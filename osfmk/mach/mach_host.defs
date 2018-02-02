@@ -214,7 +214,12 @@ routine mach_memory_object_memory_entry_64(
 /*
  *	Return statistics from this host.
  */
-routine host_statistics(
+routine
+#ifdef KERNEL_SERVER
+host_statistics_from_user(
+#else
+host_statistics(
+#endif
 		host_priv	: host_t;
 		flavor		: host_flavor_t;
 	out	host_info_out	: host_info_t, CountInOut);
@@ -232,7 +237,12 @@ routine host_lockgroup_info(
 /*
  *	Return 64-bit statistics from this host.
  */
-routine host_statistics64(
+routine
+#ifdef KERNEL_SERVER
+host_statistics64_from_user(
+#else
+host_statistics64(
+#endif
 		host_priv	: host_t;
 		flavor		: host_flavor_t;
 	out	host_info64_out	: host_info64_t, CountInOut);

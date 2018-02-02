@@ -94,6 +94,7 @@
 #include <sys/time.h>
 #include <sys/systm.h>
 #include <sys/mman.h>
+#include <sys/kasl.h>
 
 #include <security/audit/audit.h>
 
@@ -710,6 +711,9 @@ bsd_init(void)
 		if (ret != KERN_SUCCESS) 
 			panic("bsd_init: Failed to allocate bsd pageable map");
 	}
+
+	bsd_init_kprintf("calling fpxlog_init\n");
+	fpxlog_init();
 
 	/*
 	 * Initialize buffers and hash links for buffers

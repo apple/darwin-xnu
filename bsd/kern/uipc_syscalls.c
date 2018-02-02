@@ -822,11 +822,15 @@ connectx_nocancel(struct proc *p, struct connectx_args *uap, int *retval)
 
 	if (uap->iov != USER_ADDR_NULL) {
 		/* Verify range before calling uio_create() */
-		if (uap->iovcnt <= 0 || uap->iovcnt > UIO_MAXIOV)
-			return (EINVAL);
+		if (uap->iovcnt <= 0 || uap->iovcnt > UIO_MAXIOV){
+			error = EINVAL;
+			goto out;
+		}
 
-		if (uap->len == USER_ADDR_NULL)
-			return (EINVAL);
+		if (uap->len == USER_ADDR_NULL){
+			error = EINVAL;
+			goto out;
+		}
 
 		/* allocate a uio to hold the number of iovecs passed */
 		auio = uio_create(uap->iovcnt, 0,

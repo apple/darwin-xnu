@@ -160,7 +160,6 @@ extern void flush_mmu_tlb_region(vm_offset_t va, unsigned length);
 
 #if defined(__arm64__)
 extern uint64_t get_mmu_control(void);
-extern void set_mmu_control(uint64_t);
 extern uint64_t get_aux_control(void);
 extern void set_aux_control(uint64_t);
 extern void set_mmu_ttb(uint64_t);

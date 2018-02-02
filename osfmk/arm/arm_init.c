@@ -92,10 +92,6 @@ extern const char version[];
 extern const char version_variant[];
 extern int      disableConsoleOutput;
 
-#if __ARM_PAN_AVAILABLE__
-SECURITY_READ_ONLY_LATE(boolean_t) arm_pan_enabled = FALSE;     /* PAN support on Hurricane and newer HW */
-#endif
-
 int             pc_trace_buf[PC_TRACE_BUF_SIZE] = {0};
 int             pc_trace_cnt = PC_TRACE_BUF_SIZE;
 int             debug_task;
@@ -304,18 +300,7 @@ arm_init(
 	PE_parse_boot_argn("immediate_NMI", &force_immediate_debug_halt, sizeof(force_immediate_debug_halt));
 
 #if __ARM_PAN_AVAILABLE__
-#if (DEVELOPMENT || DEBUG)
-	boolean_t pan;
-	if (!PE_parse_boot_argn("-pmap_smap_disable", &pan, sizeof(pan))) {
-		arm_pan_enabled = TRUE;
-		__builtin_arm_wsr("pan", 1);
-		set_mmu_control((get_mmu_control()) & ~SCTLR_PAN_UNCHANGED);
-	}
-#else
-	arm_pan_enabled = TRUE;
 	__builtin_arm_wsr("pan", 1);
-	/* SCTLR_EL1.SPAN is clear on RELEASE */
-#endif
 #endif  /* __ARM_PAN_AVAILABLE__ */
 
 	arm_vm_init(xmaxmem, args);
@@ -411,15 +396,7 @@ arm_init_cpu(
 	cpu_data_t	*cpu_data_ptr)
 {
 #if __ARM_PAN_AVAILABLE__
-#if (DEVELOPMENT || DEBUG)
-	if (arm_pan_enabled) {
-		__builtin_arm_wsr("pan", 1);
-		set_mmu_control((get_mmu_control()) & ~SCTLR_PAN_UNCHANGED);
-	}
-#else
 	__builtin_arm_wsr("pan", 1);
-	/* SCTLR_EL1.SPAN is clear on RELEASE */
-#endif
 #endif
 
 	cpu_data_ptr->cpu_flags &= ~SleepState;
@@ -495,15 +472,7 @@ arm_init_idle_cpu(
 	cpu_data_t	*cpu_data_ptr)
 {
 #if __ARM_PAN_AVAILABLE__
-#if (DEVELOPMENT || DEBUG)
-	if (arm_pan_enabled) {
-		__builtin_arm_wsr("pan", 1);
-		set_mmu_control((get_mmu_control()) & ~SCTLR_PAN_UNCHANGED);
-	}
-#else
 	__builtin_arm_wsr("pan", 1);
-	/* SCTLR_EL1.SPAN is clear on RELEASE */
-#endif
 #endif
 #if     __ARM_SMP__ && defined(ARMA7)
 	cpu_data_ptr->cpu_CLW_active = 1;

@@ -302,6 +302,9 @@ ipc_entry_alloc_name(
 	mach_port_index_t index = MACH_PORT_INDEX(name);
 	mach_port_gen_t gen = MACH_PORT_GEN(name);
 
+	if (index > ipc_table_max_entries())
+		return KERN_NO_SPACE;
+
 	assert(MACH_PORT_VALID(name));
 
 

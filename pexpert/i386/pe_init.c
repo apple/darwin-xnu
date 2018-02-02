@@ -49,7 +49,7 @@
 
 /* extern references */
 extern void pe_identify_machine(void * args);
-
+extern int kdb_printf(const char *format, ...) __printflike(1,2);
 /* private globals */
 PE_state_t  PE_state;
 
@@ -344,6 +344,12 @@ PE_sync_panic_buffers(void)
 uint32_t
 PE_i_can_has_debugger(uint32_t *debug_flags)
 {
+#if DEVELOPMENT || DEBUG
+	if (debug_flags) {
+		assert(debug_boot_arg_inited);
+	}
+#endif
+
 #if CONFIG_CSR
 	if (csr_check(CSR_ALLOW_KERNEL_DEBUGGER) != 0) {
 		if (debug_flags)
@@ -363,7 +369,7 @@ PE_get_offset_into_panic_region(char *location)
 	assert(panic_info != NULL);
 	assert(location > (char *) panic_info);
 
-	return (uint32_t) (location - debug_buf);
+	return (uint32_t) (location - (char *) panic_info);
 }
 
 void
@@ -383,6 +389,9 @@ PE_init_panicheader()
  *
  * NOTE: The purpose of this function is NOT to detect/correct corruption in the panic region,
  *       it is to update the panic header to make it consistent when we nest panics.
+ *
+ * We try to avoid nested panics/asserts on x86 because they are difficult to debug, so log any
+ * inconsistencies we find.
  */
 void
 PE_update_panicheader_nestedpanic()
@@ -396,7 +405,27 @@ PE_update_panicheader_nestedpanic()
 
 	panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_NESTED_PANIC;
 
-	/* macOS panic logs include nested panic data, so don't touch the panic log length here */
+	/* Usually indicative of corruption in the panic region */
+	if(!(((panic_info->mph_stackshot_offset == 0) && (panic_info->mph_stackshot_len == 0)) ||
+			((panic_info->mph_stackshot_offset != 0) && (panic_info->mph_stackshot_len != 0)))) {
+		kdb_printf("panic_info contains invalid stackshot metadata: mph_stackshot_offset 0x%x mph_stackshot_len 0x%x\n",
+				panic_info->mph_stackshot_offset, panic_info->mph_stackshot_len);
+	}
+
+	/*
+	 * macOS panic logs contain nested panic data, if we've already closed the panic log,
+	 * begin the other log.
+	 */
+	if ((panic_info->mph_panic_log_len != 0) && (panic_info->mph_other_log_offset == 0)) {
+		panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+
+		/* Usually indicative of corruption in the panic region */
+		if (panic_info->mph_other_log_len != 0) {
+			kdb_printf("panic_info contains invalid other log metadata (zero offset but non-zero length), length was 0x%x, zeroing value\n",
+					panic_info->mph_other_log_len);
+			panic_info->mph_other_log_len = 0;
+		}
+	}
 
 	return;
 }

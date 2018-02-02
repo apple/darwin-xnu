@@ -84,9 +84,10 @@
 #include <sys/kdebug.h>
 #include <sys/timex.h>
 #include <kern/arithmetic_128.h>
+#include <os/log.h>
 
 uint32_t	hz_tick_interval = 1;
-
+static uint64_t has_monotonic_clock = 0;
 
 decl_simple_lock_data(,clock_lock)
 lck_grp_attr_t * settime_lock_grp_attr;
@@ -237,6 +238,15 @@ bintime2absolutetime(const struct bintime *_bt, uint64_t *abs)
 	nsec = (uint64_t) _bt->sec * (uint64_t)NSEC_PER_SEC + (((uint64_t)NSEC_PER_SEC * (uint32_t)(_bt->frac >> 32)) >> 32);
 	nanoseconds_to_absolutetime(nsec, abs);
 }
+
+struct latched_time {
+        uint64_t monotonic_time_usec;
+        uint64_t mach_time;
+};
+
+extern int
+kernel_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
+
 /*
  *	Time of day (calendar) variables.
  *
@@ -270,7 +280,18 @@ clock_sec_t last_sys_sec = 0;
 clock_usec_t last_sys_usec = 0;
 #endif
 
+#if DEVELOPMENT || DEBUG
+extern int g_should_log_clock_adjustments;
+
+static void print_all_clock_variables(const char*, clock_sec_t* pmu_secs, clock_usec_t* pmu_usec, clock_sec_t* sys_secs, clock_usec_t* sys_usec, struct clock_calend* calend_cp);
+static void print_all_clock_variables_internal(const char *, struct clock_calend* calend_cp);
+#else
+#define print_all_clock_variables(...) do { } while (0)
+#define print_all_clock_variables_internal(...) do { } while (0)
+#endif
+
 #if	CONFIG_DTRACE
+
 
 /*
  *	Unlocked calendar flipflop; this is used to track a clock_calend such
@@ -683,6 +704,24 @@ clock_gettimeofday_and_absolute_time(
 	}
 }
 
+static void
+update_basesleep(struct bintime delta, bool forward)
+{
+	/*
+	 * Update basesleep only if the platform does not have monotonic clock.
+	 * In that case the sleep time computation will use the PMU time
+	 * which offset gets modified by settimeofday.
+	 * We don't need this for mononic clock because in that case the sleep
+	 * time computation is independent from the offset value of the PMU.
+	 */
+	if (!has_monotonic_clock) {
+		if (forward)
+			bintime_add(&clock_calend.basesleep, &delta);
+		else
+			bintime_sub(&clock_calend.basesleep, &delta);
+	}
+}
+
 /*
  *	clock_set_calendar_microtime:
  *
@@ -727,6 +766,9 @@ clock_set_calendar_microtime(
 	s = splclock();
 	clock_lock();
 
+#if DEVELOPMENT || DEBUG
+	struct clock_calend clock_calend_cp = clock_calend;
+#endif
 	commpage_disable_timestamp();
 
 	/*
@@ -734,29 +776,50 @@ clock_set_calendar_microtime(
 	 */
 	clock_get_calendar_absolute_and_microtime_locked(&oldsecs, &oldmicrosecs, &absolutesys);
 
+#if DEVELOPMENT || DEBUG
+	if (g_should_log_clock_adjustments) {
+		os_log(OS_LOG_DEFAULT, "%s wall %lu s %d u computed with %llu abs\n",
+		       __func__, (unsigned long)oldsecs, oldmicrosecs, absolutesys);
+		os_log(OS_LOG_DEFAULT, "%s requested %lu s %d u\n",
+		       __func__,  (unsigned long)secs, microsecs );
+	}
+#endif
+
 	if (oldsecs < secs || (oldsecs == secs && oldmicrosecs < microsecs)) {
 		// moving forwards
 		deltasecs = secs;
 		deltamicrosecs = microsecs;
 
 		TIME_SUB(deltasecs, oldsecs, deltamicrosecs, oldmicrosecs, USEC_PER_SEC);
-		TIME_ADD(clock_boottime, deltasecs, clock_boottime_usec, deltamicrosecs, USEC_PER_SEC);
 
+#if DEVELOPMENT || DEBUG
+		if (g_should_log_clock_adjustments) {
+			os_log(OS_LOG_DEFAULT, "%s delta requested %lu s %d u\n",
+			       __func__, (unsigned long)deltasecs, deltamicrosecs);
+		}
+#endif
+
+		TIME_ADD(clock_boottime, deltasecs, clock_boottime_usec, deltamicrosecs, USEC_PER_SEC);
 		clock2bintime(&deltasecs, &deltamicrosecs, &bt);
 		bintime_add(&clock_calend.boottime, &bt);
-		bintime_add(&clock_calend.basesleep, &bt);
-
+		update_basesleep(bt, TRUE);
 	} else {
 		// moving backwards
 		deltasecs = oldsecs;
 		deltamicrosecs = oldmicrosecs;
 
 		TIME_SUB(deltasecs, secs, deltamicrosecs, microsecs, USEC_PER_SEC);
-		TIME_SUB(clock_boottime, deltasecs, clock_boottime_usec, deltamicrosecs, USEC_PER_SEC);
+#if DEVELOPMENT || DEBUG
+		if (g_should_log_clock_adjustments) {
+			os_log(OS_LOG_DEFAULT, "%s negative delta requested %lu s %d u\n",
+			       __func__, (unsigned long)deltasecs, deltamicrosecs);
+		}
+#endif
 
+		TIME_SUB(clock_boottime, deltasecs, clock_boottime_usec, deltamicrosecs, USEC_PER_SEC);
 		clock2bintime(&deltasecs, &deltamicrosecs, &bt);
 		bintime_sub(&clock_calend.boottime, &bt);
-		bintime_sub(&clock_calend.basesleep, &bt);
+		update_basesleep(bt, FALSE);
 	}
 
 	clock_calend.bintime = clock_calend.boottime;
@@ -765,6 +828,10 @@ clock_set_calendar_microtime(
 	clock2bintime((clock_sec_t *) &secs, (clock_usec_t *) &microsecs, &bt);
 
 	clock_gettimeofday_set_commpage(absolutesys, bt.sec, bt.frac, clock_calend.tick_scale_x, ticks_per_sec);
+
+#if DEVELOPMENT || DEBUG
+	struct clock_calend clock_calend_cp1 = clock_calend;
+#endif
 
 	commpage_value = clock_boottime * USEC_PER_SEC + clock_boottime_usec;
 
@@ -775,7 +842,21 @@ clock_set_calendar_microtime(
 	 *	Set the new value for the platform clock.
 	 *	This call might block, so interrupts must be enabled.
 	 */
+#if DEVELOPMENT || DEBUG
+	uint64_t now_b = mach_absolute_time();
+#endif
+
 	PESetUTCTimeOfDay(newsecs, newmicrosecs);
+
+#if DEVELOPMENT || DEBUG
+	uint64_t now_a = mach_absolute_time();
+	if (g_should_log_clock_adjustments) {
+		os_log(OS_LOG_DEFAULT, "%s mach bef PESet %llu mach aft %llu \n", __func__, now_b, now_a);
+	}
+#endif
+
+	print_all_clock_variables_internal(__func__, &clock_calend_cp);
+	print_all_clock_variables_internal(__func__, &clock_calend_cp1);
 
 	commpage_update_boottime(commpage_value);
 
@@ -857,6 +938,12 @@ clock_update_calendar(void)
 	 */
 	ntp_update_second(&adjustment, clock_calend.bintime.sec);
 
+#if DEVELOPMENT || DEBUG
+	if (g_should_log_clock_adjustments) {
+		os_log(OS_LOG_DEFAULT, "%s adjustment %lld\n", __func__, adjustment);
+	}
+#endif
+	
 	/*
 	 * recomputing scale factors.
 	 */
@@ -864,20 +951,102 @@ clock_update_calendar(void)
 
 	clock_gettimeofday_set_commpage(now, clock_calend.bintime.sec, clock_calend.bintime.frac, clock_calend.tick_scale_x, ticks_per_sec);
 
+#if DEVELOPMENT || DEBUG
+	struct clock_calend calend_cp = clock_calend;
+#endif
+
 	clock_unlock();
 	splx(s);
+
+	print_all_clock_variables(__func__, NULL,NULL,NULL,NULL, &calend_cp);
 }
+
+
+#if DEVELOPMENT || DEBUG
+
+void print_all_clock_variables_internal(const char* func, struct clock_calend* clock_calend_cp)
+{
+	clock_sec_t     offset_secs;
+	clock_usec_t    offset_microsecs;
+	clock_sec_t     bintime_secs;
+	clock_usec_t    bintime_microsecs;
+	clock_sec_t     bootime_secs;
+	clock_usec_t    bootime_microsecs;
+	
+	if (!g_should_log_clock_adjustments)
+                return;
+
+	bintime2usclock(&clock_calend_cp->offset, &offset_secs, &offset_microsecs);
+	bintime2usclock(&clock_calend_cp->bintime, &bintime_secs, &bintime_microsecs);
+	bintime2usclock(&clock_calend_cp->boottime, &bootime_secs, &bootime_microsecs);
+
+	os_log(OS_LOG_DEFAULT, "%s s_scale_ns %llu s_adj_nsx %lld tick_scale_x %llu offset_count %llu\n",
+	       func , clock_calend_cp->s_scale_ns, clock_calend_cp->s_adj_nsx,
+	       clock_calend_cp->tick_scale_x, clock_calend_cp->offset_count);
+	os_log(OS_LOG_DEFAULT, "%s offset.sec %ld offset.frac %llu offset_secs %lu offset_microsecs %d\n",
+	       func, clock_calend_cp->offset.sec, clock_calend_cp->offset.frac,
+	       (unsigned long)offset_secs, offset_microsecs);
+	os_log(OS_LOG_DEFAULT, "%s bintime.sec %ld bintime.frac %llu bintime_secs %lu bintime_microsecs %d\n",
+	       func, clock_calend_cp->bintime.sec, clock_calend_cp->bintime.frac,
+	       (unsigned long)bintime_secs, bintime_microsecs);
+	os_log(OS_LOG_DEFAULT, "%s bootime.sec %ld bootime.frac %llu bootime_secs %lu bootime_microsecs %d\n",
+	       func, clock_calend_cp->boottime.sec, clock_calend_cp->boottime.frac,
+	       (unsigned long)bootime_secs, bootime_microsecs);
+
+	clock_sec_t     basesleep_secs;
+        clock_usec_t    basesleep_microsecs;
+	
+	bintime2usclock(&clock_calend_cp->basesleep, &basesleep_secs, &basesleep_microsecs);
+	os_log(OS_LOG_DEFAULT, "%s basesleep.sec %ld basesleep.frac %llu basesleep_secs %lu basesleep_microsecs %d\n",
+	       func, clock_calend_cp->basesleep.sec, clock_calend_cp->basesleep.frac,
+	       (unsigned long)basesleep_secs, basesleep_microsecs);
+
+}
+
+
+void print_all_clock_variables(const char* func, clock_sec_t* pmu_secs, clock_usec_t* pmu_usec, clock_sec_t* sys_secs, clock_usec_t* sys_usec, struct clock_calend* clock_calend_cp)
+{
+	if (!g_should_log_clock_adjustments)
+		return;
+
+	struct bintime  bt;
+	clock_sec_t     wall_secs;
+	clock_usec_t    wall_microsecs;
+	uint64_t now;
+	uint64_t delta;
+
+	if (pmu_secs) {
+		os_log(OS_LOG_DEFAULT, "%s PMU %lu s %d u \n", func, (unsigned long)*pmu_secs, *pmu_usec); 
+	}
+	if (sys_secs) {
+		os_log(OS_LOG_DEFAULT, "%s sys %lu s %d u \n", func, (unsigned long)*sys_secs, *sys_usec);
+	}
+
+	print_all_clock_variables_internal(func, clock_calend_cp);
+
+	now = mach_absolute_time();
+        delta = now - clock_calend_cp->offset_count;
+
+        bt = scale_delta(delta, clock_calend_cp->tick_scale_x, clock_calend_cp->s_scale_ns, clock_calend_cp->s_adj_nsx);
+	bintime_add(&bt, &clock_calend_cp->bintime);
+	bintime2usclock(&bt, &wall_secs, &wall_microsecs);
+
+	os_log(OS_LOG_DEFAULT, "%s wall %lu s %d u computed with %llu abs\n",
+	       func, (unsigned long)wall_secs, wall_microsecs, now);
+}
+
+
+#endif /* DEVELOPMENT || DEBUG */
+
 
 /*
  *	clock_initialize_calendar:
  *
  *	Set the calendar and related clocks
- *	from the platform clock at boot or
- *	wake event.
+ *	from the platform clock at boot.
  *
  *	Also sends host notifications.
  */
-
 void
 clock_initialize_calendar(void)
 {
@@ -889,19 +1058,40 @@ clock_initialize_calendar(void)
 	clock_usec_t		utc_offset_microsecs; 
 	spl_t			s;
 	struct bintime 		bt;
+	struct bintime		monotonic_bt;
+	struct latched_time	monotonic_time;
+	uint64_t		monotonic_usec_total;
+	clock_sec_t             sys2, monotonic_sec;
+        clock_usec_t            microsys2, monotonic_usec;
+        size_t                  size;
 
+	//Get PMU time with offset and corresponding sys time
 	PEGetUTCTimeOfDay(&secs, &microsecs);
+	clock_get_system_microtime(&sys, &microsys);
+
+	/*
+	 * If the platform has a monotonic clock, use kern.monotonicclock_usecs
+	 * to estimate the sleep/wake time, otherwise use the PMU and adjustments
+	 * provided through settimeofday to estimate the sleep time.
+	 * NOTE: the latter case relies that the kernel is the only component
+	 * to set the PMU offset.
+	 */
+	size = sizeof(monotonic_time);
+	if (kernel_sysctlbyname("kern.monotonicclock_usecs", &monotonic_time, &size, NULL, 0) != 0) {
+		has_monotonic_clock = 0;
+		os_log(OS_LOG_DEFAULT, "%s system does not have monotonic clock.\n", __func__);
+	} else {
+		has_monotonic_clock = 1;
+		monotonic_usec_total = monotonic_time.monotonic_time_usec;
+		absolutetime_to_microtime(monotonic_time.mach_time, &sys2, &microsys2);
+		os_log(OS_LOG_DEFAULT, "%s system has monotonic clock.\n", __func__);
+	}
 
 	s = splclock();
 	clock_lock();
 
 	commpage_disable_timestamp();
 
-	/*
-	 *	Calculate the new calendar epoch based on
-	 *	the platform clock and the system clock.
-	 */
-	clock_get_system_microtime(&sys, &microsys);
 	utc_offset_secs = secs;
 	utc_offset_microsecs = microsecs;
 
@@ -922,11 +1112,15 @@ clock_initialize_calendar(void)
 	 * on error) in which that doesn't hold true.  Bring the UTC measurements
 	 * in-line with the tick counter measurements as a best effort in that case.
 	 */
+	//FIXME if the current time is prior than 1970 secs will be negative
 	if ((sys > secs) || ((sys == secs) && (microsys > microsecs))) {
+		os_log(OS_LOG_DEFAULT, "%s WARNING: PMU offset is less then sys PMU %lu s %d u sys %lu s %d u\n",
+			__func__, (unsigned long) secs, microsecs, (unsigned long)sys, microsys);
 		secs = utc_offset_secs = sys;
 		microsecs = utc_offset_microsecs = microsys;
 	}
 
+	// PMU time with offset - sys
 	// This macro stores the subtraction result in utc_offset_secs and utc_offset_microsecs
 	TIME_SUB(utc_offset_secs, sys, utc_offset_microsecs, microsys, USEC_PER_SEC);
 
@@ -952,12 +1146,32 @@ clock_initialize_calendar(void)
 	clock_calend.s_scale_ns = NSEC_PER_SEC;
 	clock_calend.s_adj_nsx = 0;
 
-	clock_calend.basesleep = bt;
+	if (has_monotonic_clock) {
 
+		monotonic_sec = monotonic_usec_total / (clock_sec_t)USEC_PER_SEC;
+		monotonic_usec = monotonic_usec_total % (clock_usec_t)USEC_PER_SEC;
+
+		// PMU time without offset - sys
+		// This macro stores the subtraction result in monotonic_sec and monotonic_usec
+		TIME_SUB(monotonic_sec, sys2, monotonic_usec, microsys2, USEC_PER_SEC);
+		clock2bintime(&monotonic_sec, &monotonic_usec, &monotonic_bt);
+
+		// set the baseleep as the difference between monotonic clock - sys
+		clock_calend.basesleep = monotonic_bt;
+	} else {
+		// set the baseleep as the difference between PMU clock - sys
+		clock_calend.basesleep = bt;
+	}
 	commpage_update_mach_continuous_time(mach_absolutetime_asleep);
+
+#if DEVELOPMENT || DEBUG
+	struct clock_calend clock_calend_cp = clock_calend;
+#endif
 
 	clock_unlock();
 	splx(s);
+
+        print_all_clock_variables(__func__, &secs, &microsecs, &sys, &microsys, &clock_calend_cp);
 
 	/*
 	 *	Send host notifications.
@@ -973,25 +1187,87 @@ clock_initialize_calendar(void)
 void
 clock_wakeup_calendar(void)
 {
-	clock_sec_t		sys;  // sleepless time since boot in seconds
-	clock_sec_t		secs; // Current UTC time
-	clock_usec_t		microsys;  
-	clock_usec_t		microsecs; 
+	clock_sec_t		sys;
+	clock_sec_t		secs;
+	clock_usec_t		microsys;
+	clock_usec_t		microsecs;
 	spl_t			s;
-	struct bintime		utc_offset_bt, last_sleep_bt;
+	struct bintime		bt, last_sleep_bt;
+	clock_sec_t             basesleep_s, last_sleep_sec;
+	clock_usec_t            basesleep_us, last_sleep_usec;
+	struct latched_time     monotonic_time;
+	uint64_t		monotonic_usec_total;
+	size_t 			size;
+	clock_sec_t secs_copy;
+        clock_usec_t microsecs_copy;
+#if DEVELOPMENT || DEBUG
+	clock_sec_t utc_sec;
+	clock_usec_t utc_usec;
+	PEGetUTCTimeOfDay(&utc_sec, &utc_usec);
+#endif
 
-	PEGetUTCTimeOfDay(&secs, &microsecs);
+	/*
+	 * If the platform has the monotonic clock use that to
+	 * compute the sleep time. The monotonic clock does not have an offset
+	 * that can be modified, so nor kernel or userspace can change the time
+	 * of this clock, it can only monotonically increase over time.
+	 * During sleep mach_absolute_time does not tick,
+	 * so the sleep time is the difference betwen the current monotonic time
+	 * less the absolute time and the previous difference stored at wake time.
+	 *
+	 * basesleep = monotonic - sys ---> computed at last wake
+	 * sleep_time = (monotonic - sys) - basesleep
+	 *
+	 * If the platform does not support monotonic time we use the PMU time
+	 * to compute the last sleep.
+	 * The PMU time is the monotonic clock + an offset that can be set
+	 * by kernel.
+	 *
+	 * IMPORTANT:
+	 * We assume that only the kernel is setting the offset of the PMU and that
+	 * it is doing it only througth the settimeofday interface.
+	 *
+	 * basesleep is the different between the PMU time and the mach_absolute_time
+	 * at wake.
+	 * During awake time settimeofday can change the PMU offset by a delta,
+	 * and basesleep is shifted by the same delta applyed to the PMU. So the sleep
+	 * time computation becomes:
+	 *
+	 * PMU = monotonic + PMU_offset
+	 * basesleep = PMU - sys ---> computed at last wake
+	 * basesleep += settimeofday_delta
+	 * PMU_offset += settimeofday_delta
+	 * sleep_time = (PMU - sys) - basesleep
+	 */
+	if (has_monotonic_clock) {
+		//Get monotonic time with corresponding sys time
+		size = sizeof(monotonic_time);
+		if (kernel_sysctlbyname("kern.monotonicclock_usecs", &monotonic_time, &size, NULL, 0) != 0) {
+			panic("%s: could not call kern.monotonicclock_usecs", __func__);
+		}
+		monotonic_usec_total = monotonic_time.monotonic_time_usec;
+		absolutetime_to_microtime(monotonic_time.mach_time, &sys, &microsys);
+
+		secs = monotonic_usec_total / (clock_sec_t)USEC_PER_SEC;
+		microsecs = monotonic_usec_total % (clock_usec_t)USEC_PER_SEC;
+	} else {
+		//Get PMU time with offset and corresponding sys time
+		PEGetUTCTimeOfDay(&secs, &microsecs);
+		clock_get_system_microtime(&sys, &microsys);
+
+	}
 
 	s = splclock();
 	clock_lock();
-
+	
 	commpage_disable_timestamp();
 
-	/*
-	 * Calculate the new calendar epoch based on
-	 * the platform clock and the system clock.
-	 */
-	clock_get_system_microtime(&sys, &microsys);
+	secs_copy = secs;
+	microsecs_copy = microsecs;
+
+#if DEVELOPMENT || DEBUG
+	struct clock_calend clock_calend_cp1 = clock_calend;
+#endif /* DEVELOPMENT || DEBUG */
 
 #if DEVELOPMENT || DEBUG
 	last_utc_sec = secs;
@@ -1001,23 +1277,26 @@ clock_wakeup_calendar(void)
 	if (secs > max_utc_sec)
 		max_utc_sec = secs;
 #endif
-
 	/*
 	 * We normally expect the UTC clock to be always-on and produce
 	 * greater readings than the tick counter.  There may be corner cases
 	 * due to differing clock resolutions (UTC clock is likely lower) and
-	 * errors reading the UTC clock (some implementations return 0 on error)
-	 * in which that doesn't hold true.  Bring the UTC measurements in-line
-	 * with the tick counter measurements as a best effort in that case.
+	 * and errors reading the UTC clock (some implementations return 0
+	 * on error) in which that doesn't hold true.  Bring the UTC measurements
+	 * in-line with the tick counter measurements as a best effort in that case.
 	 */
+	//FIXME if the current time is prior than 1970 secs will be negative
 	if ((sys > secs) || ((sys == secs) && (microsys > microsecs))) {
+		os_log(OS_LOG_DEFAULT, "%s WARNING: %s is less then sys %s %lu s %d u sys %lu s %d u\n",
+			__func__, (has_monotonic_clock)?"monotonic":"PMU", (has_monotonic_clock)?"monotonic":"PMU", (unsigned long)secs, microsecs, (unsigned long)sys, microsys);
 		secs = sys;
 		microsecs = microsys;
 	}
 
+	// PMU or monotonic - sys
 	// This macro stores the subtraction result in secs and microsecs
 	TIME_SUB(secs, sys, microsecs, microsys, USEC_PER_SEC);
-	clock2bintime(&secs, &microsecs, &utc_offset_bt);
+	clock2bintime(&secs, &microsecs, &bt);
 
 	/*
 	 * Safety belt: the UTC clock will likely have a lower resolution than the tick counter.
@@ -1027,20 +1306,29 @@ clock_wakeup_calendar(void)
 	 * tick counter to be less than the previously recorded value in clock.calend.basesleep.
 	 * In that case simply record that we slept for 0 ticks.
 	 */ 
-	if ((utc_offset_bt.sec > clock_calend.basesleep.sec) ||
-	    ((utc_offset_bt.sec == clock_calend.basesleep.sec) && (utc_offset_bt.frac > clock_calend.basesleep.frac))) {
+	if ((bt.sec > clock_calend.basesleep.sec) ||
+	    ((bt.sec == clock_calend.basesleep.sec) && (bt.frac > clock_calend.basesleep.frac))) {
 
-		last_sleep_bt = utc_offset_bt;
+		//last_sleep is the difference between current PMU or monotonic - abs and last wake PMU or monotonic - abs
+		last_sleep_bt = bt;
 		bintime_sub(&last_sleep_bt, &clock_calend.basesleep);
-		clock_calend.basesleep = utc_offset_bt;
 
+		//set baseseep to current PMU or monotonic - abs
+		clock_calend.basesleep = bt;
+		bintime2usclock(&last_sleep_bt, &last_sleep_sec, &last_sleep_usec);
 		bintime2absolutetime(&last_sleep_bt, &mach_absolutetime_last_sleep);
 		mach_absolutetime_asleep += mach_absolutetime_last_sleep;
 
 		bintime_add(&clock_calend.offset, &last_sleep_bt);
 		bintime_add(&clock_calend.bintime, &last_sleep_bt);
-	} else
+
+	} else{
 		mach_absolutetime_last_sleep = 0;
+		last_sleep_sec = last_sleep_usec = 0;
+		bintime2usclock(&clock_calend.basesleep, &basesleep_s, &basesleep_us);
+		os_log(OS_LOG_DEFAULT, "%s WARNING: basesleep (%lu s %d u)  > %s-sys (%lu s %d u) \n",
+			__func__, (unsigned long) basesleep_s, basesleep_us, (has_monotonic_clock)?"monotonic":"PMU", (unsigned long) secs_copy, microsecs_copy );
+	}
 
 	KERNEL_DEBUG_CONSTANT(
 		  MACHDBG_CODE(DBG_MACH_CLOCK,MACH_EPOCH_CHANGE) | DBG_FUNC_NONE,
@@ -1053,8 +1341,22 @@ clock_wakeup_calendar(void)
 	commpage_update_mach_continuous_time(mach_absolutetime_asleep);
 	adjust_cont_time_thread_calls();
 
+#if DEVELOPMENT || DEBUG
+	struct clock_calend clock_calend_cp = clock_calend;
+#endif
+
 	clock_unlock();
 	splx(s);
+
+#if DEVELOPMENT || DEBUG
+	if (g_should_log_clock_adjustments) {
+		os_log(OS_LOG_DEFAULT, "PMU was %lu s %d u\n",(unsigned long) utc_sec, utc_usec);
+		os_log(OS_LOG_DEFAULT, "last sleep was %lu s %d u\n",(unsigned long) last_sleep_sec, last_sleep_usec);
+		print_all_clock_variables("clock_wakeup_calendar:BEFORE",
+	                          &secs_copy, &microsecs_copy, &sys, &microsys, &clock_calend_cp1);
+		print_all_clock_variables("clock_wakeup_calendar:AFTER", NULL, NULL, NULL, NULL, &clock_calend_cp);
+	}
+#endif /* DEVELOPMENT || DEBUG */
 
 	host_notify_calendar_change();
 
@@ -1062,7 +1364,6 @@ clock_wakeup_calendar(void)
 	clock_track_calend_nowait();
 #endif
 }
-
 
 
 /*

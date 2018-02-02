@@ -145,4 +145,7 @@ extern void ipc_table_free(
 		       sizeof(struct ipc_port_request),			\
 		       (void *)(table))
 
+extern unsigned int ipc_table_max_entries(void);
+extern unsigned int ipc_table_max_requests(void);
+
 #endif	/* _IPC_IPC_TABLE_H_ */

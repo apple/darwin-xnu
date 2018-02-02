@@ -746,6 +746,12 @@ kdp_snapshot_preflight(int pid, void * tracebuf, uint32_t tracebuf_size, uint32_
 	stack_snapshot_bytes_traced = 0;
 }
 
+void
+panic_stackshot_reset_state()
+{
+	stackshot_kcdata_p = NULL;
+}
+
 boolean_t
 stackshot_active()
 {

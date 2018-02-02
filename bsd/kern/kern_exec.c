@@ -3115,7 +3115,7 @@ bad:
 		if (error) {
 			DTRACE_PROC1(exec__failure, int, error);
 		} else {
-			DTRACE_PROC(exec__success);
+			dtrace_thread_didexec(imgp->ip_new_thread);
 		}
 	}
 
@@ -3124,8 +3124,7 @@ bad:
 	}
 #endif
 	/*
-	 * exec-success dtrace probe fired, clear bsd_info from
-	 * old task if it did exec.
+	 * clear bsd_info from old task if it did exec.
 	 */
 	if (task_did_exec(current_task())) {
 		set_bsdtask_info(current_task(), NULL);
@@ -3577,9 +3576,10 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 		}
 #endif /* CONFIG_MACF */
 
-		DTRACE_PROC(exec__success);
 
 #if CONFIG_DTRACE
+		dtrace_thread_didexec(imgp->ip_new_thread);
+
 		if ((dtrace_proc_waitfor_hook = dtrace_proc_waitfor_exec_ptr) != NULL)
 			(*dtrace_proc_waitfor_hook)(p);
 #endif
@@ -3594,8 +3594,7 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 exit_with_error:
 
 	/*
-	 * exec-success dtrace probe fired, clear bsd_info from
-	 * old task if it did exec.
+	 * clear bsd_info from old task if it did exec.
 	 */
 	if (task_did_exec(current_task())) {
 		set_bsdtask_info(current_task(), NULL);

@@ -2062,7 +2062,14 @@ ifnet_reset_order(u_int32_t *ordered_indices, u_int32_t count)
 	int error = 0;
 
 	ifnet_head_lock_exclusive();
-
+	for (u_int32_t order_index = 0; order_index < count; order_index++) {
+		if (ordered_indices[order_index] == IFSCOPE_NONE ||
+		    ordered_indices[order_index] > (uint32_t)if_index) {
+			error = EINVAL;
+			ifnet_head_done();
+			return (error);
+		}
+	}
 	// Flush current ordered list
 	for (ifp = TAILQ_FIRST(&ifnet_ordered_head); ifp != NULL;
 	    ifp = TAILQ_FIRST(&ifnet_ordered_head)) {
@@ -2075,10 +2082,6 @@ ifnet_reset_order(u_int32_t *ordered_indices, u_int32_t count)
 
 	for (u_int32_t order_index = 0; order_index < count; order_index++) {
 		u_int32_t interface_index = ordered_indices[order_index];
-		if (interface_index == IFSCOPE_NONE ||
-			interface_index > (uint32_t)if_index) {
-			break;
-		}
 		ifp = ifindex2ifnet[interface_index];
 		if (ifp == NULL) {
 			continue;
@@ -2130,7 +2133,6 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 {
 	int error = 0;
 	u_int32_t *ordered_indices = NULL;
-
 	if (data == NULL) {
 		return (EINVAL);
 	}
@@ -2139,7 +2141,7 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 	case SIOCSIFORDER: {		/* struct if_order */
 		struct if_order *ifo = (struct if_order *)(void *)data;
 
-		if (ifo->ifo_count > (u_int32_t)if_index) {
+		if (ifo->ifo_count == 0 || ifo->ifo_count > (u_int32_t)if_index) {
 			error = EINVAL;
 			break;
 		}
@@ -2162,8 +2164,22 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 				break;
 			}
 		}
+		/* ordered_indices should not contain duplicates */
+		bool found_duplicate = FALSE;
+		for (uint32_t i = 0; i < (ifo->ifo_count - 1) && !found_duplicate ; i++){
+			for (uint32_t j = i + 1; j < ifo->ifo_count && !found_duplicate ; j++){
+				if (ordered_indices[j] == ordered_indices[i]){
+					error = EINVAL;
+					found_duplicate = TRUE;
+					break;
+				}
+			}
+		}
+		if (found_duplicate)
+			break;
 
 		error = ifnet_reset_order(ordered_indices, ifo->ifo_count);
+
 		break;
 	}
 

@@ -303,9 +303,26 @@
 
 /* TODO: should be in header file */
 /* kernel translater */
-extern vm_offset_t kmem_mb_alloc(vm_map_t, int, int);
+extern vm_offset_t kmem_mb_alloc(vm_map_t, int, int, kern_return_t *);
 extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
 extern vm_map_t mb_map;		/* special map */
+
+static uint32_t mb_kmem_contig_failed;
+static uint32_t mb_kmem_failed;
+static uint32_t mb_kmem_one_failed;
+/* Timestamp of allocation failures. */
+static uint64_t mb_kmem_contig_failed_ts;
+static uint64_t mb_kmem_failed_ts;
+static uint64_t mb_kmem_one_failed_ts;
+static uint64_t mb_kmem_contig_failed_size;
+static uint64_t mb_kmem_failed_size;
+static uint32_t mb_kmem_stats[6];
+static const char *mb_kmem_stats_labels[] = { "INVALID_ARGUMENT",
+					      "INVALID_ADDRESS",
+					      "RESOURCE_SHORTAGE",
+					      "NO_SPACE",
+					      "KERN_FAILURE",
+					      "OTHERS" };
 
 /* Global lock */
 decl_lck_mtx_data(static, mbuf_mlock_data);
@@ -315,7 +332,16 @@ static lck_grp_t *mbuf_mlock_grp;
 static lck_grp_attr_t *mbuf_mlock_grp_attr;
 
 /* Back-end (common) layer */
+static uint64_t mb_expand_cnt;
+static uint64_t mb_expand_cl_cnt;
+static uint64_t mb_expand_cl_total;
+static uint64_t mb_expand_bigcl_cnt;
+static uint64_t mb_expand_bigcl_total;
+static uint64_t mb_expand_16kcl_cnt;
+static uint64_t mb_expand_16kcl_total;
 static boolean_t mbuf_worker_needs_wakeup; /* wait channel for mbuf worker */
+static uint32_t mbuf_worker_run_cnt;
+static uint64_t mbuf_worker_last_runtime;
 static int mbuf_worker_ready;	/* worker thread is runnable */
 static int ncpu;		/* number of CPUs */
 static ppnum_t *mcl_paddr;	/* Array of cluster physical addresses */
@@ -655,7 +681,7 @@ boolean_t mb_peak_firstreport = FALSE;
 static struct timeval mb_wdtstart;	/* watchdog start timestamp */
 static char *mbuf_dump_buf;
 
-#define	MBUF_DUMP_BUF_SIZE	2048
+#define	MBUF_DUMP_BUF_SIZE	3072
 
 /*
  * mbuf watchdog is enabled by default on embedded platforms.  It is
@@ -1886,6 +1912,20 @@ slab_free(mbuf_class_t class, mcache_obj_t *buf)
 	VERIFY(class != MC_16KCL || njcl > 0);
 	VERIFY(buf->obj_next == NULL);
 
+	/*
+	 * Synchronizing with m_clalloc, as it reads m_total, while we here
+	 * are modifying m_total.
+	 */
+	while (mb_clalloc_busy) {
+		mb_clalloc_waiters++;
+		(void) msleep(mb_clalloc_waitchan, mbuf_mlock,
+		    (PZERO-1), "m_clalloc", NULL);
+		LCK_MTX_ASSERT(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
+	}
+
+	/* We are busy now; tell everyone else to go away */
+	mb_clalloc_busy = TRUE;
+
 	sp = slab_get(buf);
 	VERIFY(sp->sl_class == class && slab_inrange(sp, buf) &&
 	    (sp->sl_flags & (SLF_MAPPED | SLF_PARTIAL)) == SLF_MAPPED);
@@ -2076,6 +2116,13 @@ slab_free(mbuf_class_t class, mcache_obj_t *buf)
 	/* Reinsert the slab to the class's slab list */
 	if (slab_is_detached(sp))
 		slab_insert(sp, class);
+
+	/* We're done; let others enter */
+	mb_clalloc_busy = FALSE;
+	if (mb_clalloc_waiters > 0) {
+		mb_clalloc_waiters = 0;
+		wakeup(mb_clalloc_waitchan);
+	}
 }
 
 /*
@@ -2781,6 +2828,42 @@ mbuf_cslab_audit(void *arg, mcache_obj_t *list, boolean_t alloc)
 	}
 }
 
+static void
+m_vm_error_stats(uint32_t *cnt, uint64_t *ts, uint64_t *size,
+                 uint64_t alloc_size, kern_return_t error)
+{
+
+	*cnt = *cnt + 1;
+	*ts = net_uptime();
+	if (size) {
+		*size = alloc_size;
+	}
+	_CASSERT(sizeof(mb_kmem_stats) / sizeof(mb_kmem_stats[0]) ==
+	    sizeof(mb_kmem_stats_labels) / sizeof(mb_kmem_stats_labels[0]));
+	switch (error) {
+	case KERN_SUCCESS:
+		break;
+	case KERN_INVALID_ARGUMENT:
+		mb_kmem_stats[0]++;
+		break;
+	case KERN_INVALID_ADDRESS:
+		mb_kmem_stats[1]++;
+		break;
+	case KERN_RESOURCE_SHORTAGE:
+		mb_kmem_stats[2]++;
+		break;
+	case KERN_NO_SPACE:
+		mb_kmem_stats[3]++;
+		break;
+	case KERN_FAILURE:
+		mb_kmem_stats[4]++;
+		break;
+	default:
+		mb_kmem_stats[5]++;
+		break;
+	}
+}
+
 /*
  * Allocate some number of mbuf clusters and place on cluster freelist.
  */
@@ -2795,6 +2878,7 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 	mcache_obj_t *con_list = NULL;
 	mcl_slab_t *sp;
 	mbuf_class_t class;
+	kern_return_t error;
 
 	/* Set if a buffer allocation needs allocation of multiple pages */
 	large_buffer = ((bufsize == m_maxsize(MC_16KCL)) &&
@@ -2841,24 +2925,41 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 	lck_mtx_unlock(mbuf_mlock);
 
 	size = round_page(i * bufsize);
-	page = kmem_mb_alloc(mb_map, size, large_buffer);
+	page = kmem_mb_alloc(mb_map, size, large_buffer, &error);
 
 	/*
 	 * If we did ask for "n" 16KB physically contiguous chunks
 	 * and didn't get them, then please try again without this
 	 * restriction.
 	 */
-	if (large_buffer && page == 0)
-		page = kmem_mb_alloc(mb_map, size, 0);
+	net_update_uptime();
+	if (large_buffer && page == 0) {
+		m_vm_error_stats(&mb_kmem_contig_failed,
+		    &mb_kmem_contig_failed_ts,
+		    &mb_kmem_contig_failed_size,
+		    size, error);
+		page = kmem_mb_alloc(mb_map, size, 0, &error);
+	}
 
 	if (page == 0) {
+		m_vm_error_stats(&mb_kmem_failed,
+		    &mb_kmem_failed_ts,
+		    &mb_kmem_failed_size,
+		    size, error);
+#if PAGE_SIZE == 4096
 		if (bufsize == m_maxsize(MC_BIGCL)) {
+#else
+		if (bufsize >= m_maxsize(MC_BIGCL)) {
+#endif
 			/* Try for 1 page if failed */
 			size = PAGE_SIZE;
-			page = kmem_mb_alloc(mb_map, size, 0);
+			page = kmem_mb_alloc(mb_map, size, 0, &error);
 		}
 
 		if (page == 0) {
+			m_vm_error_stats(&mb_kmem_one_failed,
+			    &mb_kmem_one_failed_ts,
+			    NULL, size, error);
 			lck_mtx_lock(mbuf_mlock);
 			goto out;
 		}
@@ -6408,7 +6509,7 @@ mbuf_sleep(mbuf_class_t class, unsigned int num, int wait)
 		mbuf_watchdog();
 
 	mb_waiters++;
-	m_region_expand(class) += num;
+	m_region_expand(class) += m_total(class) + num;
 	/* wake up the worker thread */
 	if (class > MC_MBUF && mbuf_worker_ready &&
 	    mbuf_worker_needs_wakeup) {
@@ -6441,15 +6542,19 @@ mbuf_worker_thread(void)
 
 	while (1) {
 		lck_mtx_lock(mbuf_mlock);
+		mbuf_worker_run_cnt++;
 		mbuf_expand = 0;
 		if (m_region_expand(MC_CL) > 0) {
 			int n;
-
+			mb_expand_cl_cnt++;
 			/* Adjust to current number of cluster in use */
 			n = m_region_expand(MC_CL) -
 			    (m_total(MC_CL) - m_infree(MC_CL));
 			if ((n + m_total(MC_CL)) > m_maxlimit(MC_CL))
 				n = m_maxlimit(MC_CL) - m_total(MC_CL);
+			if (n > 0) {
+				mb_expand_cl_total += n;
+			}
 			m_region_expand(MC_CL) = 0;
 
 			if (n > 0 && freelist_populate(MC_CL, n, M_WAIT) > 0)
@@ -6457,12 +6562,15 @@ mbuf_worker_thread(void)
 		}
 		if (m_region_expand(MC_BIGCL) > 0) {
 			int n;
-
+			mb_expand_bigcl_cnt++;
 			/* Adjust to current number of 4 KB cluster in use */
 			n = m_region_expand(MC_BIGCL) -
 			    (m_total(MC_BIGCL) - m_infree(MC_BIGCL));
 			if ((n + m_total(MC_BIGCL)) > m_maxlimit(MC_BIGCL))
 				n = m_maxlimit(MC_BIGCL) - m_total(MC_BIGCL);
+			if (n > 0) {
+				mb_expand_bigcl_total += n;
+			}
 			m_region_expand(MC_BIGCL) = 0;
 
 			if (n > 0 && freelist_populate(MC_BIGCL, n, M_WAIT) > 0)
@@ -6470,12 +6578,15 @@ mbuf_worker_thread(void)
 		}
 		if (m_region_expand(MC_16KCL) > 0) {
 			int n;
-
+			mb_expand_16kcl_cnt++;
 			/* Adjust to current number of 16 KB cluster in use */
 			n = m_region_expand(MC_16KCL) -
 			    (m_total(MC_16KCL) - m_infree(MC_16KCL));
 			if ((n + m_total(MC_16KCL)) > m_maxlimit(MC_16KCL))
 				n = m_maxlimit(MC_16KCL) - m_total(MC_16KCL);
+			if (n > 0) {
+				mb_expand_16kcl_total += n;
+			}
 			m_region_expand(MC_16KCL) = 0;
 
 			if (n > 0)
@@ -6491,12 +6602,20 @@ mbuf_worker_thread(void)
 		if (mbuf_expand) {
 			while (m_total(MC_MBUF) <
 			    (m_total(MC_BIGCL) + m_total(MC_CL))) {
+				mb_expand_cnt++;
 				if (freelist_populate(MC_MBUF, 1, M_WAIT) == 0)
 					break;
 			}
 		}
 
 		mbuf_worker_needs_wakeup = TRUE;
+		/*
+		 * If there's a deadlock and we're not sending / receiving
+		 * packets, net_uptime() won't be updated.  Update it here
+		 * so we are sure it's correct.
+		 */
+		net_update_uptime();
+		mbuf_worker_last_runtime = net_uptime();
 		assert_wait((caddr_t)&mbuf_worker_needs_wakeup,
 		    THREAD_UNINT);
 		lck_mtx_unlock(mbuf_mlock);
@@ -7256,7 +7375,8 @@ static struct mbtypes {
 static char *
 mbuf_dump(void)
 {
-	unsigned long totmem = 0, totfree = 0, totmbufs, totused, totpct;
+	unsigned long totmem = 0, totfree = 0, totmbufs, totused, totpct,
+	    totreturned = 0;
 	u_int32_t m_mbufs = 0, m_clfree = 0, m_bigclfree = 0;
 	u_int32_t m_mbufclfree = 0, m_mbufbigclfree = 0;
 	u_int32_t m_16kclusters = 0, m_16kclfree = 0, m_mbuf16kclfree = 0;
@@ -7299,6 +7419,7 @@ mbuf_dump(void)
 		totmem += mem;
 		totfree += (sp->mbcl_mc_cached + sp->mbcl_infree) *
 		    sp->mbcl_size;
+		totreturned += sp->mbcl_release_cnt;
 
 	}
 
@@ -7363,6 +7484,52 @@ mbuf_dump(void)
 	k = snprintf(c, clen, "%lu KB allocated to network (approx. %lu%% "
 	    "in use)\n", totmem / 1024, totpct);
 	MBUF_DUMP_BUF_CHK();
+	k = snprintf(c, clen, "%lu KB returned to the system\n",
+	    totreturned / 1024);
+	MBUF_DUMP_BUF_CHK();
+
+	net_update_uptime();
+	k = snprintf(c, clen,
+	    "VM allocation failures: contiguous %u, normal %u, one page %u\n",
+	    mb_kmem_contig_failed, mb_kmem_failed, mb_kmem_one_failed);
+	MBUF_DUMP_BUF_CHK();
+	if (mb_kmem_contig_failed_ts || mb_kmem_failed_ts ||
+	    mb_kmem_one_failed_ts) {
+		k = snprintf(c, clen,
+		    "VM allocation failure timestamps: contiguous %llu "
+		    "(size %llu), normal %llu (size %llu), one page %llu "
+		    "(now %llu)\n",
+		    mb_kmem_contig_failed_ts, mb_kmem_contig_failed_size,
+		    mb_kmem_failed_ts, mb_kmem_failed_size,
+		    mb_kmem_one_failed_ts, net_uptime());
+		MBUF_DUMP_BUF_CHK();
+		k = snprintf(c, clen,
+		    "VM return codes: ");
+		MBUF_DUMP_BUF_CHK();
+		for (i = 0;
+		     i < sizeof(mb_kmem_stats) / sizeof(mb_kmem_stats[0]);
+		     i++) {
+			k = snprintf(c, clen, "%s: %u ", mb_kmem_stats_labels[i],
+			    mb_kmem_stats[i]);
+			MBUF_DUMP_BUF_CHK();
+		}
+		k = snprintf(c, clen, "\n");
+		MBUF_DUMP_BUF_CHK();
+	}
+	k = snprintf(c, clen,
+	    "worker thread runs: %u, expansions: %llu, cl %llu/%llu, "
+	    "bigcl %llu/%llu, 16k %llu/%llu\n", mbuf_worker_run_cnt,
+	    mb_expand_cnt, mb_expand_cl_cnt, mb_expand_cl_total,
+	    mb_expand_bigcl_cnt, mb_expand_bigcl_total, mb_expand_16kcl_cnt,
+	    mb_expand_16kcl_total);
+	MBUF_DUMP_BUF_CHK();
+	if (mbuf_worker_last_runtime != 0) {
+		k = snprintf(c, clen, "worker thread last run time: "
+		    "%llu (%llu seconds ago)\n",
+		    mbuf_worker_last_runtime,
+		    net_uptime() - mbuf_worker_last_runtime);
+		MBUF_DUMP_BUF_CHK();
+	}
 
 	/* mbuf leak detection statistics */
 	mleak_update_stats();
@@ -7736,6 +7903,7 @@ mbuf_report_peak_usage(void)
 	u_int64_t uptime;
 	struct nstat_sysinfo_data ns_data;
 	uint32_t memreleased = 0;
+	static uint32_t prevmemreleased;
 
 	uptime = net_uptime();
 	lck_mtx_lock(mbuf_mlock);
@@ -7762,8 +7930,9 @@ mbuf_report_peak_usage(void)
 	for (i = 0; i < NELEM(mbuf_table); i++) {
 		m_peak(m_class(i)) = m_total(m_class(i));
 		memreleased += m_release_cnt(i);
-		m_release_cnt(i) = 0;
 	}
+	memreleased = memreleased - prevmemreleased;
+	prevmemreleased = memreleased;
 	mb_peak_newreport = FALSE;
 	lck_mtx_unlock(mbuf_mlock);
 
@@ -7997,7 +8166,83 @@ m_drain_force_sysctl SYSCTL_HANDLER_ARGS
 	return (err);
 }
 
+#if DEBUG || DEVELOPMENT
+
+static int mbtest_val;
+static int mbtest_running;
+
+static void mbtest_thread(__unused void *arg)
+{
+	int i;
+
+	printf("%s thread starting\n", __func__);
+
+	for (i = 0; i < 1000; i++) {
+		unsigned int needed = 100000;
+		struct mbuf *m1, *m2, *m3;
+
+		if (njcl > 0) {
+			needed = 100000;
+			m3 = m_getpackets_internal(&needed, 0, M_DONTWAIT, 0, M16KCLBYTES);
+			m_freem_list(m3);
+		}
+
+		needed = 100000;
+		m2 = m_getpackets_internal(&needed, 0, M_DONTWAIT, 0, MBIGCLBYTES);
+		m_freem_list(m2);
+
+		m1 = m_getpackets_internal(&needed, 0, M_DONTWAIT, 0, MCLBYTES);
+		m_freem_list(m1);
+	}
+
+	printf("%s thread ending\n", __func__);
+
+	OSDecrementAtomic(&mbtest_running);
+	wakeup_one((caddr_t)&mbtest_running);
+}
+
+static void sysctl_mbtest(void)
+{
+	/* We launch three threads - wait for all of them */
+	OSIncrementAtomic(&mbtest_running);
+	OSIncrementAtomic(&mbtest_running);
+	OSIncrementAtomic(&mbtest_running);
+
+	thread_call_func_delayed((thread_call_func_t)mbtest_thread, NULL, 10);
+	thread_call_func_delayed((thread_call_func_t)mbtest_thread, NULL, 10);
+	thread_call_func_delayed((thread_call_func_t)mbtest_thread, NULL, 10);
+
+	while (mbtest_running) {
+		msleep((caddr_t)&mbtest_running, NULL, PUSER, "mbtest_running", NULL);
+	}
+}
+
+static int
+mbtest SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error = 0, val, oldval = mbtest_val;
+
+	val = oldval;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error || !req->newptr)
+		return (error);
+
+	if (val != oldval)
+		sysctl_mbtest();
+
+	mbtest_val = val;
+
+	return (error);
+}
+#endif
+
 SYSCTL_DECL(_kern_ipc);
+#if DEBUG || DEVELOPMENT
+SYSCTL_PROC(_kern_ipc, OID_AUTO, mbtest,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &mbtest_val, 0, &mbtest, "I",
+    "Toggle to test mbufs");
+#endif
 SYSCTL_PROC(_kern_ipc, KIPC_MBSTAT, mbstat,
     CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
     0, 0, mbstat_sysctl, "S,mbstat", "");

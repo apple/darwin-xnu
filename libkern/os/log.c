@@ -45,7 +45,7 @@ extern firehose_chunk_t firehose_boot_chunk;
 
 extern void bsd_log_lock(void);
 extern void bsd_log_unlock(void);
-extern void logwakeup(void);
+extern void logwakeup(struct msgbuf *);
 
 decl_lck_spin_data(extern, oslog_stream_lock)
 extern void oslog_streamwakeup(void);
@@ -196,7 +196,13 @@ _os_log_to_msgbuf_internal(const char *format, va_list args, bool safe, bool log
     static int msgbufreplay = -1;
     va_list args_copy;
 
+#if DEVELOPMENT || DEBUG
+    if (safe) {
+        bsd_log_lock();
+    }
+#else
     bsd_log_lock();
+#endif
 
     if (!safe) {
         if (-1 == msgbufreplay) msgbufreplay = msgbufp->msg_bufx;
@@ -253,9 +259,15 @@ _os_log_to_msgbuf_internal(const char *format, va_list args, bool safe, bool log
     vprintf_log_locked(format, args_copy);
     va_end(args_copy);
 
+#if DEVELOPMENT || DEBUG
+    if (safe) {
+        bsd_log_unlock();
+        logwakeup(msgbufp);
+    }
+#else
     bsd_log_unlock();
-
-    if (safe) logwakeup();
+    if (safe) logwakeup(msgbufp);
+#endif
 }
 
 static void

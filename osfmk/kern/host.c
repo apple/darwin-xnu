@@ -311,6 +311,8 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 	}
 }
 
+kern_return_t host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t * count);
+
 kern_return_t
 host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t * count)
 {
@@ -525,6 +527,219 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 
 extern uint32_t c_segment_pages_compressed;
 
+#define HOST_STATISTICS_TIME_WINDOW 1 /* seconds */
+#define HOST_STATISTICS_MAX_REQUESTS 10 /* maximum number of requests per window */
+#define HOST_STATISTICS_MIN_REQUESTS 2 /* minimum number of requests per window */
+
+uint64_t host_statistics_time_window;
+
+static lck_mtx_t host_statistics_lck;
+static lck_grp_t* host_statistics_lck_grp;
+
+#define HOST_VM_INFO64_REV0		0
+#define HOST_VM_INFO64_REV1		1
+#define HOST_EXTMOD_INFO64_REV0		2
+#define HOST_LOAD_INFO_REV0		3
+#define HOST_VM_INFO_REV0		4
+#define HOST_VM_INFO_REV1        	5
+#define HOST_VM_INFO_REV2        	6
+#define HOST_CPU_LOAD_INFO_REV0		7
+#define HOST_EXPIRED_TASK_INFO_REV0	8
+#define HOST_EXPIRED_TASK_INFO_REV1 	9
+#define NUM_HOST_INFO_DATA_TYPES 	10
+
+static vm_statistics64_data_t host_vm_info64_rev0 = {};
+static vm_statistics64_data_t host_vm_info64_rev1 = {};
+static vm_extmod_statistics_data_t host_extmod_info64 = {};
+static host_load_info_data_t host_load_info = {};
+static vm_statistics_data_t host_vm_info_rev0 = {};
+static vm_statistics_data_t host_vm_info_rev1 = {};
+static vm_statistics_data_t host_vm_info_rev2 = {};
+static host_cpu_load_info_data_t host_cpu_load_info = {};
+static task_power_info_data_t host_expired_task_info = {};
+static task_power_info_v2_data_t host_expired_task_info2 = {};
+
+struct host_stats_cache {
+	uint64_t last_access;
+	uint64_t current_requests;
+	uint64_t max_requests;
+	uintptr_t data;
+	mach_msg_type_number_t count; //NOTE count is in sizeof(integer_t)
+};
+
+static struct host_stats_cache g_host_stats_cache[NUM_HOST_INFO_DATA_TYPES] = {
+	[HOST_VM_INFO64_REV0] = { .last_access = 0, .current_requests = 0, .max_requests = 0, .data = (uintptr_t)&host_vm_info64_rev0, .count = HOST_VM_INFO64_REV0_COUNT },
+	[HOST_VM_INFO64_REV1] = { .last_access = 0, .current_requests = 0, .max_requests = 0, .data = (uintptr_t)&host_vm_info64_rev1, .count = HOST_VM_INFO64_REV1_COUNT },
+	[HOST_EXTMOD_INFO64_REV0] = { .last_access = 0, .current_requests = 0, .max_requests = 0, .data = (uintptr_t)&host_extmod_info64, .count = HOST_EXTMOD_INFO64_COUNT },
+	[HOST_LOAD_INFO_REV0] = { .last_access = 0, .current_requests = 0, .max_requests = 0, .data = (uintptr_t)&host_load_info, .count = HOST_LOAD_INFO_COUNT },
+	[HOST_VM_INFO_REV0] = { .last_access = 0, .current_requests = 0, .max_requests = 0, .data = (uintptr_t)&host_vm_info_rev0, .count = HOST_VM_INFO_REV0_COUNT },
+	[HOST_VM_INFO_REV1] = { .last_access = 0, .current_requests = 0, .max_requests = 0, .data = (uintptr_t)&host_vm_info_rev1, .count = HOST_VM_INFO_REV1_COUNT },
+	[HOST_VM_INFO_REV2] = { .last_access = 0, .current_requests = 0, .max_requests = 0, .data = (uintptr_t)&host_vm_info_rev2, .count = HOST_VM_INFO_REV2_COUNT },
+	[HOST_CPU_LOAD_INFO_REV0] = { .last_access = 0, .current_requests = 0, .max_requests = 0, .data = (uintptr_t)&host_cpu_load_info, .count = HOST_CPU_LOAD_INFO_COUNT },
+	[HOST_EXPIRED_TASK_INFO_REV0] = { .last_access = 0, .current_requests = 0, .max_requests = 0, .data = (uintptr_t)&host_expired_task_info, .count = TASK_POWER_INFO_COUNT },
+	[HOST_EXPIRED_TASK_INFO_REV1] = { .last_access = 0, .current_requests = 0, .max_requests = 0, .data = (uintptr_t)&host_expired_task_info2, .count = TASK_POWER_INFO_V2_COUNT},
+};
+
+
+void
+host_statistics_init(void)
+{
+	host_statistics_lck_grp = lck_grp_alloc_init("host_statistics", LCK_GRP_ATTR_NULL);
+	lck_mtx_init(&host_statistics_lck, host_statistics_lck_grp, LCK_ATTR_NULL);
+	nanoseconds_to_absolutetime((HOST_STATISTICS_TIME_WINDOW * NSEC_PER_SEC), &host_statistics_time_window);
+}
+
+static void
+cache_host_statistics(int index, host_info64_t info)
+{
+    if (index < 0 || index >= NUM_HOST_INFO_DATA_TYPES)
+        return;
+
+    task_t task = current_task();
+    if (task->t_flags & TF_PLATFORM)
+        return;
+
+    memcpy((void *)g_host_stats_cache[index].data, info, g_host_stats_cache[index].count * sizeof(integer_t));
+    return;
+}
+
+static void
+get_cached_info(int index, host_info64_t info, mach_msg_type_number_t* count)
+{
+    if (index < 0 || index >= NUM_HOST_INFO_DATA_TYPES) {
+        *count = 0;
+        return;
+    }
+
+    *count = g_host_stats_cache[index].count;
+    memcpy(info, (void *)g_host_stats_cache[index].data, g_host_stats_cache[index].count * sizeof(integer_t));
+}
+
+static int
+get_host_info_data_index(bool is_stat64, host_flavor_t flavor, mach_msg_type_number_t* count, kern_return_t* ret)
+{
+	switch (flavor) {
+
+        case HOST_VM_INFO64:
+	if (!is_stat64){
+		*ret = KERN_INVALID_ARGUMENT;
+		return -1;
+	}
+	if (*count < HOST_VM_INFO64_REV0_COUNT) {
+		*ret = KERN_FAILURE;
+		return -1;
+	}
+	if (*count >= HOST_VM_INFO64_REV1_COUNT) {
+		return HOST_VM_INFO64_REV1;
+	}
+	return HOST_VM_INFO64_REV0;
+
+	case HOST_EXTMOD_INFO64:
+	if (!is_stat64){
+		*ret = KERN_INVALID_ARGUMENT;
+		return -1;
+	}
+	if (*count < HOST_EXTMOD_INFO64_COUNT) {
+		*ret = KERN_FAILURE;
+		return -1;
+	}
+	return HOST_EXTMOD_INFO64_REV0;
+
+	case HOST_LOAD_INFO:
+	if (*count < HOST_LOAD_INFO_COUNT) {
+		*ret = KERN_FAILURE;
+		return -1;
+	}
+	return HOST_LOAD_INFO_REV0;
+
+	case HOST_VM_INFO:
+	if (*count < HOST_VM_INFO_REV0_COUNT) {
+		*ret = KERN_FAILURE;
+		return -1;
+	}
+	if (*count >= HOST_VM_INFO_REV2_COUNT) {
+		return HOST_VM_INFO_REV2;
+	}
+	if (*count >= HOST_VM_INFO_REV1_COUNT) {
+		return HOST_VM_INFO_REV1;
+	}
+	return HOST_VM_INFO_REV0;
+
+	case HOST_CPU_LOAD_INFO:
+	if (*count < HOST_CPU_LOAD_INFO_COUNT) {
+		*ret = KERN_FAILURE;
+		return -1;
+	}
+	return HOST_CPU_LOAD_INFO_REV0;
+
+	case HOST_EXPIRED_TASK_INFO:
+	if (*count < TASK_POWER_INFO_COUNT){
+		*ret = KERN_FAILURE;
+		return -1;
+	}
+	if (*count >= TASK_POWER_INFO_V2_COUNT){
+		return HOST_EXPIRED_TASK_INFO_REV1;
+	}
+	return HOST_EXPIRED_TASK_INFO_REV0;
+
+	default:
+	*ret = KERN_INVALID_ARGUMENT;
+	return -1;
+
+	}
+
+}
+
+static bool
+rate_limit_host_statistics(bool is_stat64, host_flavor_t flavor, host_info64_t info, mach_msg_type_number_t* count, kern_return_t* ret, int *pindex)
+{
+	task_t task = current_task();
+
+	assert(task != kernel_task);
+
+	*ret = KERN_SUCCESS;
+
+	/* Access control only for third party applications */
+	if (task->t_flags & TF_PLATFORM) {
+		return FALSE;
+	}
+
+	/* Rate limit to HOST_STATISTICS_MAX_REQUESTS queries for each HOST_STATISTICS_TIME_WINDOW window of time */
+	bool rate_limited = FALSE;
+	bool set_last_access = TRUE;
+
+	/* there is a cache for every flavor */
+	int index = get_host_info_data_index(is_stat64, flavor, count, ret);
+	if (index == -1)
+		goto out;
+
+	*pindex = index;
+	lck_mtx_lock(&host_statistics_lck);
+	if (g_host_stats_cache[index].last_access > mach_continuous_time() - host_statistics_time_window) {
+		set_last_access = FALSE;
+		if (g_host_stats_cache[index].current_requests++ >= g_host_stats_cache[index].max_requests) {
+			rate_limited = TRUE;
+			get_cached_info(index, info, count);
+		}
+	}
+	if (set_last_access) {
+		g_host_stats_cache[index].current_requests = 1;
+		/*
+		 * select a random number of requests (included between HOST_STATISTICS_MIN_REQUESTS and HOST_STATISTICS_MAX_REQUESTS)
+		 * to let query host_statistics.
+		 * In this way it is not possible to infer looking at when the a cached copy changes if host_statistics was called on
+		 * the provious window.
+		 */
+		g_host_stats_cache[index].max_requests = (mach_absolute_time() % (HOST_STATISTICS_MAX_REQUESTS - HOST_STATISTICS_MIN_REQUESTS + 1)) + HOST_STATISTICS_MIN_REQUESTS;
+		g_host_stats_cache[index].last_access = mach_continuous_time();
+	}
+	lck_mtx_unlock(&host_statistics_lck);
+out:
+	return rate_limited;
+}
+
+kern_return_t host_statistics64(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t * count);
+
 kern_return_t
 host_statistics64(host_t host, host_flavor_t flavor, host_info64_t info, mach_msg_type_number_t * count)
 {
@@ -659,6 +874,52 @@ host_statistics64(host_t host, host_flavor_t flavor, host_info64_t info, mach_ms
 	default: /* If we didn't recognize the flavor, send to host_statistics */
 		return (host_statistics(host, flavor, (host_info_t)info, count));
 	}
+}
+
+kern_return_t
+host_statistics64_from_user(host_t host, host_flavor_t flavor, host_info64_t info, mach_msg_type_number_t * count)
+{
+	kern_return_t ret = KERN_SUCCESS;
+	int index;
+
+	if (host == HOST_NULL)
+		return (KERN_INVALID_HOST);
+
+	if (rate_limit_host_statistics(TRUE, flavor, info, count, &ret, &index))
+		return ret;
+
+	if (ret != KERN_SUCCESS)
+		return ret;
+
+	ret = host_statistics64(host, flavor, info, count);
+
+	if (ret == KERN_SUCCESS)
+		cache_host_statistics(index, info);
+
+	return ret;
+}
+
+kern_return_t
+host_statistics_from_user(host_t host, host_flavor_t flavor, host_info64_t info, mach_msg_type_number_t * count)
+{
+	kern_return_t ret = KERN_SUCCESS;
+	int index;
+
+	if (host == HOST_NULL)
+		return (KERN_INVALID_HOST);
+
+	if (rate_limit_host_statistics(FALSE, flavor, info, count, &ret, &index))
+		return ret;
+
+	if (ret != KERN_SUCCESS)
+		return ret;
+
+	ret = host_statistics(host, flavor, info, count);
+
+	if (ret == KERN_SUCCESS)
+		cache_host_statistics(index, info);
+
+	return ret;
 }
 
 /*

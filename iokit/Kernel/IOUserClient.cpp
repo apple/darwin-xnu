@@ -1006,9 +1006,9 @@ IOReturn IOServiceMessageUserNotification::handler( void * ref,
     }
     else
     {
+        if( callerArgSize > kIOUserNotifyMaxMessageSize)
+            callerArgSize = kIOUserNotifyMaxMessageSize;
         argSize = callerArgSize;
-        if( argSize > kIOUserNotifyMaxMessageSize)
-            argSize = kIOUserNotifyMaxMessageSize;
     }
 
     // adjust message size for ipc restrictions
@@ -2319,6 +2319,8 @@ static kern_return_t internal_io_service_add_notification(
 
     do {
         err = kIOReturnNoResources;
+
+        if (matching_size > (sizeof(io_struct_inband_t) * 1024)) return(kIOReturnMessageTooLarge);
 
         if( !(sym = OSSymbol::withCString( notification_type )))
 	    err = kIOReturnNoResources;

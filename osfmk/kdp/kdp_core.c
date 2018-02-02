@@ -1148,7 +1148,8 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 	existing_log_size = (panic_info->eph_panic_log_offset - sizeof(struct embedded_panic_header)) +
 				panic_info->eph_panic_log_len + panic_info->eph_other_log_len;
 #else /* CONFIG_EMBEDDED */
-	existing_log_size  = log_start - debug_buf_base;
+	existing_log_size = (panic_info->mph_panic_log_offset - sizeof(struct macos_panic_header)) +
+				panic_info->mph_panic_log_len + panic_info->mph_other_log_len;
 #endif /* CONFIG_EMBEDDED */
 
 	assert (existing_log_size <= debug_buf_size);
@@ -1256,9 +1257,11 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 			new_log_len = KERN_COREDUMP_MAXDEBUGLOGSIZE;
 		}
 
-#if CONFIG_EMBEDDED
 		/* This data is after the panic stackshot, we need to write it separately */
+#if CONFIG_EMBEDDED
 		existing_log_size -= panic_info->eph_other_log_len;
+#else
+		existing_log_size -= panic_info->mph_other_log_len;
 #endif
 
 		/*
@@ -1273,13 +1276,17 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 				goto exit;
 		}
 
+		/*
+		 * The next part of the log we're interested in is the beginning of the 'other' log.
+		 * Include any data after the panic stackshot but before we started the coredump log
+		 * (see above)
+		 */
 #if CONFIG_EMBEDDED
-		/* The next part of the log we're interested in is the beginning of the 'other' log */
 		buf = (char *)(((char *)panic_info) + (uintptr_t) panic_info->eph_other_log_offset);
-		/* Include any data after the panic stackshot but before we started the coredump log (see above) */
 		new_log_len += panic_info->eph_other_log_len;
 #else /* CONFIG_EMBEDDED */
-		buf += existing_log_size;
+		buf = (char *)(((char *)panic_info) + (uintptr_t) panic_info->mph_other_log_offset);
+		new_log_len += panic_info->mph_other_log_len;
 #endif /* CONFIG_EMBEDDED */
 
 		/* Write the coredump log */
@@ -1300,6 +1307,16 @@ exit:
 		kern_coredump_log(NULL, "(do_kern_dump close) outproc(KDP_EOF, NULL, 0, 0) returned 0x%x\n", ret);
 		dump_succeeded = FALSE;
 	}
+
+#if CONFIG_EMBEDDED
+	panic_info->eph_panic_flags |= (dump_succeeded ? EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_COMPLETE :
+			EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_FAILED);
+#else
+	panic_info->mph_panic_flags |= (dump_succeeded ? MACOS_PANIC_HEADER_FLAG_COREDUMP_COMPLETE :
+			MACOS_PANIC_HEADER_FLAG_COREDUMP_FAILED);
+#endif
+	/* We touched the panic header, flush it so we update the CRC */
+	paniclog_flush();
 
 	return (dump_succeeded ? 0 : -1);
 }

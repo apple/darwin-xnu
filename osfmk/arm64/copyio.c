@@ -40,7 +40,6 @@ extern int _bcopyout(const char *src, char *dst, vm_size_t len);
 extern int _copyin_word(const char *src, uint64_t *dst, vm_size_t len);
 
 extern pmap_t kernel_pmap;
-extern boolean_t arm_pan_enabled;
 
 typedef enum copyio_type {
 	COPYIO_IN,
@@ -65,9 +64,7 @@ static inline void
 user_access_enable(void)
 {
 #if __ARM_PAN_AVAILABLE__
-    if (arm_pan_enabled) {
-        __builtin_arm_wsr("pan", 0);
-    }
+	__builtin_arm_wsr("pan", 0);
 #endif  /* __ARM_PAN_AVAILABLE__ */
 }
 
@@ -75,9 +72,7 @@ static inline void
 user_access_disable(void)
 {
 #if __ARM_PAN_AVAILABLE__
-    if (arm_pan_enabled) {
-		__builtin_arm_wsr("pan", 1);
-    }
+	__builtin_arm_wsr("pan", 1);
 #endif  /* __ARM_PAN_AVAILABLE__ */
 }
 
@@ -110,7 +105,7 @@ copyio(copyio_type_t copytype, const char *src, char *dst,
 	}
 #endif
 
-    user_access_enable();
+	user_access_enable();
 
 	/* Select copy routines based on direction:
 	 *   COPYIO_IN - Use unprivileged loads to read from user address
@@ -137,7 +132,7 @@ copyio(copyio_type_t copytype, const char *src, char *dst,
 		result = EINVAL;
 	}
 
-    user_access_disable();
+	user_access_disable();
 	return result;
 }
 

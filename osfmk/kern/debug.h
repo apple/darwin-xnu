@@ -266,7 +266,7 @@ boolean_t kern_feature_override(uint32_t fmask);
  *       and be done alongside astris and DumpPanic changes.
  */
 struct embedded_panic_header {
-	uint32_t eph_magic;                /* PANIC_MAGIC if valid */
+	uint32_t eph_magic;                /* EMBEDDED_PANIC_MAGIC if valid */
 	uint32_t eph_crc;                  /* CRC of everything following the ph_crc in the header and the contents */
 	uint32_t eph_version;              /* embedded_panic_header version */
 	uint64_t eph_panic_flags;          /* Flags indicating any state or relevant details */
@@ -287,26 +287,39 @@ struct embedded_panic_header {
 #define EMBEDDED_PANIC_HEADER_FLAG_NESTED_PANIC                  0x40
 #define EMBEDDED_PANIC_HEADER_FLAG_BUTTON_RESET_PANIC            0x80
 #define EMBEDDED_PANIC_HEADER_FLAG_COPROC_INITIATED_PANIC        0x100
+#define EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_FAILED               0x200
 
 #define EMBEDDED_PANIC_HEADER_CURRENT_VERSION 1
 #define EMBEDDED_PANIC_MAGIC 0x46554E4B /* FUNK */
 
 struct macos_panic_header {
-	uint32_t mph_magic;              /* PANIC_MAGIC if valid */
-	uint32_t mph_crc;                /* CRC of everything following mph_crc in the header and the contents */
-	uint32_t mph_version;            /* macos_panic_header version */
-	uint32_t mph_padding;            /* unused */
-	uint64_t mph_panic_flags;        /* Flags indicating any state or relevant details */
-	uint32_t mph_panic_log_offset;   /* Offset of the panic log from the beginning of the header */
-	uint32_t mph_panic_log_len;      /* length of the panic log */
-	char     mph_data[];             /* panic data -- DO NOT ACCESS THIS FIELD DIRECTLY. Use the offsets above relative to the beginning of the header */
+	uint32_t mph_magic;                   /* MACOS_PANIC_MAGIC if valid */
+	uint32_t mph_crc;                     /* CRC of everything following mph_crc in the header and the contents */
+	uint32_t mph_version;                 /* macos_panic_header version */
+	uint32_t mph_padding;                 /* unused */
+	uint64_t mph_panic_flags;             /* Flags indicating any state or relevant details */
+	uint32_t mph_panic_log_offset;        /* Offset of the panic log from the beginning of the header */
+	uint32_t mph_panic_log_len;           /* length of the panic log */
+	uint32_t mph_stackshot_offset;  /* Offset of the panic stackshot from the beginning of the header */
+	uint32_t mph_stackshot_len;     /* length of the panic stackshot */
+	uint32_t mph_other_log_offset;        /* Offset of the other log (any logging subsequent to the stackshot) from the beginning of the header */
+	uint32_t mph_other_log_len;           /* length of the other log */
+	char     mph_data[];                  /* panic data -- DO NOT ACCESS THIS FIELD DIRECTLY. Use the offsets above relative to the beginning of the header */
 } __attribute__((packed));
 
-#define MACOS_PANIC_HEADER_CURRENT_VERSION 1
+#define MACOS_PANIC_HEADER_CURRENT_VERSION 2
 #define MACOS_PANIC_MAGIC 0x44454544 /* DEED */
 
-#define MACOS_PANIC_HEADER_FLAG_NESTED_PANIC            0x01
-#define MACOS_PANIC_HEADER_FLAG_COPROC_INITIATED_PANIC  0x02
+#define MACOS_PANIC_HEADER_FLAG_NESTED_PANIC                  0x01
+#define MACOS_PANIC_HEADER_FLAG_COPROC_INITIATED_PANIC        0x02
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_SUCCEEDED           0x04
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_DATA_COMPRESSED     0x08
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_DEBUGGERSYNC 0x10
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR        0x20
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_INCOMPLETE   0x40
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_NESTED       0x80
+#define MACOS_PANIC_HEADER_FLAG_COREDUMP_COMPLETE             0x100
+#define MACOS_PANIC_HEADER_FLAG_COREDUMP_FAILED               0x200
 
 #endif /* __APPLE_API_UNSTABLE */
 #endif /* __APPLE_API_PRIVATE */
@@ -434,6 +447,7 @@ __END_DECLS
 boolean_t oslog_is_safe(void);
 boolean_t debug_mode_active(void);
 boolean_t stackshot_active(void);
+void panic_stackshot_reset_state(void);
 
 /*
  * @function stack_snapshot_from_kernel
@@ -461,6 +475,7 @@ stack_snapshot_from_kernel(int pid, void *buf, uint32_t size, uint32_t flags,
 #if !CONFIG_EMBEDDED
 extern char debug_buf[];
 extern boolean_t coprocessor_paniclog_flush;
+extern boolean_t extended_debug_log_enabled;;
 #endif /* !CONFIG_EMBEDDED */
 
 extern char	*debug_buf_base;
@@ -471,8 +486,9 @@ extern size_t	panic_disk_error_description_size;
 
 extern unsigned char	*kernel_uuid;
 extern unsigned int	debug_boot_arg;
-
-#ifdef XNU_KERNEL_PRIVATE
+#if DEVELOPMENT || DEBUG
+extern boolean_t	debug_boot_arg_inited;
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -498,12 +514,7 @@ extern unsigned int	kdebug_serial;
 extern const char	*debugger_panic_str;
 
 extern char *debug_buf_ptr;
-
-#if CONFIG_EMBEDDED
 extern unsigned int debug_buf_size;
-#else
-extern const unsigned int debug_buf_size;
-#endif
 
 extern void	debug_log_init(void);
 extern void	debug_putc(char);
@@ -511,6 +522,8 @@ extern void	debug_putc(char);
 extern void	panic_init(void);
 
 #if defined (__x86_64__)
+extern void extended_debug_log_init(void);
+
 int	packA(char *inbuf, uint32_t length, uint32_t buflen);
 void	unpackA(char *inbuf, uint32_t length);
 
@@ -536,7 +549,6 @@ void	panic_display_ztrace(void);
 #if CONFIG_ECC_LOGGING
 void 	panic_display_ecc_errors(void);
 #endif /* CONFIG_ECC_LOGGING */
-#endif /* MACH_KERNEL_PRIVATE */
 
 /*
  * @var not_in_kdp

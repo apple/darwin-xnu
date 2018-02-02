@@ -79,7 +79,6 @@
 #include <machine/cpu_capabilities.h>
 #include <arm/cpu_data_internal.h>
 
-extern boolean_t arm_pan_enabled;
 kern_return_t arm64_lock_test(void);
 kern_return_t arm64_munger_test(void);
 kern_return_t ex_cb_test(void);
@@ -87,7 +86,11 @@ kern_return_t arm64_pan_test(void);
 
 // exception handler ignores this fault address during PAN test
 #if __ARM_PAN_AVAILABLE__
-vm_offset_t pan_test_addr;
+const uint64_t pan_ro_value = 0xFEEDB0B0DEADBEEF;
+vm_offset_t pan_test_addr = 0;
+vm_offset_t pan_ro_addr = 0;
+volatile int pan_exception_level = 0;
+volatile char pan_fault_value = 0;
 #endif
 
 #include <libkern/OSAtomic.h>
@@ -1037,19 +1040,14 @@ ex_cb_test()
 kern_return_t
 arm64_pan_test()
 {
-	unsigned long last_pan_config;
 	vm_offset_t priv_addr = _COMM_PAGE_SIGNATURE;
 
 	T_LOG("Testing PAN.");
 
-	last_pan_config = __builtin_arm_rsr("pan");
-	if (!last_pan_config) {
-		T_ASSERT(!arm_pan_enabled, "PAN is not enabled even though it is configured to be"); 
-		__builtin_arm_wsr("pan", 1);
-	}
-		
 	T_ASSERT(__builtin_arm_rsr("pan") != 0, NULL);
 
+	pan_exception_level = 0;
+	pan_fault_value = 0xDE;
 	// convert priv_addr to one that is accessible from user mode
 	pan_test_addr = priv_addr + _COMM_PAGE64_BASE_ADDRESS - 
 		_COMM_PAGE_START_ADDRESS;
@@ -1059,14 +1057,31 @@ arm64_pan_test()
 	// The exception handler, upon recognizing the fault address is pan_test_addr,
 	// will disable PAN and rerun this instruction successfully
 	T_ASSERT(*(char *)pan_test_addr == *(char *)priv_addr, NULL);
-	pan_test_addr = 0;
+
+	T_ASSERT(pan_exception_level == 2, NULL);
 
 	T_ASSERT(__builtin_arm_rsr("pan") == 0, NULL);
 
-	// restore previous PAN config value
-	if (last_pan_config)
-		__builtin_arm_wsr("pan", 1);
+	T_ASSERT(pan_fault_value == *(char *)priv_addr, NULL);
 
+	pan_exception_level = 0;
+	pan_fault_value = 0xAD;
+	pan_ro_addr = (vm_offset_t) &pan_ro_value;
+
+	// Force a permission fault while PAN is disabled to make sure PAN is
+	// re-enabled during the exception handler.
+	*((volatile uint64_t*)pan_ro_addr) = 0xFEEDFACECAFECAFE;
+
+	T_ASSERT(pan_exception_level == 2, NULL);
+
+	T_ASSERT(__builtin_arm_rsr("pan") == 0, NULL);
+
+	T_ASSERT(pan_fault_value == *(char *)priv_addr, NULL);
+
+	pan_test_addr = 0;
+	pan_ro_addr = 0;
+
+	__builtin_arm_wsr("pan", 1);
 	return KERN_SUCCESS;
 }
 #endif

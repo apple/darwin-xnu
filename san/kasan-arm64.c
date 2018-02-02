@@ -105,9 +105,18 @@ alloc_zero_page(void)
 }
 
 static void
+align_to_page(vm_offset_t *addrp, vm_offset_t *sizep)
+{
+	vm_offset_t addr_aligned = vm_map_trunc_page(*addrp, ARM_PGMASK);
+	*sizep = vm_map_round_page(*sizep + (*addrp - addr_aligned), ARM_PGMASK);
+	*addrp = addr_aligned;
+}
+
+static void
 kasan_map_shadow_internal(vm_offset_t address, vm_size_t size, bool is_zero, bool back_page)
 {
-	size = vm_map_round_page(size, ARM_PGMASK);
+	align_to_page(&address, &size);
+
 	vm_size_t j;
 	uint64_t *pte;
 
@@ -189,7 +198,8 @@ kasan_map_shadow(vm_offset_t address, vm_size_t size, bool is_zero)
 static void
 kasan_map_shadow_early(vm_offset_t address, vm_size_t size, bool is_zero)
 {
-	size = vm_map_round_page(size, ARM_PGMASK);
+	align_to_page(&address, &size);
+
 	vm_size_t j;
 	uint64_t *pte;
 

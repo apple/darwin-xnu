@@ -577,6 +577,8 @@ def ShowPanicLog(cmd_args=None, cmd_options={}):
     if "-S" in cmd_options:
         if hasattr(kern.globals, "kc_panic_data"):
             stackshot_saved = False
+            # TODO: Update logic to handle "in-memory" panic stackshot on Gibraltar platforms
+            #       once we drop support for the on disk one there.
             if kern.arch == 'x86_64':
                 if kern.globals.panic_stackshot_len != 0:
                     stackshot_saved = True
@@ -609,18 +611,16 @@ def ShowPanicLog(cmd_args=None, cmd_options={}):
     warn_str = ""
 
     if kern.arch == 'x86_64':
-        panic_buf = kern.globals.debug_buf_base
-        panic_buf_start = unsigned(panic_buf)
-        panic_buf_end = unsigned(kern.globals.debug_buf_ptr)
-        num_bytes = panic_buf_end - panic_buf_start
-        if num_bytes == 0:
-            return
-        num_print_bytes = 0
-        pos = 0
-        while pos < num_bytes:
-            p_char = str(panic_buf[pos])
-            out_str += p_char
-            pos += 1
+        panic_buf = Cast(kern.globals.panic_info, 'char *')
+        panic_log_magic = unsigned(kern.globals.panic_info.mph_magic)
+        panic_log_begin_offset = unsigned(kern.globals.panic_info.mph_panic_log_offset)
+        panic_log_len = unsigned(kern.globals.panic_info.mph_panic_log_len)
+        other_log_begin_offset = unsigned(kern.globals.panic_info.mph_other_log_offset)
+        other_log_len = unsigned(kern.globals.panic_info.mph_other_log_len)
+        cur_debug_buf_ptr_offset = (unsigned(kern.globals.debug_buf_ptr) - unsigned(kern.globals.panic_info))
+        if other_log_begin_offset != 0 and (other_log_len == 0 or other_log_len < (cur_debug_buf_ptr_offset - other_log_begin_offset)):
+            other_log_len = cur_debug_buf_ptr_offset - other_log_begin_offset
+        expected_panic_magic = xnudefines.MACOS_PANIC_MAGIC
     else:
         panic_buf = Cast(kern.globals.panic_info, 'char *')
         panic_log_magic = unsigned(kern.globals.panic_info.eph_magic)
@@ -628,31 +628,32 @@ def ShowPanicLog(cmd_args=None, cmd_options={}):
         panic_log_len = unsigned(kern.globals.panic_info.eph_panic_log_len)
         other_log_begin_offset = unsigned(kern.globals.panic_info.eph_other_log_offset)
         other_log_len = unsigned(kern.globals.panic_info.eph_other_log_len)
+        expected_panic_magic = xnudefines.EMBEDDED_PANIC_MAGIC
 
-        if panic_log_begin_offset == 0:
-            return
+    if panic_log_begin_offset == 0:
+        return
 
-        if panic_log_magic != 0 and panic_log_magic != xnudefines.EMBEDDED_PANIC_MAGIC:
-            warn_str += "BAD MAGIC! Found 0x%x expected 0x%x".format(panic_log_magic,
-                    xnudefines.EMBEDDED_PANIC_MAGIC)
+    if panic_log_magic != 0 and panic_log_magic != expected_panic_magic:
+        warn_str += "BAD MAGIC! Found 0x%x expected 0x%x".format(panic_log_magic,
+                    expected_panic_magic)
 
-        if panic_log_begin_offset == 0:
-            if warn_str:
-                print "\n %s" % warn_str
-            return
+    if panic_log_begin_offset == 0:
+        if warn_str:
+            print "\n %s" % warn_str
+        return
 
-        panic_log_curindex = 0
-        while panic_log_curindex < panic_log_len:
-            p_char = str(panic_buf[(panic_log_begin_offset + panic_log_curindex)])
+    panic_log_curindex = 0
+    while panic_log_curindex < panic_log_len:
+        p_char = str(panic_buf[(panic_log_begin_offset + panic_log_curindex)])
+        out_str += p_char
+        panic_log_curindex += 1
+
+    if other_log_begin_offset != 0:
+        other_log_curindex = 0
+        while other_log_curindex < other_log_len:
+            p_char = str(panic_buf[(other_log_begin_offset + other_log_curindex)])
             out_str += p_char
-            panic_log_curindex += 1
-
-        if other_log_begin_offset != 0:
-            other_log_curindex = 0
-            while other_log_curindex < other_log_len:
-                p_char = str(panic_buf[(other_log_begin_offset + other_log_curindex)])
-                out_str += p_char
-                other_log_curindex += 1
+            other_log_curindex += 1
 
     print out_str
 

@@ -636,30 +636,31 @@ extern void kdebug_reset(void);
 #define DBG_IODISK			DBG_IOSTORAGE		/* OBSOLETE: Use DBG_IOSTORAGE instead */
 
 /* **** The Kernel Debug Sub Classes for Device Drivers (DBG_DRIVERS) **** */
-#define DBG_DRVSTORAGE       1 /* Storage layers */
-#define DBG_DRVNETWORK       2 /* Network layers */
-#define DBG_DRVKEYBOARD      3 /* Keyboard */
-#define DBG_DRVHID           4 /* HID Devices */
-#define DBG_DRVAUDIO         5 /* Audio */
-#define DBG_DRVSERIAL        7 /* Serial */
-#define DBG_DRVSAM           8 /* SCSI Architecture Model layers */
-#define DBG_DRVPARALLELATA   9 /* Parallel ATA */
-#define DBG_DRVPARALLELSCSI 10 /* Parallel SCSI */
-#define DBG_DRVSATA         11 /* Serial ATA */
-#define DBG_DRVSAS          12 /* SAS */
-#define DBG_DRVFIBRECHANNEL 13 /* FiberChannel */
-#define DBG_DRVUSB          14 /* USB */
-#define DBG_DRVBLUETOOTH    15 /* Bluetooth */
-#define DBG_DRVFIREWIRE     16 /* FireWire */
-#define DBG_DRVINFINIBAND   17 /* Infiniband */
-#define DBG_DRVGRAPHICS     18 /* Graphics */
-#define DBG_DRVSD           19 /* Secure Digital */
-#define DBG_DRVNAND         20 /* NAND drivers and layers */
-#define DBG_SSD             21 /* SSD */
-#define DBG_DRVSPI          22 /* SPI */
-#define DBG_DRVWLAN_802_11  23 /* WLAN 802.11 */
-#define DBG_DRVSSM          24 /* System State Manager(AppleSSM) */
-#define DBG_DRVSMC          25 /* System Management Controller */
+#define DBG_DRVSTORAGE        1 /* Storage layers */
+#define DBG_DRVNETWORK        2 /* Network layers */
+#define DBG_DRVKEYBOARD       3 /* Keyboard */
+#define DBG_DRVHID            4 /* HID Devices */
+#define DBG_DRVAUDIO          5 /* Audio */
+#define DBG_DRVSERIAL         7 /* Serial */
+#define DBG_DRVSAM            8 /* SCSI Architecture Model layers */
+#define DBG_DRVPARALLELATA    9 /* Parallel ATA */
+#define DBG_DRVPARALLELSCSI  10 /* Parallel SCSI */
+#define DBG_DRVSATA          11 /* Serial ATA */
+#define DBG_DRVSAS           12 /* SAS */
+#define DBG_DRVFIBRECHANNEL  13 /* FiberChannel */
+#define DBG_DRVUSB           14 /* USB */
+#define DBG_DRVBLUETOOTH     15 /* Bluetooth */
+#define DBG_DRVFIREWIRE      16 /* FireWire */
+#define DBG_DRVINFINIBAND    17 /* Infiniband */
+#define DBG_DRVGRAPHICS      18 /* Graphics */
+#define DBG_DRVSD            19 /* Secure Digital */
+#define DBG_DRVNAND          20 /* NAND drivers and layers */
+#define DBG_SSD              21 /* SSD */
+#define DBG_DRVSPI           22 /* SPI */
+#define DBG_DRVWLAN_802_11   23 /* WLAN 802.11 */
+#define DBG_DRVSSM           24 /* System State Manager(AppleSSM) */
+#define DBG_DRVSMC           25 /* System Management Controller */
+#define DBG_DRVMACEFIMANAGER 26 /* Mac EFI Manager */
 
 /* Backwards compatibility */
 #define	DBG_DRVPOINTING		DBG_DRVHID	/* OBSOLETE: Use DBG_DRVHID instead */
@@ -842,6 +843,7 @@ extern void kdebug_reset(void);
 #define DBG_APP_DFR             0x0E
 #define DBG_APP_SAMBA           0x80
 #define DBG_APP_EOSSUPPORT      0x81
+#define DBG_APP_MACEFIMANAGER   0x82
 
 /* Kernel Debug codes for Throttling (DBG_THROTTLE) */
 #define OPEN_THROTTLE_WINDOW	0x1

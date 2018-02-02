@@ -1221,9 +1221,10 @@ thread_call_wake(
 				       THREAD_AWAKENED, WAITQ_ALL_PRIORITIES) == KERN_SUCCESS) {
 			group->idle_count--; group->active_count++;
 
-			if (group->idle_count == 0) {
-				timer_call_cancel(&group->dealloc_timer);
-				group->flags &= ~TCG_DEALLOC_ACTIVE;
+			if (group->idle_count == 0 && (group->flags & TCG_DEALLOC_ACTIVE) == TCG_DEALLOC_ACTIVE) {
+				if (timer_call_cancel(&group->dealloc_timer) == TRUE) {
+					group->flags &= ~TCG_DEALLOC_ACTIVE;
+				}
 			}
 		} else {
 			if (!thread_call_daemon_awake && thread_call_group_should_add_thread(group)) {
@@ -1500,19 +1501,18 @@ thread_call_thread(
 
 		if (group->idle_count == 1) {
 			group->idle_timestamp = mach_absolute_time();
-		}   
+		}
 
 		if (((group->flags & TCG_DEALLOC_ACTIVE) == 0) &&
-				((group->active_count + group->idle_count) > group->target_thread_count)) {
-			group->flags |= TCG_DEALLOC_ACTIVE;
+		    ((group->active_count + group->idle_count) > group->target_thread_count)) {
 			thread_call_start_deallocate_timer(group);
-		}   
+		}
 
 		/* Wait for more work (or termination) */
 		wres = waitq_assert_wait64(&group->idle_waitq, NO_EVENT64, THREAD_INTERRUPTIBLE, 0);
 		if (wres != THREAD_WAITING) {
 			panic("kcall worker unable to assert wait?");
-		}   
+		}
 
 		enable_ints_and_unlock(s);
 
@@ -1600,21 +1600,20 @@ thread_call_daemon(
  * is idle the whole time.
  */
 static void
-thread_call_start_deallocate_timer(
-		thread_call_group_t group)
+thread_call_start_deallocate_timer(thread_call_group_t group)
 {
-        uint64_t deadline;
-        boolean_t onqueue;
+	__assert_only boolean_t already_enqueued;
 
 	assert(group->idle_count > 0);
+	assert((group->flags & TCG_DEALLOC_ACTIVE) == 0);
 
-        group->flags |= TCG_DEALLOC_ACTIVE;
-        deadline = group->idle_timestamp + thread_call_dealloc_interval_abs;
-        onqueue = timer_call_enter(&group->dealloc_timer, deadline, 0); 
+	group->flags |= TCG_DEALLOC_ACTIVE;
 
-        if (onqueue) {
-                panic("Deallocate timer already active?");
-        }   
+	uint64_t deadline = group->idle_timestamp + thread_call_dealloc_interval_abs;
+
+	already_enqueued = timer_call_enter(&group->dealloc_timer, deadline, 0);
+
+	assert(already_enqueued == FALSE);
 }
 
 /* non-static so dtrace can find it rdar://problem/31156135&31379348 */
@@ -1763,10 +1762,13 @@ thread_call_dealloc_timer(
 	uint64_t now;
 	kern_return_t res;
 	boolean_t terminated = FALSE;
-	
+
 	thread_call_lock_spin();
 
+	assert((group->flags & TCG_DEALLOC_ACTIVE) == TCG_DEALLOC_ACTIVE);
+
 	now = mach_absolute_time();
+
 	if (group->idle_count > 0) {
 		if (now > group->idle_timestamp + thread_call_dealloc_interval_abs) {
 			terminated = TRUE;
@@ -1777,8 +1779,9 @@ thread_call_dealloc_timer(
 				panic("Unable to wake up idle thread for termination?");
 			}
 		}
-
 	}
+
+	group->flags &= ~TCG_DEALLOC_ACTIVE;
 
 	/*
 	 * If we still have an excess of threads, schedule another
@@ -1794,8 +1797,6 @@ thread_call_dealloc_timer(
 		}
 
 		thread_call_start_deallocate_timer(group);
-	} else {
-		group->flags &= ~TCG_DEALLOC_ACTIVE;
 	}
 
 	thread_call_unlock();

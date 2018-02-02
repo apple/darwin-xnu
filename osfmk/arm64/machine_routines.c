@@ -51,7 +51,6 @@
 #include <pexpert/device_tree.h>
 
 #include <IOKit/IOPlatformExpert.h>
-#include <libkern/section_keywords.h>
 
 #if defined(KERNEL_INTEGRITY_KTRR)
 #include <libkern/kernel_mach_header.h>
@@ -73,7 +72,6 @@ boolean_t is_clock_configured = FALSE;
 
 extern int mach_assert;
 extern volatile uint32_t debug_enabled;
-SECURITY_READ_ONLY_LATE(unsigned int) debug_boot_arg;
 
 
 void machine_conf(void);
@@ -419,19 +417,6 @@ machine_startup(__unused boot_args * args)
 {
 	int boot_arg;
 
-
-#if MACH_KDP
-	if (PE_parse_boot_argn("debug", &debug_boot_arg, sizeof (debug_boot_arg)) &&
-	    debug_enabled) {
-		if (debug_boot_arg & DB_HALT)
-			halt_in_debugger = 1;
-		if (debug_boot_arg & DB_NMI)
-			panicDebugging = TRUE;
-	} else {
-		debug_boot_arg = 0;
-	}
-
-#endif
 
 	PE_parse_boot_argn("assert", &mach_assert, sizeof (mach_assert));
 
