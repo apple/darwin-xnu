@@ -3440,11 +3440,16 @@ bsd_ast(thread_t thread)
 	}
 	proc_unlock(p);
 
+#ifdef CONFIG_32BIT_TELEMETRY
+	if (task_consume_32bit_log_flag(p->task)) {
+		proc_log_32bit_telemetry(p);
+	}
+#endif /* CONFIG_32BIT_TELEMETRY */
+
 	if (!bsd_init_done) {
 		bsd_init_done = 1;
 		bsdinit_task();
 	}
-
 }
 
 /* ptrace set runnable */

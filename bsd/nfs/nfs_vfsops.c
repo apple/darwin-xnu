@@ -5464,10 +5464,10 @@ nfs_vfs_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	struct nfs_exportfs *nxfs;
 	struct nfs_export *nx;
 	struct nfs_active_user_list *ulist;
-	struct nfs_export_stat_desc stat_desc;
+	struct nfs_export_stat_desc stat_desc = {};
 	struct nfs_export_stat_rec statrec;
 	struct nfs_user_stat_node *unode, *unode_next;
-	struct nfs_user_stat_desc ustat_desc;
+	struct nfs_user_stat_desc ustat_desc = {};
 	struct nfs_user_stat_user_rec ustat_rec;
 	struct nfs_user_stat_path_rec upath_rec;
 	uint bytes_avail, bytes_total, recs_copied;

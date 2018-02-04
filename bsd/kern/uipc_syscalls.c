@@ -1735,7 +1735,7 @@ copyout_control(struct proc *p, struct mbuf *m, user_addr_t control,
 			 * different size for 32 bits and 64 bits processes
 			 */
 			if (cp->cmsg_level == SOL_SOCKET && cp->cmsg_type == SCM_TIMESTAMP) {
-				unsigned char tmp_buffer[CMSG_SPACE(sizeof(struct user64_timeval))];
+				unsigned char tmp_buffer[CMSG_SPACE(sizeof(struct user64_timeval))] = {};
 				struct cmsghdr *tmp_cp = (struct cmsghdr *)(void *)tmp_buffer;
 				int tmp_space;
 				struct timeval *tv = (struct timeval *)(void *)CMSG_DATA(cp);

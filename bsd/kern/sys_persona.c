@@ -215,7 +215,7 @@ static int kpersona_info_syscall(user_addr_t idp, user_addr_t infop)
 	kinfo.persona_id = persona->pna_id;
 	kinfo.persona_type = persona->pna_type;
 	kinfo.persona_gid = persona_get_gid(persona);
-	int ngroups = 0;
+	unsigned ngroups = 0;
 	persona_get_groups(persona, &ngroups, kinfo.persona_groups, NGROUPS);
 	kinfo.persona_ngroups = ngroups;
 	kinfo.persona_gmuid = persona_get_gmuid(persona);
@@ -257,7 +257,7 @@ static int kpersona_pidinfo_syscall(user_addr_t idp, user_addr_t infop)
 	kinfo.persona_id = persona->pna_id;
 	kinfo.persona_type = persona->pna_type;
 	kinfo.persona_gid = persona_get_gid(persona);
-	int ngroups = 0;
+	unsigned ngroups = 0;
 	persona_get_groups(persona, &ngroups, kinfo.persona_groups, NGROUPS);
 	kinfo.persona_ngroups = ngroups;
 	kinfo.persona_gmuid = persona_get_gmuid(persona);

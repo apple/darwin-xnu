@@ -267,7 +267,7 @@ ntp_gettime(struct proc *p, struct ntp_gettime_args *uap, __unused int32_t *retv
 	NTP_UNLOCK(enable);
 
 	if (IS_64BIT_PROCESS(p)) {
-		struct user64_ntptimeval user_ntv;
+		struct user64_ntptimeval user_ntv = {};
 		user_ntv.time.tv_sec = ntv.time.tv_sec;
 		user_ntv.time.tv_nsec = ntv.time.tv_nsec;
 		user_ntv.maxerror = ntv.maxerror;
@@ -276,7 +276,7 @@ ntp_gettime(struct proc *p, struct ntp_gettime_args *uap, __unused int32_t *retv
 		user_ntv.time_state = ntv.time_state;
 		error = copyout(&user_ntv, uap->ntvp, sizeof(user_ntv));
 	} else {
-		struct user32_ntptimeval user_ntv;
+		struct user32_ntptimeval user_ntv = {};
 		user_ntv.time.tv_sec = ntv.time.tv_sec;
 		user_ntv.time.tv_nsec = ntv.time.tv_nsec;
 		user_ntv.maxerror = ntv.maxerror;
@@ -439,7 +439,7 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, __unused int32_t *retv
 	 * returned only by ntp_gettime();
 	 */
 	if (IS_64BIT_PROCESS(p)) {
-		struct user64_timex user_ntv;
+		struct user64_timex user_ntv = {};
 
 		if (time_status & STA_NANO)
 			user_ntv.offset = L_GINT(time_offset);
@@ -463,7 +463,7 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, __unused int32_t *retv
 
 	}
 	else{
-		struct user32_timex user_ntv;
+		struct user32_timex user_ntv = {};
 
 		if (time_status & STA_NANO)
 			user_ntv.offset = L_GINT(time_offset);
@@ -712,12 +712,12 @@ adjtime(struct proc *p, struct adjtime_args *uap, __unused int32_t *retval)
 
 	if (uap->olddelta) {
 		if (IS_64BIT_PROCESS(p)) {
-			struct user64_timeval user_atv;
+			struct user64_timeval user_atv = {};
 			user_atv.tv_sec = atv.tv_sec;
 			user_atv.tv_usec = atv.tv_usec;
 			error = copyout(&user_atv, uap->olddelta, sizeof(user_atv));
 		} else {
-			struct user32_timeval user_atv;
+			struct user32_timeval user_atv = {};
 			user_atv.tv_sec = atv.tv_sec;
 			user_atv.tv_usec = atv.tv_usec;
 			error = copyout(&user_atv, uap->olddelta, sizeof(user_atv));

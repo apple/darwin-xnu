@@ -593,7 +593,7 @@ identitysvc(__unused struct proc *p, struct identitysvc_args *uap, __unused int3
 	int opcode = uap->opcode;
 	user_addr_t message = uap->message;
 	struct kauth_resolver_work *workp;
-	struct kauth_cache_sizes sz_arg;
+	struct kauth_cache_sizes sz_arg = {};
 	int error;
 	pid_t new_id;
 
@@ -5657,7 +5657,7 @@ sysctl_dump_creds( __unused struct sysctl_oid *oidp, __unused void *arg1, __unus
 		return 0;
 	}
 
-	MALLOC( cred_listp, debug_ucred *, req->oldlen, M_TEMP, M_WAITOK );
+	MALLOC( cred_listp, debug_ucred *, req->oldlen, M_TEMP, M_WAITOK | M_ZERO);
 	if ( cred_listp == NULL ) {
 		return (ENOMEM);
 	}
@@ -5756,7 +5756,7 @@ sysctl_dump_cred_backtraces( __unused struct sysctl_oid *oidp, __unused void *ar
 		return (ENOMEM);
 	}
 
-	MALLOC( bt_bufp, cred_debug_buffer *, req->oldlen, M_TEMP, M_WAITOK );
+	MALLOC( bt_bufp, cred_debug_buffer *, req->oldlen, M_TEMP, M_WAITOK | M_ZERO);
 	if ( bt_bufp == NULL ) {
 		return (ENOMEM);
 	}

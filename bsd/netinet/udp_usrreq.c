@@ -923,7 +923,7 @@ udp_ctlinput(int cmd, struct sockaddr *sa, void *vip, __unused struct ifnet * if
 int
 udp_ctloutput(struct socket *so, struct sockopt *sopt)
 {
-	int	error, optval;
+	int	error = 0, optval = 0;
 	struct	inpcb *inp;
 
 	/* Allow <SOL_SOCKET,SO_FLUSH> at this level */
@@ -931,7 +931,6 @@ udp_ctloutput(struct socket *so, struct sockopt *sopt)
 	    !(sopt->sopt_level == SOL_SOCKET && sopt->sopt_name == SO_FLUSH))
 		return (ip_ctloutput(so, sopt));
 
-	error = 0;
 	inp = sotoinpcb(so);
 
 	switch (sopt->sopt_dir) {

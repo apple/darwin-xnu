@@ -3272,6 +3272,10 @@ nfsrv_export_lookup(struct nfs_export *nx, mbuf_t nam)
 	/* Lookup in the export list first. */
 	if (nam != NULL) {
 		saddr = mbuf_data(nam);
+		if (saddr->sa_family > AF_MAX) {
+			/* Bogus sockaddr?  Don't match anything. */
+			return (NULL);
+		}
 		rnh = nx->nx_rtable[saddr->sa_family];
 		if (rnh != NULL) {
 			no = (struct nfs_netopt *)

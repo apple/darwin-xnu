@@ -5432,6 +5432,27 @@ typedef int mpo_vnode_check_stat_t(
 	struct label *label
 );
 /**
+  @brief Access control check for vnode trigger resolution
+  @param cred Subject credential
+  @param dvp Object vnode
+  @param dlabel Policy label for dvp
+  @param cnp Component name that triggered resolution
+
+  Determine whether the subject identified by the credential can trigger
+  resolution of the passed name (cnp) in the passed directory vnode
+  via an external trigger resolver.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned. Suggested failure: EACCES for label mismatch or
+  EPERM for lack of privilege.
+*/
+typedef int mpo_vnode_check_trigger_resolve_t(
+	kauth_cred_t cred,
+	struct vnode *dvp,
+	struct label *dlabel,
+	struct componentname *cnp
+);
+/**
   @brief Access control check for truncate/ftruncate
   @param active_cred Subject credential
   @param file_cred Credential associated with the struct fileproc
@@ -6301,7 +6322,7 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 52 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 53 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t		*mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t		*mpo_audit_check_preselect;
@@ -6453,10 +6474,10 @@ struct mac_policy_ops {
 	mpo_exc_action_label_init_t		*mpo_exc_action_label_init;
 	mpo_exc_action_label_update_t		*mpo_exc_action_label_update;
 
+	mpo_vnode_check_trigger_resolve_t	*mpo_vnode_check_trigger_resolve;
 	mpo_reserved_hook_t			*mpo_reserved1;
 	mpo_reserved_hook_t			*mpo_reserved2;
 	mpo_reserved_hook_t			*mpo_reserved3;
-	mpo_reserved_hook_t			*mpo_reserved4;
 	mpo_skywalk_flow_check_connect_t	*mpo_skywalk_flow_check_connect;
 	mpo_skywalk_flow_check_listen_t		*mpo_skywalk_flow_check_listen;
 

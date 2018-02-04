@@ -461,7 +461,6 @@ route_output(struct mbuf *m, struct socket *so)
 	if (info.rti_info[RTAX_GATEWAY] != NULL &&
 	    info.rti_info[RTAX_GATEWAY]->sa_family == AF_INET)
 		sin_set_ifscope(info.rti_info[RTAX_GATEWAY], IFSCOPE_NONE);
-
 	switch (rtm->rtm_type) {
 	case RTM_ADD:
 		if (info.rti_info[RTAX_GATEWAY] == NULL)
@@ -583,24 +582,23 @@ report:
 			len = rt_msg2(rtm->rtm_type, &info, NULL, NULL, &cred);
 			if (ifa2 != NULL)
 				IFA_UNLOCK(ifa2);
-			if (len > rtm->rtm_msglen) {
-				struct rt_msghdr *new_rtm;
-				R_Malloc(new_rtm, struct rt_msghdr *, len);
-				if (new_rtm == NULL) {
-					RT_UNLOCK(rt);
-					if (ifa2 != NULL)
-						IFA_REMREF(ifa2);
-					senderr(ENOBUFS);
-				}
-				Bcopy(rtm, new_rtm, rtm->rtm_msglen);
-				R_Free(rtm); rtm = new_rtm;
+			struct rt_msghdr *out_rtm;
+			R_Malloc(out_rtm, struct rt_msghdr *, len);
+			if (out_rtm == NULL) {
+				RT_UNLOCK(rt);
+				if (ifa2 != NULL)
+					IFA_REMREF(ifa2);
+				senderr(ENOBUFS);
 			}
+			Bcopy(rtm, out_rtm, sizeof(struct rt_msghdr));
 			if (ifa2 != NULL)
 				IFA_LOCK(ifa2);
-			(void) rt_msg2(rtm->rtm_type, &info, (caddr_t)rtm,
+			(void) rt_msg2(out_rtm->rtm_type, &info, (caddr_t)out_rtm,
 			    NULL, &cred);
 			if (ifa2 != NULL)
 				IFA_UNLOCK(ifa2);
+			R_Free(rtm);
+			rtm = out_rtm;
 			rtm->rtm_flags = rt->rt_flags;
 			rt_getmetrics(rt, &rtm->rtm_rmx);
 			rtm->rtm_addrs = info.rti_addrs;

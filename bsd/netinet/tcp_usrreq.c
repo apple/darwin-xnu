@@ -1765,7 +1765,7 @@ __private_extern__ int
 tcp_sysctl_info(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
 	int error;
-	struct tcp_info ti;
+	struct tcp_info ti = {};
 	struct info_tuple itpl;
 #if !CONFIG_EMBEDDED
 	proc_t caller = PROC_NULL;
@@ -1883,11 +1883,10 @@ tcp_getconninfo(struct socket *so, struct conninfo_tcp *tcp_ci)
 int
 tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 {
-	int	error, opt, optval;
+	int	error = 0, opt = 0, optval = 0;
 	struct	inpcb *inp;
 	struct	tcpcb *tp;
 
-	error = 0;
 	inp = sotoinpcb(so);
 	if (inp == NULL) {
 		return (ECONNRESET);
@@ -2490,7 +2489,7 @@ tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 			goto done;
 		}
 		case TCP_MEASURE_BW_BURST: {
-			struct tcp_measure_bw_burst out;
+			struct tcp_measure_bw_burst out = {};
 			if ((tp->t_flagsext & TF_MEASURESNDBW) == 0 ||
 				tp->t_bwmeas == NULL) {
 				error = EINVAL;

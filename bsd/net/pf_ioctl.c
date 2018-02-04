@@ -3395,7 +3395,7 @@ pfioctl_ioc_states(u_long cmd, struct pfioc_states_32 *ps32,
 			break;
 		}
 
-		pstore = _MALLOC(sizeof (*pstore), M_TEMP, M_WAITOK);
+		pstore = _MALLOC(sizeof (*pstore), M_TEMP, M_WAITOK | M_ZERO);
 		if (pstore == NULL) {
 			error = ENOMEM;
 			break;

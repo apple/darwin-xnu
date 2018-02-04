@@ -1144,7 +1144,7 @@ out:
 int
 getrlimit(struct proc *p, struct getrlimit_args *uap, __unused int32_t *retval)
 {
-	struct rlimit lim;
+	struct rlimit lim = {};
 
 	/*
 	 * Take out flag now in case we need to use it to trigger variant

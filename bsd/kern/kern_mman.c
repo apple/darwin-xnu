@@ -1047,7 +1047,7 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 	req_vec_size_pages = (end - addr) >> PAGE_SHIFT;
 	cur_vec_size_pages = MIN(req_vec_size_pages, (int)(MAX_PAGE_RANGE_QUERY >> PAGE_SHIFT));
 
-	kernel_vec = (void*) _MALLOC(cur_vec_size_pages * sizeof(char), M_TEMP, M_WAITOK);
+	kernel_vec = (void*) _MALLOC(cur_vec_size_pages * sizeof(char), M_TEMP, M_WAITOK | M_ZERO);
 
 	if (kernel_vec == NULL) {
 		return (ENOMEM);

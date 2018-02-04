@@ -400,7 +400,7 @@ mach_timebase_info_trap(
 	struct mach_timebase_info_trap_args *args)
 {
 	mach_vm_address_t 			out_info_addr = args->info;
-	mach_timebase_info_data_t	info;
+	mach_timebase_info_data_t	info = {};
 
 	clock_timebase_info(&info);
 

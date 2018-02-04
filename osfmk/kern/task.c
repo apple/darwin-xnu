@@ -500,6 +500,25 @@ task_wait_to_return(void)
 	thread_bootstrap_return();
 }
 
+#ifdef CONFIG_32BIT_TELEMETRY
+boolean_t
+task_consume_32bit_log_flag(task_t task)
+{
+	if ((task->t_procflags & TPF_LOG_32BIT_TELEMETRY) != 0) {
+		task->t_procflags &= ~TPF_LOG_32BIT_TELEMETRY;
+		return TRUE;
+	} else {
+		return FALSE;
+	}
+}
+
+void
+task_set_32bit_log_flag(task_t task)
+{
+	task->t_procflags |= TPF_LOG_32BIT_TELEMETRY;
+}
+#endif /* CONFIG_32BIT_TELEMETRY */
+
 boolean_t
 task_is_exec_copy(task_t task)
 {
