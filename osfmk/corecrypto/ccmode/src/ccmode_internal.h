@@ -46,7 +46,7 @@
 #define CCMODE_NOT_SUPPORTED         -4
 #define CCMODE_INTERNAL_ERROR        -5
 
-// VNG speed up for GCM's AES encrypton and finite fileld multiplication
+// VNG speed up for GCM's AES encryption and finite field multiplication
 #if	 \
 ((CCAES_INTEL_ASM && defined(__x86_64__)) || (CCAES_ARM_ASM && defined(__ARM_NEON__)))
 #define	CCMODE_GCM_VNG_SPEEDUP	1
