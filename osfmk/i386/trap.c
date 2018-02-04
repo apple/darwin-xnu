@@ -790,7 +790,6 @@ debugger_entry:
 	 */
 }
 
-
 static void
 set_recovery_ip(x86_saved_state64_t  *saved_state, vm_offset_t ip)
 {
@@ -814,8 +813,8 @@ panic_trap(x86_saved_state64_t *regs, uint32_t pl, kern_return_t fault_result)
 	 */
 	panic_io_port_read();
 
-	kprintf("panic trap number 0x%x, rip 0x%016llx\n",
-		regs->isf.trapno, regs->isf.rip);
+	kprintf("CPU %d panic trap number 0x%x, rip 0x%016llx\n",
+	    cpu_number(), regs->isf.trapno, regs->isf.rip);
 	kprintf("cr0 0x%016llx cr2 0x%016llx cr3 0x%016llx cr4 0x%016llx\n",
 		cr0, cr2, cr3, cr4);
 
@@ -939,11 +938,6 @@ user_trap(
 	code = 0;
 	subcode = 0;
 	exc = 0;
-
-#if DEBUG_TRACE
-	kprintf("user_trap(0x%08x) type=%d vaddr=0x%016llx\n",
-		saved_state, type, vaddr);
-#endif
 
 	perfASTCallback astfn = perfASTHook;
 	if (__improbable(astfn != NULL)) {
@@ -1245,6 +1239,10 @@ sync_iss_to_iks_unconditionally(__unused x86_saved_state_t *saved_state) {
 }
 
 #if DEBUG
+#define TERI 1
+#endif
+
+#if TERI
 extern void	thread_exception_return_internal(void) __dead2;
 
 void thread_exception_return(void) {

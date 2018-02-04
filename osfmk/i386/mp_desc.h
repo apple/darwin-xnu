@@ -80,18 +80,23 @@ __BEGIN_DECLS
  * The descriptor tables are together in a structure
  * allocated one per processor (except for the boot processor).
  */
+#define FSTK_SZ (PAGE_SIZE/2)
 typedef struct cpu_desc_table64 {
 	struct fake_descriptor	gdt[GDTSZ]       __attribute__ ((aligned (16)));
 	struct x86_64_tss	ktss             __attribute__ ((aligned (16)));
 	struct sysenter_stack	sstk	         __attribute__ ((aligned (16)));
-	uint8_t			fstk[PAGE_SIZE]  __attribute__ ((aligned (16)));
+	uint8_t			*fstkp;
 } cpu_desc_table64_t;
 
-#define	current_gdt()	(current_cpu_datap()->cpu_desc_index.cdi_gdt.ptr)
-#define	current_idt()	(current_cpu_datap()->cpu_desc_index.cdi_idt.ptr)
-#define	current_ldt()	(current_cpu_datap()->cpu_desc_index.cdi_ldt)
-#define	current_ktss()	(current_cpu_datap()->cpu_desc_index.cdi_ktss)
-#define	current_sstk()	(current_cpu_datap()->cpu_desc_index.cdi_sstk)
+typedef struct {
+	uint8_t			fstk[FSTK_SZ]  __attribute__ ((aligned (16)));
+} cpu_fault_stack_t;
+
+#define	current_gdt()	(current_cpu_datap()->cpu_desc_index.cdi_gdtb.ptr)
+#define	current_idt()	(current_cpu_datap()->cpu_desc_index.cdi_idtb.ptr)
+#define	current_ldt()	(current_cpu_datap()->cpu_desc_index.cdi_ldtb)
+#define	current_ktss()	(current_cpu_datap()->cpu_desc_index.cdi_ktssb)
+#define	current_sstk()	(current_cpu_datap()->cpu_desc_index.cdi_sstkb)
 
 #define	current_ktss64() ((struct x86_64_tss *) current_ktss())
 #define	current_sstk64() ((addr64_t *) current_sstk())

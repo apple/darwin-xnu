@@ -1622,8 +1622,13 @@ SYSCTL_STRING(_kern, KERN_VERSION, version,
 SYSCTL_STRING(_kern, OID_AUTO, uuid, 
 		CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 
 		&kernel_uuid_string[0], 0, "");
-
 #if DEBUG
+#ifndef DKPR
+#define DKPR 1
+#endif
+#endif
+
+#if DKPR
 int debug_kprint_syscall = 0;
 char debug_kprint_syscall_process[MAXCOMLEN+1];
 

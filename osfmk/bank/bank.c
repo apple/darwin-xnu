@@ -44,6 +44,7 @@
 #include <sys/kdebug.h>
 #include <IOKit/IOBSD.h>
 #include <mach/mach_voucher_attr_control.h>
+#include <kern/policy_internal.h>
 
 static zone_t bank_task_zone, bank_account_zone;
 #define MAX_BANK_TASK     (CONFIG_TASK_MAX)
@@ -69,13 +70,15 @@ struct _bank_ledger_indices bank_ledgers = { -1, -1 };
 
 static bank_task_t bank_task_alloc_init(task_t task);
 static bank_account_t bank_account_alloc_init(bank_task_t bank_holder, bank_task_t bank_merchant,
-		bank_task_t bank_secureoriginator, bank_task_t bank_proximateprocess);
+		bank_task_t bank_secureoriginator, bank_task_t bank_proximateprocess, struct thread_group* banktg);
 static bank_task_t get_bank_task_context(task_t task, boolean_t initialize);
 static void bank_task_dealloc(bank_task_t bank_task, mach_voucher_attr_value_reference_t sync);
 static kern_return_t bank_account_dealloc_with_sync(bank_account_t bank_account, mach_voucher_attr_value_reference_t sync);
 static void bank_rollup_chit_to_tasks(ledger_t bill, bank_task_t bank_holder, bank_task_t bank_merchant);
 static void init_bank_ledgers(void);
 static boolean_t bank_task_is_propagate_entitled(task_t t);
+static struct thread_group *bank_get_bank_task_thread_group(bank_task_t bank_task __unused);
+static struct thread_group *bank_get_bank_account_thread_group(bank_account_t bank_account __unused);
 
 static lck_spin_t g_bank_task_lock_data;    /* lock to protect task->bank_context transition */
 
@@ -322,6 +325,8 @@ bank_get_value(
 	task_t task;
 	kern_return_t kr = KERN_SUCCESS;
 	mach_msg_type_number_t i;
+	struct thread_group *thread_group = NULL;
+	struct thread_group *cur_thread_group = NULL;
 
 	assert(MACH_VOUCHER_ATTR_KEY_BANK == key);
 	assert(manager == &bank_manager);
@@ -354,11 +359,14 @@ bank_get_value(
 				bank_holder = CAST_TO_BANK_TASK(bank_element);
 				bank_secureoriginator = bank_holder;
 				bank_proximateprocess = bank_holder;
+				thread_group = bank_get_bank_task_thread_group(bank_holder);
 			} else if (bank_element->be_type == BANK_ACCOUNT) {
 				old_bank_account = CAST_TO_BANK_ACCOUNT(bank_element);
 				bank_holder = old_bank_account->ba_holder;
 				bank_secureoriginator = old_bank_account->ba_secureoriginator;
 				bank_proximateprocess = old_bank_account->ba_proximateprocess;
+				thread_group = bank_get_bank_account_thread_group(old_bank_account);
+
 			} else {
 				panic("Bogus bank type: %d passed in get_value\n", bank_element->be_type);
 			}
@@ -367,17 +375,26 @@ bank_get_value(
 			if (bank_merchant == BANK_TASK_NULL)
 				return KERN_RESOURCE_SHORTAGE;
 
+			cur_thread_group = bank_get_bank_task_thread_group(bank_merchant);
+
+			/* Change voucher thread group to current thread group for Apps */
+			if (task_is_app(task)) {
+				thread_group = cur_thread_group;
+			}
+
 			/* Check if trying to redeem for self task, return the default bank task */
 			if (bank_holder == bank_merchant && 
 				bank_holder == bank_secureoriginator &&
-				bank_holder == bank_proximateprocess) {
+				bank_holder == bank_proximateprocess &&
+				thread_group == cur_thread_group) {
 				*out_value = BANK_ELEMENT_TO_HANDLE(BANK_DEFAULT_TASK_VALUE);
 				*out_flags = MACH_VOUCHER_ATTR_VALUE_FLAGS_PERSIST;
 				return kr;
 			}
 
 			bank_account = bank_account_alloc_init(bank_holder, bank_merchant,
-						bank_secureoriginator, bank_proximateprocess);
+						bank_secureoriginator, bank_proximateprocess,
+						thread_group);
 			if (bank_account == BANK_ACCOUNT_NULL)
 				return KERN_RESOURCE_SHORTAGE;
 
@@ -405,10 +422,12 @@ bank_get_value(
 			if (bank_element->be_type == BANK_TASK) {
 				bank_holder = CAST_TO_BANK_TASK(bank_element);
 				bank_secureoriginator = bank_holder;
+				thread_group = bank_get_bank_task_thread_group(bank_holder);
 			} else if (bank_element->be_type == BANK_ACCOUNT) {
 				old_bank_account = CAST_TO_BANK_ACCOUNT(bank_element);
 				bank_holder = old_bank_account->ba_holder;
 				bank_secureoriginator = old_bank_account->ba_secureoriginator;
+				thread_group = bank_get_bank_account_thread_group(old_bank_account);
 			} else {
 				panic("Bogus bank type: %d passed in get_value\n", bank_element->be_type);
 			}
@@ -416,6 +435,8 @@ bank_get_value(
 			bank_merchant = get_bank_task_context(task, FALSE);
 			if (bank_merchant == BANK_TASK_NULL)
 				return KERN_RESOURCE_SHORTAGE;
+
+			cur_thread_group = bank_get_bank_task_thread_group(bank_merchant);
 
 			/*
 			 * If the process doesn't have secure persona entitlement,
@@ -433,7 +454,8 @@ bank_get_value(
 			/* Check if trying to redeem for self task, return the bank task */
 			if (bank_holder == bank_merchant && 
 				bank_holder == bank_secureoriginator &&
-				bank_holder == bank_proximateprocess) {
+				bank_holder == bank_proximateprocess &&
+				thread_group == cur_thread_group) {
 
 				lck_mtx_lock(&bank_holder->bt_acc_to_pay_lock);
 				bank_task_made_reference(bank_holder);
@@ -448,7 +470,8 @@ bank_get_value(
 				return kr;
 			}
 			bank_account = bank_account_alloc_init(bank_holder, bank_merchant,
-						bank_secureoriginator, bank_proximateprocess);
+						bank_secureoriginator, bank_proximateprocess,
+						thread_group);
 			if (bank_account == BANK_ACCOUNT_NULL)
 				return KERN_RESOURCE_SHORTAGE;
 
@@ -782,7 +805,8 @@ bank_account_alloc_init(
 	bank_task_t bank_holder,
 	bank_task_t bank_merchant,
 	bank_task_t bank_secureoriginator,
-	bank_task_t bank_proximateprocess)
+	bank_task_t bank_proximateprocess,
+	struct thread_group *thread_group)
 {
 	bank_account_t new_bank_account;
 	bank_account_t bank_account;
@@ -815,7 +839,8 @@ bank_account_alloc_init(
 	queue_iterate(&bank_holder->bt_accounts_to_pay, bank_account, bank_account_t, ba_next_acc_to_pay) {
 		if (bank_account->ba_merchant != bank_merchant ||
 		    bank_account->ba_secureoriginator != bank_secureoriginator ||
-		    bank_account->ba_proximateprocess != bank_proximateprocess)
+		    bank_account->ba_proximateprocess != bank_proximateprocess ||
+		    bank_get_bank_account_thread_group(bank_account) != thread_group)
 			continue;
 
 		entry_found = TRUE;
@@ -1322,7 +1347,8 @@ bank_serviced_balance(bank_task_t bank_task, uint64_t *cpu_time, uint64_t *energ
  * Routine: bank_get_voucher_bank_account
  * Purpose: Get the bank account from the voucher.
  * Returns: bank_account if bank_account attribute present in voucher.
- *          NULL on no attribute, no bank_element, or if holder and merchant bank accounts are the same.
+ *          NULL on no attribute, no bank_element, or if holder and merchant bank accounts
+ *          and voucher thread group and current thread group are the same.
  */
 static bank_account_t
 bank_get_voucher_bank_account(ipc_voucher_t voucher)
@@ -1352,12 +1378,20 @@ bank_get_voucher_bank_account(ipc_voucher_t voucher)
 		return BANK_ACCOUNT_NULL;
 	} else if (bank_element->be_type == BANK_ACCOUNT) {
 		bank_account = CAST_TO_BANK_ACCOUNT(bank_element);
-		if (bank_account->ba_holder != bank_account->ba_merchant) {
-			bank_task_t bank_merchant = get_bank_task_context(current_task(), FALSE);
-			if (bank_account->ba_merchant == bank_merchant)
-				return bank_account;
-			else
-				return BANK_ACCOUNT_NULL;
+		/*
+		 * Return BANK_ACCOUNT_NULL if the ba_holder is same as ba_merchant
+		 * and bank account thread group is same as current thread group
+		 * i.e. ba_merchant's thread group.
+		 *
+		 * The bank account might have ba_holder same as ba_merchant but different
+		 * thread group if daemon sends a voucher to an App and then App sends the
+		 * same voucher back to the daemon (IPC code will replace thread group in the
+		 * voucher to App's thread group when it gets auto redeemed by the App).
+		 */
+		if (bank_account->ba_holder != bank_account->ba_merchant ||
+			bank_get_bank_account_thread_group(bank_account) !=
+				bank_get_bank_task_thread_group(bank_account->ba_merchant)) {
+			return bank_account;
 		} else {
 			return BANK_ACCOUNT_NULL;
 		}
@@ -1369,19 +1403,45 @@ bank_get_voucher_bank_account(ipc_voucher_t voucher)
 
 /*
  * Routine: bank_get_bank_account_ledger
- * Purpose: Get the bankledger from the bank account
+ * Purpose: Get the bankledger from the bank account if ba_merchant different than ba_holder
  */
 static ledger_t
 bank_get_bank_account_ledger(bank_account_t bank_account)
 {
 	ledger_t bankledger = NULL;
 
-	if (bank_account != BANK_ACCOUNT_NULL)
+	if (bank_account != BANK_ACCOUNT_NULL &&
+		bank_account->ba_holder != bank_account->ba_merchant)
 		bankledger = bank_account->ba_bill;
 
 	return (bankledger);
 }
 
+/*
+ * Routine: bank_get_bank_task_thread_group
+ * Purpose: Get the bank task's thread group from the bank task
+ */
+static struct thread_group *
+bank_get_bank_task_thread_group(bank_task_t bank_task __unused)
+{
+	struct thread_group *banktg = NULL;
+
+
+	return (banktg);
+}
+
+/*
+ * Routine: bank_get_bank_account_thread_group
+ * Purpose: Get the bank account's thread group from the bank account
+ */
+static struct thread_group *
+bank_get_bank_account_thread_group(bank_account_t bank_account __unused)
+{
+	thread_group_t banktg = NULL;
+
+
+	return (banktg);
+}
 
 /*
  * Routine: bank_get_bank_ledger_and_thread_group
@@ -1393,12 +1453,21 @@ kern_return_t
 bank_get_bank_ledger_and_thread_group(
 	ipc_voucher_t     voucher,
 	ledger_t          *bankledger,
-	thread_group_t    *banktg __unused)
+	thread_group_t    *banktg)
 {
 	bank_account_t bank_account;
+	struct thread_group *thread_group = NULL;
 
 	bank_account = bank_get_voucher_bank_account(voucher);
 	*bankledger = bank_get_bank_account_ledger(bank_account);
+	thread_group = bank_get_bank_account_thread_group(bank_account);
+
+	/* Return NULL thread group if voucher has current task's thread group */
+	if (thread_group == bank_get_bank_task_thread_group(
+			get_bank_task_context(current_task(), FALSE))) {
+		thread_group = NULL;
+	}
+	*banktg = thread_group;
 	return KERN_SUCCESS;
 }
 

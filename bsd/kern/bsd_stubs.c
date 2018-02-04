@@ -64,9 +64,9 @@ kmem_mb_alloc(vm_map_t mbmap, int size, int physContig, kern_return_t *err)
 	kern_return_t kr = KERN_SUCCESS;
 
 	if (!physContig)
-		kr = kernel_memory_allocate(mbmap, &addr, size, 0, KMA_NOPAGEWAIT | KMA_KOBJECT | KMA_LOMEM, VM_KERN_MEMORY_MBUF);
+		kr = kernel_memory_allocate(mbmap, &addr, size, 0, KMA_KOBJECT | KMA_LOMEM, VM_KERN_MEMORY_MBUF);
 	else
-		kr = kmem_alloc_contig(mbmap, &addr, size, PAGE_MASK, 0xfffff, 0, KMA_NOPAGEWAIT | KMA_KOBJECT | KMA_LOMEM, VM_KERN_MEMORY_MBUF);
+		kr = kmem_alloc_contig(mbmap, &addr, size, PAGE_MASK, 0xfffff, 0, KMA_KOBJECT | KMA_LOMEM, VM_KERN_MEMORY_MBUF);
 
 	if (kr != KERN_SUCCESS)
 		addr = 0;

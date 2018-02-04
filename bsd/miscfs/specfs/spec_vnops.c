@@ -104,6 +104,7 @@ extern dev_t	chrtoblk(dev_t dev);
 extern boolean_t	iskmemdev(dev_t dev);
 extern int	bpfkqfilter(dev_t dev, struct knote *kn);
 extern int ptsd_kqfilter(dev_t, struct knote *);
+extern int ptmx_kqfilter(dev_t, struct knote *);
 
 struct vnode *speclisth[SPECHSZ];
 
@@ -768,9 +769,10 @@ spec_kqfilter(vnode_t vp, struct knote *kn, struct kevent_internal_s *kev)
 	if (cdevsw_flags[major(dev)] & CDEVSW_IS_PTS) {
 		kn->kn_filtid = EVFILTID_PTSD;
 		return ptsd_kqfilter(dev, kn);
-	} else if (cdevsw[major(dev)].d_type == D_TTY &&
-	           !(cdevsw_flags[major(dev)] & CDEVSW_IS_PTC) &&
-	           kn->kn_vnode_kqok) {
+	} else if (cdevsw_flags[major(dev)] & CDEVSW_IS_PTC) {
+		kn->kn_filtid = EVFILTID_PTMX;
+		return ptmx_kqfilter(dev, kn);
+	} else if (cdevsw[major(dev)].d_type == D_TTY && kn->kn_vnode_kqok) {
 		/*
 		 * TTYs from drivers that use struct ttys use their own filter
 		 * routines.  The PTC driver doesn't use the tty for character

@@ -181,6 +181,7 @@ int mach_assert = 1;
  * EXTENDED_/DEBUG_BUF_SIZE can't grow without updates to SMC and iBoot to store larger panic logs on co-processor systems */
 #define DEBUG_BUF_SIZE ((3 * PAGE_SIZE) + offsetof(struct macos_panic_header, mph_data))
 #define EXTENDED_DEBUG_BUF_SIZE 0x0013ff80
+static_assert(((EXTENDED_DEBUG_BUF_SIZE % PANIC_FLUSH_BOUNDARY) == 0), "Extended debug buf size must match SMC alignment requirements");
 #define KDBG_TRACE_PANIC_FILENAME "/var/tmp/panic.trace"
 #endif
 
@@ -315,7 +316,12 @@ extended_debug_log_init(void)
 	 * to point at this new buffer.
 	 */
 	char *new_debug_buf = kalloc(EXTENDED_DEBUG_BUF_SIZE);
-	bzero(new_debug_buf, EXTENDED_DEBUG_BUF_SIZE);
+	/*
+	 * iBoot pre-initializes the panic region with the NULL character. We set this here
+	 * so we can accurately calculate the CRC for the region without needing to flush the
+	 * full region over SMC.
+	 */
+	memset(new_debug_buf, '\0', EXTENDED_DEBUG_BUF_SIZE);
 
 	panic_info = (struct macos_panic_header *)new_debug_buf;
 	debug_buf_ptr = debug_buf_base = (new_debug_buf + offsetof(struct macos_panic_header, mph_data));
@@ -846,8 +852,6 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 	}
 
 #if CONFIG_KDP_INTERACTIVE_DEBUGGING
-	PE_i_can_has_debugger(NULL);
-
 	/*
 	 * If reboot on panic is enabled and the caller of panic indicated that we should skip
 	 * local coredumps, don't try to write these and instead go straight to reboot. This
@@ -888,6 +892,10 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 		if (ret == 0 && (debug_boot_arg & DB_REBOOT_POST_CORE)) {
 			kdp_machine_reboot_type(kPEPanicRestartCPU);
 		}
+	}
+
+	if (debug_boot_arg & DB_REBOOT_ALWAYS) {
+		kdp_machine_reboot_type(kPEPanicRestartCPU);
 	}
 
 	/* If KDP is configured, try to trap to the debugger */

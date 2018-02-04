@@ -604,6 +604,8 @@ vm_page_init_lck_grp(void)
 	vm_compressor_init_locks();
 }
 
+#define ROUNDUP_NEXTP2(X) (1U << (32 - __builtin_clz((X) - 1)))
+
 void
 vm_page_init_local_q()
 {
@@ -619,11 +621,12 @@ vm_page_init_local_q()
 	if (num_cpus >= 2) {
 #if KASAN
 		/* KASAN breaks the expectation of a size-aligned object by adding a
-		 * rezone, so explicitly align. */
+		 * redzone, so explicitly align. */
 		t_local_q = (struct vplq *)kalloc(num_cpus * sizeof(struct vplq) + VM_PACKED_POINTER_ALIGNMENT);
 		t_local_q = (void *)(((uintptr_t)t_local_q + (VM_PACKED_POINTER_ALIGNMENT-1)) & ~(VM_PACKED_POINTER_ALIGNMENT-1));
 #else
-		t_local_q = (struct vplq *)kalloc(num_cpus * sizeof(struct vplq));
+		/* round the size up to the nearest power of two */
+		t_local_q = (struct vplq *)kalloc(ROUNDUP_NEXTP2(num_cpus * sizeof(struct vplq)));
 #endif
 
 		for (i = 0; i < num_cpus; i++) {

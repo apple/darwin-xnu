@@ -188,9 +188,9 @@ typedef struct cpu_data
 	uint64_t				cpu_idle_latency;
 	uint64_t				cpu_idle_pop;
 
-#if	__arm__
+#if	__arm__ || __ARM_KERNEL_PROTECT__
 	vm_offset_t				cpu_exc_vectors;
-#endif
+#endif /* __ARM_KERNEL_PROTECT__ */
 	vm_offset_t				cpu_reset_handler;
 	uint32_t				cpu_reset_type;
 	uintptr_t				cpu_reset_assist;

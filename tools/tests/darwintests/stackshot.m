@@ -15,6 +15,7 @@ T_GLOBAL_META(
 
 static const char *current_process_name(void);
 static void parse_stackshot(bool delta, void *ssbuf, size_t sslen);
+static void parse_thread_group_stackshot(void **sbuf, size_t sslen);
 static uint64_t stackshot_timestamp(void *ssbuf, size_t sslen);
 static void initialize_thread(void);
 
@@ -231,6 +232,34 @@ T_DECL(instrs_cycles, "test a getting instructions and cycles in stackshot")
 	});
 }
 
+static void
+check_thread_groups_supported()
+{
+	int err;
+	int supported = 0;
+	size_t supported_size = sizeof(supported);
+	err = sysctlbyname("kern.thread_groups_supported", &supported, &supported_size, NULL, 0);
+
+	if (err || !supported)
+		T_SKIP("thread groups not supported on this system");
+}
+
+T_DECL(thread_groups, "test getting thread groups in stackshot")
+{
+	check_thread_groups_supported();
+
+	struct scenario scenario = {
+		.flags = (STACKSHOT_SAVE_LOADINFO | STACKSHOT_THREAD_GROUP
+				| STACKSHOT_KCDATA_FORMAT)
+	};
+
+	T_LOG("attempting to take stackshot with thread group flag");
+	take_stackshot(&scenario, ^(void *ssbuf, size_t sslen) {
+		parse_thread_group_stackshot(ssbuf, sslen);
+	});
+
+}
+
 #pragma mark performance tests
 
 #define SHOULD_REUSE_SIZE_HINT 0x01
@@ -317,6 +346,79 @@ stackshot_timestamp(void *ssbuf, size_t sslen)
 }
 
 #define TEST_THREAD_NAME "stackshot_test_thread"
+
+static void
+parse_thread_group_stackshot(void **ssbuf, size_t sslen)
+{
+	bool seen_thread_group_snapshot = false;
+	kcdata_iter_t iter = kcdata_iter(ssbuf, sslen);
+	T_ASSERT_EQ(kcdata_iter_type(iter), KCDATA_BUFFER_BEGIN_STACKSHOT,
+			"buffer provided is a stackshot");
+
+	NSMutableSet *thread_groups = [[NSMutableSet alloc] init];
+
+	iter = kcdata_iter_next(iter);
+	KCDATA_ITER_FOREACH(iter) {
+		switch (kcdata_iter_type(iter)) {
+		case KCDATA_TYPE_ARRAY: {
+			T_QUIET;
+			T_ASSERT_TRUE(kcdata_iter_array_valid(iter),
+					"checked that array is valid");
+
+			if (kcdata_iter_array_elem_type(iter) != STACKSHOT_KCTYPE_THREAD_GROUP_SNAPSHOT) {
+				continue;
+			}
+
+			seen_thread_group_snapshot = true;
+
+			if (kcdata_iter_array_elem_size(iter) >= sizeof(struct thread_group_snapshot_v2)) {
+				struct thread_group_snapshot_v2 *tgs_array = kcdata_iter_payload(iter);
+				for (uint32_t j = 0; j < kcdata_iter_array_elem_count(iter); j++) {
+					struct thread_group_snapshot_v2 *tgs = tgs_array + j;
+					[thread_groups addObject:@(tgs->tgs_id)];
+				}
+
+			}
+			else {
+				struct thread_group_snapshot *tgs_array = kcdata_iter_payload(iter);
+				for (uint32_t j = 0; j < kcdata_iter_array_elem_count(iter); j++) {
+					struct thread_group_snapshot *tgs = tgs_array + j;
+					[thread_groups addObject:@(tgs->tgs_id)];
+				}
+			}
+			break;
+		}
+		}
+	}
+	KCDATA_ITER_FOREACH(iter) {
+		NSError *error = nil;
+
+		switch (kcdata_iter_type(iter)) {
+
+		case KCDATA_TYPE_CONTAINER_BEGIN: {
+			T_QUIET;
+			T_ASSERT_TRUE(kcdata_iter_container_valid(iter),
+					"checked that container is valid");
+
+			NSDictionary *container = parseKCDataContainer(&iter, &error);
+			T_QUIET; T_ASSERT_NOTNULL(container, "parsed container from stackshot");
+			T_QUIET; T_ASSERT_NULL(error, "error unset after parsing container");
+
+			if (kcdata_iter_container_type(iter) != STACKSHOT_KCCONTAINER_THREAD) {
+				break;
+			}
+
+			int tg = [container[@"thread_snapshots"][@"thread_group"] intValue];
+
+			T_ASSERT_TRUE([thread_groups containsObject:@(tg)], "check that the thread group the thread is in exists");
+
+			break;
+		};
+
+		}
+	}
+	T_ASSERT_TRUE(seen_thread_group_snapshot, "check that we have seen a thread group snapshot");
+}
 
 static void
 parse_stackshot(bool delta, void *ssbuf, size_t sslen)

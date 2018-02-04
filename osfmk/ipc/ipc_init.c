@@ -275,7 +275,6 @@ ipc_init(void)
 	msg_ool_size_small -= cpy_kdata_hdr_sz;
 
 	ipc_host_init();
-
 }
 
 

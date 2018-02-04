@@ -176,15 +176,17 @@ extern uint32_t		low_eintstack[];	/* top */
 
 /*
  * Per-cpu data area pointers.
- * The master cpu (cpu 0) has its data area statically allocated;
- * others are allocated dynamically and this array is updated at runtime.
  */
-static cpu_data_t	cpu_data_master = {
-	.cpu_this = &cpu_data_master,
-	.cpu_nanotime = &pal_rtc_nanotime_info,
-	.cpu_int_stack_top = (vm_offset_t) low_eintstack,
+cpu_data_t cpshadows[MAX_CPUS] __attribute__((aligned(64))) __attribute__((section("__HIB, __desc")));
+cpu_data_t scdatas[MAX_CPUS] __attribute__((aligned(64))) = {
+	[0].cpu_this = &scdatas[0],
+	[0].cpu_nanotime = &pal_rtc_nanotime_info,
+	[0].cpu_int_stack_top = (vm_offset_t) low_eintstack,
+	[0].cd_shadow = &cpshadows[0]
 };
-cpu_data_t	*cpu_data_ptr[MAX_CPUS] = { [0] = &cpu_data_master };
+cpu_data_t *cpu_data_master = &scdatas[0];
+
+cpu_data_t	*cpu_data_ptr[MAX_CPUS] = { [0] = &scdatas[0] };
 
 decl_simple_lock_data(,ncpus_lock);	/* protects real_ncpus */
 unsigned int	real_ncpus = 1;
@@ -192,6 +194,15 @@ unsigned int	max_ncpus = MAX_CPUS;
 
 extern void hi64_sysenter(void);
 extern void hi64_syscall(void);
+
+typedef struct {
+	struct real_descriptor pcldts[LDTSZ];
+} cldt_t;
+
+cpu_desc_table64_t scdtables[MAX_CPUS] __attribute__((aligned(64))) __attribute__((section("__HIB, __desc")));
+cpu_fault_stack_t scfstks[MAX_CPUS] __attribute__((aligned(64))) __attribute__((section("__HIB, __desc")));
+
+cldt_t *dyn_ldts;
 
 /*
  * Multiprocessor i386/i486 systems use a separate copy of the
@@ -356,51 +367,36 @@ fix_desc64(void *descp, int count)
 	}
 }
 
-static void
-cpu_gdt_alias(vm_map_offset_t gdt, vm_map_offset_t alias)
-{
-	pt_entry_t *pte = NULL;
-
-	/* Require page alignment */
-	assert(page_aligned(gdt));
-	assert(page_aligned(alias));
-
-	pte = pmap_pte(kernel_pmap, alias);
-	pmap_store_pte(pte, kvtophys(gdt) | INTEL_PTE_REF
-					  | INTEL_PTE_MOD
-					  | INTEL_PTE_WIRED
-					  | INTEL_PTE_VALID
-					  | INTEL_PTE_WRITE
-					  | INTEL_PTE_NX);
-#if KASAN
-	kasan_notify_address(alias, PAGE_SIZE);
-#endif
-}
-
-
+extern unsigned mldtsz;
 void
 cpu_desc_init(cpu_data_t *cdp)
 {
 	cpu_desc_index_t	*cdi = &cdp->cpu_desc_index;
 
-	if (cdp == &cpu_data_master) {
+	if (cdp == cpu_data_master) {
 		/*
-		 * Master CPU uses the tables built at boot time.
-		 * Just set the index pointers to the low memory space.
+		 * Populate the double-mapped 'u' and base 'b' fields in the
+		 * KTSS with I/G/LDT and sysenter stack data.
 		 */
-		cdi->cdi_ktss = (void *)&master_ktss64;
-		cdi->cdi_sstk = (vm_offset_t) &master_sstk.top;
-		cdi->cdi_gdt.ptr  = (void *)MASTER_GDT_ALIAS;
-		cdi->cdi_idt.ptr  = (void *)MASTER_IDT_ALIAS;
-		cdi->cdi_ldt  = (struct fake_descriptor *) master_ldt;
+		cdi->cdi_ktssu = (void *)DBLMAP(&master_ktss64);
+		cdi->cdi_ktssb = (void *)&master_ktss64;
+		cdi->cdi_sstku = (vm_offset_t) DBLMAP(&master_sstk.top);
+		cdi->cdi_sstkb = (vm_offset_t) &master_sstk.top;
+
+		cdi->cdi_gdtu.ptr = (void *)DBLMAP((uintptr_t) &master_gdt);
+		cdi->cdi_gdtb.ptr = (void *)&master_gdt;
+		cdi->cdi_idtu.ptr  = (void *)DBLMAP((uintptr_t) &master_idt64);
+		cdi->cdi_idtb.ptr  = (void *)((uintptr_t) &master_idt64);
+		cdi->cdi_ldtu  = (struct fake_descriptor *) (void *) DBLMAP((uintptr_t)&master_ldt[0]);
+		cdi->cdi_ldtb  = (struct fake_descriptor *) (void *) &master_ldt[0];
 
 		/* Replace the expanded LDTs and TSS slots in the GDT */
-		kernel_ldt_desc64.offset64 = (uintptr_t) &master_ldt;
+		kernel_ldt_desc64.offset64 = (uintptr_t) cdi->cdi_ldtu;
 		*(struct fake_descriptor64 *) &master_gdt[sel_idx(KERNEL_LDT)] =
 			kernel_ldt_desc64;
 		*(struct fake_descriptor64 *) &master_gdt[sel_idx(USER_LDT)] =
 			kernel_ldt_desc64;
-		kernel_tss_desc64.offset64 = (uintptr_t) &master_ktss64;
+		kernel_tss_desc64.offset64 = (uintptr_t) DBLMAP(&master_ktss64);
 		*(struct fake_descriptor64 *) &master_gdt[sel_idx(KERNEL_TSS)] =
 			kernel_tss_desc64;
 
@@ -412,69 +408,62 @@ cpu_desc_init(cpu_data_t *cdp)
 
 		/*
 		 * Set the NMI/fault stacks as IST2/IST1 in the 64-bit TSS
-		 * Note: this will be dynamically re-allocated in VM later. 
 		 */
 		master_ktss64.ist2 = (uintptr_t) low_eintstack;
-		master_ktss64.ist1 = (uintptr_t) low_eintstack
-					- sizeof(x86_64_intr_stack_frame_t);
-	} else if (cdi->cdi_ktss == NULL) {	/* Skipping re-init on wake */
+		master_ktss64.ist1 = (uintptr_t) low_eintstack - sizeof(x86_64_intr_stack_frame_t);
+	} else if (cdi->cdi_ktssu == NULL) {	/* Skipping re-init on wake */
 		cpu_desc_table64_t	*cdt = (cpu_desc_table64_t *) cdp->cpu_desc_tablep;
 
-		/*
-		 * Per-cpu GDT, IDT, KTSS descriptors are allocated in kernel 
-		 * heap (cpu_desc_table). 
-		 * LDT descriptors are mapped into a separate area.
-		 * GDT descriptors are addressed by alias to avoid sgdt leaks to user-space.
-		 */
-		cdi->cdi_idt.ptr  = (void *)MASTER_IDT_ALIAS;
-		cdi->cdi_gdt.ptr  = (void *)CPU_GDT_ALIAS(cdp->cpu_number);
-		cdi->cdi_ktss = (void *)&cdt->ktss;
-		cdi->cdi_sstk = (vm_offset_t)&cdt->sstk.top;
-		cdi->cdi_ldt  = cdp->cpu_ldtp;
+		cdi->cdi_idtu.ptr  = (void *)DBLMAP((uintptr_t) &master_idt64);
 
-		/* Make the virtual alias address for the GDT */
-		cpu_gdt_alias((vm_map_offset_t) &cdt->gdt,
-			      (vm_map_offset_t) cdi->cdi_gdt.ptr);
+		cdi->cdi_ktssu = (void *)DBLMAP(&cdt->ktss);
+		cdi->cdi_ktssb = (void *)(&cdt->ktss);
+		cdi->cdi_sstku = (vm_offset_t)DBLMAP(&cdt->sstk.top);
+		cdi->cdi_sstkb = (vm_offset_t)(&cdt->sstk.top);
+		cdi->cdi_ldtu  = (void *)LDTALIAS(cdp->cpu_ldtp);
+		cdi->cdi_ldtb  = (void *)(cdp->cpu_ldtp);
 
 		/*
 		 * Copy the tables
 		 */
 		bcopy((char *)master_gdt, (char *)cdt->gdt, sizeof(master_gdt));
-		bcopy((char *)master_ldt, (char *)cdp->cpu_ldtp, sizeof(master_ldt));
+		bcopy((char *)master_ldt, (char *)cdp->cpu_ldtp, mldtsz);
 		bcopy((char *)&master_ktss64, (char *)&cdt->ktss, sizeof(struct x86_64_tss));
-
+		cdi->cdi_gdtu.ptr  = (void *)DBLMAP(cdt->gdt);
+		cdi->cdi_gdtb.ptr  = (void *)(cdt->gdt);
 		/*
 		 * Fix up the entries in the GDT to point to
 		 * this LDT and this TSS.
+		 * Note reuse of global 'kernel_ldt_desc64, which is not
+		 * concurrency-safe. Higher level synchronization is expected
 		 */
-		kernel_ldt_desc64.offset64 = (uintptr_t) cdi->cdi_ldt;
+		kernel_ldt_desc64.offset64 = (uintptr_t) cdi->cdi_ldtu;
 		*(struct fake_descriptor64 *) &cdt->gdt[sel_idx(KERNEL_LDT)] =
 			kernel_ldt_desc64;
 		fix_desc64(&cdt->gdt[sel_idx(KERNEL_LDT)], 1);
 
-		kernel_ldt_desc64.offset64 = (uintptr_t) cdi->cdi_ldt;
+		kernel_ldt_desc64.offset64 = (uintptr_t) cdi->cdi_ldtu;
 		*(struct fake_descriptor64 *) &cdt->gdt[sel_idx(USER_LDT)] =
 			kernel_ldt_desc64;
 		fix_desc64(&cdt->gdt[sel_idx(USER_LDT)], 1);
 
-		kernel_tss_desc64.offset64 = (uintptr_t) cdi->cdi_ktss;
+		kernel_tss_desc64.offset64 = (uintptr_t) cdi->cdi_ktssu;
 		*(struct fake_descriptor64 *) &cdt->gdt[sel_idx(KERNEL_TSS)] =
 			kernel_tss_desc64;
 		fix_desc64(&cdt->gdt[sel_idx(KERNEL_TSS)], 1);
 
 		/* Set (zeroed) fault stack as IST1, NMI intr stack IST2 */
-		bzero((void *) cdt->fstk, sizeof(cdt->fstk));
-		cdt->ktss.ist2 = (unsigned long)cdt->fstk + sizeof(cdt->fstk);
-		cdt->ktss.ist1 = cdt->ktss.ist2
-					- sizeof(x86_64_intr_stack_frame_t);
+		uint8_t *cfstk = &scfstks[cdp->cpu_number].fstk[0];
+		cdt->fstkp = cfstk;
+		bzero((void *) cfstk, FSTK_SZ);
+		cdt->ktss.ist2 = DBLMAP((uint64_t)cdt->fstkp + FSTK_SZ);
+		cdt->ktss.ist1 = cdt->ktss.ist2 - sizeof(x86_64_intr_stack_frame_t);
 	}
 
 	/* Require that the top of the sysenter stack is 16-byte aligned */
-	if ((cdi->cdi_sstk % 16) != 0)
+	if ((cdi->cdi_sstku % 16) != 0)
 		panic("cpu_desc_init() sysenter stack not 16-byte aligned");
 }
-
-
 void
 cpu_desc_load(cpu_data_t *cdp)
 {
@@ -496,13 +485,15 @@ cpu_desc_load(cpu_data_t *cdp)
 	gdt_desc_p(KERNEL_TSS)->access &= ~ACC_TSS_BUSY;
 
 	/* Load the GDT, LDT, IDT and TSS */
-	cdi->cdi_gdt.size = sizeof(struct real_descriptor)*GDTSZ - 1;
-	cdi->cdi_idt.size = 0x1000 + cdp->cpu_number;
-	
+	cdi->cdi_gdtb.size = sizeof(struct real_descriptor)*GDTSZ - 1;
+	cdi->cdi_gdtu.size = cdi->cdi_gdtb.size;
+	cdi->cdi_idtb.size = 0x1000 + cdp->cpu_number;
+	cdi->cdi_idtu.size = cdi->cdi_idtb.size;
+
 	postcode(CPU_DESC_LOAD_GDT);
-	lgdt((uintptr_t *) &cdi->cdi_gdt);
+	lgdt((uintptr_t *) &cdi->cdi_gdtu);
 	postcode(CPU_DESC_LOAD_IDT);
-	lidt((uintptr_t *) &cdi->cdi_idt);
+	lidt((uintptr_t *) &cdi->cdi_idtu);
 	postcode(CPU_DESC_LOAD_LDT);
 	lldt(KERNEL_LDT);
 	postcode(CPU_DESC_LOAD_TSS);
@@ -513,7 +504,6 @@ cpu_desc_load(cpu_data_t *cdp)
 #endif
 	postcode(CPU_DESC_LOAD_EXIT);
 }
-
 
 /*
  * Set MSRs for sysenter/sysexit and syscall/sysret for 64-bit.
@@ -527,8 +517,8 @@ cpu_syscall_init(cpu_data_t *cdp)
 #pragma unused(cdp)
 #endif /* !MONOTONIC */
 	wrmsr64(MSR_IA32_SYSENTER_CS, SYSENTER_CS); 
-	wrmsr64(MSR_IA32_SYSENTER_EIP, (uintptr_t) hi64_sysenter);
-	wrmsr64(MSR_IA32_SYSENTER_ESP, current_sstk());
+	wrmsr64(MSR_IA32_SYSENTER_EIP, DBLMAP((uintptr_t) hi64_sysenter));
+	wrmsr64(MSR_IA32_SYSENTER_ESP, current_cpu_datap()->cpu_desc_index.cdi_sstku);
 	/* Enable syscall/sysret */
 	wrmsr64(MSR_IA32_EFER, rdmsr64(MSR_IA32_EFER) | MSR_IA32_EFER_SCE);
 
@@ -537,9 +527,8 @@ cpu_syscall_init(cpu_data_t *cdp)
 	 * Note USER_CS because sysret uses this + 16 when returning to
 	 * 64-bit code.
 	 */
-	wrmsr64(MSR_IA32_LSTAR, (uintptr_t) hi64_syscall);
-	wrmsr64(MSR_IA32_STAR, (((uint64_t)USER_CS) << 48) |
-				(((uint64_t)KERNEL64_CS) << 32));
+	wrmsr64(MSR_IA32_LSTAR, DBLMAP((uintptr_t) hi64_syscall));
+	wrmsr64(MSR_IA32_STAR, (((uint64_t)USER_CS) << 48) | (((uint64_t)KERNEL64_CS) << 32));
 	/*
 	 * Emulate eflags cleared by sysenter but note that
 	 * we also clear the trace trap to avoid the complications
@@ -550,7 +539,8 @@ cpu_syscall_init(cpu_data_t *cdp)
 	wrmsr64(MSR_IA32_FMASK, EFL_DF|EFL_IF|EFL_TF|EFL_NT);
 
 }
-
+extern vm_offset_t dyn_dblmap(vm_offset_t, vm_offset_t);
+uint64_t ldt_alias_offset;
 
 cpu_data_t *
 cpu_data_alloc(boolean_t is_boot_cpu)
@@ -571,17 +561,24 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 		return cdp;
 	}
 
+	boolean_t do_ldt_alloc = FALSE;
+	simple_lock(&ncpus_lock);
+	int cnum = real_ncpus;
+	real_ncpus++;
+	if (dyn_ldts == NULL) {
+		do_ldt_alloc = TRUE;
+	}
+	simple_unlock(&ncpus_lock);
+
 	/*
 	 * Allocate per-cpu data:
 	 */
-	ret = kmem_alloc(kernel_map, (vm_offset_t *) &cdp, sizeof(cpu_data_t), VM_KERN_MEMORY_CPU);
-	if (ret != KERN_SUCCESS) {
-		printf("cpu_data_alloc() failed, ret=%d\n", ret);
-		goto abort;
-	}
+
+	cdp = &scdatas[cnum];
 	bzero((void*) cdp, sizeof(cpu_data_t));
 	cdp->cpu_this = cdp;
-
+	cdp->cpu_number = cnum;
+	cdp->cd_shadow = &cpshadows[cnum];
 	/*
 	 * Allocate interrupt stack:
 	 */
@@ -589,8 +586,7 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 			 (vm_offset_t *) &cdp->cpu_int_stack_top,
 			 INTSTACK_SIZE, VM_KERN_MEMORY_CPU);
 	if (ret != KERN_SUCCESS) {
-		printf("cpu_data_alloc() int stack failed, ret=%d\n", ret);
-		goto abort;
+		panic("cpu_data_alloc() int stack failed, ret=%d\n", ret);
 	}
 	bzero((void*) cdp->cpu_int_stack_top, INTSTACK_SIZE);
 	cdp->cpu_int_stack_top += INTSTACK_SIZE;
@@ -598,38 +594,48 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	/*
 	 * Allocate descriptor table:
 	 */
-	ret = kmem_alloc(kernel_map, 
-			 (vm_offset_t *) &cdp->cpu_desc_tablep,
-			 sizeof(cpu_desc_table64_t),
-			 VM_KERN_MEMORY_CPU);
-	if (ret != KERN_SUCCESS) {
-		printf("cpu_data_alloc() desc_table failed, ret=%d\n", ret);
-		goto abort;
-	}
 
+	cdp->cpu_desc_tablep = (struct cpu_desc_table *) &scdtables[cnum];
 	/*
 	 * Allocate LDT
 	 */
-	ret = kmem_alloc(kernel_map, 
-			 (vm_offset_t *) &cdp->cpu_ldtp,
-			 sizeof(struct real_descriptor) * LDTSZ,
-			 VM_KERN_MEMORY_CPU);
-	if (ret != KERN_SUCCESS) {
-		printf("cpu_data_alloc() ldt failed, ret=%d\n", ret);
-		goto abort;
+	if (do_ldt_alloc) {
+		boolean_t do_ldt_free = FALSE;
+		vm_offset_t sldtoffset = 0;
+		/*
+		 * Allocate LDT
+		 */
+		vm_offset_t ldtalloc = 0, ldtallocsz = round_page_64(MAX_CPUS * sizeof(struct real_descriptor) * LDTSZ);
+		ret = kmem_alloc(kernel_map, (vm_offset_t *) &ldtalloc, ldtallocsz, VM_KERN_MEMORY_CPU);
+		if (ret != KERN_SUCCESS) {
+			panic("cpu_data_alloc() ldt failed, kmem_alloc=%d\n", ret);
+		}
+
+		simple_lock(&ncpus_lock);
+		if (dyn_ldts == NULL) {
+			dyn_ldts = (cldt_t *)ldtalloc;
+		} else {
+			do_ldt_free = TRUE;
+		}
+		simple_unlock(&ncpus_lock);
+
+		if (do_ldt_free) {
+			kmem_free(kernel_map, ldtalloc, ldtallocsz);
+		} else {
+			/* CPU registration and startup are expected to execute
+			 * serially, as invoked by the platform driver.
+			 * Create trampoline alias of LDT region.
+			 */
+			sldtoffset = dyn_dblmap(ldtalloc, ldtallocsz);
+			ldt_alias_offset = sldtoffset;
+		}
 	}
+	cdp->cpu_ldtp = &dyn_ldts[cnum].pcldts[0];
 
 #if CONFIG_MCA
 	/* Machine-check shadow register allocation. */
 	mca_cpu_alloc(cdp);
 #endif
-
-	simple_lock(&ncpus_lock);
-
-	cpu_data_ptr[real_ncpus] = cdp;
-	cdp->cpu_number = real_ncpus;
-	real_ncpus++;
-	simple_unlock(&ncpus_lock);
 
 	/*
 	 * Before this cpu has been assigned a real thread context,
@@ -648,20 +654,10 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 		"int_stack: 0x%lx-0x%lx\n",
 		cdp->cpu_number, cdp, cdp->cpu_desc_tablep, cdp->cpu_ldtp,
 		(long)(cdp->cpu_int_stack_top - INTSTACK_SIZE), (long)(cdp->cpu_int_stack_top));
+	cpu_data_ptr[cnum] = cdp;
 
 	return cdp;
 
-abort:
-	if (cdp) {
-		if (cdp->cpu_desc_tablep)
-			kfree((void *) cdp->cpu_desc_tablep,
-				sizeof(cpu_desc_table64_t));
-		if (cdp->cpu_int_stack_top)
-			kfree((void *) (cdp->cpu_int_stack_top - INTSTACK_SIZE),
-				INTSTACK_SIZE);
-		kfree((void *) cdp, sizeof(*cdp));
-	}
-	return NULL;
 }
 
 boolean_t
@@ -678,7 +674,6 @@ valid_user_data_selector(uint16_t selector)
 	if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U)
 	    return (TRUE);
     }
-		
     return (FALSE);
 }
 
@@ -841,7 +836,6 @@ cpu_data_realloc(void)
 {
 	int		ret;
 	vm_offset_t	istk;
-	vm_offset_t	fstk;
 	cpu_data_t	*cdp;
 	boolean_t	istate;
 
@@ -852,10 +846,7 @@ cpu_data_realloc(void)
 	bzero((void*) istk, INTSTACK_SIZE);
 	istk += INTSTACK_SIZE;
 
-	ret = kmem_alloc(kernel_map, (vm_offset_t *) &cdp, sizeof(cpu_data_t), VM_KERN_MEMORY_CPU);
-	if (ret != KERN_SUCCESS) {
-		panic("cpu_data_realloc() cpu data alloc, ret=%d\n", ret);
-	}
+	cdp = &scdatas[0];
 
 	/* Copy old contents into new area and make fix-ups */
 	assert(cpu_number() == 0);
@@ -863,28 +854,25 @@ cpu_data_realloc(void)
 	cdp->cpu_this = cdp;
 	cdp->cpu_int_stack_top = istk;
 	timer_call_queue_init(&cdp->rtclock_timer.queue);
+	cdp->cpu_desc_tablep = (struct cpu_desc_table *) &scdtables[0];
+	cpu_desc_table64_t	*cdt = (cpu_desc_table64_t *) cdp->cpu_desc_tablep;
 
-	/* Allocate the separate fault stack */
-	ret = kmem_alloc(kernel_map, &fstk, PAGE_SIZE, VM_KERN_MEMORY_CPU);
-	if (ret != KERN_SUCCESS) {
-		panic("cpu_data_realloc() fault stack alloc, ret=%d\n", ret);
-	}
-	bzero((void*) fstk, PAGE_SIZE);
-	fstk += PAGE_SIZE;
+	uint8_t *cfstk = &scfstks[cdp->cpu_number].fstk[0];
+	cdt->fstkp = cfstk;
+	cfstk += FSTK_SZ;
 
 	/*
 	 * With interrupts disabled commmit the new areas.
 	 */
 	istate = ml_set_interrupts_enabled(FALSE);
 	cpu_data_ptr[0] = cdp;
-	master_ktss64.ist2 = (uintptr_t) fstk;
-	master_ktss64.ist1 = (uintptr_t) fstk
-				- sizeof(x86_64_intr_stack_frame_t);
+	master_ktss64.ist2 = DBLMAP((uintptr_t) cfstk);
+	master_ktss64.ist1 = DBLMAP((uintptr_t) cfstk - sizeof(x86_64_intr_stack_frame_t));
 	wrmsr64(MSR_IA32_GS_BASE, (uintptr_t) cdp);
 	wrmsr64(MSR_IA32_KERNEL_GS_BASE, (uintptr_t) cdp);
 	(void) ml_set_interrupts_enabled(istate);
 
 	kprintf("Reallocated master cpu data: %p,"
 		" interrupt stack: %p, fault stack: %p\n",
-		(void *) cdp, (void *) istk, (void *) fstk);
+		(void *) cdp, (void *) istk, (void *) cfstk);
 }

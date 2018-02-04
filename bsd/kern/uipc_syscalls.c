@@ -90,6 +90,7 @@
 #include <kern/task.h>
 #include <sys/priv.h>
 #include <sys/sysctl.h>
+#include <sys/sys_domain.h>
 
 #include <security/audit/audit.h>
 
@@ -328,7 +329,8 @@ bind(__unused proc_t p, struct bind_args *uap, __unused int32_t *retval)
 		goto out;
 	AUDIT_ARG(sockaddr, vfs_context_cwd(vfs_context_current()), sa);
 #if CONFIG_MACF_SOCKET_SUBSET
-	if ((error = mac_socket_check_bind(kauth_cred_get(), so, sa)) == 0)
+	if ((sa != NULL && sa->sa_family == AF_SYSTEM) ||
+		(error = mac_socket_check_bind(kauth_cred_get(), so, sa)) == 0)
 		error = sobindlock(so, sa, 1);	/* will lock socket */
 #else
 		error = sobindlock(so, sa, 1);	/* will lock socket */

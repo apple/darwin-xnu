@@ -216,6 +216,7 @@ struct mpt_dsn_map {
 	uint32_t		mpt_sseq;	/* relative subflow # */
 	uint16_t		mpt_len;	/* length of mapping */
 	uint16_t		mpt_csum;	/* checksum value if on */
+	uint8_t			mpt_dfin;	/* It's a DATA_FIN */
 };
 #define tcp6cb		tcpcb  /* for KAME src sync over BSD*'s */
 
@@ -1634,6 +1635,7 @@ extern boolean_t tfo_enabled(const struct tcpcb *tp);
 extern void tcp_disable_tfo(struct tcpcb *tp);
 extern void tcp_tfo_gen_cookie(struct inpcb *inp, u_char *out, size_t blk_size);
 #define	TCP_FASTOPEN_KEYLEN 16
+extern int tcp_freeq(struct tcpcb *tp);
 extern errno_t tcp_notify_ack_id_valid(struct tcpcb *, struct socket *, u_int32_t);
 extern errno_t tcp_add_notify_ack_marker(struct tcpcb *, u_int32_t);
 extern void tcp_notify_ack_free(struct tcpcb *);
@@ -1648,11 +1650,12 @@ extern int get_tcp_inp_list(struct inpcb **, int, inp_gen_t);
 extern bool tcp_notify_ack_active(struct socket *so);
 
 #if MPTCP
-extern int mptcp_input_preproc(struct tcpcb *, struct mbuf *, int);
+extern int mptcp_input_preproc(struct tcpcb *tp, struct mbuf *m,
+			       struct tcphdr *th, int drop_hdrlen);
 extern uint32_t mptcp_output_csum(struct mbuf *m, uint64_t dss_val,
 				  uint32_t sseq, uint16_t dlen);
 extern int mptcp_adj_mss(struct tcpcb *, boolean_t);
-extern void mptcp_insert_rmap(struct tcpcb *, struct mbuf *);
+extern void mptcp_insert_rmap(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th);
 #endif
 
 __private_extern__ void tcp_update_stats_per_flow(

@@ -594,8 +594,7 @@ sysctl_mib_init(void)
 	watchpoint_flag = arm_debug_info()->num_watchpoint_pairs;
 	breakpoint_flag = arm_debug_info()->num_breakpoint_pairs;
 
-	arm_mvfp_info_t *mvfp_info;
-	mvfp_info = arm_mvfp_info();
+	arm_mvfp_info_t *mvfp_info = arm_mvfp_info();
 	gNeon = mvfp_info->neon;
 	gNeonHpfp = mvfp_info->neon_hpfp;
 

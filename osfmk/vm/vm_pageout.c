@@ -420,6 +420,7 @@ unsigned int vm_stat_discard_failure = 0;	/* debugging */
 unsigned int vm_stat_discard_throttle = 0;	/* debugging */
 unsigned int vm_pageout_reactivation_limit_exceeded = 0;	/* debugging */
 unsigned int vm_pageout_inactive_force_reclaim = 0;	/* debugging */
+unsigned int vm_pageout_skipped_external = 0;   /* debugging */
 
 unsigned int vm_pageout_scan_reclaimed_throttled = 0;
 unsigned int vm_pageout_scan_active_throttled = 0;
@@ -1702,10 +1703,12 @@ int	last_vm_pageout_reactivation_limit_exceeded = 0;
 int	last_vm_pageout_considered_page = 0;
 int	last_vm_compressor_pages_grabbed = 0;
 int	last_vm_compressor_failed = 0;
+int     last_vm_pageout_skipped_external = 0;
+
 
 void update_vm_info(void)
 {
-	int	tmp1, tmp2, tmp3;
+        int	tmp1, tmp2, tmp3, tmp4;
 
 	if (!kdebug_enable)
 		return;
@@ -1773,12 +1776,14 @@ void update_vm_info(void)
 	tmp1 = vm_pageout_scan_inactive_throttled_internal;
 	tmp2 = vm_pageout_freed_after_compression;
 	tmp3 = vm_compressor_pages_grabbed;
+	tmp4 = vm_pageout_skipped_external;
 
 	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_INFO6)) | DBG_FUNC_NONE,
 			      tmp1 - last_vm_pageout_scan_inactive_throttled_internal,
 			      tmp2 - last_vm_pageout_freed_after_compression,
 			      tmp3 - last_vm_compressor_pages_grabbed,
-			      0, 0);
+			      tmp4 - last_vm_pageout_skipped_external,
+			      0);
 			      
 	vm_pageout_stats[vm_pageout_stat_now].throttled_internal_q += (tmp1 - last_vm_pageout_scan_inactive_throttled_internal);
 	vm_pageout_stats[vm_pageout_stat_now].pages_compressed += (tmp2 - last_vm_pageout_freed_after_compression);
@@ -1787,6 +1792,7 @@ void update_vm_info(void)
 	last_vm_pageout_scan_inactive_throttled_internal = tmp1;
 	last_vm_pageout_freed_after_compression = tmp2;
 	last_vm_compressor_pages_grabbed = tmp3;
+	last_vm_pageout_skipped_external = tmp4;
 
 
 	if ((vm_pageout_reactivation_limit_exceeded - last_vm_pageout_reactivation_limit_exceeded) == 0 &&
@@ -2655,6 +2661,9 @@ consider_inactive:
 			    ((inactive_external_count < vm_page_anonymous_count) && (inactive_external_count < (vm_page_pageable_external_count / 3)))) {
 				grab_anonymous = TRUE;
 				anons_grabbed = 0;
+
+				vm_pageout_skipped_external++;
+				goto want_anonymous;
 			}
 #if CONFIG_JETSAM
 			/* If the file-backed pool has accumulated
@@ -2687,6 +2696,7 @@ consider_inactive:
 			}
 #endif /* CONFIG_JETSAM */
 
+want_anonymous:
 			if (grab_anonymous == FALSE || anons_grabbed >= ANONS_GRABBED_LIMIT || vm_page_queue_empty(&vm_page_queue_anonymous)) {
 
 				if ( !vm_page_queue_empty(&vm_page_queue_inactive) ) {
@@ -2801,6 +2811,7 @@ consider_inactive:
 				pmap_clear_reference(VM_PAGE_GET_PHYS_PAGE(m));
 				m->reference = FALSE;
 
+#if !CONFIG_EMBEDDED
 				/*
 				 * m->object must be stable since we hold the page queues lock...
 				 * we can update the scan_collisions field sans the object lock
@@ -2810,7 +2821,17 @@ consider_inactive:
 				 * is possible for the value to be a bit non-determistic, but that's ok
 				 * since it's only used as a hint
 				 */
+
+				/*
+				 * This is not used on EMBEDDED because having this variable set *could* lead
+				 * us to self-cannibalize pages from m_object to fill a UPL for a pagein.
+				 * And, there's a high probability that the object that vm_pageout_scan
+				 * wants and collides on is a very popular object e.g. the shared cache on EMBEDDED.
+				 * The older pages that we cannibalize from the shared cache could be really
+				 * important text pages e.g. the system call stubs.
+				 */
 				m_object->scan_collisions = 1;
+#endif /* !CONFIG_EMBEDDED */
 
 				if ( !vm_page_queue_empty(&sq->age_q) )
 					m_want = (vm_page_t) vm_page_queue_first(&sq->age_q);

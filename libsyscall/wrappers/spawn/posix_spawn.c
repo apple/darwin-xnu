@@ -713,7 +713,6 @@ posix_spawn_growportactions_np(posix_spawnattr_t *attr)
 {
 	_posix_spawnattr_t psattr;
 	_posix_spawn_port_actions_t acts; 
-	int newnum;
 
 	if (attr == NULL || *attr == NULL)
 		return EINVAL;
@@ -724,8 +723,14 @@ posix_spawn_growportactions_np(posix_spawnattr_t *attr)
 		return EINVAL;
 	
 	/* Double number of port actions allocated for */
-	newnum = 2 * acts->pspa_alloc;
-	acts = realloc(acts, PS_PORT_ACTIONS_SIZE(newnum));
+	int newnum = 0;
+	if (os_mul_overflow(acts->pspa_alloc, 2, &newnum))
+		return ENOMEM;
+	size_t newsize = PS_PORT_ACTIONS_SIZE(newnum);
+	if (newsize == 0)
+		return ENOMEM;
+
+	acts = realloc(acts, newsize);
 	if (acts == NULL)
 		return ENOMEM;
 	
@@ -1031,8 +1036,13 @@ posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *file_actions)
 static int
 _posix_spawn_file_actions_grow(_posix_spawn_file_actions_t *psactsp)
 {
-	int	new_alloc = (*psactsp)->psfa_act_alloc * 2;
-	_posix_spawn_file_actions_t new_psacts;
+	int newnum = 0;
+	if (os_mul_overflow((*psactsp)->psfa_act_alloc, 2, &newnum))
+		return ENOMEM;
+
+	size_t newsize = PSF_ACTIONS_SIZE(newnum);
+	if (newsize == 0)
+		return ENOMEM;
 
 	/*
 	 * XXX may want to impose an administrative limit here; POSIX does
@@ -1040,13 +1050,14 @@ _posix_spawn_file_actions_grow(_posix_spawn_file_actions_t *psactsp)
 	 * XXX so it's probably acceptable to just fail catastrophically
 	 * XXX instead of implementing one.
 	 */
-	if ((new_psacts = (_posix_spawn_file_actions_t)realloc((*psactsp), PSF_ACTIONS_SIZE(new_alloc))) == NULL) {
-		return (ENOMEM);
+	_posix_spawn_file_actions_t new_psacts;
+	if ((new_psacts = (_posix_spawn_file_actions_t)realloc((*psactsp), newsize)) == NULL) {
+		return ENOMEM;
 	}
-	new_psacts->psfa_act_alloc = new_alloc;
+	new_psacts->psfa_act_alloc = newnum;
 	*psactsp = new_psacts;
 
-	return (0);
+	return 0;
 }
 
 
@@ -1515,10 +1526,16 @@ posix_spawnattr_setmacpolicyinfo_np(posix_spawnattr_t * __restrict attr,
 		psmx->psmx_count = 0;
 	}
 	else if (psmx->psmx_count == psmx->psmx_alloc) {
-		psmx = psattr->psa_mac_extensions = reallocf(psmx, PS_MAC_EXTENSIONS_SIZE(psmx->psmx_alloc * 2));
+		int newnum = 0;
+		if (os_mul_overflow(psmx->psmx_alloc, 2, &newnum))
+			return ENOMEM;
+		size_t extsize = PS_MAC_EXTENSIONS_SIZE(newnum);
+		if (extsize == 0)
+			return ENOMEM;
+		psmx = psattr->psa_mac_extensions = reallocf(psmx, extsize);
 		if (psmx == NULL)
 			return ENOMEM;
-		psmx->psmx_alloc *= 2;
+		psmx->psmx_alloc = newnum;
 	}
 	extension = &psmx->psmx_extensions[psmx->psmx_count];
 	strlcpy(extension->policyname, policyname, sizeof(extension->policyname));
@@ -1801,14 +1818,24 @@ posix_spawn(pid_t * __restrict pid, const char * __restrict path,
 			ad.attrp = psattr;
 
 			if (psattr->psa_ports != NULL) {
+				size_t psact_size = PS_PORT_ACTIONS_SIZE(psattr->psa_ports->pspa_count);
+				if (psact_size == 0 && psattr->psa_ports->pspa_count != 0) {
+					errno = EINVAL;
+					ret = -1;
+					goto out;
+				}
 				ad.port_actions = psattr->psa_ports;
-				ad.port_actions_size = PS_PORT_ACTIONS_SIZE(
-						ad.port_actions->pspa_count);
+				ad.port_actions_size = psact_size;
 			}
 			if (psattr->psa_mac_extensions != NULL) {
+				size_t macext_size = PS_MAC_EXTENSIONS_SIZE(psattr->psa_mac_extensions->psmx_count);
+				if (macext_size == 0 && psattr->psa_mac_extensions->psmx_count != 0) {
+					errno = EINVAL;
+					ret = -1;
+					goto out;
+				}
 				ad.mac_extensions = psattr->psa_mac_extensions;
-				ad.mac_extensions_size = PS_MAC_EXTENSIONS_SIZE(
-						ad.mac_extensions->psmx_count);
+				ad.mac_extensions_size = macext_size;
 			}
 			if (psattr->psa_coalition_info != NULL) {
 				ad.coal_info_size = sizeof(struct _posix_spawn_coalition_info);
@@ -1824,7 +1851,13 @@ posix_spawn(pid_t * __restrict pid, const char * __restrict path,
 				*(_posix_spawn_file_actions_t *)file_actions;
 
 			if (psactsp->psfa_act_count > 0) {
-				ad.file_actions_size = PSF_ACTIONS_SIZE(psactsp->psfa_act_count);
+				size_t fa_size = PSF_ACTIONS_SIZE(psactsp->psfa_act_count);
+				if (fa_size == 0 && psactsp->psfa_act_count != 0) {
+					errno = EINVAL;
+					ret = -1;
+					goto out;
+				}
+				ad.file_actions_size = fa_size;
 				ad.file_actions = psactsp;
 			}
 		}
@@ -1833,6 +1866,7 @@ posix_spawn(pid_t * __restrict pid, const char * __restrict path,
 	} else
 		ret = __posix_spawn(pid, path, NULL, argv, envp);
 
+out:
 	if (ret < 0)
 		ret = errno;
 	errno = saveerrno;

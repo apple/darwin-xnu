@@ -955,7 +955,7 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 					}
 				}
 
-				while (tcp_optlen) {
+				while (tcp_optlen > 0) {
 					if (tcp_opt_buf[i] == 0x1) {
 						PKT_MNGLR_LOG(LOG_INFO, "Skipping NOP\n");
 						tcp_optlen--;
@@ -968,7 +968,7 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 						continue;
 					} else if (tcp_opt_buf[i] == TCP_OPT_MULTIPATH_TCP) {
 						int j = 0;
-						int mptcpoptlen = tcp_opt_buf[i+1];
+						unsigned char mptcpoptlen = tcp_opt_buf[i+1];
 						uint8_t sbtver = tcp_opt_buf[i+MPTCP_SBT_VER_OFFSET];
 						uint8_t subtype = sbtver >> 4;
 
@@ -984,7 +984,7 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 						}
 
 						PKT_MNGLR_LOG(LOG_INFO, "Got MPTCP option %x\n", tcp_opt_buf[i]);
-						for (; j < mptcpoptlen; j++) {
+						for (; j < mptcpoptlen && j < tcp_optlen; j++) {
 							if (p_pkt_mnglr->proto_action_mask &
 							    PKT_MNGLR_TCP_ACT_NOP_MPTCP) {
 								tcp_opt_buf[i+j] = 0x1;

@@ -62,6 +62,8 @@
 		13F3DA9E1C7C1C6600ACFFCC /* corpse-twr-sample-v2.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 13F3DA9D1C7C1C6000ACFFCC /* corpse-twr-sample-v2.plist.gz */; };
 		1862B0341E7A083F0005ADF4 /* stackshot-sample-thread-groups in Resources */ = {isa = PBXBuildFile; fileRef = 1862B0321E7A083F0005ADF4 /* stackshot-sample-thread-groups */; };
 		1862B0351E7A083F0005ADF4 /* stackshot-sample-thread-groups.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 1862B0331E7A083F0005ADF4 /* stackshot-sample-thread-groups.plist.gz */; };
+		18C577C31F96DB5200C67EB3 /* stackshot-sample-thread-groups-flags in Resources */ = {isa = PBXBuildFile; fileRef = 18C577C11F96DB5100C67EB3 /* stackshot-sample-thread-groups-flags */; };
+		18C577C61F96DB7100C67EB3 /* stackshot-sample-thread-groups-flags.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 18C577C51F96DB7100C67EB3 /* stackshot-sample-thread-groups-flags.plist.gz */; };
 		18E592981E9451A20018612A /* stackshot-sample-coalitions in Resources */ = {isa = PBXBuildFile; fileRef = 18E592961E9451A20018612A /* stackshot-sample-coalitions */; };
 		18E592991E9451A20018612A /* stackshot-sample-coalitions.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 18E592971E9451A20018612A /* stackshot-sample-coalitions.plist.gz */; };
 		C91C93CB1ACB58B700119B60 /* kdd.h in Headers */ = {isa = PBXBuildFile; fileRef = C91C93CA1ACB58B700119B60 /* kdd.h */; settings = {ATTRIBUTES = (Private, ); }; };
@@ -165,6 +167,8 @@
 		13F3DA9D1C7C1C6000ACFFCC /* corpse-twr-sample-v2.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "corpse-twr-sample-v2.plist.gz"; path = "tests/corpse-twr-sample-v2.plist.gz"; sourceTree = SOURCE_ROOT; };
 		1862B0321E7A083F0005ADF4 /* stackshot-sample-thread-groups */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-thread-groups"; sourceTree = "<group>"; };
 		1862B0331E7A083F0005ADF4 /* stackshot-sample-thread-groups.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-thread-groups.plist.gz"; sourceTree = "<group>"; };
+		18C577C11F96DB5100C67EB3 /* stackshot-sample-thread-groups-flags */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-thread-groups-flags"; sourceTree = "<group>"; };
+		18C577C51F96DB7100C67EB3 /* stackshot-sample-thread-groups-flags.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-thread-groups-flags.plist.gz"; sourceTree = "<group>"; };
 		18E592961E9451A20018612A /* stackshot-sample-coalitions */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-coalitions"; sourceTree = "<group>"; };
 		18E592971E9451A20018612A /* stackshot-sample-coalitions.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-coalitions.plist.gz"; sourceTree = "<group>"; };
 		C91C93C71ACB58B700119B60 /* libkdd.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libkdd.a; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -214,6 +218,8 @@
 		08603F351BF69EDE007D3784 /* tests */ = {
 			isa = PBXGroup;
 			children = (
+				18C577C51F96DB7100C67EB3 /* stackshot-sample-thread-groups-flags.plist.gz */,
+				18C577C11F96DB5100C67EB3 /* stackshot-sample-thread-groups-flags */,
 				C9DCEF001F01C3790000BD02 /* stackshot-sample-instrs-cycles */,
 				C9DCEEFF1F01C3790000BD02 /* stackshot-sample-instrs-cycles.plist.gz */,
 				088C36DF1EF323AE00ABB2E0 /* stackshot-sample-thread-policy */,
@@ -437,6 +443,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				18C577C61F96DB7100C67EB3 /* stackshot-sample-thread-groups-flags.plist.gz in Resources */,
+				18C577C31F96DB5200C67EB3 /* stackshot-sample-thread-groups-flags in Resources */,
 				C9DCEF011F01C3810000BD02 /* stackshot-sample-instrs-cycles in Resources */,
 				C9DCEF021F01C3810000BD02 /* stackshot-sample-instrs-cycles.plist.gz in Resources */,
 				088C36E01EF323C300ABB2E0 /* stackshot-sample-thread-policy in Resources */,

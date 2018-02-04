@@ -574,8 +574,9 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 
 	case STACKSHOT_KCTYPE_THREAD_GROUP_SNAPSHOT: {
 		i = 0;
-		_SUBTYPE(KC_ST_UINT64, struct thread_group_snapshot, tgs_id);
-		_SUBTYPE_ARRAY(KC_ST_CHAR, struct thread_group_snapshot, tgs_name, 16);
+		_SUBTYPE(KC_ST_UINT64, struct thread_group_snapshot_v2, tgs_id);
+		_SUBTYPE_ARRAY(KC_ST_CHAR, struct thread_group_snapshot_v2, tgs_name, 16);
+		_SUBTYPE(KC_ST_UINT64, struct thread_group_snapshot_v2, tgs_flags);
 		setup_type_definition(retval, type_id, i, "thread_group_snapshot");
 		break;
 	}

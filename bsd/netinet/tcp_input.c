@@ -2741,18 +2741,19 @@ findpcb:
 	 */
 	if (tp->t_state != TCPS_LISTEN && optp) {
 		tcp_dooptions(tp, optp, optlen, th, &to);
-#if MPTCP
-		if (mptcp_input_preproc(tp, m, drop_hdrlen) != 0) {
-			tp->t_flags |= TF_ACKNOW;
-			(void) tcp_output(tp);
-			tcp_check_timer_state(tp);
-			socket_unlock(so, 1);
-			KERNEL_DEBUG(DBG_FNC_TCP_INPUT |
-			    DBG_FUNC_END,0,0,0,0,0);
-			return;
-		}
-#endif /* MPTCP */
 	}
+#if MPTCP
+	if (tp->t_state != TCPS_LISTEN && (so->so_flags & SOF_MP_SUBFLOW) &&
+	    mptcp_input_preproc(tp, m, th, drop_hdrlen) != 0) {
+		tp->t_flags |= TF_ACKNOW;
+		(void) tcp_output(tp);
+		tcp_check_timer_state(tp);
+		socket_unlock(so, 1);
+		KERNEL_DEBUG(DBG_FNC_TCP_INPUT |
+		    DBG_FUNC_END,0,0,0,0,0);
+		return;
+	}
+#endif /* MPTCP */
 	if (tp->t_state == TCPS_SYN_SENT && (thflags & TH_SYN)) {
 		if (!(thflags & TH_ACK) ||
 		    (SEQ_GT(th->th_ack, tp->iss) &&
@@ -4940,7 +4941,14 @@ dodata:
 
 		}
 	} else {
-		m_freem(m);
+		if ((so->so_flags & SOF_MP_SUBFLOW) && tlen == 0 &&
+		    (m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN)) {
+			m_adj(m, drop_hdrlen);	/* delayed header drop */
+			mptcp_input(tptomptp(tp)->mpt_mpte, m);
+			tp->t_flags |= TF_ACKNOW;
+		} else {
+			m_freem(m);
+		}
 		thflags &= ~TH_FIN;
 	}
 

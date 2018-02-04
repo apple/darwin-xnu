@@ -90,7 +90,9 @@ selector_to_sel(uint16_t selector)
     return (tconv.sel);
 }
 
-#define LDTSZ		8192		/* size of the kernel ldt in entries */
+#define LDTSZ_MAX	8192	/* maximal size of the kernel ldt in entries */
+#define LDTSZ_DFL	(128)
+#define LDTSZ		(LDTSZ_MAX)
 #define	LDTSZ_MIN	SEL_TO_INDEX(USER_SETTABLE)
 					/* kernel ldt entries */
 
@@ -182,11 +184,13 @@ typedef struct __attribute__((packed)) {
 	void		*ptr;
 } x86_64_desc_register_t;
 
+
+
 /*
  * Boot-time data for master (or only) CPU
  */
 extern struct real_descriptor	master_gdt[GDTSZ];
-extern struct real_descriptor	master_ldt[LDTSZ];
+extern struct real_descriptor	master_ldt[];
 extern struct i386_tss		master_ktss;
 extern struct sysenter_stack	master_sstk;
 
@@ -285,6 +289,7 @@ __END_DECLS
 #define SYSENTER_TF_CS	(USER_CS|0x10000)
 #define	SYSENTER_DS	KERNEL64_SS	/* sysenter kernel data segment */
 
+#endif	/* _I386_SEG_H_ */
 #ifdef __x86_64__
 /*
  * 64-bit kernel LDT descriptors
@@ -293,5 +298,3 @@ __END_DECLS
 #define	USER_CTHREAD	0x0f		/* user cthread area */
 #define	USER_SETTABLE	0x1f		/* start of user settable ldt entries */
 #endif
-
-#endif	/* _I386_SEG_H_ */

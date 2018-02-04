@@ -1049,10 +1049,10 @@ arm64_pan_test()
 	pan_exception_level = 0;
 	pan_fault_value = 0xDE;
 	// convert priv_addr to one that is accessible from user mode
-	pan_test_addr = priv_addr + _COMM_PAGE64_BASE_ADDRESS - 
+	pan_test_addr = priv_addr + _COMM_HIGH_PAGE64_BASE_ADDRESS -
 		_COMM_PAGE_START_ADDRESS;
 
-	// Below should trigger a PAN exception as pan_test_addr is accessible 
+	// Below should trigger a PAN exception as pan_test_addr is accessible
 	// in user mode
 	// The exception handler, upon recognizing the fault address is pan_test_addr,
 	// will disable PAN and rerun this instruction successfully

@@ -1253,7 +1253,7 @@ thread_create_internal(
 		 * This task has a per-thread CPU limit; make sure this new thread
 		 * gets its limit set too, before it gets out of the kernel.
 		 */
-		set_astledger(new_thread);
+		act_set_astledger(new_thread);
 	}
 
 	/* Instantiate a thread ledger. Do not fail thread creation if ledger creation fails. */

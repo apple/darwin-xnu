@@ -276,7 +276,8 @@ static kern_return_t	vm_map_remap_extract(
 	vm_prot_t		*max_protection,
 	vm_inherit_t		inheritance,
 	boolean_t		pageable,
-	boolean_t		same_map);
+	boolean_t		same_map,
+	vm_map_kernel_flags_t	vmk_flags);
 
 static kern_return_t	vm_map_remap_range_allocate(
 	vm_map_t		map,
@@ -354,7 +355,11 @@ boolean_t _vmec_reserved = (NEW)->from_reserved_zone;	\
 	(NEW)->permanent = FALSE;	\
 	(NEW)->used_for_jit = FALSE;	\
 	(NEW)->from_reserved_zone = _vmec_reserved;	\
-	(NEW)->iokit_acct = FALSE;	\
+	if ((NEW)->iokit_acct) {			\
+	     assertf(!(NEW)->use_pmap, "old %p new %p\n", (OLD), (NEW)); \
+	     (NEW)->iokit_acct = FALSE;			\
+	     (NEW)->use_pmap = TRUE;			\
+	}						\
 	(NEW)->vme_resilient_codesign = FALSE; \
 	(NEW)->vme_resilient_media = FALSE;	\
 	(NEW)->vme_atomic = FALSE; 	\
@@ -5388,10 +5393,43 @@ vm_map_protect(
 	vm_map_entry_t			entry;
 	vm_prot_t			new_max;
 	int				pmap_options = 0;
+	kern_return_t			kr;
 
 	XPR(XPR_VM_MAP,
 	    "vm_map_protect, 0x%X start 0x%X end 0x%X, new 0x%X %d",
 	    map, start, end, new_prot, set_max);
+
+	if (new_prot & VM_PROT_COPY) {
+		vm_map_offset_t		new_start;
+		vm_prot_t		cur_prot, max_prot;
+		vm_map_kernel_flags_t	kflags;
+
+		/* LP64todo - see below */
+		if (start >= map->max_offset) {
+			return KERN_INVALID_ADDRESS;
+		}
+
+		kflags = VM_MAP_KERNEL_FLAGS_NONE;
+		kflags.vmkf_remap_prot_copy = TRUE;
+		new_start = start;
+		kr = vm_map_remap(map,
+				  &new_start,
+				  end - start,
+				  0, /* mask */
+				  VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+				  kflags,
+				  0,
+				  map,
+				  start,
+				  TRUE, /* copy-on-write remapping! */
+				  &cur_prot,
+				  &max_prot,
+				  VM_INHERIT_DEFAULT);
+		if (kr != KERN_SUCCESS) {
+			return kr;
+		}
+		new_prot &= ~VM_PROT_COPY;
+	}
 
 	vm_map_lock(map);
 
@@ -5442,17 +5480,9 @@ vm_map_protect(
 		}
 
 		new_max = current->max_protection;
-		if(new_prot & VM_PROT_COPY) {
-			new_max |= VM_PROT_WRITE;
-			if ((new_prot & (new_max | VM_PROT_COPY)) != new_prot) {
-				vm_map_unlock(map);
-				return(KERN_PROTECTION_FAILURE);
-			}
-		} else {
-			if ((new_prot & new_max) != new_prot) {
-				vm_map_unlock(map);
-				return(KERN_PROTECTION_FAILURE);
-			}
+		if ((new_prot & new_max) != new_prot) {
+			vm_map_unlock(map);
+			return(KERN_PROTECTION_FAILURE);
 		}
 
 #if CONFIG_EMBEDDED
@@ -5521,35 +5551,12 @@ vm_map_protect(
 
 		old_prot = current->protection;
 
-		if(new_prot & VM_PROT_COPY) {
-			/* caller is asking specifically to copy the      */
-			/* mapped data, this implies that max protection  */
-			/* will include write.  Caller must be prepared   */
-			/* for loss of shared memory communication in the */
-			/* target area after taking this step */
-
-			if (current->is_sub_map == FALSE &&
-			    VME_OBJECT(current) == VM_OBJECT_NULL) {
-				VME_OBJECT_SET(current,
-					       vm_object_allocate(
-						       (vm_map_size_t)
-						       (current->vme_end -
-							current->vme_start)));
-				VME_OFFSET_SET(current, 0);
-				assert(current->use_pmap);
-			}
-			assert(current->wired_count == 0);
-			current->needs_copy = TRUE;
-			current->max_protection |= VM_PROT_WRITE;
+		if (set_max) {
+			current->max_protection = new_prot;
+			current->protection = new_prot & old_prot;
+		} else {
+			current->protection = new_prot;
 		}
-
-		if (set_max)
-			current->protection =
-				(current->max_protection =
-				 new_prot & ~VM_PROT_COPY) &
-				old_prot;
-		else
-			current->protection = new_prot & ~VM_PROT_COPY;
 
 		/*
 		 *	Update physical map if necessary.
@@ -11354,7 +11361,8 @@ vm_map_copy_extract(
 				  max_prot,
 				  VM_INHERIT_SHARE,
 				  TRUE, /* pageable */
-				  FALSE); /* same_map */
+				  FALSE, /* same_map */
+				  VM_MAP_KERNEL_FLAGS_NONE);
 	if (kr != KERN_SUCCESS) {
 		vm_map_copy_discard(copy);
 		return kr;
@@ -14780,7 +14788,8 @@ vm_map_remap_extract(
 	/* What, no behavior? */
 	vm_inherit_t		inheritance,
 	boolean_t		pageable,
-	boolean_t		same_map)
+	boolean_t		same_map,
+	vm_map_kernel_flags_t	vmk_flags)
 {
 	kern_return_t		result;
 	vm_map_size_t		mapped_size;
@@ -14961,7 +14970,20 @@ vm_map_remap_extract(
 		new_entry->vme_start = map_address;
 		new_entry->vme_end = map_address + tmp_size;
 		assert(new_entry->vme_start < new_entry->vme_end);
-		new_entry->inheritance = inheritance;
+		if (copy && vmk_flags.vmkf_remap_prot_copy) {
+			/*
+			 * Remapping for vm_map_protect(VM_PROT_COPY)
+			 * to convert a read-only mapping into a
+			 * copy-on-write version of itself but
+			 * with write access:
+			 * keep the original inheritance and add 
+			 * VM_PROT_WRITE to the max protection.
+			 */
+			new_entry->inheritance = src_entry->inheritance;
+			new_entry->max_protection |= VM_PROT_WRITE;
+		} else {
+			new_entry->inheritance = inheritance;
+		}
 		VME_OFFSET_SET(new_entry, offset);
 		
 		/*
@@ -15236,7 +15258,8 @@ vm_map_remap(
 				      max_protection,
 				      inheritance,
 				      target_map->hdr.entries_pageable,
-				      src_map == target_map);
+				      src_map == target_map,
+				      vmk_flags);
 
 	if (result != KERN_SUCCESS) {
 		return result;

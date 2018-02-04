@@ -276,6 +276,10 @@ struct embedded_panic_header {
 	uint32_t eph_stackshot_len;        /* length of the panic stackshot (0 if not valid ) */
 	uint32_t eph_other_log_offset;     /* Offset of the other log (any logging subsequent to the stackshot) from the beginning of the header */
 	uint32_t eph_other_log_len;        /* length of the other log */
+	uint64_t eph_x86_power_state:8,
+		 eph_x86_efi_boot_state:8,
+		 eph_x86_system_state:8,
+		 eph_x86_unused_bits:40;
 } __attribute__((packed));
 
 #define EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_COMPLETE             0x01
@@ -289,7 +293,7 @@ struct embedded_panic_header {
 #define EMBEDDED_PANIC_HEADER_FLAG_COPROC_INITIATED_PANIC        0x100
 #define EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_FAILED               0x200
 
-#define EMBEDDED_PANIC_HEADER_CURRENT_VERSION 1
+#define EMBEDDED_PANIC_HEADER_CURRENT_VERSION 2
 #define EMBEDDED_PANIC_MAGIC 0x46554E4B /* FUNK */
 
 struct macos_panic_header {
@@ -336,6 +340,12 @@ __END_DECLS
 
 #ifdef KERNEL_PRIVATE
 #if DEBUG
+#ifndef DKPR
+#define DKPR 1
+#endif
+#endif
+
+#if DKPR
 /*
  * For the DEBUG kernel, support the following:
  *	sysctl -w debug.kprint_syscall=<syscall_mask> 
@@ -403,6 +413,12 @@ enum {
 #define DB_PRT_KDEBUG   	0x10000 /* kprintf KDEBUG traces */
 #define DB_DISABLE_LOCAL_CORE   0x20000 /* ignore local kernel core dump support */
 #define DB_DISABLE_GZIP_CORE    0x40000 /* don't gzip kernel core dumps */
+#define DB_DISABLE_CROSS_PANIC  0x80000 /* x86 only - don't trigger cross panics. Only
+                                         * necessary to enable x86 kernel debugging on
+                                         * configs with a dev-fused co-processor running
+                                         * release bridgeOS.
+                                         */
+#define DB_REBOOT_ALWAYS        0x100000 /* Don't wait for debugger connection */
 
 /*
  * Values for a 64-bit mask that's passed to the debugger.

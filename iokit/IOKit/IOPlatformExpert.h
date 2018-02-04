@@ -47,6 +47,13 @@ extern "C" {
 
 #include <libkern/OSTypes.h>
 
+typedef enum {
+    kCoprocessorVersionNone    =   0x00000000,
+    kCoprocessorVersion1       =   0x00010000,
+    kCoprocessorVersion2       =   0x00020000,
+} coprocessor_type_t;
+
+
 extern boolean_t PEGetMachineName( char * name, int maxLength );
 extern boolean_t PEGetModelName( char * name, int maxLength );
 extern int PEGetPlatformEpoch( void );
@@ -68,7 +75,13 @@ extern int PEHaltRestart(unsigned int type);
 
 // Save the Panic Info.  Returns the number of bytes saved.
 extern UInt32 PESavePanicInfo(UInt8 *buffer, UInt32 length);
-extern void PESavePanicInfoAction(void *buffer, size_t length);
+extern void PESavePanicInfoAction(void *buffer, UInt32 offset, UInt32 length);
+
+/* 
+ * SMC requires that all data is flushed in multiples of 16 bytes at 16 byte
+ * boundaries.
+ */
+#define PANIC_FLUSH_BOUNDARY 16
 
 extern long PEGetGMTTimeOfDay( void );
 extern void PESetGMTTimeOfDay( long secs );
@@ -84,10 +97,14 @@ extern boolean_t PEReadNVRAMProperty(const char *symbol, void *value, unsigned i
 
 extern boolean_t PERemoveNVRAMProperty(const char *symbol);
 
+extern coprocessor_type_t PEGetCoprocessorVersion( void );
+
 #ifdef __cplusplus
 } /* extern "C" */
 
 #define kIOPlatformMapperPresentKey "IOPlatformMapperPresent"
+
+
 
 
 extern OSSymbol *               gPlatformInterruptControllerName;

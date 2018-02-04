@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1133,8 +1133,14 @@ icmp6_notify_error(struct mbuf *m, int off, int icmp6len, int code)
 
 		ctlfunc = ip6_protox[nxt]->pr_ctlinput;
 		if (ctlfunc) {
+			LCK_MTX_ASSERT(inet6_domain_mutex, LCK_MTX_ASSERT_OWNED);
+
+			lck_mtx_unlock(inet6_domain_mutex);
+
 			(void) (*ctlfunc)(code, (struct sockaddr *)&icmp6dst,
 			    &ip6cp, m->m_pkthdr.rcvif);
+
+			lck_mtx_lock(inet6_domain_mutex);
 		}
 	}
 	return(0);

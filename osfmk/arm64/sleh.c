@@ -942,7 +942,7 @@ handle_user_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_addr
 	thread->iotier_override = THROTTLE_LEVEL_NONE; /* Reset IO tier override before handling abort from userspace */
 
 	if (is_vm_fault(fault_code)) {
-		kern_return_t	result;
+		kern_return_t	result = KERN_FAILURE;
 		vm_map_t		map = thread->map;
 		vm_offset_t		vm_fault_addr = fault_addr;
 
@@ -982,7 +982,10 @@ handle_user_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_addr
 #endif
 
 		/* check to see if it is just a pmap ref/modify fault */
-		result = arm_fast_fault(map->pmap, trunc_page(vm_fault_addr), fault_type, TRUE);
+
+		if (result != KERN_SUCCESS) {
+			result = arm_fast_fault(map->pmap, trunc_page(vm_fault_addr), fault_type, TRUE);
+		}
 		if (result != KERN_SUCCESS) {
 
 			{

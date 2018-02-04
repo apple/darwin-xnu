@@ -142,7 +142,7 @@ static struct cdevsw ptsd_cdev = {
 /*
  * System-wide limit on the max number of cloned ptys
  */
-#define	PTMX_MAX_DEFAULT	127	/* 128 entries */
+#define	PTMX_MAX_DEFAULT	511	/* 512 entries */
 #define	PTMX_MAX_HARD		999	/* 1000 entries, due to PTSD_TEMPLATE */
 
 static int ptmx_max = PTMX_MAX_DEFAULT;	/* default # of clones we allow */
@@ -694,4 +694,248 @@ ptsd_revoke_knotes(__unused int minor, struct tty *tp)
 	KNOTE(&tp->t_wsel.si_note, NOTE_REVOKE | 1);
 
 	tty_unlock(tp);
+}
+
+/*
+ * kevent filter routines for the master side of a pty, a ptmx.
+ *
+ * Stuff the ptmx_ioctl structure into the hook for ptmx knotes.  Use the
+ * embedded tty's lock for synchronization.
+ */
+
+int ptmx_kqfilter(dev_t dev, struct knote *kn);
+static void ptmx_kqops_detach(struct knote *);
+static int ptmx_kqops_event(struct knote *, long);
+static int ptmx_kqops_touch(struct knote *kn, struct kevent_internal_s *kev);
+static int ptmx_kqops_process(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
+static int ptmx_kqops_common(struct knote *kn, struct ptmx_ioctl *pti, struct tty *tp);
+
+SECURITY_READ_ONLY_EARLY(struct filterops) ptmx_kqops = {
+	.f_isfd = 1,
+	/* attach is handled by ptmx_kqfilter -- the dev node must be passed in */
+	.f_detach = ptmx_kqops_detach,
+	.f_event = ptmx_kqops_event,
+	.f_touch = ptmx_kqops_touch,
+	.f_process = ptmx_kqops_process,
+};
+
+static struct ptmx_ioctl *
+ptmx_knote_ioctl(struct knote *kn)
+{
+	return (struct ptmx_ioctl *)kn->kn_hook;
+}
+
+static struct tty *
+ptmx_knote_tty(struct knote *kn)
+{
+	struct ptmx_ioctl *pti = kn->kn_hook;
+	return pti->pt_tty;
+}
+
+int
+ptmx_kqfilter(dev_t dev, struct knote *kn)
+{
+	struct tty *tp = NULL;
+	struct ptmx_ioctl *pti = NULL;
+	int ret;
+
+	/* make sure we're talking about the right device type */
+	if (cdevsw[major(dev)].d_open != ptcopen) {
+		knote_set_error(kn, ENODEV);
+		return 0;
+	}
+
+	if ((pti = ptmx_get_ioctl(minor(dev), 0)) == NULL) {
+		knote_set_error(kn, ENXIO);
+		return 0;
+	}
+
+	tp = pti->pt_tty;
+	tty_lock(tp);
+
+	kn->kn_filtid = EVFILTID_PTMX;
+	kn->kn_hook = pti;
+
+	/*
+	 * Attach to the ptmx's selinfo structures.  This is the major difference
+	 * to the ptsd filtops, which use the selinfo structures in the tty
+	 * structure.
+	 */
+	switch (kn->kn_filter) {
+	case EVFILT_READ:
+		KNOTE_ATTACH(&pti->pt_selr.si_note, kn);
+		break;
+	case EVFILT_WRITE:
+		KNOTE_ATTACH(&pti->pt_selw.si_note, kn);
+		break;
+	default:
+		panic("ptmx kevent: unexpected filter: %d, kn = %p, tty = %p",
+				kn->kn_filter, kn, tp);
+		break;
+	}
+
+	/* capture current event state */
+	ret = ptmx_kqops_common(kn, pti, tp);
+
+	/* take a reference on the TTY */
+	ttyhold(tp);
+	tty_unlock(tp);
+
+	return ret;
+}
+
+static void
+ptmx_kqops_detach(struct knote *kn)
+{
+	struct ptmx_ioctl *pti = kn->kn_hook;
+	struct tty *tp = pti->pt_tty;
+
+	assert(tp != NULL);
+
+	tty_lock(tp);
+
+	switch (kn->kn_filter) {
+	case EVFILT_READ:
+		KNOTE_DETACH(&pti->pt_selr.si_note, kn);
+		break;
+
+	case EVFILT_WRITE:
+		KNOTE_DETACH(&pti->pt_selw.si_note, kn);
+		break;
+
+	default:
+		panic("invalid knote %p detach, filter: %d", kn, kn->kn_filter);
+		break;
+	}
+
+	kn->kn_hook = NULL;
+	tty_unlock(tp);
+
+	ttyfree(tp);
+}
+
+static int
+ptmx_kqops_common(struct knote *kn, struct ptmx_ioctl *pti, struct tty *tp)
+{
+	int retval = 0;
+
+	TTY_LOCK_OWNED(tp);
+
+	/* disconnects should force a wakeup (EOF) */
+	if (!(tp->t_state & TS_CONNECTED)) {
+		return 1;
+	}
+
+	switch (kn->kn_filter) {
+	case EVFILT_READ:
+		/* there's data on the TTY and it's not stopped */
+		if (tp->t_outq.c_cc && !(tp->t_state & TS_TTSTOP)) {
+			retval = tp->t_outq.c_cc;
+		} else if (((pti->pt_flags & PF_PKT) && pti->pt_send) ||
+				((pti->pt_flags & PF_UCNTL) && pti->pt_ucntl)) {
+			retval = 1;
+		}
+		break;
+
+	case EVFILT_WRITE:
+		if (pti->pt_flags & PF_REMOTE) {
+			if (tp->t_canq.c_cc == 0) {
+				retval = TTYHOG - 1;
+			}
+		} else {
+			retval = (TTYHOG - 2) - (tp->t_rawq.c_cc + tp->t_canq.c_cc);
+			if (tp->t_canq.c_cc == 0 && (tp->t_lflag & ICANON)) {
+				retval = 1;
+			}
+			if (retval < 0) {
+				retval = 0;
+			}
+		}
+		break;
+
+	default:
+		panic("ptmx kevent: unexpected filter: %d, kn = %p, tty = %p",
+				kn->kn_filter, kn, tp);
+		break;
+	}
+
+	if (tp->t_state & TS_ZOMBIE) {
+		kn->kn_flags |= EV_EOF;
+		retval = 1;
+	}
+
+	return retval;
+}
+
+static int
+ptmx_kqops_event(struct knote *kn, long hint)
+{
+	struct ptmx_ioctl *pti = ptmx_knote_ioctl(kn);
+	struct tty *tp = ptmx_knote_tty(kn);
+	int ret;
+	bool revoked = hint & NOTE_REVOKE;
+	hint &= ~NOTE_REVOKE;
+
+	if (!hint) {
+		tty_lock(tp);
+	}
+
+	if (revoked) {
+		kn->kn_flags |= EV_EOF | EV_ONESHOT;
+		ret = 1;
+	} else {
+		ret = ptmx_kqops_common(kn, pti, tp);
+	}
+
+	if (!hint) {
+		tty_unlock(tp);
+	}
+
+	return ret;
+}
+
+static int
+ptmx_kqops_touch(struct knote *kn, struct kevent_internal_s *kev)
+{
+	struct ptmx_ioctl *pti = ptmx_knote_ioctl(kn);
+	struct tty *tp = ptmx_knote_tty(kn);
+	int ret;
+
+	tty_lock(tp);
+
+	/* accept new kevent state */
+	kn->kn_sfflags = kev->fflags;
+	kn->kn_sdata = kev->data;
+	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0) {
+		kn->kn_udata = kev->udata;
+	}
+
+	/* recapture fired state of knote */
+	ret = ptmx_kqops_common(kn, pti, tp);
+
+	tty_unlock(tp);
+
+	return ret;
+}
+
+static int
+ptmx_kqops_process(struct knote *kn, __unused struct filt_process_s *data,
+		struct kevent_internal_s *kev)
+{
+	struct ptmx_ioctl *pti = ptmx_knote_ioctl(kn);
+	struct tty *tp = ptmx_knote_tty(kn);
+	int ret;
+
+	tty_lock(tp);
+	ret = ptmx_kqops_common(kn, pti, tp);
+	if (ret) {
+		*kev = kn->kn_kevent;
+		if (kn->kn_flags & EV_CLEAR) {
+			kn->kn_fflags = 0;
+			kn->kn_data = 0;
+		}
+	}
+	tty_unlock(tp);
+
+	return ret;
 }

@@ -42,6 +42,7 @@ boolean_t i386_smp_init(int nmi_vector, i386_intr_func_t nmi_handler,
 void i386_start_cpu(int lapic_id, int cpu_num);
 void i386_send_NMI(int cpu);
 void handle_pending_TLB_flushes(void);
+void NMIPI_enable(boolean_t);
 
 extern void	slave_pstart(void);
 
@@ -75,16 +76,27 @@ i386_start_cpu(int lapic_id, __unused int cpu_num )
 			LAPIC_ICR_DM_STARTUP|(REAL_MODE_BOOTSTRAP_OFFSET>>12));
 }
 
+static boolean_t NMIPIs_enabled = FALSE;
+
+void NMIPI_enable(boolean_t enable) {
+	NMIPIs_enabled = enable;
+}
+
 void
 i386_send_NMI(int cpu)
 {
 	boolean_t state = ml_set_interrupts_enabled(FALSE);
+
+	if (NMIPIs_enabled == FALSE) {
+		i386_cpu_IPI(cpu);
+	} else {
 	/* Program the interrupt command register */
 	/* The vector is ignored in this case--the target CPU will enter on the
 	 * NMI vector.
 	 */
 	LAPIC_WRITE_ICR(cpu_to_lapic[cpu],
 			LAPIC_VECTOR(INTERPROCESSOR)|LAPIC_ICR_DM_NMI);
+	}
 	(void) ml_set_interrupts_enabled(state);
 }
 

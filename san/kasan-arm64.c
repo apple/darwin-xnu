@@ -301,8 +301,9 @@ kasan_bootstrap(boot_args *args, vm_offset_t pgtable)
 	kernel_vbase = args->virtBase;
 	kernel_vtop = args->virtBase + ptop - pbase;
 
-	/* Steal ~15% of physical memory */
-	tosteal = vm_map_trunc_page(args->memSize / 6, ARM_PGMASK);
+	tosteal = (args->memSize * STOLEN_MEM_PERCENT) / 100 + STOLEN_MEM_BYTES;
+	tosteal = vm_map_trunc_page(tosteal, ARM_PGMASK);
+
 	args->memSize -= tosteal;
 
 	/* Initialize the page allocator */

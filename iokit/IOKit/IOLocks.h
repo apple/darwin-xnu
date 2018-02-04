@@ -140,6 +140,28 @@ int	IOLockSleepDeadline( IOLock * lock, void *event,
 
 void	IOLockWakeup(IOLock * lock, void *event, bool oneThread) __DARWIN14_ALIAS(IOLockWakeup);
 
+#ifdef XNU_KERNEL_PRIVATE
+/*! @enum     IOLockAssertState
+ *  @abstract Used with IOLockAssert to assert the state of a lock.
+ */
+typedef enum {
+    kIOLockAssertOwned    = LCK_ASSERT_OWNED,
+    kIOLockAssertNotOwned = LCK_ASSERT_NOTOWNED
+} IOLockAssertState;
+
+#ifdef IOLOCKS_INLINE
+#define IOLockAssert(l, type) LCK_MTX_ASSERT(l, type)
+#else
+/*! @function   IOLockAssert
+ *  @abstract   Assert that lock is either held or not held by current thread.
+ *  @discussion Call with either kIOLockAssertOwned or kIOLockAssertNotOwned.
+ *  Panics the kernel if the lock is not owned if called with kIOLockAssertOwned,
+ *  and vice-versa.
+ */
+void	IOLockAssert(IOLock * lock, IOLockAssertState type);
+#endif /* !IOLOCKS_INLINE */
+#endif /* !XNU_KERNEL_PRIVATE */
+
 #ifdef __APPLE_API_OBSOLETE
 
 /* The following API is deprecated */
@@ -286,6 +308,30 @@ void	IORWLockWrite( IORWLock * lock);
 void	IORWLockUnlock( IORWLock * lock);
 #endif	/* !IOLOCKS_INLINE */
 
+#ifdef XNU_KERNEL_PRIVATE
+/*! @enum     IORWLockAssertState
+ *  @abstract Used with IORWLockAssert to assert the state of a lock.
+ */
+typedef enum {
+    kIORWLockAssertRead    = LCK_RW_ASSERT_SHARED,
+    kIORWLockAssertWrite   = LCK_RW_ASSERT_EXCLUSIVE,
+    kIORWLockAssertHeld    = LCK_RW_ASSERT_HELD,
+    kIORWLockAssertNotHeld = LCK_RW_ASSERT_NOTHELD
+} IORWLockAssertState;
+
+#ifdef IOLOCKS_INLINE
+#define IORWLockAssert(l, type) LCK_RW_ASSERT(l, type)
+#else
+/*! @function   IORWLockAssert
+ *  @abstract   Assert that a reader-writer lock is either held or not held
+ *  by the current thread.
+ *  @discussion Call with a value defined by the IORWLockAssertState type.
+ *  If the specified lock is not in the state specified by the type argument,
+ *  then the kernel will panic.
+ */
+void	IORWLockAssert(IORWLock * lock, IORWLockAssertState type);
+#endif /* !IOLOCKS_INLINE */
+#endif /* !XNU_KERNEL_PRIVATE */
 
 #ifdef __APPLE_API_OBSOLETE
 
@@ -370,6 +416,28 @@ boolean_t IOSimpleLockTryLock( IOSimpleLock * lock );
 #else
 void IOSimpleLockUnlock( IOSimpleLock * lock );
 #endif	/* !IOLOCKS_INLINE */
+
+#ifdef XNU_KERNEL_PRIVATE
+/*! @enum     IOSimpleLockAssertState
+ *  @abstract Used with IOSimpleLockAssert to assert the state of a lock.
+ */
+typedef enum {
+    kIOSimpleLockAssertOwned    = LCK_ASSERT_OWNED,
+    kIOSimpleLockAssertNotOwned = LCK_ASSERT_NOTOWNED
+} IOSimpleLockAssertState;
+
+#ifdef IOLOCKS_INLINE
+#define IOSimpleLockAssert(l, type) LCK_SPIN_ASSERT(l, type)
+#else
+/*! @function   IOSimpleLockAssert
+ *  @abstract   Assert that spinlock is either held or not held by current thread.
+ *  @discussion Call with either kIOSimpleLockAssertOwned or kIOSimpleLockAssertNotOwned.
+ *  Panics the kernel if the lock is not owned if called with
+ *  kIOSimpleLockAssertOwned and vice-versa.
+ */
+void	IOSimpleLockAssert(IOSimpleLock *lock, IOSimpleLockAssertState type);
+#endif /* !IOLOCKS_INLINE */
+#endif /* !XNU_KERNEL_PRIVATE */
 
 #if __LP64__
 typedef boolean_t IOInterruptState;

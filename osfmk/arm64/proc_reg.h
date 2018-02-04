@@ -33,6 +33,61 @@
 
 #include <arm/proc_reg.h>
 
+#if __ARM_KERNEL_PROTECT__
+/*
+ * __ARM_KERNEL_PROTECT__ is a feature intended to guard against potential
+ * architectural or microarchitectural vulnerabilities that could allow cores to
+ * read/access EL1-only mappings while in EL0 mode.  This is achieved by
+ * removing as many mappings as possible when the core transitions to EL0 mode
+ * from EL1 mode, and restoring those mappings when the core transitions to EL1
+ * mode from EL0 mode.
+ *
+ * At the moment, this is achieved through use of ASIDs and TCR_EL1.  TCR_EL1 is
+ * used to map and unmap the ordinary kernel mappings, by contracting and
+ * expanding translation zone size for TTBR1 when exiting and entering EL1,
+ * respectively:
+ *
+ * Kernel EL0 Mappings: TTBR1 mappings that must remain mapped while the core is
+ *   is in EL0.
+ * Kernel EL1 Mappings: TTBR1 mappings that must be mapped while the core is in
+ *   EL1.
+ *
+ * T1SZ_USER: T1SZ_BOOT + 1
+ * TTBR1_EL1_BASE_BOOT: (2^64) - (2^(64 - T1SZ_BOOT)
+ * TTBR1_EL1_BASE_USER: (2^64) - (2^(64 - T1SZ_USER)
+ * TTBR1_EL1_MAX: (2^64) - 1
+ *
+ * When in EL1, we program TCR_EL1 (specifically, TCR_EL1.T1SZ) to give the
+ * the following TTBR1 layout:
+ *
+ *  TTBR1_EL1_BASE_BOOT   TTBR1_EL1_BASE_USER   TTBR1_EL1_MAX
+ * +---------------------------------------------------------+
+ * | Kernel EL0 Mappings |        Kernel EL1 Mappings        |
+ * +---------------------------------------------------------+
+ *
+ * And when in EL0, we program TCR_EL1 to give the following TTBR1 layout:
+ *
+ *  TTBR1_EL1_BASE_USER                         TTBR1_EL1_MAX
+ * +---------------------------------------------------------+
+ * |                   Kernel EL0 Mappings                   |
+ * +---------------------------------------------------------+
+ *
+ * With the current implementation, both the EL0 and EL1 mappings for the kernel
+ * use otherwise empty translation tables for mapping the exception vectors (so
+ * that we do not need to TLB flush the exception vector address when switching
+ * between EL0 and EL1).  The rationale here is that the TLBI would require a
+ * DSB, and DSBs can be extremely expensive.
+ *
+ * Each pmap is given two ASIDs: (n & ~1) as an EL0 ASID, and (n | 1) as an EL1
+ * ASID.  The core switches between ASIDs on EL transitions, so that the TLB
+ * does not need to be fully invalidated on an EL transition.
+ *
+ * Most kernel mappings will be marked non-global in this configuration, as
+ * global mappings would be visible to userspace unless we invalidate them on
+ * eret.
+ */
+#endif /* __ARM_KERNEL_PROTECT */
+
 /*
  * 64-bit Program Status Register (PSR64)
  *
@@ -484,22 +539,30 @@
  * we support the following:
  *
  * 4KB pages, full page L1: 39 bit range.
- * 4KB pages, sub-page L1: 36 bit range.
+ * 4KB pages, sub-page L1: 38 bit range.
  * 16KB pages, full page L1: 47 bit range.
- * 16KB pages, sub-page L1: 37 bit range.
+ * 16KB pages, sub-page L1: 39 bit range.
  * 16KB pages, two level page tables: 36 bit range.
  */
+#if __ARM_KERNEL_PROTECT__
+/*
+ * If we are configured to use __ARM_KERNEL_PROTECT__, the first half of the
+ * address space is used for the mappings that will remain in place when in EL0.
+ * As a result, 1 bit less of address space is available to the rest of the
+ * the kernel.
+ */
+#endif /* __ARM_KERNEL_PROTECT__ */
 #ifdef __ARM_16K_PG__
 #if __ARM64_TWO_LEVEL_PMAP__
 #define T0SZ_BOOT						28ULL
 #elif __ARM64_PMAP_SUBPAGE_L1__
-#define T0SZ_BOOT						27ULL
+#define T0SZ_BOOT						25ULL
 #else /* __ARM64_TWO_LEVEL_PMAP__ */
 #define T0SZ_BOOT						17ULL
 #endif /* __ARM64_TWO_LEVEL_PMAP__ */
 #else /* __ARM_16K_PG__ */
 #if __ARM64_PMAP_SUBPAGE_L1__
-#define T0SZ_BOOT						28ULL
+#define T0SZ_BOOT						26ULL
 #else /* __ARM64_PMAP_SUBPAGE_L1__ */
 #define T0SZ_BOOT						25ULL
 #endif /* __ARM64_PMAP_SUBPAGE_L1__ */
@@ -513,22 +576,32 @@
 #if __ARM64_TWO_LEVEL_PMAP__
 #define T1SZ_BOOT						28ULL
 #elif __ARM64_PMAP_SUBPAGE_L1__
-#define T1SZ_BOOT						27ULL
+#define T1SZ_BOOT						25ULL
 #else /* __ARM64_TWO_LEVEL_PMAP__ */
 #define T1SZ_BOOT						17ULL
 #endif /* __ARM64_TWO_LEVEL_PMAP__ */
 #else /* __ARM_16K_PG__ */
 #if __ARM64_PMAP_SUBPAGE_L1__
-#define T1SZ_BOOT						28ULL
+#define T1SZ_BOOT						26ULL
 #else /* __ARM64_PMAP_SUBPAGE_L1__ */
 #define T1SZ_BOOT						25ULL
 #endif /*__ARM64_PMAP_SUBPAGE_L1__*/
 #endif /* __ARM_16K_PG__ */
 #endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
 
-#define TCR_EL1_BOOT	(TCR_IPS_40BITS | \
+#define TCR_EL1_BASE	(TCR_IPS_40BITS | \
 						 TCR_SH0_OUTER | TCR_ORGN0_WRITEBACK |  TCR_IRGN0_WRITEBACK | (T0SZ_BOOT << TCR_T0SZ_SHIFT) | (TCR_TG0_GRANULE_SIZE) |\
-						 TCR_SH1_OUTER | TCR_ORGN1_WRITEBACK |  TCR_IRGN1_WRITEBACK | (T1SZ_BOOT << TCR_T1SZ_SHIFT) | (TCR_TG1_GRANULE_SIZE))
+						 TCR_SH1_OUTER | TCR_ORGN1_WRITEBACK |  TCR_IRGN1_WRITEBACK | (TCR_TG1_GRANULE_SIZE))
+
+#if __ARM_KERNEL_PROTECT__
+#define TCR_EL1_BOOT	(TCR_EL1_BASE | \
+						 (T1SZ_BOOT << TCR_T1SZ_SHIFT) | TCR_TBI0_TOPBYTE_IGNORED)
+#define T1SZ_USER	(T1SZ_BOOT + 1)
+#define TCR_EL1_USER	(TCR_EL1_BASE | (T1SZ_USER << TCR_T1SZ_SHIFT) | TCR_TBI0_TOPBYTE_IGNORED)
+#else
+#define TCR_EL1_BOOT	(TCR_EL1_BASE | \
+						 (T1SZ_BOOT << TCR_T1SZ_SHIFT))
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 /*
  * Translation Table Base Register (TTBR)
@@ -686,21 +759,21 @@
 #define ARM_TT_L1_OFFMASK				0x0000000fffffffffULL		/* offset within an L1 entry */
 #define ARM_TT_L1_SHIFT					36							/* page descriptor shift */
 #ifdef __ARM64_PMAP_SUBPAGE_L1__
-/* This config supports 128GB per TTBR. */
-#define ARM_TT_L1_INDEX_MASK			0x0000001000000000ULL		/* mask for getting index into L1 table from virtual address */
-#else
+/* This config supports 512GB per TTBR. */
+#define ARM_TT_L1_INDEX_MASK			0x0000007000000000ULL		/* mask for getting index into L1 table from virtual address */
+#else /* __ARM64_PMAP_SUBPAGE_L1__ */
 #define ARM_TT_L1_INDEX_MASK			0x00007ff000000000ULL		/* mask for getting index into L1 table from virtual address */
-#endif
-#else
+#endif /* __ARM64_PMAP_SUBPAGE_L1__ */
+#else /* __ARM_16K_PG__ */
 #define ARM_TT_L1_SIZE					0x0000000040000000ULL		/* size of area covered by a tte */
 #define ARM_TT_L1_OFFMASK				0x000000003fffffffULL		/* offset within an L1 entry */
 #define ARM_TT_L1_SHIFT					30							/* page descriptor shift */
 #ifdef __ARM64_PMAP_SUBPAGE_L1__
-/* This config supports 64GB per TTBR. */
-#define ARM_TT_L1_INDEX_MASK			0x0000000fc0000000ULL		/* mask for getting index into L1 table from virtual address */
-#else
+/* This config supports 256GB per TTBR. */
+#define ARM_TT_L1_INDEX_MASK			0x0000003fc0000000ULL		/* mask for getting index into L1 table from virtual address */
+#else /* __ARM64_PMAP_SUBPAGE_L1__ */
 #define ARM_TT_L1_INDEX_MASK			0x0000007fc0000000ULL		/* mask for getting index into L1 table from virtual address */
-#endif
+#endif /* __ARM64_PMAP_SUBPAGE_L1__ */
 #endif
 
 /*
@@ -759,6 +832,7 @@
  * Convenience definitions for:
  *   ARM_TT_LEAF: The last level of the configured page table format.
  *   ARM_TT_TWIG: The second to last level of the configured page table format.
+ *   ARM_TT_ROOT: The first level of the configured page table format.
  *
  *   My apologies to any botanists who may be reading this.
  */
@@ -771,6 +845,18 @@
 #define ARM_TT_TWIG_OFFMASK				ARM_TT_L2_OFFMASK
 #define ARM_TT_TWIG_SHIFT				ARM_TT_L2_SHIFT
 #define ARM_TT_TWIG_INDEX_MASK			ARM_TT_L2_INDEX_MASK
+
+#if __ARM64_TWO_LEVEL_PMAP__
+#define ARM_TT_ROOT_SIZE				ARM_TT_L2_SIZE
+#define ARM_TT_ROOT_OFFMASK				ARM_TT_L2_OFFMASK
+#define ARM_TT_ROOT_SHIFT				ARM_TT_L2_SHIFT
+#define ARM_TT_ROOT_INDEX_MASK			ARM_TT_L2_INDEX_MASK
+#else
+#define ARM_TT_ROOT_SIZE				ARM_TT_L1_SIZE
+#define ARM_TT_ROOT_OFFMASK				ARM_TT_L1_OFFMASK
+#define ARM_TT_ROOT_SHIFT				ARM_TT_L1_SHIFT
+#define ARM_TT_ROOT_INDEX_MASK			ARM_TT_L1_INDEX_MASK
+#endif
 
 /*
  * 4KB granule size:
@@ -941,8 +1027,14 @@
 #define ARM_TTE_TABLE_PXN			0x0800000000000000ULL	/* value for privilege no execute bit */
 #define ARM_TTE_TABLE_PXNMASK		0x0800000000000000ULL	/* privilege execute mask */
 
+#if __ARM_KERNEL_PROTECT__
+#define ARM_TTE_BOOT_BLOCK			(ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID |  ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY)	\
+									 | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITEBACK) | ARM_TTE_BLOCK_AF \
+									 | ARM_TTE_BLOCK_NG)
+#else /* __ARM_KERNEL_PROTECT__ */
 #define ARM_TTE_BOOT_BLOCK			(ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID |  ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY)	\
 									 | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITEBACK) | ARM_TTE_BLOCK_AF)
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 #define ARM_TTE_BOOT_TABLE			(ARM_TTE_TYPE_TABLE | ARM_TTE_VALID )
 /*
@@ -1083,8 +1175,25 @@
 #define ARM_PTE_PGTRACE_MASK        0x0200000000000000ULL   /* software trace mask */
 #endif
 
-#define ARM_PTE_BOOT_PAGE			(ARM_PTE_TYPE_VALID |  ARM_PTE_SH(SH_OUTER_MEMORY)	\
+#define ARM_PTE_BOOT_PAGE_BASE			(ARM_PTE_TYPE_VALID |  ARM_PTE_SH(SH_OUTER_MEMORY) \
 									 | ARM_PTE_ATTRINDX(CACHE_ATTRINDX_WRITEBACK) | ARM_PTE_AF)
+
+#if __ARM_KERNEL_PROTECT__
+#define ARM_PTE_BOOT_PAGE			(ARM_PTE_BOOT_PAGE_BASE | ARM_PTE_NG)
+#else /* __ARM_KERNEL_PROTECT__ */
+#define ARM_PTE_BOOT_PAGE			(ARM_PTE_BOOT_PAGE_BASE)
+#endif /* __ARM_KERNEL_PROTECT__ */
+
+/*
+ * TLBI appers to only deal in 4KB page addresses, so give
+ * it an explicit shift of 12.
+ */
+#define TLBI_ADDR_SIZE  (44)
+#define TLBI_ADDR_MASK  ((1ULL << TLBI_ADDR_SIZE) - 1)
+#define TLBI_ADDR_SHIFT (12)
+#define TLBI_ASID_SHIFT (48)
+#define TLBI_ASID_SIZE  (16)
+#define TLBI_ASID_MASK  (((1ULL << TLBI_ASID_SIZE) - 1) << TLBI_ASID_SHIFT)
 
 /*
  * Exception Syndrome Register

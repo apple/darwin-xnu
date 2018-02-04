@@ -306,9 +306,9 @@ static inline uintptr_t get_cr3_base(void)
 	return(cr3 & ~(0xFFFULL));
 }
 
-static inline void set_cr3_composed(uintptr_t base, uint16_t pcid, uint32_t preserve)
+static inline void set_cr3_composed(uintptr_t base, uint16_t pcid, uint64_t preserve)
 {
-	__asm__ volatile("mov %0, %%cr3" : : "r" (base | pcid | ( ( (uint64_t)preserve) << 63) ) );
+	__asm__ volatile("mov %0, %%cr3" : : "r" (base | pcid | ( (preserve) << 63) ) );
 }
 
 static inline uintptr_t get_cr4(void)
@@ -383,7 +383,13 @@ static inline void hlt(void)
 
 static inline void flush_tlb_raw(void)
 {
-	set_cr3_raw(get_cr3_raw());
+	uintptr_t cr4 = get_cr4();
+	if (cr4 & CR4_PGE) {
+		set_cr4(cr4 & ~CR4_PGE);
+		set_cr4(cr4 | CR4_PGE);
+	} else {
+		set_cr3_raw(get_cr3_raw());
+	}
 }
 extern int rdmsr64_carefully(uint32_t msr, uint64_t *val);
 extern int wrmsr64_carefully(uint32_t msr, uint64_t val);

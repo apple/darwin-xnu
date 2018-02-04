@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -72,6 +72,7 @@ struct kctl {
 	u_int32_t		sendbufsize;	/* request more than the default buffer size */
 
 	/* Dispatch functions */
+	ctl_bind_func		bind;		/* Prepare contact */
 	ctl_connect_func	connect;	/* Make contact */
 	ctl_disconnect_func	disconnect;	/* Break contact */
 	ctl_send_func		send;		/* Send data to nke */
@@ -90,7 +91,7 @@ struct ctl_cb {
 	struct socket		*so;		/* controlling socket */
 	struct kctl		*kctl;		/* back pointer to controller */
 	void			*userdata;
-	u_int32_t		unit;
+	struct sockaddr_ctl 	sac;
 	u_int32_t		usecount;
 };
 
@@ -125,6 +126,7 @@ TAILQ_HEAD(kctl_list, kctl) 	ctl_head;
 static int ctl_attach(struct socket *, int, struct proc *);
 static int ctl_detach(struct socket *);
 static int ctl_sofreelastref(struct socket *so);
+static int ctl_bind(struct socket *, struct sockaddr *, struct proc *);
 static int ctl_connect(struct socket *, struct sockaddr *, struct proc *);
 static int ctl_disconnect(struct socket *);
 static int ctl_ioctl(struct socket *so, u_long cmd, caddr_t data,
@@ -151,6 +153,7 @@ static lck_mtx_t * ctl_getlock(struct socket *, int);
 
 static struct pr_usrreqs ctl_usrreqs = {
 	.pru_attach =		ctl_attach,
+	.pru_bind =		ctl_bind,
 	.pru_connect =		ctl_connect,
 	.pru_control =		ctl_ioctl,
 	.pru_detach =		ctl_detach,
@@ -354,28 +357,46 @@ ctl_detach(struct socket *so)
 	if (kcb == 0)
 		return (0);
 
+	if (kcb->kctl != NULL && kcb->kctl->bind != NULL &&
+	    kcb->userdata != NULL && !(so->so_state & SS_ISCONNECTED)) {
+		// The unit was bound, but not connected
+		// Invoke the disconnected call to cleanup
+		if (kcb->kctl->disconnect != NULL) {
+			socket_unlock(so, 0);
+			(*kcb->kctl->disconnect)(kcb->kctl->kctlref,
+			    kcb->sac.sc_unit, kcb->userdata);
+			socket_lock(so, 0);
+		}
+	}
+
 	soisdisconnected(so);
 	so->so_flags |= SOF_PCBCLEARING;
 	return (0);
 }
 
 static int
-ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
+ctl_setup_kctl(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
-#pragma unused(p)
-	struct kctl		*kctl;
-	int			error = 0;
+	struct kctl *kctl = NULL;
+	int error = 0;
 	struct sockaddr_ctl	sa;
-	struct ctl_cb		*kcb = (struct ctl_cb *)so->so_pcb;
-	struct ctl_cb		*kcb_next = NULL;
-	u_quad_t		sbmaxsize;
-	u_int32_t		recvbufsize, sendbufsize;
+	struct ctl_cb *kcb = (struct ctl_cb *)so->so_pcb;
+	struct ctl_cb *kcb_next = NULL;
+	u_quad_t sbmaxsize;
+	u_int32_t recvbufsize, sendbufsize;
 
-	if (kcb == 0)
-		panic("ctl_connect so_pcb null\n");
+	if (kcb == 0) {
+		panic("ctl_setup_kctl so_pcb null\n");
+	}
 
-	if (nam->sa_len !=  sizeof(struct sockaddr_ctl))
+	if (kcb->kctl != NULL) {
+		// Already set up, skip
+		return (0);
+	}
+
+	if (nam->sa_len != sizeof(struct sockaddr_ctl)) {
 		return (EINVAL);
+	}
 
 	bcopy(nam, &sa, sizeof(struct sockaddr_ctl));
 
@@ -387,12 +408,12 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	}
 
 	if (((kctl->flags & CTL_FLAG_REG_SOCK_STREAM) &&
-			(so->so_type != SOCK_STREAM)) ||
+		 (so->so_type != SOCK_STREAM)) ||
 		(!(kctl->flags & CTL_FLAG_REG_SOCK_STREAM) &&
-			(so->so_type != SOCK_DGRAM))) {
-		lck_mtx_unlock(ctl_mtx);
-		return (EPROTOTYPE);
-	}
+		 (so->so_type != SOCK_DGRAM))) {
+			lck_mtx_unlock(ctl_mtx);
+			return (EPROTOTYPE);
+		}
 
 	if (kctl->flags & CTL_FLAG_PRIVILEGED) {
 		if (p == 0) {
@@ -412,16 +433,17 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 		}
 	} else {
 		/* Find an unused ID, assumes control IDs are in order */
-		u_int32_t	unit = 1;
+		u_int32_t unit = 1;
 
 		TAILQ_FOREACH(kcb_next, &kctl->kcb_head, next) {
-			if (kcb_next->unit > unit) {
+			if (kcb_next->sac.sc_unit > unit) {
 				/* Found a gap, lets fill it in */
 				break;
 			}
-			unit = kcb_next->unit + 1;
-			if (unit == ctl_maxunit)
+			unit = kcb_next->sac.sc_unit + 1;
+			if (unit == ctl_maxunit) {
 				break;
+			}
 		}
 
 		if (unit == ctl_maxunit) {
@@ -432,7 +454,7 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 		sa.sc_unit = unit;
 	}
 
-	kcb->unit = sa.sc_unit;
+	bcopy(&sa, &kcb->sac, sizeof(struct sockaddr_ctl));
 	kcb->kctl = kctl;
 	if (kcb_next != NULL) {
 		TAILQ_INSERT_BEFORE(kcb_next, kcb, next);
@@ -450,36 +472,102 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	 */
 	sbmaxsize = (u_quad_t)sb_max * MCLBYTES / (MSIZE + MCLBYTES);
 
-	if (kctl->sendbufsize > sbmaxsize)
+	if (kctl->sendbufsize > sbmaxsize) {
 		sendbufsize = sbmaxsize;
-	else
+	} else {
 		sendbufsize = kctl->sendbufsize;
+	}
 
-	if (kctl->recvbufsize > sbmaxsize)
+	if (kctl->recvbufsize > sbmaxsize) {
 		recvbufsize = sbmaxsize;
-	else
+	} else {
 		recvbufsize = kctl->recvbufsize;
+	}
 
 	error = soreserve(so, sendbufsize, recvbufsize);
 	if (error) {
 		if (ctl_debug)
 			printf("%s - soreserve(%llx, %u, %u) error %d\n",
-			    __func__, (uint64_t)VM_KERNEL_ADDRPERM(so),
-			    sendbufsize, recvbufsize, error);
+				   __func__, (uint64_t)VM_KERNEL_ADDRPERM(so),
+				   sendbufsize, recvbufsize, error);
 		goto done;
 	}
-	soisconnecting(so);
+
+done:
+	if (error) {
+		soisdisconnected(so);
+		lck_mtx_lock(ctl_mtx);
+		TAILQ_REMOVE(&kctl->kcb_head, kcb, next);
+		kcb->kctl = NULL;
+		kcb->sac.sc_unit = 0;
+		kctlstat.kcs_pcbcount--;
+		kctlstat.kcs_gencnt++;
+		kctlstat.kcs_conn_fail++;
+		lck_mtx_unlock(ctl_mtx);
+	}
+	return (error);
+}
+
+static int
+ctl_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
+{
+	int error = 0;
+	struct ctl_cb *kcb = (struct ctl_cb *)so->so_pcb;
+
+	if (kcb == NULL) {
+		panic("ctl_bind so_pcb null\n");
+	}
+
+	error = ctl_setup_kctl(so, nam, p);
+	if (error) {
+		return (error);
+	}
+
+	if (kcb->kctl == NULL) {
+		panic("ctl_bind kctl null\n");
+	}
+
+	if (kcb->kctl->bind == NULL) {
+		return (EINVAL);
+	}
 
 	socket_unlock(so, 0);
-	error = (*kctl->connect)(kctl->kctlref, &sa, &kcb->userdata);
+	error = (*kcb->kctl->bind)(kcb->kctl->kctlref, &kcb->sac, &kcb->userdata);
 	socket_lock(so, 0);
-	if (error)
-		goto end;
 
+	return (error);
+}
+
+static int
+ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
+{
+	int error = 0;
+	struct ctl_cb *kcb = (struct ctl_cb *)so->so_pcb;
+
+	if (kcb == NULL) {
+		panic("ctl_connect so_pcb null\n");
+	}
+
+	error = ctl_setup_kctl(so, nam, p);
+	if (error) {
+		return (error);
+	}
+
+	if (kcb->kctl == NULL) {
+		panic("ctl_connect kctl null\n");
+	}
+
+	soisconnecting(so);
+	socket_unlock(so, 0);
+	error = (*kcb->kctl->connect)(kcb->kctl->kctlref, &kcb->sac, &kcb->userdata);
+	socket_lock(so, 0);
+	if (error) {
+		goto end;
+	}
 	soisconnected(so);
 
 end:
-	if (error && kctl->disconnect) {
+	if (error && kcb->kctl->disconnect) {
 		/*
 		 * XXX Make sure we Don't check the return value
 		 * of disconnect here.
@@ -490,16 +578,15 @@ end:
 		 * ipsec/utun_ctl_disconnect.
 		 */
 		socket_unlock(so, 0);
-		(*kctl->disconnect)(kctl->kctlref, kcb->unit, kcb->userdata);
+		(*kcb->kctl->disconnect)(kcb->kctl->kctlref, kcb->sac.sc_unit, kcb->userdata);
 		socket_lock(so, 0);
 	}
-done:
 	if (error) {
 		soisdisconnected(so);
 		lck_mtx_lock(ctl_mtx);
-		kcb->kctl = 0;
-		kcb->unit = 0;
-		TAILQ_REMOVE(&kctl->kcb_head, kcb, next);
+		TAILQ_REMOVE(&kcb->kctl->kcb_head, kcb, next);
+		kcb->kctl = NULL;
+		kcb->sac.sc_unit = 0;
 		kctlstat.kcs_pcbcount--;
 		kctlstat.kcs_gencnt++;
 		kctlstat.kcs_conn_fail++;
@@ -518,7 +605,7 @@ ctl_disconnect(struct socket *so)
 
 		if (kctl && kctl->disconnect) {
 			socket_unlock(so, 0);
-			(*kctl->disconnect)(kctl->kctlref, kcb->unit,
+			(*kctl->disconnect)(kctl->kctlref, kcb->sac.sc_unit,
 			    kcb->userdata);
 			socket_lock(so, 0);
 		}
@@ -528,7 +615,7 @@ ctl_disconnect(struct socket *so)
 		socket_unlock(so, 0);
 		lck_mtx_lock(ctl_mtx);
 		kcb->kctl = 0;
-		kcb->unit = 0;
+		kcb->sac.sc_unit = 0;
 		while (kcb->usecount != 0) {
 			msleep(&kcb->usecount, ctl_mtx, 0, "kcb->usecount", 0);
 		}
@@ -559,7 +646,7 @@ ctl_peeraddr(struct socket *so, struct sockaddr **nam)
 	sc.sc_family = AF_SYSTEM;
 	sc.ss_sysaddr = AF_SYS_CONTROL;
 	sc.sc_id =  kctl->id;
-	sc.sc_unit = kcb->unit;
+	sc.sc_unit = kcb->sac.sc_unit;
 
 	*nam = dup_sockaddr((struct sockaddr *)&sc, 1);
 
@@ -609,7 +696,7 @@ ctl_usr_rcvd(struct socket *so, int flags)
 
 	if (kctl->rcvd) {
 		socket_unlock(so, 0);
-		(*kctl->rcvd)(kctl->kctlref, kcb->unit, kcb->userdata, flags);
+		(*kctl->rcvd)(kctl->kctlref, kcb->sac.sc_unit, kcb->userdata, flags);
 		socket_lock(so, 0);
 	}
 
@@ -640,7 +727,7 @@ ctl_send(struct socket *so, int flags, struct mbuf *m,
 	if (error == 0 && kctl->send) {
 		so_tc_update_stats(m, so, m_get_service_class(m));
 		socket_unlock(so, 0);
-		error = (*kctl->send)(kctl->kctlref, kcb->unit, kcb->userdata,
+		error = (*kctl->send)(kctl->kctlref, kcb->sac.sc_unit, kcb->userdata,
 		    m, flags);
 		socket_lock(so, 0);
 	} else {
@@ -678,7 +765,7 @@ ctl_send_list(struct socket *so, int flags, struct mbuf *m,
 			so_tc_update_stats(nxt, so, m_get_service_class(nxt));
 
 		socket_unlock(so, 0);
-		error = (*kctl->send_list)(kctl->kctlref, kcb->unit,
+		error = (*kctl->send_list)(kctl->kctlref, kcb->sac.sc_unit,
 		    kcb->userdata, m, flags);
 		socket_lock(so, 0);
 	} else if (error == 0 && kctl->send) {
@@ -688,7 +775,7 @@ ctl_send_list(struct socket *so, int flags, struct mbuf *m,
 			m->m_nextpkt = NULL;
 			so_tc_update_stats(m, so, m_get_service_class(m));
 			socket_unlock(so, 0);
-			error = (*kctl->send)(kctl->kctlref, kcb->unit,
+			error = (*kctl->send)(kctl->kctlref, kcb->sac.sc_unit,
 			    kcb->userdata, m, flags);
 			socket_lock(so, 0);
 			m = nextpkt;
@@ -1089,7 +1176,7 @@ ctl_ctloutput(struct socket *so, struct sockopt *sopt)
 	struct ctl_cb 	*kcb = (struct ctl_cb *)so->so_pcb;
 	struct kctl	*kctl;
 	int 	error = 0;
-	void 	*data;
+	void 	*data = NULL;
 	size_t	len;
 
 	if (sopt->sopt_level != SYSPROTO_CONTROL) {
@@ -1106,11 +1193,9 @@ ctl_ctloutput(struct socket *so, struct sockopt *sopt)
 		case SOPT_SET:
 			if (kctl->setopt == NULL)
 				return (ENOTSUP);
-			if (sopt->sopt_valsize == 0) {
-				data = NULL;
-			} else {
+			if (sopt->sopt_valsize != 0) {
 				MALLOC(data, void *, sopt->sopt_valsize, M_TEMP,
-					M_WAITOK);
+					M_WAITOK | M_ZERO);
 				if (data == NULL)
 					return (ENOMEM);
 				error = sooptcopyin(sopt, data,
@@ -1119,20 +1204,22 @@ ctl_ctloutput(struct socket *so, struct sockopt *sopt)
 			if (error == 0) {
 				socket_unlock(so, 0);
 				error = (*kctl->setopt)(kctl->kctlref,
-				    kcb->unit, kcb->userdata, sopt->sopt_name,
+				    kcb->sac.sc_unit, kcb->userdata, sopt->sopt_name,
 				    data, sopt->sopt_valsize);
 				socket_lock(so, 0);
 			}
-			FREE(data, M_TEMP);
+
+			if (data != NULL)
+				FREE(data, M_TEMP);
 			break;
 
 		case SOPT_GET:
 			if (kctl->getopt == NULL)
 				return (ENOTSUP);
-			data = NULL;
+
 			if (sopt->sopt_valsize && sopt->sopt_val) {
 				MALLOC(data, void *, sopt->sopt_valsize, M_TEMP,
-					M_WAITOK);
+					M_WAITOK | M_ZERO);
 				if (data == NULL)
 					return (ENOMEM);
 				/*
@@ -1142,22 +1229,25 @@ ctl_ctloutput(struct socket *so, struct sockopt *sopt)
 				error = sooptcopyin(sopt, data,
 					sopt->sopt_valsize, sopt->sopt_valsize);
 			}
-			len = sopt->sopt_valsize;
-			socket_unlock(so, 0);
-			error = (*kctl->getopt)(kctl->kctlref, kcb->unit,
-					kcb->userdata, sopt->sopt_name,
-						data, &len);
-			if (data != NULL && len > sopt->sopt_valsize)
-				panic_plain("ctl_ctloutput: ctl %s returned "
-					"len (%lu) > sopt_valsize (%lu)\n",
-						kcb->kctl->name, len,
-						sopt->sopt_valsize);
-			socket_lock(so, 0);
+
 			if (error == 0) {
-				if (data != NULL)
-					error = sooptcopyout(sopt, data, len);
-				else
-					sopt->sopt_valsize = len;
+				len = sopt->sopt_valsize;
+				socket_unlock(so, 0);
+				error = (*kctl->getopt)(kctl->kctlref, kcb->sac.sc_unit,
+						kcb->userdata, sopt->sopt_name,
+						data, &len);
+				if (data != NULL && len > sopt->sopt_valsize)
+					panic_plain("ctl_ctloutput: ctl %s returned "
+					    "len (%lu) > sopt_valsize (%lu)\n",
+					    kcb->kctl->name, len,
+					    sopt->sopt_valsize);
+				socket_lock(so, 0);
+				if (error == 0) {
+					if (data != NULL)
+						error = sooptcopyout(sopt, data, len);
+					else
+						sopt->sopt_valsize = len;
+				}
 			}
 			if (data != NULL)
 				FREE(data, M_TEMP);
@@ -1496,6 +1586,7 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 		kctl->recvbufsize = userkctl->ctl_recvsize;
 	}
 
+	kctl->bind = userkctl->ctl_bind;
 	kctl->connect = userkctl->ctl_connect;
 	kctl->disconnect = userkctl->ctl_disconnect;
 	kctl->send = userkctl->ctl_send;
@@ -1643,7 +1734,7 @@ kcb_find(struct kctl *kctl, u_int32_t unit)
 	lck_mtx_assert(ctl_mtx, LCK_MTX_ASSERT_OWNED);
 
 	TAILQ_FOREACH(kcb, &kctl->kcb_head, next)
-		if (kcb->unit == unit)
+		if (kcb->sac.sc_unit == unit)
 			return (kcb);
 
 	return (NULL);
@@ -2014,7 +2105,7 @@ kctl_pcblist SYSCTL_HANDLER_ARGS
 
 			xk->xkp_len = sizeof(struct xkctlpcb);
 			xk->xkp_kind = XSO_KCB;
-			xk->xkp_unit = kcb->unit;
+			xk->xkp_unit = kcb->sac.sc_unit;
 			xk->xkp_kctpcb = (uint64_t)VM_KERNEL_ADDRPERM(kcb);
 			xk->xkp_kctlref = (uint64_t)VM_KERNEL_ADDRPERM(kctl);
 			xk->xkp_kctlid = kctl->id;
@@ -2099,6 +2190,6 @@ kctl_fill_socketinfo(struct socket *so, struct socket_info *si)
 	kcsi->kcsi_flags = kctl->flags;
 	kcsi->kcsi_recvbufsize = kctl->recvbufsize;
 	kcsi->kcsi_sendbufsize = kctl->sendbufsize;
-	kcsi->kcsi_unit = kcb->unit;
+	kcsi->kcsi_unit = kcb->sac.sc_unit;
 	strlcpy(kcsi->kcsi_name, kctl->name, MAX_KCTL_NAME);
 }

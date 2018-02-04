@@ -504,6 +504,7 @@ struct pkthdr {
 #define	PKTF_START_SEQ		0x8000000 /* valid start sequence */
 #define	PKTF_LAST_PKT		0x10000000 /* last packet in the flow */
 #define	PKTF_MPTCP_REINJ	0x20000000 /* Packet has been reinjected for MPTCP */
+#define	PKTF_MPTCP_DFIN		0x40000000 /* Packet is a data-fin */
 
 /* flags related to flow control/advisory and identification */
 #define	PKTF_FLOW_MASK	\

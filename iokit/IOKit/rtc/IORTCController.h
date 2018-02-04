@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2017 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -28,6 +28,8 @@
 /*
  * 24 Nov  1998 suurballe  Created.
  */
+#ifndef _IORTCCONTROLLER_H
+#define _IORTCCONTROLLER_H
 
 #include <IOKit/IOService.h>
 
@@ -44,3 +46,40 @@ virtual IOReturn getRealTimeClock ( UInt8 * currentTime, IOByteCount * length ) 
 virtual IOReturn setRealTimeClock ( UInt8 * newTime ) = 0;
 };
 
+class IORTC: public IOService
+{
+OSDeclareAbstractStructors(IORTC);
+
+protected:
+
+    /*! @var reserved
+        Reserved for future use.  (Internal use only)  */
+    struct ExpansionData { };
+    ExpansionData *reserved;
+
+public:
+
+    virtual long            getGMTTimeOfDay( void ) = 0;
+    virtual void            setGMTTimeOfDay( long secs ) = 0;
+
+	virtual void			getUTCTimeOfDay( clock_sec_t * secs, clock_nsec_t * nsecs );
+	virtual void			setUTCTimeOfDay( clock_sec_t secs, clock_nsec_t nsecs );
+
+    virtual void            setAlarmEnable( IOOptionBits message ) = 0;
+
+    virtual IOReturn        getMonotonicClockOffset( int64_t * usecs );
+    virtual IOReturn        setMonotonicClockOffset( int64_t usecs );
+    virtual IOReturn        getMonotonicClockAndTimestamp( uint64_t * usecs, uint64_t *mach_absolute_time );
+
+
+    OSMetaClassDeclareReservedUnused(IORTC, 0);
+    OSMetaClassDeclareReservedUnused(IORTC, 1);
+    OSMetaClassDeclareReservedUnused(IORTC, 2);
+    OSMetaClassDeclareReservedUnused(IORTC, 3);
+    OSMetaClassDeclareReservedUnused(IORTC, 4);
+    OSMetaClassDeclareReservedUnused(IORTC, 5);
+    OSMetaClassDeclareReservedUnused(IORTC, 6);
+    OSMetaClassDeclareReservedUnused(IORTC, 7);
+};
+
+#endif /* !_IORTCCONTROLLER_H */

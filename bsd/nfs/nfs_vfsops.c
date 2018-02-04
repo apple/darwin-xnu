@@ -204,7 +204,7 @@ int	nfs_vfs_fhtovp(mount_t, int, unsigned char *, vnode_t *, vfs_context_t);
 int	nfs_vfs_init(struct vfsconf *);
 int	nfs_vfs_sysctl(int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, vfs_context_t);
 
-struct vfsops nfs_vfsops = {
+const struct vfsops nfs_vfsops = {
 	.vfs_mount       = nfs_vfs_mount,
 	.vfs_start       = nfs_vfs_start,
 	.vfs_unmount     = nfs_vfs_unmount,
@@ -237,7 +237,7 @@ int nfs3_getquota(struct nfsmount *, vfs_context_t, uid_t, int, struct dqblk *);
 int nfs4_getquota(struct nfsmount *, vfs_context_t, uid_t, int, struct dqblk *);
 #endif
 
-struct nfs_funcs nfs3_funcs = {
+const struct nfs_funcs nfs3_funcs = {
 	nfs3_mount,
 	nfs3_update_statfs,
 	nfs3_getquota,
@@ -258,7 +258,7 @@ struct nfs_funcs nfs3_funcs = {
 	nfs3_unlock_rpc,
 	nfs3_getlock_rpc
 	};
-struct nfs_funcs nfs4_funcs = {
+const struct nfs_funcs nfs4_funcs = {
 	nfs4_mount,
 	nfs4_update_statfs,
 	nfs4_getquota,

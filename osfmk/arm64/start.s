@@ -35,6 +35,10 @@
 #include <machine/asm.h>
 #include "assym.s"
 
+#if __ARM_KERNEL_PROTECT__
+#include <arm/pmap.h>
+#endif /* __ARM_KERNEL_PROTECT__ */
+
 
 .macro MSR_VBAR_EL1_X0
 #if defined(KERNEL_INTEGRITY_KTRR)
@@ -179,6 +183,15 @@ Lfound_cpu_data_entry:
 1:
 
 
+
+#if __ARM_KERNEL_PROTECT__ && defined(KERNEL_INTEGRITY_KTRR)
+	/*
+	 * Populate TPIDR_EL1 (in case the CPU takes an exception while
+	 * turning on the MMU).
+	 */
+	ldr		x13, [x21, CPU_ACTIVE_THREAD]
+	msr		TPIDR_EL1, x13
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 	blr		x0
 Lskip_cpu_reset_handler:
@@ -586,6 +599,10 @@ common_start:
 	 */
 #endif
 	and		x0, x25, #(TTBR_BADDR_MASK)
+#if __ARM_KERNEL_PROTECT__
+	/* We start out with a kernel ASID. */
+	orr		x0, x0, #(1 << TTBR_ASID_SHIFT)
+#endif /* __ARM_KERNEL_PROTECT__ */
 	msr		TTBR0_EL1, x0
 #if __ARM64_TWO_LEVEL_PMAP__
 	/*
@@ -656,10 +673,20 @@ common_start:
 1:
 
 	// Set up the exception vectors
+#if __ARM_KERNEL_PROTECT__
+	/* If this is not the first reset of the boot CPU, the alternate mapping
+	 * for the exception vectors will be set up, so use it.  Otherwise, we
+	 * should use the mapping located in the kernelcache mapping.
+	 */
+	MOV64	x0, ARM_KERNEL_PROTECT_EXCEPTION_START
+
+	cbnz		x21, 1f
+#endif /* __ARM_KERNEL_PROTECT__ */
 	adrp	x0, EXT(ExceptionVectorsBase)@page			// Load exception vectors base address
 	add		x0, x0, EXT(ExceptionVectorsBase)@pageoff
 	add		x0, x0, x22									// Convert exception vector address to KVA
 	sub		x0, x0, x23
+1:
 	MSR_VBAR_EL1_X0
 
 
@@ -874,6 +901,10 @@ arm_init_tramp:
 	adrp	x0, EXT(invalid_ttep)@page
 	add		x0, x0, EXT(invalid_ttep)@pageoff
 	ldr		x0, [x0]
+#if __ARM_KERNEL_PROTECT__
+	/* We start out with a kernel ASID. */
+	orr		x0, x0, #(1 << TTBR_ASID_SHIFT)
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 	msr		TTBR0_EL1, x0
 

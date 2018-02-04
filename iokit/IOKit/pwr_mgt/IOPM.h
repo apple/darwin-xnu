@@ -613,6 +613,8 @@ enum {
 #define kIOPMPSAdapterDetailsDescriptionKey	    "Description"
 #define kIOPMPSAdapterDetailsPMUConfigurationKey    "PMUConfiguration"
 #define kIOPMPSAdapterDetailsVoltage            "AdapterVoltage"
+#define kIOPMPSAdapterDetailsSourceIDKey		    "SourceID"
+#define kIOPMPSAdapterDetailsSharedSourceKey		"SharedSource"
 
 // values for kIOPSPowerAdapterFamilyKey
 enum {

@@ -1421,7 +1421,11 @@ sbappendstream_rcvdemux(struct socket *so, struct mbuf *m, uint32_t seqnum,
 {
 	int ret = 0;
 
-	if ((m != NULL) && (m_pktlen(m) <= 0)) {
+	if ((m != NULL) &&
+	    m_pktlen(m) <= 0 &&
+	    !((so->so_flags & SOF_MP_SUBFLOW) &&
+	      (m->m_flags & M_PKTHDR) &&
+	      (m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN))) {
 		m_freem(m);
 		return (ret);
 	}
@@ -1453,8 +1457,14 @@ sbappendmptcpstream_rcv(struct sockbuf *sb, struct mbuf *m)
 
 	if (m == NULL || m_pktlen(m) == 0 || (sb->sb_flags & SB_DROP) ||
 	    (so->so_state & SS_CANTRCVMORE)) {
-		if (m != NULL)
+		if (m && m_pktlen(m) == 0 &&
+		    (m->m_flags & M_PKTHDR) &&
+		    (m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN)) {
+			mptcp_input(tptomptp(sototcpcb(so))->mpt_mpte, m);
+			return (1);
+		} else if (m != NULL) {
 			m_freem(m);
+		}
 		return (0);
 	}
 	/* the socket is not closed, so SOF_MP_SUBFLOW must be set */

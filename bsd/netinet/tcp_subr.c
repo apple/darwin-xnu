@@ -401,8 +401,6 @@ get_tcp_str_size(void)
 	return (sizeof(struct tcpcb));
 }
 
-int	tcp_freeq(struct tcpcb *tp);
-
 static int scale_to_powerof2(int size);
 
 /*

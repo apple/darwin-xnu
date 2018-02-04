@@ -2472,11 +2472,14 @@ proc_pidlistuptrs(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *re
 		count = buffersize / sizeof(uint64_t);
 		if (count > MAX_UPTRS) {
 			count = MAX_UPTRS;
-			buffersize = count * sizeof(uint64_t);
 		}
 		if (count > 0) {
+			buffersize = count * sizeof(uint64_t);
 			kbuf = kalloc(buffersize);
+			bzero(kbuf, buffersize);
 			assert(kbuf != NULL);
+		} else {
+			buffersize = 0;
 		}
 	} else {
 		buffersize = 0;

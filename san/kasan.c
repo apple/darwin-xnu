@@ -309,17 +309,16 @@ static const char *shadow_strings[] = {
 	[ASAN_PARTIAL5] =       "PARTIAL5",
 	[ASAN_PARTIAL6] =       "PARTIAL6",
 	[ASAN_PARTIAL7] =       "PARTIAL7",
-	[ASAN_STACK_RZ] =       "<invalid>",
 	[ASAN_STACK_LEFT_RZ] =  "STACK_LEFT_RZ",
 	[ASAN_STACK_MID_RZ] =   "STACK_MID_RZ",
 	[ASAN_STACK_RIGHT_RZ] = "STACK_RIGHT_RZ",
 	[ASAN_STACK_FREED] =    "STACK_FREED",
+	[ASAN_STACK_OOSCOPE] =  "STACK_OOSCOPE",
 	[ASAN_GLOBAL_RZ] =      "GLOBAL_RZ",
-	[ASAN_HEAP_RZ] =        "<invalid>",
 	[ASAN_HEAP_LEFT_RZ] =   "HEAP_LEFT_RZ",
 	[ASAN_HEAP_RIGHT_RZ] =  "HEAP_RIGHT_RZ",
 	[ASAN_HEAP_FREED] =     "HEAP_FREED",
-	[0xff] =                "<invalid>",
+	[0xff] =                NULL
 };
 
 #define CRASH_CONTEXT_BEFORE 5
@@ -370,6 +369,9 @@ kasan_crash_report(uptr p, uptr width, unsigned access_type)
 	uint8_t *shadow_ptr = SHADOW_FOR_ADDRESS(p);
 	uint8_t shadow_type = *shadow_ptr;
 	const char *shadow_str = shadow_strings[shadow_type];
+	if (!shadow_str) {
+		shadow_str = "<invalid>";
+	}
 
 	kasan_handle_test();
 

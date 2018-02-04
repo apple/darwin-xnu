@@ -484,6 +484,11 @@ static int sysctl_coalition_get_pid_list SYSCTL_HANDLER_ARGS
 out:
 	proc_rele(tproc);
 
+	if (npids < 0) {
+		/* npids is a negative errno */
+		return -npids;
+	}
+
 	if (npids == 0)
 		return ENOENT;
 

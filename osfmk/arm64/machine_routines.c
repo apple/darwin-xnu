@@ -186,6 +186,11 @@ pmap_paddr_t get_mmu_ttb(void)
 MARK_AS_PMAP_TEXT
 void set_mmu_ttb(pmap_paddr_t value)
 {
+#if __ARM_KERNEL_PROTECT__
+	/* All EL1-mode ASIDs are odd. */
+	value |= (1ULL << TTBR_ASID_SHIFT);
+#endif /* __ARM_KERNEL_PROTECT__ */
+
 	__builtin_arm_dsb(DSB_ISH);
 	MSR("TTBR0_EL1", value);
 	__builtin_arm_isb(ISB_SY);

@@ -744,7 +744,6 @@ thread_unblock(
 	ml_get_power_state(&aticontext, &pidle);
 
 	if (__improbable(aticontext && !(thread_get_tag_internal(thread) & THREAD_TAG_CALLOUT))) {
-		ledger_credit(thread->t_ledger, task_ledgers.interrupt_wakeups, 1);
 		DTRACE_SCHED2(iwakeup, struct thread *, thread, struct proc *, thread->task->bsd_info);
 
 		uint64_t ttd = PROCESSOR_DATA(current_processor(), timer_call_ttd);
@@ -757,23 +756,30 @@ thread_unblock(
 					thread->thread_timer_wakeups_bin_2++;
 		}
 
+		ledger_credit_thread(thread, thread->t_ledger,
+		                     task_ledgers.interrupt_wakeups, 1);
 		if (pidle) {
-			ledger_credit(thread->t_ledger, task_ledgers.platform_idle_wakeups, 1);
+			ledger_credit_thread(thread, thread->t_ledger,
+			                     task_ledgers.platform_idle_wakeups, 1);
 		}
 
 	} else if (thread_get_tag_internal(cthread) & THREAD_TAG_CALLOUT) {
+		/* TODO: what about an interrupt that does a wake taken on a callout thread? */
 		if (cthread->callout_woken_from_icontext) {
-			ledger_credit(thread->t_ledger, task_ledgers.interrupt_wakeups, 1);
+			ledger_credit_thread(thread, thread->t_ledger,
+			                     task_ledgers.interrupt_wakeups, 1);
 			thread->thread_callout_interrupt_wakeups++;
+
 			if (cthread->callout_woken_from_platform_idle) {
-				ledger_credit(thread->t_ledger, task_ledgers.platform_idle_wakeups, 1);
+				ledger_credit_thread(thread, thread->t_ledger,
+				                     task_ledgers.platform_idle_wakeups, 1);
 				thread->thread_callout_platform_idle_wakeups++;
 			}
-			
+
 			cthread->callout_woke_thread = TRUE;
 		}
 	}
-	
+
 	if (thread_get_tag_internal(thread) & THREAD_TAG_CALLOUT) {
 		thread->callout_woken_from_icontext = aticontext;
 		thread->callout_woken_from_platform_idle = pidle;
@@ -2621,17 +2627,16 @@ thread_dispatch(
 				 * Bill CPU time to both the task and
 				 * the individual thread.
 				 */
-				ledger_credit(thread->t_ledger,
-				    task_ledgers.cpu_time, consumed);
-				ledger_credit(thread->t_threadledger,
-				    thread_ledgers.cpu_time, consumed);
+				ledger_credit_thread(thread, thread->t_ledger,
+				                     task_ledgers.cpu_time, consumed);
+				ledger_credit_thread(thread, thread->t_threadledger,
+				                     thread_ledgers.cpu_time, consumed);
 				if (thread->t_bankledger) {
-					ledger_credit(thread->t_bankledger,
-				    		bank_ledgers.cpu_time,
-						(consumed - thread->t_deduct_bank_ledger_time));
-
+					ledger_credit_thread(thread, thread->t_bankledger,
+					                     bank_ledgers.cpu_time,
+					                     (consumed - thread->t_deduct_bank_ledger_time));
 				}
-				thread->t_deduct_bank_ledger_time =0;
+				thread->t_deduct_bank_ledger_time = 0;
 			}
 
 			wake_lock(thread);

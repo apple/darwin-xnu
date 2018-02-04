@@ -437,6 +437,7 @@ IOHibernateSystemSleep(void)
         gIOHibernateTrimCalloutEntry = thread_call_allocate(&IOHibernateSystemPostWakeTrim, &gFSLock);
     }
     IOHibernateSystemPostWakeTrim(NULL, NULL);
+    thread_call_cancel(gIOHibernateTrimCalloutEntry);
     if (kFSIdle != gFSState)
     {
 	HIBLOG("hibernate file busy\n");
@@ -677,14 +678,16 @@ IOHibernateSystemSleep(void)
 		    IOService::getPMRootDomain()->setProperty(gIOHibernateRTCVariablesKey, data);
 		data->release();
 	    }
-            if (gIOChosenEntry)
+            if (gIOChosenEntry && gIOOptionsEntry)
             {
                 data = OSDynamicCast(OSData, gIOChosenEntry->getProperty(kIOHibernateMachineSignatureKey));
                 if (data) gIOHibernateCurrentHeader->machineSignature = *((UInt32 *)data->getBytesNoCopy());
 		// set BootNext
 		if (!gIOHibernateBoot0082Data)
 		{
+		    OSData * fileData = 0;
 		    data = OSDynamicCast(OSData, gIOChosenEntry->getProperty("boot-device-path"));
+		    if (data->getLength() >= 4) fileData = OSDynamicCast(OSData, gIOChosenEntry->getProperty("boot-file-path"));
 		    if (data)
 		    {
 			// AppleNVRAM_EFI_LOAD_OPTION
@@ -696,11 +699,21 @@ IOHibernateSystemSleep(void)
 			loadOptionHeader.Attributes     = 1;
 			loadOptionHeader.FilePathLength = data->getLength();
 			loadOptionHeader.Desc           = 0;
+			if (fileData)
+			{
+			    loadOptionHeader.FilePathLength -= 4;
+			    loadOptionHeader.FilePathLength += fileData->getLength();
+			}
 			gIOHibernateBoot0082Data = OSData::withCapacity(sizeof(loadOptionHeader) + loadOptionHeader.FilePathLength);
 			if (gIOHibernateBoot0082Data)
 			{
 			    gIOHibernateBoot0082Data->appendBytes(&loadOptionHeader, sizeof(loadOptionHeader));
-			    gIOHibernateBoot0082Data->appendBytes(data);
+			    if (fileData)
+			    {
+				gIOHibernateBoot0082Data->appendBytes(data->getBytesNoCopy(), data->getLength() - 4);
+				gIOHibernateBoot0082Data->appendBytes(fileData);
+			    }
+			    else gIOHibernateBoot0082Data->appendBytes(data);
 			}
 		    }
 		}
@@ -1316,12 +1329,20 @@ IOHibernateSystemPostWake(bool now)
 {
     gIOHibernateCurrentHeader->signature = kIOHibernateHeaderInvalidSignature;
     IOLockLock(gFSLock);
-    if (kFSTrimDelay == gFSState) IOHibernateSystemPostWakeTrim(NULL, NULL);
+    if (kFSTrimDelay == gFSState)
+    {
+        thread_call_cancel(gIOHibernateTrimCalloutEntry);
+        IOHibernateSystemPostWakeTrim(NULL, NULL);
+    }
     else if (kFSOpened != gFSState) gFSState = kFSIdle;
     else
     {
         gFSState = kFSTrimDelay;
-	if (now) IOHibernateSystemPostWakeTrim(NULL, NULL);
+	if (now)
+    {
+        thread_call_cancel(gIOHibernateTrimCalloutEntry);
+        IOHibernateSystemPostWakeTrim(NULL, NULL);
+    }
 	else
 	{
 	    AbsoluteTime deadline;
@@ -1331,8 +1352,6 @@ IOHibernateSystemPostWake(bool now)
     }
     IOLockUnlock(gFSLock);
 
-    // IOCloseDebugDataFile() calls IOSetBootImageNVRAM() unconditionally
-    IOCloseDebugDataFile( );
     return (kIOReturnSuccess);
 }
 

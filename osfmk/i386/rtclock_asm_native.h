@@ -69,7 +69,23 @@
         jz        0b			/* - wait if so */		; \
 	lfence								; \
 	rdtsc								; \
-	lfence								; \
+	shlq	$32,%rdx						; \
+	movl    RNT_SHIFT(%rdi),%ecx					; \
+	orq	%rdx,%rax			/* %rax := tsc */	; \
+	subq	RNT_TSC_BASE(%rdi),%rax		/* tsc - tsc_base */	; \
+	shlq    %cl,%rax						; \
+	movl	RNT_SCALE(%rdi),%ecx					; \
+	mulq	%rcx				/* delta * scale */	; \
+	shrdq	$32,%rdx,%rax			/* %rdx:%rax >>= 32 */	; \
+	addq	RNT_NS_BASE(%rdi),%rax		/* add ns_base */	; \
+	cmpl	RNT_GENERATION(%rdi),%esi	/* repeat if changed */ ; \
+	jne	0b
+
+#define PAL_RTC_NANOTIME_READ_NOBARRIER()					  \
+0:	movl	RNT_GENERATION(%rdi),%esi				; \
+	test        %esi,%esi		/* info updating? */		; \
+        jz        0b			/* - wait if so */		; \
+	rdtsc								; \
 	shlq	$32,%rdx						; \
 	movl    RNT_SHIFT(%rdi),%ecx					; \
 	orq	%rdx,%rax			/* %rax := tsc */	; \

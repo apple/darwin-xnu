@@ -85,6 +85,7 @@ iokit/Kernel/IOStateReporter.cpp			optional iokitcpp
 iokit/Kernel/IOHistogramReporter.cpp			optional iokitcpp
 iokit/Kernel/IOReportLegend.cpp				optional iokitcpp
 
+iokit/Kernel/IORTC.cpp				optional iokitcpp
 
 iokit/Kernel/IOStringFuncs.c				standard
 

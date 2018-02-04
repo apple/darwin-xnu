@@ -224,7 +224,6 @@ i386_set_ldt(
 	    } else {
 		bzero(&new_ldt->ldt[start_sel - begin_sel], num_sels * sizeof(struct real_descriptor));
 	    }
-
 	    /*
 	     * Validate descriptors.
 	     * Only allow descriptors with user privileges.
@@ -249,6 +248,12 @@ i386_set_ldt(
 		    case ACC_P | ACC_PL_U | ACC_CODE_CR:
 			break;
 		    default:
+			task_unlock(task);
+			user_ldt_free(new_ldt);
+			return EACCES;
+		}
+		/* Reject attempts to create segments with 64-bit granules */
+		if (dp->granularity & SZ_64) {
 			task_unlock(task);
 			user_ldt_free(new_ldt);
 			return EACCES;
@@ -292,9 +297,9 @@ i386_get_ldt(
 	unsigned int	ldt_count;
 	kern_return_t	err;
 
-	if (start_sel >= 8192)
+	if (start_sel >= LDTSZ)
 	    return EINVAL;
-	if ((uint64_t)start_sel + (uint64_t)num_sels > 8192)
+	if ((uint64_t)start_sel + (uint64_t)num_sels > LDTSZ)
 	    return EINVAL;
 	if (descs == 0)
 	    return EINVAL;

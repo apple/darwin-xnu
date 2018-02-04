@@ -1338,6 +1338,10 @@ class Tests: XCTestCase {
         self.testSampleStackshot("stackshot-sample-thread-groups")
     }
 
+    func testSampleThreadGroupsFlags() {
+        self.testSampleStackshot("stackshot-sample-thread-groups-flags")
+    }
+
     func testSampleCoalitions() {
         self.testSampleStackshot("stackshot-sample-coalitions")
     }

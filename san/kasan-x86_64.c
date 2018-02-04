@@ -274,11 +274,6 @@ kasan_arch_init(void)
 
 	/* Map the physical aperture */
 	kasan_map_shadow_superpage_zero(physmap_base, physmap_max - physmap_base);
-	/* Establish shadow mappings for the x86 descriptor tables and
-	 * "low global" page; these are specially alias-mapped at fixed VAs
-	 * early in boot
-	 */
-	kasan_map_low_fixed_regions();
 }
 
 /*
@@ -311,8 +306,7 @@ kasan_reserve_memory(void *_args)
 		total_pages += mptr_tmp->NumberOfPages;
 	}
 
-	/* steal 25% of physical memory */
-	to_steal = total_pages / 4;
+	to_steal = (total_pages * STOLEN_MEM_PERCENT) / 100 + (STOLEN_MEM_BYTES / I386_PGBYTES);
 
 	/* Search for a range large enough to steal from */
 	for (i = 0, mptr_tmp = mptr; i < mcount; i++, mptr_tmp = (EfiMemoryRange *)(((vm_offset_t)mptr_tmp) + msize)) {

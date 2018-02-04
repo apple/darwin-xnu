@@ -189,7 +189,7 @@ boolean_t i386_smp_init(int nmi_vector, i386_intr_func_t nmi_handler,
 		int ipi_vector, i386_intr_func_t ipi_handler);
 void i386_start_cpu(int lapic_id, int cpu_num);
 void i386_send_NMI(int cpu);
-
+void NMIPI_enable(boolean_t);
 #if GPROF
 /*
  * Initialize dummy structs for profiling. These aren't used but
@@ -1034,6 +1034,7 @@ NMIPI_panic(cpumask_t cpu_mask, NMI_reason_t why) {
 	unsigned int cpu, cpu_bit;
 	uint64_t deadline;
 
+	NMIPI_enable(TRUE);
 	NMI_panic_reason = why;
 
 	for (cpu = 0, cpu_bit = 1; cpu < real_ncpus; cpu++, cpu_bit <<= 1) {
@@ -1647,8 +1648,12 @@ mp_kdp_enter(boolean_t proceed_on_failure)
 			cpu_pause();
 		}
 		/* If we've timed out, and some processor(s) are still unresponsive,
-		 * interrupt them with an NMI via the local APIC.
+		 * interrupt them with an NMI via the local APIC, iff a panic is
+		 * in progress.
 		 */
+		if (panic_active()) {
+			NMIPI_enable(TRUE);
+		}
 		if (mp_kdp_ncpus != ncpus) {
 			DBG("mp_kdp_enter() timed-out on cpu %d, NMI-ing\n", my_cpu);
 			for (cpu = 0; cpu < real_ncpus; cpu++) {

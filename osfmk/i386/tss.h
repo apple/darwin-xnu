@@ -105,8 +105,9 @@ struct i386_tss {
  * Although this is defined as a 64-bit stack, the space is also used in
  * 32-bit legacy mode. For 64-bit the stack is 16-byte aligned.
  */
+
 struct sysenter_stack {
-	uint64_t	stack[16];	/* Space for a 64-bit frame and some */
+	uint64_t	sysestack[64];	/* Space for a 64-bit frame and some */
 	uint64_t	top;		/* Top and pointer to ISS in PCS */
 };
 

@@ -78,11 +78,17 @@ typedef struct rtclock_timer {
 } rtclock_timer_t;
 
 typedef struct {
-	struct x86_64_tss	*cdi_ktss;
-	x86_64_desc_register_t	cdi_gdt;
-	x86_64_desc_register_t	cdi_idt;
-	struct fake_descriptor	*cdi_ldt;
-	vm_offset_t		cdi_sstk;
+	/* The 'u' suffixed fields store the double-mapped descriptor addresses */
+	struct x86_64_tss	*cdi_ktssu;
+	struct x86_64_tss	*cdi_ktssb;
+	x86_64_desc_register_t	cdi_gdtu;
+	x86_64_desc_register_t	cdi_gdtb;
+	x86_64_desc_register_t	cdi_idtu;
+	x86_64_desc_register_t	cdi_idtb;
+	struct fake_descriptor	*cdi_ldtu;
+	struct fake_descriptor	*cdi_ldtb;
+	vm_offset_t		cdi_sstku;
+	vm_offset_t		cdi_sstkb;
 } cpu_desc_index_t;
 
 typedef enum {
@@ -109,7 +115,7 @@ typedef	uint8_t		pcid_ref_t;
 #define CPU_RTIME_BINS (12)
 #define CPU_ITIME_BINS (CPU_RTIME_BINS)
 
-#define MAXPLFRAMES (32)
+#define MAXPLFRAMES (16)
 typedef struct {
 	boolean_t pltype;
 	int plevel;
@@ -129,6 +135,13 @@ typedef struct {
  * cpu_datap(cpu_number) macro which uses the cpu_data_ptr[] array of per-cpu
  * pointers.
  */
+typedef struct {
+	pcid_t			cpu_pcid_free_hint;
+#define	PMAP_PCID_MAX_PCID      (0x800)
+	pcid_ref_t		cpu_pcid_refcounts[PMAP_PCID_MAX_PCID];
+	pmap_t			cpu_pcid_last_pmap_dispatched[PMAP_PCID_MAX_PCID];
+} pcid_cdata_t;
+
 typedef struct cpu_data
 {
 	struct pal_cpu_data	cpu_pal_data;		/* PAL-specific data */
@@ -143,8 +156,6 @@ typedef struct cpu_data
 	vm_offset_t		cpu_kernel_stack;	/* kernel stack top */
 	vm_offset_t		cpu_int_stack_top;
 	int			cpu_interrupt_level;
-	int			cpu_phys_number;	/* Physical CPU */
-	cpu_id_t		cpu_id;			/* Platform Expert */
 	volatile int		cpu_signals;		/* IPI events */
 	volatile int		cpu_prior_signals;	/* Last set of events,
 							 * debugging
@@ -166,18 +177,22 @@ typedef struct cpu_data
 	};
 	volatile task_map_t	cpu_task_map;
 	volatile addr64_t	cpu_task_cr3;
+	volatile addr64_t	cpu_ucr3;
 	addr64_t		cpu_kernel_cr3;
 	boolean_t		cpu_pagezero_mapped;
 	cpu_uber_t		cpu_uber;
-	void			*cpu_chud;
-	void			*cpu_console_buf;
-	struct x86_lcpu		lcpu;
+	/* Double-mapped per-CPU exception stack address */
+	uintptr_t		cd_estack;
+	/* Address of shadowed, partially mirrored CPU data structures located
+	 * in the double mapped PML4
+	 */
+	void			*cd_shadow;
 	struct processor	*cpu_processor;
 #if NCOPY_WINDOWS > 0
 	struct cpu_pmap		*cpu_pmap;
 #endif
 	struct cpu_desc_table	*cpu_desc_tablep;
-	struct fake_descriptor	*cpu_ldtp;
+	struct real_descriptor	*cpu_ldtp;
 	cpu_desc_index_t	cpu_desc_index;
 	int			cpu_ldt;
 #if NCOPY_WINDOWS > 0
@@ -191,7 +206,6 @@ typedef struct cpu_data
 #define HWINTCNT_SIZE 256
 	uint32_t		cpu_hwIntCnt[HWINTCNT_SIZE];	/* Interrupt counts */
  	uint64_t		cpu_hwIntpexits[HWINTCNT_SIZE];
-	uint64_t		cpu_hwIntcexits[HWINTCNT_SIZE];
 	uint64_t		cpu_dr7; /* debug control register */
 	uint64_t		cpu_int_event_time;	/* intr entry/exit time */
 	pal_rtc_nanotime_t	*cpu_nanotime;		/* Nanotime info */
@@ -211,10 +225,7 @@ typedef struct cpu_data
 	pcid_t			cpu_kernel_pcid;
 	volatile pcid_ref_t	*cpu_pmap_pcid_coherentp;
 	volatile pcid_ref_t	*cpu_pmap_pcid_coherentp_kernel;
-#define	PMAP_PCID_MAX_PCID      (0x1000)
-	pcid_t			cpu_pcid_free_hint;
-	pcid_ref_t		cpu_pcid_refcounts[PMAP_PCID_MAX_PCID];
-	pmap_t			cpu_pcid_last_pmap_dispatched[PMAP_PCID_MAX_PCID];
+	pcid_cdata_t		*cpu_pcid_data;
 #ifdef	PCID_STATS
 	uint64_t		cpu_pmap_pcid_flushes;
 	uint64_t		cpu_pmap_pcid_preserves;
@@ -263,10 +274,20 @@ typedef struct cpu_data
  	boolean_t		cpu_iflag;
  	boolean_t		cpu_boot_complete;
 	int			cpu_hibernate;
-#define MAX_PREEMPTION_RECORDS (128)
+#define MAX_PREEMPTION_RECORDS (8)
 #if	DEVELOPMENT || DEBUG
 	int			cpu_plri;
 	plrecord_t		plrecords[MAX_PREEMPTION_RECORDS];
+#endif
+	void			*cpu_chud;
+	void			*cpu_console_buf;
+	struct x86_lcpu		lcpu;
+	int			cpu_phys_number;	/* Physical CPU */
+	cpu_id_t		cpu_id;			/* Platform Expert */
+#if DEBUG
+	uint64_t		cpu_entry_cr3;
+	uint64_t		cpu_exit_cr3;
+	uint64_t		cpu_pcid_last_cr3;
 #endif
 } cpu_data_t;
 
@@ -585,12 +606,18 @@ _mp_enable_preemption_no_check(void) {
 #define MACHINE_PREEMPTION_MACROS (1)
 #endif
 
-
 static inline cpu_data_t *
 cpu_datap(int cpu) {
 	return cpu_data_ptr[cpu];
 }
 
+#ifdef MACH_KERNEL_PRIVATE
+static inline cpu_data_t *
+cpu_shadowp(int cpu) {
+	return cpu_data_ptr[cpu]->cd_shadow;
+}
+
+#endif
 extern cpu_data_t *cpu_data_alloc(boolean_t is_boot_cpu);
 extern void cpu_data_realloc(void);
 

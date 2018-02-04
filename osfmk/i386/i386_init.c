@@ -137,6 +137,7 @@ pdpt_entry_t		*IdlePDPT;
 pml4_entry_t		*IdlePML4;
 
 char *physfree;
+void idt64_remap(void);
 
 /*
  * Note: ALLOCPAGES() can only be used safely within Idle_PTs_init()
@@ -249,32 +250,7 @@ physmap_init(void)
 		KERNEL_PHYSMAP_PML4_INDEX, IdlePML4[KERNEL_PHYSMAP_PML4_INDEX]);
 }
 
-static void
-descriptor_alias_init()
-{
-	vm_offset_t	master_gdt_phys;
-	vm_offset_t	master_gdt_alias_phys;
-	vm_offset_t	master_idt_phys;
-	vm_offset_t	master_idt_alias_phys;
-
-	assert(((vm_offset_t)master_gdt & PAGE_MASK) == 0);
-	assert(((vm_offset_t)master_idt64 & PAGE_MASK) == 0);
-
-	master_gdt_phys       = (vm_offset_t) ID_MAP_VTOP(master_gdt);
-	master_idt_phys       = (vm_offset_t) ID_MAP_VTOP(master_idt64);
-	master_gdt_alias_phys = (vm_offset_t) ID_MAP_VTOP(MASTER_GDT_ALIAS);
-	master_idt_alias_phys = (vm_offset_t) ID_MAP_VTOP(MASTER_IDT_ALIAS);
-	
-	DBG("master_gdt_phys:       %p\n", (void *) master_gdt_phys);
-	DBG("master_idt_phys:       %p\n", (void *) master_idt_phys);
-	DBG("master_gdt_alias_phys: %p\n", (void *) master_gdt_alias_phys);
-	DBG("master_idt_alias_phys: %p\n", (void *) master_idt_alias_phys);
-
-	KPTphys[atop_kernel(master_gdt_alias_phys)] = master_gdt_phys |
-		INTEL_PTE_VALID | INTEL_PTE_NX | INTEL_PTE_WRITE;
-	KPTphys[atop_kernel(master_idt_alias_phys)] = master_idt_phys |
-		INTEL_PTE_VALID | INTEL_PTE_NX;	/* read-only */
-}
+void doublemap_init(void);
 
 static void
 Idle_PTs_init(void)
@@ -304,10 +280,8 @@ Idle_PTs_init(void)
 	postcode(VSTART_PHYSMAP_INIT);
 
 	physmap_init();
-
-	postcode(VSTART_DESC_ALIAS_INIT);
-
-	descriptor_alias_init();
+	doublemap_init();
+	idt64_remap();
 
 	postcode(VSTART_SET_CR3);
 
@@ -685,4 +659,115 @@ i386_init_slave_fast(void)
     	do_init_slave(TRUE);
 }
 
+#include <libkern/kernel_mach_header.h>
 
+/* TODO: Evaluate global PTEs for the double-mapped translations */
+
+uint64_t dblmap_base, dblmap_max;
+kernel_segment_command_t *hdescseg;
+
+pt_entry_t *dblmapL3;
+unsigned int dblallocs;
+uint64_t dblmap_dist;
+extern uint64_t idt64_hndl_table0[];
+
+
+void doublemap_init(void) {
+	dblmapL3 = ALLOCPAGES(1); // for 512 1GiB entries
+	dblallocs++;
+
+	struct {
+		pt_entry_t entries[PTE_PER_PAGE];
+	} * dblmapL2 = ALLOCPAGES(1); // for 512 2MiB entries
+	dblallocs++;
+
+	dblmapL3[0] = ((uintptr_t)ID_MAP_VTOP(&dblmapL2[0]))
+	    | INTEL_PTE_VALID
+	    | INTEL_PTE_WRITE;
+
+	hdescseg = getsegbynamefromheader(&_mh_execute_header, "__HIB");
+
+	vm_offset_t hdescb = hdescseg->vmaddr;
+	unsigned long hdescsz = hdescseg->vmsize;
+	unsigned long hdescszr = round_page_64(hdescsz);
+	vm_offset_t hdescc = hdescb, hdesce = hdescb + hdescszr;
+
+	kernel_section_t *thdescsect = getsectbynamefromheader(&_mh_execute_header, "__HIB", "__text");
+	vm_offset_t thdescb = thdescsect->addr;
+	unsigned long thdescsz = thdescsect->size;
+	unsigned long thdescszr = round_page_64(thdescsz);
+	vm_offset_t thdesce = thdescb + thdescszr;
+
+	assert((hdescb & 0xFFF) == 0);
+	/* Mirror HIB translations into the double-mapped pagetable subtree*/
+	for(int i = 0; hdescc < hdesce; i++) {
+		struct {
+			pt_entry_t entries[PTE_PER_PAGE];
+		} * dblmapL1 = ALLOCPAGES(1);
+		dblallocs++;
+		dblmapL2[0].entries[i] = ((uintptr_t)ID_MAP_VTOP(&dblmapL1[0])) | INTEL_PTE_VALID | INTEL_PTE_WRITE | INTEL_PTE_REF;
+		int hdescn = (int) ((hdesce - hdescc) / PAGE_SIZE);
+		for (int j = 0; j < MIN(PTE_PER_PAGE, hdescn); j++) {
+			uint64_t template = INTEL_PTE_VALID;
+			if ((hdescc >= thdescb) && (hdescc < thdesce)) {
+				/* executable */
+			} else {
+				template |= INTEL_PTE_WRITE | INTEL_PTE_NX ; /* Writeable, NX */
+			}
+			dblmapL1[0].entries[j] = ((uintptr_t)ID_MAP_VTOP(hdescc)) | template;
+			hdescc += PAGE_SIZE;
+		}
+	}
+
+	IdlePML4[KERNEL_DBLMAP_PML4_INDEX] = ((uintptr_t)ID_MAP_VTOP(dblmapL3)) | INTEL_PTE_VALID | INTEL_PTE_WRITE | INTEL_PTE_REF;
+
+	dblmap_base = KVADDR(KERNEL_DBLMAP_PML4_INDEX, dblmapL3, 0, 0);
+	dblmap_max = dblmap_base + hdescszr;
+	/* Calculate the double-map distance, which accounts for the current
+	 * KASLR slide
+	 */
+
+	dblmap_dist = dblmap_base - hdescb;
+	idt64_hndl_table0[1] = DBLMAP(idt64_hndl_table0[1]);
+
+	extern cpu_data_t cpshadows[], scdatas[];
+	uintptr_t cd1 = (uintptr_t) &cpshadows[0];
+	uintptr_t cd2 = (uintptr_t) &scdatas[0];
+/* Record the displacement from the kernel's per-CPU data pointer, eventually
+ * programmed into GSBASE, to the "shadows" in the doublemapped
+ * region. These are not aliases, but separate physical allocations
+ * containing data required in the doublemapped trampolines.
+*/
+	idt64_hndl_table0[2] = dblmap_dist + cd1 - cd2;
+
+	DBG("Double map base: 0x%qx\n", dblmap_base);
+	DBG("double map idlepml4[%d]: 0x%llx\n", KERNEL_DBLMAP_PML4_INDEX, IdlePML4[KERNEL_DBLMAP_PML4_INDEX]);
+	assert(LDTSZ > LDTSZ_MIN);
+}
+
+vm_offset_t dyn_dblmap(vm_offset_t, vm_offset_t);
+
+#include <i386/pmap_internal.h>
+
+/* Use of this routine is expected to be synchronized by callers
+ * Creates non-executable aliases.
+ */
+vm_offset_t dyn_dblmap(vm_offset_t cva, vm_offset_t sz) {
+	vm_offset_t ava = dblmap_max;
+
+	assert((sz & PAGE_MASK) == 0);
+	assert(cva != 0);
+
+	pmap_alias(ava, cva, cva + sz, VM_PROT_READ | VM_PROT_WRITE, PMAP_EXPAND_OPTIONS_ALIASMAP);
+	dblmap_max += sz;
+	return (ava - cva);
+}
+/* Adjust offsets interior to the bootstrap interrupt descriptor table to redirect
+ * control to the double-mapped interrupt vectors. The IDTR proper will be
+ * programmed via cpu_desc_load()
+ */
+void idt64_remap(void) {
+	for (int i = 0; i < IDTSZ; i++) {
+		master_idt64[i].offset64 = DBLMAP(master_idt64[i].offset64);
+	}
+}

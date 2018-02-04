@@ -127,6 +127,7 @@ int proc_clear_dirty(pid_t pid, uint32_t flags);
 int proc_terminate(pid_t pid, int *sig);
 
 #ifdef PRIVATE
+#include <sys/event.h>
 /*
  * Enumerate potential userspace pointers embedded in kernel data structures.
  * Currently inspects kqueues only.

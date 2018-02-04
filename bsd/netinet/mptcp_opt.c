@@ -1367,33 +1367,6 @@ mptcp_do_dss_opt_meat(u_char *cp, struct tcpcb *tp, struct tcphdr *th)
 }
 
 static void
-mptcp_do_fin_opt(struct tcpcb *tp)
-{
-	struct mptcb *mp_tp = tptomptp(tp);
-
-	if (!(tp->t_mpflags & TMPF_RECV_DFIN)) {
-		if (mp_tp != NULL) {
-			mptcp_close_fsm(mp_tp, MPCE_RECV_DATA_FIN);
-
-			if (tp->t_inpcb->inp_socket != NULL) {
-				soevent(tp->t_inpcb->inp_socket,
-				    SO_FILT_HINT_LOCKED |
-				    SO_FILT_HINT_MPCANTRCVMORE);
-			}
-
-		}
-		tp->t_mpflags |= TMPF_RECV_DFIN;
-	}
-
-	tp->t_mpflags |= TMPF_MPTCP_ACKNOW;
-	/*
-	 * Since this is a data level FIN, TCP needs to be explicitly told
-	 * to send back an ACK on which the Data ACK is piggybacked.
-	 */
-	tp->t_flags |= TF_ACKNOW;
-}
-
-static void
 mptcp_do_dss_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 {
 #pragma unused(optlen)
@@ -1408,9 +1381,8 @@ mptcp_do_dss_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 		struct mptcp_dss_copt *dss_rsp = (struct mptcp_dss_copt *)cp;
 
 		if (dss_rsp->mdss_subtype == MPO_DSS) {
-			if (dss_rsp->mdss_flags & MDSS_F) {
-				mptcp_do_fin_opt(tp);
-			}
+			if (dss_rsp->mdss_flags & MDSS_F)
+				tp->t_rcv_map.mpt_dfin = 1;
 
 			mptcp_do_dss_opt_meat(cp, tp, th);
 		}

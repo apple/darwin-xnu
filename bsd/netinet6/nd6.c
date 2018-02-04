@@ -1310,9 +1310,13 @@ addrloop:
 
 			/*
 			 * Only enqueue the Deprecated event when the address just
-			 * becomes deprecated
+			 * becomes deprecated.
+			 * Keep it limited to the stable address it is common for
+			 * older temporary addresses to get deprecated while we generate
+			 * new ones.
 			 */
-			if((oldflags & IN6_IFF_DEPRECATED) == 0) {
+			if((oldflags & IN6_IFF_DEPRECATED) == 0 &&
+			    (ia6->ia6_flags & IN6_IFF_TEMPORARY) == 0) {
 				in6_event_enqueue_nwk_wq_entry(IN6_ADDR_MARKED_DEPRECATED,
 				    ia6->ia_ifa.ifa_ifp, &ia6->ia_addr.sin6_addr,
 				    0);

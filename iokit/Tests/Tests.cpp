@@ -236,6 +236,7 @@ sysctl_iokittest(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused
 	data->release();
     }
 
+
     if (changed && newValue)
     {
 	error = IOWorkLoopTest(newValue);

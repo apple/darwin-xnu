@@ -73,10 +73,10 @@
  * due to a single-step trace trap at system call entry.
  */
 struct sysenter_stack master_sstk
-	__attribute__ ((section ("__DESC, master_sstk")))
+	__attribute__ ((section ("__HIB, __desc")))
 	__attribute__ ((aligned (16)))  = { {0}, 0 };
 
-struct x86_64_tss master_ktss64 __attribute__ ((aligned (4096))) = {
+struct x86_64_tss master_ktss64 __attribute__ ((aligned (4096))) __attribute__ ((section ("__HIB, __desc"))) = {
 	.io_bit_map_offset = 0x0FFF,
 };
 

@@ -3330,6 +3330,9 @@ mach_memory_object_memory_entry_64(
 
 	if (pager == MEMORY_OBJECT_NULL && internal) {
 		object = vm_object_allocate(size);
+		if (object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC) {
+			object->copy_strategy = MEMORY_OBJECT_COPY_DELAY;
+		}
 	} else {
 		object = memory_object_to_vm_object(pager);
 		if (object != VM_OBJECT_NULL) {

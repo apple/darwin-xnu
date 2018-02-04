@@ -134,9 +134,25 @@
 #define DPRINTF(x...)
 #endif
 
+#ifndef ROUNDUP
+#define ROUNDUP(a, b) (((a) + ((b) - 1)) & (~((b) - 1)))
+#endif
+
+#ifndef ROUNDDOWN
+#define ROUNDDOWN(x,y) (((x)/(y))*(y))
+#endif
+
 static void machine_conf(void);
 void panic_print_symbol_name(vm_address_t search);
 void RecordPanicStackshot(void);
+
+typedef enum paniclog_flush_type {
+    kPaniclogFlushBase		= 1, /* Flush the initial log and paniclog header */
+    kPaniclogFlushStackshot	= 2, /* Flush only the stackshot data, then flush the header */
+    kPaniclogFlushOtherLog	= 3  /* Flush the other log, then flush the header */
+} paniclog_flush_type_t;
+
+void paniclog_flush_internal(paniclog_flush_type_t variant);
 
 extern const char	version[];
 extern char 	osversion[];
@@ -919,8 +935,6 @@ RecordPanicStackshot()
 				}
 			}
 		}
-
-		paniclog_flush();
 #if DEVELOPMENT || DEBUG
 		if (panic_stackshot_buf != 0) {
 			// We're going to try to take another stackshot, reset the state.
@@ -1008,7 +1022,7 @@ SavePanicInfo(
 	}
 
 	/* Flush the panic log */
-	paniclog_flush();
+	paniclog_flush_internal(kPaniclogFlushBase);
 
 	/* Try to take a panic stackshot */
 	RecordPanicStackshot();
@@ -1018,17 +1032,12 @@ SavePanicInfo(
 	 * from when we tried to capture it.
 	 */
 	if (extended_debug_log_enabled) {
-		paniclog_flush();
+		paniclog_flush_internal(kPaniclogFlushStackshot);
 	}
 }
 
-void
-paniclog_flush()
+void paniclog_flush_internal(paniclog_flush_type_t variant)
 {
-	unsigned long pi_size = 0;
-
-	assert(panic_info != NULL);
-
 	/* Update the other log offset if we've opened the other log */
 	if (panic_info->mph_other_log_offset != 0) {
 		panic_info->mph_other_log_len = PE_get_offset_into_panic_region(debug_buf_ptr) - panic_info->mph_other_log_offset;
@@ -1039,7 +1048,8 @@ paniclog_flush()
 	 * panic callbacks, otherwise we flush via nvram (unless that has been disabled).
 	 */
 	if (coprocessor_paniclog_flush) {
-		unsigned int size_to_flush = debug_buf_size;
+		uint32_t overall_buffer_size = debug_buf_size;
+		uint32_t size_to_flush = 0, offset_to_flush = 0;
 		if (extended_debug_log_enabled) {
 			/*
 			 * debug_buf_size for the extended log does not include the length of the header.
@@ -1047,16 +1057,47 @@ paniclog_flush()
 			 * for the non-extended case (this is a concession we make to not shrink the paniclog data
 			 * for non-coprocessor systems that only use the basic log).
 			 */
-			size_to_flush = debug_buf_size + sizeof(struct macos_panic_header);
+			overall_buffer_size = debug_buf_size + sizeof(struct macos_panic_header);
 		}
 
-		/* We need to calculate the CRC for co-processor platforms */
-		panic_info->mph_crc = crc32(0L, &panic_info->mph_version, (size_to_flush - offsetof(struct macos_panic_header, mph_version)));
+		/* Update the CRC */
+		panic_info->mph_crc = crc32(0L, &panic_info->mph_version, (overall_buffer_size - offsetof(struct macos_panic_header, mph_version)));
 
-		PESavePanicInfoAction(panic_info, size_to_flush);
+		if (variant == kPaniclogFlushBase) {
+			/* Flush the header and base panic log. */
+			kprintf("Flushing base panic log\n");
+			size_to_flush = ROUNDUP((panic_info->mph_panic_log_offset + panic_info->mph_panic_log_len), PANIC_FLUSH_BOUNDARY);
+			offset_to_flush = 0;
+			PESavePanicInfoAction(panic_info, offset_to_flush, size_to_flush);
+		} else if ((variant == kPaniclogFlushStackshot) || (variant == kPaniclogFlushOtherLog)) {
+			if (variant == kPaniclogFlushStackshot) {
+				/*
+				 * We flush the stackshot before flushing the updated header because the stackshot
+				 * can take a while to flush. We want the paniclog header to be as consistent as possible even
+				 * if the stackshot isn't flushed completely. Flush starting from the end of the panic log.
+				 */
+				kprintf("Flushing panic log stackshot\n");
+				offset_to_flush = ROUNDDOWN((panic_info->mph_panic_log_offset + panic_info->mph_panic_log_len), PANIC_FLUSH_BOUNDARY);
+				size_to_flush = ROUNDUP((panic_info->mph_stackshot_len + (panic_info->mph_stackshot_offset - offset_to_flush)), PANIC_FLUSH_BOUNDARY);
+				PESavePanicInfoAction(panic_info, offset_to_flush, size_to_flush);
+			}
+
+			/* Flush the other log -- everything after the stackshot */
+			kprintf("Flushing panic 'other' log\n");
+			offset_to_flush = ROUNDDOWN((panic_info->mph_stackshot_offset + panic_info->mph_stackshot_len), PANIC_FLUSH_BOUNDARY);
+			size_to_flush = ROUNDUP((panic_info->mph_other_log_len + (panic_info->mph_other_log_offset - offset_to_flush)), PANIC_FLUSH_BOUNDARY);
+			PESavePanicInfoAction(panic_info, offset_to_flush, size_to_flush);
+
+			/* Flush the header -- everything before the paniclog */
+			kprintf("Flushing panic log header\n");
+			size_to_flush = ROUNDUP(panic_info->mph_panic_log_offset, PANIC_FLUSH_BOUNDARY);
+			offset_to_flush = 0;
+			PESavePanicInfoAction(panic_info, offset_to_flush, size_to_flush);
+		}
 	} else if (commit_paniclog_to_nvram) {
 		assert(debug_buf_size != 0);
 		unsigned int bufpos;
+		unsigned long pi_size = 0;
 		uintptr_t cr0;
 
 		debug_putc(0);
@@ -1107,6 +1148,14 @@ paniclog_flush()
 			unpackA(debug_buf_base, bufpos);
 		}
 	}
+}
+
+void
+paniclog_flush()
+{
+	/* Called outside of this file to update logging appended to the "other" log */
+	paniclog_flush_internal(kPaniclogFlushOtherLog);
+	return;
 }
 
 char *
