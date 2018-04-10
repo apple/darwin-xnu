@@ -323,7 +323,7 @@ union lc_str {
 /*
  * The segment load command indicates that a part of this file is to be
  * mapped into the task's address space.  The size of this segment in memory,
- * vmsize, maybe equal to or larger than the amount to map from this file,
+ * vmsize, may be equal to or larger than the amount to map from this file,
  * filesize.  The file is mapped starting at fileoff to the beginning of
  * the segment in memory, vmaddr.  The rest of the memory of the segment,
  * if any, is allocated zero fill on demand.  The segment's maximum virtual
@@ -375,7 +375,7 @@ struct segment_command_64 { /* for 64-bit architectures */
 				   the link editor */
 #define	SG_NORELOC	0x4	/* this segment has nothing that was relocated
 				   in it and nothing relocated to it, that is
-				   it maybe safely replaced without relocation*/
+				   it may be safely replaced without relocation*/
 #define SG_PROTECTED_VERSION_1	0x8 /* This segment is protected.  If the
 				       segment starts at file offset 0, the
 				       first page of the segment is not
@@ -1180,7 +1180,7 @@ struct encryption_info_command {
    uint32_t	cmdsize;	/* sizeof(struct encryption_info_command) */
    uint32_t	cryptoff;	/* file offset of encrypted range */
    uint32_t	cryptsize;	/* file size of encrypted range */
-   uint32_t	cryptid;	/* which enryption system,
+   uint32_t	cryptid;	/* which encryption system,
 				   0 means not-encrypted yet */
 };
 
@@ -1193,7 +1193,7 @@ struct encryption_info_command_64 {
    uint32_t	cmdsize;	/* sizeof(struct encryption_info_command_64) */
    uint32_t	cryptoff;	/* file offset of encrypted range */
    uint32_t	cryptsize;	/* file size of encrypted range */
-   uint32_t	cryptid;	/* which enryption system,
+   uint32_t	cryptid;	/* which encryption system,
 				   0 means not-encrypted yet */
    uint32_t	pad;		/* padding to make this struct's size a multiple
 				   of 8 bytes */
