@@ -2347,6 +2347,21 @@ void IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
             ((IOService *)this)->stop_watchdog_timer(); //14456299
             lowBatteryCondition = false;
 
+#if DEVELOPMENT || DEBUG
+            extern int g_should_log_clock_adjustments;
+            if (g_should_log_clock_adjustments) {
+                clock_sec_t  secs = 0;
+                clock_usec_t microsecs = 0;
+                uint64_t now_b = mach_absolute_time();
+
+                PEGetUTCTimeOfDay(&secs, &microsecs);
+
+                uint64_t now_a = mach_absolute_time();
+                os_log(OS_LOG_DEFAULT, "%s PMU before going to sleep %lu s %d u %llu abs_b_PEG %llu abs_a_PEG \n",
+                       __func__, (unsigned long)secs, microsecs, now_b, now_a);
+            }
+#endif
+
             getPlatform()->sleepKernel();
 
             // The CPU(s) are off at this point,
@@ -6109,7 +6124,9 @@ bool IOPMrootDomain::displayWranglerMatchPublished(
     IONotifier * notifier __unused)
 {
 #if !NO_KERNEL_HID
-    // found the display wrangler, now install a handler
+    // found the display wrangler, check for any display assertions already created
+    gRootDomain->evaluateWranglerAssertions();
+    // install a handler
     if( !newService->registerInterest( gIOGeneralInterest,
                             &displayWranglerNotification, target, 0) )
     {
@@ -7552,6 +7569,22 @@ void IOPMrootDomain::evaluateAssertions(IOPMDriverAssertionType newAssertions, I
             DLOG("Driver assertion ReservedBit7 dropped\n");
             updatePreventIdleSleepList(this, false);
         }
+    }
+}
+
+void IOPMrootDomain::evaluateWranglerAssertions()
+{
+    if (gIOPMWorkLoop->inGate() == false) {
+        gIOPMWorkLoop->runAction(
+                OSMemberFunctionCast(IOWorkLoop::Action, this, &IOPMrootDomain::evaluateWranglerAssertions),
+                (OSObject *)this);
+
+        return;
+    }
+
+    if (pmAssertions->getActivatedAssertions() & kIOPMDriverAssertionPreventDisplaySleepBit) {
+        DLOG("wrangler setIgnoreIdleTimer\(1) on matching\n");
+        wrangler->setIgnoreIdleTimer( true );
     }
 }
 

@@ -49,6 +49,7 @@
 struct callstack {
 	uint32_t flags;
 	uint32_t nframes;
+	/* WARNING this can be uintptr_t instead if CALLSTACK_KERNEL_WORDS is set */
 	uint64_t frames[MAX_CALLSTACK_FRAMES];
 };
 

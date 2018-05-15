@@ -1271,6 +1271,8 @@ fpextovrflt(void)
 	/*NOTREACHED*/
 }
 
+extern void fpxlog(int, uint32_t, uint32_t, uint32_t);
+
 /*
  * FPU error. Called by AST.
  */
@@ -1296,6 +1298,11 @@ fpexterrflt(void)
 
 	(void)ml_set_interrupts_enabled(intr);
 
+	const uint32_t mask = ifps->fx_control &
+	    (FPC_IM | FPC_DM | FPC_ZM | FPC_OM | FPC_UE | FPC_PE);
+	const uint32_t xcpt = ~mask & (ifps->fx_status &
+	    (FPS_IE | FPS_DE | FPS_ZE | FPS_OE | FPS_UE | FPS_PE));
+	fpxlog(EXC_I386_EXTERR, ifps->fx_status, ifps->fx_control, xcpt);
 	/*
 	 * Raise FPU exception.
 	 * Locking not needed on pcb->ifps,
@@ -1393,6 +1400,11 @@ fpSSEexterrflt(void)
 	 * Locking not needed on pcb->ifps,
 	 * since thread is running.
 	 */
+	const uint32_t mask = (ifps->fx_MXCSR >> 7) &
+		(FPC_IM | FPC_DM | FPC_ZM | FPC_OM | FPC_UE | FPC_PE);
+	const uint32_t xcpt = ~mask & (ifps->fx_MXCSR &
+		(FPS_IE | FPS_DE | FPS_ZE | FPS_OE | FPS_UE | FPS_PE));
+	fpxlog(EXC_I386_SSEEXTERR, ifps->fx_MXCSR, ifps->fx_MXCSR, xcpt);
 
 	i386_exception(EXC_ARITHMETIC,
 		       EXC_I386_SSEEXTERR,
@@ -1411,22 +1423,38 @@ fpSSEexterrflt(void)
 static void
 fpu_savearea_promote_avx512(thread_t thread)
 {
-	struct x86_avx_thread_state	*ifps;
-	struct x86_avx512_thread_state	*ifps512;
+	struct x86_avx_thread_state	*ifps = NULL;
+	struct x86_avx512_thread_state	*ifps512 = NULL;
 	pcb_t				pcb = THREAD_TO_PCB(thread);
+	boolean_t			do_avx512_alloc = FALSE;
 
 	DBG("fpu_upgrade_savearea(%p)\n", thread);
-	ifps512 = fp_state_alloc(AVX512);
+
 	simple_lock(&pcb->lock);
+
 	ifps = pcb->ifps;
 	if (ifps == NULL) {
-		/* nothing to be done */
+		pcb->xstate = AVX512;
 		simple_unlock(&pcb->lock);
-		fp_state_free(ifps512, AVX512);
-		xsetbv(0, AVX512_XMASK);
-		DBG("fpu_upgrade_savearea() NULL ifps\n");
+		if (thread != current_thread()) {
+			/* nothing to be done */
+
+			return;
+		}
+		fpnoextflt();
 		return;
 	}
+
+	if (pcb->xstate != AVX512) {
+		do_avx512_alloc = TRUE;
+	}
+	simple_unlock(&pcb->lock);
+
+	if (do_avx512_alloc == TRUE) {
+		ifps512 = fp_state_alloc(AVX512);
+	}
+
+	simple_lock(&pcb->lock);
 	if (thread == current_thread()) {
 		boolean_t	intr;
 
@@ -1443,12 +1471,25 @@ fpu_savearea_promote_avx512(thread_t thread)
 	assert(ifps->fp.fp_valid);
 
 	/* Allocate an AVX512 savearea and copy AVX state into it */
-	bcopy(ifps, ifps512, fp_state_size[AVX]);
-	pcb->ifps = ifps512;
-	pcb->xstate = AVX512;
-	fp_state_free(ifps, AVX);
-
+	if (pcb->xstate != AVX512) {
+		bcopy(ifps, ifps512, fp_state_size[AVX]);
+		pcb->ifps = ifps512;
+		pcb->xstate = AVX512;
+		ifps512 = NULL;
+	} else {
+		ifps = NULL;
+	}
+	/* The PCB lock is redundant in some scenarios given the higher level
+	 * thread mutex, but its pre-emption disablement is relied upon here
+	 */
 	simple_unlock(&pcb->lock);
+
+	if (ifps) {
+		fp_state_free(ifps, AVX);
+	}
+	if (ifps512) {
+		fp_state_free(ifps, AVX512);
+	}
 }
 
 /*
@@ -1481,17 +1522,26 @@ fpu_thread_promote_avx512(thread_t thread)
  * return directly via thread_exception_return().
  * Otherwise simply return.
  */
+#define MAX_X86_INSN_LENGTH (16)
 void
 fpUDflt(user_addr_t rip)
 {
 	uint8_t		instruction_prefix;
 	boolean_t	is_AVX512_instruction = FALSE;
-
+	user_addr_t	original_rip = rip;
 	do {
-		if (copyin(rip, (char *) &instruction_prefix, 1))
+		/* TODO: as an optimisation, copy up to the lesser of the
+		 * next page boundary or maximal prefix length in one pass
+		 * rather than issue multiple copyins
+		 */
+		if (copyin(rip, (char *) &instruction_prefix, 1)) {
 			return;
+		}
 		DBG("fpUDflt(0x%016llx) prefix: 0x%x\n",
 			rip, instruction_prefix);
+		/* TODO: determine more specifically which prefixes
+		 * are sane possibilities for AVX512 insns
+		 */
 		switch (instruction_prefix) {
 		    case 0x2E:	/* CS segment override */
 		    case 0x36:	/* SS segment override */
@@ -1499,9 +1549,13 @@ fpUDflt(user_addr_t rip)
 		    case 0x26:	/* ES segment override */
 		    case 0x64:	/* FS segment override */
 		    case 0x65:	/* GS segment override */
+		    case 0x66:  /* Operand-size override */
 		    case 0x67:	/* address-size override */
 			/* Skip optional prefixes */
 			rip++;
+			if ((rip - original_rip) > MAX_X86_INSN_LENGTH) {
+				return;
+			}
 			break;
 		    case 0x62:  /* EVEX */
 		    case 0xC5:	/* VEX 2-byte */
@@ -1516,11 +1570,9 @@ fpUDflt(user_addr_t rip)
 	/* Here if we detect attempted execution of an AVX512 instruction */
 
 	/*
-	 * Fail if this machine doesn't support AVX512 or
-	 * the current thread is (strangely) already in AVX512 mode.
+	 * Fail if this machine doesn't support AVX512
 	 */
-	if (fpu_capability != AVX512 ||
-	    current_xstate() == AVX512)
+	if (fpu_capability != AVX512)
 		return;
 
 	assert(xgetbv(XCR0) == AVX_XMASK);

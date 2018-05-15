@@ -31,11 +31,16 @@ def ShowIfConfiguration(ifnet):
     """ Display ifconfig-like output for the ifnet
     """
     iface = Cast(ifnet, 'ifnet *')
+    dlifnet = Cast(ifnet, 'dlil_ifnet *')
     out_string = ""
     format_string = "{0: <s}: flags={1: <x} <{2: <s}> index {3: <d} mtu {4: <d}"
     if iface :
         out_string += format_string.format(iface.if_xname, (iface.if_flags & 0xffff), GetIfFlagsAsString(iface.if_flags), iface.if_index, iface.if_data.ifi_mtu)
         out_string += "\n\t(struct ifnet *)" + hex(ifnet)
+        if iface.if_snd.ifcq_len :
+            out_string += "\n\t" + str(iface.if_snd.ifcq_len)
+        if dlifnet.dl_if_inpstorage.rcvq_pkts.qlen :
+            out_string += "\n\t" + str(dlifnet.dl_if_inpstorage.rcvq_pkts.qlen)
     print out_string
 
 def GetIfConfiguration(ifname):
@@ -1619,7 +1624,7 @@ def GetPcbInfo(pcbi, proto):
                 while mp != 0:
                     snd_buf += 256
                     if (mp.m_hdr.mh_flags & 0x01):
-                        snd_buf = mp.M_dat.MH.MH_dat.MH_ext.ext_size
+                        snd_buf += mp.M_dat.MH.MH_dat.MH_ext.ext_size
                     mp = mp.m_hdr.mh_next
                 rcv_cc += so.so_rcv.sb_cc
                 mp = so.so_rcv.sb_mb

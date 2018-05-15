@@ -277,20 +277,6 @@ LEXT(set_aux_control)
 	isb		sy
 	ret
 
-#if (DEVELOPMENT || DEBUG)
-/*
- * 	set MMU control register
- */
-	.text
-	.align 2
-	.globl EXT(set_mmu_control)
-LEXT(set_mmu_control)
-	msr		SCTLR_EL1, x0
-	dsb		sy
-	isb		sy
-	ret
-#endif
-
 
 /*
  *	set translation control register

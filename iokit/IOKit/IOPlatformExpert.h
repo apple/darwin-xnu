@@ -60,7 +60,8 @@ enum {
   kPEPanicSync,
   kPEPagingOff,
   kPEPanicBegin,
-  kPEPanicEnd
+  kPEPanicEnd,
+  kPEPanicDiskShutdown
 };
 extern int (*PE_halt_restart)(unsigned int type);
 extern int PEHaltRestart(unsigned int type);

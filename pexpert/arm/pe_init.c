@@ -460,6 +460,9 @@ uint32_t
 PE_i_can_has_debugger(uint32_t *debug_flags)
 {
 	if (debug_flags) {
+#if DEVELOPMENT || DEBUG
+		assert(debug_boot_arg_inited);
+#endif
 		if (debug_enabled)
 			*debug_flags = debug_boot_arg;	
 		else

@@ -46,30 +46,13 @@ def IterateLinkedList(element, field_name):
         elt = elt.__getattr__(field_name)
     #end of while loop
 
-def IterateSListEntry(element, element_type, field_name, slist_prefix=''):
-    """ iterate over a list as defined with SLIST_HEAD in bsd/sys/queue.h
-        params:
-            element      - value : Value object for slh_first
-            element_type - str   : Type of the next element
-            field_name   - str   : Name of the field in next element's structure
-        returns:
-            A generator does not return. It is used for iterating
-            value  : an object thats of type (element_type) head->sle_next. Always a pointer object
-    """
-    elt = element.__getattr__(slist_prefix + 'slh_first')
-    if type(element_type) == str:
-        element_type = gettype(element_type)
-    while unsigned(elt) != 0:
-        yield elt
-        next_el = elt.__getattr__(field_name).__getattr__(slist_prefix + 'sle_next')
-        elt = cast(next_el, element_type)
-
 def IterateListEntry(element, element_type, field_name, list_prefix=''):
     """ iterate over a list as defined with LIST_HEAD in bsd/sys/queue.h
         params:
             element      - value : Value object for lh_first
             element_type - str   : Type of the next element
             field_name   - str   : Name of the field in next element's structure
+            list_prefix  - str   : use 's' here to iterate SLIST_HEAD instead
         returns:
             A generator does not return. It is used for iterating
             value  : an object thats of type (element_type) head->le_next. Always a pointer object
@@ -176,6 +159,67 @@ def IterateQueue(queue_head, element_ptr_type, element_field_name, backwards=Fal
             cur_elt = unpack_ptr_and_recast(elt.GetChildMemberWithName(element_field_name).GetChildMemberWithName('prev'))
         else:
             cur_elt = unpack_ptr_and_recast(elt.GetChildMemberWithName(element_field_name).GetChildMemberWithName('next'))
+
+
+def IterateRBTreeEntry(element, element_type, field_name):
+    """ iterate over a rbtree as defined with RB_HEAD in libkern/tree.h
+            element      - value : Value object for rbh_root
+            element_type - str   : Type of the link element
+            field_name   - str   : Name of the field in link element's structure
+        returns:
+            A generator does not return. It is used for iterating
+            value  : an object thats of type (element_type) head->sle_next. Always a pointer object
+    """
+    elt = element.__getattr__('rbh_root')
+    if type(element_type) == str:
+        element_type = gettype(element_type)
+
+    # Walk to find min
+    parent = elt
+    while unsigned(elt) != 0:
+        parent = elt
+        elt = cast(elt.__getattr__(field_name).__getattr__('rbe_left'), element_type)
+    elt = parent
+
+    # Now elt is min
+    while unsigned(elt) != 0:
+        yield elt
+        # implementation cribbed from RB_NEXT in libkern/tree.h
+        right = cast(elt.__getattr__(field_name).__getattr__('rbe_right'), element_type)
+        if unsigned(right) != 0:
+            elt = right
+            left = cast(elt.__getattr__(field_name).__getattr__('rbe_left'), element_type)
+            while unsigned(left) != 0:
+                elt = left
+                left = cast(elt.__getattr__(field_name).__getattr__('rbe_left'), element_type)
+        else:
+
+            # avoid using GetValueFromAddress
+            addr = elt.__getattr__(field_name).__getattr__('rbe_parent')&~1
+            parent = value(elt.GetSBValue().CreateValueFromExpression(None,'(void *)'+str(addr)))
+            parent = cast(parent, element_type)
+
+            if unsigned(parent) != 0:
+                left = cast(parent.__getattr__(field_name).__getattr__('rbe_left'), element_type)
+            if (unsigned(parent) != 0) and (unsigned(elt) == unsigned(left)):
+                elt = parent
+            else:
+                if unsigned(parent) != 0:
+                    right = cast(parent.__getattr__(field_name).__getattr__('rbe_right'), element_type)
+                while unsigned(parent) != 0 and (unsigned(elt) == unsigned(right)):
+                    elt = parent
+
+                    # avoid using GetValueFromAddress
+                    addr = elt.__getattr__(field_name).__getattr__('rbe_parent')&~1
+                    parent = value(elt.GetSBValue().CreateValueFromExpression(None,'(void *)'+str(addr)))
+                    parent = cast(parent, element_type)
+
+                    right = cast(parent.__getattr__(field_name).__getattr__('rbe_right'), element_type)
+
+                # avoid using GetValueFromAddress
+                addr = elt.__getattr__(field_name).__getattr__('rbe_parent')&~1
+                elt = value(elt.GetSBValue().CreateValueFromExpression(None,'(void *)'+str(addr)))
+                elt = cast(elt, element_type)
 
 
 class KernelTarget(object):

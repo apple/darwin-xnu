@@ -1,16 +1,16 @@
+#include <darwintest.h>
+#include <darwintest_utils.h>
+#include <errno.h>
 #include <mach/mach.h>
+#include <mach/mach_error.h>
+#include <mach/policy.h>
 #include <mach/task_info.h>
 #include <mach/thread_info.h>
-#include <mach/mach_error.h>
 #include <stdio.h>
-#include <errno.h>
-#include <unistd.h>
 #include <stdlib.h>
 #include <sys/mman.h>
-#include <mach/policy.h>
-#include <darwintest.h>
 #include <sys/sysctl.h>
-#include <darwintest_utils.h>
+#include <unistd.h>
 
 /* *************************************************************************************
  * Test the task_info API.
@@ -311,18 +311,30 @@ T_DECL(task_absolutetime_info, "tests task absolute time info", T_META_ASROOT(tr
 	               "Tests whether the difference between thread times is greater than the expected range");
 #endif
 
-	/*
-	 * There is no way of estimating the exact number of threads, hence checking the counter to be non-zero for now.
-	 */
+	if (absolute_time_info_data.threads_user <= 0) {
+		int precise_time_val = 0;
+		size_t len           = sizeof(size_t);
 
-	T_EXPECT_NE(absolute_time_info_data.threads_user, 0ULL, "task_info should return non-zero number of user threads");
+		T_LOG("User threads time is zero. This should only happen rarely and when precise_user_time is off");
+
+		err = sysctlbyname("kern.precise_user_kernel_time", &precise_time_val, &len, NULL, 0);
+
+		T_EXPECT_POSIX_SUCCESS(err, "performing sysctl to check precise_user_time");
+
+		T_LOG("kern.precise_user_kernel_time val = %d", precise_time_val);
+
+		T_EXPECT_FALSE(precise_time_val, "user thread time should only be zero when precise_user_kernel_time is disabled");
+	} else {
+		T_PASS("task_info should return non-zero value for user threads time = %llu", absolute_time_info_data.threads_user);
+	}
 
 #if !(defined(__arm__) || defined(__arm64__))
 	/*
 	 * On iOS, system threads are always zero. On OS X this value can be some large positive number.
 	 * There is no real way to estimate the exact amount.
 	 */
-	T_EXPECT_NE(absolute_time_info_data.threads_system, 0ULL, "task_info should return non-zero number of system threads");
+	T_EXPECT_NE(absolute_time_info_data.threads_system, 0ULL,
+	            "task_info should return non-zero value for system threads time = %llu", absolute_time_info_data.threads_system);
 #endif
 
 	/*

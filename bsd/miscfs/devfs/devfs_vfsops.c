@@ -128,10 +128,8 @@ devfs_init(__unused struct vfsconf *vfsp)
 					UID_ROOT, GID_WHEEL, 0666, "zero");
 	uint32_t logging_config = atm_get_diagnostic_config();
 
-	if ( logging_config & ATM_ENABLE_LEGACY_LOGGING ) {
-		devfs_make_node(makedev(6, 0), DEVFS_CHAR,
+	devfs_make_node(makedev(6, 0), DEVFS_CHAR,
 					UID_ROOT, GID_WHEEL, 0600, "klog");
-	}
 
 	if ( !(logging_config & ATM_TRACE_DISABLE) ) {
 		devfs_make_node(makedev(7, 0), DEVFS_CHAR,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -54,7 +54,8 @@ extern "C" {
 #include <uuid/uuid.h>
 }
 
-#if defined(__x86_64__)
+#if !CONFIG_EMBEDDED
+
 /*
  * This will eventually be properly exported in
  * <rdar://problem/31181482> ER: Expose coprocessor version (T208/T290) in a kernel/kext header
@@ -62,7 +63,9 @@ extern "C" {
  * header this ends up in.
  */
 #define kCoprocessorMinVersion 0x00020000
-#endif
+
+boolean_t coprocessor_cross_panic_enabled = TRUE;
+#endif /* !CONFIG_EMBEDDED */
 
 void printDictionaryKeys (OSDictionary * inDictionary, char * inMsg);
 static void getCStringForObject(OSObject *inObj, char *outStr, size_t outStrLen);
@@ -111,7 +114,7 @@ bool IOPlatformExpert::start( IOService * provider )
     OSData *		busFrequency;
     uint32_t		debugFlags;
 
-#if defined(__x86_64__)
+#if !CONFIG_EMBEDDED
     IORegistryEntry	*platform_entry = NULL;
     OSData		*coprocessor_version_obj = NULL;
     uint64_t		coprocessor_version = 0;
@@ -167,7 +170,7 @@ bool IOPlatformExpert::start( IOService * provider )
         }
     }
 
-#if defined(__x86_64__)
+#if !CONFIG_EMBEDDED
     platform_entry = IORegistryEntry::fromPath(kIODeviceTreePlane ":/efi/platform");
     if (platform_entry != NULL) {
         coprocessor_version_obj = OSDynamicCast(OSData, platform_entry->getProperty("apple-coprocessor-version"));
@@ -175,11 +178,12 @@ bool IOPlatformExpert::start( IOService * provider )
             memcpy(&coprocessor_version, coprocessor_version_obj->getBytesNoCopy(), coprocessor_version_obj->getLength());
             if (coprocessor_version >= kCoprocessorMinVersion) {
                 coprocessor_paniclog_flush = TRUE;
+                extended_debug_log_init();
             }
         }
         platform_entry->release();
     }
-#endif /* defined(__x86_64__) */
+#endif /* !CONFIG_EMBEDDED */
 
     return( configure(provider) );
 }
@@ -877,6 +881,11 @@ int PEHaltRestart(unsigned int type)
            // Notify any listeners that we're done collecting
            // panic data before we call through to do the restart
            IOCPURunPlatformPanicActions(kPEPanicEnd);
+
+           // Callout to shutdown the disk driver once we've returned from the
+           // kPEPanicEnd callback (and we know all core dumps on this system
+           // are complete).
+           IOCPURunPlatformPanicActions(kPEPanicDiskShutdown);
        }
 
        // Do an initial sync to flush as much panic data as possible,
@@ -888,12 +897,21 @@ int PEHaltRestart(unsigned int type)
        PE_sync_panic_buffers();
    }
    else if (type == kPEPanicEnd) {
-       IOCPURunPlatformPanicActions(type);
+#if !CONFIG_EMBEDDED
+        if (coprocessor_cross_panic_enabled)
+#endif
+            IOCPURunPlatformPanicActions(type);
+
    } else if (type == kPEPanicBegin) {
-       // Only call the kPEPanicBegin callout once
-       if (!panic_begin_called) {
-           panic_begin_called = TRUE;
-           IOCPURunPlatformPanicActions(type);
+#if !CONFIG_EMBEDDED
+       if (coprocessor_cross_panic_enabled)
+#endif
+       {
+           // Only call the kPEPanicBegin callout once
+           if (!panic_begin_called) {
+               panic_begin_called = TRUE;
+               IOCPURunPlatformPanicActions(type);
+           }
        }
    }
 
@@ -1156,6 +1174,27 @@ void IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
         entry->release( );
     }
 #else /* !CONFIG_EMBEDDED */
+   /*
+    * If we have panic debugging enabled and a prod-fused coprocessor,
+    * disable cross panics so that the co-processor doesn't cause the system
+    * to reset when we enter the debugger or hit a panic on the x86 side.
+    */
+    if ( panicDebugging )
+    {
+        entry = IORegistryEntry::fromPath( "/options", gIODTPlane );
+        if ( entry )
+        {
+            data = OSDynamicCast( OSData, entry->getProperty( "EffectiveProductionStatus" ) );
+            if ( data  && ( data->getLength( ) == sizeof( UInt8 ) ) ) {
+                    UInt8 *isProdFused = (UInt8 *) data->getBytesNoCopy( );
+                    if ( *isProdFused ) {
+                        coprocessor_cross_panic_enabled = FALSE;
+                    }
+            }
+            entry->release( );
+        }
+    }
+
     entry = IORegistryEntry::fromPath( "/efi/platform", gIODTPlane );
     if ( entry )
     {

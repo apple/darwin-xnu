@@ -45,7 +45,7 @@
 
 /* XXX these should be in a common header somwhere, but aren't */
 extern int chrtoblk_set(int, int);
-extern vm_offset_t kmem_mb_alloc(vm_map_t, int, int);
+extern vm_offset_t kmem_mb_alloc(vm_map_t, int, int, kern_return_t *);
 
 /* XXX most of these just exist to export; there's no good header for them*/
 void pcb_synch(void);
@@ -58,7 +58,7 @@ lck_grp_t * devsw_lock_grp;
 int dmmin, dmmax, dmtext;
 
 vm_offset_t
-kmem_mb_alloc(vm_map_t mbmap, int size, int physContig)
+kmem_mb_alloc(vm_map_t mbmap, int size, int physContig, kern_return_t *err)
 {
 	vm_offset_t addr = 0;
 	kern_return_t kr = KERN_SUCCESS;
@@ -70,6 +70,8 @@ kmem_mb_alloc(vm_map_t mbmap, int size, int physContig)
 
 	if (kr != KERN_SUCCESS)
 		addr = 0;
+	if (err)
+		*err = kr;
 
 	return addr;
 }

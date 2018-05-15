@@ -1138,8 +1138,16 @@ IODMACommand::genIOVMSegments(uint32_t op,
 	internalState->fIOVMAddrValid = state->fIOVMAddr = 0;
 	internalState->fNextRemapPage                    = NULL;
 	internalState->fNewMD	                         = false;
-	state->fMapped                                   = (0 != fMapper);
 	mdOp                                             = kIOMDFirstSegment;
+	if (fMapper)
+	{
+	    if (internalState->fLocalMapperAllocValid)
+	    {
+		state->fMapped = kIOMDDMAWalkMappedLocal;
+		state->fMappedBase = internalState->fLocalMapperAlloc;
+	    }
+	    else state->fMapped = true;
+	}
     };
 	
     UInt32    segIndex = 0;

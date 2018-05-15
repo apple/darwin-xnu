@@ -99,7 +99,6 @@ __doprnt(
 extern void cons_putc_locked(char);
 extern void bsd_log_lock(void);
 extern void bsd_log_unlock(void);
-extern void logwakeup();
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */

@@ -2193,7 +2193,8 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 
     isP = (InternalState *) vData;
     UInt offset = isP->fIO.fOffset;
-    bool mapped = isP->fIO.fMapped;
+    uint8_t mapped = isP->fIO.fMapped;
+    uint64_t mappedBase;
 
     if (mapped && (kIOMemoryRemote & _flags)) return (kIOReturnNotAttached);
 
@@ -2218,6 +2219,20 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 	}
     }
 
+    if (kIOMDDMAWalkMappedLocal == mapped) mappedBase = isP->fIO.fMappedBase;
+    else if (mapped)
+    {
+	if (IOMapper::gSystem
+		&& (!(kIOMemoryHostOnly & _flags))
+		&& _memoryEntries
+		&& (dataP = getDataP(_memoryEntries))
+		&& dataP->fMappedBaseValid)
+	{
+	    mappedBase = dataP->fMappedBase;
+	}
+	else mapped = 0;
+    }
+
     if (offset >= _length)
 	return (offset == _length)? kIOReturnOverrun : kIOReturnInternalError;
 
@@ -2232,7 +2247,6 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 
     UInt length;
     UInt64 address;
-
 
     if ( (_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical) {
 
@@ -2250,10 +2264,9 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 	length   = off2Ind - offset;
 	address  = physP[ind - 1].address + len - length;
 
-	if (true && mapped && _memoryEntries 
-		&& (dataP = getDataP(_memoryEntries)) && dataP->fMappedBaseValid)
+	if (true && mapped)
 	{
-	    address = dataP->fMappedBase + offset;
+	    address = mappedBase + offset;
 	}
 	else
 	{
@@ -2287,10 +2300,9 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 	length   = off2Ind - offset;
 	address  = physP[ind - 1].address + len - length;
 
-	if (true && mapped && _memoryEntries 
-		&& (dataP = getDataP(_memoryEntries)) && dataP->fMappedBaseValid)
+	if (true && mapped)
 	{
-	    address = dataP->fMappedBase + offset;
+	    address = mappedBase + offset;
 	}
 	else
 	{
@@ -2339,9 +2351,9 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 
 	// If a mapped address is requested and this is a pre-mapped IOPL
 	// then just need to compute an offset relative to the mapped base.
-	if (mapped && dataP->fMappedBaseValid) {
+	if (mapped) {
 	    offset += (ioplInfo.fPageOffset & PAGE_MASK);
-	    address = trunc_page_64(dataP->fMappedBase) + ptoa_64(ioplInfo.fMappedPage) + offset;
+	    address = trunc_page_64(mappedBase) + ptoa_64(ioplInfo.fMappedPage) + offset;
 	    continue;	// Done leave do/while(false) now
 	}
 
@@ -3084,14 +3096,15 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
 
         for (UInt range = 0; range < _rangesCount; range++) {
             ioPLBlock iopl;
-            mach_vm_address_t startPage;
+            mach_vm_address_t startPage, startPageOffset;
             mach_vm_size_t    numBytes;
             ppnum_t highPage = 0;
 
             // Get the startPage address and length of vec[range]
             getAddrLenForInd(startPage, numBytes, type, vec, range);
-            iopl.fPageOffset = startPage & PAGE_MASK;
-            numBytes += iopl.fPageOffset;
+            startPageOffset = startPage & PAGE_MASK;
+            iopl.fPageOffset = startPageOffset;
+            numBytes += startPageOffset;
             startPage = trunc_page_64(startPage);
 
             if (mapper)
@@ -3186,7 +3199,7 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
 
                 iopl.fIOMDOffset = mdOffset;
                 iopl.fPageInfo = pageIndex;
-                if (mapper && pageIndex && (page_mask & (mdOffset + iopl.fPageOffset))) dataP->fDiscontig = true;
+                if (mapper && pageIndex && (page_mask & (mdOffset + startPageOffset))) dataP->fDiscontig = true;
 
                 if (!_memoryEntries->appendBytes(&iopl, sizeof(iopl))) {
                     // Clean up partial created and unsaved iopl

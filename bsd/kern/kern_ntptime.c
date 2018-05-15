@@ -80,6 +80,7 @@
 #include <security/mac_framework.h>
 #endif
 #include <IOKit/IOBSD.h>
+#include <os/log.h>
 
 typedef int64_t l_fp;
 #define L_ADD(v, u)	((v) += (u))
@@ -216,6 +217,11 @@ static void ntp_loop_update_call(void);
 static void refresh_ntp_loop(void);
 static void start_ntp_loop(void);
 
+#if DEVELOPMENT || DEBUG
+uint32_t g_should_log_clock_adjustments = 0;
+SYSCTL_INT(_kern, OID_AUTO, log_clock_adjustments, CTLFLAG_RW | CTLFLAG_LOCKED, &g_should_log_clock_adjustments, 0, "enable kernel clock adjustment logging");
+#endif
+
 static bool
 ntp_is_time_error(int tsl)
 {
@@ -326,6 +332,12 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, __unused int32_t *retv
 	if (error)
 		return (error);
 
+#if DEVELOPEMNT || DEBUG
+	if (g_should_log_clock_adjustments) {
+		os_log(OS_LOG_DEFAULT, "%s:BEFORE modes %u offset %ld freq %ld status %d constant %ld time_adjtime %lld\n",
+		       __func__, ntv.modes, ntv.offset, ntv.freq, ntv.status, ntv.constant, time_adjtime);
+	}
+#endif
 	/*
 	 * Update selected clock variables - only the superuser can
 	 * change anything. Note that there is no error checking here on
@@ -414,6 +426,13 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, __unused int32_t *retv
 	}
 
 	ret = ntp_is_time_error(time_status) ? TIME_ERROR : time_state;
+
+#if DEVELOPEMNT || DEBUG
+	if (g_should_log_clock_adjustments) {
+		os_log(OS_LOG_DEFAULT, "%s:AFTER offset %lld freq %lld status %d constant %ld time_adjtime %lld\n",
+		       __func__, time_offset, time_freq, time_status, time_constant, time_adjtime);
+	}
+#endif
 
 	/*
 	 * Retrieve all clock variables. Note that the TAI offset is
@@ -535,6 +554,18 @@ ntp_update_second(int64_t *adjustment, clock_sec_t secs)
 		updated = 0;
 	}
 
+#if DEVELOPEMNT || DEBUG
+	if (g_should_log_clock_adjustments) {
+		int64_t nano = (time_adj > 0)? time_adj >> 32 : -((-time_adj) >> 32); 
+		int64_t frac = (time_adj > 0)? ((uint32_t) time_adj) : -((uint32_t) (-time_adj)); 
+
+		os_log(OS_LOG_DEFAULT, "%s:AFTER offset %lld (%lld) freq %lld status %d "
+		       "constant %ld time_adjtime %lld nano %lld frac %lld adj %lld\n",
+		       __func__, time_offset, (time_offset > 0)? time_offset >> 32 : -((-time_offset) >> 32),
+		       time_freq, time_status, time_constant, time_adjtime, nano, frac, time_adj);
+	}
+#endif
+
 	*adjustment = time_adj;
 }
 
@@ -622,6 +653,12 @@ kern_adjtime(struct timeval *delta)
 	NTP_LOCK(enable);
 	ltr = time_adjtime;
 	time_adjtime = ltw;
+#if DEVELOPEMNT || DEBUG
+	if (g_should_log_clock_adjustments) {
+		os_log(OS_LOG_DEFAULT, "%s:AFTER offset %lld freq %lld status %d constant %ld time_adjtime %lld\n",
+		       __func__, time_offset, time_freq, time_status, time_constant, time_adjtime);
+	}
+#endif
 	NTP_UNLOCK(enable);
 
 	atv.tv_sec = ltr / (int64_t)USEC_PER_SEC;
