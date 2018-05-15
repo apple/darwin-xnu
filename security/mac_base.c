@@ -2026,4 +2026,10 @@ int mac_iokit_check_nvram_set(kauth_cred_t cred __unused, const char *name __unu
 	return 0;
 }
 
+int mac_vnode_check_trigger_resolve(vfs_context_t ctx __unused, struct vnode *dvp __unused, struct componentname *cnp __unused);
+int mac_vnode_check_trigger_resolve(vfs_context_t ctx __unused, struct vnode *dvp __unused, struct componentname *cnp __unused)
+{
+	return 0;
+}
+
 #endif /* !MAC */

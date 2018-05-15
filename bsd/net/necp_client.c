@@ -3500,7 +3500,7 @@ necp_client_copy_internal(struct necp_client *client, bool client_is_observed, s
 		LIST_FOREACH(flow, &client->flow_list, flow_chain) {
 			if (flow->nexus || (flow->socket && flow->assigned)) {
 				// Write TLV headers
-				struct necp_client_nexus_flow_header header;
+				struct necp_client_nexus_flow_header header = {};
 				u_int32_t length = 0;
 				u_int32_t flags = 0;
 				u_int8_t tfo_cookie_len = 0;
@@ -3603,7 +3603,7 @@ necp_client_copy_internal(struct necp_client *client, bool client_is_observed, s
 
 				/* Read the protocol event and reset it */
 				if (flow->has_protoctl_event) {
-					struct necp_client_flow_protoctl_event_header protoctl_event_header;
+					struct necp_client_flow_protoctl_event_header protoctl_event_header = {};
 
 					type = NECP_CLIENT_RESULT_PROTO_CTL_EVENT;
 					length = sizeof(protoctl_event_header.protoctl_event);
@@ -4546,7 +4546,7 @@ necp_match_policy(struct proc *p, struct necp_match_policy_args *uap, int32_t *r
 {
 #pragma unused(retval)
 	u_int8_t *parameters = NULL;
-	struct necp_aggregate_result returned_result;
+	struct necp_aggregate_result returned_result = {};
 	int error = 0;
 
 	if (uap == NULL) {

@@ -534,11 +534,13 @@ int	mac_vnode_check_setowner(vfs_context_t ctx, struct vnode *vp,
 int	mac_vnode_check_setutimes(vfs_context_t ctx, struct vnode *vp,
 	    struct timespec atime, struct timespec mtime);
 int	mac_vnode_check_signature(struct vnode *vp,
-		struct cs_blob *cs_blob, struct image_params *imgp,
-		unsigned int *cs_flags, unsigned int *signer_type,
-		int flags);
+	    struct cs_blob *cs_blob, struct image_params *imgp,
+	    unsigned int *cs_flags, unsigned int *signer_type,
+	    int flags);
 int	mac_vnode_check_stat(vfs_context_t ctx,
 	    kauth_cred_t file_cred, struct vnode *vp);
+int	mac_vnode_check_trigger_resolve(vfs_context_t ctx, struct vnode *dvp,
+	    struct componentname *cnp);
 int	mac_vnode_check_truncate(vfs_context_t ctx,
 	    kauth_cred_t file_cred, struct vnode *vp);
 int	mac_vnode_check_uipc_bind(vfs_context_t ctx, struct vnode *dvp,

@@ -998,7 +998,7 @@ gid_t persona_get_gid(struct persona *persona)
 	return gid;
 }
 
-int persona_set_groups(struct persona *persona, gid_t *groups, int ngroups, uid_t gmuid)
+int persona_set_groups(struct persona *persona, gid_t *groups, unsigned ngroups, uid_t gmuid)
 {
 	int ret = 0;
 	kauth_cred_t my_cred, new_cred;
@@ -1020,7 +1020,7 @@ int persona_set_groups(struct persona *persona, gid_t *groups, int ngroups, uid_
 
 	my_cred = persona->pna_cred;
 	kauth_cred_ref(my_cred);
-	new_cred = kauth_cred_setgroups(my_cred, groups, ngroups, gmuid);
+	new_cred = kauth_cred_setgroups(my_cred, groups, (int)ngroups, gmuid);
 	if (new_cred != my_cred)
 		persona->pna_cred = new_cred;
 	kauth_cred_unref(&my_cred);
@@ -1030,17 +1030,19 @@ out_unlock:
 	return ret;
 }
 
-int persona_get_groups(struct persona *persona, int *ngroups, gid_t *groups, int groups_sz)
+int persona_get_groups(struct persona *persona, unsigned *ngroups, gid_t *groups, unsigned groups_sz)
 {
 	int ret = EINVAL;
-	if (!persona || !persona->pna_cred || !groups || !ngroups)
+	if (!persona || !persona->pna_cred || !groups || !ngroups || groups_sz > NGROUPS)
 		return EINVAL;
 
 	*ngroups = groups_sz;
 
 	persona_lock(persona);
 	if (persona_valid(persona)) {
-		kauth_cred_getgroups(persona->pna_cred, groups, ngroups);
+		int kauth_ngroups = (int)groups_sz;
+		kauth_cred_getgroups(persona->pna_cred, groups, &kauth_ngroups);
+		*ngroups = (unsigned)kauth_ngroups;
 		ret = 0;
 	}
 	persona_unlock(persona);

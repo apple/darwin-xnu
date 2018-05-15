@@ -1697,7 +1697,7 @@ inp_findmoptions(struct inpcb *inp)
 static int
 inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 {
-	struct __msfilterreq64	msfr, msfr64;
+	struct __msfilterreq64	msfr = {}, msfr64;
 	struct __msfilterreq32	msfr32;
 	struct sockaddr_in	*gsa;
 	struct ifnet		*ifp;
@@ -2719,7 +2719,7 @@ inp_set_multicast_if(struct inpcb *inp, struct sockopt *sopt)
 static int
 inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 {
-	struct __msfilterreq64	 msfr, msfr64;
+	struct __msfilterreq64	 msfr = {}, msfr64;
 	struct __msfilterreq32	 msfr32;
 	struct sockaddr_in	*gsa;
 	struct ifnet		*ifp;
@@ -3126,7 +3126,7 @@ sysctl_ip_mcast_filters SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp)
 
-	struct in_addr			 src, group;
+	struct in_addr			 src = {}, group;
 	struct ifnet			*ifp;
 	struct in_multi			*inm;
 	struct in_multistep		step;

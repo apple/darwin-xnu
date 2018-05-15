@@ -605,7 +605,9 @@ iokit_client_died( io_object_t obj, ipc_port_t /* port */,
 	if( (client = OSDynamicCast( IOUserClient, obj )))
 	{
 	    IOStatisticsClientCall();
+	    IOLockLock(client->lock);
 	    client->clientDied();
+	    IOLockUnlock(client->lock);
         }
     }
     else if( IKOT_IOKIT_OBJECT == type)
@@ -1544,6 +1546,7 @@ iokit_task_terminate(task_t task)
 void IOUserClient::free()
 {
     if( mappings) mappings->release();
+    if (lock) IOLockFree(lock);
 		
     IOStatisticsUnregisterCounter();
 
@@ -3465,6 +3468,7 @@ kern_return_t is_io_service_open_extended(
 
 	    client->sharedInstance = (0 != client->getProperty(kIOUserClientSharedInstanceKey));
 	    client->closed = false;
+	    client->lock = IOLockAlloc();
 
 	    disallowAccess = (crossEndian
 		&& (kOSBooleanTrue != service->getProperty(kIOUserClientCrossEndianCompatibleKey))
@@ -3516,7 +3520,9 @@ kern_return_t is_io_service_close(
 
     if (client->sharedInstance || OSCompareAndSwap8(0, 1, &client->closed)) 
     {
+	IOLockLock(client->lock);
 	client->clientClose();
+	IOLockUnlock(client->lock);
     }
     else
     {
@@ -3552,11 +3558,15 @@ kern_return_t is_io_connect_set_notification_port(
 	mach_port_t port,
 	uint32_t reference)
 {
+    kern_return_t ret;
     CHECK( IOUserClient, connection, client );
 
     IOStatisticsClientCall();
-    return( client->registerNotificationPort( port, notification_type,
-						(io_user_reference_t) reference ));
+    IOLockLock(client->lock);
+    ret = client->registerNotificationPort( port, notification_type,
+						(io_user_reference_t) reference );
+    IOLockUnlock(client->lock);
+    return (ret);
 }
 
 /* Routine io_connect_set_notification_port */
@@ -3566,11 +3576,15 @@ kern_return_t is_io_connect_set_notification_port_64(
 	mach_port_t port,
 	io_user_reference_t reference)
 {
+    kern_return_t ret;
     CHECK( IOUserClient, connection, client );
 
     IOStatisticsClientCall();
-    return( client->registerNotificationPort( port, notification_type,
-						reference ));
+    IOLockLock(client->lock);
+    ret = client->registerNotificationPort( port, notification_type,
+						reference );
+    IOLockUnlock(client->lock);
+    return (ret);
 }
 
 /* Routine io_connect_map_memory_into_task */

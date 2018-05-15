@@ -1619,7 +1619,7 @@ in6p_findmoptions(struct inpcb *inp)
 static int
 in6p_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 {
-	struct __msfilterreq64	msfr, msfr64;
+	struct __msfilterreq64	msfr = {}, msfr64;
 	struct __msfilterreq32	msfr32;
 	struct sockaddr_in6	*gsa;
 	struct ifnet		*ifp;
@@ -2650,7 +2650,7 @@ in6p_set_multicast_if(struct inpcb *inp, struct sockopt *sopt)
 static int
 in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 {
-	struct __msfilterreq64	 msfr, msfr64;
+	struct __msfilterreq64	 msfr = {}, msfr64;
 	struct __msfilterreq32	 msfr32;
 	struct sockaddr_in6	*gsa;
 	struct ifnet		*ifp;

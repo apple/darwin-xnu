@@ -364,6 +364,10 @@ extern uint64_t proc_did_throttle(proc_t);
 
 extern void proc_coalitionids(proc_t, uint64_t [COALITION_NUM_TYPES]);
 
+#ifdef CONFIG_32BIT_TELEMETRY
+extern void proc_log_32bit_telemetry(proc_t p);
+#endif /* CONFIG_32BIT_TELEMETRY */
+
 #endif /* XNU_KERNEL_PRIVATE*/
 
 #ifdef KERNEL_PRIVATE

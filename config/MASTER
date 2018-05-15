@@ -735,3 +735,8 @@ options		CONFIG_REQUIRES_U32_MUNGING	# incoming U32 argument structures must be 
 #
 options		COPYOUT_SHIM			# Shim for copyout memory analysis via kext #<copyout_shim>
 
+
+#
+# Telemetry for 32-bit process launch
+#
+options		CONFIG_32BIT_TELEMETRY # # <config_32bit_telemetry>

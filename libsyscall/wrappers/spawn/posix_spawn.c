@@ -1730,7 +1730,7 @@ posix_spawnattr_set_persona_groups_np(const posix_spawnattr_t * __restrict attr,
 	if (gidarray == NULL)
 		return EINVAL;
 
-	if (ngroups > NGROUPS)
+	if (ngroups > NGROUPS || ngroups < 0)
 		return EINVAL;
 
 	psattr = *(_posix_spawnattr_t *)attr;

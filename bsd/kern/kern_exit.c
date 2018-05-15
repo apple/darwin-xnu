@@ -1791,14 +1791,14 @@ loop1:
 					error = ENOMEM;
 				} else {
 					if (IS_64BIT_PROCESS(q)) {
-						struct user64_rusage	my_rusage;
+						struct user64_rusage	my_rusage = {};
 						munge_user64_rusage(&p->p_ru->ru, &my_rusage);
 						error = copyout((caddr_t)&my_rusage,
 							uap->rusage,
 							sizeof (my_rusage));
 					}
 					else {
-						struct user32_rusage	my_rusage;
+						struct user32_rusage	my_rusage = {};
 						munge_user32_rusage(&p->p_ru->ru, &my_rusage);
 						error = copyout((caddr_t)&my_rusage,
 							uap->rusage,

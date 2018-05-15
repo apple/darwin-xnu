@@ -325,7 +325,7 @@ cs_system_require_lv(void)
 /*
  * Function: csblob_get_base_offset
  *
- * Description: This function returns the base offset into the Mach-O binary
+ * Description: This function returns the base offset into the (possibly universal) binary
  *		for a given blob.
 */
 
@@ -413,11 +413,15 @@ csproc_get_blob(struct proc *p)
 	if (NULL == p->p_textvp)
 		return NULL;
 
+	if ((p->p_csflags & CS_SIGNED) == 0) {
+		return NULL;
+	}
+
 	return ubc_cs_blob_get(p->p_textvp, -1, p->p_textoff);
 }
 
 /*
- * Function: csproc_get_blob
+ * Function: csvnode_get_blob
  *
  * Description: This function returns the cs_blob
  *		for the vnode vp
@@ -579,7 +583,9 @@ csproc_get_platform_binary(struct proc *p)
 int
 csproc_get_platform_path(struct proc *p)
 {
-	struct cs_blob *csblob = csproc_get_blob(p);
+	struct cs_blob *csblob;
+
+    csblob = csproc_get_blob(p);
 
 	return (csblob == NULL) ? 0 : csblob->csb_platform_path;
 }
@@ -858,6 +864,10 @@ cs_entitlements_blob_get(proc_t p, void **out_start, size_t *out_length)
 	*out_start = NULL;
 	*out_length = 0;
 
+	if ((p->p_csflags & CS_SIGNED) == 0) {
+		return 0;
+	}
+
 	if (NULL == p->p_textvp)
 		return EINVAL;
 
@@ -878,6 +888,10 @@ cs_identity_get(proc_t p)
 {
 	struct cs_blob *csblob;
 
+	if ((p->p_csflags & CS_SIGNED) == 0) {
+		return NULL;
+	}
+
 	if (NULL == p->p_textvp)
 		return NULL;
 
@@ -887,15 +901,13 @@ cs_identity_get(proc_t p)
 	return csblob_get_identity(csblob);
 }
 
-
-/* Retrieve the codesign blob for a process.
- * Returns:
- *   EINVAL	no text vnode associated with the process
- *   0		no error occurred
+/*
+ * DO NOT USE THIS FUNCTION!
+ * Use the properly guarded csproc_get_blob instead.
  *
- * On success, out_start and out_length will point to the
- * cms blob if found; or will be set to NULL/zero
- * if there were no blob.
+ * This is currently here to allow detached signatures to work
+ * properly. The only user of this function is also checking
+ * for CS_VALID.
  */
 
 int
@@ -926,6 +938,10 @@ uint8_t *
 cs_get_cdhash(struct proc *p)
 {
 	struct cs_blob *csblob;
+
+	if ((p->p_csflags & CS_SIGNED) == 0) {
+		return NULL;
+	}
 
 	if (NULL == p->p_textvp)
 		return NULL;

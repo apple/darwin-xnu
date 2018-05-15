@@ -3492,7 +3492,7 @@ again:
 	if (space < req->oldlen)
 		return (ENOMEM);
 
-	MALLOC(fsidlst, fsid_t *, req->oldlen, M_TEMP, M_WAITOK);
+	MALLOC(fsidlst, fsid_t *, req->oldlen, M_TEMP, M_WAITOK | M_ZERO);
 	if (fsidlst == NULL) {
 		return (ENOMEM);
 	}
@@ -3861,7 +3861,7 @@ sysctl_vfs_generic_conf SYSCTL_HANDLER_ARGS
 {
 	int *name, namelen;
 	struct vfstable *vfsp;
-	struct vfsconf vfsc;
+	struct vfsconf vfsc = {};
 	
 	(void)oidp;
 	name = arg1;
@@ -9502,6 +9502,12 @@ vnode_trigger_resolve(vnode_t vp, struct nameidata *ndp, vfs_context_t ctx)
 	}
 
 	lck_mtx_unlock(&rp->vr_lock);
+
+#if CONFIG_MACF
+	int rv = mac_vnode_check_trigger_resolve(ctx, vp, &ndp->ni_cnd);
+	if (rv != 0)
+		return rv;
+#endif
 
 	/*
 	 * XXX

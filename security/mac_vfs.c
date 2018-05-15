@@ -1700,6 +1700,25 @@ mac_vnode_check_stat(vfs_context_t ctx, struct ucred *file_cred,
 }
 
 int
+mac_vnode_check_trigger_resolve(vfs_context_t ctx, struct vnode *dvp,
+    struct componentname *cnp)
+{
+	kauth_cred_t cred;
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_vnode_enforce)
+		return 0;
+#endif
+	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
+	MAC_CHECK(vnode_check_trigger_resolve, cred, dvp, dvp->v_label, cnp);
+	return (error);
+}
+
+int
 mac_vnode_check_truncate(vfs_context_t ctx, struct ucred *file_cred,
     struct vnode *vp)
 {

@@ -5500,13 +5500,13 @@ fstatat_internal(vfs_context_t ctx, user_addr_t path, user_addr_t ub,
 	union {
 		struct stat sb;
 		struct stat64 sb64;
-	} source;
+	} source = {};
 	union {
 		struct user64_stat user64_sb;
 		struct user32_stat user32_sb;
 		struct user64_stat64 user64_sb64;
 		struct user32_stat64 user32_sb64;
-	} dest;
+	} dest = {};
 	caddr_t sbp;
 	int error, my_size;
 	kauth_filesec_t fsec;

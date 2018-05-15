@@ -112,6 +112,10 @@
 #include <sys/bsdtask_info.h>
 #include <sys/persona.h>
 
+#ifdef CONFIG_32BIT_TELEMETRY
+#include <sys/kasl.h>
+#endif /* CONFIG_32BIT_TELEMETRY */
+
 #if CONFIG_CSR
 #include <sys/csr.h>
 #endif
@@ -125,6 +129,10 @@
 #endif
 
 #include <libkern/crypto/sha1.h>
+
+#ifdef CONFIG_32BIT_TELEMETRY
+#define MAX_32BIT_EXEC_SIG_SIZE 160
+#endif /* CONFIG_32BIT_TELEMETRY */
 
 /*
  * Structure associated with user cacheing.
@@ -1155,7 +1163,7 @@ proc_getexecutablevnode(proc_t p)
 		if (vnode_getwithref(tvp) == 0) {
 			return tvp;
 		}
-	}       
+	}
 
 	return NULLVP;
 }
@@ -3431,3 +3439,80 @@ proc_get_uthread_uu_threadlist(void * uthread_v)
 	uthread_t uth = (uthread_t)uthread_v;
 	return (uth != NULL) ? uth->uu_threadlist : NULL;
 }
+
+#ifdef CONFIG_32BIT_TELEMETRY
+void
+proc_log_32bit_telemetry(proc_t p)
+{
+	/* Gather info */
+	char signature_buf[MAX_32BIT_EXEC_SIG_SIZE] = { 0 };
+	char * signature_cur_end = &signature_buf[0];
+	char * signature_buf_end = &signature_buf[MAX_32BIT_EXEC_SIG_SIZE - 1];
+	int bytes_printed = 0;
+
+	const char * teamid = NULL;
+	const char * identity = NULL;
+	struct cs_blob * csblob = NULL;
+
+	proc_list_lock();
+
+	/*
+	 * Get proc name and parent proc name; if the parent execs, we'll get a
+	 * garbled name.
+	 */
+	bytes_printed = snprintf(signature_cur_end,
+	                         signature_buf_end - signature_cur_end,
+	                         "%s,%s,", p->p_name,
+	                         (p->p_pptr ? p->p_pptr->p_name : ""));
+
+	if (bytes_printed > 0) {
+		signature_cur_end += bytes_printed;
+	}
+
+	proc_list_unlock();
+
+	/* Get developer info. */
+	vnode_t v = proc_getexecutablevnode(p);
+
+	if (v) {
+		csblob = csvnode_get_blob(v, 0);
+
+		if (csblob) {
+			teamid = csblob_get_teamid(csblob);
+			identity = csblob_get_identity(csblob);
+		}
+	}
+
+	if (teamid == NULL) {
+		teamid = "";
+	}
+
+	if (identity == NULL) {
+		identity = "";
+	}
+
+	bytes_printed = snprintf(signature_cur_end,
+	                         signature_buf_end - signature_cur_end,
+	                         "%s,%s", teamid, identity);
+
+	if (bytes_printed > 0) {
+		signature_cur_end += bytes_printed;
+	}
+
+	if (v) {
+		vnode_put(v);
+	}
+
+	/*
+	 * We may want to rate limit here, although the SUMMARIZE key should
+	 * help us aggregate events in userspace.
+	 */
+
+	/* Emit log */
+	kern_asl_msg(LOG_DEBUG, "messagetracer", 3,
+	/* 0 */	"com.apple.message.domain", "com.apple.kernel.32bit_exec",
+	/* 1 */ "com.apple.message.signature", signature_buf,
+	/* 2 */ "com.apple.message.summarize", "YES",
+		NULL);
+}
+#endif /* CONFIG_32BIT_TELEMETRY */

@@ -2190,12 +2190,11 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 
 	case SIOCGIFORDER: {		/* struct if_order */
 		struct if_order *ifo = (struct if_order *)(void *)data;
-
-		u_int32_t ordered_count = if_ordered_count;
+		u_int32_t ordered_count = *((volatile u_int32_t *)&if_ordered_count);
 
 		if (ifo->ifo_count == 0 ||
 			ordered_count == 0) {
-			ifo->ifo_count = ordered_count;
+			ifo->ifo_count = 0;
 		} else if (ifo->ifo_ordered_indices != USER_ADDR_NULL) {
 			u_int32_t count_to_copy =
 			    MIN(ordered_count, ifo->ifo_count);
@@ -2203,7 +2202,7 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 			struct ifnet *ifp = NULL;
 			u_int32_t cursor = 0;
 
-			ordered_indices = _MALLOC(length, M_NECP, M_WAITOK);
+			ordered_indices = _MALLOC(length, M_NECP, M_WAITOK | M_ZERO);
 			if (ordered_indices == NULL) {
 				error = ENOMEM;
 				break;
@@ -2211,7 +2210,8 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 
 			ifnet_head_lock_shared();
 			TAILQ_FOREACH(ifp, &ifnet_ordered_head, if_ordered_link) {
-				if (cursor >= count_to_copy) {
+				if (cursor >= count_to_copy ||
+				    cursor >= if_ordered_count) {
 					break;
 				}
 				ordered_indices[cursor] = ifp->if_index;
@@ -2219,7 +2219,11 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 			}
 			ifnet_head_done();
 
-			ifo->ifo_count = count_to_copy;
+			/* We might have parsed less than the original length
+			 * because the list could have changed.
+			 */
+			length = cursor * sizeof(u_int32_t);
+			ifo->ifo_count = cursor;
 			error = copyout(ordered_indices,
 			    ifo->ifo_ordered_indices, length);
 		} else {
