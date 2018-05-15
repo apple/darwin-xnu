@@ -252,7 +252,7 @@ handle_lowresource(__unused int scope, int action, __unused int policy, int poli
 static int 
 handle_cpuuse(int action, user_addr_t attrp, proc_t proc, __unused uint64_t target_threadid)
 {
-	proc_policy_cpuusage_attr_t	cpuattr;
+	proc_policy_cpuusage_attr_t	cpuattr = { };
 #if CONFIG_MACF || !CONFIG_EMBEDDED
 	proc_t 				curp = current_proc();
 #endif

@@ -249,8 +249,9 @@ typedef uint64_t kqueue_id_t;
 #define EVFILTID_FSEVENT           (EVFILT_SYSCOUNT + 13)
 #define EVFILTID_VN                (EVFILT_SYSCOUNT + 14)
 #define EVFILTID_TTY               (EVFILT_SYSCOUNT + 16)
+#define EVFILTID_PTMX              (EVFILT_SYSCOUNT + 17)
 
-#define EVFILTID_MAX               (EVFILT_SYSCOUNT + 17)
+#define EVFILTID_MAX               (EVFILT_SYSCOUNT + 18)
 
 #endif /* defined(XNU_KERNEL_PRIVATE) */
 

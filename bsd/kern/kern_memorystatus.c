@@ -4123,11 +4123,87 @@ memorystatus_get_task_memory_region_count(task_t task, uint64_t *count)
 	*count = get_task_memory_region_count(task);
 }
 
+#if DEVELOPMENT || DEBUG
+
+/*
+ * Sysctl only used to test memorystatus_allowed_vm_map_fork() path.
+ *   set a new pidwatch value
+ *	or
+ *   get the current pidwatch value
+ */
+
+uint64_t memorystatus_vm_map_fork_pidwatch_val = 0;
+#define MEMORYSTATUS_VM_MAP_FORK_ALLOWED     0x100000000
+#define MEMORYSTATUS_VM_MAP_FORK_NOT_ALLOWED 0x200000000
+
+static int sysctl_memorystatus_vm_map_fork_pidwatch SYSCTL_HANDLER_ARGS {
+#pragma unused(oidp, arg1, arg2)
+
+        uint64_t new_value = 0;
+	uint64_t old_value = 0;
+        int error = 0;
+
+	/*
+	 * The pid is held in the low 32 bits.
+	 * The 'allowed' flags are in the upper 32 bits.
+	 */
+	old_value = memorystatus_vm_map_fork_pidwatch_val;
+
+        error = sysctl_io_number(req, old_value, sizeof(old_value), &new_value, NULL);
+
+        if (error || !req->newptr) {
+		/*
+		 * No new value passed in.
+		 */
+		return(error);
+	}
+
+	/*
+	 * A new pid was passed in via req->newptr.
+	 * Ignore any attempt to set the higher order bits.
+	 */
+	memorystatus_vm_map_fork_pidwatch_val = new_value & 0xFFFFFFFF;
+	printf("memorystatus: pidwatch old_value = 0x%llx, new_value = 0x%llx \n", old_value, new_value);
+
+        return(error);
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, memorystatus_vm_map_fork_pidwatch, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED| CTLFLAG_MASKED,
+            0, 0, sysctl_memorystatus_vm_map_fork_pidwatch, "Q", "get/set pid watched for in vm_map_fork");
+
+
+#define SET_VM_MAP_FORK_PIDWATCH_ALLOWED(task)							\
+MACRO_BEGIN											\
+if (memorystatus_vm_map_fork_pidwatch_val != 0) {						\
+	proc_t p = get_bsdtask_info(task);							\
+	if (p && (memorystatus_vm_map_fork_pidwatch_val == (uint64_t)p->p_pid)) {		\
+		memorystatus_vm_map_fork_pidwatch_val |= MEMORYSTATUS_VM_MAP_FORK_ALLOWED;	\
+	}											\
+}												\
+MACRO_END
+
+#define SET_VM_MAP_FORK_PIDWATCH_NOT_ALLOWED(task)						\
+MACRO_BEGIN											\
+if (memorystatus_vm_map_fork_pidwatch_val != 0) {						\
+	proc_t p = get_bsdtask_info(task);							\
+	if (p && (memorystatus_vm_map_fork_pidwatch_val == (uint64_t)p->p_pid)) {		\
+		memorystatus_vm_map_fork_pidwatch_val |= MEMORYSTATUS_VM_MAP_FORK_NOT_ALLOWED;	\
+	}											\
+}												\
+MACRO_END
+
+#else /* DEVELOPMENT || DEBUG */
+
+#define SET_VM_MAP_FORK_PIDWATCH_ALLOWED(task)
+#define SET_VM_MAP_FORK_PIDWATCH_NOT_ALLOWED(task)
+
+#endif /* DEVELOPMENT || DEBUG */
+
 /*
  * Called during EXC_RESOURCE handling when a process exceeds a soft
  * memory limit.  This is the corpse fork path and here we decide if
  * vm_map_fork will be allowed when creating the corpse.
- * The current task is suspended.
+ * The task being considered is suspended.
  *
  * By default, a vm_map_fork is allowed to proceed.
  *
@@ -4156,6 +4232,7 @@ memorystatus_allowed_vm_map_fork(__unused task_t task)
 	uint64_t max_allowed_bytes = 0;
 
 	if (max_task_footprint_mb == 0) {
+		SET_VM_MAP_FORK_PIDWATCH_ALLOWED(task);
 		return (is_allowed);
 	}
 
@@ -4172,14 +4249,17 @@ memorystatus_allowed_vm_map_fork(__unused task_t task)
 	}
 
 	if (footprint_in_bytes <= max_allowed_bytes) {
+		SET_VM_MAP_FORK_PIDWATCH_ALLOWED(task);
 		return (is_allowed);
 	} else {
 		printf("memorystatus disallowed vm_map_fork %lld  %lld\n", footprint_in_bytes, max_allowed_bytes);
+		SET_VM_MAP_FORK_PIDWATCH_NOT_ALLOWED(task);
 		return (!is_allowed);
 	}
 
 #else /* CONFIG_EMBEDDED */
 
+	SET_VM_MAP_FORK_PIDWATCH_ALLOWED(task);
 	return (is_allowed);
 
 #endif /* CONFIG_EMBEDDED */

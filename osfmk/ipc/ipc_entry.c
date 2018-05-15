@@ -103,8 +103,9 @@ ipc_entry_lookup(
 	if (index <  space->is_table_size) {
                 entry = &space->is_table[index];
 		if (IE_BITS_GEN(entry->ie_bits) != MACH_PORT_GEN(name) ||
-		    IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE)
+		    IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE) {
 			entry = IE_NULL;		
+		}
 	}
 	else {
 		entry = IE_NULL;
@@ -189,10 +190,14 @@ ipc_entry_claim(
 	assert(table->ie_next < space->is_table_size);
 
 	/*
-	 *	Initialize the new entry.  We need only
-	 *	increment the generation number and clear ie_request.
+	 *	Initialize the new entry: increment gencount and reset
+	 *	rollover point if it rolled over, and clear ie_request.
 	 */
-	gen = IE_BITS_NEW_GEN(entry->ie_bits);
+	gen = ipc_entry_new_gen(entry->ie_bits);
+	if (__improbable(ipc_entry_gen_rolled(entry->ie_bits, gen))) {
+		ipc_entry_bits_t roll = ipc_space_get_rollpoint(space);
+		gen = ipc_entry_new_rollpoint(roll);
+	}
 	entry->ie_bits = gen;
 	entry->ie_request = IE_REQ_NONE;
 
@@ -434,7 +439,7 @@ ipc_entry_dealloc(
 
 	if ((index < size) && (entry == &table[index])) {
 		assert(IE_BITS_GEN(entry->ie_bits) == MACH_PORT_GEN(name));
-		entry->ie_bits &= IE_BITS_GEN_MASK;
+		entry->ie_bits &= (IE_BITS_GEN_MASK | IE_BITS_ROLL_MASK);
 		entry->ie_next = table->ie_next;
 		table->ie_next = index;
 		space->is_table_free++;
@@ -611,14 +616,7 @@ ipc_entry_grow_table(
 		return KERN_RESOURCE_SHORTAGE;
 	}
 
-	/* initialize new entries (free chain in backwards order) */
-	for (i = osize; i < size; i++) {
-		table[i].ie_object = IO_NULL;
-		table[i].ie_bits = IE_BITS_GEN_MASK;
-		table[i].ie_index = 0;
-		table[i].ie_next = i + 1;
-	}
-	table[size-1].ie_next = 0;
+	ipc_space_rand_freelist(space, table, osize, size);
 
 	/* clear out old entries in new table */
 	memset((void *)table, 0, osize * sizeof(*table));
@@ -771,10 +769,10 @@ mach_port_name_t
 ipc_entry_name_mask(mach_port_name_t name)
 {
 #ifndef NO_PORT_GEN
-	static mach_port_name_t null_name = MACH_PORT_MAKE(0, IE_BITS_NEW_GEN(IE_BITS_GEN_MASK));
+	static mach_port_name_t null_name = MACH_PORT_MAKE(0, IE_BITS_GEN_MASK + IE_BITS_GEN_ONE);
 	return name | null_name;
 #else
-	static mach_port_name_t null_name = MACH_PORT_MAKE(0, ~(IE_BITS_NEW_GEN(IE_BITS_GEN_MASK)));
+	static mach_port_name_t null_name = MACH_PORT_MAKE(0, ~(IE_BITS_GEN_MASK + IE_BITS_GEN_ONE));
 	return name & ~null_name;
 #endif
 }

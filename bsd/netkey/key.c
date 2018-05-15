@@ -9920,7 +9920,7 @@ key_sa_routechange(
 	
 	lck_mtx_lock(sadb_mutex);
 	LIST_FOREACH(sah, &sahtree, chain) {
-		ro = &sah->sa_route;
+		ro = (struct route *)&sah->sa_route;
 		if (ro->ro_rt && dst->sa_len == ro->ro_dst.sa_len
 			&& bcmp(dst, &ro->ro_dst, dst->sa_len) == 0) {
 			ROUTE_RELEASE(ro);

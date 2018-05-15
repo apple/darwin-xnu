@@ -83,7 +83,14 @@
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_right.h>
+#include <prng/random.h>
 #include <string.h>
+
+/* Remove this in the future so port names are less predictable. */
+#define CONFIG_SEMI_RANDOM_ENTRIES
+#ifdef CONFIG_SEMI_RANDOM_ENTRIES
+#define NUM_SEQ_ENTRIES 8
+#endif
 
 zone_t ipc_space_zone;
 ipc_space_t ipc_space_kernel;
@@ -110,6 +117,102 @@ ipc_space_release(
 	is_release(space);
 }
 
+/* 	Routine:		ipc_space_get_rollpoint
+ * 	Purpose:
+ * 		Generate a new gencount rollover point from a space's entropy pool
+ */
+ipc_entry_bits_t
+ipc_space_get_rollpoint(
+	ipc_space_t	space)
+{
+	return random_bool_gen_bits(
+			&space->bool_gen,
+			&space->is_entropy[0],
+			IS_ENTROPY_CNT,
+			IE_BITS_ROLL_BITS);
+}
+
+/*
+ *	Routine:	ipc_entry_rand_freelist
+ *	Purpose:
+ *		Pseudo-randomly permute the order of entries in an IPC space
+ *	Arguments:
+ *		space:	the ipc space to initialize.
+ *		table:	the corresponding ipc table to initialize.
+ *		bottom:	the start of the range to initialize (inclusive).
+ *		top:	the end of the range to initialize (noninclusive).
+ */
+void
+ipc_space_rand_freelist(
+	ipc_space_t		space,
+	ipc_entry_t		table,
+	mach_port_index_t	bottom,
+	mach_port_index_t	top)
+{
+#ifdef CONFIG_SEMI_RANDOM_ENTRIES
+	/*
+	 * Only make sequential entries at the start of the table, and not when
+	 * we're growing the space.
+	 */
+	int at_start = (bottom == 0);
+	ipc_entry_num_t total = 0;
+#endif
+
+	/* First entry in the free list is always free, and is the start of the free list. */
+	mach_port_index_t curr = bottom;
+	bottom++;
+	top--;
+
+	/*
+	 *	Initialize the free list in the table.
+	 *	Add the entries in pseudo-random order and randomly set the generation
+	 *	number, in order to frustrate attacks involving port name reuse.
+	 */
+	while (bottom <= top) {
+		ipc_entry_t entry = &table[curr];
+		int which;
+#ifdef CONFIG_SEMI_RANDOM_ENTRIES
+		/*
+		 * XXX: This is a horrible hack to make sure that randomizing the port
+		 * doesn't break programs that might have (sad) hard-coded values for
+		 * certain port names.
+		 */
+		if (at_start && total++ < NUM_SEQ_ENTRIES)
+			which = 0;
+		else
+#endif
+			which = random_bool_gen_bits(
+						&space->bool_gen,
+						&space->is_entropy[0],
+						IS_ENTROPY_CNT,
+						1);
+
+		mach_port_index_t next;
+		if (which) {
+			next = top;
+			top--;
+		} else {
+			next = bottom;
+			bottom++;
+		}
+
+		/*
+		 * The entry's gencount will roll over on its first allocation, at which
+		 * point a random rollover will be set for the entry.
+		 */
+		entry->ie_bits = IE_BITS_GEN_MASK;
+		entry->ie_next   = next;
+		entry->ie_object = IO_NULL;
+		entry->ie_index  = 0;
+		curr = next;
+	}
+	table[curr].ie_next   = 0;
+	table[curr].ie_object = IO_NULL;
+	table[curr].ie_index  = 0;
+	table[curr].ie_bits   = IE_BITS_GEN_MASK;
+}
+
+
 /*
  *	Routine:	ipc_space_create
  *	Purpose:
@@ -132,7 +235,6 @@ ipc_space_create(
 	ipc_space_t space;
 	ipc_entry_t table;
 	ipc_entry_num_t new_size;
-	mach_port_index_t index;
 
 	space = is_alloc();
 	if (space == IS_NULL)
@@ -147,19 +249,11 @@ ipc_space_create(
 	new_size = initial->its_size;
 	memset((void *) table, 0, new_size * sizeof(struct ipc_entry));
 
-	/*
-	 *	Initialize the free list in the table.
-	 *	Add the entries in reverse order, and
-	 *	set the generation number to -1, so that
-	 *	initial allocations produce "natural" names.
-	 */
-	for (index = 0; index < new_size; index++) {
-		ipc_entry_t entry = &table[index];
+	/* Set to 0 so entropy pool refills */
+	memset((void *) space->is_entropy, 0, sizeof(space->is_entropy));
 
-		entry->ie_bits = IE_BITS_GEN_MASK;
-		entry->ie_next = index+1;
-	}
-	table[new_size-1].ie_next = 0;
+	random_bool_init(&space->bool_gen);
+	ipc_space_rand_freelist(space, table, 0, new_size);
 
 	is_lock_init(space);
 	space->is_bits = 2; /* 2 refs, active, not growing */

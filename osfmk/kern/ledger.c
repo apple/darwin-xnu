@@ -178,8 +178,8 @@ static kern_return_t ledger_perform_blocking(ledger_t l);
 static uint32_t flag_set(volatile uint32_t *flags, uint32_t bit);
 static uint32_t flag_clear(volatile uint32_t *flags, uint32_t bit);
 
-static void ledger_entry_check_new_balance(ledger_t ledger, int entry,
-					   struct ledger_entry *le);
+static void ledger_entry_check_new_balance(thread_t thread, ledger_t ledger,
+                                           int entry, struct ledger_entry *le);
 
 #if 0
 static void
@@ -697,7 +697,8 @@ ledger_refill(uint64_t now, ledger_t ledger, int entry)
 #define TOCKSTAMP_IS_STALE(now, tock) ((((now) - (tock)) < NTOCKS) ? FALSE : TRUE)
 
 void
-ledger_entry_check_new_balance(ledger_t ledger, int entry, struct ledger_entry *le)
+ledger_entry_check_new_balance(thread_t thread, ledger_t ledger,
+                               int entry, struct ledger_entry *le)
 {
 	ledger_amount_t	credit, debit;
 
@@ -749,7 +750,7 @@ ledger_entry_check_new_balance(ledger_t ledger, int entry, struct ledger_entry *
 		if ((le->le_flags & LEDGER_ACTION_BLOCK) ||
 		    (!(le->le_flags & LF_CALLED_BACK) &&
 		    entry_get_callback(ledger, entry))) {
-			set_astledger(current_thread());
+			act_set_astledger_async(thread);
 		}
 	} else {
 		/*
@@ -778,7 +779,7 @@ ledger_entry_check_new_balance(ledger_t ledger, int entry, struct ledger_entry *
 		 			 * set the AST so it can be done before returning
 		 			 * to userland.
 		 			 */
-					set_astledger(current_thread());
+					act_set_astledger_async(thread);
 				}
 			} else {
 				/*
@@ -792,7 +793,7 @@ ledger_entry_check_new_balance(ledger_t ledger, int entry, struct ledger_entry *
 					 * know the ledger balance is now back below
 					 * the warning level.
 					 */
-					set_astledger(current_thread());
+					act_set_astledger_async(thread);
 				}
 			}
 		}
@@ -812,20 +813,19 @@ ledger_entry_check_new_balance(ledger_t ledger, int entry, struct ledger_entry *
 }
 
 void
-ledger_check_new_balance(ledger_t ledger, int entry)
+ledger_check_new_balance(thread_t thread, ledger_t ledger, int entry)
 {
 	struct ledger_entry *le;
 	assert(entry > 0 && entry <= ledger->l_size);
 	le = &ledger->l_entries[entry];
-	ledger_entry_check_new_balance(ledger, entry, le);
+	ledger_entry_check_new_balance(thread, ledger, entry, le);
 }
 
-
 /*
- * Add value to an entry in a ledger.
+ * Add value to an entry in a ledger for a specific thread.
  */
 kern_return_t
-ledger_credit(ledger_t ledger, int entry, ledger_amount_t amount)
+ledger_credit_thread(thread_t thread, ledger_t ledger, int entry, ledger_amount_t amount)
 {
 	ledger_amount_t old, new;
 	struct ledger_entry *le;
@@ -840,10 +840,20 @@ ledger_credit(ledger_t ledger, int entry, ledger_amount_t amount)
 
 	old = OSAddAtomic64(amount, &le->le_credit);
 	new = old + amount;
-	lprintf(("%p Credit %lld->%lld\n", current_thread(), old, new));
-	ledger_entry_check_new_balance(ledger, entry, le);
+	lprintf(("%p Credit %lld->%lld\n", thread, old, new));
+
+	ledger_entry_check_new_balance(thread, ledger, entry, le);
 
 	return (KERN_SUCCESS);
+}
+
+/*
+ * Add value to an entry in a ledger.
+ */
+kern_return_t
+ledger_credit(ledger_t ledger, int entry, ledger_amount_t amount)
+{
+	return ledger_credit_thread(current_thread(), ledger, entry, amount);
 }
 
 /* Add all of one ledger's values into another.
@@ -1285,7 +1295,7 @@ ledger_set_action(ledger_t ledger, int entry, int action)
 }
 
 kern_return_t
-ledger_debit(ledger_t ledger, int entry, ledger_amount_t amount)
+ledger_debit_thread(thread_t thread, ledger_t ledger, int entry, ledger_amount_t amount)
 {
 	struct ledger_entry *le;
 	ledger_amount_t old, new;
@@ -1308,9 +1318,15 @@ ledger_debit(ledger_t ledger, int entry, ledger_amount_t amount)
 	}
 	lprintf(("%p Debit %lld->%lld\n", thread, old, new));
 
-	ledger_entry_check_new_balance(ledger, entry, le);
-	return (KERN_SUCCESS);
+	ledger_entry_check_new_balance(thread, ledger, entry, le);
 
+	return (KERN_SUCCESS);
+}
+
+kern_return_t
+ledger_debit(ledger_t ledger, int entry, ledger_amount_t amount)
+{
+	return ledger_debit_thread(current_thread(), ledger, entry, amount);
 }
 
 void

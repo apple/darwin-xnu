@@ -60,10 +60,19 @@ extern void di_root_ramfile(IORegistryEntry * entry);
 
 #if CONFIG_EMBEDDED
 #define IOPOLLED_COREFILE 	(CONFIG_KDP_INTERACTIVE_DEBUGGING)
-#define kIOCoreDumpPath 	"/private/var/vm/kernelcore"
-#define kIOCoreDumpSize		350ULL*1024ULL*1024ULL
+
+#if defined(XNU_TARGET_OS_BRIDGE)
+#define kIOCoreDumpSize         150ULL*1024ULL*1024ULL
 // leave free space on volume:
-#define kIOCoreDumpFreeSize	350ULL*1024ULL*1024ULL
+#define kIOCoreDumpFreeSize     150ULL*1024ULL*1024ULL
+#define kIOCoreDumpPath         "/private/var/internal/kernelcore"
+#else
+#define kIOCoreDumpSize         350ULL*1024ULL*1024ULL
+// leave free space on volume:
+#define kIOCoreDumpFreeSize     350ULL*1024ULL*1024ULL
+#define kIOCoreDumpPath         "/private/var/vm/kernelcore"
+#endif
+
 #elif DEVELOPMENT
 #define IOPOLLED_COREFILE  	1
 // no sizing
@@ -909,7 +918,13 @@ IOBSDMountChange(struct mount * mp, uint32_t op)
 	    vnode_put(vn);
 	    if (0 != result) break;
 	    if (!pathLen) break;
-	    if (0 != bcmp(path, kIOCoreDumpPath, pathLen - 1)) break;
+#if defined(XNU_TARGET_OS_BRIDGE)
+	    // on bridgeOS systems we put the core in /private/var/internal. We don't
+	    // want to match with /private/var because /private/var/internal is often mounted
+	    // over /private/var
+	    if ((pathLen - 1) < (int) strlen("/private/var/internal")) break;
+#endif
+	    if (0 != strncmp(path, kIOCoreDumpPath, pathLen - 1)) break;
 	    IOOpenPolledCoreFile(kIOCoreDumpPath);
 	    break;
 

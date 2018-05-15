@@ -1160,6 +1160,12 @@ ipc_kmsg_rmqueue(
 
 		queue->ikmq_base = IKM_NULL;
 	} else {
+		if (__improbable(next->ikm_prev != kmsg || prev->ikm_next != kmsg)) {
+			panic("ipc_kmsg_rmqueue: inconsistent prev/next pointers. "
+				"(prev->next: %p, next->prev: %p, kmsg: %p)",
+				prev->ikm_next, next->ikm_prev, kmsg);
+		}
+
 		if (queue->ikmq_base == kmsg)
 			queue->ikmq_base = next;
 

@@ -88,6 +88,17 @@
 
 #include <san/kasan.h>
 
+#if MACH_ASSERT
+int pmap_stats_assert = 1;
+#define PMAP_STATS_ASSERTF(cond, pmap, fmt, ...)		    \
+	MACRO_BEGIN					    \
+	if (pmap_stats_assert && (pmap)->pmap_stats_assert) \
+		assertf(cond, fmt, ##__VA_ARGS__);		    \
+	MACRO_END
+#else /* MACH_ASSERT */
+#define PMAP_STATS_ASSERTF(cond, pmap, fmt, ...)
+#endif /* MACH_ASSERT */
+
 #if DEVELOPMENT || DEBUG
 #define PMAP_FOOTPRINT_SUSPENDED(pmap) ((pmap)->footprint_suspended)
 #else /* DEVELOPMENT || DEBUG */
@@ -366,7 +377,7 @@ SECURITY_READ_ONLY_LATE(vm_map_offset_t) arm64_pmap_max_offset_default = 0x0;
 static uint32_t asid_bitmap[MAX_ASID / (sizeof(uint32_t) * NBBY)] MARK_AS_PMAP_DATA;
 
 #if	(__ARM_VMSA__ > 7)
-SECURITY_READ_ONLY_LATE(pmap_t) u32_sharedpage_pmap;
+SECURITY_READ_ONLY_LATE(pmap_t) sharedpage_pmap;
 #endif
 
 
@@ -975,7 +986,7 @@ static inline tt_entry_t *pmap_tt2e(
 static inline pt_entry_t *pmap_tt3e(
 				pmap_t, vm_map_address_t);
 
-static void pmap_unmap_sharedpage32(
+static void pmap_unmap_sharedpage(
 				pmap_t pmap);
 
 static void pmap_sharedpage_flush_32_to_64(
@@ -1605,10 +1616,32 @@ alloc_asid(
 		if (temp > 0) {
 			temp -= 1;
 			asid_bitmap[asid_bitmap_index] &= ~(1 << temp);
+#if __ARM_KERNEL_PROTECT__
+			/*
+			 * We need two ASIDs: n and (n | 1).  n is used for EL0,
+			 * (n | 1) for EL1.
+			 */
+			unsigned int temp2 = temp | 1;
+			assert(temp2 < MAX_ASID);
+			assert(temp2 < 32);
+			assert(temp2 != temp);
+			assert(asid_bitmap[asid_bitmap_index] & (1 << temp2));
+
+			/* Grab the second ASID. */
+			asid_bitmap[asid_bitmap_index] &= ~(1 << temp2);
+#endif /* __ARM_KERNEL_PROTECT__ */
 			simple_unlock(&pmaps_lock);
 
-			/* We should never vend out physical ASID 0 through this method. */
+			/*
+			 * We should never vend out physical ASID 0 through this
+			 * method, as it belongs to the kernel.
+			 */
 			assert(((asid_bitmap_index * sizeof(uint32_t) * NBBY + temp) % ARM_MAX_ASID) != 0);
+
+#if __ARM_KERNEL_PROTECT__
+			/* Or the kernel EL1 ASID. */
+			assert(((asid_bitmap_index * sizeof(uint32_t) * NBBY + temp) % ARM_MAX_ASID) != 1);
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 			return (asid_bitmap_index * sizeof(uint32_t) * NBBY + temp);
 		}
@@ -1631,6 +1664,13 @@ free_asid(
 
 	simple_lock(&pmaps_lock);
 	setbit(asid, (int *) asid_bitmap);
+
+#if __ARM_KERNEL_PROTECT__
+	assert((asid | 1) < MAX_ASID);
+	assert((asid | 1) != asid);
+	setbit(asid | 1, (int *) asid_bitmap);
+#endif /* __ARM_KERNEL_PROTECT__ */
+
 	simple_unlock(&pmaps_lock);
 }
 
@@ -2510,6 +2550,9 @@ pmap_map_bd_with_options(
 
 	tmplate = pa_to_pte(start) | ARM_PTE_AP((prot & VM_PROT_WRITE) ? AP_RWNA : AP_RONA) |
 	          mem_attr | ARM_PTE_TYPE | ARM_PTE_NX | ARM_PTE_PNX | ARM_PTE_AF;
+#if __ARM_KERNEL_PROTECT__
+	tmplate |= ARM_PTE_NG;
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 	vaddr = virt;
 	paddr = start;
@@ -2554,8 +2597,11 @@ pmap_map_bd(
 	/* not cacheable and not buffered */
 	tmplate = pa_to_pte(start)
 	          | ARM_PTE_TYPE | ARM_PTE_AF | ARM_PTE_NX | ARM_PTE_PNX
-		      | ARM_PTE_AP((prot & VM_PROT_WRITE) ? AP_RWNA : AP_RONA)
+	          | ARM_PTE_AP((prot & VM_PROT_WRITE) ? AP_RWNA : AP_RONA)
 	          | ARM_PTE_ATTRINDX(CACHE_ATTRINDX_DISABLE);
+#if __ARM_KERNEL_PROTECT__
+	tmplate |= ARM_PTE_NG;
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 	vaddr = virt;
 	paddr = start;
@@ -2644,6 +2690,9 @@ scan:
 #else
 		pte |= ARM_PTE_SH;
 #endif
+#if __ARM_KERNEL_PROTECT__
+		pte |= ARM_PTE_NG;
+#endif /* __ARM_KERNEL_PROTECT__ */
 		WRITE_PTE(ptep, pte);
 	}
 	PMAP_UPDATE_TLBS(kernel_pmap, va_start, va_start + len);
@@ -2898,6 +2947,11 @@ pmap_bootstrap(
 	 */
 	for (i = 0; i < MAX_ASID; i += ARM_MAX_ASID) {
 		asid_bitmap[i / (sizeof(uint32_t) * NBBY)] &= ~(1 << (i % (sizeof(uint32_t) * NBBY)));
+
+#if __ARM_KERNEL_PROTECT__
+		assert((i + 1) < MAX_ASID);
+		asid_bitmap[(i + 1) / (sizeof(uint32_t) * NBBY)] &= ~(1 << ((i + 1) % (sizeof(uint32_t) * NBBY)));
+#endif /* __ARM_KERNEL_PROTECT__ */
 	}
 
 	kernel_pmap->asid = 0;
@@ -2928,6 +2982,12 @@ pmap_bootstrap(
 	pmap_nesting_size_max = ARM_NESTING_SIZE_MAX;
 
 	simple_lock_init(&phys_backup_lock, 0);
+
+#if MACH_ASSERT
+	PE_parse_boot_argn("pmap_stats_assert",
+			   &pmap_stats_assert,
+			   sizeof (pmap_stats_assert));
+#endif /* MACH_ASSERT */
 }
 
 
@@ -3231,6 +3291,7 @@ pmap_create_internal(
 	p->nested_region_asid_bitmap_size = 0x0UL;
 
 #if MACH_ASSERT
+	p->pmap_stats_assert = TRUE;
 	p->pmap_pid = 0;
 	strlcpy(p->pmap_procname, "<nil>", sizeof (p->pmap_procname));
 #endif /* MACH_ASSERT */
@@ -3278,9 +3339,31 @@ pmap_set_process_internal(
 
 	pmap->pmap_pid = pid;
 	strlcpy(pmap->pmap_procname, procname, sizeof (pmap->pmap_procname));
-#endif
+	if (!strncmp(procname, "corecaptured", sizeof (pmap->pmap_procname))) {
+		/*
+		 * XXX FBDP
+		 * "corecaptured" somehow triggers some issues that make
+		 * the pmap stats and ledgers to go off track, causing
+		 * some assertion failures and ledger panics.
+		 * Turn that off if the terminating process is "corecaptured".
+		 */
+		pmap->pmap_stats_assert = FALSE;
+		ledger_disable_panic_on_negative(pmap->ledger,
+						 task_ledgers.phys_footprint);
+		ledger_disable_panic_on_negative(pmap->ledger,
+						 task_ledgers.internal);
+		ledger_disable_panic_on_negative(pmap->ledger,
+						 task_ledgers.internal_compressed);
+		ledger_disable_panic_on_negative(pmap->ledger,
+						 task_ledgers.iokit_mapped);
+		ledger_disable_panic_on_negative(pmap->ledger,
+						 task_ledgers.alternate_accounting);
+		ledger_disable_panic_on_negative(pmap->ledger,
+						 task_ledgers.alternate_accounting_compressed);
+	}
+#endif /* MACH_ASSERT */
 }
-#endif
+#endif /* MACH_ASSERT*/
 
 #if MACH_ASSERT
 void
@@ -3513,8 +3596,7 @@ pmap_destroy_internal(
 		return;
 	}
 
-	if (!pmap->is_64bit)
-		pmap_unmap_sharedpage32(pmap);
+	pmap_unmap_sharedpage(pmap);
 
 	if (hw_atomic_sub(&pmap->ref_count, 1) == 0) {
 
@@ -3560,7 +3642,6 @@ pmap_destroy_internal(
 
 
 		assert((tt_free_entry_t*)pmap->tt_entry_free == NULL);
-
 		flush_mmu_tlb_asid((uint64_t)(pmap->asid) << TLBI_ASID_SHIFT);
 		free_asid(pmap->vasid);
 
@@ -4238,7 +4319,8 @@ pmap_remove_range_options(
 		/* sanity checks... */
 #if MACH_ASSERT
 		if (pmap->stats.internal < num_internal) {
-			if ((pmap->stats.internal + pmap->stats.reusable) ==
+			if ((! pmap_stats_assert) ||
+			    (pmap->stats.internal + pmap->stats.reusable) ==
 			    (num_internal + num_reusable)) {
 				num_reusable_mismatch++;
 				printf("pmap_remove_range_options(%p,0x%llx,%p,%p,0x%x): num_internal=%d num_removed=%d num_unwired=%d num_external=%d num_reusable=%d num_compressed=%lld num_alt_internal=%d num_alt_compressed=%lld num_pte_changed=%d stats.internal=%d stats.reusable=%d\n",
@@ -4282,23 +4364,27 @@ pmap_remove_range_options(
 			}
 		}
 #endif /* MACH_ASSERT */
-		assertf(pmap->stats.external >= num_external,
-			"pmap=%p num_external=%d stats.external=%d",
-			pmap, num_external, pmap->stats.external);
-		assertf(pmap->stats.internal >= num_internal,
-			"pmap=%p num_internal=%d stats.internal=%d num_reusable=%d stats.reusable=%d",
-			pmap,
-			num_internal, pmap->stats.internal,
-			num_reusable, pmap->stats.reusable);
-		assertf(pmap->stats.reusable >= num_reusable,
-			"pmap=%p num_internal=%d stats.internal=%d num_reusable=%d stats.reusable=%d",
-			pmap,
-			num_internal, pmap->stats.internal,
-			num_reusable, pmap->stats.reusable);
-		assertf(pmap->stats.compressed >= num_compressed,
-			"pmap=%p num_compressed=%lld num_alt_compressed=%lld stats.compressed=%lld",
-			pmap, num_compressed, num_alt_compressed,
-			pmap->stats.compressed);
+		PMAP_STATS_ASSERTF(pmap->stats.external >= num_external,
+				   pmap,
+				   "pmap=%p num_external=%d stats.external=%d",
+				   pmap, num_external, pmap->stats.external);
+		PMAP_STATS_ASSERTF(pmap->stats.internal >= num_internal,
+				   pmap,
+				   "pmap=%p num_internal=%d stats.internal=%d num_reusable=%d stats.reusable=%d",
+				   pmap,
+				   num_internal, pmap->stats.internal,
+				   num_reusable, pmap->stats.reusable);
+		PMAP_STATS_ASSERTF(pmap->stats.reusable >= num_reusable,
+				   pmap,
+				   "pmap=%p num_internal=%d stats.internal=%d num_reusable=%d stats.reusable=%d",
+				   pmap,
+				   num_internal, pmap->stats.internal,
+				   num_reusable, pmap->stats.reusable);
+		PMAP_STATS_ASSERTF(pmap->stats.compressed >= num_compressed,
+				   pmap,
+				   "pmap=%p num_compressed=%lld num_alt_compressed=%lld stats.compressed=%lld",
+				   pmap, num_compressed, num_alt_compressed,
+				   pmap->stats.compressed);
 
 		/* update pmap stats... */
 		OSAddAtomic(-num_unwired, (SInt32 *) &pmap->stats.wired_count);
@@ -4493,6 +4579,9 @@ pmap_flush_core_tlb_asid(pmap_t pmap)
 	flush_core_tlb_asid(pmap->asid);
 #else
 	flush_core_tlb_asid(((uint64_t) pmap->asid) << TLBI_ASID_SHIFT);
+#if __ARM_KERNEL_PROTECT__
+	flush_core_tlb_asid(((uint64_t) pmap->asid + 1) << TLBI_ASID_SHIFT);
+#endif /* __ARM_KERNEL_PROTECT__ */
 #endif
 }
 
@@ -4758,13 +4847,13 @@ pmap_page_protect_options_internal(
 				if (IS_REUSABLE_PAGE(pai) &&
 				    IS_INTERNAL_PAGE(pai) &&
 				    !is_altacct) {
-					assert(pmap->stats.reusable > 0);
+					PMAP_STATS_ASSERTF(pmap->stats.reusable > 0, pmap, "stats.reusable %d", pmap->stats.reusable);
 					OSAddAtomic(-1, &pmap->stats.reusable);
 				} else if (IS_INTERNAL_PAGE(pai)) {
-					assert(pmap->stats.internal > 0);
+					PMAP_STATS_ASSERTF(pmap->stats.internal > 0, pmap, "stats.internal %d", pmap->stats.internal);
 					OSAddAtomic(-1, &pmap->stats.internal);
 				} else {
-					assert(pmap->stats.external > 0);
+					PMAP_STATS_ASSERTF(pmap->stats.external > 0, pmap, "stats.external %d", pmap->stats.external);
 					OSAddAtomic(-1, &pmap->stats.external);
 				}
 				if ((options & PMAP_OPTIONS_COMPRESSOR) &&
@@ -5579,6 +5668,9 @@ Pmap_enter_retry:
 	pte |= wimg_to_pte(wimg_bits);
 
 	if (pmap == kernel_pmap) {
+#if __ARM_KERNEL_PROTECT__
+		pte |= ARM_PTE_NG;
+#endif /* __ARM_KERNEL_PROTECT__ */
 		if (prot & VM_PROT_WRITE) {
 			pte |= ARM_PTE_AP(AP_RWNA);
 			pa_set_bits(pa, PP_ATTR_MODIFIED | PP_ATTR_REFERENCED);
@@ -5960,7 +6052,7 @@ pmap_change_wiring_internal(
 		OSAddAtomic(+1, (SInt32 *) &pmap->stats.wired_count);
 		pmap_ledger_credit(pmap, task_ledgers.wired_mem, PAGE_SIZE);
 	} else if (!wired && pte_is_wired(*pte_p)) {
-                assert(pmap->stats.wired_count >= 1);
+                PMAP_STATS_ASSERTF(pmap->stats.wired_count >= 1, pmap, "stats.wired_count %d", pmap->stats.wired_count);
 		pte_set_wired(pte_p, wired);
 		OSAddAtomic(-1, (SInt32 *) &pmap->stats.wired_count);
 		pmap_ledger_debit(pmap, task_ledgers.wired_mem, PAGE_SIZE);
@@ -7294,12 +7386,12 @@ arm_force_fast_fault_internal(
 			   is_internal &&
 			   pmap != kernel_pmap) {
 			/* one less "reusable" */
-			assert(pmap->stats.reusable > 0);
+			PMAP_STATS_ASSERTF(pmap->stats.reusable > 0, pmap, "stats.reusable %d", pmap->stats.reusable);
 			OSAddAtomic(-1, &pmap->stats.reusable);
 			/* one more "internal" */
 			OSAddAtomic(+1, &pmap->stats.internal);
 			PMAP_STATS_PEAK(pmap->stats.internal);
-			assert(pmap->stats.internal > 0);
+			PMAP_STATS_ASSERTF(pmap->stats.internal > 0, pmap, "stats.internal %d", pmap->stats.internal);
 			pmap_ledger_credit(pmap,
 					   task_ledgers.internal,
 					   machine_ptob(1));
@@ -7325,9 +7417,9 @@ arm_force_fast_fault_internal(
 			/* one more "reusable" */
 			OSAddAtomic(+1, &pmap->stats.reusable);
 			PMAP_STATS_PEAK(pmap->stats.reusable);
-			assert(pmap->stats.reusable > 0);
+			PMAP_STATS_ASSERTF(pmap->stats.reusable > 0, pmap, "stats.reusable %d", pmap->stats.reusable);
 			/* one less "internal" */
-			assert(pmap->stats.internal > 0);
+			PMAP_STATS_ASSERTF(pmap->stats.internal > 0, pmap, "stats.internal %d", pmap->stats.internal);
 			OSAddAtomic(-1, &pmap->stats.internal);
 			pmap_ledger_debit(pmap,
 					  task_ledgers.internal,
@@ -7696,6 +7788,9 @@ pmap_map_globals(
 	assert(*ptep == ARM_PTE_EMPTY);
 
 	pte = pa_to_pte(ml_static_vtop((vm_offset_t)&lowGlo)) | AP_RONA | ARM_PTE_NX | ARM_PTE_PNX | ARM_PTE_AF | ARM_PTE_TYPE;
+#if __ARM_KERNEL_PROTECT__
+	pte |= ARM_PTE_NG;
+#endif /* __ARM_KERNEL_PROTECT__ */
 	pte |= ARM_PTE_ATTRINDX(CACHE_ATTRINDX_WRITEBACK);
 #if	(__ARM_VMSA__ > 7)
 	pte |= ARM_PTE_SH(SH_OUTER_MEMORY);
@@ -7738,6 +7833,9 @@ pmap_map_cpu_windows_copy_internal(
 	}
 
 	pte = pa_to_pte(ptoa(pn)) | ARM_PTE_TYPE | ARM_PTE_AF | ARM_PTE_NX | ARM_PTE_PNX;
+#if __ARM_KERNEL_PROTECT__
+	pte |= ARM_PTE_NG;
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 	pte |= wimg_to_pte(wimg_bits);
 
@@ -8606,7 +8704,7 @@ pmap_update_cache_attributes_locked(
 		va = ptep_get_va(pte_p);
 
 		tmplate = *pte_p;
-		tmplate &= ~(ARM_PTE_ATTRINDXMASK | ARM_PTE_NX | ARM_PTE_PNX | ARM_PTE_SHMASK);
+		tmplate &= ~(ARM_PTE_ATTRINDXMASK | ARM_PTE_SHMASK);
 		tmplate |= wimg_to_pte(attributes);
 
 		WRITE_PTE(pte_p, tmplate);
@@ -8670,20 +8768,24 @@ pmap_create_sharedpage(
 	pmap_paddr_t    pa = 0;
 
 
-	kr = pmap_expand(kernel_pmap, _COMM_PAGE64_BASE_ADDRESS, 0, PMAP_TT_L3_LEVEL);
-	assert(kr == KERN_SUCCESS);
-
 	(void) pmap_pages_alloc(&pa, PAGE_SIZE, 0);
 
 	memset((char *) phystokv(pa), 0, PAGE_SIZE);
 
 	/*
-	 * This is the mapping which U64 will refer to.
-	 * Create with common path, update to be non-global and user-readable.
+	 * The kernel pmap maintains a user accessible mapping of the commpage
+	 * to test PAN.
 	 */
-	kr = pmap_enter(kernel_pmap, _COMM_PAGE64_BASE_ADDRESS, (ppnum_t)atop(pa), VM_PROT_READ, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, TRUE);
+	kr = pmap_expand(kernel_pmap, _COMM_HIGH_PAGE64_BASE_ADDRESS, 0, PMAP_TT_L3_LEVEL);
 	assert(kr == KERN_SUCCESS);
-	pmap_update_tt3e(kernel_pmap, _COMM_PAGE64_BASE_ADDRESS, PMAP_COMM_PAGE_PTE_TEMPLATE);
+	kr = pmap_enter(kernel_pmap, _COMM_HIGH_PAGE64_BASE_ADDRESS, (ppnum_t)atop(pa), VM_PROT_READ, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, TRUE);
+	assert(kr == KERN_SUCCESS);
+
+	/*
+	 * This mapping should not be global (as we only expect to reference it
+	 * during testing).
+	 */
+	pmap_update_tt3e(kernel_pmap, _COMM_HIGH_PAGE64_BASE_ADDRESS, PMAP_COMM_PAGE_PTE_TEMPLATE | ARM_PTE_NG);
 
 	/*
 	 * With PAN enabled kernel drivers can no longer use the previous mapping which is user readable
@@ -8695,30 +8797,49 @@ pmap_create_sharedpage(
 	assert(kr == KERN_SUCCESS);
 
 	/*
-	 * Preferrable to just use a single entry,but we consume
-	 * the full entry 0 of the L1 page table for U32 (i.e.
-	 * for the 1GB of user address space), so we have no choice
-	 * but to burn another L1 entry for the shared page... unless
-	 * something clever comes to us.  For the short term (i.e.
-	 * bringup) do a kind of forced nesting (we don't have a
-	 * notion of nesting more than one pmap, and the shared cache
-	 * wins).  In effect, just allocate a pmap, fill it out
-	 * to include the one entry we care about, and then
-	 * use its L1 pointer in U32 TTBR0 page tables.
+	 * In order to avoid burning extra pages on mapping the shared page, we
+	 * create a dedicated pmap for the shared page.  We forcibly nest the
+	 * translation tables from this pmap into other pmaps.  The level we
+	 * will nest at depends on the MMU configuration (page size, TTBR range,
+	 * etc).
 	 *
-	 * Note that we update parameters of entry for our unique
-	 * needs (NG entry, etc.).
+	 * Note that this is NOT "the nested pmap" (which is used to nest the
+	 * shared cache).
+	 *
+	 * Note that we update parameters of the entry for our unique needs (NG
+	 * entry, etc.).
 	 */
-	u32_sharedpage_pmap = pmap_create(NULL, 0x0, FALSE);
-	assert(u32_sharedpage_pmap != NULL);
-	kr = pmap_enter(u32_sharedpage_pmap, _COMM_PAGE32_BASE_ADDRESS, (ppnum_t)atop(pa), VM_PROT_READ, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, TRUE);
+	sharedpage_pmap = pmap_create(NULL, 0x0, FALSE);
+	assert(sharedpage_pmap != NULL);
+
+	/* The user 64-bit mapping... */
+	kr = pmap_enter(sharedpage_pmap, _COMM_PAGE64_BASE_ADDRESS, (ppnum_t)atop(pa), VM_PROT_READ, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, TRUE);
 	assert(kr == KERN_SUCCESS);
-	pmap_update_tt3e(u32_sharedpage_pmap, _COMM_PAGE32_BASE_ADDRESS, PMAP_COMM_PAGE_PTE_TEMPLATE);
+	pmap_update_tt3e(sharedpage_pmap, _COMM_PAGE64_BASE_ADDRESS, PMAP_COMM_PAGE_PTE_TEMPLATE);
+
+	/* ...and the user 32-bit mapping. */
+	kr = pmap_enter(sharedpage_pmap, _COMM_PAGE32_BASE_ADDRESS, (ppnum_t)atop(pa), VM_PROT_READ, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, TRUE);
+	assert(kr == KERN_SUCCESS);
+	pmap_update_tt3e(sharedpage_pmap, _COMM_PAGE32_BASE_ADDRESS, PMAP_COMM_PAGE_PTE_TEMPLATE);
 
 	/* For manipulation in kernel, go straight to physical page */
 	sharedpage_rw_addr = phystokv(pa);
 	return((vm_map_address_t)sharedpage_rw_addr);
 }
+
+/*
+ * Asserts to ensure that the TTEs we nest to map the shared page do not overlap
+ * with user controlled TTEs.
+ */
+#if (ARM_PGSHIFT == 14) || __ARM64_TWO_LEVEL_PMAP__
+static_assert((_COMM_PAGE64_BASE_ADDRESS & ~ARM_TT_L2_OFFMASK) >= MACH_VM_MAX_ADDRESS);
+static_assert((_COMM_PAGE32_BASE_ADDRESS & ~ARM_TT_L2_OFFMASK) >= VM_MAX_ADDRESS);
+#elif (ARM_PGSHIFT == 12)
+static_assert((_COMM_PAGE64_BASE_ADDRESS & ~ARM_TT_L1_OFFMASK) >= MACH_VM_MAX_ADDRESS);
+static_assert((_COMM_PAGE32_BASE_ADDRESS & ~ARM_TT_L1_OFFMASK) >= VM_MAX_ADDRESS);
+#else
+#error Nested shared page mapping is unsupported on this config
+#endif
 
 static void
 pmap_insert_sharedpage_internal(
@@ -8727,14 +8848,16 @@ pmap_insert_sharedpage_internal(
 #if (ARM_PGSHIFT == 14) && !__ARM64_TWO_LEVEL_PMAP__
 	kern_return_t kr;
 #endif
+	vm_offset_t sharedpage_vaddr;
 	pt_entry_t *ttep, *src_ttep;
 #if _COMM_PAGE_AREA_LENGTH != PAGE_SIZE
 #error We assume a single page.
 #endif
 
 	if (pmap_is_64bit(pmap)) {
-		/* Already in kernel pmap */
-		return;
+		sharedpage_vaddr = _COMM_PAGE64_BASE_ADDRESS;
+	} else {
+		sharedpage_vaddr = _COMM_PAGE32_BASE_ADDRESS;
 	}
 
 	PMAP_LOCK(pmap);
@@ -8751,12 +8874,13 @@ pmap_insert_sharedpage_internal(
 #error A two level page table with a page shift of 12 is not currently supported
 #endif
 	/* Just slam in the L1 entry.  */
-	ttep = pmap_tt1e(pmap, _COMM_PAGE32_BASE_ADDRESS);
+	ttep = pmap_tt1e(pmap, sharedpage_vaddr);
+
 	if (*ttep != ARM_PTE_EMPTY) {
 		panic("%s: Found something mapped at the commpage address?!", __FUNCTION__);
 	}
 
-	src_ttep = pmap_tt1e(u32_sharedpage_pmap, _COMM_PAGE32_BASE_ADDRESS);
+	src_ttep = pmap_tt1e(sharedpage_pmap, sharedpage_vaddr);
 #elif (ARM_PGSHIFT == 14)
 #if !__ARM64_TWO_LEVEL_PMAP__
 	/* Allocate for the L2 entry if necessary, and slam it into place. */
@@ -8764,7 +8888,7 @@ pmap_insert_sharedpage_internal(
 	 * As long as we are use a three level page table, the first level
 	 * should always exist, so we don't need to check for it.
 	 */
-	while (*pmap_tt1e(pmap, _COMM_PAGE32_BASE_ADDRESS) == ARM_PTE_EMPTY) {
+	while (*pmap_tt1e(pmap, sharedpage_vaddr) == ARM_PTE_EMPTY) {
 		PMAP_UNLOCK(pmap);
 
 		kr = pmap_expand(pmap, _COMM_PAGE32_BASE_ADDRESS, 0, PMAP_TT_L2_LEVEL);
@@ -8777,23 +8901,26 @@ pmap_insert_sharedpage_internal(
 	}
 #endif
 
-	ttep = pmap_tt2e(pmap, _COMM_PAGE32_BASE_ADDRESS);
+	ttep = pmap_tt2e(pmap, sharedpage_vaddr);
+
 	if (*ttep != ARM_PTE_EMPTY) {
 		panic("%s: Found something mapped at the commpage address?!", __FUNCTION__);
 	}
 
-	src_ttep = pmap_tt2e(u32_sharedpage_pmap, _COMM_PAGE32_BASE_ADDRESS);
+	src_ttep = pmap_tt2e(sharedpage_pmap, sharedpage_vaddr);
 #endif
 
 	*ttep =  *src_ttep;
 #ifndef __ARM_L1_PTW__
 	CleanPoU_DcacheRegion((vm_offset_t) ttep, sizeof(tt_entry_t));
 #endif
-	flush_mmu_tlb_region(_COMM_PAGE32_BASE_ADDRESS, PAGE_SIZE);
+	/* TODO: Should we flush in the 64-bit case? */
+	flush_mmu_tlb_region(sharedpage_vaddr, PAGE_SIZE);
+
 #if (ARM_PGSHIFT == 12) && !__ARM64_TWO_LEVEL_PMAP__
-	flush_mmu_tlb_entry(tlbi_addr(_COMM_PAGE32_BASE_ADDRESS & ~ARM_TT_L1_OFFMASK) | tlbi_asid(pmap->asid));
+	flush_mmu_tlb_entry(tlbi_addr(sharedpage_vaddr & ~ARM_TT_L1_OFFMASK) | tlbi_asid(pmap->asid));
 #elif (ARM_PGSHIFT == 14)
-	flush_mmu_tlb_entry(tlbi_addr(_COMM_PAGE32_BASE_ADDRESS & ~ARM_TT_L2_OFFMASK) | tlbi_asid(pmap->asid));
+	flush_mmu_tlb_entry(tlbi_addr(sharedpage_vaddr & ~ARM_TT_L2_OFFMASK) | tlbi_asid(pmap->asid));
 #endif
 
 	PMAP_UNLOCK(pmap);
@@ -8807,50 +8934,59 @@ pmap_sharedpage_flush_32_to_64(
 }
 
 static void
-pmap_unmap_sharedpage32(
+pmap_unmap_sharedpage(
 	pmap_t pmap)
 {
 	pt_entry_t *ttep;
+	vm_offset_t sharedpage_vaddr;
 
 #if _COMM_PAGE_AREA_LENGTH != PAGE_SIZE
 #error We assume a single page.
 #endif
 
+	if (pmap_is_64bit(pmap)) {
+		sharedpage_vaddr = _COMM_PAGE64_BASE_ADDRESS;
+	} else {
+		sharedpage_vaddr = _COMM_PAGE32_BASE_ADDRESS;
+	}
+
 #if (ARM_PGSHIFT == 12)
 #if __ARM64_TWO_LEVEL_PMAP__
 #error A two level page table with a page shift of 12 is not currently supported
 #endif
-	ttep = pmap_tt1e(pmap, _COMM_PAGE32_BASE_ADDRESS);
+	ttep = pmap_tt1e(pmap, sharedpage_vaddr);
+
 	if (ttep == NULL) {
 		return;
 	}
 
 	/* It had better be mapped to the shared page */
-	if (*ttep != ARM_TTE_EMPTY && *ttep != *pmap_tt1e(u32_sharedpage_pmap, _COMM_PAGE32_BASE_ADDRESS)) {
+	if (*ttep != ARM_TTE_EMPTY && *ttep != *pmap_tt1e(sharedpage_pmap, sharedpage_vaddr)) {
 		panic("%s: Something other than commpage mapped in shared page slot?", __FUNCTION__);
 	}
 #elif (ARM_PGSHIFT == 14)
-	ttep = pmap_tt2e(pmap, _COMM_PAGE32_BASE_ADDRESS);
+	ttep = pmap_tt2e(pmap, sharedpage_vaddr);
+
 	if (ttep == NULL) {
 		return;
 	}
 
 	/* It had better be mapped to the shared page */
-	if (*ttep != ARM_TTE_EMPTY && *ttep != *pmap_tt2e(u32_sharedpage_pmap, _COMM_PAGE32_BASE_ADDRESS)) {
+	if (*ttep != ARM_TTE_EMPTY && *ttep != *pmap_tt2e(sharedpage_pmap, sharedpage_vaddr)) {
 		panic("%s: Something other than commpage mapped in shared page slot?", __FUNCTION__);
 	}
 #endif
 
 	*ttep = ARM_TTE_EMPTY;
-	flush_mmu_tlb_region(_COMM_PAGE32_BASE_ADDRESS, PAGE_SIZE);
+	flush_mmu_tlb_region(sharedpage_vaddr, PAGE_SIZE);
 
 #if (ARM_PGSHIFT == 12)
 #if __ARM64_TWO_LEVEL_PMAP__
 #error A two level page table with a page shift of 12 is not currently supported
 #endif
-	flush_mmu_tlb_entry(tlbi_addr(_COMM_PAGE32_BASE_ADDRESS & ~ARM_TT_L1_OFFMASK) | tlbi_asid(pmap->asid));
+	flush_mmu_tlb_entry(tlbi_addr(sharedpage_vaddr & ~ARM_TT_L1_OFFMASK) | tlbi_asid(pmap->asid));
 #elif (ARM_PGSHIFT == 14)
-	flush_mmu_tlb_entry(tlbi_addr(_COMM_PAGE32_BASE_ADDRESS & ~ARM_TT_L2_OFFMASK) | tlbi_asid(pmap->asid));
+	flush_mmu_tlb_entry(tlbi_addr(sharedpage_vaddr & ~ARM_TT_L2_OFFMASK) | tlbi_asid(pmap->asid));
 #endif
 }
 
@@ -9478,15 +9614,15 @@ pmap_check_ledgers(
 		}
 	}
 
-	assert(pmap->stats.resident_count == 0);
+	PMAP_STATS_ASSERTF(pmap->stats.resident_count == 0, pmap, "stats.resident_count %d", pmap->stats.resident_count);
 #if 00
-	assert(pmap->stats.wired_count == 0);
+	PMAP_STATS_ASSERTF(pmap->stats.wired_count == 0, pmap, "stats.wired_count %d", pmap->stats.wired_count);
 #endif
-	assert(pmap->stats.device == 0);
-	assert(pmap->stats.internal == 0);
-	assert(pmap->stats.external == 0);
-	assert(pmap->stats.reusable == 0);
-	assert(pmap->stats.compressed == 0);
+	PMAP_STATS_ASSERTF(pmap->stats.device == 0, pmap, "stats.device %d", pmap->stats.device);
+	PMAP_STATS_ASSERTF(pmap->stats.internal == 0, pmap, "stats.internal %d", pmap->stats.internal);
+	PMAP_STATS_ASSERTF(pmap->stats.external == 0, pmap, "stats.external %d", pmap->stats.external);
+	PMAP_STATS_ASSERTF(pmap->stats.reusable == 0, pmap, "stats.reusable %d", pmap->stats.reusable);
+	PMAP_STATS_ASSERTF(pmap->stats.compressed == 0, pmap, "stats.compressed %lld", pmap->stats.compressed);
 }
 #endif /* MACH_ASSERT */
 

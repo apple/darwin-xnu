@@ -102,7 +102,7 @@
 52	AUE_SIGPENDING	ALL	{ int sigpending(struct sigvec *osv); } 
 53	AUE_SIGALTSTACK	ALL	{ int sigaltstack(struct sigaltstack *nss, struct sigaltstack *oss) NO_SYSCALL_STUB ; } 
 54	AUE_IOCTL	ALL	{ int ioctl(int fd, u_long com, caddr_t data) NO_SYSCALL_STUB; } 
-55	AUE_REBOOT	ALL	{ int reboot(int opt, char *command); } 
+55	AUE_REBOOT	ALL	{ int reboot(int opt, char *command) NO_SYSCALL_STUB; }
 56	AUE_REVOKE	ALL	{ int revoke(char *path); } 
 57	AUE_SYMLINK	ALL	{ int symlink(char *path, char *link); } 
 58	AUE_READLINK	ALL	{ int readlink(char *path, char *buf, int count); } 

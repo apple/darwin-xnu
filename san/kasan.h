@@ -73,6 +73,7 @@ typedef uintptr_t uptr;
 #define ASAN_STACK_MID_RZ   0xf2
 #define ASAN_STACK_RIGHT_RZ 0xf3
 #define ASAN_STACK_FREED    0xf5
+#define ASAN_STACK_OOSCOPE  0xf8
 #define ASAN_GLOBAL_RZ      0xf9
 #define ASAN_HEAP_RZ        0xe9
 #define ASAN_HEAP_LEFT_RZ   0xfa

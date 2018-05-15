@@ -166,7 +166,6 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 	int		debug_type = 0xeff70010;
 	debug_type += (copy_type << 2);
 #endif
-	boolean_t nopagezero = thread->map->pmap->pagezero_accessible;
 
 	if (__improbable(nbytes > copysize_limit_panic))
 		panic("%s(%p, %p, %lu) - transfer too large", __func__,
@@ -179,6 +178,7 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 		goto out;
 
         pmap = thread->map->pmap;
+	boolean_t nopagezero = pmap->pagezero_accessible;
 
 	if (__improbable((copy_type != COPYINPHYS) && (copy_type != COPYOUTPHYS) && ((vm_offset_t)kernel_addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS))) {
 		panic("Invalid copy parameter, copy type: %d, kernel address: %p", copy_type, kernel_addr);

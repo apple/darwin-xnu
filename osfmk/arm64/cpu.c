@@ -78,6 +78,10 @@ void sleep_token_buffer_init(void);
 extern uintptr_t resume_idle_cpu;
 extern uintptr_t start_cpu;
 
+#if __ARM_KERNEL_PROTECT__
+extern void exc_vectors_table;
+#endif /* __ARM_KERNEL_PROTECT__ */
+
 extern void __attribute__((noreturn)) arm64_prepare_for_sleep(void);
 extern void arm64_force_wfi_clock_gate(void);
 #if (defined(APPLECYCLONE) || defined(APPLETYPHOON))
@@ -537,6 +541,9 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 		pmap_cpu_data_ptr->cpu_asid_high_bits[i] = 0;
 	}
 	cpu_data_ptr->halt_status = CPU_NOT_HALTED;
+#if __ARM_KERNEL_PROTECT__
+	cpu_data_ptr->cpu_exc_vectors = (vm_offset_t)&exc_vectors_table;
+#endif /* __ARM_KERNEL_PROTECT__ */
 }
 
 kern_return_t

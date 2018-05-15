@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -26,34 +26,43 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#include <console/video_console.h>
-#include <pexpert/GearImage.h>
+#include <IOKit/rtc/IORTCController.h>
 
-struct boot_progress_element {
-    unsigned int	width;
-    unsigned int	height;
-    int			yOffset;
-    unsigned int	res[5];
-    unsigned char	data[0];
-};
-typedef struct boot_progress_element boot_progress_element;
+#define super IOService
 
-static const unsigned char * default_noroot_data;
+OSDefineMetaClassAndAbstractStructors(IORTC, IOService);
 
-static const unsigned char * default_progress_data1x = gGearPict;
-static const unsigned char * default_progress_data2x = gGearPict2x;
-#if !PEXPERT_NO_3X_IMAGES
-static const unsigned char * default_progress_data3x = gGearPict3x;
-#else
-static const unsigned char * default_progress_data3x = NULL;
-#endif
+void IORTC::getUTCTimeOfDay( clock_sec_t * secs, clock_nsec_t * nsecs )
+{
+    *nsecs = 0;
+    *secs = getGMTTimeOfDay();
+}
 
-static vc_progress_element default_progress = 
-	{   0, 4|1, 1000 / kGearFPS, kGearFrames, {0, 0, 0}, 
-            kGearWidth, kGearHeight, 0, kGearOffset,
-            0, {0, 0, 0} };
+void IORTC::setUTCTimeOfDay( clock_sec_t secs, clock_nsec_t nsecs )
+{
+    setGMTTimeOfDay(secs);
+}
 
-static vc_progress_element default_noroot = 
-	{   0, 1, 0, 0, {0, 0, 0}, 
-            128, 128, 0, 0,
-	    -1, {0, 0, 0} };
+IOReturn IORTC::getMonotonicClockOffset( int64_t * usecs )
+{
+    return kIOReturnUnsupported;
+}
+
+IOReturn IORTC::setMonotonicClockOffset( int64_t usecs )
+{
+    return kIOReturnUnsupported;
+}
+
+IOReturn IORTC::getMonotonicClockAndTimestamp( uint64_t * usecs, uint64_t *mach_absolute_time )
+{
+    return kIOReturnUnsupported;
+}
+
+OSMetaClassDefineReservedUnused(IORTC, 0);
+OSMetaClassDefineReservedUnused(IORTC, 1);
+OSMetaClassDefineReservedUnused(IORTC, 2);
+OSMetaClassDefineReservedUnused(IORTC, 3);
+OSMetaClassDefineReservedUnused(IORTC, 4);
+OSMetaClassDefineReservedUnused(IORTC, 5);
+OSMetaClassDefineReservedUnused(IORTC, 6);
+OSMetaClassDefineReservedUnused(IORTC, 7);

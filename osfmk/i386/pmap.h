@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -70,7 +70,6 @@
 
 #ifndef	ASSEMBLER
 
-
 #include <mach/kern_return.h>
 #include <mach/machine/vm_types.h>
 #include <mach/vm_prot.h>
@@ -110,10 +109,7 @@
 
 #define PTESHIFT        12ULL
 
-
-#ifdef __x86_64__
 #define LOW_4GB_MASK	((vm_offset_t)0x00000000FFFFFFFFUL)
-#endif
 
 #define PDESIZE		sizeof(pd_entry_t) /* for assembly files */
 #define PTESIZE		sizeof(pt_entry_t) /* for assembly files */
@@ -194,11 +190,7 @@ extern int pmap_asserts_traced;
 #endif
 
 /* superpages */
-#ifdef __x86_64__
 #define SUPERPAGE_NBASEPAGES 512
-#else
-#define SUPERPAGE_NBASEPAGES 1	/* we don't support superpages on i386 */
-#endif
 
 /*
  * Atomic 64-bit store of a page table entry.
@@ -220,10 +212,11 @@ pmap_store_pte(pt_entry_t *entryp, pt_entry_t value)
 #define NPTEPGS         (NPDEPGS * (PAGE_SIZE/(sizeof (pt_entry_t))))
 
 #define KERNEL_PML4_INDEX		511
-#define KERNEL_KEXTS_INDEX	510	/* Home of KEXTs - the basement */
+#define KERNEL_KEXTS_INDEX		510	/* Home of KEXTs - the basement */
 #define KERNEL_PHYSMAP_PML4_INDEX	509	/* virtual to physical map */ 
 #define KERNEL_KASAN_PML4_INDEX0	508
 #define KERNEL_KASAN_PML4_INDEX1	507
+#define KERNEL_DBLMAP_PML4_INDEX	(506)
 #define KERNEL_BASE		(0ULL - NBPML4)
 #define KERNEL_BASEMENT		(KERNEL_BASE - NBPML4)
 
@@ -460,9 +453,6 @@ extern uint64_t		pmap_pv_hashlist_cnts;
 extern uint32_t		pmap_pv_hashlist_max;
 extern uint32_t		pmap_kernel_text_ps;
 
-
-
-#ifdef __x86_64__
 #define ID_MAP_VTOP(x)	((void *)(((uint64_t)(x)) & LOW_4GB_MASK))
 
 extern	uint64_t physmap_base, physmap_max;
@@ -484,6 +474,30 @@ static	inline void * PHYSMAP_PTOV_check(void *paddr) {
 }
 
 #define PHYSMAP_PTOV(x)	(PHYSMAP_PTOV_check((void*) (x)))
+#if MACH_KERNEL_PRIVATE
+extern uint64_t dblmap_base, dblmap_max, dblmap_dist;
+
+static inline uint64_t DBLMAP_CHECK(uintptr_t x) {
+	uint64_t dbladdr = (uint64_t)x + dblmap_dist;
+	if (__improbable((dbladdr >= dblmap_max) || (dbladdr < dblmap_base))) {
+		panic("DBLMAP bounds exceeded, 0x%qx, 0x%qx 0x%qx, 0x%qx",
+		    (uint64_t)x, dbladdr, dblmap_base, dblmap_max);
+	}
+	return dbladdr;
+
+}
+#define DBLMAP(x) (DBLMAP_CHECK((uint64_t) x))
+extern uint64_t ldt_alias_offset;
+static inline uint64_t LDTALIAS_CHECK(uintptr_t x) {
+	uint64_t dbladdr = (uint64_t)x + ldt_alias_offset;
+	if (__improbable((dbladdr >= dblmap_max) || (dbladdr < dblmap_base))) {
+		panic("LDTALIAS: bounds exceeded, 0x%qx, 0x%qx 0x%qx, 0x%qx",
+		    (uint64_t)x, dbladdr, dblmap_base, dblmap_max);
+	}
+	return dbladdr;
+}
+#define LDTALIAS(x) (LDTALIAS_CHECK((uint64_t) x))
+#endif
 
 /*
  * For KASLR, we alias the master processor's IDT and GDT at fixed
@@ -491,18 +505,13 @@ static	inline void * PHYSMAP_PTOV_check(void *paddr) {
  * And non-boot processor's GDT aliases likewise (skipping LOWGLOBAL_ALIAS)
  * The low global vector page is mapped at a fixed alias also.
  */
-#define MASTER_IDT_ALIAS	(VM_MIN_KERNEL_ADDRESS + 0x0000)
-#define MASTER_GDT_ALIAS	(VM_MIN_KERNEL_ADDRESS + 0x1000)
 #define LOWGLOBAL_ALIAS		(VM_MIN_KERNEL_ADDRESS + 0x2000)
-#define CPU_GDT_ALIAS(_cpu)	(LOWGLOBAL_ALIAS + (0x1000*(_cpu)))
 
 /*
  * This indicates (roughly) where there is free space for the VM
  * to use for the heap; this does not need to be precise.
  */
 #define KERNEL_PMAP_HEAP_RANGE_START VM_MIN_KERNEL_AND_KEXT_ADDRESS
-
-#endif /*__x86_64__ */
 
 #include <vm/vm_page.h>
 
@@ -514,7 +523,8 @@ static	inline void * PHYSMAP_PTOV_check(void *paddr) {
 
 struct pmap {
 	decl_simple_lock_data(,lock)	/* lock on map */
-	pmap_paddr_t    pm_cr3;         /* physical addr */
+	pmap_paddr_t    pm_cr3;         /* Kernel+user shared PML4 physical*/
+	pmap_paddr_t    pm_ucr3;	/* Mirrored user PML4 physical */
         task_map_t      pm_task_map;
 	boolean_t       pm_shared;
 	boolean_t	pagezero_accessible;
@@ -524,13 +534,12 @@ struct pmap {
 	struct pmap_statistics	stats;	/* map statistics */
 	int		ref_count;	/* reference count */
         int		nx_enabled;
-	pdpt_entry_t    *pm_pdpt;       /* KVA of 3rd level page */
 	pml4_entry_t    *pm_pml4;       /* VKA of top level */
+	pml4_entry_t    *pm_upml4;      /* Shadow VKA of top level */
 	vm_object_t     pm_obj;         /* object to hold pde's */
 	vm_object_t     pm_obj_pdpt;    /* holds pdpt pages */
 	vm_object_t     pm_obj_pml4;    /* holds pml4 pages */
 	pmap_paddr_t	pm_eptp;	/* EPTP */
-	pd_entry_t      *dirbase;        /* page directory pointer */
 	ledger_t	ledger;		/* ledger tracking phys mappings */
 #if MACH_ASSERT
 	int		pmap_pid;
@@ -602,7 +611,13 @@ extern pmap_memory_region_t pmap_memory_regions[];
 static inline void
 set_dirbase(pmap_t tpmap, thread_t thread, int my_cpu) {
 	int ccpu = my_cpu;
-	cpu_datap(ccpu)->cpu_task_cr3 = tpmap->pm_cr3;
+	uint64_t pcr3 = tpmap->pm_cr3, ucr3 = tpmap->pm_ucr3;
+	cpu_datap(ccpu)->cpu_task_cr3 = pcr3;
+	cpu_shadowp(ccpu)->cpu_task_cr3 = pcr3;
+
+	cpu_datap(ccpu)->cpu_ucr3 = ucr3;
+	cpu_shadowp(ccpu)->cpu_ucr3 = ucr3;
+
 	cpu_datap(ccpu)->cpu_task_map = tpmap->pm_task_map;
 
 	assert((get_preemption_level() > 0) || (ml_get_interrupts_enabled() == FALSE));
@@ -650,10 +665,6 @@ set_dirbase(pmap_t tpmap, thread_t thread, int my_cpu) {
 extern void		process_pmap_updates(void);
 extern void		pmap_update_interrupt(void);
 
-/*
- *	Machine dependent routines that are used only for i386/i486/i860.
- */
-
 extern addr64_t		(kvtophys)(
 				vm_offset_t	addr);
 
@@ -661,23 +672,6 @@ extern kern_return_t	pmap_expand(
 				pmap_t		pmap,
 				vm_map_offset_t	addr,
 				unsigned int options);
-#if	!defined(__x86_64__)
-extern pt_entry_t	*pmap_pte(
-				struct pmap	*pmap,
-				vm_map_offset_t	addr);
-
-extern pd_entry_t	*pmap_pde(
-				struct pmap	*pmap,
-				vm_map_offset_t	addr);
-
-extern pd_entry_t	*pmap64_pde(
-				struct pmap	*pmap,
-				vm_map_offset_t	addr);
-
-extern pdpt_entry_t	*pmap64_pdpt(
-				struct pmap	*pmap,
-				vm_map_offset_t	addr);
-#endif
 extern vm_offset_t	pmap_map(
 				vm_offset_t	virt,
 				vm_map_offset_t	start,
@@ -691,7 +685,6 @@ extern vm_offset_t	pmap_map_bd(
 				vm_map_offset_t	end,
 				vm_prot_t	prot,
 				unsigned int	flags);
-
 extern void		pmap_bootstrap(
 				vm_offset_t	load_start,
 				boolean_t	IA32e);
@@ -870,11 +863,6 @@ extern int pmap_stats_assert;
 #else /* MACH_ASSERT */
 #define PMAP_STATS_ASSERTF(args)
 #endif /* MACH_ASSERT */
-
 #endif	/* ASSEMBLER */
-
-
 #endif	/* _PMAP_MACHINE_ */
-
-
 #endif  /* KERNEL_PRIVATE */

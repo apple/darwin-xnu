@@ -2719,6 +2719,9 @@ tcp_disconnect(struct tcpcb *tp)
 {
 	struct socket *so = tp->t_inpcb->inp_socket;
 
+	if (so->so_rcv.sb_cc != 0 || tp->t_reassqlen != 0)
+		return tcp_drop(tp, 0);
+
 	if (tp->t_state < TCPS_ESTABLISHED)
 		tp = tcp_close(tp);
 	else if ((so->so_options & SO_LINGER) && so->so_linger == 0)

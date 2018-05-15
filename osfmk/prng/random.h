@@ -115,6 +115,28 @@ MACRO_END
 /* /dev/random's PRNG is reseeded after generating this many bytes: */
 #define	RESEED_BYTES (17597)
 
+#include <kern/simple_lock.h>
+/* Definitions for boolean PRNG */
+#define RANDOM_BOOL_GEN_SEED_COUNT 4
+struct bool_gen {
+	unsigned int seed[RANDOM_BOOL_GEN_SEED_COUNT];
+	unsigned int state;
+	decl_simple_lock_data(, lock)
+};
+
+extern void random_bool_init(struct bool_gen *bg);
+
+extern void random_bool_gen_entropy(
+		struct bool_gen *bg,
+		unsigned int *buffer,
+		int count);
+
+extern unsigned int random_bool_gen_bits(
+		struct bool_gen *bg,
+		unsigned int *buffer,
+		unsigned int count,
+		unsigned int numbits);
+
 __END_DECLS
 
 #endif /* _PRNG_RANDOM_H_ */

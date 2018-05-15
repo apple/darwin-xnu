@@ -1341,7 +1341,7 @@ sendit:
 	if (flags & IP_ROUTETOIF) {
 		bzero(&ipsec_state.ro, sizeof (ipsec_state.ro));
 	} else {
-		route_copyout(&ipsec_state.ro, ro, sizeof (ipsec_state.ro));
+		route_copyout((struct route *)&ipsec_state.ro, ro, sizeof (struct route));
 	}
 	ipsec_state.dst = SA(dst);
 
@@ -1389,10 +1389,10 @@ sendit:
 		 */
 		if (ipsec_state.tunneled) {
 			flags &= ~IP_ROUTETOIF;
-			ro = &ipsec_state.ro;
+			ro = (struct route *)&ipsec_state.ro;
 		}
 	} else {
-		ro = &ipsec_state.ro;
+		ro = (struct route *)&ipsec_state.ro;
 	}
 	dst = SIN(ipsec_state.dst);
 	if (error) {

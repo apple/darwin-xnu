@@ -582,6 +582,18 @@ static lck_attr_t *mleak_lock_attr;
 static lck_grp_t *mleak_lock_grp;
 static lck_grp_attr_t *mleak_lock_grp_attr;
 
+/* *Failed* large allocations. */
+struct mtracelarge {
+	uint64_t	size;
+	uint64_t	depth;
+	uintptr_t	addr[MLEAK_STACK_DEPTH];
+};
+
+#define MTRACELARGE_NUM_TRACES		5
+static struct mtracelarge mtracelarge_table[MTRACELARGE_NUM_TRACES];
+
+static void mtracelarge_register(size_t size);
+
 /* Lock to protect the completion callback table */
 static lck_grp_attr_t *mbuf_tx_compl_tbl_lck_grp_attr = NULL;
 static lck_attr_t *mbuf_tx_compl_tbl_lck_attr = NULL;
@@ -681,7 +693,7 @@ boolean_t mb_peak_firstreport = FALSE;
 static struct timeval mb_wdtstart;	/* watchdog start timestamp */
 static char *mbuf_dump_buf;
 
-#define	MBUF_DUMP_BUF_SIZE	3072
+#define	MBUF_DUMP_BUF_SIZE	4096
 
 /*
  * mbuf watchdog is enabled by default on embedded platforms.  It is
@@ -2954,12 +2966,14 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 			/* Try for 1 page if failed */
 			size = PAGE_SIZE;
 			page = kmem_mb_alloc(mb_map, size, 0, &error);
+			if (page == 0) {
+				m_vm_error_stats(&mb_kmem_one_failed,
+				    &mb_kmem_one_failed_ts,
+				    NULL, size, error);
+			}
 		}
 
 		if (page == 0) {
-			m_vm_error_stats(&mb_kmem_one_failed,
-			    &mb_kmem_one_failed_ts,
-			    NULL, size, error);
 			lck_mtx_lock(mbuf_mlock);
 			goto out;
 		}
@@ -3107,6 +3121,8 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 	return (count);
 out:
 	LCK_MTX_ASSERT(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
+
+	mtracelarge_register(size);
 
 	/* We're done; let others enter */
 	mb_clalloc_busy = FALSE;
@@ -7324,7 +7340,7 @@ mleak_update_stats()
 	mltr = &mleak_stat->ml_trace[0];
 	bzero(mltr, sizeof (*mltr) * MLEAK_NUM_TRACES);
 	for (i = 0; i < MLEAK_NUM_TRACES; i++) {
-	int j;
+		int j;
 
 		if (mleak_top_trace[i] == NULL ||
 		    mleak_top_trace[i]->allocs == 0)
@@ -7386,7 +7402,7 @@ mbuf_dump(void)
 	mb_class_stat_t *sp;
 	mleak_trace_stat_t *mltr;
 	char *c = mbuf_dump_buf;
-	int i, k, clen = MBUF_DUMP_BUF_SIZE;
+	int i, j, k, clen = MBUF_DUMP_BUF_SIZE;
 
 	mbuf_dump_buf[0] = '\0';
 
@@ -7531,6 +7547,32 @@ mbuf_dump(void)
 		MBUF_DUMP_BUF_CHK();
 	}
 
+	k = snprintf(c, clen, "\nlargest allocation failure backtraces:\n");
+	MBUF_DUMP_BUF_CHK();
+
+	for (j = 0; j < MTRACELARGE_NUM_TRACES; j++) {
+		struct mtracelarge *trace = &mtracelarge_table[j];
+		if (trace->size == 0 || trace->depth == 0)
+			continue;
+		k = snprintf(c, clen, "size %llu: < ", trace->size);
+		MBUF_DUMP_BUF_CHK();
+		for (i = 0; i < trace->depth; i++) {
+			if (mleak_stat->ml_isaddr64) {
+				k = snprintf(c, clen, "0x%0llx ",
+				    (uint64_t)VM_KERNEL_UNSLIDE(
+					    trace->addr[i]));
+			} else {
+				k = snprintf(c, clen,
+				    "0x%08x ",
+				    (uint32_t)VM_KERNEL_UNSLIDE(
+					    trace->addr[i]));
+			}
+			MBUF_DUMP_BUF_CHK();
+		}
+		k = snprintf(c, clen, ">\n");
+		MBUF_DUMP_BUF_CHK();
+	}
+
 	/* mbuf leak detection statistics */
 	mleak_update_stats();
 
@@ -7575,7 +7617,6 @@ mbuf_dump(void)
 	MBUF_DUMP_BUF_CHK();
 
 	for (i = 0; i < MLEAK_STACK_DEPTH; i++) {
-		int j;
 		k = snprintf(c, clen, "%2d: ", (i + 1));
 		MBUF_DUMP_BUF_CHK();
 		for (j = 0; j < mleak_stat->ml_cnt; j++) {
@@ -8160,8 +8201,12 @@ m_drain_force_sysctl SYSCTL_HANDLER_ARGS
 	err = sysctl_handle_int(oidp, &val, 0, req);
 	if (err != 0 || req->newptr == USER_ADDR_NULL)
 		return (err);
-	if (val)
+	if (val) {
+		lck_mtx_lock(mbuf_mlock);
+		printf("%s\n", mbuf_dump());
+		lck_mtx_unlock(mbuf_mlock);
 		m_drain();
+	}
 
 	return (err);
 }
@@ -8236,6 +8281,36 @@ mbtest SYSCTL_HANDLER_ARGS
 	return (error);
 }
 #endif
+
+
+static void
+mtracelarge_register(size_t size)
+{
+	int i;
+	struct mtracelarge *trace;
+	uintptr_t bt[MLEAK_STACK_DEPTH];
+	unsigned int depth;
+
+	depth = backtrace(bt, MLEAK_STACK_DEPTH);
+	/* Check if this entry is already on the list. */
+	for (i = 0; i < MTRACELARGE_NUM_TRACES; i++) {
+		trace = &mtracelarge_table[i];
+		if (trace->size == size && trace->depth == depth &&
+		    memcmp(bt, trace->addr, depth * sizeof(uintptr_t)) == 0) {
+			return;
+		}
+
+	}
+	for (i = 0; i < MTRACELARGE_NUM_TRACES; i++) {
+		trace = &mtracelarge_table[i];
+		if (size > trace->size) {
+			trace->depth = depth;
+			memcpy(trace->addr, bt, depth * sizeof(uintptr_t));
+			trace->size = size;
+			break;
+		}
+	}
+}
 
 SYSCTL_DECL(_kern_ipc);
 #if DEBUG || DEVELOPMENT

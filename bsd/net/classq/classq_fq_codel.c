@@ -253,6 +253,7 @@ fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 			if (fqs->fqs_large_flow == NULL) {
 				droptype = DTYPE_FORCED;
 				fq_cl->fcl_stat.fcl_drop_overflow++;
+				ret = CLASSQEQ_DROP;
 
 				/*
 				 * if this fq was freshly created and there

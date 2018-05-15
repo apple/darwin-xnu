@@ -44,6 +44,42 @@
 
 #include <mach/kern_return.h>
 #include <mach/machine/vm_types.h>
+
+#if __ARM_KERNEL_PROTECT__
+/*
+ * For __ARM_KERNEL_PROTECT__, we need twice as many ASIDs to support having
+ * unique EL0 and EL1 ASIDs for each pmap.
+ */
+#define ASID_SHIFT			(12)				/* Shift for the maximum virtual ASID value (2048)*/
+#else /* __ARM_KERNEL_PROTECT__ */
+#define ASID_SHIFT			(11)				/* Shift for the maximum virtual ASID value (2048) */
+#endif /* __ARM_KERNEL_PROTECT__ */
+#define MAX_ASID			(1 << ASID_SHIFT)		/* Max supported ASIDs (can be virtual) */
+#define ARM_ASID_SHIFT			(8)				/* Shift for the maximum ARM ASID value (256) */
+#define ARM_MAX_ASID			(1 << ARM_ASID_SHIFT)		/* Max ASIDs supported by the hardware */
+#define ASID_VIRT_BITS			(ASID_SHIFT - ARM_ASID_SHIFT)	/* The number of virtual bits in a virtaul ASID */
+#define NBBY				8
+
+struct pmap_cpu_data {
+	pmap_t cpu_user_pmap;
+	unsigned int cpu_number;
+	unsigned int cpu_user_pmap_stamp;
+
+	/*
+	 * This supports overloading of ARM ASIDs by the pmap.  The field needs
+	 * to be wide enough to cover all the virtual bits in a virtual ASID.
+	 * With 256 physical ASIDs, 8-bit fields let us support up to 65536
+	 * Virtual ASIDs, minus all that would map on to 0 (as 0 is a global
+	 * ASID).
+	 *
+	 * If we were to use bitfield shenanigans here, we could save a bit of
+	 * memory by only having enough bits to support MAX_ASID.  However, such
+	 * an implementation would be more error prone.
+	 */
+	uint8_t cpu_asid_high_bits[ARM_MAX_ASID];
+};
+typedef struct pmap_cpu_data pmap_cpu_data_t;
+
 #include <mach/vm_prot.h>
 #include <mach/vm_statistics.h>
 #include <mach/machine/vm_param.h>
@@ -136,18 +172,8 @@ extern void flush_mmu_tlb_entry(uint64_t);
 extern void flush_mmu_tlb_entries(uint64_t, uint64_t);
 extern void flush_mmu_tlb_asid(uint64_t);
 extern void flush_core_tlb_asid(uint64_t);
-/*
- * TLBI appers to only deal in 4KB page addresses, so give
- * it an explicit shift of 12.
- */
-#define TLBI_ADDR_SIZE 44
-#define TLBI_ADDR_MASK ((1ULL << TLBI_ADDR_SIZE) - 1)
-#define TLBI_ADDR_SHIFT (12)
-#define tlbi_addr(x) (((x) >> TLBI_ADDR_SHIFT) & TLBI_ADDR_MASK)
 
-#define	TLBI_ASID_SHIFT	48
-#define TLBI_ASID_SIZE 16
-#define TLBI_ASID_MASK (((1ULL << TLBI_ASID_SIZE) - 1) << TLBI_ASID_SHIFT)
+#define tlbi_addr(x) (((x) >> TLBI_ADDR_SHIFT) & TLBI_ADDR_MASK)
 #define tlbi_asid(x) (((uint64_t)x << TLBI_ASID_SHIFT) & TLBI_ASID_MASK)
 #else
 extern void flush_mmu_tlb_entry(uint32_t);
@@ -268,8 +294,9 @@ struct pmap {
 	decl_simple_lock_data(,tt1_lock)	/* lock on tt1 */
 #endif
 #if MACH_ASSERT
-	int					pmap_pid;
-	char				pmap_procname[17];
+	boolean_t		pmap_stats_assert;
+	int			pmap_pid;
+	char			pmap_procname[17];
 #endif /* MACH_ASSERT */
 #if DEVELOPMENT || DEBUG
 	boolean_t		footprint_suspended;
@@ -423,12 +450,6 @@ extern boolean_t pmap_is_empty(pmap_t pmap, vm_map_offset_t start, vm_map_offset
 #define ARM_PMAP_MAX_OFFSET_DEVICE	0x08
 #define ARM_PMAP_MAX_OFFSET_JUMBO	0x10
 
-#define ASID_SHIFT			(11)				/* Shift for the maximum virtual ASID value (2048) */
-#define MAX_ASID			(1 << ASID_SHIFT)		/* Max supported ASIDs (can be virtual) */
-#define ARM_ASID_SHIFT			(8)				/* Shift for the maximum ARM ASID value (256) */
-#define ARM_MAX_ASID			(1 << ARM_ASID_SHIFT)		/* Max ASIDs supported by the hardware */
-#define ASID_VIRT_BITS			(ASID_SHIFT - ARM_ASID_SHIFT)	/* The number of virtual bits in a virtaul ASID */
-#define NBBY				8
 
 extern vm_map_offset_t pmap_max_offset(boolean_t is64, unsigned int option);
 
@@ -478,27 +499,6 @@ boolean_t pmap_enforces_execute_only(pmap_t pmap);
 
 #define PMAP_INVALID_CPU_NUM (~0U)
 
-struct pmap_cpu_data {
-	pmap_t cpu_user_pmap;
-	unsigned int cpu_number;
-	unsigned int cpu_user_pmap_stamp;
-
-	/*
-	 * This supports overloading of ARM ASIDs by the pmap.  The field needs
-	 * to be wide enough to cover all the virtual bits in a virtual ASID.
-	 * With 256 physical ASIDs, 8-bit fields let us support up to 65536
-	 * Virtual ASIDs, minus all that would map on to 0 (as 0 is a global
-	 * ASID).
-	 *
-	 * If we were to use bitfield shenanigans here, we could save a bit of
-	 * memory by only having enough bits to support MAX_ASID.  However, such
-	 * an implementation would be more error prone.
-	 */
-	uint8_t cpu_asid_high_bits[ARM_MAX_ASID];
-};
-
-typedef struct pmap_cpu_data pmap_cpu_data_t;
-
 /* Initialize the pmap per-CPU data for the current CPU. */
 extern void pmap_cpu_data_init(void);
 
@@ -511,5 +511,13 @@ extern pmap_cpu_data_t * pmap_get_cpu_data(void);
 extern kern_return_t pmap_return(boolean_t do_panic, boolean_t do_recurse);
 
 #endif /* #ifndef ASSEMBLER */
+
+#if __ARM_KERNEL_PROTECT__
+/*
+ * The exception vector mappings start at the middle of the kernel page table
+ * range  (so that the EL0 mapping can be located at the base of the range).
+ */
+#define ARM_KERNEL_PROTECT_EXCEPTION_START ((~((ARM_TT_ROOT_SIZE + ARM_TT_ROOT_INDEX_MASK) / 2ULL)) + 1ULL)
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 #endif /* #ifndef _ARM_PMAP_H_ */

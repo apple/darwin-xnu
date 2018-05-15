@@ -92,7 +92,7 @@ extern int 		kdp_stack_snapshot_bytes_traced(void);
  * Increment the PANICLOG_VERSION if you change the format of the panic
  * log in any way.
  */
-#define PANICLOG_VERSION 8
+#define PANICLOG_VERSION 9
 static struct kcdata_descriptor kc_panic_data;
 
 extern char                 firmware_version[];
@@ -147,6 +147,14 @@ unsigned int          debug_ack_timeout_count = 0;
 volatile unsigned int debugger_sync = 0;
 volatile unsigned int mp_kdp_trap = 0; /* CPUs signalled by the debug CPU will spin on this */
 unsigned int          DebugContextCount = 0;
+
+#if defined(__arm64__)
+uint8_t PE_smc_stashed_x86_system_state = 0xFF;
+uint8_t PE_smc_stashed_x86_power_state = 0xFF;
+uint8_t PE_smc_stashed_x86_efi_boot_state = 0xFF;
+uint32_t PE_pcie_stashed_link_state = UINT32_MAX;
+#endif
+
  
 // Convenient macros to easily validate one or more pointers if 
 // they have defined types
@@ -319,6 +327,14 @@ do_print_all_backtraces(
 		if (last_hwaccess_thread) {
 			paniclog_append_noflush("AppleHWAccess Thread: 0x%llx\n", last_hwaccess_thread);
 		}
+#if defined(XNU_TARGET_OS_BRIDGE)
+		paniclog_append_noflush("PCIeUp link state: ");
+		if (PE_pcie_stashed_link_state != UINT32_MAX) {
+			paniclog_append_noflush("0x%x", PE_pcie_stashed_link_state);
+		} else {
+			paniclog_append_noflush("not available\n");
+		}
+#endif
 	}
 	paniclog_append_noflush("Memory ID: 0x%x\n", gPlatformMemoryID);
 	paniclog_append_noflush("OS version: %.256s\n",
@@ -332,6 +348,26 @@ do_print_all_backtraces(
 
 	paniclog_append_noflush("iBoot version: %.128s\n", firmware_version);
 	paniclog_append_noflush("secure boot?: %s\n", debug_enabled ? "NO": "YES");
+#if defined(XNU_TARGET_OS_BRIDGE)
+	paniclog_append_noflush("x86 EFI Boot State: ");
+	if (PE_smc_stashed_x86_efi_boot_state != 0xFF) {
+		paniclog_append_noflush("0x%x\n", PE_smc_stashed_x86_efi_boot_state);
+	} else {
+		paniclog_append_noflush("not available\n");
+	}
+	paniclog_append_noflush("x86 System State: ");
+	if (PE_smc_stashed_x86_system_state != 0xFF) {
+		paniclog_append_noflush("0x%x\n", PE_smc_stashed_x86_system_state);
+	} else {
+		paniclog_append_noflush("not available\n");
+	}
+	paniclog_append_noflush("x86 Power State: ");
+	if (PE_smc_stashed_x86_power_state != 0xFF) {
+		paniclog_append_noflush("0x%x\n", PE_smc_stashed_x86_power_state);
+	} else {
+		paniclog_append_noflush("not available\n");
+	}
+#endif
 	paniclog_append_noflush("Paniclog version: %d\n", logversion);
 
 	panic_display_kernel_aslr();
@@ -573,6 +609,12 @@ SavePanicInfo(
 	if (panic_options & DEBUGGER_OPTION_COPROC_INITIATED_PANIC) {
 		panic_info->eph_panic_flags |= EMBEDDED_PANIC_HEADER_FLAG_COPROC_INITIATED_PANIC;
 	}
+
+#if defined(XNU_TARGET_OS_BRIDGE)
+	panic_info->eph_x86_power_state = PE_smc_stashed_x86_power_state;
+	panic_info->eph_x86_efi_boot_state = PE_smc_stashed_x86_efi_boot_state;
+	panic_info->eph_x86_system_state = PE_smc_stashed_x86_system_state;
+#endif
 
 	/*
 	 * On newer targets, panic data is stored directly into the iBoot panic region.

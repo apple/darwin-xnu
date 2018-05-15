@@ -678,8 +678,8 @@ kern_do_coredump(void *core_outvars, boolean_t kernel_only, uint64_t first_file_
 	current_core = kern_coredump_core_list;
 	while (current_core) {
 		/* Seek to the beginning of the next file */
-		ret = kern_dump_seek_to_next_file(core_outvars, *last_file_offset);
-		if (ret != KERN_SUCCESS) {
+		cur_ret = kern_dump_seek_to_next_file(core_outvars, *last_file_offset);
+		if (cur_ret != KERN_SUCCESS) {
 			kern_coredump_log(NULL, "Failed to seek to beginning of next core\n");
 			return KERN_FAILURE;
 		}

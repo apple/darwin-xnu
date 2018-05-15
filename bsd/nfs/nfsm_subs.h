@@ -144,6 +144,8 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 		VATTR_WANTED((VAP), va_change_time); \
 		if ((VERS) == NFS_VER2) \
 			VATTR_WANTED((VAP), va_iosize); \
+		if ((VERS) == NFS_VER3) \
+			VATTR_WANTED((VAP), va_filerev); \
 	} while (0)
 
 /* Initialize a vnode_attr to retrieve pre-operation attributes for the NFS server. */

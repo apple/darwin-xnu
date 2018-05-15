@@ -709,7 +709,7 @@ kernel_pmap_present_mapping(uint64_t vaddr, uint64_t * pvincr, uintptr_t * pvphy
     }
     else
 #if defined(__arm64__)
-    if (vaddr == _COMM_PAGE64_BASE_ADDRESS)
+    if (vaddr == _COMM_HIGH_PAGE64_BASE_ADDRESS)
     {
 	/* not readable */
 	ppn = 0;
@@ -1148,8 +1148,10 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 	existing_log_size = (panic_info->eph_panic_log_offset - sizeof(struct embedded_panic_header)) +
 				panic_info->eph_panic_log_len + panic_info->eph_other_log_len;
 #else /* CONFIG_EMBEDDED */
-	existing_log_size = (panic_info->mph_panic_log_offset - sizeof(struct macos_panic_header)) +
+	if (panic_info->mph_panic_log_offset != 0) {
+		existing_log_size = (panic_info->mph_panic_log_offset - sizeof(struct macos_panic_header)) +
 				panic_info->mph_panic_log_len + panic_info->mph_other_log_len;
+	}
 #endif /* CONFIG_EMBEDDED */
 
 	assert (existing_log_size <= debug_buf_size);
@@ -1261,7 +1263,9 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 #if CONFIG_EMBEDDED
 		existing_log_size -= panic_info->eph_other_log_len;
 #else
-		existing_log_size -= panic_info->mph_other_log_len;
+		if (existing_log_size) {
+			existing_log_size -= panic_info->mph_other_log_len;
+		}
 #endif
 
 		/*
@@ -1308,15 +1312,18 @@ exit:
 		dump_succeeded = FALSE;
 	}
 
+	/* If applicable, update the panic header and flush it so we update the CRC */
 #if CONFIG_EMBEDDED
 	panic_info->eph_panic_flags |= (dump_succeeded ? EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_COMPLETE :
 			EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_FAILED);
-#else
-	panic_info->mph_panic_flags |= (dump_succeeded ? MACOS_PANIC_HEADER_FLAG_COREDUMP_COMPLETE :
-			MACOS_PANIC_HEADER_FLAG_COREDUMP_FAILED);
-#endif
-	/* We touched the panic header, flush it so we update the CRC */
 	paniclog_flush();
+#else
+	if (panic_info->mph_panic_log_offset != 0) {
+		panic_info->mph_panic_flags |= (dump_succeeded ? MACOS_PANIC_HEADER_FLAG_COREDUMP_COMPLETE :
+			MACOS_PANIC_HEADER_FLAG_COREDUMP_FAILED);
+		paniclog_flush();
+	}
+#endif
 
 	return (dump_succeeded ? 0 : -1);
 }

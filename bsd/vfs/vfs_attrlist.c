@@ -340,7 +340,7 @@ static struct getvolattrlist_attrtab getvolattrlist_common_tab[] = {
 static struct getvolattrlist_attrtab getvolattrlist_vol_tab[] = {
 	{ATTR_VOL_FSTYPE,		0,						sizeof(uint32_t)},
 	{ATTR_VOL_SIGNATURE,		VFSATTR_BIT(f_signature),			sizeof(uint32_t)},
-	{ATTR_VOL_SIZE,			VFSATTR_BIT(f_blocks),				sizeof(off_t)},
+	{ATTR_VOL_SIZE,				VFSATTR_BIT(f_blocks)  |  VFSATTR_BIT(f_bsize),				sizeof(off_t)},
 	{ATTR_VOL_SPACEFREE,		VFSATTR_BIT(f_bfree) | VFSATTR_BIT(f_bsize),	sizeof(off_t)},
 	{ATTR_VOL_SPACEAVAIL,		VFSATTR_BIT(f_bavail) | VFSATTR_BIT(f_bsize),	sizeof(off_t)},
 	{ATTR_VOL_MINALLOCATION,	VFSATTR_BIT(f_bsize),				sizeof(off_t)},

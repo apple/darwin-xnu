@@ -2668,6 +2668,9 @@ vfork_exit_internal(proc_t p, int rv, int forceexit)
 __private_extern__  void 
 munge_user64_rusage(struct rusage *a_rusage_p, struct user64_rusage *a_user_rusage_p)
 {
+	/* Zero-out struct so that padding is cleared */
+	bzero(a_user_rusage_p, sizeof(struct user64_rusage));
+
 	/* timeval changes size, so utime and stime need special handling */
 	a_user_rusage_p->ru_utime.tv_sec = a_rusage_p->ru_utime.tv_sec;
 	a_user_rusage_p->ru_utime.tv_usec = a_rusage_p->ru_utime.tv_usec;

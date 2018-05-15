@@ -4117,7 +4117,7 @@ ip_forward(struct mbuf *m, int srcrt, struct sockaddr_in *next_hop)
 			if (sav != NULL) {
 				lck_mtx_lock(sadb_mutex);
 				if (sav->sah != NULL) {
-					ro = &sav->sah->sa_route;
+					ro = (struct route *)&sav->sah->sa_route;
 					if (ro->ro_rt != NULL) {
 						RT_LOCK(ro->ro_rt);
 						if (ro->ro_rt->rt_ifp != NULL) {

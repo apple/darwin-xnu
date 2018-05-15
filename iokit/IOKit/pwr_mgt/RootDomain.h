@@ -557,6 +557,8 @@ public:
     void        sleepWakeDebugSaveSpinDumpFile();
     void        swdDebugSetup();
     void        swdDebugTeardown();
+    bool        checkShutdownTimeout();
+    void        panicWithShutdownLog(uint32_t timeoutInMs);
 
 private:
     friend class PMSettingObject;

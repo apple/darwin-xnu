@@ -382,6 +382,7 @@ SECURITY_READ_ONLY_EARLY(static struct filterops) workloop_filtops = {
 extern const struct filterops pipe_rfiltops;
 extern const struct filterops pipe_wfiltops;
 extern const struct filterops ptsd_kqops;
+extern const struct filterops ptmx_kqops;
 extern const struct filterops soread_filtops;
 extern const struct filterops sowrite_filtops;
 extern const struct filterops sock_filtops;
@@ -449,7 +450,8 @@ SECURITY_READ_ONLY_EARLY(static struct filterops *) sysfilt_ops[EVFILTID_MAX] = 
 	[EVFILTID_NECP_FD] 				= &necp_fd_rfiltops,
 	[EVFILTID_FSEVENT] 				= &fsevent_filtops,
 	[EVFILTID_VN] 					= &vnode_filtops,
-	[EVFILTID_TTY]					= &tty_filtops
+	[EVFILTID_TTY]					= &tty_filtops,
+	[EVFILTID_PTMX]					= &ptmx_kqops,
 };
 
 /* waitq prepost callback */
@@ -2107,7 +2109,8 @@ filt_wldebounce(
 
 #if DEBUG || DEVELOPMENT
 		if ((kev->fflags & NOTE_WL_THREAD_REQUEST) && !(kev->flags & EV_DELETE)) {
-			if ((udata & DISPATCH_QUEUE_ENQUEUED) == 0) {
+			if ((udata & DISPATCH_QUEUE_ENQUEUED) == 0 &&
+					(udata >> 48) != 0 && (udata >> 48) != 0xffff) {
 				panic("kevent: workloop %#016llx is not enqueued "
 						"(kev:%p dq_state:%#016llx)", kev->udata, kev, udata);
 			}
@@ -2807,7 +2810,8 @@ filt_wlprocess(
 			uint64_t val;
 			if (addr && task_is_active(t) && !task_is_halting(t) &&
 					copyin_word(addr, &val, sizeof(val)) == 0 &&
-					val && (val & DISPATCH_QUEUE_ENQUEUED) == 0) {
+					val && (val & DISPATCH_QUEUE_ENQUEUED) == 0 &&
+					(val >> 48) != 0 && (val >> 48) != 0xffff) {
 				panic("kevent: workloop %#016llx is not enqueued "
 						"(kn:%p dq_state:%#016llx kev.dq_state:%#016llx)",
 						kn->kn_udata, kn, val,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1956,6 +1956,10 @@ bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp)
     bondport_ref *		old_array = NULL;
     bondport_ref 		p;
     int				progress = 0;
+
+    if (IFNET_IS_INTCOPROC(port_ifp)) {
+	return (EINVAL);
+    }
 
     /* pre-allocate space for new port */
     p = bondport_create(port_ifp, 0x8000, 1, 0, &error);

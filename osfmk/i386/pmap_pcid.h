@@ -61,8 +61,12 @@ tlb_flush_global(void) {
 	 * count of kernel invalidations, but that scheme
 	 * has its disadvantages as well.
 	 */
-	set_cr4(cr4 & ~CR4_PGE);
-	set_cr4(cr4 | CR4_PGE); 
+	if (cr4 & CR4_PGE) {
+		set_cr4(cr4 & ~CR4_PGE);
+		set_cr4(cr4 | CR4_PGE);
+	} else {
+		set_cr3_raw(get_cr3_raw());
+	}
 	return;
 }
 
@@ -85,7 +89,6 @@ static inline void pmap_pcid_validate_current(void) {
 	if (cptr) {
 		*cptr = 0;
 	}
-
 }
 
 static inline void pmap_pcid_invalidate_cpu(pmap_t tpmap, int ccpu) {

@@ -47,6 +47,28 @@
 #include <libkern/kernel_mach_header.h>
 #include <libkern/section_keywords.h>
 
+#if __ARM_KERNEL_PROTECT__
+#include <arm/atomic.h>
+#endif /* __ARM_KERNEL_PROTECT__ */
+
+#if __ARM_KERNEL_PROTECT__
+/*
+ * If we want to support __ARM_KERNEL_PROTECT__, we need a sufficient amount of
+ * mappable space preceeding the kernel (as we unmap the kernel by cutting the
+ * range covered by TTBR1 in half).  This must also cover the exception vectors.
+ */
+static_assert(KERNEL_PMAP_HEAP_RANGE_START > ARM_KERNEL_PROTECT_EXCEPTION_START);
+
+/* The exception vectors and the kernel cannot share root TTEs. */
+static_assert((KERNEL_PMAP_HEAP_RANGE_START & ~ARM_TT_ROOT_OFFMASK) > ARM_KERNEL_PROTECT_EXCEPTION_START);
+
+/*
+ * We must have enough space in the TTBR1_EL1 range to create the EL0 mapping of
+ * the exception vectors.
+ */
+static_assert((((~ARM_KERNEL_PROTECT_EXCEPTION_START) + 1) * 2ULL) <= (ARM_TT_ROOT_SIZE + ARM_TT_ROOT_INDEX_MASK));
+#endif /* __ARM_KERNEL_PROTECT__ */
+
 #if KASAN
 extern vm_offset_t shadow_pbase;
 extern vm_offset_t shadow_ptop;
@@ -177,6 +199,11 @@ SECURITY_READ_ONLY_LATE(vm_offset_t)     first_avail;
 SECURITY_READ_ONLY_LATE(vm_offset_t)     static_memory_end;
 SECURITY_READ_ONLY_LATE(pmap_paddr_t)    avail_start;
 SECURITY_READ_ONLY_LATE(pmap_paddr_t)    avail_end;
+
+#if __ARM_KERNEL_PROTECT__
+extern void ExceptionVectorsBase;
+extern void ExceptionVectorsEnd;
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 #define	MEM_SIZE_MAX		0x100000000ULL
 
@@ -344,6 +371,240 @@ void dump_kva_space() {
 
 #endif /* DEBUG */
 
+#if __ARM_KERNEL_PROTECT__
+/*
+ * arm_vm_map:
+ *   root_ttp: The kernel virtual address for the root of the target page tables
+ *   vaddr: The target virtual address
+ *   pte: A page table entry value (may be ARM_PTE_EMPTY)
+ *
+ * This function installs pte at vaddr in root_ttp.  Any page table pages needed
+ * to install pte will be allocated by this function.
+ */
+static void
+arm_vm_map(tt_entry_t * root_ttp, vm_offset_t vaddr, pt_entry_t pte)
+{
+	vm_offset_t ptpage = 0;
+	tt_entry_t * ttp = root_ttp;
+
+#if !__ARM64_TWO_LEVEL_PMAP__
+	tt_entry_t * l1_ttep = NULL;
+	tt_entry_t l1_tte = 0;
+#endif
+
+	tt_entry_t * l2_ttep = NULL;
+	tt_entry_t l2_tte = 0;
+	pt_entry_t * ptep = NULL;
+	pt_entry_t cpte = 0;
+
+	/*
+	 * Walk the target page table to find the PTE for the given virtual
+	 * address.  Allocate any page table pages needed to do this.
+	 */
+#if !__ARM64_TWO_LEVEL_PMAP__
+	l1_ttep = ttp + ((vaddr & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
+	l1_tte = *l1_ttep;
+
+	if (l1_tte == ARM_TTE_EMPTY) {
+		ptpage = alloc_ptpage(TRUE);
+		bzero((void *)ptpage, ARM_PGBYTES);
+		l1_tte = kvtophys(ptpage);
+		l1_tte &= ARM_TTE_TABLE_MASK;
+		l1_tte |= ARM_TTE_VALID | ARM_TTE_TYPE_TABLE;
+		*l1_ttep = l1_tte;
+		ptpage = 0;
+	}
+
+	ttp = (tt_entry_t *)phystokv(l1_tte & ARM_TTE_TABLE_MASK);
+#endif
+
+	l2_ttep = ttp + ((vaddr & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
+	l2_tte = *l2_ttep;
+
+	if (l2_tte == ARM_TTE_EMPTY) {
+		ptpage = alloc_ptpage(TRUE);
+		bzero((void *)ptpage, ARM_PGBYTES);
+		l2_tte = kvtophys(ptpage);
+		l2_tte &= ARM_TTE_TABLE_MASK;
+		l2_tte |= ARM_TTE_VALID | ARM_TTE_TYPE_TABLE;
+		*l2_ttep = l2_tte;
+		ptpage = 0;
+	}
+
+	ttp = (tt_entry_t *)phystokv(l2_tte & ARM_TTE_TABLE_MASK);
+
+	ptep = ttp + ((vaddr & ARM_TT_L3_INDEX_MASK) >> ARM_TT_L3_SHIFT);
+	cpte = *ptep;
+
+	/*
+	 * If the existing PTE is not empty, then we are replacing a valid
+	 * mapping.
+	 */
+	if (cpte != ARM_PTE_EMPTY) {
+		panic("%s: cpte=%#llx is not empty, "
+		      "vaddr=%#lx, pte=%#llx",
+		      __FUNCTION__, cpte,
+		      vaddr, pte);
+	}
+
+	*ptep = pte;
+}
+
+/*
+ * arm_vm_kernel_el0_map:
+ *   vaddr: The target virtual address
+ *   pte: A page table entry value (may be ARM_PTE_EMPTY)
+ *
+ * This function installs pte at vaddr for the EL0 kernel mappings.
+ */
+static void
+arm_vm_kernel_el0_map(vm_offset_t vaddr, pt_entry_t pte)
+{
+	/* Calculate where vaddr will be in the EL1 kernel page tables. */
+	vm_offset_t kernel_pmap_vaddr = vaddr - ((ARM_TT_ROOT_INDEX_MASK + ARM_TT_ROOT_SIZE) / 2ULL);
+	arm_vm_map(cpu_tte, kernel_pmap_vaddr, pte);
+}
+
+/*
+ * arm_vm_kernel_el1_map:
+ *   vaddr: The target virtual address
+ *   pte: A page table entry value (may be ARM_PTE_EMPTY)
+ *
+ * This function installs pte at vaddr for the EL1 kernel mappings.
+ */
+static void
+arm_vm_kernel_el1_map(vm_offset_t vaddr, pt_entry_t pte) {
+	arm_vm_map(cpu_tte, vaddr, pte);
+}
+
+/*
+ * arm_vm_kernel_pte:
+ *   vaddr: The target virtual address
+ *
+ * This function returns the PTE value for the given vaddr from the kernel page
+ * tables.  If the region has been been block mapped, we return what an
+ * equivalent PTE value would be (as regards permissions and flags).  We also
+ * remove the HINT bit (as we are not necessarily creating contiguous mappings.
+ */
+static pt_entry_t
+arm_vm_kernel_pte(vm_offset_t vaddr)
+{
+	tt_entry_t * ttp = cpu_tte;
+	tt_entry_t * ttep = NULL;
+	tt_entry_t tte = 0;
+	pt_entry_t * ptep = NULL;
+	pt_entry_t pte = 0;
+
+#if !__ARM64_TWO_LEVEL_PMAP__
+	ttep = ttp + ((vaddr & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
+	tte = *ttep;
+
+	assert(tte & ARM_TTE_VALID);
+
+	if ((tte & ARM_TTE_TYPE_MASK) == ARM_TTE_TYPE_BLOCK) {
+		/* This is a block mapping; return the equivalent PTE value. */
+		pte = (pt_entry_t)(tte & ~ARM_TTE_TYPE_MASK);
+		pte |= ARM_PTE_TYPE_VALID;
+		pte |= vaddr & ((ARM_TT_L1_SIZE - 1) & ARM_PTE_PAGE_MASK);
+		pte &= ~ARM_PTE_HINT_MASK;
+		return pte;
+	}
+
+	ttp = (tt_entry_t *)phystokv(tte & ARM_TTE_TABLE_MASK);
+#endif
+	ttep = ttp + ((vaddr & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
+	tte = *ttep;
+
+	assert(tte & ARM_TTE_VALID);
+
+	if ((tte & ARM_TTE_TYPE_MASK) == ARM_TTE_TYPE_BLOCK) {
+		/* This is a block mapping; return the equivalent PTE value. */
+		pte = (pt_entry_t)(tte & ~ARM_TTE_TYPE_MASK);
+		pte |= ARM_PTE_TYPE_VALID;
+		pte |= vaddr & ((ARM_TT_L2_SIZE - 1) & ARM_PTE_PAGE_MASK);
+		pte &= ~ARM_PTE_HINT_MASK;
+		return pte;
+	}
+
+	ttp = (tt_entry_t *)phystokv(tte & ARM_TTE_TABLE_MASK);
+
+	ptep = ttp + ((vaddr & ARM_TT_L3_INDEX_MASK) >> ARM_TT_L3_SHIFT);
+	pte = *ptep;
+	pte &= ~ARM_PTE_HINT_MASK;
+	return pte;
+}
+
+/*
+ * arm_vm_prepare_kernel_el0_mappings:
+ *   alloc_only: Indicates if PTE values should be copied from the EL1 kernel
+ *     mappings.
+ *
+ * This function expands the kernel page tables to support the EL0 kernel
+ * mappings, and conditionally installs the PTE values for the EL0 kernel
+ * mappings (if alloc_only is false).
+ */
+static void
+arm_vm_prepare_kernel_el0_mappings(bool alloc_only)
+{
+	pt_entry_t pte = 0;
+	vm_offset_t start = ((vm_offset_t)&ExceptionVectorsBase) & ~PAGE_MASK;
+	vm_offset_t end = (((vm_offset_t)&ExceptionVectorsEnd) + PAGE_MASK) & ~PAGE_MASK;
+	vm_offset_t cur = 0;
+	vm_offset_t cur_fixed = 0;
+
+	/* Expand for/map the exceptions vectors in the EL0 kernel mappings. */
+	for (cur = start, cur_fixed = ARM_KERNEL_PROTECT_EXCEPTION_START; cur < end; cur += ARM_PGBYTES, cur_fixed += ARM_PGBYTES) {
+		/*
+		 * We map the exception vectors at a different address than that
+		 * of the kernelcache to avoid sharing page table pages with the
+		 * kernelcache (as this may cause issues with TLB caching of
+		 * page table pages.
+		 */
+		if (!alloc_only) {
+			pte = arm_vm_kernel_pte(cur);
+		}
+
+		arm_vm_kernel_el1_map(cur_fixed, pte);
+		arm_vm_kernel_el0_map(cur_fixed, pte);
+	}
+
+	__builtin_arm_dmb(DMB_ISH);
+	__builtin_arm_isb(ISB_SY);
+
+	if (!alloc_only) {
+		/*
+		 * If we have created the alternate exception vector mappings,
+		 * the boot CPU may now switch over to them.
+		 */
+		set_vbar_el1(ARM_KERNEL_PROTECT_EXCEPTION_START);
+		__builtin_arm_isb(ISB_SY);
+	}
+}
+
+/*
+ * arm_vm_populate_kernel_el0_mappings:
+ *
+ * This function adds all required mappings to the EL0 kernel mappings.
+ */
+static void
+arm_vm_populate_kernel_el0_mappings(void)
+{
+	arm_vm_prepare_kernel_el0_mappings(FALSE);
+}
+
+/*
+ * arm_vm_expand_kernel_el0_mappings:
+ *
+ * This function expands the kernel page tables to accomodate the EL0 kernel
+ * mappings.
+ */
+static void
+arm_vm_expand_kernel_el0_mappings(void)
+{
+	arm_vm_prepare_kernel_el0_mappings(TRUE);
+}
+#endif /* __ARM_KERNEL_PROTECT__ */
+
 #if defined(KERNEL_INTEGRITY_KTRR)
 extern void bootstrap_instructions;
 
@@ -474,6 +735,9 @@ arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va,
 				ptmp = ptmp | ARM_PTE_ATTRINDX(CACHE_ATTRINDX_DEFAULT);
 				ptmp = ptmp | ARM_PTE_AP(pte_prot_APX);
 				ptmp = ptmp | ARM_PTE_NX;
+#if __ARM_KERNEL_PROTECT__
+				ptmp = ptmp | ARM_PTE_NG;
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 				if (pte_prot_XN) {
 					ptmp = ptmp | ARM_PTE_PNX;
@@ -566,6 +830,9 @@ arm_vm_page_granular_prot(vm_offset_t start, unsigned long size,
 
 			tmplate = (tmplate & ~ARM_TTE_BLOCK_APMASK) | ARM_TTE_BLOCK_AP(pte_prot_APX);
 			tmplate = tmplate | ARM_TTE_BLOCK_NX;
+#if __ARM_KERNEL_PROTECT__
+			tmplate = tmplate | ARM_TTE_BLOCK_NG;
+#endif /* __ARM_KERNEL_PROTECT__ */
 			if (tte_prot_XN)
 				tmplate = tmplate | ARM_TTE_BLOCK_PNX;
 
@@ -742,6 +1009,10 @@ arm_vm_prot_finalize(boot_args * args)
 		arm_vm_page_granular_RNX(segPLKDATACONSTB, segSizePLKDATACONST, FALSE);
 	}
 
+#if __ARM_KERNEL_PROTECT__
+	arm_vm_populate_kernel_el0_mappings();
+#endif /* __ARM_KERNEL_PROTECT__ */
+
 #if defined(KERNEL_INTEGRITY_KTRR)
 	/*
 	 * __LAST,__pinst should no longer be executable.
@@ -754,6 +1025,7 @@ arm_vm_prot_finalize(boot_args * args)
 	 * and will become immutable.
 	 */
 #endif
+
 	arm_vm_page_granular_RNX(segDATACONSTB, segSizeDATACONST, FALSE);
 
 #ifndef __ARM_L1_PTW__
@@ -776,6 +1048,10 @@ boolean_t user_tbi = TRUE;
 static void
 set_tbi(void)
 {
+#if !__ARM_KERNEL_PROTECT__
+	/* If we are not built with __ARM_KERNEL_PROTECT__, TBI can be turned
+	 * off with a boot-arg.
+	 */
 	uint64_t old_tcr, new_tcr;
 	int tbi = 0;
 
@@ -789,6 +1065,7 @@ set_tbi(void)
 		set_tcr(new_tcr);
 		sysreg_restore.tcr_el1 = new_tcr;
 	}
+#endif /* !__ARM_KERNEL_PROTECT__ */
 }
 
 void
@@ -863,7 +1140,6 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	cpu_tte = (tt_entry_t *)alloc_ptpage(TRUE);
 	cpu_ttep = kvtophys((vm_offset_t)cpu_tte);
 	bzero(cpu_tte, ARM_PGBYTES);
-
 	avail_end = gPhysBase + mem_size;
 
 	/*
@@ -873,7 +1149,6 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 *
 	 *   the so called physical aperture should be statically mapped
 	 */
-
 #if !__ARM64_TWO_LEVEL_PMAP__
 	pa_l1 = gPhysBase;
 	va_l1 = gVirtBase;
@@ -920,6 +1195,9 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 			              | ARM_TTE_VALID | ARM_TTE_BLOCK_AF
 			              | ARM_TTE_BLOCK_AP(AP_RWNA) | ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY)
 			              | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITEBACK);
+#if __ARM_KERNEL_PROTECT__
+			*cpu_l2_tte |= ARM_TTE_BLOCK_NG;
+#endif /* __ARM_KERNEL_PROTECT__ */
 			va_l2 += ARM_TT_L2_SIZE;
 			pa_l2 += ARM_TT_L2_SIZE;
 			cpu_l2_tte++;
@@ -930,6 +1208,11 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 		pa_l1 = pa_l2;
 	}
 #endif
+
+#if __ARM_KERNEL_PROTECT__
+	/* Expand the page tables to prepare for the EL0 mappings. */
+	arm_vm_expand_kernel_el0_mappings();
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 	/*
 	 * Now retrieve addresses for end, edata, and etext from MACH-O headers
@@ -1010,7 +1293,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 */
 #if !__ARM64_TWO_LEVEL_PMAP__
 	va_l1 = (gVirtBase+MEM_SIZE_MAX+ ~0xFFFFFFFFFF800000ULL) & 0xFFFFFFFFFF800000ULL;
-	va_l1_end = VM_MAX_KERNEL_ADDRESS; 
+	va_l1_end = VM_MAX_KERNEL_ADDRESS;
 	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
 
 	while (va_l1 < va_l1_end) {

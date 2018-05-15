@@ -239,6 +239,7 @@ pmap_t		kernel_pmap;
 struct zone	*pmap_zone;		/* zone of pmap structures */
 
 struct zone	*pmap_anchor_zone;
+struct zone	*pmap_uanchor_zone;
 int		pmap_debug = 0;		/* flag for debugging prints */
 
 unsigned int	inuse_ptepages_count = 0;
@@ -323,12 +324,8 @@ void
 pmap_cpu_init(void)
 {
 	cpu_data_t	*cdp = current_cpu_datap();
-	/*
-	 * Here early in the life of a processor (from cpu_mode_init()).
-	 * Ensure global page feature is disabled at this point.
-	 */
 
-	set_cr4(get_cr4() &~ CR4_PGE);
+	set_cr4(get_cr4() | CR4_PGE);
 
 	/*
 	 * Initialize the per-cpu, TLB-related fields.
@@ -337,6 +334,7 @@ pmap_cpu_init(void)
 	cdp->cpu_active_cr3 = kernel_pmap->pm_cr3;
 	cdp->cpu_tlb_invalid = FALSE;
 	cdp->cpu_task_map = TASK_MAP_64BIT;
+
 	pmap_pcid_configure();
 	if (cpuid_leaf7_features() & CPUID_LEAF7_FEATURE_SMEP) {
 		pmap_smep_enabled = TRUE;
@@ -415,14 +413,13 @@ pmap_bootstrap(
 	kernel_pmap->nx_enabled = TRUE;
 	kernel_pmap->pm_task_map = TASK_MAP_64BIT;
 	kernel_pmap->pm_obj = (vm_object_t) NULL;
-	kernel_pmap->dirbase = (pd_entry_t *)((uintptr_t)IdlePTD);
-	kernel_pmap->pm_pdpt = (pd_entry_t *) ((uintptr_t)IdlePDPT);
 	kernel_pmap->pm_pml4 = IdlePML4;
+	kernel_pmap->pm_upml4 = IdlePML4;
 	kernel_pmap->pm_cr3 = (uintptr_t)ID_MAP_VTOP(IdlePML4);
+	kernel_pmap->pm_ucr3 = (uintptr_t)ID_MAP_VTOP(IdlePML4);
 	kernel_pmap->pm_eptp = 0;
-	pmap_pcid_initialize_kernel(kernel_pmap);
 
-	
+	pmap_pcid_initialize_kernel(kernel_pmap);
 
 	current_cpu_datap()->cpu_kernel_cr3 = (addr64_t) kernel_pmap->pm_cr3;
 
@@ -808,6 +805,18 @@ pmap_init(void)
 	 */
 
 	zone_change(pmap_anchor_zone, Z_ALIGNMENT_REQUIRED, TRUE);
+/* TODO: possible general optimisation...pre-allocate via zones commonly created
+ * level3/2 pagetables
+ */
+	pmap_uanchor_zone = zinit(PAGE_SIZE, task_max, PAGE_SIZE, "pagetable user anchors");
+	zone_change(pmap_uanchor_zone, Z_NOENCRYPT, TRUE);
+
+	/* The anchor is required to be page aligned. Zone debugging adds
+	 * padding which may violate that requirement. Tell the zone
+	 * subsystem that alignment is required.
+	 */
+
+	zone_change(pmap_uanchor_zone, Z_ALIGNMENT_REQUIRED, TRUE);
 
 	s = (vm_size_t) sizeof(struct pv_hashed_entry);
 	pv_hashed_list_zone = zinit(s, 10000*s /* Expandable zone */,
@@ -1288,6 +1297,7 @@ hv_ept_pmap_create(void **ept_pmap, void **eptp)
  *	the map will be used in software only, and
  *	is bounded by that size.
  */
+
 pmap_t
 pmap_create_options(
 	ledger_t	ledger,
@@ -1314,24 +1324,20 @@ pmap_create_options(
 	/*
 	 *	Return error when unrecognized flags are passed.
 	 */
-	if ((flags & ~(PMAP_CREATE_KNOWN_FLAGS)) != 0) {
+	if (__improbable((flags & ~(PMAP_CREATE_KNOWN_FLAGS)) != 0)) {
 		return(PMAP_NULL);
 	}
 
 	p = (pmap_t) zalloc(pmap_zone);
 	if (PMAP_NULL == p)
 		panic("pmap_create zalloc");
+
 	/* Zero all fields */
 	bzero(p, sizeof(*p));
 	/* init counts now since we'll be bumping some */
 	simple_lock_init(&p->lock, 0);
-#if 00
-	p->stats.resident_count = 0;
-	p->stats.resident_max = 0;
-	p->stats.wired_count = 0;
-#else
 	bzero(&p->stats, sizeof (p->stats));
-#endif
+
 	p->ref_count = 1;
 	p->nx_enabled = 1;
 	p->pm_shared = FALSE;
@@ -1347,10 +1353,13 @@ pmap_create_options(
 	}
 
 	p->pm_pml4 = zalloc(pmap_anchor_zone);
+	p->pm_upml4 = zalloc(pmap_uanchor_zone); //cleanup for EPT
 
 	pmap_assert((((uintptr_t)p->pm_pml4) & PAGE_MASK) == 0);
+	pmap_assert((((uintptr_t)p->pm_upml4) & PAGE_MASK) == 0);
 
 	memset((char *)p->pm_pml4, 0, PAGE_SIZE);
+	memset((char *)p->pm_upml4, 0, PAGE_SIZE);
 
 	if (flags & PMAP_CREATE_EPT) {
 		p->pm_eptp = (pmap_paddr_t)kvtophys((vm_offset_t)p->pm_pml4) | pmap_eptp_flags;
@@ -1358,6 +1367,7 @@ pmap_create_options(
 	} else {
 		p->pm_eptp = 0;
 		p->pm_cr3 = (pmap_paddr_t)kvtophys((vm_offset_t)p->pm_pml4);
+		p->pm_ucr3 = (pmap_paddr_t)kvtophys((vm_offset_t)p->pm_upml4);
 	}
 
 	/* allocate the vm_objs to hold the pdpt, pde and pte pages */
@@ -1381,11 +1391,13 @@ pmap_create_options(
 		pml4[KERNEL_PML4_INDEX]    = kpml4[KERNEL_PML4_INDEX];
 		pml4[KERNEL_KEXTS_INDEX]   = kpml4[KERNEL_KEXTS_INDEX];
 		pml4[KERNEL_PHYSMAP_PML4_INDEX] = kpml4[KERNEL_PHYSMAP_PML4_INDEX];
-
+		pml4[KERNEL_DBLMAP_PML4_INDEX] = kpml4[KERNEL_DBLMAP_PML4_INDEX];
 #if KASAN
 		pml4[KERNEL_KASAN_PML4_INDEX0] = kpml4[KERNEL_KASAN_PML4_INDEX0];
 		pml4[KERNEL_KASAN_PML4_INDEX1] = kpml4[KERNEL_KASAN_PML4_INDEX1];
 #endif
+		pml4_entry_t    *pml4u = pmap64_user_pml4(p, 0ULL);
+		pml4u[KERNEL_DBLMAP_PML4_INDEX] = kpml4[KERNEL_DBLMAP_PML4_INDEX];
 	}
 
 #if MACH_ASSERT
@@ -1556,6 +1568,7 @@ pmap_destroy(pmap_t	p)
 	int inuse_ptepages = 0;
 
 	zfree(pmap_anchor_zone, p->pm_pml4);
+	zfree(pmap_uanchor_zone, p->pm_upml4);
 
 	inuse_ptepages += p->pm_obj_pml4->resident_page_count;
 	vm_object_deallocate(p->pm_obj_pml4);
@@ -1782,6 +1795,10 @@ pmap_expand_pml4(
 
 	DBG("pmap_expand_pml4(%p,%p)\n", map, (void *)vaddr);
 
+	/* With the exception of the kext "basement", the kernel's level 4
+	 * pagetables must not be dynamically expanded.
+	 */
+	assert(map != kernel_pmap || (vaddr == KERNEL_BASEMENT));
 	/*
 	 *	Allocate a VM page for the pml4 page
 	 */
@@ -1844,6 +1861,13 @@ pmap_expand_pml4(
 	pml4p = pmap64_pml4(map, vaddr); /* refetch under lock */
 
 	pmap_store_pte(pml4p, pa_to_pte(pa)
+				| PTE_READ(is_ept)
+				| (is_ept ? INTEL_EPT_EX : INTEL_PTE_USER)
+				| PTE_WRITE(is_ept));
+	pml4_entry_t	*upml4p;
+
+	upml4p = pmap64_user_pml4(map, vaddr);
+	pmap_store_pte(upml4p, pa_to_pte(pa)
 				| PTE_READ(is_ept)
 				| (is_ept ? INTEL_EPT_EX : INTEL_PTE_USER)
 				| PTE_WRITE(is_ept));
@@ -1980,12 +2004,16 @@ pmap_expand(
 	 * which is for kexts and is in the 512GB immediately below the kernel..
 	 * XXX - should use VM_MIN_KERNEL_AND_KEXT_ADDRESS not KERNEL_BASEMENT
 	 */
-	if (map == kernel_pmap && 
-	    !(vaddr >= KERNEL_BASEMENT && vaddr <= VM_MAX_KERNEL_ADDRESS))
-		panic("pmap_expand: bad vaddr 0x%llx for kernel pmap", vaddr);
+	if (__improbable(map == kernel_pmap && 
+		!(vaddr >= KERNEL_BASEMENT && vaddr <= VM_MAX_KERNEL_ADDRESS))) {
+		if ((options & PMAP_EXPAND_OPTIONS_ALIASMAP) == 0) {
+			panic("pmap_expand: bad vaddr 0x%llx for kernel pmap", vaddr);
+		}
+	}
 
 
 	while ((pdp = pmap64_pde(map, vaddr)) == PD_ENTRY_NULL) {
+		assert((options & PMAP_EXPAND_OPTIONS_ALIASMAP) == 0);
 		kern_return_t pepkr = pmap_expand_pdpt(map, vaddr, options);
 		if (pepkr != KERN_SUCCESS)
 			return pepkr;
@@ -2035,7 +2063,7 @@ pmap_expand(
 
 		VM_PAGE_FREE(m);
 
-		OSAddAtomic(-1,  &inuse_ptepages_count);
+		OSAddAtomic(-1,  &inuse_ptepages_count);//todo replace all with inlines
 		PMAP_ZINFO_PFREE(map, PAGE_SIZE);
 		return KERN_SUCCESS;
 	}
@@ -2089,6 +2117,14 @@ pmap_pre_expand(pmap_t pmap, vm_map_offset_t vaddr)
 				| PTE_READ(is_ept)
 				| (is_ept ? INTEL_EPT_EX : INTEL_PTE_USER)
 				| PTE_WRITE(is_ept));
+
+		pte = pmap64_user_pml4(pmap, vaddr);
+
+		pmap_store_pte(pte, pa_to_pte(i386_ptob(pn))
+				| PTE_READ(is_ept)
+				| (is_ept ? INTEL_EPT_EX : INTEL_PTE_USER)
+				| PTE_WRITE(is_ept));
+
 	}
 
 	if(pmap64_pde(pmap, vaddr) == PD_ENTRY_NULL) {
@@ -2552,7 +2588,7 @@ pmap_flush(
 				}
 				orig_acks = NMIPI_acks;
 				NMIPI_panic(cpus_to_respond, TLB_FLUSH_TIMEOUT);
-				panic("TLB invalidation IPI timeout, unresponsive CPU bitmap: 0x%llx, NMIPI acks: 0x%lx, now: 0x%lx, deadline: %llu",
+				panic("Uninterruptible processor(s): CPU bitmap: 0x%llx, NMIPI acks: 0x%lx, now: 0x%lx, deadline: %llu",
 				      cpus_to_respond, orig_acks, NMIPI_acks, deadline);
 			}
 		}
@@ -2646,7 +2682,7 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 			continue;
 		uint64_t	cpu_active_cr3 = CPU_GET_ACTIVE_CR3(cpu);
 		uint64_t	cpu_task_cr3 = CPU_GET_TASK_CR3(cpu);
-
+//recall that the shadowed task cr3 is pre-composed
 		if ((pmap_cr3 == cpu_task_cr3) ||
 		    (pmap_cr3 == cpu_active_cr3) ||
 		    (pmap_is_shared)) {
@@ -2781,16 +2817,9 @@ process_pmap_updates(void)
 	pmap_assert(ml_get_interrupts_enabled() == 0 || get_preemption_level() != 0);
 	if (pmap_pcid_ncpus) {
 		pmap_pcid_validate_current();
-		if (cpu_datap(ccpu)->cpu_tlb_invalid_global) {
-			cpu_datap(ccpu)->cpu_tlb_invalid = FALSE;
-			tlb_flush_global();
-		}
-		else {
-			cpu_datap(ccpu)->cpu_tlb_invalid_local = FALSE;
-			flush_tlb_raw();
-		}
-	}
-	else {
+		cpu_datap(ccpu)->cpu_tlb_invalid = FALSE;
+		tlb_flush_global();
+	} else {
 		current_cpu_datap()->cpu_tlb_invalid = FALSE;
 		flush_tlb_raw();
 	}
@@ -3209,7 +3238,16 @@ pmap_check_ledgers(
 	}
 
 	if (pmap->stats.resident_count != 0 ||
+#if 35156815
+	    /*
+	     * "wired_count" is unfortunately a bit inaccurate, so let's
+	     * tolerate some slight deviation to limit the amount of
+	     * somewhat-spurious assertion failures.
+	     */
+	    pmap->stats.wired_count > 10 ||
+#else /* 35156815 */
 	    pmap->stats.wired_count != 0 ||
+#endif /* 35156815 */
 	    pmap->stats.device != 0 ||
 	    pmap->stats.internal != 0 ||
 	    pmap->stats.external != 0 ||
@@ -3287,11 +3325,3 @@ void pmap_verify_noncacheable(uintptr_t vaddr) {
 		return;
 	panic("pmap_verify_noncacheable: IO read from a cacheable address? address: 0x%lx, PTE: %p, *PTE: 0x%llx", vaddr, ptep, *ptep);
 }
-
-#if KASAN
-void kasan_map_low_fixed_regions(void) {
-	kasan_map_shadow(MASTER_GDT_ALIAS, PAGE_SIZE, false);
-	kasan_map_shadow(MASTER_IDT_ALIAS, PAGE_SIZE, false);
-	kasan_map_shadow(LOWGLOBAL_ALIAS, PAGE_SIZE, false);
-}
-#endif

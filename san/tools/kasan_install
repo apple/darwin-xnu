@@ -4,15 +4,9 @@
 # kasan_install: set up a system to run the KASan kernel. Run with "--uninstall"
 # to reverse the setup.
 #
-# Installs a symlink to the kernel kasan in /System/Library/Kernels/kernel.kasan
-# and adds kcsuffix=kasan to boot-args.
+# Adds kcsuffix=kasan to boot-args.
 #
 
-
-kernel_name=kernel.kasan
-kernel_src=/AppleInternal/CoreOS/xnu_kasan/${kernel_name}
-SLK=/System/Library/Kernels/
-kernel_dst=${SLK}${kernel_name}
 
 if [[ `whoami` != root ]] ; then
 	echo "Re-running with sudo"
@@ -35,37 +29,7 @@ prompt() {
 
 kasan_install() {
 
-	dosymlink=0
 	dobootargs=0
-
-	if [[ ! -f $kernel_src ]] ; then
-		echo "No KASan kernel found at $kernel_src"
-		exit 1
-	fi
-
-	echo -n "Installing KASan kernel... "
-
-	if [[ -L $kernel_dst && $kernel_dst -ef $kernel_src ]] ; then
-		echo "already installed."
-	elif [[ -f $kernel_dst ]] ; then
-		prompt "file exists. Overwrite?" && {
-			echo -n "Overwriting KASan kernel... "
-			dosymlink=1
-		}
-	else
-		dosymlink=1
-	fi
-
-	# Use a temporary directory with a symlink to kernel.kasan. We can ditto
-	# from there into /S/L/K, even with SIP enabled.
-	[[ $dosymlink -eq 1 ]] && {
-		tmp=$(mktemp -d) || exit $?
-		ln -s "$kernel_src" "$tmp" || exit $?
-		ditto "$tmp" "$SLK" || exit $?
-		rm -r "$tmp"
-		echo "done."
-	}
-
 
 	echo -n "Checking KASan boot args... "
 
@@ -97,41 +61,10 @@ kasan_install() {
 		echo "done."
 	}
 
-	[[ $dosymlink -eq 1 ]] && {
-		echo -n "Triggering kernel cache rebuild... "
-		touch /System/Library/Extensions || exit $?
-		echo "done."
-	}
-
 }
 
 
 kasan_uninstall() {
-
-	echo -n "Removing kasan kernel... "
-
-	dorm=0
-
-	if [[ -L $kernel_dst && $kernel_dst -ef $kernel_src ]] ; then
-		dorm=1
-	elif [[ -f $kernel_dst ]] ; then
-		prompt "unexpected file. Remove anyway?" && {
-			dorm=1
-		}
-	else
-		echo "not installed."
-	fi
-
-	[[ $dorm -eq 1 ]] && {
-		if rm "$kernel_dst" ; then
-			echo "done."
-		else
-			if sip_enabled ; then
-				echo "failed due to SIP - this is normal."
-			fi
-		fi
-	}
-
 
 	echo -n "Removing boot args... "
 

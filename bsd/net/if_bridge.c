@@ -2313,6 +2313,10 @@ bridge_ioctl_add(struct bridge_softc *sc, void *arg)
 	if (ifs->if_ioctl == NULL)	/* must be supported */
 		return (EINVAL);
 
+	if (IFNET_IS_INTCOPROC(ifs)) {
+		return (EINVAL);
+	}
+
 	if (bsd_mode) {
 		/* If it's in the span list, it can't be a member. */
 		TAILQ_FOREACH(bif, &sc->sc_spanlist, bif_next)
@@ -3103,6 +3107,10 @@ bridge_ioctl_addspan(struct bridge_softc *sc, void *arg)
 	ifs = ifunit(req->ifbr_ifsname);
 	if (ifs == NULL)
 		return (ENOENT);
+
+	if (IFNET_IS_INTCOPROC(ifs)) {
+		return (EINVAL);
+	}
 
 	TAILQ_FOREACH(bif, &sc->sc_spanlist, bif_next)
 		if (ifs == bif->bif_ifp)

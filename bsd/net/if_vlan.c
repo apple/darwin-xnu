@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1835,6 +1835,11 @@ vlan_ioctl(ifnet_t ifp, u_long cmd, void * data)
 		error = ENXIO;
 		break;
 	    }
+	    if (IFNET_IS_INTCOPROC(p)) {
+		error = EINVAL;
+		break;
+	    }
+
 	    /* can't do VLAN over anything but ethernet or ethernet aggregate */
 	    if (ifnet_type(p) != IFT_ETHER 
 		&& ifnet_type(p) != IFT_IEEE8023ADLAG) {

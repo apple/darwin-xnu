@@ -626,3 +626,79 @@ write_random(void* buffer, u_int numbytes)
 	return 0;
 #endif
 }
+
+
+/*
+ * Boolean PRNG for generating booleans to randomize order of elements
+ * in certain kernel data structures. The algorithm is a
+ * modified version of the KISS RNG proposed in the paper:
+ * http://stat.fsu.edu/techreports/M802.pdf
+ * The modifications have been documented in the technical paper
+ * paper from UCL:
+ * http://www0.cs.ucl.ac.uk/staff/d.jones/GoodPracticeRNG.pdf
+ */
+
+/* Initialize the PRNG structures. */
+void random_bool_init(struct bool_gen *bg)
+{
+	/* Seed the random boolean generator */
+	for (int i = 0; i < RANDOM_BOOL_GEN_SEED_COUNT; i++) {
+		bg->seed[i] = (unsigned int)early_random();
+	}
+	bg->state = 0;
+	simple_lock_init(&bg->lock, 0);
+}
+
+/* Generate random bits and add them to an entropy pool. */
+void random_bool_gen_entropy(
+		struct bool_gen	*bg,
+		unsigned int 	*buffer,
+		int 		count)
+{
+
+	simple_lock(&bg->lock);
+	int i, t;
+	for (i = 0; i < count; i++) {
+		bg->seed[1] ^= (bg->seed[1] << 5);
+		bg->seed[1] ^= (bg->seed[1] >> 7);
+		bg->seed[1] ^= (bg->seed[1] << 22);
+		t = bg->seed[2] + bg->seed[3] + bg->state;
+		bg->seed[2] = bg->seed[3];
+		bg->state = t < 0;
+		bg->seed[3] = t & 2147483647;
+		bg->seed[0] += 1411392427;
+		buffer[i] = (bg->seed[0] + bg->seed[1] + bg->seed[3]);
+	}
+	simple_unlock(&bg->lock);
+}
+
+/* Get some number of bits from the entropy pool, refilling if necessary. */
+unsigned int random_bool_gen_bits(
+		struct bool_gen	*bg,
+		unsigned int	*buffer,
+		unsigned int	count,
+		unsigned int	numbits)
+{
+	unsigned int index = 0;
+	unsigned int rbits = 0;
+	for (unsigned int bitct = 0; bitct < numbits; bitct++) {
+		/*
+		 * Find a portion of the buffer that hasn't been emptied.
+		 * We might have emptied our last index in the previous iteration.
+		 */
+		while (index < count && buffer[index] == 0)
+			index++;
+
+		/* If we've exhausted the pool, refill it. */
+		if (index == count) {
+			random_bool_gen_entropy(bg, buffer, count);
+			index = 0;
+		}
+
+		/* Collect-a-bit */
+		unsigned int bit = buffer[index] & 1;
+		buffer[index] = buffer[index] >> 1;
+		rbits = bit | (rbits << 1);
+	}
+	return rbits;
+}

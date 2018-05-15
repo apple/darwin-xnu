@@ -192,8 +192,10 @@ ipc_pset_alloc_special(
 	reserved_link = waitq_link_reserve(NULL);
 
 	__IGNORE_WCASTALIGN(pset = (ipc_pset_t)io_alloc(IOT_PORT_SET));
-	if (pset == IPS_NULL)
+	if (pset == IPS_NULL) {
+		waitq_link_release(reserved_link);
 		return IPS_NULL;
+	}
 
 	bzero((char *)pset, sizeof(*pset));
 

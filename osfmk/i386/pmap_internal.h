@@ -407,7 +407,7 @@ extern boolean_t	pmap_disable_kstack_nx;
 #define PMAP_EXPAND_OPTIONS_NONE (0x0)
 #define PMAP_EXPAND_OPTIONS_NOWAIT (PMAP_OPTIONS_NOWAIT)
 #define PMAP_EXPAND_OPTIONS_NOENTER (PMAP_OPTIONS_NOENTER)
-
+#define PMAP_EXPAND_OPTIONS_ALIASMAP (0x40000000U)
 /*
  *	Amount of virtual memory mapped by one
  *	page-directory entry.
@@ -473,11 +473,14 @@ extern ppnum_t	highest_hi;
 #define MAX_PREEMPTION_LATENCY_NS 20000
 extern uint64_t max_preemption_latency_tsc;
 
-/* #define DEBUGINTERRUPTS 1  uncomment to ensure pmap callers have interrupts enabled */
-#ifdef DEBUGINTERRUPTS
+#if DEBUG
+#define PMAP_INTR_DEBUG (1)
+#endif
+
+#if PMAP_INTR_DEBUG
 #define pmap_intr_assert() {							\
 	if (processor_avail_count > 1 && !ml_get_interrupts_enabled())		\
-		panic("pmap interrupt assert %s, %d",__FILE__, __LINE__);	\
+		panic("pmap interrupt assert %d %s, %d", processor_avail_count, __FILE__, __LINE__); \
 }
 #else
 #define pmap_intr_assert()
@@ -494,7 +497,6 @@ pvhashidx(pmap_t pmap, vm_map_offset_t va)
 	       npvhashmask;
 	    return hashidx;
 }
-
 
 /*
  * unlinks the pv_hashed_entry_t pvh from the singly linked hash chain.
@@ -964,11 +966,6 @@ PMAP_ZINFO_SFREE(pmap_t pmap, vm_size_t bytes)
 extern boolean_t	pmap_initialized;/* Has pmap_init completed? */
 #define valid_page(x) (pmap_initialized && pmap_valid_page(x))
 
-// XXX
-#define HIGH_MEM_BASE  ((uint32_t)( -NBPDE) )  /* shared gdt etc seg addr */ /* XXX64 ?? */
-// XXX
-
-
 int		phys_attribute_test(
 			ppnum_t		phys,
 			int		bits);
@@ -1033,7 +1030,6 @@ static inline void pmap_update_pte(pt_entry_t *mptep, uint64_t pclear_bits, uint
 	}	while (!pmap_cmpx_pte(mptep, opte, npte));
 }
 
-#if	defined(__x86_64__)
 /*
  * The single pml4 page per pmap is allocated at pmap create time and exists
  * for the duration of the pmap. we allocate this page in kernel vm.
@@ -1052,6 +1048,21 @@ pmap64_pml4(pmap_t pmap, vm_map_offset_t vaddr)
 	return PHYSMAP_PTOV(&((pml4_entry_t *)pmap->pm_cr3)[(vaddr >> PML4SHIFT) & (NPML4PG-1)]);
 #else
 	return &pmap->pm_pml4[(vaddr >> PML4SHIFT) & (NPML4PG-1)];
+#endif
+}
+
+static inline pml4_entry_t *
+pmap64_user_pml4(pmap_t pmap, vm_map_offset_t vaddr)
+{
+	if (__improbable((vaddr > 0x00007FFFFFFFFFFFULL) &&
+		(vaddr < 0xFFFF800000000000ULL))) {
+		return (NULL);
+	}
+
+#if	DEBUG
+	return PHYSMAP_PTOV(&((pml4_entry_t *)pmap->pm_ucr3)[(vaddr >> PML4SHIFT) & (NPML4PG-1)]);
+#else
+	return &pmap->pm_upml4[(vaddr >> PML4SHIFT) & (NPML4PG-1)];
 #endif
 }
 
@@ -1134,7 +1145,13 @@ pmap_pte(pmap_t pmap, vm_map_offset_t vaddr)
 	}
 	return (NULL);
 }
-#endif
+extern void	pmap_alias(
+				vm_offset_t	ava,
+				vm_map_offset_t	start,
+				vm_map_offset_t	end,
+				vm_prot_t	prot,
+				unsigned int options);
+
 #if	DEBUG
 #define DPRINTF(x...)	kprintf(x)
 #else

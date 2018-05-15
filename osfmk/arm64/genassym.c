@@ -296,6 +296,10 @@ main(
 		offsetof(cpu_data_t, fiqstackptr));
         DECLARE("CPU_FIQSTACK_TOP",
 		offsetof(cpu_data_t, fiqstack_top));
+#if __ARM_KERNEL_PROTECT__
+	DECLARE("CPU_EXC_VECTORS",
+		offsetof(cpu_data_t, cpu_exc_vectors));
+#endif /* __ARM_KERNEL_PROTECT__ */
         DECLARE("CPU_NUMBER_GS",
 		offsetof(cpu_data_t,cpu_number));
         DECLARE("CPU_IDENT",

@@ -232,16 +232,13 @@ _mach_continuous_time_kernel:
  * read the register.  If the offset changes, we have gone to sleep in the midst of
  * doing a read.  This case should be exceedingly rare, but could result in a terribly
  * inaccurate result, so we need to get a fresh timebase value.
- *
- * Note that the commpage address construction expects our top 2 bytes to be 0xFFFF.
- * If this changes (i.e, we significantly relocate the commpage), this logic will need
- * to change as well (use 4 movk instructions rather than cheating with the movn).
  */
 	.text
 	.align 2
 	.globl _mach_absolute_time
 _mach_absolute_time:
-	movn	x3, #(~((_COMM_PAGE_TIMEBASE_OFFSET) >> 32) & 0x000000000000FFFF), lsl #32
+	movk	x3, #(((_COMM_PAGE_TIMEBASE_OFFSET) >> 48) & 0x000000000000FFFF), lsl #48
+	movk	x3, #(((_COMM_PAGE_TIMEBASE_OFFSET) >> 32) & 0x000000000000FFFF), lsl #32
 	movk	x3, #(((_COMM_PAGE_TIMEBASE_OFFSET) >> 16) & 0x000000000000FFFF), lsl #16
 	movk	x3, #((_COMM_PAGE_TIMEBASE_OFFSET) & 0x000000000000FFFF)
 	ldrb	w2, [x3, #((_COMM_PAGE_USER_TIMEBASE) - (_COMM_PAGE_TIMEBASE_OFFSET))]

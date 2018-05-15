@@ -189,9 +189,12 @@ krpc_portmap(
 		return error;
 
 	rdata = mbuf_data(m);
-	*portp = rdata->port;
 
-	if (!rdata->port)
+	if (mbuf_len(m) >= sizeof(*rdata)) {
+		*portp = rdata->port;
+	}
+
+	if (mbuf_len(m) < sizeof(*rdata) || !rdata->port)
 		error = EPROGUNAVAIL;
 
 	mbuf_freem(m);

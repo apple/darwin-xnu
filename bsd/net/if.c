@@ -243,6 +243,8 @@ static uint32_t if_verbose = 0;
 SYSCTL_INT(_net_link_generic_system, OID_AUTO, if_verbose,
     CTLFLAG_RW | CTLFLAG_LOCKED, &if_verbose, 0, "");
 
+boolean_t intcoproc_unrestricted;
+
 /* Eventhandler context for interface events */
 struct eventhandler_lists_ctxt ifnet_evhdlr_ctxt;
 
@@ -270,6 +272,9 @@ ifa_init(void)
 
 	lck_mtx_init(&ifma_trash_lock, ifa_mtx_grp, ifa_mtx_attr);
 	TAILQ_INIT(&ifma_trash_head);
+
+	PE_parse_boot_argn("intcoproc_unrestricted", &intcoproc_unrestricted,
+           sizeof (intcoproc_unrestricted));
 }
 
 /*
@@ -2303,6 +2308,88 @@ ifioctl_nat64prefix(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 
 /*
+ * List the ioctl()s we can perform on restricted INTCOPROC interfaces.
+ */
+static bool
+ifioctl_restrict_intcoproc(unsigned long cmd, const char *ifname,
+    struct ifnet *ifp, struct proc *p)
+{
+
+	if (intcoproc_unrestricted == TRUE) {
+		return (false);
+	}
+	if (proc_pid(p) == 0) {
+		return (false);
+	}
+	if (ifname) {
+		ifp = ifunit(ifname);
+	}
+	if (ifp == NULL) {
+		return (false);
+	}
+	if (!IFNET_IS_INTCOPROC(ifp)) {
+		return (false);
+	}
+	switch (cmd) {
+	case SIOCGIFBRDADDR:
+	case SIOCGIFCONF32:
+	case SIOCGIFCONF64:
+	case SIOCGIFFLAGS:
+	case SIOCGIFEFLAGS:
+	case SIOCGIFCAP:
+	case SIOCGIFMAC:
+	case SIOCGIFMETRIC:
+	case SIOCGIFMTU:
+	case SIOCGIFPHYS:
+	case SIOCGIFTYPE:
+	case SIOCGIFFUNCTIONALTYPE:
+	case SIOCGIFPSRCADDR:
+	case SIOCGIFPDSTADDR:
+	case SIOCGIFGENERIC:
+	case SIOCGIFDEVMTU:
+	case SIOCGIFVLAN:
+	case SIOCGIFBOND:
+	case SIOCGIFWAKEFLAGS:
+	case SIOCGIFGETRTREFCNT:
+	case SIOCGIFOPPORTUNISTIC:
+	case SIOCGIFLINKQUALITYMETRIC:
+	case SIOCGIFLOG:
+	case SIOCGIFDELEGATE:
+	case SIOCGIFEXPENSIVE:
+	case SIOCGIFINTERFACESTATE:
+	case SIOCGIFPROBECONNECTIVITY:
+	case SIOCGIFTIMESTAMPENABLED:
+	case SIOCGECNMODE:
+	case SIOCGQOSMARKINGMODE:
+	case SIOCGQOSMARKINGENABLED:
+	case SIOCGIFLOWINTERNET:
+	case SIOCGIFSTATUS:
+	case SIOCGIFMEDIA32:
+	case SIOCGIFMEDIA64:
+	case SIOCGIFDESC:
+	case SIOCGIFLINKPARAMS:
+	case SIOCGIFQUEUESTATS:
+	case SIOCGIFTHROTTLE:
+	case SIOCGIFAGENTIDS32:
+	case SIOCGIFAGENTIDS64:
+	case SIOCGIFNETSIGNATURE:
+	case SIOCGIFINFO_IN6:
+	case SIOCGIFAFLAG_IN6:
+	case SIOCGNBRINFO_IN6:
+	case SIOCGIFALIFETIME_IN6:
+	case SIOCGIFNETMASK_IN6:
+		return (false);
+	default:
+#if (DEBUG || DEVELOPMENT)
+		printf("%s: cmd 0x%lx not allowed (pid %u)\n",
+		    __func__, cmd, proc_pid(p));
+#endif
+		return (true);
+	}
+	return (false);
+}
+
+/*
  * Interface ioctls.
  *
  * Most of the routines called to handle the ioctls would end up being
@@ -2434,6 +2521,10 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		bcopy(data, &ifr, sizeof (ifr));
 		ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 		bcopy(&ifr.ifr_name, ifname, IFNAMSIZ);
+		if (ifioctl_restrict_intcoproc(cmd, ifname, NULL, p) == true) {
+			error = EPERM;
+			goto done;
+		}
 		error = ifioctl_ifreq(so, cmd, &ifr, p);
 		bcopy(&ifr, data, sizeof (ifr));
 		goto done;
@@ -2551,6 +2642,10 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		goto done;
 	}
 
+	if (ifioctl_restrict_intcoproc(cmd, NULL, ifp, p) == true) {
+		error = EPERM;
+		goto done;
+	}
 	switch (cmd) {
 	case SIOCSIFPHYADDR:			/* struct {if,in_}aliasreq */
 #if INET6

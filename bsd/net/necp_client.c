@@ -4706,8 +4706,18 @@ necp_get_socket_attributes(struct socket *so, struct sockopt *sopt)
 	u_int8_t *buffer = NULL;
 	u_int8_t *cursor = NULL;
 	size_t valsize = 0;
-	struct inpcb *inp = sotoinpcb(so);
+	struct inpcb *inp = NULL;
 
+	if ((SOCK_DOM(so) != PF_INET
+#if INET6
+		 && SOCK_DOM(so) != PF_INET6
+#endif
+		 )) {
+		error = EINVAL;
+		goto done;
+	}
+
+	inp = sotoinpcb(so);
 	if (inp->inp_necp_attributes.inp_domain != NULL) {
 		valsize += sizeof(struct necp_tlv_header) + strlen(inp->inp_necp_attributes.inp_domain);
 	}

@@ -1980,6 +1980,11 @@ bpf_setif(struct bpf_d *d, ifnet_t theywant)
 		if (bp->bif_dlt == DLT_PKTAP && !(d->bd_flags & BPF_WANT_PKTAP))
 			continue;
 		/*
+		 * Skip the coprocessor interface
+		 */
+		if (!intcoproc_unrestricted && IFNET_IS_INTCOPROC(ifp))
+			continue;
+		/*
 		 * We found the requested interface.
 		 * Allocate the packet buffers.
 		 */

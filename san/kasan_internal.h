@@ -35,6 +35,8 @@
 
 typedef uintptr_t uptr;
 
+#define MiB(x) ((x) * 1024UL * 1024)
+
 /*
  * KASAN features and config
  */
@@ -46,7 +48,20 @@ typedef uintptr_t uptr;
 #define FAKESTACK_QUARANTINE (1 && FAKESTACK)
 
 #define QUARANTINE_ENTRIES 5000
-#define QUARANTINE_MAXSIZE (10UL * 1024 * 1024)
+#define QUARANTINE_MAXSIZE MiB(10)
+
+/*
+ * The amount of physical memory stolen by KASan at boot to back the shadow memory
+ * and page tables. Larger memory systems need to steal proportionally less.
+ */
+#ifdef __arm64__
+/* Works out at about 25% of 512 MiB and 15% of 3GiB system */
+# define STOLEN_MEM_PERCENT  13UL
+# define STOLEN_MEM_BYTES    MiB(62)
+#else
+# define STOLEN_MEM_PERCENT  25UL
+# define STOLEN_MEM_BYTES    0
+#endif
 
 #ifndef KASAN
 # error KASAN undefined
@@ -138,8 +153,11 @@ struct asan_global {
 
 #if defined(__x86_64__)
 # define _JBLEN ((9 * 2) + 3 + 16)
+#elif defined(__arm64__)
+# define _JBLEN ((14 + 8 + 2) * 2)
+#else
+# error "Unknown arch"
 #endif
-
 
 typedef int jmp_buf[_JBLEN];
 void _longjmp(jmp_buf env, int val);

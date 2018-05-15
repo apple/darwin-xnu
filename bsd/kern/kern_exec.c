@@ -1320,12 +1320,6 @@ badtoolate:
 	}
 	
 done:
-	if (!spawn) {
-		/* notify only if it has not failed due to FP Key error */
-		if ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)
-			proc_knote(p, NOTE_EXEC);
-	}
-
 	if (load_result.threadstate) {
 		kfree(load_result.threadstate, load_result.threadstate_sz);
 		load_result.threadstate = NULL;
@@ -1991,7 +1985,8 @@ spawn_copyin_macpolicyinfo(const struct user__posix_spawn_args_desc *px_args, _p
 	if ((error = copyin(px_args->mac_extensions, psmx, px_args->mac_extensions_size)) != 0)
 		goto bad;
 
-	if (PS_MAC_EXTENSIONS_SIZE(psmx->psmx_count) > px_args->mac_extensions_size) {
+	size_t extsize = PS_MAC_EXTENSIONS_SIZE(psmx->psmx_count);
+	if (extsize == 0 || extsize > px_args->mac_extensions_size) {
 		error = EINVAL;
 		goto bad;
 	}
@@ -2304,8 +2299,9 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 		if (px_args.file_actions_size != 0) {
 			/* Limit file_actions to allowed number of open files */
 			int maxfa = (p->p_limit ? p->p_rlimit[RLIMIT_NOFILE].rlim_cur : NOFILE);
+			size_t maxfa_size = PSF_ACTIONS_SIZE(maxfa);
 			if (px_args.file_actions_size < PSF_ACTIONS_SIZE(1) ||
-				px_args.file_actions_size > PSF_ACTIONS_SIZE(maxfa)) {
+			    maxfa_size == 0 || px_args.file_actions_size > maxfa_size) {
 				error = EINVAL;
 				goto bad;
 			}
@@ -2321,7 +2317,8 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 				goto bad;
 
 			/* Verify that the action count matches the struct size */
-			if (PSF_ACTIONS_SIZE(px_sfap->psfa_act_count) != px_args.file_actions_size) {
+			size_t psfsize = PSF_ACTIONS_SIZE(px_sfap->psfa_act_count);
+			if (psfsize == 0 || psfsize != px_args.file_actions_size) {
 				error = EINVAL;
 				goto bad;
 			}
@@ -2347,7 +2344,8 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 				goto bad;
 
 			/* Verify that the action count matches the struct size */
-			if (PS_PORT_ACTIONS_SIZE(px_spap->pspa_count) != px_args.port_actions_size) {
+			size_t pasize = PS_PORT_ACTIONS_SIZE(px_spap->pspa_count);
+			if (pasize == 0 || pasize != px_args.port_actions_size) {
 				error = EINVAL;
 				goto bad;
 			}
@@ -2944,11 +2942,12 @@ bad:
 
 		/* flag the 'fork' has occurred */
 		proc_knote(p->p_pptr, NOTE_FORK | p->p_pid);
-		/* then flag exec has occurred */
-		/* notify only if it has not failed due to FP Key error */
-		if ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)
-			proc_knote(p, NOTE_EXEC);
 	}
+
+	/* flag exec has occurred, notify only if it has not failed due to FP Key error */
+	if (!error && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0))
+		proc_knote(p, NOTE_EXEC);
+
 
 	if (error == 0) {
 		/*
@@ -3522,7 +3521,12 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 
 		exec_resettextvp(p, imgp);
 		error = check_for_signature(p, imgp);
-	}	
+	}
+
+	/* flag exec has occurred, notify only if it has not failed due to FP Key error */
+	if (exec_done && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0))
+		proc_knote(p, NOTE_EXEC);
+
 	if (imgp->ip_vp != NULLVP)
 		vnode_put(imgp->ip_vp);
 	if (imgp->ip_scriptvp != NULLVP)

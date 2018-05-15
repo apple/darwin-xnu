@@ -496,10 +496,12 @@ ptcwakeup(struct tty *tp, int flag)
 	if (flag & FREAD) {
 		selwakeup(&pti->pt_selr);
 		wakeup(TSA_PTC_READ(tp));
+		KNOTE(&pti->pt_selr.si_note, 1);
 	}
 	if (flag & FWRITE) {
 		selwakeup(&pti->pt_selw);
 		wakeup(TSA_PTC_WRITE(tp));
+		KNOTE(&pti->pt_selw.si_note, 1);
 	}
 }
 
@@ -776,10 +778,10 @@ ptcselect(dev_t dev, int rw, void *wql, proc_t p)
 		}
 		/* FALLTHROUGH */
 
-	case 0:					/* exceptional */
+	case 0: /* exceptional */
 		if ((tp->t_state&TS_ISOPEN) &&
-		    ((pti->pt_flags & PF_PKT && pti->pt_send) ||
-		     (pti->pt_flags & PF_UCNTL && pti->pt_ucntl))) {
+				(((pti->pt_flags & PF_PKT) && pti->pt_send) ||
+				 ((pti->pt_flags & PF_UCNTL) && pti->pt_ucntl))) {
 			retval = 1;
 			break;
 		}
@@ -790,21 +792,21 @@ ptcselect(dev_t dev, int rw, void *wql, proc_t p)
 	case FWRITE:
 		if (tp->t_state&TS_ISOPEN) {
 			if (pti->pt_flags & PF_REMOTE) {
-			    if (tp->t_canq.c_cc == 0) {
-				retval = (driver->fix_7828447) ? (TTYHOG - 1) : 1;
-				break;
+				if (tp->t_canq.c_cc == 0) {
+					retval = (driver->fix_7828447) ? (TTYHOG - 1) : 1;
+					break;
 			    }
 			} else {
-			    retval = (TTYHOG - 2) - (tp->t_rawq.c_cc + tp->t_canq.c_cc);
-			    if (retval > 0) {
-				    retval = (driver->fix_7828447) ? retval : 1;
-				    break;
-			    }
-			    if (tp->t_canq.c_cc == 0 && (tp->t_lflag&ICANON)) {
-				    retval = 1;
-				    break;
-			    }
-			    retval = 0;
+				retval = (TTYHOG - 2) - (tp->t_rawq.c_cc + tp->t_canq.c_cc);
+				if (retval > 0) {
+					retval = (driver->fix_7828447) ? retval : 1;
+					break;
+				}
+				if (tp->t_canq.c_cc == 0 && (tp->t_lflag&ICANON)) {
+					retval = 1;
+					break;
+				}
+				retval = 0;
 			}
 		}
 		selrecord(p, &pti->pt_selw, wql);

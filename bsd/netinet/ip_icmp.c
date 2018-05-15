@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -538,9 +538,17 @@ icmp_input(struct mbuf *m, int hlen)
 		 * notification to TCP layer.
 		 */
 		ctlfunc = ip_protox[icp->icmp_ip.ip_p]->pr_ctlinput;
-		if (ctlfunc)
+
+		if (ctlfunc) {
+			LCK_MTX_ASSERT(inet_domain_mutex, LCK_MTX_ASSERT_OWNED);
+
+			lck_mtx_unlock(inet_domain_mutex);
+
 			(*ctlfunc)(code, (struct sockaddr *)&icmpsrc,
 				   (void *)&icp->icmp_ip, m->m_pkthdr.rcvif);
+
+			lck_mtx_lock(inet_domain_mutex);
+		}
 		break;
 
 	badcode:

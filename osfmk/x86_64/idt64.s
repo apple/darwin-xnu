@@ -66,31 +66,41 @@
  *   syscall	- synchronous system call request
  *   fatal	- fatal traps
  */
-
 /*
- * Handlers:
+ * Indices of handlers for each exception type.
  */
-#define	HNDL_ALLINTRS		EXT(hndl_allintrs)
-#define	HNDL_ALLTRAPS		EXT(hndl_alltraps)
-#define	HNDL_SYSENTER		EXT(hndl_sysenter)
-#define	HNDL_SYSCALL		EXT(hndl_syscall)
-#define	HNDL_UNIX_SCALL		EXT(hndl_unix_scall)
-#define	HNDL_MACH_SCALL		EXT(hndl_mach_scall)
-#define	HNDL_MDEP_SCALL		EXT(hndl_mdep_scall)
-#define	HNDL_DOUBLE_FAULT	EXT(hndl_double_fault)
-#define	HNDL_MACHINE_CHECK	EXT(hndl_machine_check)
+#define	HNDL_ALLINTRS		0
+#define	HNDL_ALLTRAPS		1
+#define	HNDL_SYSENTER		2
+#define	HNDL_SYSCALL		3
+#define	HNDL_UNIX_SCALL		4
+#define	HNDL_MACH_SCALL		5
+#define	HNDL_MDEP_SCALL		6
+#define	HNDL_DOUBLE_FAULT	7
+#define	HNDL_MACHINE_CHECK	8
 
+/* Begin double-mapped descriptor section */
+	
+.section	__HIB, __desc
+.globl EXT(idt64_hndl_table0)
+EXT(idt64_hndl_table0):
+	.quad EXT(ks_dispatch)
+	.quad EXT(ks_64bit_return)
+	.quad 0 /* Populated with CPU shadow displacement*/
+	.quad EXT(ks_return)
 
-#if 1
-#define PUSH_FUNCTION(func) 			 \
-	sub	$8, %rsp			;\
-	push	%rax				;\
-	leaq	func(%rip), %rax		;\
-	movq	%rax, 8(%rsp)			;\
-	pop	%rax
-#else
-#define PUSH_FUNCTION(func) pushq func
-#endif
+EXT(idt64_hndl_table1):
+	.quad	EXT(hndl_allintrs)
+	.quad	EXT(hndl_alltraps)
+	.quad	EXT(hndl_sysenter)
+	.quad	EXT(hndl_syscall)
+	.quad	EXT(hndl_unix_scall)
+	.quad	EXT(hndl_mach_scall)
+	.quad	EXT(hndl_mdep_scall)
+	.quad	EXT(hndl_double_fault)
+	.quad	EXT(hndl_machine_check)
+.text
+
 
 /* The wrapper for all non-special traps/interrupts */
 /* Everything up to PUSH_FUNCTION is just to output 
@@ -101,12 +111,12 @@
 	push	%rax				;\
 	POSTCODE2(0x6400+n)			;\
 	pop	%rax				;\
-	PUSH_FUNCTION(f)  			;\
+	pushq	$(f)				;\
 	pushq	$(n)				;\
 	jmp L_dispatch
 #else
 #define IDT_ENTRY_WRAPPER(n, f)			 \
-	PUSH_FUNCTION(f)  			;\
+	pushq	$(f)				;\
 	pushq	$(n)				;\
 	jmp L_dispatch
 #endif
@@ -136,8 +146,174 @@
 #define TRAP_IST2(n, f)
 #define USER_TRAP_SPC(n, f)
 
+/* Begin double-mapped text section */
+.section __HIB, __text
 /* Generate all the stubs */
 #include "idt_table.h"
+
+Entry(idt64_page_fault)
+	pushq	$(HNDL_ALLTRAPS)
+	push	$(T_PAGE_FAULT)
+	jmp	L_dispatch
+
+Entry(idt64_debug)
+	push	$0			/* error code */
+	pushq	$(HNDL_ALLTRAPS)
+	pushq	$(T_DEBUG)
+	jmp	L_dispatch
+/*
+ * Legacy interrupt gate System call handlers.
+ * These are entered via a syscall interrupt. The system call number in %rax
+ * is saved to the error code slot in the stack frame. We then branch to the
+ * common state saving code.
+ */
+
+#ifndef UNIX_INT
+#error NO UNIX INT!!!
+#endif
+Entry(idt64_unix_scall)
+	pushq	%rax			/* save system call number */
+	pushq	$(HNDL_UNIX_SCALL)
+	pushq	$(UNIX_INT)
+	jmp	L_dispatch
+	
+Entry(idt64_mach_scall)
+	pushq	%rax			/* save system call number */
+	pushq	$(HNDL_MACH_SCALL)
+	pushq	$(MACH_INT)
+	jmp	L_dispatch
+	
+Entry(idt64_mdep_scall)
+	pushq	%rax			/* save system call number */
+	pushq	$(HNDL_MDEP_SCALL)
+	pushq	$(MACHDEP_INT)
+	jmp	L_dispatch
+
+/*
+ * For GP/NP/SS faults, we use the IST1 stack.
+ * For faults from user-space, we have to copy the machine state to the
+ * PCB stack and then dispatch as normal.
+ * For faults in kernel-space, we need to scrub for kernel exit faults and
+ * treat these as user-space faults. But for all other kernel-space faults
+ * we continue to run on the IST1 stack and we dispatch to handle the fault
+ * as fatal.
+ */
+Entry(idt64_gen_prot)
+	pushq	$(HNDL_ALLTRAPS)
+	pushq	$(T_GENERAL_PROTECTION)
+	jmp	L_dispatch
+
+Entry(idt64_stack_fault)
+	pushq	$(HNDL_ALLTRAPS)
+	pushq	$(T_STACK_FAULT)
+	jmp	L_dispatch
+
+Entry(idt64_segnp)
+	pushq	$(HNDL_ALLTRAPS)
+	pushq	$(T_SEGMENT_NOT_PRESENT)
+	jmp	L_dispatch
+
+/*
+ * Fatal exception handlers:
+ */
+Entry(idt64_db_task_dbl_fault)
+	pushq	$(HNDL_DOUBLE_FAULT)
+	pushq	$(T_DOUBLE_FAULT)
+	jmp	L_dispatch
+
+Entry(idt64_db_task_stk_fault)
+	pushq	$(HNDL_DOUBLE_FAULT)
+	pushq	$(T_STACK_FAULT)
+	jmp	L_dispatch
+
+Entry(idt64_mc)
+	push	$(0)			/* Error */
+	pushq	$(HNDL_MACHINE_CHECK)
+	pushq	$(T_MACHINE_CHECK)
+	jmp	L_dispatch
+
+/*
+ * NMI
+ * This may or may not be fatal but extreme care is required
+ * because it may fall when control was already in another trampoline.
+ *
+ * We get here on IST2 stack which is used for NMIs only.
+ */
+Entry(idt64_nmi)
+	push	%rax				/* save RAX to ISF64_ERR */
+	push	%rcx				/* save RCX to ISF64_TRAPFN */
+	push	%rdx				/* save RDX to ISF64_TRAPNO */
+	jmp	L_dispatch
+
+Entry(idt64_double_fault)
+	pushq	$(HNDL_DOUBLE_FAULT)
+	pushq	$(T_DOUBLE_FAULT)
+	jmp	L_dispatch
+
+Entry(hi64_syscall)
+Entry(idt64_syscall)
+	swapgs
+     /* Use RAX as a temporary by shifting its contents into R11[32:63]
+      * The systemcall number is defined to be a 32-bit quantity, as is
+      * RFLAGS.
+      */
+	shlq	$32, %rax
+	or 	%rax, %r11
+.globl EXT(dblsyscall_patch_point)
+EXT(dblsyscall_patch_point):
+//	movabsq	$0x12345678ABCDEFFFULL, %rax
+     /* Generate offset to the double-mapped per-CPU data shadow
+      * into RAX
+      */
+	leaq	EXT(idt64_hndl_table0)(%rip), %rax
+	mov	16(%rax), %rax
+	mov     %rsp, %gs:CPU_UBER_TMP(%rax)  /* save user stack */
+	mov     %gs:CPU_ESTACK(%rax), %rsp  /* switch stack to per-cpu estack */
+	sub	$(ISF64_SIZE), %rsp
+
+	/*
+	 * Synthesize an ISF frame on the exception stack
+	 */
+	movl	$(USER_DS), ISF64_SS(%rsp)
+	mov	%rcx, ISF64_RIP(%rsp)		/* rip */
+
+	mov	%gs:CPU_UBER_TMP(%rax), %rcx
+	mov	%rcx, ISF64_RSP(%rsp)		/* user stack --changed */
+
+	mov	%r11, %rax
+	shrq	$32, %rax		/* Restore RAX */
+	mov	%r11d, %r11d		/* Clear r11[32:63] */
+
+	mov	%r11, ISF64_RFLAGS(%rsp)	/* rflags */
+	movl	$(SYSCALL_CS), ISF64_CS(%rsp)	/* cs - a pseudo-segment */
+	mov	%rax, ISF64_ERR(%rsp)		/* err/rax - syscall code */
+	movq	$(HNDL_SYSCALL), ISF64_TRAPFN(%rsp)
+	movq	$(T_SYSCALL), ISF64_TRAPNO(%rsp)	/* trapno */
+	swapgs
+	jmp	L_dispatch			/* this can only be 64-bit */
+
+Entry(hi64_sysenter)
+Entry(idt64_sysenter)
+	/* Synthesize an interrupt stack frame onto the
+	 * exception stack.
+	 */
+	push	$(USER_DS)		/* ss */
+	push	%rcx			/* uesp */
+	pushf				/* flags */
+	/*
+	 * Clear, among others, the Nested Task (NT) flags bit;
+	 * this is zeroed by INT, but not by SYSENTER.
+	 */
+	push	$0
+	popf
+	push	$(SYSENTER_CS)		/* cs */ 
+L_sysenter_continue:
+	push	%rdx			/* eip */
+	push	%rax			/* err/eax - syscall code */
+	pushq	$(HNDL_SYSENTER)
+	pushq	$(T_SYSENTER)
+	orl	$(EFL_IF), ISF64_RFLAGS(%rsp)
+	jmp L_dispatch
 
 /*
  * Common dispatch point.
@@ -148,13 +324,113 @@
  *	GSBASE	from user-space:   pthread area, or
  *		from kernel-space: cpu_data
  */
+
 L_dispatch:
-	cmpl	$(KERNEL64_CS), ISF64_CS(%rsp)
-	je	L_dispatch_kernel
+	pushq	%rax
+	testb	$3, 8+ISF64_CS(%rsp)
+	jz	1f
+     	swapgs
+	leaq	EXT(idt64_hndl_table0)(%rip), %rax
+     	mov	16(%rax), %rax
 
+	mov	%gs:CPU_TASK_CR3(%rax), %rax 
+	mov	%rax, %cr3
+#if	DEBUG
+	mov	%rax, %gs:CPU_ENTRY_CR3
+#endif
+1:
+	/* The text/data relationship here must be preserved in the doublemap, and the contents must be remapped */
+	leaq	EXT(idt64_hndl_table0)(%rip), %rax
+	/* Indirect branch to non-doublemapped trampolines */
+	jmp *(%rax)
+/* User return: register restoration and address space switch sequence */
+Entry(ks_64bit_return)
+	mov	R64_R14(%r15), %r14
+	mov	R64_R13(%r15), %r13
+	mov	R64_R12(%r15), %r12
+	mov	R64_R11(%r15), %r11
+	mov	R64_R10(%r15), %r10
+	mov	R64_R9(%r15),  %r9
+	mov	R64_R8(%r15),  %r8
+	mov	R64_RSI(%r15), %rsi
+	mov	R64_RDI(%r15), %rdi
+	mov	R64_RBP(%r15), %rbp
+	mov	R64_RDX(%r15), %rdx
+	mov	R64_RCX(%r15), %rcx
+	mov	R64_RBX(%r15), %rbx
+	mov	R64_RAX(%r15), %rax
+	/* Switch to per-CPU exception stack */
+	mov	%gs:CPU_ESTACK, %rsp
+
+	/* Synthesize interrupt stack frame from PCB savearea to exception stack */
+	push	R64_SS(%r15)
+	push	R64_RSP(%r15)
+	push	R64_RFLAGS(%r15)
+	push	R64_CS(%r15)
+	push	R64_RIP(%r15)
+
+	mov	R64_R15(%r15), %r15
+	cmpq	$(KERNEL64_CS), 8(%rsp)
+	jz	1f
+	/* Discover user cr3/ASID */
+	push	%rax
+	mov	%gs:CPU_UCR3, %rax
+#if	DEBUG
+	mov	%rax, %gs:CPU_EXIT_CR3
+#endif
+	mov	%rax, %cr3
+	/* Continue execution on the shared/doublemapped trampoline */
+	pop	%rax
 	swapgs
+1:
+	cmpl	$(SYSCALL_CS), 8(%rsp) /* test for exit via SYSRET */
+	je      L_sysret
+EXT(ret64_iret):
+        iretq				/* return from interrupt */
+L_sysret:
+	/*
+	 * Here to restore rcx/r11/rsp and perform the sysret back to user-space.
+	 * 	rcx	user rip
+	 *	r11	user rflags
+	 *	rsp	user stack pointer
+	 */
+	pop	%rcx
+	add	$8, %rsp
+	pop	%r11
+	pop	%rsp
+	sysretq				/* return from system call */
+/* End of double-mapped TEXT */
+.text
 
-L_dispatch_user:
+Entry(ks_dispatch)
+	popq	%rax
+	cmpl	$(KERNEL64_CS), ISF64_CS(%rsp)
+	je	EXT(ks_dispatch_kernel)
+
+	mov 	%rax, %gs:CPU_UBER_TMP
+	mov 	%gs:CPU_UBER_ISF, %rax
+	add 	$(ISF64_SIZE), %rax
+
+	xchg	%rsp, %rax
+/* Memory to memory moves (aint x86 wonderful):
+ * Transfer the exception frame from the per-CPU exception stack to the
+ * 'PCB' stack programmed at cswitch.
+ */
+	push	ISF64_SS(%rax)
+	push	ISF64_RSP(%rax)
+	push	ISF64_RFLAGS(%rax)
+	push	ISF64_CS(%rax)
+	push	ISF64_RIP(%rax)
+	push	ISF64_ERR(%rax)
+	push	ISF64_TRAPFN(%rax)
+	push 	ISF64_TRAPNO(%rax)
+	mov	%gs:CPU_UBER_TMP, %rax
+	jmp	EXT(ks_dispatch_user)
+
+Entry (ks_return)
+     jmp .
+
+Entry(ks_dispatch_user)
 	cmpl	$(TASK_MAP_32BIT), %gs:CPU_TASK_MAP
 	je	L_dispatch_U32		/* 32-bit user task */
 
@@ -165,7 +441,7 @@ L_dispatch_U64:
 	mov	%gs:CPU_KERNEL_STACK, %rsp
 	jmp	L_dispatch_64bit
 
-L_dispatch_kernel:
+Entry(ks_dispatch_kernel)
 	subq	$(ISS64_OFFSET), %rsp
 	mov	%r15, R64_R15(%rsp)
 	mov	%rsp, %r15
@@ -212,14 +488,11 @@ L_64bit_entry_reject:
 	/*
 	 * Here for a 64-bit user attempting an invalid kernel entry.
 	 */
-	pushq	%rax
-	leaq	HNDL_ALLTRAPS(%rip), %rax
-	movq	%rax, ISF64_TRAPFN+8(%rsp)
-	popq	%rax
+	movq	$(HNDL_ALLTRAPS), ISF64_TRAPFN(%rsp)
 	movq	$(T_INVALID_OPCODE), ISF64_TRAPNO(%rsp)
 	jmp 	L_dispatch_U64
 	
-L_32bit_entry_check:
+Entry(ks_32bit_entry_check)
 	/*
 	 * Check we're not a confused 64-bit user.
 	 */
@@ -315,19 +588,12 @@ L_common_dispatch:
 	shr	$32, %rcx
 	testl	%ecx, %ecx
 	jz	4f
-	testl	$(1<<16), %ecx			/* Global? */
-	jz	3f
 	movl	$0, %gs:CPU_TLB_INVALID
 	mov	%cr4, %rcx	/* RMWW CR4, for lack of an alternative*/
 	and	$(~CR4_PGE), %rcx
 	mov	%rcx, %cr4
 	or	$(CR4_PGE), %rcx
 	mov	%rcx, %cr4
-	jmp	4f
-3:
-	movb	$0, %gs:CPU_TLB_INVALID_LOCAL
-	mov	%cr3, %rcx
-	mov	%rcx, %cr3
 4:
 	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Get the active thread */
 	testq	%rcx, %rcx
@@ -340,7 +606,8 @@ L_common_dispatch:
 5:
 	incl	%gs:hwIntCnt(,%ebx,4)		// Bump the trap/intr count
 	/* Dispatch the designated handler */
-	jmp	*%rdx
+	leaq	EXT(idt64_hndl_table1)(%rip), %rax
+	jmp	*(%rax, %rdx, 8)
 
 /*
  * Control is passed here to return to user.
@@ -430,6 +697,40 @@ L_32bit_return:
 	movl	R32_SS(%r15), %eax
 	movl	%eax, R64_SS(%r15)
 
+	/* Validate DS/ES/FS/GS segment selectors with the Load Access Rights instruction prior to restoration */
+	/* Exempt "known good" statically configured selectors, e.g. USER_DS and 0 */
+	cmpl	$(USER_DS), R32_DS(%r15)
+	jz	22f
+	cmpl	$0, R32_DS(%r15)
+	jz 	22f
+	larw	R32_DS(%r15), %ax
+	jz	22f
+	movl	$(USER_DS), R32_DS(%r15)
+22:
+	cmpl	$(USER_DS), R32_ES(%r15)
+	jz	33f
+	cmpl	$0, R32_ES(%r15)
+	jz 	33f
+	larw	R32_ES(%r15), %ax
+	jz	33f
+	movl	$(USER_DS), R32_ES(%r15)
+33:
+	cmpl	$(USER_DS), R32_FS(%r15)
+	jz	44f
+	cmpl	$0, R32_FS(%r15)
+	jz 	44f
+	larw	R32_FS(%r15), %ax
+	jz	44f
+	movl	$(USER_DS), R32_FS(%r15)
+44:
+	cmpl	$(USER_CTHREAD), R32_GS(%r15)
+	jz	55f
+	cmpl	$0, R32_GS(%r15)
+	jz 	55f
+	larw	R32_GS(%r15), %ax
+	jz	55f
+	movl	$(USER_CTHREAD), R32_GS(%r15)
+55:
 	/*
 	 * Restore general 32-bit registers
 	 */
@@ -458,13 +759,13 @@ L_32bit_return:
 	xor	%r15, %r15
 
 EXT(ret32_set_ds):	
-	movl	R32_DS(%rsp), %ds
+	movw	R32_DS(%rsp), %ds
 EXT(ret32_set_es):
-	movl	R32_ES(%rsp), %es
+	movw	R32_ES(%rsp), %es
 EXT(ret32_set_fs):
-	movl	R32_FS(%rsp), %fs
+	movw	R32_FS(%rsp), %fs
 EXT(ret32_set_gs):
-	movl	R32_GS(%rsp), %gs
+	movw	R32_GS(%rsp), %gs
 
 	/* pop compat frame + trapno, trapfn and error */	
 	add	$(ISS64_OFFSET)+8+8+8, %rsp
@@ -474,7 +775,6 @@ EXT(ret32_set_gs):
 EXT(ret32_iret):
 	iretq				/* return from interrupt */
 
-	
 L_fast_exit:
 	pop	%rdx			/* user return eip */
 	pop	%rcx			/* pop and toss cs */
@@ -512,176 +812,10 @@ L_64bit_return:
 	 * Restore general 64-bit registers.
 	 * Here on fault stack and PCB address in R15.
 	 */
-	mov	R64_R14(%r15), %r14
-	mov	R64_R13(%r15), %r13
-	mov	R64_R12(%r15), %r12
-	mov	R64_R11(%r15), %r11
-	mov	R64_R10(%r15), %r10
-	mov	R64_R9(%r15),  %r9
-	mov	R64_R8(%r15),  %r8
-	mov	R64_RSI(%r15), %rsi
-	mov	R64_RDI(%r15), %rdi
-	mov	R64_RBP(%r15), %rbp
-	mov	R64_RDX(%r15), %rdx
-	mov	R64_RCX(%r15), %rcx
-	mov	R64_RBX(%r15), %rbx
-	mov	R64_RAX(%r15), %rax
+	leaq	EXT(idt64_hndl_table0)(%rip), %rax
+	jmp *8(%rax)
 
-	/*
-	 * We must swap GS base if we're returning to user-space,
-	 * or we're returning from an NMI that occurred in a trampoline
-	 * before the user GS had been swapped. In the latter case, the NMI
-	 * handler will have flagged the high-order 32-bits of the CS.
-	 */
-	cmpq	$(KERNEL64_CS), R64_CS(%r15)
-	jz	1f
-	swapgs
-1:
-	mov	R64_R15(%r15), %rsp
-	xchg	%r15, %rsp
-	add	$(ISS64_OFFSET)+24, %rsp	/* pop saved state       */
-						/* + trapno/trapfn/error */	
-	cmpl	$(SYSCALL_CS),ISF64_CS-24(%rsp)
-						/* test for fast entry/exit */
-	je      L_sysret
-.globl _dump_iretq
-EXT(ret64_iret):
-        iretq				/* return from interrupt */
-
-L_sysret:
-	/*
-	 * Here to load rcx/r11/rsp and perform the sysret back to user-space.
-	 * 	rcx	user rip
-	 *	r11	user rflags
-	 *	rsp	user stack pointer
-	 */
-	mov	ISF64_RIP-24(%rsp), %rcx
-	mov	ISF64_RFLAGS-24(%rsp), %r11
-	mov	ISF64_RSP-24(%rsp), %rsp
-        sysretq				/* return from systen call */
-
-
-
-/*
- * System call handlers.
- * These are entered via a syscall interrupt. The system call number in %rax
- * is saved to the error code slot in the stack frame. We then branch to the
- * common state saving code.
- */
-		
-#ifndef UNIX_INT
-#error NO UNIX INT!!!
-#endif
-Entry(idt64_unix_scall)
-	swapgs				/* switch to kernel gs (cpu_data) */
-	pushq	%rax			/* save system call number */
-	PUSH_FUNCTION(HNDL_UNIX_SCALL)
-	pushq	$(UNIX_INT)
-	jmp	L_32bit_entry_check
-
-	
-Entry(idt64_mach_scall)
-	swapgs				/* switch to kernel gs (cpu_data) */
-	pushq	%rax			/* save system call number */
-	PUSH_FUNCTION(HNDL_MACH_SCALL)
-	pushq	$(MACH_INT)
-	jmp	L_32bit_entry_check
-
-	
-Entry(idt64_mdep_scall)
-	swapgs				/* switch to kernel gs (cpu_data) */
-	pushq	%rax			/* save system call number */
-	PUSH_FUNCTION(HNDL_MDEP_SCALL)
-	pushq	$(MACHDEP_INT)
-	jmp	L_32bit_entry_check
-
-/* Programmed into MSR_IA32_LSTAR by mp_desc.c */
-Entry(hi64_syscall)
-Entry(idt64_syscall)
-L_syscall_continue:
-	swapgs				/* Kapow! get per-cpu data area */
-	mov	%rsp, %gs:CPU_UBER_TMP	/* save user stack */
-	mov	%gs:CPU_UBER_ISF, %rsp	/* switch stack to pcb */
-
-	/*
-	 * Save values in the ISF frame in the PCB
-	 * to cons up the saved machine state.
-	 */
-	movl	$(USER_DS), ISF64_SS(%rsp)	
-	movl	$(SYSCALL_CS), ISF64_CS(%rsp)	/* cs - a pseudo-segment */
-	mov	%r11, ISF64_RFLAGS(%rsp)	/* rflags */
-	mov	%rcx, ISF64_RIP(%rsp)		/* rip */
-	mov	%gs:CPU_UBER_TMP, %rcx
-	mov	%rcx, ISF64_RSP(%rsp)		/* user stack */
-	mov	%rax, ISF64_ERR(%rsp)		/* err/rax - syscall code */
-	movq	$(T_SYSCALL), ISF64_TRAPNO(%rsp)	/* trapno */
-	leaq	HNDL_SYSCALL(%rip), %r11;
-	movq	%r11, ISF64_TRAPFN(%rsp)
-	mov	ISF64_RFLAGS(%rsp), %r11	/* Avoid leak, restore R11 */
-	jmp	L_dispatch_U64			/* this can only be 64-bit */
-	
-/*
- * sysenter entry point
- * Requires user code to set up:
- *	edx: user instruction pointer (return address)
- *	ecx: user stack pointer
- *		on which is pushed stub ret addr and saved ebx
- * Return to user-space is made using sysexit.
- * Note: sysenter/sysexit cannot be used for calls returning a value in edx,
- *       or requiring ecx to be preserved.
- */
-Entry(hi64_sysenter)
-Entry(idt64_sysenter)
-	movq	(%rsp), %rsp
-	/*
-	 * Push values on to the PCB stack
-	 * to cons up the saved machine state.
-	 */
-	push	$(USER_DS)		/* ss */
-	push	%rcx			/* uesp */
-	pushf				/* flags */
-	/*
-	 * Clear, among others, the Nested Task (NT) flags bit;
-	 * this is zeroed by INT, but not by SYSENTER.
-	 */
-	push	$0
-	popf
-	push	$(SYSENTER_CS)		/* cs */ 
-L_sysenter_continue:
-	swapgs				/* switch to kernel gs (cpu_data) */
-	push	%rdx			/* eip */
-	push	%rax			/* err/eax - syscall code */
-	PUSH_FUNCTION(HNDL_SYSENTER)
-	pushq	$(T_SYSENTER)
-	orl	$(EFL_IF), ISF64_RFLAGS(%rsp)
-	jmp	L_32bit_entry_check
-
-
-Entry(idt64_page_fault)
-	PUSH_FUNCTION(HNDL_ALLTRAPS)
-	push	$(T_PAGE_FAULT)
-	push	%rax			/* save %rax temporarily */
-	testb	$3, 8+ISF64_CS(%rsp)	/* was trap from kernel? */
-	jz	L_kernel_trap		/* - yes, handle with care */
-	pop	%rax			/* restore %rax, swapgs, and continue */
-	swapgs
-	jmp	L_dispatch_user
-
-
-/*
- * Debug trap.  Check for single-stepping across system call into
- * kernel.  If this is the case, taking the debug trap has turned
- * off single-stepping - save the flags register with the trace
- * bit set.
- */
-Entry(idt64_debug)
-	push	$0			/* error code */
-	PUSH_FUNCTION(HNDL_ALLTRAPS)
-	pushq	$(T_DEBUG)
-
-	testb	$3, ISF64_CS(%rsp)
-	jnz	L_dispatch
-
+Entry(ks_idt64_debug_kernel)
 	/*
 	 * trap came from kernel mode
 	 */
@@ -690,7 +824,7 @@ Entry(idt64_debug)
 	lea	EXT(idt64_sysenter)(%rip), %rax
 	cmp	%rax, ISF64_RIP+8(%rsp)
 	pop	%rax
-	jne	L_dispatch
+	jne	EXT(ks_dispatch_kernel)
 	/*
 	 * Interrupt stack frame has been pushed on the temporary stack.
 	 * We have to switch to pcb stack and patch up the saved state.
@@ -705,37 +839,7 @@ Entry(idt64_debug)
 	mov	ISF64_ERR(%rcx),%rcx	/* restore %rcx */
 	jmp	L_sysenter_continue	/* continue sysenter entry */
 	
-
-Entry(idt64_double_fault)
-	PUSH_FUNCTION(HNDL_DOUBLE_FAULT)
-	pushq	$(T_DOUBLE_FAULT)
-	jmp	L_dispatch_kernel
-
-
-/*
- * For GP/NP/SS faults, we use the IST1 stack.
- * For faults from user-space, we have to copy the machine state to the
- * PCB stack and then dispatch as normal.
- * For faults in kernel-space, we need to scrub for kernel exit faults and
- * treat these as user-space faults. But for all other kernel-space faults
- * we continue to run on the IST1 stack and we dispatch to handle the fault
- * as fatal.
- */
-Entry(idt64_gen_prot)
-	PUSH_FUNCTION(HNDL_ALLTRAPS)
-	pushq	$(T_GENERAL_PROTECTION)
-	jmp	trap_check_kernel_exit	/* check for kernel exit sequence */
-
-Entry(idt64_stack_fault)
-	PUSH_FUNCTION(HNDL_ALLTRAPS)
-	pushq	$(T_STACK_FAULT)
-	jmp	trap_check_kernel_exit	/* check for kernel exit sequence */
-
-Entry(idt64_segnp)
-	PUSH_FUNCTION(HNDL_ALLTRAPS)
-	pushq	$(T_SEGMENT_NOT_PRESENT)
-					/* indicate fault type */
-trap_check_kernel_exit:
+Entry(ks_trap_check_kernel_exit)
 	testb   $3,ISF64_CS(%rsp)
 	jz	L_kernel_gpf
 
@@ -763,7 +867,7 @@ trap_check_kernel_exit:
 	pop	%rax
 	mov	%gs:CPU_UBER_TMP, %rsp		/* user RCX into RSP */
 	xchg	%rcx, %rsp			/* to PCB stack with user RCX */
-	jmp	L_dispatch_user
+	jmp	EXT(ks_dispatch_user)
 
 L_kernel_gpf:
 	/* Here for GPF from kernel_space. Check for recoverable cases. */
@@ -786,10 +890,10 @@ L_kernel_gpf:
 	leaq	EXT(ret32_set_gs)(%rip), %rax
 	cmp	%rax, 8+ISF64_RIP(%rsp)
 	je	L_32bit_fault_set_seg
-
+	jmp	EXT(ks_kernel_trap)
 	/* Fall through */
 
-L_kernel_trap:
+Entry(ks_kernel_trap)
 	/*
 	 * Here after taking an unexpected trap from kernel mode - perhaps
 	 * while running in the trampolines hereabouts.
@@ -814,7 +918,7 @@ L_kernel_trap:
 	cmpq	$(PAGE_SIZE), %rax		/* current stack in PCB? */
 	jb	2f				/*  - yes, deal with it */
 	pop	%rax				/*  - no, restore %rax */
-	jmp	L_dispatch_kernel
+	jmp	EXT(ks_dispatch_kernel)
 2:
 	/*
 	 *  Here if %rsp is in the PCB
@@ -831,7 +935,7 @@ L_kernel_trap:
 	pushq	8+ISF64_TRAPFN(%rax)
 	pushq	8+ISF64_TRAPNO(%rax)
 	movq	(%rax), %rax
-	jmp	L_dispatch_kernel
+	jmp	EXT(ks_dispatch_kernel)
 
 
 /*
@@ -917,46 +1021,8 @@ L_32bit_fault_set_seg:
 					/* the compatibility frame */
 	jmp	L_dispatch_U32_after_fault
 
-/*
- * Fatal exception handlers:
- */
-Entry(idt64_db_task_dbl_fault)
-	PUSH_FUNCTION(HNDL_DOUBLE_FAULT)
-	pushq	$(T_DOUBLE_FAULT)
-	jmp	L_dispatch	
 
-Entry(idt64_db_task_stk_fault)
-	PUSH_FUNCTION(HNDL_DOUBLE_FAULT)
-	pushq	$(T_STACK_FAULT)
-	jmp	L_dispatch	
-
-Entry(idt64_mc)
-	push	$(0)			/* Error */
-	PUSH_FUNCTION(HNDL_MACHINE_CHECK)
-	pushq	$(T_MACHINE_CHECK)
-	jmp	L_dispatch	
-
-/*
- * NMI
- * This may or may not be fatal but extreme care is required
- * because it may fall when control was already in another trampoline.
- *
- * We get here on IST2 stack which is used for NMIs only.
- * We must be aware of the interrupted state:
- *  - from user-space, we
- *    - copy state to the PCB and continue;
- *  - from kernel-space, we
- *    - copy state to the kernel stack and continue, but
- *    - check what GSBASE was active, set the kernel base and
- *    - ensure that the active state is restored when the NMI is dismissed.
- */
-Entry(idt64_nmi)
-	push	%rax				/* save RAX to ISF64_ERR */
-	push	%rcx				/* save RCX to ISF64_TRAPFN */
-	push	%rdx				/* save RDX to ISF64_TRAPNO */
-	testb	$3, ISF64_CS(%rsp)		/* NMI from user-space? */
-	je	1f
-
+Entry(ks_idt64_nmi_kernel)
 	/* From user-space: copy interrupt state to user PCB */
 	swapgs
 	mov	%gs:CPU_UBER_ISF, %rcx		/* PCB stack addr */
@@ -1015,8 +1081,7 @@ Entry(idt64_nmi)
 	push	ISF64_CS(%rcx)
 	push	ISF64_RIP(%rcx)
 	push	$(0)				/* error code 0 */
-	lea	HNDL_ALLINTRS(%rip), %rax
-	push	%rax				/* trapfn allintrs */
+	push	$(HNDL_ALLINTRS)		/* trapfn allintrs */
 	push	$(T_NMI)			/* trapno T_NMI */
 	mov	ISF64_ERR(%rcx), %rax
 	mov	ISF64_TRAPNO(%rcx), %rdx
@@ -1088,7 +1153,7 @@ L_return_from_trap_with_ast:
 	je	2f			/* not in the PFZ... go service AST */
 	movl	%eax, R64_RBX(%r15)	/* let the PFZ know we've pended an AST */
 	jmp	EXT(return_to_user)
-2:	
+2:
 
 	xorq	%rbp, %rbp		/* clear framepointer */
 	CCALL(ast_taken_user)		/* handle all ASTs (enables interrupts, may return via continuation) */
@@ -1180,7 +1245,7 @@ Entry(hndl_allintrs)
 
 	CCALL1(interrupt, %r15)		/* call generic interrupt routine */
 
-	.globl	EXT(return_to_iret)
+.globl	EXT(return_to_iret)
 LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 
 	decl	%gs:CPU_INTERRUPT_LEVEL
@@ -1442,11 +1507,16 @@ Entry(hndl_diag_scall64)
 	sti
 	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)
 	/* no return */
-
+/* TODO assert at all 'C' entry points that we're never operating on the fault stack's alias mapping */
 Entry(hndl_machine_check)
+	/* Adjust SP and savearea to their canonical, non-aliased addresses */
+	subq	EXT(dblmap_dist)(%rip), %rsp
+	subq	EXT(dblmap_dist)(%rip), %r15
 	CCALL1(panic_machine_check64, %r15)
 	hlt
 
 Entry(hndl_double_fault)
+	subq	EXT(dblmap_dist)(%rip), %rsp
+	subq	EXT(dblmap_dist)(%rip), %r15
 	CCALL1(panic_double_fault64, %r15)
 	hlt

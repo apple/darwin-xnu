@@ -163,7 +163,9 @@ extern int cs_enforcement_enable;
 #endif
 #if CONFIG_COREDUMP
 /* Name to give to core files */
-#if CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_BRIDGE)
+__XNU_PRIVATE_EXTERN char corefilename[MAXPATHLEN+1] = {"/private/var/internal/%N.core"};
+#elif CONFIG_EMBEDDED
 __XNU_PRIVATE_EXTERN char corefilename[MAXPATHLEN+1] = {"/private/var/cores/%N.core"};
 #else
 __XNU_PRIVATE_EXTERN char corefilename[MAXPATHLEN+1] = {"/cores/core.%P"};

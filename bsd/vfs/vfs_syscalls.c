@@ -11993,9 +11993,11 @@ fs_snapshot(__unused proc_t p, struct fs_snapshot_args *uap,
     case SNAPSHOT_OP_REVERT:
         error = snapshot_revert(uap->dirfd, uap->name1, uap->flags, ctx);
         break;
+#if !TARGET_OS_OSX
 	case SNAPSHOT_OP_ROOT:
 		error = snapshot_root(uap->dirfd, uap->name1, uap->flags, ctx);
 		break;
+#endif /* !TARGET_OS_OSX */
 	default:
 		error = ENOSYS;
 	}

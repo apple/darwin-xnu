@@ -2533,7 +2533,7 @@ task_suspend_cpumon(task_t task)
 	 */
 	task->rusage_cpu_flags &= ~(TASK_RUSECPU_FLAGS_PERTHR_LIMIT | TASK_RUSECPU_FLAGS_FATAL_CPUMON);		
 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
-		set_astledger(thread);
+		act_set_astledger(thread);
 	}
 
 	return KERN_SUCCESS;
@@ -2573,7 +2573,7 @@ task_enable_cpumon_locked(task_t task)
 
 	task->rusage_cpu_flags |= TASK_RUSECPU_FLAGS_PERTHR_LIMIT;
 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
-		set_astledger(thread);
+		act_set_astledger(thread);
 	}
 
 	return KERN_SUCCESS;

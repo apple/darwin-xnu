@@ -82,19 +82,19 @@ LEXT(set_fpscr)
 #endif
 	ret
 
-#if	(__ARM_VFP__ >= 3)
-	.align	2
-	.globl	EXT(get_mvfr0)
-LEXT(get_mvfr0)
-	mrs x0, MVFR0_EL1
-	ret
-
-	.globl	EXT(get_mvfr1)
-LEXT(get_mvfr1)
-	mrs x0, MVFR1_EL1
-	ret
-
-#endif
+#if __ARM_KERNEL_PROTECT__
+/*
+ * __ARM_KERNEL_PROTECT__ adds two complications to TLB management:
+ *
+ * 1. As each pmap has two ASIDs, every TLB operation that targets an ASID must
+ *   target both ASIDs for the pmap that owns the target ASID.
+ *
+ * 2. Any TLB operation targeting the kernel_pmap ASID (ASID 0) must target all
+ *   ASIDs (as kernel_pmap mappings may be referenced while using an ASID that
+ *   belongs to another pmap).  We expect these routines to be called with the
+ *   EL0 ASID for the target; not the EL1 ASID.
+ */
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 /*
  *	void flush_mmu_tlb(void)
@@ -154,12 +154,11 @@ LEXT(flush_mmu_tlb_allentries)
 	add		x1, x1, #0x3
 	and		x1, x1, #~0x3
 #endif
-
-1:
+Lflush_mmu_tlb_allentries_loop:
 	tlbi    vaae1is, x0
 	add		x0, x0, #(ARM_PGBYTES / 4096)	// Units are 4KB pages, as defined by the ISA
 	cmp		x0, x1
-	b.lt	1b
+	b.lt	Lflush_mmu_tlb_allentries_loop
 	dsb		ish
 	isb		sy
 	ret
@@ -173,10 +172,30 @@ LEXT(flush_mmu_tlb_allentries)
 	.align 2
 	.globl EXT(flush_mmu_tlb_entry)
 LEXT(flush_mmu_tlb_entry)
+#if __ARM_KERNEL_PROTECT__
+	/*
+	 * If we are flushing ASID 0, this is a kernel operation.  With this
+	 * ASID scheme, this means we should flush all ASIDs.
+	 */
+	lsr		x2, x0, #TLBI_ASID_SHIFT
+	cmp		x2, #0
+	b.eq		Lflush_mmu_tlb_entry_globally
+
+	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
+	tlbi    vae1is, x0
+	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
+#endif /* __ARM_KERNEL_PROTECT__ */
 	tlbi    vae1is, x0
 	dsb		ish
 	isb		sy
 	ret
+#if __ARM_KERNEL_PROTECT__
+Lflush_mmu_tlb_entry_globally:
+	tlbi    vaae1is, x0
+	dsb		ish
+	isb		sy
+	ret
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 /*
  *	void flush_mmu_tlb_entries(uint64_t, uint64_t)
@@ -207,16 +226,41 @@ LEXT(flush_mmu_tlb_entries)
 	 */
 	add		x1, x1, #0x3
 	and		x1, x1, #~0x3
-#endif
+#endif /* __ARM_KERNEL_PROTECT__ */
+#if __ARM_KERNEL_PROTECT__
+	/*
+	 * If we are flushing ASID 0, this is a kernel operation.  With this
+	 * ASID scheme, this means we should flush all ASIDs.
+	 */
+	lsr		x2, x0, #TLBI_ASID_SHIFT
+	cmp		x2, #0
+	b.eq		Lflush_mmu_tlb_entries_globally_loop
 
-1:
+	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
+#endif /* __ARM_KERNEL_PROTECT__ */
+Lflush_mmu_tlb_entries_loop:
 	tlbi    vae1is, x0
+#if __ARM_KERNEL_PROTECT__
+	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
+	tlbi    vae1is, x0
+	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
+#endif /* __ARM_KERNEL_PROTECT__ */
 	add		x0, x0, #(ARM_PGBYTES / 4096)	// Units are pages
 	cmp		x0, x1
-	b.lt	1b
+	b.lt	Lflush_mmu_tlb_entries_loop
 	dsb		ish
 	isb		sy
 	ret
+#if __ARM_KERNEL_PROTECT__
+Lflush_mmu_tlb_entries_globally_loop:
+	tlbi	vaae1is, x0
+	add		x0, x0, #(ARM_PGBYTES / 4096)	// Units are pages
+	cmp		x0, x1
+	b.lt	Lflush_mmu_tlb_entries_globally_loop
+	dsb		ish
+	isb		sy
+	ret
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 /*
  *	void flush_mmu_tlb_asid(uint64_t)
@@ -227,10 +271,30 @@ LEXT(flush_mmu_tlb_entries)
 	.align 2
 	.globl EXT(flush_mmu_tlb_asid)
 LEXT(flush_mmu_tlb_asid)
+#if __ARM_KERNEL_PROTECT__
+	/*
+	 * If we are flushing ASID 0, this is a kernel operation.  With this
+	 * ASID scheme, this means we should flush all ASIDs.
+	 */
+	lsr		x1, x0, #TLBI_ASID_SHIFT
+	cmp		x1, #0
+	b.eq		Lflush_mmu_tlb_globally
+
+	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
+	tlbi    aside1is, x0
+	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
+#endif /* __ARM_KERNEL_PROTECT__ */
 	tlbi    aside1is, x0
 	dsb		ish
 	isb		sy
 	ret
+#if __ARM_KERNEL_PROTECT__
+Lflush_mmu_tlb_globally:
+	tlbi    vmalle1is
+	dsb		ish
+	isb		sy
+	ret
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 /*
  *	void flush_core_tlb_asid(uint64_t)
@@ -241,10 +305,30 @@ LEXT(flush_mmu_tlb_asid)
 	.align 2
 	.globl EXT(flush_core_tlb_asid)
 LEXT(flush_core_tlb_asid)
+#if __ARM_KERNEL_PROTECT__
+	/*
+	 * If we are flushing ASID 0, this is a kernel operation.  With this
+	 * ASID scheme, this means we should flush all ASIDs.
+	 */
+	lsr		x1, x0, #TLBI_ASID_SHIFT
+	cmp		x1, #0
+	b.eq		Lflush_core_tlb_asid_globally
+
+	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
+	tlbi	aside1, x0
+	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
+#endif /* __ARM_KERNEL_PROTECT__ */
 	tlbi	aside1, x0
 	dsb		ish
 	isb		sy
 	ret
+#if __ARM_KERNEL_PROTECT__
+Lflush_core_tlb_asid_globally:
+	tlbi	vmalle1
+	dsb		ish
+	isb		sy
+	ret
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 /*
  * 	Set MMU Translation Table Base Alternate
@@ -276,6 +360,19 @@ LEXT(set_aux_control)
 	dsb		sy
 	isb		sy
 	ret
+
+#if __ARM_KERNEL_PROTECT__
+	.text
+	.align 2
+	.globl EXT(set_vbar_el1)
+LEXT(set_vbar_el1)
+#if defined(KERNEL_INTEGRITY_KTRR)
+	b		EXT(pinst_set_vbar)
+#else
+	msr		VBAR_EL1, x0
+	ret
+#endif
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 
 /*

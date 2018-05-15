@@ -177,18 +177,6 @@ LEXT(set_fpscr)
 #endif
 	bx	lr
 
-#if	(__ARM_VFP__ >= 3)
-	.align	2
-	.globl	EXT(get_mvfr0)
-LEXT(get_mvfr0)
-	vmrs    r0, mvfr0
-	bx		lr
-	.globl	EXT(get_mvfr1)
-LEXT(get_mvfr1)
-	vmrs    r0, mvfr1
-	bx		lr
-#endif
-
 /*
  *	void OSSynchronizeIO(void)
  */

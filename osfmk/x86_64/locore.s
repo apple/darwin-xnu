@@ -159,6 +159,12 @@ wrmsr_fail:
 	ret
 
 #if DEBUG
+#ifndef TERI
+#define TERI 1
+#endif
+#endif
+
+#if TERI
 .globl	EXT(thread_exception_return_internal)
 #else
 .globl	EXT(thread_exception_return)
@@ -169,7 +175,7 @@ LEXT(thread_bootstrap_return)
 	call EXT(dtrace_thread_bootstrap)
 #endif
 
-#if DEBUG
+#if TERI
 LEXT(thread_exception_return_internal)
 #else
 LEXT(thread_exception_return)

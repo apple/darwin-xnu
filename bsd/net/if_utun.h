@@ -60,6 +60,13 @@ errno_t utun_register_control(void);
 #define UTUN_OPT_ENABLE_CHANNEL				17
 #define UTUN_OPT_GET_CHANNEL_UUID			18
 #define UTUN_OPT_ENABLE_FLOWSWITCH			19
+
+#define UTUN_OPT_ENABLE_NETIF				20		/* Must be set before connecting */
+#define UTUN_OPT_SLOT_SIZE					21		/* Must be set before connecting */
+#define UTUN_OPT_NETIF_RING_SIZE			22		/* Must be set before connecting */
+#define UTUN_OPT_TX_FSW_RING_SIZE			23		/* Must be set before connecting */
+#define UTUN_OPT_RX_FSW_RING_SIZE			24		/* Must be set before connecting */
+
 /*
  * Flags for by UTUN_OPT_FLAGS 
  */
