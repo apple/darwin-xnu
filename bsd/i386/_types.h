@@ -30,7 +30,7 @@
 
 /*
  * This header file contains integer types.  It's intended to also contain
- * flotaing point and other arithmetic types, as needed, later.
+ * floating-point and other arithmetic types, as needed, later.
  */
 
 #ifdef __GNUC__
