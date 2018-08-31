@@ -48,9 +48,9 @@
 The
 .Fn fs_snapshot_create
 function, for supported Filesystems, causes a snapshot  of the Filesystem to be created. A snapshot is a read only copy
-of the filesystem frozen at a point in time.  The Filesystem is identified by the the
+of the filesystem frozen at a point in time.  The Filesystem is identified by the
 .Fa dirfd
-parameter which should be a file descriptor associated with the root directory of the filesystem for the snapshot is to be created.
+parameter which should be a file descriptor associated with the root directory of the filesystem for which the snapshot is to be created.
 .Fa name
 can be any valid name for a component name (except . and ..).
 .
@@ -94,11 +94,13 @@ Upon successful completion,
 .Fn fs_snapshot_create
 ,
 .Fn fs_snapshot_delete
-,
-.Fn fs_snapshot_rename
 and
-.Fn fs_snapshot_list
+.Fn fs_snapshot_rename
 returns 0. Otherwise, a value of -1 is returned and errno is set to indicate the error.
+.Fn fs_snapshot_list
+returns the number of entries successfully read. A return value of 0 indicates there are no more entries.
+Otherwise, a value of -1 is returned and errno is set to indicate the error. Return values are the same as
+.Xr getattrlistbulk 2 .
 .Pp
 .Sh COMPATIBILITY 
 Not all volumes support snapshots. A volume can be tested for snapshot support

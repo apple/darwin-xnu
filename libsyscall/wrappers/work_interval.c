@@ -30,6 +30,7 @@
 
 #include <sys/errno.h>
 #include <stdlib.h>
+#include <strings.h>
 
 struct work_interval {
 	uint64_t thread_id;
@@ -112,6 +113,7 @@ work_interval_notify_simple(work_interval_t interval_handle, uint64_t start,
 	return work_interval_notify(interval_handle, start, mach_absolute_time(),
 	                            deadline, next_start, 0);
 }
+
 
 int
 work_interval_destroy(work_interval_t interval_handle)

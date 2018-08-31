@@ -72,6 +72,7 @@
 #include <mach/machine/vm_types.h>
 #include <mach_debug/zone_info.h>
 #include <mach/vm_map.h>
+#include <mach/sdt.h>
 
 #include <kern/bits.h>
 #include <kern/kern_types.h>
@@ -445,6 +446,7 @@ struct zone_page_metadata {
 /* Magic value to indicate empty element free list */
 #define PAGE_METADATA_EMPTY_FREELIST 		((uint32_t)(~0))
 
+boolean_t get_zone_info(zone_t z, mach_zone_name_t *zn, mach_zone_info_t *zi);
 boolean_t is_zone_map_nearing_exhaustion(void);
 extern void vm_pageout_garbage_collect(int collect);
 
@@ -3339,6 +3341,8 @@ zalloc_internal(
 	}
 #endif
 
+	DTRACE_VM2(zalloc, zone_t, zone, void*, addr);
+
 	return((void *)addr);
 }
 
@@ -3478,6 +3482,7 @@ zfree(
 #endif /* VM_MAX_TAG_ZONES */
 
 	assert(zone != ZONE_NULL);
+	DTRACE_VM2(zfree, zone_t, zone, void*, addr);
 
 #if KASAN_ZALLOC
 	/*
@@ -3868,6 +3873,48 @@ consider_zone_gc(boolean_t consider_jetsams)
 		zone_gc(consider_jetsams);
 }
 
+
+boolean_t
+get_zone_info(
+	zone_t				z,
+	mach_zone_name_t	*zn,
+	mach_zone_info_t	*zi)
+{
+	struct zone zcopy;
+
+	assert(z != ZONE_NULL);
+	lock_zone(z);
+	if (!z->zone_valid) {
+		unlock_zone(z);
+		return FALSE;
+	}
+	zcopy = *z;
+	unlock_zone(z);
+
+	if (zn != NULL) {
+		/* assuming here the name data is static */
+		(void) __nosan_strlcpy(zn->mzn_name, zcopy.zone_name,
+				strlen(zcopy.zone_name)+1);
+	}
+
+	if (zi != NULL) {
+		zi->mzi_count = (uint64_t)zcopy.count;
+		zi->mzi_cur_size = ptoa_64(zcopy.page_count);
+		zi->mzi_max_size = (uint64_t)zcopy.max_size;
+		zi->mzi_elem_size = (uint64_t)zcopy.elem_size;
+		zi->mzi_alloc_size = (uint64_t)zcopy.alloc_size;
+		zi->mzi_sum_size = zcopy.sum_count * zcopy.elem_size;
+		zi->mzi_exhaustible = (uint64_t)zcopy.exhaustible;
+		zi->mzi_collectable = 0;
+		if (zcopy.collectable) {
+			SET_MZI_COLLECTABLE_BYTES(zi->mzi_collectable, ((uint64_t)zcopy.count_all_free_pages * PAGE_SIZE));
+			SET_MZI_COLLECTABLE_FLAG(zi->mzi_collectable, TRUE);
+		}
+	}
+
+	return TRUE;
+}
+
 kern_return_t
 task_zone_info(
 	__unused task_t					task,
@@ -3916,7 +3963,6 @@ mach_memory_info(
         unsigned int		num_info;
 
 	unsigned int		max_zones, used_zones, i;
-	zone_t			z;
 	mach_zone_name_t	*zn;
 	mach_zone_info_t    	*zi;
 	kern_return_t		kr;
@@ -3963,40 +4009,26 @@ mach_memory_info(
 
 	used_zones = max_zones;
 	for (i = 0; i < max_zones; i++) {
-		struct zone zcopy;
-		z = &(zone_array[i]);
-		assert(z != ZONE_NULL);
-
-		lock_zone(z);
-		if (!z->zone_valid) {
-			unlock_zone(z);
+		if (!get_zone_info(&(zone_array[i]), zn, zi)) {
 			used_zones--;
 			continue;
 		}
-		zcopy = *z;
-		unlock_zone(z);
-
-		/* assuming here the name data is static */
-		(void) __nosan_strncpy(zn->mzn_name, zcopy.zone_name,
-			       sizeof zn->mzn_name);
-		zn->mzn_name[sizeof zn->mzn_name - 1] = '\0';
-
-		zi->mzi_count = (uint64_t)zcopy.count;
-		zi->mzi_cur_size = ptoa_64(zcopy.page_count);
-		zi->mzi_max_size = (uint64_t)zcopy.max_size;
-		zi->mzi_elem_size = (uint64_t)zcopy.elem_size;
-		zi->mzi_alloc_size = (uint64_t)zcopy.alloc_size;
-		zi->mzi_sum_size = zcopy.sum_count * zcopy.elem_size;
-		zi->mzi_exhaustible = (uint64_t)zcopy.exhaustible;
-		zi->mzi_collectable = (uint64_t)zcopy.collectable;
-		zones_collectable_bytes += ((uint64_t)zcopy.count_all_free_pages * PAGE_SIZE);
+		zones_collectable_bytes += GET_MZI_COLLECTABLE_BYTES(zi->mzi_collectable);
 		zn++;
 		zi++;
 	}
 
 	used = used_zones * sizeof *names;
-	if (used != names_size)
-		bzero((char *) (names_addr + used), names_size - used);
+	if (used != names_size) {
+		vm_offset_t names_addr_end = names_addr + used;
+		vm_size_t free_size = names_size - (round_page(names_addr_end) - names_addr);
+
+		if (free_size >= PAGE_SIZE) {
+			kmem_free(ipc_kernel_map,
+					round_page(names_addr_end), free_size);
+		}
+		bzero((char *) names_addr_end, round_page(names_addr_end) - names_addr_end);
+	}
 
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)names_addr,
 			   (vm_map_size_t)used, TRUE, &copy);
@@ -4006,9 +4038,16 @@ mach_memory_info(
 	*namesCntp = used_zones;
 
 	used = used_zones * sizeof *info;
+	if (used != info_size) {
+		vm_offset_t info_addr_end = info_addr + used;
+		vm_size_t free_size = info_size - (round_page(info_addr_end) - info_addr);
 
-	if (used != info_size)
-		bzero((char *) (info_addr + used), info_size - used);
+		if (free_size >= PAGE_SIZE) {
+			kmem_free(ipc_kernel_map,
+					round_page(info_addr_end), free_size);
+		}
+		bzero((char *) info_addr_end, round_page(info_addr_end) - info_addr_end);
+	}
 
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)info_addr,
 			   (vm_map_size_t)used, TRUE, &copy);
@@ -4028,10 +4067,6 @@ mach_memory_info(
 		kr = kmem_alloc_pageable(ipc_kernel_map,
 					 &memory_info_addr, memory_info_vmsize, VM_KERN_MEMORY_IPC);
 		if (kr != KERN_SUCCESS) {
-			kmem_free(ipc_kernel_map,
-				  names_addr, names_size);
-			kmem_free(ipc_kernel_map,
-				  info_addr, info_size);
 			return kr;
 		}
 
@@ -4056,24 +4091,91 @@ mach_memory_info(
 	return KERN_SUCCESS;
 }
 
+kern_return_t
+mach_zone_info_for_zone(
+	host_priv_t			host,
+	mach_zone_name_t	name,
+	mach_zone_info_t	*infop)
+{
+	unsigned int max_zones, i;
+	zone_t zone_ptr;
+
+	if (host == HOST_NULL)
+		return KERN_INVALID_HOST;
+#if CONFIG_DEBUGGER_FOR_ZONE_INFO
+	if (!PE_i_can_has_debugger(NULL))
+		return KERN_INVALID_HOST;
+#endif
+
+	if (infop == NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	simple_lock(&all_zones_lock);
+	max_zones = (unsigned int)(num_zones);
+	simple_unlock(&all_zones_lock);
+
+	zone_ptr = ZONE_NULL;
+	for (i = 0; i < max_zones; i++) {
+		zone_t z = &(zone_array[i]);
+		assert(z != ZONE_NULL);
+
+		/* Find the requested zone by name */
+		if (!strncmp(name.mzn_name, z->zone_name, strlen(z->zone_name))) {
+			zone_ptr = z;
+			break;
+		}
+	}
+
+	/* No zones found with the requested zone name */
+	if (zone_ptr == ZONE_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (get_zone_info(zone_ptr, NULL, infop)) {
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
+}
+
+kern_return_t
+mach_zone_info_for_largest_zone(
+	host_priv_t			host,
+	mach_zone_name_t	*namep,
+	mach_zone_info_t	*infop)
+{
+	if (host == HOST_NULL)
+		return KERN_INVALID_HOST;
+#if CONFIG_DEBUGGER_FOR_ZONE_INFO
+	if (!PE_i_can_has_debugger(NULL))
+		return KERN_INVALID_HOST;
+#endif
+
+	if (namep == NULL || infop == NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (get_zone_info(zone_find_largest(), namep, infop)) {
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
+}
+
 uint64_t
 get_zones_collectable_bytes(void)
 {
-	zone_t z;
 	unsigned int i, max_zones;
 	uint64_t zones_collectable_bytes = 0;
+	mach_zone_info_t zi;
 
 	simple_lock(&all_zones_lock);
 	max_zones = (unsigned int)(num_zones);
 	simple_unlock(&all_zones_lock);
 
 	for (i = 0; i < max_zones; i++) {
-		z = &(zone_array[i]);
-		assert(z != ZONE_NULL);
-
-		lock_zone(z);
-		zones_collectable_bytes += ((uint64_t)z->count_all_free_pages * PAGE_SIZE);
-		unlock_zone(z);
+		if (get_zone_info(&(zone_array[i]), NULL, &zi)) {
+			zones_collectable_bytes += GET_MZI_COLLECTABLE_BYTES(zi.mzi_collectable);
+		}
 	}
 
 	return zones_collectable_bytes;

@@ -87,6 +87,7 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/fcntl.h>
+#include <sys/fsctl.h>
 #include <sys/malloc.h>
 #include <sys/mman.h>
 #include <sys/syslog.h>
@@ -157,6 +158,18 @@ extern kauth_scope_t	kauth_scope_fileop;
 
 /* Conflict wait queue for when selects collide (opaque type) */
 extern struct waitq select_conflict_queue;
+
+#ifndef HFS_GET_BOOT_INFO
+#define HFS_GET_BOOT_INFO   (FCNTL_FS_SPECIFIC_BASE + 0x00004)
+#endif
+
+#ifndef HFS_SET_BOOT_INFO
+#define HFS_SET_BOOT_INFO   (FCNTL_FS_SPECIFIC_BASE + 0x00005)
+#endif
+
+#ifndef APFSIOC_REVERT_TO_SNAPSHOT
+#define APFSIOC_REVERT_TO_SNAPSHOT  _IOW('J', 1, u_int64_t)
+#endif
 
 #define f_flag f_fglob->fg_flag
 #define f_type f_fglob->fg_ops->fo_type
@@ -2540,6 +2553,12 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 
 		/* Catch any now-invalid fcntl() selectors */
 		switch (uap->cmd) {
+			case (int)APFSIOC_REVERT_TO_SNAPSHOT:
+			case (int)FSIOC_FIOSEEKHOLE:
+			case (int)FSIOC_FIOSEEKDATA:
+			case HFS_GET_BOOT_INFO:
+			case HFS_SET_BOOT_INFO:
+			case FIOPINSWAP:
 			case F_MARKDEPENDENCY:
 				error = EINVAL;
 				goto out;

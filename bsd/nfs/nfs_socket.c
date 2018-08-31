@@ -3247,6 +3247,7 @@ again:
 	case ECONNREFUSED:
 	case EHOSTDOWN:
 	case EHOSTUNREACH:
+	/* case ECANCELED??? */
 		needrecon = 1;
 		break;
 	}
@@ -3281,7 +3282,15 @@ again:
 	/* only allow the following errors to be returned */
 	if ((error != EINTR) && (error != ERESTART) && (error != EIO) &&
 	    (error != ENXIO) && (error != ETIMEDOUT))
-		error = 0;
+		/*
+		 * We got some error we don't know what do do with,
+		 * i.e., we're not reconnecting, we map it to
+		 * EIO. Presumably our send failed and we better tell
+		 * the caller so they don't wait for a reply that is
+		 * never going to come.  If we are reconnecting we
+		 * return 0 and the request will be resent.
+		 */
+		error = needrecon ? 0 : EIO;
 	return (error);
 }
 

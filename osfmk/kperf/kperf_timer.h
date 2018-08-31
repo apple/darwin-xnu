@@ -45,6 +45,10 @@ struct kperf_timer {
 	 * timers.
 	 */
 	bitmap_t pending_cpus;
+
+#if DEVELOPMENT || DEBUG
+	uint64_t fire_time;
+#endif /* DEVELOPMENT || DEBUG */
 };
 
 extern struct kperf_timer *kperf_timerv;

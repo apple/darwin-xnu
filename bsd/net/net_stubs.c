@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -28,8 +28,6 @@
 
 #include <kern/debug.h>
 
-#if !NETWORKING
-
 #define	STUB(name)							\
 	int name(void);							\
 	int name(void) 							\
@@ -37,6 +35,8 @@
 		panic("stub called in a config with no networking");	\
 		return (0); 						\
 	}
+
+#if !NETWORKING
 
 STUB(bpf_attach);
 STUB(bpf_tap_in);
@@ -466,5 +466,8 @@ void m_drain(void)
 {
 	return;
 }
+
+#else /* NETWORKING */
+
 
 #endif /* !NETWORKING */

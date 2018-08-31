@@ -467,7 +467,7 @@ extern kern_return_t clear_wait(
 						wait_result_t	result);
 
 /* Start thread running */
-extern void		thread_bootstrap_return(void);
+extern void		thread_bootstrap_return(void) __attribute__((noreturn));
 
 /* Return from exception (BSD-visible interface) */
 extern void		thread_exception_return(void) __dead2;

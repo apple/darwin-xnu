@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -116,6 +116,8 @@
 
 #define	PRIV_NET_PRIVILEGED_MULTIPATH		10009	/* Multipath usage */
 #define	PRIV_NET_RESTRICTED_MULTIPATH_EXTENDED	10010	/* Extended multipath (more aggressive on cell) */
+#define	PRIV_NET_RESTRICTED_ROUTE_NC_READ	10011	/* Enable route neighbhor cache read operations */
+
 /*
  * IPv4 and IPv6 privileges.
  */

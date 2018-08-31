@@ -785,19 +785,41 @@ sysctl_zone_map_jetsam_limit SYSCTL_HANDLER_ARGS
 SYSCTL_PROC(_kern, OID_AUTO, zone_map_jetsam_limit, CTLTYPE_INT|CTLFLAG_RW, 0, 0,
 		sysctl_zone_map_jetsam_limit, "I", "Zone map jetsam limit");
 
+
+extern void get_zone_map_size(uint64_t *current_size, uint64_t *capacity);
+
+static int
+sysctl_zone_map_size_and_capacity SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	uint64_t zstats[2];
+	get_zone_map_size(&zstats[0], &zstats[1]);
+
+	return SYSCTL_OUT(req, &zstats, sizeof(zstats));
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, zone_map_size_and_capacity,
+	CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED,
+	0, 0, &sysctl_zone_map_size_and_capacity, "Q", "Current size and capacity of the zone map");
+
+
 extern boolean_t run_zone_test(void);
 
 static int
 sysctl_run_zone_test SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg1, arg2)
-	int ret_val = run_zone_test();
+	/* require setting this sysctl to prevent sysctl -a from running this */
+	if (!req->newptr) {
+		return 0;
+	}
 
+	int ret_val = run_zone_test();
 	return SYSCTL_OUT(req, &ret_val, sizeof(ret_val));
 }
 
 SYSCTL_PROC(_kern, OID_AUTO, run_zone_test,
-	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED,
+	CTLTYPE_INT | CTLFLAG_WR | CTLFLAG_MASKED | CTLFLAG_LOCKED,
 	0, 0, &sysctl_run_zone_test, "I", "Test zone allocator KPI");
 
 #endif /* DEBUG || DEVELOPMENT */

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) 2007-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
@@ -2961,7 +2961,8 @@ pf_step_out_of_anchor(int *depth, struct pf_ruleset **rs, int n,
 			if (f->child->match ||
 			    (match != NULL && *match)) {
 				f->r->anchor->match = 1;
-				*match = 0;
+				if (match)
+					*match = 0;
 			}
 			f->child = RB_NEXT(pf_anchor_node, f->parent, f->child);
 			if (f->child != NULL) {

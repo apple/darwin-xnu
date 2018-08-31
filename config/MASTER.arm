@@ -1,7 +1,7 @@
 #
 # Mach Operating System
 # Copyright (c) 1986 Carnegie-Mellon University
-# Copyright 2001-2016 Apple Inc.
+# Copyright 2001-2018 Apple Inc.
 #
 # All rights reserved.  The CMU software License Agreement
 # specifies the terms and conditions for use and redistribution.
@@ -29,10 +29,6 @@
 #  FILESYS_DEV =    [ FILESYS_BASE fdesc ]
 #  FILESYS_DEBUG =  [ FILESYS_BASE fdesc ]
 #  NFS =            [ nfsclient nfsserver ]
-#  SKYWALK_BASE =   [ skywalk config_nexus_user_pipe config_nexus_kernel_pipe config_nexus_monitor config_nexus_flowswitch config_nexus_netif ]
-#  SKYWALK_RELEASE = [ SKYWALK_BASE ]
-#  SKYWALK_DEV =    [ SKYWALK_BASE ]
-#  SKYWALK_DEBUG =  [ SKYWALK_BASE ]
 #  NETWORKING =     [ inet tcpdrop_synfin bpfilter inet6 ipv6send if_bridge traffic_mgt dummynet ah_all_crypto if_fake ]
 #  VPN =            [ ipsec flow_divert necp content_filter ]
 #  PF =             [ pf ]

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1259,7 +1259,7 @@ after_sack_rexmit:
 	 * space. So we have to be able to go backwards and announce a smaller
 	 * window.
 	 */
-	if (!(so->so_flags & SOF_MPTCP_TRUE) &&
+	if (!(so->so_flags & SOF_MP_SUBFLOW) &&
 	    recwin < (int32_t)(tp->rcv_adv - tp->rcv_nxt))
 		recwin = (int32_t)(tp->rcv_adv - tp->rcv_nxt);
 
@@ -2607,9 +2607,14 @@ out:
 		TCP_PKTLIST_CLEAR(tp);
 
 		if (error == ENOBUFS) {
+			/*
+			 * Set retransmit timer if not currently set
+			 * when we failed to send a segment that can be
+			 * retransmitted (i.e. not pure ack or rst)
+			 */
 			if (!tp->t_timer[TCPT_REXMT] &&
 			    !tp->t_timer[TCPT_PERSIST] &&
-			    (SEQ_GT(tp->snd_max, tp->snd_una) ||
+			    (len != 0 || (flags & (TH_SYN | TH_FIN)) != 0 ||
 			    so->so_snd.sb_cc > 0))
 				tp->t_timer[TCPT_REXMT] =
 					OFFSET_FROM_START(tp, tp->t_rxtcur);
@@ -2677,16 +2682,25 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 	boolean_t unlocked = FALSE;
 	boolean_t ifdenied = FALSE;
 	struct inpcb *inp = tp->t_inpcb;
-	struct ip_out_args ipoa =
-	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF|IPOAF_BOUND_SRCADDR, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip_out_args ipoa;
 	struct route ro;
 	struct ifnet *outif = NULL;
+
+	bzero(&ipoa, sizeof(ipoa));
+	ipoa.ipoa_boundif = IFSCOPE_NONE;
+	ipoa.ipoa_flags = IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR;
+	ipoa.ipoa_sotc = SO_TC_UNSPEC;
+	ipoa.ipoa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 #if INET6
-	struct ip6_out_args ip6oa =
-	    { IFSCOPE_NONE, { 0 }, IP6OAF_SELECT_SRCIF|IP6OAF_BOUND_SRCADDR, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip6_out_args ip6oa;
 	struct route_in6 ro6;
+
+	bzero(&ip6oa, sizeof(ip6oa));
+	ip6oa.ip6oa_boundif = IFSCOPE_NONE;
+	ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR;
+	ip6oa.ip6oa_sotc = SO_TC_UNSPEC;
+	ip6oa.ip6oa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
+
 	struct flowadv *adv =
 	    (isipv6 ? &ip6oa.ip6oa_flowadv : &ipoa.ipoa_flowadv);
 #else /* INET6 */

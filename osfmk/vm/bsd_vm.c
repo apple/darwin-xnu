@@ -41,6 +41,7 @@
 
 #include <kern/assert.h>
 #include <kern/host.h>
+#include <kern/ledger.h>
 #include <kern/thread.h>
 #include <kern/ipc_kobject.h>
 
@@ -969,6 +970,7 @@ fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *
 	vm_map_offset_t		start;
 	vm_region_extended_info_data_t extended;
 	vm_region_top_info_data_t top;
+	boolean_t do_region_footprint;
 
 	    task_lock(task);
 	    map = task->map;
@@ -979,15 +981,75 @@ fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *
 	    }
 	    vm_map_reference(map); 
 	    task_unlock(task);
-	    
+
+	    do_region_footprint = task_self_region_footprint();
+
 	    vm_map_lock_read(map);
 
 	    start = address;
+
 	    if (!vm_map_lookup_entry(map, start, &tmp_entry)) {
 		if ((entry = tmp_entry->vme_next) == vm_map_to_entry(map)) {
+			if (do_region_footprint &&
+			    address == tmp_entry->vme_end) {
+				ledger_amount_t nonvol, nonvol_compressed;
+
+				/*
+				 * This request is right after the last valid
+				 * memory region;  instead of reporting the
+				 * end of the address space, report a fake
+				 * memory region to account for non-volatile
+				 * purgeable memory owned by this task.
+				 */
+
+				ledger_get_balance(
+					task->ledger,
+					task_ledgers.purgeable_nonvolatile,
+					&nonvol);
+				ledger_get_balance(
+					task->ledger,
+					task_ledgers.purgeable_nonvolatile_compressed,
+					&nonvol_compressed);
+				if (nonvol + nonvol_compressed == 0) {
+					/* nothing to report */
+					vm_map_unlock_read(map);
+					vm_map_deallocate(map);
+					return 0;
+				}
+				/* provide fake region for purgeable */
+				pinfo->pri_offset = address;
+				pinfo->pri_protection = VM_PROT_DEFAULT;
+				pinfo->pri_max_protection = VM_PROT_DEFAULT;
+				pinfo->pri_inheritance = VM_INHERIT_NONE;
+				pinfo->pri_behavior = VM_BEHAVIOR_DEFAULT;
+				pinfo->pri_user_wired_count = 0;
+				pinfo->pri_user_tag = -1;
+				pinfo->pri_pages_resident =
+					(uint32_t) (nonvol / PAGE_SIZE);
+				pinfo->pri_pages_shared_now_private = 0;
+				pinfo->pri_pages_swapped_out =
+					(uint32_t) (nonvol_compressed / PAGE_SIZE);
+				pinfo->pri_pages_dirtied =
+					(uint32_t) (nonvol / PAGE_SIZE);
+				pinfo->pri_ref_count = 1;
+				pinfo->pri_shadow_depth = 0;
+				pinfo->pri_share_mode = SM_PRIVATE;
+				pinfo->pri_private_pages_resident =
+					(uint32_t) (nonvol / PAGE_SIZE);
+				pinfo->pri_shared_pages_resident = 0;
+				pinfo->pri_obj_id = INFO_MAKE_FAKE_OBJECT_ID(map, task_ledgers.purgeable_nonvolatile);
+				pinfo->pri_address = address;
+				pinfo->pri_size =
+					(uint64_t) (nonvol + nonvol_compressed);
+				pinfo->pri_depth = 0;
+
+				vm_map_unlock_read(map);
+				vm_map_deallocate(map);
+				return 1;
+			}
 			vm_map_unlock_read(map);
-	    		vm_map_deallocate(map); 
-		   	return(0);
+			vm_map_deallocate(map);
+			return 0;
 		}
 	    } else {
 		entry = tmp_entry;
@@ -1020,7 +1082,7 @@ fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *
 	    extended.external_pager = 0;
 	    extended.shadow_depth = 0;
 
-	    vm_map_region_walk(map, start, entry, VME_OFFSET(entry), entry->vme_end - start, &extended);
+	    vm_map_region_walk(map, start, entry, VME_OFFSET(entry), entry->vme_end - start, &extended, TRUE, VM_REGION_EXTENDED_INFO_COUNT);
 
 	    if (extended.external_pager && extended.ref_count == 2 && extended.share_mode == SM_SHARED)
 	            extended.share_mode = SM_PRIVATE;

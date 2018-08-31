@@ -219,16 +219,111 @@ T_DECL(delta, "test delta stackshots")
 	});
 }
 
+static void
+expect_instrs_cycles_in_stackshot(void *ssbuf, size_t sslen)
+{
+	kcdata_iter_t iter = kcdata_iter(ssbuf, sslen);
+
+	bool in_task = false;
+	bool in_thread = false;
+	bool saw_instrs_cycles = false;
+	iter = kcdata_iter_next(iter);
+
+	KCDATA_ITER_FOREACH(iter) {
+		switch (kcdata_iter_type(iter)) {
+		case KCDATA_TYPE_CONTAINER_BEGIN:
+			switch (kcdata_iter_container_type(iter)) {
+			case STACKSHOT_KCCONTAINER_TASK:
+				in_task = true;
+				saw_instrs_cycles = false;
+				break;
+
+			case STACKSHOT_KCCONTAINER_THREAD:
+				in_thread = true;
+				saw_instrs_cycles = false;
+				break;
+
+			default:
+				break;
+			}
+			break;
+
+		case STACKSHOT_KCTYPE_INSTRS_CYCLES:
+			saw_instrs_cycles = true;
+			break;
+
+		case KCDATA_TYPE_CONTAINER_END:
+			if (in_thread) {
+				T_QUIET; T_EXPECT_TRUE(saw_instrs_cycles, "saw instructions and cycles in thread");
+				in_thread = false;
+			} else if (in_task) {
+				T_QUIET; T_EXPECT_TRUE(saw_instrs_cycles, "saw instructions and cycles in task");
+				in_task = false;
+			}
+
+		default:
+			break;
+		}
+	}
+}
+
+static void
+skip_if_monotonic_unsupported(void)
+{
+	int supported = 0;
+	size_t supported_size = sizeof(supported);
+	int ret = sysctlbyname("kern.monotonic.supported", &supported, &supported_size, 0, 0);
+	if (ret < 0 || !supported) {
+		T_SKIP("monotonic is unsupported");
+	}
+}
+
 T_DECL(instrs_cycles, "test a getting instructions and cycles in stackshot")
 {
+	skip_if_monotonic_unsupported();
+
 	struct scenario scenario = {
 		.flags = (STACKSHOT_SAVE_LOADINFO | STACKSHOT_INSTRS_CYCLES
 				| STACKSHOT_KCDATA_FORMAT)
 	};
 
-	T_LOG("attempting to take stackshot with kernel-only flag");
+	T_LOG("attempting to take stackshot with instructions and cycles");
 	take_stackshot(&scenario, ^(void *ssbuf, size_t sslen) {
 		parse_stackshot(false, ssbuf, sslen);
+		expect_instrs_cycles_in_stackshot(ssbuf, sslen);
+	});
+}
+
+T_DECL(delta_instrs_cycles, "test delta stackshots with instructions and cycles")
+{
+	skip_if_monotonic_unsupported();
+
+	struct scenario scenario = {
+		.flags = (STACKSHOT_SAVE_LOADINFO | STACKSHOT_INSTRS_CYCLES
+				| STACKSHOT_KCDATA_FORMAT)
+	};
+
+	initialize_thread();
+	T_LOG("taking full stackshot");
+	take_stackshot(&scenario, ^(void *ssbuf, size_t sslen) {
+		uint64_t stackshot_time = stackshot_timestamp(ssbuf, sslen);
+
+		T_LOG("taking delta stackshot since time %" PRIu64, stackshot_time);
+
+		parse_stackshot(false, ssbuf, sslen);
+		expect_instrs_cycles_in_stackshot(ssbuf, sslen);
+
+		struct scenario delta_scenario = {
+			.flags = (STACKSHOT_SAVE_LOADINFO | STACKSHOT_INSTRS_CYCLES
+					| STACKSHOT_KCDATA_FORMAT
+					| STACKSHOT_COLLECT_DELTA_SNAPSHOT),
+			.since_timestamp = stackshot_time
+		};
+
+		take_stackshot(&delta_scenario, ^(void *dssbuf, size_t dsslen) {
+			parse_stackshot(true, dssbuf, dsslen);
+			expect_instrs_cycles_in_stackshot(dssbuf, dsslen);
+		});
 	});
 }
 

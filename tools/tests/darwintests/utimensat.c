@@ -34,6 +34,12 @@ T_DECL(utimensat, "Try various versions of utimensat")
 {
 	T_SETUPBEGIN;
 	T_ASSERT_POSIX_ZERO(chdir(dt_tmpdir()), NULL);
+	// Skip the test if the current working directory is not on APFS.
+	struct statfs sfs = { 0 };
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(statfs(".", &sfs), NULL);
+	if (memcmp(&sfs.f_fstypename[0], "apfs", strlen("apfs")) != 0) {
+		T_SKIP("utimensat is APFS-only, but working directory is non-APFS");
+	}
 	T_SETUPEND;
 
 	struct stat pre_st, post_st;

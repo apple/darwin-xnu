@@ -1028,6 +1028,9 @@
 #define ARM_DBG_CR_SECURITY_STATE_BOTH      (0 << 14)
 #define ARM_DBG_CR_SECURITY_STATE_NONSECURE (1 << 14)
 #define ARM_DBG_CR_SECURITY_STATE_SECURE    (2 << 14)
+#define ARM_DBG_CR_HIGHER_MODE_MASK         (1 << 13)   /* BCR & WCR */
+#define ARM_DBG_CR_HIGHER_MODE_ENABLE       (1 << 13)
+#define ARM_DBG_CR_HIGHER_MODE_DISABLE      (0 << 13)
 #define ARM_DBGWCR_BYTE_ADDRESS_SELECT_MASK 0x00001FE0  /* WCR only  */
 #define ARM_DBG_CR_BYTE_ADDRESS_SELECT_MASK 0x000001E0  /* BCR & WCR */
 #define ARM_DBGWCR_ACCESS_CONTROL_MASK      (3 << 3)    /* WCR only */
@@ -1036,7 +1039,7 @@
 #define ARM_DBCWCR_ACCESS_CONTROL_ANY       (3 << 3)
 #define ARM_DBG_CR_MODE_CONTROL_MASK        (3 << 1)    /* BCR & WCR */
 #define ARM_DBG_CR_MODE_CONTROL_U_S_S       (0 << 1)    /* BCR only  */
-#define ARM_DBG_CR_MODE_CONTROL_PRIVILEDGED (1 << 1)    /* BCR & WCR */
+#define ARM_DBG_CR_MODE_CONTROL_PRIVILEGED  (1 << 1)    /* BCR & WCR */
 #define ARM_DBG_CR_MODE_CONTROL_USER        (2 << 1)    /* BCR & WCR */
 #define ARM_DBG_CR_MODE_CONTROL_ANY         (3 << 1)    /* BCR & WCR */
 #define ARM_DBG_CR_ENABLE_MASK              (1 << 0)    /* BCR & WCR */

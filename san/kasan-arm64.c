@@ -69,10 +69,6 @@ extern vm_offset_t excepstack, excepstack_top;
 void kasan_bootstrap(boot_args *, vm_offset_t pgtable);
 void flush_mmu_tlb(void);
 
-#ifndef __ARM_16K_PG__
-#error "Unsupported HW config: Assuming 16K pages"
-#endif
-
 #define KASAN_SHIFT_ARM64 0xdffffff800000000ULL /* Defined in makedefs/MakeInc.def */
 #define KASAN_SHADOW_MIN  0xfffffff400000000ULL
 #define KASAN_SHADOW_MAX  0xfffffff680000000ULL
@@ -115,25 +111,18 @@ align_to_page(vm_offset_t *addrp, vm_offset_t *sizep)
 static void
 kasan_map_shadow_internal(vm_offset_t address, vm_size_t size, bool is_zero, bool back_page)
 {
-	align_to_page(&address, &size);
+	vm_offset_t shadow_base = vm_map_trunc_page(SHADOW_FOR_ADDRESS(address), ARM_PGMASK);
+	vm_offset_t shadow_top = vm_map_round_page(SHADOW_FOR_ADDRESS(address + size), ARM_PGMASK);
 
-	vm_size_t j;
-	uint64_t *pte;
+	assert(shadow_base >= KASAN_SHADOW_MIN && shadow_top <= KASAN_SHADOW_MAX);
 
-	/* XXX: this could be more efficient by walking through the shadow pages
-	 * instead of the source pages */
-
-	for (j = 0; j < size; j += ARM_PGBYTES) {
-		vm_offset_t virt_shadow_target = (vm_offset_t)SHADOW_FOR_ADDRESS(address + j);
-
-		assert(virt_shadow_target >= KASAN_SHADOW_MIN);
-		assert(virt_shadow_target < KASAN_SHADOW_MAX);
-
+	for (; shadow_base < shadow_top; shadow_base += ARM_PGBYTES) {
 		uint64_t *base = cpu_tte;
+		uint64_t *pte;
 
 #if !__ARM64_TWO_LEVEL_PMAP__
 		/* lookup L1 entry */
-		pte = base + ((virt_shadow_target & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
+		pte = base + ((shadow_base & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
 		if (*pte & ARM_TTE_VALID) {
 			assert((*pte & ARM_TTE_TYPE_MASK) == ARM_TTE_TYPE_TABLE);
 		} else {
@@ -144,7 +133,7 @@ kasan_map_shadow_internal(vm_offset_t address, vm_size_t size, bool is_zero, boo
 #endif
 
 		/* lookup L2 entry */
-		pte = base + ((virt_shadow_target & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
+		pte = base + ((shadow_base & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
 		if (*pte & ARM_TTE_VALID) {
 			assert((*pte & ARM_TTE_TYPE_MASK) == ARM_TTE_TYPE_TABLE);
 		} else {
@@ -158,7 +147,7 @@ kasan_map_shadow_internal(vm_offset_t address, vm_size_t size, bool is_zero, boo
 		}
 
 		/* lookup L3 entry */
-		pte = base + ((virt_shadow_target & ARM_TT_L3_INDEX_MASK) >> ARM_TT_L3_SHIFT);
+		pte = base + ((shadow_base & ARM_TT_L3_INDEX_MASK) >> ARM_TT_L3_SHIFT);
 		if ((*pte & ARM_PTE_TYPE_VALID) &&
 		    ((((*pte) & ARM_PTE_APMASK) != ARM_PTE_AP(AP_RONA)) || is_zero)) {
 			/* nothing to do - page already mapped and we are not
@@ -274,8 +263,6 @@ kasan_map_shadow_early(vm_offset_t address, vm_size_t size, bool is_zero)
 void
 kasan_arch_init(void)
 {
-	assert(KASAN_SHADOW_MIN >= VM_MAX_KERNEL_ADDRESS);
-
 	/* Map the physical aperture */
 	kasan_map_shadow(kernel_vtop, physmap_vtop - kernel_vtop, true);
 
@@ -330,4 +317,38 @@ kasan_bootstrap(boot_args *args, vm_offset_t pgtable)
 
 	kasan_map_shadow_early(intstack_virt, intstack_size, false);
 	kasan_map_shadow_early(excepstack_virt, excepstack_size, false);
+}
+
+bool
+kasan_is_shadow_mapped(uintptr_t shadowp)
+{
+	uint64_t *pte;
+	uint64_t *base = cpu_tte;
+
+	assert(shadowp >= KASAN_SHADOW_MIN);
+	assert(shadowp < KASAN_SHADOW_MAX);
+
+#if !__ARM64_TWO_LEVEL_PMAP__
+	/* lookup L1 entry */
+	pte = base + ((shadowp & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
+	if (!(*pte & ARM_TTE_VALID)) {
+		return false;
+	}
+	base = (uint64_t *)phystokv(*pte & ARM_TTE_TABLE_MASK);
+#endif
+
+	/* lookup L2 entry */
+	pte = base + ((shadowp & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
+	if (!(*pte & ARM_TTE_VALID)) {
+		return false;
+	}
+	base = (uint64_t *)phystokv(*pte & ARM_TTE_TABLE_MASK);
+
+	/* lookup L3 entry */
+	pte = base + ((shadowp & ARM_TT_L3_INDEX_MASK) >> ARM_TT_L3_SHIFT);
+	if (!(*pte & ARM_PTE_TYPE_VALID)) {
+		return false;
+	}
+
+	return true;
 }

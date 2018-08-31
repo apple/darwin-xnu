@@ -40,6 +40,7 @@
 #include <IOKit/IOBSD.h>
 #include <IOKit/IOStatisticsPrivate.h>
 #include <IOKit/IOTimeStamp.h>
+#include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/system.h>
 #include <libkern/OSDebug.h>
 #include <sys/proc.h>
@@ -124,44 +125,12 @@ do { \
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-// definitions we should get from osfmk
-
-//typedef struct ipc_port * ipc_port_t;
-typedef natural_t ipc_kobject_type_t;
-
-#define IKOT_IOKIT_SPARE	27
-#define IKOT_IOKIT_CONNECT	29
-#define IKOT_IOKIT_OBJECT	30
-
 extern "C" {
-
-extern ipc_port_t iokit_alloc_object_port( io_object_t obj,
-			ipc_kobject_type_t type );
-
-extern kern_return_t iokit_destroy_object_port( ipc_port_t port );
-
-extern mach_port_name_t iokit_make_send_right( task_t task,
-				io_object_t obj, ipc_kobject_type_t type );
-
-extern kern_return_t iokit_mod_send_right( task_t task, mach_port_name_t name, mach_port_delta_t delta );
-
-extern io_object_t iokit_lookup_connect_ref(io_object_t clientRef, ipc_space_t task);
-
-extern io_object_t iokit_lookup_connect_ref_current_task(io_object_t clientRef);
-
-extern ipc_port_t master_device_port;
-
-extern void iokit_retain_port( ipc_port_t port );
-extern void iokit_release_port( ipc_port_t port );
-extern void iokit_release_port_send( ipc_port_t port );
-
-extern kern_return_t iokit_switch_object_port( ipc_port_t port, io_object_t obj, ipc_kobject_type_t type );
 
 #include <mach/mach_traps.h>
 #include <vm/vm_map.h>
 
 } /* extern "C" */
-
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -202,17 +171,28 @@ static IOLock *		gIOObjectPortLock;
 // not in dictForType() for debugging ease
 static OSDictionary *	gIOObjectPorts;
 static OSDictionary *	gIOConnectPorts;
+static OSDictionary *	gIOIdentifierPorts;
 
 OSDictionary * IOMachPort::dictForType( ipc_kobject_type_t type )
 {
     OSDictionary **	 	dict;
 
-    if( IKOT_IOKIT_OBJECT == type )
-	dict = &gIOObjectPorts;
-    else if( IKOT_IOKIT_CONNECT == type )
-	dict = &gIOConnectPorts;
-    else
-	return( 0 );
+    switch (type)
+    {
+	case IKOT_IOKIT_OBJECT:
+	    dict = &gIOObjectPorts;
+	    break;
+	case IKOT_IOKIT_CONNECT:
+	    dict = &gIOConnectPorts;
+	    break;
+	case IKOT_IOKIT_IDENT:
+	    dict = &gIOIdentifierPorts;
+	    break;
+	default:
+	    panic("dictForType %d", type);
+	    dict = NULL;
+	    break;
+    }
 
     if( 0 == *dict)
         *dict = OSDictionary::withCapacity( 1 );
@@ -507,10 +487,19 @@ extern "C" {
 // functions called from osfmk/device/iokit_rpc.c
 
 void
-iokit_add_reference( io_object_t obj )
+iokit_add_reference( io_object_t obj, ipc_kobject_type_t type )
 {
-    if( obj)
-	obj->retain();
+    IOUserClient * uc;
+
+    if (!obj) return;
+
+    if ((IKOT_IOKIT_CONNECT == type)
+	&& (uc = OSDynamicCast(IOUserClient, obj)))
+    {
+	OSIncrementAtomic(&uc->__ipc);
+    }
+
+    obj->retain();
 }
 
 void
@@ -518,18 +507,6 @@ iokit_remove_reference( io_object_t obj )
 {
     if( obj)
 	obj->release();
-}
-
-void
-iokit_add_connect_reference( io_object_t obj )
-{
-    IOUserClient * uc;
-
-    if (!obj) return;
-
-    if ((uc = OSDynamicCast(IOUserClient, obj))) OSIncrementAtomic(&uc->__ipc);
-
-    obj->retain();
 }
 
 void
@@ -1661,7 +1638,39 @@ IOReturn IOUserClient::exportObjectToClient(task_t task,
     name = IOMachPort::makeSendRightForTask( task, obj, IKOT_IOKIT_OBJECT );
 
     *(mach_port_name_t *)clientObj = name;
+
+    if (obj) obj->release();
+
     return kIOReturnSuccess;
+}
+
+IOReturn IOUserClient::copyPortNameForObjectInTask(task_t task,
+			OSObject *obj, mach_port_name_t * port_name)
+{
+    mach_port_name_t	name;
+
+    name = IOMachPort::makeSendRightForTask( task, obj, IKOT_IOKIT_IDENT );
+
+    *(mach_port_name_t *) port_name = name;
+
+    return kIOReturnSuccess;
+}
+
+IOReturn IOUserClient::copyObjectForPortNameInTask(task_t task, mach_port_name_t port_name,
+			OSObject **obj)
+{
+    OSObject * object;
+
+    object = iokit_lookup_object_with_port_name(port_name, IKOT_IOKIT_IDENT, task);
+
+    *obj = object;
+
+    return (object ? kIOReturnSuccess : kIOReturnIPCError);
+}
+
+IOReturn IOUserClient::adjustPortNameReferencesInTask(task_t task, mach_port_name_t port_name, mach_port_delta_t delta)
+{
+    return (iokit_mod_send_right(task, port_name, delta));
 }
 
 IOExternalMethod * IOUserClient::getExternalMethodForIndex( UInt32 /* index */)
@@ -3620,6 +3629,7 @@ kern_return_t is_io_connect_map_memory_into_task
 	    mach_port_name_t name __unused =
 		IOMachPort::makeSendRightForTask(
                                     into_task, map, IKOT_IOKIT_OBJECT );
+	    map->release();
 
         } else {
             // keep it with the user client
@@ -3730,7 +3740,11 @@ kern_return_t is_io_connect_unmap_memory_from_task
 
 	    mach_port_name_t name = 0;
 	    if (from_task != current_task())
+	    {
 		name = IOMachPort::makeSendRightForTask( from_task, map, IKOT_IOKIT_OBJECT );
+		map->release();
+	    }
+
 	    if (name)
 	    {
 		map->userClientUnmap();
@@ -5237,7 +5251,7 @@ kern_return_t iokit_user_client_trap(struct iokit_user_client_trap_args *args)
     IOUserClient *userClient;
 
     if ((userClient = OSDynamicCast(IOUserClient,
-            iokit_lookup_connect_ref_current_task((OSObject *)(args->userClientRef))))) {
+            iokit_lookup_connect_ref_current_task((mach_port_name_t)(uintptr_t)args->userClientRef)))) {
         IOExternalTrap *trap;
         IOService *target = NULL;
 
@@ -5257,6 +5271,24 @@ kern_return_t iokit_user_client_trap(struct iokit_user_client_trap_args *args)
     }
 
     return result;
+}
+
+/* Routine io_device_tree_entry_exists_with_name */
+kern_return_t is_io_device_tree_entry_exists_with_name(
+	mach_port_t master_port,
+	io_name_t name,
+	boolean_t *exists )
+{
+	OSCollectionIterator *iter;
+
+	if (master_port != master_device_port)
+		return (kIOReturnNotPrivileged);
+
+	iter = IODTFindMatchingEntries(IORegistryEntry::getRegistryRoot(), kIODTRecursive, name);
+	*exists = iter && iter->getNextObject();
+	OSSafeReleaseNULL(iter);
+
+	return kIOReturnSuccess;
 }
 
 } /* extern "C" */

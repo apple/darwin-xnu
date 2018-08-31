@@ -203,6 +203,7 @@ unsigned int new_nkdbufs = 0;
 unsigned int wake_nkdbufs = 0;
 unsigned int write_trace_on_panic = 0;
 static char trace_typefilter[64] = { 0 };
+unsigned int trace_wrap = 0;
 boolean_t trace_serial = FALSE;
 boolean_t early_boot_complete = FALSE;
 
@@ -265,6 +266,7 @@ kernel_bootstrap(void)
 	PE_parse_boot_argn("trace_wake", &wake_nkdbufs, sizeof (wake_nkdbufs));
 	PE_parse_boot_argn("trace_panic", &write_trace_on_panic, sizeof(write_trace_on_panic));
 	PE_parse_boot_arg_str("trace_typefilter", trace_typefilter, sizeof(trace_typefilter));
+	PE_parse_boot_argn("trace_wrap", &trace_wrap, sizeof(trace_wrap));
 
 	scale_setup();
 
@@ -530,7 +532,7 @@ kernel_bootstrap_thread(void)
 	kernel_bootstrap_thread_log("ktrace_init");
 	ktrace_init();
 
-	kdebug_init(new_nkdbufs, trace_typefilter);
+	kdebug_init(new_nkdbufs, trace_typefilter, trace_wrap);
 
 	kernel_bootstrap_log("prng_init");
 	prng_cpu_init(master_cpu);

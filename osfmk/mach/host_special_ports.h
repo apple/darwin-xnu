@@ -88,7 +88,7 @@
 #define HOST_KTRACE_BACKGROUND_PORT     (6 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_SEATBELT_PORT              (7 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_KEXTD_PORT                 (8 + HOST_MAX_SPECIAL_KERNEL_PORT)
-#define HOST_CHUD_PORT                  (9 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_LAUNCHCTL_PORT             (9 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_UNFREED_PORT		(10 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_AMFID_PORT			(11 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_GSSD_PORT			(12 + HOST_MAX_SPECIAL_KERNEL_PORT)
@@ -104,6 +104,9 @@
 
 #define HOST_MAX_SPECIAL_PORT		HOST_CLOSURED_PORT
                                         /* MAX = last since rdar://19421223 */
+
+/* obsolete name */
+#define HOST_CHUD_PORT HOST_LAUNCHCTL_PORT
 
 /*
  * Special node identifier to always represent the local node.
@@ -177,11 +180,14 @@
 #define host_set_kextd_port(host, port)	\
 	(host_set_special_port((host), HOST_KEXTD_PORT, (port)))
 
-#define host_get_chud_port(host, port)	\
-	(host_get_special_port((host), 			\
-	HOST_LOCAL_NODE, HOST_CHUD_PORT, (port)))
-#define host_set_chud_port(host, port)	\
-	(host_set_special_port((host), HOST_CHUD_PORT, (port)))
+#define host_get_launchctl_port(host, port) \
+	(host_get_special_port((host), HOST_LOCAL_NODE, HOST_LAUNCHCTL_PORT, \
+	(port)))
+#define host_set_launchctl_port(host, port) \
+	(host_set_special_port((host), HOST_LAUNCHCTL_PORT, (port)))
+
+#define host_get_chud_port(host, port) host_get_launchctl_port(host, port)
+#define host_set_chud_port(host, port) host_set_launchctl_port(host, port)
 
 #define host_get_unfreed_port(host, port)	\
 	(host_get_special_port((host), 			\

@@ -547,6 +547,7 @@ bpf_detachd(struct bpf_d *d, int closing)
 	struct bpf_if *bp;
 	struct ifnet  *ifp;
 
+	int bpf_closed = d->bd_flags & BPF_CLOSING;
 	/*
 	 * Some other thread already detached
 	 */
@@ -615,6 +616,9 @@ bpf_detachd(struct bpf_d *d, int closing)
 	 */
 	d->bd_flags &= ~BPF_DETACHING;
 	d->bd_flags |= BPF_DETACHED;
+
+	/* Refresh the local variable as d could have been modified */
+	bpf_closed = d->bd_flags & BPF_CLOSING;
 	/*
 	 * Note that We've kept the reference because we may have dropped
 	 * the lock when turning off promiscuous mode
@@ -631,7 +635,7 @@ done:
 	/*
 	 * Let the caller know the bpf_d is closed
 	 */
-	if ((d->bd_flags & BPF_CLOSING))
+	if (bpf_closed)
 		return (1);
 	else
 		return (0);
@@ -1508,7 +1512,7 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 	 * Set buffer length.
 	 */
 	case BIOCSBLEN:			/* u_int */
-		if (d->bd_bif != 0)
+		if (d->bd_bif != 0 || (d->bd_flags & BPF_DETACHING))
 			error = EINVAL;
 		else {
 			u_int size;
@@ -2584,6 +2588,9 @@ catchpacket(struct bpf_d *d, struct bpf_packet * pkt,
 	totlen = hdrlen + min(snaplen, pkt->bpfp_total_length);
 	if (totlen > d->bd_bufsize)
 		totlen = d->bd_bufsize;
+
+	if (hdrlen > totlen)
+		return;
 
 	/*
 	 * Round up the end of the previous packet to the next longword.

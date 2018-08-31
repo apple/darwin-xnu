@@ -394,7 +394,7 @@ lightweight_update_priority(thread_t thread)
 			                      (uintptr_t)thread_tid(thread),
 			                      thread->base_pri,
 			                      thread->sched_pri,
-			                      0, /* eventually, 'reason' */
+			                      thread->sched_usage,
 			                      0);
 		}
 	}
@@ -582,7 +582,7 @@ update_priority(
 			                      (uintptr_t)thread_tid(thread),
 			                      thread->base_pri,
 			                      thread->sched_pri,
-			                      0, /* eventually, 'reason' */
+			                      thread->sched_usage,
 			                      0);
 
 			if (removed)

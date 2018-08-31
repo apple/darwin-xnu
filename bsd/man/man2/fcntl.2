@@ -56,7 +56,7 @@
 .\"
 .\"     @(#)fcntl.2	8.2 (Berkeley) 1/12/94
 .\"
-.Dd February 17, 2011
+.Dd August 24, 2017
 .Dt FCNTL 2
 .Os BSD 4.2
 .Sh NAME
@@ -153,8 +153,10 @@ The argument must be a buffer of size
 or greater.
 .It Dv F_PREALLOCATE
 Preallocate file storage space. Note: upon success, 
-the space that is allocated can be the same size or 
-larger than the space requested.
+the space that is allocated can be the size requested,
+larger than the size requested, or (if the
+.Dv F_ALLOCATEALL
+flag is not provided) smaller than the space requested.
 .It Dv F_PUNCHHOLE
 Deallocate a region and replace it with a hole. Subsequent reads of the
 affected region will return bytes of zeros that are usually not backed by
@@ -779,6 +781,31 @@ or
 and satisfying the lock or unlock request would result in the
 number of locked regions in the system exceeding a system-imposed limit.
 .\" ==========
+.It Bq Er ENOSPC
+The argument
+.Fa cmd
+is
+.Dv F_PREALLOCATE
+and either there is no space available on the volume containing
+.Fa fildes
+or
+.Fa fst_flags
+contains
+.Dv F_ALLOCATEALL
+and there is not enough space available on the volume containing
+.Fa fildes
+to satisfy the entire request.
+.Pp
+The argument
+.Fa cmd
+is
+.Dv F_PUNCHHOLE
+and there is not enough space available on the volume containing
+.Fa fildes
+to satisfy the request. As an example, a filesystem that supports
+cloned files may return this error if punching a hole requires the
+creation of a clone and there is not enough space available to do so.
+.\" ==========
 .It Bq Er EOVERFLOW
 A return value would overflow its representation.
 For example,
@@ -787,6 +814,11 @@ is F_GETLK, F_SETLK, or F_SETLKW
 and the smallest (or, if l_len is non-zero, the largest) offset
 of a byte in the requested segment
 will not fit in an object of type off_t.
+.\" ==========
+.It Bq Er EPERM
+The argument cmd is
+.Dv F_PUNCHHOLE
+and the calling process does not have file write permission.
 .\" ==========
 .It Bq Er ESRCH
 .Fa Cmd

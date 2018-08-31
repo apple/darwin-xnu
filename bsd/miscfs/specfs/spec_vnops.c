@@ -1925,6 +1925,11 @@ void throttle_set_thread_io_policy(int policy)
 	proc_set_thread_policy(current_thread(), TASK_POLICY_INTERNAL, TASK_POLICY_IOPOL, policy);
 }
 
+int throttle_get_thread_effective_io_policy()
+{
+	return proc_get_effective_thread_policy(current_thread(), TASK_POLICY_IO);
+}
+
 void throttle_info_reset_window(uthread_t ut)
 {
 	struct _throttle_io_info_t *info;
@@ -2709,21 +2714,35 @@ spec_knote_select_and_link(struct knote *kn)
 	rlptr = (void *)&rsvd_arg;
 
 	/*
-	 * Trick selrecord() into hooking kqueue's wait queue set
-	 * set into device's selinfo wait queue
+	 * Trick selrecord() into hooking kqueue's wait queue set into the device's
+	 * selinfo wait queue.
 	 */
 	old_wqs = uth->uu_wqset;
 	uth->uu_wqset = &(knote_get_kq(kn)->kq_wqs);
+	/*
+	 * Now these are the laws of VNOP_SELECT, as old and as true as the sky,
+	 * And the device that shall keep it may prosper, but the device that shall
+	 * break it must receive ENODEV:
+	 *
+	 * 1. Take a lock to protect against other selects on the same vnode.
+	 * 2. Return 1 if data is ready to be read.
+	 * 3. Return 0 and call `selrecord` on a handy `selinfo` structure if there
+	 *    is no data.
+	 * 4. Call `selwakeup` when the vnode has an active `selrecord` and data
+	 *    can be read or written (depending on the seltype).
+	 * 5. If there's a `selrecord` and no corresponding `selwakeup`, but the
+	 *    vnode is going away, call `selthreadclear`.
+	 */
 	selres = VNOP_SELECT(vp, knote_get_seltype(kn), 0, rlptr, ctx);
 	uth->uu_wqset = old_wqs;
 
 	/*
-	 * make sure to cleanup the reserved link - this guards against
+	 * Make sure to cleanup the reserved link - this guards against
 	 * drivers that may not actually call selrecord().
 	 */
 	waitq_link_release(rsvd);
 	if (rsvd != rsvd_arg) {
-		/* the driver / handler called selrecord() */
+		/* The driver / handler called selrecord() */
 		struct waitq *wq;
 		memcpy(&wq, rlptr, sizeof(void *));
 
@@ -2748,8 +2767,14 @@ spec_knote_select_and_link(struct knote *kn)
 		 * device won't go away while we get this ID.
 		 */
 		kn->kn_hook_data = waitq_get_prepost_id(wq);
-	} else {
-		assert(selres != 0);
+	} else if (selres == 0) {
+		/*
+		 * The device indicated that there's no data to read, but didn't call
+		 * `selrecord`.  Nothing will be notified of changes to this vnode, so
+		 * return an error back to user space, to make it clear that the knote
+		 * is not attached.
+		 */
+		knote_set_error(kn, ENODEV);
 	}
 
 	vnode_put(vp);

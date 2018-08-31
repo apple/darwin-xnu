@@ -65,6 +65,7 @@
 
 #endif
 
+
 #if DEBUG || COMPRESSOR_INTEGRITY_CHECKS
 #define ENABLE_SWAP_CHECKS 1
 #define ENABLE_COMPRESSOR_CHECKS 1
@@ -219,6 +220,9 @@ extern	vm_offset_t	c_buffers;
 
 #define	C_SEG_ONDISK_IS_SPARSE(cseg)	((cseg->c_bytes_used < cseg->c_bytes_unused) ? 1 : 0)
 #define C_SEG_IS_ONDISK(cseg)		((cseg->c_state == C_ON_SWAPPEDOUT_Q || cseg->c_state == C_ON_SWAPPEDOUTSPARSE_Q))
+#define C_SEG_IS_ON_DISK_OR_SOQ(cseg)	((cseg->c_state == C_ON_SWAPPEDOUT_Q || \
+					  cseg->c_state == C_ON_SWAPPEDOUTSPARSE_Q || \
+					  cseg->c_state == C_ON_SWAPOUT_Q))
 
 
 #define C_SEG_WAKEUP_DONE(cseg)				\

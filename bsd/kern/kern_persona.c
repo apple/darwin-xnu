@@ -284,29 +284,6 @@ out_error:
 	return NULL;
 }
 
-int persona_invalidate(struct persona *persona)
-{
-	int error = 0;
-	if (!persona)
-		return EINVAL;
-
-	lock_personas();
-	persona_lock(persona);
-
-	if (!persona_valid(persona))
-		panic("Double-invalidation of persona %p", persona);
-
-	LIST_REMOVE(persona, pna_list);
-	if (hw_atomic_add(&g_total_personas, -1) == UINT_MAX)
-		panic("persona ref count underflow!\n");
-	persona_mkinvalid(persona);
-
-	persona_unlock(persona);
-	unlock_personas();
-
-	return error;
-}
-
 static struct persona *persona_get_locked(struct persona *persona)
 {
 	if (persona->pna_refcount) {
@@ -353,12 +330,14 @@ void persona_put(struct persona *persona)
 
 	/* remove it from the global list and decrement the count */
 	lock_personas();
+	persona_lock(persona);
 	if (persona_valid(persona)) {
 		LIST_REMOVE(persona, pna_list);
 		if (hw_atomic_add(&g_total_personas, -1) == UINT_MAX)
 			panic("persona count underflow!\n");
 		persona_mkinvalid(persona);
 	}
+	persona_unlock(persona);
 	unlock_personas();
 
 	assert(LIST_EMPTY(&persona->pna_members));
@@ -392,6 +371,34 @@ struct persona *persona_lookup(uid_t id)
 			break;
 		}
 		persona_unlock(tmp);
+	}
+	unlock_personas();
+
+	return persona;
+}
+
+struct persona *persona_lookup_and_invalidate(uid_t id)
+{
+	struct persona *persona, *entry, *tmp;
+
+	persona = NULL;
+
+	lock_personas();
+	LIST_FOREACH_SAFE(entry, &all_personas, pna_list, tmp) {
+		persona_lock(entry);
+		if (entry->pna_id == id) {
+			if (persona_valid(entry)) {
+				persona = persona_get_locked(entry);
+				assert(persona != NULL);
+				LIST_REMOVE(persona, pna_list);
+				if (hw_atomic_add(&g_total_personas, -1) == UINT_MAX)
+					panic("persona ref count underflow!\n");
+				persona_mkinvalid(persona);
+			}
+			persona_unlock(entry);
+			break;
+		}
+		persona_unlock(entry);
 	}
 	unlock_personas();
 

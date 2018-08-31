@@ -68,6 +68,7 @@
 #include <sys/sysproto.h>		/* abused for sync() */
 #include <kern/clock.h>			/* for delay_for_interval() */
 #include <libkern/OSAtomic.h>
+#include <IOKit/IOPlatformExpert.h>
 
 #include <sys/kdebug.h>
 
@@ -83,7 +84,6 @@ static int  sd_closelog(vfs_context_t);
 static void sd_log(vfs_context_t, const char *, ...);
 static void proc_shutdown(void);
 static void kernel_hwm_panic_info(void);
-extern void IOSystemShutdownNotification(void);
 extern void halt_log_enter(const char * what, const void * pc, uint64_t time);
 
 #if DEVELOPMENT || DEBUG
@@ -157,10 +157,9 @@ reboot_kernel(int howto, char *message)
 		return (EBUSY);
 	}
 	/*
-	 * Temporary hack to notify the power management root domain
-	 * that the system will shut down.
+	 * Notify the power management root domain that the system will shut down.
 	 */
-	IOSystemShutdownNotification();
+	IOSystemShutdownNotification(kIOSystemShutdownNotificationStageProcessExit);
 
 	if ((howto&RB_QUICK)==RB_QUICK) {
 		printf("Quick reboot...\n");
@@ -200,6 +199,8 @@ reboot_kernel(int howto, char *message)
 			kdbg_dump_trace_to_file("/var/log/shutdown/shutdown.trace");
 			halt_log_enter("shutdown.trace", 0, mach_absolute_time() - startTime);
 		}
+
+		IOSystemShutdownNotification(kIOSystemShutdownNotificationStageRootUnmount);
 
 		/*
 		 * Unmount filesystems

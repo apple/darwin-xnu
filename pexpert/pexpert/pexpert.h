@@ -70,6 +70,8 @@ extern struct macos_panic_header *panic_info;
 #endif /* CONFIG_EMBEDDED */
 #endif /* XNU_KERNEL_PRIVATE */
 
+extern void lpss_uart_enable (boolean_t on_off);
+
 void PE_enter_debugger(
 	const char *cause);
 

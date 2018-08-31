@@ -41,6 +41,7 @@
 #include <mach/boolean.h>
 #include <netinet/mp_pcb.h>
 #include <netinet/tcp_var.h>
+#include <os/log.h>
 
 struct mpt_itf_info {
 	uint32_t ifindex;
@@ -78,6 +79,10 @@ struct mptses {
 		struct sockaddr_in __mpte_dst_v4;
 		struct sockaddr_in6 __mpte_dst_v6;
 	};
+
+	struct sockaddr_in mpte_dst_v4_nat64;
+
+	uint16_t	mpte_alternate_port;	/* Alternate port for subflow establishment (network-byte-order) */
 
 	struct mptsub	*mpte_active_sub;	/* ptr to last active subf */
 	uint8_t	mpte_flags;			/* per mptcp session flags */
@@ -481,6 +486,7 @@ SYSCTL_DECL(_net_inet_mptcp);
 
 extern struct mppcbinfo mtcbinfo;
 extern struct pr_usrreqs mptcp_usrreqs;
+extern os_log_t mptcp_log_handle;
 
 /* Encryption algorithm related definitions */
 #define	SHA1_TRUNCATED		8
@@ -586,6 +592,7 @@ extern void mptcp_subflow_workloop(struct mptses *);
 
 extern void mptcp_sched_create_subflows(struct mptses *);
 
+extern void mptcp_finish_usrclosed(struct mptses *mpte);
 extern struct mptopt *mptcp_sopt_alloc(int);
 extern const char *mptcp_sopt2str(int, int);
 extern void mptcp_sopt_free(struct mptopt *);
@@ -609,6 +616,7 @@ extern int mptcp_subflow_sogetopt(struct mptses *, struct socket *,
     struct mptopt *);
 
 extern void mptcp_input(struct mptses *, struct mbuf *);
+extern boolean_t mptcp_can_send_more(struct mptcb *mp_tp, boolean_t ignore_reinject);
 extern int mptcp_output(struct mptses *);
 extern void mptcp_close_fsm(struct mptcb *, uint32_t);
 
@@ -645,6 +653,7 @@ extern int mptcp_notsent_lowat_check(struct socket *so);
 extern void mptcp_ask_symptoms(struct mptses *mpte);
 extern void mptcp_control_register(void);
 extern int mptcp_is_wifi_unusable(void);
+extern void mptcp_ask_for_nat64(struct ifnet *ifp);
 extern void mptcp_session_necp_cb(void *, int, struct necp_client_flow *);
 extern void mptcp_set_restrictions(struct socket *mp_so);
 extern int mptcp_freeq(struct mptcb *);

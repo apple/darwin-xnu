@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -526,10 +526,14 @@ stf_pre_output(
 	struct ip6_hdr *ip6;
 	struct in6_ifaddr *ia6;
 	struct sockaddr_in 	*dst4;
-	struct ip_out_args ipoa =
-	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
-	errno_t				result = 0;
+	struct ip_out_args ipoa;
+	errno_t	result = 0;
+
+	bzero(&ipoa, sizeof(ipoa));
+	ipoa.ipoa_boundif = IFSCOPE_NONE;
+	ipoa.ipoa_flags = IPOAF_SELECT_SRCIF;
+	ipoa.ipoa_sotc = SO_TC_UNSPEC;
+	ipoa.ipoa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 	sc = ifnet_softc(ifp);
 	dst6 = (const struct sockaddr_in6 *)(const void *)dst;

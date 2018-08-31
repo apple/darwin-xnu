@@ -34,6 +34,8 @@
 #define ARM64_REG_EHID3_DisDcZvaCmdOnly			(1<<25)
 
 #define ARM64_REG_HID4						S3_0_c15_c4_0
+#define ARM64_REG_EHID4						S3_0_c15_c4_1
+
 #define ARM64_REG_HID4_DisDcMVAOps				(1<<11)
 #define ARM64_REG_HID4_DisSpecLnchRead			(1<<33)
 #define ARM64_REG_HID4_ForceNsOrdLdReqNoOlderLd			(1<<39)
@@ -81,6 +83,7 @@
 
 #if defined(APPLECYCLONE) || defined(APPLETYPHOON) || defined(APPLETWISTER)
 #define ARM64_REG_CYC_CFG					S3_5_c15_c4_0
+#define ARM64_REG_CYC_CFG_skipInit				(1ULL<<30)
 #define ARM64_REG_CYC_CFG_deepSleep				(1ULL<<24)
 #else
 #define ARM64_REG_ACC_OVRD					S3_5_c15_c6_0
@@ -147,11 +150,48 @@
 
 
 
-
 #endif	/* APPLE_ARM64_ARCH_FAMILY */
 
 
 
 
+
+#define MPIDR_PNE_SHIFT	               16	// pcore not ecore
+#define MPIDR_PNE                      (1 << MPIDR_PNE_SHIFT)
+
+#ifdef ASSEMBLER
+
+/*
+ *  arg0: register in which to store result
+ *	 0=>not a p-core, non-zero=>p-core
+ */
+.macro ARM64_IS_PCORE
+.endmacro
+
+/*
+ * reads a special purpose register, using a different msr for e- vs. p-cores
+ * arg0: register indicating the current core type, see ARM64_IS_PCORE
+ * arg1: register in which to store the result of the read
+ * arg2: SPR to use for e-core
+ * arg3: SPR to use for p-core or non-AMP architecture
+ */
+.macro ARM64_READ_EP_SPR
+	mrs		$1, $3
+2:
+.endmacro
+
+/*
+ * writes a special purpose register, using a different msr for e- vs. p-cores
+ * arg0: register indicating the current core type, see ARM64_IS_PCORE
+ * arg1: register containing the value to write
+ * arg2: SPR to use for e-core
+ * arg3: SPR to use for p-core or non-AMP architecture
+ */
+.macro ARM64_WRITE_EP_SPR
+	msr		$3, $1
+2:
+.endmacro
+
+#endif /* ASSEMBLER */
 
 #endif /* ! _PEXPERT_ARM_ARM64_H */

@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -154,6 +154,9 @@ SYSCTL_NODE(, CTL_MACHDEP, machdep, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 SYSCTL_NODE(, CTL_USER,	  user,   CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"user-level");
 
+SYSCTL_NODE(_kern, OID_AUTO, bridge, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
+	"bridge");
+
 #define SYSCTL_RETURN(r, x)	SYSCTL_OUT(r, &x, sizeof(x))
 
 /******************************************************************************
@@ -171,7 +174,7 @@ SYSCTL_NODE(, CTL_USER,	  user,   CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 
 
 /*
- * Supporting some variables requires us to do "real" work.  We 
+ * Supporting some variables requires us to do "real" work.  We
  * gather some of that here.
  */
 static int
@@ -405,7 +408,7 @@ SYSCTL_INT     (_hw, OID_AUTO, packages, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOC
  *
  * If the feature is not present, the node should either not be registered,
  * or it should return -1.  If the feature is present, the node should return
- * 0.  If the feature is present and its use is advised, the node should 
+ * 0.  If the feature is present and its use is advised, the node should
  * return 1.
  */
 SYSCTL_NODE(_hw, OID_AUTO, optional, CTLFLAG_RW|CTLFLAG_LOCKED, NULL, "optional features");
@@ -457,7 +460,7 @@ sysctl_cpu_capability
 {
 	uint64_t	mask = (uint64_t) (uintptr_t) arg1;
 	boolean_t	is_capable = (_get_cpu_capabilities() & mask) != 0;
- 
+
 	return SYSCTL_OUT(req, &is_capable, sizeof(is_capable));
 
 }

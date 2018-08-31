@@ -44,9 +44,15 @@ _OSlibkernInit
 _SHA1Final
 _SHA1Init
 _SHA1Update
+_SHA256_Final
+_SHA256_Init
+_SHA256_Update
 _SHA384_Final
 _SHA384_Init
 _SHA384_Update
+_SHA512_Final
+_SHA512_Init
+_SHA512_Update
 _STRDUP
 __Z13OSUnserializePKcPP8OSString
 __Z16OSUnserializeXMLPKcPP8OSString
@@ -709,6 +715,7 @@ _page_shift
 _page_size
 _panic
 _printf
+_random_buf
 _sha1_init:_SHA1Init
 _sha1_loop:_SHA1Update
 _sha1_result:_SHA1Final_r

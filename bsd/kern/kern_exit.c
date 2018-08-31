@@ -337,6 +337,7 @@ populate_corpse_crashinfo(proc_t p, task_t corpse_task, struct rusage_superset *
 		}
 	}
 
+	static_assert(sizeof(struct proc_uniqidentifierinfo) == sizeof(struct crashinfo_proc_uniqidentifierinfo));
 	if (KERN_SUCCESS ==
 	    kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_BSDINFOWITHUNIQID, sizeof(struct proc_uniqidentifierinfo), &uaddr)) {
 		proc_piduniqidentifierinfo(p, &p_uniqidinfo);
@@ -2181,7 +2182,7 @@ out:
  * make process 'parent' the new parent of process 'child'.
  */
 void
-proc_reparentlocked(proc_t child, proc_t parent, int cansignal, int locked)
+proc_reparentlocked(proc_t child, proc_t parent, int signallable, int locked)
 {
 	proc_t oldparent = PROC_NULL;
 
@@ -2214,7 +2215,7 @@ proc_reparentlocked(proc_t child, proc_t parent, int cansignal, int locked)
 
 	proc_list_unlock();
 
-	if ((cansignal != 0) && (initproc == parent) && (child->p_stat == SZOMB))
+	if ((signallable != 0) && (initproc == parent) && (child->p_stat == SZOMB))
 		psignal(initproc, SIGCHLD);
 	if (locked == 1)
 		proc_list_lock();

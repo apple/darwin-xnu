@@ -238,6 +238,7 @@ struct vm_map_links {
 	vm_object_shadow(&__object, &__offset, (length));	\
 	if (__object != VME_OBJECT((entry))) {			\
 		VME_OBJECT_SET((entry), __object);		\
+		(entry)->use_pmap = TRUE;			\
 	}							\
 	if (__offset != VME_OFFSET((entry))) {			\
 		VME_OFFSET_SET((entry), __offset);		\
@@ -252,6 +253,35 @@ struct vm_map_links {
 	__offset = VME_OFFSET((entry));					\
 	(entry)->vme_offset = __offset | ((alias) & VME_ALIAS_MASK);	\
 	MACRO_END
+
+/*
+ * FOOTPRINT ACCOUNTING:
+ * The "memory footprint" is better described in the pmap layer.
+ *
+ * At the VM level, these 2 vm_map_entry_t fields are relevant:
+ * iokit_mapped:
+ *	For an "iokit_mapped" entry, we add the size of the entry to the
+ *	footprint when the entry is entered into the map and we subtract that
+ *	size when the entry is removed.  No other accounting should take place.
+ *	"use_pmap" should be FALSE but is not taken into account.
+ * use_pmap: (only when is_sub_map is FALSE)
+ *	This indicates if we should ask the pmap layer to account for pages
+ *	in this mapping.  If FALSE, we expect that another form of accounting
+ *	is being used (e.g. "iokit_mapped" or the explicit accounting of
+ *	non-volatile purgable memory).
+ *
+ * So the logic is mostly:
+ * if entry->is_sub_map == TRUE
+ *	anything in a submap does not count for the footprint
+ * else if entry->iokit_mapped == TRUE
+ *	footprint includes the entire virtual size of this entry
+ * else if entry->use_pmap == FALSE
+ *	tell pmap NOT to account for pages being pmap_enter()'d from this
+ *	mapping (i.e. use "alternate accounting")
+ * else
+ *	pmap will account for pages being pmap_enter()'d from this mapping
+ *	as it sees fit (only if anonymous, etc...)
+ */
 
 struct vm_map_entry {
 	struct vm_map_links	links;		/* links to other entries */
@@ -431,7 +461,8 @@ struct _vm_map {
 	/* boolean_t */		map_disallow_data_exec:1, /* Disallow execution from data pages on exec-permissive architectures */
 	/* boolean_t */		holelistenabled:1,
 	/* boolean_t */		is_nested_map:1,
-	/* reserved */		pad:23;
+	/* boolean_t */		map_disallow_new_exec:1, /* Disallow new executable code */
+	/* reserved */		pad:22;
 	unsigned int		timestamp;	/* Version number */
 	unsigned int		color_rr;	/* next color (not protected by a lock) */
 
@@ -1018,6 +1049,19 @@ extern kern_return_t vm_map_set_cache_attr(
 
 extern int override_nx(vm_map_t map, uint32_t user_tag);
 
+extern void vm_map_region_top_walk(
+        vm_map_entry_t entry,
+	vm_region_top_info_t top);
+extern void vm_map_region_walk(
+	vm_map_t map,
+	vm_map_offset_t va,
+	vm_map_entry_t entry,
+	vm_object_offset_t offset,
+	vm_object_size_t range,
+	vm_region_extended_info_t extended,
+	boolean_t look_for_pages,
+	mach_msg_type_number_t count);
+
 #endif /* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
@@ -1501,6 +1545,14 @@ extern kern_return_t vm_map_freeze(
 #endif
 
 __END_DECLS
+
+/*
+ * In some cases, we don't have a real VM object but still want to return a
+ * unique ID (to avoid a memory region looking like shared memory), so build
+ * a fake pointer based on the map's ledger and the index of the ledger being
+ * reported.
+ */
+#define INFO_MAKE_FAKE_OBJECT_ID(map,ledger_id)	((uint32_t)(uintptr_t)VM_KERNEL_ADDRPERM((int*)((map)->pmap->ledger)+(ledger_id)))
 
 #endif	/* KERNEL_PRIVATE */
  

@@ -14,9 +14,18 @@ src:./san/kasan-x86_64.c
 src:./san/kasan-memintrinsics.c
 src:./san/kasan_dynamic_blacklist.c
 
+# Blanket ignore non-sanitized functions
+fun:__nosan_*
+
 # Try really hard to avoid panicing while debugging
 src:./osfmk/kdp/*
 src:./osfmk/kern/debug.c
+
+# Exclude dtrace function that does weird stack manipulations
+fun:fbt_perfCallback
+
+# Exclude leak detection code that reads all memory
+fun:_ZL18IOTrackingLeakScanPv
 
 # Exclude KASAN dependencies
 # XXX: could this be relaxed since fakestack is reentrant?

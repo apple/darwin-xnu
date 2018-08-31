@@ -367,14 +367,69 @@ call_continuation(
 	Call_continuation(continuation, parameter, wresult, current_thread()->machine.kstackptr);
 }
 
+/* Setting breakpoints in EL1 is effectively a KTRR bypass. The ability to do so is
+ * controlled by MDSCR.KDE. The MSR to set MDSCR must be present to allow
+ * self-hosted user mode debug. Any checks before the MRS can be skipped with ROP,
+ * so we need to put the checks after the MRS where they can't be skipped. That
+ * still leaves a small window if a breakpoint is set on the instruction
+ * immediately after the MRS. To handle that, we also do a check and then set of
+ * the breakpoint control registers. This allows us to guarantee that a given
+ * core will never have both KDE set and a breakpoint targeting EL1.
+ *
+ * If KDE gets set, unset it and then panic */
+static void
+update_mdscr(uint64_t clear, uint64_t set)
+{  
+	uint64_t result = 0;
+	uint64_t tmp1, tmp2;
+	__asm__ volatile(
+		"mrs %[reg], MDSCR_EL1\n"
+		"bic %[reg], %[reg], %[clear]\n"
+		"orr %[reg], %[reg], %[set]\n"
+		"1:\n"
+		"bic %[reg], %[reg], #0x2000\n"
+		"msr MDSCR_EL1, %[reg]\n"
+#if defined(CONFIG_KERNEL_INTEGRITY)
+		/* verify KDE didn't get set (including via ROP)
+		 * If set, clear it and then panic */
+		"ands %[tmp], %[reg], #0x2000\n"
+		"orr %[res], %[res], %[tmp]\n"
+		"bne 1b\n"
+#endif
+		: [res] "+r" (result), [tmp] "=r" (tmp1), [reg] "=r" (tmp2)
+		: [clear] "r" (clear), [set] "r" (set) : "x0");
+#if defined(CONFIG_KERNEL_INTEGRITY)
+	if (result)
+		panic("MDSCR.KDE was set: %llx %llx %llx", tmp1, tmp2, result);
+#endif
+}
+
+#define SET_DBGBCRn(n, value, accum) \
+	__asm__ volatile( \
+		"msr DBGBCR" #n "_EL1, %[val]\n" \
+		"orr %[result], %[result], %[val]\n" \
+		: [result] "+r"(accum) : [val] "r"((value)))
+
+#define SET_DBGBVRn(n, value) \
+	__asm__ volatile("msr DBGBVR" #n "_EL1, %0" : : "r"(value))
+
+#define SET_DBGWCRn(n, value, accum) \
+	__asm__ volatile( \
+		"msr DBGWCR" #n "_EL1, %[val]\n" \
+		"orr %[result], %[result], %[val]\n" \
+		: [result] "+r"(accum) : [val] "r"((value)))
+
+#define SET_DBGWVRn(n, value) \
+	__asm__ volatile("msr DBGWVR" #n "_EL1, %0" : : "r"(value))
+
 void arm_debug_set32(arm_debug_state_t *debug_state)
 {
 	struct cpu_data 	*cpu_data_ptr;
 	arm_debug_info_t 	*debug_info = arm_debug_info();
-	volatile uint64_t	state;
 	boolean_t       	intr, set_mde = 0;
 	arm_debug_state_t 	off_state;
 	uint32_t 			i;
+	uint64_t		all_ctrls = 0;
 
 	intr = ml_set_interrupts_enabled(FALSE);
 	cpu_data_ptr = getCpuDatap();
@@ -389,109 +444,115 @@ void arm_debug_set32(arm_debug_state_t *debug_state)
 
 	switch (debug_info->num_breakpoint_pairs) {
 	case 16:
-		__asm__ volatile("msr DBGBVR15_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[15]));
-		__asm__ volatile("msr DBGBCR15_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[15]));
+		SET_DBGBVRn(15, (uint64_t)debug_state->uds.ds32.bvr[15]);
+		SET_DBGBCRn(15, (uint64_t)debug_state->uds.ds32.bcr[15], all_ctrls);
 	case 15:
-		__asm__ volatile("msr DBGBVR14_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[14]));
-		__asm__ volatile("msr DBGBCR14_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[14]));
+		SET_DBGBVRn(14, (uint64_t)debug_state->uds.ds32.bvr[14]);
+		SET_DBGBCRn(14, (uint64_t)debug_state->uds.ds32.bcr[14], all_ctrls);
 	case 14:
-		__asm__ volatile("msr DBGBVR13_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[13]));
-		__asm__ volatile("msr DBGBCR13_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[13]));
+		SET_DBGBVRn(13, (uint64_t)debug_state->uds.ds32.bvr[13]);
+		SET_DBGBCRn(13, (uint64_t)debug_state->uds.ds32.bcr[13], all_ctrls);
 	case 13:
-		__asm__ volatile("msr DBGBVR12_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[12]));
-		__asm__ volatile("msr DBGBCR12_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[12]));
+		SET_DBGBVRn(12, (uint64_t)debug_state->uds.ds32.bvr[12]);
+		SET_DBGBCRn(12, (uint64_t)debug_state->uds.ds32.bcr[12], all_ctrls);
 	case 12:
-		__asm__ volatile("msr DBGBVR11_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[11]));
-		__asm__ volatile("msr DBGBCR11_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[11]));
+		SET_DBGBVRn(11, (uint64_t)debug_state->uds.ds32.bvr[11]);
+		SET_DBGBCRn(11, (uint64_t)debug_state->uds.ds32.bcr[11], all_ctrls);
 	case 11:
-		__asm__ volatile("msr DBGBVR10_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[10]));
-		__asm__ volatile("msr DBGBCR10_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[10]));
+		SET_DBGBVRn(10, (uint64_t)debug_state->uds.ds32.bvr[10]);
+		SET_DBGBCRn(10, (uint64_t)debug_state->uds.ds32.bcr[10], all_ctrls);
 	case 10:
-		__asm__ volatile("msr DBGBVR9_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[9]));
-		__asm__ volatile("msr DBGBCR9_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[9]));
+		SET_DBGBVRn(9, (uint64_t)debug_state->uds.ds32.bvr[9]);
+		SET_DBGBCRn(9, (uint64_t)debug_state->uds.ds32.bcr[9], all_ctrls);
 	case 9:
-		__asm__ volatile("msr DBGBVR8_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[8]));
-		__asm__ volatile("msr DBGBCR8_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[8]));
+		SET_DBGBVRn(8, (uint64_t)debug_state->uds.ds32.bvr[8]);
+		SET_DBGBCRn(8, (uint64_t)debug_state->uds.ds32.bcr[8], all_ctrls);
 	case 8:
-		__asm__ volatile("msr DBGBVR7_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[7]));
-		__asm__ volatile("msr DBGBCR7_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[7]));
+		SET_DBGBVRn(7, (uint64_t)debug_state->uds.ds32.bvr[7]);
+		SET_DBGBCRn(7, (uint64_t)debug_state->uds.ds32.bcr[7], all_ctrls);
 	case 7:
-		__asm__ volatile("msr DBGBVR6_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[6]));
-		__asm__ volatile("msr DBGBCR6_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[6]));
+		SET_DBGBVRn(6, (uint64_t)debug_state->uds.ds32.bvr[6]);
+		SET_DBGBCRn(6, (uint64_t)debug_state->uds.ds32.bcr[6], all_ctrls);
 	case 6:
-		__asm__ volatile("msr DBGBVR5_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[5]));
-		__asm__ volatile("msr DBGBCR5_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[5]));
+		SET_DBGBVRn(5, (uint64_t)debug_state->uds.ds32.bvr[5]);
+		SET_DBGBCRn(5, (uint64_t)debug_state->uds.ds32.bcr[5], all_ctrls);
 	case 5:
-		__asm__ volatile("msr DBGBVR4_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[4]));
-		__asm__ volatile("msr DBGBCR4_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[4]));
+		SET_DBGBVRn(4, (uint64_t)debug_state->uds.ds32.bvr[4]);
+		SET_DBGBCRn(4, (uint64_t)debug_state->uds.ds32.bcr[4], all_ctrls);
 	case 4:
-		__asm__ volatile("msr DBGBVR3_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[3]));
-		__asm__ volatile("msr DBGBCR3_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[3]));
+		SET_DBGBVRn(3, (uint64_t)debug_state->uds.ds32.bvr[3]);
+		SET_DBGBCRn(3, (uint64_t)debug_state->uds.ds32.bcr[3], all_ctrls);
 	case 3:
-		__asm__ volatile("msr DBGBVR2_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[2]));
-		__asm__ volatile("msr DBGBCR2_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[2]));
+		SET_DBGBVRn(2, (uint64_t)debug_state->uds.ds32.bvr[2]);
+		SET_DBGBCRn(2, (uint64_t)debug_state->uds.ds32.bcr[2], all_ctrls);
 	case 2:
-		__asm__ volatile("msr DBGBVR1_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[1]));
-		__asm__ volatile("msr DBGBCR1_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[1]));
+		SET_DBGBVRn(1, (uint64_t)debug_state->uds.ds32.bvr[1]);
+		SET_DBGBCRn(1, (uint64_t)debug_state->uds.ds32.bcr[1], all_ctrls);
 	case 1:
-		__asm__ volatile("msr DBGBVR0_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bvr[0]));
-		__asm__ volatile("msr DBGBCR0_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.bcr[0]));
+		SET_DBGBVRn(0, (uint64_t)debug_state->uds.ds32.bvr[0]);
+		SET_DBGBCRn(0, (uint64_t)debug_state->uds.ds32.bcr[0], all_ctrls);
 	default:
 		break;
 	}
 
 	switch (debug_info->num_watchpoint_pairs) {
 	case 16:
-		__asm__ volatile("msr DBGWVR15_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[15]));
-		__asm__ volatile("msr DBGWCR15_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[15]));
+		SET_DBGWVRn(15, (uint64_t)debug_state->uds.ds32.wvr[15]);
+		SET_DBGWCRn(15, (uint64_t)debug_state->uds.ds32.wcr[15], all_ctrls);
 	case 15:
-		__asm__ volatile("msr DBGWVR14_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[14]));
-		__asm__ volatile("msr DBGWCR14_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[14]));
+		SET_DBGWVRn(14, (uint64_t)debug_state->uds.ds32.wvr[14]);
+		SET_DBGWCRn(14, (uint64_t)debug_state->uds.ds32.wcr[14], all_ctrls);
 	case 14:
-		__asm__ volatile("msr DBGWVR13_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[13]));
-		__asm__ volatile("msr DBGWCR13_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[13]));
+		SET_DBGWVRn(13, (uint64_t)debug_state->uds.ds32.wvr[13]);
+		SET_DBGWCRn(13, (uint64_t)debug_state->uds.ds32.wcr[13], all_ctrls);
 	case 13:
-		__asm__ volatile("msr DBGWVR12_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[12]));
-		__asm__ volatile("msr DBGWCR12_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[12]));
+		SET_DBGWVRn(12, (uint64_t)debug_state->uds.ds32.wvr[12]);
+		SET_DBGWCRn(12, (uint64_t)debug_state->uds.ds32.wcr[12], all_ctrls);
 	case 12:
-		__asm__ volatile("msr DBGWVR11_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[11]));
-		__asm__ volatile("msr DBGWCR11_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[11]));
+		SET_DBGWVRn(11, (uint64_t)debug_state->uds.ds32.wvr[11]);
+		SET_DBGWCRn(11, (uint64_t)debug_state->uds.ds32.wcr[11], all_ctrls);
 	case 11:
-		__asm__ volatile("msr DBGWVR10_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[10]));
-		__asm__ volatile("msr DBGWCR10_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[10]));
+		SET_DBGWVRn(10, (uint64_t)debug_state->uds.ds32.wvr[10]);
+		SET_DBGWCRn(10, (uint64_t)debug_state->uds.ds32.wcr[10], all_ctrls);
 	case 10:
-		__asm__ volatile("msr DBGWVR9_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[9]));
-		__asm__ volatile("msr DBGWCR9_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[9]));
+		SET_DBGWVRn(9, (uint64_t)debug_state->uds.ds32.wvr[9]);
+		SET_DBGWCRn(9, (uint64_t)debug_state->uds.ds32.wcr[9], all_ctrls);
 	case 9:
-		__asm__ volatile("msr DBGWVR8_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[8]));
-		__asm__ volatile("msr DBGWCR8_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[8]));
+		SET_DBGWVRn(8, (uint64_t)debug_state->uds.ds32.wvr[8]);
+		SET_DBGWCRn(8, (uint64_t)debug_state->uds.ds32.wcr[8], all_ctrls);
 	case 8:
-		__asm__ volatile("msr DBGWVR7_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[7]));
-		__asm__ volatile("msr DBGWCR7_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[7]));
+		SET_DBGWVRn(7, (uint64_t)debug_state->uds.ds32.wvr[7]);
+		SET_DBGWCRn(7, (uint64_t)debug_state->uds.ds32.wcr[7], all_ctrls);
 	case 7:
-		__asm__ volatile("msr DBGWVR6_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[6]));
-		__asm__ volatile("msr DBGWCR6_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[6]));
+		SET_DBGWVRn(6, (uint64_t)debug_state->uds.ds32.wvr[6]);
+		SET_DBGWCRn(6, (uint64_t)debug_state->uds.ds32.wcr[6], all_ctrls);
 	case 6:
-		__asm__ volatile("msr DBGWVR5_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[5]));
-		__asm__ volatile("msr DBGWCR5_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[5]));
+		SET_DBGWVRn(5, (uint64_t)debug_state->uds.ds32.wvr[5]);
+		SET_DBGWCRn(5, (uint64_t)debug_state->uds.ds32.wcr[5], all_ctrls);
 	case 5:
-		__asm__ volatile("msr DBGWVR4_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[4]));
-		__asm__ volatile("msr DBGWCR4_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[4]));
+		SET_DBGWVRn(4, (uint64_t)debug_state->uds.ds32.wvr[4]);
+		SET_DBGWCRn(4, (uint64_t)debug_state->uds.ds32.wcr[4], all_ctrls);
 	case 4:
-		__asm__ volatile("msr DBGWVR3_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[3]));
-		__asm__ volatile("msr DBGWCR3_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[3]));
+		SET_DBGWVRn(3, (uint64_t)debug_state->uds.ds32.wvr[3]);
+		SET_DBGWCRn(3, (uint64_t)debug_state->uds.ds32.wcr[3], all_ctrls);
 	case 3:
-		__asm__ volatile("msr DBGWVR2_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[2]));
-		__asm__ volatile("msr DBGWCR2_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[2]));
+		SET_DBGWVRn(2, (uint64_t)debug_state->uds.ds32.wvr[2]);
+		SET_DBGWCRn(2, (uint64_t)debug_state->uds.ds32.wcr[2], all_ctrls);
 	case 2:
-		__asm__ volatile("msr DBGWVR1_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[1]));
-		__asm__ volatile("msr DBGWCR1_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[1]));
+		SET_DBGWVRn(1, (uint64_t)debug_state->uds.ds32.wvr[1]);
+		SET_DBGWCRn(1, (uint64_t)debug_state->uds.ds32.wcr[1], all_ctrls);
 	case 1:
-		__asm__ volatile("msr DBGWVR0_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wvr[0]));
-		__asm__ volatile("msr DBGWCR0_EL1, %0" : : "r"((uint64_t)debug_state->uds.ds32.wcr[0]));
+		SET_DBGWVRn(0, (uint64_t)debug_state->uds.ds32.wvr[0]);
+		SET_DBGWCRn(0, (uint64_t)debug_state->uds.ds32.wcr[0], all_ctrls);
 	default:
 		break;
 	}
+
+#if defined(CONFIG_KERNEL_INTEGRITY)
+	if ((all_ctrls & (ARM_DBG_CR_MODE_CONTROL_PRIVILEGED | ARM_DBG_CR_HIGHER_MODE_ENABLE)) != 0) {
+		panic("sorry, self-hosted debug is not supported: 0x%llx", all_ctrls);
+	}
+#endif
 
 	for (i = 0; i < debug_info->num_breakpoint_pairs; i++) {
 		if (0 != debug_state->uds.ds32.bcr[i]) {
@@ -511,36 +572,23 @@ void arm_debug_set32(arm_debug_state_t *debug_state)
 	 * Breakpoint/Watchpoint Enable
 	 */
 	if (set_mde) {
-
-		__asm__ volatile("mrs %0, MDSCR_EL1" : "=r"(state));
-		state |= 0x8000; // MDSCR_EL1[MDE]
-		__asm__ volatile("msr MDSCR_EL1, %0" : : "r"(state));
-
+		update_mdscr(0, 0x8000); // MDSCR_EL1[MDE]
 	} else {
-
-		__asm__ volatile("mrs %0, MDSCR_EL1" : "=r"(state));
-		state &= ~0x8000;
-		__asm__ volatile("msr MDSCR_EL1, %0" : : "r"(state));
-
+		update_mdscr(0x8000, 0);
 	}
 		
 	/*
 	 * Software debug single step enable
 	 */
 	if (debug_state->uds.ds32.mdscr_el1 & 0x1) {
-
-		__asm__ volatile("mrs %0, MDSCR_EL1" : "=r"(state));
-		state = (state & ~0x8000) | 0x1; // ~MDE | SS : no brk/watch while single stepping (which we've set)
-		__asm__ volatile("msr MDSCR_EL1, %0" : : "r"(state));
+		update_mdscr(0x8000, 1); // ~MDE | SS : no brk/watch while single stepping (which we've set)
 
 		set_saved_state_cpsr((current_thread()->machine.upcb), 
 			get_saved_state_cpsr((current_thread()->machine.upcb)) | PSR64_SS);
 
 	} else {
 
-		__asm__ volatile("mrs %0, MDSCR_EL1" : "=r"(state));
-		state &= ~0x1;
-		__asm__ volatile("msr MDSCR_EL1, %0" : : "r"(state));
+		update_mdscr(0x1, 0);
 
 #if SINGLE_STEP_RETIRE_ERRATA
 		// Workaround for radar 20619637
@@ -557,10 +605,10 @@ void arm_debug_set64(arm_debug_state_t *debug_state)
 {
 	struct cpu_data 	*cpu_data_ptr;
 	arm_debug_info_t 	*debug_info = arm_debug_info();
-	volatile uint64_t	state;
 	boolean_t       	intr, set_mde = 0;
 	arm_debug_state_t 	off_state;
 	uint32_t 			i;
+	uint64_t			all_ctrls = 0;
 
 	intr = ml_set_interrupts_enabled(FALSE);
 	cpu_data_ptr = getCpuDatap();
@@ -575,109 +623,115 @@ void arm_debug_set64(arm_debug_state_t *debug_state)
 
 	switch (debug_info->num_breakpoint_pairs) {
 	case 16:
-		__asm__ volatile("msr DBGBVR15_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[15]));
-		__asm__ volatile("msr DBGBCR15_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[15]));
+		SET_DBGBVRn(15, debug_state->uds.ds64.bvr[15]);
+		SET_DBGBCRn(15, (uint64_t)debug_state->uds.ds64.bcr[15], all_ctrls);
 	case 15:
-		__asm__ volatile("msr DBGBVR14_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[14]));
-		__asm__ volatile("msr DBGBCR14_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[14]));
+		SET_DBGBVRn(14, debug_state->uds.ds64.bvr[14]);
+		SET_DBGBCRn(14, (uint64_t)debug_state->uds.ds64.bcr[14], all_ctrls);
 	case 14:
-		__asm__ volatile("msr DBGBVR13_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[13]));
-		__asm__ volatile("msr DBGBCR13_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[13]));
+		SET_DBGBVRn(13, debug_state->uds.ds64.bvr[13]);
+		SET_DBGBCRn(13, (uint64_t)debug_state->uds.ds64.bcr[13], all_ctrls);
 	case 13:
-		__asm__ volatile("msr DBGBVR12_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[12]));
-		__asm__ volatile("msr DBGBCR12_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[12]));
+		SET_DBGBVRn(12, debug_state->uds.ds64.bvr[12]);
+		SET_DBGBCRn(12, (uint64_t)debug_state->uds.ds64.bcr[12], all_ctrls);
 	case 12:
-		__asm__ volatile("msr DBGBVR11_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[11]));
-		__asm__ volatile("msr DBGBCR11_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[11]));
+		SET_DBGBVRn(11, debug_state->uds.ds64.bvr[11]);
+		SET_DBGBCRn(11, (uint64_t)debug_state->uds.ds64.bcr[11], all_ctrls);
 	case 11:
-		__asm__ volatile("msr DBGBVR10_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[10]));
-		__asm__ volatile("msr DBGBCR10_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[10]));
+		SET_DBGBVRn(10, debug_state->uds.ds64.bvr[10]);
+		SET_DBGBCRn(10, (uint64_t)debug_state->uds.ds64.bcr[10], all_ctrls);
 	case 10:
-		__asm__ volatile("msr DBGBVR9_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[9]));
-		__asm__ volatile("msr DBGBCR9_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[9]));
+		SET_DBGBVRn(9, debug_state->uds.ds64.bvr[9]);
+		SET_DBGBCRn(9, (uint64_t)debug_state->uds.ds64.bcr[9], all_ctrls);
 	case 9:
-		__asm__ volatile("msr DBGBVR8_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[8]));
-		__asm__ volatile("msr DBGBCR8_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[8]));
+		SET_DBGBVRn(8, debug_state->uds.ds64.bvr[8]);
+		SET_DBGBCRn(8, (uint64_t)debug_state->uds.ds64.bcr[8], all_ctrls);
 	case 8:
-		__asm__ volatile("msr DBGBVR7_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[7]));
-		__asm__ volatile("msr DBGBCR7_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[7]));
+		SET_DBGBVRn(7, debug_state->uds.ds64.bvr[7]);
+		SET_DBGBCRn(7, (uint64_t)debug_state->uds.ds64.bcr[7], all_ctrls);
 	case 7:
-		__asm__ volatile("msr DBGBVR6_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[6]));
-		__asm__ volatile("msr DBGBCR6_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[6]));
+		SET_DBGBVRn(6, debug_state->uds.ds64.bvr[6]);
+		SET_DBGBCRn(6, (uint64_t)debug_state->uds.ds64.bcr[6], all_ctrls);
 	case 6:
-		__asm__ volatile("msr DBGBVR5_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[5]));
-		__asm__ volatile("msr DBGBCR5_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[5]));
+		SET_DBGBVRn(5, debug_state->uds.ds64.bvr[5]);
+		SET_DBGBCRn(5, (uint64_t)debug_state->uds.ds64.bcr[5], all_ctrls);
 	case 5:
-		__asm__ volatile("msr DBGBVR4_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[4]));
-		__asm__ volatile("msr DBGBCR4_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[4]));
+		SET_DBGBVRn(4, debug_state->uds.ds64.bvr[4]);
+		SET_DBGBCRn(4, (uint64_t)debug_state->uds.ds64.bcr[4], all_ctrls);
 	case 4:
-		__asm__ volatile("msr DBGBVR3_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[3]));
-		__asm__ volatile("msr DBGBCR3_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[3]));
+		SET_DBGBVRn(3, debug_state->uds.ds64.bvr[3]);
+		SET_DBGBCRn(3, (uint64_t)debug_state->uds.ds64.bcr[3], all_ctrls);
 	case 3:
-		__asm__ volatile("msr DBGBVR2_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[2]));
-		__asm__ volatile("msr DBGBCR2_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[2]));
+		SET_DBGBVRn(2, debug_state->uds.ds64.bvr[2]);
+		SET_DBGBCRn(2, (uint64_t)debug_state->uds.ds64.bcr[2], all_ctrls);
 	case 2:
-		__asm__ volatile("msr DBGBVR1_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[1]));
-		__asm__ volatile("msr DBGBCR1_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[1]));
+		SET_DBGBVRn(1, debug_state->uds.ds64.bvr[1]);
+		SET_DBGBCRn(1, (uint64_t)debug_state->uds.ds64.bcr[1], all_ctrls);
 	case 1:
-		__asm__ volatile("msr DBGBVR0_EL1, %0" : : "r"(debug_state->uds.ds64.bvr[0]));
-		__asm__ volatile("msr DBGBCR0_EL1, %0" : : "r"(debug_state->uds.ds64.bcr[0]));
+		SET_DBGBVRn(0, debug_state->uds.ds64.bvr[0]);
+		SET_DBGBCRn(0, (uint64_t)debug_state->uds.ds64.bcr[0], all_ctrls);
 	default:
 		break;
 	}
 
 	switch (debug_info->num_watchpoint_pairs) {
 	case 16:
-		__asm__ volatile("msr DBGWVR15_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[15]));
-		__asm__ volatile("msr DBGWCR15_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[15]));
+		SET_DBGWVRn(15, debug_state->uds.ds64.wvr[15]);
+		SET_DBGWCRn(15, (uint64_t)debug_state->uds.ds64.wcr[15], all_ctrls);
 	case 15:
-		__asm__ volatile("msr DBGWVR14_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[14]));
-		__asm__ volatile("msr DBGWCR14_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[14]));
+		SET_DBGWVRn(14, debug_state->uds.ds64.wvr[14]);
+		SET_DBGWCRn(14, (uint64_t)debug_state->uds.ds64.wcr[14], all_ctrls);
 	case 14:
-		__asm__ volatile("msr DBGWVR13_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[13]));
-		__asm__ volatile("msr DBGWCR13_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[13]));
+		SET_DBGWVRn(13, debug_state->uds.ds64.wvr[13]);
+		SET_DBGWCRn(13, (uint64_t)debug_state->uds.ds64.wcr[13], all_ctrls);
 	case 13:
-		__asm__ volatile("msr DBGWVR12_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[12]));
-		__asm__ volatile("msr DBGWCR12_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[12]));
+		SET_DBGWVRn(12, debug_state->uds.ds64.wvr[12]);
+		SET_DBGWCRn(12, (uint64_t)debug_state->uds.ds64.wcr[12], all_ctrls);
 	case 12:
-		__asm__ volatile("msr DBGWVR11_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[11]));
-		__asm__ volatile("msr DBGWCR11_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[11]));
+		SET_DBGWVRn(11, debug_state->uds.ds64.wvr[11]);
+		SET_DBGWCRn(11, (uint64_t)debug_state->uds.ds64.wcr[11], all_ctrls);
 	case 11:
-		__asm__ volatile("msr DBGWVR10_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[10]));
-		__asm__ volatile("msr DBGWCR10_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[10]));
+		SET_DBGWVRn(10, debug_state->uds.ds64.wvr[10]);
+		SET_DBGWCRn(10, (uint64_t)debug_state->uds.ds64.wcr[10], all_ctrls);
 	case 10:
-		__asm__ volatile("msr DBGWVR9_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[9]));
-		__asm__ volatile("msr DBGWCR9_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[9]));
+		SET_DBGWVRn(9, debug_state->uds.ds64.wvr[9]);
+		SET_DBGWCRn(9, (uint64_t)debug_state->uds.ds64.wcr[9], all_ctrls);
 	case 9:
-		__asm__ volatile("msr DBGWVR8_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[8]));
-		__asm__ volatile("msr DBGWCR8_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[8]));
+		SET_DBGWVRn(8, debug_state->uds.ds64.wvr[8]);
+		SET_DBGWCRn(8, (uint64_t)debug_state->uds.ds64.wcr[8], all_ctrls);
 	case 8:
-		__asm__ volatile("msr DBGWVR7_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[7]));
-		__asm__ volatile("msr DBGWCR7_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[7]));
+		SET_DBGWVRn(7, debug_state->uds.ds64.wvr[7]);
+		SET_DBGWCRn(7, (uint64_t)debug_state->uds.ds64.wcr[7], all_ctrls);
 	case 7:
-		__asm__ volatile("msr DBGWVR6_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[6]));
-		__asm__ volatile("msr DBGWCR6_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[6]));
+		SET_DBGWVRn(6, debug_state->uds.ds64.wvr[6]);
+		SET_DBGWCRn(6, (uint64_t)debug_state->uds.ds64.wcr[6], all_ctrls);
 	case 6:
-		__asm__ volatile("msr DBGWVR5_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[5]));
-		__asm__ volatile("msr DBGWCR5_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[5]));
+		SET_DBGWVRn(5, debug_state->uds.ds64.wvr[5]);
+		SET_DBGWCRn(5, (uint64_t)debug_state->uds.ds64.wcr[5], all_ctrls);
 	case 5:
-		__asm__ volatile("msr DBGWVR4_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[4]));
-		__asm__ volatile("msr DBGWCR4_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[4]));
+		SET_DBGWVRn(4, debug_state->uds.ds64.wvr[4]);
+		SET_DBGWCRn(4, (uint64_t)debug_state->uds.ds64.wcr[4], all_ctrls);
 	case 4:
-		__asm__ volatile("msr DBGWVR3_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[3]));
-		__asm__ volatile("msr DBGWCR3_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[3]));
+		SET_DBGWVRn(3, debug_state->uds.ds64.wvr[3]);
+		SET_DBGWCRn(3, (uint64_t)debug_state->uds.ds64.wcr[3], all_ctrls);
 	case 3:
-		__asm__ volatile("msr DBGWVR2_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[2]));
-		__asm__ volatile("msr DBGWCR2_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[2]));
+		SET_DBGWVRn(2, debug_state->uds.ds64.wvr[2]);
+		SET_DBGWCRn(2, (uint64_t)debug_state->uds.ds64.wcr[2], all_ctrls);
 	case 2:
-		__asm__ volatile("msr DBGWVR1_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[1]));
-		__asm__ volatile("msr DBGWCR1_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[1]));
+		SET_DBGWVRn(1, debug_state->uds.ds64.wvr[1]);
+		SET_DBGWCRn(1, (uint64_t)debug_state->uds.ds64.wcr[1], all_ctrls);
 	case 1:
-		__asm__ volatile("msr DBGWVR0_EL1, %0" : : "r"(debug_state->uds.ds64.wvr[0]));
-		__asm__ volatile("msr DBGWCR0_EL1, %0" : : "r"(debug_state->uds.ds64.wcr[0]));
+		SET_DBGWVRn(0, debug_state->uds.ds64.wvr[0]);
+		SET_DBGWCRn(0, (uint64_t)debug_state->uds.ds64.wcr[0], all_ctrls);
 	default:
 		break;
 	}
+
+#if defined(CONFIG_KERNEL_INTEGRITY)
+	if ((all_ctrls & (ARM_DBG_CR_MODE_CONTROL_PRIVILEGED | ARM_DBG_CR_HIGHER_MODE_ENABLE)) != 0) {
+		panic("sorry, self-hosted debug is not supported: 0x%llx", all_ctrls);
+	}
+#endif
 
 	for (i = 0; i < debug_info->num_breakpoint_pairs; i++) {
 		if (0 != debug_state->uds.ds64.bcr[i]) {
@@ -697,11 +751,7 @@ void arm_debug_set64(arm_debug_state_t *debug_state)
 	 * Breakpoint/Watchpoint Enable
 	 */
 	if (set_mde) {
-
-		__asm__ volatile("mrs %0, MDSCR_EL1" : "=r"(state));
-		state |= 0x8000; // MDSCR_EL1[MDE]
-		__asm__ volatile("msr MDSCR_EL1, %0" : : "r"(state));
-
+		update_mdscr(0, 0x8000); // MDSCR_EL1[MDE]
 	}
 		
 	/*
@@ -709,18 +759,14 @@ void arm_debug_set64(arm_debug_state_t *debug_state)
 	 */
 	if (debug_state->uds.ds64.mdscr_el1 & 0x1) {
 
-		__asm__ volatile("mrs %0, MDSCR_EL1" : "=r"(state));
-		state = (state & ~0x8000) | 0x1; // ~MDE | SS : no brk/watch while single stepping (which we've set)
-		__asm__ volatile("msr MDSCR_EL1, %0" : : "r"(state));
+		update_mdscr(0x8000, 1); // ~MDE | SS : no brk/watch while single stepping (which we've set)
 
 		set_saved_state_cpsr((current_thread()->machine.upcb), 
 			get_saved_state_cpsr((current_thread()->machine.upcb)) | PSR64_SS);
 
 	} else {
 
-		__asm__ volatile("mrs %0, MDSCR_EL1" : "=r"(state));
-		state &= ~0x1;
-		__asm__ volatile("msr MDSCR_EL1, %0" : : "r"(state));
+		update_mdscr(0x1, 0);
 
 #if SINGLE_STEP_RETIRE_ERRATA
 		// Workaround for radar 20619637

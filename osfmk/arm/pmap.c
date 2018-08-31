@@ -2988,6 +2988,11 @@ pmap_bootstrap(
 			   &pmap_stats_assert,
 			   sizeof (pmap_stats_assert));
 #endif /* MACH_ASSERT */
+
+#if KASAN
+	/* Shadow the CPU copy windows, as they fall outside of the physical aperture */
+	kasan_map_shadow(CPUWINDOWS_BASE, CPUWINDOWS_TOP - CPUWINDOWS_BASE, true);
+#endif /* KASAN */
 }
 
 
@@ -4319,7 +4324,8 @@ pmap_remove_range_options(
 		/* sanity checks... */
 #if MACH_ASSERT
 		if (pmap->stats.internal < num_internal) {
-			if ((! pmap_stats_assert) ||
+			if ((! pmap_stats_assert ||
+			     ! pmap->pmap_stats_assert) ||
 			    (pmap->stats.internal + pmap->stats.reusable) ==
 			    (num_internal + num_reusable)) {
 				num_reusable_mismatch++;
@@ -5524,16 +5530,17 @@ pmap_enter_options_internal(
 	boolean_t wired,
 	unsigned int options)
 {
-	pmap_paddr_t	pa = ptoa(pn);
-	pt_entry_t		pte;
-	pt_entry_t		spte;
-	pt_entry_t		*pte_p;
-	pv_entry_t		*pve_p;
-	boolean_t		set_NX;
-	boolean_t		set_XO = FALSE;
-	boolean_t		refcnt_updated;
-	unsigned int	wimg_bits;
-	boolean_t		was_compressed, was_alt_compressed;
+	pmap_paddr_t    pa = ptoa(pn);
+	pt_entry_t      pte;
+	pt_entry_t      spte;
+	pt_entry_t      *pte_p;
+	pv_entry_t      *pve_p;
+	boolean_t       set_NX;
+	boolean_t       set_XO = FALSE;
+	boolean_t       refcnt_updated;
+	boolean_t       wiredcnt_updated;
+	unsigned int    wimg_bits;
+	boolean_t       was_compressed, was_alt_compressed;
 
 	if ((v) & PAGE_MASK) {
 		panic("pmap_enter_options() pmap %p v 0x%llx\n",
@@ -5562,6 +5569,7 @@ pmap_enter_options_internal(
 	assert(pn != vm_page_fictitious_addr);
 
 	refcnt_updated = FALSE;
+	wiredcnt_updated = FALSE;
 	pve_p = PV_ENTRY_NULL;
 	was_compressed = FALSE;
 	was_alt_compressed = FALSE;
@@ -5757,16 +5765,17 @@ Pmap_enter_retry:
 	pte |= ARM_PTE_AF;
 
 	volatile uint16_t *refcnt = NULL;
+	volatile uint16_t *wiredcnt = NULL;
 	if (pmap != kernel_pmap) {
 		refcnt = &(ptep_get_ptd(pte_p)->pt_cnt[ARM_PT_DESC_INDEX(pte_p)].refcnt);
-		/* Mark the PT page active to keep it from being reclaimed.  We need this because
+		wiredcnt = &(ptep_get_ptd(pte_p)->pt_cnt[ARM_PT_DESC_INDEX(pte_p)].wiredcnt);
+		/* Bump the wired count to keep the PTE page from being reclaimed.  We need this because
 		 * we may drop the PVH and pmap locks later in pmap_enter() if we need to allocate
-		 * a new PV entry.  Note that setting this high bit (0x4000) can temporarily
-		 * prevent the refcount underflow checks in pmap_page_protect() and pmap_remove() from
-		 * working.  If an underflow should happen during this window, we'll instead get a
-		 * refcount along the lines of 0x3FFF, which will produce a later panic on non-zero
-		 * refcount in pmap_pages_reclaim() or pmap_tt_deallocate(). */
-		OSBitOrAtomic16(PT_DESC_REFCOUNT, refcnt);
+		 * a new PV entry. */
+		if (!wiredcnt_updated) {
+			OSAddAtomic16(1, (volatile int16_t*)wiredcnt);
+			wiredcnt_updated = TRUE;
+		}
 		if (!refcnt_updated) {
 			OSAddAtomic16(1, (volatile int16_t*)refcnt);
 			refcnt_updated = TRUE;
@@ -5794,7 +5803,7 @@ Pmap_enter_loop:
 			 */
 			if (refcnt != NULL) {
 				assert(refcnt_updated);
-				if (OSAddAtomic16(-1, (volatile int16_t*)refcnt) <= (int16_t)PT_DESC_REFCOUNT)
+				if (OSAddAtomic16(-1, (volatile int16_t*)refcnt) <= 0)
 					panic("pmap_enter(): over-release of ptdp %p for pte %p\n", ptep_get_ptd(pte_p), pte_p);
 			}
 			UNLOCK_PVH(pai);
@@ -5802,7 +5811,7 @@ Pmap_enter_loop:
 		} else if (pte_to_pa(*pte_p) == pa) {
 			if (refcnt != NULL) {
 				assert(refcnt_updated);
-				if (OSAddAtomic16(-1, (volatile int16_t*)refcnt) <= (int16_t)PT_DESC_REFCOUNT)
+				if (OSAddAtomic16(-1, (volatile int16_t*)refcnt) <= 0)
 					panic("pmap_enter(): over-release of ptdp %p for pte %p\n", ptep_get_ptd(pte_p), pte_p);
 			}
 			pmap_enter_pte(pmap, pte_p, pte, v);
@@ -5974,19 +5983,20 @@ Pmap_enter_loop:
 Pmap_enter_return:
 
 #if CONFIG_PGTRACE
-    if (pgtrace_enabled) {
-        // Clone and invalidate original mapping if eligible
-        for (int i = 0; i < PAGE_RATIO; i++) {
-            pmap_pgtrace_enter_clone(pmap, v + ARM_PGBYTES*i, 0, 0);
-        }
-    }
+	if (pgtrace_enabled) {
+		// Clone and invalidate original mapping if eligible
+		for (int i = 0; i < PAGE_RATIO; i++) {
+			pmap_pgtrace_enter_clone(pmap, v + ARM_PGBYTES*i, 0, 0);
+		}
+	}
 #endif
 
 	if (pve_p != PV_ENTRY_NULL)
 		pv_free(pve_p);
 
-	if (refcnt != NULL)
-		OSBitAndAtomic16(~PT_DESC_REFCOUNT, refcnt); // clear active marker
+	if (wiredcnt_updated && (OSAddAtomic16(-1, (volatile int16_t*)wiredcnt) <= 0))
+		panic("pmap_enter(): over-unwire of ptdp %p for pte %p\n", ptep_get_ptd(pte_p), pte_p);
+
 	PMAP_UNLOCK(pmap);
 
 	return KERN_SUCCESS;
@@ -9142,12 +9152,18 @@ vm_map_offset_t pmap_max_offset(
 			max_offset_ret = min_max_offset;
 		}
 	} else if (option == ARM_PMAP_MAX_OFFSET_JUMBO) {
-		max_offset_ret = 0x0000000518000000ULL;     // Max offset is 20.375GB for pmaps with special "jumbo" blessing
+		if (arm64_pmap_max_offset_default) {
+			// Allow the boot-arg to override jumbo size
+			max_offset_ret = arm64_pmap_max_offset_default;
+		} else {
+			max_offset_ret = MACH_VM_MAX_ADDRESS;     // Max offset is MACH_VM_MAX_ADDRESS for pmaps with special "jumbo" blessing
+		}
 	} else {
 		panic("pmap_max_offset illegal option 0x%x\n", option);
 	}
 
 	assert(max_offset_ret >= min_max_offset);
+	assert(max_offset_ret <= MACH_VM_MAX_ADDRESS);
 	return max_offset_ret;
 #else
 	if (option == ARM_PMAP_MAX_OFFSET_DEFAULT) {
@@ -9168,6 +9184,7 @@ vm_map_offset_t pmap_max_offset(
 		panic("pmap_max_offset illegal option 0x%x\n", option);
 	}
 
+	assert(max_offset_ret <= VM_MAX_ADDRESS);
 	return max_offset_ret;
 #endif
 }
@@ -9605,7 +9622,8 @@ pmap_check_ledgers(
 	}
 
 	if (do_panic) {
-		if (pmap_ledgers_panic) {
+		if (pmap_ledgers_panic &&
+		    pmap->pmap_stats_assert) {
 			panic("pmap_destroy(%p) %d[%s] has imbalanced ledgers\n",
 			      pmap, pid, procname);
 		} else {
@@ -10624,7 +10642,7 @@ pmap_query_page_info_internal(
 			pve_p = pvh_list(pv_h);
 			while (pve_p != PV_ENTRY_NULL &&
 			       pve_get_ptep(pve_p) != pte) {
-				pve_p = pvh_list(pv_h);
+				pve_p = PVE_NEXT_PTR(pve_next(pve_p));
 			}
 		}
 		if (IS_ALTACCT_PAGE(pai, pve_p)) {

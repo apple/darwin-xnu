@@ -685,6 +685,7 @@ extern void kdebug_reset(void);
 #define DBG_HFS       0x8     /* HFS-specific events; see the hfs project */
 #define DBG_APFS      0x9     /* APFS-specific events; see the apfs project */
 #define DBG_SMB       0xA     /* SMB-specific events; see the smb project */
+#define DBG_MOUNT     0xB     /* Mounting/unmounting operations */
 #define DBG_EXFAT     0xE     /* ExFAT-specific events; see the exfat project */
 #define DBG_MSDOS     0xF     /* FAT-specific events; see the msdosfs project */
 #define DBG_ACFS      0x10    /* Xsan-specific events; see the XsanFS project */
@@ -1155,11 +1156,19 @@ extern unsigned int kdebug_enable;
 	do {                                                                      \
 		if (KDBG_IMPROBABLE(kdebug_enable & (type))) {                        \
 			kernel_debug((x), (uintptr_t)(a), (uintptr_t)(b), (uintptr_t)(c), \
-				(uintptr_t)(d), (uintptr_t)(e));                              \
+				(uintptr_t)(d), 0);                                           \
 		}                                                                     \
+	} while (0)
+#define KERNEL_DEBUG_CONSTANT_IST1(x, a, b, c, d, e)                     \
+	do {                                                                       \
+		if (KDBG_IMPROBABLE(kdebug_enable)) {                         \
+			kernel_debug1((x), (uintptr_t)(a), (uintptr_t)(b), (uintptr_t)(c), \
+				(uintptr_t)(d), (uintptr_t)(e));                               \
+		}                                                                      \
 	} while (0)
 #else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
 #define KERNEL_DEBUG_CONSTANT_IST(type, x, a, b, c, d, e) do {} while (0)
+#define KERNEL_DEBUG_CONSTANT_IST1(x, a, b, c, d, e) do {} while (0)
 #endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
 
 #if NO_KDEBUG
@@ -1395,11 +1404,11 @@ void kdbg_trace_data(struct proc *proc, long *arg_pid, long *arg_uniqueid);
 void kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *arg3, long *arg4);
 
 void kdbg_dump_trace_to_file(const char *);
-void kdebug_init(unsigned int n_events, char *filterdesc);
-void kdebug_trace_start(unsigned int n_events, const char *filterdesc, boolean_t at_wake);
+void kdebug_init(unsigned int n_events, char *filterdesc, boolean_t wrapping);
+void kdebug_trace_start(unsigned int n_events, const char *filterdesc,
+		boolean_t wrapping, boolean_t at_wake);
 void kdebug_free_early_buf(void);
 struct task;
-void kdbg_get_task_name(char*, int, struct task *task);
 boolean_t disable_wrap(uint32_t *old_slowcheck, uint32_t *old_flags);
 void enable_wrap(uint32_t old_slowcheck, boolean_t lostevents);
 void release_storage_unit(int cpu,  uint32_t storage_unit);
@@ -1468,12 +1477,12 @@ kdbg_set_timestamp_and_cpu(kd_buf *kp, uint64_t thetime, int cpu)
 static inline void
 kdbg_set_cpu(kd_buf *kp, int cpu)
 {
-	kp->cpuid = cpu;
+	kp->cpuid = (unsigned int)cpu;
 }
 static inline int
 kdbg_get_cpu(kd_buf *kp)
 {
-	return kp->cpuid;
+	return (int)kp->cpuid;
 }
 static inline void
 kdbg_set_timestamp(kd_buf *kp, uint64_t thetime)

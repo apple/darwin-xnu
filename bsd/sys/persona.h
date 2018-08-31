@@ -322,7 +322,8 @@ void personas_bootstrap(void);
 
 struct persona *persona_alloc(uid_t id, const char *login,
 			      int type, int *error);
-int persona_invalidate(struct persona *persona);
+
+struct persona *persona_lookup_and_invalidate(uid_t id);
 
 static inline int proc_has_persona(proc_t p)
 {

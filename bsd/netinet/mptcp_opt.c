@@ -459,6 +459,8 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 	if (sndfin) {							\
 		dsn_opt.mdss_copt.mdss_flags |= MDSS_F;			\
 		dsn_opt.mdss_data_len += 1;				\
+		if (do_csum)						\
+			dss_csum = in_addword(dss_csum, 1);		\
 	}								\
 }
 
@@ -755,11 +757,23 @@ do_ack64_only:
 	}
 
 	if (tp->t_mpflags & TMPF_SEND_DFIN) {
+		unsigned int dssoptlen = sizeof(struct mptcp_dss_ack_opt);
 		struct mptcp_dss_ack_opt dss_ack_opt;
-		unsigned int dssoptlen = sizeof (struct mptcp_dss_ack_opt);
+		uint16_t dss_csum;
 
-		if (do_csum)
+		if (do_csum) {
+			uint64_t dss_val = mptcp_hton64(mp_tp->mpt_sndmax - 1);
+			uint16_t dlen = htons(1);
+			uint32_t sseq = 0;
+			uint32_t sum;
+
+
 			dssoptlen += 2;
+
+			sum = in_pseudo64(dss_val, sseq, dlen);
+			ADDCARRY(sum);
+			dss_csum = ~sum & 0xffff;
+		}
 
 		CHECK_OPTLEN;
 
@@ -769,7 +783,7 @@ do_ack64_only:
 		 * Data FIN occupies one sequence space.
 		 * Don't send it if it has been Acked.
 		 */
-		if (((mp_tp->mpt_sndnxt + 1) != mp_tp->mpt_sndmax) ||
+		if ((mp_tp->mpt_sndnxt + 1 != mp_tp->mpt_sndmax) ||
 		    (mp_tp->mpt_snduna == mp_tp->mpt_sndmax))
 			goto ret_optlen;
 
@@ -780,11 +794,14 @@ do_ack64_only:
 		dss_ack_opt.mdss_ack =
 		    htonl(MPTCP_DATAACK_LOW32(mp_tp->mpt_rcvnxt));
 		dss_ack_opt.mdss_dsn =
-		    htonl(MPTCP_DATASEQ_LOW32(mp_tp->mpt_sndnxt));
+		    htonl(MPTCP_DATASEQ_LOW32(mp_tp->mpt_sndmax - 1));
 		dss_ack_opt.mdss_subflow_seqn = 0;
 		dss_ack_opt.mdss_data_len = 1;
 		dss_ack_opt.mdss_data_len = htons(dss_ack_opt.mdss_data_len);
 		memcpy(opt + optlen, &dss_ack_opt, sizeof (dss_ack_opt));
+		if (do_csum)
+			*((uint16_t *)(void *)(opt + optlen + sizeof (dss_ack_opt))) = dss_csum;
+
 		optlen += dssoptlen;
 	}
 
@@ -937,7 +954,6 @@ mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 	}
 	tcp_heuristic_mptcp_success(tp);
 	tp->t_mpflags |= (TMPF_SND_KEYS | TMPF_MPTCP_TRUE);
-	tp->t_inpcb->inp_socket->so_flags |= SOF_MPTCP_TRUE;
 }
 
 
@@ -1021,9 +1037,7 @@ mptcp_validate_join_hmac(struct tcpcb *tp, u_char* hmac, int mac_len)
 void
 mptcp_data_ack_rcvd(struct mptcb *mp_tp, struct tcpcb *tp, u_int64_t full_dack)
 {
-	u_int64_t acked = 0;
-
-	acked = full_dack - mp_tp->mpt_snduna;
+	u_int64_t acked = full_dack - mp_tp->mpt_snduna;
 
 	if (acked) {
 		struct socket *mp_so = mptetoso(mp_tp->mpt_mpte);

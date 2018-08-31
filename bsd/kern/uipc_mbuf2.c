@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -130,9 +130,9 @@
 struct mbuf *
 m_pulldown(struct mbuf *m, int off, int len, int *offp)
 {
-	struct mbuf *n, *o;
-	int hlen, tlen, olen;
-	int sharedcluster;
+	struct mbuf *n = NULL, *o = NULL;
+	int hlen = 0, tlen = 0, olen = 0;
+	int sharedcluster = 0;
 #if defined(PULLDOWN_STAT) && INET6
 	static struct mbuf *prev = NULL;
 	int prevlen = 0, prevmlen = 0;
@@ -222,15 +222,24 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
     }
 #endif
 	n = m;
+
+	/*
+	 * Iterate and make n point to the mbuf
+	 * within which the first byte at length
+	 * offset is contained from the start of
+	 * mbuf chain.
+	 */
 	while (n != NULL && off > 0) {
 		if (n->m_len > off)
 			break;
 		off -= n->m_len;
 		n = n->m_next;
 	}
+
 	/* be sure to point non-empty mbuf */
 	while (n != NULL && n->m_len == 0)
 		n = n->m_next;
+
 	if (!n) {
 		m_freem(m);
 		return NULL;	/* mbuf chain too short */
@@ -239,6 +248,16 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	/*
 	 * the target data is on <n, off>.
 	 * if we got enough data on the mbuf "n", we're done.
+	 *
+	 * It should be noted, that we should only do this either
+	 * when offset is 0, i.e. data is pointing to the start
+	 * or when the caller specifies an out argument to get
+	 * the offset value in the mbuf to work with data pointer
+	 * correctly.
+	 *
+	 * If offset is not 0 and caller did not provide out-argument
+	 * to get offset, we should split the mbuf even when the length
+	 * is contained in current mbuf.
 	 */
 	if ((off == 0 || offp) && len <= n->m_len - off)
 		goto ok;
@@ -248,12 +267,12 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 #endif
 
 	/*
-	 * when len < n->m_len - off and off != 0, it is a special case.
+	 * when len <= n->m_len - off and off != 0, it is a special case.
 	 * len bytes from <n, off> sits in single mbuf, but the caller does
 	 * not like the starting position (off).
 	 * chop the current mbuf into two pieces, set off to 0.
 	 */
-	if (len < n->m_len - off) {
+	if (len <= n->m_len - off) {
 		o = m_copym(n, off, n->m_len - off, M_DONTWAIT);
 		if (o == NULL) {
 			m_freem(m);
@@ -271,6 +290,8 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	 * we need to take hlen from <n, off> and tlen from <n->m_next, 0>,
 	 * and construct contiguous mbuf with m_len == len.
 	 * note that hlen + tlen == len, and tlen > 0.
+	 *
+	 * Read these variables as head length and tail length
 	 */
 	hlen = n->m_len - off;
 	tlen = len - hlen;
@@ -301,6 +322,12 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 		else
 			sharedcluster = 0;
 	}
+
+	/*
+	 * If we have enough space left in current mbuf to accomodate
+	 * tail length, copy tail length worth of data starting with next mbuf
+	 * and adjust the length of next one accordingly.
+	 */
 	if ((off == 0 || offp) && M_TRAILINGSPACE(n) >= tlen
 	 && !sharedcluster) {
 		m_copydata(n->m_next, 0, tlen, mtod(n, caddr_t) + n->m_len);
@@ -308,8 +335,15 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 		m_adj(n->m_next, tlen);
 		goto ok;
 	}
-	if ((off == 0 || offp) && M_LEADINGSPACE(n->m_next) >= hlen
-	 && !sharedcluster) {
+
+	/*
+	 * If have enough leading space in next mbuf to accomodate head length
+	 * of current mbuf, and total resulting length of next mbuf is greater
+	 * than or equal to requested len bytes, then just copy hlen from
+	 * current to the next one and adjust sizes accordingly.
+	 */
+	if ((off == 0 || offp) && M_LEADINGSPACE(n->m_next) >= hlen &&
+	    (n->m_next->m_len + hlen) >= len && !sharedcluster) {
 		n->m_next->m_data -= hlen;
 		n->m_next->m_len += hlen;
 		bcopy(mtod(n, caddr_t) + off, mtod(n->m_next, caddr_t), hlen);

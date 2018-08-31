@@ -74,25 +74,9 @@ struct eventhandler_lists_ctxt {
 };
 
 struct eventhandler_entry_arg {
-	union {
-		/* Generic cookie object reference */
-		void		*ee_voidptr;
-		/* Skywalk ids */
-		struct {
-			pid_t		ee_fe_pid;
-			uuid_t		ee_fe_uuid;
-			uuid_t		ee_nx_uuid;
-		} sk_ids;
-		/* Generic UUID */
-		uuid_t		ee_uuid;
-	} ee_arg;
+	uuid_t ee_fmc_uuid;	/* Flow manager UUID */
+	uuid_t ee_fr_uuid;	/* Flow route UUID */
 };
-
-#define	ee_voidptr	ee_arg.ee_voidptr
-#define	ee_fe_pid	ee_arg.sk_ids.ee_fe_pid
-#define	ee_fe_uuid	ee_arg.sk_ids.ee_fe_uuid
-#define	ee_nx_uuid	ee_arg.sk_ids.ee_nx_uuid
-#define	ee_uuid		ee_arg.ee_uuid
 
 struct eventhandler_entry {
 	TAILQ_ENTRY(eventhandler_entry)	ee_link;
@@ -101,8 +85,10 @@ struct eventhandler_entry {
 	struct eventhandler_entry_arg	ee_arg;
 };
 
+#define	EVENTHANDLER_MAX_NAME	32
+
 struct eventhandler_list {
-	char				*el_name;
+	char				el_name[EVENTHANDLER_MAX_NAME];
 	int				el_flags;
 #define EHL_INITTED	(1<<0)
 	u_int				el_runcount;
@@ -115,6 +101,8 @@ typedef struct eventhandler_entry	*eventhandler_tag;
 
 #define EHL_LOCK_INIT(p)	lck_mtx_init(&(p)->el_lock, el_lock_grp, el_lock_attr)
 #define	EHL_LOCK(p)		lck_mtx_lock(&(p)->el_lock)
+#define	EHL_LOCK_SPIN(p)	lck_mtx_lock_spin(&(p)->el_lock)
+#define	EHL_LOCK_CONVERT(p)	lck_mtx_convert_spin(&(p)->el_lock)
 #define	EHL_UNLOCK(p)		lck_mtx_unlock(&(p)->el_lock)
 #define	EHL_LOCK_ASSERT(p, x)	LCK_MTX_ASSERT(&(p)->el_lock, x)
 #define	EHL_LOCK_DESTROY(p)	lck_mtx_destroy(&(p)->el_lock, el_lock_grp)
@@ -140,14 +128,16 @@ typedef struct eventhandler_entry	*eventhandler_tag;
 			evhlog((LOG_DEBUG, "eventhandler_invoke: executing %p",	\
 			    VM_KERNEL_UNSLIDE((void *)_t->eh_func)));	\
 			_t->eh_func(_ep->ee_arg , ## __VA_ARGS__);	\
-			EHL_LOCK((list));				\
+			EHL_LOCK_SPIN((list));				\
 		}							\
 	}								\
 	KASSERT((list)->el_runcount > 0,				\
 	    ("eventhandler_invoke: runcount underflow"));		\
 	(list)->el_runcount--;						\
-	if ((list)->el_runcount == 0)					\
+	if ((list)->el_runcount == 0) {					\
+		EHL_LOCK_CONVERT((list));				\
 		eventhandler_prune_list(list);				\
+	}								\
 	EHL_UNLOCK((list));						\
 } while (0)
 
@@ -203,6 +193,7 @@ do {									\
 } while(0)
 
 void eventhandler_init(void);
+extern void eventhandler_reap_caches(boolean_t);
 eventhandler_tag eventhandler_register(struct eventhandler_lists_ctxt *evthdlr_lists_ctxt,
     struct eventhandler_list *list, const char *name, void *func, struct eventhandler_entry_arg arg, int priority);
 void eventhandler_deregister(struct eventhandler_list *list,

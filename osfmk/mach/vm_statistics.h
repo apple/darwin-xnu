@@ -275,6 +275,9 @@ typedef struct pmap_statistics	*pmap_statistics_t;
  * VM_FLAGS_PURGABLE
  *	Create a purgable VM object for that new VM region.
  *
+ * VM_FLAGS_4GB_CHUNK
+ *	The new VM region will be chunked up into 4GB sized pieces.
+ *
  * VM_FLAGS_NO_PMAP_CHECK
  *	(for DEBUG kernel config only, ignored for other configs)
  *	Do not check that there is no stale pmap mapping for the new VM region.
@@ -294,6 +297,7 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_FLAGS_FIXED		0x0000
 #define VM_FLAGS_ANYWHERE	0x0001
 #define VM_FLAGS_PURGABLE	0x0002
+#define VM_FLAGS_4GB_CHUNK	0x0004
 #define VM_FLAGS_RANDOM_ADDR	0x0008
 #define VM_FLAGS_NO_CACHE	0x0010
 #define VM_FLAGS_RESILIENT_CODESIGN	0x0020
@@ -320,6 +324,7 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_FLAGS_USER_ALLOCATE	(VM_FLAGS_FIXED |		\
 				 VM_FLAGS_ANYWHERE |		\
 				 VM_FLAGS_PURGABLE |		\
+				 VM_FLAGS_4GB_CHUNK |		\
 				 VM_FLAGS_RANDOM_ADDR |		\
 				 VM_FLAGS_NO_CACHE |		\
 				 VM_FLAGS_OVERWRITE |		\

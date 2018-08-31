@@ -114,6 +114,12 @@ class OSCollection;
 #define APPLE_KEXT_COMPATIBILITY_OVERRIDE
 #endif
 
+#define APPLE_KEXT_WSHADOW_PUSH _Pragma("clang diagnostic push"); \
+	_Pragma("clang diagnostic ignored \"-Wunknown-warning-option\"") \
+	_Pragma("clang diagnostic ignored \"-Wshadow-field\"")
+
+#define APPLE_KEXT_WSHADOW_POP _Pragma("clang diagnostic pop")
+
 
 /*!
  * @class OSMetaClassBase
@@ -1677,7 +1683,7 @@ public:
         virtual const OSMetaClass * getMetaClass() const APPLE_KEXT_OVERRIDE; \
     protected:                                                  \
     className (const OSMetaClass *);                            \
-    virtual ~ className ()
+    virtual ~ className () APPLE_KEXT_OVERRIDE
 
 
    /*!

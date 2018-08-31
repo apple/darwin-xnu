@@ -4458,6 +4458,7 @@ nfs_mount_zombie(struct nfsmount *nmp, int nm_state_flags)
 	if ((nmp->nm_vers >= NFS_VER4) && nmp->nm_renew_timer) {
 		thread_call_cancel(nmp->nm_renew_timer);
 		thread_call_free(nmp->nm_renew_timer);
+		nmp->nm_renew_timer = NULL;
 	}
 
 	lck_mtx_unlock(&nmp->nm_lock);
@@ -4483,6 +4484,7 @@ nfs_mount_zombie(struct nfsmount *nmp, int nm_state_flags)
 		if (nmp->nm_longid->nci_id)
 			FREE(nmp->nm_longid->nci_id, M_TEMP);
 		FREE(nmp->nm_longid, M_TEMP);
+		nmp->nm_longid = NULL;
 		lck_mtx_unlock(nfs_global_mutex);
 	}
 

@@ -7,6 +7,9 @@ __ZNK18IODTPlatformExpert*
 __ZTV18IODTPlatformExpert
 __ZN5IOCPU*
 __ZNK5IOCPU*
+__ZN12IOUserClient27copyObjectForPortNameInTaskEP4taskjPP8OSObject
+__ZN12IOUserClient27copyPortNameForObjectInTaskEP4taskP8OSObjectPj
+__ZN12IOUserClient30adjustPortNameReferencesInTaskEP4taskji
 __ZTV5IOCPU
 __ZN24IOCPUInterruptController*
 __ZNK24IOCPUInterruptController*
@@ -49,7 +52,6 @@ _bufattr_setcpx
 _bufattr_throttled
 _cdevsw
 _cdevsw_setkqueueok
-_chudxnu_platform_ptr
 _clalloc
 _clfree
 _cluster_unlock_direct_read
@@ -85,6 +87,7 @@ _cpx_size
 _cpx_sizex
 _cpx_use_offset_for_iv
 _cpx_synthetic_offset_for_iv
+_cpx_writeprotect
 _cs_blob_reset_cache
 _cs_debug
 _cs_enforcement
@@ -111,18 +114,22 @@ _csblob_get_teamid
 _csblob_get_signer_type
 _csblob_get_size
 _csfg_get_cdhash
+_csfg_get_identity
 _csfg_get_path
 _csfg_get_platform_binary
+_csfg_get_platform_identifier
 _csfg_get_prod_signed
 _csfg_get_signer_type
 _csfg_get_teamid
 _csproc_get_blob
 _csproc_get_platform_binary
+_csproc_get_platform_identifier
 _csproc_get_prod_signed
 _csproc_get_signer_type
 _csproc_get_teamid
 _csvnode_get_blob
 _csvnode_get_teamid
+_csvnode_get_platform_identifier
 _csvnode_print_debug
 _ctl_enqueuembuf_list
 _ctl_id_by_name
@@ -393,8 +400,10 @@ _thread_call_allocate_with_priority
 _thread_call_allocate_with_qos
 _thread_call_cancel_wait
 _thread_clear_eager_preempt
+_thread_clear_honor_qlimit
 _thread_dispatchqaddr
 _thread_set_eager_preempt
+_thread_set_honor_qlimit
 _thread_set_mach_voucher
 _thread_set_pending_block_hint
 _throttle_info_create
@@ -410,6 +419,7 @@ _throttle_info_update_by_mask
 _throttle_lowpri_io
 _throttle_lowpri_window
 _throttle_set_thread_io_policy
+_throttle_get_thread_effective_io_policy
 _timeout
 _timeout_with_leeway
 _tk_nin

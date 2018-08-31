@@ -1079,6 +1079,25 @@ error_exit:
 	return error;
 }
 
+#if MONOTONIC
+static kern_return_t
+kcdata_record_task_instrs_cycles(kcdata_descriptor_t kcd, task_t task)
+{
+	uint64_t instrs = 0, cycles = 0;
+	mt_stackshot_task(task, &instrs, &cycles);
+
+	kern_return_t error = KERN_SUCCESS;
+	mach_vm_address_t out_addr = 0;
+	kcd_exit_on_error(kcdata_get_memory_addr(kcd, STACKSHOT_KCTYPE_INSTRS_CYCLES, sizeof(struct instrs_cycles_snapshot), &out_addr));
+	struct instrs_cycles_snapshot *instrs_cycles = (struct instrs_cycles_snapshot *)out_addr;
+	instrs_cycles->ics_instructions = instrs;
+	instrs_cycles->ics_cycles = cycles;
+
+error_exit:
+	return error;
+}
+#endif /* MONOTONIC */
+
 static kern_return_t
 kcdata_record_task_snapshot(kcdata_descriptor_t kcd, task_t task, uint32_t trace_flags, boolean_t have_pmap, unaligned_u64 **task_snap_ss_flags)
 {
@@ -1154,13 +1173,7 @@ kcdata_record_task_snapshot(kcdata_descriptor_t kcd, task_t task, uint32_t trace
 
 #if MONOTONIC
 	if (collect_instrs_cycles) {
-		uint64_t instrs = 0, cycles = 0;
-		mt_stackshot_task(task, &instrs, &cycles);
-
-		kcd_exit_on_error(kcdata_get_memory_addr(kcd, STACKSHOT_KCTYPE_INSTRS_CYCLES, sizeof(struct instrs_cycles_snapshot), &out_addr));
-		struct instrs_cycles_snapshot *instrs_cycles = (struct instrs_cycles_snapshot *)out_addr;
-		instrs_cycles->ics_instructions = instrs;
-		instrs_cycles->ics_cycles = cycles;
+		kcd_exit_on_error(kcdata_record_task_instrs_cycles(kcd, task));
 	}
 #endif /* MONOTONIC */
 
@@ -1169,11 +1182,16 @@ error_exit:
 }
 
 static kern_return_t
-kcdata_record_task_delta_snapshot(kcdata_descriptor_t kcd, task_t task, boolean_t have_pmap, unaligned_u64 **task_snap_ss_flags)
+kcdata_record_task_delta_snapshot(kcdata_descriptor_t kcd, task_t task, uint32_t trace_flags, boolean_t have_pmap, unaligned_u64 **task_snap_ss_flags)
 {
 	kern_return_t error                       = KERN_SUCCESS;
 	struct task_delta_snapshot_v2 * cur_tsnap = NULL;
 	mach_vm_address_t out_addr                = 0;
+#if MONOTONIC
+	boolean_t collect_instrs_cycles           = ((trace_flags & STACKSHOT_INSTRS_CYCLES) != 0);
+#else
+	(void)trace_flags;
+#endif /* MONOTONIC */
 
 	uint64_t task_uniqueid = get_task_uniqueid(task);
 	assert(task_snap_ss_flags != NULL);
@@ -1205,6 +1223,12 @@ kcdata_record_task_delta_snapshot(kcdata_descriptor_t kcd, task_t task, boolean_
 	cur_tsnap->tds_latency_qos       = (task-> effective_policy.tep_latency_qos == LATENCY_QOS_TIER_UNSPECIFIED)
 	                                 ? LATENCY_QOS_TIER_UNSPECIFIED
 	                                 : ((0xFF << 16) | task-> effective_policy.tep_latency_qos);
+
+#if MONOTONIC
+	if (collect_instrs_cycles) {
+		kcd_exit_on_error(kcdata_record_task_instrs_cycles(kcd, task));
+	}
+#endif /* MONOTONIC */
 
 error_exit:
 	return error;
@@ -1453,7 +1477,7 @@ error_exit:
 }
 
 static int
-kcdata_record_thread_delta_snapshot(struct thread_delta_snapshot_v2 * cur_thread_snap, thread_t thread, boolean_t thread_on_core)
+kcdata_record_thread_delta_snapshot(struct thread_delta_snapshot_v3 * cur_thread_snap, thread_t thread, boolean_t thread_on_core)
 {
 	cur_thread_snap->tds_thread_id = thread_tid(thread);
 	if (IPC_VOUCHER_NULL != thread->ith_voucher)
@@ -1484,6 +1508,11 @@ kcdata_record_thread_delta_snapshot(struct thread_delta_snapshot_v2 * cur_thread
 	cur_thread_snap->tds_rqos                    = thread->requested_policy.thrp_qos;
 	cur_thread_snap->tds_rqos_override           = thread->requested_policy.thrp_qos_override;
 	cur_thread_snap->tds_io_tier                 = proc_get_effective_thread_policy(thread, TASK_POLICY_IO);
+
+	static_assert(sizeof(thread->effective_policy) == sizeof(uint64_t));
+	static_assert(sizeof(thread->requested_policy) == sizeof(uint64_t));
+	cur_thread_snap->tds_requested_policy = *(unaligned_u64 *) &thread->requested_policy;
+	cur_thread_snap->tds_effective_policy = *(unaligned_u64 *) &thread->effective_policy;
 
 	return 0;
 }
@@ -1760,7 +1789,7 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 				if (minimize_nonrunnables) {
 					// delay taking the task snapshot.  If there are no runnable threads we'll skip it.
 				} else {
-					kcd_exit_on_error(kcdata_record_task_delta_snapshot(stackshot_kcdata_p, task, have_pmap, &task_snap_ss_flags));
+					kcd_exit_on_error(kcdata_record_task_delta_snapshot(stackshot_kcdata_p, task, trace_flags, have_pmap, &task_snap_ss_flags));
 				}
 			}
 
@@ -1815,7 +1844,7 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 
 			if (task_delta_stackshot && minimize_nonrunnables) {
 				if (some_thread_ran || num_delta_thread_snapshots > 0) {
-					kcd_exit_on_error(kcdata_record_task_delta_snapshot(stackshot_kcdata_p, task, have_pmap, &task_snap_ss_flags));
+					kcd_exit_on_error(kcdata_record_task_delta_snapshot(stackshot_kcdata_p, task, trace_flags, have_pmap, &task_snap_ss_flags));
 				} else {
 					kcd_exit_on_error(kcdata_undo_add_container_begin(stackshot_kcdata_p));
 
@@ -1831,14 +1860,14 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 				}
 			}
 
-			struct thread_delta_snapshot_v2 * delta_snapshots = NULL;
+			struct thread_delta_snapshot_v3 * delta_snapshots = NULL;
 			int current_delta_snapshot_index                  = 0;
 
 			if (num_delta_thread_snapshots > 0) {
 				kcd_exit_on_error(kcdata_get_memory_addr_for_array(stackshot_kcdata_p, STACKSHOT_KCTYPE_THREAD_DELTA_SNAPSHOT,
-				                                                   sizeof(struct thread_delta_snapshot_v2),
+				                                                   sizeof(struct thread_delta_snapshot_v3),
 				                                                   num_delta_thread_snapshots, &out_addr));
-				delta_snapshots = (struct thread_delta_snapshot_v2 *)out_addr;
+				delta_snapshots = (struct thread_delta_snapshot_v3 *)out_addr;
 			}
 
 			uint64_t * nonrunnable_tids   = NULL;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -278,6 +278,8 @@ struct necp_stat_counts
 	u_int32_t	necp_stat_avg_rtt;
 	u_int32_t	necp_stat_var_rtt;
 
+#define	NECP_STAT_ROUTE_FLAGS	1
+	u_int32_t	necp_stat_route_flags;
 };
 
 // Note, some metadata is implicit in the necp client itself:
@@ -927,7 +929,9 @@ extern void necp_client_early_close(uuid_t client_id); // Cause a single client 
 
 extern void necp_set_client_as_background(proc_t proc, struct fileproc *fp, bool background); // Set all clients for an fp as background or not
 
-extern void necp_defunct_client(proc_t proc, struct fileproc *fp); // Set all clients for an fp as defunct
+struct necp_fd_data;
+extern void necp_fd_memstatus(proc_t proc, uint32_t status, struct necp_fd_data *client_fd); // Purge memory of clients for the process
+extern void necp_fd_defunct(proc_t proc, struct necp_fd_data *client_fd); // Set all clients for an process as defunct
 
 extern int necp_client_register_socket_flow(pid_t pid, uuid_t client_id, struct inpcb *inp);
 
@@ -999,6 +1003,10 @@ struct necp_client_flow {
 	size_t assigned_results_length;
 	u_int8_t *assigned_results;
 };
+
+extern void necp_client_reap_caches(boolean_t);
+
+
 #endif /* BSD_KERNEL_PRIVATE */
 #ifndef KERNEL
 

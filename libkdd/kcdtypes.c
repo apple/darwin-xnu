@@ -29,7 +29,6 @@
 #include <assert.h>
 #include <stdio.h>
 #include <mach/mach_time.h>
-#include <sys/proc_info.h>
 
 /*!
  * @function kcdata_get_typedescription
@@ -347,6 +346,8 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 		_SUBTYPE(KC_ST_UINT8, struct thread_delta_snapshot_v2, tds_rqos);
 		_SUBTYPE(KC_ST_UINT8, struct thread_delta_snapshot_v2, tds_rqos_override);
 		_SUBTYPE(KC_ST_UINT8, struct thread_delta_snapshot_v2, tds_io_tier);
+		_SUBTYPE(KC_ST_UINT64, struct thread_delta_snapshot_v3, tds_requested_policy);
+		_SUBTYPE(KC_ST_UINT64, struct thread_delta_snapshot_v3, tds_effective_policy);
 
 		setup_type_definition(retval, type_id, i, "thread_delta_snapshot");
 
@@ -468,9 +469,9 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 	/* crashinfo types */
 	case TASK_CRASHINFO_BSDINFOWITHUNIQID: {
 		i = 0;
-		_SUBTYPE_ARRAY(KC_ST_UINT8, struct proc_uniqidentifierinfo, p_uuid, 16);
-		_SUBTYPE(KC_ST_UINT64, struct proc_uniqidentifierinfo, p_uniqueid);
-		_SUBTYPE(KC_ST_UINT64, struct proc_uniqidentifierinfo, p_puniqueid);
+		_SUBTYPE_ARRAY(KC_ST_UINT8, struct crashinfo_proc_uniqidentifierinfo, p_uuid, 16);
+		_SUBTYPE(KC_ST_UINT64, struct crashinfo_proc_uniqidentifierinfo, p_uniqueid);
+		_SUBTYPE(KC_ST_UINT64, struct crashinfo_proc_uniqidentifierinfo, p_puniqueid);
 		/* Ignore the p_reserve fields */
 		setup_type_definition(retval, type_id, i, "proc_uniqidentifierinfo");
 		break;

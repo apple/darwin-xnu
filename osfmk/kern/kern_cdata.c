@@ -186,23 +186,24 @@ static kern_return_t kcdata_get_memory_addr_with_flavor(
 		mach_vm_address_t *user_addr)
 {
 	struct kcdata_item info;
-	uint32_t total_size;
 
-	if (user_addr == NULL || data == NULL) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
+	uint32_t orig_size = size;
 	/* make sure 16 byte aligned */
 	size += kcdata_calc_padding(size);
+	uint32_t total_size  = size + sizeof(info);
+
+	if (user_addr == NULL || data == NULL || total_size + sizeof(info) < orig_size) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	bzero(&info, sizeof(info));
 	info.type  = type;
 	info.size = size;
 	info.flags = flags;
-	total_size = size + sizeof(info);
 
 	/* check available memory, including trailer size for KCDATA_TYPE_BUFFER_END */
-	if (data->kcd_length < ((data->kcd_addr_end - data->kcd_addr_begin) + total_size + sizeof(info))) {
+	if (total_size + sizeof(info) > data->kcd_length ||
+		data->kcd_length - (total_size + sizeof(info)) < data->kcd_addr_end - data->kcd_addr_begin) {
 		return KERN_RESOURCE_SHORTAGE;
 	}
 

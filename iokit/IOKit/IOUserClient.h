@@ -195,7 +195,9 @@ protected:
 /*! @var reserved
     Reserved for future use.  (Internal use only) 
 */
+    APPLE_KEXT_WSHADOW_PUSH;
     ExpansionData * reserved;
+    APPLE_KEXT_WSHADOW_POP;
 
     bool reserve();
 
@@ -385,6 +387,46 @@ public:
     */
     virtual IOReturn exportObjectToClient(task_t task,
 				OSObject *obj, io_object_t *clientObj);
+
+#if KERNEL_PRIVATE
+
+    /*!
+        @function copyPortNameForObjectInTask
+        Make an arbitrary OSObject available to the client task as a port name.
+        The port does not respond to any IOKit IPC calls.
+        @param task The task.
+        @param object The object we want to export to the client.
+        The port holds a reference on the object, this function does not consume any reference on the object.
+        @param port_name Returned value is the task's port name. It has one send right created by this function.
+        @result A return code.
+    */
+    static IOReturn copyPortNameForObjectInTask(task_t task, OSObject *object,
+		        mach_port_name_t * port_name);
+
+    /*!
+        @function copyObjectForPortNameInTask
+        Look up an OSObject given a task's port name created with copyPortNameForObjectInTask().
+        @param task The task.
+        @param port_name The task's port name. This function does not consume any reference on the port name.
+        @param object If the port name is valid, a reference to the object is returned. It should be released by the caller.
+        @result A return code.
+    */
+	static IOReturn copyObjectForPortNameInTask(task_t task, mach_port_name_t port_name,
+				OSObject **object);
+
+    /*!
+        @function adjustPortNameReferencesInTask
+        Adjust the send rights for a port name created with copyPortNameForObjectInTask().
+        @param task The task.
+        @param port_name The task's port name.
+        @param delta Signed value change to the number of user references.
+        @result A return code.
+    */
+	static IOReturn adjustPortNameReferencesInTask(task_t task, mach_port_name_t port_name, mach_port_delta_t delta);
+
+#define IOUC_COPYPORTNAMEFOROBJECTINTASK    1
+
+#endif /* KERNEL_PRIVATE */
 
     // Old methods for accessing method vector backward compatiblility only
     virtual IOExternalMethod *

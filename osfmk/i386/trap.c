@@ -119,8 +119,6 @@ static void user_page_fault_continue(kern_return_t kret);
 static void panic_trap(x86_saved_state64_t *saved_state, uint32_t pl, kern_return_t fault_result);
 static void set_recovery_ip(x86_saved_state64_t *saved_state, vm_offset_t ip);
 
-volatile perfCallback perfTrapHook = NULL; /* Pointer to CHUD trap hook routine */
-
 #if CONFIG_DTRACE
 /* See <rdar://problem/4613924> */
 perfCallback tempDTraceTrapHook = NULL; /* Pointer to DTrace fbt trap hook routine */
@@ -498,7 +496,6 @@ kernel_trap(
 	kern_return_t		result = KERN_FAILURE;
 	kern_return_t		fault_result = KERN_SUCCESS;
 	thread_t		thread;
-	ast_t			*myast;
 	boolean_t               intr;
 	vm_prot_t		prot;
         struct recovery		*rp;
@@ -524,17 +521,7 @@ kernel_trap(
 	intr  = (saved_state->isf.rflags & EFL_IF) != 0;	/* state of ints at trap */
 	kern_ip = (vm_offset_t)saved_state->isf.rip;
 
-	myast = ast_pending();
-
 	is_user = (vaddr < VM_MAX_USER_PAGE_ADDRESS);
-
-	perfASTCallback astfn = perfASTHook;
-	if (__improbable(astfn != NULL)) {
-		if (*myast & AST_CHUD_ALL)
-			astfn(AST_CHUD_ALL, myast);
-	} else
-		*myast &= ~AST_CHUD_ALL;
-
 
 #if CONFIG_DTRACE
 	/*
@@ -885,7 +872,6 @@ user_trap(
 	user_addr_t		vaddr;
 	vm_prot_t		prot;
 	thread_t		thread = current_thread();
-	ast_t			*myast;
 	kern_return_t		kret;
 	user_addr_t		rip;
 	unsigned long 		dr6 = 0; /* 32 bit for i386, 64 bit for x86_64 */
@@ -938,21 +924,6 @@ user_trap(
 	code = 0;
 	subcode = 0;
 	exc = 0;
-
-	perfASTCallback astfn = perfASTHook;
-	if (__improbable(astfn != NULL)) {
-		myast = ast_pending();
-		if (*myast & AST_CHUD_ALL) {
-			astfn(AST_CHUD_ALL, myast);
-		}
-	}
-
-	/* Is there a hook? */
-	perfCallback fn = perfTrapHook;
-	if (__improbable(fn != NULL)) {
-		if (fn(type, saved_state, 0, 0) == KERN_SUCCESS)
-			return;	/* If it succeeds, we are done... */
-	}
 
 #if CONFIG_DTRACE
 	/*

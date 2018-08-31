@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -198,13 +198,17 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 
 	if (!in6_ifaddrs) /* XXX broken! */
 		return (EADDRNOTAVAIL);
-	if (inp->inp_lport || !IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr))
-		return (EINVAL);
 	if (!(so->so_options & (SO_REUSEADDR|SO_REUSEPORT)))
 		wild = 1;
 
 	socket_unlock(so, 0); /* keep reference */
 	lck_rw_lock_exclusive(pcbinfo->ipi_lock);
+	if (inp->inp_lport || !IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)) {
+		/* another thread completed the bind */
+		lck_rw_done(pcbinfo->ipi_lock);
+		socket_lock(so, 0);
+		return (EINVAL);
+	}
 
 	bzero(&sin6, sizeof (sin6));
 	if (nam != NULL) {

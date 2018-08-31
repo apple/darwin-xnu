@@ -554,10 +554,10 @@ void sdt_init( void )
 					 * that symbol names the function containing the sdt probe.
 					 */
 					for (j = 0; j < orig_st->nsyms; j++) {
-						uint8_t jn_type = sym[j].n_type & (N_TYPE | N_EXT);
+						uint8_t jn_type = sym[j].n_type & N_TYPE;
 						char *jname = strings + sym[j].n_un.n_strx;
 						
-						if (((N_SECT | N_EXT) != jn_type && (N_ABS | N_EXT) != jn_type))
+						if ((N_SECT != jn_type && N_ABS != jn_type))
 							continue;
 						
 						if (0 == sym[j].n_un.n_strx) /* iff a null, "", name. */

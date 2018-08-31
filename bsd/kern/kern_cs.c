@@ -808,6 +808,93 @@ out:
 	return prod_signed;
 }
 
+/*
+ * Function: csfg_get_identity
+ *
+ * Description: This function returns the codesign identity
+ *		for the fileglob
+ */
+const char *
+csfg_get_identity(struct fileglob *fg, off_t offset)
+{
+	vnode_t vp;
+	struct cs_blob *csblob = NULL;
+
+	if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE)
+		return NULL;
+
+	vp = (struct vnode *)fg->fg_data;
+	if (vp == NULL)
+		return NULL;
+
+	csblob = ubc_cs_blob_get(vp, -1, offset);
+	if (csblob == NULL)
+		return NULL;
+
+	return csblob_get_identity(csblob);
+}
+
+/*
+ * Function: csfg_get_platform_identifier
+ *
+ * Description: This function returns the codesign platform
+ *		identifier for the fileglob.  Assumes the fileproc
+ *		is being held busy to keep the fileglob consistent.
+ */
+uint8_t
+csfg_get_platform_identifier(struct fileglob *fg, off_t offset)
+{
+	vnode_t vp;
+
+	if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE)
+		return 0;
+
+	vp = (struct vnode *)fg->fg_data;
+	if (vp == NULL)
+		return 0;
+
+	return csvnode_get_platform_identifier(vp, offset);
+}
+
+/*
+ * Function: csvnode_get_platform_identifier
+ *
+ * Description: This function returns the codesign platform
+ *		identifier for the vnode.  Assumes a vnode reference
+ *		is held.
+ */
+uint8_t
+csvnode_get_platform_identifier(struct vnode *vp, off_t offset)
+{
+	struct cs_blob *csblob;
+	const CS_CodeDirectory *code_dir;
+
+	csblob = ubc_cs_blob_get(vp, -1, offset);
+	if (csblob == NULL)
+		return 0;
+
+	code_dir = csblob->csb_cd;
+	if (code_dir == NULL || ntohl(code_dir->length) < 8)
+		return 0;
+
+	return code_dir->platform;
+}
+
+/*
+ * Function: csproc_get_platform_identifier
+ *
+ * Description: This function returns the codesign platform
+ *		identifier for the proc.  Assumes proc will remain
+ *		valid through call.
+ */
+uint8_t
+csproc_get_platform_identifier(struct proc *p)
+{
+	if (NULL == p->p_textvp)
+		return 0;
+
+	return csvnode_get_platform_identifier(p->p_textvp, p->p_textoff);
+}
 
 uint32_t
 cs_entitlement_flags(struct proc *p)

@@ -821,4 +821,5 @@ from pgtrace import *
 from xnutriage import *
 from kevent import *
 from ntstat import *
+from zonetriage import *
 

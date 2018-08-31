@@ -1337,6 +1337,10 @@ retry:
 	return KERN_FAILURE;
 
 done:	
+	assert(c_seg->c_busy_swapping);
+	assert(c_seg->c_busy);
+	assert(!c_seg->c_on_minorcompact_q);
+
 	error = vm_swapfile_io(swf->swp_vp, file_offset, addr, (int) (size / PAGE_SIZE_64), SWAP_WRITE);
 
 	lck_mtx_lock(&vm_swap_data_lock);

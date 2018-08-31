@@ -126,6 +126,7 @@ struct rpc_reply {
 };
 
 #define MIN_REPLY_HDR 16	/* xid, dir, astat, errno */
+#define REPLY_SIZE 24		/* xid, dir, astat, rpu_ok */
 
 /*
  * What is the longest we will wait before re-sending a request?
@@ -492,8 +493,16 @@ krpc_call(
 				goto out;
 			}
 
+
+			if (mbuf_len(m) < REPLY_SIZE) {
+				error = RPC_SYSTEM_ERR;
+			}
+			else {
+				error = ntohl(reply->rp_u.rpu_ok.rp_rstatus);
+			}
+
 			/* Did the call succeed? */
-			if ((error = ntohl(reply->rp_u.rpu_ok.rp_rstatus)) != 0) {
+			if (error != 0) {
 				printf("rpc status=%d\n", error);
 				/* convert rpc error to errno */
 				switch (error) {

@@ -244,22 +244,99 @@ LEXT(fleh_reset)
 	.align 2
 	.globl EXT(fleh_undef)
 
-LEXT(fleh_undef)	
-	mrs		sp, spsr							// Check the previous mode
+/*
+ *	Ensures the stack is safely aligned, usually in preparation for an external branch
+ *	arg0: temp register for storing the stack offset
+ *	arg1: temp register for storing the previous stack pointer
+ */
+.macro ALIGN_STACK
+/*
+ * For armv7k ABI, the stack needs to be 16-byte aligned
+ */
+#if __BIGGEST_ALIGNMENT__ > 4
+	and		$0, sp, #0x0F						// sp mod 16-bytes
+	cmp		$0, #4							// need space for the sp on the stack
+	addlt		$0, $0, #0x10						// make room if needed, but keep stack aligned
+	mov		$1, sp							// get current sp
+	sub		sp, sp, $0						// align stack
+	str		$1, [sp]						// store previous sp on stack
+#endif
+.endmacro
+
+/*
+ *	Restores the stack pointer to its previous value following an ALIGN_STACK call
+ */
+.macro UNALIGN_STACK
+#if __BIGGEST_ALIGNMENT__ > 4
+	ldr		sp, [sp]
+#endif
+.endmacro
+
+/*
+ *	Checks that cpu is currently in the expected mode, panics if not.
+ *	arg0: the expected mode, should be one of the PSR_*_MODE defines
+ */
+.macro VERIFY_EXCEPTION_MODE
+	mrs		sp, cpsr 							// Read cpsr
+	and		sp, sp, #PSR_MODE_MASK					// Extract current mode
+	cmp		sp, $0							// Check specified mode
+	movne		r0, sp
+	bne		EXT(ExceptionVectorPanic)
+.endmacro
+
+/*
+ *	Checks previous processor mode.  If usermode, will execute the code
+ *	following the macro to handle the userspace exception.  Otherwise,
+ *	will branch to a ELSE_IF_KERNELMODE_EXCEPTION call with the same
+ *	argument.
+ *	arg0: arbitrary string indicating the exception class, e.g. 'dataabt'
+ */ 
+.macro IF_USERMODE_EXCEPTION
+	mrs		sp, spsr
+	and		sp, sp, #PSR_MODE_MASK						// Is it from user?
+	cmp		sp, #PSR_USER_MODE
+	beq		$0_from_user
+	cmp		sp, #PSR_IRQ_MODE
+	beq		$0_from_irq
+	cmp		sp, #PSR_FIQ_MODE
+	beq		$0_from_fiq
+	bne		$0_from_svc
+$0_from_user:
+.endmacro
+
+/*
+ *	Handles an exception taken from kernelmode (IRQ/FIQ/SVC/etc).
+ *	Places the processor into the correct mode and executes the
+ *	code following the macro to handle the kernel exception.
+ *	Intended to be paired with a prior call to IF_USERMODE_EXCEPTION.
+ *	arg0: arbitrary string indicating the exception class, e.g. 'dataabt'
+ */
+.macro ELSE_IF_KERNELMODE_EXCEPTION
+$0_from_irq:
+	cpsid		i, #PSR_IRQ_MODE
+	b		$0_from_kernel
+$0_from_fiq:
+	cpsid		i, #PSR_FIQ_MODE
+	b		$0_from_kernel
+$0_from_svc:
+	cpsid		i, #PSR_SVC_MODE
+$0_from_kernel:
+.endmacro
+
+LEXT(fleh_undef)
+VERIFY_EXCEPTION_MODE PSR_UND_MODE
+	mrs		sp, spsr							// For check the previous mode
 	tst		sp, #PSR_TF							// Is it Thumb?
 	subeq		lr, lr, #4
 	subne		lr, lr, #2
-	tst		sp, #0x0f							// Is it from user?
-	bne		undef_from_kernel
-
-undef_from_user:	
+IF_USERMODE_EXCEPTION undef
 	mrc		p15, 0, sp, c13, c0, 4				// Read TPIDRPRW
 	add		sp, sp, ACT_PCBDATA				// Get current thread PCB pointer
 
 	stmia	sp, {r0-r12, sp, lr}^				// Save user context on PCB
 	mov		r7, #0								// Zero the frame pointer
 	nop
-		
+
 	mov		r0, sp								// Store arm_saved_state pointer 
 												//  for argument
 
@@ -268,7 +345,6 @@ undef_from_user:
 	mrs		r4, spsr
 	str		r4, [sp, SS_CPSR]					// Save user mode cpsr
 
-	mrs		r4, cpsr 							// Read cpsr
 	cpsid i, #PSR_SVC_MODE
 	mrs		r3, cpsr 							// Read cpsr
 	msr		spsr_cxsf, r3                       // Set spsr(svc mode cpsr)
@@ -281,9 +357,6 @@ undef_from_user:
 	mcr		p15, 0, r3, c13, c0, 1				// Set CONTEXTIDR
 	isb
 #endif
-	and		r0, r4, #PSR_MODE_MASK				// Extract current mode
-	cmp		r0, #PSR_UND_MODE					// Check undef mode
-	bne		EXT(ExceptionVectorPanic)
 
 	mvn		r0, #0
 	str		r0, [r9, TH_IOTIER_OVERRIDE]			// Reset IO tier override to -1 before handling abort from userspace
@@ -309,36 +382,11 @@ undef_from_user:
 												//   sleh will enable interrupt
 	b		load_and_go_user
 
-undef_from_kernel:	
-	mrs		sp, cpsr 							// Read cpsr
-	and		sp, sp, #PSR_MODE_MASK				// Extract current mode
-	cmp		sp, #PSR_UND_MODE					// Check undef mode
-	movne	r0, sp
-	bne		EXT(ExceptionVectorPanic)
-	mrs		sp, spsr							// Check the previous mode
-
+ELSE_IF_KERNELMODE_EXCEPTION undef
 	/*
 	 * We have a kernel stack already, and I will use it to save contexts
 	 * IRQ is disabled
 	 */
-
-#if CONFIG_DTRACE
-	/*
-	 * See if we came here from IRQ or SVC mode, and go back to that mode
-	 */
-
-	and		sp, sp, #PSR_MODE_MASK
-	cmp		sp, #PSR_IRQ_MODE
-	bne		undef_from_kernel_svc
-
-	cpsid i, #PSR_IRQ_MODE
-	b		handle_undef
-#endif
-
-undef_from_kernel_svc:
-	cpsid i, #PSR_SVC_MODE
-
-handle_undef:
 #if CONFIG_DTRACE
 	// We need a frame for backtracing. The LR here is the LR of supervisor mode, not the location where the exception
 	// took place. We'll store that later after we switch to undef mode and pull out the LR from there.
@@ -356,31 +404,13 @@ handle_undef:
 #if CONFIG_DTRACE
 	add		r7, sp, EXC_CTX_SIZE						// Save frame pointer
 #endif
-	
-	mov		ip, sp								// Stack transfer
 
-	cpsid	i, #PSR_UND_MODE
+	mrs		r4, lr_und
+	str		r4, [sp, SS_PC]						// Save complete
+	mrs		r4, spsr_und
+	str		r4, [sp, SS_CPSR]	
 
-	str		lr, [ip, SS_PC]						// Save complete
-	mrs		r4, spsr
-	str		r4, [ip, SS_CPSR]	
-
-#if CONFIG_DTRACE
-	/*
-	 * Go back to previous mode for mode specific regs
-	 */
-	and		r4, r4, #PSR_MODE_MASK
-	cmp		r4, #PSR_IRQ_MODE
-	bne		handle_undef_from_svc
-
-	cpsid	i, #PSR_IRQ_MODE
-	b		handle_undef2
-#endif
-
-handle_undef_from_svc:
-	cpsid	i, #PSR_SVC_MODE
-
-handle_undef2:
+	mov		ip, sp
 
 /*
    sp - stack pointer
@@ -431,23 +461,9 @@ handle_undef2:
 #endif
 	mov		r0, sp								// Argument
 
-/*
- * For armv7k ABI, the stack needs to be 16-byte aligned
- */
-#if __BIGGEST_ALIGNMENT__ > 4
-	and 	r1, sp, #0x0F						// sp mod 16-bytes
-	cmp		r1, #4								// need space for the sp on the stack
-	addlt	r1, r1, #0x10						// make room if needed, but keep stack aligned
-	mov		r2,	sp								// get current sp
-	sub		sp, sp, r1							// align stack
-	str		r2, [sp]							// store previous sp on stack
-#endif
-
+	ALIGN_STACK r2, r3
 	bl		EXT(sleh_undef)						// Call second level handler
-
-#if __BIGGEST_ALIGNMENT__ > 4
-	ldr		sp, [sp]							// restore stack
-#endif
+	UNALIGN_STACK
 
 #if __ARM_USER_PROTECT__
 	mrc		p15, 0, r9, c13, c0, 4              // Read TPIDRPRW
@@ -500,6 +516,7 @@ swi_from_kernel:
 	str		r0, [sp, SS_SP]						// Save supervisor mode sp
 	str		lr, [sp, SS_LR]                     // Save supervisor mode lr
 
+	ALIGN_STACK r0, r1
 	adr		r0, L_kernel_swi_panic_str			// Load panic messages and panic()
 	blx		EXT(panic)
 	b		.
@@ -785,6 +802,7 @@ cache_trap_error:
 	mov		r1, sp
 	str		r2, [sp]
 	str		r3, [sp, #4]
+	ALIGN_STACK r2, r3
 	mov		r2, #2
 	bl		EXT(exception_triage)
 	b		.
@@ -817,13 +835,10 @@ L_kernel_swi_panic_str:
 	.globl EXT(fleh_prefabt)
 	
 LEXT(fleh_prefabt)
+VERIFY_EXCEPTION_MODE PSR_ABT_MODE
 	sub		lr, lr, #4
-	
-	mrs		sp, spsr							// For check the previous mode
-	tst		sp, #0x0f							// Is it from user?
-	bne		prefabt_from_kernel
 
-prefabt_from_user:	
+IF_USERMODE_EXCEPTION prefabt
 	mrc		p15, 0, sp, c13, c0, 4				// Read TPIDRPRW
 	add		sp, sp, ACT_PCBDATA					// Get User PCB
 
@@ -842,7 +857,6 @@ prefabt_from_user:
 	mrs     r4, spsr
 	str     r4, [sp, SS_CPSR]					// Save user mode cpsr
 
-	mrs		r4, cpsr 							// Read cpsr
 	cpsid	i, #PSR_SVC_MODE
 	mrs		r3, cpsr 							// Read cpsr
 	msr		spsr_cxsf, r3                       // Set spsr(svc mode cpsr)
@@ -862,9 +876,6 @@ prefabt_from_user:
 	mcr		p15, 0, r3, c13, c0, 1				// Set CONTEXTIDR
 	isb
 #endif
-	and		r0, r4, #PSR_MODE_MASK				// Extract current mode
-	cmp		r0, #PSR_ABT_MODE					// Check abort mode
-	bne		EXT(ExceptionVectorPanic)
 
 	mvn		r0, #0
 	str		r0, [r9, TH_IOTIER_OVERRIDE]			// Reset IO tier override to -1 before handling abort from userspace
@@ -880,14 +891,7 @@ prefabt_from_user:
 												// Sleh will enable interrupt
 	b		load_and_go_user
 
-prefabt_from_kernel:
-	mrs		sp, cpsr 							// Read cpsr
-	and		sp, sp, #PSR_MODE_MASK				// Extract current mode
-	cmp		sp, #PSR_ABT_MODE					// Check abort mode
-	movne	r0, sp
-	bne		EXT(ExceptionVectorPanic)
-	mrs		sp, spsr							// Check the previous mode
-
+ELSE_IF_KERNELMODE_EXCEPTION prefabt
 	/*
 	 * We have a kernel stack already, and I will use it to save contexts:
 	 *     ------------------
@@ -898,8 +902,6 @@ prefabt_from_kernel:
 	 *
 	 * IRQ is disabled
 	 */
-	cpsid	i, #PSR_SVC_MODE
-
 	sub     sp, sp, EXC_CTX_SIZE
 	stmia	sp, {r0-r12}
 	add		r0, sp, EXC_CTX_SIZE
@@ -929,42 +931,23 @@ prefabt_from_kernel:
 	mcr		p15, 0, r3, c13, c0, 1				// Set CONTEXTIDR
 	isb
 #endif
-	mov     ip, sp
 
-	cpsid	i, #PSR_ABT_MODE
-
-	str		lr, [ip, SS_PC]						// Save pc to pc and
+	mrs		r4, lr_abt
+	str		r4, [sp, SS_PC]					// Save pc
 
 	mrc		p15, 0, r5, c6, c0, 2 				// Read IFAR
-	str		r5, [ip, SS_VADDR]					// and fault address of pcb
+	str		r5, [sp, SS_VADDR]					// and fault address of pcb
 	mrc		p15, 0, r5, c5, c0, 1 				// Read (instruction) Fault Status
-	str		r5, [ip, SS_STATUS]					// Save fault status register to pcb
+	str		r5, [sp, SS_STATUS]					// Save fault status register to pcb
 
-	mrs		r4, spsr
-	str		r4, [ip, SS_CPSR]	
+	mrs		r4, spsr_abt
+	str		r4, [sp, SS_CPSR]	
 
-	cpsid	i, #PSR_SVC_MODE
-
-	mov     r0, sp
-
-/*
- * For armv7k ABI, the stack needs to be 16-byte aligned
- */
-#if __BIGGEST_ALIGNMENT__ > 4
-	and 	r1, sp, #0x0F						// sp mod 16-bytes
-	cmp		r1, #4								// need space for the sp on the stack
-	addlt	r1, r1, #0x10						// make room if needed, but keep stack aligned
-	mov		r2,	sp								// get current sp
-	sub		sp, sp, r1							// align stack
-	str		r2, [sp]							// store previous sp on stack
-#endif
-
+	mov		r0, sp
+	ALIGN_STACK r1, r2
 	mov		r1, T_PREFETCH_ABT					// Pass abort type
 	bl		EXT(sleh_abort) 					// Call second level handler
-
-#if __BIGGEST_ALIGNMENT__ > 4
-	ldr		sp, [sp]							// restore stack
-#endif
+	UNALIGN_STACK
 
 	mrc		p15, 0, r9, c13, c0, 4				// Read TPIDRPRW
 #if __ARM_USER_PROTECT__
@@ -992,13 +975,9 @@ prefabt_from_kernel:
 	.globl EXT(fleh_dataabt)
 	
 LEXT(fleh_dataabt)
+VERIFY_EXCEPTION_MODE PSR_ABT_MODE
 	sub		lr, lr, #8
-	
-	mrs		sp, spsr							// For check the previous mode
-	tst		sp, #0x0f							// Is it from kernel?
-	bne		dataabt_from_kernel
-
-dataabt_from_user:	
+IF_USERMODE_EXCEPTION dataabt
 	mrc		p15, 0, sp, c13, c0, 4				// Read TPIDRPRW
 	add		sp, sp, ACT_PCBDATA					// Get User PCB
 
@@ -1019,7 +998,6 @@ dataabt_from_user:
 	str		r5, [sp, SS_STATUS]					// Save fault status register to pcb
 	str		r6, [sp, SS_VADDR]					// Save fault address to pcb
 
-	mrs		r4, cpsr 							// Read cpsr
 	cpsid	i, #PSR_SVC_MODE
 	mrs		r3, cpsr 							// Read cpsr
 	msr		spsr_cxsf, r3                       // Set spsr(svc mode cpsr)
@@ -1039,9 +1017,6 @@ dataabt_from_user:
 	mcr		p15, 0, r3, c13, c0, 1				// Set CONTEXTIDR
 	isb
 #endif
-	and		r0, r4, #PSR_MODE_MASK				// Extract current mode
-	cmp		r0, #PSR_ABT_MODE					// Check abort mode
-	bne		EXT(ExceptionVectorPanic)
 
 	mvn		r0, #0
 	str		r0, [r9, TH_IOTIER_OVERRIDE]			// Reset IO tier override to -1 before handling abort from userspace
@@ -1057,14 +1032,7 @@ dataabt_from_user:
 												// Sleh will enable irq
 	b		load_and_go_user
 
-dataabt_from_kernel:	
-	mrs		sp, cpsr 							// Read cpsr
-	and		sp, sp, #PSR_MODE_MASK				// Extract current mode
-	cmp		sp, #PSR_ABT_MODE					// Check abort mode
-	movne	r0, sp
-	bne		EXT(ExceptionVectorPanic)
-	mrs		sp, spsr							// Check the previous mode
-
+ELSE_IF_KERNELMODE_EXCEPTION dataabt
 	/*
 	 * We have a kernel stack already, and I will use it to save contexts:
 	 *     ------------------
@@ -1075,8 +1043,6 @@ dataabt_from_kernel:
 	 *
 	 * IRQ is disabled
 	 */
-	cpsid	i, #PSR_SVC_MODE
-
 	sub     sp, sp, EXC_CTX_SIZE
 	stmia	sp, {r0-r12}
 	add		r0, sp, EXC_CTX_SIZE
@@ -1095,15 +1061,10 @@ dataabt_from_kernel:
 	fmxr		fpscr, r4					// And shove it into FPSCR
 #endif
 
-	mov     ip, sp
-
-	cpsid	i, #PSR_ABT_MODE
-
-	str		lr, [ip, SS_PC]
-	mrs		r4, spsr
-	str		r4, [ip, SS_CPSR]	
-
-	cpsid	i, #PSR_SVC_MODE
+	mrs		r4, lr_abt
+	str		r4, [sp, SS_PC]
+	mrs		r4, spsr_abt
+	str		r4, [sp, SS_CPSR]	
 
 #if __ARM_USER_PROTECT__
 	mrc		p15, 0, r10, c2, c0, 0				// Get TTBR0
@@ -1123,25 +1084,10 @@ dataabt_from_kernel:
 	str		r6, [sp, SS_VADDR]					// Save fault address to pcb
 
 	mov		r0, sp								// Argument
-
-/*
- * For armv7k ABI, the stack needs to be 16-byte aligned
- */
-#if __BIGGEST_ALIGNMENT__ > 4
-	and 	r1, sp, #0x0F						// sp mod 16-bytes
-	cmp		r1, #4								// need space for the sp on the stack
-	addlt	r1, r1, #0x10						// make room if needed, but keep stack aligned
-	mov		r2,	sp								// get current sp
-	sub		sp, sp, r1							// align stack
-	str		r2, [sp]							// store previous sp on stack
-#endif
-
+	ALIGN_STACK r1, r2
 	mov		r1, T_DATA_ABT						// Pass abort type
 	bl		EXT(sleh_abort)						// Call second level handler
-
-#if __BIGGEST_ALIGNMENT__ > 4
-	ldr		sp,	[sp]							// restore stack (removed align padding)
-#endif
+	UNALIGN_STACK
 
 	mrc		p15, 0, r9, c13, c0, 4				// Read TPIDRPRW
 #if __ARM_USER_PROTECT__
@@ -1188,24 +1134,9 @@ load_and_go_sys:
 	ldr		lr, [sp, SS_LR]							// Restore the link register
 	stmfd		sp!, {r7, lr}							// Push a fake frame
 
-	/* TODO: Should this be setting r7?  I think so. */
-	mov		r7, sp							// Set the frame pointer
-
-#if __BIGGEST_ALIGNMENT__ > 4
-	and 	r2, sp, #0x0F						// sp mod 16-bytes
-	cmp		r2, #4								// need space for the sp on the stack
-	addlt	r2, r2, #0x10						// make room if needed, but keep stack aligned
-	mov		r3,	sp								// get current sp
-	sub		sp, sp, r2							// align stack
-	str		r3, [sp]							// store previous sp on stack
-#endif
-
+	ALIGN_STACK r2, r3
 	bl		EXT(ast_taken_kernel)				// Handle AST_URGENT
-
-#if __BIGGEST_ALIGNMENT__ > 4
-	ldr		sp, [sp]
-#endif
-
+	UNALIGN_STACK
 
 	ldmfd		sp!, {r7, lr}							// Pop the fake frame
 	mrc		p15, 0, r9, c13, c0, 4				// Reload r9 from TPIDRPRW
@@ -1786,11 +1717,14 @@ LEXT(fleh_dec)
 	mcr		p15, 0, r3, c13, c0, 1				// Set CONTEXTIDR
 	isb
 #endif
+
+	ALIGN_STACK r0, r1
 	mov		r0, r8								// Get current cpu in arg 0
 	mov		r1, SIGPdec							// Decrementer signal in arg1
 	mov		r2, #0
 	mov		r3, #0
 	bl		EXT(cpu_signal)						// Call cpu_signal
+	UNALIGN_STACK
 
 	mrc		p15, 0, r9, c13, c0, 4				// Read TPIDRPRW
 
@@ -1818,6 +1752,7 @@ LEXT(fleh_dec)
 	cpsid	i, #PSR_IRQ_MODE
 	cpsie	f
 	mov		sp, r6								// Restore the stack pointer
+	ALIGN_STACK r2, r3
 	msr		spsr_cxsf, r4						// Restore the spsr
 	ldr		r2, [r9, ACT_PREEMPT_CNT]           // Load preemption count
 	add		r2, r2, #1							// Increment count
@@ -1864,6 +1799,7 @@ LEXT(fleh_dec)
 	movs	r4, r4
 	COND_EXTERN_BLNE(interrupt_trace_exit)
 #endif
+	UNALIGN_STACK
 
 	mrc		p15, 0, r9, c13, c0, 4				// Reload r9 from TPIDRPRW
 
@@ -1924,20 +1860,7 @@ load_and_go_user:
 	cmp		r5, #0								// Test if ASTs pending
 	beq		return_to_user_now					// Branch if no ASTs
 
-#if __BIGGEST_ALIGNMENT__ > 4
-	and 	r2, sp, #0x0F						// sp mod 16-bytes
-	cmp		r2, #4								// need space for the sp on the stack
-	addlt	r2, r2, #0x10						// make room if needed, but keep stack aligned
-	mov		r3,	sp								// get current sp
-	sub		sp, sp, r2							// align stack
-	str		r3, [sp]							// store previous sp on stack
-#endif
-
 	bl		EXT(ast_taken_user)					// Handle all ASTs (may continue via thread_exception_return)
-
-#if __BIGGEST_ALIGNMENT__ > 4
-	ldr	sp, [sp]						// Restore the stack pointer
-#endif
 
 	mrc		p15, 0, r9, c13, c0, 4				// Reload r9 from TPIDRPRW
 	b	load_and_go_user						// Loop back
@@ -2028,6 +1951,7 @@ L_evimpanic_str:
 
 LEXT(ExceptionVectorPanic)
 	cpsid i, #PSR_SVC_MODE
+	ALIGN_STACK r1, r2
 	mov		r1, r0
 	adr		r0, L_evimpanic_str
 	blx		EXT(panic)

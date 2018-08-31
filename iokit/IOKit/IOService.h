@@ -319,7 +319,9 @@ protected:
 
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
+    APPLE_KEXT_WSHADOW_PUSH;
     ExpansionData * reserved;
+    APPLE_KEXT_WSHADOW_POP;
 
 private:
     IOService *     __provider;

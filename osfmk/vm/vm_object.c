@@ -542,6 +542,8 @@ vm_object_bootstrap(void)
 
 	vm_object_template.objq.next = NULL;
 	vm_object_template.objq.prev = NULL;
+	vm_object_template.task_objq.next = NULL;
+	vm_object_template.task_objq.prev = NULL;
 
 	vm_object_template.purgeable_queue_type = PURGEABLE_Q_TYPE_MAX;
 	vm_object_template.purgeable_queue_group = 0;
@@ -1008,11 +1010,10 @@ vm_object_cache_remove_locked(
 	vm_object_t	object)
 {
 	assert(object->purgable == VM_PURGABLE_DENY);
-	assert(object->wired_page_count == 0);
 
-	queue_remove(&vm_object_cached_list, object, vm_object_t, objq);
-	object->objq.next = NULL;
-	object->objq.prev = NULL;
+	queue_remove(&vm_object_cached_list, object, vm_object_t, cached_list);
+	object->cached_list.next = NULL;
+	object->cached_list.prev = NULL;
 
 	vm_object_cached_count--;
 }
@@ -1023,7 +1024,8 @@ vm_object_cache_remove(
 {
 	vm_object_cache_lock_spin();
 
-	if (object->objq.next || object->objq.prev)
+	if (object->cached_list.next &&
+	    object->cached_list.prev)
 		vm_object_cache_remove_locked(object);
 
 	vm_object_cache_unlock();
@@ -1037,7 +1039,6 @@ vm_object_cache_add(
 	clock_nsec_t nsec;
 
 	assert(object->purgable == VM_PURGABLE_DENY);
-	assert(object->wired_page_count == 0);
 
 	if (object->resident_page_count == 0)
 		return;
@@ -1045,8 +1046,9 @@ vm_object_cache_add(
 
 	vm_object_cache_lock_spin();
 
-	if (object->objq.next == NULL && object->objq.prev == NULL) {
-		queue_enter(&vm_object_cached_list, object, vm_object_t, objq);
+	if (object->cached_list.next == NULL &&
+	    object->cached_list.prev == NULL) {
+		queue_enter(&vm_object_cached_list, object, vm_object_t, cached_list);
 		object->vo_cache_ts = sec + EVICT_AGE;
 		object->vo_cache_pages_to_scan = object->resident_page_count;
 
@@ -1110,7 +1112,7 @@ vm_object_cache_evict(
 		while (!queue_end(&vm_object_cached_list, (queue_entry_t)next_obj) && object_cnt++ < max_objects_to_examine) {
 
 			object = next_obj;
-			next_obj = (vm_object_t)queue_next(&next_obj->objq);
+			next_obj = (vm_object_t)queue_next(&next_obj->cached_list);
 
 			assert(object->purgable == VM_PURGABLE_DENY);
 			assert(object->wired_page_count == 0);
@@ -1351,7 +1353,9 @@ vm_object_terminate(
 	object->terminating = TRUE;
 	object->alive = FALSE;
 
-	if ( !object->internal && (object->objq.next || object->objq.prev))
+	if (!object->internal &&
+	    object->cached_list.next &&
+	    object->cached_list.prev)
 		vm_object_cache_remove(object);
 
 	/*
@@ -1452,7 +1456,8 @@ vm_object_reap(
 	    object->purgable != VM_PURGABLE_DENY) {
 		vm_purgeable_accounting(object,
 					object->purgable,
-					TRUE); /* disown */
+					TRUE, /* disown */
+					FALSE); /* task_objq locked? */
 	}
 
 	pager = object->pager;
@@ -1533,8 +1538,17 @@ vm_object_reap(
 			panic("object %p in unexpected purgeable state 0x%x\n",
 			      object, object->purgable);
 		}
-		assert(object->objq.next == NULL);
-		assert(object->objq.prev == NULL);
+		if (object->transposed &&
+		    object->cached_list.next != NULL &&
+		    object->cached_list.prev == NULL) {
+			/*
+			 * object->cached_list.next "points" to the
+			 * object that was transposed with this object.
+			 */
+		} else {
+			assert(object->cached_list.next == NULL);
+		}
+		assert(object->cached_list.prev == NULL);
 	}
     
 	if (object->pageout) {
@@ -5466,17 +5480,17 @@ vm_object_lock_request(
  * On entry the object must be locked and it must be
  * purgeable with no delayed copies pending.
  */
-void
+uint64_t
 vm_object_purge(vm_object_t object, int flags)
 {
-	unsigned int	object_page_count = 0;
-	unsigned int	pgcount = 0;
+	unsigned int	object_page_count = 0, pgcount = 0;
+	uint64_t	total_purged_pgcount = 0;
 	boolean_t	skipped_object = FALSE;
 
         vm_object_lock_assert_exclusive(object);
 
 	if (object->purgable == VM_PURGABLE_DENY)
-		return;
+		return 0;
 
 	assert(object->copy == VM_OBJECT_NULL);
 	assert(object->copy_strategy == MEMORY_OBJECT_COPY_NONE);
@@ -5521,6 +5535,12 @@ vm_object_purge(vm_object_t object, int flags)
 	object_page_count = object->resident_page_count;
 
 	vm_object_reap_pages(object, REAP_PURGEABLE);
+
+	if (object->resident_page_count >= object_page_count) {
+		total_purged_pgcount = 0;
+	} else {
+		total_purged_pgcount = object_page_count - object->resident_page_count;
+	}
 
 	if (object->pager != NULL) {
 
@@ -5575,13 +5595,16 @@ vm_object_purge(vm_object_t object, int flags)
 
 	vm_object_lock_assert_exclusive(object);
 
+	total_purged_pgcount += pgcount;
+
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (MACHDBG_CODE(DBG_MACH_VM, OBJECT_PURGE_ONE)),
 			      VM_KERNEL_UNSLIDE_OR_PERM(object), /* purged object */
 			      object_page_count,
-			      pgcount,
+			      total_purged_pgcount,
 			      skipped_object,
 			      0);
 
+	return total_purged_pgcount;
 }
 				
 
@@ -5785,7 +5808,8 @@ vm_object_purgable_control(
 			 * non-volatile ledgers.
 			 */
 			vm_purgeable_accounting(object, VM_PURGABLE_VOLATILE,
-						FALSE);
+						FALSE, /* disown */
+						FALSE); /* task_objq locked? */
 		}
 
 		break;
@@ -5913,8 +5937,10 @@ vm_object_purgable_control(
 		};
 		vm_purgeable_object_add(object, queue, (*state&VM_VOLATILE_GROUP_MASK)>>VM_VOLATILE_GROUP_SHIFT );
 		if (old_state == VM_PURGABLE_NONVOLATILE) {
-			vm_purgeable_accounting(object, VM_PURGABLE_NONVOLATILE,
-						FALSE);
+			vm_purgeable_accounting(object,
+						VM_PURGABLE_NONVOLATILE,
+						FALSE, /* disown */
+						FALSE); /* task_objq locked? */
 		}
 
 		assert(queue->debug_count_objects>=0);
@@ -5963,8 +5989,10 @@ vm_object_purgable_control(
 			 * "non-volatile" and now need to be accounted as
 			 * "volatile".
 			 */
-			vm_purgeable_accounting(object, VM_PURGABLE_NONVOLATILE,
-						FALSE);
+			vm_purgeable_accounting(object,
+						VM_PURGABLE_NONVOLATILE,
+						FALSE, /* disown */
+						FALSE); /* task_objq locked? */
 			/*
 			 * Set to VM_PURGABLE_EMPTY because the pages are no
 			 * longer accounted in the "non-volatile" ledger

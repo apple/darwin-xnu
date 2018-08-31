@@ -4120,7 +4120,6 @@ trimthenstep6:
 						    ~TMPF_PREESTABLISHED;
 						tp->t_mpflags |=
 						    TMPF_MPTCP_TRUE;
-						so->so_flags |= SOF_MPTCP_TRUE;
 						mptcplog((LOG_DEBUG, "MPTCP "
 						    "Sockets: %s \n",__func__),
 						    MPTCP_SOCKET_DBG,
@@ -4942,7 +4941,8 @@ dodata:
 		}
 	} else {
 		if ((so->so_flags & SOF_MP_SUBFLOW) && tlen == 0 &&
-		    (m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN)) {
+		    (m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN) &&
+		    (m->m_pkthdr.pkt_flags & PKTF_MPTCP)) {
 			m_adj(m, drop_hdrlen);	/* delayed header drop */
 			mptcp_input(tptomptp(tp)->mpt_mpte, m);
 			tp->t_flags |= TF_ACKNOW;
@@ -5865,6 +5865,8 @@ tcp_mss(struct tcpcb *tp, int offer, unsigned int input_ifscope)
 	}
 	tp->t_maxseg = mss;
 
+	ASSERT(tp->t_maxseg);
+
 	/*
 	 * Update MSS using recommendation from link status report. This is
 	 * temporary
@@ -6338,9 +6340,9 @@ tcp_getstat SYSCTL_HANDLER_ARGS
 			proc_rele(caller_parent);
 		}
 
-		if ((escape_str(command_name, strlen(command_name),
+		if ((escape_str(command_name, strlen(command_name) + 1,
 		    sizeof(command_name)) == 0) &&
-		    (escape_str(parent_name, strlen(parent_name),
+		    (escape_str(parent_name, strlen(parent_name) + 1,
 		    sizeof(parent_name)) == 0)) {
 			kern_asl_msg(LOG_DEBUG, "messagetracer",
 			    5,

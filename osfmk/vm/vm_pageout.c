@@ -3236,14 +3236,14 @@ throttle_inactive:
 					VM_DEBUG_CONSTANT_EVENT(vm_pageout_jetsam, VM_PAGEOUT_JETSAM, DBG_FUNC_START,
     					       vm_page_active_count, vm_page_inactive_count, vm_page_free_count, vm_page_free_count);
 
-                                        /* Kill first suitable process */
-					if (memorystatus_kill_on_VM_page_shortage(FALSE) == FALSE) {
-						panic("vm_pageout_scan: Jetsam request failed\n");	
+                                        /* Kill first suitable process. If this call returned FALSE, we might have simply purged a process instead. */
+					if (memorystatus_kill_on_VM_page_shortage(FALSE) == TRUE) {
+						vm_pageout_inactive_external_forced_jetsam_count++;
 					}
 					
-					VM_DEBUG_CONSTANT_EVENT(vm_pageout_jetsam, VM_PAGEOUT_JETSAM, DBG_FUNC_END, 0, 0, 0, 0);
+					VM_DEBUG_CONSTANT_EVENT(vm_pageout_jetsam, VM_PAGEOUT_JETSAM, DBG_FUNC_END,
+							vm_page_active_count, vm_page_inactive_count, vm_page_free_count, vm_page_free_count);
 
-					vm_pageout_inactive_external_forced_jetsam_count++;
 					vm_page_lock_queues();	
 					delayed_unlock = 1;
 				}
@@ -5898,6 +5898,7 @@ REDISCOVER_ENTRY:
 						  (entry->vme_end -
 						   entry->vme_start)));
 		VME_OFFSET_SET(entry, 0);
+		assert(entry->use_pmap);
 
 		vm_map_lock_write_to_read(map);
 	}

@@ -301,7 +301,8 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			 */
 			alloc_flags = fd & (VM_FLAGS_ALIAS_MASK |
 					    VM_FLAGS_SUPERPAGE_MASK |
-					    VM_FLAGS_PURGABLE);
+					    VM_FLAGS_PURGABLE |
+					    VM_FLAGS_4GB_CHUNK);
 			if (alloc_flags != fd) {
 				/* reject if there are any extra flags */
 				return EINVAL;
@@ -607,6 +608,14 @@ map_file_retry:
 			/* strictly limit access to "prot" */
 			maxprot &= prot;
 		}
+
+		vm_object_offset_t end_pos = 0;
+		if (os_add_overflow(user_size, file_pos, &end_pos)) {
+			vnode_put(vp);
+			error = EINVAL;
+			goto bad;
+		}
+
 		result = vm_map_enter_mem_object_control(user_map,
 						 &user_addr, user_size,
 						 0, alloc_flags, vmk_flags,
@@ -1012,14 +1021,14 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 	vm_map_t map = VM_MAP_NULL;
 	user_addr_t vec = 0;
 	int error = 0;
-	int vecindex = 0, lastvecindex = 0;
+	int lastvecindex = 0;
 	int mincoreinfo=0;
 	int pqueryinfo = 0;
 	unsigned int pqueryinfo_vec_size = 0;
 	vm_page_info_basic_t info = NULL;
 	mach_msg_type_number_t count = 0;
 	char *kernel_vec = NULL;
-	int req_vec_size_pages = 0, cur_vec_size_pages = 0;
+	unsigned int req_vec_size_pages = 0, cur_vec_size_pages = 0, vecindex = 0;
 	kern_return_t kr = KERN_SUCCESS;
 
 	map = current_map();
@@ -1045,7 +1054,7 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 	 */
 
 	req_vec_size_pages = (end - addr) >> PAGE_SHIFT;
-	cur_vec_size_pages = MIN(req_vec_size_pages, (int)(MAX_PAGE_RANGE_QUERY >> PAGE_SHIFT));
+	cur_vec_size_pages = MIN(req_vec_size_pages, (MAX_PAGE_RANGE_QUERY >> PAGE_SHIFT));
 
 	kernel_vec = (void*) _MALLOC(cur_vec_size_pages * sizeof(char), M_TEMP, M_WAITOK | M_ZERO);
 
@@ -1129,7 +1138,7 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 		 */
 		vec += cur_vec_size_pages * sizeof(char);
 		req_vec_size_pages = (end - addr) >> PAGE_SHIFT;
-		cur_vec_size_pages = MIN(req_vec_size_pages, (int)(MAX_PAGE_RANGE_QUERY >> PAGE_SHIFT));
+		cur_vec_size_pages = MIN(req_vec_size_pages, (MAX_PAGE_RANGE_QUERY >> PAGE_SHIFT));
 
 		first_addr = addr;
 	}

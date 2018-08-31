@@ -56,6 +56,8 @@
 
 #include <sys/dtrace_glue.h>
 
+#include <san/kasan.h>
+
 #define DTRACE_INVOP_NOP_SKIP 1
 #define DTRACE_INVOP_MOVL_ESP_EBP 10
 #define DTRACE_INVOP_MOVL_ESP_EBP_SKIP 2
@@ -225,6 +227,18 @@ fbt_perfCallback(
 			     pDst > (((uint32_t *)old_sp));
 				 pDst--)
 				*pDst = pDst[-delta];
+
+#if KASAN
+			/*
+			 * The above has moved stack objects so they are no longer in sync
+			 * with the shadow.
+			 */
+			uintptr_t base = (uintptr_t)((uint32_t *)old_sp - delta);
+			uintptr_t size = (uintptr_t)fp - base;
+			if (base >= VM_MIN_KERNEL_AND_KEXT_ADDRESS) {
+				kasan_unpoison_stack(base, size);
+			}
+#endif
 
 /* Track the stack lift in "saved_state". */
 			saved_state = (x86_saved_state64_t *) (((uintptr_t)saved_state) + (delta << 2));

@@ -13,7 +13,7 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-CFLAGS+=
+CFLAGS += -Wassign-enum -Wswitch-enum
 
 #
 # Directories for mig generated files

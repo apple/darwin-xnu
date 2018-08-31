@@ -42,6 +42,7 @@
 #include <kasan_internal.h>
 
 int __asan_option_detect_stack_use_after_return = 0;
+int fakestack_enabled = 0;
 
 #define FAKESTACK_HEADER_SZ 64
 #define FAKESTACK_NUM_SZCLASS 7
@@ -69,28 +70,40 @@ static const unsigned long fakestack_min = 1 << 6;
 static const unsigned long __unused fakestack_max = 1 << 16;
 
 /*
- * Mark the current thread as being in a fakestack operation, to avoid reentrancy
- * issues. If set, disable fakestack allocation.
+ * Enter a fakestack critical section in a reentrant-safe fashion. Returns true on
+ * success with the kasan lock held.
  */
-static boolean_t
-thread_enter_fakestack(void)
+static bool
+thread_enter_fakestack(boolean_t *flags)
 {
-	thread_t thread = current_thread();
-	if (thread) {
-		return OSIncrementAtomic(&kasan_get_thread_data(current_thread())->in_fakestack);
-	} else {
-		return 0;
+	thread_t cur = current_thread();
+	if (cur && kasan_lock_held(cur)) {
+		/* current thread is already in kasan - fail */
+		return false;
+	}
+	kasan_lock(flags);
+	return true;
+}
+
+static volatile long suspend_count;
+static const long suspend_threshold = 20;
+
+void
+kasan_fakestack_suspend(void)
+{
+	if (OSIncrementAtomicLong(&suspend_count) == suspend_threshold) {
+		__asan_option_detect_stack_use_after_return = 0;
 	}
 }
 
-static boolean_t
-thread_exit_fakestack(void)
+void
+kasan_fakestack_resume(void)
 {
-	thread_t thread = current_thread();
-	if (thread) {
-		return OSDecrementAtomic(&kasan_get_thread_data(current_thread())->in_fakestack);
-	} else {
-		return 0;
+	long orig = OSDecrementAtomicLong(&suspend_count);
+	assert(orig >= 0);
+
+	if (fakestack_enabled && orig == suspend_threshold) {
+		__asan_option_detect_stack_use_after_return = 1;
 	}
 }
 
@@ -155,23 +168,20 @@ kasan_fakestack_alloc(int sz_class, size_t realsz)
 		return 0;
 	}
 
-	boolean_t flags;
 	uptr ret = 0;
 	size_t sz = fakestack_min << sz_class;
 	assert(realsz <= sz);
 	assert(sz <= fakestack_max);
 	zone_t zone = fakestack_zones[sz_class];
 
-	if (thread_enter_fakestack()) {
+	boolean_t flags;
+	if (!thread_enter_fakestack(&flags)) {
 		return 0;
 	}
 
-	kasan_lock(&flags);
 	kasan_fakestack_gc(current_thread()); /* XXX: optimal? */
 
 	ret = (uptr)zget(zone);
-
-	thread_exit_fakestack();
 
 	if (ret) {
 		size_t leftrz = 32 + FAKESTACK_HEADER_SZ;
@@ -204,7 +214,6 @@ kasan_fakestack_free(int sz_class, uptr dst, size_t realsz)
 	}
 
 	assert(realsz <= (fakestack_min << sz_class));
-	assert(__asan_option_detect_stack_use_after_return);
 
 	vm_size_t sz = fakestack_min << sz_class;
 	zone_t zone = fakestack_zones[sz_class];
@@ -234,14 +243,10 @@ kasan_fakestack_free(int sz_class, uptr dst, size_t realsz)
 void NOINLINE
 kasan_unpoison_fakestack(thread_t thread)
 {
-	if (!__asan_option_detect_stack_use_after_return) {
-		return;
-	}
-
 	boolean_t flags;
-	kasan_lock(&flags);
-
-	thread_enter_fakestack();
+	if (!thread_enter_fakestack(&flags)) {
+		panic("expected success entering fakestack\n");
+	}
 
 	struct fakestack_header_list *head = &kasan_get_thread_data(thread)->fakestack_head;
 	struct fakestack_header *cur;
@@ -252,7 +257,6 @@ kasan_unpoison_fakestack(thread_t thread)
 	}
 
 	kasan_fakestack_gc(thread);
-	thread_exit_fakestack();
 	kasan_unlock(flags);
 }
 
@@ -283,7 +287,9 @@ kasan_init_fakestack(void)
 	}
 
 	/* globally enable */
-	__asan_option_detect_stack_use_after_return = 1;
+	if (fakestack_enabled) {
+		__asan_option_detect_stack_use_after_return = 1;
+	}
 }
 
 #else /* FAKESTACK */
@@ -318,7 +324,6 @@ kasan_fakestack_free(int __unused sz_class, uptr __unused dst, size_t __unused r
 
 void kasan_init_thread(struct kasan_thread_data *td)
 {
-	td->in_fakestack = 0;
 	LIST_INIT(&td->fakestack_head);
 }
 

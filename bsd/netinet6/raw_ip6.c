@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -349,11 +349,14 @@ rip6_output(
 	int type = 0, code = 0;		/* for ICMPv6 output statistics only */
 	int sotc = SO_TC_UNSPEC;
 	int netsvctype = _NET_SERVICE_TYPE_UNSPEC;
-	struct ip6_out_args ip6oa =
-	    { IFSCOPE_NONE, { 0 }, IP6OAF_SELECT_SRCIF, 0, 0, 0 };
+	struct ip6_out_args ip6oa;
 	int flags = IPV6_OUTARGS;
 
 	in6p = sotoin6pcb(so);
+
+	bzero(&ip6oa, sizeof(ip6oa));
+	ip6oa.ip6oa_boundif = IFSCOPE_NONE;
+	ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF;
 
 	if (in6p == NULL
 #if NECP

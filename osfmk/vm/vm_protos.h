@@ -109,6 +109,12 @@ extern kern_return_t vm_map_purgable_control(
 				vm_purgable_t		control,
 				int			*state);
 
+extern kern_return_t
+vnode_pager_get_object_vnode(
+	memory_object_t mem_obj,
+	uintptr_t * vnodeaddr,
+	uint32_t * vid);
+
 #if CONFIG_COREDUMP
 extern boolean_t coredumpok(vm_map_t map, vm_offset_t va);
 #endif

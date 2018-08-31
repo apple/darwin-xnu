@@ -164,7 +164,8 @@ acpi_hibernate(void *refcon)
 extern void			slave_pstart(void);
 extern void			hibernate_rebuild_vm_structs(void);
 
-extern	unsigned int		wake_nkdbufs;
+extern unsigned int wake_nkdbufs;
+extern unsigned int trace_wrap;
 
 void
 acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
@@ -332,7 +333,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	if (kdebug_enable == 0) {
 		if (wake_nkdbufs) {
 			start = mach_absolute_time();
-			kdebug_trace_start(wake_nkdbufs, NULL, TRUE);
+			kdebug_trace_start(wake_nkdbufs, NULL, trace_wrap != 0, TRUE);
 			elapsed_trace_start += mach_absolute_time() - start;
 		}
 	}
@@ -460,7 +461,7 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 	if (kdebug_enable == 0) {
 		if (wake_nkdbufs) {
 			__kdebug_only uint64_t start = mach_absolute_time();
-			kdebug_trace_start(wake_nkdbufs, NULL, TRUE);
+			kdebug_trace_start(wake_nkdbufs, NULL, trace_wrap != 0, TRUE);
 			KDBG(IOKDBG_CODE(DBG_HIBERNATE, 15), start);
 		}
 	}

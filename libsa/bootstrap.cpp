@@ -384,7 +384,7 @@ KLDBootstrap::readPrelinkedExtensions(
         panic("kernelcacheUUID length is %d, expected %lu", kernelcacheUUID->getLength(),
             sizeof(kernelcache_uuid));
     } else {
-        memcpy((void *)&kernelcache_uuid, (void *)kernelcacheUUID->getBytesNoCopy(), kernelcacheUUID->getLength());
+        memcpy((void *)&kernelcache_uuid, (const void *)kernelcacheUUID->getBytesNoCopy(), kernelcacheUUID->getLength());
     }
 #endif /* CONFIG_EMBEDDED */
 
@@ -481,8 +481,8 @@ KLDBootstrap::readPrelinkedExtensions(
 	    int badSlideAddr = 0;
 	    int badSlideTarget = 0;
 
-        kaslrPackedOffsets * myOffsets = NULL;
-	    myOffsets = (kaslrPackedOffsets *) kaslrOffsets->getBytesNoCopy();
+        const kaslrPackedOffsets * myOffsets = NULL;
+	    myOffsets = (const kaslrPackedOffsets *) kaslrOffsets->getBytesNoCopy();
 
 	    for (uint32_t j = 0; j < myOffsets->count; j++) {
 

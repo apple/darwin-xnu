@@ -222,7 +222,28 @@ LEXT(CleanPoC_DcacheRegion)
 	.align 2
 	.globl EXT(CleanPoC_DcacheRegion_Force)
 LEXT(CleanPoC_DcacheRegion_Force)
-	b EXT(CleanPoC_DcacheRegion_internal)
+#if defined(APPLE_ARM64_ARCH_FAMILY)
+	PUSH_FRAME
+	stp		x0, x1, [sp, #-16]!
+	bl		EXT(_disable_preemption)
+	isb		sy
+	ARM64_IS_PCORE x15
+	ARM64_READ_EP_SPR x15, x14, ARM64_REG_EHID4, ARM64_REG_HID4
+	and		x14, x14, (~ARM64_REG_HID4_DisDcMVAOps)
+	ARM64_WRITE_EP_SPR x15, x14, ARM64_REG_EHID4, ARM64_REG_HID4
+	isb		sy
+	ldp		x0, x1, [sp], #16
+	bl		EXT(CleanPoC_DcacheRegion_internal)
+	isb		sy
+	orr		x14, x14, ARM64_REG_HID4_DisDcMVAOps
+	ARM64_WRITE_EP_SPR x15, x14, ARM64_REG_EHID4, ARM64_REG_HID4
+	isb		sy
+	bl		EXT(_enable_preemption)
+	POP_FRAME
+	ret
+#else
+	b		EXT(CleanPoC_DcacheRegion_internal)
+#endif // APPLE_ARM64_ARCH_FAMILY
 
 /*
  *	void FlushPoC_Dcache(void)

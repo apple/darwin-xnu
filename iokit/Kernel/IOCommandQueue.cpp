@@ -229,7 +229,7 @@ IOCommandQueue::enqueueCommand(bool gotoSleep,
     /*
      * Make sure that we update the current producer entry before we
      * increment the producer pointer.  This avoids a nasty race as the
-     * as the test for work is producerIndex != consumerIndex and a signal.
+     * test for work is producerIndex != consumerIndex and a signal.
      */
     {
         commandEntryT *q = (commandEntryT *) queue;

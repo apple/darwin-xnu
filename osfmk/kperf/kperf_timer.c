@@ -105,8 +105,6 @@ static void
 kperf_sample_cpu(struct kperf_timer *timer, bool system_sample,
 		bool only_system)
 {
-	struct kperf_context ctx;
-
 	assert(timer != NULL);
 
 	/* Always cut a tracepoint to show a sample event occurred */
@@ -115,14 +113,17 @@ kperf_sample_cpu(struct kperf_timer *timer, bool system_sample,
 	int ncpu = cpu_number();
 
 	struct kperf_sample *intbuf = kperf_intr_sample_buffer();
+#if DEVELOPMENT || DEBUG
+	intbuf->sample_time = mach_absolute_time();
+#endif /* DEVELOPMENT || DEBUG */
 
 	/* On a timer, we can see the "real" current thread */
-	ctx.cur_thread = current_thread();
+	struct kperf_context ctx = {
+		.cur_thread = current_thread(),
+		.trigger_type = TRIGGER_TYPE_TIMER,
+		.trigger_id = (unsigned int)(timer - kperf_timerv),
+	};
 	ctx.cur_pid = task_pid(get_threadtask(ctx.cur_thread));
-
-	/* who fired */
-	ctx.trigger_type = TRIGGER_TYPE_TIMER;
-	ctx.trigger_id = (unsigned int)(timer - kperf_timerv);
 
 	if (ctx.trigger_id == pet_timer_id && ncpu < machine_info.logical_cpu_max) {
 		kperf_tid_on_cpus[ncpu] = thread_tid(ctx.cur_thread);
@@ -169,6 +170,9 @@ kperf_timer_handler(void *param0, __unused void *param1)
 	}
 
 	timer->active = 1;
+#if DEVELOPMENT || DEBUG
+	timer->fire_time = mach_absolute_time();
+#endif /* DEVELOPMENT || DEBUG */
 
 	/* along the lines of do not ipi if we are all shutting down */
 	if (kperf_sampling_status() == KPERF_SAMPLING_SHUTDOWN) {

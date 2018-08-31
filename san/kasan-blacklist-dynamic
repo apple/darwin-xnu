@@ -1,0 +1,16 @@
+# entry = <kext>:<func>:<type>
+#
+# <type> = [ kfree zfree fsfree memr memw strr strw read write rw free mem str poison ]
+# See kasan_internal.h for descriptions of the types
+#
+# <kext> = last component of kext bundle ID. Use '__kernel__' for xnu proper.
+#
+# Any field can be empty, which matches everything
+
+
+# OSKext::copyInfo copies the whole cstrings section
+__kernel__:_ZN6OSKext8copyInfoEP7OSArray:memr
+
+# For unit-testing KASan
+__kernel__:test_blacklist:test
+__kernel__:test_blacklist_str:memr

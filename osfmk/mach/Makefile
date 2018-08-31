@@ -166,6 +166,7 @@ INSTALL_MI_LIST	= \
 # installed into System.framework's PrivateHeaders/mach subdirectory
 PRIVATE_DATAFILES = \
 	bootstrap.h \
+	branch_predicates.h \
 	coalition.h \
 	coalition_notification.defs \
 	host_info.h \

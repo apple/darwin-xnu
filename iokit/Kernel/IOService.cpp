@@ -2278,16 +2278,20 @@ void IOService::scheduleTerminatePhase2( IOOptionBits options )
 		terminateWorker( options );
             wait = (0 != (__state[1] & kIOServiceBusyStateMask));
             if( wait) {
-                // wait for the victim to go non-busy
+                /* wait for the victim to go non-busy */
                 if( !haveDeadline) {
                     clock_interval_to_deadline( 15, kSecondScale, &deadline );
                     haveDeadline = true;
                 }
+                /* let others do work while we wait */
+                gIOTerminateThread = 0;
+                IOLockWakeup( gJobsLock, (event_t) &gIOTerminateThread, /* one-thread */ false);
                 waitResult = IOLockSleepDeadline( gJobsLock, &gIOTerminateWork,
                                                   deadline, THREAD_UNINT );
-                if(__improbable(waitResult == THREAD_TIMED_OUT)) {
+                if (__improbable(waitResult == THREAD_TIMED_OUT)) {
                     panic("%s[0x%qx]::terminate(kIOServiceSynchronous) timeout\n", getName(), getRegistryEntryID());
-		}
+                }
+                waitToBecomeTerminateThread();
             }
         } while(gIOTerminateWork || (wait && (waitResult != THREAD_TIMED_OUT)));
 

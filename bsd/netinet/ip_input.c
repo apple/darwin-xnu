@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -3835,9 +3835,14 @@ ip_forward(struct mbuf *m, int srcrt, struct sockaddr_in *next_hop)
 	n_long dest;
 	struct in_addr pkt_dst;
 	u_int32_t nextmtu = 0, len;
-	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, 0, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip_out_args ipoa;
 	struct ifnet *rcvifp = m->m_pkthdr.rcvif;
+
+	bzero(&ipoa, sizeof(ipoa));
+	ipoa.ipoa_boundif = IFSCOPE_NONE;
+	ipoa.ipoa_sotc = SO_TC_UNSPEC;
+	ipoa.ipoa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
+
 #if IPSEC
 	struct secpolicy *sp = NULL;
 	int ipsecerror;

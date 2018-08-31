@@ -280,7 +280,7 @@ bool OSString::isEqualTo(const OSData *obj) const
       return false;
 
     unsigned int dataLen = obj->getLength ();;
-    char * dataPtr = (char *) obj->getBytesNoCopy ();
+    const char * dataPtr = (const char *) obj->getBytesNoCopy ();
 
     if (dataLen != length) {
 

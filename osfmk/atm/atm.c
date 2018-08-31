@@ -725,11 +725,9 @@ atm_send_user_notification(
 		return KERN_FAILURE;
 	}
 
-	/* Set the honor queue limit option on the thread. */
-	th->options |= TH_OPT_HONOR_QLIMIT;
+	thread_set_honor_qlimit(th);
 	kr = atm_collect_trace_info(user_port, aid, sub_aid, flags, buffers_array, count, sizes_array, count);
-	/* Make sure that honor queue limit option is unset on the thread. */
-	th->options &= (~TH_OPT_HONOR_QLIMIT);
+	thread_clear_honor_qlimit(th);
 
 	if (kr != KERN_SUCCESS) {
 		ipc_port_release_send(user_port);
@@ -793,11 +791,9 @@ atm_send_proc_inspect_notification(
 		return KERN_FAILURE;
 	}
 
-	/* Set the honor queue limit option on the thread. */
-	th->options |= TH_OPT_HONOR_QLIMIT;
+	thread_set_honor_qlimit(th);
 	kr =  atm_inspect_process_buffer(user_port, traced_pid, traced_uniqueid, buffer_size, memory_port);
-	/* Make sure that honor queue limit option is unset on the thread. */
-	th->options &= (~TH_OPT_HONOR_QLIMIT);
+	thread_clear_honor_qlimit(th);
 
 	if (kr != KERN_SUCCESS) {
 		ipc_port_release_send(user_port);

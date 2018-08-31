@@ -1,15 +1,29 @@
 /*
- * Copyright (C) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2018 Apple Inc. All rights reserved.
  *
- * This document is the property of Apple Inc.
- * It is considered confidential and proprietary.
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
- * This document may not be reproduced or transmitted in any form,
- * in whole or in part, without the express written permission of
- * Apple Inc.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  *
- * CRC-16-ANSI (aka CRC-16-IBM) Polynomial: x^16 + x^15 + x^2 + 1
- * Derived from Craig Marciniak's "Craig's Portable CRC16 Library."
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/systm.h>
@@ -62,3 +76,17 @@ crc16(uint16_t crc, const void *buf, size_t size)
 
     return crc;
 }
+
+#if KASAN
+uint16_t
+__nosan_crc16(uint16_t crc, const void *buf, size_t size)
+{
+	const uint8_t *p = buf;
+
+	while (size--) {
+		crc = crc16_tab[(crc ^ (*p++)) & 0xFF] ^ (crc >> 8);
+	}
+
+	return crc;
+}
+#endif

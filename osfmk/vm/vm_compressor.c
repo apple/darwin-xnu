@@ -849,7 +849,7 @@ c_seg_need_delayed_compaction(c_segment_t c_seg, boolean_t c_list_lock_held)
 	}
 	assert(c_seg->c_state != C_IS_FILLING);
 
-	if (!c_seg->c_on_minorcompact_q && !(C_SEG_IS_ONDISK(c_seg))) {
+	if (!c_seg->c_on_minorcompact_q && !(C_SEG_IS_ON_DISK_OR_SOQ(c_seg))) {
 		queue_enter(&c_minor_list_head, c_seg, c_segment_t, c_list);
 		c_seg->c_on_minorcompact_q = 1;
 		c_minor_count++;
@@ -953,6 +953,7 @@ c_seg_do_minor_compaction_and_unlock(c_segment_t c_seg, boolean_t clear_busy, bo
 	int	c_seg_freed;
 
 	assert(c_seg->c_busy);
+	assert(!C_SEG_IS_ON_DISK_OR_SOQ(c_seg));
 
 	/*
 	 * check for the case that can occur when we are not swapping
@@ -2999,13 +3000,13 @@ c_current_seg_filled(c_segment_t c_seg, c_segment_t *current_chead)
 
 	lck_mtx_lock_spin_always(c_list_lock);
 
+	c_seg->c_generation_id = c_generation_id++;
+	c_seg_switch_state(c_seg, new_state, FALSE);
+
 #if CONFIG_FREEZE
 	if (c_seg->c_state == C_ON_SWAPOUT_Q)
 		c_freezer_swapout_count++;
 #endif /* CONFIG_FREEZE */
-
-	c_seg->c_generation_id = c_generation_id++;
-	c_seg_switch_state(c_seg, new_state, FALSE);
 
 	if (c_seg->c_state == C_ON_AGE_Q && C_SEG_UNUSED_BYTES(c_seg) >= PAGE_SIZE)
 		c_seg_need_delayed_compaction(c_seg, TRUE);
@@ -3781,6 +3782,7 @@ bypass_busy_check:
 		} else if (c_seg->c_on_minorcompact_q) {
 
 			assert(c_seg->c_state != C_ON_BAD_Q);
+			assert(!C_SEG_IS_ON_DISK_OR_SOQ(c_seg));
 
 			if (C_SEG_SHOULD_MINORCOMPACT_NOW(c_seg)) {
 				c_seg_try_minor_compaction_and_unlock(c_seg);

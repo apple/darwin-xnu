@@ -171,8 +171,6 @@ def GetASTSummary(ast):
         B - AST_BSD
         K - AST_KPERF
         M - AST_MACF
-        C - AST_CHUD
-        C - AST_CHUD_URGENT
         G - AST_GUARD
         T - AST_TELEMETRY_USER
         T - AST_TELEMETRY_KERNEL
@@ -185,7 +183,7 @@ def GetASTSummary(ast):
     out_string = ""
     state = int(ast)
     thread_state_chars = {0x0:'', 0x1:'P', 0x2:'Q', 0x4:'U', 0x8:'H', 0x10:'Y', 0x20:'A',
-                          0x40:'L', 0x80:'B', 0x100:'K', 0x200:'M', 0x400:'C', 0x800:'C',
+                          0x40:'L', 0x80:'B', 0x100:'K', 0x200:'M',
                           0x1000:'G', 0x2000:'T', 0x4000:'T', 0x8000:'T', 0x10000:'S',
                           0x20000: 'D', 0x40000: 'I', 0x80000: 'E'}
     state_str = ''
@@ -451,6 +449,14 @@ def GetResourceCoalitionSummary(coal, verbose=False):
     out_string += "\n\t  total_tasks {0: <d}\n\t  dead_tasks {1: <d}\n\t  active_tasks {2: <d}".format(coal.r.task_count, coal.r.dead_task_count, coal.r.task_count - coal.r.dead_task_count)
     out_string += "\n\t  last_became_nonempty_time {0: <d}\n\t  time_nonempty {1: <d}".format(coal.r.last_became_nonempty_time, coal.r.time_nonempty)
     out_string += "\n\t  cpu_ptime {0: <d}".format(coal.r.cpu_ptime)
+    if verbose:
+        out_string += "\n\t  cpu_time_effective[THREAD_QOS_DEFAULT] {0: <d}".format(coal.r.cpu_time_eqos[0])
+        out_string += "\n\t  cpu_time_effective[THREAD_QOS_MAINTENANCE] {0: <d}".format(coal.r.cpu_time_eqos[1])
+        out_string += "\n\t  cpu_time_effective[THREAD_QOS_BACKGROUND] {0: <d}".format(coal.r.cpu_time_eqos[2])
+        out_string += "\n\t  cpu_time_effective[THREAD_QOS_UTILITY] {0: <d}".format(coal.r.cpu_time_eqos[3])
+        out_string += "\n\t  cpu_time_effective[THREAD_QOS_LEGACY] {0: <d}".format(coal.r.cpu_time_eqos[4])
+        out_string += "\n\t  cpu_time_effective[THREAD_QOS_USER_INITIATED] {0: <d}".format(coal.r.cpu_time_eqos[5])
+        out_string += "\n\t  cpu_time_effective[THREAD_QOS_USER_INTERACTIVE] {0: <d}".format(coal.r.cpu_time_eqos[6])
     out_string += "\n\t  Tasks:\n\t\t"
     tasks = GetCoalitionTasks(addressof(coal.r.tasks), 0, thread_details)
     out_string += "\n\t\t".join(tasks)

@@ -136,6 +136,7 @@ private:
   
   void initNVRAMImage(void);
   void initProxyData(void);
+  IOReturn syncVariables(void);
   
 public:
   virtual bool init(IORegistryEntry *old, const IORegistryPlane *plane) APPLE_KEXT_OVERRIDE;

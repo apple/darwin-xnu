@@ -29,15 +29,16 @@
 #ifndef _RAND_H
 #define _RAND_H
 
-#if defined(__cplusplus)
-extern "C"
-{
-#endif
+#include <sys/types.h>
 
+__BEGIN_DECLS
+
+#if XNU_KERNEL_PRIVATE
 int cc_rand_generate(void *out, size_t outlen);
+#endif  /* XNU_KERNEL_PRIVATE */
 
-#if defined(__cplusplus)
-}
-#endif
+int random_buf(void *buf, size_t buflen);
+
+__END_DECLS
 
 #endif

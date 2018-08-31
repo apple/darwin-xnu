@@ -174,6 +174,10 @@ int __attribute__ ((noinline)) proc_pidoriginatorpid_uuid(uuid_t uuid, uint32_t 
 int __attribute__ ((noinline)) proc_pidlistuptrs(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int __attribute__ ((noinline)) proc_piddynkqueueinfo(pid_t pid, int flavor, kqueue_id_t id, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 
+#if !CONFIG_EMBEDDED
+int __attribute__ ((noinline)) proc_udata_info(pid_t pid, int flavor, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+#endif
+
 /* protos for proc_pidfdinfo calls */
 int __attribute__ ((noinline)) pid_vnodeinfo(vnode_t vp, uint32_t vid, struct fileproc * fp,proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
 int __attribute__ ((noinline)) pid_vnodeinfopath(vnode_t vp, uint32_t vid, struct fileproc * fp,proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
@@ -194,7 +198,7 @@ static void munge_vinfo_stat(struct stat64 *sbp, struct vinfo_stat *vsbp);
 static int proc_piduuidinfo(pid_t pid, uuid_t uuid_buf, uint32_t buffersize);
 int proc_pidpathinfo_internal(proc_t p, __unused uint64_t arg, char *buf, uint32_t buffersize, __unused int32_t *retval);
 
-extern int cansignal(struct proc *, kauth_cred_t, struct proc *, int, int);
+extern int cansignal(struct proc *, kauth_cred_t, struct proc *, int);
 extern int proc_get_rusage(proc_t proc, int flavor, user_addr_t buffer, int is_zombie);
 
 #define CHECK_SAME_USER         TRUE
@@ -272,6 +276,10 @@ proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t b
 			return proc_can_use_foreground_hw(pid, buffer, buffersize, retval);
 		case PROC_INFO_CALL_PIDDYNKQUEUEINFO:
 			return proc_piddynkqueueinfo(pid, flavor, (kqueue_id_t)arg, buffer, buffersize, retval);
+#if !CONFIG_EMBEDDED
+		case PROC_INFO_CALL_UDATA_INFO:
+			return proc_udata_info(pid, flavor, buffer, buffersize, retval);
+#endif /* !CONFIG_EMBEDDED */
 		default:
 			return EINVAL;
 	}
@@ -2828,7 +2836,7 @@ proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t *retval) {
 
 		case PROC_DIRTYCONTROL_SET: {			
 			/* Check privileges; use cansignal() here since the process could be terminated */
-			if (!cansignal(current_proc(), my_cred, target_p, SIGKILL, 0)) {
+			if (!cansignal(current_proc(), my_cred, target_p, SIGKILL)) {
 				error = EPERM;
 				goto out;
 			}
@@ -2849,7 +2857,7 @@ proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t *retval) {
 		
 		case PROC_DIRTYCONTROL_CLEAR: {			
 			/* Check privileges; use cansignal() here since the process could be terminated */
-			if (!cansignal(current_proc(), my_cred, target_p, SIGKILL, 0)) {
+			if (!cansignal(current_proc(), my_cred, target_p, SIGKILL)) {
 				error = EPERM;
 				goto out;
 			}
@@ -2912,7 +2920,7 @@ proc_terminate(int pid, int32_t *retval)
 #endif
 
 	/* Check privileges; if SIGKILL can be issued, then SIGTERM is also OK */
-	if (!cansignal(current_proc(), uc, p, SIGKILL, 0)) {
+	if (!cansignal(current_proc(), uc, p, SIGKILL)) {
 		error = EPERM;
 		goto out;
 	}
@@ -3206,3 +3214,51 @@ out:
 
 	return err;
 }
+
+#if !CONFIG_EMBEDDED
+int
+proc_udata_info(int pid, int flavor, user_addr_t buffer, uint32_t bufsize, int32_t *retval)
+{
+	int err = 0;
+	proc_t p;
+
+	p = proc_find(pid);
+	if (p == PROC_NULL) {
+		return ESRCH;
+	}
+
+	/*
+	 * Only support calls against oneself for the moment.
+	 */
+	if (p->p_pid != proc_selfpid()) {
+		err = EACCES;
+		goto out;
+	}
+
+	if (bufsize != sizeof (p->p_user_data)) {
+		err = EINVAL;
+		goto out;
+	}
+
+	switch (flavor) {
+	case PROC_UDATA_INFO_SET:
+		err = copyin(buffer, &p->p_user_data, sizeof (p->p_user_data));
+		break;
+	case PROC_UDATA_INFO_GET:
+		err = copyout(&p->p_user_data, buffer, sizeof (p->p_user_data));
+		break;
+	default:
+		err = ENOTSUP;
+		break;
+	}
+
+out:
+	proc_rele(p);
+
+	if (err == 0) {
+		*retval = 0;
+	}
+
+	return err;
+}
+#endif /* !CONFIG_EMBEDDED */

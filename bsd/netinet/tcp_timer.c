@@ -842,6 +842,7 @@ tcp_pmtud_revert_segment_size(struct tcpcb *tp)
 	optlen = tp->t_maxopd - tp->t_maxseg;
 	tp->t_maxopd = tp->t_pmtud_saved_maxopd;
 	tp->t_maxseg = tp->t_maxopd - optlen;
+
 	/*
 	 * Reset the slow-start flight size as it
 	 * may depend on the new MSS

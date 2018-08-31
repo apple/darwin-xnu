@@ -700,7 +700,7 @@ ipc_kobject_notify(
 #ifdef IOKIT
 		case IKOT_IOKIT_OBJECT:
 		case IKOT_IOKIT_CONNECT:
-		case IKOT_IOKIT_SPARE:
+		case IKOT_IOKIT_IDENT:
 		{
                 return iokit_notify(request_header);
 		}

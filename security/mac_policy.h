@@ -3841,13 +3841,14 @@ typedef int mpo_system_check_auditon_t(
   @param cred Subject credential
 
   Determine whether the subject identified by the credential can perform
-  performance-related tasks using the CHUD system call.
+  performance-related tasks using the CHUD system call.  This interface is
+  deprecated.
 
   @return Return 0 if access is granted, otherwise an appropriate value for
   errno should be returned.
 */
 typedef int mpo_system_check_chud_t(
-	kauth_cred_t cred
+   kauth_cred_t cred
 );
 /**
   @brief Access control check for obtaining the host control port

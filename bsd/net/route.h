@@ -272,6 +272,12 @@ EVENTHANDLER_DECLARE(route_event, route_event_fn);
 	((_rt)->rt_tree_genid != NULL &&				\
 	*(_rt)->rt_tree_genid != (_rt)->rt_genid)
 
+enum {
+	ROUTE_OP_READ,
+	ROUTE_OP_WRITE,
+};
+
+extern int route_op_entitlement_check(struct socket *, kauth_cred_t, int, boolean_t);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #define	RTF_UP		0x1		/* route usable */
@@ -677,6 +683,5 @@ extern void route_event_init(struct route_event *p_route_ev, struct rtentry *rt,
 extern int route_event_walktree(struct radix_node *rn, void *arg);
 extern void route_event_enqueue_nwk_wq_entry(struct rtentry *, struct rtentry *,
     uint32_t, eventhandler_tag, boolean_t);
-
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NET_ROUTE_H_ */

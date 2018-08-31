@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -355,12 +355,17 @@ rip_output(
 	struct ip *ip;
 	struct inpcb *inp = sotoinpcb(so);
 	int flags = (so->so_options & SO_DONTROUTE) | IP_ALLOWBROADCAST;
-	struct ip_out_args ipoa =
-	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0, 0, 0 };
+	struct ip_out_args ipoa;
 	struct ip_moptions *imo;
 	int error = 0;
+
+	bzero(&ipoa, sizeof(ipoa));
+	ipoa.ipoa_boundif = IFSCOPE_NONE;
+	ipoa.ipoa_flags = IPOAF_SELECT_SRCIF;
+
 	int sotc = SO_TC_UNSPEC;
 	int netsvctype = _NET_SERVICE_TYPE_UNSPEC;
+
 
 	if (control != NULL) {
 		sotc = so_tc_from_control(control, &netsvctype);

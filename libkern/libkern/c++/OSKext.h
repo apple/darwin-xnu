@@ -86,7 +86,6 @@ void OSKextVLog(
 
 #ifdef XNU_KERNEL_PRIVATE
 void OSKextRemoveKextBootstrap(void);
-void IOSystemShutdownNotification(void);
 
 kern_return_t OSRuntimeInitializeCPP(
     kmod_info_t * kmodInfo,
@@ -183,7 +182,6 @@ class OSKext : public OSObject
         va_list          srcArgList);
 
     friend void OSKextRemoveKextBootstrap(void);
-    friend void IOSystemShutdownNotification(void);
     friend OSReturn OSKextUnloadKextWithLoadTag(uint32_t);
 
     friend kern_return_t kext_request(

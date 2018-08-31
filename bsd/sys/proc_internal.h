@@ -409,6 +409,10 @@ struct	proc {
 	_Atomic uint32_t  p_user_faults; /* count the number of user faults generated */
 
 	struct os_reason     *p_exit_reason;
+
+#if !CONFIG_EMBEDDED
+	uint64_t	p_user_data;			/* general-purpose storage for userland-provided data */
+#endif /* !CONFIG_EMBEDDED */
 };
 
 #define PGRPID_DEAD 0xdeaddead

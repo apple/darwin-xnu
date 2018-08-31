@@ -466,7 +466,7 @@ OSMetaClass::~OSMetaClass()
         if (myKext) {
             sAllClassesDict->removeObject(className);
         } else {
-            sAllClassesDict->removeObject((char *)className);
+            sAllClassesDict->removeObject((const char *)className);
         }
     }
     IOLockUnlock(sAllClassesLock);

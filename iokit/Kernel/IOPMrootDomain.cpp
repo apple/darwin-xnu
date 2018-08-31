@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -640,7 +640,7 @@ halt_log_enter(const char * what, const void * pc, uint64_t time)
 
     if (!gHaltLog) return;
     absolutetime_to_nanoseconds(time, &nano);
-    millis = nano / 1000000ULL;
+    millis = nano / NSEC_PER_MSEC;
     if (millis < 100) return;
 
     IOLockLock(gHaltLogLock);
@@ -659,9 +659,27 @@ halt_log_enter(const char * what, const void * pc, uint64_t time)
 
 extern  uint32_t                           gFSState;
 
-extern "C" void IOSystemShutdownNotification(void)
+extern "C" void IOSystemShutdownNotification(int stage)
 {
     uint64_t startTime;
+
+    if (kIOSystemShutdownNotificationStageRootUnmount == stage)
+    {
+#if !CONFIG_EMBEDDED
+        uint64_t nano, millis;
+        startTime = mach_absolute_time();
+        IOService::getPlatform()->waitQuiet(30 * NSEC_PER_SEC);
+        absolutetime_to_nanoseconds(mach_absolute_time() - startTime, &nano);
+        millis = nano / NSEC_PER_MSEC;
+        if (gHaltTimeMaxLog && (millis >= gHaltTimeMaxLog))
+        {
+            printf("waitQuiet() for unmount %qd ms\n", millis);
+        }
+#endif
+        return;
+    }
+
+    assert(kIOSystemShutdownNotificationStageProcessExit == stage);
 
     IOLockLock(gHaltLogLock);
     if (!gHaltLog)
@@ -888,7 +906,7 @@ static UInt32 computeDeltaTimeMS( const AbsoluteTime * startTime, AbsoluteTime *
         *elapsedTime = endTime;
     }
 
-    return (UInt32)(nano / 1000000ULL);
+    return (UInt32)(nano / NSEC_PER_MSEC);
 }
 
 //******************************************************************************
@@ -3255,6 +3273,40 @@ void IOPMrootDomain::handlePublishSleepWakeUUID( bool shouldPublish )
         queuedSleepWakeUUIDString->release();
         queuedSleepWakeUUIDString = NULL;
     }
+}
+
+//******************************************************************************
+// IOPMGetSleepWakeUUIDKey
+//
+// Return the truth value of gSleepWakeUUIDIsSet and optionally copy the key.
+// To get the full key -- a C string -- the buffer must large enough for
+// the end-of-string character.
+// The key is expected to be an UUID string
+//******************************************************************************
+
+extern "C" bool
+IOPMCopySleepWakeUUIDKey(char *buffer, size_t buf_len)
+{
+	if (!gSleepWakeUUIDIsSet) {
+		return (false);
+	}
+
+	if (buffer != NULL) {
+		OSString *string;
+
+		string = (OSString *)
+		    gRootDomain->copyProperty(kIOPMSleepWakeUUIDKey);
+
+		if (string == NULL) {
+			*buffer = '\0';
+		} else {
+			strlcpy(buffer, string->getCStringNoCopy(), buf_len);
+
+			string->release();
+		}
+	}
+
+	return (true);
 }
 
 //******************************************************************************
@@ -5644,7 +5696,7 @@ void IOPMrootDomain::overridePowerChangeForUIService(
                 absolutetime_to_nanoseconds(now, &nsec);
                 if (kIOLogPMRootDomain & gIOKitDebug)
                     MSG("Graphics suppressed %u ms\n",
-                        ((int)((nsec) / 1000000ULL)));
+                        ((int)((nsec) / NSEC_PER_MSEC)));
             }
             graphicsSuppressed = true;
         }
@@ -7528,7 +7580,7 @@ void IOPMrootDomain::requestFullWake( FullWakeReason reason )
         absolutetime_to_nanoseconds(now, &nsec);
         MSG("full wake %s (reason %u) %u ms\n",
             promotion ? "promotion" : "request",
-            fullWakeReason, ((int)((nsec) / 1000000ULL)));
+            fullWakeReason, ((int)((nsec) / NSEC_PER_MSEC)));
     }
 }
 
@@ -7685,7 +7737,7 @@ void IOPMrootDomain::pmStatsRecordEvent(
 
             if (stopping) {
                 delta = gPMStats.hibWrite.stop - gPMStats.hibWrite.start;
-                IOLog("PMStats: Hibernate write took %qd ms\n", delta/1000000ULL);
+                IOLog("PMStats: Hibernate write took %qd ms\n", delta/NSEC_PER_MSEC);
             }
             break;
         case kIOPMStatsHibernateImageRead:
@@ -7696,7 +7748,7 @@ void IOPMrootDomain::pmStatsRecordEvent(
 
             if (stopping) {
                 delta = gPMStats.hibRead.stop - gPMStats.hibRead.start;
-                IOLog("PMStats: Hibernate read took %qd ms\n", delta/1000000ULL);
+                IOLog("PMStats: Hibernate read took %qd ms\n", delta/NSEC_PER_MSEC);
 
                 publishPMStats = OSData::withBytes(&gPMStats, sizeof(gPMStats));
                 setProperty(kIOPMSleepStatisticsKey, publishPMStats);

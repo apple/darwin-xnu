@@ -1,9 +1,6 @@
 _IOGetBootKeyStoreData
 _IOGetAPFSKeyStoreData
 _IOSetAPFSKeyStoreData
-_SHA256_Final
-_SHA256_Init
-_SHA256_Update
 __ZN14IOPMrootDomain20claimSystemWakeEventEP9IOServicejPKcP8OSObject
 __ZN14IOPMrootDomain20restartWithStackshotEv
 __ZN22IOInterruptEventSource7warmCPUEy

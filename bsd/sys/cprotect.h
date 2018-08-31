@@ -158,6 +158,7 @@ typedef int backup_key_t(cp_cred_t access, const cp_wrapped_key_t wrapped_key_in
 cpx_t cpx_alloc(size_t key_size);
 void cpx_init(cpx_t, size_t key_len);
 void cpx_free(cpx_t);
+void cpx_writeprotect(cpx_t cpx);
 __attribute__((const)) size_t cpx_size(size_t key_size);
 __attribute__((pure)) bool cpx_is_sep_wrapped_key(const struct cpx *);
 void cpx_set_is_sep_wrapped_key(struct cpx *, bool);

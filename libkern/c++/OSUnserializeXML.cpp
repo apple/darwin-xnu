@@ -2774,7 +2774,7 @@ buildSymbol(parser_state_t *state, object_t *o)
 {
 	OSSymbol *symbol;
 
-	symbol = (OSSymbol *)OSSymbol::withCString(o->string);
+	symbol = const_cast<OSSymbol *>(OSSymbol::withCString(o->string));
 	if (o->idref >= 0) rememberObject(state, o->idref, symbol);
 
 	free(o->string);

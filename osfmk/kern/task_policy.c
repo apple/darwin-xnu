@@ -3709,16 +3709,13 @@ send_resource_violation(typeof(send_cpu_usage_violation) sendfunc,
 	                           HOST_RESOURCE_NOTIFY_PORT, &dstport);
 	if (kr)         goto finish;
 
-	/* TH_OPT_HONOR_QLIMIT causes ipc_kmsg_send() to respect the
-	 * queue limit.  It also unsets this flag, but this code also
-	 * unsets it for clarity and in case that code changes. */
-	curthread->options |= TH_OPT_HONOR_QLIMIT;
+	thread_set_honor_qlimit(curthread);
 	kr = sendfunc(dstport,
 	              procname, pid, proc_path, timestamp,
 		      linfo->lei_balance, linfo->lei_last_refill,
 	              linfo->lei_limit, linfo->lei_refill_period,
 	              flags);
-	curthread->options &= (~TH_OPT_HONOR_QLIMIT);
+	thread_clear_honor_qlimit(curthread);
 
 	ipc_port_release_send(dstport);
 

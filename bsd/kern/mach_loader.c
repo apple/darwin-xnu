@@ -83,10 +83,14 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_pager.h>
 #include <vm/vnode_pager.h>
-#include <vm/vm_protos.h> 
+#include <vm/vm_protos.h>
 #include <IOKit/IOReturn.h>	/* for kIOReturnNotPrivileged */
 
 #include <os/overflow.h>
+
+#if __x86_64__
+extern int bootarg_no32exec;    /* bsd_init.c */
+#endif
 
 /*
  * XXX vm/pmap.h should not treat these prototypes as MACH_KERNEL_PRIVATE
@@ -623,14 +627,20 @@ parse_machfile(
 	 *	Check to see if right machine type.
 	 */
 	if (((cpu_type_t)(header->cputype & ~CPU_ARCH_MASK) != (cpu_type() & ~CPU_ARCH_MASK)) ||
-	    !grade_binary(header->cputype, 
+	    !grade_binary(header->cputype,
 	    	header->cpusubtype & ~CPU_SUBTYPE_MASK))
 		return(LOAD_BADARCH);
-		
+
+#if __x86_64__
+	if (bootarg_no32exec && (header->cputype == CPU_TYPE_X86)) {
+		return(LOAD_BADARCH_X86);
+	}
+#endif
+
 	abi64 = ((header->cputype & CPU_ARCH_ABI64) == CPU_ARCH_ABI64);
-		
+
 	switch (header->filetype) {
-	
+
 	case MH_EXECUTE:
 		if (depth != 1) {
 			return (LOAD_FAILURE);

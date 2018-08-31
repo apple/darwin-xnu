@@ -154,8 +154,6 @@ unix_syscall(struct arm_saved_state * regs, thread_t thread_act,
 extern void
 mach_syscall(struct arm_saved_state*);
 
-volatile perfCallback    perfTrapHook = NULL;	/* Pointer to CHUD trap hook routine */
-
 #if CONFIG_DTRACE
 extern kern_return_t dtrace_user_probe(arm_saved_state_t* regs);
 extern boolean_t dtrace_tally_fault(user_addr_t);
@@ -498,7 +496,7 @@ sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far)
 		break;
 
 	case ESR_EC_BKPT_REG_MATCH_EL1:
-		if (FSC_DEBUG_FAULT == ISS_SSDE_FSC(esr)) {
+		if (!PE_i_can_has_debugger(NULL) && FSC_DEBUG_FAULT == ISS_SSDE_FSC(esr)) {
 			kprintf("Hardware Breakpoint Debug exception from kernel.  Hanging here (by design).\n");
 			for (;;);
 
@@ -523,7 +521,7 @@ sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far)
 		break;
 
 	case ESR_EC_SW_STEP_DEBUG_EL1:
-		if (FSC_DEBUG_FAULT == ISS_SSDE_FSC(esr)) {
+		if (!PE_i_can_has_debugger(NULL) && FSC_DEBUG_FAULT == ISS_SSDE_FSC(esr)) {
 			kprintf("Software Step Debug exception from kernel.  Hanging here (by design).\n");
 			for (;;);
 

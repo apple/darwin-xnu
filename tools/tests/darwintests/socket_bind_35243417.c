@@ -7,7 +7,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
-#include <TargetConditionals.h>
 
 static int
 sockv6_open(void)
@@ -97,20 +96,12 @@ T_DECL(socket_bind_35243417,
        T_META_ASROOT(false),
        T_META_CHECK_LEAKS(false))
 {
-#if TARGET_OS_WATCH
-	T_SKIP("socket_bind_35243417 can't run on watch.");
-#else
 	alloc_and_bind_ports(1, 65534, 10);
-#endif
 }
 
 T_DECL(socket_bind_35243417_root,
        "bind IPv6 only UDP socket, then bind IPv6 socket.",
        T_META_ASROOT(true))
 {
-#if TARGET_OS_WATCH
-	T_SKIP("socket_bind_35243417_root can't run on watch.");
-#else
 	alloc_and_bind_ports(1, 65534, 10);
-#endif
 }

@@ -2912,6 +2912,7 @@ redo_lookup:
 						(VME_OFFSET(next_entry->vme_prev) +
 						 (next_entry->vme_prev->vme_end 
 						  - next_entry->vme_prev->vme_start)));
+					next_entry->use_pmap = TRUE;
 						next_entry->needs_copy = FALSE;
 					} else {
 						panic("mach_make_memory_entry_64:"
@@ -3244,6 +3245,20 @@ task_wire(
 		map->wiring_required = TRUE;
 	else
 		map->wiring_required = FALSE;
+
+	return(KERN_SUCCESS);
+}
+
+kern_return_t
+vm_map_exec_lockdown(
+	vm_map_t 	map)
+{
+	if (map == VM_MAP_NULL)
+		return(KERN_INVALID_ARGUMENT);
+
+	vm_map_lock(map);
+	map->map_disallow_new_exec = TRUE;
+	vm_map_unlock(map);
 
 	return(KERN_SUCCESS);
 }

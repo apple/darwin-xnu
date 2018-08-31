@@ -95,17 +95,28 @@ void kasan_notify_stolen(vm_offset_t top);
 void kasan_load_kext(vm_offset_t base, vm_size_t size, const void *bundleid);
 void kasan_unload_kext(vm_offset_t base, vm_size_t size);
 
+void kasan_unpoison(void *base, vm_size_t size);
 void kasan_poison_range(vm_offset_t base, vm_size_t sz, uint8_t flags);
 void kasan_notify_address(vm_offset_t address, vm_size_t size);
 void kasan_notify_address_nopoison(vm_offset_t address, vm_size_t size);
 void kasan_unpoison_stack(vm_offset_t stack, vm_size_t size);
+void kasan_unpoison_curstack(bool whole_stack);
 void kasan_unpoison_fakestack(thread_t thread);
+
+void kasan_fakestack_suspend(void);
+void kasan_fakestack_resume(void);
 
 struct kasan_test;
 void __kasan_runtests(struct kasan_test *, int numtests);
 
+
+typedef int (*pmap_traverse_callback)(vm_map_offset_t start,
+                                      vm_map_offset_t end,
+                                      void *context);
+int kasan_traverse_mappings(pmap_traverse_callback, void *context);
+
 #if XNU_KERNEL_PRIVATE
-extern long shadow_pages_total;
+extern unsigned shadow_pages_total;
 
 #if __arm64__
 void kasan_notify_address_zero(vm_offset_t, vm_size_t);
@@ -132,7 +143,6 @@ __END_DECLS
 
 /* thread interface */
 struct kasan_thread_data {
-	int in_fakestack;
 	LIST_HEAD(fakestack_header_list, fakestack_header) fakestack_head;
 };
 struct kasan_thread_data *kasan_get_thread_data(thread_t);
@@ -147,36 +157,30 @@ void kasan_init_thread(struct kasan_thread_data *);
 #endif
 
 /*
- * Delimit areas of code that may do kasan-unsafe operations
- */
-__BEGIN_DECLS
-#if KASAN
-void kasan_unsafe_start(void);
-void kasan_unsafe_end(void);
-#else
-static inline void kasan_unsafe_start(void) {}
-static inline void kasan_unsafe_end(void) {}
-#endif
-__END_DECLS
-
-/*
  * ASAN callbacks - inserted by the compiler
  */
 
 extern int __asan_option_detect_stack_use_after_return;
 extern const uintptr_t __asan_shadow_memory_dynamic_address;
 
+#define KASAN_DECLARE_FOREACH_WIDTH(ret, func, ...) \
+	ret func ## 1(__VA_ARGS__); \
+	ret func ## 2(__VA_ARGS__); \
+	ret func ## 4(__VA_ARGS__); \
+	ret func ## 8(__VA_ARGS__); \
+	ret func ## 16(__VA_ARGS__); \
+
 __BEGIN_DECLS
-void __asan_report_load1(uptr p);
-void __asan_report_load2(uptr p);
-void __asan_report_load4(uptr p);
-void __asan_report_load8(uptr p);
-void __asan_report_load16(uptr p);
-void __asan_report_store1(uptr p);
-void __asan_report_store2(uptr p);
-void __asan_report_store4(uptr p);
-void __asan_report_store8(uptr p);
-void __asan_report_store16(uptr p);
+
+KASAN_DECLARE_FOREACH_WIDTH(void, __asan_report_load, uptr);
+KASAN_DECLARE_FOREACH_WIDTH(void, __asan_report_store, uptr);
+KASAN_DECLARE_FOREACH_WIDTH(void, __asan_store, uptr);
+KASAN_DECLARE_FOREACH_WIDTH(void, __asan_report_exp_load, uptr, int32_t);
+KASAN_DECLARE_FOREACH_WIDTH(void, __asan_report_exp_store, uptr, int32_t);
+KASAN_DECLARE_FOREACH_WIDTH(void, __asan_exp_load, uptr, int32_t);
+KASAN_DECLARE_FOREACH_WIDTH(void, __asan_exp_store, uptr, int32_t);
+KASAN_DECLARE_FOREACH_WIDTH(void, __asan_load, uptr);
+
 void __asan_report_load_n(uptr p, unsigned long size);
 void __asan_report_store_n(uptr p, unsigned long size);
 void __asan_handle_no_return(void);
@@ -208,21 +212,16 @@ void __asan_poison_stack_memory(uptr addr, size_t size);
 void __asan_unpoison_stack_memory(uptr addr, size_t size);
 void __asan_alloca_poison(uptr addr, uptr size);
 void __asan_allocas_unpoison(uptr top, uptr bottom);
-void __asan_load1(uptr);
-void __asan_load2(uptr);
-void __asan_load4(uptr);
-void __asan_load8(uptr);
-void __asan_load16(uptr);
 void __asan_loadN(uptr, size_t);
-void __asan_store1(uptr);
-void __asan_store2(uptr);
-void __asan_store4(uptr);
-void __asan_store8(uptr);
-void __asan_store16(uptr);
 void __asan_storeN(uptr, size_t);
 void __sanitizer_ptr_sub(uptr a, uptr b);
 void __sanitizer_ptr_cmp(uptr a, uptr b);
 void __sanitizer_annotate_contiguous_container(const void *beg, const void *end, const void *old_mid, const void *new_mid);
+
+void __asan_exp_loadN(uptr addr, size_t sz, int32_t e);
+void __asan_exp_storeN(uptr addr, size_t sz, int32_t e);
+void __asan_report_exp_load_n(uptr addr, unsigned long b, int32_t c);
+void __asan_report_exp_store_n(uptr addr, unsigned long b, int32_t c);
 
 void __asan_set_shadow_00(uptr, size_t);
 void __asan_set_shadow_f1(uptr, size_t);
@@ -232,10 +231,13 @@ void __asan_set_shadow_f5(uptr, size_t);
 void __asan_set_shadow_f8(uptr, size_t);
 
 void __asan_init_v5(void);
+void __asan_register_globals(uptr a, uptr b);
+void __asan_unregister_globals(uptr a, uptr b);
+void __asan_register_elf_globals(uptr a, uptr b, uptr c);
+void __asan_unregister_elf_globals(uptr a, uptr b, uptr c);
+
 void __asan_before_dynamic_init(uptr);
 void __asan_after_dynamic_init(void);
-void __asan_unregister_globals(uptr a, uptr b);
-void __asan_register_globals(uptr a, uptr b);
 void __asan_init(void);
 void __asan_unregister_image_globals(uptr);
 void __asan_register_image_globals(uptr);

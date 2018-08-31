@@ -1434,7 +1434,7 @@ sbappendstream_rcvdemux(struct socket *so, struct mbuf *m, uint32_t seqnum,
 		ret = sbappendmsgstream_rcv(&so->so_rcv, m, seqnum, unordered);
 	}
 #if MPTCP
-	else if (so->so_flags & SOF_MPTCP_TRUE) {
+	else if (so->so_flags & SOF_MP_SUBFLOW) {
 		ret = sbappendmptcpstream_rcv(&so->so_rcv, m);
 	}
 #endif /* MPTCP */
@@ -1457,8 +1457,8 @@ sbappendmptcpstream_rcv(struct sockbuf *sb, struct mbuf *m)
 
 	if (m == NULL || m_pktlen(m) == 0 || (sb->sb_flags & SB_DROP) ||
 	    (so->so_state & SS_CANTRCVMORE)) {
-		if (m && m_pktlen(m) == 0 &&
-		    (m->m_flags & M_PKTHDR) &&
+		if (m && (m->m_flags & M_PKTHDR) &&
+		    m_pktlen(m) == 0 &&
 		    (m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN)) {
 			mptcp_input(tptomptp(sototcpcb(so))->mpt_mpte, m);
 			return (1);

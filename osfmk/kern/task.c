@@ -288,7 +288,12 @@ extern int kevent_proc_copy_uptrs(void *proc, uint64_t *buf, int bufsize);
 extern void	proc_memstat_terminated(struct proc* p, boolean_t set);
 extern void	memorystatus_on_ledger_footprint_exceeded(int warning, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
 extern void	memorystatus_log_exception(const int max_footprint_mb, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
-extern boolean_t memorystatus_allowed_vm_map_fork(__unused task_t task);
+extern boolean_t memorystatus_allowed_vm_map_fork(task_t task);
+
+#if DEVELOPMENT || DEBUG
+extern void memorystatus_abort_vm_map_fork(task_t);
+#endif
+
 #endif /* CONFIG_MEMORYSTATUS */
 
 #endif /* MACH_BSD */
@@ -390,6 +395,30 @@ task_set_platform_binary(
 	task_unlock(task);
 }
 
+/*
+ * Set or clear per-task TF_CA_CLIENT_WI flag according to specified argument.
+ * Returns "false" if flag is already set, and "true" in other cases.
+ */
+bool
+task_set_ca_client_wi(
+		task_t task,
+		boolean_t set_or_clear)
+{
+	bool ret = true;
+	task_lock(task);
+	if (set_or_clear) {
+		/* Tasks can have only one CA_CLIENT work interval */
+		if (task->t_flags & TF_CA_CLIENT_WI)
+			ret = false;
+		else
+			task->t_flags |= TF_CA_CLIENT_WI;
+	} else {
+		task->t_flags &= ~TF_CA_CLIENT_WI;
+	}
+	task_unlock(task);
+	return ret;
+}
+
 void
 task_set_dyld_info(
     task_t task, 
@@ -475,7 +504,7 @@ task_clear_return_wait(task_t task)
 	task_unlock(task);
 }
 
-void
+void __attribute__((noreturn))
 task_wait_to_return(void)
 {
 	task_t task;
@@ -1105,7 +1134,7 @@ task_create_internal(
 
 	new_task->affinity_space = NULL;
 
-	new_task->t_chud = 0;
+	new_task->t_kpc = 0;
 
 	new_task->pidsuspended = FALSE;
 	new_task->frozen = FALSE;
@@ -1227,7 +1256,8 @@ task_create_internal(
 	assert(new_task->task_io_stats != NULL);
 	bzero(new_task->task_io_stats, sizeof(struct io_stat_info));
 
-	bzero(&(new_task->cpu_time_qos_stats), sizeof(struct _cpu_time_qos_stats));
+	bzero(&(new_task->cpu_time_eqos_stats), sizeof(new_task->cpu_time_eqos_stats));
+	bzero(&(new_task->cpu_time_rqos_stats), sizeof(new_task->cpu_time_rqos_stats));
 
 	bzero(&new_task->extmod_statistics, sizeof(new_task->extmod_statistics));
 
@@ -1318,6 +1348,10 @@ task_create_internal(
 	new_task->task_nonvolatile_objects = 0;
 	new_task->task_purgeable_disowning = FALSE;
 	new_task->task_purgeable_disowned = FALSE;
+	queue_init(&new_task->task_objq);
+	task_objq_lock_init(new_task);
+
+	new_task->task_region_footprint = FALSE;
 
 #if CONFIG_SECLUDED_MEMORY
 	new_task->task_can_use_secluded_mem = FALSE;
@@ -1372,7 +1406,8 @@ task_rollup_accounting_info(task_t to_task, task_t from_task)
 	to_task->purged_memory_critical = from_task->purged_memory_critical;
 	to_task->low_mem_privileged_listener = from_task->low_mem_privileged_listener;
 	*to_task->task_io_stats = *from_task->task_io_stats;
-	to_task->cpu_time_qos_stats = from_task->cpu_time_qos_stats;
+	to_task->cpu_time_eqos_stats = from_task->cpu_time_eqos_stats;
+	to_task->cpu_time_rqos_stats = from_task->cpu_time_rqos_stats;
 	to_task->task_timer_wakeups_bin_1 = from_task->task_timer_wakeups_bin_1;
 	to_task->task_timer_wakeups_bin_2 = from_task->task_timer_wakeups_bin_2;
 	to_task->task_gpu_ns = from_task->task_gpu_ns;
@@ -1567,6 +1602,8 @@ task_deallocate(
 		task->crash_label = NULL;
 	}
 #endif
+
+	assert(queue_empty(&task->task_objq));
 
 	zfree(task_zone, task);
 }
@@ -1997,12 +2034,15 @@ task_duplicate_map_and_threads(
 		 *
 		 * Skip it.
 		 */
+#if DEVELOPMENT || DEBUG
+		memorystatus_abort_vm_map_fork(task);
+#endif
 		task_resume_internal(task);
 		return KERN_FAILURE;
 	}
 
 	/* Check with VM if vm_map_fork is allowed for this task */
-	if (task_allowed_vm_map_fork(task)) {
+	if (memorystatus_allowed_vm_map_fork(task)) {
 
 		/* Setup new task's vmmap, switch from parent task's map to it COW map */
 		oldmap = new_task->map;
@@ -2104,16 +2144,6 @@ task_duplicate_map_and_threads(
 	}
 
 	return kr;
-}
-
-/*
- * Place holder function to be filled by VM to return
- * TRUE if vm_map_fork is allowed on the given task.
- */
-boolean_t
-task_allowed_vm_map_fork(task_t task __unused)
-{
-	return memorystatus_allowed_vm_map_fork(task);
 }
 
 #if CONFIG_SECLUDED_MEMORY
@@ -2330,11 +2360,11 @@ task_terminate_internal(
 	 */
 	thread_interrupt_level(interrupt_save);
 
-#if KPERF
+#if KPC
 	/* force the task to release all ctrs */
-	if (task->t_chud & TASK_KPC_FORCED_ALL_CTRS)
+	if (task->t_kpc & TASK_KPC_FORCED_ALL_CTRS)
 		kpc_force_all_ctrs(task, 0);
-#endif
+#endif /* KPC */
 
 #if CONFIG_COALITIONS
 	/*
@@ -4353,6 +4383,8 @@ task_info(
 		if (task->itk_space){
 			dbg_info->ipc_space_size = task->itk_space->is_table_size;
 		}
+		
+		dbg_info->suspend_count = task->suspend_count;
 
 		error = KERN_SUCCESS;
 		*task_info_count = TASK_DEBUG_INFO_INTERNAL_COUNT;
@@ -4564,6 +4596,52 @@ task_cpu_ptime(
     return 0;
 }
 
+
+/* This function updates the cpu time in the arrays for each
+ * effective and requested QoS class
+ */
+void
+task_update_cpu_time_qos_stats(
+	task_t	task,
+	uint64_t *eqos_stats,
+	uint64_t *rqos_stats)
+{
+	if (!eqos_stats && !rqos_stats) {
+		return;
+	}
+
+	task_lock(task);
+	thread_t thread;
+	queue_iterate(&task->threads, thread, thread_t, task_threads) {
+		if (thread->options & TH_OPT_IDLE_THREAD) {
+			continue;
+		}
+
+		thread_update_qos_cpu_time(thread);
+	}
+
+	if (eqos_stats) {
+		eqos_stats[THREAD_QOS_DEFAULT] += task->cpu_time_eqos_stats.cpu_time_qos_default;
+		eqos_stats[THREAD_QOS_MAINTENANCE] += task->cpu_time_eqos_stats.cpu_time_qos_maintenance;
+		eqos_stats[THREAD_QOS_BACKGROUND] += task->cpu_time_eqos_stats.cpu_time_qos_background;
+		eqos_stats[THREAD_QOS_UTILITY] += task->cpu_time_eqos_stats.cpu_time_qos_utility;
+		eqos_stats[THREAD_QOS_LEGACY] += task->cpu_time_eqos_stats.cpu_time_qos_legacy;
+		eqos_stats[THREAD_QOS_USER_INITIATED] += task->cpu_time_eqos_stats.cpu_time_qos_user_initiated;
+		eqos_stats[THREAD_QOS_USER_INTERACTIVE] += task->cpu_time_eqos_stats.cpu_time_qos_user_interactive;
+	}
+
+	if (rqos_stats) {
+		rqos_stats[THREAD_QOS_DEFAULT] += task->cpu_time_rqos_stats.cpu_time_qos_default;
+		rqos_stats[THREAD_QOS_MAINTENANCE] += task->cpu_time_rqos_stats.cpu_time_qos_maintenance;
+		rqos_stats[THREAD_QOS_BACKGROUND] += task->cpu_time_rqos_stats.cpu_time_qos_background;
+		rqos_stats[THREAD_QOS_UTILITY] += task->cpu_time_rqos_stats.cpu_time_qos_utility;
+		rqos_stats[THREAD_QOS_LEGACY] += task->cpu_time_rqos_stats.cpu_time_qos_legacy;
+		rqos_stats[THREAD_QOS_USER_INITIATED] += task->cpu_time_rqos_stats.cpu_time_qos_user_initiated;
+		rqos_stats[THREAD_QOS_USER_INTERACTIVE] += task->cpu_time_rqos_stats.cpu_time_qos_user_interactive;
+	}
+
+	task_unlock(task);
+}
 
 kern_return_t
 task_purgable_info(
@@ -6108,4 +6186,36 @@ void
 task_copy_fields_for_exec(task_t dst_task, task_t src_task)
 {
 	dst_task->vtimers = src_task->vtimers;
+}
+
+#if DEVELOPMENT || DEBUG
+int vm_region_footprint = 0;
+#endif /* DEVELOPMENT || DEBUG */
+
+boolean_t
+task_self_region_footprint(void)
+{
+#if DEVELOPMENT || DEBUG
+	if (vm_region_footprint) {
+		/* system-wide override */
+		return TRUE;
+	}
+#endif /* DEVELOPMENT || DEBUG */
+	return current_task()->task_region_footprint;
+}
+
+void
+task_self_region_footprint_set(
+	boolean_t newval)
+{
+	task_t	curtask;
+
+	curtask = current_task();
+	task_lock(curtask);
+	if (newval) {
+		curtask->task_region_footprint = TRUE;
+	} else {
+		curtask->task_region_footprint = FALSE;
+	}
+	task_unlock(curtask);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2014-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -811,7 +811,7 @@ netagent_handle_register_setopt(struct netagent_session *session, u_int8_t *payl
 	}
 
 	if (payload_length < sizeof(struct netagent)) {
-		NETAGENTLOG(LOG_ERR, "Register message size too small for agent: (%d < %d)",
+		NETAGENTLOG(LOG_ERR, "Register message size too small for agent: (%u < %lu)",
 					payload_length, sizeof(struct netagent));
 		response_error = EINVAL;
 		goto done;
@@ -825,7 +825,7 @@ netagent_handle_register_setopt(struct netagent_session *session, u_int8_t *payl
 	}
 
 	if (payload_length != (sizeof(struct netagent) + data_size)) {
-		NETAGENTLOG(LOG_ERR, "Mismatch between data size and payload length (%u != %u)", (sizeof(struct netagent) + data_size), payload_length);
+		NETAGENTLOG(LOG_ERR, "Mismatch between data size and payload length (%lu != %u)", (sizeof(struct netagent) + data_size), payload_length);
 		response_error = EINVAL;
 		goto done;
     }
@@ -877,7 +877,7 @@ netagent_handle_register_message(struct netagent_session *session, u_int32_t mes
 	}
 
 	if (payload_length < sizeof(struct netagent)) {
-		NETAGENTLOG(LOG_ERR, "Register message size too small for agent: (%d < %d)",
+		NETAGENTLOG(LOG_ERR, "Register message size too small for agent: (%u < %lu)",
 					payload_length, sizeof(struct netagent));
 		response_error = NETAGENT_MESSAGE_ERROR_INVALID_DATA;
 		goto fail;
@@ -1158,7 +1158,7 @@ netagent_handle_update_setopt(struct netagent_session *session, u_int8_t *payloa
 	}
 
 	if (payload_length < sizeof(struct netagent)) {
-		NETAGENTLOG(LOG_ERR, "Update message size too small for agent: (%d < %d)",
+		NETAGENTLOG(LOG_ERR, "Update message size too small for agent: (%u < %lu)",
 					payload_length, sizeof(struct netagent));
 		response_error = EINVAL;
 		goto done;
@@ -1172,7 +1172,7 @@ netagent_handle_update_setopt(struct netagent_session *session, u_int8_t *payloa
 	}
 
 	if (payload_length != (sizeof(struct netagent) + data_size)) {
-		NETAGENTLOG(LOG_ERR, "Mismatch between data size and payload length (%u != %u)", (sizeof(struct netagent) + data_size), payload_length);
+		NETAGENTLOG(LOG_ERR, "Mismatch between data size and payload length (%lu != %u)", (sizeof(struct netagent) + data_size), payload_length);
 		response_error = EINVAL;
 		goto done;
     }
@@ -1225,7 +1225,7 @@ netagent_handle_update_message(struct netagent_session *session, u_int32_t messa
 	}
 
 	if (payload_length < sizeof(struct netagent)) {
-		NETAGENTLOG(LOG_ERR, "Update message size too small for agent: (%d < %d)",
+		NETAGENTLOG(LOG_ERR, "Update message size too small for agent: (%u < %lu)",
 					payload_length, sizeof(struct netagent));
 		response_error = NETAGENT_MESSAGE_ERROR_INVALID_DATA;
 		goto fail;
@@ -1526,7 +1526,7 @@ netagent_handle_use_count_setopt(struct netagent_session *session, u_int8_t *pay
 	}
 
 	if (payload_length != sizeof(use_count)) {
-		NETAGENTLOG(LOG_ERR, "Payload length is invalid (%u)", payload_length);
+		NETAGENTLOG(LOG_ERR, "Payload length is invalid (%lu)", payload_length);
 		response_error = EINVAL;
 		goto done;
 	}
@@ -1569,7 +1569,7 @@ netagent_handle_use_count_getopt(struct netagent_session *session, u_int8_t *buf
 	}
 
 	if (*buffer_length != sizeof(use_count)) {
-		NETAGENTLOG(LOG_ERR, "Buffer length is invalid (%u)", buffer_length);
+		NETAGENTLOG(LOG_ERR, "Buffer length is invalid (%lu)", *buffer_length);
 		response_error = EINVAL;
 		goto done;
 	}
@@ -1985,6 +1985,11 @@ netagent_client_message_with_params(uuid_t agent_uuid,
 		}
 	}
 	NETAGENTLOG(((error && error != ENOENT) ? LOG_ERR : LOG_INFO), "Send message %d for client (error %d)", message_type, error);
+	if (message_type == NETAGENT_MESSAGE_TYPE_CLIENT_TRIGGER) {
+		uuid_string_t uuid_str;
+		uuid_unparse(agent_uuid, uuid_str);
+		NETAGENTLOG(LOG_NOTICE, "Triggered network agent %s, error = %d", uuid_str, error);
+	}
 done:
 	if (should_unlock) {
 		lck_rw_done(&netagent_lock);
@@ -2065,7 +2070,7 @@ netagent_trigger(struct proc *p, struct netagent_trigger_args *uap, int32_t *ret
 
 	if (uap->agent_uuid) {
 		if (uap->agent_uuidlen != sizeof(uuid_t)) {
-			NETAGENTLOG(LOG_ERR, "Incorrect length (got %d, expected %d)",
+			NETAGENTLOG(LOG_ERR, "Incorrect length (got %llu, expected %lu)",
 						uap->agent_uuidlen, sizeof(uuid_t));
 			return (ERANGE);
 		}

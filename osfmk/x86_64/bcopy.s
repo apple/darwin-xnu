@@ -63,7 +63,7 @@
 /*
  * Note: memcpy does not support overlapping copies
 	*/
-	/* TODO: movsb */
+
 ENTRY(memcpy)
 	movq	%rdi, %rax			/* return destination */
 	movq	%rdx,%rcx

@@ -720,7 +720,7 @@ void ipc_kmsg_trace_send(ipc_kmsg_t kmsg,
 	case IKOT_MASTER_DEVICE:
 	case IKOT_IOKIT_CONNECT:
 	case IKOT_IOKIT_OBJECT:
-	case IKOT_IOKIT_SPARE:
+	case IKOT_IOKIT_IDENT:
 		msg_flags |= KMSG_TRACE_FLAG_IOKIT;
 		break;
 	default:

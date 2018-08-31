@@ -238,9 +238,19 @@ endif # CURRENT_BUILD_CONFIG
 
 endif # all other RC_ProjectName
 
-installhdrs_libkdd install_libkdd:
+installapi_libkdd installhdrs_libkdd install_libkdd:
 	cd libkdd; \
 		xcodebuild -target libkdd $(subst _libkdd,,$@)	\
+			"SRCROOT=$(SRCROOT)/libkdd"		\
+			"OBJROOT=$(OBJROOT)"			\
+			"SYMROOT=$(SYMROOT)"			\
+			"DSTROOT=$(DSTROOT)"			\
+			"SDKROOT=$(SDKROOT)"
+
+
+installapi_libkdd_host installhdrs_libkdd_host install_libkdd_host:
+	cd libkdd; \
+		xcodebuild -target kdd.framework $(subst _libkdd_host,,$@)	\
 			"SRCROOT=$(SRCROOT)/libkdd"		\
 			"OBJROOT=$(OBJROOT)"			\
 			"SYMROOT=$(SYMROOT)"			\

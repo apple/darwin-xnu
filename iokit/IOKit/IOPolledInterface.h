@@ -91,7 +91,9 @@ public:
 
     virtual IOReturn checkForWork(void) = 0;
 
-    OSMetaClassDeclareReservedUnused(IOPolledInterface, 0);
+    virtual IOReturn setEncryptionKey(const uint8_t * key, size_t keySize);
+
+    OSMetaClassDeclareReservedUsed(IOPolledInterface, 0);
     OSMetaClassDeclareReservedUnused(IOPolledInterface, 1);
     OSMetaClassDeclareReservedUnused(IOPolledInterface, 2);
     OSMetaClassDeclareReservedUnused(IOPolledInterface, 3);
@@ -177,7 +179,7 @@ IOReturn IOPolledFileOpen(const char * filename,
 			  void * write_file_addr, size_t write_file_len,
 			  IOPolledFileIOVars ** fileVars,
 			  OSData ** imagePath,
-			  uint8_t * volumeCryptKey, size_t keySize);
+			  uint8_t * volumeCryptKey, size_t * keySize);
 
 IOReturn IOPolledFileClose(IOPolledFileIOVars ** pVars,
 			   off_t write_offset, void * addr, size_t write_length,
@@ -209,6 +211,9 @@ extern __C IOReturn IOPolledFileFlush(IOPolledFileIOVars * vars);
 extern __C IOReturn IOPolledFilePollersOpen(IOPolledFileIOVars * vars, uint32_t state, bool abortable);
 
 extern __C IOReturn IOPolledFilePollersClose(IOPolledFileIOVars * vars, uint32_t state);
+
+extern __C IOReturn IOPolledFilePollersSetEncryptionKey(IOPolledFileIOVars * vars,
+				    const uint8_t * key, size_t keySize);
 
 extern __C IOPolledFileIOVars * gCoreFileVars;
 

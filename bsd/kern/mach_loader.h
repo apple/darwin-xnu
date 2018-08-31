@@ -63,7 +63,7 @@ typedef struct _load_result {
 
 	mach_vm_address_t	all_image_info_addr;
 	mach_vm_size_t		all_image_info_size;
-    
+
 	int			thread_count;
 	unsigned int
 		/* boolean_t */	unixproc	:1,
@@ -104,5 +104,7 @@ load_return_t load_machfile(
 #define	LOAD_IOERROR		9	/* IO error */
 #define	LOAD_DECRYPTFAIL	10	/* FP decrypt failure */
 #define	LOAD_BADMACHO_UPX	11	/* malformed mach-o file */
+#define	LOAD_BADARCH_X86	12	/* -no32exec boot-arg + attempted load
+					   of 32bit x86 binary */
 
 #endif	/* _BSD_KERN_MACH_LOADER_H_ */

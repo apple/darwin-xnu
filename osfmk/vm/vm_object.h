@@ -385,6 +385,7 @@ struct vm_object {
 #endif	/* VM_PIP_DEBUG  */
 
         queue_chain_t		objq;      /* object queue - currently used for purgable queues */
+	queue_chain_t		task_objq; /* objects owned by task - protected by task lock */
 
 #if DEBUG
 	void *purgeable_owner_bt[16];
@@ -671,7 +672,7 @@ __private_extern__ void	vm_object_reuse_pages(
 	vm_object_offset_t	end_offset,
 	boolean_t		allow_partial_reuse);
 
-__private_extern__ void		vm_object_purge(
+__private_extern__ uint64_t	vm_object_purge(
 	                               vm_object_t		object,
 				       int			flags);
 

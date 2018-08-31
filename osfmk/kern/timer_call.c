@@ -108,12 +108,13 @@ lck_grp_attr_t          timer_longterm_lck_grp_attr;
 #endif
 
 /*
- * The scan limit throttles processing of the longterm queue.
+ * The scan_limit throttles processing of the longterm queue.
  * If the scan time exceeds this limit, we terminate, unlock 
- * and repeat after this same interval. This prevents unbounded holding of
+ * and defer for scan_interval. This prevents unbounded holding of
  * timer queue locks with interrupts masked.
  */
-#define TIMER_LONGTERM_SCAN_LIMIT	(1ULL * NSEC_PER_MSEC)	/* 1 msec */
+#define TIMER_LONGTERM_SCAN_LIMIT	(100ULL * NSEC_PER_USEC)	/* 100 us */
+#define TIMER_LONGTERM_SCAN_INTERVAL	(100ULL * NSEC_PER_USEC)	/* 100 us */
 /* Sentinel for "scan limit exceeded": */
 #define TIMER_LONGTERM_SCAN_AGAIN	0
 
@@ -141,11 +142,13 @@ typedef struct {
 	uint64_t	scan_time;	/* last time the list was scanned */
 	threshold_t	threshold;	/* longterm timer threshold */
 	uint64_t	scan_limit;	/* maximum scan time */
+	uint64_t	scan_interval;	/* interval between LT "escalation" scans */
 	uint64_t	scan_pauses;	/* num scans exceeding time limit */
 } timer_longterm_t;
 
 timer_longterm_t		timer_longterm = {
 					.scan_limit = TIMER_LONGTERM_SCAN_LIMIT,
+					.scan_interval = TIMER_LONGTERM_SCAN_INTERVAL,
 				};
 
 static mpqueue_head_t		*timer_longterm_queue = NULL;
@@ -1492,7 +1495,7 @@ timer_longterm_update_locked(timer_longterm_t *tlp)
 	}
 	
 	/* Throttle next scan time */
-	uint64_t scan_clamp = mach_absolute_time() + tlp->scan_limit;
+	uint64_t scan_clamp = mach_absolute_time() + tlp->scan_interval;
 	if (tlp->threshold.deadline_set < scan_clamp)
 		tlp->threshold.deadline_set = scan_clamp;
 
@@ -1577,7 +1580,7 @@ timer_longterm_init(void)
 enum {
 	THRESHOLD, QCOUNT,
 	ENQUEUES, DEQUEUES, ESCALATES, SCANS, PREEMPTS,
-	LATENCY, LATENCY_MIN, LATENCY_MAX, SCAN_LIMIT, PAUSES
+	LATENCY, LATENCY_MIN, LATENCY_MAX, SCAN_LIMIT, SCAN_INTERVAL, PAUSES
 };
 uint64_t
 timer_sysctl_get(int oid)
@@ -1608,6 +1611,8 @@ timer_sysctl_get(int oid)
 		return tlp->threshold.latency_max;
 	case SCAN_LIMIT:
 		return tlp->scan_limit;
+	case SCAN_INTERVAL:
+		return tlp->scan_interval;
 	case PAUSES:
 		return tlp->scan_pauses;
 	default:
@@ -1744,6 +1749,9 @@ timer_sysctl_set(int oid, uint64_t value)
 		return KERN_SUCCESS;
 	case SCAN_LIMIT:
 		timer_longterm.scan_limit = value;
+		return KERN_SUCCESS;
+	case SCAN_INTERVAL:
+		timer_longterm.scan_interval = value;
 		return KERN_SUCCESS;
 	default:
 		return KERN_INVALID_ARGUMENT;

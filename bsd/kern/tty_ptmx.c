@@ -823,6 +823,7 @@ ptmx_kqops_common(struct knote *kn, struct ptmx_ioctl *pti, struct tty *tp)
 
 	/* disconnects should force a wakeup (EOF) */
 	if (!(tp->t_state & TS_CONNECTED)) {
+		kn->kn_flags |= EV_EOF;
 		return 1;
 	}
 

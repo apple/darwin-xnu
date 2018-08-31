@@ -684,7 +684,7 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 	if (write_trace_on_panic && kdebug_enable) {
 		if (get_preemption_level() == 0 && !ml_at_interrupt_context()) {
 			ml_set_interrupts_enabled(TRUE);
-			KDBG(TRACE_PANIC);
+			KDBG_RELEASE(TRACE_PANIC);
 			kdbg_dump_trace_to_file(KDBG_TRACE_PANIC_FILENAME);
 		}
 	}

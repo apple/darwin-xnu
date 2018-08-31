@@ -100,9 +100,7 @@ kern_collectth_state(thread_t thread, void *buffer, uint64_t size, void ** iter)
 
 		/* Locate and obtain the non-volatile register context
 		 * for this kernel thread. This should ideally be
-		 * encapsulated in machine_thread_get_kern_state()
-		 * but that routine appears to have been co-opted
-		 * by CHUD to obtain pre-interrupt state.
+		 * encapsulated in machine_thread_get_kern_state().
 		 */
 		if (thread_flavor_array[i].flavor == x86_THREAD_STATE64) {
 			x86_thread_state64_t *tstate = (x86_thread_state64_t *) ((uintptr_t)buffer + hoffset);

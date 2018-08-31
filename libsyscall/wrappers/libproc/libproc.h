@@ -145,6 +145,8 @@ int proc_piddynkqueueinfo(int pid, int flavor, kqueue_id_t kq_id, void *buffer,
 		int buffersize);
 #endif /* PRIVATE */
 
+int proc_udata_info(int pid, int flavor, void *buffer, int buffersize);
+
 __END_DECLS
 
 #endif /*_LIBPROC_H_ */

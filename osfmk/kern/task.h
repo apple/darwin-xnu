@@ -256,6 +256,7 @@ struct task {
 #define TF_LRETURNWAIT          0x00000100                              /* task is waiting for fork/posix_spawn/exec to complete */
 #define TF_LRETURNWAITER        0x00000200                              /* task is waiting for TF_LRETURNWAIT to get cleared */
 #define TF_PLATFORM             0x00000400                              /* task is a platform binary */
+#define TF_CA_CLIENT_WI         0x00000800                              /* task has CA_CLIENT work interval */
 
 #define task_has_64BitAddr(task)	\
 	 (((task)->t_flags & TF_64B_ADDR) != 0)
@@ -301,12 +302,10 @@ struct task {
 	mach_vm_address_t	all_image_info_addr; /* dyld __all_image_info     */
 	mach_vm_size_t		all_image_info_size; /* section location and size */
 
-#if KPERF
-#define TASK_PMC_FLAG			0x1	/* Bit in "t_chud" signifying PMC interest */
-#define TASK_KPC_FORCED_ALL_CTRS	0x2	/* Bit in "t_chud" signifying KPC forced all counters */
-
-	uint32_t t_chud;		/* CHUD flags, used for Shark */
-#endif
+#if KPC
+#define TASK_KPC_FORCED_ALL_CTRS	0x2	/* Bit in "t_kpc" signifying this task forced all counters */
+	uint32_t t_kpc; /* kpc flags */
+#endif /* KPC */
 
 	boolean_t pidsuspended; /* pid_suspend called; no threads can execute */
 	boolean_t frozen;       /* frozen; private resident pages committed to swap */
@@ -371,7 +370,8 @@ struct task {
 	/* 
 	 * The cpu_time_qos_stats fields are protected by the task lock
 	 */
-	struct _cpu_time_qos_stats 	cpu_time_qos_stats;
+	struct _cpu_time_qos_stats 	cpu_time_eqos_stats;
+	struct _cpu_time_qos_stats 	cpu_time_rqos_stats;
 
 	/* Statistics accumulated for terminated threads from this task */
 	uint32_t	task_timer_wakeups_bin_1;
@@ -390,6 +390,10 @@ struct task {
 	int		task_nonvolatile_objects;
 	boolean_t	task_purgeable_disowning;
 	boolean_t	task_purgeable_disowned;
+	queue_head_t	task_objq;
+	decl_lck_mtx_data(,task_objq_lock) /* protects "task_objq" */
+
+	boolean_t	task_region_footprint;
 
 	/*
 	 * A task's coalition set is "adopted" in task_create_internal
@@ -425,6 +429,12 @@ struct task {
 #define	task_lock_assert_owned(task)	LCK_MTX_ASSERT(&(task)->lock, LCK_MTX_ASSERT_OWNED)
 #define task_lock_try(task)	 	lck_mtx_try_lock(&(task)->lock)
 #define task_unlock(task)	 	lck_mtx_unlock(&(task)->lock)
+
+#define	task_objq_lock_init(task)	lck_mtx_init(&(task)->task_objq_lock, &vm_object_lck_grp, &vm_object_lck_attr)
+#define task_objq_lock(task)		lck_mtx_lock(&(task)->task_objq_lock)
+#define	task_objq_lock_assert_owned(task)	LCK_MTX_ASSERT(&(task)->task_objq_lock, LCK_MTX_ASSERT_OWNED)
+#define task_objq_lock_try(task)	lck_mtx_try_lock(&(task)->task_objq_lock)
+#define task_objq_unlock(task)	 	lck_mtx_unlock(&(task)->task_objq_lock)
 
 #define	itk_lock_init(task)	lck_mtx_init(&(task)->itk_lock_data, &ipc_lck_grp, &ipc_lck_attr)
 #define	itk_lock_destroy(task)	lck_mtx_destroy(&(task)->itk_lock_data, &ipc_lck_grp)
@@ -467,7 +477,6 @@ extern void		init_task_ledgers(void);
 
 extern lck_attr_t      task_lck_attr;
 extern lck_grp_t       task_lck_grp;
-
 
 #else	/* MACH_KERNEL_PRIVATE */
 
@@ -592,6 +601,10 @@ extern uint64_t		task_energy(
 
 extern uint64_t		task_cpu_ptime(
 							task_t	 task);
+extern void		task_update_cpu_time_qos_stats(
+							task_t	 task,
+							uint64_t *eqos_stats,
+							uint64_t *rqos_stats);
 
 extern void		task_vtimer_set(
 					task_t		task,
@@ -617,6 +630,9 @@ extern void		task_set_64bit(
 extern void 	task_set_platform_binary(
 					task_t task,
 					boolean_t is_platform);
+extern bool	task_set_ca_client_wi(
+					task_t task,
+					boolean_t ca_client_wi);
 
 extern void		task_backing_store_privileged(
 					task_t		task);
@@ -752,7 +768,7 @@ extern void task_set_32bit_log_flag(task_t task);
 extern boolean_t task_is_active(task_t task);
 extern boolean_t task_is_halting(task_t task);
 extern void task_clear_return_wait(task_t task);
-extern void task_wait_to_return(void);
+extern void task_wait_to_return(void) __attribute__((noreturn));
 extern event_t task_get_return_wait_event(task_t task);
 
 extern void task_atm_reset(task_t task);
@@ -833,6 +849,10 @@ extern void		task_inspect_deallocate(
 
 extern void		task_suspension_token_deallocate(
 					task_suspension_token_t	token);
+
+extern boolean_t task_self_region_footprint(void);
+extern void task_self_region_footprint_set(boolean_t newval);
+
 __END_DECLS
 
 #endif	/* _KERN_TASK_H_ */

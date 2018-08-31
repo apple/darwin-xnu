@@ -614,7 +614,9 @@ enum {
 #define kIOPMPSAdapterDetailsPMUConfigurationKey    "PMUConfiguration"
 #define kIOPMPSAdapterDetailsVoltage            "AdapterVoltage"
 #define kIOPMPSAdapterDetailsSourceIDKey		    "SourceID"
+#define kIOPMPSAdapterDetailsErrorFlagsKey		    "ErrorFlags"
 #define kIOPMPSAdapterDetailsSharedSourceKey		"SharedSource"
+#define kIOPMPSAdapterDetailsCloakedKey		    "CloakedSource"
 
 // values for kIOPSPowerAdapterFamilyKey
 enum {
@@ -634,6 +636,14 @@ enum {
     kIOPSFamilyCodeExternal2     = iokit_family_err(sub_iokit_pmu, 2),
     kIOPSFamilyCodeExternal3     = iokit_family_err(sub_iokit_pmu, 3),
     kIOPSFamilyCodeExternal4     = iokit_family_err(sub_iokit_pmu, 4),
+};
+
+// values for kIOPMPSAdapterDetailsErrorFlagsKey
+enum {
+    kIOPSAdapterErrorFlagNoErrors                     = 0,
+    kIOPSAdapterErrorFlagInsufficientAvailablePower   = (1 << 1),
+    kIOPSAdapterErrorFlagForeignObjectDetected        = (1 << 2),
+    kIOPSAdapterErrorFlagDeviceNeedsToBeRepositioned  = (1 << 3),
 };
 
 // Battery's time remaining estimate is invalid this long (seconds) after a wake

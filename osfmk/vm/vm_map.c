@@ -220,20 +220,6 @@ static boolean_t	vm_map_fork_copy(
 	vm_map_t	new_map,
 	int		vm_map_copyin_flags);
 
-void		vm_map_region_top_walk(
-	vm_map_entry_t		   entry,
-	vm_region_top_info_t       top);
-
-void		vm_map_region_walk(
-	vm_map_t		   map,
-	vm_map_offset_t		   va,
-	vm_map_entry_t		   entry,
-	vm_object_offset_t	   offset,
-	vm_object_size_t	   range,
-	vm_region_extended_info_t  extended,
-	boolean_t		   look_for_pages,
-	mach_msg_type_number_t count);
-
 static kern_return_t	vm_map_wire_nested(
 	vm_map_t		   map,
 	vm_map_offset_t		   start,
@@ -1052,6 +1038,7 @@ vm_map_create(
 	result->disable_vmentry_reuse = FALSE;
 	result->map_disallow_data_exec = FALSE;
 	result->is_nested_map = FALSE;
+	result->map_disallow_new_exec = FALSE;
 	result->highest_entry_end = 0;
 	result->first_free = vm_map_to_entry(result);
 	result->hint = vm_map_to_entry(result);
@@ -2015,8 +2002,19 @@ vm_map_enter(
 	kern_return_t		kr;
 	boolean_t		clear_map_aligned = FALSE;
 	vm_map_entry_t		hole_entry;
+	vm_map_size_t		chunk_size = 0;
 
 	assertf(vmk_flags.__vmkf_unused == 0, "vmk_flags unused=0x%x\n", vmk_flags.__vmkf_unused);
+
+	if (flags & VM_FLAGS_4GB_CHUNK) {
+#if defined(__LP64__)
+		chunk_size = (4ULL * 1024 * 1024 * 1024); /* max. 4GB chunks for the new allocation */
+#else /* __LP64__ */
+		chunk_size = ANON_CHUNK_SIZE;
+#endif /* __LP64__ */
+	} else {
+		chunk_size = ANON_CHUNK_SIZE;
+	}
 
 	if (superpage_size) {
 		switch (superpage_size) {
@@ -2054,6 +2052,16 @@ vm_map_enter(
 		}
 	}
 #endif /* CONFIG_EMBEDDED */
+
+	/*
+	 * If the task has requested executable lockdown,
+	 * deny any new executable mapping.
+	 */
+	if (map->map_disallow_new_exec == TRUE) {
+		if (cur_protection & VM_PROT_EXECUTE) {
+			return KERN_PROTECTION_FAILURE;
+		}
+	}
 
 	if (resilient_codesign || resilient_media) {
 		if ((cur_protection & (VM_PROT_WRITE | VM_PROT_EXECUTE)) ||
@@ -2655,25 +2663,22 @@ StartAgain: ;
 		tmp2_end = tmp2_start + step;
 		/*
 		 *	Create a new entry
-		 *	LP64todo - for now, we can only allocate 4GB internal objects
-		 *	because the default pager can't page bigger ones.  Remove this
-		 *	when it can.
 		 *
 		 * XXX FBDP
 		 * The reserved "page zero" in each process's address space can
-		 * be arbitrarily large.  Splitting it into separate 4GB objects and
+		 * be arbitrarily large.  Splitting it into separate objects and
 		 * therefore different VM map entries serves no purpose and just
 		 * slows down operations on the VM map, so let's not split the
-		 * allocation into 4GB chunks if the max protection is NONE.  That
+		 * allocation into chunks if the max protection is NONE.  That
 		 * memory should never be accessible, so it will never get to the
 		 * default pager.
 		 */
 		tmp_start = tmp2_start;
 		if (object == VM_OBJECT_NULL &&
-		    size > (vm_map_size_t)ANON_CHUNK_SIZE &&
+		    size > chunk_size &&
 		    max_protection != VM_PROT_NONE &&
 		    superpage_size == 0)
-			tmp_end = tmp_start + (vm_map_size_t)ANON_CHUNK_SIZE;
+			tmp_end = tmp_start + chunk_size;
 		else
 			tmp_end = tmp2_end;
 		do {
@@ -2831,8 +2836,8 @@ StartAgain: ;
 			}
 		} while (tmp_end != tmp2_end &&
 			 (tmp_start = tmp_end) &&
-			 (tmp_end = (tmp2_end - tmp_end > (vm_map_size_t)ANON_CHUNK_SIZE) ?
-			  tmp_end + (vm_map_size_t)ANON_CHUNK_SIZE : tmp2_end));
+			 (tmp_end = (tmp2_end - tmp_end > chunk_size) ?
+			  tmp_end + chunk_size : tmp2_end));
 	}
 
 	new_mapping_established = TRUE;
@@ -3095,6 +3100,16 @@ vm_map_enter_fourk(
 		}
 	}
 #endif /* CONFIG_EMBEDDED */
+
+	/*
+	 * If the task has requested executable lockdown,
+	 * deny any new executable mapping.
+	 */
+	if (map->map_disallow_new_exec == TRUE) {
+		if (cur_protection & VM_PROT_EXECUTE) {
+			return KERN_PROTECTION_FAILURE;
+		}
+	}
 
 	if (is_submap) {
 		return KERN_NOT_SUPPORTED;
@@ -5494,6 +5509,20 @@ vm_map_protect(
 		}
 #endif
 
+		/*
+		 * If the task has requested executable lockdown,
+		 * deny both:
+		 * - adding executable protections OR
+		 * - adding write protections to an existing executable mapping.
+		 */
+		if (map->map_disallow_new_exec == TRUE) {
+			if ((new_prot & VM_PROT_EXECUTE) ||
+			    ((current->protection & VM_PROT_EXECUTE) && (new_prot & VM_PROT_WRITE))) {
+				vm_map_unlock(map);
+				return(KERN_PROTECTION_FAILURE);
+			}
+		}
+
 		prev = current->vme_end;
 		current = current->vme_next;
 	}
@@ -7634,6 +7663,7 @@ vm_map_delete(
 						     (entry->vme_end -
 						      entry->vme_start));
 			entry->iokit_acct = FALSE;
+			entry->use_pmap = FALSE;
 		}
 
 		/*
@@ -8388,6 +8418,8 @@ start_overwrite:
 					vm_map_clip_start(
 						dst_map, entry, sub_start);
 					assert(!entry->use_pmap);
+					assert(!entry->iokit_acct);
+					entry->use_pmap = TRUE;
 					entry->is_sub_map = FALSE;
 					vm_map_deallocate(
 						VME_SUBMAP(entry));
@@ -9460,6 +9492,13 @@ vm_map_copy_overwrite_aligned(
 			   	}
 			}
 
+			if (entry->iokit_acct) {
+				/* keep using iokit accounting */
+				entry->use_pmap = FALSE;
+			} else {
+				/* use pmap accounting */
+				entry->use_pmap = TRUE;
+			}
 			entry->is_sub_map = FALSE;
 			VME_OBJECT_SET(entry, VME_OBJECT(copy_entry));
 			object = VME_OBJECT(entry);
@@ -10726,6 +10765,19 @@ vm_map_copyin_internal(
 		if (new_entry->is_sub_map) {
 			/* clr address space specifics */
 			new_entry->use_pmap = FALSE;
+		} else {
+			/*
+			 * We're dealing with a copy-on-write operation,
+			 * so the resulting mapping should not inherit the
+			 * original mapping's accounting settings.
+			 * "iokit_acct" should have been cleared in
+			 * vm_map_entry_copy().
+			 * "use_pmap" should be reset to its default (TRUE)
+			 * so that the new mapping gets accounted for in
+			 * the task's memory footprint.
+			 */
+			assert(!new_entry->iokit_acct);
+			new_entry->use_pmap = TRUE;
 		}
 
 		/*
@@ -10735,8 +10787,7 @@ vm_map_copyin_internal(
 		if (src_destroy &&
 		    (src_object == VM_OBJECT_NULL ||
 		     (src_object->internal &&
-		      src_object->copy_strategy != MEMORY_OBJECT_COPY_DELAY &&
-		      !src_object->true_share &&
+		      src_object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC &&
 		      !map_share))) {
 			/*
 			 * If we are destroying the source, and the object
@@ -10844,7 +10895,6 @@ vm_map_copyin_internal(
 				&VME_OBJECT(new_entry));
 			VME_OFFSET_SET(new_entry, 0);
 			new_entry->needs_copy = FALSE;
-
 		}
 		else if (src_object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC &&
 			 (entry_was_shared  || map_share)) {
@@ -10864,7 +10914,7 @@ vm_map_copyin_internal(
 			new_entry->needs_copy = TRUE;
 			assert(!new_entry->iokit_acct);
 			assert(new_object->purgable == VM_PURGABLE_DENY);
-			new_entry->use_pmap = TRUE;
+			assertf(new_entry->use_pmap, "src_map %p new_entry %p\n", src_map, new_entry);
 			result = KERN_SUCCESS;
 
 		} else {
@@ -10912,6 +10962,8 @@ vm_map_copyin_internal(
 			}
 			vm_object_unlock(new_object);
 			new_object = VM_OBJECT_NULL;
+			/* no pmap accounting for purgeable objects */
+			new_entry->use_pmap = FALSE;
 		}
 
 		if (result != KERN_SUCCESS &&
@@ -10955,7 +11007,8 @@ vm_map_copyin_internal(
 			if (result != KERN_MEMORY_RESTART_COPY) {
 				vm_object_deallocate(VME_OBJECT(new_entry));
 				VME_OBJECT_SET(new_entry, VM_OBJECT_NULL);
-				assert(!new_entry->iokit_acct);
+				/* reset accounting state */
+				new_entry->iokit_acct = FALSE;
 				new_entry->use_pmap = TRUE;
 			}
 			RETURN(KERN_INVALID_ADDRESS);
@@ -11445,6 +11498,7 @@ vm_map_fork_share(
 		VME_OFFSET_SET(old_entry, 0);
 		VME_OBJECT_SET(old_entry, object);
 		old_entry->use_pmap = TRUE;
+//		assert(!old_entry->needs_copy);
 	} else if (object->copy_strategy !=
 		   MEMORY_OBJECT_COPY_SYMMETRIC) {
 
@@ -11618,6 +11672,15 @@ vm_map_fork_share(
 	vm_map_entry_copy(new_entry, old_entry);
 	old_entry->is_shared = TRUE;
 	new_entry->is_shared = TRUE;
+
+	/*
+	 * We're dealing with a shared mapping, so the resulting mapping
+	 * should inherit some of the original mapping's accounting settings.
+	 * "iokit_acct" should have been cleared in vm_map_entry_copy().
+	 * "use_pmap" should stay the same as before (if it hasn't been reset
+	 * to TRUE when we cleared "iokit_acct").
+	 */
+	assert(!new_entry->iokit_acct);
 
 	/*
 	 *	If old entry's inheritence is VM_INHERIT_NONE,
@@ -11832,6 +11895,19 @@ vm_map_fork(
 			if (new_entry->is_sub_map) {
 				/* clear address space specifics */
 				new_entry->use_pmap = FALSE;
+			} else {
+				/*
+				 * We're dealing with a copy-on-write operation,
+				 * so the resulting mapping should not inherit
+				 * the original mapping's accounting settings.
+				 * "iokit_acct" should have been cleared in
+				 * vm_map_entry_copy().
+				 * "use_pmap" should be reset to its default
+				 * (TRUE) so that the new mapping gets
+				 * accounted for in the task's memory footprint.
+				 */
+				assert(!new_entry->iokit_acct);
+				new_entry->use_pmap = TRUE;
 			}
 
 			if (! vm_object_copy_quickly(
@@ -12186,6 +12262,8 @@ submap_recurse:
 						 submap_entry->vme_start));
 				VME_OBJECT_SET(submap_entry, sub_object);
 				VME_OFFSET_SET(submap_entry, 0);
+				assert(!submap_entry->is_sub_map);
+				assert(submap_entry->use_pmap);
 			}
 			local_start =  local_vaddr -
 				(cow_parent_vaddr - old_start);
@@ -12477,6 +12555,7 @@ submap_recurse:
 				       (vm_map_size_t)(entry->vme_end -
 						       entry->vme_start)));
 		VME_OFFSET_SET(entry, 0);
+		assert(entry->use_pmap);
 		vm_map_lock_write_to_read(map);
 	}
 
@@ -12565,10 +12644,6 @@ vm_map_verify(
  *
  */
 
-#if DEVELOPMENT || DEBUG
-int vm_region_footprint = 0;
-#endif /* DEVELOPMENT || DEBUG */
-
 kern_return_t
 vm_map_region_recurse_64(
 	vm_map_t		 map,
@@ -12625,6 +12700,7 @@ vm_map_region_recurse_64(
 
 	boolean_t			look_for_pages;
 	vm_region_submap_short_info_64_t short_info;
+	boolean_t			do_region_footprint;
 
 	if (map == VM_MAP_NULL) {
 		/* no address space to work on */
@@ -12640,6 +12716,7 @@ vm_map_region_recurse_64(
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	do_region_footprint = task_self_region_footprint();
 	original_count = *count;
 
 	if (original_count < VM_REGION_SUBMAP_INFO_V0_COUNT_64) {
@@ -12829,14 +12906,17 @@ recurse_again:
 		curr_entry = NULL;
 	}
 
+// LP64todo: all the current tools are 32bit, obviously never worked for 64b
+// so probably should be a real 32b ID vs. ptr.
+// Current users just check for equality
+
 	if (curr_entry == NULL) {
 		/* no VM region contains the address... */
-#if DEVELOPMENT || DEBUG
-		if (vm_region_footprint && /* we want footprint numbers */
-		    look_for_pages && /* & we want page counts */
+
+		if (do_region_footprint && /* we want footprint numbers */
 		    next_entry == NULL && /* & there are no more regions */
 		    /* & we haven't already provided our fake region: */
-		    user_address == vm_map_last_entry(map)->vme_end) {
+		    user_address <= vm_map_last_entry(map)->vme_end) {
 			ledger_amount_t nonvol, nonvol_compressed;
 			/*
 			 * Add a fake memory region to account for
@@ -12855,33 +12935,50 @@ recurse_again:
 				&nonvol_compressed);
 			if (nonvol + nonvol_compressed == 0) {
 				/* no purgeable memory usage to report */
-				return KERN_FAILURE;
+				return KERN_INVALID_ADDRESS;
 			}
 			/* fake region to show nonvolatile footprint */
-			submap_info->protection = VM_PROT_DEFAULT;
-			submap_info->max_protection = VM_PROT_DEFAULT;
-			submap_info->inheritance = VM_INHERIT_DEFAULT;
-			submap_info->offset = 0;
-			submap_info->user_tag = 0;
-			submap_info->pages_resident = (unsigned int) (nonvol / PAGE_SIZE);
-			submap_info->pages_shared_now_private = 0;
-			submap_info->pages_swapped_out = (unsigned int) (nonvol_compressed / PAGE_SIZE);
-			submap_info->pages_dirtied = submap_info->pages_resident;
-			submap_info->ref_count = 1;
-			submap_info->shadow_depth = 0;
-			submap_info->external_pager = 0;
-			submap_info->share_mode = SM_PRIVATE;
-			submap_info->is_submap = 0;
-			submap_info->behavior = VM_BEHAVIOR_DEFAULT;
-			submap_info->object_id = 0x11111111;
-			submap_info->user_wired_count = 0;
-			submap_info->pages_reusable = 0;
+			if (look_for_pages) {
+				submap_info->protection = VM_PROT_DEFAULT;
+				submap_info->max_protection = VM_PROT_DEFAULT;
+				submap_info->inheritance = VM_INHERIT_DEFAULT;
+				submap_info->offset = 0;
+				submap_info->user_tag = -1;
+				submap_info->pages_resident = (unsigned int) (nonvol / PAGE_SIZE);
+				submap_info->pages_shared_now_private = 0;
+				submap_info->pages_swapped_out = (unsigned int) (nonvol_compressed / PAGE_SIZE);
+				submap_info->pages_dirtied = submap_info->pages_resident;
+				submap_info->ref_count = 1;
+				submap_info->shadow_depth = 0;
+				submap_info->external_pager = 0;
+				submap_info->share_mode = SM_PRIVATE;
+				submap_info->is_submap = 0;
+				submap_info->behavior = VM_BEHAVIOR_DEFAULT;
+				submap_info->object_id = INFO_MAKE_FAKE_OBJECT_ID(map, task_ledgers.purgeable_nonvolatile);
+				submap_info->user_wired_count = 0;
+				submap_info->pages_reusable = 0;
+			} else {
+				short_info->user_tag = -1;
+				short_info->offset = 0;
+				short_info->protection = VM_PROT_DEFAULT;
+				short_info->inheritance = VM_INHERIT_DEFAULT;
+				short_info->max_protection = VM_PROT_DEFAULT;
+				short_info->behavior = VM_BEHAVIOR_DEFAULT;
+				short_info->user_wired_count = 0;
+				short_info->is_submap = 0;
+				short_info->object_id = INFO_MAKE_FAKE_OBJECT_ID(map, task_ledgers.purgeable_nonvolatile);
+				short_info->external_pager = 0;
+				short_info->shadow_depth = 0;
+				short_info->share_mode = SM_PRIVATE;
+				short_info->ref_count = 1;
+			}
 			*nesting_depth = 0;
 			*size = (vm_map_size_t) (nonvol + nonvol_compressed);
-			*address = user_address;
+//			*address = user_address;
+			*address = vm_map_last_entry(map)->vme_end;
 			return KERN_SUCCESS;
 		}
-#endif /* DEVELOPMENT || DEBUG */
+
 		if (next_entry == NULL) {
 			/* ... and no VM region follows it either */
 			return KERN_INVALID_ADDRESS;
@@ -13350,6 +13447,9 @@ vm_map_region_walk(
 	int               ref_count;
 	struct vm_object	*shadow_object;
 	int			shadow_depth;
+	boolean_t	  do_region_footprint;
+
+	do_region_footprint = task_self_region_footprint();
 
 	if ((VME_OBJECT(entry) == 0) ||
 	    (entry->is_sub_map) ||
@@ -13381,53 +13481,60 @@ vm_map_region_walk(
 		for (last_offset = offset + range;
 		     offset < last_offset;
 		     offset += PAGE_SIZE_64, va += PAGE_SIZE) {
-#if DEVELOPMENT || DEBUG
-			if (vm_region_footprint) {
-				if (obj->purgable != VM_PURGABLE_DENY) {
-					/* alternate accounting */
-				} else if (entry->iokit_acct) {
-					/* alternate accounting */
-					extended->pages_resident++;
-					extended->pages_dirtied++;
-				} else {
-					int disp;
 
-					disp = 0;
-					pmap_query_page_info(map->pmap, va, &disp);
-					if (disp & PMAP_QUERY_PAGE_PRESENT) {
-						extended->pages_resident++;
-						if (disp & PMAP_QUERY_PAGE_REUSABLE) {
-							extended->pages_reusable++;
-						} else if (!(disp & PMAP_QUERY_PAGE_INTERNAL) ||
-							   (disp & PMAP_QUERY_PAGE_ALTACCT)) {
-							/* alternate accounting */
-						} else {
-							extended->pages_dirtied++;
-						}
-					} else if (disp & PMAP_QUERY_PAGE_COMPRESSED) {
-						if (disp & PMAP_QUERY_PAGE_COMPRESSED_ALTACCT) {
-							/* alternate accounting */
-						} else {
-							extended->pages_swapped_out++;
-						}
+			if (do_region_footprint) {
+				int disp;
+
+				disp = 0;
+				pmap_query_page_info(map->pmap, va, &disp);
+				if (disp & PMAP_QUERY_PAGE_PRESENT) {
+					extended->pages_resident++;
+					if (disp & PMAP_QUERY_PAGE_REUSABLE) {
+						extended->pages_reusable++;
+					} else if (!(disp & PMAP_QUERY_PAGE_INTERNAL) ||
+						   (disp & PMAP_QUERY_PAGE_ALTACCT)) {
+						/* alternate accounting */
+					} else {
+						extended->pages_dirtied++;
 					}
+				} else if (disp & PMAP_QUERY_PAGE_COMPRESSED) {
+					if (disp & PMAP_QUERY_PAGE_COMPRESSED_ALTACCT) {
+						/* alternate accounting */
+					} else {
+						extended->pages_swapped_out++;
+					}
+				}
+				/* deal with alternate accounting */
+				if (obj->purgable != VM_PURGABLE_DENY) {
+					/*
+					 * Pages from purgeable objects
+					 * will be reported as dirty 
+					 * appropriately in an extra
+					 * fake memory region at the end of
+					 * the address space.
+					 */
+				} else if (entry->iokit_acct) {
+					/*
+					 * IOKit mappings are considered
+					 * as fully dirty for footprint's
+					 * sake.
+					 */
+					extended->pages_dirtied++;
 				}
 				continue;
 			}
-#endif /* DEVELOPMENT || DEBUG */
+
 			vm_map_region_look_for_page(map, va, obj,
 						    offset, ref_count,
 						    0, extended, count);
 		}
-#if DEVELOPMENT || DEBUG
-		if (vm_region_footprint) {
+
+		if (do_region_footprint) {
 			goto collect_object_info;
 		}
-#endif /* DEVELOPMENT || DEBUG */
+
 	} else {
-#if DEVELOPMENT || DEBUG
 	collect_object_info:
-#endif /* DEVELOPMENT || DEBUG */
 		shadow_object = obj->shadow;
 		shadow_depth = 0;
 
@@ -14681,6 +14788,11 @@ vm_map_entry_insert(
 
 	assert(insp_entry != (vm_map_entry_t)0);
 
+#if DEVELOPMENT || DEBUG
+	vm_object_offset_t	end_offset = 0;
+	assertf(!os_add_overflow(end - start, offset, &end_offset), "size 0x%llx, offset 0x%llx caused overflow", (uint64_t)(end - start), offset);
+#endif /* DEVELOPMENT || DEBUG */
+
 	new_entry = vm_map_entry_create(map, !map->hdr.entries_pageable);
 
 	if (VM_MAP_PAGE_SHIFT(map) != PAGE_SHIFT) {
@@ -14804,6 +14916,8 @@ vm_map_remap_extract(
 	vm_map_version_t	version;
 	boolean_t		src_needs_copy;
 	boolean_t		new_entry_needs_copy;
+	vm_map_entry_t		saved_src_entry;
+	boolean_t		src_entry_was_wired;
 
 	assert(map != VM_MAP_NULL);
 	assert(size != 0);
@@ -14881,19 +14995,36 @@ vm_map_remap_extract(
 				 * Purgeable objects have their own accounting:
 				 * no pmap accounting for them.
 				 */
-				assert(!src_entry->use_pmap);
+				assertf(!src_entry->use_pmap,
+					"map=%p src_entry=%p [0x%llx:0x%llx] 0x%x/0x%x %d",
+					map,
+					src_entry,
+					(uint64_t)src_entry->vme_start,
+					(uint64_t)src_entry->vme_end,
+					src_entry->protection,
+					src_entry->max_protection,
+					VME_ALIAS(src_entry));
 			} else {
 				/*
 				 * Not IOKit or purgeable:
 				 * must be accounted by pmap stats.
 				 */
-				assert(src_entry->use_pmap);
+				assertf(src_entry->use_pmap,
+					"map=%p src_entry=%p [0x%llx:0x%llx] 0x%x/0x%x %d",
+					map,
+					src_entry,
+					(uint64_t)src_entry->vme_start,
+					(uint64_t)src_entry->vme_end,
+					src_entry->protection,
+					src_entry->max_protection,
+					VME_ALIAS(src_entry));
 			}
 
 			if (object == VM_OBJECT_NULL) {
 				object = vm_object_allocate(entry_size);
 				VME_OFFSET_SET(src_entry, 0);
 				VME_OBJECT_SET(src_entry, object);
+				assert(src_entry->use_pmap);
 			} else if (object->copy_strategy !=
 				   MEMORY_OBJECT_COPY_SYMMETRIC) {
 				/*
@@ -14908,6 +15039,7 @@ vm_map_remap_extract(
 				    object->vo_size > entry_size)) {
 
 				VME_OBJECT_SHADOW(src_entry, entry_size);
+				assert(src_entry->use_pmap);
 
 				if (!src_entry->needs_copy &&
 				    (src_entry->protection & VM_PROT_WRITE)) {
@@ -14963,7 +15095,19 @@ vm_map_remap_extract(
 		if (new_entry->is_sub_map) {
 			/* clr address space specifics */
 			new_entry->use_pmap = FALSE;
+		} else if (copy) {
+			/*
+			 * We're dealing with a copy-on-write operation,
+			 * so the resulting mapping should not inherit the
+			 * original mapping's accounting settings.
+			 * "use_pmap" should be reset to its default (TRUE)
+			 * so that the new mapping gets accounted for in
+			 * the task's memory footprint.
+			 */
+			new_entry->use_pmap = TRUE;
 		}
+		/* "iokit_acct" was cleared in vm_map_entry_copy() */
+		assert(!new_entry->iokit_acct);
 
 		new_entry->map_aligned = FALSE;
 
@@ -15019,6 +15163,7 @@ vm_map_remap_extract(
 
 			new_entry->needs_copy = new_entry_needs_copy;
 			new_entry->is_shared = FALSE;
+			assertf(new_entry->use_pmap, "map %p new_entry %p\n", map, new_entry);
 
 			/*
 			 * Handle copy_on_write semantics.
@@ -15056,6 +15201,11 @@ vm_map_remap_extract(
 
 		} else {
 			new_entry->is_shared = FALSE;
+			assertf(new_entry->use_pmap, "map %p new_entry %p\n", map, new_entry);
+
+			src_entry_was_wired = (src_entry->wired_count > 0);
+			saved_src_entry = src_entry;
+			src_entry = VM_MAP_ENTRY_NULL;
 
 			/*
 			 * The map can be safely unlocked since we
@@ -15070,7 +15220,7 @@ vm_map_remap_extract(
 			/*
 			 * Perform the copy.
 			 */
-			if (src_entry->wired_count > 0) {
+			if (src_entry_was_wired > 0) {
 				vm_object_lock(object);
 				result = vm_object_copy_slowly(
 					object,
@@ -15126,12 +15276,16 @@ vm_map_remap_extract(
 				 * Retry the lookup and verify that the
 				 * same object/offset are still present.
 				 */
+				saved_src_entry = VM_MAP_ENTRY_NULL;
 				vm_object_deallocate(VME_OBJECT(new_entry));
 				_vm_map_entry_dispose(map_header, new_entry);
 				if (result == KERN_MEMORY_RESTART_COPY)
 					result = KERN_SUCCESS;
 				continue;
 			}
+			/* map hasn't changed: src_entry is still valid */
+			src_entry = saved_src_entry;
+			saved_src_entry = VM_MAP_ENTRY_NULL;
 
 			if (result == KERN_MEMORY_RESTART_COPY) {
 				vm_object_reference(object);
@@ -15961,6 +16115,7 @@ vm_map_page_range_info_internal(
 	vm_page_info_basic_t	basic_info = 0;
 	vm_map_offset_t		offset_in_page = 0, offset_in_object = 0, curr_offset_in_object = 0;
 	vm_map_offset_t		start = 0, end = 0, curr_s_offset = 0, curr_e_offset = 0;
+	boolean_t		do_region_footprint;
 
 	switch (flavor) {
 	case VM_PAGE_INFO_BASIC:
@@ -15978,6 +16133,7 @@ vm_map_page_range_info_internal(
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	do_region_footprint = task_self_region_footprint();
 	disposition = 0;
 	ref_count = 0;
 	depth = 0;
@@ -16000,6 +16156,58 @@ vm_map_page_range_info_internal(
 		offset_in_object = 0;
 		ref_count = 0;
 		depth = 0;
+
+		if (do_region_footprint &&
+		    curr_s_offset >= vm_map_last_entry(map)->vme_end) {
+			ledger_amount_t nonvol_compressed;
+
+			/*
+			 * Request for "footprint" info about a page beyond
+			 * the end of address space: this must be for
+			 * the fake region vm_map_region_recurse_64()
+			 * reported to account for non-volatile purgeable
+			 * memory owned by this task.
+			 */
+			disposition = 0;
+			nonvol_compressed = 0;
+			ledger_get_balance(
+				map->pmap->ledger,
+				task_ledgers.purgeable_nonvolatile_compressed,
+				&nonvol_compressed);
+			if (curr_s_offset - vm_map_last_entry(map)->vme_end <=
+			    (unsigned) nonvol_compressed) {
+				/*
+				 * We haven't reported all the "non-volatile
+				 * compressed" pages yet, so report this fake
+				 * page as "compressed".
+				 */
+				disposition |= VM_PAGE_QUERY_PAGE_PAGED_OUT;
+			} else {
+				/*
+				 * We've reported all the non-volatile
+				 * compressed page but not all the non-volatile
+				 * pages , so report this fake page as
+				 * "resident dirty".
+				 */
+				disposition |= VM_PAGE_QUERY_PAGE_PRESENT;
+				disposition |= VM_PAGE_QUERY_PAGE_DIRTY;
+				disposition |= VM_PAGE_QUERY_PAGE_REF;
+			}
+			switch (flavor) {
+			case VM_PAGE_INFO_BASIC:
+				basic_info = (vm_page_info_basic_t) (((uintptr_t) info) + (info_idx * sizeof(struct vm_page_info_basic)));
+				basic_info->disposition = disposition;
+				basic_info->ref_count = 1;
+				basic_info->object_id = INFO_MAKE_FAKE_OBJECT_ID(map, task_ledgers.purgeable_nonvolatile);
+				basic_info->offset = 0;
+				basic_info->depth = 0;
+
+				info_idx++;
+				break;
+			}
+			curr_s_offset += PAGE_SIZE;
+			continue;
+		}
 
 		/*
 		 * First, find the map entry covering "curr_s_offset", going down
@@ -16126,6 +16334,58 @@ vm_map_page_range_info_internal(
 
 			info_idx += num_pages;
 
+			continue;
+		}
+
+		if (do_region_footprint) {
+			int pmap_disp;
+
+			disposition = 0;
+			pmap_disp = 0;
+			pmap_query_page_info(map->pmap, curr_s_offset, &pmap_disp);
+			if (map_entry->iokit_acct &&
+			    object->internal &&
+			    object->purgable == VM_PURGABLE_DENY) {
+				/*
+				 * Non-purgeable IOKit memory: phys_footprint
+				 * includes the entire virtual mapping.
+				 */
+				assertf(!map_entry->use_pmap, "offset 0x%llx map_entry %p", (uint64_t) curr_s_offset, map_entry);
+				disposition |= VM_PAGE_QUERY_PAGE_PRESENT;
+				disposition |= VM_PAGE_QUERY_PAGE_DIRTY;
+			} else if (pmap_disp & (PMAP_QUERY_PAGE_ALTACCT |
+						PMAP_QUERY_PAGE_COMPRESSED_ALTACCT)) {
+				/* alternate accounting */
+				assertf(!map_entry->use_pmap, "offset 0x%llx map_entry %p", (uint64_t) curr_s_offset, map_entry);
+				pmap_disp = 0;
+			} else {
+				if (pmap_disp & PMAP_QUERY_PAGE_PRESENT) {
+					assertf(map_entry->use_pmap, "offset 0x%llx map_entry %p", (uint64_t) curr_s_offset, map_entry);
+					disposition |= VM_PAGE_QUERY_PAGE_PRESENT;
+					disposition |= VM_PAGE_QUERY_PAGE_REF;
+					if (pmap_disp & PMAP_QUERY_PAGE_INTERNAL) {
+						disposition |= VM_PAGE_QUERY_PAGE_DIRTY;
+					} else {
+						disposition |= VM_PAGE_QUERY_PAGE_EXTERNAL;
+					}
+				} else if (pmap_disp & PMAP_QUERY_PAGE_COMPRESSED) {
+					assertf(map_entry->use_pmap, "offset 0x%llx map_entry %p", (uint64_t) curr_s_offset, map_entry);
+					disposition |= VM_PAGE_QUERY_PAGE_PAGED_OUT;
+				}
+			}
+			switch (flavor) {
+			case VM_PAGE_INFO_BASIC:
+				basic_info = (vm_page_info_basic_t) (((uintptr_t) info) + (info_idx * sizeof(struct vm_page_info_basic)));
+				basic_info->disposition = disposition;
+				basic_info->ref_count = 1;
+				basic_info->object_id = INFO_MAKE_FAKE_OBJECT_ID(map, task_ledgers.purgeable_nonvolatile);
+				basic_info->offset = 0;
+				basic_info->depth = 0;
+
+				info_idx++;
+				break;
+			}
+			curr_s_offset += PAGE_SIZE;
 			continue;
 		}
 

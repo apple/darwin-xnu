@@ -3,8 +3,9 @@
 # Exclude KASan runtime
 src:./san/kasan-arm64.c
 
-# Uses a local to work out if we're on the interrupt stack, but ends up with a
-# fakestack allocation
+# These use a local variable to work out which stack we're on, but can end up with
+# a fakestack allocation.
 fun:ml_at_interrupt_context
-
-
+fun:ml_stack_remaining
+fun:ml_stack_base
+fun:ml_stack_size

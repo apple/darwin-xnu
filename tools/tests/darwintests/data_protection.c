@@ -1,4 +1,5 @@
 #include <darwintest.h>
+#include <darwintest_utils.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
@@ -577,10 +578,10 @@ setup(void) {
 		T_SKIP("Data protection not supported on this system");
 	}
 
-	T_ASSERT_NE(
+	T_ASSERT_EQ(
 		has_passcode(),
-		-1,
-		"No passcode set"
+		0,
+		"Device should not have existing passcode"
 	);
 
 	T_ASSERT_EQ(
@@ -1043,55 +1044,32 @@ end:
 }
 
 /*
- * Just a wrapper around fork/exec for separate
- * cmds that may require entitlements.
+ * Helper function for launching tools
  */
 int
 spawn_proc(char * const command[]) {
-	int child_result = -1;
-	int result = -1;
-	pid_t child = -1;
+	pid_t pid           = 0;
+	int launch_tool_ret = 0;
+	bool waitpid_ret    = true;
+	int status          = 0;
+	int signal          = 0;
+	int timeout         = 30;
 
-	T_LOG("Spawning %s", command[0]);
-
-	child = fork();
-
-	if(child == -1) {
-		T_LOG("%s(%s): fork() failed", __func__, command[0]);
+	launch_tool_ret = dt_launch_tool(&pid, command, false, NULL, NULL);
+	T_EXPECT_EQ(launch_tool_ret, 0, "launch tool: %s", command[0]);
+	if(launch_tool_ret != 0) {
 		return 1;
-	} else if(child == 0) {
-		/*
-		 * TODO: This keeps keystorectl from bombarding us with key
-		 * state changes, but there must be a better way of doing
-		 * this; killing stderr is a bit nasty, and if keystorectl
-		 * fails, we want all the information we can get.
-		 */
-		fclose(stderr);
-		fclose(stdin);
-
-		/*
-		 * Use the first argument in 'command' array as the path to
-		 * execute, as it could be invoking keystorectl OR keybagdTest
-		 * depending on whether or not we need to apply a grace period.
-		 * In the "lock" case we must use keybagdTest to ensure it's
-		 * giving people the grace period.
-		 */
-		execv(command[0], command);
-		T_WITH_ERRNO;
-		T_ASSERT_FAIL("child failed to execv %s", command[0]);
 	}
 
-	if(waitpid(child, &child_result, 0) != child) {
-		T_LOG(
-			"%s(%s): waitpid(%d) failed",
-			__func__, command[0], child
-		);
-		return 1;
-	} else if(WEXITSTATUS(child_result)) {
-		T_LOG(
-			"%s(%s): child exited %d",
-			__func__, command[0], WEXITSTATUS(child_result)
-		);
+	waitpid_ret = dt_waitpid(pid, &status, &signal, timeout);
+	T_EXPECT_TRUE(waitpid_ret, "%s should succeed", command[0]);
+	if(waitpid_ret == false) {
+		if(status != 0) {
+			T_LOG("%s exited %d", command[0], status);
+		}
+		if(signal != 0) {
+			T_LOG("%s received signal %d", command[0], signal);
+		}
 		return 1;
 	}
 

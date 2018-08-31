@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -333,8 +333,12 @@ ipf_injectv4_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	errno_t error = 0;
 	struct m_tag *mtag = NULL;
 	struct ip_moptions *imo = NULL;
-	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, 0, 0,
-		SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip_out_args ipoa;
+
+	bzero(&ipoa, sizeof(ipoa));
+	ipoa.ipoa_boundif = IFSCOPE_NONE;
+	ipoa.ipoa_sotc = SO_TC_UNSPEC;
+	ipoa.ipoa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 	/* Make the IP header contiguous in the mbuf */
 	if ((size_t)m->m_len < sizeof (struct ip)) {
@@ -410,8 +414,12 @@ ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	errno_t error = 0;
 	struct m_tag *mtag = NULL;
 	struct ip6_moptions *im6o = NULL;
-	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 }, 0, 0,
-		SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip6_out_args ip6oa;
+
+	bzero(&ip6oa, sizeof(ip6oa));
+	ip6oa.ip6oa_boundif = IFSCOPE_NONE;
+	ip6oa.ip6oa_sotc = SO_TC_UNSPEC;
+	ip6oa.ip6oa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 	/* Make the IP header contiguous in the mbuf */
 	if ((size_t)m->m_len < sizeof(struct ip6_hdr)) {

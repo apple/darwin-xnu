@@ -418,7 +418,7 @@ uint32_t spinlock_timeout_NMI(uintptr_t thread_addr) {
 	uint32_t i;
 
 	for (i = 0; i < real_ncpus; i++) {
-		if ((uintptr_t)cpu_data_ptr[i]->cpu_active_thread == thread_addr) {
+		if ((cpu_data_ptr[i] != NULL) && ((uintptr_t)cpu_data_ptr[i]->cpu_active_thread == thread_addr)) {
 			spinlock_owner_cpu = i;
 			if ((uint32_t) cpu_number() != i) {
 				/* Cause NMI and panic on the owner's cpu */
@@ -1362,6 +1362,7 @@ lck_rw_unlock_shared(
 {
 	lck_rw_type_t	ret;
 
+	assertf(lck->lck_rw_shared_count > 0, "lck %p has shared_count=0x%x", lck, lck->lck_rw_shared_count);
 	ret = lck_rw_done(lck);
 
 	if (ret != LCK_RW_TYPE_SHARED)

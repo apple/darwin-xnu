@@ -54,8 +54,6 @@
 #include <sys/kdebug.h>
 #include <arm/machine_routines.h>
 #include <libkern/OSAtomic.h>
-#include <chud/chud_xnu.h>
-#include <chud/chud_xnu_private.h>
 
 #if KPERF
 void kperf_signal_handler(unsigned int cpu_number);
@@ -405,10 +403,6 @@ cpu_signal_handler_internal(boolean_t disable_signal)
 		if (cpu_signal & SIGPdec) {
 			(void)hw_atomic_and(&cpu_data_ptr->cpu_signal, ~SIGPdec);
 			rtclock_intr(FALSE);
-		}
-		if (cpu_signal & SIGPchud) {
-			(void)hw_atomic_and(&cpu_data_ptr->cpu_signal, ~SIGPchud);
-			chudxnu_cpu_signal_handler();
 		}
 #if KPERF
 		if (cpu_signal & SIGPkptimer) {

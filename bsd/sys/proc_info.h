@@ -681,7 +681,7 @@ struct appletalk_fdinfo {
 	struct appletalk_info	appletalkinfo;
 };
 
-
+typedef uint64_t proc_info_udata_t;
 
 /* defns of process file desc type */
 #define PROX_FDTYPE_ATALK	0
@@ -872,6 +872,10 @@ struct proc_fileportinfo {
 #define PROC_DIRTY_IS_DIRTY             0x4
 #define PROC_DIRTY_LAUNCH_IS_IN_PROGRESS   0x8
 
+/* Flavors for proc_udata_info */
+#define PROC_UDATA_INFO_GET		1
+#define PROC_UDATA_INFO_SET		2
+
 #ifdef PRIVATE
 
 /* Flavors for proc_pidoriginatorinfo */
@@ -905,12 +909,10 @@ struct proc_fileportinfo {
 #define PROC_FGHW_ERROR                 99 /* syscall parameter/permissions error */
 
 /* flavors for proc_piddynkqueueinfo */
-#ifdef PRIVATE
 #define PROC_PIDDYNKQUEUE_INFO         0
 #define PROC_PIDDYNKQUEUE_INFO_SIZE    (sizeof(struct kqueue_dyninfo))
 #define PROC_PIDDYNKQUEUE_EXTINFO      1
 #define PROC_PIDDYNKQUEUE_EXTINFO_SIZE (sizeof(struct kevent_extinfo))
-#endif
 
 /* __proc_info() call numbers */
 #define PROC_INFO_CALL_LISTPIDS          0x1
@@ -926,6 +928,7 @@ struct proc_fileportinfo {
 #define PROC_INFO_CALL_LISTCOALITIONS    0xb
 #define PROC_INFO_CALL_CANUSEFGHW        0xc
 #define PROC_INFO_CALL_PIDDYNKQUEUEINFO  0xd
+#define PROC_INFO_CALL_UDATA_INFO        0xe
 
 #endif /* PRIVATE */
 

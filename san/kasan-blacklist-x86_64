@@ -21,9 +21,6 @@ src:./osfmk/i386/vmx/vmx_cpu.c
 src:./osfmk/kern/locks.c
 src:./osfmk/prng/random.c
 src:./osfmk/x86_64/loose_ends.c
-src:./osfmk/x86_64/xcpm/xcpm_dvfs.c
-src:./osfmk/x86_64/xcpm/xcpm_idle.c
-src:./osfmk/x86_64/xcpm/xcpm_ioctl.c
 src:./pexpert/gen/bootargs.c
 src:./pexpert/gen/device_tree.c
 src:./pexpert/gen/pe_gen.c

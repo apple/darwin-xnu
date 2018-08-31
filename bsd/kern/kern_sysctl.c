@@ -1691,6 +1691,28 @@ SYSCTL_PROC(_kern, KERN_OSVERSION, osversion,
         osversion, 256 /* OSVERSIZE*/, 
         sysctl_osversion, "A", "");
 
+static uint64_t osproductversion_string[48];
+
+STATIC int
+sysctl_osproductversion(__unused struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req)
+{
+	if (req->newptr != 0) {
+		/*
+		 * Can only ever be set by launchd, and only once at boot.
+		 */
+		if (req->p->p_pid != 1 || osproductversion_string[0] != '\0') {
+			return EPERM;
+		}
+	}
+
+    return sysctl_handle_string(oidp, arg1, arg2, req);
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, osproductversion,
+        CTLFLAG_RW | CTLFLAG_KERN | CTLTYPE_STRING | CTLFLAG_LOCKED,
+        osproductversion_string, sizeof(osproductversion_string),
+        sysctl_osproductversion, "A", "The ProductVersion from SystemVersion.plist");
+
 static uint64_t osvariant_status = 0;
 
 STATIC int
@@ -1818,6 +1840,10 @@ extern int sched_smt_balance;
 SYSCTL_INT(_kern, OID_AUTO, sched_smt_balance, 
                CTLFLAG_KERN| CTLFLAG_RW| CTLFLAG_LOCKED, 
                &sched_smt_balance, 0, "");
+extern int sched_allow_rt_smt;
+SYSCTL_INT(_kern, OID_AUTO, sched_allow_rt_smt, 
+               CTLFLAG_KERN| CTLFLAG_RW| CTLFLAG_LOCKED, 
+               &sched_allow_rt_smt, 0, "");
 #if __arm__ || __arm64__
 extern uint32_t perfcontrol_requested_recommended_cores;
 SYSCTL_UINT(_kern, OID_AUTO, sched_recommended_cores,
@@ -2193,7 +2219,7 @@ SYSCTL_NODE(_kern_timer, OID_AUTO, longterm, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "lo
 enum {
 	THRESHOLD, QCOUNT,
 	ENQUEUES, DEQUEUES, ESCALATES, SCANS, PREEMPTS,
-	LATENCY, LATENCY_MIN, LATENCY_MAX, SCAN_LIMIT, PAUSES
+	LATENCY, LATENCY_MIN, LATENCY_MAX, SCAN_LIMIT, SCAN_INTERVAL, PAUSES
 };
 extern uint64_t	timer_sysctl_get(int);
 extern int      timer_sysctl_set(int, uint64_t);
@@ -2221,9 +2247,17 @@ SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, threshold,
 SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, scan_limit,
 		CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
 		(void *) SCAN_LIMIT, 0, sysctl_timer, "Q", "");
+SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, scan_interval,
+		CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
+		(void *) SCAN_INTERVAL, 0, sysctl_timer, "Q", "");
+
 SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, qlen,
 		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
 		(void *) QCOUNT, 0, sysctl_timer, "Q", "");
+SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, scan_pauses,
+		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
+		(void *) PAUSES, 0, sysctl_timer, "Q", "");
+
 #if  DEBUG
 SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, enqueues,
 		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
@@ -2249,9 +2283,6 @@ SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, latency_min,
 SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, latency_max,
 		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
 		(void *) LATENCY_MAX, 0, sysctl_timer, "Q", "");
-SYSCTL_PROC(_kern_timer_longterm, OID_AUTO, scan_pauses,
-		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
-		(void *) PAUSES, 0, sysctl_timer, "Q", "");
 #endif /* DEBUG */
 
 STATIC int
@@ -3331,37 +3362,6 @@ SYSCTL_PROC(_kern, OID_AUTO, darkboot,
            CTLFLAG_KERN | CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY,
            0, 0, sysctl_darkboot, "I", "");
 #endif
-
-/*
- * This is set by core audio to tell tailspin (ie background tracing) how long
- * its smallest buffer is.  Background tracing can then try to make a reasonable
- * decisions to try to avoid introducing so much latency that the buffers will
- * underflow.
- */
-
-int min_audio_buffer_usec;
-
-STATIC int
-sysctl_audio_buffer SYSCTL_HANDLER_ARGS
-{
-#pragma unused(oidp, arg1, arg2)
-	int err = 0, value = 0, changed = 0;
-	err = sysctl_io_number(req, min_audio_buffer_usec, sizeof(int), &value, &changed);
-	if (err) goto exit;
-
-	if (changed) {
-		/* writing is protected by an entitlement */
-		if (priv_check_cred(kauth_cred_get(), PRIV_AUDIO_LATENCY, 0) != 0) {
-			err = EPERM;
-			goto exit;
-		}
-		min_audio_buffer_usec = value;
-	}
-exit:
-	return err;
-}
-
-SYSCTL_PROC(_kern, OID_AUTO, min_audio_buffer_usec, CTLFLAG_RW | CTLFLAG_ANYBODY, 0, 0, sysctl_audio_buffer, "I", "Minimum audio buffer size, in microseconds");
 
 #if DEVELOPMENT || DEBUG
 #include <sys/sysent.h>

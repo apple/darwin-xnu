@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -31,5 +31,7 @@
 #define	_MACH_BRANCH_PREDICATES_H
 
 #define	__probable(x)	__builtin_expect(!!((long)(x)), 1L)
+
 #define	__improbable(x)	__builtin_expect(!!((long)(x)), 0L)
+
 #endif /* _MACH_BRANCH_PREDICATES_H */

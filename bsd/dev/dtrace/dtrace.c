@@ -105,6 +105,8 @@
 #include <machine/monotonic.h>
 #endif /* MONOTONIC */
 
+#include <IOKit/IOPlatformExpert.h>
+
 #include <kern/cpu_data.h>
 extern uint32_t pmap_find_phys(void *, uint64_t);
 extern boolean_t pmap_valid_page(uint32_t);
@@ -12155,55 +12157,59 @@ dtrace_dof_copyin_from_proc(proc_t* p, user_addr_t uarg, int *errp)
 	return (dof);
 }
 
-static dof_hdr_t *
-dtrace_dof_property(const char *name)
-{
-	uchar_t *buf;
-	uint64_t loadsz;
-	unsigned int len, i;
-	dof_hdr_t *dof;
-
-	/*
-	 * Unfortunately, array of values in .conf files are always (and
-	 * only) interpreted to be integer arrays.  We must read our DOF
-	 * as an integer array, and then squeeze it into a byte array.
-	 */
-	if (ddi_prop_lookup_int_array(DDI_DEV_T_ANY, dtrace_devi, 0,
-	    name, (int **)&buf, &len) != DDI_PROP_SUCCESS)
-		return (NULL);
-
-	for (i = 0; i < len; i++)
-		buf[i] = (uchar_t)(((int *)buf)[i]);
-
-	if (len < sizeof (dof_hdr_t)) {
-		ddi_prop_free(buf);
-		dtrace_dof_error(NULL, "truncated header");
-		return (NULL);
-	}
-
-	if (len < (loadsz = ((dof_hdr_t *)buf)->dofh_loadsz)) {
-		ddi_prop_free(buf);
-		dtrace_dof_error(NULL, "truncated DOF");
-		return (NULL);
-	}
-
-	if (loadsz >= (uint64_t)dtrace_dof_maxsize) {
-		ddi_prop_free(buf);
-		dtrace_dof_error(NULL, "oversized DOF");
-		return (NULL);
-	}
-
-	dof = dt_kmem_alloc_aligned(loadsz, 8, KM_SLEEP);
-	bcopy(buf, dof, loadsz);
-	ddi_prop_free(buf);
-
-	return (dof);
-}
-
 static void
 dtrace_dof_destroy(dof_hdr_t *dof)
 {
 	dt_kmem_free_aligned(dof, dof->dofh_loadsz);
+}
+
+static dof_hdr_t *
+dtrace_dof_property(const char *name)
+{
+	unsigned int len;
+	dof_hdr_t *dof;
+
+	if (dtrace_is_restricted() && !dtrace_are_restrictions_relaxed()) {
+		return NULL;
+	}
+
+	if (!PEReadNVRAMProperty(name, NULL, &len)) {
+		return NULL;
+	}
+
+	dof = dt_kmem_alloc_aligned(len, 8, KM_SLEEP);
+
+	if (!PEReadNVRAMProperty(name, dof, &len)) {
+		dtrace_dof_destroy(dof);
+		dtrace_dof_error(NULL, "unreadable DOF");
+		return NULL;
+	}
+
+	if (len < sizeof (dof_hdr_t)) {
+		dtrace_dof_destroy(dof);
+		dtrace_dof_error(NULL, "truncated header");
+		return (NULL);
+	}
+
+	if (len < dof->dofh_loadsz) {
+		dtrace_dof_destroy(dof);
+		dtrace_dof_error(NULL, "truncated DOF");
+		return (NULL);
+	}
+
+	if (len != dof->dofh_loadsz) {
+		dtrace_dof_destroy(dof);
+		dtrace_dof_error(NULL, "invalid DOF size");
+		return (NULL);
+	}
+
+	if (dof->dofh_loadsz >= (uint64_t)dtrace_dof_maxsize) {
+		dtrace_dof_destroy(dof);
+		dtrace_dof_error(NULL, "oversized DOF");
+		return (NULL);
+	}
+
+	return (dof);
 }
 
 /*

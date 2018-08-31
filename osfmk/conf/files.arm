@@ -61,7 +61,6 @@ osfmk/arm/commpage/commpage.c	standard
 osfmk/kdp/ml/arm/kdp_machdep.c	optional	mach_kdp
 osfmk/kdp/ml/arm/kdp_vm.c	optional	mach_kdp
 
-
 # DUMMIES TO FORCE GENERATION OF .h FILES
 osfmk/OPTIONS/ln		optional ln
 osfmk/OPTIONS/eisa		optional eisa

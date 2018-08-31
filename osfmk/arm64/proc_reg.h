@@ -518,8 +518,6 @@
  *	Aff1	Cluster ID
  *	Aff0	CPU ID
  */
-#define MPIDR_PNE_SHIFT				16	// pcore not ecore
-#define MPIDR_PNE						(1 << MPIDR_PNE_SHIFT)
 #define MPIDR_AFF0_MASK				0xFF
 #define MPIDR_AFF1_MASK				0xFF00
 #define MPIDR_AFF2_MASK				0xFF0000

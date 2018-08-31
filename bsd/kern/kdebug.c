@@ -1342,6 +1342,10 @@ static_assert(SIMPLE_STR_LEN % sizeof(uintptr_t) == 0);
 void
 kernel_debug_string_simple(uint32_t eventid, const char *str)
 {
+	if (!kdebug_enable) {
+		return;
+	}
+
 	/* array of uintptr_ts simplifies emitting the string as arguments */
 	uintptr_t str_buf[(SIMPLE_STR_LEN / sizeof(uintptr_t)) + 1] = { 0 };
 	size_t len = strlcpy((char *)str_buf, str, SIMPLE_STR_LEN + 1);
@@ -3477,12 +3481,12 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 				if (name[0] == KERN_KDWRITETR || name[0] == KERN_KDWRITETR_V3) {
 					number = nkdbufs * sizeof(kd_buf);
 
-					KDBG(TRACE_WRITING_EVENTS | DBG_FUNC_START);
+					KDBG_RELEASE(TRACE_WRITING_EVENTS | DBG_FUNC_START);
 					if (name[0] == KERN_KDWRITETR_V3)
 						ret = kdbg_read(0, &number, vp, &context, RAW_VERSION3);
 					else
 						ret = kdbg_read(0, &number, vp, &context, RAW_VERSION1);
-					KDBG(TRACE_WRITING_EVENTS | DBG_FUNC_END, number);
+					KDBG_RELEASE(TRACE_WRITING_EVENTS | DBG_FUNC_END, number);
 
 					*sizep = number;
 				} else {
@@ -3911,7 +3915,7 @@ kdbg_test(size_t flavor)
 }
 
 void
-kdebug_init(unsigned int n_events, char *filter_desc)
+kdebug_init(unsigned int n_events, char *filter_desc, boolean_t wrapping)
 {
 	assert(filter_desc != NULL);
 
@@ -3931,7 +3935,7 @@ kdebug_init(unsigned int n_events, char *filter_desc)
 		n_events = 200000;
 	}
 
-	kdebug_trace_start(n_events, filter_desc, FALSE);
+	kdebug_trace_start(n_events, filter_desc, wrapping, FALSE);
 }
 
 static void
@@ -4005,10 +4009,8 @@ kdbg_set_typefilter_string(const char *filter_desc)
  */
 void
 kdebug_trace_start(unsigned int n_events, const char *filter_desc,
-                   boolean_t at_wake)
+	boolean_t wrapping, boolean_t at_wake)
 {
-	uint32_t old1, old2;
-
 	if (!n_events) {
 		kd_early_done = true;
 		return;
@@ -4033,7 +4035,10 @@ kdebug_trace_start(unsigned int n_events, const char *filter_desc,
 	 * Wrapping is disabled because boot and wake tracing is interested in
 	 * the earliest events, at the expense of later ones.
 	 */
-	(void)disable_wrap(&old1, &old2);
+	if (!wrapping) {
+		uint32_t old1, old2;
+		(void)disable_wrap(&old1, &old2);
+	}
 
 	if (filter_desc && filter_desc[0] != '\0') {
 		if (kdbg_initialize_typefilter(NULL) == KERN_SUCCESS) {
@@ -4103,7 +4108,7 @@ kdbg_dump_trace_to_file(const char *filename)
 		goto out;
 	}
 
-	KDBG(TRACE_WRITING_EVENTS | DBG_FUNC_START);
+	KDBG_RELEASE(TRACE_WRITING_EVENTS | DBG_FUNC_START);
 
 	kdebug_enable = 0;
 	kd_ctrl_page.enabled = 0;
@@ -4151,27 +4156,6 @@ out_close:
 
 out:
 	ktrace_unlock();
-}
-
-/* Helper function for filling in the BSD name for an address space
- * Defined here because the machine bindings know only Mach threads
- * and nothing about BSD processes.
- *
- * FIXME: need to grab a lock during this?
- */
-void kdbg_get_task_name(char* name_buf, int len, task_t task)
-{
-	proc_t proc;
-	
-	/* Note: we can't use thread->task (and functions that rely on it) here 
-	 * because it hasn't been initialized yet when this function is called.
-	 * We use the explicitly-passed task parameter instead.
-	 */
-	proc = get_bsdtask_info(task);
-	if (proc != PROC_NULL)
-		snprintf(name_buf, len, "%s/%d", proc->p_comm, proc->p_pid);
-	else
-		snprintf(name_buf, len, "%p [!bsd]", task);
 }
 
 static int

@@ -352,4 +352,27 @@ routine host_check_multiuser_mode(
 skip;
 #endif // !KERNEL && LIBSYSCALL_INTERFACE
 
+/*
+ * Returns information about a specific zone.
+ * The zone name is passed in via the argument name,
+ * info returns the zone info.
+ */
+routine mach_zone_info_for_zone(
+		host		: host_priv_t;
+		name		: mach_zone_name_t;
+	out	info		: mach_zone_info_t);
+
+#ifdef PRIVATE
+/*
+ * Returns information about the largest zone.
+ * name returns the zone name, info returns the zone info.
+ */
+routine mach_zone_info_for_largest_zone(
+		host		: host_priv_t;
+	out	name		: mach_zone_name_t;
+	out	info		: mach_zone_info_t);
+#else
+skip;
+#endif
+
 /* vim: set ft=c : */

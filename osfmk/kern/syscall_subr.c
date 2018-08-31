@@ -492,7 +492,7 @@ thread_depress_abstime(
 		                      (uintptr_t)thread_tid(self),
 		                      self->base_pri,
 		                      self->sched_pri,
-		                      0, /* eventually, 'reason' */
+		                      self->sched_usage,
 		                      0);
 
 		myprocessor->current_pri = self->sched_pri;
@@ -596,7 +596,7 @@ thread_poll_yield(
 				                      (uintptr_t)thread_tid(self),
 				                      self->base_pri,
 				                      self->sched_pri,
-				                      0, /* eventually, 'reason' */
+				                      self->sched_usage,
 				                      0);
 
 				myprocessor->current_pri = self->sched_pri;

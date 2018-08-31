@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -484,7 +484,8 @@ tcp_init(struct protosw *pp, struct domain *dp)
 
 	/* expose initial uptime/now via systcl for utcp to keep time sync */
 	tcp_now_init = tcp_now;
-	tcp_microuptime_init = tcp_uptime.tv_sec * 1000 + tcp_uptime.tv_usec;
+	tcp_microuptime_init =
+	    tcp_uptime.tv_usec + (tcp_uptime.tv_sec * USEC_PER_SEC);
 	SYSCTL_SKMEM_UPDATE_FIELD(tcp.microuptime_init, tcp_microuptime_init);
 	SYSCTL_SKMEM_UPDATE_FIELD(tcp.now_init, tcp_now_init);
 
@@ -953,9 +954,12 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 
 #if INET6
 	if (isipv6) {
-		struct ip6_out_args ip6oa = { tra->ifscope, { 0 },
-		    IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR, 0,
-		    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC};
+		struct ip6_out_args ip6oa;
+		bzero(&ip6oa, sizeof(ip6oa));
+		ip6oa.ip6oa_boundif = tra->ifscope;
+		ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR;
+		ip6oa.ip6oa_sotc = SO_TC_UNSPEC;
+		ip6oa.ip6oa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 		if (tra->ifscope != IFSCOPE_NONE)
 			ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
@@ -987,9 +991,12 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 	} else
 #endif /* INET6 */
 	{
-		struct ip_out_args ipoa = { tra->ifscope, { 0 },
-		    IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR, 0,
-		    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+		struct ip_out_args ipoa;
+		bzero(&ipoa, sizeof(ipoa));
+		ipoa.ipoa_boundif = tra->ifscope;
+		ipoa.ipoa_flags = IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR;
+		ipoa.ipoa_sotc = SO_TC_UNSPEC;
+		ipoa.ipoa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 		if (tra->ifscope != IFSCOPE_NONE)
 			ipoa.ipoa_flags |= IPOAF_BOUND_IF;
@@ -2141,7 +2148,7 @@ tcp_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 {
 		inpcb_get_ports_used(ifindex, protocol, flags, bitfield,
 		    &tcbinfo);
-}
+	}
 
 __private_extern__ uint32_t
 tcp_count_opportunistic(unsigned int ifindex, u_int32_t flags)
@@ -2671,6 +2678,8 @@ tcp_mtudisc(
 			mss = so->so_snd.sb_hiwat;
 
 		tp->t_maxseg = mss;
+
+		ASSERT(tp->t_maxseg);
 
 		/*
 		 * Reset the slow-start flight size as it may depends on the

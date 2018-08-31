@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -71,6 +71,7 @@
 
 #include <net/route.h>
 #include <net/if_var.h>
+#include <net/if_ports_used.h>
 #include <net/ntstat.h>
 
 #include <netinet/in.h>
@@ -446,6 +447,10 @@ inpcb_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 		    (protocol == PF_INET6 && (inp->inp_vflag & INP_IPV6))))
 			continue;
 
+		if (SOCK_PROTO(inp->inp_socket) != IPPROTO_UDP &&
+		    SOCK_PROTO(inp->inp_socket) != IPPROTO_TCP)
+			continue;
+
 		iswildcard = (((inp->inp_vflag & INP_IPV4) &&
 		    inp->inp_laddr.s_addr == INADDR_ANY) ||
 		    ((inp->inp_vflag & INP_IPV6) &&
@@ -524,6 +529,8 @@ inpcb_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 		if (port == 0)
 			continue;
 		bitstr_set(bitfield, port);
+
+		if_ports_used_add_inpcb(ifindex, inp);
 	}
 	lck_rw_done(pcbinfo->ipi_lock);
 }

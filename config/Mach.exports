@@ -4,6 +4,7 @@ _assert_wait
 _assert_wait_deadline
 _assert_wait_timeout
 _clock_absolutetime_interval_to_deadline
+_clock_continuoustime_interval_to_deadline
 _clock_delay_until
 _clock_get_calendar_microtime
 _clock_get_calendar_nanotime

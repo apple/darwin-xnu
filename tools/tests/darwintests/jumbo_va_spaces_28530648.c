@@ -15,7 +15,7 @@
  * allocate at least this many GB of VA space. i.e. with the entitlement, n GB
  * must be allocatable; whereas without it, it must be less.
  */
-#define ALLOC_TEST_GB 12
+#define ALLOC_TEST_GB 54
 
 T_DECL(jumbo_va_spaces_28530648,
 	"Verify that the \"dynamic-codesigning\" entitlement is required to utilize an extra-large "

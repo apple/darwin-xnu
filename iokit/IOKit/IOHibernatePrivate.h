@@ -2,7 +2,7 @@
  * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -54,14 +54,14 @@ struct IOHibernateImageHeader
 {
     uint64_t	imageSize;
     uint64_t	image1Size;
-    
+
     uint32_t	restore1CodePhysPage;
     uint32_t    reserved1;
     uint64_t	restore1CodeVirt;
     uint32_t	restore1PageCount;
     uint32_t	restore1CodeOffset;
     uint32_t	restore1StackOffset;
-    
+
     uint32_t	pageCount;
     uint32_t	bitmapSize;
 
@@ -86,7 +86,7 @@ struct IOHibernateImageHeader
 
     uint32_t    performanceDataStart;
     uint32_t    performanceDataSize;
-    
+
     uint64_t	encryptStart __attribute__ ((packed));
     uint64_t	machineSignature __attribute__ ((packed));
 
@@ -105,7 +105,9 @@ struct IOHibernateImageHeader
     uint32_t	sleepTime;
     uint32_t    compression;
 
-    uint32_t	reserved[58];		// make sizeof == 512
+    uint8_t     bridgeBootSessionUUID[16];
+
+    uint32_t	reserved[54];		// make sizeof == 512
     uint32_t	booterTime0;
     uint32_t	booterTime1;
     uint32_t	booterTime2;
@@ -138,6 +140,7 @@ enum
     kIOHibernateOptionColor         = 0x00000002,
     kIOHibernateOptionProgress      = 0x00000004,
     kIOHibernateOptionDarkWake      = 0x00000008,
+    kIOHibernateOptionHWEncrypt     = 0x00000010,
 };
 
 struct hibernate_bitmap_t
@@ -175,7 +178,7 @@ typedef struct hibernate_cryptvars_t hibernate_cryptvars_t;
 
 #endif /* defined(_AES_H) */
 
-enum 
+enum
 {
     kIOHibernateHandoffType                 = 0x686f0000,
     kIOHibernateHandoffTypeEnd              = kIOHibernateHandoffType + 0,
@@ -185,6 +188,7 @@ enum
     kIOHibernateHandoffTypeDeviceTree       = kIOHibernateHandoffType + 4,
     kIOHibernateHandoffTypeDeviceProperties = kIOHibernateHandoffType + 5,
     kIOHibernateHandoffTypeKeyStore         = kIOHibernateHandoffType + 6,
+    kIOHibernateHandoffTypeVolumeCryptKey   = kIOHibernateHandoffType + 7,
 };
 
 struct IOHibernateHandoff
@@ -195,7 +199,7 @@ struct IOHibernateHandoff
 };
 typedef struct IOHibernateHandoff IOHibernateHandoff;
 
-enum 
+enum
 {
     kIOHibernateProgressCount         = 19,
     kIOHibernateProgressWidth         = 7,
@@ -326,28 +330,28 @@ vm_compressor_do_warmup(void);
 hibernate_page_list_t *
 hibernate_page_list_allocate(boolean_t log);
 
-kern_return_t 
+kern_return_t
 hibernate_alloc_page_lists(
 		hibernate_page_list_t ** page_list_ret,
 		hibernate_page_list_t ** page_list_wired_ret,
 		hibernate_page_list_t ** page_list_pal_ret);
 
-kern_return_t 
+kern_return_t
 hibernate_setup(IOHibernateImageHeader * header,
                         boolean_t vmflush,
 			hibernate_page_list_t * page_list,
 			hibernate_page_list_t * page_list_wired,
 			hibernate_page_list_t * page_list_pal);
 
-kern_return_t 
+kern_return_t
 hibernate_teardown(hibernate_page_list_t * page_list,
                     hibernate_page_list_t * page_list_wired,
                     hibernate_page_list_t * page_list_pal);
 
-kern_return_t 
+kern_return_t
 hibernate_pin_swap(boolean_t begin);
 
-kern_return_t 
+kern_return_t
 hibernate_processor_setup(IOHibernateImageHeader * header);
 
 void
@@ -374,11 +378,11 @@ void
 hibernate_page_list_setall(hibernate_page_list_t * page_list,
 			   hibernate_page_list_t * page_list_wired,
 			   hibernate_page_list_t * page_list_pal,
-			   boolean_t preflight, 
+			   boolean_t preflight,
 			   boolean_t discard_all,
 			   uint32_t * pagesOut);
 
-// mark pages to be saved, or pages not to be saved but available 
+// mark pages to be saved, or pages not to be saved but available
 // for scratch usage during restore
 void
 hibernate_page_list_setall_machine(hibernate_page_list_t * page_list,
@@ -402,10 +406,10 @@ void
 hibernate_set_page_state(hibernate_page_list_t * page_list, hibernate_page_list_t * page_list_wired,
 				vm_offset_t ppnum, vm_offset_t count, uint32_t kind);
 
-void 
+void
 hibernate_page_bitset(hibernate_page_list_t * list, boolean_t set, uint32_t page);
 
-boolean_t 
+boolean_t
 hibernate_page_bittst(hibernate_page_list_t * list, uint32_t page);
 
 hibernate_bitmap_t *
@@ -414,7 +418,7 @@ hibernate_page_bitmap_pin(hibernate_page_list_t * list, uint32_t * page);
 uint32_t
 hibernate_page_bitmap_count(hibernate_bitmap_t * bitmap, uint32_t set, uint32_t page);
 
-uintptr_t 
+uintptr_t
 hibernate_restore_phys_page(uint64_t src, uint64_t dst, uint32_t len, uint32_t procFlags);
 
 void
@@ -428,7 +432,7 @@ hibernate_machine_entrypoint(uint32_t p1, uint32_t p2, uint32_t p3, uint32_t p4)
 long
 hibernate_kernel_entrypoint(uint32_t p1, uint32_t p2, uint32_t p3, uint32_t p4);
 void
-hibernate_newruntime_map(void * map, vm_size_t map_size, 
+hibernate_newruntime_map(void * map, vm_size_t map_size,
 			    uint32_t system_table_offset);
 
 
@@ -538,8 +542,8 @@ enum {
 
 enum
 {
-	kIOPreviewImageIndexDesktop = 0, 
-	kIOPreviewImageIndexLockScreen = 1, 
+	kIOPreviewImageIndexDesktop = 0,
+	kIOPreviewImageIndexLockScreen = 1,
 	kIOPreviewImageCount = 2
 };
 
@@ -549,7 +553,7 @@ enum
 	kIOScreenLockUnlocked        = 2,
 	kIOScreenLockLocked          = 3,
 	kIOScreenLockFileVaultDialog = 4,
-};	
+};
 
 #define kIOScreenLockStateKey       "IOScreenLockState"
 #define kIOBooterScreenLockStateKey "IOBooterScreenLockState"

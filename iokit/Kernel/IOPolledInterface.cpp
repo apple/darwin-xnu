@@ -44,7 +44,7 @@
 
 OSDefineMetaClassAndAbstractStructors(IOPolledInterface, OSObject);
 
-OSMetaClassDefineReservedUnused(IOPolledInterface, 0);
+OSMetaClassDefineReservedUsed(IOPolledInterface, 0);
 OSMetaClassDefineReservedUnused(IOPolledInterface, 1);
 OSMetaClassDefineReservedUnused(IOPolledInterface, 2);
 OSMetaClassDefineReservedUnused(IOPolledInterface, 3);
@@ -293,6 +293,38 @@ IOPolledFilePollersClose(IOPolledFileIOVars * filevars, uint32_t state)
 
     return (err);
 }
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+IOReturn IOPolledInterface::setEncryptionKey(const uint8_t * key, size_t keySize)
+{
+    return (kIOReturnUnsupported);
+}
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+IOReturn
+IOPolledFilePollersSetEncryptionKey(IOPolledFileIOVars * filevars,
+				    const uint8_t * key, size_t keySize)
+{
+    IOReturn              ret = kIOReturnUnsupported;
+    IOReturn              err;
+    int32_t		  idx;
+    IOPolledFilePollers * vars = filevars->pollers;
+    IOPolledInterface   * poller;
+
+    for (idx = 0;
+         (poller = (IOPolledInterface *) vars->pollers->getObject(idx));
+         idx++)
+    {
+        poller = (IOPolledInterface *) vars->pollers->getObject(idx);
+        err = poller->setEncryptionKey(key, keySize);
+	if (kIOReturnSuccess == err) ret = err;
+    }
+
+    return (ret);
+}
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 IOMemoryDescriptor *
@@ -471,7 +503,7 @@ IOCopyMediaForDev(dev_t device)
 
 static IOReturn 
 IOGetVolumeCryptKey(dev_t block_dev,  OSString ** pKeyUUID, 
-		    uint8_t * volumeCryptKey, size_t keySize)
+		    uint8_t * volumeCryptKey, size_t * keySize)
 {
     IOReturn         err;
     IOService *      part;
@@ -488,9 +520,15 @@ IOGetVolumeCryptKey(dev_t block_dev,  OSString ** pKeyUUID,
     // Try APFS first
     {
         uuid_t volUuid = {0};
-        size_t sizeOut = 0;
-        err = part->callPlatformFunction(APFSMEDIA_GETHIBERKEY, false, &volUuid, volumeCryptKey, &keySize, &sizeOut);
-        if (err == kIOReturnSuccess)
+        err = part->callPlatformFunction(APFSMEDIA_GETHIBERKEY, false, &volUuid, volumeCryptKey, keySize, keySize);
+	if (kIOReturnBadArgument == err)
+	{
+	    // apfs fails on buffer size >32
+	    *keySize = 32;
+	    err = part->callPlatformFunction(APFSMEDIA_GETHIBERKEY, false, &volUuid, volumeCryptKey, keySize, keySize);
+	}
+        if (err != kIOReturnSuccess) *keySize = 0;
+        else
         {
             // No need to create uuid string if it's not requested
             if (pKeyUUID)
@@ -524,8 +562,8 @@ IOGetVolumeCryptKey(dev_t block_dev,  OSString ** pKeyUUID,
             IOLog("volume key err 0x%x\n", err);
         else
         {
-            if (vek.key.keybytecount < keySize) keySize = vek.key.keybytecount;
-            bcopy(&vek.key.keybytes[0], volumeCryptKey, keySize);
+            if (vek.key.keybytecount < *keySize) *keySize = vek.key.keybytecount;
+            bcopy(&vek.key.keybytes[0], volumeCryptKey, *keySize);
         }
         bzero(&vek, sizeof(vek));
 
@@ -548,7 +586,7 @@ IOPolledFileOpen(const char * filename,
                  void * write_file_addr, size_t write_file_len,
                  IOPolledFileIOVars ** fileVars,
                  OSData ** imagePath,
-                 uint8_t * volumeCryptKey, size_t keySize)
+                 uint8_t * volumeCryptKey, size_t * keySize)
 {
     IOReturn             err = kIOReturnSuccess;
     IOPolledFileIOVars * vars;

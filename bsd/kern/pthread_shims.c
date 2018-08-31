@@ -146,6 +146,13 @@ pthread_returning_to_userspace(void)
 	thread_exception_return();
 }
 
+__attribute__((noreturn))
+static void
+pthread_bootstrap_return(void)
+{
+	thread_bootstrap_return();
+}
+
 static uint32_t
 get_task_threadmax(void) {
 	return task_threadmax;
@@ -616,7 +623,7 @@ static const struct pthread_callbacks_s pthread_callbacks = {
 	.uthread_is_cancelled = uthread_is_cancelled,
 
 	.thread_exception_return = pthread_returning_to_userspace,
-	.thread_bootstrap_return = thread_bootstrap_return,
+	.thread_bootstrap_return = pthread_bootstrap_return,
 	.unix_syscall_return = unix_syscall_return,
 
 	.absolutetime_to_microtime = absolutetime_to_microtime,

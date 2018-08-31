@@ -91,12 +91,12 @@ kperf_thread_info_runmode_legacy(thread_t thread)
 		kperf_state |= KPERF_TI_IDLE;
 	}
 
-#if !TARGET_OS_EMBEDDED
+#if !CONFIG_EMBEDDED
 	/* on desktop, if state is blank, leave not idle set */
 	if (kperf_state == 0) {
 		return (TH_IDLE << 16);
 	}
-#endif /* !TARGET_OS_EMBEDDED */
+#endif /* !CONFIG_EMBEDDED */
 
 	/* high two bytes are inverted mask, low two bytes are normal */
 	return (((~kperf_state & 0xffff) << 16) | (kperf_state & 0xffff));

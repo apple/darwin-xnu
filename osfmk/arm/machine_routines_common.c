@@ -81,7 +81,14 @@ sched_perfcontrol_max_runnable_latency_default(perfcontrol_max_runnable_latency_
 }
 
 static void
-sched_perfcontrol_work_interval_notify_default(perfcontrol_state_t thread_state __unused, perfcontrol_work_interval_t work_interval __unused)
+sched_perfcontrol_work_interval_notify_default(perfcontrol_state_t thread_state __unused,
+					       perfcontrol_work_interval_t work_interval __unused)
+{
+}
+
+static void
+sched_perfcontrol_work_interval_ctl_default(perfcontrol_state_t thread_state __unused,
+					    perfcontrol_work_interval_instance_t instance __unused)
 {
 }
 
@@ -115,6 +122,7 @@ sched_perfcontrol_thread_group_deinit_t         sched_perfcontrol_thread_group_d
 sched_perfcontrol_thread_group_flags_update_t   sched_perfcontrol_thread_group_flags_update = sched_perfcontrol_thread_group_default;
 sched_perfcontrol_max_runnable_latency_t        sched_perfcontrol_max_runnable_latency = sched_perfcontrol_max_runnable_latency_default;
 sched_perfcontrol_work_interval_notify_t        sched_perfcontrol_work_interval_notify = sched_perfcontrol_work_interval_notify_default;
+sched_perfcontrol_work_interval_ctl_t           sched_perfcontrol_work_interval_ctl = sched_perfcontrol_work_interval_ctl_default;
 sched_perfcontrol_deadline_passed_t             sched_perfcontrol_deadline_passed = sched_perfcontrol_deadline_passed_default;
 sched_perfcontrol_csw_t                         sched_perfcontrol_csw = sched_perfcontrol_csw_default;
 sched_perfcontrol_state_update_t                sched_perfcontrol_state_update = sched_perfcontrol_state_update_default;
@@ -130,6 +138,14 @@ sched_perfcontrol_register_callbacks(sched_perfcontrol_callbacks_t callbacks, un
 
 	if (callbacks) {
 
+
+		if (callbacks->version >= SCHED_PERFCONTROL_CALLBACKS_VERSION_7) {
+			if (callbacks->work_interval_ctl != NULL) {
+				sched_perfcontrol_work_interval_ctl = callbacks->work_interval_ctl;
+			} else {
+				sched_perfcontrol_work_interval_ctl = sched_perfcontrol_work_interval_ctl_default;
+			}
+		}
 
 		if (callbacks->version >= SCHED_PERFCONTROL_CALLBACKS_VERSION_5) {
 			if (callbacks->csw != NULL) {
@@ -192,6 +208,7 @@ sched_perfcontrol_register_callbacks(sched_perfcontrol_callbacks_t callbacks, un
 		sched_perfcontrol_thread_group_flags_update = sched_perfcontrol_thread_group_default;
 		sched_perfcontrol_max_runnable_latency = sched_perfcontrol_max_runnable_latency_default;
 		sched_perfcontrol_work_interval_notify = sched_perfcontrol_work_interval_notify_default;
+		sched_perfcontrol_work_interval_ctl = sched_perfcontrol_work_interval_ctl_default;
 		sched_perfcontrol_csw = sched_perfcontrol_csw_default;
 		sched_perfcontrol_state_update = sched_perfcontrol_state_update_default;
 	}
@@ -431,6 +448,7 @@ machine_work_interval_notify(thread_t thread,
 	};
 	sched_perfcontrol_work_interval_notify(state, &work_interval);
 }
+
 
 void
 machine_perfcontrol_deadline_passed(uint64_t deadline)

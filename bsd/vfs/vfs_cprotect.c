@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -89,12 +89,38 @@ size_t cpx_sizex(const struct cpx *cpx)
 cpx_t cpx_alloc(size_t key_len)
 {
 	cpx_t cpx;
-
+	
+#if TARGET_OS_OSX
+	/* 
+	 * Macs only use 1 key per volume, so force it into its own page.
+	 * This way, we can write-protect as needed.
+	 */
+	size_t cpsize = cpx_size (key_len);
+	if (cpsize < PAGE_SIZE) {
+		MALLOC(cpx, cpx_t, PAGE_SIZE, M_TEMP, M_WAITOK);
+	}
+	else {
+		panic ("cpx_size too large ! (%lu)", cpsize);
+	}
+#else
 	MALLOC(cpx, cpx_t, cpx_size(key_len), M_TEMP, M_WAITOK);
-
+#endif
 	cpx_init(cpx, key_len);
 
 	return cpx;
+}
+
+/* this is really a void function */
+void cpx_writeprotect (cpx_t cpx) 
+{
+#if TARGET_OS_OSX
+	void *cpxstart = (void*)cpx;
+	void *cpxend = (void*)((uint8_t*)cpx + PAGE_SIZE);
+	vm_map_protect (kernel_map, cpxstart, cpxend, (VM_PROT_READ), FALSE);
+#else
+	(void) cpx;
+#endif
+	return;
 }
 
 #if DEBUG
@@ -104,10 +130,19 @@ static const uint32_t cpx_magic2 = 0x7870637d;		// }cpx
 
 void cpx_free(cpx_t cpx)
 {
+
 #if DEBUG
 	assert(cpx->cpx_magic1 == cpx_magic1);
 	assert(*PTR_ADD(uint32_t *, cpx, cpx_sizex(cpx) - 4) == cpx_magic2);
 #endif
+	
+#if TARGET_OS_OSX
+	/* unprotect the page before bzeroing */
+	void *cpxstart = (void*)cpx;
+	void *cpxend = (void*)((uint8_t*)cpx + PAGE_SIZE);
+	vm_map_protect (kernel_map, cpxstart, cpxend, (VM_PROT_DEFAULT), FALSE);
+#endif
+
 	bzero(cpx->cpx_cached_key, cpx->cpx_max_key_len);
 	FREE(cpx, M_TEMP);
 }

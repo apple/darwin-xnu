@@ -517,12 +517,11 @@ handle_reading(enum fd_pair fd_pair, int fd)
 	T_QUIET; T_ASSERT_LE(final_length, EXPECTED_LEN,
 			"should not read more from file than what can be sent");
 
-	/* FIFOs don't (and TTYs may not) send EOF when the write side closes */
+	/* FIFOs don't send EOF when the write side closes */
 	if (final_length == strlen(EXPECTED_STRING) &&
-			(fd_pair == FIFO_PAIR || fd_pair == PTY_PAIR))
+			(fd_pair == FIFO_PAIR))
 	{
-		T_LOG("read all expected bytes from %s",
-				fd_pair == FIFO_PAIR ? "FIFO" : "PTY");
+		T_LOG("read all expected bytes from FIFO");
 		return false;
 	}
 	return true;
@@ -611,12 +610,6 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 				"select waited for %d seconds and timed out",
 				READ_TIMEOUT_SECS);
 
-			if (fd_pair == PTY_PAIR) {
-				/*
-				 * XXX sometimes a PTY doesn't send EOF when the writer closes
-				 */
-				T_MAYFAIL;
-			}
 			/* didn't fail or time out, therefore data is ready */
 			T_QUIET; T_ASSERT_NE(FD_ISSET(fd, &read_fd), 0,
 					"select should show reading fd as readable");

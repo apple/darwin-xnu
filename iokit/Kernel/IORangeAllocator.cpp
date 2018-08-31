@@ -142,7 +142,8 @@ bool IORangeAllocator::allocElement( UInt32 index )
     if( ((numElements == capacity) && capacityIncrement)
      || (!elements)) {
 
-	newCapacity = capacity + capacityIncrement;
+	if (os_add_overflow(capacity, capacityIncrement, &newCapacity))
+	    return( false );
 	newElements = IONew( IORangeAllocatorElement, newCapacity );
 	if( !newElements)
 	    return( false );

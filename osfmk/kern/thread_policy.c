@@ -777,17 +777,32 @@ thread_update_qos_cpu_time_locked(thread_t thread)
 
 	uint64_t* task_counter = NULL;
 
-	/* Update the task-level qos stats atomically, because we don't have the task lock. */
+	/* Update the task-level effective and requested qos stats atomically, because we don't have the task lock. */
 	switch (thread->effective_policy.thep_qos) {
-		case THREAD_QOS_DEFAULT:            task_counter = &task->cpu_time_qos_stats.cpu_time_qos_default;          break;
-		case THREAD_QOS_MAINTENANCE:        task_counter = &task->cpu_time_qos_stats.cpu_time_qos_maintenance;      break;
-		case THREAD_QOS_BACKGROUND:         task_counter = &task->cpu_time_qos_stats.cpu_time_qos_background;       break;
-		case THREAD_QOS_UTILITY:            task_counter = &task->cpu_time_qos_stats.cpu_time_qos_utility;          break;
-		case THREAD_QOS_LEGACY:             task_counter = &task->cpu_time_qos_stats.cpu_time_qos_legacy;           break;
-		case THREAD_QOS_USER_INITIATED:     task_counter = &task->cpu_time_qos_stats.cpu_time_qos_user_initiated;   break;
-		case THREAD_QOS_USER_INTERACTIVE:   task_counter = &task->cpu_time_qos_stats.cpu_time_qos_user_interactive; break;
+		case THREAD_QOS_DEFAULT:            task_counter = &task->cpu_time_eqos_stats.cpu_time_qos_default;          break;
+		case THREAD_QOS_MAINTENANCE:        task_counter = &task->cpu_time_eqos_stats.cpu_time_qos_maintenance;      break;
+		case THREAD_QOS_BACKGROUND:         task_counter = &task->cpu_time_eqos_stats.cpu_time_qos_background;       break;
+		case THREAD_QOS_UTILITY:            task_counter = &task->cpu_time_eqos_stats.cpu_time_qos_utility;          break;
+		case THREAD_QOS_LEGACY:             task_counter = &task->cpu_time_eqos_stats.cpu_time_qos_legacy;           break;
+		case THREAD_QOS_USER_INITIATED:     task_counter = &task->cpu_time_eqos_stats.cpu_time_qos_user_initiated;   break;
+		case THREAD_QOS_USER_INTERACTIVE:   task_counter = &task->cpu_time_eqos_stats.cpu_time_qos_user_interactive; break;
 		default:
 			panic("unknown effective QoS: %d", thread->effective_policy.thep_qos);
+	}
+
+	OSAddAtomic64(timer_delta, task_counter);
+
+	/* Update the task-level qos stats atomically, because we don't have the task lock. */
+	switch (thread->requested_policy.thrp_qos) {
+		case THREAD_QOS_DEFAULT:            task_counter = &task->cpu_time_rqos_stats.cpu_time_qos_default;          break;
+		case THREAD_QOS_MAINTENANCE:        task_counter = &task->cpu_time_rqos_stats.cpu_time_qos_maintenance;      break;
+		case THREAD_QOS_BACKGROUND:         task_counter = &task->cpu_time_rqos_stats.cpu_time_qos_background;       break;
+		case THREAD_QOS_UTILITY:            task_counter = &task->cpu_time_rqos_stats.cpu_time_qos_utility;          break;
+		case THREAD_QOS_LEGACY:             task_counter = &task->cpu_time_rqos_stats.cpu_time_qos_legacy;           break;
+		case THREAD_QOS_USER_INITIATED:     task_counter = &task->cpu_time_rqos_stats.cpu_time_qos_user_initiated;   break;
+		case THREAD_QOS_USER_INTERACTIVE:   task_counter = &task->cpu_time_rqos_stats.cpu_time_qos_user_interactive; break;
+		default:
+			panic("unknown requested QoS: %d", thread->requested_policy.thrp_qos);
 	}
 
 	OSAddAtomic64(timer_delta, task_counter);

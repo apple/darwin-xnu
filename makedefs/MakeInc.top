@@ -545,7 +545,6 @@ CLEAN_RM_DIRS= $(OBJROOT) $(SYMROOT) $(DSTROOT) \
 CLEAN_ACTION_DIRS= $(SRCROOT)/tools/tests/MPMMTest \
 		$(SRCROOT)/tools/tests/TLBcoherency \
 		$(SRCROOT)/tools/tests/kqueue_tests \
-		$(SRCROOT)/tools/tests/libMicro \
 		$(SRCROOT)/tools/tests/mktimer \
 		$(SRCROOT)/tools/tests/zero-to-n \
 		$(SRCROOT)/tools/tests/personas

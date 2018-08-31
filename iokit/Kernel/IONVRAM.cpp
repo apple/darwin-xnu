@@ -118,7 +118,9 @@ void IODTNVRAM::registerNVRAMController(IONVRAMController *nvram)
     _nvramController->read(0, _nvramImage, kIODTNVRAMImageSize);
     initNVRAMImage();
   } else {
-    syncOFVariables();
+    IOLockLock(_ofLock);
+    (void) syncVariables();
+    IOLockUnlock(_ofLock);
   }
 }
 
@@ -383,14 +385,13 @@ bool IODTNVRAM::setProperty(const OSSymbol *aKey, OSObject *anObject)
   bool     result;
   UInt32   propType, propPerm;
   OSString *tmpString;
-  OSObject *propObject = 0;
-  
+  OSObject *propObject = 0, *oldObject;
+
   if (_ofDict == 0) return false;
-  
+
   // Verify permissions.
   propPerm = getOFVariablePerm(aKey);
-  result = IOUserClient::clientHasPrivilege(current_task(), kIONVRAMPrivilege);
-  if (result != kIOReturnSuccess) {
+  if (IOUserClient::clientHasPrivilege(current_task(), kIONVRAMPrivilege) != kIOReturnSuccess) {
     if (propPerm != kOFVariablePermUserWrite) return false;
   }
   if (propPerm == kOFVariablePermKernelOnly && current_task() != kernel_task) return 0;
@@ -410,15 +411,15 @@ bool IODTNVRAM::setProperty(const OSSymbol *aKey, OSObject *anObject)
   case kOFVariableTypeBoolean :
     propObject = OSDynamicCast(OSBoolean, anObject);
     break;
-    
+
   case kOFVariableTypeNumber :
     propObject = OSDynamicCast(OSNumber, anObject);
     break;
-    
+
   case kOFVariableTypeString :
     propObject = OSDynamicCast(OSString, anObject);
     break;
-    
+
   case kOFVariableTypeData :
     propObject = OSDynamicCast(OSData, anObject);
     if (propObject == 0) {
@@ -430,17 +431,36 @@ bool IODTNVRAM::setProperty(const OSSymbol *aKey, OSObject *anObject)
     }
     break;
   }
-  
+
   if (propObject == 0) return false;
 
   IOLockLock(_ofLock);
+
+  oldObject = _ofDict->getObject(aKey);
+  if (oldObject) {
+    oldObject->retain();
+  }
   result = _ofDict->setObject(aKey, propObject);
-  IOLockUnlock(_ofLock);
 
   if (result) {
-    syncOFVariables();
+    if (syncVariables() != kIOReturnSuccess) {
+        if (oldObject) {
+          _ofDict->setObject(aKey, oldObject);
+        }
+        else {
+          _ofDict->removeObject(aKey);
+        }
+        (void) syncVariables();
+        result = false;
+    }
   }
-  
+
+  if (oldObject) {
+    oldObject->release();
+  }
+
+  IOLockUnlock(_ofLock);
+
   return result;
 }
 
@@ -475,11 +495,12 @@ void IODTNVRAM::removeProperty(const OSSymbol *aKey)
   if (result) {
     _ofDict->removeObject(aKey);
   }
-  IOLockUnlock(_ofLock);
 
   if (result) {
-    syncOFVariables();
+    (void) syncVariables();
   }
+
+  IOLockUnlock(_ofLock);
 }
 
 IOReturn IODTNVRAM::setProperties(OSObject *properties)
@@ -758,35 +779,41 @@ IOReturn IODTNVRAM::initOFVariables(void)
 
 IOReturn IODTNVRAM::syncOFVariables(void)
 {
+  return kIOReturnUnsupported;
+}
+
+IOReturn IODTNVRAM::syncVariables(void)
+{
   bool                 ok;
   UInt32               length, maxLength;
   UInt8                *buffer, *tmpBuffer;
   const OSSymbol       *tmpSymbol;
   OSObject             *tmpObject;
   OSCollectionIterator *iter;
-  
+
+  IOLockAssert(_ofLock, kIOLockAssertOwned);
+
   if ((_ofImage == 0) || (_ofDict == 0) || _systemPaniced) return kIOReturnNotReady;
-  
+
   buffer = tmpBuffer = IONew(UInt8, _ofPartitionSize);
   if (buffer == 0) return kIOReturnNoMemory;
   bzero(buffer, _ofPartitionSize);
-  
+
   ok = true;
   maxLength = _ofPartitionSize;
 
-  IOLockLock(_ofLock);
   iter = OSCollectionIterator::withCollection(_ofDict);
   if (iter == 0) ok = false;
-  
+
   while (ok) {
     tmpSymbol = OSDynamicCast(OSSymbol, iter->getNextObject());
     if (tmpSymbol == 0) break;
-    
+
     // Don't save 'aapl,panic-info'.
     if (tmpSymbol->isEqualTo(kIODTNVRAMPanicInfoKey)) continue;
-    
+
     tmpObject = _ofDict->getObject(tmpSymbol);
-    
+
     length = maxLength;
     ok = convertObjectToProp(tmpBuffer, &length, tmpSymbol, tmpObject);
     if (ok) {
@@ -795,21 +822,20 @@ IOReturn IODTNVRAM::syncOFVariables(void)
     }
   }
   iter->release();
-  IOLockUnlock(_ofLock);
-  
+
   if (ok) {
     bcopy(buffer, _ofImage, _ofPartitionSize);
   }
-  
+
   IODelete(buffer, UInt8, _ofPartitionSize);
-  
+
   if (!ok) return kIOReturnBadArgument;
-  
+
   if (_nvramController != 0) {
-    _nvramController->write(0, _nvramImage, kIODTNVRAMImageSize);
+    return _nvramController->write(0, _nvramImage, kIODTNVRAMImageSize);
   }
-  
-  return kIOReturnSuccess;
+
+  return kIOReturnNotReady;
 }
 
 struct OFVariable {
@@ -1376,7 +1402,7 @@ IOReturn IODTNVRAM::writeNVRAMPropertyType1(IORegistryEntry *entry,
 					    const OSSymbol *propName,
 					    OSData *value)
 {
-  OSData       *oldData;
+  OSData       *oldData, *escapedData;
   OSData       *data = 0;
   const UInt8  *startPtr;
   const UInt8  *propStart;
@@ -1400,9 +1426,10 @@ IOReturn IODTNVRAM::writeNVRAMPropertyType1(IORegistryEntry *entry,
 
   oldData = OSDynamicCast(OSData, _ofDict->getObject(_registryPropertiesKey));
   if (oldData) {
+
     startPtr = (const UInt8 *) oldData->getBytesNoCopy();
     endPtr = startPtr + oldData->getLength();
-    
+
     propStart = startPtr;
     wherePtr = startPtr;
     while (wherePtr < endPtr) {
@@ -1430,7 +1457,7 @@ IOReturn IODTNVRAM::writeNVRAMPropertyType1(IORegistryEntry *entry,
         nvPath = 0;
         nvName = 0;
       }
-        
+
       startPtr = wherePtr;
     }
   }
@@ -1476,22 +1503,39 @@ IOReturn IODTNVRAM::writeNVRAMPropertyType1(IORegistryEntry *entry,
 
     // append prop name
     ok &= data->appendBytes(propName->getCStringNoCopy(), propName->getLength() + 1);
-  
+
     // append escaped data
-    oldData = escapeDataToData(value);
-    ok &= (oldData != 0);
-    if (ok) ok &= data->appendBytes(oldData);
+    escapedData = escapeDataToData(value);
+    ok &= (escapedData != 0);
+    if (ok) ok &= data->appendBytes(escapedData);
 
   } while (false);
 
+  oldData->retain();
   if (ok) {
     ok = _ofDict->setObject(_registryPropertiesKey, data);
   }
 
-  IOLockUnlock(_ofLock);
   if (data) data->release();
 
-  if (ok) syncOFVariables();
+  if (ok) {
+    if (syncVariables() != kIOReturnSuccess) {
+      if (oldData) {
+        _ofDict->setObject(_registryPropertiesKey, oldData);
+      }
+      else {
+        _ofDict->removeObject(_registryPropertiesKey);
+      }
+      (void) syncVariables();
+      ok = false;
+    }
+  }
+
+  if (oldData) {
+    oldData->release();
+  }
+
+  IOLockUnlock(_ofLock);
 
   return ok ? kIOReturnSuccess : kIOReturnNoMemory;
 }

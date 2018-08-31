@@ -29,9 +29,8 @@
 #ifndef _KDD_H_
 #define _KDD_H_
 
-#include <kcdata.h>
-
 #import <Foundation/Foundation.h>
+#import <kcdata.h>
 
 /*!
  * @class KCDataType
@@ -123,7 +122,7 @@ NSMutableDictionary * _Nullable parseKCDataArray(kcdata_iter_t iter, NSError * _
  *
  */
 
-NSMutableDictionary * _Nullable parseKCDataContainer(kcdata_iter_t * _Nonnull iter_p, NSError * _Nullable * _Nullable error) NS_RETURNS_RETAINED;
+NSMutableDictionary * _Nullable parseKCDataContainer(kcdata_iter_t * _Nonnull iter, NSError * _Nullable * _Nullable error) NS_RETURNS_RETAINED;
 
 /*!
  * @function parseKCDataBuffer

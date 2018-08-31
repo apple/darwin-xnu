@@ -51,6 +51,8 @@
 #include <mach/host_special_ports.h>
 #include <mach/audit_triggers_server.h>
 
+#include <os/overflow.h>
+
 extern void ipc_port_release_send(ipc_port_t port);
 
 #if CONFIG_AUDIT
@@ -182,7 +184,10 @@ _audit_malloc(size_t size, au_malloc_type_t *type, int flags)
 #endif
 {
 	struct mhdr	*hdr;
-	size_t	memsize = sizeof (*hdr) + size;
+	size_t	memsize;
+	if (os_add_overflow(sizeof(*hdr), size, &memsize)) {
+		return (NULL);
+	}
 
 	if (size == 0)
 		return (NULL);

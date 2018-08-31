@@ -113,5 +113,83 @@ enum {
     kIOCatalogServiceTerminate
 };
 
+
+#ifdef XNU_KERNEL_PRIVATE
+
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
+#include <kern/ipc_kobject.h>
+
+/*
+ * Functions in iokit:IOUserClient.cpp
+ */
+
+extern void iokit_add_reference( io_object_t obj, ipc_kobject_type_t type );
+
+extern ipc_port_t iokit_port_for_object( io_object_t obj,
+			ipc_kobject_type_t type );
+
+extern kern_return_t iokit_client_died( io_object_t obj,
+                        ipc_port_t port, ipc_kobject_type_t type, mach_port_mscount_t * mscount );
+
+extern kern_return_t
+iokit_client_memory_for_type(
+	io_object_t	connect,
+	unsigned int	type,
+	unsigned int *	flags,
+	vm_address_t *	address,
+	vm_size_t    *	size );
+
+/*
+ * Functions in osfmk:iokit_rpc.c
+ */
+
+extern ipc_port_t iokit_alloc_object_port( io_object_t obj,
+			ipc_kobject_type_t type );
+
+extern kern_return_t iokit_destroy_object_port( ipc_port_t port );
+
+extern mach_port_name_t iokit_make_send_right( task_t task,
+				io_object_t obj, ipc_kobject_type_t type );
+
+extern kern_return_t iokit_mod_send_right( task_t task, mach_port_name_t name, mach_port_delta_t delta );
+
+extern io_object_t iokit_lookup_object_with_port_name(mach_port_name_t name, ipc_kobject_type_t type, task_t task);
+
+extern io_object_t iokit_lookup_connect_ref_current_task(mach_port_name_t name);
+
+extern void iokit_retain_port( ipc_port_t port );
+extern void iokit_release_port( ipc_port_t port );
+extern void iokit_release_port_send( ipc_port_t port );
+
+extern void iokit_lock_port(ipc_port_t port);
+extern void iokit_unlock_port(ipc_port_t port);
+
+extern kern_return_t iokit_switch_object_port( ipc_port_t port, io_object_t obj, ipc_kobject_type_t type );
+
+/*
+ * Functions imported by iokit:IOMemoryDescriptor.cpp
+ */
+
+extern ppnum_t IOGetLastPageNumber(void);
+
+extern kern_return_t IOMapPages(vm_map_t map, mach_vm_address_t va, mach_vm_address_t pa,
+                                 mach_vm_size_t length, unsigned int mapFlags);
+
+extern kern_return_t IOUnmapPages(vm_map_t map, mach_vm_address_t va, mach_vm_size_t length);
+
+extern kern_return_t IOProtectCacheMode(vm_map_t map, mach_vm_address_t va,
+					mach_vm_size_t length, unsigned int options);
+
+extern unsigned int IODefaultCacheBits(addr64_t pa);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif /* __cplusplus */
+
+#endif /* MACH_KERNEL_PRIVATE */
+
 #endif /* ! _IOKIT_IOKITSERVER_H */
 

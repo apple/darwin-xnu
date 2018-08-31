@@ -1,3 +1,4 @@
+
 export MakeInc_cmd=${SRCROOT}/makedefs/MakeInc.cmd
 export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
@@ -79,7 +80,7 @@ INSTALL_KF_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES} ${EXPORT_FILES} ${PRI
 
 INSTALL_MI_DIR = kern
 
-EXPORT_MI_LIST = ${DATAFILES} ${PRIVATE_DATAFILES} ${EXPORT_FILES}
+EXPORT_MI_LIST = ${DATAFILES} ${PRIVATE_DATAFILES} ${EXPORT_FILES} ipc_kobject.h
 
 EXPORT_MI_DIR = kern
 

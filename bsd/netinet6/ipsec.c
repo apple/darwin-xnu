@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -3689,8 +3689,13 @@ ipsec6_output_tunnel_internal(struct ipsec_output_state *state, struct secasvar 
 			struct sockaddr_in* dst4;
 			struct route *ro4 = NULL;
 			struct route  ro4_copy;
-			struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0,
-			    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+			struct ip_out_args ipoa;
+
+			bzero(&ipoa, sizeof(ipoa));
+			ipoa.ipoa_boundif = IFSCOPE_NONE;
+			ipoa.ipoa_flags = IPOAF_SELECT_SRCIF;
+			ipoa.ipoa_sotc = SO_TC_UNSPEC;
+			ipoa.ipoa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 			
 			if (must_be_last)
 				*must_be_last = 1;
@@ -4680,11 +4685,15 @@ ipsec_send_natt_keepalive(
 	struct mbuf	       *m;
 	struct ip          *ip;
 	int                 error;
-	struct ip_out_args  ipoa =
-	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip_out_args  ipoa;
 	struct route        ro;
 	int keepalive_interval = natt_keepalive_interval;
+
+	bzero(&ipoa, sizeof(ipoa));
+	ipoa.ipoa_boundif = IFSCOPE_NONE;
+	ipoa.ipoa_flags = IPOAF_SELECT_SRCIF;
+	ipoa.ipoa_sotc = SO_TC_UNSPEC;
+	ipoa.ipoa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 

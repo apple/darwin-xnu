@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -75,6 +75,7 @@
 #include <net/ntstat.h>
 #include <net/if_llatbl.h>
 #include <net/net_api_stats.h>
+#include <net/if_ports_used.h>
 
 #if INET
 #include <netinet/in_var.h>
@@ -322,7 +323,8 @@ static void dlil_if_trace(struct dlil_ifnet *, int);
 static void if_proto_ref(struct if_proto *);
 static void if_proto_free(struct if_proto *);
 static struct if_proto *find_attached_proto(struct ifnet *, u_int32_t);
-static int dlil_ifp_proto_count(struct ifnet *);
+static u_int32_t dlil_ifp_protolist(struct ifnet *ifp, protocol_family_t *list,
+     u_int32_t list_count);
 static void if_flt_monitor_busy(struct ifnet *);
 static void if_flt_monitor_unbusy(struct ifnet *);
 static void if_flt_monitor_enter(struct ifnet *);
@@ -432,7 +434,6 @@ static int sysctl_rcvq_maxlen SYSCTL_HANDLER_ARGS;
 static int sysctl_hwcksum_dbg_mode SYSCTL_HANDLER_ARGS;
 static int sysctl_hwcksum_dbg_partial_rxoff_forced SYSCTL_HANDLER_ARGS;
 static int sysctl_hwcksum_dbg_partial_rxoff_adj SYSCTL_HANDLER_ARGS;
-static int sysctl_get_ports_used SYSCTL_HANDLER_ARGS;
 
 struct chain_len_stats tx_chain_len_stats;
 static int sysctl_tx_chain_len_stats SYSCTL_HANDLER_ARGS;
@@ -518,12 +519,6 @@ static u_int32_t dlil_input_sanity_check = 0;
 struct timespec dlil_dbgrate = { 1, 0 };
 
 SYSCTL_DECL(_net_link_generic_system);
-
-#if CONFIG_MACF
-SYSCTL_INT(_net_link_generic_system, OID_AUTO, dlil_lladdr_ckreq,
-	CTLFLAG_RW | CTLFLAG_LOCKED, &dlil_lladdr_ckreq, 0,
-	"Require MACF system info check to expose link-layer address");
-#endif
 
 SYSCTL_INT(_net_link_generic_system, OID_AUTO, dlil_verbose,
     CTLFLAG_RW | CTLFLAG_LOCKED, &dlil_verbose, 0, "Log DLIL error messages");
@@ -734,9 +729,6 @@ uint32_t tx_chain_len_count = 0;
 SYSCTL_UINT(_net_link_generic_system, OID_AUTO, tx_chain_len_count,
     CTLFLAG_RW | CTLFLAG_LOCKED, &tx_chain_len_count, 0, "");
 
-SYSCTL_NODE(_net_link_generic_system, OID_AUTO, get_ports_used,
-    CTLFLAG_RD | CTLFLAG_LOCKED, sysctl_get_ports_used, "");
-
 static uint32_t threshold_notify = 1;		/* enable/disable */
 SYSCTL_UINT(_net_link_generic_system, OID_AUTO, threshold_notify,
     CTLFLAG_RW | CTLFLAG_LOCKED, &threshold_notify, 0, "");
@@ -910,12 +902,23 @@ if_proto_free(struct if_proto *proto)
 	 */
 	ifnet_lock_shared(ifp);
 	ev_pr_data.proto_family = proto_family;
-	ev_pr_data.proto_remaining_count = dlil_ifp_proto_count(ifp);
+	ev_pr_data.proto_remaining_count = dlil_ifp_protolist(ifp, NULL, 0);
 	ifnet_lock_done(ifp);
 
 	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_PROTO_DETACHED,
 	    (struct net_event_data *)&ev_pr_data,
 	    sizeof (struct kev_dl_proto_data));
+
+	if (ev_pr_data.proto_remaining_count == 0) {
+		/*
+		 * The protocol count has gone to zero, mark the interface down.
+		 * This used to be done by configd.KernelEventMonitor, but that
+		 * is inherently prone to races (rdar://problem/30810208).
+		 */
+		(void) ifnet_set_flags(ifp, 0, IFF_UP);
+		(void) ifnet_ioctl(ifp, 0, SIOCSIFFLAGS, NULL);
+		dlil_post_sifflags_msg(ifp);
+	}
 
 	zfree(dlif_proto_zone, proto);
 }
@@ -1038,12 +1041,20 @@ ifnet_head_assert_exclusive(void)
 }
 
 /*
- * Caller must already be holding ifnet lock.
+ * dlil_ifp_protolist
+ * - get the list of protocols attached to the interface, or just the number
+ *   of attached protocols
+ * - if the number returned is greater than 'list_count', truncation occurred
+ *
+ * Note:
+ * - caller must already be holding ifnet lock.
  */
-static int
-dlil_ifp_proto_count(struct ifnet *ifp)
+static u_int32_t
+dlil_ifp_protolist(struct ifnet *ifp, protocol_family_t *list,
+    u_int32_t list_count)
 {
-	int i, count = 0;
+	u_int32_t	count = 0;
+	int 		i;
 
 	ifnet_lock_assert(ifp, IFNET_LCK_ASSERT_OWNED);
 
@@ -1053,11 +1064,29 @@ dlil_ifp_proto_count(struct ifnet *ifp)
 	for (i = 0; i < PROTO_HASH_SLOTS; i++) {
 		struct if_proto *proto;
 		SLIST_FOREACH(proto, &ifp->if_proto_hash[i], next_hash) {
+			if (list != NULL && count < list_count) {
+				list[count] = proto->protocol_family;
+			}
 			count++;
 		}
 	}
 done:
 	return (count);
+}
+
+__private_extern__ u_int32_t
+if_get_protolist(struct ifnet * ifp, u_int32_t *protolist, u_int32_t count)
+{
+	ifnet_lock_shared(ifp);
+	count = dlil_ifp_protolist(ifp, protolist, count);
+	ifnet_lock_done(ifp);
+	return (count);
+}
+
+__private_extern__ void
+if_free_protolist(u_int32_t *list)
+{
+	_FREE(list, M_TEMP);
 }
 
 __private_extern__ void
@@ -1683,6 +1712,9 @@ dlil_init(void)
 
 	/* Initialize the service class to dscp map */
 	net_qos_map_init();
+
+	/* Initialize the interface port list */
+	if_ports_used_init();
 
 #if DEBUG || DEVELOPMENT
 	/* Run self-tests */
@@ -2697,7 +2729,8 @@ dlil_input_handler(struct ifnet *ifp, struct mbuf *m_head,
 	if (inp == dlil_main_input_thread)
 		dlil_input_stats_sync(ifp, inp);
 
-	if (qlen(&inp->rcvq_pkts) >= dlil_rcv_mit_pkts_min &&
+	if (inp->input_mit_tcall &&
+	    qlen(&inp->rcvq_pkts) >= dlil_rcv_mit_pkts_min &&
 	    qlen(&inp->rcvq_pkts) < dlil_rcv_mit_pkts_max &&
 	    (ifp->if_family == IFNET_FAMILY_ETHERNET ||
 	    ifp->if_type == IFT_CELLULAR)
@@ -4006,6 +4039,27 @@ dlil_post_complete_msg(struct ifnet *ifp, struct kev_msg *event)
 	return (kev_post_msg(event));
 }
 
+__private_extern__ void
+dlil_post_sifflags_msg(struct ifnet * ifp)
+{
+	struct kev_msg ev_msg;
+	struct net_event_data ev_data;
+
+	bzero(&ev_data, sizeof (ev_data));
+	bzero(&ev_msg, sizeof (ev_msg));
+	ev_msg.vendor_code = KEV_VENDOR_APPLE;
+	ev_msg.kev_class = KEV_NETWORK_CLASS;
+	ev_msg.kev_subclass = KEV_DL_SUBCLASS;
+	ev_msg.event_code = KEV_DL_SIFFLAGS;
+	strlcpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
+	ev_data.if_family = ifp->if_family;
+	ev_data.if_unit = (u_int32_t) ifp->if_unit;
+	ev_msg.dv[0].data_length = sizeof(struct net_event_data);
+	ev_msg.dv[0].data_ptr = &ev_data;
+	ev_msg.dv[1].data_length = 0;
+	dlil_post_complete_msg(ifp, &ev_msg);
+}
+
 #define	TMP_IF_PROTO_ARR_SIZE	10
 static int
 dlil_event_internal(struct ifnet *ifp, struct kev_msg *event, bool update_generation)
@@ -4048,7 +4102,7 @@ dlil_event_internal(struct ifnet *ifp, struct kev_msg *event, bool update_genera
 	 * therefore we are avoiding embedded pointers here.
 	 */
 	ifnet_lock_shared(ifp);
-	if_proto_count = dlil_ifp_proto_count(ifp);
+	if_proto_count = dlil_ifp_protolist(ifp, NULL, 0);
 	if (if_proto_count) {
 		int i;
 		VERIFY(ifp->if_proto_hash != NULL);
@@ -5198,7 +5252,8 @@ dlil_attach_protocol_internal(struct if_proto *proto,
 	 * (subject to change)
 	 */
 	ev_pr_data.proto_family = proto->protocol_family;
-	ev_pr_data.proto_remaining_count = dlil_ifp_proto_count(ifp);
+	ev_pr_data.proto_remaining_count = dlil_ifp_protolist(ifp, NULL, 0);
+
 	ifnet_lock_done(ifp);
 
 	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_PROTO_ATTACHED,
@@ -5265,6 +5320,14 @@ end:
 	}
 	ifnet_head_done();
 	if (retval == 0) {
+		/*
+		 * A protocol has been attached, mark the interface up.
+		 * This used to be done by configd.KernelEventMonitor, but that
+		 * is inherently prone to races (rdar://problem/30810208).
+		 */
+		(void) ifnet_set_flags(ifp, IFF_UP, IFF_UP);
+		(void) ifnet_ioctl(ifp, 0, SIOCSIFFLAGS, NULL);
+		dlil_post_sifflags_msg(ifp);
 	} else if (ifproto != NULL) {
 		zfree(dlif_proto_zone, ifproto);
 	}
@@ -5326,6 +5389,14 @@ end:
 	}
 	ifnet_head_done();
 	if (retval == 0) {
+		/*
+		 * A protocol has been attached, mark the interface up.
+		 * This used to be done by configd.KernelEventMonitor, but that
+		 * is inherently prone to races (rdar://problem/30810208).
+		 */
+		(void) ifnet_set_flags(ifp, IFF_UP, IFF_UP);
+		(void) ifnet_ioctl(ifp, 0, SIOCSIFFLAGS, NULL);
+		dlil_post_sifflags_msg(ifp);
 	} else if (ifproto != NULL) {
 		zfree(dlif_proto_zone, ifproto);
 	}
@@ -6705,42 +6776,65 @@ ifp_if_event(struct ifnet *ifp, const struct kev_msg *e)
 #pragma unused(ifp, e)
 }
 
-__private_extern__
 int dlil_if_acquire(u_int32_t family, const void *uniqueid,
-    size_t uniqueid_len, struct ifnet **ifp)
+    size_t uniqueid_len, const char *ifxname, struct ifnet **ifp)
 {
 	struct ifnet *ifp1 = NULL;
 	struct dlil_ifnet *dlifp1 = NULL;
 	void *buf, *base, **pbuf;
 	int ret = 0;
 
+	VERIFY(*ifp == NULL);
 	dlil_if_lock();
+	/*
+	 * We absolutely can't have an interface with the same name
+	 * in in-use state.
+	 * To make sure of that list has to be traversed completely
+	 */
 	TAILQ_FOREACH(dlifp1, &dlil_ifnet_head, dl_if_link) {
 		ifp1 = (struct ifnet *)dlifp1;
 
 		if (ifp1->if_family != family)
 			continue;
 
+		/*
+		 * If interface is in use, return EBUSY if either unique id
+		 * or interface extended names are the same
+		 */
 		lck_mtx_lock(&dlifp1->dl_if_lock);
-		/* same uniqueid and same len or no unique id specified */
-		if ((uniqueid_len == dlifp1->dl_if_uniqueid_len) &&
-		    bcmp(uniqueid, dlifp1->dl_if_uniqueid, uniqueid_len) == 0) {
-			/* check for matching interface in use */
+		if (strncmp(ifxname, ifp1->if_xname, IFXNAMSIZ) == 0) {
 			if (dlifp1->dl_if_flags & DLIF_INUSE) {
-				if (uniqueid_len) {
-					ret = EBUSY;
-					lck_mtx_unlock(&dlifp1->dl_if_lock);
-					goto end;
-				}
-			} else {
-				dlifp1->dl_if_flags |= (DLIF_INUSE|DLIF_REUSE);
 				lck_mtx_unlock(&dlifp1->dl_if_lock);
-				*ifp = ifp1;
+				ret = EBUSY;
 				goto end;
+			}
+		}
+
+		if (uniqueid_len) {
+			if (uniqueid_len == dlifp1->dl_if_uniqueid_len &&
+			    bcmp(uniqueid, dlifp1->dl_if_uniqueid, uniqueid_len) == 0) {
+				if (dlifp1->dl_if_flags & DLIF_INUSE) {
+					lck_mtx_unlock(&dlifp1->dl_if_lock);
+					ret = EBUSY;
+					goto end;
+				} else {
+					dlifp1->dl_if_flags |= (DLIF_INUSE|DLIF_REUSE);
+					/* Cache the first interface that can be recycled */
+					if (*ifp == NULL)
+						*ifp = ifp1;
+					/*
+					 * XXX Do not break or jump to end as we have to traverse
+					 * the whole list to ensure there are no name collisions
+					 */
+				}
 			}
 		}
 		lck_mtx_unlock(&dlifp1->dl_if_lock);
 	}
+
+	/* If there's an interface that can be recycled, use that */
+	if (*ifp != NULL)
+		goto end;
 
 	/* no interface found, allocate a new one */
 	buf = zalloc(dlif_zone);
@@ -8658,74 +8752,6 @@ dlil_kev_dl_code_str(u_int32_t event_code)
 		break;
 	}
 	return ("");
-}
-
-/*
- * Mirror the arguments of ifnet_get_local_ports_extended()
- *  ifindex
- *  protocol
- *  flags
- */
-static int
-sysctl_get_ports_used SYSCTL_HANDLER_ARGS
-{
-#pragma unused(oidp)
-	int *name = (int *)arg1;
-	int namelen = arg2;
-	int error = 0;
-	int idx;
-	protocol_family_t protocol;
-	u_int32_t flags;
-	ifnet_t ifp = NULL;
-	u_int8_t *bitfield = NULL;
-
-	if (req->newptr != USER_ADDR_NULL) {
-		error = EPERM;
-		goto done;
-	}
-	if (namelen != 3) {
-		error = ENOENT;
-		goto done;
-	}
-
-	if (req->oldptr == USER_ADDR_NULL) {
-		req->oldidx = bitstr_size(65536);
-		goto done;
-	}
-	if (req->oldlen < bitstr_size(65536)) {
-		error = ENOMEM;
-		goto done;
-	}
-
-	idx = name[0];
-	protocol = name[1];
-	flags = name[2];
-
-	ifnet_head_lock_shared();
-	if (!IF_INDEX_IN_RANGE(idx)) {
-		ifnet_head_done();
-		error = ENOENT;
-		goto done;
-	}
-	ifp = ifindex2ifnet[idx];
-	ifnet_head_done();
-
-	bitfield = _MALLOC(bitstr_size(65536), M_TEMP, M_WAITOK | M_ZERO);
-	if (bitfield == NULL) {
-		error = ENOMEM;
-		goto done;
-	}
-	error = ifnet_get_local_ports_extended(ifp, protocol, flags, bitfield);
-	if (error != 0) {
-		printf("%s: ifnet_get_local_ports_extended() error %d\n",
-		    __func__, error);
-		goto done;
-	}
-	error = SYSCTL_OUT(req, bitfield, bitstr_size(65536));
-done:
-	if (bitfield != NULL)
-		_FREE(bitfield, M_TEMP);
-	return (error);
 }
 
 static void

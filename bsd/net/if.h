@@ -780,6 +780,7 @@ struct if_linkparamsreq {
 	u_int32_t	iflpr_output_sched;
 	u_int64_t	iflpr_output_tbr_rate;
 	u_int32_t	iflpr_output_tbr_percent;
+	u_int64_t	iflpr_input_tbr_rate;
 	struct if_bandwidths iflpr_output_bw;
 	struct if_bandwidths iflpr_input_bw;
 	struct if_latencies iflpr_output_lt;
@@ -882,17 +883,6 @@ struct if_agentidsreq {
 	uuid_t		*ifar_uuids;		/* array of agent UUIDs */
 };
 
-/*
- * Structure for SIOCGIFNEXUS
- */
-struct if_nexusreq {
-	char		ifnr_name[IFNAMSIZ];	/* interface name */
-	uint64_t	ifnr_flags;		/* unused, must be zero */
-	uuid_t		ifnr_netif;		/* netif nexus instance UUID */
-	uuid_t		ifnr_multistack;	/* multistack nexus UUID */
-	uint64_t	ifnr_reserved[5];
-};
-
 #ifdef BSD_KERNEL_PRIVATE
 struct if_agentidsreq32 {
 	char		ifar_name[IFNAMSIZ];
@@ -905,6 +895,17 @@ struct if_agentidsreq64 {
 	user64_addr_t ifar_uuids __attribute__((aligned(8)));
 };
 #endif /* BSD_KERNEL_PRIVATE */
+
+/*
+ * Structure for SIOCGIFNEXUS
+ */
+struct if_nexusreq {
+	char		ifnr_name[IFNAMSIZ];	/* interface name */
+	uint64_t	ifnr_flags;		/* unused, must be zero */
+	uuid_t		ifnr_netif;		/* netif nexus instance UUID */
+	uuid_t		ifnr_multistack;	/* multistack nexus UUID */
+	uint64_t	ifnr_reserved[5];
+};
 
 #define	DLIL_MODIDLEN	20	/* same as IFNET_MODIDLEN */
 #define	DLIL_MODARGLEN	12	/* same as IFNET_MODARGLEN */
@@ -1006,6 +1007,32 @@ struct if_tdmreq64 {
 	user64_addr_t		iftdm_table __attribute__((aligned(8)));
 };
 #endif
+
+/*
+ * Structure for SIOCGIFPROTOLIST.
+ */
+struct if_protolistreq {
+	char			ifpl_name[IFNAMSIZ];
+	u_int32_t		ifpl_count;
+	u_int32_t		ifpl_reserved; /* must be zero */
+	u_int32_t		*ifpl_list;
+};
+
+#ifdef BSD_KERNEL_PRIVATE
+struct if_protolistreq32 {
+	char			ifpl_name[IFNAMSIZ];
+	u_int32_t		ifpl_count;
+	u_int32_t		ifpl_reserved; /* must be zero */
+	user32_addr_t		ifpl_list;
+};
+
+struct if_protolistreq64 {
+	char			ifpl_name[IFNAMSIZ];
+	u_int32_t		ifpl_count;
+	u_int32_t		ifpl_reserved; /* must be zero */
+	user64_addr_t		ifpl_list;
+};
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* PRIVATE */
 

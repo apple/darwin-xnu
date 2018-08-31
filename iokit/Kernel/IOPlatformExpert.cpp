@@ -59,6 +59,7 @@ extern "C" {
 #if !CONFIG_EMBEDDED
 
 boolean_t coprocessor_cross_panic_enabled = TRUE;
+#define APPLE_SECURE_BOOT_VARIABLE_GUID "94b73556-2197-4702-82a8-3e1337dafbfb"
 #endif /* !CONFIG_EMBEDDED */
 
 void printDictionaryKeys (OSDictionary * inDictionary, char * inMsg);
@@ -869,7 +870,10 @@ int PEHaltRestart(unsigned int type)
        if (type == kPEPanicRestartCPU) {
            // Notify any listeners that we're done collecting
            // panic data before we call through to do the restart
-           IOCPURunPlatformPanicActions(kPEPanicEnd);
+#if !CONFIG_EMBEDDED
+           if (coprocessor_cross_panic_enabled)
+#endif
+              IOCPURunPlatformPanicActions(kPEPanicEnd);
 
            // Callout to shutdown the disk driver once we've returned from the
            // kPEPanicEnd callback (and we know all core dumps on this system
@@ -1192,7 +1196,7 @@ void IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
         entry = IORegistryEntry::fromPath( "/options", gIODTPlane );
         if ( entry )
         {
-            data = OSDynamicCast( OSData, entry->getProperty( "EffectiveProductionStatus" ) );
+            data = OSDynamicCast( OSData, entry->getProperty( APPLE_SECURE_BOOT_VARIABLE_GUID":EffectiveProductionStatus" ) );
             if ( data  && ( data->getLength( ) == sizeof( UInt8 ) ) ) {
                     UInt8 *isProdFused = (UInt8 *) data->getBytesNoCopy( );
                     UInt32 debug_flags = 0;
@@ -1619,7 +1623,6 @@ IOPlatformExpertDevice::initWithArgs(
     if( !ok)
 	return( false);
 
-    reserved = NULL;
     workLoop = IOWorkLoop::workLoop();
     if (!workLoop)
         return false;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -365,6 +365,7 @@ extern void ifclassq_calc_target_qdelay(struct ifnet *ifp,
 extern void ifclassq_calc_update_interval(u_int64_t *update_interval);
 extern void ifclassq_set_packet_metadata(struct ifclassq *ifq,
     struct ifnet *ifp, void *p, classq_pkt_type_t ptype);
+extern void ifclassq_reap_caches(boolean_t);
 
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* PRIVATE */

@@ -270,15 +270,6 @@ osfmk/kern/kmod.c			standard
 #
 osfmk/device/subrs.c			standard
 
-#
-# MI CHUD:
-#
-osfmk/chud/chud_cpu.c			standard
-osfmk/chud/chud_glue.c			standard
-osfmk/chud/chud_memory.c		standard
-osfmk/chud/chud_osfmk_callback.c	standard
-osfmk/chud/chud_thread.c		standard
-
 # Kernel performance monitoring
 osfmk/kperf/kperf.c                     optional kperf
 osfmk/kperf/action.c                    optional kperf

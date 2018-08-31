@@ -369,9 +369,6 @@ extern void ddi_report_dev(dev_info_t *);
 
 int ddi_getprop(dev_t dev, dev_info_t *dip, int flags, const char *name, int defvalue);
 
-extern int ddi_prop_free(void *);
-extern int ddi_prop_lookup_int_array(dev_t, dev_info_t *, uint_t, const char *, int **, uint_t *);
-
 extern int ddi_driver_major(dev_info_t *);
 
 extern int ddi_create_minor_node(dev_info_t *, const char *, int, minor_t, const char *, int);

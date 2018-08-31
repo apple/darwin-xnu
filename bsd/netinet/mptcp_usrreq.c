@@ -693,8 +693,7 @@ mptcp_disconnect(struct mptses *mpte)
 	mp_so = mptetoso(mpte);
 	mp_tp = mpte->mpte_mptcb;
 
-	mptcplog((LOG_DEBUG, "MPTCP Socket: "
-	    "%s: mp_so 0x%llx %d\n", __func__,
+	mptcplog((LOG_DEBUG, "%s: mp_so 0x%llx %d\n", __func__,
 	    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so), mp_so->so_error),
 	    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
 
@@ -758,27 +757,19 @@ mptcp_usr_disconnectx(struct socket *mp_so, sae_associd_t aid, sae_connid_t cid)
 	return (mptcp_usr_disconnect(mp_so));
 }
 
-/*
- * User issued close, and wish to trail thru shutdown states.
- */
-static struct mptses *
-mptcp_usrclosed(struct mptses *mpte)
+void
+mptcp_finish_usrclosed(struct mptses *mpte)
 {
-	struct socket *mp_so;
-	struct mptcb *mp_tp;
-	struct mptsub *mpts;
-
-	mpte_lock_assert_held(mpte);	/* same as MP socket lock */
-	mp_so = mptetoso(mpte);
-	mp_tp = mpte->mpte_mptcb;
-
-	mptcp_close_fsm(mp_tp, MPCE_CLOSE);
+	struct mptcb *mp_tp = mpte->mpte_mptcb;
+	struct socket *mp_so = mptetoso(mpte);
 
 	if (mp_tp->mpt_state == MPTCPS_CLOSED) {
 		mpte = mptcp_close(mpte, mp_tp);
 	} else if (mp_tp->mpt_state >= MPTCPS_FIN_WAIT_2) {
 		soisdisconnected(mp_so);
 	} else {
+		struct mptsub *mpts;
+
 		TAILQ_FOREACH(mpts, &mpte->mpte_subflows, mpts_entry) {
 			if ((mp_so->so_state & (SS_CANTRCVMORE|SS_CANTSENDMORE)) ==
 			    (SS_CANTRCVMORE | SS_CANTSENDMORE))
@@ -787,6 +778,23 @@ mptcp_usrclosed(struct mptses *mpte)
 				mptcp_subflow_shutdown(mpte, mpts);
 		}
 	}
+}
+
+/*
+ * User issued close, and wish to trail thru shutdown states.
+ */
+static struct mptses *
+mptcp_usrclosed(struct mptses *mpte)
+{
+	struct mptcb *mp_tp = mpte->mpte_mptcb;
+
+	mptcp_close_fsm(mp_tp, MPCE_CLOSE);
+
+	/* Not everything has been acknowledged - don't close the subflows! */
+	if (mp_tp->mpt_sndnxt + 1 != mp_tp->mpt_sndmax)
+		return (mpte);
+
+	mptcp_finish_usrclosed(mpte);
 
 	return (mpte);
 }
@@ -1458,6 +1466,21 @@ mptcp_setopt(struct mptses *mpte, struct sockopt *sopt)
 			mpte->mpte_flags |= MPTE_SVCTYPE_CHECKED;
 
 			goto out;
+		case MPTCP_ALTERNATE_PORT:
+			/* record at MPTCP level */
+			error = sooptcopyin(sopt, &optval, sizeof(optval),
+			    sizeof(optval));
+			if (error)
+				goto out;
+
+			if (optval < 0 || optval > UINT16_MAX) {
+				error = EINVAL;
+				goto out;
+			}
+
+			mpte->mpte_alternate_port = optval;
+
+			goto out;
 		default:
 			/* not eligible */
 			error = ENOPROTOOPT;
@@ -1567,6 +1590,7 @@ mptcp_getopt(struct mptses *mpte, struct sockopt *sopt)
 	case TCP_ADAPTIVE_WRITE_TIMEOUT:
 	case TCP_NOTSENT_LOWAT:
 	case MPTCP_SERVICE_TYPE:
+	case MPTCP_ALTERNATE_PORT:
 		/* eligible; get the default value just in case */
 		error = mptcp_default_tcp_optval(mpte, sopt, &optval);
 		break;
@@ -1585,6 +1609,9 @@ mptcp_getopt(struct mptses *mpte, struct sockopt *sopt)
 		goto out;
 	case MPTCP_SERVICE_TYPE:
 		optval = mpte->mpte_svctype;
+		goto out;
+	case MPTCP_ALTERNATE_PORT:
+		optval = mpte->mpte_alternate_port;
 		goto out;
 	}
 
@@ -1634,6 +1661,7 @@ mptcp_default_tcp_optval(struct mptses *mpte, struct sockopt *sopt, int *optval)
 	case TCP_ADAPTIVE_READ_TIMEOUT:
 	case TCP_ADAPTIVE_WRITE_TIMEOUT:
 	case MPTCP_SERVICE_TYPE:
+	case MPTCP_ALTERNATE_PORT:
 		*optval = 0;
 		break;
 
@@ -1806,6 +1834,8 @@ mptcp_sopt2str(int level, int optname)
 			return ("ADAPTIVE_WRITE_TIMEOUT");
 		case MPTCP_SERVICE_TYPE:
 			return ("MPTCP_SERVICE_TYPE");
+		case MPTCP_ALTERNATE_PORT:
+			return ("MPTCP_ALTERNATE_PORT");
 		}
 
 		break;

@@ -401,8 +401,9 @@ static void tcp_cache_set_cookie_common(struct tcp_cache_key_src *tcks, u_char *
 	if (tpcache == NULL)
 		return;
 
-	tpcache->tc_tfo_cookie_len = len;
-	memcpy(tpcache->tc_tfo_cookie, cookie, len);
+	tpcache->tc_tfo_cookie_len = len > TFO_COOKIE_LEN_MAX ?
+		TFO_COOKIE_LEN_MAX : len;
+	memcpy(tpcache->tc_tfo_cookie, cookie, tpcache->tc_tfo_cookie_len);
 
 	tcp_cache_unlock(head);
 }

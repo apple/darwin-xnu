@@ -232,6 +232,7 @@ int terminate_with_payload(int pid, uint32_t reason_namespace, uint64_t reason_c
 #define EXEC_EXIT_REASON_FAIRPLAY_DECRYPT   10
 #define EXEC_EXIT_REASON_DECRYPT            11
 #define EXEC_EXIT_REASON_UPX                12
+#define EXEC_EXIT_REASON_NO32EXEC           13
 
 __END_DECLS
 

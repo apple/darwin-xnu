@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -50,6 +50,7 @@
 #include <net/if_ether.h>
 #include <net/net_api_stats.h>
 #include <net/route.h>
+#include <net/if_ports_used.h>
 #include <libkern/libkern.h>
 #include <libkern/OSAtomic.h>
 #include <kern/locks.h>
@@ -225,16 +226,18 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		}
 	}
 
+
+	/* Initialize external name (name + unit) */
+	(void) snprintf(if_xname, sizeof (if_xname), "%s%d",
+	    einit.name, einit.unit);
+
 	if (einit.uniqueid == NULL) {
-		/* Initialize external name (name + unit) */
-		(void) snprintf(if_xname, sizeof (if_xname), "%s%d",
-		    einit.name, einit.unit);
 		einit.uniqueid = if_xname;
 		einit.uniqueid_len = strlen(if_xname);
 	}
 
 	error = dlil_if_acquire(einit.family, einit.uniqueid,
-	    einit.uniqueid_len, &ifp);
+	    einit.uniqueid_len, if_xname, &ifp);
 
 	if (error == 0) {
 		u_int64_t br;
@@ -279,7 +282,7 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 
 		/* Initialize external name (name + unit) */
 		snprintf(__DECONST(char *, ifp->if_xname), IFXNAMSIZ,
-		    "%s%d", ifp->if_name, ifp->if_unit);
+		    "%s", if_xname);
 
 		/*
 		 * On embedded, framer() is already in the extended form;
@@ -2612,7 +2615,10 @@ ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
 	}
 
 	/* bit string is long enough to hold 16-bit port values */
-	bzero(bitfield, bitstr_size(65536));
+	bzero(bitfield, bitstr_size(IP_PORTRANGE_SIZE));
+
+	if_ports_used_update_wakeuuid(ifp);
+
 
 		inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_WILDCARDOK) ?
 			INPCB_GET_PORTS_USED_WILDCARDOK : 0);
@@ -2625,7 +2631,6 @@ ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
 		inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_ACTIVEONLY) ?
 			INPCB_GET_PORTS_USED_ACTIVEONLY : 0);
 
-		
 		ifindex = (ifp != NULL) ? ifp->if_index : 0;
 
 		if (!(flags & IFNET_GET_LOCAL_PORTS_TCPONLY))
@@ -2635,6 +2640,7 @@ ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
 		if (!(flags & IFNET_GET_LOCAL_PORTS_UDPONLY))
 			tcp_get_ports_used(ifindex, protocol, inp_flags,
 			    bitfield);
+
 	return (0);
 }
 

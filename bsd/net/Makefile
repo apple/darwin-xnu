@@ -46,6 +46,7 @@ PRIVATE_DATAFILES = \
 	if_media.h \
 	if_mib.h \
 	if_pflog.h \
+	if_ports_used.h \
 	if_ppp.h \
 	if_utun.h \
 	if_var.h \

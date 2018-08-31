@@ -893,7 +893,7 @@ thread_suspended(__unused void *parameter, wait_result_t result)
 			                      (uintptr_t)thread_tid(thread),
 			                      thread->base_pri,
 			                      thread->sched_pri,
-			                      0, /* eventually, 'reason' */
+			                      thread->sched_usage,
 			                      0);
 		}
 		thread_unlock(thread);

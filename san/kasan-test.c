@@ -434,12 +434,14 @@ static int test_strncat(struct kasan_test *t)
 }
 
 /* we ignore the top *two* frames in backtrace - so add an extra one */
-static int NOINLINE test_blacklist_helper(void)
+static int __attribute__((noinline))
+test_blacklist_helper(void)
 {
 	return kasan_is_blacklisted(TYPE_TEST);
 }
 
-static int NOINLINE test_blacklist(struct kasan_test *t)
+static int __attribute__((noinline))
+test_blacklist(struct kasan_test *t)
 {
 	TEST_START(t);
 	int res = (int)!test_blacklist_helper();
@@ -447,12 +449,13 @@ static int NOINLINE test_blacklist(struct kasan_test *t)
 	return 0;
 }
 
-static int NOINLINE test_blacklist_str(struct kasan_test *t)
+static int __attribute__((noinline))
+test_blacklist_str(struct kasan_test *t)
 {
 	TEST_START(t);
 	char a1[8];
 
-	strlcpy(a1, "looooooooonnnnggg", 9);
+	bcopy("123456", a1, 8);
 
 	TEST_DONE(t, 0); /* success */
 	return 0;
@@ -557,7 +560,7 @@ kasan_run_test(struct kasan_test *test_list, int testno, int fail)
 		/* Triggering a KASan violation will return here by longjmp, bypassing
 		 * stack unpoisoning, so do it here explicitly. We just hope that
 		 * fakestack free will happen later... */
-		kasan_unpoison_curstack();
+		kasan_unpoison_curstack(true);
 
 		if (t->result) {
 			/* faulted, but at the wrong place */

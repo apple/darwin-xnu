@@ -50,6 +50,7 @@
 #include <sys/fbt.h>
 
 #include <sys/dtrace_glue.h>
+#include <san/kasan.h>
 
 /* #include <machine/trap.h> */
 struct savearea_t; /* Used anonymously */
@@ -467,6 +468,14 @@ fbt_excluded(const char* name)
 		return TRUE;
 	}
 
+#if KASAN
+	if (LIT_STRNSTART(name, "kasan") ||
+		LIT_STRNSTART(name, "__kasan") ||
+		LIT_STRNSTART(name, "__asan")) {
+		return TRUE;
+	}
+#endif
+
 	/*
 	 * Place no probes that could be hit on the way to a panic.
 	 */
@@ -560,6 +569,13 @@ fbt_enable(void *arg, dtrace_id_t id, void *parg)
 	}
 
 	if (fbt->fbtp_currentval != fbt->fbtp_patchval) {
+#if KASAN
+		/* Since dtrace probes can call into KASan and vice versa, things can get
+		 * very slow if we have a lot of probes. This call will disable the KASan
+		 * fakestack after a threshold of probes is reached. */
+		kasan_fakestack_suspend();
+#endif
+
 		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint, 
 								sizeof(fbt->fbtp_patchval));
 		/*
@@ -607,6 +623,10 @@ fbt_disable(void *arg, dtrace_id_t id, void *parg)
 		fbt->fbtp_currentval = fbt->fbtp_savedval;
 		ASSERT(ctl->mod_nenabled > 0);
 		ctl->mod_nenabled--;
+
+#if KASAN
+		kasan_fakestack_resume();
+#endif
 	    }
 	}
 	dtrace_membar_consumer();

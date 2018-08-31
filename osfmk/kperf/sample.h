@@ -49,7 +49,11 @@ struct kperf_sample {
 
 #if KPC
 	struct kpcdata    kpcdata;
-#endif
+#endif /* KPC */
+
+#if DEVELOPMENT || DEBUG
+	uint64_t sample_time;
+#endif /* DEVELOPMENT || DEBUG */
 };
 
 /* cache of threads on each CPU during a timer fire */

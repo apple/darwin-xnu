@@ -48,6 +48,12 @@ static struct pe_serial_functions *gPESF;
 
 static int uart_initted = 0;   /* 1 if init'ed */
 
+static unsigned int legacy_uart_enabled = 0; /* 1 Legacy IO based UART is supported on platform */
+
+static boolean_t lpss_uart_supported = 0; /* 1 if LPSS UART is supported on platform */
+static unsigned int lpss_uart_enabled = 0; /* 1 if it is LPSS UART is in D0 state */
+static void lpss_uart_re_init (void);
+
 #define DEFAULT_UART_BAUD_RATE 115200
 
 static unsigned uart_baud_rate = DEFAULT_UART_BAUD_RATE;
@@ -101,6 +107,11 @@ enum {
     UART_LSR_PE    = 0x04,
     UART_LSR_FE    = 0x08,
     UART_LSR_THRE  = 0x20
+};
+
+enum {
+	UART_CLK_125M_1 = 0x60002,
+	UART_CLK_125M_2 = 0x80060003,
 };
 
 static int
@@ -207,8 +218,9 @@ static struct pe_serial_functions legacy_uart_serial_functions = {
 // MMIO UART (using PCH LPSS UART2)
 // =============================================================================
 
-#define MMIO_UART2_BASE_LEGACY  0xFE034000
-#define MMIO_UART2_BASE         0xFE036000
+#define MMIO_UART2_BASE_LEGACY  0xFE034000 /* Legacy MMIO Config space */
+#define MMIO_UART2_BASE         0xFE036000 /* MMIO Config space */
+#define PCI_UART2               0xFE037000 /* PCI Config Space */
 
 #define MMIO_WRITE(r, v)  ml_phys_write_word(mmio_uart_base + MMIO_UART_##r, v)
 #define MMIO_READ(r)      ml_phys_read_word(mmio_uart_base + MMIO_UART_##r)
@@ -223,7 +235,9 @@ enum {
     MMIO_UART_LCR = 0xc,   /* line control register         */
     MMIO_UART_MCR = 0x10,  /* modem control register        */
     MMIO_UART_LSR = 0x14,  /* line status register          */
-    MMIO_UART_SCR = 0x1c   /* scratch register              */
+    MMIO_UART_SCR = 0x1c,  /* scratch register              */
+    MMIO_UART_CLK = 0x200, /* clocks register               */
+    MMIO_UART_RST = 0x204  /* Reset register              */
 };
 
 static vm_offset_t mmio_uart_base = 0;
@@ -235,7 +249,6 @@ mmio_uart_present( void )
     if (MMIO_READ(SCR) != 0x5a) return 0;
     MMIO_WRITE( SCR, 0xa5 );
     if (MMIO_READ(SCR) != 0xa5) return 0;
-
     return 1;
 }
 
@@ -348,6 +361,63 @@ mmio_uart_rr0( void )
     return (lsr & UART_LSR_DR);
 }
 
+void lpss_uart_enable( boolean_t on_off )
+{
+	unsigned int pmcs_reg;
+
+	if (!lpss_uart_supported) {
+		return;
+	}
+
+	pmcs_reg = ml_phys_read_byte (PCI_UART2 + 0x84);
+	if (on_off == FALSE) {
+		pmcs_reg |= 0x03;
+		lpss_uart_enabled = 0;
+	} else {
+		pmcs_reg &= ~(0x03);
+	}
+
+	ml_phys_write_byte (PCI_UART2 + 0x84, pmcs_reg);
+	pmcs_reg = ml_phys_read_byte (PCI_UART2 + 0x84);
+	
+	if (on_off == TRUE) {
+		lpss_uart_re_init();
+		lpss_uart_enabled = 1;
+	}
+}
+
+static void lpss_uart_re_init( void )
+{
+	uint32_t register_read;
+	
+	MMIO_WRITE (RST, 0x7);				/* LPSS UART2 controller out ot reset */
+	register_read = MMIO_READ (RST);
+
+	MMIO_WRITE (LCR, UART_LCR_DLAB);	/* Set DLAB bit to enable reading/writing of DLL, DLH */
+	register_read = MMIO_READ (LCR);
+
+	MMIO_WRITE (DLL, 1);				/* Divisor Latch Low Register */
+	register_read = MMIO_READ (DLL);
+
+	MMIO_WRITE (DLM, 0);				/* Divisor Latch High Register */
+	register_read = MMIO_READ (DLM);
+
+	MMIO_WRITE (FCR, 1);				/* Enable FIFO */
+	register_read = MMIO_READ (FCR);
+
+	MMIO_WRITE (LCR, UART_LCR_8BITS);	/* Set 8 bits, clear DLAB */
+	register_read = MMIO_READ (LCR);
+
+	MMIO_WRITE (MCR, UART_MCR_RTS);		/* Request to send */
+	register_read = MMIO_READ (MCR);
+
+	MMIO_WRITE (CLK, UART_CLK_125M_1);	/* 1.25M Clock speed */
+	register_read = MMIO_READ (CLK);
+
+	MMIO_WRITE (CLK, UART_CLK_125M_2);	/* 1.25M Clock speed */
+	register_read = MMIO_READ (CLK);	
+}
+
 static int
 mmio_uart_rd0( void ) 
 {
@@ -384,12 +454,15 @@ serial_init( void )
     {
         gPESF = &mmio_uart_serial_functions;
         gPESF->uart_init();
+        lpss_uart_supported = 1;
+        lpss_uart_enabled = 1;
         return 1;
     }
     else if ( legacy_uart_probe() )
     {
         gPESF = &legacy_uart_serial_functions;
         gPESF->uart_init();
+        legacy_uart_enabled = 1;
         return 1;
     }
     else
@@ -402,7 +475,7 @@ serial_init( void )
 static void
 uart_putc(char c)
 {
-    if (uart_initted) {
+	if (uart_initted && (legacy_uart_enabled || lpss_uart_enabled)) {
         while (!gPESF->tr0());  /* Wait until THR is empty. */
         gPESF->td0(c);
     }
@@ -411,7 +484,7 @@ uart_putc(char c)
 static int
 uart_getc(void)
 {
-    if (uart_initted) {
+    if (uart_initted && (legacy_uart_enabled || lpss_uart_enabled)) {
         if (!gPESF->rr0())
             return -1;
         return gPESF->rd0();

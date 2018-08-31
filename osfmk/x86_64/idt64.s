@@ -237,13 +237,33 @@ Entry(idt64_mc)
  * This may or may not be fatal but extreme care is required
  * because it may fall when control was already in another trampoline.
  *
- * We get here on IST2 stack which is used for NMIs only.
+ * We get here on IST2 stack which is used exclusively for NMIs.
+ * Machine checks, doublefaults and similar use IST1
  */
 Entry(idt64_nmi)
-	push	%rax				/* save RAX to ISF64_ERR */
-	push	%rcx				/* save RCX to ISF64_TRAPFN */
-	push	%rdx				/* save RDX to ISF64_TRAPNO */
-	jmp	L_dispatch
+	/* Synthesize common interrupt stack frame */
+	pushq	$0
+	pushq	$(HNDL_ALLINTRS)
+	pushq	$(T_NMI)
+	/* Spill prior to RDMSR */
+	push	%rax
+	push	%rcx
+	push	%rdx
+	mov	$(MSR_IA32_GS_BASE), %ecx
+	rdmsr					/* Check contents of GSBASE MSR */
+	test	$0x80000000, %edx		/* MSB set? Already swapped to kernel's */
+	jnz	44f
+	swapgs					/* Either direct from user or within trampolines */
+44:
+	pop	%rdx
+	pop	%rcx
+
+	leaq    EXT(idt64_hndl_table0)(%rip), %rax
+	mov     16(%rax), %rax /* Offset of per-CPU shadow */
+	mov     %gs:CPU_KERNEL_CR3(%rax), %rax
+	mov     %rax, %cr3 /* Unconditionally switch to primary kernel pagetables */
+	leaq    EXT(idt64_hndl_table0)(%rip), %rax
+	jmp	*(%rax)
 
 Entry(idt64_double_fault)
 	pushq	$(HNDL_DOUBLE_FAULT)
@@ -474,6 +494,17 @@ L_dispatch_64bit:
 	mov	%r13, R64_R13(%r15)
 	mov	%r14, R64_R14(%r15)
 
+	/* Zero unused GPRs. BX/DX/SI are clobbered elsewhere across the exception handler, and are skipped. */
+	xor	%ecx, %ecx
+	xor	%edi, %edi
+	xor	%r8, %r8
+	xor	%r9, %r9
+	xor	%r10, %r10
+	xor	%r11, %r11
+	xor	%r12, %r12
+	xor	%r13, %r13
+	xor	%r14, %r14
+
 	/* cr2 is significant only for page-faults */
 	mov	%cr2, %rax
 	mov	%rax, R64_CR2(%r15)
@@ -528,6 +559,16 @@ L_dispatch_U32: /* 32-bit user task */
 	/* Unconditionally save cr2; only meaningful on page faults */
 	mov	%cr2, %rax
 	mov	%eax, R32_CR2(%r15)
+	/* Zero unused GPRs. BX/DX/SI/R15 are clobbered elsewhere across the exception handler, and are skipped. */
+	xor	%ecx, %ecx
+	xor	%edi, %edi
+	xor	%r8, %r8
+	xor	%r9, %r9
+	xor	%r10, %r10
+	xor	%r11, %r11
+	xor	%r12, %r12
+	xor	%r13, %r13
+	xor	%r14, %r14
 
 	/*
 	 * Copy registers already saved in the machine state 
@@ -606,6 +647,13 @@ L_common_dispatch:
 5:
 	incl	%gs:hwIntCnt(,%ebx,4)		// Bump the trap/intr count
 	/* Dispatch the designated handler */
+	cmp	EXT(dblmap_base)(%rip), %rsp
+	jb	66f
+	cmp	EXT(dblmap_max)(%rip), %rsp
+	jge	66f
+	subq	EXT(dblmap_dist)(%rip), %rsp
+	subq	EXT(dblmap_dist)(%rip), %r15
+66:
 	leaq	EXT(idt64_hndl_table1)(%rip), %rax
 	jmp	*(%rax, %rdx, 8)
 
@@ -749,6 +797,7 @@ L_32bit_return:
 	mov	%r15, %rsp		/* Set the PCB as the stack */
 	swapgs
 
+	/* Zero 64-bit-exclusive GPRs to prevent data leaks */
 	xor	%r8, %r8
 	xor	%r9, %r9
 	xor	%r10, %r10
@@ -1510,13 +1559,9 @@ Entry(hndl_diag_scall64)
 /* TODO assert at all 'C' entry points that we're never operating on the fault stack's alias mapping */
 Entry(hndl_machine_check)
 	/* Adjust SP and savearea to their canonical, non-aliased addresses */
-	subq	EXT(dblmap_dist)(%rip), %rsp
-	subq	EXT(dblmap_dist)(%rip), %r15
 	CCALL1(panic_machine_check64, %r15)
 	hlt
 
 Entry(hndl_double_fault)
-	subq	EXT(dblmap_dist)(%rip), %rsp
-	subq	EXT(dblmap_dist)(%rip), %r15
 	CCALL1(panic_double_fault64, %r15)
 	hlt

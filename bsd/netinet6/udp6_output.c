@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -161,12 +161,15 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	struct	in6_addr storage;
 	int sotc = SO_TC_UNSPEC;
 	int netsvctype = _NET_SERVICE_TYPE_UNSPEC;
-	struct ip6_out_args ip6oa =
-	    { IFSCOPE_NONE, { 0 }, IP6OAF_SELECT_SRCIF, 0, 0, 0 };
+	struct ip6_out_args ip6oa;
 	struct flowadv *adv = &ip6oa.ip6oa_flowadv;
 	struct socket *so = in6p->in6p_socket;
 	struct route_in6 ro;
 	int flowadv = 0;
+
+	bzero(&ip6oa, sizeof(ip6oa));
+	ip6oa.ip6oa_boundif = IFSCOPE_NONE;
+	ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF;
 
 	/* Enable flow advisory only when connected */
 	flowadv = (so->so_state & SS_ISCONNECTED) ? 1 : 0;

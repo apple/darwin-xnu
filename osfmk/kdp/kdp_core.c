@@ -862,6 +862,13 @@ pmap_traverse_present_mappings(pmap_t __unused pmap,
 	/* send previous run */
 	ret = callback(vcurstart, vcur, context);
     }
+
+#if KASAN
+    if (ret == KERN_SUCCESS) {
+	ret = kasan_traverse_mappings(callback, context);
+    }
+#endif
+
     return (ret);
 }
 

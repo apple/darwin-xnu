@@ -942,9 +942,6 @@ ml_processor_register(
 
 	this_cpu_datap->cpu_id = in_processor_info->cpu_id;
 
-	this_cpu_datap->cpu_chud = chudxnu_cpu_alloc(is_boot_cpu);
-	if (this_cpu_datap->cpu_chud == (void *)NULL)
-		goto processor_register_error;
 	this_cpu_datap->cpu_console_buf = console_cpu_alloc(is_boot_cpu);
 	if (this_cpu_datap->cpu_console_buf == (void *)(NULL))
 		goto processor_register_error;
@@ -1020,8 +1017,6 @@ processor_register_error:
 #if KPC
 	kpc_unregister_cpu(this_cpu_datap);
 #endif
-	if (this_cpu_datap->cpu_chud != (void *)NULL)
-		chudxnu_cpu_free(this_cpu_datap->cpu_chud);
 	if (!is_boot_cpu)
 		cpu_data_free(this_cpu_datap);
 

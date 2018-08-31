@@ -275,7 +275,6 @@ struct socket {
 #define	SOF_ENABLE_MSGS		0x00400000 /* TCP must enable message delivery */
 #define	SOF_FLOW_DIVERT		0x00800000 /* Flow Divert is enabled */
 #define	SOF_MP_SUBFLOW		0x01000000 /* is a multipath subflow socket */
-#define	SOF_MPTCP_TRUE		0x02000000 /* Established e2e MPTCP connection */
 #define	SOF_MP_SEC_SUBFLOW	0x04000000 /* Set up secondary flow */
 #define	SOF_MP_TRYFAILOVER	0x08000000 /* Failing subflow */
 #define	SOF_DELEGATED		0x10000000 /* on behalf of another process */

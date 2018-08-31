@@ -66,7 +66,7 @@ protected:
   ipi_handler_t          ipi_handler;
 
   struct ExpansionData { };
-  ExpansionData *reserved;
+  ExpansionData *iocpu_reserved;
 
   virtual void           setCPUNumber(UInt32 cpuNumber);
   virtual void           setCPUState(UInt32 cpuState);
@@ -124,7 +124,7 @@ protected:
   int   numSources;
 
   struct ExpansionData { };
-  ExpansionData *reserved;
+  ExpansionData *iocpuic_reserved;
 
 public:
   virtual IOReturn initCPUInterruptController(int sources);

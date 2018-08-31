@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1311,7 +1311,7 @@ udp_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 {
 		inpcb_get_ports_used(ifindex, protocol, flags, bitfield,
 		    &udbinfo);
-}
+	}
 
 __private_extern__ uint32_t
 udp_count_opportunistic(unsigned int ifindex, u_int32_t flags)
@@ -1414,8 +1414,12 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	struct mbuf *inpopts;
 	struct ip_moptions *mopts;
 	struct route ro;
-	struct ip_out_args ipoa =
-	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0, 0, 0 };
+	struct ip_out_args ipoa;
+
+	bzero(&ipoa, sizeof(ipoa));
+	ipoa.ipoa_boundif = IFSCOPE_NONE;
+	ipoa.ipoa_flags = IPOAF_SELECT_SRCIF;
+
 	struct ifnet *outif = NULL;
 	struct flowadv *adv = &ipoa.ipoa_flowadv;
 	int sotc = SO_TC_UNSPEC;

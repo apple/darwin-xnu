@@ -217,6 +217,7 @@ bsd/net/ntstat.c			optional networking
 bsd/net/net_perf.c			optional networking
 bsd/net/if_gif.c          		optional gif
 bsd/net/if_stf.c          		optional stf
+bsd/net/if_ports_used.c			optional networking
 bsd/net/kpi_interface.c		optional networking
 bsd/net/kpi_protocol.c		optional networking
 bsd/net/kpi_interfacefilter.c	optional networking
@@ -487,8 +488,6 @@ bsd/uxkern/ux_exception.c		standard
 
 bsd/conf/param.c			standard
 ./ioconf.c				standard
-
-bsd/dev/chud/chud_process.c		standard
 
 bsd/kern/imageboot.c			optional config_imageboot
 

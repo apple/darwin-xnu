@@ -1370,6 +1370,10 @@ class Tests: XCTestCase {
         self.testSampleStackshot("stackshot-sample-thread-policy")
     }
 
+    func testDeltaStackshotWithThreadPolicy() {
+        self.testSampleStackshot("stackshot-sample-delta-thread-policy")
+    }
+
     func testStackshotWithInstrsCycles() {
         self.testSampleStackshot("stackshot-sample-instrs-cycles")
     }

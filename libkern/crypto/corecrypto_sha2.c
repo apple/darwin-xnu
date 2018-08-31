@@ -28,6 +28,7 @@
 
 #include <libkern/crypto/crypto_internal.h>
 #include <libkern/crypto/sha2.h>
+#include <libkern/libkern.h>
 #include <kern/debug.h>
 #include <corecrypto/ccdigest.h>
 
@@ -120,22 +121,17 @@ void SHA512_Final(void *digest, SHA512_CTX *ctx)
 
 #else
 
-/* As these are part of the KPI, we need to stub them out for any kernle cofiguration that does not support SHA2. */
+/* As these are part of the KPI, we need to stub them out for any kernel configuration that does not support SHA2. */
 
-void SHA384_Init(__unused SHA384_CTX *ctx)
-{
-	panic("SHA384_Init");
-}
-
-void SHA384_Update(__unused SHA384_CTX *ctx, __unused const void *data, __unused size_t len)
-{
-	panic("SHA384_Update");
-}
-
-void SHA384_Final(__unused void *digest, __unused SHA384_CTX *ctx)
-{
-	panic("SHA384_Final");
-}
+void UNSUPPORTED_API(SHA256_Init,   SHA256_CTX *ctx);
+void UNSUPPORTED_API(SHA384_Init,   SHA384_CTX *ctx);
+void UNSUPPORTED_API(SHA512_Init,   SHA512_CTX *ctx);
+void UNSUPPORTED_API(SHA256_Update, SHA256_CTX *ctx, const void *data, size_t len);
+void UNSUPPORTED_API(SHA384_Update, SHA384_CTX *ctx, const void *data, size_t len);
+void UNSUPPORTED_API(SHA512_Update, SHA512_CTX *ctx, const void *data, size_t len);
+void UNSUPPORTED_API(SHA256_Final,  void *digest, SHA256_CTX *ctx);
+void UNSUPPORTED_API(SHA384_Final,  void *digest, SHA384_CTX *ctx);
+void UNSUPPORTED_API(SHA512_Final,  void *digest, SHA512_CTX *ctx);
 
 #endif
 

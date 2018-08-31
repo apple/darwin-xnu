@@ -330,7 +330,7 @@ do_print_all_backtraces(
 #if defined(XNU_TARGET_OS_BRIDGE)
 		paniclog_append_noflush("PCIeUp link state: ");
 		if (PE_pcie_stashed_link_state != UINT32_MAX) {
-			paniclog_append_noflush("0x%x", PE_pcie_stashed_link_state);
+			paniclog_append_noflush("0x%x\n", PE_pcie_stashed_link_state);
 		} else {
 			paniclog_append_noflush("not available\n");
 		}

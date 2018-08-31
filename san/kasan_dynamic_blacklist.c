@@ -27,16 +27,17 @@
 struct blacklist_entry {
 	const char *kext_name;
 	const char *func_name;
-	const unsigned type_mask;
+	access_t type_mask;
 
 	/* internal */
 	uint64_t count;
 };
 
 #include "kasan_blacklist_dynamic.h"
-static const size_t blacklist_entries = sizeof(blacklist)/sizeof(blacklist[0]);
+/* defines 'blacklist' and 'blacklist_entries' */
 
 decl_simple_lock_data(static, _dybl_lock);
+static access_t blacklisted_types; /* bitmap of access types with blacklist entries */
 
 static void
 dybl_lock(boolean_t *b)
@@ -349,19 +350,27 @@ addr_to_func(uintptr_t addr, const kernel_mach_header_t *mh)
 	return cur_name;
 }
 
-bool NOINLINE
-kasan_is_blacklisted(unsigned mask)
+bool __attribute__((noinline))
+kasan_is_blacklisted(access_t type)
 {
 	uint32_t nframes = 0;
 	uintptr_t frames[MAX_FRAMES];
 	uintptr_t *bt = frames;
-	nframes = backtrace(bt, MAX_FRAMES);
+
+	assert(__builtin_popcount(type) == 1);
+
+	if ((type & blacklisted_types) == 0) {
+		/* early exit for types with no blacklist entries */
+		return false;
+	}
+
+	nframes = backtrace_frame(bt, MAX_FRAMES, __builtin_frame_address(0));
 	boolean_t flag;
 
-	if (nframes >= 2) {
-		/* ignore self and direct caller */
-		nframes -= 2;
-		bt += 2;
+	if (nframes >= 1) {
+		/* ignore direct caller */
+		nframes -= 1;
+		bt += 1;
 	}
 
 	struct blacklist_hash_entry *blhe = NULL;
@@ -372,7 +381,7 @@ kasan_is_blacklisted(unsigned mask)
 	for (uint32_t i = 0; i < nframes; i++) {
 		blhe = blacklist_hash_lookup(bt[i]);
 		if (blhe) {
-			if ((blhe->ble->type_mask & mask) != mask) {
+			if ((blhe->ble->type_mask & type) != type) {
 				/* wrong type */
 				continue;
 			}
@@ -419,7 +428,7 @@ kasan_is_blacklisted(unsigned mask)
 			struct blacklist_entry *ble = &blacklist[j];
 			uint64_t count;
 
-			if ((ble->type_mask & mask) != mask) {
+			if ((ble->type_mask & type) != type) {
 				/* wrong type */
 				continue;
 			}
@@ -443,7 +452,7 @@ kasan_is_blacklisted(unsigned mask)
 
 			if (count == 0) {
 				printf("KASan: ignoring blacklisted violation (%s:%s [0x%lx] %d 0x%x)\n",
-						kextname, funcname, VM_KERNEL_UNSLIDE(bt[i]), i, mask);
+						kextname, funcname, VM_KERNEL_UNSLIDE(bt[i]), i, type);
 			}
 
 			return true;
@@ -454,10 +463,123 @@ kasan_is_blacklisted(unsigned mask)
 	return false;
 }
 
+static void
+add_blacklist_entry(const char *kext, const char *func, access_t type)
+{
+	assert(kext || func);
+	struct blacklist_entry *ble = &blacklist[blacklist_entries++];
+
+	if (blacklist_entries > blacklist_max_entries) {
+		panic("KASan: dynamic blacklist entries exhausted\n");
+	}
+
+	if (kext) {
+		size_t sz = __nosan_strlen(kext) + 1;
+		if (sz > 1) {
+			char *s = kalloc(sz);
+			__nosan_strlcpy(s, kext, sz);
+			ble->kext_name = s;
+		}
+	}
+
+	if (func) {
+		size_t sz = __nosan_strlen(func) + 1;
+		if (sz > 1) {
+			char *s = kalloc(sz);
+			__nosan_strlcpy(s, func, sz);
+			ble->func_name = s;
+		}
+	}
+
+	ble->type_mask = type;
+}
+
+#define TS(x) { .type = TYPE_##x, .str = #x }
+
+static const struct {
+	const access_t type;
+	const char * const str;
+} typemap[] = {
+	TS(LOAD),
+	TS(STORE),
+	TS(MEMR),
+	TS(MEMW),
+	TS(STRR),
+	TS(STRW),
+	TS(KFREE),
+	TS(ZFREE),
+	TS(FSFREE),
+	TS(UAF),
+	TS(POISON_GLOBAL),
+	TS(POISON_HEAP),
+	TS(MEM),
+	TS(STR),
+	TS(READ),
+	TS(WRITE),
+	TS(RW),
+	TS(FREE),
+	TS(NORMAL),
+	TS(DYNAMIC),
+	TS(POISON),
+	TS(ALL),
+
+	/* convenience aliases */
+	{ .type = TYPE_POISON_GLOBAL, .str = "GLOB" },
+	{ .type = TYPE_POISON_HEAP,   .str = "HEAP" },
+};
+static size_t typemap_sz = sizeof(typemap)/sizeof(typemap[0]);
+
+static inline access_t
+map_type(const char *str)
+{
+	if (strlen(str) == 0) {
+		return TYPE_NORMAL;
+	}
+
+	/* convert type string to integer ID */
+	for (size_t i = 0; i < typemap_sz; i++) {
+		if (strcasecmp(str, typemap[i].str) == 0) {
+			return typemap[i].type;
+		}
+	}
+
+	printf("KASan: unknown blacklist type `%s', assuming `normal'\n", str);
+	return TYPE_NORMAL;
+}
+
 void
 kasan_init_dybl(void)
 {
 	simple_lock_init(&_dybl_lock, 0);
+
+	/*
+	 * dynamic blacklist entries via boot-arg. Syntax is:
+	 *  kasan.bl=kext1:func1:type1,kext2:func2:type2,...
+	 */
+	char buf[256] = {};
+	char *bufp = buf;
+	if (PE_parse_boot_arg_str("kasan.bl", bufp, sizeof(buf))) {
+		char *kext;
+		while ((kext = strsep(&bufp, ",")) != NULL) {
+			access_t type = TYPE_NORMAL;
+			char *func = strchr(kext, ':');
+			if (func) {
+				*func++ = 0;
+			}
+			char *typestr = strchr(func, ':');
+			if (typestr) {
+				*typestr++ = 0;
+				type = map_type(typestr);
+			}
+			add_blacklist_entry(kext, func, type);
+		}
+	}
+
+	/* collect bitmask of blacklisted types */
+	for (size_t j = 0; j < blacklist_entries; j++) {
+		struct blacklist_entry *ble = &blacklist[j];
+		blacklisted_types |= ble->type_mask;
+	}
 
 	/* add the fake kernel kext */
 	kasan_dybl_load_kext((uintptr_t)&_mh_execute_header, "__kernel__");
@@ -466,7 +588,7 @@ kasan_init_dybl(void)
 #else /* KASAN_DYNAMIC_BLACKLIST */
 
 bool
-kasan_is_blacklisted(unsigned __unused mask)
+kasan_is_blacklisted(access_t __unused type)
 {
 	return false;
 }

@@ -45,8 +45,6 @@
 #include <kperf/context.h>
 #include <kperf/action.h>
 
-#include <chud/chud_xnu.h>
-
 uint32_t kpc_actionid[KPC_MAX_COUNTERS];
 
 #define COUNTERBUF_SIZE_PER_CPU (KPC_MAX_COUNTERS * sizeof(uint64_t))
@@ -152,9 +150,9 @@ kpc_task_set_forced_all_ctrs(task_t task, boolean_t state)
 
 	task_lock(task);
 	if (state)
-		task->t_chud |= TASK_KPC_FORCED_ALL_CTRS;
+		task->t_kpc |= TASK_KPC_FORCED_ALL_CTRS;
 	else
-		task->t_chud &= ~TASK_KPC_FORCED_ALL_CTRS;
+		task->t_kpc &= ~TASK_KPC_FORCED_ALL_CTRS;
 	task_unlock(task);
 }
 
@@ -162,7 +160,7 @@ static boolean_t
 kpc_task_get_forced_all_ctrs(task_t task)
 {
 	assert(task);
-	return task->t_chud & TASK_KPC_FORCED_ALL_CTRS ? TRUE : FALSE;
+	return task->t_kpc & TASK_KPC_FORCED_ALL_CTRS ? TRUE : FALSE;
 }
 
 int

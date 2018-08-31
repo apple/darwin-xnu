@@ -145,6 +145,18 @@
 	FREE_ZONE((x), MAXPATHLEN, M_NAMEI);
 #endif /* CONFIG_FSE */
 
+#ifndef HFS_GET_BOOT_INFO
+#define HFS_GET_BOOT_INFO   (FCNTL_FS_SPECIFIC_BASE + 0x00004)
+#endif
+
+#ifndef HFS_SET_BOOT_INFO
+#define HFS_SET_BOOT_INFO   (FCNTL_FS_SPECIFIC_BASE + 0x00005)
+#endif
+
+#ifndef APFSIOC_REVERT_TO_SNAPSHOT
+#define APFSIOC_REVERT_TO_SNAPSHOT  _IOW('J', 1, u_int64_t)
+#endif
+
 extern void disk_conditioner_unmount(mount_t mp);
 
 /* struct for checkdirs iteration */
@@ -162,8 +174,8 @@ static int getfsstat_callback(mount_t mp, void * arg);
 static int getutimes(user_addr_t usrtvp, struct timespec *tsp);
 static int setutimes(vfs_context_t ctx, vnode_t vp, const struct timespec *ts, int nullflag);
 static int sync_callback(mount_t, void *);
-static void sync_thread(void *, __unused wait_result_t);
-static int sync_async(int);
+static void hibernate_sync_thread(void *, __unused wait_result_t);
+static int hibernate_sync_async(int);
 static int munge_statfs(struct mount *mp, struct vfsstatfs *sfsp,
 			user_addr_t bufp, int *sizep, boolean_t is_64_bit,
 						boolean_t partial_copy);
@@ -2313,6 +2325,7 @@ int syncprt = 0;
 int print_vmpage_stat=0;
 int sync_timeout = 60;  // Sync time limit (sec)
 
+
 static int
 sync_callback(mount_t mp, __unused void *arg)
 {
@@ -2346,7 +2359,7 @@ sync(__unused proc_t p, __unused struct sync_args *uap, __unused int32_t *retval
 }
 
 static void
-sync_thread(void *arg, __unused wait_result_t wr)
+hibernate_sync_thread(void *arg, __unused wait_result_t wr)
 {
 	int *timeout = (int *) arg;
 
@@ -2368,20 +2381,20 @@ sync_thread(void *arg, __unused wait_result_t wr)
  * Sync in a separate thread so we can time out if it blocks.
  */
 static int
-sync_async(int timeout)
+hibernate_sync_async(int timeout)
 {
 	thread_t thd;
 	int error;
 	struct timespec ts = {timeout, 0};
 
 	lck_mtx_lock(sync_mtx_lck);
-	if (kernel_thread_start(sync_thread, &timeout, &thd) != KERN_SUCCESS) {
-		printf("sync_thread failed\n");
+	if (kernel_thread_start(hibernate_sync_thread, &timeout, &thd) != KERN_SUCCESS) {
+		printf("hibernate_sync_thread failed\n");
 		lck_mtx_unlock(sync_mtx_lck);
 		return (0);
 	}
 
-	error = msleep((caddr_t) &timeout, sync_mtx_lck, (PVFS | PDROP | PCATCH), "sync_thread", &ts);
+	error = msleep((caddr_t) &timeout, sync_mtx_lck, (PVFS | PDROP | PCATCH), "hibernate_sync_thread", &ts);
 	if (error) {
 		printf("sync timed out: %d sec\n", timeout);
 	}
@@ -2396,7 +2409,7 @@ sync_async(int timeout)
 __private_extern__ int
 sync_internal(void)
 {
-	(void) sync_async(sync_timeout);
+	(void) hibernate_sync_async(sync_timeout);
 
 	return 0;
 } /* end of sync_internal call */
@@ -10444,6 +10457,34 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 		break;
 
 		default: {
+			/* other, known commands shouldn't be passed down here */
+			switch (cmd) {
+				case F_PUNCHHOLE:
+				case F_TRIM_ACTIVE_FILE:
+				case F_RDADVISE:
+				case F_TRANSCODEKEY:
+				case F_GETPROTECTIONLEVEL:
+				case F_GETDEFAULTPROTLEVEL:
+				case F_MAKECOMPRESSED:
+				case F_SET_GREEDY_MODE:
+				case F_SETSTATICCONTENT:
+				case F_SETIOTYPE:
+				case F_SETBACKINGSTORE:
+				case F_GETPATH_MTMINFO:
+				case APFSIOC_REVERT_TO_SNAPSHOT:
+				case FSIOC_FIOSEEKHOLE:
+				case FSIOC_FIOSEEKDATA:
+				case HFS_GET_BOOT_INFO:
+				case HFS_SET_BOOT_INFO:
+				case FIOPINSWAP:
+				case F_CHKCLEAN:
+				case F_FULLFSYNC:
+				case F_BARRIERFSYNC:
+				case F_FREEZE_FS:
+				case F_THAW_FS:
+					error = EINVAL;
+					goto outdrop;
+			}
 			/* Invoke the filesystem-specific code */
 			error = VNOP_IOCTL(vp, cmd, data, options, ctx);
 		}
@@ -10457,6 +10498,7 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 	if (error == 0 && (cmd & IOC_OUT) && size)
 		error = copyout(data, udata, size);
 
+outdrop:
 	if (memp) {
 		kfree(memp, size);
 	}
@@ -11711,10 +11753,6 @@ snapshot_revert(int dirfd, user_addr_t name, __unused uint32_t flags,
             return (error);
         }
 
-
-#ifndef APFSIOC_REVERT_TO_SNAPSHOT
-#define APFSIOC_REVERT_TO_SNAPSHOT  _IOW('J', 1, u_int64_t)
-#endif
 
         error = VNOP_IOCTL(namend.ni_vp, APFSIOC_REVERT_TO_SNAPSHOT, (caddr_t) NULL,
                            0, ctx);

@@ -40,6 +40,20 @@
 
 #include <sys/kdebug.h>
 
+/*
+ * LOCK ORDERING for task-owned purgeable objects
+ *
+ * Whenever we need to hold multiple locks while adding to, removing from,
+ * or scanning a task's task_objq list of VM objects it owns, locks should
+ * be taken in this order:
+ *
+ * VM object ==> vm_purgeable_queue_lock ==> owner_task->task_objq_lock
+ *
+ * If one needs to acquire the VM object lock after any of the other 2 locks,
+ * one needs to use vm_object_lock_try() and, if that fails, release the
+ * other locks and retake them all in the correct order.
+ */
+
 extern vm_pressure_level_t memorystatus_vm_pressure_level;
 
 struct token {
@@ -1249,71 +1263,17 @@ vm_purgeable_account(
 }
 #endif /* DEVELOPMENT || DEBUG */
 
-static void
-vm_purgeable_volatile_queue_disown(
-	purgeable_q_t	queue,
-	int		group,
-	task_t		task)
-{
-	vm_object_t	object;
-	int		collisions;
-
-	collisions = 0;
-
-again:
-	LCK_MTX_ASSERT(&vm_purgeable_queue_lock, LCK_MTX_ASSERT_OWNED);
-
-	for (object = (vm_object_t) queue_first(&queue->objq[group]);
-	     !queue_end(&queue->objq[group], (queue_entry_t) object);
-	     object = (vm_object_t) queue_next(&object->objq)) {
-#if MACH_ASSERT
-		/*
-		 * Sanity check: let's scan the entire queues to
-		 * make sure we don't leave any purgeable objects
-		 * pointing back at a dead task.  If the counters
-		 * are off, we would fail to assert that they go
-		 * back to 0 after disowning is done.
-		 */
-#else /* MACH_ASSERT */
-		if (task->task_volatile_objects == 0) {
-			/* no more volatile objects owned by "task" */
-			break;
-		}
-#endif /* MACH_ASSERT */
-		if (object->vo_purgeable_owner == task) {
-			if (! vm_object_lock_try(object)) {
-				lck_mtx_unlock(&vm_purgeable_queue_lock);
-				mutex_pause(collisions++);
-				lck_mtx_lock(&vm_purgeable_queue_lock);
-				goto again;
-			}
-			assert(object->purgable == VM_PURGABLE_VOLATILE);
-			if (object->vo_purgeable_owner == task) {
-				vm_purgeable_accounting(object,
-							object->purgable,
-							TRUE); /* disown */
-				assert(object->vo_purgeable_owner == NULL);
-			}
-			vm_object_unlock(object);
-		}
-	}
-}
-
 void
 vm_purgeable_disown(
 	task_t	task)
 {
-	purgeable_q_t	volatile_q;
-	int		group;
-	queue_head_t	*nonvolatile_q;
+	vm_object_t	next_object;
 	vm_object_t	object;
 	int		collisions;
 
 	if (task == NULL) {
 		return;
 	}
-
-	task->task_purgeable_disowning = TRUE;
 
 	/*
 	 * Scan the purgeable objects queues for objects owned by "task".
@@ -1335,73 +1295,55 @@ again:
 		assert(task->task_nonvolatile_objects == 0);
 		return;
 	}
-	lck_mtx_lock(&vm_purgeable_queue_lock);
 
-	nonvolatile_q = &purgeable_nonvolatile_queue;
-	for (object = (vm_object_t) queue_first(nonvolatile_q);
-	      !queue_end(nonvolatile_q, (queue_entry_t) object);
-	     object = (vm_object_t) queue_next(&object->objq)) {
-#if MACH_ASSERT
-		/*
-		 * Sanity check: let's scan the entire queues to
-		 * make sure we don't leave any purgeable objects
-		 * pointing back at a dead task.  If the counters
-		 * are off, we would fail to assert that they go
-		 * back to 0 after disowning is done.
-		 */
-#else /* MACH_ASSERT */
-		if (task->task_nonvolatile_objects == 0) {
-			/* no more non-volatile objects owned by "task" */
+	lck_mtx_lock(&vm_purgeable_queue_lock);
+	task_objq_lock(task);
+
+	task->task_purgeable_disowning = TRUE;
+
+	for (object = (vm_object_t) queue_first(&task->task_objq);
+	     !queue_end(&task->task_objq, (queue_entry_t) object);
+	     object = next_object) {
+		if (task->task_nonvolatile_objects == 0 &&
+		    task->task_volatile_objects == 0) {
+			/* no more purgeable objects owned by "task" */
 			break;
 		}
-#endif /* MACH_ASSERT */
+
+		next_object = (vm_object_t) queue_next(&object->task_objq);
+		if (object->purgable == VM_PURGABLE_DENY) {
+			/* not a purgeable object: skip */
+			continue;
+		}
+
 #if DEBUG
 		assert(object->vo_purgeable_volatilizer == NULL);
 #endif /* DEBUG */
-		if (object->vo_purgeable_owner == task) {
-			if (!vm_object_lock_try(object)) {
-				lck_mtx_unlock(&vm_purgeable_queue_lock);
-				mutex_pause(collisions++);
-				goto again;
-			}
-			if (object->vo_purgeable_owner == task) {
-				vm_purgeable_accounting(object,
-							object->purgable,
-							TRUE); /* disown */
-				assert(object->vo_purgeable_owner == NULL);
-			}
-			vm_object_unlock(object);
+		assert(object->vo_purgeable_owner == task);
+		if (!vm_object_lock_try(object)) {
+			lck_mtx_unlock(&vm_purgeable_queue_lock);
+			task_objq_unlock(task);
+			mutex_pause(collisions++);
+			goto again;
 		}
+		vm_purgeable_accounting(object,
+					object->purgable,
+					TRUE, /* disown */
+					TRUE);/* task_objq_lock is locked */
+		assert(object->vo_purgeable_owner == NULL);
+		vm_object_unlock(object);
 	}
 
-	lck_mtx_yield(&vm_purgeable_queue_lock);
-
-	/*
-	 * Scan volatile queues for objects owned by "task".
-	 */
-
-	volatile_q = &purgeable_queues[PURGEABLE_Q_TYPE_OBSOLETE];
-	vm_purgeable_volatile_queue_disown(volatile_q, 0, task);
-	lck_mtx_yield(&vm_purgeable_queue_lock);
-
-	volatile_q = &purgeable_queues[PURGEABLE_Q_TYPE_FIFO];
-	for (group = 0; group < NUM_VOLATILE_GROUPS; group++) {
-		vm_purgeable_volatile_queue_disown(volatile_q, group, task);
-		lck_mtx_yield(&vm_purgeable_queue_lock);
-	}
-	
-	volatile_q = &purgeable_queues[PURGEABLE_Q_TYPE_LIFO];
-	for (group = 0; group < NUM_VOLATILE_GROUPS; group++) {
-		vm_purgeable_volatile_queue_disown(volatile_q, group, task);
-		lck_mtx_yield(&vm_purgeable_queue_lock);
-	}
-
-	if (task->task_volatile_objects != 0 ||
-	    task->task_nonvolatile_objects != 0) {
-		/* some purgeable objects sneaked into a queue: find them */
-		lck_mtx_unlock(&vm_purgeable_queue_lock);
-		mutex_pause(collisions++);
-		goto again;
+	if (__improbable(task->task_volatile_objects != 0 ||
+			 task->task_nonvolatile_objects != 0)) {
+		panic("%s(%p): volatile=%d nonvolatile=%d q=%p q_first=%p q_last=%p",
+		      __FUNCTION__,
+		      task,
+		      task->task_volatile_objects,
+		      task->task_nonvolatile_objects,
+		      &task->task_objq,
+		      queue_first(&task->task_objq),
+		      queue_last(&task->task_objq));
 	}
 
 	/* there shouldn't be any purgeable objects owned by task now */
@@ -1413,34 +1355,31 @@ again:
 	task->task_purgeable_disowned = TRUE;
 
 	lck_mtx_unlock(&vm_purgeable_queue_lock);
+	task_objq_unlock(task);
 }
 
 
-#if notyet
-static int
+static uint64_t
 vm_purgeable_queue_purge_task_owned(
 	purgeable_q_t	queue,
 	int		group,
 	task_t		task)
 {
-	vm_object_t	object;
-	int		num_objects;
-	int		collisions;
-	int		num_objects_purged;
+	vm_object_t	object = VM_OBJECT_NULL;
+	int		collisions = 0;
+	uint64_t	num_pages_purged = 0;
 
-	num_objects_purged = 0;
+	num_pages_purged = 0;
 	collisions = 0;
 
 look_again:
 	lck_mtx_lock(&vm_purgeable_queue_lock);
 
-	num_objects = 0;
 	for (object = (vm_object_t) queue_first(&queue->objq[group]);
 	     !queue_end(&queue->objq[group], (queue_entry_t) object);
 	     object = (vm_object_t) queue_next(&object->objq)) {
 
-		if (object->vo_purgeable_owner != task &&
-		    object->vo_purgeable_owner != NULL) {
+		if (object->vo_purgeable_owner != task) {
 			continue;
 		}
 
@@ -1459,6 +1398,8 @@ look_again:
 			     vm_object_t, objq);
 		object->objq.next = NULL;
 		object->objq.prev = NULL;
+		object->purgeable_queue_type = PURGEABLE_Q_TYPE_MAX;
+		object->purgeable_queue_group = 0;
 		/* one less volatile object for this object's owner */
 		assert(object->vo_purgeable_owner == task);
 		vm_purgeable_volatile_owner_update(task, -1);
@@ -1486,11 +1427,11 @@ look_again:
 		}
 
 		/* purge the object */
-		(void) vm_object_purge(object, 0);
+		num_pages_purged += vm_object_purge(object, 0);
+
 		assert(object->purgable == VM_PURGABLE_EMPTY);
 		/* no change for purgeable accounting */
 		vm_object_unlock(object);
-		num_objects_purged++;
 
 		/* we unlocked the purgeable queues, so start over */
 		goto look_again;
@@ -1498,39 +1439,38 @@ look_again:
 
 	lck_mtx_unlock(&vm_purgeable_queue_lock);
 
-	return num_objects_purged;
+	return num_pages_purged;
 }
 
-int
+uint64_t
 vm_purgeable_purge_task_owned(
 	task_t	task)
 {
-	purgeable_q_t	queue;
-	int		group;
-	int		num_objects_purged;
+	purgeable_q_t	queue = NULL;
+	int		group = 0;
+	uint64_t	num_pages_purged = 0;
 
-	num_objects_purged = 0;
+	num_pages_purged = 0;
 
 	queue = &purgeable_queues[PURGEABLE_Q_TYPE_OBSOLETE];
-	num_objects_purged += vm_purgeable_queue_purge_task_owned(queue,
+	num_pages_purged += vm_purgeable_queue_purge_task_owned(queue,
 								  0,
 								  task);
 
 	queue = &purgeable_queues[PURGEABLE_Q_TYPE_FIFO];
 	for (group = 0; group < NUM_VOLATILE_GROUPS; group++)
-		num_objects_purged += vm_purgeable_queue_purge_task_owned(queue,
+		num_pages_purged += vm_purgeable_queue_purge_task_owned(queue,
 									  group,
 									  task);
 	
 	queue = &purgeable_queues[PURGEABLE_Q_TYPE_LIFO];
 	for (group = 0; group < NUM_VOLATILE_GROUPS; group++)
-		num_objects_purged += vm_purgeable_queue_purge_task_owned(queue,
+		num_pages_purged += vm_purgeable_queue_purge_task_owned(queue,
 									  group,
 									  task);
 
-	return num_objects_purged;
+	return num_pages_purged;
 }
-#endif
 
 void
 vm_purgeable_nonvolatile_enqueue(
@@ -1556,6 +1496,11 @@ vm_purgeable_nonvolatile_enqueue(
 #if DEBUG
 	object->vo_purgeable_volatilizer = NULL;
 #endif /* DEBUG */
+	if (owner != NULL) {
+		task_objq_lock(owner);
+		queue_enter(&owner->task_objq, object, vm_object_t, task_objq);
+		task_objq_unlock(owner);
+	}
 
 #if DEBUG
 	OSBacktrace(&object->purgeable_owner_bt[0], 16);
@@ -1606,7 +1551,8 @@ vm_purgeable_nonvolatile_dequeue(
 		 */
 		vm_purgeable_accounting(object,
 					object->purgable,
-					TRUE); /* disown */
+					TRUE, /* disown */
+					FALSE); /* is task_objq locked? */
 	}
 
 	lck_mtx_lock(&vm_purgeable_queue_lock);
@@ -1628,7 +1574,8 @@ void
 vm_purgeable_accounting(
 	vm_object_t	object,
 	vm_purgable_t	old_state,
-	boolean_t	disown)
+	boolean_t	disown,
+	boolean_t	task_objq_locked)
 {
 	task_t		owner;
 	int		resident_page_count;
@@ -1693,6 +1640,15 @@ vm_purgeable_accounting(
 				vm_purgeable_volatile_owner_update(owner, -1);
 			}
 			/* no more accounting for this dead object */
+			owner = object->vo_purgeable_owner;
+			if (! task_objq_locked) {
+				task_objq_lock(owner);
+			}
+			task_objq_lock_assert_owned(owner);
+			queue_remove(&owner->task_objq, object, vm_object_t, task_objq);
+			if (! task_objq_locked) {
+				task_objq_unlock(owner);
+			}
 			object->vo_purgeable_owner = NULL;
 #if DEBUG
 			object->vo_purgeable_volatilizer = NULL;
@@ -1748,6 +1704,14 @@ vm_purgeable_accounting(
 			}
 			vm_purgeable_nonvolatile_owner_update(owner, -1);
 			/* no more accounting for this dead object */
+			if (! task_objq_locked) {
+				task_objq_lock(owner);
+			}
+			task_objq_lock_assert_owned(owner);
+			queue_remove(&owner->task_objq, object, vm_object_t, task_objq);
+			if (! task_objq_locked) {
+				task_objq_unlock(owner);
+			}
 			object->vo_purgeable_owner = NULL;
 #if DEBUG
 			object->vo_purgeable_volatilizer = NULL;

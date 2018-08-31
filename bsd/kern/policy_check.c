@@ -471,8 +471,6 @@ const static struct mac_policy_ops policy_ops = {
 
 	CHECK_SET_HOOK(iokit_check_set_properties)
 
-	CHECK_SET_HOOK(system_check_chud)
-
 	CHECK_SET_HOOK(vnode_check_searchfs)
 
 	CHECK_SET_HOOK(priv_check)

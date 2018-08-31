@@ -6,6 +6,7 @@
 #include <mach/policy.h>
 #include <mach/task_info.h>
 #include <mach/thread_info.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
@@ -710,6 +711,220 @@ test_task_basic_info(enum info_kind kind)
 
 #undef BEFORE
 #undef AFTER
+}
+
+T_DECL(test_sigcont_task_suspend_resume,
+       "test to verify that SIGCONT on task_suspend()-ed process works",
+       T_META_ASROOT(true),
+       T_META_LTEPHASE(LTE_POSTINIT))
+{
+	T_SETUPBEGIN;
+	int is_dev = is_development_kernel();
+	T_QUIET;
+	T_ASSERT_TRUE(is_dev, "verify development kernel is running");
+	T_SETUPEND;
+
+	mach_task_basic_info_data_t mach_basic_info_data;
+	task_info_t info_data = (task_info_t)&mach_basic_info_data;
+
+	task_debug_info_internal_data_t debug_info;
+	mach_msg_type_number_t debug_count = TASK_DEBUG_INFO_INTERNAL_COUNT;
+
+	kern_return_t kr;
+	int posix_ret;
+	mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+	task_flavor_t flavor         = MACH_TASK_BASIC_INFO;
+	integer_t suspend_count;
+	integer_t debug_suspend_count;
+	pid_t child_pid = 0;
+	mach_port_name_t child_task;
+	/*for dt_waitpid*/
+	int timeout     = 5;
+	int exit_status = 0;
+	int signal_no   = 0;
+
+	child_pid = fork();
+
+	T_ASSERT_POSIX_SUCCESS(child_pid, "verify process can be forked");
+
+	if (child_pid == 0) {
+		/*
+		 * This will suspend the child process.
+		 */
+		kr = task_suspend(mach_task_self());
+
+		/*
+		 * When child resumes, it exits immediately
+		 */
+
+		exit(kr);
+	}
+
+	/*
+	 * Wait for the child process to suspend itself.
+	 */
+	sleep(1);
+
+	kr = task_for_pid(mach_task_self(), child_pid, &child_task);
+	T_ASSERT_MACH_SUCCESS(kr, "verify task_for_pid succeeded.  check sudo if failed");
+
+	/*
+	 * Verify the suspend_count for child and resume it.
+	 */
+
+	kr = task_info(child_task, flavor, info_data, &count);
+	T_ASSERT_MACH_SUCCESS(kr, "verify task_info call succeeded");
+
+	suspend_count = (integer_t)(info_get(INFO_MACH, GET_SUSPEND_COUNT, info_data));
+	T_ASSERT_EQ(suspend_count, 1, "verify task_info shows correct suspend_count (1) (actually user stop count) ");
+
+	kr = task_info(child_task, TASK_DEBUG_INFO_INTERNAL, (task_info_t)&debug_info, &debug_count);
+	T_ASSERT_MACH_SUCCESS(kr, "verify task_info call succeeded");
+
+	debug_suspend_count = debug_info.suspend_count;
+	T_ASSERT_EQ(debug_info.suspend_count, 1, "verify debug_info shows correct suspend_count(1)");
+
+	posix_ret = kill(child_pid, SIGCONT);
+	T_ASSERT_POSIX_SUCCESS(posix_ret, "verify signal call succeeded");
+
+	/*
+	 * reap kr from task_suspend call in child
+	 */
+	dt_waitpid(child_pid, &exit_status, &signal_no, timeout);
+
+	T_ASSERT_EQ(signal_no, 0, "child should be resumed and exit without signal");
+	T_ASSERT_EQ(exit_status, 0, "child should exit with 0");
+
+}
+
+T_DECL(test_sigcont_task_suspend2_resume,
+       "test to verify that SIGCONT on task_suspend2()-ed process doesn't work",
+       T_META_ASROOT(true),
+       T_META_LTEPHASE(LTE_POSTINIT))
+{
+	T_SETUPBEGIN;
+	int is_dev = is_development_kernel();
+	T_QUIET;
+	T_ASSERT_TRUE(is_dev, "verify development kernel is running");
+	T_SETUPEND;
+
+	mach_task_basic_info_data_t mach_basic_info_data;
+	task_info_t info_data = (task_info_t)&mach_basic_info_data;
+
+	task_debug_info_internal_data_t debug_info;
+	mach_msg_type_number_t debug_count = TASK_DEBUG_INFO_INTERNAL_COUNT;
+
+	kern_return_t kr;
+	int posix_ret;
+	mach_msg_type_number_t count  = MACH_TASK_BASIC_INFO_COUNT;
+	task_flavor_t flavor          = MACH_TASK_BASIC_INFO;
+	integer_t suspend_count       = 0;
+	integer_t debug_suspend_count = 0;
+	pid_t child_pid               = 0;
+	mach_port_name_t child_task;
+	task_suspension_token_t child_token = 0xFFFFF;
+
+	/*
+	 * for dt_waitpid
+	 * We expect the test to fail right now, so I've set timeout to
+	 * be shorter than we may want it to be when the issue is fixed
+	 */
+	int timeout     = 1;
+	int exit_status = 0;
+	int signal_no   = 0;
+
+	/* for pipe */
+	int fd[2];
+	pipe(fd);
+	int pipe_msg = 0;
+
+	child_pid = fork();
+
+	T_ASSERT_POSIX_SUCCESS(child_pid, "verify process can be forked %d", child_pid);
+
+	if (child_pid == 0) {
+		close(fd[1]);
+		T_LOG("Waiting to read from parent...");
+		read(fd[0], &pipe_msg, sizeof(pipe_msg));
+		T_LOG("Done reading from parent, about to exit...");
+		exit(0);
+	}
+	/*
+	 * Wait for child to fork and block on read
+	 */
+	sleep(1);
+
+	close(fd[0]);
+
+	kr = task_for_pid(mach_task_self(), child_pid, &child_task);
+	T_ASSERT_MACH_SUCCESS(kr, "verify task_for_pid succeeded.  check sudo if failed");
+
+	kr = task_info(child_task, TASK_DEBUG_INFO_INTERNAL, (task_info_t)&debug_info, &debug_count);
+	T_ASSERT_MACH_SUCCESS(kr, "verify task_info call succeeded");
+
+	debug_suspend_count = debug_info.suspend_count;
+	T_EXPECT_EQ(debug_suspend_count, 0, "verify debug_info shows correct (true) suspend_count(0)");
+
+	kr = task_suspend2(child_task, &child_token);
+	T_ASSERT_MACH_SUCCESS(kr, "verify task_suspend2 call succeeded");
+
+	kr = task_info(child_task, TASK_DEBUG_INFO_INTERNAL, (task_info_t)&debug_info, &debug_count);
+	T_ASSERT_MACH_SUCCESS(kr, "verify task_info call succeeded");
+
+	debug_suspend_count = debug_info.suspend_count;
+	T_ASSERT_EQ(debug_suspend_count, 1, "verify debug_info shows correct (true) suspend_count(1)");
+
+	/*
+	 * Verify the suspend_count for child and resume it.
+	 */
+
+	kr = task_info(child_task, flavor, info_data, &count);
+	T_ASSERT_MACH_SUCCESS(kr, "verify task_info call succeeded");
+
+	suspend_count = (integer_t)(info_get(INFO_MACH, GET_SUSPEND_COUNT, info_data));
+	T_EXPECT_EQ(suspend_count, 1, "verify task_info shows correct (user_stop_count) suspend_count (1)");
+
+	posix_ret = kill(child_pid, SIGCONT);
+	T_ASSERT_POSIX_SUCCESS(posix_ret, "verify signal call succeeded");
+
+	kr = task_info(child_task, TASK_DEBUG_INFO_INTERNAL, (task_info_t)&debug_info, &debug_count);
+	T_EXPECT_MACH_SUCCESS(kr, "verify task_info call succeeded");
+
+	debug_suspend_count = debug_info.suspend_count;
+	T_EXPECTFAIL_WITH_RADAR(33166654);
+	T_EXPECT_EQ(debug_suspend_count, 1, "verify debug_info shows correct (true) suspend_count (1)");
+
+	suspend_count = (integer_t)(info_get(INFO_MACH, GET_SUSPEND_COUNT, info_data));
+	T_ASSERT_EQ(suspend_count, 1, "verify task_info shows correct (user_stop_count) suspend_count (1) after SIG_CONT");
+
+	kr = task_resume(child_task);
+	T_EXPECTFAIL_WITH_RADAR(33166654);
+	T_EXPECT_MACH_SUCCESS(kr, "verify task_resume succeeded");
+
+	/*
+	 * reap kr from task_suspend call in child
+	 */
+
+	dt_waitpid(child_pid, &exit_status, &signal_no, timeout);
+
+	T_ASSERT_EQ(signal_no, SIG_DT_TIMEOUT, "dt_waitpid timed out as expected");
+
+	// Resume properly using token and then wait
+
+	kr = task_resume2(child_token);
+	T_EXPECTFAIL_WITH_RADAR(33166654);
+	T_ASSERT_MACH_SUCCESS(kr, "verify task_resume2 succeeded");
+
+	write(fd[1], &pipe_msg, sizeof(pipe_msg));
+
+	/*
+	 * reap kr from task_suspend call in child
+	 */
+	dt_waitpid(child_pid, &exit_status, &signal_no, timeout);
+
+	T_ASSERT_EQ(signal_no, 0, "child should be resumed and no signal should be returned");
+	T_ASSERT_EQ(exit_status, 0, "child should exit with 0");
+
 }
 
 uint64_t

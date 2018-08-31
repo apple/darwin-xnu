@@ -973,6 +973,13 @@ grade:
 			exec_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_UPX);
 			exec_failure_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
 			exec_failure_reason->osr_flags |= OS_REASON_FLAG_CONSISTENT_FAILURE;
+		} else if (lret == LOAD_BADARCH_X86) {
+			/* set anything that might be useful in the crash report */
+			set_proc_name(imgp, p);
+
+			exec_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_NO32EXEC);
+			exec_failure_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
+			exec_failure_reason->osr_flags |= OS_REASON_FLAG_CONSISTENT_FAILURE;
 		} else {
 			exec_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_BAD_MACHO);
 		}
@@ -1234,12 +1241,7 @@ grade:
 #endif
 
 	if (kdebug_enable) {
-		long dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4;
-
-		/*
-		 * Collect the pathname for tracing
-		 */
-		kdbg_trace_string(p, &dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
+		long args[4] = {};
 
 		uintptr_t fsid = 0, fileid = 0;
 		if (imgp->ip_vattr) {
@@ -1251,10 +1253,15 @@ grade:
 				fsid = fileid = 0;
 			}
 		}
-		KERNEL_DEBUG_CONSTANT1(TRACE_DATA_EXEC | DBG_FUNC_NONE,
-				p->p_pid , fsid, fileid, 0, (uintptr_t)thread_tid(thread));
-		KERNEL_DEBUG_CONSTANT1(TRACE_STRING_EXEC | DBG_FUNC_NONE,
-				dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, (uintptr_t)thread_tid(thread));
+		KERNEL_DEBUG_CONSTANT_IST1(TRACE_DATA_EXEC, p->p_pid, fsid, fileid, 0,
+				(uintptr_t)thread_tid(thread));
+
+		/*
+		 * Collect the pathname for tracing
+		 */
+		kdbg_trace_string(p, &args[0], &args[1], &args[2], &args[3]);
+		KERNEL_DEBUG_CONSTANT_IST1(TRACE_STRING_EXEC, args[0], args[1],
+				args[2], args[3], (uintptr_t)thread_tid(thread));
 	}
 
 	/*
@@ -5195,13 +5202,14 @@ load_init_program(proc_t p)
  *		EIO			An I/O error occurred
  *		EBADEXEC		The executable is corrupt/unknown
  */
-static int 
+static int
 load_return_to_errno(load_return_t lrtn)
 {
 	switch (lrtn) {
 	case LOAD_SUCCESS:
 		return 0;
 	case LOAD_BADARCH:
+	case LOAD_BADARCH_X86:
 		return EBADARCH;
 	case LOAD_BADMACHO:
 	case LOAD_BADMACHO_UPX:

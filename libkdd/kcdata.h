@@ -456,7 +456,7 @@ struct kcdata_type_definition {
 #define STACKSHOT_KCTYPE_DELTA_SINCE_TIMESTAMP 0x912u /* timestamp used for the delta stackshot */
 
 #define STACKSHOT_KCTYPE_TASK_DELTA_SNAPSHOT 0x940u   /* task_delta_snapshot_v2 */
-#define STACKSHOT_KCTYPE_THREAD_DELTA_SNAPSHOT 0x941u /* thread_delta_snapshot_v2 */
+#define STACKSHOT_KCTYPE_THREAD_DELTA_SNAPSHOT 0x941u /* thread_delta_snapshot_v* */
 
 #define STACKSHOT_KCTYPE_KERN_STACKLR 0x913u          /* uint32_t */
 #define STACKSHOT_KCTYPE_KERN_STACKLR64 0x914u        /* uint64_t */
@@ -704,6 +704,23 @@ struct thread_delta_snapshot_v2 {
 	uint8_t   tds_io_tier;
 } __attribute__ ((packed));
 
+struct thread_delta_snapshot_v3 {
+	uint64_t  tds_thread_id;
+	uint64_t  tds_voucher_identifier;
+	uint64_t  tds_ss_flags;
+	uint64_t  tds_last_made_runnable_time;
+	uint32_t  tds_state;
+	uint32_t  tds_sched_flags;
+	int16_t   tds_base_priority;
+	int16_t   tds_sched_priority;
+	uint8_t   tds_eqos;
+	uint8_t   tds_rqos;
+	uint8_t   tds_rqos_override;
+	uint8_t   tds_io_tier;
+	uint64_t  tds_requested_policy;
+	uint64_t  tds_effective_policy;
+} __attribute__ ((packed));
+
 struct io_stats_snapshot
 {
 	/*
@@ -805,13 +822,22 @@ typedef struct stackshot_thread_waitinfo {
 
 /* FIXME some of these types aren't clean (fixed width,  packed, and defined *here*) */
 
+struct crashinfo_proc_uniqidentifierinfo {
+	uint8_t                 p_uuid[16];		/* UUID of the main executable */
+	uint64_t                p_uniqueid;		/* 64 bit unique identifier for process */
+	uint64_t                p_puniqueid;		/* unique identifier for process's parent */
+	uint64_t                p_reserve2;		/* reserved for future use */
+	uint64_t                p_reserve3;		/* reserved for future use */
+	uint64_t                p_reserve4;		/* reserved for future use */
+} __attribute__((packed));
+
 #define TASK_CRASHINFO_BEGIN                KCDATA_BUFFER_BEGIN_CRASHINFO
 #define TASK_CRASHINFO_STRING_DESC          KCDATA_TYPE_STRING_DESC
 #define TASK_CRASHINFO_UINT32_DESC          KCDATA_TYPE_UINT32_DESC
 #define TASK_CRASHINFO_UINT64_DESC          KCDATA_TYPE_UINT64_DESC
 
 #define TASK_CRASHINFO_EXTMODINFO           0x801
-#define TASK_CRASHINFO_BSDINFOWITHUNIQID    0x802 /* struct proc_uniqidentifierinfo */
+#define TASK_CRASHINFO_BSDINFOWITHUNIQID    0x802 /* struct crashinfo_proc_uniqidentifierinfo */
 #define TASK_CRASHINFO_TASKDYLD_INFO        0x803
 #define TASK_CRASHINFO_UUID                 0x804
 #define TASK_CRASHINFO_PID                  0x805

@@ -3320,17 +3320,27 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 		if (retval == 0) {
 			int cl_index;
 			int ret_cluster_try_push;
+			int do_zeroing = 1;
 
-		        io_size += start_offset;
+			
+			io_size += start_offset;
+			
 
-			if (newEOF >= oldEOF && (upl_f_offset + io_size) >= newEOF && (u_int)io_size < upl_size) {
-			        /*
+			/* Force more restrictive zeroing behavior only on APFS */
+			if ((vnode_tag(vp) == VT_APFS) && (newEOF < oldEOF)) {
+				do_zeroing = 0;
+			}
+
+
+			if (do_zeroing && (upl_f_offset + io_size) >= newEOF && (u_int)io_size < upl_size) {
+
+				/*
 				 * if we're extending the file with this write
 				 * we'll zero fill the rest of the page so that
 				 * if the file gets extended again in such a way as to leave a
 				 * hole starting at this EOF, we'll have zero's in the correct spot
 				 */
-			        cluster_zero(upl, io_size, upl_size - io_size, NULL); 
+				cluster_zero(upl, io_size, upl_size - io_size, NULL); 
 			}
 			/*
 			 * release the upl now if we hold one since...

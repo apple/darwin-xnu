@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -317,7 +317,11 @@ unsigned int jetsam_aging_policy = kJetsamAgingPolicyLegacy;
 extern int corpse_for_fatal_memkill;
 extern unsigned long total_corpses_count(void) __attribute__((pure));
 extern void task_purge_all_corpses(void);
-boolean_t memorystatus_allowed_vm_map_fork(__unused task_t);
+extern uint64_t vm_purgeable_purge_task_owned(task_t task);
+boolean_t memorystatus_allowed_vm_map_fork(task_t);
+#if DEVELOPMENT || DEBUG
+void memorystatus_abort_vm_map_fork(task_t);
+#endif
 
 #if 0
 
@@ -626,7 +630,7 @@ static uint32_t memorystatus_build_state(proc_t p);
 static boolean_t memorystatus_kill_top_process(boolean_t any, boolean_t sort_flag, uint32_t cause, os_reason_t jetsam_reason, int32_t *priority, uint32_t *errors);
 static boolean_t memorystatus_kill_top_process_aggressive(uint32_t cause, int aggr_count, int32_t priority_max, uint32_t *errors);
 static boolean_t memorystatus_kill_elevated_process(uint32_t cause, os_reason_t jetsam_reason, int aggr_count, uint32_t *errors);
-static boolean_t memorystatus_kill_hiwat_proc(uint32_t *errors);
+static boolean_t memorystatus_kill_hiwat_proc(uint32_t *errors, boolean_t *purged);
 
 static boolean_t memorystatus_kill_process_async(pid_t victim_pid, uint32_t cause);
 
@@ -3379,14 +3383,18 @@ memorystatus_action_needed(void)
 static boolean_t
 memorystatus_act_on_hiwat_processes(uint32_t *errors, uint32_t *hwm_kill, boolean_t *post_snapshot, __unused boolean_t *is_critical)
 {
-	boolean_t killed = memorystatus_kill_hiwat_proc(errors);
+	boolean_t purged = FALSE;
+	boolean_t killed = memorystatus_kill_hiwat_proc(errors, &purged);
 
 	if (killed) {
 		*hwm_kill = *hwm_kill + 1;
 		*post_snapshot = TRUE;
 		return TRUE;
 	} else {
-		memorystatus_hwm_candidates = FALSE;
+		if (purged == FALSE) {
+			/* couldn't purge and couldn't kill */
+			memorystatus_hwm_candidates = FALSE;
+		}
 	}
 
 #if CONFIG_JETSAM
@@ -4123,6 +4131,10 @@ memorystatus_get_task_memory_region_count(task_t task, uint64_t *count)
 	*count = get_task_memory_region_count(task);
 }
 
+
+#define MEMORYSTATUS_VM_MAP_FORK_ALLOWED     0x100000000
+#define MEMORYSTATUS_VM_MAP_FORK_NOT_ALLOWED 0x200000000
+
 #if DEVELOPMENT || DEBUG
 
 /*
@@ -4130,11 +4142,15 @@ memorystatus_get_task_memory_region_count(task_t task, uint64_t *count)
  *   set a new pidwatch value
  *	or
  *   get the current pidwatch value
+ *
+ * The pidwatch_val starts out with a PID to watch for in the map_fork path.
+ * Its value is:
+ * - OR'd with MEMORYSTATUS_VM_MAP_FORK_ALLOWED if we allow the map_fork.
+ * - OR'd with MEMORYSTATUS_VM_MAP_FORK_NOT_ALLOWED if we disallow the map_fork.
+ * - set to -1ull if the map_fork() is aborted for other reasons.
  */
 
 uint64_t memorystatus_vm_map_fork_pidwatch_val = 0;
-#define MEMORYSTATUS_VM_MAP_FORK_ALLOWED     0x100000000
-#define MEMORYSTATUS_VM_MAP_FORK_NOT_ALLOWED 0x200000000
 
 static int sysctl_memorystatus_vm_map_fork_pidwatch SYSCTL_HANDLER_ARGS {
 #pragma unused(oidp, arg1, arg2)
@@ -4172,30 +4188,40 @@ SYSCTL_PROC(_kern, OID_AUTO, memorystatus_vm_map_fork_pidwatch, CTLTYPE_QUAD | C
             0, 0, sysctl_memorystatus_vm_map_fork_pidwatch, "Q", "get/set pid watched for in vm_map_fork");
 
 
-#define SET_VM_MAP_FORK_PIDWATCH_ALLOWED(task)							\
-MACRO_BEGIN											\
-if (memorystatus_vm_map_fork_pidwatch_val != 0) {						\
-	proc_t p = get_bsdtask_info(task);							\
-	if (p && (memorystatus_vm_map_fork_pidwatch_val == (uint64_t)p->p_pid)) {		\
-		memorystatus_vm_map_fork_pidwatch_val |= MEMORYSTATUS_VM_MAP_FORK_ALLOWED;	\
-	}											\
-}												\
-MACRO_END
+/*
+ * Record if a watched process fails to qualify for a vm_map_fork().
+ */
+void
+memorystatus_abort_vm_map_fork(task_t task)
+{
+	if (memorystatus_vm_map_fork_pidwatch_val != 0) {
+		proc_t p = get_bsdtask_info(task);
+		if (p != NULL && memorystatus_vm_map_fork_pidwatch_val == (uint64_t)p->p_pid) {
+			memorystatus_vm_map_fork_pidwatch_val = -1ull;
+		}
+	}
+}
 
-#define SET_VM_MAP_FORK_PIDWATCH_NOT_ALLOWED(task)						\
-MACRO_BEGIN											\
-if (memorystatus_vm_map_fork_pidwatch_val != 0) {						\
-	proc_t p = get_bsdtask_info(task);							\
-	if (p && (memorystatus_vm_map_fork_pidwatch_val == (uint64_t)p->p_pid)) {		\
-		memorystatus_vm_map_fork_pidwatch_val |= MEMORYSTATUS_VM_MAP_FORK_NOT_ALLOWED;	\
-	}											\
-}												\
-MACRO_END
+static void
+set_vm_map_fork_pidwatch(task_t task, uint64_t x)
+{
+	if (memorystatus_vm_map_fork_pidwatch_val != 0) {
+		proc_t p = get_bsdtask_info(task);
+		if (p && (memorystatus_vm_map_fork_pidwatch_val == (uint64_t)p->p_pid)) {
+			memorystatus_vm_map_fork_pidwatch_val |= x;
+		}
+	}
+}
 
 #else /* DEVELOPMENT || DEBUG */
 
-#define SET_VM_MAP_FORK_PIDWATCH_ALLOWED(task)
-#define SET_VM_MAP_FORK_PIDWATCH_NOT_ALLOWED(task)
+
+static void
+set_vm_map_fork_pidwatch(task_t task, uint64_t x)
+{
+#pragma unused(task)
+#pragma unused(x)
+}
 
 #endif /* DEVELOPMENT || DEBUG */
 
@@ -4221,18 +4247,18 @@ MACRO_END
  *	munch memory up to the system-wide task limit.
  */
 boolean_t
-memorystatus_allowed_vm_map_fork(__unused task_t task)
+memorystatus_allowed_vm_map_fork(task_t task)
 {
 	boolean_t is_allowed = TRUE;   /* default */
 
 #if CONFIG_EMBEDDED
 
-	uint64_t footprint_in_bytes = 0;
-	uint64_t purgeable_in_bytes = 0;
-	uint64_t max_allowed_bytes = 0;
+	uint64_t footprint_in_bytes;
+	uint64_t purgeable_in_bytes;
+	uint64_t max_allowed_bytes;
 
 	if (max_task_footprint_mb == 0) {
-		SET_VM_MAP_FORK_PIDWATCH_ALLOWED(task);
+		set_vm_map_fork_pidwatch(task, MEMORYSTATUS_VM_MAP_FORK_ALLOWED);
 		return (is_allowed);
 	}
 
@@ -4242,27 +4268,21 @@ memorystatus_allowed_vm_map_fork(__unused task_t task)
 	/*
 	 * Maximum is half the system-wide task limit.
 	 */
-	max_allowed_bytes = ((((uint64_t)max_task_footprint_mb) * 1024ULL * 1024ULL) >> 1);
+	max_allowed_bytes = ((uint64_t)max_task_footprint_mb * 1024 * 1024) >> 1;
 
 	if (footprint_in_bytes > purgeable_in_bytes) {
 		footprint_in_bytes -= purgeable_in_bytes;
 	}
 
-	if (footprint_in_bytes <= max_allowed_bytes) {
-		SET_VM_MAP_FORK_PIDWATCH_ALLOWED(task);
-		return (is_allowed);
-	} else {
+	if (footprint_in_bytes > max_allowed_bytes) {
 		printf("memorystatus disallowed vm_map_fork %lld  %lld\n", footprint_in_bytes, max_allowed_bytes);
-		SET_VM_MAP_FORK_PIDWATCH_NOT_ALLOWED(task);
+		set_vm_map_fork_pidwatch(task, MEMORYSTATUS_VM_MAP_FORK_NOT_ALLOWED);
 		return (!is_allowed);
 	}
-
-#else /* CONFIG_EMBEDDED */
-
-	SET_VM_MAP_FORK_PIDWATCH_ALLOWED(task);
-	return (is_allowed);
-
 #endif /* CONFIG_EMBEDDED */
+
+	set_vm_map_fork_pidwatch(task, MEMORYSTATUS_VM_MAP_FORK_ALLOWED);
+	return (is_allowed);
 
 }
 
@@ -4631,7 +4651,7 @@ memorystatus_init_snapshot_vmstats(memorystatus_jetsam_snapshot_t *snapshot)
 	mach_msg_type_number_t	count = HOST_VM_INFO64_COUNT;
 	vm_statistics64_data_t	vm_stat;
 
-	if ((kr = host_statistics64(host_self(), HOST_VM_INFO64, (host_info64_t)&vm_stat, &count) != KERN_SUCCESS)) {
+	if ((kr = host_statistics64(host_self(), HOST_VM_INFO64, (host_info64_t)&vm_stat, &count)) != KERN_SUCCESS) {
 		printf("memorystatus_init_jetsam_snapshot_stats: host_statistics64 failed with %d\n", kr);
 		memset(&snapshot->stats, 0, sizeof(snapshot->stats));
 	} else {
@@ -4785,6 +4805,137 @@ memorystatus_cmd_test_jetsam_sort(int priority, int sort_order) {
 #endif /* DEVELOPMENT || DEBUG */
 
 /*
+ * Prepare the process to be killed (set state, update snapshot) and kill it.
+ */
+static uint64_t memorystatus_purge_before_jetsam_success = 0;
+
+static boolean_t
+memorystatus_kill_proc(proc_t p, uint32_t cause, os_reason_t jetsam_reason, boolean_t *killed)
+{
+	pid_t aPid = 0;
+	uint32_t aPid_ep = 0;
+
+	uint64_t killtime = 0;
+        clock_sec_t     tv_sec;
+        clock_usec_t    tv_usec;
+        uint32_t        tv_msec;
+	boolean_t	retval = FALSE;
+	uint64_t	num_pages_purged = 0;
+
+	aPid = p->p_pid;
+	aPid_ep = p->p_memstat_effectivepriority;
+
+	if (cause != kMemorystatusKilledVnodes && cause != kMemorystatusKilledZoneMapExhaustion) {
+		/*
+		 * Genuine memory pressure and not other (vnode/zone) resource exhaustion.
+		 */
+		boolean_t success = FALSE;
+
+		networking_memstatus_callout(p, cause);
+		num_pages_purged = vm_purgeable_purge_task_owned(p->task);
+
+		if (num_pages_purged) {
+			/*
+			 * We actually purged something and so let's
+			 * check if we need to continue with the kill.
+			 */
+			if (cause == kMemorystatusKilledHiwat) {
+				uint64_t footprint_in_bytes = get_task_phys_footprint(p->task);
+				uint64_t memlimit_in_bytes  = (((uint64_t)p->p_memstat_memlimit) * 1024ULL * 1024ULL);	/* convert MB to bytes */
+				success = (footprint_in_bytes <= memlimit_in_bytes);
+			} else {
+				success = (memorystatus_avail_pages_below_pressure() == FALSE);
+			}
+
+			if (success) {
+
+				memorystatus_purge_before_jetsam_success++;
+
+				os_log_with_startup_serial(OS_LOG_DEFAULT, "memorystatus: purged %llu pages from pid %d [%s] and avoided %s\n",
+				num_pages_purged, aPid, (*p->p_name ? p->p_name : "unknown"),  memorystatus_kill_cause_name[cause]);
+
+				*killed = FALSE;
+
+				return TRUE;
+			}
+		}
+	}
+
+#if CONFIG_JETSAM && (DEVELOPMENT || DEBUG)
+	MEMORYSTATUS_DEBUG(1, "jetsam: %s pid %d [%s] - %lld Mb > 1 (%d Mb)\n",
+			   (memorystatus_jetsam_policy & kPolicyDiagnoseActive) ? "suspending": "killing",
+			   aPid, (*p->p_name ? p->p_name : "unknown"),
+			   (footprint_in_bytes / (1024ULL * 1024ULL)), 	/* converted bytes to MB */
+			   p->p_memstat_memlimit);
+#endif /* CONFIG_JETSAM && (DEVELOPMENT || DEBUG) */
+
+	killtime = mach_absolute_time();
+	absolutetime_to_microtime(killtime, &tv_sec, &tv_usec);
+	tv_msec = tv_usec / 1000;
+
+#if CONFIG_JETSAM && (DEVELOPMENT || DEBUG)
+	if (memorystatus_jetsam_policy & kPolicyDiagnoseActive) {
+		if (cause == kMemorystatusKilledHiwat) {
+			MEMORYSTATUS_DEBUG(1, "jetsam: suspending pid %d [%s] for diagnosis - memorystatus_available_pages: %d\n",
+				aPid, (*p->p_name ? p->p_name: "(unknown)"), memorystatus_available_pages);
+		} else {
+			int activeProcess = p->p_memstat_state & P_MEMSTAT_FOREGROUND;
+			if (activeProcess) {
+				MEMORYSTATUS_DEBUG(1, "jetsam: suspending pid %d [%s] (active) for diagnosis - memorystatus_available_pages: %d\n",
+					aPid, (*p->p_name ? p->p_name: "(unknown)"), memorystatus_available_pages);
+
+					if (memorystatus_jetsam_policy & kPolicyDiagnoseFirst) {
+						jetsam_diagnostic_suspended_one_active_proc = 1;
+						printf("jetsam: returning after suspending first active proc - %d\n", aPid);
+					}
+			}
+		}
+
+		memorystatus_update_jetsam_snapshot_entry_locked(p, kMemorystatusKilledDiagnostic, killtime);
+		p->p_memstat_state |= P_MEMSTAT_DIAG_SUSPENDED;
+
+		if (p) {
+			task_suspend(p->task);
+			*killed = TRUE;
+		}
+	} else
+#endif /* CONFIG_JETSAM && (DEVELOPMENT || DEBUG) */
+	{
+		memorystatus_update_jetsam_snapshot_entry_locked(p, cause, killtime);
+
+		char kill_reason_string[128];
+
+		if (cause == kMemorystatusKilledHiwat) {
+			strlcpy(kill_reason_string, "killing_highwater_process", 128);
+		} else {
+			if (aPid_ep == JETSAM_PRIORITY_IDLE) {
+				strlcpy(kill_reason_string, "killing_idle_process", 128);
+			} else {
+				strlcpy(kill_reason_string, "killing_top_process", 128);
+			}
+		}
+
+		os_log_with_startup_serial(OS_LOG_DEFAULT, "%lu.%03d memorystatus: %s pid %d [%s] (%s %d) - memorystatus_available_pages: %llu\n",
+		       (unsigned long)tv_sec, tv_msec, kill_reason_string,
+		       aPid, (*p->p_name ? p->p_name : "unknown"),
+		       memorystatus_kill_cause_name[cause], aPid_ep, (uint64_t)memorystatus_available_pages);
+
+		/*
+		 * memorystatus_do_kill drops a reference, so take another one so we can
+		 * continue to use this exit reason even after memorystatus_do_kill()
+		 * returns
+		 */
+		os_reason_ref(jetsam_reason);
+
+		retval = memorystatus_do_kill(p, cause, jetsam_reason);
+
+		*killed = retval;
+	}
+
+	return retval;
+}
+
+/*
  * Jetsam the first process in the queue.
  */
 static boolean_t
@@ -4793,14 +4944,9 @@ memorystatus_kill_top_process(boolean_t any, boolean_t sort_flag, uint32_t cause
 {
 	pid_t aPid;
 	proc_t p = PROC_NULL, next_p = PROC_NULL;
-	boolean_t new_snapshot = FALSE, force_new_snapshot = FALSE, killed = FALSE;
-	int kill_count = 0;
+	boolean_t new_snapshot = FALSE, force_new_snapshot = FALSE, killed = FALSE, freed_mem = FALSE;
 	unsigned int i = 0;
 	uint32_t aPid_ep;
-	uint64_t killtime = 0;
-        clock_sec_t     tv_sec;
-        clock_usec_t    tv_usec;
-        uint32_t        tv_msec;
 	int32_t		local_max_kill_prio = JETSAM_PRIORITY_IDLE;
 
 #ifndef CONFIG_FREEZE
@@ -4859,7 +5005,6 @@ memorystatus_kill_top_process(boolean_t any, boolean_t sort_flag, uint32_t cause
 	next_p = memorystatus_get_first_proc_locked(&i, TRUE);
 	while (next_p && (next_p->p_memstat_effectivepriority <= local_max_kill_prio)) {
 #if DEVELOPMENT || DEBUG
-		int activeProcess;
 		int procSuspendedForDiagnosis;
 #endif /* DEVELOPMENT || DEBUG */
         
@@ -4867,7 +5012,6 @@ memorystatus_kill_top_process(boolean_t any, boolean_t sort_flag, uint32_t cause
 		next_p = memorystatus_get_next_proc_locked(&i, p, TRUE);
 		
 #if DEVELOPMENT || DEBUG
-		activeProcess = p->p_memstat_state & P_MEMSTAT_FOREGROUND;
 		procSuspendedForDiagnosis = p->p_memstat_state & P_MEMSTAT_DIAG_SUSPENDED;
 #endif /* DEVELOPMENT || DEBUG */
 		
@@ -4915,6 +5059,28 @@ memorystatus_kill_top_process(boolean_t any, boolean_t sort_flag, uint32_t cause
 		} else
 #endif
 		{
+			if (proc_ref_locked(p) == p) {
+				/*
+				 * Mark as terminated so that if exit1() indicates success, but the process (for example)
+				 * is blocked in task_exception_notify(), it'll be skipped if encountered again - see
+				 * <rdar://problem/13553476>. This is cheaper than examining P_LEXIT, which requires the
+				 * acquisition of the proc lock.
+				 */
+				p->p_memstat_state |= P_MEMSTAT_TERMINATED;
+
+				proc_list_unlock();
+			} else {
+				/*
+				 * We need to restart the search again because
+				 * proc_ref_locked _can_ drop the proc_list lock
+				 * and we could have lost our stored next_p via
+				 * an exit() on another core.
+				 */
+				i = 0;
+				next_p = memorystatus_get_first_proc_locked(&i, TRUE);
+				continue;
+			}
+
 		        /*
 		         * Capture a snapshot if none exists and:
 			 * - we are forcing a new snapshot creation, either because:
@@ -4928,101 +5094,36 @@ memorystatus_kill_top_process(boolean_t any, boolean_t sort_flag, uint32_t cause
 				memorystatus_init_jetsam_snapshot_locked(NULL,0);
                 		new_snapshot = TRUE;
                 	}
-		        
-			/* 
-			 * Mark as terminated so that if exit1() indicates success, but the process (for example)
-			 * is blocked in task_exception_notify(), it'll be skipped if encountered again - see 
-			 * <rdar://problem/13553476>. This is cheaper than examining P_LEXIT, which requires the 
-			 * acquisition of the proc lock.
-			 */
-			p->p_memstat_state |= P_MEMSTAT_TERMINATED;
 
-			killtime = mach_absolute_time();
-			absolutetime_to_microtime(killtime, &tv_sec, &tv_usec);
-			tv_msec = tv_usec / 1000;
-		        
-#if CONFIG_JETSAM && (DEVELOPMENT || DEBUG)
-			if ((memorystatus_jetsam_policy & kPolicyDiagnoseActive) && activeProcess) {
-				MEMORYSTATUS_DEBUG(1, "jetsam: suspending pid %d [%s] (active) for diagnosis - memory_status_level: %d\n",
-					aPid, (*p->p_name ? p->p_name: "(unknown)"), memorystatus_level);
-				memorystatus_update_jetsam_snapshot_entry_locked(p, kMemorystatusKilledDiagnostic, killtime);
-				p->p_memstat_state |= P_MEMSTAT_DIAG_SUSPENDED;
-				if (memorystatus_jetsam_policy & kPolicyDiagnoseFirst) {
-					jetsam_diagnostic_suspended_one_active_proc = 1;
-					printf("jetsam: returning after suspending first active proc - %d\n", aPid);
-				}
-				
-				p = proc_ref_locked(p);
-				proc_list_unlock();
-				if (p) {
-					task_suspend(p->task);
+			freed_mem = memorystatus_kill_proc(p, cause, jetsam_reason, &killed); /* purged and/or killed 'p' */
+			/* Success? */
+			if (freed_mem) {
+				if (killed) {
 					if (priority) {
 						*priority = aPid_ep;
 					}
-					proc_rele(p);
-					killed = TRUE;
-				}
-				
-				goto exit;
-			} else
-#endif /* CONFIG_JETSAM && (DEVELOPMENT || DEBUG) */
-			{
-				/* Shift queue, update stats */
-				memorystatus_update_jetsam_snapshot_entry_locked(p, cause, killtime);
-
-				if (proc_ref_locked(p) == p) {
-					proc_list_unlock();
-					os_log_with_startup_serial(OS_LOG_DEFAULT, "%lu.%03d memorystatus: %s pid %d [%s] (%s %d) - memorystatus_available_pages: %llu\n",
-					       (unsigned long)tv_sec, tv_msec,
-					       ((aPid_ep == JETSAM_PRIORITY_IDLE) ? "killing_idle_process" : "killing_top_process"),
-					       aPid, (*p->p_name ? p->p_name : "unknown"),
-					       memorystatus_kill_cause_name[cause], aPid_ep, (uint64_t)memorystatus_available_pages);
-
-					/*
-					 * memorystatus_do_kill() drops a reference, so take another one so we can
-					 * continue to use this exit reason even after memorystatus_do_kill()
-					 * returns.
-					 */
-					os_reason_ref(jetsam_reason);
-
-					killed = memorystatus_do_kill(p, cause, jetsam_reason);
-
-					/* Success? */
-					if (killed) {
-						if (priority) {
-							*priority = aPid_ep;
-						}
-						proc_rele(p);
-						kill_count++;
-						goto exit;
-					}
-				
-					/*
-					 * Failure - first unwind the state,
-					 * then fall through to restart the search.
-					 */
+				} else {
+					/* purged */
 					proc_list_lock();
-					proc_rele_locked(p);
 					p->p_memstat_state &= ~P_MEMSTAT_TERMINATED;
-					p->p_memstat_state |= P_MEMSTAT_ERROR;
-					*errors += 1;
+					proc_list_unlock();
 				}
-				
-				/*
-				 * Failure - restart the search.
-				 *
-				 * We might have raced with "p" exiting on another core, resulting in no
-				 * ref on "p".  Or, we may have failed to kill "p".
-				 *
-				 * Either way, we fall thru to here, leaving the proc in the
-				 * P_MEMSTAT_TERMINATED state.
-				 *
-				 * And, we hold the the proc_list_lock at this point.
-				 */
-
-				i = 0;
-				next_p = memorystatus_get_first_proc_locked(&i, TRUE);
+				proc_rele(p);
+				goto exit;
 			}
+		
+			/*
+			 * Failure - first unwind the state,
+			 * then fall through to restart the search.
+			 */
+			proc_list_lock();
+			proc_rele_locked(p);
+			p->p_memstat_state &= ~P_MEMSTAT_TERMINATED;
+			p->p_memstat_state |= P_MEMSTAT_ERROR;
+			*errors += 1;
+
+			i = 0;
+			next_p = memorystatus_get_first_proc_locked(&i, TRUE);
 		}
 	}
 	
@@ -5039,7 +5140,7 @@ exit:
 	}
 	
 	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_MEMSTAT, BSD_MEMSTAT_JETSAM) | DBG_FUNC_END,
-			      memorystatus_available_pages, killed ? aPid : 0, kill_count, 0, 0);
+			      memorystatus_available_pages, killed ? aPid : 0, 0, 0, 0);
 
 	return killed;
 }
@@ -5283,18 +5384,13 @@ exit:
 }
 
 static boolean_t
-memorystatus_kill_hiwat_proc(uint32_t *errors)
+memorystatus_kill_hiwat_proc(uint32_t *errors, boolean_t *purged)
 {
 	pid_t aPid = 0;
 	proc_t p = PROC_NULL, next_p = PROC_NULL;
-	boolean_t new_snapshot = FALSE, killed = FALSE;
-	int kill_count = 0;
+	boolean_t new_snapshot = FALSE, killed = FALSE, freed_mem = FALSE;
 	unsigned int i = 0;
 	uint32_t aPid_ep;
-	uint64_t killtime = 0;
-        clock_sec_t     tv_sec;
-        clock_usec_t    tv_usec;
-        uint32_t        tv_msec;
 	os_reason_t jetsam_reason = OS_REASON_NULL;
 	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_MEMSTAT, BSD_MEMSTAT_JETSAM_HIWAT) | DBG_FUNC_START,
 		memorystatus_available_pages, 0, 0, 0, 0);
@@ -5352,93 +5448,61 @@ memorystatus_kill_hiwat_proc(uint32_t *errors)
 		if (skip) {
 			continue;
 		} else {
-#if CONFIG_JETSAM && (DEVELOPMENT || DEBUG)
-			MEMORYSTATUS_DEBUG(1, "jetsam: %s pid %d [%s] - %lld Mb > 1 (%d Mb)\n",
-					   (memorystatus_jetsam_policy & kPolicyDiagnoseActive) ? "suspending": "killing",
-					   aPid, (*p->p_name ? p->p_name : "unknown"),
-					   (footprint_in_bytes / (1024ULL * 1024ULL)), 	/* converted bytes to MB */
-					   p->p_memstat_memlimit);
-#endif /* CONFIG_JETSAM && (DEVELOPMENT || DEBUG) */
-				
+
 			if (memorystatus_jetsam_snapshot_count == 0) {
 				memorystatus_init_jetsam_snapshot_locked(NULL,0);
-                		new_snapshot = TRUE;
-                	}
-                	
-			p->p_memstat_state |= P_MEMSTAT_TERMINATED;
-
-			killtime = mach_absolute_time();
-			absolutetime_to_microtime(killtime, &tv_sec, &tv_usec);
-			tv_msec = tv_usec / 1000;
-				
-#if CONFIG_JETSAM && (DEVELOPMENT || DEBUG)
-			if (memorystatus_jetsam_policy & kPolicyDiagnoseActive) {
-			        MEMORYSTATUS_DEBUG(1, "jetsam: pid %d suspended for diagnosis - memorystatus_available_pages: %d\n", aPid, memorystatus_available_pages);
-				memorystatus_update_jetsam_snapshot_entry_locked(p, kMemorystatusKilledDiagnostic, killtime);
-				p->p_memstat_state |= P_MEMSTAT_DIAG_SUSPENDED;
-				
-				p = proc_ref_locked(p);
-				proc_list_unlock();
-				if (p) {
-					task_suspend(p->task);
-					proc_rele(p);
-					killed = TRUE;
-				}
-				
-				goto exit;
-			} else
-#endif /* CONFIG_JETSAM && (DEVELOPMENT || DEBUG) */
-			{
-				memorystatus_update_jetsam_snapshot_entry_locked(p, kMemorystatusKilledHiwat, killtime);
-			        
-				if (proc_ref_locked(p) == p) {
-					proc_list_unlock();
-
-					os_log_with_startup_serial(OS_LOG_DEFAULT, "%lu.%03d memorystatus: killing_highwater_process pid %d [%s] (highwater %d) - memorystatus_available_pages: %llu\n",
-					       (unsigned long)tv_sec, tv_msec, aPid, (*p->p_name ? p->p_name : "unknown"), aPid_ep, (uint64_t)memorystatus_available_pages);
-
-					/*
-					 * memorystatus_do_kill drops a reference, so take another one so we can
-					 * continue to use this exit reason even after memorystatus_do_kill()
-					 * returns
-					 */
-					os_reason_ref(jetsam_reason);
-
-					killed = memorystatus_do_kill(p, kMemorystatusKilledHiwat, jetsam_reason);
-
-					/* Success? */
-					if (killed) {
-						proc_rele(p);
-						kill_count++;
-						goto exit;
-					}
-
-					/*
-					 * Failure - first unwind the state,
-					 * then fall through to restart the search.
-					 */
-					proc_list_lock();
-					proc_rele_locked(p);
-					p->p_memstat_state &= ~P_MEMSTAT_TERMINATED;
-					p->p_memstat_state |= P_MEMSTAT_ERROR;
-					*errors += 1;
-				}
-
+				new_snapshot = TRUE;
+			}
+	
+			if (proc_ref_locked(p) == p) {
 				/*
-				 * Failure - restart the search.
-				 *
-				 * We might have raced with "p" exiting on another core, resulting in no
-				 * ref on "p".  Or, we may have failed to kill "p".
-				 *
-				 * Either way, we fall thru to here, leaving the proc in the 
-				 * P_MEMSTAT_TERMINATED state.
-				 *
-				 * And, we hold the the proc_list_lock at this point.
+				 * Mark as terminated so that if exit1() indicates success, but the process (for example)
+				 * is blocked in task_exception_notify(), it'll be skipped if encountered again - see
+				 * <rdar://problem/13553476>. This is cheaper than examining P_LEXIT, which requires the
+				 * acquisition of the proc lock.
 				 */
+				p->p_memstat_state |= P_MEMSTAT_TERMINATED;
 
+				proc_list_unlock();
+			} else {
+				/*
+				 * We need to restart the search again because
+				 * proc_ref_locked _can_ drop the proc_list lock
+				 * and we could have lost our stored next_p via
+				 * an exit() on another core.
+				 */
 				i = 0;
 				next_p = memorystatus_get_first_proc_locked(&i, TRUE);
+				continue;
 			}
+		
+			freed_mem = memorystatus_kill_proc(p, kMemorystatusKilledHiwat, jetsam_reason, &killed); /* purged and/or killed 'p' */
+
+			/* Success? */
+			if (freed_mem) {
+				if (killed == FALSE) {
+					/* purged 'p'..don't reset HWM candidate count */
+					*purged = TRUE;
+
+					proc_list_lock();
+					p->p_memstat_state &= ~P_MEMSTAT_TERMINATED;
+					proc_list_unlock();
+				}
+				proc_rele(p);
+				goto exit;
+			}
+			/*
+			 * Failure - first unwind the state,
+			 * then fall through to restart the search.
+			 */
+			proc_list_lock();
+			proc_rele_locked(p);
+			p->p_memstat_state &= ~P_MEMSTAT_TERMINATED;
+			p->p_memstat_state |= P_MEMSTAT_ERROR;
+			*errors += 1;
+
+			i = 0;
+			next_p = memorystatus_get_first_proc_locked(&i, TRUE);
 		}
 	}
 	
@@ -5455,7 +5519,7 @@ exit:
 	}
 	
 	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_MEMSTAT, BSD_MEMSTAT_JETSAM_HIWAT) | DBG_FUNC_END, 
-			      memorystatus_available_pages, killed ? aPid : 0, kill_count, 0, 0);
+			      memorystatus_available_pages, killed ? aPid : 0, 0, 0, 0);
 
 	return killed;
 }
@@ -7253,7 +7317,7 @@ memorystatus_get_priority_list(memorystatus_priority_entry_t **list_ptr, size_t 
 	}
 
  	*list_ptr = (memorystatus_priority_entry_t*)kalloc(*list_size);
-	if (!list_ptr) {
+	if (!*list_ptr) {
 		return ENOMEM;
 	}
 

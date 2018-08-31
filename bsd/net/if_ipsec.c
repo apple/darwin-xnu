@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -58,7 +58,6 @@
 
 extern int net_qos_policy_restricted;
 extern int net_qos_policy_restrict_avapps;
-extern unsigned int if_enable_netagent;
 
 /* Kernel Control functions */
 static errno_t	ipsec_ctl_bind(kern_ctl_ref kctlref, struct sockaddr_ctl *sac,
@@ -108,12 +107,13 @@ SYSCTL_NODE(_net, OID_AUTO, ipsec, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "IPsec");
 static int if_ipsec_verify_interface_creation = 0;
 SYSCTL_INT(_net_ipsec, OID_AUTO, verify_interface_creation, CTLFLAG_RW | CTLFLAG_LOCKED, &if_ipsec_verify_interface_creation, 0, "");
 
-#define IPSEC_IF_VERIFY(_e)		if (unlikely(if_ipsec_verify_interface_creation)) { VERIFY(_e); }
+#define IPSEC_IF_VERIFY(_e)		if (__improbable(if_ipsec_verify_interface_creation)) { VERIFY(_e); }
 
 #define IPSEC_IF_DEFAULT_SLOT_SIZE 2048
 #define IPSEC_IF_DEFAULT_RING_SIZE 64
 #define IPSEC_IF_DEFAULT_TX_FSW_RING_SIZE 64
 #define IPSEC_IF_DEFAULT_RX_FSW_RING_SIZE 128
+#define	IPSEC_IF_DEFAULT_BUF_SEG_SIZE	skmem_usr_buf_seg_size
 
 #define IPSEC_IF_MIN_RING_SIZE 16
 #define IPSEC_IF_MAX_RING_SIZE 1024
@@ -183,8 +183,10 @@ struct ipsec_pcb {
 	uuid_t				ipsec_kpipe_uuid;
 	void *				ipsec_kpipe_rxring;
 	void *				ipsec_kpipe_txring;
+	kern_pbufpool_t			ipsec_kpipe_pp;
 
 	kern_nexus_t		ipsec_netif_nexus;
+	kern_pbufpool_t			ipsec_netif_pp;
 	void *				ipsec_netif_rxring;
 	void *				ipsec_netif_txring;
 	uint64_t			ipsec_netif_txring_size;
@@ -719,7 +721,7 @@ ipsec_kpipe_sync_rx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 		// Allocate rx packet
 		kern_packet_t rx_ph = 0;
 		error = kern_pbufpool_alloc_nosleep(rx_pp, 1, &rx_ph);
-		if (unlikely(error != 0)) {
+		if (__improbable(error != 0)) {
 			printf("ipsec_kpipe_sync_rx %s: failed to allocate packet\n",
 				   pcb->ipsec_ifp->if_xname);
 			break;
@@ -732,6 +734,7 @@ ipsec_kpipe_sync_rx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 		tx_slot = kern_channel_get_next_slot(tx_ring, tx_slot, NULL);
 
 		if (tx_ph == 0) {
+			kern_pbufpool_free(rx_pp, rx_ph);
 			continue;
 		}
 		
@@ -1151,7 +1154,7 @@ ipsec_netif_sync_rx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 		// Allocate rx packet
 		kern_packet_t rx_ph = 0;
 		errno_t error = kern_pbufpool_alloc_nosleep(rx_pp, 1, &rx_ph);
-		if (unlikely(error != 0)) {
+		if (__improbable(error != 0)) {
 			STATS_INC(nifs, NETIF_STATS_NOMEM_PKT);
 			STATS_INC(nifs, NETIF_STATS_DROPPED);
 			lck_mtx_unlock(&pcb->ipsec_input_chain_lock);
@@ -1370,7 +1373,7 @@ ipsec_netif_sync_rx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 		// Allocate rx packet
 		kern_packet_t rx_ph = 0;
 		error = kern_pbufpool_alloc_nosleep(rx_pp, 1, &rx_ph);
-		if (unlikely(error != 0)) {
+		if (__improbable(error != 0)) {
 			STATS_INC(nifs, NETIF_STATS_NOMEM_PKT);
 			STATS_INC(nifs, NETIF_STATS_DROPPED);
 			break;
@@ -1383,6 +1386,7 @@ ipsec_netif_sync_rx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 		tx_slot = kern_channel_get_next_slot(tx_ring, tx_slot, NULL);
 
 		if (tx_ph == 0) {
+			kern_pbufpool_free(rx_pp, rx_ph);
 			continue;
 		}
 
@@ -1570,10 +1574,11 @@ ipsec_nexus_ifattach(struct ipsec_pcb *pcb,
 	errno_t err;
 	nexus_controller_t controller = kern_nexus_shared_controller();
 	struct kern_nexus_net_init net_init;
+	struct kern_pbufpool_init pp_init;
 
 	nexus_name_t provider_name;
 	snprintf((char *)provider_name, sizeof(provider_name),
-			 "com.apple.netif.ipsec%d", pcb->ipsec_unit);
+			 "com.apple.netif.%s", pcb->ipsec_if_xname);
 
 	struct kern_nexus_provider_init prov_init = {
 		.nxpi_version = KERN_NEXUS_DOMAIN_PROVIDER_CURRENT_VERSION,
@@ -1613,6 +1618,21 @@ ipsec_nexus_ifattach(struct ipsec_pcb *pcb,
 
 	pcb->ipsec_netif_txring_size = ring_size;
 
+	bzero(&pp_init, sizeof (pp_init));
+	pp_init.kbi_version = KERN_PBUFPOOL_CURRENT_VERSION;
+	pp_init.kbi_packets = pcb->ipsec_netif_ring_size * 2;
+	pp_init.kbi_bufsize = pcb->ipsec_slot_size;
+	pp_init.kbi_buf_seg_size = IPSEC_IF_DEFAULT_BUF_SEG_SIZE;
+	pp_init.kbi_max_frags = 1;
+	(void) snprintf((char *)pp_init.kbi_name, sizeof (pp_init.kbi_name),
+	    "%s", provider_name);
+
+	err = kern_pbufpool_create(&pp_init, &pp_init, &pcb->ipsec_netif_pp, NULL);
+	if (err != 0) {
+		printf("%s pbufbool create failed, error %d\n", __func__, err);
+		goto failed;
+	}
+
 	err = kern_nexus_controller_register_provider(controller,
 												  ipsec_nx_dom_prov,
 												  provider_name,
@@ -1633,6 +1653,7 @@ ipsec_nexus_ifattach(struct ipsec_pcb *pcb,
 	net_init.nxneti_eparams = init_params;
 	net_init.nxneti_lladdr = NULL;
 	net_init.nxneti_prepare = ipsec_netif_prepare;
+	net_init.nxneti_tx_pbufpool = pcb->ipsec_netif_pp;
 	err = kern_nexus_controller_alloc_net_provider_instance(controller,
 															pcb->ipsec_nx.if_provider,
 															pcb,
@@ -1652,6 +1673,10 @@ ipsec_nexus_ifattach(struct ipsec_pcb *pcb,
 failed:
 	if (nxa) {
 		kern_nexus_attr_destroy(nxa);
+	}
+	if (err && pcb->ipsec_netif_pp != NULL) {
+		kern_pbufpool_destroy(pcb->ipsec_netif_pp);
+		pcb->ipsec_netif_pp = NULL;
 	}
 	return (err);
 }
@@ -1683,8 +1708,9 @@ ipsec_detach_provider_and_instance(uuid_t provider, uuid_t instance)
 }
 
 static void
-ipsec_nexus_detach(ipsec_nx_t nx)
+ipsec_nexus_detach(struct ipsec_pcb *pcb)
 {
+	ipsec_nx_t nx = &pcb->ipsec_nx;
 	nexus_controller_t controller = kern_nexus_shared_controller();
 	errno_t	err;
 
@@ -1713,6 +1739,11 @@ ipsec_nexus_detach(ipsec_nx_t nx)
 	ipsec_detach_provider_and_instance(nx->ms_provider,
 									   nx->ms_instance);
 
+	if (pcb->ipsec_netif_pp != NULL) {
+		kern_pbufpool_destroy(pcb->ipsec_netif_pp);
+		pcb->ipsec_netif_pp = NULL;
+
+	}
 	memset(nx, 0, sizeof(*nx));
 }
 
@@ -1858,7 +1889,7 @@ ipsec_multistack_attach(struct ipsec_pcb *pcb)
 	return (0);
 
 failed:
-	ipsec_nexus_detach(nx);
+	ipsec_nexus_detach(pcb);
 
 	errno_t detach_error = 0;
 	if ((detach_error = ifnet_detach(pcb->ipsec_ifp)) != 0) {
@@ -2006,6 +2037,10 @@ ipsec_disable_channel(struct ipsec_pcb *pcb)
 	}
 
 	if (!result) {
+		if (pcb->ipsec_kpipe_pp != NULL) {
+			kern_pbufpool_destroy(pcb->ipsec_kpipe_pp);
+			pcb->ipsec_kpipe_pp = NULL;
+		}
 		ipsec_unregister_kernel_pipe_nexus();
 	}
 
@@ -2016,6 +2051,7 @@ static errno_t
 ipsec_enable_channel(struct ipsec_pcb *pcb, struct proc *proc)
 {
 	struct kern_nexus_init init;
+	struct kern_pbufpool_init pp_init;
 	errno_t result;
 
 	result = ipsec_register_kernel_pipe_nexus();
@@ -2027,14 +2063,38 @@ ipsec_enable_channel(struct ipsec_pcb *pcb, struct proc *proc)
 
 	lck_rw_lock_exclusive(&pcb->ipsec_pcb_lock);
 
+	/* ipsec driver doesn't support channels without a netif */
+	if (!pcb->ipsec_use_netif) {
+		result = EOPNOTSUPP;
+		goto done;
+	}
+
 	if (pcb->ipsec_kpipe_enabled) {
 		result = EEXIST; // return success instead?
+		goto done;
+	}
+
+	bzero(&pp_init, sizeof (pp_init));
+	pp_init.kbi_version = KERN_PBUFPOOL_CURRENT_VERSION;
+	pp_init.kbi_packets = pcb->ipsec_netif_ring_size * 2;
+	pp_init.kbi_bufsize = pcb->ipsec_slot_size;
+	pp_init.kbi_buf_seg_size = IPSEC_IF_DEFAULT_BUF_SEG_SIZE;
+	pp_init.kbi_max_frags = 1;
+	pp_init.kbi_flags |= KBIF_QUANTUM;
+	(void) snprintf((char *)pp_init.kbi_name, sizeof (pp_init.kbi_name),
+	    "com.apple.kpipe.%s", pcb->ipsec_if_xname);
+
+	result = kern_pbufpool_create(&pp_init, &pp_init, &pcb->ipsec_kpipe_pp,
+	    NULL);
+	if (result != 0) {
+		printf("%s pbufbool create failed, error %d\n", __func__, result);
 		goto done;
 	}
 
 	VERIFY(uuid_is_null(pcb->ipsec_kpipe_uuid));
 	bzero(&init, sizeof (init));
 	init.nxi_version = KERN_NEXUS_CURRENT_VERSION;
+	init.nxi_tx_pbufpool = pcb->ipsec_kpipe_pp;
 	result = kern_nexus_controller_alloc_provider_instance(ipsec_ncd,
 														   ipsec_kpipe_uuid, pcb, &pcb->ipsec_kpipe_uuid, &init);
 	if (result) {
@@ -2058,6 +2118,10 @@ done:
 	lck_rw_unlock_exclusive(&pcb->ipsec_pcb_lock);
 	
 	if (result) {
+		if (pcb->ipsec_kpipe_pp != NULL) {
+			kern_pbufpool_destroy(pcb->ipsec_kpipe_pp);
+			pcb->ipsec_kpipe_pp = NULL;
+		}
 		ipsec_unregister_kernel_pipe_nexus();
 	}
 	
@@ -2460,10 +2524,14 @@ ipsec_ctl_disconnect(__unused kern_ctl_ref	kctlref,
 
 			if (!uuid_is_null(kpipe_uuid)) {
 				if (kern_nexus_controller_free_provider_instance(ipsec_ncd, kpipe_uuid) == 0) {
+					if (pcb->ipsec_kpipe_pp != NULL) {
+						kern_pbufpool_destroy(pcb->ipsec_kpipe_pp);
+						pcb->ipsec_kpipe_pp = NULL;
+					}
 					ipsec_unregister_kernel_pipe_nexus();
 				}
 			}
-			ipsec_nexus_detach(&pcb->ipsec_nx);
+			ipsec_nexus_detach(pcb);
 
 			/* Decrement refcnt to finish detaching and freeing */
 			ifnet_decr_iorefcnt(ifp);
@@ -2475,6 +2543,10 @@ ipsec_ctl_disconnect(__unused kern_ctl_ref	kctlref,
 #if IPSEC_NEXUS
 			if (!uuid_is_null(kpipe_uuid)) {
 				if (kern_nexus_controller_free_provider_instance(ipsec_ncd, kpipe_uuid) == 0) {
+					if (pcb->ipsec_kpipe_pp != NULL) {
+						kern_pbufpool_destroy(pcb->ipsec_kpipe_pp);
+						pcb->ipsec_kpipe_pp = NULL;
+					}
 					ipsec_unregister_kernel_pipe_nexus();
 				}
 			}
@@ -2673,18 +2745,19 @@ ipsec_ctl_setopt(__unused kern_ctl_ref	kctlref,
 				result = EINVAL;
 				break;
 			}
-			if (!if_enable_netagent) {
+			if (!if_is_netagent_enabled()) {
 				result = ENOTSUP;
 				break;
 			}
+			if (uuid_is_null(pcb->ipsec_nx.ms_agent)) {
+				result = ENOENT;
+				break;
+			}
+
 			if (*(int *)data) {
-				if (!uuid_is_null(pcb->ipsec_nx.ms_agent)) {
 					if_add_netagent(pcb->ipsec_ifp, pcb->ipsec_nx.ms_agent);
-				}
 			} else {
-				if (!uuid_is_null(pcb->ipsec_nx.ms_agent)) {
 					if_delete_netagent(pcb->ipsec_ifp, pcb->ipsec_nx.ms_agent);
-				}
 			}
 			break;
 		}
@@ -2715,7 +2788,9 @@ ipsec_ctl_setopt(__unused kern_ctl_ref	kctlref,
 				result = EINVAL;
 				break;
 			}
-			pcb->ipsec_use_netif = true;
+			lck_rw_lock_exclusive(&pcb->ipsec_pcb_lock);
+			pcb->ipsec_use_netif = !!(*(int *)data);
+			lck_rw_unlock_exclusive(&pcb->ipsec_pcb_lock);
 			break;
 		}
 		case IPSEC_OPT_SLOT_SIZE: {
@@ -2855,6 +2930,38 @@ ipsec_ctl_getopt(__unused kern_ctl_ref kctlref,
 		}
 
 #if IPSEC_NEXUS
+
+		case IPSEC_OPT_ENABLE_CHANNEL: {
+			if (*len != sizeof(int)) {
+				result = EMSGSIZE;
+			} else {
+				lck_rw_lock_shared(&pcb->ipsec_pcb_lock);
+				*(int *)data = pcb->ipsec_kpipe_enabled;
+				lck_rw_unlock_shared(&pcb->ipsec_pcb_lock);
+			}
+			break;
+		}
+
+		case IPSEC_OPT_ENABLE_FLOWSWITCH: {
+			if (*len != sizeof(int)) {
+				result = EMSGSIZE;
+			} else {
+				*(int *)data = if_check_netagent(pcb->ipsec_ifp, pcb->ipsec_nx.ms_agent);
+			}
+			break;
+		}
+
+		case IPSEC_OPT_ENABLE_NETIF: {
+			if (*len != sizeof(int)) {
+				result = EMSGSIZE;
+			} else {
+				lck_rw_lock_shared(&pcb->ipsec_pcb_lock);
+				*(int *)data = !!pcb->ipsec_use_netif;
+				lck_rw_unlock_shared(&pcb->ipsec_pcb_lock);
+			}
+			break;
+		}
+
 		case IPSEC_OPT_GET_CHANNEL_UUID: {
 			lck_rw_lock_shared(&pcb->ipsec_pcb_lock);
 			if (uuid_is_null(pcb->ipsec_kpipe_uuid)) {
@@ -3190,12 +3297,12 @@ ipsec_ioctl(ifnet_t interface,
 			u_long command,
 			void *data)
 {
-	struct ipsec_pcb *pcb = ifnet_softc(interface);
 	errno_t	result = 0;
 	
 	switch(command) {
 		case SIOCSIFMTU: {
 #if IPSEC_NEXUS
+			struct ipsec_pcb *pcb = ifnet_softc(interface);
 			if (pcb->ipsec_use_netif) {
 				// Make sure we can fit packets in the channel buffers
 				if (((uint64_t)((struct ifreq*)data)->ifr_mtu) > pcb->ipsec_slot_size) {
@@ -3253,14 +3360,15 @@ ipsec_proto_input(ifnet_t interface,
 			af = AF_INET6;
 		}
 		bpf_tap_in(interface, DLT_NULL, m, &af, sizeof(af));
+		pktap_input(interface, protocol, m, NULL);
 	}
-	pktap_input(interface, protocol, m, NULL);
 
+    int32_t pktlen = m->m_pkthdr.len;
 	if (proto_input(protocol, m) != 0) {
 		ifnet_stat_increment_in(interface, 0, 0, 1);
 		m_freem(m);
 	} else {
-		ifnet_stat_increment_in(interface, 1, m->m_pkthdr.len, 0);
+		ifnet_stat_increment_in(interface, 1, pktlen, 0);
 	}
 	
 	return 0;
@@ -3304,9 +3412,9 @@ errno_t
 ipsec_inject_inbound_packet(ifnet_t	interface,
 							mbuf_t packet)
 {
+#if IPSEC_NEXUS
 	struct ipsec_pcb *pcb = ifnet_softc(interface);
 
-#if IPSEC_NEXUS
 	if (pcb->ipsec_use_netif) {
 		lck_rw_lock_shared(&pcb->ipsec_pcb_lock);
 

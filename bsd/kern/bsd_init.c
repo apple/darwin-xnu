@@ -293,6 +293,9 @@ void bsd_exec_setup(int);
 #if __arm64__
 __private_extern__ int bootarg_no64exec = 0;
 #endif
+#if __x86_64__
+__private_extern__ int bootarg_no32exec = 0;
+#endif
 __private_extern__ int bootarg_vnode_cache_defeat = 0;
 
 #if CONFIG_JETSAM && (DEVELOPMENT || DEBUG)
@@ -1194,6 +1197,11 @@ parse_bsd_args(void)
 	/* disable 64 bit grading */
 	if (PE_parse_boot_argn("-no64exec", namep, sizeof (namep)))
 		bootarg_no64exec = 1;
+#endif
+#if __x86_64__
+	/* disable 32 bit grading */
+	if (PE_parse_boot_argn("-no32exec", namep, sizeof (namep)))
+		bootarg_no32exec = 1;
 #endif
 
 	/* disable vnode_cache_is_authorized() by setting vnode_cache_defeat */

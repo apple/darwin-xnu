@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -2138,10 +2138,14 @@ icmp6_reflect(struct mbuf *m, size_t off)
 	struct sockaddr_in6 sa6_src, sa6_dst;
 	struct nd_ifinfo *ndi = NULL;
 	u_int32_t oflow;
-	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 },
-	    IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR |
-	    IP6OAF_INTCOPROC_ALLOWED | IP6OAF_AWDL_UNRESTRICTED, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip6_out_args ip6oa;
+
+	bzero(&ip6oa, sizeof(ip6oa));
+	ip6oa.ip6oa_boundif = IFSCOPE_NONE;
+	ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR |
+	    IP6OAF_INTCOPROC_ALLOWED | IP6OAF_AWDL_UNRESTRICTED;
+	ip6oa.ip6oa_sotc = SO_TC_UNSPEC;
+	ip6oa.ip6oa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 	if (!(m->m_pkthdr.pkt_flags & PKTF_LOOP) && m->m_pkthdr.rcvif != NULL) {
 		ip6oa.ip6oa_boundif = m->m_pkthdr.rcvif->if_index;
@@ -2569,9 +2573,13 @@ icmp6_redirect_output(struct mbuf *m0, struct rtentry *rt)
 	u_char *p;
 	struct ifnet *outif = NULL;
 	struct sockaddr_in6 src_sa;
-	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 },
-	    IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip6_out_args ip6oa;
+
+	bzero(&ip6oa, sizeof(ip6oa));
+	ip6oa.ip6oa_boundif = IFSCOPE_NONE;
+	ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR;
+	ip6oa.ip6oa_sotc = SO_TC_UNSPEC;
+	ip6oa.ip6oa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 	icmp6_errcount(&icmp6stat.icp6s_outerrhist, ND_REDIRECT, 0);
 

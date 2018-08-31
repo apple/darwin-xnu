@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -330,6 +330,7 @@ if_attach_ifa_common(struct ifnet *ifp, struct ifaddr *ifa, int link)
 
 	if (ifa->ifa_attached != NULL)
 		(*ifa->ifa_attached)(ifa);
+
 }
 
 __private_extern__ void
@@ -696,8 +697,7 @@ if_clone_list(int count, int *ret_total, user_addr_t dst)
 	for (ifc = LIST_FIRST(&if_cloners); ifc != NULL && count != 0;
 	    ifc = LIST_NEXT(ifc, ifc_list), count--, dst += IFNAMSIZ) {
 		bzero(outbuf, sizeof(outbuf));
-		strlcpy(outbuf, ifc->ifc_name,
-		    min(strlen(ifc->ifc_name), IFNAMSIZ));
+		strlcpy(outbuf, ifc->ifc_name, IFNAMSIZ);
 		error = copyout(outbuf, dst, IFNAMSIZ);
 		if (error)
 			break;
@@ -1665,7 +1665,8 @@ ifioctl_linkparams(struct ifnet *ifp, u_long cmd, caddr_t data, struct proc *p)
 		struct tb_profile tb = { 0, 0, 0 };
 
 		if ((error = proc_suser(p)) != 0)
-		break;
+			break;
+
 
 		IFCQ_LOCK(ifq);
 		if (!IFCQ_IS_READY(ifq)) {
@@ -1939,6 +1940,30 @@ if_delete_netagent(struct ifnet *ifp, uuid_t remove_agent_uuid)
 	return (error);
 }
 
+boolean_t
+if_check_netagent(struct ifnet *ifp, uuid_t find_agent_uuid)
+{
+	boolean_t found = FALSE;
+
+	if (!ifp || uuid_is_null(find_agent_uuid))
+		return FALSE;
+
+	ifnet_lock_shared(ifp);
+
+	if (ifp->if_agentids != NULL) {
+		for (uint32_t index = 0; index < ifp->if_agentcount; index++) {
+			if (uuid_compare(ifp->if_agentids[index], find_agent_uuid) == 0) {
+				found = TRUE;
+				break;
+			}
+		}
+	}
+
+	ifnet_lock_done(ifp);
+
+	return found;
+}
+
 static __attribute__((noinline)) int
 ifioctl_netagent(struct ifnet *ifp, u_long cmd, caddr_t data, struct proc *p)
 {
@@ -2146,7 +2171,7 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 	case SIOCSIFORDER: {		/* struct if_order */
 		struct if_order *ifo = (struct if_order *)(void *)data;
 
-		if (ifo->ifo_count == 0 || ifo->ifo_count > (u_int32_t)if_index) {
+		if (ifo->ifo_count > (u_int32_t)if_index) {
 			error = EINVAL;
 			break;
 		}
@@ -2168,20 +2193,22 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 			if (error != 0) {
 				break;
 			}
-		}
-		/* ordered_indices should not contain duplicates */
-		bool found_duplicate = FALSE;
-		for (uint32_t i = 0; i < (ifo->ifo_count - 1) && !found_duplicate ; i++){
-			for (uint32_t j = i + 1; j < ifo->ifo_count && !found_duplicate ; j++){
-				if (ordered_indices[j] == ordered_indices[i]){
-					error = EINVAL;
-					found_duplicate = TRUE;
-					break;
+
+			/* ordered_indices should not contain duplicates */
+			bool found_duplicate = FALSE;
+			for (uint32_t i = 0; i < (ifo->ifo_count - 1) && !found_duplicate ; i++){
+				for (uint32_t j = i + 1; j < ifo->ifo_count && !found_duplicate ; j++){
+					if (ordered_indices[j] == ordered_indices[i]){
+						error = EINVAL;
+						found_duplicate = TRUE;
+						break;
+					}
 				}
 			}
+			if (found_duplicate) {
+				break;
+			}
 		}
-		if (found_duplicate)
-			break;
 
 		error = ifnet_reset_order(ordered_indices, ifo->ifo_count);
 
@@ -2311,6 +2338,89 @@ ifioctl_nat64prefix(struct ifnet *ifp, u_long cmd, caddr_t data)
 #endif
 
 
+static int
+ifioctl_get_protolist(struct ifnet *ifp, u_int32_t * ret_count,
+    user_addr_t ifpl)
+{
+	u_int32_t	actual_count;
+	u_int32_t	count;
+	int		error = 0;
+	u_int32_t	*list = NULL;
+
+	/* find out how many */
+	count = if_get_protolist(ifp, NULL, 0);
+	if (ifpl == USER_ADDR_NULL) {
+		goto done;
+	}
+
+	/* copy out how many there's space for */
+	if (*ret_count < count) {
+		count = *ret_count;
+	}
+	if (count == 0) {
+		goto done;
+	}
+	list = _MALLOC(count * sizeof(*list), M_TEMP, M_WAITOK);
+	if (list == NULL) {
+		error = ENOMEM;
+		goto done;
+	}
+	actual_count = if_get_protolist(ifp, list, count);
+	if (actual_count < count) {
+		count = actual_count;
+	}
+	if (count != 0) {
+		error = copyout((caddr_t)list, ifpl, count * sizeof(*list));
+	}
+
+ done:
+	if (list != NULL) {
+		if_free_protolist(list);
+	}
+	*ret_count = count;
+	return (error);
+}
+
+static __attribute__((noinline)) int
+ifioctl_protolist(struct ifnet *ifp, u_long cmd, caddr_t data)
+{
+	int error = 0;
+
+	switch (cmd) {
+	case SIOCGIFPROTOLIST32: {		/* struct if_protolistreq32 */
+		struct if_protolistreq32 	ifpl;
+
+		bcopy(data, &ifpl, sizeof(ifpl));
+		if (ifpl.ifpl_reserved != 0) {
+			error = EINVAL;
+			break;
+		}
+		error = ifioctl_get_protolist(ifp, &ifpl.ifpl_count,
+		    CAST_USER_ADDR_T(ifpl.ifpl_list));
+		bcopy(&ifpl, data, sizeof(ifpl));
+		break;
+	}
+	case SIOCGIFPROTOLIST64: {		/* struct if_protolistreq64 */
+		struct if_protolistreq64 	ifpl;
+
+		bcopy(data, &ifpl, sizeof(ifpl));
+		if (ifpl.ifpl_reserved != 0) {
+			error = EINVAL;
+			break;
+		}
+		error = ifioctl_get_protolist(ifp, &ifpl.ifpl_count,
+		    ifpl.ifpl_list);
+		bcopy(&ifpl, data, sizeof(ifpl));
+		break;
+	}
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+
+	return (error);
+}
+
 /*
  * List the ioctl()s we can perform on restricted INTCOPROC interfaces.
  */
@@ -2382,6 +2492,8 @@ ifioctl_restrict_intcoproc(unsigned long cmd, const char *ifname,
 	case SIOCGNBRINFO_IN6:
 	case SIOCGIFALIFETIME_IN6:
 	case SIOCGIFNETMASK_IN6:
+	case SIOCGIFPROTOLIST32:
+	case SIOCGIFPROTOLIST64:
 		return (false);
 	default:
 #if (DEBUG || DEVELOPMENT)
@@ -2629,6 +2741,12 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		ifp = ifunit(ifname);
 		break;
 
+	case SIOCGIFPROTOLIST32:		/* struct if_protolistreq32 */
+	case SIOCGIFPROTOLIST64:		/* struct if_protolistreq64 */
+		bcopy(((struct if_protolistreq *)(void *)data)->ifpl_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
 	default:
 		/*
 		 * This is a bad assumption, but the code seems to
@@ -2718,6 +2836,12 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		error = ifioctl_nat64prefix(ifp, cmd, data);
 		break;
 #endif
+
+	case SIOCGIFPROTOLIST32:		/* struct if_protolistreq32 */
+	case SIOCGIFPROTOLIST64:		/* struct if_protolistreq64 */
+		error = ifioctl_protolist(ifp, cmd, data);
+		break;
+
 	default:
 		if (so->so_proto == NULL) {
 			error = EOPNOTSUPP;
@@ -2871,18 +2995,7 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		 * Send the event even upon error from the driver because
 		 * we changed the flags.
 		 */
-		ev_msg.vendor_code    = KEV_VENDOR_APPLE;
-		ev_msg.kev_class      = KEV_NETWORK_CLASS;
-		ev_msg.kev_subclass   = KEV_DL_SUBCLASS;
-
-		ev_msg.event_code = KEV_DL_SIFFLAGS;
-		strlcpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
-		ev_data.if_family = ifp->if_family;
-		ev_data.if_unit   = (u_int32_t) ifp->if_unit;
-		ev_msg.dv[0].data_length = sizeof(struct net_event_data);
-		ev_msg.dv[0].data_ptr    = &ev_data;
-		ev_msg.dv[1].data_length = 0;
-		dlil_post_complete_msg(ifp, &ev_msg);
+		dlil_post_sifflags_msg(ifp);
 
 		ifnet_touch_lastchange(ifp);
 		break;
@@ -5021,17 +5134,13 @@ ifioctl_cassert(void)
 	case SIOCSQOSMARKINGENABLED:
 	case SIOCGQOSMARKINGMODE:
 	case SIOCGQOSMARKINGENABLED:
+
+	case SIOCGIFPROTOLIST32:
+	case SIOCGIFPROTOLIST64:
 		;
 	}
 }
 
-/*
- * XXX: This API is only used by BSD stack and for now will always return 0.
- * For Skywalk native drivers, preamble space need not be allocated in mbuf
- * as the preamble will be reserved in the translated skywalk packet
- * which is transmitted to the driver.
- * For Skywalk compat drivers currently headroom is always set to zero.
- */
 uint32_t
 ifnet_mbuf_packetpreamblelen(struct ifnet *ifp)
 {

@@ -37,6 +37,8 @@
 #include <kern/thread_group.h>
 #include <kern/ipc_kobject.h>
 #include <kern/task.h>
+#include <kern/coalition.h>
+#include <kern/policy_internal.h>
 
 #include <mach/kern_return.h>
 #include <mach/notify.h>
@@ -371,6 +373,20 @@ kern_work_interval_create(thread_t thread,
 	uint32_t create_flags = create_params->wica_create_flags;
 
 	task_t creating_task = current_task();
+	if ((create_flags & WORK_INTERVAL_TYPE_MASK) == WORK_INTERVAL_TYPE_CA_CLIENT) {
+		/*
+		 * CA_CLIENT work intervals do not create new thread groups
+		 * and are non-joinable.
+		 * There can only be one CA_CLIENT work interval (created by UIKit)
+		 * per each application task
+		 */
+		if (create_flags & (WORK_INTERVAL_FLAG_JOINABLE | WORK_INTERVAL_FLAG_GROUP))
+			return (KERN_FAILURE);
+		if (!task_is_app(creating_task))
+			return (KERN_NOT_SUPPORTED);
+		if (task_set_ca_client_wi(creating_task, true) == false)
+			return (KERN_FAILURE);
+	}
 
 	*work_interval = (struct work_interval) {
 		.wi_id                  = work_interval_id,
@@ -406,13 +422,12 @@ kern_work_interval_create(thread_t thread,
 	}
 
 	create_params->wica_id = work_interval_id;
-
 	return KERN_SUCCESS;
 }
 
+
 kern_return_t
-kern_work_interval_destroy(thread_t thread,
-                           uint64_t work_interval_id)
+kern_work_interval_destroy(thread_t thread, uint64_t work_interval_id)
 {
 	if (work_interval_id == 0)
 		return KERN_INVALID_ARGUMENT;
@@ -454,6 +469,3 @@ kern_work_interval_join(thread_t            thread,
 
 	return KERN_SUCCESS;
 }
-
-
-

@@ -146,6 +146,7 @@ extern void machine_max_runnable_latency(uint64_t bg_max_latency,
 
 extern void machine_work_interval_notify(thread_t thread, struct kern_work_interval_args* kwi_args);
 
+
 extern void machine_perfcontrol_deadline_passed(uint64_t deadline);
 
 extern void machine_switch_perfcontrol_context(perfcontrol_event event,

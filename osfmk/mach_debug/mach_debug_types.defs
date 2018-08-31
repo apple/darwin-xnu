@@ -76,8 +76,8 @@ type mach_zone_name_array_t = array[] of mach_zone_name_t;
 type mach_zone_info_t = struct[8] of uint64_t;
 type mach_zone_info_array_t = array[] of mach_zone_info_t;
 
-type task_zone_info_t = struct[11] of uint64_t;
-type task_zone_info_array_t = array[] of task_zone_info_t;
+type task_zone_info_t = struct[11] of uint64_t;				/* deprecated */
+type task_zone_info_array_t = array[] of task_zone_info_t;	/* deprecated */
 
 type hash_info_bucket_t = struct[1] of natural_t;
 type hash_info_bucket_array_t = array[] of hash_info_bucket_t;

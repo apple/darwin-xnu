@@ -548,9 +548,17 @@ route_output(struct mbuf *m, struct socket *so)
 		switch (rtm->rtm_type) {
 		case RTM_GET: {
 			kauth_cred_t cred;
+			kauth_cred_t* credp;
 			struct ifaddr *ifa2;
 report:
 			cred = kauth_cred_proc_ref(current_proc());
+
+			if (rt->rt_ifp == lo_ifp ||
+			    route_op_entitlement_check(so, NULL, ROUTE_OP_READ, TRUE) != 0)
+				credp = &cred;
+			else
+				credp = NULL;
+
 			ifa2 = NULL;
 			RT_LOCK_ASSERT_HELD(rt);
 			info.rti_info[RTAX_DST] = rt_key(rt);
@@ -579,7 +587,7 @@ report:
 			}
 			if (ifa2 != NULL)
 				IFA_LOCK(ifa2);
-			len = rt_msg2(rtm->rtm_type, &info, NULL, NULL, &cred);
+			len = rt_msg2(rtm->rtm_type, &info, NULL, NULL, credp);
 			if (ifa2 != NULL)
 				IFA_UNLOCK(ifa2);
 			struct rt_msghdr *out_rtm;
@@ -674,7 +682,6 @@ report:
 		}
 		RT_UNLOCK(rt);
 		break;
-
 	default:
 		senderr(EOPNOTSUPP);
 	}
@@ -1512,8 +1519,14 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	int error = 0, size;
 	struct rt_addrinfo info;
 	kauth_cred_t cred;
+	kauth_cred_t *credp;
 
 	cred = kauth_cred_proc_ref(current_proc());
+	if (rt->rt_ifp == lo_ifp ||
+	    route_op_entitlement_check(NULL, cred, ROUTE_OP_READ, TRUE) != 0)
+		credp = &cred;
+	else
+		credp = NULL;
 
 	RT_LOCK(rt);
 	if (w->w_op == NET_RT_FLAGS && !(rt->rt_flags & w->w_arg))
@@ -1525,7 +1538,7 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	info.rti_info[RTAX_GENMASK] = rt->rt_genmask;
 
 	if (w->w_op != NET_RT_DUMP2) {
-		size = rt_msg2(RTM_GET, &info, NULL, w, &cred);
+		size = rt_msg2(RTM_GET, &info, NULL, w, credp);
 		if (w->w_req != NULL && w->w_tmem != NULL) {
 			struct rt_msghdr *rtm =
 			    (struct rt_msghdr *)(void *)w->w_tmem;
@@ -1541,7 +1554,7 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 			error = SYSCTL_OUT(w->w_req, (caddr_t)rtm, size);
 		}
 	} else {
-		size = rt_msg2(RTM_GET2, &info, NULL, w, &cred);
+		size = rt_msg2(RTM_GET2, &info, NULL, w, credp);
 		if (w->w_req != NULL && w->w_tmem != NULL) {
 			struct rt_msghdr2 *rtm =
 			    (struct rt_msghdr2 *)(void *)w->w_tmem;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1463,11 +1463,13 @@ set_netsvctype_dscp_map(size_t in_count,
 			case NET_SERVICE_TYPE_AV:
 			case NET_SERVICE_TYPE_OAM:
 			case NET_SERVICE_TYPE_RD: {
-				int sotcix;
+				size_t sotcix;
 
 				sotcix = sotc_index(sotc_by_netservicetype[netsvctype]);
-				net_qos_dscp_map->sotc_to_dscp[sotcix]  =
-				    netsvctype_dscp_map[netsvctype].dscp;
+				if (sotcix != SIZE_T_MAX) {
+					net_qos_dscp_map->sotc_to_dscp[sotcix]  =
+					    netsvctype_dscp_map[netsvctype].dscp;
+				}
 				break;
 			}
 			case  NET_SERVICE_TYPE_SIG:
@@ -1619,7 +1621,7 @@ set_packet_qos(struct mbuf *m, struct ifnet *ifp, boolean_t qos_allowed,
 		 * We still want to prioritize control traffic on the interface
 		 * so we do not change the mbuf service class for SO_TC_CTL
 		 */
-		if (netsvctype != _NET_SERVICE_TYPE_UNSPEC &&
+		if (IS_VALID_NET_SERVICE_TYPE(netsvctype) &&
 		    netsvctype != NET_SERVICE_TYPE_BE) {
 			dscp = default_net_qos_dscp_map.netsvctype_to_dscp[netsvctype];
 
@@ -1630,17 +1632,18 @@ set_packet_qos(struct mbuf *m, struct ifnet *ifp, boolean_t qos_allowed,
 				if (sotc != SO_TC_CTL)
 					m_set_service_class(m, MBUF_SC_BE);
 			}
-		} else {
+		} else if (sotc != SO_TC_UNSPEC) {
 			size_t sotcix = sotc_index(sotc);
+			if (sotcix != SIZE_T_MAX) {
+				dscp = default_net_qos_dscp_map.sotc_to_dscp[sotcix];
 
-			dscp = default_net_qos_dscp_map.sotc_to_dscp[sotcix];
-
-			if (qos_allowed == FALSE && sotc != SO_TC_BE &&
-			    sotc != SO_TC_BK && sotc != SO_TC_BK_SYS &&
-			    sotc != SO_TC_CTL) {
-				dscp = _DSCP_DF;
-				if (sotc != SO_TC_CTL)
-					m_set_service_class(m, MBUF_SC_BE);
+				if (qos_allowed == FALSE && sotc != SO_TC_BE &&
+				    sotc != SO_TC_BK && sotc != SO_TC_BK_SYS &&
+				    sotc != SO_TC_CTL) {
+					dscp = _DSCP_DF;
+					if (sotc != SO_TC_CTL)
+						m_set_service_class(m, MBUF_SC_BE);
+				}
 			}
 		}
 		if (net_qos_verbose != 0)

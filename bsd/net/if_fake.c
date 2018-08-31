@@ -156,6 +156,18 @@ feth_is_detaching(if_fake_ref fakeif)
 	return ((fakeif->iff_flags & IFF_FLAGS_DETACHING) != 0);
 }
 
+static int
+feth_enable_dequeue_stall(ifnet_t ifp, uint32_t enable)
+{
+	int error;
+
+	if (enable != 0)
+		error = ifnet_disable_output(ifp);
+	else
+		error = ifnet_enable_output(ifp);
+
+	return (error);
+}
 
 #define M_FAKE 		M_DEVBUF
 
@@ -713,14 +725,10 @@ feth_config(ifnet_t ifp, ifnet_t peer)
 
 	/* generate link status event if we connect or disconnect */
 	if (connected) {
-		ifnet_set_flags(ifp, IFF_RUNNING, IFF_RUNNING);
-		ifnet_set_flags(peer, IFF_RUNNING, IFF_RUNNING);
 		interface_link_event(ifp, KEV_DL_LINK_ON);
 		interface_link_event(peer, KEV_DL_LINK_ON);
 	}
 	else if (disconnected) {
-		ifnet_set_flags(ifp, 0, IFF_RUNNING);
-		ifnet_set_flags(peer, 0, IFF_RUNNING);
 		interface_link_event(ifp, KEV_DL_LINK_OFF);
 		interface_link_event(peer, KEV_DL_LINK_OFF);
 	}
@@ -822,6 +830,14 @@ feth_set_drvspec(ifnet_t ifp, uint32_t cmd, u_int32_t len,
 			break;
 		}
 		error = feth_set_media(ifp, &iffr);
+		break;
+	case IF_FAKE_S_CMD_SET_DEQUEUE_STALL:
+		error = if_fake_request_copyin(user_addr, &iffr, len);
+		if (error != 0) {
+			break;
+		}
+		error = feth_enable_dequeue_stall(ifp,
+		    iffr.iffr_dequeue_stall);
 		break;
 	default:
 		error = EOPNOTSUPP;
@@ -980,7 +996,17 @@ feth_ioctl(ifnet_t ifp, u_long cmd, void * data)
 		break;
 
 	case SIOCSIFFLAGS:
-		error = 0;
+		if ((ifp->if_flags & IFF_UP) != 0) {
+			/* marked up, set running if not already set */
+			if ((ifp->if_flags & IFF_RUNNING) == 0) {
+				/* set running */
+				error = ifnet_set_flags(ifp, IFF_RUNNING,
+				    IFF_RUNNING);
+			}
+		} else if ((ifp->if_flags & IFF_RUNNING) != 0) {
+			/* marked down, clear running */
+			error = ifnet_set_flags(ifp, 0, IFF_RUNNING);
+		}
 		break;
 
 	case SIOCADDMULTI:

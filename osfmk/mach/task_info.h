@@ -485,6 +485,7 @@ typedef struct task_flags_info * task_flags_info_t;
 
 #ifdef PRIVATE
 struct task_debug_info_internal {
+	integer_t suspend_count; 
 	uint64_t ipc_space_size;
 };
 typedef struct task_debug_info_internal *task_debug_info_internal_t;

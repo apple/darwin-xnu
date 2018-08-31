@@ -179,6 +179,15 @@ int	_consume_printf_args(int, ...);
 uint16_t	crc16(uint16_t crc, const void *bufp, size_t len);
 uint32_t	crc32(uint32_t crc, const void *bufp, size_t len);
 
+#if XNU_KERNEL_PRIVATE
+#if KASAN
+uint16_t __nosan_crc16(uint16_t crc, const void *bufp, size_t len);
+#else
+static inline uint16_t
+__nosan_crc16(uint16_t crc, const void *bufp, size_t len) { return crc16(crc, bufp, len); }
+#endif
+#endif
+
 int	copystr(const void *kfaddr, void *kdaddr, size_t len, size_t *done);
 int	copyinstr(const user_addr_t uaddr, void *kaddr, size_t len, size_t *done);
 int	copyoutstr(const void *kaddr, user_addr_t udaddr, size_t len, size_t *done);
@@ -228,6 +237,20 @@ clz(unsigned int num)
 	return num ? __builtin_clz(num) : sizeof(num) * CHAR_BIT;
 #endif
 }
+
+#if XNU_KERNEL_PRIVATE
+
+/*
+ * Define a function that for whatever reason needs to exist, but must never be
+ * called.
+ */
+#define UNSUPPORTED_API(funcname, ...) \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wunused-parameter\"") \
+	funcname(__VA_ARGS__) { panic(__func__ ": unsupported API\n"); } \
+	_Pragma("clang diagnostic pop")
+
+#endif
 
 __END_DECLS
 

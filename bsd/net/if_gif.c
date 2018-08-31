@@ -630,11 +630,13 @@ gif_input(
 	 * it occurs more times than we thought, we may change the policy
 	 * again.
 	 */
+    int32_t pktlen = m->m_pkthdr.len;
 	if (proto_input(protocol_family, m) != 0) {
 		ifnet_stat_increment_in(ifp, 0, 0, 1);
 		m_freem(m);
-	} else
-		ifnet_stat_increment_in(ifp, 1, m->m_pkthdr.len, 0);
+    } else {
+		ifnet_stat_increment_in(ifp, 1, pktlen, 0);
+    }
 
 	return (0);
 }

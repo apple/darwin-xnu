@@ -77,8 +77,6 @@
 #include <netinet6/in6_pcb.h>
 #include <netinet6/in6_var.h>
 
-extern unsigned int if_enable_netagent;
-
 __private_extern__ int	nstat_collect = 1;
 
 #if (DEBUG || DEVELOPMENT)

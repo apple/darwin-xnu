@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -141,7 +141,32 @@ SYSCTL_PROC(_vm, OID_AUTO, kmem_alloc_contig, CTLTYPE_INT|CTLFLAG_WR|CTLFLAG_LOC
 	    0, 0, &sysctl_kmem_alloc_contig, "I", "");
 
 extern int vm_region_footprint;
-SYSCTL_INT(_vm, OID_AUTO, region_footprint, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_region_footprint, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, region_footprint, CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED, &vm_region_footprint, 0, "");
+static int
+sysctl_vm_self_region_footprint SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2, oidp)
+	int	error = 0;
+	int	value;
+
+	value = task_self_region_footprint();
+	error = SYSCTL_OUT(req, &value, sizeof (int));
+	if (error) {
+		return error;
+	}
+
+	if (!req->newptr) {
+		return 0;
+	}
+
+	error = SYSCTL_IN(req, &value, sizeof (int));
+	if (error) {
+		return (error);
+	}
+	task_self_region_footprint_set(value);
+	return 0;
+}
+SYSCTL_PROC(_vm, OID_AUTO, self_region_footprint, CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY|CTLFLAG_LOCKED|CTLFLAG_MASKED, 0, 0, &sysctl_vm_self_region_footprint, "I", "");
 
 #endif /* DEVELOPMENT || DEBUG */
 
@@ -768,8 +793,9 @@ task_for_pid(
 	user_addr_t		task_addr = args->t;
 	proc_t 			p = PROC_NULL;
 	task_t			t1 = TASK_NULL;
+	task_t			task = TASK_NULL;
 	mach_port_name_t	tret = MACH_PORT_NULL;
- 	ipc_port_t 		tfpport;
+	ipc_port_t 		tfpport = MACH_PORT_NULL;
 	void * sright;
 	int error = 0;
 
@@ -807,60 +833,86 @@ task_for_pid(
 		goto tfpout;
 	}
 
-	if (p->task != TASK_NULL) {
-		/* If we aren't root and target's task access port is set... */
-		if (!kauth_cred_issuser(kauth_cred_get()) &&
-			p != current_proc() &&
-			(task_get_task_access_port(p->task, &tfpport) == 0) &&
-			(tfpport != IPC_PORT_NULL)) {
+	if (p->task == TASK_NULL) {
+		error = KERN_SUCCESS;
+		goto tfpout;
+	}
 
-			if (tfpport == IPC_PORT_DEAD) {
-				error = KERN_PROTECTION_FAILURE;
-				goto tfpout;
-			}
-
-			/* Call up to the task access server */
-			error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport, proc_selfpid(), kauth_getgid(), pid);
-
-			if (error != MACH_MSG_SUCCESS) {
-				if (error == MACH_RCV_INTERRUPTED)
-					error = KERN_ABORTED;
-				else
-					error = KERN_FAILURE;
-				goto tfpout;
-			}
-		}
 #if CONFIG_MACF
-		error = mac_proc_check_get_task(kauth_cred_get(), p);
-		if (error) {
-			error = KERN_FAILURE;
-			goto tfpout;
-		}
+	error = mac_proc_check_get_task(kauth_cred_get(), p);
+	if (error) {
+		error = KERN_FAILURE;
+		goto tfpout;
+	}
 #endif
 
-		/* Grant task port access */
-		task_reference(p->task);
-		extmod_statistics_incr_task_for_pid(p->task);
+	/* Grab a task reference since the proc ref might be dropped if an upcall to task access server is made */
+	task = p->task;
+	task_reference(task);
 
-		sright = (void *) convert_task_to_port(p->task);
+	/* If we aren't root and target's task access port is set... */
+	if (!kauth_cred_issuser(kauth_cred_get()) &&
+		p != current_proc() &&
+		(task_get_task_access_port(task, &tfpport) == 0) &&
+		(tfpport != IPC_PORT_NULL)) {
 
-		/* Check if the task has been corpsified */
-		if (is_corpsetask(p->task)) {
-			ipc_port_release_send(sright);
-			error = KERN_FAILURE;
+		if (tfpport == IPC_PORT_DEAD) {
+			error = KERN_PROTECTION_FAILURE;
 			goto tfpout;
 		}
 
-		tret = ipc_port_copyout_send(
-				sright, 
-				get_task_ipcspace(current_task()));
-	} 
+		/*
+		 * Drop the proc_find proc ref before making an upcall
+		 * to taskgated, since holding a proc_find
+		 * ref while making an upcall can cause deadlock.
+		 */
+		proc_rele(p);
+		p = PROC_NULL;
+
+		/* Call up to the task access server */
+		error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport, proc_selfpid(), kauth_getgid(), pid);
+
+		if (error != MACH_MSG_SUCCESS) {
+			if (error == MACH_RCV_INTERRUPTED)
+				error = KERN_ABORTED;
+			else
+				error = KERN_FAILURE;
+			goto tfpout;
+		}
+	}
+
+	/* Grant task port access */
+	extmod_statistics_incr_task_for_pid(task);
+	sright = (void *) convert_task_to_port(task);
+
+	/* Check if the task has been corpsified */
+	if (is_corpsetask(task)) {
+		/* task ref consumed by convert_task_to_port */
+		task = TASK_NULL;
+		ipc_port_release_send(sright);
+		error = KERN_FAILURE;
+		goto tfpout;
+	}
+
+	/* task ref consumed by convert_task_to_port */
+	task = TASK_NULL;
+	tret = ipc_port_copyout_send(
+			sright,
+			get_task_ipcspace(current_task()));
+
 	error = KERN_SUCCESS;
 
 tfpout:
 	task_deallocate(t1);
 	AUDIT_ARG(mach_port2, tret);
 	(void) copyout((char *) &tret, task_addr, sizeof(mach_port_name_t));
+
+	if (tfpport != IPC_PORT_NULL) {
+		ipc_port_release_send(tfpport);
+	}
+	if (task != TASK_NULL) {
+		task_deallocate(task);
+	}
 	if (p != PROC_NULL)
 		proc_rele(p);
 	AUDIT_MACH_SYSCALL_EXIT(error);
@@ -1201,38 +1253,90 @@ out:
 #endif /* CONFIG_EMBEDDED */
 
 #if SOCKETS
+int
+networking_memstatus_callout(proc_t p, uint32_t status)
+{
+	struct filedesc	*fdp;
+	int i;
+
+	/*
+	 * proc list lock NOT held
+	 * proc lock NOT held
+	 * a reference on the proc has been held / shall be dropped by the caller.
+	 */
+	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&p->p_mlock, LCK_MTX_ASSERT_NOTOWNED);
+
+	proc_fdlock(p);
+	fdp = p->p_fd;
+	for (i = 0; i < fdp->fd_nfiles; i++) {
+		struct fileproc	*fp;
+
+		fp = fdp->fd_ofiles[i];
+		if (fp == NULL || (fdp->fd_ofileflags[i] & UF_RESERVED) != 0) {
+			continue;
+		}
+		switch (FILEGLOB_DTYPE(fp->f_fglob)) {
+#if NECP
+		case DTYPE_NETPOLICY:
+			necp_fd_memstatus(p, status,
+			    (struct necp_fd_data *)fp->f_fglob->fg_data);
+			break;
+#endif /* NECP */
+		default:
+			break;
+		}
+	}
+	proc_fdunlock(p);
+
+	return (1);
+}
+
+
 static int
-shutdown_sockets_callout(proc_t p, void *arg)
+networking_defunct_callout(proc_t p, void *arg)
 {
 	struct pid_shutdown_sockets_args *args = arg;
 	int pid = args->pid;
 	int level = args->level;
 	struct filedesc	*fdp;
-	struct fileproc	*fp;
 	int i;
 
 	proc_fdlock(p);
 	fdp = p->p_fd;
 	for (i = 0; i < fdp->fd_nfiles; i++) {
-		fp = fdp->fd_ofiles[i];
+		struct fileproc	*fp = fdp->fd_ofiles[i];
+		struct fileglob *fg;
+
 		if (fp == NULL || (fdp->fd_ofileflags[i] & UF_RESERVED) != 0) {
 			continue;
 		}
-		if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_SOCKET) {
-			struct socket *so = (struct socket *)fp->f_fglob->fg_data;
+
+		fg = fp->f_fglob;
+		switch (FILEGLOB_DTYPE(fg)) {
+		case DTYPE_SOCKET: {
+			struct socket *so = (struct socket *)fg->fg_data;
 			if (p->p_pid == pid || so->last_pid == pid || 
 			    ((so->so_flags & SOF_DELEGATED) && so->e_pid == pid)) {
 				/* Call networking stack with socket and level */
 				(void) socket_defunct(p, so, level);
 			}
+			break;
 		}
 #if NECP
-		else if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_NETPOLICY &&
-		    p->p_pid == pid) {
-			necp_defunct_client(p, fp);
-		}
+		case DTYPE_NETPOLICY:
+			/* first pass: defunct necp and get stats for ntstat */
+			if (p->p_pid == pid) {
+				necp_fd_defunct(p,
+				    (struct necp_fd_data *)fg->fg_data);
+			}
+			break;
 #endif /* NECP */
+		default:
+			break;
+		}
 	}
+
 	proc_fdunlock(p);
 
 	return (PROC_RETURNED);
@@ -1271,7 +1375,8 @@ pid_shutdown_sockets(struct proc *p __unused, struct pid_shutdown_sockets_args *
 		goto out;
 	}
 
-	proc_iterate(PROC_ALLPROCLIST | PROC_NOWAITTRANS, shutdown_sockets_callout, args, NULL, NULL);
+	proc_iterate(PROC_ALLPROCLIST | PROC_NOWAITTRANS,
+	    networking_defunct_callout, args, NULL, NULL);
 
 out:
 	if (targetproc != PROC_NULL)

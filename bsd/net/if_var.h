@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1722,6 +1722,9 @@ __private_extern__ struct rtentry *ifnet_cached_rtlookup_inet6(struct ifnet *,
     struct in6_addr *);
 #endif /* INET6 */
 
+__private_extern__ u_int32_t if_get_protolist(struct ifnet * ifp,
+    u_int32_t *protolist, u_int32_t count);
+__private_extern__ void if_free_protolist(u_int32_t *list);
 __private_extern__ errno_t if_state_update(struct ifnet *,
     struct if_interface_state *);
 __private_extern__ void if_get_state(struct ifnet *,
@@ -1770,6 +1773,8 @@ __private_extern__ u_int32_t ifnet_get_generation(struct ifnet *);
 /* Adding and deleting netagents will take ifnet lock */
 __private_extern__ int if_add_netagent(struct ifnet *, uuid_t);
 __private_extern__ int if_delete_netagent(struct ifnet *, uuid_t);
+__private_extern__ boolean_t if_check_netagent(struct ifnet *, uuid_t);
+
 
 extern int if_set_qosmarking_mode(struct ifnet *, u_int32_t);
 __private_extern__ uint32_t ifnet_mbuf_packetpreamblelen(struct ifnet *);

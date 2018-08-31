@@ -6539,8 +6539,20 @@ necp_application_find_policy_match_internal(proc_t proc,
 				is_local = TRUE;
 			} else if (returned_result->routed_interface_index != 0 &&
 				!no_remote_addr) {
+				// Clean up the address before comparison with interface addresses
+
+				// Transform remote_addr into the ifaddr form
+				// IPv6 Scope IDs are always embedded in the ifaddr list
+				struct sockaddr_storage remote_address_sanitized;
+				u_int ifscope = IFSCOPE_NONE;
+				(void)sa_copy(&remote_addr.sa, &remote_address_sanitized, &ifscope);
+				SIN(&remote_address_sanitized)->sin_port = 0;
+				if (remote_address_sanitized.ss_family == AF_INET6) {
+					SIN6(&remote_address_sanitized)->sin6_scope_id = 0;
+				}
+
 				// Check if remote address is an interface address
-				struct ifaddr *ifa = ifa_ifwithaddr(&remote_addr.sa);
+				struct ifaddr *ifa = ifa_ifwithaddr((struct sockaddr *)&remote_address_sanitized);
 				if (ifa != NULL && ifa->ifa_ifp != NULL) {
 					u_int if_index_for_remote_addr = ifa->ifa_ifp->if_index;
 					if (if_index_for_remote_addr == returned_result->routed_interface_index ||

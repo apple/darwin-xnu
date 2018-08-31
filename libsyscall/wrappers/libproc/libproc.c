@@ -183,6 +183,12 @@ proc_piddynkqueueinfo(int pid, int flavor, kqueue_id_t kq_id, void *buffer, int 
 }
 
 int
+proc_udata_info(int pid, int flavor, void *buffer, int buffersize)
+{
+	return (__proc_info(PROC_INFO_CALL_UDATA_INFO, pid, flavor, 0, buffer, buffersize));
+}
+
+int
 proc_name(int pid, void * buffer, uint32_t buffersize)
 {
 	int retval = 0, len;
@@ -218,7 +224,7 @@ proc_regionfilename(int pid, uint64_t address, void * buffer, uint32_t buffersiz
 		return(0);
 	}
 	
-	retval = proc_pidinfo(pid, PROC_PIDREGIONPATHINFO, (uint64_t)address, &reginfo, sizeof(struct proc_regionwithpathinfo));
+	retval = proc_pidinfo(pid, PROC_PIDREGIONPATHINFO2, (uint64_t)address, &reginfo, sizeof(struct proc_regionwithpathinfo));
 	if (retval != -1) {
 		return ((int)(strlcpy(buffer, reginfo.prp_vip.vip_path, MAXPATHLEN)));
 	}

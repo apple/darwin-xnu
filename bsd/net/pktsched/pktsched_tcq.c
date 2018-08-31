@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -543,7 +543,7 @@ tcq_addq(struct tcq_class *cl, pktsched_pkt_t *pkt, struct pf_mtag *t)
 
 #if PF_ECN
 	if (cl->cl_flags & TQCF_CLEARDSCP)
-		/* not supported for skywalk packets */
+		/* not supported for non-BSD stack packets */
 		VERIFY(pkt->pktsched_ptype == QP_MBUF);
 		write_dsfield(m, t, 0);
 #endif /* PF_ECN */

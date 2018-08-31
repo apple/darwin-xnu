@@ -413,10 +413,6 @@ register_cpu(
 	if (this_cpu_datap->cpu_console_buf == NULL)
 		goto failed;
 
-	this_cpu_datap->cpu_chud = chudxnu_cpu_alloc(boot_cpu);
-	if (this_cpu_datap->cpu_chud == NULL)
-		goto failed;
-
 #if KPC
 	if (kpc_register_cpu(this_cpu_datap) != TRUE)
 		goto failed;
@@ -452,11 +448,10 @@ failed:
 #if NCOPY_WINDOWS > 0
 	pmap_cpu_free(this_cpu_datap->cpu_pmap);
 #endif
-	chudxnu_cpu_free(this_cpu_datap->cpu_chud);
 	console_cpu_free(this_cpu_datap->cpu_console_buf);
 #if KPC
 	kpc_unregister_cpu(this_cpu_datap);
-#endif
+#endif /* KPC */
 
 	return KERN_FAILURE;
 }

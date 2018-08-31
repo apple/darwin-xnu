@@ -103,18 +103,8 @@ endif
 # Shared C/C++ warning flags
 WARNFLAGS_STD := \
 	-Weverything \
-	-Wextra \
+	-Wno-pedantic \
 	$(WERROR) \
-	-Wpointer-arith \
-	-Wreturn-type \
-	-Wcast-qual \
-	-Wwrite-strings \
-	-Wswitch \
-	-Wcast-align \
-	-Wchar-subscripts \
-	-Wredundant-decls \
-	-Wextra-tokens \
-	-Wunreachable-code \
 	-Wno-assign-enum \
 	-Wno-bad-function-cast \
 	-Wno-c++98-compat \
@@ -141,7 +131,6 @@ WARNFLAGS_STD := \
 	-Wno-packed \
 	-Wno-padded \
 	-Wno-partial-availability \
-	-Wno-pedantic \
 	-Wno-shift-sign-overflow \
 	-Wno-switch-enum \
 	-Wno-undef \
@@ -151,13 +140,13 @@ WARNFLAGS_STD := \
 	-Wno-vla \
 	-Wno-zero-length-array
 
+WARNFLAGS_STD := $(WARNFLAGS_STD) \
+	-Wno-unknown-warning-option \
+	-Wno-error=shadow-field \
+	-Wno-error=cast-qual
+
 CWARNFLAGS_STD = \
-	$(WARNFLAGS_STD) \
-	-Wstrict-prototypes \
-	-Wmissing-prototypes \
-	-Wshadow \
-	-Winline \
-	-Wnested-externs
+	$(WARNFLAGS_STD)
 
 # Can be overridden in Makefile.template or Makefile.$arch
 export CWARNFLAGS ?= $(CWARNFLAGS_STD)
@@ -171,10 +160,8 @@ CXXWARNFLAGS_STD = \
 	-Wno-c++98-compat-pedantic \
 	-Wno-exit-time-destructors \
 	-Wno-global-constructors \
-	-Wno-old-style-cast
-
-# overloaded-virtual warnings are non-fatal (9000888)
-CXXWARNFLAGS_STD += -Wno-error=overloaded-virtual
+	-Wno-old-style-cast \
+	-Wno-zero-as-null-pointer-constant
 
 # Can be overridden in Makefile.template or Makefile.$arch
 export CXXWARNFLAGS ?= $(CXXWARNFLAGS_STD)
@@ -519,7 +506,7 @@ SUPPORTS_CTFCONVERT	= 0
 ifeq ($(USE_LTO),1)
 CFLAGS_GEN	+= -flto
 CXXFLAGS_GEN	+= -flto
-LDFLAGS_KERNEL_GEN	+= -Wl,-mllvm,-inline-threshold=125 -Wl,-object_path_lto,$(TARGET)/lto.o # -Wl,-mllvm -Wl,-disable-fp-elim
+LDFLAGS_KERNEL_GEN	+= -Wl,-mllvm,-inline-threshold=100 -Wl,-object_path_lto,$(TARGET)/lto.o
 LDFLAGS_NOSTRIP_FLAG = -rdynamic
 CFLAGS_NOLTO_FLAG = -fno-lto
 NEEDS_CTF_MACHOS	= 1

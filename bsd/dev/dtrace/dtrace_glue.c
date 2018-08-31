@@ -586,63 +586,13 @@ ddi_report_dev(dev_info_t *devi)
 #pragma unused(devi)
 }
 
-
-static unsigned int gRegisteredProps = 0;
-static struct {
-	char name[32];		/* enough for "dof-data-" + digits */
-	int *data;
-	uint_t nelements;
-} gPropTable[16];
-
 kern_return_t _dtrace_register_anon_DOF(char *, uchar_t *, uint_t);
 
 kern_return_t
 _dtrace_register_anon_DOF(char *name, uchar_t *data, uint_t nelements)
 {
-	if (gRegisteredProps < sizeof(gPropTable)/sizeof(gPropTable[0])) {
-		int *p = (int *)_MALLOC(nelements*sizeof(int), M_TEMP, M_WAITOK);
-		
-		if (NULL == p)
-			return KERN_FAILURE;
-			
-		strlcpy(gPropTable[gRegisteredProps].name, name, sizeof(gPropTable[0].name));
-		gPropTable[gRegisteredProps].nelements = nelements;
-		gPropTable[gRegisteredProps].data = p;
-			
-		while (nelements-- > 0) {
-			*p++ = (int)(*data++);
-		}
-		
-		gRegisteredProps++;
-		return KERN_SUCCESS;
-	}
-	else
-		return KERN_FAILURE;
-}
-
-int
-ddi_prop_lookup_int_array(dev_t match_dev, dev_info_t *dip, uint_t flags,
-    const char *name, int **data, uint_t *nelements)
-{
-#pragma unused(match_dev,dip,flags)
-	unsigned int i;
-	for (i = 0; i < gRegisteredProps; ++i)
-	{
-		if (0 == strncmp(name, gPropTable[i].name,
-					sizeof(gPropTable[i].name))) {
-			*data = gPropTable[i].data;
-			*nelements = gPropTable[i].nelements;
-			return DDI_SUCCESS;
-		}
-	}
-	return DDI_FAILURE;
-}
-	
-int
-ddi_prop_free(void *buf)
-{
-	_FREE(buf, M_TEMP);
-	return DDI_SUCCESS;
+#pragma unused(name, data, nelements)
+	return KERN_FAILURE;
 }
 
 int

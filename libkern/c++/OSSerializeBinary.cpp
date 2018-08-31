@@ -411,7 +411,7 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 				sym = OSDynamicCast(OSSymbol, sym);
 				if (!sym && (str = OSDynamicCast(OSString, str)))
 				{
-				    sym = (OSSymbol *) OSSymbol::withString(str);
+				    sym = const_cast<OSSymbol *>(OSSymbol::withString(str));
                     ok = (sym != 0);
                     if (!ok) break;
 				}

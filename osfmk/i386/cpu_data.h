@@ -177,22 +177,22 @@ typedef struct cpu_data
 	};
 	volatile task_map_t	cpu_task_map;
 	volatile addr64_t	cpu_task_cr3;
-	volatile addr64_t	cpu_ucr3;
 	addr64_t		cpu_kernel_cr3;
+	volatile addr64_t       cpu_ucr3;
 	boolean_t		cpu_pagezero_mapped;
 	cpu_uber_t		cpu_uber;
-	/* Double-mapped per-CPU exception stack address */
+/* Double-mapped per-CPU exception stack address */
 	uintptr_t		cd_estack;
-	/* Address of shadowed, partially mirrored CPU data structures located
-	 * in the double mapped PML4
-	 */
+/* Address of shadowed, partially mirrored CPU data structures located
+ * in the double mapped PML4
+ */
 	void			*cd_shadow;
 	struct processor	*cpu_processor;
 #if NCOPY_WINDOWS > 0
 	struct cpu_pmap		*cpu_pmap;
 #endif
-	struct cpu_desc_table	*cpu_desc_tablep;
 	struct real_descriptor	*cpu_ldtp;
+	struct cpu_desc_table	*cpu_desc_tablep;
 	cpu_desc_index_t	cpu_desc_index;
 	int			cpu_ldt;
 #if NCOPY_WINDOWS > 0
@@ -279,7 +279,6 @@ typedef struct cpu_data
 	int			cpu_plri;
 	plrecord_t		plrecords[MAX_PREEMPTION_RECORDS];
 #endif
-	void			*cpu_chud;
 	void			*cpu_console_buf;
 	struct x86_lcpu		lcpu;
 	int			cpu_phys_number;	/* Physical CPU */
@@ -609,6 +608,11 @@ _mp_enable_preemption_no_check(void) {
 static inline cpu_data_t *
 cpu_datap(int cpu) {
 	return cpu_data_ptr[cpu];
+}
+
+static inline int
+cpu_is_running(int cpu) {
+	return ((cpu_datap(cpu) != NULL) && (cpu_datap(cpu)->cpu_running));
 }
 
 #ifdef MACH_KERNEL_PRIVATE

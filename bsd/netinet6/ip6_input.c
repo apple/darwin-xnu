@@ -1030,6 +1030,12 @@ hbhcheck:
 	if (ip6->ip6_nxt == IPPROTO_HOPOPTS) {
 		struct ip6_hbh *hbh;
 
+		/*
+		 * Mark the packet to imply that HBH option has been checked.
+		 * This can only be true is the packet came in unfragmented
+		 * or if the option is in the first fragment
+		 */
+		m->m_pkthdr.pkt_flags |= PKTF_HBH_CHKED;
 		if (ip6_hopopts_input(&plen, &rtalert, &m, &off)) {
 #if 0	/* touches NULL pointer */
 			in6_ifstat_inc(inifp, ifs6_in_discard);
@@ -1177,6 +1183,20 @@ injectit:
 		struct ipfilter *filter;
 		int (*pr_input)(struct mbuf **, int *, int);
 
+		/*
+		 * This would imply either IPPROTO_HOPOPTS was not the first
+		 * option or it did not come in the first fragment.
+		 */
+		if (nxt == IPPROTO_HOPOPTS &&
+		    (m->m_pkthdr.pkt_flags & PKTF_HBH_CHKED) == 0) {
+			/*
+			 * This implies that HBH option was not contained
+			 * in the first fragment
+			 */
+			ip6stat.ip6s_badoptions++;
+			goto bad;
+		}
+
 		if (ip6_hdrnestlimit && (++nest > ip6_hdrnestlimit)) {
 			ip6stat.ip6s_toomanyhdr++;
 			goto bad;
@@ -1191,7 +1211,6 @@ injectit:
 			in6_ifstat_inc(inifp, ifs6_in_truncated);
 			goto bad;
 		}
-
 
 #if IPSEC
 		/*

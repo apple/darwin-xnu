@@ -68,7 +68,8 @@ LLDBMACROS_PYTHON_FILES = $(LLDBMACROS_USERDEBUG_FILES) \
 	usertaskgdbserver.py \
 	waitq.py \
 	pgtrace.py \
-	xnutriage.py
+	xnutriage.py \
+	zonetriage.py
 
 ifneq ($(PLATFORM),MacOSX)
 	LLDBMACROS_PYTHON_FILES+= \

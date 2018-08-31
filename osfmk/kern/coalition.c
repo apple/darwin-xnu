@@ -167,6 +167,12 @@ static int           i_coal_resource_get_taskrole(coalition_t coal, task_t task)
 static void          i_coal_resource_iterate_tasks(coalition_t coal, void *ctx,
 						   void (*callback)(coalition_t, void *, task_t));
 
+/*
+ * Ensure COALITION_NUM_THREAD_QOS_TYPES defined in mach/coalition.h still
+ * matches THREAD_QOS_LAST defined in mach/thread_policy.h
+ */
+static_assert(COALITION_NUM_THREAD_QOS_TYPES == THREAD_QOS_LAST);
+
 struct i_resource_coalition {
 	ledger_t ledger;
 	uint64_t bytesread;
@@ -178,6 +184,8 @@ struct i_resource_coalition {
 	uint64_t logical_invalidated_writes;
 	uint64_t logical_metadata_writes;
 	uint64_t cpu_ptime;
+	uint64_t cpu_time_eqos[COALITION_NUM_THREAD_QOS_TYPES];      /* cpu time per effective QoS class */
+	uint64_t cpu_time_rqos[COALITION_NUM_THREAD_QOS_TYPES];      /* cpu time per requested QoS class */
 
 	uint64_t task_count;      /* tasks that have started in this coalition */
 	uint64_t dead_task_count; /* tasks that have exited in this coalition;
@@ -424,6 +432,7 @@ i_coal_resource_remove_task(coalition_t coal, task_t task)
 		cr->logical_invalidated_writes += task->task_invalidated_writes;
 		cr->logical_metadata_writes += task->task_metadata_writes;
 		cr->cpu_ptime += task_cpu_ptime(task);
+		task_update_cpu_time_qos_stats(task, cr->cpu_time_eqos, cr->cpu_time_rqos);
 	}
 
 	/* remove the task from the coalition's list */
@@ -509,7 +518,10 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 	int64_t energy_billed_to_me = 0;
 	int64_t energy_billed_to_others = 0;
 	uint64_t cpu_ptime = coal->r.cpu_ptime;
-
+	uint64_t cpu_time_eqos[COALITION_NUM_THREAD_QOS_TYPES];
+	memcpy(cpu_time_eqos, coal->r.cpu_time_eqos, sizeof(cpu_time_eqos));
+	uint64_t cpu_time_rqos[COALITION_NUM_THREAD_QOS_TYPES];
+	memcpy(cpu_time_rqos, coal->r.cpu_time_rqos, sizeof(cpu_time_rqos));
 	/*
 	 * Add to that all the active tasks' ledgers. Tasks cannot deallocate
 	 * out from under us, since we hold the coalition lock.
@@ -537,6 +549,7 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 		logical_invalidated_writes += task->task_invalidated_writes;
 		logical_metadata_writes += task->task_metadata_writes;
 		cpu_ptime += task_cpu_ptime(task);
+		task_update_cpu_time_qos_stats(task, cpu_time_eqos, cpu_time_rqos);
 	}
 
 	kr = ledger_get_balance(sum_ledger, task_ledgers.cpu_time_billed_to_me, (int64_t *)&cpu_time_billed_to_me);
@@ -603,7 +616,8 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 	cru_out->logical_invalidated_writes = logical_invalidated_writes;
 	cru_out->logical_metadata_writes = logical_metadata_writes;
 	cru_out->cpu_ptime = cpu_ptime;
-
+	cru_out->cpu_time_eqos_len = COALITION_NUM_THREAD_QOS_TYPES;
+	memcpy(cru_out->cpu_time_eqos, cpu_time_eqos, sizeof(cru_out->cpu_time_eqos));
 	ledger_dereference(sum_ledger);
 	sum_ledger = LEDGER_NULL;
 

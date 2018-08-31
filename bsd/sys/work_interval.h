@@ -115,11 +115,14 @@ __BEGIN_DECLS
 #define WORK_INTERVAL_TYPE_DEFAULT              (0x0 << 28)
 #define WORK_INTERVAL_TYPE_COREAUDIO            (0x1 << 28)
 #define WORK_INTERVAL_TYPE_COREANIMATION        (0x2 << 28)
+#define WORK_INTERVAL_TYPE_CA_RENDER_SERVER     (0x2 << 28)
+#define WORK_INTERVAL_TYPE_CA_CLIENT            (0x3 << 28)
 #define WORK_INTERVAL_TYPE_LAST                 (0xF << 28)
 
 #ifndef KERNEL
 
 typedef struct work_interval *work_interval_t;
+typedef struct work_interval_instance *work_interval_instance_t;
 
 /*
  * Create a new work interval handle.
@@ -149,6 +152,7 @@ typedef struct work_interval *work_interval_t;
  * Note that joining a work interval supersedes automatic thread group management via vouchers
  */
 int     work_interval_create(work_interval_t *interval_handle, uint32_t flags);
+
 
 /*
  * Notify the power management subsystem that the work for a current interval has completed
@@ -213,8 +217,6 @@ int     work_interval_join_port(mach_port_t port);
  */
 int     work_interval_leave(void);
 
-/* TODO: complexity measure <rdar://problem/31586510> */
-
 #endif /* !KERNEL */
 
 #if PRIVATE
@@ -241,6 +243,7 @@ struct work_interval_create_params {
 	uint32_t        wicp_port;        /* out param */
 	uint32_t        wicp_create_flags;
 };
+
 
 int     __work_interval_ctl(uint32_t operation, uint64_t work_interval_id, void *arg, size_t len);
 

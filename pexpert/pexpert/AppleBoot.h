@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
- *  appleboot.h - Apple logo shown durring boot
+ *  appleboot.h - Apple logo shown during boot
  *
  *  Copyright (c) 2002 Apple Computer, Inc.
  *

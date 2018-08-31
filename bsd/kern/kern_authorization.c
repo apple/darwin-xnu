@@ -132,7 +132,7 @@ static int	kauth_authorize_generic_callback(kauth_cred_t _credential, void *_ida
     uintptr_t arg0, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3);
 kauth_scope_t	kauth_scope_fileop;
 
-extern int 		cansignal(struct proc *, kauth_cred_t, struct proc *, int, int);
+extern int 		cansignal(struct proc *, kauth_cred_t, struct proc *, int);
 extern char *	get_pathbuff(void);
 extern void		release_pathbuff(char *path);
 
@@ -484,7 +484,7 @@ kauth_authorize_process_callback(kauth_cred_t credential, __unused void *idata, 
 		/* arg0 - process to signal
 		 * arg1 - signal to send the process
 		 */
-		if (cansignal(current_proc(), credential, (struct proc *)arg0, (int)arg1, 0))
+		if (cansignal(current_proc(), credential, (struct proc *)arg0, (int)arg1))
 			return(KAUTH_RESULT_ALLOW);
 		break;
 	case KAUTH_PROCESS_CANTRACE:

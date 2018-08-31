@@ -69,8 +69,10 @@
  *	Declarations for letting a port represent a kernel object.
  */
 
+#ifdef MACH_KERNEL_PRIVATE
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_port.h>
+#endif /* MACH_KERNEL_PRIVATE */
 
 #ifndef	_KERN_IPC_KOBJECT_H_
 #define _KERN_IPC_KOBJECT_H_
@@ -114,7 +116,7 @@ typedef natural_t	ipc_kobject_type_t;
 #define IKOT_LOCK_SET			24
 #define IKOT_CLOCK				25
 #define IKOT_CLOCK_CTRL			26
-#define IKOT_IOKIT_SPARE		27
+#define IKOT_IOKIT_IDENT		27
 #define IKOT_NAMED_ENTRY		28
 #define IKOT_IOKIT_CONNECT		29
 #define IKOT_IOKIT_OBJECT		30
@@ -137,6 +139,8 @@ typedef natural_t	ipc_kobject_type_t;
 
 
 #define is_ipc_kobject(ikot)	((ikot) != IKOT_NONE)
+
+#ifdef MACH_KERNEL_PRIVATE
 
 /*
  *	Define types of kernel objects that use page lists instead
@@ -164,6 +168,8 @@ extern void		ipc_kobject_destroy(
 					ipc_port_t			port);
 
 #define	null_conversion(port)	(port)
+
+#endif /* MACH_KERNEL_PRIVATE */
 
 #endif /* KERNEL_PRIVATE */
 

@@ -113,10 +113,23 @@ typedef struct mach_zone_info_data {
 	uint64_t	mzi_alloc_size;	/* size used for more memory */
 	uint64_t	mzi_sum_size;	/* sum of all allocs (life of zone) */
 	uint64_t	mzi_exhaustible;	/* merely return if empty? */
-	uint64_t	mzi_collectable;	/* garbage collect elements? */
+	uint64_t	mzi_collectable;	/* garbage collect elements? and how much? */
 } mach_zone_info_t;
 
 typedef mach_zone_info_t *mach_zone_info_array_t;
+
+/*
+ * The lowest bit of mzi_collectable indicates whether or not the zone
+ * is collectable by zone_gc(). The higher bits contain the size in bytes
+ * that can be collected.
+ */
+#define GET_MZI_COLLECTABLE_BYTES(val)	((val) >> 1)
+#define GET_MZI_COLLECTABLE_FLAG(val)	((val) & 1)
+
+#define SET_MZI_COLLECTABLE_BYTES(val, size)	\
+	(val) = ((val) & 1) | ((size) << 1)
+#define SET_MZI_COLLECTABLE_FLAG(val, flag)		\
+	(val) = (flag) ? ((val) | 1) : (val)
 
 typedef struct task_zone_info_data {
 	uint64_t	tzi_count;	/* count of elements in use */

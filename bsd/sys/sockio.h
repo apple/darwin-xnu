@@ -309,7 +309,11 @@
 #define	SIOCSIFNAT64PREFIX	_IOWR('i', 194, struct if_nat64req)
 #endif
 #define	SIOCGIFNEXUS		_IOWR('i', 195, struct if_nexusreq)
-
+#define SIOCGIFPROTOLIST	_IOWR('i', 196, struct if_protolistreq) /* get list of attached protocols */
+#ifdef BSD_KERNEL_PRIVATE
+#define SIOCGIFPROTOLIST32	_IOWR('i', 196, struct if_protolistreq32)
+#define SIOCGIFPROTOLIST64	_IOWR('i', 196, struct if_protolistreq64)
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* PRIVATE */
 
 #endif /* !_SYS_SOCKIO_H_ */

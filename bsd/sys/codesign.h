@@ -131,7 +131,12 @@ int 	csfg_get_platform_binary(struct fileglob *);
 uint8_t * csfg_get_cdhash(struct fileglob *, uint64_t, size_t *);
 int csfg_get_prod_signed(struct fileglob *);
 unsigned int csfg_get_signer_type(struct fileglob *);
+const char *csfg_get_identity(struct fileglob *fg, off_t offset);
 unsigned int csproc_get_signer_type(struct proc *);
+
+uint8_t csfg_get_platform_identifier(struct fileglob *, off_t);
+uint8_t csvnode_get_platform_identifier(struct vnode *, off_t);
+uint8_t csproc_get_platform_identifier(struct proc *);
 
 extern int cs_debug;
 

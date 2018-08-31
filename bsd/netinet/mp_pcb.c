@@ -335,7 +335,7 @@ mp_getsockaddr(struct socket *mp_so, struct sockaddr **nam)
 
 	if (mpte->mpte_src.sa_family == AF_INET || mpte->mpte_src.sa_family == 0)
 		return mp_getaddr_v4(mp_so, nam, false);
-	else if (mpte->mpte_src.sa_family == AF_INET)
+	else if (mpte->mpte_src.sa_family == AF_INET6)
 		return mp_getaddr_v6(mp_so, nam, false);
 	else
 		return (EINVAL);
@@ -348,7 +348,7 @@ mp_getpeeraddr(struct socket *mp_so, struct sockaddr **nam)
 
 	if (mpte->mpte_src.sa_family == AF_INET || mpte->mpte_src.sa_family == 0)
 		return mp_getaddr_v4(mp_so, nam, true);
-	else if (mpte->mpte_src.sa_family == AF_INET)
+	else if (mpte->mpte_src.sa_family == AF_INET6)
 		return mp_getaddr_v6(mp_so, nam, true);
 	else
 		return (EINVAL);

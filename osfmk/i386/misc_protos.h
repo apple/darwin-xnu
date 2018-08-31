@@ -108,9 +108,6 @@ extern void dcache_incoherent_io_store64(addr64_t pa, unsigned int count);
 extern processor_t	cpu_processor_alloc(boolean_t is_boot_cpu);
 extern void		cpu_processor_free(processor_t proc);
 
-extern void		*chudxnu_cpu_alloc(boolean_t is_boot_cpu);
-extern void		chudxnu_cpu_free(void *);
-
 extern void		sysclk_gettime_interrupts_disabled(
 				mach_timespec_t *cur_time);
 

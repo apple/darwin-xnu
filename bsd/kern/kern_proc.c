@@ -184,11 +184,13 @@ __XNU_PRIVATE_EXTERN char corefilename[MAXPATHLEN+1] = {"/cores/core.%P"};
 #include <kern/backtrace.h>
 #endif
 
+typedef uint64_t unaligned_u64 __attribute__((aligned(1)));
+
 static void orphanpg(struct pgrp * pg);
 void proc_name_kdp(task_t t, char * buf, int size);
 void * proc_get_uthread_uu_threadlist(void * uthread_v);
 int proc_threadname_kdp(void * uth, char * buf, size_t size);
-void proc_starttime_kdp(void * p, uint64_t * tv_sec, uint64_t * tv_usec, uint64_t * abstime);
+void proc_starttime_kdp(void * p, unaligned_u64 *tv_sec, unaligned_u64 *tv_usec, unaligned_u64 *abstime);
 char * proc_name_address(void * p);
 
 /* TODO: make a header that's exported and usable in osfmk */
@@ -915,23 +917,20 @@ proc_threadname_kdp(void * uth, char * buf, size_t size)
 	return 0;
 }
 
+
 /* note that this function is generally going to be called from stackshot,
  * and the arguments will be coming from a struct which is declared packed
  * thus the input arguments will in general be unaligned. We have to handle
  * that here. */
 void
-proc_starttime_kdp(void *p, uint64_t *tv_sec, uint64_t *tv_usec, uint64_t *abstime)
+proc_starttime_kdp(void *p, unaligned_u64 *tv_sec, unaligned_u64 *tv_usec, unaligned_u64 *abstime)
 {
 	proc_t pp = (proc_t)p;
-	struct uint64p {
-		uint64_t val;
-	} __attribute__((packed));
-
 	if (pp != PROC_NULL) {
 		if (tv_sec != NULL)
-			((struct uint64p *)tv_sec)->val = pp->p_start.tv_sec;
+			*tv_sec = pp->p_start.tv_sec;
 		if (tv_usec != NULL)
-			((struct uint64p *)tv_usec)->val = pp->p_start.tv_usec;
+			*tv_usec = pp->p_start.tv_usec;
 		if (abstime != NULL) {
 			if (pp->p_stats != NULL)
 				*abstime = pp->p_stats->ps_start;

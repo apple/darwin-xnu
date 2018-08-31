@@ -97,10 +97,6 @@ osfmk/kdp/ml/i386/kdp_x86_common.c	optional	mach_kdp
 osfmk/i386/hibernate_i386.c		optional hibernation
 osfmk/i386/hibernate_restore.c		optional hibernation
 
-osfmk/chud/i386/chud_osfmk_callback_i386.c	standard
-osfmk/chud/i386/chud_cpu_i386.c			standard
-osfmk/chud/i386/chud_thread_i386.c		standard
-
 osfmk/i386/ucode.c				standard
 
 osfmk/i386/vmx/vmx_cpu.c			optional config_vmx

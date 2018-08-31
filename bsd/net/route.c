@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -74,6 +74,7 @@
 #include <sys/syslog.h>
 #include <sys/queue.h>
 #include <sys/mcache.h>
+#include <sys/priv.h>
 #include <sys/protosw.h>
 #include <sys/kernel.h>
 #include <kern/locks.h>
@@ -1485,8 +1486,14 @@ create:
 done:
 	if (rt != NULL) {
 		RT_LOCK_ASSERT_NOTHELD(rt);
-		if (rtp && !error)
-			*rtp = rt;
+		if (!error) {
+			/* Enqueue event to refresh flow route entries */
+			route_event_enqueue_nwk_wq_entry(rt, NULL, ROUTE_ENTRY_REFRESH, NULL, FALSE);
+			if (rtp)
+				*rtp = rt;
+			else
+				rtfree_locked(rt);
+		}
 		else
 			rtfree_locked(rt);
 	}
@@ -4364,4 +4371,38 @@ route_event2str(int route_event)
 	return  route_event_str;
 }
 
+int
+route_op_entitlement_check(struct socket *so,
+    kauth_cred_t cred,
+    int route_op_type,
+    boolean_t allow_root)
+{
+	if (so != NULL) {
+		if (route_op_type == ROUTE_OP_READ) {
+			/*
+			 * If needed we can later extend this for more
+			 * granular entitlements and return a bit set of
+			 * allowed accesses.
+			 */
+			if (soopt_cred_check(so, PRIV_NET_RESTRICTED_ROUTE_NC_READ,
+			    allow_root) == 0)
+				return (0);
+			else
+				return (-1);
+		}
+	} else if (cred != NULL) {
+		uid_t uid = kauth_cred_getuid(cred);
 
+		/* uid is 0 for root */
+		if (uid != 0 || !allow_root) {
+			if (route_op_type == ROUTE_OP_READ) {
+				if (priv_check_cred(cred,
+				    PRIV_NET_RESTRICTED_ROUTE_NC_READ, 0) == 0)
+					return (0);
+				else
+					return (-1);
+			}
+		}
+	}
+	return (-1);
+}

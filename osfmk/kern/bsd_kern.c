@@ -1032,20 +1032,20 @@ fill_task_qos_rusage(task_t task, rusage_info_current *ri)
 	assert(task != TASK_NULL);
 	task_lock(task);
 
-	/* Rollup Qos time of all the threads to task */
+	/* Rollup QoS time of all the threads to task */
 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
 		if (thread->options & TH_OPT_IDLE_THREAD)
 			continue;
 
 		thread_update_qos_cpu_time(thread);
 	}
-	ri->ri_cpu_time_qos_default = task->cpu_time_qos_stats.cpu_time_qos_default;
-	ri->ri_cpu_time_qos_maintenance = task->cpu_time_qos_stats.cpu_time_qos_maintenance;
-	ri->ri_cpu_time_qos_background = task->cpu_time_qos_stats.cpu_time_qos_background;
-	ri->ri_cpu_time_qos_utility = task->cpu_time_qos_stats.cpu_time_qos_utility;
-	ri->ri_cpu_time_qos_legacy = task->cpu_time_qos_stats.cpu_time_qos_legacy;
-	ri->ri_cpu_time_qos_user_initiated = task->cpu_time_qos_stats.cpu_time_qos_user_initiated;
-	ri->ri_cpu_time_qos_user_interactive = task->cpu_time_qos_stats.cpu_time_qos_user_interactive;
+	ri->ri_cpu_time_qos_default = task->cpu_time_eqos_stats.cpu_time_qos_default;
+	ri->ri_cpu_time_qos_maintenance = task->cpu_time_eqos_stats.cpu_time_qos_maintenance;
+	ri->ri_cpu_time_qos_background = task->cpu_time_eqos_stats.cpu_time_qos_background;
+	ri->ri_cpu_time_qos_utility = task->cpu_time_eqos_stats.cpu_time_qos_utility;
+	ri->ri_cpu_time_qos_legacy = task->cpu_time_eqos_stats.cpu_time_qos_legacy;
+	ri->ri_cpu_time_qos_user_initiated = task->cpu_time_eqos_stats.cpu_time_qos_user_initiated;
+	ri->ri_cpu_time_qos_user_interactive = task->cpu_time_eqos_stats.cpu_time_qos_user_interactive;
 
 	task_unlock(task);
 	return (0);

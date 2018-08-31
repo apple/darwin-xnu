@@ -43,10 +43,6 @@
 #include <kperf/context.h>
 #include <kperf/action.h>
 
-#include <chud/chud_xnu.h>
-
-
-
 /* Fixed counter mask -- three counters, each with OS and USER */
 #define IA32_FIXED_CTR_ENABLE_ALL_CTRS_ALL_RINGS (0x333)
 #define IA32_FIXED_CTR_ENABLE_ALL_PMI (0x888)

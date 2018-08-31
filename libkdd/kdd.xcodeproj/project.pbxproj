@@ -15,6 +15,7 @@
 		081EDD391C23855700A1C138 /* stackshot-sample-cputime.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 081EDD371C23854500A1C138 /* stackshot-sample-cputime.plist.gz */; };
 		08238A3B1BFEB5450053190C /* libz.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 08F1501D1BFEA7AC00F2C89C /* libz.dylib */; };
 		0834719E1BF7D05400D67253 /* kcdata.h in Headers */ = {isa = PBXBuildFile; fileRef = 0834719D1BF7D05400D67253 /* kcdata.h */; settings = {ATTRIBUTES = (Private, ); }; };
+		084085AC1FA3CE3D005BAD16 /* kdd.h in Headers */ = {isa = PBXBuildFile; fileRef = 084085AA1FA3CE32005BAD16 /* kdd.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		0843EE921BF6AFC600CD4150 /* stackshot-sample in Resources */ = {isa = PBXBuildFile; fileRef = 0843EE911BF6AFB700CD4150 /* stackshot-sample */; };
 		0843EE941BF6BAC100CD4150 /* stackshot-sample.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 0843EE931BF6BAB400CD4150 /* stackshot-sample.plist.gz */; };
 		08603F371BF69EDE007D3784 /* Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08603F361BF69EDE007D3784 /* Tests.swift */; };
@@ -23,6 +24,14 @@
 		0860F87B1BFC3857007E1301 /* stackshot-sample-tailspin-2.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 0860F8791BFC3845007E1301 /* stackshot-sample-tailspin-2.plist.gz */; };
 		086395B51BF5655D005ED913 /* kdd_main.m in Sources */ = {isa = PBXBuildFile; fileRef = 086395B41BF5655D005ED913 /* kdd_main.m */; };
 		086395B91BF565A2005ED913 /* libkdd.a in Frameworks */ = {isa = PBXBuildFile; fileRef = C91C93C71ACB58B700119B60 /* libkdd.a */; };
+		0864FD081FA3C127001B7B0B /* kcdata.h in Headers */ = {isa = PBXBuildFile; fileRef = 0834719D1BF7D05400D67253 /* kcdata.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		0864FD0A1FA3C2A9001B7B0B /* kcdtypes.c in Sources */ = {isa = PBXBuildFile; fileRef = C9C5C68B1ACDAFDB00BE0E5E /* kcdtypes.c */; };
+		0864FD0B1FA3C2A9001B7B0B /* kcdata_core.m in Sources */ = {isa = PBXBuildFile; fileRef = C9DE39131ACB5A540020F4A3 /* kcdata_core.m */; };
+		0864FD0D1FA3C2A9001B7B0B /* KCDBasicTypeDescription.m in Sources */ = {isa = PBXBuildFile; fileRef = C91C93E11ACB598700119B60 /* KCDBasicTypeDescription.m */; };
+		0864FD0F1FA3C2A9001B7B0B /* KCDStructTypeDescription.m in Sources */ = {isa = PBXBuildFile; fileRef = C91C93E31ACB598700119B60 /* KCDStructTypeDescription.m */; };
+		0864FD111FA3C2A9001B7B0B /* KCDEmbeddedBufferDescription.m in Sources */ = {isa = PBXBuildFile; fileRef = 08A4C94B1C4701B800D5F010 /* KCDEmbeddedBufferDescription.m */; };
+		0864FD131FA3C2A9001B7B0B /* kdd.m in Sources */ = {isa = PBXBuildFile; fileRef = C91C93CC1ACB58B700119B60 /* kdd.m */; };
+		0864FD141FA3C2B9001B7B0B /* libz.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 08F1501D1BFEA7AC00F2C89C /* libz.dylib */; };
 		088C36E01EF323C300ABB2E0 /* stackshot-sample-thread-policy in Resources */ = {isa = PBXBuildFile; fileRef = 088C36DF1EF323AE00ABB2E0 /* stackshot-sample-thread-policy */; };
 		088C36E11EF323C300ABB2E0 /* stackshot-sample-thread-policy.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 088C36DE1EF323AE00ABB2E0 /* stackshot-sample-thread-policy.plist.gz */; };
 		08A4C94C1C4701B800D5F010 /* KCDEmbeddedBufferDescription.m in Sources */ = {isa = PBXBuildFile; fileRef = 08A4C94B1C4701B800D5F010 /* KCDEmbeddedBufferDescription.m */; };
@@ -46,6 +55,8 @@
 		08CF18FF1BF9B7B100D05813 /* stackshot-sample-tailspin in Resources */ = {isa = PBXBuildFile; fileRef = 08CF18FD1BF9B79E00D05813 /* stackshot-sample-tailspin */; };
 		08CF19001BF9B7B100D05813 /* stackshot-sample-tailspin.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08CF18FE1BF9B79E00D05813 /* stackshot-sample-tailspin.plist.gz */; };
 		08F1501E1BFEA7AC00F2C89C /* libz.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 08F1501D1BFEA7AC00F2C89C /* libz.dylib */; };
+		08F2AC0A1FA136EB00271A11 /* stackshot-sample-delta-thread-policy in Resources */ = {isa = PBXBuildFile; fileRef = 08F2AC081FA136EB00271A11 /* stackshot-sample-delta-thread-policy */; };
+		08F2AC0B1FA136EB00271A11 /* stackshot-sample-delta-thread-policy.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08F2AC091FA136EB00271A11 /* stackshot-sample-delta-thread-policy.plist.gz */; };
 		1368F0851C87E06A00940FC6 /* exitreason-codesigning.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 1368F0841C87E06300940FC6 /* exitreason-codesigning.plist.gz */; };
 		1368F0861C87E06C00940FC6 /* exitreason-codesigning in Resources */ = {isa = PBXBuildFile; fileRef = 1368F0831C87E06300940FC6 /* exitreason-codesigning */; };
 		13A79CAA1CF8C5D600FFC181 /* stackshot-with-kcid in Resources */ = {isa = PBXBuildFile; fileRef = 13A79CA81CF8C5D200FFC181 /* stackshot-with-kcid */; };
@@ -117,6 +128,8 @@
 		081EDD361C23854500A1C138 /* stackshot-sample-cputime */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-sample-cputime"; path = "tests/stackshot-sample-cputime"; sourceTree = SOURCE_ROOT; };
 		081EDD371C23854500A1C138 /* stackshot-sample-cputime.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-cputime.plist.gz"; path = "tests/stackshot-sample-cputime.plist.gz"; sourceTree = SOURCE_ROOT; };
 		0834719D1BF7D05400D67253 /* kcdata.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = kcdata.h; path = ../osfmk/kern/kcdata.h; sourceTree = "<group>"; };
+		084085AA1FA3CE32005BAD16 /* kdd.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = kdd.h; sourceTree = BUILT_PRODUCTS_DIR; };
+		084085AE1FA3D156005BAD16 /* module.modulemap */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = "sourcecode.module-map"; path = module.modulemap; sourceTree = "<group>"; };
 		0843EE911BF6AFB700CD4150 /* stackshot-sample */ = {isa = PBXFileReference; lastKnownFileType = text; name = "stackshot-sample"; path = "tests/stackshot-sample"; sourceTree = SOURCE_ROOT; };
 		0843EE931BF6BAB400CD4150 /* stackshot-sample.plist.gz */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = archive.gzip; name = "stackshot-sample.plist.gz"; path = "tests/stackshot-sample.plist.gz"; sourceTree = SOURCE_ROOT; };
 		08603F341BF69EDE007D3784 /* tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -127,6 +140,10 @@
 		0860F8791BFC3845007E1301 /* stackshot-sample-tailspin-2.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-tailspin-2.plist.gz"; path = "tests/stackshot-sample-tailspin-2.plist.gz"; sourceTree = SOURCE_ROOT; };
 		086395B21BF5655D005ED913 /* kdd */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = kdd; sourceTree = BUILT_PRODUCTS_DIR; };
 		086395B41BF5655D005ED913 /* kdd_main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = kdd_main.m; sourceTree = "<group>"; };
+		0864FCEF1FA3C0B7001B7B0B /* kdd.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = kdd.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		0864FCF21FA3C0B7001B7B0B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		0864FCFC1FA3C0B7001B7B0B /* kdd_frameworkTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = kdd_frameworkTests.m; sourceTree = "<group>"; };
+		0864FCFE1FA3C0B7001B7B0B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		088C36DE1EF323AE00ABB2E0 /* stackshot-sample-thread-policy.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-thread-policy.plist.gz"; sourceTree = "<group>"; };
 		088C36DF1EF323AE00ABB2E0 /* stackshot-sample-thread-policy */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-thread-policy"; sourceTree = "<group>"; };
 		08A4C94A1C47019E00D5F010 /* KCDEmbeddedBufferDescription.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = KCDEmbeddedBufferDescription.h; sourceTree = "<group>"; };
@@ -151,6 +168,8 @@
 		08CF18FD1BF9B79E00D05813 /* stackshot-sample-tailspin */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-sample-tailspin"; path = "tests/stackshot-sample-tailspin"; sourceTree = SOURCE_ROOT; };
 		08CF18FE1BF9B79E00D05813 /* stackshot-sample-tailspin.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-tailspin.plist.gz"; path = "tests/stackshot-sample-tailspin.plist.gz"; sourceTree = SOURCE_ROOT; };
 		08F1501D1BFEA7AC00F2C89C /* libz.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libz.dylib; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.12.sdk/usr/lib/libz.dylib; sourceTree = DEVELOPER_DIR; };
+		08F2AC081FA136EB00271A11 /* stackshot-sample-delta-thread-policy */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-delta-thread-policy"; sourceTree = "<group>"; };
+		08F2AC091FA136EB00271A11 /* stackshot-sample-delta-thread-policy.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-delta-thread-policy.plist.gz"; sourceTree = "<group>"; };
 		1368F0831C87E06300940FC6 /* exitreason-codesigning */ = {isa = PBXFileReference; lastKnownFileType = file; name = "exitreason-codesigning"; path = "tests/exitreason-codesigning"; sourceTree = SOURCE_ROOT; };
 		1368F0841C87E06300940FC6 /* exitreason-codesigning.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "exitreason-codesigning.plist.gz"; path = "tests/exitreason-codesigning.plist.gz"; sourceTree = SOURCE_ROOT; };
 		13A79CA81CF8C5D200FFC181 /* stackshot-with-kcid */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-with-kcid"; path = "tests/stackshot-with-kcid"; sourceTree = SOURCE_ROOT; };
@@ -205,6 +224,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		0864FCEB1FA3C0B7001B7B0B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0864FD141FA3C2B9001B7B0B /* libz.dylib in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C91C93C41ACB58B700119B60 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -218,6 +245,8 @@
 		08603F351BF69EDE007D3784 /* tests */ = {
 			isa = PBXGroup;
 			children = (
+				08F2AC081FA136EB00271A11 /* stackshot-sample-delta-thread-policy */,
+				08F2AC091FA136EB00271A11 /* stackshot-sample-delta-thread-policy.plist.gz */,
 				18C577C51F96DB7100C67EB3 /* stackshot-sample-thread-groups-flags.plist.gz */,
 				18C577C11F96DB5100C67EB3 /* stackshot-sample-thread-groups-flags */,
 				C9DCEF001F01C3790000BD02 /* stackshot-sample-instrs-cycles */,
@@ -279,6 +308,31 @@
 			path = tests;
 			sourceTree = "<group>";
 		};
+		0864FCF01FA3C0B7001B7B0B /* kdd.framework */ = {
+			isa = PBXGroup;
+			children = (
+				084085AE1FA3D156005BAD16 /* module.modulemap */,
+				0864FCF21FA3C0B7001B7B0B /* Info.plist */,
+			);
+			path = kdd.framework;
+			sourceTree = "<group>";
+		};
+		0864FCFB1FA3C0B7001B7B0B /* kdd.frameworkTests */ = {
+			isa = PBXGroup;
+			children = (
+				0864FCFC1FA3C0B7001B7B0B /* kdd_frameworkTests.m */,
+				0864FCFE1FA3C0B7001B7B0B /* Info.plist */,
+			);
+			path = kdd.frameworkTests;
+			sourceTree = "<group>";
+		};
+		0864FD061FA3C0C8001B7B0B /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		08DE68351BFFB70900BC682F /* libkdd */ = {
 			isa = PBXGroup;
 			children = (
@@ -291,6 +345,7 @@
 				08A4C94A1C47019E00D5F010 /* KCDEmbeddedBufferDescription.h */,
 				08A4C94B1C4701B800D5F010 /* KCDEmbeddedBufferDescription.m */,
 				C91C93CA1ACB58B700119B60 /* kdd.h */,
+				084085AA1FA3CE32005BAD16 /* kdd.h */,
 				C91C93CC1ACB58B700119B60 /* kdd.m */,
 			);
 			name = libkdd;
@@ -313,7 +368,10 @@
 				0834719D1BF7D05400D67253 /* kcdata.h */,
 				08B480871BF92DFB00B4AAE0 /* kcdata.py */,
 				08603F351BF69EDE007D3784 /* tests */,
+				0864FCF01FA3C0B7001B7B0B /* kdd.framework */,
+				0864FCFB1FA3C0B7001B7B0B /* kdd.frameworkTests */,
 				C91C93C81ACB58B700119B60 /* Products */,
+				0864FD061FA3C0C8001B7B0B /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -323,6 +381,7 @@
 				C91C93C71ACB58B700119B60 /* libkdd.a */,
 				086395B21BF5655D005ED913 /* kdd */,
 				08603F341BF69EDE007D3784 /* tests.xctest */,
+				0864FCEF1FA3C0B7001B7B0B /* kdd.framework */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -330,6 +389,15 @@
 /* End PBXGroup section */
 
 /* Begin PBXHeadersBuildPhase section */
+		0864FCEC1FA3C0B7001B7B0B /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				084085AC1FA3CE3D005BAD16 /* kdd.h in Headers */,
+				0864FD081FA3C127001B7B0B /* kcdata.h in Headers */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C91C93C51ACB58B700119B60 /* Headers */ = {
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
@@ -380,6 +448,25 @@
 			productReference = 086395B21BF5655D005ED913 /* kdd */;
 			productType = "com.apple.product-type.tool";
 		};
+		0864FCEE1FA3C0B7001B7B0B /* kdd.framework */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0864FD041FA3C0B7001B7B0B /* Build configuration list for PBXNativeTarget "kdd.framework" */;
+			buildPhases = (
+				084085AD1FA3CE5A005BAD16 /* ShellScript */,
+				0864FCEA1FA3C0B7001B7B0B /* Sources */,
+				0864FCEB1FA3C0B7001B7B0B /* Frameworks */,
+				0864FCEC1FA3C0B7001B7B0B /* Headers */,
+				0864FCED1FA3C0B7001B7B0B /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = kdd.framework;
+			productName = kdd.framework;
+			productReference = 0864FCEF1FA3C0B7001B7B0B /* kdd.framework */;
+			productType = "com.apple.product-type.framework";
+		};
 		C91C93C61ACB58B700119B60 /* libkdd */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = C91C93DA1ACB58B700119B60 /* Build configuration list for PBXNativeTarget "libkdd" */;
@@ -414,6 +501,10 @@
 					086395B11BF5655D005ED913 = {
 						CreatedOnToolsVersion = 7.3;
 					};
+					0864FCEE1FA3C0B7001B7B0B = {
+						CreatedOnToolsVersion = 9.1;
+						ProvisioningStyle = Automatic;
+					};
 					C91C93C61ACB58B700119B60 = {
 						CreatedOnToolsVersion = 7.0;
 					};
@@ -434,6 +525,7 @@
 				C91C93C61ACB58B700119B60 /* libkdd */,
 				086395B11BF5655D005ED913 /* kdd */,
 				08603F331BF69EDE007D3784 /* tests */,
+				0864FCEE1FA3C0B7001B7B0B /* kdd.framework */,
 			);
 		};
 /* End PBXProject section */
@@ -443,6 +535,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				08F2AC0A1FA136EB00271A11 /* stackshot-sample-delta-thread-policy in Resources */,
 				18C577C61F96DB7100C67EB3 /* stackshot-sample-thread-groups-flags.plist.gz in Resources */,
 				18C577C31F96DB5200C67EB3 /* stackshot-sample-thread-groups-flags in Resources */,
 				C9DCEF011F01C3810000BD02 /* stackshot-sample-instrs-cycles in Resources */,
@@ -458,6 +551,7 @@
 				13D6C5D01C4DDDB6005E617C /* corpse-twr-sample in Resources */,
 				C9D7B5401D1B41D700F1019D /* xnupost_testconfig-sample in Resources */,
 				081725D51C3F476500371A54 /* stackshot-sample-duration in Resources */,
+				08F2AC0B1FA136EB00271A11 /* stackshot-sample-delta-thread-policy.plist.gz in Resources */,
 				081725D61C3F476500371A54 /* stackshot-sample-duration.plist.gz in Resources */,
 				081EDD381C23855700A1C138 /* stackshot-sample-cputime in Resources */,
 				081EDD391C23855700A1C138 /* stackshot-sample-cputime.plist.gz in Resources */,
@@ -501,7 +595,32 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		0864FCED1FA3C0B7001B7B0B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		084085AD1FA3CE5A005BAD16 /* ShellScript */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/kdd.h",
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/kdd.h",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "perl -pe 's:kcdata.h:kdd/kcdata.h:' ${SRCROOT}/kdd.h  >${SCRIPT_OUTPUT_FILE_0}";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		08603F301BF69EDE007D3784 /* Sources */ = {
@@ -517,6 +636,19 @@
 			buildActionMask = 2147483647;
 			files = (
 				086395B51BF5655D005ED913 /* kdd_main.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0864FCEA1FA3C0B7001B7B0B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0864FD0A1FA3C2A9001B7B0B /* kcdtypes.c in Sources */,
+				0864FD0B1FA3C2A9001B7B0B /* kcdata_core.m in Sources */,
+				0864FD0D1FA3C2A9001B7B0B /* KCDBasicTypeDescription.m in Sources */,
+				0864FD0F1FA3C2A9001B7B0B /* KCDStructTypeDescription.m in Sources */,
+				0864FD111FA3C2A9001B7B0B /* KCDEmbeddedBufferDescription.m in Sources */,
+				0864FD131FA3C2A9001B7B0B /* kdd.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -603,6 +735,92 @@
 				MACOSX_DEPLOYMENT_TARGET = 10.11;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		0864FD001FA3C0B7001B7B0B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				FRAMEWORK_VERSION = A;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				INFOPLIST_FILE = kdd.framework/Info.plist;
+				INSTALLHDRS_SCRIPT_PHASE = YES;
+				INSTALL_PATH = /AppleInternal/Ariadne/Frameworks/;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 10.13;
+				MODULEMAP_FILE = "$(SRCROOT)/kdd.framework/module.modulemap";
+				PRODUCT_BUNDLE_IDENTIFIER = "test.kdd-framework";
+				PRODUCT_NAME = kdd;
+				SDKROOT = macosx.internal;
+				SKIP_INSTALL = NO;
+				SUPPORTS_TEXT_BASED_API = YES;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Debug;
+		};
+		0864FD011FA3C0B7001B7B0B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				FRAMEWORK_VERSION = A;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				INFOPLIST_FILE = kdd.framework/Info.plist;
+				INSTALLHDRS_SCRIPT_PHASE = YES;
+				INSTALL_PATH = /AppleInternal/Ariadne/Frameworks/;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 10.13;
+				MODULEMAP_FILE = "$(SRCROOT)/kdd.framework/module.modulemap";
+				PRODUCT_BUNDLE_IDENTIFIER = "test.kdd-framework";
+				PRODUCT_NAME = kdd;
+				SDKROOT = macosx.internal;
+				SKIP_INSTALL = NO;
+				SUPPORTS_TEXT_BASED_API = YES;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
 			};
 			name = Release;
 		};
@@ -723,6 +941,15 @@
 			buildConfigurations = (
 				086395B71BF5655D005ED913 /* Debug */,
 				086395B81BF5655D005ED913 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0864FD041FA3C0B7001B7B0B /* Build configuration list for PBXNativeTarget "kdd.framework" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0864FD001FA3C0B7001B7B0B /* Debug */,
+				0864FD011FA3C0B7001B7B0B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -542,18 +542,22 @@ thread_terminate_self(void)
 
 	bank_swap_thread_bank_ledger(thread, NULL);
 
+	if (kdebug_enable && bsd_hasthreadname(thread->uthread)) {
+		char threadname[MAXTHREADNAMESIZE];
+		bsd_getthreadname(thread->uthread, threadname);
+		kernel_debug_string_simple(TRACE_STRING_THREADNAME_PREV, threadname);
+	}
+
 	task = thread->task;
 	uthread_cleanup(task, thread->uthread, task->bsd_info);
 
-	if (task->bsd_info && !task_is_exec_copy(task)) {
+	if (kdebug_enable && task->bsd_info && !task_is_exec_copy(task)) {
 		/* trace out pid before we sign off */
 		long dbg_arg1 = 0;
-		long dbg_arg2 = 0; 
-		
-		kdbg_trace_data(thread->task->bsd_info, &dbg_arg1, &dbg_arg2);
+		long dbg_arg2 = 0;
 
-		KERNEL_DEBUG_CONSTANT(TRACE_DATA_THREAD_TERMINATE_PID | DBG_FUNC_NONE,
-			dbg_arg1, 0, 0, 0, 0);
+		kdbg_trace_data(thread->task->bsd_info, &dbg_arg1, &dbg_arg2);
+		KDBG_RELEASE(TRACE_DATA_THREAD_TERMINATE_PID, dbg_arg1, dbg_arg2);
 	}
 
 	/*
@@ -571,14 +575,11 @@ thread_terminate_self(void)
 	 */
 	if (threadcnt == 0 && task->bsd_info != NULL && !task_is_exec_copy(task)) {
 		mach_exception_data_type_t subcode = 0;
-		{
+		if (kdebug_enable) {
 			/* since we're the last thread in this process, trace out the command name too */
-			long	dbg_arg1 = 0, dbg_arg2 = 0, dbg_arg3 = 0, dbg_arg4 = 0;
-
-			kdbg_trace_string(thread->task->bsd_info, &dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
-
-			KERNEL_DEBUG_CONSTANT(TRACE_STRING_PROC_EXIT | DBG_FUNC_NONE,
-				dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
+			long args[4] = {};
+			kdbg_trace_string(thread->task->bsd_info, &args[0], &args[1], &args[2], &args[3]);
+			KDBG_RELEASE(TRACE_STRING_PROC_EXIT, args[0], args[1], args[2], args[3]);
 		}
 
 		/* Get the exit reason before proc_exit */
@@ -703,14 +704,14 @@ thread_deallocate(
 
 	task = thread->task;
 
-#ifdef MACH_BSD 
+#ifdef MACH_BSD
 	{
 		void *ut = thread->uthread;
 
 		thread->uthread = NULL;
 		uthread_zone_free(ut);
 	}
-#endif  /* MACH_BSD */   
+#endif /* MACH_BSD */
 
 	if (thread->t_ledger)
 		ledger_dereference(thread->t_ledger);
@@ -979,7 +980,7 @@ void
 thread_terminate_enqueue(
 	thread_t		thread)
 {
-	KERNEL_DEBUG_CONSTANT(TRACE_DATA_THREAD_TERMINATE | DBG_FUNC_NONE, thread->thread_id, 0, 0, 0, 0);
+	KDBG_RELEASE(TRACE_DATA_THREAD_TERMINATE, thread->thread_id);
 
 	simple_lock(&thread_terminate_lock);
 	enqueue_tail(&thread_terminate_queue, &thread->runq_links);
@@ -1341,10 +1342,10 @@ thread_create_internal(
 	new_thread->corpse_dup = FALSE;
 	*out_thread = new_thread;
 
-	{
-		long	dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4;
+	if (kdebug_enable) {
+		long args[4] = {};
 
-		kdbg_trace_data(parent_task->bsd_info, &dbg_arg2, &dbg_arg4);
+		kdbg_trace_data(parent_task->bsd_info, &args[1], &args[3]);
 
 		/*
 		 * Starting with 26604425, exec'ing creates a new task/thread.
@@ -1352,26 +1353,23 @@ thread_create_internal(
 		 * NEWTHREAD in the current process has two possible meanings:
 		 *
 		 * 1) Create a new thread for this process.
-		 * 2) Create a new thread for the future process this will become in an exec.
+		 * 2) Create a new thread for the future process this will become in an
+		 * exec.
 		 *
 		 * To disambiguate these, arg3 will be set to TRUE for case #2.
 		 *
 		 * The value we need to find (TPF_EXEC_COPY) is stable in the case of a
 		 * task exec'ing. The read of t_procflags does not take the proc_lock.
 		 */
-		dbg_arg3 = (task_is_exec_copy(parent_task)) ? TRUE : 0;
+		args[2] = task_is_exec_copy(parent_task) ? 1 : 0;
 
+		KDBG_RELEASE(TRACE_DATA_NEWTHREAD, (uintptr_t)thread_tid(new_thread),
+				args[1], args[2], args[3]);
 
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-			TRACE_DATA_NEWTHREAD | DBG_FUNC_NONE,
-			(vm_address_t)(uintptr_t)thread_tid(new_thread), dbg_arg2, dbg_arg3, dbg_arg4, 0);
-
-		kdbg_trace_string(parent_task->bsd_info,
-							&dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
-
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-			TRACE_STRING_NEWTHREAD | DBG_FUNC_NONE,
-			dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
+		kdbg_trace_string(parent_task->bsd_info, &args[0], &args[1],
+				&args[2], &args[3]);
+		KDBG_RELEASE(TRACE_STRING_NEWTHREAD, args[0], args[1], args[2],
+				args[3]);
 	}
 
 	DTRACE_PROC1(lwp__create, thread_t, *out_thread);
@@ -3036,6 +3034,18 @@ thread_set_thread_name(thread_t th, const char* name)
 	if ((th) && (th->uthread) && name) {
 		bsd_setthreadname(th->uthread, name);
 	}
+}
+
+void
+thread_set_honor_qlimit(thread_t thread)
+{
+	thread->options |= TH_OPT_HONOR_QLIMIT;
+}
+
+void
+thread_clear_honor_qlimit(thread_t thread)
+{
+	thread->options &= (~TH_OPT_HONOR_QLIMIT);
 }
 
 /*

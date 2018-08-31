@@ -728,7 +728,6 @@ find_user_regs(thread_t thread)
 #if CONFIG_DTRACE
 /*
  * DTrace would like to have a peek at the kernel interrupt state, if available.
- * Based on osfmk/chud/i386/chud_thread_i386.c:chudxnu_thread_get_state(), which see.
  */
 x86_saved_state_t *find_kern_regs(thread_t);
 

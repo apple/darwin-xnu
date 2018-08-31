@@ -3039,51 +3039,51 @@ kqueue_dealloc(struct kqueue *kq)
 	p = kq->kq_p;
 	fdp = p->p_fd;
 
-	proc_fdlock(p);
-	for (i = 0; i < fdp->fd_knlistsize; i++) {
-		kn = SLIST_FIRST(&fdp->fd_knlist[i]);
-		while (kn != NULL) {
-			if (kq == knote_get_kq(kn)) {
-				assert((kq->kq_state & KQ_WORKLOOP) == 0);
-				kqlock(kq);
-				proc_fdunlock(p);
-				/* drop it ourselves or wait */
-				if (kqlock2knotedrop(kq, kn)) {
-					knote_drop(kn, p);
-				}
-				proc_fdlock(p);
-				/* start over at beginning of list */
-				kn = SLIST_FIRST(&fdp->fd_knlist[i]);
-				continue;
-			}
-			kn = SLIST_NEXT(kn, kn_link);
-		}
-	}
-	knhash_lock(p);
-	proc_fdunlock(p);
-
-	if (fdp->fd_knhashmask != 0) {
-		for (i = 0; i < (int)fdp->fd_knhashmask + 1; i++) {
-			kn = SLIST_FIRST(&fdp->fd_knhash[i]);
+	if ((kq->kq_state & KQ_WORKLOOP) == 0) {
+		proc_fdlock(p);
+		for (i = 0; i < fdp->fd_knlistsize; i++) {
+			kn = SLIST_FIRST(&fdp->fd_knlist[i]);
 			while (kn != NULL) {
 				if (kq == knote_get_kq(kn)) {
-					assert((kq->kq_state & KQ_WORKLOOP) == 0);
 					kqlock(kq);
-					knhash_unlock(p);
+					proc_fdunlock(p);
 					/* drop it ourselves or wait */
 					if (kqlock2knotedrop(kq, kn)) {
 						knote_drop(kn, p);
 					}
-					knhash_lock(p);
+					proc_fdlock(p);
 					/* start over at beginning of list */
-					kn = SLIST_FIRST(&fdp->fd_knhash[i]);
+					kn = SLIST_FIRST(&fdp->fd_knlist[i]);
 					continue;
 				}
 				kn = SLIST_NEXT(kn, kn_link);
 			}
 		}
+		knhash_lock(p);
+		proc_fdunlock(p);
+
+		if (fdp->fd_knhashmask != 0) {
+			for (i = 0; i < (int)fdp->fd_knhashmask + 1; i++) {
+				kn = SLIST_FIRST(&fdp->fd_knhash[i]);
+				while (kn != NULL) {
+					if (kq == knote_get_kq(kn)) {
+						kqlock(kq);
+						knhash_unlock(p);
+						/* drop it ourselves or wait */
+						if (kqlock2knotedrop(kq, kn)) {
+							knote_drop(kn, p);
+						}
+						knhash_lock(p);
+						/* start over at beginning of list */
+						kn = SLIST_FIRST(&fdp->fd_knhash[i]);
+						continue;
+					}
+					kn = SLIST_NEXT(kn, kn_link);
+				}
+			}
+		}
+		knhash_unlock(p);
 	}
-	knhash_unlock(p);
 
 	if (kq->kq_state & KQ_WORKLOOP) {
 		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
@@ -4273,6 +4273,9 @@ kevent_internal(struct proc *p,
 	/* restrict dynamic kqueue allocation to workloops (for now) */
 	if ((flags & (KEVENT_FLAG_DYNAMIC_KQUEUE | KEVENT_FLAG_WORKLOOP)) == KEVENT_FLAG_DYNAMIC_KQUEUE)
 		return EINVAL;
+
+	if ((flags & (KEVENT_FLAG_WORKLOOP)) && (flags & (KEVENT_FLAG_WORKQ)))
+                return EINVAL;
 
 	if (flags & (KEVENT_FLAG_WORKLOOP_SERVICER_ATTACH | KEVENT_FLAG_WORKLOOP_SERVICER_DETACH |
 	    KEVENT_FLAG_DYNAMIC_KQ_MUST_EXIST | KEVENT_FLAG_DYNAMIC_KQ_MUST_NOT_EXIST | KEVENT_FLAG_WORKLOOP_NO_WQ_THREAD)) {

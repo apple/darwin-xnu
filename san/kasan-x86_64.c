@@ -194,14 +194,12 @@ kasan_map_shadow_superpage_zero(vm_offset_t address, vm_size_t size)
 void
 kasan_map_shadow(vm_offset_t address, vm_size_t size, bool is_zero)
 {
-	size = vm_map_round_page(size, PAGE_MASK);
-	vm_size_t j;
+	vm_offset_t shadow_base = vm_map_trunc_page(SHADOW_FOR_ADDRESS(address), PAGE_MASK);
+	vm_offset_t shadow_top = vm_map_round_page(SHADOW_FOR_ADDRESS(address + size), PAGE_MASK);
 
-	for (j = 0; j < size; j += I386_PGBYTES) {
+	for (; shadow_base < shadow_top; shadow_base += I386_PGBYTES) {
 
-		vm_offset_t virt_shadow_target = (vm_offset_t)SHADOW_FOR_ADDRESS(address + j);
-
-		split_addr_t addr = split_address(virt_shadow_target);
+		split_addr_t addr = split_address(shadow_base);
 		assert(addr.pml4 == 507 || addr.pml4 == 508);
 
 		uint64_t *L3;
@@ -260,10 +258,10 @@ kasan_map_shadow(vm_offset_t address, vm_size_t size, bool is_zero)
 			L1[addr.pt] = newpte
 				| INTEL_PTE_VALID
 				| INTEL_PTE_NX;
-		}
 
-		/* adding a new entry, this is not strictly required */
-		invlpg(virt_shadow_target);
+			/* adding a new entry, this is not strictly required */
+			invlpg(shadow_base);
+		}
 	}
 }
 
@@ -334,3 +332,42 @@ kasan_reserve_memory(void *_args)
 	panic("KASAN: could not reserve memory");
 }
 
+bool
+kasan_is_shadow_mapped(uintptr_t shadowp)
+{
+	split_addr_t addr = split_address(shadowp);
+	assert(addr.pml4 == 507 || addr.pml4 == 508);
+
+	uint64_t *L3;
+	uint64_t *L2;
+	uint64_t *L1;
+
+	L3 = (uint64_t *)(IdlePML4[addr.pml4] & ~PAGE_MASK);
+	if (L3 == NULL) {
+		return false;
+	}
+	L3 = (uint64_t *)phys2virt(L3);
+
+	L2 = (uint64_t *)(L3[addr.pdpt] & ~PAGE_MASK);
+	if (L2 == NULL) {
+		return false;
+	}
+	L2 = (uint64_t *)phys2virt(L2);
+
+	uint64_t pde = L2[addr.pd];
+	if ((pde & (INTEL_PTE_VALID|INTEL_PTE_PS)) == (INTEL_PTE_VALID|INTEL_PTE_PS)) {
+		/* mapped as superpage */
+		return true;
+	}
+	L1 = (uint64_t *)(pde & ~PAGE_MASK);
+	if (L1 == NULL) {
+		return false;
+	}
+	L1 = (uint64_t *)phys2virt(L1);
+
+	if (L1[addr.pt] & INTEL_PTE_VALID) {
+		return true;
+	}
+
+	return false;
+}

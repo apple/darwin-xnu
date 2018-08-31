@@ -331,6 +331,7 @@ pmap_cpu_init(void)
 	 * Initialize the per-cpu, TLB-related fields.
 	 */
 	cdp->cpu_kernel_cr3 = kernel_pmap->pm_cr3;
+	cpu_shadowp(cdp->cpu_number)->cpu_kernel_cr3 = cdp->cpu_kernel_cr3;
 	cdp->cpu_active_cr3 = kernel_pmap->pm_cr3;
 	cdp->cpu_tlb_invalid = FALSE;
 	cdp->cpu_task_map = TASK_MAP_64BIT;
@@ -421,7 +422,7 @@ pmap_bootstrap(
 
 	pmap_pcid_initialize_kernel(kernel_pmap);
 
-	current_cpu_datap()->cpu_kernel_cr3 = (addr64_t) kernel_pmap->pm_cr3;
+	current_cpu_datap()->cpu_kernel_cr3 = cpu_shadowp(cpu_number())->cpu_kernel_cr3 = (addr64_t) kernel_pmap->pm_cr3;
 
 	nkpt = NKPT;
 	OSAddAtomic(NKPT,  &inuse_ptepages_count);
@@ -2518,7 +2519,7 @@ pmap_flush(
 
 			cpus_to_signal &= ~cpu_bit;
 
-			if (!cpu_datap(cpu)->cpu_running)
+			if (!cpu_is_running(cpu))
 				continue;
 
 			if (pfc->pfc_invalid_global & cpu_bit)
@@ -2563,7 +2564,7 @@ pmap_flush(
 				 * as appropriate in the PCID case.
 				 */
 				if ((cpus_to_respond & cpu_bit) != 0) {
-					if (!cpu_datap(cpu)->cpu_running ||
+					if (!cpu_is_running(cpu) ||
 					    cpu_datap(cpu)->cpu_tlb_invalid == FALSE ||
 					    !CPU_CR3_IS_ACTIVE(cpu)) {
 						cpus_to_respond &= ~cpu_bit;
@@ -2678,7 +2679,7 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 		mfence();
 	}
 	for (cpu = 0, cpu_bit = 1; cpu < real_ncpus; cpu++, cpu_bit <<= 1) {
-		if (!cpu_datap(cpu)->cpu_running)
+		if (!cpu_is_running(cpu))
 			continue;
 		uint64_t	cpu_active_cr3 = CPU_GET_ACTIVE_CR3(cpu);
 		uint64_t	cpu_task_cr3 = CPU_GET_TASK_CR3(cpu);
@@ -2764,7 +2765,7 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 				 * as appropriate in the PCID case.
 				 */
 				if ((cpus_to_respond & cpu_bit) != 0) {
-					if (!cpu_datap(cpu)->cpu_running ||
+					if (!cpu_is_running(cpu) ||
 					    cpu_datap(cpu)->cpu_tlb_invalid == FALSE ||
 					    !CPU_CR3_IS_ACTIVE(cpu)) {
 						cpus_to_respond &= ~cpu_bit;

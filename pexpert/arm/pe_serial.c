@@ -644,10 +644,9 @@ static void dockchannel_uart_init(void)
 	// Setup DRAIN timer
 	rDOCKCHANNELS_DEV_DRAIN_CFG(DOCKCHANNEL_UART_CHANNEL) = max_dockchannel_drain_period;
 
-	// Drain timer doesnt get loaded with value from drain period register if fifo
-	// is already full. Drop a character from the fifo. 
-	// Refer https://seg-docs.ecs.apple.com/projects/cayman//release/specs/Apple/DockChannels/DockChannels_Specification.pdf
-	// Chapter 8 for more details.
+	// Drain timer doesn't get loaded with value from drain period register if fifo
+	// is already full. Drop a character from the fifo.  See chapter 8 of the Cayman
+	// DockChannels specification for more details.
 	rDOCKCHANNELS_DOCK_RDATA1(DOCKCHANNEL_UART_CHANNEL);
 }
 

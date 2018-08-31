@@ -103,9 +103,6 @@ void            sleh_abort(struct arm_saved_state *, int);
 static kern_return_t sleh_alignment(struct arm_saved_state *);
 static void 	panic_with_thread_kernel_state(const char *msg, arm_saved_state_t *regs);
 
-
-volatile perfCallback    perfTrapHook = NULL;	/* Pointer to CHUD trap hook routine */
-
 int             sleh_alignment_count = 0;
 int             trap_on_alignment_fault = 0;
 

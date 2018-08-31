@@ -30,12 +30,13 @@ INSTALL_MI_DIR = san
 EXPORT_MI_DIR = san
 COMP_SUBDIRS = conf
 
+.DELETE_ON_ERROR:
 $(OBJROOT)/san/kasan-blacklist-%: $(SOURCE)/kasan-blacklist $(SOURCE)/kasan-blacklist-%
 	@echo "$(ColorH)GENERATING$(Color0)    $(ColorLF)$(notdir $@)$(Color0)"
 	$(_v)sed -e 's,^src:\./,src:'"$(SRCROOT)/," $^ > $@
+	$(_v)$(SOURCE)/tools/validate_blacklist.sh "$@"
 
-do_build_setup:: $(OBJROOT)/san/kasan-blacklist-x86_64
-
+do_build_setup:: $(OBJROOT)/san/kasan-blacklist-x86_64 $(OBJROOT)/san/kasan-blacklist-arm64
 
 #
 # Kasan System.kext plugin

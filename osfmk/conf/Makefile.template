@@ -23,8 +23,6 @@ SFLAGS+= -include meta_features.h
 OBJS_NO_CAST_ALIGN =			\
 		atm_notification_user.o \
 		model_dep.o		\
-		chud_thread.o		\
-		chud_thread_arm.o	\
 		video_console.o		\
 		kdp_udp.o		\
 		kdp_machdep.o		\
@@ -91,11 +89,6 @@ OBJS_NO_SIGN_COMPARE =		\
 
 $(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
 $(foreach file,$(OBJS_NO_SIGN_COMPARE),$(eval $(call add_perfile_cflags,$(file),-Wno-sign-compare)))
-
-#
-# Do not provide CTF symbolic these files
-#
-chud_glue.o_SKIP_CTFCONVERT = 1
 
 #
 # XXX: INCFLAGS to include libsa prototypes

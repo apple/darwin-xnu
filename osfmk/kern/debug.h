@@ -276,10 +276,15 @@ struct embedded_panic_header {
 	uint32_t eph_stackshot_len;        /* length of the panic stackshot (0 if not valid ) */
 	uint32_t eph_other_log_offset;     /* Offset of the other log (any logging subsequent to the stackshot) from the beginning of the header */
 	uint32_t eph_other_log_len;        /* length of the other log */
-	uint64_t eph_x86_power_state:8,
-		 eph_x86_efi_boot_state:8,
-		 eph_x86_system_state:8,
-		 eph_x86_unused_bits:40;
+	union {
+		struct {
+			uint64_t eph_x86_power_state:8,
+				 eph_x86_efi_boot_state:8,
+				 eph_x86_system_state:8,
+				 eph_x86_unused_bits:40;
+		}; // anonymous struct to group the bitfields together.
+		uint64_t eph_x86_do_not_use; /* Used for offsetof/sizeof when parsing header */
+	};
 } __attribute__((packed));
 
 #define EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_COMPLETE             0x01
@@ -324,6 +329,7 @@ struct macos_panic_header {
 #define MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_NESTED       0x80
 #define MACOS_PANIC_HEADER_FLAG_COREDUMP_COMPLETE             0x100
 #define MACOS_PANIC_HEADER_FLAG_COREDUMP_FAILED               0x200
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_KERNEL_ONLY         0x400
 
 #endif /* __APPLE_API_UNSTABLE */
 #endif /* __APPLE_API_PRIVATE */

@@ -119,12 +119,13 @@ void vm_purgeable_stats(vm_purgeable_info_t info, task_t target_task);
 kern_return_t vm_purgeable_account(task_t task, pvm_account_info_t acnt_info);
 #endif /* DEVELOPMENT || DEBUG */
 
-int vm_purgeable_purge_task_owned(task_t task);
+uint64_t vm_purgeable_purge_task_owned(task_t task);
 void vm_purgeable_nonvolatile_enqueue(vm_object_t object, task_t task);
 void vm_purgeable_nonvolatile_dequeue(vm_object_t object);
 void vm_purgeable_accounting(vm_object_t	object,
 			     vm_purgable_t	old_state,
-			     boolean_t		disown);
+			     boolean_t		disown,
+			     boolean_t		task_objq_locked);
 void vm_purgeable_compressed_update(vm_object_t	object,
 				    int		delta);
 

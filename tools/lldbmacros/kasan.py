@@ -113,6 +113,14 @@ def print_alloc_free_entry(addr, orig_ptr):
 
 alloc_header_sz = 16
 
+def magic_for_addr(addr, xor):
+    magic = addr & 0xffff
+    magic ^= (addr >> 16) & 0xffff
+    magic ^= (addr >> 32) & 0xffff
+    magic ^= (addr >> 48) & 0xffff
+    magic ^= xor
+    return magic
+
 def print_alloc_info(_addr):
     addr = (_addr & ~0x7)
 
@@ -144,10 +152,7 @@ def print_alloc_info(_addr):
             print "No allocation found at 0x{:x} (found shadow {:x})".format(_addr, shbyte)
             return
 
-        live_magic = (addr & 0xffffffff) ^ 0xA110C8ED
-        free_magic = (addr & 0xffffffff) ^ 0xF23333D
-
-        if live_magic == unsigned(liveh.magic):
+        if magic_for_addr(addr, 0x3a65) == unsigned(liveh.magic):
             usz = unsigned(liveh.user_size)
             asz = unsigned(liveh.alloc_size)
             leftrz = unsigned(liveh.left_rz)
@@ -156,11 +161,12 @@ def print_alloc_info(_addr):
             if _addr >= base and _addr < base + asz:
                 footer = kern.GetValueFromAddress(addr + usz, 'struct kasan_alloc_footer *')
                 rightrz = asz - usz - leftrz
+                offset = _addr - addr
 
                 print "Live heap object"
                 print "Valid range: 0x{:x} -- 0x{:x} ({} bytes)".format(addr, addr + usz - 1, usz)
                 print "Total range: 0x{:x} -- 0x{:x} ({} bytes)".format(base, base + asz - 1, asz)
-                print "Offset:      {} bytes (shadow: 0x{:02x} {})".format(_addr - addr, _shbyte, _shstr)
+                print "Offset:      {} bytes (shadow: 0x{:02x} {}, remaining: {} bytes)".format(offset, _shbyte, _shstr, usz - offset)
                 print "Redzone:     {} / {} bytes".format(leftrz, rightrz)
 
                 btframes = unsigned(liveh.frames)
@@ -174,7 +180,7 @@ def print_alloc_info(_addr):
                 print_hexdump(base, asz, 0)
             return
 
-        elif free_magic == unsigned(freeh.magic):
+        elif magic_for_addr(addr, 0xf233) == unsigned(freeh.magic):
             asz = unsigned(freeh.size)
             if _addr >= addr and _addr < addr + asz:
                 print_alloc_free_entry(addr, _addr)

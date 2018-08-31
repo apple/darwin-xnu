@@ -21,7 +21,7 @@ SFLAGS+= -include meta_features.h
 
 # Objects that don't want -Wcast-align warning (8474835)
 OSKextLib.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align
-OSKext.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align
+OSKext.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align -Wno-cast-qual
 OSMetaClass.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align
 OSRuntime.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes
 OSUnserialize.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align -Wno-unreachable-code-break

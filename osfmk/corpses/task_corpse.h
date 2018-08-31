@@ -100,8 +100,6 @@ extern kern_return_t task_duplicate_map_and_threads(
 			int *size,
 			int *num_udata);
 
-extern boolean_t task_allowed_vm_map_fork(task_t task __unused);
-
 extern kern_return_t task_enqueue_exception_with_corpse(
 	task_t task,
 	exception_type_t etype,

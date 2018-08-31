@@ -338,13 +338,13 @@ mt_sysctl SYSCTL_HANDLER_ARGS
 
 	switch ((enum mt_sysctl)arg1) {
 	case MT_SUPPORTED:
-		return sysctl_io_number(req, mt_core_supported, sizeof(mt_core_supported), NULL, NULL);
+		return sysctl_io_number(req, (int)mt_core_supported, sizeof(int), NULL, NULL);
 	case MT_PMIS:
 		return sysctl_io_number(req, mt_pmis, sizeof(mt_pmis), NULL, NULL);
 	case MT_RETROGRADE:
 		return sysctl_io_number(req, mt_retrograde, sizeof(mt_retrograde), NULL, NULL);
 	case MT_TASK_THREAD:
-		return sysctl_io_number(req, mt_core_supported, sizeof(mt_core_supported), NULL, NULL);
+		return sysctl_io_number(req, (int)mt_core_supported, sizeof(int), NULL, NULL);
 	case MT_DEBUG: {
 		int value = mt_debug;
 

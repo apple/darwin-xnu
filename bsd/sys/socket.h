@@ -302,6 +302,7 @@
 #define	SO_TRAFFIC_CLASS_DBG	0x1088		/* Debug traffic class (struct so_tcdbg) */
 #define	SO_TRAFFIC_CLASS_STATS	0x1089		/* Traffic class statistics */
 #define	SO_PRIVILEGED_TRAFFIC_CLASS 0x1090	/* Privileged traffic class (bool) */
+#define	SO_DEFUNCTIT	0x1091		/* Defunct a socket (only in internal builds) */
 #define	SO_DEFUNCTOK	0x1100		/* can be defunct'd */
 #define	SO_ISDEFUNCT	0x1101		/* get defunct status */
 

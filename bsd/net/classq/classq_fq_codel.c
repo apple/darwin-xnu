@@ -47,7 +47,8 @@
 #include <net/pktsched/pktsched_fq_codel.h>
 #include <net/classq/classq_fq_codel.h>
 
-static struct zone *flowq_zone = NULL;
+static uint32_t flowq_size;			/* size of flowq */
+static struct mcache *flowq_cache = NULL;	/* mcache for flowq */
 
 #define	FQ_ZONE_MAX	(32 * 1024)	/* across all interfaces */
 
@@ -58,30 +59,35 @@ static struct zone *flowq_zone = NULL;
 void
 fq_codel_init(void)
 {
-	if (flowq_zone != NULL)
+	if (flowq_cache != NULL)
 		return;
 
-	flowq_zone = zinit(sizeof (struct flowq),
-	    FQ_ZONE_MAX * sizeof (struct flowq), 0, "flowq_zone");
-	if (flowq_zone == NULL) {
-		panic("%s: failed to allocate flowq_zone", __func__);
+	flowq_size = sizeof (fq_t);
+	flowq_cache = mcache_create("fq.flowq", flowq_size, sizeof (uint64_t),
+	    0, MCR_SLEEP);
+	if (flowq_cache == NULL) {
+		panic("%s: failed to allocate flowq_cache", __func__);
 		/* NOTREACHED */
 	}
-	zone_change(flowq_zone, Z_EXPAND, TRUE);
-	zone_change(flowq_zone, Z_CALLERACCT, TRUE);
+}
+
+void
+fq_codel_reap_caches(boolean_t purge)
+{
+	mcache_reap_now(flowq_cache, purge);
 }
 
 fq_t *
 fq_alloc(classq_pkt_type_t ptype)
 {
 	fq_t *fq = NULL;
-	fq = zalloc(flowq_zone);
+	fq = mcache_alloc(flowq_cache, MCR_SLEEP);
 	if (fq == NULL) {
-		log(LOG_ERR, "%s: unable to allocate from flowq_zone\n");
+		log(LOG_ERR, "%s: unable to allocate from flowq_cache\n");
 		return (NULL);
 	}
 
-	bzero(fq, sizeof (*fq));
+	bzero(fq, flowq_size);
 	fq->fq_ptype = ptype;
 	if (ptype == QP_MBUF) {
 		MBUFQ_INIT(&fq->fq_mbufq);
@@ -95,7 +101,7 @@ fq_destroy(fq_t *fq)
 	VERIFY(fq_empty(fq));
 	VERIFY(!(fq->fq_flags & (FQF_NEW_FLOW | FQF_OLD_FLOW)));
 	VERIFY(fq->fq_bytes == 0);
-	zfree(flowq_zone, fq);
+	mcache_free(flowq_cache, fq);
 }
 
 static void

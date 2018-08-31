@@ -782,9 +782,11 @@
  * c99 still want long longs.  While not perfect, we allow long longs for
  * g++.
  */
-#define	__DARWIN_NO_LONG_LONG	(defined(__STRICT_ANSI__) \
-				&& (__STDC_VERSION__-0 < 199901L) \
-				&& !defined(__GNUG__))
+#if (defined(__STRICT_ANSI__) && (__STDC_VERSION__-0 < 199901L)  && !defined(__GNUG__))
+#define __DARWIN_NO_LONG_LONG 1
+#else
+#define __DARWIN_NO_LONG_LONG 0
+#endif
 
 /*****************************************
  *  Public darwin-specific feature macros

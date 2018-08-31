@@ -555,4 +555,19 @@ vm32__task_wire(
 	return(KERN_SUCCESS);
 }
 
+kern_return_t
+vm32__map_exec_lockdown(
+	vm_map_t 	map)
+{
+	if (map == VM_MAP_NULL)
+		return(KERN_INVALID_ARGUMENT);
+
+	vm_map_lock(map);
+	map->map_disallow_new_exec = TRUE;
+	vm_map_unlock(map);
+
+	return(KERN_SUCCESS);
+}
+
+
 #endif /* VM32_SUPPORT */

@@ -34,6 +34,8 @@ CODESIGN_ALLOCATE:=$(shell xcrun -sdk "$(TARGETSDK)" -find codesign_allocate)
 # to have custom compiler flags to
 # target: OTHER_CFLAGS += <my flags>
 
+atm_diagnostic_flag: OTHER_CFLAGS += drop_priv.c
+
 avx: INVALID_ARCHS = i386
 avx: OTHER_CFLAGS += -mavx512f -mavx512bw -mavx512vl
 avx: OTHER_CFLAGS += -I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
@@ -41,18 +43,20 @@ avx: CONFIG_FLAGS := $(filter-out -O%,$(CONFIG_FLAGS))
 # Level 2 optimization must be used to prevent compiler from generating
 # invalid instructions when compiling with AVX-512 flags.
 avx: CONFIG_FLAGS += -O2
+# Disable vzeroupper insertion to work around rdar://problem/35035096
+avx: CONFIG_FLAGS += -mllvm -x86-use-vzeroupper=0
 ifneq (osx,$(TARGET_NAME))
 EXCLUDED_SOURCES += avx.c
 endif
 
 backtracing: OTHER_LDFLAGS += -framework CoreSymbolication
 
-data_protection: OTHER_LDFLAGS += -framework IOKit
+data_protection: OTHER_LDFLAGS += -ldarwintest_utils -framework IOKit
 
 kdebug: INVALID_ARCHS = i386
 kdebug: OTHER_LDFLAGS = -framework ktrace
 
-EXCLUDED_SOURCES += kperf_helpers.c xnu_quick_test_helpers.c
+EXCLUDED_SOURCES += drop_priv.c kperf_helpers.c xnu_quick_test_helpers.c
 
 ifeq ($(PLATFORM),iPhoneOS)
 CONFIG_FREEZE_DEFINE:= -DCONFIG_FREEZE
@@ -62,6 +66,7 @@ EXCLUDED_SOURCES += jumbo_va_spaces_28530648.c
 endif
 
 perf_compressor: OTHER_CFLAGS += $(CONFIG_FREEZE_DEFINE)
+perf_compressor: OTHER_LDFLAGS += -ldarwintest_utils
 perf_compressor: CODE_SIGN_ENTITLEMENTS=./private_entitlement.plist
 
 stackshot: OTHER_LDFLAGS += -lkdd -framework Foundation
@@ -119,9 +124,19 @@ stackshot_idle_25570396: OTHER_LDFLAGS += -lkdd -framework Foundation
 
 stackshot_block_owner_14362384: INVALID_ARCHS = i386
 stackshot_block_owner_14362384: OTHER_LDFLAGS += -framework Foundation -lpthread -lkdd
+ifeq ($(PLATFORM),MacOSX)
+stackshot_block_owner_14362384: OTHER_LDFLAGS += -lpcre
+endif
+
+all: $(DSTROOT)/usr/local/bin/kcdata
+
+$(DSTROOT)/usr/local/bin/kcdata: $(SRCROOT)/../../lldbmacros/kcdata.py
+	mkdir -p $(dir $@)
+	cp $< $@
+	chmod a+x $@
 
 xnu_quick_test: OTHER_CFLAGS += xnu_quick_test_helpers.c
-	
+
 ifeq ($(PLATFORM),iPhoneOS)
 OTHER_TEST_TARGETS += jumbo_va_spaces_28530648_unentitled
 jumbo_va_spaces_28530648: CODE_SIGN_ENTITLEMENTS = jumbo_va_spaces_28530648.entitlements
@@ -134,6 +149,9 @@ jumbo_va_spaces_28530648_unentitled: jumbo_va_spaces_28530648.c
 endif
 
 task_info_28439149: CODE_SIGN_ENTITLEMENTS = ./task_for_pid_entitlement.plist
+
+proc_info: CODE_SIGN_ENTITLEMENTS = ./task_for_pid_entitlement.plist
+proc_info: OTHER_LDFLAGS += -ldarwintest_utils
 
 disk_mount_conditioner: disk_mount_conditioner*
 disk_mount_conditioner: CODE_SIGN_ENTITLEMENTS=./disk_mount_conditioner-entitlements.plist
@@ -148,10 +166,24 @@ disk_mount_conditioner_unentitled: disk_mount_conditioner.c
 work_interval_test: CODE_SIGN_ENTITLEMENTS = work_interval_test.entitlements
 work_interval_test: OTHER_CFLAGS += -DENTITLED=1
 
+settimeofday_29193041: OTHER_CFLAGS += drop_priv.c
+
 settimeofday_29193041_entitled: CODE_SIGN_ENTITLEMENTS = settimeofday_29193041.entitlements
+settimeofday_29193041_entitled: OTHER_CFLAGS += drop_priv.c
+
 thread_group_set_32261625: OTHER_LDFLAGS = -framework ktrace
 thread_group_set_32261625: INVALID_ARCHS = i386
 
 task_info: CODE_SIGN_ENTITLEMENTS = task_for_pid_entitlement.plist
+
+socket_bind_35243417: CODE_SIGN_ENTITLEMENTS = network_entitlements.plist
+socket_bind_35685803: CODE_SIGN_ENTITLEMENTS = network_entitlements.plist
+
+ifneq (osx,$(TARGET_NAME))
+EXCLUDED_SOURCES += no32exec_35914211.c no32exec_35914211_helper.c
+endif
+
+no32exec_35914211_helper:  INVALID_ARCHS = x86_64
+no32exec_35914211:  INVALID_ARCHS = i386
 
 include $(DEVELOPER_DIR)/AppleInternal/Makefiles/darwintest/Makefile.targets

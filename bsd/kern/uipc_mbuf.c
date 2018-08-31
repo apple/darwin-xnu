@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -92,6 +92,8 @@
 #include <libkern/OSAtomic.h>
 #include <libkern/OSDebug.h>
 #include <libkern/libkern.h>
+
+#include <os/log.h>
 
 #include <IOKit/IOMapper.h>
 
@@ -634,7 +636,6 @@ typedef struct {
 #define	m_minlimit(c)	mbuf_table[c].mtbl_minlimit
 #define	m_maxlimit(c)	mbuf_table[c].mtbl_maxlimit
 #define	m_wantpurge(c)	mbuf_table[c].mtbl_wantpurge
-#define	m_avgtotal(c)	mbuf_table[c].mtbl_avgtotal
 #define	m_cname(c)	mbuf_table[c].mtbl_stats->mbcl_cname
 #define	m_size(c)	mbuf_table[c].mtbl_stats->mbcl_size
 #define	m_total(c)	mbuf_table[c].mtbl_stats->mbcl_total
@@ -679,6 +680,13 @@ static mbuf_table_t mbuf_table[] = {
 };
 
 #define	NELEM(a)	(sizeof (a) / sizeof ((a)[0]))
+
+
+static uint32_t
+m_avgtotal(mbuf_class_t c)
+{
+	return (mbuf_table[c].mtbl_avgtotal);
+}
 
 static void *mb_waitchan = &mbuf_table;	/* wait channel for all caches */
 static int mb_waiters;			/* number of waiters */
@@ -5304,6 +5312,16 @@ m_pullup(struct mbuf *n, int len)
 	int count;
 	int space;
 
+	/* check invalid arguments */
+	if (n == NULL) {
+		 panic("%s: n == NULL", __func__);
+	}
+	if (len < 0) {
+		os_log_info(OS_LOG_DEFAULT, "%s: failed negative len %d",
+		    __func__, len);
+		goto bad;
+	}
+
 	/*
 	 * If first mbuf has no cluster, and has room for len bytes
 	 * without shifting current data, pullup into it,
@@ -6527,7 +6545,7 @@ mbuf_sleep(mbuf_class_t class, unsigned int num, int wait)
 	mb_waiters++;
 	m_region_expand(class) += m_total(class) + num;
 	/* wake up the worker thread */
-	if (class > MC_MBUF && mbuf_worker_ready &&
+	if (mbuf_worker_ready &&
 	    mbuf_worker_needs_wakeup) {
 		wakeup((caddr_t)&mbuf_worker_needs_wakeup);
 		mbuf_worker_needs_wakeup = FALSE;
@@ -6573,8 +6591,8 @@ mbuf_worker_thread(void)
 			}
 			m_region_expand(MC_CL) = 0;
 
-			if (n > 0 && freelist_populate(MC_CL, n, M_WAIT) > 0)
-				mbuf_expand++;
+			if (n > 0)
+				freelist_populate(MC_CL, n, M_WAIT);
 		}
 		if (m_region_expand(MC_BIGCL) > 0) {
 			int n;
@@ -6589,8 +6607,8 @@ mbuf_worker_thread(void)
 			}
 			m_region_expand(MC_BIGCL) = 0;
 
-			if (n > 0 && freelist_populate(MC_BIGCL, n, M_WAIT) > 0)
-				mbuf_expand++;
+			if (n > 0)
+				freelist_populate(MC_BIGCL, n, M_WAIT);
 		}
 		if (m_region_expand(MC_16KCL) > 0) {
 			int n;
@@ -6615,13 +6633,11 @@ mbuf_worker_thread(void)
 		 * mbufs -- otherwise we could have a large number of useless
 		 * clusters allocated.
 		 */
-		if (mbuf_expand) {
-			while (m_total(MC_MBUF) <
-			    (m_total(MC_BIGCL) + m_total(MC_CL))) {
-				mb_expand_cnt++;
-				if (freelist_populate(MC_MBUF, 1, M_WAIT) == 0)
-					break;
-			}
+		while (m_total(MC_MBUF) <
+		    (m_total(MC_BIGCL) + m_total(MC_CL) + m_total(MC_16KCL))) {
+			mb_expand_cnt++;
+			if (freelist_populate(MC_MBUF, 1, M_WAIT) == 0)
+				break;
 		}
 
 		mbuf_worker_needs_wakeup = TRUE;
@@ -8219,20 +8235,23 @@ static int mbtest_running;
 static void mbtest_thread(__unused void *arg)
 {
 	int i;
-
+	int scale_down = 1;
+	int iterations = 250;
+	int allocations = nmbclusters;
+	iterations = iterations / scale_down;
+	allocations = allocations / scale_down;
 	printf("%s thread starting\n", __func__);
-
-	for (i = 0; i < 1000; i++) {
-		unsigned int needed = 100000;
+	for (i = 0; i < iterations; i++) {
+		unsigned int needed = allocations;
 		struct mbuf *m1, *m2, *m3;
 
 		if (njcl > 0) {
-			needed = 100000;
+			needed = allocations;
 			m3 = m_getpackets_internal(&needed, 0, M_DONTWAIT, 0, M16KCLBYTES);
 			m_freem_list(m3);
 		}
 
-		needed = 100000;
+		needed = allocations;
 		m2 = m_getpackets_internal(&needed, 0, M_DONTWAIT, 0, MBIGCLBYTES);
 		m_freem_list(m2);
 

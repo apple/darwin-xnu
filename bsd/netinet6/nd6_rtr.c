@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -3072,10 +3072,12 @@ pfxlist_onlink_check(void)
 			} else {
 				NDPR_UNLOCK(ndpr);
 				IFA_LOCK(&ifa->ia_ifa);
-				ifa->ia6_flags |= IN6_IFF_DETACHED;
-				in6_event_enqueue_nwk_wq_entry(IN6_ADDR_MARKED_DETACHED,
-				    ifa->ia_ifa.ifa_ifp, &ifa->ia_addr.sin6_addr,
-				    0);
+				if ((ifa->ia6_flags & IN6_IFF_DETACHED) == 0) {
+					ifa->ia6_flags |= IN6_IFF_DETACHED;
+					in6_event_enqueue_nwk_wq_entry(IN6_ADDR_MARKED_DETACHED,
+					    ifa->ia_ifa.ifa_ifp, &ifa->ia_addr.sin6_addr,
+					    0);
+				}
 				IFA_UNLOCK(&ifa->ia_ifa);
 			}
 			NDPR_REMREF(ndpr);

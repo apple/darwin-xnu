@@ -297,6 +297,8 @@ struct tcp_notify_ack_complete {
 
 #define	TCP_RXT_MINIMUM_TIMEOUT_LIMIT	(5 * 60) /* Limit is 5 minutes */
 
+#define MPTCP_ALTERNATE_PORT		0x216
+
 /*
  * The TCP_INFO socket option is a private API and is subject to change
  */

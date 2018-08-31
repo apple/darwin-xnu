@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -811,7 +811,8 @@ again:
 	 * resolved, however right now we do not install more than one default
 	 * route per interface in the routing table.
 	 */
-	if (send_nc_failure_kev && ifp->if_addrlen == IF_LLREACH_MAXLEN) {
+	if (send_nc_failure_kev && ifp != NULL &&
+	    ifp->if_addrlen == IF_LLREACH_MAXLEN) {
 		struct kev_msg ev_msg;
 		struct kev_nd6_ndfailure nd6_ndfailure;
 		bzero(&ev_msg, sizeof(ev_msg));
@@ -1234,6 +1235,7 @@ again:
 addrloop:
 	lck_rw_lock_exclusive(&in6_ifaddr_rwlock);
 	for (ia6 = in6_ifaddrs; ia6; ia6 = nia6) {
+		int oldflags = ia6->ia6_flags;
 		ap->found++;
 		nia6 = ia6->ia_next;
 		IFA_LOCK(&ia6->ia_ifa);
@@ -1305,21 +1307,21 @@ addrloop:
 			ap->aging_lazy++;
 		IFA_LOCK_ASSERT_HELD(&ia6->ia_ifa);
 		if (IFA6_IS_DEPRECATED(ia6, timenow)) {
-			int oldflags = ia6->ia6_flags;
 			ia6->ia6_flags |= IN6_IFF_DEPRECATED;
 
-			/*
-			 * Only enqueue the Deprecated event when the address just
-			 * becomes deprecated.
-			 * Keep it limited to the stable address it is common for
-			 * older temporary addresses to get deprecated while we generate
-			 * new ones.
-			 */
-			if((oldflags & IN6_IFF_DEPRECATED) == 0 &&
-			    (ia6->ia6_flags & IN6_IFF_TEMPORARY) == 0) {
-				in6_event_enqueue_nwk_wq_entry(IN6_ADDR_MARKED_DEPRECATED,
-				    ia6->ia_ifa.ifa_ifp, &ia6->ia_addr.sin6_addr,
-				    0);
+			if((oldflags & IN6_IFF_DEPRECATED) == 0) {
+				/*
+				 * Only enqueue the Deprecated event when the address just
+				 * becomes deprecated.
+				 * Keep it limited to the stable address as it is common for
+				 * older temporary addresses to get deprecated while we generate
+				 * new ones.
+				 */
+				if ((ia6->ia6_flags & IN6_IFF_TEMPORARY) == 0) {
+					in6_event_enqueue_nwk_wq_entry(IN6_ADDR_MARKED_DEPRECATED,
+					    ia6->ia_ifa.ifa_ifp, &ia6->ia_addr.sin6_addr,
+					    0);
+				}
 			}
 			/*
 			 * If a temporary address has just become deprecated,

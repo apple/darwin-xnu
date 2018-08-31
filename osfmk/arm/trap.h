@@ -273,12 +273,6 @@ typedef kern_return_t (*perfCallback)(
 				uintptr_t *,
 				      int);
 
-typedef kern_return_t (*perfASTCallback)(ast_t reasons, ast_t *myast);
-
-extern volatile perfCallback perfTrapHook;
-extern volatile perfASTCallback perfASTHook;
-extern volatile perfCallback perfIntHook;
-
 #endif	/* !ASSEMBLER && MACH_KERNEL */
 
 #endif	/* _ARM_TRAP_H_ */

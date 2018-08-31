@@ -100,9 +100,6 @@ struct proc_regioninfo_internal {
 #define PROC_REGION_SUBMAP	1
 #define PROC_REGION_SHARED	2
 
-void  vm_map_region_top_walk(vm_map_entry_t entry, vm_region_top_info_t top);
-void vm_map_region_walk(vm_map_t map, vm_map_offset_t a, vm_map_entry_t entry, vm_object_offset_t offset, vm_object_size_t range, vm_region_extended_info_t extended);
-kern_return_t vnode_pager_get_object_vnode(memory_object_t mem_obj, uintptr_t * vnodeaddr, uint32_t * vid);
 extern uint32_t vnode_vid(void *vp);
 #if CONFIG_IOSCHED
 kern_return_t vnode_pager_get_object_devvp(memory_object_t mem_obj, uintptr_t *devvp);
