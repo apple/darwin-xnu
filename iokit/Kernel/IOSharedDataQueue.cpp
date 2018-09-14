@@ -175,7 +175,7 @@ IODataQueueEntry * IOSharedDataQueue::peek()
         UInt32              headOffset  = dataQueue->head;
         UInt32              queueSize   = getQueueSize();
 
-        if (headOffset >= queueSize) {
+        if (headOffset > queueSize) {
             return NULL;
         }
 
