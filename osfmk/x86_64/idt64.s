@@ -156,11 +156,53 @@ Entry(idt64_page_fault)
 	push	$(T_PAGE_FAULT)
 	jmp	L_dispatch
 
+/*
+ * #DB handler, which runs on IST1, will treat as spurious any #DB received while executing in the
+ * kernel while not on the kernel's gsbase.
+ */
 Entry(idt64_debug)
+	/* Synthesize common interrupt stack frame */
 	push	$0			/* error code */
 	pushq	$(HNDL_ALLTRAPS)
 	pushq	$(T_DEBUG)
-	jmp	L_dispatch
+	/* Spill prior to RDMSR */
+	push	%rax
+	push	%rcx
+	push	%rdx
+	mov	$(MSR_IA32_GS_BASE), %ecx
+	rdmsr					/* Check contents of GSBASE MSR */
+	test	$0x80000000, %edx		/* MSB set? Already swapped to kernel's */
+	jnz	1f
+
+	/*
+	 * If we're not already swapped to the kernel's gsbase AND this #DB originated from kernel space,
+	 * it must have happened within the very small window on entry or exit before or after (respectively)
+	 * swapgs occurred.  In those cases, consider the #DB spurious and immediately return.
+	 */
+	testb	$3, 8+8+8+ISF64_CS(%rsp)
+	jnz	2f
+	pop	%rdx
+	pop	%rcx
+	pop	%rax
+	addq	$0x18, %rsp	/* Remove synthesized interrupt stack frame */
+	jmp	EXT(ret64_iret)
+2:
+	swapgs					/* direct from user */
+1:
+	pop	%rdx
+
+	leaq	EXT(idt64_hndl_table0)(%rip), %rax
+	mov	16(%rax), %rax /* Offset of per-CPU shadow */
+	mov	%gs:CPU_TASK_CR3(%rax), %rax
+	mov	%rax, %cr3
+
+	pop	%rcx
+
+	/* Note that %rax will be popped from the stack in ks_dispatch, below */
+
+	leaq    EXT(idt64_hndl_table0)(%rip), %rax
+	jmp	*(%rax)
+
 /*
  * Legacy interrupt gate System call handlers.
  * These are entered via a syscall interrupt. The system call number in %rax

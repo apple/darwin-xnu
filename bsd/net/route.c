@@ -1926,6 +1926,9 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 		 * necp client watchers to re-evaluate
 		 */
 		if (SA_DEFAULT(rt_key(rt))) {
+			if (rt->rt_ifp != NULL) {
+				ifnet_touch_lastupdown(rt->rt_ifp);
+			}
 			necp_update_all_clients();
 		}
 #endif /* NECP */
@@ -2235,6 +2238,9 @@ makeroute:
 		 * necp client watchers to re-evaluate
 		 */
 		if (SA_DEFAULT(rt_key(rt))) {
+			if (rt->rt_ifp != NULL) {
+				ifnet_touch_lastupdown(rt->rt_ifp);
+			}
 			necp_update_all_clients();
 		}
 #endif /* NECP */

@@ -217,6 +217,58 @@ do { \
 	goto out;		/* XXX: we can't use 'break' here */ \
 } while (0)
 
+
+struct ifaddr *
+in6_selectsrc_core_ifa(struct sockaddr_in6 *addr, struct ifnet *ifp, int srcsel_debug) {
+	int err = 0;
+	struct ifnet *src_ifp = NULL;
+	struct in6_addr src_storage = {};
+	struct in6_addr *in6 = NULL;
+	struct ifaddr *ifa = NULL;
+
+	if((in6 = in6_selectsrc_core(addr,
+	    (ip6_prefer_tempaddr ? IPV6_SRCSEL_HINT_PREFER_TMPADDR : 0),
+	    ifp, 0, &src_storage, &src_ifp, &err, &ifa)) == NULL) {
+		if (err == 0)
+			err = EADDRNOTAVAIL;
+		VERIFY(src_ifp == NULL);
+		if (ifa != NULL) {
+			IFA_REMREF(ifa);
+			ifa = NULL;
+		}
+		goto done;
+	}
+
+	if (src_ifp != ifp) {
+		if (err == 0)
+			err = ENETUNREACH;
+		if (ifa != NULL) {
+			IFA_REMREF(ifa);
+			ifa = NULL;
+		}
+		goto done;
+	}
+
+	VERIFY(ifa != NULL);
+	ifnet_lock_shared(ifp);
+	if ((ifa->ifa_debug & IFD_DETACHING) != 0) {
+		err = EHOSTUNREACH;
+		ifnet_lock_done(ifp);
+		if (ifa != NULL) {
+			IFA_REMREF(ifa);
+			ifa = NULL;
+		}
+		goto done;
+	}
+	ifnet_lock_done(ifp);
+
+done:
+	SASEL_LOG("Returned with error: %d", err);
+	if (src_ifp != NULL)
+		ifnet_release(src_ifp);
+	return (ifa);
+}
+
 struct in6_addr *
 in6_selectsrc_core(struct sockaddr_in6 *dstsock, uint32_t hint_mask,
     struct ifnet *ifp, int srcsel_debug, struct in6_addr *src_storage,

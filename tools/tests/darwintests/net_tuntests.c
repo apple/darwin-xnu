@@ -314,26 +314,6 @@ create_sa(const char ifname[IFXNAMSIZ], uint8_t type, uint32_t spi, struct in_ad
 	T_QUIET; T_EXPECT_EQ(slen, (ssize_t)sizeof(addcmd), NULL);
 }
 
-/* Unfortunately, connect can return EBUSY due to:
- * <rdar://problem/33832735> Always return EBUSY if interface with the same name is in delayed detach even if the unique ID is different.
- *
- * We should fix that so we don't return EBUSY when we aren't
- * requesting a specific interface name, but until then workaround it
- * in the test.
- */
-
-static int
-try_connect(int socket, const struct sockaddr *address, socklen_t address_len)
-{
-	int ret;
-	while (1) {
-		ret = connect(socket, address, address_len);
-		if (ret != -1 || errno != EBUSY)
-			return ret;
-		sleep(1);
-	}
-}
-
 static int
 create_tunsock(int enable_netif, int enable_flowswitch, int enable_channel)
 {
@@ -342,6 +322,8 @@ create_tunsock(int enable_netif, int enable_flowswitch, int enable_channel)
 	struct sockaddr_ctl kernctl_addr;
 	uuid_t uuid;
 	socklen_t uuidlen;
+
+startover:
 
 	T_QUIET; T_EXPECT_POSIX_SUCCESS(tunsock = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL), NULL);
 
@@ -387,7 +369,17 @@ create_tunsock(int enable_netif, int enable_flowswitch, int enable_channel)
 	T_QUIET; T_EXPECT_EQ_ULONG((unsigned long )uuidlen, sizeof(uuid_t), NULL);
 	T_QUIET; T_EXPECT_TRUE(uuid_is_null(uuid), NULL);
 
-	T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(try_connect(tunsock, (struct sockaddr *)&kernctl_addr, sizeof(kernctl_addr)), NULL);
+	int error = connect(tunsock, (struct sockaddr *)&kernctl_addr, sizeof(kernctl_addr));
+	if (error == -1 && errno == EBUSY) {
+		/* XXX remove this retry nonsense when this is fixed:
+		 * <rdar://problem/37340313> creating an interface without specifying specific interface name should not return EBUSY
+		 */
+		close(tunsock);
+		T_LOG("connect got EBUSY, sleeping 1 second before retry");
+		sleep(1);
+		goto startover;
+	}
+	T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(error, "connect()");
 
 	T_QUIET; T_EXPECT_POSIX_FAILURE(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_NETIF,
 			&enable_netif, sizeof(enable_netif)), EINVAL, NULL);

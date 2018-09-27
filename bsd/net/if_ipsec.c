@@ -196,7 +196,7 @@ struct ipsec_pcb {
 	u_int32_t			ipsec_tx_fsw_ring_size;
 	u_int32_t			ipsec_rx_fsw_ring_size;
 	bool				ipsec_use_netif;
-
+	bool				ipsec_needs_netagent;
 #endif // IPSEC_NEXUS
 };
 
@@ -368,6 +368,24 @@ ipsec_interface_isvalid (ifnet_t interface)
         return 0;
     
     return 1;
+}
+
+boolean_t
+ipsec_interface_needs_netagent(ifnet_t interface)
+{
+	struct ipsec_pcb *pcb = NULL;
+
+	if (interface == NULL) {
+		return (FALSE);
+	}
+
+	pcb = ifnet_softc(interface);
+
+	if (pcb == NULL) {
+		return (FALSE);
+	}
+
+	return (pcb->ipsec_needs_netagent == true);
 }
 
 static errno_t
@@ -2755,9 +2773,11 @@ ipsec_ctl_setopt(__unused kern_ctl_ref	kctlref,
 			}
 
 			if (*(int *)data) {
-					if_add_netagent(pcb->ipsec_ifp, pcb->ipsec_nx.ms_agent);
+				if_add_netagent(pcb->ipsec_ifp, pcb->ipsec_nx.ms_agent);
+				pcb->ipsec_needs_netagent = true;
 			} else {
-					if_delete_netagent(pcb->ipsec_ifp, pcb->ipsec_nx.ms_agent);
+				pcb->ipsec_needs_netagent = false;
+				if_delete_netagent(pcb->ipsec_ifp, pcb->ipsec_nx.ms_agent);
 			}
 			break;
 		}

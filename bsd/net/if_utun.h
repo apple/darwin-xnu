@@ -37,6 +37,7 @@
 void* utun_alloc(size_t size);
 void utun_free(void *ptr);
 errno_t utun_register_control(void);
+boolean_t utun_interface_needs_netagent(ifnet_t interface);
 
 #endif
 

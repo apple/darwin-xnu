@@ -177,6 +177,7 @@ SYSCTL_INT(_net_necp, NECPCTL_IF_FLOW_COUNT, if_flow_count, CTLFLAG_LOCKED | CTL
 SYSCTL_INT(_net_necp, NECPCTL_OBSERVER_MESSAGE_LIMIT, observer_message_limit, CTLFLAG_LOCKED | CTLFLAG_RW, &necp_observer_message_limit, 256, "");
 
 #define NECP_MAX_CLIENT_LIST_SIZE 		1024 * 1024 // 1MB
+#define NECP_MAX_AGENT_ACTION_SIZE 		256
 
 extern int tvtohz(struct timeval *);
 extern unsigned int get_maxmtu(struct rtentry *);
@@ -2347,6 +2348,16 @@ necp_update_client_result(proc_t proc,
 		interface_struct.generation = ifnet_get_generation(direct_interface);
 		cursor = necp_buffer_write_tlv_if_different(cursor, NECP_CLIENT_RESULT_INTERFACE, sizeof(interface_struct), &interface_struct, &updated,
 													client->result, sizeof(client->result));
+
+		// Set the delta time since interface up/down
+		struct timeval updown_delta = {};
+		if (ifnet_updown_delta(direct_interface, &updown_delta) == 0) {
+			u_int32_t delta = updown_delta.tv_sec;
+			bool ignore_updated = FALSE;
+			cursor = necp_buffer_write_tlv_if_different(cursor, NECP_CLIENT_RESULT_INTERFACE_TIME_DELTA,
+														sizeof(delta), &delta, &ignore_updated,
+														client->result, sizeof(client->result));
+		}
 	}
 	if (delegate_interface != NULL) {
 		struct necp_client_result_interface interface_struct;
@@ -4066,6 +4077,12 @@ necp_client_agent_action(struct necp_fd_data *fd_data, struct necp_client_action
 	error = copyin(uap->client_id, client_id, sizeof(uuid_t));
 	if (error) {
 		NECPLOG(LOG_ERR, "necp_client_agent_action copyin client_id error (%d)", error);
+		goto done;
+	}
+
+	if (uap->buffer_size > NECP_MAX_AGENT_ACTION_SIZE) {
+		NECPLOG(LOG_ERR, "necp_client_agent_action invalid buffer size (>%u)", NECP_MAX_AGENT_ACTION_SIZE);
+		error = EINVAL;
 		goto done;
 	}
 

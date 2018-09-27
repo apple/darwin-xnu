@@ -386,6 +386,7 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 			& 0xFF000000) | ((flags) & 0xFFFFFF));
 
 /* leave room for vm_prot bits (0xFF ?) */
+#define MAP_MEM_LEDGER_TAG_NETWORK 0x002000 /* charge to "network" ledger */
 #define MAP_MEM_PURGABLE_KERNEL_ONLY 0x004000 /* volatility controlled by kernel */
 #define MAP_MEM_GRAB_SECLUDED	0x008000 /* can grab secluded pages */
 #define MAP_MEM_ONLY		0x010000 /* change processor caching  */
@@ -409,6 +410,9 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 	MAP_MEM_VM_COPY |				   \
 	MAP_MEM_VM_SHARE |				   \
 	MAP_MEM_4K_DATA_ADDR)
+#define MAP_MEM_FLAGS_ALL (			\
+	MAP_MEM_LEDGER_TAG_NETWORK |		\
+	MAP_MEM_FLAGS_USER)
 
 #ifdef KERNEL
 

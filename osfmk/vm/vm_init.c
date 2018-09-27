@@ -113,12 +113,31 @@ vm_mem_bootstrap_log(const char *message)
  *	This is done only by the first cpu up.
  */
 
+int pacified_footprint_suspend = 0;
+int pacified_purgeable_iokit = 0;
+
 void
 vm_mem_bootstrap(void)
 {
 	vm_offset_t	start, end;
 	vm_size_t zsizearg;
 	mach_vm_size_t zsize;
+	int pacified;
+
+	pacified = 0;
+	PE_parse_boot_argn("pacified",
+			   &pacified,
+			   sizeof (pacified));
+	if (pacified) {
+		pacified_footprint_suspend = 1;
+		pacified_purgeable_iokit = 1;
+	}
+	PE_parse_boot_argn("pacified_footprint_suspend",
+			   &pacified_footprint_suspend,
+			   sizeof (pacified_footprint_suspend));
+	PE_parse_boot_argn("pacified_purgeable_iokit",
+			   &pacified_purgeable_iokit,
+			   sizeof (pacified_purgeable_iokit));
 
 	/*
 	 *	Initializes resident memory structures.

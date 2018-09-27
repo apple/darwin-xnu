@@ -91,6 +91,7 @@ extern int net_qos_guideline(struct net_qos_param *param, size_t param_len);
 
 extern int net_qos_policy_restricted;
 extern int net_qos_policy_wifi_enabled;
+extern int net_qos_policy_none_wifi_enabled;
 extern int net_qos_policy_capable_enabled;
 
 extern void net_qos_map_init(void);

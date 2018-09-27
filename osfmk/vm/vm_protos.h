@@ -589,6 +589,14 @@ extern void 		memory_object_mark_eligible_for_secluded(
 
 #define MAX_PAGE_RANGE_QUERY	(1ULL * 1024 * 1024 * 1024) /* 1 GB */
 
+extern kern_return_t mach_make_memory_entry_internal(
+	vm_map_t		target_map,
+	memory_object_size_t	*size,
+	memory_object_offset_t offset,
+	vm_prot_t		permission,
+	ipc_port_t		*object_handle,
+	ipc_port_t		parent_handle);
+
 #ifdef __cplusplus
 }
 #endif

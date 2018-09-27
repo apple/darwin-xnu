@@ -1139,7 +1139,26 @@ next:
 
 /*
  * Find an interface address specific to an interface best matching
- * a given address.
+ * a given address applying same source address selection rules
+ * as done in the kernel for implicit source address binding
+ */
+struct ifaddr *
+ifaof_ifpforaddr_select(const struct sockaddr *addr, struct ifnet *ifp)
+{
+	u_int af = addr->sa_family;
+
+	if (af == AF_INET6)
+		return (in6_selectsrc_core_ifa(__DECONST(struct sockaddr_in6 *, addr), ifp, 0));
+
+	return (ifaof_ifpforaddr(addr, ifp));
+}
+
+/*
+ * Find an interface address specific to an interface best matching
+ * a given address without regards to source address selection.
+ *
+ * This is appropriate for use-cases where we just want to update/init
+ * some data structure like routing table entries.
  */
 struct ifaddr *
 ifaof_ifpforaddr(const struct sockaddr *addr, struct ifnet *ifp)
@@ -1311,6 +1330,7 @@ if_updown( struct ifnet *ifp, int up)
 	}
 
 	ifnet_touch_lastchange(ifp);
+	ifnet_touch_lastupdown(ifp);
 
 	/* Drop the lock to notify addresses and route */
 	ifnet_lock_done(ifp);

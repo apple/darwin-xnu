@@ -400,6 +400,7 @@ Lel1_sp1_serror_vector_long:
 	b		fleh_dispatch64
 
 .macro EL0_64_VECTOR
+	mov		x18, xzr						// Zero x18 to avoid leaking data to user SS
 	stp		x0, x1, [sp, #-16]!					// Save x0 and x1 to the exception stack
 	mrs		x0, TPIDR_EL1						// Load the thread register
 	mrs		x1, SP_EL0							// Load the user stack pointer

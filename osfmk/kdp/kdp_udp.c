@@ -1363,7 +1363,7 @@ kdp_debugger_loop(
 		if (kdp_flag & REBOOT_POST_CORE && dumped_kernel_core())
 			kdp_machine_reboot();
 	} else {
-		if ((kdp_flag & PANIC_CORE_ON_NMI) && panic_active()
+		if ((kdp_flag & PANIC_CORE_ON_NMI) && !panic_active()
 			&& !kdp.is_conn) {
 
 			disableConsoleOutput = FALSE;

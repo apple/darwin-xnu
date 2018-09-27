@@ -40,6 +40,7 @@ errno_t ipsec_register_control(void);
 
 /* Helpers */
 int ipsec_interface_isvalid (ifnet_t interface);
+boolean_t ipsec_interface_needs_netagent(ifnet_t interface);
 
 errno_t ipsec_inject_inbound_packet(ifnet_t	interface, mbuf_t packet);
 

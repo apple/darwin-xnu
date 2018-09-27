@@ -511,12 +511,14 @@ IOGetVolumeCryptKey(dev_t block_dev,  OSString ** pKeyUUID,
     OSString *       keyStoreUUID = 0;
     uuid_t           volumeKeyUUID;
     aks_volume_key_t vek;
+    size_t           callerKeySize;
 
     static IOService * sKeyStore;
 
     part = IOCopyMediaForDev(block_dev);
     if (!part) return (kIOReturnNotFound);
 
+    callerKeySize = *keySize;
     // Try APFS first
     {
         uuid_t volUuid = {0};
@@ -562,7 +564,7 @@ IOGetVolumeCryptKey(dev_t block_dev,  OSString ** pKeyUUID,
             IOLog("volume key err 0x%x\n", err);
         else
         {
-            if (vek.key.keybytecount < *keySize) *keySize = vek.key.keybytecount;
+            if (vek.key.keybytecount <= callerKeySize) *keySize = vek.key.keybytecount;
             bcopy(&vek.key.keybytes[0], volumeCryptKey, *keySize);
         }
         bzero(&vek, sizeof(vek));

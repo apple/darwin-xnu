@@ -319,6 +319,11 @@ mptcp_usr_connectx(struct socket *mp_so, struct sockaddr *src,
 		goto out;
 	}
 
+	if (dst->sa_family != AF_INET && dst->sa_family != AF_INET6) {
+		error = EAFNOSUPPORT;
+		goto out;
+	}
+
 	if (dst->sa_family == AF_INET &&
 	    dst->sa_len != sizeof(mpte->__mpte_dst_v4)) {
 		mptcplog((LOG_ERR, "%s IPv4 dst len %u\n", __func__,
@@ -351,6 +356,11 @@ mptcp_usr_connectx(struct socket *mp_so, struct sockaddr *src,
 	}
 
 	if (src) {
+		if (src->sa_family != AF_INET && src->sa_family != AF_INET6) {
+			error = EAFNOSUPPORT;
+			goto out;
+		}
+
 		if (src->sa_family == AF_INET &&
 		    src->sa_len != sizeof(mpte->__mpte_src_v4)) {
 			mptcplog((LOG_ERR, "%s IPv4 src len %u\n", __func__,

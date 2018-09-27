@@ -2193,6 +2193,32 @@ mach_make_memory_entry_64(
 	ipc_port_t		*object_handle,
 	ipc_port_t		parent_handle)
 {
+	if ((permission & MAP_MEM_FLAGS_MASK) & ~MAP_MEM_FLAGS_USER) {
+		/*
+		 * Unknown flag: reject for forward compatibility.
+		 */
+		return KERN_INVALID_VALUE;
+	}
+
+	return mach_make_memory_entry_internal(target_map,
+					       size,
+					       offset,
+					       permission,
+					       object_handle,
+					       parent_handle);
+}
+
+extern int pacified_purgeable_iokit;
+
+kern_return_t
+mach_make_memory_entry_internal(
+	vm_map_t		target_map,
+	memory_object_size_t	*size,
+	memory_object_offset_t offset,
+	vm_prot_t		permission,
+	ipc_port_t		*object_handle,
+	ipc_port_t		parent_handle)
+{
 	vm_map_version_t	version;
 	vm_named_entry_t	parent_entry;
 	vm_named_entry_t	user_entry;
@@ -2234,7 +2260,7 @@ mach_make_memory_entry_64(
 	boolean_t 		use_data_addr;
 	boolean_t 		use_4K_compat;
 
-	if ((permission & MAP_MEM_FLAGS_MASK) & ~MAP_MEM_FLAGS_USER) {
+	if ((permission & MAP_MEM_FLAGS_MASK) & ~MAP_MEM_FLAGS_ALL) {
 		/*
 		 * Unknown flag: reject for forward compatibility.
 		 */
@@ -2344,12 +2370,22 @@ mach_make_memory_entry_64(
 			assert(object->resident_page_count == 0);
 			assert(object->wired_page_count == 0);
 			vm_object_lock(object);
-			if (object->purgeable_only_by_kernel) {
-				vm_purgeable_nonvolatile_enqueue(object,
-								 kernel_task);
+			if (pacified_purgeable_iokit) {
+				if (permission & MAP_MEM_LEDGER_TAG_NETWORK) {
+					vm_purgeable_nonvolatile_enqueue(object,
+									 kernel_task);
+				} else {
+					vm_purgeable_nonvolatile_enqueue(object,
+									 current_task());
+				}
 			} else {
-				vm_purgeable_nonvolatile_enqueue(object,
-								 current_task());
+				if (object->purgeable_only_by_kernel) {
+					vm_purgeable_nonvolatile_enqueue(object,
+									 kernel_task);
+				} else {
+					vm_purgeable_nonvolatile_enqueue(object,
+									 current_task());
+				}
 			}
 			vm_object_unlock(object);
 		}

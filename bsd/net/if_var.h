@@ -688,6 +688,7 @@ struct if_data_internal {
 	u_int64_t	ifi_fpackets;	/* forwarded packets on interface */
 	u_int64_t	ifi_fbytes;	/* forwarded bytes on interface */
 	struct	timeval ifi_lastchange;	/* time of last administrative change */
+	struct	timeval ifi_lastupdown;	/* time of last up/down event */
 	u_int32_t	ifi_hwassist;	/* HW offload capabilities */
 	u_int32_t	ifi_tso_v4_mtu;	/* TCP Segment Offload IPv4 maximum segment size */
 	u_int32_t	ifi_tso_v6_mtu;	/* TCP Segment Offload IPv6 maximum segment size */
@@ -726,6 +727,7 @@ struct if_data_internal {
 #define	if_dt_bytes	if_data.ifi_dt_bytes
 #define	if_fpackets	if_data.ifi_fpackets
 #define	if_fbytes	if_data.ifi_fbytes
+#define	if_lastupdown	if_data.ifi_lastupdown
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -1503,6 +1505,7 @@ extern struct	ifaddr *ifa_ifwithroute_locked(int, const struct sockaddr *,
     const struct sockaddr *);
 extern struct ifaddr *ifa_ifwithroute_scoped_locked(int,
     const struct sockaddr *, const struct sockaddr *, unsigned int);
+extern struct ifaddr *ifaof_ifpforaddr_select(const struct sockaddr *, struct ifnet *);
 extern struct ifaddr *ifaof_ifpforaddr(const struct sockaddr *, struct ifnet *);
 __private_extern__ struct ifaddr *ifa_ifpgetprimary(struct ifnet *, int);
 extern void ifa_addref(struct ifaddr *, int);

@@ -2290,6 +2290,10 @@ extern uint32_t vm_page_pages;
 SYSCTL_UINT(_vm, OID_AUTO, pages, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_pages, 0, "");
 
 #if (__arm__ || __arm64__) && (DEVELOPMENT || DEBUG)
+extern int pacified_footprint_suspend;
+int footprint_suspend_allowed = 0;
+SYSCTL_INT(_vm, OID_AUTO, footprint_suspend_allowed, CTLFLAG_RW | CTLFLAG_LOCKED, &footprint_suspend_allowed, 0, "");
+
 extern void pmap_footprint_suspend(vm_map_t map, boolean_t suspend);
 static int
 sysctl_vm_footprint_suspend SYSCTL_HANDLER_ARGS
@@ -2305,7 +2309,20 @@ sysctl_vm_footprint_suspend SYSCTL_HANDLER_ARGS
 	if (error) {
 		return error;
 	}
+	if (pacified_footprint_suspend &&
+	    !footprint_suspend_allowed) {
+		if (new_value != 0) {
+			/* suspends are not allowed... */
+			return 0;
+		}
+		/* ... but let resumes proceed */
+	}
+	DTRACE_VM2(footprint_suspend,
+		   vm_map_t, current_map(),
+		   int, new_value);
+
 	pmap_footprint_suspend(current_map(), new_value);
+
 	return 0;
 }
 SYSCTL_PROC(_vm, OID_AUTO, footprint_suspend,

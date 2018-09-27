@@ -508,6 +508,7 @@ copy_mbuf(struct mbuf *m)
 	}
 	mbuf_setlen(copy_m, pkt_len);
 	copy_m->m_pkthdr.len = pkt_len;
+	copy_m->m_pkthdr.pkt_svc = m->m_pkthdr.pkt_svc;
 	offset = 0;
 	while (m != NULL && offset < pkt_len) {
 		uint32_t	frag_len;

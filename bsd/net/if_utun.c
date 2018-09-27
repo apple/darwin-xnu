@@ -114,6 +114,7 @@ struct utun_pcb {
 	u_int32_t		utun_tx_fsw_ring_size;
 	u_int32_t		utun_rx_fsw_ring_size;
 	bool			utun_use_netif;
+	bool			utun_needs_netagent;
 #endif // UTUN_NEXUS
 };
 
@@ -2083,7 +2084,9 @@ utun_ctl_setopt(__unused kern_ctl_ref kctlref,
 
 			if (*(int *)data) {
 				if_add_netagent(pcb->utun_ifp, pcb->utun_nx.ms_agent);
+				pcb->utun_needs_netagent = true;
 			} else {
+				pcb->utun_needs_netagent = false;
 				if_delete_netagent(pcb->utun_ifp, pcb->utun_nx.ms_agent);
 			}
 			break;
@@ -2793,6 +2796,23 @@ utun_register_nexus(void)
 		return (err);
 	}
 	return (0);
+}
+boolean_t
+utun_interface_needs_netagent(ifnet_t interface)
+{
+	struct utun_pcb *pcb = NULL;
+
+	if (interface == NULL) {
+		return (FALSE);
+	}
+
+	pcb = ifnet_softc(interface);
+
+	if (pcb == NULL) {
+		return (FALSE);
+	}
+
+	return (pcb->utun_needs_netagent == true);
 }
 
 static errno_t

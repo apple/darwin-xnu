@@ -567,7 +567,14 @@ IOGeneralMemoryDescriptor::memoryReferenceCreate(
 	{
 	    // IOBufferMemoryDescriptor alloc - set flags for entry + object create
 	    prot |= MAP_MEM_NAMED_CREATE;
-	    if (kIOMemoryBufferPurgeable & _flags) prot |= (MAP_MEM_PURGABLE | MAP_MEM_PURGABLE_KERNEL_ONLY);
+	    if (kIOMemoryBufferPurgeable & _flags)
+	    {
+		prot |= (MAP_MEM_PURGABLE | MAP_MEM_PURGABLE_KERNEL_ONLY);
+		if (VM_KERN_MEMORY_SKYWALK == tag)
+		{
+		    prot |= MAP_MEM_LEDGER_TAG_NETWORK;
+		}
+	    }
 	    if (kIOMemoryUseReserve & _flags)      prot |= MAP_MEM_GRAB_SECLUDED;
 
 	    prot |= VM_PROT_WRITE;
@@ -604,7 +611,7 @@ IOGeneralMemoryDescriptor::memoryReferenceCreate(
 		    else                                                  prot &= ~MAP_MEM_NAMED_REUSE;
 		}
 
-		err = mach_make_memory_entry_64(map,
+		err = mach_make_memory_entry_internal(map,
 			&actualSize, entryAddr, prot, &entry, cloneEntry);
 
 		if (KERN_SUCCESS != err) break;

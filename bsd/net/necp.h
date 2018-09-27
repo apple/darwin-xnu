@@ -502,6 +502,7 @@ typedef struct necp_cache_buffer {
 #define	NECP_CLIENT_RESULT_TFO_COOKIE					13		// NECP_TFO_COOKIE_LEN_MAX
 #define	NECP_CLIENT_RESULT_TFO_FLAGS					14		// u_int8_t
 #define	NECP_CLIENT_RESULT_RECOMMENDED_MSS				15		// u_int8_t
+#define	NECP_CLIENT_RESULT_INTERFACE_TIME_DELTA			17		// u_int32_t, seconds since interface up/down
 
 #define	NECP_CLIENT_RESULT_NEXUS_INSTANCE				100		// uuid_t
 #define	NECP_CLIENT_RESULT_NEXUS_PORT					101		// u_int16_t

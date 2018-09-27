@@ -1312,7 +1312,7 @@ mptcp_subflow_socreate(struct mptses *mpte, struct mptsub *mpts, int dom,
 	mpte_lock(mpte);
 	if (error) {
 		mptcplog((LOG_ERR, "%s: subflow socreate mp_so 0x%llx unable to create subflow socket error %d\n",
-			  (u_int64_t)VM_KERNEL_ADDRPERM(mp_so), error),
+			  __func__, (u_int64_t)VM_KERNEL_ADDRPERM(mp_so), error),
 			 MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 
 		proc_rele(p);

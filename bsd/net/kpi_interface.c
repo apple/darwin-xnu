@@ -1704,6 +1704,35 @@ ifnet_lastchange(ifnet_t interface, struct timeval *last_change)
 }
 
 errno_t
+ifnet_touch_lastupdown(ifnet_t interface)
+{
+	if (interface == NULL) {
+		return (EINVAL);
+	}
+
+	TOUCHLASTCHANGE(&interface->if_lastupdown);
+
+	return (0);
+}
+
+errno_t
+ifnet_updown_delta(ifnet_t interface, struct timeval *updown_delta)
+{
+	if (interface == NULL) {
+		return (EINVAL);
+	}
+
+	/* Calculate the delta */
+	updown_delta->tv_sec = net_uptime();
+	if (updown_delta->tv_sec > interface->if_data.ifi_lastupdown.tv_sec) {
+		updown_delta->tv_sec -= interface->if_data.ifi_lastupdown.tv_sec;
+	}
+	updown_delta->tv_usec = 0;
+
+	return (0);
+}
+
+errno_t
 ifnet_get_address_list(ifnet_t interface, ifaddr_t **addresses)
 {
 	return (addresses == NULL ? EINVAL :
@@ -2441,7 +2470,7 @@ ifaddr_findbestforaddr(const struct sockaddr *addr, ifnet_t interface)
 	if (addr == NULL || interface == NULL)
 		return (NULL);
 
-	return (ifaof_ifpforaddr(addr, interface));
+	return (ifaof_ifpforaddr_select(addr, interface));
 }
 
 errno_t

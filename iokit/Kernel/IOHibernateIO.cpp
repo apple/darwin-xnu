@@ -1890,7 +1890,7 @@ hibernate_write_image(void)
 	    if (kUnwiredEncrypt == pageType)
 	   {
 		// start unwired image
-		if (kIOHibernateModeEncrypt & gIOHibernateMode)
+		if (!vars->hwEncrypt && (kIOHibernateModeEncrypt & gIOHibernateMode))
 		{
 		    vars->fileVars->encryptStart = (vars->fileVars->position & ~(((uint64_t)AES_BLOCK_SIZE) - 1));
 		    vars->fileVars->encryptEnd   = UINT64_MAX;
@@ -2388,6 +2388,7 @@ hibernate_machine_init(void)
 		&vars->volumeCryptKey[0], vars->volumeCryptKeySize);
 	HIBLOG("IOPolledFilePollersSetEncryptionKey(%x)\n", err);
 	if (kIOReturnSuccess != err) panic("IOPolledFilePollersSetEncryptionKey(0x%x)", err);
+	cryptvars = 0;
     }
 
     IOPolledFileSeek(vars->fileVars, gIOHibernateCurrentHeader->image1Size);

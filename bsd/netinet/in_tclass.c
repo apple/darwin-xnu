@@ -117,6 +117,10 @@ int net_qos_policy_wifi_enabled = 0;
 SYSCTL_INT(_net_qos_policy, OID_AUTO, wifi_enabled,
     CTLFLAG_RW | CTLFLAG_LOCKED, &net_qos_policy_wifi_enabled, 0, "");
 
+int net_qos_policy_none_wifi_enabled = 0;
+SYSCTL_INT(_net_qos_policy, OID_AUTO, none_wifi_enabled,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &net_qos_policy_none_wifi_enabled, 0, "");
+
 int net_qos_policy_capable_enabled = 0;
 SYSCTL_INT(_net_qos_policy, OID_AUTO, capable_enabled,
     CTLFLAG_RW | CTLFLAG_LOCKED, &net_qos_policy_capable_enabled, 0, "");

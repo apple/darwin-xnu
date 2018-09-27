@@ -3556,6 +3556,23 @@ extern errno_t ifnet_get_buffer_status(const ifnet_t interface,
  */
 extern void ifnet_normalise_unsent_data(void);
 
+/*!
+ @function ifnet_touch_lastupdown
+ @discussion Updates the lastupdown value to now.
+ @param interface The interface.
+ @result 0 on success otherwise the errno error.
+ */
+extern errno_t ifnet_touch_lastupdown(ifnet_t interface);
+
+/*!
+ @function ifnet_updown_delta
+ @discussion Retrieves the difference between lastupdown and now.
+ @param interface The interface.
+ @param updown_delta A timeval struct to copy the delta between lastupdown and now.
+ to.
+ */
+extern errno_t ifnet_updown_delta(ifnet_t interface, struct timeval *updown_delta);
+
 #endif /* KERNEL_PRIVATE */
 
 __END_DECLS

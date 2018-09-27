@@ -27,7 +27,7 @@
  */
 
 TRAP(0x00,idt64_zero_div)
-TRAP_SPC(0x01,idt64_debug)
+TRAP_IST1(0x01,idt64_debug)
 TRAP_IST2(0x02,idt64_nmi)
 USER_TRAP(0x03,idt64_int3)
 USER_TRAP(0x04,idt64_into)

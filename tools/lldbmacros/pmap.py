@@ -118,7 +118,7 @@ def KDPWritePhysMEM(address, intval, bits):
     if not WriteInt32ToMemoryAddress(0, input_address):
         return False
 
-    kdp_pkt_size = GetType('kdp_writephysmem64_req_t').GetByteSize()
+    kdp_pkt_size = GetType('kdp_writephysmem64_req_t').GetByteSize() + (bits / 8)
     if not WriteInt32ToMemoryAddress(kdp_pkt_size, len_address):
         return False
 

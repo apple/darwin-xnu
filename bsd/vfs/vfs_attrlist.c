@@ -1142,6 +1142,27 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: buffer size too large (%d limit %d)", ab.allocated, ATTR_MAX_BUFFER);
 		goto out;
 	}
+
+	if (return_valid &&
+	    (ab.allocated < (ssize_t)(sizeof(uint32_t) + sizeof(attribute_set_t))) &&
+	    !(options & FSOPT_REPORT_FULLSIZE)) {
+		uint32_t num_bytes_valid = sizeof(uint32_t);
+		/*
+		 * Not enough to return anything and we don't have to report
+		 * how much space is needed. Get out now.
+		 * N.B. - We have only been called after having verified that
+		 * attributeBuffer is at least sizeof(uint32_t);
+		 */
+		if (UIO_SEG_IS_USER_SPACE(segflg)) {
+			error = copyout(&num_bytes_valid,
+			    CAST_USER_ADDR_T(attributeBuffer), num_bytes_valid);
+		} else {
+			bcopy(&num_bytes_valid, (void *)attributeBuffer,
+			    (size_t)num_bytes_valid);
+		}
+		goto out;
+	}
+
 	MALLOC(ab.base, char *, ab.allocated, M_TEMP, M_ZERO | M_WAITOK);
 	if (ab.base == NULL) {
 		error = ENOMEM;
@@ -1457,9 +1478,10 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 	 * they gave us, so they can always check for truncation themselves.
 	 */
 	*(uint32_t *)ab.base = (options & FSOPT_REPORT_FULLSIZE) ? ab.needed : imin(ab.allocated, ab.needed);
-	
+
 	/* Return attribute set output if requested. */
-	if (return_valid) {
+	if (return_valid &&
+	    (ab.allocated >= (ssize_t)(sizeof(uint32_t) + sizeof(ab.actual)))) {
 		ab.actual.commonattr |= ATTR_CMN_RETURNED_ATTRS;
 		if (pack_invalid) {
 			/* Only report the attributes that are valid */
@@ -2774,6 +2796,9 @@ getattrlist_internal(vfs_context_t ctx, vnode_t vp, struct attrlist  *alp,
 	char uio_buf[ UIO_SIZEOF(1)];
 	// must be true for fork attributes to be used as new common attributes
 	const int use_fork = (options & FSOPT_ATTR_CMN_EXTENDED) != 0;
+
+	if (bufferSize < sizeof(uint32_t))
+		return (ERANGE);
 
 	proc_is64 = proc_is64bit(vfs_context_proc(ctx));
 

@@ -1627,6 +1627,10 @@ vm_purgeable_accounting(
 				     task_ledgers.phys_footprint,
 				     ptoa(wired_page_count));
 
+			/* no more accounting for this dead object */
+			if (! task_objq_locked) {
+				task_objq_lock(owner);
+			}
 			if (!disown_on_the_fly &&
 			    (object->purgeable_queue_type ==
 			     PURGEABLE_Q_TYPE_MAX)) {
@@ -1639,20 +1643,15 @@ vm_purgeable_accounting(
 				/* on a volatile queue */
 				vm_purgeable_volatile_owner_update(owner, -1);
 			}
-			/* no more accounting for this dead object */
-			owner = object->vo_purgeable_owner;
-			if (! task_objq_locked) {
-				task_objq_lock(owner);
-			}
 			task_objq_lock_assert_owned(owner);
 			queue_remove(&owner->task_objq, object, vm_object_t, task_objq);
-			if (! task_objq_locked) {
-				task_objq_unlock(owner);
-			}
 			object->vo_purgeable_owner = NULL;
 #if DEBUG
 			object->vo_purgeable_volatilizer = NULL;
 #endif /* DEBUG */
+			if (! task_objq_locked) {
+				task_objq_unlock(owner);
+			}
 			return;
 		}
 
@@ -1697,25 +1696,25 @@ vm_purgeable_accounting(
 				     task_ledgers.phys_footprint,
 				     ptoa(wired_page_count));
 
+			/* no more accounting for this dead object */
+			if (! task_objq_locked) {
+				task_objq_lock(owner);
+			}
 			/* one less "non-volatile" object for the owner */
 			if (!disown_on_the_fly) {
 				assert(object->purgeable_queue_type ==
 				       PURGEABLE_Q_TYPE_MAX);
 			}
 			vm_purgeable_nonvolatile_owner_update(owner, -1);
-			/* no more accounting for this dead object */
-			if (! task_objq_locked) {
-				task_objq_lock(owner);
-			}
 			task_objq_lock_assert_owned(owner);
 			queue_remove(&owner->task_objq, object, vm_object_t, task_objq);
-			if (! task_objq_locked) {
-				task_objq_unlock(owner);
-			}
 			object->vo_purgeable_owner = NULL;
 #if DEBUG
 			object->vo_purgeable_volatilizer = NULL;
 #endif /* DEBUG */
+			if (! task_objq_locked) {
+				task_objq_unlock(owner);
+			}
 			return;
 		}
 		/* more volatile bytes in ledger */

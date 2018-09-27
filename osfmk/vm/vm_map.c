@@ -16356,7 +16356,7 @@ vm_map_page_range_info_internal(
 			} else if (pmap_disp & (PMAP_QUERY_PAGE_ALTACCT |
 						PMAP_QUERY_PAGE_COMPRESSED_ALTACCT)) {
 				/* alternate accounting */
-				assertf(!map_entry->use_pmap, "offset 0x%llx map_entry %p", (uint64_t) curr_s_offset, map_entry);
+//				assertf(!map_entry->use_pmap, "offset 0x%llx map_entry %p", (uint64_t) curr_s_offset, map_entry);
 				pmap_disp = 0;
 			} else {
 				if (pmap_disp & PMAP_QUERY_PAGE_PRESENT) {

@@ -628,6 +628,7 @@ kernel_bootstrap_thread(void)
 
 
 
+
 	/*
 	 *	Start the user bootstrap.
 	 */
