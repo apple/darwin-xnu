@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -659,9 +659,14 @@ kernel_trap(
 		return;
 
 	    case T_SSE_FLOAT_ERROR:
-	        fpSSEexterrflt();
+		fpSSEexterrflt();
 		return;
- 	    case T_DEBUG:
+
+	    case T_INVALID_OPCODE:
+		fpUDflt(kern_ip);
+		goto debugger_entry;
+
+	    case T_DEBUG:
 		    if ((saved_state->isf.rflags & EFL_TF) == 0 && NO_WATCHPOINTS)
 		    {
 			    /* We've somehow encountered a debug
@@ -673,10 +678,8 @@ kernel_trap(
 			    return;
 		    }
 		    goto debugger_entry;
-#ifdef __x86_64__
 	    case T_INT3:
 	      goto debugger_entry;
-#endif
 	    case T_PAGE_FAULT:
 
 #if CONFIG_DTRACE
@@ -855,6 +858,11 @@ panic_trap(x86_saved_state64_t *regs, uint32_t pl, kern_return_t fault_result)
 
 #if CONFIG_DTRACE
 extern kern_return_t dtrace_user_probe(x86_saved_state_t *);
+#endif
+
+#if DEBUG
+uint32_t fsigs[2];
+uint32_t fsigns, fsigcs;
 #endif
 
 /*
@@ -1052,11 +1060,33 @@ user_trap(
 		        prot |= VM_PROT_WRITE;
 		if (__improbable(err & T_PF_EXECUTE))
 		        prot |= VM_PROT_EXECUTE;
+#if DEVELOPMENT || DEBUG
+		uint32_t fsig = 0;
+		fsig = thread_fpsimd_hash(thread);
+#if DEBUG
+		fsigs[0] = fsig;
+#endif
+#endif
 		kret = vm_fault(thread->map,
 				vaddr,
 				prot, FALSE, VM_KERN_MEMORY_NONE,
 				THREAD_ABORTSAFE, NULL, 0);
-
+#if DEVELOPMENT || DEBUG
+		if (fsig) {
+			uint32_t fsig2 = thread_fpsimd_hash(thread);
+#if DEBUG
+			fsigcs++;
+			fsigs[1] = fsig2;
+#endif
+			if (fsig != fsig2) {
+				panic("FP/SIMD state hash mismatch across fault thread: %p 0x%x->0x%x", thread, fsig, fsig2);
+			}
+		} else {
+#if DEBUG
+			fsigns++;
+#endif
+		}
+#endif
 		if (__probable((kret == KERN_SUCCESS) || (kret == KERN_ABORTED))) {
 			thread_exception_return();
 			/*NOTREACHED*/

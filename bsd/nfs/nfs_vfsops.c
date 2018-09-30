@@ -2328,6 +2328,9 @@ nocomponents:
 		nfsmout_if(error);
 		nfsm_chain_op_check(error, &nmrep, NFS_OP_GETFH);
 		nfsm_chain_get_32(error, &nmrep, fh.fh_len);
+		if (fh.fh_len > sizeof(fh.fh_data))
+			error = EBADRPC;
+		nfsmout_if(error);
 		nfsm_chain_get_opaque(error, &nmrep, fh.fh_len, fh.fh_data);
 		nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
 		if (!error) {
@@ -3030,8 +3033,7 @@ mountnfs(
 			error = ENOMEM;
 		xb_get_32(error, &xb, nmp->nm_fh->fh_len);
 		nfsmerr_if(error);
-		if (nmp->nm_fh->fh_len < 0 ||
-		    (size_t)nmp->nm_fh->fh_len > sizeof(nmp->nm_fh->fh_data))
+		if ((size_t)nmp->nm_fh->fh_len > sizeof(nmp->nm_fh->fh_data))
 			error = EINVAL;
 		else
 			error = xb_get_bytes(&xb, (char*)&nmp->nm_fh->fh_data[0], nmp->nm_fh->fh_len, 0);

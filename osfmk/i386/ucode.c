@@ -38,6 +38,7 @@
 #include <i386/cpuid.h>
 #include <vm/vm_kern.h>
 #include <i386/mp.h>			// mp_broadcast
+#include <i386/fpu.h>
 #include <machine/cpu_number.h> // cpu_number
 #include <pexpert/pexpert.h>  // boot-args
 
@@ -182,6 +183,41 @@ cpu_update(__unused void *arg)
 	lck_spin_unlock(ucode_slock);
 }
 
+static void
+ucode_cpuid_set_info(void)
+{
+	uint64_t saved_xcr0, dest_xcr0;
+	int need_xcr0_restore = 0;
+	boolean_t intrs_enabled = ml_set_interrupts_enabled(FALSE);
+
+	/*
+	 * Before we cache the CPUID information, we must configure XCR0 with the maximal set of
+	 * features to ensure the save area returned in the xsave leaf is correctly-sized.
+	 *
+	 * Since we are guaranteed that init_fpu() has already happened, we can use state
+	 * variables set there that were already predicated on the presence of explicit
+	 * boot-args enables/disables.
+	 */
+
+	if (fpu_capability == AVX512 || fpu_capability == AVX) {
+		saved_xcr0 = xgetbv(XCR0);
+		dest_xcr0 = (fpu_capability == AVX512) ? AVX512_XMASK : AVX_XMASK;
+		assert((get_cr4() & CR4_OSXSAVE) != 0);
+		if (saved_xcr0 != dest_xcr0) {
+			need_xcr0_restore = 1;
+			xsetbv(dest_xcr0 >> 32, dest_xcr0 & 0xFFFFFFFFUL);
+		}
+	}
+
+	cpuid_set_info();
+
+	if (need_xcr0_restore) {
+		xsetbv(saved_xcr0 >> 32, saved_xcr0 & 0xFFFFFFFFUL);
+	}
+
+	ml_set_interrupts_enabled(intrs_enabled);
+}
+
 /* Farm an update out to all CPUs */
 static void
 xcpu_update(void)
@@ -193,8 +229,7 @@ xcpu_update(void)
 	mp_broadcast(cpu_update, NULL);
 
 	/* Update the cpuid info */
-	cpuid_set_info();
-
+	ucode_cpuid_set_info();
 }
 
 /*

@@ -214,6 +214,9 @@ extern "C" void IOKitInitializeTime( void );
 
 extern "C" OSString * IOCopyLogNameForPID(int pid);
 
+extern "C" void IOKitKernelLogBuffer(const char * title, const void * buffer, size_t size,
+                          void (*output)(const char *format, ...));
+
 #if defined(__i386__) || defined(__x86_64__)
 #ifndef __cplusplus
 #error xx

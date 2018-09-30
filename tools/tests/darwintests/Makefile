@@ -186,4 +186,10 @@ endif
 no32exec_35914211_helper:  INVALID_ARCHS = x86_64
 no32exec_35914211:  INVALID_ARCHS = i386
 
+ifneq ($(PLATFORM),BridgeOS)
+EXCLUDED_SOURCES += remote_time.c
+else
+remote_time: INVALID_ARCHS = armv7 armv7s arm64_32
+endif
+
 include $(DEVELOPER_DIR)/AppleInternal/Makefiles/darwintest/Makefile.targets

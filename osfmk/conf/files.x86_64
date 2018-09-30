@@ -38,6 +38,7 @@ osfmk/i386/cpu_threads.c	standard
 osfmk/i386/cpu_topology.c	standard
 osfmk/i386/i386_timer.c		standard
 osfmk/i386/fpu.c		standard
+osfmk/i386/fp_simd.s		standard
 osfmk/i386/i386_lock.s		standard
 osfmk/i386/i386_init.c		standard
 osfmk/i386/i386_vm_init.c	standard

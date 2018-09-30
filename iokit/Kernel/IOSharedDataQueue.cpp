@@ -166,6 +166,7 @@ IODataQueueEntry * IOSharedDataQueue::peek()
     }
 
     // Read head and tail with acquire barrier
+    // See rdar://problem/40780584 for an explanation of relaxed/acquire barriers
     headOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED);
     tailOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_ACQUIRE);
 
@@ -211,8 +212,9 @@ Boolean IOSharedDataQueue::enqueue(void * data, UInt32 dataSize)
     IODataQueueEntry * entry;
     
     // Force a single read of head and tail
-    head = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED);
+    // See rdar://problem/40780584 for an explanation of relaxed/acquire barriers
     tail = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_RELAXED);
+    head = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_ACQUIRE);
 
     // Check for overflow of entrySize
     if (dataSize > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) {
@@ -289,7 +291,7 @@ Boolean IOSharedDataQueue::enqueue(void * data, UInt32 dataSize)
     // Send notification (via mach message) that data is available.
     
     if ( ( tail == head )                                                   /* queue was empty prior to enqueue() */
-      || ( tail == __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED) ) )   /* queue was emptied during enqueue() */
+      || ( tail == __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_ACQUIRE) ) )   /* queue was emptied during enqueue() */
     {
         sendDataAvailableNotification();
     }
@@ -311,8 +313,9 @@ Boolean IOSharedDataQueue::dequeue(void *data, UInt32 *dataSize)
     }
 
     // Read head and tail with acquire barrier
-    tailOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_RELAXED);
-    headOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_ACQUIRE);
+    // See rdar://problem/40780584 for an explanation of relaxed/acquire barriers
+    headOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED);
+    tailOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_ACQUIRE);
 
     if (headOffset != tailOffset) {
         IODataQueueEntry *  head        = 0;

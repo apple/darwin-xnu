@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -970,4 +970,10 @@ extern int plctrace_enabled;
 SYSCTL_INT(_machdep, OID_AUTO, pltrace,
 		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
 		&plctrace_enabled, 0, "");
+
+extern int fpsimd_fault_popc;
+SYSCTL_INT(_machdep, OID_AUTO, fpsimd_fault_popc,
+		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+		&fpsimd_fault_popc, 0, "");
+
 #endif /* DEVELOPMENT || DEBUG */

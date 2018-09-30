@@ -853,7 +853,6 @@ private:
 
     void        evaluateAssertions(IOPMDriverAssertionType newAssertions,
                                    IOPMDriverAssertionType oldAssertions);
-    void        evaluateWranglerAssertions();
 
     void        deregisterPMSettingObject( PMSettingObject * pmso );
 

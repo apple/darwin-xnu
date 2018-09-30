@@ -183,6 +183,7 @@ typedef struct cpu_data
 	cpu_uber_t		cpu_uber;
 /* Double-mapped per-CPU exception stack address */
 	uintptr_t		cd_estack;
+	int			cpu_xstate;
 /* Address of shadowed, partially mirrored CPU data structures located
  * in the double mapped PML4
  */

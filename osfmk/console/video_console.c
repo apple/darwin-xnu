@@ -2945,7 +2945,9 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 			if (kVCDarkBackground & vc_progress_options.options)       vc_progress_white = TRUE;
 			else if (kVCLightBackground & vc_progress_options.options) vc_progress_white = FALSE;
 
+#if !defined(XNU_TARGET_OS_BRIDGE)
 			vc_progress_set( graphics_now, delay );
+#endif /* !defined(XNU_TARGET_OS_BRIDGE) */
 			gc_enable( !graphics_now );
 			gc_acquired = TRUE;
 			gc_desire_text = FALSE;

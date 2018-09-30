@@ -1066,6 +1066,8 @@ nfs_gss_clnt_verf_get(
 	 * the context is complete.
 	 */
 	if (!(cp->gss_clnt_flags & GSS_CTX_COMPLETE)) {
+		if (verflen > KRB5_MAX_MIC_SIZE)
+			return (EBADRPC);
 		MALLOC(cp->gss_clnt_verf, u_char *, verflen, M_TEMP, M_WAITOK|M_ZERO);
 		if (cp->gss_clnt_verf == NULL)
 			return (ENOMEM);
@@ -1144,6 +1146,10 @@ nfs_gss_clnt_verf_get(
 		nmc_tmp = *nmc;
 		nfsm_chain_adv(error, &nmc_tmp, reslen);	// skip over the results
 		nfsm_chain_get_32(error, &nmc_tmp,  cksum.length);
+		if (cksum.length > KRB5_MAX_MIC_SIZE) {
+			error = EBADRPC;
+			goto nfsmout;
+		}
 		MALLOC(cksum.value, void *, cksum.length, M_TEMP, M_WAITOK);
 		nfsm_chain_get_opaque(error, &nmc_tmp, cksum.length, cksum.value);
 		//XXX chop offf the cksum?
@@ -2998,8 +3004,10 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 			goto nfsmout;
 		if (flavor != RPCSEC_GSS || cksum.length > KRB5_MAX_MIC_SIZE)
 			error = NFSERR_AUTHERR | AUTH_BADVERF;
-		MALLOC(cksum.value, void *, cksum.length, M_TEMP, M_WAITOK);
-		nfsm_chain_get_opaque(error, nmc, cksum.length, cksum.value);
+		else {
+			MALLOC(cksum.value, void *, cksum.length, M_TEMP, M_WAITOK);
+			nfsm_chain_get_opaque(error, nmc, cksum.length, cksum.value);
+		}
 		if (error)
 			goto nfsmout;
 

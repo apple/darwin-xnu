@@ -288,7 +288,10 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 /* zero the last 4 bytes for a range of opaque */
 /* data to make sure any pad bytes will be zero. */
 #define nfsm_chain_zero_opaque_pad(BUF, LEN) \
-	*(((uint32_t*)(BUF))+((nfsm_rndup(LEN)>>2)-1)) = 0
+	do { \
+		if ((LEN) > 0) \
+			*(((uint32_t*)(BUF))+((nfsm_rndup(LEN)>>2)-1)) = 0; \
+	} while (0)
 
 /* add buffer of opaque data to an mbuf chain */
 #define nfsm_chain_add_opaque(E, NMC, BUF, LEN) \
@@ -586,6 +589,10 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 		uint32_t rndlen; \
 		if (E) break; \
 		rndlen = nfsm_rndup(LEN); \
+		if (rndlen < (LEN)) { \
+			(E) = EBADRPC; \
+			break; \
+		} \
 		if ((NMC)->nmc_left >= rndlen) { \
 			(PTR) = (void*)(NMC)->nmc_ptr; \
 			(NMC)->nmc_left -= rndlen; \
@@ -601,6 +608,10 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 		uint32_t rndlen; \
 		if (E) break; \
 		rndlen = nfsm_rndup(LEN); \
+		if (rndlen < (LEN)) { \
+			(E) = EBADRPC; \
+			break; \
+		} \
 		if ((NMC)->nmc_left >= rndlen) { \
 			u_char *__tmpptr = (u_char*)(NMC)->nmc_ptr; \
 			(NMC)->nmc_left -= rndlen; \
@@ -614,22 +625,29 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 /* get the size of and a pointer to a file handle in an mbuf chain */
 #define nfsm_chain_get_fh_ptr(E, NMC, VERS, FHP, FHSIZE) \
 	do { \
-		if ((VERS) != NFS_VER2) \
+		if ((VERS) != NFS_VER2) { \
 			nfsm_chain_get_32((E), (NMC), (FHSIZE)); \
-		else \
+			if (E) break; \
+			if ((FHSIZE) > NFS_MAX_FH_SIZE) \
+				(E) = EBADRPC; \
+		} else \
 			(FHSIZE) = NFSX_V2FH;\
-		nfsm_chain_get_opaque_pointer((E), (NMC), (FHSIZE), (FHP));\
+		if ((E) == 0) \
+			nfsm_chain_get_opaque_pointer((E), (NMC), (FHSIZE), (FHP));\
 	} while (0)
 
 /* get the size of and data for a file handle in an mbuf chain */
 #define nfsm_chain_get_fh(E, NMC, VERS, FHP) \
 	do { \
-		if ((VERS) != NFS_VER2) \
+		if ((VERS) != NFS_VER2) { \
 			nfsm_chain_get_32((E), (NMC), (FHP)->fh_len); \
-		else \
+			if ((FHP)->fh_len > sizeof((FHP)->fh_data)) \
+				(E) = EBADRPC; \
+		} else \
 			(FHP)->fh_len = NFSX_V2FH;\
-		nfsm_chain_get_opaque((E), (NMC), (uint32_t)(FHP)->fh_len, (FHP)->fh_data);\
-		if (E) \
+		if ((E) == 0) \
+			nfsm_chain_get_opaque((E), (NMC), (uint32_t)(FHP)->fh_len, (FHP)->fh_data);\
+		else \
 			(FHP)->fh_len = 0;\
 	} while (0)
 

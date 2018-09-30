@@ -83,7 +83,7 @@ static int  sd_openlog(vfs_context_t);
 static int  sd_closelog(vfs_context_t);
 static void sd_log(vfs_context_t, const char *, ...);
 static void proc_shutdown(void);
-static void kernel_hwm_panic_info(void);
+static void zprint_panic_info(void);
 extern void halt_log_enter(const char * what, const void * pc, uint64_t time);
 
 #if DEVELOPMENT || DEBUG
@@ -118,7 +118,7 @@ extern mach_memory_info_t *panic_kext_memory_info;
 extern vm_size_t panic_kext_memory_size;
 
 static void
-kernel_hwm_panic_info(void)
+zprint_panic_info(void)
 {
 	unsigned int  num_sites;
 	kern_return_t kr;
@@ -145,11 +145,24 @@ get_system_inshutdown()
 	return (system_inshutdown);
 }
 
+static void
+panic_kernel(int howto, char *message)
+{
+	if ((howto & RB_PANIC_ZPRINT) == RB_PANIC_ZPRINT) {
+		zprint_panic_info();
+	}
+	panic("userspace panic: %s", message);
+}
+
 int
 reboot_kernel(int howto, char *message)
 {
 	int hostboot_option=0;
 	uint64_t startTime;
+
+	if ((howto & (RB_PANIC | RB_QUICK)) == (RB_PANIC | RB_QUICK)) {
+		panic_kernel(howto, message);
+	}
 
 	if (!OSCompareAndSwap(0, 1, &system_inshutdown)) {
 		if ( (howto&RB_QUICK) == RB_QUICK)
@@ -244,10 +257,7 @@ reboot_kernel(int howto, char *message)
 force_reboot:
 
 	if (howto & RB_PANIC) {
-		if (strncmp(message, "Kernel memory has exceeded limits", 33) == 0) {
-			kernel_hwm_panic_info();
-		}
-		panic ("userspace panic: %s", message);
+		panic_kernel(howto, message);
 	}
 
 	if (howto & RB_POWERDOWN)

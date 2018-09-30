@@ -5345,7 +5345,8 @@ nfs_portmap_lookup(
 	struct sockaddr *saddr = (struct sockaddr*)&ss;
 	struct nfsm_chain nmreq, nmrep;
 	mbuf_t mreq;
-	int error = 0, ip, pmprog, pmvers, pmproc, ualen = 0;
+	int error = 0, ip, pmprog, pmvers, pmproc;
+	uint32_t ualen = 0;
 	uint32_t port;
 	uint64_t xid = 0;
 	char uaddr[MAX_IPv6_STR_LEN+16];
@@ -5406,7 +5407,7 @@ tryagain:
 		/* get uaddr string and convert to sockaddr */
 		nfsm_chain_get_32(error, &nmrep, ualen);
 		if (!error) {
-			if (ualen > ((int)sizeof(uaddr)-1))
+			if (ualen > (sizeof(uaddr)-1))
 				error = EIO;
 			if (ualen < 1) {
 				/* program is not available, just return a zero port */

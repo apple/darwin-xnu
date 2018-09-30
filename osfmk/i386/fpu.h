@@ -66,6 +66,10 @@
 #include <mach/i386/thread_status.h>
 #include <i386/proc_reg.h>
 
+#define FP_XMASK     ((uint32_t) (XFEM_X87 | XFEM_SSE))
+#define AVX_XMASK    ((uint32_t) (XFEM_X87 | XFEM_SSE | XFEM_YMM))
+#define AVX512_XMASK ((uint32_t) (XFEM_X87 | XFEM_SSE | XFEM_YMM | XFEM_ZMM))
+
 typedef	enum {
 		FXSAVE32 = 1,
 		FXSAVE64 = 2,
@@ -78,10 +82,18 @@ typedef enum {
 	UNDEFINED,
 	FP,
 	AVX,
-#if !defined(RC_HIDE_XNU_J137)
 	AVX512
-#endif
 } xstate_t;
+
+static inline uint64_t xgetbv(uint32_t c) {
+	uint32_t	mask_hi, mask_lo;
+	__asm__ __volatile__("xgetbv" : "=a"(mask_lo), "=d"(mask_hi) : "c" (c));
+	return ((uint64_t) mask_hi<<32) + (uint64_t) mask_lo;
+}
+
+static inline void xsetbv(uint32_t mask_hi, uint32_t mask_lo) {
+	__asm__ __volatile__("xsetbv" :: "a"(mask_lo), "d"(mask_hi), "c" (XCR0));
+}
 
 extern void		init_fpu(void);
 extern void		fpu_module_init(void);
@@ -115,7 +127,12 @@ extern void		fpu_switch_addrmode(
 				boolean_t	is_64bit);
 
 extern xstate_t		fpu_default;
+extern xstate_t		fpu_capability;
 extern xstate_t		current_xstate(void);
 extern void		fpUDflt(user_addr_t rip);
-
+#ifdef MACH_KERNEL_PRIVATE
+extern uint32_t	thread_fpsimd_hash(thread_t);
+extern void vzeroall(void);
+extern void xmmzeroall(void);
+#endif /* MKP */
 #endif	/* _I386_FPU_H_ */

@@ -42,6 +42,7 @@
 #include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
+#include <sys/coalition.h>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet/tcp.h>
@@ -393,6 +394,9 @@ static u_int32_t necp_create_string_to_id_mapping(struct necp_string_id_mapping_
 static bool necp_remove_string_to_id_mapping(struct necp_string_id_mapping_list *list, char *domain);
 static struct necp_string_id_mapping *necp_lookup_string_with_id_locked(struct necp_string_id_mapping_list *list, u_int32_t local_id);
 
+static struct necp_kernel_socket_policy *necp_kernel_socket_policy_find(necp_kernel_policy_id policy_id);
+static struct necp_kernel_ip_output_policy *necp_kernel_ip_output_policy_find(necp_kernel_policy_id policy_id);
+
 static LIST_HEAD(_necp_kernel_service_list, necp_service_registration) necp_registered_service_list;
 
 static char *necp_create_trimmed_domain(char *string, size_t length);
@@ -421,6 +425,7 @@ static u_int32_t necp_create_route_rule(struct necp_route_rule_list *list, u_int
 static bool necp_remove_route_rule(struct necp_route_rule_list *list, u_int32_t route_rule_id);
 static bool necp_route_is_allowed(struct rtentry *route, ifnet_t interface, u_int32_t route_rule_id, u_int32_t *interface_type_denied);
 static struct necp_route_rule *necp_lookup_route_rule_locked(struct necp_route_rule_list *list, u_int32_t route_rule_id);
+static inline void necp_get_parent_cred_result(proc_t proc, struct necp_socket_info *info);
 
 #define MAX_AGGREGATE_ROUTE_RULES 16
 struct necp_aggregate_route_rule {
@@ -4144,23 +4149,41 @@ necp_kernel_policy_get_new_id(bool socket_level)
 	LCK_RW_ASSERT(&necp_kernel_policy_lock, LCK_RW_ASSERT_EXCLUSIVE);
 
 	if (socket_level) {
-		necp_last_kernel_socket_policy_id++;
-		if (necp_last_kernel_socket_policy_id < NECP_KERNEL_POLICY_ID_FIRST_VALID_SOCKET ||
-			necp_last_kernel_socket_policy_id >= NECP_KERNEL_POLICY_ID_FIRST_VALID_IP) {
-			necp_last_kernel_socket_policy_id = NECP_KERNEL_POLICY_ID_FIRST_VALID_SOCKET;
-		}
-		newid = necp_last_kernel_socket_policy_id;
+		bool wrapped = FALSE;
+		do {
+			necp_last_kernel_socket_policy_id++;
+			if (necp_last_kernel_socket_policy_id < NECP_KERNEL_POLICY_ID_FIRST_VALID_SOCKET ||
+				necp_last_kernel_socket_policy_id >= NECP_KERNEL_POLICY_ID_FIRST_VALID_IP) {
+				if (wrapped) {
+					// Already wrapped, give up
+					NECPLOG0(LOG_ERR, "Failed to find a free socket kernel policy ID.\n");
+					return (NECP_KERNEL_POLICY_ID_NONE);
+				}
+				necp_last_kernel_socket_policy_id = NECP_KERNEL_POLICY_ID_FIRST_VALID_SOCKET;
+				wrapped = TRUE;
+			}
+			newid = necp_last_kernel_socket_policy_id;
+		} while (necp_kernel_socket_policy_find(newid) != NULL); // If already used, keep trying
 	} else {
-		necp_last_kernel_ip_policy_id++;
-		if (necp_last_kernel_ip_policy_id < NECP_KERNEL_POLICY_ID_FIRST_VALID_IP) {
-			necp_last_kernel_ip_policy_id = NECP_KERNEL_POLICY_ID_FIRST_VALID_IP;
-		}
-		newid = necp_last_kernel_ip_policy_id;
+		bool wrapped = FALSE;
+		do {
+			necp_last_kernel_ip_policy_id++;
+			if (necp_last_kernel_ip_policy_id < NECP_KERNEL_POLICY_ID_FIRST_VALID_IP) {
+				if (wrapped) {
+					// Already wrapped, give up
+					NECPLOG0(LOG_ERR, "Failed to find a free IP kernel policy ID.\n");
+					return (NECP_KERNEL_POLICY_ID_NONE);
+				}
+				necp_last_kernel_ip_policy_id = NECP_KERNEL_POLICY_ID_FIRST_VALID_IP;
+				wrapped = TRUE;
+			}
+			newid = necp_last_kernel_ip_policy_id;
+		} while (necp_kernel_ip_output_policy_find(newid) != NULL); // If already used, keep trying
 	}
 
 	if (newid == NECP_KERNEL_POLICY_ID_NONE) {
-		NECPLOG0(LOG_DEBUG, "Allocate kernel policy id failed.\n");
-		return (0);
+		NECPLOG0(LOG_ERR, "Allocate kernel policy id failed.\n");
+		return (NECP_KERNEL_POLICY_ID_NONE);
 	}
 
 	return (newid);
@@ -6051,6 +6074,35 @@ necp_copy_string(char *string, size_t length)
 	return (copied_string);
 }
 
+static inline void
+necp_get_parent_cred_result(proc_t proc, struct necp_socket_info *info)
+{
+	task_t task = proc_task(proc ? proc : current_proc());
+	coalition_t coal = COALITION_NULL;
+	Boolean is_leader = coalition_is_leader(task, COALITION_TYPE_JETSAM, &coal);
+
+	if (is_leader == TRUE) {
+		// No parent, nothing to do
+		return;
+	}
+
+	if (coal != NULL) {
+		task_t lead_task = coalition_get_leader(coal);
+		if (lead_task != NULL) {
+			proc_t lead_proc = get_bsdtask_info(lead_task);
+			if (lead_proc != NULL) {
+				kauth_cred_t lead_cred = kauth_cred_proc_ref(lead_proc);
+				if (lead_cred != NULL) {
+					errno_t cred_result = priv_check_cred(lead_cred, PRIV_NET_PRIVILEGED_NECP_MATCH, 0);
+					kauth_cred_unref(&lead_cred);
+					info->cred_result = cred_result;
+				}
+			}
+			task_deallocate(lead_task);
+		}
+	}
+}
+
 #define	NECP_KERNEL_ADDRESS_TYPE_CONDITIONS (NECP_KERNEL_CONDITION_LOCAL_START | NECP_KERNEL_CONDITION_LOCAL_END | NECP_KERNEL_CONDITION_LOCAL_PREFIX | NECP_KERNEL_CONDITION_REMOTE_START | NECP_KERNEL_CONDITION_REMOTE_END | NECP_KERNEL_CONDITION_REMOTE_PREFIX)
 static void
 necp_application_fillout_info_locked(uuid_t application_uuid, uuid_t real_application_uuid, char *account, char *domain, pid_t pid, uid_t uid, u_int16_t protocol, u_int32_t bound_interface_index, u_int32_t traffic_class, union necp_sockaddr_union *local_addr, union necp_sockaddr_union *remote_addr, proc_t proc, struct necp_socket_info *info)
@@ -6065,6 +6117,10 @@ necp_application_fillout_info_locked(uuid_t application_uuid, uuid_t real_applic
 
 	if (necp_kernel_application_policies_condition_mask & NECP_KERNEL_CONDITION_ENTITLEMENT && proc != NULL) {
 		info->cred_result = priv_check_cred(proc_ucred(proc), PRIV_NET_PRIVILEGED_NECP_MATCH, 0);
+		if (info->cred_result != 0) {
+			// Process does not have entitlement, check the parent process
+			necp_get_parent_cred_result(proc, info);
+		}
 	}
 
 	if (necp_kernel_application_policies_condition_mask & NECP_KERNEL_CONDITION_APP_ID && !uuid_is_null(application_uuid)) {
@@ -6965,6 +7021,10 @@ necp_socket_fillout_info_locked(struct inpcb *inp, struct sockaddr *override_loc
 
 		if (necp_kernel_socket_policies_condition_mask & NECP_KERNEL_CONDITION_ENTITLEMENT) {
 			info->cred_result = priv_check_cred(so->so_cred, PRIV_NET_PRIVILEGED_NECP_MATCH, 0);
+			if (info->cred_result != 0) {
+				// Process does not have entitlement, check the parent process
+				necp_get_parent_cred_result(NULL, info);
+			}
 		}
 	}
 

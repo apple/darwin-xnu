@@ -410,6 +410,12 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 		ml_set_interrupts_enabled(FALSE);
 	}
 
+	if (current_cpu_datap()->cpu_hibernate)  {
+        /* Call hibernate_write_image() to put disk to low power state */
+        hibernate_write_image();
+        cpu_datap(0)->cpu_hibernate = 0;
+    }
+
 	/*
 	 * Call back to caller to indicate that interrupts will remain
 	 * disabled while we deep idle, wake and return.

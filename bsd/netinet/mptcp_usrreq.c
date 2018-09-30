@@ -78,8 +78,6 @@ static int mptcp_usr_shutdown(struct socket *);
 static int mptcp_usr_sosend(struct socket *, struct sockaddr *, struct uio *,
     struct mbuf *, struct mbuf *, int);
 static int mptcp_usr_socheckopt(struct socket *, struct sockopt *);
-static int mptcp_setopt(struct mptses *, struct sockopt *);
-static int mptcp_getopt(struct mptses *, struct sockopt *);
 static int mptcp_default_tcp_optval(struct mptses *, struct sockopt *, int *);
 static int mptcp_usr_preconnect(struct socket *so);
 
@@ -1357,9 +1355,6 @@ mptcp_setopt(struct mptses *mpte, struct sockopt *sopt)
 	level = sopt->sopt_level;
 	optname = sopt->sopt_name;
 
-	VERIFY(sopt->sopt_dir == SOPT_SET);
-	VERIFY(level == SOL_SOCKET || level == IPPROTO_TCP);
-	mpte_lock_assert_held(mpte);	/* same as MP socket lock */
 	mp_so = mptetoso(mpte);
 
 	/*
@@ -1524,7 +1519,6 @@ mptcp_setopt(struct mptses *mpte, struct sockopt *sopt)
 				mpo->mpo_name = optname;
 				mptcp_sopt_insert(mpte, mpo);
 			}
-			VERIFY(mpo->mpo_flags & MPOF_ATTACHED);
 			/* this can be issued on the subflow socket */
 			mpo->mpo_flags |= MPOF_SUBFLOW_OK;
 		}
@@ -1536,7 +1530,6 @@ mptcp_setopt(struct mptses *mpte, struct sockopt *sopt)
 		mpo->mpo_name = optname;
 		mpo->mpo_intval = optval;
 	}
-	VERIFY(mpo == NULL || error == 0);
 
 	/* issue this socket option on existing subflows */
 	if (error == 0) {
@@ -1573,9 +1566,6 @@ static int
 mptcp_getopt(struct mptses *mpte, struct sockopt *sopt)
 {
 	int error = 0, optval = 0;
-
-	VERIFY(sopt->sopt_dir == SOPT_GET);
-	mpte_lock_assert_held(mpte);	/* same as MP socket lock */
 
 	/*
 	 * We only handle SOPT_GET for TCP level socket options; we should

@@ -359,6 +359,7 @@ static IOLock *         gPMHaltLock  = 0;
 static OSArray *        gPMHaltArray = 0;
 static const OSSymbol * gPMHaltClientAcknowledgeKey = 0;
 static bool             gPMQuiesced;
+static uint32_t         gIOPMPCIHostBridgeWakeDelay;
 
 // Constants used as arguments to IOPMrootDomain::informCPUStateChange
 #define kCPUUnknownIndex    9999999
@@ -1152,6 +1153,7 @@ bool IOPMrootDomain::start( IOService * nub )
     PE_parse_boot_argn("noidle", &gNoIdleFlag, sizeof(gNoIdleFlag));
     PE_parse_boot_argn("haltmspanic", &gHaltTimeMaxPanic, sizeof(gHaltTimeMaxPanic));
     PE_parse_boot_argn("haltmslog", &gHaltTimeMaxLog, sizeof(gHaltTimeMaxLog));
+	PE_parse_boot_argn("pcihostbridge_wake_delay", &gIOPMPCIHostBridgeWakeDelay, sizeof(gIOPMPCIHostBridgeWakeDelay));
 
     queue_init(&aggressivesQueue);
     aggressivesThreadCall = thread_call_allocate(handleAggressivesFunction, this);
@@ -4923,6 +4925,8 @@ IOReturn IOPMrootDomain::restartSystem( void )
 // MARK: -
 // MARK: System Capability
 
+SYSCTL_UINT(_kern, OID_AUTO, pcihostbridge_wake_delay, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (uint32_t *)&gIOPMPCIHostBridgeWakeDelay, 0, "");
+
 //******************************************************************************
 // tagPowerPlaneService
 //
@@ -4963,6 +4967,11 @@ void IOPMrootDomain::tagPowerPlaneService(
     if (isDisplayWrangler)
     {
         wrangler = service;
+		// found the display wrangler, check for any display assertions already created
+		if (pmAssertions->getActivatedAssertions() & kIOPMDriverAssertionPreventDisplaySleepBit) {
+			DLOG("wrangler setIgnoreIdleTimer\(1) due to pre-existing assertion\n");
+			wrangler->setIgnoreIdleTimer( true );
+		}
     }
 #else
     isDisplayWrangler = false;
@@ -4988,13 +4997,14 @@ void IOPMrootDomain::tagPowerPlaneService(
 
         while (child != this)
         {
-            if ((parent == pciHostBridgeDriver) ||
+            if ((gIOPMPCIHostBridgeWakeDelay ? (parent == pciHostBridgeDriver) : (parent->metaCast("IOPCIDevice") != NULL)) ||
                 (parent == this))
             {
                 if (OSDynamicCast(IOPowerConnection, child))
                 {
                     IOPowerConnection * conn = (IOPowerConnection *) child;
                     conn->delayChildNotification = true;
+                    DLOG("delayChildNotification for 0x%llx\n", conn->getRegistryEntryID());
                 }
                 break;
             }
@@ -6242,8 +6252,6 @@ bool IOPMrootDomain::displayWranglerMatchPublished(
     IONotifier * notifier __unused)
 {
 #if !NO_KERNEL_HID
-    // found the display wrangler, check for any display assertions already created
-    gRootDomain->evaluateWranglerAssertions();
     // install a handler
     if( !newService->registerInterest( gIOGeneralInterest,
                             &displayWranglerNotification, target, 0) )
@@ -7687,22 +7695,6 @@ void IOPMrootDomain::evaluateAssertions(IOPMDriverAssertionType newAssertions, I
             DLOG("Driver assertion ReservedBit7 dropped\n");
             updatePreventIdleSleepList(this, false);
         }
-    }
-}
-
-void IOPMrootDomain::evaluateWranglerAssertions()
-{
-    if (gIOPMWorkLoop->inGate() == false) {
-        gIOPMWorkLoop->runAction(
-                OSMemberFunctionCast(IOWorkLoop::Action, this, &IOPMrootDomain::evaluateWranglerAssertions),
-                (OSObject *)this);
-
-        return;
-    }
-
-    if (pmAssertions->getActivatedAssertions() & kIOPMDriverAssertionPreventDisplaySleepBit) {
-        DLOG("wrangler setIgnoreIdleTimer\(1) on matching\n");
-        wrangler->setIgnoreIdleTimer( true );
     }
 }
 

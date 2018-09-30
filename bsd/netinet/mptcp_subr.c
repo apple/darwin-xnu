@@ -1102,7 +1102,6 @@ void
 mptcp_sopt_insert(struct mptses *mpte, struct mptopt *mpo)
 {
 	mpte_lock_assert_held(mpte);	/* same as MP socket lock */
-	VERIFY(!(mpo->mpo_flags & MPOF_ATTACHED));
 	mpo->mpo_flags |= MPOF_ATTACHED;
 	TAILQ_INSERT_TAIL(&mpte->mpte_sopts, mpo, mpo_entry);
 }
@@ -1134,8 +1133,6 @@ mptcp_sopt_find(struct mptses *mpte, struct sockopt *sopt)
 		    mpo->mpo_name == sopt->sopt_name)
 			break;
 	}
-	VERIFY(mpo == NULL || sopt->sopt_valsize == sizeof (int));
-
 	return (mpo);
 }
 

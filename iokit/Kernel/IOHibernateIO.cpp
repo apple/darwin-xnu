@@ -678,6 +678,11 @@ IOHibernateSystemSleep(void)
 		    digits++;
 		}
 	    }
+#if DEBUG || DEVELOPMENT
+            if (kIOLogHibernate & gIOKitDebug) IOKitKernelLogBuffer("H> rtc:",
+                    &rtcVars, sizeof(rtcVars), &kprintf);
+#endif /* DEBUG || DEVELOPMENT */
+
 	    data = OSData::withBytes(&rtcVars, sizeof(rtcVars));
 	    if (data)
 	    {
@@ -729,6 +734,11 @@ IOHibernateSystemSleep(void)
 		    uint16_t bits = 0x0082;
 		    gIOHibernateBootNextData = OSData::withBytes(&bits, sizeof(bits));
 		}
+
+#if DEBUG || DEVELOPMENT
+		if (kIOLogHibernate & gIOKitDebug) IOKitKernelLogBuffer("H> bootnext:",
+                        gIOHibernateBoot0082Data->getBytesNoCopy(), gIOHibernateBoot0082Data->getLength(), &kprintf);
+#endif /* DEBUG || DEVELOPMENT */
 		if (gIOHibernateBoot0082Key && gIOHibernateBoot0082Data && gIOHibernateBootNextKey && gIOHibernateBootNextData)
 		{
 		    gIOHibernateBootNextSave = gIOOptionsEntry->copyProperty(gIOHibernateBootNextKey);
@@ -759,6 +769,19 @@ IOHibernateSystemSleep(void)
 	gIOHibernateVars.fileVars = &gFileVars;
 	gIOHibernateCurrentHeader->signature = kIOHibernateHeaderSignature;
 	gIOHibernateState = kIOHibernateStateHibernating;
+
+#if DEBUG || DEVELOPMENT
+        if (kIOLogHibernate & gIOKitDebug)
+        {
+            OSData * data = OSDynamicCast(OSData, IOService::getPMRootDomain()->getProperty(kIOHibernateSMCVariablesKey));
+            if (data)
+	    {
+                uintptr_t * smcVars = (typeof(smcVars)) data->getBytesNoCopy();
+                IOKitKernelLogBuffer("H> smc:",
+                        (const void *)smcVars[1], smcVars[0], &kprintf);
+            }
+        }
+#endif /* DEBUG || DEVELOPMENT */
     }
     else
     {
@@ -796,7 +819,14 @@ IOSetBootImageNVRAM(OSData * data)
     }
     if (gIOOptionsEntry && gIOHibernateBootImageKey)
     {
-    	if (data) gIOOptionsEntry->setProperty(gIOHibernateBootImageKey, data);
+        if (data)
+        {
+	    gIOOptionsEntry->setProperty(gIOHibernateBootImageKey, data);
+#if DEBUG || DEVELOPMENT
+	    if (kIOLogHibernate & gIOKitDebug) IOKitKernelLogBuffer("H> boot-image:",
+                data->getBytesNoCopy(), data->getLength(), &kprintf);
+#endif /* DEBUG || DEVELOPMENT */
+        }
     	else
     	{
 	    gIOOptionsEntry->removeProperty(gIOHibernateBootImageKey);
@@ -2386,7 +2416,7 @@ hibernate_machine_init(void)
     {
 	err = IOPolledFilePollersSetEncryptionKey(vars->fileVars,
 		&vars->volumeCryptKey[0], vars->volumeCryptKeySize);
-	HIBLOG("IOPolledFilePollersSetEncryptionKey(%x)\n", err);
+	HIBLOG("IOPolledFilePollersSetEncryptionKey(%x) %ld\n", err, vars->volumeCryptKeySize);
 	if (kIOReturnSuccess != err) panic("IOPolledFilePollersSetEncryptionKey(0x%x)", err);
 	cryptvars = 0;
     }

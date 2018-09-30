@@ -50,6 +50,8 @@
 #include <arm/rtclock.h>
 #include <libkern/OSAtomic.h>
 #include <stdatomic.h>
+#include <kern/remote_time.h>
+#include <machine/machine_remote_time.h>
 
 #include <sys/kdebug.h>
 
@@ -419,6 +421,30 @@ commpage_update_boottime(uint64_t value)
 		do {
 			old_value = *cp;
 		} while (!OSCompareAndSwap64(old_value, value, cp));
+#endif /* __arm64__ */
+	}
+}
+
+/*
+ * set the commpage's remote time params for
+ * userspace call to mach_bridge_remote_time()
+ */
+ void
+ commpage_set_remotetime_params(double rate, uint64_t base_local_ts, uint64_t base_remote_ts)
+ {
+	 if (commPagePtr) {
+#ifdef __arm64__
+		struct bt_params *paramsp = (struct bt_params *)(_COMM_PAGE_REMOTETIME_PARAMS + _COMM_PAGE_RW_OFFSET);
+		paramsp->base_local_ts = 0;
+		__asm__ volatile("dmb ish" ::: "memory");
+		paramsp->rate = rate;
+		paramsp->base_remote_ts = base_remote_ts;
+		__asm__ volatile("dmb ish" ::: "memory");
+		paramsp->base_local_ts = base_local_ts;  //This will act as a generation count
+#else
+		(void)rate;
+		(void)base_local_ts;
+		(void)base_remote_ts;
 #endif /* __arm64__ */
 	}
 }

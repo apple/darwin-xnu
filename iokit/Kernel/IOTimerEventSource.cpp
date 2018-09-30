@@ -412,9 +412,12 @@ IOReturn IOTimerEventSource::setTimeout(uint32_t options,
 					AbsoluteTime abstime, AbsoluteTime leeway)
 {
     AbsoluteTime end;
-    clock_continuoustime_interval_to_deadline(abstime, &end);
-    return wakeAtTime(options, end, leeway);
+    if (options & kIOTimeOptionsContinuous)
+        clock_continuoustime_interval_to_deadline(abstime, &end);
+    else
+        clock_absolutetime_interval_to_deadline(abstime, &end);
 
+    return wakeAtTime(options, end, leeway);
 }
 
 IOReturn IOTimerEventSource::wakeAtTimeTicks(UInt32 ticks)

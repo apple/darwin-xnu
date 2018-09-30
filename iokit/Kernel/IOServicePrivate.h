@@ -65,6 +65,7 @@ enum {
     kIOServiceNeedWillTerminate = 0x00080000,
     kIOServiceWaitDetachState   = 0x00040000,
     kIOServiceConfigRunning     = 0x00020000,
+    kIOServiceFinalized         = 0x00010000,
 };
 
 // notify state

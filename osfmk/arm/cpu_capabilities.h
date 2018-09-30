@@ -207,6 +207,7 @@ extern vm_address_t				sharedpage_rw_addr;
 
 
 #define _COMM_PAGE_NEWTIMEOFDAY_DATA		(_COMM_PAGE_START_ADDRESS+0x120)	// used by gettimeofday(). Currently, sizeof(new_commpage_timeofday_data_t) = 40.
+
 #define _COMM_PAGE_END				(_COMM_PAGE_START_ADDRESS+0x1000)	// end of common page
 
 #endif /* _ARM_CPU_CAPABILITIES_H */
