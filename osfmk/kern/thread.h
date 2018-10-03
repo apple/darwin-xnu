@@ -1077,7 +1077,8 @@ extern boolean_t	thread_should_abort(
 extern int is_64signalregset(void);
 
 extern void act_set_kperf(thread_t);
-extern void set_astledger(thread_t thread);
+extern void act_set_astledger(thread_t thread);
+extern void act_set_astledger_async(thread_t thread);
 extern void act_set_io_telemetry_ast(thread_t);
 
 extern uint32_t dtrace_get_thread_predcache(thread_t);

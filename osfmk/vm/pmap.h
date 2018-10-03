@@ -660,6 +660,9 @@ extern pmap_t	kernel_pmap;			/* The kernel's map */
 #define VM_MEM_STACK		0x200
 
 #if __x86_64__
+/* N.B. These use the same numerical space as the PMAP_EXPAND_OPTIONS
+ * definitions in i386/pmap_internal.h
+ */
 #define PMAP_CREATE_64BIT	0x1
 #define PMAP_CREATE_EPT		0x2
 #define PMAP_CREATE_KNOWN_FLAGS (PMAP_CREATE_64BIT | PMAP_CREATE_EPT)
@@ -709,9 +712,6 @@ extern void		pmap_remove_options(	/* Remove mappings. */
 				int		options);
 
 extern void		fillPage(ppnum_t pa, unsigned int fill);
-
-extern void pmap_map_sharedpage(task_t task, pmap_t pmap);
-extern void pmap_unmap_sharedpage(pmap_t pmap);
 
 #if defined(__LP64__)
 void pmap_pre_expand(pmap_t pmap, vm_map_offset_t vaddr);

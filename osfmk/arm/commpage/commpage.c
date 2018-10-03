@@ -263,22 +263,14 @@ commpage_init_cpu_capabilities( void )
 	bits |= (cpus << kNumCPUsShift);
 
 	bits |= kFastThreadLocalStorage;        // TPIDRURO for TLS
+
 #if	__ARM_VFP__
 	bits |= kHasVfp;
-#if	(__ARM_VFP__ >= 3)
-	bits |= kHasNeon;
-
-#if defined(__arm64__)
-	bits |= kHasNeonHPFP;
-#else
-	boolean_t intr = ml_set_interrupts_enabled(FALSE);
-	unsigned int mvfr1 = get_mvfr1();
-	
-	if (mvfr1 & MVFR_ASIMD_HPFP)
+	arm_mvfp_info_t *mvfp_info = arm_mvfp_info();
+	if (mvfp_info->neon)
+		bits |= kHasNeon;
+	if (mvfp_info->neon_hpfp)
 		bits |= kHasNeonHPFP;
-	(void) ml_set_interrupts_enabled(intr);
-#endif
-#endif
 #endif
 #if defined(__arm64__)
 	bits |= kHasFMA;

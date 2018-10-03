@@ -129,11 +129,15 @@ extern kern_return_t ledger_set_period(ledger_t ledger, int entry,
 	uint64_t period);
 extern kern_return_t ledger_disable_refill(ledger_t l, int entry);
 extern kern_return_t ledger_entry_setactive(ledger_t ledger, int entry);
-extern void ledger_check_new_balance(ledger_t ledger, int entry);
+extern void ledger_check_new_balance(thread_t thread, ledger_t ledger, int entry);
 extern kern_return_t ledger_credit(ledger_t ledger, int entry,
 	ledger_amount_t amount);
 extern kern_return_t ledger_debit(ledger_t ledger, int entry,
 	ledger_amount_t amount);
+extern kern_return_t ledger_credit_thread(thread_t thread, ledger_t ledger,
+                                          int entry, ledger_amount_t amount);
+extern kern_return_t ledger_debit_thread(thread_t thread, ledger_t ledger,
+                                         int entry, ledger_amount_t amount);
 extern kern_return_t ledger_zero_balance(ledger_t ledger, int entry);
 extern kern_return_t ledger_get_entries(ledger_t ledger, int entry,
 	ledger_amount_t *credit, ledger_amount_t *debit);

@@ -51,7 +51,6 @@
 #include <pexpert/device_tree.h>
 
 #include <IOKit/IOPlatformExpert.h>
-#include <libkern/section_keywords.h>
 
 #if KPC
 #include <kern/kpc.h>
@@ -70,7 +69,6 @@ boolean_t is_clock_configured = FALSE;
 
 extern int mach_assert;
 extern volatile uint32_t debug_enabled;
-SECURITY_READ_ONLY_LATE(unsigned int) debug_boot_arg;
 
 void machine_conf(void);
 
@@ -78,20 +76,6 @@ void
 machine_startup(__unused boot_args * args)
 {
 	int boot_arg;
-
-#if MACH_KDP
-	if (PE_parse_boot_argn("debug", &debug_boot_arg, sizeof (debug_boot_arg)) &&
-	    debug_enabled) {
-#if DEVELOPMENT || DEBUG
-		if (debug_boot_arg & DB_HALT)
-			halt_in_debugger = 1;
-#endif
-		if (debug_boot_arg & DB_NMI)
-			panicDebugging = TRUE;
-	} else {
-		debug_boot_arg = 0;
-	}
-#endif
 
 	PE_parse_boot_argn("assert", &mach_assert, sizeof (mach_assert));
 
@@ -668,12 +652,13 @@ cause_ast_check(
 boolean_t 
 ml_at_interrupt_context(void)
 {
-	vm_offset_t     stack_ptr;
-	vm_offset_t     intstack_top_ptr;
+	boolean_t at_interrupt_context = FALSE;
 
-	__asm__         volatile("mov  %0, sp\n":"=r"(stack_ptr));
-	intstack_top_ptr = getCpuDatap()->intstack_top;
-	return ((stack_ptr < intstack_top_ptr) && (stack_ptr > intstack_top_ptr - INTSTACK_SIZE));
+	disable_preemption();
+	at_interrupt_context = (getCpuDatap()->cpu_int_state != NULL);
+	enable_preemption();
+
+	return at_interrupt_context;
 }
 
 extern uint32_t cpu_idle_count;
@@ -987,8 +972,10 @@ vm_offset_t
 ml_stack_remaining(void)
 {
 	uintptr_t local = (uintptr_t) &local;
+	vm_offset_t     intstack_top_ptr;
 
-	if (ml_at_interrupt_context()) {
+	intstack_top_ptr = getCpuDatap()->intstack_top;
+	if ((local < intstack_top_ptr) && (local > intstack_top_ptr - INTSTACK_SIZE)) {
 	    return (local - (getCpuDatap()->intstack_top - INTSTACK_SIZE));
 	} else {
 	    return (local - current_thread()->kernel_stack);

@@ -557,6 +557,8 @@ public:
     void        sleepWakeDebugSaveSpinDumpFile();
     void        swdDebugSetup();
     void        swdDebugTeardown();
+    bool        checkShutdownTimeout();
+    void        panicWithShutdownLog(uint32_t timeoutInMs);
 
 private:
     friend class PMSettingObject;
@@ -851,6 +853,7 @@ private:
 
     void        evaluateAssertions(IOPMDriverAssertionType newAssertions,
                                    IOPMDriverAssertionType oldAssertions);
+    void        evaluateWranglerAssertions();
 
     void        deregisterPMSettingObject( PMSettingObject * pmso );
 

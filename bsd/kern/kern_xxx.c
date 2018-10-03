@@ -91,7 +91,7 @@ int psem_cache_purge_all(proc_t p);
 int
 reboot(struct proc *p, struct reboot_args *uap, __unused int32_t *retval)
 {
-	char message[128];
+	char message[256];
 	int error=0;
 	size_t dummy=0;
 #if CONFIG_MACF

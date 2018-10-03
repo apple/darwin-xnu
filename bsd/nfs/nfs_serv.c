@@ -4878,10 +4878,7 @@ nfsmout:
 	return (error);
 }
 
-int (*nfsrv_procs[NFS_NPROCS])(struct nfsrv_descript *nd,
-				    struct nfsrv_sock *slp,
-				    vfs_context_t ctx,
-				    mbuf_t *mrepp) = {
+const nfsrv_proc_t nfsrv_procs[NFS_NPROCS] = {
 	nfsrv_null,
 	nfsrv_getattr,
 	nfsrv_setattr,

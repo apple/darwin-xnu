@@ -1539,7 +1539,7 @@ out:
 static int
 mptcp_getopt(struct mptses *mpte, struct sockopt *sopt)
 {
-	int error = 0, optval;
+	int error = 0, optval = 0;
 
 	VERIFY(sopt->sopt_dir == SOPT_GET);
 	mpte_lock_assert_held(mpte);	/* same as MP socket lock */

@@ -50,9 +50,8 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_shared_region.h>
 
-#include <kperf/kperf.h>
-#include <kperf/context.h>
 #include <kperf/callstack.h>
+#include <kern/backtrace.h>
 
 #include <sys/kdebug.h>
 #include <uuid/uuid.h>
@@ -360,9 +359,7 @@ void telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct 
 {
 	task_t task;
 	void *p;
-	struct kperf_context ctx;
-	struct callstack cs;
-	uint32_t btcount, bti;
+	uint32_t btcount = 0, bti;
 	struct micro_snapshot *msnap;
 	struct task_snapshot *tsnap;
 	struct thread_snapshot *thsnap;
@@ -402,18 +399,17 @@ void telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct 
 
 	p = get_bsdtask_info(task);
 
-	ctx.cur_thread = thread;
-	ctx.cur_pid = proc_pid(p);
-
 	/*
 	 * Gather up the data we'll need for this sample. The sample is written into the kernel
 	 * buffer with the global telemetry lock held -- so we must do our (possibly faulting)
 	 * copies from userland here, before taking the lock.
 	 */
-	cs.nframes = MAX_CALLSTACK_FRAMES;
-	kperf_ucallstack_sample(&cs, &ctx);
-	if (!(cs.flags & CALLSTACK_VALID))
+	uintptr_t frames[MAX_CALLSTACK_FRAMES] = {};
+	bool user64;
+	int backtrace_error = backtrace_user(frames, MAX_CALLSTACK_FRAMES, &btcount, &user64);
+	if (backtrace_error) {
 		return;
+	}
 
 	/*
 	 * Find the actual [slid] address of the shared cache's UUID, and copy it in from userland.
@@ -731,8 +727,6 @@ copytobuffer:
 		framesize = 4;
 	}
 
-	btcount = cs.nframes;
-
 	/*
 	 * If we can't fit this entire stacktrace then cancel this record, wrap to the beginning,
 	 * and start again there so that we always store a full record.
@@ -749,9 +743,9 @@ copytobuffer:
 
 	for (bti=0; bti < btcount; bti++, current_buffer->current_position += framesize) {
 		if (framesize == 8) {
-			*(uint64_t *)(uintptr_t)(current_buffer->buffer + current_buffer->current_position) = cs.frames[bti];
+			*(uint64_t *)(uintptr_t)(current_buffer->buffer + current_buffer->current_position) = frames[bti];
 		} else {
-			*(uint32_t *)(uintptr_t)(current_buffer->buffer + current_buffer->current_position) = (uint32_t)cs.frames[bti];
+			*(uint32_t *)(uintptr_t)(current_buffer->buffer + current_buffer->current_position) = (uint32_t)frames[bti];
 		}
 	}
 

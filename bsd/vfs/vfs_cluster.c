@@ -3323,7 +3323,7 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 
 		        io_size += start_offset;
 
-			if ((upl_f_offset + io_size) >= newEOF && (u_int)io_size < upl_size) {
+			if (newEOF >= oldEOF && (upl_f_offset + io_size) >= newEOF && (u_int)io_size < upl_size) {
 			        /*
 				 * if we're extending the file with this write
 				 * we'll zero fill the rest of the page so that

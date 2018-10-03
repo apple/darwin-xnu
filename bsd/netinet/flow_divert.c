@@ -1070,6 +1070,9 @@ flow_divert_create_connect_packet(struct flow_divert_pcb *fd_cb, struct sockaddr
 		}
 	} else {
 		FDLOG0(LOG_WARNING, fd_cb, "Failed to get the code signing identity");
+		if (fd_cb->group->flags & FLOW_DIVERT_GROUP_FLAG_NO_APP_MAP) {
+			error = 0;
+		}
 	}
 
 	if (src_proc != PROC_NULL) {
@@ -3383,11 +3386,13 @@ flow_divert_token_set(struct socket *so, struct sockopt *sopt)
 
 	error = soopt_getm(sopt, &token);
 	if (error) {
+		token = NULL;
 		goto done;
 	}
 
 	error = soopt_mcopyin(sopt, token);
 	if (error) {
+		token = NULL;
 		goto done;
 	}
 

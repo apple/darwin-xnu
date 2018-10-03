@@ -169,6 +169,7 @@ kperf_kernel_configure(const char *config)
 
 	do {
 		uint32_t action_samplers;
+		uint64_t timer_period_ns;
 		uint64_t timer_period;
 
 		pairs += 1;
@@ -190,11 +191,12 @@ kperf_kernel_configure(const char *config)
 		}
 		config++;
 
-		timer_period = strtouq(config, &end, 0);
+		timer_period_ns = strtouq(config, &end, 0);
 		if (config == end) {
 			kprintf("kperf: unable to parse '%s' as timer period\n", config);
 			goto out;
 		}
+		nanoseconds_to_absolutetime(timer_period_ns, &timer_period);
 		config = end;
 
 		kperf_timer_set_period(pairs - 1, timer_period);

@@ -100,8 +100,9 @@ typedef struct {
 
 #if defined(__arm64__)
 
-#define _COMM_PAGE64_BASE_ADDRESS		(0xfffffff0001fc000ULL) /* Just below the kernel, safely in TTBR1 */
-#define _COMM_PRIV_PAGE64_BASE_ADDRESS	(_COMM_PAGE64_BASE_ADDRESS - (PAGE_SIZE))		/* Privileged RO in kernel mode */
+#define _COMM_PAGE64_BASE_ADDRESS		(0x0000000FFFFFC000ULL) /* In TTBR0 */
+#define _COMM_HIGH_PAGE64_BASE_ADDRESS	(0xFFFFFFF0001FC000ULL) /* Just below the kernel, safely in TTBR1; only used for testing */
+#define _COMM_PRIV_PAGE64_BASE_ADDRESS	(_COMM_HIGH_PAGE64_BASE_ADDRESS - (PAGE_SIZE))		/* Privileged RO in kernel mode */
 
 #define _COMM_PAGE64_AREA_LENGTH		(_COMM_PAGE32_AREA_LENGTH)
 #define _COMM_PAGE64_AREA_USED			(-1)
@@ -117,12 +118,12 @@ extern vm_address_t						sharedpage_rw_addr;
 
 #define	_COMM_PAGE_BASE_ADDRESS			(sharedpage_rw_addr)
 #define _COMM_PAGE_START_ADDRESS		(sharedpage_rw_addr)
-#else
+#else /* KERNEL_PRIVATE */
 #define	_COMM_PAGE_AREA_LENGTH			(4096)
 
 #define	_COMM_PAGE_BASE_ADDRESS			_COMM_PAGE64_BASE_ADDRESS
 #define _COMM_PAGE_START_ADDRESS		_COMM_PAGE64_BASE_ADDRESS
-#endif
+#endif /* KERNEL_PRIVATE */
 
 #elif defined(__arm__)
 

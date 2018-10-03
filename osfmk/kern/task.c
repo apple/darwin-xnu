@@ -500,6 +500,25 @@ task_wait_to_return(void)
 	thread_bootstrap_return();
 }
 
+#ifdef CONFIG_32BIT_TELEMETRY
+boolean_t
+task_consume_32bit_log_flag(task_t task)
+{
+	if ((task->t_procflags & TPF_LOG_32BIT_TELEMETRY) != 0) {
+		task->t_procflags &= ~TPF_LOG_32BIT_TELEMETRY;
+		return TRUE;
+	} else {
+		return FALSE;
+	}
+}
+
+void
+task_set_32bit_log_flag(task_t task)
+{
+	task->t_procflags |= TPF_LOG_32BIT_TELEMETRY;
+}
+#endif /* CONFIG_32BIT_TELEMETRY */
+
 boolean_t
 task_is_exec_copy(task_t task)
 {
@@ -2267,21 +2286,6 @@ task_terminate_internal(
 	vm_map_disable_hole_optimization(task->map);
 	vm_map_unlock(task->map);
 
-	vm_map_remove(task->map,
-		      task->map->min_offset,
-		      task->map->max_offset,
-		      /*
-		       * Final cleanup:
-		       * + no unnesting
-		       * + remove immutable mappings
-		       */
-		      (VM_MAP_REMOVE_NO_UNNESTING |
-		       VM_MAP_REMOVE_IMMUTABLE));
-
-	/* release our shared region */
-	vm_shared_region_set(task, NULL);
-
-
 #if MACH_ASSERT
 	/*
 	 * Identify the pmap's process, in case the pmap ledgers drift
@@ -2297,6 +2301,21 @@ task_terminate_internal(
 	}
 	pmap_set_process(task->map->pmap, pid, procname);
 #endif /* MACH_ASSERT */
+
+	vm_map_remove(task->map,
+		      task->map->min_offset,
+		      task->map->max_offset,
+		      /*
+		       * Final cleanup:
+		       * + no unnesting
+		       * + remove immutable mappings
+		       */
+		      (VM_MAP_REMOVE_NO_UNNESTING |
+		       VM_MAP_REMOVE_IMMUTABLE));
+
+	/* release our shared region */
+	vm_shared_region_set(task, NULL);
+
 
 	lck_mtx_lock(&tasks_threads_lock);
 	queue_remove(&tasks, task, task_t, tasks);
@@ -5071,8 +5090,13 @@ PROC_CROSSED_HIGH_WATERMARK__SEND_EXC_RESOURCE_AND_SUSPEND(int max_footprint_mb,
 			task_resume_internal(task);
 		}
 	} else {
-		task_enqueue_exception_with_corpse(task, EXC_RESOURCE,
+		if (audio_active) {
+			printf("process %s[%d] crossed memory high watermark (%d MB); EXC_RESOURCE "
+			"supressed due to audio playback.\n", procname, pid, max_footprint_mb);
+		} else {
+			task_enqueue_exception_with_corpse(task, EXC_RESOURCE,
 				code, EXCEPTION_CODE_MAX, NULL);
+		}
 	}
 
 	/*
@@ -5248,7 +5272,8 @@ task_set_phys_footprint_limit_internal(
 		(ledger_amount_t)new_limit_mb << 20, PHYS_FOOTPRINT_WARNING_LEVEL);
 
         if (task == current_task()) {
-                ledger_check_new_balance(task->ledger, task_ledgers.phys_footprint);
+                ledger_check_new_balance(current_thread(), task->ledger,
+                                         task_ledgers.phys_footprint);
         }
 
 	task_unlock(task);

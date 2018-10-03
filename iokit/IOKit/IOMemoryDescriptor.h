@@ -234,8 +234,14 @@ struct IOMDDMAWalkSegmentArgs {
     UInt64 fOffset;			// Input/Output offset
     UInt64 fIOVMAddr, fLength;		// Output variables
     UInt8 fMapped;			// Input Variable, Require mapped IOVMA
+    UInt64 fMappedBase;			// Input base of mapping
 };
 typedef UInt8 IOMDDMAWalkSegmentState[128];
+// fMapped:
+enum
+{
+	kIOMDDMAWalkMappedLocal = 2
+};
 
 #endif /* KERNEL_PRIVATE */
 

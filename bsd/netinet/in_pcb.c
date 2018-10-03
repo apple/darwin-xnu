@@ -131,7 +131,6 @@ static u_int16_t inpcb_timeout_run = 0;	/* INPCB timer is scheduled to run */
 static boolean_t inpcb_garbage_collecting = FALSE; /* gc timer is scheduled */
 static boolean_t inpcb_ticking = FALSE;		/* "slow" timer is scheduled */
 static boolean_t inpcb_fast_timer_on = FALSE;
-static boolean_t intcoproc_unrestricted = FALSE;
 
 extern char *proc_best_name(proc_t);
 
@@ -308,9 +307,6 @@ in_pcbinit(void)
 	RB_INIT(&inp_fc_tree);
 	bzero(&key_inp, sizeof(key_inp));
 	lck_mtx_unlock(&inp_fc_lck);
-
-	PE_parse_boot_argn("intcoproc_unrestricted", &intcoproc_unrestricted,
-	    sizeof (intcoproc_unrestricted));
 }
 
 #define	INPCB_HAVE_TIMER_REQ(req)	(((req).intimer_lazy > 0) || \

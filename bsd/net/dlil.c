@@ -2723,7 +2723,7 @@ dlil_input_handler(struct ifnet *ifp, struct mbuf *m_head,
 
 
 static void
-ifnet_start_common(struct ifnet *ifp, int resetfc)
+ifnet_start_common(struct ifnet *ifp, boolean_t resetfc)
 {
 	if (!(ifp->if_eflags & IFEF_TXSTART))
 		return;
@@ -2731,7 +2731,8 @@ ifnet_start_common(struct ifnet *ifp, int resetfc)
 	 * If the starter thread is inactive, signal it to do work,
 	 * unless the interface is being flow controlled from below,
 	 * e.g. a virtual interface being flow controlled by a real
-	 * network interface beneath it.
+	 * network interface beneath it, or it's been disabled via
+	 * a call to ifnet_disable_output().
 	 */
 	lck_mtx_lock_spin(&ifp->if_start_lock);
 	if (resetfc) {
@@ -2754,7 +2755,7 @@ ifnet_start_common(struct ifnet *ifp, int resetfc)
 void
 ifnet_start(struct ifnet *ifp)
 {
-	ifnet_start_common(ifp, 0);
+	ifnet_start_common(ifp, FALSE);
 }
 
 static void
@@ -2868,9 +2869,14 @@ ifnet_start_thread_fn(void *v, wait_result_t w)
 
 			lck_mtx_lock_spin(&ifp->if_start_lock);
 
-			/* if there's no pending request, we're done */
-			if (req == ifp->if_start_req)
+			/*
+			 * If there's no pending request or if the
+			 * interface has been disabled, we're done.
+			 */
+			if (req == ifp->if_start_req ||
+			    (ifp->if_start_flags & IFSF_FLOW_CONTROLLED)) {
 				break;
+			}
 		}
 
 		ifp->if_start_req = 0;
@@ -3041,8 +3047,9 @@ ifnet_poll_thread_fn(void *v, wait_result_t w)
 			lck_mtx_lock_spin(&ifp->if_poll_lock);
 
 			/* if there's no pending request, we're done */
-			if (req == ifp->if_poll_req)
+			if (req == ifp->if_poll_req) {
 				break;
+			}
 		}
 		ifp->if_poll_req = 0;
 		ifp->if_poll_active = 0;
@@ -6076,8 +6083,14 @@ ifnet_detach(ifnet_t ifp)
 	ifp->if_refflags |= IFRF_DETACHING;
 	lck_mtx_unlock(&ifp->if_ref_lock);
 
-	if (dlil_verbose)
+	if (dlil_verbose) {
 		printf("%s: detaching\n", if_name(ifp));
+	}
+
+	/* clean up flow control entry object if there's any */
+	if (ifp->if_eflags & IFEF_TXSTART) {
+		ifnet_flowadv(ifp->if_flowhash);
+	}
 
 	/* Reset ECN enable/disable flags */
 	ifp->if_eflags &= ~IFEF_ECN_DISABLE;
@@ -6438,6 +6451,7 @@ ifnet_detach_final(struct ifnet *ifp)
 			wakeup_one((caddr_t)&inp->input_waiting);
 		}
 		lck_mtx_unlock(&inp->input_lck);
+		ifnet_lock_done(ifp);
 
 		/* wait for the input thread to terminate */
 		lck_mtx_lock_spin(&inp->input_lck);
@@ -6447,6 +6461,7 @@ ifnet_detach_final(struct ifnet *ifp)
 			    (PZERO - 1) | PSPIN, inp->input_name, NULL);
 		}
 		lck_mtx_unlock(&inp->input_lck);
+		ifnet_lock_exclusive(ifp);
 
 		/* clean-up input thread state */
 		dlil_clean_threading_info(inp);
@@ -7834,7 +7849,7 @@ ifnet_enable_output(struct ifnet *ifp)
 		return (ENXIO);
 	}
 
-	ifnet_start_common(ifp, 1);
+	ifnet_start_common(ifp, TRUE);
 	return (0);
 }
 
@@ -7904,7 +7919,7 @@ ifnet_fc_add(struct ifnet *ifp)
 	/* become regular mutex */
 	lck_mtx_convert_spin(&ifnet_fc_lock);
 
-	ifce = zalloc_noblock(ifnet_fc_zone);
+	ifce = zalloc(ifnet_fc_zone);
 	if (ifce == NULL) {
 		/* memory allocation failed */
 		lck_mtx_unlock(&ifnet_fc_lock);

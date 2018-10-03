@@ -192,6 +192,87 @@ IODMACommandForceDoubleBufferTest(int newValue)
     return (0);
 }
 
+// <rdar://problem/34322778>
+static int __unused
+IODMACommandLocalMappedNonContig(int newValue)
+{
+    IOReturn                   kr;
+    IOMemoryDescriptor       * md;
+    IODMACommand             * dma;
+    OSDictionary             * matching;
+    IOService                * device;
+    IOMapper                 * mapper;
+    IODMACommand::SegmentOptions segOptions =
+    {
+	.fStructSize      = sizeof(segOptions),
+	.fNumAddressBits  = 64,
+	.fMaxSegmentSize  = 128*1024,
+	.fMaxTransferSize = 128*1024,
+	.fAlignment       = 1,
+	.fAlignmentLength = 1,
+	.fAlignmentInternalSegments = 1
+    };
+    IODMACommand::Segment64 segments[1];
+    UInt32                  numSegments;
+    UInt64                  dmaOffset;
+    UInt64                  segPhys;
+    vm_address_t            buffer;
+    vm_size_t               bufSize = ptoa(4);
+
+    if (!IOMapper::gSystem) return (0);
+
+    buffer = 0;
+    kr = vm_allocate_kernel(kernel_map, &buffer, bufSize, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IOKIT);
+    assert(KERN_SUCCESS == kr);
+
+    // fragment the vmentries
+    kr = vm_inherit(kernel_map, buffer + ptoa(1), ptoa(1), VM_INHERIT_NONE);
+    assert(KERN_SUCCESS == kr);
+
+    md = IOMemoryDescriptor::withAddressRange(
+				buffer + 0xa00, 0x2000, kIODirectionOutIn, kernel_task);
+    assert(md);
+    kr = md->prepare(kIODirectionOutIn);
+    assert(kIOReturnSuccess == kr);
+
+    segPhys = md->getPhysicalSegment(0, NULL, 0);
+
+    matching = IOService::nameMatching("XHC1");
+    assert(matching);
+    device = IOService::copyMatchingService(matching);
+    matching->release();
+    mapper = device ? IOMapper::copyMapperForDeviceWithIndex(device, 0) : NULL;
+
+    dma = IODMACommand::withSpecification(kIODMACommandOutputHost64, &segOptions,
+					  kIODMAMapOptionMapped,
+					  mapper, NULL);
+    assert(dma);
+    kr = dma->setMemoryDescriptor(md, true);
+    assert(kIOReturnSuccess == kr);
+
+    dmaOffset   = 0;
+    numSegments = 1;
+    kr = dma->gen64IOVMSegments(&dmaOffset, &segments[0], &numSegments);
+    assert(kIOReturnSuccess == kr);
+    assert(1 == numSegments);
+
+    if (mapper) assertf(segments[0].fIOVMAddr != segPhys, "phys !local 0x%qx, 0x%qx, %p", segments[0].fIOVMAddr, segPhys, dma);
+
+    kr = dma->clearMemoryDescriptor(true);
+    assert(kIOReturnSuccess == kr);
+    dma->release();
+
+    kr = md->complete(kIODirectionOutIn);
+    assert(kIOReturnSuccess == kr);
+    md->release();
+
+    kr = vm_deallocate(kernel_map, buffer, bufSize);
+    assert(KERN_SUCCESS == kr);
+    OSSafeReleaseNULL(mapper);
+
+    return (0);
+}
+
 // <rdar://problem/30102458>
 static int
 IOMemoryRemoteTest(int newValue)
@@ -687,6 +768,9 @@ int IOMemoryDescriptorTest(int newValue)
 	md2->release();
     }
 #endif
+
+//    result = IODMACommandLocalMappedNonContig(newValue);
+//    if (result) return (result);
 
     result = IODMACommandForceDoubleBufferTest(newValue);
     if (result) return (result);

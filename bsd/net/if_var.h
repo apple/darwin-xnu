@@ -754,6 +754,8 @@ LIST_HEAD(ifmultihead, ifmultiaddr);
 TAILQ_HEAD(tailq_head, tqdummy);
 TAILQ_HEAD(ifnet_filter_head, ifnet_filter);
 TAILQ_HEAD(ddesc_head_name, dlil_demux_desc);
+
+extern boolean_t intcoproc_unrestricted;
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef PRIVATE

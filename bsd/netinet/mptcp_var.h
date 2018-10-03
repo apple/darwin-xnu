@@ -223,7 +223,7 @@ static inline int
 mptcp_subflow_cwnd_space(struct socket *so)
 {
 	struct tcpcb *tp = sototcpcb(so);
-	int cwnd = min(tp->snd_wnd, tp->snd_cwnd) - (tp->snd_nxt - tp->snd_una);
+	int cwnd = min(tp->snd_wnd, tp->snd_cwnd) - (so->so_snd.sb_cc);
 
 	return (min(cwnd, sbspace(&so->so_snd)));
 }
@@ -653,7 +653,8 @@ extern void mptcp_unset_cellicon(void);
 extern void mptcp_reset_rexmit_state(struct tcpcb *tp);
 extern void mptcp_reset_keepalive(struct tcpcb *tp);
 extern int mptcp_validate_csum(struct tcpcb *tp, struct mbuf *m, uint64_t dsn,
-			       uint32_t sseq, uint16_t dlen, uint16_t csum);
+			       uint32_t sseq, uint16_t dlen, uint16_t csum,
+			       uint16_t dfin);
 __END_DECLS
 
 #endif /* BSD_KERNEL_PRIVATE */

@@ -994,6 +994,13 @@ pktap_bpf_tap(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
 	void (*bpf_tap_func)(ifnet_t, u_int32_t, mbuf_t, void *, size_t) =
 		outgoing ? bpf_tap_out : bpf_tap_in;
 
+
+	/*
+	 * Skip the coprocessor interface
+	 */
+	if (!intcoproc_unrestricted && IFNET_IS_INTCOPROC(ifp))
+		return;
+
 	lck_rw_lock_shared(pktap_lck_rw);
 
 	/*

@@ -7,7 +7,12 @@ if_capenable_strings = ["RXCSUM",
                         "TSO6",
                         "LRO",
                         "AV",
-                        "TXSTATUS"
+                        "TXSTATUS",
+                        "CHANNEL_IO",
+                        "HW_TIMESTAMP",
+                        "SW_TIMESTAMP",
+                        "CSUM_PARTIAL",
+                        "CSUM_ZERO_INVERT"
                        ]
 
 if_flags_strings = ["UP",

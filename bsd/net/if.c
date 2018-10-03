@@ -243,6 +243,8 @@ static uint32_t if_verbose = 0;
 SYSCTL_INT(_net_link_generic_system, OID_AUTO, if_verbose,
     CTLFLAG_RW | CTLFLAG_LOCKED, &if_verbose, 0, "");
 
+boolean_t intcoproc_unrestricted;
+
 /* Eventhandler context for interface events */
 struct eventhandler_lists_ctxt ifnet_evhdlr_ctxt;
 
@@ -270,6 +272,9 @@ ifa_init(void)
 
 	lck_mtx_init(&ifma_trash_lock, ifa_mtx_grp, ifa_mtx_attr);
 	TAILQ_INIT(&ifma_trash_head);
+
+	PE_parse_boot_argn("intcoproc_unrestricted", &intcoproc_unrestricted,
+           sizeof (intcoproc_unrestricted));
 }
 
 /*
@@ -2062,7 +2067,14 @@ ifnet_reset_order(u_int32_t *ordered_indices, u_int32_t count)
 	int error = 0;
 
 	ifnet_head_lock_exclusive();
-
+	for (u_int32_t order_index = 0; order_index < count; order_index++) {
+		if (ordered_indices[order_index] == IFSCOPE_NONE ||
+		    ordered_indices[order_index] > (uint32_t)if_index) {
+			error = EINVAL;
+			ifnet_head_done();
+			return (error);
+		}
+	}
 	// Flush current ordered list
 	for (ifp = TAILQ_FIRST(&ifnet_ordered_head); ifp != NULL;
 	    ifp = TAILQ_FIRST(&ifnet_ordered_head)) {
@@ -2075,10 +2087,6 @@ ifnet_reset_order(u_int32_t *ordered_indices, u_int32_t count)
 
 	for (u_int32_t order_index = 0; order_index < count; order_index++) {
 		u_int32_t interface_index = ordered_indices[order_index];
-		if (interface_index == IFSCOPE_NONE ||
-			interface_index > (uint32_t)if_index) {
-			break;
-		}
 		ifp = ifindex2ifnet[interface_index];
 		if (ifp == NULL) {
 			continue;
@@ -2130,7 +2138,6 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 {
 	int error = 0;
 	u_int32_t *ordered_indices = NULL;
-
 	if (data == NULL) {
 		return (EINVAL);
 	}
@@ -2139,7 +2146,7 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 	case SIOCSIFORDER: {		/* struct if_order */
 		struct if_order *ifo = (struct if_order *)(void *)data;
 
-		if (ifo->ifo_count > (u_int32_t)if_index) {
+		if (ifo->ifo_count == 0 || ifo->ifo_count > (u_int32_t)if_index) {
 			error = EINVAL;
 			break;
 		}
@@ -2162,19 +2169,32 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 				break;
 			}
 		}
+		/* ordered_indices should not contain duplicates */
+		bool found_duplicate = FALSE;
+		for (uint32_t i = 0; i < (ifo->ifo_count - 1) && !found_duplicate ; i++){
+			for (uint32_t j = i + 1; j < ifo->ifo_count && !found_duplicate ; j++){
+				if (ordered_indices[j] == ordered_indices[i]){
+					error = EINVAL;
+					found_duplicate = TRUE;
+					break;
+				}
+			}
+		}
+		if (found_duplicate)
+			break;
 
 		error = ifnet_reset_order(ordered_indices, ifo->ifo_count);
+
 		break;
 	}
 
 	case SIOCGIFORDER: {		/* struct if_order */
 		struct if_order *ifo = (struct if_order *)(void *)data;
-
-		u_int32_t ordered_count = if_ordered_count;
+		u_int32_t ordered_count = *((volatile u_int32_t *)&if_ordered_count);
 
 		if (ifo->ifo_count == 0 ||
 			ordered_count == 0) {
-			ifo->ifo_count = ordered_count;
+			ifo->ifo_count = 0;
 		} else if (ifo->ifo_ordered_indices != USER_ADDR_NULL) {
 			u_int32_t count_to_copy =
 			    MIN(ordered_count, ifo->ifo_count);
@@ -2182,7 +2202,7 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 			struct ifnet *ifp = NULL;
 			u_int32_t cursor = 0;
 
-			ordered_indices = _MALLOC(length, M_NECP, M_WAITOK);
+			ordered_indices = _MALLOC(length, M_NECP, M_WAITOK | M_ZERO);
 			if (ordered_indices == NULL) {
 				error = ENOMEM;
 				break;
@@ -2190,7 +2210,8 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 
 			ifnet_head_lock_shared();
 			TAILQ_FOREACH(ifp, &ifnet_ordered_head, if_ordered_link) {
-				if (cursor >= count_to_copy) {
+				if (cursor >= count_to_copy ||
+				    cursor >= if_ordered_count) {
 					break;
 				}
 				ordered_indices[cursor] = ifp->if_index;
@@ -2198,7 +2219,11 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 			}
 			ifnet_head_done();
 
-			ifo->ifo_count = count_to_copy;
+			/* We might have parsed less than the original length
+			 * because the list could have changed.
+			 */
+			length = cursor * sizeof(u_int32_t);
+			ifo->ifo_count = cursor;
 			error = copyout(ordered_indices,
 			    ifo->ifo_ordered_indices, length);
 		} else {
@@ -2285,6 +2310,88 @@ ifioctl_nat64prefix(struct ifnet *ifp, u_long cmd, caddr_t data)
 }
 #endif
 
+
+/*
+ * List the ioctl()s we can perform on restricted INTCOPROC interfaces.
+ */
+static bool
+ifioctl_restrict_intcoproc(unsigned long cmd, const char *ifname,
+    struct ifnet *ifp, struct proc *p)
+{
+
+	if (intcoproc_unrestricted == TRUE) {
+		return (false);
+	}
+	if (proc_pid(p) == 0) {
+		return (false);
+	}
+	if (ifname) {
+		ifp = ifunit(ifname);
+	}
+	if (ifp == NULL) {
+		return (false);
+	}
+	if (!IFNET_IS_INTCOPROC(ifp)) {
+		return (false);
+	}
+	switch (cmd) {
+	case SIOCGIFBRDADDR:
+	case SIOCGIFCONF32:
+	case SIOCGIFCONF64:
+	case SIOCGIFFLAGS:
+	case SIOCGIFEFLAGS:
+	case SIOCGIFCAP:
+	case SIOCGIFMAC:
+	case SIOCGIFMETRIC:
+	case SIOCGIFMTU:
+	case SIOCGIFPHYS:
+	case SIOCGIFTYPE:
+	case SIOCGIFFUNCTIONALTYPE:
+	case SIOCGIFPSRCADDR:
+	case SIOCGIFPDSTADDR:
+	case SIOCGIFGENERIC:
+	case SIOCGIFDEVMTU:
+	case SIOCGIFVLAN:
+	case SIOCGIFBOND:
+	case SIOCGIFWAKEFLAGS:
+	case SIOCGIFGETRTREFCNT:
+	case SIOCGIFOPPORTUNISTIC:
+	case SIOCGIFLINKQUALITYMETRIC:
+	case SIOCGIFLOG:
+	case SIOCGIFDELEGATE:
+	case SIOCGIFEXPENSIVE:
+	case SIOCGIFINTERFACESTATE:
+	case SIOCGIFPROBECONNECTIVITY:
+	case SIOCGIFTIMESTAMPENABLED:
+	case SIOCGECNMODE:
+	case SIOCGQOSMARKINGMODE:
+	case SIOCGQOSMARKINGENABLED:
+	case SIOCGIFLOWINTERNET:
+	case SIOCGIFSTATUS:
+	case SIOCGIFMEDIA32:
+	case SIOCGIFMEDIA64:
+	case SIOCGIFDESC:
+	case SIOCGIFLINKPARAMS:
+	case SIOCGIFQUEUESTATS:
+	case SIOCGIFTHROTTLE:
+	case SIOCGIFAGENTIDS32:
+	case SIOCGIFAGENTIDS64:
+	case SIOCGIFNETSIGNATURE:
+	case SIOCGIFINFO_IN6:
+	case SIOCGIFAFLAG_IN6:
+	case SIOCGNBRINFO_IN6:
+	case SIOCGIFALIFETIME_IN6:
+	case SIOCGIFNETMASK_IN6:
+		return (false);
+	default:
+#if (DEBUG || DEVELOPMENT)
+		printf("%s: cmd 0x%lx not allowed (pid %u)\n",
+		    __func__, cmd, proc_pid(p));
+#endif
+		return (true);
+	}
+	return (false);
+}
 
 /*
  * Interface ioctls.
@@ -2418,6 +2525,10 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		bcopy(data, &ifr, sizeof (ifr));
 		ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 		bcopy(&ifr.ifr_name, ifname, IFNAMSIZ);
+		if (ifioctl_restrict_intcoproc(cmd, ifname, NULL, p) == true) {
+			error = EPERM;
+			goto done;
+		}
 		error = ifioctl_ifreq(so, cmd, &ifr, p);
 		bcopy(&ifr, data, sizeof (ifr));
 		goto done;
@@ -2535,6 +2646,10 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		goto done;
 	}
 
+	if (ifioctl_restrict_intcoproc(cmd, NULL, ifp, p) == true) {
+		error = EPERM;
+		goto done;
+	}
 	switch (cmd) {
 	case SIOCSIFPHYADDR:			/* struct {if,in_}aliasreq */
 #if INET6

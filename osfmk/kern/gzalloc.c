@@ -57,7 +57,7 @@
  *	-gzalloc_noconsistency: disable consistency checks that flag mismatched
  *	frees, corruptions of the header/trailer signatures etc.
  *	-nogzalloc_mode: Disables the guard mode allocator. The DEBUG kernel
- *	enables the guard allocator for zones sized 8K-16K (if present) by
+ *	enables the guard allocator for zones sized 1K (if present) by
  *	default, this option can disable that behaviour.
  *	gzname=<name> target a zone by name. Can be coupled with size-based
  *	targeting. Naming conventions match those of the zlog boot-arg, i.e.

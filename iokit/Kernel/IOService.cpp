@@ -190,6 +190,7 @@ static IOLock *			gIOServiceBusyLock;
 bool				gCPUsRunning;
 
 static thread_t			gIOTerminateThread;
+static thread_t			gIOTerminateWorkerThread;
 static UInt32			gIOTerminateWork;
 static OSArray *		gIOTerminatePhase2List;
 static OSArray *		gIOStopList;
@@ -448,6 +449,11 @@ void IOService::initialize( void )
     gIOStopProviderList    = OSArray::withCapacity( 16 );
     gIOFinalizeList	   = OSArray::withCapacity( 16 );
     assert( gIOTerminatePhase2List && gIOStopList && gIOStopProviderList && gIOFinalizeList );
+
+    // worker thread that is responsible for terminating / cleaning up threads
+    kernel_thread_start(&terminateThread, NULL, &gIOTerminateWorkerThread);
+    assert(gIOTerminateWorkerThread);
+    thread_set_thread_name(gIOTerminateWorkerThread, "IOServiceTerminateThread");
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -2221,13 +2227,27 @@ void IOService::setTerminateDefer(IOService * provider, bool defer)
     }
 }
 
+// Must call this while holding gJobsLock
+void IOService::waitToBecomeTerminateThread(void)
+{
+    IOLockAssert(gJobsLock, kIOLockAssertOwned);
+    bool wait;
+    do {
+        wait = (gIOTerminateThread != THREAD_NULL);
+        if (wait) {
+            IOLockSleep(gJobsLock, &gIOTerminateThread, THREAD_UNINT);
+        }
+    } while (wait);
+    gIOTerminateThread = current_thread();
+}
+
 // call with lockForArbitration
 void IOService::scheduleTerminatePhase2( IOOptionBits options )
 {
     AbsoluteTime	deadline;
     uint64_t		regID1;
     int			waitResult = THREAD_AWAKENED;
-    bool		wait, haveDeadline = false;
+    bool		wait = false, haveDeadline = false;
 
     if (!(__state[0] & kIOServiceInactiveState)) return;
 
@@ -2249,15 +2269,7 @@ void IOService::scheduleTerminatePhase2( IOOptionBits options )
     if( (options & kIOServiceSynchronous)
         && (current_thread() != gIOTerminateThread)) {
 
-        do {
-            wait = (gIOTerminateThread != 0);
-            if( wait) {
-                // wait to become the terminate thread
-                IOLockSleep( gJobsLock, &gIOTerminateThread, THREAD_UNINT);
-            }
-        } while( wait );
-
-        gIOTerminateThread = current_thread();
+        waitToBecomeTerminateThread();
         gIOTerminatePhase2List->setObject( this );
         gIOTerminateWork++;
 
@@ -2273,8 +2285,8 @@ void IOService::scheduleTerminatePhase2( IOOptionBits options )
                 }
                 waitResult = IOLockSleepDeadline( gJobsLock, &gIOTerminateWork,
                                                   deadline, THREAD_UNINT );
-                if( waitResult == THREAD_TIMED_OUT) {
-                    IOLog("%s[0x%qx]::terminate(kIOServiceSynchronous) timeout\n", getName(), getRegistryEntryID());
+                if(__improbable(waitResult == THREAD_TIMED_OUT)) {
+                    panic("%s[0x%qx]::terminate(kIOServiceSynchronous) timeout\n", getName(), getRegistryEntryID());
 		}
             }
         } while(gIOTerminateWork || (wait && (waitResult != THREAD_TIMED_OUT)));
@@ -2287,11 +2299,9 @@ void IOService::scheduleTerminatePhase2( IOOptionBits options )
 
         gIOTerminatePhase2List->setObject( this );
         if( 0 == gIOTerminateWork++) {
-	    if( !gIOTerminateThread)
-		kernel_thread_start(&terminateThread, (void *)(uintptr_t) options, &gIOTerminateThread);
-	    else
-		IOLockWakeup(gJobsLock, (event_t) &gIOTerminateWork, /* one-thread */ false );
-	}
+            assert(gIOTerminateWorkerThread);
+            IOLockWakeup(gJobsLock, (event_t)&gIOTerminateWork, /* one-thread */ false );
+        }
     }
 
     IOLockUnlock( gJobsLock );
@@ -2299,18 +2309,23 @@ void IOService::scheduleTerminatePhase2( IOOptionBits options )
     release();
 }
 
+__attribute__((__noreturn__))
 void IOService::terminateThread( void * arg, wait_result_t waitResult )
 {
-    IOLockLock( gJobsLock );
+    // IOLockSleep re-acquires the lock on wakeup, so we only need to do this once
+    IOLockLock(gJobsLock);
+    while (true) {
+        if (gIOTerminateThread != gIOTerminateWorkerThread) {
+            waitToBecomeTerminateThread();
+        }
 
-    while (gIOTerminateWork)
-	terminateWorker( (uintptr_t) arg );
+        while (gIOTerminateWork)
+            terminateWorker( (uintptr_t)arg );
 
-    thread_deallocate(gIOTerminateThread);
-    gIOTerminateThread = 0;
-    IOLockWakeup( gJobsLock, (event_t) &gIOTerminateThread, /* one-thread */ false);
-
-    IOLockUnlock( gJobsLock );
+        gIOTerminateThread = 0;
+        IOLockWakeup( gJobsLock, (event_t) &gIOTerminateThread, /* one-thread */ false);
+        IOLockSleep(gJobsLock, &gIOTerminateWork, THREAD_UNINT);
+    }
 }
 
 void IOService::scheduleStop( IOService * provider )
@@ -2331,10 +2346,8 @@ void IOService::scheduleStop( IOService * provider )
     gIOStopProviderList->tailQ( provider );
 
     if( 0 == gIOTerminateWork++) {
-        if( !gIOTerminateThread)
-	    kernel_thread_start(&terminateThread, (void *) 0, &gIOTerminateThread);
-        else
-            IOLockWakeup(gJobsLock, (event_t) &gIOTerminateWork, /* one-thread */ false );
+        assert(gIOTerminateWorkerThread);
+        IOLockWakeup(gJobsLock, (event_t)&gIOTerminateWork, /* one-thread */ false );
     }
 
     IOLockUnlock( gJobsLock );
@@ -2355,12 +2368,9 @@ void IOService::scheduleFinalize(bool now)
     {
 	IOLockLock( gJobsLock );
 	gIOFinalizeList->tailQ(this);
-	if( 0 == gIOTerminateWork++)
-	{
-	    if( !gIOTerminateThread)
-		kernel_thread_start(&terminateThread, (void *) 0, &gIOTerminateThread);
-	    else
-		IOLockWakeup(gJobsLock, (event_t) &gIOTerminateWork, /* one-thread */ false );
+	if( 0 == gIOTerminateWork++) {
+	    assert(gIOTerminateWorkerThread);
+	    IOLockWakeup(gJobsLock, (event_t)&gIOTerminateWork, /* one-thread */ false );
 	}
 	IOLockUnlock( gJobsLock );
     }
@@ -5086,6 +5096,7 @@ bool IOResources::matchPropertyTable( OSDictionary * table )
     OSString *		str;
     OSSet *		set;
     OSIterator *	iter;
+    OSObject *          obj;
     OSArray *           keys;
     bool		ok = true;
 
@@ -5106,14 +5117,15 @@ bool IOResources::matchPropertyTable( OSDictionary * table )
     }
     else if ((prop = table->getObject(gIOResourceMatchedKey)))
     {
-        keys = (OSArray *) copyProperty(gIOResourceMatchedKey);
+        obj = copyProperty(gIOResourceMatchedKey);
+        keys = OSDynamicCast(OSArray, obj);
         ok = false;
         if (keys)
         {
             // assuming OSSymbol
             ok = ((-1U) != keys->getNextIndexOfObject(prop, 0));
-            keys->release();
         }
+        OSSafeReleaseNULL(obj);
     }
 
     return( ok );

@@ -626,7 +626,7 @@ sysctl_llreach_ifinfo SYSCTL_HANDLER_ARGS
 	unsigned int	namelen;
 	uint32_t	ifindex;
 	struct if_llreach *lr;
-	struct if_llreach_info lri;
+	struct if_llreach_info lri = {};
 	struct ifnet	*ifp;
 
 	name = (int *)arg1;

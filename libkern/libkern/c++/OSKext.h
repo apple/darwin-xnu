@@ -630,6 +630,7 @@ public:
                                             OSDictionary * theDictionary,
                                             OSCollectionIterator * theIterator);
     static void     createExcludeListFromPrelinkInfo(OSArray * theInfoArray);
+    static boolean_t updateExcludeList(OSDictionary * infoDict);
 
     static bool     isWaitingKextd(void);
 

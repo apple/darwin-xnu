@@ -477,7 +477,7 @@ u_int32_t	rip6_sendspace = RIPV6SNDQ;
 u_int32_t	rip6_recvspace = RIPV6RCVQ;
 
 /* ICMPV6 parameters */
-int	icmp6_rediraccept = 0;		/* accept and process redirects */
+int	icmp6_rediraccept = 1;		/* accept and process redirects */
 int	icmp6_redirtimeout = 10 * 60;	/* 10 minutes */
 int	icmp6errppslim = 500;		/* 500 packets per second */
 int	icmp6rappslim = 10;		/* 10 packets per second */

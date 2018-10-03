@@ -173,7 +173,7 @@ SYSCTL_UINT(_net_inet_mptcp, OID_AUTO, probecnt, CTLFLAG_RW | CTLFLAG_LOCKED,
  * Static declarations
  */
 static uint16_t mptcp_input_csum(struct tcpcb *, struct mbuf *, uint64_t,
-				 uint32_t, uint16_t, uint16_t);
+				 uint32_t, uint16_t, uint16_t, uint16_t);
 
 static int
 mptcp_reass_present(struct socket *mp_so)
@@ -181,16 +181,17 @@ mptcp_reass_present(struct socket *mp_so)
 	struct mptcb *mp_tp = mpsotomppcb(mp_so)->mpp_pcbe->mpte_mptcb;
 	struct tseg_qent *q;
 	int dowakeup = 0;
+	int flags = 0;
 
 	/*
 	 * Present data to user, advancing rcv_nxt through
 	 * completed sequence space.
 	 */
 	if (mp_tp->mpt_state < MPTCPS_ESTABLISHED)
-		return (0);
+		return (flags);
 	q = LIST_FIRST(&mp_tp->mpt_segq);
 	if (!q || q->tqe_m->m_pkthdr.mp_dsn != mp_tp->mpt_rcvnxt)
-		return (0);
+		return (flags);
 
 	/*
 	 * If there is already another thread doing reassembly for this
@@ -198,7 +199,7 @@ mptcp_reass_present(struct socket *mp_so)
 	 * (radar 16316196)
 	 */
 	if (mp_tp->mpt_flags & MPTCPF_REASS_INPROG)
-		return (0);
+		return (flags);
 
 	mp_tp->mpt_flags |= MPTCPF_REASS_INPROG;
 
@@ -208,7 +209,8 @@ mptcp_reass_present(struct socket *mp_so)
 		if (mp_so->so_state & SS_CANTRCVMORE) {
 			m_freem(q->tqe_m);
 		} else {
-			if (sbappendstream(&mp_so->so_rcv, q->tqe_m))
+			flags = !!(q->tqe_m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN);
+			if (sbappendstream_rcvdemux(mp_so, q->tqe_m, 0, 0))
 				dowakeup = 1;
 		}
 		zfree(tcp_reass_zone, q);
@@ -219,7 +221,7 @@ mptcp_reass_present(struct socket *mp_so)
 
 	if (dowakeup)
 		sorwakeup(mp_so); /* done with socket lock held */
-	return (0);
+	return (flags);
 
 }
 
@@ -376,21 +378,40 @@ mptcp_input(struct mptses *mpte, struct mbuf *m)
 	 * In the degraded fallback case, data is accepted without DSS map
 	 */
 	if (mp_tp->mpt_flags & MPTCPF_FALLBACK_TO_TCP) {
+		struct mbuf *iter;
+		int mb_dfin = 0;
 fallback:
 		mptcp_sbrcv_grow(mp_tp);
+
+		for (iter = m; iter; iter = iter->m_next) {
+			if ((iter->m_flags & M_PKTHDR) &&
+			    (iter->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN)) {
+				mb_dfin = 1;
+				break;
+			}
+		}
 
 		/*
 		 * assume degraded flow as this may be the first packet
 		 * without DSS, and the subflow state is not updated yet.
 		 */
-		if (sbappendstream(&mp_so->so_rcv, m))
+		if (sbappendstream_rcvdemux(mp_so, m, 0, 0))
 			sorwakeup(mp_so);
+
 		DTRACE_MPTCP5(receive__degraded, struct mbuf *, m,
 		    struct socket *, mp_so,
 		    struct sockbuf *, &mp_so->so_rcv,
 		    struct sockbuf *, &mp_so->so_snd,
 		    struct mptses *, mpte);
 		count = mp_so->so_rcv.sb_cc - count;
+
+		mp_tp->mpt_rcvnxt += count;
+
+		if (mb_dfin) {
+			mptcp_close_fsm(mp_tp, MPCE_RECV_DATA_FIN);
+			socantrcvmore(mp_so);
+		}
+
 		mptcplog((LOG_DEBUG, "%s: Fallback read %d bytes\n", __func__,
 		    count), MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
 		return;
@@ -400,6 +421,7 @@ fallback:
 		u_int64_t mb_dsn;
 		int32_t mb_datalen;
 		int64_t todrop;
+		int mb_dfin = 0;
 
 		/* If fallback occurs, mbufs will not have PKTF_MPTCP set */
 		if (!(m->m_pkthdr.pkt_flags & PKTF_MPTCP))
@@ -450,14 +472,21 @@ fallback:
 				m_adj(m, -todrop);
 				mb_datalen -= todrop;
 			}
+
+			/*
+			 * We drop from the right edge of the mbuf, thus the
+			 * DATA_FIN is dropped as well
+			 */
+			m->m_pkthdr.pkt_flags &= ~PKTF_MPTCP_DFIN;
 		}
 
 		if (MPTCP_SEQ_GT(mb_dsn, mp_tp->mpt_rcvnxt) ||
 		    !LIST_EMPTY(&mp_tp->mpt_segq)) {
-			mptcp_reass(mp_so, &m->m_pkthdr, &mb_datalen, m);
+			mb_dfin = mptcp_reass(mp_so, &m->m_pkthdr, &mb_datalen, m);
 
 			goto next;
 		}
+		mb_dfin = !!(m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN);
 
 		if (MPTCP_SEQ_LT(mb_dsn, mp_tp->mpt_rcvnxt)) {
 			if (MPTCP_SEQ_LEQ((mb_dsn + mb_datalen),
@@ -485,7 +514,7 @@ fallback:
 
 		mptcp_sbrcv_grow(mp_tp);
 
-		if (sbappendstream(&mp_so->so_rcv, m))
+		if (sbappendstream_rcvdemux(mp_so, m, 0, 0))
 			wakeup = 1;
 
 		DTRACE_MPTCP6(receive, struct mbuf *, m, struct socket *, mp_so,
@@ -502,6 +531,10 @@ fallback:
 		mp_tp->mpt_rcvnxt += count;
 
 next:
+		if (mb_dfin) {
+			mptcp_close_fsm(mp_tp, MPCE_RECV_DATA_FIN);
+			socantrcvmore(mp_so);
+		}
 		m = save;
 		prev = save = NULL;
 		count = mp_so->so_rcv.sb_cc;
@@ -1076,19 +1109,13 @@ mptcp_update_rcv_state_meat(struct mptcb *mp_tp, struct tcpcb *tp,
 		mptcp_notify_mpfail(tp->t_inpcb->inp_socket);
 		return;
 	}
-		mptcplog((LOG_DEBUG,
-		    "%s: seqn = %x len = %x full = %llx rcvnxt = %llu \n", __func__,
-		    seqn, mdss_data_len, full_dsn, mp_tp->mpt_rcvnxt),
-		    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
+	mptcplog((LOG_DEBUG,
+	    "%s: seqn = %x len = %x full = %llx rcvnxt = %llu \n", __func__,
+	    seqn, mdss_data_len, full_dsn, mp_tp->mpt_rcvnxt),
+	    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
 
-	/* Process a Data FIN packet , handled in mptcp_do_fin_opt */
-	if ((seqn == 0) && (mdss_data_len == 1)) {
-		mptcplog((LOG_INFO, "%s: Data FIN in %s state \n", __func__,
-		    mptcp_state_to_str(mp_tp->mpt_state)),
-		    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_LOG);
-		return;
-	}
 	mptcp_notify_mpready(tp->t_inpcb->inp_socket);
+
 	tp->t_rcv_map.mpt_dsn = full_dsn;
 	tp->t_rcv_map.mpt_sseq = seqn;
 	tp->t_rcv_map.mpt_len = mdss_data_len;
@@ -1123,9 +1150,10 @@ mptcp_validate_dss_map(struct socket *so, struct tcpcb *tp, struct mbuf *m,
 }
 
 int
-mptcp_input_preproc(struct tcpcb *tp, struct mbuf *m, int drop_hdrlen)
+mptcp_input_preproc(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
+		    int drop_hdrlen)
 {
-	mptcp_insert_rmap(tp, m);
+	mptcp_insert_rmap(tp, m, th);
 	if (mptcp_validate_dss_map(tp->t_inpcb->inp_socket, tp, m,
 	    drop_hdrlen) != 0)
 		return -1;
@@ -1142,11 +1170,11 @@ mptcp_input_preproc(struct tcpcb *tp, struct mbuf *m, int drop_hdrlen)
 
 int
 mptcp_validate_csum(struct tcpcb *tp, struct mbuf *m, uint64_t dsn,
-		    uint32_t sseq, uint16_t dlen, uint16_t csum)
+		    uint32_t sseq, uint16_t dlen, uint16_t csum, uint16_t dfin)
 {
 	uint16_t mptcp_csum;
 
-	mptcp_csum = mptcp_input_csum(tp, m, dsn, sseq, dlen, csum);
+	mptcp_csum = mptcp_input_csum(tp, m, dsn, sseq, dlen, csum, dfin);
 	if (mptcp_csum) {
 		tp->t_mpflags |= TMPF_SND_MPFAIL;
 		mptcp_notify_mpfail(tp->t_inpcb->inp_socket);
@@ -1159,9 +1187,10 @@ mptcp_validate_csum(struct tcpcb *tp, struct mbuf *m, uint64_t dsn,
 
 static uint16_t
 mptcp_input_csum(struct tcpcb *tp, struct mbuf *m, uint64_t dsn, uint32_t sseq,
-		 uint16_t dlen, uint16_t csum)
+		 uint16_t dlen, uint16_t csum, uint16_t dfin)
 {
 	struct mptcb *mp_tp = tptomptp(tp);
+	uint16_t real_len = dlen - dfin;
 	uint32_t sum = 0;
 
 	if (mp_tp == NULL)
@@ -1177,11 +1206,12 @@ mptcp_input_csum(struct tcpcb *tp, struct mbuf *m, uint64_t dsn, uint32_t sseq,
 	 * The remote side may send a packet with fewer bytes than the
 	 * claimed DSS checksum length.
 	 */
-	if ((int)m_length2(m, NULL) < dlen)
+	if ((int)m_length2(m, NULL) < real_len) {
 		return (0xffff);
+	}
 
-	if (dlen != 0)
-		sum = m_sum16(m, 0, dlen);
+	if (real_len != 0)
+		sum = m_sum16(m, 0, real_len);
 
 	sum += in_pseudo64(htonll(dsn), htonl(sseq), htons(dlen) + csum);
 	ADDCARRY(sum);

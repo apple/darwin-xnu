@@ -87,6 +87,8 @@
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
 
+#include <prng/random.h>
+
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -215,6 +217,8 @@ uintptr_t       zp_nopoison_cookie      = 0;
 boolean_t       zone_tagging_on;
 #endif /* VM_MAX_TAG_ZONES */
 
+static struct bool_gen zone_bool_gen;
+
 /*
  * initialize zone poisoning
  * called from zone_bootstrap before any allocations are made from zalloc
@@ -342,10 +346,6 @@ vm_offset_t     zone_map_max_address = 0;
 
 /* Globals for random boolean generator for elements in free list */
 #define MAX_ENTROPY_PER_ZCRAM 		4
-#define RANDOM_BOOL_GEN_SEED_COUNT      4
-static unsigned int bool_gen_seed[RANDOM_BOOL_GEN_SEED_COUNT];
-static unsigned int bool_gen_global = 0;
-decl_simple_lock_data(, bool_gen_lock)
 
 /* VM region for all metadata structures */
 vm_offset_t 	zone_metadata_region_min = 0;
@@ -368,7 +368,7 @@ decl_simple_lock_data(, all_zones_lock)
 unsigned int            num_zones_in_use;
 unsigned int            num_zones;
 
-#define MAX_ZONES       288
+#define MAX_ZONES       320
 struct zone             zone_array[MAX_ZONES];
 
 /* Used to keep track of empty slots in the zone_array */
@@ -2543,61 +2543,18 @@ zcram_metadata_init(vm_offset_t newmem, vm_size_t size, struct zone_page_metadat
 	return;
 }
 
-
-/*
- * Boolean Random Number Generator for generating booleans to randomize 
- * the order of elements in newly zcram()'ed memory. The algorithm is a 
- * modified version of the KISS RNG proposed in the paper:
- * http://stat.fsu.edu/techreports/M802.pdf
- * The modifications have been documented in the technical paper 
- * paper from UCL:
- * http://www0.cs.ucl.ac.uk/staff/d.jones/GoodPracticeRNG.pdf 
- */
-
-static void random_bool_gen_entropy(
-		int 	*buffer,
-		int 	count)
-{
-
-	int i, t;
-	simple_lock(&bool_gen_lock);
-	for (i = 0; i < count; i++) {
-		bool_gen_seed[1] ^= (bool_gen_seed[1] << 5);
-		bool_gen_seed[1] ^= (bool_gen_seed[1] >> 7);
-		bool_gen_seed[1] ^= (bool_gen_seed[1] << 22);
-		t = bool_gen_seed[2] + bool_gen_seed[3] + bool_gen_global;
-		bool_gen_seed[2] = bool_gen_seed[3];
-		bool_gen_global = t < 0;
-		bool_gen_seed[3] = t &2147483647;
-		bool_gen_seed[0] += 1411392427;
-		buffer[i] = (bool_gen_seed[0] + bool_gen_seed[1] + bool_gen_seed[3]);
-	}
-	simple_unlock(&bool_gen_lock);
-}
-
-static boolean_t random_bool_gen(
-		int 	*buffer,
-		int 	index,
-		int 	bufsize)
-{
-	int valindex, bitpos;
-	valindex = (index / (8 * sizeof(int))) % bufsize;
-	bitpos = index % (8 * sizeof(int));
-	return (boolean_t)(buffer[valindex] & (1 << bitpos));
-} 
-
-static void 
+static void
 random_free_to_zone(
 			zone_t 		zone,
 			vm_offset_t 	newmem,
 			vm_offset_t 	first_element_offset,
 			int 		element_count,
-			int 		*entropy_buffer)
+			unsigned int 	*entropy_buffer)
 {
 	vm_offset_t 	last_element_offset;
 	vm_offset_t 	element_addr;
 	vm_size_t       elem_size;
-	int 		index;	
+	int 		index;
 
 	assert(element_count  <= ZONE_CHUNK_MAXELEMENTS);
 	elem_size = zone->elem_size;
@@ -2608,7 +2565,7 @@ random_free_to_zone(
 #if DEBUG || DEVELOPMENT
 		leak_scan_debug_flag || __improbable(zone->tags) ||
 #endif /* DEBUG || DEVELOPMENT */
-	        random_bool_gen(entropy_buffer, index, MAX_ENTROPY_PER_ZCRAM)) {
+	        random_bool_gen_bits(&zone_bool_gen, entropy_buffer, MAX_ENTROPY_PER_ZCRAM, 1)) {
 			element_addr = newmem + first_element_offset;
 			first_element_offset += elem_size;
 		} else {
@@ -2635,7 +2592,7 @@ zcram(
 	vm_size_t	elem_size;
 	boolean_t   from_zm = FALSE;
 	int element_count;
-	int entropy_buffer[MAX_ENTROPY_PER_ZCRAM];
+	unsigned int entropy_buffer[MAX_ENTROPY_PER_ZCRAM] = { 0 };
 
 	/* Basic sanity checks */
 	assert(zone != ZONE_NULL && newmem != (vm_offset_t)0);
@@ -2650,12 +2607,12 @@ zcram(
 		from_zm = TRUE;
 
 	if (!from_zm) {
-		/* We cannot support elements larger than page size for foreign memory because we 
-		 * put metadata on the page itself for each page of foreign memory. We need to do 
-		 * this in order to be able to reach the metadata when any element is freed 
+		/* We cannot support elements larger than page size for foreign memory because we
+		 * put metadata on the page itself for each page of foreign memory. We need to do
+		 * this in order to be able to reach the metadata when any element is freed
 		 */
 		assert((zone->allows_foreign == TRUE) && (zone->elem_size <= (PAGE_SIZE - sizeof(struct zone_page_metadata))));
-	} 
+	}
 
 	if (zalloc_debug & ZALLOC_DEBUG_ZCRAM)
 		kprintf("zcram(%p[%s], 0x%lx%s, 0x%lx)\n", zone, zone->zone_name,
@@ -2663,10 +2620,8 @@ zcram(
 
 	ZONE_PAGE_COUNT_INCR(zone, (size / PAGE_SIZE));
 
-	random_bool_gen_entropy(entropy_buffer, MAX_ENTROPY_PER_ZCRAM);
-	
-	/* 
-	 * Initialize the metadata for all pages. We dont need the zone lock 
+	/*
+	 * Initialize the metadata for all pages. We dont need the zone lock
 	 * here because we are not manipulating any zone related state yet.
 	 */
 
@@ -2773,7 +2728,6 @@ void
 zone_bootstrap(void)
 {
 	char temp_buf[16];
-	unsigned int i;
 
 	if (!PE_parse_boot_argn("zalloc_debug", &zalloc_debug, sizeof(zalloc_debug)))
 		zalloc_debug = 0;
@@ -2781,11 +2735,7 @@ zone_bootstrap(void)
 	/* Set up zone element poisoning */
 	zp_init();
 
-	/* Seed the random boolean generator for elements in zone free list */
-	for (i = 0; i < RANDOM_BOOL_GEN_SEED_COUNT; i++) {
-		bool_gen_seed[i] = (unsigned int)early_random();
-	}
-	simple_lock_init(&bool_gen_lock, 0);
+	random_bool_init(&zone_bool_gen);
 
 	/* should zlog log to debug zone corruption instead of leaks? */
 	if (PE_parse_boot_argn("-zc", temp_buf, sizeof(temp_buf))) {

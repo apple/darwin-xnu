@@ -905,7 +905,11 @@ kmem_realloc(
 	oldmapsize = oldmapmax - oldmapmin;
 	newmapsize = vm_map_round_page(newsize,
 				       VM_MAP_PAGE_MASK(map));
-
+	if (newmapsize < newsize) {
+		/* overflow */
+		*newaddrp = 0;
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	/*
 	 *	Find the VM object backing the old region.
@@ -1075,6 +1079,11 @@ kmem_alloc_pageable(
 #endif
 	map_size = vm_map_round_page(size,
 				     VM_MAP_PAGE_MASK(map));
+	if (map_size < size) {
+		/* overflow */
+		*addrp = 0;
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	kr = vm_map_enter(map, &map_addr, map_size,
 			  (vm_map_offset_t) 0, 
@@ -1200,6 +1209,11 @@ kmem_suballoc(
 
 	map_size = vm_map_round_page(size,
 				     VM_MAP_PAGE_MASK(parent));
+	if (map_size < size) {
+		/* overflow */
+		*addr = 0;
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	/*
 	 *	Need reference on submap object because it is internal

@@ -58,6 +58,7 @@
 
 uint32_t	pmap_pcid_ncpus;
 boolean_t 	pmap_pcid_disabled = FALSE;
+pcid_cdata_t pcid_data[MAX_CPUS] __attribute__((aligned(64)));
 
 void	pmap_pcid_configure(void) {
 	int ccpu = cpu_number();
@@ -74,6 +75,7 @@ void	pmap_pcid_configure(void) {
 		kprintf("PMAP: PCID feature disabled %u\n", pmap_pcid_disabled);
 	}
 	 /* no_shared_cr3+PCID is currently unsupported */
+	//todo remove nscr3
 #if	DEBUG
 	if (pmap_pcid_disabled == FALSE)
 		no_shared_cr3 = FALSE;
@@ -134,7 +136,8 @@ void	pmap_pcid_configure(void) {
 		cpu_datap(ccpu)->cpu_pmap_pcid_coherentp =
 		    cpu_datap(ccpu)->cpu_pmap_pcid_coherentp_kernel =
 		    &(kernel_pmap->pmap_pcid_coherency_vector[ccpu]);
-		cpu_datap(ccpu)->cpu_pcid_refcounts[0] = 1;
+		cpu_datap(ccpu)->cpu_pcid_data = &pcid_data[ccpu];
+		cpu_datap(ccpu)->cpu_pcid_data->cpu_pcid_refcounts[0] = 1;
 	}
 }
 
@@ -167,13 +170,13 @@ pcid_t	pmap_pcid_allocate_pcid(int ccpu) {
 	int i;
 	pcid_ref_t 	cur_min = 0xFF;
 	uint32_t	cur_min_index = ~1;
-	pcid_ref_t	*cpu_pcid_refcounts = &cpu_datap(ccpu)->cpu_pcid_refcounts[0];
+	pcid_ref_t	*cpu_pcid_refcounts = &cpu_datap(ccpu)->cpu_pcid_data->cpu_pcid_refcounts[0];
 	pcid_ref_t	old_count;
 
-	if ((i = cpu_datap(ccpu)->cpu_pcid_free_hint) != 0) {
+	if ((i = cpu_datap(ccpu)->cpu_pcid_data->cpu_pcid_free_hint) != 0) {
 		if (cpu_pcid_refcounts[i] == 0) {
 			(void)__sync_fetch_and_add(&cpu_pcid_refcounts[i], 1);
-			cpu_datap(ccpu)->cpu_pcid_free_hint = 0;
+			cpu_datap(ccpu)->cpu_pcid_data->cpu_pcid_free_hint = 0;
 			return i;
 		}
 	}
@@ -193,8 +196,7 @@ pcid_t	pmap_pcid_allocate_pcid(int ccpu) {
 		if (cur_refcount == 0) {
 			(void)__sync_fetch_and_add(&cpu_pcid_refcounts[i], 1);
 			return i;
-		}
-		else {
+		} else {
 			if (cur_refcount < cur_min) {
 				cur_min_index = i;
 				cur_min = cur_refcount;
@@ -208,7 +210,7 @@ pcid_t	pmap_pcid_allocate_pcid(int ccpu) {
 
 	old_count = __sync_fetch_and_add(&cpu_pcid_refcounts[cur_min_index], 1);
 	pmap_assert(old_count < PMAP_PCID_MAX_REFCOUNT);
-	return cur_min_index;
+	return (cur_min_index);
 }
 
 void	pmap_pcid_deallocate_pcid(int ccpu, pmap_t tpmap) {
@@ -221,15 +223,15 @@ void	pmap_pcid_deallocate_pcid(int ccpu, pmap_t tpmap) {
 	if (pcid == PMAP_PCID_INVALID_PCID)
 		return;
 
-	lp = cpu_datap(ccpu)->cpu_pcid_last_pmap_dispatched[pcid];
+	lp = cpu_datap(ccpu)->cpu_pcid_data->cpu_pcid_last_pmap_dispatched[pcid];
 	pmap_assert(pcid > 0 && pcid < PMAP_PCID_MAX_PCID);
-	pmap_assert(cpu_datap(ccpu)->cpu_pcid_refcounts[pcid] >= 1);
+	pmap_assert(cpu_datap(ccpu)->cpu_pcid_data->cpu_pcid_refcounts[pcid] >= 1);
 
 	if (lp == tpmap)
-		(void)__sync_bool_compare_and_swap(&cpu_datap(ccpu)->cpu_pcid_last_pmap_dispatched[pcid], tpmap, PMAP_INVALID);
+		(void)__sync_bool_compare_and_swap(&cpu_datap(ccpu)->cpu_pcid_data->cpu_pcid_last_pmap_dispatched[pcid], tpmap, PMAP_INVALID);
 
-	if ((prior_count = __sync_fetch_and_sub(&cpu_datap(ccpu)->cpu_pcid_refcounts[pcid], 1)) == 1) {
-		    cpu_datap(ccpu)->cpu_pcid_free_hint = pcid;
+	if ((prior_count = __sync_fetch_and_sub(&cpu_datap(ccpu)->cpu_pcid_data->cpu_pcid_refcounts[pcid], 1)) == 1) {
+		    cpu_datap(ccpu)->cpu_pcid_data->cpu_pcid_free_hint = pcid;
 	}
 	pmap_assert(prior_count <= PMAP_PCID_MAX_REFCOUNT);
 }
@@ -253,6 +255,7 @@ pcid_t	pcid_for_pmap_cpu_tuple(pmap_t cpmap, thread_t cthread, int ccpu) {
 
 	return active_pmap->pmap_pcid_cpus[ccpu];
 }
+int npz = 0;
 
 #if PMAP_ASSERT
 #define PCID_RECORD_SIZE 128
@@ -263,6 +266,7 @@ void	pmap_pcid_activate(pmap_t tpmap, int ccpu, boolean_t nopagezero, boolean_t 
 	pcid_t		new_pcid = tpmap->pmap_pcid_cpus[ccpu];
 	pmap_t		last_pmap;
 	boolean_t	pcid_conflict = FALSE, pending_flush = FALSE;
+	pcid_cdata_t	*pcdata = cpu_datap(ccpu)->cpu_pcid_data;
 
 	pmap_assert(cpu_datap(ccpu)->cpu_pmap_pcid_enabled);
 	if (__improbable(new_pcid == PMAP_PCID_INVALID_PCID)) {
@@ -277,14 +281,14 @@ void	pmap_pcid_activate(pmap_t tpmap, int ccpu, boolean_t nopagezero, boolean_t 
 
 	pending_flush = (tpmap->pmap_pcid_coherency_vector[ccpu] != 0);
 	if (__probable(pending_flush == FALSE)) {
-		last_pmap = cpu_datap(ccpu)->cpu_pcid_last_pmap_dispatched[new_pcid];
+		last_pmap = pcdata->cpu_pcid_last_pmap_dispatched[new_pcid];
 		pcid_conflict = ((last_pmap != NULL) && (tpmap != last_pmap));
 	}
 	if (__improbable(pending_flush || pcid_conflict)) {
 		pmap_pcid_validate_cpu(tpmap, ccpu);
 	}
 	/* Consider making this a unique id */
-	cpu_datap(ccpu)->cpu_pcid_last_pmap_dispatched[new_pcid] = tpmap;
+	pcdata->cpu_pcid_last_pmap_dispatched[new_pcid] = tpmap;
 
 	pmap_assert(new_pcid < PMAP_PCID_MAX_PCID);
 	pmap_assert(((tpmap ==  kernel_pmap) && new_pcid == 0) ||
@@ -306,9 +310,24 @@ void	pmap_pcid_activate(pmap_t tpmap, int ccpu, boolean_t nopagezero, boolean_t 
 			ncr3 = kernel_pmap->pm_cr3;
 		}
 		cpu_datap(ccpu)->cpu_kernel_pcid = kernel_pmap->pmap_pcid_cpus[ccpu];
+		npz++;
 	}
 
-	set_cr3_composed(ncr3, new_pcid, !(pending_flush || pcid_conflict));
+	uint64_t preserve = !(pending_flush || pcid_conflict);
+	set_cr3_composed(ncr3, new_pcid, preserve);
+#if DEBUG
+	cpu_datap(ccpu)->cpu_pcid_last_cr3 = ncr3 | new_pcid | preserve << 63;
+#endif
+	uint64_t spcid = (new_pcid + PMAP_PCID_MAX_PCID);
+	if (new_pcid == 0) {
+		spcid = 0;
+	}
+	uint64_t scr3 = tpmap->pm_ucr3 | spcid;
+
+	cpu_datap(ccpu)->cpu_ucr3 = scr3;
+	cpu_shadowp(ccpu)->cpu_ucr3 = scr3;
+
+	cpu_shadowp(ccpu)->cpu_task_cr3 = ncr3 | new_pcid;
 
 	if (!pending_flush) {
 		/* We did not previously observe a pending invalidation for this

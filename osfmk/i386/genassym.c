@@ -311,11 +311,11 @@ main(
 	DECLARE("KERNEL_PML4_INDEX", KERNEL_PML4_INDEX);
 	DECLARE("IDTSZ",	IDTSZ);
 	DECLARE("GDTSZ",	GDTSZ);
-	DECLARE("LDTSZ",	LDTSZ);
 
 	DECLARE("KERNEL_DS",	KERNEL_DS);
 	DECLARE("USER_CS",	USER_CS);
 	DECLARE("USER_DS",	USER_DS);
+	DECLARE("USER_CTHREAD",	USER_CTHREAD);
 	DECLARE("KERNEL32_CS",	KERNEL32_CS);
 	DECLARE("KERNEL64_CS",  KERNEL64_CS);
 	DECLARE("USER64_CS",	USER64_CS);
@@ -350,14 +350,6 @@ main(
 		offsetof(cpu_data_t,cpu_running));
 	DECLARE("CPU_PENDING_AST",
 		offsetof(cpu_data_t,cpu_pending_ast));
-	DECLARE("CPU_DESC_TABLEP",
-		offsetof(cpu_data_t,cpu_desc_tablep));
-	DECLARE("CPU_DESC_INDEX",
-		offsetof(cpu_data_t,cpu_desc_index));
-	DECLARE("CDI_GDT",
-		offsetof(cpu_desc_index_t,cdi_gdt));
-	DECLARE("CDI_IDT",
-		offsetof(cpu_desc_index_t,cdi_idt));
 	DECLARE("CPU_PROCESSOR",
 		offsetof(cpu_data_t,cpu_processor));
         DECLARE("CPU_INT_STATE",
@@ -371,6 +363,14 @@ main(
 		offsetof(cpu_data_t, cpu_active_cr3));
         DECLARE("CPU_KERNEL_CR3",
 		offsetof(cpu_data_t, cpu_kernel_cr3));
+	DECLARE("CPU_UCR3",
+		offsetof(cpu_data_t, cpu_ucr3));
+#if	DEBUG
+	DECLARE("CPU_ENTRY_CR3",
+		offsetof(cpu_data_t, cpu_entry_cr3));
+	DECLARE("CPU_EXIT_CR3",
+		offsetof(cpu_data_t, cpu_exit_cr3));
+#endif
 	DECLARE("CPU_TLB_INVALID",
 		offsetof(cpu_data_t, cpu_tlb_invalid));
 	DECLARE("CPU_PAGEZERO_MAPPED",
@@ -418,6 +418,11 @@ main(
 	    offsetof(cpu_data_t, cpu_tlb_invalid_local));
 	DECLARE("CPU_TLB_INVALID_GLOBAL",
 		offsetof(cpu_data_t, cpu_tlb_invalid_global));
+	DECLARE("CPU_ESTACK",
+		offsetof(cpu_data_t, cd_estack));
+	DECLARE("CPU_DSHADOW",
+		offsetof(cpu_data_t, cd_shadow));
+
 	DECLARE("enaExpTrace",	enaExpTrace);
 	DECLARE("enaUsrFCall",	enaUsrFCall);
 	DECLARE("enaUsrPhyMp",	enaUsrPhyMp);

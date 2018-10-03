@@ -278,7 +278,9 @@ os_reason_ref(os_reason_t cur_reason)
 	lck_mtx_lock(&cur_reason->osr_lock);
 
 	assert(cur_reason->osr_refcount > 0);
-	cur_reason->osr_refcount++;
+	if (os_add_overflow(cur_reason->osr_refcount, 1, &cur_reason->osr_refcount)) {
+		panic("os reason refcount overflow");
+	}
 
 	lck_mtx_unlock(&cur_reason->osr_lock);
 
@@ -298,7 +300,9 @@ os_reason_free(os_reason_t cur_reason)
 
 	lck_mtx_lock(&cur_reason->osr_lock);
 
-	assert(cur_reason->osr_refcount > 0);
+	if (cur_reason->osr_refcount == 0) {
+		panic("os_reason_free called on reason with zero refcount");
+	}
 
 	cur_reason->osr_refcount--;
 	if (cur_reason->osr_refcount != 0) {

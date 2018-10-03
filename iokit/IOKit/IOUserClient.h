@@ -209,10 +209,11 @@ public:
     UInt8   __reservedA[1];
     volatile SInt32 __ipc;
     queue_head_t owners;
+    IOLock * lock;
 #if __LP64__
-    void  * __reserved[5];
-#else
     void  * __reserved[4];
+#else
+    void  * __reserved[3];
 #endif
 
 #else /* XNU_KERNEL_PRIVATE */

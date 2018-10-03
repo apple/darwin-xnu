@@ -499,7 +499,7 @@ clock_sleep_trap(
 	int					sleep_nsec = args->sleep_nsec;
 	mach_vm_address_t	wakeup_time_addr = args->wakeup_time;  
 	clock_t				clock;
-	mach_timespec_t		swtime;
+	mach_timespec_t		swtime = {};
 	kern_return_t		rvalue;
 
 	/*

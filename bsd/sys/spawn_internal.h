@@ -48,6 +48,25 @@
 #include <mach/port.h>
 #include <mach/exception_types.h>
 #include <mach/coalition.h>	/* COALITION_NUM_TYPES */
+#include <os/overflow.h>
+
+/*
+ * Safely compute the size in bytes of a structure, '_type', whose last
+ * element, '_member', is a zero-sized array meant to hold 'x' bytes.
+ *
+ * If the size calculation overflows a size_t value, this macro returns 0.
+ */
+#define PS_ACTION_SIZE(x,_type,_member_type) ({ \
+	size_t _ps_count = (size_t)x; \
+	size_t _ps_size = 0; \
+	/* (count * sizeof(_member_type)) + sizeof(_type) */ \
+	if (os_mul_and_add_overflow(_ps_count, \
+	                            sizeof(_member_type), \
+	                            sizeof(_type), \
+	                            &_ps_size)) { \
+		_ps_size = 0; \
+	} \
+	_ps_size; })
 
 /*
  * Allowable posix_spawn() port action types
@@ -86,7 +105,7 @@ typedef struct _posix_spawn_port_actions {
  * Returns size in bytes of a _posix_spawn_port_actions holding x elements.
  */
 #define	PS_PORT_ACTIONS_SIZE(x)	\
-	__offsetof(struct _posix_spawn_port_actions, pspa_actions[(x)])
+	PS_ACTION_SIZE(x, struct _posix_spawn_port_actions, _ps_port_action_t)
 
 #define NBINPREFS	4
 
@@ -115,7 +134,7 @@ typedef struct _posix_spawn_mac_policy_extensions {
  * Returns size in bytes of a _posix_spawn_mac_policy_extensions holding x elements.
  */
 #define PS_MAC_EXTENSIONS_SIZE(x)     \
-        __offsetof(struct _posix_spawn_mac_policy_extensions, psmx_extensions[(x)])
+	PS_ACTION_SIZE(x, struct _posix_spawn_mac_policy_extensions, _ps_mac_policy_extension_t)
 
 #define PS_MAC_EXTENSIONS_INIT_COUNT	2
 
@@ -334,7 +353,7 @@ typedef struct _posix_spawn_file_actions {
  * capable of containing.
  */
 #define	PSF_ACTIONS_SIZE(x)	\
-	__offsetof(struct _posix_spawn_file_actions, psfa_act_acts[(x)])
+	PS_ACTION_SIZE(x, struct _posix_spawn_file_actions, _psfa_action_t)
 
 /*
  * Initial count of actions in a struct _posix_spawn_file_actions after it is

@@ -145,6 +145,10 @@ next:;
 			T_PASS("found up-pointer for %s", uptr_names[found]);
 		}
 	}
+
+	uint64_t up_overflow[2] = {0};
+	uptrs_count = proc_list_uptrs(getpid(), up_overflow, sizeof(uint64_t)+1);
+	T_ASSERT_EQ(up_overflow[1], 0 , "overflow check");
 }
 
 #pragma mark dynamic kqueue info

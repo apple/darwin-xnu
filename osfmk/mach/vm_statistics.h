@@ -362,7 +362,8 @@ typedef struct {
 		vmkf_keep_map_locked:1,
 		vmkf_fourk:1,
 		vmkf_overwrite_immutable:1,
-		__vmkf_unused:19;
+		vmkf_remap_prot_copy:1,
+		__vmkf_unused:18;
 } vm_map_kernel_flags_t;
 #define VM_MAP_KERNEL_FLAGS_NONE (vm_map_kernel_flags_t) {		\
 	.vmkf_atomic_entry = 0,	/* keep entry atomic (no coalescing) */ \
@@ -378,6 +379,7 @@ typedef struct {
 	.vmkf_keep_map_locked = 0, /* keep map locked when returning from vm_map_enter() */ \
 	.vmkf_fourk = 0,	/* use fourk pager */			\
 	.vmkf_overwrite_immutable = 0,	/* can overwrite immutable mappings */ \
+	.vmkf_remap_prot_copy = 0, /* vm_remap for VM_PROT_COPY */ 	\
 	.__vmkf_unused = 0						\
 }
 #endif /* KERNEL_PRIVATE */

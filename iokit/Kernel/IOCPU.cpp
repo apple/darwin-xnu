@@ -183,12 +183,18 @@ IOCPURunPlatformPanicActions(uint32_t message)
 
 
 extern "C" kern_return_t
-IOCPURunPlatformPanicSyncAction(void *addr, size_t len)
+IOCPURunPlatformPanicSyncAction(void *addr, uint32_t offset, uint32_t len)
 {
+    PE_panic_save_context_t context = {
+        .psc_buffer = addr,
+        .psc_offset = offset,
+        .psc_length = len
+    };
+
     // Don't allow nested calls of panic actions
     if (!gActionQueues[kQueuePanic].next) return (kIOReturnNotReady);
     return (iocpu_run_platform_actions(&gActionQueues[kQueuePanic], 0, 0U-1,
-				    (void *)(uintptr_t)(kPEPanicSync), addr, (void *)(uintptr_t)len, FALSE));
+				    (void *)(uintptr_t)(kPEPanicSync), &context, NULL, FALSE));
 
 }
 

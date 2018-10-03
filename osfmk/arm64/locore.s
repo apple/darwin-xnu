@@ -34,6 +34,10 @@
 #include <config_dtrace.h>
 #include "assym.s"
 
+#if __ARM_KERNEL_PROTECT__
+#include <arm/pmap.h>
+#endif
+
 
 /*
  * INIT_SAVED_STATE_FLAVORS
@@ -53,16 +57,6 @@
 	str		$1, [$0, NS_COUNT]
 .endmacro
 
-.macro EL1_SP0_VECTOR
-	msr		SPSel, #0							// Switch to SP0
-	sub		sp, sp, ARM_CONTEXT_SIZE			// Create exception frame
-	stp		x0, x1, [sp, SS64_X0]				// Save x0, x1 to exception frame
-	add		x0, sp, ARM_CONTEXT_SIZE			// Calculate the original stack pointer
-	str		x0, [sp, SS64_SP]					// Save stack pointer to exception frame
-	stp		fp, lr, [sp, SS64_FP]				// Save fp and lr to exception frame
-	INIT_SAVED_STATE_FLAVORS sp, w0, w1
-	mov		x0, sp								// Copy saved state pointer to x0
-.endmacro
 
 /*
  * SPILL_REGISTERS
@@ -142,11 +136,183 @@
 #endif
 .endmacro
 
+/*
+ * MAP_KERNEL
+ *
+ * Restores the kernel EL1 mappings, if necessary.
+ *
+ * This may mutate x18.
+ */
+.macro MAP_KERNEL
+#if __ARM_KERNEL_PROTECT__
+	/* Switch to the kernel ASID (low bit set) for the task. */
+	mrs		x18, TTBR0_EL1
+	orr		x18, x18, #(1 << TTBR_ASID_SHIFT)
+	msr		TTBR0_EL1, x18
+
+	/*
+	 * We eschew some barriers on Apple CPUs, as relative ordering of writes
+	 * to the TTBRs and writes to the TCR should be ensured by the
+	 * microarchitecture.
+	 */
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+	isb		sy
+#endif
+
+	/*
+	 * Update the TCR to map the kernel now that we are using the kernel
+	 * ASID.
+	 */
+	MOV64		x18, TCR_EL1_BOOT
+	msr		TCR_EL1, x18
+	isb		sy
+#endif /* __ARM_KERNEL_PROTECT__ */
+.endmacro
+
+/*
+ * BRANCH_TO_KVA_VECTOR
+ *
+ * Branches to the requested long exception vector in the kernelcache.
+ *   arg0 - The label to branch to
+ *   arg1 - The index of the label in exc_vectors_tables
+ *
+ * This may mutate x18.
+ */
+.macro BRANCH_TO_KVA_VECTOR
+#if __ARM_KERNEL_PROTECT__
+	/*
+	 * Find the kernelcache table for the exception vectors by accessing
+	 * the per-CPU data.
+	 */
+	mrs		x18, TPIDR_EL1
+	ldr		x18, [x18, ACT_CPUDATAP]
+	ldr		x18, [x18, CPU_EXC_VECTORS]
+
+	/*
+	 * Get the handler for this exception and jump to it.
+	 */
+	ldr		x18, [x18, #($1 << 3)]
+	br		x18
+#else
+	b		$0
+#endif /* __ARM_KERNEL_PROTECT__ */
+.endmacro
+
+#if __ARM_KERNEL_PROTECT__
+	.data
+	.align 3
+	.globl EXT(exc_vectors_table)
+LEXT(exc_vectors_table)
+	/* Table of exception handlers. */
+	.quad Lel1_sp0_synchronous_vector_long
+	.quad Lel1_sp0_irq_vector_long
+	.quad Lel1_sp0_fiq_vector_long
+	.quad Lel1_sp0_serror_vector_long
+	.quad Lel1_sp1_synchronous_vector_long
+	.quad Lel1_sp1_irq_vector_long
+	.quad Lel1_sp1_fiq_vector_long
+	.quad Lel1_sp1_serror_vector_long
+	.quad Lel0_synchronous_vector_64_long
+	.quad Lel0_irq_vector_64_long
+	.quad Lel0_fiq_vector_64_long
+	.quad Lel0_serror_vector_64_long
+#endif /* __ARM_KERNEL_PROTECT__ */
+
 	.text
+#if __ARM_KERNEL_PROTECT__
+	/*
+	 * We need this to be on a page boundary so that we may avoiding mapping
+	 * other text along with it.  As this must be on the VM page boundary
+	 * (due to how the coredumping code currently works), this will be a
+	 * 16KB page boundary.
+	 */
+	.align 14
+#else
 	.align 12
+#endif /* __ARM_KERNEL_PROTECT__ */
 	.globl EXT(ExceptionVectorsBase)
 LEXT(ExceptionVectorsBase)
 Lel1_sp0_synchronous_vector:
+	BRANCH_TO_KVA_VECTOR Lel1_sp0_synchronous_vector_long, 0
+
+	.text
+	.align 7
+Lel1_sp0_irq_vector:
+	BRANCH_TO_KVA_VECTOR Lel1_sp0_irq_vector_long, 1
+
+	.text
+	.align 7
+Lel1_sp0_fiq_vector:
+	BRANCH_TO_KVA_VECTOR Lel1_sp0_fiq_vector_long, 2
+
+	.text
+	.align 7
+Lel1_sp0_serror_vector:
+	BRANCH_TO_KVA_VECTOR Lel1_sp0_serror_vector_long, 3
+
+	.text
+	.align 7
+Lel1_sp1_synchronous_vector:
+	BRANCH_TO_KVA_VECTOR Lel1_sp1_synchronous_vector_long, 4
+
+	.text
+	.align 7
+Lel1_sp1_irq_vector:
+	BRANCH_TO_KVA_VECTOR Lel1_sp1_irq_vector_long, 5
+
+	.text
+	.align 7
+Lel1_sp1_fiq_vector:
+	BRANCH_TO_KVA_VECTOR Lel1_sp1_fiq_vector_long, 6
+
+	.text
+	.align 7
+Lel1_sp1_serror_vector:
+	BRANCH_TO_KVA_VECTOR Lel1_sp1_serror_vector, 7
+
+	.text
+	.align 7
+Lel0_synchronous_vector_64:
+	MAP_KERNEL
+	BRANCH_TO_KVA_VECTOR Lel0_synchronous_vector_64_long, 8
+
+	.text
+	.align 7
+Lel0_irq_vector_64:
+	MAP_KERNEL
+	BRANCH_TO_KVA_VECTOR Lel0_irq_vector_64_long, 9
+
+	.text
+	.align 7
+Lel0_fiq_vector_64:
+	MAP_KERNEL
+	BRANCH_TO_KVA_VECTOR Lel0_fiq_vector_64_long, 10
+
+	.text
+	.align 7
+Lel0_serror_vector_64:
+	MAP_KERNEL
+	BRANCH_TO_KVA_VECTOR Lel0_serror_vector_64_long, 11
+
+	/* Fill out the rest of the page */
+	.align 12
+
+/*********************************
+ * END OF EXCEPTION VECTORS PAGE *
+ *********************************/
+
+.macro EL1_SP0_VECTOR
+	msr		SPSel, #0							// Switch to SP0
+	sub		sp, sp, ARM_CONTEXT_SIZE			// Create exception frame
+	stp		x0, x1, [sp, SS64_X0]				// Save x0, x1 to exception frame
+	add		x0, sp, ARM_CONTEXT_SIZE			// Calculate the original stack pointer
+	str		x0, [sp, SS64_SP]					// Save stack pointer to exception frame
+	stp		fp, lr, [sp, SS64_FP]				// Save fp and lr to exception frame
+	INIT_SAVED_STATE_FLAVORS sp, w0, w1
+	mov		x0, sp								// Copy saved state pointer to x0
+.endmacro
+
+Lel1_sp0_synchronous_vector_long:
 	sub		sp, sp, ARM_CONTEXT_SIZE			// Make space on the exception stack
 	stp		x0, x1, [sp, SS64_X0]				// Save x0, x1 to the stack
 	mrs		x1, ESR_EL1							// Get the exception syndrome
@@ -168,9 +334,7 @@ Lkernel_stack_valid:
 	add		x1, x1, fleh_synchronous@pageoff
 	b		fleh_dispatch64
 
-	.text
-	.align 7
-Lel1_sp0_irq_vector:
+Lel1_sp0_irq_vector_long:
 	EL1_SP0_VECTOR
 	mrs		x1, TPIDR_EL1
 	ldr		x1, [x1, ACT_CPUDATAP]
@@ -180,9 +344,7 @@ Lel1_sp0_irq_vector:
 	add		x1, x1, fleh_irq@pageoff
 	b		fleh_dispatch64
 
-	.text
-	.align 7
-Lel1_sp0_fiq_vector:
+Lel1_sp0_fiq_vector_long:
 	// ARM64_TODO write optimized decrementer
 	EL1_SP0_VECTOR
 	mrs		x1, TPIDR_EL1
@@ -193,9 +355,7 @@ Lel1_sp0_fiq_vector:
 	add		x1, x1, fleh_fiq@pageoff
 	b		fleh_dispatch64
 
-	.text
-	.align 7
-Lel1_sp0_serror_vector:
+Lel1_sp0_serror_vector_long:
 	EL1_SP0_VECTOR
 	adrp	x1, fleh_serror@page				// Load address for fleh
 	add		x1, x1, fleh_serror@pageoff
@@ -211,9 +371,7 @@ Lel1_sp0_serror_vector:
 	mov		x0, sp								// Copy saved state pointer to x0
 .endmacro
 
-	.text
-	.align 7
-Lel1_sp1_synchronous_vector:
+Lel1_sp1_synchronous_vector_long:
 #if defined(KERNEL_INTEGRITY_KTRR)
 	b		check_ktrr_sctlr_trap
 Lel1_sp1_synchronous_vector_continue:
@@ -223,25 +381,19 @@ Lel1_sp1_synchronous_vector_continue:
 	add		x1, x1, fleh_synchronous_sp1@pageoff
 	b		fleh_dispatch64
 
-	.text
-	.align 7
-Lel1_sp1_irq_vector:
+Lel1_sp1_irq_vector_long:
 	EL1_SP1_VECTOR
 	adrp	x1, fleh_irq_sp1@page
 	add		x1, x1, fleh_irq_sp1@pageoff
 	b		fleh_dispatch64
 
-	.text
-	.align 7
-Lel1_sp1_fiq_vector:
+Lel1_sp1_fiq_vector_long:
 	EL1_SP1_VECTOR
 	adrp	x1, fleh_fiq_sp1@page
 	add		x1, x1, fleh_fiq_sp1@pageoff
 	b		fleh_dispatch64
 
-	.text
-	.align 7
-Lel1_sp1_serror_vector:
+Lel1_sp1_serror_vector_long:
 	EL1_SP1_VECTOR
 	adrp	x1, fleh_serror_sp1@page
 	add		x1, x1, fleh_serror_sp1@pageoff
@@ -264,9 +416,8 @@ Lel1_sp1_serror_vector:
 	mov		x0, sp								// Copy the user PCB pointer to x0
 .endmacro
 
-	.text
-	.align 7
-Lel0_synchronous_vector_64:
+
+Lel0_synchronous_vector_64_long:
 	EL0_64_VECTOR
 	mrs		x1, TPIDR_EL1						// Load the thread register
 	ldr		x1, [x1, TH_KSTACKPTR]				// Load the top of the kernel stack to x1
@@ -275,9 +426,7 @@ Lel0_synchronous_vector_64:
 	add		x1, x1, fleh_synchronous@pageoff
 	b		fleh_dispatch64
 
-	.text
-	.align 7
-Lel0_irq_vector_64:
+Lel0_irq_vector_64_long:
 	EL0_64_VECTOR
 	mrs		x1, TPIDR_EL1
 	ldr		x1, [x1, ACT_CPUDATAP]
@@ -287,9 +436,7 @@ Lel0_irq_vector_64:
 	add		x1, x1, fleh_irq@pageoff
 	b		fleh_dispatch64
 
-	.text
-	.align 7
-Lel0_fiq_vector_64:
+Lel0_fiq_vector_64_long:
 	EL0_64_VECTOR
 	mrs		x1, TPIDR_EL1
 	ldr		x1, [x1, ACT_CPUDATAP]
@@ -299,9 +446,7 @@ Lel0_fiq_vector_64:
 	add		x1, x1, fleh_fiq@pageoff
 	b		fleh_dispatch64
 
-	.text
-	.align 7
-Lel0_serror_vector_64:
+Lel0_serror_vector_64_long:
 	EL0_64_VECTOR
 	mrs		x1, TPIDR_EL1						// Load the thread register
 	ldr		x1, [x1, TH_KSTACKPTR]				// Load the top of the kernel stack to x1
@@ -309,13 +454,6 @@ Lel0_serror_vector_64:
 	adrp	x1, fleh_serror@page				// load address for fleh
 	add		x1, x1, fleh_serror@pageoff
 	b		fleh_dispatch64
-
-	/* Fill out the rest of the page */
-	.align 12
-
-/*********************************
- * END OF EXCEPTION VECTORS PAGE *
- *********************************/
 
 
 /*
@@ -755,6 +893,26 @@ exception_return:
 	ldr		x0, [x3, TH_CTH_DATA]				// Load cthread data pointer
 	str		x0, [sp, SS64_X18]					// and use it to trash x18
 
+#if __ARM_KERNEL_PROTECT__
+	/*
+	 * If we are going to eret to userspace, we must return through the EL0
+	 * eret mapping.
+	 */
+	ldr		w1, [sp, SS64_CPSR]									// Load CPSR
+	tbnz		w1, PSR64_MODE_EL_SHIFT, Lskip_el0_eret_mapping	// Skip if returning to EL1
+
+	/* We need to switch to the EL0 mapping of this code to eret to EL0. */
+	adrp		x0, EXT(ExceptionVectorsBase)@page				// Load vector base
+	adrp		x1, Lexception_return_restore_registers@page	// Load target PC
+	add		x1, x1, Lexception_return_restore_registers@pageoff
+	MOV64		x2, ARM_KERNEL_PROTECT_EXCEPTION_START			// Load EL0 vector address
+	sub		x1, x1, x0											// Calculate delta
+	add		x0, x2, x1											// Convert KVA to EL0 vector address
+	br		x0
+
+Lskip_el0_eret_mapping:
+#endif /* __ARM_KERNEL_PROTECT__ */
+
 Lexception_return_restore_registers:
 	/* Restore special register state */
 	ldr		x0, [sp, SS64_PC]					// Get the return address
@@ -809,7 +967,38 @@ Lexception_return_restore_registers:
 	// Restore stack pointer and our last two GPRs
 	ldr		x1, [x0, SS64_SP]
 	mov		sp, x1
+
+#if __ARM_KERNEL_PROTECT__
+	ldr		w18, [x0, SS64_CPSR]				// Stash CPSR
+#endif /* __ARM_KERNEL_PROTECT__ */
+
 	ldp		x0, x1, [x0, SS64_X0]				// Restore the GPRs
+
+#if __ARM_KERNEL_PROTECT__
+	/* If we are going to eret to userspace, we must unmap the kernel. */
+	tbnz		w18, PSR64_MODE_EL_SHIFT, Lskip_ttbr1_switch
+
+	/* Update TCR to unmap the kernel. */
+	MOV64		x18, TCR_EL1_USER
+	msr		TCR_EL1, x18
+
+	/*
+	 * On Apple CPUs, TCR writes and TTBR writes should be ordered relative to
+	 * each other due to the microarchitecture.
+	 */
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+	isb		sy
+#endif
+
+	/* Switch to the user ASID (low bit clear) for the task. */
+	mrs		x18, TTBR0_EL1
+	bic		x18, x18, #(1 << TTBR_ASID_SHIFT)
+	msr		TTBR0_EL1, x18
+	mov		x18, xzr
+
+	/* We don't need an ISB here, as the eret is synchronizing. */
+Lskip_ttbr1_switch:
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 	eret
 
@@ -855,6 +1044,18 @@ rwlock_count_notzero:
 L_rwlock_count_notzero_str:
 	.asciz "RW lock count not 0 on thread %p (%u)"
 .align 2
+
+#if __ARM_KERNEL_PROTECT__
+	/*
+	 * This symbol denotes the end of the exception vector/eret range; we page
+	 * align it so that we can avoid mapping other text in the EL0 exception
+	 * vector mapping.
+	 */
+	.text
+	.align 14
+	.globl EXT(ExceptionVectorsEnd)
+LEXT(ExceptionVectorsEnd)
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 	.text
 	.align 2

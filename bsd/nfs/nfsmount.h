@@ -267,7 +267,7 @@ struct nfsmount {
 	uint32_t nm_minor_vers;		/* minor version of above */
 	uint32_t nm_min_vers;		/* minimum packed version to try */
 	uint32_t nm_max_vers;		/* maximum packed version to try */
-	struct nfs_funcs *nm_funcs;	/* version-specific functions */
+	const struct nfs_funcs *nm_funcs;/* version-specific functions */
 	kauth_cred_t nm_mcred;		/* credential used for the mount */
 	mount_t	nm_mountp;		/* VFS structure for this filesystem */
 	nfsnode_t nm_dnp;		/* root directory nfsnode pointer */

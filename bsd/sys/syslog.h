@@ -326,7 +326,6 @@ struct reg_desc {
 __BEGIN_DECLS
 void	log(int, const char *, ...);
 #ifdef XNU_KERNEL_PRIVATE
-void	logpri(int);
 int	vaddlog(const char *, va_list) __printflike(1,0);
 void	logtime(time_t);
 #endif /* XNU_KERNEL_PRIVATE */

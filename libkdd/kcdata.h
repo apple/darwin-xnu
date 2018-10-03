@@ -469,7 +469,7 @@ struct kcdata_type_definition {
 #define STACKSHOT_KCTYPE_STACKSHOT_FAULT_STATS 0x91bu /* struct stackshot_fault_stats */
 #define STACKSHOT_KCTYPE_KERNELCACHE_LOADINFO  0x91cu /* kernelcache UUID -- same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
 #define STACKSHOT_KCTYPE_THREAD_WAITINFO 0x91du       /* struct stackshot_thread_waitinfo */
-#define STACKSHOT_KCTYPE_THREAD_GROUP_SNAPSHOT 0x91eu /* struct thread_group_snapshot */
+#define STACKSHOT_KCTYPE_THREAD_GROUP_SNAPSHOT 0x91eu /* struct thread_group_snapshot or thread_group_snapshot_v2 */
 #define STACKSHOT_KCTYPE_THREAD_GROUP 0x91fu          /* uint64_t */
 #define STACKSHOT_KCTYPE_JETSAM_COALITION_SNAPSHOT 0x920u /* struct jetsam_coalition_snapshot */
 #define STACKSHOT_KCTYPE_JETSAM_COALITION 0x921u      /* uint64_t */
@@ -657,6 +657,17 @@ struct thread_snapshot_v4 {
 struct thread_group_snapshot {
 	uint64_t tgs_id;
 	char tgs_name[16];
+} __attribute__((packed));
+
+enum thread_group_flags {
+	kThreadGroupEfficient = 0x1,
+	kThreadGroupUIApp = 0x2
+};
+
+struct thread_group_snapshot_v2 {
+	uint64_t tgs_id;
+	char tgs_name[16];
+	uint64_t tgs_flags;
 } __attribute__((packed));
 
 enum coalition_flags {

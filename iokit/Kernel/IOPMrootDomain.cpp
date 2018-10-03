@@ -611,7 +611,7 @@ extern "C" IOReturn rootDomainShutdown ( void )
 
 static void halt_log_putc(char c)
 {
-    if (gHaltLogPos >= (kHaltLogSize - 1)) return;
+    if (gHaltLogPos >= (kHaltLogSize - 2)) return;
     gHaltLog[gHaltLogPos++] = c;
 }
 
@@ -645,12 +645,15 @@ halt_log_enter(const char * what, const void * pc, uint64_t time)
 
     IOLockLock(gHaltLogLock);
     if (pc) {
-	halt_log("%s: %qd ms @ 0x%lx, ", what, millis, VM_KERNEL_UNSLIDE(pc));
-	OSKext::printKextsInBacktrace((vm_offset_t *) &pc, 1, &halt_log,
-	     OSKext::kPrintKextsLock | OSKext::kPrintKextsUnslide | OSKext::kPrintKextsTerse);
-    } else {
-	halt_log("%s: %qd ms\n", what, millis, VM_KERNEL_UNSLIDE(pc));
+        halt_log("%s: %qd ms @ 0x%lx, ", what, millis, VM_KERNEL_UNSLIDE(pc));
+        OSKext::printKextsInBacktrace((vm_offset_t *) &pc, 1, &halt_log,
+                OSKext::kPrintKextsLock | OSKext::kPrintKextsUnslide | OSKext::kPrintKextsTerse);
     }
+    else {
+        halt_log("%s: %qd ms\n", what, millis);
+    }
+
+    gHaltLog[gHaltLogPos] = 0;
     IOLockUnlock(gHaltLogLock);
 }
 
@@ -675,6 +678,7 @@ extern "C" void IOSystemShutdownNotification(void)
 #if HIBERNATION
     startTime = mach_absolute_time();
     IOHibernateSystemPostWake(true);
+    gRootDomain->swdDebugTeardown();
     halt_log_enter("IOHibernateSystemPostWake", 0, mach_absolute_time() - startTime);
 #endif
     if (OSCompareAndSwap(0, 1, &gPagingOff))
@@ -782,13 +786,15 @@ static void swdDebugSetupCallout( thread_call_param_t p0, thread_call_param_t p1
 void IOPMrootDomain::swdDebugSetup( )
 {
 #if	HIBERNATION
-    static int32_t mem_only = -1;
-    if ((mem_only == -1) &&
-        (PE_parse_boot_argn("swd_mem_only", &mem_only, sizeof(mem_only)) == false)) {
-        mem_only = 0;
+    static int32_t noDebugFile = -1;
+    if (noDebugFile == -1) {
+        if (PEGetCoprocessorVersion() >= kCoprocessorVersion2)
+            noDebugFile = 1;
+        else if (PE_parse_boot_argn("swd_mem_only", &noDebugFile, sizeof(noDebugFile)) == false)
+            noDebugFile = 0;
     }
 
-   if ((mem_only == 1) || (gRootDomain->sleepWakeDebugIsWdogEnabled() == false)) {
+   if ((noDebugFile == 1) || (gRootDomain->sleepWakeDebugIsWdogEnabled() == false)) {
        return;
    }
     DLOG("swdDebugSetup state:%d\n", swd_DebugImageSetup);
@@ -797,6 +803,7 @@ void IOPMrootDomain::swdDebugSetup( )
         if (CAP_GAIN(kIOPMSystemCapabilityGraphics) ||
                 (CAP_LOSS(kIOPMSystemCapabilityGraphics))) {
             IOHibernateSystemPostWake(true);
+            IOCloseDebugDataFile();
         }
         IOOpenDebugDataFile(kSleepWakeStackBinFilename, SWD_BUF_SIZE);
     }
@@ -844,6 +851,11 @@ static void disk_sync_callout( thread_call_param_t p0, thread_call_param_t p1 )
     if (ON_STATE == powerState)
     {
         sync_internal();
+
+#if HIBERNATION
+        // Block sleep until trim issued on previous wake path is completed.
+        IOHibernateSystemPostWake(true);
+#endif
         swdDebugSetupCallout(p0, NULL);
     }
 #if HIBERNATION
@@ -2347,6 +2359,21 @@ void IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
             ((IOService *)this)->stop_watchdog_timer(); //14456299
             lowBatteryCondition = false;
 
+#if DEVELOPMENT || DEBUG
+            extern int g_should_log_clock_adjustments;
+            if (g_should_log_clock_adjustments) {
+                clock_sec_t  secs = 0;
+                clock_usec_t microsecs = 0;
+                uint64_t now_b = mach_absolute_time();
+
+                PEGetUTCTimeOfDay(&secs, &microsecs);
+
+                uint64_t now_a = mach_absolute_time();
+                os_log(OS_LOG_DEFAULT, "%s PMU before going to sleep %lu s %d u %llu abs_b_PEG %llu abs_a_PEG \n",
+                       __func__, (unsigned long)secs, microsecs, now_b, now_a);
+            }
+#endif
+
             getPlatform()->sleepKernel();
 
             // The CPU(s) are off at this point,
@@ -3067,9 +3094,6 @@ IOReturn IOPMrootDomain::sysPowerDownHandler(
         {
             // We will ack within 20 seconds
             params->maxWaitForReply = 20 * 1000 * 1000;
-
-            // Remove EFI/BootRom's previous wake's failure data
-            PERemoveNVRAMProperty(kIOEFIBootRomFailureKey);
 
 #if HIBERNATION
             gRootDomain->evaluateSystemSleepPolicyEarly();
@@ -4607,6 +4631,16 @@ IOReturn IOPMrootDomain::getSystemSleepType( uint32_t * sleepType, uint32_t * st
 //
 //******************************************************************************
 
+// Phases while performing shutdown/restart
+typedef enum {
+    kNotifyDone                 = 0x00,
+    kNotifyPriorityClients      = 0x10,
+    kNotifyPowerPlaneDrivers    = 0x20,
+    kNotifyHaltRestartAction    = 0x30,
+    kQuiescePM                  = 0x40,
+} shutdownPhase_t;
+
+
 struct HaltRestartApplierContext {
     IOPMrootDomain *    RootDomain;
     unsigned long       PowerState;
@@ -4614,7 +4648,29 @@ struct HaltRestartApplierContext {
     UInt32              MessageType;
     UInt32              Counter;
     const char *        LogString;
-};
+    shutdownPhase_t     phase;
+
+    IOServiceInterestHandler	handler;
+} gHaltRestartCtx;
+
+const char *shutdownPhase2String(shutdownPhase_t phase)
+{
+    switch(phase) {
+        case kNotifyDone:
+            return "Notifications completed";
+        case kNotifyPriorityClients:
+            return "Notifying priority clients";
+        case kNotifyPowerPlaneDrivers:
+            return  "Notifying power plane drivers";
+        case kNotifyHaltRestartAction:
+            return "Notifying HaltRestart action handlers";
+        case kQuiescePM:
+            return "Quiescing PM";
+        default:
+            return "Unknown";
+    }
+
+}
 
 static void
 platformHaltRestartApplier( OSObject * object, void * context )
@@ -4626,33 +4682,30 @@ platformHaltRestartApplier( OSObject * object, void * context )
 
     ctx = (HaltRestartApplierContext *) context;
 
+    _IOServiceInterestNotifier * notifier;
+    notifier = OSDynamicCast(_IOServiceInterestNotifier, object);
     memset(&notify, 0, sizeof(notify));
     notify.powerRef    = (void *)(uintptr_t)ctx->Counter;
     notify.returnValue = 0;
     notify.stateNumber = ctx->PowerState;
     notify.stateFlags  = ctx->PowerFlags;
 
+    if (notifier) {
+        ctx->handler = notifier->handler;
+    }
+
     clock_get_uptime(&startTime);
     ctx->RootDomain->messageClient( ctx->MessageType, object, (void *)&notify );
     deltaTime = computeDeltaTimeMS(&startTime, &elapsedTime);
 
-    if ((deltaTime > kPMHaltTimeoutMS) ||
-        (gIOKitDebug & kIOLogPMRootDomain))
-    {
-        _IOServiceInterestNotifier * notifier;
-        notifier = OSDynamicCast(_IOServiceInterestNotifier, object);
+    if ((deltaTime > kPMHaltTimeoutMS) && notifier) {
 
-        // IOService children of IOPMrootDomain are not instrumented.
-        // Only IORootParent currently falls under that group.
-
-        if (notifier)
-        {
-            LOG("%s handler %p took %u ms\n",
+        LOG("%s handler %p took %u ms\n",
                 ctx->LogString, OBFUSCATE(notifier->handler), deltaTime);
-            halt_log_enter(ctx->LogString, (const void *) notifier->handler, elapsedTime);
-        }
+        halt_log_enter("PowerOff/Restart message to priority client", (const void *) notifier->handler, elapsedTime);
     }
 
+    ctx->handler = 0;
     ctx->Counter++;
 }
 
@@ -4666,33 +4719,32 @@ static void quiescePowerTreeCallback( void * target, void * param )
 
 void IOPMrootDomain::handlePlatformHaltRestart( UInt32 pe_type )
 {
-    HaltRestartApplierContext   ctx;
     AbsoluteTime                startTime, elapsedTime;
     uint32_t                    deltaTime;
 
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.RootDomain = this;
+    memset(&gHaltRestartCtx, 0, sizeof(gHaltRestartCtx));
+    gHaltRestartCtx.RootDomain = this;
 
     clock_get_uptime(&startTime);
     switch (pe_type)
     {
         case kPEHaltCPU:
         case kPEUPSDelayHaltCPU:
-            ctx.PowerState  = OFF_STATE;
-            ctx.MessageType = kIOMessageSystemWillPowerOff;
-            ctx.LogString   = "PowerOff";
+            gHaltRestartCtx.PowerState  = OFF_STATE;
+            gHaltRestartCtx.MessageType = kIOMessageSystemWillPowerOff;
+            gHaltRestartCtx.LogString   = "PowerOff";
             break;
 
         case kPERestartCPU:
-            ctx.PowerState  = RESTART_STATE;
-            ctx.MessageType = kIOMessageSystemWillRestart;
-            ctx.LogString   = "Restart";
+            gHaltRestartCtx.PowerState  = RESTART_STATE;
+            gHaltRestartCtx.MessageType = kIOMessageSystemWillRestart;
+            gHaltRestartCtx.LogString   = "Restart";
             break;
 
         case kPEPagingOff:
-            ctx.PowerState  = ON_STATE;
-            ctx.MessageType = kIOMessageSystemPagingOff;
-            ctx.LogString   = "PagingOff";
+            gHaltRestartCtx.PowerState  = ON_STATE;
+            gHaltRestartCtx.MessageType = kIOMessageSystemPagingOff;
+            gHaltRestartCtx.LogString   = "PagingOff";
             IOService::updateConsoleUsers(NULL, kIOMessageSystemPagingOff);
 #if HIBERNATION
             IOHibernateSystemRestart();
@@ -4703,8 +4755,9 @@ void IOPMrootDomain::handlePlatformHaltRestart( UInt32 pe_type )
             return;
     }
 
+    gHaltRestartCtx.phase = kNotifyPriorityClients;
     // Notify legacy clients
-    applyToInterested(gIOPriorityPowerStateInterest, platformHaltRestartApplier, &ctx);
+    applyToInterested(gIOPriorityPowerStateInterest, platformHaltRestartApplier, &gHaltRestartCtx);
 
     // For normal shutdown, turn off File Server Mode.
     if (kPEHaltCPU == pe_type)
@@ -4719,17 +4772,21 @@ void IOPMrootDomain::handlePlatformHaltRestart( UInt32 pe_type )
         }
     }
 
+
     if (kPEPagingOff != pe_type)
     {
+        gHaltRestartCtx.phase = kNotifyPowerPlaneDrivers;
         // Notify in power tree order
-        notifySystemShutdown(this, ctx.MessageType);
+        notifySystemShutdown(this, gHaltRestartCtx.MessageType);
     }
 
+    gHaltRestartCtx.phase = kNotifyHaltRestartAction;
     IOCPURunPlatformHaltRestartActions(pe_type);
 
     // Wait for PM to quiesce
     if ((kPEPagingOff != pe_type) && gPMHaltLock)
     {
+        gHaltRestartCtx.phase = kQuiescePM;
         AbsoluteTime quiesceTime = mach_absolute_time();
 
         IOLockLock(gPMHaltLock);
@@ -4747,23 +4804,47 @@ void IOPMrootDomain::handlePlatformHaltRestart( UInt32 pe_type )
         DLOG("PM quiesce took %u ms\n", deltaTime);
         halt_log_enter("Quiesce", NULL, elapsedTime);
     }
+    gHaltRestartCtx.phase = kNotifyDone;
 
     deltaTime = computeDeltaTimeMS(&startTime, &elapsedTime);
-    LOG("%s all drivers took %u ms\n", ctx.LogString, deltaTime);
+    LOG("%s all drivers took %u ms\n", gHaltRestartCtx.LogString, deltaTime);
 
-    halt_log_enter(ctx.LogString, NULL, elapsedTime);
-    if (gHaltLog) gHaltLog[gHaltLogPos] = 0;
+    halt_log_enter(gHaltRestartCtx.LogString, NULL, elapsedTime);
 
     deltaTime = computeDeltaTimeMS(&gHaltStartTime, &elapsedTime);
-    LOG("%s total %u ms\n", ctx.LogString, deltaTime);
+    LOG("%s total %u ms\n", gHaltRestartCtx.LogString, deltaTime);
 
     if (gHaltLog && gHaltTimeMaxLog && (deltaTime >= gHaltTimeMaxLog))
     {
-         printf("%s total %d ms:%s\n", ctx.LogString, deltaTime, gHaltLog);
+         printf("%s total %d ms:%s\n", gHaltRestartCtx.LogString, deltaTime, gHaltLog);
     }
-    if (gHaltLog && gHaltTimeMaxPanic && (deltaTime >= gHaltTimeMaxPanic))
-    {
-        panic("%s total %d ms:%s\n", ctx.LogString, deltaTime, gHaltLog);
+
+    checkShutdownTimeout();
+}
+
+bool IOPMrootDomain::checkShutdownTimeout()
+{
+    AbsoluteTime   elapsedTime;
+    uint32_t deltaTime = computeDeltaTimeMS(&gHaltStartTime, &elapsedTime);
+
+    if (gHaltTimeMaxPanic && (deltaTime >= gHaltTimeMaxPanic)) {
+        return true;
+    }
+    return false;
+}
+
+void IOPMrootDomain::panicWithShutdownLog(uint32_t timeoutInMs)
+{
+    if (gHaltLog) {
+        if ((gHaltRestartCtx.phase == kNotifyPriorityClients) && gHaltRestartCtx.handler) {
+            halt_log_enter("Blocked on priority client", (void *)gHaltRestartCtx.handler, mach_absolute_time() - gHaltStartTime);
+        }
+        panic("%s timed out in phase '%s'. Total %d ms:%s",
+                gHaltRestartCtx.LogString, shutdownPhase2String(gHaltRestartCtx.phase), timeoutInMs, gHaltLog);
+    }
+    else {
+        panic("%s timed out in phase \'%s\'. Total %d ms",
+                gHaltRestartCtx.LogString, shutdownPhase2String(gHaltRestartCtx.phase), timeoutInMs);
     }
 }
 
@@ -6109,7 +6190,9 @@ bool IOPMrootDomain::displayWranglerMatchPublished(
     IONotifier * notifier __unused)
 {
 #if !NO_KERNEL_HID
-    // found the display wrangler, now install a handler
+    // found the display wrangler, check for any display assertions already created
+    gRootDomain->evaluateWranglerAssertions();
+    // install a handler
     if( !newService->registerInterest( gIOGeneralInterest,
                             &displayWranglerNotification, target, 0) )
     {
@@ -7555,6 +7638,22 @@ void IOPMrootDomain::evaluateAssertions(IOPMDriverAssertionType newAssertions, I
     }
 }
 
+void IOPMrootDomain::evaluateWranglerAssertions()
+{
+    if (gIOPMWorkLoop->inGate() == false) {
+        gIOPMWorkLoop->runAction(
+                OSMemberFunctionCast(IOWorkLoop::Action, this, &IOPMrootDomain::evaluateWranglerAssertions),
+                (OSObject *)this);
+
+        return;
+    }
+
+    if (pmAssertions->getActivatedAssertions() & kIOPMDriverAssertionPreventDisplaySleepBit) {
+        DLOG("wrangler setIgnoreIdleTimer\(1) on matching\n");
+        wrangler->setIgnoreIdleTimer( true );
+    }
+}
+
 // MARK: -
 // MARK: Statistics
 
@@ -7768,7 +7867,6 @@ IOReturn IOPMrootDomain::callPlatformFunction(
     void * param3, void * param4 )
 {
     uint32_t bootFailureCode = 0xffffffff;
-    unsigned int len = sizeof(bootFailureCode);
     if (pmTracer && functionName &&
         functionName->isEqualTo(kIOPMRegisterNVRAMTracePointHandlerKey) &&
         !pmTracer->tracePointHandler && !pmTracer->tracePointTarget)
@@ -7781,11 +7879,17 @@ IOReturn IOPMrootDomain::callPlatformFunction(
         tracePointPCI               = (uint32_t)(uintptr_t) param3;
         tracePointPhases            = (uint32_t)(uintptr_t) param4;
         if ((tracePointPhases & 0xff) == kIOPMTracePointSystemSleep) {
-           if (!PEReadNVRAMProperty(kIOEFIBootRomFailureKey, &bootFailureCode, &len)) {
-              MSG("Failed to read failure code from NVRam\n");
-           }
-           // Failure code from EFI/BootRom is a four byte structure
-           tracePointPCI = OSSwapBigToHostInt32(bootFailureCode);
+
+            IORegistryEntry *node = IORegistryEntry::fromPath( "/chosen", gIODTPlane );
+            if ( node ) {
+                OSData *data = OSDynamicCast( OSData, node->getProperty(kIOEFIBootRomFailureKey) );
+                if ( data && data->getLength() == sizeof(bootFailureCode) ) {
+                    memcpy(&bootFailureCode, data->getBytesNoCopy(), sizeof(bootFailureCode));
+                }
+                node->release();
+            }
+            // Failure code from EFI/BootRom is a four byte structure
+            tracePointPCI = OSSwapBigToHostInt32(bootFailureCode);
         }
         statusCode = (((uint64_t)tracePointPCI) << 32) | tracePointPhases;
         if ((tracePointPhases & 0xff) != kIOPMTracePointSystemUp) {
@@ -8421,16 +8525,14 @@ void PMHaltWorker::work( PMHaltWorker * me )
         }
 
         deltaTime = computeDeltaTimeMS(&startTime, &elapsedTime);
-        if ((deltaTime > kPMHaltTimeoutMS) || timeout ||
-            (gIOKitDebug & kIOLogPMRootDomain))
+        if ((deltaTime > kPMHaltTimeoutMS) || timeout)
         {
             LOG("%s driver %s (0x%llx) took %u ms\n",
                 (gPMHaltMessageType == kIOMessageSystemWillPowerOff) ?
                     "PowerOff" : "Restart",
                 service->getName(), service->getRegistryEntryID(),
                 (uint32_t) deltaTime );
-            halt_log_enter(
-                (gPMHaltMessageType == kIOMessageSystemWillPowerOff) ? "PowerOff" : "Restart",
+            halt_log_enter("PowerOff/Restart handler completed",
                 OSMemberFunctionCast(const void *, service, &IOService::systemWillShutdown),
                 elapsedTime);
         }
@@ -8461,9 +8563,12 @@ void PMHaltWorker::checkTimeout( PMHaltWorker * me, AbsoluteTime * now )
         if (nano > 3000000000ULL)
         {
             me->timeout = true;
+
+            halt_log_enter("PowerOff/Restart still waiting on handler",
+                OSMemberFunctionCast(const void *, me->service, &IOService::systemWillShutdown),
+                endTime);
             MSG("%s still waiting on %s\n",
-                (gPMHaltMessageType == kIOMessageSystemWillPowerOff) ?
-                    "PowerOff" : "Restart",
+                (gPMHaltMessageType == kIOMessageSystemWillPowerOff) ?  "PowerOff" : "Restart",
                 me->service->getName());
         }
     }
@@ -9667,7 +9772,7 @@ void IOPMrootDomain::takeStackshot(bool wdogTrigger, bool isOSXWatchdog, bool is
    if (wdogTrigger) {
        PE_parse_boot_argn("swd_panic", &wdog_panic, sizeof(wdog_panic));
        PE_parse_boot_argn("stress-rack", &stress_rack, sizeof(stress_rack));
-       if ((wdog_panic == 1) || (stress_rack == 1)) {
+       if ((wdog_panic == 1) || (stress_rack == 1) || (PEGetCoprocessorVersion() >= kCoprocessorVersion2)) {
            // If boot-arg specifies to panic then panic.
            panic("Sleep/Wake hang detected");
            return;
@@ -9852,6 +9957,9 @@ void IOPMrootDomain::sleepWakeDebugMemAlloc( )
 
     if ( kIOSleepWakeWdogOff & gIOKitDebug )
       return;
+
+    if (PEGetCoprocessorVersion() >= kCoprocessorVersion2)
+        return;
 
     if (!OSCompareAndSwap(0, 1, &gRootDomain->swd_lock))
        return;

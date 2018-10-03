@@ -37,4 +37,5 @@ _ml_get_max_cpu_number
 _ml_lockdown_handler_register
 _ml_dbgwrap_halt_cpu_with_state
 _vm_map:_vm_map_external
-
+__ZN5IORTC15getUTCTimeOfDayEPmPj
+__ZN5IORTC15setUTCTimeOfDayEmj

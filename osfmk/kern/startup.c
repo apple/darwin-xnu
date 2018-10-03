@@ -122,6 +122,7 @@
 #include <kern/waitq.h>
 #include <ipc/ipc_voucher.h>
 #include <voucher/ipc_pthread_priority_internal.h>
+#include <mach/host_info.h>
 
 
 #if CONFIG_ATM
@@ -379,6 +380,9 @@ kernel_bootstrap(void)
 
 	/* initialize the corpse config based on boot-args */
 	corpses_init();
+
+	/* initialize host_statistics */
+	host_statistics_init();
 
 	/*
 	 *	Create a kernel thread to execute the kernel bootstrap.

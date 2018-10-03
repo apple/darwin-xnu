@@ -119,7 +119,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 52)
+#if (MAC_POLICY_OPS_VERSION != 53)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*
@@ -281,10 +281,10 @@ const static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(exc_action_label_init)
 	CHECK_SET_HOOK(exc_action_label_update)
 
+	CHECK_SET_HOOK(vnode_check_trigger_resolve)
 	.mpo_reserved1 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved2 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved3 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved4 = (mpo_reserved_hook_t *)common_hook,
 	CHECK_SET_HOOK(skywalk_flow_check_connect)
 	CHECK_SET_HOOK(skywalk_flow_check_listen)
 

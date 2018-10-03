@@ -1733,7 +1733,7 @@ mptcp_subflow_soreceive(struct socket *so, struct sockaddr **psa,
 	SBLASTMBUFCHK(&so->so_rcv, "mptcp_subflow_soreceive 1");
 
 	while (m != NULL) {
-		int dlen = 0;
+		int dlen = 0, dfin = 0, error_out = 0;
 		struct mbuf *start = m;
 		uint64_t dsn;
 		uint32_t sseq;
@@ -1749,7 +1749,7 @@ mptcp_subflow_soreceive(struct socket *so, struct sockaddr **psa,
 			csum = m->m_pkthdr.mp_csum;
 		} else {
 			/* We did fallback */
-			mptcp_adj_rmap(so, m, 0);
+			mptcp_adj_rmap(so, m, 0, 0, 0, 0);
 
 			sbfree(&so->so_rcv, m);
 
@@ -1770,10 +1770,13 @@ mptcp_subflow_soreceive(struct socket *so, struct sockaddr **psa,
 			continue;
 		}
 
+		if (m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN)
+			dfin = 1;
+
 		/*
 		 * Check if the full mapping is now present
 		 */
-		if ((int)so->so_rcv.sb_cc < dlen) {
+		if ((int)so->so_rcv.sb_cc < dlen - dfin) {
 			mptcplog((LOG_INFO, "%s not enough data (%u) need %u\n",
 				  __func__, so->so_rcv.sb_cc, dlen),
 				 MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_LOG);
@@ -1785,7 +1788,13 @@ mptcp_subflow_soreceive(struct socket *so, struct sockaddr **psa,
 
 		/* Now, get the full mapping */
 		while (dlen > 0) {
-			mptcp_adj_rmap(so, m, orig_dlen - dlen);
+			if (mptcp_adj_rmap(so, m, orig_dlen - dlen, dsn, sseq, orig_dlen)) {
+				error_out = 1;
+				error = EIO;
+				dlen = 0;
+				soevent(so, SO_FILT_HINT_LOCKED | SO_FILT_HINT_MUSTRST);
+				break;
+			}
 
 			dlen -= m->m_len;
 			sbfree(&so->so_rcv, m);
@@ -1796,6 +1805,9 @@ mptcp_subflow_soreceive(struct socket *so, struct sockaddr **psa,
 				so->so_rcv.sb_mb = m = m->m_next;
 				*mp = NULL;
 			}
+
+			if (dlen - dfin == 0)
+				dlen = 0;
 
 			VERIFY(dlen <= 0 || m);
 		}
@@ -1808,7 +1820,11 @@ mptcp_subflow_soreceive(struct socket *so, struct sockaddr **psa,
 			SB_EMPTY_FIXUP(&so->so_rcv);
 		}
 
-		if (mptcp_validate_csum(sototcpcb(so), start, dsn, sseq, orig_dlen, csum)) {
+		if (error_out)
+			goto release;
+
+
+		if (mptcp_validate_csum(sototcpcb(so), start, dsn, sseq, orig_dlen, csum, dfin)) {
 			error = EIO;
 			*mp0 = NULL;
 			goto release;
@@ -4118,15 +4134,7 @@ mptcp_subflow_workloop(struct mptses *mpte)
 	}
 
 	if (mpsofilt_hint_mask != SO_FILT_HINT_LOCKED) {
-		struct mptcb *mp_tp = mpte->mpte_mptcb;
-
 		VERIFY(mpsofilt_hint_mask & SO_FILT_HINT_LOCKED);
-
-		if (mpsofilt_hint_mask & SO_FILT_HINT_CANTRCVMORE) {
-			mptcp_close_fsm(mp_tp, MPCE_RECV_DATA_FIN);
-			socantrcvmore(mp_so);
-			mpsofilt_hint_mask &= ~SO_FILT_HINT_CANTRCVMORE;
-		}
 
 		soevent(mp_so, mpsofilt_hint_mask);
 	}
@@ -4778,31 +4786,49 @@ mptcp_output_getm_dsnmap64(struct socket *so, int off, uint64_t *dsn,
  * with mptcp_adj_rmap()
  */
 void
-mptcp_insert_rmap(struct tcpcb *tp, struct mbuf *m)
+mptcp_insert_rmap(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th)
 {
+	VERIFY(m->m_flags & M_PKTHDR);
 	VERIFY(!(m->m_pkthdr.pkt_flags & PKTF_MPTCP));
 
 	if (tp->t_mpflags & TMPF_EMBED_DSN) {
-		VERIFY(m->m_flags & M_PKTHDR);
 		m->m_pkthdr.mp_dsn = tp->t_rcv_map.mpt_dsn;
 		m->m_pkthdr.mp_rseq = tp->t_rcv_map.mpt_sseq;
 		m->m_pkthdr.mp_rlen = tp->t_rcv_map.mpt_len;
 		m->m_pkthdr.mp_csum = tp->t_rcv_map.mpt_csum;
+		if (tp->t_rcv_map.mpt_dfin)
+			m->m_pkthdr.pkt_flags |= PKTF_MPTCP_DFIN;
+
 		m->m_pkthdr.pkt_flags |= PKTF_MPTCP;
+
 		tp->t_mpflags &= ~TMPF_EMBED_DSN;
 		tp->t_mpflags |= TMPF_MPTCP_ACKNOW;
+	} else if (tp->t_mpflags & TMPF_TCP_FALLBACK) {
+		if (th->th_flags & TH_FIN)
+			m->m_pkthdr.pkt_flags |= PKTF_MPTCP_DFIN;
 	}
 }
 
-void
-mptcp_adj_rmap(struct socket *so, struct mbuf *m, int off)
+int
+mptcp_adj_rmap(struct socket *so, struct mbuf *m, int off, uint64_t dsn,
+	       uint32_t rseq, uint16_t dlen)
 {
 	struct mptsub *mpts = sototcpcb(so)->t_mpsub;
 
 	if (m_pktlen(m) == 0)
-		return;
+		return (0);
 
 	if ((m->m_flags & M_PKTHDR) && (m->m_pkthdr.pkt_flags & PKTF_MPTCP)) {
+		if (off && (dsn != m->m_pkthdr.mp_dsn ||
+			    rseq != m->m_pkthdr.mp_rseq ||
+			    dlen != m->m_pkthdr.mp_rlen)) {
+			mptcplog((LOG_ERR, "%s: Received incorrect second mapping: %llu - %llu , %u - %u, %u - %u\n",
+				  __func__, dsn, m->m_pkthdr.mp_dsn,
+				  rseq, m->m_pkthdr.mp_rseq,
+				  dlen, m->m_pkthdr.mp_rlen),
+				 MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_ERR);
+			return (-1);
+		}
 		m->m_pkthdr.mp_dsn += off;
 		m->m_pkthdr.mp_rseq += off;
 		m->m_pkthdr.mp_rlen = m->m_pkthdr.len;
@@ -4817,7 +4843,7 @@ mptcp_adj_rmap(struct socket *so, struct mbuf *m, int off)
 
 	mpts->mpts_flags |= MPTSF_CONFIRMED;
 
-	return;
+	return (0);
 }
 
 /*

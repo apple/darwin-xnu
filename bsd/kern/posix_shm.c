@@ -904,11 +904,16 @@ pshm_mmap(__unused proc_t p, struct mmap_args *uap, user_addr_t *retval, struct 
 		PSHM_SUBSYS_UNLOCK();
 		return(EINVAL);
 	}
-	if ((off_t)user_size > pinfo->pshm_length) {
+	if (user_size > (vm_map_size_t)pinfo->pshm_length) {
 		PSHM_SUBSYS_UNLOCK();
 		return(EINVAL);
 	}
-	if ((off_t)(user_size + file_pos) > pinfo->pshm_length) {
+	vm_map_size_t end_pos = 0;
+	if (os_add_overflow(user_size, file_pos, &end_pos)) {
+		PSHM_SUBSYS_UNLOCK();
+		return(EINVAL);
+	}
+	if (end_pos > (vm_map_size_t)pinfo->pshm_length) {
 		PSHM_SUBSYS_UNLOCK();
 		return(EINVAL);
 	}

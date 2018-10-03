@@ -1546,7 +1546,7 @@ sysctl_default_netsvctype_to_dscp_map SYSCTL_HANDLER_ARGS
 	const size_t max_netsvctype_to_dscp_map_len =
 	    _NET_SERVICE_TYPE_COUNT * sizeof(struct netsvctype_dscp_map);
 	size_t len;
-	struct netsvctype_dscp_map netsvctype_dscp_map[_NET_SERVICE_TYPE_COUNT];
+	struct netsvctype_dscp_map netsvctype_dscp_map[_NET_SERVICE_TYPE_COUNT] = {};
 	size_t count;
 
 	if (req->oldptr == USER_ADDR_NULL) {
@@ -1748,7 +1748,7 @@ sysctl_dscp_to_wifi_ac_map SYSCTL_HANDLER_ARGS
 #pragma unused(oidp, arg1, arg2)
 	int error = 0;
 	size_t len = DSCP_ARRAY_SIZE * sizeof(struct netsvctype_dscp_map);
-	struct netsvctype_dscp_map netsvctype_dscp_map[DSCP_ARRAY_SIZE];
+	struct netsvctype_dscp_map netsvctype_dscp_map[DSCP_ARRAY_SIZE] = {};
 	struct dcsp_msc_map dcsp_msc_map[DSCP_ARRAY_SIZE];
 	size_t count;
 	u_int32_t i;

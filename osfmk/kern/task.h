@@ -288,6 +288,9 @@ struct task {
 #define TPF_NONE                 0
 #define TPF_DID_EXEC             0x00000001                              /* task has been execed to a new task */
 #define TPF_EXEC_COPY            0x00000002                              /* task is the new copy of an exec */
+#ifdef CONFIG_32BIT_TELEMETRY
+#define TPF_LOG_32BIT_TELEMETRY  0x00000004                              /* task should log identifying information */
+#endif
 
 #define task_did_exec_internal(task)		\
 	(((task)->t_procflags & TPF_DID_EXEC) != 0)
@@ -742,6 +745,10 @@ extern void task_set_did_exec_flag(task_t task);
 extern void task_clear_exec_copy_flag(task_t task);
 extern boolean_t task_is_exec_copy(task_t);
 extern boolean_t task_did_exec(task_t task);
+#ifdef CONFIG_32BIT_TELEMETRY
+extern boolean_t task_consume_32bit_log_flag(task_t task);
+extern void task_set_32bit_log_flag(task_t task);
+#endif /* CONFIG_32BIT_TELEMETRY */
 extern boolean_t task_is_active(task_t task);
 extern boolean_t task_is_halting(task_t task);
 extern void task_clear_return_wait(task_t task);

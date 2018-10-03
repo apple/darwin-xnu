@@ -136,9 +136,8 @@ extern int  __doprnt(const char *fmt,
 /*
  *	Record cpu that panic'd and lock around panic data
  */
-static void printn(uint32_t n, int b, int flags, struct tty *ttyp, int zf, int fld_size);
 
-extern	void logwakeup(void);
+extern	void logwakeup(struct msgbuf *);
 extern	void halt_cpu(void);
 
 static void
@@ -218,8 +217,6 @@ tprintf(tpr_t tpr, const char *fmt, ...)
 	va_list ap;
 	struct putchar_args pca;
 
-	logpri(LOG_INFO);
-
 	if (sess && (tp = SESSION_TP(sess)) != TTY_NULL) {
 		/* ttycheckoutq(), tputchar() require a locked tp */
 		tty_lock(tp);
@@ -235,12 +232,12 @@ tprintf(tpr_t tpr, const char *fmt, ...)
 	}
 
 	pca.flags = TOLOG;
-	pca.tty   = TTY_NULL;
+	pca.tty	  = TTY_NULL;
 	va_start(ap, fmt);
 	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
 	va_end(ap);
 
-	logwakeup();
+	logwakeup(msgbufp);
 
 	va_start(ap, fmt);
 	os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, ap, __builtin_return_address(0));
@@ -272,55 +269,39 @@ ttyprintf(struct tty *tp, const char *fmt, ...)
 	}
 }
 
-
-extern	int log_open;
-
-
-void
-logpri(int level)
-{
-	struct putchar_args pca;
-	pca.flags = TOLOG;
-	pca.tty   = NULL;
-	
-	putchar('<', &pca);
-	printn((uint32_t)level, 10, TOLOG, (struct tty *)0, 0, 0);
-	putchar('>', &pca);
-}
-
-static void
-_logtime(const char *fmt, ...)
-{
-	va_list ap;
-	va_start(ap, fmt);
-	vaddlog(fmt, ap);
-	va_end(ap);
-}
-
 void
 logtime(time_t secs)
 {
-	_logtime("         0 [Time %ld] [Message ", secs);
+	printf("Time %ld Message ", secs);
 }
 
+static void
+putchar_asl(int c, void *arg)
+{
+	struct putchar_args *pca = arg;
+
+	if ((pca->flags & TOLOGLOCKED) && c != '\0' && c != '\r' && c != 0177)
+		log_putc_locked(aslbufp, c);
+	putchar(c, arg);
+}
+
+/*
+ * Vestigial support for kern_asl_msg() via /dev/klog
+ */
 int
 vaddlog(const char *fmt, va_list ap)
 {
-	struct putchar_args pca;
-
-	pca.flags = TOLOGLOCKED;
-	pca.tty   = NULL;
-
-	if (!log_open) {
-		pca.flags |= TOCONS;
-	}
+	struct putchar_args pca = {
+		.flags = TOLOGLOCKED,
+		.tty = NULL,
+	};
 
 	bsd_log_lock();
-	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
+	__doprnt(fmt, ap, putchar_asl, &pca, 10, TRUE);
 	bsd_log_unlock();
-	
-	logwakeup();
-	return 0;
+	logwakeup(NULL);
+
+	return (0);
 }
 
 void
@@ -357,43 +338,6 @@ prf(const char *fmt, va_list ap, int flags, struct tty *ttyp)
 }
 
 /*
- * Printn prints a number n in base b.
- * We don't use recursion to avoid deep kernel stacks.
- */
-static void
-printn(uint32_t n, int b, int flags, struct tty *ttyp, int zf, int fld_size)
-{
-	char prbuf[11];
-	char *cp;
-	struct putchar_args pca;
-
-	pca.flags = flags;
-	pca.tty   = ttyp;
-
-	if (b == 10 && (int)n < 0) {
-		putchar('-', &pca);
-		n = (unsigned)(-(int)n);
-	}
-	cp = prbuf;
-	do {
-		*cp++ = "0123456789abcdef"[n%b];
-		n /= b;
-	} while (n);
-	if (fld_size) {
-		for (fld_size -= cp - prbuf; fld_size > 0; fld_size--)
-			if (zf)
-				putchar('0', &pca);
-			else
-				putchar(' ', &pca);
-	}
-	do
-		putchar(*--cp, &pca);
-	while (cp > prbuf);
-}
-
-
-
-/*
  * Warn that a system table is full.
  */
 void tablefull(const char *tab)
@@ -428,7 +372,7 @@ putchar(int c, void *arg)
 	if ((pca->flags & TOLOG) && c != '\0' && c != '\r' && c != 0177)
 		log_putc(c);
 	if ((pca->flags & TOLOGLOCKED) && c != '\0' && c != '\r' && c != 0177)
-		log_putc_locked(c);
+		log_putc_locked(msgbufp, c);
 	if ((pca->flags & TOCONS) && constty == 0 && c != '\0')
 		(*v_putc)(c);
 	if (pca->flags & TOSTR) {

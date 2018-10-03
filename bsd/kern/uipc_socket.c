@@ -5661,7 +5661,7 @@ integer:
 			goto integer;
 
 		case SO_NP_EXTENSIONS: {
-			struct so_np_extensions sonpx;
+			struct so_np_extensions sonpx = {};
 
 			sonpx.npx_flags = (so->so_flags & SOF_NPX_SETOPTSHUT) ?
 			    SONPX_SETOPTSHUT : 0;

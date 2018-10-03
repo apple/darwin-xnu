@@ -74,12 +74,12 @@ typedef	kern_return_t		IOReturn;
 #endif
 #define sub_iokit_platform                err_sub(0x2A)
 #define sub_iokit_audio_video             err_sub(0x45)
+#define sub_iokit_cec                     err_sub(0x46)
 #define sub_iokit_baseband                err_sub(0x80)
-#define sub_iokit_HDA                     err_sub(254)
+#define sub_iokit_HDA                     err_sub(0xFE)
 #define sub_iokit_hsic                    err_sub(0x147)
 #define sub_iokit_sdio                    err_sub(0x174)
 #define sub_iokit_wlan                    err_sub(0x208)
-
 #define sub_iokit_appleembeddedsleepwakehandler  err_sub(0x209)
 
 #define sub_iokit_vendor_specific         err_sub(-2)

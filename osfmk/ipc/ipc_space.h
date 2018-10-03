@@ -73,6 +73,7 @@
 #define _IPC_IPC_SPACE_H_
 
 
+#include <prng/random.h>
 #include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
@@ -109,6 +110,7 @@ typedef natural_t ipc_space_refs_t;
 #define IS_REFS_MAX	0x0fffffff
 #define IS_INACTIVE	0x40000000	/* space is inactive */
 #define IS_GROWING	0x20000000	/* space is growing */
+#define IS_ENTROPY_CNT  1		/* per-space entropy pool size */
 
 struct ipc_space {
 	lck_spin_t	is_lock_data;
@@ -120,6 +122,8 @@ struct ipc_space {
 	struct ipc_table_size *is_table_next; /* info for larger table */
 	ipc_entry_num_t is_low_mod;	/* lowest modified entry during growth */
 	ipc_entry_num_t is_high_mod;	/* highest modified entry during growth */
+	struct bool_gen bool_gen;       /* state for boolean RNG */
+	unsigned int is_entropy[IS_ENTROPY_CNT]; /* pool of entropy taken from RNG */
 	int is_node_id;			/* HOST_LOCAL_NODE, or remote node if proxy space */
 };
 
@@ -215,7 +219,7 @@ is_release(ipc_space_t is) {
 extern kern_return_t ipc_space_create_special(
 	ipc_space_t	*spacep);
 
-/* Create  new IPC space */
+/* Create a new IPC space */
 extern kern_return_t ipc_space_create(
 	ipc_table_size_t	initial,
 	ipc_space_t		*spacep);
@@ -228,6 +232,15 @@ extern void ipc_space_terminate(
 extern void ipc_space_clean(
 	ipc_space_t	space);
 
+/* Permute the order of a range within an IPC space */
+extern void ipc_space_rand_freelist(
+	ipc_space_t		space,
+	ipc_entry_t		table,
+	mach_port_index_t	bottom,
+	mach_port_index_t	top);
+
+/* Generate a new gencount rollover point from a space's entropy pool */
+extern ipc_entry_bits_t ipc_space_get_rollpoint(ipc_space_t space);
 #endif /* MACH_KERNEL_PRIVATE */
 #endif /* __APPLE_API_PRIVATE */
 

@@ -4,6 +4,10 @@ _PE_consistent_debug_register
 _PE_get_default
 _PE_reboot_on_panic
 _PE_mark_hwaccess
+_PE_smc_stashed_x86_system_state
+_PE_smc_stashed_x86_power_state
+_PE_smc_stashed_x86_efi_boot_state
+_PE_pcie_stashed_link_state
 __ZN17IONVRAMController*
 __ZTV17IONVRAMController
 _cpu_broadcast_xcall

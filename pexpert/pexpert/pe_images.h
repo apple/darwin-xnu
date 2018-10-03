@@ -42,7 +42,11 @@ static const unsigned char * default_noroot_data;
 
 static const unsigned char * default_progress_data1x = gGearPict;
 static const unsigned char * default_progress_data2x = gGearPict2x;
+#if !PEXPERT_NO_3X_IMAGES
+static const unsigned char * default_progress_data3x = gGearPict3x;
+#else
 static const unsigned char * default_progress_data3x = NULL;
+#endif
 
 static vc_progress_element default_progress = 
 	{   0, 4|1, 1000 / kGearFPS, kGearFrames, {0, 0, 0}, 

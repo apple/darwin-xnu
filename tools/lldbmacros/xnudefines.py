@@ -209,6 +209,8 @@ EVENTS_PER_STORAGE_UNIT = 2048
 EMBEDDED_PANIC_MAGIC = 0x46554E4B
 EMBEDDED_PANIC_STACKSHOT_SUCCEEDED_FLAG = 0x02
 
+MACOS_PANIC_MAGIC = 0x44454544
+
 if __name__ == "__main__":
     populate_kobject_types("../../")
     

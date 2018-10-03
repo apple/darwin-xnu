@@ -54,7 +54,7 @@
 #define NANOTIME							       \
 	movq	%gs:CPU_NANOTIME,%rdi					     ; \
 	PAL_RTC_NANOTIME_READ_FAST()
-
+/* TODO nobarrier */
 /*
  * Add 64-bit delta in register reg to timer pointed to by register treg.
  */

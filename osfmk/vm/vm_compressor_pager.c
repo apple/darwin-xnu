@@ -645,6 +645,18 @@ compressor_pager_slot_lookup(
 			compressor_pager_lock(pager);
 
 			if ((chunk = pager->cpgr_slots.cpgr_islots[chunk_idx]) == NULL) {
+
+				/*
+				 * On some platforms, the memory stores from
+				 * the bzero(t_chunk) above might not have been
+				 * made visible and another thread might see
+				 * the contents of this new chunk before it's
+				 * been fully zero-filled.
+				 * This memory barrier should take care of this
+				 * according to the platform requirements.
+				 */
+				__c11_atomic_thread_fence(memory_order_release);
+
 				chunk = pager->cpgr_slots.cpgr_islots[chunk_idx] = t_chunk;
 				t_chunk = NULL;
 			}

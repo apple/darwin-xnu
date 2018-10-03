@@ -5500,13 +5500,13 @@ fstatat_internal(vfs_context_t ctx, user_addr_t path, user_addr_t ub,
 	union {
 		struct stat sb;
 		struct stat64 sb64;
-	} source;
+	} source = {};
 	union {
 		struct user64_stat user64_sb;
 		struct user32_stat user32_sb;
 		struct user64_stat64 user64_sb64;
 		struct user32_stat64 user32_sb64;
-	} dest;
+	} dest = {};
 	caddr_t sbp;
 	int error, my_size;
 	kauth_filesec_t fsec;
@@ -11993,9 +11993,11 @@ fs_snapshot(__unused proc_t p, struct fs_snapshot_args *uap,
     case SNAPSHOT_OP_REVERT:
         error = snapshot_revert(uap->dirfd, uap->name1, uap->flags, ctx);
         break;
+#if !TARGET_OS_OSX
 	case SNAPSHOT_OP_ROOT:
 		error = snapshot_root(uap->dirfd, uap->name1, uap->flags, ctx);
 		break;
+#endif /* !TARGET_OS_OSX */
 	default:
 		error = ENOSYS;
 	}

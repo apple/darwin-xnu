@@ -978,7 +978,9 @@ KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_THREAD_WAITINFO')] = KCT
 KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_THREAD_GROUP_SNAPSHOT')] = KCTypeDescription(GetTypeForName('STACKSHOT_KCTYPE_THREAD_GROUP'),
             (
                         KCSubTypeElement.FromBasicCtype('tgs_id', KCSUBTYPE_TYPE.KC_ST_UINT64, 0),
-                        KCSubTypeElement('tgs_name', KCSUBTYPE_TYPE.KC_ST_CHAR, KCSubTypeElement.GetSizeForArray(16, 1), 8, 1)
+                        KCSubTypeElement('tgs_name', KCSUBTYPE_TYPE.KC_ST_CHAR, KCSubTypeElement.GetSizeForArray(16, 1),
+                            8, 1),
+                        KCSubTypeElement.FromBasicCtype('tgs_flags', KCSUBTYPE_TYPE.KC_ST_UINT64, 24),
             ),
             'thread_group_snapshot')
 
@@ -1331,8 +1333,14 @@ def SaveStackshotReport(j, outfile_name, dsc_uuid, dsc_libs_arr, incomplete):
     if not ss:
         print "No KCDATA_BUFFER_BEGIN_STACKSHOT object found. Skipping writing report."
         return
+
     timestamp = ss.get('usecs_since_epoch', int(time.time()))
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S %z",time.gmtime(timestamp))
+    try:
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S %z",time.gmtime(timestamp))
+    except ValueError, e:
+        print "couldn't convert timestamp:", str(e)
+        timestamp = None
+
     os_version = ss.get('osversion', 'Unknown')
     timebase = ss.get('mach_timebase_info', {"denom": 1, "numer": 1})
     if not dsc_uuid and 'imageSlidBaseAddress' not in ss.get('shared_cache_dyld_load_info'):
@@ -1373,7 +1381,8 @@ def SaveStackshotReport(j, outfile_name, dsc_uuid, dsc_libs_arr, incomplete):
     AllImageCatalog = []
     obj = {}
     obj["kernel"] = os_version
-    obj["date"] = timestamp
+    if timestamp is not None:
+        obj["date"] = timestamp
     obj["reason"] = "kernel panic stackshot"
     obj["incident"] = "ABCDEFGH-1234-56IJ-789K-0LMNOPQRSTUV"
     obj["crashReporterKey"] = "12ab34cd45aabbccdd6712ab34cd45aabbccdd67"
@@ -1486,7 +1495,15 @@ def SaveStackshotReport(j, outfile_name, dsc_uuid, dsc_libs_arr, incomplete):
         fh = sys.stdout
     else:
         fh = open(outfile_name, "w")
-    fh.write('{"bug_type":"288", "timestamp":"'+ timestamp +'", "os_version":"'+ os_version +'"}\n')
+
+    header = {}
+    header['bug_type'] = 288
+    if timestamp is not None:
+        header['timestamp'] = timestamp
+    header['os_version'] = os_version
+    fh.write(json.dumps(header))
+    fh.write("\n")
+
     fh.write(json.dumps(obj, sort_keys=False, indent=2, separators=(',', ': ')))
     fh.close()
 

@@ -980,7 +980,8 @@ extern void mptcp_fallback_sbdrop(struct socket *so, struct mbuf *m, int len);
 extern void mptcp_preproc_sbdrop(struct socket *, struct mbuf *, unsigned int);
 extern void mptcp_postproc_sbdrop(struct mbuf *, u_int64_t, u_int32_t,
     u_int32_t);
-extern void mptcp_adj_rmap(struct socket *, struct mbuf *, int);
+extern int mptcp_adj_rmap(struct socket *so, struct mbuf *m, int off,
+			  uint64_t dsn, uint32_t rseq, uint16_t dlen);
 
 extern void netpolicy_post_msg(uint32_t, struct netpolicy_event_data *,
     uint32_t);

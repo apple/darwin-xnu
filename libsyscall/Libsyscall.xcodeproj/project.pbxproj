@@ -107,6 +107,7 @@
 		29A59AE2183B0DE000E8B896 /* renameat.c in Sources */ = {isa = PBXBuildFile; fileRef = 29A59AE1183B0DE000E8B896 /* renameat.c */; };
 		29A59AE6183B110C00E8B896 /* unlinkat.c in Sources */ = {isa = PBXBuildFile; fileRef = 29A59AE5183B110C00E8B896 /* unlinkat.c */; };
 		2BA88DCC1810A3CE00EB63F6 /* coalition.c in Sources */ = {isa = PBXBuildFile; fileRef = 2BA88DCB1810A3CE00EB63F6 /* coalition.c */; };
+		3695DCC91F3D2C5F0072C0B3 /* reboot.c in Sources */ = {isa = PBXBuildFile; fileRef = 3695DCC81F3D2C5A0072C0B3 /* reboot.c */; };
 		374A36E314748F1300AAF39D /* varargs_wrappers.s in Sources */ = {isa = PBXBuildFile; fileRef = 374A36E214748EE400AAF39D /* varargs_wrappers.s */; };
 		3F538F891A659C5600B37EFD /* persona.c in Sources */ = {isa = PBXBuildFile; fileRef = 3F538F881A659C5600B37EFD /* persona.c */; };
 		401BB71A1BCAE57B005080D3 /* os_channel.c in Sources */ = {isa = PBXBuildFile; fileRef = 401BB7161BCAE539005080D3 /* os_channel.c */; settings = {COMPILER_FLAGS = "-fno-builtin"; }; };
@@ -491,6 +492,7 @@
 		29A59AE1183B0DE000E8B896 /* renameat.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = renameat.c; sourceTree = "<group>"; };
 		29A59AE5183B110C00E8B896 /* unlinkat.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = unlinkat.c; sourceTree = "<group>"; };
 		2BA88DCB1810A3CE00EB63F6 /* coalition.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = coalition.c; sourceTree = "<group>"; };
+		3695DCC81F3D2C5A0072C0B3 /* reboot.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = reboot.c; sourceTree = "<group>"; };
 		374A36E214748EE400AAF39D /* varargs_wrappers.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = varargs_wrappers.s; sourceTree = "<group>"; };
 		37DDFB7614748713009D3355 /* syscall.map */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = syscall.map; sourceTree = "<group>"; };
 		3F538F881A659C5600B37EFD /* persona.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = persona.c; sourceTree = "<group>"; };
@@ -805,6 +807,7 @@
 				BA9973461C3B4C8A00B14D8C /* quota_obsolete.c */,
 				24B8C2611237F53900D36CC3 /* remove-counter.c */,
 				248AA966122C7CDA0085F5B1 /* rename.c */,
+				3695DCC81F3D2C5A0072C0B3 /* reboot.c */,
 				29A59AE1183B0DE000E8B896 /* renameat.c */,
 				906AA2D018F74CD1001C681A /* renamex.c */,
 				248AA964122C7C330085F5B1 /* rmdir.c */,
@@ -1319,6 +1322,7 @@
 				C9D9BD4D114B00600000D8B9 /* processor.defs in Sources */,
 				C9D9BD53114B00600000D8B9 /* netname.defs in Sources */,
 				C9D9BD57114B00600000D8B9 /* task.defs in Sources */,
+				3695DCC91F3D2C5F0072C0B3 /* reboot.c in Sources */,
 				C9D9BD58114B00600000D8B9 /* thread_act.defs in Sources */,
 				72E09E941B444B19006F11A4 /* mach_continuous_time.c in Sources */,
 				29A59AE6183B110C00E8B896 /* unlinkat.c in Sources */,

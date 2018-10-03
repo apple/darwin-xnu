@@ -1023,6 +1023,27 @@ act_set_ast(
 	splx(s);
 }
 
+/*
+ * set AST on thread without causing an AST check
+ * and without taking the thread lock
+ *
+ * If thread is not the current thread, then it may take
+ * up until the next context switch or quantum expiration
+ * on that thread for it to notice the AST.
+ */
+static void
+act_set_ast_async(thread_t  thread,
+                  ast_t     ast)
+{
+	thread_ast_set(thread, ast);
+
+	if (thread == current_thread()) {
+		spl_t s = splsched();
+		ast_propagate(thread);
+		splx(s);
+	}
+}
+
 void
 act_set_astbsd(
 	thread_t	thread)
@@ -1033,22 +1054,10 @@ act_set_astbsd(
 void
 act_set_astkevent(thread_t thread, uint16_t bits)
 {
-	spl_t s = splsched();
-
-	/*
-	 * Do not send an IPI if the thread is running on
-	 * another processor, wait for the next quantum
-	 * expiration to load the AST.
-	 */
-
 	atomic_fetch_or(&thread->kevent_ast_bits, bits);
-	thread_ast_set(thread, AST_KEVENT);
 
-	if (thread == current_thread()) {
-		ast_propagate(thread);
-	}
-
-	splx(s);
+	/* kevent AST shouldn't send immediate IPIs */
+	act_set_ast_async(thread, AST_KEVENT);
 }
 
 void
@@ -1073,9 +1082,23 @@ act_set_astmacf(
 #endif
 
 void
-set_astledger(thread_t thread)
+act_set_astledger(thread_t thread)
 {
 	act_set_ast(thread, AST_LEDGER);
+}
+
+/*
+ * The ledger AST may need to be set while already holding
+ * the thread lock.  This routine skips sending the IPI,
+ * allowing us to avoid the lock hold.
+ *
+ * However, it means the targeted thread must context switch
+ * to recognize the ledger AST.
+ */
+void
+act_set_astledger_async(thread_t thread)
+{
+	act_set_ast_async(thread, AST_LEDGER);
 }
 
 void

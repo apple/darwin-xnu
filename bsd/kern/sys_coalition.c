@@ -216,7 +216,7 @@ static int __attribute__ ((noinline))
 coalition_info_resource_usage(coalition_t coal, user_addr_t buffer, user_size_t bufsize)
 {
 	kern_return_t kr;
-	struct coalition_resource_usage cru;
+	struct coalition_resource_usage cru = {};
 
 	kr = coalition_resource_usage_internal(coal, &cru);
 
@@ -483,6 +483,11 @@ static int sysctl_coalition_get_pid_list SYSCTL_HANDLER_ARGS
 
 out:
 	proc_rele(tproc);
+
+	if (npids < 0) {
+		/* npids is a negative errno */
+		return -npids;
+	}
 
 	if (npids == 0)
 		return ENOENT;

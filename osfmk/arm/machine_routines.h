@@ -529,10 +529,6 @@ void		set_fpscr(uint32_t);
 
 extern	void		init_vfp(void);
 extern	boolean_t	get_vfp_enabled(void);
-#if     (__ARM_VFP__ >= 3)
-extern	unsigned int	get_mvfr0(void);
-extern	unsigned int	get_mvfr1(void);
-#endif
 extern	void		arm_debug_set_cp14(arm_debug_state_t *debug_state);
 extern	void		fiq_context_init(boolean_t enable_fiq);
 
@@ -551,6 +547,9 @@ void rorgn_stash_range(void);
 void rorgn_lockdown(void);
 #endif /* defined(KERNEL_INTEGRITY_KTRR)*/
 
+#if __ARM_KERNEL_PROTECT__
+extern void set_vbar_el1(uint64_t);
+#endif /* __ARM_KERNEL_PROTECT__ */
 #endif /* MACH_KERNEL_PRIVATE */
 
 extern	uint32_t	arm_debug_read_dscr(void);

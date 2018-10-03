@@ -1055,8 +1055,8 @@ skip_ipsec:
 		exthdrs.ip6e_ip6 = m;
 
 		ipsec_state.m = m;
-		route_copyout(&ipsec_state.ro, (struct route *)ro,
-		    sizeof (ipsec_state.ro));
+		route_copyout((struct route *)&ipsec_state.ro, (struct route *)ro,
+		    sizeof (struct route_in6));
 		ipsec_state.dst = SA(dst);
 
 		/* So that we can see packets inside the tunnel */

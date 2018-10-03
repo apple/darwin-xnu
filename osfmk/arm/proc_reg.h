@@ -64,6 +64,17 @@
 #ifndef	_ARM_PROC_REG_H_
 #define	_ARM_PROC_REG_H_
 
+#if __ARM_KERNEL_PROTECT__
+/*
+ * This feature is not currently implemented for 32-bit ARM CPU architectures.
+ * A discussion of this feature for 64-bit ARM CPU architectures can be found
+ * in the ARM64 version of this file.
+ */
+#if __arm__
+#error __ARM_KERNEL_PROTECT__ is not supported on ARM32
+#endif
+#endif /* __ARM_KERNEL_PROTECT__ */
+
 #if defined (__arm64__)
 #include <pexpert/arm64/board_config.h>
 #elif defined (__arm__)
@@ -110,6 +121,7 @@
 #define __ARM_ENABLE_SWAP__ 1
 #define __ARM_V8_CRYPTO_EXTENSIONS__ 1
 #define __ARM64_PMAP_SUBPAGE_L1__ 1
+#define __ARM_KERNEL_PROTECT__ 1
 
 #elif defined (APPLETYPHOON)
 #define	__ARM_ARCH__	8
@@ -124,6 +136,7 @@
 #define __ARM_ENABLE_SWAP__ 1
 #define __ARM_V8_CRYPTO_EXTENSIONS__ 1
 #define __ARM64_PMAP_SUBPAGE_L1__ 1
+#define __ARM_KERNEL_PROTECT__ 1
 
 #elif defined (APPLETWISTER)
 #define	__ARM_ARCH__	8
@@ -138,7 +151,8 @@
 #define __ARM_ENABLE_SWAP__ 1
 #define __ARM_V8_CRYPTO_EXTENSIONS__ 1
 #define	__ARM_16K_PG__	1
-#define __ARM64_TWO_LEVEL_PMAP__ 1
+#define __ARM64_PMAP_SUBPAGE_L1__ 1
+#define __ARM_KERNEL_PROTECT__ 1
 
 #elif defined (APPLEHURRICANE)
 #define	__ARM_ARCH__	8
@@ -154,6 +168,7 @@
 #define __ARM_V8_CRYPTO_EXTENSIONS__ 1
 #define	__ARM_16K_PG__	1
 #define __ARM64_PMAP_SUBPAGE_L1__ 1
+#define __ARM_KERNEL_PROTECT__ 1
 #define __ARM_GLOBAL_SLEEP_BIT__ 1
 #define __ARM_PAN_AVAILABLE__ 1
 
@@ -678,6 +693,7 @@
  * Convenience definitions for:
  *   ARM_TT_LEAF: The last level of the configured page table format.
  *   ARM_TT_TWIG: The second to last level of the configured page table format.
+ *   ARM_TT_ROOT: The first level of the configured page table format.
  *
  *   My apologies to any botanists who may be reading this.
  */
@@ -690,6 +706,11 @@
 #define ARM_TT_TWIG_OFFMASK				ARM_TT_L1_OFFMASK
 #define ARM_TT_TWIG_SHIFT				ARM_TT_L1_SHIFT
 #define ARM_TT_TWIG_INDEX_MASK			ARM_TT_L1_INDEX_MASK
+
+#define ARM_TT_ROOT_SIZE				ARM_TT_L1_SIZE
+#define ARM_TT_ROOT_OFFMASK				ARM_TT_L1_OFFMASK
+#define ARM_TT_ROOT_SHIFT				ARM_TT_L1_SHIFT
+#define ARM_TT_ROOT_INDEX_MASK			ARM_TT_L1_INDEX_MASK
 
 /*
  *	Level 1 Translation Table Entry

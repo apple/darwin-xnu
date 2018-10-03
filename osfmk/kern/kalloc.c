@@ -140,48 +140,63 @@ KALLOC_ZINFO_SFREE(vm_size_t bytes)
  *	kalloc_max_prerounded is the smallest allocation size, before
  *	rounding, for which no zone exists.
  *
- *	Also if the allocation size is more than kalloc_kernmap_size 
+ *	Also if the allocation size is more than kalloc_kernmap_size
  *	then allocate from kernel map rather than kalloc_map.
  */
 
 #if KALLOC_MINSIZE == 16 && KALLOC_LOG2_MINALIGN == 4
 
-#define K_ZONE_SIZES			\
-	16,				\
-	32,				\
-	48,				\
-/* 3 */	64,				\
-	80,				\
-	96,				\
-/* 6 */	128,				\
-	160, 192,				\
-	256,				\
-/* 9 */	288,				\
-	512, 576,				\
-	1024, 1152,				\
-/* C */	1280,				\
-	2048,				\
-	4096
+#define K_ZONE_SIZES \
+	16, \
+	32, \
+	48, \
+	64, /* 2^6 */ \
+	80, \
+	96, \
+	128, /* 2^7 */ \
+	160, \
+	192, \
+	224, \
+	256, /* 2^8 */ \
+	288, \
+	368, \
+	400, \
+	512, /* 2^9 */\
+	576, \
+	768, \
+	1024, /* 2^10 */ \
+	1152, \
+	1280, \
+	1664, \
+	2048, /* 2^11 */ \
+	4096, /* 2^12 */ \
+	6144
 
-#define K_ZONE_NAMES			\
-	"kalloc.16",			\
-	"kalloc.32",			\
-	"kalloc.48",			\
-/* 3 */	"kalloc.64",			\
-	"kalloc.80",			\
-	"kalloc.96",			\
-/* 6 */	"kalloc.128",			\
-	"kalloc.160",			\
-	"kalloc.192",			\
-	"kalloc.256",			\
-/* 9 */	"kalloc.288",			\
-	"kalloc.512",			\
-	"kalloc.576",			\
-	"kalloc.1024",			\
-	"kalloc.1152", 			\
-/* C */	"kalloc.1280",			\
-	"kalloc.2048",			\
-	"kalloc.4096"
+#define K_ZONE_NAMES \
+	"kalloc.16", \
+	"kalloc.32", \
+	"kalloc.48", \
+	"kalloc.64", /* 2^6 */ \
+	"kalloc.80", \
+	"kalloc.96", \
+	"kalloc.128", /* 2^7 */ \
+	"kalloc.160", \
+	"kalloc.192", \
+	"kalloc.224", \
+	"kalloc.256", /* 2^8 */\
+	"kalloc.288", \
+	"kalloc.368", \
+	"kalloc.400", \
+	"kalloc.512", /* 2^9 */ \
+	"kalloc.576", \
+	"kalloc.768", \
+	"kalloc.1024", /* 2^10 */ \
+	"kalloc.1152", \
+	"kalloc.1280", \
+	"kalloc.1664", \
+	"kalloc.2048", /* 2^11 */ \
+	"kalloc.4096", /* 2^12 */ \
+	"kalloc.6144"
 
 #elif KALLOC_MINSIZE == 8 && KALLOC_LOG2_MINALIGN == 3
 
@@ -214,7 +229,7 @@ KALLOC_ZINFO_SFREE(vm_size_t bytes)
 	"kalloc.4096",	"kalloc.6144"
 
 #else
-#error	missing zone size parameters for kalloc
+#error missing or invalid zone size parameters for kalloc
 #endif
 
 #define KALLOC_MINALIGN (1 << KALLOC_LOG2_MINALIGN)

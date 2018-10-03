@@ -219,8 +219,10 @@ int main(int argc, char **argv)
 			break;
 		case 'u':
 			ret = atoi(optarg);
-			if (ret <= 0)
-				err("Invalid UID: %s", optarg);
+			/* allow invalid / -1 as a wildcard for lookup */
+			if (ret < 0 && persona_op != PERSONA_OP_LOOKUP) {
+				err("Invalid UID:%s (%d)", optarg, ret);
+			}
 			uid = (uid_t)ret;
 			break;
 		case 'g':
@@ -255,7 +257,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (uid == (uid_t)-1)
+	if (uid == (uid_t)-1 && persona_op != PERSONA_OP_LOOKUP)
 		uid = kinfo.persona_id;
 
 	if (kinfo.persona_gmuid && kinfo.persona_ngroups == 0) {

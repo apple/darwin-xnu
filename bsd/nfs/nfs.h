@@ -1127,6 +1127,9 @@ struct nfsrv_descript {
 
 extern TAILQ_HEAD(nfsd_head, nfsd) nfsd_head, nfsd_queue;
 
+typedef int (*nfsrv_proc_t)(struct nfsrv_descript *, struct nfsrv_sock *,
+			  vfs_context_t, mbuf_t *);
+
 /* mutex for nfs server */
 extern lck_mtx_t *nfsd_mutex;
 extern int nfsd_thread_count, nfsd_thread_max;

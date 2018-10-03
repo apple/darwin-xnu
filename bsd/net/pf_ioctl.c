@@ -3395,7 +3395,7 @@ pfioctl_ioc_states(u_long cmd, struct pfioc_states_32 *ps32,
 			break;
 		}
 
-		pstore = _MALLOC(sizeof (*pstore), M_TEMP, M_WAITOK);
+		pstore = _MALLOC(sizeof (*pstore), M_TEMP, M_WAITOK | M_ZERO);
 		if (pstore == NULL) {
 			error = ENOMEM;
 			break;
@@ -4341,7 +4341,7 @@ pf_af_hook(struct ifnet *ifp, struct mbuf **mppn, struct mbuf **mp,
 	struct ifnet * pf_ifp = ifp;
 
 	/* Always allow traffic on co-processor interfaces. */
-	if (ifp && IFNET_IS_INTCOPROC(ifp))
+	if (!intcoproc_unrestricted && ifp && IFNET_IS_INTCOPROC(ifp))
 		return (0);
 
 	marks = net_thread_marks_push(NET_THREAD_HELD_PF);

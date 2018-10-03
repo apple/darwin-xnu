@@ -266,6 +266,7 @@ static IORecursiveLock    * sKextLock                  = NULL;
 
 static OSDictionary       * sKextsByID                 = NULL;
 static OSDictionary       * sExcludeListByID           = NULL;
+static OSKextVersion        sExcludeListVersion        = 0;
 static OSArray            * sLoadedKexts               = NULL;
 static OSArray            * sUnloadedPrelinkedKexts    = NULL;
 
@@ -3757,26 +3758,11 @@ OSKext::createExcludeListFromBooterData(
         if ( myBundleID && 
             strcmp( myBundleID->getCStringNoCopy(), "com.apple.driver.KextExcludeList" ) == 0 ) {
             
-            /* get copy of exclusion list dictionary */
-            OSDictionary *      myTempDict;     // do not free
-            
-            myTempDict = OSDynamicCast(
-                                       OSDictionary,
-                                       theInfoDict->getObject("OSKextExcludeList"));
-            if ( NULL == myTempDict ) {
+            boolean_t updated = updateExcludeList(theInfoDict);
+            if (!updated) {
                 /* 25322874 */
                 panic("Missing OSKextExcludeList dictionary\n");
             }
-            
-            IORecursiveLockLock(sKextLock);
-            
-            /* get rid of old exclusion list */
-            if (sExcludeListByID) {
-                OSSafeReleaseNULL(sExcludeListByID);
-            }
-            sExcludeListByID = OSDictionary::withDictionary(myTempDict, 0);
-            IORecursiveLockUnlock(sKextLock);
-
             break;
         }
         
@@ -3809,28 +3795,58 @@ OSKext::createExcludeListFromPrelinkInfo( OSArray * theInfoArray )
                       myInfoDict->getObject(kCFBundleIdentifierKey));
         if ( myBundleID && 
             strcmp( myBundleID->getCStringNoCopy(), "com.apple.driver.KextExcludeList" ) == 0 ) {
-            // get copy of exclude list dictionary
-            OSDictionary *      myTempDict;     // do not free
-            myTempDict = OSDynamicCast(OSDictionary,
-                                       myInfoDict->getObject("OSKextExcludeList"));
-            if ( NULL == myTempDict ) {
+
+            boolean_t updated = updateExcludeList(myInfoDict);
+            if (!updated) {
                 /* 25322874 */
                 panic("Missing OSKextExcludeList dictionary\n");
             }
-            
-            IORecursiveLockLock(sKextLock);
-            // get rid of old exclude list
-            if (sExcludeListByID) {
-                OSSafeReleaseNULL(sExcludeListByID);
-            }
-            
-            sExcludeListByID = OSDictionary::withDictionary(myTempDict, 0);
-            IORecursiveLockUnlock(sKextLock);
             break;
         }
     } // for (i = 0; i < theInfoArray->getCount()...
-    
+
     return;
+}
+
+/* static */
+boolean_t
+OSKext::updateExcludeList(OSDictionary *infoDict)
+{
+    OSDictionary *myTempDict = NULL;     // do not free
+    OSString     *myTempString = NULL;   // do not free
+    OSKextVersion newVersion = 0;
+    boolean_t updated = false;
+
+    if (!infoDict) {
+        return false;
+    }
+
+    myTempDict = OSDynamicCast(OSDictionary, infoDict->getObject("OSKextExcludeList"));
+    if (!myTempDict) {
+        return false;
+    }
+
+    myTempString = OSDynamicCast(OSString, infoDict->getObject(kCFBundleVersionKey));
+    if (!myTempString) {
+        return false;
+    }
+
+    newVersion = OSKextParseVersionString(myTempString->getCStringNoCopy());
+    if (newVersion == 0) {
+        return false;
+    }
+
+    IORecursiveLockLock(sKextLock);
+
+    if (newVersion > sExcludeListVersion) {
+        OSSafeReleaseNULL(sExcludeListByID);
+        sExcludeListByID = OSDictionary::withDictionary(myTempDict, 0);
+        sExcludeListVersion = newVersion;
+        updated = true;
+    }
+
+    IORecursiveLockUnlock(sKextLock);
+    return updated;
 }
 
 #if PRAGMA_MARK
@@ -4285,16 +4301,26 @@ OSKext::isInExcludeList(void)
     size_t          i;
     boolean_t       wantLessThan = false;
     boolean_t       wantLessThanEqualTo = false;
+    boolean_t       isInExcludeList = true;
     char            myBuffer[32];
     
+    IORecursiveLockLock(sKextLock);
+
     if (!sExcludeListByID) {
-        return(false);
+        isInExcludeList = false;
+    } else {
+        /* look up by bundleID in our exclude list and if found get version
+         * string (or strings) that we will not allow to load
+         */
+        versionString = OSDynamicCast(OSString, sExcludeListByID->getObject(bundleID));
+        if (versionString == NULL || versionString->getLength() > (sizeof(myBuffer) - 1)) {
+            isInExcludeList = false;
+        }
     }
-    /* look up by bundleID in our exclude list and if found get version
-     * string (or strings) that we will not allow to load
-     */
-    versionString = OSDynamicCast(OSString, sExcludeListByID->getObject(bundleID));
-    if (versionString == NULL || versionString->getLength() > (sizeof(myBuffer) - 1)) {
+
+    IORecursiveLockUnlock(sKextLock);
+
+    if (!isInExcludeList) {
         return(false);
     }
     
@@ -4652,6 +4678,18 @@ OSKext::load(
     * personalities within the load function.
     */
     if (!declaresExecutable()) {
+       /* There is a special case where a non-executable kext can be loaded: the
+        * AppleKextExcludeList.  Detect that special kext by bundle identifier and
+        * load its metadata into the global data structures, if appropriate
+        */
+        if (strcmp(getIdentifierCString(), "com.apple.driver.KextExcludeList") == 0) {
+            boolean_t updated = updateExcludeList(infoDict);
+            if (updated) {
+                OSKextLog(this,
+                    kOSKextLogDebugLevel | kOSKextLogLoadFlag,
+                    "KextExcludeList was updated to version: %lld", sExcludeListVersion);
+            }
+        }
         result = kOSReturnSuccess;
         goto loaded;
     }
@@ -11883,4 +11921,3 @@ int OSKextGetUUIDForName(const char *name, uuid_t uuid)
 	return 1;
 }
 #endif
-

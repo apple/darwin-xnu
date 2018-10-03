@@ -135,24 +135,20 @@ machine_arm_debug_info(void)
 void
 machine_do_mvfpid()
 {
+#if __arm__
 	arm_mvfr0_info_t	arm_mvfr0_info;
 	arm_mvfr1_info_t	arm_mvfr1_info;
-	uint64_t		tmp;
 
-#if __arm__
-	(void)tmp;
 	__asm__ volatile("vmrs	%0, mvfr0":"=r"(arm_mvfr0_info.value));
 	__asm__ volatile("vmrs	%0, mvfr1":"=r"(arm_mvfr1_info.value));
-#else
-	__asm__ volatile("mrs	%0, MVFR0_EL1":"=r"(tmp));
-	arm_mvfr0_info.value = (uint32_t)tmp;
-
-	__asm__ volatile("mrs	%0, MVFR1_EL1":"=r"(tmp));
-	arm_mvfr1_info.value = (uint32_t)tmp;
-#endif
 
 	cpuid_mvfp_info.neon = arm_mvfr1_info.bits.SP;
 	cpuid_mvfp_info.neon_hpfp = arm_mvfr1_info.bits.HPFP;
+#else
+	cpuid_mvfp_info.neon = 1;
+	cpuid_mvfp_info.neon_hpfp = 1;
+#endif
+
 }
 
 arm_mvfp_info_t *

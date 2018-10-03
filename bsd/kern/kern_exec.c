@@ -1320,12 +1320,6 @@ badtoolate:
 	}
 	
 done:
-	if (!spawn) {
-		/* notify only if it has not failed due to FP Key error */
-		if ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)
-			proc_knote(p, NOTE_EXEC);
-	}
-
 	if (load_result.threadstate) {
 		kfree(load_result.threadstate, load_result.threadstate_sz);
 		load_result.threadstate = NULL;
@@ -1991,7 +1985,8 @@ spawn_copyin_macpolicyinfo(const struct user__posix_spawn_args_desc *px_args, _p
 	if ((error = copyin(px_args->mac_extensions, psmx, px_args->mac_extensions_size)) != 0)
 		goto bad;
 
-	if (PS_MAC_EXTENSIONS_SIZE(psmx->psmx_count) > px_args->mac_extensions_size) {
+	size_t extsize = PS_MAC_EXTENSIONS_SIZE(psmx->psmx_count);
+	if (extsize == 0 || extsize > px_args->mac_extensions_size) {
 		error = EINVAL;
 		goto bad;
 	}
@@ -2087,7 +2082,7 @@ static int spawn_validate_persona(struct _posix_spawn_persona_info *px_persona)
 			}
 		}
 		if (px_persona->pspi_flags & POSIX_SPAWN_PERSONA_GROUPS) {
-			int ngroups = 0;
+			unsigned ngroups = 0;
 			gid_t groups[NGROUPS_MAX];
 
 			if (persona_get_groups(persona, &ngroups, groups,
@@ -2095,7 +2090,7 @@ static int spawn_validate_persona(struct _posix_spawn_persona_info *px_persona)
 				error = EINVAL;
 				goto out;
 			}
-			if (ngroups != (int)px_persona->pspi_ngroups) {
+			if (ngroups != px_persona->pspi_ngroups) {
 				error = EINVAL;
 				goto out;
 			}
@@ -2304,8 +2299,9 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 		if (px_args.file_actions_size != 0) {
 			/* Limit file_actions to allowed number of open files */
 			int maxfa = (p->p_limit ? p->p_rlimit[RLIMIT_NOFILE].rlim_cur : NOFILE);
+			size_t maxfa_size = PSF_ACTIONS_SIZE(maxfa);
 			if (px_args.file_actions_size < PSF_ACTIONS_SIZE(1) ||
-				px_args.file_actions_size > PSF_ACTIONS_SIZE(maxfa)) {
+			    maxfa_size == 0 || px_args.file_actions_size > maxfa_size) {
 				error = EINVAL;
 				goto bad;
 			}
@@ -2321,7 +2317,8 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 				goto bad;
 
 			/* Verify that the action count matches the struct size */
-			if (PSF_ACTIONS_SIZE(px_sfap->psfa_act_count) != px_args.file_actions_size) {
+			size_t psfsize = PSF_ACTIONS_SIZE(px_sfap->psfa_act_count);
+			if (psfsize == 0 || psfsize != px_args.file_actions_size) {
 				error = EINVAL;
 				goto bad;
 			}
@@ -2347,7 +2344,8 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 				goto bad;
 
 			/* Verify that the action count matches the struct size */
-			if (PS_PORT_ACTIONS_SIZE(px_spap->pspa_count) != px_args.port_actions_size) {
+			size_t pasize = PS_PORT_ACTIONS_SIZE(px_spap->pspa_count);
+			if (pasize == 0 || pasize != px_args.port_actions_size) {
 				error = EINVAL;
 				goto bad;
 			}
@@ -2944,11 +2942,12 @@ bad:
 
 		/* flag the 'fork' has occurred */
 		proc_knote(p->p_pptr, NOTE_FORK | p->p_pid);
-		/* then flag exec has occurred */
-		/* notify only if it has not failed due to FP Key error */
-		if ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)
-			proc_knote(p, NOTE_EXEC);
 	}
+
+	/* flag exec has occurred, notify only if it has not failed due to FP Key error */
+	if (!error && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0))
+		proc_knote(p, NOTE_EXEC);
+
 
 	if (error == 0) {
 		/*
@@ -3115,7 +3114,7 @@ bad:
 		if (error) {
 			DTRACE_PROC1(exec__failure, int, error);
 		} else {
-			DTRACE_PROC(exec__success);
+			dtrace_thread_didexec(imgp->ip_new_thread);
 		}
 	}
 
@@ -3124,8 +3123,7 @@ bad:
 	}
 #endif
 	/*
-	 * exec-success dtrace probe fired, clear bsd_info from
-	 * old task if it did exec.
+	 * clear bsd_info from old task if it did exec.
 	 */
 	if (task_did_exec(current_task())) {
 		set_bsdtask_info(current_task(), NULL);
@@ -3523,7 +3521,12 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 
 		exec_resettextvp(p, imgp);
 		error = check_for_signature(p, imgp);
-	}	
+	}
+
+	/* flag exec has occurred, notify only if it has not failed due to FP Key error */
+	if (exec_done && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0))
+		proc_knote(p, NOTE_EXEC);
+
 	if (imgp->ip_vp != NULLVP)
 		vnode_put(imgp->ip_vp);
 	if (imgp->ip_scriptvp != NULLVP)
@@ -3577,9 +3580,10 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 		}
 #endif /* CONFIG_MACF */
 
-		DTRACE_PROC(exec__success);
 
 #if CONFIG_DTRACE
+		dtrace_thread_didexec(imgp->ip_new_thread);
+
 		if ((dtrace_proc_waitfor_hook = dtrace_proc_waitfor_exec_ptr) != NULL)
 			(*dtrace_proc_waitfor_hook)(p);
 #endif
@@ -3594,8 +3598,7 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 exit_with_error:
 
 	/*
-	 * exec-success dtrace probe fired, clear bsd_info from
-	 * old task if it did exec.
+	 * clear bsd_info from old task if it did exec.
 	 */
 	if (task_did_exec(current_task())) {
 		set_bsdtask_info(current_task(), NULL);
@@ -5467,67 +5470,6 @@ static void cdhash_to_string(char str[CS_CDHASH_STRING_SIZE], uint8_t const * co
 }
 
 /*
- * If the process is not signed or if it contains entitlements, we
- * need to communicate through the task_access_port to taskgated.
- *
- * taskgated will provide a detached code signature if present, and
- * will enforce any restrictions on entitlements.
- */
-
-static boolean_t
-taskgated_required(proc_t p, boolean_t *require_success)
-{
-	size_t length;
-	void *blob;
-	int error;
-
-	if (cs_debug > 2)
-		csvnode_print_debug(p->p_textvp);
-
-#if !CONFIG_EMBEDDED
-	const int can_skip_taskgated = csproc_get_platform_binary(p) && !csproc_get_platform_path(p);
-#else
-	const int can_skip_taskgated = csproc_get_platform_binary(p);
-#endif
-	if (can_skip_taskgated) {
-		if (cs_debug) printf("taskgated not required for: %s\n", p->p_name);
-		*require_success = FALSE;
-		return FALSE;
-	}
-
-	if ((p->p_csflags & CS_VALID) == 0) {
-		*require_success = FALSE;
-		return TRUE;
-	}
-
-	error = cs_entitlements_blob_get(p, &blob, &length);
-	if (error == 0 && blob != NULL) {
-#if !CONFIG_EMBEDDED
-		/*
-		 * fatal on the desktop when entitlements are present,
-		 * unless we started in single-user mode 
-		 */
-		if ((boothowto & RB_SINGLE) == 0)
-			*require_success = TRUE;
-		/*
-		 * Allow initproc to run without causing taskgated to launch
-		 */
-		if (p == initproc) {
-			*require_success = FALSE;
-			return FALSE;
-		}
-
-#endif
-		if (cs_debug) printf("taskgated required for: %s\n", p->p_name);
-
-		return TRUE;
-	}
-
-	*require_success = FALSE;
-	return FALSE;
-}
-
-/*
  * __EXEC_WAITING_ON_TASKGATED_CODE_SIGNATURE_UPCALL__
  * 
  * Description: Waits for the userspace daemon to respond to the request
@@ -5547,7 +5489,7 @@ check_for_signature(proc_t p, struct image_params *imgp)
 	kern_return_t kr = KERN_FAILURE;
 	int error = EACCES;
 	boolean_t unexpected_failure = FALSE;
-	unsigned char hash[CS_CDHASH_LEN];
+	struct cs_blob *csb;
 	boolean_t require_success = FALSE;
 	int spawn = (imgp->ip_flags & IMGPF_SPAWN);
 	int vfexec = (imgp->ip_flags & IMGPF_VFORK_EXEC);
@@ -5589,12 +5531,17 @@ check_for_signature(proc_t p, struct image_params *imgp)
 		goto done;
 	}
 
-	/* check if callout to taskgated is needed */
-	if (!taskgated_required(p, &require_success)) {
+	/* If the code signature came through the image activation path, we skip the
+     * taskgated / externally attached path. */
+	if (imgp->ip_csflags & CS_SIGNED) {
 		error = 0;
 		goto done;
 	}
 
+    /* The rest of the code is for signatures that either already have been externally
+     * attached (likely, but not necessarily by a previous run through the taskgated
+     * path), or that will now be attached by taskgated. */
+    
 	kr = task_get_task_access_port(p->task, &port);
 	if (KERN_SUCCESS != kr || !IPC_PORT_VALID(port)) {
 		error = 0;
@@ -5639,14 +5586,42 @@ check_for_signature(proc_t p, struct image_params *imgp)
 
 	/* Only do this if exec_resettextvp() did not fail */
 	if (p->p_textvp != NULLVP) {
-		/*
-		 * If there's a new code directory, mark this process
-		 * as signed.
-		 */
-		if (0 == ubc_cs_getcdhash(p->p_textvp, p->p_textoff, hash)) {
-			proc_lock(p);
-			p->p_csflags |= CS_VALID;
-			proc_unlock(p);
+		csb = ubc_cs_blob_get(p->p_textvp, -1, p->p_textoff);
+
+		if (csb != NULL) {
+			/* As the enforcement we can do here is very limited, we only allow things that
+			 * are the only reason why this code path still exists:
+			 * Adhoc signed non-platform binaries without special cs_flags and without any
+			 * entitlements (unrestricted ones still pass AMFI). */
+			if (
+                /* Revalidate the blob if necessary through bumped generation count. */
+                (ubc_cs_generation_check(p->p_textvp) == 0 ||
+                 ubc_cs_blob_revalidate(p->p_textvp, csb, imgp, 0) == 0) &&
+                /* Only CS_ADHOC, no CS_KILL, CS_HARD etc. */
+				(csb->csb_flags & CS_ALLOWED_MACHO) == CS_ADHOC &&
+				/* If it has a CMS blob, it's not adhoc. The CS_ADHOC flag can lie. */
+				csblob_find_blob_bytes((const uint8_t *)csb->csb_mem_kaddr, csb->csb_mem_size,
+									   CSSLOT_SIGNATURESLOT,
+									   CSMAGIC_BLOBWRAPPER) == NULL &&
+				/* It could still be in a trust cache (unlikely with CS_ADHOC), or a magic path. */
+				csb->csb_platform_binary == 0 &&
+				/* No entitlements, not even unrestricted ones. */
+                csb->csb_entitlements_blob == NULL) {
+
+				proc_lock(p);
+				p->p_csflags |= CS_SIGNED | CS_VALID;
+				proc_unlock(p);
+
+			} else {
+				uint8_t cdhash[CS_CDHASH_LEN];
+				char cdhash_string[CS_CDHASH_STRING_SIZE];
+				proc_getcdhash(p, cdhash);
+				cdhash_to_string(cdhash_string, cdhash);
+				printf("ignoring detached code signature on '%s' with cdhash '%s' "
+					   "because it is invalid, or not a simple adhoc signature.\n", 
+					   p->p_name, cdhash_string);
+			}
+
 		}
 	}
 

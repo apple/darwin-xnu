@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -54,15 +54,12 @@ extern "C" {
 #include <uuid/uuid.h>
 }
 
-#if defined(__x86_64__)
-/*
- * This will eventually be properly exported in
- * <rdar://problem/31181482> ER: Expose coprocessor version (T208/T290) in a kernel/kext header
- * although we'll always need to hardcode this here since we won't be able to include whatever
- * header this ends up in.
- */
-#define kCoprocessorMinVersion 0x00020000
-#endif
+#define kShutdownTimeout    30 //in secs
+
+#if !CONFIG_EMBEDDED
+
+boolean_t coprocessor_cross_panic_enabled = TRUE;
+#endif /* !CONFIG_EMBEDDED */
 
 void printDictionaryKeys (OSDictionary * inDictionary, char * inMsg);
 static void getCStringForObject(OSObject *inObj, char *outStr, size_t outStrLen);
@@ -111,11 +108,6 @@ bool IOPlatformExpert::start( IOService * provider )
     OSData *		busFrequency;
     uint32_t		debugFlags;
 
-#if defined(__x86_64__)
-    IORegistryEntry	*platform_entry = NULL;
-    OSData		*coprocessor_version_obj = NULL;
-    uint64_t		coprocessor_version = 0;
-#endif
     
     if (!super::start(provider))
       return false;
@@ -167,19 +159,12 @@ bool IOPlatformExpert::start( IOService * provider )
         }
     }
 
-#if defined(__x86_64__)
-    platform_entry = IORegistryEntry::fromPath(kIODeviceTreePlane ":/efi/platform");
-    if (platform_entry != NULL) {
-        coprocessor_version_obj = OSDynamicCast(OSData, platform_entry->getProperty("apple-coprocessor-version"));
-        if ((coprocessor_version_obj != NULL) && (coprocessor_version_obj->getLength() <= sizeof(coprocessor_version))) {
-            memcpy(&coprocessor_version, coprocessor_version_obj->getBytesNoCopy(), coprocessor_version_obj->getLength());
-            if (coprocessor_version >= kCoprocessorMinVersion) {
-                coprocessor_paniclog_flush = TRUE;
-            }
-        }
-        platform_entry->release();
+#if !CONFIG_EMBEDDED
+    if (PEGetCoprocessorVersion() >= kCoprocessorVersion2) {
+        coprocessor_paniclog_flush = TRUE;
+        extended_debug_log_init();
     }
-#endif /* defined(__x86_64__) */
+#endif
 
     return( configure(provider) );
 }
@@ -784,6 +769,14 @@ static void IOShutdownNotificationsTimedOut(
 
 #else /* ! CONFIG_EMBEDDED */
     int type = (int)(long)p0;
+    uint32_t timeout = (uint32_t)(uintptr_t)p1;
+
+    IOPMrootDomain *pmRootDomain = IOService::getPMRootDomain();
+    if (pmRootDomain) {
+        if ((PEGetCoprocessorVersion() >= kCoprocessorVersion2) || pmRootDomain->checkShutdownTimeout()) {
+        pmRootDomain->panicWithShutdownLog(timeout * 1000);
+        }
+    }
 
     /* 30 seconds has elapsed - resume shutdown */
     if(gIOPlatform) gIOPlatform->haltRestart(type);
@@ -828,7 +821,7 @@ int PEHaltRestart(unsigned int type)
   thread_call_t     shutdown_hang;
   IORegistryEntry   *node;
   OSData            *data;
-  uint32_t          timeout = 30;
+  uint32_t          timeout = kShutdownTimeout;
   static boolean_t  panic_begin_called = FALSE;
   
   if(type == kPEHaltCPU || type == kPERestartCPU || type == kPEUPSDelayHaltCPU)
@@ -859,7 +852,7 @@ int PEHaltRestart(unsigned int type)
     shutdown_hang = thread_call_allocate( &IOShutdownNotificationsTimedOut, 
                         (thread_call_param_t)(uintptr_t) type);
     clock_interval_to_deadline( timeout, kSecondScale, &deadline );
-    thread_call_enter1_delayed( shutdown_hang, 0, deadline );
+    thread_call_enter1_delayed( shutdown_hang, (thread_call_param_t)(uintptr_t)timeout, deadline );
 
     pmRootDomain->handlePlatformHaltRestart(type); 
     /* This notification should have few clients who all do 
@@ -877,6 +870,11 @@ int PEHaltRestart(unsigned int type)
            // Notify any listeners that we're done collecting
            // panic data before we call through to do the restart
            IOCPURunPlatformPanicActions(kPEPanicEnd);
+
+           // Callout to shutdown the disk driver once we've returned from the
+           // kPEPanicEnd callback (and we know all core dumps on this system
+           // are complete).
+           IOCPURunPlatformPanicActions(kPEPanicDiskShutdown);
        }
 
        // Do an initial sync to flush as much panic data as possible,
@@ -888,12 +886,21 @@ int PEHaltRestart(unsigned int type)
        PE_sync_panic_buffers();
    }
    else if (type == kPEPanicEnd) {
-       IOCPURunPlatformPanicActions(type);
+#if !CONFIG_EMBEDDED
+        if (coprocessor_cross_panic_enabled)
+#endif
+            IOCPURunPlatformPanicActions(type);
+
    } else if (type == kPEPanicBegin) {
-       // Only call the kPEPanicBegin callout once
-       if (!panic_begin_called) {
-           panic_begin_called = TRUE;
-           IOCPURunPlatformPanicActions(type);
+#if !CONFIG_EMBEDDED
+       if (coprocessor_cross_panic_enabled)
+#endif
+       {
+           // Only call the kPEPanicBegin callout once
+           if (!panic_begin_called) {
+               panic_begin_called = TRUE;
+               IOCPURunPlatformPanicActions(type);
+           }
        }
    }
 
@@ -907,9 +914,9 @@ UInt32 PESavePanicInfo(UInt8 *buffer, UInt32 length)
   else return 0;
 }
 
-void PESavePanicInfoAction(void *buffer, size_t length)
+void PESavePanicInfoAction(void *buffer, UInt32 offset, UInt32 length)
 {
-	IOCPURunPlatformPanicSyncAction(buffer, length);
+	IOCPURunPlatformPanicSyncAction(buffer, offset, length);
 	return;
 }
 
@@ -1112,6 +1119,25 @@ void PESetUTCTimeOfDay(clock_sec_t secs, clock_usec_t usecs)
         gIOPlatform->setUTCTimeOfDay(secs, usecs * NSEC_PER_USEC);
 }
 
+coprocessor_type_t  PEGetCoprocessorVersion( void )
+{
+    coprocessor_type_t coprocessor_version = kCoprocessorVersionNone;
+#if !CONFIG_EMBEDDED
+    IORegistryEntry	*platform_entry = NULL;
+    OSData		*coprocessor_version_obj = NULL;
+
+    platform_entry = IORegistryEntry::fromPath(kIODeviceTreePlane ":/efi/platform");
+    if (platform_entry != NULL) {
+        coprocessor_version_obj = OSDynamicCast(OSData, platform_entry->getProperty("apple-coprocessor-version"));
+        if ((coprocessor_version_obj != NULL) && (coprocessor_version_obj->getLength() <= sizeof(uint64_t))) {
+            memcpy(&coprocessor_version, coprocessor_version_obj->getBytesNoCopy(), coprocessor_version_obj->getLength());
+        }
+        platform_entry->release();
+    }
+#endif
+    return coprocessor_version;
+}
+
 } /* extern "C" */
 
 void IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
@@ -1156,6 +1182,29 @@ void IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
         entry->release( );
     }
 #else /* !CONFIG_EMBEDDED */
+   /*
+    * If we have panic debugging enabled and a prod-fused coprocessor,
+    * disable cross panics so that the co-processor doesn't cause the system
+    * to reset when we enter the debugger or hit a panic on the x86 side.
+    */
+    if ( panicDebugging )
+    {
+        entry = IORegistryEntry::fromPath( "/options", gIODTPlane );
+        if ( entry )
+        {
+            data = OSDynamicCast( OSData, entry->getProperty( "EffectiveProductionStatus" ) );
+            if ( data  && ( data->getLength( ) == sizeof( UInt8 ) ) ) {
+                    UInt8 *isProdFused = (UInt8 *) data->getBytesNoCopy( );
+                    UInt32 debug_flags = 0;
+                    if ( *isProdFused || ( PE_i_can_has_debugger(&debug_flags) &&
+				( debug_flags & DB_DISABLE_CROSS_PANIC ) ) ) {
+                        coprocessor_cross_panic_enabled = FALSE;
+                    }
+            }
+            entry->release( );
+        }
+    }
+
     entry = IORegistryEntry::fromPath( "/efi/platform", gIODTPlane );
     if ( entry )
     {
