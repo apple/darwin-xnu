@@ -4367,7 +4367,7 @@ necp_get_result_description(char *result_string, necp_kernel_policy_result resul
 		}
 		case NECP_KERNEL_POLICY_RESULT_ROUTE_RULES: {
 			int index = 0;
-			char interface_names[IFXNAMSIZ][MAX_ROUTE_RULE_INTERFACES];
+			char interface_names[MAX_ROUTE_RULE_INTERFACES][IFXNAMSIZ];
 			struct necp_route_rule *route_rule = necp_lookup_route_rule_locked(&necp_route_rules, result_parameter.route_rule_id);
 			if (route_rule != NULL) {
 				for (index = 0; index < MAX_ROUTE_RULE_INTERFACES; index++) {
