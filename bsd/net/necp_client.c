@@ -208,7 +208,7 @@ struct necp_client_parsed_parameters {
 	union necp_sockaddr_union local_addr;
 	union necp_sockaddr_union remote_addr;
 	u_int32_t required_interface_index;
-	char prohibited_interfaces[IFXNAMSIZ][NECP_MAX_PARSED_PARAMETERS];
+	char prohibited_interfaces[NECP_MAX_PARSED_PARAMETERS][IFXNAMSIZ];
 	u_int8_t required_interface_type;
 	u_int8_t prohibited_interface_types[NECP_MAX_PARSED_PARAMETERS];
 	struct necp_client_parameter_netagent_type required_netagent_types[NECP_MAX_PARSED_PARAMETERS];
