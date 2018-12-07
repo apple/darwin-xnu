@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -888,7 +888,13 @@ static LIST_HEAD(, bridge_softc) bridge_list =
 static lck_grp_t *bridge_lock_grp = NULL;
 static lck_attr_t *bridge_lock_attr = NULL;
 
-static if_clone_t bridge_cloner = NULL;
+#define	BRIDGENAME	"bridge"
+#define	BRIDGES_MAX	IF_MAXUNIT
+#define	BRIDGE_ZONE_MAX_ELEM	MIN(IFNETS_MAX, BRIDGES_MAX)
+
+static struct if_clone bridge_cloner =
+    IF_CLONE_INITIALIZER(BRIDGENAME, bridge_clone_create, bridge_clone_destroy,
+        0, BRIDGES_MAX, BRIDGE_ZONE_MAX_ELEM, sizeof(struct bridge_softc));
 
 static int if_bridge_txstart = 0;
 SYSCTL_INT(_net_link_bridge, OID_AUTO, txstart, CTLFLAG_RW | CTLFLAG_LOCKED,
@@ -1126,7 +1132,6 @@ bridgeattach(int n)
 #pragma unused(n)
 	int error;
 	lck_grp_attr_t *lck_grp_attr = NULL;
-	struct ifnet_clone_params ifnet_clone_params;
 
 	bridge_rtnode_pool = zinit(sizeof (struct bridge_rtnode),
 	    1024 * sizeof (struct bridge_rtnode), 0, "bridge_rtnode");
@@ -1153,11 +1158,7 @@ bridgeattach(int n)
 	bstp_sys_init();
 #endif /* BRIDGESTP */
 
-	ifnet_clone_params.ifc_name = "bridge";
-	ifnet_clone_params.ifc_create = bridge_clone_create;
-	ifnet_clone_params.ifc_destroy = bridge_clone_destroy;
-
-	error = ifnet_clone_attach(&ifnet_clone_params, &bridge_cloner);
+	error = if_clone_attach(&bridge_cloner);
 	if (error != 0)
 		printf("%s: ifnet_clone_attach failed %d\n", __func__, error);
 
@@ -1243,13 +1244,18 @@ bridge_clone_create(struct if_clone *ifc, uint32_t unit, void *params)
 {
 #pragma unused(params)
 	struct ifnet *ifp = NULL;
-	struct bridge_softc *sc, *sc2;
+	struct bridge_softc *sc = NULL;
+	struct bridge_softc *sc2 = NULL;
 	struct ifnet_init_eparams init_params;
 	errno_t error = 0;
 	uint8_t eth_hostid[ETHER_ADDR_LEN];
 	int fb, retry, has_hostid;
 
-	sc = _MALLOC(sizeof (*sc), M_DEVBUF, M_WAITOK | M_ZERO);
+	sc =  if_clone_softc_allocate(&bridge_cloner);
+	if (sc == NULL) {
+		error = ENOMEM;
+		goto done;
+	}
 
 	lck_mtx_init(&sc->sc_mtx, bridge_lock_grp, bridge_lock_attr);
 	sc->sc_brtmax = BRIDGE_RTABLE_MAX;
@@ -1422,7 +1428,7 @@ bridge_clone_create(struct if_clone *ifc, uint32_t unit, void *params)
 done:
 	if (error != 0) {
 		printf("%s failed error %d\n", __func__, error);
-		/* Cleanup TBD */
+		/* TBD: Clean up: sc, sc_rthash etc */
 	}
 
 	return (error);
@@ -6033,8 +6039,7 @@ bridge_detach(ifnet_t ifp)
 	ifnet_release(ifp);
 
 	lck_mtx_destroy(&sc->sc_mtx, bridge_lock_grp);
-
-	_FREE(sc, M_DEVBUF);
+	if_clone_softc_deallocate(&bridge_cloner, sc);
 }
 
 /*

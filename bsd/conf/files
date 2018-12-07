@@ -117,7 +117,6 @@ bsd/dev/dtrace/lockstat.c		optional config_dtrace
 bsd/dev/dtrace/dtrace_ptss.c		optional config_dtrace
 bsd/dev/dtrace/dtrace_subr.c		optional config_dtrace
 bsd/dev/dtrace/dtrace_glue.c		standard
-bsd/dev/dtrace/dtrace_alloc.c		optional config_dtrace
 bsd/dev/dtrace/blist.c			optional config_dtrace
 bsd/dev/dtrace/fbt.c			optional config_dtrace
 bsd/dev/dtrace/sdt.c			optional config_dtrace
@@ -218,6 +217,7 @@ bsd/net/net_perf.c			optional networking
 bsd/net/if_gif.c          		optional gif
 bsd/net/if_stf.c          		optional stf
 bsd/net/if_ports_used.c			optional networking
+bsd/net/if_low_power_mode.c		optional networking
 bsd/net/kpi_interface.c		optional networking
 bsd/net/kpi_protocol.c		optional networking
 bsd/net/kpi_interfacefilter.c	optional networking
@@ -228,6 +228,7 @@ bsd/net/necp.c				optional necp
 bsd/net/necp_client.c		optional necp
 bsd/net/network_agent.c			optional networking
 bsd/net/if_pflog.c			optional pflog
+bsd/net/nat464_utils.c			optional networking
 bsd/net/pf.c				optional pf
 bsd/net/pf_if.c				optional pf
 bsd/net/pf_ioctl.c			optional pf
@@ -380,6 +381,10 @@ bsd/security/audit/audit_session.c		standard
 bsd/security/audit/audit_syscalls.c		standard
 bsd/security/audit/audit_worker.c		optional config_audit
 
+bsd/pthread/pthread_shims.c		standard
+bsd/pthread/pthread_priority.c		standard
+bsd/pthread/pthread_workqueue.c		standard
+
 bsd/kern/bsd_init.c			standard
 ./init_sysent.c				standard
 bsd/kern/kdebug.c			standard
@@ -469,7 +474,6 @@ bsd/kern/posix_shm.c			standard
 bsd/kern/qsort.c				standard
 bsd/kern/kpi_socket.c			optional sockets
 bsd/kern/kpi_socketfilter.c		optional sockets
-bsd/kern/pthread_shims.c		standard
 bsd/kern/proc_info.c			standard
 bsd/kern/process_policy.c		standard
 bsd/kern/kern_overrides.c 		standard
@@ -503,4 +507,6 @@ bsd/miscfs/nullfs/null_subr.c       optional nullfs
 bsd/miscfs/nullfs/null_vfsops.c     optional nullfs
 bsd/miscfs/nullfs/null_vnops.c      optional nullfs
 
+bsd/tests/bsd_tests.c 			optional config_xnupost
+bsd/tests/pmap_test_sysctl.c		optional config_xnupost
 

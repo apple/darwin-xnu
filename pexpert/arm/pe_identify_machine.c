@@ -97,6 +97,11 @@ pe_identify_machine(boot_args * bootArgs)
 		pclk = hclk / 2;
 		tclk = 100000;	/* timer is at 100khz */
 
+	} else if (!strcmp(gPESoCDeviceType, "bcm2837-io")) {
+		mclk = 1200000000;
+		hclk = mclk / 4;
+		pclk = hclk / 2;
+		tclk = 1000000;
 	} else
 		use_dt = 1;
 
@@ -297,10 +302,18 @@ static struct tbd_ops    t8010_funcs = {NULL, NULL, NULL};
 static struct tbd_ops    t8011_funcs = {NULL, NULL, NULL};
 #endif /* defined(ARM_BOARD_CLASS_T8011) */
 
+#if defined(ARM_BOARD_CLASS_T8015)
+static struct tbd_ops    t8015_funcs = {NULL, NULL, NULL};
+#endif /* defined(ARM_BOARD_CLASS_T8015) */
 
 
 
 
+
+
+#if defined(ARM_BOARD_CLASS_BCM2837)
+static struct tbd_ops    bcm2837_funcs = {NULL, NULL, NULL};
+#endif /* defined(ARM_BOARD_CLASS_BCM2837) */
 
 vm_offset_t	gPicBase;
 vm_offset_t	gTimerBase;
@@ -320,7 +333,7 @@ typedef enum
 static panic_trace_t bootarg_panic_trace;
 
 // The command buffer contains the converted commands from the device tree for commanding cpu_halt, enable_trace, etc.
-#define DEBUG_COMMAND_BUFFER_SIZE 100
+#define DEBUG_COMMAND_BUFFER_SIZE 256
 typedef struct command_buffer_element{
 	uintptr_t address;
 	uint16_t destination_cpu_selector;
@@ -658,6 +671,16 @@ pe_arm_init_timer(void *args)
 #if defined(ARM_BOARD_CLASS_T8011)
 	if (!strcmp(gPESoCDeviceType, "t8011-io")) {
 		tbd_funcs = &t8011_funcs;
+	} else
+#endif
+#if defined(ARM_BOARD_CLASS_T8015)
+	if (!strcmp(gPESoCDeviceType, "t8015-io")) {
+		tbd_funcs = &t8015_funcs;
+	} else
+#endif
+#if defined(ARM_BOARD_CLASS_BCM2837)
+	if (!strcmp(gPESoCDeviceType, "bcm2837-io")) {
+		tbd_funcs = &bcm2837_funcs;
 	} else
 #endif
 		return 0;

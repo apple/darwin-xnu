@@ -129,12 +129,13 @@ typedef natural_t	ipc_kobject_type_t;
 #define IKOT_VOUCHER			37
 #define IKOT_VOUCHER_ATTR_CONTROL	38
 #define IKOT_WORK_INTERVAL              39
+#define IKOT_UX_HANDLER                 40
 
 /*
  * Add new entries here and adjust IKOT_UNKNOWN.
  * Please keep ipc/ipc_object.c:ikot_print_array up to date.
  */
-#define IKOT_UNKNOWN                    40      /* magic catchall       */
+#define IKOT_UNKNOWN                    41      /* magic catchall       */
 #define	IKOT_MAX_TYPE	(IKOT_UNKNOWN+1)	/* # of IKOT_ types	*/
 
 

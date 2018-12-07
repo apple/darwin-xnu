@@ -37,6 +37,7 @@
 #include <sys/cdefs.h>
 #include <sys/kernel_types.h>
 #include <kern/locks.h>
+#include <mach/machine.h>
 #include <mach/memory_object_types.h>
 #include <sys/ucred.h>
 
@@ -97,6 +98,8 @@ const char *cs_identity_get(proc_t);
 #endif
 
 /* cluster IO routines */
+void    cluster_update_state(vnode_t, vm_object_offset_t, vm_object_offset_t, boolean_t);
+
 int	advisory_read(vnode_t, off_t, off_t, int);
 int	advisory_read_ext(vnode_t, off_t, off_t, int, int (*)(buf_t, void *), void *, int);
 

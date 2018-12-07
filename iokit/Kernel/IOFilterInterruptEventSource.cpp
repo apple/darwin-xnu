@@ -32,6 +32,7 @@
 #include <IOKit/IOTimeStamp.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOInterruptAccountingPrivate.h>
+#include <libkern/Block.h>
 
 #if IOKITSTATS
 
@@ -123,6 +124,39 @@ IOFilterInterruptEventSource *IOFilterInterruptEventSource
     return me;
 }
 
+
+IOFilterInterruptEventSource *IOFilterInterruptEventSource
+::filterInterruptEventSource(OSObject *inOwner,
+                             IOService *inProvider,
+                             int inIntIndex,
+                             ActionBlock inAction,
+                             FilterBlock inFilterAction)
+{
+    IOFilterInterruptEventSource *me = new IOFilterInterruptEventSource;
+
+    FilterBlock filter = Block_copy(inFilterAction);
+    if (!filter) return 0;
+
+    if (me
+    && !me->init(inOwner, (Action) NULL, (Filter) filter, inProvider, inIntIndex)) {
+        me->release();
+	    Block_release(filter);
+        return 0;
+    }
+    me->flags |= kFilterBlock;
+    me->setActionBlock((IOEventSource::ActionBlock) inAction);
+
+    return me;
+}
+
+
+void IOFilterInterruptEventSource::free( void )
+{
+	if ((kFilterBlock & flags) && filterActionBlock) Block_release(filterActionBlock);
+
+    super::free();
+}
+
 void IOFilterInterruptEventSource::signalInterrupt()
 {
 	bool trace = (gIOKitTrace & kIOTraceIntEventSource) ? true : false;
@@ -144,11 +178,16 @@ void IOFilterInterruptEventSource::signalInterrupt()
 IOFilterInterruptEventSource::Filter
 IOFilterInterruptEventSource::getFilterAction() const
 {
+	if (kFilterBlock & flags) return NULL;
     return filterAction;
 }
 
-
-
+IOFilterInterruptEventSource::FilterBlock
+IOFilterInterruptEventSource::getFilterActionBlock() const
+{
+	if (kFilterBlock & flags) return filterActionBlock;
+	return (NULL);
+}
 
 void IOFilterInterruptEventSource::normalInterruptOccurred
     (void */*refcon*/, IOService */*prov*/, int /*source*/)
@@ -169,7 +208,8 @@ void IOFilterInterruptEventSource::normalInterruptOccurred
     }
     
     // Call the filter.
-    filterRes = (*filterAction)(owner, this);
+    if (kFilterBlock & flags) filterRes = (filterActionBlock)(this);
+    else                      filterRes = (*filterAction)(owner, this);
 
     if (IOInterruptEventSource::reserved->statistics) {
         if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelCountIndex)) {
@@ -210,7 +250,8 @@ void IOFilterInterruptEventSource::disableInterruptOccurred
     }
     
     // Call the filter.
-    filterRes = (*filterAction)(owner, this);
+    if (kFilterBlock & flags) filterRes = (filterActionBlock)(this);
+    else                      filterRes = (*filterAction)(owner, this);
 
     if (IOInterruptEventSource::reserved->statistics) {
         if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelCountIndex)) {

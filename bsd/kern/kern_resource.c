@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1232,8 +1232,8 @@ int
 getrusage(struct proc *p, struct getrusage_args *uap, __unused int32_t *retval)
 {
 	struct rusage *rup, rubuf;
-	struct user64_rusage rubuf64;
-	struct user32_rusage rubuf32;
+	struct user64_rusage rubuf64 = {};
+	struct user32_rusage rubuf32 = {};
 	size_t retsize = sizeof(rubuf);			/* default: 32 bits */
 	caddr_t retbuf = (caddr_t)&rubuf;		/* default: 32 bits */
 	struct timeval utime;
@@ -1421,6 +1421,13 @@ proc_limitreplace(proc_t p)
 	return(0);
 }
 
+static int
+iopolicysys_disk(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
+static int
+iopolicysys_vfs_hfs_case_sensitivity(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
+static int
+iopolicysys_vfs_atime_updates(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
+
 /*
  * iopolicysys
  *
@@ -1433,12 +1440,6 @@ proc_limitreplace(proc_t p)
  *		EINVAL				Invalid command or invalid policy arguments
  *
  */
-
-static int
-iopolicysys_disk(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
-static int
-iopolicysys_vfs(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
-
 int
 iopolicysys(struct proc *p, struct iopolicysys_args *uap, int32_t *retval)
 {
@@ -1459,7 +1460,12 @@ iopolicysys(struct proc *p, struct iopolicysys_args *uap, int32_t *retval)
 				goto out;
 			break;
 		case IOPOL_TYPE_VFS_HFS_CASE_SENSITIVITY:
-			error = iopolicysys_vfs(p, uap->cmd, iop_param.iop_scope, iop_param.iop_policy, &iop_param);
+			error = iopolicysys_vfs_hfs_case_sensitivity(p, uap->cmd, iop_param.iop_scope, iop_param.iop_policy, &iop_param);
+			if (error)
+				goto out;
+			break;
+		case IOPOL_TYPE_VFS_ATIME_UPDATES:
+			error = iopolicysys_vfs_atime_updates(p, uap->cmd, iop_param.iop_scope, iop_param.iop_policy, &iop_param);
 			if (error)
 				goto out;
 			break;
@@ -1600,7 +1606,7 @@ out:
 }
 
 static int
-iopolicysys_vfs(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param)
+iopolicysys_vfs_hfs_case_sensitivity(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param)
 {
 	int			error = 0;
 
@@ -1668,6 +1674,93 @@ out:
 	return (error);
 }
 
+static inline int
+get_thread_atime_policy(struct uthread *ut)
+{
+	return (ut->uu_flag & UT_ATIME_UPDATE)? IOPOL_ATIME_UPDATES_OFF: IOPOL_ATIME_UPDATES_DEFAULT;
+}
+
+static inline void
+set_thread_atime_policy(struct uthread *ut, int policy)
+{
+	if (policy == IOPOL_ATIME_UPDATES_OFF) {
+		ut->uu_flag |= UT_ATIME_UPDATE;
+	} else {
+		ut->uu_flag &= ~UT_ATIME_UPDATE;
+	}
+}
+
+static inline void
+set_task_atime_policy(struct proc *p, int policy)
+{
+	if (policy == IOPOL_ATIME_UPDATES_OFF) {
+		OSBitOrAtomic16((uint16_t)P_VFS_IOPOLICY_ATIME_UPDATES, &p->p_vfs_iopolicy);
+	} else {
+		OSBitAndAtomic16(~((uint16_t)P_VFS_IOPOLICY_ATIME_UPDATES), &p->p_vfs_iopolicy);
+	}
+}
+
+static inline int
+get_task_atime_policy(struct proc *p)
+{
+	return (p->p_vfs_iopolicy & P_VFS_IOPOLICY_ATIME_UPDATES)? IOPOL_ATIME_UPDATES_OFF: IOPOL_ATIME_UPDATES_DEFAULT;
+}
+
+static int
+iopolicysys_vfs_atime_updates(struct proc *p __unused, int cmd, int scope, int policy, struct _iopol_param_t *iop_param)
+{
+	int			error = 0;
+	thread_t		thread;
+
+	/* Validate scope */
+	switch (scope) {
+		case IOPOL_SCOPE_THREAD:
+			thread = current_thread();
+			break;
+		case IOPOL_SCOPE_PROCESS:
+			thread = THREAD_NULL;
+			break;
+		default:
+			error = EINVAL;
+			goto out;
+	}
+
+	/* Validate policy */
+	if (cmd == IOPOL_CMD_SET) {
+		switch (policy) {
+			case IOPOL_ATIME_UPDATES_DEFAULT:
+			case IOPOL_ATIME_UPDATES_OFF:
+				break;
+			default:
+				error = EINVAL;
+				goto out;
+		}
+	}
+
+	/* Perform command */
+	switch(cmd) {
+		case IOPOL_CMD_SET:
+			if (thread != THREAD_NULL)
+				set_thread_atime_policy(get_bsdthread_info(thread), policy);
+			else
+				set_task_atime_policy(p, policy);
+			break;
+		case IOPOL_CMD_GET:
+			if (thread != THREAD_NULL)
+				policy = get_thread_atime_policy(get_bsdthread_info(thread));
+			else
+				policy = get_task_atime_policy(p);
+			iop_param->iop_policy = policy;
+			break;
+		default:
+			error = EINVAL; /* unknown command */
+			break;
+	}
+
+out:
+	return (error);
+}
+
 /* BSD call back function for task_policy networking changes */
 void
 proc_apply_task_networkbg(void * bsd_info, thread_t thread)
@@ -1697,8 +1790,11 @@ gather_rusage_info(proc_t p, rusage_info_current *ru, int flavor)
 	case RUSAGE_INFO_V4:
 		ru->ri_logical_writes = get_task_logical_writes(p->task);
 		ru->ri_lifetime_max_phys_footprint = get_task_phys_footprint_lifetime_max(p->task);
+#if CONFIG_LEDGER_INTERVAL_MAX
+		ru->ri_interval_max_phys_footprint = get_task_phys_footprint_interval_max(p->task, FALSE);
+#endif
 		fill_task_monotonic_rusage(p->task, ru);
-        /* fall through */
+	/* fall through */
 
 	case RUSAGE_INFO_V3:
 		fill_task_qos_rusage(p->task, ru);
@@ -1736,7 +1832,7 @@ gather_rusage_info(proc_t p, rusage_info_current *ru, int flavor)
 int
 proc_get_rusage(proc_t p, int flavor, user_addr_t buffer, __unused int is_zombie)
 {
-	rusage_info_current ri_current;
+	rusage_info_current ri_current = {};
 
 	int error = 0;
 	size_t size = 0;
@@ -1811,6 +1907,9 @@ mach_to_bsd_rv(int mach_rv)
  * uap->flavor available flavors:
  *
  *     RLIMIT_WAKEUPS_MONITOR
+ *     RLIMIT_CPU_USAGE_MONITOR
+ *     RLIMIT_THREAD_CPULIMITS
+ *     RLIMIT_FOOTPRINT_INTERVAL
  */
 int
 proc_rlimit_control(__unused struct proc *p, struct proc_rlimit_control_args *uap, __unused int32_t *retval)
@@ -1821,6 +1920,10 @@ proc_rlimit_control(__unused struct proc *p, struct proc_rlimit_control_args *ua
 	uint32_t cpumon_flags;
 	uint32_t cpulimits_flags;
 	kauth_cred_t my_cred, target_cred;
+#if CONFIG_LEDGER_INTERVAL_MAX
+	uint32_t footprint_interval_flags;	
+	uint64_t interval_max_footprint;
+#endif /* CONFIG_LEDGER_INTERVAL_MAX */
 
 	/* -1 implicitly means our own process (perhaps even the current thread for per-thread attributes) */
 	if (uap->pid == -1) {
@@ -1883,6 +1986,20 @@ proc_rlimit_control(__unused struct proc *p, struct proc_rlimit_control_args *ua
 
 		error = mach_to_bsd_rv(thread_set_cpulimit(THREAD_CPULIMIT_BLOCK, percent, ns_refill));
 		break;
+
+#if CONFIG_LEDGER_INTERVAL_MAX
+	case RLIMIT_FOOTPRINT_INTERVAL:
+		footprint_interval_flags = uap->arg; // XXX temporarily stashing flags in argp (12592127)
+		/*
+		 * There is currently only one option for this flavor.
+		 */
+		if ((footprint_interval_flags & FOOTPRINT_INTERVAL_RESET) == 0) {
+			error = EINVAL;
+			break;
+		}
+		interval_max_footprint = get_task_phys_footprint_interval_max(targetp->task, TRUE);
+		break;
+#endif /* CONFIG_LEDGER_INTERVAL_MAX */
 	default:
 		error = EINVAL;
 		break;

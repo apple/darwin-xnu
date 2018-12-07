@@ -310,8 +310,6 @@ typedef struct hibernate_statistics_t hibernate_statistics_t;
 void     IOHibernateSystemInit(IOPMrootDomain * rootDomain);
 
 IOReturn IOHibernateSystemSleep(void);
-void     IOOpenDebugDataFile(const char *fname, uint64_t size);
-void     IOCloseDebugDataFile();
 IOReturn IOHibernateIOKitSleep(void);
 IOReturn IOHibernateSystemHasSlept(void);
 IOReturn IOHibernateSystemWake(void);

@@ -47,7 +47,8 @@ osfmk/i386/ktss.c		standard
 osfmk/i386/ldt.c		standard
 osfmk/x86_64/loose_ends.c	standard
 osfmk/x86_64/copyio.c		standard
-osfmk/i386/locks_i386.c	standard
+osfmk/i386/locks_i386.c		standard
+osfmk/i386/locks_i386_opt.c	standard
 osfmk/x86_64/locore.s	standard
 osfmk/x86_64/lowmem_vectors.c	standard
 osfmk/x86_64/cswitch.s	standard
@@ -73,7 +74,6 @@ osfmk/i386/commpage/commpage.c	standard
 osfmk/i386/commpage/commpage_asm.s	standard
 osfmk/i386/commpage/fifo_queues.s	standard
 
-osfmk/i386/AT386/conf.c		standard
 osfmk/i386/AT386/model_dep.c	standard
 
 osfmk/i386/lapic.c		standard
@@ -114,7 +114,6 @@ osfmk/kern/hv_support.c				optional hypervisor
 
 # Kernel performance monitoring
 osfmk/kperf/x86_64/kperf_mp.c   optional kperf
-osfmk/kperf/x86_64/kperf_meminfo.c  optional kperf
 osfmk/x86_64/kpc_x86.c              optional kpc
 
 osfmk/x86_64/monotonic_x86_64.c optional monotonic

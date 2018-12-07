@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -82,7 +82,6 @@
 #include <libkern/libkern.h>
 
 #include <mach/thread_act.h>
-#include <mach/branch_predicates.h>
 
 #include <net/if.h>
 #include <net/if_types.h>
@@ -108,6 +107,7 @@
 #include <net/if_ether.h>
 #include <net/ethernet.h>
 #include <net/flowhash.h>
+#include <net/nat464_utils.h>
 #include <net/pfvar.h>
 #include <net/if_pflog.h>
 
@@ -2061,16 +2061,7 @@ pf_addr_wrap_neq(struct pf_addr_wrap *aw1, struct pf_addr_wrap *aw2)
 u_int16_t
 pf_cksum_fixup(u_int16_t cksum, u_int16_t old, u_int16_t new, u_int8_t udp)
 {
-	u_int32_t	l;
-
-	if (udp && !cksum)
-		return (0);
-	l = cksum + old - new;
-	l = (l >> 16) + (l & 0xffff);
-	l = l & 0xffff;
-	if (udp && !l)
-		return (0xffff);
-	return (l);
+	return (nat464_cksum_fixup(cksum, old, new, udp));
 }
 
 /*
@@ -2111,17 +2102,23 @@ pf_change_ap(int dir, pbuf_t *pbuf, struct pf_addr *a, u_int16_t *p,
 			ao.addr16[0], an->addr16[0], 0),
 			ao.addr16[1], an->addr16[1], 0);
 			*p = pn;
-		/*
-		 * If the packet is originated from an ALG on the NAT gateway
-		 * (source address is loopback or local), in which case the
-		 * TCP/UDP checksum field contains the pseudo header checksum
-		 * that's not yet complemented. A packet generated locally
-		 * will have UDP/TCP CSUM flag set (gets set in protocol
-		 * output).
-		 */
+			/*
+			 * If the packet is originated from an ALG on the NAT gateway
+			 * (source address is loopback or local), in which case the
+			 * TCP/UDP checksum field contains the pseudo header checksum
+			 * that's not yet complemented.
+			 * In that case we do not need to fixup the checksum for port
+			 * translation as the pseudo header checksum doesn't include ports.
+			 *
+			 * A packet generated locally will have UDP/TCP CSUM flag
+			 * set (gets set in protocol output).
+			 *
+			 * It should be noted that the fixup doesn't do anything if the
+			 * checksum is 0.
+			 */
 			if (dir == PF_OUT && pbuf != NULL &&
-			(*pbuf->pb_csum_flags & (CSUM_TCP | CSUM_UDP))) {
-			/* Pseudo-header checksum does not include ports */
+			    (*pbuf->pb_csum_flags & (CSUM_TCP | CSUM_UDP))) {
+				/* Pseudo-header checksum does not include ports */
 				*pc = ~pf_cksum_fixup(pf_cksum_fixup(~*pc,
 				ao.addr16[0], an->addr16[0], u),
 				ao.addr16[1], an->addr16[1], u);
@@ -4062,7 +4059,16 @@ pf_calc_mss(struct pf_addr *addr, sa_family_t af, u_int16_t offer)
 	}
 
 	if (rt && rt->rt_ifp) {
-		mss = rt->rt_ifp->if_mtu - hlen - sizeof (struct tcphdr);
+		 /* This is relevant only for PF SYN Proxy */
+		int interface_mtu = rt->rt_ifp->if_mtu;
+
+		if (af == AF_INET &&
+		    INTF_ADJUST_MTU_FOR_CLAT46(rt->rt_ifp)) {
+			interface_mtu = IN6_LINKMTU(rt->rt_ifp);
+			/* Further adjust the size for CLAT46 expansion */
+			interface_mtu -= CLAT46_HDR_EXPANSION_OVERHD;
+		}
+		mss = interface_mtu - hlen - sizeof (struct tcphdr);
 		mss = max(tcp_mssdflt, mss);
 		rtfree(rt);
 	}
@@ -4483,10 +4489,10 @@ pf_nat64_ipv6(pbuf_t *pbuf, int off, struct pf_pdesc *pd)
 	ip4->ip_hl  = 5;
 	ip4->ip_tos = pd->tos & htonl(0x0ff00000);
 	ip4->ip_len = htons(sizeof(*ip4) + (pd->tot_len - off));
-        ip4->ip_id  = 0;
-        ip4->ip_off = htons(IP_DF);
-        ip4->ip_ttl = pd->ttl;
-        ip4->ip_p   = pd->proto;
+	ip4->ip_id  = 0;
+	ip4->ip_off = htons(IP_DF);
+	ip4->ip_ttl = pd->ttl;
+	ip4->ip_p   = pd->proto;
 	ip4->ip_sum = 0;
 	ip4->ip_src = pd->naddr.v4addr;
 	ip4->ip_dst = pd->ndaddr.v4addr;
@@ -4500,7 +4506,7 @@ pf_nat64_ipv6(pbuf_t *pbuf, int off, struct pf_pdesc *pd)
 		icmp = (struct icmp *)pbuf_contig_segment(pbuf, hlen,
 		    ICMP_MINLEN);
 		if (icmp == NULL)
-			return (PF_NAT64);
+			return (PF_DROP);
 
 		icmp->icmp_cksum = 0;
 		icmp->icmp_cksum = pbuf_inet_cksum(pbuf, 0, hlen,
@@ -4628,11 +4634,7 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		icmptype = pd->hdr.icmp->icmp_type;
 		icmpcode = pd->hdr.icmp->icmp_code;
 
-		if (icmptype == ICMP_UNREACH ||
-		    icmptype == ICMP_SOURCEQUENCH ||
-		    icmptype == ICMP_REDIRECT ||
-		    icmptype == ICMP_TIMXCEED ||
-		    icmptype == ICMP_PARAMPROB)
+		if (ICMP_ERRORTYPE(icmptype))
 			state_icmp++;
 		break;
 #endif /* INET */
@@ -4645,10 +4647,7 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		icmptype = pd->hdr.icmp6->icmp6_type;
 		icmpcode = pd->hdr.icmp6->icmp6_code;
 
-		if (icmptype == ICMP6_DST_UNREACH ||
-		    icmptype == ICMP6_PACKET_TOO_BIG ||
-		    icmptype == ICMP6_TIME_EXCEEDED ||
-		    icmptype == ICMP6_PARAM_PROB)
+		if (ICMP6_ERRORTYPE(icmptype))
 			state_icmp++;
 		break;
 #endif /* INET6 */
@@ -7374,11 +7373,7 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		icmpid = pd->hdr.icmp->icmp_id;
 		icmpsum = &pd->hdr.icmp->icmp_cksum;
 
-		if (icmptype == ICMP_UNREACH ||
-		    icmptype == ICMP_SOURCEQUENCH ||
-		    icmptype == ICMP_REDIRECT ||
-		    icmptype == ICMP_TIMXCEED ||
-		    icmptype == ICMP_PARAMPROB)
+		if (ICMP_ERRORTYPE(icmptype))
 			state_icmp++;
 		break;
 #endif /* INET */
@@ -7388,10 +7383,7 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 		icmpid = pd->hdr.icmp6->icmp6_id;
 		icmpsum = &pd->hdr.icmp6->icmp6_cksum;
 
-		if (icmptype == ICMP6_DST_UNREACH ||
-		    icmptype == ICMP6_PACKET_TOO_BIG ||
-		    icmptype == ICMP6_TIME_EXCEEDED ||
-		    icmptype == ICMP6_PARAM_PROB)
+		if (ICMP6_ERRORTYPE(icmptype))
 			state_icmp++;
 		break;
 #endif /* INET6 */
@@ -8735,7 +8727,7 @@ pf_route(pbuf_t **pbufp, struct pf_rule *r, int dir, struct ifnet *oifp,
 	struct pf_src_node	*sn = NULL;
 	int			 error = 0;
 	uint32_t		 sw_csum;
-
+	int			 interface_mtu = 0;
 	bzero(&iproute, sizeof (iproute));
 
 	if (pbufp == NULL || !pbuf_is_valid(*pbufp) || r == NULL ||
@@ -8837,7 +8829,15 @@ pf_route(pbuf_t **pbufp, struct pf_rule *r, int dir, struct ifnet *oifp,
 	ip_output_checksum(ifp, m0, ((ip->ip_hl) << 2), ntohs(ip->ip_len),
 	    &sw_csum);
 
-	if (ntohs(ip->ip_len) <= ifp->if_mtu || TSO_IPV4_OK(ifp, m0) ||
+	interface_mtu = ifp->if_mtu;
+
+	if (INTF_ADJUST_MTU_FOR_CLAT46(ifp)) {
+		interface_mtu = IN6_LINKMTU(ifp);
+		/* Further adjust the size for CLAT46 expansion */
+		interface_mtu -= CLAT46_HDR_EXPANSION_OVERHD;
+	}
+
+	if (ntohs(ip->ip_len) <= interface_mtu || TSO_IPV4_OK(ifp, m0) ||
 	    (!(ip->ip_off & htons(IP_DF)) &&
 	    (ifp->if_hwassist & CSUM_FRAGMENT))) {
 		ip->ip_sum = 0;
@@ -8860,7 +8860,7 @@ pf_route(pbuf_t **pbufp, struct pf_rule *r, int dir, struct ifnet *oifp,
 		ipstat.ips_cantfrag++;
 		if (r->rt != PF_DUPTO) {
 			icmp_error(m0, ICMP_UNREACH, ICMP_UNREACH_NEEDFRAG, 0,
-			    ifp->if_mtu);
+			    interface_mtu);
 			goto done;
 		} else
 			goto bad;
@@ -8873,7 +8873,7 @@ pf_route(pbuf_t **pbufp, struct pf_rule *r, int dir, struct ifnet *oifp,
 	NTOHS(ip->ip_off);
 	NTOHS(ip->ip_len);
 #endif
-	error = ip_fragment(m0, ifp, ifp->if_mtu, sw_csum);
+	error = ip_fragment(m0, ifp, interface_mtu, sw_csum);
 
 	if (error) {
 		m0 = NULL;

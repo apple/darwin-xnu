@@ -31,7 +31,7 @@ EXPORT_MI_DIR = san
 COMP_SUBDIRS = conf
 
 .DELETE_ON_ERROR:
-$(OBJROOT)/san/kasan-blacklist-%: $(SOURCE)/kasan-blacklist $(SOURCE)/kasan-blacklist-%
+$(OBJROOT)/san/kasan-blacklist-%: $(SOURCE)/kasan-blacklist $(SOURCE)/ubsan-blacklist $(SOURCE)/kasan-blacklist-%
 	@echo "$(ColorH)GENERATING$(Color0)    $(ColorLF)$(notdir $@)$(Color0)"
 	$(_v)sed -e 's,^src:\./,src:'"$(SRCROOT)/," $^ > $@
 	$(_v)$(SOURCE)/tools/validate_blacklist.sh "$@"

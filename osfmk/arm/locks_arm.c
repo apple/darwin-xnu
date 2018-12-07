@@ -232,7 +232,6 @@ static boolean_t lck_rw_lock_shared_to_exclusive_success(lck_rw_t *lck);
 static boolean_t lck_rw_lock_shared_to_exclusive_failure(lck_rw_t *lck, uint32_t prior_lock_state);
 static void lck_rw_lock_exclusive_to_shared_gen(lck_rw_t *lck, uint32_t prior_lock_state);
 static lck_rw_type_t lck_rw_done_gen(lck_rw_t *lck, uint32_t prior_lock_state);
-void lck_rw_clear_promotions_x86(thread_t thread);
 static boolean_t lck_rw_grab(lck_rw_t *lock, int mode, boolean_t wait);
 
 /*
@@ -358,8 +357,8 @@ static unsigned int
 hw_lock_bit_to_contended(hw_lock_bit_t *lock, uint32_t mask, uint32_t timeout);
 #endif
 
-unsigned int
-hw_lock_bit_to(hw_lock_bit_t *lock, unsigned int bit, uint32_t timeout)
+static inline unsigned int
+hw_lock_bit_to_internal(hw_lock_bit_t *lock, unsigned int bit, uint32_t timeout)
 {
 	unsigned int success = 0;
 	uint32_t	mask = (1 << bit);
@@ -367,7 +366,6 @@ hw_lock_bit_to(hw_lock_bit_t *lock, unsigned int bit, uint32_t timeout)
 	uint32_t	state;
 #endif
 
-	_disable_preemption();
 #if	__SMP__
 	if (__improbable(!atomic_test_and_set32(lock, mask, mask, memory_order_acquire, FALSE)))
 		success = hw_lock_bit_to_contended(lock, mask, timeout);
@@ -388,6 +386,13 @@ hw_lock_bit_to(hw_lock_bit_t *lock, unsigned int bit, uint32_t timeout)
 #endif
 
 	return success;
+}
+
+unsigned int
+hw_lock_bit_to(hw_lock_bit_t *lock, unsigned int bit, uint32_t timeout)
+{
+	_disable_preemption();
+	return hw_lock_bit_to_internal(lock, bit, timeout);
 }
 
 #if	__SMP__
@@ -440,17 +445,30 @@ hw_lock_bit(hw_lock_bit_t *lock, unsigned int bit)
 #endif
 }
 
+void
+hw_lock_bit_nopreempt(hw_lock_bit_t *lock, unsigned int bit)
+{
+	if (__improbable(get_preemption_level() == 0))
+		panic("Attempt to take no-preempt bitlock %p in preemptible context", lock);
+	if (hw_lock_bit_to_internal(lock, bit, LOCK_PANIC_TIMEOUT))
+		return;
+#if	__SMP__
+	panic("hw_lock_bit_nopreempt(): timed out (%p)", lock);
+#else
+	panic("hw_lock_bit_nopreempt(): interlock held (%p)", lock);
+#endif
+}
+
 unsigned int
 hw_lock_bit_try(hw_lock_bit_t *lock, unsigned int bit)
 {
-	long		intmask;
 	uint32_t	mask = (1 << bit);
 #if	!__SMP__
 	uint32_t	state;
 #endif
 	boolean_t	success = FALSE;
 
-	intmask = disable_interrupts();
+	_disable_preemption();
 #if	__SMP__
 	// TODO: consider weak (non-looping) atomic test-and-set
 	success = atomic_test_and_set32(lock, mask, mask, memory_order_acquire, FALSE);
@@ -461,9 +479,8 @@ hw_lock_bit_try(hw_lock_bit_t *lock, unsigned int bit)
 		success = TRUE;
 	}
 #endif	// __SMP__
-	if (success)
-		disable_preemption();
-	restore_interrupts(intmask);
+	if (!success)
+		_enable_preemption();
 
 #if CONFIG_DTRACE
 	if (success)
@@ -473,14 +490,8 @@ hw_lock_bit_try(hw_lock_bit_t *lock, unsigned int bit)
 	return success;
 }
 
-/*
- *	Routine:	hw_unlock_bit
- *
- *		Release spin-lock. The second parameter is the bit number to test and set.
- *		Decrement the preemption level.
- */
-void
-hw_unlock_bit(hw_lock_bit_t *lock, unsigned int bit)
+static inline void
+hw_unlock_bit_internal(hw_lock_bit_t *lock, unsigned int bit)
 {
 	uint32_t	mask = (1 << bit);
 #if	!__SMP__
@@ -497,9 +508,28 @@ hw_unlock_bit(hw_lock_bit_t *lock, unsigned int bit)
 #if CONFIG_DTRACE
 	LOCKSTAT_RECORD(LS_LCK_SPIN_UNLOCK_RELEASE, lock, bit);
 #endif
-	enable_preemption();
 }
 
+/*
+ *	Routine:	hw_unlock_bit
+ *
+ *		Release spin-lock. The second parameter is the bit number to test and set.
+ *		Decrement the preemption level.
+ */
+void
+hw_unlock_bit(hw_lock_bit_t *lock, unsigned int bit)
+{
+	hw_unlock_bit_internal(lock, bit);
+	_enable_preemption();
+}
+
+void
+hw_unlock_bit_nopreempt(hw_lock_bit_t *lock, unsigned int bit)
+{
+	if (__improbable(get_preemption_level() == 0))
+		panic("Attempt to release no-preempt bitlock %p in preemptible context", lock);
+	hw_unlock_bit_internal(lock, bit);
+}
 
 /*
  *      Routine:        lck_spin_alloc_init
@@ -571,12 +601,34 @@ lck_spin_lock(lck_spin_t *lock)
 }
 
 /*
+ *      Routine:        lck_spin_lock_nopreempt
+ */
+void
+lck_spin_lock_nopreempt(lck_spin_t *lock)
+{
+#if	DEVELOPMENT || DEBUG
+	if (lock->type != LCK_SPIN_TYPE)
+		panic("Invalid spinlock %p", lock);
+#endif	// DEVELOPMENT || DEBUG
+	hw_lock_lock_nopreempt(&lock->hwlock);
+}
+
+/*
  *      Routine:        lck_spin_try_lock
  */
 int
 lck_spin_try_lock(lck_spin_t *lock)
 {
 	return hw_lock_try(&lock->hwlock);
+}
+
+/*
+ *      Routine:        lck_spin_try_lock_nopreempt
+ */
+int
+lck_spin_try_lock_nopreempt(lck_spin_t *lock)
+{
+	return hw_lock_try_nopreempt(&lock->hwlock);
 }
 
 /*
@@ -592,6 +644,21 @@ lck_spin_unlock(lck_spin_t *lock)
 		panic("Invalid spinlock type %p", lock);
 #endif	// DEVELOPMENT || DEBUG
 	hw_lock_unlock(&lock->hwlock);
+}
+
+/*
+ *      Routine:        lck_spin_unlock_nopreempt
+ */
+void
+lck_spin_unlock_nopreempt(lck_spin_t *lock)
+{
+#if	DEVELOPMENT || DEBUG
+	if ((LCK_MTX_STATE_TO_THREAD(lock->lck_spin_data) != current_thread()) && LOCK_CORRECTNESS_PANIC())
+		panic("Spinlock not owned by thread %p = %lx", lock, lock->lck_spin_data);
+	if (lock->type != LCK_SPIN_TYPE)
+		panic("Invalid spinlock type %p", lock);
+#endif	// DEVELOPMENT || DEBUG
+	hw_lock_unlock_nopreempt(&lock->hwlock);
 }
 
 /*
@@ -1373,7 +1440,7 @@ lck_rw_lock_shared_to_exclusive_failure(
 
 	if ((rwlock_count == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
 		/* sched_flags checked without lock, but will be rechecked while clearing */
-		lck_rw_clear_promotion(thread);
+		lck_rw_clear_promotion(thread, unslide_for_kdebug(lck));
 	}
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_RW_LCK_SH_TO_EX_CODE) | DBG_FUNC_NONE,
@@ -1457,7 +1524,8 @@ lck_rw_lock_shared_to_exclusive_success(
 				ordered_store_rw(lock, word.data);
 
 				thread_set_pending_block_hint(current_thread(), kThreadWaitKernelRWLockUpgrade);
-				res = assert_wait(LCK_RW_WRITER_EVENT(lock), THREAD_UNINT);
+				res = assert_wait(LCK_RW_WRITER_EVENT(lock),
+						THREAD_UNINT | THREAD_WAIT_NOREPORT_USER);
 				lck_interlock_unlock(lock, istate);
 
 				if (res == THREAD_WAITING) {
@@ -1796,7 +1864,8 @@ lck_rw_lock_exclusive_gen(
 				ordered_store_rw(lock, word.data);
 
 				thread_set_pending_block_hint(current_thread(), kThreadWaitKernelRWLockWrite);
-				res = assert_wait(LCK_RW_WRITER_EVENT(lock), THREAD_UNINT);
+				res = assert_wait(LCK_RW_WRITER_EVENT(lock),
+						THREAD_UNINT | THREAD_WAIT_NOREPORT_USER);
 				lck_interlock_unlock(lock, istate);
 
 				if (res == THREAD_WAITING) {
@@ -1866,7 +1935,8 @@ lck_rw_lock_exclusive_gen(
 				ordered_store_rw(lock, word.data);
 
 				thread_set_pending_block_hint(current_thread(), kThreadWaitKernelRWLockWrite);
-				res = assert_wait(LCK_RW_WRITER_EVENT(lock), THREAD_UNINT);
+				res = assert_wait(LCK_RW_WRITER_EVENT(lock),
+						THREAD_UNINT | THREAD_WAIT_NOREPORT_USER);
 				lck_interlock_unlock(lock, istate);
 
 				if (res == THREAD_WAITING) {
@@ -2034,7 +2104,7 @@ lck_rw_done_gen(
 #endif
 	if ((rwlock_count == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
 		/* sched_flags checked without lock, but will be rechecked while clearing */
-		lck_rw_clear_promotion(thread);
+		lck_rw_clear_promotion(thread, unslide_for_kdebug(lck));
 	}
 #if CONFIG_DTRACE
 	LOCKSTAT_RECORD(LS_LCK_RW_DONE_RELEASE, lck, lock_type == LCK_RW_TYPE_SHARED ? 0 : 1);
@@ -2116,7 +2186,8 @@ lck_rw_lock_shared_gen(
 				ordered_store_rw(lck, word.data);
 
 				thread_set_pending_block_hint(current_thread(), kThreadWaitKernelRWLockRead);
-				res = assert_wait(LCK_RW_READER_EVENT(lck), THREAD_UNINT);
+				res = assert_wait(LCK_RW_READER_EVENT(lck),
+						THREAD_UNINT | THREAD_WAIT_NOREPORT_USER);
 				lck_interlock_unlock(lck, istate);
 
 				if (res == THREAD_WAITING) {
@@ -2414,10 +2485,10 @@ lck_mtx_lock_contended(lck_mtx_t *lock, thread_t thread, boolean_t interlocked)
 	if (interlocked)
 		goto interlock_held;
 
+	/* TODO: short-duration spin for on-core contention <rdar://problem/10234625> */
+
+	/* Loop waiting until I see that the mutex is unowned */
 	for ( ; ; ) {
-		if (atomic_compare_exchange(&lock->lck_mtx_data, 0, LCK_MTX_THREAD_TO_STATE(thread),
-						memory_order_acquire_smp, FALSE))
-			return;
 		interlock_lock(lock);
 interlock_held:
 		state = ordered_load_mtx(lock);
@@ -2426,7 +2497,10 @@ interlock_held:
 			break;
 		ordered_store_mtx(lock, (state | LCK_ILOCK | ARM_LCK_WAITERS)); // Set waiters bit and wait
 		lck_mtx_lock_wait(lock, holding_thread);
+		/* returns interlock unlocked */
 	}
+
+	/* Hooray, I'm the new owner! */
 	waiters = lck_mtx_lock_acquire(lock);
 	state = LCK_MTX_THREAD_TO_STATE(thread);
 	if (waiters != 0)
@@ -2661,14 +2735,14 @@ lck_mtx_unlock_contended(lck_mtx_t *lock, thread_t thread, boolean_t ilk_held)
 		state |= LCK_ILOCK;
 		ordered_store_mtx(lock, state);
 #endif
+		if (state & ARM_LCK_WAITERS) {
+			lck_mtx_unlock_wakeup(lock, thread);
+			state = ordered_load_mtx(lock);
+		} else {
+            assertf(lock->lck_mtx_pri == 0, "pri=0x%x", lock->lck_mtx_pri);
+		}
 	}
-	if (state & ARM_LCK_WAITERS) {
-		lck_mtx_unlock_wakeup(lock, thread);
-		state = ordered_load_mtx(lock);
-	} else {
-		assertf(lock->lck_mtx_pri == 0, "pri=0x%x", lock->lck_mtx_pri);
-	}
-	state &= ARM_LCK_WAITERS;		// Retain waiters bit
+	state &= ARM_LCK_WAITERS;   /* Clear state, retain waiters bit */
 #if __SMP__
 	state |= LCK_ILOCK;
 	ordered_store_mtx(lock, state);

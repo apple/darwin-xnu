@@ -60,6 +60,7 @@
 #include <sys/socketvar.h>
 
 #include <bsm/audit.h>
+#include <bsm/audit_internal.h>
 #include <bsm/audit_kevents.h>
 
 #include <security/audit/audit.h>
@@ -86,6 +87,8 @@
 
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
+
+#include <IOKit/IOBSD.h>
 
 #if CONFIG_AUDIT
 
@@ -147,21 +150,43 @@
 int
 audit(proc_t p, struct audit_args *uap, __unused int32_t *retval)
 {
-	int error;
-	void * rec;
-	struct kaudit_record *ar;
-	struct uthread *uthr;
+	int error = 0;
+	void * rec = NULL;
+	void * full_rec = NULL;
+	struct kaudit_record *ar = NULL;
+	struct uthread *uthr = NULL;
+	int add_identity_token = 1;
+	int max_record_length = MAX_AUDIT_RECORD_SIZE;
+	void *udata = NULL;
+	u_int ulen = 0;
+	struct au_identity_info id_info = {0, NULL, 0, NULL, 0, NULL, 0};
+	token_t *id_tok = NULL;
 
 	error = suser(kauth_cred_get(), &p->p_acflag);
-	if (error)
-		return (error);
+	if (error) {
+		goto free_out;
+	}
 
 	mtx_lock(&audit_mtx);
-	if ((uap->length <= 0) || (uap->length > (int)audit_qctrl.aq_bufsz)) {
-		mtx_unlock(&audit_mtx);
-		return (EINVAL);
-	}
+	max_record_length = MIN(audit_qctrl.aq_bufsz, MAX_AUDIT_RECORD_SIZE);
 	mtx_unlock(&audit_mtx);
+
+	if (IOTaskHasEntitlement(current_task(),
+		AU_CLASS_RESERVED_ENTITLEMENT)) {
+		/* Entitled tasks are trusted to add appropriate identity info */
+		add_identity_token = 0;
+	} else {
+		/*
+		 * If the caller is unentitled, an identity token will be added and
+		 * the space must be accounted for
+		 */
+		max_record_length -= MAX_AUDIT_IDENTITY_SIZE;
+	}
+
+	if ((uap->length <= 0) || (uap->length > max_record_length)) {
+		error = EINVAL;
+		goto free_out;
+	}
 
 	ar = currecord();
 
@@ -171,8 +196,11 @@ audit(proc_t p, struct audit_args *uap, __unused int32_t *retval)
 	 */
 	if (ar == NULL) {
 		uthr = curthread();
-		if (uthr == NULL)	/* can this happen? */
-			return (ENOTSUP);
+		if (uthr == NULL) {
+			/* can this happen? */
+			error = ENOTSUP;
+			goto free_out;
+		}
 
 		/*
 		 * This is not very efficient; we're required to allocate a
@@ -180,30 +208,86 @@ audit(proc_t p, struct audit_args *uap, __unused int32_t *retval)
 		 * tag along.
 		 */
 		uthr->uu_ar = audit_new(AUE_NULL, p, uthr);
-		if (uthr->uu_ar == NULL)
-			return (ENOTSUP);
+		if (uthr->uu_ar == NULL) {
+			error = ENOTSUP;
+			goto free_out;
+		}
 		ar = uthr->uu_ar;
 	}
 
-	if (uap->length > MAX_AUDIT_RECORD_SIZE)
-		return (EINVAL);
-
 	rec = malloc(uap->length, M_AUDITDATA, M_WAITOK);
+	if (!rec) {
+		error = ENOMEM;
+		goto free_out;
+	}
 
 	error = copyin(uap->record, rec, uap->length);
-	if (error)
+	if (error) {
 		goto free_out;
+	}
 
 #if CONFIG_MACF
 	error = mac_system_check_audit(kauth_cred_get(), rec, uap->length);
-	if (error)
+	if (error) {
 		goto free_out;
+	}
 #endif
 
 	/* Verify the record. */
-	if (bsm_rec_verify(rec) == 0) {
+	if (bsm_rec_verify(rec, uap->length) == 0) {
 		error = EINVAL;
 		goto free_out;
+	}
+
+	if (add_identity_token) {
+		struct hdr_tok_partial *hdr;
+		struct trl_tok_partial *trl;
+		int bytes_copied = 0;
+
+		/* Create a new identity token for this buffer */
+		audit_identity_info_construct(&id_info);
+		id_tok = au_to_identity(id_info.signer_type, id_info.signing_id,
+			id_info.signing_id_trunc, id_info.team_id, id_info.team_id_trunc,
+			id_info.cdhash, id_info.cdhash_len);
+		if (!id_tok) {
+			error = ENOMEM;
+			goto free_out;
+		}
+
+		/* Splice the record together using a new buffer */
+		full_rec = malloc(uap->length + id_tok->len, M_AUDITDATA, M_WAITOK);
+		if (!full_rec) {
+			error = ENOMEM;
+			goto free_out;
+		}
+
+		/* Copy the original buffer up to but not including the trailer */
+		memcpy(full_rec, rec, uap->length - AUDIT_TRAILER_SIZE);
+		bytes_copied = uap->length - AUDIT_TRAILER_SIZE;
+
+		/* Copy the identity token */
+		memcpy(full_rec + bytes_copied, id_tok->t_data, id_tok->len);
+		bytes_copied += id_tok->len;
+
+		/* Copy the old trailer */
+		memcpy(full_rec + bytes_copied,
+			rec + (uap->length - AUDIT_TRAILER_SIZE), AUDIT_TRAILER_SIZE);
+		bytes_copied += AUDIT_TRAILER_SIZE;
+
+		/* Fix the record size stored in the header token */
+		hdr = (struct hdr_tok_partial*)full_rec;
+		hdr->len = htonl(bytes_copied);
+
+		/* Fix the record size stored in the trailer token */
+		trl = (struct trl_tok_partial*)
+			(full_rec + bytes_copied - AUDIT_TRAILER_SIZE);
+		trl->len = htonl(bytes_copied);
+
+		udata = full_rec;
+		ulen = bytes_copied;
+	} else {
+		udata = rec;
+		ulen = uap->length;
 	}
 
 	/*
@@ -214,8 +298,8 @@ audit(proc_t p, struct audit_args *uap, __unused int32_t *retval)
 	 * XXXAUDIT: KASSERT appropriate starting values of k_udata, k_ulen,
 	 * k_ar_commit & AR_COMMIT_USER?
 	 */
-	ar->k_udata = rec;
-	ar->k_ulen  = uap->length;
+	ar->k_udata = udata;
+	ar->k_ulen  = ulen;
 	ar->k_ar_commit |= AR_COMMIT_USER;
 
 	/*
@@ -225,14 +309,30 @@ audit(proc_t p, struct audit_args *uap, __unused int32_t *retval)
 	 * want to setup kernel based preselection.
 	 */
 	ar->k_ar_commit |= (AR_PRESELECT_USER_TRAIL | AR_PRESELECT_USER_PIPE);
-	return (0);
 
 free_out:
 	/*
-	 * audit_syscall_exit() will free the audit record on the thread even
-	 * if we allocated it above.
+	 * If rec was allocated, it must be freed if an identity token was added
+	 * (since full_rec will be used) OR there was an error (since nothing
+	 * will be attached to the kernel structure).
 	 */
-	free(rec, M_AUDITDATA);
+	if (rec && (add_identity_token || error)) {
+		free(rec, M_AUDITDATA);
+	}
+
+	/* Only free full_rec if an error occurred */
+	if (full_rec && error) {
+		free(full_rec, M_AUDITDATA);
+	}
+
+	audit_identity_info_destruct(&id_info);
+	if (id_tok) {
+		if (id_tok->t_data) {
+			free(id_tok->t_data, M_AUDITBSM);
+		}
+		free(id_tok, M_AUDITBSM);
+	}
+
 	return (error);
 }
 
@@ -288,6 +388,8 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 	case A_GETSINFO_ADDR:
 	case A_GETSFLAGS:
 	case A_SETSFLAGS:
+	case A_SETCTLMODE:
+	case A_SETEXPAFTER:
 		error = copyin(uap->data, (void *)&udata, uap->length);
 		if (error)
 			return (error);
@@ -319,12 +421,39 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 		 * control implemented in audit_session_setaia().
 		 */
 		break;
+	case A_SETCTLMODE:
+	case A_SETEXPAFTER:
+		if (!IOTaskHasEntitlement(current_task(),
+			AU_CLASS_RESERVED_ENTITLEMENT)) {
+			error = EPERM;
+		}
+		break;
 	default:
 		error = suser(kauth_cred_get(), &p->p_acflag);
 		break;
 	}
 	if (error)
 		return (error);
+
+	/*
+	 * If the audit subsytem is in external control mode, additional
+	 * privilege checks are required for a subset of auditon commands
+	 */
+	if (audit_ctl_mode == AUDIT_CTLMODE_EXTERNAL) {
+		switch (uap->cmd) {
+		case A_SETCOND:
+		case A_SETFSIZE:
+		case A_SETPOLICY:
+		case A_SETQCTRL:
+			if (!IOTaskHasEntitlement(current_task(),
+				AU_CLASS_RESERVED_ENTITLEMENT)) {
+				error = EPERM;
+			}
+			break;
+		}
+		if (error)
+			return (error);
+	}
 
 	/*
 	 * XXX Need to implement these commands by accessing the global
@@ -698,6 +827,56 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 			return (error);
 		break;
 
+	case A_GETCTLMODE:
+		if (sizeof(udata.au_ctl_mode) != uap->length) {
+			return (EINVAL);
+		}
+		mtx_lock(&audit_mtx);
+		udata.au_ctl_mode = audit_ctl_mode;
+		mtx_unlock(&audit_mtx);
+		break;
+
+	case A_SETCTLMODE:
+		if (sizeof(udata.au_ctl_mode) != uap->length) {
+			return (EINVAL);
+		}
+
+		mtx_lock(&audit_mtx);
+
+		if (udata.au_ctl_mode == AUDIT_CTLMODE_NORMAL) {
+			audit_ctl_mode = AUDIT_CTLMODE_NORMAL;
+		} else if (udata.au_ctl_mode == AUDIT_CTLMODE_EXTERNAL) {
+			audit_ctl_mode = AUDIT_CTLMODE_EXTERNAL;
+		} else {
+			mtx_unlock(&audit_mtx);
+			return (EINVAL);
+		}
+
+		mtx_unlock(&audit_mtx);
+		break;
+
+	case A_GETEXPAFTER:
+		if (sizeof(udata.au_expire_after) != uap->length) {
+			return (EINVAL);
+		}
+		mtx_lock(&audit_mtx);
+		udata.au_expire_after.age = audit_expire_after.age;
+		udata.au_expire_after.size = audit_expire_after.size;
+		udata.au_expire_after.op_type = audit_expire_after.op_type;
+		mtx_unlock(&audit_mtx);
+		break;
+
+	case A_SETEXPAFTER:
+		if (sizeof(udata.au_expire_after) != uap->length) {
+			return (EINVAL);
+		}
+		mtx_lock(&audit_mtx);
+		audit_expire_after.age = udata.au_expire_after.age;
+		audit_expire_after.size = udata.au_expire_after.size;
+		audit_expire_after.op_type = udata.au_expire_after.op_type;
+		mtx_unlock(&audit_mtx);
+		break;
+
 	default:
 		return (EINVAL);
 	}
@@ -723,6 +902,8 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 	case A_GETKAUDIT:
 	case A_GETSINFO_ADDR:
 	case A_GETSFLAGS:
+	case A_GETCTLMODE:
+	case A_GETEXPAFTER:
 		error = copyout((void *)&udata, uap->data, uap->length);
 		if (error)
 			return (ENOSYS);
@@ -906,10 +1087,21 @@ auditctl(proc_t p, struct auditctl_args *uap, __unused int32_t *retval)
 	kauth_cred_t cred;
 	struct vnode *vp;
 	int error = 0;
+	au_ctlmode_t ctlmode;
 
 	error = suser(kauth_cred_get(), &p->p_acflag);
 	if (error)
 		return (error);
+
+	ctlmode = audit_ctl_mode;
+
+	/*
+	 * Do not allow setting of a path when auditing is in reserved mode
+	 */
+	if (ctlmode == AUDIT_CTLMODE_EXTERNAL &&
+		!IOTaskHasEntitlement(current_task(), AU_AUDITCTL_RESERVED_ENTITLEMENT)) {
+		return (EPERM);
+	}
 
 	vp = NULL;
 	cred = NULL;

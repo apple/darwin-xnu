@@ -36,6 +36,7 @@ HISTORY
 
 #include <IOKit/IOEventSource.h>
 #include <IOKit/IOWorkLoop.h>
+#include <libkern/Block.h>
 
 #define super OSObject
 
@@ -162,6 +163,8 @@ bool IOEventSource::init(OSObject *inOwner,
 void IOEventSource::free( void )
 {
     IOStatisticsUnregisterCounter();
+
+	if ((kActionBlock & flags) && actionBlock) Block_release(actionBlock);
 	
     if (reserved)
 		IODelete(reserved, ExpansionData, 1);
@@ -169,11 +172,39 @@ void IOEventSource::free( void )
     super::free();
 }
 
-IOEventSource::Action IOEventSource::getAction () const { return action; };
+void IOEventSource::setRefcon(void *newrefcon)
+{
+	refcon = newrefcon;
+}
+
+void * IOEventSource::getRefcon() const
+{
+	return refcon;
+}
+
+IOEventSource::Action IOEventSource::getAction() const
+{
+	if (kActionBlock & flags) return NULL;
+	return (action);
+}
+
+IOEventSource::ActionBlock IOEventSource::getActionBlock(ActionBlock) const
+{
+	if (kActionBlock & flags) return actionBlock;
+	return (NULL);
+}
 
 void IOEventSource::setAction(Action inAction)
 {
+	if ((kActionBlock & flags) && actionBlock) Block_release(actionBlock);
     action = inAction;
+}
+
+void IOEventSource::setActionBlock(ActionBlock block)
+{
+	if ((kActionBlock & flags) && actionBlock) Block_release(actionBlock);
+	actionBlock = Block_copy(block);
+	flags |= kActionBlock;
 }
 
 IOEventSource *IOEventSource::getNext() const { return eventChainNext; };

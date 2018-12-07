@@ -81,8 +81,9 @@ extern kern_return_t memory_object_pages_resident(memory_object_control_t,
 							boolean_t *);
 extern kern_return_t	memory_object_signed(memory_object_control_t control,
 					     boolean_t is_signed);
-extern boolean_t	memory_object_is_slid(memory_object_control_t	control);
 extern boolean_t	memory_object_is_signed(memory_object_control_t);
+
+/* XXX Same for those. */
 
 extern void Debugger(const char *message);
 
@@ -112,7 +113,7 @@ static int ubc_msync_internal(vnode_t, off_t, off_t, off_t *, int, int *);
 static void ubc_cs_free(struct ubc_info *uip);
 
 static boolean_t ubc_cs_supports_multilevel_hash(struct cs_blob *blob);
-static void ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob);
+static kern_return_t ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob);
 
 struct zone	*ubc_info_zone;
 static uint32_t	cs_blob_generation_count = 1;
@@ -477,19 +478,18 @@ cs_validate_blob(const CS_GenericBlob *blob, size_t length)
 static int
 cs_validate_csblob(
 	const uint8_t *addr,
-	size_t *blob_size_p,
+	const size_t blob_size,
 	const CS_CodeDirectory **rcd,
 	const CS_GenericBlob **rentitlements)
 {
 	const CS_GenericBlob *blob;
 	int error;
-	size_t length, blob_size;
+	size_t length;
 
 	*rcd = NULL;
 	*rentitlements = NULL;
 
 	blob = (const CS_GenericBlob *)(const void *)addr;
-	blob_size = *blob_size_p;
 
 	length = blob_size;
 	error = cs_validate_blob(blob, length);
@@ -616,8 +616,6 @@ cs_validate_csblob(
 
 	if (*rcd == NULL)
 		return EBADEXEC;
-
-	*blob_size_p = blob_size;
 
 	return 0;
 }
@@ -1465,17 +1463,6 @@ ubc_getobject(struct vnode *vp, __unused int flags)
 	        return((vp->v_ubcinfo->ui_control));
 
 	return (MEMORY_OBJECT_CONTROL_NULL);
-}
-
-boolean_t
-ubc_strict_uncached_IO(struct vnode *vp)
-{
-        boolean_t result = FALSE;
-
-	if (UBCINFOEXISTS(vp)) {
-	        result = memory_object_is_slid(vp->v_ubcinfo->ui_control);
-	}
-	return result;
 }
 
 /*
@@ -2835,14 +2822,18 @@ ubc_cs_blob_allocate(
 	vm_offset_t	*blob_addr_p,
 	vm_size_t	*blob_size_p)
 {
-	kern_return_t	kr;
+	kern_return_t	kr = KERN_FAILURE;
 
-	*blob_addr_p = (vm_offset_t) kalloc_tag(*blob_size_p, VM_KERN_MEMORY_SECURITY);
-	if (*blob_addr_p == 0) {
-		kr = KERN_NO_SPACE;
-	} else {
-		kr = KERN_SUCCESS;
+	{
+		*blob_addr_p = (vm_offset_t) kalloc_tag(*blob_size_p, VM_KERN_MEMORY_SECURITY);
+
+		if (*blob_addr_p == 0) {
+			kr = KERN_NO_SPACE;
+		} else {
+			kr = KERN_SUCCESS;
+		}
 	}
+
 	return kr;
 }
 
@@ -2851,7 +2842,14 @@ ubc_cs_blob_deallocate(
 	vm_offset_t	blob_addr,
 	vm_size_t	blob_size)
 {
-	kfree((void *) blob_addr, blob_size);
+#if PMAP_CS
+	if (blob_size > pmap_cs_blob_limit) {
+		kmem_free(kernel_map, blob_addr, blob_size);
+	} else
+#endif
+	{
+		kfree((void *) blob_addr, blob_size);
+	}
 }
 
 /*
@@ -2871,6 +2869,7 @@ ubc_cs_supports_multilevel_hash(struct cs_blob *blob)
 {
 	const CS_CodeDirectory *cd;
 
+	
 	/*
 	 * Only applies to binaries that ship as part of the OS,
 	 * primarily the shared cache.
@@ -2935,11 +2934,25 @@ ubc_cs_supports_multilevel_hash(struct cs_blob *blob)
 }
 
 /*
- * All state and preconditions were checked before, so this
- * function cannot fail.
+ * Given a cs_blob with an already chosen best code directory, this
+ * function allocates memory and copies into it only the blobs that
+ * will be needed by the kernel, namely the single chosen code
+ * directory (and not any of its alternatives) and the entitlement
+ * blob.
+ *
+ * This saves significant memory with agile signatures, and additional
+ * memory for 3rd Party Code because we also omit the CMS blob.
+ *
+ * To support multilevel and other potential code directory rewriting,
+ * the size of a new code directory can be specified. Since that code
+ * directory will replace the existing code directory,
+ * ubc_cs_reconstitute_code_signature does not copy the original code
+ * directory when a size is given, and the caller must fill it in.
  */
-static void
-ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob)
+static int
+ubc_cs_reconstitute_code_signature(struct cs_blob const *blob, vm_size_t optional_new_cd_size,
+								   vm_address_t *new_blob_addr_p, vm_size_t *new_blob_size_p,
+								   CS_CodeDirectory **new_cd_p, CS_GenericBlob const **new_entitlements_p)
 {
 	const CS_CodeDirectory	*old_cd, *cd;
 	CS_CodeDirectory	*new_cd;
@@ -2949,20 +2962,10 @@ ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob)
 	vm_size_t       new_cdsize;
 	kern_return_t	kr;
 	int				error;
-	size_t		length;
-
-	uint32_t		hashes_per_new_hash_shift = (uint32_t)(PAGE_SHIFT - blob->csb_hash_pageshift);
-
-	if (cs_debug > 1) {
-		printf("CODE SIGNING: Attempting to convert Code Directory for %lu -> %lu page shift\n",
-			   (unsigned long)blob->csb_hash_pageshift, (unsigned long)PAGE_SHIFT);
-	}
 
 	old_cd = blob->csb_cd;
 
-	/* Up to the hashes, we can copy all data */
-	new_cdsize  = ntohl(old_cd->hashOffset);
-	new_cdsize += (ntohl(old_cd->nCodeSlots) >> hashes_per_new_hash_shift) * old_cd->hashSize;
+	new_cdsize = optional_new_cd_size != 0 ? optional_new_cd_size : htonl(old_cd->length);
 
 	new_blob_size  = sizeof(CS_SuperBlob);
 	new_blob_size += sizeof(CS_BlobIndex);
@@ -2980,7 +2983,7 @@ ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob)
 			printf("CODE SIGNING: Failed to allocate memory for new Code Signing Blob: %d\n",
 				   kr);
 		}
-		return;
+		return ENOMEM;
 	}
 
 	CS_SuperBlob		*new_superblob;
@@ -3004,15 +3007,69 @@ ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob)
 
 		new_cd = (CS_CodeDirectory *)(new_blob_addr + cd_offset);
 	} else {
-		vm_size_t			cd_offset;
-
-		cd_offset  = sizeof(CS_SuperBlob) + 1 * sizeof(CS_BlobIndex);
-
-		new_superblob->count = htonl(1);
-		new_superblob->index[0].type = htonl(CSSLOT_CODEDIRECTORY);
-		new_superblob->index[0].offset = htonl((uint32_t)cd_offset);
-
+		// Blob is the code directory, directly.
 		new_cd = (CS_CodeDirectory *)new_blob_addr;
+	}
+
+	if (optional_new_cd_size == 0) {
+		// Copy code directory, and revalidate.
+		memcpy(new_cd, old_cd, new_cdsize);
+
+		vm_size_t length = new_blob_size;
+
+		error = cs_validate_csblob((const uint8_t *)new_blob_addr, length, &cd, &entitlements);
+
+		if (error) {
+			printf("CODE SIGNING: Failed to validate new Code Signing Blob: %d\n",
+				   error);
+
+			ubc_cs_blob_deallocate(new_blob_addr, new_blob_size);
+			return error;
+		}
+		*new_entitlements_p = entitlements;
+	} else {
+		// Caller will fill out and validate code directory.
+		memset(new_cd, 0, new_cdsize);
+		*new_entitlements_p = NULL;
+	}
+
+	*new_blob_addr_p = new_blob_addr;
+	*new_blob_size_p = new_blob_size;
+	*new_cd_p = new_cd;
+
+	return 0;
+}
+
+static int
+ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob)
+{
+	const CS_CodeDirectory	*old_cd, *cd;
+	CS_CodeDirectory	*new_cd;
+	const CS_GenericBlob *entitlements;
+	vm_offset_t     new_blob_addr;
+	vm_size_t       new_blob_size;
+	vm_size_t       new_cdsize;
+	int				error;
+
+	uint32_t		hashes_per_new_hash_shift = (uint32_t)(PAGE_SHIFT - blob->csb_hash_pageshift);
+
+	if (cs_debug > 1) {
+		printf("CODE SIGNING: Attempting to convert Code Directory for %lu -> %lu page shift\n",
+			   (unsigned long)blob->csb_hash_pageshift, (unsigned long)PAGE_SHIFT);
+	}
+
+	old_cd = blob->csb_cd;
+
+	/* Up to the hashes, we can copy all data */
+	new_cdsize  = ntohl(old_cd->hashOffset);
+	new_cdsize += (ntohl(old_cd->nCodeSlots) >> hashes_per_new_hash_shift) * old_cd->hashSize;
+
+	error = ubc_cs_reconstitute_code_signature(blob, new_cdsize,
+											&new_blob_addr, &new_blob_size, &new_cd,
+											&entitlements);
+	if (error != 0) {
+		printf("CODE SIGNING: Failed to reconsitute code signature: %d\n", error);
+		return error;
 	}
 
 	memcpy(new_cd, old_cd, ntohl(old_cd->hashOffset));
@@ -3066,21 +3123,17 @@ ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob)
 		blob->csb_hashtype->cs_final(dst, &mdctx);
 	}
 
-	length = new_blob_size;
-	error = cs_validate_csblob((const uint8_t *)new_blob_addr, &length, &cd, &entitlements);
-	assert(length == new_blob_size);
-	if (error) {
+	error = cs_validate_csblob((const uint8_t *)new_blob_addr, new_blob_size, &cd, &entitlements);
+	if (error != 0) {
 
-		if (cs_debug > 1) {
-			printf("CODE SIGNING: Failed to validate new Code Signing Blob: %d\n",
-				   error);
-		}
+		printf("CODE SIGNING: Failed to validate new Code Signing Blob: %d\n",
+			   error);
 
 		ubc_cs_blob_deallocate(new_blob_addr, new_blob_size);
-		return;
+		return error;
 	}
 
-	/* New Code Directory is ready for use, swap it out in the blob structure */
+    /* New Code Directory is ready for use, swap it out in the blob structure */
 	ubc_cs_blob_deallocate(blob->csb_mem_kaddr, blob->csb_mem_size);
 
 	blob->csb_mem_size = new_blob_size;
@@ -3103,31 +3156,33 @@ ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob)
 	} else {
 		blob->csb_start_offset = 0;
 	}
+
+	return 0;
 }
 
+/*
+ * Validate the code signature blob, create a struct cs_blob wrapper
+ * and return it together with a pointer to the chosen code directory
+ * and entitlements blob.
+ *
+ * Note that this takes ownership of the memory as addr, mainly because
+ * this function can actually replace the passed in blob with another
+ * one, e.g. when performing multilevel hashing optimization.
+ */
 int
-ubc_cs_blob_add(
-	struct vnode	*vp,
-	cpu_type_t	cputype,
-	off_t		base_offset,
-	vm_address_t	*addr,
-	vm_size_t	size,
-	struct image_params *imgp,
-	__unused int	flags,
-	struct cs_blob	**ret_blob)
+cs_blob_create_validated(
+	vm_address_t * const            addr,
+	vm_size_t                       size,
+	struct cs_blob ** const         ret_blob,
+    CS_CodeDirectory const ** const	ret_cd)
 {
-	kern_return_t		kr;
-	struct ubc_info		*uip;
-	struct cs_blob		*blob, *oblob;
-	int			error;
+	struct cs_blob		*blob;
+	int		error = EINVAL;
 	const CS_CodeDirectory *cd;
 	const CS_GenericBlob *entitlements;
-	off_t			blob_start_offset, blob_end_offset;
 	union cs_hash_union	mdctx;
-	boolean_t		record_mtime;
 	size_t			length;
 
-	record_mtime = FALSE;
 	if (ret_blob)
 	    *ret_blob = NULL;
 
@@ -3137,8 +3192,6 @@ ubc_cs_blob_add(
 	}
 
 	/* fill in the new blob */
-	blob->csb_cpu_type = cputype;
-	blob->csb_base_offset = base_offset;
 	blob->csb_mem_size = size;
 	blob->csb_mem_offset = 0;
 	blob->csb_mem_kaddr = *addr;
@@ -3149,7 +3202,8 @@ ubc_cs_blob_add(
 	blob->csb_teamid = NULL;
 	blob->csb_entitlements_blob = NULL;
 	blob->csb_entitlements = NULL;
-	
+	blob->csb_reconstituted = false;
+
 	/* Transfer ownership. Even on error, this function will deallocate */
 	*addr = 0;
 
@@ -3158,7 +3212,7 @@ ubc_cs_blob_add(
 	 */
 	length = (size_t) size;
 	error = cs_validate_csblob((const uint8_t *)blob->csb_mem_kaddr,
-				   &length, &cd, &entitlements);
+							   length, &cd, &entitlements);
 	if (error) {
 
 		if (cs_debug)
@@ -3172,49 +3226,6 @@ ubc_cs_blob_add(
 		const unsigned char *md_base;
 		uint8_t hash[CS_HASH_MAX_SIZE];
 		int md_size;
-
-		size = (vm_size_t) length;
-		assert(size <= blob->csb_mem_size);
-		if (size < blob->csb_mem_size) {
-			vm_address_t new_blob_addr;
-			const CS_CodeDirectory *new_cd;
-			const CS_GenericBlob *new_entitlements;
-
-			kr = ubc_cs_blob_allocate(&new_blob_addr, &size);
-			if (kr != KERN_SUCCESS) {
-				if (cs_debug > 1) {
-					printf("CODE SIGNING: failed to "
-					       "re-allocate blob (size "
-					       "0x%llx->0x%llx) error 0x%x\n",
-					       (uint64_t)blob->csb_mem_size,
-					       (uint64_t)size,
-					       kr);
-				}
-			} else {
-				memcpy((void *)new_blob_addr, (void *)blob->csb_mem_kaddr, size);
-				if (cd == NULL) {
-					new_cd = NULL;
-				} else {
-					new_cd = (void *)(((uintptr_t)cd
-						  - (uintptr_t)blob->csb_mem_kaddr
-						  + (uintptr_t)new_blob_addr));
-				}
-				if (entitlements == NULL) {
-					new_entitlements = NULL;
-				} else {
-					new_entitlements = (void *)(((uintptr_t)entitlements
-							    - (uintptr_t)blob->csb_mem_kaddr
-							    + (uintptr_t)new_blob_addr));
-				}
-//				printf("CODE SIGNING: %s:%d kaddr 0x%llx cd %p ents %p -> blob 0x%llx cd %p ents %p\n", __FUNCTION__, __LINE__, (uint64_t)blob->csb_mem_kaddr, cd, entitlements, (uint64_t)new_blob_addr, new_cd, new_entitlements);
-				ubc_cs_blob_deallocate(blob->csb_mem_kaddr,
-						       blob->csb_mem_size);
-				blob->csb_mem_kaddr = new_blob_addr;
-				blob->csb_mem_size = size;
-				cd = new_cd;
-				entitlements = new_entitlements;
-			}
-		}
 
 		blob->csb_cd = cd;
 		blob->csb_entitlements_blob = entitlements; /* may be NULL, not yet validated */
@@ -3246,7 +3257,81 @@ ubc_cs_blob_add(
 		memcpy(blob->csb_cdhash, hash, CS_CDHASH_LEN);
 	}
 
-	/* 
+    error = 0;
+
+out:
+    if (error != 0) {
+        cs_blob_free(blob);
+        blob = NULL;
+        cd = NULL;
+    }
+
+    if (ret_blob != NULL) {
+        *ret_blob = blob;
+    }
+    if (ret_cd != NULL) {
+        *ret_cd = cd;
+    }
+
+    return error;
+}
+
+/*
+ * Free a cs_blob previously created by cs_blob_create_validated.
+ */
+void
+cs_blob_free(
+    struct cs_blob * const blob)
+{
+    if (blob != NULL) {
+        if (blob->csb_mem_kaddr) {
+            ubc_cs_blob_deallocate(blob->csb_mem_kaddr, blob->csb_mem_size);
+            blob->csb_mem_kaddr = 0;
+        }
+        if (blob->csb_entitlements != NULL) {
+            osobject_release(blob->csb_entitlements);
+            blob->csb_entitlements = NULL;
+        }
+        kfree(blob, sizeof (*blob));
+    }
+}
+
+int
+ubc_cs_blob_add(
+	struct vnode	*vp,
+	cpu_type_t	cputype,
+	off_t		base_offset,
+	vm_address_t	*addr,
+	vm_size_t	size,
+	struct image_params *imgp,
+	__unused int	flags,
+	struct cs_blob	**ret_blob)
+{
+	kern_return_t		kr;
+	struct ubc_info		*uip;
+	struct cs_blob		*blob, *oblob;
+	int			error;
+	CS_CodeDirectory const *cd;
+	off_t			blob_start_offset, blob_end_offset;
+	boolean_t		record_mtime;
+
+	record_mtime = FALSE;
+	if (ret_blob)
+	    *ret_blob = NULL;
+ 
+    /* Create the struct cs_blob wrapper that will be attached to the vnode.
+     * Validates the passed in blob in the process. */
+    error = cs_blob_create_validated(addr, size, &blob, &cd);
+
+    if (error != 0) {
+		printf("malform code signature blob: %d\n", error);
+        return error;
+    }
+
+    blob->csb_cpu_type = cputype;
+	blob->csb_base_offset = base_offset;
+
+	/*
 	 * Let policy module check whether the blob's signature is accepted.
 	 */
 #if CONFIG_MACF
@@ -3268,6 +3353,38 @@ ubc_cs_blob_add(
 		goto out;
 	}
 #endif
+
+#if CONFIG_ENFORCE_SIGNED_CODE
+	/*
+	 * Reconstitute code signature
+	 */
+	{
+		vm_address_t new_mem_kaddr = 0;
+		vm_size_t new_mem_size = 0;
+
+		CS_CodeDirectory *new_cd = NULL;
+		CS_GenericBlob const *new_entitlements = NULL;
+
+		error = ubc_cs_reconstitute_code_signature(blob, 0,
+												   &new_mem_kaddr, &new_mem_size,
+												   &new_cd, &new_entitlements);
+
+		if (error != 0) {
+			printf("failed code signature reconstitution: %d\n", error);
+			goto out;
+		}
+
+		ubc_cs_blob_deallocate(blob->csb_mem_kaddr, blob->csb_mem_size);
+
+		blob->csb_mem_kaddr = new_mem_kaddr;
+		blob->csb_mem_size = new_mem_size;
+		blob->csb_cd = new_cd;
+		blob->csb_entitlements_blob = new_entitlements;
+		blob->csb_reconstituted = true;
+	}
+
+#endif
+
 
 	if (blob->csb_flags & CS_PLATFORM_BINARY) {
 		if (cs_debug > 1)
@@ -3301,7 +3418,12 @@ ubc_cs_blob_add(
 	}
 
 	if (ubc_cs_supports_multilevel_hash(blob)) {
-		ubc_cs_convert_to_multilevel_hash(blob);
+		error = ubc_cs_convert_to_multilevel_hash(blob);
+		if (error != 0) {
+			printf("failed multilevel hash conversion: %d\n", error);
+			goto out;
+		}
+		blob->csb_reconstituted = true;
 	}
 
 	vnode_lock(vp);
@@ -3378,6 +3500,11 @@ ubc_cs_blob_add(
 					  */
 					 oblob->csb_cpu_type = cputype;
 				 }
+
+				 /* The signature is still accepted, so update the
+				  * generation count. */
+				 uip->cs_add_gen = cs_blob_generation_count;
+
 				 vnode_unlock(vp);
 				 if (ret_blob)
 					 *ret_blob = oblob;
@@ -3464,19 +3591,7 @@ out:
 		if (cs_debug)
 			printf("check_signature[pid: %d]: error = %d\n", current_proc()->p_pid, error);
 
-		/* we failed; release what we allocated */
-		if (blob) {
-			if (blob->csb_mem_kaddr) {
-				ubc_cs_blob_deallocate(blob->csb_mem_kaddr, blob->csb_mem_size);
-				blob->csb_mem_kaddr = 0;
-			}
-			if (blob->csb_entitlements != NULL) {
-				osobject_release(blob->csb_entitlements);
-				blob->csb_entitlements = NULL;
-			}
-			kfree(blob, sizeof (*blob));
-			blob = NULL;
-		}
+        cs_blob_free(blob);
 	}
 
 	if (error == EAGAIN) {
@@ -3577,18 +3692,9 @@ ubc_cs_free(
 	     blob != NULL;
 	     blob = next_blob) {
 		next_blob = blob->csb_next;
-		if (blob->csb_mem_kaddr != 0) {
-			ubc_cs_blob_deallocate(blob->csb_mem_kaddr,
-					       blob->csb_mem_size);
-			blob->csb_mem_kaddr = 0;
-		}
-		if (blob->csb_entitlements != NULL) {
-			osobject_release(blob->csb_entitlements);
-			blob->csb_entitlements = NULL;
-		}
 		OSAddAtomic(-1, &cs_blob_count);
 		OSAddAtomic((SInt32) -blob->csb_mem_size, &cs_blob_size);
-		kfree(blob, sizeof (*blob));
+		cs_blob_free(blob);
 	}
 #if CHECK_CS_VALIDATION_BITMAP
 	ubc_cs_validation_bitmap_deallocate( uip->ui_vnode );
@@ -3634,17 +3740,45 @@ ubc_cs_blob_revalidate(
 
 	size = blob->csb_mem_size;
 	error = cs_validate_csblob((const uint8_t *)blob->csb_mem_kaddr,
-				   &size, &cd, &entitlements);
+							   size, &cd, &entitlements);
 	if (error) {
 		if (cs_debug) {
 			printf("CODESIGNING: csblob invalid: %d\n", error);
 		}
 		goto out;
 	}
-	assert(size == blob->csb_mem_size);
 
     unsigned int cs_flags = (ntohl(cd->flags) & CS_ALLOWED_MACHO) | CS_VALID;
     unsigned int signer_type = CS_SIGNER_TYPE_UNKNOWN;
+
+	if (blob->csb_reconstituted) {
+		/*
+		 * Code signatures that have been modified after validation
+		 * cannot be revalidated inline from their in-memory blob.
+		 *
+		 * That's okay, though, because the only path left that relies
+		 * on revalidation of existing in-memory blobs is the legacy
+		 * detached signature database path, which only exists on macOS,
+		 * which does not do reconstitution of any kind.
+		 */
+		if (cs_debug) {
+			printf("CODESIGNING: revalidate: not inline revalidating reconstituted signature.\n");
+		}
+
+		/*
+		 * EAGAIN tells the caller that they may reread the code
+		 * signature and try attaching it again, which is the same
+		 * thing they would do if there was no cs_blob yet in the
+		 * first place.
+		 *
+		 * Conveniently, after ubc_cs_blob_add did a successful
+		 * validation, it will detect that a matching cs_blob (cdhash,
+		 * offset, arch etc.) already exists, and return success
+		 * without re-adding a cs_blob to the vnode.
+		 */
+		return EAGAIN;
+	}
+
 	/* callout to mac_vnode_check_signature */
 #if CONFIG_MACF
 	error = mac_vnode_check_signature(vp, blob, imgp, &cs_flags, &signer_type, flags);
@@ -4150,3 +4284,66 @@ void	ubc_cs_validation_bitmap_deallocate(__unused vnode_t vp){
 	return;
 }
 #endif /* CHECK_CS_VALIDATION_BITMAP */
+
+#if PMAP_CS
+kern_return_t
+cs_associate_blob_with_mapping(
+	void			*pmap,
+	vm_map_offset_t		start,
+	vm_map_size_t		size,
+	vm_object_offset_t 	offset,
+	void			*blobs_p)
+{
+	off_t			blob_start_offset, blob_end_offset;
+	kern_return_t		kr;
+	struct cs_blob		*blobs, *blob;
+	vm_offset_t		kaddr;
+	struct pmap_cs_code_directory *cd_entry = NULL;
+
+	if (!pmap_cs) {
+		return KERN_NOT_SUPPORTED;
+	}
+	
+	blobs = (struct cs_blob *)blobs_p;
+
+	for (blob = blobs;
+	     blob != NULL;
+	     blob = blob->csb_next) {
+		blob_start_offset = (blob->csb_base_offset +
+				     blob->csb_start_offset);
+		blob_end_offset = (blob->csb_base_offset +
+				   blob->csb_end_offset);
+		if ((off_t) offset < blob_start_offset ||
+		    (off_t) offset >= blob_end_offset ||
+		    (off_t) (offset + size) <= blob_start_offset ||
+		    (off_t) (offset + size) > blob_end_offset) {
+			continue;
+		}
+		kaddr = blob->csb_mem_kaddr;
+		if (kaddr == 0) {
+			/* blob data has been released */
+			continue;
+		}
+		cd_entry = blob->csb_pmap_cs_entry;
+		if (cd_entry == NULL) {
+			continue;
+		}
+
+		break;
+	}
+
+	if (cd_entry != NULL) {
+		kr = pmap_cs_associate(pmap,
+				       cd_entry,
+				       start,
+				       size);
+	} else {
+		kr = KERN_CODESIGN_ERROR;
+	}
+#if 00
+	printf("FBDP %d[%s] pmap_cs_associate(%p,%p,0x%llx,0x%llx) -> kr=0x%x\n", proc_selfpid(), &(current_proc()->p_comm[0]), pmap, cd_entry, (uint64_t)start, (uint64_t)size, kr);
+	kr = KERN_SUCCESS;
+#endif
+	return kr;
+}
+#endif /* PMAP_CS */

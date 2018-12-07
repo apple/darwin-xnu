@@ -440,8 +440,26 @@ nfsrv_getattr(
 	error = nfsrv_credcheck(nd, ctx, nx, nxo);
 	nfsmerr_if(error);
 
+#if CONFIG_MAC
+	if (mac_vnode_check_open(ctx, vp, FREAD))
+		error = ESTALE;
+	nfsmerr_if(error);
+#endif
+
 	nfsm_srv_vattr_init(&vattr, nd->nd_vers);
 	error = vnode_getattr(vp, &vattr, ctx);
+
+#if CONFIG_MAC
+	/* XXXab: Comment in the VFS code makes it sound like
+         *        some arguments can be filtered out, but not
+         *        what it actually means. Hopefully not like
+         *        they gonna set mtime to 0 or something. For
+         *        now trust there are no shenanigans here.
+         */
+	error = mac_vnode_check_getattr(ctx, NOCRED, vp, &vattr);
+	nfsmerr_if(error);
+#endif
+
 	vnode_put(vp);
 	vp = NULL;
 
@@ -556,6 +574,9 @@ nfsrv_setattr(
 		error = nfsrv_authorize(vp, NULL, action, ctx, nxo, 0);
 
 #if CONFIG_MACF
+	if (!error && mac_vnode_check_open(ctx, vp, FREAD|FWRITE))
+		error = ESTALE;
+
 	if (!error) {
 		/* chown case */
 		if (VATTR_IS_ACTIVE(vap, va_uid) || VATTR_IS_ACTIVE(vap, va_gid)) {
@@ -665,6 +686,18 @@ nfsrv_lookup(
 
 			/* update active user stats */
 			nfsrv_update_user_stat(nx, nd, saved_uid, 1, 0, 0);
+		}
+		if (!error && mac_vnode_check_open(ctx, ni.ni_vp, FREAD)) {
+			error = EACCES;
+			if (dirp) {
+				vnode_put(dirp);
+				dirp = NULL;
+			}
+
+			if (ni.ni_vp) {
+				vnode_put(ni.ni_vp);
+				ni.ni_vp = NULL;
+			}
 		}
 	}
 
@@ -788,6 +821,13 @@ nfsrv_readlink(
 
 	if (!error)
 		error = nfsrv_authorize(vp, NULL, KAUTH_VNODE_READ_DATA, ctx, nxo, 0);
+#if CONFIG_MACF
+	if (mac_vnode_check_open(ctx, vp, FREAD))
+		error = ESTALE;
+	nfsmerr_if(error);
+	if (!error)
+		error = mac_vnode_check_readlink(ctx, vp);
+#endif
 	if (!error)
 		error = VNOP_READLINK(vp, auio, ctx);
 	if (vp) {
@@ -906,6 +946,21 @@ nfsrv_read(
 	    if ((error = nfsrv_authorize(vp, NULL, KAUTH_VNODE_READ_DATA, ctx, nxo, 1)))
 		error = nfsrv_authorize(vp, NULL, KAUTH_VNODE_EXECUTE, ctx, nxo, 1);
 	}
+#if CONFIG_MACF
+	if (!error) {
+		error = mac_vnode_check_open(ctx, vp, FREAD);
+		if (error) {
+			error = EACCES;
+		} else {
+			/* XXXab: Do we need to do this?! */
+			error = mac_vnode_check_read(ctx, vfs_context_ucred(ctx), vp);
+			if (error)
+				error = EACCES;
+			/* mac_vnode_check_exec() can't be done here. */
+		}
+	}
+	nfsmerr_if(error);
+#endif
 	nfsm_srv_vattr_init(vap, nd->nd_vers);
 	attrerr = vnode_getattr(vp, vap, ctx);
 	if (!error)
@@ -4073,6 +4128,15 @@ nfsrv_readdir(
 	}
 	if (!error)
 		error = nfsrv_authorize(vp, NULL, KAUTH_VNODE_LIST_DIRECTORY, ctx, nxo, 0);
+#if CONFIG_MACF
+	if (!error) {
+		if (!error && mac_vnode_check_open(ctx, vp, FREAD))
+			error = EACCES;
+
+		if (!error)
+			error = mac_vnode_check_readdir(ctx, vp);
+	}
+#endif
 	nfsmerr_if(error);
 
 	MALLOC(rbuf, caddr_t, siz, M_TEMP, M_WAITOK);
@@ -4294,6 +4358,15 @@ nfsrv_readdirplus(
 		error = NFSERR_BAD_COOKIE;
 	if (!error)
 		error = nfsrv_authorize(vp, NULL, KAUTH_VNODE_LIST_DIRECTORY, ctx, nxo, 0);
+#if CONFIG_MACF
+	if (!error) {
+		if (!error && mac_vnode_check_open(ctx, vp, FREAD))
+			error = EACCES;
+
+		if (!error)
+			error = mac_vnode_check_readdir(ctx, vp);
+	}
+#endif
 	nfsmerr_if(error);
 
 	MALLOC(rbuf, caddr_t, siz, M_TEMP, M_WAITOK);

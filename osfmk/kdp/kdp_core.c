@@ -178,6 +178,10 @@ boolean_t kdp_has_polled_corefile(void)
     return (NULL != gIOPolledCoreFileVars);
 }
 
+kern_return_t kdp_polled_corefile_error(void)
+{
+    return gIOPolledCoreFileOpenRet;
+}
 #if CONFIG_EMBEDDED
 /*
  * Whenever we start a coredump, make sure the buffers
@@ -461,7 +465,7 @@ kern_dump_disk_proc(unsigned int request, __unused char *corename,
         case KDP_DATA:
 	    err = IOPolledFileWrite(gIOPolledCoreFileVars, data, length, NULL);
 	    if (kIOReturnSuccess != err) {
-		    kern_coredump_log(NULL, "IOPolledFileWrite(gIOPolledCoreFileVars, 0x%p, 0x%llx, NULL) returned 0x%x\n",
+		    kern_coredump_log(NULL, "IOPolledFileWrite(gIOPolledCoreFileVars, %p, 0x%llx, NULL) returned 0x%x\n",
 				    data, length, err);
 		    break;
 	    }
@@ -510,7 +514,7 @@ kdp_core_zoutput(z_streamp strm, Bytef *buf, unsigned len)
     {
 	if ((ret = (*vars->outproc)(KDP_DATA, NULL, len, buf)) != kIOReturnSuccess)
 	{ 
-	    kern_coredump_log(NULL, "(kdp_core_zoutput) outproc(KDP_DATA, NULL, 0x%x, 0x%p) returned 0x%x\n",
+	    kern_coredump_log(NULL, "(kdp_core_zoutput) outproc(KDP_DATA, NULL, 0x%x, %p) returned 0x%x\n",
 			    len, buf, ret);
 	    vars->error = ret;
 	}
@@ -553,7 +557,7 @@ kdp_core_zoutputbuf(z_streamp strm, Bytef *inbuf, unsigned inlen)
 					vars->outlen - vars->outremain, 
 					vars->outbuf)) != kIOReturnSuccess)
 	{ 
-	    kern_coredump_log(NULL, "(kdp_core_zoutputbuf) outproc(KDP_DATA, NULL, 0x%x, 0x%p) returned 0x%x\n",
+	    kern_coredump_log(NULL, "(kdp_core_zoutputbuf) outproc(KDP_DATA, NULL, 0x%x, %p) returned 0x%x\n",
 			    (vars->outlen - vars->outremain), vars->outbuf, ret);
 	    vars->error = ret;
 	}
@@ -708,7 +712,7 @@ kernel_pmap_present_mapping(uint64_t vaddr, uint64_t * pvincr, uintptr_t * pvphy
         vincr = kdp_core_ramdisk_size;
     }
     else
-#if defined(__arm64__)
+#if defined(__arm64__) && defined(CONFIG_XNUPOST)
     if (vaddr == _COMM_HIGH_PAGE64_BASE_ADDRESS)
     {
 	/* not readable */
@@ -795,22 +799,25 @@ pmap_traverse_present_mappings(pmap_t __unused pmap,
 		    ppn = VM_PAGE_GET_PHYS_PAGE(m);
 	            break;
 	        }
-	        m = (vm_page_t)vm_page_queue_next(&m->listq);
-	    }
-	    vcur = phystokv(ptoa(ppn));
-	    if (vcur != vprev)
-	    {
-	        ret = callback(vcurstart, vprev, context);
-	        lastvavalid = FALSE;
+	        m = (vm_page_t)vm_page_queue_next(&m->vmp_listq);
 	    }
 	    vincr = PAGE_SIZE_64;
 	    if (ppn == atop(avail_end))
 	    {
 	        vm_object_unlock(&pmap_object_store);
 	        m = VM_PAGE_NULL;
+	        // avail_end is not a valid physical address,
+	        // so phystokv(avail_end) may not produce the expected result.
+	        vcur = phystokv(avail_start) + (avail_end - avail_start);
+	    } else {
+	        m = (vm_page_t)vm_page_queue_next(&m->vmp_listq);
+	        vcur = phystokv(ptoa(ppn));
 	    }
-	    else
-	        m = (vm_page_t)vm_page_queue_next(&m->listq);
+	    if (vcur != vprev)
+	    {
+	        ret = callback(vcurstart, vprev, context);
+	        lastvavalid = FALSE;
+	    }
 	}
 	if (m == VM_PAGE_NULL)
 	    ppn = kernel_pmap_present_mapping(vcur, &vincr, NULL);
@@ -1066,13 +1073,13 @@ kern_dump_update_header(struct kdp_core_out_vars *outvars)
 	/* Write the file header -- first seek to the beginning of the file */
 	foffset = 0;
 	if ((ret = (outvars->outproc)(KDP_SEEK, NULL, sizeof(foffset), &foffset)) != kIOReturnSuccess) {
-		kern_coredump_log(NULL, "(kern_dump_update_header) outproc(KDP_SEEK, NULL, %lu, 0x%p) foffset = 0x%llx returned 0x%x\n",
+		kern_coredump_log(NULL, "(kern_dump_update_header) outproc(KDP_SEEK, NULL, %lu, %p) foffset = 0x%llx returned 0x%x\n",
 				sizeof(foffset), &foffset, foffset, ret);
 		return ret;
 	}
 
 	if ((ret = (outvars->outproc)(KDP_DATA, NULL, sizeof(kdp_core_header), &kdp_core_header)) != kIOReturnSuccess) {
-		kern_coredump_log(NULL, "(kern_dump_update_header) outproc(KDP_DATA, NULL, %lu, 0x%p) returned 0x%x\n",
+		kern_coredump_log(NULL, "(kern_dump_update_header) outproc(KDP_DATA, NULL, %lu, %p) returned 0x%x\n",
 				sizeof(kdp_core_header), &kdp_core_header, ret);
                 return ret;
 	}
@@ -1125,7 +1132,7 @@ kern_dump_seek_to_next_file(void *kdp_core_out_vars, uint64_t next_file_offset)
 	int ret;
 
 	if ((ret = (outvars->outproc)(KDP_SEEK, NULL, sizeof(next_file_offset), &next_file_offset)) != kIOReturnSuccess) {
-		kern_coredump_log(NULL, "(kern_dump_seek_to_next_file) outproc(KDP_SEEK, NULL, %lu, 0x%p) foffset = 0x%llx returned 0x%x\n",
+		kern_coredump_log(NULL, "(kern_dump_seek_to_next_file) outproc(KDP_SEEK, NULL, %lu, %p) foffset = 0x%llx returned 0x%x\n",
 				sizeof(next_file_offset), &next_file_offset, next_file_offset, ret);
 	}
 
@@ -1186,7 +1193,7 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 
 		/* Seek the calculated offset (we'll scrollback later to flush the logs and header) */
 		if ((ret = (*outproc)(KDP_SEEK, NULL, sizeof(foffset), &foffset)) != kIOReturnSuccess) {
-			kern_coredump_log(NULL, "(do_kern_dump seek begin) outproc(KDP_SEEK, NULL, %lu, 0x%p) foffset = 0x%llx returned 0x%x\n",
+			kern_coredump_log(NULL, "(do_kern_dump seek begin) outproc(KDP_SEEK, NULL, %lu, %p) foffset = 0x%llx returned 0x%x\n",
 					sizeof(foffset), &foffset, foffset, ret);
 			dump_succeeded = FALSE;
 			goto exit;
@@ -1237,11 +1244,11 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 				kern_coredump_log(NULL, "Failed to reset outvars for stackshot with len 0x%zx, returned 0x%x\n", panic_stackshot_len, ret);
 				dump_succeeded = FALSE;
 			} else if ((ret = kdp_core_output(&outvars, panic_stackshot_len, (void *)panic_stackshot_buf)) != KERN_SUCCESS) {
-				kern_coredump_log(NULL, "Failed to write panic stackshot to file, kdp_coreoutput(outvars, %lu, 0x%p) returned 0x%x\n",
+				kern_coredump_log(NULL, "Failed to write panic stackshot to file, kdp_coreoutput(outvars, %lu, %p) returned 0x%x\n",
 					       panic_stackshot_len, (void *) panic_stackshot_buf, ret);
 				dump_succeeded = FALSE;
 			} else if ((ret = kdp_core_output(&outvars, 0, NULL)) != KERN_SUCCESS) {
-				kern_coredump_log(NULL, "Failed to flush stackshot data : kdp_core_output(0x%p, 0, NULL) returned 0x%x\n", &outvars, ret);
+				kern_coredump_log(NULL, "Failed to flush stackshot data : kdp_core_output(%p, 0, NULL) returned 0x%x\n", &outvars, ret);
 				dump_succeeded = FALSE;
 			} else if ((ret = kern_dump_record_file(&outvars, "panic_stackshot.kcdata", foffset, &compressed_stackshot_len)) != KERN_SUCCESS) {
 				kern_coredump_log(NULL, "Failed to record panic stackshot in corefile header, kern_dump_record_file returned 0x%x\n", ret);
@@ -1255,7 +1262,7 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 		/* Write the debug log -- first seek to the end of the corefile header */
 		foffset = KERN_COREDUMP_HEADERSIZE;
 		if ((ret = (*outproc)(KDP_SEEK, NULL, sizeof(foffset), &foffset)) != kIOReturnSuccess) {
-			kern_coredump_log(NULL, "(do_kern_dump seek logfile) outproc(KDP_SEEK, NULL, %lu, 0x%p) foffset = 0x%llx returned 0x%x\n",
+			kern_coredump_log(NULL, "(do_kern_dump seek logfile) outproc(KDP_SEEK, NULL, %lu, %p) foffset = 0x%llx returned 0x%x\n",
 					sizeof(foffset), &foffset, foffset, ret);
 			dump_succeeded = FALSE;
 			goto exit;
@@ -1281,7 +1288,7 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 		 */
 		buf = debug_buf_base;
 		if ((ret = (*outproc)(KDP_DATA, NULL, existing_log_size, buf)) != kIOReturnSuccess) {
-				kern_coredump_log(NULL, "(do_kern_dump paniclog) outproc(KDP_DATA, NULL, %lu, 0x%p) returned 0x%x\n",
+				kern_coredump_log(NULL, "(do_kern_dump paniclog) outproc(KDP_DATA, NULL, %lu, %p) returned 0x%x\n",
 						existing_log_size, buf, ret);
 				dump_succeeded = FALSE;
 				goto exit;
@@ -1302,7 +1309,7 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 
 		/* Write the coredump log */
 		if ((ret = (*outproc)(KDP_DATA, NULL, new_log_len, buf)) != kIOReturnSuccess) {
-			kern_coredump_log(NULL, "(do_kern_dump coredump log) outproc(KDP_DATA, NULL, %lu, 0x%p) returned 0x%x\n",
+			kern_coredump_log(NULL, "(do_kern_dump coredump log) outproc(KDP_DATA, NULL, %lu, %p) returned 0x%x\n",
 					new_log_len, buf, ret);
 			dump_succeeded = FALSE;
 			goto exit;
@@ -1382,17 +1389,18 @@ kern_dump(enum kern_dump_type kd_variant)
 }
 
 #if CONFIG_EMBEDDED
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wmissing-noreturn"
 void
 panic_spin_shmcon()
 {
-#pragma clang diagnostic pop
+	if (hwsd_info == NULL) {
+		kern_coredump_log(NULL, "handshake structure not initialized\n");
+		return;
+	}
+
 	kern_coredump_log(NULL, "\nPlease go to https://panic.apple.com to report this panic\n");
 	kern_coredump_log(NULL, "Waiting for hardware shared memory debugger, handshake structure is at virt: %p, phys %p\n",
 			hwsd_info, (void *)kvtophys((vm_offset_t)hwsd_info));
 
-	assert(hwsd_info != NULL);
 	hwsd_info->xhsdci_status = XHSDCI_STATUS_KERNEL_READY;
 	hwsd_info->xhsdci_seq_no = 0;
 	FlushPoC_DcacheRegion((vm_offset_t) hwsd_info, sizeof(*hwsd_info));

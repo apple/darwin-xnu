@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -278,7 +278,6 @@
 #define	SIOCSECNMODE		_IOW('i', 177, struct ifreq)
 
 #define	SIOCSIFORDER	_IOWR('i', 178, struct if_order)
-#define	SIOCGIFORDER	_IOWR('i', 179, struct if_order)
 
 #define	SIOCSQOSMARKINGMODE	_IOWR('i', 180, struct ifreq)
 #define	SIOCSFASTLANECAPABLE	SIOCSQOSMARKINGMODE
@@ -314,6 +313,15 @@
 #define SIOCGIFPROTOLIST32	_IOWR('i', 196, struct if_protolistreq32)
 #define SIOCGIFPROTOLIST64	_IOWR('i', 196, struct if_protolistreq64)
 #endif /* BSD_KERNEL_PRIVATE */
+#endif /* PRIVATE */
+
+#ifdef PRIVATE
+#define	SIOCGIFLOWPOWER	_IOWR('i', 199, struct ifreq)	/* Low Power Mode */
+#define	SIOCSIFLOWPOWER	_IOWR('i', 200, struct ifreq)	/* Low Power Mode */
+
+#if INET6
+#define	SIOCGIFCLAT46ADDR	_IOWR('i', 201, struct if_clat46req)
+#endif /* INET6 */
 #endif /* PRIVATE */
 
 #endif /* !_SYS_SOCKIO_H_ */

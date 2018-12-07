@@ -132,11 +132,10 @@ void vm_map_store_init( struct vm_map_header*  );
 boolean_t vm_map_store_lookup_entry( struct _vm_map*, vm_map_offset_t, struct vm_map_entry**);
 void	vm_map_store_update( struct _vm_map*, struct vm_map_entry*, int);
 void 	_vm_map_store_entry_link( struct vm_map_header *, struct vm_map_entry*, struct vm_map_entry*);
-void 	vm_map_store_entry_link( struct _vm_map*, struct vm_map_entry*, struct vm_map_entry*);
+void 	vm_map_store_entry_link( struct _vm_map*, struct vm_map_entry*, struct vm_map_entry*, vm_map_kernel_flags_t);
 void	_vm_map_store_entry_unlink( struct vm_map_header *, struct vm_map_entry*);
 void	vm_map_store_entry_unlink( struct _vm_map*, struct vm_map_entry*);
 void	vm_map_store_update_first_free( struct _vm_map*, struct vm_map_entry*, boolean_t new_entry_creation);
-void	vm_map_store_copy_insert( struct _vm_map*, struct vm_map_entry*, struct vm_map_copy*);
 void	vm_map_store_copy_reset( struct vm_map_copy*, struct vm_map_entry*);
 #if MACH_ASSERT
 boolean_t first_free_is_valid_store( struct _vm_map*);

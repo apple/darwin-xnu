@@ -1795,7 +1795,7 @@ filt_vndetach(struct knote *kn)
  * differently than the regular case for VREG files.  If not in poll(),
  * then we need to know current fileproc offset for VREG.
  */
-static intptr_t
+static int64_t
 vnode_readable_data_count(vnode_t vp, off_t current_offset, int ispoll)
 {
 	if (vnode_isfifo(vp)) {
@@ -1803,25 +1803,25 @@ vnode_readable_data_count(vnode_t vp, off_t current_offset, int ispoll)
 		int cnt;
 		int err = fifo_charcount(vp, &cnt);
 		if (err == 0) {
-			return (intptr_t)cnt;
+			return (int64_t)cnt;
 		} else 
 #endif
 		{
-			return (intptr_t)0;
+			return 0;
 		}
 	} else if (vnode_isreg(vp)) {
 		if (ispoll) {
-			return (intptr_t)1;
+			return 1;
 		}
 
 		off_t amount;
 		amount = vp->v_un.vu_ubcinfo->ui_size - current_offset;
-		if (amount > (off_t)INTPTR_MAX) {
-			return INTPTR_MAX;
-		} else if (amount < (off_t)INTPTR_MIN) {
-			return INTPTR_MIN;
+		if (amount > INT64_MAX) {
+			return INT64_MAX;
+		} else if (amount < INT64_MIN) {
+			return INT64_MIN;
 		} else {
-			return (intptr_t)amount;
+			return (int64_t)amount;
 		} 
 	} else {
 		panic("Should never have an EVFILT_READ except for reg or fifo.");
@@ -1936,8 +1936,6 @@ filt_vntouch(struct knote *kn, struct kevent_internal_s *kev)
 
 	/* accept new input fflags mask */
 	kn->kn_sfflags = kev->fflags;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 
 	activate = filt_vnode_common(kn, vp, hint);
 

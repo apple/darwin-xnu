@@ -268,7 +268,6 @@ typedef struct cpu_data
 #if CONFIG_MCA
 	struct mca_state	*cpu_mca_state;		/* State at MC fault */
 #endif
-	struct prngContext	*cpu_prng;		/* PRNG's context */
  	int			cpu_type;
  	int			cpu_subtype;
  	int			cpu_threadtype;
@@ -289,6 +288,7 @@ typedef struct cpu_data
 	uint64_t		cpu_exit_cr3;
 	uint64_t		cpu_pcid_last_cr3;
 #endif
+	boolean_t		cpu_rendezvous_in_progress;
 } cpu_data_t;
 
 extern cpu_data_t	*cpu_data_ptr[];  
@@ -365,12 +365,37 @@ extern cpu_data_t	*cpu_data_ptr[];
  * inline versions of these routines.  Everyone outside, must call
  * the real thing,
  */
+
+
+/*
+ * The "volatile" flavor of current_thread() is intended for use by
+ * scheduler code which may need to update the thread pointer in the
+ * course of a context switch.  Any call to current_thread() made
+ * prior to the thread pointer update should be safe to optimize away
+ * as it should be consistent with that thread's state to the extent
+ * the compiler can reason about it.  Likewise, the context switch
+ * path will eventually result in an arbitrary branch to the new
+ * thread's pc, about which the compiler won't be able to reason.
+ * Thus any compile-time optimization of current_thread() calls made
+ * within the new thread should be safely encapsulated in its
+ * register/stack state.  The volatile form therefore exists to cover
+ * the window between the thread pointer update and the branch to
+ * the new pc.
+ */
 static inline thread_t
+get_active_thread_volatile(void)
+{
+	CPU_DATA_GET(cpu_active_thread,thread_t)
+}
+
+static inline __pure2 thread_t
 get_active_thread(void)
 {
 	CPU_DATA_GET(cpu_active_thread,thread_t)
 }
+
 #define current_thread_fast()		get_active_thread()
+#define current_thread_volatile()	get_active_thread_volatile()
 #define current_thread()		current_thread_fast()
 
 #define cpu_mode_is64bit()		TRUE

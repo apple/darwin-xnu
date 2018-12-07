@@ -55,7 +55,7 @@ protected:
     /*! @var reserved
         Reserved for future use.  (Internal use only)  */
     struct ExpansionData { };
-    ExpansionData *reserved;
+    ExpansionData *iortc_reserved __unused;
 
 public:
 

@@ -84,12 +84,17 @@ extern int __ulock_wake(uint32_t operation, void *addr, uint64_t wake_value);
 
 /*
  * operation bits [23, 16] contain the flags for __ulock_wait
- */
-/* The waiter is contending on this lock for synchronization around global data.
+ *
+ * @const ULF_WAIT_WORKQ_DATA_CONTENTION
+ * The waiter is contending on this lock for synchronization around global data.
  * This causes the workqueue subsystem to not create new threads to offset for
  * waiters on this lock.
+ *
+ * @const ULF_WAIT_CANCEL_POINT
+ * This wait is a cancelation point
  */
-#define ULF_WAIT_WORKQ_DATA_CONTENTION	0x00010000
+#define ULF_WAIT_WORKQ_DATA_CONTENTION  0x00010000
+#define ULF_WAIT_CANCEL_POINT           0x00020000
 
 /*
  * operation bits [31, 24] contain the generic flags
@@ -104,7 +109,8 @@ extern int __ulock_wake(uint32_t operation, void *addr, uint64_t wake_value);
 #define ULF_GENERIC_MASK	0xFFFF0000
 
 #define ULF_WAIT_MASK		(ULF_NO_ERRNO | \
-							 ULF_WAIT_WORKQ_DATA_CONTENTION)
+							 ULF_WAIT_WORKQ_DATA_CONTENTION | \
+							 ULF_WAIT_CANCEL_POINT)
 
 #define ULF_WAKE_MASK		(ULF_WAKE_ALL | \
 							 ULF_WAKE_THREAD | \

@@ -119,12 +119,13 @@ typedef struct cpu_data
 	unsigned short				cpu_flags;
 	vm_offset_t				istackptr;
 	vm_offset_t				intstack_top;
-	vm_offset_t				fiqstackptr;
-	vm_offset_t				fiqstack_top;
 #if __arm64__
 	vm_offset_t				excepstackptr;
 	vm_offset_t				excepstack_top;
 	boolean_t				cluster_master;
+#else
+	vm_offset_t				fiqstackptr;
+	vm_offset_t				fiqstack_top;
 #endif
 	boolean_t				interrupts_enabled;
 	thread_t				cpu_active_thread;
@@ -259,7 +260,6 @@ typedef struct cpu_data
 #if MONOTONIC
 	struct mt_cpu				cpu_monotonic;
 #endif /* MONOTONIC */
-	struct prngContext			*cpu_prng;
 	cluster_type_t				cpu_cluster_type;
 	uint32_t				cpu_cluster_id;
 	uint32_t				cpu_l2_id;
@@ -302,9 +302,10 @@ extern	unsigned int		LowExceptionVectorBase;
 
 extern cpu_data_t			*cpu_datap(int cpu);
 extern cpu_data_t			*cpu_data_alloc(boolean_t is_boot);
-extern void					cpu_data_init(cpu_data_t *cpu_data_ptr);
-extern void					cpu_data_free(cpu_data_t *cpu_data_ptr);
-extern kern_return_t		cpu_data_register(cpu_data_t *cpu_data_ptr);
+extern void				cpu_stack_alloc(cpu_data_t*);
+extern void				cpu_data_init(cpu_data_t *cpu_data_ptr);
+extern void				cpu_data_free(cpu_data_t *cpu_data_ptr);
+extern kern_return_t			cpu_data_register(cpu_data_t *cpu_data_ptr);
 extern cpu_data_t			*processor_to_cpu_datap( processor_t processor);
 
 #if __arm64__

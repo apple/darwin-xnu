@@ -134,21 +134,21 @@ size_t ccder_sizeof_uint64(uint64_t value);
 /* Encode a tag backwards, der_end should point to one byte past the end of
    destination for the tag, returns a pointer to the first byte of the tag.
    Returns NULL if there is an encoding error. */
-CC_NONNULL2
+CC_NONNULL((2))
 uint8_t *ccder_encode_tag(ccder_tag tag, const uint8_t *der, uint8_t *der_end);
 
 /* Returns a pointer to the start of the len field.  returns NULL if there
  is an encoding error. */
-CC_NONNULL2
+CC_NONNULL((2))
 uint8_t *
 ccder_encode_len(size_t len, const uint8_t *der, uint8_t *der_end);
 
 /* der_end should point to the first byte of the content of this der item. */
-CC_NONNULL3
+CC_NONNULL((3))
 uint8_t *
 ccder_encode_tl(ccder_tag tag, size_t len, const uint8_t *der, uint8_t *der_end);
 
-CC_PURE CC_NONNULL2
+CC_PURE CC_NONNULL((2))
 uint8_t *
 ccder_encode_body_nocopy(size_t size, const uint8_t *der, uint8_t *der_end);
 
@@ -163,7 +163,7 @@ ccder_encode_constructed_tl(ccder_tag tag, const uint8_t *body_end,
 
 /* Encodes oid into der and returns
  der + ccder_sizeof_oid(oid). */
-CC_NONNULL_TU((1)) CC_NONNULL2
+CC_NONNULL((1, 2))
 uint8_t *ccder_encode_oid(ccoid_t oid, const uint8_t *der, uint8_t *der_end);
 
 CC_NONNULL((3, 4))
@@ -175,12 +175,12 @@ CC_NONNULL((2, 3))
 uint8_t *ccder_encode_integer(cc_size n, const cc_unit *s,
                               const uint8_t *der, uint8_t *der_end);
 
-CC_NONNULL3
+CC_NONNULL((3))
 uint8_t *ccder_encode_implicit_uint64(ccder_tag implicit_tag,
                                       uint64_t value,
                                       const uint8_t *der, uint8_t *der_end);
 
-CC_NONNULL2
+CC_NONNULL((2))
 uint8_t *ccder_encode_uint64(uint64_t value,
                              const uint8_t *der, uint8_t *der_end);
 
@@ -206,7 +206,7 @@ uint8_t *ccder_encode_raw_octet_string(size_t s_size, const uint8_t *s,
 
 size_t ccder_encode_eckey_size(size_t priv_size, ccoid_t oid, size_t pub_size);
 
-CC_NONNULL2 CC_NONNULL5 CC_NONNULL6  CC_NONNULL7
+CC_NONNULL((2, 5, 6, 7))
 uint8_t *ccder_encode_eckey(size_t priv_size, const uint8_t *priv_key,
                             ccoid_t oid,
                             size_t pub_size, const uint8_t *pub_key,
@@ -216,7 +216,7 @@ uint8_t *ccder_encode_eckey(size_t priv_size, const uint8_t *priv_key,
    It's inefficient – especially when you already have to convert to get to
    the form for the body.
    see encode integer for the right way to unify conversion and insertion */
-CC_NONNULL3
+CC_NONNULL((3))
 uint8_t *
 ccder_encode_body(size_t size, const uint8_t* body,
                   const uint8_t *der, uint8_t *der_end);
@@ -291,16 +291,16 @@ const uint8_t *ccder_decode_uint64(uint64_t* r,
 CC_NONNULL((2, 3, 5))
 const uint8_t *ccder_decode_seqii(cc_size n, cc_unit *r, cc_unit *s,
                                   const uint8_t *der, const uint8_t *der_end);
-CC_NONNULL_TU((1)) CC_NONNULL((3))
+CC_NONNULL((1, 3))
 const uint8_t *ccder_decode_oid(ccoid_t *oidp,
                                 const uint8_t *der, const uint8_t *der_end);
 
-CC_NONNULL((1,2,4))
+CC_NONNULL((1, 2, 4))
 const uint8_t *ccder_decode_bitstring(const uint8_t **bit_string,
                                 size_t *bit_length,
                                 const uint8_t *der, const uint8_t *der_end);
 
-CC_NONNULL_TU((4)) CC_NONNULL((1,2,3,5,6,8))
+CC_NONNULL((1, 2, 3, 4, 5, 6, 8))
 const uint8_t *ccder_decode_eckey(uint64_t *version,
                                   size_t *priv_size, const uint8_t **priv_key,
                                   ccoid_t *oid,

@@ -39,14 +39,19 @@
 #include <sys/disk.h>
 #include <vm/vm_protos.h>
 #include <vm/vm_pageout.h>
+#include <sys/content_protection.h>
 
 void vm_swapfile_open(const char *path, vnode_t *vp);
 void vm_swapfile_close(uint64_t path, vnode_t vp);
 int vm_swapfile_preallocate(vnode_t vp, uint64_t *size, boolean_t *pin);
 uint64_t vm_swapfile_get_blksize(vnode_t vp);
 uint64_t vm_swapfile_get_transfer_size(vnode_t vp);
-int vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flags);
+int vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flags, void *);
 int vm_record_file_write(struct vnode *vp, uint64_t offset, char *buf, int size);
+
+#if CONFIG_FREEZE
+int vm_swap_vol_get_budget(vnode_t vp, uint64_t *freeze_daily_budget);
+#endif /* CONFIG_FREEZE */
 
 
 void
@@ -115,7 +120,9 @@ vm_swapfile_preallocate(vnode_t vp, uint64_t *size, boolean_t *pin)
 	int		error = 0;
 	uint64_t	file_size = 0;
 	vfs_context_t	ctx = NULL;
-
+#if CONFIG_FREEZE
+	struct vnode_attr va;
+#endif /* CONFIG_FREEZE */
 
 	ctx = vfs_context_kernel();
 
@@ -148,6 +155,18 @@ vm_swapfile_preallocate(vnode_t vp, uint64_t *size, boolean_t *pin)
 	vnode_lock_spin(vp);
 	SET(vp->v_flag, VSWAP);
 	vnode_unlock(vp);
+
+#if CONFIG_FREEZE
+	VATTR_INIT(&va);
+	VATTR_SET(&va, va_dataprotect_class, PROTECTION_CLASS_C);
+	error = VNOP_SETATTR(vp, &va, ctx);
+
+	if (error) {
+		printf("setattr PROTECTION_CLASS_C for swap file failed: %d\n", error);
+		goto done;
+	}
+#endif /* CONFIG_FREEZE */
+
 done:
 	return error;
 }
@@ -170,7 +189,7 @@ vm_record_file_write(vnode_t vp, uint64_t offset, char *buf, int size)
 
 
 int
-vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flags)
+vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flags, void *upl_iodone)
 {
 	int error = 0;
 	uint64_t io_size = npages * PAGE_SIZE_64;
@@ -184,11 +203,13 @@ vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flag
 
 	upl_create_flags = UPL_SET_INTERNAL | UPL_SET_LITE;
 
+	if (upl_iodone == NULL)
+	        upl_control_flags = UPL_IOSYNC;
+
 #if ENCRYPTED_SWAP
-	upl_control_flags = UPL_IOSYNC | UPL_PAGING_ENCRYPTED;
-#else
-	upl_control_flags = UPL_IOSYNC;
+	upl_control_flags |= UPL_PAGING_ENCRYPTED;
 #endif
+
 	if ((flags & SWAP_READ) == FALSE) {
 		upl_create_flags |= UPL_COPYOUT_FROM;
 	}
@@ -224,6 +245,8 @@ vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flag
 		}
 	
 	} else {
+	        upl_set_iodone(upl, upl_iodone);
+
 		vnode_pageout(vp,
 			      upl,
 			      0,
@@ -367,3 +390,19 @@ trim_exit:
 
 	return error;
 }
+
+#if CONFIG_FREEZE
+int
+vm_swap_vol_get_budget(vnode_t vp, uint64_t *freeze_daily_budget)
+{
+	vnode_t		devvp = NULL;
+	vfs_context_t	ctx = vfs_context_kernel();
+	errno_t		err = 0;
+
+	devvp = vp->v_mount->mnt_devvp;
+
+	err = VNOP_IOCTL(devvp, DKIOCGETMAXSWAPWRITE, (caddr_t)freeze_daily_budget, 0, ctx);
+
+	return err;
+}
+#endif /* CONFIG_FREEZE */

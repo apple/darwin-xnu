@@ -175,17 +175,39 @@ ENTRY(_rtc_tsc_to_nanoseconds)
 	shrdq   $32,%rdx,%rax			/* %rdx:%rax >>= 32 */
 	ret
     
-    
+
+/*
+ *  typedef void (*thread_continue_t)(void *param, wait_result_t)
+ *
+ *	void call_continuation( thread_continue_t continuation,
+ *	            			void *param,
+ *				            wait_result_t wresult,
+ *                          bool enable interrupts)
+ */
 
 Entry(call_continuation)
-	movq	%rdi,%rcx			/* get continuation */
-	movq	%rsi,%rdi			/* continuation param */
-	movq	%rdx,%rsi			/* wait result */
+
+	movq    %rdi, %r12  /* continuation */
+    movq    %rsi, %r13  /* continuation param */
+    movq    %rdx, %r14  /* wait result */
+
 	movq	%gs:CPU_KERNEL_STACK,%rsp	/* set the stack */
 	xorq	%rbp,%rbp			/* zero frame pointer */
+
+    test    %ecx, %ecx
+    jz 1f
+    mov     $1, %edi
+    call   _ml_set_interrupts_enabled
+1:
+
+	movq	%r12,%rcx			/* continuation */
+	movq	%r13,%rdi			/* continuation param */
+	movq	%r14,%rsi			/* wait result */
+
 	call	*%rcx				/* call continuation */
 	movq	%gs:CPU_ACTIVE_THREAD,%rdi
 	call	EXT(thread_terminate)
+
 
 Entry(x86_init_wrapper)
 	xor	%rbp, %rbp

@@ -76,7 +76,7 @@ machine_task_set_state(
 		case x86_DEBUG_STATE32:
 		{
 			x86_debug_state32_t *tstate = (x86_debug_state32_t*) state;
-			if ((task_has_64BitAddr(task)) || 
+			if ((task_has_64Bit_addr(task)) ||
 					(state_count != x86_DEBUG_STATE32_COUNT) || 
 					(!debug_state_is_valid32(tstate))) {
 				return KERN_INVALID_ARGUMENT;
@@ -94,7 +94,7 @@ machine_task_set_state(
 		{
 			x86_debug_state64_t *tstate = (x86_debug_state64_t*) state;
 
-			if ((!task_has_64BitAddr(task)) || 
+			if ((!task_has_64Bit_addr(task)) ||
 					(state_count != x86_DEBUG_STATE64_COUNT) || 
 					(!debug_state_is_valid64(tstate))) {
 				return KERN_INVALID_ARGUMENT;
@@ -118,7 +118,7 @@ machine_task_set_state(
 
 			if ((tstate->dsh.flavor == x86_DEBUG_STATE32) && 
 					(tstate->dsh.count == x86_DEBUG_STATE32_COUNT) &&
-					(!task_has_64BitAddr(task)) &&
+					(!task_has_64Bit_addr(task)) &&
 					debug_state_is_valid32(&tstate->uds.ds32)) {
 				
 				if (task->task_debug == NULL) {
@@ -130,7 +130,7 @@ machine_task_set_state(
 
 			} else if ((tstate->dsh.flavor == x86_DEBUG_STATE64) && 
 					(tstate->dsh.count == x86_DEBUG_STATE64_COUNT) &&
-					task_has_64BitAddr(task) &&
+					task_has_64Bit_addr(task) &&
 					debug_state_is_valid64(&tstate->uds.ds64)) {
 				
 				if (task->task_debug == NULL) {
@@ -161,7 +161,7 @@ machine_task_get_state(task_t task,
 		{
 			x86_debug_state32_t *tstate = (x86_debug_state32_t*) state;
 
-			if ((task_has_64BitAddr(task)) || (*state_count != x86_DEBUG_STATE32_COUNT)) {
+			if ((task_has_64Bit_addr(task)) || (*state_count != x86_DEBUG_STATE32_COUNT)) {
 				return KERN_INVALID_ARGUMENT;
 			}
 
@@ -177,7 +177,7 @@ machine_task_get_state(task_t task,
 		{
 			x86_debug_state64_t *tstate = (x86_debug_state64_t*) state;
 
-			if ((!task_has_64BitAddr(task)) || (*state_count != x86_DEBUG_STATE64_COUNT)) {
+			if ((!task_has_64Bit_addr(task)) || (*state_count != x86_DEBUG_STATE64_COUNT)) {
 				return KERN_INVALID_ARGUMENT;
 			}
 
@@ -196,7 +196,7 @@ machine_task_get_state(task_t task,
 			if (*state_count != x86_DEBUG_STATE_COUNT)
 				return(KERN_INVALID_ARGUMENT);
 
-			if (task_has_64BitAddr(task)) {
+			if (task_has_64Bit_addr(task)) {
 				tstate->dsh.flavor = x86_DEBUG_STATE64;
 				tstate->dsh.count  = x86_DEBUG_STATE64_COUNT;
 
@@ -270,7 +270,7 @@ machine_thread_inherit_taskwide(
 		int flavor;
 		mach_msg_type_number_t count;
 
-		if (task_has_64BitAddr(parent_task)) {
+		if (task_has_64Bit_addr(parent_task)) {
 			flavor = x86_DEBUG_STATE64;
 			count = x86_DEBUG_STATE64_COUNT;
 		} else {

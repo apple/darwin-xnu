@@ -8,6 +8,7 @@ include $(MakeInc_def)
 
 DATAFILES = \
 	AIC.h \
+	AMCC.h \
 	arm64_common.h \
 	board_config.h \
 	boot.h \
@@ -19,7 +20,8 @@ DATAFILES = \
 	cyclone.h \
 	typhoon.h \
 	twister.h \
-	hurricane.h
+	hurricane.h \
+	BCM2837.h
 
 
 INSTALL_MD_LIST	= ${DATAFILES}

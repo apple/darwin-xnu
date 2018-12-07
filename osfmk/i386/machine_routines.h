@@ -100,6 +100,12 @@ void ml_static_mfree(
 vm_offset_t ml_static_malloc(
 	vm_size_t size);
 
+vm_offset_t ml_static_slide(
+	vm_offset_t vaddr);
+
+vm_offset_t ml_static_unslide(
+	vm_offset_t vaddr);
+
 /* virtual to physical on wired pages */
 vm_offset_t ml_vtophys(
 	vm_offset_t vaddr);

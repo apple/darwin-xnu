@@ -344,6 +344,7 @@ static uint64_t mb_expand_16kcl_total;
 static boolean_t mbuf_worker_needs_wakeup; /* wait channel for mbuf worker */
 static uint32_t mbuf_worker_run_cnt;
 static uint64_t mbuf_worker_last_runtime;
+static uint64_t mbuf_drain_last_runtime;
 static int mbuf_worker_ready;	/* worker thread is runnable */
 static int ncpu;		/* number of CPUs */
 static ppnum_t *mcl_paddr;	/* Array of cluster physical addresses */
@@ -708,7 +709,7 @@ static char *mbuf_dump_buf;
  * also toggeable via the kern.ipc.mb_watchdog sysctl.
  * Garbage collection is also enabled by default on embedded platforms.
  * mb_drain_maxint controls the amount of time to wait (in seconds) before
- * consecutive calls to m_drain().
+ * consecutive calls to mbuf_drain().
  */
 #if CONFIG_EMBEDDED
 static unsigned int mb_watchdog = 1;
@@ -801,6 +802,16 @@ static int m_copyback0(struct mbuf **, int, int, const void *, int, int);
 static struct mbuf *m_split0(struct mbuf *, int, int, int);
 __private_extern__ void mbuf_report_peak_usage(void);
 static boolean_t mbuf_report_usage(mbuf_class_t);
+#if DEBUG || DEVELOPMENT
+#define mbwdog_logger(fmt, ...)  _mbwdog_logger(__func__, __LINE__, fmt, ## __VA_ARGS__)
+static void _mbwdog_logger(const char *func, const int line, const char *fmt, ...);
+static char *mbwdog_logging;
+const unsigned mbwdog_logging_size = 4096;
+static size_t mbwdog_logging_used;
+#else
+#define mbwdog_logger(fmt, ...)  do { } while (0)
+#endif
+static void mbuf_drain_locked(boolean_t);
 
 /* flags for m_copyback0 */
 #define	M_COPYBACK0_COPYBACK	0x0001	/* copyback from cp */
@@ -1528,6 +1539,7 @@ mbinit(void)
 	_CASSERT(MBUF_SC2TC(MBUF_SC_AV) == MBUF_TC_VI);
 	_CASSERT(MBUF_SC2TC(MBUF_SC_RV) == MBUF_TC_VI);
 	_CASSERT(MBUF_SC2TC(MBUF_SC_VI) == MBUF_TC_VI);
+	_CASSERT(MBUF_SC2TC(MBUF_SC_SIG) == MBUF_TC_VI);
 	_CASSERT(MBUF_SC2TC(MBUF_SC_VO) == MBUF_TC_VO);
 	_CASSERT(MBUF_SC2TC(MBUF_SC_CTL) == MBUF_TC_VO);
 
@@ -2258,7 +2270,9 @@ mbuf_slab_free(void *arg, mcache_obj_t *list, __unused int purged)
 
 	if ((w = mb_waiters) > 0)
 		mb_waiters = 0;
-
+	if (w) {
+		mbwdog_logger("waking up all threads");
+	}
 	lck_mtx_unlock(mbuf_mlock);
 
 	if (w != 0)
@@ -2331,6 +2345,9 @@ mbuf_slab_notify(void *arg, u_int32_t reason)
 	if ((w = mb_waiters) > 0) {
 		m_notified(class)++;
 		mb_waiters = 0;
+	}
+	if (w) {
+		mbwdog_logger("waking up all threads");
 	}
 	lck_mtx_unlock(mbuf_mlock);
 
@@ -2755,6 +2772,9 @@ mbuf_cslab_free(void *arg, mcache_obj_t *list, int purged)
 
 	if ((w = mb_waiters) > 0)
 		mb_waiters = 0;
+	if (w) {
+		mbwdog_logger("waking up all threads");
+	}
 
 	lck_mtx_unlock(mbuf_mlock);
 
@@ -3144,6 +3164,8 @@ out:
 	 * pool or if the number of free clusters is less than requested.
 	 */
 	if (i > 0 && mbuf_worker_ready && mbuf_worker_needs_wakeup) {
+		mbwdog_logger("waking up the worker thread to to grow %s by %d",
+		    m_cname(class), i);
 		wakeup((caddr_t)&mbuf_worker_needs_wakeup);
 		mbuf_worker_needs_wakeup = FALSE;
 	}
@@ -3317,8 +3339,10 @@ freelist_populate(mbuf_class_t class, unsigned int num, int wait)
 
 		if ((i = mb_waiters) > 0)
 			mb_waiters = 0;
-		if (i != 0)
+		if (i != 0) {
+			mbwdog_logger("waking up all threads");
 			wakeup(mb_waitchan);
+		}
 	}
 	return (count != 0);
 }
@@ -4808,37 +4832,27 @@ m_freem(struct mbuf *m)
 /*
  * Mbuffer utility routines.
  */
-
 /*
- * Compute the amount of space available before the current start
- * of data in an mbuf.
+ * Set the m_data pointer of a newly allocated mbuf to place an object of the
+ * specified size at the end of the mbuf, longword aligned.
+ *
+ * NB: Historically, we had M_ALIGN(), MH_ALIGN(), and MEXT_ALIGN() as
+ * separate macros, each asserting that it was called at the proper moment.
+ * This required callers to themselves test the storage type and call the
+ * right one.  Rather than require callers to be aware of those layout
+ * decisions, we centralize here.
  */
-int
-m_leadingspace(struct mbuf *m)
+void
+m_align(struct mbuf *m, int len)
 {
-	if (m->m_flags & M_EXT) {
-		if (MCLHASREFERENCE(m))
-			return (0);
-		return (m->m_data - m->m_ext.ext_buf);
-	}
-	if (m->m_flags & M_PKTHDR)
-		return (m->m_data - m->m_pktdat);
-	return (m->m_data - m->m_dat);
-}
+	int adjust = 0;
 
-/*
- * Compute the amount of space available after the end of data in an mbuf.
- */
-int
-m_trailingspace(struct mbuf *m)
-{
-	if (m->m_flags & M_EXT) {
-		if (MCLHASREFERENCE(m))
-			return (0);
-		return (m->m_ext.ext_buf + m->m_ext.ext_size -
-		    (m->m_data + m->m_len));
-	}
-	return (&m->m_dat[MLEN] - (m->m_data + m->m_len));
+	/* At this point data must point to start */
+	VERIFY(m->m_data == M_START(m));
+	VERIFY(len >= 0);
+	VERIFY(len <= M_SIZE(m));
+	adjust = M_SIZE(m) - len;
+	m->m_data += adjust &~ (sizeof(long) - 1);
 }
 
 /*
@@ -5321,6 +5335,17 @@ m_pullup(struct mbuf *n, int len)
 		    __func__, len);
 		goto bad;
 	}
+	if (len > MLEN) {
+		os_log_info(OS_LOG_DEFAULT, "%s: failed len %d too big",
+		    __func__, len);
+		goto bad;
+	}
+	if ((n->m_flags & M_EXT) == 0 &&
+	    n->m_data >= &n->m_dat[MLEN]) {
+		os_log_info(OS_LOG_DEFAULT, "%s: m_data out of bounds",
+		    __func__);
+		goto bad;
+	}
 
 	/*
 	 * If first mbuf has no cluster, and has room for len bytes
@@ -5328,7 +5353,7 @@ m_pullup(struct mbuf *n, int len)
 	 * otherwise allocate a new mbuf to prepend to the chain.
 	 */
 	if ((n->m_flags & M_EXT) == 0 &&
-	    n->m_data + len < &n->m_dat[MLEN] && n->m_next) {
+	    len < &n->m_dat[MLEN] - n->m_data && n->m_next != NULL) {
 		if (n->m_len >= len)
 			return (n);
 		m = n;
@@ -5355,11 +5380,11 @@ m_pullup(struct mbuf *n, int len)
 		m->m_len += count;
 		n->m_len -= count;
 		space -= count;
-		if (n->m_len)
+		if (n->m_len != 0)
 			n->m_data += count;
 		else
 			n = m_free(n);
-	} while (len > 0 && n);
+	} while (len > 0 && n != NULL);
 	if (len > 0) {
 		(void) m_free(m);
 		goto bad;
@@ -5439,18 +5464,52 @@ m_split0(struct mbuf *m0, int len0, int wait, int copyhdr)
 	struct mbuf *m, *n;
 	unsigned len = len0, remain;
 
+	/*
+	 * First iterate to the mbuf which contains the first byte of
+	 * data at offset len0
+	 */
 	for (m = m0; m && len > m->m_len; m = m->m_next)
 		len -= m->m_len;
 	if (m == NULL)
 		return (NULL);
+	/*
+	 * len effectively is now the offset in the current
+	 * mbuf where we have to perform split.
+	 *
+	 * remain becomes the tail length.
+	 * Note that len can also be == m->m_len
+	 */
 	remain = m->m_len - len;
-	if (copyhdr && (m0->m_flags & M_PKTHDR)) {
+
+	/*
+	 * If current mbuf len contains the entire remaining offset len,
+	 * just make the second mbuf chain pointing to next mbuf onwards
+	 * and return after making necessary adjustments
+	 */
+	if (copyhdr && (m0->m_flags & M_PKTHDR) && remain == 0) {
+		_MGETHDR(n, wait, m0->m_type);
+		if (n == NULL)
+			return (NULL);
+		n->m_next = m->m_next;
+		m->m_next = NULL;
+		n->m_pkthdr.rcvif = m0->m_pkthdr.rcvif;
+		n->m_pkthdr.len = m0->m_pkthdr.len - len0;
+		m0->m_pkthdr.len = len0;
+		return (n);
+	} if (copyhdr && (m0->m_flags & M_PKTHDR)) {
 		_MGETHDR(n, wait, m0->m_type);
 		if (n == NULL)
 			return (NULL);
 		n->m_pkthdr.rcvif = m0->m_pkthdr.rcvif;
 		n->m_pkthdr.len = m0->m_pkthdr.len - len0;
 		m0->m_pkthdr.len = len0;
+
+		/*
+		 * If current points to external storage
+		 * then it can be shared by making last mbuf
+		 * of head chain and first mbuf of current chain
+		 * pointing to different data offsets
+		 */
 		if (m->m_flags & M_EXT)
 			goto extpacket;
 		if (remain > MHLEN) {
@@ -5472,7 +5531,11 @@ m_split0(struct mbuf *m0, int len0, int wait, int copyhdr)
 		_MGET(n, wait, m->m_type);
 		if (n == NULL)
 			return (NULL);
-		M_ALIGN(n, remain);
+
+		if ((m->m_flags & M_EXT) == 0) {
+			VERIFY(remain <= MLEN);
+			M_ALIGN(n, remain);
+		}
 	}
 extpacket:
 	if (m->m_flags & M_EXT) {
@@ -5607,6 +5670,9 @@ m_howmany(int num, size_t bufsize)
 	if ((bufsize == m_maxsize(MC_BIGCL) && sumclusters >= nclusters) ||
 	    (njcl > 0 && bufsize == m_maxsize(MC_16KCL) &&
 	    (m_16kclusters << NCLPJCLSHIFT) >= njcl)) {
+		mbwdog_logger("maxed out nclusters (%u >= %u) or njcl (%u >= %u)",
+		    sumclusters, nclusters,
+		    (m_16kclusters << NCLPJCLSHIFT), njcl);
 		return (0);
 	}
 
@@ -6550,8 +6616,9 @@ mbuf_sleep(mbuf_class_t class, unsigned int num, int wait)
 		wakeup((caddr_t)&mbuf_worker_needs_wakeup);
 		mbuf_worker_needs_wakeup = FALSE;
 	}
-
+	mbwdog_logger("waiting (%d mbufs in class %s)", num, m_cname(class));
 	(void) msleep(mb_waitchan, mbuf_mlock, (PZERO-1), m_cname(class), NULL);
+	mbwdog_logger("woke up (%d mbufs in class %s) ", num, m_cname(class));
 
 	/* We are now up; stop getting notified until next round */
 	mbuf_waiter_dec(class, (wait & MCR_COMP));
@@ -6576,8 +6643,31 @@ mbuf_worker_thread(void)
 
 	while (1) {
 		lck_mtx_lock(mbuf_mlock);
+		mbwdog_logger("worker thread running");
 		mbuf_worker_run_cnt++;
 		mbuf_expand = 0;
+		/*
+		 * Allocations are based on page size, so if we have depleted
+		 * the reserved spaces, try to free mbufs from the major classes.
+		 */
+#if PAGE_SIZE == 4096
+		uint32_t m_mbclusters = m_total(MC_MBUF) >> NMBPCLSHIFT;
+		uint32_t m_clusters = m_total(MC_CL);
+		uint32_t m_bigclusters = m_total(MC_BIGCL) << NCLPBGSHIFT;
+		uint32_t sumclusters = m_mbclusters + m_clusters + m_bigclusters;
+		if (sumclusters >= nclusters) {
+			mbwdog_logger("reclaiming bigcl");
+			mbuf_drain_locked(TRUE);
+			m_reclaim(MC_BIGCL, 4, FALSE);
+		}
+#else
+		uint32_t m_16kclusters = m_total(MC_16KCL);
+		if (njcl > 0 && (m_16kclusters << NCLPJCLSHIFT) >= njcl) {
+			mbwdog_logger("reclaiming 16kcl");
+			mbuf_drain_locked(TRUE);
+			m_reclaim(MC_16KCL, 4, FALSE);
+		}
+#endif
 		if (m_region_expand(MC_CL) > 0) {
 			int n;
 			mb_expand_cl_cnt++;
@@ -6591,8 +6681,10 @@ mbuf_worker_thread(void)
 			}
 			m_region_expand(MC_CL) = 0;
 
-			if (n > 0)
+			if (n > 0) {
+				mbwdog_logger("expanding MC_CL by %d", n);
 				freelist_populate(MC_CL, n, M_WAIT);
+			}
 		}
 		if (m_region_expand(MC_BIGCL) > 0) {
 			int n;
@@ -6607,8 +6699,10 @@ mbuf_worker_thread(void)
 			}
 			m_region_expand(MC_BIGCL) = 0;
 
-			if (n > 0)
+			if (n > 0) {
+				mbwdog_logger("expanding MC_BIGCL by %d", n);
 				freelist_populate(MC_BIGCL, n, M_WAIT);
+			}
 		}
 		if (m_region_expand(MC_16KCL) > 0) {
 			int n;
@@ -6623,8 +6717,10 @@ mbuf_worker_thread(void)
 			}
 			m_region_expand(MC_16KCL) = 0;
 
-			if (n > 0)
+			if (n > 0) {
+				mbwdog_logger("expanding MC_16KCL by %d", n);
 				(void) freelist_populate(MC_16KCL, n, M_WAIT);
+			}
 		}
 
 		/*
@@ -6633,11 +6729,23 @@ mbuf_worker_thread(void)
 		 * mbufs -- otherwise we could have a large number of useless
 		 * clusters allocated.
 		 */
-		while (m_total(MC_MBUF) <
-		    (m_total(MC_BIGCL) + m_total(MC_CL) + m_total(MC_16KCL))) {
+		mbwdog_logger("totals: MC_MBUF %d MC_BIGCL %d MC_CL %d MC_16KCL %d",
+		    m_total(MC_MBUF), m_total(MC_BIGCL), m_total(MC_CL),
+		    m_total(MC_16KCL));
+		uint32_t total_mbufs = m_total(MC_MBUF);
+		uint32_t total_clusters = m_total(MC_BIGCL) + m_total(MC_CL) +
+		    m_total(MC_16KCL);
+		if (total_mbufs < total_clusters) {
+			mbwdog_logger("expanding MC_MBUF by %d",
+				total_clusters - total_mbufs);
+		}
+		while (total_mbufs < total_clusters) {
 			mb_expand_cnt++;
 			if (freelist_populate(MC_MBUF, 1, M_WAIT) == 0)
 				break;
+			total_mbufs = m_total(MC_MBUF);
+			total_clusters = m_total(MC_BIGCL) + m_total(MC_CL) +
+			    m_total(MC_16KCL);
 		}
 
 		mbuf_worker_needs_wakeup = TRUE;
@@ -6650,6 +6758,7 @@ mbuf_worker_thread(void)
 		mbuf_worker_last_runtime = net_uptime();
 		assert_wait((caddr_t)&mbuf_worker_needs_wakeup,
 		    THREAD_UNINT);
+		mbwdog_logger("worker thread sleeping");
 		lck_mtx_unlock(mbuf_mlock);
 		(void) thread_block((thread_continue_t)mbuf_worker_thread);
 	}
@@ -7419,6 +7528,7 @@ mbuf_dump(void)
 	mleak_trace_stat_t *mltr;
 	char *c = mbuf_dump_buf;
 	int i, j, k, clen = MBUF_DUMP_BUF_SIZE;
+	bool printed_banner = false;
 
 	mbuf_dump_buf[0] = '\0';
 
@@ -7562,14 +7672,29 @@ mbuf_dump(void)
 		    net_uptime() - mbuf_worker_last_runtime);
 		MBUF_DUMP_BUF_CHK();
 	}
+	if (mbuf_drain_last_runtime != 0) {
+		k = snprintf(c, clen, "drain routine last run time: "
+		    "%llu (%llu seconds ago)\n",
+		    mbuf_drain_last_runtime,
+		    net_uptime() - mbuf_drain_last_runtime);
+		MBUF_DUMP_BUF_CHK();
+	}
 
-	k = snprintf(c, clen, "\nlargest allocation failure backtraces:\n");
+#if DEBUG || DEVELOPMENT
+	k = snprintf(c, clen, "\nworker thread log:\n%s\n", mbwdog_logging);
 	MBUF_DUMP_BUF_CHK();
+#endif
 
 	for (j = 0; j < MTRACELARGE_NUM_TRACES; j++) {
 		struct mtracelarge *trace = &mtracelarge_table[j];
 		if (trace->size == 0 || trace->depth == 0)
 			continue;
+		if (printed_banner == false) {
+			k = snprintf(c, clen,
+			    "\nlargest allocation failure backtraces:\n");
+			MBUF_DUMP_BUF_CHK();
+			printed_banner = true;
+		}
 		k = snprintf(c, clen, "size %llu: < ", trace->size);
 		MBUF_DUMP_BUF_CHK();
 		for (i = 0; i < trace->depth; i++) {
@@ -8017,10 +8142,27 @@ mbuf_report_peak_usage(void)
 }
 
 /*
- * Called by the VM when there's memory pressure.
+ * Simple routine to avoid taking the lock when we can't run the
+ * mbuf drain.
  */
-__private_extern__ void
-m_drain(void)
+static int
+mbuf_drain_checks(boolean_t ignore_waiters)
+{
+
+	if (mb_drain_maxint == 0)
+		return 0;
+	if (!ignore_waiters && mb_waiters != 0)
+		return 0;
+
+	return 1;
+}
+
+/*
+ * Called by the VM when there's memory pressure or when we exhausted
+ * the 4k/16k reserved space.
+ */
+static void
+mbuf_drain_locked(boolean_t ignore_waiters)
 {
 	mbuf_class_t mc;
 	mcl_slab_t *sp, *sp_tmp, *nsp;
@@ -8030,11 +8172,11 @@ m_drain(void)
 	ppnum_t offset;
 	mcache_obj_t *obj;
 	unsigned long per;
-	static uint64_t last_drain = 0;
 	static unsigned char scratch[32];
 	static ppnum_t scratch_pa = 0;
 
-	if (mb_drain_maxint == 0 || mb_waiters)
+	LCK_MTX_ASSERT(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
+	if (!mbuf_drain_checks(ignore_waiters))
 		return;
 	if (scratch_pa == 0) {
 		bzero(scratch, sizeof(scratch));
@@ -8053,20 +8195,15 @@ m_drain(void)
 	 * waiting times for mbufs.  Purge caches if we were asked to drain
 	 * in the last 5 minutes.
 	 */
-	lck_mtx_lock(mbuf_mlock);
-	if (last_drain == 0) {
-		last_drain = net_uptime();
-		lck_mtx_unlock(mbuf_mlock);
-		return;
+	if (mbuf_drain_last_runtime != 0) {
+		interval = net_uptime() - mbuf_drain_last_runtime;
+		if (interval <= mb_drain_maxint) {
+			return;
+		}
+		if (interval <= mb_drain_maxint * 5)
+			purge_caches = TRUE;
 	}
-	interval = net_uptime() - last_drain;
-	if (interval <= mb_drain_maxint) {
-		lck_mtx_unlock(mbuf_mlock);
-		return;
-	}
-	if (interval <= mb_drain_maxint * 5)
-		purge_caches = TRUE;
-	last_drain = net_uptime();
+	mbuf_drain_last_runtime = net_uptime();
 	/*
 	 * Don't free any memory if we're using 60% or more.
 	 */
@@ -8076,7 +8213,6 @@ m_drain(void)
 	}
 	per = (use_mem * 100) / total_mem;
 	if (per >= 60) {
-		lck_mtx_unlock(mbuf_mlock);
 		return;
 	}
 	/*
@@ -8205,8 +8341,19 @@ m_drain(void)
 	mbstat.m_mbufs = m_total(MC_MBUF);
 	mbuf_stat_sync();
 	mbuf_mtypes_sync(TRUE);
+}
+
+__private_extern__ void
+mbuf_drain(boolean_t ignore_waiters)
+{
+	LCK_MTX_ASSERT(mbuf_mlock, LCK_MTX_ASSERT_NOTOWNED);
+	if (!mbuf_drain_checks(ignore_waiters))
+		return;
+	lck_mtx_lock(mbuf_mlock);
+	mbuf_drain_locked(ignore_waiters);
 	lck_mtx_unlock(mbuf_mlock);
 }
+
 
 static int
 m_drain_force_sysctl SYSCTL_HANDLER_ARGS
@@ -8218,16 +8365,60 @@ m_drain_force_sysctl SYSCTL_HANDLER_ARGS
 	if (err != 0 || req->newptr == USER_ADDR_NULL)
 		return (err);
 	if (val) {
-		lck_mtx_lock(mbuf_mlock);
-		printf("%s\n", mbuf_dump());
-		lck_mtx_unlock(mbuf_mlock);
-		m_drain();
+		mbuf_drain(TRUE);
 	}
 
 	return (err);
 }
 
 #if DEBUG || DEVELOPMENT
+static void
+_mbwdog_logger(const char *func, const int line, const char *fmt, ...)
+{
+	va_list ap;
+	struct timeval now;
+	char str[384], p[256];
+	int len;
+
+	LCK_MTX_ASSERT(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
+	if (mbwdog_logging == NULL) {
+		mbwdog_logging = _MALLOC(mbwdog_logging_size,
+		    M_TEMP, M_ZERO|M_NOWAIT);
+		if (mbwdog_logging == NULL)
+			return;
+	}
+	va_start(ap, fmt);
+	vsnprintf(p, sizeof(p), fmt, ap);
+	va_end(ap);
+	microuptime(&now);
+	len = snprintf(str, sizeof(str),
+	    "\n%ld.%d (%d/%llx) %s:%d %s",
+	    now.tv_sec, now.tv_usec,
+	    current_proc()->p_pid,
+	    (uint64_t)VM_KERNEL_ADDRPERM(current_thread()),
+	    func, line, p);
+	if (len < 0)
+		return;
+	if (mbwdog_logging_used + len > mbwdog_logging_size) {
+		mbwdog_logging_used = mbwdog_logging_used / 2;
+		memmove(mbwdog_logging, mbwdog_logging + mbwdog_logging_used,
+		    mbwdog_logging_size - mbwdog_logging_used);
+		mbwdog_logging[mbwdog_logging_used] = 0;
+	}
+	strlcat(mbwdog_logging, str, mbwdog_logging_size);
+	mbwdog_logging_used += len;
+}
+
+static int
+sysctl_mbwdog_log SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+    return SYSCTL_OUT(req, mbwdog_logging, mbwdog_logging_used);
+}
+SYSCTL_DECL(_kern_ipc);
+SYSCTL_PROC(_kern_ipc, OID_AUTO, mbwdog_log,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED,
+    0, 0, sysctl_mbwdog_log, "A", "");
 
 static int mbtest_val;
 static int mbtest_running;
@@ -8299,8 +8490,7 @@ mbtest SYSCTL_HANDLER_ARGS
 
 	return (error);
 }
-#endif
-
+#endif // DEBUG || DEVELOPMENT
 
 static void
 mtracelarge_register(size_t size)

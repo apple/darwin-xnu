@@ -134,6 +134,55 @@ static vm_offset_t sleepTokenBuffer = (vm_offset_t)NULL;
 #endif
 static boolean_t coresight_debug_enabled = FALSE;
 
+#if defined(CONFIG_XNUPOST)
+void arm64_ipi_test_callback(void *);
+
+void arm64_ipi_test_callback(void *parm) {
+	volatile uint64_t *ipi_test_data = parm;
+	cpu_data_t *cpu_data;
+
+	cpu_data = getCpuDatap();
+
+	*ipi_test_data = cpu_data->cpu_number;
+}
+
+uint64_t arm64_ipi_test_data[MAX_CPUS];
+
+void arm64_ipi_test() {
+	volatile uint64_t *ipi_test_data;
+	uint32_t timeout_ms = 100;
+	uint64_t then, now, delta;
+	int current_cpu_number = getCpuDatap()->cpu_number;
+
+	/*
+	 * probably the only way to have this on most systems is with the
+	 * cpus=1 boot-arg, but nonetheless, if we only have 1 CPU active,
+	 * IPI is not available
+	 */
+	if (real_ncpus == 1) {
+		return;
+	}
+
+	for (unsigned int i = 0; i < MAX_CPUS; ++i) {
+		ipi_test_data = &arm64_ipi_test_data[i];
+		*ipi_test_data = ~i;
+		kern_return_t error = cpu_xcall((int)i, (void *)arm64_ipi_test_callback, (void *)(uintptr_t)ipi_test_data);
+		if (error != KERN_SUCCESS)
+			panic("CPU %d was unable to IPI CPU %u: error %d", current_cpu_number, i, error);
+
+		then = mach_absolute_time();
+
+		while (*ipi_test_data != i) {
+			now = mach_absolute_time();
+			absolutetime_to_nanoseconds(now-then, &delta);
+			if ((delta / NSEC_PER_MSEC) > timeout_ms) {
+				panic("CPU %d tried to IPI CPU %d but didn't get correct response within %dms, respose: %llx", current_cpu_number, i, timeout_ms, *ipi_test_data);
+			}
+		}
+	}
+
+}
+#endif /* defined(CONFIG_XNUPOST) */
 
 static void
 configure_coresight_registers(cpu_data_t *cdp)
@@ -316,7 +365,7 @@ cpu_idle(void)
 
 	ClearIdlePop(TRUE);
 
-	cpu_idle_exit();
+	cpu_idle_exit(FALSE);
 }
 
 /*
@@ -324,7 +373,7 @@ cpu_idle(void)
  *	Function:
  */
 void
-cpu_idle_exit(void)
+cpu_idle_exit(boolean_t from_reset)
 {
 	uint64_t	new_idle_timeout_ticks = 0x0ULL;
 	cpu_data_t     *cpu_data_ptr = getCpuDatap();
@@ -332,7 +381,8 @@ cpu_idle_exit(void)
 	assert(exception_stack_pointer() != 0);
 
 	/* Back from WFI, unlock OSLAR and EDLAR. */
-	configure_coresight_registers(cpu_data_ptr);
+	if (from_reset)
+		configure_coresight_registers(cpu_data_ptr);
 
 #if KPC
 	kpc_idle_exit();
@@ -420,50 +470,34 @@ cpu_init(void)
 #endif /* MONOTONIC */
 }
 
-cpu_data_t *
-cpu_data_alloc(boolean_t is_boot_cpu)
+void
+cpu_stack_alloc(cpu_data_t *cpu_data_ptr)
 {
-	cpu_data_t		*cpu_data_ptr = NULL;
+	vm_offset_t		irq_stack = 0;
+	vm_offset_t		exc_stack = 0;
 
-	if (is_boot_cpu)
-		cpu_data_ptr = &BootCpuData;
-	else {
-		void	*irq_stack = NULL;
-		void	*exc_stack = NULL;
-		void	*fiq_stack = NULL;
+	kern_return_t kr = kernel_memory_allocate(kernel_map, &irq_stack,
+				   INTSTACK_SIZE + (2 * PAGE_SIZE),
+				   PAGE_MASK,
+				   KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT,
+				   VM_KERN_MEMORY_STACK);
+	if (kr != KERN_SUCCESS)
+		panic("Unable to allocate cpu interrupt stack\n");
 
-		if ((kmem_alloc(kernel_map, (vm_offset_t *)&cpu_data_ptr, sizeof(cpu_data_t), VM_KERN_MEMORY_CPU)) != KERN_SUCCESS)
-			goto cpu_data_alloc_error;
+	cpu_data_ptr->intstack_top = irq_stack + PAGE_SIZE + INTSTACK_SIZE;
+	cpu_data_ptr->istackptr = cpu_data_ptr->intstack_top;
 
-		bzero((void *)cpu_data_ptr, sizeof(cpu_data_t));
+	kr = kernel_memory_allocate(kernel_map, &exc_stack,
+				   EXCEPSTACK_SIZE + (2 * PAGE_SIZE),
+				   PAGE_MASK,
+				   KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT,
+				   VM_KERN_MEMORY_STACK);
+	if (kr != KERN_SUCCESS)
+		panic("Unable to allocate cpu exception stack\n");
 
-		if ((irq_stack = kalloc(INTSTACK_SIZE)) == 0)
-			goto cpu_data_alloc_error;
-		cpu_data_ptr->intstack_top = (vm_offset_t)irq_stack + INTSTACK_SIZE ;
-		cpu_data_ptr->istackptr = cpu_data_ptr->intstack_top;
-
-		if ((exc_stack = kalloc(PAGE_SIZE)) == 0)
-			goto cpu_data_alloc_error;
-		cpu_data_ptr->excepstack_top = (vm_offset_t)exc_stack + PAGE_SIZE ;
-		cpu_data_ptr->excepstackptr = cpu_data_ptr->excepstack_top;
-
-		if ((fiq_stack = kalloc(PAGE_SIZE)) == 0)
-			goto cpu_data_alloc_error;
-		cpu_data_ptr->fiqstack_top = (vm_offset_t)fiq_stack + PAGE_SIZE ;
-		cpu_data_ptr->fiqstackptr = cpu_data_ptr->fiqstack_top;
-	}
-
-	cpu_data_ptr->cpu_processor = cpu_processor_alloc(is_boot_cpu);
-	if (cpu_data_ptr->cpu_processor == (struct processor *)NULL)
-		goto cpu_data_alloc_error;
-
-	return cpu_data_ptr;
-
-cpu_data_alloc_error:
-	panic("cpu_data_alloc() failed\n");
-	return (cpu_data_t *)NULL;
+	cpu_data_ptr->excepstack_top = exc_stack + PAGE_SIZE + EXCEPSTACK_SIZE;
+	cpu_data_ptr->excepstackptr = cpu_data_ptr->excepstack_top;
 }
-
 
 void
 cpu_data_free(cpu_data_t *cpu_data_ptr)
@@ -473,7 +507,7 @@ cpu_data_free(cpu_data_t *cpu_data_ptr)
 
 	cpu_processor_free( cpu_data_ptr->cpu_processor);
 	kfree( (void *)(cpu_data_ptr->intstack_top - INTSTACK_SIZE), INTSTACK_SIZE);
-	kfree( (void *)(cpu_data_ptr->fiqstack_top - PAGE_SIZE), PAGE_SIZE);
+	kfree( (void *)(cpu_data_ptr->excepstack_top - EXCEPSTACK_SIZE), EXCEPSTACK_SIZE);
 	kmem_free(kernel_map, (vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t));
 }
 
@@ -533,8 +567,7 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 
 	pmap_cpu_data_t * pmap_cpu_data_ptr = &cpu_data_ptr->cpu_pmap_cpu_data;
 
-	pmap_cpu_data_ptr->cpu_user_pmap = (struct pmap *) NULL;
-	pmap_cpu_data_ptr->cpu_user_pmap_stamp = 0;
+	pmap_cpu_data_ptr->cpu_nested_pmap = (struct pmap *) NULL;
 	pmap_cpu_data_ptr->cpu_number = PMAP_INVALID_CPU_NUM;
 
 	for (i = 0; i < (sizeof(pmap_cpu_data_ptr->cpu_asid_high_bits) / sizeof(*pmap_cpu_data_ptr->cpu_asid_high_bits)); i++) {
@@ -544,6 +577,7 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 #if __ARM_KERNEL_PROTECT__
 	cpu_data_ptr->cpu_exc_vectors = (vm_offset_t)&exc_vectors_table;
 #endif /* __ARM_KERNEL_PROTECT__ */
+
 }
 
 kern_return_t
@@ -563,6 +597,7 @@ cpu_data_register(cpu_data_t *cpu_data_ptr)
 
 }
 
+
 kern_return_t
 cpu_start(int cpu)
 {
@@ -578,7 +613,7 @@ cpu_start(int cpu)
 
 		cpu_data_ptr->cpu_reset_handler = (vm_offset_t) start_cpu_paddr;
 
-		cpu_data_ptr->cpu_pmap_cpu_data.cpu_user_pmap = NULL;
+		cpu_data_ptr->cpu_pmap_cpu_data.cpu_nested_pmap = NULL;
 
 		if (cpu_data_ptr->cpu_processor->next_thread != THREAD_NULL)
 			first_thread = cpu_data_ptr->cpu_processor->next_thread;

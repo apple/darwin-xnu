@@ -503,7 +503,9 @@ int watchpoint_flag = -1;
 int breakpoint_flag = -1;
 int gNeon = -1;
 int gNeonHpfp = -1;
+int gNeonFp16 = -1;
 int gARMv81Atomics = 0;
+int gARMv8Crc32 = 0;
 
 #if defined (__arm__)
 int arm64_flag = 0;
@@ -517,7 +519,9 @@ SYSCTL_INT(_hw_optional, OID_AUTO, watchpoint, CTLFLAG_RD | CTLFLAG_KERN | CTLFL
 SYSCTL_INT(_hw_optional, OID_AUTO, breakpoint, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &breakpoint_flag, 0, "");
 SYSCTL_INT(_hw_optional, OID_AUTO, neon, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gNeon, 0, "");
 SYSCTL_INT(_hw_optional, OID_AUTO, neon_hpfp, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gNeonHpfp, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, neon_fp16, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gNeonFp16, 0, "");
 SYSCTL_INT(_hw_optional, OID_AUTO, armv8_1_atomics, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gARMv81Atomics, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, armv8_crc32, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gARMv8Crc32, 0, "");
 
 /*
  * Without this little ifdef dance, the preprocessor replaces "arm64" with "1",
@@ -600,6 +604,7 @@ sysctl_mib_init(void)
 	arm_mvfp_info_t *mvfp_info = arm_mvfp_info();
 	gNeon = mvfp_info->neon;
 	gNeonHpfp = mvfp_info->neon_hpfp;
+	gNeonFp16 = mvfp_info->neon_fp16;
 
 	cacheconfig[0] = ml_get_max_cpus();
 	cacheconfig[1] = 1;

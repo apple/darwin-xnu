@@ -82,10 +82,12 @@
 #include <kern/clock.h>
 #include <kern/coalition.h>
 #include <kern/cpu_number.h>
+#include <kern/cpu_quiesce.h>
 #include <kern/ledger.h>
 #include <kern/machine.h>
 #include <kern/processor.h>
 #include <kern/sched_prim.h>
+#include <kern/turnstile.h>
 #if CONFIG_SCHED_SFI
 #include <kern/sfi.h>
 #endif
@@ -117,13 +119,19 @@
 #include <sys/kdebug.h>
 #include <sys/random.h>
 #include <sys/ktrace.h>
+#include <libkern/section_keywords.h>
 
 #include <kern/ltable.h>
 #include <kern/waitq.h>
 #include <ipc/ipc_voucher.h>
 #include <voucher/ipc_pthread_priority_internal.h>
 #include <mach/host_info.h>
+#include <pthread/workqueue_internal.h>
 
+#if CONFIG_XNUPOST
+#include <tests/ktest.h>
+#include <tests/xnupost.h>
+#endif
 
 #if CONFIG_ATM
 #include <atm/atm_internal.h>
@@ -182,8 +190,13 @@ extern void cpu_physwindow_init(int);
 #include <i386/vmx/vmx_cpu.h>
 #endif
 
+#if CONFIG_DTRACE
+extern void dtrace_early_init(void);
+extern void sdt_early_init(void);
+#endif
+
 // libkern/OSKextLib.cpp
-extern void	OSKextRemoveKextBootstrap(void);
+extern void OSKextRemoveKextBootstrap(void);
 
 void scale_setup(void);
 extern void bsd_scale_setup(int);
@@ -206,6 +219,11 @@ static char trace_typefilter[64] = { 0 };
 unsigned int trace_wrap = 0;
 boolean_t trace_serial = FALSE;
 boolean_t early_boot_complete = FALSE;
+
+/* physically contiguous carveouts */
+SECURITY_READ_ONLY_LATE(uintptr_t) phys_carveout = 0;
+SECURITY_READ_ONLY_LATE(uintptr_t) phys_carveout_pa = 0;
+SECURITY_READ_ONLY_LATE(size_t) phys_carveout_size = 0;
 
 /* mach leak logging */
 int log_leaks = 0;
@@ -301,9 +319,14 @@ kernel_bootstrap(void)
 	csr_init();
 #endif
 
-	if (PE_i_can_has_debugger(NULL) &&
-	    PE_parse_boot_argn("-show_pointers", &namep, sizeof (namep))) {
-		doprnt_hide_pointers = FALSE;
+	if (PE_i_can_has_debugger(NULL)) {
+		if (PE_parse_boot_argn("-show_pointers", &namep, sizeof(namep))) {
+			doprnt_hide_pointers = FALSE;
+		}
+		if (PE_parse_boot_argn("-no_slto_panic", &namep, sizeof(namep))) {
+			extern boolean_t spinlock_timeout_panic;
+			spinlock_timeout_panic = FALSE;
+		}
 	}
 
 	kernel_bootstrap_log("console_init");
@@ -364,6 +387,12 @@ kernel_bootstrap(void)
 
 	kernel_bootstrap_log("thread_init");
 	thread_init();
+
+	kernel_bootstrap_log("workq_init");
+	workq_init();
+
+	kernel_bootstrap_log("turnstiles_init");
+	turnstiles_init();
 
 #if CONFIG_ATM
 	/* Initialize the Activity Trace Resource Manager. */
@@ -497,9 +526,25 @@ kernel_bootstrap_thread(void)
 	cpu_physwindow_init(0);
 #endif
 
+	if (PE_i_can_has_debugger(NULL)) {
+		unsigned int phys_carveout_mb = 0;
+		if (PE_parse_boot_argn("phys_carveout_mb", &phys_carveout_mb,
+				sizeof(phys_carveout_mb)) && phys_carveout_mb > 0) {
+			phys_carveout_size = phys_carveout_mb * 1024 * 1024;
+			kern_return_t kr = kmem_alloc_contig(kernel_map,
+					(vm_offset_t *)&phys_carveout, phys_carveout_size,
+					VM_MAP_PAGE_MASK(kernel_map), 0, 0, KMA_NOPAGEWAIT,
+					VM_KERN_MEMORY_DIAG);
+			if (kr != KERN_SUCCESS) {
+				kprintf("failed to allocate %uMB for phys_carveout_mb: %u\n",
+						phys_carveout_mb, (unsigned int)kr);
+			} else {
+				phys_carveout_pa = kvtophys((vm_offset_t)phys_carveout);
+			}
+		}
+	}
 
-	
-#if MACH_KDP 
+#if MACH_KDP
 	kernel_bootstrap_log("kdp_init");
 	kdp_init();
 #endif
@@ -534,16 +579,13 @@ kernel_bootstrap_thread(void)
 
 	kdebug_init(new_nkdbufs, trace_typefilter, trace_wrap);
 
-	kernel_bootstrap_log("prng_init");
-	prng_cpu_init(master_cpu);
-
 #ifdef	MACH_BSD
 	kernel_bootstrap_log("bsd_early_init");
 	bsd_early_init();
 #endif
 
 #if defined(__arm64__)
-    ml_lockdown_init();
+	ml_lockdown_init();
 #endif
 
 #ifdef	IOKIT
@@ -591,9 +633,22 @@ kernel_bootstrap_thread(void)
 #endif
 #endif
 
+#if CONFIG_DTRACE
+	dtrace_early_init();
+	sdt_early_init();
+#endif
+
+
+	/*
+	 * Get rid of segments used to bootstrap kext loading. This removes
+	 * the KLD, PRELINK symtab, LINKEDIT, and symtab segments/load commands.
+	 * Must be done prior to lockdown so that we can free (and possibly relocate)
+	 * the static KVA mappings used for the jettisoned bootstrap segments.
+	 */
+	OSKextRemoveKextBootstrap();
 #if defined(__arm__) || defined(__arm64__)
 #if CONFIG_KERNEL_INTEGRITY
-        machine_lockdown_preflight();
+	machine_lockdown_preflight();
 #endif
 	/*
 	 *  Finalize protections on statically mapped pages now that comm page mapping is established.
@@ -627,6 +682,14 @@ kernel_bootstrap_thread(void)
 	vm_set_restrictions();
 
 
+#ifdef CONFIG_XNUPOST
+	kern_return_t result = kernel_list_tests();
+	result = kernel_do_post();
+	if (result != KERN_SUCCESS) {
+		panic("kernel_do_post: Tests failed with result = 0x%08x\n", result);
+	}
+	kernel_bootstrap_log("kernel_do_post - done");
+#endif /* CONFIG_XNUPOST */
 
 
 	/*
@@ -636,11 +699,6 @@ kernel_bootstrap_thread(void)
 	bsd_init();
 #endif
 
-    /*
-     * Get rid of segments used to bootstrap kext loading. This removes
-     * the KLD, PRELINK symtab, LINKEDIT, and symtab segments/load commands.
-     */
-	OSKextRemoveKextBootstrap();
 
 	/*
 	 * Get rid of pages used for early boot tracing.
@@ -771,6 +829,8 @@ load_context(
 	timer_start(&PROCESSOR_DATA(processor, system_state), processor->last_dispatch);
 	PROCESSOR_DATA(processor, current_state) = &PROCESSOR_DATA(processor, system_state);
 
+
+	cpu_quiescent_counter_join(processor->last_dispatch);
 
 	PMAP_ACTIVATE_USER(thread, processor->cpu_id);
 

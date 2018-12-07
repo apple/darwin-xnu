@@ -120,7 +120,8 @@ static kern_return_t pet_threads_prepare(task_t task);
 
 static void pet_sample_all_tasks(uint32_t idle_rate);
 static void pet_sample_task(task_t task, uint32_t idle_rate);
-static void pet_sample_thread(int pid, thread_t thread, uint32_t idle_rate);
+static void pet_sample_thread(int pid, task_t task, thread_t thread,
+		uint32_t idle_rate);
 
 /* functions called by other areas of kperf */
 
@@ -161,9 +162,11 @@ kperf_pet_on_cpu(thread_t thread, thread_continue_t continuation,
 	if (thread->kperf_pet_gen != kperf_pet_gen) {
 		BUF_VERB(PERF_PET_SAMPLE_THREAD | DBG_FUNC_START, kperf_pet_gen, thread->kperf_pet_gen);
 
+		task_t task = get_threadtask(thread);
 		struct kperf_context ctx = {
 			.cur_thread = thread,
-			.cur_pid = task_pid(get_threadtask(thread)),
+			.cur_task = task,
+			.cur_pid = task_pid(task),
 			.starting_fp = starting_fp,
 		};
 		/*
@@ -345,17 +348,18 @@ pet_thread_loop(void *param, wait_result_t wr)
 /* sampling */
 
 static void
-pet_sample_thread(int pid, thread_t thread, uint32_t idle_rate)
+pet_sample_thread(int pid, task_t task, thread_t thread, uint32_t idle_rate)
 {
 	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
 
-	uint32_t sample_flags = SAMPLE_FLAG_IDLE_THREADS;
+	uint32_t sample_flags = SAMPLE_FLAG_IDLE_THREADS | SAMPLE_FLAG_THREAD_ONLY;
 
 	BUF_VERB(PERF_PET_SAMPLE_THREAD | DBG_FUNC_START);
 
 	/* work out the context */
 	struct kperf_context ctx = {
 		.cur_thread = thread,
+		.cur_task = task,
 		.cur_pid = pid,
 	};
 
@@ -441,21 +445,51 @@ pet_sample_task(task_t task, uint32_t idle_rate)
 
 	BUF_VERB(PERF_PET_SAMPLE_TASK | DBG_FUNC_START);
 
-	kern_return_t kr = pet_threads_prepare(task);
-	if (kr != KERN_SUCCESS) {
-		BUF_INFO(PERF_PET_ERROR, ERR_THREAD, kr);
-		BUF_VERB(PERF_PET_SAMPLE_TASK | DBG_FUNC_END, 1);
+	int pid = task_pid(task);
+	if (kperf_action_has_task(pet_action_id)) {
+		struct kperf_context ctx = {
+			.cur_task = task,
+			.cur_pid = pid,
+		};
+
+		kperf_sample(pet_sample, &ctx, pet_action_id, SAMPLE_FLAG_TASK_ONLY);
+	}
+
+	if (!kperf_action_has_thread(pet_action_id)) {
+		BUF_VERB(PERF_PET_SAMPLE_TASK | DBG_FUNC_END);
 		return;
 	}
 
-	int pid = task_pid(task);
+	kern_return_t kr = KERN_SUCCESS;
+
+	/*
+	 * Suspend the task to see an atomic snapshot of all its threads.  This
+	 * is expensive, and disruptive.
+	 */
+	bool needs_suspend = task != kernel_task;
+	if (needs_suspend) {
+		kr = task_suspend_internal(task);
+		if (kr != KERN_SUCCESS) {
+			BUF_VERB(PERF_PET_SAMPLE_TASK | DBG_FUNC_END, 1);
+			return;
+		}
+		needs_suspend = true;
+	}
+
+	kr = pet_threads_prepare(task);
+	if (kr != KERN_SUCCESS) {
+		BUF_INFO(PERF_PET_ERROR, ERR_THREAD, kr);
+		goto out;
+	}
 
 	for (unsigned int i = 0; i < pet_threads_count; i++) {
 		thread_t thread = pet_threads[i];
-		int cpu;
-		assert(thread);
+		assert(thread != THREAD_NULL);
 
-		/* do not sample the thread if it was on a CPU during the IPI. */
+		/*
+		 * Do not sample the thread if it was on a CPU when the timer fired.
+		 */
+		int cpu = 0;
 		for (cpu = 0; cpu < machine_info.logical_cpu_max; cpu++) {
 			if (kperf_tid_on_cpus[cpu] == thread_tid(thread)) {
 				break;
@@ -464,10 +498,15 @@ pet_sample_task(task_t task, uint32_t idle_rate)
 
 		/* the thread was not on a CPU */
 		if (cpu == machine_info.logical_cpu_max) {
-			pet_sample_thread(pid, thread, idle_rate);
+			pet_sample_thread(pid, task, thread, idle_rate);
 		}
 
 		thread_deallocate(pet_threads[i]);
+	}
+
+out:
+	if (needs_suspend) {
+		task_resume_internal(task);
 	}
 
 	BUF_VERB(PERF_PET_SAMPLE_TASK | DBG_FUNC_END, pet_threads_count);
@@ -556,18 +595,7 @@ pet_sample_all_tasks(uint32_t idle_rate)
 	for (unsigned int i = 0; i < pet_tasks_count; i++) {
 		task_t task = pet_tasks[i];
 
-		if (task != kernel_task) {
-			kr = task_suspend_internal(task);
-			if (kr != KERN_SUCCESS) {
-				continue;
-			}
-		}
-
 		pet_sample_task(task, idle_rate);
-
-		if (task != kernel_task) {
-			task_resume_internal(task);
-		}
 	}
 
 	for(unsigned int i = 0; i < pet_tasks_count; i++) {

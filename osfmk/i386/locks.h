@@ -31,6 +31,7 @@
 
 #include <sys/appleapiopts.h>
 #include <kern/kern_types.h>
+#include <kern/assert.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
 
@@ -100,23 +101,39 @@ typedef struct _lck_mtx_ {
 	};
 } lck_mtx_t;
 
+#define LCK_MTX_WAITERS_MSK		0x0000ffff
+#define LCK_MTX_WAITER			0x00000001
+#define LCK_MTX_PRIORITY_MSK		0x00ff0000
+#define LCK_MTX_ILOCKED_MSK		0x01000000
+#define LCK_MTX_MLOCKED_MSK		0x02000000
+#define LCK_MTX_PROMOTED_MSK		0x04000000
+#define LCK_MTX_SPIN_MSK		0x08000000
+
 /* This pattern must subsume the interlocked, mlocked and spin bits */
 #define	LCK_MTX_TAG_INDIRECT			0x07ff1007	/* lock marked as Indirect  */
 #define	LCK_MTX_TAG_DESTROYED			0x07fe2007	/* lock marked as Destroyed */
 
 /* Adaptive spin before blocking */
 extern uint64_t 	MutexSpin;
-extern int		lck_mtx_lock_spinwait_x86(lck_mtx_t *mutex);
-extern void		lck_mtx_lock_wait_x86(lck_mtx_t *mutex);
-extern void		lck_mtx_lock_acquire_x86(lck_mtx_t *mutex);
-extern void		lck_mtx_unlock_wakeup_x86(lck_mtx_t *mutex, int prior_lock_state);
 
-extern void		lck_mtx_lock_mark_destroyed(lck_mtx_t *mutex);
-extern int		lck_mtx_lock_grab_mutex(lck_mtx_t *mutex);
+typedef enum lck_mtx_spinwait_ret_type {
+	LCK_MTX_SPINWAIT_ACQUIRED = 0,
+	LCK_MTX_SPINWAIT_SPUN = 1,
+	LCK_MTX_SPINWAIT_NO_SPIN = 2,
+} lck_mtx_spinwait_ret_type_t;
 
-extern void		hw_lock_byte_init(volatile uint8_t *lock_byte);
-extern void		hw_lock_byte_lock(volatile uint8_t *lock_byte);
-extern void		hw_lock_byte_unlock(volatile uint8_t *lock_byte);
+extern lck_mtx_spinwait_ret_type_t		lck_mtx_lock_spinwait_x86(lck_mtx_t *mutex);
+extern void					lck_mtx_lock_wait_x86(lck_mtx_t *mutex);
+extern void					lck_mtx_lock_acquire_x86(lck_mtx_t *mutex);
+
+extern void					lck_mtx_lock_slow(lck_mtx_t *lock);
+extern boolean_t				lck_mtx_try_lock_slow(lck_mtx_t *lock);
+extern void					lck_mtx_unlock_slow(lck_mtx_t *lock);
+extern void					lck_mtx_lock_spin_slow(lck_mtx_t *lock);
+extern boolean_t				lck_mtx_try_lock_spin_slow(lck_mtx_t *lock);
+extern void					hw_lock_byte_init(volatile uint8_t *lock_byte);
+extern void					hw_lock_byte_lock(volatile uint8_t *lock_byte);
+extern void					hw_lock_byte_unlock(volatile uint8_t *lock_byte);
 
 typedef struct {
 	unsigned int		type;
@@ -176,7 +193,6 @@ typedef struct __lck_mtx_ext_t__	lck_mtx_ext_t;
 #endif
 
 #ifdef	MACH_KERNEL_PRIVATE
-#pragma pack(1)		/* Make sure the structure stays as we defined it */
 typedef union _lck_rw_t_internal_ {
 	struct {
 		volatile uint16_t	lck_rw_shared_count;	/* No. of accepted readers */
@@ -199,7 +215,9 @@ typedef union _lck_rw_t_internal_ {
 		uint32_t		lck_rw_pad12;
 	};
 } lck_rw_t;
-#pragma pack()
+#define LCK_RW_T_SIZE		16
+
+static_assert(sizeof(lck_rw_t) == LCK_RW_T_SIZE);
 
 #define LCK_RW_SHARED_SHIFT	 0
 #define LCK_RW_INTERLOCK_BIT	16
@@ -244,6 +262,7 @@ typedef union _lck_rw_t_internal_ {
 #if LOCK_PRIVATE
 
 #define disable_preemption_for_thread(t) ((cpu_data_t GS_RELATIVE *)0UL)->cpu_preemption_level++
+#define preemption_disabled_for_thread(t) (((cpu_data_t GS_RELATIVE *)0UL)->cpu_preemption_level > 0)
 
 #define LCK_MTX_THREAD_TO_STATE(t)	((uintptr_t)t)
 #define PLATFORM_LCK_ILOCK		0
@@ -274,5 +293,4 @@ typedef struct __lck_rw_t__	lck_rw_t;
 extern void		kernel_preempt_check (void);
 
 #endif /* MACH_KERNEL_PRIVATE */
-
 #endif	/* _I386_LOCKS_H_ */

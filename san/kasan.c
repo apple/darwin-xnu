@@ -299,7 +299,7 @@ kasan_check_range(const void *x, size_t sz, access_t access)
 /*
  * Return true if [base, base+sz) is unpoisoned or has given shadow value.
  */
-static bool
+bool
 kasan_check_shadow(vm_address_t base, vm_size_t sz, uint8_t shadow)
 {
 	sz -= 8 - (base % 8);
@@ -371,7 +371,7 @@ kasan_shadow_crashlog(uptr p, char *buf, size_t len)
 
 	uptr shadow = (uptr)SHADOW_FOR_ADDRESS(p);
 	uptr shadow_p = shadow;
-	uptr shadow_page = vm_map_round_page(shadow_p, PAGE_MASK);
+	uptr shadow_page = vm_map_round_page(shadow_p, HW_PAGE_MASK);
 
 	/* rewind to start of context block */
 	shadow &= ~((uptr)0xf);
@@ -381,7 +381,7 @@ kasan_shadow_crashlog(uptr p, char *buf, size_t len)
 			" Shadow             0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f\n");
 
 	for (i = 0; i < 1 + before + after; i++, shadow += 16) {
-		if ((vm_map_round_page(shadow, PAGE_MASK) != shadow_page) && !kasan_is_shadow_mapped(shadow)) {
+		if ((vm_map_round_page(shadow, HW_PAGE_MASK) != shadow_page) && !kasan_is_shadow_mapped(shadow)) {
 			/* avoid unmapped shadow when crossing page boundaries */
 			continue;
 		}
@@ -518,7 +518,12 @@ void NOINLINE
 __asan_handle_no_return(void)
 {
 	kasan_unpoison_curstack(false);
-	kasan_unpoison_fakestack(current_thread());
+
+	/*
+	 * No need to free any fakestack objects because they must stay alive until
+	 * we drop the real stack, at which point we can drop the entire fakestack
+	 * anyway.
+	 */
 }
 
 bool NOINLINE
@@ -1258,17 +1263,17 @@ kasan_traverse_mappings(pmap_traverse_callback cb, void *ctx)
 {
 	uintptr_t shadow_base = (uintptr_t)SHADOW_FOR_ADDRESS(VM_MIN_KERNEL_AND_KEXT_ADDRESS);
 	uintptr_t shadow_top = (uintptr_t)SHADOW_FOR_ADDRESS(VM_MAX_KERNEL_ADDRESS);
-	shadow_base = vm_map_trunc_page(shadow_base, PAGE_MASK);
-	shadow_top = vm_map_round_page(shadow_top, PAGE_MASK);
+	shadow_base = vm_map_trunc_page(shadow_base, HW_PAGE_MASK);
+	shadow_top = vm_map_round_page(shadow_top, HW_PAGE_MASK);
 
 	uintptr_t start = 0, end = 0;
 
-	for (uintptr_t addr = shadow_base; addr < shadow_top; addr += PAGE_SIZE) {
+	for (uintptr_t addr = shadow_base; addr < shadow_top; addr += HW_PAGE_SIZE) {
 		if (kasan_is_shadow_mapped(addr)) {
 			if (start == 0) {
 				start = addr;
 			}
-			end = addr + PAGE_SIZE;
+			end = addr + HW_PAGE_SIZE;
 		} else if (start && end) {
 			cb(start, end, ctx);
 			start = end = 0;
@@ -1307,6 +1312,7 @@ UNUSED_ABI(__asan_version_mismatch_check_v8, void);
 UNUSED_ABI(__asan_version_mismatch_check_apple_802, void);
 UNUSED_ABI(__asan_version_mismatch_check_apple_900, void);
 UNUSED_ABI(__asan_version_mismatch_check_apple_902, void);
+UNUSED_ABI(__asan_version_mismatch_check_apple_1000, void);
 
 void UNSUPPORTED_API(__asan_init_v5, void);
 void UNSUPPORTED_API(__asan_register_globals, uptr a, uptr b);

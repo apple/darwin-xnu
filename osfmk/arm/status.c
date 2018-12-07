@@ -71,6 +71,47 @@ unsigned int    _MachineStateCount[] = {
 
 extern zone_t ads_zone;
 
+kern_return_t
+machine_thread_state_convert_to_user(
+			 __unused thread_t thread,
+			 __unused thread_flavor_t flavor,
+			 __unused thread_state_t tstate,
+			 __unused mach_msg_type_number_t *count)
+{
+	// No conversion to userspace representation on this platform
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+machine_thread_state_convert_from_user(
+			 __unused thread_t thread,
+			 __unused thread_flavor_t flavor,
+			 __unused thread_state_t tstate,
+			 __unused mach_msg_type_number_t count)
+{
+	// No conversion from userspace representation on this platform
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+machine_thread_siguctx_pointer_convert_to_user(
+			 __unused thread_t thread,
+			 __unused user_addr_t *uctxp)
+{
+	// No conversion to userspace representation on this platform
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+machine_thread_function_pointers_convert_from_user(
+			 __unused thread_t thread,
+			 __unused user_addr_t *fptrs,
+			 __unused uint32_t count)
+{
+	// No conversion from userspace representation on this platform
+	return KERN_SUCCESS;
+}
+
 /*
  * Routine:	machine_thread_get_state
  *
@@ -468,7 +509,8 @@ vfp_state_initialize(struct arm_vfpsaved_state *vfp_state)
 kern_return_t
 machine_thread_dup(
 		   thread_t self,
-		   thread_t target)
+		   thread_t target,
+		   __unused boolean_t is_corpse)
 {
 	struct arm_saved_state *self_saved_state;
 	struct arm_saved_state *target_saved_state;

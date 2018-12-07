@@ -75,6 +75,7 @@ bool OSSerialize::addBinary(const void * bits, size_t size)
 	if (newCapacity >= capacity) 
 	{
 	   newCapacity = (((newCapacity - 1) / capacityIncrement) + 1) * capacityIncrement;
+	   if (newCapacity < capacity) return (false);
 	   if (newCapacity > ensureCapacity(newCapacity)) return (false);
     }
 
@@ -99,6 +100,7 @@ bool OSSerialize::addBinaryObject(const OSMetaClassBase * o, uint32_t key,
 	if (newCapacity >= capacity) 
 	{
 	   newCapacity = (((newCapacity - 1) / capacityIncrement) + 1) * capacityIncrement;
+	   if (newCapacity < capacity) return (false);
 	   if (newCapacity > ensureCapacity(newCapacity)) return (false);
     }
 

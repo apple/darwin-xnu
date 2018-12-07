@@ -75,7 +75,7 @@ static const unsigned long mask80 = 0x8080808080808080;
 
 __attribute__((visibility("hidden")))
 size_t
-strlen(const char *str)
+_libkernel_strlen(const char *str)
 {
 	const char *p;
 	const unsigned long *lp;

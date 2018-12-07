@@ -47,6 +47,7 @@ void kperf_thread_info_log(struct kperf_thread_info *);
 struct kperf_thread_scheduling {
 	uint64_t kpthsc_user_time;
 	uint64_t kpthsc_system_time;
+	uint64_t kpthsc_runnable_time;
 	unsigned int kpthsc_state;
 	uint16_t kpthsc_base_priority;
 	uint16_t kpthsc_sched_priority;

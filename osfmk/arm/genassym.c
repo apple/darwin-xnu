@@ -316,8 +316,10 @@ main(
 
 	DECLARE("CPU_DATA_PADDR",	offsetof(struct cpu_data_entry, cpu_data_paddr));
 
-
 	DECLARE("INTSTACK_SIZE",	INTSTACK_SIZE);
+	DECLARE("FIQSTACK_SIZE",	FIQSTACK_SIZE);
+
+	DECLARE("PAGE_MAX_SIZE",	PAGE_MAX_SIZE);
 
 	/* values from kern/timer.h */
 	DECLARE("TIMER_LOW",

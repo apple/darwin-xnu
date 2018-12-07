@@ -419,8 +419,6 @@ size_t lz4raw_encode_buffer(uint8_t * __restrict dst_buffer, size_t dst_size,
   return (size_t)(dst - dst_buffer); // bytes produced
 }
 
-#define likely(expr)     __builtin_expect((expr) != 0, 1)
-#define unlikely(expr)   __builtin_expect((expr) != 0, 0)
 typedef uint32_t lz4_uint128 __attribute__((ext_vector_type(4))) __attribute__((__aligned__(1)));
 
 int lz4_decode(uint8_t ** dst_ptr,
@@ -446,25 +444,25 @@ int lz4_decode(uint8_t ** dst_ptr,
         uint32_t matchLength = 4 + (cmd & 15); // 4..19
 
         // extra bytes for literalLength
-        if (unlikely(literalLength == 15))
+        if (__improbable(literalLength == 15))
         {
             uint8_t s;
             do {
 #if DEBUG_LZ4_DECODE_ERRORS
-                if (unlikely(src >= src_end)) printf("Truncated SRC literal length\n");
+                if (__improbable(src >= src_end)) printf("Truncated SRC literal length\n");
 #endif
-                if (unlikely(src >= src_end)) goto IN_FAIL;         // unexpected end of input (1 byte needed)
+                if (__improbable(src >= src_end)) goto IN_FAIL;         // unexpected end of input (1 byte needed)
                 s = *src++;
                 literalLength += s;
-            } while (unlikely(s == 255));
+            } while (__improbable(s == 255));
         }
 
         // copy literal
 #if DEBUG_LZ4_DECODE_ERRORS
-        if (unlikely(literalLength > (size_t)(src_end - src))) printf("Truncated SRC literal\n");
+        if (__improbable(literalLength > (size_t)(src_end - src))) printf("Truncated SRC literal\n");
 #endif
-        if (unlikely(literalLength > (size_t)(src_end - src))) goto IN_FAIL;
-        if (unlikely(literalLength > (size_t)(dst_end - dst))) {
+        if (__improbable(literalLength > (size_t)(src_end - src))) goto IN_FAIL;
+        if (__improbable(literalLength > (size_t)(dst_end - dst))) {
             //  literal will take us past the end of the destination buffer,
             //  so we can only copy part of it.
             literalLength = (uint32_t)(dst_end - dst);
@@ -476,11 +474,11 @@ int lz4_decode(uint8_t ** dst_ptr,
         src += literalLength;
         dst += literalLength;
 
-        if (unlikely(src >= src_end)) goto OUT_FULL;                // valid end of stream
+        if (__improbable(src >= src_end)) goto OUT_FULL;                // valid end of stream
 #if DEBUG_LZ4_DECODE_ERRORS
-        if (unlikely(2 > (size_t)(src_end - src))) printf("Truncated SRC distance\n");
+        if (__improbable(2 > (size_t)(src_end - src))) printf("Truncated SRC distance\n");
 #endif
-        if (unlikely(2 > (size_t)(src_end - src))) goto IN_FAIL;    // unexpected end of input (2 bytes needed)
+        if (__improbable(2 > (size_t)(src_end - src))) goto IN_FAIL;    // unexpected end of input (2 bytes needed)
 
 	//DRKTODO: this causes an alignment increase warning (legitimate?)
 	//DRKTODO: cast of char * to uint16_t*
@@ -494,29 +492,29 @@ int lz4_decode(uint8_t ** dst_ptr,
 #if DEBUG_LZ4_DECODE_ERRORS
         if (matchDistance == 0) printf("Invalid match distance D = 0\n");
 #endif
-        if (unlikely(matchDistance == 0)) goto IN_FAIL;                      // 0x0000 invalid
+        if (__improbable(matchDistance == 0)) goto IN_FAIL;                      // 0x0000 invalid
         uint8_t * ref = dst - matchDistance;
 #if DEBUG_LZ4_DECODE_ERRORS
-        if (unlikely(ref < dst_begin)) printf("Invalid reference D=0x%llx dst_begin=%p dst=%p dst_end=%p\n",matchDistance,dst_begin,dst,dst_end);
+        if (__improbable(ref < dst_begin)) printf("Invalid reference D=0x%llx dst_begin=%p dst=%p dst_end=%p\n",matchDistance,dst_begin,dst,dst_end);
 #endif
-        if (unlikely(ref < dst_begin)) goto OUT_FAIL;                        // out of range
+        if (__improbable(ref < dst_begin)) goto OUT_FAIL;                        // out of range
 
         // extra bytes for matchLength
-        if (unlikely(matchLength == 19))
+        if (__improbable(matchLength == 19))
         {
             uint8_t s;
             do {
 #if DEBUG_LZ4_DECODE_ERRORS
-                if (unlikely(src >= src_end)) printf("Truncated SRC match length\n");
+                if (__improbable(src >= src_end)) printf("Truncated SRC match length\n");
 #endif
-                if (unlikely(src >= src_end)) goto IN_FAIL;                      // unexpected end of input (1 byte needed)
+                if (__improbable(src >= src_end)) goto IN_FAIL;                      // unexpected end of input (1 byte needed)
                 s = *src++;
                 matchLength += s;
-            } while (unlikely(s == 255));
+            } while (__improbable(s == 255));
         }
       
         // copy match (may overlap)
-        if (unlikely(matchLength > (size_t)(dst_end - dst))) {
+        if (__improbable(matchLength > (size_t)(dst_end - dst))) {
             //  match will take us past the end of the destination buffer,
             //  so we can only copy part of it.
             matchLength = (uint32_t)(dst_end - dst);

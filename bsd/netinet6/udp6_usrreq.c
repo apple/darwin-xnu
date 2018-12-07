@@ -145,6 +145,10 @@ extern int esp_udp_encap_port;
 #include <netinet/flow_divert.h>
 #endif /* FLOW_DIVERT */
 
+#if CONTENT_FILTER
+#include <net/content_filter.h>
+#endif /* CONTENT_FILTER */
+
 /*
  * UDP protocol inplementation.
  * Per RFC 768, August, 1980.
@@ -206,7 +210,8 @@ udp6_append(struct inpcb *last, struct ip6_hdr *ip6,
 #endif /* CONFIG_MACF_NET */
 	if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
 	    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
-	    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+	    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
+		(last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 		ret = ip6_savecontrol(last, n, &opts);
 		if (ret != 0) {
 			m_freem(n);
@@ -400,7 +405,7 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 			skipit = 0;
 			if (!necp_socket_is_allowed_to_send_recv_v6(in6p,
 			    uh->uh_dport, uh->uh_sport, &ip6->ip6_dst,
-			    &ip6->ip6_src, ifp, NULL, NULL)) {
+			    &ip6->ip6_src, ifp, NULL, NULL, NULL)) {
 				/* do not inject data to pcb */
 				skipit = 1;
 			}
@@ -548,7 +553,7 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	}
 #if NECP
 	if (!necp_socket_is_allowed_to_send_recv_v6(in6p, uh->uh_dport,
-	    uh->uh_sport, &ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL)) {
+	    uh->uh_sport, &ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL, NULL)) {
 		in_pcb_checkstate(in6p, WNT_RELEASE, 0);
 		IF_UDP_STATINC(ifp, badipsec);
 		goto bad;
@@ -571,7 +576,8 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	udp_in6.sin6_port = uh->uh_sport;
 	if ((in6p->in6p_flags & INP_CONTROLOPTS) != 0 ||
 	    (in6p->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
-	    (in6p->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+	    (in6p->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
+		(in6p->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 		ret = ip6_savecontrol(in6p, m, &opts);
 		if (ret != 0) {
 			udp_unlock(in6p->in6p_socket, 1, 0);
@@ -943,12 +949,26 @@ udp6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 #if defined(NECP) && defined(FLOW_DIVERT)
 	int should_use_flow_divert = 0;
 #endif /* defined(NECP) && defined(FLOW_DIVERT) */
+#if CONTENT_FILTER
+	struct m_tag *cfil_tag = NULL;
+	struct sockaddr *cfil_faddr = NULL;
+#endif
 
 	inp = sotoinpcb(so);
 	if (inp == NULL) {
 		error = EINVAL;
 		goto bad;
 	}
+
+#if CONTENT_FILTER
+	//If socket is subject to UDP Content Filter and unconnected, get addr from tag.
+	if (so->so_cfil_db && !addr && IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr)) {
+		cfil_tag = cfil_udp_get_socket_state(m, NULL, NULL, &cfil_faddr);
+		if (cfil_tag) {
+			addr = (struct sockaddr *)cfil_faddr;
+		}
+	}
+#endif
 
 #if defined(NECP) && defined(FLOW_DIVERT)
 	should_use_flow_divert = necp_socket_should_use_flow_divert(inp);
@@ -989,6 +1009,10 @@ udp6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 			pru = ip_protox[IPPROTO_UDP]->pr_usrreqs;
 			error = ((*pru->pru_send)(so, flags, m, addr,
 			    control, p));
+#if CONTENT_FILTER
+			if (cfil_tag)
+				m_tag_free(cfil_tag);
+#endif
 			/* addr will just be freed in sendit(). */
 			return (error);
 		}
@@ -998,11 +1022,21 @@ udp6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 do_flow_divert:
 	if (should_use_flow_divert) {
 		/* Implicit connect */
-		return (flow_divert_implicit_data_out(so, flags, m, addr, control, p));
+		error = flow_divert_implicit_data_out(so, flags, m, addr, control, p);
+#if CONTENT_FILTER
+		if (cfil_tag)
+			m_tag_free(cfil_tag);
+#endif
+		return error;
 	}
 #endif /* defined(NECP) && defined(FLOW_DIVERT) */
 
-	return (udp6_output(inp, m, addr, control, p));
+	error = udp6_output(inp, m, addr, control, p);
+#if CONTENT_FILTER
+	if (cfil_tag)
+		m_tag_free(cfil_tag);
+#endif
+	return error;
 
 bad:
 	VERIFY(error != 0);
@@ -1011,7 +1045,10 @@ bad:
 		m_freem(m);
 	if (control != NULL)
 		m_freem(control);
-
+#if CONTENT_FILTER
+	if (cfil_tag)
+		m_tag_free(cfil_tag);
+#endif
 	return (error);
 }
 

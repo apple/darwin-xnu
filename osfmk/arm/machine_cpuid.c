@@ -147,7 +147,7 @@ machine_do_mvfpid()
 #else
 	cpuid_mvfp_info.neon = 1;
 	cpuid_mvfp_info.neon_hpfp = 1;
-#endif
+#endif /* __arm__ */
 
 }
 

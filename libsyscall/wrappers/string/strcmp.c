@@ -37,7 +37,7 @@
  */
 __attribute__((visibility("hidden")))
 int
-strcmp(const char *s1, const char *s2)
+_libkernel_strcmp(const char *s1, const char *s2)
 {
 	while (*s1 == *s2++)
 		if (*s1++ == '\0')

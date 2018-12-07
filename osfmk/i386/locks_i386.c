@@ -61,6 +61,9 @@
  *	Locking primitives implementation
  */
 
+#define ATOMIC_PRIVATE 1
+#define LOCK_PRIVATE 1
+
 #include <mach_ldebug.h>
 
 #include <kern/locks.h>
@@ -79,9 +82,9 @@
 #include <machine/atomic.h>
 #include <machine/machine_cpu.h>
 #include <i386/mp.h>
-
+#include <machine/atomic.h>
 #include <sys/kdebug.h>
-#include <mach/branch_predicates.h>
+#include <i386/locks_i386_inlines.h>
 
 /*
  * We need only enough declarations from the BSD-side to be able to
@@ -160,14 +163,6 @@ typedef void	*pc_t;
 #endif	/* lint */
 #endif	/* USLOCK_DEBUG */
 
-// Enforce program order of loads and stores.
-#define ordered_load(target) _Generic( (target),\
-		uint32_t* : __c11_atomic_load((_Atomic uint32_t* )(target), memory_order_relaxed), \
-		uintptr_t*: __c11_atomic_load((_Atomic uintptr_t*)(target), memory_order_relaxed) )
-#define ordered_store(target, value) _Generic( (target),\
-		uint32_t* : __c11_atomic_store((_Atomic uint32_t* )(target), (value), memory_order_relaxed), \
-		uintptr_t*: __c11_atomic_store((_Atomic uintptr_t*)(target), (value), memory_order_relaxed) )
-
 /*
  * atomic exchange API is a low level abstraction of the operations
  * to atomically read, modify, and write a pointer.  This abstraction works
@@ -235,7 +230,6 @@ int		usld_lock_common_checks(usimple_lock_t, char *);
 #define	USLDBG(stmt)
 #endif	/* USLOCK_DEBUG */
 
-
 /*
  * Forward definitions
  */
@@ -250,6 +244,14 @@ void lck_rw_clear_promotions_x86(thread_t thread);
 static boolean_t lck_rw_held_read_or_upgrade(lck_rw_t *lock);
 static boolean_t lck_rw_grab_want(lck_rw_t *lock);
 static boolean_t lck_rw_grab_shared(lck_rw_t *lock);
+static void lck_mtx_unlock_wakeup_tail(lck_mtx_t *mutex, int prior_lock_state, boolean_t indirect);
+static void lck_mtx_interlock_lock(lck_mtx_t *mutex, uint32_t *new_state);
+static void lck_mtx_interlock_lock_clear_flags(lck_mtx_t *mutex, uint32_t and_flags, uint32_t *new_state);
+static int lck_mtx_interlock_try_lock(lck_mtx_t *mutex, uint32_t *new_state);
+static int lck_mtx_interlock_try_lock_set_flags(lck_mtx_t *mutex, uint32_t or_flags, uint32_t *new_state);
+static boolean_t lck_mtx_lock_wait_interlock_to_clear(lck_mtx_t *lock, uint32_t *new_state);
+static boolean_t lck_mtx_try_lock_wait_interlock_to_clear(lck_mtx_t *lock, uint32_t *new_state);
+
 
 /*
  *      Routine:        lck_spin_alloc_init
@@ -1030,7 +1032,7 @@ static void
 lck_rw_lock_exclusive_gen(
 	lck_rw_t	*lck)
 {
-	__kdebug_only uintptr_t	trace_lck = VM_KERNEL_UNSLIDE_OR_PERM(lck);
+	__kdebug_only uintptr_t	trace_lck = unslide_for_kdebug(lck);
 	uint64_t	deadline = 0;
 	int		slept = 0;
 	int		gotlock = 0;
@@ -1096,7 +1098,8 @@ lck_rw_lock_exclusive_gen(
 				lck->lck_w_waiting = TRUE;
 
 				thread_set_pending_block_hint(current_thread(), kThreadWaitKernelRWLockWrite);
-				res = assert_wait(RW_LOCK_WRITER_EVENT(lck), THREAD_UNINT);
+				res = assert_wait(RW_LOCK_WRITER_EVENT(lck),
+						THREAD_UNINT | THREAD_WAIT_NOREPORT_USER);
 				lck_interlock_unlock(lck, istate);
 
 				if (res == THREAD_WAITING) {
@@ -1175,7 +1178,8 @@ lck_rw_lock_exclusive_gen(
 				lck->lck_w_waiting = TRUE;
 
 				thread_set_pending_block_hint(current_thread(), kThreadWaitKernelRWLockWrite);
-				res = assert_wait(RW_LOCK_WRITER_EVENT(lck), THREAD_UNINT);
+				res = assert_wait(RW_LOCK_WRITER_EVENT(lck),
+						THREAD_UNINT | THREAD_WAIT_NOREPORT_USER);
 				lck_interlock_unlock(lck, istate);
 
 				if (res == THREAD_WAITING) {
@@ -1325,7 +1329,7 @@ lck_rw_done_gen(
 #endif
 	if ((rwlock_count == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
 		/* sched_flags checked without lock, but will be rechecked while clearing */
-		lck_rw_clear_promotion(thread);
+		lck_rw_clear_promotion(thread, unslide_for_kdebug(lck));
 	}
 
 #if CONFIG_DTRACE
@@ -1440,7 +1444,7 @@ static void
 lck_rw_lock_shared_gen(
 	lck_rw_t	*lck)
 {
-	__kdebug_only uintptr_t	trace_lck = VM_KERNEL_UNSLIDE_OR_PERM(lck);
+	__kdebug_only uintptr_t	trace_lck = unslide_for_kdebug(lck);
 	uint64_t	deadline = 0;
 	int		gotlock = 0;
 	int		slept = 0;
@@ -1506,7 +1510,8 @@ lck_rw_lock_shared_gen(
 				lck->lck_r_waiting = TRUE;
 
 				thread_set_pending_block_hint(current_thread(), kThreadWaitKernelRWLockRead);
-				res = assert_wait(RW_LOCK_READER_EVENT(lck), THREAD_UNINT);
+				res = assert_wait(RW_LOCK_READER_EVENT(lck),
+						THREAD_UNINT | THREAD_WAIT_NOREPORT_USER);
 				lck_interlock_unlock(lck, istate);
 
 				if (res == THREAD_WAITING) {
@@ -1634,7 +1639,7 @@ lck_rw_lock_shared_to_exclusive_failure(
 
 	if ((rwlock_count == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
 		/* sched_flags checked without lock, but will be rechecked while clearing */
-		lck_rw_clear_promotion(thread);
+		lck_rw_clear_promotion(thread, unslide_for_kdebug(lck));
 	}
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_RW_LCK_SH_TO_EX_CODE) | DBG_FUNC_NONE,
@@ -1656,7 +1661,7 @@ static boolean_t
 lck_rw_lock_shared_to_exclusive_success(
 	lck_rw_t	*lck)
 {
-	__kdebug_only uintptr_t	trace_lck = VM_KERNEL_UNSLIDE_OR_PERM(lck);
+	__kdebug_only uintptr_t	trace_lck = unslide_for_kdebug(lck);
 	uint64_t	deadline = 0;
 	int		slept = 0;
 	int		still_shared = 0;
@@ -1720,7 +1725,8 @@ lck_rw_lock_shared_to_exclusive_success(
 				lck->lck_w_waiting = TRUE;
 
 				thread_set_pending_block_hint(current_thread(), kThreadWaitKernelRWLockUpgrade);
-				res = assert_wait(RW_LOCK_WRITER_EVENT(lck), THREAD_UNINT);
+				res = assert_wait(RW_LOCK_WRITER_EVENT(lck),
+						THREAD_UNINT | THREAD_WAIT_NOREPORT_USER);
 				lck_interlock_unlock(lck, istate);
 
 				if (res == THREAD_WAITING) {
@@ -1796,7 +1802,7 @@ lck_rw_lock_exclusive_to_shared_gen(
 	lck_rw_t	*lck,
 	uint32_t	prior_lock_state)
 {
-	__kdebug_only uintptr_t	trace_lck = VM_KERNEL_UNSLIDE_OR_PERM(lck);
+	__kdebug_only uintptr_t	trace_lck = unslide_for_kdebug(lck);
 	lck_rw_t		*fake_lck;
 
 	fake_lck = (lck_rw_t *)&prior_lock_state;
@@ -1956,7 +1962,7 @@ lck_rw_clear_promotions_x86(thread_t thread)
 #else
 	/* Paper over the issue */
 	thread->rwlock_count = 0;
-	lck_rw_clear_promotion(thread);
+	lck_rw_clear_promotion(thread, 0);
 #endif
 }
 
@@ -1987,10 +1993,77 @@ kdp_lck_rw_lock_is_acquired_exclusive(lck_rw_t *lck) {
 	return ((lck->lck_rw_want_upgrade || lck->lck_rw_want_write) && (lck->lck_rw_shared_count == 0)) ? TRUE : FALSE;
 }
 
+/*
+ * Slow path routines for lck_mtx locking and unlocking functions.
+ *
+ * These functions were previously implemented in x86 assembly,
+ * and some optimizations are in place in this c code to obtain a compiled code
+ * as performant and compact as the assembly version.
+ *
+ * To avoid to inline these functions on the fast path, all functions directly called by
+ * the fast paths have the __attribute__((noinline)) specified. Also they are all implemented
+ * in such a way the fast path can tail call into them. In this way the return address
+ * does not need to be pushed on the caller stack and stack optimization can happen on the caller.
+ *
+ * Slow path code is structured in such a way there are no calls to functions that will return
+ * on the context of the caller function, i.e. all functions called are or tail call functions
+ * or inline functions. The number of arguments of the tail call functions are less then six,
+ * so that they can be passed over registers and do not need to be pushed on stack.
+ * This allows the compiler to not create a stack frame for the functions.
+ *
+ * __improbable and __probable are used to compile the slow path code in such a way
+ * the fast path case will be on a sequence of instructions with as less jumps as possible,
+ * to make this case the most optimized even if falling through the slow path.
+ */
+
+/*
+ * Intel lock invariants:
+ *
+ * lck_mtx_waiters: contains the count of threads currently in the mutex waitqueue
+ * lck_mtx_pri: contains the max priority of all waiters during a contention period
+ *      not cleared on last unlock, but stomped over on next first contention
+ * lck_mtx_promoted: set when the current lock owner has been promoted
+ *      cleared when lock owner unlocks, set on acquire or wait.
+ *
+ * The lock owner is promoted to the max priority of all its waiters only if it
+ * was a lower priority when it acquired or was an owner when a waiter waited.
+ * Max priority is capped at MAXPRI_PROMOTE.
+ *
+ * The last waiter will not be promoted as it is woken up, but the last
+ * lock owner may not have been the last thread to have been woken up depending on the
+ * luck of the draw.  Therefore a last-owner may still have the promoted-on-wakeup
+ * flag set.
+ *
+ * TODO: Figure out an algorithm for stopping a lock holder which is already at the right
+ *       priority from dropping priority in the future without having to take thread lock
+ *       on acquire.
+ */
 
 #ifdef	MUTEX_ZONE
 extern zone_t lck_mtx_zone;
 #endif
+
+/*
+ * N.B.: On x86, statistics are currently recorded for all indirect mutexes.
+ * Also, only the acquire attempt count (GRP_MTX_STAT_UTIL) is maintained
+ * as a 64-bit quantity (the new x86 specific statistics are also maintained
+ * as 32-bit quantities).
+ *
+ *
+ * Enable this preprocessor define to record the first miss alone
+ * By default, we count every miss, hence multiple misses may be
+ * recorded for a single lock acquire attempt via lck_mtx_lock
+ */
+#undef LOG_FIRST_MISS_ALONE
+
+/*
+ * This preprocessor define controls whether the R-M-W update of the
+ * per-group statistics elements are atomic (LOCK-prefixed)
+ * Enabled by default.
+ */
+#define ATOMIC_STAT_UPDATES 1
+
+
 /*
  *      Routine:        lck_mtx_alloc_init
  */
@@ -2114,6 +2187,27 @@ lck_mtx_init_ext(
 	lck_grp_lckcnt_incr(grp, LCK_TYPE_MTX);
 }
 
+static void
+lck_mtx_lock_mark_destroyed(
+	lck_mtx_t *mutex,
+	boolean_t indirect)
+{
+	uint32_t state;
+
+	if (indirect) {
+		/* convert to destroyed state */
+		ordered_store_mtx_state_release(mutex, LCK_MTX_TAG_DESTROYED);
+		return;
+	}
+
+	state = ordered_load_mtx_state(mutex);
+	lck_mtx_interlock_lock(mutex, &state);
+
+	ordered_store_mtx_state_release(mutex, LCK_MTX_TAG_DESTROYED);
+
+	enable_preemption();
+}
+
 /*
  *      Routine:        lck_mtx_destroy
  */
@@ -2122,18 +2216,18 @@ lck_mtx_destroy(
 	lck_mtx_t	*lck,
 	lck_grp_t	*grp)
 {
-	boolean_t lck_is_indirect;
+	boolean_t indirect;
 	
 	if (lck->lck_mtx_tag == LCK_MTX_TAG_DESTROYED)
 		return;
 #if MACH_LDEBUG
 	lck_mtx_assert(lck, LCK_MTX_ASSERT_NOTOWNED);
 #endif
-	lck_is_indirect = (lck->lck_mtx_tag == LCK_MTX_TAG_INDIRECT);
+	indirect = (lck->lck_mtx_tag == LCK_MTX_TAG_INDIRECT);
 
-	lck_mtx_lock_mark_destroyed(lck);
+	lck_mtx_lock_mark_destroyed(lck, indirect);
 
-	if (lck_is_indirect)
+	if (indirect)
 		kfree(lck->lck_mtx_ptr, sizeof(lck_mtx_ext_t));
 	lck_grp_lckcnt_decr(grp, LCK_TYPE_MTX);
 	lck_grp_deallocate(grp);
@@ -2141,29 +2235,133 @@ lck_mtx_destroy(
 }
 
 
+#if DEVELOPMENT | DEBUG
+__attribute__((noinline))
+void
+lck_mtx_owner_check_panic(
+	lck_mtx_t       *lock)
+{
+	thread_t owner = (thread_t)lock->lck_mtx_owner;
+	panic("Mutex unlock attempted from non-owner thread. Owner=%p lock=%p", owner, lock);
+}
+#endif
+
+__attribute__((always_inline))
+static boolean_t
+get_indirect_mutex(
+	lck_mtx_t       **lock,
+	uint32_t	*state)
+{
+	*lock = &((*lock)->lck_mtx_ptr->lck_mtx);
+	*state = ordered_load_mtx_state(*lock);
+	return TRUE;
+}
+
+/*
+ * Routine: 	lck_mtx_unlock_slow
+ *
+ * Unlocks a mutex held by current thread.
+ *
+ * It will wake up waiters if necessary and
+ * drop promotions.
+ *
+ * Interlock can be held.
+ */
+__attribute__((noinline))
+void
+lck_mtx_unlock_slow(
+	lck_mtx_t	*lock)
+{
+	thread_t	thread;
+	uint32_t	state, prev;
+	boolean_t	indirect = FALSE;
+
+	state = ordered_load_mtx_state(lock);
+
+	/* Is this an indirect mutex? */
+	if (__improbable(state == LCK_MTX_TAG_INDIRECT)) {
+		indirect = get_indirect_mutex(&lock, &state);
+	}
+
+	thread = current_thread();
+
+#if DEVELOPMENT | DEBUG
+	thread_t owner = (thread_t)lock->lck_mtx_owner;
+	if(__improbable(owner != thread))
+		return lck_mtx_owner_check_panic(lock);
+#endif
+
+	/* check if it is held as a spinlock */
+	if (__improbable((state & LCK_MTX_MLOCKED_MSK) == 0))
+		goto unlock;
+
+	lck_mtx_interlock_lock_clear_flags(lock, LCK_MTX_MLOCKED_MSK, &state);
+
+unlock:
+	/* preemption disabled, interlock held and mutex not held */
+
+	/* clear owner */
+	ordered_store_mtx_owner(lock, 0);
+	/* keep original state in prev for later evaluation */
+	prev = state;
+	/* release interlock, promotion and clear spin flag */
+	state &= (~(LCK_MTX_ILOCKED_MSK | LCK_MTX_SPIN_MSK | LCK_MTX_PROMOTED_MSK));
+	if ((state & LCK_MTX_WAITERS_MSK))
+		state -= LCK_MTX_WAITER;	/* decrement waiter count */
+	ordered_store_mtx_state_release(lock, state);		/* since I own the interlock, I don't need an atomic update */
+
+#if	MACH_LDEBUG
+	/* perform lock statistics after drop to prevent delay */
+	if (thread)
+		thread->mutex_count--;		/* lock statistic */
+#endif	/* MACH_LDEBUG */
+
+	/* check if there are waiters to wake up or priority to drop */
+	if ((prev & (LCK_MTX_PROMOTED_MSK | LCK_MTX_WAITERS_MSK)))
+		return lck_mtx_unlock_wakeup_tail(lock, prev, indirect);
+
+	/* re-enable preemption */
+	lck_mtx_unlock_finish_inline(lock, FALSE);
+
+	return;
+}
+
 #define	LCK_MTX_LCK_WAIT_CODE		0x20
 #define	LCK_MTX_LCK_WAKEUP_CODE		0x21
 #define	LCK_MTX_LCK_SPIN_CODE		0x22
 #define	LCK_MTX_LCK_ACQUIRE_CODE	0x23
 #define LCK_MTX_LCK_DEMOTE_CODE		0x24
 
-
 /*
- * Routine: 	lck_mtx_unlock_wakeup_x86
+ * Routine:    lck_mtx_unlock_wakeup_tail
  *
- * Invoked on unlock when there is 
- * contention (i.e. the assembly routine sees that
- * that mutex->lck_mtx_waiters != 0 or 
- * that mutex->lck_mtx_promoted != 0...
+ * Invoked on unlock when there is
+ * contention, i.e. the assembly routine sees
+ * that mutex->lck_mtx_waiters != 0 or
+ * that mutex->lck_mtx_promoted != 0
  *
  * neither the mutex or interlock is held
+ *
+ * Note that this routine might not be called if there are pending
+ * waiters which have previously been woken up, and they didn't
+ * end up boosting the old owner.
+ *
+ * assembly routine previously did the following to mutex:
+ * (after saving the state in prior_lock_state)
+ *      cleared lck_mtx_promoted
+ *      decremented lck_mtx_waiters if nonzero
+ *
+ * This function needs to be called as a tail call
+ * to optimize the compiled code.
  */
-void
-lck_mtx_unlock_wakeup_x86 (
+__attribute__((noinline))
+static void
+lck_mtx_unlock_wakeup_tail (
 	lck_mtx_t	*mutex,
-	int		prior_lock_state)
+	int		prior_lock_state,
+	boolean_t	indirect)
 {
-	__kdebug_only uintptr_t	trace_lck = VM_KERNEL_UNSLIDE_OR_PERM(mutex);
+	__kdebug_only uintptr_t	trace_lck = unslide_for_kdebug(mutex);
 	lck_mtx_t		fake_lck;
 
 	/*
@@ -2175,56 +2373,50 @@ lck_mtx_unlock_wakeup_x86 (
 	fake_lck.lck_mtx_state = prior_lock_state;
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAKEUP_CODE) | DBG_FUNC_START,
-		     trace_lck, fake_lck.lck_mtx_promoted, fake_lck.lck_mtx_waiters, fake_lck.lck_mtx_pri, 0);
+	             trace_lck, fake_lck.lck_mtx_promoted, fake_lck.lck_mtx_waiters, fake_lck.lck_mtx_pri, 0);
 
 	if (__probable(fake_lck.lck_mtx_waiters)) {
+		kern_return_t did_wake;
+
 		if (fake_lck.lck_mtx_waiters > 1)
-			thread_wakeup_one_with_pri(LCK_MTX_EVENT(mutex), fake_lck.lck_mtx_pri);
+			did_wake = thread_wakeup_one_with_pri(LCK_MTX_EVENT(mutex), fake_lck.lck_mtx_pri);
 		else
-			thread_wakeup_one(LCK_MTX_EVENT(mutex));
+			did_wake = thread_wakeup_one(LCK_MTX_EVENT(mutex));
+		/*
+		 * The waiters count always precisely matches the number of threads on the waitqueue.
+		 * i.e. we should never see ret == KERN_NOT_WAITING.
+		 */
+		assert(did_wake == KERN_SUCCESS);
 	}
 
+	/* When lck_mtx_promoted was set, then I as the owner definitely have a promotion */
 	if (__improbable(fake_lck.lck_mtx_promoted)) {
-		thread_t	thread = current_thread();
+		thread_t thread = current_thread();
 
+		spl_t s = splsched();
+		thread_lock(thread);
 
 		KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_DEMOTE_CODE) | DBG_FUNC_NONE,
-			     thread_tid(thread), thread->promotions, thread->sched_flags & TH_SFLAG_PROMOTED, 0, 0);
+		             thread_tid(thread), thread->promotions, thread->sched_flags & TH_SFLAG_PROMOTED, 0, 0);
+		assert(thread->was_promoted_on_wakeup == 0);
+		assert(thread->promotions > 0);
 
-		if (thread->promotions > 0) {
-			spl_t	s = splsched();
+		assert_promotions_invariant(thread);
 
-			thread_lock(thread);
+		if (--thread->promotions == 0)
+			sched_thread_unpromote(thread, trace_lck);
 
-			if (--thread->promotions == 0 && (thread->sched_flags & TH_SFLAG_PROMOTED)) {
+		assert_promotions_invariant(thread);
 
-				thread->sched_flags &= ~TH_SFLAG_PROMOTED;
-
-				if (thread->sched_flags & TH_SFLAG_RW_PROMOTED) {
-					/* Thread still has a RW lock promotion */
-				} else if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
-					KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_DEMOTE) | DBG_FUNC_NONE,
-							      thread->sched_pri, DEPRESSPRI, 0, trace_lck, 0);
-
-					set_sched_pri(thread, DEPRESSPRI);
-				}
-				else {
-					if (thread->base_pri < thread->sched_pri) {
-						KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_DEMOTE) | DBG_FUNC_NONE,
-								      thread->sched_pri, thread->base_pri, 0, trace_lck, 0);
-
-						thread_recompute_sched_pri(thread, FALSE);
-					}
-				}
-			}
-			thread_unlock(thread);
-			splx(s);
-		}
+		thread_unlock(thread);
+		splx(s);
 	}
-	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAKEUP_CODE) | DBG_FUNC_END,
-		     trace_lck, 0, mutex->lck_mtx_waiters, 0, 0);
-}
 
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAKEUP_CODE) | DBG_FUNC_END,
+                 trace_lck, 0, mutex->lck_mtx_waiters, 0, 0);
+
+	lck_mtx_unlock_finish_inline(mutex, indirect);
+}
 
 /*
  * Routine: 	lck_mtx_lock_acquire_x86
@@ -2236,14 +2428,13 @@ lck_mtx_unlock_wakeup_x86 (
  *
  * mutex is owned...  interlock is held... preemption is disabled
  */
-void
-lck_mtx_lock_acquire_x86(
+__attribute__((always_inline))
+static void
+lck_mtx_lock_acquire_inline(
 	lck_mtx_t	*mutex)
 {
-	__kdebug_only uintptr_t	trace_lck = VM_KERNEL_UNSLIDE_OR_PERM(mutex);
-	thread_t		thread;
+	__kdebug_only uintptr_t	trace_lck = unslide_for_kdebug(mutex);
 	integer_t		priority;
-	spl_t			s;
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_ACQUIRE_CODE) | DBG_FUNC_START,
 		     trace_lck, thread->was_promoted_on_wakeup, mutex->lck_mtx_waiters, mutex->lck_mtx_pri, 0);
@@ -2251,31 +2442,49 @@ lck_mtx_lock_acquire_x86(
 	if (mutex->lck_mtx_waiters)
 		priority = mutex->lck_mtx_pri;
 	else
-		priority = 0;
+		priority = 0; /* not worth resetting lck_mtx_pri here, it will be reset by next waiter */
 
-	thread = (thread_t)mutex->lck_mtx_owner;	/* faster then current_thread() */
+	/* the priority must have been set correctly by wait */
+	assert(priority <= MAXPRI_PROMOTE);
+	assert(priority == 0 || priority >= BASEPRI_DEFAULT);
+
+	/* if the mutex wasn't owned, then the owner wasn't promoted */
+	assert(mutex->lck_mtx_promoted == 0);
+
+	thread_t thread = (thread_t)mutex->lck_mtx_owner;       /* faster than current_thread() */
 
 	if (thread->sched_pri < priority || thread->was_promoted_on_wakeup) {
-
-		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_PROMOTE) | DBG_FUNC_NONE,
-				      thread->sched_pri, priority, thread->was_promoted_on_wakeup, trace_lck, 0);
-
-		s = splsched();
+		spl_t s = splsched();
 		thread_lock(thread);
 
-		if (thread->sched_pri < priority) {
-			/* Do not promote past promotion ceiling */
-			assert(priority <= MAXPRI_PROMOTE);
-			set_sched_pri(thread, priority);
-		}
-		if (mutex->lck_mtx_promoted == 0) {
+		if (thread->was_promoted_on_wakeup)
+			assert(thread->promotions > 0);
+
+		/* Intel only promotes if priority goes up */
+		if (thread->sched_pri < priority && thread->promotion_priority < priority) {
+			/* Remember that I need to drop this promotion on unlock */
 			mutex->lck_mtx_promoted = 1;
-			
-			thread->promotions++;
-			thread->sched_flags |= TH_SFLAG_PROMOTED;
+
+			if (thread->promotions++ == 0) {
+				/* This is the first promotion for the owner */
+				sched_thread_promote_to_pri(thread, priority, trace_lck);
+			} else {
+				/*
+				 * Holder was previously promoted due to a different mutex,
+				 * raise to match this one.
+				 * Or, this thread was promoted on wakeup but someone else
+				 * later contended on mutex at higher priority before we got here
+				 */
+				sched_thread_update_promotion_to_pri(thread, priority, trace_lck);
+			}
 		}
-		thread->was_promoted_on_wakeup = 0;
-		
+
+		if (thread->was_promoted_on_wakeup) {
+			thread->was_promoted_on_wakeup = 0;
+			if (--thread->promotions == 0)
+				sched_thread_unpromote(thread, trace_lck);
+		}
+
 		thread_unlock(thread);
 		splx(s);
 	}
@@ -2283,28 +2492,794 @@ lck_mtx_lock_acquire_x86(
 		     trace_lck, 0, mutex->lck_mtx_waiters, 0, 0);
 }
 
-
-static int
-lck_mtx_interlock_try_lock(lck_mtx_t *mutex, boolean_t *istate)
+void
+lck_mtx_lock_acquire_x86(
+	lck_mtx_t	*mutex)
 {
-	int		retval;
-
-	*istate = ml_set_interrupts_enabled(FALSE);
-	retval = lck_mtx_ilk_try_lock(mutex);
-
-	if (retval == 0)
-		ml_set_interrupts_enabled(*istate);
-
-	return retval;
+	return lck_mtx_lock_acquire_inline(mutex);
 }
 
+/*
+ * Tail call helpers for lock functions that perform
+ * lck_mtx_lock_acquire followed by the caller's finish routine, to optimize
+ * the caller's compiled code.
+ */
+
+__attribute__((noinline))
 static void
-lck_mtx_interlock_unlock(lck_mtx_t *mutex, boolean_t istate)
-{               
+lck_mtx_lock_acquire_tail(
+	lck_mtx_t	*mutex,
+	boolean_t	indirect)
+{
+	lck_mtx_lock_acquire_inline(mutex);
+	lck_mtx_lock_finish_inline(mutex, ordered_load_mtx_state(mutex), indirect);
+}
+
+__attribute__((noinline))
+static boolean_t
+lck_mtx_try_lock_acquire_tail(
+	lck_mtx_t	*mutex)
+{
+	lck_mtx_lock_acquire_inline(mutex);
+	lck_mtx_try_lock_finish_inline(mutex, ordered_load_mtx_state(mutex));
+
+	return TRUE;
+}
+
+__attribute__((noinline))
+static void
+lck_mtx_convert_spin_acquire_tail(
+	lck_mtx_t	*mutex)
+{
+	lck_mtx_lock_acquire_inline(mutex);
+	lck_mtx_convert_spin_finish_inline(mutex, ordered_load_mtx_state(mutex));
+}
+
+boolean_t
+lck_mtx_ilk_unlock(
+	lck_mtx_t       *mutex)
+{
+	lck_mtx_ilk_unlock_inline(mutex, ordered_load_mtx_state(mutex));
+	return TRUE;
+}
+
+static inline void
+lck_mtx_interlock_lock_set_and_clear_flags(
+	lck_mtx_t *mutex,
+	uint32_t xor_flags,
+	uint32_t and_flags,
+	uint32_t *new_state)
+{
+	uint32_t state, prev;
+	state = *new_state;
+
+	for ( ; ; ) {
+		/* have to wait for interlock to clear */
+		while (__improbable(state & (LCK_MTX_ILOCKED_MSK | xor_flags))) {
+			cpu_pause();
+			state = ordered_load_mtx_state(mutex);
+		}
+		prev = state;                                   /* prev contains snapshot for exchange */
+		state |= LCK_MTX_ILOCKED_MSK | xor_flags;       /* pick up interlock */
+		state &= ~and_flags;                    	/* clear flags */
+
+		disable_preemption();
+		if (atomic_compare_exchange32(&mutex->lck_mtx_state, prev, state, memory_order_acquire_smp, FALSE))
+			break;
+		enable_preemption();
+		cpu_pause();
+		state = ordered_load_mtx_state(mutex);
+	}
+	*new_state = state;
+	return;
+}
+
+static inline void
+lck_mtx_interlock_lock_clear_flags(
+	lck_mtx_t *mutex,
+	uint32_t and_flags,
+	uint32_t *new_state)
+{
+	return lck_mtx_interlock_lock_set_and_clear_flags(mutex, 0, and_flags, new_state);
+}
+
+static inline void
+lck_mtx_interlock_lock(
+	lck_mtx_t *mutex,
+	uint32_t *new_state)
+{
+	return lck_mtx_interlock_lock_set_and_clear_flags(mutex, 0, 0, new_state);
+}
+
+static inline int
+lck_mtx_interlock_try_lock_set_flags(
+	lck_mtx_t *mutex,
+	uint32_t or_flags,
+	uint32_t *new_state)
+{
+	uint32_t state, prev;
+	state = *new_state;
+
+	/* have to wait for interlock to clear */
+	if (state & (LCK_MTX_ILOCKED_MSK | or_flags)) {
+		return 0;
+	}
+	prev = state;					/* prev contains snapshot for exchange */
+	state |= LCK_MTX_ILOCKED_MSK | or_flags;	/* pick up interlock */
+	disable_preemption();
+	if (atomic_compare_exchange32(&mutex->lck_mtx_state, prev, state, memory_order_acquire_smp, FALSE)) {
+			*new_state = state;
+			return 1;
+	}
+
+	enable_preemption();
+	return 0;
+}
+
+static inline int
+lck_mtx_interlock_try_lock(
+	lck_mtx_t *mutex,
+	uint32_t *new_state)
+{
+	return lck_mtx_interlock_try_lock_set_flags(mutex, 0, new_state);
+}
+
+static inline int
+lck_mtx_interlock_try_lock_disable_interrupts(
+	lck_mtx_t *mutex,
+	boolean_t *istate)
+{
+	uint32_t	state;
+
+	*istate = ml_set_interrupts_enabled(FALSE);
+	state = ordered_load_mtx_state(mutex);
+
+	if (lck_mtx_interlock_try_lock(mutex, &state)) {
+		return 1;
+	} else {
+		ml_set_interrupts_enabled(*istate);
+		return 0;
+	}
+}
+
+static inline void
+lck_mtx_interlock_unlock_enable_interrupts(
+	lck_mtx_t *mutex,
+	boolean_t istate)
+{
 	lck_mtx_ilk_unlock(mutex);
 	ml_set_interrupts_enabled(istate);
 }
 
+static void __inline__
+lck_mtx_inc_stats(
+	uint64_t* stat)
+{
+#if ATOMIC_STAT_UPDATES
+		os_atomic_inc(stat, relaxed);
+#else
+		*stat = (*stat)++;
+#endif
+}
+
+static void __inline__
+lck_mtx_update_miss(
+	struct _lck_mtx_ext_ *lock,
+	int *first_miss)
+{
+#if LOG_FIRST_MISS_ALONE
+	if ((*first_miss & 1) == 0) {
+#else
+#pragma unused(first_miss)
+#endif
+		uint64_t* stat = &lock->lck_mtx_grp->lck_grp_miss;
+		lck_mtx_inc_stats(stat);
+
+#if LOG_FIRST_MISS_ALONE
+		*first_miss |= 1;
+	}
+#endif
+}
+
+static void __inline__
+lck_mtx_update_direct_wait(
+	struct _lck_mtx_ext_ *lock)
+{
+	uint64_t* stat = &lock->lck_mtx_grp->lck_grp_direct_wait;
+	lck_mtx_inc_stats(stat);
+}
+
+static void __inline__
+lck_mtx_update_wait(
+	struct _lck_mtx_ext_ *lock,
+	int *first_miss)
+{
+#if LOG_FIRST_MISS_ALONE
+	if ((*first_miss & 2) == 0) {
+#else
+#pragma unused(first_miss)
+#endif
+		uint64_t* stat = &lock->lck_mtx_grp->lck_grp_wait;
+		lck_mtx_inc_stats(stat);
+
+#if LOG_FIRST_MISS_ALONE
+		*first_miss |= 2;
+	}
+#endif
+}
+
+static void __inline__
+lck_mtx_update_util(
+	struct _lck_mtx_ext_ *lock)
+{
+	uint64_t* stat = &lock->lck_mtx_grp->lck_grp_util;
+	lck_mtx_inc_stats(stat);
+}
+
+__attribute__((noinline))
+static void
+lck_mtx_lock_contended(
+	lck_mtx_t       *lock,
+	boolean_t indirect,
+	boolean_t *first_miss)
+{
+	lck_mtx_spinwait_ret_type_t ret;
+	uint32_t state;
+	thread_t thread;
+
+try_again:
+
+	if (indirect) {
+		lck_mtx_update_miss((struct _lck_mtx_ext_*)lock, first_miss);
+	}
+
+	ret = lck_mtx_lock_spinwait_x86(lock);
+	state = ordered_load_mtx_state(lock);
+	switch (ret) {
+	case LCK_MTX_SPINWAIT_NO_SPIN:
+		/*
+		 * owner not on core, lck_mtx_lock_spinwait_x86 didn't even
+		 * try to spin.
+		 */
+		if (indirect) {
+			lck_mtx_update_direct_wait((struct _lck_mtx_ext_*)lock);
+		}
+
+		/* just fall through case LCK_MTX_SPINWAIT_SPUN */
+	case LCK_MTX_SPINWAIT_SPUN:
+		/*
+		 * mutex not acquired but lck_mtx_lock_spinwait_x86 tried to spin
+		 * interlock not held
+		 */
+		lck_mtx_interlock_lock(lock, &state);
+		assert(state & LCK_MTX_ILOCKED_MSK);
+
+		if (state & LCK_MTX_MLOCKED_MSK) {
+			if (indirect) {
+				lck_mtx_update_wait((struct _lck_mtx_ext_*)lock, first_miss);
+			}
+			lck_mtx_lock_wait_x86(lock);
+			/*
+			 * interlock is not held here.
+			 */
+			goto try_again;
+		} else {
+
+			/* grab the mutex */
+			state |= LCK_MTX_MLOCKED_MSK;
+			ordered_store_mtx_state_release(lock, state);
+			thread = current_thread();
+			ordered_store_mtx_owner(lock, (uintptr_t)thread);
+#if     MACH_LDEBUG
+			if (thread) {
+				thread->mutex_count++;
+			}
+#endif  /* MACH_LDEBUG */
+		}
+
+		break;
+	case LCK_MTX_SPINWAIT_ACQUIRED:
+		/*
+		 * mutex has been acquired by lck_mtx_lock_spinwait_x86
+		 * interlock is held and preemption disabled
+		 * owner is set and mutex marked as locked
+		 * statistics updated too
+		 */
+		break;
+	default:
+		panic("lck_mtx_lock_spinwait_x86 returned %d for mutex %p\n", ret, lock);
+	}
+
+	/*
+	 * interlock is already acquired here
+	 */
+
+	/* mutex has been acquired */
+	thread = (thread_t)lock->lck_mtx_owner;
+	if (state & LCK_MTX_WAITERS_MSK || thread->was_promoted_on_wakeup) {
+		return lck_mtx_lock_acquire_tail(lock, indirect);
+	}
+
+	/* release the interlock */
+	lck_mtx_lock_finish_inline(lock, ordered_load_mtx_state(lock), indirect);
+}
+
+/*
+ * Helper noinline functions for calling
+ * panic to optimize compiled code.
+ */
+
+__attribute__((noinline))
+static void
+lck_mtx_destroyed(
+	lck_mtx_t       *lock)
+{
+	panic("trying to interlock destroyed mutex (%p)", lock);
+}
+
+__attribute__((noinline))
+static boolean_t
+lck_mtx_try_destroyed(
+	lck_mtx_t       *lock)
+{
+	panic("trying to interlock destroyed mutex (%p)", lock);
+	return FALSE;
+}
+
+__attribute__((always_inline))
+static boolean_t
+lck_mtx_lock_wait_interlock_to_clear(
+	lck_mtx_t       *lock,
+	uint32_t*        new_state)
+{
+	uint32_t state;
+
+	for ( ; ; ) {
+		cpu_pause();
+		state = ordered_load_mtx_state(lock);
+		if (!(state & (LCK_MTX_ILOCKED_MSK | LCK_MTX_MLOCKED_MSK))) {
+			*new_state = state;
+			return TRUE;
+		}
+		if (state & LCK_MTX_MLOCKED_MSK) {
+			/* if it is held as mutex, just fail */
+			return FALSE;
+		}
+	}
+}
+
+__attribute__((always_inline))
+static boolean_t
+lck_mtx_try_lock_wait_interlock_to_clear(
+	lck_mtx_t       *lock,
+	uint32_t*        new_state)
+{
+	uint32_t state;
+
+	for ( ; ; ) {
+		cpu_pause();
+		state = ordered_load_mtx_state(lock);
+		if (state & (LCK_MTX_MLOCKED_MSK | LCK_MTX_SPIN_MSK)) {
+			/* if it is held as mutex or spin, just fail */
+			return FALSE;
+		}
+		if (!(state & LCK_MTX_ILOCKED_MSK)) {
+			*new_state = state;
+			return TRUE;
+		}
+	}
+}
+
+/*
+ * Routine:	lck_mtx_lock_slow
+ *
+ * Locks a mutex for current thread.
+ * If the lock is contended this function might
+ * sleep.
+ *
+ * Called with interlock not held.
+ */
+__attribute__((noinline))
+void
+lck_mtx_lock_slow(
+	lck_mtx_t       *lock)
+{
+	boolean_t	indirect = FALSE;
+	uint32_t	state;
+	int		first_miss = 0;
+
+	state = ordered_load_mtx_state(lock);
+
+	/* is the interlock or mutex held */
+	if (__improbable(state & ((LCK_MTX_ILOCKED_MSK | LCK_MTX_MLOCKED_MSK)))) {
+		/*
+		 * Note: both LCK_MTX_TAG_DESTROYED and LCK_MTX_TAG_INDIRECT
+		 * have LCK_MTX_ILOCKED_MSK and LCK_MTX_MLOCKED_MSK
+		 * set in state (state == lck_mtx_tag)
+		 */
+
+
+		/* is the mutex already held and not indirect */
+		if (__improbable(!(state & LCK_MTX_ILOCKED_MSK))){
+			/* no, must have been the mutex */
+			return lck_mtx_lock_contended(lock, indirect, &first_miss);
+		}
+
+		/* check to see if it is marked destroyed */
+		if (__improbable(state == LCK_MTX_TAG_DESTROYED)) {
+			return lck_mtx_destroyed(lock);
+		}
+
+		/* Is this an indirect mutex? */
+		if (__improbable(state == LCK_MTX_TAG_INDIRECT)) {
+			indirect = get_indirect_mutex(&lock, &state);
+
+			first_miss = 0;
+			lck_mtx_update_util((struct _lck_mtx_ext_*)lock);
+
+			if (state & LCK_MTX_SPIN_MSK) {
+				 /* M_SPIN_MSK was set, so M_ILOCKED_MSK must also be present */
+				assert(state & LCK_MTX_ILOCKED_MSK);
+				lck_mtx_update_miss((struct _lck_mtx_ext_*)lock, &first_miss);
+			}
+		}
+
+		if (!lck_mtx_lock_wait_interlock_to_clear(lock, &state)) {
+			return lck_mtx_lock_contended(lock, indirect, &first_miss);
+		}
+	}
+
+	/* no - can't be INDIRECT, DESTROYED or locked */
+	while (__improbable(!lck_mtx_interlock_try_lock_set_flags(lock, LCK_MTX_MLOCKED_MSK, &state))) {
+		if (!lck_mtx_lock_wait_interlock_to_clear(lock, &state)) {
+			return lck_mtx_lock_contended(lock, indirect, &first_miss);
+		}
+	}
+
+	/* lock and interlock acquired */
+
+	thread_t thread = current_thread();
+	/* record owner of mutex */
+	ordered_store_mtx_owner(lock, (uintptr_t)thread);
+
+#if MACH_LDEBUG
+	if (thread) {
+		thread->mutex_count++;		/* lock statistic */
+	}
+#endif
+	/*
+	 * Check if there are waiters to
+	 * inherit their priority.
+	 */
+	if (__improbable(state & LCK_MTX_WAITERS_MSK)) {
+		return lck_mtx_lock_acquire_tail(lock, indirect);
+	}
+
+	/* release the interlock */
+	lck_mtx_lock_finish_inline(lock, ordered_load_mtx_state(lock), indirect);
+
+	return;
+}
+
+__attribute__((noinline))
+boolean_t
+lck_mtx_try_lock_slow(
+	lck_mtx_t       *lock)
+{
+	boolean_t       indirect = FALSE;
+	uint32_t        state;
+	int             first_miss = 0;
+
+	state = ordered_load_mtx_state(lock);
+
+	/* is the interlock or mutex held */
+	if (__improbable(state & ((LCK_MTX_ILOCKED_MSK | LCK_MTX_MLOCKED_MSK)))) {
+		/*
+		 * Note: both LCK_MTX_TAG_DESTROYED and LCK_MTX_TAG_INDIRECT
+		 * have LCK_MTX_ILOCKED_MSK and LCK_MTX_MLOCKED_MSK
+		 * set in state (state == lck_mtx_tag)
+		 */
+
+		/* is the mutex already held and not indirect */
+		if (__improbable(!(state & LCK_MTX_ILOCKED_MSK))){
+			return FALSE;
+		}
+
+		/* check to see if it is marked destroyed */
+		if (__improbable(state == LCK_MTX_TAG_DESTROYED)) {
+			return lck_mtx_try_destroyed(lock);
+		}
+
+		/* Is this an indirect mutex? */
+		if (__improbable(state == LCK_MTX_TAG_INDIRECT)) {
+			indirect = get_indirect_mutex(&lock, &state);
+
+			first_miss = 0;
+			lck_mtx_update_util((struct _lck_mtx_ext_*)lock);
+		}
+
+		if (!lck_mtx_try_lock_wait_interlock_to_clear(lock, &state)) {
+			if (indirect)
+				lck_mtx_update_miss((struct _lck_mtx_ext_*)lock, &first_miss);
+			return FALSE;
+		}
+	}
+
+	/* no - can't be INDIRECT, DESTROYED or locked */
+	while (__improbable(!lck_mtx_interlock_try_lock_set_flags(lock, LCK_MTX_MLOCKED_MSK, &state))) {
+		if (!lck_mtx_try_lock_wait_interlock_to_clear(lock, &state)) {
+			if (indirect)
+				lck_mtx_update_miss((struct _lck_mtx_ext_*)lock, &first_miss);
+			return FALSE;
+		}
+	}
+
+	/* lock and interlock acquired */
+
+	thread_t thread = current_thread();
+	/* record owner of mutex */
+	ordered_store_mtx_owner(lock, (uintptr_t)thread);
+
+#if MACH_LDEBUG
+	if (thread) {
+		thread->mutex_count++;		/* lock statistic */
+	}
+#endif
+	/*
+	 * Check if there are waiters to
+	 * inherit their priority.
+	 */
+	if (__improbable(state & LCK_MTX_WAITERS_MSK)) {
+		return lck_mtx_try_lock_acquire_tail(lock);
+	}
+
+	/* release the interlock */
+	lck_mtx_try_lock_finish_inline(lock, ordered_load_mtx_state(lock));
+
+	return TRUE;
+
+}
+
+__attribute__((noinline))
+void
+lck_mtx_lock_spin_slow(
+	lck_mtx_t	*lock)
+{
+	boolean_t       indirect = FALSE;
+	uint32_t        state;
+	int             first_miss = 0;
+
+	state = ordered_load_mtx_state(lock);
+
+	/* is the interlock or mutex held */
+	if (__improbable(state & ((LCK_MTX_ILOCKED_MSK | LCK_MTX_MLOCKED_MSK)))) {
+		/*
+		 * Note: both LCK_MTX_TAG_DESTROYED and LCK_MTX_TAG_INDIRECT
+		 * have LCK_MTX_ILOCKED_MSK and LCK_MTX_MLOCKED_MSK
+		 * set in state (state == lck_mtx_tag)
+		 */
+
+
+		/* is the mutex already held and not indirect */
+		if (__improbable(!(state & LCK_MTX_ILOCKED_MSK))){
+			/* no, must have been the mutex */
+			return lck_mtx_lock_contended(lock, indirect, &first_miss);
+		}
+
+		/* check to see if it is marked destroyed */
+		if (__improbable(state == LCK_MTX_TAG_DESTROYED)) {
+			return lck_mtx_destroyed(lock);
+		}
+
+		/* Is this an indirect mutex? */
+		if (__improbable(state == LCK_MTX_TAG_INDIRECT)) {
+			indirect = get_indirect_mutex(&lock, &state);
+
+			first_miss = 0;
+			lck_mtx_update_util((struct _lck_mtx_ext_*)lock);
+
+			if (state & LCK_MTX_SPIN_MSK) {
+				 /* M_SPIN_MSK was set, so M_ILOCKED_MSK must also be present */
+				assert(state & LCK_MTX_ILOCKED_MSK);
+				lck_mtx_update_miss((struct _lck_mtx_ext_*)lock, &first_miss);
+			}
+		}
+
+		if (!lck_mtx_lock_wait_interlock_to_clear(lock, &state)) {
+			return lck_mtx_lock_contended(lock, indirect, &first_miss);
+		}
+	}
+
+	/* no - can't be INDIRECT, DESTROYED or locked */
+	while (__improbable(!lck_mtx_interlock_try_lock_set_flags(lock, LCK_MTX_SPIN_MSK, &state) )) {
+		if (!lck_mtx_lock_wait_interlock_to_clear(lock, &state)) {
+			return lck_mtx_lock_contended(lock, indirect, &first_miss);
+		}
+	}
+
+	/* lock as spinlock and interlock acquired */
+
+	thread_t thread = current_thread();
+	/* record owner of mutex */
+	ordered_store_mtx_owner(lock, (uintptr_t)thread);
+
+#if MACH_LDEBUG
+	if (thread) {
+		thread->mutex_count++;          /* lock statistic */
+	}
+#endif
+
+#if	CONFIG_DTRACE
+	LOCKSTAT_RECORD(LS_LCK_MTX_LOCK_SPIN_ACQUIRE, lock, 0);
+#endif
+	/* return with the interlock held and preemption disabled */
+	return;
+}
+
+__attribute__((noinline))
+boolean_t
+lck_mtx_try_lock_spin_slow(
+	lck_mtx_t       *lock)
+{
+	boolean_t       indirect = FALSE;
+	uint32_t        state;
+	int             first_miss = 0;
+
+	state = ordered_load_mtx_state(lock);
+
+	/* is the interlock or mutex held */
+	if (__improbable(state & ((LCK_MTX_ILOCKED_MSK | LCK_MTX_MLOCKED_MSK)))) {
+		/*
+		 * Note: both LCK_MTX_TAG_DESTROYED and LCK_MTX_TAG_INDIRECT
+		 * have LCK_MTX_ILOCKED_MSK and LCK_MTX_MLOCKED_MSK
+		 * set in state (state == lck_mtx_tag)
+		 */
+
+		/* is the mutex already held and not indirect */
+		if (__improbable(!(state & LCK_MTX_ILOCKED_MSK))){
+			return FALSE;
+		}
+
+		/* check to see if it is marked destroyed */
+		if (__improbable(state == LCK_MTX_TAG_DESTROYED)) {
+			return lck_mtx_try_destroyed(lock);
+		}
+
+		/* Is this an indirect mutex? */
+		if (__improbable(state == LCK_MTX_TAG_INDIRECT)) {
+			indirect = get_indirect_mutex(&lock, &state);
+
+			first_miss = 0;
+			lck_mtx_update_util((struct _lck_mtx_ext_*)lock);
+		}
+
+		if (!lck_mtx_try_lock_wait_interlock_to_clear(lock, &state)) {
+			if (indirect)
+				lck_mtx_update_miss((struct _lck_mtx_ext_*)lock, &first_miss);
+			return FALSE;
+		}
+	}
+
+	/* no - can't be INDIRECT, DESTROYED or locked */
+	while (__improbable(!lck_mtx_interlock_try_lock_set_flags(lock, LCK_MTX_SPIN_MSK, &state))) {
+		if (!lck_mtx_try_lock_wait_interlock_to_clear(lock, &state)) {
+			if (indirect)
+				lck_mtx_update_miss((struct _lck_mtx_ext_*)lock, &first_miss);
+			return FALSE;
+		}
+	}
+
+	/* lock and interlock acquired */
+
+	thread_t thread = current_thread();
+	/* record owner of mutex */
+	ordered_store_mtx_owner(lock, (uintptr_t)thread);
+
+#if MACH_LDEBUG
+	if (thread) {
+		thread->mutex_count++;		/* lock statistic */
+	}
+#endif
+
+#if     CONFIG_DTRACE
+	LOCKSTAT_RECORD(LS_LCK_MTX_TRY_SPIN_LOCK_ACQUIRE, lock, 0);
+#endif
+	return TRUE;
+
+}
+
+__attribute__((noinline))
+void
+lck_mtx_convert_spin(
+	lck_mtx_t 	*lock)
+{
+	uint32_t state;
+
+	state = ordered_load_mtx_state(lock);
+
+	/* Is this an indirect mutex? */
+	if (__improbable(state == LCK_MTX_TAG_INDIRECT)) {
+		/* If so, take indirection */
+		get_indirect_mutex(&lock, &state);
+	}
+
+	assertf((thread_t)lock->lck_mtx_owner == current_thread(), "lock %p not owned by thread %p (current owner %p)", lock, current_thread(), (thread_t)lock->lck_mtx_owner );
+
+	if (__improbable(state & LCK_MTX_MLOCKED_MSK)) {
+		/* already owned as a mutex, just return */
+		return;
+	}
+
+	assert(get_preemption_level() > 0);
+	assert(state & LCK_MTX_ILOCKED_MSK);
+	assert(state & LCK_MTX_SPIN_MSK);
+
+	/*
+	 * Check if there are waiters to
+	 * inherit their priority.
+	 */
+	if (__improbable(state & LCK_MTX_WAITERS_MSK)) {
+		return lck_mtx_convert_spin_acquire_tail(lock);
+	}
+
+	lck_mtx_convert_spin_finish_inline(lock, ordered_load_mtx_state(lock));
+
+	return;
+}
+
+static inline boolean_t
+lck_mtx_lock_grab_mutex(
+	lck_mtx_t 	*lock)
+{
+	uint32_t state;
+
+	state = ordered_load_mtx_state(lock);
+
+	if (!lck_mtx_interlock_try_lock_set_flags(lock, LCK_MTX_MLOCKED_MSK, &state)) {
+		return FALSE;
+	}
+
+	/* lock and interlock acquired */
+
+	thread_t thread = current_thread();
+	/* record owner of mutex */
+	ordered_store_mtx_owner(lock, (uintptr_t)thread);
+
+#if MACH_LDEBUG
+	if (thread) {
+		thread->mutex_count++;		/* lock statistic */
+	}
+#endif
+	return TRUE;
+}
+
+__attribute__((noinline))
+void
+lck_mtx_assert(
+	lck_mtx_t 	*lock,
+	unsigned int 	type)
+{
+	thread_t thread, owner;
+	uint32_t state;
+
+	thread = current_thread();
+	state = ordered_load_mtx_state(lock);
+
+	if (state == LCK_MTX_TAG_INDIRECT) {
+		get_indirect_mutex(&lock, &state);
+	}
+
+	owner = (thread_t)lock->lck_mtx_owner;
+
+	if (type == LCK_MTX_ASSERT_OWNED) {
+		if (owner != thread || !(state & (LCK_MTX_ILOCKED_MSK | LCK_MTX_MLOCKED_MSK)))
+			panic("mutex (%p) not owned\n", lock);
+	} else {
+		assert (type == LCK_MTX_ASSERT_NOTOWNED);
+		if (owner == thread)
+			panic("mutex (%p) owned\n", lock);
+	}
+}
 
 /*
  * Routine: 	lck_mtx_lock_spinwait_x86
@@ -2314,20 +3289,21 @@ lck_mtx_interlock_unlock(lck_mtx_t *mutex, boolean_t istate)
  * time waiting for the lock to be released.
  *
  * Called with the interlock unlocked.
- * returns 0 if mutex acquired
- * returns 1 if we spun
- * returns 2 if we didn't spin due to the holder not running
+ * returns LCK_MTX_SPINWAIT_ACQUIRED if mutex acquired
+ * returns LCK_MTX_SPINWAIT_SPUN if we spun
+ * returns LCK_MTX_SPINWAIT_NO_SPIN if we didn't spin due to the holder not running
  */
-int
+__attribute__((noinline))
+lck_mtx_spinwait_ret_type_t
 lck_mtx_lock_spinwait_x86(
 	lck_mtx_t	*mutex)
 {
-	__kdebug_only uintptr_t	trace_lck = VM_KERNEL_UNSLIDE_OR_PERM(mutex);
+	__kdebug_only uintptr_t	trace_lck = unslide_for_kdebug(mutex);
 	thread_t	holder;
 	uint64_t	overall_deadline;
 	uint64_t	check_owner_deadline;
 	uint64_t	cur_time;
-	int		retval = 1;
+	lck_mtx_spinwait_ret_type_t		retval = LCK_MTX_SPINWAIT_SPUN;
 	int		loopcount = 0;
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_SPIN_CODE) | DBG_FUNC_START,
@@ -2347,7 +3323,7 @@ lck_mtx_lock_spinwait_x86(
 	 */
 	do {
 		if (__probable(lck_mtx_lock_grab_mutex(mutex))) {
-			retval = 0;
+			retval = LCK_MTX_SPINWAIT_ACQUIRED;
 			break;
 		}
 		cur_time = mach_absolute_time();
@@ -2358,21 +3334,33 @@ lck_mtx_lock_spinwait_x86(
 		if (cur_time >= check_owner_deadline && mutex->lck_mtx_owner) {
 			boolean_t	istate;
 
-			if (lck_mtx_interlock_try_lock(mutex, &istate)) {
+			/*
+			 * We will repeatedly peek at the state of the lock while spinning,
+			 * and we will acquire the interlock to do so.
+			 * The thread that will unlock the mutex will also need to acquire
+			 * the interlock, and we want to avoid to slow it down.
+			 * To avoid to get an interrupt while holding the interlock
+			 * and increase the time we are holding it, we
+			 * will try to acquire the interlock with interrupts disabled.
+			 * This is safe because it is a "try_lock", if we can't acquire
+			 * the interlock we re-enable the interrupts and fail, so it is
+			 * ok to call it even if the interlock was already held.
+			*/
+			if (lck_mtx_interlock_try_lock_disable_interrupts(mutex, &istate)) {
 
 				if ((holder = (thread_t) mutex->lck_mtx_owner) != NULL) {
 
 					if ( !(holder->machine.specFlags & OnProc) ||
 					     (holder->state & TH_IDLE)) {
 
-						lck_mtx_interlock_unlock(mutex, istate);
+						lck_mtx_interlock_unlock_enable_interrupts(mutex, istate);
 
 						if (loopcount == 0)
-							retval = 2;
+							retval = LCK_MTX_SPINWAIT_NO_SPIN;
 						break;
 					}
 				}
-				lck_mtx_interlock_unlock(mutex, istate);
+				lck_mtx_interlock_unlock_enable_interrupts(mutex, istate);
 
 				check_owner_deadline = cur_time + (MutexSpin / 4);
 			}
@@ -2418,79 +3406,119 @@ lck_mtx_lock_spinwait_x86(
  * Invoked in order to wait on contention.
  *
  * Called with the interlock locked and
- * preemption disabled...  
+ * preemption disabled...
  * returns it unlocked and with preemption enabled
+ *
+ * lck_mtx_waiters is 1:1 with a wakeup needing to occur.
+ *      A runnable waiter can exist between wait and acquire
+ *      without a waiters count being set.
+ *      This allows us to never make a spurious wakeup call.
+ *
+ * Priority:
+ *      This avoids taking the thread lock if the owning thread is the same priority.
+ *      This optimizes the case of same-priority threads contending on a lock.
+ *      However, that allows the owning thread to drop in priority while holding the lock,
+ *      because there is no state that the priority change can notice that
+ *      says that the targeted thread holds a contended mutex.
+ *
+ *      One possible solution: priority changes could look for some atomic tag
+ *      on the thread saying 'holding contended lock', and then set up a promotion.
+ *      Needs a story for dropping that promotion - the last contended unlock
+ *      has to notice that this has happened.
  */
+__attribute__((noinline))
 void
 lck_mtx_lock_wait_x86 (
 	lck_mtx_t	*mutex)
 {
-	__kdebug_only uintptr_t	trace_lck = VM_KERNEL_UNSLIDE_OR_PERM(mutex);
-	thread_t	self = current_thread();
-	thread_t	holder;
-	integer_t	priority;
-	spl_t		s;
 #if	CONFIG_DTRACE
-	uint64_t	sleep_start = 0;
+	uint64_t sleep_start = 0;
 
 	if (lockstat_probemap[LS_LCK_MTX_LOCK_BLOCK] || lockstat_probemap[LS_LCK_MTX_EXT_LOCK_BLOCK]) {
 		sleep_start = mach_absolute_time();
 	}
 #endif
+	thread_t self = current_thread();
+	assert(self->waiting_for_mutex == NULL);
+
+	self->waiting_for_mutex = mutex;
+
+	__kdebug_only uintptr_t trace_lck = unslide_for_kdebug(mutex);
+
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_START,
-		     trace_lck, VM_KERNEL_UNSLIDE_OR_PERM(mutex->lck_mtx_owner), mutex->lck_mtx_waiters, mutex->lck_mtx_pri, 0);
+	             trace_lck, VM_KERNEL_UNSLIDE_OR_PERM(mutex->lck_mtx_owner),
+	             mutex->lck_mtx_waiters, mutex->lck_mtx_pri, 0);
 
-	priority = self->sched_pri;
+	integer_t waiter_pri = self->sched_pri;
+	waiter_pri = MAX(waiter_pri, self->base_pri);
+	waiter_pri = MAX(waiter_pri, BASEPRI_DEFAULT);
+	waiter_pri = MIN(waiter_pri, MAXPRI_PROMOTE);
 
-	if (priority < self->base_pri)
-		priority = self->base_pri;
-	if (priority < BASEPRI_DEFAULT)
-		priority = BASEPRI_DEFAULT;
+	assert(mutex->lck_mtx_pri <= MAXPRI_PROMOTE);
 
-	/* Do not promote past promotion ceiling */
-	priority = MIN(priority, MAXPRI_PROMOTE);
+	/* Re-initialize lck_mtx_pri if this is the first contention */
+	if (mutex->lck_mtx_waiters == 0 || mutex->lck_mtx_pri <= waiter_pri)
+		mutex->lck_mtx_pri = waiter_pri;
 
-	if (mutex->lck_mtx_waiters == 0 || priority > mutex->lck_mtx_pri)
-		mutex->lck_mtx_pri = priority;
-	mutex->lck_mtx_waiters++;
+	thread_t holder = (thread_t)mutex->lck_mtx_owner;
 
-	if ( (holder = (thread_t)mutex->lck_mtx_owner) &&
-	     holder->sched_pri < mutex->lck_mtx_pri ) {
-		s = splsched();
+	assert(holder != NULL);
+
+	/*
+	 * Intel only causes a promotion when priority needs to change,
+	 * reducing thread lock holds but leaving us vulnerable to the holder
+	 * dropping priority.
+	 */
+	if (holder->sched_pri < mutex->lck_mtx_pri) {
+		int promote_pri = mutex->lck_mtx_pri;
+
+		spl_t s = splsched();
 		thread_lock(holder);
 
-		/* holder priority may have been bumped by another thread
-		 * before thread_lock was taken
-		 */
-		if (holder->sched_pri < mutex->lck_mtx_pri) {
-			KERNEL_DEBUG_CONSTANT(
-				MACHDBG_CODE(DBG_MACH_SCHED, MACH_PROMOTE) | DBG_FUNC_NONE,
-				holder->sched_pri, priority, thread_tid(holder), trace_lck, 0);
-			/* Assert that we're not altering the priority of a
-			 * thread above the MAXPRI_PROMOTE band
-			 */
-			assert(holder->sched_pri < MAXPRI_PROMOTE);
-			set_sched_pri(holder, priority);
-			
+		/* Check again in case sched_pri changed */
+		if (holder->sched_pri < promote_pri && holder->promotion_priority < promote_pri) {
 			if (mutex->lck_mtx_promoted == 0) {
-				holder->promotions++;
-				holder->sched_flags |= TH_SFLAG_PROMOTED;
-				
+				/* This is the first promotion for this mutex */
 				mutex->lck_mtx_promoted = 1;
+
+				if (holder->promotions++ == 0) {
+					/* This is the first promotion for holder */
+					sched_thread_promote_to_pri(holder, promote_pri, trace_lck);
+				} else {
+					/*
+					 * Holder was previously promoted due to a different mutex,
+					 * check if it needs to raise to match this one
+					 */
+					sched_thread_update_promotion_to_pri(holder, promote_pri,
+					                                     trace_lck);
+				}
+			} else {
+				/*
+				 * Holder was previously promoted due to this mutex,
+				 * check if the pri needs to go up
+				 */
+				sched_thread_update_promotion_to_pri(holder, promote_pri, trace_lck);
 			}
 		}
+
 		thread_unlock(holder);
 		splx(s);
 	}
+
+	mutex->lck_mtx_waiters++;
+
 	thread_set_pending_block_hint(self, kThreadWaitKernelMutex);
-	assert_wait(LCK_MTX_EVENT(mutex), THREAD_UNINT);
+	assert_wait(LCK_MTX_EVENT(mutex), THREAD_UNINT | THREAD_WAIT_NOREPORT_USER);
 
 	lck_mtx_ilk_unlock(mutex);
 
 	thread_block(THREAD_CONTINUE_NULL);
 
+	self->waiting_for_mutex = NULL;
+
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_END,
-		     trace_lck, VM_KERNEL_UNSLIDE_OR_PERM(mutex->lck_mtx_owner), mutex->lck_mtx_waiters, mutex->lck_mtx_pri, 0);
+	             trace_lck, VM_KERNEL_UNSLIDE_OR_PERM(mutex->lck_mtx_owner),
+	             mutex->lck_mtx_waiters, mutex->lck_mtx_pri, 0);
 
 #if	CONFIG_DTRACE
 	/*

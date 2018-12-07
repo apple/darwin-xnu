@@ -258,7 +258,7 @@ coredump_save_summary(uint64_t core_segment_count, uint64_t core_byte_count,
 		/* Send the core_header to the output procedure */
 		ret =  kdp_core_output(core_context->core_outvars, sizeof(core_header), (caddr_t)&core_header);
 		if (ret != KERN_SUCCESS) {
-			kern_coredump_log(context, "coredump_save_summary() : failed to write mach header : kdp_core_output(0x%p, %lu, 0x%p) returned error 0x%x\n",
+			kern_coredump_log(context, "coredump_save_summary() : failed to write mach header : kdp_core_output(%p, %lu, %p) returned error 0x%x\n",
 					core_context->core_outvars, sizeof(core_header), &core_header, ret);
 			return ret;
 		}
@@ -280,7 +280,7 @@ coredump_save_summary(uint64_t core_segment_count, uint64_t core_byte_count,
 		/* Send the core_header to the output procedure */
 		ret =  kdp_core_output(core_context->core_outvars, sizeof(core_header), (caddr_t)&core_header);
 		if (ret != KERN_SUCCESS) {
-			kern_coredump_log(context, "coredump_save_summary() : failed to write mach header : kdp_core_output(0x%p, %lu, 0x%p) returned error 0x%x\n",
+			kern_coredump_log(context, "coredump_save_summary() : failed to write mach header : kdp_core_output(%p, %lu, %p) returned error 0x%x\n",
 					core_context->core_outvars, sizeof(core_header), &core_header, ret);
 			return ret;
 		}
@@ -303,13 +303,13 @@ coredump_save_segment_descriptions(uint64_t seg_start, uint64_t seg_end,
 	uint64_t size = seg_end - seg_start;
 
 	if (seg_end <= seg_start) {
-		kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, 0x%p) : called with invalid addresses : start 0x%llx >= end 0x%llx\n",
+		kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : called with invalid addresses : start 0x%llx >= end 0x%llx\n",
 				seg_start, seg_end, context, seg_start, seg_end);
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	if (core_context->core_segments_remaining == 0) {
-		kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, 0x%p) : coredump_save_segment_descriptions() called too many times, %llu segment descriptions already recorded\n",
+		kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : coredump_save_segment_descriptions() called too many times, %llu segment descriptions already recorded\n",
 				seg_start, seg_end, context, core_context->core_segment_count);
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -320,7 +320,7 @@ coredump_save_segment_descriptions(uint64_t seg_start, uint64_t seg_end,
 		struct segment_command_64 seg_command = { };
 
 		if (core_context->core_cur_hoffset + sizeof(seg_command) > core_context->core_header_size) {
-			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, 0x%p) : ran out of space to save commands with %llu of %llu remaining\n",
+			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : ran out of space to save commands with %llu of %llu remaining\n",
 				seg_start, seg_end, context, core_context->core_segments_remaining, core_context->core_segment_count);
 			return KERN_NO_SPACE;
 		}
@@ -338,7 +338,7 @@ coredump_save_segment_descriptions(uint64_t seg_start, uint64_t seg_end,
 		/* Flush new command to output */
 		ret = kdp_core_output(core_context->core_outvars, sizeof(seg_command), (caddr_t)&seg_command);
 		if (ret != KERN_SUCCESS) {
-			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, 0x%p) : failed to write segment %llu of %llu. kdp_core_output(0x%p, %lu, 0x%p) returned error %d\n",
+			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : failed to write segment %llu of %llu. kdp_core_output(%p, %lu, %p) returned error %d\n",
 					seg_start, seg_end, context, core_context->core_segment_count - core_context->core_segments_remaining,
 					core_context->core_segment_count, core_context->core_outvars, sizeof(seg_command), &seg_command, ret);
 			return ret;
@@ -351,13 +351,13 @@ coredump_save_segment_descriptions(uint64_t seg_start, uint64_t seg_end,
 		struct segment_command seg_command = { };
 
 		if (seg_start > UINT32_MAX || seg_end > UINT32_MAX) {
-			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, 0x%p) : called with invalid addresses for 32-bit : start 0x%llx, end 0x%llx\n",
+			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : called with invalid addresses for 32-bit : start 0x%llx, end 0x%llx\n",
 				seg_start, seg_end, context, seg_start, seg_end);
 			return KERN_INVALID_ARGUMENT;
 		}
 
 		if (core_context->core_cur_hoffset + sizeof(seg_command) > core_context->core_header_size) {
-			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, 0x%p) : ran out of space to save commands with %llu of %llu remaining\n",
+			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : ran out of space to save commands with %llu of %llu remaining\n",
 				seg_start, seg_end, context, core_context->core_segments_remaining, core_context->core_segment_count);
 			return KERN_NO_SPACE;
 		}
@@ -375,7 +375,7 @@ coredump_save_segment_descriptions(uint64_t seg_start, uint64_t seg_end,
 		/* Flush new command to output */
 		ret = kdp_core_output(core_context->core_outvars, sizeof(seg_command), (caddr_t)&seg_command);
 		if (ret != KERN_SUCCESS) {
-			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, 0x%p) : failed to write segment %llu of %llu : kdp_core_output(0x%p, %lu, 0x%p) returned  error 0x%x\n",
+			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : failed to write segment %llu of %llu : kdp_core_output(%p, %lu, %p) returned  error 0x%x\n",
 					seg_start, seg_end, context, core_context->core_segment_count - core_context->core_segments_remaining,
 					core_context->core_segment_count, core_context->core_outvars, sizeof(seg_command), &seg_command, ret);
 			return ret;
@@ -404,20 +404,20 @@ coredump_save_thread_state(void *thread_state, void *context)
 	int ret;
 
 	if (tc->cmd != LC_THREAD) {
-		kern_coredump_log(context, "coredump_save_thread_state(0x%p, 0x%p) : found %d expected LC_THREAD (%d)\n",
+		kern_coredump_log(context, "coredump_save_thread_state(%p, %p) : found %d expected LC_THREAD (%d)\n",
 				thread_state, context, tc->cmd, LC_THREAD);
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	if (core_context->core_cur_hoffset + core_context->core_thread_state_size > core_context->core_header_size) {
-		kern_coredump_log(context, "coredump_save_thread_state(0x%p, 0x%p) : ran out of space to save threads with %llu of %llu remaining\n",
+		kern_coredump_log(context, "coredump_save_thread_state(%p, %p) : ran out of space to save threads with %llu of %llu remaining\n",
 				thread_state, context, core_context->core_threads_remaining, core_context->core_thread_count);
 		return KERN_NO_SPACE;
 	}
 
 	ret = kdp_core_output(core_context->core_outvars, core_context->core_thread_state_size, (caddr_t)thread_state);
 	if (ret != KERN_SUCCESS) {
-		kern_coredump_log(context, "coredump_save_thread_state(0x%p, 0x%p) : failed to write thread data : kdp_core_output(0x%p, %llu, 0x%p) returned 0x%x\n",
+		kern_coredump_log(context, "coredump_save_thread_state(%p, %p) : failed to write thread data : kdp_core_output(%p, %llu, %p) returned 0x%x\n",
 				thread_state, context, core_context->core_outvars, core_context->core_thread_state_size, thread_state, ret);
 		return ret;
 	}
@@ -436,13 +436,13 @@ coredump_save_sw_vers(void *sw_vers, uint64_t length, void *context)
 	int ret;
 
 	if (length > KERN_COREDUMP_VERSIONSTRINGMAXSIZE || !length) {
-		kern_coredump_log(context, "coredump_save_sw_vers(0x%p, %llu, 0x%p) : called with invalid length %llu\n",
+		kern_coredump_log(context, "coredump_save_sw_vers(%p, %llu, %p) : called with invalid length %llu\n",
 				sw_vers, length, context, length);
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	if (core_context->core_cur_hoffset + sizeof(struct ident_command) + length > core_context->core_header_size) {
-		kern_coredump_log(context, "coredump_save_sw_vers(0x%p, %llu, 0x%p) : ran out of space to save data\n",
+		kern_coredump_log(context, "coredump_save_sw_vers(%p, %llu, %p) : ran out of space to save data\n",
 				sw_vers, length, context);
 		return KERN_NO_SPACE;
 	}
@@ -451,14 +451,14 @@ coredump_save_sw_vers(void *sw_vers, uint64_t length, void *context)
 	ident.cmdsize = (uint32_t)(sizeof(struct ident_command) + KERN_COREDUMP_VERSIONSTRINGMAXSIZE);
 	ret = kdp_core_output(core_context->core_outvars, sizeof(struct ident_command), (caddr_t)&ident);
 	if (ret != KERN_SUCCESS) {
-		kern_coredump_log(context, "coredump_save_sw_vers(0x%p, %llu, 0x%p) : failed to write ident command : kdp_core_output(0x%p, %lu, 0x%p) returned 0x%x\n",
+		kern_coredump_log(context, "coredump_save_sw_vers(%p, %llu, %p) : failed to write ident command : kdp_core_output(%p, %lu, %p) returned 0x%x\n",
 				sw_vers, length, context, core_context->core_outvars, sizeof(struct ident_command), &ident, ret);
 		return ret;
 	}
 
 	ret = kdp_core_output(core_context->core_outvars, length, (caddr_t)sw_vers);
 	if (ret != KERN_SUCCESS) {
-		kern_coredump_log(context, "coredump_save_sw_vers(0x%p, %llu, 0x%p) : failed to write version string : kdp_core_output(0x%p, %llu, 0x%p) returned 0x%x\n",
+		kern_coredump_log(context, "coredump_save_sw_vers(%p, %llu, %p) : failed to write version string : kdp_core_output(%p, %llu, %p) returned 0x%x\n",
 				sw_vers, length, context, core_context->core_outvars, length, sw_vers, ret);
 		return ret;
 	}
@@ -467,7 +467,7 @@ coredump_save_sw_vers(void *sw_vers, uint64_t length, void *context)
 		/* Zero fill to the full command size */
 		ret = kdp_core_output(core_context->core_outvars, (KERN_COREDUMP_VERSIONSTRINGMAXSIZE - length), NULL);
 		if (ret != KERN_SUCCESS) {
-			kern_coredump_log(context, "coredump_save_sw_vers(0x%p, %llu, 0x%p) : failed to write zero fill padding : kdp_core_output(0x%p, %llu, NULL) returned 0x%x\n",
+			kern_coredump_log(context, "coredump_save_sw_vers(%p, %llu, %p) : failed to write zero fill padding : kdp_core_output(%p, %llu, NULL) returned 0x%x\n",
 					sw_vers, length, context, core_context->core_outvars, (KERN_COREDUMP_VERSIONSTRINGMAXSIZE - length), ret);
 			return ret;
 		}
@@ -485,7 +485,7 @@ coredump_save_segment_data(void *seg_data, uint64_t length, void *context)
 	processor_core_context *core_context = (processor_core_context *)context;
 
 	if (length > core_context->core_segment_bytes_remaining) {
-		kern_coredump_log(context, "coredump_save_segment_data(0x%p, %llu, 0x%p) : called with too much data, %llu written, %llu left\n",
+		kern_coredump_log(context, "coredump_save_segment_data(%p, %llu, %p) : called with too much data, %llu written, %llu left\n",
 				seg_data, length, context, core_context->core_segment_byte_total - core_context->core_segment_bytes_remaining,
 				core_context->core_segment_bytes_remaining);
 		return KERN_INVALID_ARGUMENT;
@@ -493,7 +493,7 @@ coredump_save_segment_data(void *seg_data, uint64_t length, void *context)
 
 	ret = kdp_core_output(core_context->core_outvars, length, (caddr_t)seg_data);
 	if (ret != KERN_SUCCESS) {
-		kern_coredump_log(context, "coredump_save_segment_data(0x%p, %llu, 0x%p) : failed to write data (%llu bytes remaining) :%d\n",
+		kern_coredump_log(context, "coredump_save_segment_data(%p, %llu, %p) : failed to write data (%llu bytes remaining) :%d\n",
 				seg_data, length, context, core_context->core_segment_bytes_remaining, ret);
 		return ret;
 	}
@@ -595,7 +595,7 @@ kern_coredump_routine(void *core_outvars, struct kern_coredump_core *current_cor
 	/* Zero fill between the end of the header and the beginning of the segment data file offset */
 	ret = kdp_core_output(context.core_outvars, (round_page(context.core_header_size) - context.core_header_size), NULL);
 	if (ret != KERN_SUCCESS) {
-		kern_coredump_log(&context, "(kern_coredump_routine) : failed to write zero fill padding (%llu bytes remaining) : kdp_core_output(0x%p, %llu, NULL) returned 0x%x\n",
+		kern_coredump_log(&context, "(kern_coredump_routine) : failed to write zero fill padding (%llu bytes remaining) : kdp_core_output(%p, %llu, NULL) returned 0x%x\n",
 				context.core_segment_bytes_remaining, context.core_outvars, (round_page(context.core_header_size) - context.core_header_size), ret);
 		return ret;
 	}
@@ -618,7 +618,7 @@ kern_coredump_routine(void *core_outvars, struct kern_coredump_core *current_cor
 	/* Flush the last data out */
 	ret = kdp_core_output(context.core_outvars, 0, NULL);
 	if (ret != KERN_SUCCESS) {
-		kern_coredump_log(&context, "(kern_coredump_routine) : failed to flush final core data : kdp_core_output(0x%p, 0, NULL) returned 0x%x\n",
+		kern_coredump_log(&context, "(kern_coredump_routine) : failed to flush final core data : kdp_core_output(%p, 0, NULL) returned 0x%x\n",
 				context.core_outvars, ret);
 		return ret;
 	}

@@ -126,13 +126,4 @@ CC_INLINE int ccsiv_one_shot(const struct ccmode_siv *mode,
     return rc;
 }
 
-void ccmode_factory_siv_encrypt(struct ccmode_siv *siv,
-                                const struct ccmode_cbc *cbc,
-                                const struct ccmode_ctr *ctr);
-
-void ccmode_factory_siv_decrypt(struct ccmode_siv *siv,
-                                const struct ccmode_cbc *cbc,
-                                const struct ccmode_ctr *ctr);
-
-
 #endif /* _CORECRYPTO_CCMODE_H_ */

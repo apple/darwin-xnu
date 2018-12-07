@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -499,13 +499,6 @@ fallback:
 			m->m_pkthdr.pkt_flags &= ~PKTF_MPTCP_DFIN;
 		}
 
-		if (MPTCP_SEQ_GT(mb_dsn, mp_tp->mpt_rcvnxt) ||
-		    !LIST_EMPTY(&mp_tp->mpt_segq)) {
-			mb_dfin = mptcp_reass(mp_so, &m->m_pkthdr, &mb_datalen, m);
-
-			goto next;
-		}
-		mb_dfin = !!(m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN);
 
 		if (MPTCP_SEQ_LT(mb_dsn, mp_tp->mpt_rcvnxt)) {
 			if (MPTCP_SEQ_LEQ((mb_dsn + mb_datalen),
@@ -530,6 +523,14 @@ fallback:
 			    mp_tp->mpt_rcvnxt),
 			    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
 		}
+
+		if (MPTCP_SEQ_GT(mb_dsn, mp_tp->mpt_rcvnxt) ||
+		    !LIST_EMPTY(&mp_tp->mpt_segq)) {
+			mb_dfin = mptcp_reass(mp_so, &m->m_pkthdr, &mb_datalen, m);
+
+			goto next;
+		}
+		mb_dfin = !!(m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN);
 
 		mptcp_sbrcv_grow(mp_tp);
 
@@ -885,9 +886,8 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore, struct mptsub **pr
 		/*
 		 * Only handover if Symptoms tells us to do so.
 		 */
-		if (IFNET_IS_WIFI(bestinp->inp_last_outifp) &&
-		    mptcp_is_wifi_unusable() &&
-		    besttp->t_rxtshift >= mptcp_fail_thresh)
+		if (!IFNET_IS_CELLULAR(bestinp->inp_last_outifp) &&
+		    mptcp_is_wifi_unusable(mpte) != 0 && mptcp_subflow_is_bad(mpte, best))
 			return (mptcp_return_subflow(second_best));
 
 		return (mptcp_return_subflow(best));
@@ -896,8 +896,8 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore, struct mptsub **pr
 		int rto_thresh = mptcp_rtothresh;
 
 		/* Adjust with symptoms information */
-		if (IFNET_IS_WIFI(bestinp->inp_last_outifp) &&
-		    mptcp_is_wifi_unusable()) {
+		if (!IFNET_IS_CELLULAR(bestinp->inp_last_outifp) &&
+		    mptcp_is_wifi_unusable(mpte) != 0) {
 			rtt_thresh /= 2;
 			rto_thresh /= 2;
 		}
@@ -914,7 +914,7 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore, struct mptsub **pr
 			return (mptcp_return_subflow(second_best));
 		}
 
-		if (besttp->t_rxtshift >= mptcp_fail_thresh &&
+		if (mptcp_subflow_is_bad(mpte, best) &&
 		    secondtp->t_rxtshift == 0) {
 			return (mptcp_return_subflow(second_best));
 		}
@@ -1136,8 +1136,8 @@ mptcp_update_rcv_state_meat(struct mptcb *mp_tp, struct tcpcb *tp,
 		return;
 	}
 	mptcplog((LOG_DEBUG,
-	    "%s: seqn = %x len = %x full = %llx rcvnxt = %llu \n", __func__,
-	    seqn, mdss_data_len, full_dsn, mp_tp->mpt_rcvnxt),
+	    "%s: seqn = %u len = %u full = %u rcvnxt = %u \n", __func__,
+	    seqn, mdss_data_len, (uint32_t)full_dsn, (uint32_t)mp_tp->mpt_rcvnxt),
 	    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
 
 	mptcp_notify_mpready(tp->t_inpcb->inp_socket);
@@ -1356,11 +1356,17 @@ mptcp_reset_itfinfo(struct mpt_itf_info *info)
 	info->ifindex = 0;
 	info->has_v4_conn = 0;
 	info->has_v6_conn = 0;
+	info->has_nat64_conn = 0;
 }
 
 void
-mptcp_session_necp_cb(void *handle, int action, struct necp_client_flow *flow)
+mptcp_session_necp_cb(void *handle, int action, uint32_t interface_index,
+		      uint32_t necp_flags, __unused bool *viable)
 {
+	boolean_t has_v4 = !!(necp_flags & NECP_CLIENT_RESULT_FLAG_HAS_IPV4);
+	boolean_t has_v6 = !!(necp_flags & NECP_CLIENT_RESULT_FLAG_HAS_IPV6);
+	boolean_t has_nat64 = !!(necp_flags & NECP_CLIENT_RESULT_FLAG_HAS_NAT64);
+	boolean_t low_power = !!(necp_flags & NECP_CLIENT_RESULT_FLAG_INTERFACE_LOW_POWER);
 	struct mppcb *mp = (struct mppcb *)handle;
 	struct mptses *mpte = mptompte(mp);
 	struct socket *mp_so;
@@ -1368,7 +1374,7 @@ mptcp_session_necp_cb(void *handle, int action, struct necp_client_flow *flow)
 	int locked = 0;
 	uint32_t i, ifindex;
 
-	ifindex = flow->interface_index;
+	ifindex = interface_index;
 	VERIFY(ifindex != IFSCOPE_NONE);
 
 	/* About to be garbage-collected (see note about MPTCP/NECP interactions) */
@@ -1389,15 +1395,26 @@ mptcp_session_necp_cb(void *handle, int action, struct necp_client_flow *flow)
 	mp_tp = mpte->mpte_mptcb;
 	mp_so = mptetoso(mpte);
 
-	os_log_debug(mptcp_log_handle, "%s, action: %u ifindex %u usecount %u mpt_flags %#x state %u\n",
-		     __func__, action, ifindex, mp->mpp_socket->so_usecount, mp_tp->mpt_flags, mp_tp->mpt_state);
+	os_log_info(mptcp_log_handle, "%s, action: %u ifindex %u usecount %u mpt_flags %#x state %u v4 %u v6 %u nat64 %u power %u\n",
+		     __func__, action, ifindex, mp->mpp_socket->so_usecount, mp_tp->mpt_flags, mp_tp->mpt_state,
+		     has_v4, has_v6, has_nat64, low_power);
 
 	/* No need on fallen back sockets */
 	if (mp_tp->mpt_flags & MPTCPF_FALLBACK_TO_TCP)
 		goto out;
 
+	/*
+	 * When the interface goes in low-power mode we don't want to establish
+	 * new subflows on it. Thus, mark it internally as non-viable.
+	 */
+	if (low_power)
+		action = NECP_CLIENT_CBACTION_NONVIABLE;
+
 	if (action == NECP_CLIENT_CBACTION_NONVIABLE) {
 		for (i = 0; i < mpte->mpte_itfinfo_size; i++) {
+			if (mpte->mpte_itfinfo[i].ifindex == IFSCOPE_NONE)
+				continue;
+
 			if (mpte->mpte_itfinfo[i].ifindex == ifindex)
 				mptcp_reset_itfinfo(&mpte->mpte_itfinfo[i]);
 		}
@@ -1406,8 +1423,6 @@ mptcp_session_necp_cb(void *handle, int action, struct necp_client_flow *flow)
 	} else if (action == NECP_CLIENT_CBACTION_VIABLE ||
 		   action == NECP_CLIENT_CBACTION_INITIAL) {
 		int found_slot = 0, slot_index = -1;
-		boolean_t has_v4 = !!(flow->necp_flow_flags & NECP_CLIENT_RESULT_FLAG_HAS_IPV4);
-		boolean_t has_v6 = !!(flow->necp_flow_flags & NECP_CLIENT_RESULT_FLAG_HAS_IPV6);
 		struct ifnet *ifp;
 
 		ifnet_head_lock_shared();
@@ -1425,6 +1440,9 @@ mptcp_session_necp_cb(void *handle, int action, struct necp_client_flow *flow)
 		    (mp_so->so_restrictions & SO_RESTRICT_DENY_CELLULAR))
 			goto out;
 
+		if (IS_INTF_CLAT46(ifp))
+			has_v4 = FALSE;
+
 		/* Look for the slot on where to store/update the interface-info. */
 		for (i = 0; i < mpte->mpte_itfinfo_size; i++) {
 			/* Found a potential empty slot where we can put it */
@@ -1439,7 +1457,8 @@ mptcp_session_necp_cb(void *handle, int action, struct necp_client_flow *flow)
 			 */
 			if (mpte->mpte_itfinfo[i].ifindex == ifindex &&
 			    (mpte->mpte_itfinfo[i].has_v4_conn != has_v4 ||
-			     mpte->mpte_itfinfo[i].has_v6_conn != has_v6)) {
+			     mpte->mpte_itfinfo[i].has_v6_conn != has_v6 ||
+			     mpte->mpte_itfinfo[i].has_nat64_conn != has_nat64)) {
 				found_slot = 1;
 				slot_index = i;
 				break;
@@ -1455,8 +1474,12 @@ mptcp_session_necp_cb(void *handle, int action, struct necp_client_flow *flow)
 		}
 
 		if ((mpte->mpte_dst.sa_family == AF_INET || mpte->mpte_dst.sa_family == 0) &&
-		    !(flow->necp_flow_flags & NECP_CLIENT_RESULT_FLAG_HAS_IPV4) &&
-		    ifnet_get_nat64prefix(ifp, NULL) == ENOENT) {
+		    !has_nat64 && !has_v4) {
+			if (found_slot) {
+				mpte->mpte_itfinfo[slot_index].has_v4_conn = has_v4;
+				mpte->mpte_itfinfo[slot_index].has_v6_conn = has_v6;
+				mpte->mpte_itfinfo[slot_index].has_nat64_conn = has_nat64;
+			}
 			mptcp_ask_for_nat64(ifp);
 			goto out;
 		}
@@ -1466,8 +1489,8 @@ mptcp_session_necp_cb(void *handle, int action, struct necp_client_flow *flow)
 			struct mpt_itf_info *info = _MALLOC(sizeof(*info) * new_size, M_TEMP, M_ZERO);
 
 			if (info == NULL) {
-				mptcplog((LOG_ERR, "%s malloc failed for %u\n", __func__, new_size),
-					 MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
+				os_log_error(mptcp_log_handle, "%s malloc failed for %u\n",
+					     __func__, new_size);
 				goto out;
 			}
 
@@ -1481,15 +1504,13 @@ mptcp_session_necp_cb(void *handle, int action, struct necp_client_flow *flow)
 
 			mpte->mpte_itfinfo = info;
 			mpte->mpte_itfinfo_size = new_size;
-
-			mptcplog((LOG_DEBUG, "%s Needed to realloc to %u\n", __func__, new_size),
-			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_VERBOSE);
 		}
 
 		VERIFY(slot_index >= 0 && slot_index < (int)mpte->mpte_itfinfo_size);
 		mpte->mpte_itfinfo[slot_index].ifindex = ifindex;
 		mpte->mpte_itfinfo[slot_index].has_v4_conn = has_v4;
 		mpte->mpte_itfinfo[slot_index].has_v6_conn = has_v6;
+		mpte->mpte_itfinfo[slot_index].has_nat64_conn = has_nat64;
 
 		mptcp_sched_create_subflows(mpte);
 	}
@@ -1518,6 +1539,8 @@ mptcp_set_restrictions(struct socket *mp_so)
 			continue;
 
 		ifp = ifindex2ifnet[ifindex];
+		if (ifp == NULL)
+			continue;
 
 		if (IFNET_IS_EXPENSIVE(ifp) &&
 		    (mp_so->so_restrictions & SO_RESTRICT_DENY_EXPENSIVE))

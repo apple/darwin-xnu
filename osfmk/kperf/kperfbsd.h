@@ -29,9 +29,7 @@
 #ifndef __KPERF_BSD_H__
 #define __KPERF_BSD_H__
 
-/* bless a process to allow kperf access to a non-root process
- */
-extern int kperf_bless_pid(pid_t newpid);
-
+/* bless a process to allow kperf access to a non-root process */
+int kperf_bless_pid(pid_t newpid);
 
 #endif /* __KPERF_BSD_H__ */

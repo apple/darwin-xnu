@@ -1419,7 +1419,7 @@ filt_piperead(struct knote *kn, long hint)
 
 	return filt_piperead_common(kn, rpipe);
 }
-	
+
 static int
 filt_pipereadtouch(struct knote *kn, struct kevent_internal_s *kev)
 {
@@ -1431,8 +1431,6 @@ filt_pipereadtouch(struct knote *kn, struct kevent_internal_s *kev)
 	/* accept new inputs (and save the low water threshold and flag) */
 	kn->kn_sdata = kev->data;
 	kn->kn_sfflags = kev->fflags;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 
 	/* identify if any events are now fired */
 	retval = filt_piperead_common(kn, rpipe);
@@ -1515,8 +1513,6 @@ filt_pipewritetouch(struct knote *kn, struct kevent_internal_s *kev)
 	/* accept new kevent data (and save off lowat threshold and flag) */
 	kn->kn_sfflags = kev->fflags;
 	kn->kn_sdata = kev->data;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 
 	/* determine if any event is now deemed fired */
 	res = filt_pipewrite_common(kn, rpipe);

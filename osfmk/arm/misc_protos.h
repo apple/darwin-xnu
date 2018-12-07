@@ -56,7 +56,7 @@ extern void Load_context(thread_t);
 extern void Idle_load_context(void) __attribute__((noreturn));
 extern thread_t Switch_context(thread_t, thread_continue_t, thread_t);
 extern thread_t Shutdown_context(void (*doshutdown)(processor_t), processor_t  processor);
-extern void Call_continuation(thread_continue_t, void *, wait_result_t, vm_offset_t);
+extern void Call_continuation(thread_continue_t, void *, wait_result_t, boolean_t enable_interrupts);
 
 extern void DebuggerCall(unsigned int reason, void *ctx);
 extern void DebuggerXCall(void *ctx);
@@ -82,8 +82,6 @@ extern boolean_t debug_state_is_valid32(arm_debug_state32_t *ds);
 extern boolean_t debug_state_is_valid64(arm_debug_state64_t *ds);
 
 extern int copyio_check_user_addr(user_addr_t user_addr, vm_size_t nbytes);
-extern int _emulate_swp(user_addr_t addr, uint32_t newval, uint32_t *oldval);
-extern int _emulate_swpb(user_addr_t addr, uint8_t newval, uint32_t *oldval);
 
 /* Top-Byte-Ignore */
 extern boolean_t user_tbi;

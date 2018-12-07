@@ -1,5 +1,7 @@
 # x86_64 specific blacklist
 
+[address]
+
 # Early boot AUTOGEN
 src:./bsd/kern/kdebug.c
 src:./bsd/kern/kern_csr.c
@@ -11,6 +13,7 @@ src:./osfmk/i386/acpi.c
 src:./osfmk/i386/cpu.c
 src:./osfmk/i386/i386_init.c
 src:./osfmk/i386/locks_i386.c
+src:./osfmk/i386/locks_i386_opt.c
 src:./osfmk/i386/machine_routines.c
 src:./osfmk/i386/mp.c
 src:./osfmk/i386/mtrr.c
@@ -19,7 +22,7 @@ src:./osfmk/i386/panic_hooks.c
 src:./osfmk/i386/rtclock.c
 src:./osfmk/i386/vmx/vmx_cpu.c
 src:./osfmk/kern/locks.c
-src:./osfmk/prng/random.c
+src:./osfmk/prng/prng_random.c
 src:./osfmk/x86_64/loose_ends.c
 src:./pexpert/gen/bootargs.c
 src:./pexpert/gen/device_tree.c

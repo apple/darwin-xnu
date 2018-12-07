@@ -47,6 +47,8 @@ extern void kperf_kernel_configure(char *);
 
 extern "C" void console_suspend();
 extern "C" void console_resume();
+extern "C" void sched_override_recommended_cores_for_sleep(void);
+extern "C" void sched_restore_recommended_cores_after_sleep(void);
 
 typedef kern_return_t (*iocpu_platform_action_t)(void * refcon0, void * refcon1, uint32_t priority,
 						 void * param1, void * param2, void * param3,
@@ -352,64 +354,63 @@ IORemoveServicePlatformActions(IOService * service)
 kern_return_t PE_cpu_start(cpu_id_t target,
 			   vm_offset_t start_paddr, vm_offset_t arg_paddr)
 {
-  IOCPU *targetCPU = OSDynamicCast(IOCPU, (OSObject *)target);
+    IOCPU *targetCPU = (IOCPU *)target;
   
-  if (targetCPU == 0) return KERN_FAILURE;
-  return targetCPU->startCPU(start_paddr, arg_paddr);
+    if (targetCPU == NULL) return KERN_FAILURE;
+    return targetCPU->startCPU(start_paddr, arg_paddr);
 }
 
 void PE_cpu_halt(cpu_id_t target)
 {
-  IOCPU *targetCPU = OSDynamicCast(IOCPU, (OSObject *)target);
+    IOCPU *targetCPU = (IOCPU *)target;
   
-  if (targetCPU) targetCPU->haltCPU();
+    targetCPU->haltCPU();
 }
 
 void PE_cpu_signal(cpu_id_t source, cpu_id_t target)
 {
-  IOCPU *sourceCPU = OSDynamicCast(IOCPU, (OSObject *)source);
-  IOCPU *targetCPU = OSDynamicCast(IOCPU, (OSObject *)target);
+    IOCPU *sourceCPU = (IOCPU *)source;
+    IOCPU *targetCPU = (IOCPU *)target;
   
-  if (sourceCPU && targetCPU) sourceCPU->signalCPU(targetCPU);
+    sourceCPU->signalCPU(targetCPU);
 }
 
 void PE_cpu_signal_deferred(cpu_id_t source, cpu_id_t target)
 {
-  IOCPU *sourceCPU = OSDynamicCast(IOCPU, (OSObject *)source);
-  IOCPU *targetCPU = OSDynamicCast(IOCPU, (OSObject *)target);
+    IOCPU *sourceCPU = (IOCPU *)source;
+    IOCPU *targetCPU = (IOCPU *)target;
 
-  if (sourceCPU && targetCPU) sourceCPU->signalCPUDeferred(targetCPU);
+    sourceCPU->signalCPUDeferred(targetCPU);
 }
 
 void PE_cpu_signal_cancel(cpu_id_t source, cpu_id_t target)
 {
-  IOCPU *sourceCPU = OSDynamicCast(IOCPU, (OSObject *)source);
-  IOCPU *targetCPU = OSDynamicCast(IOCPU, (OSObject *)target);
+    IOCPU *sourceCPU = (IOCPU *)source;
+    IOCPU *targetCPU = (IOCPU *)target;
 
-  if (sourceCPU && targetCPU) sourceCPU->signalCPUCancel(targetCPU);
+    sourceCPU->signalCPUCancel(targetCPU);
 }
 
 void PE_cpu_machine_init(cpu_id_t target, boolean_t bootb)
 {
-  IOCPU *targetCPU = OSDynamicCast(IOCPU, (OSObject *)target);
-  
-  if (targetCPU) {
-   targetCPU->initCPU(bootb);
+    IOCPU *targetCPU = OSDynamicCast(IOCPU, (OSObject *)target);
+
+    if (targetCPU == NULL)
+        panic("%s: invalid target CPU %p", __func__, target);
+
+    targetCPU->initCPU(bootb);
 #if defined(__arm__) || defined(__arm64__)
-   if (!bootb && (targetCPU->getCPUNumber() == (UInt32)master_cpu)) ml_set_is_quiescing(false);
+    if (!bootb && (targetCPU->getCPUNumber() == (UInt32)master_cpu)) ml_set_is_quiescing(false);
 #endif /* defined(__arm__) || defined(__arm64__) */
-  }
 }
 
 void PE_cpu_machine_quiesce(cpu_id_t target)
 {
-  IOCPU *targetCPU = OSDynamicCast(IOCPU, (OSObject *)target);
-  if (targetCPU) {
+    IOCPU *targetCPU = (IOCPU*)target;
 #if defined(__arm__) || defined(__arm64__)
-      if (targetCPU->getCPUNumber() == (UInt32)master_cpu) ml_set_is_quiescing(true);
+    if (targetCPU->getCPUNumber() == (UInt32)master_cpu) ml_set_is_quiescing(true);
 #endif /* defined(__arm__) || defined(__arm64__) */
-      targetCPU->quiesceCPU();
-  }
+    targetCPU->quiesceCPU();
 }
 
 #if defined(__arm__) || defined(__arm64__)
@@ -424,15 +425,17 @@ kern_return_t PE_cpu_perfmon_interrupt_install_handler(perfmon_interrupt_handler
 
 void PE_cpu_perfmon_interrupt_enable(cpu_id_t target, boolean_t enable)
 {
-    IOCPU *targetCPU = OSDynamicCast(IOCPU, (OSObject *)target);
+    IOCPU *targetCPU = (IOCPU*)target;
 
-    if (targetCPU) {
-        if (enable) {
-	    targetCPU->getProvider()->registerInterrupt(1, targetCPU, (IOInterruptAction)pmi_handler, 0);
-	    targetCPU->getProvider()->enableInterrupt(1);
-	} else {
-	    targetCPU->getProvider()->disableInterrupt(1);
-	}
+    if (targetCPU == nullptr) {
+        return;
+    }
+
+    if (enable) {
+        targetCPU->getProvider()->registerInterrupt(1, targetCPU, (IOInterruptAction)pmi_handler, 0);
+        targetCPU->getProvider()->enableInterrupt(1);
+    } else {
+        targetCPU->getProvider()->disableInterrupt(1);
     }
 }
 #endif
@@ -461,6 +464,9 @@ void IOCPUSleepKernel(void)
     IOPMrootDomain  *rootDomain = IOService::getPMRootDomain();
 
     kprintf("IOCPUSleepKernel\n");
+#if defined(__arm64__)
+    sched_override_recommended_cores_for_sleep();
+#endif
 
     IORegistryIterator * iter;
     OSOrderedSet *       all;
@@ -526,10 +532,12 @@ void IOCPUSleepKernel(void)
     console_suspend();
 
     rootDomain->tracePoint( kIOPMTracePointSleepPlatformDriver );
+    rootDomain->stop_watchdog_timer();
 
     // Now sleep the boot CPU.
     bootCPU->haltCPU();
 
+    rootDomain->start_watchdog_timer();
     rootDomain->tracePoint( kIOPMTracePointWakePlatformActions );
 
     console_resume();
@@ -564,6 +572,10 @@ void IOCPUSleepKernel(void)
                 processor_start(target->getMachProcessor());
         }
     }
+
+#if defined(__arm64__)
+    sched_restore_recommended_cores_after_sleep();
+#endif
 }
 
 bool IOCPU::start(IOService *provider)

@@ -67,6 +67,7 @@
 #include <mach/exception_types.h>
 #include <mach/exc.h>
 #include <mach/mach_exc.h>
+
 #include <ipc/port.h>
 #include <ipc/ipc_entry.h>
 #include <ipc/ipc_object.h>
@@ -74,6 +75,7 @@
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_pset.h>
 #include <ipc/ipc_machdep.h>
+
 #include <kern/counters.h>
 #include <kern/ipc_tt.h>
 #include <kern/task.h>
@@ -83,8 +85,11 @@
 #include <kern/sched_prim.h>
 #include <kern/host.h>
 #include <kern/misc_protos.h>
+#include <kern/ux_handler.h>
+
 #include <security/mac_mach_internal.h>
 #include <string.h>
+
 #include <pexpert/pexpert.h>
 
 extern int panic_on_exception_triage;
@@ -212,7 +217,10 @@ exception_deliver(
 	 * As with other failures, exception_triage_thread will go on
 	 * to the next level.
 	 */
-	if (mac_exc_action_check_exception_send(task, excp) != 0) {
+
+	/* The global exception-to-signal translation port is safe to be an exception handler. */
+	if (is_ux_handler_port(exc_port) == FALSE &&
+	    mac_exc_action_check_exception_send(task, excp) != 0) {
 		kr = KERN_FAILURE;
 		goto out_release_right;
 	}
@@ -241,7 +249,7 @@ exception_deliver(
 
 		c_thr_exc_raise_state++;
 		state_cnt = _MachineStateCount[flavor];
-		kr = thread_getstatus(thread, flavor, 
+		kr = thread_getstatus_to_user(thread, flavor,
 				      (thread_state_t)state,
 				      &state_cnt);
 		if (kr == KERN_SUCCESS) {
@@ -263,7 +271,7 @@ exception_deliver(
 			}
 			if (kr == KERN_SUCCESS) {
 				if (exception != EXC_CORPSE_NOTIFY)
-					kr = thread_setstatus(thread, flavor,
+					kr = thread_setstatus_from_user(thread, flavor,
 							(thread_state_t)state,
 							state_cnt);
 				goto out_release_right;
@@ -300,7 +308,7 @@ exception_deliver(
 
 		c_thr_exc_raise_state_id++;
 		state_cnt = _MachineStateCount[flavor];
-		kr = thread_getstatus(thread, flavor,
+		kr = thread_getstatus_to_user(thread, flavor,
 				      (thread_state_t)state,
 				      &state_cnt);
 		if (kr == KERN_SUCCESS) {
@@ -329,7 +337,7 @@ exception_deliver(
 
 			if (kr == KERN_SUCCESS) {
 				if (exception != EXC_CORPSE_NOTIFY)
-					kr = thread_setstatus(thread, flavor,
+					kr = thread_setstatus_from_user(thread, flavor,
 							(thread_state_t)state,
 							state_cnt);
 				goto out_release_right;

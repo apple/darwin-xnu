@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -62,11 +62,14 @@
 extern "C" {
 #endif
 
-#define	PFLOGIFS_MAX	16
+#define	PFLOGIFS_MAX		16
+#define	PFLOGIF_ZONE_MAX_ELEM		MIN(IFNETS_MAX, PFLOGIFS_MAX)
 
 #if KERNEL_PRIVATE
 struct pflog_softc {
 	struct ifnet		*sc_if;		/* back ptr to interface */
+	u_int32_t		sc_flags;
+#define	IFPFLF_DETACHING	0x1
 	int			sc_unit;
 	LIST_ENTRY(pflog_softc)	sc_list;
 };

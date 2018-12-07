@@ -238,9 +238,6 @@ int	mac_iokit_check_set_properties(kauth_cred_t cred, io_object_t registry_entry
 int	mac_iokit_check_filter_properties(kauth_cred_t cred, io_object_t registry_entry);
 int	mac_iokit_check_get_property(kauth_cred_t cred, io_object_t registry_entry, const char *name);
 int	mac_iokit_check_hid_control(kauth_cred_t cred);
-int	mac_iokit_check_nvram_delete(kauth_cred_t cred, const char *name);
-int	mac_iokit_check_nvram_get(kauth_cred_t cred, const char *name);
-int	mac_iokit_check_nvram_set(kauth_cred_t cred, const char *name, io_object_t value);
 void	mac_ipq_label_associate(struct mbuf *fragment, struct ipq *ipq);
 int	mac_ipq_label_compare(struct mbuf *fragment, struct ipq *ipq);
 void	mac_ipq_label_destroy(struct ipq *ipq);

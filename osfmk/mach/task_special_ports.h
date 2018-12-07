@@ -92,6 +92,8 @@ typedef	int	task_special_port_t;
 
 #define TASK_RESOURCE_NOTIFY_PORT   11	/* overrides host special RN port */
 
+#define TASK_MAX_SPECIAL_PORT TASK_RESOURCE_NOTIFY_PORT
+
 /*
  *	Definitions for ease of use
  */

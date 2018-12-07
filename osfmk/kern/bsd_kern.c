@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -308,7 +308,7 @@ int  get_task_numacts(task_t t)
 /* does this machine need  64bit register set for signal handler */
 int is_64signalregset(void)
 {
-	if (task_has_64BitData(current_task())) {
+	if (task_has_64Bit_data(current_task())) {
 		return(1);
 	}
 
@@ -430,21 +430,24 @@ uint64_t get_task_phys_footprint(task_t task)
 	return 0;
 }
 
+#if CONFIG_LEDGER_INTERVAL_MAX
 /*
  *
  */
-uint64_t get_task_phys_footprint_recent_max(task_t task)
+uint64_t get_task_phys_footprint_interval_max(task_t task, int reset)
 {
 	kern_return_t ret;
 	ledger_amount_t max;
 
-	ret = ledger_get_recent_max(task->ledger, task_ledgers.phys_footprint, &max);
-	if (KERN_SUCCESS == ret) {
+	ret = ledger_get_interval_max(task->ledger, task_ledgers.phys_footprint, &max, reset);
+
+	if(KERN_SUCCESS == ret) {
 		return max;
 	}
 
 	return 0;
 }
+#endif /* CONFIG_LEDGER_INTERVAL_MAX */
 
 /*
  *
@@ -582,6 +585,46 @@ uint64_t get_task_iokit_mapped(task_t task)
 
 	return 0;
 }
+
+uint64_t get_task_network_nonvolatile(task_t task)
+{
+    kern_return_t ret;
+    ledger_amount_t credit, debit;
+
+    ret = ledger_get_entries(task->ledger, task_ledgers.network_nonvolatile, &credit, &debit);
+    if (KERN_SUCCESS == ret) {
+        return (credit - debit);
+    }
+
+    return 0;
+}
+
+uint64_t get_task_network_nonvolatile_compressed(task_t task)
+{
+    kern_return_t ret;
+    ledger_amount_t credit, debit;
+
+    ret = ledger_get_entries(task->ledger, task_ledgers.network_nonvolatile_compressed, &credit, &debit);
+    if (KERN_SUCCESS == ret) {
+        return (credit - debit);
+    }
+
+    return 0;
+}
+
+uint64_t get_task_wired_mem(task_t task)
+{
+    kern_return_t ret;
+    ledger_amount_t credit, debit;
+
+    ret = ledger_get_entries(task->ledger, task_ledgers.wired_mem, &credit, &debit);
+    if (KERN_SUCCESS == ret) {
+        return (credit - debit);
+    }
+
+    return 0;
+}
+
 
 uint64_t get_task_cpu_time(task_t task)
 {
@@ -885,7 +928,7 @@ fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
 }
 
 int 
-fill_taskthreadinfo(task_t task, uint64_t thaddr, int thuniqueid, struct proc_threadinfo_internal * ptinfo, void * vpp, int *vidp)
+fill_taskthreadinfo(task_t task, uint64_t thaddr, bool thuniqueid, struct proc_threadinfo_internal * ptinfo, void * vpp, int *vidp)
 {
 	thread_t  thact;
 	int err=0;
@@ -898,7 +941,7 @@ fill_taskthreadinfo(task_t task, uint64_t thaddr, int thuniqueid, struct proc_th
 
 	for (thact  = (thread_t)(void *)queue_first(&task->threads);
 			!queue_end(&task->threads, (queue_entry_t)thact); ) {
-		addr = (thuniqueid==0)?thact->machine.cthread_self: thact->thread_id;
+		addr = (thuniqueid) ? thact->thread_id : thact->machine.cthread_self;
 		if (addr == thaddr)
 		{
 		
@@ -935,7 +978,7 @@ out:
 }
 
 int
-fill_taskthreadlist(task_t task, void * buffer, int thcount)
+fill_taskthreadlist(task_t task, void * buffer, int thcount, bool thuniqueid)
 {
 	int numthr=0;
 	thread_t thact;
@@ -948,7 +991,7 @@ fill_taskthreadlist(task_t task, void * buffer, int thcount)
 
 	for (thact  = (thread_t)(void *)queue_first(&task->threads);
 			!queue_end(&task->threads, (queue_entry_t)thact); ) {
-		thaddr = thact->machine.cthread_self;
+		thaddr = (thuniqueid) ? thact->thread_id : thact->machine.cthread_self;
 		*uptr++ = thaddr;
 		numthr++;
 		if (numthr >= thcount)

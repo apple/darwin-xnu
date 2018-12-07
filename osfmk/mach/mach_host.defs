@@ -375,4 +375,31 @@ routine mach_zone_info_for_largest_zone(
 skip;
 #endif
 
+#ifdef PRIVATE
+/*
+ * Returns names of zones that have zlog enabled.
+ */
+routine mach_zone_get_zlog_zones(
+		host		: host_priv_t;
+	out	names		: mach_zone_name_array_t,
+					Dealloc);
+#else
+skip;
+#endif
+
+#ifdef PRIVATE
+/*
+ * Returns BTLog records for a specific zone.
+ * The zone name is passed in via the argument name,
+ * recs returns an array of zone_btrecord_t's.
+ */
+routine mach_zone_get_btlog_records(
+		host		: host_priv_t;
+		name		: mach_zone_name_t;
+	out	recs		: zone_btrecord_array_t,
+					Dealloc);
+#else
+skip;
+#endif
+
 /* vim: set ft=c : */

@@ -40,6 +40,7 @@
 #include <pexpert/boot.h>
 #include <pexpert/pexpert.h>
 
+
 #include <kern/misc_protos.h>
 #include <kern/startup.h>
 #include <kern/clock.h>
@@ -57,6 +58,7 @@
 #include <kdp/kdp_dyld.h>
 #include <kdp/kdp_internal.h>
 #include <uuid/uuid.h>
+#include <sys/codesign.h>
 #include <sys/time.h>
 
 #include <IOKit/IOPlatformExpert.h>
@@ -92,7 +94,7 @@ extern int 		kdp_stack_snapshot_bytes_traced(void);
  * Increment the PANICLOG_VERSION if you change the format of the panic
  * log in any way.
  */
-#define PANICLOG_VERSION 9
+#define PANICLOG_VERSION 11
 static struct kcdata_descriptor kc_panic_data;
 
 extern char                 firmware_version[];
@@ -123,6 +125,7 @@ decl_simple_lock_data(extern,clock_lock)
 extern struct timeval	 gIOLastSleepTime;
 extern struct timeval	 gIOLastWakeTime;
 extern boolean_t		 is_clock_configured;
+extern boolean_t kernelcache_uuid_valid;
 extern uuid_t kernelcache_uuid;
 
 /* Definitions for frame pointers */
@@ -152,6 +155,8 @@ unsigned int          DebugContextCount = 0;
 uint8_t PE_smc_stashed_x86_system_state = 0xFF;
 uint8_t PE_smc_stashed_x86_power_state = 0xFF;
 uint8_t PE_smc_stashed_x86_efi_boot_state = 0xFF;
+uint8_t PE_smc_stashed_x86_shutdown_cause = 0xFF;
+uint64_t PE_smc_stashed_x86_prev_power_transitions = UINT64_MAX;
 uint32_t PE_pcie_stashed_link_state = UINT32_MAX;
 #endif
 
@@ -327,24 +332,21 @@ do_print_all_backtraces(
 		if (last_hwaccess_thread) {
 			paniclog_append_noflush("AppleHWAccess Thread: 0x%llx\n", last_hwaccess_thread);
 		}
-#if defined(XNU_TARGET_OS_BRIDGE)
-		paniclog_append_noflush("PCIeUp link state: ");
-		if (PE_pcie_stashed_link_state != UINT32_MAX) {
-			paniclog_append_noflush("0x%x\n", PE_pcie_stashed_link_state);
-		} else {
-			paniclog_append_noflush("not available\n");
-		}
-#endif
+		paniclog_append_noflush("Boot args: %s\n", PE_boot_args());
 	}
 	paniclog_append_noflush("Memory ID: 0x%x\n", gPlatformMemoryID);
 	paniclog_append_noflush("OS version: %.256s\n",
 			('\0' != osversion[0]) ? osversion : "Not set yet");
 	paniclog_append_noflush("Kernel version: %.512s\n", version);
-	paniclog_append_noflush("KernelCache UUID: ");
-	for (index = 0; index < sizeof(uuid_t); index++) {
-		paniclog_append_noflush("%02X", kernelcache_uuid[index]);
+
+	if (kernelcache_uuid_valid) {
+		paniclog_append_noflush("KernelCache UUID: ");
+		for (index = 0; index < sizeof(uuid_t); index++) {
+			paniclog_append_noflush("%02X", kernelcache_uuid[index]);
+		}
+		paniclog_append_noflush("\n");
 	}
-	paniclog_append_noflush("\n");
+	panic_display_kernel_uuid();
 
 	paniclog_append_noflush("iBoot version: %.128s\n", firmware_version);
 	paniclog_append_noflush("secure boot?: %s\n", debug_enabled ? "NO": "YES");
@@ -367,6 +369,24 @@ do_print_all_backtraces(
 	} else {
 		paniclog_append_noflush("not available\n");
 	}
+	paniclog_append_noflush("x86 Shutdown Cause: ");
+	if (PE_smc_stashed_x86_shutdown_cause != 0xFF) {
+		paniclog_append_noflush("0x%x\n", PE_smc_stashed_x86_shutdown_cause);
+	} else {
+		paniclog_append_noflush("not available\n");
+	}
+	paniclog_append_noflush("x86 Previous Power Transitions: ");
+	if (PE_smc_stashed_x86_prev_power_transitions != UINT64_MAX) {
+		paniclog_append_noflush("0x%llx\n", PE_smc_stashed_x86_prev_power_transitions);
+	} else {
+		paniclog_append_noflush("not available\n");
+	}
+	paniclog_append_noflush("PCIeUp link state: ");
+	if (PE_pcie_stashed_link_state != UINT32_MAX) {
+		paniclog_append_noflush("0x%x\n", PE_pcie_stashed_link_state);
+	} else {
+		paniclog_append_noflush("not available\n");
+	}
 #endif
 	paniclog_append_noflush("Paniclog version: %d\n", logversion);
 
@@ -379,6 +399,13 @@ do_print_all_backtraces(
 #if CONFIG_ECC_LOGGING
 	panic_display_ecc_errors();
 #endif /* CONFIG_ECC_LOGGING */
+
+#if DEVELOPMENT || DEBUG
+	if (cs_debug_unsigned_exec_failures != 0 || cs_debug_unsigned_mmap_failures != 0) {
+		paniclog_append_noflush("Unsigned code exec failures: %u\n", cs_debug_unsigned_exec_failures);
+		paniclog_append_noflush("Unsigned code mmap failures: %u\n", cs_debug_unsigned_mmap_failures);
+	}
+#endif
 
 	// Just print threads with high CPU usage for WDT timeouts
 	if (strncmp(message, "WDT timeout", 11) == 0) {
@@ -596,7 +623,7 @@ void panic_print_symbol_name(vm_address_t search)
 
 void
 SavePanicInfo(
-	const char *message, __unused uint64_t panic_options)
+	const char *message, __unused void *panic_data, __unused uint64_t panic_options)
 {
 
 	/* This should be initialized by the time we get here */
@@ -787,10 +814,12 @@ DebuggerXCallEnter(
 				paniclog_append_noflush("Attempting to forcibly halt cpu %d\n", cpu);
 				dbgwrap_status_t halt_status = ml_dbgwrap_halt_cpu(cpu, 0);
 				if (halt_status < 0)
-					paniclog_append_noflush("Unable to halt cpu %d: %d\n", cpu, halt_status);
+					paniclog_append_noflush("cpu %d failed to halt with error %d: %s\n", cpu, halt_status, ml_dbgwrap_strerror(halt_status));
 				else {
 					if (halt_status > 0)
-						paniclog_append_noflush("cpu %d halted with warning %d\n", cpu, halt_status);
+						paniclog_append_noflush("cpu %d halted with warning %d: %s\n", cpu, halt_status, ml_dbgwrap_strerror(halt_status));
+					else
+						paniclog_append_noflush("cpu %d successfully halted\n", cpu);
 					target_cpu_datap->halt_status = CPU_HALTED;
 				}
 			} else
@@ -806,7 +835,7 @@ DebuggerXCallEnter(
 				dbgwrap_status_t halt_status = ml_dbgwrap_halt_cpu_with_state(cpu,
 				    NSEC_PER_SEC, &target_cpu_datap->halt_state);
 				if ((halt_status < 0) || (halt_status == DBGWRAP_WARN_CPU_OFFLINE))
-					paniclog_append_noflush("Unable to obtain state for cpu %d: %d\n", cpu, halt_status);
+					paniclog_append_noflush("Unable to obtain state for cpu %d with status %d: %s\n", cpu, halt_status, ml_dbgwrap_strerror(halt_status));
 				else
 					target_cpu_datap->halt_status = CPU_HALTED_WITH_STATE;
 			}
@@ -871,6 +900,7 @@ DebuggerXCall(
 	if (save_context) {
 		/* Save the interrupted context before acknowledging the signal */
 		*state = *regs;
+
 	} else if (regs) {
 		/* zero old state so machine_trace_thread knows not to backtrace it */
 		set_saved_state_fp(state, 0);

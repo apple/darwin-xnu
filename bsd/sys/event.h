@@ -2,7 +2,7 @@
  * Copyright (c) 2003-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -189,9 +189,9 @@ typedef uint64_t kqueue_id_t;
 
 
 /* kevent system call flags */
-#define KEVENT_FLAG_NONE                         0x000	/* no flag value */
-#define KEVENT_FLAG_IMMEDIATE                    0x001	/* immediate timeout */
-#define KEVENT_FLAG_ERROR_EVENTS                 0x002	/* output events only include change errors */
+#define KEVENT_FLAG_NONE                         0x000000	/* no flag value */
+#define KEVENT_FLAG_IMMEDIATE                    0x000001	/* immediate timeout */
+#define KEVENT_FLAG_ERROR_EVENTS                 0x000002	/* output events only include change errors */
 
 #ifdef PRIVATE
 
@@ -201,34 +201,36 @@ typedef uint64_t kqueue_id_t;
  * instead.
  */
 
-#define KEVENT_FLAG_STACK_EVENTS                 0x004   /* output events treated as stack (grows down) */
-#define KEVENT_FLAG_STACK_DATA                   0x008   /* output data allocated as stack (grows down) */
-#define KEVENT_FLAG_UNBIND_CHECK_FLAGS           0x010   /* check the flags passed to kevent_qos_internal_unbind */
-#define KEVENT_FLAG_WORKQ                        0x020   /* interact with the default workq kq */
-#define KEVENT_FLAG_WORKQ_MANAGER                0x200   /* current thread is the workq manager */
-#define KEVENT_FLAG_WORKLOOP                     0x400   /* interact with the specified workloop kq */
-#define KEVENT_FLAG_SYNCHRONOUS_BIND             0x800   /* synchronous bind callback */
-
-#define KEVENT_FLAG_WORKLOOP_SERVICER_ATTACH     0x8000  /* attach current thread to workloop */
-#define KEVENT_FLAG_WORKLOOP_SERVICER_DETACH     0x10000 /* unbind current thread from workloop */
-#define KEVENT_FLAG_DYNAMIC_KQ_MUST_EXIST        0x20000 /* kq lookup by id must exist */
-#define KEVENT_FLAG_DYNAMIC_KQ_MUST_NOT_EXIST    0x40000 /* kq lookup by id must not exist */
-#define KEVENT_FLAG_WORKLOOP_NO_WQ_THREAD        0x80000 /* do not create workqueue threads for this worloop */
+#define KEVENT_FLAG_STACK_EVENTS                 0x000004   /* output events treated as stack (grows down) */
+#define KEVENT_FLAG_STACK_DATA                   0x000008   /* output data allocated as stack (grows down) */
+//                                               0x000010
+#define KEVENT_FLAG_WORKQ                        0x000020   /* interact with the default workq kq */
+//      KEVENT_FLAG_LEGACY32                     0x000040
+//      KEVENT_FLAG_LEGACY64                     0x000080
+//                                               0x000100
+#define KEVENT_FLAG_WORKQ_MANAGER                0x000200   /* obsolete */
+#define KEVENT_FLAG_WORKLOOP                     0x000400   /* interact with the specified workloop kq */
+#define KEVENT_FLAG_PARKING                      0x000800   /* workq thread is parking */
+//      KEVENT_FLAG_KERNEL                       0x001000
+//      KEVENT_FLAG_DYNAMIC_KQUEUE               0x002000
+//                                               0x004000
+#define KEVENT_FLAG_WORKLOOP_SERVICER_ATTACH     0x008000   /* obsolete */
+#define KEVENT_FLAG_WORKLOOP_SERVICER_DETACH     0x010000   /* obsolete */
+#define KEVENT_FLAG_DYNAMIC_KQ_MUST_EXIST        0x020000   /* kq lookup by id must exist */
+#define KEVENT_FLAG_DYNAMIC_KQ_MUST_NOT_EXIST    0x040000   /* kq lookup by id must not exist */
+#define KEVENT_FLAG_WORKLOOP_NO_WQ_THREAD        0x080000   /* obsolete */
 
 #ifdef XNU_KERNEL_PRIVATE
 
-#define KEVENT_FLAG_LEGACY32                     0x040   /* event data in legacy 32-bit format */
-#define KEVENT_FLAG_LEGACY64                     0x080   /* event data in legacy 64-bit format */
+#define KEVENT_FLAG_LEGACY32                     0x0040  /* event data in legacy 32-bit format */
+#define KEVENT_FLAG_LEGACY64                     0x0080  /* event data in legacy 64-bit format */
 #define KEVENT_FLAG_KERNEL                       0x1000  /* caller is in-kernel */
 #define KEVENT_FLAG_DYNAMIC_KQUEUE               0x2000  /* kqueue is dynamically allocated */
-#define KEVENT_FLAG_WORKLOOP_CANCELED            0x4000  /* workloop bind was cancelled */
 
 #define KEVENT_FLAG_USER (KEVENT_FLAG_IMMEDIATE | KEVENT_FLAG_ERROR_EVENTS | \
-                          KEVENT_FLAG_STACK_EVENTS | KEVENT_FLAG_STACK_DATA | \
-                          KEVENT_FLAG_WORKQ | KEVENT_FLAG_WORKLOOP | \
-                          KEVENT_FLAG_WORKLOOP_SERVICER_ATTACH | KEVENT_FLAG_WORKLOOP_SERVICER_DETACH | \
-                          KEVENT_FLAG_DYNAMIC_KQ_MUST_EXIST | KEVENT_FLAG_DYNAMIC_KQ_MUST_NOT_EXIST | \
-			  KEVENT_FLAG_WORKLOOP_NO_WQ_THREAD)
+		KEVENT_FLAG_STACK_EVENTS | KEVENT_FLAG_STACK_DATA | \
+		KEVENT_FLAG_WORKQ | KEVENT_FLAG_WORKLOOP | \
+		KEVENT_FLAG_DYNAMIC_KQ_MUST_EXIST | KEVENT_FLAG_DYNAMIC_KQ_MUST_NOT_EXIST)
 
 /*
  * Since some filter ops are not part of the standard sysfilt_ops, we use
@@ -260,48 +262,48 @@ typedef uint64_t kqueue_id_t;
 #endif /* PRIVATE */
 
 /* actions */
-#define EV_ADD              0x0001		/* add event to kq (implies enable) */
-#define EV_DELETE           0x0002		/* delete event from kq */
-#define EV_ENABLE           0x0004		/* enable event */
-#define EV_DISABLE          0x0008		/* disable event (not reported) */
+#define EV_ADD              0x0001      /* add event to kq (implies enable) */
+#define EV_DELETE           0x0002      /* delete event from kq */
+#define EV_ENABLE           0x0004      /* enable event */
+#define EV_DISABLE          0x0008      /* disable event (not reported) */
 
 /* flags */
-#define EV_ONESHOT          0x0010		/* only report one occurrence */
-#define EV_CLEAR            0x0020		/* clear event state after reporting */
-#define EV_RECEIPT          0x0040		/* force immediate event output */
-                                		/* ... with or without EV_ERROR */
-                                  		/* ... use KEVENT_FLAG_ERROR_EVENTS */
-                                		/*     on syscalls supporting flags */
+#define EV_ONESHOT          0x0010      /* only report one occurrence */
+#define EV_CLEAR            0x0020      /* clear event state after reporting */
+#define EV_RECEIPT          0x0040      /* force immediate event output */
+                                        /* ... with or without EV_ERROR */
+                                        /* ... use KEVENT_FLAG_ERROR_EVENTS */
+                                        /*     on syscalls supporting flags */
 
-#define EV_DISPATCH         0x0080		/* disable event after reporting */
-#define EV_UDATA_SPECIFIC   0x0100		/* unique kevent per udata value */
+#define EV_DISPATCH         0x0080      /* disable event after reporting */
+#define EV_UDATA_SPECIFIC   0x0100      /* unique kevent per udata value */
 
 #define EV_DISPATCH2        (EV_DISPATCH | EV_UDATA_SPECIFIC)
-                                  		/* ... in combination with EV_DELETE */
-                                  		/* will defer delete until udata-specific */
-                                  		/* event enabled. EINPROGRESS will be */
-                                  		/* returned to indicate the deferral */
+                                        /* ... in combination with EV_DELETE */
+                                        /* will defer delete until udata-specific */
+                                        /* event enabled. EINPROGRESS will be */
+                                        /* returned to indicate the deferral */
 
-#define EV_VANISHED         0x0200		/* report that source has vanished  */
-                                  		/* ... only valid with EV_DISPATCH2 */
+#define EV_VANISHED         0x0200      /* report that source has vanished  */
+                                        /* ... only valid with EV_DISPATCH2 */
 
-#define EV_SYSFLAGS         0xF000		/* reserved by system */
-#define EV_FLAG0            0x1000		/* filter-specific flag */
-#define EV_FLAG1            0x2000		/* filter-specific flag */
+#define EV_SYSFLAGS         0xF000      /* reserved by system */
+#define EV_FLAG0            0x1000      /* filter-specific flag */
+#define EV_FLAG1            0x2000      /* filter-specific flag */
 
 /* returned values */
-#define EV_EOF              0x8000		/* EOF detected */
-#define EV_ERROR            0x4000		/* error, data contains errno */
+#define EV_EOF              0x8000      /* EOF detected */
+#define EV_ERROR            0x4000      /* error, data contains errno */
 
 /*
  * Filter specific flags for EVFILT_READ
  *
  * The default behavior for EVFILT_READ is to make the "read" determination
- * relative to the current file descriptor read pointer. 
+ * relative to the current file descriptor read pointer.
  *
  * The EV_POLL flag indicates the determination should be made via poll(2)
  * semantics. These semantics dictate always returning true for regular files,
- * regardless of the amount of unread data in the file.  
+ * regardless of the amount of unread data in the file.
  *
  * On input, EV_OOBAND specifies that filter should actively return in the
  * presence of OOB on the descriptor. It implies that filter will return
@@ -331,7 +333,7 @@ typedef uint64_t kqueue_id_t;
 #define NOTE_TRIGGER	0x01000000
 
 /*
- * On input, the top two bits of fflags specifies how the lower twenty four 
+ * On input, the top two bits of fflags specifies how the lower twenty four
  * bits should be applied to the stored value of fflags.
  *
  * On output, the top two bits will always be set to NOTE_FFNOP and the
@@ -342,7 +344,7 @@ typedef uint64_t kqueue_id_t;
 #define NOTE_FFOR       0x80000000              /* or fflags */
 #define NOTE_FFCOPY     0xc0000000              /* copy fflags */
 #define NOTE_FFCTRLMASK 0xc0000000              /* mask for operations */
-#define NOTE_FFLAGSMASK	0x00ffffff 
+#define NOTE_FFLAGSMASK	0x00ffffff
 
 #ifdef PRIVATE
 /*
@@ -434,13 +436,13 @@ typedef uint64_t kqueue_id_t;
 /*
  * data/hint fflags for EVFILT_VNODE, shared with userspace
  */
-#define	NOTE_DELETE	0x00000001		/* vnode was removed */
-#define	NOTE_WRITE	0x00000002		/* data contents changed */
-#define	NOTE_EXTEND	0x00000004		/* size increased */
-#define	NOTE_ATTRIB	0x00000008		/* attributes changed */
-#define	NOTE_LINK	0x00000010		/* link count changed */
-#define	NOTE_RENAME	0x00000020		/* vnode was renamed */
-#define	NOTE_REVOKE	0x00000040		/* vnode access was revoked */
+#define NOTE_DELETE	0x00000001		/* vnode was removed */
+#define NOTE_WRITE	0x00000002		/* data contents changed */
+#define NOTE_EXTEND	0x00000004		/* size increased */
+#define NOTE_ATTRIB	0x00000008		/* attributes changed */
+#define NOTE_LINK	0x00000010		/* link count changed */
+#define NOTE_RENAME	0x00000020		/* vnode was renamed */
+#define NOTE_REVOKE	0x00000040		/* vnode access was revoked */
 #define NOTE_NONE	0x00000080		/* No specific vnode event: to test for EVFILT_READ activation*/
 #define NOTE_FUNLOCK	0x00000100		/* vnode was unlocked by flock(2) */
 
@@ -458,22 +460,22 @@ enum {
 	eNoteReapDeprecated __deprecated_enum_msg("This kqueue(2) EVFILT_PROC flag is deprecated") = 0x10000000
 };
 
-#define	NOTE_EXIT		0x80000000	/* process exited */
-#define	NOTE_FORK		0x40000000	/* process forked */
-#define	NOTE_EXEC		0x20000000	/* process exec'd */
-#define	NOTE_REAP		((unsigned int)eNoteReapDeprecated /* 0x10000000 */)	/* process reaped */
-#define	NOTE_SIGNAL		0x08000000	/* shared with EVFILT_SIGNAL */
-#define	NOTE_EXITSTATUS		0x04000000	/* exit status to be returned, valid for child process only */
-#define	NOTE_EXIT_DETAIL	0x02000000	/* provide details on reasons for exit */
+#define NOTE_EXIT		0x80000000	/* process exited */
+#define NOTE_FORK		0x40000000	/* process forked */
+#define NOTE_EXEC		0x20000000	/* process exec'd */
+#define NOTE_REAP		((unsigned int)eNoteReapDeprecated /* 0x10000000 */)	/* process reaped */
+#define NOTE_SIGNAL		0x08000000	/* shared with EVFILT_SIGNAL */
+#define NOTE_EXITSTATUS		0x04000000	/* exit status to be returned, valid for child process only */
+#define NOTE_EXIT_DETAIL	0x02000000	/* provide details on reasons for exit */
 
-#define	NOTE_PDATAMASK	0x000fffff		/* mask for signal & exit status */
-#define	NOTE_PCTRLMASK	(~NOTE_PDATAMASK)
+#define NOTE_PDATAMASK	0x000fffff		/* mask for signal & exit status */
+#define NOTE_PCTRLMASK	(~NOTE_PDATAMASK)
 
 /*
  * If NOTE_EXITSTATUS is present, provide additional info about exiting process.
  */
 enum {
-	eNoteExitReparentedDeprecated __deprecated_enum_msg("This kqueue(2) EVFILT_PROC flag is no longer sent") = 0x00080000 
+	eNoteExitReparentedDeprecated __deprecated_enum_msg("This kqueue(2) EVFILT_PROC flag is no longer sent") = 0x00080000
 };
 #define NOTE_EXIT_REPARENTED	((unsigned int)eNoteExitReparentedDeprecated)	/* exited while reparented */
 
@@ -481,8 +483,8 @@ enum {
  * If NOTE_EXIT_DETAIL is present, these bits indicate specific reasons for exiting.
  */
 #define NOTE_EXIT_DETAIL_MASK		0x00070000
-#define	NOTE_EXIT_DECRYPTFAIL		0x00010000 
-#define	NOTE_EXIT_MEMORY		0x00020000
+#define NOTE_EXIT_DECRYPTFAIL		0x00010000
+#define NOTE_EXIT_MEMORY		0x00020000
 #define NOTE_EXIT_CSERROR		0x00040000
 
 #ifdef PRIVATE
@@ -536,15 +538,15 @@ enum {
  */
 #define EVFILT_MEMORYSTATUS_ALL_MASK \
 	(NOTE_MEMORYSTATUS_PRESSURE_NORMAL | NOTE_MEMORYSTATUS_PRESSURE_WARN | NOTE_MEMORYSTATUS_PRESSURE_CRITICAL | NOTE_MEMORYSTATUS_LOW_SWAP | \
-        NOTE_MEMORYSTATUS_PROC_LIMIT_WARN | NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL | NOTE_MEMORYSTATUS_MSL_STATUS)
+	 NOTE_MEMORYSTATUS_PROC_LIMIT_WARN | NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL | NOTE_MEMORYSTATUS_MSL_STATUS)
 
 #endif /* KERNEL_PRIVATE */
 
 typedef enum vm_pressure_level {
-        kVMPressureNormal   = 0,
-        kVMPressureWarning  = 1,
-        kVMPressureUrgent   = 2,
-        kVMPressureCritical = 3,
+	kVMPressureNormal   = 0,
+	kVMPressureWarning  = 1,
+	kVMPressureUrgent   = 2,
+	kVMPressureCritical = 3,
 } vm_pressure_level_t;
 
 #endif /* PRIVATE */
@@ -561,7 +563,7 @@ typedef enum vm_pressure_level {
 #define NOTE_NSECONDS	0x00000004		/* data is nanoseconds     */
 #define NOTE_ABSOLUTE	0x00000008		/* absolute timeout        */
 	/* ... implicit EV_ONESHOT, timeout uses the gettimeofday epoch */
-#define NOTE_LEEWAY	0x00000010		/* ext[1] holds leeway for power aware timers */
+#define NOTE_LEEWAY		0x00000010		/* ext[1] holds leeway for power aware timers */
 #define NOTE_CRITICAL	0x00000020		/* system does minimal timer coalescing */
 #define NOTE_BACKGROUND	0x00000040		/* system does maximum timer coalescing */
 #define NOTE_MACH_CONTINUOUS_TIME	0x00000080
@@ -580,27 +582,32 @@ typedef enum vm_pressure_level {
  * data/hint fflags for EVFILT_SOCK, shared with userspace.
  *
  */
-#define	NOTE_CONNRESET		0x00000001 /* Received RST */
-#define	NOTE_READCLOSED		0x00000002 /* Read side is shutdown */
-#define	NOTE_WRITECLOSED	0x00000004 /* Write side is shutdown */
-#define	NOTE_TIMEOUT		0x00000008 /* timeout: rexmt, keep-alive or persist */
-#define	NOTE_NOSRCADDR		0x00000010 /* source address not available */
-#define	NOTE_IFDENIED		0x00000020 /* interface denied connection */
-#define	NOTE_SUSPEND		0x00000040 /* output queue suspended */
-#define	NOTE_RESUME		0x00000080 /* output queue resumed */
+#define NOTE_CONNRESET		0x00000001 /* Received RST */
+#define NOTE_READCLOSED		0x00000002 /* Read side is shutdown */
+#define NOTE_WRITECLOSED	0x00000004 /* Write side is shutdown */
+#define NOTE_TIMEOUT		0x00000008 /* timeout: rexmt, keep-alive or persist */
+#define NOTE_NOSRCADDR		0x00000010 /* source address not available */
+#define NOTE_IFDENIED		0x00000020 /* interface denied connection */
+#define NOTE_SUSPEND		0x00000040 /* output queue suspended */
+#define NOTE_RESUME		0x00000080 /* output queue resumed */
 #define NOTE_KEEPALIVE		0x00000100 /* TCP Keepalive received */
 #define NOTE_ADAPTIVE_WTIMO	0x00000200 /* TCP adaptive write timeout */
 #define NOTE_ADAPTIVE_RTIMO	0x00000400 /* TCP adaptive read timeout */
-#define	NOTE_CONNECTED		0x00000800 /* socket is connected */
-#define	NOTE_DISCONNECTED	0x00001000 /* socket is disconnected */
-#define	NOTE_CONNINFO_UPDATED	0x00002000 /* connection info was updated */
-#define	NOTE_NOTIFY_ACK		0x00004000 /* notify acknowledgement */
+#define NOTE_CONNECTED		0x00000800 /* socket is connected */
+#define NOTE_DISCONNECTED	0x00001000 /* socket is disconnected */
+#define NOTE_CONNINFO_UPDATED	0x00002000 /* connection info was updated */
+#define NOTE_NOTIFY_ACK		0x00004000 /* notify acknowledgement */
 
-#define	EVFILT_SOCK_LEVEL_TRIGGER_MASK \
-    (NOTE_READCLOSED | NOTE_WRITECLOSED | NOTE_SUSPEND | NOTE_RESUME | NOTE_CONNECTED | NOTE_DISCONNECTED)
+#define EVFILT_SOCK_LEVEL_TRIGGER_MASK \
+		(NOTE_READCLOSED | NOTE_WRITECLOSED | NOTE_SUSPEND | NOTE_RESUME | \
+		 NOTE_CONNECTED | NOTE_DISCONNECTED)
 
 #define EVFILT_SOCK_ALL_MASK \
-    (NOTE_CONNRESET | NOTE_READCLOSED | NOTE_WRITECLOSED | NOTE_TIMEOUT | NOTE_NOSRCADDR | NOTE_IFDENIED | NOTE_SUSPEND | NOTE_RESUME | NOTE_KEEPALIVE | NOTE_ADAPTIVE_WTIMO | NOTE_ADAPTIVE_RTIMO | NOTE_CONNECTED | NOTE_DISCONNECTED | NOTE_CONNINFO_UPDATED | NOTE_NOTIFY_ACK)
+		(NOTE_CONNRESET | NOTE_READCLOSED | NOTE_WRITECLOSED | NOTE_TIMEOUT | \
+		NOTE_NOSRCADDR | NOTE_IFDENIED | NOTE_SUSPEND | NOTE_RESUME | \
+		NOTE_KEEPALIVE | NOTE_ADAPTIVE_WTIMO | NOTE_ADAPTIVE_RTIMO | \
+		NOTE_CONNECTED | NOTE_DISCONNECTED | NOTE_CONNINFO_UPDATED | \
+		NOTE_NOTIFY_ACK)
 
 #endif /* PRIVATE */
 
@@ -623,7 +630,7 @@ typedef enum vm_pressure_level {
  * system call argument specifying an ouput area (kevent_qos) will be consulted. If
  * the system call specified an output data area, the user-space address
  * of the received message is carved from that provided output data area (if enough
- * space remains there). The address and length of each received message is 
+ * space remains there). The address and length of each received message is
  * returned in the ext[0] and ext[1] fields (respectively) of the corresponding kevent.
  *
  * IF_MACH_RCV_VOUCHER_CONTENT is specified, the contents of the message voucher is
@@ -642,9 +649,9 @@ typedef enum vm_pressure_level {
  * NOTE_TRACK, NOTE_TRACKERR, and NOTE_CHILD are no longer supported as of 10.5
  */
 /* additional flags for EVFILT_PROC */
-#define	NOTE_TRACK	0x00000001		/* follow across forks */
-#define	NOTE_TRACKERR	0x00000002		/* could not track child */
-#define	NOTE_CHILD	0x00000004		/* am a child process */
+#define NOTE_TRACK	0x00000001		/* follow across forks */
+#define NOTE_TRACKERR	0x00000002		/* could not track child */
+#define NOTE_CHILD	0x00000004		/* am a child process */
 
 
 #ifdef PRIVATE
@@ -652,7 +659,7 @@ typedef enum vm_pressure_level {
 
 #ifndef KERNEL
 /* Temporay solution for BootX to use inode.h till kqueue moves to vfs layer */
-#include <sys/queue.h> 
+#include <sys/queue.h>
 struct knote;
 SLIST_HEAD(klist, knote);
 #endif
@@ -660,10 +667,11 @@ SLIST_HEAD(klist, knote);
 #ifdef KERNEL
 
 #ifdef XNU_KERNEL_PRIVATE
-#include <sys/queue.h> 
+#include <sys/queue.h>
 #include <kern/kern_types.h>
 #include <sys/fcntl.h> /* FREAD, FWRITE */
 #include <kern/debug.h> /* panic */
+#include <pthread/priority_private.h>
 
 #ifdef MALLOC_DECLARE
 MALLOC_DECLARE(M_KQUEUE);
@@ -671,58 +679,61 @@ MALLOC_DECLARE(M_KQUEUE);
 
 TAILQ_HEAD(kqtailq, knote);	/* a list of "queued" events */
 
-/* Bit size for packed field within knote */
-#define KNOTE_KQ_BITSIZE 			40
-
-
 /* index into various kq queues */
-typedef uint8_t kq_index_t; 
+typedef uint8_t kq_index_t;
 typedef uint16_t kn_status_t;
 
-#define KN_ACTIVE          0x0001		/* event has been triggered */
-#define KN_QUEUED          0x0002		/* event is on queue */
-#define KN_DISABLED        0x0004		/* event is disabled */
-#define KN_DROPPING        0x0008		/* knote is being dropped */
-#define KN_USEWAIT         0x0010		/* wait for knote use */
-#define KN_ATTACHING       0x0020		/* event is pending attach */
-#define KN_STAYACTIVE      0x0040		/* force event to stay active */
-#define KN_DEFERDELETE     0x0080		/* defer delete until re-enabled */
-#define KN_ATTACHED        0x0100		/* currently attached to source */
-#define KN_DISPATCH        0x0200		/* disables as part of deliver */
-#define KN_UDATA_SPECIFIC  0x0400		/* udata is part of matching */
-#define KN_SUPPRESSED      0x0800		/* event is suppressed during delivery */
-#define KN_STOLENDROP	   0x1000		/* someone stole the drop privilege */
-#define KN_REQVANISH       0x2000       /* requested EV_VANISH */
-#define KN_VANISHED        0x4000       /* has vanished */
+#define KN_ACTIVE          0x0001	/* event has been triggered */
+#define KN_QUEUED          0x0002	/* event is on queue */
+#define KN_DISABLED        0x0004	/* event is disabled */
+#define KN_DROPPING        0x0008	/* knote is being dropped */
+#define KN_LOCKED          0x0010	/* knote is locked (kq_knlocks) */
+#define KN_ATTACHING       0x0020	/* event is pending attach */
+#define KN_STAYACTIVE      0x0040	/* force event to stay active */
+#define KN_DEFERDELETE     0x0080	/* defer delete until re-enabled */
+#define KN_ATTACHED        0x0100	/* currently attached to source */
+#define KN_DISPATCH        0x0200	/* disables as part of deliver */
+#define KN_UDATA_SPECIFIC  0x0400	/* udata is part of matching */
+#define KN_SUPPRESSED      0x0800	/* event is suppressed during delivery */
+#define KN_MERGE_QOS       0x1000	/* f_event() / f_* ran concurrently and
+									   overrides must merge */
+#define KN_REQVANISH       0x2000	/* requested EV_VANISH */
+#define KN_VANISHED        0x4000	/* has vanished */
+//                         0x8000
 
+/* combination defines deferred-delete mode enabled */
 #define KN_DISPATCH2		(KN_DISPATCH | KN_UDATA_SPECIFIC)
-					/* combination defines deferred-delete mode enabled */
 
+#define KNOTE_KQ_BITSIZE    42
+_Static_assert(KNOTE_KQ_BITSIZE >= VM_KERNEL_POINTER_SIGNIFICANT_BITS,
+		"Make sure sign extending kn_kq_packed is legit");
+
+struct kqueue;
 struct knote {
 	TAILQ_ENTRY(knote)       kn_tqe;            /* linkage for tail queue */
 	SLIST_ENTRY(knote)       kn_link;           /* linkage for search list */
 	SLIST_ENTRY(knote)       kn_selnext;        /* klist element chain */
-	union {
-		struct fileproc      *p_fp;             /* file data pointer */
-		struct proc          *p_proc;           /* proc pointer */
-		struct ipc_mqueue    *p_mqueue;         /* pset pointer */
-	} kn_ptr;
-	uint64_t                     kn_req_index:3,                   /* requested qos index */
-	                             kn_qos_index:3,                   /* in-use qos index */
-	                             kn_qos_override:3,                /* qos override index */
-	                             kn_qos_sync_override:3,           /* qos sync override index */
-	                             kn_vnode_kqok:1,
-	                             kn_vnode_use_ofst:1,
-	                             kn_qos_override_is_sync:1,        /* qos override index is a sync override */
-	                             kn_reserved:1,                    /* reserved bits */
-	                             kn_filtid:8,                      /* filter id to index filter ops */
-	                             kn_kq_packed:KNOTE_KQ_BITSIZE;    /* packed pointer for kq */
-
+	uintptr_t                kn_filtid:8,       /* filter id to index filter ops */
+	                         kn_req_index:4,    /* requested qos index */
+	                         kn_qos_index:4,    /* in-use qos index */
+	                         kn_qos_override:4, /* qos override index */
+	                         kn_vnode_kqok:1,
+	                         kn_vnode_use_ofst:1;
+#if __LP64__
+	intptr_t                 kn_kq_packed : KNOTE_KQ_BITSIZE;
+#else
+	intptr_t                 kn_kq_packed;
+#endif
 	union {
 		void                 *kn_hook;
 		uint64_t             kn_hook_data;
 	};
 	int64_t                  kn_sdata;          /* saved data field */
+	union {
+		struct fileproc      *p_fp;             /* file data pointer */
+		struct proc          *p_proc;           /* proc pointer */
+		struct ipc_mqueue    *p_mqueue;         /* pset pointer */
+	} kn_ptr;
 	struct kevent_internal_s kn_kevent;
 	int                      kn_sfflags;        /* saved filter flags */
 	int                      kn_hookid;
@@ -741,28 +752,16 @@ struct knote {
 #define kn_fp		kn_ptr.p_fp
 };
 
-static inline struct kqueue *knote_get_kq(struct knote *kn)
+static inline struct kqueue *
+knote_get_kq(struct knote *kn)
 {
-	if (!(kn->kn_kq_packed))
-		return 0;
-	else
-		return (struct kqueue *)((uintptr_t)(kn->kn_kq_packed) + (uintptr_t)VM_MIN_KERNEL_AND_KEXT_ADDRESS);
-}
-
-static inline void knote_set_kq(struct knote *kn, void *kq)
-{
-	if (!kq)
-		kn->kn_kq_packed = 0;
-	else {
-		uint64_t offset = ((uintptr_t)kq - (uintptr_t)VM_MIN_KERNEL_AND_KEXT_ADDRESS);
-		kn->kn_kq_packed = offset;
-	}
+	return (struct kqueue *)kn->kn_kq_packed;
 }
 
 static inline int knote_get_seltype(struct knote *kn)
 {
 	switch (kn->kn_filter) {
-	case EVFILT_READ: 
+	case EVFILT_READ:
 		return FREAD;
 	case EVFILT_WRITE:
 		return FWRITE;
@@ -792,8 +791,20 @@ typedef struct filt_process_s *filt_process_data_t;
  * Filter operators
  *
  * These routines, provided by each filter, are called to attach, detach, deliver events,
- * change/update filter registration and process/deliver events.  They are called with the
- * with a use-count referenced knote, with the kq unlocked.  Here are more details:
+ * change/update filter registration and process/deliver events:
+ *
+ * - the f_attach, f_touch, f_process, f_peek and f_detach callbacks are always
+ *   serialized with respect to each other for the same knote.
+ *
+ * - the f_event routine is called with a use-count taken on the knote to
+ *   prolongate its lifetime and protect against drop, but is not otherwise
+ *   serialized with other routine calls.
+ *
+ * - the f_detach routine is always called last, and is serialized with all
+ *   other callbacks, including f_event calls.
+ *
+ *
+ * Here are more details:
  *
  * f_isfd -
  *        identifies if the "ident" field in the kevent structure is a file-descriptor.
@@ -808,17 +819,17 @@ typedef struct filt_process_s *filt_process_data_t;
  * f_adjusts_qos -
  *        identifies if the filter can adjust its QoS during its lifetime.
  *
- *        Currently, EVFILT_MAACHPORT is the only filter using this facility.
+ *        Filters using this facility should request the new overrides they want
+ *        using the appropriate FILTER_{RESET,ADJUST}_EVENT_QOS extended codes.
  *
- * f_needs_boost -
- *        [OPTIONAL] used by filters to communicate they need to hold a boost
- *        while holding a usecount on this knote. This is called with the kqlock
- *        held.
+ *        Currently, EVFILT_MACHPORT is the only filter using this facility.
  *
- *        This is only used by EVFILT_WORKLOOP currently.
+ * f_extended_codes -
+ *        identifies if the filter returns extended codes from its routines
+ *        (see FILTER_ACTIVE, ...) or 0 / 1 values.
  *
  * f_attach -
- *	      called to attach the knote to the underlying object that will be delivering events
+ *        called to attach the knote to the underlying object that will be delivering events
  *        through it when EV_ADD is supplied and no existing matching event is found
  *
  *        provided a knote that is pre-attached to the fd or hashed (see above) but is
@@ -836,21 +847,9 @@ typedef struct filt_process_s *filt_process_data_t;
  *        The return value indicates if the knote should already be considered "activated" at
  *        the time of attach (one or more of the interest events has already occured).
  *
- * f_post_attach -
- *        [OPTIONAL] called after a successful attach, with the kqueue lock held,
- *        returns lock held, may drop and re-acquire
- *
- *        If this function is non-null, then it indicates that the filter wants
- *        to perform an action after a successful ATTACH of a knote.
- *
- *        Currently, EVFILT_WORKLOOP is the only filter using this facility.
- *
- *        The return value indicates an error to report to userland.
- *
- *
  * f_detach -
  *        called to disassociate the knote from the underlying object delivering events
- *	      the filter should not attempt to deliver events through this knote after this
+ *        the filter should not attempt to deliver events through this knote after this
  *        operation returns control to the kq system.
  *
  * f_event -
@@ -864,24 +863,8 @@ typedef struct filt_process_s *filt_process_data_t;
  *        The return value indicates if the knote should already be considered "activated" at
  *        the time of attach (one or more of the interest events has already occured).
  *
- * f_drop_and_unlock -
- *        [OPTIONAL] called with the kqueue locked, and has to unlock
- *
- *        If this function is non-null, then it indicates that the filter
- *        wants to handle EV_DELETE events. This is necessary if a particular
- *        filter needs to synchronize knote deletion with its own filter lock.
- *        Currently, EVFILT_WORKLOOP is the only filter using this facility.
- *
- *        The return value indicates an error during the knote drop, i.e., the
- *        knote still exists and user space should re-drive the EV_DELETE.
- *
- *        If the return value is ERESTART, kevent_register() is called from
- *        scratch again (useful to wait for usecounts to drop and then
- *        reevaluate the relevance of that drop)
- *
- *
  * f_process -
- *        called when attempting to deliver triggered events to user-space. 
+ *        called when attempting to deliver triggered events to user-space.
  *
  *        If the knote was previously activated, this operator will be called when a
  *        thread is trying to deliver events to user-space.  The filter gets one last
@@ -912,47 +895,148 @@ typedef struct filt_process_s *filt_process_data_t;
  *        Unless one of the special output flags was set in the output kevent, a non-
  *        zero return value ALSO indicates that the knote should be re-activated
  *        for future event processing (in case it delivers level-based or a multi-edge
- *        type events like message queues that already exist).  
+ *        type events like message queues that already exist).
  *
  *        NOTE: In the future, the boolean may change to an enum that allows more
  *              explicit indication of just delivering a current event vs delivering
  *              an event with more events still pending.
  *
  * f_touch -
- *        called to update the knote with new state from the user during EVFILT_ADD/ENABLE/DISABLE
- *        on an already-attached knote.
+ *        called to update the knote with new state from the user during
+ *        EVFILT_ADD/ENABLE/DISABLE on an already-attached knote.
  *
  *        f_touch should copy relevant new data from the kevent into the knote.
- *        (if KN_UDATA_SPECIFIC is not set, you may need to update the udata too)
  *
- *        operator must lock against concurrent f_event and f_process operations.
+ *        operator must lock against concurrent f_event operations.
  *
- *        A return value of 1 indicates that the knote should now be considered 'activated'.
+ *        A return value of 1 indicates that the knote should now be considered
+ *        'activated'.
  *
- *        f_touch can set EV_ERROR with specific error in the data field to return an error to the client.
- *        You should return 1 to indicate that the kevent needs to be activated and processed.
+ *        f_touch can set EV_ERROR with specific error in the data field to
+ *        return an error to the client. You should return 1 to indicate that
+ *        the kevent needs to be activated and processed.
  *
  * f_peek -
- *        For knotes marked KN_STAYACTIVE, indicate if the knote is truly active at
- *        the moment (not used for event delivery, but for status checks).
+ *        For knotes marked KN_STAYACTIVE, indicate if the knote is truly active
+ *        at the moment (not used for event delivery, but for status checks).
+ *
+ * f_allow_drop -
+ *
+ *        [OPTIONAL] If this function is non-null, then it indicates that the
+ *        filter wants to validate EV_DELETE events. This is necessary if
+ *        a particular filter needs to synchronize knote deletion with its own
+ *        filter lock.
+ *
+ *        When true is returned, the the EV_DELETE is allowed and can proceed.
+ *
+ *        If false is returned, the EV_DELETE doesn't proceed, and the passed in
+ *        kevent is used for the copyout to userspace.
+ *
+ *        Currently, EVFILT_WORKLOOP is the only filter using this facility.
+ *
+ * f_post_register_wait -
+ *        [OPTIONAL] called when attach or touch return the FILTER_REGISTER_WAIT
+ *        extended code bit. It is possible to use this facility when the last
+ *        register command wants to wait.
+ *
+ *        Currently, EVFILT_WORKLOOP is the only filter using this facility.
  */
 
+struct _kevent_register;
+struct knote_lock_ctx;
+struct proc;
+struct uthread;
+struct waitq;
+
 struct filterops {
-	bool    f_isfd;		/* true if ident == filedescriptor */
-	bool    f_adjusts_qos; /* true if the filter can override the knote */
-	bool    (*f_needs_boost)(struct kevent_internal_s *kev);
+	bool    f_isfd;		      /* true if ident == filedescriptor */
+	bool    f_adjusts_qos;    /* true if the filter can override the knote */
+	bool    f_extended_codes; /* hooks return extended codes */
+
 	int     (*f_attach)(struct knote *kn, struct kevent_internal_s *kev);
-	int     (*f_post_attach)(struct knote *kn, struct kevent_internal_s *kev);
 	void    (*f_detach)(struct knote *kn);
 	int     (*f_event)(struct knote *kn, long hint);
 	int     (*f_touch)(struct knote *kn, struct kevent_internal_s *kev);
-	int     (*f_drop_and_unlock)(struct knote *kn, struct kevent_internal_s *kev);
 	int     (*f_process)(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
-	unsigned (*f_peek)(struct knote *kn);
+	int     (*f_peek)(struct knote *kn);
+
+	/* optional & advanced */
+	bool    (*f_allow_drop)(struct knote *kn, struct kevent_internal_s *kev);
+	void    (*f_post_register_wait)(struct uthread *uth, struct knote_lock_ctx *ctx,
+			struct _kevent_register *ss_kr);
 };
 
-struct proc;
-struct waitq;
+/*
+ * Extended codes returned by filter routines when f_extended_codes is set.
+ *
+ * FILTER_ACTIVE
+ *     The filter is active and a call to f_process() may return an event.
+ *
+ *     For f_process() the meaning is slightly different: the knote will be
+ *     activated again as long as f_process returns FILTER_ACTIVE, unless
+ *     EV_CLEAR is set, which require a new f_event to reactivate the knote.
+ *
+ *     Valid:    f_attach, f_event, f_touch, f_process, f_peek
+ *     Implicit: -
+ *     Ignored:  -
+ *
+ * FILTER_REGISTER_WAIT
+ *     The filter wants its f_post_register_wait() to be called.
+ *
+ *     Note: It is only valid to ask for this behavior for a workloop kqueue,
+ *     and is really only meant to be used by EVFILT_WORKLOOP.
+ *
+ *     Valid:    f_attach, f_touch
+ *     Implicit: -
+ *     Ignored:  f_event, f_process, f_peek
+ *
+ * FILTER_UPDATE_REQ_QOS
+ *     The filter wants the passed in QoS to be updated as the new intrinsic qos
+ *     for this knote. If the kevent `qos` field is 0, no update is performed.
+ *
+ *     This also will reset the event QoS, so FILTER_ADJUST_EVENT_QOS() must
+ *     also be used if an override should be maintained.
+ *
+ *     Valid:    f_touch
+ *     Implicit: f_attach
+ *     Ignored:  f_event, f_process, f_peek
+ *
+ * FILTER_RESET_EVENT_QOS
+ * FILTER_ADJUST_EVENT_QOS(qos)
+ *     The filter wants the QoS of the next event delivery to be overridden
+ *     at the specified QoS.  This allows for the next event QoS to be elevated
+ *     from the knote requested qos (See FILTER_UPDATE_REQ_QOS).
+ *
+ *     Event QoS Overrides are reset when a particular knote is no longer
+ *     active. Hence this is ignored if FILTER_ACTIVE isn't also returned.
+ *
+ *     Races between an f_event() and any other f_* routine asking for
+ *     a specific QoS override are handled generically and the filters do not
+ *     have to worry about them.
+ *
+ *     To use this facility, filters MUST set their f_adjusts_qos bit to true.
+ *
+ *     It is expected that filters will return the new QoS they expect to be
+ *     applied from any f_* callback except for f_process() where no specific
+ *     information should be provided. Filters should not try to hide no-ops,
+ *     kevent will already optimize these away.
+ *
+ *     Valid:    f_touch, f_attach, f_event, f_process
+ *     Implicit: -
+ *     Ignored:  f_peek
+ */
+#define FILTER_ACTIVE                       0x00000001
+#define FILTER_REGISTER_WAIT                0x00000002
+#define FILTER_UPDATE_REQ_QOS               0x00000004
+#define FILTER_ADJUST_EVENT_QOS_BIT         0x00000008
+#define FILTER_ADJUST_EVENT_QOS_MASK        0x00000070
+#define FILTER_ADJUST_EVENT_QOS_SHIFT 4
+#define FILTER_ADJUST_EVENT_QOS(qos) \
+		(((qos) << FILTER_ADJUST_EVENT_QOS_SHIFT) | FILTER_ADJUST_EVENT_QOS_BIT)
+#define FILTER_RESET_EVENT_QOS              FILTER_ADJUST_EVENT_QOS_BIT
+
+#define filter_call(_ops, call)  \
+		((_ops)->f_extended_codes ? (_ops)->call : !!((_ops)->call))
 
 SLIST_HEAD(klist, knote);
 extern void	knote_init(void);
@@ -965,16 +1049,19 @@ extern void	klist_init(struct klist *list);
 extern void	knote(struct klist *list, long hint);
 extern int	knote_attach(struct klist *list, struct knote *kn);
 extern int	knote_detach(struct klist *list, struct knote *kn);
-extern void knote_vanish(struct klist *list);
+extern void 	knote_vanish(struct klist *list);
+extern void	knote_link_waitqset_lazy_alloc(struct knote *kn);
+extern boolean_t knote_link_waitqset_should_lazy_alloc(struct knote *kn);
 extern int	knote_link_waitq(struct knote *kn, struct waitq *wq, uint64_t *reserved_link);
 extern int	knote_unlink_waitq(struct knote *kn, struct waitq *wq);
-extern void	knote_fdclose(struct proc *p, int fd, int force);
+extern void	knote_fdclose(struct proc *p, int fd);
 extern void	knote_markstayactive(struct knote *kn);
 extern void	knote_clearstayactive(struct knote *kn);
-extern void knote_adjust_qos(struct knote *kn, int qos, int override, kq_index_t sync_override_index);
-extern void knote_adjust_sync_qos(struct knote *kn, kq_index_t sync_qos, boolean_t lock_kq);
 extern const struct filterops *knote_fops(struct knote *kn);
 extern void knote_set_error(struct knote *kn, int error);
+
+extern struct turnstile *kqueue_turnstile(struct kqueue *);
+extern struct turnstile *kqueue_alloc_turnstile(struct kqueue *);
 
 int kevent_exit_on_workloop_ownership_leak(thread_t thread);
 int kevent_proc_copy_uptrs(void *proc, uint64_t *buf, int bufsize);
@@ -987,7 +1074,7 @@ int kevent_copyout_dynkqextinfo(void *proc, kqueue_id_t kq_id, user_addr_t ubuf,
 
 #elif defined(KERNEL_PRIVATE) /* !XNU_KERNEL_PRIVATE: kexts still need a klist structure definition */
 
-#include <sys/queue.h> 
+#include <sys/queue.h>
 struct proc;
 struct knote;
 SLIST_HEAD(klist, knote);
@@ -998,16 +1085,11 @@ SLIST_HEAD(klist, knote);
 #ifdef PRIVATE
 
 /* make these private functions available to the pthread kext */
-extern int	kevent_qos_internal(struct proc *p, int fd, 
+extern int	kevent_qos_internal(struct proc *p, int fd,
 			    user_addr_t changelist, int nchanges,
 			    user_addr_t eventlist, int nevents,
 			    user_addr_t data_out, user_size_t *data_available,
 			    unsigned int flags, int32_t *retval);
-
-extern int  kevent_qos_internal_bind(struct proc *p,
-                int qos, thread_t thread, unsigned int flags);
-extern int  kevent_qos_internal_unbind(struct proc *p,
-                int qos, thread_t thread, unsigned int flags);
 
 extern int	kevent_id_internal(struct proc *p, kqueue_id_t *id,
 			    user_addr_t changelist, int nchanges,
@@ -1018,7 +1100,7 @@ extern int	kevent_id_internal(struct proc *p, kqueue_id_t *id,
 #endif  /* PRIVATE */
 #endif  /* KERNEL_PRIVATE */
 
-#else 	/* KERNEL */
+#else	/* KERNEL */
 
 #include <sys/types.h>
 
@@ -1026,24 +1108,24 @@ struct timespec;
 
 __BEGIN_DECLS
 int     kqueue(void);
-int     kevent(int kq, 
+int     kevent(int kq,
 	       const struct kevent *changelist, int nchanges,
 	       struct kevent *eventlist, int nevents,
 	       const struct timespec *timeout);
-int     kevent64(int kq, 
+int     kevent64(int kq,
 		 const struct kevent64_s *changelist, int nchanges,
 		 struct kevent64_s *eventlist, int nevents,
-		 unsigned int flags, 
+		 unsigned int flags,
 		 const struct timespec *timeout);
 
 #ifdef PRIVATE
-int     kevent_qos(int kq, 
+int     kevent_qos(int kq,
 		   const struct kevent_qos_s *changelist, int nchanges,
 		   struct kevent_qos_s *eventlist, int nevents,
 		   void *data_out, size_t *data_available,
 		   unsigned int flags);
 
-int     kevent_id(kqueue_id_t id, 
+int     kevent_id(kqueue_id_t id,
 		   const struct kevent_qos_s *changelist, int nchanges,
 		   struct kevent_qos_s *eventlist, int nevents,
 		   void *data_out, size_t *data_available,
@@ -1062,6 +1144,5 @@ __END_DECLS
 #define R2K_WORKQ_PENDING_EVENTS		0x2
 
 #endif /* PRIVATE */
-
 
 #endif /* !_SYS_EVENT_H_ */

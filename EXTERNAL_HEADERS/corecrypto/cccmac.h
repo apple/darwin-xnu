@@ -17,30 +17,6 @@
 
 #define CMAC_BLOCKSIZE   16
 
-#if CORECRYPTO_USE_TRANSPARENT_UNION
-struct cccmac_ctx {
-    uint8_t b[8];
-} CC_ALIGNED(8);
-
-typedef struct cccmac_ctx_hdr {
-    uint8_t k1[CMAC_BLOCKSIZE];
-    uint8_t k2[CMAC_BLOCKSIZE];
-    uint8_t block[CMAC_BLOCKSIZE];
-    size_t  block_nbytes;      // Number of byte occupied in block buf
-    size_t  cumulated_nbytes;  // Total size processed
-    const struct ccmode_cbc *cbc;
-    uint8_t ctx[8];
-} CC_ALIGNED(8) cccmac_ctx_hdr;
-
-
-typedef union {
-    struct cccmac_ctx *b;
-    cccmac_ctx_hdr *hdr;
-} cccmac_ctx_t __attribute__((transparent_union));
-#define cccmac_hdr_size sizeof(struct cccmac_ctx_hdr)
-
-#else
-
 struct cccmac_ctx {
     uint8_t k1[CMAC_BLOCKSIZE];
     uint8_t k2[CMAC_BLOCKSIZE];
@@ -55,8 +31,6 @@ typedef struct cccmac_ctx* cccmac_ctx_t;
 
 #define cccmac_hdr_size sizeof(struct cccmac_ctx)
 
-#endif
-
 
 #define cccmac_iv_size(_mode_)  ((_mode_)->block_size)
 #define cccmac_cbc_size(_mode_) ((_mode_)->size)
@@ -67,15 +41,9 @@ typedef struct cccmac_ctx* cccmac_ctx_t;
 #define cccmac_mode_decl(_mode_, _name_) cc_ctx_decl(struct cccmac_ctx, cccmac_ctx_size(_mode_), _name_)
 #define cccmac_mode_clear(_mode_, _name_) cc_clear(cccmac_ctx_size(_mode_), _name_)
 
-#if CORECRYPTO_USE_TRANSPARENT_UNION
-/* Return a cccbc_ctx * which can be accesed with the macros in ccmode.h */
-#define cccmac_mode_ctx_start(_mode_, HC)     (((HC).hdr)->ctx)
-#define CCCMAC_HDR(HC)      (((cccmac_ctx_t)(HC)).hdr)
-#else
 /* Return a cccbc_ctx * which can be accesed with the macros in ccmode.h */
 #define cccmac_mode_ctx_start(_mode_, HC)    (HC->ctx)
 #define CCCMAC_HDR(HC)      (HC)
-#endif
 
 #define cccmac_mode_sym_ctx(_mode_, HC)     (cccbc_ctx *)(cccmac_mode_ctx_start(_mode_, HC))
 #define cccmac_mode_iv(_mode_, HC)     (cccbc_iv *)(cccmac_mode_ctx_start(_mode_, HC)+cccmac_cbc_size(_mode_))

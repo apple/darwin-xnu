@@ -74,19 +74,17 @@ extern "C" {
 
 #define DTRACE_PTSS_SCRATCH_SPACE_PER_THREAD (64)
 
-#define DTRACE_PTSS_ENTRIES_PER_PAGE (PAGE_SIZE / DTRACE_PTSS_SCRATCH_SPACE_PER_THREAD)
+#define DTRACE_PTSS_ENTRIES_PER_PAGE (PAGE_MAX_SIZE / DTRACE_PTSS_SCRATCH_SPACE_PER_THREAD)
 
 struct dtrace_ptss_page_entry {
 	struct dtrace_ptss_page_entry*	next;
 	user_addr_t			addr;
-#if CONFIG_EMBEDDED
 	user_addr_t			write_addr;
-#endif
 };
 
 struct dtrace_ptss_page {
 	struct dtrace_ptss_page*       next;
-	struct dtrace_ptss_page_entry  entries[PAGE_MAX_SIZE / DTRACE_PTSS_SCRATCH_SPACE_PER_THREAD]; 
+	struct dtrace_ptss_page_entry  entries[DTRACE_PTSS_ENTRIES_PER_PAGE]; 
 };
 
 struct dtrace_ptss_page_entry*	dtrace_ptss_claim_entry(struct proc* p); /* sprlock not held */

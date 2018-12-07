@@ -61,3 +61,10 @@ _register_copyout_shim
 _getsegdatafromheader
 _getsegbynamefromheader
 __mh_execute_header
+
+#macOS only codesigning kpi
+_csproc_disable_enforcement
+_csproc_mark_invalid_allowed
+_csproc_check_invalid_allowed
+_csproc_hardened_runtime
+_csproc_forced_lv

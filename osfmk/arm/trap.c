@@ -51,6 +51,7 @@
 #include <kern/sched_prim.h>
 
 #include <sys/kdebug.h>
+#include <kperf/kperf.h>
 
 #include <arm/trap.h>
 #include <arm/caches_internal.h>
@@ -142,7 +143,7 @@ sleh_undef(struct arm_saved_state * regs, struct arm_vfpsaved_state * vfp_ss __u
 	/* Check to see if we've hit a userland probe */
 	if ((regs->cpsr & PSR_MODE_MASK) == PSR_USER_MODE) {
 		if (regs->cpsr & PSR_TF) {
-			uint16_t instr;
+			uint16_t instr = 0;
 
 			if(COPYIN((user_addr_t)(regs->pc), (char *)&instr,(vm_size_t)(sizeof(uint16_t))) != KERN_SUCCESS)
 				goto exit;
@@ -153,7 +154,7 @@ sleh_undef(struct arm_saved_state * regs, struct arm_vfpsaved_state * vfp_ss __u
 					goto exit;
 			}
 		} else {
-			uint32_t instr;
+			uint32_t instr = 0;
 
 			if(COPYIN((user_addr_t)(regs->pc), (char *)&instr,(vm_size_t)(sizeof(uint32_t))) != KERN_SUCCESS)
 				goto exit;
@@ -169,13 +170,13 @@ sleh_undef(struct arm_saved_state * regs, struct arm_vfpsaved_state * vfp_ss __u
 
 
 	if (regs->cpsr & PSR_TF) {
-		unsigned short instr;
+		unsigned short instr = 0;
 
 		if(COPYIN((user_addr_t)(regs->pc), (char *)&instr,(vm_size_t)(sizeof(unsigned short))) != KERN_SUCCESS)
 			goto exit;
 
 		if (IS_THUMB32(instr)) {
-			unsigned int	instr32;
+			unsigned int instr32;
 
 			instr32 = (instr<<16);
 
@@ -202,7 +203,7 @@ sleh_undef(struct arm_saved_state * regs, struct arm_vfpsaved_state * vfp_ss __u
 			}
 		}
 	} else {
-		uint32_t instr;
+		uint32_t instr = 0;
 
 		if(COPYIN((user_addr_t)(regs->pc), (char *)&instr,(vm_size_t)(sizeof(uint32_t))) != KERN_SUCCESS)
 			goto exit;
@@ -238,17 +239,7 @@ sleh_undef(struct arm_saved_state * regs, struct arm_vfpsaved_state * vfp_ss __u
 			(void) ml_set_interrupts_enabled(intr);
 			goto exit;
 		}
-		panic_context(exception, (void *)regs, "undefined kernel instruction\n"
-		      "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
-		      "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
-		      "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
-		      "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
-		      "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
-		      regs->r[0], regs->r[1], regs->r[2], regs->r[3],
-		      regs->r[4], regs->r[5], regs->r[6], regs->r[7],
-		      regs->r[8], regs->r[9], regs->r[10], regs->r[11],
-		      regs->r[12], regs->sp, regs->lr, regs->pc,
-		      regs->cpsr, regs->fsr, regs->far);
+		panic_with_thread_kernel_state("undefined kernel instruction", regs);
 
 		(void) ml_set_interrupts_enabled(intr);
 
@@ -306,8 +297,14 @@ sleh_abort(struct arm_saved_state * regs, int type)
 	/* Done with asynchronous handling; re-enable here so that subsequent aborts are taken as early as possible. */
 	reenable_async_aborts();
 
-	if (ml_at_interrupt_context())
-		panic_with_thread_kernel_state("sleh_abort at interrupt context", regs);
+	if (ml_at_interrupt_context()) {
+#if CONFIG_DTRACE
+		if (!(thread->options & TH_OPT_DTRACE))
+#endif /* CONFIG_DTRACE */
+		{
+			panic_with_thread_kernel_state("sleh_abort at interrupt context", regs);
+		}
+	}
 
 	fault_addr = vaddr = regs->far;
 
@@ -339,7 +336,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 			/* Cache operations report faults as write access, change these to read access */
 			/* Cache operations are invoked from arm mode for now */
 			if (!(regs->cpsr & PSR_TF)) {
-				unsigned int    ins;
+				unsigned int ins = 0;
 
 				if(COPYIN((user_addr_t)(regs->pc), (char *)&ins,(vm_size_t)(sizeof(unsigned int))) != KERN_SUCCESS)
 					goto exit;
@@ -355,7 +352,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 			 * a write fault.
 			 */
 			if (!(regs->cpsr & PSR_TF)) {
-				unsigned int    ins;
+				unsigned int ins = 0;
 
 				if(COPYIN((user_addr_t)(regs->pc), (char *)&ins,(vm_size_t)(sizeof(unsigned int))) != KERN_SUCCESS)
 					goto exit;
@@ -387,18 +384,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 				(void) ml_set_interrupts_enabled(intr);
 				goto exit;
 			}
-			panic_context(EXC_BAD_ACCESS, (void*)regs, "sleh_abort: prefetch abort in kernel mode: fault_addr=0x%x\n"
-			      "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
-			      "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
-			      "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
-			      "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
-			      "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
-			      fault_addr,
-			      regs->r[0], regs->r[1], regs->r[2], regs->r[3],
-			      regs->r[4], regs->r[5], regs->r[6], regs->r[7],
-			      regs->r[8], regs->r[9], regs->r[10], regs->r[11],
-			      regs->r[12], regs->sp, regs->lr, regs->pc,
-			      regs->cpsr, regs->fsr, regs->far);
+			panic_with_thread_kernel_state("prefetch abort in kernel mode", regs);
 
 			(void) ml_set_interrupts_enabled(intr);
 
@@ -412,17 +398,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 					goto exit;
 				} else {
 					intr = ml_set_interrupts_enabled(FALSE);
-					panic_context(EXC_BAD_ACCESS, (void *)regs, "Unexpected page fault under dtrace_probe"
-					      "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
-					      "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
-					      "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
-					      "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
-					      "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
-					      regs->r[0], regs->r[1], regs->r[2], regs->r[3],
-					      regs->r[4], regs->r[5], regs->r[6], regs->r[7],
-					      regs->r[8], regs->r[9], regs->r[10], regs->r[11],
-					      regs->r[12], regs->sp, regs->lr, regs->pc,
-					      regs->cpsr, regs->fsr, regs->far);
+					panic_with_thread_kernel_state("Unexpected page fault under dtrace_probe", regs);
 
 					(void) ml_set_interrupts_enabled(intr);
 
@@ -436,10 +412,12 @@ sleh_abort(struct arm_saved_state * regs, int type)
 			else
 				map = thread->map;
 
-			/* check to see if it is just a pmap ref/modify fault */
-			result = arm_fast_fault(map->pmap, trunc_page(fault_addr), fault_type, FALSE);
-			if (result == KERN_SUCCESS)
-				goto exit;
+			if (!TEST_FSR_TRANSLATION_FAULT(status)) {
+				/* check to see if it is just a pmap ref/modify fault */
+				result = arm_fast_fault(map->pmap, trunc_page(fault_addr), fault_type, FALSE);
+				if (result == KERN_SUCCESS)
+					goto exit;
+			}
 
 			/*
 			 *  We have to "fault" the page in.
@@ -468,18 +446,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 			} else {
 				intr = ml_set_interrupts_enabled(FALSE);
 
-				panic_context(EXC_BAD_ACCESS, (void *)regs, "unaligned kernel data access: pc=0x%08x fault_addr=0x%x\n"
-				      "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
-				      "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
-				      "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
-				      "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
-				      "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
-				      regs->pc, fault_addr,
-				      regs->r[0], regs->r[1], regs->r[2], regs->r[3],
-				      regs->r[4], regs->r[5], regs->r[6], regs->r[7],
-				      regs->r[8], regs->r[9], regs->r[10], regs->r[11],
-				      regs->r[12], regs->sp, regs->lr, regs->pc,
-				      regs->cpsr, regs->fsr, regs->far);
+				panic_with_thread_kernel_state("unaligned kernel data access", regs);
 
 				(void) ml_set_interrupts_enabled(intr);
 
@@ -489,7 +456,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 		}
 		intr = ml_set_interrupts_enabled(FALSE);
 
-		panic_context(EXC_BAD_ACCESS, (void *)regs, "kernel abort type %d: fault_type=0x%x, fault_addr=0x%x\n"
+		panic_plain("kernel abort type %d: fault_type=0x%x, fault_addr=0x%x\n"
 		      "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
 		      "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
 		      "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
@@ -519,17 +486,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 				} else {
 					intr = ml_set_interrupts_enabled(FALSE);
 
-					panic_context(EXC_BAD_ACCESS, (void *)regs, "copyin/out has no recovery point"
-					      "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
-					      "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
-					      "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
-					      "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
-					      "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
-					      regs->r[0], regs->r[1], regs->r[2], regs->r[3],
-					      regs->r[4], regs->r[5], regs->r[6], regs->r[7],
-					      regs->r[8], regs->r[9], regs->r[10], regs->r[11],
-					      regs->r[12], regs->sp, regs->lr, regs->pc,
-					      regs->cpsr, regs->fsr, regs->far);
+					panic_with_thread_kernel_state("copyin/out has no recovery point", regs);
 
 					(void) ml_set_interrupts_enabled(intr);
 				}
@@ -537,17 +494,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 			} else {
 				intr = ml_set_interrupts_enabled(FALSE);
 
-				panic_context(EXC_BAD_ACCESS, (void*)regs, "Unexpected UMW page fault under dtrace_probe"
-				      "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
-				      "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
-				      "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
-				      "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
-				      "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
-				      regs->r[0], regs->r[1], regs->r[2], regs->r[3],
-				      regs->r[4], regs->r[5], regs->r[6], regs->r[7],
-				      regs->r[8], regs->r[9], regs->r[10], regs->r[11],
-				      regs->r[12], regs->sp, regs->lr, regs->pc,
-				      regs->cpsr, regs->fsr, regs->far);
+				panic_with_thread_kernel_state("Unexpected UMW page fault under dtrace_probe", regs);
 
 				(void) ml_set_interrupts_enabled(intr);
 
@@ -556,16 +503,19 @@ sleh_abort(struct arm_saved_state * regs, int type)
 		}
 #endif
 
-		/* check to see if it is just a pmap ref/modify fault */
-		result = arm_fast_fault(map->pmap, trunc_page(fault_addr), fault_type, TRUE);
-		if (result != KERN_SUCCESS) {
-			/*
-			 * We have to "fault" the page in.
-			 */
-			result = vm_fault(map, fault_addr, fault_type,
-					  FALSE /* change_wiring */, VM_KERN_MEMORY_NONE,
-					  THREAD_ABORTSAFE, NULL, 0);
+		if (!TEST_FSR_TRANSLATION_FAULT(status)) {
+			/* check to see if it is just a pmap ref/modify fault */
+			result = arm_fast_fault(map->pmap, trunc_page(fault_addr), fault_type, TRUE);
+			if (result == KERN_SUCCESS)
+				goto exception_return;
 		}
+
+		/*
+		 * We have to "fault" the page in.
+		 */
+		result = vm_fault(map, fault_addr, fault_type,
+				  FALSE /* change_wiring */, VM_KERN_MEMORY_NONE,
+				  THREAD_ABORTSAFE, NULL, 0);
 		if (result == KERN_SUCCESS || result == KERN_ABORTED) {
 			goto exception_return;
 		}
@@ -614,7 +564,7 @@ static kern_return_t
 sleh_alignment(struct arm_saved_state * regs)
 {
 	unsigned int    status;
-	unsigned int    ins;
+	unsigned int    ins = 0;
 	unsigned int    rd_index;
 	unsigned int    base_index;
 	unsigned int    paddr;
@@ -650,7 +600,7 @@ sleh_alignment(struct arm_saved_state * regs)
 	paddr = regs->far;
 
 	if (regs->cpsr & PSR_TF) {
-		 unsigned short  ins16;
+		 unsigned short ins16 = 0;
 
 		/* Get aborted instruction */
 #if	__ARM_SMP__ || __ARM_USER_PROTECT__
@@ -859,9 +809,10 @@ void
 interrupt_trace_exit(
 		     void)
 {
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END,
-		0, 0, 0, 0, 0);
+#if KPERF
+	kperf_interrupt();
+#endif /* KPERF */
+	KDBG_RELEASE(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END);
 }
 #endif
 
@@ -878,17 +829,17 @@ interrupt_stats(void)
 static void 
 panic_with_thread_kernel_state(const char *msg, struct arm_saved_state *regs)
 {
-		panic_context(0, (void*)regs, "%s (saved state:%p)\n"
-			      "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
-			      "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
-			      "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
-			      "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
-			      "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
-				  msg, regs,
-			      regs->r[0], regs->r[1], regs->r[2], regs->r[3],
-			      regs->r[4], regs->r[5], regs->r[6], regs->r[7],
-			      regs->r[8], regs->r[9], regs->r[10], regs->r[11],
-			      regs->r[12], regs->sp, regs->lr, regs->pc,
-			      regs->cpsr, regs->fsr, regs->far);
+	panic_plain("%s (saved state:%p)\n"
+		    "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
+		    "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
+		    "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
+		    "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
+		    "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
+		    msg, regs,
+		    regs->r[0], regs->r[1], regs->r[2], regs->r[3],
+		    regs->r[4], regs->r[5], regs->r[6], regs->r[7],
+		    regs->r[8], regs->r[9], regs->r[10], regs->r[11],
+		    regs->r[12], regs->sp, regs->lr, regs->pc,
+		    regs->cpsr, regs->fsr, regs->far);
 
 }

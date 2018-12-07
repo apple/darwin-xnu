@@ -56,6 +56,7 @@
 
 #include <kern/ast.h>
 #include <kern/counters.h>
+#include <kern/cpu_quiesce.h>
 #include <kern/misc_protos.h>
 #include <kern/queue.h>
 #include <kern/sched_prim.h>
@@ -297,7 +298,28 @@ ast_taken_user(void)
 		}
 	}
 
+	if (ast_consume(AST_UNQUIESCE) == AST_UNQUIESCE) {
+		cpu_quiescent_counter_ast();
+	}
+
+	cpu_quiescent_counter_assert_ast();
+
 	splx(s);
+
+	/*
+	 * Here's a good place to put assertions of things which must be true
+	 * upon return to userspace.
+	 */
+	assert((thread->sched_flags & TH_SFLAG_WAITQ_PROMOTED) == 0);
+	assert((thread->sched_flags & TH_SFLAG_RW_PROMOTED) == 0);
+	assert((thread->sched_flags & TH_SFLAG_EXEC_PROMOTED) == 0);
+	assert((thread->sched_flags & TH_SFLAG_PROMOTED) == 0);
+	assert((thread->sched_flags & TH_SFLAG_DEPRESS) == 0);
+
+	assert(thread->promotions == 0);
+	assert(thread->was_promoted_on_wakeup == 0);
+	assert(thread->waiting_for_mutex == NULL);
+	assert(thread->rwlock_count == 0);
 }
 
 /*

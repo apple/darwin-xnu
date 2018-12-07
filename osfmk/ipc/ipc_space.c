@@ -149,12 +149,12 @@ ipc_space_rand_freelist(
 	mach_port_index_t	bottom,
 	mach_port_index_t	top)
 {
+	int at_start = (bottom == 0);
 #ifdef CONFIG_SEMI_RANDOM_ENTRIES
 	/*
 	 * Only make sequential entries at the start of the table, and not when
 	 * we're growing the space.
 	 */
-	int at_start = (bottom == 0);
 	ipc_entry_num_t total = 0;
 #endif
 
@@ -210,6 +210,11 @@ ipc_space_rand_freelist(
 	table[curr].ie_object = IO_NULL;
 	table[curr].ie_index  = 0;
 	table[curr].ie_bits   = IE_BITS_GEN_MASK;
+
+	/* The freelist head should always have generation number set to 0 */
+	if (at_start) {
+		table[0].ie_bits = 0;
+	}
 }
 
 

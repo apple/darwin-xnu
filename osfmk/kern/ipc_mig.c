@@ -84,6 +84,9 @@
 
 #include <libkern/OSAtomic.h>
 
+void
+mach_msg_receive_results_complete(ipc_object_t object);
+
 /*
  *	Routine:	mach_msg_send_from_kernel
  *	Purpose:
@@ -410,6 +413,7 @@ mach_msg_rpc_from_kernel_body(
 
 	for (;;) {
 		ipc_mqueue_t mqueue;
+		ipc_object_t object;
 
 		assert(reply->ip_in_pset == 0);
 		assert(ip_active(reply));
@@ -433,6 +437,9 @@ mach_msg_rpc_from_kernel_body(
 		mr = self->ith_state;
 		kmsg = self->ith_kmsg;
 		seqno = self->ith_seqno;
+
+		__IGNORE_WCASTALIGN(object = (ipc_object_t) reply);
+		mach_msg_receive_results_complete(object);
 
 		if (mr == MACH_MSG_SUCCESS)
 		  {
@@ -598,6 +605,7 @@ mach_msg_overwrite(
 					       &mqueue, &object);
 			if (mr != MACH_MSG_SUCCESS)
 				return mr;
+
 			/* hold ref for object */
 
 			self->ith_continuation = (void (*)(mach_msg_return_t))0;
@@ -610,6 +618,7 @@ mach_msg_overwrite(
 			kmsg = self->ith_kmsg;
 			seqno = self->ith_seqno;
 
+			mach_msg_receive_results_complete(object);
 			io_release(object);
 
 		} while (mr == MACH_RCV_INTERRUPTED);

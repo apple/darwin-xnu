@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -97,6 +97,7 @@
 #include <net/kpi_protocol.h>
 
 #include <kern/locks.h>
+#include <kern/zalloc.h>
 
 #ifdef INET
 #include <netinet/in.h>
@@ -369,6 +370,8 @@ SYSCTL_NODE(_net_link, IFT_L2VLAN, vlan, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "IEEE 802
 SYSCTL_NODE(_net_link_vlan, PF_LINK, link, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "for consistency");
 #endif
 
+#define	VLAN_UNITMAX	IF_MAXUNIT
+#define	VLAN_ZONE_MAX_ELEM	MIN(IFNETS_MAX, VLAN_UNITMAX)
 #define M_VLAN 		M_DEVBUF
 
 static	int vlan_clone_create(struct if_clone *, u_int32_t, void *);
@@ -386,10 +389,12 @@ static	void vlan_if_free(struct ifnet * ifp);
 static 	int vlan_remove(ifvlan_ref ifv, int need_to_wait);
 
 static struct if_clone vlan_cloner = IF_CLONE_INITIALIZER(VLANNAME,
-							  vlan_clone_create, 
-							  vlan_clone_destroy, 
-							  0, 
-							  IF_MAXUNIT);
+    vlan_clone_create,
+    vlan_clone_destroy,
+    0,
+    VLAN_UNITMAX,
+    VLAN_ZONE_MAX_ELEM,
+    sizeof(struct ifvlan));
 static	void interface_link_event(struct ifnet * ifp, u_int32_t event_code);
 static	void vlan_parent_link_event(struct ifnet * p,
 				    u_int32_t event_code);
@@ -429,7 +434,7 @@ ifvlan_release(ifvlan_ref ifv)
 	    printf("ifvlan_release(%s)\n", ifv->ifv_name);
 	}
 	ifv->ifv_signature = 0;
-	FREE(ifv, M_VLAN);
+	if_clone_softc_deallocate(&vlan_cloner, ifv);
 	break;
     default:
 	break;
@@ -937,7 +942,7 @@ vlan_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	if (error != 0) {
 		return (error);
 	}
-	ifv = _MALLOC(sizeof(struct ifvlan), M_VLAN, M_WAITOK | M_ZERO);
+	ifv = if_clone_softc_allocate(&vlan_cloner);
 	if (ifv == NULL)
 		return ENOBUFS;
 	ifv->ifv_retain_count = 1;

@@ -35,30 +35,29 @@
 #ifndef KERNEL
 /*
  * Gets all register values in the target thread with pointer-like contents.
- * There's no guarantee that the returned values are valid pointers, but all
+ *
+ * There is no guarantee that the returned values are valid pointers, but all
  * valid pointers will be returned.  The order and count of the provided
  * register values is unspecified and may change; registers with values that
  * are not valid pointers may be omitted, so the number of pointers returned
  * may vary from call to call.
  *
- * sp is an out parameter that will contain the stack pointer
- * length is an in/out parameter for the length of the values array
- * values is an array of pointers
+ * sp is an out parameter that will contain the stack pointer.
+ * length is an in/out parameter for the length of the values array.
+ * values is an array of pointers.
  *
  * This may only be called on threads in the current task.  If the current
  * platform defines a stack red zone, the stack pointer returned will be
  * adjusted to account for red zone.
  *
- * If length is insufficient KERN_INSUFFICIENT_BUFFER_SIZE will be returned and
- * length set to the amount of memory required.  Callers MUST NOT assume that
- * any particular size of buffer will be sufficient and should retry with an
- * aproproately sized buffer upon this error.
+ * If length is insufficient, KERN_INSUFFICIENT_BUFFER_SIZE will be returned
+ * and length set to the amount of memory required.  Callers MUST NOT assume
+ * that any particular size of buffer will be sufficient and should retry with
+ * an appropriately sized buffer upon this error.
  */
-__OSX_UNAVAILABLE
-__IOS_UNAVAILABLE
-__TVOS_AVAILABLE(9.0)
-__WATCHOS_UNAVAILABLE
-kern_return_t thread_get_register_pointer_values(thread_t thread, uintptr_t *sp, size_t *length, uintptr_t *values);
+__API_AVAILABLE(macosx(10.14), ios(12.0), tvos(9.0), watchos(5.0))
+kern_return_t thread_get_register_pointer_values(thread_t thread,
+		uintptr_t *sp, size_t *length, uintptr_t *values);
 #endif
 
 #endif /* _MACH_THREAD_STATE_H_ */

@@ -161,6 +161,9 @@ int	oslog_stream_open = 0;
 int	oslog_stream_buf_size = OSLOG_STREAM_BUF_SIZE;
 int	oslog_stream_num_entries = OSLOG_NUM_STREAM_ENTRIES;
 
+uint8_t __firehose_buffer_kernel_chunk_count = FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT;
+uint8_t __firehose_num_kernel_io_pages = FIREHOSE_BUFFER_KERNEL_DEFAULT_IO_PAGES;
+
 /* oslogsoftc only valid while oslog_open=1 */
 struct oslogsoftc {
 	int	sc_state;		/* see above for possibilities */
@@ -784,7 +787,7 @@ int
 oslogioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __unused struct proc *p)
 {
 	int ret = 0;
-	mach_vm_size_t buffer_size = (FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT * FIREHOSE_CHUNK_SIZE);
+	mach_vm_size_t buffer_size = (__firehose_buffer_kernel_chunk_count * FIREHOSE_CHUNK_SIZE);
 	firehose_buffer_map_info_t map_info = {0, 0};
 	firehose_buffer_t kernel_firehose_buffer = NULL;
 	mach_vm_address_t user_addr = 0;
@@ -809,6 +812,7 @@ oslogioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __un
 					  buffer_size,
 					  0, /*  mask */
 					  VM_FLAGS_ANYWHERE,
+					  VM_MAP_KERNEL_FLAGS_NONE,
 					  VM_KERN_MEMORY_NONE,
 					  mem_entry_ptr,
 					  0, /* offset */
@@ -876,7 +880,18 @@ void
 oslog_init(void)
 {
 	kern_return_t kr;
-	vm_size_t size = FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT * FIREHOSE_CHUNK_SIZE;
+	if (!PE_parse_boot_argn("firehose_chunk_count", &__firehose_buffer_kernel_chunk_count, sizeof(__firehose_buffer_kernel_chunk_count))) {
+		__firehose_buffer_kernel_chunk_count = FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT;
+	}
+	if (!PE_parse_boot_argn("firehose_io_pages", &__firehose_num_kernel_io_pages, sizeof(__firehose_num_kernel_io_pages))) {
+		__firehose_num_kernel_io_pages = FIREHOSE_BUFFER_KERNEL_DEFAULT_IO_PAGES;
+	}
+	if (!__firehose_kernel_configuration_valid(__firehose_buffer_kernel_chunk_count, __firehose_num_kernel_io_pages)) {
+		printf("illegal firehose configuration %u/%u, using defaults\n", __firehose_buffer_kernel_chunk_count, __firehose_num_kernel_io_pages);
+		__firehose_buffer_kernel_chunk_count = FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT;
+		__firehose_num_kernel_io_pages = FIREHOSE_BUFFER_KERNEL_DEFAULT_IO_PAGES;
+	}
+	vm_size_t size = __firehose_buffer_kernel_chunk_count * FIREHOSE_CHUNK_SIZE;
 
 	oslog_lock_init();
 
@@ -891,7 +906,7 @@ oslog_init(void)
 	/* register buffer with firehose */
 	kernel_firehose_addr = (vm_offset_t)__firehose_buffer_create((size_t *) &size);
 
-	kprintf("oslog_init completed\n");
+	printf("oslog_init completed, %u chunks, %u io pages\n", __firehose_buffer_kernel_chunk_count, __firehose_num_kernel_io_pages);
 }
 
 /*
@@ -1333,3 +1348,46 @@ log_dmesg(user_addr_t buffer, uint32_t buffersize, int32_t * retval)
 	return (error);
 }
 
+#ifdef CONFIG_XNUPOST
+
+uint32_t find_pattern_in_buffer(char * pattern, uint32_t len, int expected_count);
+
+/*
+ * returns count of pattern found in systemlog buffer.
+ * stops searching further if count reaches expected_count.
+ */
+uint32_t
+find_pattern_in_buffer(char * pattern, uint32_t len, int expected_count)
+{
+	int match_count = 0;
+	int i           = 0;
+	int j           = 0;
+	int no_match    = 0;
+	int pos         = 0;
+	char ch         = 0;
+
+	if (pattern == NULL || len == 0 || expected_count == 0) {
+		return 0;
+	}
+
+	for (i = 0; i < msgbufp->msg_size; i++) {
+		no_match = 0;
+		for (j = 0; j < (int)len; j++) {
+			pos = (msgbufp->msg_bufx + i + j) % msgbufp->msg_size;
+			ch  = msgbufp->msg_bufc[pos];
+			if (ch != pattern[j]) {
+				no_match = 1;
+				break;
+			}
+		}
+		if (no_match == 0) {
+			match_count++;
+			if (match_count >= expected_count) {
+				break;
+			}
+		}
+	}
+	return match_count;
+}
+
+#endif

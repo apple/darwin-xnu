@@ -126,6 +126,15 @@ vnode_pager_issue_reprioritize_io(struct vnode *devvp, uint64_t blkno, uint32_t 
 }
 #endif
 
+void
+vnode_pager_was_dirtied(
+	struct vnode		*vp,
+	vm_object_offset_t	s_offset,
+	vm_object_offset_t	e_offset)
+{
+        cluster_update_state(vp, s_offset, e_offset, TRUE);
+}
+
 uint32_t
 vnode_pager_isinuse(struct vnode *vp)
 {

@@ -40,6 +40,33 @@ Entry(vzeroall)
 	vzeroall
 	ret
 
+Entry(avx512_zero)
+	vzeroall
+
+	VPX %zmm16
+	VPX %zmm17
+	VPX %zmm18
+	VPX %zmm19
+
+	VPX %zmm20
+	VPX %zmm21
+	VPX %zmm22
+	VPX %zmm23
+
+	VPX %zmm24
+	VPX %zmm25
+	VPX %zmm26
+	VPX %zmm27
+
+	VPX %zmm28
+	VPX %zmm29
+	VPX %zmm30
+	VPX %zmm31
+
+	xor %eax, %eax
+	kmovw %eax, %k1
+	ret
+
 Entry(xmmzeroall)
 	PX %xmm0
 	PX %xmm1

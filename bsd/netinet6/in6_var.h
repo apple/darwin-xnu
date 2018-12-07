@@ -723,9 +723,12 @@ void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *, uint8_t *mac);
 #define	SIOCLL_CGASTART_32	_IOW('i', 160, struct in6_cgareq_32)
 #define	SIOCLL_CGASTART_64	_IOW('i', 160, struct in6_cgareq_64)
 #endif
+
 #define	SIOCGIFCGAPREP_IN6	_IOWR('i', 187, struct in6_cgareq)
 #define	SIOCSIFCGAPREP_IN6	_IOWR('i', 188, struct in6_cgareq)
 
+#define	SIOCCLAT46_START	_IOWR('i', 189, struct in6_ifreq)
+#define	SIOCCLAT46_STOP		_IOWR('i', 190, struct in6_ifreq)
 #endif /* PRIVATE */
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -754,6 +757,7 @@ void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *, uint8_t *mac);
 #ifdef PRIVATE
 #define	IN6_IFF_SWIFTDAD	0x0800  /* DAD with no delay */
 #endif
+#define	IN6_IFF_CLAT46		0x1000  /* Address reserved for CLAT46 */
 #define	IN6_IFF_NOPFX		0x8000	/* Depreciated. Don't use. */
 
 /* Duplicate Address Detection [DAD] in progress. */
@@ -1114,6 +1118,7 @@ extern void in6_setmaxmtu(void);
 extern void in6_restoremkludge(struct in6_ifaddr *, struct ifnet *);
 extern void in6_purgemkludge(struct ifnet *);
 extern struct in6_ifaddr *in6ifa_ifpforlinklocal(struct ifnet *, int);
+extern struct in6_ifaddr *in6ifa_ifpwithflag(struct ifnet *, int);
 extern struct in6_ifaddr *in6ifa_ifpwithaddr(struct ifnet *, struct in6_addr *);
 extern struct in6_ifaddr *in6ifa_prproxyaddr(struct in6_addr *);
 extern void in6ifa_getlifetime(struct in6_ifaddr *,

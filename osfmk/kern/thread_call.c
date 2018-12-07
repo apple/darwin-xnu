@@ -1285,7 +1285,6 @@ thread_call_finish(thread_call_t call, thread_call_group_t group, spl_t *s)
 	uint64_t  time;
 	uint32_t  flags;
 	boolean_t signal;
-	boolean_t dowake = FALSE;
 	boolean_t repend = FALSE;
 
 	call->tc_finish_count++;
@@ -1328,22 +1327,8 @@ thread_call_finish(thread_call_t call, thread_call_group_t group, spl_t *s)
 		}
 	}
 
-	if ((flags & THREAD_CALL_WAIT) != 0) {
-		dowake = TRUE;
-
-		/* 
-		 * Dropping lock here because the sched call for the 
-		 * high-pri group can take the big lock from under
-		 * a thread lock.
-		 */
-		thread_call_unlock();
-		thread_wakeup((event_t)call);
-		thread_call_lock_spin();
-		/* THREAD_CALL_SIGNAL call may have been freed */
-	}
-
 	if (!signal && (call->tc_refs == 0)) {
-		if (dowake) {
+		if ((flags & THREAD_CALL_WAIT) != 0) {
 			panic("Someone waiting on a thread call that is scheduled for free: %p\n", call->tc_call.func);
 		}
 
@@ -1354,6 +1339,18 @@ thread_call_finish(thread_call_t call, thread_call_group_t group, spl_t *s)
 		zfree(thread_call_zone, call);
 
 		*s = disable_ints_and_lock();
+	}
+
+	if ((flags & THREAD_CALL_WAIT) != 0) {
+		/*
+		 * Dropping lock here because the sched call for the
+		 * high-pri group can take the big lock from under
+		 * a thread lock.
+		 */
+		thread_call_unlock();
+		thread_wakeup((event_t)call);
+		thread_call_lock_spin();
+		/* THREAD_CALL_SIGNAL call may have been freed */
 	}
 
 	return (repend);

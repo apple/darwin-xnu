@@ -29,10 +29,6 @@ extern "C" {
 #include <mach/kmod.h>
 #include <libkern/kernel_mach_header.h>
 #include <libkern/prelink.h>
-
-#if CONFIG_EMBEDDED
-extern uuid_t kernelcache_uuid;
-#endif
 }
 
 #include <libkern/version.h>
@@ -104,6 +100,7 @@ static const char * sKernelComponentNames[] = {
    "com.apple.kpi.bsd",
    "com.apple.kpi.dsep",
    "com.apple.kpi.iokit",
+   "com.apple.kpi.kasan",
    "com.apple.kpi.libkern",
    "com.apple.kpi.mach",
    "com.apple.kpi.private",
@@ -246,9 +243,7 @@ KLDBootstrap::readPrelinkedExtensions(
     OSDictionary              * prelinkInfoDict         = NULL;  // do not release
     OSString                  * errorString             = NULL;  // must release
     OSKext                    * theKernel               = NULL;  // must release
-#if CONFIG_EMBEDDED
     OSData                    * kernelcacheUUID         = NULL;  // do not release
-#endif
 
     kernel_segment_command_t  * prelinkTextSegment      = NULL;  // see code
     kernel_segment_command_t  * prelinkInfoSegment      = NULL;  // see code
@@ -374,19 +369,19 @@ KLDBootstrap::readPrelinkedExtensions(
     ramDiskBoot = IORamDiskBSDRoot();
 #endif /* NO_KEXTD */
 
-#if CONFIG_EMBEDDED
     /* Copy in the kernelcache UUID */
     kernelcacheUUID = OSDynamicCast(OSData,
         prelinkInfoDict->getObject(kPrelinkInfoKCIDKey));
-    if (!kernelcacheUUID) {
-	bzero(&kernelcache_uuid, sizeof(kernelcache_uuid));
-    } else if (kernelcacheUUID->getLength() != sizeof(kernelcache_uuid)) {
-        panic("kernelcacheUUID length is %d, expected %lu", kernelcacheUUID->getLength(),
-            sizeof(kernelcache_uuid));
-    } else {
-        memcpy((void *)&kernelcache_uuid, (const void *)kernelcacheUUID->getBytesNoCopy(), kernelcacheUUID->getLength());
+    if (kernelcacheUUID) {
+        if (kernelcacheUUID->getLength() != sizeof(kernelcache_uuid)) {
+            panic("kernelcacheUUID length is %d, expected %lu", kernelcacheUUID->getLength(),
+                sizeof(kernelcache_uuid));
+        } else {
+            kernelcache_uuid_valid = TRUE;
+            memcpy((void *)&kernelcache_uuid, (const void *)kernelcacheUUID->getBytesNoCopy(), kernelcacheUUID->getLength());
+            uuid_unparse_upper(kernelcache_uuid, kernelcache_uuid_string);
+        }
     }
-#endif /* CONFIG_EMBEDDED */
 
     infoDictArray = OSDynamicCast(OSArray, 
         prelinkInfoDict->getObject(kPrelinkInfoDictionaryKey));
@@ -454,7 +449,7 @@ KLDBootstrap::readPrelinkedExtensions(
                 infoDict->getObject(kPrelinkExecutableSizeKey));
             if (addressNum && lengthNum) {
 #if __arm__ || __arm64__
-                vm_offset_t data = (vm_offset_t) ((addressNum->unsigned64BitValue()) + vm_kernel_slide);
+                vm_offset_t data = ml_static_slide(addressNum->unsigned64BitValue());
                 vm_size_t length = (vm_size_t) (lengthNum->unsigned32BitValue());
                 ml_static_mfree(data, length);
 #else
@@ -493,7 +488,7 @@ KLDBootstrap::readPrelinkedExtensions(
 
 		    slideAddrSegIndex = __whereIsAddr( (vm_offset_t)slideAddr, &plk_segSizes[0], &plk_segAddrs[0], PLK_SEGMENTS );
 		    if (slideAddrSegIndex >= 0) {
-			    addrToSlideSegIndex = __whereIsAddr( (vm_offset_t)(*slideAddr + vm_kernel_slide), &plk_segSizes[0], &plk_segAddrs[0], PLK_SEGMENTS );
+			    addrToSlideSegIndex = __whereIsAddr(ml_static_slide((vm_offset_t)(*slideAddr)), &plk_segSizes[0], &plk_segAddrs[0], PLK_SEGMENTS );
 			    if (addrToSlideSegIndex < 0) {
 				    badSlideTarget++;
 				    continue;
@@ -505,7 +500,7 @@ KLDBootstrap::readPrelinkedExtensions(
 		    }
 
 		    slidKextAddrCount++;
-		    *(slideAddr) += vm_kernel_slide;
+		    *slideAddr = ml_static_slide(*slideAddr);
 	    } // for ...
 
 	    /* All kexts are now slid, set VM protections for them */

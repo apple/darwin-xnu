@@ -114,6 +114,7 @@
 
 #include <sys/sdt.h>
 #include <sys/codesign.h>
+#include <sys/random.h>
 #include <libkern/section_keywords.h>
 
 #if CONFIG_MACF
@@ -261,6 +262,11 @@ __sigaction_user32_to_kern(struct __user32_sigaction *in, struct __kern_sigactio
 	out->sa_tramp = CAST_USER_ADDR_T(in->sa_tramp);
 	out->sa_mask = in->sa_mask;
 	out->sa_flags = in->sa_flags;
+
+	kern_return_t kr;
+	kr = machine_thread_function_pointers_convert_from_user(current_thread(),
+			&out->sa_tramp, 1);
+	assert(kr == KERN_SUCCESS);
 }
 
 static void
@@ -270,6 +276,11 @@ __sigaction_user64_to_kern(struct __user64_sigaction *in, struct __kern_sigactio
 	out->sa_tramp = in->sa_tramp;
 	out->sa_mask = in->sa_mask;
 	out->sa_flags = in->sa_flags;
+
+	kern_return_t kr;
+	kr = machine_thread_function_pointers_convert_from_user(current_thread(),
+			&out->sa_tramp, 1);
+	assert(kr == KERN_SUCCESS);
 }
 
 #if SIGNAL_DEBUG
@@ -444,6 +455,7 @@ sigaction(proc_t p, struct sigaction_args *uap, __unused int32_t *retval)
 
 	int signum;
 	int bit, error=0;
+	uint32_t sigreturn_validation = PS_SIGRETURN_VALIDATION_DEFAULT;
 
 	signum = uap->signum;
 	if (signum <= 0 || signum >= NSIG ||
@@ -462,6 +474,9 @@ sigaction(proc_t p, struct sigaction_args *uap, __unused int32_t *retval)
 		}
 		if (error)
 			return (error);
+
+		sigreturn_validation = (__vec.sa_flags & SA_VALIDATE_SIGRETURN_FROM_SIGTRAMP) ?
+				PS_SIGRETURN_VALIDATION_ENABLED : PS_SIGRETURN_VALIDATION_DISABLED;
 		__vec.sa_flags &= SA_USERSPACE_MASK; /* Only pass on valid sa_flags */
 
 		if ((__vec.sa_flags & SA_SIGINFO) || __vec.sa_handler != SIG_DFL) {
@@ -488,8 +503,6 @@ sigaction(proc_t p, struct sigaction_args *uap, __unused int32_t *retval)
 			sa->sa_flags |= SA_SIGINFO;
 		if (ps->ps_signodefer & bit)
 			sa->sa_flags |= SA_NODEFER;
-		if (ps->ps_64regset & bit)
-			sa->sa_flags |= SA_64REGSET;
 		if ((signum == SIGCHLD) && (p->p_flag & P_NOCLDSTOP))
 			sa->sa_flags |= SA_NOCLDSTOP;
 		if ((signum == SIGCHLD) && (p->p_flag & P_NOCLDWAIT))
@@ -509,6 +522,13 @@ sigaction(proc_t p, struct sigaction_args *uap, __unused int32_t *retval)
 	}
 
 	if (uap->nsa) {
+		uint32_t old_sigreturn_validation = atomic_load_explicit(
+				&ps->ps_sigreturn_validation, memory_order_relaxed);
+		if (old_sigreturn_validation == PS_SIGRETURN_VALIDATION_DEFAULT) {
+			atomic_compare_exchange_strong_explicit(&ps->ps_sigreturn_validation,
+					&old_sigreturn_validation, sigreturn_validation,
+					memory_order_relaxed, memory_order_relaxed);
+		}
 		error = setsigvec(p, current_thread(), signum, &__vec, FALSE);
 	}
 
@@ -673,10 +693,6 @@ setsigvec(proc_t p, __unused thread_t thread, int signum, struct __kern_sigactio
 		ps->ps_siginfo |= bit;
 	else
 		ps->ps_siginfo &= ~bit;
-	if (sa->sa_flags & SA_64REGSET)
-		ps->ps_64regset |= bit;
-	else
-		ps->ps_64regset &= ~bit;
 	if ((sa->sa_flags & SA_RESTART) == 0)
 		ps->ps_sigintr |= bit;
 	else
@@ -685,10 +701,6 @@ setsigvec(proc_t p, __unused thread_t thread, int signum, struct __kern_sigactio
 		ps->ps_sigonstack |= bit;
 	else
 		ps->ps_sigonstack &= ~bit;
-	if (sa->sa_flags & SA_USERTRAMP)
-		ps->ps_usertramp |= bit;
-	else
-		ps->ps_usertramp &= ~bit;
 	if (sa->sa_flags & SA_RESETHAND)
 		ps->ps_sigreset |= bit;
 	else
@@ -785,6 +797,11 @@ execsigs(proc_t p, thread_t thread)
 		}
 		ps->ps_sigact[nc] = SIG_DFL;
 	}
+
+	atomic_store_explicit(&ps->ps_sigreturn_validation,
+			PS_SIGRETURN_VALIDATION_DEFAULT, memory_order_relaxed);
+	/* Generate random token value used to validate sigreturn arguments */
+	read_random(&ps->ps_sigreturn_token, sizeof(ps->ps_sigreturn_token));
 
 	/*
 	 * Reset stack state to the user stack.
@@ -1676,6 +1693,15 @@ terminate_with_payload_internal(struct proc *cur_proc, int target_pid, uint32_t 
 	if (!cansignal(cur_proc, cur_cred, target_proc, SIGKILL)) {
 		proc_rele(target_proc);
 		return EPERM;
+	}
+
+	if (target_pid != cur_proc->p_pid) {
+		/*
+		 * FLAG_ABORT should only be set on terminate_with_reason(getpid()) that
+		 * was a fallback from an unsuccessful abort_with_reason(). In that case
+		 * caller's pid matches the target one. Otherwise remove the flag.
+		 */
+		reason_flags &= ~((typeof(reason_flags))OS_REASON_FLAG_ABORT);
 	}
 
 	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
@@ -3063,6 +3089,7 @@ postsig_locked(int signum)
 	uint32_t code;
 	int mask, returnmask;
 	struct uthread * ut;
+	os_reason_t ut_exit_reason = OS_REASON_NULL;
 
 #if DIAGNOSTIC
 	if (signum == 0)
@@ -3093,6 +3120,15 @@ postsig_locked(int signum)
 		 * the process.  (Other cases were ignored above.)
 		 */
 		sig_lock_to_exit(p);
+
+		/*
+		 * exit_with_reason() below will consume a reference to the thread's exit reason, so we take another
+		 * reference so the thread still has one even after we call exit_with_reason(). The thread's reference will
+		 * ultimately be destroyed in uthread_cleanup().
+		 */
+		ut_exit_reason = ut->uu_exit_reason;
+		os_reason_ref(ut_exit_reason);
+
 		p->p_acflag |= AXSIG;
 		if (sigprop[signum] & SA_CORE) {
 			p->p_sigacts->ps_sig = signum;
@@ -3132,12 +3168,7 @@ postsig_locked(int signum)
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_FRCEXIT) | DBG_FUNC_NONE,
 					      p->p_pid, W_EXITCODE(0, signum), 3, 0, 0);
 
-		/*
-		 * exit_with_reason() will consume a reference to the thread's exit reason, so we take another
-		 * reference for the thread. This reference will be destroyed in uthread_cleanup().
-		 */
-		os_reason_ref(ut->uu_exit_reason);
-		exit_with_reason(p, W_EXITCODE(0, signum), (int *)NULL, TRUE, TRUE, 0, ut->uu_exit_reason);
+		exit_with_reason(p, W_EXITCODE(0, signum), (int *)NULL, TRUE, TRUE, 0, ut_exit_reason);
 
 		proc_lock(p);
 		return;
@@ -3266,11 +3297,8 @@ filt_signaltouch(
 
 	proc_klist_lock();
 
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
-	/* 
-	 * No data to save - 
-	 * just capture if it is already fired
+	/*
+	 * No data to save - just capture if it is already fired
 	 */
 	res = (kn->kn_data > 0);
 

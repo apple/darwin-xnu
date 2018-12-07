@@ -74,6 +74,8 @@
 #include <mach/boolean.h>
 #include <mach/vm_prot.h>
 
+#include <kern/trustcache.h>
+
 #ifdef	KERNEL_PRIVATE
 
 /*
@@ -431,7 +433,7 @@ extern kern_return_t	(pmap_attribute)(	/* Get/Set special memory
 	if (__obj->internal) {						\
 		__options |= PMAP_OPTIONS_INTERNAL;			\
 	}								\
-	if (__page->reusable || __obj->all_reusable) {			\
+	if (__page->vmp_reusable || __obj->all_reusable) {		\
 		__options |= PMAP_OPTIONS_REUSABLE;			\
 	}								\
 	result = pmap_enter_options(__pmap,				\
@@ -460,7 +462,7 @@ extern kern_return_t	(pmap_attribute)(	/* Get/Set special memory
 	if (__obj->internal) {						\
 		__extra_options |= PMAP_OPTIONS_INTERNAL;		\
 	}								\
-	if (__page->reusable || __obj->all_reusable) {			\
+	if (__page->vmp_reusable || __obj->all_reusable) {		\
 		__extra_options |= PMAP_OPTIONS_REUSABLE;		\
 	}								\
 	result = pmap_enter_options(__pmap,				\
@@ -547,7 +549,7 @@ extern kern_return_t	(pmap_attribute)(	/* Get/Set special memory
 
 #define PMAP_ENTER_CHECK(pmap, page)					\
 {									\
-	if ((page)->error) {						\
+	if ((page)->vmp_error) {					\
 		panic("VM page %p should not have an error\n",		\
 			(page));					\
 	}								\
@@ -688,6 +690,7 @@ extern pmap_t	kernel_pmap;			/* The kernel's map */
 						    * iff page was modified */
 #define PMAP_OPTIONS_PROTECT_IMMEDIATE 0x1000	/* allow protections to be
 						 * be upgraded */
+#define PMAP_OPTIONS_CLEAR_WRITE 0x2000
 
 
 #if	!defined(__LP64__)
@@ -726,6 +729,21 @@ mach_vm_size_t pmap_query_resident(pmap_t pmap,
 extern void pmap_set_jit_entitled(pmap_t pmap);
 
 /*
+ * Tell the pmap layer what range within the nested region the VM intends to
+ * use.
+ */
+extern void pmap_trim(pmap_t grand, pmap_t subord, addr64_t vstart, addr64_t nstart, uint64_t size);
+
+/*
+ * Dump page table contents into the specified buffer.  Returns the number of
+ * bytes copied, 0 if insufficient space, (size_t)-1 if unsupported.
+ * This is expected to only be called from kernel debugger context,
+ * so synchronization is not required.
+ */
+
+extern size_t pmap_dump_page_tables(pmap_t pmap, void *bufp, void *buf_end);
+
+/*
  * Indicates if any special policy is applied to this protection by the pmap
  * layer.
  */
@@ -735,7 +753,7 @@ bool pmap_has_prot_policy(vm_prot_t prot);
  * Causes the pmap to return any available pages that it can return cheaply to
  * the VM.
  */
-void pmap_release_pages_fast(void);
+uint64_t pmap_release_pages_fast(void);
 
 #define PMAP_QUERY_PAGE_PRESENT			0x01
 #define PMAP_QUERY_PAGE_REUSABLE		0x02
@@ -753,6 +771,11 @@ int pmap_pgtrace_add_page(pmap_t pmap, vm_map_offset_t start, vm_map_offset_t en
 int pmap_pgtrace_delete_page(pmap_t pmap, vm_map_offset_t start, vm_map_offset_t end);
 kern_return_t pmap_pgtrace_fault(pmap_t pmap, vm_map_offset_t va, arm_saved_state_t *ss);
 #endif
+
+
+extern void pmap_ledger_alloc_init(size_t);
+extern ledger_t pmap_ledger_alloc(void);
+extern void pmap_ledger_free(ledger_t);
 
 #endif  /* KERNEL_PRIVATE */
 

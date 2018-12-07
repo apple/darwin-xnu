@@ -1506,6 +1506,7 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 	OSIncrementAtomic(&lio_contexts_alloced);
 #endif /* DEBUG */
 
+	free_context = TRUE;
 	bzero(lio_context, sizeof(aio_lio_context));
 	
 	aiocbpp = aio_copy_in_list(p, uap->aiocblist, uap->nent);
@@ -1527,6 +1528,7 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 	}
 
 	/* process list of aio requests */
+	free_context = FALSE;
 	lio_context->io_issued = uap->nent;
 	lio_context->io_waiter = uap->mode == LIO_WAIT ? 1 : 0; /* Should it be freed by last AIO */
 	for ( i = 0; i < uap->nent; i++ ) {
@@ -1645,7 +1647,7 @@ ExitRoutine:
 		FREE( entryp_listp, M_TEMP );
 	if ( aiocbpp != NULL )
 		FREE( aiocbpp, M_TEMP );
-	if ((lio_context != NULL) && ((lio_context->io_issued == 0) || (free_context == TRUE))) {
+	if (free_context) {
 		free_lio_context(lio_context);
 	}
 	

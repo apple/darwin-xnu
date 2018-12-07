@@ -40,6 +40,7 @@ enum {
     kTenMinutesInSeconds = 600
 };
 
+
 /*! @class IOPMPowerSource
  *
  * See IOKit/pwr_mgt/IOPM.h for power source keys relevant to this class. These

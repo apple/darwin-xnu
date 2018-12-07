@@ -48,6 +48,7 @@ int esp_chachapoly_decrypt(struct mbuf *, size_t, struct secasvar *,
 int esp_chachapoly_encrypt_finalize(struct secasvar *, unsigned char *, unsigned int);
 int esp_chachapoly_decrypt_finalize(struct secasvar *, unsigned char *, unsigned int);
 int esp_chachapoly_mature(struct secasvar *);
+int esp_chachapoly_ivlen(const struct esp_algorithm *, struct secasvar *);
 
 #endif /* _ESP_CHACHA_POLY_H_ */
 #endif /* BSD_KERNEL_PRIVATE */

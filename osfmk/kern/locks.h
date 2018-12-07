@@ -116,6 +116,12 @@ typedef	struct _lck_grp_ {
 	lck_grp_stat_t		lck_grp_stat;
 } lck_grp_t;
 
+#define lck_grp_miss		lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_miss_cnt
+#define lck_grp_held		lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_held_cnt
+#define lck_grp_util		lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_util_cnt
+#define lck_grp_wait		lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_wait_cnt
+#define lck_grp_direct_wait	lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_held_cnt
+
 #define LCK_GRP_NULL	(lck_grp_t *)0
 
 #else
@@ -265,7 +271,13 @@ extern wait_result_t	lck_spin_sleep_deadline(
 
 #ifdef	KERNEL_PRIVATE
 
+extern void			lck_spin_lock_nopreempt(		lck_spin_t		*lck);
+
+extern void			lck_spin_unlock_nopreempt(		lck_spin_t		*lck);
+
 extern boolean_t		lck_spin_try_lock(			lck_spin_t		*lck);
+
+extern boolean_t		lck_spin_try_lock_nopreempt(		lck_spin_t		*lck);
 
 /* NOT SAFE: To be used only by kernel debugger to avoid deadlock. */
 extern boolean_t		kdp_lck_spin_is_acquired(		lck_spin_t		*lck);
@@ -313,6 +325,17 @@ extern wait_result_t	lck_mtx_sleep_deadline(
 									event_t				event,
 									wait_interrupt_t	interruptible,
 									uint64_t			deadline);
+#if DEVELOPMENT || DEBUG
+extern void		erase_all_test_mtx_stats(void);
+extern int		get_test_mtx_stats_string(char* buffer, int buffer_size);
+extern void		lck_mtx_test_init(void);
+extern void		lck_mtx_test_lock(void);
+extern void		lck_mtx_test_unlock(void);
+extern int		lck_mtx_test_mtx_uncontended(int iter, char* buffer, int buffer_size);
+extern int		lck_mtx_test_mtx_contended(int iter, char* buffer, int buffer_size);
+extern int		lck_mtx_test_mtx_uncontended_loop_time(int iter, char* buffer, int buffer_size);
+extern int		lck_mtx_test_mtx_contended_loop_time(int iter, char* buffer, int buffer_size);
+#endif
 
 #ifdef	KERNEL_PRIVATE
 
@@ -396,14 +419,14 @@ extern int				lck_mtx_lock_acquire(
 extern void				lck_mtx_unlock_wakeup(
 									lck_mtx_t		*lck,
 									thread_t		holder);
-extern void				lck_mtx_unlockspin_wakeup(
-							                lck_mtx_t		*lck);
 
 extern boolean_t		lck_mtx_ilk_unlock(
 									lck_mtx_t		*lck);
 
 extern boolean_t		lck_mtx_ilk_try_lock(
 									lck_mtx_t		*lck);
+
+extern void lck_mtx_wakeup_adjust_pri(thread_t thread, integer_t priority);
 
 #endif
 
@@ -466,9 +489,10 @@ extern void				lck_rw_assert(
 									lck_rw_t		*lck,
 									unsigned int		type);
 
-extern void				lck_rw_clear_promotion(
-									thread_t		thread);
+extern void lck_rw_clear_promotion(thread_t thread, uintptr_t trace_obj);
 extern void lck_rw_set_promotion_locked(thread_t thread);
+
+uintptr_t unslide_for_kdebug(void* object);
 #endif
 
 #ifdef	KERNEL_PRIVATE

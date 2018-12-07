@@ -1260,6 +1260,7 @@ fleh_irq_user:
 	ldr		r2, [r2]
 	movs	r2, r2
 	beq		1f
+	mov		r1, #0					// (not a PMI record)
 	bl		EXT(telemetry_mark_curthread)		// ...if so, mark the current thread...
 	mrc		p15, 0, r9, c13, c0, 4				// ...and restore the thread pointer from TPIDRPRW
 1:
@@ -1313,6 +1314,7 @@ fleh_irq_kernel:
 	ldr		r2, [r2]
 	movs	r2, r2
 	beq		1f
+	mov		r1, #0					// (not a PMI record)
 	bl		EXT(telemetry_mark_curthread)		// ...if so, mark the current thread...
 	mrc		p15, 0, r9, c13, c0, 4				// ...and restore the thread pointer from TPIDRPRW
 1:
@@ -1470,6 +1472,7 @@ fleh_decirq_user:
 	ldr		r2, [r2]
 	movs	r2, r2
 	beq		1f
+	mov 		r1, #0					// (not a PMI record)
 	bl		EXT(telemetry_mark_curthread)		// ...if so, mark the current thread...
 	mrc		p15, 0, r9, c13, c0, 4				// ...and restore the thread pointer from TPIDRPRW
 1:
@@ -1523,6 +1526,7 @@ fleh_decirq_kernel:
 	ldr		r2, [r2]
 	movs	r2, r2
 	beq		1f
+	mov		r1, #0					// (not a pmi record)
 	bl		EXT(telemetry_mark_curthread)		// ...if so, mark the current thread...
 	mrc		p15, 0, r9, c13, c0, 4				// ...and restore the thread pointer from TPIDRPRW
 1:
@@ -1777,8 +1781,9 @@ LEXT(fleh_dec)
 #if CONFIG_TELEMETRY
 	LOAD_ADDR(r4, telemetry_needs_record)		// Check if a telemetry record was requested...
 	ldr		r4, [r4]
-	movs	r4, r4
+	movs		r4, r4
 	beq		6f
+	mov		r1, #0					// (not a PMI record)
 	bl		EXT(telemetry_mark_curthread)		// ...if so, mark the current thread...
 	mrc		p15, 0, r9, c13, c0, 4				// ...and restore the thread pointer from TPIDRPRW
 6:

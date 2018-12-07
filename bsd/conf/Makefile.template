@@ -160,6 +160,7 @@ OBJS_NO_CAST_ALIGN =			\
 		dtrace.o		\
 		fasttrap.o		\
 		fasttrap_isa.o		\
+		fbt.o			\
 		fbt_arm.o		\
 		fbt_x86.o		\
 		if_bond.o		\
@@ -228,6 +229,7 @@ $(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-W
 OBJS_NO_PACKED_ADDRESS =    \
 		ah_core.o           \
 		ah_input.o          \
+		dlil.o              \
 		esp_input.o         \
 		esp_output.o        \
 		frag6.o             \
@@ -242,6 +244,7 @@ OBJS_NO_PACKED_ADDRESS =    \
 		ipsec.o             \
 		mld6.o              \
 		mptcp_opt.o         \
+		nat464_utils.o      \
 		nd6.o               \
 		nd6_nbr.o           \
 		nd6_prproxy.o       \

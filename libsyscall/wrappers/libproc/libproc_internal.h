@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -149,6 +149,8 @@ int proc_set_wakemon_defaults(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_9, __
 int proc_set_wakemon_params(pid_t pid, int rate_hz, int flags) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 int proc_get_wakemon_params(pid_t pid, int *rate_hz, int *flags) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 int proc_disable_wakemon(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+
+int proc_reset_footprint_interval(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_14, __IPHONE_12_0);
 
 /* request trace buffer collection */
 int proc_trace_log(pid_t pid, uint64_t uniqueid) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);

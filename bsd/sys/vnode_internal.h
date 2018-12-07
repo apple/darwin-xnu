@@ -253,9 +253,7 @@ struct vnode {
 #define	VLOCKLOCAL	0x080000	/* this vnode does adv locking in vfs */
 #define	VISHARDLINK	0x100000	/* hard link needs special processing on lookup and in volfs */
 #define	VISUNION	0x200000	/* union special processing */
-#if NAMEDSTREAMS
 #define	VISNAMEDSTREAM	0x400000	/* vnode is a named stream (eg HFS resource fork) */
-#endif
 #define VOPENEVT        0x800000        /* if process is P_CHECKOPENEVT, then or in the O_EVTONLY flag on open */
 #define VNEEDSSNAPSHOT 0x1000000
 #define VNOCS	       0x2000000	/* is there no code signature available */
@@ -444,6 +442,9 @@ int 	vn_authorize_rename(struct vnode *fdvp, struct vnode *fvp, struct component
 int vn_authorize_renamex(struct vnode *fdvp,  struct vnode *fvp,  struct componentname *fcnp,
 						 struct vnode *tdvp,  struct vnode *tvp,  struct componentname *tcnp,
 						 vfs_context_t ctx, vfs_rename_flags_t flags, void *reserved);
+int vn_authorize_renamex_with_paths(struct vnode *fdvp,  struct vnode *fvp,  struct componentname *fcnp, const char *from_path,
+						 struct vnode *tdvp,  struct vnode *tvp,  struct componentname *tcnp, const char *to_path,
+						 vfs_context_t ctx, vfs_rename_flags_t flags, void *reserved);
 int	vn_authorize_rmdir(vnode_t dvp, vnode_t vp, struct componentname *cnp, vfs_context_t ctx, void *reserved);
 
 typedef int (*vn_create_authorizer_t)(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*);
@@ -479,7 +480,7 @@ errno_t  vnode_verifynamedstream (vnode_t vp);
 
 
 void	nchinit(void);
-int	resize_namecache(uint32_t newsize);
+int	resize_namecache(int newsize);
 void	name_cache_lock_shared(void);
 void	name_cache_lock(void);
 void	name_cache_unlock(void);

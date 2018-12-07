@@ -127,16 +127,18 @@ struct image_params {
 /*
  * Image flags
  */
-#define	IMGPF_NONE		0x00000000	/* No flags */
-#define	IMGPF_INTERPRET		0x00000001	/* Interpreter invoked */
-#define	IMGPF_RESERVED		0x00000002
-#define	IMGPF_WAS_64BIT		0x00000004	/* exec from a 64Bit binary */
-#define	IMGPF_IS_64BIT		0x00000008	/* exec to a 64Bit binary */
-#define	IMGPF_SPAWN		0x00000010	/* spawn (without setexec) */
-#define	IMGPF_DISABLE_ASLR	0x00000020	/* disable ASLR */
+#define	IMGPF_NONE				0x00000000	/* No flags */
+#define	IMGPF_INTERPRET			0x00000001	/* Interpreter invoked */
+#define	IMGPF_RESERVED			0x00000002
+#define	IMGPF_WAS_64BIT_ADDR	0x00000004	/* exec from a 64Bit address space */
+#define	IMGPF_IS_64BIT_ADDR		0x00000008	/* exec to a 64Bit address space */
+#define	IMGPF_SPAWN				0x00000010	/* spawn (without setexec) */
+#define	IMGPF_DISABLE_ASLR		0x00000020	/* disable ASLR */
 #define	IMGPF_ALLOW_DATA_EXEC	0x00000040	/* forcibly disallow data execution */
-#define	IMGPF_VFORK_EXEC	0x00000080	/* vfork followed by exec */
-#define	IMGPF_EXEC		0x00000100	/* exec */
+#define	IMGPF_VFORK_EXEC		0x00000080	/* vfork followed by exec */
+#define	IMGPF_EXEC				0x00000100	/* exec */
 #define	IMGPF_HIGH_BITS_ASLR	0x00000200	/* randomize high bits of ASLR slide */
+#define	IMGPF_IS_64BIT_DATA		0x00000400	/* exec to a 64Bit register state */
+
 
 #endif	/* !_SYS_IMGACT */

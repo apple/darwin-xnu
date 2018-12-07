@@ -2,7 +2,7 @@
  * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <mach/host_priv.h>
@@ -35,9 +35,9 @@
 #include <kern/debug.h>
 #include <kern/host.h>
 #include <kern/kalloc.h>
-#include <kern/kern_types.h> 
-#include <kern/locks.h> 
-#include <kern/misc_protos.h> 
+#include <kern/kern_types.h>
+#include <kern/locks.h>
+#include <kern/misc_protos.h>
 #include <kern/sched.h>
 #include <kern/sched_prim.h>
 #include <kern/telemetry.h>
@@ -52,6 +52,7 @@
 
 #include <kperf/callstack.h>
 #include <kern/backtrace.h>
+#include <kern/monotonic.h>
 
 #include <sys/kdebug.h>
 #include <uuid/uuid.h>
@@ -93,10 +94,11 @@ volatile boolean_t 	telemetry_needs_timer_arming_record = FALSE;
  * If TRUE, record micro-stackshot samples for all tasks.
  * If FALSE, only sample tasks which are marked for telemetry.
  */
-boolean_t			telemetry_sample_all_tasks = FALSE;
-uint32_t			telemetry_active_tasks = 0; // Number of tasks opted into telemetry
+boolean_t telemetry_sample_all_tasks = FALSE;
+boolean_t telemetry_sample_pmis = FALSE;
+uint32_t telemetry_active_tasks = 0; // Number of tasks opted into telemetry
 
-uint32_t			telemetry_timestamp = 0;
+uint32_t telemetry_timestamp = 0;
 
 /*
  * The telemetry_buffer is responsible
@@ -109,12 +111,16 @@ struct micro_snapshot_buffer telemetry_buffer = {0, 0, 0, 0};
 int					telemetry_bytes_since_last_mark = -1; // How much data since buf was last marked?
 int					telemetry_buffer_notify_at = 0;
 
-lck_grp_t       	telemetry_lck_grp;
-lck_mtx_t       	telemetry_mtx;
+lck_grp_t telemetry_lck_grp;
+lck_mtx_t telemetry_mtx;
+lck_mtx_t telemetry_pmi_mtx;
 
-#define TELEMETRY_LOCK() do { lck_mtx_lock(&telemetry_mtx); } while(0)
+#define TELEMETRY_LOCK() do { lck_mtx_lock(&telemetry_mtx); } while (0)
 #define TELEMETRY_TRY_SPIN_LOCK() lck_mtx_try_lock_spin(&telemetry_mtx)
-#define TELEMETRY_UNLOCK() do { lck_mtx_unlock(&telemetry_mtx); } while(0)
+#define TELEMETRY_UNLOCK() do { lck_mtx_unlock(&telemetry_mtx); } while (0)
+
+#define TELEMETRY_PMI_LOCK() do { lck_mtx_lock(&telemetry_pmi_mtx); } while (0)
+#define TELEMETRY_PMI_UNLOCK() do { lck_mtx_unlock(&telemetry_pmi_mtx); } while (0)
 
 void telemetry_init(void)
 {
@@ -123,6 +129,7 @@ void telemetry_init(void)
 
 	lck_grp_init(&telemetry_lck_grp, "telemetry group", LCK_GRP_ATTR_NULL);
 	lck_mtx_init(&telemetry_mtx, &telemetry_lck_grp, LCK_ATTR_NULL);
+	lck_mtx_init(&telemetry_pmi_mtx, &telemetry_lck_grp, LCK_ATTR_NULL);
 
 	if (!PE_parse_boot_argn("telemetry_buffer_size", &telemetry_buffer.size, sizeof(telemetry_buffer.size))) {
 		telemetry_buffer.size = TELEMETRY_DEFAULT_BUFFER_SIZE;
@@ -180,7 +187,7 @@ void telemetry_init(void)
  * enable_disable == 0: turn it off
  */
 void
-telemetry_global_ctl(int enable_disable) 
+telemetry_global_ctl(int enable_disable)
 {
 	if (enable_disable == 1) {
 		telemetry_sample_all_tasks = TRUE;
@@ -222,9 +229,9 @@ telemetry_task_ctl_locked(task_t task, uint32_t reasons, int enable_disable)
 		task->t_flags |= reasons;
 		if ((origflags & TF_TELEMETRY) == 0) {
 			OSIncrementAtomic(&telemetry_active_tasks);
-#if TELEMETRY_DEBUG			
+#if TELEMETRY_DEBUG
 			printf("%s: telemetry OFF -> ON (%d active)\n", proc_name_address(task->bsd_info), telemetry_active_tasks);
-#endif			
+#endif
 		}
 	} else {
 		task->t_flags &= ~reasons;
@@ -258,15 +265,15 @@ telemetry_is_active(thread_t thread)
 		return FALSE;
 	}
 
-	if (telemetry_sample_all_tasks == TRUE) {
-		return (TRUE);
+	if (telemetry_sample_all_tasks || telemetry_sample_pmis) {
+		return TRUE;
 	}
 
 	if ((telemetry_active_tasks > 0) && ((thread->task->t_flags & TF_TELEMETRY) != 0)) {
-		return (TRUE);
+		return TRUE;
 	}
- 
-	return (FALSE);
+
+	return FALSE;
 }
 
 /*
@@ -284,11 +291,82 @@ int telemetry_timer_event(__unused uint64_t deadline, __unused uint64_t interval
 	return (0);
 }
 
+#if defined(MT_CORE_INSTRS) && defined(MT_CORE_CYCLES)
+static void
+telemetry_pmi_handler(bool user_mode, __unused void *ctx)
+{
+	telemetry_mark_curthread(user_mode, TRUE);
+}
+#endif /* defined(MT_CORE_INSTRS) && defined(MT_CORE_CYCLES) */
+
+int telemetry_pmi_setup(enum telemetry_pmi pmi_ctr, uint64_t period)
+{
+#if defined(MT_CORE_INSTRS) && defined(MT_CORE_CYCLES)
+	static boolean_t sample_all_tasks_aside = FALSE;
+	static uint32_t active_tasks_aside = FALSE;
+	int error = 0;
+	const char *name = "?";
+
+	unsigned int ctr = 0;
+
+	TELEMETRY_PMI_LOCK();
+
+	switch (pmi_ctr) {
+	case TELEMETRY_PMI_NONE:
+		if (!telemetry_sample_pmis) {
+			error = 1;
+			goto out;
+		}
+
+		telemetry_sample_pmis = FALSE;
+		telemetry_sample_all_tasks = sample_all_tasks_aside;
+		telemetry_active_tasks = active_tasks_aside;
+		error = mt_microstackshot_stop();
+		if (!error) {
+			printf("telemetry: disabling ustackshot on PMI\n");
+		}
+		goto out;
+
+	case TELEMETRY_PMI_INSTRS:
+		ctr = MT_CORE_INSTRS;
+		name = "instructions";
+		break;
+
+	case TELEMETRY_PMI_CYCLES:
+		ctr = MT_CORE_CYCLES;
+		name = "cycles";
+		break;
+
+	default:
+		error = 1;
+		goto out;
+	}
+
+	telemetry_sample_pmis = TRUE;
+	sample_all_tasks_aside = telemetry_sample_all_tasks;
+	active_tasks_aside = telemetry_active_tasks;
+	telemetry_sample_all_tasks = FALSE;
+	telemetry_active_tasks = 0;
+
+	error = mt_microstackshot_start(ctr, period, telemetry_pmi_handler, NULL);
+	if (!error) {
+		printf("telemetry: ustackshot every %llu %s\n", period, name);
+	}
+
+out:
+	TELEMETRY_PMI_UNLOCK();
+	return error;
+#else /* defined(MT_CORE_INSTRS) && defined(MT_CORE_CYCLES) */
+#pragma unused(pmi_ctr, period)
+	return 1;
+#endif /* !defined(MT_CORE_INSTRS) || !defined(MT_CORE_CYCLES) */
+}
+
 /*
  * Mark the current thread for an interrupt-based
  * telemetry record, to be sampled at the next AST boundary.
  */
-void telemetry_mark_curthread(boolean_t interrupted_userspace)
+void telemetry_mark_curthread(boolean_t interrupted_userspace, boolean_t pmi)
 {
 	uint32_t ast_bits = 0;
 	thread_t thread = current_thread();
@@ -302,6 +380,9 @@ void telemetry_mark_curthread(boolean_t interrupted_userspace)
 	}
 
 	ast_bits |= (interrupted_userspace ? AST_TELEMETRY_USER : AST_TELEMETRY_KERNEL);
+	if (pmi) {
+		ast_bits |= AST_TELEMETRY_PMI;
+	}
 
 	telemetry_needs_record = FALSE;
 	thread_ast_set(thread, ast_bits);
@@ -324,33 +405,33 @@ void compute_telemetry(void *arg __unused)
 static void
 telemetry_notify_user(void)
 {
-	mach_port_t user_port;
-	uint32_t	flags = 0;
-	int			error;
+	mach_port_t user_port = MACH_PORT_NULL;
 
-	error = host_get_telemetry_port(host_priv_self(), &user_port);
-	if ((error != KERN_SUCCESS) || !IPC_PORT_VALID(user_port)) {
+	kern_return_t kr = host_get_telemetry_port(host_priv_self(), &user_port);
+	if ((kr != KERN_SUCCESS) || !IPC_PORT_VALID(user_port)) {
 		return;
 	}
 
-	telemetry_notification(user_port, flags);
+	telemetry_notification(user_port, 0);
 	ipc_port_release_send(user_port);
 }
 
 void telemetry_ast(thread_t thread, ast_t reasons)
 {
-	assert((reasons & AST_TELEMETRY_ALL) != AST_TELEMETRY_ALL); /* only one is valid at a time */
+	assert((reasons & AST_TELEMETRY_ALL) != 0);
 
-	boolean_t io_telemetry = (reasons & AST_TELEMETRY_IO) ? TRUE : FALSE;
-	boolean_t interrupted_userspace = (reasons & AST_TELEMETRY_USER) ? TRUE : FALSE;
+	uint8_t record_type = 0;
+	if (reasons & AST_TELEMETRY_IO) {
+		record_type |= kIORecord;
+	}
+	if (reasons & (AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL)) {
+		record_type |= (reasons & AST_TELEMETRY_PMI) ? kPMIRecord :
+				kInterruptRecord;
+	}
 
-	uint8_t microsnapshot_flags = kInterruptRecord;
+	uint8_t user_telemetry = (reasons & AST_TELEMETRY_USER) ? kUserMode : 0;
 
-	if (io_telemetry == TRUE)
-		microsnapshot_flags = kIORecord;
-
-	if (interrupted_userspace)
-		microsnapshot_flags |= kUserMode;
+	uint8_t microsnapshot_flags = record_type | user_telemetry;
 
 	telemetry_take_sample(thread, microsnapshot_flags, &telemetry_buffer);
 }
@@ -377,25 +458,10 @@ void telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct 
 	if ((task == TASK_NULL) || (task == kernel_task) || task_did_exec(task) || task_is_exec_copy(task))
 		return;
 
-	/*
-	 * To avoid overloading the system with telemetry requests, make
-	 * sure we don't add more requests while existing ones are
-	 * in-flight.  Attempt this by checking if we can grab the lock.
-	 *
-	 * This concerns me a little; this working as intended is
-	 * contingent on the workload being done in the context of the
-	 * telemetry lock being the expensive part of telemetry.  This
-	 * includes populating the buffer and the client gathering it,
-	 * but excludes the copyin overhead.
-	 */
-	if (!TELEMETRY_TRY_SPIN_LOCK())
-		return;
-
-	TELEMETRY_UNLOCK();
-
 	/* telemetry_XXX accessed outside of lock for instrumentation only */
-	/* TODO */
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_STACKSHOT, MICROSTACKSHOT_RECORD) | DBG_FUNC_START, microsnapshot_flags, telemetry_bytes_since_last_mark, 0, 0, (&telemetry_buffer != current_buffer));
+	KDBG(MACHDBG_CODE(DBG_MACH_STACKSHOT, MICROSTACKSHOT_RECORD) | DBG_FUNC_START,
+			microsnapshot_flags, telemetry_bytes_since_last_mark, 0,
+			(&telemetry_buffer != current_buffer));
 
 	p = get_bsdtask_info(task);
 
@@ -444,7 +510,7 @@ void telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct 
 	 */
 	uint32_t			uuid_info_count = 0;
 	mach_vm_address_t	uuid_info_addr = 0;
-	if (task_has_64BitAddr(task)) {
+	if (task_has_64Bit_addr(task)) {
 		struct user64_dyld_all_image_infos task_image_infos;
 		if (copyin(task->all_image_info_addr, (char *)&task_image_infos, sizeof(task_image_infos)) == 0) {
 			uuid_info_count = (uint32_t)task_image_infos.uuidArrayCount;
@@ -475,7 +541,7 @@ void telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct 
 		uuid_info_count = TELEMETRY_MAX_UUID_COUNT;
 	}
 
-	uint32_t uuid_info_size = (uint32_t)(task_has_64BitAddr(thread->task) ? sizeof(struct user64_dyld_uuid_info) : sizeof(struct user32_dyld_uuid_info));
+	uint32_t uuid_info_size = (uint32_t)(task_has_64Bit_addr(thread->task) ? sizeof(struct user64_dyld_uuid_info) : sizeof(struct user32_dyld_uuid_info));
 	uint32_t uuid_info_array_size = uuid_info_count * uuid_info_size;
 	char	 *uuid_info_array = NULL;
 
@@ -505,10 +571,10 @@ void telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct 
 	if (dqkeyaddr != 0) {
 		uint64_t dqaddr = 0;
 		uint64_t dq_serialno_offset = get_task_dispatchqueue_serialno_offset(task);
-		if ((copyin(dqkeyaddr, (char *)&dqaddr, (task_has_64BitAddr(task) ? 8 : 4)) == 0) &&
+		if ((copyin(dqkeyaddr, (char *)&dqaddr, (task_has_64Bit_addr(task) ? 8 : 4)) == 0) &&
 		    (dqaddr != 0) && (dq_serialno_offset != 0)) {
 			uint64_t dqserialnumaddr = dqaddr + dq_serialno_offset;
-			if (copyin(dqserialnumaddr, (char *)&dqserialnum, (task_has_64BitAddr(task) ? 8 : 4)) == 0) {
+			if (copyin(dqserialnumaddr, (char *)&dqserialnum, (task_has_64Bit_addr(task) ? 8 : 4)) == 0) {
 				dqserialnum_valid = 1;
 			}
 		}
@@ -556,7 +622,7 @@ copytobuffer:
 	msnap->snapshot_magic = STACKSHOT_MICRO_SNAPSHOT_MAGIC;
 	msnap->ms_flags = microsnapshot_flags;
 	msnap->ms_opaque_flags = 0; /* namespace managed by userspace */
-	msnap->ms_cpu = 0; /* XXX - does this field make sense for a micro-stackshot? */
+	msnap->ms_cpu = cpu_number();
 	msnap->ms_time = secs;
 	msnap->ms_time_microsecs = usecs;
 
@@ -580,7 +646,7 @@ copytobuffer:
 	tsnap->user_time_in_terminated_threads = task->total_user_time;
 	tsnap->system_time_in_terminated_threads = task->total_system_time;
 	tsnap->suspend_count = task->suspend_count;
-	tsnap->task_size = pmap_resident_count(task->map->pmap);
+	tsnap->task_size = (typeof(tsnap->task_size)) (get_task_phys_footprint(task) / PAGE_SIZE);
 	tsnap->faults = task->faults;
 	tsnap->pageins = task->pageins;
 	tsnap->cow_faults = task->cow_faults;
@@ -588,12 +654,12 @@ copytobuffer:
 	 * The throttling counters are maintained as 64-bit counters in the proc
 	 * structure. However, we reserve 32-bits (each) for them in the task_snapshot
 	 * struct to save space and since we do not expect them to overflow 32-bits. If we
-	 * find these values overflowing in the future, the fix would be to simply 
+	 * find these values overflowing in the future, the fix would be to simply
 	 * upgrade these counters to 64-bit in the task_snapshot struct
 	 */
 	tsnap->was_throttled = (uint32_t) proc_was_throttled(p);
 	tsnap->did_throttle = (uint32_t) proc_did_throttle(p);
-	
+
 	if (task->t_flags & TF_TELEMETRY) {
 		tsnap->ss_flags |= kTaskRsrcFlagged;
 	}
@@ -619,7 +685,7 @@ copytobuffer:
 	tsnap->latency_qos = task_grab_latency_qos(task);
 
 	strlcpy(tsnap->p_comm, proc_name_address(p), sizeof(tsnap->p_comm));
-	if (task_has_64BitAddr(thread->task)) {
+	if (task_has_64Bit_addr(thread->task)) {
 		tsnap->ss_flags |= kUser64_p;
 	}
 
@@ -660,7 +726,7 @@ copytobuffer:
 
 	if ((current_buffer->size - current_buffer->current_position) < sizeof(struct thread_snapshot)) {
 		/* wrap and overwrite */
-		current_buffer->end_point = current_record_start;		
+		current_buffer->end_point = current_record_start;
 		current_buffer->current_position = 0;
 		if (current_record_start == 0) {
 			/* This sample is too large to fit in the buffer even when we started at 0, so skip it */
@@ -681,7 +747,8 @@ copytobuffer:
 	thsnap->ss_flags |= kStacksPCOnly;
 	thsnap->ts_qos = thread->effective_policy.thep_qos;
 	thsnap->ts_rqos = thread->requested_policy.thrp_qos;
-	thsnap->ts_rqos_override = thread->requested_policy.thrp_qos_override;
+	thsnap->ts_rqos_override = MAX(thread->requested_policy.thrp_qos_override,
+			thread->requested_policy.thrp_qos_workq_override);
 
 	if (proc_get_effective_thread_policy(thread, TASK_POLICY_DARWIN_BG)) {
 		thsnap->ss_flags |= kThreadDarwinBG;
@@ -706,7 +773,7 @@ copytobuffer:
 	if (dqserialnum_valid) {
 		if ((current_buffer->size - current_buffer->current_position) < sizeof(dqserialnum)) {
 			/* wrap and overwrite */
-			current_buffer->end_point = current_record_start;		
+			current_buffer->end_point = current_record_start;
 			current_buffer->current_position = 0;
 			if (current_record_start == 0) {
 				/* This sample is too large to fit in the buffer even when we started at 0, so skip it */
@@ -720,7 +787,7 @@ copytobuffer:
 		current_buffer->current_position += sizeof (dqserialnum);
 	}
 
-	if (task_has_64BitAddr(task)) {
+	if (user64) {
 		framesize = 8;
 		thsnap->ss_flags |= kUser64_p;
 	} else {
@@ -772,11 +839,11 @@ copytobuffer:
 	}
 
 cancel_sample:
-
 	TELEMETRY_UNLOCK();
 
-	/* TODO */
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_STACKSHOT, MICROSTACKSHOT_RECORD) | DBG_FUNC_END, notify, telemetry_bytes_since_last_mark, current_buffer->current_position, current_buffer->end_point, (&telemetry_buffer != current_buffer));
+	KDBG(MACHDBG_CODE(DBG_MACH_STACKSHOT, MICROSTACKSHOT_RECORD) | DBG_FUNC_END,
+			notify, telemetry_bytes_since_last_mark,
+			current_buffer->current_position, current_buffer->end_point);
 
 	if (notify) {
 		telemetry_notify_user();
@@ -793,7 +860,7 @@ log_telemetry_output(vm_offset_t buf, uint32_t pos, uint32_t sz)
 {
 	struct micro_snapshot *p;
 	uint32_t offset;
-	
+
 	printf("Copying out %d bytes of telemetry at offset %d\n", sz, pos);
 
 	buf += pos;
@@ -820,13 +887,14 @@ int telemetry_buffer_gather(user_addr_t buffer, uint32_t *length, boolean_t mark
 	int result = 0;
 	uint32_t oldest_record_offset;
 
-	/* TODO */
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_STACKSHOT, MICROSTACKSHOT_GATHER) | DBG_FUNC_START, mark, telemetry_bytes_since_last_mark, 0, 0, (&telemetry_buffer != current_buffer));
+	KDBG(MACHDBG_CODE(DBG_MACH_STACKSHOT, MICROSTACKSHOT_GATHER) | DBG_FUNC_START,
+			mark, telemetry_bytes_since_last_mark, 0,
+			(&telemetry_buffer != current_buffer));
 
 	TELEMETRY_LOCK();
 
 	if (current_buffer->buffer == 0) {
-		*length = 0;		
+		*length = 0;
 		goto out;
 	}
 
@@ -910,7 +978,9 @@ out:
 
 	TELEMETRY_UNLOCK();
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_STACKSHOT, MICROSTACKSHOT_GATHER) | DBG_FUNC_END, current_buffer->current_position, *length, current_buffer->end_point, 0, (&telemetry_buffer != current_buffer));
+	KDBG(MACHDBG_CODE(DBG_MACH_STACKSHOT, MICROSTACKSHOT_GATHER) | DBG_FUNC_END,
+			current_buffer->current_position, *length,
+			current_buffer->end_point, (&telemetry_buffer != current_buffer));
 
 	return (result);
 }
@@ -1007,7 +1077,7 @@ void bootprofile_init(void)
 		if (0 == strcmp(type, "boot")) {
 			bootprofile_type = kBootProfileStartTimerAtBoot;
 		} else if (0 == strcmp(type, "wake")) {
-			bootprofile_type = kBootProfileStartTimerAtWake;			
+			bootprofile_type = kBootProfileStartTimerAtWake;
 		} else {
 			bootprofile_type = kBootProfileDisabled;
 		}
@@ -1182,7 +1252,7 @@ int bootprofile_gather(user_addr_t buffer, uint32_t *length)
 	BOOTPROFILE_LOCK();
 
 	if (bootprofile_buffer == 0) {
-		*length = 0;		
+		*length = 0;
 		goto out;
 	}
 

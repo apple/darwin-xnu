@@ -30,6 +30,8 @@
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #include <mach/mach_traps.h>
+#include <mach/mach_sync_ipc.h>
+#include "tsd.h"
 
 kern_return_t
 mach_port_names(
@@ -302,8 +304,22 @@ mach_port_get_attributes(
 {
 	kern_return_t rv;
 
-	rv = _kernelrpc_mach_port_get_attributes(task, name, flavor,
+	rv = _kernelrpc_mach_port_get_attributes_trap(task, name, flavor,
 			port_info_out, port_info_outCnt);
+
+#ifdef __x86_64__
+	/* REMOVE once XBS kernel has new trap */
+	if (rv == ((1 << 24) | 40)) /* see mach/i386/syscall_sw.h */
+		rv = MACH_SEND_INVALID_DEST;
+#elif defined(__i386__)
+	/* REMOVE once XBS kernel has new trap */
+	if (rv == (kern_return_t)(-40))
+		rv = MACH_SEND_INVALID_DEST;
+#endif
+
+	if (rv == MACH_SEND_INVALID_DEST)
+		rv = _kernelrpc_mach_port_get_attributes(task, name, flavor,
+				port_info_out, port_info_outCnt);
 
 	return (rv);
 }
@@ -405,6 +421,93 @@ mach_port_space_basic_info(
 	rv = _kernelrpc_mach_port_space_basic_info(task, space_basic_info);
 
 	return (rv);
+}
+
+static inline mach_port_t
+_tsd_get_special_reply_port()
+{
+	return (mach_port_t)(uintptr_t)_os_tsd_get_direct(__TSD_MACH_SPECIAL_REPLY);
+}
+
+static inline void
+_tsd_set_special_reply_port(mach_port_t port)
+{
+	_os_tsd_set_direct(__TSD_MACH_SPECIAL_REPLY, (void *)(uintptr_t)port);
+}
+
+mach_port_t
+mig_get_special_reply_port(void)
+{
+	mach_port_t srp;
+
+	srp = _tsd_get_special_reply_port();
+	if (!MACH_PORT_VALID(srp)) {
+		srp = thread_get_special_reply_port();
+		_tsd_set_special_reply_port(srp);
+	}
+
+	return srp;
+}
+
+void
+mig_dealloc_special_reply_port(mach_port_t migport)
+{
+	mach_port_t srp = _tsd_get_special_reply_port();
+	if (MACH_PORT_VALID(srp)) {
+		thread_destruct_special_reply_port(srp, THREAD_SPECIAL_REPLY_PORT_ALL);
+		if (migport != srp) {
+			mach_port_deallocate(mach_task_self(), migport);
+		}
+		_tsd_set_special_reply_port(MACH_PORT_NULL);
+	}
+}
+
+kern_return_t
+mach_sync_ipc_link_monitoring_start(mach_port_t *special_reply_port)
+{
+	mach_port_t srp;
+	boolean_t link_broken;
+	kern_return_t kr;
+
+	*special_reply_port = MACH_PORT_DEAD;
+
+	srp = mig_get_special_reply_port();
+
+	kr = mach_port_mod_refs(mach_task_self(), srp, MACH_PORT_RIGHT_SEND, 1);
+
+	if (kr != KERN_SUCCESS) {
+		return kr;
+	}
+
+	kr = _kernelrpc_mach_port_special_reply_port_reset_link(mach_task_self(), srp, &link_broken);
+	if (kr != KERN_SUCCESS) {
+		mach_port_deallocate(mach_task_self(), srp);
+		return kr;
+	}
+
+	*special_reply_port = srp;
+
+	return kr;
+}
+
+kern_return_t
+mach_sync_ipc_link_monitoring_stop(mach_port_t srp, boolean_t* in_effect)
+{
+	kern_return_t kr;
+	boolean_t link_broken = TRUE;
+
+	kr = _kernelrpc_mach_port_special_reply_port_reset_link(mach_task_self(), srp, &link_broken);
+
+	/*
+	 * We return if the sync IPC priority inversion avoidance facility took
+	 * effect, so if the link was broken it didn't take effect.
+	 * Flip the return.
+	 */
+	*in_effect = !link_broken;
+
+	mach_port_deallocate(mach_task_self(), srp);
+
+	return kr;
 }
 
 kern_return_t
@@ -602,18 +705,29 @@ mach_voucher_extract_attr_recipe(
 
 	rv = mach_voucher_extract_attr_recipe_trap(voucher, key, recipe, recipe_size);
 
-#ifdef __x86_64__
-	/* REMOVE once XBS kernel has new trap */
-	if (rv == ((1 << 24) | 72)) /* see mach/i386/syscall_sw.h */
-		rv = MACH_SEND_INVALID_DEST;
-#elif defined(__i386__)
-	/* REMOVE once XBS kernel has new trap */
-	if (rv == (kern_return_t)(-72))
-		rv = MACH_SEND_INVALID_DEST;
-#endif
-
 	if (rv == MACH_SEND_INVALID_DEST)
 		rv = _kernelrpc_mach_voucher_extract_attr_recipe(voucher, key, recipe, recipe_size);
 
 	return rv;
+}
+
+
+kern_return_t
+thread_destruct_special_reply_port(
+		mach_port_name_t port,
+		thread_destruct_special_reply_port_rights_t rights)
+{
+	switch (rights) {
+	case THREAD_SPECIAL_REPLY_PORT_ALL:
+		return mach_port_destruct(mach_task_self(), port, -1, 0);
+
+	case THREAD_SPECIAL_REPLY_PORT_RECEIVE_ONLY:
+		return mach_port_destruct(mach_task_self(), port, 0, 0);
+
+	case THREAD_SPECIAL_REPLY_PORT_SEND_ONLY:
+		return mach_port_deallocate(mach_task_self(), port);
+
+	default:
+		return KERN_INVALID_ARGUMENT;
+	}
 }

@@ -312,6 +312,21 @@ populate_corpse_crashinfo(proc_t p, task_t corpse_task, struct rusage_superset *
 	unsigned int pflags = 0;
 	uint64_t max_footprint_mb;
 	uint64_t max_footprint;
+
+    uint64_t ledger_internal;
+    uint64_t ledger_internal_compressed;
+    uint64_t ledger_iokit_mapped;
+    uint64_t ledger_alternate_accounting;
+    uint64_t ledger_alternate_accounting_compressed;
+    uint64_t ledger_purgeable_nonvolatile;
+    uint64_t ledger_purgeable_nonvolatile_compressed;
+    uint64_t ledger_page_table;
+    uint64_t ledger_phys_footprint;
+    uint64_t ledger_phys_footprint_lifetime_max;
+    uint64_t ledger_network_nonvolatile;
+    uint64_t ledger_network_nonvolatile_compressed;
+    uint64_t ledger_wired_mem;
+
 	void *crash_info_ptr = task_get_corpseinfo(corpse_task);
 
 #if CONFIG_MEMORYSTATUS
@@ -411,6 +426,72 @@ populate_corpse_crashinfo(proc_t p, task_t corpse_task, struct rusage_superset *
 		max_footprint_mb = max_footprint >> 20;
 		kcdata_memcpy(crash_info_ptr, uaddr, &max_footprint_mb, sizeof(max_footprint_mb));
 	}
+
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_PHYS_FOOTPRINT_LIFETIME_MAX, sizeof(ledger_phys_footprint_lifetime_max), &uaddr)) {
+        ledger_phys_footprint_lifetime_max = get_task_phys_footprint_lifetime_max(p->task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_phys_footprint_lifetime_max, sizeof(ledger_phys_footprint_lifetime_max));
+    }
+
+    // In the forking case, the current ledger info is copied into the corpse while the original task is suspended for consistency
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_INTERNAL, sizeof(ledger_internal), &uaddr)) {
+        ledger_internal = get_task_internal(corpse_task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_internal, sizeof(ledger_internal));
+    }
+
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_INTERNAL_COMPRESSED, sizeof(ledger_internal_compressed), &uaddr)) {
+        ledger_internal_compressed = get_task_internal_compressed(corpse_task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_internal_compressed, sizeof(ledger_internal_compressed));
+    }
+
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_IOKIT_MAPPED, sizeof(ledger_iokit_mapped), &uaddr)) {
+        ledger_iokit_mapped = get_task_iokit_mapped(corpse_task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_iokit_mapped, sizeof(ledger_iokit_mapped));
+    }
+
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_ALTERNATE_ACCOUNTING, sizeof(ledger_alternate_accounting), &uaddr)) {
+        ledger_alternate_accounting = get_task_alternate_accounting(corpse_task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_alternate_accounting, sizeof(ledger_alternate_accounting));
+    }
+
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_ALTERNATE_ACCOUNTING_COMPRESSED, sizeof(ledger_alternate_accounting_compressed), &uaddr)) {
+        ledger_alternate_accounting_compressed = get_task_alternate_accounting_compressed(corpse_task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_alternate_accounting_compressed, sizeof(ledger_alternate_accounting_compressed));
+    }
+
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_PURGEABLE_NONVOLATILE, sizeof(ledger_purgeable_nonvolatile), &uaddr)) {
+        ledger_purgeable_nonvolatile = get_task_purgeable_nonvolatile(corpse_task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_purgeable_nonvolatile, sizeof(ledger_purgeable_nonvolatile));
+    }
+
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_PURGEABLE_NONVOLATILE_COMPRESSED, sizeof(ledger_purgeable_nonvolatile_compressed), &uaddr)) {
+        ledger_purgeable_nonvolatile_compressed = get_task_purgeable_nonvolatile_compressed(corpse_task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_purgeable_nonvolatile_compressed, sizeof(ledger_purgeable_nonvolatile_compressed));
+    }
+
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_PAGE_TABLE, sizeof(ledger_page_table), &uaddr)) {
+        ledger_page_table = get_task_page_table(corpse_task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_page_table, sizeof(ledger_page_table));
+    }
+
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_PHYS_FOOTPRINT, sizeof(ledger_phys_footprint), &uaddr)) {
+        ledger_phys_footprint = get_task_phys_footprint(corpse_task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_phys_footprint, sizeof(ledger_phys_footprint));
+    }
+
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_NETWORK_NONVOLATILE, sizeof(ledger_network_nonvolatile), &uaddr)) {
+        ledger_network_nonvolatile = get_task_network_nonvolatile(corpse_task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_network_nonvolatile, sizeof(ledger_network_nonvolatile));
+    }
+
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_NETWORK_NONVOLATILE_COMPRESSED, sizeof(ledger_network_nonvolatile_compressed), &uaddr)) {
+        ledger_network_nonvolatile_compressed = get_task_network_nonvolatile_compressed(corpse_task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_network_nonvolatile_compressed, sizeof(ledger_network_nonvolatile_compressed));
+    }
+
+    if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_WIRED_MEM, sizeof(ledger_wired_mem), &uaddr)) {
+        ledger_wired_mem = get_task_wired_mem(corpse_task);
+        kcdata_memcpy(crash_info_ptr, uaddr, &ledger_wired_mem, sizeof(ledger_wired_mem));
+    }
 
 	bzero(&pwqinfo, sizeof(struct proc_workqueueinfo));
 	retval = fill_procworkqueue(p, &pwqinfo);
@@ -614,7 +695,7 @@ abort_with_payload_internal(proc_t p,
 					reason_code, 0, 0);
 
 	exit_reason = build_userspace_exit_reason(reason_namespace, reason_code,
-			payload, payload_size, reason_string, reason_flags);
+			payload, payload_size, reason_string, reason_flags | OS_REASON_FLAG_ABORT);
 
 	if (internal_flags & OS_REASON_IFLAG_USER_FAULT) {
 		mach_exception_code_t code = 0;
@@ -1065,7 +1146,7 @@ proc_exit(proc_t p)
 	/* if any pending cpu limits action, clear it */
 	task_clear_cpuusage(p->task, TRUE);
 
-	workqueue_mark_exiting(p);
+	workq_mark_exiting(p);
 
 	_aio_exit( p );
 
@@ -1079,7 +1160,7 @@ proc_exit(proc_t p)
 	 * Once all the knotes, kqueues & workloops are destroyed, get rid of the
 	 * workqueue.
 	 */
-	workqueue_exit(p);
+	workq_exit(p);
 
 	if (uth->uu_lowpri_window) {
 	        /*
@@ -1361,8 +1442,6 @@ proc_exit(proc_t p)
 	proc_limitdrop(p, 1);
 	p->p_limit = NULL;
 
-	vm_purgeable_disown(p->task);
-
 	/*
 	 * Finish up by terminating the task
 	 * and halt this thread (only if a
@@ -1432,6 +1511,7 @@ proc_exit(proc_t p)
 		 * The write is to an int and is coherent. Also parent is
 		 *  keyed off of list lock for reaping
 		 */
+		DTRACE_PROC2(exited, proc_t, p, int, exitval);
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON,
 			BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_END,
 			pid, exitval, 0, 0, 0);
@@ -1455,6 +1535,7 @@ proc_exit(proc_t p)
 		 * The write is to an int and is coherent. Also parent is
 		 *  keyed off of list lock for reaping
 		 */
+		DTRACE_PROC2(exited, proc_t, p, int, exitval);
 		proc_list_lock();
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON,
 			BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_END,
@@ -1716,7 +1797,7 @@ wait1continue(int result)
 	thread = current_thread();
 	uth = (struct uthread *)get_bsdthread_info(thread);
 
-	wait4_data = &uth->uu_kevent.uu_wait4_data;
+	wait4_data = &uth->uu_save.uus_wait4_data;
 	uap = wait4_data->args;
 	retval = wait4_data->retval;
 	return(wait4_nocancel(p, uap, retval));
@@ -1763,6 +1844,14 @@ loop1:
 		/* XXX This is racy because we don't get the lock!!!! */
 
 		if (p->p_listflag & P_LIST_WAITING) {
+
+			/* we're not using a continuation here but we still need to stash
+			 * the args for stackshot. */
+			uth = current_uthread();
+			wait4_data = &uth->uu_save.uus_wait4_data;
+			wait4_data->args = uap;
+			thread_set_pending_block_hint(current_thread(), kThreadWaitOnProcess);
+
 			(void)msleep(&p->p_stat, proc_list_mlock, PWAIT, "waitcoll", 0);
 			goto loop1;
 		}
@@ -1897,10 +1986,11 @@ loop1:
 
 	/* Save arguments for continuation. Backing storage is in uthread->uu_arg, and will not be deallocated */
 	uth = current_uthread();
-	wait4_data = &uth->uu_kevent.uu_wait4_data;
+	wait4_data = &uth->uu_save.uus_wait4_data;
 	wait4_data->args = uap;
 	wait4_data->retval = retval;
 
+	thread_set_pending_block_hint(current_thread(), kThreadWaitOnProcess);
 	if ((error = msleep0((caddr_t)q, proc_list_mlock, PWAIT | PCATCH | PDROP, "wait", 0, wait1continue)))
 		return (error);
 
@@ -1937,7 +2027,7 @@ waitidcontinue(int result)
 	thread = current_thread();
 	uth = (struct uthread *)get_bsdthread_info(thread);
 
-	waitid_data = &uth->uu_kevent.uu_waitid_data;
+	waitid_data = &uth->uu_save.uus_waitid_data;
 	uap = waitid_data->args;
 	retval = waitid_data->retval;
 	return(waitid_nocancel(p, uap, retval));
@@ -2161,7 +2251,7 @@ loop1:
 
 	/* Save arguments for continuation. Backing storage is in uthread->uu_arg, and will not be deallocated */
 	uth = current_uthread();
-	waitid_data = &uth->uu_kevent.uu_waitid_data;
+	waitid_data = &uth->uu_save.uus_waitid_data;
 	waitid_data->args = uap;
 	waitid_data->retval = retval;
 
@@ -2725,3 +2815,20 @@ munge_user32_rusage(struct rusage *a_rusage_p, struct user32_rusage *a_user_rusa
 	a_user_rusage_p->ru_nvcsw = a_rusage_p->ru_nvcsw;
 	a_user_rusage_p->ru_nivcsw = a_rusage_p->ru_nivcsw;
 }
+
+void
+kdp_wait4_find_process(thread_t thread, __unused event64_t wait_event, thread_waitinfo_t *waitinfo)
+{
+	assert(thread != NULL);
+	assert(waitinfo != NULL);
+
+	struct uthread *ut = get_bsdthread_info(thread);
+	waitinfo->context = 0;
+	// ensure wmesg is consistent with a thread waiting in wait4
+	assert(!strcmp(ut->uu_wmesg, "waitcoll") || !strcmp(ut->uu_wmesg, "wait"));
+	struct wait4_nocancel_args *args = ut->uu_save.uus_wait4_data.args;
+	// May not actually contain a pid; this is just the argument to wait4.
+	// See man wait4 for other valid wait4 arguments.
+	waitinfo->owner = args->pid;
+}
+

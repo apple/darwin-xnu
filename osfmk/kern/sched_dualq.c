@@ -94,6 +94,9 @@ sched_dualq_processor_queue_shutdown(processor_t processor);
 static sched_mode_t
 sched_dualq_initial_thread_sched_mode(task_t parent_task);
 
+static bool
+sched_dualq_thread_avoid_processor(processor_t processor, thread_t thread);
+
 const struct sched_dispatch_table sched_dualq_dispatch = {
 	.sched_name                                     = "dualq",
 	.init                                           = sched_dualq_init,
@@ -126,8 +129,8 @@ const struct sched_dispatch_table sched_dualq_dispatch = {
 	.direct_dispatch_to_idle_processors             = FALSE,
 	.multiple_psets_enabled                         = TRUE,
 	.sched_groups_enabled                           = FALSE,
-	.avoid_processor_enabled                        = FALSE,
-	.thread_avoid_processor                         = NULL,
+	.avoid_processor_enabled                        = TRUE,
+	.thread_avoid_processor                         = sched_dualq_thread_avoid_processor,
 	.processor_balance                              = sched_SMT_balance,
 
 	.rt_runq                                        = sched_rtglobal_runq,
@@ -250,6 +253,10 @@ sched_dualq_processor_csw_check(processor_t processor)
 {
 	boolean_t       has_higher;
 	int             pri;
+
+	if (sched_dualq_thread_avoid_processor(processor, current_thread())) {
+		return (AST_PREEMPT | AST_URGENT);
+	}
 
 	run_queue_t main_runq  = dualq_main_runq(processor);
 	run_queue_t bound_runq = dualq_bound_runq(processor);
@@ -476,4 +483,21 @@ sched_dualq_thread_update_scan(sched_update_scan_context_t scan_context)
 	} while (restart_needed);
 }
 
+extern int sched_allow_rt_smt;
 
+/* Return true if this thread should not continue running on this processor */
+static bool
+sched_dualq_thread_avoid_processor(processor_t processor, thread_t thread)
+{
+	if (processor->processor_primary != processor) {
+		/*
+		 * This is a secondary SMT processor.  If the primary is running
+		 * a realtime thread, only allow realtime threads on the secondary.
+		 */
+		if ((processor->processor_primary->current_pri >= BASEPRI_RTQUEUES) && ((thread->sched_pri < BASEPRI_RTQUEUES) || !sched_allow_rt_smt)) {
+			return true;
+		}
+	}
+
+	return false;
+}

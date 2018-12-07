@@ -66,6 +66,10 @@
 #ifndef	_VM_VM_KERN_H_
 #define _VM_VM_KERN_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
@@ -98,6 +102,7 @@ extern kern_return_t	kernel_memory_allocate(
 #define KMA_COMPRESSOR	0x400   /* Pages belonging to the compressor are not on the paging queues, nor are they counted as wired. */
 #define KMA_ATOMIC 	0x800
 #define KMA_ZERO 	0x1000
+#define KMA_PAGEABLE	0x2000
 
 extern kern_return_t kmem_alloc(
 				vm_map_t    map,
@@ -326,6 +331,7 @@ extern kern_return_t mach_vm_map_kernel(
 	mach_vm_size_t	initial_size,
 	mach_vm_offset_t	mask,
 	int			flags,
+	vm_map_kernel_flags_t	vmk_flags,
 	vm_tag_t		tag,
 	ipc_port_t		port,
 	vm_object_offset_t	offset,
@@ -341,6 +347,7 @@ extern kern_return_t vm_map_kernel(
 	vm_size_t		size,
 	vm_offset_t		mask,
 	int			flags,
+	vm_map_kernel_flags_t	vmk_flags,
 	vm_tag_t		tag,
 	ipc_port_t		port,
 	vm_offset_t		offset,
@@ -383,6 +390,7 @@ extern kern_return_t vm_map_64_kernel(
 	vm_size_t		size,
 	vm_offset_t		mask,
 	int			flags,
+	vm_map_kernel_flags_t	vmk_flags,
 	vm_tag_t		tag,
 	ipc_port_t		port,
 	vm_object_offset_t	offset,
@@ -455,4 +463,9 @@ extern void vm_kernel_addrhash_external(
 extern void vm_init_before_launchd(void);
 
 #endif /* KERNEL */
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif	/* _VM_VM_KERN_H_ */

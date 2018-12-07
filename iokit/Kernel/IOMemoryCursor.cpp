@@ -244,8 +244,13 @@ IOBigMemoryCursor::outputSegment(PhysicalSegment inSegment,
     IOPhysicalAddress * segment;
 
     segment = &((PhysicalSegment *) inSegments)[inSegmentIndex].location;
+#if IOPhysSize == 64
+    OSWriteBigInt64(segment, 0, inSegment.location);
+    OSWriteBigInt64(segment, sizeof(IOPhysicalAddress), inSegment.length);
+#else
     OSWriteBigInt(segment, 0, inSegment.location);
     OSWriteBigInt(segment, sizeof(IOPhysicalAddress), inSegment.length);
+#endif
 }
 
 IOBigMemoryCursor *
@@ -291,8 +296,13 @@ IOLittleMemoryCursor::outputSegment(PhysicalSegment inSegment,
     IOPhysicalAddress * segment;
 
     segment = &((PhysicalSegment *) inSegments)[inSegmentIndex].location;
+#if IOPhysSize == 64
+    OSWriteLittleInt64(segment, 0, inSegment.location);
+    OSWriteLittleInt64(segment, sizeof(IOPhysicalAddress), inSegment.length);
+#else
     OSWriteLittleInt(segment, 0, inSegment.location);
     OSWriteLittleInt(segment, sizeof(IOPhysicalAddress), inSegment.length);
+#endif
 }
 
 IOLittleMemoryCursor *

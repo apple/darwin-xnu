@@ -21,7 +21,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#if defined(__LP64__) || defined(__arm__)
+#if !defined(__i386__)
 
 #include <sys/ioctl.h>
 #include <stdarg.h>
@@ -29,8 +29,6 @@
 int __ioctl(int, unsigned long, void *);
 /*
  * Stub function to account for the third argument being void *
- *
- * This is for LP64 only.
  */
 int
 ioctl(int d, unsigned long request, ...)

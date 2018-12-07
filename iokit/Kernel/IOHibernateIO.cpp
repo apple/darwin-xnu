@@ -214,9 +214,6 @@ static OSData *	                gIOHibernateBoot0082Data;
 static OSData *	                gIOHibernateBootNextData;
 static OSObject *		gIOHibernateBootNextSave;
 
-static IOPolledFileIOVars *     gDebugImageFileVars;
-static IOLock             *     gDebugImageLock;
-
 #endif /* defined(__i386__) || defined(__x86_64__) */
 
 static IOLock *                           gFSLock;
@@ -530,19 +527,11 @@ IOHibernateSystemSleep(void)
 	    }
 	}
 
-	// Invalidate the image file
-    if (gDebugImageLock) {
-        IOLockLock(gDebugImageLock);
-        if (gDebugImageFileVars != 0) {
-            IOSetBootImageNVRAM(0);
-            IOPolledFileClose(&gDebugImageFileVars, 0, 0, 0, 0, 0);
-        }
-        IOLockUnlock(gDebugImageLock);
-    }
-
         vars->volumeCryptKeySize = sizeof(vars->volumeCryptKey);
-        err = IOPolledFileOpen(gIOHibernateFilename, setFileSize, 0,
-        			gIOHibernateCurrentHeader, sizeof(gIOHibernateCurrentHeader),
+        err = IOPolledFileOpen(gIOHibernateFilename,
+                                (kIOPolledFileCreate | kIOPolledFileHibernate),
+                                setFileSize, 0,
+                                gIOHibernateCurrentHeader, sizeof(gIOHibernateCurrentHeader),
                                 &vars->fileVars, &nvramData,
                                 &vars->volumeCryptKey[0], &vars->volumeCryptKeySize);
 
@@ -888,75 +877,6 @@ IOWriteExtentsToFile(IOPolledFileIOVars * vars, uint32_t signature)
 
 exit:
     return err;
-}
-
-extern "C" boolean_t root_is_CF_drive;
-
-void
-IOOpenDebugDataFile(const char *fname, uint64_t size)
-{
-    IOReturn   err;
-    OSData *   imagePath = NULL;
-    uint64_t   padding;
-
-    if (!gDebugImageLock) {
-        gDebugImageLock = IOLockAlloc();
-    }
-
-    if (root_is_CF_drive) return;
-
-    // Try to get a lock, but don't block for getting lock
-    if (!IOLockTryLock(gDebugImageLock)) {
-        HIBLOG("IOOpenDebugDataFile: Failed to get lock\n");
-        return;
-    }
-
-    if (gDebugImageFileVars ||  !fname || !size) {
-        HIBLOG("IOOpenDebugDataFile: conditions failed\n");
-        goto exit;
-    }
-
-    padding = (PAGE_SIZE*2);  // allocate couple more pages for header and fileextents
-    err = IOPolledFileOpen(fname, size+padding, 32ULL*1024*1024*1024,
-                           NULL, 0,
-                           &gDebugImageFileVars, &imagePath, NULL, 0);
-
-    if ((kIOReturnSuccess == err) && imagePath)
-    {
-        if ((gDebugImageFileVars->fileSize < (size+padding)) ||
-            (gDebugImageFileVars->fileExtents->getLength() > PAGE_SIZE)) {
-            // Can't use the file
-            IOPolledFileClose(&gDebugImageFileVars, 0, 0, 0, 0, 0);
-            HIBLOG("IOOpenDebugDataFile: too many file extents\n");
-            goto exit;
-        }
-
-        // write extents for debug data usage in EFI
-        IOWriteExtentsToFile(gDebugImageFileVars, kIOHibernateHeaderOpenSignature);
-        IOSetBootImageNVRAM(imagePath);
-    }
-
-exit:
-    IOLockUnlock(gDebugImageLock);
-
-    if (imagePath) imagePath->release();
-    return;
-}
-
-void
-IOCloseDebugDataFile()
-{
-    IOSetBootImageNVRAM(0);
-
-    if (gDebugImageLock) {
-        IOLockLock(gDebugImageLock);
-        if (gDebugImageFileVars != 0) {
-            IOPolledFileClose(&gDebugImageFileVars, 0, 0, 0, 0, 0);
-        }
-        IOLockUnlock(gDebugImageLock);
-    }
-
-
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -1394,6 +1314,8 @@ IOReturn
 IOHibernateSystemPostWake(bool now)
 {
     gIOHibernateCurrentHeader->signature = kIOHibernateHeaderInvalidSignature;
+    IOSetBootImageNVRAM(0);
+
     IOLockLock(gFSLock);
     if (kFSTrimDelay == gFSState)
     {
@@ -1913,12 +1835,11 @@ hibernate_write_image(void)
         };
 
         bool cpuAES = (0 != (CPUID_FEATURE_AES & cpuid_features()));
-#define _pmap_is_noencrypt(x) (cpuAES ? false : pmap_is_noencrypt((x)))
 
         for (pageType = kWiredEncrypt; pageType >= kUnwiredEncrypt; pageType--)
         {
 	    if (kUnwiredEncrypt == pageType)
-	   {
+	    {
 		// start unwired image
 		if (!vars->hwEncrypt && (kIOHibernateModeEncrypt & gIOHibernateMode))
 		{
@@ -1933,27 +1854,36 @@ hibernate_write_image(void)
             }
             for (iterDone = false, ppnum = 0; !iterDone; )
             {
-                count = hibernate_page_list_iterate((kWired & pageType)
-                                                            ? vars->page_list_wired : vars->page_list,
-                                                        &ppnum);
+		if (cpuAES && (pageType == kWiredClear))
+		{
+		    count = 0;
+		}
+		else
+		{
+		    count = hibernate_page_list_iterate((kWired & pageType) ? vars->page_list_wired : vars->page_list,
+							&ppnum);
+		}
 //              kprintf("[%d](%x : %x)\n", pageType, ppnum, count);
                 iterDone = !count;
 
-                if (count && (kWired & pageType) && needEncrypt)
-                {
-                    uint32_t checkIndex;
-                    for (checkIndex = 0;
-                            (checkIndex < count)
-                                && (((kEncrypt & pageType) == 0) == _pmap_is_noencrypt(ppnum + checkIndex));
-                            checkIndex++)
-                    {}
-                    if (!checkIndex)
-                    {
-                        ppnum++;
-                        continue;
-                    }
-                    count = checkIndex;
-                }
+		if (!cpuAES)
+		{
+		    if (count && (kWired & pageType) && needEncrypt)
+		    {
+			uint32_t checkIndex;
+			for (checkIndex = 0;
+				(checkIndex < count)
+				    && (((kEncrypt & pageType) == 0) == pmap_is_noencrypt(ppnum + checkIndex));
+				checkIndex++)
+			{}
+			if (!checkIndex)
+			{
+			    ppnum++;
+			    continue;
+			}
+			count = checkIndex;
+		    }
+		}
 
                 switch (pageType)
                 {

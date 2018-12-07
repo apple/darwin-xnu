@@ -53,6 +53,7 @@
 #include <kern/telemetry.h>
 #include <kern/waitq.h>
 #include <kern/sched_prim.h>
+#include <kern/turnstile.h>
 #include <kern/zalloc.h>
 #include <kern/debug.h>
 
@@ -87,14 +88,14 @@
  */
 
 static lck_grp_t *ull_lck_grp;
-static lck_mtx_t ull_table_lock;
 
-#define ull_global_lock()       lck_mtx_lock(&ull_table_lock)
-#define ull_global_unlock()     lck_mtx_unlock(&ull_table_lock)
-
-#define ull_lock(ull)           lck_mtx_lock(&ull->ull_lock)
-#define ull_unlock(ull)         lck_mtx_unlock(&ull->ull_lock)
-#define ull_assert_owned(ull)	LCK_MTX_ASSERT(&ull->ull_lock, LCK_MTX_ASSERT_OWNED)
+typedef lck_spin_t ull_lock_t;
+#define ull_lock_init(ull)      lck_spin_init(&ull->ull_lock, ull_lck_grp, NULL)
+#define ull_lock_destroy(ull)   lck_spin_destroy(&ull->ull_lock, ull_lck_grp)
+#define ull_lock(ull)           lck_spin_lock(&ull->ull_lock)
+#define ull_unlock(ull)         lck_spin_unlock(&ull->ull_lock)
+#define ull_assert_owned(ull)   LCK_SPIN_ASSERT(&ull->ull_lock, LCK_ASSERT_OWNED)
+#define ull_assert_notwned(ull) LCK_SPIN_ASSERT(&ull->ull_lock, LCK_ASSERT_NOTOWNED)
 
 #define ULOCK_TO_EVENT(ull)   ((event_t)ull)
 #define EVENT_TO_ULOCK(event) ((ull_t *)event)
@@ -119,24 +120,21 @@ typedef struct ull {
 	thread_t        ull_owner; /* holds +1 thread reference */
 	ulk_t		ull_key;
 	ulk_t		ull_saved_key;
-	lck_mtx_t	ull_lock;
+	ull_lock_t	ull_lock;
+	uint		ull_bucket_index;
 	int32_t		ull_nwaiters;
 	int32_t		ull_max_nwaiters;
 	int32_t		ull_refcount;
-	struct promote_token ull_promote_token;
-	queue_chain_t	ull_hash_link;
 	uint8_t		ull_opcode;
+	struct turnstile *ull_turnstile;
+	queue_chain_t	ull_hash_link;
 } ull_t;
-
-static const bool ull_debug = false;
 
 extern void ulock_initialize(void);
 
 #define ULL_MUST_EXIST	0x0001
-static ull_t *ull_get(ulk_t *, uint32_t);
+static ull_t *ull_get(ulk_t *, uint32_t, ull_t **);
 static void ull_put(ull_t *);
-
-static thread_t ull_promote_owner_locked(ull_t* ull, thread_t thread);
 
 #if DEVELOPMENT || DEBUG
 static int ull_simulate_copyin_fault = 0;
@@ -154,14 +152,22 @@ ull_dump(ull_t *ull)
 	kprintf("ull_refcount\t%d\n", ull->ull_refcount);
 	kprintf("ull_opcode\t%d\n\n", ull->ull_opcode);
 	kprintf("ull_owner\t0x%llx\n\n", thread_tid(ull->ull_owner));
-	kprintf("ull_promote_token\t%d, %d\n\n", ull->ull_promote_token.pt_basepri, ull->ull_promote_token.pt_qos);
+	kprintf("ull_turnstile\t%p\n\n", ull->ull_turnstile);
 }
 #endif
 
+typedef struct ull_bucket {
+	queue_head_t ulb_head;
+	lck_spin_t   ulb_lock;
+} ull_bucket_t;
+
 static int ull_hash_buckets;
-static queue_head_t *ull_bucket;
+static ull_bucket_t *ull_bucket;
 static uint32_t ull_nzalloc = 0;
 static zone_t ull_zone;
+
+#define ull_bucket_lock(i)       lck_spin_lock(&ull_bucket[i].ulb_lock)
+#define ull_bucket_unlock(i)     lck_spin_unlock(&ull_bucket[i].ulb_lock)
 
 static __inline__ uint32_t
 ull_hash_index(char *key, size_t length)
@@ -185,7 +191,6 @@ void
 ulock_initialize(void)
 {
 	ull_lck_grp = lck_grp_alloc_init("ulocks", NULL);
-	lck_mtx_init(&ull_table_lock, ull_lck_grp, NULL);
 
 	assert(thread_max > 16);
 	/* Size ull_hash_buckets based on thread_max.
@@ -196,11 +201,12 @@ ulock_initialize(void)
 	kprintf("%s>thread_max=%d, ull_hash_buckets=%d\n", __FUNCTION__, thread_max, ull_hash_buckets);
 	assert(ull_hash_buckets >= thread_max/4);
 
-	ull_bucket = (queue_head_t *)kalloc(sizeof(queue_head_t) * ull_hash_buckets);
+	ull_bucket = (ull_bucket_t *)kalloc(sizeof(ull_bucket_t) * ull_hash_buckets);
 	assert(ull_bucket != NULL);
 
 	for (int i = 0; i < ull_hash_buckets; i++) {
-		queue_init(&ull_bucket[i]);
+		queue_init(&ull_bucket[i].ulb_head);
+		lck_spin_init(&ull_bucket[i].ulb_lock, ull_lck_grp, NULL);
 	}
 
 	ull_zone = zinit(sizeof(ull_t),
@@ -218,30 +224,30 @@ static int
 ull_hash_dump(pid_t pid)
 {
 	int count = 0;
-	ull_global_lock();
 	if (pid == 0) {
 		kprintf("%s>total number of ull_t allocated %d\n", __FUNCTION__, ull_nzalloc);
 		kprintf("%s>BEGIN\n", __FUNCTION__);
 	}
 	for (int i = 0; i < ull_hash_buckets; i++) {
-		if (!queue_empty(&ull_bucket[i])) {
+		ull_bucket_lock(i);
+		if (!queue_empty(&ull_bucket[i].ulb_head)) {
 			ull_t *elem;
 			if (pid == 0) {
 				kprintf("%s>index %d:\n", __FUNCTION__, i);
 			}
-			qe_foreach_element(elem, &ull_bucket[i], ull_hash_link) {
+			qe_foreach_element(elem, &ull_bucket[i].ulb_head, ull_hash_link) {
 				if ((pid == 0) || (pid == elem->ull_key.ulk_pid)) {
 					ull_dump(elem);
 					count++;
 				}
 			}
 		}
+		ull_bucket_unlock(i);
 	}
 	if (pid == 0) {
 		kprintf("%s>END\n", __FUNCTION__);
 		ull_nzalloc = 0;
 	}
-	ull_global_unlock();
 	return count;
 }
 #endif
@@ -255,14 +261,15 @@ ull_alloc(ulk_t *key)
 	ull->ull_refcount = 1;
 	ull->ull_key = *key;
 	ull->ull_saved_key = *key;
+	ull->ull_bucket_index = ULL_INDEX(key);
 	ull->ull_nwaiters = 0;
 	ull->ull_max_nwaiters = 0;
 	ull->ull_opcode = 0;
 
 	ull->ull_owner = THREAD_NULL;
-	ull->ull_promote_token = PROMOTE_TOKEN_INIT;
+	ull->ull_turnstile = TURNSTILE_NULL;
 
-	lck_mtx_init(&ull->ull_lock, ull_lck_grp, NULL);
+	ull_lock_init(ull);
 
 	ull_nzalloc++;
 	return ull;
@@ -272,10 +279,11 @@ static void
 ull_free(ull_t *ull)
 {
 	assert(ull->ull_owner == THREAD_NULL);
+	assert(ull->ull_turnstile == TURNSTILE_NULL);
 
-	LCK_MTX_ASSERT(&ull->ull_lock, LCK_ASSERT_NOTOWNED);
+	ull_assert_notwned(ull);
 
-	lck_mtx_destroy(&ull->ull_lock, ull_lck_grp);
+	ull_lock_destroy(ull);
 
 	zfree(ull_zone, ull);
 }
@@ -283,17 +291,17 @@ ull_free(ull_t *ull)
 /* Finds an existing ulock structure (ull_t), or creates a new one.
  * If MUST_EXIST flag is set, returns NULL instead of creating a new one.
  * The ulock structure is returned with ull_lock locked
- *
- * TODO: Per-bucket lock to reduce contention on global lock
  */
 static ull_t *
-ull_get(ulk_t *key, uint32_t flags)
+ull_get(ulk_t *key, uint32_t flags, ull_t **unused_ull)
 {
 	ull_t *ull = NULL;
 	uint i = ULL_INDEX(key);
+	ull_t *new_ull = (flags & ULL_MUST_EXIST) ? NULL : ull_alloc(key);
 	ull_t *elem;
-	ull_global_lock();
-	qe_foreach_element(elem, &ull_bucket[i], ull_hash_link) {
+
+	ull_bucket_lock(i);
+	qe_foreach_element(elem, &ull_bucket[i].ulb_head, ull_hash_link) {
 		ull_lock(elem);
 		if (ull_key_match(&elem->ull_key, key)) {
 			ull = elem;
@@ -305,30 +313,31 @@ ull_get(ulk_t *key, uint32_t flags)
 	if (ull == NULL) {
 		if (flags & ULL_MUST_EXIST) {
 			/* Must already exist (called from wake) */
-			ull_global_unlock();
+			ull_bucket_unlock(i);
+			assert(new_ull == NULL);
+			assert(unused_ull == NULL);
 			return NULL;
 		}
 
-		/* NRG maybe drop the ull_global_lock before the kalloc,
-		 * then take the lock and check again for a key match
-		 * and either use the new ull_t or free it.
-		 */
-
-		ull = ull_alloc(key);
-
-		if (ull == NULL) {
-			ull_global_unlock();
+		if (new_ull == NULL) {
+			/* Alloc above failed */
+			ull_bucket_unlock(i);
 			return NULL;
 		}
 
+		ull = new_ull;
 		ull_lock(ull);
-
-		enqueue(&ull_bucket[i], &ull->ull_hash_link);
+		enqueue(&ull_bucket[i].ulb_head, &ull->ull_hash_link);
+	} else if (!(flags & ULL_MUST_EXIST)) {
+		assert(new_ull);
+		assert(unused_ull);
+		assert(*unused_ull == NULL);
+		*unused_ull = new_ull;
 	}
 
 	ull->ull_refcount++;
 
-	ull_global_unlock();
+	ull_bucket_unlock(i);
 
 	return ull; /* still locked */
 }
@@ -348,17 +357,35 @@ ull_put(ull_t *ull)
 		return;
 	}
 
-	ull_global_lock();
+	ull_bucket_lock(ull->ull_bucket_index);
 	remqueue(&ull->ull_hash_link);
-	ull_global_unlock();
+	ull_bucket_unlock(ull->ull_bucket_index);
 
-#if DEVELOPMENT || DEBUG
-	if (ull_debug) {
-		kprintf("%s>", __FUNCTION__);
-		ull_dump(ull);
-	}
-#endif
 	ull_free(ull);
+}
+
+static void ulock_wait_continue(void *, wait_result_t);
+static void ulock_wait_cleanup(ull_t *, thread_t, thread_t, int32_t *);
+
+inline static int
+wait_result_to_return_code(wait_result_t wr)
+{
+	int ret = 0;
+
+	switch (wr) {
+	case THREAD_AWAKENED:
+		break;
+	case THREAD_TIMED_OUT:
+		ret = ETIMEDOUT;
+		break;
+	case THREAD_INTERRUPTED:
+	case THREAD_RESTART:
+	default:
+		ret = EINTR;
+		break;
+	}
+
+	return ret;
 }
 
 int
@@ -366,20 +393,20 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 {
 	uint opcode = args->operation & UL_OPCODE_MASK;
 	uint flags = args->operation & UL_FLAGS_MASK;
+
+	if (flags & ULF_WAIT_CANCEL_POINT) {
+		__pthread_testcancel(1);
+	}
+
 	int ret = 0;
 	thread_t self = current_thread();
-	int id = thread_tid(self);
 	ulk_t key;
 
 	/* involved threads - each variable holds +1 ref if not null */
 	thread_t owner_thread   = THREAD_NULL;
 	thread_t old_owner      = THREAD_NULL;
-	thread_t old_lingering_owner = THREAD_NULL;
-	sched_call_t workq_callback = NULL;
 
-	if (ull_debug) {
-		kprintf("[%d]%s>ENTER opcode %d addr %llx value %llx timeout %d flags %x\n", id, __FUNCTION__, opcode, (unsigned long long)(args->addr), args->value, args->timeout, flags);
-	}
+	ull_t *unused_ull = NULL;
 
 	if ((flags & ULF_WAIT_MASK) != flags) {
 		ret = EINVAL;
@@ -395,11 +422,6 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 	case UL_COMPARE_AND_WAIT:
 		break;
 	default:
-		if (ull_debug) {
-			kprintf("[%d]%s>EINVAL opcode %d addr 0x%llx flags 0x%x\n",
-				id, __FUNCTION__, opcode,
-				(unsigned long long)(args->addr), flags);
-		}
 		ret = EINVAL;
 		goto munge_retval;
 	}
@@ -415,12 +437,7 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 	key.ulk_pid = p->p_pid;
 	key.ulk_addr = args->addr;
 
-	if (flags & ULF_WAIT_WORKQ_DATA_CONTENTION) {
-		workq_callback = workqueue_get_sched_callback();
-		workq_callback = thread_disable_sched_call(self, workq_callback);
-	}
-
-	ull_t *ull = ull_get(&key, 0);
+	ull_t *ull = ull_get(&key, 0, &unused_ull);
 	if (ull == NULL) {
 		ret = ENOMEM;
 		goto munge_retval;
@@ -436,9 +453,8 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 	if (ull->ull_opcode == 0) {
 		ull->ull_opcode = opcode;
 	} else if (ull->ull_opcode != opcode) {
-		ull_unlock(ull);
 		ret = EDOM;
-		goto out;
+		goto out_locked;
 	}
 
 	/*
@@ -446,14 +462,12 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 	 * but we have to read the userspace value under the ull lock for correctness.
 	 *
 	 * Until <rdar://problem/24999882> exists,
-	 * fake it by disabling preemption across copyin, which forces any
+	 * holding the ull spinlock across copyin forces any
 	 * vm_fault we encounter to fail.
 	 */
 	uint64_t val64; /* copyin_word always zero-extends to 64-bits */
 
-	disable_preemption();
 	int copy_ret = copyin_word(args->addr, &val64, sizeof(value));
-	enable_preemption();
 
 	value = (uint32_t)val64;
 
@@ -467,23 +481,16 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 	}
 #endif
 	if (copy_ret != 0) {
-		ull_unlock(ull);
-
 		/* copyin() will return an error if the access to the user addr would have faulted,
 		 * so just return and let the user level code fault it in.
 		 */
 		ret = copy_ret;
-		goto out;
+		goto out_locked;
 	}
 
 	if (value != args->value) {
 		/* Lock value has changed from expected so bail out */
-		ull_unlock(ull);
-		if (ull_debug) {
-			kprintf("[%d]%s>Lock value %d has changed from expected %d so bail out\n",
-			        id, __FUNCTION__, value, (uint32_t)(args->value));
-		}
-		goto out;
+		goto out_locked;
 	}
 
 	if (set_owner) {
@@ -496,9 +503,8 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 			 * Translation failed - even though the lock value is up to date,
 			 * whatever was stored in the lock wasn't actually a thread port.
 			 */
-			ull_unlock(ull);
 			ret = EOWNERDEAD;
-			goto out;
+			goto out_locked;
 		}
 		/* owner_thread has a +1 reference */
 
@@ -511,54 +517,102 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 		 *              and is heading toward the kernel to call ull_wake.
 		 *              If so, it's going to have to wait for the ull mutex.
 		 *
-		 * Therefore, I can promote its priority to match mine, and I can rely on it to
-		 * come by later to issue the wakeup and lose its promotion.
+		 * Therefore, I can ask the turnstile to promote its priority, and I can rely
+		 * on it to come by later to issue the wakeup and lose its promotion.
 		 */
 
-		old_owner = ull_promote_owner_locked(ull, owner_thread);
+		/* Return the +1 ref from the ull_owner field */
+		old_owner = ull->ull_owner;
+		ull->ull_owner = THREAD_NULL;
+
+		if (owner_thread != THREAD_NULL) {
+			/* The ull_owner field now owns a +1 ref on owner_thread */
+			thread_reference(owner_thread);
+			ull->ull_owner = owner_thread;
+		}
 	}
 
 	wait_result_t wr;
 	uint32_t timeout = args->timeout;
+	uint64_t deadline = TIMEOUT_WAIT_FOREVER;
+	wait_interrupt_t interruptible = THREAD_ABORTSAFE;
+	struct turnstile *ts;
+
+	ts = turnstile_prepare((uintptr_t)ull, &ull->ull_turnstile,
+	                       TURNSTILE_NULL, TURNSTILE_ULOCK);
 	thread_set_pending_block_hint(self, kThreadWaitUserLock);
-	if (timeout) {
-		wr = assert_wait_timeout(ULOCK_TO_EVENT(ull), THREAD_ABORTSAFE, timeout, NSEC_PER_USEC);
-	} else {
-		wr = assert_wait(ULOCK_TO_EVENT(ull), THREAD_ABORTSAFE);
+
+	if (flags & ULF_WAIT_WORKQ_DATA_CONTENTION) {
+		interruptible |= THREAD_WAIT_NOREPORT;
 	}
+
+	if (timeout) {
+		clock_interval_to_deadline(timeout, NSEC_PER_USEC, &deadline);
+	}
+
+	turnstile_update_inheritor(ts, owner_thread,
+		(TURNSTILE_DELAYED_UPDATE | TURNSTILE_INHERITOR_THREAD));
+
+	wr = waitq_assert_wait64(&ts->ts_waitq, CAST_EVENT64_T(ULOCK_TO_EVENT(ull)),
+			interruptible, deadline);
 
 	ull_unlock(ull);
 
-	if (ull_debug) {
-		kprintf("[%d]%s>after assert_wait() returned %d\n", id, __FUNCTION__, wr);
+	if (unused_ull) {
+		ull_free(unused_ull);
+		unused_ull = NULL;
 	}
 
-	if (set_owner && owner_thread != THREAD_NULL && wr == THREAD_WAITING) {
-		wr = thread_handoff(owner_thread);
-		/* owner_thread ref is consumed */
-		owner_thread = THREAD_NULL;
-	} else {
-		/* NRG At some point this should be a continuation based block, so that we can avoid saving the full kernel context. */
-		wr = thread_block(NULL);
-	}
-	if (ull_debug) {
-		kprintf("[%d]%s>thread_block() returned %d\n", id, __FUNCTION__, wr);
-	}
-	switch (wr) {
-	case THREAD_AWAKENED:
-		break;
-	case THREAD_TIMED_OUT:
-		ret = ETIMEDOUT;
-		break;
-	case THREAD_INTERRUPTED:
-	case THREAD_RESTART:
-	default:
-		ret = EINTR;
-		break;
+	turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_NOT_HELD);
+
+	if (wr == THREAD_WAITING) {
+		uthread_t uthread = (uthread_t)get_bsdthread_info(self);
+		uthread->uu_save.uus_ulock_wait_data.retval = retval;
+		uthread->uu_save.uus_ulock_wait_data.flags = flags;
+		uthread->uu_save.uus_ulock_wait_data.owner_thread = owner_thread;
+		uthread->uu_save.uus_ulock_wait_data.old_owner = old_owner;
+		if (set_owner && owner_thread != THREAD_NULL) {
+			thread_handoff_parameter(owner_thread, ulock_wait_continue, ull);
+		} else {
+			assert(owner_thread == THREAD_NULL);
+			thread_block_parameter(ulock_wait_continue, ull);
+		}
+		/* NOT REACHED */
 	}
 
-out:
+	ret = wait_result_to_return_code(wr);
+
 	ull_lock(ull);
+	turnstile_complete((uintptr_t)ull, &ull->ull_turnstile, NULL);
+
+out_locked:
+	ulock_wait_cleanup(ull, owner_thread, old_owner, retval);
+
+	if (unused_ull) {
+		ull_free(unused_ull);
+		unused_ull = NULL;
+	}
+
+	assert(*retval >= 0);
+
+munge_retval:
+	if ((flags & ULF_NO_ERRNO) && (ret != 0)) {
+		*retval = -ret;
+		ret = 0;
+	}
+	return ret;
+}
+
+/*
+ * Must be called with ull_lock held
+ */
+static void
+ulock_wait_cleanup(ull_t *ull, thread_t owner_thread, thread_t old_owner, int32_t *retval)
+{
+	ull_assert_owned(ull);
+
+	thread_t old_lingering_owner = THREAD_NULL;
+
 	*retval = --ull->ull_nwaiters;
 	if (ull->ull_nwaiters == 0) {
 		/*
@@ -566,11 +620,8 @@ out:
 		 * clear out the lingering owner reference before
 		 * freeing the ull.
 		 */
-		if (ull->ull_owner != THREAD_NULL) {
-			old_lingering_owner = ull_promote_owner_locked(ull, THREAD_NULL);
-		}
-
-		assert(ull->ull_owner == THREAD_NULL);
+		old_lingering_owner = ull->ull_owner;
+		ull->ull_owner = THREAD_NULL;
 
 		ull->ull_key.ulk_pid = 0;
 		ull->ull_key.ulk_addr = 0;
@@ -578,6 +629,9 @@ out:
 		assert(ull->ull_refcount > 0);
 	}
 	ull_put(ull);
+
+	/* Need to be called after dropping the interlock */
+	turnstile_cleanup();
 
 	if (owner_thread != THREAD_NULL) {
 		thread_deallocate(owner_thread);
@@ -592,17 +646,35 @@ out:
 	}
 
 	assert(*retval >= 0);
+}
 
-munge_retval:
-	if (workq_callback) {
-		thread_reenable_sched_call(self, workq_callback);
-	}
+__attribute__((noreturn))
+static void
+ulock_wait_continue(void * parameter, wait_result_t wr)
+{
+	thread_t self = current_thread();
+	uthread_t uthread = (uthread_t)get_bsdthread_info(self);
+	int ret = 0;
+
+	ull_t *ull = (ull_t *)parameter;
+	int32_t *retval = uthread->uu_save.uus_ulock_wait_data.retval;
+	uint flags = uthread->uu_save.uus_ulock_wait_data.flags;
+	thread_t owner_thread = uthread->uu_save.uus_ulock_wait_data.owner_thread;
+	thread_t old_owner = uthread->uu_save.uus_ulock_wait_data.old_owner;
+
+	ret = wait_result_to_return_code(wr);
+
+	ull_lock(ull);
+	turnstile_complete((uintptr_t)ull, &ull->ull_turnstile, NULL);
+
+	ulock_wait_cleanup(ull, owner_thread, old_owner, retval);
 
 	if ((flags & ULF_NO_ERRNO) && (ret != 0)) {
 		*retval = -ret;
 		ret = 0;
 	}
-	return ret;
+
+	unix_syscall_return(ret);
 }
 
 int
@@ -611,17 +683,11 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 	uint opcode = args->operation & UL_OPCODE_MASK;
 	uint flags = args->operation & UL_FLAGS_MASK;
 	int ret = 0;
-	int id = thread_tid(current_thread());
 	ulk_t key;
 
 	/* involved threads - each variable holds +1 ref if not null */
 	thread_t wake_thread    = THREAD_NULL;
 	thread_t old_owner      = THREAD_NULL;
-
-	if (ull_debug) {
-		kprintf("[%d]%s>ENTER opcode %d addr %llx flags %x\n",
-		        id, __FUNCTION__, opcode, (unsigned long long)(args->addr), flags);
-	}
 
 	if ((flags & ULF_WAKE_MASK) != flags) {
 		ret = EINVAL;
@@ -662,7 +728,7 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 	key.ulk_pid = p->p_pid;
 	key.ulk_addr = args->addr;
 
-	ull_t *ull = ull_get(&key, ULL_MUST_EXIST);
+	ull_t *ull = ull_get(&key, ULL_MUST_EXIST, NULL);
 	if (ull == NULL) {
 		if (wake_thread != THREAD_NULL) {
 			thread_deallocate(wake_thread);
@@ -681,19 +747,11 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 	case UL_COMPARE_AND_WAIT:
 		break;
 	default:
-		if (ull_debug) {
-			kprintf("[%d]%s>EINVAL opcode %d addr 0x%llx flags 0x%x\n",
-			        id, __FUNCTION__, opcode, (unsigned long long)(args->addr), flags);
-		}
 		ret = EINVAL;
 		goto out_locked;
 	}
 
 	if (opcode != ull->ull_opcode) {
-		if (ull_debug) {
-			kprintf("[%d]%s>EDOM - opcode mismatch - opcode %d addr 0x%llx flags 0x%x\n",
-			        id, __FUNCTION__, opcode, (unsigned long long)(args->addr), flags);
-		}
 		ret = EDOM;
 		goto out_locked;
 	}
@@ -702,10 +760,16 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 		assert(ull->ull_owner == THREAD_NULL);
 	}
 
+	struct turnstile *ts;
+	ts = turnstile_prepare((uintptr_t)ull, &ull->ull_turnstile,
+	                       TURNSTILE_NULL, TURNSTILE_ULOCK);
+
 	if (flags & ULF_WAKE_ALL) {
-		thread_wakeup(ULOCK_TO_EVENT(ull));
+		waitq_wakeup64_all(&ts->ts_waitq, CAST_EVENT64_T(ULOCK_TO_EVENT(ull)),
+			THREAD_AWAKENED, 0);
 	} else if (flags & ULF_WAKE_THREAD) {
-		kern_return_t kr = thread_wakeup_thread(ULOCK_TO_EVENT(ull), wake_thread);
+		kern_return_t kr = waitq_wakeup64_thread(&ts->ts_waitq, CAST_EVENT64_T(ULOCK_TO_EVENT(ull)),
+			wake_thread, THREAD_AWAKENED);
 		if (kr != KERN_SUCCESS) {
 			assert(kr == KERN_NOT_WAITING);
 			ret = EALREADY;
@@ -718,7 +782,8 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 		 * TODO: 'owner is not current_thread (or null)' likely means we can avoid this wakeup
 		 * <rdar://problem/25487001>
 		 */
-		thread_wakeup_one_with_pri(ULOCK_TO_EVENT(ull), WAITQ_SELECT_MAX_PRI);
+		waitq_wakeup64_one(&ts->ts_waitq, CAST_EVENT64_T(ULOCK_TO_EVENT(ull)),
+			THREAD_AWAKENED, WAITQ_SELECT_MAX_PRI);
 	}
 
 	/*
@@ -732,11 +797,20 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 	 */
 
 	if (ull->ull_owner == current_thread()) {
-		old_owner = ull_promote_owner_locked(ull, THREAD_NULL);
+		turnstile_update_inheritor(ts, THREAD_NULL,
+			(TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
+		turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_HELD);
+		old_owner = ull->ull_owner;
+		ull->ull_owner = THREAD_NULL;
 	}
+
+	turnstile_complete((uintptr_t)ull, &ull->ull_turnstile, NULL);
 
 out_locked:
 	ull_put(ull);
+
+	/* Need to be called after dropping the interlock */
+	turnstile_cleanup();
 
 	if (wake_thread != THREAD_NULL) {
 		thread_deallocate(wake_thread);
@@ -752,46 +826,6 @@ munge_retval:
 		ret = 0;
 	}
 	return ret;
-}
-
-/*
- * Change ull_owner to be new_owner, and update it with the properties
- * of the current thread.
- *
- * Records the highest current promotion value in ull_promote_token, and applies that
- * to any new owner.
- *
- * Returns +1 ref to the old ull_owner if it is going away.
- */
-static thread_t
-ull_promote_owner_locked(ull_t*    ull,
-                         thread_t  new_owner)
-{
-	if (new_owner != THREAD_NULL && ull->ull_owner == new_owner) {
-		thread_user_promotion_update(new_owner, current_thread(), &ull->ull_promote_token);
-		return THREAD_NULL;
-	}
-
-	thread_t old_owner = ull->ull_owner;
-	ull->ull_owner = THREAD_NULL;
-
-	if (new_owner != THREAD_NULL) {
-		/* The ull_owner field now owns a +1 ref on thread */
-		thread_reference(new_owner);
-		ull->ull_owner = new_owner;
-
-		thread_user_promotion_add(new_owner, current_thread(), &ull->ull_promote_token);
-	} else {
-		/* No new owner - clear the saturated promotion value */
-		ull->ull_promote_token = PROMOTE_TOKEN_INIT;
-	}
-
-	if (old_owner != THREAD_NULL) {
-		thread_user_promotion_drop(old_owner);
-	}
-
-	/* Return the +1 ref from the ull_owner field */
-	return old_owner;
 }
 
 void

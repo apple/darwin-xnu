@@ -100,9 +100,6 @@ static struct nd_defrouter *defrtrlist_update_common(struct nd_defrouter *,
     boolean_t);
 static struct nd_defrouter *defrtrlist_update(struct nd_defrouter *);
 
-static struct in6_ifaddr *in6_pfx_newpersistaddr(struct nd_prefix *, int,
-    int *);
-
 static struct nd_pfxrouter *pfxrtr_lookup(struct nd_prefix *,
 	struct nd_defrouter *);
 static void pfxrtr_add(struct nd_prefix *, struct nd_defrouter *);
@@ -2362,8 +2359,7 @@ prelist_update(
 		 * No address matched and the valid lifetime is non-zero.
 		 * Create a new address.
 		 */
-
-		if ((ia6 = in6_pfx_newpersistaddr(new, mcast, &error))
+		if ((ia6 = in6_pfx_newpersistaddr(new, mcast, &error, FALSE))
 		    != NULL) {
 			/*
 			 * note that we should use pr (not new) for reference.
@@ -2402,6 +2398,46 @@ prelist_update(
 			ia6 = NULL;
 
 			/*
+			 * If the interface is marked for CLAT46 configuration
+			 * try and configure the reserved IPv6 address for
+			 * stateless translation.
+			 */
+			if (IS_INTF_CLAT46(ifp)) {
+				if ((ia6 = in6_pfx_newpersistaddr(new, mcast,&error, TRUE)) != NULL) {
+					IFA_LOCK(&ia6->ia_ifa);
+					NDPR_LOCK(pr);
+					ia6->ia6_ndpr = pr;
+					NDPR_ADDREF_LOCKED(pr); /* for addr reference */
+					pr->ndpr_addrcnt++;
+					VERIFY(pr->ndpr_addrcnt != 0);
+					pr->ndpr_stateflags |= NDPRF_CLAT46;
+					NDPR_UNLOCK(pr);
+					IFA_UNLOCK(&ia6->ia_ifa);
+					IFA_REMREF(&ia6->ia_ifa);
+					ia6 = NULL;
+				} else if (error != EEXIST) {
+					uuid_t tmp_uuid = {};
+					/*
+					 * Only report the error if it is not
+					 * EEXIST.
+					 */
+					ip6stat.ip6s_clat464_v6addr_conffail++;
+					in6_clat46_event_enqueue_nwk_wq_entry(
+					    IN6_CLAT46_EVENT_V6_ADDR_CONFFAIL,
+					    0,
+					    tmp_uuid);
+					nd6log0((LOG_ERR, "Could not configure CLAT46 address on interface "
+					    "%s.\n", ifp->if_xname));
+				}
+				/*
+				 * Reset the error as we do not want to
+				 * treat failure of CLAT46 address configuration
+				 * as complete failure in prelist update path.
+				 */
+				error = 0;
+			}
+
+			/*
 			 * A newly added address might affect the status
 			 * of other addresses, so we check and update it.
 			 * XXX: what if address duplication happens?
@@ -2411,7 +2447,6 @@ prelist_update(
 			lck_mtx_unlock(nd6_mutex);
 		}
 	}
-
 end:
 	if (pr != NULL)
 		NDPR_REMREF(pr);
@@ -3543,8 +3578,8 @@ nd6_prefix_offlink(struct nd_prefix *pr)
 	return (error);
 }
 
-static struct in6_ifaddr *
-in6_pfx_newpersistaddr(struct nd_prefix *pr, int mcast, int *errorp)
+struct in6_ifaddr *
+in6_pfx_newpersistaddr(struct nd_prefix *pr, int mcast, int *errorp, boolean_t is_clat46)
 {
 	struct in6_ifaddr *ia6 = NULL;
 	struct ifnet *ifp = NULL;
@@ -3619,7 +3654,7 @@ in6_pfx_newpersistaddr(struct nd_prefix *pr, int mcast, int *errorp)
 	lck_mtx_unlock(&ndi->lock);
 	NDPR_UNLOCK(pr);
 
-	if (notcga) {
+	if (notcga && !is_clat46) {
 		ia6 = in6ifa_ifpforlinklocal(ifp, 0);
 		if (ia6 == NULL) {
 			error = EADDRNOTAVAIL;
@@ -3644,22 +3679,43 @@ in6_pfx_newpersistaddr(struct nd_prefix *pr, int mcast, int *errorp)
 		in6_cga_node_lock();
 		struct in6_cga_prepare local_cga_prepare;
 
+		/*
+		 * XXX For now the collision count is not used in the classical
+		 * way for secure addresses.
+		 * Use a different collision count value to generate reserved
+		 * address for stateless CLAT46
+		 */
 		if (ndi->cga_initialized) {
 			bcopy(&(ndi->local_cga_modifier),
 			    &(local_cga_prepare.cga_modifier),
 			    sizeof(local_cga_prepare.cga_modifier));
-			error = in6_cga_generate(&local_cga_prepare, 0,
-			    &ifra.ifra_addr.sin6_addr);
+			if (!is_clat46) {
+				error = in6_cga_generate(&local_cga_prepare, 0,
+				    &ifra.ifra_addr.sin6_addr);
+			} else {
+				error = in6_cga_generate(&local_cga_prepare, 1,
+				    &ifra.ifra_addr.sin6_addr);
+			}
 		} else {
-			error = in6_cga_generate(NULL, 0,
-			    &ifra.ifra_addr.sin6_addr);
+			if (!is_clat46)
+				error = in6_cga_generate(NULL, 0,
+				    &ifra.ifra_addr.sin6_addr);
+			else
+				error = in6_cga_generate(NULL, 1,
+				    &ifra.ifra_addr.sin6_addr);
 		}
 		in6_cga_node_unlock();
-		if (error == 0)
+		if (error == 0) {
 			ifra.ifra_flags |= IN6_IFF_SECURED;
-		else {
-			nd6log((LOG_ERR, "%s: no CGA available (%s)\n",
-			    __func__, if_name(ifp)));
+			if (is_clat46)
+				ifra.ifra_flags |= IN6_IFF_CLAT46;
+		} else {
+			if (!is_clat46)
+				nd6log((LOG_ERR, "%s: no CGA available (%s)\n",
+				    __func__, if_name(ifp)));
+			else
+				nd6log((LOG_ERR, "%s: no CLAT46 available (%s)\n",
+                                    __func__, if_name(ifp)));
 			goto done;
 		}
 	}
@@ -3686,7 +3742,7 @@ in6_pfx_newpersistaddr(struct nd_prefix *pr, int mcast, int *errorp)
 	 */
 	if ((ia6 = in6ifa_ifpwithaddr(ifp, &ifra.ifra_addr.sin6_addr))
 	    != NULL) {
-		error = EADDRNOTAVAIL;
+		error = EEXIST;
 		IFA_REMREF(&ia6->ia_ifa);
 		ia6 = NULL;
 

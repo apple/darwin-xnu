@@ -28,8 +28,6 @@ int __FCNTL(int, int, void *);
  * Stub function to account for the differences in the size of the third
  * argument when int and void * are different sizes. Also add pthread
  * cancelability.
- *
- * This is for LP64 only.
  */
 int
 fcntl(int fd, int cmd, ...)

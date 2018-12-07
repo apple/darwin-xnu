@@ -689,21 +689,18 @@ sched_traditional_steal_thread(processor_set_t pset)
 	thread_t        thread;
 
 	do {
-		processor = (processor_t)(uintptr_t)queue_first(&cset->active_queue);
-		while (!queue_end(&cset->active_queue, (queue_entry_t)processor)) {
+		uint64_t active_map = (pset->cpu_state_map[PROCESSOR_RUNNING] |
+				       pset->cpu_state_map[PROCESSOR_DISPATCHING]);
+		for (int cpuid = lsb_first(active_map); cpuid >= 0; cpuid = lsb_next(active_map, cpuid)) {
+			processor = processor_array[cpuid];
 			if (runq_for_processor(processor)->count > 0) {
 				thread = sched_traditional_steal_processor_thread(processor);
 				if (thread != THREAD_NULL) {
-					remqueue((queue_entry_t)processor);
-					enqueue_tail(&cset->active_queue, (queue_entry_t)processor);
-
 					pset_unlock(cset);
 
 					return (thread);
 				}
 			}
-
-			processor = (processor_t)(uintptr_t)queue_next((queue_entry_t)processor);
 		}
 
 		nset = next_pset(cset);

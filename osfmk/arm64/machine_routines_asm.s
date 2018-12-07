@@ -35,6 +35,7 @@
 #include "assym.s"
 
 
+
 /*	uint32_t get_fpscr(void):
  *		Returns (FPSR | FPCR).
  */
@@ -82,6 +83,54 @@ LEXT(set_fpscr)
 #endif
 	ret
 
+/*
+ * void update_mdscr(unsigned long clear, unsigned long set)
+ *   Clears and sets the specified bits in MDSCR_EL1.
+ *
+ * Setting breakpoints in EL1 is effectively a KTRR bypass. The ability to do so is
+ * controlled by MDSCR.KDE. The MSR to set MDSCR must be present to allow
+ * self-hosted user mode debug. Any checks before the MRS can be skipped with ROP,
+ * so we need to put the checks after the MRS where they can't be skipped. That
+ * still leaves a small window if a breakpoint is set on the instruction
+ * immediately after the MRS. To handle that, we also do a check and then set of
+ * the breakpoint control registers. This allows us to guarantee that a given
+ * core will never have both KDE set and a breakpoint targeting EL1.
+ *
+ * If KDE gets set, unset it and then panic
+ */
+	.align 2
+	.globl EXT(update_mdscr)
+LEXT(update_mdscr)
+	mov	x4, #0
+	mrs	x2, MDSCR_EL1
+	bic	x2, x2, x0
+	orr	x2, x2, x1
+1:
+	bic	x2, x2, #0x2000
+	msr	MDSCR_EL1, x2
+#if defined(CONFIG_KERNEL_INTEGRITY)
+	/*
+	 * verify KDE didn't get set (including via ROP)
+	 * If set, clear it and then panic
+	 */
+	ands	x3, x2, #0x2000
+	orr	x4, x4, x3
+	bne	1b
+	cmp	x4, xzr
+	b.ne	Lupdate_mdscr_panic
+#endif
+	ret
+
+Lupdate_mdscr_panic:
+	adrp	x0, Lupdate_mdscr_panic_str@page
+	add	x0, x0, Lupdate_mdscr_panic_str@pageoff
+	b	EXT(panic)
+	b	.
+
+Lupdate_mdscr_panic_str:
+	.asciz "MDSCR.KDE was set"
+
+
 #if __ARM_KERNEL_PROTECT__
 /*
  * __ARM_KERNEL_PROTECT__ adds two complications to TLB management:
@@ -96,6 +145,40 @@ LEXT(set_fpscr)
  */
 #endif /* __ARM_KERNEL_PROTECT__ */
 
+.macro SYNC_TLB_FLUSH
+	dsb	ish
+	isb	sy
+.endmacro
+
+
+/*
+ *	void sync_tlb_flush(void)
+ *
+ *		Synchronize one or more prior TLB flush operations
+ */
+	.text
+	.align 2
+	.globl EXT(sync_tlb_flush)
+LEXT(sync_tlb_flush)
+	SYNC_TLB_FLUSH
+	ret
+
+
+.macro FLUSH_MMU_TLB
+	tlbi    vmalle1is
+.endmacro
+/*
+ *	void flush_mmu_tlb_async(void)
+ *
+ *		Flush all TLBs, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_async)
+LEXT(flush_mmu_tlb_async)
+	FLUSH_MMU_TLB
+	ret
+
 /*
  *	void flush_mmu_tlb(void)
  *
@@ -105,34 +188,40 @@ LEXT(set_fpscr)
 	.align 2
 	.globl EXT(flush_mmu_tlb)
 LEXT(flush_mmu_tlb)
-	tlbi    vmalle1is
-	dsb		ish
-	isb		sy
+	FLUSH_MMU_TLB
+	SYNC_TLB_FLUSH
+	ret
+
+.macro FLUSH_CORE_TLB
+	tlbi    vmalle1
+.endmacro
+
+/*
+ *	void flush_core_tlb_async(void)
+ *
+ *		Flush local core TLB, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_core_tlb_async)
+LEXT(flush_core_tlb_async)
+	FLUSH_CORE_TLB
 	ret
 
 /*
  *	void flush_core_tlb(void)
  *
- *		Flush core TLB
+ *		Flush local core TLB
  */
 	.text
 	.align 2
 	.globl EXT(flush_core_tlb)
 LEXT(flush_core_tlb)
-	tlbi    vmalle1
-	dsb		ish
-	isb		sy
+	FLUSH_CORE_TLB
+	SYNC_TLB_FLUSH
 	ret
 
-/*
- *	void flush_mmu_tlb_allentries(uint64_t, uint64_t)
- *
- *		Flush TLB entries
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb_allentries)
-LEXT(flush_mmu_tlb_allentries)
+.macro FLUSH_MMU_TLB_ALLENTRIES
 #if __ARM_16K_PG__
 	and		x0, x0, #~0x3
 
@@ -154,13 +243,68 @@ LEXT(flush_mmu_tlb_allentries)
 	add		x1, x1, #0x3
 	and		x1, x1, #~0x3
 #endif
-Lflush_mmu_tlb_allentries_loop:
+1: // Lflush_mmu_tlb_allentries_loop:
 	tlbi    vaae1is, x0
 	add		x0, x0, #(ARM_PGBYTES / 4096)	// Units are 4KB pages, as defined by the ISA
 	cmp		x0, x1
-	b.lt	Lflush_mmu_tlb_allentries_loop
-	dsb		ish
-	isb		sy
+	b.lt	1b // Lflush_mmu_tlb_allentries_loop
+.endmacro
+
+/*
+ *	void flush_mmu_tlb_allentries_async(uint64_t, uint64_t)
+ *
+ *		Flush TLB entries, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_allentries_async)
+LEXT(flush_mmu_tlb_allentries_async)
+	FLUSH_MMU_TLB_ALLENTRIES
+	ret
+
+/*
+ *	void flush_mmu_tlb_allentries(uint64_t, uint64_t)
+ *
+ *		Flush TLB entries
+ */
+	.globl EXT(flush_mmu_tlb_allentries)
+LEXT(flush_mmu_tlb_allentries)
+	FLUSH_MMU_TLB_ALLENTRIES
+	SYNC_TLB_FLUSH
+	ret
+
+.macro FLUSH_MMU_TLB_ENTRY
+#if __ARM_KERNEL_PROTECT__
+	/*
+	 * If we are flushing ASID 0, this is a kernel operation.  With this
+	 * ASID scheme, this means we should flush all ASIDs.
+	 */
+	lsr		x2, x0, #TLBI_ASID_SHIFT
+	cmp		x2, #0
+	b.eq		1f // Lflush_mmu_tlb_entry_globally
+
+	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
+	tlbi    vae1is, x0
+	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
+#endif /* __ARM_KERNEL_PROTECT__ */
+	tlbi    vae1is, x0
+#if __ARM_KERNEL_PROTECT__
+	b		2f // Lflush_mmu_tlb_entry_done
+1: // Lflush_mmu_tlb_entry_globally:
+	tlbi    vaae1is, x0
+2: // Lflush_mmu_tlb_entry_done
+#endif /* __ARM_KERNEL_PROTECT__ */
+.endmacro
+/*
+ *	void flush_mmu_tlb_entry_async(uint64_t)
+ *
+ *		Flush TLB entry, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_entry_async)
+LEXT(flush_mmu_tlb_entry_async)
+	FLUSH_MMU_TLB_ENTRY
 	ret
 
 /*
@@ -172,40 +316,11 @@ Lflush_mmu_tlb_allentries_loop:
 	.align 2
 	.globl EXT(flush_mmu_tlb_entry)
 LEXT(flush_mmu_tlb_entry)
-#if __ARM_KERNEL_PROTECT__
-	/*
-	 * If we are flushing ASID 0, this is a kernel operation.  With this
-	 * ASID scheme, this means we should flush all ASIDs.
-	 */
-	lsr		x2, x0, #TLBI_ASID_SHIFT
-	cmp		x2, #0
-	b.eq		Lflush_mmu_tlb_entry_globally
-
-	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
-	tlbi    vae1is, x0
-	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
-#endif /* __ARM_KERNEL_PROTECT__ */
-	tlbi    vae1is, x0
-	dsb		ish
-	isb		sy
+	FLUSH_MMU_TLB_ENTRY
+	SYNC_TLB_FLUSH
 	ret
-#if __ARM_KERNEL_PROTECT__
-Lflush_mmu_tlb_entry_globally:
-	tlbi    vaae1is, x0
-	dsb		ish
-	isb		sy
-	ret
-#endif /* __ARM_KERNEL_PROTECT__ */
 
-/*
- *	void flush_mmu_tlb_entries(uint64_t, uint64_t)
- *
- *		Flush TLB entries
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb_entries)
-LEXT(flush_mmu_tlb_entries)
+.macro FLUSH_MMU_TLB_ENTRIES
 #if __ARM_16K_PG__
 	and		x0, x0, #~0x3
 
@@ -226,7 +341,7 @@ LEXT(flush_mmu_tlb_entries)
 	 */
 	add		x1, x1, #0x3
 	and		x1, x1, #~0x3
-#endif /* __ARM_KERNEL_PROTECT__ */
+#endif /* __ARM_16K_PG__ */
 #if __ARM_KERNEL_PROTECT__
 	/*
 	 * If we are flushing ASID 0, this is a kernel operation.  With this
@@ -234,11 +349,11 @@ LEXT(flush_mmu_tlb_entries)
 	 */
 	lsr		x2, x0, #TLBI_ASID_SHIFT
 	cmp		x2, #0
-	b.eq		Lflush_mmu_tlb_entries_globally_loop
+	b.eq		2f // Lflush_mmu_tlb_entries_globally_loop
 
 	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
 #endif /* __ARM_KERNEL_PROTECT__ */
-Lflush_mmu_tlb_entries_loop:
+1: // Lflush_mmu_tlb_entries_loop
 	tlbi    vae1is, x0
 #if __ARM_KERNEL_PROTECT__
 	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
@@ -247,20 +362,77 @@ Lflush_mmu_tlb_entries_loop:
 #endif /* __ARM_KERNEL_PROTECT__ */
 	add		x0, x0, #(ARM_PGBYTES / 4096)	// Units are pages
 	cmp		x0, x1
-	b.lt	Lflush_mmu_tlb_entries_loop
-	dsb		ish
-	isb		sy
-	ret
+	b.lt		1b // Lflush_mmu_tlb_entries_loop
 #if __ARM_KERNEL_PROTECT__
-Lflush_mmu_tlb_entries_globally_loop:
+	b		3f // Lflush_mmu_tlb_entries_done
+2: // Lflush_mmu_tlb_entries_globally_loop:
 	tlbi	vaae1is, x0
 	add		x0, x0, #(ARM_PGBYTES / 4096)	// Units are pages
 	cmp		x0, x1
-	b.lt	Lflush_mmu_tlb_entries_globally_loop
-	dsb		ish
-	isb		sy
-	ret
+	b.lt		2b // Lflush_mmu_tlb_entries_globally_loop
+3: // Lflush_mmu_tlb_entries_done
 #endif /* __ARM_KERNEL_PROTECT__ */
+.endmacro
+
+/*
+ *	void flush_mmu_tlb_entries_async(uint64_t, uint64_t)
+ *
+ *		Flush TLB entries, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_entries_async)
+LEXT(flush_mmu_tlb_entries_async)
+	FLUSH_MMU_TLB_ENTRIES
+	ret
+
+/*
+ *	void flush_mmu_tlb_entries(uint64_t, uint64_t)
+ *
+ *		Flush TLB entries
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_entries)
+LEXT(flush_mmu_tlb_entries)
+	FLUSH_MMU_TLB_ENTRIES
+	SYNC_TLB_FLUSH
+	ret
+
+.macro FLUSH_MMU_TLB_ASID
+#if __ARM_KERNEL_PROTECT__
+	/*
+	 * If we are flushing ASID 0, this is a kernel operation.  With this
+	 * ASID scheme, this means we should flush all ASIDs.
+	 */
+	lsr		x1, x0, #TLBI_ASID_SHIFT
+	cmp		x1, #0
+	b.eq		1f // Lflush_mmu_tlb_globally
+
+	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
+	tlbi    aside1is, x0
+	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
+#endif /* __ARM_KERNEL_PROTECT__ */
+	tlbi    aside1is, x0
+#if __ARM_KERNEL_PROTECT__
+	b		2f // Lflush_mmu_tlb_asid_done
+1: // Lflush_mmu_tlb_globally:
+	tlbi    vmalle1is
+2: // Lflush_mmu_tlb_asid_done:
+#endif /* __ARM_KERNEL_PROTECT__ */
+.endmacro
+
+/*
+ *	void flush_mmu_tlb_asid_async(uint64_t)
+ *
+ *		Flush TLB entriesfor requested asid, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_asid_async)
+LEXT(flush_mmu_tlb_asid_async)
+	FLUSH_MMU_TLB_ASID
+	ret
 
 /*
  *	void flush_mmu_tlb_asid(uint64_t)
@@ -271,6 +443,11 @@ Lflush_mmu_tlb_entries_globally_loop:
 	.align 2
 	.globl EXT(flush_mmu_tlb_asid)
 LEXT(flush_mmu_tlb_asid)
+	FLUSH_MMU_TLB_ASID
+	SYNC_TLB_FLUSH
+	ret
+
+.macro FLUSH_CORE_TLB_ASID
 #if __ARM_KERNEL_PROTECT__
 	/*
 	 * If we are flushing ASID 0, this is a kernel operation.  With this
@@ -278,24 +455,32 @@ LEXT(flush_mmu_tlb_asid)
 	 */
 	lsr		x1, x0, #TLBI_ASID_SHIFT
 	cmp		x1, #0
-	b.eq		Lflush_mmu_tlb_globally
+	b.eq		1f // Lflush_core_tlb_asid_globally
 
 	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
-	tlbi    aside1is, x0
+	tlbi	aside1, x0
 	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
 #endif /* __ARM_KERNEL_PROTECT__ */
-	tlbi    aside1is, x0
-	dsb		ish
-	isb		sy
-	ret
+	tlbi	aside1, x0
 #if __ARM_KERNEL_PROTECT__
-Lflush_mmu_tlb_globally:
-	tlbi    vmalle1is
-	dsb		ish
-	isb		sy
-	ret
+	b		2f // Lflush_core_tlb_asid_done
+1: // Lflush_core_tlb_asid_globally:
+	tlbi	vmalle1
+2: // Lflush_core_tlb_asid_done:
 #endif /* __ARM_KERNEL_PROTECT__ */
+.endmacro
 
+/*
+ *	void flush_core_tlb_asid_async(uint64_t)
+ *
+ *		Flush TLB entries for core for requested asid, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_core_tlb_asid_async)
+LEXT(flush_core_tlb_asid_async)
+	FLUSH_CORE_TLB_ASID
+	ret
 /*
  *	void flush_core_tlb_asid(uint64_t)
  *
@@ -305,30 +490,9 @@ Lflush_mmu_tlb_globally:
 	.align 2
 	.globl EXT(flush_core_tlb_asid)
 LEXT(flush_core_tlb_asid)
-#if __ARM_KERNEL_PROTECT__
-	/*
-	 * If we are flushing ASID 0, this is a kernel operation.  With this
-	 * ASID scheme, this means we should flush all ASIDs.
-	 */
-	lsr		x1, x0, #TLBI_ASID_SHIFT
-	cmp		x1, #0
-	b.eq		Lflush_core_tlb_asid_globally
-
-	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
-	tlbi	aside1, x0
-	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
-#endif /* __ARM_KERNEL_PROTECT__ */
-	tlbi	aside1, x0
-	dsb		ish
-	isb		sy
+	FLUSH_CORE_TLB_ASID
+	SYNC_TLB_FLUSH
 	ret
-#if __ARM_KERNEL_PROTECT__
-Lflush_core_tlb_asid_globally:
-	tlbi	vmalle1
-	dsb		ish
-	isb		sy
-	ret
-#endif /* __ARM_KERNEL_PROTECT__ */
 
 /*
  * 	Set MMU Translation Table Base Alternate
@@ -345,6 +509,19 @@ LEXT(set_mmu_ttb_alternate)
 #else
 	msr		TTBR1_EL1, x0
 #endif /* defined(KERNEL_INTEGRITY_KTRR) */
+	isb		sy
+	ret
+
+	.text
+	.align 2
+	.globl EXT(set_mmu_ttb)
+LEXT(set_mmu_ttb)
+#if __ARM_KERNEL_PROTECT__
+	/* All EL1-mode ASIDs are odd. */
+	orr		x0, x0, #(1 << TTBR_ASID_SHIFT)
+#endif /* __ARM_KERNEL_PROTECT__ */
+	dsb		ish
+	msr		TTBR0_EL1, x0
 	isb		sy
 	ret
 
@@ -447,7 +624,7 @@ LEXT(mmu_kvtop)
 	and		x0, x1, #0x0000ffffffffffff					// Clear non-address bits 
 	ret
 L_mmu_kvtop_invalid:
-	mov		x0, xzr										// Return invalid
+	mov		x0, #0										// Return invalid
 	ret
 
 /*
@@ -469,7 +646,7 @@ LEXT(mmu_uvtop)
 	and		x0, x1, #0x0000ffffffffffff					// Clear non-address bits 
 	ret
 L_mmu_uvtop_invalid:
-	mov		x0, xzr										// Return invalid
+	mov		x0, #0										// Return invalid
 	ret
 
 /*
@@ -489,7 +666,7 @@ LEXT(mmu_kvtop_wpreflight)
 	and		x0, x1, #0x0000ffffffffffff					// Clear non-address bits
 	ret
 L_mmu_kvtop_wpreflight_invalid:
-	mov		x0, xzr										// Return invalid
+	mov		x0, #0										// Return invalid
 	ret
 
 /*
@@ -529,7 +706,7 @@ copyio_error:
 	CLEAR_RECOVERY_HANDLER x10, x11
 	mov		x0, #EFAULT					// Return an EFAULT error
 	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG
 
 /*
  * int _bcopyin(const char *src, char *dst, vm_size_t len)
@@ -538,6 +715,7 @@ copyio_error:
 	.align 2
 	.globl EXT(_bcopyin)
 LEXT(_bcopyin)
+	ARM64_STACK_PROLOG
 	PUSH_FRAME
 	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
 	/* If len is less than 16 bytes, just do a bytewise copy */
@@ -560,9 +738,9 @@ LEXT(_bcopyin)
 	b.hi	2b
 3:
 	CLEAR_RECOVERY_HANDLER x10, x11
-	mov		x0, xzr
+	mov		x0, #0
 	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG
 
 /*
  * int _copyin_word(const char *src, uint64_t *dst, vm_size_t len)
@@ -571,6 +749,7 @@ LEXT(_bcopyin)
 	.align 2
 	.globl EXT(_copyin_word)
 LEXT(_copyin_word)
+	ARM64_STACK_PROLOG
 	PUSH_FRAME
 	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
 	cmp		x2, #4
@@ -586,11 +765,12 @@ L_copyin_word_8:
 	ldr		x8, [x0]
 L_copyin_word_store:
 	str		x8, [x1]
-	mov		x0, xzr
+	mov		x0, #0
 	CLEAR_RECOVERY_HANDLER x10, x11
 L_copying_exit:
 	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG
+
 
 
 /*
@@ -600,6 +780,7 @@ L_copying_exit:
 	.align 2
 	.globl EXT(_bcopyout)
 LEXT(_bcopyout)
+	ARM64_STACK_PROLOG
 	PUSH_FRAME
 	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
 	/* If len is less than 16 bytes, just do a bytewise copy */
@@ -622,9 +803,9 @@ LEXT(_bcopyout)
 	b.hi	2b
 3:
 	CLEAR_RECOVERY_HANDLER x10, x11
-	mov		x0, xzr
+	mov		x0, #0
 	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG
 
 /*
  * int _bcopyinstr(
@@ -637,12 +818,13 @@ LEXT(_bcopyout)
 	.align 2
 	.globl EXT(_bcopyinstr)
 LEXT(_bcopyinstr)
+	ARM64_STACK_PROLOG
 	PUSH_FRAME
 	adr		x4, Lcopyinstr_error		// Get address for recover
 	mrs		x10, TPIDR_EL1				// Get thread pointer
 	ldr		x11, [x10, TH_RECOVER]		// Save previous recover
 	str		x4, [x10, TH_RECOVER]		// Store new recover
-	mov		x4, xzr						// x4 - total bytes copied
+	mov		x4, #0						// x4 - total bytes copied
 Lcopyinstr_loop:
 	ldrb	w5, [x0], #1					// Load a byte from the user source
 	strb	w5, [x1], #1				// Store a byte to the kernel dest
@@ -661,7 +843,7 @@ Lcopyinstr_error:
 Lcopyinstr_exit:
 	str		x11, [x10, TH_RECOVER]		// Restore old recover
 	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG
 
 /*
  * int copyinframe(const vm_address_t frame_addr, char *kernel_addr, bool is64bit)
@@ -684,6 +866,7 @@ Lcopyinstr_exit:
 	.align 2
 	.globl EXT(copyinframe)
 LEXT(copyinframe)
+	ARM64_STACK_PROLOG
 	PUSH_FRAME
 	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
 	cbnz	w2, Lcopyinframe64 		// Check frame size
@@ -718,90 +901,8 @@ Lcopyinframe_valid:
 Lcopyinframe_done:
 	CLEAR_RECOVERY_HANDLER x10, x11
 	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG
 
-
-/*
- * int _emulate_swp(user_addr_t addr, uint32_t newval, uint32_t *oldval)
- *
- *  Securely emulates the swp instruction removed from armv8.
- *    Returns true on success.
- *    Returns false if the user address is not user accessible.
- *
- *  x0 : address to swap
- *  x1 : new value to store
- *  x2 : address to save old value
- *  x3 : scratch reg
- *  x10 : thread pointer (set by SET_RECOVERY_HANDLER)
- *  x11 : old recovery handler (set by SET_RECOVERY_HANDLER)
- *  x12 : interrupt state
- *  x13 : return value
- */
-	.text
-	.align 2
-	.globl EXT(_emulate_swp)
-LEXT(_emulate_swp)
-	PUSH_FRAME
-	SET_RECOVERY_HANDLER x10, x11, x3, swp_error
-
-	// Perform swap
-Lswp_try:
-	ldxr	w3, [x0]									// Load data at target address
-	stxr	w4, w1, [x0]								// Store new value to target address
-	cbnz	w4, Lswp_try								// Retry if store failed
-	str		w3, [x2]									// Save old value
-	mov		x13, #1										// Set successful return value
-
-Lswp_exit:
-	mov		x0, x13 									// Set return value
-	CLEAR_RECOVERY_HANDLER x10, x11
-	POP_FRAME
-	ret
-
-/*
- * int _emulate_swpb(user_addr_t addr, uint32_t newval, uint32_t *oldval)
- *
- *  Securely emulates the swpb instruction removed from armv8.
- *    Returns true on success.
- *    Returns false if the user address is not user accessible.
- *
- *  x0 : address to swap
- *  x1 : new value to store
- *  x2 : address to save old value
- *  x3 : scratch reg
- *  x10 : thread pointer (set by SET_RECOVERY_HANDLER)
- *  x11 : old recovery handler (set by SET_RECOVERY_HANDLER)
- *  x12 : interrupt state
- *  x13 : return value
- */
-	.text
-	.align 2
-	.globl EXT(_emulate_swpb)
-LEXT(_emulate_swpb)
-	PUSH_FRAME
-	SET_RECOVERY_HANDLER x10, x11, x3, swp_error
-
-	// Perform swap
-Lswpb_try:
-	ldxrb	w3, [x0]									// Load data at target address
-	stxrb	w4, w1, [x0]								// Store new value to target address
-	cbnz	w4, Lswp_try								// Retry if store failed
-	str		w3, [x2]									// Save old value
-	mov		x13, #1										// Set successful return value
-
-Lswpb_exit:
-	mov		x0, x13										// Set return value
-	CLEAR_RECOVERY_HANDLER x10, x11
-	POP_FRAME
-	ret
-
-	.text
-	.align 2
-swp_error:
-	mov		x0, xzr										// Return false
-	CLEAR_RECOVERY_HANDLER x10, x11
-	POP_FRAME
-	ret
 
 /*
  * uint32_t arm_debug_read_dscr(void)
@@ -825,7 +926,6 @@ LEXT(arm_debug_read_dscr)
        .globl EXT(arm_debug_set_cp14)
 LEXT(arm_debug_set_cp14)
 	PANIC_UNIMPLEMENTED
-
 
 #if defined(APPLE_ARM64_ARCH_FAMILY)
 /*
@@ -871,6 +971,28 @@ LEXT(arm64_prepare_for_sleep)
 	orr		x0, x0, #(ARM64_REG_CYC_OVRD_ok2pwrdn_force_down)
 	msr		ARM64_REG_CYC_OVRD, x0
 
+#if defined(APPLEMONSOON)
+	ARM64_IS_PCORE x0
+	cbz		x0, Lwfi_inst // skip if not p-core 
+
+	/* <rdar://problem/32512947>: Flush the GUPS prefetcher prior to
+	 * wfi.  A Skye HW bug can cause the GUPS prefetcher on p-cores
+	 * to be left with valid entries that fail to drain if a
+	 * subsequent wfi is issued.  This can prevent the core from
+	 * power-gating.  For the idle case that is recoverable, but
+	 * for the deep-sleep (S2R) case in which cores MUST power-gate,
+	 * it can lead to a hang.  This can be prevented by disabling
+	 * and re-enabling GUPS, which forces the prefetch queue to
+	 * drain.  This should be done as close to wfi as possible, i.e.
+	 * at the very end of arm64_prepare_for_sleep(). */
+	mrs		x0, ARM64_REG_HID10
+	orr		x0, x0, #(ARM64_REG_HID10_DisHwpGups)
+	msr		ARM64_REG_HID10, x0
+	isb		sy
+	and		x0, x0, #(~(ARM64_REG_HID10_DisHwpGups))
+	msr		ARM64_REG_HID10, x0
+	isb		sy
+#endif
 Lwfi_inst:
 	dsb		sy
 	isb		sy
@@ -885,6 +1007,7 @@ Lwfi_inst:
 	.align 2
 	.globl EXT(arm64_force_wfi_clock_gate)
 LEXT(arm64_force_wfi_clock_gate)
+	ARM64_STACK_PROLOG
 	PUSH_FRAME
 
 	mrs		x0, ARM64_REG_CYC_OVRD
@@ -892,7 +1015,7 @@ LEXT(arm64_force_wfi_clock_gate)
 	msr		ARM64_REG_CYC_OVRD, x0
 	
 	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG
 
 
 
@@ -1030,7 +1153,64 @@ cpu_defeatures_set_ret:
 	ret
 #endif
 
+#else /* !defined(APPLE_ARM64_ARCH_FAMILY) */
+	.text
+	.align 2
+	.globl EXT(arm64_prepare_for_sleep)
+LEXT(arm64_prepare_for_sleep)
+	PUSH_FRAME
+Lwfi_inst:
+	dsb		sy
+	isb		sy
+	wfi
+	b		Lwfi_inst
+
+/*
+ * Force WFI to use clock gating only
+ * Note: for non-Apple device, do nothing.
+ */	
+	.text
+	.align 2
+	.globl EXT(arm64_force_wfi_clock_gate)
+LEXT(arm64_force_wfi_clock_gate)
+	PUSH_FRAME
+	nop
+	POP_FRAME
+
+#endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
+
+/*
+ * void arm64_replace_bootstack(cpu_data_t *cpu_data)
+ *
+ * This must be called from a kernel thread context running on the boot CPU,
+ * after setting up new exception stacks in per-CPU data. That will guarantee
+ * that the stack(s) we're trying to replace aren't currently in use.  For
+ * KTRR-protected devices, this must also be called prior to VM prot finalization
+ * and lockdown, as updating SP1 requires a sensitive instruction.
+ */
+	.text
+	.align 2
+	.globl EXT(arm64_replace_bootstack)
+LEXT(arm64_replace_bootstack)
+	ARM64_STACK_PROLOG
+	PUSH_FRAME
+	// Set the exception stack pointer
+	ldr		x0, [x0, CPU_EXCEPSTACK_TOP]
+	mrs		x4, DAIF					// Load current DAIF; use x4 as pinst may trash x1-x3
+	msr		DAIFSet, #(DAIFSC_IRQF | DAIFSC_FIQF | DAIFSC_ASYNCF)		// Disable IRQ/FIQ/serror
+	// Set SP_EL1 to exception stack
+#if defined(KERNEL_INTEGRITY_KTRR)
+	mov		x1, lr
+	bl		_pinst_spsel_1
+	mov		lr, x1
+#else
+	msr		SPSel, #1
 #endif
+	mov		sp, x0
+	msr		SPSel, #0
+	msr		DAIF, x4					// Restore interrupt state
+	POP_FRAME
+	ARM64_STACK_EPILOG
 
 #ifdef MONITOR
 /*
@@ -1049,5 +1229,6 @@ LEXT(monitor_call)
 	smc 	0x11
 	ret
 #endif
+
 
 /* vim: set sw=4 ts=4: */

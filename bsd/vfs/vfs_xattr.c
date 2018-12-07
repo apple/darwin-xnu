@@ -397,6 +397,48 @@ xattr_protected(const char *attrname)
 }
 
 
+static void
+vnode_setasnamedstream_internal(vnode_t vp, vnode_t svp)
+{
+	uint32_t streamflags = VISNAMEDSTREAM;
+
+	if ((vp->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0) {
+		streamflags |= VISSHADOW;
+	}
+
+	/* Tag the vnode. */
+	vnode_lock_spin(svp);
+	svp->v_flag |= streamflags;
+	vnode_unlock(svp);
+
+	/* Tag the parent so we know to flush credentials for streams on setattr */
+	vnode_lock_spin(vp);
+	vp->v_lflag |= VL_HASSTREAMS;
+	vnode_unlock(vp);
+
+	/* Make the file it's parent.
+	 * Note:  This parent link helps us distinguish vnodes for
+	 * shadow stream files from vnodes for resource fork on file
+	 * systems that support namedstream natively (both have
+	 * VISNAMEDSTREAM set) by allowing access to mount structure
+	 * for checking MNTK_NAMED_STREAMS bit at many places in the
+	 * code.
+	 */
+	vnode_update_identity(svp, vp, NULL, 0, 0, VNODE_UPDATE_NAMEDSTREAM_PARENT);
+
+	return;
+}
+
+errno_t
+vnode_setasnamedstream(vnode_t vp, vnode_t svp)
+{
+	if ((vp->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0)
+		return (EINVAL);
+
+	vnode_setasnamedstream_internal(vp, svp);
+	return (0);
+}
+
 #if NAMEDSTREAMS
 
 /*
@@ -417,33 +459,8 @@ vnode_getnamedstream(vnode_t vp, vnode_t *svpp, const char *name, enum nsoperati
 	}
 
 	if (error == 0) {
-		uint32_t streamflags = VISNAMEDSTREAM;
-		vnode_t svp = *svpp;
-
-		if ((vp->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0) {
-			streamflags |= VISSHADOW;
-		}
-		
-		/* Tag the vnode. */
-		vnode_lock_spin(svp);
-		svp->v_flag |= streamflags;
-		vnode_unlock(svp);
-
-		/* Tag the parent so we know to flush credentials for streams on setattr */
-		vnode_lock_spin(vp);
-		vp->v_lflag |= VL_HASSTREAMS;
-		vnode_unlock(vp);
-
-		/* Make the file it's parent.  
-		 * Note:  This parent link helps us distinguish vnodes for 
-		 * shadow stream files from vnodes for resource fork on file 
-		 * systems that support namedstream natively (both have 
-		 * VISNAMEDSTREAM set) by allowing access to mount structure 
-		 * for checking MNTK_NAMED_STREAMS bit at many places in the 
-		 * code.
-		 */
-		vnode_update_identity(svp, vp, NULL, 0, 0, VNODE_UPDATE_PARENT);
-	}		
+		vnode_setasnamedstream_internal(vp, *svpp);
+	}
 
 	return (error);
 }
@@ -462,34 +479,9 @@ vnode_makenamedstream(vnode_t vp, vnode_t *svpp, const char *name, int flags, vf
 		error = default_makenamedstream(vp, svpp, name, context);
 
 	if (error == 0) {
-		uint32_t streamflags = VISNAMEDSTREAM;
-		vnode_t svp = *svpp;
-
-		/* Tag the vnode. */
-		if ((vp->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0) {
-			streamflags |= VISSHADOW;
-		}
-		
-		/* Tag the vnode. */
-		vnode_lock_spin(svp);
-		svp->v_flag |= streamflags;
-		vnode_unlock(svp);
-
-		/* Tag the parent so we know to flush credentials for streams on setattr */
-		vnode_lock_spin(vp);
-		vp->v_lflag |= VL_HASSTREAMS;
-		vnode_unlock(vp);
-
-		/* Make the file it's parent.
-		 * Note:  This parent link helps us distinguish vnodes for 
-		 * shadow stream files from vnodes for resource fork on file 
-		 * systems that support namedstream natively (both have 
-		 * VISNAMEDSTREAM set) by allowing access to mount structure 
-		 * for checking MNTK_NAMED_STREAMS bit at many places in the 
-		 * code.
-		 */
-		vnode_update_identity(svp, vp, NULL, 0, 0, VNODE_UPDATE_PARENT);
+		vnode_setasnamedstream_internal(vp, *svpp);
 	}
+
 	return (error);
 }
 

@@ -69,7 +69,8 @@ PRIVATE_DATAFILES = \
 	raw_cb.h \
 	route.h \
 	net_perf.h \
-	net_kev.h
+	net_kev.h \
+	nat464_utils.h
 
 PRIVATE_KERNELFILES = $(filter-out radix.h,${KERNELFILES}) \
 	bpfdesc.h ppp_comp.h \

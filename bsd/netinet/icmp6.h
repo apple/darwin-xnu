@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -229,6 +229,10 @@ struct mld_hdr {
 #define mld_v2_reserved	mld_icmp6_hdr.icmp6_data16[0]
 #define mld_v2_numrecs	mld_icmp6_hdr.icmp6_data16[1]
 
+
+#define ICMP6_ERRORTYPE(type) \
+	((type) == ICMP6_DST_UNREACH || (type) == ICMP6_PACKET_TOO_BIG || \
+	(type) == ICMP6_TIME_EXCEEDED || (type) == ICMP6_PARAM_PROB)
 /*
  * Neighbor Discovery
  */

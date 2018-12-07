@@ -3255,13 +3255,14 @@ start:
 			if (kret != KERN_SUCCESS)
 			        panic("getblk: ubc_upl_map() failed with (%d)", kret);
 			break;
-		  }
+		  } // end BLK_READ
 		default:
 			panic("getblk: paging or unknown operation - %x", operation);
 			/*NOTREACHED*/
 			break;
-		}
-	}
+		} // end switch
+	} //end buf_t !incore
+
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 386)) | DBG_FUNC_END,
 		     bp, bp->b_datap, bp->b_flags, 3, 0);
 
@@ -4044,9 +4045,11 @@ buf_biodone(buf_t bp)
 			code |= DKIO_TIER_UPGRADE;
 		}
 
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON, FSDBG_CODE(DBG_DKRW, code) | DBG_FUNC_NONE,
-		                          buf_kernel_addrperm_addr(bp), (uintptr_t)VM_KERNEL_ADDRPERM(bp->b_vp), bp->b_resid, bp->b_error, 0);
-        }
+		KDBG_RELEASE_NOPROCFILT(FSDBG_CODE(DBG_DKRW, code),
+				buf_kernel_addrperm_addr(bp),
+				(uintptr_t)VM_KERNEL_ADDRPERM(bp->b_vp), bp->b_resid,
+				bp->b_error);
+	}
 
 	microuptime(&real_elapsed);
 	timevalsub(&real_elapsed, &bp->b_timestamp_tv);
@@ -4579,7 +4582,7 @@ fs_buffer_cache_gc_dispatch_callouts(int all)
 	lck_mtx_unlock(buf_gc_callout);
 }
 
-boolean_t 
+static boolean_t 
 buffer_cache_gc(int all)
 {
 	buf_t bp;

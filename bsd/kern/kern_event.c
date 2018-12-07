@@ -55,7 +55,7 @@
  *	@(#)kern_event.c       1.0 (3/31/2000)
  */
 #include <stdint.h>
-#include <stdatomic.h>
+#include <machine/atomic.h>
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -87,6 +87,7 @@
 #include <sys/kdebug.h>
 #include <sys/reason.h>
 #include <os/reason_private.h>
+#include <pexpert/pexpert.h>
 
 #include <kern/locks.h>
 #include <kern/clock.h>
@@ -102,6 +103,9 @@
 #include <kern/thread.h>
 #include <kern/kcdata.h>
 
+#include <pthread/priority_private.h>
+#include <pthread/workqueue_syscalls.h>
+#include <pthread/workqueue_internal.h>
 #include <libkern/libkern.h>
 #include <libkern/OSAtomic.h>
 
@@ -119,24 +123,9 @@ extern mach_port_name_t ipc_entry_name_mask(mach_port_name_t name); /* osfmk/ipc
 
 #define KEV_EVTID(code) BSDDBG_CODE(DBG_BSD_KEVENT, (code))
 
-/*
- * JMM - this typedef needs to be unified with pthread_priority_t
- *       and mach_msg_priority_t. It also needs to be the same type
- *       everywhere.
- */
-typedef int32_t qos_t;
-
 MALLOC_DEFINE(M_KQUEUE, "kqueue", "memory for kqueue system");
 
 #define	KQ_EVENT	NO_EVENT64
-
-#define KNUSE_NONE       0x0
-#define KNUSE_STEAL_DROP 0x1
-#define KNUSE_BOOST      0x2
-static int kqlock2knoteuse(struct kqueue *kq, struct knote *kn, int flags);
-static int kqlock2knotedrop(struct kqueue *kq, struct knote *kn);
-static int kqlock2knotedetach(struct kqueue *kq, struct knote *kn, int flags);
-static int knoteuse2kqlock(struct kqueue *kq, struct knote *kn, int flags);
 
 static int kqueue_read(struct fileproc *fp, struct uio *uio,
 		int flags, vfs_context_t ctx);
@@ -166,7 +155,7 @@ static void kevent_put_kq(struct proc *p, kqueue_id_t id, struct fileproc *fp, s
 static int kevent_internal(struct proc *p,
 			   kqueue_id_t id, kqueue_id_t *id_out,
 			   user_addr_t changelist, int nchanges,
-			   user_addr_t eventlist, int nevents, 
+			   user_addr_t eventlist, int nevents,
 			   user_addr_t data_out, uint64_t data_available,
 			   unsigned int flags, user_addr_t utimeout,
 			   kqueue_continue_t continuation,
@@ -177,39 +166,34 @@ static int kevent_copyout(struct kevent_internal_s *kevp, user_addr_t *addrp,
 			  struct proc *p, unsigned int flags);
 char * kevent_description(struct kevent_internal_s *kevp, char *s, size_t n);
 
+static int kevent_register_wait_prepare(struct knote *kn, struct kevent_internal_s *kev);
+static void kevent_register_wait_block(struct turnstile *ts, thread_t handoff_thread,
+		struct knote_lock_ctx *knlc, thread_continue_t cont,
+		struct _kevent_register *cont_args) __dead2;
+static void kevent_register_wait_return(struct _kevent_register *cont_args) __dead2;
+static void kevent_register_wait_cleanup(struct knote *kn);
+static inline void kqueue_release_last(struct proc *p, kqueue_t kqu);
 static void kqueue_interrupt(struct kqueue *kq);
 static int kevent_callback(struct kqueue *kq, struct kevent_internal_s *kevp,
-			   void *data);
+		void *data);
 static void kevent_continue(struct kqueue *kq, void *data, int error);
 static void kqueue_scan_continue(void *contp, wait_result_t wait_result);
 static int kqueue_process(struct kqueue *kq, kevent_callback_t callback, void *callback_data,
-                          struct filt_process_s *process_data, int *countp, struct proc *p);
-static struct kqtailq *kqueue_get_base_queue(struct kqueue *kq, kq_index_t qos_index);
-static struct kqtailq *kqueue_get_high_queue(struct kqueue *kq, kq_index_t qos_index);
+		struct filt_process_s *process_data, int *countp);
 static int kqueue_queue_empty(struct kqueue *kq, kq_index_t qos_index);
 
-static struct kqtailq *kqueue_get_suppressed_queue(struct kqueue *kq, kq_index_t qos_index);
+static struct kqtailq *kqueue_get_suppressed_queue(kqueue_t kq, struct knote *kn);
+static void kqueue_threadreq_initiate(struct kqueue *kq, struct kqrequest *kqr, kq_index_t qos, int flags);
 
-static void kqworkq_request_thread(struct kqworkq *kqwq, kq_index_t qos_index);
-static void kqworkq_request_help(struct kqworkq *kqwq, kq_index_t qos_index);
-static void kqworkq_update_override(struct kqworkq *kqwq, kq_index_t qos_index, kq_index_t override_index);
-static void kqworkq_bind_thread_impl(struct kqworkq *kqwq, kq_index_t qos_index, thread_t thread, unsigned int flags);
-static void kqworkq_unbind_thread(struct kqworkq *kqwq, kq_index_t qos_index, thread_t thread, unsigned int flags);
+static void kqworkq_update_override(struct kqworkq *kqwq, struct knote *kn, kq_index_t qos);
+static void kqworkq_unbind(proc_t p, struct kqrequest *kqr);
+static thread_qos_t kqworkq_unbind_locked(struct kqworkq *kqwq, struct kqrequest *kqr, thread_t thread);
 static struct kqrequest *kqworkq_get_request(struct kqworkq *kqwq, kq_index_t qos_index);
 
-enum {
-	KQWL_UO_NONE = 0,
-	KQWL_UO_OLD_OVERRIDE_IS_SYNC_UI = 0x1,
-	KQWL_UO_NEW_OVERRIDE_IS_SYNC_UI = 0x2,
-	KQWL_UO_UPDATE_SUPPRESS_SYNC_COUNTERS = 0x4,
-	KQWL_UO_UPDATE_OVERRIDE_LAZY = 0x8
-};
-
-static void kqworkloop_update_override(struct kqworkloop *kqwl, kq_index_t qos_index, kq_index_t override_index, uint32_t flags);
-static void kqworkloop_bind_thread_impl(struct kqworkloop *kqwl, thread_t thread, unsigned int flags);
-static void kqworkloop_unbind_thread(struct kqworkloop *kqwl, thread_t thread, unsigned int flags);
-static inline kq_index_t kqworkloop_combined_qos(struct kqworkloop *kqwl, boolean_t *);
-static void kqworkloop_update_suppress_sync_count(struct kqrequest *kqr, uint32_t flags);
+static void kqworkloop_update_override(struct kqworkloop *kqwl, kq_index_t override_index);
+static void kqworkloop_unbind(proc_t p, struct kqworkloop *kwql);
+static thread_qos_t kqworkloop_unbind_locked(struct kqworkloop *kwql, thread_t thread);
+static kq_index_t kqworkloop_owner_override(struct kqworkloop *kqwl);
 enum {
 	KQWL_UTQ_NONE,
 	/*
@@ -223,6 +207,8 @@ enum {
 	KQWL_UTQ_UPDATE_WAKEUP_QOS,
 	KQWL_UTQ_UPDATE_STAYACTIVE_QOS,
 	KQWL_UTQ_RECOMPUTE_WAKEUP_QOS,
+	KQWL_UTQ_UNBINDING, /* attempt to rebind */
+	KQWL_UTQ_PARKING,
 	/*
 	 * The wakeup override is for suppressed knotes that have fired again at
 	 * a higher QoS than the one for which they are suppressed already.
@@ -231,35 +217,26 @@ enum {
 	KQWL_UTQ_UPDATE_WAKEUP_OVERRIDE,
 	KQWL_UTQ_RESET_WAKEUP_OVERRIDE,
 	/*
-	 * The async QoS is the maximum QoS of an event enqueued on this workloop in
+	 * The QoS is the maximum QoS of an event enqueued on this workloop in
 	 * userland. It is copied from the only EVFILT_WORKLOOP knote with
 	 * a NOTE_WL_THREAD_REQUEST bit set allowed on this workloop. If there is no
 	 * such knote, this QoS is 0.
 	 */
-	KQWL_UTQ_SET_ASYNC_QOS,
-	/*
-	 * The sync waiters QoS is the maximum QoS of any thread blocked on an
-	 * EVFILT_WORKLOOP knote marked with the NOTE_WL_SYNC_WAIT bit.
-	 * If there is no such knote, this QoS is 0.
-	 */
-	KQWL_UTQ_SET_SYNC_WAITERS_QOS,
+	KQWL_UTQ_SET_QOS_INDEX,
 	KQWL_UTQ_REDRIVE_EVENTS,
 };
 static void kqworkloop_update_threads_qos(struct kqworkloop *kqwl, int op, kq_index_t qos);
 static void kqworkloop_request_help(struct kqworkloop *kqwl, kq_index_t qos_index);
+static int kqworkloop_end_processing(struct kqworkloop *kqwl, int flags, int kevent_flags);
 
 static int knote_process(struct knote *kn, kevent_callback_t callback, void *callback_data,
-			 struct filt_process_s *process_data, struct proc *p);
-#if 0
-static void knote_put(struct knote *kn);
-#endif
+			 struct filt_process_s *process_data);
 
 static int kq_add_knote(struct kqueue *kq, struct knote *kn,
-		struct kevent_internal_s *kev, struct proc *p, int *knoteuse_flags);
+		struct knote_lock_ctx *knlc, struct proc *p);
 static struct knote *kq_find_knote_and_kq_lock(struct kqueue *kq, struct kevent_internal_s *kev, bool is_fd, struct proc *p);
-static void kq_remove_knote(struct kqueue *kq, struct knote *kn, struct proc *p, kn_status_t *kn_status, uint16_t *kq_state);
 
-static void knote_drop(struct knote *kn, struct proc *p);
+static void knote_drop(struct kqueue *kq, struct knote *kn, struct knote_lock_ctx *knlc);
 static struct knote *knote_alloc(void);
 static void knote_free(struct knote *kn);
 
@@ -276,109 +253,56 @@ static void knote_suppress(struct knote *kn);
 static void knote_unsuppress(struct knote *kn);
 static void knote_wakeup(struct knote *kn);
 
-static kq_index_t knote_get_queue_index(struct knote *kn);
-static struct kqtailq *knote_get_queue(struct knote *kn);
-static kq_index_t knote_get_req_index(struct knote *kn);
-static kq_index_t knote_get_qos_index(struct knote *kn);
-static void knote_set_qos_index(struct knote *kn, kq_index_t qos_index);
+static bool knote_should_apply_qos_override(struct kqueue *kq, struct knote *kn,
+		int result, thread_qos_t *qos_out);
+static void knote_apply_qos_override(struct knote *kn, kq_index_t qos_index);
+static void knote_adjust_qos(struct kqueue *kq, struct knote *kn, int result);
+static void knote_reset_priority(struct knote *kn, pthread_priority_t pp);
 static kq_index_t knote_get_qos_override_index(struct knote *kn);
-static kq_index_t knote_get_sync_qos_override_index(struct knote *kn);
-static void knote_set_qos_override_index(struct knote *kn, kq_index_t qos_index, boolean_t override_is_sync);
 static void knote_set_qos_overcommit(struct knote *kn);
-
-static int filt_fileattach(struct knote *kn, struct kevent_internal_s *kev);
-SECURITY_READ_ONLY_EARLY(static struct filterops) file_filtops = {
-	.f_isfd = 1,
-	.f_attach = filt_fileattach,
-};
-
-static void filt_kqdetach(struct knote *kn);
-static int filt_kqueue(struct knote *kn, long hint);
-static int filt_kqtouch(struct knote *kn, struct kevent_internal_s *kev);
-static int filt_kqprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
-SECURITY_READ_ONLY_EARLY(static struct filterops) kqread_filtops = {
-	.f_isfd = 1,
-	.f_detach = filt_kqdetach,
-	.f_event = filt_kqueue,
-	.f_touch = filt_kqtouch,
-	.f_process = filt_kqprocess,
-};
-
-/* placeholder for not-yet-implemented filters */
-static int filt_badattach(struct knote *kn, struct kevent_internal_s *kev);
-SECURITY_READ_ONLY_EARLY(static struct filterops) bad_filtops = {
-	.f_attach = filt_badattach,
-};
-
-static int filt_procattach(struct knote *kn, struct kevent_internal_s *kev);
-static void filt_procdetach(struct knote *kn);
-static int filt_proc(struct knote *kn, long hint);
-static int filt_proctouch(struct knote *kn, struct kevent_internal_s *kev);
-static int filt_procprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
-SECURITY_READ_ONLY_EARLY(static struct filterops) proc_filtops = {
-	.f_attach = filt_procattach,
-	.f_detach = filt_procdetach,
-	.f_event = filt_proc,
-	.f_touch = filt_proctouch,
-	.f_process = filt_procprocess,
-};
-
-#if CONFIG_MEMORYSTATUS
-extern const struct filterops memorystatus_filtops;
-#endif /* CONFIG_MEMORYSTATUS */
-
-extern const struct filterops fs_filtops;
-
-extern const struct filterops sig_filtops;
 
 static zone_t knote_zone;
 static zone_t kqfile_zone;
 static zone_t kqworkq_zone;
 static zone_t kqworkloop_zone;
+#if DEVELOPMENT || DEBUG
+#define KEVENT_PANIC_ON_WORKLOOP_OWNERSHIP_LEAK  (1U << 0)
+#define KEVENT_PANIC_ON_NON_ENQUEUED_PROCESS     (1U << 1)
+#define KEVENT_PANIC_BOOT_ARG_INITIALIZED        (1U << 31)
+
+#define KEVENT_PANIC_DEFAULT_VALUE (0)
+static uint32_t
+kevent_debug_flags(void)
+{
+	static uint32_t flags = KEVENT_PANIC_DEFAULT_VALUE;
+
+	if ((flags & KEVENT_PANIC_BOOT_ARG_INITIALIZED) == 0) {
+		uint32_t value = 0;
+		if (!PE_parse_boot_argn("kevent_debug", &value, sizeof(value))) {
+			value = KEVENT_PANIC_DEFAULT_VALUE;
+		}
+		value |= KEVENT_PANIC_BOOT_ARG_INITIALIZED;
+		os_atomic_store(&flags, value, relaxed);
+	}
+	return flags;
+}
+#endif
 
 #define	KN_HASH(val, mask)	(((val) ^ (val >> 8)) & (mask))
 
-/* Mach portset filter */
+/* placeholder for not-yet-implemented filters */
+static int filt_badattach(struct knote *kn, struct kevent_internal_s *kev);
+static int filt_badevent(struct knote *kn, long hint);
+SECURITY_READ_ONLY_EARLY(static struct filterops) bad_filtops = {
+	.f_attach = filt_badattach,
+};
+
+#if CONFIG_MEMORYSTATUS
+extern const struct filterops memorystatus_filtops;
+#endif /* CONFIG_MEMORYSTATUS */
+extern const struct filterops fs_filtops;
+extern const struct filterops sig_filtops;
 extern const struct filterops machport_filtops;
-
-/* User filter */
-static int filt_userattach(struct knote *kn, struct kevent_internal_s *kev);
-static void filt_userdetach(struct knote *kn);
-static int filt_user(struct knote *kn, long hint);
-static int filt_usertouch(struct knote *kn, struct kevent_internal_s *kev);
-static int filt_userprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
-SECURITY_READ_ONLY_EARLY(static struct filterops) user_filtops = {
-	.f_attach = filt_userattach,
-	.f_detach = filt_userdetach,
-	.f_event = filt_user,
-	.f_touch = filt_usertouch,
-	.f_process = filt_userprocess,
-};
-
-static lck_spin_t _filt_userlock;
-static void filt_userlock(void);
-static void filt_userunlock(void);
-
-/* Workloop filter */
-static bool filt_wlneeds_boost(struct kevent_internal_s *kev);
-static int filt_wlattach(struct knote *kn, struct kevent_internal_s *kev);
-static int filt_wlpost_attach(struct knote *kn, struct  kevent_internal_s *kev);
-static void filt_wldetach(struct knote *kn);
-static int filt_wlevent(struct knote *kn, long hint);
-static int filt_wltouch(struct knote *kn, struct kevent_internal_s *kev);
-static int filt_wldrop_and_unlock(struct knote *kn, struct kevent_internal_s *kev);
-static int filt_wlprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
-SECURITY_READ_ONLY_EARLY(static struct filterops) workloop_filtops = {
-	.f_needs_boost = filt_wlneeds_boost,
-	.f_attach = filt_wlattach,
-	.f_post_attach = filt_wlpost_attach,
-	.f_detach = filt_wldetach,
-	.f_event = filt_wlevent,
-	.f_touch = filt_wltouch,
-	.f_drop_and_unlock = filt_wldrop_and_unlock,
-	.f_process = filt_wlprocess,
-};
-
 extern const struct filterops pipe_rfiltops;
 extern const struct filterops pipe_wfiltops;
 extern const struct filterops ptsd_kqops;
@@ -394,7 +318,12 @@ extern const struct filterops fsevent_filtops;
 extern const struct filterops vnode_filtops;
 extern const struct filterops tty_filtops;
 
+const static struct filterops file_filtops;
+const static struct filterops kqread_filtops;
+const static struct filterops proc_filtops;
 const static struct filterops timer_filtops;
+const static struct filterops user_filtops;
+const static struct filterops workloop_filtops;
 
 /*
  *
@@ -403,170 +332,93 @@ const static struct filterops timer_filtops;
  * - Add a new "EVFILT_" option value to bsd/sys/event.h (typically a negative value)
  *   in the exported section of the header
  * - Update the EVFILT_SYSCOUNT value to reflect the new addition
- * - Add a filterops to the sysfilt_ops array. Public filters should be added at the end 
+ * - Add a filterops to the sysfilt_ops array. Public filters should be added at the end
  *   of the Public Filters section in the array.
  * Private filters:
  * - Add a new "EVFILT_" value to bsd/sys/event.h (typically a positive value)
  *   in the XNU_KERNEL_PRIVATE section of the header
  * - Update the EVFILTID_MAX value to reflect the new addition
- * - Add a filterops to the sysfilt_ops. Private filters should be added at the end of 
- *   the Private filters section of the array. 
+ * - Add a filterops to the sysfilt_ops. Private filters should be added at the end of
+ *   the Private filters section of the array.
  */
 SECURITY_READ_ONLY_EARLY(static struct filterops *) sysfilt_ops[EVFILTID_MAX] = {
 	/* Public Filters */
-	[~EVFILT_READ] 					= &file_filtops,
-	[~EVFILT_WRITE] 				= &file_filtops,
-	[~EVFILT_AIO] 					= &bad_filtops,
-	[~EVFILT_VNODE] 				= &file_filtops,
-	[~EVFILT_PROC] 					= &proc_filtops,
-	[~EVFILT_SIGNAL] 				= &sig_filtops,
-	[~EVFILT_TIMER] 				= &timer_filtops,
-	[~EVFILT_MACHPORT] 				= &machport_filtops,
-	[~EVFILT_FS] 					= &fs_filtops,
-	[~EVFILT_USER] 					= &user_filtops,
-									  &bad_filtops,
-									  &bad_filtops,
-	[~EVFILT_SOCK] 					= &file_filtops,
+	[~EVFILT_READ]                  = &file_filtops,
+	[~EVFILT_WRITE]                 = &file_filtops,
+	[~EVFILT_AIO]                   = &bad_filtops,
+	[~EVFILT_VNODE]                 = &file_filtops,
+	[~EVFILT_PROC]                  = &proc_filtops,
+	[~EVFILT_SIGNAL]                = &sig_filtops,
+	[~EVFILT_TIMER]                 = &timer_filtops,
+	[~EVFILT_MACHPORT]              = &machport_filtops,
+	[~EVFILT_FS]                    = &fs_filtops,
+	[~EVFILT_USER]                  = &user_filtops,
+	                                  &bad_filtops,
+	[~EVFILT_VM]                    = &bad_filtops,
+	[~EVFILT_SOCK]                  = &file_filtops,
 #if CONFIG_MEMORYSTATUS
-	[~EVFILT_MEMORYSTATUS] 			= &memorystatus_filtops,
+	[~EVFILT_MEMORYSTATUS]          = &memorystatus_filtops,
 #else
-	[~EVFILT_MEMORYSTATUS] 			= &bad_filtops,
+	[~EVFILT_MEMORYSTATUS]          = &bad_filtops,
 #endif
-	[~EVFILT_EXCEPT] 				= &file_filtops,
-
+	[~EVFILT_EXCEPT]                = &file_filtops,
 	[~EVFILT_WORKLOOP]              = &workloop_filtops,
 
 	/* Private filters */
-	[EVFILTID_KQREAD] 				= &kqread_filtops,
-	[EVFILTID_PIPE_R] 				= &pipe_rfiltops,
-	[EVFILTID_PIPE_W] 				= &pipe_wfiltops,
-	[EVFILTID_PTSD] 				= &ptsd_kqops,
-	[EVFILTID_SOREAD] 				= &soread_filtops,
-	[EVFILTID_SOWRITE] 				= &sowrite_filtops,
-	[EVFILTID_SCK] 					= &sock_filtops,
-	[EVFILTID_SOEXCEPT] 			= &soexcept_filtops,
-	[EVFILTID_SPEC] 				= &spec_filtops,
-	[EVFILTID_BPFREAD] 				= &bpfread_filtops,
-	[EVFILTID_NECP_FD] 				= &necp_fd_rfiltops,
-	[EVFILTID_FSEVENT] 				= &fsevent_filtops,
-	[EVFILTID_VN] 					= &vnode_filtops,
-	[EVFILTID_TTY]					= &tty_filtops,
-	[EVFILTID_PTMX]					= &ptmx_kqops,
+	[EVFILTID_KQREAD]               = &kqread_filtops,
+	[EVFILTID_PIPE_R]               = &pipe_rfiltops,
+	[EVFILTID_PIPE_W]               = &pipe_wfiltops,
+	[EVFILTID_PTSD]                 = &ptsd_kqops,
+	[EVFILTID_SOREAD]               = &soread_filtops,
+	[EVFILTID_SOWRITE]              = &sowrite_filtops,
+	[EVFILTID_SCK]                  = &sock_filtops,
+	[EVFILTID_SOEXCEPT]             = &soexcept_filtops,
+	[EVFILTID_SPEC]                 = &spec_filtops,
+	[EVFILTID_BPFREAD]              = &bpfread_filtops,
+	[EVFILTID_NECP_FD]              = &necp_fd_rfiltops,
+	[EVFILTID_FSEVENT]              = &fsevent_filtops,
+	[EVFILTID_VN]                   = &vnode_filtops,
+	[EVFILTID_TTY]                  = &tty_filtops,
+	[EVFILTID_PTMX]                 = &ptmx_kqops,
 };
 
 /* waitq prepost callback */
 void waitq_set__CALLING_PREPOST_HOOK__(void *kq_hook, void *knote_hook, int qos);
 
-#ifndef _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG
-#define _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG 0x02000000 /* pthread event manager bit */
-#endif
-#ifndef _PTHREAD_PRIORITY_OVERCOMMIT_FLAG
-#define _PTHREAD_PRIORITY_OVERCOMMIT_FLAG    0x80000000 /* request overcommit threads */
-#endif
-#ifndef _PTHREAD_PRIORITY_QOS_CLASS_MASK
-#define _PTHREAD_PRIORITY_QOS_CLASS_MASK    0x003fff00  /* QoS class mask */
-#endif
-#ifndef _PTHREAD_PRIORITY_QOS_CLASS_SHIFT_32
-#define _PTHREAD_PRIORITY_QOS_CLASS_SHIFT_32 8
-#endif
-
-static inline __kdebug_only
-uintptr_t
-kqr_thread_id(struct kqrequest *kqr)
+static inline struct kqworkloop *
+kqr_kqworkloop(struct kqrequest *kqr)
 {
-	return (uintptr_t)thread_tid(kqr->kqr_thread);
+	if (kqr->kqr_state & KQR_WORKLOOP) {
+		return __container_of(kqr, struct kqworkloop, kqwl_request);
+	}
+	return NULL;
 }
 
-static inline
-boolean_t is_workqueue_thread(thread_t thread)
+static inline kqueue_t
+kqr_kqueue(proc_t p, struct kqrequest *kqr)
+{
+	kqueue_t kqu;
+	if (kqr->kqr_state & KQR_WORKLOOP) {
+		kqu.kqwl = kqr_kqworkloop(kqr);
+	} else {
+		kqu.kqwq = (struct kqworkq *)p->p_fd->fd_wqkqueue;
+		assert(kqr >= kqu.kqwq->kqwq_request &&
+				kqr < kqu.kqwq->kqwq_request + KQWQ_NBUCKETS);
+	}
+	return kqu;
+}
+
+static inline boolean_t
+is_workqueue_thread(thread_t thread)
 {
 	return (thread_get_tag(thread) & THREAD_TAG_WORKQUEUE);
-}
-
-static inline
-void knote_canonicalize_kevent_qos(struct knote *kn)
-{
-	struct kqueue *kq = knote_get_kq(kn);
-	unsigned long canonical;
-
-	if ((kq->kq_state & (KQ_WORKQ | KQ_WORKLOOP)) == 0)
-		return;
-
-	/* preserve manager and overcommit flags in this case */
-	canonical = pthread_priority_canonicalize(kn->kn_qos, FALSE);
-	kn->kn_qos = (qos_t)canonical;
-}
-
-static inline
-kq_index_t qos_index_from_qos(struct knote *kn, qos_t qos, boolean_t propagation)
-{
-	struct kqueue *kq = knote_get_kq(kn);
-	kq_index_t qos_index;
-	unsigned long flags = 0;
-
-	if ((kq->kq_state & (KQ_WORKQ | KQ_WORKLOOP)) == 0)
-		return QOS_INDEX_KQFILE;
-
-	qos_index = (kq_index_t)thread_qos_from_pthread_priority(
-				(unsigned long)qos, &flags);
-	
-	if (kq->kq_state & KQ_WORKQ) {
-		/* workq kqueues support requesting a manager thread (non-propagation) */
-		if (!propagation && (flags & _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG))
-			return KQWQ_QOS_MANAGER;
-	}
-
-	return qos_index;
-}
-
-static inline
-qos_t qos_from_qos_index(kq_index_t qos_index)
-{
-	/* should only happen for KQ_WORKQ */
-	if (qos_index == KQWQ_QOS_MANAGER) 
-		return  _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG;
-
-	if (qos_index == 0)
-		return THREAD_QOS_UNSPECIFIED;
-
-	/* Should have support from pthread kext support */
-	return (1 << (qos_index - 1 + 
-	              _PTHREAD_PRIORITY_QOS_CLASS_SHIFT_32));
-}
-
-/* kqr lock must be held */
-static inline
-unsigned long pthread_priority_for_kqrequest(
-	struct kqrequest *kqr,
-	kq_index_t qos_index)
-{
-	unsigned long priority = qos_from_qos_index(qos_index);
-	if (kqr->kqr_state & KQR_THOVERCOMMIT) {
-		priority |= _PTHREAD_PRIORITY_OVERCOMMIT_FLAG;
-	}
-	return priority;
-}
-
-static inline
-kq_index_t qos_index_for_servicer(int qos_class, thread_t thread, int flags)
-{
-#pragma unused(thread)
-	kq_index_t qos_index;
-
-	if (flags & KEVENT_FLAG_WORKQ_MANAGER)
-		return KQWQ_QOS_MANAGER;
-
-	qos_index = (kq_index_t)qos_class;
-	assert(qos_index > 0 && qos_index < KQWQ_QOS_MANAGER);
-
-	return qos_index;
 }
 
 /*
  * kqueue/note lock implementations
  *
  *	The kqueue lock guards the kq state, the state of its queues,
- *	and the kqueue-aware status and use counts of individual knotes.
+ *	and the kqueue-aware status and locks of individual knotes.
  *
  *	The kqueue workq lock is used to protect state guarding the
  *	interaction of the kqueue with the workq.  This state cannot
@@ -580,26 +432,47 @@ kq_index_t qos_index_for_servicer(int qos_class, thread_t thread, int flags)
  *	by calling the filter to get a [consistent] snapshot of that
  *	data.
  */
-lck_grp_attr_t * kq_lck_grp_attr;
-lck_grp_t * kq_lck_grp;
-lck_attr_t * kq_lck_attr;
+static lck_grp_attr_t *kq_lck_grp_attr;
+static lck_grp_t *kq_lck_grp;
+static lck_attr_t *kq_lck_attr;
 
 static inline void
-kqlock(struct kqueue *kq)
+kqlock(kqueue_t kqu)
 {
-	lck_spin_lock(&kq->kq_lock);
+	lck_spin_lock(&kqu.kq->kq_lock);
 }
 
 static inline void
-kqlock_held(__assert_only struct kqueue *kq)
+kqlock_held(__assert_only kqueue_t kqu)
 {
-	LCK_SPIN_ASSERT(&kq->kq_lock, LCK_ASSERT_OWNED);
+	LCK_SPIN_ASSERT(&kqu.kq->kq_lock, LCK_ASSERT_OWNED);
 }
 
 static inline void
-kqunlock(struct kqueue *kq)
+kqunlock(kqueue_t kqu)
 {
-	lck_spin_unlock(&kq->kq_lock);
+	lck_spin_unlock(&kqu.kq->kq_lock);
+}
+
+static inline void
+kq_req_lock(kqueue_t kqu)
+{
+	assert(kqu.kq->kq_state & (KQ_WORKLOOP | KQ_WORKQ));
+	lck_spin_lock(&kqu.kq->kq_reqlock);
+}
+
+static inline void
+kq_req_unlock(kqueue_t kqu)
+{
+	assert(kqu.kq->kq_state & (KQ_WORKLOOP | KQ_WORKQ));
+	lck_spin_unlock(&kqu.kq->kq_reqlock);
+}
+
+static inline void
+kq_req_held(__assert_only kqueue_t kqu)
+{
+	assert(kqu.kq->kq_state & (KQ_WORKLOOP | KQ_WORKQ));
+	LCK_SPIN_ASSERT(&kqu.kq->kq_reqlock, LCK_ASSERT_OWNED);
 }
 
 static inline void
@@ -614,240 +487,310 @@ knhash_unlock(proc_t p)
 	lck_mtx_unlock(&p->p_fd->fd_knhashlock);
 }
 
+#pragma mark knote locks
 
 /*
- * Convert a kq lock to a knote use referece.
+ * Enum used by the knote_lock_* functions.
  *
- *	If the knote is being dropped, or has
- *  vanished, we can't get a use reference.
- *  Just return with it still locked.
+ * KNOTE_KQ_LOCK_ALWAYS
+ *   The function will always return with the kq lock held.
  *
- *	- kq locked at entry
- *	- unlock on exit if we get the use reference
+ * KNOTE_KQ_UNLOCK_ON_SUCCESS
+ *   The function will return with the kq lock held if it was successful
+ *   (knote_lock() is the only function that can fail).
+ *
+ * KNOTE_KQ_UNLOCK_ON_FAILURE
+ *   The function will return with the kq lock held if it was unsuccessful
+ *   (knote_lock() is the only function that can fail).
+ *
+ * KNOTE_KQ_UNLOCK:
+ *   The function returns with the kq unlocked.
  */
-static int
-kqlock2knoteuse(struct kqueue *kq, struct knote *kn, int flags)
-{
-	if (kn->kn_status & (KN_DROPPING | KN_VANISHED))
-		return (0);
+#define KNOTE_KQ_LOCK_ALWAYS      0x0
+#define KNOTE_KQ_LOCK_ON_SUCCESS  0x1
+#define KNOTE_KQ_LOCK_ON_FAILURE  0x2
+#define KNOTE_KQ_UNLOCK           0x3
 
-	assert(kn->kn_status & KN_ATTACHED);
-	kn->kn_inuse++;
-	if (flags & KNUSE_BOOST) {
-		set_thread_rwlock_boost();
+#if DEBUG || DEVELOPMENT
+__attribute__((noinline, not_tail_called, disable_tail_calls))
+void knote_lock_ctx_chk(struct knote_lock_ctx *knlc)
+{
+	/* evil hackery to make sure no one forgets to unlock */
+	assert(knlc->knlc_state == KNOTE_LOCK_CTX_UNLOCKED);
+}
+#endif
+
+static struct knote_lock_ctx *
+knote_lock_ctx_find(struct kqueue *kq, struct knote *kn)
+{
+	struct knote_lock_ctx *ctx;
+	LIST_FOREACH(ctx, &kq->kq_knlocks, knlc_le) {
+		if (ctx->knlc_knote == kn) return ctx;
 	}
+	panic("knote lock context not found: %p", kn);
+	__builtin_trap();
+}
+
+/* slowpath of knote_lock() */
+__attribute__((noinline))
+static bool __result_use_check
+knote_lock_slow(struct kqueue *kq, struct knote *kn,
+		struct knote_lock_ctx *knlc, int kqlocking)
+{
+	kqlock_held(kq);
+
+	struct knote_lock_ctx *owner_lc = knote_lock_ctx_find(kq, kn);
+	thread_t owner_thread = owner_lc->knlc_thread;
+
+#if DEBUG || DEVELOPMENT
+	knlc->knlc_state = KNOTE_LOCK_CTX_WAITING;
+#endif
+
+	thread_reference(owner_thread);
+	TAILQ_INSERT_TAIL(&owner_lc->knlc_head, knlc, knlc_tqe);
+	assert_wait(&kn->kn_status, THREAD_UNINT | THREAD_WAIT_NOREPORT);
 	kqunlock(kq);
-	return (1);
+
+	if (thread_handoff_deallocate(owner_thread) == THREAD_RESTART) {
+		if (kqlocking == KNOTE_KQ_LOCK_ALWAYS ||
+				kqlocking == KNOTE_KQ_LOCK_ON_FAILURE) {
+			kqlock(kq);
+		}
+#if DEBUG || DEVELOPMENT
+		assert(knlc->knlc_state == KNOTE_LOCK_CTX_WAITING);
+		knlc->knlc_state = KNOTE_LOCK_CTX_UNLOCKED;
+#endif
+		return false;
+	}
+#if DEBUG || DEVELOPMENT
+		assert(knlc->knlc_state == KNOTE_LOCK_CTX_LOCKED);
+#endif
+	if (kqlocking == KNOTE_KQ_LOCK_ALWAYS ||
+			kqlocking == KNOTE_KQ_LOCK_ON_SUCCESS) {
+		kqlock(kq);
+	}
+	return true;
 }
 
 /*
+ * Attempts to take the "knote" lock.
+ *
+ * Called with the kqueue lock held.
+ *
+ * Returns true if the knote lock is acquired, false if it has been dropped
+ */
+static bool __result_use_check
+knote_lock(struct kqueue *kq, struct knote *kn, struct knote_lock_ctx *knlc,
+		int kqlocking)
+{
+	kqlock_held(kq);
+
+#if DEBUG || DEVELOPMENT
+	assert(knlc->knlc_state == KNOTE_LOCK_CTX_UNLOCKED);
+#endif
+	knlc->knlc_knote = kn;
+	knlc->knlc_thread = current_thread();
+	TAILQ_INIT(&knlc->knlc_head);
+
+	if (__improbable(kn->kn_status & KN_LOCKED)) {
+		return knote_lock_slow(kq, kn, knlc, kqlocking);
+	}
+
+	/*
+	 * When the knote will be dropped, the knote lock is taken before
+	 * KN_DROPPING is set, and then the knote will be removed from any
+	 * hash table that references it before the lock is canceled.
+	 */
+	assert((kn->kn_status & KN_DROPPING) == 0);
+	LIST_INSERT_HEAD(&kq->kq_knlocks, knlc, knlc_le);
+	kn->kn_status |= KN_LOCKED;
+#if DEBUG || DEVELOPMENT
+	knlc->knlc_state = KNOTE_LOCK_CTX_LOCKED;
+#endif
+
+	if (kqlocking == KNOTE_KQ_UNLOCK ||
+			kqlocking == KNOTE_KQ_LOCK_ON_FAILURE) {
+		kqunlock(kq);
+	}
+	return true;
+}
+
+/*
+ * Unlocks a knote successfully locked with knote_lock().
+ *
+ * Called with the kqueue lock held.
+ *
+ * Returns with the kqueue lock held according to KNOTE_KQ_* flags
+ */
+static void
+knote_unlock(struct kqueue *kq, struct knote *kn,
+		struct knote_lock_ctx *knlc, int flags)
+{
+	kqlock_held(kq);
+
+	assert(knlc->knlc_knote == kn);
+	assert(kn->kn_status & KN_LOCKED);
+#if DEBUG || DEVELOPMENT
+	assert(knlc->knlc_state == KNOTE_LOCK_CTX_LOCKED);
+#endif
+
+	struct knote_lock_ctx *next_owner_lc = TAILQ_FIRST(&knlc->knlc_head);
+
+	LIST_REMOVE(knlc, knlc_le);
+
+	if (next_owner_lc) {
+		assert(next_owner_lc->knlc_knote == kn);
+		TAILQ_REMOVE(&knlc->knlc_head, next_owner_lc, knlc_tqe);
+
+		assert(TAILQ_EMPTY(&next_owner_lc->knlc_head));
+		TAILQ_CONCAT(&next_owner_lc->knlc_head, &knlc->knlc_head, knlc_tqe);
+		LIST_INSERT_HEAD(&kq->kq_knlocks, next_owner_lc, knlc_le);
+#if DEBUG || DEVELOPMENT
+		next_owner_lc->knlc_state = KNOTE_LOCK_CTX_LOCKED;
+#endif
+	} else {
+		kn->kn_status &= ~KN_LOCKED;
+	}
+	if (kn->kn_inuse == 0) {
+		/*
+		 * No f_event() in flight anymore, we can leave QoS "Merge" mode
+		 *
+		 * See knote_should_apply_qos_override()
+		 */
+		kn->kn_status &= ~KN_MERGE_QOS;
+	}
+	if (flags & KNOTE_KQ_UNLOCK) {
+		kqunlock(kq);
+	}
+	if (next_owner_lc) {
+		thread_wakeup_thread(&kn->kn_status, next_owner_lc->knlc_thread);
+	}
+#if DEBUG || DEVELOPMENT
+	knlc->knlc_state = KNOTE_LOCK_CTX_UNLOCKED;
+#endif
+}
+
+/*
+ * Aborts all waiters for a knote lock, and unlock the knote.
+ *
+ * Called with the kqueue lock held.
+ *
+ * Returns with the kqueue lock held according to KNOTE_KQ_* flags
+ */
+static void
+knote_unlock_cancel(struct kqueue *kq, struct knote *kn,
+		struct knote_lock_ctx *knlc, int kqlocking)
+{
+	kqlock_held(kq);
+
+	assert(knlc->knlc_knote == kn);
+	assert(kn->kn_status & KN_LOCKED);
+	assert(kn->kn_status & KN_DROPPING);
+
+	LIST_REMOVE(knlc, knlc_le);
+	kn->kn_status &= ~KN_LOCKED;
+
+	if (kqlocking == KNOTE_KQ_UNLOCK ||
+			kqlocking == KNOTE_KQ_LOCK_ON_FAILURE) {
+		kqunlock(kq);
+	}
+	if (!TAILQ_EMPTY(&knlc->knlc_head)) {
+		thread_wakeup_with_result(&kn->kn_status, THREAD_RESTART);
+	}
+#if DEBUG || DEVELOPMENT
+	knlc->knlc_state = KNOTE_LOCK_CTX_UNLOCKED;
+#endif
+}
+
+/*
+ * Call the f_event hook of a given filter.
+ *
+ * Takes a use count to protect against concurrent drops.
+ */
+static void
+knote_call_filter_event(struct kqueue *kq, struct knote *kn, long hint)
+{
+	int result, dropping = 0;
+
+	kqlock_held(kq);
+
+	if (kn->kn_status & (KN_DROPPING | KN_VANISHED))
+		return;
+
+	kn->kn_inuse++;
+	kqunlock(kq);
+	result = filter_call(knote_fops(kn), f_event(kn, hint));
+	kqlock(kq);
+
+	dropping = (kn->kn_status & KN_DROPPING);
+
+	if (!dropping && (result & FILTER_ACTIVE)) {
+		if (result & FILTER_ADJUST_EVENT_QOS_BIT)
+			knote_adjust_qos(kq, kn, result);
+		knote_activate(kn);
+	}
+
+	if (--kn->kn_inuse == 0) {
+		if ((kn->kn_status & KN_LOCKED) == 0) {
+			/*
+			 * We're the last f_event() call and there's no other f_* call in
+			 * flight, we can leave QoS "Merge" mode.
+			 *
+			 * See knote_should_apply_qos_override()
+			 */
+			kn->kn_status &= ~KN_MERGE_QOS;
+		}
+		if (dropping) {
+			waitq_wakeup64_all((struct waitq *)&kq->kq_wqs,
+					CAST_EVENT64_T(&kn->kn_inuse),
+					THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
+		}
+	}
+}
+
+/*
+ * Called by knote_drop() to wait for the last f_event() caller to be done.
+ *
  *	- kq locked at entry
  *	- kq unlocked at exit
  */
-__disable_tail_calls
-static wait_result_t
-knoteusewait(struct kqueue *kq, struct knote *kn)
-{
-	kn->kn_status |= KN_USEWAIT;
-	waitq_assert_wait64((struct waitq *)&kq->kq_wqs,
-			CAST_EVENT64_T(&kn->kn_status),
-			THREAD_UNINT, TIMEOUT_WAIT_FOREVER);
-	kqunlock(kq);
-	return thread_block(THREAD_CONTINUE_NULL);
-}
-
-static bool
-knoteuse_needs_boost(struct knote *kn, struct kevent_internal_s *kev)
-{
-	if (knote_fops(kn)->f_needs_boost) {
-		return knote_fops(kn)->f_needs_boost(kev);
-	}
-	return false;
-}
-
-/*
- * Convert from a knote use reference back to kq lock.
- *
- *	Drop a use reference and wake any waiters if
- *	this is the last one.
- *
- *  If someone is trying to drop the knote, but the
- *  caller has events they must deliver, take
- *  responsibility for the drop later - and wake the
- *  other attempted dropper in a manner that informs
- *  him of the transfer of responsibility.
- *
- *	The exit return indicates if the knote is still alive
- *  (or if not, the other dropper has been given the green
- *  light to drop it).
- *
- *  The kqueue lock is re-taken unconditionally.
- */
-static int
-knoteuse2kqlock(struct kqueue *kq, struct knote *kn, int flags)
-{
-	int dropped = 0;
-	int steal_drop = (flags & KNUSE_STEAL_DROP);
-
-	kqlock(kq);
-	if (flags & KNUSE_BOOST) {
-		clear_thread_rwlock_boost();
-	}
-
-	if (--kn->kn_inuse == 0) {
-
-		if ((kn->kn_status & KN_ATTACHING) != 0) {
-			kn->kn_status &= ~KN_ATTACHING;
-		}
-
-		if ((kn->kn_status & KN_USEWAIT) != 0) {
-			wait_result_t result;
-
-			/* If we need to, try and steal the drop */
-			if (kn->kn_status & KN_DROPPING) {
-				if (steal_drop && !(kn->kn_status & KN_STOLENDROP)) {
-					kn->kn_status |= KN_STOLENDROP;
-				} else {
-					dropped = 1;
-				}
-			}
-
-			/* wakeup indicating if ANY USE stole the drop */
-			result = (kn->kn_status & KN_STOLENDROP) ?
-			         THREAD_RESTART : THREAD_AWAKENED;
-
-			kn->kn_status &= ~KN_USEWAIT;
-			waitq_wakeup64_all((struct waitq *)&kq->kq_wqs,
-					   CAST_EVENT64_T(&kn->kn_status),
-					   result,
-					   WAITQ_ALL_PRIORITIES);
-		} else {
-			/* should have seen use-wait if dropping with use refs */
-			assert((kn->kn_status & (KN_DROPPING|KN_STOLENDROP)) == 0);
-		}
-
-	} else if (kn->kn_status & KN_DROPPING) {
-		/* not the last ref but want to steal a drop if present */
-		if (steal_drop && ((kn->kn_status & KN_STOLENDROP) == 0)) {
-			kn->kn_status |= KN_STOLENDROP;
-
-			/* but we now have to wait to be the last ref */
-			knoteusewait(kq, kn);
-			kqlock(kq);
-		} else {
-			dropped = 1;
-		}
-	}
-
-	return (!dropped);
-}
-
-/*
- * Convert a kq lock to a knote use reference
- * (for the purpose of detaching AND vanishing it).
- *
- *	If the knote is being dropped, we can't get
- *	a detach reference, so wait for the knote to
- *  finish dropping before returning.
- *
- *  If the knote is being used for other purposes,
- *  we cannot detach it until those uses are done
- *  as well. Again, just wait for them to finish
- *  (caller will start over at lookup).
- *
- *	- kq locked at entry
- *	- unlocked on exit
- */
-static int
-kqlock2knotedetach(struct kqueue *kq, struct knote *kn, int flags)
-{
-	if ((kn->kn_status & KN_DROPPING) || kn->kn_inuse) {
-		/* have to wait for dropper or current uses to go away */
-		knoteusewait(kq, kn);
-		return (0);
-	}
-	assert((kn->kn_status & KN_VANISHED) == 0);
-	assert(kn->kn_status & KN_ATTACHED);
-	kn->kn_status &= ~KN_ATTACHED;
-	kn->kn_status |= KN_VANISHED;
-	if (flags & KNUSE_BOOST) {
-		clear_thread_rwlock_boost();
-	}
-	kn->kn_inuse++;
-	kqunlock(kq);
-	return (1);
-}
-
-/*
- * Convert a kq lock to a knote drop reference.
- *
- *	If the knote is in use, wait for the use count
- *	to subside.  We first mark our intention to drop
- *	it - keeping other users from "piling on."
- *	If we are too late, we have to wait for the
- *	other drop to complete.
- *
- *	- kq locked at entry
- *	- always unlocked on exit.
- *	- caller can't hold any locks that would prevent
- *	  the other dropper from completing.
- */
-static int
-kqlock2knotedrop(struct kqueue *kq, struct knote *kn)
-{
-	int oktodrop;
-	wait_result_t result;
-
-	oktodrop = ((kn->kn_status & (KN_DROPPING | KN_ATTACHING)) == 0);
-	/* if another thread is attaching, they will become the dropping thread */
-	kn->kn_status |= KN_DROPPING;
-	knote_unsuppress(kn);
-	knote_dequeue(kn);
-	if (oktodrop) {
-		if (kn->kn_inuse == 0) {
-			kqunlock(kq);
-			return (oktodrop);
-		}
-	}
-	result = knoteusewait(kq, kn);
-	/* THREAD_RESTART == another thread stole the knote drop */
-	return (result == THREAD_AWAKENED);
-}
-
-#if 0
-/*
- * Release a knote use count reference.
- */
 static void
-knote_put(struct knote *kn)
+knote_wait_for_filter_events(struct kqueue *kq, struct knote *kn)
 {
-	struct kqueue *kq = knote_get_kq(kn);
+	wait_result_t wr = THREAD_NOT_WAITING;
 
-	kqlock(kq);
-	if (--kn->kn_inuse == 0) {
-		if ((kn->kn_status & KN_USEWAIT) != 0) {
-			kn->kn_status &= ~KN_USEWAIT;
-			waitq_wakeup64_all((struct waitq *)&kq->kq_wqs,
-					   CAST_EVENT64_T(&kn->kn_status),
-					   THREAD_AWAKENED,
-					   WAITQ_ALL_PRIORITIES);
-		}
+	kqlock_held(kq);
+
+	assert(kn->kn_status & KN_DROPPING);
+
+	if (kn->kn_inuse) {
+		wr = waitq_assert_wait64((struct waitq *)&kq->kq_wqs,
+				CAST_EVENT64_T(&kn->kn_inuse),
+				THREAD_UNINT | THREAD_WAIT_NOREPORT, TIMEOUT_WAIT_FOREVER);
 	}
 	kqunlock(kq);
+	if (wr == THREAD_WAITING) {
+		thread_block(THREAD_CONTINUE_NULL);
+	}
 }
-#endif
+
+#pragma mark file_filtops
 
 static int
 filt_fileattach(struct knote *kn, struct kevent_internal_s *kev)
 {
-	return (fo_kqfilter(kn->kn_fp, kn, kev, vfs_context_current()));
+	return fo_kqfilter(kn->kn_fp, kn, kev, vfs_context_current());
 }
 
+SECURITY_READ_ONLY_EARLY(static struct filterops) file_filtops = {
+	.f_isfd = 1,
+	.f_attach = filt_fileattach,
+};
+
+#pragma mark kqread_filtops
+
 #define	f_flag f_fglob->fg_flag
-#define	f_msgcount f_fglob->fg_msgcount
-#define	f_cred f_fglob->fg_cred
 #define	f_ops f_fglob->fg_ops
-#define	f_offset f_fglob->fg_offset
 #define	f_data f_fglob->fg_data
 
 static void
@@ -861,15 +804,12 @@ filt_kqdetach(struct knote *kn)
 	kqunlock(kq);
 }
 
-/*ARGSUSED*/
 static int
 filt_kqueue(struct knote *kn, __unused long hint)
 {
 	struct kqueue *kq = (struct kqueue *)kn->kn_fp->f_data;
-	int count;
 
-	count = kq->kq_count;
-	return (count > 0);
+	return (kq->kq_count > 0);
 }
 
 static int
@@ -881,8 +821,6 @@ filt_kqtouch(struct knote *kn, struct kevent_internal_s *kev)
 
 	kqlock(kq);
 	kn->kn_data = kq->kq_count;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 	res = (kn->kn_data > 0);
 
 	kqunlock(kq);
@@ -910,7 +848,15 @@ filt_kqprocess(struct knote *kn, struct filt_process_s *data, struct kevent_inte
 	return res;
 }
 
-#pragma mark EVFILT_PROC
+SECURITY_READ_ONLY_EARLY(static struct filterops) kqread_filtops = {
+	.f_isfd = 1,
+	.f_detach = filt_kqdetach,
+	.f_event = filt_kqueue,
+	.f_touch = filt_kqtouch,
+	.f_process = filt_kqprocess,
+};
+
+#pragma mark proc_filtops
 
 static int
 filt_procattach(struct knote *kn, __unused struct kevent_internal_s *kev)
@@ -920,15 +866,13 @@ filt_procattach(struct knote *kn, __unused struct kevent_internal_s *kev)
 	assert(PID_MAX < NOTE_PDATAMASK);
 
 	if ((kn->kn_sfflags & (NOTE_TRACK | NOTE_TRACKERR | NOTE_CHILD)) != 0) {
-		kn->kn_flags = EV_ERROR;
-		kn->kn_data = ENOTSUP;
+		knote_set_error(kn, ENOTSUP);
 		return 0;
 	}
 
 	p = proc_find(kn->kn_id);
 	if (p == NULL) {
-		kn->kn_flags = EV_ERROR;
-		kn->kn_data = ESRCH;
+		knote_set_error(kn, ESRCH);
 		return 0;
 	}
 
@@ -946,8 +890,7 @@ filt_procattach(struct knote *kn, __unused struct kevent_internal_s *kev)
 				break;	/* parent-in-waiting => ok */
 
 			proc_rele(p);
-			kn->kn_flags = EV_ERROR;
-			kn->kn_data = EACCES;
+			knote_set_error(kn, EACCES);
 			return 0;
 		} while (0);
 
@@ -1022,7 +965,7 @@ filt_proc(struct knote *kn, long hint)
 			 */
 			return 0;
 		}
-	}					
+	}
 
 	/*
 	 * if the user is interested in this event, record it.
@@ -1040,7 +983,7 @@ filt_proc(struct knote *kn, long hint)
 
 	/*
 	 * The kernel has a wrapper in place that returns the same data
-	 * as is collected here, in kn_data.  Any changes to how 
+	 * as is collected here, in kn_data.  Any changes to how
 	 * NOTE_EXITSTATUS and NOTE_EXIT_DETAIL are collected
 	 * should also be reflected in the proc_pidnoteexit() wrapper.
 	 */
@@ -1054,7 +997,7 @@ filt_proc(struct knote *kn, long hint)
 			kn->kn_fflags |= NOTE_EXIT_DETAIL;
 			if ((kn->kn_ptr.p_proc->p_lflag &
 			     P_LTERM_DECRYPTFAIL) != 0) {
-				kn->kn_data |= NOTE_EXIT_DECRYPTFAIL; 
+				kn->kn_data |= NOTE_EXIT_DECRYPTFAIL;
 			}
 			if ((kn->kn_ptr.p_proc->p_lflag &
 			     P_LTERM_JETSAM) != 0) {
@@ -1103,8 +1046,6 @@ filt_proctouch(struct knote *kn, struct kevent_internal_s *kev)
 
 	/* accept new filter flags and mask off output events no long interesting */
 	kn->kn_sfflags = kev->fflags;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 
 	/* restrict the current results to the (smaller?) set of new interest */
 	/*
@@ -1138,9 +1079,22 @@ filt_procprocess(struct knote *kn, struct filt_process_s *data, struct kevent_in
 	return res;
 }
 
+SECURITY_READ_ONLY_EARLY(static struct filterops) proc_filtops = {
+	.f_attach = filt_procattach,
+	.f_detach = filt_procdetach,
+	.f_event = filt_proc,
+	.f_touch = filt_proctouch,
+	.f_process = filt_procprocess,
+};
 
-#pragma mark EVFILT_TIMER
+#pragma mark timer_filtops
 
+struct filt_timer_params {
+	uint64_t deadline; /* deadline in abs/cont time
+						  (or 0 if NOTE_ABSOLUTE and deadline is in past) */
+	uint64_t leeway;   /* leeway in abstime, or 0 if none */
+	uint64_t interval; /* interval in abstime or 0 if non-repeating timer */
+};
 
 /*
  * Values stored in the knote at rest (using Mach absolute time units)
@@ -1150,22 +1104,35 @@ filt_procprocess(struct knote *kn, struct filt_process_s *data, struct kevent_in
  * kn->kn_ext[1]        leeway value
  * kn->kn_sdata         interval timer: the interval
  *                      absolute/deadline timer: 0
- * kn->kn_data          fire count
+ * kn->kn_hookid        timer state
+ *
+ * TIMER_IDLE:
+ *   The timer has either never been scheduled or been cancelled.
+ *   It is safe to schedule a new one in this state.
+ *
+ * TIMER_ARMED:
+ *   The timer has been scheduled
+ *
+ * TIMER_FIRED
+ *   The timer has fired and an event needs to be delivered.
+ *   When in this state, the callout may still be running.
+ *
+ * TIMER_IMMEDIATE
+ *   The timer has fired at registration time, and the callout was never
+ *   dispatched.
  */
+#define TIMER_IDLE       0x0
+#define	TIMER_ARMED      0x1
+#define TIMER_FIRED      0x2
+#define TIMER_IMMEDIATE  0x3
 
-static lck_mtx_t _filt_timerlock;
-
-static void filt_timerlock(void)   { lck_mtx_lock(&_filt_timerlock);   }
-static void filt_timerunlock(void) { lck_mtx_unlock(&_filt_timerlock); }
-
-static inline void filt_timer_assert_locked(void)
+static void
+filt_timer_set_params(struct knote *kn, struct filt_timer_params *params)
 {
-	LCK_MTX_ASSERT(&_filt_timerlock, LCK_MTX_ASSERT_OWNED);
+	kn->kn_ext[0] = params->deadline;
+	kn->kn_ext[1] = params->leeway;
+	kn->kn_sdata  = params->interval;
 }
-
-/* state flags stored in kn_hookid */
-#define	TIMER_RUNNING           0x1
-#define	TIMER_CANCELWAIT        0x2
 
 /*
  * filt_timervalidate - process data from user
@@ -1177,20 +1144,21 @@ static inline void filt_timer_assert_locked(void)
  *      kn_sfflags      style of timer, unit of measurement
  *
  * Output:
- *      kn_sdata        either interval in abstime or 0 if non-repeating timer
- *      ext[0]          fire deadline in abs/cont time
- *                      (or 0 if NOTE_ABSOLUTE and deadline is in past)
+ *      struct filter_timer_params to apply to the filter with
+ *      filt_timer_set_params when changes are ready to be commited.
  *
  * Returns:
  *      EINVAL          Invalid user data parameters
+ *      ERANGE          Various overflows with the parameters
  *
  * Called with timer filter lock held.
  */
 static int
-filt_timervalidate(struct knote *kn)
+filt_timervalidate(const struct kevent_internal_s *kev,
+		struct filt_timer_params *params)
 {
 	/*
-	 * There are 4 knobs that need to be chosen for a timer registration:
+	 * There are 5 knobs that need to be chosen for a timer registration:
 	 *
 	 * A) Units of time (what is the time duration of the specified number)
 	 *      Absolute and interval take:
@@ -1220,13 +1188,11 @@ filt_timervalidate(struct knote *kn)
 	 *              expires when mach_continuous_time() is > the passed in value.
 	 */
 
-	filt_timer_assert_locked();
-
 	uint64_t multiplier;
 
 	boolean_t use_abstime = FALSE;
 
-	switch (kn->kn_sfflags & (NOTE_SECONDS|NOTE_USECONDS|NOTE_NSECONDS|NOTE_MACHTIME)) {
+	switch (kev->fflags & (NOTE_SECONDS|NOTE_USECONDS|NOTE_NSECONDS|NOTE_MACHTIME)) {
 	case NOTE_SECONDS:
 		multiplier = NSEC_PER_SEC;
 		break;
@@ -1248,31 +1214,33 @@ filt_timervalidate(struct knote *kn)
 	}
 
 	/* transform the leeway in kn_ext[1] to same time scale */
-	if (kn->kn_sfflags & NOTE_LEEWAY) {
+	if (kev->fflags & NOTE_LEEWAY) {
 		uint64_t leeway_abs;
 
 		if (use_abstime) {
-			leeway_abs = (uint64_t)kn->kn_ext[1];
+			leeway_abs = (uint64_t)kev->ext[1];
 		} else  {
 			uint64_t leeway_ns;
-			if (os_mul_overflow((uint64_t)kn->kn_ext[1], multiplier, &leeway_ns))
+			if (os_mul_overflow((uint64_t)kev->ext[1], multiplier, &leeway_ns))
 				return (ERANGE);
 
 			nanoseconds_to_absolutetime(leeway_ns, &leeway_abs);
 		}
 
-		kn->kn_ext[1] = leeway_abs;
+		params->leeway = leeway_abs;
+	} else {
+		params->leeway = 0;
 	}
 
-	if (kn->kn_sfflags & NOTE_ABSOLUTE) {
+	if (kev->fflags & NOTE_ABSOLUTE) {
 		uint64_t deadline_abs;
 
 		if (use_abstime) {
-			deadline_abs = (uint64_t)kn->kn_sdata;
+			deadline_abs = (uint64_t)kev->data;
 		} else {
 			uint64_t calendar_deadline_ns;
 
-			if (os_mul_overflow((uint64_t)kn->kn_sdata, multiplier, &calendar_deadline_ns))
+			if (os_mul_overflow((uint64_t)kev->data, multiplier, &calendar_deadline_ns))
 				return (ERANGE);
 
 			/* calendar_deadline_ns is in nanoseconds since the epoch */
@@ -1306,7 +1274,7 @@ filt_timervalidate(struct knote *kn)
 				 * it does not change the calendar timebase.
 				 */
 
-				if (kn->kn_sfflags & NOTE_MACH_CONTINUOUS_TIME)
+				if (kev->fflags & NOTE_MACH_CONTINUOUS_TIME)
 					clock_continuoustime_interval_to_deadline(interval_abs,
 					                                          &deadline_abs);
 				else
@@ -1317,9 +1285,9 @@ filt_timervalidate(struct knote *kn)
 			}
 		}
 
-		kn->kn_ext[0] = deadline_abs;
-		kn->kn_sdata  = 0;       /* NOTE_ABSOLUTE is non-repeating */
-	} else if (kn->kn_sdata < 0) {
+		params->deadline = deadline_abs;
+		params->interval = 0; /* NOTE_ABSOLUTE is non-repeating */
+	} else if (kev->data < 0) {
 		/*
 		 * Negative interval timers fire immediately, once.
 		 *
@@ -1333,16 +1301,16 @@ filt_timervalidate(struct knote *kn)
 		 * We now skip the power-wasting hot spin phase and go straight to the idle phase.
 		 */
 
-		kn->kn_sdata  = 0;      /* non-repeating */
-		kn->kn_ext[0] = 0;      /* expire immediately */
+		params->deadline = 0; /* expire immediately */
+		params->interval = 0; /* non-repeating */
 	} else {
 		uint64_t interval_abs = 0;
 
 		if (use_abstime) {
-			interval_abs = (uint64_t)kn->kn_sdata;
+			interval_abs = (uint64_t)kev->data;
 		} else {
 			uint64_t interval_ns;
-			if (os_mul_overflow((uint64_t)kn->kn_sdata, multiplier, &interval_ns))
+			if (os_mul_overflow((uint64_t)kev->data, multiplier, &interval_ns))
 				return (ERANGE);
 
 			nanoseconds_to_absolutetime(interval_ns, &interval_abs);
@@ -1350,116 +1318,92 @@ filt_timervalidate(struct knote *kn)
 
 		uint64_t deadline = 0;
 
-		if (kn->kn_sfflags & NOTE_MACH_CONTINUOUS_TIME)
+		if (kev->fflags & NOTE_MACH_CONTINUOUS_TIME)
 			clock_continuoustime_interval_to_deadline(interval_abs, &deadline);
 		else
 			clock_absolutetime_interval_to_deadline(interval_abs, &deadline);
 
-		kn->kn_sdata  = interval_abs;   /* default to a repeating timer */
-		kn->kn_ext[0] = deadline;
+		params->deadline = deadline;
+		params->interval = interval_abs;
 	}
 
 	return (0);
 }
 
-
-
-
 /*
  * filt_timerexpire - the timer callout routine
- *
- * Just propagate the timer event into the knote
- * filter routine (by going through the knote
- * synchronization point).  Pass a hint to
- * indicate this is a real event, not just a
- * query from above.
  */
 static void
 filt_timerexpire(void *knx, __unused void *spare)
 {
-	struct klist timer_list;
 	struct knote *kn = knx;
+	int v;
 
-	filt_timerlock();
-
-	kn->kn_hookid &= ~TIMER_RUNNING;
-
-	/* no "object" for timers, so fake a list */
-	SLIST_INIT(&timer_list);
-	SLIST_INSERT_HEAD(&timer_list, kn, kn_selnext);
-
-	KNOTE(&timer_list, 1);
-
-	/* if someone is waiting for timer to pop */
-	if (kn->kn_hookid & TIMER_CANCELWAIT) {
+	if (os_atomic_cmpxchgv(&kn->kn_hookid, TIMER_ARMED, TIMER_FIRED,
+			&v, relaxed)) {
+		// our f_event always would say FILTER_ACTIVE,
+		// so be leaner and just do it.
 		struct kqueue *kq = knote_get_kq(kn);
-		waitq_wakeup64_all((struct waitq *)&kq->kq_wqs,
-				   CAST_EVENT64_T(&kn->kn_hook),
-				   THREAD_AWAKENED,
-				   WAITQ_ALL_PRIORITIES);
-
-		kn->kn_hookid &= ~TIMER_CANCELWAIT;
+		kqlock(kq);
+		knote_activate(kn);
+		kqunlock(kq);
+	} else {
+		/*
+		 * From TIMER_ARMED, the only allowed transition are:
+		 * - to TIMER_FIRED through the timer callout just above
+		 * - to TIMER_IDLE due to filt_timercancel() which will wait for the
+		 *   timer callout (and any possible invocation of filt_timerexpire) to
+		 *   have finished before the state is changed again.
+		 */
+		assert(v == TIMER_IDLE);
 	}
-
-	filt_timerunlock();
 }
 
-/*
- * Cancel a running timer (or wait for the pop).
- * Timer filter lock is held.
- * May drop and retake the timer filter lock.
- */
 static void
 filt_timercancel(struct knote *kn)
 {
-	filt_timer_assert_locked();
-
-	assert((kn->kn_hookid & TIMER_CANCELWAIT) == 0);
-
-	/* if no timer, then we're good */
-	if ((kn->kn_hookid & TIMER_RUNNING) == 0)
-		return;
-
-	thread_call_t callout = (thread_call_t)kn->kn_hook;
-
-	/* cancel the callout if we can */
-	if (thread_call_cancel(callout)) {
-		kn->kn_hookid &= ~TIMER_RUNNING;
-		return;
+	if (os_atomic_xchg(&kn->kn_hookid, TIMER_IDLE, relaxed) == TIMER_ARMED) {
+		/* cancel the thread call and wait for any filt_timerexpire in flight */
+		thread_call_cancel_wait((thread_call_t)kn->kn_hook);
 	}
-
-	/* cancel failed, we have to wait for the in-flight expire routine */
-
-	kn->kn_hookid |= TIMER_CANCELWAIT;
-
-	struct kqueue *kq = knote_get_kq(kn);
-
-	waitq_assert_wait64((struct waitq *)&kq->kq_wqs,
-	                    CAST_EVENT64_T(&kn->kn_hook),
-	                    THREAD_UNINT, TIMEOUT_WAIT_FOREVER);
-
-	filt_timerunlock();
-	thread_block(THREAD_CONTINUE_NULL);
-	filt_timerlock();
-
-	assert((kn->kn_hookid & TIMER_CANCELWAIT) == 0);
-	assert((kn->kn_hookid & TIMER_RUNNING) == 0);
 }
 
+/*
+ * Does this deadline needs a timer armed for it, or has it expired?
+ */
+static bool
+filt_timer_is_ready(struct knote *kn)
+{
+	uint64_t now, deadline = kn->kn_ext[0];
+
+	if (deadline == 0) {
+		return true;
+	}
+
+	if (kn->kn_sfflags & NOTE_MACH_CONTINUOUS_TIME) {
+		now = mach_continuous_time();
+	} else {
+		now = mach_absolute_time();
+	}
+	return deadline <= now;
+}
+
+/*
+ * Arm a timer
+ *
+ * It is the responsibility of the caller to make sure the timer call
+ * has completed or been cancelled properly prior to arming it.
+ */
 static void
 filt_timerarm(struct knote *kn)
 {
-	filt_timer_assert_locked();
-
-	assert((kn->kn_hookid & TIMER_RUNNING) == 0);
-
-	thread_call_t callout = (thread_call_t)kn->kn_hook;
-
 	uint64_t deadline = kn->kn_ext[0];
 	uint64_t leeway   = kn->kn_ext[1];
 
 	int filter_flags = kn->kn_sfflags;
 	unsigned int timer_flags = 0;
+
+	assert(os_atomic_load(&kn->kn_hookid, relaxed) == TIMER_IDLE);
 
 	if (filter_flags & NOTE_CRITICAL)
 		timer_flags |= THREAD_CALL_DELAY_USER_CRITICAL;
@@ -1474,85 +1418,51 @@ filt_timerarm(struct knote *kn)
 	if (filter_flags & NOTE_MACH_CONTINUOUS_TIME)
 		timer_flags |= THREAD_CALL_CONTINUOUS;
 
-	thread_call_enter_delayed_with_leeway(callout, NULL,
-	                                      deadline, leeway,
-	                                      timer_flags);
-
-	kn->kn_hookid |= TIMER_RUNNING;
-}
-
-/*
- * Does this knote need a timer armed for it, or should it be ready immediately?
- */
-static boolean_t
-filt_timer_is_ready(struct knote *kn)
-{
-	uint64_t now;
-
-	if (kn->kn_sfflags & NOTE_MACH_CONTINUOUS_TIME)
-		now = mach_continuous_time();
-	else
-		now = mach_absolute_time();
-
-	uint64_t deadline = kn->kn_ext[0];
-
-	if (deadline < now)
-		return TRUE;
-	else
-		return FALSE;
+	os_atomic_store(&kn->kn_hookid, TIMER_ARMED, relaxed);
+	thread_call_enter_delayed_with_leeway((thread_call_t)kn->kn_hook, NULL,
+			deadline, leeway, timer_flags);
 }
 
 /*
  * Allocate a thread call for the knote's lifetime, and kick off the timer.
  */
 static int
-filt_timerattach(struct knote *kn, __unused struct kevent_internal_s *kev)
+filt_timerattach(struct knote *kn, struct kevent_internal_s *kev)
 {
 	thread_call_t callout;
+	struct filt_timer_params params;
 	int error;
+
+	if ((error = filt_timervalidate(kev, &params)) != 0) {
+		knote_set_error(kn, error);
+		return 0;
+	}
 
 	callout = thread_call_allocate_with_options(filt_timerexpire,
 	                (thread_call_param_t)kn, THREAD_CALL_PRIORITY_HIGH,
 	                THREAD_CALL_OPTIONS_ONCE);
 
 	if (NULL == callout) {
-		kn->kn_flags = EV_ERROR;
-		kn->kn_data = ENOMEM;
+		knote_set_error(kn, ENOMEM);
 		return 0;
 	}
 
-	filt_timerlock();
-
-	if ((error = filt_timervalidate(kn)) != 0) {
-		kn->kn_flags = EV_ERROR;
-		kn->kn_data  = error;
-		filt_timerunlock();
-
-		__assert_only boolean_t freed = thread_call_free(callout);
-		assert(freed);
-		return 0;
-	}
-
-	kn->kn_hook = (void*)callout;
-	kn->kn_hookid = 0;
+	filt_timer_set_params(kn, &params);
+	kn->kn_hook = callout;
 	kn->kn_flags |= EV_CLEAR;
+	os_atomic_store(&kn->kn_hookid, TIMER_IDLE, relaxed);
 
 	/* NOTE_ABSOLUTE implies EV_ONESHOT */
 	if (kn->kn_sfflags & NOTE_ABSOLUTE)
 		kn->kn_flags |= EV_ONESHOT;
 
-	boolean_t timer_ready = FALSE;
-
-	if ((timer_ready = filt_timer_is_ready(kn))) {
-		/* cause immediate expiration */
-		kn->kn_data = 1;
+	if (filt_timer_is_ready(kn)) {
+		os_atomic_store(&kn->kn_hookid, TIMER_IMMEDIATE, relaxed);
+		return FILTER_ACTIVE;
 	} else {
 		filt_timerarm(kn);
+		return 0;
 	}
-
-	filt_timerunlock();
-
-	return timer_ready;
 }
 
 /*
@@ -1561,32 +1471,15 @@ filt_timerattach(struct knote *kn, __unused struct kevent_internal_s *kev)
 static void
 filt_timerdetach(struct knote *kn)
 {
-	thread_call_t callout;
+	__assert_only boolean_t freed;
 
-	filt_timerlock();
-
-	callout = (thread_call_t)kn->kn_hook;
-	filt_timercancel(kn);
-
-	filt_timerunlock();
-
-	__assert_only boolean_t freed = thread_call_free(callout);
+	/*
+	 * Unconditionally cancel to make sure there can't be any filt_timerexpire()
+	 * running anymore.
+	 */
+	thread_call_cancel_wait((thread_call_t)kn->kn_hook);
+	freed = thread_call_free((thread_call_t)kn->kn_hook);
 	assert(freed);
-}
-
-/*
- * filt_timerevent - post events to a timer knote
- *
- * Called in the context of filt_timerexpire with
- * the filt_timerlock held
- */
-static int
-filt_timerevent(struct knote *kn, __unused long hint)
-{
-	filt_timer_assert_locked();
-
-	kn->kn_data = 1;
-	return (1);
 }
 
 /*
@@ -1597,54 +1490,36 @@ filt_timerevent(struct knote *kn, __unused long hint)
  * pops have gone off (in kn_data).
  */
 static int
-filt_timertouch(
-	struct knote *kn,
-	struct kevent_internal_s *kev)
+filt_timertouch(struct knote *kn, struct kevent_internal_s *kev)
 {
+	struct filt_timer_params params;
+	uint32_t changed_flags = (kn->kn_sfflags ^ kev->fflags);
 	int error;
 
-	filt_timerlock();
+	if (changed_flags & NOTE_ABSOLUTE) {
+		kev->flags |= EV_ERROR;
+		kev->data = EINVAL;
+		return 0;
+	}
 
-	/*
-	 * cancel current call - drops and retakes lock
-	 * TODO: not safe against concurrent touches?
-	 */
-	filt_timercancel(kn);
-
-	/* clear if the timer had previously fired, the user no longer wants to see it */
-	kn->kn_data = 0;
+	if ((error = filt_timervalidate(kev, &params)) != 0) {
+		kev->flags |= EV_ERROR;
+		kev->data = error;
+		return 0;
+	}
 
 	/* capture the new values used to compute deadline */
-	kn->kn_sdata = kev->data;
+	filt_timercancel(kn);
+	filt_timer_set_params(kn, &params);
 	kn->kn_sfflags = kev->fflags;
-	kn->kn_ext[0] = kev->ext[0];
-	kn->kn_ext[1] = kev->ext[1];
 
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
-
-	/* recalculate deadline */
-	error = filt_timervalidate(kn);
-	if (error) {
-		/* no way to report error, so mark it in the knote */
-		kn->kn_flags |= EV_ERROR;
-		kn->kn_data = error;
-		filt_timerunlock();
-		return 1;
-	}
-
-	boolean_t timer_ready = FALSE;
-
-	if ((timer_ready = filt_timer_is_ready(kn))) {
-		/* cause immediate expiration */
-		kn->kn_data = 1;
+	if (filt_timer_is_ready(kn)) {
+		os_atomic_store(&kn->kn_hookid, TIMER_IMMEDIATE, relaxed);
+		return FILTER_ACTIVE | FILTER_UPDATE_REQ_QOS;
 	} else {
 		filt_timerarm(kn);
+		return FILTER_UPDATE_REQ_QOS;
 	}
-
-	filt_timerunlock();
-
-	return timer_ready;
 }
 
 /*
@@ -1660,24 +1535,43 @@ filt_timerprocess(
 	__unused struct filt_process_s *data,
 	struct kevent_internal_s *kev)
 {
-	filt_timerlock();
-
-	if (kn->kn_data == 0 || (kn->kn_hookid & TIMER_CANCELWAIT)) {
+	/*
+	 * filt_timerprocess is serialized with any filter routine except for
+	 * filt_timerexpire which atomically does a TIMER_ARMED -> TIMER_FIRED
+	 * transition, and on success, activates the knote.
+	 *
+	 * Hence, we don't need atomic modifications of the state, only to peek at
+	 * whether we see any of the "FIRED" state, and if we do, it is safe to
+	 * do simple state machine transitions.
+	 */
+	switch (os_atomic_load(&kn->kn_hookid, relaxed)) {
+	case TIMER_IDLE:
+	case TIMER_ARMED:
 		/*
-		 * kn_data = 0:
-		 * The timer hasn't yet fired, so there's nothing to deliver
-		 * TIMER_CANCELWAIT:
-		 * touch is in the middle of canceling the timer,
-		 * so don't deliver or re-arm anything
-		 *
 		 * This can happen if a touch resets a timer that had fired
 		 * without being processed
 		 */
-		filt_timerunlock();
 		return 0;
 	}
 
-	if (kn->kn_sdata != 0 && ((kn->kn_flags & EV_ERROR) == 0)) {
+	os_atomic_store(&kn->kn_hookid, TIMER_IDLE, relaxed);
+
+	/*
+	 * Copy out the interesting kevent state,
+	 * but don't leak out the raw time calculations.
+	 *
+	 * TODO: potential enhancements - tell the user about:
+	 *      - deadline to which this timer thought it was expiring
+	 *      - return kn_sfflags in the fflags field so the client can know
+	 *        under what flags the timer fired
+	 */
+	*kev = kn->kn_kevent;
+	kev->ext[0] = 0;
+	/* kev->ext[1] = 0;  JMM - shouldn't we hide this too? */
+
+	if (kn->kn_sdata == 0) {
+		kev->data = 1;
+	} else {
 		/*
 		 * This is a 'repeating' timer, so we have to emit
 		 * how many intervals expired between the arm
@@ -1686,9 +1580,6 @@ filt_timerprocess(
 		 * A very strange style of interface, because
 		 * this could easily be done in the client...
 		 */
-
-		/* The timer better have had expired... */
-		assert((kn->kn_hookid & TIMER_RUNNING) == 0);
 
 		uint64_t now;
 
@@ -1713,18 +1604,11 @@ filt_timerprocess(
 		 * and be in repeating mode, so therefore it must have been
 		 * more than 'interval' time since the attach or last
 		 * successful touch.
-		 *
-		 * An unsuccessful touch would:
-		 * disarm the timer
-		 * clear kn_data
-		 * clear kn_sdata
-		 * set EV_ERROR
-		 * all of which will prevent this code from running.
 		 */
 		assert(num_fired > 0);
 
 		/* report how many intervals have elapsed to the user */
-		kn->kn_data = (int64_t) num_fired;
+		kev->data = (int64_t)num_fired;
 
 		/* We only need to re-arm the timer if it's not about to be destroyed */
 		if ((kn->kn_flags & EV_ONESHOT) == 0) {
@@ -1735,62 +1619,33 @@ filt_timerprocess(
 
 			kn->kn_ext[0] = new_deadline;
 
+			/*
+			 * This can't shortcut setting up the thread call, because
+			 * knote_process deactivates EV_CLEAR knotes unconditionnally.
+			 */
 			filt_timerarm(kn);
 		}
 	}
 
-	/*
-	 * Copy out the interesting kevent state,
-	 * but don't leak out the raw time calculations.
-	 *
-	 * TODO: potential enhancements - tell the user about:
-	 *      - deadline to which this timer thought it was expiring
-	 *      - return kn_sfflags in the fflags field so the client can know
-	 *        under what flags the timer fired
-	 */
-	*kev = kn->kn_kevent;
-	kev->ext[0] = 0;
-	/* kev->ext[1] = 0;  JMM - shouldn't we hide this too? */
-
-	/* we have delivered the event, reset the timer pop count */
-	kn->kn_data = 0;
-
-	filt_timerunlock();
-	return 1;
+	return FILTER_ACTIVE;
 }
 
 SECURITY_READ_ONLY_EARLY(static struct filterops) timer_filtops = {
+	.f_extended_codes = true,
 	.f_attach   = filt_timerattach,
 	.f_detach   = filt_timerdetach,
-	.f_event    = filt_timerevent,
+	.f_event    = filt_badevent,
 	.f_touch    = filt_timertouch,
 	.f_process  = filt_timerprocess,
 };
 
-
-#pragma mark EVFILT_USER
-
-
-static void
-filt_userlock(void)
-{
-	lck_spin_lock(&_filt_userlock);
-}
-
-static void
-filt_userunlock(void)
-{
-	lck_spin_unlock(&_filt_userlock);
-}
+#pragma mark user_filtops
 
 static int
 filt_userattach(struct knote *kn, __unused struct kevent_internal_s *kev)
 {
-	/* EVFILT_USER knotes are not attached to anything in the kernel */
-	/* Cant discover this knote until after attach - so no lock needed */
-	kn->kn_hook = NULL;
 	if (kn->kn_sfflags & NOTE_TRIGGER) {
-		kn->kn_hookid = 1;
+		kn->kn_hookid = FILTER_ACTIVE;
 	} else {
 		kn->kn_hookid = 0;
 	}
@@ -1804,24 +1659,10 @@ filt_userdetach(__unused struct knote *kn)
 }
 
 static int
-filt_user(
-	__unused struct knote *kn,
-	__unused long hint)
-{
-	panic("filt_user");
-	return 0;
-}
-
-static int
-filt_usertouch(
-	struct knote *kn,
-	struct kevent_internal_s *kev)
+filt_usertouch(struct knote *kn, struct kevent_internal_s *kev)
 {
 	uint32_t ffctrl;
 	int fflags;
-	int active;
-
-	filt_userlock();
 
 	ffctrl = kev->fflags & NOTE_FFCTRLMASK;
 	fflags = kev->fflags & NOTE_FFLAGSMASK;
@@ -1840,17 +1681,10 @@ filt_usertouch(
 	}
 	kn->kn_sdata = kev->data;
 
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
-
 	if (kev->fflags & NOTE_TRIGGER) {
-		kn->kn_hookid = 1;
+		kn->kn_hookid = FILTER_ACTIVE;
 	}
-	active = kn->kn_hookid;
-
-	filt_userunlock();
-
-	return (active);
+	return (int)kn->kn_hookid;
 }
 
 static int
@@ -1859,34 +1693,32 @@ filt_userprocess(
 	__unused struct filt_process_s *data,
 	struct kevent_internal_s *kev)
 {
-	filt_userlock();
+	int result = (int)kn->kn_hookid;
 
-	if (kn->kn_hookid == 0) {
-		filt_userunlock();
-		return 0;
+	if (result) {
+		*kev = kn->kn_kevent;
+		kev->fflags = kn->kn_sfflags;
+		kev->data = kn->kn_sdata;
+		if (kn->kn_flags & EV_CLEAR) {
+			kn->kn_hookid = 0;
+			kn->kn_data = 0;
+			kn->kn_fflags = 0;
+		}
 	}
 
-	*kev = kn->kn_kevent;
-	kev->fflags = (volatile UInt32)kn->kn_sfflags;
-	kev->data = kn->kn_sdata;
-	if (kn->kn_flags & EV_CLEAR) {
-		kn->kn_hookid = 0;
-		kn->kn_data = 0;
-		kn->kn_fflags = 0;
-	}
-	filt_userunlock();
-
-	return 1;
+	return result;
 }
 
-#pragma mark EVFILT_WORKLOOP
+SECURITY_READ_ONLY_EARLY(static struct filterops) user_filtops = {
+	.f_extended_codes = true,
+	.f_attach  = filt_userattach,
+	.f_detach  = filt_userdetach,
+	.f_event   = filt_badevent,
+	.f_touch   = filt_usertouch,
+	.f_process = filt_userprocess,
+};
 
-#if DEBUG || DEVELOPMENT
-/*
- * see src/queue_internal.h in libdispatch
- */
-#define DISPATCH_QUEUE_ENQUEUED 0x1ull
-#endif
+#pragma mark workloop_filtops
 
 static inline void
 filt_wllock(struct kqworkloop *kqwl)
@@ -1900,117 +1732,188 @@ filt_wlunlock(struct kqworkloop *kqwl)
 	lck_mtx_unlock(&kqwl->kqwl_statelock);
 }
 
-static inline void
-filt_wlheld(__assert_only struct kqworkloop *kqwl)
+/*
+ * Returns true when the interlock for the turnstile is the workqueue lock
+ *
+ * When this is the case, all turnstiles operations are delegated
+ * to the workqueue subsystem.
+ *
+ * This is required because kqueue_threadreq_bind_prepost only holds the
+ * workqueue lock but needs to move the inheritor from the workloop turnstile
+ * away from the creator thread, so that this now fulfilled request cannot be
+ * picked anymore by other threads.
+ */
+static inline bool
+filt_wlturnstile_interlock_is_workq(struct kqworkloop *kqwl)
 {
-	LCK_MTX_ASSERT(&kqwl->kqwl_statelock, LCK_MTX_ASSERT_OWNED);
+	struct kqrequest *kqr = &kqwl->kqwl_request;
+	return (kqr->kqr_state & KQR_THREQUESTED) &&
+			(kqr->kqr_thread == THREAD_NULL);
 }
 
-#define WL_OWNER_SUSPENDED    ((thread_t)(~0ull))  /* special owner when suspended */
-
-static inline bool
-filt_wlowner_is_valid(thread_t owner)
+static void
+filt_wlupdate_inheritor(struct kqworkloop *kqwl, struct turnstile *ts,
+		turnstile_update_flags_t flags)
 {
-	return owner != THREAD_NULL && owner != WL_OWNER_SUSPENDED;
-}
+	turnstile_inheritor_t inheritor = TURNSTILE_INHERITOR_NULL;
+	struct kqrequest *kqr = &kqwl->kqwl_request;
 
-static inline bool
-filt_wlshould_end_ownership(struct kqworkloop *kqwl,
-		struct kevent_internal_s *kev, int error)
-{
-	thread_t owner = kqwl->kqwl_owner;
-	return (error == 0 || error == ESTALE) &&
-			(kev->fflags & NOTE_WL_END_OWNERSHIP) &&
-			(owner == current_thread() || owner == WL_OWNER_SUSPENDED);
-}
+	/*
+	 * binding to the workq should always happen through
+	 * workq_kern_threadreq_update_inheritor()
+	 */
+	assert(!filt_wlturnstile_interlock_is_workq(kqwl));
 
-static inline bool
-filt_wlshould_update_ownership(struct kevent_internal_s *kev, int error)
-{
-	return error == 0 && (kev->fflags & NOTE_WL_DISCOVER_OWNER) &&
-			kev->ext[EV_EXTIDX_WL_ADDR];
-}
-
-static inline bool
-filt_wlshould_set_async_qos(struct kevent_internal_s *kev, int error,
-		kq_index_t async_qos)
-{
-	if (error != 0) {
-		return false;
+	if ((inheritor = kqwl->kqwl_owner)) {
+		flags |= TURNSTILE_INHERITOR_THREAD;
+	} else if ((inheritor = kqr->kqr_thread)) {
+		flags |= TURNSTILE_INHERITOR_THREAD;
 	}
-	if (async_qos != THREAD_QOS_UNSPECIFIED) {
-		return true;
-	}
-	if ((kev->fflags & NOTE_WL_THREAD_REQUEST) && (kev->flags & EV_DELETE)) {
-		/* see filt_wlprocess() */
-		return true;
-	}
-	return false;
+
+	turnstile_update_inheritor(ts, inheritor, flags);
 }
+
+#define FILT_WLATTACH 0
+#define FILT_WLTOUCH  1
+#define FILT_WLDROP   2
 
 __result_use_check
 static int
-filt_wlupdateowner(struct kqworkloop *kqwl, struct kevent_internal_s *kev,
-		int error, kq_index_t async_qos)
+filt_wlupdate(struct kqworkloop *kqwl, struct knote *kn,
+		struct kevent_internal_s *kev, kq_index_t qos_index, int op)
 {
+	user_addr_t uaddr = CAST_USER_ADDR_T(kev->ext[EV_EXTIDX_WL_ADDR]);
 	struct kqrequest *kqr = &kqwl->kqwl_request;
 	thread_t cur_owner, new_owner, extra_thread_ref = THREAD_NULL;
-	kq_index_t cur_override = THREAD_QOS_UNSPECIFIED;
-	kq_index_t old_owner_override = THREAD_QOS_UNSPECIFIED;
-	boolean_t ipc_override_is_sync = false;
-	boolean_t old_owner_override_is_sync = false;
-	int action = KQWL_UTQ_NONE;
+	kq_index_t cur_owner_override = THREAD_QOS_UNSPECIFIED;
+	int action = KQWL_UTQ_NONE, error = 0;
+	bool needs_wake = false, needs_wllock = false;
+	uint64_t kdata = kev->ext[EV_EXTIDX_WL_VALUE];
+	uint64_t mask = kev->ext[EV_EXTIDX_WL_MASK];
+	uint64_t udata = 0;
 
-	filt_wlheld(kqwl);
+	if (kev->fflags & (NOTE_WL_END_OWNERSHIP | NOTE_WL_DISCOVER_OWNER)) {
+		/*
+		 * If we're maybe going to change the kqwl_owner,
+		 * then we need to hold the filt_wllock().
+		 */
+		needs_wllock = true;
+	} else if (kqr->kqr_thread == current_thread()) {
+		/*
+		 * <rdar://problem/41531764> Servicer updates need to be serialized with
+		 * any ownership change too, as the kqr_thread value influences the
+		 * outcome of handling NOTE_WL_DISCOVER_OWNER.
+		 */
+		needs_wllock = true;
+	}
+
+	if (needs_wllock) {
+		filt_wllock(kqwl);
+		/*
+		 * The kqwl owner is set under both the req and filter lock,
+		 * meaning it's fine to look at it under any.
+		 */
+		new_owner = cur_owner = kqwl->kqwl_owner;
+	} else {
+		new_owner = cur_owner = THREAD_NULL;
+	}
 
 	/*
-	 * The owner is only changed under both the filt_wllock and the
-	 * kqwl_req_lock. Looking at it with either one held is fine.
+	 * Phase 1:
+	 *
+	 * If asked, load the uint64 value at the user provided address and compare
+	 * it against the passed in mask and expected value.
+	 *
+	 * If NOTE_WL_DISCOVER_OWNER is specified, translate the loaded name as
+	 * a thread reference.
+	 *
+	 * If NOTE_WL_END_OWNERSHIP is specified and the currently known owner is
+	 * the current thread, then end ownership.
+	 *
+	 * Lastly decide whether we need to perform a QoS update.
 	 */
-	cur_owner = kqwl->kqwl_owner;
-	if (filt_wlshould_end_ownership(kqwl, kev, error)) {
-		new_owner = THREAD_NULL;
-	} else if (filt_wlshould_update_ownership(kev, error)) {
-		/*
-		 * Decipher the owner port name, and translate accordingly.
-		 * The low 2 bits were borrowed for other flags, so mask them off.
-		 */
-		uint64_t udata = kev->ext[EV_EXTIDX_WL_VALUE];
-		mach_port_name_t new_owner_name = (mach_port_name_t)udata & ~0x3;
-		if (new_owner_name != MACH_PORT_NULL) {
-			new_owner_name = ipc_entry_name_mask(new_owner_name);
+	if (uaddr) {
+		error = copyin_word(uaddr, &udata, sizeof(udata));
+		if (error) {
+			goto out;
 		}
 
-		if (MACH_PORT_VALID(new_owner_name)) {
-			new_owner = port_name_to_thread(new_owner_name);
-			if (new_owner == THREAD_NULL)
-				return EOWNERDEAD;
-			extra_thread_ref = new_owner;
-		} else if (new_owner_name == MACH_PORT_DEAD) {
-			new_owner = WL_OWNER_SUSPENDED;
-		} else {
+		/* Update state as copied in.  */
+		kev->ext[EV_EXTIDX_WL_VALUE] = udata;
+
+		if ((udata & mask) != (kdata & mask)) {
+			error = ESTALE;
+		} else if (kev->fflags & NOTE_WL_DISCOVER_OWNER) {
 			/*
-			 * We never want to learn a new owner that is NULL.
-			 * Ownership should be ended with END_OWNERSHIP.
+			 * Decipher the owner port name, and translate accordingly.
+			 * The low 2 bits were borrowed for other flags, so mask them off.
+			 *
+			 * Then attempt translation to a thread reference or fail.
 			 */
-			new_owner = cur_owner;
+			mach_port_name_t name = (mach_port_name_t)udata & ~0x3;
+			if (name != MACH_PORT_NULL) {
+				name = ipc_entry_name_mask(name);
+				extra_thread_ref = port_name_to_thread(name);
+				if (extra_thread_ref == THREAD_NULL) {
+					error = EOWNERDEAD;
+					goto out;
+				}
+				new_owner = extra_thread_ref;
+			}
 		}
-	} else {
-		new_owner = cur_owner;
 	}
 
-	if (filt_wlshould_set_async_qos(kev, error, async_qos)) {
-		action = KQWL_UTQ_SET_ASYNC_QOS;
+	if ((kev->fflags & NOTE_WL_END_OWNERSHIP) && new_owner == current_thread()) {
+		new_owner = THREAD_NULL;
 	}
-	if (cur_owner == new_owner && action == KQWL_UTQ_NONE) {
+
+	if (error == 0) {
+		if ((kev->fflags & NOTE_WL_THREAD_REQUEST) && (kev->flags & EV_DELETE)) {
+			action = KQWL_UTQ_SET_QOS_INDEX;
+		} else if (qos_index && kqr->kqr_qos_index != qos_index) {
+			action = KQWL_UTQ_SET_QOS_INDEX;
+		}
+
+		if (op == FILT_WLTOUCH) {
+			/*
+			 * Save off any additional fflags/data we just accepted
+			 * But only keep the last round of "update" bits we acted on which helps
+			 * debugging a lot.
+			 */
+			kn->kn_sfflags &= ~NOTE_WL_UPDATES_MASK;
+			kn->kn_sfflags |= kev->fflags;
+			kn->kn_sdata = kev->data;
+			if (kev->fflags & NOTE_WL_SYNC_WAKE) {
+				needs_wake = (kn->kn_hook != THREAD_NULL);
+			}
+		} else if (op == FILT_WLDROP) {
+			if ((kn->kn_sfflags & (NOTE_WL_SYNC_WAIT | NOTE_WL_SYNC_WAKE)) ==
+					NOTE_WL_SYNC_WAIT) {
+				/*
+				 * When deleting a SYNC_WAIT knote that hasn't been woken up
+				 * explicitly, issue a wake up.
+				 */
+				kn->kn_sfflags |= NOTE_WL_SYNC_WAKE;
+				needs_wake = (kn->kn_hook != THREAD_NULL);
+			}
+		}
+	}
+
+	/*
+	 * Phase 2:
+	 *
+	 * Commit ownership and QoS changes if any, possibly wake up waiters
+	 */
+
+	if (cur_owner == new_owner && action == KQWL_UTQ_NONE && !needs_wake) {
 		goto out;
 	}
 
-	kqwl_req_lock(kqwl);
+	kq_req_lock(kqwl);
 
 	/* If already tracked as servicer, don't track as owner */
-	if ((kqr->kqr_state & KQR_BOUND) && new_owner == kqr->kqr_thread) {
-		kqwl->kqwl_owner = new_owner = THREAD_NULL;
+	if (new_owner == kqr->kqr_thread) {
+		new_owner = THREAD_NULL;
 	}
 
 	if (cur_owner != new_owner) {
@@ -2019,30 +1922,24 @@ filt_wlupdateowner(struct kqworkloop *kqwl, struct kevent_internal_s *kev,
 			/* we just transfered this ref to kqwl_owner */
 			extra_thread_ref = THREAD_NULL;
 		}
-		cur_override = kqworkloop_combined_qos(kqwl, &ipc_override_is_sync);
-		old_owner_override = kqr->kqr_dsync_owner_qos;
-		old_owner_override_is_sync = kqr->kqr_owner_override_is_sync;
+		cur_owner_override = kqworkloop_owner_override(kqwl);
 
-		if (filt_wlowner_is_valid(new_owner)) {
+		if (cur_owner) {
+			thread_ends_owning_workloop(cur_owner);
+		}
+
+		if (new_owner) {
 			/* override it before we drop the old */
-			if (cur_override != THREAD_QOS_UNSPECIFIED) {
-				thread_add_ipc_override(new_owner, cur_override);
+			if (cur_owner_override != THREAD_QOS_UNSPECIFIED) {
+				thread_add_ipc_override(new_owner, cur_owner_override);
 			}
-			if (ipc_override_is_sync) {
-				thread_add_sync_ipc_override(new_owner);
-			}
-			/* Update the kqr to indicate that owner has sync ipc override */
-			kqr->kqr_dsync_owner_qos = cur_override;
-			kqr->kqr_owner_override_is_sync = ipc_override_is_sync;
 			thread_starts_owning_workloop(new_owner);
-			if ((kqr->kqr_state & (KQR_THREQUESTED | KQR_BOUND)) == KQR_THREQUESTED) {
+			if ((kqr->kqr_state & KQR_THREQUESTED) && !kqr->kqr_thread) {
 				if (action == KQWL_UTQ_NONE) {
 					action = KQWL_UTQ_REDRIVE_EVENTS;
 				}
 			}
-		} else if (new_owner == THREAD_NULL) {
-			kqr->kqr_dsync_owner_qos = THREAD_QOS_UNSPECIFIED;
-			kqr->kqr_owner_override_is_sync = false;
+		} else {
 			if ((kqr->kqr_state & (KQR_THREQUESTED | KQR_WAKEUP)) == KQR_WAKEUP) {
 				if (action == KQWL_UTQ_NONE) {
 					action = KQWL_UTQ_REDRIVE_EVENTS;
@@ -2051,74 +1948,100 @@ filt_wlupdateowner(struct kqworkloop *kqwl, struct kevent_internal_s *kev,
 		}
 	}
 
+	struct turnstile *ts = kqwl->kqwl_turnstile;
+	bool wl_inheritor_updated = false;
+
 	if (action != KQWL_UTQ_NONE) {
-		kqworkloop_update_threads_qos(kqwl, action, async_qos);
+		kqworkloop_update_threads_qos(kqwl, action, qos_index);
 	}
 
-	kqwl_req_unlock(kqwl);
+	if (cur_owner != new_owner && ts) {
+		if (action == KQWL_UTQ_REDRIVE_EVENTS) {
+			/*
+			 * Note that when action is KQWL_UTQ_REDRIVE_EVENTS,
+			 * the code went through workq_kern_threadreq_initiate()
+			 * and the workqueue has set the inheritor already
+			 */
+			assert(filt_wlturnstile_interlock_is_workq(kqwl));
+		} else if (filt_wlturnstile_interlock_is_workq(kqwl)) {
+			workq_kern_threadreq_lock(kqwl->kqwl_p);
+			workq_kern_threadreq_update_inheritor(kqwl->kqwl_p, kqr, new_owner,
+					ts, TURNSTILE_IMMEDIATE_UPDATE);
+			workq_kern_threadreq_unlock(kqwl->kqwl_p);
+			if (!filt_wlturnstile_interlock_is_workq(kqwl)) {
+				/*
+				 * If the workq is no longer the interlock, then
+				 * workq_kern_threadreq_update_inheritor() has finished a bind
+				 * and we need to fallback to the regular path.
+				 */
+				filt_wlupdate_inheritor(kqwl, ts, TURNSTILE_IMMEDIATE_UPDATE);
+			}
+			wl_inheritor_updated = true;
+		} else {
+			filt_wlupdate_inheritor(kqwl, ts, TURNSTILE_IMMEDIATE_UPDATE);
+			wl_inheritor_updated = true;
+		}
 
-	/* Now that we are unlocked, drop the override and ref on old owner */
-	if (new_owner != cur_owner && filt_wlowner_is_valid(cur_owner)) {
-		if (old_owner_override != THREAD_QOS_UNSPECIFIED) {
-			thread_drop_ipc_override(cur_owner);
+		/*
+		 * We need a turnstile reference because we are dropping the interlock
+		 * and the caller has not called turnstile_prepare.
+		 */
+		if (wl_inheritor_updated) {
+			turnstile_reference(ts);
 		}
-		if (old_owner_override_is_sync) {
-			thread_drop_sync_ipc_override(cur_owner);
-		}
-		thread_ends_owning_workloop(cur_owner);
-		thread_deallocate(cur_owner);
+	}
+
+	if (needs_wake && ts) {
+		waitq_wakeup64_thread(&ts->ts_waitq, CAST_EVENT64_T((event_t)kn),
+				(thread_t)kn->kn_hook, THREAD_AWAKENED);
+	}
+
+	kq_req_unlock(kqwl);
+
+	if (wl_inheritor_updated) {
+		turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_NOT_HELD);
+		turnstile_deallocate(ts);
 	}
 
 out:
+	/*
+	 * Phase 3:
+	 *
+	 * Unlock and cleanup various lingering references and things.
+	 */
+	if (needs_wllock) {
+		filt_wlunlock(kqwl);
+	}
+
+#if CONFIG_WORKLOOP_DEBUG
+	KQWL_HISTORY_WRITE_ENTRY(kqwl, {
+		.updater = current_thread(),
+		.servicer = kqr->kqr_thread, /* Note: racy */
+		.old_owner = cur_owner,
+		.new_owner = new_owner,
+
+		.kev_ident  = kev->ident,
+		.error      = (int16_t)error,
+		.kev_flags  = kev->flags,
+		.kev_fflags = kev->fflags,
+
+		.kev_mask   = mask,
+		.kev_value  = kdata,
+		.in_value   = udata,
+	});
+#endif // CONFIG_WORKLOOP_DEBUG
+
+	if (cur_owner && new_owner != cur_owner) {
+		if (cur_owner_override != THREAD_QOS_UNSPECIFIED) {
+			thread_drop_ipc_override(cur_owner);
+		}
+		thread_deallocate(cur_owner);
+	}
+
 	if (extra_thread_ref) {
 		thread_deallocate(extra_thread_ref);
 	}
 	return error;
-}
-
-static int
-filt_wldebounce(
-	struct kqworkloop *kqwl,
-	struct kevent_internal_s *kev,
-	int default_result)
-{
-	user_addr_t addr = CAST_USER_ADDR_T(kev->ext[EV_EXTIDX_WL_ADDR]);
-	uint64_t udata;
-	int error;
-
-	/* we must have the workloop state mutex held */
-	filt_wlheld(kqwl);
-
-	/* Do we have a debounce address to work with? */
-	if (addr) {
-		uint64_t kdata = kev->ext[EV_EXTIDX_WL_VALUE];
-		uint64_t mask = kev->ext[EV_EXTIDX_WL_MASK];
-
-		error = copyin_word(addr, &udata, sizeof(udata));
-		if (error) {
-			return error;
-		}
-
-		/* update state as copied in */
-		kev->ext[EV_EXTIDX_WL_VALUE] = udata;
-
-		/* If the masked bits don't match, reject it as stale */
-		if ((udata & mask) != (kdata & mask)) {
-			return ESTALE;
-		}
-
-#if DEBUG || DEVELOPMENT
-		if ((kev->fflags & NOTE_WL_THREAD_REQUEST) && !(kev->flags & EV_DELETE)) {
-			if ((udata & DISPATCH_QUEUE_ENQUEUED) == 0 &&
-					(udata >> 48) != 0 && (udata >> 48) != 0xffff) {
-				panic("kevent: workloop %#016llx is not enqueued "
-						"(kev:%p dq_state:%#016llx)", kev->udata, kev, udata);
-			}
-		}
-#endif
-	}
-
-	return default_result;
 }
 
 /*
@@ -2129,57 +2052,12 @@ filt_wldebounce(
  * - data is set to the error if any
  */
 static inline void
-filt_wlremember_last_update(
-	__assert_only struct kqworkloop *kqwl,
-	struct knote *kn,
-	struct kevent_internal_s *kev,
-	int error)
+filt_wlremember_last_update(struct knote *kn, struct kevent_internal_s *kev,
+		int error)
 {
-	filt_wlheld(kqwl);
 	kn->kn_fflags = kev->fflags;
 	kn->kn_data = error;
 	memcpy(kn->kn_ext, kev->ext, sizeof(kev->ext));
-}
-
-/*
- * Return which operations on EVFILT_WORKLOOP need to be protected against
- * knoteusewait() causing priority inversions.
- */
-static bool
-filt_wlneeds_boost(struct kevent_internal_s *kev)
-{
-	if (kev == NULL) {
-		/*
-		 * this is an f_process() usecount, and it can cause a drop to wait
-		 */
-		return true;
-	}
-	if (kev->fflags & NOTE_WL_THREAD_REQUEST) {
-		/*
-		 * All operations on thread requests may starve drops or re-attach of
-		 * the same knote, all of them need boosts. None of what we do under
-		 * thread-request usecount holds blocks anyway.
-		 */
-		return true;
-	}
-	if (kev->fflags & NOTE_WL_SYNC_WAIT) {
-		/*
-		 * this may call filt_wlwait() and we don't want to hold any boost when
-		 * woken up, this would cause background threads contending on
-		 * dispatch_sync() to wake up at 64 and be preempted immediately when
-		 * this drops.
-		 */
-		return false;
-	}
-
-	/*
-	 * SYNC_WAIT knotes when deleted don't need to be rushed, there's no
-	 * detach/reattach race with these ever. In addition to this, when the
-	 * SYNC_WAIT knote is dropped, the caller is no longer receiving the
-	 * workloop overrides if any, and we'd rather schedule other threads than
-	 * him, he's not possibly stalling anything anymore.
-	 */
-	return (kev->flags & EV_DELETE) == 0;
 }
 
 static int
@@ -2199,7 +2077,7 @@ filt_wlattach(struct knote *kn, struct kevent_internal_s *kev)
 	if (kev->ident == 0 && kev->udata == 0 && kev->fflags == 0) {
 		struct kqrequest *kqr = &kqwl->kqwl_request;
 
-		kqwl_req_lock(kqwl);
+		kq_req_lock(kqwl);
 		kev->fflags = 0;
 		if (kqr->kqr_dsync_waiters) {
 			kev->fflags |= NOTE_WL_SYNC_WAIT;
@@ -2207,21 +2085,16 @@ filt_wlattach(struct knote *kn, struct kevent_internal_s *kev)
 		if (kqr->kqr_qos_index) {
 			kev->fflags |= NOTE_WL_THREAD_REQUEST;
 		}
-		if (kqwl->kqwl_owner == WL_OWNER_SUSPENDED) {
-			kev->ext[0] = ~0ull;
-		} else {
-			kev->ext[0] = thread_tid(kqwl->kqwl_owner);
-		}
+		kev->ext[0] = thread_tid(kqwl->kqwl_owner);
 		kev->ext[1] = thread_tid(kqwl->kqwl_request.kqr_thread);
 		kev->ext[2] = thread_owned_workloops_count(current_thread());
 		kev->ext[3] = kn->kn_kevent.ext[3];
-		kqwl_req_unlock(kqwl);
+		kq_req_unlock(kqwl);
 		error = EBUSY;
 		goto out;
 	}
 #endif
 
-	/* Some simple validation */
 	int command = (kn->kn_sfflags & NOTE_WL_COMMANDS_MASK);
 	switch (command) {
 	case NOTE_WL_THREAD_REQUEST:
@@ -2229,19 +2102,22 @@ filt_wlattach(struct knote *kn, struct kevent_internal_s *kev)
 			error = EINVAL;
 			goto out;
 		}
-		qos_index = qos_index_from_qos(kn, kn->kn_qos, FALSE);
-		if (qos_index < THREAD_QOS_MAINTENANCE ||
-				qos_index > THREAD_QOS_USER_INTERACTIVE) {
+		qos_index = _pthread_priority_thread_qos(kn->kn_qos);
+		if (qos_index == THREAD_QOS_UNSPECIFIED) {
 			error = ERANGE;
+			goto out;
+		}
+		if (kqwl->kqwl_request.kqr_qos_index) {
+			/*
+			 * There already is a thread request, and well, you're only allowed
+			 * one per workloop, so fail the attach.
+			 */
+			error = EALREADY;
 			goto out;
 		}
 		break;
 	case NOTE_WL_SYNC_WAIT:
 	case NOTE_WL_SYNC_WAKE:
-		if (kq->kq_state & KQ_NO_WQ_THREAD) {
-			error = ENOTSUP;
-			goto out;
-		}
 		if (kn->kn_id == kqwl->kqwl_dynamicid) {
 			error = EINVAL;
 			goto out;
@@ -2260,139 +2136,131 @@ filt_wlattach(struct knote *kn, struct kevent_internal_s *kev)
 		goto out;
 	}
 
-	filt_wllock(kqwl);
-	kn->kn_hook = NULL;
+	error = filt_wlupdate(kqwl, kn, kev, qos_index, FILT_WLATTACH);
 
-	if (command == NOTE_WL_THREAD_REQUEST && kqwl->kqwl_request.kqr_qos_index) {
-		/*
-		 * There already is a thread request, and well, you're only allowed
-		 * one per workloop, so fail the attach.
-		 *
-		 * Note: kqr_qos_index is always set with the wllock held, so we
-		 * don't need to take the kqr lock.
-		 */
-		error = EALREADY;
-	} else {
-		/* Make sure user and kernel are in agreement on important state */
-		error = filt_wldebounce(kqwl, kev, 0);
-	}
-
-	error = filt_wlupdateowner(kqwl, kev, error, qos_index);
-	filt_wlunlock(kqwl);
 out:
 	if (error) {
-		kn->kn_flags |= EV_ERROR;
 		/* If userland wants ESTALE to be hidden, fail the attach anyway */
 		if (error == ESTALE && (kn->kn_sfflags & NOTE_WL_IGNORE_ESTALE)) {
 			error = 0;
 		}
-		kn->kn_data = error;
+		knote_set_error(kn, error);
 		return 0;
 	}
-
+	if (command == NOTE_WL_SYNC_WAIT) {
+		return kevent_register_wait_prepare(kn, kev);
+	}
 	/* Just attaching the thread request successfully will fire it */
-	return command == NOTE_WL_THREAD_REQUEST;
+	if (command == NOTE_WL_THREAD_REQUEST) {
+		/*
+		 * Thread Request knotes need an explicit touch to be active again,
+		 * so delivering an event needs to also consume it.
+		 */
+		kn->kn_flags |= EV_CLEAR;
+		return FILTER_ACTIVE;
+	}
+	return 0;
 }
 
-__attribute__((noinline,not_tail_called))
-static int
-filt_wlwait(struct kqworkloop           *kqwl,
-            struct knote                *kn,
-            struct kevent_internal_s    *kev)
+static void __dead2
+filt_wlwait_continue(void *parameter, wait_result_t wr)
 {
-	filt_wlheld(kqwl);
-	assert((kn->kn_sfflags & NOTE_WL_SYNC_WAKE) == 0);
+	struct _kevent_register *cont_args = parameter;
+	struct kqworkloop *kqwl = (struct kqworkloop *)cont_args->kq;
+	struct kqrequest *kqr = &kqwl->kqwl_request;
 
-	/*
-	 * Hint to the wakeup side that this thread is waiting.  Also used by
-	 * stackshot for waitinfo.
-	 */
-	kn->kn_hook = current_thread();
+	kq_req_lock(kqwl);
+	kqr->kqr_dsync_waiters--;
+	if (filt_wlturnstile_interlock_is_workq(kqwl)) {
+		workq_kern_threadreq_lock(kqwl->kqwl_p);
+		turnstile_complete((uintptr_t)kqwl, &kqwl->kqwl_turnstile, NULL);
+		workq_kern_threadreq_unlock(kqwl->kqwl_p);
+	} else {
+		turnstile_complete((uintptr_t)kqwl, &kqwl->kqwl_turnstile, NULL);
+	}
+	kq_req_unlock(kqwl);
 
-	thread_set_pending_block_hint(current_thread(), kThreadWaitWorkloopSyncWait);
+	turnstile_cleanup();
 
-	wait_result_t wr = assert_wait(kn, THREAD_ABORTSAFE);
-
-	if (wr == THREAD_WAITING) {
-		kq_index_t qos_index = qos_index_from_qos(kn, kev->qos, TRUE);
-		struct kqrequest *kqr = &kqwl->kqwl_request;
-
-		thread_t thread_to_handoff = THREAD_NULL; /* holds +1 thread ref */
-
-		thread_t kqwl_owner = kqwl->kqwl_owner;
-		if (filt_wlowner_is_valid(kqwl_owner)) {
-			thread_reference(kqwl_owner);
-			thread_to_handoff = kqwl_owner;
-		}
-
-		kqwl_req_lock(kqwl);
-
-		if (qos_index) {
-			assert(kqr->kqr_dsync_waiters < UINT16_MAX);
-			kqr->kqr_dsync_waiters++;
-			if (qos_index > kqr->kqr_dsync_waiters_qos) {
-				kqworkloop_update_threads_qos(kqwl,
-						KQWL_UTQ_SET_SYNC_WAITERS_QOS, qos_index);
-			}
-		}
-
-		if ((kqr->kqr_state & KQR_BOUND) && thread_to_handoff == THREAD_NULL) {
-			assert(kqr->kqr_thread != THREAD_NULL);
-			thread_t servicer = kqr->kqr_thread;
-
-			thread_reference(servicer);
-			thread_to_handoff = servicer;
-		}
-
-		kqwl_req_unlock(kqwl);
-
-		filt_wlunlock(kqwl);
-
-		/* TODO: use continuation based blocking <rdar://problem/31299584> */
-
-		/* consume a refcount on thread_to_handoff, then thread_block() */
-		wr = thread_handoff(thread_to_handoff);
-		thread_to_handoff = THREAD_NULL;
-
-		filt_wllock(kqwl);
-
-		/* clear waiting state (only one waiting thread - so no race) */
-		assert(kn->kn_hook == current_thread());
-
-		if (qos_index) {
-			kqwl_req_lock(kqwl);
-			assert(kqr->kqr_dsync_waiters > 0);
-			if (--kqr->kqr_dsync_waiters == 0) {
-				assert(kqr->kqr_dsync_waiters_qos);
-				kqworkloop_update_threads_qos(kqwl,
-						KQWL_UTQ_SET_SYNC_WAITERS_QOS, 0);
-			}
-			kqwl_req_unlock(kqwl);
-		}
+	if (wr == THREAD_INTERRUPTED) {
+		cont_args->kev.flags |= EV_ERROR;
+		cont_args->kev.data = EINTR;
+	} else if (wr != THREAD_AWAKENED) {
+		panic("Unexpected wait result: %d", wr);
 	}
 
-	kn->kn_hook = NULL;
+	kevent_register_wait_return(cont_args);
+}
 
-	switch (wr) {
-	case THREAD_AWAKENED:
-		return 0;
-	case THREAD_INTERRUPTED:
-		return EINTR;
-	case THREAD_RESTART:
-		return ECANCELED;
-	default:
-		panic("filt_wlattach: unexpected wait result %d", wr);
-		return EINVAL;
+/*
+ * Called with the workloop mutex held, most of the time never returns as it
+ * calls filt_wlwait_continue through a continuation.
+ */
+static void __dead2
+filt_wlpost_register_wait(struct uthread *uth, struct knote_lock_ctx *knlc,
+		struct _kevent_register *cont_args)
+{
+	struct kqworkloop *kqwl = (struct kqworkloop *)cont_args->kq;
+	struct kqrequest *kqr = &kqwl->kqwl_request;
+	struct turnstile *ts;
+	bool workq_locked = false;
+
+	kq_req_lock(kqwl);
+
+	kqr->kqr_dsync_waiters++;
+
+	if (filt_wlturnstile_interlock_is_workq(kqwl)) {
+		workq_kern_threadreq_lock(kqwl->kqwl_p);
+		workq_locked = true;
 	}
+
+	ts = turnstile_prepare((uintptr_t)kqwl, &kqwl->kqwl_turnstile,
+			TURNSTILE_NULL, TURNSTILE_WORKLOOPS);
+
+	if (workq_locked) {
+		workq_kern_threadreq_update_inheritor(kqwl->kqwl_p,
+				&kqwl->kqwl_request, kqwl->kqwl_owner, ts,
+				TURNSTILE_DELAYED_UPDATE);
+		if (!filt_wlturnstile_interlock_is_workq(kqwl)) {
+			/*
+			 * if the interlock is no longer the workqueue lock,
+			 * then we don't need to hold it anymore.
+			 */
+			workq_kern_threadreq_unlock(kqwl->kqwl_p);
+			workq_locked = false;
+		}
+	}
+	if (!workq_locked) {
+		/*
+		 * If the interlock is the workloop's, then it's our responsibility to
+		 * call update_inheritor, so just do it.
+		 */
+		filt_wlupdate_inheritor(kqwl, ts, TURNSTILE_DELAYED_UPDATE);
+	}
+
+	thread_set_pending_block_hint(uth->uu_thread, kThreadWaitWorkloopSyncWait);
+	waitq_assert_wait64(&ts->ts_waitq, CAST_EVENT64_T(cont_args->knote),
+			THREAD_ABORTSAFE, TIMEOUT_WAIT_FOREVER);
+
+	if (workq_locked) {
+		workq_kern_threadreq_unlock(kqwl->kqwl_p);
+	}
+
+	thread_t thread = kqwl->kqwl_owner ?: kqr->kqr_thread;
+	if (thread) {
+		thread_reference(thread);
+	}
+	kq_req_unlock(kqwl);
+
+	kevent_register_wait_block(ts, thread, knlc, filt_wlwait_continue, cont_args);
 }
 
 /* called in stackshot context to report the thread responsible for blocking this thread */
 void
 kdp_workloop_sync_wait_find_owner(__assert_only thread_t thread,
-                                  event64_t event,
-                                  thread_waitinfo_t *waitinfo)
+		event64_t event, thread_waitinfo_t *waitinfo)
 {
-	struct knote *kn = (struct knote*) event;
+	struct knote *kn = (struct knote *)event;
 	assert(kdp_is_in_zone(kn, "knote zone"));
 
 	assert(kn->kn_hook == thread);
@@ -2407,9 +2275,7 @@ kdp_workloop_sync_wait_find_owner(__assert_only thread_t thread,
 	thread_t kqwl_owner = kqwl->kqwl_owner;
 	thread_t servicer = kqr->kqr_thread;
 
-	if (kqwl_owner == WL_OWNER_SUSPENDED) {
-		waitinfo->owner = STACKSHOT_WAITOWNER_SUSPENDED;
-	} else if (kqwl_owner != THREAD_NULL) {
+	if (kqwl_owner != THREAD_NULL) {
 		assert(kdp_is_in_zone(kqwl_owner, "threads"));
 
 		waitinfo->owner = thread_tid(kqwl->kqwl_owner);
@@ -2424,205 +2290,82 @@ kdp_workloop_sync_wait_find_owner(__assert_only thread_t thread,
 	}
 
 	waitinfo->context = kqwl->kqwl_dynamicid;
-
-	return;
-}
-
-/*
- * Takes kqueue locked, returns locked, may drop in the middle and/or block for a while
- */
-static int
-filt_wlpost_attach(struct knote *kn, struct  kevent_internal_s *kev)
-{
-	struct kqueue *kq = knote_get_kq(kn);
-	struct kqworkloop *kqwl = (struct kqworkloop *)kq;
-	int error = 0;
-
-	if (kev->fflags & NOTE_WL_SYNC_WAIT) {
-		if (kqlock2knoteuse(kq, kn, KNUSE_NONE)) {
-			filt_wllock(kqwl);
-			/* if the wake has already preposted, don't wait */
-			if ((kn->kn_sfflags & NOTE_WL_SYNC_WAKE) == 0)
-				error = filt_wlwait(kqwl, kn, kev);
-			filt_wlunlock(kqwl);
-			knoteuse2kqlock(kq, kn, KNUSE_NONE);
-		}
-	}
-	return error;
 }
 
 static void
 filt_wldetach(__assert_only struct knote *kn)
 {
 	assert(knote_get_kq(kn)->kq_state & KQ_WORKLOOP);
-
-	/*
-	 * Thread requests have nothing to detach.
-	 * Sync waiters should have been aborted out
-	 * and drop their refs before we could drop/
-	 * detach their knotes.
-	 */
-	assert(kn->kn_hook == NULL);
+	if (kn->kn_hook) {
+		kevent_register_wait_cleanup(kn);
+	}
 }
 
 static int
-filt_wlevent(
-	__unused struct knote *kn,
-	__unused long hint)
-{
-	panic("filt_wlevent");
-	return 0;
-}
-
-static int
-filt_wlvalidate_kev_flags(struct knote *kn, struct kevent_internal_s *kev)
+filt_wlvalidate_kev_flags(struct knote *kn, struct kevent_internal_s *kev,
+		thread_qos_t *qos_index)
 {
 	int new_commands = kev->fflags & NOTE_WL_COMMANDS_MASK;
 	int sav_commands = kn->kn_sfflags & NOTE_WL_COMMANDS_MASK;
-	int error = 0;
+
+	if ((kev->fflags & NOTE_WL_DISCOVER_OWNER) && (kev->flags & EV_DELETE)) {
+		return EINVAL;
+	}
+	if (kev->fflags & NOTE_WL_UPDATE_QOS) {
+		if (kev->flags & EV_DELETE) {
+			return EINVAL;
+		}
+		if (sav_commands != NOTE_WL_THREAD_REQUEST) {
+			return EINVAL;
+		}
+		if (!(*qos_index = _pthread_priority_thread_qos(kev->qos))) {
+			return ERANGE;
+		}
+	}
 
 	switch (new_commands) {
 	case NOTE_WL_THREAD_REQUEST:
 		/* thread requests can only update themselves */
-		if (sav_commands != new_commands)
-			error = EINVAL;
+		if (sav_commands != NOTE_WL_THREAD_REQUEST)
+			return EINVAL;
 		break;
 
 	case NOTE_WL_SYNC_WAIT:
 		if (kev->fflags & NOTE_WL_END_OWNERSHIP)
-			error = EINVAL;
-		/* FALLTHROUGH */
+			return EINVAL;
+		goto sync_checks;
+
 	case NOTE_WL_SYNC_WAKE:
-		/* waits and wakes can update themselves or their counterparts */
+	sync_checks:
 		if (!(sav_commands & (NOTE_WL_SYNC_WAIT | NOTE_WL_SYNC_WAKE)))
-			error = EINVAL;
-		if (kev->fflags & NOTE_WL_UPDATE_QOS)
-			error = EINVAL;
+			return EINVAL;
 		if ((kev->flags & (EV_ENABLE | EV_DELETE)) == EV_ENABLE)
-			error = EINVAL;
-		if (kev->flags & EV_DELETE) {
-			/*
-			 * Really this is not supported: there is absolutely no reason
-			 * whatsoever to want to fail the drop of a NOTE_WL_SYNC_WAIT knote.
-			 */
-			if (kev->ext[EV_EXTIDX_WL_ADDR] && kev->ext[EV_EXTIDX_WL_MASK]) {
-				error = EINVAL;
-			}
-		}
+			return EINVAL;
 		break;
 
 	default:
-		error = EINVAL;
+		return EINVAL;
 	}
-	if ((kev->flags & EV_DELETE) && (kev->fflags & NOTE_WL_DISCOVER_OWNER)) {
-		error = EINVAL;
-	}
-	return error;
+	return 0;
 }
 
 static int
-filt_wltouch(
-	struct knote *kn,
-	struct kevent_internal_s *kev)
+filt_wltouch(struct knote *kn, struct kevent_internal_s *kev)
 {
-	struct kqueue *kq = knote_get_kq(kn);
-	int error = 0;
-	struct kqworkloop *kqwl;
+	struct kqworkloop *kqwl = (struct kqworkloop *)knote_get_kq(kn);
+	thread_qos_t qos_index = THREAD_QOS_UNSPECIFIED;
 
-	assert(kq->kq_state & KQ_WORKLOOP);
-	kqwl = (struct kqworkloop *)kq;
-
-	error = filt_wlvalidate_kev_flags(kn, kev);
+	int error = filt_wlvalidate_kev_flags(kn, kev, &qos_index);
 	if (error) {
 		goto out;
 	}
 
-	filt_wllock(kqwl);
-
-	/* Make sure user and kernel are in agreement on important state */
-	error = filt_wldebounce(kqwl, kev, 0);
+	error = filt_wlupdate(kqwl, kn, kev, qos_index, FILT_WLTOUCH);
+	filt_wlremember_last_update(kn, kev, error);
 	if (error) {
-		error = filt_wlupdateowner(kqwl, kev, error, 0);
-		goto out_unlock;
+		goto out;
 	}
 
-	int new_command = kev->fflags & NOTE_WL_COMMANDS_MASK;
-	switch (new_command) {
-	case NOTE_WL_THREAD_REQUEST:
-		assert(kqwl->kqwl_request.kqr_qos_index != THREAD_QOS_UNSPECIFIED);
-		break;
-
-	case NOTE_WL_SYNC_WAIT:
-		/*
-		 * we need to allow waiting several times on the same knote because
-		 * of EINTR. If it's already woken though, it won't block.
-		 */
-		break;
-
-	case NOTE_WL_SYNC_WAKE:
-		if (kn->kn_sfflags & NOTE_WL_SYNC_WAKE) {
-			/* disallow waking the same knote twice */
-			error = EALREADY;
-			goto out_unlock;
-		}
-		if (kn->kn_hook) {
-			thread_wakeup_thread((event_t)kn, (thread_t)kn->kn_hook);
-		}
-		break;
-
-	default:
-		error = EINVAL;
-		goto out_unlock;
-	}
-
-	/*
-	 * Save off any additional fflags/data we just accepted
-	 * But only keep the last round of "update" bits we acted on which helps
-	 * debugging a lot.
-	 */
-	kn->kn_sfflags &= ~NOTE_WL_UPDATES_MASK;
-	kn->kn_sfflags |= kev->fflags;
-	kn->kn_sdata = kev->data;
-
-	kq_index_t qos_index = THREAD_QOS_UNSPECIFIED;
-
-	if (kev->fflags & NOTE_WL_UPDATE_QOS) {
-		qos_t qos = pthread_priority_canonicalize(kev->qos, FALSE);
-
-		if (kn->kn_qos != qos) {
-			qos_index = qos_index_from_qos(kn, qos, FALSE);
-			if (qos_index == THREAD_QOS_UNSPECIFIED) {
-				error = ERANGE;
-				goto out_unlock;
-			}
-			kqlock(kq);
-			if (kn->kn_status & KN_QUEUED) {
-				knote_dequeue(kn);
-				knote_set_qos_index(kn, qos_index);
-				knote_enqueue(kn);
-				knote_wakeup(kn);
-			} else {
-				knote_set_qos_index(kn, qos_index);
-			}
-			kn->kn_qos = qos;
-			kqunlock(kq);
-		}
-	}
-
-	error = filt_wlupdateowner(kqwl, kev, 0, qos_index);
-	if (error) {
-		goto out_unlock;
-	}
-
-	if (new_command == NOTE_WL_SYNC_WAIT) {
-		/* if the wake has already preposted, don't wait */
-		if ((kn->kn_sfflags & NOTE_WL_SYNC_WAKE) == 0)
-			error = filt_wlwait(kqwl, kn, kev);
-	}
-
-out_unlock:
-	filt_wlremember_last_update(kqwl, kn, kev, error);
-	filt_wlunlock(kqwl);
 out:
 	if (error) {
 		if (error == ESTALE && (kev->fflags & NOTE_WL_IGNORE_ESTALE)) {
@@ -2633,144 +2376,46 @@ out:
 		kev->data = error;
 		return 0;
 	}
+	int command = kev->fflags & NOTE_WL_COMMANDS_MASK;
+	if (command == NOTE_WL_SYNC_WAIT && !(kn->kn_sfflags & NOTE_WL_SYNC_WAKE)) {
+		return kevent_register_wait_prepare(kn, kev);
+	}
 	/* Just touching the thread request successfully will fire it */
-	return new_command == NOTE_WL_THREAD_REQUEST;
+	if (command == NOTE_WL_THREAD_REQUEST) {
+		if (kev->fflags & NOTE_WL_UPDATE_QOS) {
+			return FILTER_ACTIVE | FILTER_UPDATE_REQ_QOS;
+		}
+		return FILTER_ACTIVE;
+	}
+	return 0;
 }
 
-static int
-filt_wldrop_and_unlock(
-	struct knote *kn,
-	struct kevent_internal_s *kev)
+static bool
+filt_wlallow_drop(struct knote *kn, struct kevent_internal_s *kev)
 {
-	struct kqueue *kq = knote_get_kq(kn);
-	struct kqworkloop *kqwl = (struct kqworkloop *)kq;
-	int error = 0, knoteuse_flags = KNUSE_NONE;
+	struct kqworkloop *kqwl = (struct kqworkloop *)knote_get_kq(kn);
 
-	kqlock_held(kq);
-
-	assert(kev->flags & EV_DELETE);
-	assert(kq->kq_state & KQ_WORKLOOP);
-
-	error = filt_wlvalidate_kev_flags(kn, kev);
+	int error = filt_wlvalidate_kev_flags(kn, kev, NULL);
 	if (error) {
 		goto out;
 	}
 
-	if (kn->kn_sfflags & NOTE_WL_THREAD_REQUEST) {
-		knoteuse_flags |= KNUSE_BOOST;
-	}
-
-	/* take a usecount to allow taking the filt_wllock */
-	if (!kqlock2knoteuse(kq, kn, knoteuse_flags)) {
-		/* knote is being dropped already */
-		error = EINPROGRESS;
+	error = filt_wlupdate(kqwl, kn, kev, 0, FILT_WLDROP);
+	filt_wlremember_last_update(kn, kev, error);
+	if (error) {
 		goto out;
 	}
-
-	filt_wllock(kqwl);
-
-	/*
-	 * Make sure user and kernel are in agreement on important state
-	 *
-	 * Userland will modify bits to cause this to fail for the touch / drop
-	 * race case (when a drop for a thread request quiescing comes in late after
-	 * the workloop has been woken up again).
-	 */
-	error = filt_wldebounce(kqwl, kev, 0);
-
-	if (!knoteuse2kqlock(kq, kn, knoteuse_flags)) {
-		/* knote is no longer alive */
-		error = EINPROGRESS;
-		goto out_unlock;
-	}
-
-	if (!error && (kn->kn_sfflags & NOTE_WL_THREAD_REQUEST) && kn->kn_inuse) {
-		/*
-		 * There is a concurrent drop or touch happening, we can't resolve this,
-		 * userland has to redrive.
-		 *
-		 * The race we're worried about here is the following:
-		 *
-		 *   f_touch               |  f_drop_and_unlock
-		 * ------------------------+--------------------------------------------
-		 *                         | kqlock()
-		 *                         | kqlock2knoteuse()
-		 *                         | filt_wllock()
-		 *                         | debounces successfully
-		 *  kqlock()               |
-		 *  kqlock2knoteuse        |
-		 *  filt_wllock() <BLOCKS> |
-		 *                         | knoteuse2kqlock()
-		 *                         | filt_wlunlock()
-		 *                         | kqlock2knotedrop() <BLOCKS, WAKES f_touch>
-		 *  debounces successfully |
-		 *  filt_wlunlock()        |
-		 *  caller WAKES f_drop    |
-		 *                         | performs drop, but f_touch should have won
-		 *
-		 * So if the usecount is not 0 here, we need to wait for it to drop and
-		 * redrive the whole logic (including looking up the knote again).
-		 */
-		filt_wlunlock(kqwl);
-		knoteusewait(kq, kn);
-		return ERESTART;
-	}
-
-	/*
-	 * If error is 0 this will set kqr_qos_index to THREAD_QOS_UNSPECIFIED
-	 *
-	 * If error is 0 or ESTALE this may drop ownership and cause a thread
-	 * request redrive, however the kqlock is held which prevents f_process() to
-	 * run until we did the drop for real.
-	 */
-	error = filt_wlupdateowner(kqwl, kev, error, 0);
-	if (error) {
-		goto out_unlock;
-	}
-
-	if ((kn->kn_sfflags & (NOTE_WL_SYNC_WAIT | NOTE_WL_SYNC_WAKE)) ==
-			NOTE_WL_SYNC_WAIT) {
-		/*
-		 * When deleting a SYNC_WAIT knote that hasn't been woken up
-		 * explicitly, issue a wake up.
-		 */
-		kn->kn_sfflags |= NOTE_WL_SYNC_WAKE;
-		if (kn->kn_hook) {
-			thread_wakeup_thread((event_t)kn, (thread_t)kn->kn_hook);
-		}
-	}
-
-out_unlock:
-	filt_wlremember_last_update(kqwl, kn, kev, error);
-	filt_wlunlock(kqwl);
 
 out:
-	if (error == 0) {
-		/* If nothing failed, do the regular knote drop. */
-		if (kqlock2knotedrop(kq, kn)) {
-			knote_drop(kn, current_proc());
-		} else {
-			error = EINPROGRESS;
+	if (error) {
+		if (error == ESTALE && (kev->fflags & NOTE_WL_IGNORE_ESTALE)) {
+			return false;
 		}
-	} else {
-		kqunlock(kq);
+		kev->flags |= EV_ERROR;
+		kev->data = error;
+		return false;
 	}
-	if (error == ESTALE && (kev->fflags & NOTE_WL_IGNORE_ESTALE)) {
-		error = 0;
-	}
-	if (error == EINPROGRESS) {
-		/*
-		 * filt_wlprocess() makes sure that no event can be delivered for
-		 * NOTE_WL_THREAD_REQUEST knotes once a drop is happening, and
-		 * NOTE_WL_SYNC_* knotes are never fired.
-		 *
-		 * It means that EINPROGRESS is about a state that userland cannot
-		 * observe for this filter (an event being delivered concurrently from
-		 * a drop), so silence the error.
-		 */
-		error = 0;
-	}
-	return error;
+	return true;
 }
 
 static int
@@ -2779,55 +2424,70 @@ filt_wlprocess(
 	__unused struct filt_process_s *data,
 	struct kevent_internal_s *kev)
 {
-	struct kqueue *kq = knote_get_kq(kn);
-	struct kqworkloop *kqwl = (struct kqworkloop *)kq;
-	struct kqrequest *kqr = &kqwl->kqwl_request;
+	struct kqworkloop *kqwl = (struct kqworkloop *)knote_get_kq(kn);
 	int rc = 0;
 
-	assert(kq->kq_state & KQ_WORKLOOP);
-
-	/* only thread requests should get here */
 	assert(kn->kn_sfflags & NOTE_WL_THREAD_REQUEST);
-	if (kn->kn_sfflags & NOTE_WL_THREAD_REQUEST) {
-		filt_wllock(kqwl);
-		assert(kqr->kqr_qos_index != THREAD_QOS_UNSPECIFIED);
-		if (kqwl->kqwl_owner) {
-			/*
-			 * <rdar://problem/33584321> userspace sometimes due to events being
-			 * delivered but not triggering a drain session can cause a process
-			 * of the thread request knote.
-			 *
-			 * When that happens, the automatic deactivation due to process
-			 * would swallow the event, so we have to activate the knote again.
-			 */
-			kqlock(kq);
-			knote_activate(kn);
-			kqunlock(kq);
-		} else if (kqr->kqr_qos_index) {
+
+	filt_wllock(kqwl);
+
+	if (kqwl->kqwl_owner) {
+		/*
+		 * <rdar://problem/33584321> userspace sometimes due to events being
+		 * delivered but not triggering a drain session can cause a process
+		 * of the thread request knote.
+		 *
+		 * When that happens, the automatic deactivation due to process
+		 * would swallow the event, so we have to activate the knote again.
+		 */
+		kqlock(kqwl);
+		knote_activate(kn);
+		kqunlock(kqwl);
+	} else {
 #if DEBUG || DEVELOPMENT
+		if (kevent_debug_flags() & KEVENT_PANIC_ON_NON_ENQUEUED_PROCESS) {
+			/*
+			 * see src/queue_internal.h in libdispatch
+			 */
+#define DISPATCH_QUEUE_ENQUEUED 0x1ull
 			user_addr_t addr = CAST_USER_ADDR_T(kn->kn_ext[EV_EXTIDX_WL_ADDR]);
 			task_t t = current_task();
 			uint64_t val;
 			if (addr && task_is_active(t) && !task_is_halting(t) &&
 					copyin_word(addr, &val, sizeof(val)) == 0 &&
 					val && (val & DISPATCH_QUEUE_ENQUEUED) == 0 &&
-					(val >> 48) != 0 && (val >> 48) != 0xffff) {
+					(val >> 48) != 0xdead && (val >> 48) != 0 && (val >> 48) != 0xffff) {
 				panic("kevent: workloop %#016llx is not enqueued "
 						"(kn:%p dq_state:%#016llx kev.dq_state:%#016llx)",
-						kn->kn_udata, kn, val,
-						kn->kn_ext[EV_EXTIDX_WL_VALUE]);
+						kn->kn_udata, kn, val, kn->kn_ext[EV_EXTIDX_WL_VALUE]);
 			}
-#endif
-			*kev = kn->kn_kevent;
-			kev->fflags = kn->kn_sfflags;
-			kev->data = kn->kn_sdata;
-			kev->qos = kn->kn_qos;
-			rc = 1;
 		}
-		filt_wlunlock(kqwl);
+#endif
+		*kev = kn->kn_kevent;
+		kev->fflags = kn->kn_sfflags;
+		kev->data = kn->kn_sdata;
+		kev->qos = kn->kn_qos;
+		rc |= FILTER_ACTIVE;
+	}
+
+	filt_wlunlock(kqwl);
+
+	if (rc & FILTER_ACTIVE) {
+		workq_thread_set_max_qos(kqwl->kqwl_p, &kqwl->kqwl_request);
 	}
 	return rc;
 }
+
+SECURITY_READ_ONLY_EARLY(static struct filterops) workloop_filtops = {
+	.f_extended_codes = true,
+	.f_attach  = filt_wlattach,
+	.f_detach  = filt_wldetach,
+	.f_event   = filt_badevent,
+	.f_touch   = filt_wltouch,
+	.f_process = filt_wlprocess,
+	.f_allow_drop = filt_wlallow_drop,
+	.f_post_register_wait = filt_wlpost_register_wait,
+};
 
 #pragma mark kevent / knotes
 
@@ -2835,10 +2495,16 @@ filt_wlprocess(
  * JMM - placeholder for not-yet-implemented filters
  */
 static int
+filt_badevent(struct knote *kn, long hint)
+{
+	panic("%s[%d](%p, %ld)", __func__, kn->kn_filter, kn, hint);
+	return 0;
+}
+
+static int
 filt_badattach(__unused struct knote *kn, __unused struct kevent_internal_s *kev)
 {
-	kn->kn_flags |= EV_ERROR;
-	kn->kn_data = ENOTSUP;
+	knote_set_error(kn, ENOTSUP);
 	return 0;
 }
 
@@ -2849,7 +2515,6 @@ kqueue_alloc(struct proc *p, unsigned int flags)
 	struct kqueue *kq = NULL;
 	int policy;
 	void *hook = NULL;
-	uint64_t kq_addr_offset;
 
 	if (flags & KEVENT_FLAG_WORKQ) {
 		struct kqworkq *kqwq;
@@ -2865,16 +2530,29 @@ kqueue_alloc(struct proc *p, unsigned int flags)
 		kqwq->kqwq_state = KQ_WORKQ;
 
 		for (i = 0; i < KQWQ_NBUCKETS; i++) {
-			TAILQ_INIT(&kq->kq_queue[i]);
+			TAILQ_INIT(&kqwq->kqwq_queue[i]);
 		}
-		for (i = 0; i < KQWQ_NQOS; i++) {
+		for (i = 0; i < KQWQ_NBUCKETS; i++) {
+			if (i != KQWQ_QOS_MANAGER) {
+				/*
+				 * Because of how the bucketized system works, we mix overcommit
+				 * sources with not overcommit: each time we move a knote from
+				 * one bucket to the next due to overrides, we'd had to track
+				 * overcommitness, and it's really not worth it in the workloop
+				 * enabled world that track this faithfully.
+				 *
+				 * Incidentally, this behaves like the original manager-based
+				 * kqwq where event delivery always happened (hence is
+				 * "overcommit")
+				 */
+				kqwq->kqwq_request[i].kqr_state |= KQR_THOVERCOMMIT;
+			}
 			kqwq->kqwq_request[i].kqr_qos_index = i;
+			TAILQ_INIT(&kqwq->kqwq_request[i].kqr_suppressed);
 		}
 
-		lck_spin_init(&kqwq->kqwq_reqlock, kq_lck_grp, kq_lck_attr);
 		policy = SYNC_POLICY_FIFO;
 		hook = (void *)kqwq;
-		
 	} else if (flags & KEVENT_FLAG_WORKLOOP) {
 		struct kqworkloop *kqwl;
 		int i;
@@ -2887,41 +2565,36 @@ kqueue_alloc(struct proc *p, unsigned int flags)
 
 		kqwl->kqwl_state = KQ_WORKLOOP | KQ_DYNAMIC;
 		kqwl->kqwl_retains = 1; /* donate a retain to creator */
+		kqwl->kqwl_request.kqr_state = KQR_WORKLOOP;
 
 		kq = &kqwl->kqwl_kqueue;
 		for (i = 0; i < KQWL_NBUCKETS; i++) {
-			TAILQ_INIT(&kq->kq_queue[i]);
+			TAILQ_INIT(&kqwl->kqwl_queue[i]);
 		}
 		TAILQ_INIT(&kqwl->kqwl_request.kqr_suppressed);
 
-		lck_spin_init(&kqwl->kqwl_reqlock, kq_lck_grp, kq_lck_attr);
 		lck_mtx_init(&kqwl->kqwl_statelock, kq_lck_grp, kq_lck_attr);
 
 		policy = SYNC_POLICY_FIFO;
-		if (flags & KEVENT_FLAG_WORKLOOP_NO_WQ_THREAD) {
-			policy |= SYNC_POLICY_PREPOST;
-			kq->kq_state |= KQ_NO_WQ_THREAD;
-		} else {
-			hook = (void *)kqwl;
-		}
-		
+		hook = (void *)kqwl;
 	} else {
 		struct kqfile *kqf;
-		
+
 		kqf = (struct kqfile *)zalloc(kqfile_zone);
 		if (kqf == NULL)
 			return NULL;
 
 		kq = &kqf->kqf_kqueue;
 		bzero(kqf, sizeof (struct kqfile));
-		TAILQ_INIT(&kq->kq_queue[0]);
+		TAILQ_INIT(&kqf->kqf_queue);
 		TAILQ_INIT(&kqf->kqf_suppressed);
-		
+
 		policy = SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST;
 	}
 
 	waitq_set_init(&kq->kq_wqs, policy, NULL, hook);
 	lck_spin_init(&kq->kq_lock, kq_lck_grp, kq_lck_attr);
+	lck_spin_init(&kq->kq_reqlock, kq_lck_grp, kq_lck_attr);
 	kq->kq_p = p;
 
 	if (fdp->fd_knlistsize < 0) {
@@ -2931,19 +2604,16 @@ kqueue_alloc(struct proc *p, unsigned int flags)
 		proc_fdunlock(p);
 	}
 
-	kq_addr_offset = ((uintptr_t)kq - (uintptr_t)VM_MIN_KERNEL_AND_KEXT_ADDRESS);
-	/* Assert that the address can be pointer compacted for use with knote */
-	assert(kq_addr_offset < (uint64_t)(1ull << KNOTE_KQ_BITSIZE));
 	return (kq);
 }
 
 /*
  * knotes_dealloc - detach all knotes for the process and drop them
  *
- * 		Called with proc_fdlock held.
- * 		Returns with it locked.
- * 		May drop it temporarily.
- * 		Process is in such a state that it will not try to allocate
+ *		Called with proc_fdlock held.
+ *		Returns with it locked.
+ *		May drop it temporarily.
+ *		Process is in such a state that it will not try to allocate
  *		any more knotes during this process (stopped for exit or exec).
  */
 void
@@ -2962,10 +2632,7 @@ knotes_dealloc(proc_t p)
 				kq = knote_get_kq(kn);
 				kqlock(kq);
 				proc_fdunlock(p);
-				/* drop it ourselves or wait */
-				if (kqlock2knotedrop(kq, kn)) {
-					knote_drop(kn, p);
-				}
+				knote_drop(kq, kn, NULL);
 				proc_fdlock(p);
 			}
 		}
@@ -2985,10 +2652,7 @@ knotes_dealloc(proc_t p)
 				kq = knote_get_kq(kn);
 				kqlock(kq);
 				knhash_unlock(p);
-				/* drop it ourselves or wait */
-				if (kqlock2knotedrop(kq, kn)) {
-					knote_drop(kn, p);
-				}
+				knote_drop(kq, kn, NULL);
 				knhash_lock(p);
 			}
 		}
@@ -3006,11 +2670,43 @@ knotes_dealloc(proc_t p)
 	proc_fdlock(p);
 }
 
+/*
+ * kqworkloop_invalidate
+ *
+ * Invalidate ownership of a workloop.
+ *
+ * This is meant to be used so that any remnant of overrides and ownership
+ * information is dropped before a kqworkloop can no longer be found in the
+ * global hash table and have ghost workloop ownership left over.
+ *
+ * Possibly returns a thread to deallocate in a safe context.
+ */
+static thread_t
+kqworkloop_invalidate(struct kqworkloop *kqwl)
+{
+	thread_t cur_owner = kqwl->kqwl_owner;
+
+	assert(TAILQ_EMPTY(&kqwl->kqwl_request.kqr_suppressed));
+	if (cur_owner) {
+		/*
+		 * If the kqueue had an owner that prevented the thread request to
+		 * go through, then no unbind happened, and we may have lingering
+		 * overrides to drop.
+		 */
+		if (kqworkloop_owner_override(kqwl) != THREAD_QOS_UNSPECIFIED) {
+			thread_drop_ipc_override(cur_owner);
+		}
+		thread_ends_owning_workloop(cur_owner);
+		kqwl->kqwl_owner = THREAD_NULL;
+	}
+
+	return cur_owner;
+}
 
 /*
  * kqueue_dealloc - detach all knotes from a kqueue and free it
  *
- * 	We walk each list looking for knotes referencing this
+ *	We walk each list looking for knotes referencing this
  *	this kqueue.  If we find one, we try to drop it.  But
  *	if we fail to get a drop reference, that will wait
  *	until it is dropped.  So, we can just restart again
@@ -3039,7 +2735,13 @@ kqueue_dealloc(struct kqueue *kq)
 	p = kq->kq_p;
 	fdp = p->p_fd;
 
+	/*
+	 * Workloops are refcounted by their knotes, so there's no point
+	 * spending a lot of time under these locks just to deallocate one.
+	 */
 	if ((kq->kq_state & KQ_WORKLOOP) == 0) {
+		KNOTE_LOCK_CTX(knlc);
+
 		proc_fdlock(p);
 		for (i = 0; i < fdp->fd_knlistsize; i++) {
 			kn = SLIST_FIRST(&fdp->fd_knlist[i]);
@@ -3047,9 +2749,8 @@ kqueue_dealloc(struct kqueue *kq)
 				if (kq == knote_get_kq(kn)) {
 					kqlock(kq);
 					proc_fdunlock(p);
-					/* drop it ourselves or wait */
-					if (kqlock2knotedrop(kq, kn)) {
-						knote_drop(kn, p);
+					if (knote_lock(kq, kn, &knlc, KNOTE_KQ_LOCK_ON_SUCCESS)) {
+						knote_drop(kq, kn, &knlc);
 					}
 					proc_fdlock(p);
 					/* start over at beginning of list */
@@ -3059,6 +2760,7 @@ kqueue_dealloc(struct kqueue *kq)
 				kn = SLIST_NEXT(kn, kn_link);
 			}
 		}
+
 		knhash_lock(p);
 		proc_fdunlock(p);
 
@@ -3069,9 +2771,8 @@ kqueue_dealloc(struct kqueue *kq)
 					if (kq == knote_get_kq(kn)) {
 						kqlock(kq);
 						knhash_unlock(p);
-						/* drop it ourselves or wait */
-						if (kqlock2knotedrop(kq, kn)) {
-							knote_drop(kn, p);
+						if (knote_lock(kq, kn, &knlc, KNOTE_KQ_LOCK_ON_SUCCESS)) {
+							knote_drop(kq, kn, &knlc);
 						}
 						knhash_lock(p);
 						/* start over at beginning of list */
@@ -3087,28 +2788,17 @@ kqueue_dealloc(struct kqueue *kq)
 
 	if (kq->kq_state & KQ_WORKLOOP) {
 		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
-		struct kqrequest *kqr = &kqwl->kqwl_request;
-		thread_t cur_owner = kqwl->kqwl_owner;
+		thread_t cur_owner = kqworkloop_invalidate(kqwl);
 
-		assert(TAILQ_EMPTY(&kqwl->kqwl_request.kqr_suppressed));
-		if (filt_wlowner_is_valid(cur_owner)) {
-			/*
-			 * If the kqueue had an owner that prevented the thread request to
-			 * go through, then no unbind happened, and we may have lingering
-			 * overrides to drop.
-			 */
-			if (kqr->kqr_dsync_owner_qos != THREAD_QOS_UNSPECIFIED) {
-				thread_drop_ipc_override(cur_owner);
-				kqr->kqr_dsync_owner_qos = THREAD_QOS_UNSPECIFIED;
-			}
+		if (cur_owner) thread_deallocate(cur_owner);
 
-			if (kqr->kqr_owner_override_is_sync) {
-				thread_drop_sync_ipc_override(cur_owner);
-				kqr->kqr_owner_override_is_sync = 0;
-			}
-			thread_ends_owning_workloop(cur_owner);
-			thread_deallocate(cur_owner);
-			kqwl->kqwl_owner = THREAD_NULL;
+		if (kqwl->kqwl_request.kqr_state & KQR_ALLOCATED_TURNSTILE) {
+			struct turnstile *ts;
+			turnstile_complete((uintptr_t)kqwl, &kqwl->kqwl_turnstile, &ts);
+			turnstile_cleanup();
+			turnstile_deallocate(ts);
+		} else {
+			assert(kqwl->kqwl_turnstile == NULL);
 		}
 	}
 
@@ -3118,23 +2808,18 @@ kqueue_dealloc(struct kqueue *kq)
 	 */
 	waitq_set_deinit(&kq->kq_wqs);
 	lck_spin_destroy(&kq->kq_lock, kq_lck_grp);
+	lck_spin_destroy(&kq->kq_reqlock, kq_lck_grp);
 
 	if (kq->kq_state & KQ_WORKQ) {
-		struct kqworkq *kqwq = (struct kqworkq *)kq;
-
-		lck_spin_destroy(&kqwq->kqwq_reqlock, kq_lck_grp);
-		zfree(kqworkq_zone, kqwq);
+		zfree(kqworkq_zone, (struct kqworkq *)kq);
 	} else if (kq->kq_state & KQ_WORKLOOP) {
 		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
 
 		assert(kqwl->kqwl_retains == 0);
-		lck_spin_destroy(&kqwl->kqwl_reqlock, kq_lck_grp);
 		lck_mtx_destroy(&kqwl->kqwl_statelock, kq_lck_grp);
 		zfree(kqworkloop_zone, kqwl);
 	} else {
-		struct kqfile *kqf = (struct kqfile *)kq;
-
-		zfree(kqfile_zone, kqf);
+		zfree(kqfile_zone, (struct kqfile *)kq);
 	}
 }
 
@@ -3159,18 +2844,16 @@ kqueue_retain(struct kqueue *kq)
 #define KQUEUE_MIGHT_BE_LAST_REF 1
 
 static inline int
-kqueue_release(struct kqueue *kq, __assert_only int possibly_last)
+kqueue_release(kqueue_t kqu, __assert_only int possibly_last)
 {
-	struct kqworkloop *kqwl = (struct kqworkloop *)kq;
-
-	if ((kq->kq_state & KQ_DYNAMIC) == 0) {
+	if ((kqu.kq->kq_state & KQ_DYNAMIC) == 0) {
 		return 0;
 	}
 
-	assert(kq->kq_state & KQ_WORKLOOP); /* for now */
-	uint32_t refs = OSDecrementAtomic(&kqwl->kqwl_retains);
+	assert(kqu.kq->kq_state & KQ_WORKLOOP); /* for now */
+	uint32_t refs = OSDecrementAtomic(&kqu.kqwl->kqwl_retains);
 	if (__improbable(refs == 0)) {
-		panic("kq(%p) over-release", kq);
+		panic("kq(%p) over-release", kqu.kq);
 	}
 	if (refs == 1) {
 		assert(possibly_last);
@@ -3219,7 +2902,7 @@ kqueue(struct proc *p, __unused struct kqueue_args *uap, int32_t *retval)
 
 static int
 kevent_copyin(user_addr_t *addrp, struct kevent_internal_s *kevp, struct proc *p,
-    unsigned int flags)
+		unsigned int flags)
 {
 	int advance;
 	int error;
@@ -3271,7 +2954,7 @@ kevent_copyin(user_addr_t *addrp, struct kevent_internal_s *kevp, struct proc *p
 		kevp->data = kev64.data;
 		kevp->ext[0] = kev64.ext[0];
 		kevp->ext[1] = kev64.ext[1];
-		
+
 	} else {
 		struct kevent_qos_s kevqos;
 
@@ -3301,13 +2984,13 @@ kevent_copyin(user_addr_t *addrp, struct kevent_internal_s *kevp, struct proc *p
 
 static int
 kevent_copyout(struct kevent_internal_s *kevp, user_addr_t *addrp, struct proc *p,
-    unsigned int flags)
+		unsigned int flags)
 {
 	user_addr_t addr = *addrp;
 	int advance;
 	int error;
 
-	/* 
+	/*
 	 * fully initialize the differnt output event structure
 	 * types from the internal kevent (and some universal
 	 * defaults for fields not represented in the internal
@@ -3321,7 +3004,7 @@ kevent_copyout(struct kevent_internal_s *kevp, user_addr_t *addrp, struct proc *
 
 			advance = sizeof (kev64);
 			bzero(&kev64, advance);
-			
+
 			/*
 			 * deal with the special case of a user-supplied
 			 * value of (uintptr_t)-1.
@@ -3367,7 +3050,7 @@ kevent_copyout(struct kevent_internal_s *kevp, user_addr_t *addrp, struct proc *
 		error = copyout((caddr_t)&kev64, addr, advance);
 	} else {
 		struct kevent_qos_s kevqos;
-	   
+
 		advance = sizeof (struct kevent_qos_s);
 		if (flags & KEVENT_FLAG_STACK_EVENTS) {
 			addr -= advance;
@@ -3397,10 +3080,11 @@ kevent_copyout(struct kevent_internal_s *kevp, user_addr_t *addrp, struct proc *
 }
 
 static int
-kevent_get_data_size(struct proc *p, 
-                     uint64_t data_available,
-                     unsigned int flags,
-                     user_size_t *residp)
+kevent_get_data_size(
+		struct proc *p,
+		uint64_t data_available,
+		unsigned int flags,
+		user_size_t *residp)
 {
 	user_size_t resid;
 	int error = 0;
@@ -3427,10 +3111,11 @@ kevent_get_data_size(struct proc *p,
 }
 
 static int
-kevent_put_data_size(struct proc *p, 
-                     uint64_t data_available,
-                     unsigned int flags,
-                     user_size_t resid)
+kevent_put_data_size(
+		struct proc *p,
+		uint64_t data_available,
+		unsigned int flags,
+		user_size_t resid)
 {
 	int error = 0;
 
@@ -3453,7 +3138,6 @@ kevent_put_data_size(struct proc *p,
  *
  *	assume we inherit a use count on the kq fileglob.
  */
-
 __attribute__((noreturn))
 static void
 kevent_continue(__unused struct kqueue *kq, void *data, int error)
@@ -3553,13 +3237,13 @@ kevent_qos(struct proc *p, struct kevent_qos_args *uap, int32_t *retval)
 	                       retval);
 }
 
-int 
-kevent_qos_internal(struct proc *p, int fd, 
+int
+kevent_qos_internal(struct proc *p, int fd,
 		    user_addr_t changelist, int nchanges,
 		    user_addr_t eventlist, int nevents,
 		    user_addr_t data_out, user_size_t *data_available,
-		    unsigned int flags, 
-		    int32_t *retval) 
+		    unsigned int flags,
+		    int32_t *retval)
 {
 	return kevent_internal(p,
 	                       (kqueue_id_t)fd, NULL,
@@ -3594,8 +3278,8 @@ kevent_id_internal(struct proc *p, kqueue_id_t *id,
 		    user_addr_t changelist, int nchanges,
 		    user_addr_t eventlist, int nevents,
 		    user_addr_t data_out, user_size_t *data_available,
-		    unsigned int flags, 
-		    int32_t *retval) 
+		    unsigned int flags,
+		    int32_t *retval)
 {
 	return kevent_internal(p,
 	                       *id, id,
@@ -3607,7 +3291,7 @@ kevent_id_internal(struct proc *p, kqueue_id_t *id,
 	                       NULL,
 	                       retval);
 }
- 
+
 static int
 kevent_get_timeout(struct proc *p,
 		   user_addr_t utimeout,
@@ -3805,13 +3489,16 @@ kqueue_hash_lookup(struct proc *p, kqueue_id_t id)
 }
 
 static inline void
-kqueue_release_last(struct proc *p, struct kqueue *kq)
+kqueue_release_last(struct proc *p, kqueue_t kqu)
 {
+	struct kqueue *kq = kqu.kq;
 	if (kq->kq_state & KQ_DYNAMIC) {
 		kqhash_lock(p);
 		if (kqueue_release(kq, KQUEUE_MIGHT_BE_LAST_REF)) {
+			thread_t cur_owner = kqworkloop_invalidate(kqu.kqwl);
 			kqueue_hash_remove(p, kq);
 			kqhash_unlock(p);
+			if (cur_owner) thread_deallocate(cur_owner);
 			kqueue_dealloc(kq);
 		} else {
 			kqhash_unlock(p);
@@ -3819,93 +3506,118 @@ kqueue_release_last(struct proc *p, struct kqueue *kq)
 	}
 }
 
-static struct kqueue *
-kevent_get_bound_kq(__assert_only struct proc *p, thread_t thread,
-                    unsigned int kev_flags, unsigned int kq_flags)
+/*
+ * kqworkloops_dealloc - rebalance retains on kqworkloops created with
+ * scheduling parameters
+ *
+ *		Called with proc_fdlock held.
+ *		Returns with it locked.
+ *		Process is in such a state that it will not try to allocate
+ *		any more knotes during this process (stopped for exit or exec).
+ */
+void
+kqworkloops_dealloc(proc_t p)
 {
-	struct kqueue *kq;
+	struct filedesc *fdp = p->p_fd;
+	struct kqlist *list;
+	struct kqworkloop *kqwl, *kqwln;
+	struct kqlist tofree;
+	int i;
+
+	if (!(fdp->fd_flags & FD_WORKLOOP)) {
+		return;
+	}
+
+	SLIST_INIT(&tofree);
+
+	kqhash_lock(p);
+	assert(fdp->fd_kqhashmask != 0);
+
+	for (i = 0; i <= (int)fdp->fd_kqhashmask; i++) {
+		list = &fdp->fd_kqhash[i];
+		SLIST_FOREACH_SAFE(kqwl, list, kqwl_hashlink, kqwln) {
+			/*
+			 * kqworkloops that have scheduling parameters have an
+			 * implicit retain from kqueue_workloop_ctl that needs
+			 * to be balanced on process exit.
+			 */
+			assert(kqwl->kqwl_params);
+			SLIST_REMOVE(list, kqwl, kqworkloop, kqwl_hashlink);
+			SLIST_INSERT_HEAD(&tofree, kqwl, kqwl_hashlink);
+		}
+	}
+
+	kqhash_unlock(p);
+
+	SLIST_FOREACH_SAFE(kqwl, &tofree, kqwl_hashlink, kqwln) {
+		struct kqueue *kq = (struct kqueue *)kqwl;
+		__assert_only bool released;
+		released = kqueue_release(kq, KQUEUE_MIGHT_BE_LAST_REF);
+		assert(released);
+		kqueue_dealloc(kq);
+	}
+}
+
+static struct kqueue *
+kevent_get_bound_kqworkloop(thread_t thread)
+{
 	struct uthread *ut = get_bsdthread_info(thread);
+	struct kqrequest *kqr = ut->uu_kqr_bound;
 
-	assert(p == get_bsdthreadtask_info(thread));
-
-	if (!(ut->uu_kqueue_flags & kev_flags))
-		return NULL;
-
-	kq = ut->uu_kqueue_bound;
-	if (!kq)
-		return NULL;
-
-	if (!(kq->kq_state & kq_flags))
-		return NULL;
-
-	return kq;
+	return kqr ? (struct kqueue *)kqr_kqworkloop(kqr) : NULL;
 }
 
 static int
-kevent_get_kq(struct proc *p, kqueue_id_t id, unsigned int flags, struct fileproc **fpp, int *fdp, struct kqueue **kqp)
+kevent_get_kq(struct proc *p, kqueue_id_t id, workq_threadreq_param_t *trp,
+		unsigned int flags, struct fileproc **fpp, int *fdp,
+		struct kqueue **kqp)
 {
 	struct filedesc *descp = p->p_fd;
 	struct fileproc *fp = NULL;
-	struct kqueue *kq;
+	struct kqueue *kq = NULL;
 	int fd = 0;
 	int error = 0;
+	thread_t th = current_thread();
+
+	assert(!trp || (flags & KEVENT_FLAG_WORKLOOP));
 
 	/* Was the workloop flag passed?  Then it is for sure only a workloop */
 	if (flags & KEVENT_FLAG_DYNAMIC_KQUEUE) {
 		assert(flags & KEVENT_FLAG_WORKLOOP);
+		assert(!trp || (flags & KEVENT_FLAG_DYNAMIC_KQ_MUST_NOT_EXIST));
+		kq = kevent_get_bound_kqworkloop(th);
+
+		/*
+		 * when kevent_id_internal is called from within the
+		 * kernel, and the passed 'id' value is '-1' then we
+		 * look for the currently bound workloop kq.
+		 */
 		if (id == (kqueue_id_t)-1 &&
 		    (flags & KEVENT_FLAG_KERNEL) &&
 		    (flags & KEVENT_FLAG_WORKLOOP)) {
 
-			assert(is_workqueue_thread(current_thread()));
-
-			/*
-			 * when kevent_id_internal is called from within the
-			 * kernel, and the passed 'id' value is '-1' then we
-			 * look for the currently bound workloop kq.
-			 *
-			 * Until pthread kext avoids calling in to kevent_id_internal
-			 * for threads whose fulfill is canceled, calling in unbound
-			 * can't be fatal.
-			 */
-			kq = kevent_get_bound_kq(p, current_thread(),
-			                         KEVENT_FLAG_WORKLOOP, KQ_WORKLOOP);
-			if (kq) {
-				kqueue_retain(kq);
-			} else {
-				struct uthread *ut = get_bsdthread_info(current_thread());
-
-				/* If thread is unbound due to cancel, just return an error */
-				if (ut->uu_kqueue_flags == KEVENT_FLAG_WORKLOOP_CANCELED) {
-					ut->uu_kqueue_flags = 0;
-					error = ECANCELED;
-				} else {
-					panic("Unbound thread called kevent_internal with id=-1"
-					      " uu_kqueue_flags:0x%x, uu_kqueue_bound:%p",
-					      ut->uu_kqueue_flags, ut->uu_kqueue_bound);
-				}
+			if (!is_workqueue_thread(th) || !kq) {
+				return EINVAL;
 			}
 
-			*fpp = NULL;
-			*fdp = 0;
-			*kqp = kq;
-			return error;
+			kqueue_retain(kq);
+			goto out;
+		}
+
+		if (id == 0 || id == (kqueue_id_t)-1) {
+			return EINVAL;
 		}
 
 		/* try shortcut on kq lookup for bound threads */
-		kq = kevent_get_bound_kq(p, current_thread(), KEVENT_FLAG_WORKLOOP, KQ_WORKLOOP);
 		if (kq != NULL && ((struct kqworkloop *)kq)->kqwl_dynamicid == id) {
 
 			if (flags & KEVENT_FLAG_DYNAMIC_KQ_MUST_NOT_EXIST) {
-				error = EEXIST;
-				kq = NULL;
-				goto out;
+				return EEXIST;
 			}
 
 			/* retain a reference while working with this kq. */
 			assert(kq->kq_state & KQ_DYNAMIC);
 			kqueue_retain(kq);
-			error = 0;
 			goto out;
 		}
 
@@ -3916,39 +3628,45 @@ kevent_get_kq(struct proc *p, kqueue_id_t id, unsigned int flags, struct filepro
 			kqhash_unlock(p);
 
 			if (flags & KEVENT_FLAG_DYNAMIC_KQ_MUST_EXIST) {
-				error = ENOENT;
-				goto out;
+				return ENOENT;
 			}
 
 			struct kqueue *alloc_kq;
 			alloc_kq = kqueue_alloc(p, flags);
-			if (alloc_kq) {
-				kqhash_lock(p);
-				kqueue_hash_init_if_needed(p);
-				kq = kqueue_hash_lookup(p, id);
-				if (kq == NULL) {
-					/* insert our new one */
-					kq = alloc_kq;
-					kqueue_hash_insert(p, id, kq);
-					kqhash_unlock(p);
-				} else {
-					/* lost race, retain existing workloop */
-					kqueue_retain(kq);
-					kqhash_unlock(p);
-					kqueue_release(alloc_kq, KQUEUE_MIGHT_BE_LAST_REF);
-					kqueue_dealloc(alloc_kq);
+			if (!alloc_kq) {
+				return ENOMEM;
+			}
+
+			kqhash_lock(p);
+			kqueue_hash_init_if_needed(p);
+			kq = kqueue_hash_lookup(p, id);
+			if (kq == NULL) {
+				/* insert our new one */
+				kq = alloc_kq;
+				if (trp) {
+					struct kqworkloop *kqwl = (struct kqworkloop *)kq;
+					kqwl->kqwl_params = trp->trp_value;
 				}
+				kqueue_hash_insert(p, id, kq);
+				kqhash_unlock(p);
+			} else if (flags & KEVENT_FLAG_DYNAMIC_KQ_MUST_NOT_EXIST) {
+				/* lost race and caller wants an error */
+				kqhash_unlock(p);
+				kqueue_release(alloc_kq, KQUEUE_MIGHT_BE_LAST_REF);
+				kqueue_dealloc(alloc_kq);
+				return EEXIST;
 			} else {
-				error = ENOMEM;
-				goto out;
+				/* lost race, retain existing workloop */
+				kqueue_retain(kq);
+				kqhash_unlock(p);
+				kqueue_release(alloc_kq, KQUEUE_MIGHT_BE_LAST_REF);
+				kqueue_dealloc(alloc_kq);
 			}
 		} else {
 
 			if (flags & KEVENT_FLAG_DYNAMIC_KQ_MUST_NOT_EXIST) {
 				kqhash_unlock(p);
-				kq = NULL;
-				error =  EEXIST;
-				goto out;
+				return  EEXIST;
 			}
 
 			/* retain a reference while working with this kq. */
@@ -3956,7 +3674,7 @@ kevent_get_kq(struct proc *p, kqueue_id_t id, unsigned int flags, struct filepro
 			kqueue_retain(kq);
 			kqhash_unlock(p);
 		}
-		
+
 	} else if (flags & KEVENT_FLAG_WORKQ) {
 		/* must already exist for bound threads. */
 		if (flags & KEVENT_FLAG_KERNEL) {
@@ -3972,8 +3690,9 @@ kevent_get_kq(struct proc *p, kqueue_id_t id, unsigned int flags, struct filepro
 		kq = descp->fd_wqkqueue;
 		if (kq == NULL) {
 			struct kqueue *alloc_kq = kqueue_alloc(p, KEVENT_FLAG_WORKQ);
-			if (alloc_kq == NULL)
+			if (alloc_kq == NULL) {
 				return ENOMEM;
+			}
 
 			knhash_lock(p);
 			if (descp->fd_wqkqueue == NULL) {
@@ -3996,13 +3715,13 @@ kevent_get_kq(struct proc *p, kqueue_id_t id, unsigned int flags, struct filepro
 		if (fp != NULL)
 			fp_drop(p, fd, fp, 0);
 		return error;
-	} 
+	}
 
 out:
 	*fpp = fp;
 	*fdp = fd;
 	*kqp = kq;
-	
+
 	return error;
 }
 
@@ -4048,7 +3767,7 @@ kevent_exit_on_workloop_ownership_leak(thread_t thread)
 	proc_t p = current_proc();
 	struct filedesc *fdp = p->p_fd;
 	kqueue_id_t workloop_id = 0;
-	os_reason_t reason;
+	os_reason_t reason = OS_REASON_NULL;
 	mach_vm_address_t addr;
 	uint32_t reason_size;
 
@@ -4067,7 +3786,6 @@ kevent_exit_on_workloop_ownership_leak(thread_t thread)
 		}
 	}
 	kqhash_unlock(p);
-	assert(workloop_id);
 
 	reason = os_reason_create(OS_REASON_LIBSYSTEM,
 			OS_REASON_LIBSYSTEM_CODE_WORKLOOP_OWNERSHIP_LEAK);
@@ -4082,21 +3800,26 @@ kevent_exit_on_workloop_ownership_leak(thread_t thread)
 		goto out;
 	}
 
-	struct kcdata_descriptor *kcd = &reason->osr_kcd_descriptor;
+	if (workloop_id) {
+		struct kcdata_descriptor *kcd = &reason->osr_kcd_descriptor;
 
-	if (kcdata_get_memory_addr(kcd, EXIT_REASON_WORKLOOP_ID,
-			sizeof(workloop_id), &addr) == KERN_SUCCESS) {
-		kcdata_memcpy(kcd, addr, &workloop_id, sizeof(workloop_id));
+		if (kcdata_get_memory_addr(kcd, EXIT_REASON_WORKLOOP_ID,
+				sizeof(workloop_id), &addr) == KERN_SUCCESS) {
+			kcdata_memcpy(kcd, addr, &workloop_id, sizeof(workloop_id));
+		}
+
+		uint64_t serial_no = kevent_workloop_serial_no_copyin(p, workloop_id);
+		if (serial_no && kcdata_get_memory_addr(kcd, EXIT_REASON_DISPATCH_QUEUE_NO,
+				sizeof(serial_no), &addr) == KERN_SUCCESS) {
+			kcdata_memcpy(kcd, addr, &serial_no, sizeof(serial_no));
+		}
 	}
-
-	uint64_t serial_no = kevent_workloop_serial_no_copyin(p, workloop_id);
-	if (serial_no && kcdata_get_memory_addr(kcd, EXIT_REASON_DISPATCH_QUEUE_NO,
-			sizeof(serial_no), &addr) == KERN_SUCCESS) {
-		kcdata_memcpy(kcd, addr, &serial_no, sizeof(serial_no));
-	}
-
 out:
 #if DEVELOPMENT || DEBUG
+	if (kevent_debug_flags() & KEVENT_PANIC_ON_WORKLOOP_OWNERSHIP_LEAK) {
+		panic("thread %p in task %p is leaked workloop 0x%016llx ownership",
+				thread, p->task, workloop_id);
+	}
 	psignal_try_thread_with_reason(p, thread, SIGABRT, reason);
 	return 0;
 #else
@@ -4105,139 +3828,8 @@ out:
 #endif
 }
 
-
-static int
-kevent_servicer_detach_preflight(thread_t thread, unsigned int flags, struct kqueue *kq)
-{
-	int error = 0;
-	struct kqworkloop *kqwl;
-	struct uthread *ut;
-	struct kqrequest *kqr;
-
-	if (!(flags & KEVENT_FLAG_WORKLOOP) || !(kq->kq_state & KQ_WORKLOOP))
-		return EINVAL;
-
-	/* only kq created with KEVENT_FLAG_WORKLOOP_NO_WQ_THREAD from userspace can have attached threads */
-	if (!(kq->kq_state & KQ_NO_WQ_THREAD))
-		return EINVAL;
-
-	/* allow detach only on not wq threads */
-	if (is_workqueue_thread(thread))
-		return EINVAL;
-
-	/* check that the current thread is bound to the requested wq */
-	ut = get_bsdthread_info(thread);
-	if (ut->uu_kqueue_bound != kq)
-		return EINVAL;
-
-	kqwl = (struct kqworkloop *)kq;
-	kqwl_req_lock(kqwl);
-	kqr = &kqwl->kqwl_request;
-
-	/* check that the wq is bound to the thread */
-	if ((kqr->kqr_state & KQR_BOUND) == 0  || (kqr->kqr_thread != thread))
-		error = EINVAL;
-
-	kqwl_req_unlock(kqwl);
-
-	return error;
-}
-
-static void
-kevent_servicer_detach_thread(struct proc *p, kqueue_id_t id, thread_t thread,
-		unsigned int flags, struct kqueue *kq)
-{
-	struct kqworkloop *kqwl;
-	struct uthread *ut;
-
-	assert((flags & KEVENT_FLAG_WORKLOOP) && (kq->kq_state & KQ_WORKLOOP));
-
-	/* allow detach only on not wqthreads threads */
-	assert(!is_workqueue_thread(thread));
-
-	/* only kq created with KEVENT_FLAG_WORKLOOP_NO_WQ_THREAD from userspace can have attached threads */
-	assert(kq->kq_state & KQ_NO_WQ_THREAD);
-
-	/* check that the current thread is bound to the requested kq */
-	ut = get_bsdthread_info(thread);
-	assert(ut->uu_kqueue_bound == kq);
-
-	kqwl = (struct kqworkloop *)kq;
-
-	kqlock(kq);
-
-	/* unbind the thread.
-	 * unbind itself checks if still processing and ends it.
-	 */
-	kqworkloop_unbind_thread(kqwl, thread, flags);
-
-	kqunlock(kq);
-
-	kevent_put_kq(p, id, NULL, kq);
-
-	return;
-}
-
-static int
-kevent_servicer_attach_thread(thread_t thread, unsigned int flags, struct kqueue *kq)
-{
-	int error = 0;
-	struct kqworkloop *kqwl;
-	struct uthread *ut;
-	struct kqrequest *kqr;
-
-	if (!(flags & KEVENT_FLAG_WORKLOOP) || !(kq->kq_state & KQ_WORKLOOP))
-		return EINVAL;
-
-	/* only kq created with KEVENT_FLAG_WORKLOOP_NO_WQ_THREAD from userspace can have attached threads*/
-	if (!(kq->kq_state & KQ_NO_WQ_THREAD))
-		return EINVAL;
-
-	/* allow attach only on not wqthreads */
-	if (is_workqueue_thread(thread))
-		return EINVAL;
-
-	/* check that the thread is not already bound */
-	ut = get_bsdthread_info(thread);
-	if (ut->uu_kqueue_bound != NULL)
-		return EINVAL;
-
-	assert(ut->uu_kqueue_flags == 0);
-
-	kqlock(kq);
-	kqwl = (struct kqworkloop *)kq;
-	kqwl_req_lock(kqwl);
-	kqr = &kqwl->kqwl_request;
-
-	/* check that the kqueue is not already bound */
-	if (kqr->kqr_state & (KQR_BOUND | KQR_THREQUESTED | KQR_DRAIN)) {
-		error = EINVAL;
-		goto out;
-	}
-
-	assert(kqr->kqr_thread == NULL);
-	assert((kqr->kqr_state & KQR_PROCESSING) == 0);
-
-	kqr->kqr_state |= KQR_THREQUESTED;
-	kqr->kqr_qos_index = THREAD_QOS_UNSPECIFIED;
-	kqr->kqr_override_index = THREAD_QOS_UNSPECIFIED;
-	kqr->kqr_dsync_owner_qos = THREAD_QOS_UNSPECIFIED;
-	kqr->kqr_owner_override_is_sync = 0;
-
-	kqworkloop_bind_thread_impl(kqwl, thread, KEVENT_FLAG_WORKLOOP);
-
-	/* get a ref on the wlkq on behalf of the attached thread */
-	kqueue_retain(kq);
-
-out:
-	kqwl_req_unlock(kqwl);
-	kqunlock(kq);
-
-	return error;
-}
-
-static inline
-boolean_t kevent_args_requesting_events(unsigned int flags, int nevents)
+static inline boolean_t
+kevent_args_requesting_events(unsigned int flags, int nevents)
 {
 	return (!(flags & KEVENT_FLAG_ERROR_EVENTS) && nevents > 0);
 }
@@ -4248,55 +3840,51 @@ kevent_internal(struct proc *p,
 		user_addr_t changelist, int nchanges,
 		user_addr_t ueventlist, int nevents,
 		user_addr_t data_out, uint64_t data_available,
-		unsigned int flags, 
+		unsigned int flags,
 		user_addr_t utimeout,
 		kqueue_continue_t continuation,
 		int32_t *retval)
 {
-	struct _kevent *cont_args;
 	uthread_t ut;
 	struct kqueue *kq;
 	struct fileproc *fp = NULL;
 	int fd = 0;
 	struct kevent_internal_s kev;
-	int error, noutputs;
+	int error, noutputs, register_rc;
+	bool needs_end_processing = false;
 	struct timeval atv;
 	user_size_t data_size;
 	user_size_t data_resid;
 	thread_t thread = current_thread();
+	KNOTE_LOCK_CTX(knlc);
 
 	/* Don't allow user-space threads to process output events from the workq kqs */
 	if (((flags & (KEVENT_FLAG_WORKQ | KEVENT_FLAG_KERNEL)) == KEVENT_FLAG_WORKQ) &&
 	    kevent_args_requesting_events(flags, nevents))
 		return EINVAL;
 
+	if (flags & KEVENT_FLAG_PARKING) {
+		if (!kevent_args_requesting_events(flags, nevents) || id != (kqueue_id_t)-1)
+			return EINVAL;
+	}
+
 	/* restrict dynamic kqueue allocation to workloops (for now) */
 	if ((flags & (KEVENT_FLAG_DYNAMIC_KQUEUE | KEVENT_FLAG_WORKLOOP)) == KEVENT_FLAG_DYNAMIC_KQUEUE)
 		return EINVAL;
 
 	if ((flags & (KEVENT_FLAG_WORKLOOP)) && (flags & (KEVENT_FLAG_WORKQ)))
-                return EINVAL;
+		return EINVAL;
 
-	if (flags & (KEVENT_FLAG_WORKLOOP_SERVICER_ATTACH | KEVENT_FLAG_WORKLOOP_SERVICER_DETACH |
-	    KEVENT_FLAG_DYNAMIC_KQ_MUST_EXIST | KEVENT_FLAG_DYNAMIC_KQ_MUST_NOT_EXIST | KEVENT_FLAG_WORKLOOP_NO_WQ_THREAD)) {
+	if (flags & (KEVENT_FLAG_DYNAMIC_KQ_MUST_EXIST | KEVENT_FLAG_DYNAMIC_KQ_MUST_NOT_EXIST)) {
 
 		/* allowed only on workloops when calling kevent_id from user-space */
 		if (!(flags & KEVENT_FLAG_WORKLOOP) || (flags & KEVENT_FLAG_KERNEL) || !(flags & KEVENT_FLAG_DYNAMIC_KQUEUE))
 			return EINVAL;
-
-		/* cannot attach and detach simultaneously*/
-		if ((flags & KEVENT_FLAG_WORKLOOP_SERVICER_ATTACH) && (flags & KEVENT_FLAG_WORKLOOP_SERVICER_DETACH))
-			return EINVAL;
-
-		/* cannot ask for events and detach */
-		if ((flags & KEVENT_FLAG_WORKLOOP_SERVICER_DETACH) && kevent_args_requesting_events(flags, nevents))
-			return EINVAL;
-
 	}
 
 	/* prepare to deal with stack-wise allocation of out events */
 	if (flags & KEVENT_FLAG_STACK_EVENTS) {
-		int scale = ((flags & KEVENT_FLAG_LEGACY32) ? 
+		int scale = ((flags & KEVENT_FLAG_LEGACY32) ?
 			     (IS_64BIT_PROCESS(p) ? sizeof(struct user64_kevent) :
 			                            sizeof(struct user32_kevent)) :
 			     ((flags & KEVENT_FLAG_LEGACY64) ? sizeof(struct kevent64_s) :
@@ -4308,47 +3896,56 @@ kevent_internal(struct proc *p,
 	error = kevent_get_timeout(p, utimeout, flags, &atv);
 	if (error)
 		return error;
-	
+
 	/* copyin initial value of data residual from data_available */
 	error = kevent_get_data_size(p, data_available, flags, &data_size);
 	if (error)
 		return error;
 
 	/* get the kq we are going to be working on */
-	error = kevent_get_kq(p, id, flags, &fp, &fd, &kq);
+	error = kevent_get_kq(p, id, NULL, flags, &fp, &fd, &kq);
+#if CONFIG_WORKLOOP_DEBUG
+	ut = (uthread_t)get_bsdthread_info(thread);
+	UU_KEVENT_HISTORY_WRITE_ENTRY(ut, {
+		.uu_kqid = id,
+		.uu_kq = error ? NULL : kq,
+		.uu_error = error,
+		.uu_nchanges = nchanges,
+		.uu_nevents = nevents,
+		.uu_flags = flags,
+	});
+#endif // CONFIG_WORKLOOP_DEBUG
 	if (error)
 		return error;
 
 	/* only bound threads can receive events on workloops */
-	if ((flags & KEVENT_FLAG_WORKLOOP) && kevent_args_requesting_events(flags, nevents)) {
-		ut = (uthread_t)get_bsdthread_info(thread);
-		if (ut->uu_kqueue_bound != kq) {
-			error = EXDEV;
-			goto out;
-		}
+	if (flags & KEVENT_FLAG_WORKLOOP) {
+		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
+		struct kqrequest *kqr = &kqwl->kqwl_request;
 
-	}
-
-	/* attach the current thread if necessary */
-	if (flags & KEVENT_FLAG_WORKLOOP_SERVICER_ATTACH) {
-		error = kevent_servicer_attach_thread(thread, flags, kq);
-		if (error)
-			goto out;
-	}
-	else {
-		/* before processing events and committing to the system call, return an error if the thread cannot be detached when requested */
-		if (flags & KEVENT_FLAG_WORKLOOP_SERVICER_DETACH) {
-			error = kevent_servicer_detach_preflight(thread, flags, kq);
-			if (error)
-				goto out;
-		}
-	}
-
-	if (id_out && kq && (flags & KEVENT_FLAG_WORKLOOP)) {
 		assert(kq->kq_state & KQ_WORKLOOP);
-		struct kqworkloop *kqwl;
-		kqwl = (struct kqworkloop *)kq;
-		*id_out = kqwl->kqwl_dynamicid;
+
+		if (kevent_args_requesting_events(flags, nevents)) {
+			if (kq != kevent_get_bound_kqworkloop(thread)) {
+				error = EXDEV;
+				goto out;
+			}
+
+			kq_req_lock(kqwl);
+			/*
+			 * Disable the R2K notification while doing a register, if the
+			 * caller wants events too, we don't want the AST to be set if we
+			 * will process these events soon.
+			 */
+			kqr->kqr_state &= ~KQR_R2K_NOTIF_ARMED;
+			needs_end_processing = true;
+			kq_req_unlock(kq);
+		}
+
+		if (id_out) {
+			*id_out = kqwl->kqwl_dynamicid;
+		}
+
 	}
 
 	/* register all the change requests the user provided... */
@@ -4361,11 +3958,43 @@ kevent_internal(struct proc *p,
 		/* Make sure user doesn't pass in any system flags */
 		kev.flags &= ~EV_SYSFLAGS;
 
-		kevent_register(kq, &kev, p);
+		register_rc = kevent_register(kq, &kev, &knlc);
+		if (register_rc & FILTER_REGISTER_WAIT) {
+			kqlock_held(kq);
 
-		if (nevents > 0 &&
-		    ((kev.flags & EV_ERROR) || (kev.flags & EV_RECEIPT))) {
-			if (kev.flags & EV_RECEIPT) {
+			// f_post_register_wait is meant to call a continuation and not to
+			// return, which is why we don't support FILTER_REGISTER_WAIT if
+			// KEVENT_FLAG_ERROR_EVENTS is not passed, or if the event that
+			// waits isn't the last.
+			//
+			// It is implementable, but not used by any userspace code at the
+			// moment, so for now return ENOTSUP if someone tries to do it.
+			if (nchanges == 1 && nevents >= 1 && (flags & KEVENT_FLAG_ERROR_EVENTS)) {
+				struct _kevent_register *cont_args;
+				/* store the continuation/completion data in the uthread */
+				ut = (uthread_t)get_bsdthread_info(thread);
+				cont_args = &ut->uu_save.uus_kevent_register;
+				cont_args->kev = kev;
+				cont_args->kq = kq;
+				cont_args->fp = fp;
+				cont_args->fd = fd;
+				cont_args->ueventlist = ueventlist;
+				cont_args->flags = flags;
+				cont_args->retval = retval;
+				cont_args->eventcount = nevents;
+				cont_args->eventout = noutputs;
+				knote_fops(cont_args->knote)->f_post_register_wait(ut, &knlc, cont_args);
+				panic("f_post_register_wait returned (kev: %p)", &kev);
+			}
+
+			kev.flags |= EV_ERROR;
+			kev.data = ENOTSUP;
+			knote_unlock(kq, knlc.knlc_knote, &knlc, KNOTE_KQ_UNLOCK);
+		}
+
+		// keep in sync with kevent_register_wait_return()
+		if (nevents > 0 && (kev.flags & (EV_ERROR|EV_RECEIPT))) {
+			if ((kev.flags & EV_ERROR) == 0) {
 				kev.flags |= EV_ERROR;
 				kev.data = 0;
 			}
@@ -4386,9 +4015,10 @@ kevent_internal(struct proc *p,
 
 	/* process pending events */
 	if (nevents > 0 && noutputs == 0 && error == 0) {
+		struct _kevent *cont_args;
 		/* store the continuation/completion data in the uthread */
 		ut = (uthread_t)get_bsdthread_info(thread);
-		cont_args = &ut->uu_kevent.ss_kevent;
+		cont_args = &ut->uu_save.uus_kevent;
 		cont_args->fp = fp;
 		cont_args->fd = fd;
 		cont_args->retval = retval;
@@ -4401,6 +4031,11 @@ kevent_internal(struct proc *p,
 		cont_args->process_data.fp_data_out = data_out;
 		cont_args->process_data.fp_data_size = data_size;
 		cont_args->process_data.fp_data_resid = data_size;
+
+		/*
+		 * kqworkloop_end_processing() will happen at the end of kqueue_scan()
+		 */
+		needs_end_processing = false;
 
 		error = kqueue_scan(kq, kevent_callback,
 		                    continuation, cont_args,
@@ -4418,13 +4053,16 @@ kevent_internal(struct proc *p,
 		}
 	}
 
-	/* detach the current thread if necessary */
-	if (flags & KEVENT_FLAG_WORKLOOP_SERVICER_DETACH) {
-		assert(fp == NULL);
-		kevent_servicer_detach_thread(p, id, thread, flags, kq);
-	}
-
 out:
+	if (__improbable(needs_end_processing)) {
+		/*
+		 * If we didn't through kqworkloop_end_processing(),
+		 * we need to do it here.
+		 */
+		kqlock(kq);
+		kqworkloop_end_processing((struct kqworkloop *)kq, 0, 0);
+		kqunlock(kq);
+	}
 	kevent_put_kq(p, id, fp, kq);
 
 	/* don't restart after signals... */
@@ -4446,7 +4084,7 @@ out:
  */
 static int
 kevent_callback(__unused struct kqueue *kq, struct kevent_internal_s *kevp,
-    void *data)
+		void *data)
 {
 	struct _kevent *cont_args;
 	int error;
@@ -4493,6 +4131,122 @@ kevent_description(struct kevent_internal_s *kevp, char *s, size_t n)
 	return (s);
 }
 
+static int
+kevent_register_validate_priority(struct kqueue *kq, struct knote *kn,
+		struct kevent_internal_s *kev)
+{
+	/* We don't care about the priority of a disabled or deleted knote */
+	if (kev->flags & (EV_DISABLE | EV_DELETE)) {
+		return 0;
+	}
+
+	if (kq->kq_state & KQ_WORKLOOP) {
+		/*
+		 * Workloops need valid priorities with a QOS (excluding manager) for
+		 * any enabled knote.
+		 *
+		 * When it is pre-existing, just make sure it has a valid QoS as
+		 * kevent_register() will not use the incoming priority (filters who do
+		 * have the responsibility to validate it again, see filt_wltouch).
+		 *
+		 * If the knote is being made, validate the incoming priority.
+		 */
+		if (!_pthread_priority_thread_qos(kn ? kn->kn_qos : kev->qos)) {
+			return ERANGE;
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * Prepare a filter for waiting after register.
+ *
+ * The f_post_register_wait hook will be called later by kevent_register()
+ * and should call kevent_register_wait_block()
+ */
+static int
+kevent_register_wait_prepare(struct knote *kn, struct kevent_internal_s *kev)
+{
+	thread_t thread = current_thread();
+	struct uthread *uth = get_bsdthread_info(thread);
+
+	assert(knote_fops(kn)->f_extended_codes);
+
+	if (kn->kn_hook == NULL) {
+		thread_reference(thread);
+		kn->kn_hook = thread;
+	} else if (kn->kn_hook != thread) {
+		/*
+		 * kn_hook may be set from a previous aborted wait
+		 * However, it has to be from the same thread.
+		 */
+		kev->flags |= EV_ERROR;
+		kev->data = EXDEV;
+		return 0;
+	}
+
+	uth->uu_save.uus_kevent_register.knote = kn;
+	return FILTER_REGISTER_WAIT;
+}
+
+/*
+ * Cleanup a kevent_register_wait_prepare() effect for threads that have been
+ * aborted instead of properly woken up with thread_wakeup_thread().
+ */
+static void
+kevent_register_wait_cleanup(struct knote *kn)
+{
+	thread_t thread = kn->kn_hook;
+	kn->kn_hook = NULL;
+	thread_deallocate(thread);
+}
+
+/*
+ * Must be called at the end of a f_post_register_wait call from a filter.
+ */
+static void
+kevent_register_wait_block(struct turnstile *ts, thread_t thread,
+		struct knote_lock_ctx *knlc, thread_continue_t cont,
+		struct _kevent_register *cont_args)
+{
+	knote_unlock(cont_args->kq, cont_args->knote, knlc, KNOTE_KQ_UNLOCK);
+	turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_NOT_HELD);
+	cont_args->handoff_thread = thread;
+	thread_handoff_parameter(thread, cont, cont_args);
+}
+
+/*
+ * Called by Filters using a f_post_register_wait to return from their wait.
+ */
+static void
+kevent_register_wait_return(struct _kevent_register *cont_args)
+{
+	struct kqueue *kq = cont_args->kq;
+	proc_t p = kq->kq_p;
+	struct kevent_internal_s *kev = &cont_args->kev;
+	int error = 0;
+
+	if (cont_args->handoff_thread) {
+		thread_deallocate(cont_args->handoff_thread);
+	}
+
+	if (kev->flags & (EV_ERROR|EV_RECEIPT)) {
+		if ((kev->flags & EV_ERROR) == 0) {
+			kev->flags |= EV_ERROR;
+			kev->data = 0;
+		}
+		error = kevent_copyout(kev, &cont_args->ueventlist, p, cont_args->flags);
+		if (error == 0) cont_args->eventout++;
+	}
+
+	kevent_put_kq(p, cont_args->fd, cont_args->fp, kq);
+	if (error == 0) {
+		*cont_args->retval = cont_args->eventout;
+	}
+	unix_syscall_return(error);
+}
+
 /*
  * kevent_register - add a new event to a kqueue
  *
@@ -4507,17 +4261,15 @@ kevent_description(struct kevent_internal_s *kevp, char *s, size_t n)
  *	caller holds a reference on the kqueue
  */
 
-void
+int
 kevent_register(struct kqueue *kq, struct kevent_internal_s *kev,
-    __unused struct proc *ctxp)
+		struct knote_lock_ctx *knlc)
 {
 	struct proc *p = kq->kq_p;
 	const struct filterops *fops;
 	struct knote *kn = NULL;
-	int result = 0;
-	int error = 0;
+	int result = 0, error = 0;
 	unsigned short kev_flags = kev->flags;
-	int knoteuse_flags = KNUSE_NONE;
 
 	if (kev->filter < 0) {
 		if (kev->filter + EVFILT_SYSCOUNT < 0) {
@@ -4532,7 +4284,7 @@ kevent_register(struct kqueue *kq, struct kevent_internal_s *kev,
 
 	/* restrict EV_VANISHED to adding udata-specific dispatch kevents */
 	if ((kev->flags & EV_VANISHED) &&
-	    (kev->flags & (EV_ADD | EV_DISPATCH2)) != (EV_ADD | EV_DISPATCH2)) {
+			(kev->flags & (EV_ADD | EV_DISPATCH2)) != (EV_ADD | EV_DISPATCH2)) {
 		error = EINVAL;
 		goto out;
 	}
@@ -4557,279 +4309,249 @@ kevent_register(struct kqueue *kq, struct kevent_internal_s *kev,
 	}
 
 restart:
-
 	/* find the matching knote from the fd tables/hashes */
 	kn = kq_find_knote_and_kq_lock(kq, kev, fops->f_isfd, p);
-
-	if (kn == NULL) {
-		if (kev->flags & EV_ADD) {
-			struct fileproc *knote_fp = NULL;
-
-			/* grab a file reference for the new knote */
-			if (fops->f_isfd) {
-				if ((error = fp_lookup(p, kev->ident, &knote_fp, 0)) != 0) {
-					goto out;
-				}
-			}
-
-			kn = knote_alloc();
-			if (kn == NULL) {
-				error = ENOMEM;
-				if (knote_fp != NULL)
-					fp_drop(p, kev->ident, knote_fp, 0);
-				goto out;
-			}
-
-			kn->kn_fp = knote_fp;
-			knote_set_kq(kn, kq);
-			kqueue_retain(kq); /* retain a kq ref */
-			kn->kn_filtid = ~kev->filter;
-			kn->kn_inuse = 1;  /* for f_attach() */
-			kn->kn_status = KN_ATTACHING | KN_ATTACHED;
-
-			/* was vanish support requested */
-			if (kev->flags & EV_VANISHED) {
-				kev->flags &= ~EV_VANISHED;
-				kn->kn_status |= KN_REQVANISH;
-			}
-
-			/* snapshot matching/dispatching protcol flags into knote */
-			if (kev->flags & EV_DISPATCH)
-				kn->kn_status |= KN_DISPATCH;
-			if (kev->flags & EV_UDATA_SPECIFIC)
-				kn->kn_status |= KN_UDATA_SPECIFIC;
-
-			/*
-			 * copy the kevent state into knote
-			 * protocol is that fflags and data
-			 * are saved off, and cleared before
-			 * calling the attach routine.
-			 */
-			kn->kn_kevent = *kev;
-			kn->kn_sfflags = kev->fflags;
-			kn->kn_sdata = kev->data;
-			kn->kn_fflags = 0;
-			kn->kn_data = 0;
-
-			/* invoke pthread kext to convert kevent qos to thread qos */
-			knote_canonicalize_kevent_qos(kn);
-			knote_set_qos_index(kn, qos_index_from_qos(kn, kn->kn_qos, FALSE));
-
-			/* before anyone can find it */
-			if (kev->flags & EV_DISABLE) {
-				/*
-				 * do this before anyone can find it,
-				 * this can't call knote_disable() because it expects having
-				 * the kqlock held
-				 */
-				kn->kn_status |= KN_DISABLED;
-			}
-
-			/* Add the knote for lookup thru the fd table */
-			error = kq_add_knote(kq, kn, kev, p, &knoteuse_flags);
-			if (error) {
-				(void)kqueue_release(kq, KQUEUE_CANT_BE_LAST_REF);
-				knote_free(kn);
-				if (knote_fp != NULL)
-					fp_drop(p, kev->ident, knote_fp, 0);
-
-				if (error == ERESTART) {
-					error = 0;
-					goto restart;
-				}
-				goto out;
-			}
-
-			/* fp reference count now applies to knote */
-			/* rwlock boost is now held */
-
-			/* call filter attach routine */
-			result = fops->f_attach(kn, kev);
-
-			/*
-			 * Trade knote use count for kq lock.
-			 * Cannot be dropped because we held
-			 * KN_ATTACHING throughout.
-			 */
-			knoteuse2kqlock(kq, kn, KNUSE_STEAL_DROP | knoteuse_flags);
-
-			if (kn->kn_flags & EV_ERROR) {
-				/*
-				 * Failed to attach correctly, so drop.
-				 * All other possible users/droppers
-				 * have deferred to us.  Save the error
-				 * to return to our caller.
-				 */
-				kn->kn_status &= ~KN_ATTACHED;
-				kn->kn_status |= KN_DROPPING;
-				error = kn->kn_data;
-				kqunlock(kq);
-				knote_drop(kn, p);
-				goto out;
-			}
-
-			/* end "attaching" phase - now just attached */
-			kn->kn_status &= ~KN_ATTACHING;
-
-			if (kn->kn_status & KN_DROPPING) {
-				/*
-				 * Attach succeeded, but someone else
-				 * deferred their drop - now we have
-				 * to do it for them.
-				 */
-				kqunlock(kq);
-				knote_drop(kn, p);
-				goto out;
-			}
-
-			/* Mark the thread request overcommit - if appropos */
-			knote_set_qos_overcommit(kn);
-
-			/*
-			 * If the attach routine indicated that an
-			 * event is already fired, activate the knote.
-			 */
-			if (result)
-				knote_activate(kn);
-
-			if (knote_fops(kn)->f_post_attach) {
-				error = knote_fops(kn)->f_post_attach(kn, kev);
-				if (error) {
-					kqunlock(kq);
-					goto out;
-				}
-			}
-
-		} else {
-			if ((kev_flags & (EV_ADD | EV_DELETE)) == (EV_ADD | EV_DELETE) &&
-					(kq->kq_state & KQ_WORKLOOP)) {
-				/*
-				 * For workloops, understand EV_ADD|EV_DELETE as a "soft" delete
-				 * that doesn't care about ENOENT, so just pretend the deletion
-				 * happened.
-				 */
-			} else {
-				error = ENOENT;
-			}
-			goto out;
-		}
-
-	} else {
-		/* existing knote: kqueue lock already taken by kq_find_knote_and_kq_lock */
-
-		if ((kn->kn_status & (KN_DROPPING | KN_ATTACHING)) != 0) {
-			/*
-			 * The knote is not in a stable state, wait for that
-			 * transition to complete and then redrive the lookup.
-			 */
-			knoteusewait(kq, kn);
-			goto restart;
-		}
-
-		if (kev->flags & EV_DELETE) {
-
-			/*
-			 * If attempting to delete a disabled dispatch2 knote,
-			 * we must wait for the knote to be re-enabled (unless
-			 * it is being re-enabled atomically here).
-			 */
-			if ((kev->flags & EV_ENABLE) == 0 &&
-			    (kn->kn_status & (KN_DISPATCH2 | KN_DISABLED)) ==
-			                     (KN_DISPATCH2 | KN_DISABLED)) {
-				kn->kn_status |= KN_DEFERDELETE;
-				kqunlock(kq);
-				error = EINPROGRESS;
-			} else if (knote_fops(kn)->f_drop_and_unlock) {
-				/*
-				 * The filter has requested to handle EV_DELETE events
-				 *
-				 * ERESTART means the kevent has to be re-evaluated
-				 */
-				error = knote_fops(kn)->f_drop_and_unlock(kn, kev);
-				if (error == ERESTART) {
-					error = 0;
-					goto restart;
-				}
-			} else if (kqlock2knotedrop(kq, kn)) {
-				/* standard/default EV_DELETE path */
-				knote_drop(kn, p);
-			} else {
-				/*
-				 * The kqueue is unlocked, it's not being
-				 * dropped, and kqlock2knotedrop returned 0:
-				 * this means that someone stole the drop of
-				 * the knote from us.
-				 */
-				error = EINPROGRESS;
-			}
-			goto out;
-		}
-
-		/*
-		 * If we are re-enabling a deferred-delete knote,
-		 * just enable it now and avoid calling the
-		 * filter touch routine (it has delivered its
-		 * last event already).
-		 */
-		if ((kev->flags & EV_ENABLE) &&
-		    (kn->kn_status & KN_DEFERDELETE)) {
-			assert(kn->kn_status & KN_DISABLED);
-			knote_activate(kn);
-			knote_enable(kn);
-			kqunlock(kq);
-			goto out;
-		}
-
-		/*
-		 * If we are disabling, do it before unlocking and
-		 * calling the touch routine (so no processing can
-		 * see the new kevent state before the disable is
-		 * applied).
-		 */
-		if (kev->flags & EV_DISABLE)
-			knote_disable(kn);
-
-		/*
-		 * Convert the kqlock to a use reference on the
-		 * knote so we can call the filter touch routine.
-		 */
-		if (knoteuse_needs_boost(kn, kev)) {
-			knoteuse_flags |= KNUSE_BOOST;
-		}
-		if (kqlock2knoteuse(kq, kn, knoteuse_flags)) {
-			/*
-			 * Call touch routine to notify filter of changes
-			 * in filter values (and to re-determine if any
-			 * events are fired).
-			 */
-			result = knote_fops(kn)->f_touch(kn, kev);
-
-			/* Get the kq lock back (don't defer droppers). */
-			if (!knoteuse2kqlock(kq, kn, knoteuse_flags)) {
-				kqunlock(kq);
-				goto out;
-			}
-
-			/* Handle errors during touch routine */
-			if (kev->flags & EV_ERROR) {
-				error = kev->data;
-				kqunlock(kq);
-				goto out;
-			}
-
-			/* Activate it if the touch routine said to */
-			if (result)
-				knote_activate(kn);
-		}
-
-		/* Enable the knote if called for */
-		if (kev->flags & EV_ENABLE)
-			knote_enable(kn);
-
+	error = kevent_register_validate_priority(kq, kn, kev);
+	result = 0;
+	if (error) {
+		goto out;
 	}
 
-	/* still have kqlock held and knote is valid */
-	kqunlock(kq);
+	if (kn == NULL && (kev->flags & EV_ADD) == 0) {
+		/*
+		 * No knote found, EV_ADD wasn't specified
+		 */
+
+		if ((kev_flags & EV_ADD) && (kev_flags & EV_DELETE) &&
+				(kq->kq_state & KQ_WORKLOOP)) {
+			/*
+			 * For workloops, understand EV_ADD|EV_DELETE as a "soft" delete
+			 * that doesn't care about ENOENT, so just pretend the deletion
+			 * happened.
+			 */
+		} else {
+			error = ENOENT;
+		}
+		goto out;
+
+	} else if (kn == NULL) {
+		/*
+		 * No knote found, need to attach a new one (attach)
+		 */
+
+		struct fileproc *knote_fp = NULL;
+
+		/* grab a file reference for the new knote */
+		if (fops->f_isfd) {
+			if ((error = fp_lookup(p, kev->ident, &knote_fp, 0)) != 0) {
+				goto out;
+			}
+		}
+
+		kn = knote_alloc();
+		if (kn == NULL) {
+			error = ENOMEM;
+			if (knote_fp != NULL)
+				fp_drop(p, kev->ident, knote_fp, 0);
+			goto out;
+		}
+
+		kn->kn_fp = knote_fp;
+		kn->kn_kq_packed = (intptr_t)(struct kqueue *)kq;
+		kqueue_retain(kq); /* retain a kq ref */
+		kn->kn_filtid = ~kev->filter;
+		kn->kn_status = KN_ATTACHING | KN_ATTACHED;
+
+		/* was vanish support requested */
+		if (kev->flags & EV_VANISHED) {
+			kev->flags &= ~EV_VANISHED;
+			kn->kn_status |= KN_REQVANISH;
+		}
+
+		/* snapshot matching/dispatching protcol flags into knote */
+		if (kev->flags & EV_DISPATCH)
+			kn->kn_status |= KN_DISPATCH;
+		if (kev->flags & EV_UDATA_SPECIFIC)
+			kn->kn_status |= KN_UDATA_SPECIFIC;
+		if (kev->flags & EV_DISABLE)
+			kn->kn_status |= KN_DISABLED;
+
+		/*
+		 * copy the kevent state into knote
+		 * protocol is that fflags and data
+		 * are saved off, and cleared before
+		 * calling the attach routine.
+		 */
+		kn->kn_kevent = *kev;
+		kn->kn_sfflags = kev->fflags;
+		kn->kn_sdata = kev->data;
+		kn->kn_fflags = 0;
+		kn->kn_data = 0;
+		knote_reset_priority(kn, kev->qos);
+
+		/* Add the knote for lookup thru the fd table */
+		error = kq_add_knote(kq, kn, knlc, p);
+		if (error) {
+			(void)kqueue_release(kq, KQUEUE_CANT_BE_LAST_REF);
+			knote_free(kn);
+			if (knote_fp != NULL)
+				fp_drop(p, kev->ident, knote_fp, 0);
+
+			if (error == ERESTART) {
+				goto restart;
+			}
+			goto out;
+		}
+
+		/* fp reference count now applies to knote */
+
+		/*
+		 * we can't use filter_call() because f_attach can change the filter ops
+		 * for a filter that supports f_extended_codes, so we need to reload
+		 * knote_fops() and not use `fops`.
+		 */
+		result = fops->f_attach(kn, kev);
+		if (result && !knote_fops(kn)->f_extended_codes) {
+			result = FILTER_ACTIVE;
+		}
+
+		kqlock(kq);
+
+		if (kn->kn_flags & EV_ERROR) {
+			/*
+			 * Failed to attach correctly, so drop.
+			 */
+			kn->kn_status &= ~(KN_ATTACHED | KN_ATTACHING);
+			error = kn->kn_data;
+			knote_drop(kq, kn, knlc);
+			result = 0;
+			goto out;
+		}
+
+		/*
+		 * end "attaching" phase - now just attached
+		 *
+		 * Mark the thread request overcommit, if appropos
+		 *
+		 * If the attach routine indicated that an
+		 * event is already fired, activate the knote.
+		 */
+		kn->kn_status &= ~KN_ATTACHING;
+		knote_set_qos_overcommit(kn);
+
+		if (result & FILTER_ACTIVE) {
+			if (result & FILTER_ADJUST_EVENT_QOS_BIT)
+				knote_adjust_qos(kq, kn, result);
+			knote_activate(kn);
+		}
+
+	} else if (!knote_lock(kq, kn, knlc, KNOTE_KQ_LOCK_ON_SUCCESS)) {
+
+		/*
+		 * The knote was dropped while we were waiting for the lock,
+		 * we need to re-evaluate entirely
+		 */
+
+		goto restart;
+
+	} else if (kev->flags & EV_DELETE) {
+		/*
+		 * Deletion of a knote (drop)
+		 *
+		 * If the filter wants to filter drop events, let it do so.
+		 *
+		 * defer-delete: when trying to delete a disabled EV_DISPATCH2 knote,
+		 * we must wait for the knote to be re-enabled (unless it is being
+		 * re-enabled atomically here).
+		 */
+
+		if (knote_fops(kn)->f_allow_drop) {
+			bool drop;
+
+			kqunlock(kq);
+			drop = knote_fops(kn)->f_allow_drop(kn, kev);
+			kqlock(kq);
+
+			if (!drop) goto out_unlock;
+		}
+
+		if ((kev->flags & EV_ENABLE) == 0 &&
+				(kn->kn_status & (KN_DISPATCH2 | KN_DISABLED)) ==
+				(KN_DISPATCH2 | KN_DISABLED)) {
+			kn->kn_status |= KN_DEFERDELETE;
+			error = EINPROGRESS;
+			goto out_unlock;
+		}
+
+		knote_drop(kq, kn, knlc);
+		goto out;
+
+	} else {
+		/*
+		 * Regular update of a knote (touch)
+		 *
+		 * Call touch routine to notify filter of changes in filter values
+		 * (and to re-determine if any events are fired).
+		 *
+		 * If the knote is in defer-delete, avoid calling the filter touch
+		 * routine (it has delivered its last event already).
+		 *
+		 * If the touch routine had no failure,
+		 * apply the requested side effects to the knote.
+		 */
+
+		if (kn->kn_status & (KN_DEFERDELETE | KN_VANISHED)) {
+			if (kev->flags & EV_ENABLE) {
+				result = FILTER_ACTIVE;
+			}
+		} else {
+			kqunlock(kq);
+			result = filter_call(knote_fops(kn), f_touch(kn, kev));
+			kqlock(kq);
+		}
+
+		if (kev->flags & EV_ERROR) {
+			result = 0;
+		} else {
+			/* accept new kevent state */
+			if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
+				kn->kn_udata = kev->udata;
+			if (kev->flags & EV_DISABLE)
+				knote_disable(kn);
+			if (result & (FILTER_UPDATE_REQ_QOS | FILTER_ADJUST_EVENT_QOS_BIT))
+				knote_dequeue(kn);
+			if ((result & FILTER_UPDATE_REQ_QOS) &&
+					kev->qos && kev->qos != kn->kn_qos) {
+				knote_reset_priority(kn, kev->qos);
+			}
+			if (result & FILTER_ACTIVE) {
+				thread_qos_t qos;
+				if (result & FILTER_ADJUST_EVENT_QOS_BIT) {
+					if (knote_should_apply_qos_override(kq, kn, result, &qos)) {
+						knote_apply_qos_override(kn, qos);
+					}
+				}
+				knote_activate(kn);
+			}
+			if (result & (FILTER_UPDATE_REQ_QOS | FILTER_ADJUST_EVENT_QOS_BIT)) {
+				if (knote_enqueue(kn) && (kn->kn_status & KN_ACTIVE)) {
+					knote_wakeup(kn);
+				}
+			}
+			if (kev->flags & EV_ENABLE)
+				knote_enable(kn);
+		}
+	}
+
+out_unlock:
+	if ((result & FILTER_REGISTER_WAIT) == 0) {
+		/*
+		 * When the filter asked for a post-register wait,
+		 * we leave the knote and kqueue locked for kevent_register()
+		 * to call the filter's f_post_register_wait hook.
+		 */
+		knote_unlock(kq, kn, knlc, KNOTE_KQ_UNLOCK);
+	}
 
 out:
 	/* output local errors through the kevent */
@@ -4837,8 +4559,8 @@ out:
 		kev->flags |= EV_ERROR;
 		kev->data = error;
 	}
+	return result;
 }
-
 
 /*
  * knote_process - process a triggered event
@@ -4861,16 +4583,17 @@ out:
  *	kqueue locked on entry and exit - but may be dropped
  */
 static int
-knote_process(struct knote *kn,	
+knote_process(struct knote *kn,
 	kevent_callback_t callback,
 	void *callback_data,
-	struct filt_process_s *process_data,
-	struct proc *p)
+	struct filt_process_s *process_data)
 {
 	struct kevent_internal_s kev;
 	struct kqueue *kq = knote_get_kq(kn);
-	int result = 0;
+	KNOTE_LOCK_CTX(knlc);
+	int result = FILTER_ACTIVE;
 	int error = 0;
+	bool drop = false;
 
 	bzero(&kev, sizeof(kev));
 
@@ -4897,110 +4620,93 @@ knote_process(struct knote *kn,
 		              kn->kn_status | (kn->kn_id << 32), kn->kn_filtid);
 	}
 
+	if ((kn->kn_status & KN_DROPPING) ||
+			!knote_lock(kq, kn, &knlc, KNOTE_KQ_LOCK_ALWAYS)) {
+		/*
+		 * When the knote is dropping or has dropped,
+		 * then there's nothing we want to process.
+		 */
+		return EJUSTRETURN;
+	}
+
 	/*
 	 * For deferred-drop or vanished events, we just create a fake
 	 * event to acknowledge end-of-life.  Otherwise, we call the
 	 * filter's process routine to snapshot the kevent state under
 	 * the filter's locking protocol.
+	 *
+	 * suppress knotes to avoid returning the same event multiple times in
+	 * a single call.
 	 */
+	knote_suppress(kn);
+
 	if (kn->kn_status & (KN_DEFERDELETE | KN_VANISHED)) {
 		/* create fake event */
 		kev.filter = kn->kn_filter;
 		kev.ident = kn->kn_id;
-		kev.qos = kn->kn_qos;
-		kev.flags = (kn->kn_status & KN_DEFERDELETE) ? 
-		            EV_DELETE : EV_VANISHED;
+		kev.flags = (kn->kn_status & KN_DEFERDELETE) ? EV_DELETE : EV_VANISHED;
 		kev.flags |= (EV_DISPATCH2 | EV_ONESHOT);
 		kev.udata = kn->kn_udata;
-		result = 1;
-
-		knote_suppress(kn);
 	} else {
-		int flags = KNUSE_NONE;
 		/* deactivate - so new activations indicate a wakeup */
 		knote_deactivate(kn);
 
-		/* suppress knotes to avoid returning the same event multiple times in a single call. */
-		knote_suppress(kn);
-
-		if (knoteuse_needs_boost(kn, NULL)) {
-			flags |= KNUSE_BOOST;
-		}
-		/* convert lock to a knote use reference */
-		if (!kqlock2knoteuse(kq, kn, flags))
-			panic("dropping knote found on queue\n");
-
-		/* call out to the filter to process with just a ref */
-		result = knote_fops(kn)->f_process(kn, process_data, &kev);
-		if (result) flags |= KNUSE_STEAL_DROP;
-
-		/*
-		 * convert our reference back to a lock. accept drop
-		 * responsibility from others if we've committed to
-		 * delivering event data.
-		 */
-		if (!knoteuse2kqlock(kq, kn, flags)) {
-			/* knote dropped */
-			kn = NULL;
-		}
+		kqunlock(kq);
+		result = filter_call(knote_fops(kn), f_process(kn, process_data, &kev));
+		kqlock(kq);
 	}
 
-	if (kn != NULL) {
-		/*
-		 * Determine how to dispatch the knote for future event handling.
-		 * not-fired: just return (do not callout, leave deactivated).
-		 * One-shot:  If dispatch2, enter deferred-delete mode (unless this is
-		 *            is the deferred delete event delivery itself).  Otherwise,
-		 *            drop it.
-		 * stolendrop:We took responsibility for someone else's drop attempt.
-		 *            treat this just like one-shot and prepare to turn it back
-		 *            into a deferred delete if required.
-		 * Dispatch:  don't clear state, just mark it disabled.
-		 * Cleared:   just leave it deactivated.
-		 * Others:    re-activate as there may be more events to handle.
-		 *            This will not wake up more handlers right now, but
-		 *            at the completion of handling events it may trigger
-		 *            more handler threads (TODO: optimize based on more than
-		 *            just this one event being detected by the filter).
-		 */
-
-		if (result == 0)
-			return (EJUSTRETURN);
-
-		if ((kev.flags & EV_ONESHOT) || (kn->kn_status & KN_STOLENDROP)) {
-			if ((kn->kn_status & (KN_DISPATCH2 | KN_DEFERDELETE)) == KN_DISPATCH2) {
-				/* defer dropping non-delete oneshot dispatch2 events */
-				kn->kn_status |= KN_DEFERDELETE;
-				knote_disable(kn);
-
-				/* if we took over another's drop clear those flags here */
-				if (kn->kn_status & KN_STOLENDROP) {
-					assert(kn->kn_status & KN_DROPPING);
-					/*
-					 * the knote will be dropped when the
-					 * deferred deletion occurs
-					 */
-					kn->kn_status &= ~(KN_DROPPING|KN_STOLENDROP);
-				}
-			} else if (kn->kn_status & KN_STOLENDROP) {
-				/* We now own the drop of the knote. */
-				assert(kn->kn_status & KN_DROPPING);
-				knote_unsuppress(kn);
-				kqunlock(kq);
-				knote_drop(kn, p);
-				kqlock(kq);
-			} else if (kqlock2knotedrop(kq, kn)) {
-				/* just EV_ONESHOT, _not_ DISPATCH2 */
-				knote_drop(kn, p);
-				kqlock(kq);
-			}
-		} else if (kn->kn_status & KN_DISPATCH) {
-			/* disable all dispatch knotes */
-			knote_disable(kn);
-		} else if ((kev.flags & EV_CLEAR) == 0) {
-			/* re-activate in case there are more events */
-			knote_activate(kn);
+	/*
+	 * Determine how to dispatch the knote for future event handling.
+	 * not-fired: just return (do not callout, leave deactivated).
+	 * One-shot:  If dispatch2, enter deferred-delete mode (unless this is
+	 *            is the deferred delete event delivery itself).  Otherwise,
+	 *            drop it.
+	 * Dispatch:  don't clear state, just mark it disabled.
+	 * Cleared:   just leave it deactivated.
+	 * Others:    re-activate as there may be more events to handle.
+	 *            This will not wake up more handlers right now, but
+	 *            at the completion of handling events it may trigger
+	 *            more handler threads (TODO: optimize based on more than
+	 *            just this one event being detected by the filter).
+	 */
+	if ((result & FILTER_ACTIVE) == 0) {
+		if ((kn->kn_status & (KN_ACTIVE | KN_STAYACTIVE)) == 0) {
+			/*
+			 * Stay active knotes should not be unsuppressed or we'd create an
+			 * infinite loop.
+			 *
+			 * Some knotes (like EVFILT_WORKLOOP) can be reactivated from
+			 * within f_process() but that doesn't necessarily make them
+			 * ready to process, so we should leave them be.
+			 *
+			 * For other knotes, since we will not return an event,
+			 * there's no point keeping the knote suppressed.
+			 */
+			knote_unsuppress(kn);
 		}
+		knote_unlock(kq, kn, &knlc, KNOTE_KQ_LOCK_ALWAYS);
+		return EJUSTRETURN;
+	}
+
+	if (result & FILTER_ADJUST_EVENT_QOS_BIT)
+		knote_adjust_qos(kq, kn, result);
+	kev.qos = _pthread_priority_combine(kn->kn_qos, kn->kn_qos_override);
+
+	if (kev.flags & EV_ONESHOT) {
+		if ((kn->kn_status & (KN_DISPATCH2 | KN_DEFERDELETE)) == KN_DISPATCH2) {
+			/* defer dropping non-delete oneshot dispatch2 events */
+			kn->kn_status |= KN_DEFERDELETE;
+			knote_disable(kn);
+		} else {
+			drop = true;
+		}
+	} else if (kn->kn_status & KN_DISPATCH) {
+		/* disable all dispatch knotes */
+		knote_disable(kn);
+	} else if ((kev.flags & EV_CLEAR) == 0) {
+		/* re-activate in case there are more events */
+		knote_activate(kn);
 	}
 
 	/*
@@ -5008,14 +4714,113 @@ knote_process(struct knote *kn,
 	 * If we have to detach and drop the knote, do
 	 * it while we have the kq unlocked.
 	 */
-	if (result) {
-		kqunlock(kq);
-		error = (callback)(kq, &kev, callback_data);
-		kqlock(kq);
+	if (drop) {
+		knote_drop(kq, kn, &knlc);
+	} else {
+		knote_unlock(kq, kn, &knlc, KNOTE_KQ_UNLOCK);
 	}
-	return (error);
+
+	if (kev.flags & EV_VANISHED) {
+		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KNOTE_VANISHED),
+		              kev.ident, kn->kn_udata, kn->kn_status | (kn->kn_id << 32),
+		              kn->kn_filtid);
+	}
+
+	error = (callback)(kq, &kev, callback_data);
+	kqlock(kq);
+	return error;
 }
 
+/*
+ * Returns -1 if the kqueue was unbound and processing should not happen
+ */
+#define KQWQAE_BEGIN_PROCESSING 1
+#define KQWQAE_END_PROCESSING   2
+#define KQWQAE_UNBIND           3
+static int
+kqworkq_acknowledge_events(struct kqworkq *kqwq, struct kqrequest *kqr,
+		int kevent_flags, int kqwqae_op)
+{
+	thread_qos_t old_override = THREAD_QOS_UNSPECIFIED;
+	thread_t thread = kqr->kqr_thread;
+	struct knote *kn;
+	int rc = 0;
+	bool seen_stayactive = false, unbind;
+
+	kqlock_held(&kqwq->kqwq_kqueue);
+
+	if (!TAILQ_EMPTY(&kqr->kqr_suppressed)) {
+		/*
+		 * Return suppressed knotes to their original state.
+		 * For workq kqueues, suppressed ones that are still
+		 * truly active (not just forced into the queue) will
+		 * set flags we check below to see if anything got
+		 * woken up.
+		 */
+		while ((kn = TAILQ_FIRST(&kqr->kqr_suppressed)) != NULL) {
+			assert(kn->kn_status & KN_SUPPRESSED);
+			knote_unsuppress(kn);
+			if (kn->kn_status & KN_STAYACTIVE) {
+				seen_stayactive = true;
+			}
+		}
+	}
+
+	kq_req_lock(kqwq);
+
+#if DEBUG || DEVELOPMENT
+	thread_t self = current_thread();
+	struct uthread *ut = get_bsdthread_info(self);
+
+	assert(kqr->kqr_state & KQR_THREQUESTED);
+	assert(kqr->kqr_thread == self);
+	assert(ut->uu_kqr_bound == kqr);
+#endif // DEBUG || DEVELOPMENT
+
+	if (kqwqae_op == KQWQAE_UNBIND) {
+		unbind = true;
+	} else if ((kevent_flags & KEVENT_FLAG_PARKING) == 0) {
+		unbind = false;
+	} else if (kqwqae_op == KQWQAE_BEGIN_PROCESSING && seen_stayactive) {
+		/*
+		 * When we unsuppress stayactive knotes, for the kind that are hooked
+		 * through select, we need to process once before we can assert there's
+		 * no event pending. Hence we can't unbind during BEGIN PROCESSING.
+		 */
+		unbind = false;
+	} else {
+		unbind = ((kqr->kqr_state & KQR_WAKEUP) == 0);
+	}
+	if (unbind) {
+		old_override = kqworkq_unbind_locked(kqwq, kqr, thread);
+		rc = -1;
+		/*
+		 * request a new thread if we didn't process the whole queue or real events
+		 * have happened (not just putting stay-active events back).
+		 */
+		if (kqr->kqr_state & KQR_WAKEUP) {
+			kqueue_threadreq_initiate(&kqwq->kqwq_kqueue, kqr,
+					kqr->kqr_qos_index, 0);
+		}
+	}
+
+	if (rc == 0) {
+		/*
+		 * Reset wakeup bit to notice events firing while we are processing,
+		 * as we cannot rely on the bucket queue emptiness because of stay
+		 * active knotes.
+		 */
+		kqr->kqr_state &= ~KQR_WAKEUP;
+	}
+
+	kq_req_unlock(kqwq);
+
+	if (old_override) {
+		thread_drop_ipc_override(thread);
+	}
+
+	return rc;
+}
 
 /*
  * Return 0 to indicate that processing should proceed,
@@ -5025,63 +4830,21 @@ knote_process(struct knote *kn,
  * but may drop lock temporarily.
  */
 static int
-kqworkq_begin_processing(struct kqworkq *kqwq, kq_index_t qos_index, int flags)
+kqworkq_begin_processing(struct kqworkq *kqwq, struct kqrequest *kqr,
+		int kevent_flags)
 {
-	struct kqrequest *kqr;
-	thread_t self = current_thread();
-	__assert_only struct uthread *ut = get_bsdthread_info(self);
-
-	assert(kqwq->kqwq_state & KQ_WORKQ);
-	assert(qos_index < KQWQ_NQOS);
+	int rc = 0;
 
 	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_PROCESS_BEGIN) | DBG_FUNC_START,
-	              flags, qos_index);
+			0, kqr->kqr_qos_index);
 
-	kqwq_req_lock(kqwq);
-
-	kqr = kqworkq_get_request(kqwq, qos_index);
-
-	/* manager skips buckets that haven't asked for its help */
-	if (flags & KEVENT_FLAG_WORKQ_MANAGER) {
-
-		/* If nothing for manager to do, just return */
-		if ((kqr->kqr_state & KQWQ_THMANAGER) == 0) {
-			KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_PROCESS_BEGIN) | DBG_FUNC_END,
-			                        0, kqr->kqr_state);
-			kqwq_req_unlock(kqwq);
-			return -1;
-		}
-		/* bind manager thread from this time on */
-		kqworkq_bind_thread_impl(kqwq, qos_index, self, flags);
-
-	} else {
-		/* We should already be bound to this kqueue */
-		assert(kqr->kqr_state & KQR_BOUND);
-		assert(kqr->kqr_thread == self);
-		assert(ut->uu_kqueue_bound == (struct kqueue *)kqwq);
-		assert(ut->uu_kqueue_qos_index == qos_index);
-		assert((ut->uu_kqueue_flags & flags) == ut->uu_kqueue_flags);
-	}
-
-	/*
-	 * we should have been requested to be here
-	 * and nobody else should still be processing
-	 */
-	assert(kqr->kqr_state & KQR_WAKEUP);
-	assert(kqr->kqr_state & KQR_THREQUESTED);
-	assert((kqr->kqr_state & KQR_PROCESSING) == 0);
-
-	/* reset wakeup trigger to catch new events after we start processing */
-	kqr->kqr_state &= ~KQR_WAKEUP;
-
-	/* convert to processing mode */
-	kqr->kqr_state |= KQR_PROCESSING;
+	rc = kqworkq_acknowledge_events(kqwq, kqr, kevent_flags,
+			KQWQAE_BEGIN_PROCESSING);
 
 	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_PROCESS_BEGIN) | DBG_FUNC_END,
-	              kqr_thread_id(kqr), kqr->kqr_state);
+			thread_tid(kqr->kqr_thread), kqr->kqr_state);
 
-	kqwq_req_unlock(kqwq);
-	return 0;
+	return rc;
 }
 
 static inline bool
@@ -5102,10 +4865,11 @@ kqworkloop_is_processing_on_current_thread(struct kqworkloop *kqwl)
 	return false;
 }
 
-static void
-kqworkloop_acknowledge_events(struct kqworkloop *kqwl, boolean_t clear_ipc_override)
+static thread_qos_t
+kqworkloop_acknowledge_events(struct kqworkloop *kqwl)
 {
 	struct kqrequest *kqr = &kqwl->kqwl_request;
+	kq_index_t qos = THREAD_QOS_UNSPECIFIED;
 	struct knote *kn, *tmp;
 
 	kqlock_held(&kqwl->kqwl_kqueue);
@@ -5119,48 +4883,112 @@ kqworkloop_acknowledge_events(struct kqworkloop *kqwl, boolean_t clear_ipc_overr
 		if (knote_fops(kn)->f_adjusts_qos && (kn->kn_status & KN_DISABLED) &&
 				(kn->kn_status & (KN_STAYACTIVE | KN_DROPPING)) == 0 &&
 				(kn->kn_flags & (EV_DISPATCH | EV_DISABLE)) == EV_DISPATCH) {
-			/*
-			 * When called from unbind, clear the sync ipc override on the knote
-			 * for events which are delivered.
-			 */
-			if (clear_ipc_override) {
-				knote_adjust_sync_qos(kn, THREAD_QOS_UNSPECIFIED, FALSE);
-			}
+			qos = MAX(qos, knote_get_qos_override_index(kn));
 			continue;
 		}
 		knote_unsuppress(kn);
 	}
+
+	return qos;
 }
 
 static int
-kqworkloop_begin_processing(struct kqworkloop *kqwl,
-		__assert_only unsigned int flags)
+kqworkloop_begin_processing(struct kqworkloop *kqwl, unsigned int kevent_flags)
 {
 	struct kqrequest *kqr = &kqwl->kqwl_request;
 	struct kqueue *kq = &kqwl->kqwl_kqueue;
+	thread_qos_t old_override = THREAD_QOS_UNSPECIFIED, qos_override;
+	thread_t thread = kqr->kqr_thread;
+	int rc = 0, op = KQWL_UTQ_NONE;
 
 	kqlock_held(kq);
 
 	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS_BEGIN) | DBG_FUNC_START,
-	              kqwl->kqwl_dynamicid, flags, 0);
-
-	kqwl_req_lock(kqwl);
+	              kqwl->kqwl_dynamicid, 0, 0);
 
 	/* nobody else should still be processing */
-	assert((kqr->kqr_state & KQR_PROCESSING) == 0);
 	assert((kq->kq_state & KQ_PROCESSING) == 0);
 
-	kqr->kqr_state |= KQR_PROCESSING | KQR_R2K_NOTIF_ARMED;
 	kq->kq_state |= KQ_PROCESSING;
 
-	kqwl_req_unlock(kqwl);
+	if (!TAILQ_EMPTY(&kqr->kqr_suppressed)) {
+		op = KQWL_UTQ_RESET_WAKEUP_OVERRIDE;
+	}
 
-	kqworkloop_acknowledge_events(kqwl, FALSE);
+	if (kevent_flags & KEVENT_FLAG_PARKING) {
+		/*
+		 * When "parking" we want to process events and if no events are found
+		 * unbind.
+		 *
+		 * However, non overcommit threads sometimes park even when they have
+		 * more work so that the pool can narrow.  For these, we need to unbind
+		 * early, so that calling kqworkloop_update_threads_qos() can ask the
+		 * workqueue subsystem whether the thread should park despite having
+		 * pending events.
+		 */
+		if (kqr->kqr_state & KQR_THOVERCOMMIT) {
+			op = KQWL_UTQ_PARKING;
+		} else {
+			op = KQWL_UTQ_UNBINDING;
+		}
+	}
+	if (op == KQWL_UTQ_NONE) {
+		goto done;
+	}
 
+	qos_override = kqworkloop_acknowledge_events(kqwl);
+
+	kq_req_lock(kqwl);
+
+	if (op == KQWL_UTQ_UNBINDING) {
+		old_override = kqworkloop_unbind_locked(kqwl, thread);
+		(void)kqueue_release(kqwl, KQUEUE_CANT_BE_LAST_REF);
+	}
+	kqworkloop_update_threads_qos(kqwl, op, qos_override);
+	if (op == KQWL_UTQ_PARKING) {
+		if (!TAILQ_EMPTY(&kqwl->kqwl_queue[KQWL_BUCKET_STAYACTIVE])) {
+			/*
+			 * We cannot trust KQR_WAKEUP when looking at stay active knotes.
+			 * We need to process once, and kqworkloop_end_processing will
+			 * handle the unbind.
+			 */
+		} else if ((kqr->kqr_state & KQR_WAKEUP) == 0 || kqwl->kqwl_owner) {
+			old_override = kqworkloop_unbind_locked(kqwl, thread);
+			(void)kqueue_release(kqwl, KQUEUE_CANT_BE_LAST_REF);
+			rc = -1;
+		}
+	} else if (op == KQWL_UTQ_UNBINDING) {
+		if (kqr->kqr_thread == thread) {
+			/*
+			 * The thread request fired again, passed the admission check and
+			 * got bound to the current thread again.
+			 */
+		} else {
+			rc = -1;
+		}
+	}
+
+	if (rc == 0) {
+		/*
+		 * Reset wakeup bit to notice stay active events firing while we are
+		 * processing, as we cannot rely on the stayactive bucket emptiness.
+		 */
+		kqr->kqr_wakeup_indexes &= ~KQWL_STAYACTIVE_FIRED_BIT;
+	} else {
+		kq->kq_state &= ~KQ_PROCESSING;
+	}
+
+	kq_req_unlock(kqwl);
+
+	if (old_override) {
+		thread_drop_ipc_override(thread);
+	}
+
+done:
 	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS_BEGIN) | DBG_FUNC_END,
-	              kqwl->kqwl_dynamicid, flags, 0);
+	              kqwl->kqwl_dynamicid, 0, 0);
 
-	return 0;
+	return rc;
 }
 
 /*
@@ -5172,22 +5000,15 @@ kqworkloop_begin_processing(struct kqworkloop *kqwl,
  * May block.
  */
 static int
-kqueue_begin_processing(struct kqueue *kq, kq_index_t qos_index, unsigned int flags)
+kqfile_begin_processing(struct kqueue *kq)
 {
 	struct kqtailq *suppressq;
 
 	kqlock_held(kq);
 
-	if (kq->kq_state & KQ_WORKQ) {
-		return kqworkq_begin_processing((struct kqworkq *)kq, qos_index, flags);
-	} else if (kq->kq_state & KQ_WORKLOOP) {
-		return kqworkloop_begin_processing((struct kqworkloop*)kq, flags);
-	}
-
+	assert((kq->kq_state & (KQ_WORKQ | KQ_WORKLOOP)) == 0);
 	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_BEGIN) | DBG_FUNC_START,
-	              VM_KERNEL_UNSLIDE_OR_PERM(kq), flags);
-
-	assert(qos_index == QOS_INDEX_KQFILE);
+	              VM_KERNEL_UNSLIDE_OR_PERM(kq), 0);
 
 	/* wait to become the exclusive processing thread */
 	for (;;) {
@@ -5202,11 +5023,11 @@ kqueue_begin_processing(struct kqueue *kq, kq_index_t qos_index, unsigned int fl
 
 		/* if someone else is processing the queue, wait */
 		kq->kq_state |= KQ_PROCWAIT;
-		suppressq = kqueue_get_suppressed_queue(kq, qos_index);
+		suppressq = kqueue_get_suppressed_queue(kq, NULL);
 		waitq_assert_wait64((struct waitq *)&kq->kq_wqs,
-		                    CAST_EVENT64_T(suppressq),
-		                    THREAD_UNINT, TIMEOUT_WAIT_FOREVER);
-		
+				CAST_EVENT64_T(suppressq), THREAD_UNINT | THREAD_WAIT_NOREPORT,
+				TIMEOUT_WAIT_FOREVER);
+
 		kqunlock(kq);
 		thread_block(THREAD_CONTINUE_NULL);
 		kqlock(kq);
@@ -5219,7 +5040,7 @@ kqueue_begin_processing(struct kqueue *kq, kq_index_t qos_index, unsigned int fl
 	kq->kq_state &= ~KQ_WAKEUP;
 
 	/* anything left to process? */
-	if (kqueue_queue_empty(kq, qos_index)) {
+	if (kqueue_queue_empty(kq, QOS_INDEX_KQFILE)) {
 		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_BEGIN) | DBG_FUNC_END,
 		              VM_KERNEL_UNSLIDE_OR_PERM(kq), 1);
 		return -1;
@@ -5235,166 +5056,133 @@ kqueue_begin_processing(struct kqueue *kq, kq_index_t qos_index, unsigned int fl
 }
 
 /*
- *	kqworkq_end_processing - Complete the processing of a workq kqueue
+ * Try to end the processing, only called when a workq thread is attempting to
+ * park (KEVENT_FLAG_PARKING is set).
  *
- *	We may have to request new threads.
- *	This can happen there are no waiting processing threads and:
- *	- there were active events we never got to (count > 0)
- *	- we pended waitq hook callouts during processing
- *	- we pended wakeups while processing (or unsuppressing)
- *
- *	Called with kqueue lock held.
+ * When returning -1, the kqworkq is setup again so that it is ready to be
+ * processed.
  */
-static void
-kqworkq_end_processing(struct kqworkq *kqwq, kq_index_t qos_index, int flags)
+static int
+kqworkq_end_processing(struct kqworkq *kqwq, struct kqrequest *kqr,
+		int kevent_flags)
 {
-#pragma unused(flags)
-
-	struct kqueue *kq = &kqwq->kqwq_kqueue;
-	struct kqtailq *suppressq = kqueue_get_suppressed_queue(kq, qos_index);
-
-	thread_t self = current_thread();
-	struct uthread *ut = get_bsdthread_info(self);
-	struct knote *kn;
-	struct kqrequest *kqr;
-	thread_t thread;
-
-	assert(kqwq->kqwq_state & KQ_WORKQ);
-	assert(qos_index < KQWQ_NQOS);
-
-	/* Are we really bound to this kqueue? */
-	if (ut->uu_kqueue_bound != kq) {
-		assert(ut->uu_kqueue_bound == kq);
-		return;
-	}
-
-	kqr = kqworkq_get_request(kqwq, qos_index);
-
-	kqwq_req_lock(kqwq);
-
-	/* Do we claim to be manager? */
-	if (flags & KEVENT_FLAG_WORKQ_MANAGER) {
-
-		/* bail if not bound that way */
-		if (ut->uu_kqueue_qos_index != KQWQ_QOS_MANAGER ||
-		    (ut->uu_kqueue_flags & KEVENT_FLAG_WORKQ_MANAGER) == 0) {
-			assert(ut->uu_kqueue_qos_index == KQWQ_QOS_MANAGER);
-			assert(ut->uu_kqueue_flags & KEVENT_FLAG_WORKQ_MANAGER);
-			kqwq_req_unlock(kqwq);
-			return;
-		}
-
-		/* bail if this request wasn't already getting manager help */
-		if ((kqr->kqr_state & KQWQ_THMANAGER) == 0 ||
-		    (kqr->kqr_state & KQR_PROCESSING) == 0) {
-			kqwq_req_unlock(kqwq);
-			return;
-		}
-	} else {
-		if (ut->uu_kqueue_qos_index != qos_index ||
-		    (ut->uu_kqueue_flags & KEVENT_FLAG_WORKQ_MANAGER)) {
-			assert(ut->uu_kqueue_qos_index == qos_index);
-			assert((ut->uu_kqueue_flags & KEVENT_FLAG_WORKQ_MANAGER) == 0);
-			kqwq_req_unlock(kqwq);
-			return;
-		}
-	}
-
-	assert(kqr->kqr_state & KQR_BOUND);
-	thread = kqr->kqr_thread;
-	assert(thread == self);
-
-	assert(kqr->kqr_state & KQR_PROCESSING);
-
-	/* If we didn't drain the whole queue, re-mark a wakeup being needed */
-	if (!kqueue_queue_empty(kq, qos_index))
+	if (!kqueue_queue_empty(&kqwq->kqwq_kqueue, kqr->kqr_qos_index)) {
+		/* remember we didn't process everything */
+		kq_req_lock(kqwq);
 		kqr->kqr_state |= KQR_WAKEUP;
-
-	kqwq_req_unlock(kqwq);
-
-	/*
-	 * Return suppressed knotes to their original state.
-	 * For workq kqueues, suppressed ones that are still
-	 * truly active (not just forced into the queue) will
-	 * set flags we check below to see if anything got
-	 * woken up.
-	 */
-	while ((kn = TAILQ_FIRST(suppressq)) != NULL) {
-		assert(kn->kn_status & KN_SUPPRESSED);
-		knote_unsuppress(kn);
+		kq_req_unlock(kqwq);
 	}
 
-	kqwq_req_lock(kqwq);
-
-	/* Indicate that we are done processing this request */
-	kqr->kqr_state &= ~KQR_PROCESSING;
-
-	/*
-	 * Drop our association with this one request and its
-	 * override on us.
-	 */
-	kqworkq_unbind_thread(kqwq, qos_index, thread, flags);
-
-	/*
-	 * request a new thread if we didn't process the whole
-	 * queue or real events have happened (not just putting
-	 * stay-active events back).
-	 */
-	if (kqr->kqr_state & KQR_WAKEUP) {
-		if (kqueue_queue_empty(kq, qos_index)) {
-			kqr->kqr_state &= ~KQR_WAKEUP;
-		} else {
-			kqworkq_request_thread(kqwq, qos_index);
+	if (kevent_flags & KEVENT_FLAG_PARKING) {
+		/*
+		 * if acknowledge events "succeeds" it means there are events,
+		 * which is a failure condition for end_processing.
+		 */
+		int rc = kqworkq_acknowledge_events(kqwq, kqr, kevent_flags,
+				KQWQAE_END_PROCESSING);
+		if (rc == 0) {
+			return -1;
 		}
 	}
-	kqwq_req_unlock(kqwq);
+
+	return 0;
 }
 
-static void
-kqworkloop_end_processing(struct kqworkloop *kqwl, int nevents,
-		unsigned int flags)
+/*
+ * Try to end the processing, only called when a workq thread is attempting to
+ * park (KEVENT_FLAG_PARKING is set).
+ *
+ * When returning -1, the kqworkq is setup again so that it is ready to be
+ * processed (as if kqworkloop_begin_processing had just been called).
+ *
+ * If successful and KEVENT_FLAG_PARKING was set in the kevent_flags,
+ * the kqworkloop is unbound from its servicer as a side effect.
+ */
+static int
+kqworkloop_end_processing(struct kqworkloop *kqwl, int flags, int kevent_flags)
 {
-	struct kqrequest *kqr = &kqwl->kqwl_request;
 	struct kqueue *kq = &kqwl->kqwl_kqueue;
+	struct kqrequest *kqr = &kqwl->kqwl_request;
+	thread_qos_t old_override = THREAD_QOS_UNSPECIFIED, qos_override;
+	thread_t thread = kqr->kqr_thread;
+	int rc = 0;
 
 	kqlock_held(kq);
 
 	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS_END) | DBG_FUNC_START,
-			kqwl->kqwl_dynamicid, flags, 0);
+			kqwl->kqwl_dynamicid, 0, 0);
 
-	if ((kq->kq_state & KQ_NO_WQ_THREAD) && nevents == 0 &&
-			(flags & KEVENT_FLAG_IMMEDIATE) == 0) {
+	if (flags & KQ_PROCESSING) {
+		assert(kq->kq_state & KQ_PROCESSING);
+
 		/*
-		 * <rdar://problem/31634014> We may soon block, but have returned no
-		 * kevents that need to be kept supressed for overriding purposes.
-		 *
-		 * It is hence safe to acknowledge events and unsuppress everything, so
-		 * that if we block we can observe all events firing.
+		 * If we still have queued stayactive knotes, remember we didn't finish
+		 * processing all of them.  This should be extremely rare and would
+		 * require to have a lot of them registered and fired.
 		 */
-		kqworkloop_acknowledge_events(kqwl, TRUE);
+		if (!TAILQ_EMPTY(&kqwl->kqwl_queue[KQWL_BUCKET_STAYACTIVE])) {
+			kq_req_lock(kqwl);
+			kqworkloop_update_threads_qos(kqwl, KQWL_UTQ_UPDATE_WAKEUP_QOS,
+					KQWL_BUCKET_STAYACTIVE);
+			kq_req_unlock(kqwl);
+		}
+
+		/*
+		 * When KEVENT_FLAG_PARKING is set, we need to attempt an unbind while
+		 * still under the lock.
+		 *
+		 * So we do everything kqworkloop_unbind() would do, but because we're
+		 * inside kqueue_process(), if the workloop actually received events
+		 * while our locks were dropped, we have the opportunity to fail the end
+		 * processing and loop again.
+		 *
+		 * This avoids going through the process-wide workqueue lock hence
+		 * scales better.
+		 */
+		if (kevent_flags & KEVENT_FLAG_PARKING) {
+			qos_override = kqworkloop_acknowledge_events(kqwl);
+		}
 	}
 
-	kqwl_req_lock(kqwl);
+	kq_req_lock(kqwl);
 
-	assert(kqr->kqr_state & KQR_PROCESSING);
-	assert(kq->kq_state & KQ_PROCESSING);
+	if (kevent_flags & KEVENT_FLAG_PARKING) {
+		kqworkloop_update_threads_qos(kqwl, KQWL_UTQ_PARKING, qos_override);
+		if ((kqr->kqr_state & KQR_WAKEUP) && !kqwl->kqwl_owner) {
+			/*
+			 * Reset wakeup bit to notice stay active events firing while we are
+			 * processing, as we cannot rely on the stayactive bucket emptiness.
+			 */
+			kqr->kqr_wakeup_indexes &= ~KQWL_STAYACTIVE_FIRED_BIT;
+			rc = -1;
+		} else {
+			old_override = kqworkloop_unbind_locked(kqwl, thread);
+			(void)kqueue_release(kqwl, KQUEUE_CANT_BE_LAST_REF);
+			kq->kq_state &= ~flags;
+		}
+	} else {
+		kq->kq_state &= ~flags;
+		kqr->kqr_state |= KQR_R2K_NOTIF_ARMED;
+		kqworkloop_update_threads_qos(kqwl, KQWL_UTQ_RECOMPUTE_WAKEUP_QOS, 0);
+	}
 
-	kq->kq_state &= ~KQ_PROCESSING;
-	kqr->kqr_state &= ~KQR_PROCESSING;
-	kqworkloop_update_threads_qos(kqwl, KQWL_UTQ_RECOMPUTE_WAKEUP_QOS, 0);
+	kq_req_unlock(kqwl);
 
-	kqwl_req_unlock(kqwl);
+	if (old_override) {
+		thread_drop_ipc_override(thread);
+	}
 
 	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS_END) | DBG_FUNC_END,
-			kqwl->kqwl_dynamicid, flags, 0);
+			kqwl->kqwl_dynamicid, 0, 0);
+
+	return rc;
 }
 
 /*
  * Called with kqueue lock held.
  */
 static void
-kqueue_end_processing(struct kqueue *kq, kq_index_t qos_index,
-		int nevents, unsigned int flags)
+kqfile_end_processing(struct kqueue *kq)
 {
 	struct knote *kn;
 	struct kqtailq *suppressq;
@@ -5402,21 +5190,15 @@ kqueue_end_processing(struct kqueue *kq, kq_index_t qos_index,
 
 	kqlock_held(kq);
 
-	assert((kq->kq_state & KQ_WORKQ) == 0);
-
-	if (kq->kq_state & KQ_WORKLOOP) {
-		return kqworkloop_end_processing((struct kqworkloop *)kq, nevents, flags);
-	}
+	assert((kq->kq_state & (KQ_WORKQ|KQ_WORKLOOP)) == 0);
 
 	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_END),
-	              VM_KERNEL_UNSLIDE_OR_PERM(kq), flags);
-
-	assert(qos_index == QOS_INDEX_KQFILE);
+			VM_KERNEL_UNSLIDE_OR_PERM(kq), 0);
 
 	/*
 	 * Return suppressed knotes to their original state.
 	 */
-	suppressq = kqueue_get_suppressed_queue(kq, qos_index);
+	suppressq = kqueue_get_suppressed_queue(kq, NULL);
 	while ((kn = TAILQ_FIRST(suppressq)) != NULL) {
 		assert(kn->kn_status & KN_SUPPRESSED);
 		knote_unsuppress(kn);
@@ -5434,498 +5216,204 @@ kqueue_end_processing(struct kqueue *kq, kq_index_t qos_index,
 	}
 }
 
-/*
- *	kqwq_internal_bind - bind thread to processing workq kqueue
- *
- *	Determines if the provided thread will be responsible for
- *	servicing the particular QoS class index specified in the
- *	parameters. Once the binding is done, any overrides that may
- *	be associated with the cooresponding events can be applied.
- *
- *	This should be called as soon as the thread identity is known,
- *	preferably while still at high priority during creation.
- *
- *  - caller holds a reference on the process (and workq kq)
- *	- the thread MUST call kevent_qos_internal after being bound
- *	  or the bucket of events may never be delivered.  
- *	- Nothing locked
- *    (unless this is a synchronous bind, then the request is locked)
- */
 static int
-kqworkq_internal_bind(
-	struct proc *p,
-	kq_index_t qos_index,
-	thread_t thread,
-	unsigned int flags)
+kqueue_workloop_ctl_internal(proc_t p, uintptr_t cmd, uint64_t __unused options,
+		struct kqueue_workloop_params *params, int *retval)
 {
-	struct kqueue *kq;
-	struct kqworkq *kqwq;
-	struct kqrequest *kqr;
-	struct uthread *ut = get_bsdthread_info(thread);
-
-	/* If no process workq, can't be our thread. */
-	kq = p->p_fd->fd_wqkqueue;
-
-	if (kq == NULL)
-		return 0;
-
-	assert(kq->kq_state & KQ_WORKQ);
-	kqwq = (struct kqworkq *)kq;
-
-	/*
-	 * No need to bind the manager thread to any specific
-	 * bucket, but still claim the thread.
-	 */
-	if (qos_index == KQWQ_QOS_MANAGER) {
-		assert(ut->uu_kqueue_bound == NULL);
-		assert(flags & KEVENT_FLAG_WORKQ_MANAGER);
-		ut->uu_kqueue_bound = kq;
-		ut->uu_kqueue_qos_index = qos_index;
-		ut->uu_kqueue_flags = flags;
-
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_BIND),
-		              thread_tid(thread), flags, qos_index);
-
-		return 1;
-	}
-
-	/*
-	 * If this is a synchronous bind callback, the request
-	 * lock is already held, so just do the bind.
-	 */
-	if (flags & KEVENT_FLAG_SYNCHRONOUS_BIND) {
-		kqwq_req_held(kqwq);
-		/* strip out synchronout bind flag */
-		flags &= ~KEVENT_FLAG_SYNCHRONOUS_BIND;
-		kqworkq_bind_thread_impl(kqwq, qos_index, thread, flags);
-		return 1;
-	}
-
-	/*
-	 * check the request that corresponds to our qos_index
-	 * to see if there is an outstanding request.
-	 */
-	kqr = kqworkq_get_request(kqwq, qos_index);
-	assert(kqr->kqr_qos_index == qos_index);
-	kqwq_req_lock(kqwq);
-
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_BIND),
-	              thread_tid(thread), flags, qos_index, kqr->kqr_state);
-
-	if ((kqr->kqr_state & KQR_THREQUESTED) &&
-	    (kqr->kqr_state & KQR_PROCESSING) == 0) {
-
-		if ((kqr->kqr_state & KQR_BOUND) &&
-		    thread == kqr->kqr_thread) {
-			/* duplicate bind - claim the thread */
-			assert(ut->uu_kqueue_bound == kq);
-			assert(ut->uu_kqueue_qos_index == qos_index);
-			kqwq_req_unlock(kqwq);
-			return 1;
-		}
-		if ((kqr->kqr_state & (KQR_BOUND | KQWQ_THMANAGER)) == 0) {
-			/* ours to bind to */
-			kqworkq_bind_thread_impl(kqwq, qos_index, thread, flags);
-			kqwq_req_unlock(kqwq);
-			return 1;
-		}
-	}
-	kqwq_req_unlock(kqwq);
-	return 0;
-}
-
-static void
-kqworkloop_bind_thread_impl(struct kqworkloop *kqwl,
-                            thread_t thread,
-                            __assert_only unsigned int flags)
-{
-	assert(flags & KEVENT_FLAG_WORKLOOP);
-
-	/* the request object must be locked */
-	kqwl_req_held(kqwl);
-
-	struct kqrequest *kqr = &kqwl->kqwl_request;
-	struct uthread *ut = get_bsdthread_info(thread);
-	boolean_t ipc_override_is_sync;
-	kq_index_t qos_index = kqworkloop_combined_qos(kqwl, &ipc_override_is_sync);
-
-	/* nobody else bound so finally bind (as a workloop) */
-	assert(kqr->kqr_state & KQR_THREQUESTED);
-	assert((kqr->kqr_state & (KQR_BOUND | KQR_PROCESSING)) == 0);
-	assert(thread != kqwl->kqwl_owner);
-
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_BIND),
-	              kqwl->kqwl_dynamicid, (uintptr_t)thread_tid(thread),
-	              qos_index,
-	              (uintptr_t)(((uintptr_t)kqr->kqr_override_index << 16) |
-	              (((uintptr_t)kqr->kqr_state) << 8) |
-	              ((uintptr_t)ipc_override_is_sync)));
-
-	kqr->kqr_state |= KQR_BOUND | KQR_R2K_NOTIF_ARMED;
-	kqr->kqr_thread = thread;
-
-	/* bind the workloop to the uthread */
-	ut->uu_kqueue_bound = (struct kqueue *)kqwl;
-	ut->uu_kqueue_flags = flags;
-	ut->uu_kqueue_qos_index = qos_index;
-	assert(ut->uu_kqueue_override_is_sync == 0);
-	ut->uu_kqueue_override_is_sync = ipc_override_is_sync;
-	if (qos_index) {
-		thread_add_ipc_override(thread, qos_index);
-	}
-	if (ipc_override_is_sync) {
-		thread_add_sync_ipc_override(thread);
-	}
-}
-
-/*
- *  workloop_fulfill_threadreq - bind thread to processing workloop
- *
- * The provided thread will be responsible for delivering events
- * associated with the given kqrequest.  Bind it and get ready for
- * the thread to eventually arrive.
- *
- * If WORKLOOP_FULFILL_THREADREQ_SYNC is specified, the callback
- * within the context of the pthread_functions->workq_threadreq
- * callout.  In this case, the request structure is already locked.
- */
-int
-workloop_fulfill_threadreq(struct proc *p,
-                           workq_threadreq_t req,
-                           thread_t thread,
-                           int flags)
-{
-	int sync = (flags & WORKLOOP_FULFILL_THREADREQ_SYNC);
-	int cancel = (flags & WORKLOOP_FULFILL_THREADREQ_CANCEL);
-	struct kqrequest *kqr;
-	struct kqworkloop *kqwl;
-
-	kqwl = (struct kqworkloop *)((uintptr_t)req -
-	                             offsetof(struct kqworkloop, kqwl_request) -
-	                             offsetof(struct kqrequest, kqr_req));
-	kqr = &kqwl->kqwl_request;
-
-	/* validate we're looking at something valid */
-	if (kqwl->kqwl_p != p ||
-	    (kqwl->kqwl_state & KQ_WORKLOOP) == 0) {
-		assert(kqwl->kqwl_p == p);
-		assert(kqwl->kqwl_state & KQ_WORKLOOP);
-		return EINVAL;
-	}
-	
-	if (!sync)
-		kqwl_req_lock(kqwl);
-
-	/* Should be a pending request */
-	if ((kqr->kqr_state & KQR_BOUND) ||
-	    (kqr->kqr_state & KQR_THREQUESTED) == 0) {
-
-		assert((kqr->kqr_state & KQR_BOUND) == 0);
-		assert(kqr->kqr_state & KQR_THREQUESTED);
-		if (!sync)
-			kqwl_req_unlock(kqwl);
-		return EINPROGRESS;
-	}
-
-	assert((kqr->kqr_state & KQR_DRAIN) == 0);
-
-	/*
-	 * Is it a cancel indication from pthread.
-	 * If so, we must be exiting/exec'ing. Forget
-	 * our pending request.
-	 */
-	if (cancel) {
-		kqr->kqr_state &= ~KQR_THREQUESTED;
-		kqr->kqr_state |= KQR_DRAIN;
-	} else {
-		/* do the actual bind? */
-		kqworkloop_bind_thread_impl(kqwl, thread, KEVENT_FLAG_WORKLOOP);
-	}
-
-	if (!sync)
-		kqwl_req_unlock(kqwl);
-
-	if (cancel)
-		kqueue_release_last(p, &kqwl->kqwl_kqueue); /* may dealloc kq */
-
-	return 0;
-}
-	
-
-/*
- *	kevent_qos_internal_bind - bind thread to processing kqueue
- *
- *	Indicates that the provided thread will be responsible for
- *	servicing the particular QoS class index specified in the
- *	parameters. Once the binding is done, any overrides that may
- *	be associated with the cooresponding events can be applied.
- *
- *	This should be called as soon as the thread identity is known,
- *	preferably while still at high priority during creation.
- *
- *  - caller holds a reference on the kqueue.
- *	- the thread MUST call kevent_qos_internal after being bound
- *	  or the bucket of events may never be delivered.  
- *	- Nothing locked (may take mutex or block).
- */
-
-int
-kevent_qos_internal_bind(
-	struct proc *p,
-	int qos_class,
-	thread_t thread,
-	unsigned int flags)
-{
-	kq_index_t qos_index;
-
-	assert(flags & KEVENT_FLAG_WORKQ);
-
-	if (thread == THREAD_NULL || (flags & KEVENT_FLAG_WORKQ) == 0) {
-		return EINVAL;
-	}
-
-	/* get the qos index we're going to service */
-	qos_index = qos_index_for_servicer(qos_class, thread, flags);
-
-	if (kqworkq_internal_bind(p, qos_index, thread, flags))
-		return 0;
-
-	return EINPROGRESS;
-}
-
-
-static void
-kqworkloop_internal_unbind(
-	struct proc *p,
-	thread_t thread,
-	unsigned int flags)
-{
+	int error = 0;
+	int fd;
+	struct fileproc *fp;
 	struct kqueue *kq;
 	struct kqworkloop *kqwl;
-	struct uthread *ut = get_bsdthread_info(thread);
+	struct filedesc *fdp = p->p_fd;
+	workq_threadreq_param_t trp = { };
 
-	assert(ut->uu_kqueue_bound != NULL);
-	kq = ut->uu_kqueue_bound;
-	assert(kq->kq_state & KQ_WORKLOOP);
-	kqwl = (struct kqworkloop *)kq;
+	switch (cmd) {
+	case KQ_WORKLOOP_CREATE:
+		if (!params->kqwlp_flags) {
+			error = EINVAL;
+			break;
+		}
 
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_UNBIND),
-	              kqwl->kqwl_dynamicid, (uintptr_t)thread_tid(thread),
-	              flags, 0);
+		if ((params->kqwlp_flags & KQ_WORKLOOP_CREATE_SCHED_PRI) &&
+				(params->kqwlp_sched_pri < 1 ||
+				 params->kqwlp_sched_pri > 63 /* MAXPRI_USER */)) {
+			error = EINVAL;
+			break;
+		}
 
-	if (!(kq->kq_state & KQ_NO_WQ_THREAD)) {
-		assert(is_workqueue_thread(thread));
+		if ((params->kqwlp_flags & KQ_WORKLOOP_CREATE_SCHED_POL) &&
+				invalid_policy(params->kqwlp_sched_pol)) {
+			error = EINVAL;
+			break;
+		}
 
+		if ((params->kqwlp_flags & KQ_WORKLOOP_CREATE_CPU_PERCENT) &&
+				(params->kqwlp_cpu_percent <= 0 ||
+				 params->kqwlp_cpu_percent > 100 ||
+				 params->kqwlp_cpu_refillms <= 0 ||
+				 params->kqwlp_cpu_refillms > 0x00ffffff)) {
+			error = EINVAL;
+			break;
+		}
+
+		if (params->kqwlp_flags & KQ_WORKLOOP_CREATE_SCHED_PRI) {
+			trp.trp_flags |= TRP_PRIORITY;
+			trp.trp_pri = params->kqwlp_sched_pri;
+		}
+		if (params->kqwlp_flags & KQ_WORKLOOP_CREATE_SCHED_POL) {
+			trp.trp_flags |= TRP_POLICY;
+			trp.trp_pol = params->kqwlp_sched_pol;
+		}
+		if (params->kqwlp_flags & KQ_WORKLOOP_CREATE_CPU_PERCENT) {
+			trp.trp_flags |= TRP_CPUPERCENT;
+			trp.trp_cpupercent = (uint8_t)params->kqwlp_cpu_percent;
+			trp.trp_refillms = params->kqwlp_cpu_refillms;
+		}
+
+		error = kevent_get_kq(p, params->kqwlp_id, &trp,
+				KEVENT_FLAG_DYNAMIC_KQUEUE | KEVENT_FLAG_WORKLOOP |
+				KEVENT_FLAG_DYNAMIC_KQ_MUST_NOT_EXIST , &fp, &fd, &kq);
+		if (error) {
+			break;
+		}
+
+		if (!(fdp->fd_flags & FD_WORKLOOP)) {
+			/* FD_WORKLOOP indicates we've ever created a workloop
+			 * via this syscall but its only ever added to a process, never
+			 * removed.
+			 */
+			proc_fdlock(p);
+			fdp->fd_flags |= FD_WORKLOOP;
+			proc_fdunlock(p);
+		}
+		break;
+	case KQ_WORKLOOP_DESTROY:
+		error = kevent_get_kq(p, params->kqwlp_id, NULL,
+				KEVENT_FLAG_DYNAMIC_KQUEUE | KEVENT_FLAG_WORKLOOP |
+				KEVENT_FLAG_DYNAMIC_KQ_MUST_EXIST , &fp, &fd, &kq);
+		if (error) {
+			break;
+		}
 		kqlock(kq);
-		kqworkloop_unbind_thread(kqwl, thread, flags);
+		kqwl = (struct kqworkloop *)kq;
+		trp.trp_value = kqwl->kqwl_params;
+		if (trp.trp_flags && !(trp.trp_flags & TRP_RELEASED)) {
+			trp.trp_flags |= TRP_RELEASED;
+			kqueue_release(kq, KQUEUE_CANT_BE_LAST_REF);
+		} else {
+			error = EINVAL;
+		}
 		kqunlock(kq);
-
-		/* If last reference, dealloc the workloop kq */
 		kqueue_release_last(p, kq);
-	} else {
-		assert(!is_workqueue_thread(thread));
-		kevent_servicer_detach_thread(p, kqwl->kqwl_dynamicid, thread, flags, kq);
+		break;
 	}
+	*retval = 0;
+	return error;
 }
-
-static void
-kqworkq_internal_unbind(
-	struct proc *p,
-	kq_index_t qos_index,
-	thread_t thread,
-	unsigned int flags)
-{
-	struct kqueue *kq;
-	struct kqworkq *kqwq;
-	struct uthread *ut;
-	kq_index_t end_index;
-
-	assert(thread == current_thread());
-	ut = get_bsdthread_info(thread);
-
-	kq = p->p_fd->fd_wqkqueue;
-	assert(kq->kq_state & KQ_WORKQ);
-	assert(ut->uu_kqueue_bound == kq);
-
-	kqwq = (struct kqworkq *)kq;
-
-	/* end servicing any requests we might own */
-	end_index = (qos_index == KQWQ_QOS_MANAGER) ? 
-	    0 : qos_index;
-	kqlock(kq);
-
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_UNBIND),
-	              (uintptr_t)thread_tid(thread), flags, qos_index);
-
-	do {
-		kqworkq_end_processing(kqwq, qos_index, flags);
-	} while (qos_index-- > end_index);
-
-	ut->uu_kqueue_bound = NULL;
-	ut->uu_kqueue_qos_index = 0;
-	ut->uu_kqueue_flags = 0;
-
-	kqunlock(kq);
-}
-
-/*
- *	kevent_qos_internal_unbind - unbind thread from processing kqueue
- *
- *	End processing the per-QoS bucket of events and allow other threads
- *	to be requested for future servicing.  
- *
- *	caller holds a reference on the kqueue.
- *	thread is the current thread.
- */
 
 int
-kevent_qos_internal_unbind(
-	struct proc *p,
-	int qos_class,
-	thread_t thread,
-	unsigned int flags)
+kqueue_workloop_ctl(proc_t p, struct kqueue_workloop_ctl_args *uap, int *retval)
 {
-#pragma unused(qos_class)
-
-	struct uthread *ut;
-	struct kqueue *kq;
-	unsigned int bound_flags;
-	bool check_flags;
-
-	ut = get_bsdthread_info(thread);
-	if (ut->uu_kqueue_bound == NULL) {
-		/* early out if we are already unbound */
-		assert(ut->uu_kqueue_flags == 0);
-		assert(ut->uu_kqueue_qos_index == 0);
-		assert(ut->uu_kqueue_override_is_sync == 0);
-		return EALREADY;
+	struct kqueue_workloop_params params = {
+		.kqwlp_id = 0,
+	};
+	if (uap->sz < sizeof(params.kqwlp_version)) {
+		return EINVAL;
 	}
 
-	assert(flags & (KEVENT_FLAG_WORKQ | KEVENT_FLAG_WORKLOOP));
-	assert(thread == current_thread());
-
-	check_flags = flags & KEVENT_FLAG_UNBIND_CHECK_FLAGS;
-
-	/* Get the kqueue we started with */
-	kq = ut->uu_kqueue_bound;
-	assert(kq != NULL);
-	assert(kq->kq_state & (KQ_WORKQ | KQ_WORKLOOP));
-
-	/* get flags and QoS parameters we started with */
-	bound_flags = ut->uu_kqueue_flags;
-
-	/* Unbind from the class of workq */
-	if (kq->kq_state & KQ_WORKQ) {
-		if (check_flags && !(flags & KEVENT_FLAG_WORKQ)) {
-			return EINVAL;
-		}
-
-		kqworkq_internal_unbind(p, ut->uu_kqueue_qos_index, thread, bound_flags);
-	} else {
-		if (check_flags && !(flags & KEVENT_FLAG_WORKLOOP)) {
-			return EINVAL;
-		}
-
-		kqworkloop_internal_unbind(p, thread, bound_flags);
+	size_t copyin_sz = MIN(sizeof(params), uap->sz);
+	int rv = copyin(uap->addr, &params, copyin_sz);
+	if (rv) {
+		return rv;
 	}
 
-	return 0;
+	if (params.kqwlp_version != (int)uap->sz) {
+		return EINVAL;
+	}
+
+	return kqueue_workloop_ctl_internal(p, uap->cmd, uap->options, &params,
+			retval);
 }
 
 /*
  * kqueue_process - process the triggered events in a kqueue
  *
- *	Walk the queued knotes and validate that they are
- *	really still triggered events by calling the filter
- *	routines (if necessary).  Hold a use reference on
- *	the knote to avoid it being detached. For each event
- *	that is still considered triggered, invoke the
- *	callback routine provided.
+ *	Walk the queued knotes and validate that they are really still triggered
+ *	events by calling the filter routines (if necessary).
+ *
+ *	For each event that is still considered triggered, invoke the callback
+ *	routine provided.
  *
  *	caller holds a reference on the kqueue.
  *	kqueue locked on entry and exit - but may be dropped
  *	kqueue list locked (held for duration of call)
  */
-
 static int
 kqueue_process(struct kqueue *kq,
-    kevent_callback_t callback,
-    void *callback_data,
-    struct filt_process_s *process_data,
-    int *countp,
-    struct proc *p)
+		kevent_callback_t callback,
+		void *callback_data,
+		struct filt_process_s *process_data,
+		int *countp)
 {
-	unsigned int flags = process_data ? process_data->fp_flags : 0;
 	struct uthread *ut = get_bsdthread_info(current_thread());
-	kq_index_t start_index, end_index, i;
+	struct kqrequest *kqr = ut->uu_kqr_bound;
 	struct knote *kn;
-	int nevents = 0;
-	int error = 0;
+	unsigned int flags = process_data ? process_data->fp_flags : 0;
+	int nevents = 0, error = 0, rc = 0;
+	struct kqtailq *base_queue, *queue;
+	kqueue_t kqu = { .kq = kq };
+#if DEBUG || DEVELOPMENT
+	int retries = 64;
+#endif
+
+	if (kq->kq_state & KQ_WORKQ) {
+		if (kqr == NULL || (kqr->kqr_state & KQR_WORKLOOP)) {
+			return EJUSTRETURN;
+		}
+		rc = kqworkq_begin_processing(kqu.kqwq, kqr, flags);
+	} else if (kq->kq_state & KQ_WORKLOOP) {
+		if (ut->uu_kqr_bound != &kqu.kqwl->kqwl_request) {
+			return EJUSTRETURN;
+		}
+		rc = kqworkloop_begin_processing(kqu.kqwl, flags);
+	} else {
+		rc = kqfile_begin_processing(kq);
+	}
+
+	if (rc == -1) {
+		/* Nothing to process */
+		*countp = 0;
+		return 0;
+	}
 
 	/*
-	 * Based on the mode of the kqueue and the bound QoS of the servicer,
-	 * determine the range of thread requests that need checking
+	 * loop through the enqueued knotes associated with this request,
+	 * processing each one. Each request may have several queues
+	 * of knotes to process (depending on the type of kqueue) so we
+	 * have to loop through all the queues as long as we have additional
+	 * space.
 	 */
+
+process_again:
 	if (kq->kq_state & KQ_WORKQ) {
-		if (flags & KEVENT_FLAG_WORKQ_MANAGER) {
-			start_index = KQWQ_QOS_MANAGER;
-		} else if (ut->uu_kqueue_bound != kq) {
-			return EJUSTRETURN;
-		} else {
-			start_index = ut->uu_kqueue_qos_index;
-		}
-
-		/* manager services every request in a workq kqueue */
-		assert(start_index > 0 && start_index <= KQWQ_QOS_MANAGER);
-		end_index = (start_index == KQWQ_QOS_MANAGER) ? 0 : start_index;
-
+		base_queue = queue = &kqu.kqwq->kqwq_queue[kqr->kqr_qos_index];
 	} else if (kq->kq_state & KQ_WORKLOOP) {
-		if (ut->uu_kqueue_bound != kq)
-			return EJUSTRETURN;
-
-		/*
-		 * Single request servicing
-		 * we want to deliver all events, regardless of the QOS
-		 */
-		start_index = end_index = THREAD_QOS_UNSPECIFIED;
+		base_queue = &kqu.kqwl->kqwl_queue[0];
+		queue = &kqu.kqwl->kqwl_queue[KQWL_NBUCKETS - 1];
 	} else {
-		start_index = end_index = QOS_INDEX_KQFILE;
+		base_queue = queue = &kq->kq_queue[QOS_INDEX_KQFILE];
 	}
-	
-	i = start_index;
 
 	do {
-		if (kqueue_begin_processing(kq, i, flags) == -1) {
-			*countp = 0;
-			/* Nothing to process */
-			continue;
-		}
-
-		/*
-		 * loop through the enqueued knotes associated with this request,
-		 * processing each one. Each request may have several queues
-		 * of knotes to process (depending on the type of kqueue) so we
-		 * have to loop through all the queues as long as we have additional
-		 * space.
-		 */
-		error = 0;
-
-		struct kqtailq *base_queue = kqueue_get_base_queue(kq, i);
-		struct kqtailq *queue = kqueue_get_high_queue(kq, i);
-		do {
-			while (error == 0 && (kn = TAILQ_FIRST(queue)) != NULL) {
-				error = knote_process(kn, callback, callback_data, process_data, p);
-				if (error == EJUSTRETURN) {
-					error = 0;
-				} else {
-					nevents++;
-				}
-				/* error is EWOULDBLOCK when the out event array is full */
+		while (error == 0 && (kn = TAILQ_FIRST(queue)) != NULL) {
+			error = knote_process(kn, callback, callback_data, process_data);
+			if (error == EJUSTRETURN) {
+				error = 0;
+			} else {
+				nevents++;
 			}
-		} while (error == 0 && queue-- > base_queue);
-
-		if ((kq->kq_state & KQ_WORKQ) == 0) {
-			kqueue_end_processing(kq, i, nevents, flags);
+			/* error is EWOULDBLOCK when the out event array is full */
 		}
 
 		if (error == EWOULDBLOCK) {
@@ -5933,10 +5421,40 @@ kqueue_process(struct kqueue *kq,
 			error = 0;
 			break;
 		}
-	} while (i-- > end_index);
+	} while (queue-- > base_queue);
 
 	*countp = nevents;
-	return (error);
+
+	/*
+	 * If KEVENT_FLAG_PARKING is set, and no kevents have been returned,
+	 * we want to unbind the kqrequest from the thread.
+	 *
+	 * However, because the kq locks are dropped several times during process,
+	 * new knotes may have fired again, in which case, we want to fail the end
+	 * processing and process again, until it converges.
+	 *
+	 * If we returned events however, end processing never fails.
+	 */
+	if (error || nevents) flags &= ~KEVENT_FLAG_PARKING;
+	if (kq->kq_state & KQ_WORKQ) {
+		rc = kqworkq_end_processing(kqu.kqwq, kqr, flags);
+	} else if (kq->kq_state & KQ_WORKLOOP) {
+		rc = kqworkloop_end_processing(kqu.kqwl, KQ_PROCESSING, flags);
+	} else {
+		kqfile_end_processing(kq);
+		rc = 0;
+	}
+	if (rc == -1) {
+		assert(flags & KEVENT_FLAG_PARKING);
+#if DEBUG || DEVELOPMENT
+		if (retries-- == 0) {
+			panic("kevent: way too many knote_process retries, kq: %p (0x%02x)",
+					kq, kq->kq_state);
+		}
+#endif
+		goto process_again;
+	}
+	return error;
 }
 
 static void
@@ -5944,7 +5462,7 @@ kqueue_scan_continue(void *data, wait_result_t wait_result)
 {
 	thread_t self = current_thread();
 	uthread_t ut = (uthread_t)get_bsdthread_info(self);
-	struct _kqueue_scan * cont_args = &ut->uu_kevent.ss_kqueue_scan;
+	struct _kqueue_scan * cont_args = &ut->uu_save.uus_kqueue_scan;
 	struct kqueue *kq = (struct kqueue *)data;
 	struct filt_process_s *process_data = cont_args->process_data;
 	int error;
@@ -5955,8 +5473,8 @@ kqueue_scan_continue(void *data, wait_result_t wait_result)
 	case THREAD_AWAKENED: {
 		kqlock(kq);
 	retry:
-		error = kqueue_process(kq, cont_args->call, cont_args->data, 
-		                       process_data, &count, current_proc());
+		error = kqueue_process(kq, cont_args->call, cont_args->data,
+		                       process_data, &count);
 		if (error == 0 && count == 0) {
 			if (kq->kq_state & KQ_DRAIN) {
 				kqunlock(kq);
@@ -6011,7 +5529,6 @@ kqueue_scan_continue(void *data, wait_result_t wait_result)
  *	The callback routine must be valid.
  *	The caller must hold a use-count reference on the kq.
  */
-
 int
 kqueue_scan(struct kqueue *kq,
 	    kevent_callback_t callback,
@@ -6019,7 +5536,7 @@ kqueue_scan(struct kqueue *kq,
 	    void *callback_data,
 	    struct filt_process_s *process_data,
 	    struct timeval *atvp,
-	    struct proc *p)
+	    __unused struct proc *p)
 {
 	thread_continue_t cont = THREAD_CONTINUE_NULL;
 	unsigned int flags;
@@ -6047,7 +5564,7 @@ kqueue_scan(struct kqueue *kq,
 		 */
 		kqlock(kq);
 		error = kqueue_process(kq, callback, callback_data,
-		                       process_data, &count, p);
+		                       process_data, &count);
 		if (error || count)
 			break; /* lock still held */
 
@@ -6070,12 +5587,12 @@ kqueue_scan(struct kqueue *kq,
 				deadline -= now;
 				clock_absolutetime_interval_to_deadline(deadline, &deadline);
 			} else {
-				deadline = 0; 	/* block forever */
+				deadline = 0;	/* block forever */
 			}
 
 			if (continuation) {
 				uthread_t ut = (uthread_t)get_bsdthread_info(current_thread());
-				struct _kqueue_scan *cont_args = &ut->uu_kevent.ss_kqueue_scan;
+				struct _kqueue_scan *cont_args = &ut->uu_save.uus_kqueue_scan;
 
 				cont_args->call = callback;
 				cont_args->cont = continuation;
@@ -6134,9 +5651,9 @@ kqueue_scan(struct kqueue *kq,
 /*ARGSUSED*/
 static int
 kqueue_read(__unused struct fileproc *fp,
-    __unused struct uio *uio,
-    __unused int flags,
-    __unused vfs_context_t ctx)
+		__unused struct uio *uio,
+		__unused int flags,
+		__unused vfs_context_t ctx)
 {
 	return (ENXIO);
 }
@@ -6144,9 +5661,9 @@ kqueue_read(__unused struct fileproc *fp,
 /*ARGSUSED*/
 static int
 kqueue_write(__unused struct fileproc *fp,
-    __unused struct uio *uio,
-    __unused int flags,
-    __unused vfs_context_t ctx)
+		__unused struct uio *uio,
+		__unused int flags,
+		__unused vfs_context_t ctx)
 {
 	return (ENXIO);
 }
@@ -6154,9 +5671,9 @@ kqueue_write(__unused struct fileproc *fp,
 /*ARGSUSED*/
 static int
 kqueue_ioctl(__unused struct fileproc *fp,
-    __unused u_long com,
-    __unused caddr_t data,
-    __unused vfs_context_t ctx)
+		__unused u_long com,
+		__unused caddr_t data,
+		__unused vfs_context_t ctx)
 {
 	return (ENOTTY);
 }
@@ -6164,7 +5681,7 @@ kqueue_ioctl(__unused struct fileproc *fp,
 /*ARGSUSED*/
 static int
 kqueue_select(struct fileproc *fp, int which, void *wq_link_id,
-    __unused vfs_context_t ctx)
+		__unused vfs_context_t ctx)
 {
 	struct kqueue *kq = (struct kqueue *)fp->f_data;
 	struct kqtailq *queue;
@@ -6189,7 +5706,7 @@ kqueue_select(struct fileproc *fp, int which, void *wq_link_id,
 	 */
 	if (wq_link_id != NULL) {
 		thread_t cur_act = current_thread();
-		struct uthread * ut = get_bsdthread_info(cur_act);
+	        struct uthread * ut = get_bsdthread_info(cur_act);
 
 		kq->kq_state |= KQ_SEL;
 		waitq_link((struct waitq *)&kq->kq_wqs, ut->uu_wqset,
@@ -6212,12 +5729,12 @@ kqueue_select(struct fileproc *fp, int which, void *wq_link_id,
 		memcpy(wq_link_id, (void *)&wqptr, sizeof(void *));
 	}
 
-	if (kqueue_begin_processing(kq, QOS_INDEX_KQFILE, 0) == -1) {
+	if (kqfile_begin_processing(kq) == -1) {
 		kqunlock(kq);
 		return (0);
 	}
 
-	queue = kqueue_get_base_queue(kq, QOS_INDEX_KQFILE);
+	queue = &kq->kq_queue[QOS_INDEX_KQFILE];
 	if (!TAILQ_EMPTY(queue)) {
 		/*
 		 * there is something queued - but it might be a
@@ -6239,26 +5756,27 @@ kqueue_select(struct fileproc *fp, int which, void *wq_link_id,
 		 * There were no regular events on the queue, so take
 		 * a deeper look at the stay-queued ones we suppressed.
 		 */
-		suppressq = kqueue_get_suppressed_queue(kq, QOS_INDEX_KQFILE);
+		suppressq = kqueue_get_suppressed_queue(kq, NULL);
 		while ((kn = (struct knote *)TAILQ_FIRST(suppressq)) != NULL) {
-			unsigned peek = 1;
-
-			assert(!knoteuse_needs_boost(kn, NULL));
+			KNOTE_LOCK_CTX(knlc);
+			int result = 0;
 
 			/* If didn't vanish while suppressed - peek at it */
-			if (kqlock2knoteuse(kq, kn, KNUSE_NONE)) {
-				peek = knote_fops(kn)->f_peek(kn);
-
-				/* if it dropped while getting lock - move on */
-				if (!knoteuse2kqlock(kq, kn, KNUSE_NONE))
-					continue;
+			if ((kn->kn_status & KN_DROPPING) || !knote_lock(kq, kn, &knlc,
+					KNOTE_KQ_LOCK_ON_FAILURE)) {
+				continue;
 			}
+
+			result = filter_call(knote_fops(kn), f_peek(kn));
+
+			kqlock(kq);
+			knote_unlock(kq, kn, &knlc, KNOTE_KQ_LOCK_ALWAYS);
 
 			/* unsuppress it */
 			knote_unsuppress(kn);
 
 			/* has data or it has to report a vanish */
-			if (peek > 0) {
+			if (result & FILTER_ACTIVE) {
 				retnum = 1;
 				goto out;
 			}
@@ -6266,7 +5784,7 @@ kqueue_select(struct fileproc *fp, int which, void *wq_link_id,
 	}
 
 out:
-	kqueue_end_processing(kq, QOS_INDEX_KQFILE, retnum, 0);
+	kqfile_end_processing(kq);
 	kqunlock(kq);
 	return (retnum);
 }
@@ -6286,6 +5804,13 @@ kqueue_close(struct fileglob *fg, __unused vfs_context_t ctx)
 	return (0);
 }
 
+/*
+ * Max depth of the nested kq path that can be created.
+ * Note that this has to be less than the size of kq_level
+ * to avoid wrapping around and mislabeling the level.
+ */
+#define MAX_NESTED_KQ 1000
+
 /*ARGSUSED*/
 /*
  * The callers has taken a use-count reference on this kqueue and will donate it
@@ -6299,13 +5824,12 @@ kqueue_kqfilter(__unused struct fileproc *fp, struct knote *kn,
 	struct kqfile *kqf = (struct kqfile *)kn->kn_fp->f_data;
 	struct kqueue *kq = &kqf->kqf_kqueue;
 	struct kqueue *parentkq = knote_get_kq(kn);
+	uint16_t plevel = 0;
 
 	assert((kqf->kqf_state & KQ_WORKQ) == 0);
 
-	if (parentkq == kq ||
-	    kn->kn_filter != EVFILT_READ) {
-		kn->kn_flags = EV_ERROR;
-		kn->kn_data = EINVAL;
+	if (parentkq == kq || kn->kn_filter != EVFILT_READ) {
+		knote_set_error(kn, EINVAL);
 		return 0;
 	}
 
@@ -6318,6 +5842,8 @@ kqueue_kqfilter(__unused struct fileproc *fp, struct knote *kn,
 	 * into another kqueue at a lower level than the potenial
 	 * child (because it could indicate a cycle).  If that test
 	 * passes, we just mark the nesting levels accordingly.
+	 *
+	 * Only up to MAX_NESTED_KQ can be nested.
 	 */
 
 	kqlock(parentkq);
@@ -6325,15 +5851,21 @@ kqueue_kqfilter(__unused struct fileproc *fp, struct knote *kn,
 	    parentkq->kq_level < kq->kq_level)
 	{
 		kqunlock(parentkq);
-		kn->kn_flags = EV_ERROR;
-		kn->kn_data = EINVAL;
+		knote_set_error(kn, EINVAL);
 		return 0;
 	} else {
 		/* set parent level appropriately */
-		if (parentkq->kq_level == 0)
-			parentkq->kq_level = 2;
-		if (parentkq->kq_level < kq->kq_level + 1)
-			parentkq->kq_level = kq->kq_level + 1;
+		plevel = (parentkq->kq_level == 0)? 2: parentkq->kq_level;
+		if (plevel < kq->kq_level + 1) {
+			if (kq->kq_level + 1 > MAX_NESTED_KQ) {
+				kqunlock(parentkq);
+				knote_set_error(kn, EINVAL);
+				return 0;
+			}
+			plevel = kq->kq_level + 1;
+		}
+
+		parentkq->kq_level = plevel;
 		kqunlock(parentkq);
 
 		kn->kn_filtid = EVFILTID_KQREAD;
@@ -6408,10 +5940,8 @@ kqueue_stat(struct kqueue *kq, void *ub, int isstat64, proc_t p)
 }
 
 /*
- * Interact with the pthread kext to request a servicing there.
- * Eventually, this will request threads at specific QoS levels.
- * For now, it only requests a dispatch-manager-QoS thread, and
- * only one-at-a-time.
+ * Interact with the pthread kext to request a servicing there at a specific QoS
+ * level.
  *
  * - Caller holds the workq request lock
  *
@@ -6419,78 +5949,259 @@ kqueue_stat(struct kqueue *kq, void *ub, int isstat64, proc_t p)
  *   so cannot do anything that could recurse on that.
  */
 static void
-kqworkq_request_thread(
-	struct kqworkq *kqwq, 
-	kq_index_t qos_index)
+kqueue_threadreq_initiate(struct kqueue *kq, struct kqrequest *kqr,
+		kq_index_t qos, int flags)
 {
-	struct kqrequest *kqr;
-
-	assert(kqwq->kqwq_state & KQ_WORKQ);
-	assert(qos_index < KQWQ_NQOS);
-
-	kqr = kqworkq_get_request(kqwq, qos_index);
-
 	assert(kqr->kqr_state & KQR_WAKEUP);
+	assert(kqr->kqr_thread == THREAD_NULL);
+	assert((kqr->kqr_state & KQR_THREQUESTED) == 0);
+	struct turnstile *ts = TURNSTILE_NULL;
 
-	/* 
-	 * If we have already requested a thread, and it hasn't
-	 * started processing yet, there's no use hammering away
-	 * on the pthread kext.
-	 */
-	if (kqr->kqr_state & KQR_THREQUESTED)
+	if (workq_is_exiting(kq->kq_p)) {
 		return;
+	}
 
-	assert((kqr->kqr_state & KQR_BOUND) == 0);
+	/* Add a thread request reference on the kqueue. */
+	kqueue_retain(kq);
 
-	/* request additional workq threads if appropriate */
-	if (pthread_functions != NULL &&
-	    pthread_functions->workq_reqthreads != NULL) {
-		unsigned int flags = KEVENT_FLAG_WORKQ;
-		unsigned long priority;
-		thread_t wqthread;
+	kq_req_held(kq);
 
-		/* Compute the appropriate pthread priority */
-		priority = qos_from_qos_index(qos_index);
+	if (kq->kq_state & KQ_WORKLOOP) {
+		__assert_only struct kqworkloop *kqwl = (struct kqworkloop *)kq;
 
-#if 0
-		/* JMM - for now remain compatible with old invocations */
-		/* set the over-commit flag on the request if needed */
-		if (kqr->kqr_state & KQR_THOVERCOMMIT)
-			priority |= _PTHREAD_PRIORITY_OVERCOMMIT_FLAG;
-#endif /* 0 */
-
-		/* Compute a priority based on qos_index. */
-		struct workq_reqthreads_req_s request = {
-			.priority = priority,
-			.count = 1
-		};
-
-		/* mark that we are making a request */
-		kqr->kqr_state |= KQR_THREQUESTED;
-		if (qos_index == KQWQ_QOS_MANAGER)
-			kqr->kqr_state |= KQWQ_THMANAGER;
-
+		assert(kqwl->kqwl_owner == THREAD_NULL);
+		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_THREQUEST),
+				kqwl->kqwl_dynamicid, 0, qos, kqr->kqr_state);
+		ts = kqwl->kqwl_turnstile;
+	} else {
+		assert(kq->kq_state & KQ_WORKQ);
 		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_THREQUEST),
-		              0, qos_index,
-		              (((uintptr_t)kqr->kqr_override_index << 8) |
-		               (uintptr_t)kqr->kqr_state));
-		wqthread = (*pthread_functions->workq_reqthreads)(kqwq->kqwq_p, 1, &request);
+				-1, 0, qos, kqr->kqr_state);
+	}
 
-		/* We've been switched to the emergency/manager thread */
-		if (wqthread == (thread_t)-1) {
-			assert(qos_index != KQWQ_QOS_MANAGER);
-			kqr->kqr_state |= KQWQ_THMANAGER;
-			return;
-		}
+	kqr->kqr_state |= KQR_THREQUESTED;
 
+	/*
+	 * New-style thread request supported.
+	 * Provide the pthread kext a pointer to a workq_threadreq_s structure for
+	 * its use until a corresponding kqueue_threadreq_bind callback.
+	 */
+	if ((kq->kq_state & KQ_WORKLOOP) && current_proc() == kq->kq_p) {
+		flags |= WORKQ_THREADREQ_SET_AST_ON_FAILURE;
+	}
+	if (qos == KQWQ_QOS_MANAGER) {
+		qos = WORKQ_THREAD_QOS_MANAGER;
+	}
+	if (!workq_kern_threadreq_initiate(kq->kq_p, kqr, ts, qos, flags)) {
 		/*
-		 * bind the returned thread identity
-		 * This goes away when we switch to synchronous callback
-		 * binding from the pthread kext.
+		 * Process is shutting down or exec'ing.
+		 * All the kqueues are going to be cleaned up
+		 * soon. Forget we even asked for a thread -
+		 * and make sure we don't ask for more.
 		 */
-		if (wqthread != NULL) {
-			kqworkq_bind_thread_impl(kqwq, qos_index, wqthread, flags);
+		kqr->kqr_state &= ~(KQR_THREQUESTED | KQR_R2K_NOTIF_ARMED);
+		kqueue_release(kq, KQUEUE_CANT_BE_LAST_REF);
+	}
+}
+
+/*
+ * kqueue_threadreq_bind_prepost - prepost the bind to kevent
+ *
+ * This is used when kqueue_threadreq_bind may cause a lock inversion.
+ */
+void
+kqueue_threadreq_bind_prepost(struct proc *p __unused, workq_threadreq_t req,
+		thread_t thread)
+{
+	struct kqrequest *kqr = __container_of(req, struct kqrequest, kqr_req);
+	struct uthread *ut = get_bsdthread_info(thread);
+
+	req->tr_binding_thread = thread;
+	ut->uu_kqr_bound = kqr;
+	req->tr_state = TR_STATE_BINDING;
+
+	struct kqworkloop *kqwl = kqr_kqworkloop(kqr);
+	if (kqwl && kqwl->kqwl_turnstile) {
+		struct turnstile *ts = kqwl->kqwl_turnstile;
+		/*
+		 * While a thread request is in flight, the workqueue
+		 * is the interlock for the turnstile and can update the inheritor.
+		 */
+		turnstile_update_inheritor(ts, thread, TURNSTILE_IMMEDIATE_UPDATE |
+				TURNSTILE_INHERITOR_THREAD);
+		turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_HELD);
+	}
+}
+
+/*
+ * kqueue_threadreq_bind_commit - commit a bind prepost
+ *
+ * The workq code has to commit any binding prepost before the thread has
+ * a chance to come back to userspace (and do kevent syscalls) or be aborted.
+ */
+void
+kqueue_threadreq_bind_commit(struct proc *p, thread_t thread)
+{
+	struct uthread *ut = get_bsdthread_info(thread);
+	struct kqrequest *kqr = ut->uu_kqr_bound;
+	kqueue_t kqu = kqr_kqueue(p, kqr);
+
+	kq_req_lock(kqu);
+	if (kqr->kqr_req.tr_state == TR_STATE_BINDING) {
+		kqueue_threadreq_bind(p, &kqr->kqr_req, thread, 0);
+	}
+	kq_req_unlock(kqu);
+}
+
+static void
+kqueue_threadreq_modify(struct kqueue *kq, struct kqrequest *kqr, kq_index_t qos)
+{
+	assert(kqr->kqr_state & KQR_THREQUESTED);
+	assert(kqr->kqr_thread == THREAD_NULL);
+
+	kq_req_held(kq);
+
+	int flags = 0;
+	if ((kq->kq_state & KQ_WORKLOOP) && kq->kq_p == current_proc()) {
+		flags |= WORKQ_THREADREQ_SET_AST_ON_FAILURE;
+	}
+	workq_kern_threadreq_modify(kq->kq_p, kqr, qos, flags);
+}
+
+/*
+ * kqueue_threadreq_bind - bind thread to processing kqrequest
+ *
+ * The provided thread will be responsible for delivering events
+ * associated with the given kqrequest.  Bind it and get ready for
+ * the thread to eventually arrive.
+ */
+void
+kqueue_threadreq_bind(struct proc *p, workq_threadreq_t req, thread_t thread,
+		unsigned int flags)
+{
+	struct kqrequest *kqr = __container_of(req, struct kqrequest, kqr_req);
+	kqueue_t kqu = kqr_kqueue(p, kqr);
+	struct uthread *ut = get_bsdthread_info(thread);
+
+	kq_req_held(kqu);
+
+	assert(kqr->kqr_state & KQR_THREQUESTED);
+	assert(kqr->kqr_thread == THREAD_NULL);
+	assert(ut->uu_kqueue_override == 0);
+
+	if (kqr->kqr_req.tr_state == TR_STATE_BINDING) {
+		assert(ut->uu_kqr_bound == kqr);
+		assert(kqr->kqr_req.tr_binding_thread == thread);
+		kqr->kqr_req.tr_state = TR_STATE_IDLE;
+		kqr->kqr_req.tr_binding_thread = NULL;
+	} else {
+		assert(ut->uu_kqr_bound == NULL);
+	}
+
+	ut->uu_kqr_bound = kqr;
+	kqr->kqr_thread = thread;
+
+	if (kqu.kq->kq_state & KQ_WORKLOOP) {
+		struct turnstile *ts = kqu.kqwl->kqwl_turnstile;
+
+		if (__improbable(thread == kqu.kqwl->kqwl_owner)) {
+			/*
+			 * <rdar://problem/38626999> shows that asserting here is not ok.
+			 *
+			 * This is not supposed to happen for correct use of the interface,
+			 * but it is sadly possible for userspace (with the help of memory
+			 * corruption, such as over-release of a dispatch queue) to make
+			 * the creator thread the "owner" of a workloop.
+			 *
+			 * Once that happens, and that creator thread picks up the same
+			 * workloop as a servicer, we trip this codepath. We need to fixup
+			 * the state to forget about this thread being the owner, as the
+			 * entire workloop state machine expects servicers to never be
+			 * owners and everything would basically go downhill from here.
+			 */
+			kqu.kqwl->kqwl_owner = THREAD_NULL;
+			if (kqworkloop_owner_override(kqu.kqwl)) {
+				thread_drop_ipc_override(thread);
+			}
+			thread_ends_owning_workloop(thread);
 		}
+
+		if (ts && (flags & KQUEUE_THREADERQ_BIND_NO_INHERITOR_UPDATE) == 0) {
+			/*
+			 * Past this point, the interlock is the kq req lock again,
+			 * so we can fix the inheritor for good.
+			 */
+			filt_wlupdate_inheritor(kqu.kqwl, ts, TURNSTILE_IMMEDIATE_UPDATE);
+			turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_HELD);
+		}
+
+		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_BIND), kqu.kqwl->kqwl_dynamicid,
+				thread_tid(thread), kqr->kqr_qos_index,
+				(kqr->kqr_override_index << 16) | kqr->kqr_state);
+
+		ut->uu_kqueue_override = kqr->kqr_override_index;
+		if (kqr->kqr_override_index) {
+			thread_add_ipc_override(thread, kqr->kqr_override_index);
+		}
+	} else {
+		assert(kqr->kqr_override_index == 0);
+
+		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_BIND), -1,
+				thread_tid(thread), kqr->kqr_qos_index,
+				(kqr->kqr_override_index << 16) | kqr->kqr_state);
+	}
+}
+
+/*
+ * kqueue_threadreq_cancel - abort a pending thread request
+ *
+ * Called when exiting/exec'ing. Forget our pending request.
+ */
+void
+kqueue_threadreq_cancel(struct proc *p, workq_threadreq_t req)
+{
+	struct kqrequest *kqr = __container_of(req, struct kqrequest, kqr_req);
+	kqueue_t kqu = kqr_kqueue(p, kqr);
+
+	kq_req_lock(kqu);
+
+	assert(kqr->kqr_thread == THREAD_NULL);
+	assert(kqr->kqr_state & KQR_THREQUESTED);
+	kqr->kqr_state &= ~(KQR_THREQUESTED | KQR_R2K_NOTIF_ARMED);
+
+	kq_req_unlock(kqu);
+
+	kqueue_release_last(p, kqu); /* may dealloc kqu */
+}
+
+workq_threadreq_param_t
+kqueue_threadreq_workloop_param(workq_threadreq_t req)
+{
+	struct kqrequest *kqr = __container_of(req, struct kqrequest, kqr_req);
+	struct kqworkloop *kqwl;
+	workq_threadreq_param_t trp;
+
+	assert(kqr->kqr_state & KQR_WORKLOOP);
+	kqwl = __container_of(kqr, struct kqworkloop, kqwl_request);
+	trp.trp_value = kqwl->kqwl_params;
+	return trp;
+}
+
+/*
+ *	kqueue_threadreq_unbind - unbind thread from processing kqueue
+ *
+ *	End processing the per-QoS bucket of events and allow other threads
+ *	to be requested for future servicing.
+ *
+ *	caller holds a reference on the kqueue.
+ */
+void
+kqueue_threadreq_unbind(struct proc *p, struct kqrequest *kqr)
+{
+	if (kqr->kqr_state & KQR_WORKLOOP) {
+		kqworkloop_unbind(p, kqr_kqworkloop(kqr));
+	} else {
+		kqworkq_unbind(p, kqr);
 	}
 }
 
@@ -6504,194 +6215,30 @@ kqworkq_request_thread(
  *   so cannot do anything that could recurse on that.
  */
 static void
-kqworkq_request_help(
-	struct kqworkq *kqwq, 
-	kq_index_t qos_index)
+kqworkq_request_help(struct kqworkq *kqwq, kq_index_t qos_index)
 {
 	struct kqrequest *kqr;
 
 	/* convert to thread qos value */
-	assert(qos_index < KQWQ_NQOS);
-	
-	kqwq_req_lock(kqwq);
+	assert(qos_index < KQWQ_NBUCKETS);
+
+	kq_req_lock(kqwq);
 	kqr = kqworkq_get_request(kqwq, qos_index);
 
 	if ((kqr->kqr_state & KQR_WAKEUP) == 0) {
-		/* Indicate that we needed help from this request */
 		kqr->kqr_state |= KQR_WAKEUP;
-
-		/* Go assure a thread request has been made */
-		kqworkq_request_thread(kqwq, qos_index);
+		if ((kqr->kqr_state & KQR_THREQUESTED) == 0) {
+			kqueue_threadreq_initiate(&kqwq->kqwq_kqueue, kqr, qos_index, 0);
+		}
 	}
-	kqwq_req_unlock(kqwq);
+	kq_req_unlock(kqwq);
 }
 
-static void
-kqworkloop_threadreq_impl(struct kqworkloop *kqwl, kq_index_t qos_index)
+static kq_index_t
+kqworkloop_owner_override(struct kqworkloop *kqwl)
 {
 	struct kqrequest *kqr = &kqwl->kqwl_request;
-	unsigned long pri = pthread_priority_for_kqrequest(kqr, qos_index);
-	int op, ret;
-
-	assert((kqr->kqr_state & (KQR_THREQUESTED | KQR_BOUND)) == KQR_THREQUESTED);
-
-	/*
-	 * New-style thread request supported. Provide
-	 * the pthread kext a pointer to a workq_threadreq_s
-	 * structure for its use until a corresponding
-	 * workloop_fulfill_threqreq callback.
-	 */
-	if (current_proc() == kqwl->kqwl_kqueue.kq_p) {
-		op = WORKQ_THREADREQ_WORKLOOP_NO_THREAD_CALL;
-	} else {
-		op = WORKQ_THREADREQ_WORKLOOP;
-	}
-again:
-	ret = (*pthread_functions->workq_threadreq)(kqwl->kqwl_p, &kqr->kqr_req,
-			WORKQ_THREADREQ_WORKLOOP, pri, 0);
-	switch (ret) {
-	case ENOTSUP:
-		assert(op == WORKQ_THREADREQ_WORKLOOP_NO_THREAD_CALL);
-		op = WORKQ_THREADREQ_WORKLOOP;
-		goto again;
-
-	case ECANCELED:
-	case EINVAL:
-		/*
-		 * Process is shutting down or exec'ing.
-		 * All the kqueues are going to be cleaned up
-		 * soon. Forget we even asked for a thread -
-		 * and make sure we don't ask for more.
-		 */
-		kqueue_release((struct kqueue *)kqwl, KQUEUE_CANT_BE_LAST_REF);
-		kqr->kqr_state &= ~KQR_THREQUESTED;
-		kqr->kqr_state |= KQR_DRAIN;
-		break;
-
-	case EAGAIN:
-		assert(op == WORKQ_THREADREQ_WORKLOOP_NO_THREAD_CALL);
-		act_set_astkevent(current_thread(), AST_KEVENT_REDRIVE_THREADREQ);
-		break;
-
-	default:
-		assert(ret == 0);
-	}
-}
-
-static void
-kqworkloop_threadreq_modify(struct kqworkloop *kqwl, kq_index_t qos_index)
-{
-	struct kqrequest *kqr = &kqwl->kqwl_request;
-	unsigned long pri = pthread_priority_for_kqrequest(kqr, qos_index);
-	int ret, op = WORKQ_THREADREQ_CHANGE_PRI_NO_THREAD_CALL;
-
-	assert((kqr->kqr_state & (KQR_THREQUESTED | KQR_BOUND)) == KQR_THREQUESTED);
-
-	if (current_proc() == kqwl->kqwl_kqueue.kq_p) {
-		op = WORKQ_THREADREQ_CHANGE_PRI_NO_THREAD_CALL;
-	} else {
-		op = WORKQ_THREADREQ_CHANGE_PRI;
-	}
-again:
-	ret = (*pthread_functions->workq_threadreq_modify)(kqwl->kqwl_p,
-			&kqr->kqr_req, op, pri, 0);
-	switch (ret) {
-	case ENOTSUP:
-		assert(op == WORKQ_THREADREQ_CHANGE_PRI_NO_THREAD_CALL);
-		op = WORKQ_THREADREQ_CHANGE_PRI;
-		goto again;
-
-	case EAGAIN:
-		assert(op == WORKQ_THREADREQ_WORKLOOP_NO_THREAD_CALL);
-		act_set_astkevent(current_thread(), AST_KEVENT_REDRIVE_THREADREQ);
-		break;
-
-	case ECANCELED:
-	case EINVAL:
-	case 0:
-		break;
-
-	default:
-		assert(ret == 0);
-	}
-}
-
-/*
- * Interact with the pthread kext to request a servicing thread.
- * This will request a single thread at the highest QoS level
- * for which there is work (whether that was the requested QoS
- * for an event or an override applied to a lower-QoS request).
- *
- * - Caller holds the workloop request lock
- *
- * - May be called with the kqueue's wait queue set locked,
- *   so cannot do anything that could recurse on that.
- */
-static void
-kqworkloop_request_thread(struct kqworkloop *kqwl, kq_index_t qos_index)
-{
-	struct kqrequest *kqr;
-
-	assert(kqwl->kqwl_state & KQ_WORKLOOP);
-
-	kqr = &kqwl->kqwl_request;
-
-	assert(kqwl->kqwl_owner == THREAD_NULL);
-	assert((kqr->kqr_state & KQR_BOUND) == 0);
-	assert((kqr->kqr_state & KQR_THREQUESTED) == 0);
-	assert(!(kqwl->kqwl_kqueue.kq_state & KQ_NO_WQ_THREAD));
-
-	/* If we're draining thread requests, just bail */
-	if (kqr->kqr_state & KQR_DRAIN)
-		return;
-
-	if (pthread_functions != NULL &&
-			pthread_functions->workq_threadreq != NULL) {
-		/*
-		 * set request state flags, etc... before calling pthread
-		 * This assures they are set before a possible synchronous
-		 * callback to workloop_fulfill_threadreq().
-		 */
-		kqr->kqr_state |= KQR_THREQUESTED;
-
-		/* Add a thread request reference on the kqueue. */
-		kqueue_retain((struct kqueue *)kqwl);
-
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_THREQUEST),
-		              kqwl->kqwl_dynamicid,
-		              0, qos_index, kqr->kqr_state);
-		kqworkloop_threadreq_impl(kqwl, qos_index);
-	} else {
-		panic("kqworkloop_request_thread");
-		return;
-	}
-}
-
-static void
-kqworkloop_update_sync_override_state(struct kqworkloop *kqwl, boolean_t sync_ipc_override)
-{
-	struct kqrequest *kqr = &kqwl->kqwl_request;
-	kqwl_req_lock(kqwl);
-	kqr->kqr_has_sync_override = sync_ipc_override;
-	kqwl_req_unlock(kqwl);
-
-}
-
-static inline kq_index_t
-kqworkloop_combined_qos(struct kqworkloop *kqwl, boolean_t *ipc_override_is_sync)
-{
-	struct kqrequest *kqr = &kqwl->kqwl_request;
-	kq_index_t override;
-
-	*ipc_override_is_sync = FALSE;
-	override = MAX(MAX(kqr->kqr_qos_index, kqr->kqr_override_index),
-					kqr->kqr_dsync_waiters_qos);
-
-	if (kqr->kqr_sync_suppress_count > 0 || kqr->kqr_has_sync_override) {
-		*ipc_override_is_sync = TRUE;
-		override = THREAD_QOS_USER_INTERACTIVE;
-	}
-	return override;
+	return MAX(kqr->kqr_qos_index, kqr->kqr_override_index);
 }
 
 static inline void
@@ -6699,12 +6246,10 @@ kqworkloop_request_fire_r2k_notification(struct kqworkloop *kqwl)
 {
 	struct kqrequest *kqr = &kqwl->kqwl_request;
 
-	kqwl_req_held(kqwl);
+	kq_req_held(kqwl);
 
 	if (kqr->kqr_state & KQR_R2K_NOTIF_ARMED) {
-		assert(kqr->kqr_state & KQR_BOUND);
 		assert(kqr->kqr_thread);
-
 		kqr->kqr_state &= ~KQR_R2K_NOTIF_ARMED;
 		act_set_astkevent(kqr->kqr_thread, AST_KEVENT_RETURN_TO_KERNEL);
 	}
@@ -6713,17 +6258,13 @@ kqworkloop_request_fire_r2k_notification(struct kqworkloop *kqwl)
 static void
 kqworkloop_update_threads_qos(struct kqworkloop *kqwl, int op, kq_index_t qos)
 {
-	const uint8_t KQWL_STAYACTIVE_FIRED_BIT = (1 << 0);
-
 	struct kqrequest *kqr = &kqwl->kqwl_request;
-	boolean_t old_ipc_override_is_sync = FALSE;
-	kq_index_t old_qos = kqworkloop_combined_qos(kqwl, &old_ipc_override_is_sync);
 	struct kqueue *kq = &kqwl->kqwl_kqueue;
-	bool static_thread = (kq->kq_state & KQ_NO_WQ_THREAD);
+	kq_index_t old_owner_override = kqworkloop_owner_override(kqwl);
 	kq_index_t i;
 
 	/* must hold the kqr lock */
-	kqwl_req_held(kqwl);
+	kq_req_held(kqwl);
 
 	switch (op) {
 	case KQWL_UTQ_UPDATE_WAKEUP_QOS:
@@ -6742,7 +6283,6 @@ kqworkloop_update_threads_qos(struct kqworkloop *kqwl, int op, kq_index_t qos)
 			kqr->kqr_wakeup_indexes |= KQWL_STAYACTIVE_FIRED_BIT;
 			qos = kqr->kqr_stayactive_qos;
 			assert(qos);
-			assert(!static_thread);
 		}
 		if (kqr->kqr_wakeup_indexes & (1 << qos)) {
 			assert(kqr->kqr_state & KQR_WAKEUP);
@@ -6752,7 +6292,7 @@ kqworkloop_update_threads_qos(struct kqworkloop *kqwl, int op, kq_index_t qos)
 		kqr->kqr_wakeup_indexes |= (1 << qos);
 		kqr->kqr_state |= KQR_WAKEUP;
 		kqworkloop_request_fire_r2k_notification(kqwl);
-		goto recompute_async;
+		goto recompute;
 
 	case KQWL_UTQ_UPDATE_STAYACTIVE_QOS:
 		assert(qos);
@@ -6761,19 +6301,25 @@ kqworkloop_update_threads_qos(struct kqworkloop *kqwl, int op, kq_index_t qos)
 			if (kqr->kqr_wakeup_indexes & KQWL_STAYACTIVE_FIRED_BIT) {
 				assert(kqr->kqr_state & KQR_WAKEUP);
 				kqr->kqr_wakeup_indexes |= (1 << qos);
-				goto recompute_async;
+				goto recompute;
 			}
 		}
 		break;
 
+	case KQWL_UTQ_PARKING:
+	case KQWL_UTQ_UNBINDING:
+		kqr->kqr_override_index = qos;
+		/* FALLTHROUGH */
 	case KQWL_UTQ_RECOMPUTE_WAKEUP_QOS:
-		kqlock_held(kq); // to look at kq_queues
-		kqr->kqr_has_sync_override = FALSE;
+		if (op == KQWL_UTQ_RECOMPUTE_WAKEUP_QOS) {
+			assert(qos == THREAD_QOS_UNSPECIFIED);
+		}
+		kqlock_held(kqwl); // to look at kq_queues
 		i = KQWL_BUCKET_STAYACTIVE;
 		if (TAILQ_EMPTY(&kqr->kqr_suppressed)) {
 			kqr->kqr_override_index = THREAD_QOS_UNSPECIFIED;
 		}
-		if (!TAILQ_EMPTY(&kq->kq_queue[i]) &&
+		if (!TAILQ_EMPTY(&kqwl->kqwl_queue[i]) &&
 				(kqr->kqr_wakeup_indexes & KQWL_STAYACTIVE_FIRED_BIT)) {
 			/*
 			 * If the KQWL_STAYACTIVE_FIRED_BIT is set, it means a stay active
@@ -6787,13 +6333,8 @@ kqworkloop_update_threads_qos(struct kqworkloop *kqwl, int op, kq_index_t qos)
 			kqr->kqr_wakeup_indexes = 0;
 		}
 		for (i = THREAD_QOS_UNSPECIFIED + 1; i < KQWL_BUCKET_STAYACTIVE; i++) {
-			if (!TAILQ_EMPTY(&kq->kq_queue[i])) {
+			if (!TAILQ_EMPTY(&kqwl->kqwl_queue[i])) {
 				kqr->kqr_wakeup_indexes |= (1 << i);
-				struct knote *kn = TAILQ_FIRST(&kqwl->kqwl_kqueue.kq_queue[i]);
-				if (i == THREAD_QOS_USER_INTERACTIVE &&
-				    kn->kn_qos_override_is_sync) {
-					kqr->kqr_has_sync_override = TRUE;
-				}
 			}
 		}
 		if (kqr->kqr_wakeup_indexes) {
@@ -6802,20 +6343,18 @@ kqworkloop_update_threads_qos(struct kqworkloop *kqwl, int op, kq_index_t qos)
 		} else {
 			kqr->kqr_state &= ~KQR_WAKEUP;
 		}
-		assert(qos == THREAD_QOS_UNSPECIFIED);
-		goto recompute_async;
+		goto recompute;
 
 	case KQWL_UTQ_RESET_WAKEUP_OVERRIDE:
-		kqr->kqr_override_index = THREAD_QOS_UNSPECIFIED;
-		assert(qos == THREAD_QOS_UNSPECIFIED);
-		goto recompute_async;
+		kqr->kqr_override_index = qos;
+		goto recompute;
 
 	case KQWL_UTQ_UPDATE_WAKEUP_OVERRIDE:
-	recompute_async:
+	recompute:
 		/*
-		 * When modifying the wakeup QoS or the async override QoS, we always
-		 * need to maintain our invariant that kqr_override_index is at least as
-		 * large as the highest QoS for which an event is fired.
+		 * When modifying the wakeup QoS or the override QoS, we always need to
+		 * maintain our invariant that kqr_override_index is at least as large
+		 * as the highest QoS for which an event is fired.
 		 *
 		 * However this override index can be larger when there is an overriden
 		 * suppressed knote pushing on the kqueue.
@@ -6831,96 +6370,44 @@ kqworkloop_update_threads_qos(struct kqworkloop *kqwl, int op, kq_index_t qos)
 	case KQWL_UTQ_REDRIVE_EVENTS:
 		break;
 
-	case KQWL_UTQ_SET_ASYNC_QOS:
-		filt_wlheld(kqwl);
+	case KQWL_UTQ_SET_QOS_INDEX:
 		kqr->kqr_qos_index = qos;
-		break;
-
-	case KQWL_UTQ_SET_SYNC_WAITERS_QOS:
-		filt_wlheld(kqwl);
-		kqr->kqr_dsync_waiters_qos = qos;
 		break;
 
 	default:
 		panic("unknown kqwl thread qos update operation: %d", op);
 	}
 
-	boolean_t new_ipc_override_is_sync = FALSE;
-	kq_index_t new_qos = kqworkloop_combined_qos(kqwl, &new_ipc_override_is_sync);
 	thread_t kqwl_owner = kqwl->kqwl_owner;
 	thread_t servicer = kqr->kqr_thread;
-	__assert_only int ret;
+	boolean_t qos_changed = FALSE;
+	kq_index_t new_owner_override = kqworkloop_owner_override(kqwl);
 
 	/*
 	 * Apply the diffs to the owner if applicable
 	 */
-	if (filt_wlowner_is_valid(kqwl_owner)) {
+	if (kqwl_owner) {
 #if 0
 		/* JMM - need new trace hooks for owner overrides */
 		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_THADJUST),
-				kqwl->kqwl_dynamicid,
-				(kqr->kqr_state & KQR_BOUND) ? thread_tid(kqwl_owner) : 0,
-				(kqr->kqr_qos_index << 8) | new_qos,
-				(kqr->kqr_override_index << 8) | kqr->kqr_state);
+				kqwl->kqwl_dynamicid, thread_tid(kqwl_owner), kqr->kqr_qos_index,
+				(kqr->kqr_override_index << 16) | kqr->kqr_state);
 #endif
-		if (new_qos == kqr->kqr_dsync_owner_qos) {
+		if (new_owner_override == old_owner_override) {
 			// nothing to do
-		} else if (kqr->kqr_dsync_owner_qos == THREAD_QOS_UNSPECIFIED) {
-			thread_add_ipc_override(kqwl_owner, new_qos);
-		} else if (new_qos == THREAD_QOS_UNSPECIFIED) {
+		} else if (old_owner_override == THREAD_QOS_UNSPECIFIED) {
+			thread_add_ipc_override(kqwl_owner, new_owner_override);
+		} else if (new_owner_override == THREAD_QOS_UNSPECIFIED) {
 			thread_drop_ipc_override(kqwl_owner);
-		} else /* kqr->kqr_dsync_owner_qos != new_qos */ {
-			thread_update_ipc_override(kqwl_owner, new_qos);
+		} else /*  old_owner_override != new_owner_override */ {
+			thread_update_ipc_override(kqwl_owner, new_owner_override);
 		}
-		kqr->kqr_dsync_owner_qos = new_qos;
-
-		if (new_ipc_override_is_sync &&
-			!kqr->kqr_owner_override_is_sync) {
-			thread_add_sync_ipc_override(kqwl_owner);
-		} else if (!new_ipc_override_is_sync &&
-			kqr->kqr_owner_override_is_sync) {
-			thread_drop_sync_ipc_override(kqwl_owner);
-		}
-		kqr->kqr_owner_override_is_sync = new_ipc_override_is_sync;
 	}
 
 	/*
 	 * apply the diffs to the servicer
 	 */
-	if (static_thread) {
-		/*
-		 * Statically bound thread
-		 *
-		 * These threads don't participates in QoS overrides today, just wakeup
-		 * the thread blocked on this kqueue if a new event arrived.
-		 */
-
-		switch (op) {
-		case KQWL_UTQ_UPDATE_WAKEUP_QOS:
-		case KQWL_UTQ_UPDATE_STAYACTIVE_QOS:
-		case KQWL_UTQ_RECOMPUTE_WAKEUP_QOS:
-			break;
-
-		case KQWL_UTQ_RESET_WAKEUP_OVERRIDE:
-		case KQWL_UTQ_UPDATE_WAKEUP_OVERRIDE:
-		case KQWL_UTQ_REDRIVE_EVENTS:
-		case KQWL_UTQ_SET_ASYNC_QOS:
-		case KQWL_UTQ_SET_SYNC_WAITERS_QOS:
-			panic("should never be called");
-			break;
-		}
-
-		kqlock_held(kq);
-
-		if ((kqr->kqr_state & KQR_BOUND) && (kqr->kqr_state & KQR_WAKEUP)) {
-			assert(servicer && !is_workqueue_thread(servicer));
-			if (kq->kq_state & (KQ_SLEEP | KQ_SEL)) {
-				kq->kq_state &= ~(KQ_SLEEP | KQ_SEL);
-				waitq_wakeup64_all((struct waitq *)&kq->kq_wqs,	KQ_EVENT,
-						THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
-			}
-		}
-	} else if ((kqr->kqr_state & KQR_THREQUESTED) == 0) {
+	if ((kqr->kqr_state & KQR_THREQUESTED) == 0) {
 		/*
 		 * No servicer, nor thread-request
 		 *
@@ -6929,70 +6416,54 @@ kqworkloop_update_threads_qos(struct kqworkloop *kqwl, int op, kq_index_t qos)
 		 * first place.
 		 */
 
-		if (kqwl_owner == THREAD_NULL && (kqr->kqr_state & KQR_WAKEUP)) {
-			kqworkloop_request_thread(kqwl, new_qos);
-		}
-	} else if ((kqr->kqr_state & KQR_BOUND) == 0 &&
-			(kqwl_owner || (kqr->kqr_state & KQR_WAKEUP) == 0)) {
-		/*
-		 * No servicer, thread request in flight we want to cancel
-		 *
-		 * We just got rid of the last knote of the kqueue or noticed an owner
-		 * with a thread request still in flight, take it back.
-		 */
-		ret = (*pthread_functions->workq_threadreq_modify)(kqwl->kqwl_p,
-				&kqr->kqr_req, WORKQ_THREADREQ_CANCEL, 0, 0);
-		if (ret == 0) {
-			kqr->kqr_state &= ~KQR_THREQUESTED;
-			kqueue_release(kq, KQUEUE_CANT_BE_LAST_REF);
-		}
-	} else {
-		boolean_t qos_changed = FALSE;
-
-		/*
-		 * Servicer or request is in flight
-		 *
-		 * Just apply the diff to the servicer or the thread request
-		 */
-		if (kqr->kqr_state & KQR_BOUND) {
-			servicer = kqr->kqr_thread;
-			struct uthread *ut = get_bsdthread_info(servicer);
-			if (ut->uu_kqueue_qos_index != new_qos) {
-				if (ut->uu_kqueue_qos_index == THREAD_QOS_UNSPECIFIED) {
-					thread_add_ipc_override(servicer, new_qos);
-				} else if (new_qos == THREAD_QOS_UNSPECIFIED) {
-					thread_drop_ipc_override(servicer);
-				} else /* ut->uu_kqueue_qos_index != new_qos */ {
-					thread_update_ipc_override(servicer, new_qos);
-				}
-				ut->uu_kqueue_qos_index = new_qos;
-				qos_changed = TRUE;
+		if (kqwl_owner == NULL && (kqr->kqr_state & KQR_WAKEUP)) {
+			int initiate_flags = 0;
+			if (op == KQWL_UTQ_UNBINDING) {
+				initiate_flags = WORKQ_THREADREQ_ATTEMPT_REBIND;
 			}
-
-			if (new_ipc_override_is_sync != ut->uu_kqueue_override_is_sync) {
-				if (new_ipc_override_is_sync &&
-				    !ut->uu_kqueue_override_is_sync) {
-					thread_add_sync_ipc_override(servicer);
-				} else if (!new_ipc_override_is_sync &&
-					ut->uu_kqueue_override_is_sync) {
-					thread_drop_sync_ipc_override(servicer);
-				}
-				ut->uu_kqueue_override_is_sync = new_ipc_override_is_sync;
-				qos_changed = TRUE;
+			kqueue_threadreq_initiate(kq, kqr, new_owner_override,
+					initiate_flags);
+		}
+	} else if (servicer) {
+		/*
+		 * Servicer in flight
+		 *
+		 * Just apply the diff to the servicer
+		 */
+		struct uthread *ut = get_bsdthread_info(servicer);
+		if (ut->uu_kqueue_override != kqr->kqr_override_index) {
+			if (ut->uu_kqueue_override == THREAD_QOS_UNSPECIFIED) {
+				thread_add_ipc_override(servicer, kqr->kqr_override_index);
+			} else if (kqr->kqr_override_index == THREAD_QOS_UNSPECIFIED) {
+				thread_drop_ipc_override(servicer);
+			} else /* ut->uu_kqueue_override != kqr->kqr_override_index */ {
+				thread_update_ipc_override(servicer, kqr->kqr_override_index);
 			}
-		} else if (old_qos != new_qos) {
-			assert(new_qos);
-			kqworkloop_threadreq_modify(kqwl, new_qos);
+			ut->uu_kqueue_override = kqr->kqr_override_index;
 			qos_changed = TRUE;
 		}
-		if (qos_changed) {
-			servicer = kqr->kqr_thread;
-			KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_THADJUST),
-				kqwl->kqwl_dynamicid,
-				(kqr->kqr_state & KQR_BOUND) ? thread_tid(servicer) : 0,
-				(kqr->kqr_qos_index << 16) | (new_qos << 8) | new_ipc_override_is_sync,
-				(kqr->kqr_override_index << 8) | kqr->kqr_state);
-		}
+	} else if (new_owner_override == THREAD_QOS_UNSPECIFIED) {
+		/*
+		 * No events to deliver anymore.
+		 *
+		 * However canceling with turnstiles is challenging, so the fact that
+		 * the request isn't useful will be discovered by the servicer himself
+		 * later on.
+		 */
+	} else if (old_owner_override != new_owner_override) {
+		/*
+		 * Request is in flight
+		 *
+		 * Apply the diff to the thread request
+		 */
+		kqueue_threadreq_modify(kq, kqr, new_owner_override);
+		qos_changed = TRUE;
+	}
+
+	if (qos_changed) {
+		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_THADJUST), kqwl->kqwl_dynamicid,
+				thread_tid(kqr->kqr_thread), kqr->kqr_qos_index,
+				(kqr->kqr_override_index << 16) | kqr->kqr_state);
 	}
 }
 
@@ -7002,179 +6473,179 @@ kqworkloop_request_help(struct kqworkloop *kqwl, kq_index_t qos_index)
 	/* convert to thread qos value */
 	assert(qos_index < KQWL_NBUCKETS);
 
-	kqwl_req_lock(kqwl);
+	kq_req_lock(kqwl);
 	kqworkloop_update_threads_qos(kqwl, KQWL_UTQ_UPDATE_WAKEUP_QOS, qos_index);
-	kqwl_req_unlock(kqwl);
-}
-
-/*
- * These arrays described the low and high qindexes for a given qos_index.
- * The values come from the chart in <sys/eventvar.h> (must stay in sync).
- */
-static kq_index_t _kqwq_base_index[KQWQ_NQOS] = {0, 0, 6, 11, 15, 18, 20, 21};
-static kq_index_t _kqwq_high_index[KQWQ_NQOS] = {0, 5, 10, 14, 17, 19, 20, 21};
-
-static struct kqtailq *
-kqueue_get_base_queue(struct kqueue *kq, kq_index_t qos_index)
-{
-	if (kq->kq_state & KQ_WORKQ) {
-		assert(qos_index < KQWQ_NQOS);
-		return &kq->kq_queue[_kqwq_base_index[qos_index]];
-	} else if (kq->kq_state & KQ_WORKLOOP) {
-		assert(qos_index < KQWL_NBUCKETS);
-		return &kq->kq_queue[qos_index];
-	} else {
-		assert(qos_index == QOS_INDEX_KQFILE);
-		return &kq->kq_queue[QOS_INDEX_KQFILE];
-	}
+	kq_req_unlock(kqwl);
 }
 
 static struct kqtailq *
-kqueue_get_high_queue(struct kqueue *kq, kq_index_t qos_index)
+kqueue_get_queue(struct kqueue *kq, kq_index_t qos_index)
 {
 	if (kq->kq_state & KQ_WORKQ) {
-		assert(qos_index < KQWQ_NQOS);
-		return &kq->kq_queue[_kqwq_high_index[qos_index]];
+		assert(qos_index < KQWQ_NBUCKETS);
 	} else if (kq->kq_state & KQ_WORKLOOP) {
 		assert(qos_index < KQWL_NBUCKETS);
-		return &kq->kq_queue[KQWL_BUCKET_STAYACTIVE];
 	} else {
 		assert(qos_index == QOS_INDEX_KQFILE);
-		return &kq->kq_queue[QOS_INDEX_KQFILE];
 	}
+	static_assert(offsetof(struct kqueue, kq_queue) == sizeof(struct kqueue),
+			"struct kqueue::kq_queue must be exactly at the end");
+	return &kq->kq_queue[qos_index];
 }
 
 static int
 kqueue_queue_empty(struct kqueue *kq, kq_index_t qos_index)
 {
-	struct kqtailq *base_queue = kqueue_get_base_queue(kq, qos_index);
-	struct kqtailq *queue = kqueue_get_high_queue(kq, qos_index);
-
-	do {
-		if (!TAILQ_EMPTY(queue))
-			return 0;
-	} while (queue-- > base_queue);
-	return 1;
+	return TAILQ_EMPTY(kqueue_get_queue(kq, qos_index));
 }
 
 static struct kqtailq *
-kqueue_get_suppressed_queue(struct kqueue *kq, kq_index_t qos_index)
+kqueue_get_suppressed_queue(kqueue_t kq, struct knote *kn)
 {
-    struct kqtailq *res;
-	struct kqrequest *kqr;
-
-	if (kq->kq_state & KQ_WORKQ) {
-		struct kqworkq *kqwq = (struct kqworkq *)kq;
-
-		kqr = kqworkq_get_request(kqwq, qos_index);
-		res = &kqr->kqr_suppressed;
-	} else if (kq->kq_state & KQ_WORKLOOP) {
-		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
-
-		kqr = &kqwl->kqwl_request;
-		res = &kqr->kqr_suppressed;
+	if (kq.kq->kq_state & KQ_WORKQ) {
+		return &kqworkq_get_request(kq.kqwq, kn->kn_qos_index)->kqr_suppressed;
+	} else if (kq.kq->kq_state & KQ_WORKLOOP) {
+		return &kq.kqwl->kqwl_request.kqr_suppressed;
 	} else {
-		struct kqfile *kqf = (struct kqfile *)kq;
-		res = &kqf->kqf_suppressed;
+		return &kq.kqf->kqf_suppressed;
 	}
-	return res;
 }
 
-static kq_index_t
-knote_get_queue_index(struct knote *kn)
+static struct turnstile *
+kqueue_get_turnstile(kqueue_t kqu, bool can_alloc)
 {
-	kq_index_t override_index = knote_get_qos_override_index(kn);
-	kq_index_t qos_index = knote_get_qos_index(kn);
-	struct kqueue *kq = knote_get_kq(kn);
-	kq_index_t res;
+	uint8_t kqr_state;
 
-	if (kq->kq_state & KQ_WORKQ) {
-		res = _kqwq_base_index[qos_index];
-		if (override_index > qos_index)
-			res += override_index - qos_index;
-		assert(res <= _kqwq_high_index[qos_index]);
-	} else if (kq->kq_state & KQ_WORKLOOP) {
-		res = MAX(override_index, qos_index);
-		assert(res < KQWL_NBUCKETS);
-	} else {
-		assert(qos_index == QOS_INDEX_KQFILE);
-		assert(override_index == QOS_INDEX_KQFILE);
-		res = QOS_INDEX_KQFILE;
+	if ((kqu.kq->kq_state & KQ_WORKLOOP) == 0) {
+		return TURNSTILE_NULL;
 	}
-	return res;
+
+	kqr_state = os_atomic_load(&kqu.kqwl->kqwl_request.kqr_state, relaxed);
+	if (kqr_state & KQR_ALLOCATED_TURNSTILE) {
+		/* force a dependency to pair with the atomic or with release below */
+		return os_atomic_load_with_dependency_on(&kqu.kqwl->kqwl_turnstile,
+				kqr_state);
+	}
+
+	if (!can_alloc) {
+		return TURNSTILE_NULL;
+	}
+
+	struct turnstile *ts = turnstile_alloc(), *free_ts = TURNSTILE_NULL;
+
+	kq_req_lock(kqu);
+	if (filt_wlturnstile_interlock_is_workq(kqu.kqwl)) {
+		workq_kern_threadreq_lock(kqu.kqwl->kqwl_p);
+	}
+
+	if (kqu.kqwl->kqwl_request.kqr_state & KQR_ALLOCATED_TURNSTILE) {
+		free_ts = ts;
+		ts = kqu.kqwl->kqwl_turnstile;
+	} else {
+		ts = turnstile_prepare((uintptr_t)kqu.kqwl, &kqu.kqwl->kqwl_turnstile,
+				ts, TURNSTILE_WORKLOOPS);
+
+		/* release-barrier to pair with the unlocked load of kqwl_turnstile above */
+		os_atomic_or(&kqu.kqwl->kqwl_request.kqr_state,
+				KQR_ALLOCATED_TURNSTILE, release);
+	}
+
+	if (filt_wlturnstile_interlock_is_workq(kqu.kqwl)) {
+		workq_kern_threadreq_unlock(kqu.kqwl->kqwl_p);
+	}
+	kq_req_unlock(kqu.kqwl);
+
+	if (free_ts) {
+		turnstile_deallocate(free_ts);
+	}
+	return ts;
+}
+
+struct turnstile *
+kqueue_turnstile(struct kqueue *kq)
+{
+	return kqueue_get_turnstile(kq, false);
+}
+
+struct turnstile *
+kqueue_alloc_turnstile(struct kqueue *kq)
+{
+	return kqueue_get_turnstile(kq, true);
 }
 
 static struct kqtailq *
 knote_get_queue(struct knote *kn)
 {
-	kq_index_t qindex = knote_get_queue_index(kn);
-
-	return &(knote_get_kq(kn))->kq_queue[qindex];
-}
-
-static kq_index_t
-knote_get_req_index(struct knote *kn)
-{
-	return kn->kn_req_index;
-}
-
-static kq_index_t
-knote_get_qos_index(struct knote *kn)
-{
-	return kn->kn_qos_index;
+	return kqueue_get_queue(knote_get_kq(kn), kn->kn_qos_index);
 }
 
 static void
-knote_set_qos_index(struct knote *kn, kq_index_t qos_index)
+knote_reset_priority(struct knote *kn, pthread_priority_t pp)
 {
 	struct kqueue *kq = knote_get_kq(kn);
+	kq_index_t qos = _pthread_priority_thread_qos(pp);
 
-	assert(qos_index < KQWQ_NQOS);
 	assert((kn->kn_status & KN_QUEUED) == 0);
 
 	if (kq->kq_state & KQ_WORKQ) {
-		assert(qos_index > THREAD_QOS_UNSPECIFIED);
+		if (qos == THREAD_QOS_UNSPECIFIED) {
+			/* On workqueues, outside of QoS means MANAGER */
+			qos = KQWQ_QOS_MANAGER;
+			pp = _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG;
+		} else {
+			pp = _pthread_priority_normalize(pp);
+		}
 	} else if (kq->kq_state & KQ_WORKLOOP) {
-		/* XXX this policy decision shouldn't be here */
-		if (qos_index == THREAD_QOS_UNSPECIFIED)
-			qos_index = THREAD_QOS_LEGACY;
-	} else
-		qos_index = QOS_INDEX_KQFILE;
+		assert((pp & _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG) == 0);
+		pp = _pthread_priority_normalize(pp);
+	} else {
+		pp = _pthread_unspecified_priority();
+		qos = THREAD_QOS_UNSPECIFIED;
+	}
 
-	/* always set requested */
-	kn->kn_req_index = qos_index;
+	kn->kn_qos = pp;
+	kn->kn_req_index = qos;
+
+	if ((kn->kn_status & KN_MERGE_QOS) == 0 || qos > kn->kn_qos_override) {
+		/* Never lower QoS when in "Merge" mode */
+		kn->kn_qos_override = qos;
+	}
 
 	/* only adjust in-use qos index when not suppressed */
-	if ((kn->kn_status & KN_SUPPRESSED) == 0)
-		kn->kn_qos_index = qos_index;
+	if ((kn->kn_status & KN_SUPPRESSED) == 0) {
+		kn->kn_qos_index = qos;
+	} else if (kq->kq_state & KQ_WORKQ) {
+		kqworkq_update_override((struct kqworkq *)kq, kn, qos);
+	} else if (kq->kq_state & KQ_WORKLOOP) {
+		kqworkloop_update_override((struct kqworkloop *)kq, qos);
+	}
 }
 
 static void
 knote_set_qos_overcommit(struct knote *kn)
 {
 	struct kqueue *kq = knote_get_kq(kn);
-	struct kqrequest *kqr;
 
 	/* turn overcommit on for the appropriate thread request? */
-	if (kn->kn_qos & _PTHREAD_PRIORITY_OVERCOMMIT_FLAG) {
-		if (kq->kq_state & KQ_WORKQ) {
-			kq_index_t qos_index = knote_get_qos_index(kn);
-			struct kqworkq *kqwq = (struct kqworkq *)kq;
+	if ((kn->kn_qos & _PTHREAD_PRIORITY_OVERCOMMIT_FLAG) &&
+			(kq->kq_state & KQ_WORKLOOP)) {
+		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
+		struct kqrequest *kqr = &kqwl->kqwl_request;
 
-			kqr = kqworkq_get_request(kqwq, qos_index);
-
-			kqwq_req_lock(kqwq);
-			kqr->kqr_state |= KQR_THOVERCOMMIT;
-			kqwq_req_unlock(kqwq);
-		} else if (kq->kq_state & KQ_WORKLOOP) {
-			struct kqworkloop *kqwl = (struct kqworkloop *)kq;
-
-			kqr = &kqwl->kqwl_request;
-
-			kqwl_req_lock(kqwl);
-			kqr->kqr_state |= KQR_THOVERCOMMIT;
-			kqwl_req_unlock(kqwl);
+		/*
+		 * This test is racy, but since we never remove this bit,
+		 * it allows us to avoid taking a lock.
+		 */
+		if (kqr->kqr_state & KQR_THOVERCOMMIT) {
+			return;
 		}
+
+		kq_req_lock(kqwl);
+		kqr->kqr_state |= KQR_THOVERCOMMIT;
+		if (!kqr->kqr_thread && (kqr->kqr_state & KQR_THREQUESTED)) {
+			kqueue_threadreq_modify(kq, kqr, kqr->kqr_req.tr_qos);
+		}
+		kq_req_unlock(kqwl);
 	}
 }
 
@@ -7185,490 +6656,309 @@ knote_get_qos_override_index(struct knote *kn)
 }
 
 static void
-knote_set_qos_override_index(struct knote *kn, kq_index_t override_index,
-		boolean_t override_is_sync)
-{
-	struct kqueue *kq = knote_get_kq(kn);
-	kq_index_t qos_index = knote_get_qos_index(kn);
-	kq_index_t old_override_index = knote_get_qos_override_index(kn);
-	boolean_t old_override_is_sync = kn->kn_qos_override_is_sync;
-	uint32_t flags = 0;
-
-	assert((kn->kn_status & KN_QUEUED) == 0);
-
-	if (override_index == KQWQ_QOS_MANAGER) {
-		assert(qos_index == KQWQ_QOS_MANAGER);
-	} else {
-		assert(override_index < KQWQ_QOS_MANAGER);
-	}
-
-	kn->kn_qos_override = override_index;
-	kn->kn_qos_override_is_sync = override_is_sync;
-
-	/*
-	 * If this is a workq/workloop kqueue, apply the override to the
-	 * servicing thread.
-	 */
-	if (kq->kq_state & KQ_WORKQ)  {
-		struct kqworkq *kqwq = (struct kqworkq *)kq;
-
-		assert(qos_index > THREAD_QOS_UNSPECIFIED);
-		kqworkq_update_override(kqwq, qos_index, override_index);
-	} else if (kq->kq_state & KQ_WORKLOOP) {
-		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
-
-		if ((kn->kn_status & KN_SUPPRESSED) == KN_SUPPRESSED) {
-			flags = flags | KQWL_UO_UPDATE_SUPPRESS_SYNC_COUNTERS;
-
-			if (override_index == THREAD_QOS_USER_INTERACTIVE
-					&& override_is_sync) {
-				flags = flags | KQWL_UO_NEW_OVERRIDE_IS_SYNC_UI;
-			}
-
-			if (old_override_index == THREAD_QOS_USER_INTERACTIVE
-					&& old_override_is_sync) {
-				flags = flags | KQWL_UO_OLD_OVERRIDE_IS_SYNC_UI;
-			}
-		}
-
-		assert(qos_index > THREAD_QOS_UNSPECIFIED);
-		kqworkloop_update_override(kqwl, qos_index, override_index, flags);
-	}
-}
-
-static kq_index_t
-knote_get_sync_qos_override_index(struct knote *kn)
-{
-	return kn->kn_qos_sync_override;
-}
-
-static void
-kqworkq_update_override(struct kqworkq *kqwq, kq_index_t qos_index, kq_index_t override_index)
+kqworkq_update_override(struct kqworkq *kqwq, struct knote *kn,
+		kq_index_t override_index)
 {
 	struct kqrequest *kqr;
 	kq_index_t old_override_index;
+	kq_index_t queue_index = kn->kn_qos_index;
 
-	if (override_index <= qos_index) {
+	if (override_index <= queue_index) {
 		return;
 	}
 
-	kqr = kqworkq_get_request(kqwq, qos_index);
+	kqr = kqworkq_get_request(kqwq, queue_index);
 
-	kqwq_req_lock(kqwq);
+	kq_req_lock(kqwq);
 	old_override_index = kqr->kqr_override_index;
 	if (override_index > MAX(kqr->kqr_qos_index, old_override_index)) {
 		kqr->kqr_override_index = override_index;
 
 		/* apply the override to [incoming?] servicing thread */
-		if (kqr->kqr_state & KQR_BOUND) {
-			thread_t wqthread = kqr->kqr_thread;
-
-			/* only apply if non-manager */
-			assert(wqthread);
-		    if ((kqr->kqr_state & KQWQ_THMANAGER) == 0) {
-				if (old_override_index)
-					thread_update_ipc_override(wqthread, override_index);
-				else
-					thread_add_ipc_override(wqthread, override_index);
-			}
+		if (kqr->kqr_thread) {
+			if (old_override_index)
+				thread_update_ipc_override(kqr->kqr_thread, override_index);
+			else
+				thread_add_ipc_override(kqr->kqr_thread, override_index);
 		}
 	}
-	kqwq_req_unlock(kqwq);
+	kq_req_unlock(kqwq);
 }
 
-/* called with the kqworkq lock held */
 static void
-kqworkq_bind_thread_impl(
-	struct kqworkq *kqwq,
-	kq_index_t qos_index,
-	thread_t thread,
-	unsigned int flags)
+kqworkloop_update_override(struct kqworkloop *kqwl, kq_index_t override_index)
 {
-	/* request lock must be held */
-	kqwq_req_held(kqwq);
+	kq_req_lock(kqwl);
+	kqworkloop_update_threads_qos(kqwl, KQWL_UTQ_UPDATE_WAKEUP_OVERRIDE,
+			override_index);
+	kq_req_unlock(kqwl);
+}
 
-	struct kqrequest *kqr = kqworkq_get_request(kqwq, qos_index);
-	assert(kqr->kqr_state & KQR_THREQUESTED);
-
-	if (qos_index == KQWQ_QOS_MANAGER)
-		flags |= KEVENT_FLAG_WORKQ_MANAGER;
-
+static thread_qos_t
+kqworkloop_unbind_locked(struct kqworkloop *kqwl, thread_t thread)
+{
 	struct uthread *ut = get_bsdthread_info(thread);
-
-	/* 
-	 * If this is a manager, and the manager request bit is
-	 * not set, assure no other thread is bound. If the bit
-	 * is set, make sure the old thread is us (or not set).
-	 */
-	if (flags & KEVENT_FLAG_WORKQ_MANAGER) {
-		if ((kqr->kqr_state & KQR_BOUND) == 0) {
-			kqr->kqr_state |= (KQR_BOUND | KQWQ_THMANAGER);
-			TAILQ_INIT(&kqr->kqr_suppressed);
-			kqr->kqr_thread = thread;
-			ut->uu_kqueue_bound = (struct kqueue *)kqwq;
-			ut->uu_kqueue_qos_index = KQWQ_QOS_MANAGER;
-			ut->uu_kqueue_flags = (KEVENT_FLAG_WORKQ | 
-			                       KEVENT_FLAG_WORKQ_MANAGER);
-		} else {
-			assert(kqr->kqr_state & KQR_BOUND);
-			assert(thread == kqr->kqr_thread);
-			assert(ut->uu_kqueue_bound == (struct kqueue *)kqwq);
-			assert(ut->uu_kqueue_qos_index == KQWQ_QOS_MANAGER);
-			assert(ut->uu_kqueue_flags & KEVENT_FLAG_WORKQ_MANAGER);
-		}
-		return;
-	}
-
-	/* Just a normal one-queue servicing thread */
-	assert(kqr->kqr_state & KQR_THREQUESTED);
-	assert(kqr->kqr_qos_index == qos_index);
-
-	if ((kqr->kqr_state & KQR_BOUND) == 0) {
-		kqr->kqr_state |= KQR_BOUND;
-		TAILQ_INIT(&kqr->kqr_suppressed);
-		kqr->kqr_thread = thread;
-
-		/* apply an ipc QoS override if one is needed */
-		if (kqr->kqr_override_index) {
-			assert(kqr->kqr_qos_index);
-			assert(kqr->kqr_override_index > kqr->kqr_qos_index);
-			assert(thread_get_ipc_override(thread) == THREAD_QOS_UNSPECIFIED);
-			thread_add_ipc_override(thread, kqr->kqr_override_index);
-		}
-
-		/* indicate that we are processing in the uthread */
-		ut->uu_kqueue_bound = (struct kqueue *)kqwq;
-		ut->uu_kqueue_qos_index = qos_index;
-		ut->uu_kqueue_flags = flags;
-	} else {
-		/*
-		 * probably syncronously bound AND post-request bound
-		 * this logic can go away when we get rid of post-request bind
-		 */
-		assert(kqr->kqr_state & KQR_BOUND);
-		assert(thread == kqr->kqr_thread);
-		assert(ut->uu_kqueue_bound == (struct kqueue *)kqwq);
-		assert(ut->uu_kqueue_qos_index == qos_index);
-		assert((ut->uu_kqueue_flags & flags) == flags);
-	}
-}
-
-static void
-kqworkloop_update_override(
-	struct kqworkloop *kqwl,
-	kq_index_t qos_index,
-	kq_index_t override_index,
-	uint32_t flags)
-{
 	struct kqrequest *kqr = &kqwl->kqwl_request;
+	kq_index_t ipc_override = ut->uu_kqueue_override;
 
-	kqwl_req_lock(kqwl);
+	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_UNBIND), kqwl->kqwl_dynamicid,
+			thread_tid(thread), 0, 0);
 
-	/* Do not override on attached threads */
-	if (kqr->kqr_state & KQR_BOUND) {
-		assert(kqr->kqr_thread);
+	kq_req_held(kqwl);
+	assert(ut->uu_kqr_bound == kqr);
+	ut->uu_kqr_bound = NULL;
+	ut->uu_kqueue_override = THREAD_QOS_UNSPECIFIED;
 
-		if (kqwl->kqwl_kqueue.kq_state & KQ_NO_WQ_THREAD) {
-			kqwl_req_unlock(kqwl);
-			assert(!is_workqueue_thread(kqr->kqr_thread));
-			return;
-		}
+	if (kqwl->kqwl_owner == NULL && kqwl->kqwl_turnstile) {
+		turnstile_update_inheritor(kqwl->kqwl_turnstile,
+				TURNSTILE_INHERITOR_NULL, TURNSTILE_IMMEDIATE_UPDATE);
+		turnstile_update_inheritor_complete(kqwl->kqwl_turnstile,
+				TURNSTILE_INTERLOCK_HELD);
 	}
 
-	/* Update sync ipc counts on kqr for suppressed knotes */
-	if (flags & KQWL_UO_UPDATE_SUPPRESS_SYNC_COUNTERS) {
-		kqworkloop_update_suppress_sync_count(kqr, flags);
-	}
-
-	if ((flags & KQWL_UO_UPDATE_OVERRIDE_LAZY) == 0) {
-		kqworkloop_update_threads_qos(kqwl, KQWL_UTQ_UPDATE_WAKEUP_OVERRIDE,
-			MAX(qos_index, override_index));
-	}
-	kqwl_req_unlock(kqwl);
-}
-
-static void
-kqworkloop_update_suppress_sync_count(
-	struct kqrequest *kqr,
-	uint32_t flags)
-{
-	if (flags & KQWL_UO_NEW_OVERRIDE_IS_SYNC_UI) {
-		kqr->kqr_sync_suppress_count++;
-	}
-
-	if (flags & KQWL_UO_OLD_OVERRIDE_IS_SYNC_UI) {
-		assert(kqr->kqr_sync_suppress_count > 0);
-		kqr->kqr_sync_suppress_count--;
-	}
+	kqr->kqr_thread = NULL;
+	kqr->kqr_state &= ~(KQR_THREQUESTED | KQR_R2K_NOTIF_ARMED);
+	return ipc_override;
 }
 
 /*
- *	kqworkloop_unbind_thread - Unbind the servicer thread of a workloop kqueue
+ *	kqworkloop_unbind - Unbind the servicer thread of a workloop kqueue
  *
- *	It will end the processing phase in case it was still processing:
- *
- *	We may have to request a new thread for not KQ_NO_WQ_THREAD workloop.
- *	This can happen if :
- *	- there were active events at or above our QoS we never got to (count > 0)
+ *	It will acknowledge events, and possibly request a new thread if:
+ *	- there were active events left
  *	- we pended waitq hook callouts during processing
  *	- we pended wakeups while processing (or unsuppressing)
  *
  *	Called with kqueue lock held.
  */
-
 static void
-kqworkloop_unbind_thread(
-	struct kqworkloop *kqwl,
-	thread_t thread,
-	__unused unsigned int flags)
+kqworkloop_unbind(proc_t p, struct kqworkloop *kqwl)
 {
 	struct kqueue *kq = &kqwl->kqwl_kqueue;
 	struct kqrequest *kqr = &kqwl->kqwl_request;
+	thread_t thread = kqr->kqr_thread;
+	int op = KQWL_UTQ_PARKING;
+	kq_index_t ipc_override, qos_override = THREAD_QOS_UNSPECIFIED;
 
-	kqlock_held(kq);
+	assert(thread == current_thread());
 
-	assert((kq->kq_state & KQ_PROCESSING) == 0);
-	if (kq->kq_state & KQ_PROCESSING) {
-		return;
-	}
+	kqlock(kqwl);
 
 	/*
 	 * Forcing the KQ_PROCESSING flag allows for QoS updates because of
 	 * unsuppressing knotes not to be applied until the eventual call to
 	 * kqworkloop_update_threads_qos() below.
 	 */
-	kq->kq_state |= KQ_PROCESSING;
-	kqworkloop_acknowledge_events(kqwl, TRUE);
-	kq->kq_state &= ~KQ_PROCESSING;
-
-	kqwl_req_lock(kqwl);
-
-	/* deal with extraneous unbinds in release kernels */
-	assert((kqr->kqr_state & (KQR_BOUND | KQR_PROCESSING)) == KQR_BOUND);
-	if ((kqr->kqr_state & (KQR_BOUND | KQR_PROCESSING)) != KQR_BOUND) {
-		kqwl_req_unlock(kqwl);
-		return;
+	assert((kq->kq_state & KQ_PROCESSING) == 0);
+	if (!TAILQ_EMPTY(&kqr->kqr_suppressed)) {
+		kq->kq_state |= KQ_PROCESSING;
+		qos_override = kqworkloop_acknowledge_events(kqwl);
+		kq->kq_state &= ~KQ_PROCESSING;
 	}
 
-	assert(thread == current_thread());
-	assert(kqr->kqr_thread == thread);
-	if (kqr->kqr_thread != thread) {
-		kqwl_req_unlock(kqwl);
-	    return;
-	}
+	kq_req_lock(kqwl);
 
-	struct uthread *ut = get_bsdthread_info(thread);
-	kq_index_t old_qos_index = ut->uu_kqueue_qos_index;
-	boolean_t ipc_override_is_sync = ut->uu_kqueue_override_is_sync;
-	ut->uu_kqueue_bound = NULL;
-	ut->uu_kqueue_qos_index = 0;
-	ut->uu_kqueue_override_is_sync = 0;
-	ut->uu_kqueue_flags = 0;
+	ipc_override = kqworkloop_unbind_locked(kqwl, thread);
+	kqworkloop_update_threads_qos(kqwl, op, qos_override);
 
-	/* unbind the servicer thread, drop overrides */
-	kqr->kqr_thread = NULL;
-	kqr->kqr_state &= ~(KQR_BOUND | KQR_THREQUESTED | KQR_R2K_NOTIF_ARMED);
-	kqworkloop_update_threads_qos(kqwl, KQWL_UTQ_RECOMPUTE_WAKEUP_QOS, 0);
+	kq_req_unlock(kqwl);
 
-	kqwl_req_unlock(kqwl);
+	kqunlock(kqwl);
 
 	/*
 	 * Drop the override on the current thread last, after the call to
 	 * kqworkloop_update_threads_qos above.
 	 */
-	if (old_qos_index) {
+	if (ipc_override) {
 		thread_drop_ipc_override(thread);
 	}
-	if (ipc_override_is_sync) {
-		thread_drop_sync_ipc_override(thread);
-	}
+
+	/* If last reference, dealloc the workloop kq */
+	kqueue_release_last(p, kqwl);
 }
 
-/* called with the kqworkq lock held */
-static void
-kqworkq_unbind_thread(
-	struct kqworkq *kqwq,
-	kq_index_t qos_index,
-	thread_t thread, 
-	__unused unsigned int flags)
+static thread_qos_t
+kqworkq_unbind_locked(__assert_only struct kqworkq *kqwq,
+		struct kqrequest *kqr, thread_t thread)
 {
-	struct kqrequest *kqr = kqworkq_get_request(kqwq, qos_index);
-	kq_index_t override_index = 0;
+	struct uthread *ut = get_bsdthread_info(thread);
+	kq_index_t old_override = kqr->kqr_override_index;
 
-	/* request lock must be held */
-	kqwq_req_held(kqwq);
+	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_UNBIND), -1,
+			thread_tid(kqr->kqr_thread), kqr->kqr_qos_index, 0);
 
-	assert(thread == current_thread());
-
-	if ((kqr->kqr_state & KQR_BOUND) == 0) {
-		assert(kqr->kqr_state & KQR_BOUND);
-		return;
-	}
-
-	assert(kqr->kqr_thread == thread);
-	assert(TAILQ_EMPTY(&kqr->kqr_suppressed));
-
-	/* 
-	 * If there is an override, drop it from the current thread
-	 * and then we are free to recompute (a potentially lower)
-	 * minimum override to apply to the next thread request.
-	 */
-	if (kqr->kqr_override_index) {
-		struct kqtailq *base_queue = kqueue_get_base_queue(&kqwq->kqwq_kqueue, qos_index);
-		struct kqtailq *queue = kqueue_get_high_queue(&kqwq->kqwq_kqueue, qos_index);
-
-		/* if not bound to a manager thread, drop the current ipc override */
-		if ((kqr->kqr_state & KQWQ_THMANAGER) == 0) {
-			thread_drop_ipc_override(thread);
-		}
-
-		/* recompute the new override */
-		do {
-			if (!TAILQ_EMPTY(queue)) {
-				override_index = queue - base_queue + qos_index;
-				break;
-			}
-		} while (queue-- > base_queue);
-	}
-
-	/* Mark it unbound */
+	kq_req_held(kqwq);
+	assert(ut->uu_kqr_bound == kqr);
+	ut->uu_kqr_bound = NULL;
 	kqr->kqr_thread = NULL;
-	kqr->kqr_state &= ~(KQR_BOUND | KQR_THREQUESTED | KQWQ_THMANAGER);
+	kqr->kqr_state &= ~(KQR_THREQUESTED | KQR_R2K_NOTIF_ARMED);
+	kqr->kqr_override_index = THREAD_QOS_UNSPECIFIED;
 
-	/* apply the new override */
-	if (override_index > kqr->kqr_qos_index) {
-		kqr->kqr_override_index = override_index;
-	} else {
-		kqr->kqr_override_index = THREAD_QOS_UNSPECIFIED;
-	}
+	return old_override;
+}
+
+/*
+ *	kqworkq_unbind - unbind of a workq kqueue from a thread
+ *
+ *	We may have to request new threads.
+ *	This can happen there are no waiting processing threads and:
+ *	- there were active events we never got to (count > 0)
+ *	- we pended waitq hook callouts during processing
+ *	- we pended wakeups while processing (or unsuppressing)
+ */
+static void
+kqworkq_unbind(proc_t p, struct kqrequest *kqr)
+{
+	struct kqworkq *kqwq = (struct kqworkq *)p->p_fd->fd_wqkqueue;
+	__assert_only int rc;
+
+	kqlock(kqwq);
+	rc = kqworkq_acknowledge_events(kqwq, kqr, 0, KQWQAE_UNBIND);
+	assert(rc == -1);
+	kqunlock(kqwq);
 }
 
 struct kqrequest *
 kqworkq_get_request(struct kqworkq *kqwq, kq_index_t qos_index)
 {
-	assert(qos_index < KQWQ_NQOS);
+	assert(qos_index < KQWQ_NBUCKETS);
 	return &kqwq->kqwq_request[qos_index];
 }
 
-void
-knote_adjust_qos(struct knote *kn, qos_t new_qos, qos_t new_override, kq_index_t sync_override_index)
+static void
+knote_apply_qos_override(struct knote *kn, kq_index_t qos_index)
 {
-	struct kqueue *kq = knote_get_kq(kn);
-	boolean_t override_is_sync = FALSE;
+	assert((kn->kn_status & KN_QUEUED) == 0);
 
-	if (kq->kq_state & (KQ_WORKQ | KQ_WORKLOOP)) {
-		kq_index_t new_qos_index;
-		kq_index_t new_override_index;
-		kq_index_t servicer_qos_index;
+	kn->kn_qos_override = qos_index;
 
-		new_qos_index = qos_index_from_qos(kn, new_qos, FALSE);
-		new_override_index = qos_index_from_qos(kn, new_override, TRUE);
-
-		/* make sure the servicer qos acts as a floor */
-		servicer_qos_index = qos_index_from_qos(kn, kn->kn_qos, FALSE);
-		if (servicer_qos_index > new_qos_index)
-			new_qos_index = servicer_qos_index;
-		if (servicer_qos_index > new_override_index)
-			new_override_index = servicer_qos_index;
-		if (sync_override_index >= new_override_index) {
-			new_override_index = sync_override_index;
-			override_is_sync = TRUE;
+	if (kn->kn_status & KN_SUPPRESSED) {
+		struct kqueue *kq = knote_get_kq(kn);
+		/*
+		 * For suppressed events, the kn_qos_index field cannot be touched as it
+		 * allows us to know on which supress queue the knote is for a kqworkq.
+		 *
+		 * Also, there's no natural push applied on the kqueues when this field
+		 * changes anyway. We hence need to apply manual overrides in this case,
+		 * which will be cleared when the events are later acknowledged.
+		 */
+		if (kq->kq_state & KQ_WORKQ) {
+			kqworkq_update_override((struct kqworkq *)kq, kn, qos_index);
+		} else {
+			kqworkloop_update_override((struct kqworkloop *)kq, qos_index);
 		}
-
-		kqlock(kq);
-		if (new_qos_index != knote_get_req_index(kn) ||
-		    new_override_index != knote_get_qos_override_index(kn) ||
-		    override_is_sync != kn->kn_qos_override_is_sync) {
-			if (kn->kn_status & KN_QUEUED) {
-				knote_dequeue(kn);
-				knote_set_qos_index(kn, new_qos_index);
-				knote_set_qos_override_index(kn, new_override_index, override_is_sync);
-				knote_enqueue(kn);
-				knote_wakeup(kn);
-			} else {
-				knote_set_qos_index(kn, new_qos_index);
-				knote_set_qos_override_index(kn, new_override_index, override_is_sync);
-			}
-		}
-		kqunlock(kq);
+	} else {
+		kn->kn_qos_index = qos_index;
 	}
 }
 
-void
-knote_adjust_sync_qos(struct knote *kn, kq_index_t sync_qos, boolean_t lock_kq)
+static bool
+knote_should_apply_qos_override(struct kqueue *kq, struct knote *kn, int result,
+		thread_qos_t *qos_out)
 {
-	struct kqueue *kq = knote_get_kq(kn);
-	kq_index_t old_sync_override;
-	kq_index_t qos_index = knote_get_qos_index(kn);
-	uint32_t flags = 0;
+	thread_qos_t qos_index = (result >> FILTER_ADJUST_EVENT_QOS_SHIFT) & 7;
 
-	/* Tracking only happens for UI qos */
-	if (sync_qos != THREAD_QOS_USER_INTERACTIVE &&
-		sync_qos != THREAD_QOS_UNSPECIFIED) {
-		return;
+	kqlock_held(kq);
+
+	assert(result & FILTER_ADJUST_EVENT_QOS_BIT);
+	assert(qos_index < THREAD_QOS_LAST);
+
+	/*
+	 * Early exit for knotes that should not change QoS
+	 *
+	 * It is safe to test kn_req_index against MANAGER / STAYACTIVE because
+	 * knotes with such kn_req_index values never change for their entire
+	 * lifetime.
+	 */
+	if (__improbable(!knote_fops(kn)->f_adjusts_qos)) {
+		panic("filter %d cannot change QoS", kn->kn_filtid);
+	} else if (kq->kq_state & KQ_WORKLOOP) {
+		if (kn->kn_req_index == KQWL_BUCKET_STAYACTIVE) {
+			return false;
+		}
+	} else if (kq->kq_state & KQ_WORKQ) {
+		if (kn->kn_req_index == KQWQ_QOS_MANAGER) {
+			return false;
+		}
+	} else {
+		return false;
 	}
 
-	if (lock_kq)
-		kqlock(kq);
+	/*
+	 * knotes with the FALLBACK flag will only use their registration QoS if the
+	 * incoming event has no QoS, else, the registration QoS acts as a floor.
+	 */
+	if (kn->kn_qos & _PTHREAD_PRIORITY_FALLBACK_FLAG) {
+		if (qos_index == THREAD_QOS_UNSPECIFIED)
+			qos_index = kn->kn_req_index;
+	} else {
+		if (qos_index < kn->kn_req_index)
+			qos_index = kn->kn_req_index;
+	}
+	if ((kn->kn_status & KN_MERGE_QOS) && (qos_index < kn->kn_qos_override)) {
+		/* Never lower QoS when in "Merge" mode */
+		return false;
+	}
 
-	if (kq->kq_state & KQ_WORKLOOP) {
-		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
+	if ((kn->kn_status & KN_LOCKED) && kn->kn_inuse) {
+		/*
+		 * When we're trying to update the QoS override and that both an
+		 * f_event() and other f_* calls are running concurrently, any of these
+		 * in flight calls may want to perform overrides that aren't properly
+		 * serialized with each other.
+		 *
+		 * The first update that observes this racy situation enters a "Merge"
+		 * mode which causes subsequent override requests to saturate the
+		 * override instead of replacing its value.
+		 *
+		 * This mode is left when knote_unlock() or knote_call_filter_event()
+		 * observe that no other f_* routine is in flight.
+		 */
+		kn->kn_status |= KN_MERGE_QOS;
+	}
 
-		old_sync_override = knote_get_sync_qos_override_index(kn);
-		if (old_sync_override != sync_qos) {
-			kn->kn_qos_sync_override = sync_qos;
+	if (kn->kn_qos_override == qos_index) {
+		return false;
+	}
 
-			/* update sync ipc counters for suppressed knotes */
-			if ((kn->kn_status & KN_SUPPRESSED) == KN_SUPPRESSED) {
-				flags = flags | KQWL_UO_UPDATE_SUPPRESS_SYNC_COUNTERS;
+	*qos_out = qos_index;
+	return true;
+}
 
-				/* Do not recalculate kqwl override, it would be done later */
-				flags = flags | KQWL_UO_UPDATE_OVERRIDE_LAZY;
-
-				if (sync_qos == THREAD_QOS_USER_INTERACTIVE) {
-					flags = flags | KQWL_UO_NEW_OVERRIDE_IS_SYNC_UI;
-				}
-
-				if (old_sync_override == THREAD_QOS_USER_INTERACTIVE) {
-					flags = flags | KQWL_UO_OLD_OVERRIDE_IS_SYNC_UI;
-				}
-
-				kqworkloop_update_override(kqwl, qos_index, sync_qos,
-					flags);
-			}
-
+static void
+knote_adjust_qos(struct kqueue *kq, struct knote *kn, int result)
+{
+	thread_qos_t qos;
+	if (knote_should_apply_qos_override(kq, kn, result, &qos)) {
+		knote_dequeue(kn);
+		knote_apply_qos_override(kn, qos);
+		if (knote_enqueue(kn) && (kn->kn_status & KN_ACTIVE)) {
+			knote_wakeup(kn);
 		}
 	}
-	if (lock_kq)
-		kqunlock(kq);
 }
 
 static void
 knote_wakeup(struct knote *kn)
 {
 	struct kqueue *kq = knote_get_kq(kn);
-	kq_index_t qos_index = knote_get_qos_index(kn);
 
 	kqlock_held(kq);
 
 	if (kq->kq_state & KQ_WORKQ) {
-		/* request a servicing thread */
 		struct kqworkq *kqwq = (struct kqworkq *)kq;
 
-		kqworkq_request_help(kqwq, qos_index);
-
+		kqworkq_request_help(kqwq, kn->kn_qos_index);
 	} else if (kq->kq_state & KQ_WORKLOOP) {
-		/* request a servicing thread */
 		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
 
-		if (kqworkloop_is_processing_on_current_thread(kqwl)) {
-			/*
-			 * kqworkloop_end_processing() will perform the required QoS
-			 * computations when it unsets the processing mode.
-			 */
-			return;
+		/*
+		 * kqworkloop_end_processing() will perform the required QoS
+		 * computations when it unsets the processing mode.
+		 */
+		if (!kqworkloop_is_processing_on_current_thread(kqwl)) {
+			kqworkloop_request_help(kqwl, kn->kn_qos_index);
 		}
-		kqworkloop_request_help(kqwl, qos_index);
 	} else {
 		struct kqfile *kqf = (struct kqfile *)kq;
 
@@ -7679,10 +6969,8 @@ knote_wakeup(struct knote *kn)
 		/* wakeup a thread waiting on this queue */
 		if (kq->kq_state & (KQ_SLEEP | KQ_SEL)) {
 			kq->kq_state &= ~(KQ_SLEEP | KQ_SEL);
-			waitq_wakeup64_all((struct waitq *)&kq->kq_wqs,
-			                   KQ_EVENT,
-			                   THREAD_AWAKENED,
-			                   WAITQ_ALL_PRIORITIES);
+			waitq_wakeup64_all((struct waitq *)&kq->kq_wqs, KQ_EVENT,
+					THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
 		}
 
 		/* wakeup other kqueues/select sets we're inside */
@@ -7714,8 +7002,8 @@ kqueue_interrupt(struct kqueue *kq)
 		assert(kq->kq_state & KQ_PROCESSING);
 
 		kq->kq_state &= ~KQ_PROCWAIT;
-		suppressq = kqueue_get_suppressed_queue(kq, QOS_INDEX_KQFILE);
-		(void)waitq_wakeup64_all((struct waitq *)&kq->kq_wqs, 
+		suppressq = kqueue_get_suppressed_queue(kq, NULL);
+		(void)waitq_wakeup64_all((struct waitq *)&kq->kq_wqs,
 		                         CAST_EVENT64_T(suppressq),
 		                         THREAD_RESTART,
 		                         WAITQ_ALL_PRIORITIES);
@@ -7744,7 +7032,6 @@ waitq_set__CALLING_PREPOST_HOOK__(void *kq_hook, void *knote_hook, int qos)
 		struct kqworkq *kqwq = (struct kqworkq *)kq;
 
 		kqworkq_request_help(kqwq, KQWQ_QOS_MANAGER);
-
 	} else if (kq->kq_state & KQ_WORKLOOP) {
 		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
 
@@ -7768,8 +7055,7 @@ klist_init(struct klist *list)
  *	the hint) and not deadlock itself.
  *
  *	The object lock should also hold off pending
- *	detach/drop operations.  But we'll prevent it here
- *	too (by taking a use reference) - just in case.
+ *	detach/drop operations.
  */
 void
 knote(struct klist *list, long hint)
@@ -7778,23 +7064,8 @@ knote(struct klist *list, long hint)
 
 	SLIST_FOREACH(kn, list, kn_selnext) {
 		struct kqueue *kq = knote_get_kq(kn);
-
 		kqlock(kq);
-
-		assert(!knoteuse_needs_boost(kn, NULL));
-
-		/* If we can get a use reference - deliver event */
-		if (kqlock2knoteuse(kq, kn, KNUSE_NONE)) {
-			int result;
-
-			/* call the event with only a use count */
-			result = knote_fops(kn)->f_event(kn, hint);
-
-			/* if its not going away and triggered */
-			if (knoteuse2kqlock(kq, kn, KNUSE_NONE) && result)
-				knote_activate(kn);
-			/* kq lock held */
-		}
+		knote_call_filter_event(kq, kn, hint);
 		kqunlock(kq);
 	}
 }
@@ -7845,30 +7116,43 @@ knote_vanish(struct klist *list)
 
 	SLIST_FOREACH_SAFE(kn, list, kn_selnext, kn_next) {
 		struct kqueue *kq = knote_get_kq(kn);
-		int result;
 
 		kqlock(kq);
-
-		assert(!knoteuse_needs_boost(kn, NULL));
-
-		if ((kn->kn_status & KN_DROPPING) == 0) {
+		if (kn->kn_status & KN_REQVANISH) {
 			/* If EV_VANISH supported - prepare to deliver one */
-			if (kn->kn_status & KN_REQVANISH) {
-				kn->kn_status |= KN_VANISHED;
-				knote_activate(kn);
-
-			} else if (kqlock2knoteuse(kq, kn, KNUSE_NONE)) {
-				/* call the event with only a use count */
-				result = knote_fops(kn)->f_event(kn, NOTE_REVOKE);
-
-				/* if its not going away and triggered */
-				if (knoteuse2kqlock(kq, kn, KNUSE_NONE) && result)
-					knote_activate(kn);
-				/* lock held again */
-			}
+			kn->kn_status |= KN_VANISHED;
+			knote_activate(kn);
+		} else {
+			knote_call_filter_event(kq, kn, NOTE_REVOKE);
 		}
 		kqunlock(kq);
 	}
+}
+
+/*
+ * Force a lazy allocation of the waitqset link
+ * of the kq_wqs associated with the kn
+ * if it wasn't already allocated.
+ *
+ * This allows knote_link_waitq to never block
+ * if reserved_link is not NULL.
+ */
+void
+knote_link_waitqset_lazy_alloc(struct knote *kn)
+{
+	struct kqueue *kq = knote_get_kq(kn);
+	waitq_set_lazy_init_link(&kq->kq_wqs);
+}
+
+/*
+ * Check if a lazy allocation for the waitqset link
+ * of the kq_wqs is needed.
+ */
+boolean_t
+knote_link_waitqset_should_lazy_alloc(struct knote *kn)
+{
+	struct kqueue *kq = knote_get_kq(kn);
+	return waitq_set_should_lazy_init_link(&kq->kq_wqs);
 }
 
 /*
@@ -7880,7 +7164,8 @@ knote_vanish(struct klist *list)
  * kqueue and knote references are held by caller.
  * waitq locked by caller.
  *
- * caller provides the wait queue link structure.
+ * caller provides the wait queue link structure and insures that the kq->kq_wqs
+ * is linked by previously calling knote_link_waitqset_lazy_alloc.
  */
 int
 knote_link_waitq(struct knote *kn, struct waitq *wq, uint64_t *reserved_link)
@@ -7920,17 +7205,15 @@ knote_unlink_waitq(struct knote *kn, struct waitq *wq)
 /*
  * remove all knotes referencing a specified fd
  *
- * Essentially an inlined knote_remove & knote_drop
- * when we know for sure that the thing is a file
- *
  * Entered with the proc_fd lock already held.
  * It returns the same way, but may drop it temporarily.
  */
 void
-knote_fdclose(struct proc *p, int fd, int force)
+knote_fdclose(struct proc *p, int fd)
 {
 	struct klist *list;
 	struct knote *kn;
+	KNOTE_LOCK_CTX(knlc);
 
 restart:
 	list = &p->p_fd->fd_knlist[fd];
@@ -7948,45 +7231,28 @@ restart:
 		 * transition it to vanished mode (or skip over
 		 * it if already vanished).
 		 */
-		if (!force && (kn->kn_status & KN_REQVANISH)) {
-
-			if ((kn->kn_status & KN_VANISHED) == 0) {
-				proc_fdunlock(p);
-
-				assert(!knoteuse_needs_boost(kn, NULL));
-
-				/* get detach reference (also marks vanished) */
-				if (kqlock2knotedetach(kq, kn, KNUSE_NONE)) {
-					/* detach knote and drop fp use reference */
-					knote_fops(kn)->f_detach(kn);
-					if (knote_fops(kn)->f_isfd)
-						fp_drop(p, kn->kn_id, kn->kn_fp, 0);
-
-					/* activate it if it's still in existence */
-					if (knoteuse2kqlock(kq, kn, KNUSE_NONE)) {
-						knote_activate(kn);
-					}
-					kqunlock(kq);
-				}
-				proc_fdlock(p);
-				goto restart;
-			} else {
-				kqunlock(kq);
-				continue;
-			}
+		if (kn->kn_status & KN_VANISHED) {
+			kqunlock(kq);
+			continue;
 		}
 
 		proc_fdunlock(p);
+		if (!knote_lock(kq, kn, &knlc, KNOTE_KQ_LOCK_ON_SUCCESS)) {
+			/* the knote was dropped by someone, nothing to do */
+		} else if (kn->kn_status & KN_REQVANISH) {
+			kn->kn_status |= KN_VANISHED;
+			kn->kn_status &= ~KN_ATTACHED;
 
-		/*
-		 * Convert the kq lock to a drop ref.
-		 * If we get it, go ahead and drop it.
-		 * Otherwise, we waited for the blocking
-		 * condition to complete. Either way,
-		 * we dropped the fdlock so start over.
-		 */
-		if (kqlock2knotedrop(kq, kn)) {
-			knote_drop(kn, p);
+			kqunlock(kq);
+			knote_fops(kn)->f_detach(kn);
+			if (knote_fops(kn)->f_isfd)
+				fp_drop(p, kn->kn_id, kn->kn_fp, 0);
+			kqlock(kq);
+
+			knote_activate(kn);
+			knote_unlock(kq, kn, &knlc, KNOTE_KQ_UNLOCK);
+		} else {
+			knote_drop(kq, kn, &knlc);
 		}
 
 		proc_fdlock(p);
@@ -7994,7 +7260,7 @@ restart:
 	}
 }
 
-/* 
+/*
  * knote_fdfind - lookup a knote in the fd table for process
  *
  * If the filter is file-based, lookup based on fd index.
@@ -8009,15 +7275,15 @@ restart:
  */
 static struct knote *
 knote_fdfind(struct kqueue *kq,
-             struct kevent_internal_s *kev,
-	     bool is_fd,
-             struct proc *p)
+		struct kevent_internal_s *kev,
+		bool is_fd,
+		struct proc *p)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct klist *list = NULL;
 	struct knote *kn = NULL;
 
-	/* 
+	/*
 	 * determine where to look for the knote
 	 */
 	if (is_fd) {
@@ -8036,7 +7302,7 @@ knote_fdfind(struct kqueue *kq,
 	if (list != NULL) {
 		SLIST_FOREACH(kn, list, kn_link) {
 			if (kq == knote_get_kq(kn) &&
-			    kev->ident == kn->kn_id && 
+			    kev->ident == kn->kn_id &&
 			    kev->filter == kn->kn_filter) {
 				if (kev->flags & EV_UDATA_SPECIFIC) {
 					if ((kn->kn_status & KN_UDATA_SPECIFIC) &&
@@ -8067,9 +7333,8 @@ knote_fdfind(struct kqueue *kq,
  * Takes a rwlock boost if inserting the knote is successful.
  */
 static int
-kq_add_knote(struct kqueue *kq, struct knote *kn,
-             struct kevent_internal_s *kev,
-             struct proc *p, int *knoteuse_flags)
+kq_add_knote(struct kqueue *kq, struct knote *kn, struct knote_lock_ctx *knlc,
+		struct proc *p)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct klist *list = NULL;
@@ -8081,7 +7346,7 @@ kq_add_knote(struct kqueue *kq, struct knote *kn,
 	else
 		knhash_lock(p);
 
-	if (knote_fdfind(kq, kev, is_fd, p) != NULL) {
+	if (knote_fdfind(kq, &kn->kn_kevent, is_fd, p) != NULL) {
 		/* found an existing knote: we can't add this one */
 		ret = ERESTART;
 		goto out_locked;
@@ -8092,8 +7357,7 @@ kq_add_knote(struct kqueue *kq, struct knote *kn,
 		if (fdp->fd_knhashmask == 0) {
 			u_long size = 0;
 
-			list = hashinit(CONFIG_KN_HASHSIZE, M_KQUEUE,
-						  &size);
+			list = hashinit(CONFIG_KN_HASHSIZE, M_KQUEUE, &size);
 			if (list == NULL) {
 				ret = ENOMEM;
 				goto out_locked;
@@ -8154,11 +7418,10 @@ kq_add_knote(struct kqueue *kq, struct knote *kn,
 	}
 
 out_locked:
-	if (ret == 0 && knoteuse_needs_boost(kn, kev)) {
-		set_thread_rwlock_boost();
-		*knoteuse_flags = KNUSE_BOOST;
-	} else {
-		*knoteuse_flags = KNUSE_NONE;
+	if (ret == 0) {
+		kqlock(kq);
+		assert((kn->kn_status & KN_LOCKED) == 0);
+		(void)knote_lock(kq, kn, knlc, KNOTE_KQ_UNLOCK);
 	}
 	if (is_fd)
 		proc_fdunlock(p);
@@ -8170,8 +7433,6 @@ out_locked:
 
 /*
  * kq_remove_knote - remove a knote from the fd table for process
- * and copy kn_status an kq_state while holding kqlock and
- * fd table locks.
  *
  * If the filter is file-based, remove based on fd index.
  * Otherwise remove from the hash based on the ident.
@@ -8180,10 +7441,11 @@ out_locked:
  */
 static void
 kq_remove_knote(struct kqueue *kq, struct knote *kn, struct proc *p,
-	kn_status_t *kn_status, uint16_t *kq_state)
+		struct knote_lock_ctx *knlc)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct klist *list = NULL;
+	uint16_t kq_state;
 	bool is_fd;
 
 	is_fd = knote_fops(kn)->f_isfd;
@@ -8202,14 +7464,19 @@ kq_remove_knote(struct kqueue *kq, struct knote *kn, struct proc *p,
 	SLIST_REMOVE(list, kn, knote, kn_link);
 
 	kqlock(kq);
-	*kn_status = kn->kn_status;
-	*kq_state = kq->kq_state;
-	kqunlock(kq);
-
+	kq_state = kq->kq_state;
+	if (knlc) {
+		knote_unlock_cancel(kq, kn, knlc, KNOTE_KQ_UNLOCK);
+	} else {
+		kqunlock(kq);
+	}
 	if (is_fd)
 		proc_fdunlock(p);
 	else
 		knhash_unlock(p);
+
+	if (kq_state & KQ_DYNAMIC)
+		kqueue_release_last(p, kq);
 }
 
 /*
@@ -8220,10 +7487,8 @@ kq_remove_knote(struct kqueue *kq, struct knote *kn, struct proc *p,
  */
 
 static struct knote *
-kq_find_knote_and_kq_lock(struct kqueue *kq,
-             struct kevent_internal_s *kev,
-	     bool is_fd,
-             struct proc *p)
+kq_find_knote_and_kq_lock(struct kqueue *kq, struct kevent_internal_s *kev,
+		bool is_fd, struct proc *p)
 {
 	struct knote * ret;
 
@@ -8248,71 +7513,41 @@ kq_find_knote_and_kq_lock(struct kqueue *kq,
 /*
  * knote_drop - disconnect and drop the knote
  *
- * Called with the kqueue unlocked and holding a
- * "drop reference" on the knote in question.
- * This reference is most often aquired thru a call
- * to kqlock2knotedrop(). But it can also be acquired
- * through stealing a drop reference via a call to
- * knoteuse2knotedrop() or during the initial attach
- * of the knote.
+ * Called with the kqueue locked, returns with the kqueue unlocked.
+ *
+ * If a knote locking context is passed, it is canceled.
  *
  * The knote may have already been detached from
  * (or not yet attached to) its source object.
  */
 static void
-knote_drop(struct knote *kn, __unused struct proc *ctxp)
+knote_drop(struct kqueue *kq, struct knote *kn, struct knote_lock_ctx *knlc)
 {
-	struct kqueue *kq = knote_get_kq(kn);
 	struct proc *p = kq->kq_p;
-	kn_status_t kn_status;
-	uint16_t kq_state;
+
+	kqlock_held(kq);
+
+	assert((kn->kn_status & KN_DROPPING) == 0);
+	if (knlc == NULL) {
+		assert((kn->kn_status & KN_LOCKED) == 0);
+	}
+	kn->kn_status |= KN_DROPPING;
+
+	knote_unsuppress(kn);
+	knote_dequeue(kn);
+	knote_wait_for_filter_events(kq, kn);
 
 	/* If we are attached, disconnect from the source first */
 	if (kn->kn_status & KN_ATTACHED) {
 		knote_fops(kn)->f_detach(kn);
 	}
 
-	/* Remove the source from the appropriate hash */
-	kq_remove_knote(kq, kn, p, &kn_status, &kq_state);
-
-	/*
-	 * If a kqueue_dealloc is happening in parallel for the kq
-	 * pointed by the knote the kq could be aready deallocated
-	 * at this point.
-	 * Do not access the kq after the kq_remove_knote if it is
-	 * not a KQ_DYNAMIC.
-	 */
-
-	/* determine if anyone needs to know about the drop */
-	assert((kn_status & (KN_DROPPING | KN_SUPPRESSED | KN_QUEUED)) == KN_DROPPING);
-
-	/*
-	 * If KN_USEWAIT is set, some other thread was trying to drop the kn.
-	 * Or it was in kqueue_dealloc, so the kqueue_dealloc did not happen
-	 * because that thread was waiting on this wake, or it was a drop happening
-	 * because of a kevent_register that takes a reference on the kq, and therefore
-	 * the kq cannot be deallocated in parallel.
-	 *
-	 * It is safe to access kq->kq_wqs if needswakeup is set.
-	 */
-	if (kn_status & KN_USEWAIT)
-		waitq_wakeup64_all((struct waitq *)&kq->kq_wqs,
-				   CAST_EVENT64_T(&kn->kn_status),
-				   THREAD_RESTART,
-				   WAITQ_ALL_PRIORITIES);
-
+	/* kq may be freed when kq_remove_knote() returns */
+	kq_remove_knote(kq, kn, p, knlc);
 	if (knote_fops(kn)->f_isfd && ((kn->kn_status & KN_VANISHED) == 0))
 		fp_drop(p, kn->kn_id, kn->kn_fp, 0);
 
 	knote_free(kn);
-
-	/*
-	 * release reference on dynamic kq (and free if last).
-	 * Will only be last if this is from fdfree, etc...
-	 * because otherwise processing thread has reference.
-	 */
-	if (kq_state & KQ_DYNAMIC)
-		kqueue_release_last(p, kq);
 }
 
 /* called with kqueue lock held */
@@ -8350,9 +7585,6 @@ knote_enable(struct knote *kn)
 	kn->kn_status &= ~KN_DISABLED;
 
 	if (kn->kn_status & KN_SUPPRESSED) {
-		/* Clear the sync qos on the knote */
-		knote_adjust_sync_qos(kn, THREAD_QOS_UNSPECIFIED, FALSE);
-
 		/*
 		 * it is possible for userland to have knotes registered for a given
 		 * workloop `wl_orig` but really handled on another workloop `wl_new`.
@@ -8401,18 +7633,8 @@ knote_suppress(struct knote *kn)
 
 	knote_dequeue(kn);
 	kn->kn_status |= KN_SUPPRESSED;
-	suppressq = kqueue_get_suppressed_queue(kq, knote_get_qos_index(kn));
+	suppressq = kqueue_get_suppressed_queue(kq, kn);
 	TAILQ_INSERT_TAIL(suppressq, kn, kn_tqe);
-
-	if ((kq->kq_state & KQ_WORKLOOP) &&
-	     knote_get_qos_override_index(kn) == THREAD_QOS_USER_INTERACTIVE &&
-	     kn->kn_qos_override_is_sync) {
-		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
-		/* update the sync qos override counter for suppressed knotes */
-		kqworkloop_update_override(kqwl, knote_get_qos_index(kn),
-			knote_get_qos_override_index(kn),
-			(KQWL_UO_UPDATE_SUPPRESS_SYNC_COUNTERS | KQWL_UO_NEW_OVERRIDE_IS_SYNC_UI));
-	}
 }
 
 /* called with kqueue lock held */
@@ -8427,68 +7649,39 @@ knote_unsuppress(struct knote *kn)
 	if ((kn->kn_status & KN_SUPPRESSED) == 0)
 		return;
 
-	/* Clear the sync qos on the knote */
-	knote_adjust_sync_qos(kn, THREAD_QOS_UNSPECIFIED, FALSE);
-
 	kn->kn_status &= ~KN_SUPPRESSED;
-	suppressq = kqueue_get_suppressed_queue(kq, knote_get_qos_index(kn));
+	suppressq = kqueue_get_suppressed_queue(kq, kn);
 	TAILQ_REMOVE(suppressq, kn, kn_tqe);
 
-	/* udate in-use qos to equal requested qos */
-	kn->kn_qos_index = kn->kn_req_index;
+	/*
+	 * If the knote is no longer active, reset its push,
+	 * and resynchronize kn_qos_index with kn_qos_override
+	 */
+	if ((kn->kn_status & KN_ACTIVE) == 0) {
+		kn->kn_qos_override = kn->kn_req_index;
+	}
+	kn->kn_qos_index = kn->kn_qos_override;
 
 	/* don't wakeup if unsuppressing just a stay-active knote */
 	if (knote_enqueue(kn) && (kn->kn_status & KN_ACTIVE)) {
 		knote_wakeup(kn);
 	}
 
-	if ((kq->kq_state & KQ_WORKLOOP) && !(kq->kq_state & KQ_NO_WQ_THREAD) &&
-	     knote_get_qos_override_index(kn) == THREAD_QOS_USER_INTERACTIVE &&
-	     kn->kn_qos_override_is_sync) {
+	if ((kq->kq_state & KQ_WORKLOOP) && TAILQ_EMPTY(suppressq)) {
 		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
 
-		/* update the sync qos override counter for suppressed knotes */
-		kqworkloop_update_override(kqwl, knote_get_qos_index(kn),
-			knote_get_qos_override_index(kn),
-			(KQWL_UO_UPDATE_SUPPRESS_SYNC_COUNTERS | KQWL_UO_OLD_OVERRIDE_IS_SYNC_UI));
-	}
-
-	if (TAILQ_EMPTY(suppressq) && (kq->kq_state & KQ_WORKLOOP) &&
-			!(kq->kq_state & KQ_NO_WQ_THREAD)) {
-		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
 		if (kqworkloop_is_processing_on_current_thread(kqwl)) {
 			/*
-			 * kqworkloop_end_processing() will perform the required QoS
-			 * computations when it unsets the processing mode.
+			 * kqworkloop_end_processing() or kqworkloop_begin_processing()
+			 * will perform the required QoS computations when it unsets the
+			 * processing mode.
 			 */
 		} else {
-			kqwl_req_lock(kqwl);
+			kq_req_lock(kqwl);
 			kqworkloop_update_threads_qos(kqwl, KQWL_UTQ_RESET_WAKEUP_OVERRIDE, 0);
-			kqwl_req_unlock(kqwl);
+			kq_req_unlock(kqwl);
 		}
 	}
-}
-
-/* called with kqueue lock held */
-static void
-knote_update_sync_override_state(struct knote *kn)
-{
-	struct kqtailq *queue = knote_get_queue(kn);
-	struct kqueue *kq = knote_get_kq(kn);
-
-	if (!(kq->kq_state & KQ_WORKLOOP) ||
-	    knote_get_queue_index(kn) != THREAD_QOS_USER_INTERACTIVE)
-		return;
-
-	/* Update the sync ipc state on workloop */
-	struct kqworkloop *kqwl = (struct kqworkloop *)kq;
-	boolean_t sync_ipc_override = FALSE;
-	if (!TAILQ_EMPTY(queue)) {
-		struct knote *kn_head = TAILQ_FIRST(queue);
-		if (kn_head->kn_qos_override_is_sync)
-			sync_ipc_override = TRUE;
-	}
-	kqworkloop_update_sync_override_state(kqwl, sync_ipc_override);
 }
 
 /* called with kqueue lock held */
@@ -8504,15 +7697,9 @@ knote_enqueue(struct knote *kn)
 		struct kqueue *kq = knote_get_kq(kn);
 
 		kqlock_held(kq);
-		/* insert at head for sync ipc waiters */
-		if (kn->kn_qos_override_is_sync) {
-			TAILQ_INSERT_HEAD(queue, kn, kn_tqe);
-		} else {
-			TAILQ_INSERT_TAIL(queue, kn, kn_tqe);
-		}
+		TAILQ_INSERT_TAIL(queue, kn, kn_tqe);
 		kn->kn_status |= KN_QUEUED;
 		kq->kq_count++;
-		knote_update_sync_override_state(kn);
 		return 1;
 	}
 	return ((kn->kn_status & KN_STAYACTIVE) != 0);
@@ -8535,7 +7722,6 @@ knote_dequeue(struct knote *kn)
 	TAILQ_REMOVE(queue, kn, kn_tqe);
 	kn->kn_status &= ~KN_QUEUED;
 	kq->kq_count--;
-	knote_update_sync_override_state(kn);
 }
 
 void
@@ -8561,12 +7747,6 @@ knote_init(void)
 	/* Allocate kq lock attribute */
 	kq_lck_attr = lck_attr_alloc_init();
 
-	/* Initialize the timer filter lock */
-	lck_mtx_init(&_filt_timerlock, kq_lck_grp, kq_lck_attr);
-
-	/* Initialize the user filter lock */
-	lck_spin_init(&_filt_userlock, kq_lck_grp, kq_lck_attr);
-
 #if CONFIG_MEMORYSTATUS
 	/* Initialize the memorystatus list lock */
 	memorystatus_kevent_init(kq_lck_grp, kq_lck_attr);
@@ -8583,15 +7763,16 @@ knote_fops(struct knote *kn)
 static struct knote *
 knote_alloc(void)
 {
-	struct knote *kn;
-	kn = ((struct knote *)zalloc(knote_zone));
-	*kn = (struct knote) { .kn_qos_override = 0, .kn_qos_sync_override = 0, .kn_qos_override_is_sync = 0 };
+	struct knote *kn = ((struct knote *)zalloc(knote_zone));
+	bzero(kn, sizeof(struct knote));
 	return kn;
 }
 
 static void
 knote_free(struct knote *kn)
 {
+	assert(kn->kn_inuse == 0);
+	assert((kn->kn_status & KN_LOCKED) == 0);
 	zfree(knote_zone, kn);
 }
 
@@ -8623,7 +7804,7 @@ static lck_rw_t *kev_rwlock = &kev_lck_data;
 static int kev_attach(struct socket *so, int proto, struct proc *p);
 static int kev_detach(struct socket *so);
 static int kev_control(struct socket *so, u_long cmd, caddr_t data,
-    struct ifnet *ifp, struct proc *p);
+		struct ifnet *ifp, struct proc *p);
 static lck_mtx_t * event_getlock(struct socket *, int);
 static int event_lock(struct socket *, int, void *);
 static int event_unlock(struct socket *, int, void *);
@@ -8658,8 +7839,8 @@ SYSCTL_NODE(_net_systm, OID_AUTO, kevt,
 
 struct kevtstat kevtstat;
 SYSCTL_PROC(_net_systm_kevt, OID_AUTO, stats,
-    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
-    kevt_getstat, "S,kevtstat", "");
+		CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
+		kevt_getstat, "S,kevtstat", "");
 
 SYSCTL_PROC(_net_systm_kevt, OID_AUTO, pcblist,
 	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
@@ -8906,7 +8087,7 @@ kev_detach(struct socket *so)
  */
 errno_t kev_vendor_code_find(
 	const char	*string,
-	u_int32_t 	*out_vendor_code)
+	u_int32_t	*out_vendor_code)
 {
 	if (strlen(string) >= KEV_VENDOR_CODE_MAX_STR_LEN) {
 		return (EINVAL);
@@ -8925,7 +8106,7 @@ kev_msg_post(struct kev_msg *event_msg)
 	if (event_msg == NULL)
 		return (EINVAL);
 
-	/* 
+	/*
 	 * Limit third parties to posting events for registered vendor codes
 	 * only
 	 */
@@ -9050,10 +8231,10 @@ kev_post_msg(struct kev_msg *event_msg)
 
 static int
 kev_control(struct socket *so,
-    u_long cmd,
-    caddr_t data,
-    __unused struct ifnet *ifp,
-    __unused struct proc *p)
+		u_long cmd,
+		caddr_t data,
+		__unused struct ifnet *ifp,
+		__unused struct proc *p)
 {
 	struct kev_request *kev_req = (struct kev_request *) data;
 	struct kern_event_pcb  *ev_pcb;
@@ -9255,6 +8436,7 @@ fill_kqueue_dyninfo(struct kqueue *kq, struct kqueue_dyninfo *kqdi)
 {
 	struct kqworkloop *kqwl = (struct kqworkloop *)kq;
 	struct kqrequest *kqr = &kqwl->kqwl_request;
+	workq_threadreq_param_t trp = {};
 	int err;
 
 	if ((kq->kq_state & KQ_WORKLOOP) == 0) {
@@ -9265,25 +8447,33 @@ fill_kqueue_dyninfo(struct kqueue *kq, struct kqueue_dyninfo *kqdi)
 		return err;
 	}
 
-	kqwl_req_lock(kqwl);
+	kq_req_lock(kqwl);
 
-	if (kqr->kqr_thread) {
-		kqdi->kqdi_servicer = thread_tid(kqr->kqr_thread);
-	}
-
-	if (kqwl->kqwl_owner == WL_OWNER_SUSPENDED) {
-		kqdi->kqdi_owner = ~0ull;
-	} else {
-		kqdi->kqdi_owner = thread_tid(kqwl->kqwl_owner);
-	}
-
+	kqdi->kqdi_servicer = thread_tid(kqr->kqr_thread);
+	kqdi->kqdi_owner = thread_tid(kqwl->kqwl_owner);
 	kqdi->kqdi_request_state = kqr->kqr_state;
 	kqdi->kqdi_async_qos = kqr->kqr_qos_index;
 	kqdi->kqdi_events_qos = kqr->kqr_override_index;
 	kqdi->kqdi_sync_waiters = kqr->kqr_dsync_waiters;
-	kqdi->kqdi_sync_waiter_qos = kqr->kqr_dsync_waiters_qos;
+	kqdi->kqdi_sync_waiter_qos = 0;
 
-	kqwl_req_unlock(kqwl);
+	trp.trp_value = kqwl->kqwl_params;
+	if (trp.trp_flags & TRP_PRIORITY)
+		kqdi->kqdi_pri = trp.trp_pri;
+	else
+		kqdi->kqdi_pri = 0;
+
+	if (trp.trp_flags & TRP_POLICY)
+		kqdi->kqdi_pol = trp.trp_pol;
+	else
+		kqdi->kqdi_pol = 0;
+
+	if (trp.trp_flags & TRP_CPUPERCENT)
+		kqdi->kqdi_cpupercent = trp.trp_cpupercent;
+	else
+		kqdi->kqdi_cpupercent = 0;
+
+	kq_req_unlock(kqwl);
 
 	return 0;
 }
@@ -9293,6 +8483,7 @@ void
 knote_markstayactive(struct knote *kn)
 {
 	struct kqueue *kq = knote_get_kq(kn);
+	kq_index_t qos;
 
 	kqlock(kq);
 	kn->kn_status |= KN_STAYACTIVE;
@@ -9302,19 +8493,27 @@ knote_markstayactive(struct knote *kn)
 	 * established before it is fully attached.
 	 */
 	assert(kn->kn_status & KN_ATTACHING);
+	assert((kn->kn_status & (KN_QUEUED | KN_SUPPRESSED)) == 0);
 
 	/* handle all stayactive knotes on the (appropriate) manager */
 	if (kq->kq_state & KQ_WORKQ) {
-		knote_set_qos_index(kn, KQWQ_QOS_MANAGER);
+		qos = KQWQ_QOS_MANAGER;
 	} else if (kq->kq_state & KQ_WORKLOOP) {
 		struct kqworkloop *kqwl = (struct kqworkloop *)kq;
-		kqwl_req_lock(kqwl);
-		assert(kn->kn_req_index && kn->kn_req_index < THREAD_QOS_LAST);
-		kqworkloop_update_threads_qos(kqwl, KQWL_UTQ_UPDATE_STAYACTIVE_QOS,
-				kn->kn_req_index);
-		kqwl_req_unlock(kqwl);
-		knote_set_qos_index(kn, KQWL_BUCKET_STAYACTIVE);
+
+		qos = _pthread_priority_thread_qos(kn->kn_qos);
+		assert(qos && qos < THREAD_QOS_LAST);
+		kq_req_lock(kq);
+		kqworkloop_update_threads_qos(kqwl, KQWL_UTQ_UPDATE_STAYACTIVE_QOS, qos);
+		kq_req_unlock(kq);
+		qos = KQWL_BUCKET_STAYACTIVE;
+	} else {
+		qos = THREAD_QOS_UNSPECIFIED;
 	}
+
+	kn->kn_req_index = qos;
+	kn->kn_qos_override = qos;
+	kn->kn_qos_index = qos;
 
 	knote_activate(kn);
 	kqunlock(kq);
@@ -9546,7 +8745,7 @@ pid_kqueue_extinfo(proc_t p, struct kqueue *kq, user_addr_t ubuf,
 	assert(bufsize >= sizeof(struct kevent_extinfo) * min(buflen, nknotes));
 	err = copyout(kqext, ubuf, sizeof(struct kevent_extinfo) * min(buflen, nknotes));
 
- out:
+out:
 	if (kqext) {
 		kfree(kqext, buflen * sizeof(struct kevent_extinfo));
 		kqext = NULL;
@@ -9632,14 +8831,6 @@ kevent_proc_copy_uptrs(void *proc, uint64_t *buf, int bufsize)
 }
 
 static void
-kevent_redrive_proc_thread_request(proc_t p)
-{
-	__assert_only int ret;
-	ret = (*pthread_functions->workq_threadreq)(p, NULL, WORKQ_THREADREQ_REDRIVE, 0, 0);
-	assert(ret == 0 || ret == ECANCELED);
-}
-
-static void
 kevent_set_return_to_kernel_user_tsd(proc_t p, thread_t thread)
 {
 	uint64_t ast_addr;
@@ -9649,12 +8840,8 @@ kevent_set_return_to_kernel_user_tsd(proc_t p, thread_t thread)
 	uint64_t ast_flags64 = 0;
 	struct uthread *ut = get_bsdthread_info(thread);
 
-	if (ut->uu_kqueue_bound != NULL) {
-		if (ut->uu_kqueue_flags & KEVENT_FLAG_WORKLOOP) {
-			ast_flags64 |= R2K_WORKLOOP_PENDING_EVENTS;
-		} else if (ut->uu_kqueue_flags & KEVENT_FLAG_WORKQ) {
-			ast_flags64 |= R2K_WORKQ_PENDING_EVENTS;
-		}
+	if (ut->uu_kqr_bound != NULL) {
+		ast_flags64 |= R2K_WORKLOOP_PENDING_EVENTS;
 	}
 
 	if (ast_flags64 == 0) {
@@ -9685,7 +8872,7 @@ kevent_ast(thread_t thread, uint16_t bits)
 	proc_t p = current_proc();
 
 	if (bits & AST_KEVENT_REDRIVE_THREADREQ) {
-		kevent_redrive_proc_thread_request(p);
+		workq_kern_threadreq_redrive(p, WORKQ_THREADREQ_CAN_CREATE_THREADS);
 	}
 	if (bits & AST_KEVENT_RETURN_TO_KERNEL) {
 		kevent_set_return_to_kernel_user_tsd(p, thread);
@@ -9702,8 +8889,6 @@ kevent_sysctl SYSCTL_HANDLER_ARGS
 #pragma unused(oidp, arg2)
 	uintptr_t type = (uintptr_t)arg1;
 	uint64_t bound_id = 0;
-	struct uthread *ut;
-	struct kqueue *kq;
 
 	if (type != KEVENT_SYSCTL_BOUND_ID) {
 		return EINVAL;
@@ -9713,16 +8898,16 @@ kevent_sysctl SYSCTL_HANDLER_ARGS
 		return EINVAL;
 	}
 
-	ut = get_bsdthread_info(current_thread());
+	struct uthread *ut = get_bsdthread_info(current_thread());
 	if (!ut) {
 		return EFAULT;
 	}
 
-	kq = ut->uu_kqueue_bound;
-	if (kq) {
-		if (kq->kq_state & KQ_WORKLOOP) {
-			bound_id = ((struct kqworkloop *)kq)->kqwl_dynamicid;
-		} else if (kq->kq_state & KQ_WORKQ) {
+	struct kqrequest *kqr = ut->uu_kqr_bound;
+	if (kqr) {
+		if (kqr->kqr_state & KQR_WORKLOOP) {
+			bound_id = kqr_kqworkloop(kqr)->kqwl_dynamicid;
+		} else {
 			bound_id = -1;
 		}
 	}

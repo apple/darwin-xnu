@@ -37,6 +37,12 @@
 
 #define kPrelinkInfoSegment                "__PRELINK_INFO"
 #define kPrelinkInfoSection                "__info"
+#define kBuiltinInfoSection                "__kmod_info"
+#define kBuiltinStartSection               "__kmod_start"
+
+// __DATA segment
+#define kBuiltinInitSection                "__kmod_init"
+#define kBuiltinTermSection                "__kmod_term"
 
 #define kPrelinkBundlePathKey              "_PrelinkBundlePath"
 #define kPrelinkExecutableRelativePathKey  "_PrelinkExecutableRelativePath"

@@ -92,7 +92,7 @@ trace_codename("MACH_CLOCK_BRIDGE_RCV_TS", function(buf)
 			prefix, format_timestamp_arm(buf[1]), format_timestamp_intel(buf[2]))
 	else
 		local skip = ""
-		if buf[3] == 1 then
+		if buf[1] == 0 then
 			skip = "Int handler"
 		end
 		printf("%s ( %-10s %-10s ) %s\n",
@@ -121,9 +121,9 @@ trace_codename("MACH_CLOCK_BRIDGE_TS_MISMATCH", function(buf)
 
 	local diff = (math.abs(buf[2] - buf[3]))/1000000
 
-	printf("%s ( Cur: %-10s Pred: %-10s Diff: %5.6f ms ) @ %-20s\n",
+	printf("%s ( Cur: %-10s Pred: %-10s Diff: %5.6f ms Count: %d ) @ %-20s\n",
 		prefix, format_timestamp_intel(buf[2]), format_timestamp_intel(buf[3]),
-		diff, format_timestamp_arm(buf[1]))
+		diff, buf[4], format_timestamp_arm(buf[1]))
 
 end)
 

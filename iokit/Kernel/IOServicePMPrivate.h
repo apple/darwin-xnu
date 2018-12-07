@@ -186,6 +186,11 @@ private:
     thread_call_t           WatchdogTimer;
     thread_call_t           SpinDumpTimer;
 
+    IOLock  *               WatchdogLock;
+    OSArray *               BlockedArray;
+    uint64_t                PendingResponseDeadline;
+    uint64_t                WatchdogDeadline;
+
     // Settle time after changing power state.
     uint32_t                SettleTimeUS;
     uint32_t                IdleTimerGeneration;
@@ -360,6 +365,10 @@ private:
 #define fSettleTimer                pwrMgt->SettleTimer
 #define fIdleTimer                  pwrMgt->IdleTimer
 #define fWatchdogTimer              pwrMgt->WatchdogTimer
+#define fWatchdogDeadline           pwrMgt->WatchdogDeadline
+#define fWatchdogLock               pwrMgt->WatchdogLock
+#define fBlockedArray               pwrMgt->BlockedArray
+#define fPendingResponseDeadline    pwrMgt->PendingResponseDeadline
 #define fSpinDumpTimer              pwrMgt->SpinDumpTimer
 #define fSettleTimeUS               pwrMgt->SettleTimeUS
 #define fIdleTimerGeneration        pwrMgt->IdleTimerGeneration
@@ -459,9 +468,11 @@ the ack timer is ticking every tenth of a second.
 #define ACK_TIMER_PERIOD            100000000
 
 #if defined(__i386__) || defined(__x86_64__)
-#define WATCHDOG_TIMER_PERIOD       (300)   // 300 secs
+#define WATCHDOG_SLEEP_TIMEOUT      (180)   // 180 secs
+#define WATCHDOG_WAKE_TIMEOUT       (180)   // 180  secs
 #else
-#define WATCHDOG_TIMER_PERIOD       (180)   // 180 secs
+#define WATCHDOG_SLEEP_TIMEOUT      (180)   // 180 secs
+#define WATCHDOG_WAKE_TIMEOUT       (180)   // 180 secs
 #endif
 
 // Max wait time in microseconds for kernel priority and capability clients

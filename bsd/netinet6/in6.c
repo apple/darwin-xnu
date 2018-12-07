@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -262,7 +262,7 @@ static struct zone *in6ifa_zone;		/* zone for in6_ifaddr */
 #define	IN6IFA_ZONE_NAME	"in6_ifaddr"	/* zone name */
 
 struct eventhandler_lists_ctxt in6_evhdlr_ctxt;
-
+struct eventhandler_lists_ctxt in6_clat46_evhdlr_ctxt;
 /*
  * Subroutine for in6_ifaddloop() and in6_ifremloop().
  * This routine does actual work.
@@ -934,7 +934,7 @@ in6ctl_gifstat(struct ifnet *ifp, u_long cmd, struct in6_ifreq *ifr)
 		/* N.B.: if_inet6data is never freed once set. */
 		if (IN6_IFEXTRA(ifp) == NULL) {
 			/* return (EAFNOSUPPORT)? */
-			bzero(&ifr->ifr_ifru.ifru_stat,
+			bzero(&ifr->ifr_ifru.ifru_icmp6stat,
 			    sizeof (ifr->ifr_ifru.ifru_icmp6stat));
 		} else {
 			bcopy(&IN6_IFEXTRA(ifp)->icmp6_ifstat,
@@ -1070,6 +1070,88 @@ in6ctl_alifetime(struct in6_ifaddr *ia, u_long cmd, struct in6_ifreq *ifr,
 	return (error);
 }
 
+static int
+in6ctl_clat46start(struct ifnet *ifp)
+{
+	struct nd_prefix *pr = NULL;
+	struct nd_prefix *next = NULL;
+	struct in6_ifaddr *ia6 = NULL;
+	int error = 0;
+
+	if (ifp == lo_ifp)
+		return (EINVAL);
+	/*
+	 * Traverse the list of prefixes and find the first non-linklocal
+	 * prefix on the interface.
+	 * For that found eligible prefix, configure a CLAT46 reserved address.
+	 */
+	lck_mtx_lock(nd6_mutex);
+	for (pr = nd_prefix.lh_first; pr; pr = next) {
+		next = pr->ndpr_next;
+
+		NDPR_LOCK(pr);
+		if (pr->ndpr_ifp != ifp) {
+			NDPR_UNLOCK(pr);
+			continue;
+		}
+
+		if (IN6_IS_ADDR_LINKLOCAL(&pr->ndpr_prefix.sin6_addr)) {
+			NDPR_UNLOCK(pr);
+			continue; /* XXX */
+		}
+
+		if (pr->ndpr_raf_auto == 0) {
+			NDPR_UNLOCK(pr);
+			continue;
+		}
+
+		if (pr->ndpr_stateflags & NDPRF_DEFUNCT) {
+			NDPR_UNLOCK(pr);
+			continue;
+		}
+
+		if ((pr->ndpr_stateflags & NDPRF_CLAT46) == 0
+		    && pr->ndpr_vltime != 0) {
+			NDPR_ADDREF_LOCKED(pr); /* Take reference for rest of the processing */
+			NDPR_UNLOCK(pr);
+			break;
+		} else {
+			NDPR_UNLOCK(pr);
+			continue;
+		}
+	}
+	lck_mtx_unlock(nd6_mutex);
+
+	if (pr != NULL) {
+		if ((ia6 = in6_pfx_newpersistaddr(pr, FALSE, &error, TRUE)) == NULL) {
+			nd6log0((LOG_ERR, "Could not configure CLAT46 address on interface "
+			    "%s.\n", ifp->if_xname));
+		} else {
+			IFA_LOCK(&ia6->ia_ifa);
+			NDPR_LOCK(pr);
+			ia6->ia6_ndpr = pr;
+			NDPR_ADDREF_LOCKED(pr); /* for addr reference */
+			pr->ndpr_stateflags |= NDPRF_CLAT46;
+			pr->ndpr_addrcnt++;
+			VERIFY(pr->ndpr_addrcnt != 0);
+			NDPR_UNLOCK(pr);
+			IFA_UNLOCK(&ia6->ia_ifa);
+			IFA_REMREF(&ia6->ia_ifa);
+			ia6 = NULL;
+			/*
+			 * A newly added address might affect the status
+			 * of other addresses, so we check and update it.
+			 * XXX: what if address duplication happens?
+			 */
+			lck_mtx_lock(nd6_mutex);
+			pfxlist_onlink_check();
+			lck_mtx_unlock(nd6_mutex);
+		}
+		NDPR_REMREF(pr);
+	}
+	return (error);
+}
+
 #define	ifa2ia6(ifa)	((struct in6_ifaddr *)(void *)(ifa))
 
 /*
@@ -1191,6 +1273,30 @@ in6_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 		error = in6ctl_llstop(ifp);
 		goto done;
 
+	case SIOCCLAT46_START:		/* struct in6_ifreq */
+		if (!privileged) {
+			error = EPERM;
+			goto done;
+		}
+		error = in6ctl_clat46start(ifp);
+		if (error == 0)
+			ifp->if_eflags |= IFEF_CLAT46;
+		goto done;
+
+	case SIOCCLAT46_STOP:		/* struct in6_ifreq */
+		if (!privileged) {
+			error = EPERM;
+			goto done;
+		}
+
+		/*
+		 * Not much to be done here and it might not be needed
+		 * It would usually be done when IPv6 configuration is being
+		 * flushed.
+		 * XXX Probably STOP equivalent is not needed here.
+		 */
+		ifp->if_eflags &= ~IFEF_CLAT46;
+		goto done;
 	case SIOCSETROUTERMODE_IN6:	/* struct in6_ifreq */
 		if (!privileged) {
 			error = EPERM;
@@ -2500,6 +2606,8 @@ in6_unlink_ifa(struct in6_ifaddr *ia, struct ifnet *ifp)
 			NDPR_LOCK(pr);
 			VERIFY(pr->ndpr_addrcnt != 0);
 			pr->ndpr_addrcnt--;
+			if (oia->ia6_flags & IN6_IFF_CLAT46)
+				pr->ndpr_stateflags &= ~NDPRF_CLAT46;
 			NDPR_UNLOCK(pr);
 			NDPR_REMREF(pr);	/* release addr reference */
 		}
@@ -2655,6 +2763,31 @@ in6ifa_ifpforlinklocal(struct ifnet *ifp, int ignoreflags)
 				continue;
 			}
 			IFA_ADDREF_LOCKED(ifa);	/* for caller */
+			IFA_UNLOCK(ifa);
+			break;
+		}
+		IFA_UNLOCK(ifa);
+	}
+	ifnet_lock_done(ifp);
+
+	return ((struct in6_ifaddr *)ifa);
+}
+
+struct in6_ifaddr *
+in6ifa_ifpwithflag(struct ifnet * ifp, int flag)
+{
+	struct ifaddr *ifa;
+
+	ifnet_lock_shared(ifp);
+	TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list)
+	{
+		IFA_LOCK_SPIN(ifa);
+		if (ifa->ifa_addr->sa_family != AF_INET6 ) {
+			IFA_UNLOCK(ifa);
+			continue;
+		}
+		if ((((struct in6_ifaddr *)ifa)->ia6_flags & flag) == flag) {
+			IFA_ADDREF_LOCKED(ifa);
 			IFA_UNLOCK(ifa);
 			break;
 		}
@@ -3010,7 +3143,7 @@ in6_ifawithscope(struct ifnet *oifp, struct in6_addr *dst)
 			 * nor a duplicated address.
 			 */
 			if (((struct in6_ifaddr *)ifa)->ia6_flags &
-			    IN6_IFF_NOTREADY) {
+			    (IN6_IFF_NOTREADY | IN6_IFF_CLAT46)) {
 				IFA_UNLOCK(ifa);
 				continue;
 			}
@@ -3294,7 +3427,7 @@ in6_ifawithifp(struct ifnet *ifp, struct in6_addr *dst)
 			IFA_UNLOCK(ifa);
 			continue; /* XXX: is there any case to allow anycast? */
 		}
-		if (ifa2ia6(ifa)->ia6_flags & IN6_IFF_NOTREADY) {
+		if (ifa2ia6(ifa)->ia6_flags & (IN6_IFF_NOTREADY | IN6_IFF_CLAT46)) {
 			IFA_UNLOCK(ifa);
 			continue; /* don't use this interface */
 		}
@@ -3364,7 +3497,7 @@ in6_ifawithifp(struct ifnet *ifp, struct in6_addr *dst)
 			IFA_UNLOCK(ifa);
 			continue; /* XXX: is there any case to allow anycast? */
 		}
-		if (ifa2ia6(ifa)->ia6_flags & IN6_IFF_NOTREADY) {
+		if (ifa2ia6(ifa)->ia6_flags & (IN6_IFF_NOTREADY | IN6_IFF_CLAT46)) {
 			IFA_UNLOCK(ifa);
 			continue; /* don't use this interface */
 		}

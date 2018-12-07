@@ -2,7 +2,7 @@ What is XNU?
 ===========
 
 XNU kernel is part of the Darwin operating system for use in macOS and iOS operating systems. XNU is an acronym for X is Not Unix.
-XNU is a hybrid kernel combining the Mach kernel developed at Carnegie Mellon University with components from FreeBSD and C++ API for writing drivers called IOKit.
+XNU is a hybrid kernel combining the Mach kernel developed at Carnegie Mellon University with components from FreeBSD and a C++ API for writing drivers called IOKit.
 XNU runs on x86_64 for both single processor and multi-processor configurations.
 
 XNU Source Tree
@@ -190,8 +190,8 @@ The header files in framework's `PrivateHeaders` are only available for ** Apple
 
 The directory containing the header file should have a Makefile that
 creates the list of files that should be installed at different locations.
-If you are adding first header file in a directory, you will need to
-create Makefile similar to xnu/bsd/sys/Makefile.
+If you are adding the first header file in a directory, you will need to
+create Makefile similar to `xnu/bsd/sys/Makefile`.
 
 Add your header file to the correct file list depending on where you want
 to install it. The default locations where the header files are installed
@@ -213,7 +213,13 @@ from each file list are -
        `$(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders`
 
 The Makefile combines the file lists mentioned above into different
-install lists which are used by build system to install the header files.
+install lists which are used by build system to install the header files. There
+are two types of install lists: machine-dependent and machine-independent.
+These lists are indicated by the presence of `MD` and `MI` in the build
+setting, respectively. If your header is architecture-specific, then you should
+use a machine-dependent install list (e.g. `INSTALL_MD_LIST`). If your header
+should be installed for all architectures, then you should use a
+machine-independent install list (e.g. `INSTALL_MI_LIST`).
 
 If the install list that you are interested does not exist, create it
 by adding the appropriate file lists.  The default install lists, its
@@ -270,28 +276,53 @@ want to export a function only to kernel level but not user level.
 
  Some pre-defined macros and their descriptions are -
 
-    a. `PRIVATE` : If true, code is available to all of the xnu kernel and is
-       not available in kernel extensions and user level header files.  The
-       header files installed in all the paths described above in (1) will not
-       have code enclosed within this macro.
-
-    b. `KERNEL_PRIVATE` : If true, code is available to all of the xnu kernel and Apple
-        internal kernel extensions.
-
-    c. `BSD_KERNEL_PRIVATE` : If true, code is available to the xnu/bsd part of
-       the kernel and is not available to rest of the kernel, kernel extensions
-       and user level header files.  The header files installed in all the
-       paths described above in (1) will not have code enclosed within this macro.
-
-    d. `KERNEL` :  If true, code is available only in kernel and kernel
-       extensions and is not available in user level header files.  Only the
+    a. `PRIVATE` : If defined, enclosed definitions are considered System
+	Private Interfaces. These are visible within xnu and
+	exposed in user/kernel headers installed within the AppleInternal
+	"PrivateHeaders" sections of the System and Kernel frameworks.
+    b. `KERNEL_PRIVATE` : If defined, enclosed code is available to all of xnu
+	kernel and Apple internal kernel extensions and omitted from user
+	headers.
+    c. `BSD_KERNEL_PRIVATE` : If defined, enclosed code is visible exclusively
+	within the xnu/bsd module.
+    d. `MACH_KERNEL_PRIVATE`: If defined, enclosed code is visible exclusively
+	within the xnu/osfmk module.
+    e. `XNU_KERNEL_PRIVATE`: If defined, enclosed code is visible exclusively
+	within xnu.
+    f. `KERNEL` :  If defined, enclosed code is available within xnu and kernel
+       extensions and is not visible in user level header files.  Only the
        header files installed in following paths will have the code -
 
             $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
             $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
 
-       you should check [Testing the kernel][] for details.
+Conditional compilation
+=======================
 
+`xnu` offers the following mechanisms for conditionally compiling code:
+
+    a. *CPU Characteristics* If the code you are guarding has specific
+    characterstics that will vary only based on the CPU architecture being
+    targeted, use this option. Prefer checking for features of the
+    architecture (e.g. `__LP64__`, `__LITTLE_ENDIAN__`, etc.).
+    b. *New Features* If the code you are guarding, when taken together,
+    implements a feature, you should define a new feature in `config/MASTER`
+    and use the resulting `CONFIG` preprocessor token (e.g. for a feature
+    named `config_virtual_memory`, check for `#if CONFIG_VIRTUAL_MEMORY`).
+    This practice ensures that existing features may be brought to other
+    platforms by simply changing a feature switch.
+    c. *Existing Features* You can use existing features if your code is
+    strongly tied to them (e.g. use `SECURE_KERNEL` if your code implements
+    new functionality that is exclusively relevant to the trusted kernel and
+    updates the definition/understanding of what being a trusted kernel means).
+
+It is recommended that you avoid compiling based on the target platform. `xnu`
+does not define the platform macros from `TargetConditionals.h`
+(`TARGET_OS_OSX`, `TARGET_OS_IOS`, etc.).
+
+
+There is a `TARGET_OS_EMBEDDED` macro, but this should be avoided as it is in
+general too broad a definition for most functionality.
 
 How to add a new syscall
 ========================

@@ -1303,11 +1303,11 @@ copy_out_kfse(fs_event_watcher *watcher, kfs_event *kfse, struct uio *uio)
 	return 0;
     }
 
-    if (kfse->type == FSE_RENAME && kfse->dest == NULL) {
+    if (((kfse->type == FSE_RENAME) || (kfse->type == FSE_CLONE)) && kfse->dest == NULL) {
 	//
 	// This can happen if an event gets recycled but we had a
 	// pointer to it in our event queue.  The event is the
-	// destination of a rename which we'll process separately
+	// destination of a rename or clone which we'll process separately
 	// (that is, another kfse points to this one so it's ok
 	// to skip this guy because we'll process it when we process
 	// the other one)
@@ -1967,7 +1967,7 @@ filt_fsevent(struct knote *kn, long hint)
 	switch(kn->kn_filter) {
 		case EVFILT_READ:
 			kn->kn_data = amt;
-			
+
 			if (kn->kn_data != 0) {
 				activate = 1;
 			}
@@ -2001,8 +2001,6 @@ filt_fsevent_touch(struct knote *kn, struct kevent_internal_s *kev)
 	/* accept new fflags/data as saved */
 	kn->kn_sfflags = kev->fflags;
 	kn->kn_sdata = kev->data;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 
 	/* restrict the current results to the (smaller?) set of new interest */
 	/*
@@ -2078,8 +2076,6 @@ fseventsf_drain(struct fileproc *fp, __unused vfs_context_t ctx)
 {
     int counter = 0;
     fsevent_handle *fseh = (struct fsevent_handle *)fp->f_fglob->fg_data;
-
-    fseh->watcher->flags |= WATCHER_CLOSING;
 
     // if there are people still waiting, sleep for 10ms to
     // let them clean up and get out of there.  however we

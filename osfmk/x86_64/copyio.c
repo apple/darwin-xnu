@@ -44,7 +44,8 @@
 
 #include <kern/copyout_shim.h>
 
-
+#undef copyin
+#undef copyout
 
 static int copyio(int, user_addr_t, char *, vm_size_t, vm_size_t *, int);
 static int copyio_phys(addr64_t, addr64_t, vm_size_t, int);
@@ -80,6 +81,8 @@ extern int _bcopy(const void *, void *, vm_size_t);
 extern int _bcopystr(const void *, void *, vm_size_t, vm_size_t *);
 extern int _copyin_word(const char *src, uint64_t *dst, vm_size_t len);
 
+/* On by default, optionally disabled by boot-arg */
+extern boolean_t copyio_zalloc_check;
 
 /*
  * Types of copies:
@@ -166,6 +169,7 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 	int		debug_type = 0xeff70010;
 	debug_type += (copy_type << 2);
 #endif
+	vm_size_t kernel_buf_size = 0;
 
 	if (__improbable(nbytes > copysize_limit_panic))
 		panic("%s(%p, %p, %lu) - transfer too large", __func__,
@@ -177,13 +181,19 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 	if (__improbable(nbytes == 0))
 		goto out;
 
-        pmap = thread->map->pmap;
-	boolean_t nopagezero = pmap->pagezero_accessible;
+	pmap = thread->map->pmap;
+	boolean_t nopagezero = thread->map->pmap->pagezero_accessible;
 
-	if (__improbable((copy_type != COPYINPHYS) && (copy_type != COPYOUTPHYS) && ((vm_offset_t)kernel_addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS))) {
-		panic("Invalid copy parameter, copy type: %d, kernel address: %p", copy_type, kernel_addr);
+	if ((copy_type != COPYINPHYS) && (copy_type != COPYOUTPHYS)) {
+		if (__improbable((vm_offset_t)kernel_addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS))
+			panic("Invalid copy parameter, copy type: %d, kernel address: %p", copy_type, kernel_addr);
+		if (__probable(copyio_zalloc_check)) {
+			kernel_buf_size = zone_element_size(kernel_addr, NULL);
+			if (__improbable(kernel_buf_size && kernel_buf_size < nbytes))
+				panic("copyio: kernel buffer %p has size %lu < nbytes %lu", kernel_addr, kernel_buf_size, nbytes);
+		}
 	}
-
+	
 	/* Sanity and security check for addresses to/from a user */
 
 	if (__improbable(((pmap != kernel_pmap) && (use_kernel_map == 0)) &&
@@ -371,7 +381,7 @@ copyinmsg(const user_addr_t user_addr, char *kernel_addr, mach_msg_size_t nbytes
 }    
 
 int
-copyin(const user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes)
+copyin(const user_addr_t user_addr, void *kernel_addr, vm_size_t nbytes)
 {
     return copyio(COPYIN, user_addr, kernel_addr, nbytes, NULL, 0);
 }

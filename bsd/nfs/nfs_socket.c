@@ -4749,6 +4749,7 @@ nfs_request_timer(__unused void *param0, __unused void *param1)
 	int timeo, maxtime, finish_asyncio, error;
 	struct timeval now;
 	TAILQ_HEAD(nfs_mount_pokeq, nfsmount) nfs_mount_poke_queue;
+	TAILQ_INIT(&nfs_mount_poke_queue);
 
 restart:
 	lck_mtx_lock(nfs_request_mutex);
@@ -4760,7 +4761,6 @@ restart:
 	}
 
 	nfs_reqbusy(req);
-	TAILQ_INIT(&nfs_mount_poke_queue);
 
 	microuptime(&now);
 	for ( ; req != NULL ; req = nfs_reqnext(req)) {

@@ -194,8 +194,11 @@ kasan_map_shadow_superpage_zero(vm_offset_t address, vm_size_t size)
 void
 kasan_map_shadow(vm_offset_t address, vm_size_t size, bool is_zero)
 {
+	size = (size + 0x7UL) & ~0x7UL;
 	vm_offset_t shadow_base = vm_map_trunc_page(SHADOW_FOR_ADDRESS(address), PAGE_MASK);
 	vm_offset_t shadow_top = vm_map_round_page(SHADOW_FOR_ADDRESS(address + size), PAGE_MASK);
+
+	assert((size & 0x7) == 0);
 
 	for (; shadow_base < shadow_top; shadow_base += I386_PGBYTES) {
 

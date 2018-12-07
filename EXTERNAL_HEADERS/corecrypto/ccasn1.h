@@ -69,26 +69,16 @@ enum {
     CCASN1_CONSTRUCTED_SEQUENCE = CCASN1_SEQUENCE | CCASN1_CONSTRUCTED,
 };
 
-#if CORECRYPTO_USE_TRANSPARENT_UNION
-typedef union {
-    const unsigned char * oid;
-} __attribute__((transparent_union)) ccoid_t;
-#define CCOID(x) ((x).oid)
-#else
-    typedef const unsigned char * ccoid_t;
+typedef const unsigned char * ccoid_t;
 #define CCOID(oid) (oid)
-#endif
-
-/* Returns *der iff *der points to a DER encoded oid that fits within *der_len. */
-ccoid_t ccoid_for_der(size_t *der_len, const uint8_t **der);
 
 /* Returns the size of an oid including it's tag and length. */
-CC_INLINE CC_PURE CC_NONNULL_TU((1))
+CC_INLINE CC_PURE CC_NONNULL((1))
 size_t ccoid_size(ccoid_t oid) {
     return 2 + CCOID(oid)[1];
 }
 
-CC_INLINE CC_PURE CC_NONNULL_TU((1)) CC_NONNULL_TU((2))
+CC_INLINE CC_PURE CC_NONNULL((1, 2))
 bool ccoid_equal(ccoid_t oid1, ccoid_t oid2) {
     return  (ccoid_size(oid1) == ccoid_size(oid2)
             && memcmp(CCOID(oid1), CCOID(oid2), ccoid_size(oid1))== 0);

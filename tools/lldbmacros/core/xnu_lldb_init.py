@@ -103,5 +103,23 @@ def __lldb_init_module(debugger, internal_dict):
         if source_map_cmd:
             print source_map_cmd
             debugger.HandleCommand(source_map_cmd)
+
+        load_kexts = True
+        if "XNU_LLDBMACROS_NOBUILTINKEXTS" in os.environ and len(os.environ['XNU_LLDBMACROS_NOBUILTINKEXTS']) > 0:
+            load_kexts = False
+        builtinkexts_path = os.path.join(os.path.dirname(self_path), "lldbmacros", "builtinkexts")
+        if os.access(builtinkexts_path, os.F_OK):
+            kexts = os.listdir(builtinkexts_path)
+            if len(kexts) > 0:
+                print "\nBuiltin kexts: %s\n" % kexts
+                if load_kexts == False:
+                    print "XNU_LLDBMACROS_NOBUILTINKEXTS is set, not loading:\n"
+                for kextdir in kexts:
+                    script = os.path.join(builtinkexts_path, kextdir, kextdir.split('.')[-1] + ".py")
+                    import_kext_cmd = "command script import \"%s\"" % script
+                    print "%s" % import_kext_cmd
+                    if load_kexts:
+                        debugger.HandleCommand(import_kext_cmd)
+
     print "\n"
 

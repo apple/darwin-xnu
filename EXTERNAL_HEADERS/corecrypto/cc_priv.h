@@ -471,6 +471,12 @@ void cc_mux2p(int s, void **r_true, void **r_false, const void *a, const void *b
     r = (~_cond&(a))|(_cond&(b)); \
 }
 
-int cc_is_compiled_with_tu(void);
+/*
+  Unfortunately, since we export this symbol, this declaration needs
+  to be in a public header to satisfy TAPI.
+
+  See fipspost_trace_priv.h for more details.
+*/
+extern const void *fipspost_trace_vtable;
 
 #endif /* _CORECRYPTO_CC_PRIV_H_ */

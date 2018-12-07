@@ -34,6 +34,7 @@
 
 #include <corecrypto/ccdigest_priv.h>
 #include <corecrypto/cc_priv.h>
+#include "ccdigest_internal.h"
 
 /* This can be used for SHA1, SHA256 and SHA224 */
 void ccdigest_final_64be(const struct ccdigest_info *di, ccdigest_ctx_t ctx,

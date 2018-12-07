@@ -61,6 +61,12 @@ _Atomic uint64_t mt_retrograde = 0;
 #define MAXSPINS   100
 #define MAXRETRIES 10
 
+/*
+ * Write the fixed counter values for the thread `thread` into `counts_out`.
+ *
+ * This function does not include the accumulated counter values since the
+ * thread's last context switch or quantum expiration.
+ */
 int
 mt_fixed_thread_counts(thread_t thread, uint64_t *counts_out)
 {
@@ -521,3 +527,54 @@ mt_stackshot_task(task_t task, uint64_t *instrs, uint64_t *cycles)
 
 	*cycles = task->task_monotonic.mtk_counts[MT_CORE_CYCLES];
 }
+
+/*
+ * Maintain reset values for the fixed instruction and cycle counters so
+ * clients can be notified after a given number of those events occur.  This is
+ * only used by microstackshot.
+ */
+
+bool mt_microstackshots = false;
+unsigned int mt_microstackshot_ctr = 0;
+mt_pmi_fn mt_microstackshot_pmi_handler = NULL;
+void *mt_microstackshot_ctx = NULL;
+uint64_t mt_core_reset_values[MT_CORE_NFIXED] = { 0 };
+
+#define MT_MIN_FIXED_PERIOD (10 * 1000 * 1000)
+
+int
+mt_microstackshot_start(unsigned int ctr, uint64_t period, mt_pmi_fn handler,
+		void *ctx)
+{
+	assert(ctr < MT_CORE_NFIXED);
+
+	if (period < MT_MIN_FIXED_PERIOD) {
+		return EINVAL;
+	}
+	if (mt_microstackshots) {
+		return EBUSY;
+	}
+
+	mt_microstackshot_ctr = ctr;
+	mt_microstackshot_pmi_handler = handler;
+	mt_microstackshot_ctx = ctx;
+
+	int error = mt_microstackshot_start_arch(period);
+	if (error) {
+		return error;
+	}
+
+	mt_microstackshots = true;
+
+	return 0;
+}
+
+int
+mt_microstackshot_stop(void)
+{
+	mt_microstackshots = false;
+	memset(mt_core_reset_values, 0, sizeof(mt_core_reset_values));
+
+	return 0;
+}
+

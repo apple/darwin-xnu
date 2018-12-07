@@ -108,8 +108,7 @@ struct ipc_kmsg {
 	mach_msg_priority_t        ikm_qos_override; /* qos override on this kmsg */
 	struct ipc_importance_elem *ikm_importance;  /* inherited from */
 	queue_chain_t              ikm_inheritance;  /* inherited from link */
-	sync_qos_count_t sync_qos[THREAD_QOS_LAST];  /* sync qos counters for ikm_prealloc port */
-	sync_qos_count_t special_port_qos;           /* special port qos for ikm_prealloc port */
+	struct turnstile           *ikm_turnstile;   /* send turnstile for ikm_prealloc port */
 #if MACH_FLIPC
 	struct mach_node           *ikm_node;        /* Originating node - needed for ack */
 #endif

@@ -1402,6 +1402,7 @@ pmap_create_options(
 	}
 
 #if MACH_ASSERT
+	p->pmap_stats_assert = TRUE;
 	p->pmap_pid = 0;
 	strlcpy(p->pmap_procname, "<nil>", sizeof (p->pmap_procname));
 #endif /* MACH_ASSERT */
@@ -1512,6 +1513,34 @@ struct {
 	int		purgeable_nonvolatile_compressed_under;
 	ledger_amount_t	purgeable_nonvolatile_compressed_under_total;
 	ledger_amount_t	purgeable_nonvolatile_compressed_under_max;
+
+	int		network_volatile_over;
+	ledger_amount_t	network_volatile_over_total;
+	ledger_amount_t	network_volatile_over_max;
+	int		network_volatile_under;
+	ledger_amount_t	network_volatile_under_total;
+	ledger_amount_t	network_volatile_under_max;
+
+	int		network_nonvolatile_over;
+	ledger_amount_t	network_nonvolatile_over_total;
+	ledger_amount_t	network_nonvolatile_over_max;
+	int		network_nonvolatile_under;
+	ledger_amount_t	network_nonvolatile_under_total;
+	ledger_amount_t	network_nonvolatile_under_max;
+
+	int		network_volatile_compressed_over;
+	ledger_amount_t	network_volatile_compressed_over_total;
+	ledger_amount_t	network_volatile_compressed_over_max;
+	int		network_volatile_compressed_under;
+	ledger_amount_t	network_volatile_compressed_under_total;
+	ledger_amount_t	network_volatile_compressed_under_max;
+
+	int		network_nonvolatile_compressed_over;
+	ledger_amount_t	network_nonvolatile_compressed_over_total;
+	ledger_amount_t	network_nonvolatile_compressed_over_max;
+	int		network_nonvolatile_compressed_under;
+	ledger_amount_t	network_nonvolatile_compressed_under_total;
+	ledger_amount_t	network_nonvolatile_compressed_under_max;
 } pmap_ledgers_drift;
 static void pmap_check_ledgers(pmap_t pmap);
 #else /* MACH_ASSERT */
@@ -1633,7 +1662,15 @@ pmap_protect(
 /*
  *	Set the physical protection on the
  *	specified range of this map as requested.
- *	Will not increase permissions.
+ *
+ * VERY IMPORTANT: Will *NOT* increase permissions.
+ *	pmap_protect_options() should protect the range against any access types
+ * 	that are not in "prot" but it should never grant extra access.
+ *	For example, if "prot" is READ|EXECUTE, that means "remove write
+ * 	access" but it does *not* mean "add read and execute" access.
+ *	VM relies on getting soft-faults to enforce extra checks (code
+ *	signing, for example), for example.
+ *	New access permissions are granted via pmap_enter() only.
  */
 void
 pmap_protect_options(
@@ -1698,26 +1735,26 @@ pmap_protect_options(
 					continue;
 
 				if (is_ept) {
-					if (prot & VM_PROT_READ)
-						pmap_update_pte(spte, 0, PTE_READ(is_ept));
-					else
+					if (! (prot & VM_PROT_READ)) {
 						pmap_update_pte(spte, PTE_READ(is_ept), 0);
+					}
 				}
-				if (prot & VM_PROT_WRITE)
-					pmap_update_pte(spte, 0, PTE_WRITE(is_ept));
-				else
+				if (! (prot & VM_PROT_WRITE)) {
 					pmap_update_pte(spte, PTE_WRITE(is_ept), 0);
+				}
+#if DEVELOPMENT || DEBUG
+				else if ((options & PMAP_OPTIONS_PROTECT_IMMEDIATE) &&
+					 map == kernel_pmap) {
+					pmap_update_pte(spte, 0, PTE_WRITE(is_ept));
+				}
+#endif /* DEVELOPMENT || DEBUG */
 
 				if (set_NX) {
-					if (!is_ept)
+					if (!is_ept) {
 						pmap_update_pte(spte, 0, INTEL_PTE_NX);
-					else
+					} else {
 						pmap_update_pte(spte, INTEL_EPT_EX, 0);
-				} else {
-					if (!is_ept)
-						pmap_update_pte(spte, INTEL_PTE_NX, 0);
-					else
-						pmap_update_pte(spte, 0, INTEL_EPT_EX);
+					}
 				}
 				num_found++;
 			}
@@ -2434,9 +2471,11 @@ pmap_switch(pmap_t tpmap)
 {
         spl_t	s;
 
+	PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__SWITCH) | DBG_FUNC_START, VM_KERNEL_ADDRHIDE(tpmap));
 	s = splhigh();		/* Make sure interruptions are disabled */
 	set_dirbase(tpmap, current_thread(), cpu_number());
 	splx(s);
+	PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__SWITCH) | DBG_FUNC_END);
 }
 
 
@@ -2498,7 +2537,7 @@ pmap_flush(
 {
 	unsigned int	my_cpu;
 	unsigned int	cpu;
-	unsigned int	cpu_bit;
+	cpumask_t	cpu_bit;
 	cpumask_t	cpus_to_respond = 0;
 	cpumask_t	cpus_to_signal = 0;
 	cpumask_t	cpus_signaled = 0;
@@ -2629,7 +2668,7 @@ void
 pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int options, pmap_flush_context *pfc)
 {
 	unsigned int	cpu;
-	unsigned int	cpu_bit;
+	cpumask_t	cpu_bit;
 	cpumask_t	cpus_to_signal = 0;
 	unsigned int	my_cpu = cpu_number();
 	pmap_paddr_t	pmap_cr3 = pmap->pm_cr3;
@@ -2954,6 +2993,8 @@ pmap_permissions_verify(pmap_t ipmap, vm_map_t ivmmap, vm_offset_t sv, vm_offset
 
 #if MACH_ASSERT
 extern int pmap_ledgers_panic;
+extern int pmap_ledgers_panic_leeway;
+
 static void
 pmap_check_ledgers(
 	pmap_t pmap)
@@ -2985,248 +3026,57 @@ pmap_check_ledgers(
 
 	pmap_ledgers_drift.num_pmaps_checked++;
 
-	ledger_get_balance(pmap->ledger,
-			   task_ledgers.phys_footprint,
-			   &bal);
-	if (bal != 0) {
-		do_panic = TRUE;
-		printf("LEDGER BALANCE proc %d (%s) "
-		       "\"phys_footprint\" = %lld\n",
-		       pid, procname, bal);
-		if (bal > 0) {
-			pmap_ledgers_drift.phys_footprint_over++;
-			pmap_ledgers_drift.phys_footprint_over_total += bal;
-			if (bal > pmap_ledgers_drift.phys_footprint_over_max) {
-				pmap_ledgers_drift.phys_footprint_over_max = bal;
-			}
-		} else {
-			pmap_ledgers_drift.phys_footprint_under++;
-			pmap_ledgers_drift.phys_footprint_under_total += bal;
-			if (bal < pmap_ledgers_drift.phys_footprint_under_max) {
-				pmap_ledgers_drift.phys_footprint_under_max = bal;
-			}
-		}
-	}
-	ledger_get_balance(pmap->ledger,
-			   task_ledgers.internal,
-			   &bal);
-	if (bal != 0) {
-		do_panic = TRUE;
-		printf("LEDGER BALANCE proc %d (%s) "
-		       "\"internal\" = %lld\n",
-		       pid, procname, bal);
-		if (bal > 0) {
-			pmap_ledgers_drift.internal_over++;
-			pmap_ledgers_drift.internal_over_total += bal;
-			if (bal > pmap_ledgers_drift.internal_over_max) {
-				pmap_ledgers_drift.internal_over_max = bal;
-			}
-		} else {
-			pmap_ledgers_drift.internal_under++;
-			pmap_ledgers_drift.internal_under_total += bal;
-			if (bal < pmap_ledgers_drift.internal_under_max) {
-				pmap_ledgers_drift.internal_under_max = bal;
-			}
-		}
-	}
-	ledger_get_balance(pmap->ledger,
-			   task_ledgers.internal_compressed,
-			   &bal);
-	if (bal != 0) {
-		do_panic = TRUE;
-		printf("LEDGER BALANCE proc %d (%s) "
-		       "\"internal_compressed\" = %lld\n",
-		       pid, procname, bal);
-		if (bal > 0) {
-			pmap_ledgers_drift.internal_compressed_over++;
-			pmap_ledgers_drift.internal_compressed_over_total += bal;
-			if (bal > pmap_ledgers_drift.internal_compressed_over_max) {
-				pmap_ledgers_drift.internal_compressed_over_max = bal;
-			}
-		} else {
-			pmap_ledgers_drift.internal_compressed_under++;
-			pmap_ledgers_drift.internal_compressed_under_total += bal;
-			if (bal < pmap_ledgers_drift.internal_compressed_under_max) {
-				pmap_ledgers_drift.internal_compressed_under_max = bal;
-			}
-		}
-	}
-	ledger_get_balance(pmap->ledger,
-			   task_ledgers.iokit_mapped,
-			   &bal);
-	if (bal != 0) {
-		do_panic = TRUE;
-		printf("LEDGER BALANCE proc %d (%s) "
-		       "\"iokit_mapped\" = %lld\n",
-		       pid, procname, bal);
-		if (bal > 0) {
-			pmap_ledgers_drift.iokit_mapped_over++;
-			pmap_ledgers_drift.iokit_mapped_over_total += bal;
-			if (bal > pmap_ledgers_drift.iokit_mapped_over_max) {
-				pmap_ledgers_drift.iokit_mapped_over_max = bal;
-			}
-		} else {
-			pmap_ledgers_drift.iokit_mapped_under++;
-			pmap_ledgers_drift.iokit_mapped_under_total += bal;
-			if (bal < pmap_ledgers_drift.iokit_mapped_under_max) {
-				pmap_ledgers_drift.iokit_mapped_under_max = bal;
-			}
-		}
-	}
-	ledger_get_balance(pmap->ledger,
-			   task_ledgers.alternate_accounting,
-			   &bal);
-	if (bal != 0) {
-		do_panic = TRUE;
-		printf("LEDGER BALANCE proc %d (%s) "
-		       "\"alternate_accounting\" = %lld\n",
-		       pid, procname, bal);
-		if (bal > 0) {
-			pmap_ledgers_drift.alternate_accounting_over++;
-			pmap_ledgers_drift.alternate_accounting_over_total += bal;
-			if (bal > pmap_ledgers_drift.alternate_accounting_over_max) {
-				pmap_ledgers_drift.alternate_accounting_over_max = bal;
-			}
-		} else {
-			pmap_ledgers_drift.alternate_accounting_under++;
-			pmap_ledgers_drift.alternate_accounting_under_total += bal;
-			if (bal < pmap_ledgers_drift.alternate_accounting_under_max) {
-				pmap_ledgers_drift.alternate_accounting_under_max = bal;
-			}
-		}
-	}
-	ledger_get_balance(pmap->ledger,
-			   task_ledgers.alternate_accounting_compressed,
-			   &bal);
-	if (bal != 0) {
-		do_panic = TRUE;
-		printf("LEDGER BALANCE proc %d (%s) "
-		       "\"alternate_accounting_compressed\" = %lld\n",
-		       pid, procname, bal);
-		if (bal > 0) {
-			pmap_ledgers_drift.alternate_accounting_compressed_over++;
-			pmap_ledgers_drift.alternate_accounting_compressed_over_total += bal;
-			if (bal > pmap_ledgers_drift.alternate_accounting_compressed_over_max) {
-				pmap_ledgers_drift.alternate_accounting_compressed_over_max = bal;
-			}
-		} else {
-			pmap_ledgers_drift.alternate_accounting_compressed_under++;
-			pmap_ledgers_drift.alternate_accounting_compressed_under_total += bal;
-			if (bal < pmap_ledgers_drift.alternate_accounting_compressed_under_max) {
-				pmap_ledgers_drift.alternate_accounting_compressed_under_max = bal;
-			}
-		}
-	}
-	ledger_get_balance(pmap->ledger,
-			   task_ledgers.page_table,
-			   &bal);
-	if (bal != 0) {
-		do_panic = TRUE;
-		printf("LEDGER BALANCE proc %d (%s) "
-		       "\"page_table\" = %lld\n",
-		       pid, procname, bal);
-		if (bal > 0) {
-			pmap_ledgers_drift.page_table_over++;
-			pmap_ledgers_drift.page_table_over_total += bal;
-			if (bal > pmap_ledgers_drift.page_table_over_max) {
-				pmap_ledgers_drift.page_table_over_max = bal;
-			}
-		} else {
-			pmap_ledgers_drift.page_table_under++;
-			pmap_ledgers_drift.page_table_under_total += bal;
-			if (bal < pmap_ledgers_drift.page_table_under_max) {
-				pmap_ledgers_drift.page_table_under_max = bal;
-			}
-		}
-	}
-	ledger_get_balance(pmap->ledger,
-			   task_ledgers.purgeable_volatile,
-			   &bal);
-	if (bal != 0) {
-		do_panic = TRUE;
-		printf("LEDGER BALANCE proc %d (%s) "
-		       "\"purgeable_volatile\" = %lld\n",
-		       pid, procname, bal);
-		if (bal > 0) {
-			pmap_ledgers_drift.purgeable_volatile_over++;
-			pmap_ledgers_drift.purgeable_volatile_over_total += bal;
-			if (bal > pmap_ledgers_drift.purgeable_volatile_over_max) {
-				pmap_ledgers_drift.purgeable_volatile_over_max = bal;
-			}
-		} else {
-			pmap_ledgers_drift.purgeable_volatile_under++;
-			pmap_ledgers_drift.purgeable_volatile_under_total += bal;
-			if (bal < pmap_ledgers_drift.purgeable_volatile_under_max) {
-				pmap_ledgers_drift.purgeable_volatile_under_max = bal;
-			}
-		}
-	}
-	ledger_get_balance(pmap->ledger,
-			   task_ledgers.purgeable_nonvolatile,
-			   &bal);
-	if (bal != 0) {
-		do_panic = TRUE;
-		printf("LEDGER BALANCE proc %d (%s) "
-		       "\"purgeable_nonvolatile\" = %lld\n",
-		       pid, procname, bal);
-		if (bal > 0) {
-			pmap_ledgers_drift.purgeable_nonvolatile_over++;
-			pmap_ledgers_drift.purgeable_nonvolatile_over_total += bal;
-			if (bal > pmap_ledgers_drift.purgeable_nonvolatile_over_max) {
-				pmap_ledgers_drift.purgeable_nonvolatile_over_max = bal;
-			}
-		} else {
-			pmap_ledgers_drift.purgeable_nonvolatile_under++;
-			pmap_ledgers_drift.purgeable_nonvolatile_under_total += bal;
-			if (bal < pmap_ledgers_drift.purgeable_nonvolatile_under_max) {
-				pmap_ledgers_drift.purgeable_nonvolatile_under_max = bal;
-			}
-		}
-	}
-	ledger_get_balance(pmap->ledger,
-			   task_ledgers.purgeable_volatile_compressed,
-			   &bal);
-	if (bal != 0) {
-		do_panic = TRUE;
-		printf("LEDGER BALANCE proc %d (%s) "
-		       "\"purgeable_volatile_compressed\" = %lld\n",
-		       pid, procname, bal);
-		if (bal > 0) {
-			pmap_ledgers_drift.purgeable_volatile_compressed_over++;
-			pmap_ledgers_drift.purgeable_volatile_compressed_over_total += bal;
-			if (bal > pmap_ledgers_drift.purgeable_volatile_compressed_over_max) {
-				pmap_ledgers_drift.purgeable_volatile_compressed_over_max = bal;
-			}
-		} else {
-			pmap_ledgers_drift.purgeable_volatile_compressed_under++;
-			pmap_ledgers_drift.purgeable_volatile_compressed_under_total += bal;
-			if (bal < pmap_ledgers_drift.purgeable_volatile_compressed_under_max) {
-				pmap_ledgers_drift.purgeable_volatile_compressed_under_max = bal;
-			}
-		}
-	}
-	ledger_get_balance(pmap->ledger,
-			   task_ledgers.purgeable_nonvolatile_compressed,
-			   &bal);
-	if (bal != 0) {
-		do_panic = TRUE;
-		printf("LEDGER BALANCE proc %d (%s) "
-		       "\"purgeable_nonvolatile_compressed\" = %lld\n",
-		       pid, procname, bal);
-		if (bal > 0) {
-			pmap_ledgers_drift.purgeable_nonvolatile_compressed_over++;
-			pmap_ledgers_drift.purgeable_nonvolatile_compressed_over_total += bal;
-			if (bal > pmap_ledgers_drift.purgeable_nonvolatile_compressed_over_max) {
-				pmap_ledgers_drift.purgeable_nonvolatile_compressed_over_max = bal;
-			}
-		} else {
-			pmap_ledgers_drift.purgeable_nonvolatile_compressed_under++;
-			pmap_ledgers_drift.purgeable_nonvolatile_compressed_under_total += bal;
-			if (bal < pmap_ledgers_drift.purgeable_nonvolatile_compressed_under_max) {
-				pmap_ledgers_drift.purgeable_nonvolatile_compressed_under_max = bal;
-			}
-		}
-	}
+#define LEDGER_CHECK_BALANCE(__LEDGER)					\
+MACRO_BEGIN								\
+	int panic_on_negative = TRUE;					\
+	ledger_get_balance(pmap->ledger,				\
+			   task_ledgers.__LEDGER,			\
+			   &bal);					\
+	ledger_get_panic_on_negative(pmap->ledger,			\
+				     task_ledgers.__LEDGER,		\
+				     &panic_on_negative);		\
+	if (bal != 0) {							\
+		if (panic_on_negative ||				\
+		    (pmap_ledgers_panic &&				\
+		     pmap_ledgers_panic_leeway > 0 &&			\
+		     (bal > (pmap_ledgers_panic_leeway * PAGE_SIZE) ||	\
+		      bal < (pmap_ledgers_panic_leeway * PAGE_SIZE)))) { \
+			do_panic = TRUE;				\
+		}							\
+		printf("LEDGER BALANCE proc %d (%s) "			\
+		       "\"%s\" = %lld\n",				\
+		       pid, procname, #__LEDGER, bal);			\
+		if (bal > 0) {						\
+			pmap_ledgers_drift.__LEDGER##_over++;		\
+			pmap_ledgers_drift.__LEDGER##_over_total += bal; \
+			if (bal > pmap_ledgers_drift.__LEDGER##_over_max) { \
+				pmap_ledgers_drift.__LEDGER##_over_max = bal; \
+			}						\
+		} else if (bal < 0) {					\
+			pmap_ledgers_drift.__LEDGER##_under++;		\
+			pmap_ledgers_drift.__LEDGER##_under_total += bal; \
+			if (bal < pmap_ledgers_drift.__LEDGER##_under_max) { \
+				pmap_ledgers_drift.__LEDGER##_under_max = bal; \
+			}						\
+		}							\
+	}								\
+MACRO_END
+
+	LEDGER_CHECK_BALANCE(phys_footprint);
+	LEDGER_CHECK_BALANCE(internal);
+	LEDGER_CHECK_BALANCE(internal_compressed);
+	LEDGER_CHECK_BALANCE(iokit_mapped);
+	LEDGER_CHECK_BALANCE(alternate_accounting);
+	LEDGER_CHECK_BALANCE(alternate_accounting_compressed);
+	LEDGER_CHECK_BALANCE(page_table);
+	LEDGER_CHECK_BALANCE(purgeable_volatile);
+	LEDGER_CHECK_BALANCE(purgeable_nonvolatile);
+	LEDGER_CHECK_BALANCE(purgeable_volatile_compressed);
+	LEDGER_CHECK_BALANCE(purgeable_nonvolatile_compressed);
+	LEDGER_CHECK_BALANCE(network_volatile);
+	LEDGER_CHECK_BALANCE(network_nonvolatile);
+	LEDGER_CHECK_BALANCE(network_volatile_compressed);
+	LEDGER_CHECK_BALANCE(network_nonvolatile_compressed);
 
 	if (do_panic) {
 		if (pmap_ledgers_panic) {
@@ -3254,7 +3104,8 @@ pmap_check_ledgers(
 	    pmap->stats.external != 0 ||
 	    pmap->stats.reusable != 0 ||
 	    pmap->stats.compressed != 0) {
-		if (pmap_stats_assert) {
+		if (pmap_stats_assert &&
+		    pmap->pmap_stats_assert) {
 			panic("pmap_destroy(%p) %d[%s] imbalanced stats: resident=%d wired=%d device=%d internal=%d external=%d reusable=%d compressed=%lld",
 			      pmap, pid, procname,
 			      pmap->stats.resident_count,
@@ -3289,6 +3140,32 @@ pmap_set_process(
 
 	pmap->pmap_pid = pid;
 	strlcpy(pmap->pmap_procname, procname, sizeof (pmap->pmap_procname));
+	if (pmap_ledgers_panic_leeway) {
+		/*
+		 * XXX FBDP
+		 * Some processes somehow trigger some issues that make
+		 * the pmap stats and ledgers go off track, causing
+		 * some assertion failures and ledger panics.
+		 * Turn off the sanity checks if we allow some ledger leeway
+		 * because of that.  We'll still do a final check in
+		 * pmap_check_ledgers() for discrepancies larger than the
+		 * allowed leeway after the address space has been fully
+		 * cleaned up.
+		 */
+		pmap->pmap_stats_assert = FALSE;
+		ledger_disable_panic_on_negative(pmap->ledger,
+						 task_ledgers.phys_footprint);
+		ledger_disable_panic_on_negative(pmap->ledger,
+						 task_ledgers.internal);
+		ledger_disable_panic_on_negative(pmap->ledger,
+						 task_ledgers.internal_compressed);
+		ledger_disable_panic_on_negative(pmap->ledger,
+						 task_ledgers.iokit_mapped);
+		ledger_disable_panic_on_negative(pmap->ledger,
+						 task_ledgers.alternate_accounting);
+		ledger_disable_panic_on_negative(pmap->ledger,
+						 task_ledgers.alternate_accounting_compressed);
+	}
 }
 #endif /* MACH_ASSERT */
 
@@ -3326,3 +3203,4 @@ void pmap_verify_noncacheable(uintptr_t vaddr) {
 		return;
 	panic("pmap_verify_noncacheable: IO read from a cacheable address? address: 0x%lx, PTE: %p, *PTE: 0x%llx", vaddr, ptep, *ptep);
 }
+

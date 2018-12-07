@@ -89,6 +89,7 @@
 #include <mach/clock_server.h>
 #include <mach/clock_priv_server.h>
 #include <mach/lock_set_server.h>
+#include <mach/memory_entry_server.h>
 #include <mach/memory_object_control_server.h>
 #include <mach/memory_object_default_server.h>
 #include <mach/processor_server.h>
@@ -100,6 +101,9 @@
 #include <mach/vm32_map_server.h>
 #endif
 #include <mach/thread_act_server.h>
+
+#include <mach/exc_server.h>
+#include <mach/mach_exc_server.h>
 
 #include <device/device_types.h>
 #include <device/device_server.h>
@@ -190,6 +194,7 @@ const struct mig_subsystem *mig_e[] = {
 	(const struct mig_subsystem *)&UNDReply_subsystem,
 	(const struct mig_subsystem *)&mach_voucher_subsystem,
 	(const struct mig_subsystem *)&mach_voucher_attr_control_subsystem,
+	(const struct mig_subsystem *)&memory_entry_subsystem,
 
 #if     XK_PROXY
         (const struct mig_subsystem *)&do_uproxy_xk_uproxy_subsystem,
@@ -200,6 +205,9 @@ const struct mig_subsystem *mig_e[] = {
 #if     MCMSG && iPSC860
 	(const struct mig_subsystem *)&mcmsg_info_subsystem,
 #endif  /* MCMSG && iPSC860 */
+        (const struct mig_subsystem *)&catch_exc_subsystem,
+        (const struct mig_subsystem *)&catch_mach_exc_subsystem,
+
 };
 
 void
@@ -269,20 +277,20 @@ ipc_kobject_server(
 	task_t task = TASK_NULL;
 	uint32_t exec_token;
 	boolean_t exec_token_changed = FALSE;
+	int request_msgh_id = request->ikm_header->msgh_id;
 
 	/*
 	 * Find out corresponding mig_hash entry if any
 	 */
 	{
-	    int key = request->ikm_header->msgh_id;
-	    unsigned int i = (unsigned int)MIG_HASH(key);
+	    unsigned int i = (unsigned int)MIG_HASH(request_msgh_id);
 	    int max_iter = mig_table_max_displ;
 
 	    do {
 		ptr = &mig_buckets[i++ % MAX_MIG_ENTRIES];
-	    } while (key != ptr->num && ptr->num && --max_iter);
+	    } while (request_msgh_id != ptr->num && ptr->num && --max_iter);
 
-	    if (!ptr->routine || key != ptr->num) {
+	    if (!ptr->routine || request_msgh_id != ptr->num) {
 	        ptr = (mig_hash_t *)0;
 		reply_size = mig_reply_size;
 	    } else {
@@ -466,8 +474,7 @@ ipc_kobject_server(
 		 */
 #if DEVELOPMENT || DEBUG
 		printf("%s: refusing to send reply to kobject %d port (id:%d)\n",
-		       __func__, ip_kotype(replyp),
-		       request->ikm_header->msgh_id);
+		       __func__, ip_kotype(replyp), request_msgh_id);
 #endif	/* DEVELOPMENT || DEBUG */
 		ipc_kmsg_destroy(reply);
 		return IKM_NULL;

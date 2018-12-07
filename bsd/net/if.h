@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -137,6 +137,13 @@ struct if_clonereq32 {
 #define	IFEF_VLAN		0x00000200	/* interface has one or more vlans */
 #define	IFEF_BOND		0x00000400	/* interface is part of bond */
 #define	IFEF_ARPLL		0x00000800	/* ARP for IPv4LL addresses */
+#define	IFEF_CLAT46		0x00001000	/* CLAT46 RFC 6877 */
+
+#define	IS_INTF_CLAT46(ifp)	((ifp) != NULL && ((ifp)->if_eflags & IFEF_CLAT46))
+#define	INTF_ADJUST_MTU_FOR_CLAT46(intf)		\
+    (IS_INTF_CLAT46((intf)) ||				\
+     IS_INTF_CLAT46((intf)->if_delegated.ifp))		\
+
 /*
  * XXX IFEF_NOAUTOIPV6LL is deprecated and should be done away with.
  * Configd pretty much manages the interface configuration.
@@ -175,6 +182,7 @@ struct if_clonereq32 {
 #define	IFXF_LOW_INTERNET_UL		0x00000010 /* Uplink Low Internet is confirmed */
 #define	IFXF_LOW_INTERNET_DL		0x00000020 /* Downlink Low Internet is confirmed */
 #define	IFXF_ALLOC_KPI			0x00000040 /* Allocated via the ifnet_alloc KPI */
+#define	IFXF_LOW_POWER			0x00000080 /* Low Power Mode */
 
 /*
  * Current requirements for an AWDL interface.  Setting/clearing IFEF_AWDL
@@ -499,7 +507,7 @@ struct	ifreq {
 #define	IFRTYPE_LOW_INTERNET_DISABLE_UL_DL	0x0000
 #define	IFRTYPE_LOW_INTERNET_ENABLE_UL		0x0001
 #define	IFRTYPE_LOW_INTERNET_ENABLE_DL		0x0002
-
+		int ifru_low_power_mode;
 #endif /* PRIVATE */
 	} ifr_ifru;
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
@@ -549,6 +557,7 @@ struct	ifreq {
 #define	ifr_fastlane_enabled	ifr_qosmarking_enabled
 #define	ifr_disable_output	ifr_ifru.ifru_disable_output
 #define	ifr_low_internet	ifr_ifru.ifru_low_internet
+#define	ifr_low_power_mode	ifr_ifru.ifru_low_power_mode
 
 #endif /* PRIVATE */
 };
@@ -929,6 +938,14 @@ struct kev_dl_rrc_state {
 };
 
 /*
+ * KEV_DL_LOW_POWER_MODE_CHANGED
+ */
+struct kev_dl_low_power_mode {
+	struct net_event_data   link_data;
+	int			low_power_event;
+};
+
+/*
  * Length of network signature/fingerprint blob.
  */
 #define	IFNET_SIGNATURELEN	20
@@ -960,12 +977,21 @@ struct ipv6_prefix {
 	uint32_t	prefix_len;
 };
 
-/*
- * Structure for SIOC[S/G]IFNAT64PREFIX
- */
+struct if_ipv6_address {
+	struct in6_addr	v6_address;
+	uint32_t	v6_prefixlen;
+};
+
+/* Structure for SIOC[S/G]IFNAT64PREFIX */
 struct if_nat64req {
 	char			ifnat64_name[IFNAMSIZ];
 	struct ipv6_prefix	ifnat64_prefixes[NAT64_MAX_NUM_PREFIXES];
+};
+
+/* Structure for SIOCGIFCLAT46ADDR */
+struct if_clat46req {
+	char			ifclat46_name[IFNAMSIZ];
+	struct if_ipv6_address	ifclat46_addr;
 };
 
 /*

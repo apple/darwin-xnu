@@ -376,7 +376,6 @@ dtrace_systrace_syscall_return(unsigned short code, int rval, int *rv)
 #error 1 << SYSTRACE_SHIFT must exceed number of system calls
 #endif
 
-static dev_info_t *systrace_devi;
 static dtrace_provider_id_t systrace_id;
 
 /*
@@ -532,31 +531,22 @@ static dtrace_pattr_t systrace_attr = {
 };
 
 static dtrace_pops_t systrace_pops = {
-	systrace_provide,
-	NULL,
-	systrace_enable,
-	systrace_disable,
-	NULL,
-	NULL,
-	systrace_getargdesc,
-	systrace_getargval,
-	NULL,
-	systrace_destroy
+	.dtps_provide =		systrace_provide,
+	.dtps_provide_module =	NULL,
+	.dtps_enable =		systrace_enable,
+	.dtps_disable =		systrace_disable,
+	.dtps_suspend =		NULL,
+	.dtps_resume =		NULL,
+	.dtps_getargdesc =	systrace_getargdesc,
+	.dtps_getargval =	systrace_getargval,
+	.dtps_usermode =	NULL,
+	.dtps_destroy =		systrace_destroy
 };
 
 static int
-systrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
+systrace_attach(dev_info_t *devi)
 {
-	switch (cmd) {
-	case DDI_ATTACH:
-		break;
-	case DDI_RESUME:
-		return (DDI_SUCCESS);
-	default:
-		return (DDI_FAILURE);
-	}
-
-	systrace_probe = (void(*))&dtrace_probe;
+	systrace_probe = (void*)&dtrace_probe;
 	membar_enter();
 
 	if (ddi_create_minor_node(devi, "systrace", S_IFCHR, 0,
@@ -567,9 +557,6 @@ systrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		ddi_remove_minor_node(devi, NULL);
 		return (DDI_FAILURE);
 	}
-
-	ddi_report_dev(devi);
-	systrace_devi = devi;
 
 	return (DDI_SUCCESS);
 }
@@ -657,7 +644,6 @@ void (*machtrace_probe)(dtrace_id_t, uint64_t, uint64_t,
 
 static uint64_t machtrace_getarg(void *, dtrace_id_t, void *, int, int);	
 
-static dev_info_t *machtrace_devi;
 static dtrace_provider_id_t machtrace_id;
 
 static kern_return_t
@@ -897,30 +883,21 @@ static dtrace_pattr_t machtrace_attr = {
 };
 
 static dtrace_pops_t machtrace_pops = {
-	machtrace_provide,
-	NULL,
-	machtrace_enable,
-	machtrace_disable,
-	NULL,
-	NULL,
-	NULL,
-	machtrace_getarg,
-	NULL,
-	machtrace_destroy
+	.dtps_provide =		machtrace_provide,
+	.dtps_provide_module =	NULL,
+	.dtps_enable =		machtrace_enable,
+	.dtps_disable =		machtrace_disable,
+	.dtps_suspend =		NULL,
+	.dtps_resume =		NULL,
+	.dtps_getargdesc =	NULL,
+	.dtps_getargval =	machtrace_getarg,
+	.dtps_usermode =	NULL,
+	.dtps_destroy =		machtrace_destroy
 };
 
 static int
-machtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
+machtrace_attach(dev_info_t *devi)
 {
-	switch (cmd) {
-		case DDI_ATTACH:
-			break;
-		case DDI_RESUME:
-			return (DDI_SUCCESS);
-		default:
-			return (DDI_FAILURE);
-	}
-
 	machtrace_probe = dtrace_probe;
 	membar_enter();
 	
@@ -928,13 +905,10 @@ machtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 				DDI_PSEUDO, 0) == DDI_FAILURE ||
 			dtrace_register("mach_trap", &machtrace_attr, DTRACE_PRIV_USER, NULL,
 				&machtrace_pops, NULL, &machtrace_id) != 0) {
-                machtrace_probe = (void (*))&systrace_stub;
+                machtrace_probe = (void*)&systrace_stub;
 		ddi_remove_minor_node(devi, NULL);
 		return (DDI_FAILURE);
 	}
-
-	ddi_report_dev(devi);
-	machtrace_devi = devi;
 
 	return (DDI_SUCCESS);
 }
@@ -971,31 +945,23 @@ static struct cdevsw systrace_cdevsw =
 	0					/* type */
 };
 
-static int gSysTraceInited = 0;
-
 void systrace_init( void );
 
 void systrace_init( void )
 {
-	if (0 == gSysTraceInited) {
-		if (dtrace_sdt_probes_restricted()) {
-			return;
-		}
+	if (dtrace_sdt_probes_restricted()) {
+		return;
+	}
 
-		int majdevno = cdevsw_add(SYSTRACE_MAJOR, &systrace_cdevsw);
+	int majdevno = cdevsw_add(SYSTRACE_MAJOR, &systrace_cdevsw);
 
-		if (majdevno < 0) {
-			printf("systrace_init: failed to allocate a major number!\n");
-			gSysTraceInited = 0;
-			return;
-		}
+	if (majdevno < 0) {
+		printf("systrace_init: failed to allocate a major number!\n");
+		return;
+	}
 
-		systrace_attach( (dev_info_t	*)(uintptr_t)majdevno, DDI_ATTACH );
-		machtrace_attach( (dev_info_t	*)(uintptr_t)majdevno, DDI_ATTACH );
-
-		gSysTraceInited = 1;
-	} else
-		panic("systrace_init: called twice!\n");
+	systrace_attach((dev_info_t*)(uintptr_t)majdevno);
+	machtrace_attach((dev_info_t*)(uintptr_t)majdevno);
 }
 #undef SYSTRACE_MAJOR
 
@@ -1012,7 +978,7 @@ systrace_getargval(void *arg, dtrace_id_t id, void *parg, int argno, int aframes
 		uargs = uthread->t_dtrace_syscall_args;
 	if (!uargs)
 		return(0);
-	if (argno < 0 || argno > SYSTRACE_NARGS)
+	if (argno < 0 || argno >= SYSTRACE_NARGS)
 		return(0);
 
 	DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);

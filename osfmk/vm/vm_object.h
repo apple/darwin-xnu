@@ -105,7 +105,6 @@ extern btlog_t *vm_object_tracking_btlog;
 #endif /* VM_OBJECT_TRACKING */
 
 struct vm_page;
-struct vm_shared_region_slide_info;
 
 /*
  *	Types defined:
@@ -126,9 +125,10 @@ struct vm_object_fault_info {
 	/* boolean_t */	stealth:1,
 	/* boolean_t */	io_sync:1,
 	/* boolean_t */ cs_bypass:1,
+	/* boolean_t */ pmap_cs_associated:1,
 	/* boolean_t */	mark_zf_absent:1,
 	/* boolean_t */ batch_pmap_op:1,
-		__vm_object_fault_info_unused_bits:26;
+		__vm_object_fault_info_unused_bits:25;
 	int		pmap_options;
 };
 
@@ -137,8 +137,7 @@ struct vm_object_fault_info {
 #define vo_cache_pages_to_scan		vo_un1.vou_cache_pages_to_scan
 #define vo_shadow_offset		vo_un2.vou_shadow_offset
 #define vo_cache_ts			vo_un2.vou_cache_ts
-#define vo_purgeable_owner		vo_un2.vou_purgeable_owner
-#define vo_slide_info			vo_un2.vou_slide_info
+#define vo_owner			vo_un2.vou_owner
 
 struct vm_object {
 	/*
@@ -171,7 +170,7 @@ struct vm_object {
 	int			ref_count;	/* Number of references */
 	unsigned int		resident_page_count;
 						/* number of resident pages */
-	const unsigned int	wired_page_count; /* number of wired pages
+	unsigned int		wired_page_count; /* number of wired pages
 						     use VM_OBJECT_WIRED_PAGE_UPDATE macros to update */
 	unsigned int		reusable_page_count;
 
@@ -189,11 +188,10 @@ struct vm_object {
 		clock_sec_t	vou_cache_ts;	/* age of an external object
 						 * present in cache
 						 */
-		task_t		vou_purgeable_owner;	/* If the purg'a'ble bits below are set 
-							 * to volatile/emtpy, this is the task 
-							 * that owns this purgeable object.
-							 */
-		struct vm_shared_region_slide_info *vou_slide_info;
+		task_t		vou_owner;	/* If the object is purgeable
+						 * or has a "ledger_tag", this
+						 * is the task that owns it.
+						 */
 	} vo_un2;
 
 	memory_object_t		pager;		/* Where to get data */
@@ -348,7 +346,7 @@ struct vm_object {
 		all_reusable:1,
 		blocked_access:1,
 		set_cache_attr:1,
-		object_slid:1,
+		object_is_shared_cache:1,
 		purgeable_queue_type:2,
 		purgeable_queue_group:3,
 		io_tracking:1,
@@ -359,7 +357,18 @@ struct vm_object {
 #else /* CONFIG_SECLUDED_MEMORY */
 		__object3_unused_bits:2,
 #endif /* CONFIG_SECLUDED_MEMORY */
-		__object2_unused_bits:5;	/* for expansion */
+#if VM_OBJECT_ACCESS_TRACKING
+		access_tracking:1,
+#else /* VM_OBJECT_ACCESS_TRACKING */
+		__unused_access_tracking:1,
+#endif /* VM_OBJECT_ACCESS_TRACKING */
+		vo_ledger_tag:2,
+		__object2_unused_bits:2;	/* for expansion */
+
+#if VM_OBJECT_ACCESS_TRACKING
+	uint32_t	access_tracking_reads;
+	uint32_t	access_tracking_writes;
+#endif /* VM_OBJECT_ACCESS_TRACKING */
 
 	uint8_t			scan_collisions;
         vm_tag_t		wire_tag;
@@ -387,6 +396,10 @@ struct vm_object {
         queue_chain_t		objq;      /* object queue - currently used for purgable queues */
 	queue_chain_t		task_objq; /* objects owned by task - protected by task lock */
 
+#if !VM_TAG_ACTIVE_UPDATE
+	queue_chain_t		wired_objq;
+#endif /* !VM_TAG_ACTIVE_UPDATE */
+
 #if DEBUG
 	void *purgeable_owner_bt[16];
 	task_t vo_purgeable_volatilizer; /* who made it volatile? */
@@ -394,10 +407,25 @@ struct vm_object {
 #endif /* DEBUG */
 };
 
+/* values for object->vo_ledger_tag */
+#define VM_OBJECT_LEDGER_TAG_NONE	0
+#define VM_OBJECT_LEDGER_TAG_NETWORK	1
+#define VM_OBJECT_LEDGER_TAG_MEDIA	2
+#define VM_OBJECT_LEDGER_TAG_RESERVED	3
+
 #define VM_OBJECT_PURGEABLE_FAULT_ERROR(object)				\
 	((object)->volatile_fault &&					\
 	 ((object)->purgable == VM_PURGABLE_VOLATILE ||			\
 	  (object)->purgable == VM_PURGABLE_EMPTY))
+
+#if VM_OBJECT_ACCESS_TRACKING
+extern uint64_t vm_object_access_tracking_reads;
+extern uint64_t vm_object_access_tracking_writes;
+extern void vm_object_access_tracking(vm_object_t object,
+				      int *access_tracking,
+				      uint32_t *access_tracking_reads,
+				      uint32_t *acess_tracking_writes);
+#endif /* VM_OBJECT_ACCESS_TRACKING */
 
 extern
 vm_object_t	kernel_object;		/* the single kernel object */
@@ -421,30 +449,44 @@ extern lck_attr_t		vm_map_lck_attr;
 #error VM_TAG_ACTIVE_UPDATE
 #endif
 
+#if VM_TAG_ACTIVE_UPDATE
+#define VM_OBJECT_WIRED_ENQUEUE(object) panic("VM_OBJECT_WIRED_ENQUEUE")
+#define VM_OBJECT_WIRED_DEQUEUE(object) panic("VM_OBJECT_WIRED_DEQUEUE")
+#else /* VM_TAG_ACTIVE_UPDATE */
+#define VM_OBJECT_WIRED_ENQUEUE(object)					\
+	MACRO_BEGIN							\
+	lck_spin_lock(&vm_objects_wired_lock);				\
+	assert(!(object)->wired_objq.next);				\
+	assert(!(object)->wired_objq.prev);				\
+	queue_enter(&vm_objects_wired, (object),			\
+		    vm_object_t, wired_objq);				\
+	lck_spin_unlock(&vm_objects_wired_lock);			\
+	MACRO_END
+#define VM_OBJECT_WIRED_DEQUEUE(object)					\
+	MACRO_BEGIN							\
+	if ((object)->wired_objq.next) {				\
+		lck_spin_lock(&vm_objects_wired_lock);			\
+		queue_remove(&vm_objects_wired, (object),		\
+			     vm_object_t, wired_objq);			\
+		lck_spin_unlock(&vm_objects_wired_lock);		\
+	}								\
+	MACRO_END
+#endif /* VM_TAG_ACTIVE_UPDATE */
+
 #define VM_OBJECT_WIRED(object, tag)					\
     MACRO_BEGIN								\
     assert(VM_KERN_MEMORY_NONE != (tag));				\
     assert(VM_KERN_MEMORY_NONE == (object)->wire_tag);			\
     (object)->wire_tag = (tag);       					\
-    if (!VM_TAG_ACTIVE_UPDATE   	 	 	 	 	\
-	&& ((object)->purgable == VM_PURGABLE_DENY))			\
-    {									\
-	lck_spin_lock(&vm_objects_wired_lock);				\
-	assert(!(object)->objq.next);					\
-	assert(!(object)->objq.prev);					\
-	queue_enter(&vm_objects_wired, (object), vm_object_t, objq);    \
-	lck_spin_unlock(&vm_objects_wired_lock);			\
+    if (!VM_TAG_ACTIVE_UPDATE) {   	 	 	 	 	\
+	VM_OBJECT_WIRED_ENQUEUE((object));				\
     }									\
     MACRO_END
 
 #define VM_OBJECT_UNWIRED(object)					       	 	\
     MACRO_BEGIN								 	 	\
-    if (!VM_TAG_ACTIVE_UPDATE   	 	 	 	 	 	 	\
-	&& ((object)->purgable == VM_PURGABLE_DENY) && (object)->objq.next)  	 	\
-    {									   	 	\
-	lck_spin_lock(&vm_objects_wired_lock);				  	 	\
-	queue_remove(&vm_objects_wired, (object), vm_object_t, objq);   	 	\
-	lck_spin_unlock(&vm_objects_wired_lock);					\
+    if (!VM_TAG_ACTIVE_UPDATE) {							\
+	    VM_OBJECT_WIRED_DEQUEUE((object));						\
     }									   	 	\
     if (VM_KERN_MEMORY_NONE != (object)->wire_tag) {			    	 	\
 	vm_tag_update_size((object)->wire_tag, -ptoa_64((object)->wired_page_count));   \
@@ -462,7 +504,7 @@ extern lck_attr_t		vm_map_lck_attr;
 	if (__wireddelta) {     	 	 	 	 	 	 	\
 	    boolean_t __overflow __assert_only =     	 	 	 	 	\
 	    os_add_overflow((object)->wired_page_count, __wireddelta,     	 	\
-			    (unsigned int *)(uintptr_t)&(object)->wired_page_count);    \
+			    &(object)->wired_page_count);				\
 	    assert(!__overflow);							\
 	    if (!(object)->pageout && !(object)->no_tag_update) {   	 	 	\
 		if (__wireddelta > 0) {      	 	 	 	 	    	\
@@ -487,10 +529,10 @@ extern lck_attr_t		vm_map_lck_attr;
     __wireddelta += delta; \
 
 #define VM_OBJECT_WIRED_PAGE_ADD(object, m)                     \
-    if (!m->private && !m->fictitious) __wireddelta++;
+    if (!(m)->vmp_private && !(m)->vmp_fictitious) __wireddelta++;
 
 #define VM_OBJECT_WIRED_PAGE_REMOVE(object, m)                  \
-    if (!m->private && !m->fictitious) __wireddelta--;
+    if (!(m)->vmp_private && !(m)->vmp_fictitious) __wireddelta--;
 
 
 
@@ -1139,5 +1181,28 @@ vm_object_wanted(
 extern void	vm_object_cache_add(vm_object_t);
 extern void	vm_object_cache_remove(vm_object_t);
 extern int	vm_object_cache_evict(int, int);
+
+#define VM_OBJECT_OWNER_DISOWNED ((task_t) -1)
+#define VM_OBJECT_OWNER(object)						\
+	((((object)->purgable == VM_PURGABLE_DENY &&			\
+	   (object)->vo_ledger_tag == 0) ||				\
+	  (object)->vo_owner == TASK_NULL) 				\
+	 ? TASK_NULL	/* not owned */					\
+	 : (((object)->vo_owner == VM_OBJECT_OWNER_DISOWNED)		\
+	    ? kernel_task /* disowned -> kernel */			\
+	    : (object)->vo_owner)) /* explicit owner */			\
+
+extern void	vm_object_ledger_tag_ledgers(
+	vm_object_t object,
+	int *ledger_idx_volatile,
+	int *ledger_idx_nonvolatile,
+	int *ledger_idx_volatile_compressed,
+	int *ledger_idx_nonvolatile_compressed,
+	boolean_t *do_footprint);
+extern kern_return_t vm_object_ownership_change(
+	vm_object_t object,
+	int ledger_tag,
+	task_t owner,
+	boolean_t task_objq_locked);
 
 #endif	/* _VM_VM_OBJECT_H_ */

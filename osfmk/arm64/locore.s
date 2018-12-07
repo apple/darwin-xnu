@@ -100,10 +100,11 @@
 	stp		q28, q29, [x0, NS64_Q28]
 	stp		q30, q31, [x0, NS64_Q30]
 
-	mrs		lr, ELR_EL1							// Get exception link register
+	mrs		lr,  ELR_EL1						// Get exception link register
 	mrs		x23, SPSR_EL1						// Load CPSR into var reg x23
 	mrs		x24, FPSR
 	mrs		x25, FPCR
+
 
 	str		lr, [x0, SS64_PC]					// Save ELR to PCB
 	str		w23, [x0, SS64_CPSR]				// Save CPSR to PCB
@@ -372,6 +373,8 @@ Lel1_sp0_serror_vector_long:
 .endmacro
 
 Lel1_sp1_synchronous_vector_long:
+	b		check_exception_stack
+Lel1_sp1_synchronous_valid_stack:
 #if defined(KERNEL_INTEGRITY_KTRR)
 	b		check_ktrr_sctlr_trap
 Lel1_sp1_synchronous_vector_continue:
@@ -400,7 +403,7 @@ Lel1_sp1_serror_vector_long:
 	b		fleh_dispatch64
 
 .macro EL0_64_VECTOR
-	mov		x18, xzr						// Zero x18 to avoid leaking data to user SS
+	mov		x18, #0 						// Zero x18 to avoid leaking data to user SS
 	stp		x0, x1, [sp, #-16]!					// Save x0 and x1 to the exception stack
 	mrs		x0, TPIDR_EL1						// Load the thread register
 	mrs		x1, SP_EL0							// Load the user stack pointer
@@ -412,8 +415,8 @@ Lel1_sp1_serror_vector_long:
 	msr		SPSel, #0							// Switch to SP0
 	stp		x0, x1, [sp, SS64_X0]				// Save x0, x1 to the user PCB
 	stp		fp, lr, [sp, SS64_FP]				// Save fp and lr to the user PCB
-	mov		fp, xzr								// Clear the fp and lr for the
-	mov		lr, xzr								// debugger stack frame
+	mov		fp, #0								// Clear the fp and lr for the
+	mov		lr, #0								// debugger stack frame
 	mov		x0, sp								// Copy the user PCB pointer to x0
 .endmacro
 
@@ -458,6 +461,30 @@ Lel0_serror_vector_64_long:
 
 
 /*
+ * check_exception_stack
+ *
+ * Verifies that stack pointer at SP1 is within exception stack
+ * If not, will simply hang as we have no more stack to fall back on.
+ */
+ 
+	.text
+	.align 2
+check_exception_stack:
+	mrs		x18, TPIDR_EL1					// Get thread pointer
+	cbz		x18, Lvalid_exception_stack			// Thread context may not be set early in boot
+	ldr		x18, [x18, ACT_CPUDATAP]
+	cbz		x18, .						// If thread context is set, cpu data should be too
+	ldr		x18, [x18, CPU_EXCEPSTACK_TOP]
+	cmp		sp, x18
+	b.gt		.						// Hang if above exception stack top
+	sub		x18, x18, EXCEPSTACK_SIZE_NUM			// Find bottom of exception stack
+	cmp		sp, x18
+	b.lt		.						// Hang if below exception stack bottom
+Lvalid_exception_stack:
+	mov		x18, #0
+	b		Lel1_sp1_synchronous_valid_stack
+
+/*
  * check_kernel_stack
  *
  * Verifies that the kernel stack is aligned and mapped within an expected
@@ -492,17 +519,10 @@ Ltest_kstack:
 Ltest_istack:
 	ldr		x1, [x1, ACT_CPUDATAP]				// Load the cpu data ptr
 	ldr		x2, [x1, CPU_INTSTACK_TOP]			// Get top of istack
-	sub		x3, x2, PGBYTES						// Find bottom of istack
+	sub		x3, x2, INTSTACK_SIZE_NUM			// Find bottom of istack
 	cmp		x0, x2								// if (SP_EL0 >= istack top)
-	b.ge	Ltest_fiqstack						//    jump to fiqstack test
-	cmp		x0, x3								// if (SP_EL0 > istack bottom)
-	b.gt	Lvalid_stack						//    stack pointer valid
-Ltest_fiqstack:
-	ldr		x2, [x1, CPU_FIQSTACK_TOP]			// Get top of fiqstack
-	sub		x3, x2, PGBYTES						// Find bottom of fiqstack
-	cmp		x0, x2								// if (SP_EL0 >= fiqstack top)
 	b.ge	Lcorrupt_stack						//    corrupt stack pointer
-	cmp		x0, x3								// if (SP_EL0 > fiqstack bottom)
+	cmp		x0, x3								// if (SP_EL0 > istack bottom)
 	b.gt	Lvalid_stack						//    stack pointer valid
 Lcorrupt_stack:
 	INIT_SAVED_STATE_FLAVORS sp, w0, w1
@@ -570,32 +590,32 @@ fleh_dispatch64:
 	cmp		x23, #(PSR64_MODE_EL0)
 	bne		1f
 
-	mov		x2, xzr
-	mov		x3, xzr
-	mov		x4, xzr
-	mov		x5, xzr
-	mov		x6, xzr
-	mov		x7, xzr
-	mov		x8, xzr
-	mov		x9, xzr
-	mov		x10, xzr
-	mov		x11, xzr
-	mov		x12, xzr
-	mov		x13, xzr
-	mov		x14, xzr
-	mov		x15, xzr
-	mov		x16, xzr
-	mov		x17, xzr
-	mov		x18, xzr
-	mov		x19, xzr
-	mov		x20, xzr
+	mov		x2, #0
+	mov		x3, #0
+	mov		x4, #0
+	mov		x5, #0
+	mov		x6, #0
+	mov		x7, #0
+	mov		x8, #0
+	mov		x9, #0
+	mov		x10, #0
+	mov		x11, #0
+	mov		x12, #0
+	mov		x13, #0
+	mov		x14, #0
+	mov		x15, #0
+	mov		x16, #0
+	mov		x17, #0
+	mov		x18, #0
+	mov		x19, #0
+	mov		x20, #0
 	/* x21, x22 cleared in common case below */
-	mov		x23, xzr
-	mov		x24, xzr
-	mov		x25, xzr
-	mov		x26, xzr
-	mov		x27, xzr
-	mov		x28, xzr
+	mov		x23, #0
+	mov		x24, #0
+	mov		x25, #0
+	mov		x26, #0
+	mov		x27, #0
+	mov		x28, #0
 	/* fp/lr already cleared by EL0_64_VECTOR */
 1:
 
@@ -910,7 +930,6 @@ check_user_asts:
 	// return_to_user, the latter will have to change.
 	//
 
-
 exception_return:
 	msr		DAIFSet, #DAIFSC_ALL				// Disable exceptions
 	mrs		x3, TPIDR_EL1					// Load thread pointer
@@ -1021,7 +1040,7 @@ Lexception_return_restore_registers:
 	mrs		x18, TTBR0_EL1
 	bic		x18, x18, #(1 << TTBR_ASID_SHIFT)
 	msr		TTBR0_EL1, x18
-	mov		x18, xzr
+	mov		x18, #0
 
 	/* We don't need an ISB here, as the eret is synchronizing. */
 Lskip_ttbr1_switch:
@@ -1044,7 +1063,7 @@ user_set_debug_state_and_return:
 	POP_FRAME
 	isb
 	mrs		x3, TPIDR_EL1						// Reload thread pointer
-	b 		exception_return					// And continue
+	b 		exception_return			// And continue
 
 	.text
 	.align 2

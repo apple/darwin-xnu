@@ -646,7 +646,7 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	 * started.
 	 */
 	cdp->cpu_active_thread = (thread_t) (uintptr_t) cdp->cpu_number;
-
+	cdp->cpu_NMI_acknowledged = TRUE;
 	cdp->cpu_nanotime = &pal_rtc_nanotime_info;
 
 	kprintf("cpu_data_alloc(%d) %p desc_table: %p "

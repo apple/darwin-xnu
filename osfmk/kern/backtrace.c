@@ -41,6 +41,7 @@
 #endif
 
 
+
 uint32_t __attribute__((noinline))
 backtrace(uintptr_t *bt, uint32_t max_frames)
 {
@@ -84,6 +85,7 @@ backtrace_frame(uintptr_t *bt, uint32_t max_frames, void *start_frame)
 
 	while (fp != NULL && frame_index < max_frames) {
 		uintptr_t *next_fp = (uintptr_t *)*fp;
+		uintptr_t ret_addr = *(fp + 1); /* return address is one word higher than frame pointer */
 
 		/*
 		 * If the frame pointer is 0, backtracing has reached the top of
@@ -97,8 +99,7 @@ backtrace_frame(uintptr_t *bt, uint32_t max_frames, void *start_frame)
 			break;
 		}
 
-		/* return address is one word higher than frame pointer */
-		bt[frame_index++] = *(fp + 1);
+		bt[frame_index++] = ret_addr;
 
 		/* stacks grow down; backtracing should be moving to higher addresses */
 		if (next_fp <= fp) {
@@ -218,7 +219,7 @@ backtrace_interrupted(uintptr_t *bt, uint32_t max_frames)
 		return 1;
 	}
 
-	return backtrace_frame(bt + 1, max_frames - 1, (void *)fp);
+	return backtrace_frame(bt + 1, max_frames - 1, (void *)fp) + 1;
 }
 
 int
@@ -235,15 +236,10 @@ backtrace_thread_user(void *thread, uintptr_t *bt, uint32_t max_frames,
 {
 	bool user_64;
 	uintptr_t pc, fp, next_fp;
-	vm_map_t map, old_map;
+	vm_map_t map = NULL, old_map = NULL;
 	uint32_t frame_index = 0;
 	int err = 0;
 	size_t frame_size;
-
-	assert(ml_get_interrupts_enabled() == TRUE);
-	if (!ml_get_interrupts_enabled()) {
-		return EINVAL;
-	}
 
 	assert(bt != NULL);
 	assert(max_frames > 0);
@@ -302,15 +298,23 @@ backtrace_thread_user(void *thread, uintptr_t *bt, uint32_t max_frames,
 #error "backtrace_thread_user: unsupported architecture"
 #endif /* !defined(__arm__) */
 
-	/* switch to the correct map, for copyin */
-	if (thread != current_thread()) {
-		map = get_task_map_reference(get_threadtask(thread));
-		if (map == NULL) {
-			return EINVAL;
-		}
-		old_map = vm_map_switch(map);
-	} else {
-		map = NULL;
+	if (max_frames == 0) {
+		goto out;
+	}
+
+	bt[frame_index++] = pc;
+
+	if (frame_index >= max_frames) {
+		goto out;
+	}
+
+	if (INVALID_USER_FP(fp)) {
+		goto out;
+	}
+
+	assert(ml_get_interrupts_enabled() == TRUE);
+	if (!ml_get_interrupts_enabled()) {
+		return EINVAL;
 	}
 
 	union {
@@ -323,12 +327,18 @@ backtrace_thread_user(void *thread, uintptr_t *bt, uint32_t max_frames,
 			uint32_t ret;
 		} u32;
 	} frame;
+
 	frame_size = 2 * (user_64 ? sizeof(uint64_t) : sizeof(uint32_t));
 
-	bt[frame_index++] = pc;
-
-	if (INVALID_USER_FP(fp)) {
-		goto out;
+	/* switch to the correct map, for copyin */
+	if (thread != current_thread()) {
+		map = get_task_map_reference(get_threadtask(thread));
+		if (map == NULL) {
+			return EINVAL;
+		}
+		old_map = vm_map_switch(map);
+	} else {
+		map = NULL;
 	}
 
 	while (fp != 0 && frame_index < max_frames) {
@@ -343,7 +353,8 @@ backtrace_thread_user(void *thread, uintptr_t *bt, uint32_t max_frames,
 			break;
 		}
 
-		bt[frame_index++] = user_64 ? frame.u64.ret : frame.u32.ret;
+		uintptr_t ret_addr = user_64 ? frame.u64.ret : frame.u32.ret;
+		bt[frame_index++] = ret_addr;
 
 		/* stacks grow down; backtracing should be moving to higher addresses */
 		if (next_fp <= fp) {

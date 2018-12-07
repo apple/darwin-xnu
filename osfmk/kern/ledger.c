@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2010-2018 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -45,6 +45,8 @@
 #include <libkern/OSAtomic.h>
 #include <mach/mach_types.h>
 #include <os/overflow.h>
+
+#include <vm/pmap.h>
 
 /*
  * Ledger entry flags. Bits in second nibble (masked by 0xF0) are used for
@@ -113,6 +115,7 @@ struct ledger_template {
 	volatile uint32_t	lt_inuse;
 	lck_mtx_t		lt_lock;
 	zone_t			lt_zone;
+	bool			lt_initialized;
 	struct entry_template	*lt_entries;
 };
 
@@ -129,47 +132,6 @@ struct ledger_template {
 	(t)->lt_inuse = 0;					\
 	splx(s);						\
 }
-
-/*
- * Use NTOCKS "tocks" to track the rolling maximum balance of a ledger entry.
- */
-#define	NTOCKS 1
-/*
- * The explicit alignment is to ensure that atomic operations don't panic
- * on ARM.
- */
-struct ledger_entry {
-        volatile uint32_t               le_flags;
-        ledger_amount_t                 le_limit;
-        ledger_amount_t                 le_warn_level;
-        volatile ledger_amount_t        le_credit __attribute__((aligned(8)));
-        volatile ledger_amount_t        le_debit  __attribute__((aligned(8)));
-	union {
-		struct {
-			/*
-			 * XXX - the following two fields can go away if we move all of
-			 * the refill logic into process policy
-			 */
-			uint64_t	le_refill_period;
-			uint64_t	le_last_refill;
-		} le_refill;
-		struct _le_maxtracking {
-			struct _le_peak {
-				uint32_t	le_max;  /* Lower 32-bits of observed max balance */
-				uint32_t	le_time; /* time when this peak was observed */
-			} le_peaks[NTOCKS];
-			ledger_amount_t    le_lifetime_max; /* greatest peak ever observed */
-		} le_maxtracking;
-	} _le;
-} __attribute__((aligned(8)));
-
-struct ledger {
-	uint64_t		l_id;
-	int32_t			l_refs;
-	int32_t			l_size;
-	struct ledger_template	*l_template;
-	struct ledger_entry	l_entries[0] __attribute__((aligned(8)));
-};
 
 static int ledger_cnt = 0;
 /* ledger ast helper functions */
@@ -366,6 +328,22 @@ ledger_template_complete(ledger_template_t template)
 	template->lt_zone = zinit(ledger_size, CONFIG_TASK_MAX * ledger_size,
 	                       ledger_size,
 	                       template->lt_name);
+	template->lt_initialized = true;
+}
+
+/*
+ * Like ledger_template_complete, except we'll ask
+ * the pmap layer to manage allocations for us.
+ * Meant for ledgers that should be owned by the
+ * pmap layer.
+ */
+void
+ledger_template_complete_secure_alloc(ledger_template_t template)
+{
+	size_t ledger_size;
+	ledger_size = sizeof(struct ledger) + (template->lt_cnt * sizeof(struct ledger_entry));
+	pmap_ledger_alloc_init(ledger_size);
+	template->lt_initialized = true;
 }
 
 /*
@@ -385,10 +363,14 @@ ledger_instantiate(ledger_template_t template, int entry_type)
 	template_lock(template);
 	template->lt_refs++;
 	cnt = template->lt_cnt;
-	assert(template->lt_zone);
 	template_unlock(template);
 
-	ledger = (ledger_t)zalloc(template->lt_zone);
+	if (template->lt_zone) {
+		ledger = (ledger_t)zalloc(template->lt_zone);
+	} else {
+		ledger = pmap_ledger_alloc();
+	}
+
 	if (ledger == NULL) {
 		ledger_template_dereference(template);
 		return LEDGER_NULL;
@@ -477,7 +459,11 @@ ledger_dereference(ledger_t ledger)
 
 	/* Just released the last reference.  Free it. */
 	if (v == 1) {
-		zfree(ledger->l_template->lt_zone, ledger);
+		if (ledger->l_template->lt_zone) {
+			zfree(ledger->l_template->lt_zone, ledger);
+		} else {
+			pmap_ledger_free(ledger);
+		}
 	}
 
 	return (KERN_SUCCESS);
@@ -657,74 +643,22 @@ ledger_refill(uint64_t now, ledger_t ledger, int entry)
 		ledger_limit_entry_wakeup(le);
 }
 
-/*
- * In tenths of a second, the length of one lookback period (a "tock") for
- * ledger rolling maximum calculations. The effective lookback window will be this times
- * NTOCKS.
- *
- * Use a tock length of 2.5 seconds to get a total lookback period of 5 seconds.
- *
- * XXX Could make this caller-definable, at the point that rolling max tracking
- * is enabled for the entry.
- */
-#define	TOCKLEN 25
-
-/*
- * How many sched_tick's are there in one tock (one of our lookback periods)?
- *
- *  X sched_ticks        2.5 sec      N sched_ticks
- * ---------------   =  ----------  * -------------
- *      tock               tock            sec
- *
- * where N sched_ticks/sec is calculated via 1 << SCHED_TICK_SHIFT (see sched_prim.h)
- *
- * This should give us 20 sched_tick's in one 2.5 second-long tock.
- */
-#define SCHED_TICKS_PER_TOCK ((TOCKLEN * (1 << SCHED_TICK_SHIFT)) / 10)
-
-/*
- * Rolling max timestamps use their own unit (let's call this a "tock"). One tock is the
- * length of one lookback period that we use for our rolling max calculation.
- *
- * Calculate the current time in tocks from sched_tick (which runs at a some
- * fixed rate).
- */
-#define	CURRENT_TOCKSTAMP() (sched_tick / SCHED_TICKS_PER_TOCK)
-
-/*
- * Does the given tockstamp fall in either the current or the previous tocks?
- */
-#define TOCKSTAMP_IS_STALE(now, tock) ((((now) - (tock)) < NTOCKS) ? FALSE : TRUE)
-
 void
 ledger_entry_check_new_balance(thread_t thread, ledger_t ledger,
                                int entry, struct ledger_entry *le)
 {
-	ledger_amount_t	credit, debit;
-
 	if (le->le_flags & LF_TRACKING_MAX) {
 		ledger_amount_t balance = le->le_credit - le->le_debit;
-		uint32_t now = CURRENT_TOCKSTAMP();
-		struct _le_peak *p = &le->_le.le_maxtracking.le_peaks[now % NTOCKS];
 
-		if (!TOCKSTAMP_IS_STALE(now, p->le_time) || (balance > p->le_max)) {
-			/*
-			 * The current balance is greater than the previously
-			 * observed peak for the current time block, *or* we
-			 * haven't yet recorded a peak for the current time block --
-			 * so this is our new peak.
-			 *
-			 * (We only track the lower 32-bits of a balance for rolling
-			 * max purposes.)
-			 */
-			p->le_max = (uint32_t)balance;
-			p->le_time = now;
+		if (balance > le->_le._le_max.le_lifetime_max){
+			le->_le._le_max.le_lifetime_max = balance;
 		}
 
-		struct _le_maxtracking *m = &le->_le.le_maxtracking;
-		if(balance > m->le_lifetime_max){
-			m->le_lifetime_max = balance;
+#if CONFIG_LEDGER_INTERVAL_MAX
+		if (balance > le->_le._le_max.le_interval_max) {
+			le->_le._le_max.le_interval_max = balance;
 		}
+#endif /* LEDGER_CONFIG_INTERVAL_MAX */
 	}
 
 	/* Check to see whether we're due a refill */
@@ -799,16 +733,13 @@ ledger_entry_check_new_balance(thread_t thread, ledger_t ledger,
 		}
 	}
 
-	credit = le->le_credit;
-	debit = le->le_debit;
 	if ((le->le_flags & LF_PANIC_ON_NEGATIVE) &&
-	    ((credit < debit) ||
-	     (le->le_credit < le->le_debit))) {
-		panic("ledger_entry_check_new_balance(%p,%d): negative ledger %p credit:%lld/%lld debit:%lld/%lld balance:%lld/%lld\n",
+	    (le->le_credit < le->le_debit)) {
+		panic("ledger_entry_check_new_balance(%p,%d): negative ledger %p credit:%lld debit:%lld balance:%lld\n",
 		      ledger, entry, le,
-		      credit, le->le_credit,
-		      debit, le->le_debit,
-		      credit - debit, le->le_credit - le->le_debit);
+		      le->le_credit,
+		      le->le_debit,
+		      le->le_credit - le->le_debit);
 	}
 }
 
@@ -842,7 +773,9 @@ ledger_credit_thread(thread_t thread, ledger_t ledger, int entry, ledger_amount_
 	new = old + amount;
 	lprintf(("%p Credit %lld->%lld\n", thread, old, new));
 
-	ledger_entry_check_new_balance(thread, ledger, entry, le);
+	if (thread) {
+		ledger_entry_check_new_balance(thread, ledger, entry, le);
+	}
 
 	return (KERN_SUCCESS);
 }
@@ -854,6 +787,15 @@ kern_return_t
 ledger_credit(ledger_t ledger, int entry, ledger_amount_t amount)
 {
 	return ledger_credit_thread(current_thread(), ledger, entry, amount);
+}
+
+/*
+ * Add value to an entry in a ledger; do not check balance after update.
+ */
+kern_return_t
+ledger_credit_nocheck(ledger_t ledger, int entry, ledger_amount_t amount)
+{
+	return ledger_credit_thread(NULL, ledger, entry, amount);
 }
 
 /* Add all of one ledger's values into another.
@@ -1004,41 +946,29 @@ ledger_set_limit(ledger_t ledger, int entry, ledger_amount_t limit,
 	return (KERN_SUCCESS);
 }
 
+#if CONFIG_LEDGER_INTERVAL_MAX
 kern_return_t
-ledger_get_recent_max(ledger_t ledger, int entry,
-	ledger_amount_t *max_observed_balance)
+ledger_get_interval_max(ledger_t ledger, int entry,
+        ledger_amount_t *max_interval_balance, int reset)
 {
-	struct ledger_entry	*le;
-	uint32_t		now = CURRENT_TOCKSTAMP();
-	int			i;
-
+	struct ledger_entry *le;
 	le = &ledger->l_entries[entry];
 
 	if (!ENTRY_VALID(ledger, entry) || !(le->le_flags & LF_TRACKING_MAX)) {
 		return (KERN_INVALID_VALUE);
 	}
 
-	/*
-	 * Start with the current balance; if neither of the recorded peaks are
-	 * within recent history, we use this.
-	 */
-	*max_observed_balance = le->le_credit - le->le_debit;
+	*max_interval_balance = le->_le._le_max.le_interval_max;
+	lprintf(("ledger_get_interval_max: %lld%s\n", *max_interval_balance,
+	        (reset) ? " --> 0" : ""));
 
-	for (i = 0; i < NTOCKS; i++) {
-		if (!TOCKSTAMP_IS_STALE(now, le->_le.le_maxtracking.le_peaks[i].le_time) &&
-		    (le->_le.le_maxtracking.le_peaks[i].le_max > *max_observed_balance)) {
-		    	/*
-		    	 * The peak for this time block isn't stale, and it
-		    	 * is greater than the current balance -- so use it.
-		    	 */
-		    *max_observed_balance = le->_le.le_maxtracking.le_peaks[i].le_max;
-		}
+	if (reset) {
+		le->_le._le_max.le_interval_max = 0;
 	}
-
-	lprintf(("ledger_get_maximum: %lld\n", *max_observed_balance));
 
 	return (KERN_SUCCESS);
 }
+#endif /* CONFIG_LEDGER_INTERVAL_MAX */
 
 kern_return_t
 ledger_get_lifetime_max(ledger_t ledger, int entry,
@@ -1051,7 +981,7 @@ ledger_get_lifetime_max(ledger_t ledger, int entry,
 		return (KERN_INVALID_VALUE);
 	}
 
-	*max_lifetime_balance = le->_le.le_maxtracking.le_lifetime_max;
+	*max_lifetime_balance = le->_le._le_max.le_lifetime_max;
 	lprintf(("ledger_get_lifetime_max: %lld\n", *max_lifetime_balance));
 
 	return (KERN_SUCCESS);
@@ -1318,7 +1248,9 @@ ledger_debit_thread(thread_t thread, ledger_t ledger, int entry, ledger_amount_t
 	}
 	lprintf(("%p Debit %lld->%lld\n", thread, old, new));
 
-	ledger_entry_check_new_balance(thread, ledger, entry, le);
+	if (thread) {
+		ledger_entry_check_new_balance(thread, ledger, entry, le);
+	}
 
 	return (KERN_SUCCESS);
 }
@@ -1327,6 +1259,12 @@ kern_return_t
 ledger_debit(ledger_t ledger, int entry, ledger_amount_t amount)
 {
 	return ledger_debit_thread(current_thread(), ledger, entry, amount);
+}
+
+kern_return_t
+ledger_debit_nocheck(ledger_t ledger, int entry, ledger_amount_t amount)
+{
+	return ledger_debit_thread(NULL, ledger, entry, amount);
 }
 
 void
@@ -1523,7 +1461,7 @@ ledger_perform_blocking(ledger_t l)
 		assert(!(le->le_flags & LF_TRACKING_MAX));
 
 		/* Prepare to sleep until the resource is refilled */
-		ret = assert_wait_deadline(le, TRUE,
+		ret = assert_wait_deadline(le, THREAD_INTERRUPTIBLE,
 		    le->_le.le_refill.le_last_refill + le->_le.le_refill.le_refill_period);
 		if (ret != THREAD_WAITING)
 			return(KERN_SUCCESS);
@@ -1591,6 +1529,25 @@ ledger_disable_panic_on_negative(ledger_t ledger, int entry)
 	le = &ledger->l_entries[entry];
 
 	flag_clear(&le->le_flags, LF_PANIC_ON_NEGATIVE);
+
+	return (KERN_SUCCESS);
+}
+
+kern_return_t
+ledger_get_panic_on_negative(ledger_t ledger, int entry, int *panic_on_negative)
+{
+	struct ledger_entry *le;
+
+	if (!ENTRY_VALID(ledger, entry))
+		return (KERN_INVALID_ARGUMENT);
+
+	le = &ledger->l_entries[entry];
+
+	if (le->le_flags & LF_PANIC_ON_NEGATIVE) {
+		*panic_on_negative = TRUE;
+	} else {
+		*panic_on_negative = FALSE;
+	}
 
 	return (KERN_SUCCESS);
 }

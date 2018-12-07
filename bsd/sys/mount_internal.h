@@ -222,6 +222,11 @@ struct mount {
  */
 #define MNT_DEFAULT_IOQUEUE_DEPTH	32
 
+/*
+ * mnt_ioscale value for the given ioqueue depth
+ */
+#define MNT_IOSCALE(ioqueue_depth)	((ioqueue_depth + (MNT_DEFAULT_IOQUEUE_DEPTH - 1)) / MNT_DEFAULT_IOQUEUE_DEPTH)
+
 /* mount point to which dead vps point to */
 extern struct mount * dead_mountp;
 
@@ -484,7 +489,7 @@ extern int num_trailing_0(uint64_t n);
 /* sync lock */
 extern lck_mtx_t * sync_mtx_lck;
 
-extern int sync_timeout;
+extern int sync_timeout_seconds;
 
 __END_DECLS
 

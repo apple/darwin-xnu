@@ -66,21 +66,21 @@ lowglo lowGlo __attribute__ ((aligned(PAGE_MAX_SIZE))) = {
 	.lgManualPktAddr = (uint64_t) &manual_pkt,
 #endif
 	.lgPmapMemQ = (uint64_t)&(pmap_object_store.memq),
-	.lgPmapMemPageOffset = offsetof(struct vm_page_with_ppnum, phys_page),
-	.lgPmapMemChainOffset = offsetof(struct vm_page, listq),
+	.lgPmapMemPageOffset = offsetof(struct vm_page_with_ppnum, vmp_phys_page),
+	.lgPmapMemChainOffset = offsetof(struct vm_page, vmp_listq),
 	.lgPmapMemPagesize = (uint64_t)sizeof(struct vm_page),
 	.lgPmapMemFromArrayMask = VM_PACKED_FROM_VM_PAGES_ARRAY,
 	.lgPmapMemPackedShift = VM_PACKED_POINTER_SHIFT,
 	.lgPmapMemPackedBaseAddr = VM_MIN_KERNEL_AND_KEXT_ADDRESS,
 	.lgPmapMemStartAddr = -1,
 	.lgPmapMemEndAddr = -1,
-	.lgPmapMemFirstppnum = -1
+	.lgPmapMemFirstppnum = -1,
+	.lgPageShift = ARM_PGSHIFT
 };
 
 void patch_low_glo(void)
 {
 	lowGlo.lgStext = (uint64_t)vm_kernel_stext;
-	lowGlo.lgPageShift = PAGE_SHIFT;
 }
 
 void patch_low_glo_static_region(uint64_t address, uint64_t size)
@@ -95,4 +95,5 @@ void patch_low_glo_vm_page_info(void * start_addr, void * end_addr, uint32_t fir
 	lowGlo.lgPmapMemStartAddr = (uint64_t)start_addr;
 	lowGlo.lgPmapMemEndAddr = (uint64_t)end_addr;
 	lowGlo.lgPmapMemFirstppnum = first_ppnum;
+	lowGlo.lgPageShift = PAGE_SHIFT;
 }

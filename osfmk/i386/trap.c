@@ -93,6 +93,7 @@
 #include <kern/telemetry.h>
 #endif
 #include <sys/kdebug.h>
+#include <kperf/kperf.h>
 #include <prng/random.h>
 
 #include <string.h>
@@ -140,7 +141,7 @@ thread_syscall_return(
 
 	pal_register_cache_state(thr_act, DIRTY);
 
-        if (thread_is_64bit(thr_act)) {
+        if (thread_is_64bit_addr(thr_act)) {
 	        x86_saved_state64_t	*regs;
 		
 		regs = USER_REGS64(thr_act);
@@ -211,7 +212,7 @@ user_page_fault_continue(
 	thread_t	thread = current_thread();
 	user_addr_t	vaddr;
 
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_addr(thread)) {
 		x86_saved_state64_t	*uregs;
 
 		uregs = USER_REGS64(thread);
@@ -383,7 +384,7 @@ interrupt(x86_saved_state_t *state)
 
 #if CONFIG_TELEMETRY
 	if (telemetry_needs_record) {
-		telemetry_mark_curthread(user_mode);
+		telemetry_mark_curthread(user_mode, FALSE);
 	}
 #endif
 
@@ -454,13 +455,16 @@ interrupt(x86_saved_state_t *state)
 				(long) depth, (long) VM_KERNEL_UNSLIDE(rip), 0, 0, 0);
 		}
 	}
-	
+
 	if (cnum == master_cpu)
 		ml_entropy_collect();
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-		MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END,
-		interrupt_num, 0, 0, 0, 0);
+#if KPERF
+	kperf_interrupt();
+#endif /* KPERF */
+
+	KDBG_RELEASE(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END,
+			interrupt_num);
 
 	assert(ml_get_interrupts_enabled() == FALSE);
 }
@@ -884,8 +888,8 @@ user_trap(
 	user_addr_t		rip;
 	unsigned long 		dr6 = 0; /* 32 bit for i386, 64 bit for x86_64 */
 
-	assert((is_saved_state32(saved_state) && !thread_is_64bit(thread)) ||
-	       (is_saved_state64(saved_state) &&  thread_is_64bit(thread)));
+	assert((is_saved_state32(saved_state) && !thread_is_64bit_addr(thread)) ||
+	       (is_saved_state64(saved_state) &&  thread_is_64bit_addr(thread)));
 
 	if (is_saved_state64(saved_state)) {
 	        x86_saved_state64_t	*regs;
@@ -967,7 +971,7 @@ user_trap(
 				 * because the high order bits are not
 				 * used on x86_64
 				 */
-				if (thread_is_64bit(thread)) {
+				if (thread_is_64bit_addr(thread)) {
 					x86_debug_state64_t *ids = pcb->ids;
 					ids->dr6 = dr6;
 				} else { /* 32 bit thread */
@@ -1249,11 +1253,11 @@ extern void	thread_exception_return_internal(void) __dead2;
 void thread_exception_return(void) {
 	thread_t thread = current_thread();
 	ml_set_interrupts_enabled(FALSE);
-	if (thread_is_64bit(thread) != task_has_64BitAddr(thread->task)) {
-		panic("Task/thread bitness mismatch %p %p, task: %d, thread: %d", thread, thread->task, thread_is_64bit(thread),  task_has_64BitAddr(thread->task));
+	if (thread_is_64bit_addr(thread) != task_has_64Bit_addr(thread->task)) {
+		panic("Task/thread bitness mismatch %p %p, task: %d, thread: %d", thread, thread->task, thread_is_64bit_addr(thread),  task_has_64Bit_addr(thread->task));
 	}
 
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_addr(thread)) {
 		if ((gdt_desc_p(USER64_CS)->access & ACC_PL_U) == 0) {
 			panic("64-GDT mismatch %p, descriptor: %p", thread, gdt_desc_p(USER64_CS));
 		}

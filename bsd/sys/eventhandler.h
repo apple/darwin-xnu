@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -131,8 +131,7 @@ typedef struct eventhandler_entry	*eventhandler_tag;
 			EHL_LOCK_SPIN((list));				\
 		}							\
 	}								\
-	KASSERT((list)->el_runcount > 0,				\
-	    ("eventhandler_invoke: runcount underflow"));		\
+	VERIFY((list)->el_runcount > 0);				\
 	(list)->el_runcount--;						\
 	if ((list)->el_runcount == 0) {					\
 		EHL_LOCK_CONVERT((list));				\

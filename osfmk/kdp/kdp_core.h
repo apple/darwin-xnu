@@ -156,6 +156,7 @@ void kern_collectth_state_size(uint64_t * tstate_count, uint64_t * tstate_size);
 void kern_collectth_state(thread_t thread, void *buffer, uint64_t size, void **iter);
 
 boolean_t kdp_has_polled_corefile(void);
+kern_return_t kdp_polled_corefile_error(void);
 
 void kdp_core_init(void);
 

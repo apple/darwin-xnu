@@ -107,17 +107,14 @@
 #include <kern/task.h>
 #include <kern/ast.h>
 #include <kern/kalloc.h>
-#include <mach/mach_host.h>
+#include <kern/ux_handler.h>            /* for ux_handler_setup() */
 
 #include <mach/vm_param.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 
-#include <sys/ux_exception.h>	/* for ux_exception_port */
-
 #include <sys/reboot.h>
-#include <mach/exception_types.h>
 #include <dev/busvar.h>			/* for pseudo_inits */
 #include <sys/kdebug.h>
 #include <sys/monotonic.h>
@@ -130,8 +127,6 @@
 #include <kern/clock.h>
 #include <mach/kern_return.h>
 #include <mach/thread_act.h>		/* for thread_resume() */
-#include <mach/task.h>			/* for task_set_exception_ports() */
-#include <sys/ux_exception.h>		/* for ux_handler() */
 #include <sys/ubc_internal.h>		/* for ubc_init() */
 #include <sys/mcache.h>			/* for mcache_init() */
 #include <sys/mbuf.h>			/* for mbinit() */
@@ -151,8 +146,6 @@
 #include <net/if_gif.h>			/* for gif_init() */
 #include <vm/vm_protos.h>		/* for vnode_pager_bootstrap() */
 #include <miscfs/devfs/devfsdefs.h>	/* for devfs_kernel_mount() */
-#include <mach/host_priv.h>		/* for host_set_exception_ports() */
-#include <kern/host.h>			/* for host_priv_self() */
 #include <vm/vm_kern.h>			/* for kmem_suballoc() */
 #include <sys/semaphore.h>		/* for psem_lock_init() */
 #include <sys/msgbuf.h>			/* for log_setsize() */
@@ -201,6 +194,9 @@
 #include <machine/pal_routines.h>
 #include <console/video_console.h>
 
+#if CONFIG_XNUPOST
+#include <tests/xnupost.h>
+#endif
 
 void * get_user_regs(thread_t);		/* XXX kludge for <machine/thread.h> */
 void IOKitInitializeTime(void);		/* XXX */
@@ -403,6 +399,10 @@ lck_attr_t * proc_lck_attr;
 lck_mtx_t * proc_list_mlock;
 lck_mtx_t * proc_klist_mlock;
 
+#if CONFIG_XNUPOST
+lck_grp_t * sysctl_debug_test_stackshot_owner_grp;
+lck_mtx_t * sysctl_debug_test_stackshot_owner_init_mtx;
+#endif /* !CONFIG_XNUPOST */
 
 extern lck_mtx_t * execargs_cache_lock;
 
@@ -500,6 +500,12 @@ bsd_init(void)
 #endif
 	proc_kqhashlock_grp = lck_grp_alloc_init("proc-kqhashlock",  proc_lck_grp_attr);
 	proc_knhashlock_grp = lck_grp_alloc_init("proc-knhashlock",  proc_lck_grp_attr);
+#if CONFIG_XNUPOST
+	sysctl_debug_test_stackshot_owner_grp = lck_grp_alloc_init("test-stackshot-owner-grp", LCK_GRP_ATTR_NULL);
+	sysctl_debug_test_stackshot_owner_init_mtx = lck_mtx_alloc_init(
+							sysctl_debug_test_stackshot_owner_grp, 
+							LCK_ATTR_NULL);
+#endif /* !CONFIG_XNUPOST */
 	/* Allocate proc lock attribute */
 	proc_lck_attr = lck_attr_alloc_init();
 #if 0
@@ -553,9 +559,6 @@ bsd_init(void)
 #endif
 #endif /* MAC */
 
-	/* Initialize System Override call */
-	init_system_override();
-	
 	ulock_initialize();
 
 	/*
@@ -1051,6 +1054,9 @@ bsd_init(void)
 	consider_zone_gc(FALSE);
 #endif
 
+	/* Initialize System Override call */
+	init_system_override();
+	
 	bsd_init_kprintf("done\n");
 }
 
@@ -1058,21 +1064,11 @@ void
 bsdinit_task(void)
 {
 	proc_t p = current_proc();
-	struct uthread *ut;
-	thread_t thread;
 
 	process_name("init", p);
 
-	ux_handler_init();
-
-	thread = current_thread();
-	(void) host_set_exception_ports(host_priv_self(),
-					EXC_MASK_ALL & ~(EXC_MASK_RPC_ALERT),//pilotfish (shark) needs this port
-					(mach_port_t) ux_exception_port,
-					EXCEPTION_DEFAULT| MACH_EXCEPTION_CODES,
-					0);
-
-	ut = (uthread_t)get_bsdthread_info(thread);
+	/* Set up exception-to-signal reflection */
+	ux_handler_setup();
 
 #if CONFIG_MACF
 	mac_cred_label_associate_user(p->p_ucred);
@@ -1080,6 +1076,13 @@ bsdinit_task(void)
 
     vm_init_before_launchd();
 
+#if CONFIG_XNUPOST
+	int result = bsd_list_tests();
+	result = bsd_do_post();
+	if (result != 0) {
+		panic("bsd_do_post: Tests failed with result = 0x%08x\n", result);
+	}
+#endif
 
 	bsd_init_kprintf("bsd_do_post - done");
 

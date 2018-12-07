@@ -39,6 +39,11 @@
 
 #include <sys/cdefs.h>
 
+#ifdef XNU_KERNEL_PRIVATE
+/* priority queue static asserts fail for __ARM64_ARCH_8_32__ kext builds */
+#include <kern/priority_queue.h>
+#endif /* XNU_KERNEL_PRIVATE */
+
 /*
  * Constants and types used in the waitq APIs
  */
@@ -102,13 +107,12 @@ jenkins_hash(char *key, size_t length)
 
 #include <kern/spl.h>
 #include <kern/simple_lock.h>
-#include <mach/branch_predicates.h>
 
 #include <machine/cpu_number.h>
 #include <machine/machine_routines.h> /* machine_timeout_suspended() */
 
 /*
- * The event mask is of 59 bits on 64 bit architeture and 27 bits on
+ * The event mask is of 57 bits on 64 bit architeture and 25 bits on
  * 32 bit architecture and so we calculate its size using sizeof(long).
  * If the bitfield for wq_type and wq_fifo is changed, then value of
  * EVENT_MASK_BITS will also change.
@@ -116,9 +120,8 @@ jenkins_hash(char *key, size_t length)
  * New plan: this is an optimization anyway, so I'm stealing 32bits
  * from the mask to shrink the waitq object even further.
  */
-#define _EVENT_MASK_BITS   ((sizeof(uint32_t) * 8) - 6)
+#define _EVENT_MASK_BITS   ((sizeof(uint32_t) * 8) - 7)
 
-#define WAITQ_BOOST_PRIORITY 31
 
 enum waitq_type {
 	WQT_INVALID = 0,
@@ -162,6 +165,7 @@ struct waitq {
 		waitq_prepost:1, /* waitq supports prepost? */
 		waitq_irq:1,     /* waitq requires interrupts disabled */
 		waitq_isvalid:1, /* waitq structure is valid */
+		waitq_turnstile_or_port:1, /* waitq is embedded in a turnstile (if irq safe), or port (if not irq safe) */
 		waitq_eventmask:_EVENT_MASK_BITS;
 		/* the wait queue set (set-of-sets) to which this queue belongs */
 #if __arm64__
@@ -172,7 +176,10 @@ struct waitq {
 
 	uint64_t waitq_set_id;
 	uint64_t waitq_prepost_id;
-	queue_head_t	waitq_queue;		/* queue of elements */
+	union {
+		queue_head_t            waitq_queue;		/* queue of elements */
+		struct priority_queue   waitq_prio_queue;	/* priority ordered queue of elements */
+	};
 };
 
 static_assert(sizeof(struct waitq) == WQ_OPAQUE_SIZE, "waitq structure size mismatch");
@@ -192,6 +199,7 @@ struct waitq_set {
 	};
 };
 
+#define WQSET_NOT_LINKED ((uint64_t)(~0))
 static_assert(sizeof(struct waitq_set) == WQS_OPAQUE_SIZE, "waitq_set structure size mismatch");
 static_assert(__alignof(struct waitq_set) == WQS_OPAQUE_ALIGN, "waitq_set structure alignment mismatch");
 
@@ -200,6 +208,12 @@ extern void waitq_bootstrap(void);
 #define waitq_is_queue(wq) \
 	((wq)->waitq_type == WQT_QUEUE)
 
+#define waitq_is_turnstile_queue(wq) \
+	(((wq)->waitq_irq) && (wq)->waitq_turnstile_or_port)
+
+#define waitq_is_port_queue(wq) \
+	(!((wq)->waitq_irq) && (wq)->waitq_turnstile_or_port)
+
 #define waitq_is_set(wq) \
 	((wq)->waitq_type == WQT_SET && ((struct waitq_set *)(wq))->wqset_id != 0)
 
@@ -207,7 +221,10 @@ extern void waitq_bootstrap(void);
 	(((wqs)->wqset_q.waitq_type == WQT_SET) && ((wqs)->wqset_id != 0))
 
 #define waitq_valid(wq) \
-	((wq) != NULL && (wq)->waitq_isvalid && ((wq)->waitq_type & ~1) == WQT_QUEUE)
+	((wq) != NULL && (wq)->waitq_isvalid)
+
+#define waitqs_is_linked(wqs) \
+	(((wqs)->wqset_id != WQSET_NOT_LINKED) && ((wqs)->wqset_id != 0))
 
 /*
  * Invalidate a waitq. The only valid waitq functions to call after this are:
@@ -216,8 +233,14 @@ extern void waitq_bootstrap(void);
  */
 extern void waitq_invalidate_locked(struct waitq *wq);
 
-#define waitq_empty(wq) \
-	(queue_empty(&(wq)->waitq_queue))
+static inline boolean_t waitq_empty(struct waitq *wq)
+{
+	if (waitq_is_turnstile_queue(wq)) {
+		return priority_queue_empty(&(wq->waitq_prio_queue));
+	} else {
+		return queue_empty(&(wq->waitq_queue));
+	}
+}
 
 #if __arm64__
 
@@ -400,6 +423,7 @@ extern void waitq_set_deinit(struct waitq_set *wqset);
 extern kern_return_t waitq_set_free(struct waitq_set *wqset);
 
 #if DEVELOPMENT || DEBUG
+extern int sysctl_helper_waitq_set_nelem(void);
 #if CONFIG_WAITQ_DEBUG
 extern uint64_t wqset_id(struct waitq_set *wqset);
 
@@ -412,6 +436,8 @@ struct waitq *wqset_waitq(struct waitq_set *wqset);
  * set membership
  */
 extern uint64_t waitq_link_reserve(struct waitq *waitq);
+extern void waitq_set_lazy_init_link(struct waitq_set *wqset);
+extern boolean_t waitq_set_should_lazy_init_link(struct waitq_set *wqset);
 
 extern void waitq_link_release(uint64_t id);
 
@@ -457,6 +483,8 @@ extern int waitq_set_is_valid(struct waitq_set *wqset);
 extern int waitq_is_global(struct waitq *waitq);
 
 extern int waitq_irq_safe(struct waitq *waitq);
+
+extern struct waitq * waitq_get_safeq(struct waitq *waitq);
 
 #if CONFIG_WAITQ_STATS
 /*

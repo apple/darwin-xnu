@@ -3044,6 +3044,9 @@ nstat_sysinfo_send_data_internal(
 			nstat_set_keyval_scalar(&kv[i++],
 			    NSTAT_SYSINFO_MPTCP_CELL_PROXY,
 			    data->u.tcp_stats.mptcp_cell_proxy);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_MPTCP_TRIGGERED_CELL,
+			    data->u.tcp_stats.mptcp_triggered_cell);
 			VERIFY(i == nkeyvals);
 			break;
 		}
@@ -5104,5 +5107,99 @@ nstat_control_send(
 
 	return result;
 }
+
+
+static int
+tcp_progress_indicators_for_interface(unsigned int ifindex, uint64_t recentflow_maxduration, struct xtcpprogress_indicators *indicators)
+{
+	int error = 0;
+	struct inpcb *inp;
+	uint64_t min_recent_start_time;
+
+	min_recent_start_time = mach_continuous_time() - recentflow_maxduration;
+	bzero(indicators, sizeof(*indicators));
+
+	lck_rw_lock_shared(tcbinfo.ipi_lock);
+	/*
+	 * For progress indicators we don't need to special case TCP to collect time wait connections
+	 */
+	LIST_FOREACH(inp, tcbinfo.ipi_listhead, inp_list)
+	{
+		struct tcpcb  *tp = intotcpcb(inp);
+		if (tp && inp->inp_last_outifp &&
+			inp->inp_last_outifp->if_index == ifindex &&
+			inp->inp_state != INPCB_STATE_DEAD &&
+			!(tp->t_flags & TF_LOCAL))
+		{
+			struct tcp_conn_status connstatus;
+			indicators->xp_numflows++;
+			tcp_get_connectivity_status(tp, &connstatus);
+			if (connstatus.write_probe_failed)
+				indicators->xp_write_probe_fails++;
+			if (connstatus.read_probe_failed)
+				indicators->xp_read_probe_fails++;
+			if (connstatus.conn_probe_failed)
+				indicators->xp_conn_probe_fails++;
+			if (inp->inp_start_timestamp > min_recent_start_time)
+			{
+				uint64_t flow_count;
+
+				indicators->xp_recentflows++;
+				atomic_get_64(flow_count, &inp->inp_stat->rxbytes);
+				indicators->xp_recentflows_rxbytes += flow_count;
+				atomic_get_64(flow_count, &inp->inp_stat->txbytes);
+				indicators->xp_recentflows_txbytes += flow_count;
+
+				indicators->xp_recentflows_rxooo += tp->t_stat.rxoutoforderbytes;
+				indicators->xp_recentflows_rxdup += tp->t_stat.rxduplicatebytes;
+				indicators->xp_recentflows_retx += tp->t_stat.txretransmitbytes;
+				if (tp->snd_max - tp->snd_una)
+				{
+					indicators->xp_recentflows_unacked++;
+				}
+			}
+		}
+	}
+	lck_rw_done(tcbinfo.ipi_lock);
+
+	return (error);
+}
+
+
+__private_extern__ int
+ntstat_tcp_progress_indicators(struct sysctl_req *req)
+{
+	struct xtcpprogress_indicators indicators = {};
+	int error = 0;
+	struct tcpprogressreq requested;
+
+	if (priv_check_cred(kauth_cred_get(), PRIV_NET_PRIVILEGED_NETWORK_STATISTICS, 0) != 0)
+	{
+		return EACCES;
+	}
+	if (req->newptr == USER_ADDR_NULL)
+	{
+		return EINVAL;
+	}
+	if (req->newlen < sizeof(req))
+	{
+		return EINVAL;
+	}
+	error = SYSCTL_IN(req, &requested, sizeof(requested));
+	if (error != 0)
+	{
+		return error;
+	}
+	error = tcp_progress_indicators_for_interface(requested.ifindex, requested.recentflow_maxduration, &indicators);
+	if (error != 0)
+	{
+		return error;
+	}
+	error = SYSCTL_OUT(req, &indicators, sizeof(indicators));
+
+	return (error);
+}
+
+
 
 

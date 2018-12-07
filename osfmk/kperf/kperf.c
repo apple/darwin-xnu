@@ -38,6 +38,7 @@
 #include <kperf/kdebug_trigger.h>
 #include <kperf/kperf.h>
 #include <kperf/kperf_timer.h>
+#include <kperf/lazy.h>
 #include <kperf/pet.h>
 #include <kperf/sample.h>
 
@@ -61,6 +62,9 @@ static boolean_t kperf_initted = FALSE;
 
 /* whether or not to callback to kperf on context switch */
 boolean_t kperf_on_cpu_active = FALSE;
+
+unsigned int kperf_thread_blocked_action;
+unsigned int kperf_cpu_sample_action;
 
 struct kperf_sample *
 kperf_intr_sample_buffer(void)
@@ -140,6 +144,7 @@ kperf_reset(void)
 	(void)kperf_sampling_disable();
 
 	/* cleanup miscellaneous configuration first */
+	kperf_lazy_reset();
 	(void)kperf_kdbg_cswitch_set(0);
 	(void)kperf_set_lightweight_pet(0);
 	kperf_kdebug_reset();
@@ -209,12 +214,17 @@ kperf_kernel_configure(const char *config)
 		}
 	} while (*(config++) == ',');
 
-	kperf_sampling_enable();
+	int error = kperf_sampling_enable();
+	if (error) {
+		kprintf("kperf: cannot enable sampling at boot: %d", error);
+	}
 
 out:
 	ktrace_end_single_threaded();
 }
 
+void kperf_on_cpu_internal(thread_t thread, thread_continue_t continuation,
+		uintptr_t *starting_fp);
 void
 kperf_on_cpu_internal(thread_t thread, thread_continue_t continuation,
                       uintptr_t *starting_fp)
@@ -222,11 +232,13 @@ kperf_on_cpu_internal(thread_t thread, thread_continue_t continuation,
 	if (kperf_kdebug_cswitch) {
 		/* trace the new thread's PID for Instruments */
 		int pid = task_pid(get_threadtask(thread));
-
 		BUF_DATA(PERF_TI_CSWITCH, thread_tid(thread), pid);
 	}
 	if (kperf_lightweight_pet_active) {
 		kperf_pet_on_cpu(thread, continuation, starting_fp);
+	}
+	if (kperf_lazy_wait_action != 0) {
+		kperf_lazy_wait_sample(thread, continuation, starting_fp);
 	}
 }
 
@@ -234,7 +246,8 @@ void
 kperf_on_cpu_update(void)
 {
 	kperf_on_cpu_active = kperf_kdebug_cswitch ||
-	                      kperf_lightweight_pet_active;
+	                      kperf_lightweight_pet_active ||
+	                      kperf_lazy_wait_action != 0;
 }
 
 /* random misc-ish functions */
@@ -321,21 +334,16 @@ kperf_thread_set_dirty(thread_t thread, boolean_t dirty)
 int
 kperf_port_to_pid(mach_port_name_t portname)
 {
-	task_t task;
-	int pid;
-
 	if (!MACH_PORT_VALID(portname)) {
 		return -1;
 	}
 
-	task = port_name_to_task(portname);
-
+	task_t task = port_name_to_task(portname);
 	if (task == TASK_NULL) {
 		return -1;
 	}
-
-	pid = task_pid(task);
-
+	pid_t pid = task_pid(task);
+	/* drop the ref taken by port_name_to_task */
 	task_deallocate_internal(task);
 
 	return pid;

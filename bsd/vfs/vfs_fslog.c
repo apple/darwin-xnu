@@ -75,7 +75,7 @@ fslog_extmod_msgtracer(proc_t caller, proc_t target)
 		strlcat(c_name, "(", sizeof(c_name));
 		strlcat(c_name, uuidstr, sizeof(c_name));
 		strlcat(c_name, ")", sizeof(c_name));
-		if (0 != escape_str(c_name, strlen(c_name), sizeof(c_name))) {
+		if (0 != escape_str(c_name, strlen(c_name) + 1, sizeof(c_name))) {
 			return;
 		}
 
@@ -84,7 +84,7 @@ fslog_extmod_msgtracer(proc_t caller, proc_t target)
 		strlcat(t_name, "(", sizeof(t_name));
 		strlcat(t_name, uuidstr, sizeof(t_name));
 		strlcat(t_name, ")", sizeof(t_name));
-		if (0 != escape_str(t_name, strlen(t_name), sizeof(t_name))) {
+		if (0 != escape_str(t_name, strlen(t_name) + 1, sizeof(t_name))) {
 			return;
 		}
 #if DEBUG

@@ -114,6 +114,7 @@ kernel_trap(semaphore_wait_signal_trap,-37,2)
 kernel_trap(semaphore_timedwait_trap,-38,3)
 kernel_trap(semaphore_timedwait_signal_trap,-39,4)
 
+kernel_trap(_kernelrpc_mach_port_get_attributes_trap,-40,5)
 kernel_trap(_kernelrpc_mach_port_guard_trap,-41,5)
 kernel_trap(_kernelrpc_mach_port_unguard_trap,-42,4)
 kernel_trap(mach_generate_activity_id, -43, 3)

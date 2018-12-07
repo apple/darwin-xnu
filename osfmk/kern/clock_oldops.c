@@ -159,6 +159,19 @@ SECURITY_READ_ONLY_EARLY(struct clock_ops) calend_ops = {
 };
 
 /*
+ * List of clock devices.
+ */
+SECURITY_READ_ONLY_LATE(struct	clock) clock_list[] = {
+
+	/* SYSTEM_CLOCK */
+	{ &sysclk_ops, 0, 0 },
+
+	/* CALENDAR_CLOCK */
+	{ &calend_ops, 0, 0 }
+};
+int	clock_count = sizeof(clock_list) / sizeof(clock_list[0]);
+
+/*
  *	Macros to lock/unlock clock system.
  */
 #define LOCK_ALARM(s)			\

@@ -545,3 +545,51 @@ mach_port_kernel_object(
 	return kr;
 }
 #endif /* MACH_IPC_DEBUG */
+
+#if (DEVELOPMENT || DEBUG)
+kern_return_t
+mach_port_special_reply_port_reset_link(
+	ipc_space_t             space,
+	mach_port_name_t        name,
+	boolean_t 		*srp_lost_link)
+{
+	ipc_port_t port;
+	kern_return_t kr;
+	thread_t thread = current_thread();
+
+	if (space != current_space())
+		return KERN_INVALID_TASK;
+
+	if (!MACH_PORT_VALID(name))
+		return KERN_INVALID_NAME;
+
+	if (!IP_VALID(thread->ith_special_reply_port))
+		return KERN_INVALID_VALUE;
+
+	kr = ipc_port_translate_receive(space, name, &port);
+	if (kr != KERN_SUCCESS)
+		return kr;
+
+	if (thread->ith_special_reply_port != port) {
+		ip_unlock(port);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	imq_lock(&port->ip_messages);
+	*srp_lost_link = (port->ip_srp_lost_link == 1)? TRUE : FALSE;
+	port->ip_srp_lost_link = 0;
+	imq_unlock(&port->ip_messages);
+
+	ip_unlock(port);
+	return KERN_SUCCESS;
+}
+#else
+kern_return_t
+mach_port_special_reply_port_reset_link(
+	__unused ipc_space_t		space,
+	__unused mach_port_name_t	name,
+	__unused boolean_t		*srp_lost_link)
+{
+	return KERN_NOT_SUPPORTED;
+}
+#endif

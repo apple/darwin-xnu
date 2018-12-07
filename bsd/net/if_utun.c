@@ -1285,6 +1285,12 @@ utun_enable_channel(struct utun_pcb *pcb, struct proc *proc)
 	struct kern_pbufpool_init pp_init;
 	errno_t result;
 
+	kauth_cred_t cred = kauth_cred_get();
+	result = priv_check_cred(cred, PRIV_SKYWALK_REGISTER_KERNEL_PIPE, 0);
+	if (result) {
+		return result;
+	}
+
 	result = utun_register_kernel_pipe_nexus();
 	if (result) {
 		return result;
@@ -2488,6 +2494,12 @@ utun_demux(__unused ifnet_t interface,
 		   __unused char *frame_header,
 		   protocol_family_t *protocol)
 {
+#if UTUN_NEXUS
+	struct utun_pcb	*pcb = ifnet_softc(interface);
+	struct ip *ip;
+	u_int ip_version;
+#endif
+
 	while (data != NULL && mbuf_len(data) < 1) {
 		data = mbuf_next(data);
 	}
@@ -2497,10 +2509,6 @@ utun_demux(__unused ifnet_t interface,
 	}
 
 #if UTUN_NEXUS
-	struct utun_pcb	*pcb = ifnet_softc(interface);
-	struct ip *ip;
-	u_int ip_version;
-
 	if (pcb->utun_use_netif) {
 		ip = mtod(data, struct ip *);
 		ip_version = ip->ip_v;
@@ -2538,14 +2546,14 @@ utun_framer(ifnet_t interface,
 	VERIFY(interface == pcb->utun_ifp);
 
 	u_int32_t header_length = UTUN_HEADER_SIZE(pcb);
-    if (mbuf_prepend(packet, header_length, MBUF_DONTWAIT) != 0) {
+	if (mbuf_prepend(packet, header_length, MBUF_DONTWAIT) != 0) {
 		printf("utun_framer - ifnet_output prepend failed\n");
 
 		ifnet_stat_increment_out(interface, 0, 0, 1);
 
 		// just	return, because the buffer was freed in mbuf_prepend
-        return EJUSTRETURN;	
-    }
+		return EJUSTRETURN;	
+	}
 	if (prepend_len != NULL) {
 		*prepend_len = header_length;
 	}
@@ -2553,8 +2561,8 @@ utun_framer(ifnet_t interface,
 		*postpend_len = 0;
 	}
 	
-    // place protocol number at the beginning of the mbuf
-    *(protocol_family_t *)mbuf_data(*packet) = *(protocol_family_t *)(uintptr_t)(size_t)frame_type;
+	// place protocol number at the beginning of the mbuf
+	*(protocol_family_t *)mbuf_data(*packet) = *(protocol_family_t *)(uintptr_t)(size_t)frame_type;
 
 
     return 0;
@@ -2590,12 +2598,14 @@ utun_ioctl(ifnet_t interface,
 		   u_long command,
 		   void *data)
 {
+#if UTUN_NEXUS
+	struct utun_pcb	*pcb = ifnet_softc(interface);
+#endif
 	errno_t	result = 0;
-
+	
 	switch(command) {
 		case SIOCSIFMTU: {
 #if UTUN_NEXUS
-			struct utun_pcb	*pcb = ifnet_softc(interface);
 			if (pcb->utun_use_netif) {
 				// Make sure we can fit packets in the channel buffers
 				// Allow for the headroom in the slot

@@ -293,11 +293,11 @@ ntp_gettime(struct proc *p, struct ntp_gettime_args *uap, __unused int32_t *retv
 }
 
 int
-ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, __unused int32_t *retval)
+ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, int32_t *retval)
 {
-	struct timex ntv;
+	struct timex ntv = {};
 	long freq;
-	int modes;
+	unsigned int modes;
 	int error, ret = 0;
 	clock_sec_t sec;
 	clock_usec_t microsecs;
@@ -334,7 +334,7 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, __unused int32_t *retv
 
 #if DEVELOPEMNT || DEBUG
 	if (g_should_log_clock_adjustments) {
-		os_log(OS_LOG_DEFAULT, "%s:BEFORE modes %u offset %ld freq %ld status %d constant %ld time_adjtime %lld\n",
+		os_log(OS_LOG_DEFAULT, "%s: BEFORE modes %u offset %ld freq %ld status %d constant %ld time_adjtime %lld\n",
 		       __func__, ntv.modes, ntv.offset, ntv.freq, ntv.status, ntv.constant, time_adjtime);
 	}
 #endif
@@ -429,8 +429,8 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, __unused int32_t *retv
 
 #if DEVELOPEMNT || DEBUG
 	if (g_should_log_clock_adjustments) {
-		os_log(OS_LOG_DEFAULT, "%s:AFTER offset %lld freq %lld status %d constant %ld time_adjtime %lld\n",
-		       __func__, time_offset, time_freq, time_status, time_constant, time_adjtime);
+		os_log(OS_LOG_DEFAULT, "%s: AFTER modes %u offset %lld freq %lld status %d constant %ld time_adjtime %lld\n",
+		       __func__, modes, time_offset, time_freq, time_status, time_constant, time_adjtime);
 	}
 #endif
 
@@ -441,6 +441,7 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, __unused int32_t *retv
 	if (IS_64BIT_PROCESS(p)) {
 		struct user64_timex user_ntv = {};
 
+		user_ntv.modes = modes;
 		if (time_status & STA_NANO)
 			user_ntv.offset = L_GINT(time_offset);
 		else
@@ -465,6 +466,7 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, __unused int32_t *retv
 	else{
 		struct user32_timex user_ntv = {};
 
+		user_ntv.modes = modes;
 		if (time_status & STA_NANO)
 			user_ntv.offset = L_GINT(time_offset);
 		else

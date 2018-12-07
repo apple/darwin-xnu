@@ -583,7 +583,14 @@ kpc_set_period_arch( struct kpc_config_remote *mp_config )
 void
 kpc_arch_init(void)
 {
-	/* No-op */
+	i386_cpu_info_t *info = cpuid_info();
+	uint8_t version_id = info->cpuid_arch_perf_leaf.version;
+	/*
+	 * kpc only supports Intel PMU versions 2 and above.
+	 */
+	if (version_id < 2) {
+		kpc_supported = false;
+	}
 }
 
 uint32_t

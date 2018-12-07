@@ -17,6 +17,13 @@
 #include <kern/debug.h>
 #include <libkern/section_keywords.h>
 
+#if defined __arm__
+#include <pexpert/arm/board_config.h>
+#elif defined __arm64__
+#include <pexpert/arm64/board_config.h>
+#endif
+
+
 /* extern references */
 extern void     pe_identify_machine(boot_args *bootArgs);
 
@@ -24,7 +31,7 @@ extern void     pe_identify_machine(boot_args *bootArgs);
 static void	pe_prepare_images(void);
 
 /* private globals */
-PE_state_t      PE_state;
+SECURITY_READ_ONLY_LATE(PE_state_t) PE_state;
 #define FW_VERS_LEN 128
 char            firmware_version[FW_VERS_LEN];
 
@@ -60,9 +67,16 @@ static boolean_t panic_console_available = FALSE;
 
 extern uint32_t crc32(uint32_t crc, const void *buf, size_t size);
 
+void PE_slide_devicetree(vm_offset_t);
+
 static void
 check_for_panic_log(void)
 {
+#ifdef PLATFORM_PANIC_LOG_PADDR
+	gPanicBase = ml_io_map_wcomb(PLATFORM_PANIC_LOG_PADDR, PLATFORM_PANIC_LOG_SIZE);
+	panic_text_len = PLATFORM_PANIC_LOG_SIZE - sizeof(struct embedded_panic_header);
+	gPanicSize = PLATFORM_PANIC_LOG_SIZE;
+#else
 	DTEntry entry, chosen;
 	unsigned int size;
 	uintptr_t *reg_prop;
@@ -93,6 +107,7 @@ check_for_panic_log(void)
 	/* Deduct the size of the panic header from the panic region size */
 	panic_text_len = panic_region_length[0] - sizeof(struct embedded_panic_header);
 	gPanicSize = panic_region_length[0];
+#endif
 	panic_info = (struct embedded_panic_header *)gPanicBase;
 
 	/* Check if a shared memory console is running in the panic buffer */
@@ -277,6 +292,14 @@ PE_init_iokit(void)
 	}
 
 	StartIOKit(PE_state.deviceTreeHead, PE_state.bootArgs, (void *) 0, (void *) 0);
+}
+
+void
+PE_slide_devicetree(vm_offset_t slide)
+{
+	assert(PE_state.initialized);
+	PE_state.deviceTreeHead += slide;
+	DTInit(PE_state.deviceTreeHead);
 }
 
 void
@@ -469,6 +492,16 @@ PE_i_can_has_debugger(uint32_t *debug_flags)
 			*debug_flags = 0;
 	}
 	return (debug_enabled);
+}
+
+/*
+ * This routine returns TRUE if the device is configured
+ * with panic debugging enabled.
+ */
+boolean_t
+PE_panic_debugging_enabled()
+{
+	return panicDebugging;
 }
 
 void

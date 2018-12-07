@@ -1158,7 +1158,6 @@ au_to_exec_strings(const char *strs, int count, u_char type)
 token_t *
 au_to_exec_args(char *args, int argc)
 {
-
 	return (au_to_exec_strings(args, argc, AUT_EXEC_ARGS));
 }
 
@@ -1170,8 +1169,29 @@ au_to_exec_args(char *args, int argc)
 token_t *
 au_to_exec_env(char *envs, int envc)
 {
-
 	return (au_to_exec_strings(envs, envc, AUT_EXEC_ENV));
+}
+
+/*
+ * token ID         1 byte
+ * count            4 bytes
+ * text             count null-terminated strings
+ */
+token_t *
+au_to_certificate_hash(char *hashes, int hashc)
+{
+	return (au_to_exec_strings(hashes, hashc, AUT_CERT_HASH));
+}
+
+/*
+ * token ID         1 byte
+ * count            4 bytes
+ * text             count null-terminated strings
+ */
+token_t *
+au_to_krb5_principal(char *principals, int princ)
+{
+	return (au_to_exec_strings(principals, princ, AUT_KRB5_PRINCIPAL));
 }
 #else
 /*
@@ -1272,6 +1292,69 @@ au_to_exec_env(char **envp)
 	return (t);
 }
 #endif  /* !(defined(_KERNEL) || defined(KERNEL)) */
+
+/*
+ * token ID             1 byte
+ * signer type          4 bytes
+ * signer id length     2 bytes
+ * signer id            n bytes
+ * signer id truncated  1 byte
+ * team id length       2 bytes
+ * team id              n bytes
+ * team id truncated    1 byte
+ * cdhash length        2 bytes
+ * cdhash               n bytes
+ */
+token_t*
+au_to_identity(uint32_t signer_type, const char* signing_id,
+	u_char signing_id_trunc, const char* team_id, u_char team_id_trunc,
+	uint8_t* cdhash, uint16_t cdhash_len)
+{
+	token_t *t = NULL;
+	u_char *dptr = NULL;
+	size_t signing_id_len = 0;
+	size_t team_id_len = 0;
+	size_t totlen = 0;
+
+	if (signing_id) {
+		signing_id_len = strlen(signing_id);
+	}
+
+	if (team_id) {
+		team_id_len = strlen(team_id);
+	}
+
+	totlen =
+		sizeof(u_char) +    // token id
+		sizeof(uint32_t) +  // signer type
+		sizeof(uint16_t) +  // singing id length
+		signing_id_len +    // length of signing id to copy
+		sizeof(u_char) +    // null terminator for signing id
+		sizeof(u_char) +    // if signing id truncated
+		sizeof(uint16_t) +  // team id length
+		team_id_len +       // length of team id to copy
+		sizeof(u_char) +    // null terminator for team id
+		sizeof(u_char) +    // if team id truncated
+		sizeof(uint16_t) +  // cdhash length
+		cdhash_len;         // cdhash buffer
+
+	GET_TOKEN_AREA(t, dptr, totlen);
+
+	ADD_U_CHAR(dptr, AUT_IDENTITY);                // token id
+	ADD_U_INT32(dptr, signer_type);                // signer type
+	ADD_U_INT16(dptr, signing_id_len + 1);         // signing id length+null
+	ADD_STRING(dptr, signing_id, signing_id_len);  // truncated signing id
+	ADD_U_CHAR(dptr, 0);                           // null terminator byte
+	ADD_U_CHAR(dptr, signing_id_trunc);            // if signing id is trunc
+	ADD_U_INT16(dptr, team_id_len + 1);            // team id length+null
+	ADD_STRING(dptr, team_id, team_id_len);        // truncated team id
+	ADD_U_CHAR(dptr, 0);                           // null terminator byte
+	ADD_U_CHAR(dptr, team_id_trunc);               // if team id is trunc
+	ADD_U_INT16(dptr, cdhash_len);                 // cdhash length
+	ADD_MEM(dptr, cdhash, cdhash_len);             // cdhash
+
+	return (t);
+}
 
 /*
  * token ID                1 byte

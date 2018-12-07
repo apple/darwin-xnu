@@ -2671,7 +2671,7 @@ in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		if (error)
 			return (error);
 		/* we never use msfr.msfr_srcs; */
-		memcpy(&msfr, &msfr64, sizeof(msfr));
+		memcpy(&msfr, &msfr64, sizeof(msfr64));
 	} else {
 		error = sooptcopyin(sopt, &msfr32,
 		    sizeof(struct __msfilterreq32),
@@ -2679,7 +2679,7 @@ in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		if (error)
 			return (error);
 		/* we never use msfr.msfr_srcs; */
-		memcpy(&msfr, &msfr32, sizeof(msfr));
+		memcpy(&msfr, &msfr32, sizeof(msfr32));
 	}
 
 	if ((size_t) msfr.msfr_nsrcs >

@@ -140,8 +140,8 @@ kperf_thread_scheduling_sample(struct kperf_thread_scheduling *thsc,
 
 	BUF_INFO(PERF_TI_SCHEDSAMPLE | DBG_FUNC_START, (uintptr_t)thread_tid(thread));
 
-	thsc->kpthsc_user_time = timer_grab(&(thread->user_timer));
-	uint64_t system_time = timer_grab(&(thread->system_timer));
+	thsc->kpthsc_user_time = timer_grab(&thread->user_timer);
+	uint64_t system_time = timer_grab(&thread->system_timer);
 
 	if (thread->precise_user_kernel_time) {
 		thsc->kpthsc_system_time = system_time;
@@ -150,12 +150,14 @@ kperf_thread_scheduling_sample(struct kperf_thread_scheduling *thsc,
 		thsc->kpthsc_system_time = 0;
 	}
 
+	thsc->kpthsc_runnable_time = timer_grab(&thread->runnable_timer);
 	thsc->kpthsc_state = thread->state;
 	thsc->kpthsc_base_priority = thread->base_pri;
 	thsc->kpthsc_sched_priority = thread->sched_pri;
 	thsc->kpthsc_effective_qos = thread->effective_policy.thep_qos;
 	thsc->kpthsc_requested_qos = thread->requested_policy.thrp_qos;
-	thsc->kpthsc_requested_qos_override = thread->requested_policy.thrp_qos_override;
+	thsc->kpthsc_requested_qos_override = MAX(thread->requested_policy.thrp_qos_override,
+			thread->requested_policy.thrp_qos_workq_override);
 	thsc->kpthsc_requested_qos_promote = thread->requested_policy.thrp_qos_promote;
 	thsc->kpthsc_requested_qos_ipc_override = thread->requested_policy.thrp_qos_ipc_override;
 	thsc->kpthsc_requested_qos_sync_ipc_override = thread->requested_policy.thrp_qos_sync_ipc_override;
@@ -183,6 +185,7 @@ kperf_thread_scheduling_log(struct kperf_thread_scheduling *thsc)
 			| ((uint64_t)thsc->kpthsc_requested_qos_ipc_override << 55)
 			| ((uint64_t)thsc->kpthsc_requested_qos_sync_ipc_override << 52)
 			);
+	BUF_DATA(PERF_TI_SCHEDDATA_3, thsc->kpthsc_runnable_time);
 #else
 	BUF_DATA(PERF_TI_SCHEDDATA1_32, UPPER_32(thsc->kpthsc_user_time),
 			LOWER_32(thsc->kpthsc_user_time),
@@ -200,6 +203,8 @@ kperf_thread_scheduling_log(struct kperf_thread_scheduling *thsc)
 			| ((uint32_t)thsc->kpthsc_requested_qos_ipc_override << 23)
 			| ((uint32_t)thsc->kpthsc_requested_qos_sync_ipc_override << 20)
 			);
+	BUF_DATA(PERF_TI_SCHEDDATA3_32, UPPER_32(thsc->kpthsc_runnable_time),
+			LOWER_32(thsc->kpthsc_runnable_time));
 #endif /* defined(__LP64__) */
 }
 
@@ -282,7 +287,7 @@ kperf_thread_dispatch_sample(struct kperf_thread_dispatch *thdi,
 	BUF_INFO(PERF_TI_DISPSAMPLE | DBG_FUNC_START, (uintptr_t)thread_tid(thread));
 
 	task_t task = thread->task;
-	boolean_t task_64 = task_has_64BitAddr(task);
+	boolean_t task_64 = task_has_64Bit_addr(task);
 	size_t user_addr_size = task_64 ? 8 : 4;
 
 	assert(thread->task != kernel_task);
@@ -364,7 +369,9 @@ kperf_thread_inscyc_log(struct kperf_context *context)
 	BUF_DATA(PERF_TI_INSCYCDATA_32, 0, 0, UPPER_32(counts[MT_CORE_CYCLES]),
 			LOWER_32(counts[MT_CORE_CYCLES]));
 #endif /* !defined(__LP64__) */
-#else /* MONOTONIC */
+
+#else
 #pragma unused(context)
-#endif /* !MONOTONIC */
+#endif /* MONOTONIC */
+
 }

@@ -121,6 +121,7 @@
 #include <kern/exc_guard.h>
 #include <kern/telemetry.h>
 #include <kern/policy_internal.h>
+#include <kern/turnstile.h>
 
 #include <corpses/task_corpse.h>
 #if KPC
@@ -169,7 +170,13 @@ static queue_head_t		thread_stack_queue;
 decl_simple_lock_data(static,thread_terminate_lock)
 static queue_head_t		thread_terminate_queue;
 
+static queue_head_t		thread_deallocate_queue;
+
+static queue_head_t		turnstile_deallocate_queue;
+
 static queue_head_t		crashed_threads_queue;
+
+static queue_head_t		workq_deallocate_queue;
 
 decl_simple_lock_data(static,thread_exception_lock)
 static queue_head_t		thread_exception_queue;
@@ -182,10 +189,8 @@ struct thread_exception_elt {
 };
 
 static struct thread	thread_template, init_thread;
-
-static void		sched_call_null(
-					int			type,
-					thread_t	thread);
+static void thread_deallocate_enqueue(thread_t thread);
+static void thread_deallocate_complete(thread_t thread);
 
 #ifdef MACH_BSD
 extern void proc_exit(void *);
@@ -193,6 +198,7 @@ extern mach_exception_data_type_t proc_encode_exit_exception_code(void *);
 extern uint64_t get_dispatchqueue_offset_from_proc(void *);
 extern uint64_t get_return_to_kernel_offset_from_proc(void *p);
 extern int      proc_selfpid(void);
+extern void     proc_name(int, char*, int);
 extern char *   proc_name_address(void *p);
 #endif /* MACH_BSD */
 
@@ -212,6 +218,13 @@ static void init_thread_ledgers(void);
 void jetsam_on_ledger_cpulimit_exceeded(void);
 #endif
 
+extern int task_thread_soft_limit;
+extern int exc_via_corpse_forking;
+
+#if DEVELOPMENT || DEBUG
+extern int exc_resource_threads_enabled;
+#endif /* DEVELOPMENT || DEBUG */
+
 /*
  * Level (in terms of percentage of the limit) at which the CPU usage monitor triggers telemetry.
  *
@@ -222,6 +235,9 @@ void jetsam_on_ledger_cpulimit_exceeded(void);
 
 int cpumon_ustackshots_trigger_pct; /* Percentage. Level at which we start gathering telemetry. */
 void __attribute__((noinline)) SENDING_NOTIFICATION__THIS_THREAD_IS_CONSUMING_TOO_MUCH_CPU(void);
+#if DEVELOPMENT || DEBUG
+void __attribute__((noinline)) SENDING_NOTIFICATION__TASK_HAS_TOO_MANY_THREADS(task_t, int);
+#endif /* DEVELOPMENT || DEBUG */
 
 /*
  * The smallest interval over which we support limiting CPU consumption is 1ms
@@ -274,10 +290,8 @@ thread_bootstrap(void)
 	thread_template.max_priority = 0;
 	thread_template.task_priority = 0;
 	thread_template.promotions = 0;
-	thread_template.pending_promoter_index = 0;
-	thread_template.pending_promoter[0] = NULL;
-	thread_template.pending_promoter[1] = NULL;
 	thread_template.rwlock_count = 0;
+	thread_template.waiting_for_mutex = NULL;
 
 
 	thread_template.realtime.deadline = UINT64_MAX;
@@ -307,11 +321,12 @@ thread_bootstrap(void)
 	thread_template.bound_processor = PROCESSOR_NULL;
 	thread_template.last_processor = PROCESSOR_NULL;
 
-	thread_template.sched_call = sched_call_null;
+	thread_template.sched_call = NULL;
 
 	timer_init(&thread_template.user_timer);
 	timer_init(&thread_template.system_timer);
 	timer_init(&thread_template.ptime);
+	timer_init(&thread_template.runnable_timer);
 	thread_template.user_timer_save = 0;
 	thread_template.system_timer_save = 0;
 	thread_template.vtimer_user_save = 0;
@@ -331,6 +346,9 @@ thread_bootstrap(void)
 	thread_template.recover = (vm_offset_t)NULL;
 	
 	thread_template.map = VM_MAP_NULL;
+#if DEVELOPMENT || DEBUG
+	thread_template.pmap_footprint_suspended = FALSE;
+#endif /* DEVELOPMENT || DEBUG */
 
 #if CONFIG_DTRACE
 	thread_template.t_dtrace_predcache = 0;
@@ -483,7 +501,6 @@ thread_terminate_self(void)
 {
 	thread_t		thread = current_thread();
 	task_t			task;
-	spl_t			s;
 	int threadcnt;
 
 	pal_thread_terminate_self(thread);
@@ -496,34 +513,12 @@ thread_terminate_self(void)
 
 	thread_mtx_unlock(thread);
 
-	s = splsched();
+	thread_sched_call(thread, NULL);
+
+	spl_t s = splsched();
 	thread_lock(thread);
 
-	/*
-	 *	Cancel priority depression, wait for concurrent expirations
-	 *	on other processors.
-	 */
-	if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
-		thread->sched_flags &= ~TH_SFLAG_DEPRESSED_MASK;
-
-		/* If our priority was low because of a depressed yield, restore it in case we block below */
-		thread_recompute_sched_pri(thread, FALSE);
-
-		if (timer_call_cancel(&thread->depress_timer))
-			thread->depress_timer_active--;
-	}
-
-	while (thread->depress_timer_active > 0) {
-		thread_unlock(thread);
-		splx(s);
-
-		delay(1);
-
-		s = splsched();
-		thread_lock(thread);
-	}
-
-	thread_sched_call(thread, NULL);
+	thread_depress_abort_locked(thread);
 
 	thread_unlock(thread);
 	splx(s);
@@ -609,6 +604,32 @@ thread_terminate_self(void)
 	thread_lock(thread);
 
 	/*
+	 * Ensure that the depress timer is no longer enqueued,
+	 * so the timer (stored in the thread) can be safely deallocated
+	 *
+	 * TODO: build timer_call_cancel_wait
+	 */
+
+	assert((thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) == 0);
+
+	uint32_t delay_us = 1;
+
+	while (thread->depress_timer_active > 0) {
+		thread_unlock(thread);
+		splx(s);
+
+		delay(delay_us++);
+
+		if (delay_us > USEC_PER_SEC)
+			panic("depress timer failed to inactivate!"
+			      "thread: %p depress_timer_active: %d",
+			      thread, thread->depress_timer_active);
+
+		s = splsched();
+		thread_lock(thread);
+	}
+
+	/*
 	 *	Cancel wait timer, and wait for
 	 *	concurrent expirations.
 	 */
@@ -619,11 +640,18 @@ thread_terminate_self(void)
 			thread->wait_timer_active--;
 	}
 
+	delay_us = 1;
+
 	while (thread->wait_timer_active > 0) {
 		thread_unlock(thread);
 		splx(s);
 
-		delay(1);
+		delay(delay_us++);
+
+		if (delay_us > USEC_PER_SEC)
+			panic("wait timer failed to inactivate!"
+			      "thread: %p wait_timer_active: %d",
+			      thread, thread->wait_timer_active);
 
 		s = splsched();
 		thread_lock(thread);
@@ -642,10 +670,16 @@ thread_terminate_self(void)
 	 */
 	thread->state |= TH_TERMINATE;
 	thread_mark_wait_locked(thread, THREAD_UNINT);
+
+	assert((thread->sched_flags & TH_SFLAG_WAITQ_PROMOTED) == 0);
+	assert((thread->sched_flags & TH_SFLAG_RW_PROMOTED) == 0);
+	assert((thread->sched_flags & TH_SFLAG_EXEC_PROMOTED) == 0);
 	assert((thread->sched_flags & TH_SFLAG_PROMOTED) == 0);
 	assert(thread->promotions == 0);
-	assert(!(thread->sched_flags & TH_SFLAG_WAITQ_PROMOTED));
+	assert(thread->was_promoted_on_wakeup == 0);
+	assert(thread->waiting_for_mutex == NULL);
 	assert(thread->rwlock_count == 0);
+
 	thread_unlock(thread);
 	/* splsched */
 
@@ -653,23 +687,10 @@ thread_terminate_self(void)
 	/*NOTREACHED*/
 }
 
-/* Drop a thread refcount that definitely isn't the last one. */
+/* Drop a thread refcount safely without triggering a zfree */
 void
 thread_deallocate_safe(thread_t thread)
 {
-	assert_thread_magic(thread);
-
-	uint32_t old_refcount = atomic_fetch_sub_explicit(&thread->ref_count, 1, memory_order_release);
-
-	if (__improbable(old_refcount <= 1))
-		panic("bad thread refcount: %d", old_refcount);
-}
-
-void
-thread_deallocate(
-	thread_t			thread)
-{
-	task_t				task;
 	__assert_only uint32_t		th_ref_count;
 
 	if (thread == THREAD_NULL)
@@ -685,14 +706,48 @@ thread_deallocate(
 	th_ref_count = atomic_load_explicit(&thread->ref_count, memory_order_acquire);
 	assert(th_ref_count == 0);
 
+	/* enqueue the thread for thread deallocate deamon to call thread_deallocate_complete */
+	thread_deallocate_enqueue(thread);
+}
+
+void
+thread_deallocate(
+	thread_t			thread)
+{
+	__assert_only uint32_t		th_ref_count;
+
+	if (thread == THREAD_NULL)
+		return;
+
+	assert_thread_magic(thread);
+
+	if (__probable(atomic_fetch_sub_explicit(&thread->ref_count, 1,
+                       memory_order_release) - 1 > 0)) {
+                return;
+        }
+
+	th_ref_count = atomic_load_explicit(&thread->ref_count, memory_order_acquire);
+	assert(th_ref_count == 0);
+
+	thread_deallocate_complete(thread);
+}
+
+void
+thread_deallocate_complete(
+	thread_t			thread)
+{
+	task_t				task;
+
+	assert_thread_magic(thread);
+
+	assert(thread->ref_count == 0);
+
 	assert(thread_owned_workloops_count(thread) == 0);
 
 	if (!(thread->state & TH_TERMINATE2))
 		panic("thread_deallocate: thread not properly terminated\n");
 
 	assert(thread->runq == PROCESSOR_NULL);
-
-	assert(thread->user_promotions == 0);
 
 #if KPC
 	kpc_thread_destroy(thread);
@@ -717,6 +772,10 @@ thread_deallocate(
 		ledger_dereference(thread->t_ledger);
 	if (thread->t_threadledger)
 		ledger_dereference(thread->t_threadledger);
+
+	assert(thread->turnstile != TURNSTILE_NULL);
+	if (thread->turnstile)
+		turnstile_deallocate(thread->turnstile);
 
 	if (IPC_VOUCHER_NULL != thread->ith_voucher)
 		ipc_voucher_release(thread->ith_voucher);
@@ -856,7 +915,6 @@ thread_copy_resource_info(
 	thread_t dst_thread,
 	thread_t src_thread)
 {
-	dst_thread->thread_tag = src_thread->thread_tag;
 	dst_thread->c_switch = src_thread->c_switch;
 	dst_thread->p_switch = src_thread->p_switch;
 	dst_thread->ps_switch = src_thread->ps_switch;
@@ -865,6 +923,7 @@ thread_copy_resource_info(
 	dst_thread->user_timer_save = src_thread->user_timer_save;
 	dst_thread->system_timer = src_thread->system_timer;
 	dst_thread->system_timer_save = src_thread->system_timer_save;
+	dst_thread->runnable_timer = src_thread->runnable_timer;
 	dst_thread->vtimer_user_save = src_thread->vtimer_user_save;
 	dst_thread->vtimer_prof_save = src_thread->vtimer_prof_save;
 	dst_thread->vtimer_rlim_save = src_thread->vtimer_rlim_save;
@@ -892,6 +951,7 @@ thread_terminate_daemon(void)
 	(void)splsched();
 	simple_lock(&thread_terminate_lock);
 
+thread_terminate_start:
 	while ((thread = qe_dequeue_head(&thread_terminate_queue, struct thread, runq_links)) != THREAD_NULL) {
 		assert_thread_magic(thread);
 
@@ -913,6 +973,7 @@ thread_terminate_daemon(void)
 		task_lock(task);
 		task->total_user_time += timer_grab(&thread->user_timer);
 		task->total_ptime += timer_grab(&thread->ptime);
+		task->total_runnable_time += timer_grab(&thread->runnable_timer);
 		if (thread->precise_user_kernel_time) {
 			task->total_system_time += timer_grab(&thread->system_timer);
 		} else {
@@ -960,6 +1021,55 @@ thread_terminate_daemon(void)
 		simple_lock(&thread_terminate_lock);
 	}
 
+	while ((thread = qe_dequeue_head(&thread_deallocate_queue, struct thread, runq_links)) != THREAD_NULL) {
+		assert_thread_magic(thread);
+
+		simple_unlock(&thread_terminate_lock);
+		(void)spllo();
+
+		thread_deallocate_complete(thread);
+
+		(void)splsched();
+		simple_lock(&thread_terminate_lock);
+	}
+
+	struct turnstile *turnstile;
+	while ((turnstile = qe_dequeue_head(&turnstile_deallocate_queue, struct turnstile, ts_deallocate_link)) != TURNSTILE_NULL) {
+
+		simple_unlock(&thread_terminate_lock);
+		(void)spllo();
+
+		turnstile_destroy(turnstile);
+
+		(void)splsched();
+		simple_lock(&thread_terminate_lock);
+	}
+
+	queue_entry_t qe;
+
+	/*
+	 * see workq_deallocate_enqueue: struct workqueue is opaque to thread.c and
+	 * we just link pieces of memory here
+	 */
+	while ((qe = dequeue_head(&workq_deallocate_queue))) {
+		simple_unlock(&thread_terminate_lock);
+		(void)spllo();
+
+		workq_destroy((struct workqueue *)qe);
+
+		(void)splsched();
+		simple_lock(&thread_terminate_lock);
+	}
+
+	/*
+	 * Check if something enqueued in thread terminate/deallocate queue
+	 * while processing workq deallocate queue
+	 */
+	if (!queue_empty(&thread_terminate_queue) ||
+	    !queue_empty(&thread_deallocate_queue) ||
+	    !queue_empty(&turnstile_deallocate_queue))
+		goto thread_terminate_start;
+
 	assert_wait((event_t)&thread_terminate_queue, THREAD_UNINT);
 	simple_unlock(&thread_terminate_lock);
 	/* splsched */
@@ -990,6 +1100,67 @@ thread_terminate_enqueue(
 }
 
 /*
+ *	thread_deallocate_enqueue:
+ *
+ *	Enqueue a thread for final deallocation.
+ */
+static void
+thread_deallocate_enqueue(
+	thread_t		thread)
+{
+	spl_t s = splsched();
+
+	simple_lock(&thread_terminate_lock);
+	enqueue_tail(&thread_deallocate_queue, &thread->runq_links);
+	simple_unlock(&thread_terminate_lock);
+
+	thread_wakeup((event_t)&thread_terminate_queue);
+	splx(s);
+}
+
+/*
+ *	turnstile_deallocate_enqueue:
+ *
+ *	Enqueue a turnstile for final deallocation.
+ */
+void
+turnstile_deallocate_enqueue(
+	struct turnstile *turnstile)
+{
+	spl_t s = splsched();
+
+	simple_lock(&thread_terminate_lock);
+	enqueue_tail(&turnstile_deallocate_queue, &turnstile->ts_deallocate_link);
+	simple_unlock(&thread_terminate_lock);
+
+	thread_wakeup((event_t)&thread_terminate_queue);
+	splx(s);
+}
+
+/*
+ *	workq_deallocate_enqueue:
+ *
+ *	Enqueue a workqueue for final deallocation.
+ */
+void
+workq_deallocate_enqueue(
+	struct workqueue *wq)
+{
+	spl_t s = splsched();
+
+	simple_lock(&thread_terminate_lock);
+	/*
+	 * this is just to delay a zfree(), so we link the memory with no regards
+	 * for how the struct looks like.
+	 */
+	enqueue_tail(&workq_deallocate_queue, (queue_entry_t)wq);
+	simple_unlock(&thread_terminate_lock);
+
+	thread_wakeup((event_t)&thread_terminate_queue);
+	splx(s);
+}
+
+/*
  * thread_terminate_crashed_threads:
  * walk the list of crashed threads and put back set of threads
  * who are no longer being inspected.
@@ -999,6 +1170,7 @@ thread_terminate_crashed_threads()
 {
 	thread_t th_remove;
 	boolean_t should_wake_terminate_queue = FALSE;
+	spl_t s = splsched();
 
 	simple_lock(&thread_terminate_lock);
 	/*
@@ -1017,6 +1189,7 @@ thread_terminate_crashed_threads()
 	}
 
 	simple_unlock(&thread_terminate_lock);
+	splx(s);
 	if (should_wake_terminate_queue == TRUE) {
 		thread_wakeup((event_t)&thread_terminate_queue);
 	}
@@ -1093,6 +1266,9 @@ thread_daemon_init(void)
 
 	simple_lock_init(&thread_terminate_lock, 0);
 	queue_init(&thread_terminate_queue);
+	queue_init(&thread_deallocate_queue);
+	queue_init(&workq_deallocate_queue);
+	queue_init(&turnstile_deallocate_queue);
 	queue_init(&crashed_threads_queue);
 
 	result = kernel_thread_start_priority((thread_continue_t)thread_terminate_daemon, NULL, MINPRI_KERNEL, &thread);
@@ -1123,6 +1299,7 @@ thread_daemon_init(void)
 #define TH_OPTION_NONE		0x00
 #define TH_OPTION_NOCRED	0x01
 #define TH_OPTION_NOSUSP	0x02
+#define TH_OPTION_WORKQ		0x04
 
 /*
  * Create a new thread.
@@ -1135,6 +1312,7 @@ thread_create_internal(
 	task_t					parent_task,
 	integer_t				priority,
 	thread_continue_t		continuation,
+	void					*parameter,
 	int						options,
 	thread_t				*out_thread)
 {
@@ -1195,6 +1373,10 @@ thread_create_internal(
 	ipc_thread_init(new_thread);
 
 	new_thread->continuation = continuation;
+	new_thread->parameter = parameter;
+	new_thread->inheritor_flags = TURNSTILE_UPDATE_FLAGS_NONE;
+	priority_queue_init(&new_thread->inheritor_queue,
+			PRIORITY_QUEUE_BUILTIN_MAX_HEAP);
 
 	/* Allocate I/O Statistics structure */
 	new_thread->thread_io_stats = (io_stat_info_t)kalloc(sizeof(struct io_stat_info));
@@ -1210,6 +1392,24 @@ thread_create_internal(
 	/* Clear out the I/O Scheduling info for AppleFSCompression */
 	new_thread->decmp_upl = NULL;
 #endif /* CONFIG_IOSCHED */ 
+
+#if DEVELOPMENT || DEBUG
+	task_lock(parent_task);
+	uint16_t thread_limit = parent_task->task_thread_limit;
+	if (exc_resource_threads_enabled &&
+	    thread_limit > 0 &&
+	    parent_task->thread_count >= thread_limit &&
+	    !parent_task->task_has_crossed_thread_limit &&
+	    !(parent_task->t_flags & TF_CORPSE)) {
+		int thread_count = parent_task->thread_count;
+		parent_task->task_has_crossed_thread_limit = TRUE;
+		task_unlock(parent_task);
+		SENDING_NOTIFICATION__TASK_HAS_TOO_MANY_THREADS(parent_task, thread_count);
+	}
+	else {
+		task_unlock(parent_task);
+	}
+#endif
 
 	lck_mtx_lock(&tasks_threads_lock);
 	task_lock(parent_task);
@@ -1340,6 +1540,7 @@ thread_create_internal(
 		new_thread->inspection = FALSE;
 	}
 	new_thread->corpse_dup = FALSE;
+	new_thread->turnstile = turnstile_alloc();
 	*out_thread = new_thread;
 
 	if (kdebug_enable) {
@@ -1390,7 +1591,7 @@ thread_create_internal2(
 	if (task == TASK_NULL || task == kernel_task)
 		return (KERN_INVALID_ARGUMENT);
 
-	result = thread_create_internal(task, -1, continuation, TH_OPTION_NONE, &thread);
+	result = thread_create_internal(task, -1, continuation, NULL, TH_OPTION_NONE, &thread);
 	if (result != KERN_SUCCESS)
 		return (result);
 
@@ -1449,6 +1650,7 @@ thread_create_waiting_internal(
 	task_t                  task,
 	thread_continue_t       continuation,
 	event_t                 event,
+	block_hint_t            block_hint,
 	int                     options,
 	thread_t                *new_thread)
 {
@@ -1458,7 +1660,8 @@ thread_create_waiting_internal(
 	if (task == TASK_NULL || task == kernel_task)
 		return (KERN_INVALID_ARGUMENT);
 
-	result = thread_create_internal(task, -1, continuation, options, &thread);
+	result = thread_create_internal(task, -1, continuation, NULL,
+			options, &thread);
 	if (result != KERN_SUCCESS)
 		return (result);
 
@@ -1468,6 +1671,11 @@ thread_create_waiting_internal(
 		thread_hold(thread);
 
 	thread_mtx_lock(thread);
+	thread_set_pending_block_hint(thread, block_hint);
+	if (options & TH_OPTION_WORKQ) {
+		thread->static_param = true;
+		event = workq_thread_init_and_wq_lock(task, thread);
+	}
 	thread_start_in_assert_wait(thread, event, THREAD_INTERRUPTIBLE);
 	thread_mtx_unlock(thread);
 
@@ -1487,7 +1695,7 @@ thread_create_waiting(
 	thread_t                *new_thread)
 {
 	return thread_create_waiting_internal(task, continuation, event,
-	                                      TH_OPTION_NONE, new_thread);
+			kThreadWaitNone, TH_OPTION_NONE, new_thread);
 }
 
 
@@ -1506,14 +1714,23 @@ thread_create_running_internal2(
 	if (task == TASK_NULL || task == kernel_task)
 		return (KERN_INVALID_ARGUMENT);
 
-	result = thread_create_internal(task, -1, (thread_continue_t)thread_bootstrap_return, TH_OPTION_NONE, &thread);
+	result = thread_create_internal(task, -1,
+			(thread_continue_t)thread_bootstrap_return, NULL,
+			TH_OPTION_NONE, &thread);
 	if (result != KERN_SUCCESS)
 		return (result);
 
 	if (task->suspend_count > 0)
 		thread_hold(thread);
 
-	result = machine_thread_set_state(thread, flavor, new_state, new_state_count);
+	if (from_user) {
+		result = machine_thread_state_convert_from_user(thread, flavor,
+				new_state, new_state_count);
+	}
+	if (result == KERN_SUCCESS) {
+		result = machine_thread_set_state(thread, flavor, new_state,
+				new_state_count);
+	}
 	if (result != KERN_SUCCESS) {
 		task_unlock(task);
 		lck_mtx_unlock(&tasks_threads_lock);
@@ -1574,45 +1791,14 @@ thread_create_running_from_user(
 }
 
 kern_return_t
-thread_create_workq(
-	task_t				task,
-	thread_continue_t		thread_return,
-	thread_t			*new_thread)
-{
-	kern_return_t		result;
-	thread_t			thread;
-
-	if (task == TASK_NULL || task == kernel_task)
-		return (KERN_INVALID_ARGUMENT);
-
-	result = thread_create_internal(task, -1, thread_return, TH_OPTION_NOCRED | TH_OPTION_NOSUSP, &thread);
-	if (result != KERN_SUCCESS)
-		return (result);
-
-	thread->user_stop_count = 1;
-	thread_hold(thread);
-	if (task->suspend_count > 0)
-		thread_hold(thread);
-
-	task_unlock(task);
-	lck_mtx_unlock(&tasks_threads_lock);
-	
-	*new_thread = thread;
-
-	return (KERN_SUCCESS);
-}
-
-kern_return_t
 thread_create_workq_waiting(
 	task_t              task,
 	thread_continue_t   continuation,
-	event_t             event,
 	thread_t            *new_thread)
 {
-
-	return thread_create_waiting_internal(task, continuation, event,
-	                                      TH_OPTION_NOCRED | TH_OPTION_NOSUSP,
-	                                      new_thread);
+	int options = TH_OPTION_NOCRED | TH_OPTION_NOSUSP | TH_OPTION_WORKQ;
+	return thread_create_waiting_internal(task, continuation, NULL,
+			kThreadWaitParkedWorkQueue, options, new_thread);
 }
 
 /*
@@ -1632,7 +1818,8 @@ kernel_thread_create(
 	thread_t			thread;
 	task_t				task = kernel_task;
 
-	result = thread_create_internal(task, priority, continuation, TH_OPTION_NOCRED | TH_OPTION_NONE, &thread);
+	result = thread_create_internal(task, priority, continuation, parameter,
+			TH_OPTION_NOCRED | TH_OPTION_NONE, &thread);
 	if (result != KERN_SUCCESS)
 		return (result);
 
@@ -1645,8 +1832,6 @@ kernel_thread_create(
 	if (priority > BASEPRI_KERNEL)
 #endif
 	thread->reserved_stack = thread->kernel_stack;
-
-	thread->parameter = parameter;
 
 if(debug_task & 1)
 	kprintf("kernel_thread_create: thread = %p continuation = %p\n", thread, continuation);
@@ -1697,7 +1882,7 @@ retrieve_thread_basic_info(thread_t thread, thread_basic_info_t basic_info)
 	/* fill in info */
 
 	thread_read_times(thread, &basic_info->user_time,
-								&basic_info->system_time);
+			&basic_info->system_time, NULL);
 
 	/*
 	 *	Update lazy-evaluated scheduler info because someone wants it.
@@ -1963,7 +2148,8 @@ void
 thread_read_times(
 	thread_t		thread,
 	time_value_t	*user_time,
-	time_value_t	*system_time)
+	time_value_t	*system_time,
+	time_value_t	*runnable_time)
 {
 	clock_sec_t		secs;
 	clock_usec_t	usecs;
@@ -1976,7 +2162,7 @@ thread_read_times(
 		absolutetime_to_microtime(tval_user, &secs, &usecs);
 		user_time->seconds = (typeof(user_time->seconds))secs;
 		user_time->microseconds = usecs;
-		
+
 		absolutetime_to_microtime(tval_system, &secs, &usecs);
 		system_time->seconds = (typeof(system_time->seconds))secs;
 		system_time->microseconds = usecs;
@@ -1989,6 +2175,13 @@ thread_read_times(
 
 		system_time->seconds = 0;
 		system_time->microseconds = 0;
+	}
+
+	if (runnable_time) {
+		uint64_t tval_runnable = timer_grab(&thread->runnable_timer);
+		absolutetime_to_microtime(tval_runnable, &secs, &usecs);
+		runnable_time->seconds = (typeof(runnable_time->seconds))secs;
+		runnable_time->microseconds = usecs;
 	}
 }
 
@@ -2004,7 +2197,7 @@ uint64_t thread_get_runtime_self(void)
 	/* Not interrupt safe, as the scheduler may otherwise update timer values underneath us */
 	interrupt_state = ml_set_interrupts_enabled(FALSE);
 	processor = current_processor();
-	timer_switch(PROCESSOR_DATA(processor, thread_timer), mach_absolute_time(), PROCESSOR_DATA(processor, thread_timer));
+	timer_update(PROCESSOR_DATA(processor, thread_timer), mach_absolute_time());
 	runtime = (timer_grab(&thread->user_timer) + timer_grab(&thread->system_timer));
 	ml_set_interrupts_enabled(interrupt_state);
 
@@ -2138,7 +2331,7 @@ clear_thread_rwlock_boost(void)
 
 	if ((thread->rwlock_count-- == 1) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
 
-		lck_rw_clear_promotion(thread);
+		lck_rw_clear_promotion(thread, 0);
 	}
 }
 
@@ -2151,7 +2344,10 @@ thread_guard_violation(thread_t thread,
     mach_exception_data_type_t code, mach_exception_data_type_t subcode)
 {
 	assert(thread == current_thread());
-	assert(thread->task != kernel_task);
+
+	/* don't set up the AST for kernel threads */
+	if (thread->task == kernel_task)
+		return;
 
 	spl_t s = splsched();
 	/*
@@ -2184,10 +2380,16 @@ guard_ast(thread_t t)
 		code = t->guard_exc_info.code,
 		subcode = t->guard_exc_info.subcode;
 
+	t->guard_exc_info.code = 0;
+	t->guard_exc_info.subcode = 0;
+	
 	switch (EXC_GUARD_DECODE_GUARD_TYPE(code)) {
+	case GUARD_TYPE_NONE:
+		/* lingering AST_GUARD on the processor? */
+		break;
 	case GUARD_TYPE_MACH_PORT:
 		mach_port_guard_ast(t, code, subcode);
-	        break;
+		break;
 	case GUARD_TYPE_FD:
 		fd_guard_ast(t, code, subcode);
 		break;
@@ -2196,6 +2398,9 @@ guard_ast(thread_t t)
 		vn_guard_ast(t, code, subcode);
 		break;
 #endif
+	case GUARD_TYPE_VIRT_MEMORY:
+		virt_memory_guard_ast(t, code, subcode);
+		break;
 	default:
 		panic("guard_exc_info %llx %llx", code, subcode);
 	}
@@ -2289,7 +2494,7 @@ SENDING_NOTIFICATION__THIS_THREAD_IS_CONSUMING_TOO_MUCH_CPU(void)
 
 	interval_sec = (uint32_t)(interval_ns / NSEC_PER_SEC);
 
-	thread_read_times(thread, &thread_user_time, &thread_system_time);
+	thread_read_times(thread, &thread_user_time, &thread_system_time, NULL);
 	time_value_add(&thread_total_time, &thread_user_time);
 	time_value_add(&thread_total_time, &thread_system_time);
 	ledger_get_entry_info(thread->t_threadledger, thread_ledgers.cpu_time, &lei);
@@ -2375,6 +2580,52 @@ SENDING_NOTIFICATION__THIS_THREAD_IS_CONSUMING_TOO_MUCH_CPU(void)
 #endif
 	}
 }
+
+#if DEVELOPMENT || DEBUG
+void __attribute__((noinline)) SENDING_NOTIFICATION__TASK_HAS_TOO_MANY_THREADS(task_t task, int thread_count)
+{
+	mach_exception_data_type_t code[EXCEPTION_CODE_MAX] = {0};
+	int pid = task_pid(task);
+	char procname[MAXCOMLEN+1] = "unknown";
+
+	if (pid == 1) {
+		/*
+		 * Cannot suspend launchd
+		 */
+		return;
+	}
+
+	proc_name(pid, procname, sizeof(procname));
+
+	if (disable_exc_resource) {
+		printf("process %s[%d] crossed thread count high watermark (%d), EXC_RESOURCE "
+			"supressed by a boot-arg. \n", procname, pid, thread_count);
+		return;
+	}
+
+	if (audio_active) {
+		printf("process %s[%d] crossed thread count high watermark (%d), EXC_RESOURCE "
+			"supressed due to audio playback.\n", procname, pid, thread_count);
+		return;
+	}
+
+	if (exc_via_corpse_forking == 0) {
+		printf("process %s[%d] crossed thread count high watermark (%d), EXC_RESOURCE "
+			"supressed due to corpse forking being disabled.\n", procname, pid,
+			thread_count);
+		return;
+	}
+
+	printf("process %s[%d] crossed thread count high watermark (%d), sending "
+		"EXC_RESOURCE\n", procname, pid, thread_count);
+
+	EXC_RESOURCE_ENCODE_TYPE(code[0], RESOURCE_TYPE_THREADS);
+	EXC_RESOURCE_ENCODE_FLAVOR(code[0], FLAVOR_THREADS_HIGH_WATERMARK);
+	EXC_RESOURCE_THREADS_ENCODE_THREADS(code[0], thread_count);
+
+	task_enqueue_exception_with_corpse(task, EXC_RESOURCE, code, EXCEPTION_CODE_MAX, NULL);
+}
+#endif /* DEVELOPMENT || DEBUG */
 
 void thread_update_io_stats(thread_t thread, int size, int io_flags)
 {
@@ -2585,63 +2836,13 @@ thread_set_cpulimit(int action, uint8_t percentage, uint64_t interval_ns)
 	return (0);
 }
 
-static void
-sched_call_null(
-__unused	int			type,
-__unused	thread_t	thread)
-{
-	return;
-}
-
 void
 thread_sched_call(
 	thread_t		thread,
 	sched_call_t	call)
 {
-	thread->sched_call = (call != NULL)? call: sched_call_null;
-}
-
-sched_call_t
-thread_disable_sched_call(
-	thread_t		thread,
-	sched_call_t	call)
-{
-	if (call) {
-		spl_t s = splsched();
-		thread_lock(thread);
-		if (thread->sched_call == call) {
-			thread->sched_call = sched_call_null;
-		} else {
-			call = NULL;
-		}
-		thread_unlock(thread);
-		splx(s);
-	}
-	return call;
-}
-
-void
-thread_reenable_sched_call(
-	thread_t		thread,
-	sched_call_t	call)
-{
-	if (call) {
-		spl_t s = splsched();
-		thread_lock(thread);
-		thread_sched_call(thread, call);
-		thread_unlock(thread);
-		splx(s);
-	}
-}
-
-void
-thread_static_param(
-	thread_t		thread,
-	boolean_t		state)
-{
-	thread_mtx_lock(thread);
-	thread->static_param = state;
-	thread_mtx_unlock(thread);
+	assert((thread->state & TH_WAIT_REPORT) == 0);
+	thread->sched_call = call;
 }
 
 uint64_t
@@ -2651,11 +2852,22 @@ thread_tid(
 	return (thread != THREAD_NULL? thread->thread_id: 0);
 }
 
-uint16_t	thread_set_tag(thread_t th, uint16_t tag) {
+uint16_t
+thread_set_tag(thread_t th, uint16_t tag)
+{
 	return thread_set_tag_internal(th, tag);
 }
-uint16_t	thread_get_tag(thread_t th) {
+
+uint16_t
+thread_get_tag(thread_t th)
+{
 	return thread_get_tag_internal(th);
+}
+
+uint64_t
+thread_last_run_time(thread_t th)
+{
+	return th->last_run_time;
 }
 
 uint64_t
@@ -2718,6 +2930,22 @@ thread_rettokern_addr(
  * within the osfmk component.
  */
 
+#undef thread_mtx_lock
+void thread_mtx_lock(thread_t thread);
+void
+thread_mtx_lock(thread_t thread)
+{
+	lck_mtx_lock(&thread->mutex);
+}
+
+#undef thread_mtx_unlock
+void thread_mtx_unlock(thread_t thread);
+void
+thread_mtx_unlock(thread_t thread)
+{
+	lck_mtx_unlock(&thread->mutex);
+}
+
 #undef thread_reference
 void thread_reference(thread_t thread);
 void
@@ -2754,7 +2982,7 @@ thread_set_voucher_name(mach_port_name_t voucher_name)
 	ipc_voucher_t new_voucher = IPC_VOUCHER_NULL;
 	ipc_voucher_t voucher;
 	ledger_t bankledger = NULL;
-	thread_group_t banktg = NULL;
+	struct thread_group *banktg = NULL;
 
 	if (MACH_PORT_DEAD == voucher_name)
 		return KERN_INVALID_RIGHT;
@@ -2879,7 +3107,7 @@ thread_set_mach_voucher(
 {
 	ipc_voucher_t old_voucher;
 	ledger_t bankledger = NULL;
-	thread_group_t banktg = NULL;
+	struct thread_group *banktg = NULL;
 
 	if (THREAD_NULL == thread)
 		return KERN_INVALID_ARGUMENT;
@@ -2916,78 +3144,22 @@ thread_set_mach_voucher(
  *  Conditions: callers holds a reference on the new and presumed old voucher(s).
  *		nothing locked.
  *
- *  If the old voucher is still the same as passed in, replace it with new voucher
- *  and discard the old (and the reference passed in).  Otherwise, discard the new
- *  and return an updated old voucher.
+ *  This function is no longer supported.
  */
 kern_return_t
 thread_swap_mach_voucher(
-	thread_t		thread,
-	ipc_voucher_t		new_voucher,
-	ipc_voucher_t		*in_out_old_voucher)
+	__unused thread_t		thread,
+	__unused ipc_voucher_t		new_voucher,
+	ipc_voucher_t			*in_out_old_voucher)
 {
-	mach_port_name_t old_voucher_name;
-	ipc_voucher_t old_voucher;
-	ledger_t bankledger = NULL;
-	thread_group_t banktg = NULL;
-
-	if (THREAD_NULL == thread)
-		return KERN_INVALID_TASK;
-
-	if (thread != current_thread() && thread->started)
-		return KERN_INVALID_ARGUMENT;
-
-	bank_get_bank_ledger_and_thread_group(new_voucher, &bankledger, &banktg);
-
-	thread_mtx_lock(thread);
-
-	old_voucher = thread->ith_voucher;
-
-	if (IPC_VOUCHER_NULL == old_voucher) {
-		old_voucher_name = thread->ith_voucher_name;
-
-		/* perform lazy binding if needed */
-		if (MACH_PORT_VALID(old_voucher_name)) {
-			old_voucher = convert_port_name_to_voucher(old_voucher_name);
-			thread->ith_voucher_name = MACH_PORT_NULL;
-			thread->ith_voucher = old_voucher;
-
-			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-						  MACHDBG_CODE(DBG_MACH_IPC,MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
-						  (uintptr_t)thread_tid(thread),
-						  (uintptr_t)old_voucher_name,
-						  VM_KERNEL_ADDRPERM((uintptr_t)old_voucher),
-						  4, 0);
-
-		}
-	}
-
-	/* swap in new voucher, if old voucher matches the one supplied */
-	if (old_voucher == *in_out_old_voucher) {
-		ipc_voucher_reference(new_voucher);
-		thread->ith_voucher = new_voucher;
-		thread->ith_voucher_name = MACH_PORT_NULL;
-		thread_mtx_unlock(thread);
-		bank_swap_thread_bank_ledger(thread, bankledger);
-
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-					  MACHDBG_CODE(DBG_MACH_IPC,MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
-					  (uintptr_t)thread_tid(thread),
-					  (uintptr_t)MACH_PORT_NULL,
-					  VM_KERNEL_ADDRPERM((uintptr_t)new_voucher),
-					  5, 0);
-
-		ipc_voucher_release(old_voucher);
-
-		*in_out_old_voucher = IPC_VOUCHER_NULL;
-		return KERN_SUCCESS;
-	}
-
-	/* Otherwise, just return old voucher reference */
-	ipc_voucher_reference(old_voucher);
-	thread_mtx_unlock(thread);
-	*in_out_old_voucher = old_voucher;
-	return KERN_SUCCESS;
+	/*
+	 * Currently this function is only called from a MIG generated
+	 * routine which doesn't release the reference on the voucher
+	 * addressed by in_out_old_voucher. To avoid leaking this reference,
+	 * a call to release it has been added here.
+	 */
+	ipc_voucher_release(*in_out_old_voucher);
+	return KERN_NOT_SUPPORTED;
 }
 
 /* 
@@ -3071,6 +3243,12 @@ kern_allocation_name_t thread_set_allocation_name(kern_allocation_name_t new_nam
 	// fifo
 	if (!new_name || !kstate->allocation_name) kstate->allocation_name = new_name;
 	return ret;
+}
+
+uint64_t
+thread_get_last_wait_duration(thread_t thread)
+{
+	return thread->last_made_runnable_time - thread->last_run_time;
 }
 
 #if CONFIG_DTRACE

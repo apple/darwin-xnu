@@ -30,6 +30,9 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <sys/cdefs.h>
+
+__BEGIN_DECLS
 
 extern bool mt_debug;
 extern _Atomic uint64_t mt_pmis;
@@ -43,11 +46,15 @@ uint64_t mt_cur_cpu_cycles(void);
 uint64_t mt_cur_thread_instrs(void);
 uint64_t mt_cur_thread_cycles(void);
 
+__END_DECLS
+
 #if MACH_KERNEL_PRIVATE
 
 #include <kern/thread.h>
 #include <kern/task.h>
 #include <stdbool.h>
+
+__BEGIN_DECLS
 
 #if defined(__arm__) || defined(__arm64__)
 #include <arm/cpu_data_internal.h>
@@ -57,7 +64,6 @@ uint64_t mt_cur_thread_cycles(void);
 #error unsupported architecture
 #endif /* !defined(__arm__) && !defined(__arm64__) && !defined(__x86_64__) */
 
-void mt_init(void);
 void mt_update_fixed_counts(void);
 void mt_update_task(task_t task, thread_t thread);
 bool mt_update_thread(thread_t thread);
@@ -65,22 +71,17 @@ int mt_fixed_thread_counts(thread_t thread, uint64_t *counts_out);
 int mt_fixed_task_counts(task_t task, uint64_t *counts_out);
 
 /*
- * Called when a thread is switching off-core or expires its quantum.
+ * Private API for the platform layers.
  */
-void mt_sched_update(thread_t thread);
 
 /*
- * Called when a thread is terminating to save its counters into the task.  The
- * task lock must be held and the thread should be removed from the task's
- * thread list in that same critical section.
+ * Called once early in boot, before CPU initialization occurs (where
+ * `mt_cpu_up` is called).
+ *
+ * This allows monotonic to detect if the hardware supports performance counters
+ * and install the global PMI handler.
  */
-void mt_terminate_update(task_t task, thread_t thread);
-
-/*
- * Called when a core receives a PMI.
- */
-void mt_cpu_pmi(cpu_data_t *cpu, uint64_t pmsr);
-uint64_t mt_cpu_update_count(cpu_data_t *cpu, unsigned int ctr);
+void mt_early_init(void);
 
 /*
  * Called when a core is idling and exiting from idle.
@@ -95,10 +96,42 @@ void mt_cpu_down(cpu_data_t *cpu);
 void mt_cpu_up(cpu_data_t *cpu);
 
 /*
- * Called while single-threaded when the system is going to sleep and waking up.
+ * Called while single-threaded when the system is going to sleep.
  */
 void mt_sleep(void);
-void mt_wake(void);
+
+/*
+ * Called on each CPU as the system is waking from sleep.
+ */
+void mt_wake_per_core(void);
+
+#if __ARM_CLUSTER_COUNT__
+/*
+ * Called when a cluster is initialized.
+ */
+void mt_cluster_init(void);
+#endif /* __ARM_CLUSTER_COUNT__ */
+
+/*
+ * "Up-call" to the Mach layer to update counters from a PMI.
+ */
+uint64_t mt_cpu_update_count(cpu_data_t *cpu, unsigned int ctr);
+
+/*
+ * Private API for the scheduler.
+ */
+
+/*
+ * Called when a thread is switching off-core or expires its quantum.
+ */
+void mt_sched_update(thread_t thread);
+
+/*
+ * Called when a thread is terminating to save its counters into the task.  The
+ * task lock must be held and the thread should be removed from the task's
+ * thread list in that same critical section.
+ */
+void mt_terminate_update(task_t task, thread_t thread);
 
 /*
  * Private API for the performance controller callout.
@@ -110,6 +143,16 @@ void mt_perfcontrol(uint64_t *instrs, uint64_t *cycles);
  */
 void mt_stackshot_thread(thread_t thread, uint64_t *instrs, uint64_t *cycles);
 void mt_stackshot_task(task_t task, uint64_t *instrs, uint64_t *cycles);
+
+/*
+ * Private API for microstackshot.
+ */
+typedef void (*mt_pmi_fn)(bool user_mode, void *ctx);
+int mt_microstackshot_start(unsigned int ctr, uint64_t period, mt_pmi_fn fn,
+		void *ctx);
+int mt_microstackshot_stop(void);
+
+__END_DECLS
 
 #endif /* MACH_KERNEL_PRIVATE */
 

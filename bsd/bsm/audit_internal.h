@@ -75,6 +75,7 @@ typedef	struct au_record	au_record_t;
 #define	AUDIT_HEADER_SIZE	18
 #define	MAX_AUDIT_HEADER_SIZE	(5*sizeof(u_int32_t)+18)
 #define	AUDIT_TRAILER_SIZE	7
+#define	MAX_AUDIT_IDENTITY_SIZE	179
 
 /*
  * BSM token streams store fields in big endian byte order, so as to be

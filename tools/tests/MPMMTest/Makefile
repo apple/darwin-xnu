@@ -17,9 +17,15 @@ ifdef RC_ARCHS
   endif
 endif
 
-ARCH_32 := $(filter-out %64, $(ARCHS))
+# These are convenience functions for filtering based on substrings, as the
+# normal filter functions only accept one wildcard.
+FILTER_OUT_SUBSTRING=$(strip $(foreach string,$(2),$(if $(findstring $(1),$(string)),,$(string))))
+FILTER_SUBSTRING=$(strip $(foreach string,$(2),$(if $(findstring $(1),$(string)),$(string),)))
+
+ARCH_32:=$(call FILTER_OUT_SUBSTRING,64,$(ARCHS))
+ARCH_64:=$(call FILTER_SUBSTRING,64,$(ARCHS))
+
 ARCH_32_FLAGS := $(patsubst %, -arch %, $(ARCH_32))
-ARCH_64 := $(filter %64, $(ARCHS))
 ARCH_64_FLAGS := $(patsubst %, -arch %, $(ARCH_64))
 
 DSTROOT?=$(shell /bin/pwd)

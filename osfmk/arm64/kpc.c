@@ -41,6 +41,8 @@
 #include <kern/monotonic.h>
 #endif /* MONOTONIC */
 
+void kpc_pmi_handler(unsigned int ctr);
+
 /*
  * PMCs 8 and 9 were added to Hurricane and to maintain the existing bit
  * positions of the other PMCs, their configuration bits start at position 32.
@@ -230,8 +232,6 @@ static uint64_t kpc_running_cfg_pmc_mask = 0;
 static uint32_t kpc_running_classes = 0;
 static uint32_t kpc_configured = 0;
 
-static int first_time = 1;
-
 /*
  * The whitelist is disabled by default on development/debug kernel. This can
  * be changed via the kpc.disable_whitelist sysctl. The whitelist is enabled on
@@ -293,6 +293,20 @@ static kpc_config_t whitelist[] = {
 	0x1b, /* L2C_AGENT_LD_MISS */
 	0x1c, /* L2C_AGENT_ST */
 	0x1d, /* L2C_AGENT_ST_MISS */
+	0x8a, /* INST_A32 */
+	0x8b, /* INST_THUMB */
+	0x8c, /* INST_A64 */
+	0x8d, /* INST_BRANCH */
+	0xbf, /* SYNC_DC_LOAD_MISS */
+	0xc0, /* SYNC_DC_STORE_MISS */
+	0xc1, /* SYNC_DTLB_MISS */
+	0xc4, /* SYNC_ST_HIT_YNGR_LD */
+	0xcb, /* SYNC_BR_ANY_MISP */
+	0xd3, /* FED_IC_MISS_DEM */
+	0xd4, /* FED_ITLB_MISS */
+
+#elif defined(APPLEMONSOON)
+	0x02, /* CORE_CYCLE */
 	0x8a, /* INST_A32 */
 	0x8b, /* INST_THUMB */
 	0x8c, /* INST_A64 */
@@ -984,43 +998,16 @@ kpc_set_reload_xcall(void *vmp_config)
 		thread_wakeup((event_t) &kpc_reload_sync);
 }
 
-void kpc_pmi_handler(cpu_id_t source);
 void
-kpc_pmi_handler(cpu_id_t source __unused)
+kpc_pmi_handler(unsigned int ctr)
 {
-	uint64_t PMSR, extra;
-	int ctr;
-	int enabled;
+	uint64_t extra = kpc_reload_counter(ctr);
 
-	enabled = ml_set_interrupts_enabled(FALSE);
+	FIXED_SHADOW(ctr) += (kpc_fixed_max() - FIXED_RELOAD(ctr) + 1 /* Wrap */) + extra;
 
-	/* The pmi must be delivered to the CPU that generated it */
-	if (source != getCpuDatap()->interrupt_nub) {
-		panic("pmi from IOCPU %p delivered to IOCPU %p", source, getCpuDatap()->interrupt_nub); 
+	if (FIXED_ACTIONID(ctr)) {
+		kpc_sample_kperf(FIXED_ACTIONID(ctr));
 	}
-
-	/* Get the PMSR which has the overflow bits for all the counters */
-	__asm__ volatile("mrs %0, S3_1_c15_c13_0" : "=r"(PMSR));
-
-	for (ctr = 0; ctr < (KPC_ARM64_FIXED_COUNT + KPC_ARM64_CONFIGURABLE_COUNT); ctr++) {
-		if ((1ull << ctr) & PMSR) {
-			if (ctr < 2) {
-#if MONOTONIC
-				mt_cpu_pmi(getCpuDatap(), PMSR);
-#endif /* MONOTONIC */
-			} else {
-				extra = kpc_reload_counter(ctr);
-
-				FIXED_SHADOW(ctr)
-					+= (kpc_fixed_max() - FIXED_RELOAD(ctr) + 1 /* Wrap */) + extra;
-
-				if (FIXED_ACTIONID(ctr))
-					kpc_sample_kperf(FIXED_ACTIONID(ctr));
-			}
-		}
-	}
-
-	ml_set_interrupts_enabled(enabled);
 }
 
 uint32_t
@@ -1032,20 +1019,7 @@ kpc_get_classes(void)
 int
 kpc_set_running_arch(struct kpc_running_remote *mp_config)
 {
-	int cpu;
-
-	assert(mp_config);
-
-	if (first_time) {
-		PE_cpu_perfmon_interrupt_install_handler(kpc_pmi_handler);
-		int max_cpu = ml_get_max_cpu_number();
-		for (cpu = 0; cpu <= max_cpu; cpu++) {
-			cpu_data_t *target_cpu_datap = (cpu_data_t *)CpuDataEntries[cpu].cpu_data_vaddr;
-			if (target_cpu_datap != NULL)
-				PE_cpu_perfmon_interrupt_enable(target_cpu_datap->cpu_id, TRUE);
-		}
-		first_time = 0;
-	}
+	assert(mp_config != NULL);
 
 	/* dispatch to all CPUs */
 	cpu_broadcast_xcall(&kpc_xcall_sync, TRUE, kpc_set_running_xcall, mp_config);

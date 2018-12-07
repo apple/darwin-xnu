@@ -78,7 +78,29 @@ lck_mtx_t	vm_swap_data_lock;
 
 void vm_swap_init(void);
 boolean_t vm_swap_create_file(void);
-kern_return_t vm_swap_put(vm_offset_t, uint64_t*, uint64_t, c_segment_t);
+
+
+struct swapout_io_completion {
+  
+        int          swp_io_busy;
+        int          swp_io_done;
+        int          swp_io_error;
+
+        uint32_t     swp_c_size;
+        c_segment_t  swp_c_seg;
+
+        struct swapfile *swp_swf;
+        uint64_t        swp_f_offset;
+
+        struct upl_io_completion swp_upl_ctx;
+};
+void vm_swapout_iodone(void *, int);
+
+
+static void vm_swapout_finish(c_segment_t, uint64_t, uint32_t, kern_return_t);
+kern_return_t vm_swap_put_finish(struct swapfile *, uint64_t *, int);
+kern_return_t vm_swap_put(vm_offset_t, uint64_t*, uint32_t, c_segment_t, struct swapout_io_completion *);
+
 void vm_swap_flush(void);
 void vm_swap_reclaim(void);
 void vm_swap_encrypt(c_segment_t);
@@ -92,7 +114,12 @@ extern void vm_swapfile_close(uint64_t path, struct vnode *vp);
 extern int vm_swapfile_preallocate(struct vnode *vp, uint64_t *size, boolean_t *pin);
 extern uint64_t vm_swapfile_get_blksize(struct vnode *vp);
 extern uint64_t vm_swapfile_get_transfer_size(struct vnode *vp);
-extern int vm_swapfile_io(struct vnode *vp, uint64_t offset, uint64_t start, int npages, int flags);
+extern int vm_swapfile_io(struct vnode *vp, uint64_t offset, uint64_t start, int npages, int flags, void *upl_ctx);
+
+#if CONFIG_FREEZE
+boolean_t vm_swap_max_budget(uint64_t *);
+int vm_swap_vol_get_budget(struct vnode* vp, uint64_t *freeze_daily_budget);
+#endif /* CONFIG_FREEZE */
 
 #if RECORD_THE_COMPRESSED_DATA
 extern int vm_record_file_write(struct vnode *vp, uint64_t offset, char *buf, int size);

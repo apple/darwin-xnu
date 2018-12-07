@@ -211,7 +211,7 @@ thread_set_child(thread_t child, int pid)
 {
 	pal_register_cache_state(child, DIRTY);
 
-	if (thread_is_64bit(child)) {
+	if (thread_is_64bit_addr(child)) {
 		x86_saved_state64_t	*iss64;
 
 		iss64 = USER_REGS64(child);
@@ -609,7 +609,7 @@ thread_setuserstack(
 	mach_vm_address_t	user_stack)
 {
 	pal_register_cache_state(thread, DIRTY);
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_addr(thread)) {
 		x86_saved_state64_t	*iss64;
 
 		iss64 = USER_REGS64(thread);
@@ -636,7 +636,7 @@ thread_adjuserstack(
 	int		adjust)
 {
 	pal_register_cache_state(thread, DIRTY);
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_addr(thread)) {
 		x86_saved_state64_t	*iss64;
 
 		iss64 = USER_REGS64(thread);
@@ -665,7 +665,7 @@ void
 thread_setentrypoint(thread_t thread, mach_vm_address_t entry)
 {
 	pal_register_cache_state(thread, DIRTY);
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_addr(thread)) {
 		x86_saved_state64_t	*iss64;
 
 		iss64 = USER_REGS64(thread);
@@ -685,7 +685,7 @@ kern_return_t
 thread_setsinglestep(thread_t thread, int on)
 {
 	pal_register_cache_state(thread, DIRTY);
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_addr(thread)) {
 		x86_saved_state64_t	*iss64;
 
 		iss64 = USER_REGS64(thread);

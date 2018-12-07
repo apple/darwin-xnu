@@ -41,6 +41,7 @@ DATAFILES = \
 	disconnectx.2		\
 	dup.2			\
 	dup2.2			\
+	errno.2			\
 	execve.2		\
 	exchangedata.2		\
 	faccessat.2		\

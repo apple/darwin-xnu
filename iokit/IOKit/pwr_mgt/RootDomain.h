@@ -511,7 +511,7 @@ public:
                             uintptr_t param1, uintptr_t param2, uintptr_t param3 = 0);
     void        tracePoint(uint8_t point);
     void        traceDetail(uint32_t msgType, uint32_t msgIndex, uint32_t delay);
-    void        traceDetail(OSObject *notifier);
+    void        traceDetail(OSObject *notifier, bool start);
     void        traceAckDelay(OSObject *notifier, uint32_t response, uint32_t delay_ms);
 
     void        startSpinDump(uint32_t spindumpKind);
@@ -553,12 +553,10 @@ public:
     void        sleepWakeDebugTrig(bool restart);
     void        sleepWakeDebugEnableWdog();
     bool        sleepWakeDebugIsWdogEnabled();
-    static void saveTimeoutAppStackShot(void *p0, void *p1);
     void        sleepWakeDebugSaveSpinDumpFile();
-    void        swdDebugSetup();
-    void        swdDebugTeardown();
     bool        checkShutdownTimeout();
     void        panicWithShutdownLog(uint32_t timeoutInMs);
+    uint32_t    getWatchdogTimeout();
 
 private:
     friend class PMSettingObject;
@@ -578,10 +576,6 @@ private:
                                     void * messageArgument, vm_size_t argSize );
 
     static bool displayWranglerMatchPublished( void * target, void * refCon,
-                                    IOService * newService,
-                                    IONotifier * notifier);
-
-    static bool IONVRAMMatchPublished( void * target, void * refCon,
                                     IOService * newService,
                                     IONotifier * notifier);
 
@@ -654,8 +648,6 @@ private:
     thread_call_t           extraSleepTimer;
     thread_call_t           diskSyncCalloutEntry;
     thread_call_t           fullWakeThreadCall;
-    thread_call_t           swdDebugSetupEntry;
-    thread_call_t           swdDebugTearDownEntry;
     thread_call_t           updateConsoleUsersEntry;
 
     // Track system capabilities.
@@ -787,12 +779,12 @@ private:
     volatile uint32_t   swd_lock;    /* Lock to access swd_buffer & and its header */
     void  *             swd_buffer;  /* Memory allocated for dumping sleep/wake logs */
     uint32_t            swd_flags;   /* Flags defined in IOPMPrivate.h */
-    uint8_t             swd_DebugImageSetup;
+    void *              swd_compressed_buffer;
     void  *             swd_spindump_buffer;
+    thread_t            notifierThread;
+    OSObject            *notifierObject;
 
     IOBufferMemoryDescriptor    *swd_memDesc;
-
-    IOMemoryMap  *      swd_logBufMap; /* Memory with sleep/wake logs from previous boot */
 
     // Wake Event Reporting
     OSArray *               _systemWakeEventsArray;
@@ -858,19 +850,12 @@ private:
 
     uint32_t    checkForValidDebugData(const char *fname, vfs_context_t *ctx, 
                                             void *tmpBuf, struct vnode **vp);
+    void        getFailureData(thread_t *thread, char *failureStr, size_t strLen);
+    void        saveFailureData2File();
+    void        tracePhase2String(uint32_t tracePhase, const char **phaseString, const char **description);
     void        sleepWakeDebugMemAlloc( );
     void        sleepWakeDebugSpinDumpMemAlloc( );
-    void        sleepWakeDebugDumpFromMem(IOMemoryMap *logBufMap);
-    void        sleepWakeDebugDumpFromFile( );
-    IOMemoryMap *sleepWakeDebugRetrieve();
     errno_t     sleepWakeDebugSaveFile(const char *name, char *buf, int len);
-    errno_t     sleepWakeDebugCopyFile( struct vnode *srcVp,
-                               vfs_context_t srcCtx,
-                               char *tmpBuf, uint64_t tmpBufSize,
-                               uint64_t srcOffset, 
-                               const char *dstFname, 
-                               uint64_t numBytes,
-                               uint32_t crc);
 
 
 #if HIBERNATION

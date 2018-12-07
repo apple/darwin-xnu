@@ -131,10 +131,10 @@ struct IODMACommandInternal
     UInt8  fPrepared;
     UInt8  fDoubleBuffer;
     UInt8  fNewMD;
-    UInt8  fLocalMapper;
     UInt8  fLocalMapperAllocValid;
     UInt8  fIOVMAddrValid;
     UInt8  fForceDoubleBuffer;
+    UInt8  fSetActiveNoMapper;
 
     vm_page_t fCopyPageAlloc;
     vm_page_t fCopyNext;

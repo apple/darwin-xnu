@@ -60,7 +60,9 @@
 
 #if DEVELOPMENT || DEBUG
 
-
+#if defined(PLATFORM_WatchOS)
+#define VALIDATE_C_SEGMENTS (1)
+#endif
 #endif
 
 #endif
@@ -78,7 +80,10 @@
 #define CHECKSUM_THE_SWAP		ENABLE_SWAP_CHECKS	/* Debug swap data */
 #define CHECKSUM_THE_DATA		ENABLE_COMPRESSOR_CHECKS	/* Debug compressor/decompressor data */
 #define CHECKSUM_THE_COMPRESSED_DATA	ENABLE_COMPRESSOR_CHECKS	/* Debug compressor/decompressor compressed data */
+
+#ifndef VALIDATE_C_SEGMENTS
 #define VALIDATE_C_SEGMENTS		ENABLE_COMPRESSOR_CHECKS	/* Debug compaction */
+#endif
 
 #define RECORD_THE_COMPRESSED_DATA	0
 
@@ -117,6 +122,7 @@ struct c_slot {
 #define	C_ON_SWAPPEDIN_Q	7
 #define	C_ON_MAJORCOMPACT_Q	8
 #define	C_ON_BAD_Q		9
+#define C_ON_SWAPIO_Q          10
 
 
 struct c_segment {
@@ -222,7 +228,8 @@ extern	vm_offset_t	c_buffers;
 #define C_SEG_IS_ONDISK(cseg)		((cseg->c_state == C_ON_SWAPPEDOUT_Q || cseg->c_state == C_ON_SWAPPEDOUTSPARSE_Q))
 #define C_SEG_IS_ON_DISK_OR_SOQ(cseg)	((cseg->c_state == C_ON_SWAPPEDOUT_Q || \
 					  cseg->c_state == C_ON_SWAPPEDOUTSPARSE_Q || \
-					  cseg->c_state == C_ON_SWAPOUT_Q))
+					  cseg->c_state == C_ON_SWAPOUT_Q || \
+					  cseg->c_state == C_ON_SWAPIO_Q))
 
 
 #define C_SEG_WAKEUP_DONE(cseg)				\
@@ -317,7 +324,7 @@ extern void		vm_swap_decrypt(c_segment_t);
 extern int		vm_swap_low_on_space(void);
 extern kern_return_t	vm_swap_get(c_segment_t, uint64_t, uint64_t);
 extern void		vm_swap_free(uint64_t);
-extern void		vm_swap_consider_defragmenting(void);
+extern void		vm_swap_consider_defragmenting(int);
 
 extern void		c_seg_swapin_requeue(c_segment_t, boolean_t, boolean_t, boolean_t);
 extern int		c_seg_swapin(c_segment_t, boolean_t, boolean_t);
@@ -358,6 +365,12 @@ extern uint32_t	vm_compressor_minorcompact_threshold_divisor;
 extern uint32_t	vm_compressor_majorcompact_threshold_divisor;
 extern uint32_t	vm_compressor_unthrottle_threshold_divisor;
 extern uint32_t	vm_compressor_catchup_threshold_divisor;
+
+extern uint32_t	vm_compressor_minorcompact_threshold_divisor_overridden;
+extern uint32_t	vm_compressor_majorcompact_threshold_divisor_overridden;
+extern uint32_t	vm_compressor_unthrottle_threshold_divisor_overridden;
+extern uint32_t	vm_compressor_catchup_threshold_divisor_overridden;
+
 extern uint64_t vm_compressor_compute_elapsed_msecs(clock_sec_t, clock_nsec_t, clock_sec_t, clock_nsec_t);
 
 #define PAGE_REPLACEMENT_DISALLOWED(enable)	(enable == TRUE ? lck_rw_lock_shared(&c_master_lock) : lck_rw_done(&c_master_lock))
@@ -366,14 +379,25 @@ extern uint64_t vm_compressor_compute_elapsed_msecs(clock_sec_t, clock_nsec_t, c
 
 #define AVAILABLE_NON_COMPRESSED_MEMORY		(vm_page_active_count + vm_page_inactive_count + vm_page_free_count + vm_page_speculative_count)
 #define AVAILABLE_MEMORY			(AVAILABLE_NON_COMPRESSED_MEMORY + VM_PAGE_COMPRESSOR_COUNT)
-/* TODO, there may be a minor optimisation opportunity to replace these divisions
+
+/*
+ * TODO, there may be a minor optimisation opportunity to replace these divisions
  * with multiplies and shifts
+ *
+ * By multiplying by 10, the divisors can have more precision w/o resorting to floating point... a divisor specified as 25 is in reality a divide by 2.5
+ * By multiplying by 9, you get a number ~11% smaller which allows us to have another limit point derived from the same base
+ * By multiplying by 11, you get a number ~10% bigger which allows us to generate a reset limit derived from the same base which is useful for hysteresis
  */
 
-#define	VM_PAGE_COMPRESSOR_COMPACT_THRESHOLD		(((AVAILABLE_MEMORY) * 10) / (vm_compressor_minorcompact_threshold_divisor ? vm_compressor_minorcompact_threshold_divisor : 1))
-#define	VM_PAGE_COMPRESSOR_SWAP_THRESHOLD		(((AVAILABLE_MEMORY) * 10) / (vm_compressor_majorcompact_threshold_divisor ? vm_compressor_majorcompact_threshold_divisor : 1))
-#define	VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD	(((AVAILABLE_MEMORY) * 10) / (vm_compressor_unthrottle_threshold_divisor ? vm_compressor_unthrottle_threshold_divisor : 1))
-#define VM_PAGE_COMPRESSOR_SWAP_CATCHUP_THRESHOLD	(((AVAILABLE_MEMORY) * 10) / (vm_compressor_catchup_threshold_divisor ? vm_compressor_catchup_threshold_divisor : 1))
+#define	VM_PAGE_COMPRESSOR_COMPACT_THRESHOLD		(((AVAILABLE_MEMORY) * 10) / (vm_compressor_minorcompact_threshold_divisor ? vm_compressor_minorcompact_threshold_divisor : 10))
+#define	VM_PAGE_COMPRESSOR_SWAP_THRESHOLD		(((AVAILABLE_MEMORY) * 10) / (vm_compressor_majorcompact_threshold_divisor ? vm_compressor_majorcompact_threshold_divisor : 10))
+
+#define	VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD	(((AVAILABLE_MEMORY) * 10) / (vm_compressor_unthrottle_threshold_divisor ? vm_compressor_unthrottle_threshold_divisor : 10))
+#define	VM_PAGE_COMPRESSOR_SWAP_RETHROTTLE_THRESHOLD	(((AVAILABLE_MEMORY) * 11) / (vm_compressor_unthrottle_threshold_divisor ? vm_compressor_unthrottle_threshold_divisor : 11))
+
+#define VM_PAGE_COMPRESSOR_SWAP_HAS_CAUGHTUP_THRESHOLD	(((AVAILABLE_MEMORY) * 11) / (vm_compressor_catchup_threshold_divisor ? vm_compressor_catchup_threshold_divisor : 11))
+#define VM_PAGE_COMPRESSOR_SWAP_CATCHUP_THRESHOLD	(((AVAILABLE_MEMORY) * 10) / (vm_compressor_catchup_threshold_divisor ? vm_compressor_catchup_threshold_divisor : 10))
+#define VM_PAGE_COMPRESSOR_HARD_THROTTLE_THRESHOLD      (((AVAILABLE_MEMORY) * 9) / (vm_compressor_catchup_threshold_divisor ? vm_compressor_catchup_threshold_divisor : 9))
 
 #ifdef	CONFIG_EMBEDDED
 #define AVAILABLE_NON_COMPRESSED_MIN			20000
@@ -383,11 +407,11 @@ extern uint64_t vm_compressor_compute_elapsed_msecs(clock_sec_t, clock_nsec_t, c
 #define COMPRESSOR_NEEDS_TO_SWAP() 		((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_THRESHOLD) ? 1 : 0)
 #endif
 
-#define VM_PAGEOUT_SCAN_NEEDS_TO_THROTTLE()				\
-	(vm_compressor_mode == VM_PAGER_COMPRESSOR_WITH_SWAP &&		\
-	 ((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_CATCHUP_THRESHOLD) ? 1 : 0))
-#define HARD_THROTTLE_LIMIT_REACHED()		((AVAILABLE_NON_COMPRESSED_MEMORY < (VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD) / 2) ? 1 : 0)
+#define HARD_THROTTLE_LIMIT_REACHED()		((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_HARD_THROTTLE_THRESHOLD) ? 1 : 0)
 #define SWAPPER_NEEDS_TO_UNTHROTTLE()		((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD) ? 1 : 0)
+#define SWAPPER_NEEDS_TO_RETHROTTLE()		((AVAILABLE_NON_COMPRESSED_MEMORY > VM_PAGE_COMPRESSOR_SWAP_RETHROTTLE_THRESHOLD) ? 1 : 0)
+#define SWAPPER_NEEDS_TO_CATCHUP()	       	((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_CATCHUP_THRESHOLD) ? 1 : 0)
+#define SWAPPER_HAS_CAUGHTUP()	       	        ((AVAILABLE_NON_COMPRESSED_MEMORY > VM_PAGE_COMPRESSOR_SWAP_HAS_CAUGHTUP_THRESHOLD) ? 1 : 0)
 #define COMPRESSOR_NEEDS_TO_MINOR_COMPACT()	((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_COMPACT_THRESHOLD) ? 1 : 0)
 
 

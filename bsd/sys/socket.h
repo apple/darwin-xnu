@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -153,6 +153,7 @@
 #ifdef PRIVATE
 #define	SO_NOWAKEFROMSLEEP	0x10000	/* Don't wake for traffic to this socket */
 #define	SO_NOAPNFALLBK		0x20000 /* Don't attempt APN fallback for the socket */
+#define	SO_TIMESTAMP_CONTINUOUS	0x40000	/* Continuous monotonic timestamp on rcvd dgram */
 #endif
 
 #endif  /* (!__APPLE__) */
@@ -276,7 +277,7 @@
 	(c == SO_TC_BK_SYS || c == SO_TC_BK || c == SO_TC_BE ||		\
 	c == SO_TC_RD || c == SO_TC_OAM || c == SO_TC_AV ||		\
 	c == SO_TC_RV || c == SO_TC_VI || c == SO_TC_VO ||		\
-	c == SO_TC_CTL)
+	c == SO_TC_CTL || c == SO_TC_NETSVC_SIG)
 
 #define	SO_TC_UNSPEC	((int)-1)		/* Traffic class not specified */
 
@@ -760,7 +761,12 @@ struct sockaddr_storage {
 #define	NET_RT_DUMPX		8	/* private */
 #define	NET_RT_DUMPX_FLAGS	9	/* private */
 #endif /* PRIVATE */
-#define	NET_RT_MAXID		10
+/*
+ * Allows read access non-local host's MAC address
+ * if the process has neighbor cache entitlement.
+ */
+#define	NET_RT_FLAGS_PRIV	10
+#define	NET_RT_MAXID		11
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 #ifdef KERNEL_PRIVATE
@@ -1084,6 +1090,7 @@ struct cmsgcred {
 #ifdef PRIVATE
 #define	SCM_SEQNUM			0x05	/* TCP unordered recv seq no */
 #define	SCM_MSG_PRIORITY		0x06	/* TCP unordered snd priority */
+#define	SCM_TIMESTAMP_CONTINUOUS		0x07	/* timestamp (uint64_t) */
 #endif /* PRIVATE */
 
 #ifdef KERNEL_PRIVATE

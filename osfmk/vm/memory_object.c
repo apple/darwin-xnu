@@ -122,15 +122,15 @@ decl_lck_mtx_data(,	memory_manager_default_lock)
  *		2. Page is precious and should_return is RETURN_ALL.
  *		3. Should_return is RETURN_ANYTHING.
  *
- *		As a side effect, m->dirty will be made consistent
+ *		As a side effect, m->vmp_dirty will be made consistent
  *		with pmap_is_modified(m), if should_return is not
  *		MEMORY_OBJECT_RETURN_NONE.
  */
 
 #define	memory_object_should_return_page(m, should_return) \
     (should_return != MEMORY_OBJECT_RETURN_NONE && \
-     (((m)->dirty || ((m)->dirty = pmap_is_modified(VM_PAGE_GET_PHYS_PAGE(m)))) || \
-      ((m)->precious && (should_return) == MEMORY_OBJECT_RETURN_ALL) || \
+     (((m)->vmp_dirty || ((m)->vmp_dirty = pmap_is_modified(VM_PAGE_GET_PHYS_PAGE(m)))) || \
+      ((m)->vmp_precious && (should_return) == MEMORY_OBJECT_RETURN_ALL) || \
       (should_return) == MEMORY_OBJECT_RETURN_ANYTHING))
 
 typedef	int	memory_object_lock_result_t;
@@ -171,18 +171,18 @@ memory_object_lock_page(
             m, should_return, should_flush, prot, 0);
 
 
-	if (m->busy || m->cleaning)
+	if (m->vmp_busy || m->vmp_cleaning)
 		return (MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK);
 
-	if (m->laundry)
+	if (m->vmp_laundry)
 		vm_pageout_steal_laundry(m, FALSE);
 
 	/*
 	 *	Don't worry about pages for which the kernel
 	 *	does not have any data.
 	 */
-	if (m->absent || m->error || m->restart) {
-		if (m->error && should_flush && !VM_PAGE_WIRED(m)) {
+	if (m->vmp_absent || m->vmp_error || m->vmp_restart) {
+		if (m->vmp_error && should_flush && !VM_PAGE_WIRED(m)) {
 			/*
 			 * dump the page, pager wants us to
 			 * clean it up and there is no
@@ -192,7 +192,7 @@ memory_object_lock_page(
 		}
 		return (MEMORY_OBJECT_LOCK_RESULT_DONE);
 	}
-	assert(!m->fictitious);
+	assert(!m->vmp_fictitious);
 
 	if (VM_PAGE_WIRED(m)) {
 		/*
@@ -486,10 +486,6 @@ MACRO_BEGIN								\
         int			upl_flags;                              \
 	memory_object_t		pager;					\
 									\
-	if (object->object_slid) {					\
-		panic("Objects with slid pages not allowed\n");		\
-	}								\
-				                   			\
 	if ((pager = (object)->pager) != MEMORY_OBJECT_NULL) {		\
 		vm_object_paging_begin(object);				\
 		vm_object_unlock(object);				\
@@ -598,7 +594,7 @@ vm_object_update_extent(
 				break;
 
 			case MEMORY_OBJECT_LOCK_RESULT_MUST_FREE:
-				if (m->dirty == TRUE)
+				if (m->vmp_dirty == TRUE)
 					dirty_count++;
 				dwp->dw_mask |= DW_vm_page_free;
 				break;
@@ -625,7 +621,7 @@ vm_object_update_extent(
 						/*
 						 * add additional state for the flush
 						 */
-						m->free_when_done = TRUE;
+						m->vmp_free_when_done = TRUE;
 					}
 					/*
 					 * we use to remove the page from the queues at this
@@ -767,7 +763,7 @@ vm_object_update(
 		vm_page_t		page;
 		vm_page_t		top_page;
 		kern_return_t		error = 0;
-		struct vm_object_fault_info fault_info;
+		struct vm_object_fault_info fault_info = {};
 
 		if (copy_object != VM_OBJECT_NULL) {
 		        /*
@@ -808,16 +804,11 @@ vm_object_update(
 		}
 		fault_info.interruptible = THREAD_UNINT;
 		fault_info.behavior  = VM_BEHAVIOR_SEQUENTIAL;
-		fault_info.user_tag  = 0;
-		fault_info.pmap_options = 0;
 		fault_info.lo_offset = copy_offset;
 		fault_info.hi_offset = copy_size;
-		fault_info.no_cache   = FALSE;
 		fault_info.stealth = TRUE;
-		fault_info.io_sync = FALSE;
-		fault_info.cs_bypass = FALSE;
-		fault_info.mark_zf_absent = FALSE;
-		fault_info.batch_pmap_op = FALSE;
+		assert(fault_info.cs_bypass == FALSE);
+		assert(fault_info.pmap_cs_associated == FALSE);
 
 		vm_object_paging_begin(copy_object);
 
@@ -958,24 +949,24 @@ BYPASS_COW_COPYIN:
 		m = (vm_page_t) vm_page_queue_first(&object->memq);
 
 		while (!vm_page_queue_end(&object->memq, (vm_page_queue_entry_t) m)) {
-			next = (vm_page_t) vm_page_queue_next(&m->listq);
+			next = (vm_page_t) vm_page_queue_next(&m->vmp_listq);
 
-			if ((m->offset >= start) && (m->offset < end)) {
+			if ((m->vmp_offset >= start) && (m->vmp_offset < end)) {
 			        /*
 				 * this is a page we're interested in
 				 * try to fit it into a current extent
 				 */
 			        for (n = 0; n < num_of_extents; n++) {
-				        if ((m->offset & e_mask) == extents[n].e_base) {
+				        if ((m->vmp_offset & e_mask) == extents[n].e_base) {
 					        /*
 						 * use (PAGE_SIZE - 1) to determine the
 						 * max offset so that we don't wrap if
 						 * we're at the last page of the space
 						 */
-					        if (m->offset < extents[n].e_min)
-						        extents[n].e_min = m->offset;
-						else if ((m->offset + (PAGE_SIZE - 1)) > extents[n].e_max)
-						        extents[n].e_max = m->offset + (PAGE_SIZE - 1);
+					        if (m->vmp_offset < extents[n].e_min)
+						        extents[n].e_min = m->vmp_offset;
+						else if ((m->vmp_offset + (PAGE_SIZE - 1)) > extents[n].e_max)
+						        extents[n].e_max = m->vmp_offset + (PAGE_SIZE - 1);
 					        break;
 					}
 				}
@@ -989,9 +980,9 @@ BYPASS_COW_COPYIN:
 						 * if we still have room, 
 						 * create a new extent
 						 */
-					        extents[n].e_base = m->offset & e_mask;
-						extents[n].e_min  = m->offset;
-						extents[n].e_max  = m->offset + (PAGE_SIZE - 1);
+					        extents[n].e_base = m->vmp_offset & e_mask;
+						extents[n].e_min  = m->vmp_offset;
+						extents[n].e_max  = m->vmp_offset + (PAGE_SIZE - 1);
 
 						num_of_extents++;
 					} else {
@@ -1556,23 +1547,33 @@ memory_object_super_upl_request(
 }
 
 kern_return_t
-memory_object_cluster_size(memory_object_control_t control, memory_object_offset_t *start,
-			   vm_size_t *length, uint32_t *io_streaming, memory_object_fault_info_t fault_info)
+memory_object_cluster_size(
+	memory_object_control_t	control,
+	memory_object_offset_t	*start,
+	vm_size_t		*length,
+	uint32_t		*io_streaming,
+	memory_object_fault_info_t mo_fault_info)
 {
 	vm_object_t		object;
+	vm_object_fault_info_t	fault_info;
 
 	object = memory_object_control_to_vm_object(control);
 
 	if (object == VM_OBJECT_NULL || object->paging_offset > *start)
-		return (KERN_INVALID_ARGUMENT);
+		return KERN_INVALID_ARGUMENT;
 
 	*start -= object->paging_offset;
 
-	vm_object_cluster_size(object, (vm_object_offset_t *)start, length, (vm_object_fault_info_t)fault_info, io_streaming);
+	fault_info = (vm_object_fault_info_t)(uintptr_t) mo_fault_info;
+	vm_object_cluster_size(object,
+			       (vm_object_offset_t *)start,
+			       length,
+			       fault_info,
+			       io_streaming);
 
 	*start += object->paging_offset;
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 
@@ -1931,7 +1932,7 @@ memory_object_is_signed(
 }
 
 boolean_t
-memory_object_is_slid(
+memory_object_is_shared_cache(
 	memory_object_control_t	control)
 {
 	vm_object_t	object = VM_OBJECT_NULL;
@@ -1940,7 +1941,7 @@ memory_object_is_slid(
 	if (object == VM_OBJECT_NULL)
 		return FALSE;
 
-	return object->object_slid;
+	return object->object_is_shared_cache;
 }
 
 static zone_t mem_obj_control_zone;

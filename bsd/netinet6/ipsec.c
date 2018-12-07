@@ -2873,8 +2873,10 @@ ipsec_updatereplay(u_int32_t seq, struct secasvar *sav)
 	wsizeb = replay->wsize << 3;
 
 	/* sequence number of 0 is invalid */
-	if (seq == 0)
-		return 1;
+    if (seq == 0) {
+        lck_mtx_unlock(sadb_mutex);
+        return 1;
+    }
 
 	/* first time */
 	if (replay->count == 0) {
@@ -3274,14 +3276,31 @@ ipsec4_interface_output(struct ipsec_output_state *state, ifnet_t interface)
 	
 	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
-	if (!state)
+	if (state == NULL) {
 		panic("state == NULL in ipsec4_output");
-	if (!state->m)
+	}
+	if (state->m == NULL) {
 		panic("state->m == NULL in ipsec4_output");
-	if (!state->dst)
+	}
+	if (state->dst == NULL) {
 		panic("state->dst == NULL in ipsec4_output");
+	}
+
+	struct ip *ip = mtod(state->m, struct ip *);
+
+	struct sockaddr_in src = {};
+	src.sin_family = AF_INET;
+	src.sin_len = sizeof(src);
+	memcpy(&src.sin_addr, &ip->ip_src, sizeof(src.sin_addr));
+
+	struct sockaddr_in dst = {};
+	dst.sin_family = AF_INET;
+	dst.sin_len = sizeof(dst);
+	memcpy(&dst.sin_addr, &ip->ip_dst, sizeof(dst.sin_addr));
 	
-	sav = key_alloc_outbound_sav_for_interface(interface, AF_INET);
+	sav = key_alloc_outbound_sav_for_interface(interface, AF_INET,
+											   (struct sockaddr *)&src,
+											   (struct sockaddr *)&dst);
 	if (sav == NULL) {
 		goto bad;
 	}
@@ -3291,13 +3310,15 @@ ipsec4_interface_output(struct ipsec_output_state *state, ifnet_t interface)
 	}
 	
 	KERNEL_DEBUG(DBG_FNC_IPSEC_OUT | DBG_FUNC_END, 0,0,0,0,0);
-	if (sav)
+	if (sav) {
 		key_freesav(sav, KEY_SADB_UNLOCKED);
+	}
 	return 0;
 	
 bad:
-	if (sav)
+	if (sav) {
 		key_freesav(sav, KEY_SADB_UNLOCKED);
+	}
 	m_freem(state->m);
 	state->m = NULL;
 	KERNEL_DEBUG(DBG_FNC_IPSEC_OUT | DBG_FUNC_END, error,0,0,0,0);
@@ -4058,16 +4079,34 @@ ipsec6_interface_output(struct ipsec_output_state *state, ifnet_t interface, u_c
 	
 	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
-	if (!state)
+	if (state == NULL) {
 		panic("state == NULL in ipsec6_output");
-	if (!state->m)
+	}
+	if (state->m == NULL) {
 		panic("state->m == NULL in ipsec6_output");
-	if (!nexthdrp)
+	}
+	if (nexthdrp == NULL) {
 		panic("nexthdrp == NULL in ipsec6_output");
-	if (!mprev)
+	}
+	if (mprev == NULL) {
 		panic("mprev == NULL in ipsec6_output");
-	
-	sav = key_alloc_outbound_sav_for_interface(interface, AF_INET6);
+	}
+
+	struct ip6_hdr *ip6 = mtod(state->m, struct ip6_hdr *);
+
+	struct sockaddr_in6 src = {};
+	src.sin6_family = AF_INET6;
+	src.sin6_len = sizeof(src);
+	memcpy(&src.sin6_addr, &ip6->ip6_src, sizeof(src.sin6_addr));
+
+	struct sockaddr_in6 dst = {};
+	dst.sin6_family = AF_INET6;
+	dst.sin6_len = sizeof(dst);
+	memcpy(&dst.sin6_addr, &ip6->ip6_dst, sizeof(dst.sin6_addr));
+
+	sav = key_alloc_outbound_sav_for_interface(interface, AF_INET6,
+											   (struct sockaddr *)&src,
+											   (struct sockaddr *)&dst);
 	if (sav == NULL) {
 		goto bad;
 	}
@@ -4083,13 +4122,15 @@ ipsec6_interface_output(struct ipsec_output_state *state, ifnet_t interface, u_c
 		}
 	}
 	
-	if (sav)
+	if (sav) {
 		key_freesav(sav, KEY_SADB_UNLOCKED);
+	}
 	return 0;
 	
 bad:
-	if (sav)
+	if (sav) {
 		key_freesav(sav, KEY_SADB_UNLOCKED);
+	}
 	m_freem(state->m);
 	state->m = NULL;
 	return error;

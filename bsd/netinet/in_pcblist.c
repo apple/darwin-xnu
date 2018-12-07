@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -64,6 +64,8 @@
 #include <sys/socketvar.h>
 #include <sys/protosw.h>
 #include <sys/domain.h>
+#include <sys/filedesc.h>
+#include <sys/file_internal.h>
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
 #include <sys/dtrace.h>
@@ -89,6 +91,8 @@
 #include <netinet/tcp_var.h>
 #include <netinet6/in6_var.h>
 
+#include <os/log.h>
+
 #ifndef ROUNDUP64
 #define	ROUNDUP64(x) P2ROUNDUP((x), sizeof (u_int64_t))
 #endif
@@ -99,6 +103,8 @@
 
 static void inpcb_to_xinpcb_n(struct inpcb *, struct xinpcb_n *);
 static void tcpcb_to_xtcpcb_n(struct tcpcb *, struct xtcpcb_n *);
+void shutdown_sockets_on_interface(struct ifnet *ifp);
+
 
 __private_extern__ void
 sotoxsocket_n(struct socket *so, struct xsocket_n *xso)
@@ -442,10 +448,39 @@ inpcb_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 		    (so->so_state & SS_ISDISCONNECTED))
 			continue;
 
-		if (!(protocol == PF_UNSPEC ||
-		    (protocol == PF_INET && (inp->inp_vflag & INP_IPV4)) ||
-		    (protocol == PF_INET6 && (inp->inp_vflag & INP_IPV6))))
-			continue;
+		/*
+		 * If protocol is specified, filter out inpcbs that
+		 * are not relevant to the protocol family of interest.
+		 */
+		if (protocol != PF_UNSPEC) {
+			if (protocol == PF_INET) {
+				/*
+				 * If protocol of interest is IPv4, skip the inpcb
+				 * if the family is not IPv4.
+				 * OR
+				 * If the family is IPv4, skip if the IPv4 flow is
+				 * CLAT46 translated.
+				 */
+				if ((inp->inp_vflag & INP_IPV4) == 0 ||
+				    (inp->inp_flags2 & INP2_CLAT46_FLOW) != 0) {
+					continue;
+				}
+			} else if (protocol == PF_INET6) {
+				/*
+				 * If protocol of interest is IPv6, skip the inpcb
+				 * if the family is not IPv6.
+				 * AND
+				 * The flow is not a CLAT46'd flow.
+				 */
+				if ((inp->inp_vflag & INP_IPV6) == 0 &&
+				    (inp->inp_flags2 & INP2_CLAT46_FLOW) == 0) {
+					continue;
+				}
+			} else {
+				/* Protocol family not supported */
+				continue;
+			}
+		}
 
 		if (SOCK_PROTO(inp->inp_socket) != IPPROTO_UDP &&
 		    SOCK_PROTO(inp->inp_socket) != IPPROTO_TCP)
@@ -630,4 +665,88 @@ inpcb_find_anypcb_byaddr(struct ifaddr *ifa, struct inpcbinfo *pcbinfo)
 	}
 	lck_rw_done(pcbinfo->ipi_lock);
 	return (0);
+}
+
+static int
+shutdown_sockets_on_interface_proc_callout(proc_t p, void *arg)
+{
+	struct filedesc *fdp;
+	int i;
+	struct ifnet *ifp = (struct ifnet *)arg;
+
+	if (ifp == NULL)
+		return (PROC_RETURNED);
+
+	proc_fdlock(p);
+	fdp = p->p_fd;
+	for (i = 0; i < fdp->fd_nfiles; i++) {
+		struct fileproc	*fp = fdp->fd_ofiles[i];
+		struct fileglob *fg;
+		struct socket *so;
+		struct inpcb *inp;
+		struct ifnet *inp_ifp;
+		int error;
+
+		if (fp == NULL || (fdp->fd_ofileflags[i] & UF_RESERVED) != 0) {
+			continue;
+		}
+
+		fg = fp->f_fglob;
+		if (FILEGLOB_DTYPE(fg) != DTYPE_SOCKET)
+			continue;
+
+		so = (struct socket *)fp->f_fglob->fg_data;
+		if (SOCK_DOM(so) != PF_INET && SOCK_DOM(so) != PF_INET6)
+			continue;
+
+		inp = (struct inpcb *)so->so_pcb;
+
+		if (in_pcb_checkstate(inp, WNT_ACQUIRE, 0) == WNT_STOPUSING)
+			continue;
+
+		socket_lock(so, 1);
+
+		if (in_pcb_checkstate(inp, WNT_RELEASE, 1) == WNT_STOPUSING) {
+			socket_unlock(so, 1);
+			continue;
+		}
+
+		if (inp->inp_boundifp != NULL) {
+			inp_ifp = inp->inp_boundifp;
+		} else if (inp->inp_last_outifp != NULL) {
+			inp_ifp = inp->inp_last_outifp;
+		} else {
+			socket_unlock(so, 1);
+			continue;
+		}
+
+		if (inp_ifp != ifp && inp_ifp->if_delegated.ifp != ifp) {
+			socket_unlock(so, 1);
+			continue;
+		}
+		error = sosetdefunct(p, so, 0, TRUE);
+		if (error != 0) {
+			log(LOG_ERR, "%s: sosetdefunct() error %d",
+			    __func__, error);
+		} else {
+			error = sodefunct(p, so, 0);
+			if (error != 0) {
+				log(LOG_ERR, "%s: sodefunct() error %d",
+				    __func__, error);
+			}
+		}
+
+		socket_unlock(so, 1);
+	}
+	proc_fdunlock(p);
+
+	return (PROC_RETURNED);
+}
+
+void
+shutdown_sockets_on_interface(struct ifnet *ifp)
+{
+	proc_iterate(PROC_ALLPROCLIST,
+		shutdown_sockets_on_interface_proc_callout,
+		ifp, NULL, NULL);
 }

@@ -832,6 +832,10 @@ def GetWaitqPreposts(waitq):
     wqset = Cast(waitq, 'waitq_set *')
     if wqset.wqset_prepost_id == 0:
         return []
+    if not wqset.wqset_q.waitq_prepost:
+        # If the "prepost_id" is non-zero, but the 'waitq_prepost' bit is
+        # *not* set, then this waitq actually has a prepost hook!
+        return [ "{0: <#18x}:{1: <18s}".format(wqset.wqset_prepost_id, "<hook>") ]
     return GetPrepostChain(wqset.wqset_prepost_id)
 
 

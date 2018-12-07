@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -257,8 +257,7 @@ pbuf_resize_segment(pbuf_t *pbuf, int off, int olen, int nlen)
 		}
 
 		pbuf_sync(pbuf);
-	} else
-	if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
+	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
 		struct pbuf_memory *nm = &pbuf->pb_memory;
 		u_int true_offset, move_len;
 		int delta_len;
@@ -280,9 +279,9 @@ pbuf_resize_segment(pbuf_t *pbuf, int off, int olen, int nlen)
 		VERIFY((nm->pm_len + nm->pm_offset) <= nm->pm_buffer_len);
 
 		pbuf_sync(pbuf);
-	} else
+	} else {
 		panic("pbuf_csum_flags_get: bad pb_type: %d", pbuf->pb_type);
-
+	}
 	return (rv);
 }
 
@@ -293,7 +292,7 @@ pbuf_contig_segment(pbuf_t *pbuf, int off, int len)
 
 	VERIFY(off >= 0);
 	VERIFY(len >= 0);
-	VERIFY((u_int)(off + len) < pbuf->pb_packet_len);
+	VERIFY((u_int)(off + len) <= pbuf->pb_packet_len);
 
 	/*
 	 * Note: If this fails, then the pbuf is destroyed. This is a
@@ -301,7 +300,6 @@ pbuf_contig_segment(pbuf_t *pbuf, int off, int len)
 	 *
 	 * PF expects this behaviour so it's not a real problem.
 	 */
-
 	if (pbuf->pb_type == PBUF_TYPE_MBUF) {
 		struct mbuf *n;
 		int moff;

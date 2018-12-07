@@ -62,8 +62,8 @@ lowglo lowGlo __attribute__ ((aligned(PAGE_MAX_SIZE))) = {
 	.lgManualPktAddr = (uint32_t)&manual_pkt,
 #endif
 	.lgPmapMemQ = (uint32_t)&(pmap_object_store.memq),
-	.lgPmapMemPageOffset = offsetof(struct vm_page_with_ppnum, phys_page),
-	.lgPmapMemChainOffset = offsetof(struct vm_page, listq),
+	.lgPmapMemPageOffset = offsetof(struct vm_page_with_ppnum, vmp_phys_page),
+	.lgPmapMemChainOffset = offsetof(struct vm_page, vmp_listq),
 	.lgPmapMemPagesize = (uint32_t)sizeof(struct vm_page),
 
 	.lgPmapMemStartAddr = -1,

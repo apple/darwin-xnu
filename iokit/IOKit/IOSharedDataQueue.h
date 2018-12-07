@@ -32,6 +32,9 @@
 #ifdef dequeue
 #undef dequeue
 #endif
+#ifdef enqueue
+#undef enqueue
+#endif
 
 #define DISABLE_DATAQUEUE_WARNING /* IODataQueue is deprecated, please use IOSharedDataQueue instead */
 
@@ -148,6 +151,12 @@ public:
      */
     virtual Boolean enqueue(void *data, UInt32 dataSize) APPLE_KEXT_OVERRIDE;
 
+#ifdef PRIVATE
+    /* workaround for queue.h redefine, please do not use */
+    __inline__ Boolean enqueue_tail(void *data, UInt32 dataSize) { return (IOSharedDataQueue::enqueue(data, dataSize)); }
+#endif
+
+#if APPLE_KEXT_VTABLE_PADDING
     OSMetaClassDeclareReservedUnused(IOSharedDataQueue, 0);
     OSMetaClassDeclareReservedUnused(IOSharedDataQueue, 1);
     OSMetaClassDeclareReservedUnused(IOSharedDataQueue, 2);
@@ -156,6 +165,7 @@ public:
     OSMetaClassDeclareReservedUnused(IOSharedDataQueue, 5);
     OSMetaClassDeclareReservedUnused(IOSharedDataQueue, 6);
     OSMetaClassDeclareReservedUnused(IOSharedDataQueue, 7);
+#endif
 };
 
 #endif /* _IOKIT_IOSHAREDDATAQUEUE_H */

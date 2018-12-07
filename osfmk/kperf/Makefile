@@ -13,6 +13,7 @@ EXPORT_ONLY_FILES = \
 			kperfbsd.h       \
 			kperf_timer.h    \
 			kdebug_trigger.h \
+			lazy.h           \
 			pet.h
 
 EXPORT_MI_DIR = kperf

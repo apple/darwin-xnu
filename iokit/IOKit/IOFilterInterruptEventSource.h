@@ -66,6 +66,10 @@ public:
     @discussion Backward compatibilty define for the old non-class scoped type definition.  See $link IOFilterInterruptSource::Filter */
 #define IOFilterInterruptAction IOFilterInterruptEventSource::Filter
 
+#ifdef __BLOCKS__
+    typedef bool (^FilterBlock)(IOFilterInterruptEventSource *sender);
+#endif /* __BLOCKS__ */
+
 private:
     // Hide the superclass initializers
     virtual bool init(OSObject *inOwner,
@@ -81,7 +85,12 @@ private:
 
 protected:
 /*! @var filterAction Filter callout */
+
+#if XNU_KERNEL_PRIVATE
+    union { Filter filterAction; FilterBlock filterActionBlock; };
+#else /* XNU_KERNEL_PRIVATE */
     Filter filterAction;
+#endif /* !XNU_KERNEL_PRIVATE */
 
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of the IOWorkLoop in the future.
@@ -110,6 +119,30 @@ public:
 				   IOService *provider,
 				   int intIndex = 0);
 
+#ifdef __BLOCKS__
+/*! @function filterInterruptEventSource
+    @abstract Factor method to create and initialise an IOFilterInterruptEventSource.  See $link init.
+    @param owner Owner/client of this event source.
+    @param provider Service that provides interrupts.
+    @param intIndex The index of the interrupt within the provider's interrupt sources.
+    @param action Block for the callout routine of this event source.
+    @param filter Block to invoke when HW interrupt occurs.
+    @result a new event source if succesful, 0 otherwise.  */
+    static IOFilterInterruptEventSource *
+	filterInterruptEventSource(OSObject *owner,
+				   IOService *provider,
+				   int intIndex,
+				   IOInterruptEventSource::ActionBlock action,
+				   FilterBlock filter);
+#endif /* __BLOCKS__ */
+
+#if XNU_KERNEL_PRIVATE
+    enum
+    {
+        kFilterBlock = kSubClass0,
+    };
+#endif
+
 /*! @function init
     @abstract Primary initialiser for the IOFilterInterruptEventSource class.
     @param owner Owner/client of this event source.
@@ -125,6 +158,7 @@ successfully.  */
 		      IOService *provider,
 		      int intIndex = 0);
 
+    virtual void free( void ) APPLE_KEXT_OVERRIDE;
 
 /*! @function signalInterrupt
     @abstract Cause the work loop to schedule the action.
@@ -135,6 +169,13 @@ successfully.  */
     @abstract Get'ter for filterAction variable.
     @result value of filterAction. */
     virtual Filter getFilterAction() const;
+
+#ifdef __BLOCKS__
+/*! @function getFilterActionBlock
+    @abstract Get'ter for filterAction variable.
+    @result value of filterAction. */
+    FilterBlock getFilterActionBlock() const;
+#endif /* __BLOCKS__ */
 
 /*! @function normalInterruptOccurred
     @abstract Override $link IOInterruptEventSource::normalInterruptOccured to make a filter callout. */

@@ -118,12 +118,15 @@ kperf_sample_cpu(struct kperf_timer *timer, bool system_sample,
 #endif /* DEVELOPMENT || DEBUG */
 
 	/* On a timer, we can see the "real" current thread */
+	thread_t thread = current_thread();
+	task_t task = get_threadtask(thread);
 	struct kperf_context ctx = {
-		.cur_thread = current_thread(),
+		.cur_thread = thread,
+		.cur_task = task,
+		.cur_pid = task_pid(task),
 		.trigger_type = TRIGGER_TYPE_TIMER,
 		.trigger_id = (unsigned int)(timer - kperf_timerv),
 	};
-	ctx.cur_pid = task_pid(get_threadtask(ctx.cur_thread));
 
 	if (ctx.trigger_id == pet_timer_id && ncpu < machine_info.logical_cpu_max) {
 		kperf_tid_on_cpus[ncpu] = thread_tid(ctx.cur_thread);
@@ -192,7 +195,7 @@ kperf_timer_handler(void *param0, __unused void *param1)
 	/*
 	 * IPI other cores only if the action has non-system samplers.
 	 */
-	if (kperf_sample_has_non_system(timer->actionid)) {
+	if (kperf_action_has_non_system(timer->actionid)) {
 		/*
 		 * If the core that's handling the timer is not scheduling
 		 * threads, only run system samplers.

@@ -1637,48 +1637,6 @@ IOWorkLoop *IOPlatformExpertDevice::getWorkLoop() const
 
 IOReturn IOPlatformExpertDevice::setProperties( OSObject * properties )
 {
-    OSDictionary * dictionary;
-    OSObject *     object;
-    IOReturn       status;
-
-    status = super::setProperties( properties );
-    if ( status != kIOReturnUnsupported ) return status;
-
-    status = IOUserClient::clientHasPrivilege( current_task( ), kIOClientPrivilegeAdministrator );
-    if ( status != kIOReturnSuccess ) return status;
-
-    dictionary = OSDynamicCast( OSDictionary, properties );
-    if ( dictionary == 0 ) return kIOReturnBadArgument;
-
-    object = dictionary->getObject( kIOPlatformUUIDKey );
-    if ( object )
-    {
-        IORegistryEntry * entry;
-        OSString *        string;
-        uuid_t            uuid;
-
-        string = ( OSString * ) getProperty( kIOPlatformUUIDKey );
-        if ( string ) return kIOReturnNotPermitted;
-
-        string = OSDynamicCast( OSString, object );
-        if ( string == 0 ) return kIOReturnBadArgument;
-
-        status = uuid_parse( string->getCStringNoCopy( ), uuid );
-        if ( status != 0 ) return kIOReturnBadArgument;
-
-        entry = IORegistryEntry::fromPath( "/options", gIODTPlane );
-        if ( entry )
-        {
-            entry->setProperty( "platform-uuid", uuid, sizeof( uuid_t ) );
-            entry->release( );
-        }
-
-        setProperty( kIOPlatformUUIDKey, string );
-        publishResource( kIOPlatformUUIDKey, string );
-
-        return kIOReturnSuccess;
-    }
-
     return kIOReturnUnsupported;
 }
 

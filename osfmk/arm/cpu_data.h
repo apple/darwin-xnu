@@ -46,18 +46,45 @@
 #include <mach/mach_types.h>
 #include <machine/thread.h>
 
-
 #define current_thread()	current_thread_fast()
 
-static inline thread_t current_thread_fast(void) 
+static inline __pure2 thread_t current_thread_fast(void) 
 {
-        thread_t        result;
 #if defined(__arm64__)
-        __asm__ volatile("mrs %0, TPIDR_EL1" : "=r" (result));
+	return (thread_t)(__builtin_arm_rsr64("TPIDR_EL1"));
 #else
-	result = (thread_t)__builtin_arm_mrc(15, 0, 13, 0, 4);	// TPIDRPRW
+	return (thread_t)(__builtin_arm_mrc(15, 0, 13, 0, 4));	// TPIDRPRW
 #endif
-        return result;
+}
+
+/*
+ * The "volatile" flavor of current_thread() is intended for use by
+ * scheduler code which may need to update the thread pointer in the
+ * course of a context switch.  Any call to current_thread() made
+ * prior to the thread pointer update should be safe to optimize away
+ * as it should be consistent with that thread's state to the extent
+ * the compiler can reason about it.  Likewise, the context switch
+ * path will eventually result in an arbitrary branch to the new
+ * thread's pc, about which the compiler won't be able to reason.
+ * Thus any compile-time optimization of current_thread() calls made
+ * within the new thread should be safely encapsulated in its
+ * register/stack state.  The volatile form therefore exists to cover
+ * the window between the thread pointer update and the branch to
+ * the new pc.
+ */
+static inline thread_t current_thread_volatile(void)
+{
+	/* The compiler treats rsr64 as const, which can allow
+	   it to eliminate redundant calls, which we don't want here.
+	   Thus we use volatile asm.  The mrc used for arm32 should be
+	   treated as volatile however. */
+#if defined(__arm64__)
+	thread_t result;
+	__asm__ volatile("mrs %0, TPIDR_EL1" : "=r" (result));
+	return result;
+#else
+	return (thread_t)(__builtin_arm_mrc(15, 0, 13, 0, 4));	// TPIDRPRW
+#endif
 }
 
 #if defined(__arm64__)

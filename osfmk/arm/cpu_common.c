@@ -515,6 +515,33 @@ processor_to_cpu_datap(processor_t processor)
 	return target_cpu_datap;
 }
 
+cpu_data_t *
+cpu_data_alloc(boolean_t is_boot_cpu)
+{
+	cpu_data_t		*cpu_data_ptr = NULL;
+
+	if (is_boot_cpu)
+		cpu_data_ptr = &BootCpuData;
+	else {
+		if ((kmem_alloc(kernel_map, (vm_offset_t *)&cpu_data_ptr, sizeof(cpu_data_t), VM_KERN_MEMORY_CPU)) != KERN_SUCCESS)
+			goto cpu_data_alloc_error;
+
+		bzero((void *)cpu_data_ptr, sizeof(cpu_data_t));
+
+		cpu_stack_alloc(cpu_data_ptr);
+	}
+
+	cpu_data_ptr->cpu_processor = cpu_processor_alloc(is_boot_cpu);
+	if (cpu_data_ptr->cpu_processor == (struct processor *)NULL)
+		goto cpu_data_alloc_error;
+
+	return cpu_data_ptr;
+
+cpu_data_alloc_error:
+	panic("cpu_data_alloc() failed\n");
+	return (cpu_data_t *)NULL;
+}
+
 ast_t *
 ast_pending(void)
 {

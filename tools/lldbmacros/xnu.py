@@ -802,6 +802,7 @@ from pmap import *
 from ioreg import *
 from mbufs import *
 from net import *
+from skywalk import *
 from kdp import *
 from userspace import *
 from pci import *
@@ -812,6 +813,7 @@ from atm import *
 from structanalyze import *
 from ipcimportancedetail import *
 from bank import *
+from turnstile import *
 from kasan import *
 from kauth import *
 from waitq import *
@@ -820,6 +822,6 @@ from ktrace import *
 from pgtrace import *
 from xnutriage import *
 from kevent import *
+from workqueue import *
 from ntstat import *
 from zonetriage import *
-

@@ -101,7 +101,8 @@ typedef void * kcdata_descriptor_t;
 
 uint32_t kcdata_estimate_required_buffer_size(uint32_t num_items, uint32_t payload_size);
 uint64_t kcdata_memory_get_used_bytes(kcdata_descriptor_t kcd);
-kern_return_t kcdata_memcpy(kcdata_descriptor_t data, mach_vm_address_t dst_addr, void * src_addr, uint32_t size);
+kern_return_t kcdata_memcpy(kcdata_descriptor_t data, mach_vm_address_t dst_addr, const void * src_addr, uint32_t size);
+kern_return_t kcdata_bzero(kcdata_descriptor_t data, mach_vm_address_t dst_addr, uint32_t size);
 kern_return_t kcdata_get_memory_addr(kcdata_descriptor_t data, uint32_t type, uint32_t size, mach_vm_address_t * user_addr);
 kern_return_t kcdata_get_memory_addr_for_array(
     kcdata_descriptor_t data, uint32_t type_of_element, uint32_t size_of_element, uint32_t count, mach_vm_address_t * user_addr);

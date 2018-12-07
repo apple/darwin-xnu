@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 1995-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1136,8 +1136,8 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 	 * Note that since we won't ever copy out more than the caller requested,
 	 * we never need to allocate more than they offer.
 	 */
-	ab.allocated = ulmin(bufferSize, fixedsize + varsize);
-	if (ab.allocated > ATTR_MAX_BUFFER) {
+	ab.allocated = fixedsize + varsize;
+	if (((size_t)ab.allocated) > ATTR_MAX_BUFFER) {
 		error = ENOMEM;
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: buffer size too large (%d limit %d)", ab.allocated, ATTR_MAX_BUFFER);
 		goto out;
@@ -1182,6 +1182,10 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 	ab.needed = fixedsize + varsize;
 
 	/* common attributes **************************************************/
+	if (alp->commonattr & ATTR_CMN_ERROR) {
+		ATTR_PACK4(ab, 0);
+		ab.actual.commonattr |= ATTR_CMN_ERROR;
+	}
 	if (alp->commonattr & ATTR_CMN_NAME) {
 		attrlist_pack_string(&ab, cnp, cnl);
 		ab.actual.commonattr |= ATTR_CMN_NAME;
@@ -1477,7 +1481,7 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 	 * of the result buffer, even if we copied less out.  The caller knows how big a buffer
 	 * they gave us, so they can always check for truncation themselves.
 	 */
-	*(uint32_t *)ab.base = (options & FSOPT_REPORT_FULLSIZE) ? ab.needed : imin(ab.allocated, ab.needed);
+	*(uint32_t *)ab.base = (options & FSOPT_REPORT_FULLSIZE) ? ab.needed : imin(bufferSize, ab.needed);
 
 	/* Return attribute set output if requested. */
 	if (return_valid &&
@@ -1493,9 +1497,9 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 
 	if (UIO_SEG_IS_USER_SPACE(segflg))
 		error = copyout(ab.base, CAST_USER_ADDR_T(attributeBuffer),
-		                ab.allocated);
+		                ulmin(bufferSize, ab.needed));
 	else
-		bcopy(ab.base, (void *)attributeBuffer, (size_t)ab.allocated);
+		bcopy(ab.base, (void *)attributeBuffer, (size_t)ulmin(bufferSize, ab.needed));
 
 out:
 	if (vs.f_vol_name != NULL)
@@ -3700,6 +3704,7 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 	struct fileproc *fp;
 	struct fd_vn_data *fvdata;
 	vfs_context_t ctx;
+	uthread_t ut;
 	enum uio_seg segflg;
 	int count;
 	uio_t auio = NULL;
@@ -3719,6 +3724,7 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 	fvdata = NULL;
 	eofflag = 0;
 	ctx = vfs_context_current();
+	ut = get_bsdthread_info(current_thread());
 	segflg = IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32;
 
 	if ((fp->f_fglob->fg_flag & FREAD) == 0) {
@@ -3865,8 +3871,14 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 			(void)getattrlist_setupvattr_all(&al, &va, VNON, NULL,
 			    IS_64BIT_PROCESS(p), (uap->options & FSOPT_ATTR_CMN_EXTENDED));
 
+			/*
+			 * Set UT_KERN_RAGE_VNODES to cause all vnodes created by the
+			 * filesystem to be rapidly aged.
+			 */
+			ut->uu_flag |= UT_KERN_RAGE_VNODES;
 			error = VNOP_GETATTRLISTBULK(dvp, &al, &va, auio, NULL,
 			    options, &eofflag, &count, ctx);
+			ut->uu_flag &= ~UT_KERN_RAGE_VNODES;
 
 			FREE(va_name, M_TEMP);
 
@@ -3887,8 +3899,10 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 		eofflag = 0;
 		count = 0;
 
+		ut->uu_flag |= UT_KERN_RAGE_VNODES;
 		error = readdirattr(dvp, fvdata, auio, &al, options,
 		    &count, &eofflag, ctx);
+		ut->uu_flag &= ~UT_KERN_RAGE_VNODES;
 	}
 
 	if (count) {

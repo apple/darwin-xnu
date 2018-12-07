@@ -75,9 +75,10 @@ function state_string(strings, state)
 end
 
 kqrequest_state_strings = {
-	['PROCESSING'] = 0x1,
-	['THREQUESTED'] = 0x2,
-	['WAKEUP'] = 0x4
+	['THREQUESTED'] = 0x02,
+	['WAKEUP'] = 0x04,
+	['BOUND'] = 0x08,
+	['DRAIN'] = 0x40,
 }
 
 kqueue_state_strings = {
@@ -100,7 +101,7 @@ knote_state_strings = {
 	['QUEUED'] = 0x0002,
 	['DISABLED'] = 0x0004,
 	['DROPPING'] = 0x0008,
-	['USEWAIT'] = 0x0010,
+	['LOCKED'] = 0x0010,
 	['ATTACHING'] = 0x0020,
 	['STAYACTIVE'] = 0x0040,
 	['DEFERDELETE'] = 0x0080,
@@ -108,28 +109,10 @@ knote_state_strings = {
 	['DISPATCH'] = 0x0200,
 	['UDATA_SPECIFIC'] = 0x0400,
 	['SUPPRESSED'] = 0x0800,
-	['STOLENDROP'] = 0x1000,
+	['MERGE_QOS'] = 0x1000,
 	['REQVANISH'] = 0x2000,
 	['VANISHED'] = 0x4000,
 }
-knote_state_strings = {
-	['ACTIVE'] = 0x0001,
-	['QUEUED'] = 0x0002,
-	['DISABLED'] = 0x0004,
-	['DROPPING'] = 0x0008,
-	['USEWAIT'] = 0x0010,
-	['ATTACHING'] = 0x0020,
-	['STAYACTIVE'] = 0x0040,
-	['DEFERDELETE'] = 0x0080,
-	['ATTACHED'] = 0x0100,
-	['DISPATCH'] = 0x0200,
-	['UDATA_SPECIFIC'] = 0x0400,
-	['SUPPRESSED'] = 0x0800,
-	['STOLENDROP'] = 0x1000,
-	['REQVANISH'] = 0x2000,
-	['VANISHED'] = 0x4000,
-}
-
 
 kevent_flags_strings = {
 	['ADD'] = 0x0001,
@@ -272,7 +255,7 @@ trace_eventname("KEVENT_kqwl_bind", function(buf)
 			event_prefix_string(buf, false), buf.arg2, qos_string(qos),
 			kqr_override_qos_delta,
 			state_string(kqrequest_state_strings, kqr_state),
-			duplicate ? ", duplicate" : "")
+			duplicate and ", duplicate" or "")
 end)
 
 trace_eventname("KEVENT_kqwl_unbind", function(buf)

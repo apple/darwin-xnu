@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -104,6 +104,7 @@
 #include <net/if.h>
 #include <net/radix.h>
 #include <net/route.h>
+#include <net/nat464_utils.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -630,6 +631,8 @@ SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXDYNROUTES,
 SYSCTL_INT(_net_inet6_ip6, OID_AUTO,
 	only_allow_rfc4193_prefixes, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&ip6_only_allow_rfc4193_prefix,	0, "");
+SYSCTL_INT(_net_inet6_ip6, OID_AUTO,
+	clat_debug, CTLFLAG_RW | CTLFLAG_LOCKED,	&clat_debug,		0, "");
 
 /* net.inet6.icmp6 */
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_REDIRACCEPT,

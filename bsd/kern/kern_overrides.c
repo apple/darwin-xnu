@@ -26,10 +26,6 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-/*
- * System Overrides syscall implementation
- */
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -52,6 +48,7 @@
 #include <sys/kdebug.h>
 #include <sys/sysproto.h>
 #include <sys/msgbuf.h>
+#include <sys/kern_memorystatus.h>
 
 /* Mutex for global system override state */
 static lck_mtx_t	sys_override_lock;
@@ -59,9 +56,33 @@ static lck_grp_t        *sys_override_mtx_grp;
 static lck_attr_t       *sys_override_mtx_attr;
 static lck_grp_attr_t   *sys_override_mtx_grp_attr;
 
-/* Assertion counts for system properties */
+/* 
+ * Assertion counts for system properties (add new ones for each new mechanism)
+ *
+ * The assertion count management for system overrides is as follows:
+ *
+ * - All assertion counts are protected by the sys_override_lock.
+ *
+ * - Each caller of system_override() increments the assertion count for the 
+ *   mechanism it specified in the flags. The caller then blocks for the 
+ *   timeout specified in the system call. 
+ *
+ * - At the end of the timeout, the caller thread wakes up and decrements the 
+ *   assertion count for the mechanism it originally took an assertion on.
+ *
+ * - If another caller calls the system_override() to disable the override 
+ *   for a mechanism, it simply disables the mechanism without changing any 
+ *   assertion counts. That way, the assertion counts are properly balanced. 
+ *
+ * One thing to note is that a SYS_OVERRIDE_DISABLE disables the overrides 
+ * for a mechanism irrespective of how many clients requested that override.
+ * That makes the implementation simpler and avoids keeping a lot of process 
+ * specific state in the kernel.
+ *
+ */
 static int64_t		io_throttle_assert_cnt;
 static int64_t		cpu_throttle_assert_cnt;
+static int64_t		fast_jetsam_assert_cnt;
 
 /* Wait Channel for system override */
 static uint64_t		sys_override_wait;
@@ -69,18 +90,12 @@ static uint64_t		sys_override_wait;
 /* Global variable to indicate if system_override is enabled */
 int 			sys_override_enabled;
 
-/* Sysctl definition for sys_override_enabled */
-SYSCTL_INT(_debug, OID_AUTO, sys_override_enabled, CTLFLAG_RW | CTLFLAG_LOCKED, &sys_override_enabled, 0, "");
-
-/* Forward Declarations */
-static void enable_system_override(uint64_t flags);
-static void disable_system_override(uint64_t flags);
+/* Helper routines */
+static void system_override_begin(uint64_t flags);
+static void system_override_end(uint64_t flags);
+static void system_override_abort(uint64_t flags);
+static void system_override_callouts(uint64_t flags, boolean_t enable_override);
 static __attribute__((noinline)) void PROCESS_OVERRIDING_SYSTEM_DEFAULTS(uint64_t timeout);
-
-/***************************** system_override ********************/
-/*
- * int system_override(uint64_t timeout, uint64_t flags);
- */
 
 void
 init_system_override()
@@ -89,7 +104,7 @@ init_system_override()
 	sys_override_mtx_grp = lck_grp_alloc_init("system_override", sys_override_mtx_grp_attr);
 	sys_override_mtx_attr = lck_attr_alloc_init();
 	lck_mtx_init(&sys_override_lock, sys_override_mtx_grp, sys_override_mtx_attr);
-	io_throttle_assert_cnt = cpu_throttle_assert_cnt = 0;
+	io_throttle_assert_cnt = cpu_throttle_assert_cnt = fast_jetsam_assert_cnt = 0;
 	sys_override_enabled = 1;
 }
 
@@ -106,37 +121,28 @@ system_override(__unused struct proc *p, struct system_override_args * uap, __un
 		goto out;
 	}	
 
-	/* Check to see if some flags are specified. */
+	/* Check to see if sane flags are specified. */
 	if ((flags & ~SYS_OVERRIDE_FLAGS_MASK) != 0) {
 		error = EINVAL;
 		goto out;
 	}
 
-	if (flags == SYS_OVERRIDE_DISABLE) {
-		
-		printf("Process %s [%d] disabling system_override()\n", current_proc()->p_comm, current_proc()->p_pid);
-
-		lck_mtx_lock(&sys_override_lock);
-		
-		if (io_throttle_assert_cnt > 0)
-			sys_override_io_throttle(THROTTLE_IO_ENABLE);
-		if (cpu_throttle_assert_cnt > 0)
-			sys_override_cpu_throttle(CPU_THROTTLE_ENABLE);
-
-		sys_override_enabled = 0;
-				
-		lck_mtx_unlock(&sys_override_lock);
-
+	/* Make sure that the system override syscall has been initialized */
+	if (!sys_override_enabled) {
+		error = EINVAL;
 		goto out;
 	}
 
 	lck_mtx_lock(&sys_override_lock);
 
-	enable_system_override(flags);
-
-	PROCESS_OVERRIDING_SYSTEM_DEFAULTS(timeout);
-
-	disable_system_override(flags);
+	if (flags & SYS_OVERRIDE_DISABLE) {
+		flags &= ~SYS_OVERRIDE_DISABLE;
+		system_override_abort(flags);
+	} else {
+		system_override_begin(flags);
+		PROCESS_OVERRIDING_SYSTEM_DEFAULTS(timeout);
+		system_override_end(flags);
+	}
 
 	lck_mtx_unlock(&sys_override_lock);
 
@@ -145,61 +151,163 @@ out:
 }
 
 /*
- * Call for enabling global system override.
- * This should be called only with the sys_override_lock held.
+ * Helper routines for enabling/disabling system overrides for various mechanisms.
+ * These routines should be called with the sys_override_lock held. Each subsystem 
+ * which is hooked into the override service provides two routines:
+ * 
+ * - void sys_override_foo_init(void);
+ * Routine to initialize the subsystem or the data needed for the override to work.
+ * This routine is optional and if a subsystem needs it, it should be invoked from 
+ * init_system_override().
+ * 
+ * - void sys_override_foo(boolean_t enable_override);
+ * Routine to enable/disable the override mechanism for that subsystem. A value of 
+ * true indicates that the mechanism should be overridden and the special behavior 
+ * should begin. A false value indicates that the subsystem should return to default 
+ * behavior. This routine is mandatory and should be invoked as part of the helper 
+ * routines if the flags passed in the syscall match the subsystem. Also, this 
+ * routine should preferably be idempotent.
+ */
+
+static void
+system_override_callouts(uint64_t flags, boolean_t enable_override)
+{
+	switch (flags) {
+		case SYS_OVERRIDE_IO_THROTTLE:
+			if (enable_override) {
+				KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_THROTTLE, IO_THROTTLE_DISABLE) | DBG_FUNC_START, 
+					current_proc()->p_pid, 0, 0, 0, 0);
+			} else {
+				KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_THROTTLE, IO_THROTTLE_DISABLE) | DBG_FUNC_END, 
+					current_proc()->p_pid, 0, 0, 0, 0);
+			}
+			sys_override_io_throttle(enable_override);
+			break;
+
+		case SYS_OVERRIDE_CPU_THROTTLE:
+			if (enable_override) {
+				KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_CPU_THROTTLE_DISABLE) | DBG_FUNC_START, 
+					current_proc()->p_pid, 0, 0, 0, 0);
+			} else {
+				KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_CPU_THROTTLE_DISABLE) | DBG_FUNC_END, 
+					current_proc()->p_pid, 0, 0, 0, 0);
+			}
+			sys_override_cpu_throttle(enable_override);
+			break;
+
+		case SYS_OVERRIDE_FAST_JETSAM:
+			if (enable_override) {
+				KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_MEMSTAT, BSD_MEMSTAT_FAST_JETSAM) | DBG_FUNC_START, 
+					current_proc()->p_pid, 0, 0, 0, 0);
+			} else {
+				KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_MEMSTAT, BSD_MEMSTAT_FAST_JETSAM) | DBG_FUNC_END, 
+					current_proc()->p_pid, 0, 0, 0, 0);
+			}
+#if CONFIG_JETSAM
+			memorystatus_fast_jetsam_override(enable_override);
+#endif /* CONFIG_JETSAM */
+			break;
+
+		default:
+			panic("Unknown option to system_override_callouts(): %llu\n", flags);
+	}
+}
+
+/*
+ * system_override_begin(uint64_t flags)
+ *
+ * Routine to start a system override if the assertion count 
+ * transitions from 0->1 for a specified mechanism.
  */
 static void
-enable_system_override(uint64_t flags)
+system_override_begin(uint64_t flags)
 {
+	lck_mtx_assert(&sys_override_lock, LCK_MTX_ASSERT_OWNED);
 	
 	if (flags & SYS_OVERRIDE_IO_THROTTLE) {
-		if ((io_throttle_assert_cnt == 0) && sys_override_enabled) {
-			/* Disable I/O Throttling */
-			printf("Process %s [%d] disabling system-wide I/O Throttling\n", current_proc()->p_comm, current_proc()->p_pid);
-			sys_override_io_throttle(THROTTLE_IO_DISABLE);
+		if (io_throttle_assert_cnt == 0) {
+			system_override_callouts(SYS_OVERRIDE_IO_THROTTLE, true);
 		}
-		KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_THROTTLE, IO_THROTTLE_DISABLE) | DBG_FUNC_START, current_proc()->p_pid, 0, 0, 0, 0);
 		io_throttle_assert_cnt++;
 	}
 	
 	if (flags & SYS_OVERRIDE_CPU_THROTTLE) {
-		if ((cpu_throttle_assert_cnt == 0) && sys_override_enabled) {
-			/* Disable CPU Throttling */
-			printf("Process %s [%d] disabling system-wide CPU Throttling\n", current_proc()->p_comm, current_proc()->p_pid);
-			sys_override_cpu_throttle(CPU_THROTTLE_DISABLE);
+		if (cpu_throttle_assert_cnt == 0) {
+			system_override_callouts(SYS_OVERRIDE_CPU_THROTTLE, true);
 		}
-		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_CPU_THROTTLE_DISABLE) | DBG_FUNC_START, current_proc()->p_pid, 0, 0, 0, 0);
 		cpu_throttle_assert_cnt++;
+	}
+	
+	if (flags & SYS_OVERRIDE_FAST_JETSAM) {
+		if (fast_jetsam_assert_cnt == 0) {
+			system_override_callouts(SYS_OVERRIDE_FAST_JETSAM, true);
+		}
+		fast_jetsam_assert_cnt++;
 	}
 
 }
 
 /*
- * Call for disabling global system override.
- * This should be called only with the sys_override_lock held.
+ * system_override_end(uint64_t flags)
+ *
+ * Routine to end a system override if the assertion count 
+ * transitions from 1->0 for a specified mechanism.
  */
 static void
-disable_system_override(uint64_t flags)
+system_override_end(uint64_t flags)
 {
 
+	lck_mtx_assert(&sys_override_lock, LCK_MTX_ASSERT_OWNED);
+	
 	if (flags & SYS_OVERRIDE_IO_THROTTLE) {
 		assert(io_throttle_assert_cnt > 0);
 		io_throttle_assert_cnt--;
-		KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_THROTTLE, IO_THROTTLE_DISABLE) | DBG_FUNC_END, current_proc()->p_pid, 0, 0, 0, 0);
-		if ((io_throttle_assert_cnt == 0) && sys_override_enabled) {
-			/* Enable I/O Throttling */
-			sys_override_io_throttle(THROTTLE_IO_ENABLE);
+		if (io_throttle_assert_cnt == 0) {
+			system_override_callouts(SYS_OVERRIDE_IO_THROTTLE, false);
 		}
 	}
 
 	if (flags & SYS_OVERRIDE_CPU_THROTTLE) {
 		assert(cpu_throttle_assert_cnt > 0);
 		cpu_throttle_assert_cnt--;
-		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_CPU_THROTTLE_DISABLE) | DBG_FUNC_END, current_proc()->p_pid, 0, 0, 0, 0);
-		if ((cpu_throttle_assert_cnt == 0) && sys_override_enabled) {
-			/* Enable CPU Throttling */
-			sys_override_cpu_throttle(CPU_THROTTLE_ENABLE);
+		if (cpu_throttle_assert_cnt == 0) {
+			system_override_callouts(SYS_OVERRIDE_CPU_THROTTLE, false);
 		}
+	}
+
+	if (flags & SYS_OVERRIDE_FAST_JETSAM) {
+		assert(fast_jetsam_assert_cnt > 0);
+		fast_jetsam_assert_cnt--;
+		if (fast_jetsam_assert_cnt == 0) {
+			system_override_callouts(SYS_OVERRIDE_FAST_JETSAM, false);
+		}
+	}
+
+}
+
+/*
+ * system_override_abort(uint64_t flags)
+ *
+ * Routine to abort a system override (if one was active) 
+ * irrespective of the assertion counts and number of blocked 
+ * requestors.
+ */
+static void
+system_override_abort(uint64_t flags)
+{
+	
+	lck_mtx_assert(&sys_override_lock, LCK_MTX_ASSERT_OWNED);
+	
+	if ((flags & SYS_OVERRIDE_IO_THROTTLE) && (io_throttle_assert_cnt > 0)) {
+		system_override_callouts(SYS_OVERRIDE_IO_THROTTLE, false);
+	}
+
+	if ((flags & SYS_OVERRIDE_CPU_THROTTLE) && (cpu_throttle_assert_cnt > 0))  {
+		system_override_callouts(SYS_OVERRIDE_CPU_THROTTLE, false);
+	}
+
+	if ((flags & SYS_OVERRIDE_FAST_JETSAM) && (fast_jetsam_assert_cnt > 0))  {
+		system_override_callouts(SYS_OVERRIDE_FAST_JETSAM, false);
 	}
 }
 

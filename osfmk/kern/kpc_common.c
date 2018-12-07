@@ -68,8 +68,8 @@ static bool kpc_calling_pm = false;
 #endif /* MACH_ASSERT */
 
 boolean_t kpc_context_switch_active = FALSE;
+bool kpc_supported = true;
 
-void kpc_common_init(void);
 void
 kpc_common_init(void)
 {
@@ -503,13 +503,19 @@ kpc_set_config(uint32_t classes, kpc_config_t *configv)
 	return ret;
 }
 
+uint32_t
+kpc_get_counterbuf_size(void)
+{
+	return COUNTERBUF_SIZE;
+}
+
 /* allocate a buffer large enough for all possible counters */
 uint64_t *
 kpc_counterbuf_alloc(void)
 {
 	uint64_t *buf = NULL;
 
-	buf = kalloc(COUNTERBUF_SIZE);
+	buf = kalloc_tag(COUNTERBUF_SIZE, VM_KERN_MEMORY_DIAG);
 	if (buf) {
 		bzero(buf, COUNTERBUF_SIZE);
 	}
@@ -529,16 +535,19 @@ void
 kpc_sample_kperf(uint32_t actionid)
 {
 	struct kperf_sample sbuf;
-	struct kperf_context ctx;
 
 	BUF_DATA(PERF_KPC_HNDLR | DBG_FUNC_START);
 
-	ctx.cur_pid = 0;
-	ctx.cur_thread = current_thread();
-	ctx.cur_pid = task_pid(current_task());
+	thread_t thread = current_thread();
+	task_t task = get_threadtask(thread);
 
-	ctx.trigger_type = TRIGGER_TYPE_PMI;
-	ctx.trigger_id = 0;
+	struct kperf_context ctx = {
+		.cur_thread = thread,
+		.cur_task = task,
+		.cur_pid = task_pid(task),
+		.trigger_type = TRIGGER_TYPE_PMI,
+		.trigger_id = 0,
+	};
 
 	int r = kperf_sample(&sbuf, &ctx, actionid, SAMPLE_FLAG_PEND_USER);
 

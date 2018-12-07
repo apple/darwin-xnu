@@ -86,4 +86,12 @@
 #define	MACH_PORT_UREFS_UNDERFLOW(urefs, delta)				\
 		(((delta) < 0) && (((mach_port_urefs_t)-(delta)) > (urefs)))
 
+__BEGIN_DECLS
+extern void mach_port_guard_exception(
+									  mach_port_name_t	name,
+									  uint64_t      inguard,
+									  uint64_t      portguard,
+									  unsigned      reason);
+__END_DECLS
+
 #endif	/* _IPC_PORT_H_ */

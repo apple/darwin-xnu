@@ -166,6 +166,7 @@ extern unsigned		PAGE_SHIFT_CONST;
 #ifdef	KERNEL
 
 #if defined (__arm__)
+#define VM_KERNEL_POINTER_SIGNIFICANT_BITS  32
 #define VM_MIN_KERNEL_ADDRESS	((vm_address_t) 0x80000000)
 #define VM_MAX_KERNEL_ADDRESS	((vm_address_t) 0xFFFEFFFF)
 #define VM_HIGH_KERNEL_WINDOW	((vm_address_t) 0xFFFE0000)
@@ -174,6 +175,7 @@ extern unsigned		PAGE_SHIFT_CONST;
  * The minimum and maximum kernel address; some configurations may
  * constrain the address space further.
  */
+#define VM_KERNEL_POINTER_SIGNIFICANT_BITS  37
 #define VM_MIN_KERNEL_ADDRESS	((vm_address_t) 0xffffffe000000000ULL)
 #define VM_MAX_KERNEL_ADDRESS	((vm_address_t) 0xfffffff3ffffffffULL)
 #else
@@ -183,8 +185,11 @@ extern unsigned		PAGE_SHIFT_CONST;
 #define VM_MIN_KERNEL_AND_KEXT_ADDRESS	\
 				VM_MIN_KERNEL_ADDRESS
 
-#define VM_KERNEL_ADDRESS(va)	((((vm_address_t)(va))>=VM_MIN_KERNEL_ADDRESS) && \
-				(((vm_address_t)(va))<=VM_MAX_KERNEL_ADDRESS))
+#define VM_KERNEL_STRIP_PTR(_v) (_v)
+
+#define VM_KERNEL_ADDRESS(_va)	\
+	((((vm_address_t)VM_KERNEL_STRIP_PTR(_va)) >= VM_MIN_KERNEL_ADDRESS) && \
+	 (((vm_address_t)VM_KERNEL_STRIP_PTR(_va)) <= VM_MAX_KERNEL_ADDRESS))
 
 #ifdef  MACH_KERNEL_PRIVATE
 /*
@@ -193,20 +198,39 @@ extern unsigned		PAGE_SHIFT_CONST;
 extern unsigned long		gVirtBase, gPhysBase, gPhysSize;
 
 #define isphysmem(a)		(((vm_address_t)(a) - gPhysBase) < gPhysSize)
-#define phystokv(a)		((vm_address_t)(a) - gPhysBase + gVirtBase)
 
 #if KASAN
 /* Increase the stack sizes to account for the redzones that get added to every
  * stack object. */
 # define KERNEL_STACK_SIZE	(4*4*4096)
-# define INTSTACK_SIZE		(4*4*4096)
 #else
 # define KERNEL_STACK_SIZE	(4*4096)
-# define INTSTACK_SIZE		(4*4096)
+#endif
+
+#define INTSTACK_SIZE		(4*4096)
+
+#ifdef __arm64__
+#define EXCEPSTACK_SIZE		(4*4096)
+#else
+#define FIQSTACK_SIZE		(4096)
 #endif
 
 #if defined (__arm__)
 #define HIGH_EXC_VECTORS	((vm_address_t) 0xFFFF0000)
+#endif
+
+/*
+ * TODO: We're hardcoding the expected virtual TEXT base here;
+ * that gives us an ugly dependency on a linker argument in
+ * the make files.  Clean this up, so we don't hardcode it
+ * twice; this is nothing but trouble.
+ */
+#if defined (__arm__)
+#define VM_KERNEL_LINK_ADDRESS  ((vm_address_t) 0x80000000)
+#elif defined (__arm64__)
+#define VM_KERNEL_LINK_ADDRESS  ((vm_address_t) 0xFFFFFFF007004000)
+#else
+#error architecture not supported
 #endif
 
 #endif	/* MACH_KERNEL_PRIVATE */

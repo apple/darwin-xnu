@@ -86,7 +86,7 @@ typedef struct ipc_mqueue {
 		struct {
 			struct  waitq		waitq;
 			struct ipc_kmsg_queue	messages;
-			mach_port_seqno_t 	seqno;
+			mach_port_seqno_t	seqno;
 			mach_port_name_t	receiver_name;
 			uint16_t		msgcount;
 			uint16_t		qlimit;
@@ -98,10 +98,30 @@ typedef struct ipc_mqueue {
 			struct waitq_set	setq;
 		} pset;
 	} data;
-	struct klist imq_klist;
+	union {
+		struct klist imq_klist;
+		uintptr_t imq_inheritor;
+	};
 } *ipc_mqueue_t;
 
 #define	IMQ_NULL		((ipc_mqueue_t) 0)
+
+/*
+ * When a receive right is in flight, before it can ever be registered with
+ * a new knote, its imq_klist field can be overloaded to hold a pointer
+ * to the knote that the port is pushing on through his turnstile.
+ *
+ * if IMQ_KLIST_VALID() returns true, then the imq_klist field can be used,
+ * else IMQ_INHERITOR() can be used to get the pointer to the knote currently
+ * being the port turnstile inheritor.
+ */
+#define IMQ_KLIST_VALID(imq) (((imq)->imq_inheritor & 1) == 0)
+#define IMQ_INHERITOR(imq) ((struct turnstile *)((imq)->imq_inheritor ^ 1))
+#define IMQ_SET_INHERITOR(imq, inheritor) \
+MACRO_BEGIN                                                                   \
+		assert(((imq)->imq_inheritor & 1) || SLIST_EMPTY(&(imq)->imq_klist)); \
+		((imq)->imq_inheritor = (uintptr_t)(inheritor) | 1);                  \
+MACRO_END
 
 #define imq_wait_queue		data.port.waitq
 #define imq_messages		data.port.messages
@@ -141,11 +161,11 @@ typedef struct ipc_mqueue {
 #define	imq_from_waitq(waitq)	(waitq_is_set(waitq) ? \
 					((struct ipc_mqueue *)((void *)( \
 						(uintptr_t)(waitq) - \
-						__offsetof(struct ipc_mqueue, imq_wait_queue)) \
+						__offsetof(struct ipc_mqueue, imq_set_queue)) \
 					)) : \
 					((struct ipc_mqueue *)((void *)( \
 						(uintptr_t)(waitq) - \
-						__offsetof(struct ipc_mqueue, imq_set_queue)) \
+						__offsetof(struct ipc_mqueue, imq_wait_queue)) \
 					)) \
 				 )
 
@@ -171,8 +191,7 @@ extern int ipc_mqueue_full;
 /* Initialize a newly-allocated message queue */
 extern void ipc_mqueue_init(
 	ipc_mqueue_t		mqueue,
-	boolean_t		is_set,
-	uint64_t		*reserved_link);
+	boolean_t		is_set);
 
 /* de-initialize / cleanup an mqueue (specifically waitq resources) */
 extern void ipc_mqueue_deinit(

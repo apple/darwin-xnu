@@ -42,6 +42,7 @@
 
 #include <IOKit/IOKitDebug.h>
 #include <libkern/OSDebug.h>
+#include <libkern/OSKextLibPrivate.h>
 
 #include "IOKitKernelInternal.h"
 
@@ -873,7 +874,7 @@ IOGeneralMemoryDescriptor::memoryReferenceMap(
      * kIOMapPrefault is redundant in that case, so don't try to use it for UPL
      * operations.
      */ 
-    if ((reserved != NULL) && (reserved->dp.devicePager) && (_memoryEntries == NULL) && (_wireCount != 0))
+    if ((reserved != NULL) && (reserved->dp.devicePager) && (_wireCount != 0))
         options &= ~kIOMapPrefault;
 
     /*
@@ -1704,6 +1705,7 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
 	      && (VM_KERN_MEMORY_NONE == _kernelTag))
             {
 		_kernelTag = IOMemoryTag(kernel_map);
+                if (_kernelTag == gIOSurfaceTag) _userTag = VM_MEMORY_IOSURFACE;
             }
 
 	    if ( (kIOMemoryPersistent & _flags) && !_memRef)
@@ -1962,7 +1964,11 @@ IOByteCount IOMemoryDescriptor::writeBytes
 
     assert(!remaining);
 
+#if defined(__x86_64__)
+    // copypv does not cppvFsnk on intel
+#else
     if (!srcAddr) performOperation(kIOMemoryIncoherentIOFlush, inoffset, length);
+#endif
 
     return length - remaining;
 }
@@ -3642,6 +3648,7 @@ IOReturn IOGeneralMemoryDescriptor::doMap(
      && (mapping->fAddressTask == _task)
      && (mapping->fAddressMap == get_task_map(_task)) 
      && (options & kIOMapAnywhere)
+     && (!(kIOMapUnique & options))
      && (1 == _rangesCount) 
      && (0 == offset)
      && range0Addr 
@@ -4535,9 +4542,8 @@ IOMemoryMap * IOMemoryDescriptor::makeMapping(
     if (!(kIOMap64Bit & options)) panic("IOMemoryDescriptor::makeMapping !64bit");
 #endif /* !__LP64__ */
 
-    IOMemoryDescriptor * mapDesc = 0;
-    IOMemoryMap *	 result = 0;
-    OSIterator *	 iter;
+    IOMemoryDescriptor *  mapDesc = 0;
+    __block IOMemoryMap * result  = 0;
 
     IOMemoryMap *  mapping = (IOMemoryMap *) __address;
     mach_vm_size_t offset  = mapping->fOffset + __offset;
@@ -4582,20 +4588,17 @@ IOMemoryMap * IOMemoryDescriptor::makeMapping(
 	else
 	{
 	    // look for a compatible existing mapping
-	    if( (iter = OSCollectionIterator::withCollection(_mappings)))
+	    if (_mappings) _mappings->iterateObjects(^(OSObject * object)
 	    {
-		IOMemoryMap * lookMapping;
-		while ((lookMapping = (IOMemoryMap *) iter->getNextObject()))
+		IOMemoryMap * lookMapping = (IOMemoryMap *) object;
+		if ((result = lookMapping->copyCompatible(mapping)))
 		{
-		    if ((result = lookMapping->copyCompatible(mapping)))
-		    {
-			addMapping(result);
-			result->setMemoryDescriptor(this, offset);
-			break;
-		    }
+		    addMapping(result);
+		    result->setMemoryDescriptor(this, offset);
+		    return (true);
 		}
-		iter->release();
-	    }
+		return (false);
+	    });
 	    if (result || (options & kIOMapReference))
 	    {
 	        if (result != mapping)

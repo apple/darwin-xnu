@@ -162,6 +162,19 @@ IOReturn IOCommandGate::attemptCommand(void *arg0, void *arg1,
     return attemptAction((Action) action, arg0, arg1, arg2, arg3);
 }
 
+
+static IOReturn IOCommandGateActionToBlock(OSObject *owner,
+			       void *arg0, void *arg1,
+			       void *arg2, void *arg3)
+{
+    return ((IOEventSource::ActionBlock) arg0)();
+}
+
+IOReturn IOCommandGate::runActionBlock(ActionBlock action)
+{
+    return (runAction(&IOCommandGateActionToBlock, action));
+}
+
 IOReturn IOCommandGate::runAction(Action inAction,
                                   void *arg0, void *arg1,
                                   void *arg2, void *arg3)
@@ -275,16 +288,20 @@ IOReturn IOCommandGate::attemptAction(Action inAction,
 
 IOReturn IOCommandGate::commandSleep(void *event, UInt32 interruptible)
 {
-    if (!workLoop->inGate())
-        return kIOReturnNotPermitted;
+    if (!workLoop->inGate()) {
+        /* The equivalent of 'msleep' while not holding the mutex is invalid */
+        panic("invalid commandSleep while not holding the gate");
+    }
 
     return sleepGate(event, interruptible);
 }
 
 IOReturn IOCommandGate::commandSleep(void *event, AbsoluteTime deadline, UInt32 interruptible)
 {
-    if (!workLoop->inGate())
-        return kIOReturnNotPermitted;
+    if (!workLoop->inGate()) {
+        /* The equivalent of 'msleep' while not holding the mutex is invalid */
+        panic("invalid commandSleep while not holding the gate");
+    }
 
     return sleepGate(event, deadline, interruptible);
 }

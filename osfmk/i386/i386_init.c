@@ -416,7 +416,7 @@ vstart(vm_offset_t boot_args_start)
 #endif
 
 #if MONOTONIC
-		mt_init();
+		mt_early_init();
 #endif /* MONOTONIC */
 
 		first_avail = (vm_offset_t)ID_MAP_VTOP(physfree);
@@ -729,6 +729,7 @@ void doublemap_init(void) {
 
 	dblmap_dist = dblmap_base - hdescb;
 	idt64_hndl_table0[1] = DBLMAP(idt64_hndl_table0[1]);
+	idt64_hndl_table0[6] = (uint64_t)(uintptr_t)&kernel_stack_mask;
 
 	extern cpu_data_t cpshadows[], scdatas[];
 	uintptr_t cd1 = (uintptr_t) &cpshadows[0];

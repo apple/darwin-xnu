@@ -120,33 +120,6 @@ void	vm_map_store_entry_unlink_rb( struct vm_map_header *mapHdr, vm_map_entry_t 
 	RB_REMOVE( rb_head, rbh, store );
 }
 
-void	vm_map_store_copy_insert_rb( vm_map_t map, __unused vm_map_entry_t after_where, vm_map_copy_t copy)
-{
-	struct vm_map_header *mapHdr = &(map->hdr);
-	struct rb_head *rbh = &(mapHdr->rb_head_store);
-	struct vm_map_store *store;
-	vm_map_entry_t entry = vm_map_copy_first_entry(copy);
-	int inserted=0, nentries = copy->cpy_hdr.nentries;
-		
-	while (entry != vm_map_copy_to_entry(copy) && nentries > 0) {		
-		vm_map_entry_t prev = entry;
-		store = &(entry->store);
-		if( RB_INSERT( rb_head, rbh, store ) != NULL){
-			panic("VMSCIR1: INSERT FAILED: %d: %p, %p, %p, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx",inserted, prev, entry, vm_map_copy_to_entry(copy), 
-					(uintptr_t)prev->vme_start,  (uintptr_t)prev->vme_end,  (uintptr_t)entry->vme_start,  (uintptr_t)entry->vme_end,  
-					 (uintptr_t)(VME_FOR_STORE(rbh->rbh_root))->vme_start,  (uintptr_t)(VME_FOR_STORE(rbh->rbh_root))->vme_end);
-		} else {
-#if MAP_ENTRY_INSERTION_DEBUG
-			backtrace(&entry->vme_insertion_bt[0],
-			          (sizeof (entry->vme_insertion_bt) / sizeof (uintptr_t)));
-#endif
-			entry = entry->vme_next;
-			inserted++;
-			nentries--;
-		}
-	}
-}
-
 void
 vm_map_store_copy_reset_rb( vm_map_copy_t copy, vm_map_entry_t entry, int nentries )
 {
@@ -200,9 +173,9 @@ vm_map_delete_hole(vm_map_t map, vm_map_entry_t hole_entry);
 void
 vm_map_delete_hole(vm_map_t map, vm_map_entry_t hole_entry)
 {
-	if (hole_entry == (vm_map_entry_t) map->holes_list) {
+	if (hole_entry == CAST_TO_VM_MAP_ENTRY(map->holes_list)) {
 
-		if (hole_entry->vme_next == (vm_map_entry_t) map->holes_list) {
+		if (hole_entry->vme_next == CAST_TO_VM_MAP_ENTRY(map->holes_list)) {
 
 			map->holes_list = NULL;
 			SAVE_HINT_HOLE_WRITE(map, NULL);
@@ -322,7 +295,7 @@ update_holes_on_entry_deletion(vm_map_t map, vm_map_entry_t old_entry)
 #endif /* DEBUG */
 	boolean_t		create_new_hole = TRUE;
 
-	hole_entry = (vm_map_entry_t) map->hole_hint;
+	hole_entry = CAST_TO_VM_MAP_ENTRY(map->hole_hint);
 
 	if (hole_entry) {
 
@@ -334,7 +307,7 @@ update_holes_on_entry_deletion(vm_map_t map, vm_map_entry_t old_entry)
 
 		} else if (hole_entry->vme_start == old_entry->vme_end) {
 
-			if (hole_entry != (vm_map_entry_t) map->holes_list) {
+			if (hole_entry != CAST_TO_VM_MAP_ENTRY(map->holes_list)) {
 
 				/*
 				 * Found a hole right after below our entry but
@@ -352,10 +325,10 @@ update_holes_on_entry_deletion(vm_map_t map, vm_map_entry_t old_entry)
 			 * Useless hint. Start from the top.
 			 */
 
-			hole_entry = (vm_map_entry_t) map->holes_list;
+			hole_entry = CAST_TO_VM_MAP_ENTRY(map->holes_list);
 		}
 
-		if (hole_entry != (vm_map_entry_t) map->holes_list) {
+		if (hole_entry != CAST_TO_VM_MAP_ENTRY(map->holes_list)) {
 			if (hole_entry->vme_start > old_entry->vme_start) {
 				panic("Hole hint failed: Hole entry start: 0x%llx, entry start: 0x%llx, map hole start: 0x%llx, map hint start: 0x%llx\n",
 					(unsigned long long)hole_entry->vme_start,
@@ -433,7 +406,7 @@ update_holes_on_entry_deletion(vm_map_t map, vm_map_entry_t old_entry)
 				copy_hole_info(hole_entry, &old_hole_entry);
 #endif /* DEBUG */
 
-				if (hole_entry != (vm_map_entry_t) map->holes_list) {
+				if (hole_entry != CAST_TO_VM_MAP_ENTRY(map->holes_list)) {
 					assert(hole_entry->vme_start != old_entry->vme_start);
 					hole_entry = hole_entry->vme_prev;
 				}
@@ -442,7 +415,7 @@ update_holes_on_entry_deletion(vm_map_t map, vm_map_entry_t old_entry)
 
 			hole_entry = next_hole_entry;
 
-			if (hole_entry == (vm_map_entry_t)map->holes_list) {
+			if (hole_entry == CAST_TO_VM_MAP_ENTRY(map->holes_list)) {
 				hole_entry = hole_entry->vme_prev;
 				break;
 			}
@@ -460,21 +433,21 @@ update_holes_on_entry_deletion(vm_map_t map, vm_map_entry_t old_entry)
 		 * OR
 		 * A hole that is located above the current first hole in the map?
 		 */
-		if (map->holes_list == NULL || (hole_entry == (vm_map_entry_t) map->holes_list && hole_entry->vme_start > old_entry->vme_start)) {
+		if (map->holes_list == NULL || (hole_entry == CAST_TO_VM_MAP_ENTRY(map->holes_list) && hole_entry->vme_start > old_entry->vme_start)) {
 
 			if (map->holes_list == NULL) {
 
 				map->holes_list = new_hole_entry;
-				new_hole_entry->prev = new_hole_entry->next = (vm_map_entry_t)map->holes_list;
+				new_hole_entry->prev = new_hole_entry->next = CAST_TO_VM_MAP_ENTRY(map->holes_list);
 			} else {
 
-				l_next = (vm_map_entry_t) map->holes_list;
+				l_next = CAST_TO_VM_MAP_ENTRY(map->holes_list);
 				l_prev = map->holes_list->prev;
 				map->holes_list = new_hole_entry;
 				new_hole_entry->next = l_next;
 				new_hole_entry->prev = l_prev;
 
-				l_prev->vme_next = l_next->vme_prev = (vm_map_entry_t) new_hole_entry;
+				l_prev->vme_next = l_next->vme_prev = CAST_TO_VM_MAP_ENTRY(new_hole_entry);
 			}
 		} else {
 
@@ -484,14 +457,14 @@ update_holes_on_entry_deletion(vm_map_t map, vm_map_entry_t old_entry)
 			new_hole_entry->prev = hole_entry;
 			new_hole_entry->next = l_next;
 
-			hole_entry->vme_next = (vm_map_entry_t)new_hole_entry;
-			l_next->vme_prev = (vm_map_entry_t) new_hole_entry;
+			hole_entry->vme_next = CAST_TO_VM_MAP_ENTRY(new_hole_entry);
+			l_next->vme_prev = CAST_TO_VM_MAP_ENTRY(new_hole_entry);
 		}
 
 		new_hole_entry->start = old_entry->vme_start;
 		new_hole_entry->end = old_entry->vme_end;
 
-		hole_entry = (vm_map_entry_t) new_hole_entry;
+		hole_entry = CAST_TO_VM_MAP_ENTRY(new_hole_entry);
 
 		assert(new_hole_entry->start < new_hole_entry->end);
 	}
@@ -529,7 +502,7 @@ update_holes_on_entry_creation(vm_map_t map, vm_map_entry_t new_entry)
 	 *	   This will reduce the size of the hole or delete the hole completely if it is smaller than the entry.
 	 */
 
-	hole_entry = (vm_map_entry_t) map->holes_list;
+	hole_entry = CAST_TO_VM_MAP_ENTRY(map->holes_list);
 	assert(hole_entry);
 	next_hole_entry = hole_entry->vme_next;
 
@@ -593,8 +566,8 @@ update_holes_on_entry_creation(vm_map_t map, vm_map_entry_t new_entry)
 
 			new_hole_entry->prev = hole_entry;
 			new_hole_entry->next = hole_entry->vme_next;
-			hole_entry->vme_next->vme_prev = (vm_map_entry_t)new_hole_entry;
-			hole_entry->vme_next = (vm_map_entry_t)new_hole_entry;
+			hole_entry->vme_next->vme_prev = CAST_TO_VM_MAP_ENTRY(new_hole_entry);
+			hole_entry->vme_next = CAST_TO_VM_MAP_ENTRY(new_hole_entry);
 
 			new_hole_entry->start = new_entry->vme_end;
 			new_hole_entry->end = hole_entry->vme_end;
@@ -664,7 +637,7 @@ update_holes_on_entry_creation(vm_map_t map, vm_map_entry_t new_entry)
 		hole_entry = next_hole_entry;
 		next_hole_entry = hole_entry->vme_next;
 
-		if (hole_entry == (vm_map_entry_t)map->holes_list)
+		if (hole_entry == CAST_TO_VM_MAP_ENTRY(map->holes_list))
 			break;
 	}
 

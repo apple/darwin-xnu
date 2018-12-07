@@ -177,6 +177,9 @@ typedef struct vm_allocation_site vm_allocation_site_t;
 	static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
 	 = { .refcount = 2, .tag = (itag), .flags = (iflags) };
 
+extern int vmrtf_extract(uint64_t, boolean_t, int, void *, int *);
+extern unsigned int vmrtfaultinfo_bufsz(void);
+
 #endif /* XNU_KERNEL_PRIVATE */
 
 #ifdef  KERNEL_PRIVATE
@@ -208,5 +211,15 @@ typedef mach_port_t		vm_named_entry_t;
 
 #define UPL_NULL		((upl_t) 0)
 #define VM_NAMED_ENTRY_NULL	((vm_named_entry_t) 0)
-
+#ifdef PRIVATE
+typedef struct {
+	uint64_t rtfabstime; // mach_continuous_time at start of fault
+	uint64_t rtfduration; // fault service duration
+	uint64_t rtfaddr; // fault address
+	uint64_t rtfpc; // userspace program counter of thread incurring the fault
+	uint64_t rtftid; // thread ID
+	uint64_t rtfupid; // process identifier
+	uint64_t rtftype; // fault type
+} vm_rtfault_record_t;
+#endif
 #endif	/* _MACH_VM_TYPES_H_ */

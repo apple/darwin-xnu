@@ -67,6 +67,7 @@
 #include <mach/task_info.h>
 #include <mach/thread_info.h>
 #include <mach/vm_region.h>
+#include <mach/vm_types.h>
 
 #include <sys/mount_internal.h>
 #include <sys/proc_info.h>
@@ -154,9 +155,9 @@ int __attribute__ ((noinline)) proc_pidfdlist(proc_t p, user_addr_t buffer, uint
 int __attribute__ ((noinline)) proc_pidbsdinfo(proc_t p, struct proc_bsdinfo *pbsd, int zombie);
 int __attribute__ ((noinline)) proc_pidshortbsdinfo(proc_t p, struct proc_bsdshortinfo *pbsd_shortp, int zombie);
 int __attribute__ ((noinline)) proc_pidtaskinfo(proc_t p, struct proc_taskinfo *ptinfo);
-int __attribute__ ((noinline)) proc_pidthreadinfo(proc_t p, uint64_t arg,  int thuniqueid, struct proc_threadinfo *pthinfo);
+int __attribute__ ((noinline)) proc_pidthreadinfo(proc_t p, uint64_t arg,  bool thuniqueid, struct proc_threadinfo *pthinfo);
 int __attribute__ ((noinline)) proc_pidthreadpathinfo(proc_t p, uint64_t arg,  struct proc_threadwithpathinfo *pinfo);
-int __attribute__ ((noinline)) proc_pidlistthreads(proc_t p,  user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+int __attribute__ ((noinline)) proc_pidlistthreads(proc_t p,  bool thuniqueid, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int __attribute__ ((noinline)) proc_pidregioninfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int __attribute__ ((noinline)) proc_pidregionpathinfo(proc_t p,  uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int __attribute__ ((noinline)) proc_pidregionpathinfo2(proc_t p,  uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
@@ -796,7 +797,7 @@ proc_pidtaskinfo(proc_t p, struct proc_taskinfo * ptinfo)
 
 
 int 
-proc_pidthreadinfo(proc_t p, uint64_t arg,  int thuniqueid, struct proc_threadinfo *pthinfo)
+proc_pidthreadinfo(proc_t p, uint64_t arg, bool thuniqueid, struct proc_threadinfo *pthinfo)
 {
 	int error = 0;
 	uint64_t threadaddr = (uint64_t)arg;
@@ -926,7 +927,7 @@ proc_pidthreadpathinfo(proc_t p, uint64_t arg,  struct proc_threadwithpathinfo *
 
 
 int 
-proc_pidlistthreads(proc_t p,  user_addr_t buffer, uint32_t  buffersize, int32_t *retval)
+proc_pidlistthreads(proc_t p, bool thuniqueid, user_addr_t buffer, uint32_t  buffersize, int32_t *retval)
 {
 	uint32_t count = 0;
 	int ret = 0;
@@ -950,7 +951,7 @@ proc_pidlistthreads(proc_t p,  user_addr_t buffer, uint32_t  buffersize, int32_t
 		return(ENOMEM);
 	bzero(kbuf, numthreads * sizeof(uint64_t));
 	
-	ret = fill_taskthreadlist(p->task, kbuf, numthreads);
+	ret = fill_taskthreadlist(p->task, kbuf, numthreads, thuniqueid);
 	
 	error = copyout(kbuf, buffer, ret);
 	kfree(kbuf, numthreads * sizeof(uint64_t));
@@ -1357,7 +1358,7 @@ proc_pidoriginatorinfo(int pid, int flavor, user_addr_t buffer, uint32_t  buffer
 
 	switch (flavor) {
 		case PROC_PIDORIGINATOR_UUID: {
-			uuid_t uuid;
+			uuid_t uuid = {};
 
 			error = proc_pidoriginatoruuid(uuid, sizeof(uuid));
 			if (error != 0)
@@ -1385,7 +1386,7 @@ proc_pidoriginatorinfo(int pid, int flavor, user_addr_t buffer, uint32_t  buffer
 		break;
 
 		case PROC_PIDORIGINATOR_BGSTATE: {
-			uint32_t is_backgrounded;
+			uint32_t is_backgrounded = 0;
 			error = proc_get_originatorbgstate(&is_backgrounded);
 			if (error)
 				goto out;
@@ -1684,7 +1685,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 	int shortversion = 0;
 	uint32_t size;
 	int zombie = 0;
-	int thuniqueid = 0;
+	bool thuniqueid = false;
 	int uniqidversion = 0;
 	boolean_t check_same_user;
 
@@ -1705,6 +1706,9 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 			break;
 		case PROC_PIDTHREADINFO:
 			size = PROC_PIDTHREADINFO_SIZE;
+			break;
+		case PROC_PIDLISTTHREADIDS:
+			size = PROC_PIDLISTTHREADIDS_SIZE;
 			break;
 		case PROC_PIDLISTTHREADS:
 			size = PROC_PIDLISTTHREADS_SIZE;
@@ -1784,6 +1788,12 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 			break;
 		case PROC_PIDLISTDYNKQUEUES:
 			size = PROC_PIDLISTDYNKQUEUES_SIZE;
+			if (buffer == USER_ADDR_NULL) {
+				size = 0;
+			}
+			break;
+		case PROC_PIDVMRTFAULTINFO:
+			size = sizeof(vm_rtfault_record_t);
 			if (buffer == USER_ADDR_NULL) {
 				size = 0;
 			}
@@ -1917,7 +1927,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		break;
 
 		case PROC_PIDTHREADID64INFO:
-			thuniqueid = 1;
+			thuniqueid = true;
 		case PROC_PIDTHREADINFO:{
 		struct proc_threadinfo pthinfo;
 
@@ -1930,8 +1940,10 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		}
 		break;
 
+		case PROC_PIDLISTTHREADIDS:
+			thuniqueid = true;
 		case PROC_PIDLISTTHREADS:{
-			error =  proc_pidlistthreads(p,  buffer, buffersize, retval);
+			error =  proc_pidlistthreads(p, thuniqueid, buffer, buffersize, retval);
 		}
 		break;
 
@@ -2070,7 +2082,48 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		case PROC_PIDLISTDYNKQUEUES:
 			error = kevent_copyout_proc_dynkqids(p, buffer, buffersize, retval);
 			break;
+		case PROC_PIDVMRTFAULTINFO: {
+			/* This interface can only be employed on the current
+			 * process. We will eventually enforce an entitlement.
+			 */
+			*retval = 0;
 
+			if (p != current_proc()) {
+				error = EINVAL;
+				break;
+			}
+
+			size_t kbufsz = MIN(buffersize, vmrtfaultinfo_bufsz());
+			void *vmrtfbuf = kalloc(kbufsz);
+
+			if (vmrtfbuf == NULL) {
+				error = ENOMEM;
+				break;
+			}
+
+			bzero(vmrtfbuf, kbufsz);
+
+			uint64_t effpid = get_current_unique_pid();
+			/* The VM may choose to provide more comprehensive records
+			 * for root-privileged users on internal configurations.
+			 */
+			boolean_t isroot = (suser(kauth_cred_get(), (u_short *)0) == 0);
+			int vmf_residue = vmrtf_extract(effpid, isroot, kbufsz, vmrtfbuf, retval);
+			int vmfsz = *retval * sizeof(vm_rtfault_record_t);
+
+			error = 0;
+			if (vmfsz) {
+				error = copyout(vmrtfbuf, buffer, vmfsz);
+			}
+
+			if (error == 0) {
+				if (vmf_residue) {
+					error = ENOMEM;
+				}
+			}
+			kfree(vmrtfbuf, kbufsz);
+		}
+			break;
 		default:
 			error = ENOTSUP;
 			break;

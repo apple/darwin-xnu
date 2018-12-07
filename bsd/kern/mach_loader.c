@@ -121,7 +121,8 @@ static const load_result_t load_result_null = {
 	.needs_dynlinker = 0,
 	.validentry = 0,
 	.using_lcmain = 0,
-	.is64bit = 0,
+	.is_64bit_addr = 0,
+	.is_64bit_data = 0,
 	.csflags = 0,
 	.has_pagezero = 0,
 	.uuid = { 0 },
@@ -314,8 +315,8 @@ note_all_image_info_section(const struct segment_command_64 *scp,
  * in exchange for better binary compatibility for legacy apps built
  * before 16KB-alignment was enforced.
  */
-int fourk_binary_compatibility_unsafe = TRUE;
-int fourk_binary_compatibility_allow_wx = FALSE;
+const int fourk_binary_compatibility_unsafe = TRUE;
+const int fourk_binary_compatibility_allow_wx = FALSE;
 #endif /* __arm64__ */
 
 load_return_t
@@ -349,7 +350,8 @@ load_machfile(
 		return(LOAD_BADMACHO);
 	}
 
-	result->is64bit = ((imgp->ip_flags & IMGPF_IS_64BIT) == IMGPF_IS_64BIT);
+	result->is_64bit_addr = ((imgp->ip_flags & IMGPF_IS_64BIT_ADDR) == IMGPF_IS_64BIT_ADDR);
+	result->is_64bit_data = ((imgp->ip_flags & IMGPF_IS_64BIT_DATA) == IMGPF_IS_64BIT_DATA);
 
 	task_t ledger_task;
 	if (imgp->ip_new_thread) {
@@ -359,14 +361,14 @@ load_machfile(
 	}
 	pmap = pmap_create(get_task_ledger(ledger_task),
 			   (vm_map_size_t) 0,
-			   result->is64bit);
+			   result->is_64bit_addr);
 	map = vm_map_create(pmap,
 			0,
-			vm_compute_max_offset(result->is64bit),
+			vm_compute_max_offset(result->is_64bit_addr),
 			TRUE);
 
 #if defined(__arm64__)
-	if (result->is64bit) {
+	if (result->is_64bit_addr) {
 		/* enforce 16KB alignment of VM map entries */
 		vm_map_set_page_shift(map, SIXTEENK_PAGE_SHIFT);
 	} else {
@@ -383,8 +385,10 @@ load_machfile(
 	 * flag (CS_ENFORCEMENT) is not set yet, but we can use the
 	 * global flag.
 	 */
-	if ( !cs_enforcement(NULL) && (header->flags & MH_ALLOW_STACK_EXECUTION) )
+	if ( !cs_process_global_enforcement() && (header->flags & MH_ALLOW_STACK_EXECUTION) ) {
 	        vm_map_disable_NX(map);
+	        // TODO: Message Trace or log that this is happening
+	}
 #endif
 
 	/* Forcibly disallow execution from data pages on even if the arch
@@ -418,7 +422,8 @@ load_machfile(
 	/*
 	 * re-set the bitness on the load result since we cleared the load result above.
 	 */
-	result->is64bit = ((imgp->ip_flags & IMGPF_IS_64BIT) == IMGPF_IS_64BIT);
+	result->is_64bit_addr = ((imgp->ip_flags & IMGPF_IS_64BIT_ADDR) == IMGPF_IS_64BIT_ADDR);
+	result->is_64bit_data = ((imgp->ip_flags & IMGPF_IS_64BIT_DATA) == IMGPF_IS_64BIT_DATA);
 
 	lret = parse_machfile(vp, map, thread, header, file_offset, macho_size,
 	                      0, aslr_page_offset, dyld_aslr_page_offset, result,
@@ -433,7 +438,7 @@ load_machfile(
 	/*
 	 * On x86, for compatibility, don't enforce the hard page-zero restriction for 32-bit binaries.
 	 */
-	if (!result->is64bit) {
+	if (!result->is_64bit_addr) {
 		enforce_hard_pagezero = FALSE;
 	}
 
@@ -443,7 +448,7 @@ load_machfile(
 	 */
 #define VM_MAP_HIGH_START_BITS_COUNT 8
 #define VM_MAP_HIGH_START_BITS_SHIFT 27
-	if (result->is64bit &&
+	if (result->is_64bit_addr &&
 	    (imgp->ip_flags & IMGPF_HIGH_BITS_ASLR)) {
 		int random_bits;
 		vm_map_offset_t high_start;
@@ -462,7 +467,7 @@ load_machfile(
 	if (enforce_hard_pagezero &&
 	    (vm_map_has_hard_pagezero(map, 0x1000) == FALSE)) {
 #if __arm64__
-		if (!result->is64bit && /* not 64-bit */
+		if (!result->is_64bit_addr && /* not 64-bit address space */
 		    !(header->flags & MH_PIE) &&	  /* not PIE */
 		    (vm_map_page_shift(map) != FOURK_PAGE_SHIFT ||
 		     PAGE_SHIFT != FOURK_PAGE_SHIFT) && /* page size != 4KB */
@@ -513,9 +518,9 @@ load_machfile(
 			return (LOAD_FAILURE);
 		}
 		proc_transcommit(p, 0);
-		workqueue_mark_exiting(p);
+		workq_mark_exiting(p);
 		task_complete_halt(task);
-		workqueue_exit(p);
+		workq_exit(p);
 
 		/*
 		 * Roll up accounting info to new task. The roll up is done after
@@ -527,7 +532,7 @@ load_machfile(
 	*mapp = map;
 
 #ifdef CONFIG_32BIT_TELEMETRY
-	if (!result->is64bit) {
+	if (!result->is_64bit_data) {
 		/*
 		 * This may not need to be an AST; we merely need to ensure that
 		 * we gather telemetry at the point where all of the information
@@ -863,7 +868,6 @@ parse_machfile(
 			switch(lcp->cmd) {
 			case LC_SEGMENT: {
 				struct segment_command *scp = (struct segment_command *) lcp;
-
 				if (pass == 0) {
 					if (is_dyld && scp->vmaddr == 0 && scp->fileoff == 0) {
 						dyld_no_load_addr = TRUE;
@@ -926,7 +930,6 @@ parse_machfile(
 				                   map,
 				                   slide,
 				                   result);
-
 				if (ret == LOAD_SUCCESS && scp->fileoff == 0 && scp->filesize > 0) {
 					/* Enforce a single segment mapping offset zero, with R+X
 					 * protection. */
@@ -1052,7 +1055,7 @@ parse_machfile(
 					/*
 					 * Allow injections to be ignored on devices w/o enforcement enabled
 					 */
-					if (!cs_enforcement(NULL))
+					if (!cs_process_global_enforcement())
 					    ret = LOAD_SUCCESS; /* ignore error */
 
 				} else {
@@ -1081,7 +1084,7 @@ parse_machfile(
 						     if (cs_debug)
 							     printf("CODE SIGNING: %s[%d]: invalid initial page at offset %lld validated:%d tainted:%d csflags:0x%x\n", 
 								    vp->v_name, p->p_pid, (long long)(file_offset + off), valid, tainted, result->csflags);
-						     if (cs_enforcement(NULL) ||
+						     if (cs_process_global_enforcement() ||
 							 (result->csflags & (CS_HARD|CS_KILL|CS_ENFORCEMENT))) {
 							     ret = LOAD_FAILURE;
 						     }
@@ -1133,6 +1136,22 @@ parse_machfile(
 				}
 				break;
 #endif
+#if __arm64__
+			case LC_VERSION_MIN_IPHONEOS: {
+				struct version_min_command *vmc;
+
+				if (pass != 1) {
+					break;
+				}
+				vmc = (struct version_min_command *) lcp;
+				if (vmc->sdk < (12 << 16)) {
+					/* app built with a pre-iOS12 SDK: apply legacy footprint mitigation */
+					result->legacy_footprint = TRUE;
+				}
+//				printf("FBDP %s:%d vp %p (%s) sdk %d.%d.%d -> legacy_footprint=%d\n", __FUNCTION__, __LINE__, vp, vp->v_name, (vmc->sdk >> 16), ((vmc->sdk & 0xFF00) >> 8), (vmc->sdk & 0xFF), result->legacy_footprint);
+				break;
+			}
+#endif /* __arm64__ */
 			default:
 				/* Other commands are ignored by the kernel */
 				ret = LOAD_SUCCESS;
@@ -1146,7 +1165,7 @@ parse_machfile(
 	}
 
 	if (ret == LOAD_SUCCESS) {
-		if(!got_code_signatures && cs_enforcement(NULL)) {
+		if(!got_code_signatures && cs_process_global_enforcement()) {
 			ret = LOAD_FAILURE;
 		}
 
@@ -1168,7 +1187,7 @@ parse_machfile(
 			if (result->thread_count == 0) {
 				ret = LOAD_FAILURE;
 			}
-#if CONFIG_EMBEDDED
+#if CONFIG_ENFORCE_SIGNED_CODE
 			if (result->needs_dynlinker && !(result->csflags & CS_DYLD_PLATFORM)) {
 				ret = LOAD_FAILURE;
 			}
@@ -1308,7 +1327,8 @@ map_segment(
 	vm_map_offset_t		file_start,
 	vm_map_offset_t		file_end,
 	vm_prot_t		initprot,
-	vm_prot_t		maxprot)
+	vm_prot_t		maxprot,
+	load_result_t		*result)
 {
 	vm_map_offset_t	cur_offset, cur_start, cur_end;
 	kern_return_t	ret;
@@ -1410,6 +1430,23 @@ map_segment(
 			/* regular mapping for the middle */
 			cur_vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
 		}
+
+#if CONFIG_EMBEDDED
+		(void) result;
+#else /* CONFIG_EMBEDDED */
+		/*
+		 * This process doesn't have its new csflags (from
+		 * the image being loaded) yet, so tell VM to override the
+		 * current process's CS_ENFORCEMENT for this mapping.
+		 */
+		if (result->csflags & CS_ENFORCEMENT) {
+			cur_vmk_flags.vmkf_cs_enforcement = TRUE;
+		} else {
+			cur_vmk_flags.vmkf_cs_enforcement = FALSE;
+		}
+		cur_vmk_flags.vmkf_cs_enforcement_override = TRUE;
+#endif /* CONFIG_EMBEDDED */
+
 		cur_end = vm_map_trunc_page(vm_start + (file_end -
 							file_start),
 					    effective_page_mask);
@@ -1785,7 +1822,8 @@ load_segment(
 				  file_start,
 				  file_end,
 				  initprot,
-				  maxprot);
+				  maxprot,
+				  result);
 		if (ret) {
 			return LOAD_NOSPACE;
 		}
@@ -1843,7 +1881,8 @@ load_segment(
 				 0,
 				 delta_size,
 				 scp->initprot,
-				 scp->maxprot);
+				 scp->maxprot,
+				 result);
 		if (kr != KERN_SUCCESS) {
 			return(LOAD_NOSPACE);
 		}
@@ -1960,7 +1999,7 @@ load_main(
 	}
 
 	/* use default location for stack */
-	ret = thread_userstackdefault(&addr, result->is64bit);
+	ret = thread_userstackdefault(&addr, result->is_64bit_addr);
 	if (ret != KERN_SUCCESS)
 		return(LOAD_FAILURE);
 
@@ -2001,7 +2040,6 @@ load_unixthread(
 	load_return_t	ret;
 	int customstack =0;
 	mach_vm_offset_t addr;
-	
 	if (tcp->cmdsize < sizeof(*tcp))
 		return (LOAD_BADMACHO);
 	if (result->thread_count != 0) {
@@ -2012,15 +2050,15 @@ load_unixthread(
 		return (LOAD_SUCCESS);
 	
 	ret = load_threadstack(thread,
-		       (uint32_t *)(((vm_offset_t)tcp) + 
-		       		sizeof(struct thread_command)),
-		       tcp->cmdsize - sizeof(struct thread_command),
-		       &addr, &customstack, result);
+				(uint32_t *)(((vm_offset_t)tcp) +
+					sizeof(struct thread_command)),
+				tcp->cmdsize - sizeof(struct thread_command),
+				&addr, &customstack, result);
 	if (ret != LOAD_SUCCESS)
 		return(ret);
 
 	/* LC_UNIXTHREAD optionally specifies stack size and location */
-    
+
 	if (!customstack) {
 		result->user_stack_alloc_size = MAXSSIZ;
 	}
@@ -2030,10 +2068,10 @@ load_unixthread(
 	result->user_stack -= slide;
 
 	ret = load_threadentry(thread,
-		       (uint32_t *)(((vm_offset_t)tcp) + 
-		       		sizeof(struct thread_command)),
-		       tcp->cmdsize - sizeof(struct thread_command),
-		       &addr);
+				(uint32_t *)(((vm_offset_t)tcp) +
+					sizeof(struct thread_command)),
+				tcp->cmdsize - sizeof(struct thread_command),
+				&addr);
 	if (ret != LOAD_SUCCESS)
 		return(ret);
 
@@ -2046,9 +2084,9 @@ load_unixthread(
 	result->entry_point += slide;
 
 	ret = load_threadstate(thread,
-		       (uint32_t *)(((vm_offset_t)tcp) + sizeof(struct thread_command)),
-		       tcp->cmdsize - sizeof(struct thread_command),
-		       result);
+				(uint32_t *)(((vm_offset_t)tcp) + sizeof(struct thread_command)),
+				tcp->cmdsize - sizeof(struct thread_command),
+				result);
 	if (ret != LOAD_SUCCESS)
 		return (ret);
 
@@ -2148,7 +2186,7 @@ load_threadstack(
 		 * to the appropriate type in thread_userstack() based on
 		 * the value of flavor.
 		 */
-		ret = thread_userstack(thread, flavor, (thread_state_t)ts, size, user_stack, customstack, result->is64bit);
+		ret = thread_userstack(thread, flavor, (thread_state_t)ts, size, user_stack, customstack, result->is_64bit_data);
 		if (ret != KERN_SUCCESS) {
 			return(LOAD_FAILURE);
 		}
@@ -2304,7 +2342,8 @@ load_dylinker(
 		goto novp_out;
 
 	*myresult = load_result_null;
-	myresult->is64bit = result->is64bit;
+	myresult->is_64bit_addr = result->is_64bit_addr;
+	myresult->is_64bit_data = result->is_64bit_data;
 
 	ret = parse_machfile(vp, map, thread, header, file_offset,
 	                     macho_size, depth, slide, 0, myresult, result, imgp);
@@ -2373,23 +2412,44 @@ load_code_signature(
 	}
 
 	blob = ubc_cs_blob_get(vp, cputype, macho_offset);
+
 	if (blob != NULL) {
 		/* we already have a blob for this vnode and cputype */
-		if (blob->csb_cpu_type == cputype &&
-		    blob->csb_base_offset == macho_offset) {
-			/* it matches the blob we want here, lets verify the version */
-			if(0 != ubc_cs_generation_check(vp)) {
-				if (0 != ubc_cs_blob_revalidate(vp, blob, imgp, 0)) {
-					ret = LOAD_FAILURE; /* set error same as from ubc_cs_blob_add */
-					goto out;
-				}
-			}
-			ret = LOAD_SUCCESS;
-		} else {
+		if (blob->csb_cpu_type != cputype ||
+		    blob->csb_base_offset != macho_offset) {
 			/* the blob has changed for this vnode: fail ! */
 			ret = LOAD_BADMACHO;
+			goto out;
 		}
-		goto out;
+
+		/* It matches the blob we want here, let's verify the version */
+		if (ubc_cs_generation_check(vp) == 0) {
+			/* No need to revalidate, we're good! */
+			ret = LOAD_SUCCESS;
+			goto out;
+		}
+
+		/* That blob may be stale, let's revalidate. */
+		error = ubc_cs_blob_revalidate(vp, blob, imgp, 0);
+		if (error == 0) {
+			/* Revalidation succeeded, we're good! */
+			ret = LOAD_SUCCESS;
+			goto out;
+		}
+
+		if (error != EAGAIN) {
+			printf("load_code_signature: revalidation failed: %d\n", error);
+			ret = LOAD_FAILURE;
+			goto out;
+		}
+
+		assert(error == EAGAIN);
+
+		/*
+		 * Revalidation was not possible for this blob. We just continue as if there was no blob,
+		 * rereading the signature, and ubc_cs_blob_add will do the right thing.
+		 */
+		blob = NULL;
 	}
 
 	blob_size = lcp->datasize;

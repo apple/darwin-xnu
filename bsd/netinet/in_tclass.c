@@ -260,8 +260,6 @@ mbuf_svc_class_t wifi_dscp_to_msc_array[DSCP_ARRAY_SIZE];
 
 #if (DEVELOPMENT || DEBUG)
 
-extern char *proc_best_name(proc_t p);
-
 static int tfp_count = 0;
 
 static TAILQ_HEAD(, tclass_for_proc) tfp_head =
@@ -1308,6 +1306,9 @@ so_tc2msc(int tc)
 	case _SO_TC_VI:
 		msc = MBUF_SC_VI;
 		break;
+	case SO_TC_NETSVC_SIG:
+		msc = MBUF_SC_SIG;
+		break;
 	case SO_TC_VO:
 	case _SO_TC_VO:
 		msc = MBUF_SC_VO;
@@ -1344,6 +1345,8 @@ so_svc2tc(mbuf_svc_class_t svc)
 		return (SO_TC_RV);
 	case MBUF_SC_VI:
 		return (SO_TC_VI);
+	case MBUF_SC_SIG:
+		return (SO_TC_NETSVC_SIG);
 	case MBUF_SC_VO:
 		return (SO_TC_VO);
 	case MBUF_SC_CTL:

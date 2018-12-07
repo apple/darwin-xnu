@@ -50,6 +50,7 @@ typedef uint32_t csr_op_t;
 #define CSR_ALLOW_DEVICE_CONFIGURATION	(1 << 7)
 #define CSR_ALLOW_ANY_RECOVERY_OS	(1 << 8)
 #define CSR_ALLOW_UNAPPROVED_KEXTS	(1 << 9)
+#define CSR_ALLOW_EXECUTABLE_POLICY_OVERRIDE	(1 << 10)
 
 #define CSR_VALID_FLAGS (CSR_ALLOW_UNTRUSTED_KEXTS | \
                          CSR_ALLOW_UNRESTRICTED_FS | \
@@ -60,7 +61,8 @@ typedef uint32_t csr_op_t;
                          CSR_ALLOW_UNRESTRICTED_NVRAM | \
                          CSR_ALLOW_DEVICE_CONFIGURATION | \
                          CSR_ALLOW_ANY_RECOVERY_OS | \
-                         CSR_ALLOW_UNAPPROVED_KEXTS)
+                         CSR_ALLOW_UNAPPROVED_KEXTS | \
+                         CSR_ALLOW_EXECUTABLE_POLICY_OVERRIDE)
 
 #define CSR_ALWAYS_ENFORCED_FLAGS (CSR_ALLOW_DEVICE_CONFIGURATION | CSR_ALLOW_ANY_RECOVERY_OS)
 

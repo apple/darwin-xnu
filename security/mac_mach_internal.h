@@ -99,6 +99,8 @@ int mac_exc_update_task_crash_label(struct task *task, struct label *newlabel);
 
 int mac_exc_action_check_exception_send(struct task *victim_task, struct exception_action *action);
 
+void mac_proc_notify_exec_complete(struct proc *proc);
+
 struct label *mac_exc_create_label_for_proc(struct proc *proc);
 struct label *mac_exc_create_label_for_current_proc(void);
 

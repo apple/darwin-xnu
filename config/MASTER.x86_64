@@ -1,7 +1,7 @@
 #
 # Mach Operating System
 # Copyright (c) 1986 Carnegie-Mellon University
-# Copyright 2001-2016 Apple Inc.
+# Copyright 2001-2018 Apple Inc.
 #
 # All rights reserved.  The CMU software License Agreement
 # specifies the terms and conditions for use and redistribution.
@@ -16,15 +16,15 @@
 #  Standard Apple OS Configurations:
 #  -------- ----- -- ---------------
 #
-#  KERNEL_BASE =    [ intel medium config_requires_u32_munging ]
+#  KERNEL_BASE =    [ intel medium config_requires_u32_munging config_zcache ]
 #  KERNEL_RELEASE = [ KERNEL_BASE ]
 #  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug os_reason_debug ]
-#  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_ltable_stats config_ltable_debug config_waitq_stats config_waitq_debug ]
+#  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_ltable_stats config_ltable_debug config_waitq_stats config_workloop_debug config_waitq_debug ]
 #  BSD_BASE =       [ mach_bsd sysv_sem sysv_msg sysv_shm config_imageboot config_workqueue psynch config_proc_uuid_policy config_coredump pgo config_32bit_telemetry ]
 #  BSD_RELEASE =    [ BSD_BASE ]
 #  BSD_DEV =        [ BSD_BASE config_vnguard ]
 #  BSD_DEBUG =      [ BSD_BASE config_vnguard ]
-#  FILESYS_BASE =   [ devfs fdesc config_dev_kmem config_fse quota namedstreams config_protect fifo config_volfs fs_compression config_imgsrc_access config_triggers config_ext_resolver config_searchfs config_appledouble nullfs config_mnt_suid ]
+#  FILESYS_BASE =   [ devfs fdesc config_dev_kmem config_fse quota namedstreams config_mnt_rootsnap config_keypage_wp config_protect fifo config_volfs fs_compression config_imgsrc_access config_triggers config_ext_resolver config_searchfs config_appledouble nullfs config_mnt_suid ]
 #  FILESYS_RELEASE= [ FILESYS_BASE ]
 #  FILESYS_DEV =    [ FILESYS_BASE ]
 #  FILESYS_DEBUG =  [ FILESYS_BASE ]
@@ -37,15 +37,15 @@
 #  IOKIT_RELEASE =  [ IOKIT_BASE ]
 #  IOKIT_DEV =      [ IOKIT_BASE iotracking ]
 #  IOKIT_DEBUG =    [ IOKIT_BASE iotracking ]
-#  LIBKERN_BASE =   [ libkerncpp config_kxld config_kec_fips zlib crypto_sha2 ]
+#  LIBKERN_BASE =   [ libkerncpp config_blocks config_kxld config_kec_fips zlib crypto_sha2 config_img4 ]
 #  LIBKERN_RELEASE =[ LIBKERN_BASE ]
 #  LIBKERN_DEV =    [ LIBKERN_BASE iotracking ]
 #  LIBKERN_DEBUG =  [ LIBKERN_BASE iotracking ]
 #  PERF_DBG =       [ config_dtrace mach_kdp config_serial_kdp kdp_interactive_debugging kperf kpc zleaks config_gzalloc MONOTONIC_BASE ]
 #  MACH_BASE =      [ mach config_kext_basement mdebug ipc_debug config_mca config_vmx config_mtrr config_lapic config_telemetry importance_inheritance config_atm config_coalitions hypervisor config_iosched config_sysdiagnose config_mach_bridge_send_time copyout_shim ]
 #  MACH_RELEASE =   [ MACH_BASE ]
-#  MACH_DEV =       [ MACH_BASE task_zone_info importance_trace ]
-#  MACH_DEBUG =     [ MACH_BASE task_zone_info importance_trace importance_debug ]
+#  MACH_DEV =       [ MACH_BASE task_zone_info importance_trace config_ledger_interval_max ]
+#  MACH_DEBUG =     [ MACH_BASE task_zone_info importance_trace config_ledger_interval_max importance_debug ]
 #  SCHED_BASE =     [ config_sched_traditional config_sched_multiq config_sched_sfi ]
 #  SCHED_RELEASE =  [ SCHED_BASE ]
 #  SCHED_DEV =      [ SCHED_BASE ]

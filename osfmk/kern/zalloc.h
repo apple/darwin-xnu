@@ -68,6 +68,7 @@
 #define _KERN_ZALLOC_H_
 
 #include <mach/machine/vm_types.h>
+#include <mach_debug/zone_info.h>
 #include <kern/kern_types.h>
 #include <sys/cdefs.h>
 
@@ -82,6 +83,10 @@
 #if KASAN
 #include <sys/queue.h>
 #include <san/kasan.h>
+#endif
+
+#ifdef CONFIG_ZCACHE
+#include <kern/zcache.h>
 #endif
 
 #if	CONFIG_GZALLOC
@@ -103,6 +108,9 @@ struct zone_free_element;
 struct zone_page_metadata;
 
 struct zone {
+#ifdef	 CONFIG_ZCACHE
+	struct zone_cache *zcache;
+#endif	/* CONFIG_ZCACHE */
 	struct zone_free_element *free_elements;	/* free elements directly linked */
 	struct {
 		queue_head_t			any_free_foreign;	/* foreign pages crammed into zone */
@@ -145,7 +153,9 @@ struct zone {
 	/* boolean_t */ tags_inline        :1,
 	/* future    */ tag_zone_index     :6,
 	/* boolean_t */ zone_valid         :1,
-	/* future    */ _reserved          :5;
+	/* boolean_t */ cpu_cache_enable_when_ready  :1,
+	/* boolean_t */ cpu_cache_enabled  :1,
+	/* future    */ _reserved          :3;
 
 	int		index;		/* index into zone_info arrays for this zone */
 	const char	*zone_name;	/* a name for the zone */
@@ -267,12 +277,19 @@ __BEGIN_DECLS
 #ifdef	XNU_KERNEL_PRIVATE
 #define Z_TAGS_ENABLED	11      /* Store tags */
 #endif  /* XNU_KERNEL_PRIVATE */
+#define Z_CACHING_ENABLED 12	/*enable and initialize per-cpu caches for the zone*/
 
 #ifdef	XNU_KERNEL_PRIVATE
 
 extern vm_offset_t     zone_map_min_address;
 extern vm_offset_t     zone_map_max_address;
 
+/* free an element with no regard for gzalloc, zleaks, or kasan*/
+extern void 	zfree_direct(		zone_t 		zone,
+					vm_offset_t 	elem);
+
+/* attempts to allocate an element with no regard for gzalloc, zleaks, or kasan*/
+extern void *	zalloc_attempt(		zone_t		zone);
 
 /* Non-waiting for memory version of zalloc */
 extern void *	zalloc_nopagewait(
@@ -320,16 +337,6 @@ extern integer_t	zone_free_count(
 extern vm_size_t 	zone_element_size(
 						void 		*addr,
 						zone_t 		*z);
-
-/*
- * MAX_ZTRACE_DEPTH configures how deep of a stack trace is taken on each zalloc in the zone of interest.  15
- * levels is usually enough to get past all the layers of code in kalloc and IOKit and see who the actual
- * caller is up above these lower levels.
- *
- * This is used both for the zone leak detector and the zone corruption log.
- */
-
-#define MAX_ZTRACE_DEPTH	15
 
 /* 
  *  Structure for keeping track of a backtrace, used for leak detection.

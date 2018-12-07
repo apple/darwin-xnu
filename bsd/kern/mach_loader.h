@@ -67,13 +67,16 @@ typedef struct _load_result {
 	int			thread_count;
 	unsigned int
 		/* boolean_t */	unixproc	:1,
-				needs_dynlinker : 1,
-				dynlinker	:1,
-				validentry	:1,
-				has_pagezero    :1,
-				using_lcmain	:1,
-				is64bit         :1,
-						:0;
+				needs_dynlinker 	:1,
+				dynlinker			:1,
+				validentry			:1,
+				has_pagezero		:1,
+				using_lcmain		:1,
+#if __arm64__
+				legacy_footprint	:1,
+#endif /* __arm64__ */
+				is_64bit_addr		:1,
+				is_64bit_data		:1;
 	unsigned int		csflags;
 	unsigned char		uuid[16];
 	mach_vm_address_t	min_vm_addr;

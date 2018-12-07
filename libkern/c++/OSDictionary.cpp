@@ -723,3 +723,31 @@ OSArray * OSDictionary::copyKeys(void)
 	}
     return (array);
 }
+
+bool OSDictionary::iterateObjects(void * refcon, bool (*callback)(void * refcon, const OSSymbol * key, OSObject * object))
+{
+    unsigned int initialUpdateStamp;
+    bool         done;
+
+    initialUpdateStamp = updateStamp;
+    done = false;
+	for (unsigned int i = 0; i < count; i++)
+    {
+        done = callback(refcon, dictionary[i].key, EXT_CAST(dictionary[i].value));
+        if (done)                              break;
+        if (initialUpdateStamp != updateStamp) break;
+    }
+
+    return initialUpdateStamp == updateStamp;
+}
+
+static bool OSDictionaryIterateObjectsBlock(void * refcon, const OSSymbol * key, OSObject * object)
+{
+    bool (^block)(const OSSymbol * key, OSObject * object) = (typeof(block)) refcon;
+    return (block(key, object));
+}
+
+bool OSDictionary::iterateObjects(bool (^block)(const OSSymbol * key, OSObject * object))
+{
+	return (iterateObjects((void *)block, &OSDictionaryIterateObjectsBlock));
+}

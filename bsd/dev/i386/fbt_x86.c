@@ -36,7 +36,7 @@
 #include <kern/thread.h>
 #include <mach/thread_status.h>
 #include <mach/vm_param.h>
-#include <mach-o/loader.h> 
+#include <mach-o/loader.h>
 #include <mach-o/nlist.h>
 #include <libkern/kernel_mach_header.h>
 #include <libkern/OSAtomic.h>
@@ -110,7 +110,7 @@ int
 fbt_invop(uintptr_t addr, uintptr_t *state, uintptr_t rval)
 {
 	fbt_probe_t *fbt = fbt_probetab[FBT_ADDR2NDX(addr)];
-	
+
 	for (; fbt != NULL; fbt = fbt->fbtp_hashnext) {
 		if ((uintptr_t)fbt->fbtp_patchpoint == addr) {
 
@@ -180,7 +180,7 @@ fbt_perfCallback(
 			"_dtrace_invop_callsite_post:\n"
 			"  .quad Ldtrace_invop_callsite_post_label\n"
 			".text\n"
-				 );		
+				 );
 
 		switch (emul) {
 		case DTRACE_INVOP_NOP:
@@ -198,7 +198,7 @@ fbt_perfCallback(
 		case DTRACE_INVOP_LEAVE:
 /*
  * Emulate first micro-op of patched leave: mov %rbp,%rsp
- * fp points just below the return address slot for target's ret 
+ * fp points just below the return address slot for target's ret
  * and at the slot holding the frame pointer saved by the target's prologue.
  */
 			fp = saved_state->rbp;
@@ -247,7 +247,7 @@ fbt_perfCallback(
 
 			retval = KERN_SUCCESS;
 			break;
-			
+
 		default:
 			retval = KERN_FAILURE;
 			break;
@@ -263,7 +263,7 @@ fbt_perfCallback(
 }
 
 void
-fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, char *modname, char* symbolName, machine_inst_t* symbolStart)
+fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolName, machine_inst_t* symbolStart, machine_inst_t* instrHigh)
 {
 	unsigned int			j;
 	unsigned int			doenable = 0;
@@ -272,37 +272,36 @@ fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, c
 	fbt_probe_t *newfbt, *retfbt, *entryfbt;
 	machine_inst_t *instr, *limit, theInstr, i1, i2, i3;
 	int size;
-		
+
 	/*
 	 * Guard against null symbols
 	 */
-	if (!symbolStart || !instrLow || !instrHigh) {
+	if (!symbolStart || !instrHigh || instrHigh < symbolStart) {
 		kprintf("dtrace: %s has an invalid address\n", symbolName);
 		return;
 	}
 
 	for (j = 0, instr = symbolStart, theInstr = 0;
-	     (j < 4) && ((uintptr_t)instr >= instrLow) && (instrHigh > (uintptr_t)(instr + 2)); 
-	     j++) {
+	     (j < 4) && (instrHigh > (instr + 2)); j++) {
 		theInstr = instr[0];
 		if (theInstr == FBT_PUSH_RBP || theInstr == FBT_RET || theInstr == FBT_RET_IMM16)
 			break;
-		
+
 		if ((size = dtrace_instr_size(instr)) <= 0)
 			break;
-		
+
 		instr += size;
 	}
-	
+
 	if (theInstr != FBT_PUSH_RBP)
 		return;
-	
+
 	i1 = instr[1];
 	i2 = instr[2];
 	i3 = instr[3];
-	
+
 	limit = (machine_inst_t *)instrHigh;
-	
+
 	if (i1 == FBT_REX_RSP_RBP && i2 == FBT_MOV_RSP_RBP0 && i3 == FBT_MOV_RSP_RBP1) {
 		instr += 1; /* Advance to the mov %rsp,%rbp */
 		theInstr = i1;
@@ -319,26 +318,26 @@ fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, c
 		 * 000006d8        pushl   %ebp
 		 * 000006d9        movl    $0x00000004,%edx
 		 * 000006de        movl    %esp,%ebp
-		 * 
+		 *
 		 * Try the next instruction, to see if it is a movl %esp,%ebp
 		 */
-		
+
 		instr += 1; /* Advance past the pushl %ebp */
 		if ((size = dtrace_instr_size(instr)) <= 0)
 			return;
-		
+
 		instr += size;
-		
+
 		if ((instr + 1) >= limit)
 			return;
-		
+
 		i1 = instr[0];
 		i2 = instr[1];
-		
+
 		if (!(i1 == FBT_MOVL_ESP_EBP0_V0 && i2 == FBT_MOVL_ESP_EBP1_V0) &&
 		    !(i1 == FBT_MOVL_ESP_EBP0_V1 && i2 == FBT_MOVL_ESP_EBP1_V1))
 			return;
-		
+
 		/* instr already points at the movl %esp,%ebp */
 		theInstr = i1;
 	}
@@ -346,7 +345,7 @@ fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, c
 	thisid = dtrace_probe_lookup(fbt_id, modname, symbolName, FBT_ENTRY);
 	newfbt = kmem_zalloc(sizeof (fbt_probe_t), KM_SLEEP);
 	strlcpy( (char *)&(newfbt->fbtp_name), symbolName, MAX_FBTP_NAME_CHARS );
-	
+
 	if (thisid != 0) {
 		/*
 		 * The dtrace_probe previously existed, so we have to hook
@@ -360,13 +359,13 @@ fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, c
 		for(; entryfbt != NULL; entryfbt = entryfbt->fbtp_next) {
 			if (entryfbt->fbtp_currentval == entryfbt->fbtp_patchval)
 				doenable++;
-			
+
 			if (entryfbt->fbtp_next == NULL) {
 				entryfbt->fbtp_next = newfbt;
 				newfbt->fbtp_id = entryfbt->fbtp_id;
 				break;
 			}
-		}		    
+		}
 	}
 	else {
 		/*
@@ -377,7 +376,7 @@ fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, c
 		newfbt->fbtp_id = dtrace_probe_create(fbt_id, modname, symbolName, FBT_ENTRY, FBT_AFRAMES_ENTRY, newfbt);
 		doenable = 0;
 	}
-	
+
 	newfbt->fbtp_patchpoint = instr;
 	newfbt->fbtp_ctl = ctl;
 	newfbt->fbtp_loadcnt = ctl->mod_loadcnt;
@@ -387,18 +386,18 @@ fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, c
 	newfbt->fbtp_currentval = 0;
 	newfbt->fbtp_hashnext = fbt_probetab[FBT_ADDR2NDX(instr)];
 	fbt_probetab[FBT_ADDR2NDX(instr)] = newfbt;
-	
+
 	if (doenable)
 		fbt_enable(NULL, newfbt->fbtp_id, newfbt);
-	
+
 	/*
 	 * The fbt entry chain is in place, one entry point per symbol.
 	 * The fbt return chain can have multiple return points per symbol.
 	 * Here we find the end of the fbt return chain.
 	 */
-	
+
 	doenable=0;
-	
+
 	thisid = dtrace_probe_lookup(fbt_id, modname, symbolName, FBT_RETURN);
 	if (thisid != 0) {
 		/* The dtrace_probe previously existed, so we have to
@@ -420,11 +419,11 @@ fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, c
 		doenable = 0;
 		retfbt = NULL;
 	}
-	
+
 again:
 	if (instr >= limit)
 		return;
-	
+
 	/*
 	 * If this disassembly fails, then we've likely walked off into
 	 * a jump table or some other unsuitable area.  Bail out of the
@@ -432,7 +431,7 @@ again:
 	 */
 	if ((size = dtrace_instr_size(instr)) <= 0)
 		return;
-	
+
 	/*
 	 * We (desperately) want to avoid erroneously instrumenting a
 	 * jump table, especially given that our markers are pretty
@@ -447,66 +446,66 @@ again:
 	for (j = 0; j < sizeof (uintptr_t); j++) {
 		uintptr_t check = (uintptr_t)instr - j;
 		uint8_t *ptr;
-		
+
 		if (check < (uintptr_t)symbolStart)
 			break;
-		
+
 		if (check + sizeof (uintptr_t) > (uintptr_t)limit)
 			continue;
-		
+
 		ptr = *(uint8_t **)check;
-		
+
 		if (ptr >= (uint8_t *)symbolStart && ptr < limit) {
 			instr += size;
 			goto again;
 		}
 	}
-	
+
 	/*
 	 * OK, it's an instruction.
 	 */
 	theInstr = instr[0];
-	
+
 	/* Walked onto the start of the next routine? If so, bail out of this function. */
 	if (theInstr == FBT_PUSH_RBP)
 		return;
-	
+
 	if (!(size == 1 && (theInstr == FBT_POP_RBP || theInstr == FBT_LEAVE))) {
 		instr += size;
 		goto again;
 	}
-	
+
 	/*
 	 * Found the pop %rbp; or leave.
 	 */
 	machine_inst_t *patch_instr = instr;
-	
+
 	/*
 	 * Scan forward for a "ret", or "jmp".
 	 */
 	instr += size;
 	if (instr >= limit)
 		return;
-	
+
 	size = dtrace_instr_size(instr);
 	if (size <= 0) /* Failed instruction decode? */
 		return;
-	
+
 	theInstr = instr[0];
-	
+
 	if (!(size == FBT_RET_LEN && (theInstr == FBT_RET)) &&
 	    !(size == FBT_RET_IMM16_LEN && (theInstr == FBT_RET_IMM16)) &&
 	    !(size == FBT_JMP_SHORT_REL_LEN && (theInstr == FBT_JMP_SHORT_REL)) &&
 	    !(size == FBT_JMP_NEAR_REL_LEN && (theInstr == FBT_JMP_NEAR_REL)) &&
 	    !(size == FBT_JMP_FAR_ABS_LEN && (theInstr == FBT_JMP_FAR_ABS)))
 		return;
-	
+
 	/*
 	 * pop %rbp; ret; or leave; ret; or leave; jmp tailCalledFun; -- We have a winner!
 	 */
 	newfbt = kmem_zalloc(sizeof (fbt_probe_t), KM_SLEEP);
 	strlcpy( (char *)&(newfbt->fbtp_name), symbolName, MAX_FBTP_NAME_CHARS );
-	
+
 	if (retfbt == NULL) {
 		newfbt->fbtp_id = dtrace_probe_create(fbt_id, modname,
 						      symbolName, FBT_RETURN, FBT_AFRAMES_RETURN, newfbt);
@@ -514,12 +513,12 @@ again:
 		retfbt->fbtp_next = newfbt;
 		newfbt->fbtp_id = retfbt->fbtp_id;
 	}
-	
+
 	retfbt = newfbt;
 	newfbt->fbtp_patchpoint = patch_instr;
 	newfbt->fbtp_ctl = ctl;
 	newfbt->fbtp_loadcnt = ctl->mod_loadcnt;
-	
+
 	if (*patch_instr == FBT_POP_RBP) {
 		newfbt->fbtp_rval = DTRACE_INVOP_POP_RBP;
 	} else {
@@ -528,87 +527,16 @@ again:
 	}
 	newfbt->fbtp_roffset =
 	(uintptr_t)(patch_instr - (uint8_t *)symbolStart);
-	
+
 	newfbt->fbtp_savedval = *patch_instr;
 	newfbt->fbtp_patchval = FBT_PATCHVAL;
 	newfbt->fbtp_hashnext = fbt_probetab[FBT_ADDR2NDX(patch_instr)];
 	fbt_probetab[FBT_ADDR2NDX(patch_instr)] = newfbt;
-	
+
 	if (doenable)
 		fbt_enable(NULL, newfbt->fbtp_id, newfbt);
-	
+
 	instr += size;
 	goto again;
 }
 
-void
-fbt_provide_module_kernel_syms(struct modctl *ctl)
-{
-	kernel_mach_header_t		*mh;
-	struct load_command		*cmd;
-	kernel_segment_command_t	*orig_ts = NULL, *orig_le = NULL;
-	struct symtab_command		*orig_st = NULL;
-	kernel_nlist_t			*sym = NULL;
-	char				*strings;
-	uintptr_t			instrLow, instrHigh;
-	char				*modname;
-	unsigned int			i;
-	
-	mh = (kernel_mach_header_t *)(ctl->mod_address);
-	modname = ctl->mod_modname;
-	
-	if (mh->magic != MH_MAGIC_KERNEL)
-		return;
-	
-	cmd = (struct load_command *) &mh[1];
-	for (i = 0; i < mh->ncmds; i++) {
-		if (cmd->cmd == LC_SEGMENT_KERNEL) {
-			kernel_segment_command_t *orig_sg = (kernel_segment_command_t *) cmd;
-			
-			if (LIT_STRNEQL(orig_sg->segname, SEG_TEXT))
-				orig_ts = orig_sg;
-			else if (LIT_STRNEQL(orig_sg->segname, SEG_LINKEDIT))
-				orig_le = orig_sg;
-			else if (LIT_STRNEQL(orig_sg->segname, ""))
-				orig_ts = orig_sg; /* kexts have a single unnamed segment */
-		}
-		else if (cmd->cmd == LC_SYMTAB)
-			orig_st = (struct symtab_command *) cmd;
-		
-		cmd = (struct load_command *) ((caddr_t) cmd + cmd->cmdsize);
-	}
-	
-	if ((orig_ts == NULL) || (orig_st == NULL) || (orig_le == NULL))
-		return;
-	
-	sym = (kernel_nlist_t *)(orig_le->vmaddr + orig_st->symoff - orig_le->fileoff);
-	strings = (char *)(orig_le->vmaddr + orig_st->stroff - orig_le->fileoff);
-	
-	/* Find extent of the TEXT section */
-	instrLow = (uintptr_t)orig_ts->vmaddr;
-	instrHigh = (uintptr_t)(orig_ts->vmaddr + orig_ts->vmsize);
-	
-	for (i = 0; i < orig_st->nsyms; i++) {
-		uint8_t n_type = sym[i].n_type & (N_TYPE | N_EXT);
-		char *name = strings + sym[i].n_un.n_strx;
-		
-		/* Check that the symbol is a global and that it has a name. */
-		if (((N_SECT | N_EXT) != n_type && (N_ABS | N_EXT) != n_type))
-			continue;
-		
-		if (0 == sym[i].n_un.n_strx) /* iff a null, "", name. */
-			continue;
-		
-		/* Lop off omnipresent leading underscore. */			
-		if (*name == '_')
-			name += 1;
-		
-		/*
-		 * We're only blacklisting functions in the kernel for now.
-		 */
-		if (MOD_IS_MACH_KERNEL(ctl) && fbt_excluded(name))
-			continue;
-		
-		fbt_provide_probe(ctl, instrLow, instrHigh, modname, name, (machine_inst_t*)sym[i].n_value);
-	}
-}

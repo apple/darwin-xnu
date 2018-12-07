@@ -119,6 +119,9 @@
 		40DF0F741E5CD7BB0035A864 /* cpu_copy_in_cksum_gen.c in Sources */ = {isa = PBXBuildFile; fileRef = 40DF0F731E5CD7B30035A864 /* cpu_copy_in_cksum_gen.c */; settings = {COMPILER_FLAGS = "-fno-builtin"; }; };
 		435F3CAA1B06B7BA005ED9EF /* work_interval.c in Sources */ = {isa = PBXBuildFile; fileRef = 435F3CA91B06B7BA005ED9EF /* work_interval.c */; };
 		467DAFD4157E8AF200CE68F0 /* guarded_open_np.c in Sources */ = {isa = PBXBuildFile; fileRef = 467DAFD3157E8AF200CE68F0 /* guarded_open_np.c */; };
+		4BCDD8AF20741A5B00FA37A3 /* mach_right.h in Headers */ = {isa = PBXBuildFile; fileRef = 4BCDD8AE20741A4700FA37A3 /* mach_right.h */; };
+		4BCDD8B020741BC400FA37A3 /* mach_right.h in Headers */ = {isa = PBXBuildFile; fileRef = 4BCDD8AE20741A4700FA37A3 /* mach_right.h */; };
+		4BCDD8B220741C2F00FA37A3 /* mach_right.c in Sources */ = {isa = PBXBuildFile; fileRef = 4BCDD8B120741C2F00FA37A3 /* mach_right.c */; };
 		4BDD5F1D1891AB2F004BF300 /* mach_approximate_time.c in Sources */ = {isa = PBXBuildFile; fileRef = 4BDD5F1B1891AB2F004BF300 /* mach_approximate_time.c */; };
 		4BDD5F1E1891AB2F004BF300 /* mach_approximate_time.s in Sources */ = {isa = PBXBuildFile; fileRef = 4BDD5F1C1891AB2F004BF300 /* mach_approximate_time.s */; };
 		726D915520ACD7FC0039A2FE /* mach_bridge_remote_time.c in Sources */ = {isa = PBXBuildFile; fileRef = 726D915420ACD7FC0039A2FE /* mach_bridge_remote_time.c */; };
@@ -138,6 +141,8 @@
 		929FD46F1C5711DB0087B9C8 /* mach_timebase_info.c in Sources */ = {isa = PBXBuildFile; fileRef = 929FD46E1C5711CF0087B9C8 /* mach_timebase_info.c */; };
 		978228281B8678DC008385AC /* pselect-darwinext.c in Sources */ = {isa = PBXBuildFile; fileRef = 978228271B8678CB008385AC /* pselect-darwinext.c */; };
 		978228291B8678DF008385AC /* pselect-darwinext-cancel.c in Sources */ = {isa = PBXBuildFile; fileRef = 978228261B8678C2008385AC /* pselect-darwinext-cancel.c */; };
+		9C6DA3D220A3D09F0090330B /* mach_sync_ipc.h in Headers */ = {isa = PBXBuildFile; fileRef = 9C6DA3D120A3D09F0090330B /* mach_sync_ipc.h */; };
+		9C6DA3D320A3D09F0090330B /* mach_sync_ipc.h in Headers */ = {isa = PBXBuildFile; fileRef = 9C6DA3D120A3D09F0090330B /* mach_sync_ipc.h */; };
 		9CCF28271E68E993002EE6CD /* pid_shutdown_networking.c in Sources */ = {isa = PBXBuildFile; fileRef = 9CCF28261E68E993002EE6CD /* pid_shutdown_networking.c */; };
 		A50845861DDA69AC0041C0E0 /* thread_self_restrict.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = A50BD52E1DDA548F006622C8 /* thread_self_restrict.h */; };
 		A50845871DDA69C90041C0E0 /* thread_self_restrict.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = A50BD52E1DDA548F006622C8 /* thread_self_restrict.h */; };
@@ -184,6 +189,8 @@
 		C6D3EFC816542C510052CF30 /* exc_catcher.h in Headers */ = {isa = PBXBuildFile; fileRef = 247A091611F8E7A800E4693F /* exc_catcher.h */; };
 		C6D3EFC916542C510052CF30 /* _libkernel_init.h in Headers */ = {isa = PBXBuildFile; fileRef = 247A08B211F8B05900E4693F /* _libkernel_init.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		C6D3F03016542C980052CF30 /* dummy.c in Sources */ = {isa = PBXBuildFile; fileRef = C6D3F02F16542C980052CF30 /* dummy.c */; };
+		C9001753206B00AC0070D674 /* port_descriptions.c in Sources */ = {isa = PBXBuildFile; fileRef = C9001751206B00850070D674 /* port_descriptions.c */; };
+		C9001754206B00D00070D674 /* port_descriptions.h in Headers */ = {isa = PBXBuildFile; fileRef = C9001752206B008B0070D674 /* port_descriptions.h */; };
 		C962B16C18DBA2C80031244A /* setpriority.c in Sources */ = {isa = PBXBuildFile; fileRef = C962B16B18DBA2C80031244A /* setpriority.c */; };
 		C962B16E18DBB43F0031244A /* thread_act.c in Sources */ = {isa = PBXBuildFile; fileRef = C962B16D18DBB43F0031244A /* thread_act.c */; };
 		C99A4F501305B2BD0054B7B7 /* __get_cpu_capabilities.s in Sources */ = {isa = PBXBuildFile; fileRef = C99A4F4E1305B1B70054B7B7 /* __get_cpu_capabilities.s */; };
@@ -506,6 +513,8 @@
 		40DF0F731E5CD7B30035A864 /* cpu_copy_in_cksum_gen.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cpu_copy_in_cksum_gen.c; path = skywalk/cpu_copy_in_cksum_gen.c; sourceTree = "<group>"; };
 		435F3CA91B06B7BA005ED9EF /* work_interval.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = work_interval.c; sourceTree = "<group>"; };
 		467DAFD3157E8AF200CE68F0 /* guarded_open_np.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = guarded_open_np.c; sourceTree = "<group>"; };
+		4BCDD8AE20741A4700FA37A3 /* mach_right.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mach_right.h; sourceTree = "<group>"; };
+		4BCDD8B120741C2F00FA37A3 /* mach_right.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = mach_right.c; sourceTree = "<group>"; };
 		4BDD5F1B1891AB2F004BF300 /* mach_approximate_time.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mach_approximate_time.c; sourceTree = "<group>"; };
 		4BDD5F1C1891AB2F004BF300 /* mach_approximate_time.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = mach_approximate_time.s; sourceTree = "<group>"; };
 		726D915420ACD7FC0039A2FE /* mach_bridge_remote_time.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = mach_bridge_remote_time.c; path = wrappers/mach_bridge_remote_time.c; sourceTree = "<group>"; };
@@ -521,6 +530,7 @@
 		929FD46E1C5711CF0087B9C8 /* mach_timebase_info.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mach_timebase_info.c; sourceTree = "<group>"; };
 		978228261B8678C2008385AC /* pselect-darwinext-cancel.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = "pselect-darwinext-cancel.c"; sourceTree = "<group>"; };
 		978228271B8678CB008385AC /* pselect-darwinext.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = "pselect-darwinext.c"; sourceTree = "<group>"; };
+		9C6DA3D120A3D09F0090330B /* mach_sync_ipc.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = mach_sync_ipc.h; sourceTree = "<group>"; };
 		9CCF28261E68E993002EE6CD /* pid_shutdown_networking.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = pid_shutdown_networking.c; sourceTree = "<group>"; };
 		A50BD52E1DDA548F006622C8 /* thread_self_restrict.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = thread_self_restrict.h; sourceTree = "<group>"; };
 		A59CB95516669DB700B064B3 /* stack_logging_internal.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = stack_logging_internal.h; sourceTree = "<group>"; };
@@ -539,6 +549,8 @@
 		C6C40121174154D9000AE69F /* gethostuuid_private.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = gethostuuid_private.h; sourceTree = "<group>"; };
 		C6D3F02E16542C510052CF30 /* libsystem_Libsyscall_headers_Sim.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libsystem_Libsyscall_headers_Sim.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		C6D3F02F16542C980052CF30 /* dummy.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = dummy.c; sourceTree = "<group>"; };
+		C9001751206B00850070D674 /* port_descriptions.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = port_descriptions.c; sourceTree = "<group>"; };
+		C9001752206B008B0070D674 /* port_descriptions.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = port_descriptions.h; sourceTree = "<group>"; };
 		C93B50491C487698009DD6AB /* __kdebug_trace_string.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = __kdebug_trace_string.s; sourceTree = "<group>"; };
 		C962B16B18DBA2C80031244A /* setpriority.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = setpriority.c; sourceTree = "<group>"; };
 		C962B16D18DBB43F0031244A /* thread_act.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = thread_act.c; sourceTree = "<group>"; };
@@ -672,6 +684,7 @@
 		08FB7795FE84155DC02AAC07 /* mach */ = {
 			isa = PBXGroup;
 			children = (
+				C9001751206B00850070D674 /* port_descriptions.c */,
 				247A08FF11F8E18000E4693F /* abort.h */,
 				C9D9BCC5114B00600000D8B9 /* clock_priv.defs */,
 				C9D9BCC6114B00600000D8B9 /* clock_reply.defs */,
@@ -706,6 +719,7 @@
 				C9D9BCF1114B00600000D8B9 /* mach_msg.c */,
 				291D3C261354FDD100D46061 /* mach_port.c */,
 				C9D9BCF2114B00600000D8B9 /* mach_port.defs */,
+				4BCDD8B120741C2F00FA37A3 /* mach_right.c */,
 				C9D9BCF3114B00600000D8B9 /* mach_traps.s */,
 				291D3C271354FDD100D46061 /* mach_vm.c */,
 				E4216C301822D404006F2632 /* mach_voucher.defs */,
@@ -1001,11 +1015,14 @@
 		C9D9BCD8114B00600000D8B9 /* mach */ = {
 			isa = PBXGroup;
 			children = (
+				C9001752206B008B0070D674 /* port_descriptions.h */,
 				C9D9BCD9114B00600000D8B9 /* errorlib.h */,
 				C9D9BCDA114B00600000D8B9 /* mach.h */,
 				C9D9BCDB114B00600000D8B9 /* mach_error.h */,
 				C9D9BCDC114B00600000D8B9 /* mach_init.h */,
 				C9D9BCDD114B00600000D8B9 /* mach_interface.h */,
+				9C6DA3D120A3D09F0090330B /* mach_sync_ipc.h */,
+				4BCDD8AE20741A4700FA37A3 /* mach_right.h */,
 				C9D9BCDF114B00600000D8B9 /* port_obj.h */,
 				C9D9BCE0114B00600000D8B9 /* sync.h */,
 				928336A21B8412C100873B90 /* thread_state.h */,
@@ -1092,9 +1109,11 @@
 				C6D3EFC616542C510052CF30 /* SYS.h in Headers */,
 				C6D3EFC716542C510052CF30 /* abort.h in Headers */,
 				C6D3EFC816542C510052CF30 /* exc_catcher.h in Headers */,
+				4BCDD8B020741BC400FA37A3 /* mach_right.h in Headers */,
 				C6D3EFC916542C510052CF30 /* _libkernel_init.h in Headers */,
 				E453AF3A17013F4C00F2C94C /* stack_logging_internal.h in Headers */,
 				E453AF3817013F1400F2C94C /* spawn.h in Headers */,
+				9C6DA3D320A3D09F0090330B /* mach_sync_ipc.h in Headers */,
 				E453AF3917013F1B00F2C94C /* spawn_private.h in Headers */,
 				E453AF3617013CBF00F2C94C /* libproc.h in Headers */,
 				E453AF3717013CC200F2C94C /* libproc_internal.h in Headers */,
@@ -1113,6 +1132,7 @@
 				C9D9BD26114B00600000D8B9 /* mach.h in Headers */,
 				C9D9BD27114B00600000D8B9 /* mach_error.h in Headers */,
 				C9D9BD28114B00600000D8B9 /* mach_init.h in Headers */,
+				C9001754206B00D00070D674 /* port_descriptions.h in Headers */,
 				9299E14A1B841E74005B7350 /* thread_state.h in Headers */,
 				C6C40122174155E3000AE69F /* gethostuuid_private.h in Headers */,
 				C9D9BD29114B00600000D8B9 /* mach_interface.h in Headers */,
@@ -1127,9 +1147,11 @@
 				24D1158311E671B20063D54D /* SYS.h in Headers */,
 				247A090011F8E18000E4693F /* abort.h in Headers */,
 				247A091711F8E7A800E4693F /* exc_catcher.h in Headers */,
+				4BCDD8AF20741A5B00FA37A3 /* mach_right.h in Headers */,
 				24B028F511FF5C3500CA64A9 /* _libkernel_init.h in Headers */,
 				A59CB95616669EFB00B064B3 /* stack_logging_internal.h in Headers */,
 				E4D45C3F16FB20D30002AF25 /* spawn.h in Headers */,
+				9C6DA3D220A3D09F0090330B /* mach_sync_ipc.h in Headers */,
 				E4D45C4016FB20DC0002AF25 /* spawn_private.h in Headers */,
 				E4D45C2F16F868ED0002AF25 /* libproc.h in Headers */,
 				E4D45C3016F868ED0002AF25 /* libproc_internal.h in Headers */,
@@ -1205,7 +1227,7 @@
 		08FB7793FE84155DC02AAC07 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
-				LastUpgradeCheck = 0500;
+				LastUpgradeCheck = 1000;
 			};
 			buildConfigurationList = 1DEB914E08733D8E0010E9CD /* Build configuration list for PBXProject "Libsyscall" */;
 			compatibilityVersion = "Xcode 3.2";
@@ -1307,6 +1329,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C9001753206B00AC0070D674 /* port_descriptions.c in Sources */,
 				726D915520ACD7FC0039A2FE /* mach_bridge_remote_time.c in Sources */,
 				403C7CEE1E1F4E4400D6FEEF /* os_packet.c in Sources */,
 				E214BDC81C2E358300CEE8A3 /* clonefile.c in Sources */,
@@ -1363,6 +1386,7 @@
 				978228281B8678DC008385AC /* pselect-darwinext.c in Sources */,
 				2485235511582D8F0051B413 /* mach_legacy.c in Sources */,
 				242AB66611EBDC1200107336 /* errno.c in Sources */,
+				4BCDD8B220741C2F00FA37A3 /* mach_right.c in Sources */,
 				E4D45C2E16F868ED0002AF25 /* libproc.c in Sources */,
 				24A7C5BC11FF8DA6007669EB /* accept.c in Sources */,
 				24A7C5BD11FF8DA6007669EB /* bind.c in Sources */,
@@ -1483,6 +1507,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = YES;
 				COPY_PHASE_STRIP = NO;
 				INSTALL_PATH = /usr/local/lib/dyld;
 				STRIP_INSTALLED_PRODUCT = NO;
@@ -1493,8 +1518,30 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = NO;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu99;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = NO;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
 				GCC_WARN_UNINITIALIZED_AUTOS = YES;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_PARAMETER = YES;
@@ -1507,7 +1554,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
-				ARCHS = "$(ARCHS_STANDARD_32_64_BIT)";
+				CLANG_ENABLE_OBJC_WEAK = YES;
 				COPY_PHASE_STRIP = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				MAP_PLATFORM = "$(MAP_PLATFORM_$(PLATFORM_NAME))";
@@ -1527,6 +1574,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = YES;
 				OTHER_LDFLAGS = "$(DYLIB_LDFLAGS)";
 				VERSION_INFO_PREFIX = "___";
 			};
@@ -1536,6 +1584,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = YES;
 				COPY_PHASE_STRIP = NO;
 				INSTALLHDRS_COPY_PHASE = NO;
 				PRODUCT_NAME = Build;
@@ -1547,6 +1596,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Release;
@@ -1555,6 +1605,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = YES;
 				COPY_PHASE_STRIP = NO;
 				PRODUCT_NAME = Libsyscall_headers_Sim;
 				SKIP_INSTALL = YES;

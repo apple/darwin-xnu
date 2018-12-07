@@ -2287,13 +2287,13 @@ timer:
 		 *
 		 * Every time new data is sent PTO will get reset.
 		 */
-		if (tcp_enable_tlp && tp->t_state == TCPS_ESTABLISHED &&
-		    SACK_ENABLED(tp) && !IN_FASTRECOVERY(tp)
-		    && tp->snd_nxt == tp->snd_max
-		    && SEQ_GT(tp->snd_nxt, tp->snd_una)
-		    && tp->t_rxtshift == 0
-		    && (tp->t_flagsext & (TF_SENT_TLPROBE|TF_PKTS_REORDERED)) == 0) {
-			u_int32_t pto, srtt, new_rto = 0;
+		if (tcp_enable_tlp && len != 0 && tp->t_state == TCPS_ESTABLISHED &&
+		    SACK_ENABLED(tp) && !IN_FASTRECOVERY(tp) &&
+		    tp->snd_nxt == tp->snd_max &&
+		    SEQ_GT(tp->snd_nxt, tp->snd_una) &&
+		    tp->t_rxtshift == 0 &&
+		    (tp->t_flagsext & (TF_SENT_TLPROBE|TF_PKTS_REORDERED)) == 0) {
+			u_int32_t pto, srtt;
 
 			/*
 			 * Using SRTT alone to set PTO can cause spurious
@@ -2311,21 +2311,9 @@ timer:
 				pto = max(10, pto);
 
 			/* if RTO is less than PTO, choose RTO instead */
-			if (tp->t_rxtcur < pto) {
-				/*
-				 * Schedule PTO instead of RTO in favor of
-				 * fast recovery.
-				 */
+			if (tp->t_rxtcur < pto)
 				pto = tp->t_rxtcur;
 
-				/* Reset the next RTO to be after PTO. */
-				TCPT_RANGESET(new_rto,
-				    (pto + TCP_REXMTVAL(tp)),
-				    max(tp->t_rttmin, tp->t_rttcur + 2),
-				    TCPTV_REXMTMAX, 0);
-				tp->t_timer[TCPT_REXMT] =
-				    OFFSET_FROM_START(tp, new_rto);
-			}
 			tp->t_timer[TCPT_PTO] = OFFSET_FROM_START(tp, pto);
 		}
 	} else {
@@ -2412,13 +2400,14 @@ timer:
 #if NECP
 	{
 		necp_kernel_policy_id policy_id;
+		necp_kernel_policy_id skip_policy_id;
 		u_int32_t route_rule_id;
-		if (!necp_socket_is_allowed_to_send_recv(inp, &policy_id, &route_rule_id)) {
+		if (!necp_socket_is_allowed_to_send_recv(inp, &policy_id, &route_rule_id, &skip_policy_id)) {
 			m_freem(m);
 			error = EHOSTUNREACH;
 			goto out;
 		}
-		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id);
+		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id, skip_policy_id);
 
 		if (net_qos_policy_restricted != 0) {
 			necp_socket_update_qos_marking(inp, inp->inp_route.ro_rt,
@@ -2445,6 +2434,11 @@ timer:
 	m->m_pkthdr.pkt_flowid = inp->inp_flowhash;
 	m->m_pkthdr.pkt_flags |= (PKTF_FLOW_ID | PKTF_FLOW_LOCALSRC | PKTF_FLOW_ADV);
 	m->m_pkthdr.pkt_proto = IPPROTO_TCP;
+	m->m_pkthdr.tx_tcp_pid = so->last_pid;
+	if (so->so_flags & SOF_DELEGATED)
+		m->m_pkthdr.tx_tcp_e_pid = so->e_pid;
+	else
+		m->m_pkthdr.tx_tcp_e_pid = 0;
 
 	m->m_nextpkt = NULL;
 

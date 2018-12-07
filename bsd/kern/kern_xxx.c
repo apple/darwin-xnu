@@ -115,8 +115,10 @@ reboot(struct proc *p, struct reboot_args *uap, __unused int32_t *retval)
 	if (uap->opt & RB_COMMAND)
                 return ENOSYS;
 
-        if (uap->opt & RB_PANIC) {
-		error = copyinstr(uap->command, (void *)message, sizeof(message), (size_t *)&dummy);
+        if (uap->opt & RB_PANIC && uap->msg != USER_ADDR_NULL) {
+		if (copyinstr(uap->msg, (void *)message, sizeof(message), (size_t *)&dummy)) {
+			strncpy(message, "user space RB_PANIC message copyin failed", sizeof(message)-1);
+		}
         }
 
 #if CONFIG_MACF
@@ -139,7 +141,7 @@ skip_cred_check:
 		OSBitOrAtomic(P_REBOOT, &p->p_flag);  /* No more signals for this proc */
 		error = reboot_kernel(uap->opt, message);
 	}
-	return(error);
+	return error;
 }
 
 int

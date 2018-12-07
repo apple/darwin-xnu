@@ -4197,6 +4197,16 @@ ip_savecontrol(struct inpcb *inp, struct mbuf **mp, struct ip *ip,
 			goto no_mbufs;
 		}
 	}
+	if (inp->inp_socket->so_options & SO_TIMESTAMP_CONTINUOUS) {
+		uint64_t time;
+
+		time = mach_continuous_time();
+		mp = sbcreatecontrol_mbuf((caddr_t)&time, sizeof (time),
+			SCM_TIMESTAMP_CONTINUOUS, SOL_SOCKET, mp);
+		if (*mp == NULL) {
+			goto no_mbufs;
+		}
+	}
 	if (inp->inp_flags & INP_RECVDSTADDR) {
 		mp = sbcreatecontrol_mbuf((caddr_t)&ip->ip_dst,
 		    sizeof (struct in_addr), IP_RECVDSTADDR, IPPROTO_IP, mp);

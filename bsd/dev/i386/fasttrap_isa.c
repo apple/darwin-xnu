@@ -1384,7 +1384,7 @@ fasttrap_pid_probe32(x86_saved_state_t *regs)
 
 		case FASTTRAP_T_COMMON:
 		{
-			user_addr_t addr;
+			user_addr_t addr, write_addr;
 			uint8_t scratch[2 * FASTTRAP_MAX_INSTR_SIZE + 7];
 			uint_t i = 0;
 
@@ -1428,8 +1428,9 @@ fasttrap_pid_probe32(x86_saved_state_t *regs)
 			 */
 
 			addr = uthread->t_dtrace_scratch->addr;
+			write_addr = uthread->t_dtrace_scratch->write_addr;
 
-			if (addr == 0LL) {
+			if (addr == 0LL || write_addr == 0LL) {
 				fasttrap_sigtrap(p, uthread, pc); // Should be killing target proc
 				new_pc = pc;
 				break;
@@ -1458,7 +1459,7 @@ fasttrap_pid_probe32(x86_saved_state_t *regs)
 			
 			ASSERT(i <= sizeof (scratch));
 
-			if (fasttrap_copyout(scratch, addr, i)) {
+			if (fasttrap_copyout(scratch, write_addr, i)) {
 				fasttrap_sigtrap(p, uthread, pc);
 				new_pc = pc;
 				break;
@@ -1938,7 +1939,7 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 
 		case FASTTRAP_T_COMMON:
 		{
-			user_addr_t addr;
+			user_addr_t addr, write_addr;
 			uint8_t scratch[2 * FASTTRAP_MAX_INSTR_SIZE + 22];
 			uint_t i = 0;
 			
@@ -2026,8 +2027,9 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 			 */
 
 			addr = uthread->t_dtrace_scratch->addr;
+			write_addr = uthread->t_dtrace_scratch->write_addr;
 
-			if (addr == 0LL) {
+			if (addr == 0LL || write_addr == 0LL) {
 				fasttrap_sigtrap(p, uthread, pc); // Should be killing target proc
 				new_pc = pc;
 				break;
@@ -2117,7 +2119,7 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 
 			ASSERT(i <= sizeof (scratch));
 
-			if (fasttrap_copyout(scratch, addr, i)) {
+			if (fasttrap_copyout(scratch, write_addr, i)) {
 				fasttrap_sigtrap(p, uthread, pc);
 				new_pc = pc;
 				break;

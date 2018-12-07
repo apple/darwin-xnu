@@ -37,36 +37,60 @@
 #error Unknown architecture.
 #endif
 
+	.section __BOOTDATA, __data					// Aligned data
 
-	.section __DATA, __data						// Aligned data
+	.align 14 
 
-#if __arm64__
-	/*
-	 * Exception stack; this is above the interrupt stack so we don't squash the interrupt
-	 * stack on an exception.
-	 */
-	.global EXT(excepstack)
-LEXT(excepstack)
-	.space	(4096)
-	.globl	EXT(excepstack_top)
-LEXT(excepstack_top)
-#endif
+	.globl EXT(intstack_low_guard)
+LEXT(intstack_low_guard)
+	.space (PAGE_MAX_SIZE_NUM)
 
 	/* IRQ stack */
 	.globl  EXT(intstack)						// Boot processor IRQ stack
 LEXT(intstack)
-	.space	(4*4096)
+	.space	(INTSTACK_SIZE_NUM)
 	.globl  EXT(intstack_top)
 LEXT(intstack_top)
 
+	.globl EXT(intstack_high_guard)
+LEXT(intstack_high_guard)
+	.space (PAGE_MAX_SIZE_NUM)
 
-	.align 12							// Page aligned Section
+/* Low guard for fiq/exception stack is shared w/ interrupt stack high guard */
+
+#ifndef __arm64__
 
 	.globl  EXT(fiqstack)						// Boot processor FIQ stack
 LEXT(fiqstack)
-	.space	(4096)							// One page size
+	.space	(FIQSTACK_SIZE_NUM)
 	.globl  EXT(fiqstack_top)					// Boot processor FIQ stack top
 LEXT(fiqstack_top)
+
+	.globl EXT(fiqstack_high_guard)
+LEXT(fiqstack_high_guard)
+	.space (PAGE_MAX_SIZE_NUM)
+
+#else
+
+	.global EXT(excepstack)
+LEXT(excepstack)
+	.space	(EXCEPSTACK_SIZE_NUM)
+	.globl	EXT(excepstack_top)
+LEXT(excepstack_top)
+
+	.globl EXT(excepstack_high_guard)
+LEXT(excepstack_high_guard)
+	.space (PAGE_MAX_SIZE_NUM)
+
+#endif
+
+// Must align to 16K here, due to <rdar://problem/33268668>
+        .global EXT(kd_early_buffer)
+        .align 14
+LEXT(kd_early_buffer) // space for kdebug's early event buffer
+        .space 16*1024,0
+
+	.section __DATA, __data						// Aligned data
 
 	.globl	EXT(CpuDataEntries)
 	.align  12							// Page aligned
@@ -90,12 +114,6 @@ LEXT(vfptrash_data)
 	.fill   64, 4, 0xca55e77e
 #endif
 
-// Must align to 16K here, due to <rdar://problem/33268668>
-        .global EXT(kd_early_buffer)
-        .align 14
-LEXT(kd_early_buffer) // space for kdebug's early event buffer
-        .space 16*1024,0
-
 #if __arm64__
         .section __DATA, __const
 
@@ -103,7 +121,7 @@ LEXT(kd_early_buffer) // space for kdebug's early event buffer
 /* reserve space for read only page tables */
         .align 14
 LEXT(ropagetable_begin)
-        .space 16*16*1024,0
+        .space 14*16*1024,0
 #else
 LEXT(ropagetable_begin)
 #endif /* defined(KERNEL_INTEGRITY_KTRR)*/

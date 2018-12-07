@@ -201,14 +201,6 @@
 
 #define SCTLR_RESERVED			((3 << 28) | (1 << 22) | (1 << 20) | (1 << 11))
 
-// 31		PACIA_ENABLED		 AddPACIA and AuthIA functions enabled
-#define SCTLR_PACIA_ENABLED		(1 << 31)
-// 30		PACIB_ENABLED		 AddPACIB and AuthIB functions enabled
-#define SCTLR_PACIB_ENABLED		(1 << 30)
-// 29:28	RES1	11
-// 27		PACDA_ENABLED		 AddPACDA and AuthDA functions enabled
-#define SCTLR_PACDA_ENABLED		(1 << 27)
-
 // 26		UCI		User Cache Instructions
 #define SCTLR_UCI_ENABLED		(1 << 26)
 
@@ -242,7 +234,8 @@
 // 14		DZE		User Data Cache Zero (DC ZVA)
 #define SCTLR_DZE_ENABLED		(1 << 14)
 
-// 13		RES0	0
+// 13		PACDB_ENABLED		 AddPACDB and AuthDB functions enabled
+#define SCTLR_PACDB_ENABLED		(1 << 13)
 
 // 12		I		Instruction cache enable
 #define SCTLR_I_ENABLED			(1 << 12)
@@ -279,9 +272,7 @@
 // 0		M		MMU enable
 #define SCTLR_M_ENABLED			(1 << 0)
 
-#define SCTLR_PAC_DEFAULT		0
-
-#define SCTLR_EL1_DEFAULT		(SCTLR_PAC_DEFAULT | SCTLR_RESERVED | SCTLR_UCI_ENABLED | SCTLR_nTWE_WFE_ENABLED | SCTLR_DZE_ENABLED | \
+#define SCTLR_EL1_DEFAULT		(SCTLR_RESERVED | SCTLR_UCI_ENABLED | SCTLR_nTWE_WFE_ENABLED | SCTLR_DZE_ENABLED | \
 						SCTLR_I_ENABLED | SCTLR_SED_DISABLED | SCTLR_CP15BEN_ENABLED |             \
  						SCTLR_SA0_ENABLED | SCTLR_SA_ENABLED | SCTLR_C_ENABLED | SCTLR_M_ENABLED)
 
@@ -520,7 +511,9 @@
  */
 #define MPIDR_AFF0_MASK				0xFF
 #define MPIDR_AFF1_MASK				0xFF00
+#define MPIDR_AFF1_SHIFT			8
 #define MPIDR_AFF2_MASK				0xFF0000
+#define MPIDR_AFF2_SHIFT			16
 
 /*
  * We currently use a 3 level page table (rather than the full 4
@@ -774,6 +767,15 @@
 #endif /* __ARM64_PMAP_SUBPAGE_L1__ */
 #endif
 
+/* some sugar for getting pointers to page tables and entries */
+
+#define L1_TABLE_INDEX(va) (((va) & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT)
+#define L2_TABLE_INDEX(va) (((va) & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT)
+#define L3_TABLE_INDEX(va) (((va) & ARM_TT_L3_INDEX_MASK) >> ARM_TT_L3_SHIFT)
+
+#define L2_TABLE_VA(tte) ((tt_entry_t*) phystokv((*(tte)) & ARM_TTE_TABLE_MASK))
+#define L3_TABLE_VA(tte2) ((pt_entry_t*) phystokv((*(tte2)) & ARM_TTE_TABLE_MASK))
+
 /*
  *  L2 Translation table
  *
@@ -992,7 +994,7 @@
 #define ARM_TTE_BLOCK_NS_MASK		0x0000000000000020ULL	/* notSecure mapping mask */
 
 #define ARM_TTE_BLOCK_PNX			0x0020000000000000ULL	/* value for privilege no execute bit */
-#define ARM_TTE_BLOCK_PNXMASK		0x0020000000000000ULL	/* privilege execute mask */
+#define ARM_TTE_BLOCK_PNXMASK		0x0020000000000000ULL	/* privilege no execute mask */
 
 #define ARM_TTE_BLOCK_NX			0x0040000000000000ULL	/* value for no execute */
 #define ARM_TTE_BLOCK_NXMASK		0x0040000000000000ULL	/* no execute mask */
@@ -1149,18 +1151,20 @@
 #define ARM_PTE_HINT_ENTRIES_SHIFT	7ULL					/* shift to construct the number of entries */
 #define ARM_PTE_HINT_ADDR_MASK		0x0000FFFFFFE00000ULL			/* mask to extract the starting hint address */
 #define ARM_PTE_HINT_ADDR_SHIFT		21					/* shift for the hint address */
+#define ARM_KVA_HINT_ADDR_MASK		0xFFFFFFFFFFE00000ULL			/* mask to extract the starting hint address */
 #else
 #define ARM_PTE_HINT_ENTRIES		16ULL					/* number of entries the hint covers */
 #define ARM_PTE_HINT_ENTRIES_SHIFT	4ULL					/* shift to construct the number of entries */
 #define ARM_PTE_HINT_ADDR_MASK		0x0000FFFFFFFF0000ULL			/* mask to extract the starting hint address */
 #define ARM_PTE_HINT_ADDR_SHIFT		16					/* shift for the hint address */
+#define ARM_KVA_HINT_ADDR_MASK		0xFFFFFFFFFFFF0000ULL			/* mask to extract the starting hint address */
 #endif
 
-#define ARM_PTE_PNX					0x0020000000000000ULL	/* value for no execute */
-#define ARM_PTE_PNXMASK				0x0020000000000000ULL	/* no execute mask */
+#define ARM_PTE_PNX					0x0020000000000000ULL	/* value for privilege no execute bit */
+#define ARM_PTE_PNXMASK				0x0020000000000000ULL	/* privilege no execute mask */
 
-#define ARM_PTE_NX					0x0040000000000000ULL	/* value for privilege no execute bit */
-#define ARM_PTE_NXMASK				0x0040000000000000ULL	/* privilege execute mask */
+#define ARM_PTE_NX					0x0040000000000000ULL	/* value for no execute bit */
+#define ARM_PTE_NXMASK				0x0040000000000000ULL	/* no execute mask */
 
 #define ARM_PTE_WIRED				0x0080000000000000ULL	/* value for software wired bit */
 #define ARM_PTE_WIRED_MASK			0x0080000000000000ULL	/* software wired mask */

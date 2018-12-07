@@ -67,10 +67,13 @@ extern kern_return_t fbt_perfCallback(int, struct savearea_t *, uintptr_t *, __u
 #error Unknown architecture
 #endif
 
+__private_extern__
+void
+qsort(void *a, size_t n, size_t es, int (*cmp)(const void *, const void *));
+
 #define	FBT_ADDR2NDX(addr)	((((uintptr_t)(addr)) >> 4) & fbt_probetab_mask)
 #define	FBT_PROBETAB_SIZE	0x8000		/* 32k entries -- 128K total */
 
-static dev_info_t		*fbt_devi;
 static int				fbt_probetab_size;
 dtrace_provider_id_t	fbt_id;
 fbt_probe_t				**fbt_probetab;
@@ -91,12 +94,23 @@ void fbt_init( void );
 static const char * critical_blacklist[] =
 {
 	"Call_DebuggerC",
+	"DebuggerCall",
+	"DebuggerTrapWithState",
+	"DebuggerXCallEnter",
+	"IOCPURunPlatformPanicActions",
+	"PEARMDebugPanicHook",
+	"PEHaltRestart",
+	"SavePanicInfo",
 	"SysChoked",
 	"_ZN9IOService14newTemperatureElPS_", /* IOService::newTemperature */
 	"_ZN9IOService26temperatureCriticalForZoneEPS_", /* IOService::temperatureCriticalForZone */
 	"_ZNK6OSData14getBytesNoCopyEv", /* Data::getBytesNoCopy, IOHibernateSystemWake path */
+	"__ZN16IOPlatformExpert11haltRestartEj",
+	"__ZN18IODTPlatformExpert11haltRestartEj",
+	"__ZN9IODTNVRAM13savePanicInfoEPhy"
 	"_disable_preemption",
 	"_enable_preemption",
+	"alternate_debugger_enter",
 	"bcopy_phys",
 	"console_cpu_alloc",
 	"console_cpu_free",
@@ -136,12 +150,18 @@ static const char * critical_blacklist[] =
 	"enter_lohandler",
 	"fbt_invop",
 	"fbt_perfCallback",
+	"get_preemption_level"
 	"get_threadtask",
 	"handle_pending_TLB_flushes",
 	"hw_compare_and_store",
 	"interrupt",
+	"is_saved_state32",
+	"kernel_preempt_check",
 	"kernel_trap",
 	"kprintf",
+	"ks_dispatch_kernel",
+	"ks_dispatch_user",
+	"ks_kernel_trap",
 	"lo_alltraps",
 	"lock_debugger",
 	"machine_idle_cstate",
@@ -153,6 +173,9 @@ static const char * critical_blacklist[] =
 	"nanotime_to_absolutetime",
 	"packA",
 	"panic",
+	"phystokv",
+	"phystokv_range",
+	"pltrace",
 	"pmKextRegister",
 	"pmMarkAllCPUsOff",
 	"pmSafeMode",
@@ -167,18 +190,28 @@ static const char * critical_blacklist[] =
 	"power_management_init",
 	"preemption_underflow_panic",
 	"register_cpu_setup_func",
+	"ret64_iret"
+	"ret_to_user"
+	"return_to_kernel",
+	"return_to_user",
+	"saved_state64",
 	"sdt_invop",
 	"sprlock",
 	"sprunlock",
+	"strlen",
+	"strncmp",
 	"t_invop",
 	"tmrCvt",
-	"uread",
-	"uwrite",
+	"trap_from_kernel",
+	"uart_putc",
 	"unlock_debugger",
 	"unpackA",
 	"unregister_cpu_setup_func",
+	"uread",
+	"uwrite",
 	"vstart"
 };
+
 #define CRITICAL_BLACKLIST_COUNT (sizeof(critical_blacklist)/sizeof(critical_blacklist[0]))
 
 /*
@@ -192,6 +225,7 @@ static const char * probe_ctx_closure[] =
 	"IS_64BIT_PROCESS",
 	"OSCompareAndSwap",
 	"SetIdlePop",
+	"__dtrace_probe",
 	"absolutetime_to_microtime",
 	"act_set_astbsd",
 	"arm_init_idle_cpu",
@@ -287,7 +321,7 @@ fbt_module_excluded(struct modctl* ctl)
 	if (ctl->mod_address == 0 || ctl->mod_size == 0) {
 		return TRUE;
 	}
-	
+
 	if (ctl->mod_loaded == 0) {
 	        return TRUE;
 	}
@@ -434,9 +468,12 @@ fbt_excluded(const char* name)
 		return TRUE;
 #endif
 
-
 #ifdef __x86_64__
 	if (LIT_STRNSTART(name, "machine_") ||
+		LIT_STRNSTART(name, "idt64") ||
+		LIT_STRNSTART(name, "ks_") ||
+		LIT_STRNSTART(name, "hndl_") ||
+		LIT_STRNSTART(name, "_intr_") ||
 		LIT_STRNSTART(name, "mapping_") ||
 		LIT_STRNSTART(name, "tsc_") ||
 		LIT_STRNSTART(name, "pmCPU") ||
@@ -532,7 +569,7 @@ fbt_enable(void *arg, dtrace_id_t id, void *parg)
     for (; fbt != NULL; fbt = fbt->fbtp_next) {
 
 	ctl = fbt->fbtp_ctl;
-	
+
 	if (!ctl->mod_loaded) {
 		if (fbt_verbose) {
 			cmn_err(CE_NOTE, "fbt is failing for probe %s "
@@ -556,7 +593,7 @@ fbt_enable(void *arg, dtrace_id_t id, void *parg)
 		}
 
 		continue;
-	}	
+	}
 
 	dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
 	if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
@@ -576,7 +613,7 @@ fbt_enable(void *arg, dtrace_id_t id, void *parg)
 		kasan_fakestack_suspend();
 #endif
 
-		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint, 
+		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint,
 								sizeof(fbt->fbtp_patchval));
 		/*
 		 * Make the patched instruction visible via a data + instruction
@@ -590,9 +627,9 @@ fbt_enable(void *arg, dtrace_id_t id, void *parg)
 	}
 
     }
-    
+
     dtrace_membar_consumer();
-    
+
     return (0);
 }
 
@@ -606,12 +643,12 @@ fbt_disable(void *arg, dtrace_id_t id, void *parg)
 
 	for (; fbt != NULL; fbt = fbt->fbtp_next) {
 	    ctl = fbt->fbtp_ctl;
-	    
+
 	    if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt))
 		continue;
 
 	    if (fbt->fbtp_currentval != fbt->fbtp_savedval) {
-		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint, 
+		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint,
 								sizeof(fbt->fbtp_savedval));
 		/*
 		 * Make the patched instruction visible via a data + instruction
@@ -647,19 +684,19 @@ fbt_suspend(void *arg, dtrace_id_t id, void *parg)
 	    if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt))
 		continue;
 
-	    (void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint, 
+	    (void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint,
 								sizeof(fbt->fbtp_savedval));
-		
+
 		/*
 		 * Make the patched instruction visible via a data + instruction
 		 * cache flush for the platforms that need it
 		 */
 		flush_dcache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_savedval), 0);
 		invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_savedval), 0);
-		
+
 		fbt->fbtp_currentval = fbt->fbtp_savedval;
 	}
-	
+
 	dtrace_membar_consumer();
 }
 
@@ -677,7 +714,7 @@ fbt_resume(void *arg, dtrace_id_t id, void *parg)
 	    ASSERT(ctl->mod_nenabled > 0);
 	    if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt))
 		continue;
-	
+
 	    dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
 	    if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
 		if (fbt_verbose) {
@@ -687,123 +724,21 @@ fbt_resume(void *arg, dtrace_id_t id, void *parg)
 		}
 		return;
 	    }
-	
-	    (void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint, 
+
+	    (void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint,
 								sizeof(fbt->fbtp_patchval));
 
-#if CONFIG_EMBEDDED
 		/*
 		 * Make the patched instruction visible via a data + instruction cache flush.
 		 */
 		flush_dcache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_patchval), 0);
 		invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_patchval), 0);
-#endif
-		
+
   	    fbt->fbtp_currentval = fbt->fbtp_patchval;
 	}
-	
+
 	dtrace_membar_consumer();
 }
-
-/*
- * APPLE NOTE: fbt_getargdesc not implemented
- */
-#if !defined(__APPLE__)
-/*ARGSUSED*/
-static void
-fbt_getargdesc(void *arg, dtrace_id_t id, void *parg, dtrace_argdesc_t *desc)
-{
-	fbt_probe_t *fbt = parg;
-	struct modctl *ctl = fbt->fbtp_ctl;
-	struct module *mp = ctl->mod_mp;
-	ctf_file_t *fp = NULL, *pfp;
-	ctf_funcinfo_t f;
-	int error;
-	ctf_id_t argv[32], type;
-	int argc = sizeof (argv) / sizeof (ctf_id_t);
-	const char *parent;
-
-	if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt))
-		goto err;
-
-	if (fbt->fbtp_roffset != 0 && desc->dtargd_ndx == 0) {
-		(void) strlcpy(desc->dtargd_native, "int",
-			       sizeof(desc->dtargd_native));
-		return;
-	}
-
-	if ((fp = ctf_modopen(mp, &error)) == NULL) {
-		/*
-		 * We have no CTF information for this module -- and therefore
-		 * no args[] information.
-		 */
-		goto err;
-	}
-
-	/*
-	 * If we have a parent container, we must manually import it.
-	 */
-	if ((parent = ctf_parent_name(fp)) != NULL) {
-		struct modctl *mp = &modules;
-		struct modctl *mod = NULL;
-
-		/*
-		 * We must iterate over all modules to find the module that
-		 * is our parent.
-		 */
-		do {
-			if (strcmp(mp->mod_modname, parent) == 0) {
-				mod = mp;
-				break;
-			}
-		} while ((mp = mp->mod_next) != &modules);
-
-		if (mod == NULL)
-			goto err;
-
-		if ((pfp = ctf_modopen(mod->mod_mp, &error)) == NULL) {
-			goto err;
-		}
-
-		if (ctf_import(fp, pfp) != 0) {
-			ctf_close(pfp);
-			goto err;
-		}
-
-		ctf_close(pfp);
-	}
-
-	if (ctf_func_info(fp, fbt->fbtp_symndx, &f) == CTF_ERR)
-		goto err;
-
-	if (fbt->fbtp_roffset != 0) {
-		if (desc->dtargd_ndx > 1)
-			goto err;
-
-		ASSERT(desc->dtargd_ndx == 1);
-		type = f.ctc_return;
-	} else {
-		if (desc->dtargd_ndx + 1 > f.ctc_argc)
-			goto err;
-
-		if (ctf_func_args(fp, fbt->fbtp_symndx, argc, argv) == CTF_ERR)
-			goto err;
-
-		type = argv[desc->dtargd_ndx];
-	}
-
-	if (ctf_type_name(fp, type, desc->dtargd_native,
-	    DTRACE_ARGTYPELEN) != NULL) {
-		ctf_close(fp);
-		return;
-	}
-err:
-	if (fp != NULL)
-		ctf_close(fp);
-
-	desc->dtargd_ndx = DTRACE_ARGNONE;
-}
-#endif /* __APPLE__ */
 
 static void
 fbt_provide_module_user_syms(struct modctl *ctl)
@@ -827,11 +762,8 @@ fbt_provide_module_user_syms(struct modctl *ctl)
 			if (*name == '_')
 				name += 1;
 
-			/*
-			 * We're only blacklisting functions in the kernel for now.
-			 */
-                        if (MOD_IS_MACH_KERNEL(ctl) && fbt_excluded(name))
-			        continue;
+			if (MOD_IS_MACH_KERNEL(ctl) && fbt_excluded(name))
+				continue;
 
 			/*
 			 * Ignore symbols with a null address
@@ -839,11 +771,139 @@ fbt_provide_module_user_syms(struct modctl *ctl)
 			if (!symbol->dtsym_addr)
 				continue;
 
-			fbt_provide_probe(ctl, (uintptr_t)symbol->dtsym_addr, (uintptr_t)(symbol->dtsym_addr + symbol->dtsym_size), modname, name, (machine_inst_t*)(uintptr_t)symbol->dtsym_addr);
+			/*
+			 * Ignore symbols not part of this module
+			 */
+			if (!dtrace_addr_in_module((void*)symbol->dtsym_addr, ctl))
+				continue;
+
+			fbt_provide_probe(ctl, modname, name, (machine_inst_t*)(uintptr_t)symbol->dtsym_addr, (machine_inst_t*)(uintptr_t)(symbol->dtsym_addr + symbol->dtsym_size));
 		}
 	}
 }
+static void
+fbt_provide_kernel_section(struct modctl *ctl, kernel_section_t *sect, kernel_nlist_t *sym, uint32_t nsyms, const char *strings)
+{
+	uintptr_t sect_start = (uintptr_t)sect->addr;
+	uintptr_t sect_end = (uintptr_t)sect->size + sect->addr;
+	unsigned int i;
 
+	if ((sect->flags & S_ATTR_PURE_INSTRUCTIONS) != S_ATTR_PURE_INSTRUCTIONS) {
+		return;
+	}
+
+	for (i = 0; i < nsyms; i++) {
+		uint8_t         n_type = sym[i].n_type & (N_TYPE | N_EXT);
+		const char           *name = strings + sym[i].n_un.n_strx;
+		uint64_t limit;
+
+		if (sym[i].n_value < sect_start || sym[i].n_value > sect_end)
+			continue;
+
+		/* Check that the symbol is a global and that it has a name. */
+		if (((N_SECT | N_EXT) != n_type && (N_ABS | N_EXT) != n_type))
+			continue;
+
+		if (0 == sym[i].n_un.n_strx)	/* iff a null, "", name. */
+			continue;
+
+		/* Lop off omnipresent leading underscore. */
+		if (*name == '_')
+			name += 1;
+
+#if defined(__arm__)
+		// Skip non-thumb functions on arm32
+		if (sym[i].n_sect == 1 && !(sym[i].n_desc & N_ARM_THUMB_DEF)) {
+			continue;
+		}
+#endif /* defined(__arm__) */
+
+		if (MOD_IS_MACH_KERNEL(ctl) && fbt_excluded(name))
+			continue;
+
+		/*
+		 * Find the function boundary by looking at either the
+		 * end of the section or the beginning of the next symbol
+		 */
+		if (i == nsyms - 1) {
+			limit = sect_end;
+		}
+		else {
+			limit = sym[i + 1].n_value;
+		}
+
+		fbt_provide_probe(ctl, ctl->mod_modname, name, (machine_inst_t*)sym[i].n_value, (machine_inst_t*)limit);
+	}
+
+}
+
+static int
+fbt_sym_cmp(const void *ap, const void *bp)
+{
+	return (int)(((const kernel_nlist_t*)ap)->n_value - ((const kernel_nlist_t*)bp)->n_value);
+}
+
+static void
+fbt_provide_module_kernel_syms(struct modctl *ctl)
+{
+	kernel_mach_header_t *mh = (kernel_mach_header_t *)(ctl->mod_address);
+	kernel_segment_command_t *seg;
+	struct load_command *cmd;
+	kernel_segment_command_t *linkedit = NULL;
+	struct symtab_command *symtab = NULL;
+	kernel_nlist_t *syms = NULL, *sorted_syms = NULL;
+	const char *strings;
+	unsigned int i;
+	size_t symlen;
+
+	if (mh->magic != MH_MAGIC_KERNEL)
+		return;
+
+	cmd = (struct load_command *) &mh[1];
+	for (i = 0; i < mh->ncmds; i++) {
+		if (cmd->cmd == LC_SEGMENT_KERNEL) {
+			kernel_segment_command_t *orig_sg = (kernel_segment_command_t *) cmd;
+			if (LIT_STRNEQL(orig_sg->segname, SEG_LINKEDIT))
+				linkedit = orig_sg;
+		} else if (cmd->cmd == LC_SYMTAB) {
+			symtab = (struct symtab_command *) cmd;
+		}
+		if (symtab && linkedit) {
+			break;
+		}
+		cmd = (struct load_command *) ((caddr_t) cmd + cmd->cmdsize);
+	}
+
+	if ((symtab == NULL) || (linkedit == NULL)) {
+		return;
+	}
+
+	syms = (kernel_nlist_t *)(linkedit->vmaddr + symtab->symoff - linkedit->fileoff);
+	strings = (const char *)(linkedit->vmaddr + symtab->stroff - linkedit->fileoff);
+
+	/*
+	 * Make a copy of the symbol table and sort it to not cross into the next function
+	 * when disassembling the function
+	 */
+	symlen = sizeof(kernel_nlist_t) * symtab->nsyms;
+	sorted_syms = kmem_alloc(symlen, KM_SLEEP);
+	bcopy(syms, sorted_syms, symlen);
+	qsort(sorted_syms, symtab->nsyms, sizeof(kernel_nlist_t), fbt_sym_cmp);
+
+	for (seg = firstsegfromheader(mh); seg != NULL; seg = nextsegfromheader(mh, seg)) {
+		kernel_section_t *sect = firstsect(seg);
+
+		if (strcmp(seg->segname, "__KLD") == 0) {
+			continue;
+		}
+
+		for (sect = firstsect(seg); sect != NULL; sect = nextsect(seg, sect)) {
+			fbt_provide_kernel_section(ctl, sect, sorted_syms, symtab->nsyms, strings);
+		}
+	}
+
+	kmem_free(sorted_syms, symlen);
+}
 
 void
 fbt_provide_module(void *arg, struct modctl *ctl)
@@ -893,16 +953,16 @@ static dtrace_pattr_t fbt_attr = {
 };
 
 static dtrace_pops_t fbt_pops = {
-	NULL,
-	fbt_provide_module,
-	fbt_enable,
-	fbt_disable,
-	fbt_suspend,
-	fbt_resume,
-	NULL, /*  APPLE NOTE: fbt_getargdesc not implemented */
-	NULL,
-	NULL,
-	fbt_destroy
+	.dtps_provide =		NULL,
+	.dtps_provide_module =	fbt_provide_module,
+	.dtps_enable =		fbt_enable,
+	.dtps_disable =		fbt_disable,
+	.dtps_suspend =		fbt_suspend,
+	.dtps_resume =		fbt_resume,
+	.dtps_getargdesc =	NULL, /* APPLE NOTE: fbt_getargdesc implemented in userspace */
+	.dtps_getargval =	NULL,
+	.dtps_usermode =	NULL,
+	.dtps_destroy =		fbt_destroy
 };
 
 static void
@@ -916,17 +976,8 @@ fbt_cleanup(dev_info_t *devi)
 }
 
 static int
-fbt_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
+fbt_attach(dev_info_t *devi)
 {
-	switch (cmd) {
-	case DDI_ATTACH:
-		break;
-	case DDI_RESUME:
-		return (DDI_SUCCESS);
-	default:
-		return (DDI_FAILURE);
-	}
-
 	if (fbt_probetab_size == 0)
 		fbt_probetab_size = FBT_PROBETAB_SIZE;
 
@@ -943,9 +994,6 @@ fbt_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		fbt_cleanup(devi);
 		return (DDI_FAILURE);
 	}
-
-	ddi_report_dev(devi);
-	fbt_devi = devi;
 
 	return (DDI_SUCCESS);
 }
@@ -1024,8 +1072,6 @@ static struct cdevsw fbt_cdevsw =
 	0					/* type */
 };
 
-static int fbt_inited = 0;
-
 #undef kmem_alloc /* from its binding to dt_kmem_alloc glue */
 #undef kmem_free /* from its binding to dt_kmem_free glue */
 #include <vm/vm_kern.h>
@@ -1033,22 +1079,15 @@ static int fbt_inited = 0;
 void
 fbt_init( void )
 {
-	if (0 == fbt_inited)
-	{
-		int majdevno = cdevsw_add(FBT_MAJOR, &fbt_cdevsw);
-		
-		if (majdevno < 0) {
-			printf("fbt_init: failed to allocate a major number!\n");
-			return;
-		}
-		
-		PE_parse_boot_argn("IgnoreFBTBlacklist", &ignore_fbt_blacklist, sizeof (ignore_fbt_blacklist));
+	int majdevno = cdevsw_add(FBT_MAJOR, &fbt_cdevsw);
 
-		fbt_attach( (dev_info_t	*)(uintptr_t)majdevno, DDI_ATTACH );
-		
-		fbt_inited = 1; /* Ensure this initialization occurs just one time. */
+	if (majdevno < 0) {
+		printf("fbt_init: failed to allocate a major number!\n");
+		return;
 	}
-	else
-		panic("fbt_init: called twice!\n");
+
+	PE_parse_boot_argn("IgnoreFBTBlacklist", &ignore_fbt_blacklist, sizeof (ignore_fbt_blacklist));
+
+	fbt_attach((dev_info_t*)(uintptr_t)majdevno);
 }
 #undef FBT_MAJOR

@@ -118,6 +118,9 @@ struct filedesc {
                                 /* if we're force unmounted and unable to */
                                 /* take a vnode_ref on fd_rdir during a fork */
 
+#define FD_WORKLOOP	0x02	/* process has created a kqworkloop that */
+                                /* requires manual cleanup on exit */
+
 /*
  * Per-process open flags.
  */

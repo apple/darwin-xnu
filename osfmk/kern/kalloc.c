@@ -716,8 +716,6 @@ kalloc_external(
 	return( kalloc_tag_bt(size, VM_KERN_MEMORY_KALLOC) );
 }
 
-volatile SInt32 kfree_nop_count = 0;
-
 void
 kfree(
 	void 		*data,
@@ -751,28 +749,7 @@ kfree(
 		if ((((vm_offset_t) data) >= kalloc_map_min) && (((vm_offset_t) data) <= kalloc_map_max))
 			alloc_map = kalloc_map;
 		if (size > kalloc_largest_allocated) {
-			        /*
-				 * work around double FREEs of small MALLOCs
-				 * this used to end up being a nop
-				 * since the pointer being freed from an
-				 * alloc backed by the zalloc world could
-				 * never show up in the kalloc_map... however,
-				 * the kernel_map is a different issue... since it
-				 * was released back into the zalloc pool, a pointer
-				 * would have gotten written over the 'size' that 
-				 * the MALLOC was retaining in the first 4 bytes of
-				 * the underlying allocation... that pointer ends up 
-				 * looking like a really big size on the 2nd FREE and
-				 * pushes the kfree into the kernel_map...  we
-				 * end up removing a ton of virtual space before we panic
-				 * this check causes us to ignore the kfree for a size
-				 * that must be 'bogus'... note that it might not be due
-				 * to the above scenario, but it would still be wrong and
-				 * cause serious damage.
-				 */
-
-				OSAddAtomic(1, &kfree_nop_count);
-			        return;
+			panic("kfree: size %lu > kalloc_largest_allocated %lu", (unsigned long)size, (unsigned long)kalloc_largest_allocated);
 		}
 		kmem_free(alloc_map, (vm_offset_t)data, size);
 		kalloc_spin_lock();
@@ -797,7 +774,9 @@ kfree(
 		    z, z->zone_name, (unsigned long)size);
 #endif
 	assert(size <= z->elem_size);
+#if !KASAN_KALLOC
 	DTRACE_VM3(kfree, vm_size_t, size, vm_size_t, z->elem_size, void*, data);
+#endif
 	zfree(z, data);
 }
 

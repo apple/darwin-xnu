@@ -66,6 +66,7 @@ ifeq ($(strip $(SDK_DIR)),)
 	SDK_DIR := /
 endif
 
+
 DEFINES = -DPRIVATE
 CFLAGS=-std=c99 -Wall -Wextra -Werror -pedantic -Wformat=2 -Wcast-align \
 	-Wwrite-strings -Wshorten-64-to-32 -Wshadow -Winit-self -Wpointer-arith \
@@ -139,6 +140,7 @@ $(LIBKXLDSYM_DYLIB): $(LIBKXLDOBJ_DYLIB)
 $(LIBKXLDSYM_ARCHIVE): $(LIBKXLDOBJ_ARCHIVE)
 	@mkdir -p $(SYMROOT)
 	install -c -m 644 $< $@
+
 
 $(LIBKXLDOBJ_DYLIB): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^

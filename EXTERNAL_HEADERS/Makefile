@@ -34,6 +34,9 @@ KERNEL_FILES = \
 	stddef.h	\
 	stdint.h
 
+KERNEL_FILES += \
+	ptrauth.h
+
 INSTALL_MI_LIST =
 
 INSTALL_MI_DIR = .

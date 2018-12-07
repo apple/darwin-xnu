@@ -7,6 +7,8 @@ _PE_mark_hwaccess
 _PE_smc_stashed_x86_system_state
 _PE_smc_stashed_x86_power_state
 _PE_smc_stashed_x86_efi_boot_state
+_PE_smc_stashed_x86_shutdown_cause
+_PE_smc_stashed_x86_prev_power_transitions
 _PE_pcie_stashed_link_state
 __ZN17IONVRAMController*
 __ZTV17IONVRAMController
@@ -16,6 +18,7 @@ _cpu_cluster_id
 _cpu_number
 _cpu_qos_update_register
 _ecc_log_record_event
+_get_preemption_level
 _ml_arm_sleep
 _ml_get_abstime_offset
 _ml_get_conttime_offset
@@ -36,3 +39,4 @@ _pgtrace_stop
 _pgtrace_active
 _pgtrace_add_probe
 _pgtrace_clear_probe
+_PE_panic_debugging_enabled

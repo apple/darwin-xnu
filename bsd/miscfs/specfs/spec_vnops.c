@@ -1138,7 +1138,7 @@ throttle_timer(struct _throttle_io_info_t *info)
 			ut = (uthread_t)TAILQ_FIRST(&info->throttle_uthlist[wake_level]);
 			TAILQ_REMOVE(&info->throttle_uthlist[wake_level], ut, uu_throttlelist);
 			ut->uu_on_throttlelist = THROTTLE_LEVEL_NONE;
-			ut->uu_is_throttled = FALSE;
+			ut->uu_is_throttled = false;
 
 			wake_address = (caddr_t)&ut->uu_on_throttlelist;
 		}
@@ -1156,7 +1156,7 @@ throttle_timer(struct _throttle_io_info_t *info)
 
 			TAILQ_REMOVE(&info->throttle_uthlist[level], ut, uu_throttlelist);
 			ut->uu_on_throttlelist = THROTTLE_LEVEL_NONE;
-			ut->uu_is_throttled = FALSE;
+			ut->uu_is_throttled = false;
 
 			wakeup(&ut->uu_on_throttlelist);
 		}
@@ -1335,13 +1335,12 @@ throttle_init(void)
 }
 
 void
-sys_override_io_throttle(int flag)
+sys_override_io_throttle(boolean_t enable_override)
 {
-	if (flag == THROTTLE_IO_ENABLE)
-		lowpri_throttle_enabled = 1;
-
-	if (flag == THROTTLE_IO_DISABLE)
+	if (enable_override)
 		lowpri_throttle_enabled = 0;
+	else
+		lowpri_throttle_enabled = 1;
 }
 
 int rethrottle_wakeups = 0;
@@ -1382,19 +1381,19 @@ rethrottle_thread(uthread_t ut)
 	boolean_t s = ml_set_interrupts_enabled(FALSE);
 	lck_spin_lock(&ut->uu_rethrottle_lock);
 
-	if (ut->uu_is_throttled == FALSE)
-		ut->uu_was_rethrottled = TRUE;
+	if (!ut->uu_is_throttled)
+		ut->uu_was_rethrottled = true;
 	else {
 		int my_new_level = throttle_get_thread_throttle_level(ut);
 
 		if (my_new_level != ut->uu_on_throttlelist) {
 			/*
 			 * ut is currently blocked (as indicated by
-			 * ut->uu_is_throttled == TRUE)
+			 * ut->uu_is_throttled == true)
 			 * and we're changing it's throttle level, so
 			 * we need to wake it up.
 			 */
-			ut->uu_is_throttled = FALSE;
+			ut->uu_is_throttled = false;
 			wakeup(&ut->uu_on_throttlelist);
 
 			rethrottle_wakeups++;
@@ -1622,7 +1621,7 @@ throttle_get_thread_throttle_level_internal(uthread_t ut, int io_tier) {
 	assert(ut != NULL);
 
 	/* Bootcache misses should always be throttled */
-	if (ut->uu_throttle_bc == TRUE)
+	if (ut->uu_throttle_bc)
 		thread_throttle_level = THROTTLE_LEVEL_TIER3;
 
 	/*
@@ -1781,7 +1780,7 @@ throttle_lowpri_io(int sleep_amount)
 	info = ut->uu_throttle_info;
 
 	if (info == NULL) {
-		ut->uu_throttle_bc = FALSE;
+		ut->uu_throttle_bc = false;
 		ut->uu_lowpri_window = 0;
 		return (0);
 	}
@@ -1791,12 +1790,12 @@ throttle_lowpri_io(int sleep_amount)
 	if (sleep_amount == 0)
 		goto done;
 
-	if (sleep_amount == 1 && ut->uu_throttle_bc == FALSE)
+	if (sleep_amount == 1 && !ut->uu_throttle_bc)
 		sleep_amount = 0;
 
 	throttle_io_period_num = info->throttle_io_period_num;
 
-	ut->uu_was_rethrottled = FALSE;
+	ut->uu_was_rethrottled = false;
 
 	while ( (throttle_type = throttle_io_will_be_throttled_internal(info, &mylevel, &throttling_level)) ) {
 
@@ -1836,7 +1835,7 @@ throttle_lowpri_io(int sleep_amount)
 		 * this is the critical section w/r to our interaction
 		 * with "rethrottle_thread"
 		 */
-		if (ut->uu_was_rethrottled == TRUE) {
+		if (ut->uu_was_rethrottled) {
 
 			lck_spin_unlock(&ut->uu_rethrottle_lock);
 			ml_set_interrupts_enabled(s);
@@ -1844,7 +1843,7 @@ throttle_lowpri_io(int sleep_amount)
 
 			KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW, 103)), thread_tid(ut->uu_thread), ut->uu_on_throttlelist, 0, 0, 0);
 
-			ut->uu_was_rethrottled = FALSE;
+			ut->uu_was_rethrottled = false;
 			continue;
 		}
 		KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_THROTTLE, PROCESS_THROTTLED)) | DBG_FUNC_NONE,
@@ -1859,7 +1858,7 @@ throttle_lowpri_io(int sleep_amount)
 
 		assert_wait((caddr_t)&ut->uu_on_throttlelist, THREAD_UNINT);
 
-		ut->uu_is_throttled = TRUE;
+		ut->uu_is_throttled = true;
 		lck_spin_unlock(&ut->uu_rethrottle_lock);
 		ml_set_interrupts_enabled(s);
 
@@ -1869,8 +1868,8 @@ throttle_lowpri_io(int sleep_amount)
 
 		ut->uu_wmesg = NULL;
 
-		ut->uu_is_throttled = FALSE;
-		ut->uu_was_rethrottled = FALSE;
+		ut->uu_is_throttled = false;
+		ut->uu_was_rethrottled = false;
 
 		lck_mtx_lock(&info->throttle_lock);
 
@@ -1904,7 +1903,7 @@ done:
 	}
 
 	ut->uu_throttle_info = NULL;
-	ut->uu_throttle_bc = FALSE;
+	ut->uu_throttle_bc = false;
 	ut->uu_lowpri_window = 0;
 
 	throttle_info_rel(info);
@@ -1942,7 +1941,7 @@ void throttle_info_reset_window(uthread_t ut)
 
 		ut->uu_throttle_info = NULL;
 		ut->uu_lowpri_window = 0;
-		ut->uu_throttle_bc = FALSE;
+		ut->uu_throttle_bc = false;
 	}
 }
 
@@ -2349,7 +2348,7 @@ spec_strategy(struct vnop_strategy_args *ap)
 
 	if (kdebug_enable) {
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON, FSDBG_CODE(DBG_DKRW, code) | DBG_FUNC_NONE,
-					  buf_kernel_addrperm_addr(bp), bdev, (int)buf_blkno(bp), buf_count(bp), 0);
+					  buf_kernel_addrperm_addr(bp), bdev, buf_blkno(bp), buf_count(bp), 0);
         }
 
 	thread_update_io_stats(current_thread(), buf_count(bp), code);
@@ -2650,7 +2649,7 @@ static void filt_specdetach(struct knote *kn);
 static int filt_specevent(struct knote *kn, long hint);
 static int filt_spectouch(struct knote *kn, struct kevent_internal_s *kev);
 static int filt_specprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
-static unsigned filt_specpeek(struct knote *kn);
+static int filt_specpeek(struct knote *kn);
 
 SECURITY_READ_ONLY_EARLY(struct filterops) spec_filtops = {
 	.f_isfd    = 1,
@@ -2719,6 +2718,14 @@ spec_knote_select_and_link(struct knote *kn)
 	 */
 	old_wqs = uth->uu_wqset;
 	uth->uu_wqset = &(knote_get_kq(kn)->kq_wqs);
+
+	/*
+	 * Be sure that the waitq set is linked
+	 * before calling select to avoid possible
+	 * allocation under spinlocks.
+	 */
+	waitq_set_lazy_init_link(uth->uu_wqset);
+
 	/*
 	 * Now these are the laws of VNOP_SELECT, as old and as true as the sky,
 	 * And the device that shall keep it may prosper, but the device that shall
@@ -2877,8 +2884,6 @@ filt_spectouch(struct knote *kn, struct kevent_internal_s *kev)
 {
 	kn->kn_sdata = kev->data;
 	kn->kn_sfflags = kev->fflags;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 
 	if (kev->flags & EV_ENABLE) {
 		return spec_knote_select_and_link(kn);
@@ -2901,8 +2906,6 @@ filt_specprocess(struct knote *kn, struct filt_process_s *data, struct kevent_in
 	uth = get_bsdthread_info(current_thread());
 	ctx = vfs_context_current();
 	vp = (vnode_t)kn->kn_fp->f_fglob->fg_data;
-
-	/* FIXME JMM - locking against touches? */
 
 	error = vnode_getwithvid(vp, kn->kn_hookid);
 	if (error != 0) {
@@ -2930,7 +2933,7 @@ filt_specprocess(struct knote *kn, struct filt_process_s *data, struct kevent_in
 	return res;
 }
 
-static unsigned
+static int
 filt_specpeek(struct knote *kn)
 {
 	int selres = 0;
@@ -2938,6 +2941,6 @@ filt_specpeek(struct knote *kn)
 	selres = spec_knote_select_and_link(kn);
 	filt_spec_common(kn, selres);
 
-	return kn->kn_data;
+	return kn->kn_data != 0;
 }
 

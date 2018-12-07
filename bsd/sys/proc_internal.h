@@ -194,7 +194,6 @@ struct proc;
 struct	proc {
 	LIST_ENTRY(proc) p_list;		/* List of all processes. */
 
-	pid_t		p_pid;			/* Process identifier. (static)*/
 	void * 		task;			/* corresponding task (static)*/
 	struct	proc *	p_pptr;		 	/* Pointer to parent process.(LL) */
 	pid_t		p_ppid;			/* process's parent pid number */
@@ -209,7 +208,7 @@ struct	proc {
 	uint64_t	p_puniqueid;		/* parent's unique ID - set on fork/spawn/vfork, doesn't change if reparented. */
 
 	lck_mtx_t 	p_mlock;		/* mutex lock for proc */
-
+	pid_t		p_pid;			/* Process identifier. (static)*/
 	char		p_stat;			/* S* process status. (PL)*/
 	char		p_shutdownstate;
 	char		p_kdebug;		/* P_KDEBUG eq (CC)*/ 
@@ -238,12 +237,12 @@ struct	proc {
 	struct	plimit *p_limit;		/* Process limits.(PL) */
 
 	struct	sigacts *p_sigacts;		/* Signal actions, state (PL) */
-	 int		p_siglist;		/* signals captured back from threads */
 	lck_spin_t	p_slock;		/* spin lock for itimer/profil protection */
 
 #define	p_rlimit	p_limit->pl_rlimit
 
 	struct	plimit *p_olimit;		/* old process limits  - not inherited by child  (PL) */
+	int		p_siglist;		/* signals captured back from threads */
 	unsigned int	p_flag;			/* P_* flags. (atomic bit ops) */
 	unsigned int	p_lflag;		/* local flags  (PL) */
 	unsigned int	p_listflag;		/* list flags (LL) */
@@ -251,10 +250,8 @@ struct	proc {
 	int		p_refcount;		/* number of outstanding users(LL) */
 	int		p_childrencnt;		/* children holding ref on parent (LL) */
 	int		p_parentref;		/* children lookup ref on parent (LL) */
-
 	pid_t		p_oppid;	 	/* Save parent pid during ptrace. XXX */
 	u_int		p_xstat;		/* Exit status for wait; also stop signal. */
-	uint8_t p_xhighbits;		/* Stores the top byte of exit status to avoid truncation*/
 
 #ifdef _PROC_HAS_SCHEDINFO_
 	/* may need cleanup, not used */
@@ -273,11 +270,9 @@ struct	proc {
 	boolean_t	sigwait;	/* indication to suspend (PL) */
 	void	*sigwait_thread;	/* 'thread' holding sigwait(PL)  */
 	void	*exit_thread;		/* Which thread is exiting(PL)  */
+	void *  p_vforkact;     	/* activation running this vfork proc)(static)  */
 	int	p_vforkcnt;		/* number of outstanding vforks(PL)  */
-    	void *  p_vforkact;     	/* activation running this vfork proc)(static)  */
 	int	p_fpdrainwait;		/* (PFDL) */
-	pid_t	p_contproc;	/* last PID to send us a SIGCONT (PL) */
-
 	/* Following fields are info from SIGCHLD (PL) */
 	pid_t	si_pid;			/* (PL) */
 	u_int   si_status;		/* (PL) */
@@ -290,9 +285,9 @@ struct	proc {
 	user_addr_t			p_dtrace_argv;			/* (write once, read only after that) */
 	user_addr_t			p_dtrace_envp;			/* (write once, read only after that) */
 	lck_mtx_t			p_dtrace_sprlock;		/* sun proc lock emulation */
+	uint8_t                         p_dtrace_stop;                  /* indicates a DTrace-desired stop */
 	int				p_dtrace_probes;		/* (PL) are there probes for this proc? */
 	u_int				p_dtrace_count;			/* (sprlock) number of DTrace tracepoints */
-        uint8_t                         p_dtrace_stop;                  /* indicates a DTrace-desired stop */
 	struct dtrace_ptss_page*	p_dtrace_ptss_pages;		/* (sprlock) list of user ptss pages */
 	struct dtrace_ptss_page_entry*	p_dtrace_ptss_free_list;	/* (atomic) list of individual ptss entries */
 	struct dtrace_helpers*		p_dtrace_helpers;		/* (dtrace_lock) DTrace per-proc private */
@@ -321,7 +316,8 @@ struct	proc {
 	// types currently in sys/param.h
 	command_t   p_comm;
 	proc_name_t p_name;	/* can be changed by the process */
-
+	uint8_t p_xhighbits;	/* Stores the top byte of exit status to avoid truncation*/
+	pid_t	p_contproc;	/* last PID to send us a SIGCONT (PL) */
 
 	struct 	pgrp *p_pgrp;		/* Pointer to process group. (LL) */
 	uint32_t	p_csflags;	/* flags for codesign (PL) */
@@ -346,10 +342,9 @@ struct	proc {
 	struct klist p_klist;  /* knote list (PL ?)*/
 
 	struct	rusage_superset *p_ru;	/* Exit information. (PL) */
-	int		p_sigwaitcnt;
 	thread_t 	p_signalholder;
 	thread_t 	p_transholder;
-
+	int		p_sigwaitcnt;
 	/* DEPRECATE following field  */
 	u_short	p_acflag;	/* Accounting flags. */
 	volatile u_short p_vfs_iopolicy;	/* VFS iopolicy flags. (atomic bit ops) */
@@ -359,7 +354,7 @@ struct	proc {
 	int 	p_pthsize;			/* pthread size */
 	uint32_t	p_pth_tsd_offset;	/* offset from pthread_t to TSD for new threads */
 	user_addr_t	p_stack_addr_hint;	/* stack allocation hint for wq threads */
-	void * 	p_wqptr;			/* workq ptr */
+	struct workqueue *_Atomic p_wqptr;			/* workq ptr */
 
 	struct  timeval p_start;        	/* starting time */
 	void *	p_rcall;
@@ -400,7 +395,9 @@ struct	proc {
 	int32_t           p_memstat_memlimit_active;	/* memory limit enforced when process is in active jetsam state */
 	int32_t           p_memstat_memlimit_inactive;	/* memory limit enforced when process is in inactive jetsam state */
 #if CONFIG_FREEZE
-	uint32_t          p_memstat_suspendedfootprint; /* footprint at time of suspensions */
+	uint32_t          p_memstat_freeze_sharedanon_pages; /* shared pages left behind after freeze */
+	uint32_t	  p_memstat_frozen_count;
+	uint32_t	  p_memstat_thaw_count;
 #endif /* CONFIG_FREEZE */
 #endif /* CONFIG_MEMORYSTATUS */
 
@@ -498,7 +495,9 @@ struct	proc {
 #define P_LXBKIDLEINPROG	0x02
 
 /* p_vfs_iopolicy flags */
-#define P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY 0x0001
+#define P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY	0x0001
+#define P_VFS_IOPOLICY_ATIME_UPDATES			0x0002
+#define P_VFS_IOPOLICY_VALID_MASK			(P_VFS_IOPOLICY_ATIME_UPDATES | P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY)
 
 /* process creation arguments */
 #define	PROC_CREATE_FORK	0	/* independent child (running) */
@@ -514,10 +513,13 @@ struct	proc {
 #ifdef KERNEL
 #include <sys/time.h>	/* user_timeval, user_itimerval */
 
-/* This packing breaks symmetry with userspace side (struct extern_proc 
- * of proc.h) for the ARMV7K ABI where 64-bit types are 64-bit aligned
+/*
+ * This packing is required to ensure symmetry between userspace and kernelspace
+ * when the kernel is 64-bit and the user application is 32-bit. All currently
+ * supported ARM slices (arm64/armv7k/arm64_32) contain the same struct
+ * alignment ABI so this packing isn't needed for ARM.
  */
-#if !(__arm__ && (__BIGGEST_ALIGNMENT__ > 4))
+#if defined(__x86_64__)
 #pragma pack(4)
 #endif
 struct user32_extern_proc {

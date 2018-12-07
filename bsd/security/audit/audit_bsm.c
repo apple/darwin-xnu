@@ -263,6 +263,18 @@ kau_free(struct au_record *rec)
 	}								\
 } while (0)
 
+#define	VNODE2_PATH_TOKENS do {					\
+	if (ARG_IS_VALID(kar, ARG_KPATH2)) {				\
+		tok = au_to_path(ar->ar_arg_kpath2);			\
+		kau_write(rec, tok);					\
+	}								\
+	if (ARG_IS_VALID(kar, ARG_VNODE2)) {				\
+		tok = au_to_attr32(&ar->ar_arg_vnode2);			\
+		kau_write(rec, tok);					\
+		MAC_VNODE2_LABEL_TOKEN;					\
+	}								\
+} while (0)
+
 #define	FD_VNODE1_TOKENS do {						\
 	if (ARG_IS_VALID(kar, ARG_VNODE1)) {				\
 		if (ARG_IS_VALID(kar, ARG_KPATH1)) {			\
@@ -983,6 +995,12 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			kau_write(rec, tok);
 		}
 		UPATH1_VNODE1_TOKENS;
+		VNODE2_PATH_TOKENS;
+		if (ARG_IS_VALID(kar, ARG_DATA)) {
+			tok = au_to_data(AUP_HEX, ar->ar_arg_data_type,
+			    ar->ar_arg_data_count, ar->ar_arg_data);
+			kau_write(rec, tok);
+		}
 		break;
 
 	case AUE_FCHMOD_EXTENDED:
@@ -2020,6 +2038,14 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	tok = au_to_return32(au_errno_to_bsm(ar->ar_errno), ar->ar_retval);
 	kau_write(rec, tok);  /* Every record gets a return token */
 
+	if (ARG_IS_VALID(kar, ARG_IDENTITY)) {
+		struct au_identity_info *id = &ar->ar_arg_identity;
+		tok = au_to_identity(id->signer_type, id->signing_id,
+			id->signing_id_trunc, id->team_id, id->team_id_trunc,
+			id->cdhash, id->cdhash_len);
+		kau_write(rec, tok);
+	}
+
 	kau_close(rec, &ar->ar_endtime, ar->ar_event);
 
 	*pau = rec;
@@ -2027,25 +2053,47 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 }
 
 /*
- * Verify that a record is a valid BSM record. This verification is simple
- * now, but may be expanded on sometime in the future.  Return 1 if the
+ * Verify that a record is a valid BSM record. Return 1 if the
  * record is good, 0 otherwise.
  */
 int
-bsm_rec_verify(void *rec)
+bsm_rec_verify(void *rec, int length)
 {
-	char c = *(char *)rec;
+	/* Used to partially deserialize the buffer */
+	struct hdr_tok_partial *hdr;
+	struct trl_tok_partial *trl;
 
-	/*
-	 * Check the token ID of the first token; it has to be a header
-	 * token.
-	 *
-	 * XXXAUDIT There needs to be a token structure to map a token.
-	 * XXXAUDIT 'Shouldn't be simply looking at the first char.
-	 */
-	if ((c != AUT_HEADER32) && (c != AUT_HEADER32_EX) &&
-	    (c != AUT_HEADER64) && (c != AUT_HEADER64_EX))
+	/* A record requires a complete header and trailer token */
+	if (length < (AUDIT_HEADER_SIZE + AUDIT_TRAILER_SIZE)) {
 		return (0);
+	}
+
+	hdr = (struct hdr_tok_partial*)rec;
+
+	/* Ensure the provided length matches what the record shows */
+	if ((uint32_t)length != ntohl(hdr->len)) {
+		return (0);
+	}
+
+	trl = (struct trl_tok_partial*)(rec + (length - AUDIT_TRAILER_SIZE));
+
+	/* Ensure the buffer contains what look like header and trailer tokens */
+	if (((hdr->type != AUT_HEADER32) && (hdr->type != AUT_HEADER32_EX) &&
+	    (hdr->type != AUT_HEADER64) && (hdr->type != AUT_HEADER64_EX)) ||
+	    (trl->type != AUT_TRAILER)) {
+		return (0);
+	}
+
+	/* Ensure the header and trailer agree on the length */
+	if (hdr->len != trl->len) {
+		return (0);
+	}
+
+	/* Ensure the trailer token has a proper magic value */
+	if (ntohs(trl->magic) != AUT_TRAILER_MAGIC) {
+		return (0);
+	}
+
 	return (1);
 }
 #endif /* CONFIG_AUDIT */

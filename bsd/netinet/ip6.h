@@ -132,7 +132,7 @@ struct ip6_hdr {
 #if BYTE_ORDER == LITTLE_ENDIAN
 #define IPV6_FLOWINFO_MASK	0xffffff0f	/* flow info (28 bits) */
 #define IPV6_FLOWLABEL_MASK	0xffff0f00	/* flow label (20 bits) */
-#define IPV6_FLOW_ECN_MASK	0x00000300	/* the 2 ECN bits */
+#define IPV6_FLOW_ECN_MASK	0x00003000	/* the 2 ECN bits */
 #endif /* LITTLE_ENDIAN */
 #endif
 #if 1
@@ -140,8 +140,6 @@ struct ip6_hdr {
 #define IP6TOS_CE		0x01	/* congestion experienced */
 #define IP6TOS_ECT		0x02	/* ECN-capable transport */
 #endif
-
-#define	IP6FLOW_ECN_MASK	0x00300000
 
 /*
  * To access the 6 bits of the DSCP value in the 32 bits ip6_flow field

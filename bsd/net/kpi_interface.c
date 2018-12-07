@@ -2861,6 +2861,10 @@ ifnet_get_keepalive_offload_frames(ifnet_t ifp,
 	if (frames_array_count == 0)
 		return (0);
 
+	/* Keep-alive offload not required for CLAT interface */
+	if (IS_INTF_CLAT46(ifp))
+		return (0);
+
 	for (i = 0; i < frames_array_count; i++) {
 		struct ifnet_keepalive_offload_frame *frame = frames_array + i;
 
@@ -3127,4 +3131,25 @@ ifnet_normalise_unsent_data(void)
 		ifnet_lock_done(ifp);
 	}
 	ifnet_head_done();
+}
+
+errno_t
+ifnet_set_low_power_mode(ifnet_t ifp, boolean_t on)
+{
+	errno_t error;
+
+	error = if_set_low_power(ifp, on);
+
+	return (error);
+}
+
+errno_t
+ifnet_get_low_power_mode(ifnet_t ifp, boolean_t *on)
+{
+	if (ifp == NULL || on == NULL)
+		return (EINVAL);
+
+	*on  = !!(ifp->if_xflags & IFXF_LOW_POWER);
+
+	return (0);
 }

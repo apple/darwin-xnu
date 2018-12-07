@@ -76,13 +76,6 @@ struct processor_data {
 	/* VM event counters */
 	vm_statistics64_data_t	vm_stat;
 
-	/* IPC free message cache */
-	struct ikm_cache {
-#define IKM_STASH	16
-		ipc_kmsg_t				entries[IKM_STASH];
-		unsigned int			avail;
-	}						ikm_cache;
-
 	/* waitq prepost cache */
 #define WQP_CACHE_MAX	50
 	struct wqp_cache {
@@ -104,6 +97,7 @@ struct processor_data {
 		const char *db_panic_str; 
 		va_list *db_panic_args;
 		uint64_t db_panic_options;
+		void *db_panic_data_ptr;
 		boolean_t db_proceed_on_sync_failure;
 		uint32_t db_entry_count; /* incremented whenever we panic or call Debugger (current CPU panic level) */
 		kern_return_t db_op_return;

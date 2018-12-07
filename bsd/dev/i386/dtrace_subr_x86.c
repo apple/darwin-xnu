@@ -307,3 +307,9 @@ dtrace_safe_defer_signal(void)
 
 	return 0;
 }
+
+void
+dtrace_flush_caches(void)
+{
+
+}

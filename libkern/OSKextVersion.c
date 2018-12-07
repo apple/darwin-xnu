@@ -38,18 +38,18 @@
 #include <libkern/OSKextLibPrivate.h>
 
 #define VERS_MAJOR_DIGITS        (4)
-#define VERS_MINOR_DIGITS        (2)
-#define VERS_REVISION_DIGITS     (2)
+#define VERS_MINOR_DIGITS        (4)
+#define VERS_REVISION_DIGITS     (4)
 #define VERS_STAGE_DIGITS        (1)
 #define VERS_STAGE_LEVEL_DIGITS  (3)
 
 #define VERS_MAJOR_MAX           (9999)
 #define VERS_STAGE_LEVEL_MAX      (255)
 
-#define VERS_MAJOR_MULT    (100000000)
-#define VERS_MINOR_MULT      (1000000)
-#define VERS_REVISION_MULT     (10000)
-#define VERS_STAGE_MULT         (1000)
+#define VERS_MAJOR_MULT  (1000000000000)
+#define VERS_MINOR_MULT      (100000000)
+#define VERS_REVISION_MULT       (10000)
+#define VERS_STAGE_MULT           (1000)
 
 
 typedef enum {

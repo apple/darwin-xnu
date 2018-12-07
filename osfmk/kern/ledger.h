@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2010-2018 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -54,6 +54,50 @@ struct ledger_template_info {
 	char		lti_group[LEDGER_NAME_MAX];
 	char		lti_units[LEDGER_NAME_MAX];
 };
+
+#ifdef MACH_KERNEL_PRIVATE
+/*
+ * These definitions are only here to allow pmap.c to determine the expected
+ * size of a ledger at build time.  Direct access to ledger fields or to
+ * ledger entries is prohibited.
+ */
+
+/*
+ * The explicit alignment is to ensure that atomic operations don't panic
+ * on ARM.
+ */
+struct ledger_entry {
+	volatile uint32_t        le_flags;
+	ledger_amount_t          le_limit;
+	ledger_amount_t          le_warn_level;
+	volatile ledger_amount_t le_credit __attribute__((aligned(8)));
+	volatile ledger_amount_t le_debit  __attribute__((aligned(8)));
+	union {
+		struct {
+			/*
+			 * XXX - the following two fields can go away if we move all of
+			 * the refill logic into process policy
+			 */
+			uint64_t le_refill_period;
+			uint64_t le_last_refill;
+		} le_refill;
+		struct {
+			ledger_amount_t le_lifetime_max; /* Process lifetime peak */
+#if CONFIG_LEDGER_INTERVAL_MAX
+			ledger_amount_t le_interval_max; /* Interval peak XXX better name needed */
+#endif
+		} _le_max;
+	} _le;
+} __attribute__((aligned(8)));
+
+struct ledger {
+	uint64_t                l_id;
+	int32_t                 l_refs;
+	int32_t                 l_size;
+	struct ledger_template *l_template;
+	struct ledger_entry     l_entries[0] __attribute__((aligned(8)));
+};
+#endif /* MACH_KERNEL_PRIVATE */
 
 struct ledger_entry_info {
 	int64_t		lei_balance;
@@ -111,14 +155,17 @@ extern int ledger_key_lookup(ledger_template_t template, const char *key);
 #define	LEDGER_CREATE_INACTIVE_ENTRIES	1
 extern ledger_t ledger_instantiate(ledger_template_t template, int entry_type);
 extern void ledger_template_complete(ledger_template_t template);
+extern void ledger_template_complete_secure_alloc(ledger_template_t template);
 extern kern_return_t ledger_disable_callback(ledger_t ledger, int entry);
 extern kern_return_t ledger_enable_callback(ledger_t ledger, int entry);
 extern kern_return_t ledger_get_limit(ledger_t ledger, int entry,
 	ledger_amount_t *limit);
 extern kern_return_t ledger_set_limit(ledger_t ledger, int entry,
 	ledger_amount_t limit, uint8_t warn_level_percentage);
-extern kern_return_t ledger_get_recent_max(ledger_t ledger, int entry,
-	ledger_amount_t *max_observed_balance);
+#if CONFIG_LEDGER_INTERVAL_MAX
+extern kern_return_t ledger_get_interval_max(ledger_t ledger, int entry,
+	ledger_amount_t *max_interval_balance, int reset);
+#endif /* CONFIG_LEDGER_INTERVAL_MAX */
 extern kern_return_t ledger_get_lifetime_max(ledger_t ledger, int entry,
 	ledger_amount_t *max_lifetime_balance);
 extern kern_return_t ledger_get_actions(ledger_t ledger, int entry, int *actions);
@@ -132,7 +179,11 @@ extern kern_return_t ledger_entry_setactive(ledger_t ledger, int entry);
 extern void ledger_check_new_balance(thread_t thread, ledger_t ledger, int entry);
 extern kern_return_t ledger_credit(ledger_t ledger, int entry,
 	ledger_amount_t amount);
+extern kern_return_t ledger_credit_nocheck(ledger_t ledger, int entry,
+	ledger_amount_t amount);
 extern kern_return_t ledger_debit(ledger_t ledger, int entry,
+	ledger_amount_t amount);
+extern kern_return_t ledger_debit_nocheck(ledger_t ledger, int entry,
 	ledger_amount_t amount);
 extern kern_return_t ledger_credit_thread(thread_t thread, ledger_t ledger,
                                           int entry, ledger_amount_t amount);
@@ -145,6 +196,7 @@ extern kern_return_t ledger_get_balance(ledger_t ledger, int entry,
 	ledger_amount_t *balance);
 extern kern_return_t ledger_reset_callback_state(ledger_t ledger, int entry);
 extern kern_return_t ledger_disable_panic_on_negative(ledger_t ledger, int entry);
+extern kern_return_t ledger_get_panic_on_negative(ledger_t ledger, int entry, int *panic_on_negative);
 
 extern kern_return_t ledger_rollup(ledger_t to_ledger, ledger_t from_ledger);
 extern kern_return_t ledger_rollup_entry(ledger_t to_ledger, ledger_t from_ledger, int entry);
@@ -154,10 +206,6 @@ extern void ledger_ast(thread_t thread);
 extern int ledger_reference_count(ledger_t ledger);
 extern kern_return_t ledger_reference(ledger_t ledger);
 extern kern_return_t ledger_dereference(ledger_t ledger);
-
-/* Per-pmap ledger operations */
-#define	pmap_ledger_debit(p, e, a) ledger_debit((p)->ledger, e, a)
-#define	pmap_ledger_credit(p, e, a) ledger_credit((p)->ledger, e, a)
 
 /* Support for ledger() syscall */
 #ifdef LEDGER_DEBUG

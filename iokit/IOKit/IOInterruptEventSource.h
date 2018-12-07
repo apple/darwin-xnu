@@ -70,6 +70,10 @@ public:
     @param count Number of interrupts seen before delivery. */
     typedef void (*Action)(OSObject *owner, IOInterruptEventSource *sender, int count);
 
+#ifdef __BLOCKS__
+    typedef void (^ActionBlock)(IOInterruptEventSource *sender, int count);
+#endif /* __BLOCKS__ */
+
 /*! @defined IOInterruptEventAction
     @discussion Backward compatibilty define for the old non-class scoped type definition.  See $link IOInterruptEventSource::Action */
 #define IOInterruptEventAction IOInterruptEventSource::Action
@@ -136,6 +140,26 @@ public:
 			     Action action,
 			     IOService *provider = 0,
 			     int intIndex = 0);
+
+
+#ifdef __BLOCKS__
+/*! @function interruptEventSource
+    @abstract Factory function for IOInterruptEventSources creation and initialisation.
+    @param owner Owning client of the new event source.
+    @param provider IOService that represents the interrupt source.  When no provider is defined the event source assumes that the client will in some manner call the interruptOccured method explicitly.  This will start the ball rolling for safe delivery of asynchronous event's into the driver.
+    @param intIndex The index of the interrupt within the provider's interrupt sources.
+    @param action Block for the callout routine of this event source..
+    @result A new interrupt event source if successfully created and initialised, 0 otherwise.  */
+    static IOInterruptEventSource *
+	interruptEventSource(OSObject *owner,
+			     IOService *provider,
+			     int intIndex,
+			     ActionBlock action);
+#endif /* __BLOCKS__ */
+
+#if XNU_KERNEL_PRIVATE
+    static void actionToBlock(OSObject *owner, IOInterruptEventSource *sender, int count);
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*! @function init
     @abstract Primary initialiser for the IOInterruptEventSource class.

@@ -679,8 +679,8 @@ wait_for_granted:
 			 * higher levels can resend the request.
 			 */
 			msg->lm_flags &= ~LOCKD_MSG_CANCEL;
-			nfs_lockdmsg_dequeue(msgreq);
 			error = NFSERR_DENIED;
+			/* Will dequeue msgreq after the following break at the end of this routine */
 			break;
 		}
 

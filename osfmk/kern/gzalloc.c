@@ -562,26 +562,43 @@ boolean_t gzalloc_element_size(void *gzaddr, zone_t *z, vm_size_t *gzsz) {
 	uintptr_t a = (uintptr_t)gzaddr;
 	if (__improbable(gzalloc_mode && (a >= gzalloc_map_min) && (a < gzalloc_map_max))) {
 		gzhdr_t *gzh;
+		boolean_t       vmef;
+		vm_map_entry_t  gzvme = NULL;
+		vm_map_lock_read(gzalloc_map);
+		vmef = vm_map_lookup_entry(gzalloc_map, (vm_map_offset_t)a, &gzvme);
+		vm_map_unlock(gzalloc_map);
+		if (vmef == FALSE) {
+			panic("GZALLOC: unable to locate map entry for %p\n", (void *)a);
+		}
+		assertf(gzvme->vme_atomic != 0, "GZALLOC: VM map entry inconsistency, vme: %p, start: %llu end: %llu", gzvme, gzvme->vme_start, gzvme->vme_end);
 
 		/* Locate the gzalloc metadata adjoining the element */
 		if (gzalloc_uf_mode == TRUE) {
-			boolean_t       vmef;
-			vm_map_entry_t  gzvme = NULL;
 
 			/* In underflow detection mode, locate the map entry describing
 			 * the element, and then locate the copy of the gzalloc
 			 * header at the trailing edge of the range.
 			 */
-			vm_map_lock_read(gzalloc_map);
-			vmef = vm_map_lookup_entry(gzalloc_map, (vm_map_offset_t)a, &gzvme);
-			vm_map_unlock(gzalloc_map);
-			if (vmef == FALSE) {
-				panic("GZALLOC: unable to locate map entry for %p\n", (void *)a);
-			}
-			assertf(gzvme->vme_atomic != 0, "GZALLOC: VM map entry inconsistency, vme: %p, start: %llu end: %llu", gzvme, gzvme->vme_start, gzvme->vme_end);
 			gzh = (gzhdr_t *)(gzvme->vme_end - GZHEADER_SIZE);
 		} else {
-			gzh = (gzhdr_t *)(a - GZHEADER_SIZE);
+			/* In overflow detection mode, scan forward from
+			 * the base of the map entry to locate the
+			 * gzalloc header.
+			 */
+			uint32_t *p = (uint32_t*) gzvme->vme_start;
+			while (p < (uint32_t *) gzvme->vme_end) {
+				if (*p == GZALLOC_SIGNATURE)
+					break;
+				else {
+					p++;
+				}
+			}
+			if (p >= (uint32_t *) gzvme->vme_end) {
+				panic("GZALLOC signature missing addr %p, zone %p", gzaddr, z);
+			}
+			p++;
+			uintptr_t q = (uintptr_t) p;
+			gzh = (gzhdr_t *) (q - sizeof(gzhdr_t));
 		}
 
 		if (gzh->gzsig != GZALLOC_SIGNATURE) {

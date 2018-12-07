@@ -26,8 +26,6 @@ ifeq ($(filter $(PLATFORM),$(SUPPORTED_PLATFORMS)),)
 $(error Unsupported PLATFORM $(PLATFORM))
 endif
 
-STATIC_KMODS =  $(SRCROOT)/kmods.a
-
 ifeq ($(BUILD_JSON_COMPILATION_DATABASE),1)
 do_build_setup::
 	$(_v)$(CAT) > $(OBJPATH)/compile_commands.json < /dev/null
@@ -41,13 +39,29 @@ endif
 # 1) $(KERNEL_FILE_NAME).unstripped    (raw linked kernel, unstripped)
 # 2) $(KERNEL_FILE_NAME)               (stripped kernel, with optional CTF data)
 # 3) $(KERNEL_FILE_NAME).dSYM          (dSYM)
-#
+# 4) $(KERNEL_FILE_NAME).link          (bits for static linking)
+
+ifeq ($(BUILD_STATIC_LINK),1)
+
+KERNEL_STATIC_LINK_TARGETS = \
+        $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a
+
+KERNEL_STATIC_LINK_DST = \
+			$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a             \
+			$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarguments \
+			$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarchives  \
+			$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).exp           \
+			$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).alias.exp     \
+			$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros                   \
+			$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME)
+
+endif
 
 do_build_all:: do_build_kernel
 
 .PHONY: do_build_kernel
 
-do_build_kernel: $(TARGET)/$(KERNEL_FILE_NAME) $(TARGET)/$(KERNEL_FILE_NAME).unstripped
+do_build_kernel: $(TARGET)/$(KERNEL_FILE_NAME) $(TARGET)/$(KERNEL_FILE_NAME).unstripped $(KERNEL_STATIC_LINK_TARGETS)
 	@:
 
 ifeq ($(BUILD_DSYM),1)
@@ -60,7 +74,7 @@ do_build_kernel_dSYM: $(TARGET)/$(KERNEL_FILE_NAME).dSYM
 	@:
 
 .LDFLAGS: ALWAYS
-	$(_v)$(REPLACECONTENTS) $@ $(LD) $(LDFLAGS_KERNEL) $(LD_KERNEL_LIBS)
+	$(_v)$(REPLACECONTENTS) $@ $(LD) $(LDFLAGS_KERNEL) $(LDFLAGS_KERNEL_EXPORTS) $(LD_KERNEL_LIBS)
 .CFLAGS: ALWAYS
 	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
 
@@ -90,7 +104,18 @@ $(TARGET)/$(KERNEL_FILE_NAME).unstripped: $(addprefix $(TARGET)/,$(foreach compo
 	$(_v)${MAKE} -f $(firstword $(MAKEFILE_LIST)) version.o
 	@echo "$(ColorL)LD$(Color0)  $(ColorLF)$(@F)$(Color0)"
 	$(_v)$(CAT) $(filter %.filelist,$+) < /dev/null > link.filelist
-	$(_v)$(LD) $(LDFLAGS_KERNEL) -filelist link.filelist version.o $(filter %.o,$+) -o $@ $(LD_KERNEL_LIBS)
+	$(_v)$(LD) $(LDFLAGS_KERNEL) $(LDFLAGS_KERNEL_EXPORTS) -filelist link.filelist version.o $(filter %.o,$+) -o $@ $(LD_KERNEL_LIBS) $(LD_KERNEL_ARCHIVES)
+
+$(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST),$(component)/$(CURRENT_KERNEL_CONFIG)/$(component).filelist)) lastkerneldataconst.o lastkernelconstructor.o $(TARGET)/$(KERNEL_FILE_NAME).unstripped .LDFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
+	@echo "$(ColorL)LIBTOOL$(Color0)    $(ColorLF)$(@F)$(Color0)"
+	$(_v)$(MKDIR) $(dir $@)
+	$(_v)$(CAT) $(filter %.filelist,$+) < /dev/null > libtool.filelist
+	$(_v)$(LIBTOOL) -ca -filelist libtool.filelist $(filter %.o,$+) version.o -o $@
+	$(_v)cp $(TARGET)/all-kpi.exp $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).exp
+	$(_v)cp $(TARGET)/all-alias.exp $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).alias.exp
+	$(_v)echo "$(LD_KERNEL_ARCHIVES)" >$(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarchives
+	$(_v)echo "$(LDFLAGS_KERNEL) $(LD_KERNEL_LIBS)" >$(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarguments
+	$(_v)$(LN) $(call function_convert_build_config_to_objdir,$(CURRENT_BUILD_CONFIG))/$(KERNEL_FILE_NAME).link $(OBJROOT)/$(KERNEL_FILE_NAME).link
 
 -include version.d
 version.o: .CFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
@@ -104,6 +129,7 @@ version.o: $(OBJPATH)/version.c
 $(OBJPATH)/version.c: $(SRCROOT)/config/version.c $(NEWVERS) $(SRCROOT)/config/MasterVersion ALWAYS
 	$(_v)$(CP) $< $@
 	$(_v)$(NEWVERS) $(OBJPATH)/version.c > /dev/null;
+
 
 -include lastkerneldataconst.d
 lastkerneldataconst.o: .CFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
@@ -194,6 +220,36 @@ $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NA
 	fi;								\
 	exit $$cmdstatus
 
+ifeq ($(BUILD_STATIC_LINK),1)
+
+$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a: $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a ALWAYS
+	$(_v)$(MKDIR) $(dir $@)
+	@echo "$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0)"
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+
+$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarguments: $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarguments ALWAYS
+	$(_v)$(MKDIR) $(dir $@)
+	@echo "$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0)"
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+
+$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarchives: $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarchives ALWAYS
+	$(_v)$(MKDIR) $(dir $@)
+	@echo "$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0)"
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+
+$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).exp: $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).exp ALWAYS
+	$(_v)$(MKDIR) $(dir $@)
+	@echo "$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0)"
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+
+$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).alias.exp: $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).alias.exp ALWAYS
+	$(_v)$(MKDIR) $(dir $@)
+	@echo "$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0)"
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+
+# BUILD_STATIC_LINK
+endif
+
 $(SYMROOT)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NAME).unstripped ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
 	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then		\
@@ -207,13 +263,20 @@ $(SYMROOT)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NAME).unstripped ALWAYS
 	fi;									\
 	exit $$cmdstatus
 
-$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros: $(TARGET)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros
+
+$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros                                                                     \
+$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros                      \
+$(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros:                                          \
+$(TARGET)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros
 	$(_v)$(MKDIR) $(dir $@)
 	@echo "$(ColorH)INSTALLMACROS$(Color0) $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
 	$(_v)$(CP) -r $< $(dir $@)
 	$(_v)$(TOUCH) $@
 
-$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME) $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME): $(TARGET)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME)
+$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME)                                                   \
+$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME)    \
+$(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME):                        \
+$(TARGET)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME)
 	$(_v)$(MKDIR) $(dir $@)
 	@echo "$(ColorH)INSTALLMACROS$(Color0) $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
@@ -243,8 +306,9 @@ $(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME) $(DSTROO
 
 .PHONY: do_install_machine_specific_kernel do_install_machine_specific_kernel_dSYM
 
-do_install_machine_specific_kernel: $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME) \
-			$(SYMROOT)/$(KERNEL_FILE_NAME)
+do_install_machine_specific_kernel: $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME)                \
+			$(SYMROOT)/$(KERNEL_FILE_NAME)                                                              \
+			$(KERNEL_STATIC_LINK_DST)
 	@:
 
 do_install_machine_specific_kernel_dSYM: \

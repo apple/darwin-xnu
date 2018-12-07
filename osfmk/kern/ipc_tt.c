@@ -867,6 +867,7 @@ mach_reply_port(
  *	Conditions:
  *		Nothing locked.
  *	Returns:
+ *		mach_port_name_t: send right & receive right for special reply port.
  *		MACH_PORT_NULL if there are any resource failures
  *		or other errors.
  */
@@ -877,6 +878,7 @@ thread_get_special_reply_port(
 {
 	ipc_port_t port;
 	mach_port_name_t name;
+	mach_port_name_t send_name;
 	kern_return_t kr;
 	thread_t thread = current_thread();
 
@@ -891,7 +893,22 @@ thread_get_special_reply_port(
 	kr = ipc_port_alloc(current_task()->itk_space, &name, &port);
 	if (kr == KERN_SUCCESS) {
 		ipc_port_bind_special_reply_port_locked(port);
+
+		/* Make a send right and insert it in the space at specified name */
+		ipc_port_make_send_locked(port);
 		ip_unlock(port);
+		send_name = ipc_port_copyout_name_send(port, current_task()->itk_space, name);
+		/*
+		 * If insertion of send right failed, userland is doing something bad, error out.
+		 * The space was marked inactive or the receive right just inserted above at the
+		 * given name was moved, in either case do not try to deallocate the receive right.
+		 */
+		if (send_name == MACH_PORT_NULL || send_name == MACH_PORT_DEAD) {
+			if (IP_VALID(thread->ith_special_reply_port)) {
+				ipc_port_unbind_special_reply_port(thread, TRUE);
+			}
+			name = MACH_PORT_NULL;
+		}
 	} else {
 		name = MACH_PORT_NULL;
 	}
@@ -918,14 +935,17 @@ ipc_port_bind_special_reply_port_locked(
 	ip_reference(port);
 	thread->ith_special_reply_port = port;
 	port->ip_specialreply = 1;
-	port->ip_link_sync_qos = 1;
+	port->ip_sync_link_state = PORT_SYNC_LINK_ANY;
+
+	reset_ip_srp_bits(port);
 }
 
 /*
  *	Routine:	ipc_port_unbind_special_reply_port
  *	Purpose:
  *		Unbind the thread's special reply port.
- *		If the special port is linked to a port, adjust it's sync qos delta`.
+ *		If the special port has threads waiting on turnstile,
+ *		update it's inheritor.
  *	Condition:
  *		Nothing locked.
  *	Returns:
@@ -947,8 +967,8 @@ ipc_port_unbind_special_reply_port(
 	}
 
 	thread->ith_special_reply_port = NULL;
-	ipc_port_unlink_special_reply_port_locked(special_reply_port, NULL,
-		IPC_PORT_UNLINK_SR_CLEAR_SPECIAL_REPLY);
+	ipc_port_adjust_special_reply_port_locked(special_reply_port, NULL,
+		IPC_PORT_ADJUST_SR_CLEAR_SPECIAL_REPLY, FALSE);
 	/* port unlocked */
 
 	ip_release(special_reply_port);
@@ -1365,7 +1385,7 @@ task_conversion_eval(task_t caller, task_t victim)
 	 * Only the kernel can can resolve the kernel's task port. We've established
 	 * by this point that the caller is not kernel_task.
 	 */
-	if (victim == kernel_task) {
+	if (victim == TASK_NULL || victim == kernel_task) {
 		return KERN_INVALID_SECURITY;
 	}
 
@@ -1751,12 +1771,13 @@ convert_port_to_thread(
 	if (IP_VALID(port)) {
 		ip_lock(port);
 
-		if (	ip_active(port)					&&
-				ip_kotype(port) == IKOT_THREAD		) {
+		if (ip_active(port) &&
+		    ip_kotype(port) == IKOT_THREAD) {
 			thread = (thread_t)port->ip_kobject;
 			assert(thread != THREAD_NULL);
-			if (thread->task && thread->task == kernel_task &&
-			    current_task() != kernel_task) {
+
+			/* Use task conversion rules for thread control conversions */
+			if (task_conversion_eval(current_task(), thread->task) != KERN_SUCCESS) {
 				ip_unlock(port);
 				return THREAD_NULL;
 			}

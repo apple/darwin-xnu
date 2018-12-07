@@ -99,7 +99,8 @@ typedef	integer_t	host_flavor_t;
 #define HOST_MACH_MSG_TRAP	8	/* Has mach_msg_trap */
 #define HOST_VM_PURGABLE	9	/* purg'e'able memory info */
 #define HOST_DEBUG_INFO_INTERNAL 10	/* Used for kernel internal development tests only */
-#define HOST_CAN_HAS_DEBUGGER	11 
+#define HOST_CAN_HAS_DEBUGGER	11
+#define HOST_PREFERRED_USER_ARCH 12	/* Get the preferred user-space architecture */
 
 #ifdef MACH_KERNEL_PRIVATE
 struct host_basic_info_old {
@@ -259,6 +260,16 @@ typedef struct host_cpu_load_info	host_cpu_load_info_data_t;
 typedef struct host_cpu_load_info	*host_cpu_load_info_t;
 #define HOST_CPU_LOAD_INFO_COUNT ((mach_msg_type_number_t) \
 		(sizeof (host_cpu_load_info_data_t) / sizeof (integer_t)))
+
+struct host_preferred_user_arch {
+	cpu_type_t	cpu_type;	/* Preferred user-space cpu type */
+	cpu_subtype_t	cpu_subtype;	/* Preferred user-space cpu subtype */
+};
+
+typedef struct host_preferred_user_arch	host_preferred_user_arch_data_t;
+typedef struct host_preferred_user_arch	*host_preferred_user_arch_t;
+#define HOST_PREFERRED_USER_ARCH_COUNT ((mach_msg_type_number_t) \
+		(sizeof(host_preferred_user_arch_data_t)/sizeof(integer_t)))
 
 #ifdef PRIVATE
 /*

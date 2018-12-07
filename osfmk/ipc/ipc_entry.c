@@ -79,6 +79,7 @@
 #include <ipc/ipc_table.h>
 #include <ipc/ipc_port.h>
 #include <string.h>
+#include <sys/kdebug.h>
 
 /*
  *	Routine:	ipc_entry_lookup
@@ -489,6 +490,14 @@ ipc_entry_modified(
 		space->is_low_mod = index;
 	if (index > space->is_high_mod)
 		space->is_high_mod = index;
+
+	KERNEL_DEBUG_CONSTANT(
+		MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_PORT_ENTRY_MODIFY) | DBG_FUNC_NONE,
+		space->is_task ? task_pid(space->is_task) : 0,
+		name,
+		entry->ie_bits,
+		0,
+		0);
 }
 
 #define IPC_ENTRY_GROW_STATS 1

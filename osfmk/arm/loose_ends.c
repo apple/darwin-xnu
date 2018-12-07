@@ -495,9 +495,9 @@ copypv(addr64_t source, addr64_t sink, unsigned int size, int which)
 		panic("copypv: no more than 1 parameter may be virtual\n");	/* Not allowed */
 
 	if (which & cppvPsrc)
-		from = (void *)phystokv(from);
+		from = (void *)phystokv((pmap_paddr_t)from);
 	if (which & cppvPsnk)
-		to = (void *)phystokv(to);
+		to = (void *)phystokv((pmap_paddr_t)to);
 
 	if ((which & (cppvPsrc | cppvKmap)) == 0)	/* Source is virtual in
 							 * current map */
@@ -549,17 +549,17 @@ copy_validate(const user_addr_t user_addr,
 {
 	uintptr_t kernel_addr_last = kernel_addr + nbytes;
 
-	if (kernel_addr < VM_MIN_KERNEL_ADDRESS ||
+	if (__improbable(kernel_addr < VM_MIN_KERNEL_ADDRESS ||
 	    kernel_addr > VM_MAX_KERNEL_ADDRESS ||
 	    kernel_addr_last < kernel_addr ||
-	    kernel_addr_last > VM_MAX_KERNEL_ADDRESS)
+	    kernel_addr_last > VM_MAX_KERNEL_ADDRESS))
 		panic("%s(%p, %p, %u) - kaddr not in kernel", __func__,
 		    (void *)user_addr, (void *)kernel_addr, nbytes);
 
 	user_addr_t user_addr_last = user_addr + nbytes;
 
-	if (user_addr_last < user_addr ||
-	    user_addr_last > VM_MIN_KERNEL_ADDRESS)
+	if (__improbable((user_addr_last < user_addr) || ((user_addr + nbytes) > vm_map_max(current_thread()->map)) ||
+	    (user_addr < vm_map_min(current_thread()->map))))
 		return (EFAULT);
 
 	if (__improbable(nbytes > copysize_limit_panic))

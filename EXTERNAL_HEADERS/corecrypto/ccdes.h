@@ -17,12 +17,8 @@
 #define CCDES_BLOCK_SIZE 8
 #define CCDES_KEY_SIZE 8
 
-extern const struct ccmode_ecb ccdes_ltc_ecb_decrypt_mode;
-extern const struct ccmode_ecb ccdes_ltc_ecb_encrypt_mode;
-
 extern const struct ccmode_ecb ccdes3_ltc_ecb_decrypt_mode;
 extern const struct ccmode_ecb ccdes3_ltc_ecb_encrypt_mode;
-extern const struct ccmode_ecb ccdes168_ltc_ecb_encrypt_mode;
 
 const struct ccmode_ecb *ccdes_ecb_decrypt_mode(void);
 const struct ccmode_ecb *ccdes_ecb_encrypt_mode(void);
@@ -61,8 +57,8 @@ int ccdes_key_is_weak( void *key, size_t  length);
 void ccdes_key_set_odd_parity(void *key, size_t length);
 
 uint32_t
-ccdes_cbc_cksum(void *in, void *out, size_t length,
-                void *key, size_t keylen, void *ivec);
+ccdes_cbc_cksum(const void *in, void *out, size_t length,
+                const void *key, size_t key_nbytes, const void *ivec);
 
 
 #endif /* _CORECRYPTO_CCDES_H_ */

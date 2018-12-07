@@ -59,6 +59,8 @@
 #include <sys/domain.h>
 #include <sys/protosw.h>
 #include <sys/socketvar.h>
+#include <sys/codesign.h>
+#include <sys/ubc.h>
 
 #include <bsm/audit.h>
 #include <bsm/audit_internal.h>
@@ -898,6 +900,93 @@ audit_sysclose(struct kaudit_record *ar, proc_t p, int fd)
 	audit_arg_vnpath_withref(ar, (struct vnode *)fp->f_fglob->fg_data,
 	    ARG_VNODE1);
 	fp_drop(p, fd, fp, 0);
+}
+
+void
+audit_identity_info_destruct(struct au_identity_info *id_info)
+{
+	if (!id_info) {
+		return;
+	}
+
+	if (id_info->signing_id != NULL) {
+		free(id_info->signing_id, M_AUDITTEXT);
+		id_info->signing_id = NULL;
+	}
+
+	if (id_info->team_id != NULL) {
+		free(id_info->team_id, M_AUDITTEXT);
+		id_info->team_id = NULL;
+	}
+
+	if (id_info->cdhash != NULL) {
+		free(id_info->cdhash, M_AUDITDATA);
+		id_info->cdhash = NULL;
+	}
+}
+
+void
+audit_identity_info_construct(struct au_identity_info *id_info)
+{
+	struct proc *p;
+	struct cs_blob *blob;
+	unsigned int signer_type = 0;
+	const char *signing_id = NULL;
+	const char* team_id = NULL;
+	const uint8_t *cdhash = NULL;
+	size_t src_len = 0;
+
+	p = current_proc();
+	blob = csproc_get_blob(p);
+	if (blob) {
+		signing_id = csblob_get_identity(blob);
+		cdhash = csblob_get_cdhash(blob);
+		team_id = csblob_get_teamid(blob);
+		signer_type = csblob_get_platform_binary(blob) ? 1 : 0;
+	}
+
+	id_info->signer_type = signer_type;
+
+	if (id_info->signing_id == NULL && signing_id != NULL) {
+		id_info->signing_id = malloc( MAX_AU_IDENTITY_SIGNING_ID_LENGTH,
+			M_AUDITTEXT, M_WAITOK);
+		if (id_info->signing_id != NULL) {
+			src_len = strlcpy(id_info->signing_id,
+				signing_id, MAX_AU_IDENTITY_SIGNING_ID_LENGTH);
+
+			if (src_len >= MAX_AU_IDENTITY_SIGNING_ID_LENGTH) {
+				id_info->signing_id_trunc = 1;
+			}
+		}
+	}
+
+	if (id_info->team_id == NULL && team_id != NULL) {
+		id_info->team_id = malloc(MAX_AU_IDENTITY_TEAM_ID_LENGTH,
+			M_AUDITTEXT, M_WAITOK);
+		if (id_info->team_id != NULL) {
+			src_len = strlcpy(id_info->team_id, team_id,
+				MAX_AU_IDENTITY_TEAM_ID_LENGTH);
+
+			if (src_len >= MAX_AU_IDENTITY_TEAM_ID_LENGTH) {
+				id_info->team_id_trunc = 1;
+			}
+		}
+	}
+
+	if (id_info->cdhash == NULL && cdhash != NULL) {
+		id_info->cdhash = malloc(CS_CDHASH_LEN, M_AUDITDATA, M_WAITOK);
+		if (id_info->cdhash != NULL) {
+			memcpy(id_info->cdhash, cdhash, CS_CDHASH_LEN);
+			id_info->cdhash_len = CS_CDHASH_LEN;
+		}
+	}
+}
+
+void
+audit_arg_identity(struct kaudit_record *ar)
+{
+	audit_identity_info_construct(&ar->k_ar.ar_arg_identity);
+	ARG_SET_VALID(ar, ARG_IDENTITY);
 }
 
 #endif /* CONFIG_AUDIT */

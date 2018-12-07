@@ -43,7 +43,7 @@
 #define PERF_KPC        (6)
 #define PERF_KDBG       (7)
 #define PERF_TASK       (8)
-/* 9 unused */
+#define PERF_LAZY       (9)
 #define PERF_MEMINFO    (10)
 
 /* helpers for 32-bit */
@@ -78,6 +78,8 @@
 #define PERF_TI_INSCYCDATA_32   PERF_TI_CODE(18)
 #define PERF_TI_SCHEDDATA_2     PERF_TI_CODE(19)
 #define PERF_TI_SCHEDDATA2_32_2 PERF_TI_CODE(20)
+#define PERF_TI_SCHEDDATA3_32   PERF_TI_CODE(21)
+#define PERF_TI_SCHEDDATA_3     PERF_TI_CODE(22)
 
 #define PERF_CS_CODE(code) PERF_CODE(PERF_CALLSTACK, code)
 #define PERF_CS_KSAMPLE    PERF_CS_CODE(0)
@@ -136,11 +138,18 @@
 #define PERF_TK_SNAP_DATA     PERF_TK_CODE(1)
 #define PERF_TK_SNAP_DATA1_32 PERF_TK_CODE(2)
 #define PERF_TK_SNAP_DATA2_32 PERF_TK_CODE(3)
+#define PERF_TK_INFO_DATA     PERF_TK_CODE(4)
+
+#define PERF_LZ_CODE(code) PERF_CODE(PERF_LAZY, code)
+#define PERF_LZ_MKRUNNABLE PERF_LZ_CODE(0)
+#define PERF_LZ_WAITSAMPLE PERF_LZ_CODE(1)
+#define PERF_LZ_CPUSAMPLE  PERF_LZ_CODE(2)
 
 #define PERF_MI_CODE(code) PERF_CODE(PERF_MEMINFO, code)
 #define PERF_MI_SAMPLE     PERF_MI_CODE(0)
 #define PERF_MI_DATA       PERF_MI_CODE(1)
 #define PERF_MI_SYS_DATA   PERF_MI_CODE(2)
+#define PERF_MI_SYS_DATA_2 PERF_MI_CODE(3)
 
 /* error sub-codes for trace data */
 enum

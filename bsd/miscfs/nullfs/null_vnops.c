@@ -1035,3 +1035,36 @@ static struct vnodeopv_entry_desc nullfs_vnodeop_entries[] = {
 };
 
 struct vnodeopv_desc nullfs_vnodeop_opv_desc = {&nullfs_vnodeop_p, nullfs_vnodeop_entries};
+
+//NULLFS Specific helper function
+
+int
+nullfs_getbackingvnode(vnode_t in_vp, vnode_t* out_vpp)
+{
+	int result = EINVAL;
+
+	if (out_vpp == NULL || in_vp == NULL) {
+		goto end;
+	}
+
+	struct vfsstatfs * sp   = NULL;
+	mount_t mp = vnode_mount(in_vp);
+
+	sp = vfs_statfs(mp);
+	//If this isn't a nullfs vnode or it is but it's a special vnode
+	if (strcmp(sp->f_fstypename, "nullfs") != 0 || nullfs_checkspecialvp(in_vp)) {
+		*out_vpp = NULLVP;
+		result = ENOENT;
+		goto end;
+	}
+
+	vnode_t lvp = NULLVPTOLOWERVP(in_vp);
+	if ((result = vnode_getwithvid(lvp, NULLVPTOLOWERVID(in_vp)))) {
+		goto end;
+	}
+
+	*out_vpp = lvp;
+
+end:
+	return result;
+}

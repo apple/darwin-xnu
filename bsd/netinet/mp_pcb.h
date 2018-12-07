@@ -43,10 +43,6 @@ typedef enum mppcb_state {
 	MPPCB_STATE_DEAD	= 2,
 } mppcb_state_t;
 
-
-/* net/necp.h already includes mp_pcb.h - so we have to forward-declare */
-struct necp_client_flow;
-
 /*
  * Multipath Protocol Control Block
  */
@@ -61,7 +57,7 @@ struct mppcb {
 
 #if NECP
 	uuid_t necp_client_uuid;
-	void	(*necp_cb)(void *, int, struct necp_client_flow *);
+	void (*necp_cb)(void *, int, uint32_t, uint32_t, bool *);
 #endif
 };
 
@@ -120,6 +116,10 @@ extern void mptcp_timer_sched(void);
 extern void mptcp_handle_deferred_upcalls(struct mppcb *mpp, uint32_t flag);
 extern int mp_getsockaddr(struct socket *mp_so, struct sockaddr **nam);
 extern int mp_getpeeraddr(struct socket *mp_so, struct sockaddr **nam);
+#if NECP
+extern int necp_client_register_multipath_cb(pid_t pid, uuid_t client_id, struct mppcb *mpp);
+extern void necp_mppcb_dispose(struct mppcb *mpp);
+#endif
 __END_DECLS
 
 #endif /* BSD_KERNEL_PRIVATE */

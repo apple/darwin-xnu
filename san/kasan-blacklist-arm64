@@ -1,5 +1,7 @@
 # ARM64 specific blacklist
 
+[address]
+
 # Exclude KASan runtime
 src:./san/kasan-arm64.c
 

@@ -19,6 +19,7 @@
 #include <mach/mach.h>
 #include <mach/task.h>
 #include <mach/vm_param.h>
+#include <sys/kauth.h>
 #include <sys/queue.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
@@ -72,7 +73,7 @@ static pid_t spawn_child(int argc, char **argv, struct persona_args *pa)
 		return -ERR_SYSTEM;
 	}
 
-	if (!pa->flags & PA_HAS_ID) {
+	if (!(pa->flags & PA_HAS_ID)) {
 		err_print("No persona ID specified!");
 		return -ERR_SYSTEM;
 	}
@@ -124,6 +125,15 @@ static pid_t spawn_child(int argc, char **argv, struct persona_args *pa)
 		ret = posix_spawnattr_set_persona_gid_np(&attr, pa->kinfo.persona_gid);
 		if (ret != 0) {
 			err_print("posix_spawnattr_set_persona_gid_np failed!");
+			ret = -ERR_SPAWN_ATTR;
+			goto out_err;
+		}
+	}
+
+	if (pa->flags & PA_HAS_GROUPS) {
+		ret = posix_spawnattr_set_persona_groups_np(&attr, pa->kinfo.persona_ngroups, pa->kinfo.persona_groups, KAUTH_UID_NONE);
+		if (ret != 0) {
+			err_print("");
 			ret = -ERR_SPAWN_ATTR;
 			goto out_err;
 		}
@@ -259,6 +269,8 @@ static void usage_main(const char *progname, int verbose)
 	printf("\t%-10s\tVerify persona parameters against existing persona (given by -I)\n", "-V");
 	printf("\t%-10s\tOverride/verify the user ID of the new process\n", "-u uid");
 	printf("\t%-10s\tOverride/verify the group ID of the new process\n", "-g gid");
+	printf("\t%-15s\tGroups to which the persona will belong\n", "-G {groupspec}");
+	printf("\t%-15s\tgroupspec: G1{,G2,G3...}\n", " ");
 	printf("\t%-10s\tBe verbose\n", "-v");
 	printf("\t%-10s\tDo not wait for the child process\n", "-w");
 	printf("\n");
@@ -283,7 +295,12 @@ int main(int argc, char **argv)
 		optind = 2;
 		ret = child_main_loop(argc, argv);
 		if (ret != 1)
+			exit(ret);
+		if (strcmp(argv[optind], "spawn") != 0) {
+			printf("child exiting (%s).\n", argv[optind]);
 			exit(0);
+		}
+		optind++;
 
 		/*
 		 * If we get here, then the child wants us to continue running
@@ -305,16 +322,21 @@ int main(int argc, char **argv)
 	/*
 	 * Argument parse for default overrides:
 	 */
-	while ((ch = getopt(argc, argv, "Vg:I:u:vwh")) != -1) {
+	while ((ch = getopt(argc, argv, "Vg:G:I:u:vwh")) != -1) {
 		switch (ch) {
 		case 'V':
 			pa.flags |= PA_SHOULD_VERIFY;
 			break;
 		case 'g':
 			pa.kinfo.persona_gid = atoi(optarg);
-			if (pa.kinfo.persona_gid <= 500)
-				err("Invalid GID: %d", pa.kinfo.persona_gid);
 			pa.flags |= PA_HAS_GID;
+			pa.flags |= PA_OVERRIDE;
+			break;
+		case 'G':
+			ret = parse_groupspec(&pa.kinfo, optarg);
+			if (ret < 0)
+				err("Invalid groupspec: \"%s\"", optarg);
+			pa.flags |= PA_HAS_GROUPS;
 			pa.flags |= PA_OVERRIDE;
 			break;
 		case 'I':
@@ -325,8 +347,6 @@ int main(int argc, char **argv)
 			break;
 		case 'u':
 			pa.override_uid = atoi(optarg);
-			if (pa.override_uid <= 500)
-				err("Invalid UID: %d", pa.override_uid);
 			pa.flags |= PA_HAS_UID;
 			pa.flags |= PA_OVERRIDE;
 			break;

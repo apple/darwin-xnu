@@ -21,11 +21,11 @@ ARM_HEADER_FILES =	\
 		machine_cpuid.h \
 		machine_routines.h \
 		pal_routines.h \
+		pmap_public.h \
 		proc_reg.h \
+		simple_lock.h \
 		smp.h \
-		thread.h \
-		simple_lock.h
-
+		thread.h
 
 INSTALL_MD_DIR = arm
 

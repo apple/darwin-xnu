@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -75,6 +75,7 @@
 #include <sys/syslog.h>
 #include <sys/protosw.h>
 #include <kern/cpu_number.h>
+#include <kern/zalloc.h>
 
 #include <net/if.h>
 #include <net/if_types.h>
@@ -113,7 +114,9 @@
 
 #define	GIFNAME		"gif"
 #define	GIFDEV		"if_gif"
-#define	GIF_MAXUNIT	0x7fff	/* ifp->if_unit is only 15 bits */
+
+#define	GIF_MAXUNIT	IF_MAXUNIT
+#define	GIF_ZONE_MAX_ELEM	MIN(IFNETS_MAX, GIF_MAXUNIT)
 
 /* gif lock variables */
 static lck_grp_t	*gif_mtx_grp;
@@ -155,12 +158,15 @@ static struct ip6protosw in6_gif_protosw =
 };
 #endif
 
-static if_clone_t gif_cloner = NULL;
+static int gif_remove(struct ifnet *);
 static int gif_clone_create(struct if_clone *, uint32_t, void *);
 static int gif_clone_destroy(struct ifnet *);
 static void gif_delete_tunnel(struct gif_softc *);
 static void gif_detach(struct ifnet *);
 
+static struct if_clone gif_cloner =
+    IF_CLONE_INITIALIZER(GIFNAME, gif_clone_create, gif_clone_destroy,
+        0, GIF_MAXUNIT, GIF_ZONE_MAX_ELEM, sizeof(struct gif_softc));
 /*
  * Theory of operation: initially, one gif interface is created.
  * Any time a gif interface is configured, if there are no other
@@ -251,8 +257,6 @@ void
 gif_init(void)
 {
 	errno_t result;
-	struct ifnet_clone_params ifnet_clone_params;
-	struct if_clone *ifc = NULL;
 
 	/* Initialize the list of interfaces */
 	TAILQ_INIT(&gifs);
@@ -276,17 +280,11 @@ gif_init(void)
 		printf("proto_register_plumber failed for AF_INET6 error=%d\n",
 		    result);
 
-	ifnet_clone_params.ifc_name = "gif";
-	ifnet_clone_params.ifc_create = gif_clone_create;
-	ifnet_clone_params.ifc_destroy = gif_clone_destroy;
-
-	result = ifnet_clone_attach(&ifnet_clone_params, &gif_cloner);
+	result = if_clone_attach(&gif_cloner);
 	if (result != 0)
-		printf("gifattach: ifnet_clone_attach failed %d\n", result);
+		panic("%s: if_clone_attach() failed, error %d\n", __func__, result);
 
-	/* Create first device */
-	ifc = if_clone_lookup("gif", NULL);
-	gif_clone_create(ifc, 0, NULL);
+	gif_clone_create(&gif_cloner, 0, NULL);
 }
 
 static errno_t
@@ -310,7 +308,7 @@ gif_detach(struct ifnet *ifp)
 {
 	struct gif_softc *sc = ifp->if_softc;
 	lck_mtx_destroy(&sc->gif_lock, gif_mtx_grp);
-	_FREE(ifp->if_softc, M_DEVBUF);
+	if_clone_softc_deallocate(&gif_cloner, sc);
 	ifp->if_softc = NULL;
 	(void) ifnet_release(ifp);
 }
@@ -330,7 +328,7 @@ gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 		goto done;
 	}
 
-	sc = _MALLOC(sizeof (struct gif_softc), M_DEVBUF, M_WAITOK | M_ZERO);
+	sc = if_clone_softc_allocate(&gif_cloner);
 	if (sc == NULL) {
 		log(LOG_ERR, "gif_clone_create: failed to allocate gif%d\n",
 		    unit);
@@ -366,7 +364,7 @@ gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 	error = ifnet_allocate_extended(&gif_init_params, &sc->gif_if);
 	if (error != 0) {
 		printf("gif_clone_create, ifnet_allocate failed - %d\n", error);
-		_FREE(sc, M_DEVBUF);
+		if_clone_softc_deallocate(&gif_cloner, sc);
 		error = ENOBUFS;
 		goto done;
 	}
@@ -378,7 +376,7 @@ gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 	if (sc->encap_cookie4 == NULL) {
 		printf("%s: unable to attach encap4\n", if_name(sc->gif_if));
 		ifnet_release(sc->gif_if);
-		FREE(sc, M_DEVBUF);
+		if_clone_softc_deallocate(&gif_cloner, sc);
 		error = ENOBUFS;
 		goto done;
 	}
@@ -393,7 +391,7 @@ gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 		}
 		printf("%s: unable to attach encap6\n", if_name(sc->gif_if));
 		ifnet_release(sc->gif_if);
-		FREE(sc, M_DEVBUF);
+		if_clone_softc_deallocate(&gif_cloner, sc);
 		error = ENOBUFS;
 		goto done;
 	}
@@ -405,6 +403,7 @@ gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 	/* turn off ingress filter */
 	sc->gif_if.if_flags  |= IFF_LINK2;
 #endif
+	sc->gif_flags |= IFGIF_DETACHING;
 	error = ifnet_attach(sc->gif_if, NULL);
 	if (error != 0) {
 		printf("gif_clone_create - ifnet_attach failed - %d\n", error);
@@ -417,13 +416,14 @@ gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 			encap_detach(sc->encap_cookie6);
 			sc->encap_cookie6 = NULL;
 		}
-		FREE(sc, M_DEVBUF);
+		if_clone_softc_deallocate(&gif_cloner, sc);
 		goto done;
 	}
 #if CONFIG_MACF_NET
 	mac_ifnet_label_init(&sc->gif_if);
 #endif
 	bpfattach(sc->gif_if, DLT_NULL, sizeof (u_int));
+	sc->gif_flags &= ~IFGIF_DETACHING;
 	TAILQ_INSERT_TAIL(&gifs, sc, gif_link);
 	ngif++;
 done:
@@ -433,33 +433,63 @@ done:
 }
 
 static int
-gif_clone_destroy(struct ifnet *ifp)
+gif_remove(struct ifnet *ifp)
 {
-#if defined(INET) || defined(INET6)
 	int error = 0;
-#endif
-	struct gif_softc *sc = ifp->if_softc;
+	struct gif_softc *sc = NULL;
 
 	lck_mtx_lock(gif_mtx);
+	sc = ifp->if_softc;
+
+	if (sc == NULL) {
+		error = EINVAL;
+		goto done;
+	}
+
+	GIF_LOCK(sc);
+	if (sc->gif_flags & IFGIF_DETACHING) {
+		error = EINVAL;
+		goto done;
+	}
+
+	sc->gif_flags |= IFGIF_DETACHING;
 	TAILQ_REMOVE(&gifs, sc, gif_link);
 	ngif--;
 
-	GIF_LOCK(sc);
 	gif_delete_tunnel(sc);
 #ifdef INET6
 	if (sc->encap_cookie6 != NULL) {
 		error = encap_detach(sc->encap_cookie6);
-		KASSERT(error == 0, ("gif_clone_destroy: Unexpected	\
-		    error detaching encap_cookie6"));
+		KASSERT(error == 0, ("gif_clone_destroy: Unexpected "
+		    "error detaching encap_cookie6"));
 	}
 #endif
 #ifdef INET
 	if (sc->encap_cookie4 != NULL) {
 		error = encap_detach(sc->encap_cookie4);
-		KASSERT(error == 0, ("gif_clone_destroy: Unexpected	\
-		    error detaching encap_cookie4"));
+		KASSERT(error == 0, ("gif_clone_destroy: Unexpected "
+		    "error detaching encap_cookie4"));
 	}
 #endif
+done:
+	if (sc != NULL)
+		GIF_UNLOCK(sc);
+	lck_mtx_unlock(gif_mtx);
+
+	return (error);
+}
+
+static int
+gif_clone_destroy(struct ifnet *ifp)
+{
+	int error = 0;
+
+	error = gif_remove(ifp);
+	if (error != 0) {
+		printf("gif_clone_destroy: gif remove failed %d\n", error);
+		return (error);
+	}
+
 	error = ifnet_set_flags(ifp, 0, IFF_UP);
 	if (error != 0) {
 		printf("gif_clone_destroy: ifnet_set_flags failed %d\n", error);
@@ -469,10 +499,6 @@ gif_clone_destroy(struct ifnet *ifp)
 	if (error != 0)
 		panic("gif_clone_destroy: ifnet_detach(%p) failed %d\n", ifp,
 		    error);
-
-	GIF_UNLOCK(sc);
-	lck_mtx_unlock(gif_mtx);
-
 	return (0);
 }
 

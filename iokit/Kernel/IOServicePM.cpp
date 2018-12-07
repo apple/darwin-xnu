@@ -474,6 +474,9 @@ void IOService::PMinit( void )
         {
             fWatchdogTimer = thread_call_allocate(
                   &IOService::watchdog_timer_expired, (thread_call_param_t)this);
+            fWatchdogLock = IOLockAlloc();
+
+            fBlockedArray =  OSArray::withCapacity(4);
         }
 
         fAckTimer = thread_call_allocate(
@@ -542,6 +545,16 @@ void IOService::PMfree( void )
             thread_call_cancel(fWatchdogTimer);
             thread_call_free(fWatchdogTimer);
             fWatchdogTimer = NULL;
+        }
+
+        if (fWatchdogLock) {
+            IOLockFree(fWatchdogLock);
+            fWatchdogLock = NULL;
+        }
+
+        if (fBlockedArray) {
+            fBlockedArray->release();
+            fBlockedArray = NULL;
         }
 
         if ( fSettleTimer ) {
@@ -1080,6 +1093,7 @@ IOReturn IOService::removePowerChild( IOPowerConnection * theNub )
             if ( fHeadNotePendingAcks == 0 )
             {
                 stop_ack_timer();
+                getPMRootDomain()->reset_watchdog_timer(this, 0);
 
                 // This parent may have a request in the work queue that is
                 // blocked on fHeadNotePendingAcks=0. And removePowerChild()
@@ -1600,6 +1614,7 @@ bool IOService::handleAcknowledgePowerChange( IOPMRequest * request )
             stop_ack_timer();
             // and now we can continue
             all_acked = true;
+            getPMRootDomain()->reset_watchdog_timer(this, 0);
         }
     } else {
         OUR_PMLog(kPMLogAcknowledgeErr3, 0, 0); // not expecting anybody to ack
@@ -3608,6 +3623,7 @@ void IOService::notifyInterestedDriversDone( void )
     IOItemCount         count;
     DriverCallParam *   param;
     IOReturn            result;
+    int                 maxTimeout = 0;
 
     PM_ASSERT_IN_GATE();
     assert( fDriverCallBusy == false );
@@ -3650,6 +3666,9 @@ void IOService::notifyInterestedDriversDone( void )
                     result = kMinAckTimeoutTicks;
 
                 informee->timer = (result / (ACK_TIMER_PERIOD / ns_per_us)) + 1;
+                if (result > maxTimeout) {
+                    maxTimeout = result;
+                }
             }
             // else, child has already acked or driver has removed interest,
             // and head_note_pendingAcks decremented.
@@ -3665,6 +3684,7 @@ void IOService::notifyInterestedDriversDone( void )
         {
             OUR_PMLog(kPMLogStartAckTimer, 0, 0);
             start_ack_timer();
+            getPMRootDomain()->reset_watchdog_timer(this, maxTimeout/USEC_PER_SEC+1);
         }
     }
 
@@ -3986,6 +4006,7 @@ void IOService::driverSetPowerState( void )
     param = (DriverCallParam *) fDriverCallParamPtr;
     powerState = fHeadNotePowerState;
 
+    callEntry.callMethod = OSMemberFunctionCast(const void *, fControllingDriver, &IOService::setPowerState);
     if (assertPMDriverCall(&callEntry))
     {
         OUR_PMLogFuncStart(kPMLogProgramHardware, (uintptr_t) this, powerState);
@@ -4066,6 +4087,12 @@ void IOService::driverInformPowerChange( void )
         informee = (IOPMinformee *) param->Target;
         driver   = informee->whatObject;
 
+        if (fDriverCallReason == kDriverCallInformPreChange) {
+            callEntry.callMethod = OSMemberFunctionCast(const void *, driver, &IOService::powerStateWillChangeTo);
+        }
+        else {
+            callEntry.callMethod = OSMemberFunctionCast(const void *, driver, &IOService::powerStateDidChangeTo);
+        }
         if (assertPMDriverCall(&callEntry, 0, informee))
         {
             if (fDriverCallReason == kDriverCallInformPreChange)
@@ -4277,6 +4304,7 @@ void IOService::notifyControllingDriverDone( void )
         {
             OUR_PMLog(kPMLogStartAckTimer, 0, 0);
             start_ack_timer();
+            getPMRootDomain()->reset_watchdog_timer(this, result/USEC_PER_SEC+1);
         }
     }
 
@@ -5311,6 +5339,7 @@ bool IOService::ackTimerTick( void )
                         done = true;
                     }
 #endif
+                    getPMRootDomain()->reset_watchdog_timer(this, 0);
                 } else {
                     // still waiting, set timer again
                     start_ack_timer();
@@ -5392,55 +5421,124 @@ bool IOService::ackTimerTick( void )
 //*********************************************************************************
 void IOService::start_watchdog_timer( void )
 {
-    AbsoluteTime    deadline;
-    boolean_t       pending;
-    static int      timeout = -1;
+    int             timeout;
+    uint64_t        deadline;
 
     if (!fWatchdogTimer || (kIOSleepWakeWdogOff & gIOKitDebug))
        return;
 
-    if (thread_call_isactive(fWatchdogTimer)) return;
-    if (timeout == -1) {
-       PE_parse_boot_argn("swd_timeout", &timeout, sizeof(timeout));
-    }
-    if (timeout < 60) {
-       timeout = WATCHDOG_TIMER_PERIOD;
-    }
+    IOLockLock(fWatchdogLock);
 
+    timeout = getPMRootDomain()->getWatchdogTimeout();
     clock_interval_to_deadline(timeout, kSecondScale, &deadline);
+    fWatchdogDeadline = deadline;
+    start_watchdog_timer(deadline);
+    IOLockUnlock(fWatchdogLock);
+}
 
-    retain();
-    pending = thread_call_enter_delayed(fWatchdogTimer, deadline);
-    if (pending) release();
+void IOService::start_watchdog_timer(uint64_t deadline)
+{
+
+    IOLockAssert(fWatchdogLock, kIOLockAssertOwned);
+
+    if (!thread_call_isactive(fWatchdogTimer)) {
+        thread_call_enter_delayed(fWatchdogTimer, deadline);
+    }
 
 }
 
 //*********************************************************************************
 // [private] stop_watchdog_timer
-// Returns true if watchdog was enabled and stopped now
 //*********************************************************************************
 
-bool IOService::stop_watchdog_timer( void )
+void IOService::stop_watchdog_timer( void )
 {
-    boolean_t   pending;
-
     if (!fWatchdogTimer || (kIOSleepWakeWdogOff & gIOKitDebug))
-       return false;
+       return;
 
-    pending = thread_call_cancel(fWatchdogTimer);
-    if (pending) release();
+    IOLockLock(fWatchdogLock);
 
-    return pending;
+    thread_call_cancel(fWatchdogTimer);
+    fWatchdogDeadline = 0;
+
+    while (fBlockedArray->getCount()) {
+        IOService *obj = OSDynamicCast(IOService, fBlockedArray->getObject(0));
+        if (obj) {
+            PM_ERROR("WDOG:Object %s unexpected in blocked array\n", obj->fName);
+            fBlockedArray->removeObject(0);
+        }
+    }
+
+    IOLockUnlock(fWatchdogLock);
 }
 
 //*********************************************************************************
 // reset_watchdog_timer
 //*********************************************************************************
 
-void IOService::reset_watchdog_timer( void )
+void IOService::reset_watchdog_timer(IOService *blockedObject, int pendingResponseTimeout)
 {
-    if (stop_watchdog_timer())
-        start_watchdog_timer();
+    unsigned int i;
+    uint64_t    deadline;
+    IOService *obj;
+
+    if (!fWatchdogTimer || (kIOSleepWakeWdogOff & gIOKitDebug))
+        return;
+
+
+    IOLockLock(fWatchdogLock);
+    if (!fWatchdogDeadline) {
+        goto exit;
+    }
+
+    i = fBlockedArray->getNextIndexOfObject(blockedObject, 0);
+    if (pendingResponseTimeout == 0) {
+        blockedObject->fPendingResponseDeadline = 0;
+        if (i == (unsigned int)-1) {
+            goto exit;
+        }
+        fBlockedArray->removeObject(i);
+    }
+    else {
+        // Set deadline 2secs after the expected response timeout to allow
+        // ack timer to handle the timeout.
+        clock_interval_to_deadline(pendingResponseTimeout+2, kSecondScale, &deadline);
+
+        if (i != (unsigned int)-1) {
+            PM_ERROR("WDOG:Object %s is already blocked for responses. Ignoring timeout %d\n",
+                    fName, pendingResponseTimeout);
+            goto exit;
+        }
+
+
+        for (i = 0; i < fBlockedArray->getCount(); i++) {
+            obj = OSDynamicCast(IOService, fBlockedArray->getObject(i));
+            if (obj && (obj->fPendingResponseDeadline < deadline)) {
+                blockedObject->fPendingResponseDeadline = deadline;
+                fBlockedArray->setObject(i, blockedObject);
+                break;
+            }
+        }
+        if (i == fBlockedArray->getCount()) {
+            blockedObject->fPendingResponseDeadline = deadline;
+            fBlockedArray->setObject(blockedObject);
+        }
+    }
+
+    obj = OSDynamicCast(IOService, fBlockedArray->getObject(0));
+    if (!obj) {
+        int timeout = getPMRootDomain()->getWatchdogTimeout();
+        clock_interval_to_deadline(timeout, kSecondScale, &deadline);
+    }
+    else {
+        deadline = obj->fPendingResponseDeadline;
+    }
+
+    thread_call_cancel(fWatchdogTimer);
+    start_watchdog_timer(deadline);
+
+exit:
+    IOLockUnlock(fWatchdogLock);
 }
 
 
@@ -5493,10 +5591,6 @@ void IOService::start_ack_timer ( UInt32 interval, UInt32 scale )
     pending = thread_call_enter_delayed(fAckTimer, deadline);
     if (pending) release();
 
-    // Stop watchdog if ack is delayed by more than a sec
-    if (interval * scale > kSecondScale) {
-        stop_watchdog_timer();
-    }
 }
 
 //*********************************************************************************
@@ -5509,8 +5603,6 @@ void IOService::stop_ack_timer( void )
 
     pending = thread_call_cancel(fAckTimer);
     if (pending) release();
-
-    start_watchdog_timer();
 }
 
 //*********************************************************************************
@@ -5535,7 +5627,6 @@ IOService::actionAckTimerExpired(
     if (done && gIOPMWorkQueue)
     {
         gIOPMWorkQueue->signalWorkAvailable();
-        me->start_watchdog_timer();
     }
 
     return kIOReturnSuccess;
@@ -5832,6 +5923,9 @@ void IOService::cleanClientResponses( bool logErrors )
         }
     }
 
+    if (IS_ROOT_DOMAIN) {
+        getPMRootDomain()->reset_watchdog_timer(this, 0);
+    }
     if (fResponseArray)
     {
         fResponseArray->release();
@@ -5924,6 +6018,7 @@ bool IOService::tellClientsWithResponse( int messageType )
 		}
 	    }
 	    context.maxTimeRequested = maxTimeOut;
+            context.enableTracing = isRootDomain;
             applyToInterested( gIOGeneralInterest,
                 pmTellClientWithResponse, (void *) &context );
 
@@ -5972,6 +6067,7 @@ bool IOService::tellClientsWithResponse( int messageType )
         OUR_PMLog(kPMLogStartAckTimer, context.maxTimeRequested, 0);
         if (context.enableTracing) {
             getPMRootDomain()->traceDetail(context.messageType, 0, context.maxTimeRequested / 1000);
+            getPMRootDomain()->reset_watchdog_timer(this, context.maxTimeRequested/USEC_PER_SEC+1);
         }
         start_ack_timer( context.maxTimeRequested / 1000, kMillisecondScale );
         return false;
@@ -6160,12 +6256,18 @@ void IOService::pmTellClientWithResponse( OSObject * object, void * arg )
 
     if (context->enableTracing && (notifier != 0))
     {
-        getPMRootDomain()->traceDetail(notifier);
+        getPMRootDomain()->traceDetail(notifier, true);
     }
 
     clock_get_uptime(&start);
     retCode = context->us->messageClient(msgType, object, (void *) &notify, sizeof(notify));
     clock_get_uptime(&end);
+
+    if (context->enableTracing && (notifier != NULL))
+    {
+        getPMRootDomain()->traceDetail(notifier, false);
+    }
+
 
     if (kIOReturnSuccess == retCode)
     {
@@ -6373,13 +6475,17 @@ void IOService::pmTellCapabilityClientWithResponse(
 
     if (context->enableTracing && (notifier != 0))
     {
-        getPMRootDomain()->traceDetail(notifier);
+        getPMRootDomain()->traceDetail(notifier, true);
     }
 
     clock_get_uptime(&start);
     retCode = context->us->messageClient(
         msgType, object, (void *) &msgArg, sizeof(msgArg));
     clock_get_uptime(&end);
+    if (context->enableTracing && (notifier != NULL))
+    {
+        getPMRootDomain()->traceDetail(notifier, false);
+    }
 
     if ( kIOReturnSuccess == retCode )
     {
@@ -6490,6 +6596,7 @@ void IOService::tellClients( int messageType )
     context.stateNumber   = fHeadNotePowerState;
     context.stateFlags    = fHeadNotePowerArrayEntry->capabilityFlags;
     context.changeFlags   = fHeadNoteChangeFlags;
+    context.enableTracing = IS_ROOT_DOMAIN;
     context.messageFilter = (IS_ROOT_DOMAIN) ?
                             OSMemberFunctionCast(
                                 IOPMMessageFilter,
@@ -6539,7 +6646,17 @@ static void tellKernelClientApplier( OSObject * object, void * arg )
     notify.stateNumber  = context->stateNumber;
     notify.stateFlags   = context->stateFlags;
 
+    if (context->enableTracing && object)
+    {
+        IOService::getPMRootDomain()->traceDetail(object, true);
+    }
     context->us->messageClient(context->messageType, object, &notify, sizeof(notify));
+    if (context->enableTracing && object)
+    {
+        IOService::getPMRootDomain()->traceDetail(object, false);
+    }
+
+
 
     if ((kIOLogDebugPower & gIOKitDebug) &&
         (OSDynamicCast(_IOServiceInterestNotifier, object)))
@@ -7974,6 +8091,7 @@ bool IOService::actionPMReplyQueue( IOPMRequest * request, IOPMRequestQueue * qu
                 // expected ack, stop the timer
                 stop_ack_timer();
 
+                getPMRootDomain()->reset_watchdog_timer(this, 0);
 
                 uint64_t nsec = computeTimeDeltaNS(&fDriverCallStartTime);
                 if (nsec > LOG_SETPOWER_TIMES) {
@@ -8108,6 +8226,33 @@ void IOService::deassertPMDriverCall( IOPMDriverCallEntry * entry )
     if (wakeup)
         PM_LOCK_WAKEUP(&fPMDriverCallQueue);
 }
+
+bool IOService::getBlockingDriverCall(thread_t *thread, const void **callMethod)
+{
+    const IOPMDriverCallEntry * entry = NULL;
+    bool    blocked = false;
+
+    if (!initialized) {
+        return false;
+    }
+
+    if (current_thread() != gIOPMWatchDogThread) {
+        // Meant to be accessed only from watchdog thread
+        return false;
+    }
+
+    PM_LOCK();
+    entry = qe_queue_first(&fPMDriverCallQueue, IOPMDriverCallEntry, link);
+    if (entry) {
+        *thread = entry->thread;
+        *callMethod = entry->callMethod;
+        blocked = true;
+    }
+    PM_UNLOCK();
+
+    return blocked;
+}
+
 
 void IOService::waitForPMDriverCall( IOService * target )
 {

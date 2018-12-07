@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -70,6 +70,8 @@
 #include <sys/ioctl.h>
 #include <sys/mcache.h>
 
+#include <kern/zalloc.h>
+
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_types.h>
@@ -102,6 +104,7 @@
 #define DPRINTF(x)
 #endif
 
+static int pflog_remove(struct ifnet *);
 static int pflog_clone_create(struct if_clone *, u_int32_t, void *);
 static int pflog_clone_destroy(struct ifnet *);
 static errno_t pflogoutput(struct ifnet *, struct mbuf *);
@@ -116,7 +119,7 @@ static void pflogfree(struct ifnet *);
 static LIST_HEAD(, pflog_softc)	pflogif_list;
 static struct if_clone pflog_cloner =
     IF_CLONE_INITIALIZER(PFLOGNAME, pflog_clone_create, pflog_clone_destroy,
-        0, (PFLOGIFS_MAX - 1));
+        0, (PFLOGIFS_MAX - 1), PFLOGIF_ZONE_MAX_ELEM, sizeof(struct pflog_softc));
 
 struct ifnet *pflogifs[PFLOGIFS_MAX];	/* for fast access */
 
@@ -146,8 +149,7 @@ pflog_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 		/* NOTREACHED */
 	}
 
-	if ((pflogif = _MALLOC(sizeof (*pflogif),
-	    M_DEVBUF, M_WAITOK|M_ZERO)) == NULL) {
+	if ((pflogif = if_clone_softc_allocate(&pflog_cloner)) == NULL) {
 		error = ENOMEM;
 		goto done;
 	}
@@ -170,11 +172,12 @@ pflog_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 
 	bzero(pflogif, sizeof (*pflogif));
 	pflogif->sc_unit = unit;
+	pflogif->sc_flags |= IFPFLF_DETACHING;
 
 	error = ifnet_allocate_extended(&pf_init, &pflogif->sc_if);
 	if (error != 0) {
 		printf("%s: ifnet_allocate failed - %d\n", __func__, error);
-		_FREE(pflogif, M_DEVBUF);
+		if_clone_softc_deallocate(&pflog_cloner, pflogif);
 		goto done;
 	}
 
@@ -185,7 +188,7 @@ pflog_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	if (error != 0) {
 		printf("%s: ifnet_attach failed - %d\n", __func__, error);
 		ifnet_release(pflogif->sc_if);
-		_FREE(pflogif, M_DEVBUF);
+		if_clone_softc_deallocate(&pflog_cloner, pflogif);
 		goto done;
 	}
 
@@ -197,6 +200,7 @@ pflog_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	lck_mtx_lock(pf_lock);
 	LIST_INSERT_HEAD(&pflogif_list, pflogif, sc_list);
 	pflogifs[unit] = pflogif->sc_if;
+	pflogif->sc_flags &= ~IFPFLF_DETACHING;
 	lck_mtx_unlock(pf_lock);
 	lck_rw_done(pf_perim_lock);
 
@@ -205,21 +209,40 @@ done:
 }
 
 static int
-pflog_clone_destroy(struct ifnet *ifp)
+pflog_remove(struct ifnet *ifp)
 {
-	struct pflog_softc *pflogif = ifp->if_softc;
+	int error = 0;
+	struct pflog_softc *pflogif = NULL;
 
 	lck_rw_lock_shared(pf_perim_lock);
 	lck_mtx_lock(pf_lock);
-	pflogifs[pflogif->sc_unit] = NULL;
+	pflogif = ifp->if_softc;
+
+	if (pflogif == NULL ||
+	    (pflogif->sc_flags & IFPFLF_DETACHING) != 0) {
+		error = EINVAL;
+		goto done;
+	}
+
+	pflogif->sc_flags |= IFPFLF_DETACHING;
 	LIST_REMOVE(pflogif, sc_list);
+done:
 	lck_mtx_unlock(pf_lock);
 	lck_rw_done(pf_perim_lock);
+	return error;
+}
 
+static int
+pflog_clone_destroy(struct ifnet *ifp)
+{
+	int error = 0;
+
+	if ((error = pflog_remove(ifp)) != 0)
+		goto done;
 	/* bpfdetach() is taken care of as part of interface detach */
-	(void) ifnet_detach(ifp);
-
-	return 0;
+	(void)ifnet_detach(ifp);
+done:
+	return (error);
 }
 
 static errno_t
@@ -278,7 +301,7 @@ pflogdelproto(struct ifnet *ifp, protocol_family_t pf)
 static void
 pflogfree(struct ifnet *ifp)
 {
-	_FREE(ifp->if_softc, M_DEVBUF);
+	if_clone_softc_deallocate(&pflog_cloner, ifp->if_softc);
 	ifp->if_softc = NULL;
 	(void) ifnet_release(ifp);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -27,6 +27,7 @@
  */
 
 #include <kern/locks.h>
+#include <kern/zalloc.h>
 
 #include <sys/types.h>
 #include <sys/kernel_types.h>
@@ -127,12 +128,17 @@ static LIST_HEAD(pktap_list, pktap_softc) pktap_list =
 int pktap_clone_create(struct if_clone *, u_int32_t, void *);
 int pktap_clone_destroy(struct ifnet *);
 
+#define	PKTAP_MAXUNIT	IF_MAXUNIT
+#define	PKTAP_ZONE_MAX_ELEM	MIN(IFNETS_MAX, PKTAP_MAXUNIT)
+
 static struct if_clone pktap_cloner =
 	IF_CLONE_INITIALIZER(PKTAP_IFNAME,
 		pktap_clone_create,
 		pktap_clone_destroy,
 		0,
-		IF_MAXUNIT);
+		PKTAP_MAXUNIT,
+		PKTAP_ZONE_MAX_ELEM,
+		sizeof(struct pktap_softc));
 
 errno_t pktap_if_output(ifnet_t, mbuf_t);
 errno_t pktap_demux(ifnet_t, mbuf_t, char *, protocol_family_t *);
@@ -175,11 +181,16 @@ pktap_hexdump(int mask, void *addr, size_t len)
 		printf("\n");
 }
 
+#define _CASSERT_OFFFSETOF_FIELD(s1, s2, f) \
+	_CASSERT(offsetof(struct s1, f) == offsetof(struct s2, f))
+
 __private_extern__ void
 pktap_init(void)
 {
 	int error = 0;
 	lck_grp_attr_t *lck_grp_attr = NULL;
+
+	_CASSERT_OFFFSETOF_FIELD(pktap_header, pktap_v2_hdr, pth_flags);
 
 	/* Make sure we're called only once */
 	VERIFY(pktap_inited == 0);
@@ -212,8 +223,7 @@ pktap_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 
 	PKTAP_LOG(PKTP_LOG_FUNC, "unit %u\n", unit);
 
-	pktap = _MALLOC(sizeof(struct pktap_softc), M_DEVBUF,
-	    M_WAITOK | M_ZERO);
+	pktap = if_clone_softc_allocate(&pktap_cloner);
 	if (pktap == NULL) {
 		printf("%s: _MALLOC failed\n", __func__);
 		error = ENOMEM;
@@ -291,10 +301,8 @@ pktap_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	LIST_INSERT_HEAD(&pktap_list, pktap, pktp_link);
 	lck_rw_done(pktap_lck_rw);
 done:
-	if (error != 0) {
-		if (pktap != NULL)
-			_FREE(pktap, M_DEVBUF);
-	}
+	if (error != 0 && pktap != NULL)
+		if_clone_softc_deallocate(&pktap_cloner, pktap);
 	return (error);
 }
 
@@ -682,8 +690,7 @@ pktap_detach(ifnet_t ifp)
 	/* Drop reference as it's no more on the global list */
 	ifnet_release(ifp);
 
-	_FREE(pktap, M_DEVBUF);
-
+	if_clone_softc_deallocate(&pktap_cloner, pktap);
 	/* This is for the reference taken by ifnet_attach() */
 	(void) ifnet_release(ifp);
 }
@@ -766,16 +773,15 @@ static void
 pktap_set_procinfo(struct pktap_header *hdr, struct so_procinfo *soprocinfo)
 {
 	hdr->pth_pid = soprocinfo->spi_pid;
-	proc_name(soprocinfo->spi_pid, hdr->pth_comm, MAXCOMLEN);
+	if (hdr->pth_comm[0] == 0)
+		proc_name(soprocinfo->spi_pid, hdr->pth_comm, MAXCOMLEN);
 	if (soprocinfo->spi_pid != 0)
 		uuid_copy(hdr->pth_uuid, soprocinfo->spi_uuid);
 
-	/*
-	 * When not delegated, the effective pid is the same as the real pid
-	 */
 	if (soprocinfo->spi_delegated != 0) {
 		hdr->pth_flags |= PTH_FLAG_PROC_DELEGATED;
 		hdr->pth_epid = soprocinfo->spi_epid;
+		if (hdr->pth_ecomm[0] == 0)
 		proc_name(soprocinfo->spi_epid, hdr->pth_ecomm, MAXCOMLEN);
 		uuid_copy(hdr->pth_euuid, soprocinfo->spi_euuid);
 	}
@@ -789,11 +795,6 @@ pktap_finalize_proc_info(struct pktap_header *hdr)
 
 	if (!(hdr->pth_flags & PTH_FLAG_DELAY_PKTAP))
 		return;
-
-	/*
-	 * Clear the flag as it's internal
-	 */
-	hdr->pth_flags &= ~PTH_FLAG_DELAY_PKTAP;
 
 	if (hdr->pth_ipproto == IPPROTO_TCP)
 		found = inp_findinpcb_procinfo(&tcbinfo, hdr->pth_flowid,
@@ -809,13 +810,83 @@ pktap_finalize_proc_info(struct pktap_header *hdr)
 		pktap_set_procinfo(hdr, &soprocinfo);
 }
 
+static void
+pktap_v2_set_procinfo(struct pktap_v2_hdr *pktap_v2_hdr,
+    struct so_procinfo *soprocinfo)
+{
+	pktap_v2_hdr->pth_pid = soprocinfo->spi_pid;
+
+	if (soprocinfo->spi_pid != 0 && soprocinfo->spi_pid != -1) {
+		if (pktap_v2_hdr->pth_comm_offset != 0) {
+			char *ptr = ((char *)pktap_v2_hdr) +
+			    pktap_v2_hdr->pth_comm_offset;
+
+			proc_name(soprocinfo->spi_pid,
+			    ptr, PKTAP_MAX_COMM_SIZE);
+		}
+		if (pktap_v2_hdr->pth_uuid_offset != 0) {
+			uuid_t *ptr = (uuid_t *) (((char *)pktap_v2_hdr) +
+			    pktap_v2_hdr->pth_uuid_offset);
+
+			uuid_copy(*ptr, soprocinfo->spi_uuid);
+		}
+	}
+
+	if (!(pktap_v2_hdr->pth_flags & PTH_FLAG_PROC_DELEGATED))
+		return;
+
+	/*
+	 * The effective UUID may be set independently from the effective pid
+	 */
+	if (soprocinfo->spi_delegated != 0) {
+		pktap_v2_hdr->pth_flags |= PTH_FLAG_PROC_DELEGATED;
+		pktap_v2_hdr->pth_e_pid = soprocinfo->spi_epid;
+
+		if (soprocinfo->spi_pid != 0 && soprocinfo->spi_pid != -1 &&
+		    pktap_v2_hdr->pth_e_comm_offset != 0) {
+			char *ptr = ((char *)pktap_v2_hdr) +
+			    pktap_v2_hdr->pth_e_comm_offset;
+
+			proc_name(soprocinfo->spi_epid,
+			    ptr, PKTAP_MAX_COMM_SIZE);
+		}
+		if (pktap_v2_hdr->pth_e_uuid_offset != 0) {
+			uuid_t *ptr = (uuid_t *) (((char *)pktap_v2_hdr) +
+			    pktap_v2_hdr->pth_e_uuid_offset);
+
+			uuid_copy(*ptr, soprocinfo->spi_euuid);
+		}
+	}
+}
+
+__private_extern__ void
+pktap_v2_finalize_proc_info(struct pktap_v2_hdr *pktap_v2_hdr)
+{
+	int found;
+	struct so_procinfo soprocinfo;
+
+	if (!(pktap_v2_hdr->pth_flags & PTH_FLAG_DELAY_PKTAP))
+		return;
+
+	if (pktap_v2_hdr->pth_ipproto == IPPROTO_TCP) {
+		found = inp_findinpcb_procinfo(&tcbinfo,
+		    pktap_v2_hdr->pth_flowid, &soprocinfo);
+	} else if (pktap_v2_hdr->pth_ipproto == IPPROTO_UDP) {
+		found = inp_findinpcb_procinfo(&udbinfo,
+		    pktap_v2_hdr->pth_flowid, &soprocinfo);
+	} else {
+		found = inp_findinpcb_procinfo(&ripcbinfo,
+		    pktap_v2_hdr->pth_flowid, &soprocinfo);
+	}
+	if (found == 1) {
+		pktap_v2_set_procinfo(pktap_v2_hdr, &soprocinfo);
+	}
+}
+
 __private_extern__ void
 pktap_fill_proc_info(struct pktap_header *hdr, protocol_family_t proto,
 	struct mbuf *m, u_int32_t pre, int outgoing, struct ifnet *ifp)
 {
-	int found = 0;
-	struct so_procinfo soprocinfo;
-
 	/*
 	 * Getting the pid and procname is expensive
 	 * For outgoing, do the lookup only if there's an
@@ -823,21 +894,53 @@ pktap_fill_proc_info(struct pktap_header *hdr, protocol_family_t proto,
 	 */
 	if (outgoing != 0 && m->m_pkthdr.pkt_flowsrc == FLOWSRC_INPCB) {
 		/*
-		 * To avoid lock ordering issues we delay the process lookup
+		 * To avoid lock ordering issues we delay the proc UUID lookup
 		 * to the BPF read as we cannot
 		 * assume the socket lock is unlocked on output
 		 */
-		found = 0;
 		hdr->pth_flags |= PTH_FLAG_DELAY_PKTAP;
+		hdr->pth_flags |= PTH_FLAG_SOCKET;
 		hdr->pth_flowid = m->m_pkthdr.pkt_flowid;
-		if (m->m_pkthdr.pkt_flags & PKTF_FLOW_RAWSOCK)
+
+		if (m->m_pkthdr.pkt_flags & PKTF_FLOW_RAWSOCK) {
 			hdr->pth_ipproto = IPPROTO_RAW;
-		else		
+		} else {
 			hdr->pth_ipproto = m->m_pkthdr.pkt_proto;
-		if (m->m_pkthdr.pkt_flags & PKTF_NEW_FLOW)
+		}
+
+		if (hdr->pth_ipproto == IPPROTO_TCP) {
+			hdr->pth_pid = m->m_pkthdr.tx_tcp_pid;
+			hdr->pth_epid = m->m_pkthdr.tx_tcp_e_pid;
+		} else if (hdr->pth_ipproto == IPPROTO_UDP) {
+			hdr->pth_pid = m->m_pkthdr.tx_udp_pid;
+			hdr->pth_epid = m->m_pkthdr.tx_udp_e_pid;
+		} else if (hdr->pth_ipproto == IPPROTO_RAW) {
+			hdr->pth_pid = m->m_pkthdr.tx_rawip_pid;
+			hdr->pth_epid = m->m_pkthdr.tx_rawip_e_pid;
+		}
+
+		if (hdr->pth_pid != 0 && hdr->pth_pid != -1) {
+			proc_name(hdr->pth_pid, hdr->pth_comm, MAXCOMLEN);
+		} else {
+			hdr->pth_pid = -1;
+		}
+
+		if (hdr->pth_epid != 0 && hdr->pth_epid != -1) {
+			hdr->pth_flags|= PTH_FLAG_PROC_DELEGATED;
+			proc_name(hdr->pth_epid, hdr->pth_ecomm, MAXCOMLEN);
+		} else {
+			hdr->pth_epid = -1;
+		}
+
+		if (m->m_pkthdr.pkt_flags & PKTF_NEW_FLOW) {
 			hdr->pth_flags |= PTH_FLAG_NEW_FLOW;
+		}
 	} else if (outgoing == 0) {
+		int found = 0;
+		struct so_procinfo soprocinfo;
 		struct inpcb *inp = NULL;
+
+		memset(&soprocinfo, 0, sizeof(struct so_procinfo));
 
 		if (proto == PF_INET) {
 			struct ip ip;
@@ -969,21 +1072,23 @@ pktap_fill_proc_info(struct pktap_header *hdr, protocol_family_t proto,
 			}
 		}
 		if (inp != NULL) {
+			hdr->pth_flags |= PTH_FLAG_SOCKET;
 			if (inp->inp_state != INPCB_STATE_DEAD && inp->inp_socket != NULL) {
 				found = 1;
 				inp_get_soprocinfo(inp, &soprocinfo);
 			}
 			in_pcb_checkstate(inp, WNT_RELEASE, 0);
 		}
-	}
 done:
-	/*
-	 * -1 means PID not found
-	 */
-	hdr->pth_pid = -1;
-	hdr->pth_epid = -1;
+		/*
+		 * -1 means PID not found
+		 */
+		hdr->pth_pid = -1;
+		hdr->pth_epid = -1;
+
 	if (found != 0)
 		pktap_set_procinfo(hdr, &soprocinfo);
+}
 }
 
 __private_extern__ void
@@ -993,7 +1098,6 @@ pktap_bpf_tap(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
 	struct pktap_softc *pktap;
 	void (*bpf_tap_func)(ifnet_t, u_int32_t, mbuf_t, void *, size_t) =
 		outgoing ? bpf_tap_out : bpf_tap_in;
-
 
 	/*
 	 * Skip the coprocessor interface
@@ -1084,7 +1188,8 @@ pktap_bpf_tap(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
 					hdr->pth_dlt = DLT_APPLE_IP_OVER_IEEE1394;
 					break;
 				case IFT_OTHER:
-					if (strncmp(ifp->if_name, "utun", strlen("utun")) == 0) {
+					if (ifp->if_subfamily == IFNET_SUBFAMILY_IPSEC ||
+					    ifp->if_subfamily == IFNET_SUBFAMILY_UTUN) {
 						/*
 						 * For utun:
 						 * - incoming packets do not have the prefix set to four
@@ -1140,6 +1245,11 @@ pktap_bpf_tap(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
 				hdr->pth_frame_post_length = post;
 				hdr->pth_iftype = ifp->if_type;
 				hdr->pth_ifunit = ifp->if_unit;
+
+				if (m->m_pkthdr.pkt_flags & PKTF_KEEPALIVE)
+					hdr->pth_flags |= PTH_FLAG_KEEP_ALIVE;
+				if (m->m_pkthdr.pkt_flags & PKTF_TCP_REXMT)
+					hdr->pth_flags |= PTH_FLAG_REXMIT;
 
 				pktap_fill_proc_info(hdr, proto, m, pre, outgoing, ifp);
 
@@ -1210,5 +1320,165 @@ pktap_output(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
 		ifp->if_xname, proto, pre, post);
 
 	pktap_bpf_tap(ifp, proto, m, pre, post, 1);
+}
+
+
+void
+convert_to_pktap_header_to_v2(struct bpf_packet *bpf_pkt, bool truncate)
+{
+	struct pktap_header *pktap_header;
+	size_t extra_src_size;
+	struct pktap_buffer_v2_hdr_extra pktap_buffer_v2_hdr_extra;
+	struct pktap_v2_hdr_space *pktap_v2_hdr_space;
+	struct pktap_v2_hdr *pktap_v2_hdr;
+	uint8_t *ptr;
+
+	pktap_header = (struct pktap_header *)bpf_pkt->bpfp_header;
+
+	if (pktap_header->pth_type_next != PTH_TYPE_PACKET) {
+		return;
+	}
+
+	VERIFY(bpf_pkt->bpfp_header_length >= sizeof(struct pktap_header));
+
+	/*
+	 * extra_src_size is the length of the optional link layer header
+	 */
+	extra_src_size = bpf_pkt->bpfp_header_length -
+	    sizeof(struct pktap_header);
+
+	VERIFY(extra_src_size <= sizeof(union pktap_header_extra));
+
+	pktap_v2_hdr_space = &pktap_buffer_v2_hdr_extra.hdr_space;
+	pktap_v2_hdr = &pktap_v2_hdr_space->pth_hdr;
+	ptr = (uint8_t *) (pktap_v2_hdr + 1);
+
+	COPY_PKTAP_COMMON_FIELDS_TO_V2(pktap_v2_hdr, pktap_header);
+
+	/*
+	 * When truncating don't bother with the process UUIDs
+	 */
+	if (!truncate) {
+		if ((pktap_header->pth_flags & PTH_FLAG_DELAY_PKTAP)) {
+			pktap_v2_hdr->pth_uuid_offset = pktap_v2_hdr->pth_length;
+			pktap_v2_hdr->pth_length += sizeof(uuid_t);
+			uuid_clear(*(uuid_t *)ptr);
+			ptr += sizeof(uuid_t);
+			VERIFY((void *)ptr < (void *)(pktap_v2_hdr_space + 1));
+		} else if (!uuid_is_null(pktap_header->pth_uuid)) {
+			pktap_v2_hdr->pth_uuid_offset = pktap_v2_hdr->pth_length;
+			uuid_copy(*(uuid_t *)ptr, pktap_header->pth_uuid);
+			pktap_v2_hdr->pth_length += sizeof(uuid_t);
+			ptr += sizeof(uuid_t);
+			VERIFY((void *)ptr < (void *)(pktap_v2_hdr_space + 1));
+		}
+
+		if ((pktap_header->pth_flags & PTH_FLAG_DELAY_PKTAP)) {
+			if (pktap_header->pth_flags & PTH_FLAG_PROC_DELEGATED) {
+				pktap_v2_hdr->pth_e_uuid_offset = pktap_v2_hdr->pth_length;
+				uuid_clear(*(uuid_t *)ptr);
+				pktap_v2_hdr->pth_length += sizeof(uuid_t);
+				ptr += sizeof(uuid_t);
+				VERIFY((void *)ptr < (void *)(pktap_v2_hdr_space + 1));
+			}
+		} else if(!uuid_is_null(pktap_header->pth_euuid)) {
+			pktap_v2_hdr->pth_e_uuid_offset = pktap_v2_hdr->pth_length;
+			uuid_copy(*(uuid_t *)ptr, pktap_header->pth_euuid);
+			pktap_v2_hdr->pth_length += sizeof(uuid_t);
+			ptr += sizeof(uuid_t);
+			VERIFY((void *)ptr < (void *)(pktap_v2_hdr_space + 1));
+		}
+	}
+
+	if (pktap_header->pth_ifname[0] != 0) {
+		size_t strsize;
+
+		pktap_v2_hdr->pth_ifname_offset = pktap_v2_hdr->pth_length;
+
+		/*
+		 * Note: strlcpy() returns the length of the string so we need
+		 * to add one for the end-of-string
+		 */
+		strsize = 1 + strlcpy((char *)ptr, pktap_header->pth_ifname,
+		    sizeof(pktap_v2_hdr_space->pth_ifname));
+		pktap_v2_hdr->pth_length += strsize;
+		ptr += strsize;
+		VERIFY((void *)ptr < (void *)(pktap_v2_hdr_space + 1));
+	}
+
+	/*
+	 * Do not waste space with the process name if we do not have a pid
+	 */
+	if (pktap_header->pth_pid != 0 && pktap_header->pth_pid != -1) {
+		if (pktap_header->pth_comm[0] != 0) {
+			size_t strsize;
+
+			pktap_v2_hdr->pth_comm_offset = pktap_v2_hdr->pth_length;
+
+			strsize = 1 + strlcpy((char *)ptr, pktap_header->pth_comm,
+			    sizeof(pktap_v2_hdr_space->pth_comm));
+			pktap_v2_hdr->pth_length += strsize;
+			ptr += strsize;
+			VERIFY((void *)ptr < (void *)(pktap_v2_hdr_space + 1));
+		} else if ((pktap_header->pth_flags & PTH_FLAG_DELAY_PKTAP)) {
+			size_t strsize = sizeof(pktap_v2_hdr_space->pth_comm);
+
+			pktap_v2_hdr->pth_comm_offset = pktap_v2_hdr->pth_length;
+
+			*ptr = 0;	/* empty string by default */
+			pktap_v2_hdr->pth_length += strsize;
+			ptr += strsize;
+			VERIFY((void *)ptr < (void *)(pktap_v2_hdr_space + 1));
+		}
+	}
+
+	/*
+	 * Do not waste space with the effective process name if we do not have
+	 * an effective pid or it's the same as the pid
+	 */
+	if (pktap_header->pth_epid != 0 && pktap_header->pth_epid != -1 &&
+	    pktap_header->pth_epid != pktap_header->pth_pid) {
+		if (pktap_header->pth_ecomm[0] != 0) {
+			size_t strsize;
+
+			pktap_v2_hdr->pth_e_comm_offset = pktap_v2_hdr->pth_length;
+
+			strsize = 1 + strlcpy((char *)ptr, pktap_header->pth_ecomm,
+			    sizeof(pktap_v2_hdr_space->pth_e_comm));
+			pktap_v2_hdr->pth_length += strsize;
+			ptr += strsize;
+			VERIFY((void *)ptr < (void *)(pktap_v2_hdr_space + 1));
+		} else if ((pktap_header->pth_flags & PTH_FLAG_DELAY_PKTAP)) {
+			size_t strsize = sizeof(pktap_v2_hdr_space->pth_e_comm);
+
+			pktap_v2_hdr->pth_e_comm_offset = pktap_v2_hdr->pth_length;
+			*ptr = 0;	/* empty string by default */
+			pktap_v2_hdr->pth_length += strsize;
+			ptr += strsize;
+			VERIFY((void *)ptr < (void *)(pktap_v2_hdr_space + 1));
+		}
+	}
+
+	if (extra_src_size > 0) {
+		char *extra_src_ptr = (char *)(pktap_header + 1);
+		char *extra_dst_ptr = ((char *)pktap_v2_hdr) +
+		    pktap_v2_hdr->pth_length;
+
+		VERIFY(pktap_v2_hdr->pth_length + extra_src_size <=
+		    sizeof(struct pktap_buffer_v2_hdr_extra));
+
+		memcpy(extra_dst_ptr, extra_src_ptr, extra_src_size);
+	}
+
+	VERIFY(pktap_v2_hdr->pth_length + extra_src_size <=
+	    bpf_pkt->bpfp_header_length);
+
+	memcpy(bpf_pkt->bpfp_header, pktap_v2_hdr,
+	    pktap_v2_hdr->pth_length + extra_src_size);
+
+	bpf_pkt->bpfp_total_length += pktap_v2_hdr->pth_length -
+	    sizeof(struct pktap_header);
+	bpf_pkt->bpfp_header_length += pktap_v2_hdr->pth_length -
+	    sizeof(struct pktap_header);
 }
 

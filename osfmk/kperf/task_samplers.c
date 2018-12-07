@@ -33,22 +33,15 @@
 
 #include <kern/task.h>
 
-extern boolean_t memorystatus_proc_is_dirty_unsafe(void *v);
+extern void memorystatus_proc_flags_unsafe(void * v, boolean_t *is_dirty,
+		boolean_t *is_dirty_tracked, boolean_t *allow_idle_exit);
 
 void
-kperf_task_snapshot_sample(struct kperf_task_snapshot *tksn,
-                           struct kperf_context *ctx)
+kperf_task_snapshot_sample(task_t task, struct kperf_task_snapshot *tksn)
 {
-	thread_t thread;
-	task_t task;
-
 	BUF_INFO(PERF_TK_SNAP_SAMPLE | DBG_FUNC_START);
 
 	assert(tksn != NULL);
-	assert(ctx != NULL);
-
-	thread = ctx->cur_thread;
-	task = get_threadtask(thread);
 
 	tksn->kptksn_flags = 0;
 	if (task->effective_policy.tep_darwinbg) {
@@ -61,8 +54,16 @@ kperf_task_snapshot_sample(struct kperf_task_snapshot *tksn,
 		tksn->kptksn_flags |= KPERF_TASK_FLAG_BOOSTED;
 	}
 #if CONFIG_MEMORYSTATUS
-	if (memorystatus_proc_is_dirty_unsafe(task->bsd_info)) {
+	boolean_t dirty = FALSE, dirty_tracked = FALSE, allow_idle_exit = FALSE;
+	memorystatus_proc_flags_unsafe(task->bsd_info, &dirty, &dirty_tracked, &allow_idle_exit);
+	if (dirty) {
 		tksn->kptksn_flags |= KPERF_TASK_FLAG_DIRTY;
+	}
+	if (dirty_tracked) {
+		tksn->kptksn_flags |= KPERF_TASK_FLAG_DIRTY_TRACKED;
+	}
+	if (allow_idle_exit) {
+		tksn->kptksn_flags |= KPERF_TASK_ALLOW_IDLE_EXIT;
 	}
 #endif
 
@@ -95,4 +96,12 @@ kperf_task_snapshot_log(struct kperf_task_snapshot *tksn)
 	                                UPPER_32(tksn->kptksn_system_time_in_terminated_threads),
 	                                LOWER_32(tksn->kptksn_system_time_in_terminated_threads));
 #endif /* defined(__LP64__) */
+}
+
+void
+kperf_task_info_log(struct kperf_context *ctx)
+{
+	assert(ctx != NULL);
+
+	BUF_DATA(PERF_TK_INFO_DATA, ctx->cur_pid);
 }

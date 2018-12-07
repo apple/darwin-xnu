@@ -548,8 +548,8 @@ IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxP
         alignment = 1;
 
     alignMask = alignment - 1;
-    adjustedSize = (2 * size) + sizeofIOLibPageMallocHeader;
-    if (adjustedSize < size) return (0);
+
+    if (os_mul_and_add_overflow(2, size, sizeofIOLibPageMallocHeader, &adjustedSize)) return (0);
 
     contiguous = (contiguous && (adjustedSize > page_size))
                    || (alignment > page_size);

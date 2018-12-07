@@ -394,3 +394,31 @@ IOReturn IOMultiMemoryDescriptor::getPageCounts(IOByteCount * pResidentPageCount
 
     return (err);
 }
+
+uint64_t IOMultiMemoryDescriptor::getPreparationID( void )
+{
+
+    if (!super::getKernelReserved())
+    {
+        return (kIOPreparationIDUnsupported);
+    }
+
+    for (unsigned index = 0; index < _descriptorsCount; index++)
+    {
+        uint64_t preparationID = _descriptors[index]->getPreparationID();
+
+        if ( preparationID == kIOPreparationIDUnsupported )
+        {
+           return (kIOPreparationIDUnsupported);
+        }
+
+        if ( preparationID == kIOPreparationIDUnprepared )
+        {
+            return (kIOPreparationIDUnprepared);
+        }
+    }
+
+    super::setPreparationID();
+
+    return (super::getPreparationID());
+}

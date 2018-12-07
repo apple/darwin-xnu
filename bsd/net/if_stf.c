@@ -317,7 +317,7 @@ stfattach(void)
 	stfinit();
 
 	error = proto_register_plumber(PF_INET6, APPLE_IF_FAM_STF,
-								   stf_attach_inet6, NULL);
+	    stf_attach_inet6, NULL);
 	if (error != 0)
 		printf("proto_register_plumber failed for AF_INET6 error=%d\n", error);
 

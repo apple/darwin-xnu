@@ -33,6 +33,7 @@
  */
 
 #include <corecrypto/ccsha2.h>
+#include "ccsha2_internal.h"
 #include <corecrypto/cc_runtime_config.h>
 
 #include "corecrypto/fipspost_trace.h"
@@ -43,8 +44,11 @@ const struct ccdigest_info *ccsha256_di(void)
 
 #if  CCSHA2_VNG_INTEL
 #if defined (__x86_64__)
-    return ( (CC_HAS_AVX2() ? &ccsha256_vng_intel_AVX2_di : 
-    		( (CC_HAS_AVX1() ? &ccsha256_vng_intel_AVX1_di : 
+    if (CC_HAS_AVX512_AND_IN_KERNEL())
+        return &ccsha256_vng_intel_SupplementalSSE3_di;
+    else
+    return ( (CC_HAS_AVX2() ? &ccsha256_vng_intel_AVX2_di :
+    		( (CC_HAS_AVX1() ? &ccsha256_vng_intel_AVX1_di :
 			&ccsha256_vng_intel_SupplementalSSE3_di ) ) ) ) ;
 #else
     return &ccsha256_vng_intel_SupplementalSSE3_di;

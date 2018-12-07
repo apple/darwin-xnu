@@ -158,10 +158,10 @@ extern	char	vm_page_non_speculative_pageable_states[];
 extern	char	vm_page_active_or_inactive_states[];
 
 
-#define	VM_PAGE_INACTIVE(m)			(vm_page_inactive_states[m->vm_page_q_state])
-#define VM_PAGE_PAGEABLE(m)			(vm_page_pageable_states[m->vm_page_q_state])
-#define VM_PAGE_NON_SPECULATIVE_PAGEABLE(m)	(vm_page_non_speculative_pageable_states[m->vm_page_q_state])
-#define	VM_PAGE_ACTIVE_OR_INACTIVE(m)		(vm_page_active_or_inactive_states[m->vm_page_q_state])
+#define	VM_PAGE_INACTIVE(m)			(vm_page_inactive_states[m->vmp_q_state])
+#define VM_PAGE_PAGEABLE(m)			(vm_page_pageable_states[m->vmp_q_state])
+#define VM_PAGE_NON_SPECULATIVE_PAGEABLE(m)	(vm_page_non_speculative_pageable_states[m->vmp_q_state])
+#define	VM_PAGE_ACTIVE_OR_INACTIVE(m)		(vm_page_active_or_inactive_states[m->vmp_q_state])
 
 
 #define	VM_PAGE_NOT_ON_Q		0		/* page is not present on any queue, nor is it wired... mainly a transient state */
@@ -184,49 +184,45 @@ extern	char	vm_page_active_or_inactive_states[];
 #define	VM_PAGE_Q_STATE_ARRAY_SIZE	(VM_PAGE_Q_STATE_LAST_VALID_VALUE+1)
 
 
-#define	pageq	pageq_un.vm_page_pageq
-#define snext	pageq_un.vm_page_snext
+/*
+ * The structure itself. See the block comment above for what (O) and (P) mean.
+ */
+#define vmp_pageq vmp_q_un.vmp_q_pageq
+#define vmp_snext vmp_q_un.vmp_q_snext
 
 struct vm_page {
 	union {
-		vm_page_queue_chain_t	vm_page_pageq;	/* queue info for FIFO queue or free list (P) */
-		struct vm_page	*vm_page_snext;
-	} pageq_un;
+		vm_page_queue_chain_t vmp_q_pageq;           /* queue info for FIFO queue or free list (P) */
+		struct vm_page        *vmp_q_snext;
+	} vmp_q_un;
 
-	vm_page_queue_chain_t	listq;	/* all pages in same object (O) */
+	vm_page_queue_chain_t         vmp_listq;           /* all pages in same object (O) */
 
 #if CONFIG_BACKGROUND_QUEUE
-        vm_page_queue_chain_t	vm_page_backgroundq;	/* anonymous pages in the background pool (P) */
+        vm_page_queue_chain_t         vmp_backgroundq;	   /* anonymous pages in the background pool (P) */
 #endif
 
-	vm_object_offset_t	offset;	/* offset into that object (O,P) */
-	vm_page_object_t	vm_page_object;		/* which object am I in (O&P) */
+	vm_object_offset_t            vmp_offset;          /* offset into that object (O,P) */
+	vm_page_object_t              vmp_object;          /* which object am I in (O&P) */
 
 	/*
-	 * The following word of flags is protected
-	 * by the "page queues" lock.
+	 * The following word of flags is always protected by the "page queues" lock.
 	 *
-	 * we use the 'wire_count' field to store the local
-	 * queue id if local queues are enabled...
-	 * see the comments at 'vm_page_queues_remove' as to
-	 * why this is safe to do
+	 * We use 'vmp_wire_count' to store the local queue id if local queues are enabled.
+	 * See the comments at 'vm_page_queues_remove' as to why this is safe to do.
 	 */
-#define local_id wire_count
-	unsigned int	wire_count:16,	/* how many wired down maps use me? (O&P) */
-		        vm_page_q_state:4,	/* which q is the page on (P) */
-
-		        vm_page_in_background:1,
-		        vm_page_on_backgroundq:1,
-	/* boolean_t */
-			gobbled:1,      /* page used internally (P) */
-		        laundry:1,	/* page is being cleaned now (P)*/
-			no_cache:1,	/* page is not to be cached and should
-					 * be reused ahead of other pages (P) */
-			private:1,	/* Page should not be returned to
-					 *  the free list (P) */
-			reference:1,	/* page has been used (P) */
-
-			__unused_pageq_bits:5;	/* 5 bits available here */
+#define vmp_local_id vmp_wire_count
+	unsigned int vmp_wire_count:16,      /* how many wired down maps use me? (O&P) */
+	             vmp_q_state:4,          /* which q is the page on (P) */
+	             vmp_in_background:1,
+	             vmp_on_backgroundq:1,
+	             vmp_gobbled:1,          /* page used internally (P) */
+	             vmp_laundry:1,          /* page is being cleaned now (P)*/
+	             vmp_no_cache:1,         /* page is not to be cached and should */
+	                                     /* be reused ahead of other pages (P) */
+	             vmp_private:1,          /* Page should not be returned to the free list (P) */
+	             vmp_reference:1,        /* page has been used (P) */
+	             vmp_unused_page_bits:5;
 
 	/*
 	 * MUST keep the 2 32 bit words used as bit fields
@@ -236,62 +232,48 @@ struct vm_page {
 	 * they are protected by 2 different locks, this
 	 * is a real problem
 	 */
-	vm_page_packed_t next_m;	/* VP bucket link (O) */
+	vm_page_packed_t vmp_next_m;            /* VP bucket link (O) */
 
 	/*
-	 * The following word of flags is protected
-	 * by the "VM object" lock.
-	 */
-	unsigned int
-	/* boolean_t */	busy:1,		/* page is in transit (O) */
-			wanted:1,	/* someone is waiting for page (O) */
-			tabled:1,	/* page is in VP table (O) */
-			hashed:1,	/* page is in vm_page_buckets[]
-					   (O) + the bucket lock */
-			fictitious:1,	/* Physical page doesn't exist (O) */
-	/*
-	 * IMPORTANT: the "pmapped", "xpmapped" and "clustered" bits can be modified while holding the
+	 * The following word of flags is protected by the "VM object" lock.
+ 	 *
+	 * IMPORTANT: the "vmp_pmapped", "vmp_xpmapped" and "vmp_clustered" bits can be modified while holding the
 	 * VM object "shared" lock + the page lock provided through the pmap_lock_phys_page function.
-	 * This is done in vm_fault_enter and the CONSUME_CLUSTERED macro.
+	 * This is done in vm_fault_enter() and the CONSUME_CLUSTERED macro.
 	 * It's also ok to modify them behind just the VM object "exclusive" lock.
 	 */
-			clustered:1,	/* page is not the faulted page (O) or (O-shared AND pmap_page) */
-			pmapped:1,     	/* page has been entered at some
-               				 * point into a pmap (O) or (O-shared AND pmap_page) */
-		        xpmapped:1,	/* page has been entered with execute permission (O)
-					   or (O-shared AND pmap_page) */
-
-		        wpmapped:1,     /* page has been entered at some
-					 * point into a pmap for write (O) */
-		        free_when_done:1,	/* page is to be freed once cleaning is completed (O) */
-			absent:1,	/* Data has been requested, but is
-					 *  not yet available (O) */
-			error:1,	/* Data manager was unable to provide
-					 *  data due to error (O) */
-			dirty:1,	/* Page must be cleaned (O) */
-			cleaning:1,	/* Page clean has begun (O) */
-			precious:1,	/* Page is precious; data must be
-					 *  returned even if clean (O) */
-			overwriting:1,  /* Request to unlock has been made
-					 * without having data. (O)
-					 * [See vm_fault_page_overwrite] */
-			restart:1,	/* Page was pushed higher in shadow
-					   chain by copy_call-related pagers;
-					   start again at top of chain */
-			unusual:1,	/* Page is absent, error, restart or
-					   page locked */
-			cs_validated:1,    /* code-signing: page was checked */	
-			cs_tainted:1,	   /* code-signing: page is tainted */
-			cs_nx:1,	   /* code-signing: page is nx */
-			reusable:1,
-		        lopage:1,
-			slid:1,
-		        written_by_kernel:1,	/* page was written by kernel (i.e. decompressed) */
-			__unused_object_bits:7;  /* 7 bits available here */
+	unsigned int    vmp_busy:1,           /* page is in transit (O) */
+	                vmp_wanted:1,         /* someone is waiting for page (O) */
+	                vmp_tabled:1,         /* page is in VP table (O) */
+	                vmp_hashed:1,         /* page is in vm_page_buckets[] (O) + the bucket lock */
+	                vmp_fictitious:1,     /* Physical page doesn't exist (O) */
+	                vmp_clustered:1,      /* page is not the faulted page (O) or (O-shared AND pmap_page) */
+	                vmp_pmapped:1,        /* page has at some time been entered into a pmap (O) or */
+	                                      /* (O-shared AND pmap_page) */
+	                vmp_xpmapped:1,       /* page has been entered with execute permission (O) or */
+	                                      /* (O-shared AND pmap_page) */
+	                vmp_wpmapped:1,       /* page has been entered at some point into a pmap for write (O) */
+	                vmp_free_when_done:1, /* page is to be freed once cleaning is completed (O) */
+	                vmp_absent:1,         /* Data has been requested, but is not yet available (O) */
+	                vmp_error:1,          /* Data manager was unable to provide data due to error (O) */
+	                vmp_dirty:1,          /* Page must be cleaned (O) */
+	                vmp_cleaning:1,       /* Page clean has begun (O) */
+	                vmp_precious:1,       /* Page is precious; data must be returned even if clean (O) */
+	                vmp_overwriting:1,    /* Request to unlock has been made without having data. (O) */
+	                                      /* [See vm_fault_page_overwrite] */
+	                vmp_restart:1,        /* Page was pushed higher in shadow chain by copy_call-related pagers */
+	                                      /* start again at top of chain */
+	                vmp_unusual:1,        /* Page is absent, error, restart or page locked */
+	                vmp_cs_validated:1,   /* code-signing: page was checked */	
+	                vmp_cs_tainted:1,     /* code-signing: page is tainted */
+	                vmp_cs_nx:1,          /* code-signing: page is nx */
+	                vmp_reusable:1,
+	                vmp_lopage:1,
+	                vmp_written_by_kernel:1, /* page was written by kernel (i.e. decompressed) */
+	                vmp_unused_object_bits:8;
 
 #if    !defined(__arm__) && !defined(__arm64__)
-	ppnum_t		phys_page;	/* Physical address of page, passed
-					 *  to pmap_enter (read-only) */
+	ppnum_t         vmp_phys_page;        /* Physical page number of the page */
 #endif
 };
 
@@ -309,7 +291,7 @@ extern	unsigned int vm_first_phys_ppnum;
 struct vm_page_with_ppnum {
 	struct	vm_page	vm_page_wo_ppnum;
 
-	ppnum_t	phys_page;
+	ppnum_t	vmp_phys_page;
 };
 typedef struct vm_page_with_ppnum *vm_page_with_ppnum_t;
 
@@ -319,13 +301,13 @@ static inline ppnum_t VM_PAGE_GET_PHYS_PAGE(vm_page_t m)
 	if (m >= vm_page_array_beginning_addr && m < vm_page_array_ending_addr)
 		return ((ppnum_t)((uintptr_t)(m - vm_page_array_beginning_addr) + vm_first_phys_ppnum));
 	else
-		return (((vm_page_with_ppnum_t)m)->phys_page);
+		return (((vm_page_with_ppnum_t)m)->vmp_phys_page);
 }
 
 #define VM_PAGE_SET_PHYS_PAGE(m, ppnum)		\
 	MACRO_BEGIN				\
 	if ((m) < vm_page_array_beginning_addr || (m) >= vm_page_array_ending_addr)	\
-		((vm_page_with_ppnum_t)(m))->phys_page = ppnum;	\
+		((vm_page_with_ppnum_t)(m))->vmp_phys_page = ppnum;	\
 	assert(ppnum == VM_PAGE_GET_PHYS_PAGE(m));		\
 	MACRO_END
 
@@ -340,10 +322,10 @@ struct vm_page_with_ppnum {
 typedef struct vm_page_with_ppnum *vm_page_with_ppnum_t;
 
 
-#define	VM_PAGE_GET_PHYS_PAGE(page)	(page)->phys_page
+#define	VM_PAGE_GET_PHYS_PAGE(page)	(page)->vmp_phys_page
 #define VM_PAGE_SET_PHYS_PAGE(page, ppnum)	\
 	MACRO_BEGIN				\
-	(page)->phys_page = ppnum;		\
+	(page)->vmp_phys_page = ppnum;		\
 	MACRO_END
 
 #define VM_PAGE_GET_CLUMP(m)    ((VM_PAGE_GET_PHYS_PAGE(m)) >> vm_clump_shift)
@@ -398,13 +380,13 @@ static inline uintptr_t	vm_page_unpack_ptr(uintptr_t p)
 #define	VM_PAGE_PACK_PTR(p)	vm_page_pack_ptr((uintptr_t)(p))
 #define	VM_PAGE_UNPACK_PTR(p)	vm_page_unpack_ptr((uintptr_t)(p))
 
-#define	VM_PAGE_OBJECT(p)	((vm_object_t)(VM_PAGE_UNPACK_PTR(p->vm_page_object)))
+#define	VM_PAGE_OBJECT(p)	((vm_object_t)(VM_PAGE_UNPACK_PTR(p->vmp_object)))
 #define	VM_PAGE_PACK_OBJECT(o)	((vm_page_object_t)(VM_PAGE_PACK_PTR(o)))
 
 
 #define	VM_PAGE_ZERO_PAGEQ_ENTRY(p)	\
 MACRO_BEGIN				\
-        (p)->snext = 0;			\
+        (p)->vmp_snext = 0;		\
 MACRO_END
 
 
@@ -560,7 +542,7 @@ MACRO_BEGIN                                                                     
         __n = VM_PAGE_GET_PHYS_PAGE(elt) & vm_clump_mask;                                                \
         /* scan backward looking for a buddy page */                                                     \
         for(__i=0, __p=(elt)-1; __i<__n && __p>=vm_page_array_beginning_addr; __i++, __p--) {            \
-            if(__p->vm_page_q_state == VM_PAGE_ON_FREE_Q && __clump_num == VM_PAGE_GET_CLUMP(__p)) {     \
+            if(__p->vmp_q_state == VM_PAGE_ON_FREE_Q && __clump_num == VM_PAGE_GET_CLUMP(__p)) {     \
                 if(__prev == 0) __prev = (vm_page_queue_entry_t) __p;                                    \
                 __first = (vm_page_queue_entry_t) __p;                                                   \
                 __n_free++;                                                                              \
@@ -568,7 +550,7 @@ MACRO_BEGIN                                                                     
         }                                                                                                \
         /* scan forward looking for a buddy page */                                                      \
         for(__i=__n+1, __p=(elt)+1; __i<vm_clump_size && __p<vm_page_array_boundary; __i++, __p++) {     \
-            if(__p->vm_page_q_state == VM_PAGE_ON_FREE_Q && __clump_num == VM_PAGE_GET_CLUMP(__p)) {     \
+            if(__p->vmp_q_state == VM_PAGE_ON_FREE_Q && __clump_num == VM_PAGE_GET_CLUMP(__p)) {     \
                 __DEBUG_CHECK_BUDDIES(__check, __prev, __p, field);                                      \
                 if(__prev == 0) __prev = (vm_page_queue_entry_t) VM_PAGE_UNPACK_PTR(__p->field.prev);    \
                 __last = (vm_page_queue_entry_t) __p;                                                    \
@@ -841,14 +823,14 @@ MACRO_END
 #define	VM_PAGE_PACK_PTR(p)	(p)
 #define	VM_PAGE_UNPACK_PTR(p)	((uintptr_t)(p))
 
-#define	VM_PAGE_OBJECT(p)	(vm_object_t)(p->vm_page_object)
+#define	VM_PAGE_OBJECT(p)	(vm_object_t)(p->vmp_object)
 #define	VM_PAGE_PACK_OBJECT(o)	((vm_page_object_t)(VM_PAGE_PACK_PTR(o)))
 
 
 #define	VM_PAGE_ZERO_PAGEQ_ENTRY(p)	\
 MACRO_BEGIN				\
-        (p)->pageq.next = 0;		\
-        (p)->pageq.prev = 0;		\
+        (p)->vmp_pageq.next = 0;		\
+        (p)->vmp_pageq.prev = 0;		\
 MACRO_END
 
 #define	VM_PAGE_CONVERT_TO_QUEUE_ENTRY(p)	((queue_entry_t)(p))
@@ -940,9 +922,9 @@ extern	void	vm_page_add_to_backgroundq(vm_page_t mem, boolean_t first);
 extern	void	vm_page_remove_from_backgroundq(vm_page_t mem);
 #endif
 
-#define VM_PAGE_WIRED(m)	((m)->vm_page_q_state == VM_PAGE_IS_WIRED)
-#define NEXT_PAGE(m)		((m)->snext)
-#define NEXT_PAGE_PTR(m)	(&(m)->snext)
+#define VM_PAGE_WIRED(m)	((m)->vmp_q_state == VM_PAGE_IS_WIRED)
+#define NEXT_PAGE(m)		((m)->vmp_snext)
+#define NEXT_PAGE_PTR(m)	(&(m)->vmp_snext)
 
 /*
  * XXX	The unusual bit should not be necessary.  Most of the bit
@@ -1147,8 +1129,6 @@ unsigned int	vm_page_free_min;	/* When to wakeup pageout */
 extern
 unsigned int	vm_page_throttle_limit;	/* When to throttle new page creation */
 extern
-uint32_t	vm_page_creation_throttle;	/* When to throttle new page creation */
-extern
 unsigned int	vm_page_inactive_target;/* How many do we want inactive? */
 #if CONFIG_SECLUDED_MEMORY
 extern
@@ -1157,11 +1137,7 @@ unsigned int	vm_page_secluded_target;/* How many do we want secluded? */
 extern
 unsigned int	vm_page_anonymous_min;	/* When it's ok to pre-clean */
 extern
-unsigned int	vm_page_inactive_min;   /* When to wakeup pageout */
-extern
 unsigned int	vm_page_free_reserved;	/* How many pages reserved to do pageout */
-extern
-unsigned int	vm_page_throttle_count;	/* Count of page allocations throttled */
 extern
 unsigned int	vm_page_gobble_count;
 extern
@@ -1285,6 +1261,9 @@ extern void		vm_page_free_unlocked(
 	                                vm_page_t	page,
 					boolean_t	remove_from_hash);
 
+extern void             vm_page_balance_inactive(
+					int             max_to_move);
+
 extern void		vm_page_activate(
 					vm_page_t	page);
 
@@ -1384,6 +1363,9 @@ extern void		vm_page_validate_cs(vm_page_t	page);
 extern void		vm_page_validate_cs_mapped(
 	vm_page_t	page,
 	const void	*kaddr);
+extern void		vm_page_validate_cs_mapped_slow(
+	vm_page_t	page,
+	const void	*kaddr);
 extern void		vm_page_validate_cs_mapped_chunk(
 	vm_page_t	page,
 	const void	*kaddr,
@@ -1434,29 +1416,32 @@ extern void memorystatus_pages_update(unsigned int pages_avail);
 #endif /* CONFIG_JETSAM */
 
 /*
- *	Functions implemented as macros. m->wanted and m->busy are
- *	protected by the object lock.
+ * Functions implemented as macros. m->vmp_wanted and m->vmp_busy are
+ * protected by the object lock.
  */
 
 #if CONFIG_EMBEDDED
 #define SET_PAGE_DIRTY(m, set_pmap_modified)				\
 		MACRO_BEGIN						\
 		vm_page_t __page__ = (m);				\
-		if (__page__->dirty == FALSE && (set_pmap_modified)) {	\
+		if (__page__->vmp_pmapped == TRUE &&			\
+		    __page__->vmp_wpmapped == TRUE &&			\
+		    __page__->vmp_dirty == FALSE &&			\
+		    (set_pmap_modified)) {				\
 			pmap_set_modify(VM_PAGE_GET_PHYS_PAGE(__page__)); \
 		}							\
-		__page__->dirty = TRUE;					\
+		__page__->vmp_dirty = TRUE;				\
 		MACRO_END
 #else /* CONFIG_EMBEDDED */
 #define SET_PAGE_DIRTY(m, set_pmap_modified)				\
 		MACRO_BEGIN						\
 		vm_page_t __page__ = (m);				\
-		__page__->dirty = TRUE;					\
+		__page__->vmp_dirty = TRUE;				\
 		MACRO_END
 #endif /* CONFIG_EMBEDDED */
 
 #define PAGE_ASSERT_WAIT(m, interruptible)			\
-		(((m)->wanted = TRUE),				\
+		(((m)->vmp_wanted = TRUE),			\
 		 assert_wait((event_t) (m), (interruptible)))
 
 #if CONFIG_IOSCHED
@@ -1464,23 +1449,23 @@ extern void memorystatus_pages_update(unsigned int pages_avail);
 		vm_page_sleep(o, m, interruptible)
 #else
 #define PAGE_SLEEP(o, m, interruptible)				\
-	(((m)->wanted = TRUE),					\
+	(((m)->vmp_wanted = TRUE),				\
 	 thread_sleep_vm_object((o), (m), (interruptible)))
 #endif
 
 #define PAGE_WAKEUP_DONE(m)					\
 		MACRO_BEGIN					\
-		(m)->busy = FALSE;				\
-		if ((m)->wanted) {				\
-			(m)->wanted = FALSE;			\
+		(m)->vmp_busy = FALSE;				\
+		if ((m)->vmp_wanted) {				\
+			(m)->vmp_wanted = FALSE;		\
 			thread_wakeup((event_t) (m));		\
 		}						\
 		MACRO_END
 
 #define PAGE_WAKEUP(m)						\
 		MACRO_BEGIN					\
-		if ((m)->wanted) {				\
-			(m)->wanted = FALSE;			\
+		if ((m)->vmp_wanted) {				\
+			(m)->vmp_wanted = FALSE;		\
 			thread_wakeup((event_t) (m));		\
 		}						\
 		MACRO_END
@@ -1523,7 +1508,7 @@ extern void memorystatus_pages_update(unsigned int pages_avail);
 #if DEVELOPMENT || DEBUG
 #define VM_PAGE_SPECULATIVE_USED_ADD()				\
 	MACRO_BEGIN						\
-	OSAddAtomic(1, &vm_page_speculative_used);	\
+	OSAddAtomic(1, &vm_page_speculative_used);		\
 	MACRO_END
 #else
 #define	VM_PAGE_SPECULATIVE_USED_ADD()
@@ -1534,16 +1519,16 @@ extern void memorystatus_pages_update(unsigned int pages_avail);
 	MACRO_BEGIN						\
 	ppnum_t	__phys_page;					\
 	__phys_page = VM_PAGE_GET_PHYS_PAGE(mem);		\
-	pmap_lock_phys_page(__phys_page);	\
-	if (mem->clustered) {					\
+	pmap_lock_phys_page(__phys_page);			\
+	if (mem->vmp_clustered) {				\
 		vm_object_t o;					\
 		o = VM_PAGE_OBJECT(mem);			\
 	        assert(o);					\
 	        o->pages_used++;				\
-		mem->clustered = FALSE;				\
+		mem->vmp_clustered = FALSE;			\
 		VM_PAGE_SPECULATIVE_USED_ADD();			\
 	}							\
-	pmap_unlock_phys_page(__phys_page);	\
+	pmap_unlock_phys_page(__phys_page);			\
 	MACRO_END
 
 
@@ -1610,8 +1595,8 @@ extern unsigned int vm_max_delayed_work_limit;
 
 #define VM_PAGE_ADD_DELAYED_WORK(dwp, mem, dw_cnt)		\
 	MACRO_BEGIN						\
-	if (mem->busy == FALSE) {				\
-		mem->busy = TRUE;				\
+	if (mem->vmp_busy == FALSE) {				\
+		mem->vmp_busy = TRUE;				\
 		if ( !(dwp->dw_mask & DW_vm_page_free))		\
 			dwp->dw_mask |= (DW_clear_busy | DW_PAGE_WAKEUP); \
 	}							\
@@ -1631,6 +1616,12 @@ extern void vm_page_remove_internal(vm_page_t page);
 extern void vm_page_enqueue_inactive(vm_page_t mem, boolean_t first);
 extern void vm_page_enqueue_active(vm_page_t mem, boolean_t first);
 extern void vm_page_check_pageable_safe(vm_page_t page);
+
+#if CONFIG_SECLUDED_MEMORY
+extern uint64_t secluded_shutoff_trigger;
+extern void start_secluded_suppression(task_t);
+extern void stop_secluded_suppression(task_t);
+#endif /* CONFIG_SECLUDED_MEMORY */
 
 
 #endif	/* _VM_VM_PAGE_H_ */

@@ -584,6 +584,7 @@ IOGetVolumeCryptKey(dev_t block_dev,  OSString ** pKeyUUID,
 
 IOReturn
 IOPolledFileOpen(const char * filename,
+                 uint32_t flags,
                  uint64_t setFileSize, uint64_t fsFreeSize,
                  void * write_file_addr, size_t write_file_len,
                  IOPolledFileIOVars ** fileVars,
@@ -614,7 +615,7 @@ IOPolledFileOpen(const char * filename,
         clock_get_uptime(&startTime);
 
         vars->fileRef = kern_open_file_for_direct_io(filename,
-                                                     (write_file_addr != NULL) || (0 != setFileSize),
+                                                     flags,
                                                      &file_extent_callback, &ctx,
                                                      setFileSize,
                                                      fsFreeSize,

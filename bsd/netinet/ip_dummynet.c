@@ -2421,7 +2421,7 @@ dummynet_get(struct sockopt *sopt)
 	for (i = 0; i < 10; i++) {
 		size = dn_calc_size(is64user);
 		lck_mtx_unlock(dn_mutex);
-		buf = _MALLOC(size, M_TEMP, M_WAITOK);
+		buf = _MALLOC(size, M_TEMP, M_WAITOK | M_ZERO);
 		if (buf == NULL)
 			return(ENOBUFS);
 		lck_mtx_lock(dn_mutex);

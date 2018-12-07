@@ -230,6 +230,9 @@ The socket is shut down for writing
 or the socket is connection-mode and is no longer connected.
 In the latter case, and if the socket is of type SOCK_STREAM,
 the SIGPIPE signal is generated to the calling thread.
+.\" ==========
+.It Bq Er EADDRNOTAVAIL
+The specified address is not available or no longer available on this machine.
 .El
 .Pp
 The

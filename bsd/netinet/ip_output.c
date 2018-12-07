@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -105,6 +105,9 @@
 #include <netinet/ip_var.h>
 #include <netinet/kpi_ipfilter_var.h>
 #include <netinet/in_tclass.h>
+#include <netinet/udp.h>
+
+#include <netinet6/nd6.h>
 
 #if CONFIG_MACF_NET
 #include <security/mac_framework.h>
@@ -350,6 +353,8 @@ ip_output_list(struct mbuf *m0, int packetchain, struct mbuf *opt,
 		uint32_t raw;
 	} ipobf = { .raw = 0 };
 
+	int interface_mtu = 0;
+
 /*
  * Here we check for restrictions when sending frames.
  * N.B.: IPv4 over internal co-processor interfaces is not allowed.
@@ -357,7 +362,7 @@ ip_output_list(struct mbuf *m0, int packetchain, struct mbuf *opt,
 #define	IP_CHECK_RESTRICTIONS(_ifp, _ipobf) 				\
 	(((_ipobf).nocell && IFNET_IS_CELLULAR(_ifp)) ||		\
 	 ((_ipobf).noexpensive && IFNET_IS_EXPENSIVE(_ifp)) ||		\
-          (IFNET_IS_INTCOPROC(_ifp)) ||					\
+         (IFNET_IS_INTCOPROC(_ifp)) ||					\
 	 (!(_ipobf).awdl_unrestricted && IFNET_IS_AWDL_RESTRICTED(_ifp)))
 
 	if (ip_output_measure)
@@ -1822,11 +1827,19 @@ pass:
 	ip_output_checksum(ifp, m, (IP_VHL_HL(ip->ip_vhl) << 2),
 	    ip->ip_len, &sw_csum);
 
+	interface_mtu = ifp->if_mtu;
+
+	if (INTF_ADJUST_MTU_FOR_CLAT46(ifp)) {
+		interface_mtu = IN6_LINKMTU(ifp);
+		/* Further adjust the size for CLAT46 expansion */
+		interface_mtu -= CLAT46_HDR_EXPANSION_OVERHD;
+	}
+
 	/*
 	 * If small enough for interface, or the interface will take
 	 * care of the fragmentation for us, can just send directly.
 	 */
-	if ((u_short)ip->ip_len <= ifp->if_mtu || TSO_IPV4_OK(ifp, m) ||
+	if ((u_short)ip->ip_len <= interface_mtu || TSO_IPV4_OK(ifp, m) ||
 	    (!(ip->ip_off & IP_DF) && (ifp->if_hwassist & CSUM_FRAGMENT))) {
 #if BYTE_ORDER != BIG_ENDIAN
 		HTONS(ip->ip_len);
@@ -1899,6 +1912,8 @@ sendchain:
 			goto loopit;
 		}
 	}
+
+	VERIFY(interface_mtu != 0);
 	/*
 	 * Too large for interface; fragment if possible.
 	 * Must be able to put at least 8 bytes per fragment.
@@ -1918,8 +1933,8 @@ sendchain:
 			RT_LOCK_SPIN(ro->ro_rt);
 			if ((ro->ro_rt->rt_flags & (RTF_UP | RTF_HOST)) &&
 			    !(ro->ro_rt->rt_rmx.rmx_locks & RTV_MTU) &&
-			    (ro->ro_rt->rt_rmx.rmx_mtu > ifp->if_mtu)) {
-				ro->ro_rt->rt_rmx.rmx_mtu = ifp->if_mtu;
+			    (ro->ro_rt->rt_rmx.rmx_mtu > interface_mtu)) {
+				ro->ro_rt->rt_rmx.rmx_mtu = interface_mtu;
 			}
 			RT_UNLOCK(ro->ro_rt);
 		}
@@ -1930,7 +1945,46 @@ sendchain:
 		goto bad;
 	}
 
-	error = ip_fragment(m, ifp, ifp->if_mtu, sw_csum);
+	/*
+	 * XXX Only TCP seems to be passing a list of packets here.
+	 * The following issue is limited to UDP datagrams with 0 checksum.
+	 * For now limit it to the case when single packet is passed down.
+	 */
+	if (packetchain == 0 && IS_INTF_CLAT46(ifp)) {
+		/*
+		 * If it is a UDP packet that has checksum set to 0
+		 * and is also not being offloaded, compute a full checksum
+		 * and update the UDP checksum.
+		 */
+		if (ip->ip_p == IPPROTO_UDP &&
+		    !(m->m_pkthdr.csum_flags & (CSUM_UDP | CSUM_PARTIAL))) {
+			struct udphdr *uh = NULL;
+
+			if (m->m_len < hlen + sizeof (struct udphdr)) {
+				m = m_pullup(m, hlen + sizeof (struct udphdr));
+				if (m == NULL) {
+					error =	ENOBUFS;
+					m0 = m;
+					goto bad;
+				}
+				m0 = m;
+				ip = mtod(m, struct ip *);
+			}
+			/*
+			 * Get UDP header and if checksum is 0, then compute the full
+			 * checksum.
+			 */
+			uh = (struct udphdr *)(void *)((caddr_t)ip + hlen);
+			if (uh->uh_sum == 0) {
+				uh->uh_sum = inet_cksum(m, IPPROTO_UDP, hlen,
+				    ip->ip_len - hlen);
+				if (uh->uh_sum == 0)
+					uh->uh_sum = 0xffff;
+			}
+		}
+	}
+
+	error = ip_fragment(m, ifp, interface_mtu, sw_csum);
 	if (error != 0) {
 		m0 = m = NULL;
 		goto bad;
@@ -2029,6 +2083,16 @@ ip_fragment(struct mbuf *m, struct ifnet *ifp, unsigned long mtu, int sw_csum)
 	hlen = ip->ip_hl << 2;
 #endif /* !_IP_VHL */
 
+#ifdef INET6
+	/*
+	 * We need to adjust the fragment sizes to account
+	 * for IPv6 fragment header if it needs to be translated
+	 * from IPv4 to IPv6.
+	 */
+	if (IS_INTF_CLAT46(ifp))
+		mtu -= sizeof(struct ip6_frag);
+
+#endif
 	firstlen = len = (mtu - hlen) &~ 7;
 	if (len < 8) {
 		m_freem(m);
@@ -3435,6 +3499,19 @@ in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
 	return (ifa);
 }
 
+/*
+ * @brief	Given outgoing interface it determines what checksum needs
+ * 	to be computed in software and what needs to be offloaded to the
+ * 	interface.
+ *
+ * @param	ifp Pointer to the outgoing interface
+ * @param	m Pointer to the packet
+ * @param	hlen IP header length
+ * @param	ip_len Total packet size i.e. headers + data payload
+ * @param	sw_csum Pointer to a software checksum flag set
+ *
+ * @return	void
+ */
 void
 ip_output_checksum(struct ifnet *ifp, struct mbuf *m, int hlen, int ip_len,
     uint32_t *sw_csum)
@@ -3458,6 +3535,14 @@ ip_output_checksum(struct ifnet *ifp, struct mbuf *m, int hlen, int ip_len,
 		*sw_csum |= ((CSUM_DELAY_DATA | CSUM_DELAY_IP) &
 		    m->m_pkthdr.csum_flags);
 	} else if (!(*sw_csum & CSUM_DELAY_DATA) && (hwcap & CSUM_PARTIAL)) {
+		int interface_mtu = ifp->if_mtu;
+
+		if (INTF_ADJUST_MTU_FOR_CLAT46(ifp)) {
+			interface_mtu = IN6_LINKMTU(ifp);
+			/* Further adjust the size for CLAT46 expansion */
+			interface_mtu -= CLAT46_HDR_EXPANSION_OVERHD;
+		}
+
 		/*
 		 * Partial checksum offload, if non-IP fragment, and TCP only
 		 * (no UDP support, as the hardware may not be able to convert
@@ -3468,7 +3553,7 @@ ip_output_checksum(struct ifnet *ifp, struct mbuf *m, int hlen, int ip_len,
 		    ((m->m_pkthdr.csum_flags & CSUM_TCP) ||
 		    ((hwcap & CSUM_ZERO_INVERT) &&
 		    (m->m_pkthdr.csum_flags & CSUM_ZERO_INVERT))) &&
-		    ip_len <= ifp->if_mtu) {
+		    ip_len <= interface_mtu) {
 			uint16_t start = sizeof (struct ip);
 			uint16_t ulpoff = m->m_pkthdr.csum_data & 0xffff;
 			m->m_pkthdr.csum_flags |=

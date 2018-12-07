@@ -105,10 +105,15 @@ static int kpersona_alloc_syscall(user_addr_t infop, user_addr_t idp)
 	if (!persona)
 		return error;
 
+	error = persona_init_begin(persona);
+	if (error) {
+		goto out_persona_err;
+	}
+
 	if (kinfo.persona_gid) {
 		error = persona_set_gid(persona, kinfo.persona_gid);
 		if (error)
-			goto out_error;
+			goto out_persona_err;
 	}
 
 	if (kinfo.persona_ngroups > 0) {
@@ -120,13 +125,21 @@ static int kpersona_alloc_syscall(user_addr_t infop, user_addr_t idp)
 					   kinfo.persona_ngroups,
 					   kinfo.persona_gmuid);
 		if (error)
-			goto out_error;
+			goto out_persona_err;
 	}
 
 	error = copyout(&persona->pna_id, idp, sizeof(persona->pna_id));
-	if (error)
-		goto out_error;
+	if (error) {
+		goto out_persona_err;
+	}
+
+	kinfo.persona_id = persona->pna_id;
 	error = kpersona_copyout(&kinfo, infop);
+	if (error) {
+		goto out_persona_err;
+	}
+
+	persona_init_end(persona, error);
 
 	/*
 	 * On success, we have a persona structure in the global list with a
@@ -135,8 +148,13 @@ static int kpersona_alloc_syscall(user_addr_t infop, user_addr_t idp)
 	 */
 	return error;
 
-out_error:
+out_persona_err:
+	assert(error != 0);
+	persona_init_end(persona, error);
+
+#if PERSONA_DEBUG
 	printf("%s:  ERROR:%d\n", __func__, error);
+#endif
 	if (persona)
 		persona_put(persona);
 	return error;
@@ -204,8 +222,8 @@ static int kpersona_info_syscall(user_addr_t idp, user_addr_t infop)
 	if (!persona)
 		return ESRCH;
 
-	persona_dbg("FOUND: persona:%p, id:%d, gid:%d, login:\"%s\"",
-		    persona, persona->pna_id, persona_get_gid(persona),
+	persona_dbg("FOUND: persona: id:%d, gid:%d, login:\"%s\"",
+		    persona->pna_id, persona_get_gid(persona),
 		    persona->pna_login);
 
 	memset(&kinfo, 0, sizeof(kinfo));

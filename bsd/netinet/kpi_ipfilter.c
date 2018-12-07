@@ -278,10 +278,15 @@ ipf_inject_input(
 	struct mbuf *m = (struct mbuf *)data;
 	struct m_tag *mtag = 0;
 	struct ip *ip = mtod(m, struct ip *);
+	struct ip6_hdr *ip6;
 	u_int8_t	vers;
 	int hlen;
 	errno_t error = 0;
 	protocol_family_t proto;
+	struct in_ifaddr *ia = NULL;
+	struct in_addr *pkt_dst = NULL;
+	struct in6_ifaddr *ia6 = NULL;
+	struct sockaddr_in6 pkt_dst6;
 
 	vers = IP_VHL_V(ip->ip_vhl);
 
@@ -298,7 +303,46 @@ ipf_inject_input(
 	}
 
 	if (filter_ref == 0 && m->m_pkthdr.rcvif == 0) {
-		m->m_pkthdr.rcvif = lo_ifp;
+		/*
+		 * Search for interface with the local address
+		 */
+		switch (proto) {
+			case PF_INET:
+				pkt_dst = &ip->ip_dst;
+				lck_rw_lock_shared(in_ifaddr_rwlock);
+				TAILQ_FOREACH(ia, INADDR_HASH(pkt_dst->s_addr), ia_hash) {
+					if (IA_SIN(ia)->sin_addr.s_addr == pkt_dst->s_addr) {
+						m->m_pkthdr.rcvif = ia->ia_ifp;
+						break;
+					}
+				}
+				lck_rw_done(in_ifaddr_rwlock);
+				break;
+
+			case PF_INET6:
+				ip6 = mtod(m, struct ip6_hdr *);
+				pkt_dst6.sin6_addr = ip6->ip6_dst;
+				lck_rw_lock_shared(&in6_ifaddr_rwlock);
+				for (ia6 = in6_ifaddrs; ia6 != NULL; ia6 = ia6->ia_next) {
+					if (IN6_ARE_ADDR_EQUAL(&ia6->ia_addr.sin6_addr, &pkt_dst6.sin6_addr)) {
+						m->m_pkthdr.rcvif = ia6->ia_ifp;
+						break;
+					}
+				}
+				lck_rw_done(&in6_ifaddr_rwlock);
+				break;
+
+			default:
+				break;
+		}
+
+		/*
+		 * If none found, fallback to loopback
+		 */
+		if (m->m_pkthdr.rcvif == NULL) {
+			m->m_pkthdr.rcvif = lo_ifp;
+		}
+
 		m->m_pkthdr.csum_data = 0;
 		m->m_pkthdr.csum_flags = 0;
 		if (vers == 4) {

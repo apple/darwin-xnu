@@ -51,6 +51,7 @@
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
 #include <libkern/OSAtomic.h>
+#include <libkern/OSKextLibPrivate.h>
 #include <kern/kern_types.h>
 #include <kern/timer_call.h>
 #include <kern/thread_call.h>
@@ -72,8 +73,22 @@
 /* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
 #define proc_t struct proc /* Steer clear of the Darwin typedef for proc_t */
 
+void
+dtrace_sprlock(proc_t *p)
+{
+	lck_mtx_assert(&p->p_mlock, LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_lock(&p->p_dtrace_sprlock);
+}
+
+void
+dtrace_sprunlock(proc_t *p)
+{
+	lck_mtx_unlock(&p->p_dtrace_sprlock);
+
+}
+
 /* Not called from probe context */
-proc_t * 
+proc_t *
 sprlock(pid_t pid)
 {
 	proc_t* p;
@@ -84,9 +99,9 @@ sprlock(pid_t pid)
 
 	task_suspend_internal(p->task);
 
-	proc_lock(p);
+	dtrace_sprlock(p);
 
-	lck_mtx_lock(&p->p_dtrace_sprlock);
+	proc_lock(p);
 
 	return p;
 }
@@ -96,9 +111,9 @@ void
 sprunlock(proc_t *p)
 {
 	if (p != PROC_NULL) {
-		lck_mtx_unlock(&p->p_dtrace_sprlock);
-
 		proc_unlock(p);
+
+		dtrace_sprunlock(p);
 
 		task_resume_internal(p->task);
 
@@ -184,7 +199,7 @@ uwrite(proc_t *p, void *buf, user_size_t len, user_addr_t a)
 
 			if (info.max_protection & VM_PROT_WRITE) {
 				/* The memory is not currently writable, but can be made writable. */
-				ret = mach_vm_protect (map, (mach_vm_offset_t)a, (mach_vm_size_t)len, 0, reprotect | VM_PROT_WRITE);
+				ret = mach_vm_protect (map, (mach_vm_offset_t)a, (mach_vm_size_t)len, 0, (reprotect & ~VM_PROT_EXECUTE) | VM_PROT_WRITE);
 			} else {
 				/*
 				 * The memory is not currently writable, and cannot be made writable. We need to COW this memory.
@@ -206,6 +221,8 @@ uwrite(proc_t *p, void *buf, user_size_t len, user_addr_t a)
 					 buf,
 					 (vm_map_address_t)a,
 					 (vm_size_t)len);
+
+		dtrace_flush_caches();
 
 		if (ret != KERN_SUCCESS)
 			goto done;
@@ -269,10 +286,6 @@ PRIV_POLICY_ONLY(void *cr, int priv, int boolean)
 #pragma unused(priv, boolean)
 	return kauth_cred_issuser(cr); /* XXX TODO: HAS_PRIVILEGE(cr, priv); */
 }
-
-/* XXX Get around const poisoning using structure assigns */
-gid_t
-crgetgid(const cred_t *cr) { cred_t copy_cr = *cr; return kauth_cred_getgid(&copy_cr); }
 
 uid_t
 crgetuid(const cred_t *cr) { cred_t copy_cr = *cr; return kauth_cred_getuid(&copy_cr); }
@@ -577,15 +590,6 @@ cyclic_remove(cyclic_id_t cyclic)
 	}
 }
 
-/*
- * ddi
- */
-void
-ddi_report_dev(dev_info_t *devi)
-{
-#pragma unused(devi)
-}
-
 kern_return_t _dtrace_register_anon_DOF(char *, uchar_t *, uint_t);
 
 kern_return_t
@@ -630,29 +634,6 @@ getminor ( dev_t d )
 	return (minor_t) minor(d);
 }
 
-dev_t 
-makedevice(major_t major, minor_t minor)
-{
-	return makedev( major, minor );
-}
-
-int ddi_getprop(dev_t dev, dev_info_t *dip, int flags, const char *name, int defvalue)
-{
-#pragma unused(dev, dip, flags, name)
-
-	return defvalue;
-}
-
-/*
- * Kernel Debug Interface
- */
-int
-kdi_dtrace_set(kdi_dtrace_set_t ignore)
-{
-#pragma unused(ignore)
-	return 0; /* Success */
-}
-
 extern void Debugger(const char*);
 
 void
@@ -663,7 +644,7 @@ debug_enter(char *c) { Debugger(c); }
  */
 
 void *
-dt_kmem_alloc(size_t size, int kmflag)
+dt_kmem_alloc_site(size_t size, int kmflag, vm_allocation_site_t *site)
 {
 #pragma unused(kmflag)
 
@@ -671,15 +652,12 @@ dt_kmem_alloc(size_t size, int kmflag)
  * We ignore the M_NOWAIT bit in kmflag (all of kmflag, in fact).
  * Requests larger than 8K with M_NOWAIT fail in kalloc_canblock.
  */
-#if defined(DTRACE_MEMORY_ZONES)
-	return dtrace_alloc(size);
-#else
-	return kalloc(size);
-#endif
+	vm_size_t vsize = size;
+	return kalloc_canblock(&vsize, TRUE, site);
 }
 
 void *
-dt_kmem_zalloc(size_t size, int kmflag)
+dt_kmem_zalloc_site(size_t size, int kmflag, vm_allocation_site_t *site)
 {
 #pragma unused(kmflag)
 
@@ -687,11 +665,8 @@ dt_kmem_zalloc(size_t size, int kmflag)
  * We ignore the M_NOWAIT bit in kmflag (all of kmflag, in fact).
  * Requests larger than 8K with M_NOWAIT fail in kalloc_canblock.
  */
-#if defined(DTRACE_MEMORY_ZONES)
-	void* buf = dtrace_alloc(size);
-#else
-	void* buf = kalloc(size);
-#endif
+	vm_size_t vsize = size;
+	void* buf = kalloc_canblock(&vsize, TRUE, site);
 
 	if(!buf)
 		return NULL;
@@ -713,21 +688,18 @@ dt_kmem_free(void *buf, size_t size)
 
 	ASSERT(size > 0);
 
-#if defined(DTRACE_MEMORY_ZONES)
-	dtrace_free(buf, size);
-#else
 	kfree(buf, size);
-#endif
 }
 
 
 
 /*
- * aligned kmem allocator
+ * aligned dt_kmem allocator
  * align should be a power of two
  */
 
-void* dt_kmem_alloc_aligned(size_t size, size_t align, int kmflag)
+void*
+dt_kmem_alloc_aligned_site(size_t size, size_t align, int kmflag, vm_allocation_site_t *site)
 {
 	void *mem, **addr_to_free;
 	intptr_t mem_aligned;
@@ -742,7 +714,7 @@ void* dt_kmem_alloc_aligned(size_t size, size_t align, int kmflag)
 	 * the address to free and the total size of the buffer.
 	 */
 	hdr_size = sizeof(size_t) + sizeof(void*);
-	mem = dt_kmem_alloc(size + align + hdr_size, kmflag);
+	mem = dt_kmem_alloc_site(size + align + hdr_size, kmflag, site);
 	if (mem == NULL)
 		return NULL;
 
@@ -759,11 +731,12 @@ void* dt_kmem_alloc_aligned(size_t size, size_t align, int kmflag)
 	return (void*) mem_aligned;
 }
 
-void* dt_kmem_zalloc_aligned(size_t size, size_t align, int kmflag)
+void*
+dt_kmem_zalloc_aligned_site(size_t size, size_t align, int kmflag, vm_allocation_site_t *s)
 {
 	void* buf;
 
-	buf = dt_kmem_alloc_aligned(size, align, kmflag);
+	buf = dt_kmem_alloc_aligned_site(size, align, kmflag, s);
 
 	if(!buf)
 		return NULL;
@@ -773,7 +746,8 @@ void* dt_kmem_zalloc_aligned(size_t size, size_t align, int kmflag)
 	return buf;
 }
 
-void dt_kmem_free_aligned(void* buf, size_t size)
+void
+dt_kmem_free_aligned(void* buf, size_t size)
 {
 #pragma unused(size)
 	intptr_t ptr = (intptr_t) buf;
@@ -828,44 +802,6 @@ kmem_cache_destroy(kmem_cache_t *cp)
 {
 #pragma unused(cp)
 }
-
-/*
- * taskq
- */
-extern void thread_call_setup(thread_call_t, thread_call_func_t, thread_call_param_t); /* XXX MACH_KERNEL_PRIVATE */
-
-static void
-_taskq_apply( task_func_t func, thread_call_param_t arg )
-{
-	func( (void *)arg );
-}
-
-taskq_t *
-taskq_create(const char *name, int nthreads, pri_t pri, int minalloc,
-    int maxalloc, uint_t flags)
-{
-#pragma unused(name,nthreads,pri,minalloc,maxalloc,flags)
-
-	return (taskq_t *)thread_call_allocate( (thread_call_func_t)_taskq_apply, NULL );
-}
-
-taskqid_t
-taskq_dispatch(taskq_t *tq, task_func_t func, void *arg, uint_t flags)
-{
-#pragma unused(flags)
-	thread_call_setup( (thread_call_t) tq, (thread_call_func_t)_taskq_apply, (thread_call_param_t)func );
-	thread_call_enter1( (thread_call_t) tq, (thread_call_param_t)arg );
-	return (taskqid_t) tq /* for lack of anything better */;
-}
-
-void	
-taskq_destroy(taskq_t *tq)
-{
-	thread_call_cancel( (thread_call_t) tq );
-	thread_call_free( (thread_call_t) tq );
-}
-
-pri_t maxclsyspri;
 
 /*
  * vmem (Solaris "slab" allocator) used by DTrace solely to hand out resource ids
@@ -1182,19 +1118,26 @@ dtrace_copyoutstr(uintptr_t src, user_addr_t dst, size_t len, volatile uint16_t 
 
 extern const int copysize_limit_panic;
 
+int dtrace_copy_maxsize(void)
+{
+	return copysize_limit_panic;
+}
+
+
 int
 dtrace_buffer_copyout(const void *kaddr, user_addr_t uaddr, vm_size_t nbytes)
 {
+	int maxsize = dtrace_copy_maxsize();
 	/*
 	 * Partition the copyout in copysize_limit_panic-sized chunks
 	 */
-	while (nbytes >= (vm_size_t)copysize_limit_panic) {
-		if (copyout(kaddr, uaddr, copysize_limit_panic) != 0)
+	while (nbytes >= (vm_size_t)maxsize) {
+		if (copyout(kaddr, uaddr, maxsize) != 0)
 			return (EFAULT);
 
-		nbytes -= copysize_limit_panic;
-		uaddr += copysize_limit_panic;
-		kaddr += copysize_limit_panic;
+		nbytes -= maxsize;
+		uaddr += maxsize;
+		kaddr += maxsize;
 	}
 	if (nbytes > 0) {
 		if (copyout(kaddr, uaddr, nbytes) != 0)
@@ -1322,22 +1265,6 @@ fuword64(user_addr_t uaddr, uint64_t *value)
 }
 
 void
-fuword8_noerr(user_addr_t uaddr, uint8_t *value)
-{
-	if (copyin((const user_addr_t)uaddr, (char *)value, sizeof(uint8_t))) {
-		*value = 0;
-	}
-}
-
-void
-fuword16_noerr(user_addr_t uaddr, uint16_t *value)
-{
-	if (copyin((const user_addr_t)uaddr, (char *)value, sizeof(uint16_t))) {
-		*value = 0;
-	}
-}
-
-void
 fuword32_noerr(user_addr_t uaddr, uint32_t *value)
 {
 	if (copyin((const user_addr_t)uaddr, (char *)value, sizeof(uint32_t))) {
@@ -1372,27 +1299,6 @@ suword32(user_addr_t addr, uint32_t value)
 
 	return 0;
 }
-
-int
-suword16(user_addr_t addr, uint16_t value)
-{
-	if (copyout((const void *)&value, addr, sizeof(value)) != 0) {
-		return -1;
-	}
-
-	return 0;
-}
-
-int
-suword8(user_addr_t addr, uint8_t value)
-{
-	if (copyout((const void *)&value, addr, sizeof(value)) != 0) {
-		return -1;
-	}
-
-	return 0;
-}
-
 
 /*
  * Miscellaneous
@@ -1535,6 +1441,12 @@ dtrace_getstackdepth(int aframes)
 		return (0);
 
 	return (depth - aframes);
+}
+
+int
+dtrace_addr_in_module(void* addr, struct modctl *ctl)
+{
+	return OSKextKextForAddress(addr) == (void*)ctl->mod_address;
 }
 
 /*

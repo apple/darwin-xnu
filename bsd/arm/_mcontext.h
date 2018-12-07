@@ -79,7 +79,7 @@ _STRUCT_MCONTEXT64
 
 #ifndef _MCONTEXT_T
 #define _MCONTEXT_T
-#if defined(__LP64__)
+#if defined(__arm64__)
 typedef _STRUCT_MCONTEXT64	*mcontext_t;
 #define _STRUCT_MCONTEXT _STRUCT_MCONTEXT64
 #else

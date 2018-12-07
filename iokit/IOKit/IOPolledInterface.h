@@ -119,9 +119,17 @@ public:
 #include <IOKit/IOTypes.h>
 #include <IOKit/IOHibernatePrivate.h>
 
+// kern_open_file_for_direct_io() flags
 enum
 {
-    kIOPolledFileSSD = 0x00000001
+    kIOPolledFileCreate    = 0x00000001,
+    kIOPolledFileHibernate = 0x00000002,
+};
+
+// kern_open_file_for_direct_io() oflags
+enum
+{
+    kIOPolledFileSSD    = 0x00000001
 };
 
 #if !defined(__cplusplus)
@@ -174,7 +182,8 @@ typedef struct IOPolledFileCryptVars IOPolledFileCryptVars;
 
 #if defined(__cplusplus)
 
-IOReturn IOPolledFileOpen(const char * filename, 
+IOReturn IOPolledFileOpen(const char * filename,
+			  uint32_t flags,
 			  uint64_t setFileSize, uint64_t fsFreeSize,
 			  void * write_file_addr, size_t write_file_len,
 			  IOPolledFileIOVars ** fileVars,
@@ -224,7 +233,8 @@ __BEGIN_DECLS
 typedef void (*kern_get_file_extents_callback_t)(void * ref, uint64_t start, uint64_t size);
 
 struct kern_direct_file_io_ref_t *
-kern_open_file_for_direct_io(const char * name, boolean_t create_file,
+kern_open_file_for_direct_io(const char * name,
+			     uint32_t flags,
 			     kern_get_file_extents_callback_t callback, 
 			     void * callback_ref,
                              off_t set_file_size,

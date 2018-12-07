@@ -99,6 +99,7 @@ ___asan_version_mismatch_check_v8
 ___asan_version_mismatch_check_apple_802
 ___asan_version_mismatch_check_apple_900
 ___asan_version_mismatch_check_apple_902
+___asan_version_mismatch_check_apple_1000
 ___asan_init
 ___asan_memcpy
 ___asan_memmove

@@ -188,7 +188,7 @@ static const struct esp_algorithm chacha_poly =
 	{ ESP_CHACHAPOLY_PAD_BOUND, ESP_CHACHAPOLY_IV_LEN,
 		esp_chachapoly_mature, ESP_CHACHAPOLY_KEYBITS_WITH_SALT,
 		ESP_CHACHAPOLY_KEYBITS_WITH_SALT, esp_chachapoly_schedlen,
-		"chacha-poly", esp_common_ivlen, esp_chachapoly_decrypt,
+		"chacha-poly", esp_chachapoly_ivlen, esp_chachapoly_decrypt,
 		esp_chachapoly_encrypt, esp_chachapoly_schedule,
 		NULL, NULL, ESP_CHACHAPOLY_ICV_LEN,
 		esp_chachapoly_decrypt_finalize, esp_chachapoly_encrypt_finalize};
@@ -268,6 +268,7 @@ esp_schedule(const struct esp_algorithm *algo, struct secasvar *sav)
 		ipseclog((LOG_ERR,
 		    "esp_schedule %s: implicit IV not allowed\n",
 			algo->name));
+		lck_mtx_unlock(sadb_mutex);
 		return EINVAL;
 	}
 

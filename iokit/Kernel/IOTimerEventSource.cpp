@@ -45,6 +45,9 @@ __END_DECLS
 #include <mach/sdt.h>
 #endif
 
+#include <libkern/Block.h>
+
+
 #define super IOEventSource
 OSDefineMetaClassAndStructors(IOTimerEventSource, IOEventSource)
 OSMetaClassDefineReservedUsed(IOTimerEventSource, 0);
@@ -96,8 +99,8 @@ do { \
 // the timeout interval expires.
 //
 
-static __inline__ void
-InvokeAction(IOTimerEventSource::Action action, IOTimerEventSource * ts,
+__inline__ void
+IOTimerEventSource::invokeAction(IOTimerEventSource::Action action, IOTimerEventSource * ts,
 	     OSObject * owner, IOWorkLoop * workLoop)
 {
     bool    trace = (gIOKitTrace & kIOTraceTimers) ? true : false;
@@ -106,7 +109,8 @@ InvokeAction(IOTimerEventSource::Action action, IOTimerEventSource * ts,
 	IOTimeStampStartConstant(IODBG_TIMES(IOTIMES_ACTION),
 				 VM_KERNEL_ADDRHIDE(action), VM_KERNEL_ADDRHIDE(owner));
 
-    (*action)(owner, ts);
+    if (kActionBlock & flags) ((IOTimerEventSource::ActionBlock) actionBlock)(ts);
+    else                      (*action)(owner, ts);
 
 #if CONFIG_DTRACE
     DTRACE_TMR3(iotescallout__expire, Action, action, OSObject, owner, void, workLoop);
@@ -135,7 +139,7 @@ void IOTimerEventSource::timeout(void *self)
             doit = (Action) me->action;
             if (doit && me->enabled && AbsoluteTime_to_scalar(&me->abstime))
             {
-                InvokeAction(doit, me, me->owner, me->workLoop);
+                me->invokeAction(doit, me, me->owner, me->workLoop);
             }
             IOStatisticsOpenGate();
             wl->openGate();
@@ -164,7 +168,7 @@ void IOTimerEventSource::timeoutAndRelease(void * self, void * c)
             doit = (Action) me->action;
             if (doit && (me->reserved->calloutGeneration == count))
             {
-                InvokeAction(doit, me, me->owner, me->workLoop);
+                me->invokeAction(doit, me, me->owner, me->workLoop);
             }
             IOStatisticsOpenGate();
             wl->openGate();
@@ -186,7 +190,7 @@ bool IOTimerEventSource::checkForWork()
      && enabled && (doit = (Action) action))
     {
 	reserved->calloutGenerationSignaled = ~reserved->calloutGeneration;
-	InvokeAction(doit, this, owner, workLoop);
+	invokeAction(doit, this, owner, workLoop);
     }
 
     return false;
@@ -301,6 +305,16 @@ IOTimerEventSource::timerEventSource(uint32_t inOptions, OSObject *inOwner, Acti
     }
 
     return me;
+}
+
+IOTimerEventSource *
+IOTimerEventSource::timerEventSource(uint32_t options, OSObject *inOwner, ActionBlock action)
+{
+    IOTimerEventSource * tes;
+    tes = IOTimerEventSource::timerEventSource(options, inOwner, (Action) NULL);
+    if (tes) tes->setActionBlock((IOEventSource::ActionBlock) action);
+
+    return tes;
 }
 
 #define _thread_call_cancel(tc)   ((kActive & flags) ? thread_call_cancel_wait((tc)) : thread_call_cancel((tc)))

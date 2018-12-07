@@ -197,7 +197,7 @@ rip6_input(
 
 #if NECP
 			if (n && !necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
-				&ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL)) {
+				&ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL, NULL)) {
 				m_freem(n);
 				/* do not inject data into pcb */
 			} else
@@ -205,7 +205,8 @@ rip6_input(
 			if (n) {
 				if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
 				    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
-				    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+				    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
+					(last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 					ret = ip6_savecontrol(last, n, &opts);
 					if (ret != 0) {
 						m_freem(n);
@@ -231,7 +232,7 @@ rip6_input(
 
 #if NECP
 	if (last && !necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
-		&ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL)) {
+		&ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL, NULL)) {
 		m_freem(m);
 		ip6stat.ip6s_delivered--;
 		/* do not inject data into pcb */
@@ -240,7 +241,8 @@ rip6_input(
 	if (last) {
 		if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
 		    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
-		    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+		    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
+			(last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 			ret = ip6_savecontrol(last, m, &opts);
 			if (ret != 0) {
 				m_freem(m);
@@ -568,6 +570,7 @@ rip6_output(
 #if NECP
 	{
 		necp_kernel_policy_id policy_id;
+		necp_kernel_policy_id skip_policy_id;
 		u_int32_t route_rule_id;
 
 		/*
@@ -603,12 +606,12 @@ rip6_output(
 		}
 
 		if (!necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
-			&ip6->ip6_src, &ip6->ip6_dst, NULL, &policy_id, &route_rule_id)) {
+			&ip6->ip6_src, &ip6->ip6_dst, NULL, &policy_id, &route_rule_id, &skip_policy_id)) {
 			error = EHOSTUNREACH;
 			goto bad;
 		}
 
-		necp_mark_packet_from_socket(m, in6p, policy_id, route_rule_id);
+		necp_mark_packet_from_socket(m, in6p, policy_id, route_rule_id, skip_policy_id);
 
 		if (net_qos_policy_restricted != 0) {
 			necp_socket_update_qos_marking(in6p, in6p->in6p_route.ro_rt,
@@ -640,6 +643,11 @@ rip6_output(
 	m->m_pkthdr.pkt_flags |= (PKTF_FLOW_ID | PKTF_FLOW_LOCALSRC |
 	    PKTF_FLOW_RAWSOCK);
 	m->m_pkthdr.pkt_proto = in6p->in6p_ip6_nxt;
+	m->m_pkthdr.tx_rawip_pid = so->last_pid;
+	if (so->so_flags & SOF_DELEGATED)
+		m->m_pkthdr.tx_rawip_e_pid = so->e_pid;
+	else
+		m->m_pkthdr.tx_rawip_e_pid = 0;
 
 	if (im6o != NULL)
 		IM6O_ADDREF(im6o);
@@ -880,8 +888,8 @@ rip6_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	if (ifa != NULL) {
 		IFA_LOCK(ifa);
 		if (((struct in6_ifaddr *)ifa)->ia6_flags &
-		    (IN6_IFF_ANYCAST|IN6_IFF_NOTREADY|
-		     IN6_IFF_DETACHED|IN6_IFF_DEPRECATED)) {
+		    (IN6_IFF_ANYCAST | IN6_IFF_NOTREADY | IN6_IFF_CLAT46 |
+		     IN6_IFF_DETACHED | IN6_IFF_DEPRECATED)) {
 			IFA_UNLOCK(ifa);
 			IFA_REMREF(ifa);
 			return (EADDRNOTAVAIL);

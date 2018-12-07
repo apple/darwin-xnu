@@ -33,6 +33,7 @@
 #include <libkern/c++/OSContainers.h>
 #include <libkern/c++/OSKext.h>
 #include <libkern/c++/OSUnserialize.h>
+#include <libkern/Block.h>
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOCommand.h>
 #include <IOKit/IODeviceTreeSupport.h>
@@ -613,7 +614,12 @@ void IOService::free( void )
 
     if (_numInterruptSources && _interruptSources)
     {
-	IOFree(_interruptSources, _numInterruptSources * sizeof(IOInterruptSource));
+	for (i = 0; i < _numInterruptSources; i++) {
+	    void * block = _interruptSourcesPrivate(this)[i].vectorBlock;
+	    if (block) Block_release(block);
+	}
+	IOFree(_interruptSources,
+		_numInterruptSources * sizeofAllIOInterruptSource);
 	_interruptSources = 0;
     }
 
@@ -724,7 +730,7 @@ void IOService::detach( IOService * provider )
 
     unlockForArbitration();
 
-    if( newProvider) {
+    if( newProvider && adjParent) {
         newProvider->lockForArbitration();
         newProvider->_adjustBusy(1);
         newProvider->unlockForArbitration();
@@ -1810,11 +1816,44 @@ IONotifier * IOService::registerInterest( const OSSymbol * typeOfInterest,
     return( notify );
 }
 
+
+
+static IOReturn
+IOServiceInterestHandlerToBlock( void * target __unused, void * refCon,
+                                              UInt32 messageType, IOService * provider,
+                                              void * messageArgument, vm_size_t argSize )
+{
+    return ((IOServiceInterestHandlerBlock) refCon)(messageType, provider, messageArgument, argSize);
+}
+
+IONotifier * IOService::registerInterest(const OSSymbol * typeOfInterest,
+                  IOServiceInterestHandlerBlock handler)
+{
+    IONotifier * notify;
+    void       * block;
+
+    block = Block_copy(handler);
+    if (!block) return (NULL);
+
+    notify = registerInterest(typeOfInterest, &IOServiceInterestHandlerToBlock, NULL, block);
+
+    if (!notify) Block_release(block);
+
+    return (notify);
+}
+
 IOReturn IOService::registerInterestForNotifier( IONotifier *svcNotify, const OSSymbol * typeOfInterest,
                   IOServiceInterestHandler handler, void * target, void * ref )
 {
     IOReturn rc = kIOReturnSuccess;
     _IOServiceInterestNotifier  *notify = 0;
+
+    if (!svcNotify || !(notify = OSDynamicCast(_IOServiceInterestNotifier, svcNotify)))
+        return( kIOReturnBadArgument );
+
+    notify->handler = handler;
+    notify->target = target;
+    notify->ref = ref;
 
     if( (typeOfInterest != gIOGeneralInterest)
      && (typeOfInterest != gIOBusyInterest)
@@ -1823,15 +1862,9 @@ IOReturn IOService::registerInterestForNotifier( IONotifier *svcNotify, const OS
      && (typeOfInterest != gIOPriorityPowerStateInterest))
         return( kIOReturnBadArgument );
 
-    if (!svcNotify || !(notify = OSDynamicCast(_IOServiceInterestNotifier, svcNotify)))
-        return( kIOReturnBadArgument );
-
     lockForArbitration();
     if( 0 == (__state[0] & kIOServiceInactiveState)) {
 
-        notify->handler = handler;
-        notify->target = target;
-        notify->ref = ref;
         notify->state = kIOServiceNotifyEnable;
 
         ////// queue
@@ -1942,6 +1975,9 @@ void _IOServiceInterestNotifier::wait()
 void _IOServiceInterestNotifier::free()
 {
     assert( queue_empty( &handlerInvocations ));
+
+    if (handler == &IOServiceInterestHandlerToBlock) Block_release(ref);
+
     OSObject::free();
 }
 
@@ -4680,6 +4716,34 @@ IONotifier * IOService::addMatchingNotification(
     return( ret );
 }
 
+static bool
+IOServiceMatchingNotificationHandlerToBlock( void * target __unused, void * refCon,
+                                  IOService * newService,
+                                  IONotifier * notifier )
+{
+    return ((IOServiceMatchingNotificationHandlerBlock) refCon)(newService, notifier);
+}
+
+IONotifier * IOService::addMatchingNotification(
+                            const OSSymbol * type, OSDictionary * matching,
+                            SInt32 priority,
+                            IOServiceMatchingNotificationHandlerBlock handler)
+{
+    IONotifier * notify;
+    void       * block;
+
+    block = Block_copy(handler);
+    if (!block) return (NULL);
+
+    notify = addMatchingNotification(type, matching,
+		&IOServiceMatchingNotificationHandlerToBlock, NULL, block, priority);
+
+    if (!notify) Block_release(block);
+
+    return (notify);
+}
+
+
 bool IOService::syncNotificationHandler(
 			void * /* target */, void * ref,
 			IOService * newService,
@@ -4981,6 +5045,9 @@ void _IOServiceNotifier::wait()
 void _IOServiceNotifier::free()
 {
     assert( queue_empty( &handlerInvocations ));
+
+    if (handler == &IOServiceMatchingNotificationHandlerToBlock) Block_release(ref);
+
     OSObject::free();
 }
 
@@ -6303,10 +6370,11 @@ IOReturn IOService::resolveInterrupt(IOService *nub, int source)
   // Allocate space for the IOInterruptSources if needed... then return early.
   if (nub->_interruptSources == 0) {
     numSources = array->getCount();
-    interruptSources = (IOInterruptSource *)IOMalloc(numSources * sizeof(IOInterruptSource));
+    interruptSources = (IOInterruptSource *)IOMalloc(
+	numSources * sizeofAllIOInterruptSource);
     if (interruptSources == 0) return kIOReturnNoMemory;
     
-    bzero(interruptSources, numSources * sizeof(IOInterruptSource));
+    bzero(interruptSources, numSources * sizeofAllIOInterruptSource);
     
     nub->_numInterruptSources = numSources;
     nub->_interruptSources = interruptSources;
@@ -6353,7 +6421,7 @@ IOReturn IOService::lookupInterrupt(int source, bool resolve, IOInterruptControl
   if (*interruptController == NULL) {
     if (!resolve) return kIOReturnNoInterrupt;
     
-    /* Try to reslove the interrupt */
+    /* Try to resolve the interrupt */
     ret = resolveInterrupt(this, source);
     if (ret != kIOReturnSuccess) return ret;    
     
@@ -6379,16 +6447,49 @@ IOReturn IOService::registerInterrupt(int source, OSObject *target,
 						refCon);
 }
 
+static void IOServiceInterruptActionToBlock( OSObject * target, void * refCon,
+                   IOService * nub, int source )
+{
+  ((IOInterruptActionBlock)(refCon))(nub, source);
+}
+
+IOReturn IOService::registerInterruptBlock(int source, OSObject *target,
+				      IOInterruptActionBlock handler)
+{
+    IOReturn ret;
+    void   * block;
+
+    block = Block_copy(handler);
+    if (!block) return (kIOReturnNoMemory);
+
+    ret = registerInterrupt(source, target, &IOServiceInterruptActionToBlock, block);
+    if (kIOReturnSuccess != ret) {
+      Block_release(block);
+      return (ret);
+    }
+    _interruptSourcesPrivate(this)[source].vectorBlock = block;
+
+    return (ret);
+}
+
 IOReturn IOService::unregisterInterrupt(int source)
 {
-  IOInterruptController *interruptController;
   IOReturn              ret;
+  IOInterruptController *interruptController;
+  void                  *block;
   
   ret = lookupInterrupt(source, false, &interruptController);
   if (ret != kIOReturnSuccess) return ret;
   
   /* Unregister the source */
-  return interruptController->unregisterInterrupt(this, source);
+  block = _interruptSourcesPrivate(this)[source].vectorBlock;
+  ret = interruptController->unregisterInterrupt(this, source);
+  if ((kIOReturnSuccess == ret) && (block = _interruptSourcesPrivate(this)[source].vectorBlock)) {
+    _interruptSourcesPrivate(this)[source].vectorBlock = NULL;
+    Block_release(block);
+  }
+
+  return ret;
 }
 
 IOReturn IOService::addInterruptStatistics(IOInterruptAccountingData * statistics, int source)

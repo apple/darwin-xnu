@@ -92,6 +92,7 @@
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
+#include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet/in_arp.h>
 
@@ -1683,6 +1684,16 @@ ifa_ifwithroute_common_locked(int flags, const struct sockaddr *dst,
 	 */
 	if ((flags & RTF_IFSCOPE) &&
 	    ifa != NULL && ifa->ifa_ifp->if_index != ifscope) {
+		IFA_REMREF(ifa);
+		ifa = NULL;
+	}
+
+	/*
+	 * ifa's address family must match destination's address family
+	 * after all is said and done.
+	 */
+	if (ifa != NULL &&
+	    ifa->ifa_addr->sa_family != dst->sa_family) {
 		IFA_REMREF(ifa);
 		ifa = NULL;
 	}
@@ -3464,8 +3475,15 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 			 * If rmx_mtu is not locked, update it
 			 * to the MTU used by the new interface.
 			 */
-			if (!(rt->rt_rmx.rmx_locks & RTV_MTU))
+			if (!(rt->rt_rmx.rmx_locks & RTV_MTU)) {
 				rt->rt_rmx.rmx_mtu = rt->rt_ifp->if_mtu;
+				if (dst->sa_family == AF_INET &&
+				    INTF_ADJUST_MTU_FOR_CLAT46(rt->rt_ifp)) {
+					rt->rt_rmx.rmx_mtu = IN6_LINKMTU(rt->rt_ifp);
+					/* Further adjust the size for CLAT46 expansion */
+					rt->rt_rmx.rmx_mtu -= CLAT46_HDR_EXPANSION_OVERHD;
+				}
+			}
 
 			/*
 			 * Now ask the protocol to check if it needs

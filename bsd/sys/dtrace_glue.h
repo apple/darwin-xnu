@@ -50,11 +50,8 @@
 /*
  * cmn_err
  */
-#define	CE_CONT		0	/* continuation		*/
 #define	CE_NOTE		1	/* notice		*/
 #define	CE_WARN		2	/* warning		*/
-#define	CE_PANIC	3	/* panic		*/
-#define	CE_IGNORE	4	/* print nothing	*/
 
 extern void cmn_err( int, const char *, ... );
 
@@ -68,6 +65,9 @@ extern void cmn_err( int, const char *, ... );
 
 proc_t* sprlock(pid_t pid);
 void sprunlock(proc_t *p);
+
+void dtrace_sprlock(proc_t *p);
+void dtrace_sprunlock(proc_t *p);
 
 /*
  * uread/uwrite
@@ -85,15 +85,11 @@ int fuword16(user_addr_t, uint16_t *);
 int fuword32(user_addr_t, uint32_t *);
 int fuword64(user_addr_t, uint64_t *);
 
-void fuword8_noerr(user_addr_t, uint8_t *);
-void fuword16_noerr(user_addr_t, uint16_t *);
 void fuword32_noerr(user_addr_t, uint32_t *);
 void fuword64_noerr(user_addr_t, uint64_t *);
 
 int suword64(user_addr_t, uint64_t value);
 int suword32(user_addr_t, uint32_t value);
-int suword16(user_addr_t, uint16_t value);
-int suword8(user_addr_t, uint8_t value);
 
 /*
  * cpuvar
@@ -233,7 +229,8 @@ typedef struct modctl {
 #define MODCTL_FBT_PRIVATE_PROBES_PROVIDED	0x80  // fbt private probes have been provided
 #define MODCTL_FBT_PROVIDE_PRIVATE_PROBES	0x100 // fbt provider must provide private probes
 #define MODCTL_FBT_PROVIDE_BLACKLISTED_PROBES	0x200 // fbt provider must provide blacklisted probes
-#define MODCTL_FBT_BLACKLISTED_PROBES_PROVIDED 0x400 // fbt blacklisted probes have been provided
+#define MODCTL_FBT_BLACKLISTED_PROBES_PROVIDED	0x400 // fbt blacklisted probes have been provided
+#define MODCTL_IS_STATIC_KEXT			0x800 // module is a static kext
 
 /* Simple/singular mod_flags accessors */
 #define MOD_IS_MACH_KERNEL(mod)			(mod->mod_flags & MODCTL_IS_MACH_KERNEL)
@@ -248,6 +245,7 @@ typedef struct modctl {
 #define MOD_FBT_PROVIDE_PRIVATE_PROBES(mod)	(mod->mod_flags & MODCTL_FBT_PROVIDE_PRIVATE_PROBES)
 #define MOD_FBT_BLACKLISTED_PROBES_PROVIDED(mod) (mod->mod_flags & MODCTL_FBT_BLACKLISTED_PROBES_PROVIDED)
 #define MOD_FBT_PROVIDE_BLACKLISTED_PROBES(mod)	(mod->mod_flags & MODCTL_FBT_PROVIDE_BLACKLISTED_PROBES)
+#define MOD_IS_STATIC_KEXT(mod)			(mod->mod_flags & MODCTL_IS_STATIC_KEXT)
 
 /* Compound accessors */
 #define MOD_FBT_PRIVATE_PROBES_DONE(mod)	(MOD_FBT_PRIVATE_PROBES_PROVIDED(mod) || !MOD_FBT_PROVIDE_PRIVATE_PROBES(mod))
@@ -257,6 +255,8 @@ typedef struct modctl {
 #define MOD_SYMBOLS_DONE(mod)			(MOD_FBT_DONE(mod) && MOD_SDT_DONE(mod))
 
 extern modctl_t *dtrace_modctl_list;
+
+extern int dtrace_addr_in_module(void*, struct modctl*);
 
 /*
  * cred_t
@@ -280,20 +280,14 @@ extern cred_t *dtrace_CRED(void); /* Safe to call from probe context. */
 #define CRED() kauth_cred_get() /* Can't be called from probe context! */
 extern int PRIV_POLICY_CHOICE(void *, int, int);
 extern int PRIV_POLICY_ONLY(void *, int, int);
-extern gid_t crgetgid(const cred_t *);
 extern uid_t crgetuid(const cred_t *);
 #define crgetzoneid(x) ((zoneid_t)0)
-
-#define crhold(a) {}
-#define crfree(a) {}
 
 /*
  * "cyclic"
  */
 #define	CY_LOW_LEVEL		0
-#define	CY_LOCK_LEVEL		1
 #define	CY_HIGH_LEVEL		2
-#define	CY_SOFT_LEVELS		2
 #define	CY_LEVELS			3
 
 typedef uintptr_t cyclic_id_t;
@@ -338,17 +332,7 @@ extern void cyclic_timer_remove(cyclic_id_t);
 #define DDI_SUCCESS			0
 #define DDI_FAILURE			-1
 
-#define	DDI_DEV_T_NONE	((dev_t)-1)
-#define	DDI_DEV_T_ANY	((dev_t)-2)
-#define	DDI_MAJOR_T_UNKNOWN	((major_t)0)
-
 #define DDI_PSEUDO "ddi_pseudo"
-
-typedef enum {
-	DDI_ATTACH = 0,
-	DDI_RESUME = 1,
-	DDI_PM_RESUME = 2
-} ddi_attach_cmd_t;
 
 typedef enum {
 	DDI_DETACH = 0,
@@ -365,10 +349,6 @@ typedef uint_t minor_t;
 
 typedef struct __dev_info *dev_info_t;
 
-extern void ddi_report_dev(dev_info_t *);
-
-int ddi_getprop(dev_t dev, dev_info_t *dip, int flags, const char *name, int defvalue);
-
 extern int ddi_driver_major(dev_info_t *);
 
 extern int ddi_create_minor_node(dev_info_t *, const char *, int, minor_t, const char *, int);
@@ -377,42 +357,14 @@ extern void ddi_remove_minor_node(dev_info_t *, char *);
 extern major_t getemajor(dev_t);
 extern minor_t getminor(dev_t);
 
-extern dev_t makedevice(major_t, minor_t);
-
 /*
  * Kernel Debug Interface
  */
-
-typedef enum kdi_dtrace_set {
-	KDI_DTSET_DTRACE_ACTIVATE,
-	KDI_DTSET_DTRACE_DEACTIVATE,
-	KDI_DTSET_KMDB_BPT_ACTIVATE,
-	KDI_DTSET_KMDB_BPT_DEACTIVATE
-} kdi_dtrace_set_t;
-
-extern int kdi_dtrace_set(kdi_dtrace_set_t);
 extern void debug_enter(char *);
 
 /*
  * DTrace specific zone allocation
  */
-
-/*
- * To break dtrace memory usage out in a trackable
- * fashion, uncomment the #define below. This will
- * enable emulation of the general kalloc.XXX zones
- * for most dtrace allocations. (kalloc.large is not
- * emulated)
- *
- * #define DTRACE_MEMORY_ZONES 1
- *
- */
-
-#if defined(DTRACE_MEMORY_ZONES)
-void dtrace_alloc_init(void);
-void *dtrace_alloc(vm_size_t);
-void dtrace_free(void *, vm_size_t);
-#endif
 
 /*
  * kmem
@@ -424,15 +376,32 @@ void dtrace_free(void *, vm_size_t);
 typedef struct vmem vmem_t;
 typedef struct kmem_cache kmem_cache_t;
 
-#define kmem_alloc dt_kmem_alloc /* Avoid clash with Darwin's kmem_alloc */
 #define kmem_free dt_kmem_free /* Avoid clash with Darwin's kmem_free */
-#define kmem_zalloc dt_kmem_zalloc /* Avoid clash with Darwin's kmem_zalloc */
-extern void *dt_kmem_alloc(size_t, int);
-extern void dt_kmem_free(void *, size_t);
-extern void *dt_kmem_zalloc(size_t, int);
+#define kmem_free_aligned dt_kmem_free_aligned
 
-extern void *dt_kmem_alloc_aligned(size_t, size_t, int);
-extern void *dt_kmem_zalloc_aligned(size_t, size_t, int);
+#define kmem_alloc(size, kmflag) \
+	({ VM_ALLOC_SITE_STATIC(0, 0); \
+	dt_kmem_alloc_site(size, kmflag, &site); })
+
+extern void *dt_kmem_alloc_site(size_t, int, vm_allocation_site_t*);
+extern void dt_kmem_free(void *, size_t);
+
+#define kmem_zalloc(size, kmflag) \
+	({ VM_ALLOC_SITE_STATIC(0, 0); \
+	dt_kmem_zalloc_site(size, kmflag, &site); })
+
+extern void *dt_kmem_zalloc_site(size_t, int, vm_allocation_site_t*);
+
+#define kmem_alloc_aligned(size, align, kmflag) \
+	({ VM_ALLOC_SITE_STATIC(0, 0); \
+	dt_kmem_alloc_aligned_site(size, align, kmflag, &site); })
+extern void *dt_kmem_alloc_aligned_site(size_t, size_t, int, vm_allocation_site_t*);
+
+#define kmem_zalloc_aligned(size, align, kmflag) \
+	({ VM_ALLOC_SITE_STATIC(0, 0); \
+	dt_kmem_zalloc_aligned_site(size, align, kmflag, &site); })
+extern void *dt_kmem_zalloc_aligned_site(size_t, size_t, int, vm_allocation_site_t*);
+
 extern void dt_kmem_free_aligned(void*, size_t);
 
 extern kmem_cache_t *
@@ -452,7 +421,6 @@ typedef struct _kthread kthread_t; /* For dtrace_vtime_switch(), dtrace_panicked
  * proc
  */
 
-#define DATAMODEL_MASK  0x0FF00000
 
 #define DATAMODEL_ILP32 0x00100000
 #define DATAMODEL_LP64  0x00200000
@@ -466,23 +434,6 @@ typedef struct _kthread kthread_t; /* For dtrace_vtime_switch(), dtrace_panicked
 #endif  /* __LP64__ */
 
 typedef unsigned int model_t; /* For dtrace_instr_size_isa() prototype in <sys/dtrace.h> */
-
-/*
- * taskq
- */
-
-#define	TQ_SLEEP	0x00	/* Can block for memory */
-
-typedef uint_t pri_t;
-typedef struct taskq taskq_t;
-typedef void (task_func_t)(void *);
-typedef uintptr_t taskqid_t;
-
-extern taskq_t	*taskq_create(const char *, int, pri_t, int, int, uint_t);
-extern taskqid_t taskq_dispatch(taskq_t *, task_func_t, void *, uint_t);
-extern void	taskq_destroy(taskq_t *);
-
-extern pri_t maxclsyspri;
 
 /*
  * vmem
@@ -569,6 +520,7 @@ extern hrtime_t dtrace_abs_to_nano(uint64_t);
 __private_extern__ const char * strstr(const char *, const char *);
 const void* bsearch(const void*, const void*, size_t, size_t, int (*compar)(const void *, const void *));
 
+int dtrace_copy_maxsize(void);
 int dtrace_buffer_copyout(const void*, user_addr_t, vm_size_t);
 
 

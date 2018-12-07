@@ -177,10 +177,12 @@ int kpersona_find(const char *name, uid_t uid, uid_t *id, size_t *idlen);
 #include <sys/cdefs.h>
 #include <sys/kauth.h>
 #include <libkern/libkern.h>
+#include <os/refcnt.h>
 
 #ifdef PERSONA_DEBUG
+#include <os/log.h>
 #define persona_dbg(fmt, ...) \
-	printf("[%4d] %s:  " fmt "\n", \
+	os_log(OS_LOG_DEFAULT, "[%4d] %s:  " fmt "\n", \
 	       current_proc() ? current_proc()->p_pid : -1, \
 	       __func__, ## __VA_ARGS__)
 #else
@@ -193,7 +195,7 @@ int kpersona_find(const char *name, uid_t uid, uid_t *id, size_t *idlen);
 #ifdef XNU_KERNEL_PRIVATE
 /* only XNU proper needs to see the persona structure */
 struct persona {
-	int32_t      pna_refcount;
+	os_refcnt_t  pna_refcount;
 	int32_t      pna_valid;
 
 	uid_t        pna_id;
@@ -322,6 +324,9 @@ void personas_bootstrap(void);
 
 struct persona *persona_alloc(uid_t id, const char *login,
 			      int type, int *error);
+
+int persona_init_begin(struct persona *persona);
+void persona_init_end(struct persona *persona, int error);
 
 struct persona *persona_lookup_and_invalidate(uid_t id);
 

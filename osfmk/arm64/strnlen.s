@@ -33,6 +33,8 @@
  * is amller, without reading beyond the first maxlen characters of string.
  */
 
+#include <arm64/asm.h>
+
 .globl _strlen
 .globl _strnlen
 
@@ -41,13 +43,14 @@
  *****************************************************************************/
 
 .macro EstablishFrame
+	ARM64_STACK_PROLOG
 	stp       fp, lr, [sp, #-16]!
 	mov       fp,      sp
 .endm
 
 .macro ClearFrameAndReturn
 	ldp       fp, lr, [sp], #16
-	ret
+	ARM64_STACK_EPILOG
 .endm
 
 /*****************************************************************************
@@ -116,7 +119,7 @@ _strnlen:
 	ClearFrameAndReturn
 
 L_maxlenIsZero:
-	mov       x0,      xzr
+	mov       x0,      #0
 	ret                         // No stack frame, so don't clear it.
 
 L_foundNUL:

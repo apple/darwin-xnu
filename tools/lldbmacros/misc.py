@@ -95,7 +95,7 @@ def GetCpuDataForCpuID(cpu_id):
     if kern.arch == 'x86_64':
         cpu_data = kern.globals.cpu_data_ptr[cpu_id]
         return cpu_data
-    elif kern.arch in ['arm', 'arm64'] :
+    elif kern.arch.startswith('arm'):
         data_entries_addr = kern.GetLoadAddressForSymbol('CpuDataEntries')
         data_entries = kern.GetValueFromAddress(data_entries_addr, 'cpu_data_entry_t *')
         data_entry = data_entries[cpu_id];
@@ -689,7 +689,7 @@ def DumpRawTraceFile(cmd_args=[], cmd_options={}):
         print "Trace buffer not enabled\n"
         return
 
-    if ((kern.arch == "x86_64") or (kern.arch == "arm64")) :
+    if ((kern.arch == "x86_64") or kern.arch.startswith("arm64")) :
         lp64 = True
     elif kern.arch == "arm" :
         lp64 = False

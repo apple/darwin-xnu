@@ -86,11 +86,6 @@ static lck_spin_t ipc_importance_lock_data;	/* single lock for now */
 	lck_spin_unlock(&ipc_importance_lock_data)
 #define ipc_importance_assert_held() \
 	lck_spin_assert(&ipc_importance_lock_data, LCK_ASSERT_OWNED)
-#define ipc_importance_sleep(elem) lck_spin_sleep(&ipc_importance_lock_data,	\
-					LCK_SLEEP_DEFAULT,			\
-					(event_t)(elem),			\
-					THREAD_UNINT)
-#define ipc_importance_wakeup(elem) thread_wakeup((event_t)(elem))
 
 #if IIE_REF_DEBUG
 #define incr_ref_counter(x) (hw_atomic_add(&(x), 1))
@@ -1660,7 +1655,7 @@ ipc_importance_task_mark_live_donor(ipc_importance_task_t task_imp, boolean_t li
 }
 
 /*
- *	Routine:	ipc_importance_task_marked_live_donor
+ *	Routine:	ipc_importance_task_is_marked_live_donor
  *	Purpose:
  *		Query the live donor and donor flags for the given task importance.
  *	Conditions:
@@ -2155,9 +2150,6 @@ ipc_importance_exec_switch_task(
 
 	/* Create an importance linkage from old_task to new_task */
 	inherit = ipc_importance_inherit_from_task(old_task, new_task);
-	if (inherit == III_NULL) {
-		return inherit;
-	}
 
 	/* Switch task importance base from old task to new task */
 	ipc_importance_lock();
@@ -2214,9 +2206,7 @@ ipc_importance_check_circularity(
 	boolean_t imp_lock_held = FALSE;
 	int assertcnt = 0;
 	ipc_port_t base;
-	sync_qos_count_t sync_qos_delta_add[THREAD_QOS_LAST] = {0};
-	sync_qos_count_t sync_qos_delta_sub[THREAD_QOS_LAST] = {0};
-	boolean_t update_knote = FALSE;
+	struct turnstile *send_turnstile = TURNSTILE_NULL;
 
 	assert(port != IP_NULL);
 	assert(dest != IP_NULL);
@@ -2224,6 +2214,9 @@ ipc_importance_check_circularity(
 	if (port == dest)
 		return TRUE;
 	base = dest;
+
+	/* Check if destination needs a turnstile */
+	ipc_port_send_turnstile_prepare(dest);
 
 	/* port is in limbo, so donation status is safe to latch */
 	if (port->ip_impdonation != 0) {
@@ -2302,22 +2295,24 @@ ipc_importance_check_circularity(
 		assert(port->ip_receiver_name == MACH_PORT_NULL);
 		assert(port->ip_destination == IP_NULL);
 
-		while (dest != IP_NULL) {
+		base = dest;
+		while (base != IP_NULL) {
 			ipc_port_t next;
 
-			/* dest is in transit or in limbo */
+			/* base is in transit or in limbo */
 
-			assert(ip_active(dest));
-			assert(dest->ip_receiver_name == MACH_PORT_NULL);
+			assert(ip_active(base));
+			assert(base->ip_receiver_name == MACH_PORT_NULL);
 
-			next = dest->ip_destination;
-			ip_unlock(dest);
-			dest = next;
+			next = base->ip_destination;
+			ip_unlock(base);
+			base = next;
 		}
 
 		if (imp_lock_held)
 			ipc_importance_unlock();
 
+		ipc_port_send_turnstile_complete(dest);
 		return TRUE;
 	}
 
@@ -2331,9 +2326,8 @@ ipc_importance_check_circularity(
 	ipc_port_multiple_unlock();
 
 not_circular:
-	imq_lock(&base->ip_messages);
-
 	/* port is in limbo */
+	imq_lock(&port->ip_messages);
 
 	assert(ip_active(port));
 	assert(port->ip_receiver_name == MACH_PORT_NULL);
@@ -2359,10 +2353,22 @@ not_circular:
 	/* take the port out of limbo w.r.t. assertions */
 	port->ip_tempowner = 0;
 
-	/* Capture the sync qos count delta */
-	for (int i = 0; i < THREAD_QOS_LAST; i++) {
-		sync_qos_delta_add[i] = port_sync_qos(port, i);
+	/*
+	 * Setup linkage for source port if it has a send turnstile i.e. it has
+	 * a thread waiting in send or has a port enqueued in it or has sync ipc
+	 * push from a special reply port.
+	 */
+	if (port_send_turnstile(port)) {
+		send_turnstile = turnstile_prepare((uintptr_t)port,
+			port_send_turnstile_address(port),
+			TURNSTILE_NULL, TURNSTILE_SYNC_IPC);
+
+		turnstile_update_inheritor(send_turnstile, port_send_turnstile(dest),
+			(TURNSTILE_INHERITOR_TURNSTILE | TURNSTILE_IMMEDIATE_UPDATE));
+
+		/* update complete and turnstile complete called after dropping all locks */
 	}
+	imq_unlock(&port->ip_messages);
 
 	/* now unlock chain */
 
@@ -2370,9 +2376,9 @@ not_circular:
 
 	for (;;) {
 
+		ipc_port_t next;
 		/* every port along chain track assertions behind it */
 		ipc_port_impcount_delta(dest, assertcnt, base);
-		update_knote = ipc_port_sync_qos_delta(dest, sync_qos_delta_add, sync_qos_delta_sub);
 
 		if (dest == base)
 			break;
@@ -2384,9 +2390,9 @@ not_circular:
 		assert(dest->ip_destination != IP_NULL);
 		assert(dest->ip_tempowner == 0);
 
-		port = dest->ip_destination;
+		next = dest->ip_destination;
 		ip_unlock(dest);
-		dest = port;
+		dest = next;
 	}
 
 	/* base is not in transit */
@@ -2425,10 +2431,6 @@ not_circular:
 		}
 	}
 
-	if (update_knote) {
-		KNOTE(&base->ip_messages.imq_klist, 0);
-	}
-	imq_unlock(&base->ip_messages);
 	ip_unlock(base);
 
 	/*
@@ -2456,6 +2458,18 @@ not_circular:
 
 	if (imp_lock_held)
 		ipc_importance_unlock();
+
+	/* All locks dropped, call turnstile_update_inheritor_complete for source port's turnstile */
+	if (send_turnstile) {
+		turnstile_update_inheritor_complete(send_turnstile, TURNSTILE_INTERLOCK_NOT_HELD);
+
+		/* Take the mq lock to call turnstile complete */
+		imq_lock(&port->ip_messages);
+		turnstile_complete((uintptr_t)port, port_send_turnstile_address(port), NULL);
+		send_turnstile = TURNSTILE_NULL;
+		imq_unlock(&port->ip_messages);
+		turnstile_cleanup();
+	}
 
 	if (imp_task != IIT_NULL)
 		ipc_importance_task_release(imp_task);

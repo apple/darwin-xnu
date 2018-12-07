@@ -1208,7 +1208,7 @@ class Tests: XCTestCase {
         // check that we agree with sample file
 
         guard let sampledata = self.dataWithResource(name)
-            else { XCTFail(); return }
+            else { XCTFail("failed to open bundle resource named " + name); return }
         var dict : NSDictionary?
 
         dict = try? self.parseBuffer(sampledata) as NSDictionary
@@ -1233,14 +1233,16 @@ class Tests: XCTestCase {
                               self.dataWithResource(name + ".plist")
             else {XCTFail(); return}
 
-        var dict2 = try? PropertyListSerialization.propertyList(from: plistdata as Data, options: [], format: nil)
-        if dict2 == nil {
-            dict2 = try? PropertyListSerialization.propertyList(from:decompress(plistdata) as Data, options:[], format: nil)
+        var opt_dict2 = try? PropertyListSerialization.propertyList(from: plistdata as Data, options: [], format: nil)
+        if opt_dict2 == nil {
+            opt_dict2 = try? PropertyListSerialization.propertyList(from:decompress(plistdata) as Data, options:[], format: nil)
         }
+        guard let dict2 = opt_dict2
+            else { XCTFail(); return}
 
-        XCTAssert(dict2 != nil)
+        XCTAssertEqual(dict, dict2 as! NSDictionary);
 
-        XCTAssert(dict == dict2 as? NSDictionary)
+        //XCTAssert(dict == dict2 as? NSDictionary)
 
         // check that we agree with python
 
@@ -1376,6 +1378,26 @@ class Tests: XCTestCase {
 
     func testStackshotWithInstrsCycles() {
         self.testSampleStackshot("stackshot-sample-instrs-cycles")
+    }
+
+    func testStackshotWithStacktop() {
+        self.testSampleStackshot("stackshot-sample-stacktop")
+    }
+
+    func testStackshotWithASID() {
+        self.testSampleStackshot("stackshot-sample-asid")
+    }
+
+    func testStackshotWithPageTables() {
+        self.testSampleStackshot("stackshot-sample-asid-pagetable")
+    }
+
+    func testStackshotCPUTimes() {
+        self.testSampleStackshot("stackshot-sample-cpu-times")
+    }
+    
+    func testStackshotWithSharedCacheLayout() {
+        self.testSampleStackshot("stackshot-with-shared-cache-layout")
     }
 
     func testTrivial() {

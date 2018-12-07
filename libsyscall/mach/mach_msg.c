@@ -559,6 +559,7 @@ mach_msg_server(
 
 			buffers_swapped = FALSE;
 			old_state = voucher_mach_msg_adopt(&bufRequest->Head);
+			bufReply->Head = (mach_msg_header_t){};
 
 			(void) (*demux)(&bufRequest->Head, &bufReply->Head);
 

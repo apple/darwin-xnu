@@ -207,58 +207,84 @@ icmp_error(
 	u_int32_t dest,
 	u_int32_t nextmtu)
 {
-	struct ip *oip, *nip;
-	struct icmp *icp;
-	struct mbuf *m;
-	u_int32_t oiphlen, icmplen, icmpelen, nlen;
+	struct ip *oip = NULL;
+	struct ip *nip = NULL;
+	struct icmp *icp = NULL;
+	struct mbuf *m = NULL;
+	u_int32_t oiphlen = 0;
+	u_int32_t icmplen = 0;
+	u_int32_t icmpelen = 0;
+	u_int32_t nlen = 0;
 
+	VERIFY((u_int)type <= ICMP_MAXTYPE);
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(n);
 
+	if (type != ICMP_REDIRECT)
+		icmpstat.icps_error++;
+	/*
+	 * Don't send error:
+	 *   if not the first fragment of message
+	 *   if original packet was a multicast or broadcast packet
+	 *   if the old packet protocol was ICMP
+	 *   error message, only known informational types.
+	 */
+	if (n->m_flags & (M_BCAST|M_MCAST))
+		goto freeit;
+
+	/*
+	 * Drop if IP header plus ICMP_MINLEN bytes are not contiguous
+	 * in first mbuf.
+	 */
+	if (n->m_len < sizeof(struct ip) + ICMP_MINLEN)
+		goto freeit;
+
 	oip = mtod(n, struct ip *);
 	oiphlen = IP_VHL_HL(oip->ip_vhl) << 2;
+	if (n->m_len < oiphlen + ICMP_MINLEN)
+		goto freeit;
 
 #if (DEBUG | DEVELOPMENT)
 	if (icmpprintfs > 1)
 		printf("icmp_error(0x%llx, %x, %d)\n",
 		    (uint64_t)VM_KERNEL_ADDRPERM(oip), type, code);
 #endif
-	if (type != ICMP_REDIRECT)
-		icmpstat.icps_error++;
-	/*
-	 * Don't send error if not the first fragment of message.
-	 * Don't error if the old packet protocol was ICMP
-	 * error message, only known informational types.
-	 */
+
 	if (oip->ip_off & ~(IP_MF|IP_DF))
 		goto freeit;
 
 	if (oip->ip_p == IPPROTO_ICMP && type != ICMP_REDIRECT &&
-	  n->m_len >= oiphlen + ICMP_MINLEN &&
-	  !ICMP_INFOTYPE(((struct icmp *)(void *)((caddr_t)oip + oiphlen))->
-	  icmp_type)) {
+	    n->m_len >= oiphlen + ICMP_MINLEN &&
+	    !ICMP_INFOTYPE(((struct icmp *)(void *)((caddr_t)oip + oiphlen))->
+	        icmp_type)) {
 		icmpstat.icps_oldicmp++;
 		goto freeit;
 	}
-	/*
-	 * Don't send error in response to a multicast or
-	 * broadcast packet
-	 */
-	if (n->m_flags & (M_BCAST|M_MCAST))
-		goto freeit;
 
 	/*
 	 * Calculate the length to quote from original packet and prevent
 	 * the ICMP mbuf from overflowing.
+	 * Unfortunatly this is non-trivial since ip_forward()
+	 * sends us truncated packets.
 	 */
 	nlen = m_length(n);
 	if (oip->ip_p == IPPROTO_TCP) {
-		struct tcphdr *th;
-		u_int16_t tcphlen;
+		struct tcphdr *th = NULL;
+		u_int16_t tcphlen = 0;
 
+		/*
+		 * If the packet got truncated and TCP header
+		 * is not contained in the packet, send out
+		 * standard reply with only IP header as payload
+		 */
 		if (oiphlen + sizeof(struct tcphdr) > n->m_len &&
 		    n->m_next == NULL)
 			goto stdreply;
+
+		/*
+		 * Otherwise, pull up to get IP and TCP headers
+		 * together
+		 */
 		if (n->m_len < (oiphlen + sizeof(struct tcphdr)) &&
 		    (n = m_pullup(n, (oiphlen + sizeof(struct tcphdr)))) == NULL)
 			goto freeit;
@@ -274,6 +300,8 @@ icmp_error(
 		    sizeof(u_int32_t))))
 			goto freeit;
 		tcphlen = th->th_off << 2;
+
+		/* Sanity checks */
 		if (tcphlen < sizeof(struct tcphdr))
 			goto freeit;
 		if (oip->ip_len < (oiphlen + tcphlen))
@@ -297,11 +325,14 @@ icmp_error(
 stdreply:	icmpelen = max(ICMP_MINLEN, min(icmp_datalen,
 		    (oip->ip_len - oiphlen)));
 
-	icmplen = min(oiphlen + icmpelen, min(nlen, oip->ip_len));
+	icmplen = min(oiphlen + icmpelen, nlen);
 	if (icmplen < sizeof(struct ip))
 		goto freeit;
+
 	/*
 	 * First, formulate icmp message
+	 * Allocate enough space for the IP header, ICMP header
+	 * and the payload (part of the original message to be sent back).
 	 */
 	if (MHLEN > (sizeof(struct ip) + ICMP_MINLEN + icmplen))
 		m = m_gethdr(M_DONTWAIT, MT_HEADER);	/* MAC-OK */
@@ -311,24 +342,20 @@ stdreply:	icmpelen = max(ICMP_MINLEN, min(icmp_datalen,
 	if (m == NULL)
 		goto freeit;
 
-	if (n->m_flags & M_SKIP_FIREWALL) {
-		/*
-		 * set M_SKIP_FIREWALL to skip firewall check, since
-		 * we're called from firewall
-		 */
-		m->m_flags |= M_SKIP_FIREWALL;
-	}
-
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_netlayer(n, m);
 #endif
-	m->m_len = icmplen + ICMP_MINLEN; /* for ICMP header and data */
-	MH_ALIGN(m, m->m_len);
+	/*
+	 * Further refine the payload length to the space
+	 * remaining in mbuf after including the IP header and ICMP
+	 * header.
+	 */
+	icmplen = min(icmplen, M_TRAILINGSPACE(m) -
+	    sizeof(struct ip) - ICMP_MINLEN);
+	m_align(m, ICMP_MINLEN + icmplen);
+	m->m_len = ICMP_MINLEN + icmplen; /* for ICMP header and data */
+
 	icp = mtod(m, struct icmp *);
-	if ((u_int)type > ICMP_MAXTYPE) {
-		m_freem(m);
-		goto freeit;
-	}
 	icmpstat.icps_outhist[type]++;
 	icp->icmp_type = type;
 	if (type == ICMP_REDIRECT)
@@ -349,6 +376,11 @@ stdreply:	icmpelen = max(ICMP_MINLEN, min(icmp_datalen,
 	}
 
 	icp->icmp_code = code;
+
+	/*
+	 * Copy icmplen worth of content from original
+	 * mbuf (n) to the new packet after ICMP header.
+	 */
 	m_copydata(n, 0, icmplen, (caddr_t)&icp->icmp_ip);
 	nip = &icp->icmp_ip;
 
@@ -360,13 +392,12 @@ stdreply:	icmpelen = max(ICMP_MINLEN, min(icmp_datalen,
 	HTONS(nip->ip_off);
 #endif
 	/*
-	 * Now, copy old ip header (without options)
-	 * in front of icmp message.
-	 */
-	if (m->m_data - sizeof(struct ip) < m->m_pktdat) {
-		m_freem(m);
-		goto freeit;
-	}
+	 * Set up ICMP message mbuf and copy old IP header (without options
+	 * in front of ICMP message.
+	 * If the original mbuf was meant to bypass the firewall, the error
+	 * reply should bypass as well.
+         */
+	m->m_flags |= n->m_flags & M_SKIP_FIREWALL;
 	m->m_data -= sizeof(struct ip);
 	m->m_len += sizeof(struct ip);
 	m->m_pkthdr.len = m->m_len;
@@ -379,7 +410,6 @@ stdreply:	icmpelen = max(ICMP_MINLEN, min(icmp_datalen,
 	nip->ip_tos = 0;
 	nip->ip_off = 0;
 	icmp_reflect(m);
-
 freeit:
 	m_freem(n);
 }

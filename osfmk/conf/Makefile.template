@@ -40,14 +40,12 @@ OBJS_NO_CAST_ALIGN =			\
 		cpu_threads.o		\
 		cpuid.o			\
 		locks_i386.o		\
+		locks_i386_opt.o	\
 		machine_task.o		\
 		mp_desc.o		\
 		pcb.o			\
 		pcb_native.o		\
 		kdp_x86_common.o	\
-		memory_object.o		\
-		vm_apple_protect.o	\
-		vm_map.o		\
 		startup64.o		\
 		affinity.o		\
 		sched_grrr.o		\
@@ -60,9 +58,6 @@ OBJS_NO_CAST_ALIGN =			\
 		status.o		\
 		machine_routines.o	\
 		loose_ends.o		\
-		fips_sha1.o		\
-		prng_yarrow.o		\
-		sha1mod.o		\
 		sleh.o			\
 		ccdigest_final_64be.o	\
 		ccdigest_init.o		\
@@ -71,17 +66,8 @@ OBJS_NO_CAST_ALIGN =			\
 		cchmac_init.o		\
 		ccsha1.o		\
 		ipc_object.o		\
-		ccmode_ctr_crypt.o	\
-		ccmode_factory_ctr_crypt.o	\
-		ccmode_ctr_init.o	\
-		ccmode_ctr_setctr.o	\
 		ipc_kmsg.o		\
-		ipc_right.o		\
-		bsd_vm.o		\
-		vm_map_store.o		\
-		vm_map_store_ll.o	\
-		vm_map_store_rb.o	\
-		vm_debug.o
+		ipc_right.o
 
 # Objects that don't want -Wsign-compare warning (15294427)
 OBJS_NO_SIGN_COMPARE =		\

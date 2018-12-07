@@ -123,6 +123,9 @@ posix_spawnattr_init(posix_spawnattr_t *attr)
 		(*psattrp)->psa_memlimit_active = -1;
 		(*psattrp)->psa_memlimit_inactive = -1;
 
+		/* Default is no thread limit */
+		(*psattrp)->psa_thread_limit = 0;
+
 		/* Default is no CPU usage monitor active. */
 		(*psattrp)->psa_cpumonitor_percent = 0;
 		(*psattrp)->psa_cpumonitor_interval = 0;
@@ -150,6 +153,8 @@ posix_spawnattr_init(posix_spawnattr_t *attr)
 
 		/* Default is no change to role */
 		(*psattrp)->psa_darwin_role = POSIX_SPAWN_DARWIN_ROLE_NONE;
+
+		(*psattrp)->psa_max_addr = 0;
 	}
 
 	return (err);
@@ -1415,6 +1420,23 @@ posix_spawnattr_setjetsam_ext(posix_spawnattr_t * __restrict attr,
 	return (0);
 }
 
+int
+posix_spawnattr_set_threadlimit_ext(posix_spawnattr_t * __restrict attr,
+	int thread_limit)
+{
+	_posix_spawnattr_t psattr;
+
+	if (attr == NULL || *attr == NULL)
+		return EINVAL;
+
+	psattr = *(_posix_spawnattr_t *)attr;
+
+	psattr->psa_thread_limit = thread_limit;
+
+	return (0);
+
+}
+
 
 /*
  * posix_spawnattr_set_importancewatch_port_np
@@ -1752,7 +1774,20 @@ posix_spawnattr_set_persona_groups_np(const posix_spawnattr_t * __restrict attr,
 	return 0;
 }
 
+int
+posix_spawnattr_set_max_addr_np(const posix_spawnattr_t * __restrict attr, uint64_t max_addr)
+{
+	_posix_spawnattr_t psattr;
 
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	psattr->psa_max_addr = max_addr;
+
+	return 0;
+}
 
 /*
  * posix_spawn

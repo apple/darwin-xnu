@@ -1111,6 +1111,7 @@ mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 
 	 char *vn_path = NULL;
 	 vm_size_t vn_pathlen = MAXPATHLEN;
+	 cpu_type_t cpu_type = (imgp == NULL) ? CPU_TYPE_ANY : imgp->ip_origcputype;
 
 
 #if SECURITY_MAC_CHECK_ENFORCE
@@ -1119,7 +1120,7 @@ mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 		  return 0;
 #endif
 
-	 MAC_CHECK(vnode_check_signature, vp, vp->v_label, cs_blob,
+	 MAC_CHECK(vnode_check_signature, vp, vp->v_label, cpu_type, cs_blob,
 			   cs_flags, signer_type, flags, &fatal_failure_desc, &fatal_failure_desc_len);
 
 	 if (fatal_failure_desc_len) {

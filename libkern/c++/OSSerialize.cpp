@@ -37,6 +37,7 @@ __END_DECLS
 #include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/OSSerializeBinary.h>
+#include <libkern/Block.h>
 #include <IOKit/IOLib.h>
 
 #define super OSObject
@@ -288,6 +289,35 @@ OSSerializer * OSSerializer::forTarget( void * target,
         thing->callback = callback;
     }
     return( thing );
+}
+
+bool OSSerializer::callbackToBlock(void * target __unused, void * ref,
+                                     OSSerialize * serializer)
+{
+    return ((OSSerializerBlock)ref)(serializer);
+}
+
+OSSerializer * OSSerializer::withBlock(
+        OSSerializerBlock callback)
+{
+    OSSerializer * serializer;
+    OSSerializerBlock block;
+
+    block = Block_copy(callback);
+    if (!block) return (0);
+
+    serializer = (OSSerializer::forTarget(NULL, &OSSerializer::callbackToBlock, block));
+
+    if (!serializer) Block_release(block);
+
+    return (serializer);
+}
+
+void OSSerializer::free(void)
+{
+    if (callback == &callbackToBlock) Block_release(ref);
+
+    super::free();
 }
 
 bool OSSerializer::serialize( OSSerialize * s ) const

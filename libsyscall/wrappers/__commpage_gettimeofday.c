@@ -95,7 +95,11 @@ __commpage_gettimeofday_internal(struct timeval *tp, uint64_t *tbr_out)
 	if (delta >= Ticks_per_sec)
 		return(1);
 
-	tp->tv_sec = TimeStamp_sec;
+	if (TimeStamp_sec > __LONG_MAX__) {
+		return(1);
+	}
+
+	tp->tv_sec = (__darwin_time_t)TimeStamp_sec;
 
 	over = multi_overflow(Tick_scale, delta);
 	if(over){

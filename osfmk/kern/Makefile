@@ -15,11 +15,13 @@ DATAFILES = \
 
 PRIVATE_DATAFILES = \
 	cs_blobs.h \
+	trustcache.h \
 	debug.h \
 	ecc.h \
 	block_hint.h \
 	monotonic.h \
-	arithmetic_128.h
+	arithmetic_128.h  \
+	turnstile.h
 
 EXPORT_FILES = \
 	affinity.h \
@@ -27,6 +29,7 @@ EXPORT_FILES = \
 	audit_sessionport.h \
 	backtrace.h \
 	bits.h \
+	btlog.h \
 	call_entry.h \
 	clock.h \
 	coalition.h \
@@ -52,6 +55,7 @@ EXPORT_FILES = \
 	policy_internal.h \
 	processor.h \
 	queue.h \
+	priority_queue.h \
 	sched_prim.h \
 	sfi.h \
 	simple_lock.h \
@@ -72,6 +76,11 @@ PRIVATE_EXPORT_FILES = \
 	copyout_shim.h
 
 
+XNU_ONLY_EXPORTS = \
+	cpu_quiesce.h \
+	ipc_kobject.h \
+	ux_handler.h
+
 INSTALL_MI_LIST = ${DATAFILES}
 
 INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
@@ -80,7 +89,7 @@ INSTALL_KF_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES} ${EXPORT_FILES} ${PRI
 
 INSTALL_MI_DIR = kern
 
-EXPORT_MI_LIST = ${DATAFILES} ${PRIVATE_DATAFILES} ${EXPORT_FILES} ipc_kobject.h
+EXPORT_MI_LIST = ${DATAFILES} ${PRIVATE_DATAFILES} ${EXPORT_FILES} ${XNU_ONLY_EXPORTS}
 
 EXPORT_MI_DIR = kern
 

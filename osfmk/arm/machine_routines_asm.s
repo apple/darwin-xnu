@@ -123,8 +123,8 @@ LEXT(timer_grab)
 	bx		lr
 
 	.align	2
-	.globl	EXT(timer_update)
-LEXT(timer_update)
+	.globl	EXT(timer_advance_internal_32)
+LEXT(timer_advance_internal_32)
 	str		r1, [r0, TIMER_HIGHCHK]
 #if	__ARM_SMP__
 	dmb		ish									// dmb ish
@@ -188,6 +188,44 @@ LEXT(OSSynchronizeIO)
 	dsb
 	bx		lr
 
+.macro SYNC_TLB_FLUSH
+	dsb	ish
+	isb
+.endmacro
+
+/*
+ *	void sync_tlb_flush
+ *
+ *		Synchronize one or more prior TLB flush operations
+ */
+	.text
+	.align 2
+	.globl EXT(sync_tlb_flush)
+LEXT(sync_tlb_flush)
+	SYNC_TLB_FLUSH
+	bx	lr
+
+.macro FLUSH_MMU_TLB
+	mov     r0, #0
+#if	__ARM_SMP__
+	mcr     p15, 0, r0, c8, c3, 0				// Invalidate Inner Shareable entire TLBs
+#else
+	mcr     p15, 0, r0, c8, c7, 0				// Invalidate entire TLB
+#endif
+.endmacro
+
+/*
+ *	void flush_mmu_tlb_async(void)
+ *
+ *		Flush all TLBs, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_async)
+LEXT(flush_mmu_tlb_async)
+	FLUSH_MMU_TLB
+	bx	lr
+
 /*
  *	void flush_mmu_tlb(void)
  *
@@ -197,30 +235,59 @@ LEXT(OSSynchronizeIO)
 	.align 2
 	.globl EXT(flush_mmu_tlb)
 LEXT(flush_mmu_tlb)
+	FLUSH_MMU_TLB
+	SYNC_TLB_FLUSH
+	bx	lr
+
+.macro FLUSH_CORE_TLB
 	mov     r0, #0
-#if	__ARM_SMP__
-	mcr     p15, 0, r0, c8, c3, 0				// Invalidate Inner Shareable entire TLBs
-#else
 	mcr     p15, 0, r0, c8, c7, 0				// Invalidate entire TLB
-#endif
-	dsb		ish
-	isb
-	bx		lr
+.endmacro
+
+/*
+ *
+ *	void flush_core_tlb_async(void)
+ *
+ *		Flush local core's TLB, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_core_tlb_async)
+LEXT(flush_core_tlb_async)
+	FLUSH_CORE_TLB
+	bx	lr
 
 /*
  *	void flush_core_tlb(void)
  *
- *		Flush core TLB
+ *		Flush local core's TLB
  */
 	.text
 	.align 2
 	.globl EXT(flush_core_tlb)
 LEXT(flush_core_tlb)
-	mov     r0, #0
-	mcr     p15, 0, r0, c8, c7, 0				// Invalidate entire TLB
-	dsb		ish
-	isb
-	bx		lr
+	FLUSH_CORE_TLB
+	SYNC_TLB_FLUSH
+	bx	lr
+
+.macro FLUSH_MMU_TLB_ENTRY
+#if	__ARM_SMP__
+	mcr     p15, 0, r0, c8, c3, 1				// Invalidate TLB  Inner Shareableentry
+#else
+	mcr     p15, 0, r0, c8, c7, 1				// Invalidate TLB entry
+#endif
+.endmacro
+/*
+ *	void flush_mmu_tlb_entry_async(uint32_t)
+ *
+ *		Flush TLB entry, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_entry_async)
+LEXT(flush_mmu_tlb_entry_async)
+	FLUSH_MMU_TLB_ENTRY
+	bx	lr
 
 /*
  *	void flush_mmu_tlb_entry(uint32_t)
@@ -231,40 +298,70 @@ LEXT(flush_core_tlb)
 	.align 2
 	.globl EXT(flush_mmu_tlb_entry)
 LEXT(flush_mmu_tlb_entry)
-#if	__ARM_SMP__
-	mcr     p15, 0, r0, c8, c3, 1				// Invalidate TLB  Inner Shareableentry
-#else
-	mcr     p15, 0, r0, c8, c7, 1				// Invalidate TLB entry
-#endif
-	dsb		ish
-	isb
-	bx		lr
+	FLUSH_MMU_TLB_ENTRY
+	SYNC_TLB_FLUSH
+	bx	lr
 
-/*
- *	void flush_mmu_tlb_entries(uint32_t, uint32_t)
- *
- *		Flush TLB entries
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb_entries)
-LEXT(flush_mmu_tlb_entries)
+.macro FLUSH_MMU_TLB_ENTRIES
 1:
 #if	__ARM_SMP__
 	mcr     p15, 0, r0, c8, c3, 1				// Invalidate TLB Inner Shareable entry 
 #else
 	mcr     p15, 0, r0, c8, c7, 1				// Invalidate TLB entry
 #endif
-	add		r0, r0, ARM_PGBYTES					// Increment to the next page
-	cmp		r0, r1								// Loop if current address < end address
-	blt		1b
-	dsb		ish									// Synchronize
-	isb
-	bx		lr
-
+	add	r0, r0, ARM_PGBYTES				// Increment to the next page
+	cmp	r0, r1						// Loop if current address < end address
+	blt	1b
+.endmacro
 
 /*
- *	void flush_mmu_tlb_mva_entries(uint32_t)
+ *	void flush_mmu_tlb_entries_async(uint32_t, uint32_t)
+ *
+ *		Flush TLB entries for address range, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_entries_async)
+LEXT(flush_mmu_tlb_entries_async)
+	FLUSH_MMU_TLB_ENTRIES
+	bx	lr
+
+/*
+ *	void flush_mmu_tlb_entries(uint32_t, uint32_t)
+ *
+ *		Flush TLB entries for address range
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_entries)
+LEXT(flush_mmu_tlb_entries)
+	FLUSH_MMU_TLB_ENTRIES
+	SYNC_TLB_FLUSH
+	bx	lr
+
+
+.macro FLUSH_MMU_TLB_MVA_ENTRIES
+#if	__ARM_SMP__
+	mcr     p15, 0, r0, c8, c3, 3				// Invalidate TLB Inner Shareable entries by mva
+#else
+	mcr     p15, 0, r0, c8, c7, 3				// Invalidate TLB Inner Shareable entries by mva
+#endif
+.endmacro
+
+/*
+ *	void flush_mmu_tlb_mva_entries_async(uint32_t)
+ *
+ *		Flush TLB entries for mva, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_mva_entries_async)
+LEXT(flush_mmu_tlb_mva_entries_async)
+	FLUSH_MMU_TLB_MVA_ENTRIES
+	bx	lr
+
+/*
+ *	void flush_mmu_tlb_mva_entries_async(uint32_t)
  *
  *		Flush TLB entries for mva
  */
@@ -272,46 +369,71 @@ LEXT(flush_mmu_tlb_entries)
 	.align 2
 	.globl EXT(flush_mmu_tlb_mva_entries)
 LEXT(flush_mmu_tlb_mva_entries)
-#if	__ARM_SMP__
-	mcr     p15, 0, r0, c8, c3, 3				// Invalidate TLB Inner Shareable entries by mva
-#else
-	mcr     p15, 0, r0, c8, c7, 3				// Invalidate TLB Inner Shareable entries by mva
-#endif
-	dsb		ish
-	isb
-	bx		lr
+	FLUSH_MMU_TLB_MVA_ENTRIES
+	SYNC_TLB_FLUSH
+	bx	lr
 
-/*
- *	void flush_mmu_tlb_asid(uint32_t)
- *
- *		Flush TLB entriesfor requested asid
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb_asid)
-LEXT(flush_mmu_tlb_asid)
+.macro FLUSH_MMU_TLB_ASID
 #if	__ARM_SMP__
 	mcr     p15, 0, r0, c8, c3, 2				// Invalidate TLB Inner Shareable entries by asid
 #else
 	mcr     p15, 0, r0, c8, c7, 2				// Invalidate TLB entries by asid
 #endif
-	dsb		ish
-	isb
-	bx		lr
+.endmacro
+
+/*
+ *	void flush_mmu_tlb_asid_async(uint32_t)
+ *
+ *		Flush TLB entries for asid, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_asid_async)
+LEXT(flush_mmu_tlb_asid_async)
+	FLUSH_MMU_TLB_ASID
+	bx	lr
+
+/*
+ *	void flush_mmu_tlb_asid(uint32_t)
+ *
+ *		Flush TLB entries for asid
+ */
+	.text
+	.align 2
+	.globl EXT(flush_mmu_tlb_asid)
+LEXT(flush_mmu_tlb_asid)
+	FLUSH_MMU_TLB_ASID
+	SYNC_TLB_FLUSH
+	bx	lr
+
+.macro FLUSH_CORE_TLB_ASID
+	mcr     p15, 0, r0, c8, c7, 2				// Invalidate TLB entries by asid
+.endmacro
+
+/*
+ *	void flush_core_tlb_asid_async(uint32_t)
+ *
+ *		Flush local core TLB entries for asid, don't wait for completion
+ */
+	.text
+	.align 2
+	.globl EXT(flush_core_tlb_asid_async)
+LEXT(flush_core_tlb_asid_async)
+	FLUSH_CORE_TLB_ASID
+	bx	lr
 
 /*
  *	void flush_core_tlb_asid(uint32_t)
  *
- *		Flush TLB entries for core for requested asid
+ *		Flush local core TLB entries for asid
  */
 	.text
 	.align 2
 	.globl EXT(flush_core_tlb_asid)
 LEXT(flush_core_tlb_asid)
-	mcr     p15, 0, r0, c8, c7, 2				// Invalidate TLB entries by asid
-	dsb		ish
-	isb
-	bx		lr
+	FLUSH_CORE_TLB_ASID
+	SYNC_TLB_FLUSH
+	bx	lr
 
 /*
  * 	Set MMU Translation Table Base
@@ -499,22 +621,7 @@ LEXT(set_context_id)
 	isb
 	bx		lr
 
-#define COPYIO_HEADER(rUser, kLabel)					\
-	/* test for zero len */						;\
-	cmp		r2, #0						;\
-	moveq		r0, #0						;\
-	bxeq		lr						;\
-	/* test user_addr, user_addr+len to see if it's in kernel space */		;\
-	add		r12, rUser, r2					;\
-	cmp		r12, KERNELBASE					;\
-	bhs		kLabel						;\
-	cmp		r12, rUser					;\
-	bcc		kLabel
-
-#define	COPYIO_VALIDATE(NAME, SIZE)					\
-	/* branch around for small sizes */				;\
-	cmp		r2, #(SIZE)					;\
-	bls		L##NAME##_validate_done				;\
+#define	COPYIO_VALIDATE(NAME)						\
 	/* call NAME_validate to check the arguments */			;\
 	push		{r0, r1, r2, r7, lr}				;\
 	add		r7, sp, #12					;\
@@ -523,7 +630,6 @@ LEXT(set_context_id)
 	addne           sp, #12						;\
 	popne		{r7, pc}					;\
 	pop		{r0, r1, r2, r7, lr}				;\
-L##NAME##_validate_done:
 
 #define	COPYIO_SET_RECOVER()						\
 	/* set recovery address */					;\
@@ -532,6 +638,15 @@ L##NAME##_validate_done:
 	mrc		p15, 0, r12, c13, c0, 4				;\
 	ldr		r4, [r12, TH_RECOVER]				;\
 	str		r3, [r12, TH_RECOVER]
+
+#define COPYIO_TRY_KERNEL()								\
+	/* if (current_thread()->map->pmap == kernel_pmap) copyio_kernel() */		;\
+	mrc		p15, 0, r12, c13, c0, 4			// Read TPIDRPRW	;\
+	ldr		r3, [r12, ACT_MAP]						;\
+	ldr		r3, [r3, MAP_PMAP]						;\
+	LOAD_ADDR(ip, kernel_pmap_store)						;\
+	cmp		r3, ip								;\
+	beq		copyio_kern_body
 
 #if __ARM_USER_PROTECT__
 #define	COPYIO_MAP_USER()					\
@@ -549,7 +664,7 @@ L##NAME##_validate_done:
 #define	COPYIO_MAP_USER()
 #endif
 
-#define COPYIO_HEADER_KERN()						;\
+#define COPYIO_HEADER()							;\
 	/* test for zero len */						;\
 	cmp		r2, #0						;\
 	moveq		r0, #0						;\
@@ -615,22 +730,21 @@ L$0_noerror:
 	.align 2
 	.globl EXT(copyinstr)
 LEXT(copyinstr)
+	cmp		r2, #0
+	moveq		r0, #ENAMETOOLONG
+	moveq		r12, #0
+	streq		r12, [r3]
+	bxeq		lr
+	COPYIO_VALIDATE(copyin)
 	stmfd	sp!, { r4, r5, r6 }
 	
 	mov		r6, r3
-	add		r3, r0, r2						// user_addr + max
-	cmp		r3, KERNELBASE					// Check KERNELBASE < user_addr + max
-	bhs		copyinstr_param_error			// Drop out if it is
-	cmp		r3, r0							// Check we're copying from user space
-	bcc		copyinstr_param_error			// Drop out if we aren't
 	adr     	r3, copyinstr_error			// Get address for recover
 	mrc		p15, 0, r12, c13, c0, 4			// Read TPIDRPRW
 	ldr		r4, [r12, TH_RECOVER]				;\
 	str		r3, [r12, TH_RECOVER]
 	COPYIO_MAP_USER()
 	mov		r12, #0							// Number of bytes copied so far
-	cmp		r2, #0
-	beq		copyinstr_too_long
 copyinstr_loop:
 	ldrb		r3, [r0], #1					// Load a byte from the source (user)
 	strb		r3, [r1], #1					// Store a byte to the destination (kernel)
@@ -647,16 +761,15 @@ copyinstr_too_long:
 copyinstr_done:
 //
 // When we get here, we have finished copying the string.  We came here from
-// either the "beq copyinstr_done" above, in which case r4 == 0 (which is also
+// either the "beq copyinstr_done" above, in which case r3 == 0 (which is also
 // the function result for success), or falling through from copyinstr_too_long,
-// in which case r4 == ENAMETOOLONG.
+// in which case r3 == ENAMETOOLONG.
 //
 	str		r12, [r6]						// Save the count for actual
 	mov		r0, r3							// Return error code from r3
 copyinstr_exit:
 	COPYIO_UNMAP_USER()
 	str		r4, [r12, TH_RECOVER]
-copyinstr_exit2:
 	ldmfd	sp!, { r4, r5, r6 }
 	bx		lr
 
@@ -665,11 +778,6 @@ copyinstr_error:
 	mov		r0, #EFAULT
 	b		copyinstr_exit
 
-copyinstr_param_error:
-	/* set error, exit routine */
-	mov		r0, #EFAULT
-	b		copyinstr_exit2
-
 /*
  * int copyin(const user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes)
  */
@@ -677,8 +785,9 @@ copyinstr_param_error:
 	.align 2
 	.globl EXT(copyin)
 LEXT(copyin)
-	COPYIO_HEADER(r0,copyio_kernel)
-	COPYIO_VALIDATE(copyin,4096)
+	COPYIO_HEADER()
+	COPYIO_VALIDATE(copyin)
+	COPYIO_TRY_KERNEL()
 	COPYIO_SET_RECOVER()
 	COPYIO_MAP_USER()
 	COPYIO_BODY copyin
@@ -693,8 +802,9 @@ LEXT(copyin)
 	.align 2
 	.globl EXT(copyout)
 LEXT(copyout)
-	COPYIO_HEADER(r1,copyio_kernel)
-	COPYIO_VALIDATE(copyout,4096)
+	COPYIO_HEADER()
+	COPYIO_VALIDATE(copyout)
+	COPYIO_TRY_KERNEL()
 	COPYIO_SET_RECOVER()
 	COPYIO_MAP_USER()
 	COPYIO_BODY copyout
@@ -717,7 +827,7 @@ LEXT(copyin_word)
 	tst		r0, r3			// Test alignment of user address
 	bne		L_copyin_invalid
 
-	COPYIO_HEADER(r0,L_copyin_word_fault)
+	COPYIO_VALIDATE(copyin)
 	COPYIO_SET_RECOVER()
 	COPYIO_MAP_USER()
 
@@ -733,9 +843,6 @@ LEXT(copyin_word)
 	bx		lr
 L_copyin_invalid:
 	mov		r0, #EINVAL
-	bx		lr
-L_copyin_word_fault:
-	mov		r0, #EFAULT
 	bx		lr
 
 
@@ -753,8 +860,8 @@ copyio_error:
 	.align 2
 	.globl EXT(copyin_kern)
 LEXT(copyin_kern)
-	COPYIO_HEADER_KERN()
-	b		bypass_check
+	COPYIO_HEADER()
+	b		copyio_kern_body
 
 /*
  *  int copyout_kern(const char *kernel_addr, user_addr_t user_addr, vm_size_t nbytes)
@@ -763,23 +870,10 @@ LEXT(copyin_kern)
 	.align 2
 	.globl EXT(copyout_kern)
 LEXT(copyout_kern)
-	COPYIO_HEADER_KERN()
-	b		bypass_check
+	COPYIO_HEADER()
+	b		copyio_kern_body
 
-copyio_kernel_error:
-	mov		r0, #EFAULT
-	bx		lr
-
-copyio_kernel:
-	/* if (current_thread()->map->pmap != kernel_pmap) return EFAULT */
-	mrc		p15, 0, r12, c13, c0, 4			// Read TPIDRPRW
-	ldr		r3, [r12, ACT_MAP]
-	ldr		r3, [r3, MAP_PMAP]
-	LOAD_ADDR(ip, kernel_pmap_store)
-	cmp		r3, ip
-	bne		copyio_kernel_error
-
-bypass_check:
+copyio_kern_body:
 	stmfd	sp!, { r5, r6 }
 	COPYIO_BODY copyio_kernel
 	ldmfd	sp!, { r5, r6 }

@@ -350,6 +350,15 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_FLAGS_SUPERPAGE_SIZE_2MB (SUPERPAGE_SIZE_2MB<<VM_FLAGS_SUPERPAGE_SHIFT)
 #endif
 
+/*
+ * EXC_GUARD definitions for virtual memory.
+ */
+#define GUARD_TYPE_VIRT_MEMORY	0x5
+
+/* Reasons for exception for virtual memory */
+enum virtual_memory_guard_exception_codes {
+	kGUARD_EXC_DEALLOC_GAP	= 1u << 0
+};
 
 #ifdef KERNEL_PRIVATE
 typedef struct {
@@ -368,7 +377,9 @@ typedef struct {
 		vmkf_fourk:1,
 		vmkf_overwrite_immutable:1,
 		vmkf_remap_prot_copy:1,
-		__vmkf_unused:18;
+		vmkf_cs_enforcement_override:1,
+		vmkf_cs_enforcement:1,
+		__vmkf_unused:16;
 } vm_map_kernel_flags_t;
 #define VM_MAP_KERNEL_FLAGS_NONE (vm_map_kernel_flags_t) {		\
 	.vmkf_atomic_entry = 0,	/* keep entry atomic (no coalescing) */ \
@@ -385,6 +396,8 @@ typedef struct {
 	.vmkf_fourk = 0,	/* use fourk pager */			\
 	.vmkf_overwrite_immutable = 0,	/* can overwrite immutable mappings */ \
 	.vmkf_remap_prot_copy = 0, /* vm_remap for VM_PROT_COPY */ 	\
+	.vmkf_cs_enforcement_override = 0, /* override CS_ENFORCEMENT */ \
+	.vmkf_cs_enforcement = 0,  /* new value for CS_ENFORCEMENT */ 	\
 	.__vmkf_unused = 0						\
 }
 #endif /* KERNEL_PRIVATE */
@@ -537,6 +550,23 @@ typedef struct {
 #define VM_MEMORY_AUDIO 90
 
 #define VM_MEMORY_VIDEOBITSTREAM 91
+
+/* memory allocated by CoreMedia */
+#define VM_MEMORY_CM_XPC 92
+
+#define VM_MEMORY_CM_RPC 93
+
+#define VM_MEMORY_CM_MEMORYPOOL 94
+
+#define VM_MEMORY_CM_READCACHE 95
+
+#define VM_MEMORY_CM_CRABS 96
+
+/* memory allocated for QuickLookThumbnailing */
+#define VM_MEMORY_QUICKLOOK_THUMBNAILS 97
+
+/* memory allocated by Accounts framework */
+#define VM_MEMORY_ACCOUNTS 98
 
 /* Reserve 240-255 for application */
 #define VM_MEMORY_APPLICATION_SPECIFIC_1 240

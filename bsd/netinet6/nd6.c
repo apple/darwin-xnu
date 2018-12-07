@@ -531,6 +531,10 @@ nd6_ifattach(struct ifnet *ifp)
 	nd6_ifreset(ifp);
 	lck_mtx_unlock(&ndi->lock);
 	nd6_setmtu(ifp);
+
+	nd6log0((LOG_INFO, ": ",
+	    "%s Reinit'd ND information for interface %s\n",
+	    if_name(ifp)));
 	return;
 }
 
@@ -1390,7 +1394,7 @@ addrloop:
 		if (pr->ndpr_expire != 0 && pr->ndpr_expire < timenow) {
 			/*
 			 * address expiration and prefix expiration are
-			 * separate.  NEVER perform in6_purgeaddr here.
+			 * separate. NEVER perform in6_purgeaddr here.
 			 */
 			pr->ndpr_stateflags |= NDPRF_PROCESSED_SERVICE;
 			NDPR_ADDREF_LOCKED(pr);

@@ -87,7 +87,8 @@ endif
 override DEFAULT_I386_MACHINE_CONFIG := NONE
 override DEFAULT_X86_64_MACHINE_CONFIG := NONE
 override DEFAULT_X86_64H_MACHINE_CONFIG := NONE
-
+override DEFAULT_ARM_MACHINE_CONFIG	:= T8002
+override DEFAULT_ARM64_MACHINE_CONFIG	:= S5L8960X
 
 # This is typically never specified (TARGET_CONFIGS is used)
 ifndef MACHINE_CONFIGS
@@ -114,6 +115,76 @@ endif
 # default kernel configuration = DEFAULT_KERNEL_CONFIG
 # default architecture configuration = system architecture where you are running make.
 
+ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
+
+# Defaults for "make all_embedded"
+ifeq ($(KERNEL_CONFIGS),DEFAULT)
+KERNEL_CONFIGS_EMBEDDED := RELEASE DEVELOPMENT
+else
+KERNEL_CONFIGS_EMBEDDED := $(KERNEL_CONFIGS)
+endif
+
+ifeq ($(ARCH_CONFIGS),DEFAULT)
+ARCH_CONFIGS_EMBEDDED := ARM ARM64
+else
+ARCH_CONFIGS_EMBEDDED := $(strip $(shell echo $(ARCH_CONFIGS) | $(TR) a-z A-Z))
+endif
+
+# Find supported products from the device map
+DEVICEMAP_PRODUCTS_ARMV7  := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH)		\
+				-query 'SELECT DISTINCT TargetType			\
+					FROM Files					\
+					  INNER JOIN Manifests USING (manifestID)	\
+					  INNER JOIN Targets USING (Target)		\
+					WHERE (KernelMachOArchitecture LIKE "armv7"	\
+					   AND fileType in ("KernelCache", "RestoreKernelCache"))')
+DEVICEMAP_PRODUCTS_ARMV7S := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH)		\
+				-query 'SELECT DISTINCT TargetType			\
+					FROM Files					\
+					  INNER JOIN Manifests USING (manifestID)	\
+					  INNER JOIN Targets USING (Target)		\
+					WHERE (KernelMachOArchitecture LIKE "armv7s"	\
+					   AND fileType in ("KernelCache", "RestoreKernelCache"))')
+DEVICEMAP_PRODUCTS_ARMV7K := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH)		\
+				-query 'SELECT DISTINCT TargetType			\
+					FROM Files					\
+					  INNER JOIN Manifests USING (manifestID)	\
+					  INNER JOIN Targets USING (Target)		\
+					WHERE (KernelMachOArchitecture LIKE "armv7k"	\
+					   AND fileType in ("KernelCache", "RestoreKernelCache"))')
+DEVICEMAP_PRODUCTS_ARM := $(DEVICEMAP_PRODUCTS_ARMV7) $(DEVICEMAP_PRODUCTS_ARMV7S) $(DEVICEMAP_PRODUCTS_ARMV7K)
+
+
+DEVICEMAP_PRODUCTS_ARM64 := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH)		\
+				-query 'SELECT DISTINCT TargetType			\
+					FROM Files					\
+					  INNER JOIN Manifests USING (manifestID)	\
+					  INNER JOIN Targets USING (Target)		\
+					WHERE (KernelMachOArchitecture LIKE "arm64"	\
+					   AND fileType in ("KernelCache", "RestoreKernelCache"))')
+
+
+# Generate a list of mappings of the form "n75:arm;t8002" based on the device map
+DEVICEMAP_PRODUCT_SOC_MAPPINGS := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH) -query SELECT DISTINCT TargetType, KernelMachOArchitecture, KernelPlatform FROM Targets | awk -F\| '{ if ($$2 ~ /armv[0-9][a-z]?/) { print $$1 ":arm;" $$3 } else if ($$2 ~ /arm64[a-z]?/) { print $$1 ":arm64;" $$3 ";" $$4} else { print $$1 ":" $$2 ";" $$3 ";" $$4} }' )
+
+# Map a product like "n75" to "arm;t8002"
+# $(1) is a product name in lower case
+function_lookup_product = $(call function_substitute_word_with_replacement,	\
+				 $(1),						\
+				 $(DEVICEMAP_PRODUCT_SOC_MAPPINGS),		\
+				 unknown_arch_for_$(1);unknown_platform_for_$(1) \
+			   )
+
+# Generate a list of mappings for products that use a different platform for their kernel configuration than their true platform
+# of the form "n71m:arm64;s8000;s8003". The 4th element is the true SoC platform, which will get an on-disk copy, while the
+# kernel's recursive build system will build the 3rd element as the KernelPlatform
+DEVICEMAP_PRODUCT_SOC_ALIASES := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH) -query SELECT DISTINCT TargetType, KernelMachOArchitecture, KernelPlatform, Platform FROM Targets WHERE KernelPlatform "!=" Platform | awk -F\| '{ if ($$2 ~ /armv[0-9][a-z]?/) { print $$1 ":arm;" $$3 ";" $$4} else if ($$2 ~ /arm64[a-z]?/) { print $$1 ":arm64;" $$3 ";" $$4} else { print $$1 ":" $$2 ";" $$3 ";" $$4} }' )
+
+function_lookup_product_alias = $(call function_substitute_word_with_replacement,	\
+					$(1),						\
+					$(DEVICEMAP_PRODUCT_SOC_ALIASES),		\
+				 )
+endif
 
 ifeq ($(PLATFORM),MacOSX)
 

@@ -179,6 +179,7 @@
 #include <arm/cpu_data_internal.h>
 #endif
 
+
 #define isdigit(d) ((d) >= '0' && (d) <= '9')
 #define Ctod(c) ((c) - '0')
 
@@ -584,6 +585,7 @@ __doprnt(
 			const char str[] = "<ptr>";
 			const char* strp = str;
 			int strl = sizeof(str) - 1;
+
 
 			if (u >= VM_MIN_KERNEL_AND_KEXT_ADDRESS && u <= VM_MAX_KERNEL_ADDRESS) {
 			    while(*strp != '\0') {

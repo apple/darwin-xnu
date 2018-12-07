@@ -34,7 +34,10 @@
 
 #include <corecrypto/ccsha2.h>
 #include <corecrypto/ccdigest_priv.h>
+#include "ccdigest_internal.h"
 #include "ccsha2_internal.h"
+
+#if !CC_KERNEL || !CC_USE_ASM
 
 const struct ccdigest_info ccsha256_ltc_di = {
     .output_size = CCSHA256_OUTPUT_SIZE,
@@ -46,3 +49,5 @@ const struct ccdigest_info ccsha256_ltc_di = {
     .compress = ccsha256_ltc_compress,
     .final = ccdigest_final_64be,
 };
+
+#endif

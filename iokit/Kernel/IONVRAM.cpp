@@ -36,13 +36,6 @@
 #include <kern/debug.h>
 #include <pexpert/pexpert.h>
 
-#if CONFIG_MACF
-extern "C" {
-#include <security/mac.h>
-#include <security/mac_framework.h>
-};
-#endif /* MAC */
-
 #define super IOService
 
 #define kIONVRAMPrivilege	kIOClientPrivilegeAdministrator
@@ -296,11 +289,7 @@ bool IODTNVRAM::serializeProperties(OSSerialize *s) const
       
       variablePerm = getOFVariablePerm(key);
       if ((hasPrivilege || (variablePerm != kOFVariablePermRootOnly)) &&
-	  ( ! (variablePerm == kOFVariablePermKernelOnly && current_task() != kernel_task) )
-#if CONFIG_MACF
-          && (current_task() == kernel_task || mac_iokit_check_nvram_get(kauth_cred_get(), key->getCStringNoCopy()) == 0)
-#endif
-         ) { }
+	  ( ! (variablePerm == kOFVariablePermKernelOnly && current_task() != kernel_task) )) { }
       else {
         dict->removeObject(key);
         iter->reset();
@@ -331,12 +320,6 @@ OSObject *IODTNVRAM::copyProperty(const OSSymbol *aKey) const
     if (variablePerm == kOFVariablePermRootOnly) return 0;
   }
   if (variablePerm == kOFVariablePermKernelOnly && current_task() != kernel_task) return 0;
-
-#if CONFIG_MACF
-  if (current_task() != kernel_task &&
-      mac_iokit_check_nvram_get(kauth_cred_get(), aKey->getCStringNoCopy()) != 0)
-    return 0;
-#endif
 
   IOLockLock(_ofLock);
   theObject = _ofDict->getObject(aKey);
@@ -384,7 +367,7 @@ bool IODTNVRAM::setProperty(const OSSymbol *aKey, OSObject *anObject)
 {
   bool     result;
   UInt32   propType, propPerm;
-  OSString *tmpString;
+  OSString *tmpString = 0;
   OSObject *propObject = 0, *oldObject;
 
   if (_ofDict == 0) return false;
@@ -399,12 +382,6 @@ bool IODTNVRAM::setProperty(const OSSymbol *aKey, OSObject *anObject)
   // Don't allow change of 'aapl,panic-info'.
   if (aKey->isEqualTo(kIODTNVRAMPanicInfoKey)) return false;
 
-#if CONFIG_MACF
-  if (current_task() != kernel_task &&
-      mac_iokit_check_nvram_set(kauth_cred_get(), aKey->getCStringNoCopy(), anObject) != 0)
-    return false;
-#endif
-  
   // Make sure the object is of the correct type.
   propType = getOFVariableType(aKey);
   switch (propType) {
@@ -458,6 +435,9 @@ bool IODTNVRAM::setProperty(const OSSymbol *aKey, OSObject *anObject)
   if (oldObject) {
     oldObject->release();
   }
+  if (tmpString) {
+    propObject->release();
+  }
 
   IOLockUnlock(_ofLock);
 
@@ -482,12 +462,6 @@ void IODTNVRAM::removeProperty(const OSSymbol *aKey)
   // Don't allow change of 'aapl,panic-info'.
   if (aKey->isEqualTo(kIODTNVRAMPanicInfoKey)) return;
   
-#if CONFIG_MACF
-  if (current_task() != kernel_task &&
-      mac_iokit_check_nvram_delete(kauth_cred_get(), aKey->getCStringNoCopy()) != 0)
-    return;
-#endif
-
   // If the object exists, remove it from the dictionary.
 
   IOLockLock(_ofLock);

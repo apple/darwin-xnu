@@ -32,9 +32,7 @@
 
 #ifndef	__ASSEMBLER__
 #include <stdint.h>
-#ifdef KERNEL_PRIVATE
 #include <mach/vm_types.h>
-#endif
 #endif
  
 /*
@@ -47,6 +45,7 @@
 /*
  * Bit definitions for _cpu_capabilities:
  */
+#define	kHasNeonFP16			0x00000008	// ARM v8.2 NEON FP16 supported
 #define	kCache32			0x00000010	// cache line size is 32 bytes
 #define	kCache64			0x00000020	// cache line size is 64 bytes
 #define	kCache128			0x00000040	// cache line size is 128 bytes
@@ -60,6 +59,7 @@
 #define	kNumCPUs			0x00FF0000	// number of CPUs (see _NumCPUs() below)
 #define kHasARMv8Crypto			0x01000000	// Optional ARMv8 Crypto extensions
 #define kHasARMv81Atomics		0x02000000	// ARMv8.1 Atomic instructions supported
+#define kHasARMv8Crc32			0x04000000	// Optional ARMv8 crc32 instructions (required in ARMv8.1)
 
 #define	kNumCPUsShift		16			// see _NumCPUs() below
 
@@ -91,6 +91,8 @@ typedef struct {
 	volatile uint32_t	TimeBase_shift;
 } commpage_timeofday_data_t;
 
+extern vm_address_t				_get_commpage_priv_address(void);
+
 #endif /* __ASSEMBLER__ */
 
 
@@ -98,26 +100,22 @@ typedef struct {
  * The shared kernel/user "comm page(s)":
  */
 
-#if defined(__arm64__)
+#if defined(__LP64__)
 
 #define _COMM_PAGE64_BASE_ADDRESS		(0x0000000FFFFFC000ULL) /* In TTBR0 */
 #define _COMM_HIGH_PAGE64_BASE_ADDRESS	(0xFFFFFFF0001FC000ULL) /* Just below the kernel, safely in TTBR1; only used for testing */
-#define _COMM_PRIV_PAGE64_BASE_ADDRESS	(_COMM_HIGH_PAGE64_BASE_ADDRESS - (PAGE_SIZE))		/* Privileged RO in kernel mode */
 
 #define _COMM_PAGE64_AREA_LENGTH		(_COMM_PAGE32_AREA_LENGTH)
 #define _COMM_PAGE64_AREA_USED			(-1)
 
-// macro to change a user comm page address to one that is accessible from privileged mode
-// we can no longer access user memory in privileged mode once PAN is enabled
-#define _COMM_PAGE_PRIV(_addr_)			((_addr_) - (_COMM_PAGE_START_ADDRESS) + (_COMM_PRIV_PAGE64_BASE_ADDRESS))
+#define _COMM_PAGE_PRIV(_addr_)			((_addr_) - (_COMM_PAGE_START_ADDRESS) + _get_commpage_priv_address())
 
 #ifdef KERNEL_PRIVATE
-extern vm_address_t						sharedpage_rw_addr;
 #define	_COMM_PAGE_RW_OFFSET			(0)
 #define	_COMM_PAGE_AREA_LENGTH			(PAGE_SIZE)
 
-#define	_COMM_PAGE_BASE_ADDRESS			(sharedpage_rw_addr)
-#define _COMM_PAGE_START_ADDRESS		(sharedpage_rw_addr)
+#define	_COMM_PAGE_BASE_ADDRESS			(_get_commpage_priv_address())
+#define _COMM_PAGE_START_ADDRESS		(_get_commpage_priv_address())
 #else /* KERNEL_PRIVATE */
 #define	_COMM_PAGE_AREA_LENGTH			(4096)
 
@@ -125,7 +123,7 @@ extern vm_address_t						sharedpage_rw_addr;
 #define _COMM_PAGE_START_ADDRESS		_COMM_PAGE64_BASE_ADDRESS
 #endif /* KERNEL_PRIVATE */
 
-#elif defined(__arm__)
+#else
 
 #define _COMM_PAGE64_BASE_ADDRESS		(-1)
 #define _COMM_PAGE64_AREA_LENGTH		(-1)
@@ -137,8 +135,7 @@ extern vm_address_t						sharedpage_rw_addr;
 #define _COMM_PAGE_PRIV(_addr_)			(_addr_)
 
 #ifdef KERNEL_PRIVATE
-extern vm_address_t				sharedpage_rw_addr;
-#define	_COMM_PAGE_RW_OFFSET			(sharedpage_rw_addr-_COMM_PAGE_BASE_ADDRESS)
+#define	_COMM_PAGE_RW_OFFSET			(_get_commpage_priv_address()-_COMM_PAGE_BASE_ADDRESS)
 #define	_COMM_PAGE_AREA_LENGTH			(PAGE_SIZE)
 #else
 #define	_COMM_PAGE_AREA_LENGTH			(4096)
@@ -147,8 +144,6 @@ extern vm_address_t				sharedpage_rw_addr;
 #define	_COMM_PAGE_BASE_ADDRESS			_COMM_PAGE32_BASE_ADDRESS
 #define _COMM_PAGE_START_ADDRESS		_COMM_PAGE32_BASE_ADDRESS
 
-#else
-#error Unknown architecture.
 #endif
 
 #define _COMM_PAGE32_BASE_ADDRESS		(0xFFFF4000)		/* Must be outside of normal map bounds */
@@ -207,6 +202,9 @@ extern vm_address_t				sharedpage_rw_addr;
 
 
 #define _COMM_PAGE_NEWTIMEOFDAY_DATA		(_COMM_PAGE_START_ADDRESS+0x120)	// used by gettimeofday(). Currently, sizeof(new_commpage_timeofday_data_t) = 40.
+
+// aligning to 128 bytes for cacheline/fabric size
+#define _COMM_PAGE_CPU_QUIESCENT_COUNTER        (_COMM_PAGE_START_ADDRESS+0x180)        // uint64_t, but reserve the whole 128 (0x80) bytes
 
 #define _COMM_PAGE_END				(_COMM_PAGE_START_ADDRESS+0x1000)	// end of common page
 

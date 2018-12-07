@@ -417,6 +417,12 @@ netagent_send_error_response(struct netagent_session *session, u_int8_t message_
 	int error = 0;
 	u_int8_t *response = NULL;
 	size_t response_size = sizeof(struct netagent_message_header);
+
+	if (session == NULL) {
+		NETAGENTLOG0(LOG_ERR, "Got a NULL session");
+		return (EINVAL);
+	}
+
 	MALLOC(response, u_int8_t *, response_size, M_NETAGENT, M_WAITOK);
 	if (response == NULL) {
 		return (ENOMEM);
@@ -1038,7 +1044,7 @@ netagent_handle_update_inner(struct netagent_session *session, struct netagent_w
 		search_client = NULL;
 		temp_client = NULL;
 		LIST_FOREACH_SAFE(search_client, &pending_triggers_list_copy, client_chain, temp_client) {
-			necp_force_update_client(search_client->client_id, session->wrapper->netagent.netagent_uuid);
+			necp_force_update_client(search_client->client_id, session->wrapper->netagent.netagent_uuid, session->wrapper->generation);
 			netagent_send_cellular_failed_event(new_wrapper, search_client->client_pid, search_client->client_proc_uuid);
 			LIST_REMOVE(search_client, client_chain);
 			FREE(search_client, M_NETAGENT);
@@ -1826,7 +1832,7 @@ netagent_get_agent_domain_and_type(uuid_t uuid, char *domain, char *type)
 		memcpy(domain, wrapper->netagent.netagent_domain, NETAGENT_DOMAINSIZE);
 		memcpy(type, wrapper->netagent.netagent_type, NETAGENT_TYPESIZE);
 	} else {
-		NETAGENTLOG0(LOG_DEBUG, "Type requested for invalid netagent");
+		NETAGENTLOG0(LOG_ERR, "Type requested for invalid netagent");
 	}
 	lck_rw_done(&netagent_lock);
 
@@ -1871,6 +1877,7 @@ int
 netagent_client_message_with_params(uuid_t agent_uuid,
 									uuid_t necp_client_uuid,
 									pid_t pid,
+									void *handle,
 									u_int8_t message_type,
 									struct necp_client_nexus_parameters *parameters,
 									void **assigned_results,
@@ -1938,13 +1945,16 @@ netagent_client_message_with_params(uuid_t agent_uuid,
 	}
 
 	if (wrapper->control_unit == 0) {
-		should_unlock = FALSE;
-		lck_rw_done(&netagent_lock);
 		if (wrapper->event_handler == NULL) {
 			// No event handler registered for kernel agent
 			error = EINVAL;
 		} else {
-			error = wrapper->event_handler(message_type, necp_client_uuid, pid, wrapper->event_context, parameters, assigned_results, assigned_results_length);
+			// We hold the shared lock during the event handler callout, so it is expected
+			// that the event handler will not lead to any registrations or unregistrations
+			// of network agents.
+			error = wrapper->event_handler(message_type, necp_client_uuid, pid, handle,
+										   wrapper->event_context, parameters,
+										   assigned_results, assigned_results_length);
 			if (error != 0) {
 				VERIFY(assigned_results == NULL || *assigned_results == NULL);
 				VERIFY(assigned_results_length == NULL || *assigned_results_length == 0);
@@ -1998,9 +2008,9 @@ done:
 }
 
 int
-netagent_client_message(uuid_t agent_uuid, uuid_t necp_client_uuid, pid_t pid, u_int8_t message_type)
+netagent_client_message(uuid_t agent_uuid, uuid_t necp_client_uuid, pid_t pid, void *handle, u_int8_t message_type)
 {
-	return (netagent_client_message_with_params(agent_uuid, necp_client_uuid, pid, message_type, NULL, NULL, NULL));
+	return (netagent_client_message_with_params(agent_uuid, necp_client_uuid, pid, handle, message_type, NULL, NULL, NULL));
 }
 
 int

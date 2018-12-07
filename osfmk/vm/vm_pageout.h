@@ -90,7 +90,7 @@
 #define VM_PAGE_AVAILABLE_COUNT()		((unsigned int)(vm_page_cleaned_count))
 
 /* externally manipulated counters */
-extern unsigned int vm_pageout_cleaned_reactivated, vm_pageout_cleaned_fault_reactivated, vm_pageout_cleaned_commit_reactivated;
+extern unsigned int vm_pageout_cleaned_fault_reactivated;
 
 #if CONFIG_FREEZE
 extern boolean_t memorystatus_freeze_enabled;
@@ -137,6 +137,8 @@ extern int	vm_debug_events;
 #define VM_INFO5                        0x10F
 #define VM_INFO6                        0x110
 #define VM_INFO7                        0x111
+#define VM_INFO8                        0x112
+#define VM_INFO9                        0x113
 
 #define VM_UPL_PAGE_WAIT		0x120
 #define VM_IOPL_PAGE_WAIT		0x121
@@ -148,15 +150,23 @@ extern int	vm_debug_events;
 #define VM_PAGE_EXPEDITE_NO_MEMORY      0x125
 #endif
 
+#define VM_PAGE_GRAB			0x126
+#define VM_PAGE_RELEASE			0x127
+
 #define VM_PRESSURE_EVENT		0x130
 #define VM_EXECVE			0x131
 #define VM_WAKEUP_COMPACTOR_SWAPPER	0x132
+#define VM_UPL_REQUEST			0x133
+#define VM_IOPL_REQUEST			0x134
+#define VM_KERN_REQUEST			0x135
 
 #define VM_DATA_WRITE 			0x140
 
+#define VM_PRESSURE_LEVEL_CHANGE	0x141
+
 #define VM_DEBUG_EVENT(name, event, control, arg1, arg2, arg3, arg4)	\
 	MACRO_BEGIN						\
-	if (vm_debug_events) {					\
+	if (__improbable(vm_debug_events)) {			\
 		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, event)) | control, arg1, arg2, arg3, arg4, 0); \
 	}							\
 	MACRO_END
@@ -174,6 +184,10 @@ extern void update_vm_info(void);
 extern int upl_get_cached_tier(
        upl_t                   upl);
 #endif
+
+extern void upl_set_iodone(upl_t, void *);
+extern void upl_set_iodone_error(upl_t, int);
+extern void upl_callout_iodone(upl_t);
 
 extern ppnum_t upl_get_highest_page(
 	upl_t			upl);
@@ -324,6 +338,14 @@ struct ucd {
 };
 #endif
 
+struct upl_io_completion {
+
+        void     *io_context;
+        void     (*io_done)(void *, int);
+
+        int      io_error;
+};
+
 
 struct upl {
 	decl_lck_mtx_data(,	Lock)	/* Synchronization */
@@ -337,6 +359,7 @@ struct upl {
 	ppnum_t		highest_page;
 	void*		vector_upl;
 	upl_t		associated_upl;
+        struct upl_io_completion *upl_iodone;
 #if CONFIG_IOSCHED
 	int 		upl_priority;
 	uint64_t        *upl_reprio_info;
@@ -470,9 +493,6 @@ extern void vm_pageout_steal_laundry(
 	vm_page_t page, 
 	boolean_t queues_locked);
 	
-extern boolean_t vm_page_is_slideable(vm_page_t m);
-
-extern kern_return_t vm_page_slide(vm_page_t page, vm_map_offset_t kernel_mapping_offset);
 #endif  /* MACH_KERNEL_PRIVATE */
 
 #if UPL_DEBUG
@@ -536,9 +556,7 @@ extern void hibernate_create_paddr_map(void);
 extern void vm_set_restrictions(void);
 
 extern int vm_compressor_mode;
-extern int vm_compressor_thread_count;
-extern boolean_t vm_restricted_to_single_processor;
-extern kern_return_t vm_pageout_compress_page(void **, char *, vm_page_t, boolean_t);
+extern kern_return_t vm_pageout_compress_page(void **, char *, vm_page_t);
 extern void vm_pageout_anonymous_pages(void);
 extern void vm_pageout_disconnect_all_pages(void);
 
@@ -574,6 +592,161 @@ extern	struct vm_config	vm_config;
 #endif	/* KERNEL_PRIVATE */
 
 #ifdef XNU_KERNEL_PRIVATE
+
+struct vm_pageout_state {
+        boolean_t vm_pressure_thread_running;
+        boolean_t vm_pressure_changed;
+        boolean_t vm_restricted_to_single_processor;
+        int vm_compressor_thread_count;
+
+        unsigned int vm_page_speculative_q_age_ms;
+        unsigned int vm_page_speculative_percentage;
+        unsigned int vm_page_speculative_target;
+
+        unsigned int vm_pageout_swap_wait;
+        unsigned int vm_pageout_idle_wait;	/* milliseconds */
+        unsigned int vm_pageout_empty_wait;	/* milliseconds */
+        unsigned int vm_pageout_burst_wait;	/* milliseconds */
+        unsigned int vm_pageout_deadlock_wait;  /* milliseconds */
+        unsigned int vm_pageout_deadlock_relief;
+        unsigned int vm_pageout_burst_inactive_throttle;
+
+        unsigned int vm_pageout_inactive;
+        unsigned int vm_pageout_inactive_used;	/* debugging */
+        unsigned int vm_pageout_inactive_clean;	/* debugging */
+
+        uint32_t vm_page_filecache_min;
+        uint32_t vm_page_filecache_min_divisor;
+        uint32_t vm_page_xpmapped_min;
+        uint32_t vm_page_xpmapped_min_divisor;
+        uint64_t vm_pageout_considered_page_last;
+
+        int vm_page_free_count_init;
+
+        unsigned int vm_memory_pressure;
+
+        int memorystatus_purge_on_critical;
+        int memorystatus_purge_on_warning;
+        int memorystatus_purge_on_urgent;
+
+        thread_t vm_pageout_external_iothread;
+        thread_t vm_pageout_internal_iothread;
+};
+
+extern struct vm_pageout_state vm_pageout_state;
+
+/*
+ * This structure is used to track the VM_INFO instrumentation
+ */
+struct vm_pageout_vminfo {
+        unsigned long vm_pageout_considered_page;
+        unsigned long vm_pageout_considered_bq_internal;
+        unsigned long vm_pageout_considered_bq_external;
+        unsigned long vm_pageout_skipped_external;
+
+        unsigned long vm_pageout_pages_evicted;
+        unsigned long vm_pageout_pages_purged;;
+        unsigned long vm_pageout_freed_cleaned;
+        unsigned long vm_pageout_freed_speculative;
+        unsigned long vm_pageout_freed_external;
+        unsigned long vm_pageout_freed_internal;
+        unsigned long vm_pageout_inactive_dirty_internal;
+        unsigned long vm_pageout_inactive_dirty_external;
+        unsigned long vm_pageout_inactive_referenced;
+        unsigned long vm_pageout_reactivation_limit_exceeded;
+        unsigned long vm_pageout_inactive_force_reclaim;
+        unsigned long vm_pageout_inactive_nolock;
+        unsigned long vm_pageout_filecache_min_reactivated;
+        unsigned long vm_pageout_scan_inactive_throttled_internal;
+        unsigned long vm_pageout_scan_inactive_throttled_external;
+
+        uint64_t      vm_pageout_compressions;
+        uint64_t      vm_compressor_pages_grabbed;
+        unsigned long vm_compressor_failed;
+
+        unsigned long vm_page_pages_freed;
+
+        unsigned long vm_phantom_cache_found_ghost;
+        unsigned long vm_phantom_cache_added_ghost;
+};
+
+extern struct vm_pageout_vminfo vm_pageout_vminfo;
+
+
+#if DEVELOPMENT || DEBUG
+
+/*
+ *	This structure records the pageout daemon's actions:
+ *	how many pages it looks at and what happens to those pages.
+ *	No locking needed because only one thread modifies the fields.
+ */
+struct vm_pageout_debug {
+        uint32_t vm_pageout_balanced;
+        uint32_t vm_pageout_scan_event_counter;
+        uint32_t vm_pageout_speculative_dirty;
+
+        uint32_t vm_pageout_inactive_busy;
+        uint32_t vm_pageout_inactive_absent;
+        uint32_t vm_pageout_inactive_notalive;
+        uint32_t vm_pageout_inactive_error;
+        uint32_t vm_pageout_inactive_deactivated;
+
+        uint32_t vm_pageout_enqueued_cleaned;
+
+        uint32_t vm_pageout_cleaned_busy;
+        uint32_t vm_pageout_cleaned_nolock;
+        uint32_t vm_pageout_cleaned_reference_reactivated;
+        uint32_t vm_pageout_cleaned_volatile_reactivated;
+        uint32_t vm_pageout_cleaned_reactivated;  /* debugging; how many cleaned pages are found to be referenced on pageout (and are therefore reactivated) */
+        uint32_t vm_pageout_cleaned_fault_reactivated;
+
+        uint32_t vm_pageout_dirty_no_pager;
+        uint32_t vm_pageout_purged_objects;
+
+        uint32_t vm_pageout_scan_throttle;
+        uint32_t vm_pageout_scan_reclaimed_throttled;
+        uint32_t vm_pageout_scan_burst_throttle;
+        uint32_t vm_pageout_scan_empty_throttle;
+        uint32_t vm_pageout_scan_swap_throttle;
+        uint32_t vm_pageout_scan_deadlock_detected;
+        uint32_t vm_pageout_scan_inactive_throttle_success;
+        uint32_t vm_pageout_scan_throttle_deferred;
+
+        uint32_t vm_pageout_inactive_external_forced_jetsam_count;
+
+        uint32_t vm_grab_anon_overrides;
+        uint32_t vm_grab_anon_nops;
+
+        uint32_t vm_pageout_no_victim;
+        unsigned long vm_pageout_throttle_up_count;
+        uint32_t vm_page_steal_pageout_page;
+
+        uint32_t vm_cs_validated_resets;
+        uint32_t vm_object_iopl_request_sleep_for_cleaning;
+        uint32_t vm_page_slide_counter;
+        uint32_t vm_page_slide_errors;
+        uint32_t vm_page_throttle_count;
+        /*
+	 * Statistics about UPL enforcement of copy-on-write obligations.
+	 */
+        unsigned long upl_cow;
+        unsigned long upl_cow_again;
+        unsigned long upl_cow_pages;
+        unsigned long upl_cow_again_pages;
+        unsigned long iopl_cow;
+        unsigned long iopl_cow_pages;
+};
+
+extern struct vm_pageout_debug vm_pageout_debug;
+
+#define VM_PAGEOUT_DEBUG(member, value)			\
+	MACRO_BEGIN					\
+	        vm_pageout_debug.member += value;	\
+	MACRO_END
+#else
+#define VM_PAGEOUT_DEBUG(member, value)
+#endif
+
 #define MAX_COMPRESSOR_THREAD_COUNT      8
 
 #if DEVELOPMENT || DEBUG

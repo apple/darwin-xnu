@@ -34,7 +34,7 @@ else
 	XCRUN = /usr/bin/xcrun
 endif
 
-SDKROOT ?= macosx.internal
+SDKROOT ?= macosx
 HOST_SDKROOT ?= macosx
 
 # SDKROOT may be passed as a shorthand like "iphoneos.internal". We
@@ -50,6 +50,9 @@ override SDKROOT = $(SDKROOT_RESOLVED)
 
 ifeq ($(HOST_SDKROOT_RESOLVED),)
 export HOST_SDKROOT_RESOLVED := $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -show-sdk-path)
+ifeq ($(strip $(HOST_SDKROOT_RESOLVED)),)
+export HOST_SDKROOT_RESOLVED := /
+endif
 endif
 override HOST_SDKROOT = $(HOST_SDKROOT_RESOLVED)
 

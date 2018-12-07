@@ -25,11 +25,11 @@
 
 __attribute__((visibility("hidden")))
 char *
-strcpy(char * restrict dst, const char * restrict src) {
-	const size_t length = strlen(src);
+_libkernel_strcpy(char * restrict dst, const char * restrict src) {
+	const size_t length = _libkernel_strlen(src);
     //  The stpcpy() and strcpy() functions copy the string src to dst
     //  (including the terminating '\0' character).
-    memcpy(dst, src, length+1);
+    _libkernel_memmove(dst, src, length+1);
     //  The strcpy() and strncpy() functions return dst.
     return dst;
 }

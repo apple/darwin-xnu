@@ -28,9 +28,43 @@
 #ifndef _SYS_DECMPFS_H_
 #define _SYS_DECMPFS_H_ 1
 
-#include <sys/kernel_types.h>
 #include <stdbool.h>
+#include <sys/kdebug.h>
+#include <sys/kernel_types.h>
 #include <sys/vnode.h>
+
+/*
+ * Please switch on @DECMPFS_ENABLE_KDEBUG_TRACES to enable tracepoints.
+ * Tracepoints are compiled out by default to eliminate any overhead due to
+ * kernel tracing.
+ *
+ * #define DECMPFS_ENABLE_KDEBUG_TRACES 1
+ */
+#if DECMPFS_ENABLE_KDEBUG_TRACES
+#define DECMPFS_EMIT_TRACE_ENTRY(D, ...)\
+        KDBG_FILTERED((D) | DBG_FUNC_START, ## __VA_ARGS__)
+#define DECMPFS_EMIT_TRACE_RETURN(D, ...)\
+        KDBG_FILTERED((D) | DBG_FUNC_END, ##__VA_ARGS__)
+#else
+#define DECMPFS_EMIT_TRACE_ENTRY(D, ...) do {} while (0)
+#define DECMPFS_EMIT_TRACE_RETURN(D, ...) do {} while (0)
+#endif /* DECMPFS_ENABLE_KDEBUG_TRACES */
+
+/*
+ * KERNEL_DEBUG related definitions for decmpfs.
+ *
+ * Please NOTE: The Class DBG_FSYSTEM = 3, and Subclass DBG_DECMP = 0x12, so
+ * these debug codes are of the form 0x0312nnnn.
+ */
+#define DECMPDBG_CODE(code)  FSDBG_CODE(DBG_DECMP, code)
+
+enum {
+    DECMPDBG_DECOMPRESS_FILE            = DECMPDBG_CODE(0), /* 0x03120000 */
+    DECMPDBG_FETCH_COMPRESSED_HEADER    = DECMPDBG_CODE(1), /* 0x03120004 */
+    DECMPDBG_FETCH_UNCOMPRESSED_DATA    = DECMPDBG_CODE(2), /* 0x03120008 */
+    DECMPDBG_FREE_COMPRESSED_DATA       = DECMPDBG_CODE(4), /* 0x03120010 */
+    DECMPDBG_FILE_IS_COMPRESSED         = DECMPDBG_CODE(5), /* 0x03120014 */
+};
 
 #define MAX_DECMPFS_XATTR_SIZE 3802
 

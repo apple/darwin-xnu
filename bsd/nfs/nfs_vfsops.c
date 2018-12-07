@@ -2814,8 +2814,9 @@ mountnfs(
 	xb_get_32(error, &xb, val); /* version */
 	xb_get_32(error, &xb, argslength); /* args length */
 	xb_get_32(error, &xb, val); /* XDR args version */
-	if (val != NFS_XDRARGS_VERSION_0)
+	if (val != NFS_XDRARGS_VERSION_0 || argslength < ((4 + NFS_MATTR_BITMAP_LEN + 1) * XDRWORD)) {
 		error = EINVAL;
+	}
 	len = NFS_MATTR_BITMAP_LEN;
 	xb_get_bitmap(error, &xb, mattrs, len); /* mount attribute bitmap */
 	attrslength = 0;
@@ -4523,6 +4524,8 @@ nfs_mount_zombie(struct nfsmount *nmp, int nm_state_flags)
 	/* Since we've drop the request mutex we can now safely unreference the request */
 	TAILQ_FOREACH_SAFE(req, &resendq, r_rchain, treq) {
 		TAILQ_REMOVE(&resendq, req, r_rchain);
+		/* Make sure we don't try and remove again in nfs_request_destroy */
+		req->r_rchain.tqe_next = NFSREQNOLIST;
 		nfs_request_rele(req);
 	}
 

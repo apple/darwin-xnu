@@ -83,6 +83,8 @@
 
 #include <netinet/if_ether.h>
 #include <netinet/in_var.h>
+#include <netinet/ip.h>
+#include <netinet/ip6.h>
 #include <kern/zalloc.h>
 
 #include <kern/thread.h>
@@ -1955,8 +1957,14 @@ match:
 			 * If rmx_mtu is not locked, update it
 			 * to the MTU used by the new interface.
 			 */
-			if (!(route->rt_rmx.rmx_locks & RTV_MTU))
+			if (!(route->rt_rmx.rmx_locks & RTV_MTU)) {
 				route->rt_rmx.rmx_mtu = route->rt_ifp->if_mtu;
+				if (INTF_ADJUST_MTU_FOR_CLAT46(ifp)) {
+					route->rt_rmx.rmx_mtu = IN6_LINKMTU(route->rt_ifp);
+					/* Further adjust the size for CLAT46 expansion */
+					route->rt_rmx.rmx_mtu -= CLAT46_HDR_EXPANSION_OVERHD;
+				}
+			}
 
 			rtsetifa(route, &best_ia->ia_ifa);
 			gateway->sdl_index = ifp->if_index;

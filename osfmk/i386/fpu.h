@@ -134,5 +134,6 @@ extern void		fpUDflt(user_addr_t rip);
 extern uint32_t	thread_fpsimd_hash(thread_t);
 extern void vzeroall(void);
 extern void xmmzeroall(void);
+extern void avx512_zero(void);
 #endif /* MKP */
 #endif	/* _I386_FPU_H_ */

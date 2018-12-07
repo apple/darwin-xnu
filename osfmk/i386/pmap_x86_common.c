@@ -1969,12 +1969,14 @@ phys_attribute_clear(
 					pte_bits &= ept_bits_to_clear;
 				}
 			}
+			if (options & PMAP_OPTIONS_CLEAR_WRITE)
+			        pte_bits |= PTE_WRITE(is_ept);
 
 			 /*
 			  * Clear modify and/or reference bits.
 			  */
 			if (pte_bits) {
-				pmap_update_pte(pte, bits, 0);
+				pmap_update_pte(pte, pte_bits, 0);
 
 				/* Ensure all processors using this translation
 				 * invalidate this TLB entry. The invalidation
@@ -2472,13 +2474,15 @@ done:
 	return KERN_SUCCESS;
 }
 
-void pmap_set_jit_entitled(__unused pmap_t pmap)
+void
+pmap_set_jit_entitled(__unused pmap_t pmap)
 {
 	/* The x86 pmap layer does not care if a map has a JIT entry. */
 	return;
 }
 
-bool pmap_has_prot_policy(__unused vm_prot_t prot)
+bool
+pmap_has_prot_policy(__unused vm_prot_t prot)
 {
 	/*
 	 * The x86 pmap layer does not apply any policy to any protection
@@ -2487,8 +2491,43 @@ bool pmap_has_prot_policy(__unused vm_prot_t prot)
 	return FALSE;
 }
 
-void pmap_release_pages_fast(void)
+uint64_t
+pmap_release_pages_fast(void)
+{
+	return 0;
+}
+
+void
+pmap_trim(__unused pmap_t grand, __unused pmap_t subord, __unused addr64_t vstart, __unused addr64_t nstart, __unused uint64_t size)
 {
 	return;
+}
+
+void pmap_ledger_alloc_init(size_t size)
+{
+	panic("%s: unsupported, "
+	      "size=%lu",
+	      __func__, size);
+}
+
+ledger_t pmap_ledger_alloc(void)
+{
+	panic("%s: unsupported",
+	      __func__);
+
+	return NULL;
+}
+
+void pmap_ledger_free(ledger_t ledger)
+{
+	panic("%s: unsupported, "
+	      "ledger=%p",
+	      __func__, ledger);
+}
+
+size_t
+pmap_dump_page_tables(pmap_t pmap __unused, void *bufp __unused, void *buf_end __unused)
+{
+	return (size_t)-1;
 }
 

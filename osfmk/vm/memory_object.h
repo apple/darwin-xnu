@@ -132,7 +132,7 @@ extern kern_return_t	memory_object_signed(
 extern boolean_t	memory_object_is_signed(
 	memory_object_control_t	control);
 
-extern boolean_t	memory_object_is_slid(
+extern boolean_t	memory_object_is_shared_cache(
 	memory_object_control_t		control);
 
 extern void		memory_object_mark_used(

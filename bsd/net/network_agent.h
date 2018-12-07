@@ -219,11 +219,12 @@ extern bool netagent_get_agent_domain_and_type(uuid_t uuid, char *domain, char *
 
 extern int netagent_kernel_trigger(uuid_t uuid);
 
-extern int netagent_client_message(uuid_t agent_uuid, uuid_t necp_client_uuid, pid_t pid, u_int8_t message_type);
+extern int netagent_client_message(uuid_t agent_uuid, uuid_t necp_client_uuid, pid_t pid, void *handle, u_int8_t message_type);
 
 extern int netagent_client_message_with_params(uuid_t agent_uuid,
 											   uuid_t necp_client_uuid,
 											   pid_t pid,
+											   void *handle,
 											   u_int8_t message_type,
 											   struct necp_client_nexus_parameters *parameters,
 											   void **assigned_results,
@@ -248,7 +249,7 @@ struct netagent_nexus_agent {
 #define	NETAGENT_EVENT_NEXUS_FLOW_REMOVE			NETAGENT_MESSAGE_TYPE_CLOSE_NEXUS
 #define	NETAGENT_EVENT_NEXUS_FLOW_ABORT				NETAGENT_MESSAGE_TYPE_ABORT_NEXUS
 
-typedef errno_t (*netagent_event_f)(u_int8_t event, uuid_t necp_client_uuid, pid_t pid, void *context, struct necp_client_nexus_parameters *parameters, void **assigned_results, size_t *assigned_results_length);
+typedef errno_t (*netagent_event_f)(u_int8_t event, uuid_t necp_client_uuid, pid_t pid, void *necp_handle, void *context, struct necp_client_nexus_parameters *parameters, void **assigned_results, size_t *assigned_results_length);
 
 extern netagent_session_t netagent_create(netagent_event_f event_handler, void *handle);
 

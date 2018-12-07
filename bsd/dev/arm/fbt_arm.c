@@ -99,9 +99,6 @@ extern int      		fbt_probetab_mask;
 
 kern_return_t fbt_perfCallback(int, struct arm_saved_state *, __unused int, __unused int);
 
-static int fbt_uninstrumented_arm = 0;
-static const int fbt_log_uninstrumented = 0;
-
 extern int dtrace_arm_condition_true(int cond, int cpsr);
 
 
@@ -212,7 +209,7 @@ fbt_invop(uintptr_t addr, uintptr_t * stack, uintptr_t rval)
 				}
 				CPU->cpu_dtrace_invop_underway = 0;
 			}
-		
+
 			/*
 				On other architectures, we return a DTRACE constant to let the callback function
 				know what was replaced. On the ARM, since the function prologue/epilogue machine code
@@ -256,7 +253,7 @@ fbt_perfCallback(
 				 );
 
 		emul = dtrace_invop(regs->pc, (uintptr_t*) regs, regs->r[0]);
-		
+
 		__asm__ volatile(
 			"Ldtrace_invop_callsite_post_label:\n"
 			".data\n"
@@ -335,7 +332,7 @@ fbt_perfCallback(
 }
 
 void
-fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, char *modname, char* symbolName, machine_inst_t* symbolStart)
+fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolName, machine_inst_t* symbolStart, machine_inst_t *instrHigh)
 {
 	unsigned int	j;
         int		doenable = 0;
@@ -344,11 +341,11 @@ fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, c
 	fbt_probe_t	*newfbt, *retfbt, *entryfbt;
 	machine_inst_t *instr, *pushinstr = NULL, *limit, theInstr;
 	int             foundPushLR, savedRegs;
-	
+
 	/*
 	 * Guard against null symbols
 	 */
-	if (!symbolStart || !instrLow || !instrHigh) {
+	if (!symbolStart || !instrHigh || instrHigh < symbolStart) {
 		kprintf("dtrace: %s has an invalid address\n", symbolName);
 		return;
 	}
@@ -360,7 +357,7 @@ fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, c
 	savedRegs = -1;
 	limit = (machine_inst_t *)instrHigh;
 	for (j = 0, instr = symbolStart, theInstr = 0;
-	     (j < 8) && ((uintptr_t)instr >= instrLow) && (instrHigh > (uintptr_t)(instr)); j++, instr++)
+	     (j < 8) && instr < instrHigh; j++, instr++)
 	{
 		theInstr = *instr;
 		if (FBT_IS_THUMB_PUSH_LR(theInstr)) {
@@ -390,7 +387,7 @@ fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, c
 	newfbt = kmem_zalloc(sizeof(fbt_probe_t), KM_SLEEP);
 	newfbt->fbtp_next = NULL;
 	strlcpy( (char *)&(newfbt->fbtp_name), symbolName, MAX_FBTP_NAME_CHARS );
-		
+
 	if (thisid != 0) {
 		/*
 		 * The dtrace_probe previously existed, so we have to hook
@@ -432,7 +429,7 @@ fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, c
 	newfbt->fbtp_currentval = 0;
 	newfbt->fbtp_hashnext = fbt_probetab[FBT_ADDR2NDX(instr)];
 	fbt_probetab[FBT_ADDR2NDX(instr)] = newfbt;
-		
+
 	if (doenable)
 		fbt_enable(NULL, newfbt->fbtp_id, newfbt);
 
@@ -446,7 +443,7 @@ fbt_provide_probe(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, c
 	doenable=0;
 
 	thisid = dtrace_probe_lookup(fbt_id, modname, symbolName, FBT_RETURN);
-		
+
 	if (thisid != 0) {
 		/* The dtrace_probe previously existed, so we have to
 		 * find the end of the existing fbt chain.  If we find
@@ -501,7 +498,7 @@ again:
 	 * OK, it's an instruction.
 	 */
 	theInstr = *instr;
-		
+
 	/* Walked onto the start of the next routine? If so, bail out from this function */
 	if (FBT_IS_THUMB_PUSH_LR(theInstr)) {
 		if (!retfbt)
@@ -560,7 +557,7 @@ again:
 	 */
 
 	newfbt = kmem_zalloc(sizeof(fbt_probe_t), KM_SLEEP);
-	newfbt->fbtp_next = NULL;	
+	newfbt->fbtp_next = NULL;
 	strlcpy( (char *)&(newfbt->fbtp_name), symbolName, MAX_FBTP_NAME_CHARS );
 
 	if (retfbt == NULL) {
@@ -593,89 +590,3 @@ again:
 	goto again;
 }
 
-void
-fbt_provide_module_kernel_syms(struct modctl *ctl)
-{
-	kernel_mach_header_t		*mh;
-	struct load_command		*cmd;
-	kernel_segment_command_t	*orig_ts = NULL, *orig_le = NULL;
-	struct symtab_command 		*orig_st = NULL;
-	kernel_nlist_t			*sym = NULL;
-	char				*strings;
-	uintptr_t			instrLow, instrHigh;
-	char				*modname;
-	unsigned int			i;
-
-	mh = (kernel_mach_header_t *)(ctl->mod_address);
-	modname = ctl->mod_modname;
-	
-	/*
-	 * Employees of dtrace and their families are ineligible.  Void
-	 * where prohibited.
-	 */
-
-	if (mh->magic != MH_MAGIC_KERNEL)
-		return;
-	
-	cmd = (struct load_command *) & mh[1];
-	for (i = 0; i < mh->ncmds; i++) {
-		if (cmd->cmd == LC_SEGMENT_KERNEL) {
-			kernel_segment_command_t *orig_sg = (kernel_segment_command_t *) cmd;
-
-			if (LIT_STRNEQL(orig_sg->segname, SEG_TEXT))
-				orig_ts = orig_sg;
-			else if (LIT_STRNEQL(orig_sg->segname, SEG_LINKEDIT))
-				orig_le = orig_sg;
-			else if (LIT_STRNEQL(orig_sg->segname, ""))
-				orig_ts = orig_sg;	/* kexts have a single
-							 * unnamed segment */
-		} else if (cmd->cmd == LC_SYMTAB)
-			orig_st = (struct symtab_command *) cmd;
-
-		cmd = (struct load_command *) ((caddr_t) cmd + cmd->cmdsize);
-	}
-
-	if ((orig_ts == NULL) || (orig_st == NULL) || (orig_le == NULL))
-		return;
-
-	sym = (kernel_nlist_t *)(orig_le->vmaddr + orig_st->symoff - orig_le->fileoff);
-	strings = (char *)(orig_le->vmaddr + orig_st->stroff - orig_le->fileoff);
-
-	/* Find extent of the TEXT section */
-	instrLow = (uintptr_t) orig_ts->vmaddr;
-	instrHigh = (uintptr_t) (orig_ts->vmaddr + orig_ts->vmsize);
-
-	for (i = 0; i < orig_st->nsyms; i++) {
-		uint8_t         n_type = sym[i].n_type & (N_TYPE | N_EXT);
-		char           *name = strings + sym[i].n_un.n_strx;
-
-		/* Check that the symbol is a global and that it has a name. */
-		if (((N_SECT | N_EXT) != n_type && (N_ABS | N_EXT) != n_type))
-			continue;
-
-		if (0 == sym[i].n_un.n_strx)	/* iff a null, "", name. */
-			continue;
-
-		/* Lop off omnipresent leading underscore. */
-		if (*name == '_')
-			name += 1;
-
-
-		if (sym[i].n_sect == 1 && !(sym[i].n_desc & N_ARM_THUMB_DEF)) {
-			/* A function but not a Thumb function */
-			fbt_uninstrumented_arm++;
-			if (fbt_log_uninstrumented)
-				kprintf("dtrace: fbt: Skipping ARM mode function %s at %08x\n",name,(unsigned)sym[i].n_value);
-
-			continue;
-		}
-
-                /*
-		 * We're only blacklisting functions in the kernel for now.
-		 */
-		if (MOD_IS_MACH_KERNEL(ctl) && fbt_excluded(name))
-			continue;
-
-		fbt_provide_probe(ctl, instrLow, instrHigh, modname, name, (machine_inst_t*)sym[i].n_value);
-	}
-}

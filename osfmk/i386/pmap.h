@@ -78,7 +78,6 @@
 #include <kern/kern_types.h>
 #include <kern/thread.h>
 #include <kern/simple_lock.h>
-#include <mach/branch_predicates.h>
 
 #include <i386/mp.h>
 #include <i386/proc_reg.h>
@@ -433,6 +432,10 @@ extern boolean_t pmap_ept_support_ad;
 #define PMAP_ACTIVATE_CACHE	4
 #define PMAP_NO_GUARD_CACHE	8
 
+/* Per-pmap ledger operations */
+#define	pmap_ledger_debit(p, e, a) ledger_debit((p)->ledger, e, a)
+#define	pmap_ledger_credit(p, e, a) ledger_credit((p)->ledger, e, a)
+
 #ifndef	ASSEMBLER
 
 #include <sys/queue.h>
@@ -542,6 +545,7 @@ struct pmap {
 	pmap_paddr_t	pm_eptp;	/* EPTP */
 	ledger_t	ledger;		/* ledger tracking phys mappings */
 #if MACH_ASSERT
+	boolean_t	pmap_stats_assert;
 	int		pmap_pid;
 	char		pmap_procname[17];
 #endif /* MACH_ASSERT */
@@ -618,7 +622,8 @@ set_dirbase(pmap_t tpmap, thread_t thread, int my_cpu) {
 	cpu_datap(ccpu)->cpu_ucr3 = ucr3;
 	cpu_shadowp(ccpu)->cpu_ucr3 = ucr3;
 
-	cpu_datap(ccpu)->cpu_task_map = tpmap->pm_task_map;
+	cpu_datap(ccpu)->cpu_task_map = cpu_shadowp(ccpu)->cpu_task_map =
+	    tpmap->pm_task_map;
 
 	assert((get_preemption_level() > 0) || (ml_get_interrupts_enabled() == FALSE));
 	assert(ccpu == cpu_number());

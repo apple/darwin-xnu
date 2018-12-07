@@ -383,6 +383,7 @@ public:
     virtual void reset() APPLE_KEXT_OVERRIDE;
     virtual bool isValid() APPLE_KEXT_OVERRIDE;
     virtual OSObject * getNextObject() APPLE_KEXT_OVERRIDE;
+    virtual OSObject * copyNextObject();
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -471,11 +472,20 @@ IOUserIterator::isValid()
 OSObject *
 IOUserIterator::getNextObject()
 {
-    OSObject * ret;
+    assert(false);
+    return (NULL);
+}
+
+OSObject *
+IOUserIterator::copyNextObject()
+{
+    OSObject * ret = NULL;
 
     IOLockLock(lock);
-    assert(OSDynamicCast(OSIterator, userIteratorObject));
-    ret = ((OSIterator *)userIteratorObject)->getNextObject();
+    if (userIteratorObject) {
+        ret = ((OSIterator *)userIteratorObject)->getNextObject();
+        if (ret) ret->retain();
+    }
     IOLockUnlock(lock);
 
     return (ret);
@@ -616,7 +626,6 @@ class IOServiceUserNotification : public IOUserNotification
     PingMsg	*	pingMsg;
     vm_size_t		msgSize;
     OSArray 	*	newSet;
-    OSObject	*	lastEntry;
     bool		armed;
     bool                ipcLogged;
 
@@ -633,6 +642,7 @@ public:
     virtual bool handler( void * ref, IOService * newService );
 
     virtual OSObject * getNextObject() APPLE_KEXT_OVERRIDE;
+    virtual OSObject * copyNextObject() APPLE_KEXT_OVERRIDE;
 };
 
 class IOServiceMessageUserNotification : public IOUserNotification
@@ -670,6 +680,7 @@ public:
                               void * messageArgument, vm_size_t argSize );
 
     virtual OSObject * getNextObject() APPLE_KEXT_OVERRIDE;
+    virtual OSObject * copyNextObject() APPLE_KEXT_OVERRIDE;
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -776,11 +787,9 @@ void IOServiceUserNotification::free( void )
     PingMsg   *	_pingMsg;
     vm_size_t	_msgSize;
     OSArray   *	_newSet;
-    OSObject  *	_lastEntry;
 
     _pingMsg   = pingMsg;
     _msgSize   = msgSize;
-    _lastEntry = lastEntry;
     _newSet    = newSet;
 
     super::free();
@@ -791,9 +800,6 @@ void IOServiceUserNotification::free( void )
 		}
         IOFree(_pingMsg, _msgSize);
 	}
-
-    if( _lastEntry)
-        _lastEntry->release();
 
     if( _newSet)
         _newSet->release();
@@ -850,16 +856,19 @@ bool IOServiceUserNotification::handler( void * ref,
 
     return( true );
 }
-
 OSObject * IOServiceUserNotification::getNextObject()
+{
+    assert(false);
+    return (NULL);
+}
+
+OSObject * IOServiceUserNotification::copyNextObject()
 {
     unsigned int	count;
     OSObject *		result;
-    OSObject *		releaseEntry;
 
     IOLockLock(lock);
 
-    releaseEntry = lastEntry;
     count = newSet->getCount();
     if( count ) {
         result = newSet->getObject( count - 1 );
@@ -869,11 +878,8 @@ OSObject * IOServiceUserNotification::getNextObject()
         result = 0;
         armed = true;
     }
-    lastEntry = result;
 
     IOLockUnlock(lock);
-
-    if (releaseEntry) releaseEntry->release();
 
     return( result );
 }
@@ -1066,6 +1072,11 @@ IOReturn IOServiceMessageUserNotification::handler( void * ref,
 OSObject * IOServiceMessageUserNotification::getNextObject()
 {
     return( 0 );
+}
+
+OSObject * IOServiceMessageUserNotification::copyNextObject()
+{
+    return( NULL );
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -1438,7 +1449,7 @@ IOUserClient::registerOwner(task_t task)
     if (newOwner)
     {
         owner = IONew(IOUserClientOwner, 1);
-        if (!newOwner) ret = kIOReturnNoMemory;
+        if (!owner) ret = kIOReturnNoMemory;
         else
         {
             owner->task = task;
@@ -2049,12 +2060,24 @@ kern_return_t is_io_iterator_next(
 {
     IOReturn    ret;
     OSObject *	obj;
+    OSIterator * iter;
+    IOUserIterator * uiter;
 
-    CHECK( OSIterator, iterator, iter );
+	if ((uiter = OSDynamicCast(IOUserIterator, iterator)))
+	{
+		obj = uiter->copyNextObject();
+	}
+	else if ((iter = OSDynamicCast(OSIterator, iterator)))
+	{
+		obj = iter->getNextObject();
+		if (obj) obj->retain();
+	}
+	else
+	{
+	    return( kIOReturnBadArgument );
+	}
 
-    obj = iter->getNextObject();
     if( obj) {
-	obj->retain();
 	*object = obj;
         ret = kIOReturnSuccess;
     } else
@@ -3292,8 +3315,8 @@ kern_return_t is_io_registry_entry_get_child_iterator(
 {
     CHECK( IORegistryEntry, registry_entry, entry );
 
-    *iterator = entry->getChildIterator(
-    IORegistryEntry::getPlane( plane ));
+    *iterator = IOUserIterator::withIterator(entry->getChildIterator(
+    IORegistryEntry::getPlane( plane )));
 
     return( kIOReturnSuccess );
 }
@@ -3306,8 +3329,8 @@ kern_return_t is_io_registry_entry_get_parent_iterator(
 {
     CHECK( IORegistryEntry, registry_entry, entry );
 
-    *iterator = entry->getParentIterator(
-	IORegistryEntry::getPlane( plane ));
+    *iterator = IOUserIterator::withIterator(entry->getParentIterator(
+	IORegistryEntry::getPlane( plane )));
 
     return( kIOReturnSuccess );
 }
@@ -4944,7 +4967,7 @@ kern_return_t is_io_catalog_send_data(
         return kIOReturnBadArgument;
     }
 
-    if (!IOTaskHasEntitlement(current_task(), "com.apple.rootless.kext-management"))
+    if (!IOTaskHasEntitlement(current_task(), "com.apple.rootless.kext-secure-management"))
     {
         OSString * taskName = IOCopyLogNameForPID(proc_selfpid());
         IOLog("IOCatalogueSendData(%s): Not entitled\n", taskName ? taskName->getCStringNoCopy() : "");

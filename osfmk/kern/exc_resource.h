@@ -62,6 +62,7 @@
 #define RESOURCE_TYPE_WAKEUPS	2
 #define	RESOURCE_TYPE_MEMORY	3
 #define RESOURCE_TYPE_IO 	4
+#define RESOURCE_TYPE_THREADS	5
 
 /* RESOURCE_TYPE_CPU flavors */
 #define FLAVOR_CPU_MONITOR		1
@@ -195,6 +196,19 @@
         ((subcode) & 0x7FFFULL)
 
 
+/*
+ * RESOURCE_TYPE_THREADS exception code & subcode
+ *
+ * This is sent by the kernel when a task crosses its
+ * thread limit.
+ */
+
+#define EXC_RESOURCE_THREADS_DECODE_THREADS(code) \
+	((code) & 0x7FFFULL)
+
+/* RESOURCE_TYPE_THREADS flavors */
+#define FLAVOR_THREADS_HIGH_WATERMARK 1
+
 #ifdef KERNEL
 
 /* EXC_RESOURCE type and flavor encoding macros */
@@ -228,6 +242,10 @@
 	((code) |= (((uint64_t)(limit) & 0x7FFFULL)))
 #define EXC_RESOURCE_IO_ENCODE_OBSERVED(subcode, num) \
 	((subcode) |= (((uint64_t)(num) & 0x7FFFULL)))
+
+/* RESOURCE_TYPE_THREADS specific encoding macros */
+#define EXC_RESOURCE_THREADS_ENCODE_THREADS(code, threads) \
+	((code) |= (((uint64_t)(threads) & 0x7FFFULL)))
 
 #endif /* KERNEL */
 

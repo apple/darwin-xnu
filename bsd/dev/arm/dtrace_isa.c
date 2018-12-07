@@ -28,6 +28,7 @@
 
 #define MACH__POSIX_C_SOURCE_PRIVATE 1	/* pulls in suitable savearea from
 					 * mach/ppc/thread_status.h */
+#include <arm/caches_internal.h>
 #include <arm/proc_reg.h>
 
 #include <kern/thread.h>
@@ -175,12 +176,16 @@ uint64_t
 dtrace_getreg(struct regs * savearea, uint_t reg)
 {
 	struct arm_saved_state *regs = (struct arm_saved_state *) savearea;
-	
+	if (regs == NULL) {
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+		return (0);
+	}
 	/* beyond register limit? */
 	if (reg > ARM_SAVED_STATE32_COUNT - 1) {
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
 		return (0);
 	}
+
 	return (uint64_t) ((unsigned int *) (&(regs->r)))[reg];
 }
 
@@ -628,4 +633,13 @@ dtrace_arm_condition_true(int cond, int cpsr)
 	}
 
 	return taken;
+}
+
+void dtrace_flush_caches(void)
+{
+	/* TODO There were some problems with flushing just the cache line that had been modified.
+	 * For now, we'll flush the entire cache, until we figure out how to flush just the patched block.
+	 */
+	FlushPoU_Dcache();
+	InvalidatePoU_Icache();
 }

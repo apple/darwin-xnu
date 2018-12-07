@@ -219,6 +219,8 @@ struct extern_proc {
 #define P_DIRTY_MARKED                          0x00000080      /* marked dirty previously */
 #define P_DIRTY_AGING_IN_PROGRESS               0x00000100      /* aging in one of the 'aging bands' */
 #define P_DIRTY_LAUNCH_IN_PROGRESS              0x00000200      /* launch is in progress */
+#define P_DIRTY_DEFER_ALWAYS                    0x00000400      /* defer going to idle-exit after every dirty->clean transition.
+								 * For legacy jetsam policy only. This is the default with the other policies.*/
 
 #define P_DIRTY_IS_DIRTY                        (P_DIRTY | P_DIRTY_SHUTDOWN)
 #define P_DIRTY_IDLE_EXIT_ENABLED               (P_DIRTY_TRACK|P_DIRTY_ALLOW_IDLE_EXIT)
@@ -255,6 +257,8 @@ extern int proc_isinferior(int pid1, int pid2);
  * routine is to be used typically for debugging
  */
 void proc_name(int pid, char * buf, int size);
+/* returns the 32-byte name if it exists, otherwise returns the 16-byte name */
+extern char *proc_best_name(proc_t p);
 /* This routine is simillar to proc_name except it returns for current process */
 void proc_selfname(char * buf, int size);
 
@@ -274,15 +278,23 @@ extern int proc_noremotehang(proc_t);
 extern int proc_forcequota(proc_t);
 /* returns 1 if the process is chrooted */
 extern int proc_chrooted(proc_t);
+/* returns TRUE if a sync EXC_RESOURCE should be sent for the process */
+extern boolean_t proc_send_synchronous_EXC_RESOURCE(proc_t p);
 
-/* this routine returns 1 if the process is running with 64bit address space, else 0 */
+/* this routine returns 1 if the process is running with a 64bit address space, else 0 */
 extern int proc_is64bit(proc_t);
+/* this routine returns 1 if the process is running with a 64bit register state, else 0 */
+extern int proc_is64bit_data(proc_t);
 /* is this process exiting? */
 extern int proc_exiting(proc_t);
+/* returns whether the process has started down proc_exit() */
+extern int proc_in_teardown(proc_t);
 /* this routine returns error if the process is not one with super user privileges */
 int proc_suser(proc_t p);
 /* returns the cred assicaited with the process; temporary api */
 kauth_cred_t proc_ucred(proc_t p);
+/* returns 1 if the process is tainted by uid or gid changes,e else 0 */
+extern int proc_issetugid(proc_t p);
 
 extern int proc_tbe(proc_t);
 
@@ -367,7 +379,7 @@ extern void proc_coalitionids(proc_t, uint64_t [COALITION_NUM_TYPES]);
 #ifdef CONFIG_32BIT_TELEMETRY
 extern void proc_log_32bit_telemetry(proc_t p);
 #endif /* CONFIG_32BIT_TELEMETRY */
-
+extern uint64_t get_current_unique_pid(void);
 #endif /* XNU_KERNEL_PRIVATE*/
 
 #ifdef KERNEL_PRIVATE

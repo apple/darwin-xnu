@@ -29,7 +29,7 @@
 #include <arm/cpu_data_internal.h>
 #include <arm/machine_routines.h>
 #include <arm64/monotonic.h>
-#include <kern/assert.h> /* static_assert, assert */
+#include <kern/assert.h>
 #include <kern/debug.h> /* panic */
 #include <kern/monotonic.h>
 #include <machine/limits.h> /* CHAR_BIT */
@@ -39,12 +39,12 @@
 #include <sys/errno.h>
 #include <sys/monotonic.h>
 #include <pexpert/arm64/board_config.h>
+#include <pexpert/device_tree.h> /* DTFindEntry */
 #include <pexpert/pexpert.h>
 
 #pragma mark core counters
 
 bool mt_core_supported = true;
-void mt_fiq_internal(uint64_t upmsr);
 
 /*
  * PMC[0-1] are the 48-bit fixed counters -- PMC0 is cycles and PMC1 is
@@ -63,6 +63,8 @@ void mt_fiq_internal(uint64_t upmsr);
 #define PMC7 "s3_2_c15_c7_0"
 #define PMC8 "s3_2_c15_c9_0"
 #define PMC9 "s3_2_c15_c10_0"
+
+#define CTR_MAX ((UINT64_C(1) << 47) - 1)
 
 #define CYCLES 0
 #define INSTRS 1
@@ -103,14 +105,13 @@ enum {
 	PMCR0_INTGEN_FIQ = 4,
 };
 #define PMCR0_INTGEN_SET(INT) ((uint64_t)(INT) << 8)
-/* use AIC for backwards compatibility with kpc */
-#define PMCR0_INTGEN_INIT PMCR0_INTGEN_SET(PMCR0_INTGEN_AIC)
+#define PMCR0_INTGEN_INIT PMCR0_INTGEN_SET(PMCR0_INTGEN_FIQ)
 /* set by hardware if a PMI was delivered */
 #define PMCR0_PMAI        (UINT64_C(1) << 11)
 #define PMCR0_PMI_EN(CTR) (UINT64_C(1) << (12 + CTR_POS(CTR)))
-/* fixed counters are always counting XXX probably need to just set this to all true */
+/* fixed counters are always counting */
 #define PMCR0_PMI_INIT (PMCR0_PMI_EN(CYCLES) | PMCR0_PMI_EN(INSTRS))
-/* disable counting on a PMI (except for AIC interrupts) */
+/* disable counting on a PMI */
 #define PMCR0_DISCNT_EN (UINT64_C(1) << 20)
 /* block PMIs until ERET retires */
 #define PMCR0_WFRFE_EN (UINT64_C(1) << 22)
@@ -119,7 +120,6 @@ enum {
 /* user mode access to configuration registers */
 #define PMCR0_USEREN_EN (UINT64_C(1) << 30)
 
-/* XXX this needs to be synchronized with kpc... */
 #define PMCR0_INIT (PMCR0_INTGEN_INIT | PMCR0_PMI_INIT | PMCR0_DISCNT_EN)
 
 /*
@@ -154,14 +154,6 @@ core_init_execution_modes(void)
 }
 
 /*
- * PMSR reports the overflow status of all counters.
- */
-
-#define PMSR "s3_1_c15_c13_0"
-
-#define PMSR_OVF(CTR) (UINT64_C(1) << (CTR))
-
-/*
  * PMCR2 controls watchpoint registers.
  *
  * PMCR3 controls breakpoints and address matching.
@@ -173,19 +165,15 @@ core_init_execution_modes(void)
 #define PMCR3 "s3_1_c15_c3_0"
 #define PMCR4 "s3_1_c15_c4_0"
 
-/*
- * PMCR_AFFINITY does ??? XXX.
- */
-
-#define PMCR_AFFINITY "s3_1_c15_c11_0"
+#define PMSR_OVF(CTR) (1ULL << (CTR))
 
 void
-mt_init(void)
+mt_early_init(void)
 {
 }
 
 static int
-core_init(void)
+core_init(__unused mt_device_t dev)
 {
 	/* the dev node interface to the core counters is still unsupported */
 	return ENOTSUP;
@@ -207,7 +195,7 @@ mt_core_snap(unsigned int ctr)
 		return __builtin_arm_rsr64(PMC1);
 	default:
 		panic("monotonic: invalid core counter read: %u", ctr);
-		__builtin_trap();
+		__builtin_unreachable();
 	}
 }
 
@@ -223,7 +211,7 @@ mt_core_set_snap(unsigned int ctr, uint64_t count)
 		break;
 	default:
 		panic("monotonic: invalid core counter %u write %llu", ctr, count);
-		__builtin_trap();
+		__builtin_unreachable();
 	}
 }
 
@@ -260,8 +248,19 @@ core_idle(__unused cpu_data_t *cpu)
 	mt_update_fixed_counts();
 }
 
-static void
-core_run(cpu_data_t *cpu)
+#pragma mark uncore performance monitor
+
+
+#pragma mark common hooks
+
+void
+mt_cpu_idle(cpu_data_t *cpu)
+{
+	core_idle(cpu);
+}
+
+void
+mt_cpu_run(cpu_data_t *cpu)
 {
 	uint64_t pmcr0;
 	struct mt_cpu *mtc;
@@ -283,47 +282,6 @@ core_run(cpu_data_t *cpu)
 	__builtin_arm_wsr64(PMCR0, pmcr0);
 }
 
-static void
-core_up(__unused cpu_data_t *cpu)
-{
-	assert(ml_get_interrupts_enabled() == FALSE);
-
-	core_init_execution_modes();
-}
-
-#pragma mark uncore counters
-
-
-static void
-uncore_sleep(void)
-{
-}
-
-static void
-uncore_wake(void)
-{
-}
-
-static void
-uncore_fiq(uint64_t upmsr)
-{
-#pragma unused(upmsr)
-}
-
-#pragma mark common hooks
-
-void
-mt_cpu_idle(cpu_data_t *cpu)
-{
-	core_idle(cpu);
-}
-
-void
-mt_cpu_run(cpu_data_t *cpu)
-{
-	core_run(cpu);
-}
-
 void
 mt_cpu_down(cpu_data_t *cpu)
 {
@@ -333,59 +291,114 @@ mt_cpu_down(cpu_data_t *cpu)
 void
 mt_cpu_up(cpu_data_t *cpu)
 {
-	core_up(cpu);
 	mt_cpu_run(cpu);
 }
 
 void
 mt_sleep(void)
 {
-	uncore_sleep();
 }
 
 void
-mt_wake(void)
+mt_wake_per_core(void)
 {
-	uncore_wake();
 }
 
-void
+static void
 mt_cpu_pmi(cpu_data_t *cpu, uint64_t pmsr)
 {
-	bool found_overflow = false;
-
 	assert(cpu != NULL);
 	assert(ml_get_interrupts_enabled() == FALSE);
 
 	(void)atomic_fetch_add_explicit(&mt_pmis, 1, memory_order_relaxed);
 
-	for (int i = 0; i < MT_CORE_NFIXED; i++) {
-		if (pmsr & PMSR_OVF(i)) {
-			mt_cpu_update_count(cpu, i);
-			mt_core_set_snap(i, 0);
-			found_overflow = true;
+	/*
+	 * monotonic handles any fixed counter PMIs.
+	 */
+	for (unsigned int i = 0; i < MT_CORE_NFIXED; i++) {
+		if ((pmsr & PMSR_OVF(i)) == 0) {
+			continue;
+		}
+
+		uint64_t count = mt_cpu_update_count(cpu, i);
+		cpu->cpu_monotonic.mtc_counts[i] += count;
+		mt_core_set_snap(i, mt_core_reset_values[i]);
+		cpu->cpu_monotonic.mtc_snaps[i] = mt_core_reset_values[i];
+
+		if (mt_microstackshots && mt_microstackshot_ctr == i) {
+			bool user_mode = false;
+			arm_saved_state_t *state = get_user_regs(current_thread());
+			if (state) {
+				user_mode = PSR64_IS_USER(get_saved_state_cpsr(state));
+			}
+			KDBG_RELEASE(KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_DEBUG, 1),
+					mt_microstackshot_ctr, user_mode);
+			mt_microstackshot_pmi_handler(user_mode, mt_microstackshot_ctx);
 		}
 	}
 
-	assert(found_overflow);
+	/*
+	 * KPC handles the configurable counter PMIs.
+	 */
+	for (unsigned int i = MT_CORE_NFIXED; i < CORE_NCTRS; i++) {
+		if (pmsr & PMSR_OVF(i)) {
+			extern void kpc_pmi_handler(unsigned int ctr);
+			kpc_pmi_handler(i);
+		}
+	}
+
 	core_set_enabled();
 }
 
 void
-mt_fiq_internal(uint64_t upmsr)
+mt_fiq(void *cpu, uint64_t pmsr, uint64_t upmsr)
 {
-	uncore_fiq(upmsr);
+	mt_cpu_pmi(cpu, pmsr);
+
+#pragma unused(upmsr)
+}
+
+static uint32_t mt_xc_sync;
+
+static void
+mt_microstackshot_start_remote(__unused void *arg)
+{
+	cpu_data_t *cpu = getCpuDatap();
+
+	__builtin_arm_wsr64(PMCR0, PMCR0_INIT);
+
+	for (int i = 0; i < MT_CORE_NFIXED; i++) {
+		uint64_t count = mt_cpu_update_count(cpu, i);
+		cpu->cpu_monotonic.mtc_counts[i] += count;
+		mt_core_set_snap(i, mt_core_reset_values[i]);
+		cpu->cpu_monotonic.mtc_snaps[i] = mt_core_reset_values[i];
+	}
+
+	core_set_enabled();
+
+	if (hw_atomic_sub(&mt_xc_sync, 1) == 0) {
+		thread_wakeup((event_t)&mt_xc_sync);
+	}
+}
+
+int
+mt_microstackshot_start_arch(uint64_t period)
+{
+	mt_core_reset_values[mt_microstackshot_ctr] = CTR_MAX - period;
+	cpu_broadcast_xcall(&mt_xc_sync, TRUE, mt_microstackshot_start_remote,
+			mt_microstackshot_start_remote /* cannot pass NULL */);
+	return 0;
 }
 
 #pragma mark dev nodes
 
-const struct monotonic_dev monotonic_devs[] = {
+struct mt_device mt_devices[] = {
 	[0] = {
-		.mtd_name = "monotonic/core",
+		.mtd_name = "core",
 		.mtd_init = core_init,
 	},
 };
 
 static_assert(
-		(sizeof(monotonic_devs) / sizeof(monotonic_devs[0])) == MT_NDEVS,
-		"MT_NDEVS macro should be same as the length of monotonic_devs");
+		(sizeof(mt_devices) / sizeof(mt_devices[0])) == MT_NDEVS,
+		"MT_NDEVS macro should be same as the length of mt_devices");

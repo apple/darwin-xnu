@@ -83,7 +83,7 @@ typedef mach_vm_address_t	IOVirtualAddress;
 typedef vm_address_t		IOVirtualAddress;
 #endif
 
-#if !defined(__arm__) && !defined(__i386__) && !(defined(__x86_64__) && !defined(KERNEL))
+#if !defined(__arm__) && !defined(__i386__) && !(defined(__x86_64__) && !defined(KERNEL)) && !(defined(__arm64__) && !defined(__LP64__))
 typedef IOByteCount64		IOByteCount;
 #else
 typedef IOByteCount32	 	IOByteCount;

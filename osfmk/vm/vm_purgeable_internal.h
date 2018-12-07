@@ -123,11 +123,9 @@ uint64_t vm_purgeable_purge_task_owned(task_t task);
 void vm_purgeable_nonvolatile_enqueue(vm_object_t object, task_t task);
 void vm_purgeable_nonvolatile_dequeue(vm_object_t object);
 void vm_purgeable_accounting(vm_object_t	object,
-			     vm_purgable_t	old_state,
-			     boolean_t		disown,
-			     boolean_t		task_objq_locked);
-void vm_purgeable_compressed_update(vm_object_t	object,
-				    int		delta);
+			     vm_purgable_t	old_state);
+void vm_object_owner_compressed_update(vm_object_t	object,
+				       int		delta);
 
 #define PURGEABLE_LOOP_MAX 64
 

@@ -40,149 +40,143 @@
 #include <sys/types.h>
 #include <sys/monotonic.h>
 
-static int mt_dev_open(dev_t dev, int flags, int devtype, struct proc *p);
-static int mt_dev_close(dev_t dev, int flags, int devtype, struct proc *p);
-static int mt_dev_ioctl(dev_t dev, unsigned long cmd, char *uptr, int fflag,
-		struct proc *p);
+static int mt_cdev_open(dev_t dev, int flags, int devtype, proc_t p);
+static int mt_cdev_close(dev_t dev, int flags, int devtype, proc_t p);
+static int mt_cdev_ioctl(dev_t dev, unsigned long cmd, char *uptr, int fflag,
+		proc_t p);
+
+#define MT_NODE "monotonic"
 
 static struct cdevsw mt_cdevsw = {
-	.d_open = mt_dev_open,
-	.d_close = mt_dev_close,
-	.d_read = eno_rdwrt,
-	.d_write = eno_rdwrt,
-	.d_ioctl = mt_dev_ioctl,
-	.d_stop = eno_stop,
-	.d_reset = eno_reset,
-	.d_ttys = NULL,
-	.d_select = eno_select,
-	.d_mmap = eno_mmap,
-	.d_strategy = eno_strat,
-	.d_type = 0
+	.d_open = mt_cdev_open,
+	.d_close = mt_cdev_close,
+	.d_ioctl = mt_cdev_ioctl,
+
+	.d_read = eno_rdwrt, .d_write = eno_rdwrt, .d_stop = eno_stop,
+	.d_reset = eno_reset, .d_ttys = NULL, .d_select = eno_select,
+	.d_mmap = eno_mmap, .d_strategy = eno_strat, .d_type = 0
 };
 
 /*
  * Written at initialization, read-only thereafter.
  */
 lck_grp_t *mt_lock_grp = NULL;
-
 static int mt_dev_major;
-decl_lck_mtx_data(static, mt_dev_mtxs[MT_NDEVS]);
-static bool mt_dev_owned[MT_NDEVS];
 
-static void
-mt_dev_lock(dev_t dev)
+static mt_device_t
+mt_get_device(dev_t devnum)
 {
-	lck_mtx_lock(&mt_dev_mtxs[minor(dev)]);
+	return &mt_devices[minor(devnum)];
 }
 
 static void
-mt_dev_unlock(dev_t dev)
+mt_device_lock(mt_device_t dev)
 {
-	lck_mtx_unlock(&mt_dev_mtxs[minor(dev)]);
+	lck_mtx_lock(&dev->mtd_lock);
 }
 
 static void
-mt_dev_assert_lock_held(__assert_only dev_t dev)
+mt_device_unlock(mt_device_t dev)
 {
-	LCK_MTX_ASSERT(&mt_dev_mtxs[minor(dev)], LCK_MTX_ASSERT_OWNED);
+	lck_mtx_unlock(&dev->mtd_lock);
+}
+
+static void
+mt_device_assert_lock_held(__assert_only mt_device_t dev)
+{
+	LCK_MTX_ASSERT(&dev->mtd_lock, LCK_MTX_ASSERT_OWNED);
+}
+
+static void
+mt_device_assert_inuse(__assert_only mt_device_t dev)
+{
+	assert(dev->mtd_inuse == true);
 }
 
 int
 mt_dev_init(void)
 {
-	lck_grp_attr_t *lock_grp_attr = NULL;
-	int devices = 0;
-
-	lock_grp_attr = lck_grp_attr_alloc_init();
-	mt_lock_grp = lck_grp_alloc_init("monotonic", lock_grp_attr);
-	lck_grp_attr_free(lock_grp_attr);
+	mt_lock_grp = lck_grp_alloc_init(MT_NODE, LCK_GRP_ATTR_NULL);
+	assert(mt_lock_grp != NULL);
 
 	mt_dev_major = cdevsw_add(-1 /* allocate a major number */, &mt_cdevsw);
 	if (mt_dev_major < 0) {
 		panic("monotonic: cdevsw_add failed: %d", mt_dev_major);
-		__builtin_trap();
+		__builtin_unreachable();
 	}
 
 	for (int i = 0; i < MT_NDEVS; i++) {
-		dev_t dev;
-		void *dn;
-		int error;
-
-		error = monotonic_devs[i].mtd_init();
-		if (error) {
+		if (mt_devices[i].mtd_init(&mt_devices[i])) {
 			continue;
 		}
 
-		dev = makedev(mt_dev_major, i);
-		dn = devfs_make_node(dev,
-				DEVFS_CHAR, UID_ROOT, GID_WINDOWSERVER, 0666,
-				monotonic_devs[i].mtd_name);
-		if (dn == NULL) {
+		assert(mt_devices[i].mtd_ncounters > 0);
+
+		dev_t dev = makedev(mt_dev_major, i);
+		char name[128];
+		snprintf(name, sizeof(name), MT_NODE "/%s", mt_devices[i].mtd_name);
+		void *node = devfs_make_node(dev, DEVFS_CHAR, UID_ROOT,
+				GID_WINDOWSERVER, 0666, name);
+		if (!node) {
 			panic("monotonic: devfs_make_node failed for '%s'",
-					monotonic_devs[i].mtd_name);
-			__builtin_trap();
+					mt_devices[i].mtd_name);
+			__builtin_unreachable();
 		}
 
-		lck_mtx_init(&mt_dev_mtxs[i], mt_lock_grp, LCK_ATTR_NULL);
-
-		devices++;
+		lck_mtx_init(&mt_devices[i].mtd_lock, mt_lock_grp, LCK_ATTR_NULL);
 	}
 
 	return 0;
 }
 
 static int
-mt_dev_open(dev_t dev, __unused int flags, __unused int devtype,
-		__unused struct proc *p)
+mt_cdev_open(dev_t devnum, __unused int flags, __unused int devtype,
+		__unused proc_t p)
 {
 	int error = 0;
 
-	mt_dev_lock(dev);
-
-	if (mt_dev_owned[minor(dev)]) {
+	mt_device_t dev = mt_get_device(devnum);
+	mt_device_lock(dev);
+	if (dev->mtd_inuse) {
 		error = EBUSY;
-		goto out;
+	} else {
+		dev->mtd_inuse = true;
 	}
+	mt_device_unlock(dev);
 
-	mt_dev_owned[minor(dev)] = true;
-
-out:
-	mt_dev_unlock(dev);
 	return error;
 }
 
 static int
-mt_dev_close(dev_t dev, __unused int flags, __unused int devtype,
+mt_cdev_close(dev_t devnum, __unused int flags, __unused int devtype,
 		__unused struct proc *p)
 {
-	mt_dev_lock(dev);
+	mt_device_t dev = mt_get_device(devnum);
 
-	assert(mt_dev_owned[minor(dev)]);
-	mt_dev_owned[minor(dev)] = false;
-
-	monotonic_devs[minor(dev)].mtd_reset();
-
-	mt_dev_unlock(dev);
+	mt_device_lock(dev);
+	mt_device_assert_inuse(dev);
+	dev->mtd_inuse = false;
+	dev->mtd_reset();
+	mt_device_unlock(dev);
 
 	return 0;
 }
 
 static int
-mt_ctl_add(dev_t dev, user_addr_t uptr, __unused int flags,
-		__unused struct proc *p)
+mt_ctl_add(mt_device_t dev, user_addr_t uptr)
 {
 	int error;
 	uint32_t ctr;
 	union monotonic_ctl_add ctl;
 
-	mt_dev_assert_lock_held(dev);
+	mt_device_assert_lock_held(dev);
 
 	error = copyin(uptr, &ctl, sizeof(ctl.in));
 	if (error) {
 		return error;
 	}
 
-	error = monotonic_devs[minor(dev)].mtd_add(&ctl.in.config, &ctr);
+	error = dev->mtd_add(&ctl.in.config, &ctr);
 	if (error) {
 		return error;
 	}
@@ -198,14 +192,12 @@ mt_ctl_add(dev_t dev, user_addr_t uptr, __unused int flags,
 }
 
 static int
-mt_ctl_counts(dev_t dev, user_addr_t uptr, __unused int flags,
-		__unused struct proc *p)
+mt_ctl_counts(mt_device_t dev, user_addr_t uptr)
 {
 	int error;
-	uint64_t ctrs;
 	union monotonic_ctl_counts ctl;
 
-	mt_dev_assert_lock_held(dev);
+	mt_device_assert_lock_held(dev);
 
 	error = copyin(uptr, &ctl, sizeof(ctl.in));
 	if (error) {
@@ -215,11 +207,12 @@ mt_ctl_counts(dev_t dev, user_addr_t uptr, __unused int flags,
 	if (ctl.in.ctr_mask == 0) {
 		return EINVAL;
 	}
-	ctrs = __builtin_popcountll(ctl.in.ctr_mask);
 
 	{
-		uint64_t counts[ctrs];
-		error = monotonic_devs[minor(dev)].mtd_read(ctl.in.ctr_mask, counts);
+		uint64_t counts[dev->mtd_nmonitors][dev->mtd_ncounters];
+		memset(counts, 0,
+				dev->mtd_ncounters * dev->mtd_nmonitors * sizeof(counts[0][0]));
+		error = dev->mtd_read(ctl.in.ctr_mask, (uint64_t *)counts);
 		if (error) {
 			return error;
 		}
@@ -234,39 +227,40 @@ mt_ctl_counts(dev_t dev, user_addr_t uptr, __unused int flags,
 }
 
 static int
-mt_ctl_enable(dev_t dev, user_addr_t uptr)
+mt_ctl_enable(mt_device_t dev, user_addr_t uptr)
 {
 	int error;
 	union monotonic_ctl_enable ctl;
 
-	mt_dev_assert_lock_held(dev);
+	mt_device_assert_lock_held(dev);
 
 	error = copyin(uptr, &ctl, sizeof(ctl));
 	if (error) {
 		return error;
 	}
 
-	monotonic_devs[minor(dev)].mtd_enable(ctl.in.enable);
+	dev->mtd_enable(ctl.in.enable);
 
 	return 0;
 }
 
 static int
-mt_ctl_reset(dev_t dev)
+mt_ctl_reset(mt_device_t dev)
 {
-	mt_dev_assert_lock_held(dev);
-	monotonic_devs[minor(dev)].mtd_reset();
+	mt_device_assert_lock_held(dev);
+	dev->mtd_reset();
 	return 0;
 }
 
 static int
-mt_dev_ioctl(dev_t dev, unsigned long cmd, char *arg, int flags,
-		struct proc *p)
+mt_cdev_ioctl(dev_t devnum, unsigned long cmd, char *arg, __unused int flags,
+		__unused proc_t p)
 {
-	int error;
+	int error = ENODEV;
 	user_addr_t uptr = *(user_addr_t *)(void *)arg;
 
-	mt_dev_lock(dev);
+	mt_device_t dev = mt_get_device(devnum);
+	mt_device_lock(dev);
 
 	switch (cmd) {
 	case MT_IOC_RESET:
@@ -274,7 +268,7 @@ mt_dev_ioctl(dev_t dev, unsigned long cmd, char *arg, int flags,
 		break;
 
 	case MT_IOC_ADD:
-		error = mt_ctl_add(dev, uptr, flags, p);
+		error = mt_ctl_add(dev, uptr);
 		break;
 
 	case MT_IOC_ENABLE:
@@ -282,15 +276,26 @@ mt_dev_ioctl(dev_t dev, unsigned long cmd, char *arg, int flags,
 		break;
 
 	case MT_IOC_COUNTS:
-		error = mt_ctl_counts(dev, uptr, flags, p);
+		error = mt_ctl_counts(dev, uptr);
 		break;
+
+	case MT_IOC_GET_INFO: {
+		union monotonic_ctl_info info = {
+			.out = {
+				.nmonitors = dev->mtd_nmonitors,
+				.ncounters = dev->mtd_ncounters,
+			},
+		};
+		error = copyout(&info, uptr, sizeof(info));
+		break;
+	}
 
 	default:
 		error = ENODEV;
 		break;
 	}
 
-	mt_dev_unlock(dev);
+	mt_device_unlock(dev);
 
 	return error;
 }
@@ -413,47 +418,26 @@ SYSCTL_DECL(_kern_monotonic);
 SYSCTL_NODE(_kern, OID_AUTO, monotonic, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
 		"monotonic");
 
-SYSCTL_PROC(_kern_monotonic, OID_AUTO, supported,
-		CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED,
-		(void *)MT_SUPPORTED, sizeof(int), mt_sysctl, "I",
+#define MT_SYSCTL(NAME, ARG, SIZE, SIZESTR, DESC) \
+		SYSCTL_PROC(_kern_monotonic, OID_AUTO, NAME, \
+		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MASKED | CTLFLAG_LOCKED, \
+		(void *)(ARG), SIZE, mt_sysctl, SIZESTR, DESC)
+
+MT_SYSCTL(supported, MT_SUPPORTED, sizeof(int), "I",
 		"whether monotonic is supported");
-
-SYSCTL_PROC(_kern_monotonic, OID_AUTO, debug,
-		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MASKED,
-		(void *)MT_DEBUG, sizeof(int), mt_sysctl, "I",
+MT_SYSCTL(debug, MT_DEBUG, sizeof(int), "I",
 		"whether monotonic is printing debug messages");
-
-SYSCTL_PROC(_kern_monotonic, OID_AUTO, pmis,
-		CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED,
-		(void *)MT_PMIS, sizeof(uint64_t), mt_sysctl, "Q",
-		"how many PMIs have been seen");
-
-SYSCTL_PROC(_kern_monotonic, OID_AUTO, retrograde_updates,
-		CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED,
-		(void *)MT_RETROGRADE, sizeof(uint64_t), mt_sysctl, "Q",
-		"how many times a counter appeared to go backwards");
-
-SYSCTL_PROC(_kern_monotonic, OID_AUTO, task_thread_counting,
-		CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED,
-		(void *)MT_TASK_THREAD, sizeof(int), mt_sysctl, "I",
-		"task and thread counting enabled");
-
-SYSCTL_PROC(_kern_monotonic, OID_AUTO, kdebug_test,
-		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MASKED | CTLFLAG_LOCKED,
-		(void *)MT_KDBG_TEST, sizeof(int), mt_sysctl, "O",
-		"test that kdebug integration works");
-
-SYSCTL_PROC(_kern_monotonic, OID_AUTO, fixed_cpu_perf,
-		CTLFLAG_RW | CTLFLAG_MASKED | CTLFLAG_LOCKED,
-		(void *)MT_FIX_CPU_PERF, sizeof(uint64_t) * 2, mt_sysctl, "O",
+MT_SYSCTL(pmis, MT_PMIS, sizeof(uint64_t), "Q",
+		"number of PMIs seen");
+MT_SYSCTL(retrograde_updates, MT_RETROGRADE, sizeof(uint64_t), "Q",
+		"number of times a counter appeared to go backwards");
+MT_SYSCTL(task_thread_counting, MT_TASK_THREAD, sizeof(int), "I",
+		"whether task and thread counting is enabled");
+MT_SYSCTL(kdebug_test, MT_KDBG_TEST, sizeof(int), "O",
+		"whether task and thread counting is enabled");
+MT_SYSCTL(fixed_cpu_perf, MT_FIX_CPU_PERF, sizeof(uint64_t) * 2, "O",
 		"overhead of accessing the current CPU's counters");
-
-SYSCTL_PROC(_kern_monotonic, OID_AUTO, fixed_thread_perf,
-		CTLFLAG_RW | CTLFLAG_MASKED | CTLFLAG_LOCKED,
-		(void *)MT_FIX_THREAD_PERF, sizeof(uint64_t) * 2, mt_sysctl, "O",
+MT_SYSCTL(fixed_thread_perf, MT_FIX_THREAD_PERF, sizeof(uint64_t) * 2, "O",
 		"overhead of accessing the current thread's counters");
-
-SYSCTL_PROC(_kern_monotonic, OID_AUTO, fixed_task_perf,
-		CTLFLAG_RW | CTLFLAG_MASKED | CTLFLAG_LOCKED,
-		(void *)MT_FIX_TASK_PERF, sizeof(uint64_t) * 2, mt_sysctl, "O",
+MT_SYSCTL(fixed_task_perf, MT_FIX_TASK_PERF, sizeof(uint64_t) * 2, "O",
 		"overhead of accessing the current task's counters");

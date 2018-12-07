@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2011 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2011-2018 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -35,9 +35,11 @@
 extern lck_grp_t kperf_lck_grp;
 
 /* the trigger types supported by kperf */
-#define TRIGGER_TYPE_TIMER  (0)
-#define TRIGGER_TYPE_PMI    (1)
-#define TRIGGER_TYPE_KDEBUG (2)
+#define TRIGGER_TYPE_TIMER     (0)
+#define TRIGGER_TYPE_PMI       (1)
+#define TRIGGER_TYPE_KDEBUG    (2)
+#define TRIGGER_TYPE_LAZY_WAIT (3)
+#define TRIGGER_TYPE_LAZY_CPU  (3)
 
 /* helpers to get and set AST flags on a thread */
 uint32_t kperf_get_thread_flags(thread_t thread);
@@ -69,51 +71,78 @@ extern int kperf_sampling_disable(void);
 struct kperf_sample *kperf_intr_sample_buffer(void);
 
 /*
- * kperf AST handler
+ * Callbacks into kperf from other systems.
  */
-extern __attribute__((noinline)) void kperf_thread_ast_handler(thread_t thread);
 
 /*
- * thread on core callback
+ * kperf AST handler
+ *
+ * Prevent inlining, since the sampling function allocates on the stack and
+ * branches calling ast_taken (but never on a kperf AST) may blow their stacks.
  */
-
-/* controls whether the callback is called on context switch */
-extern boolean_t kperf_on_cpu_active;
+extern __attribute__((noinline)) void kperf_thread_ast_handler(thread_t thread);
 
 /* update whether the callback is set */
 void kperf_on_cpu_update(void);
 
-/* handle a thread being switched on */
-void kperf_on_cpu_internal(thread_t thread, thread_continue_t continuation,
-                           uintptr_t *starting_fp);
-
-/* for scheduler threads switching threads on */
+/* for scheduler switching threads on */
 static inline void
 kperf_on_cpu(thread_t thread, thread_continue_t continuation,
              uintptr_t *starting_fp)
 {
+	extern boolean_t kperf_on_cpu_active;
+	void kperf_on_cpu_internal(thread_t thread, thread_continue_t continuation,
+			uintptr_t *starting_fp);
+
 	if (__improbable(kperf_on_cpu_active)) {
 		kperf_on_cpu_internal(thread, continuation, starting_fp);
 	}
 }
 
-/*
- * kdebug callback
- */
+/* for scheduler switching threads off */
+static inline void
+kperf_off_cpu(thread_t thread)
+{
+	extern unsigned int kperf_lazy_cpu_action;
+	void kperf_lazy_off_cpu(thread_t thread);
 
-/* controls whether the kdebug callback is called */
-extern boolean_t kperf_kdebug_active;
+	if (__improbable(kperf_lazy_cpu_action != 0)) {
+		kperf_lazy_off_cpu(thread);
+	}
+}
 
-/* handle the kdebug event */
-void kperf_kdebug_callback_internal(uint32_t debugid);
+/* for scheduler making threads runnable */
+static inline void
+kperf_make_runnable(thread_t thread, int interrupt)
+{
+	extern unsigned int kperf_lazy_cpu_action;
+	void kperf_lazy_make_runnable(thread_t thread, bool interrupt);
 
-/* handle a kdebug event */
-void kperf_kdebug_handler(uint32_t debugid, uintptr_t *starting_fp);
+	if (__improbable(kperf_lazy_cpu_action != 0)) {
+		kperf_lazy_make_runnable(thread, interrupt);
+	}
+}
 
-/* called inside of kernel_debug_internal */
+/* for interrupt handler epilogue */
+static inline void
+kperf_interrupt(void)
+{
+	extern unsigned int kperf_lazy_cpu_action;
+	extern void kperf_lazy_cpu_sample(thread_t thread, unsigned int flags,
+			bool interrupt);
+
+	if (__improbable(kperf_lazy_cpu_action != 0)) {
+		kperf_lazy_cpu_sample(current_thread(), 0, true);
+	}
+}
+
+/* for kdebug on every traced event */
 static inline void
 kperf_kdebug_callback(uint32_t debugid, uintptr_t *starting_fp)
 {
+	extern boolean_t kperf_kdebug_active;
+	void kperf_kdebug_handler(uint32_t debugid, uintptr_t *starting_fp);
+
 	if (__improbable(kperf_kdebug_active)) {
 		kperf_kdebug_handler(debugid, starting_fp);
 	}
@@ -129,21 +158,11 @@ extern void kperf_reset(void);
  */
 void kperf_kernel_configure(const char *config);
 
-/* get and set whether we're recording stacks on interesting kdebug events */
-extern int kperf_kdbg_get_stacks(void);
-extern int kperf_kdbg_set_stacks(int);
-
-extern int kperf_kdebug_cswitch;
+/* given a task port, find out its pid */
+int kperf_port_to_pid(mach_port_name_t portname);
 
 #if DEVELOPMENT || DEBUG
 extern _Atomic long long kperf_pending_ipis;
 #endif /* DEVELOPMENT || DEBUG */
-
-/* get and set whether to output tracepoints on context-switch */
-extern int kperf_kdbg_cswitch_get(void);
-extern int kperf_kdbg_cswitch_set(int newval);
-
-/* given a task port, find out its pid */
-int kperf_port_to_pid(mach_port_name_t portname);
 
 #endif /* !defined(KPERF_H) */

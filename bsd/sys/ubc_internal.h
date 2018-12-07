@@ -120,9 +120,11 @@ struct cs_blob {
 	void *          csb_entitlements;	/* The entitlements as an OSDictionary */
 	unsigned int	csb_signer_type;
 
+	unsigned int	csb_reconstituted;	/* signature has potentially been modified after validation */
 	/* The following two will be replaced by the csb_signer_type. */
 	unsigned int	csb_platform_binary:1;
 	unsigned int	csb_platform_path:1;
+
 };
 
 /*
@@ -186,7 +188,6 @@ __private_extern__ uint32_t cluster_throttle_io_limit(vnode_t, uint32_t *);
 #define UBC_FOR_PAGEOUT         0x0002
 
 memory_object_control_t ubc_getobject(vnode_t, int);
-boolean_t	ubc_strict_uncached_IO(vnode_t);
 
 int	ubc_info_init(vnode_t);
 int	ubc_info_init_withsize(vnode_t, off_t);

@@ -50,7 +50,6 @@ osfmk/arm/strlcpy.c	standard
 
 osfmk/arm/model_dep.c		standard
 osfmk/arm/pcb.c		standard
-osfmk/arm/conf.c		standard
 osfmk/arm/rtclock.c		standard
 osfmk/arm/status.c		standard
 osfmk/arm/status_shared.c	standard
@@ -70,7 +69,6 @@ osfmk/OPTIONS/hi_res_clock	optional hi_res_clock
 
 # Kernel performance monitoring
 osfmk/kperf/arm/kperf_mp.c      optional kperf
-osfmk/kperf/arm/kperf_meminfo.c optional kperf
 osfmk/arm/kpc_arm.c		optional kpc
 
 osfmk/arm/monotonic_arm.c optional monotonic

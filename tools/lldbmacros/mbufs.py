@@ -780,3 +780,12 @@ def McacheShowCache(cmd_args=None):
     out_string += "Total # of objects cached:\t\t" + str(total) + "\n"
     print out_string
 # EndMacro: mcache_showcache
+
+# Macro: mbuf_wdlog
+@lldb_command('mbuf_wdlog')
+def McacheShowCache(cmd_args=None):
+    """Display the watchdog log
+    """
+    lldb_run_command('settings set max-string-summary-length 4096')
+    print('%s' % lldb_run_command('p/s mbwdog_logging').replace("\\n","\n"))
+# EndMacro: mbuf_wdlog

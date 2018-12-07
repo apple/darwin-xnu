@@ -379,7 +379,8 @@ IODMACommand::setMemoryDescriptor(const IOMemoryDescriptor *mem, bool autoPrepar
 	fInternalState->fNewMD = true;
 	mem->retain();
 	fMemory = mem;
-	if (!fMapper) mem->dmaCommandOperation(kIOMDSetDMAActive, this, 0);
+	fInternalState->fSetActiveNoMapper = (!fMapper);
+	if (fInternalState->fSetActiveNoMapper) mem->dmaCommandOperation(kIOMDSetDMAActive, this, 0);
 	if (autoPrepare) {
 	    err = prepare();
 	    if (err) {
@@ -399,7 +400,7 @@ IODMACommand::clearMemoryDescriptor(bool autoComplete)
     if (fMemory)
     {
 	while (fActive) complete();
-	if (!fMapper) fMemory->dmaCommandOperation(kIOMDSetDMAInactive, this, 0);
+	if (fInternalState->fSetActiveNoMapper) fMemory->dmaCommandOperation(kIOMDSetDMAInactive, this, 0);
 	fMemory->release();
 	fMemory = 0;
     }
@@ -822,8 +823,6 @@ IODMACommand::prepare(UInt64 offset, UInt64 length, bool flushCache, bool synchr
 	state->fLocalMapperAlloc       = 0;
 	state->fLocalMapperAllocValid  = false;
 	state->fLocalMapperAllocLength = 0;
-
-	state->fLocalMapper    = (fMapper && (fMapper != IOMapper::gSystem));
 
 	state->fSourceAlignMask = fAlignMask;
 	if (fMapper)

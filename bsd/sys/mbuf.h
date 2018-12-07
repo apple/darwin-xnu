@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -79,14 +79,17 @@
 #ifndef	_SYS_MBUF_H_
 #define	_SYS_MBUF_H_
 
-#include <sys/cdefs.h>
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 #include <sys/_types/_u_int32_t.h> /* u_int32_t */
 #include <sys/_types/_u_int64_t.h> /* u_int64_t */
 #include <sys/_types/_u_short.h> /* u_short */
 
-#ifdef XNU_KERNEL_PRIVATE
+#ifdef KERNEL
+#include <sys/kpi_mbuf.h>
+#endif
 
+#ifdef XNU_KERNEL_PRIVATE
 #include <sys/lock.h>
 #include <sys/queue.h>
 #include <machine/endian.h>
@@ -228,6 +231,8 @@ struct tcp_pktinfo {
 		struct {
 			u_int32_t segsz;	/* segment size (actual MSS) */
 			u_int32_t start_seq;	/* start seq of this packet */
+			pid_t     pid;
+			pid_t     e_pid;
 		} __tx;
 		struct {
 			u_int16_t lro_pktlen;	/* max seg size encountered */
@@ -241,6 +246,8 @@ struct tcp_pktinfo {
 	} __msgattr;
 #define tso_segsz	proto_mtag.__pr_u.tcp.tm_tcp.__offload.__tx.segsz
 #define	tx_start_seq	proto_mtag.__pr_u.tcp.tm_tcp.__offload.__tx.start_seq
+#define	tx_tcp_pid	proto_mtag.__pr_u.tcp.tm_tcp.__offload.__tx.pid
+#define	tx_tcp_e_pid	proto_mtag.__pr_u.tcp.tm_tcp.__offload.__tx.e_pid
 #define lro_pktlen	proto_mtag.__pr_u.tcp.tm_tcp.__offload.__rx.lro_pktlen
 #define lro_npkts	proto_mtag.__pr_u.tcp.tm_tcp.__offload.__rx.lro_npkts
 #define lro_elapsed	proto_mtag.__pr_u.tcp.tm_tcp.__offload.__rx.lro_timediff
@@ -275,6 +282,20 @@ struct tcp_mtag {
 	};
 };
 
+struct udp_mtag {
+	pid_t     _pid;
+	pid_t     _e_pid;
+#define	tx_udp_pid	proto_mtag.__pr_u.udp._pid
+#define	tx_udp_e_pid	proto_mtag.__pr_u.udp._e_pid
+};
+
+struct rawip_mtag {
+	pid_t     _pid;
+	pid_t     _e_pid;
+#define	tx_rawip_pid	proto_mtag.__pr_u.rawip._pid
+#define	tx_rawip_e_pid	proto_mtag.__pr_u.rawip._e_pid
+};
+
 struct driver_mtag_ {
 	uintptr_t		_drv_tx_compl_arg;
 	uintptr_t		_drv_tx_compl_data;
@@ -297,6 +318,8 @@ struct driver_mtag_ {
 struct proto_mtag_ {
 	union {
 		struct tcp_mtag	tcp;		/* TCP specific */
+		struct udp_mtag		udp;	/* UDP specific */
+		struct rawip_mtag	rawip;	/* raw IPv4/IPv6 specific */
 	} __pr_u;
 };
 
@@ -305,9 +328,10 @@ struct proto_mtag_ {
  */
 struct necp_mtag_ {
 	u_int32_t	necp_policy_id;
-	u_int32_t	necp_last_interface_index;
+	u_int32_t	necp_skip_policy_id;
 	u_int32_t	necp_route_rule_id;
-	u_int32_t	necp_app_id;
+	u_int16_t	necp_last_interface_index;
+	u_int16_t	necp_app_id;
 };
 
 union builtin_mtag {
@@ -346,7 +370,11 @@ struct pkthdr {
 		} _csum_tx;
 #define	csum_tx_start	_csum_tx.start
 #define	csum_tx_stuff	_csum_tx.stuff
-		u_int32_t csum_data;	/* data field used by csum routines */
+		/*
+		 * Generic data field used by csum routines.
+		 * It gets used differently in different contexts.
+		 */
+		u_int32_t csum_data;
 	};
 	u_int16_t vlan_tag;		/* VLAN tag, host byte order */
 	/*
@@ -758,36 +786,61 @@ union m16kcluster {
 #define	M_COPY_CLASSIFIER(to, from)	m_copy_classifier(to, from)
 
 /*
- * Set the m_data pointer of a newly-allocated mbuf (m_get/MGET) to place
- * an object of the specified size at the end of the mbuf, longword aligned.
+ * Evaluate TRUE if it's safe to write to the mbuf m's data region (this can
+ * be both the local data payload, or an external buffer area, depending on
+ * whether M_EXT is set).
  */
-#define	M_ALIGN(m, len)							\
-do {									\
-	(m)->m_data += (MLEN - (len)) &~ (sizeof (long) - 1);		\
-} while (0)
+#define	M_WRITABLE(m)	(((m)->m_flags & M_EXT) == 0 || !MCLHASREFERENCE(m))
 
 /*
- * As above, for mbufs allocated with m_gethdr/MGETHDR
- * or initialized by M_COPY_PKTHDR.
+ * These macros are mapped to the appropriate KPIs, so that private code
+ * can be simply recompiled in order to be forward-compatible with future
+ * changes toward the struture sizes.
  */
-#define	MH_ALIGN(m, len)						\
-do {									\
-	(m)->m_data += (MHLEN - (len)) &~ (sizeof (long) - 1);		\
-} while (0)
+#define MLEN            mbuf_get_mlen()         /* normal mbuf data len */
+#define MHLEN           mbuf_get_mhlen()        /* data len in an mbuf w/pkthdr */
+#define MINCLSIZE       mbuf_get_minclsize()    /* cluster usage threshold */
+/*
+ * Return the address of the start of the buffer associated with an mbuf,
+ * handling external storage, packet-header mbufs, and regular data mbufs.
+ */
+#define M_START(m)                                                      \
+        (((m)->m_flags & M_EXT) ? (m)->m_ext.ext_buf :                  \
+         ((m)->m_flags & M_PKTHDR) ? &(m)->m_pktdat[0] :                \
+         &(m)->m_dat[0])
 
 /*
- * Compute the amount of space available
- * before the current start of data in an mbuf.
- * Subroutine - data not available if certain references.
+ * Return the size of the buffer associated with an mbuf, handling external
+ * storage, packet-header mbufs, and regular data mbufs.
  */
-#define	M_LEADINGSPACE(m)	m_leadingspace(m)
+#define M_SIZE(m)                                                       \
+        (((m)->m_flags & M_EXT) ? (m)->m_ext.ext_size :                 \
+         ((m)->m_flags & M_PKTHDR) ? MHLEN :                            \
+         MLEN)
+
+#define	M_ALIGN(m, len)		m_align(m, len)
+#define	MH_ALIGN(m, len)	m_align(m, len)
+#define	MEXT_ALIGN(m, len)	m_align(m, len)
 
 /*
- * Compute the amount of space available
- * after the end of data in an mbuf.
- * Subroutine - data not available if certain references.
+ * Compute the amount of space available before the current start of data in
+ * an mbuf.
+ *
+ * The M_WRITABLE() is a temporary, conservative safety measure: the burden
+ * of checking writability of the mbuf data area rests solely with the caller.
  */
-#define	M_TRAILINGSPACE(m)	m_trailingspace(m)
+#define	M_LEADINGSPACE(m)						\
+	(M_WRITABLE(m) ? ((m)->m_data - M_START(m)) : 0)
+
+/*
+ * Compute the amount of space available after the end of data in an mbuf.
+ *
+ * The M_WRITABLE() is a temporary, conservative safety measure: the burden
+ * of checking writability of the mbuf data area rests solely with the caller.
+ */
+#define	M_TRAILINGSPACE(m)						\
+	(M_WRITABLE(m) ?						\
+	    ((M_START(m) + M_SIZE(m)) - ((m)->m_data + (m)->m_len)) : 0)
 
 /*
  * Arrange to prepend space of size plen to mbuf m.
@@ -1175,16 +1228,6 @@ struct mbuf;
 #define	M_COPYM_MUST_COPY_HDR	3	/* MUST copy pkthdr from old to new */
 #define	M_COPYM_MUST_MOVE_HDR	4	/* MUST move pkthdr from old to new */
 
-/*
- * These macros are mapped to the appropriate KPIs, so that private code
- * can be simply recompiled in order to be forward-compatible with future
- * changes toward the struture sizes.
- */
-#define	MLEN		mbuf_get_mlen()		/* normal data len */
-#define	MHLEN		mbuf_get_mhlen()	/* data len w/pkthdr */
-
-#define	MINCLSIZE	mbuf_get_minclsize()	/* cluster usage threshold */
-
 extern void m_freem(struct mbuf *);
 extern u_int64_t mcl_to_paddr(char *);
 extern void m_adj(struct mbuf *, int);
@@ -1247,6 +1290,7 @@ extern void m_mclfree(caddr_t p);
  *	MBUF_SC_AV	] ==>	MBUF_TC_VI
  *	MBUF_SC_RV	]
  *	MBUF_SC_VI	]
+ *	MBUF_SC_SIG	]
  *
  *	MBUF_SC_VO	] ==>	MBUF_TC_VO
  *	MBUF_SC_CTL	]
@@ -1276,6 +1320,7 @@ extern void m_mclfree(caddr_t p);
 #define	SCIDX_AV		MBUF_SCIDX(MBUF_SC_AV)
 #define	SCIDX_RV		MBUF_SCIDX(MBUF_SC_RV)
 #define	SCIDX_VI		MBUF_SCIDX(MBUF_SC_VI)
+#define	SCIDX_SIG		MBUF_SCIDX(MBUF_SC_SIG)
 #define	SCIDX_VO		MBUF_SCIDX(MBUF_SC_VO)
 #define	SCIDX_CTL		MBUF_SCIDX(MBUF_SC_CTL)
 
@@ -1287,26 +1332,27 @@ extern void m_mclfree(caddr_t p);
 #define	SCVAL_AV		MBUF_SCVAL(MBUF_SC_AV)
 #define	SCVAL_RV		MBUF_SCVAL(MBUF_SC_RV)
 #define	SCVAL_VI		MBUF_SCVAL(MBUF_SC_VI)
+#define	SCVAL_SIG		MBUF_SCVAL(MBUF_SC_SIG)
 #define	SCVAL_VO		MBUF_SCVAL(MBUF_SC_VO)
 #define	SCVAL_CTL		MBUF_SCVAL(MBUF_SC_CTL)
 
 #define	MBUF_VALID_SC(c)						\
 	(c == MBUF_SC_BK_SYS || c == MBUF_SC_BK || c == MBUF_SC_BE ||	\
 	c == MBUF_SC_RD || c == MBUF_SC_OAM || c == MBUF_SC_AV ||	\
-	c == MBUF_SC_RV || c == MBUF_SC_VI || c == MBUF_SC_VO ||	\
-	c == MBUF_SC_CTL)
+	c == MBUF_SC_RV || c == MBUF_SC_VI || c == MBUF_SC_SIG ||	\
+	c == MBUF_SC_VO || c == MBUF_SC_CTL)
 
 #define	MBUF_VALID_SCIDX(c)						\
 	(c == SCIDX_BK_SYS || c == SCIDX_BK || c == SCIDX_BE ||		\
 	c == SCIDX_RD || c == SCIDX_OAM || c == SCIDX_AV ||		\
-	c == SCIDX_RV || c == SCIDX_VI || c == SCIDX_VO ||		\
-	c == SCIDX_CTL)
+	c == SCIDX_RV || c == SCIDX_VI || c == SCIDX_SIG ||		\
+	c == SCIDX_VO || c == SCIDX_CTL)
 
 #define	MBUF_VALID_SCVAL(c)						\
 	(c == SCVAL_BK_SYS || c == SCVAL_BK || c == SCVAL_BE ||		\
 	c == SCVAL_RD || c == SCVAL_OAM || c == SCVAL_AV ||		\
-	c == SCVAL_RV || c == SCVAL_VI || c == SCVAL_VO ||		\
-	c == SCVAL_CTL)
+	c == SCVAL_RV || c == SCVAL_VI || c == SCVAL_SIG ||		\
+	c == SCVAL_VO || SCVAL_CTL)
 
 extern unsigned char *mbutl;	/* start VA of mbuf pool */
 extern unsigned char *embutl;	/* end VA of mbuf pool */
@@ -1363,8 +1409,7 @@ __private_extern__ struct mbuf *m_dtom(void *);
 __private_extern__ int m_mtocl(void *);
 __private_extern__ union mcluster *m_cltom(int);
 
-__private_extern__ int m_trailingspace(struct mbuf *);
-__private_extern__ int m_leadingspace(struct mbuf *);
+__private_extern__ void m_align(struct mbuf *, int);
 
 __private_extern__ struct mbuf *m_normalize(struct mbuf *m);
 __private_extern__ void m_mchtype(struct mbuf *m, int t);
@@ -1389,7 +1434,7 @@ __private_extern__ uint32_t m_ext_get_prop(struct mbuf *);
 __private_extern__ int m_ext_paired_is_active(struct mbuf *);
 __private_extern__ void m_ext_paired_activate(struct mbuf *);
 
-__private_extern__ void m_drain(void);
+__private_extern__ void mbuf_drain(boolean_t);
 
 /*
  * Packets may have annotations attached by affixing a list of "packet
@@ -1432,6 +1477,7 @@ enum {
 	KERNEL_TAG_TYPE_INET6			= 9,
 	KERNEL_TAG_TYPE_IPSEC			= 10,
 	KERNEL_TAG_TYPE_DRVAUX			= 11,
+	KERNEL_TAG_TYPE_CFIL_UDP		= 13,
 };
 
 /* Packet tag routines */
@@ -1450,13 +1496,6 @@ __private_extern__ int m_tag_copy_chain(struct mbuf *, struct mbuf *, int);
 __private_extern__ void m_tag_init(struct mbuf *, int);
 __private_extern__ struct  m_tag *m_tag_first(struct mbuf *);
 __private_extern__ struct  m_tag *m_tag_next(struct mbuf *, struct m_tag *);
-
-__END_DECLS
-#endif /* XNU_KERNEL_PRIVATE */
-#ifdef KERNEL
-#include <sys/kpi_mbuf.h>
-#ifdef XNU_KERNEL_PRIVATE
-__BEGIN_DECLS
 
 __private_extern__ void m_scratch_init(struct mbuf *);
 __private_extern__ u_int32_t m_scratch_get(struct mbuf *, u_int8_t **);
@@ -1485,9 +1524,9 @@ __private_extern__ struct ext_ref *m_get_rfa(struct mbuf *);
 __private_extern__ m_ext_free_func_t m_get_ext_free(struct mbuf *);
 __private_extern__ caddr_t m_get_ext_arg(struct mbuf *);
 
-extern void m_do_tx_compl_callback(struct mbuf *, struct ifnet *);
+__private_extern__ void m_do_tx_compl_callback(struct mbuf *, struct ifnet *);
+__private_extern__ mbuf_tx_compl_func m_get_tx_compl_callback(u_int32_t);
 
 __END_DECLS
 #endif /* XNU_KERNEL_PRIVATE */
-#endif /* KERNEL */
 #endif	/* !_SYS_MBUF_H_ */

@@ -49,8 +49,15 @@ typedef int sync_policy_t;
  *	These options provide addition (kernel-private) behaviors
  */
 
-#define SYNC_POLICY_PREPOST		0x4
-#define SYNC_POLICY_DISABLE_IRQ		0x8
+#define SYNC_POLICY_PREPOST             0x4
+#define SYNC_POLICY_DISABLE_IRQ         0x8
+
+/*
+ * If the waitq is IRQ safe, 0x10 suggests it's a waitq embedded in turnstile.
+ * If the waitq is not IRQ safe, 0x10 suggests it's a waitq of a port and should use it's turnstile safeq.
+ */
+#define SYNC_POLICY_TURNSTILE           0x10
+#define SYNC_POLICY_PORT                0x10
 
 #endif	/* KERNEL_PRIVATE */
 

@@ -130,7 +130,19 @@ LEXT(CleanPoU_Dcache)
 #if defined(APPLE_ARM64_ARCH_FAMILY)
 	/* "Fully Coherent." */
 #else /* !defined(APPLE_ARM64_ARCH_FAMILY) */
-#error CleanPoU_Dcache needs an implementation
+	mov		x0, #0
+	mov		x9, #(1 << MMU_I7SET)
+	mov		x10, #(1 << (MMU_NSET + MMU_I7SET))
+	mov		x11, #(1 << MMU_I7WAY)
+L_cpud_dcacheway:
+L_cpud_dcacheline:
+	dc		csw, x0								// clean dcache line by way/set
+	add		x0, x0, x9							// increment set index
+	tst		x0, #(1 << (MMU_NSET + MMU_I7SET))	// look for overflow
+	b.eq	L_cpud_dcacheline
+	bic		x0, x0, x10							// clear set overflow
+	adds	x0, x0, x11							// increment way
+	b.cc	L_cpud_dcacheway					// loop
 #endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
 	dsb sy
 	ret
@@ -170,6 +182,7 @@ L_cpudr_loop:
 	.text
 	.align 2
 LEXT(CleanPoC_DcacheRegion_internal)
+	ARM64_STACK_PROLOG
 	PUSH_FRAME
 	mov		x9, #((1<<MMU_CLINE)-1)
 	and		x2, x0, x9
@@ -193,7 +206,7 @@ L_cpcdr_loop:
 	b.pl	L_cpcdr_loop						// Loop in counter not null
 	dsb		sy
 	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG
 
 /*
  *	void CleanPoC_DcacheRegion(vm_offset_t va, unsigned length)
@@ -212,35 +225,50 @@ LEXT(CleanPoC_DcacheRegion)
 	b EXT(CleanPoC_DcacheRegion_internal)
 #endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
 
-/*
- *	void CleanPoC_DcacheRegion_Force(vm_offset_t va, unsigned length)
- *
- *		Clean d-cache region to Point of Coherency -  when you really 
- *		need to flush even on coherent platforms, e.g. panic log
- */
-.text
+	.text
 	.align 2
-	.globl EXT(CleanPoC_DcacheRegion_Force)
-LEXT(CleanPoC_DcacheRegion_Force)
+	.globl EXT(CleanPoC_DcacheRegion_Force_nopreempt)
+LEXT(CleanPoC_DcacheRegion_Force_nopreempt)
 #if defined(APPLE_ARM64_ARCH_FAMILY)
+	ARM64_STACK_PROLOG
 	PUSH_FRAME
-	stp		x0, x1, [sp, #-16]!
-	bl		EXT(_disable_preemption)
 	isb		sy
 	ARM64_IS_PCORE x15
 	ARM64_READ_EP_SPR x15, x14, ARM64_REG_EHID4, ARM64_REG_HID4
 	and		x14, x14, (~ARM64_REG_HID4_DisDcMVAOps)
 	ARM64_WRITE_EP_SPR x15, x14, ARM64_REG_EHID4, ARM64_REG_HID4
 	isb		sy
-	ldp		x0, x1, [sp], #16
 	bl		EXT(CleanPoC_DcacheRegion_internal)
 	isb		sy
 	orr		x14, x14, ARM64_REG_HID4_DisDcMVAOps
 	ARM64_WRITE_EP_SPR x15, x14, ARM64_REG_EHID4, ARM64_REG_HID4
 	isb		sy
+	POP_FRAME
+	ARM64_STACK_EPILOG
+#else
+	b		EXT(CleanPoC_DcacheRegion_internal)
+#endif // APPLE_ARM64_ARCH_FAMILY
+
+/*
+ *	void CleanPoC_DcacheRegion_Force(vm_offset_t va, unsigned length)
+ *
+ *		Clean d-cache region to Point of Coherency -  when you really 
+ *		need to flush even on coherent platforms, e.g. panic log
+ */
+	.text
+	.align 2
+	.globl EXT(CleanPoC_DcacheRegion_Force)
+LEXT(CleanPoC_DcacheRegion_Force)
+#if defined(APPLE_ARM64_ARCH_FAMILY)
+	ARM64_STACK_PROLOG
+	PUSH_FRAME
+	stp		x0, x1, [sp, #-16]!
+	bl		EXT(_disable_preemption)
+	ldp		x0, x1, [sp], #16
+	bl		EXT(CleanPoC_DcacheRegion_Force_nopreempt)
 	bl		EXT(_enable_preemption)
 	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG
 #else
 	b		EXT(CleanPoC_DcacheRegion_internal)
 #endif // APPLE_ARM64_ARCH_FAMILY

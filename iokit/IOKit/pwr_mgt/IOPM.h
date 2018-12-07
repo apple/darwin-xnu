@@ -249,10 +249,28 @@ enum {
 
 /* kIOPMDeepSleepDelayKey
  * Key refers to a CFNumberRef that represents the delay in seconds before
- * entering Deep Sleep state. The property is not present if Deep Sleep is
- * unsupported.
+ * entering Deep Sleep state when on battery power and when remaining
+ * battery capacity is below a particular threshold (e.g., 50%.) The
+ * property is not present if Deep Sleep is unsupported.
  */
 #define kIOPMDeepSleepDelayKey              "Standby Delay"
+
+/* kIOPMDeepSleepDelayHighKey
+ * Key refers to a CFNumberRef that represents the delay in seconds before
+ * entering Deep Sleep state. This is used instead of the value specified by
+ * kIOPMDeepSleepDelayKey if the remaining battery capacity is above a
+ * particular threshold (e.g. 50%) or on AC power. The property is not
+ * present if Deep Sleep is unsupported.
+ */
+#define kIOPMDeepSleepDelayHighKey          "High Standby Delay"
+
+/* kIOPMLowBatteryThresholdKey
+ * Key refers to a CFNumberRef that represents the threshold used to choose
+ * between the normal deep sleep delay and the high deep sleep delay (as a
+ * percentage of total battery capacity remaining.) The property is not
+ * present if Deep Sleep is unsupported.
+ */
+#define kIOPMStandbyBatteryThresholdKey     "Standby Battery Threshold"
 
 /* kIOPMDestroyFVKeyOnStandbyKey
  * Specifies if FileVault key can be stored when going to standby mode
@@ -631,11 +649,15 @@ enum {
     kIOPSFamilyCodeUSBChargingPortDownstream  = iokit_family_err(sub_iokit_usb, 5),
     kIOPSFamilyCodeUSBChargingPort    = iokit_family_err(sub_iokit_usb, 6),
     kIOPSFamilyCodeUSBUnknown     = iokit_family_err(sub_iokit_usb, 7),
+    kIOPSFamilyCodeUSBCBrick      = iokit_family_err(sub_iokit_usb, 8),
+    kIOPSFamilyCodeUSBCTypeC      = iokit_family_err(sub_iokit_usb, 9),
+    kIOPSFamilyCodeUSBCPD         = iokit_family_err(sub_iokit_usb, 10),
     kIOPSFamilyCodeAC       = iokit_family_err(sub_iokit_pmu, 0),
     kIOPSFamilyCodeExternal     = iokit_family_err(sub_iokit_pmu, 1),
     kIOPSFamilyCodeExternal2     = iokit_family_err(sub_iokit_pmu, 2),
     kIOPSFamilyCodeExternal3     = iokit_family_err(sub_iokit_pmu, 3),
     kIOPSFamilyCodeExternal4     = iokit_family_err(sub_iokit_pmu, 4),
+    kIOPSFamilyCodeExternal5     = iokit_family_err(sub_iokit_pmu, 5),
 };
 
 // values for kIOPMPSAdapterDetailsErrorFlagsKey

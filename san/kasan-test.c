@@ -34,6 +34,7 @@
 #include <kern/kalloc.h>
 #include <kern/simple_lock.h>
 #include <kern/debug.h>
+#include <kern/thread.h>
 #include <mach/mach_vm.h>
 #include <mach/vm_param.h>
 #include <libkern/libkern.h>
@@ -434,13 +435,13 @@ static int test_strncat(struct kasan_test *t)
 }
 
 /* we ignore the top *two* frames in backtrace - so add an extra one */
-static int __attribute__((noinline))
+static int OS_NOINLINE
 test_blacklist_helper(void)
 {
 	return kasan_is_blacklisted(TYPE_TEST);
 }
 
-static int __attribute__((noinline))
+static int OS_NOINLINE
 test_blacklist(struct kasan_test *t)
 {
 	TEST_START(t);
@@ -449,7 +450,7 @@ test_blacklist(struct kasan_test *t)
 	return 0;
 }
 
-static int __attribute__((noinline))
+static int OS_NOINLINE
 test_blacklist_str(struct kasan_test *t)
 {
 	TEST_START(t);
@@ -481,6 +482,50 @@ static int test_strnlen(struct kasan_test *t)
 	return a1[0] != 'a';
 }
 #endif
+
+static void OS_NOINLINE
+force_fakestack(char *x)
+{
+	__asm__ __volatile__("" :: "r" (x) : "memory");
+}
+
+OS_NOINLINE
+static int
+test_fakestack_helper(struct kasan_test *t, char *x)
+{
+	TEST_START(t);
+
+	x[0] = 0x55;
+
+	/* ensure that 'x' is on the fakestack */
+	uintptr_t base = dtrace_get_kernel_stack(current_thread());
+	uintptr_t p = (uintptr_t)x;
+	if (p >= base && p < base + kernel_stack_size) {
+		return 1;
+	}
+
+	__asan_handle_no_return();
+
+	/* x better still be accessible */
+	TEST_NOFAULT(t);
+	if (x[0] != 0x55) {
+		TEST_DONE(t, 1);
+	}
+
+	TEST_DONE(t, 0);
+	return 0;
+}
+
+static int
+test_fakestack(struct kasan_test *t)
+{
+	char x[8];
+	if (!fakestack_enabled) {
+		return 1;
+	}
+	force_fakestack(x);
+	return test_fakestack_helper(t, x);
+}
 
 int *uaf_ptr;
 static int * NOINLINE
@@ -524,6 +569,7 @@ static struct kasan_test xnu_tests[] = {
 	DECLARE_TEST(test_strncat,         "strncat"),
 	DECLARE_TEST(test_blacklist,       "blacklist"),
 	DECLARE_TEST(test_blacklist_str,   "blacklist_str"),
+	DECLARE_TEST(test_fakestack,       "fakestack"),
 	// DECLARE_TEST(test_strnlen,         "strnlen"),
 };
 static int num_xnutests = sizeof(xnu_tests)/sizeof(xnu_tests[0]);
@@ -557,11 +603,6 @@ kasan_run_test(struct kasan_test *test_list, int testno, int fail)
 			status = TEST_FAIL_NOFAULT;
 		}
 	} else {
-		/* Triggering a KASan violation will return here by longjmp, bypassing
-		 * stack unpoisoning, so do it here explicitly. We just hope that
-		 * fakestack free will happen later... */
-		kasan_unpoison_curstack(true);
-
 		if (t->result) {
 			/* faulted, but at the wrong place */
 			printf("KASan: test.%02d FAIL %d (%s)\n", testno, t->result, t->name);

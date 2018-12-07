@@ -913,6 +913,20 @@ ttysetpgrphup(struct tty *tp)
 {
 	TTY_LOCK_OWNED(tp);     /* debug assert */
 	SET(tp->t_state, TS_PGRPHUP);
+	/*
+	 * Also wake up sleeping readers which may or may not belong to the
+	 * current foreground process group.
+	 *
+	 * This forces any non-fg readers (which entered read when
+	 * that process group was in the fg) to return with EIO (if they're
+	 * catching SIGTTIN or with SIGTTIN). The ones which do belong to the fg
+	 * process group will promptly go back to sleep and get a SIGHUP shortly
+	 * This would normally happen as part of the close in revoke but if
+	 * there is a sleeping reader from a non-fg process group we never get
+	 * to the close because the sleeping reader holds an iocount on the
+	 * vnode of the terminal which is going to get revoked->reclaimed.
+	 */
+	wakeup(TSA_HUP_OR_INPUT(tp));
 }
 
 /*
@@ -1454,6 +1468,9 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		 * case.
 		 */
 		if (ISSET(tp->t_state, TS_PGRPHUP)) {
+			if (sessp != SESSION_NULL)
+				session_rele(sessp);
+			pg_rele(pgrp);
 			error = EPERM;
 			goto out;
 		}
@@ -1462,6 +1479,23 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		tp->t_pgrp = pgrp;
 		sessp->s_ttypgrpid = pgrp->pg_id;
 		proc_list_unlock();
+
+		/*
+		 * Wakeup readers to recheck if they are still the foreground
+		 * process group.
+		 *
+		 * ttwakeup() isn't called because the readers aren't getting
+		 * woken up becuse there is something to read but to force
+		 * the re-evaluation of their foreground process group status.
+		 *
+		 * Ordinarily leaving these readers waiting wouldn't be an issue
+		 * as launchd would send them a termination signal eventually
+		 * (if nobody else does). But if this terminal happens to be
+		 * /dev/console, launchd itself could get blocked forever behind
+		 * a revoke of /dev/console and leave the system deadlocked.
+		 */
+		wakeup(TSA_HUP_OR_INPUT(tp));
+
 		/* SAFE: All callers drop the lock on return */
 		tty_unlock(tp);
 		if (oldpg != PGRP_NULL)
@@ -3333,6 +3367,12 @@ tty_set_knote_hook(struct knote *kn)
 			NULL);
 	assert(kr == KERN_SUCCESS);
 
+	/*
+	 * Lazy allocate the waitqset to avoid potential allocation under
+	 * a spinlock;
+	 */
+	waitq_set_lazy_init_link(&tmp_wqs);
+
 	old_wqs = uth->uu_wqset;
 	uth->uu_wqset = &tmp_wqs;
 	/*
@@ -3507,8 +3547,6 @@ filt_ttytouch(struct knote *kn, struct kevent_internal_s *kev)
 
 	kn->kn_sdata = kev->data;
 	kn->kn_sfflags = kev->fflags;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 
 	if (kn->kn_vnode_kqok) {
 		res = filt_tty_common(kn, tp);

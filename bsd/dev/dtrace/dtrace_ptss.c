@@ -167,7 +167,6 @@ dtrace_ptss_allocate_page(struct proc* p)
 
 	mach_vm_size_t size = PAGE_MAX_SIZE;
 	mach_vm_offset_t addr = 0;
-#if CONFIG_EMBEDDED
 	mach_vm_offset_t write_addr = 0;
 	/* 
 	 * The embedded OS has extra permissions for writable and executable pages.
@@ -175,16 +174,11 @@ dtrace_ptss_allocate_page(struct proc* p)
 	 */
 	vm_prot_t cur_protection = VM_PROT_READ|VM_PROT_EXECUTE;
 	vm_prot_t max_protection = VM_PROT_READ|VM_PROT_EXECUTE|VM_PROT_WRITE;
-#else
-	vm_prot_t cur_protection = VM_PROT_READ|VM_PROT_WRITE|VM_PROT_EXECUTE;
-	vm_prot_t max_protection = VM_PROT_READ|VM_PROT_WRITE|VM_PROT_EXECUTE;
-#endif /* CONFIG_EMBEDDED */
 
-	kern_return_t kr = mach_vm_map_kernel(map, &addr, size, 0, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE, IPC_PORT_NULL, 0, FALSE, cur_protection, max_protection, VM_INHERIT_DEFAULT);
+	kern_return_t kr = mach_vm_map_kernel(map, &addr, size, 0, VM_FLAGS_ANYWHERE, VM_MAP_KERNEL_FLAGS_NONE, VM_KERN_MEMORY_NONE, IPC_PORT_NULL, 0, FALSE, cur_protection, max_protection, VM_INHERIT_DEFAULT);
 	if (kr != KERN_SUCCESS) {
 		goto err;
 	}
-#if CONFIG_EMBEDDED
 	/*
 	 * If on embedded, remap the scratch space as writable at another
 	 * virtual address
@@ -196,14 +190,12 @@ dtrace_ptss_allocate_page(struct proc* p)
 	kr = mach_vm_protect (map, (mach_vm_offset_t)write_addr, (mach_vm_size_t)size, 0, VM_PROT_READ | VM_PROT_WRITE);
 	if (kr != KERN_SUCCESS)
 		goto err;
-#endif
+
 	// Chain the page entries.
 	int i;
 	for (i=0; i<DTRACE_PTSS_ENTRIES_PER_PAGE; i++) {
 		ptss_page->entries[i].addr = addr + (i * DTRACE_PTSS_SCRATCH_SPACE_PER_THREAD);
-#if CONFIG_EMBEDDED
 		ptss_page->entries[i].write_addr = write_addr + (i * DTRACE_PTSS_SCRATCH_SPACE_PER_THREAD);
-#endif
 		ptss_page->entries[i].next = &ptss_page->entries[i+1];
 	}
 
@@ -243,10 +235,8 @@ dtrace_ptss_free_page(struct proc* p, struct dtrace_ptss_page* ptss_page)
 	// Silent failures, no point in checking return code.
 	mach_vm_deallocate(map, addr, size);
 
-#ifdef CONFIG_EMBEDDED
 	mach_vm_address_t write_addr = ptss_page->entries[0].write_addr;
 	mach_vm_deallocate(map, write_addr, size);
-#endif
 
 	vm_map_deallocate(map);
 }

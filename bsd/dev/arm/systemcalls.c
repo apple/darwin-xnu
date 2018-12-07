@@ -10,6 +10,7 @@
 #include <kern/sched_prim.h>
 #include <mach/machine/thread_status.h>
 #include <mach/thread_act.h>
+#include <machine/machine_routines.h>
 #include <arm/thread.h>
 #include <arm/proc_reg.h>
 #include <pexpert/pexpert.h>
@@ -39,7 +40,7 @@ unix_syscall(struct arm_saved_state * regs, thread_t thread_act,
 
 static int	arm_get_syscall_args(uthread_t, struct arm_saved_state *, struct sysent *);
 static int 	arm_get_u32_syscall_args(uthread_t, arm_saved_state32_t *, struct sysent *);
-static void 	arm_prepare_u32_syscall_return(struct sysent *, arm_saved_state32_t *, uthread_t, int);
+static void 	arm_prepare_u32_syscall_return(struct sysent *, arm_saved_state_t *, uthread_t, int);
 static void	arm_prepare_syscall_return(struct sysent *, struct arm_saved_state *, uthread_t, int);
 static int 	arm_get_syscall_number(struct arm_saved_state *);
 static void 	arm_trace_unix_syscall(int, struct arm_saved_state *);
@@ -274,16 +275,20 @@ unix_syscall_return(int error)
 }
 
 static void
-arm_prepare_u32_syscall_return(struct sysent *callp, arm_saved_state32_t *regs, uthread_t uthread, int error)
+arm_prepare_u32_syscall_return(struct sysent *callp, arm_saved_state_t *regs, uthread_t uthread, int error)
 {
+	assert(is_saved_state32(regs));
+
+	arm_saved_state32_t *ss32 = saved_state32(regs);
+
 	if (error == ERESTART) {
-		regs->pc -= 4;
+		ss32->pc -= 4;
 	} else if (error != EJUSTRETURN) {
 		if (error) {
-			regs->save_r0 = error;
-			regs->save_r1 = 0;
+			ss32->save_r0 = error;
+			ss32->save_r1 = 0;
 			/* set the carry bit to execute cerror routine */
-			regs->cpsr |= PSR_CF;
+			ss32->cpsr |= PSR_CF;
 			unix_syscall_return_kprintf("error: setting carry to trigger cerror call\n");
 		} else {	/* (not error) */
 			switch (callp->sy_return_type) {
@@ -294,12 +299,12 @@ arm_prepare_u32_syscall_return(struct sysent *callp, arm_saved_state32_t *regs, 
 			case _SYSCALL_RET_SIZE_T:
 			case _SYSCALL_RET_SSIZE_T:
 			case _SYSCALL_RET_UINT64_T:
-				regs->save_r0 = uthread->uu_rval[0];
-				regs->save_r1 = uthread->uu_rval[1];
+				ss32->save_r0 = uthread->uu_rval[0];
+				ss32->save_r1 = uthread->uu_rval[1];
 				break;
 			case _SYSCALL_RET_NONE:
-				regs->save_r0 = 0;
-				regs->save_r1 = 0;
+				ss32->save_r0 = 0;
+				ss32->save_r1 = 0;
 				break;
 			default:
 				panic("unix_syscall: unknown return type");
@@ -436,7 +441,7 @@ arm_clear_syscall_error(struct arm_saved_state * state)
 }
 
 #elif defined(__arm64__)
-static void arm_prepare_u64_syscall_return(struct sysent *, arm_saved_state64_t *, uthread_t, int);
+static void arm_prepare_u64_syscall_return(struct sysent *, arm_saved_state_t *, uthread_t, int);
 static int arm_get_u64_syscall_args(uthread_t, arm_saved_state64_t *, struct sysent *);
 
 static int
@@ -460,6 +465,10 @@ arm_get_u64_syscall_args(uthread_t uthread, arm_saved_state64_t *regs, struct sy
 {
 	int indirect_offset, regparams;
 	
+#if CONFIG_REQUIRES_U32_MUNGING
+	sy_munge_t *mungerp;
+#endif
+
 	indirect_offset = (regs->x[ARM64_SYSCALL_CODE_REG_NUM] == 0) ? 1 : 0;
 	regparams = 9 - indirect_offset;
 
@@ -472,6 +481,30 @@ arm_get_u64_syscall_args(uthread_t uthread, arm_saved_state64_t *regs, struct sy
 	}
 
 	memcpy(&uthread->uu_arg[0], &regs->x[indirect_offset], callp->sy_narg * sizeof(uint64_t));
+
+#if CONFIG_REQUIRES_U32_MUNGING
+	/*
+	 * The indirect system call interface is vararg based.  For armv7k, arm64_32,
+	 * and arm64, this means we simply lay the values down on the stack, padded to
+	 * a width multiple (4 bytes for armv7k and arm64_32, 8 bytes for arm64).
+	 * The arm64(_32) stub for syscall will load this data into the registers and
+	 * then trap.  This gives us register state that corresponds to what we would
+	 * expect from a armv7 task, so in this particular case we need to munge the
+	 * arguments.
+	 *
+	 * TODO: Is there a cleaner way to do this check?  What we're actually
+	 * interested in is whether the task is arm64_32.  We don't appear to guarantee
+	 * that uu_proc is populated here, which is why this currently uses the
+	 * thread_t.
+	 */
+	mungerp = callp->sy_arg_munge32;
+	assert(uthread->uu_thread);
+
+	if (indirect_offset && !ml_thread_is64bit(uthread->uu_thread)) {
+		(*mungerp)(&uthread->uu_arg[0]);
+	}
+#endif
+
 	return 0;
 }
 /*
@@ -550,45 +583,49 @@ static void
 arm_prepare_syscall_return(struct sysent *callp, struct arm_saved_state *state, uthread_t uthread, int error) 
 {
 	if (is_saved_state32(state)) {
-		arm_prepare_u32_syscall_return(callp, saved_state32(state), uthread, error);
+		arm_prepare_u32_syscall_return(callp, state, uthread, error);
 	} else {
-		arm_prepare_u64_syscall_return(callp, saved_state64(state), uthread, error);
+		arm_prepare_u64_syscall_return(callp, state, uthread, error);
 	}
 }
 
 static void
-arm_prepare_u64_syscall_return(struct sysent *callp, arm_saved_state64_t *regs, uthread_t uthread, int error)
+arm_prepare_u64_syscall_return(struct sysent *callp, arm_saved_state_t *regs, uthread_t uthread, int error)
 {
+	assert(is_saved_state64(regs));
+
+	arm_saved_state64_t *ss64 = saved_state64(regs);
+
 	if (error == ERESTART) {
-		regs->pc -= 4;
+		ss64->pc -= 4;
 	} else if (error != EJUSTRETURN) {
 		if (error) {
-			regs->x[0] = error;
-			regs->x[1] = 0;
+			ss64->x[0] = error;
+			ss64->x[1] = 0;
 			/* 
 			 * Set the carry bit to execute cerror routine.
 			 * ARM64_TODO: should we have a separate definition?  
 			 * The bits are the same.
 			 */
-			regs->cpsr |= PSR_CF; 
+			ss64->cpsr |= PSR_CF;
 			unix_syscall_return_kprintf("error: setting carry to trigger cerror call\n");
 		} else {	/* (not error) */
 			switch (callp->sy_return_type) {
 			case _SYSCALL_RET_INT_T:
-				regs->x[0] = uthread->uu_rval[0];
-				regs->x[1] = uthread->uu_rval[1];
+				ss64->x[0] = uthread->uu_rval[0];
+				ss64->x[1] = uthread->uu_rval[1];
 				break;
 			case _SYSCALL_RET_UINT_T:
-				regs->x[0] = (u_int)uthread->uu_rval[0];
-				regs->x[1] = (u_int)uthread->uu_rval[1];
+				ss64->x[0] = (u_int)uthread->uu_rval[0];
+				ss64->x[1] = (u_int)uthread->uu_rval[1];
 				break;
 			case _SYSCALL_RET_OFF_T:
 			case _SYSCALL_RET_ADDR_T:
 			case _SYSCALL_RET_SIZE_T:
 			case _SYSCALL_RET_SSIZE_T:
 			case _SYSCALL_RET_UINT64_T:
-				regs->x[0] = *((uint64_t *)(&uthread->uu_rval[0]));
-				regs->x[1] = 0;
+				ss64->x[0] = *((uint64_t *)(&uthread->uu_rval[0]));
+				ss64->x[1] = 0;
 				break;
 			case _SYSCALL_RET_NONE:
 				break;

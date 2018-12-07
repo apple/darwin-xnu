@@ -234,8 +234,9 @@ _audit_free(void *addr, __unused au_malloc_type_t *type)
 		return;
 	hdr = addr; hdr--;
 
-	KASSERT(hdr->mh_magic == AUDIT_MHMAGIC,
-	    ("_audit_free(): hdr->mh_magic != AUDIT_MHMAGIC"));
+	if (hdr->mh_magic != AUDIT_MHMAGIC) {
+	    panic("_audit_free(): hdr->mh_magic (%lx) != AUDIT_MHMAGIC", hdr->mh_magic);
+	}
 
 #if AUDIT_MALLOC_DEBUG
 	if (type != NULL) {

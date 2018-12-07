@@ -231,20 +231,90 @@ handle_set_arm_thread_state(
 	 * what the client is expecting.
 	 */
 	if (count < ARM_UNIFIED_THREAD_STATE_COUNT) {
+		if (!is_saved_state32(saved_state)) {
+			return (KERN_INVALID_ARGUMENT);
+		}
 		return handle_set_arm32_thread_state(tstate, count, saved_state);
 	}
 
 	const arm_unified_thread_state_t *unified_state = (const arm_unified_thread_state_t *) tstate;
 #if __arm64__
 	if (is_thread_state64(unified_state)) {
+		if (!is_saved_state64(saved_state)) {
+			return (KERN_INVALID_ARGUMENT);
+		}
 		(void)thread_state64_to_saved_state(const_thread_state64(unified_state), saved_state);
 	} else
 #endif
 	{
+		if (!is_saved_state32(saved_state)) {
+			return (KERN_INVALID_ARGUMENT);
+		}
 		(void)thread_state32_to_saved_state(const_thread_state32(unified_state), saved_state);
 	}
 
 	return (KERN_SUCCESS);
+}
+
+/*
+ * Translate thread state arguments to userspace representation
+ */
+
+kern_return_t
+machine_thread_state_convert_to_user(
+			 thread_t thread,
+			 thread_flavor_t flavor,
+			 thread_state_t tstate,
+			 mach_msg_type_number_t *count)
+{
+	// No conversion to userspace representation on this platform
+	(void)thread; (void)flavor; (void)tstate; (void)count;
+	return KERN_SUCCESS;
+}
+
+/*
+ * Translate thread state arguments from userspace representation
+ */
+
+kern_return_t
+machine_thread_state_convert_from_user(
+			 thread_t thread,
+			 thread_flavor_t flavor,
+			 thread_state_t tstate,
+			 mach_msg_type_number_t count)
+{
+	// No conversion from userspace representation on this platform
+	(void)thread; (void)flavor; (void)tstate; (void)count;
+	return KERN_SUCCESS;
+}
+
+/*
+ * Translate signal context data pointer to userspace representation
+ */
+
+kern_return_t
+machine_thread_siguctx_pointer_convert_to_user(
+			 __assert_only thread_t thread,
+			 user_addr_t *uctxp)
+{
+	// No conversion to userspace representation on this platform
+	(void)thread; (void)uctxp;
+	return KERN_SUCCESS;
+}
+
+/*
+ * Translate array of function pointer syscall arguments from userspace representation
+ */
+
+kern_return_t
+machine_thread_function_pointers_convert_from_user(
+			 __assert_only thread_t thread,
+			 user_addr_t *fptrs,
+			 uint32_t count)
+{
+	// No conversion from userspace representation on this platform
+	(void)thread; (void)fptrs; (void)count;
+	return KERN_SUCCESS;
 }
 
 /*
@@ -276,8 +346,8 @@ machine_thread_get_state(
 
 		tstate[0] = ARM_THREAD_STATE;
 		tstate[1] = ARM_VFP_STATE;
-		tstate[2] = thread_is_64bit(thread) ? ARM_EXCEPTION_STATE64 : ARM_EXCEPTION_STATE;
-		tstate[3] = thread_is_64bit(thread) ? ARM_DEBUG_STATE64 : ARM_DEBUG_STATE32;
+		tstate[2] = thread_is_64bit_data(thread) ? ARM_EXCEPTION_STATE64 : ARM_EXCEPTION_STATE;
+		tstate[3] = thread_is_64bit_data(thread) ? ARM_DEBUG_STATE64 : ARM_DEBUG_STATE32;
 		*count = 4;
 		break;
 
@@ -289,7 +359,7 @@ machine_thread_get_state(
 	}
 	case ARM_THREAD_STATE32:
 	{
-		if (thread_is_64bit(thread))
+		if (thread_is_64bit_data(thread))
 			return KERN_INVALID_ARGUMENT;
 
 		kern_return_t rn = handle_get_arm32_thread_state(tstate, count, thread->machine.upcb);
@@ -299,7 +369,7 @@ machine_thread_get_state(
 #if __arm64__
 	case ARM_THREAD_STATE64:
 	{
-		if (!thread_is_64bit(thread))
+		if (!thread_is_64bit_data(thread))
 			return KERN_INVALID_ARGUMENT;
 
 		kern_return_t rn = handle_get_arm64_thread_state(tstate, count, thread->machine.upcb);
@@ -313,7 +383,7 @@ machine_thread_get_state(
 
 			if (*count < ARM_EXCEPTION_STATE_COUNT)
 				return (KERN_INVALID_ARGUMENT);
-			if (thread_is_64bit(thread))
+			if (thread_is_64bit_data(thread))
 				return (KERN_INVALID_ARGUMENT);
 
 			state = (struct arm_exception_state *) tstate;
@@ -332,7 +402,7 @@ machine_thread_get_state(
 
 			if (*count < ARM_EXCEPTION_STATE64_COUNT)
 				return (KERN_INVALID_ARGUMENT);
-			if (!thread_is_64bit(thread))
+			if (!thread_is_64bit_data(thread))
 				return (KERN_INVALID_ARGUMENT);
 
 			state = (struct arm_exception_state64 *) tstate;
@@ -352,7 +422,7 @@ machine_thread_get_state(
 			if (*count < ARM_LEGACY_DEBUG_STATE_COUNT)
 				return (KERN_INVALID_ARGUMENT);
 			
-			if (thread_is_64bit(thread))
+			if (thread_is_64bit_data(thread))
 				return (KERN_INVALID_ARGUMENT);
 
 			state = (arm_legacy_debug_state_t *) tstate;
@@ -373,7 +443,7 @@ machine_thread_get_state(
 			if (*count < ARM_DEBUG_STATE32_COUNT)
 				return (KERN_INVALID_ARGUMENT);
 			
-			if (thread_is_64bit(thread))
+			if (thread_is_64bit_data(thread))
 				return (KERN_INVALID_ARGUMENT);
 
 			state = (arm_debug_state32_t *) tstate;
@@ -395,7 +465,7 @@ machine_thread_get_state(
 			if (*count < ARM_DEBUG_STATE64_COUNT)
 				return (KERN_INVALID_ARGUMENT);
 			
-			if (!thread_is_64bit(thread))
+			if (!thread_is_64bit_data(thread))
 				return (KERN_INVALID_ARGUMENT);
 
 			state = (arm_debug_state64_t *) tstate;
@@ -439,10 +509,10 @@ machine_thread_get_state(
 		arm_neon_state_t *state;
 		arm_neon_saved_state32_t *thread_state;
 
-        if (*count < ARM_NEON_STATE_COUNT)
+		if (*count < ARM_NEON_STATE_COUNT)
 			return (KERN_INVALID_ARGUMENT);
 
-		if (thread_is_64bit(thread))
+		if (thread_is_64bit_data(thread))
 			return (KERN_INVALID_ARGUMENT);
 
 		state = (arm_neon_state_t *)tstate;
@@ -460,10 +530,10 @@ machine_thread_get_state(
 		arm_neon_state64_t *state;
 		arm_neon_saved_state64_t *thread_state;
 
-        if (*count < ARM_NEON_STATE64_COUNT)
+		if (*count < ARM_NEON_STATE64_COUNT)
 			return (KERN_INVALID_ARGUMENT);
 
-		if (!thread_is_64bit(thread))
+		if (!thread_is_64bit_data(thread))
 			return (KERN_INVALID_ARGUMENT);
 
 		state = (arm_neon_state64_t *)tstate;
@@ -532,7 +602,7 @@ machine_thread_get_kern_state(
 void
 machine_thread_switch_addrmode(thread_t thread)
 {
-	if (task_has_64BitAddr(thread->task)) {
+	if (task_has_64Bit_data(thread->task)) {
 		thread->machine.upcb->ash.flavor = ARM_SAVED_STATE64;
 		thread->machine.upcb->ash.count = ARM_SAVED_STATE64_COUNT;
 		thread->machine.uNeon->nsh.flavor = ARM_NEON_SAVED_STATE64;
@@ -579,7 +649,7 @@ machine_thread_set_state(
 		break;
 
 	case ARM_THREAD_STATE32:
-		if (thread_is_64bit(thread))
+		if (thread_is_64bit_data(thread))
 			return (KERN_INVALID_ARGUMENT);
 
 		rn = handle_set_arm32_thread_state(tstate, count, thread->machine.upcb);
@@ -588,7 +658,7 @@ machine_thread_set_state(
 
 #if __arm64__
 	case ARM_THREAD_STATE64:
-		if (!thread_is_64bit(thread))
+		if (!thread_is_64bit_data(thread))
 			return (KERN_INVALID_ARGUMENT);
 
 		rn = handle_set_arm64_thread_state(tstate, count, thread->machine.upcb);
@@ -599,7 +669,7 @@ machine_thread_set_state(
 
 			if (count != ARM_EXCEPTION_STATE_COUNT)
 				return (KERN_INVALID_ARGUMENT);
-			if (thread_is_64bit(thread))
+			if (thread_is_64bit_data(thread))
 				return (KERN_INVALID_ARGUMENT);
 
 			break;
@@ -608,7 +678,7 @@ machine_thread_set_state(
 
 			if (count != ARM_EXCEPTION_STATE64_COUNT)
 				return (KERN_INVALID_ARGUMENT);
-			if (!thread_is_64bit(thread))
+			if (!thread_is_64bit_data(thread))
 				return (KERN_INVALID_ARGUMENT);
 
 			break;
@@ -621,7 +691,7 @@ machine_thread_set_state(
 
 			if (count != ARM_LEGACY_DEBUG_STATE_COUNT)
 				return (KERN_INVALID_ARGUMENT);
-			if (thread_is_64bit(thread))
+			if (thread_is_64bit_data(thread))
 				return (KERN_INVALID_ARGUMENT);
 
 			state = (arm_legacy_debug_state_t *) tstate;
@@ -698,7 +768,7 @@ machine_thread_set_state(
 
 			if (count != ARM_DEBUG_STATE32_COUNT)
 				return (KERN_INVALID_ARGUMENT);
-			if (thread_is_64bit(thread))
+			if (thread_is_64bit_data(thread))
 				return (KERN_INVALID_ARGUMENT);
 
 			state = (arm_debug_state32_t *) tstate;
@@ -781,7 +851,7 @@ machine_thread_set_state(
 
 			if (count != ARM_DEBUG_STATE64_COUNT)
 				return (KERN_INVALID_ARGUMENT);
-			if (!thread_is_64bit(thread))
+			if (!thread_is_64bit_data(thread))
 				return (KERN_INVALID_ARGUMENT);
 
 			state = (arm_debug_state64_t *) tstate;
@@ -886,7 +956,7 @@ machine_thread_set_state(
 		if (count != ARM_NEON_STATE_COUNT)
 			return (KERN_INVALID_ARGUMENT);
 
-		if (thread_is_64bit(thread))
+		if (thread_is_64bit_data(thread))
 			return (KERN_INVALID_ARGUMENT);
 
 		state = (arm_neon_state_t *)tstate;
@@ -908,7 +978,7 @@ machine_thread_set_state(
 		if (count != ARM_NEON_STATE64_COUNT)
 			return (KERN_INVALID_ARGUMENT);
 
-		if (!thread_is_64bit(thread))
+		if (!thread_is_64bit_data(thread))
 			return (KERN_INVALID_ARGUMENT);
 
 		state = (arm_neon_state64_t *)tstate;
@@ -958,6 +1028,7 @@ machine_thread_state_initialize(
 
 	thread->machine.DebugData = NULL;
 
+
 	return KERN_SUCCESS;
 }
 
@@ -968,7 +1039,8 @@ machine_thread_state_initialize(
 kern_return_t
 machine_thread_dup(
 		   thread_t self,
-		   thread_t target)
+		   thread_t target,
+		   __unused boolean_t is_corpse)
 {
 	struct arm_saved_state *self_saved_state;
 	struct arm_saved_state *target_saved_state;
@@ -1056,13 +1128,13 @@ find_debug_state64(
  */
 kern_return_t
 thread_userstack(
-		 thread_t thread,
-		 int flavor,
-		 thread_state_t tstate,
-		 unsigned int count,
-		 mach_vm_offset_t * user_stack,
-		 int *customstack,
-		 boolean_t is64bit
+		__unused thread_t thread,
+		int flavor,
+		thread_state_t tstate,
+		unsigned int count,
+		mach_vm_offset_t * user_stack,
+		int *customstack,
+		boolean_t is_64bit_data
 )
 {
 	register_t sp;
@@ -1071,7 +1143,7 @@ thread_userstack(
 	case ARM_THREAD_STATE:
 		if (count == ARM_UNIFIED_THREAD_STATE_COUNT) {
 #if __arm64__
-			if (thread_is_64bit(thread)) {
+			if (is_64bit_data) {
 				sp = ((arm_unified_thread_state_t *)tstate)->ts_64.sp;
 			} else
 #endif
@@ -1086,7 +1158,7 @@ thread_userstack(
 	case ARM_THREAD_STATE32:
 		if (count != ARM_THREAD_STATE32_COUNT)
 			return (KERN_INVALID_ARGUMENT);
-		if (is64bit)
+		if (is_64bit_data)
 			return (KERN_INVALID_ARGUMENT);
 
 		sp = ((arm_thread_state32_t *)tstate)->sp;
@@ -1095,7 +1167,7 @@ thread_userstack(
 	case ARM_THREAD_STATE64:
 		if (count != ARM_THREAD_STATE64_COUNT)
 			return (KERN_INVALID_ARGUMENT);
-		if (!is64bit)
+		if (!is_64bit_data)
 			return (KERN_INVALID_ARGUMENT);
 
 		sp = ((arm_thread_state32_t *)tstate)->sp;
@@ -1312,7 +1384,7 @@ act_thread_csave(void)
 	}
 
 #if __ARM_VFP__
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_data(thread)) {
 		val = ARM_NEON_STATE64_COUNT;
 		kret = machine_thread_get_state(thread,
 				ARM_NEON_STATE64,
@@ -1353,7 +1425,7 @@ act_thread_catt(void *ctx)
 		goto out;
 
 #if __ARM_VFP__
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_data(thread)) {
 		kret = machine_thread_set_state(thread,
 				ARM_NEON_STATE64,
 				(thread_state_t) & ic->ns,
@@ -1390,7 +1462,7 @@ thread_set_wq_state32(thread_t thread, thread_state_t tstate)
 	thread_t curth = current_thread();
 	spl_t s=0;
 
-	assert(!thread_is_64bit(thread));
+	assert(!thread_is_64bit_data(thread));
 
 	saved_state = thread->machine.upcb;
 	saved_state_32 = saved_state32(saved_state);
@@ -1427,7 +1499,7 @@ thread_set_wq_state64(thread_t thread, thread_state_t tstate)
 	thread_t curth = current_thread();
 	spl_t s=0;
 
-	assert(thread_is_64bit(thread));
+	assert(thread_is_64bit_data(thread));
 
 	saved_state = thread->machine.upcb;
 	saved_state_64 = saved_state64(saved_state);
@@ -1444,7 +1516,7 @@ thread_set_wq_state64(thread_t thread, thread_state_t tstate)
 	 * like sp.
 	 */
 	thread_state64_to_saved_state(state, saved_state);
-	saved_state_64->cpsr = PSR64_USER64_DEFAULT;
+	set_saved_state_cpsr(saved_state, PSR64_USER64_DEFAULT);
 
 	if (curth != thread) {
 		thread_unlock(thread);

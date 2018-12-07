@@ -47,11 +47,17 @@ COMP_SUBDIRS =
 # Rebuild if per-file overrides change
 ${OBJS}: $(firstword $(MAKEFILE_LIST))
 
-ifneq ($(KASAN),1)
-# nothing to build for non-KASAN
+# set file list manually
 OBJS =
-COBJS =
-SOBJS =
+
+ifeq ($(KASAN),1)
+OBJS += kasan.o kasan-fakestack.o kasan-memintrinsics.o kasan_dynamic_blacklist.o
+OBJS += kasan-$(CURRENT_ARCH_CONFIG_LC).o
+OBJS += kasan-test.o kasan-test-$(CURRENT_ARCH_CONFIG_LC).o
+endif
+
+ifeq ($(UBSAN),1)
+OBJS += ubsan.o ubsan_log.o
 endif
 
 # Rebuild if global compile flags change

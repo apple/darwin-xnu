@@ -466,7 +466,7 @@ done:
 		kr = vm_map_remove(kernel_map,
 				   kernel_mapping,
 				   kernel_mapping + PAGE_SIZE_64,
-				   VM_MAP_NO_FLAGS);
+				   VM_MAP_REMOVE_NO_FLAGS);
 		assert(kr == KERN_SUCCESS);
 		kernel_mapping = 0;
 		dst_vaddr = 0;

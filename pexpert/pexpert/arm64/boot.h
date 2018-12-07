@@ -33,7 +33,7 @@ struct Boot_Video {
 #define kBootVideoDepthRotateShift	(8)
 #define kBootVideoDepthScaleShift	(16)
 
-#define kBootFlagsDarkBoot		(1 << 0)
+#define kBootFlagsDarkBoot		(1ULL << 0)
 
 typedef struct Boot_Video	Boot_Video;
 

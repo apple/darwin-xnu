@@ -1535,6 +1535,10 @@ extern errno_t mbuf_get_traffic_class_index(mbuf_traffic_class_t tc,
 		medium loss tolerant, elastic flow, constant packet interval,
 		variable rate & size.  This level corresponds to WMM access
 		class "VI" or MBUF_TC_VI.
+	@constant MBUF_SC_SIG "Signaling", low delay tolerant, low loss
+		tolerant, inelastic flow, jitter tolerant, rate is bursty but
+		short, variable size. e.g. SIP.  This level corresponds to WMM
+		access class "VI" or MBUF_TC_VI.
 	@constant MBUF_SC_VO "Interactive Voice", low delay tolerant, low loss
 		tolerant, inelastic flow, constant packet rate, somewhat fixed
 		size.  This level corresponds to WMM access class "VO" or
@@ -1556,6 +1560,7 @@ typedef enum {
 	MBUF_SC_AV		= 0x00280120,
 	MBUF_SC_RV		= 0x00300110,
 	MBUF_SC_VI		= 0x00380100,
+	MBUF_SC_SIG		= 0x00380130,
 
 	MBUF_SC_VO		= 0x00400180,
 	MBUF_SC_CTL		= 0x00480190,	/* highest class */

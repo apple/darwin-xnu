@@ -61,6 +61,7 @@
 
 #include <sys/kdebug.h>
 
+
 #define USER_SS_ZONE_ALLOC_SIZE (0x4000)
 
 extern int debug_task;
@@ -160,7 +161,7 @@ machine_thread_create(
 		thread->machine.upcb = &thread->machine.contextData->ss;
 		thread->machine.uNeon = &thread->machine.contextData->ns;
 
-		if (task_has_64BitAddr(task)) {
+		if (task_has_64Bit_data(task)) {
 			thread->machine.upcb->ash.flavor = ARM_SAVED_STATE64;
 			thread->machine.upcb->ash.count = ARM_SAVED_STATE64_COUNT;
 			thread->machine.uNeon->nsh.flavor = ARM_NEON_SAVED_STATE64;
@@ -309,7 +310,7 @@ machine_stack_attach(
 	savestate->lr = (uintptr_t)thread_continue;
 	savestate->sp = thread->machine.kstackptr;
 	savestate->cpsr = PSR64_KERNEL_DEFAULT;
-	machine_stack_attach_kprintf("thread = %x pc = %x, sp = %x\n", thread, savestate->lr, savestate->sp);
+	machine_stack_attach_kprintf("thread = %p pc = %llx, sp = %llx\n", thread, savestate->lr, savestate->sp);
 }
 
 
@@ -357,51 +358,15 @@ machine_stack_handoff(
  */
 void
 call_continuation(
-		  thread_continue_t continuation,
-		  void *parameter,
-		  wait_result_t wresult)
+	thread_continue_t continuation,
+	void *parameter,
+	wait_result_t wresult,
+	boolean_t enable_interrupts)
 {
 #define call_continuation_kprintf(x...)	/* kprintf("call_continuation_kprintf:" x) */
 
 	call_continuation_kprintf("thread = %p continuation = %p, stack = %p\n", current_thread(), continuation, current_thread()->machine.kstackptr);
-	Call_continuation(continuation, parameter, wresult, current_thread()->machine.kstackptr);
-}
-
-/* Setting breakpoints in EL1 is effectively a KTRR bypass. The ability to do so is
- * controlled by MDSCR.KDE. The MSR to set MDSCR must be present to allow
- * self-hosted user mode debug. Any checks before the MRS can be skipped with ROP,
- * so we need to put the checks after the MRS where they can't be skipped. That
- * still leaves a small window if a breakpoint is set on the instruction
- * immediately after the MRS. To handle that, we also do a check and then set of
- * the breakpoint control registers. This allows us to guarantee that a given
- * core will never have both KDE set and a breakpoint targeting EL1.
- *
- * If KDE gets set, unset it and then panic */
-static void
-update_mdscr(uint64_t clear, uint64_t set)
-{  
-	uint64_t result = 0;
-	uint64_t tmp1, tmp2;
-	__asm__ volatile(
-		"mrs %[reg], MDSCR_EL1\n"
-		"bic %[reg], %[reg], %[clear]\n"
-		"orr %[reg], %[reg], %[set]\n"
-		"1:\n"
-		"bic %[reg], %[reg], #0x2000\n"
-		"msr MDSCR_EL1, %[reg]\n"
-#if defined(CONFIG_KERNEL_INTEGRITY)
-		/* verify KDE didn't get set (including via ROP)
-		 * If set, clear it and then panic */
-		"ands %[tmp], %[reg], #0x2000\n"
-		"orr %[res], %[res], %[tmp]\n"
-		"bne 1b\n"
-#endif
-		: [res] "+r" (result), [tmp] "=r" (tmp1), [reg] "=r" (tmp2)
-		: [clear] "r" (clear), [set] "r" (set) : "x0");
-#if defined(CONFIG_KERNEL_INTEGRITY)
-	if (result)
-		panic("MDSCR.KDE was set: %llx %llx %llx", tmp1, tmp2, result);
-#endif
+	Call_continuation(continuation, parameter, wresult, enable_interrupts);
 }
 
 #define SET_DBGBCRn(n, value, accum) \
@@ -794,7 +759,7 @@ void arm_debug_set(arm_debug_state_t *debug_state)
 			break;
 		}
 	} else {
-		if (thread_is_64bit(current_thread()))
+		if (thread_is_64bit_data(current_thread()))
 			arm_debug_set64(debug_state);
 		else
 			arm_debug_set32(debug_state);
@@ -898,7 +863,7 @@ machine_thread_set_tsd_base(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_addr(thread)) {
 		if (tsd_base > vm_map_max(thread->map))
 			tsd_base = 0ULL;
 	} else {

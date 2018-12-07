@@ -917,10 +917,6 @@ pmap_pv_is_altacct(
 	pvhash_idx = pvhashidx(pmap, vaddr);
 	LOCK_PV_HASH(pvhash_idx);
 	pvh_e = *(pvhash(pvhash_idx));
-	if (PV_HASHED_ENTRY_NULL == pvh_e) {
-		panic("Possible memory corruption: pmap_pv_is_altacct(%p,0x%llx,0x%x): empty hash",
-		      pmap, vaddr, ppn);
-	}
 	while (PV_HASHED_ENTRY_NULL != pvh_e) {
 		if (pvh_e->pmap == pmap &&
 		    PVE_VA(pvh_e) == vaddr &&

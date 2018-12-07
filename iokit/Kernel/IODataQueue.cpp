@@ -239,18 +239,28 @@ Boolean IODataQueue::enqueue(void * data, UInt32 dataSize)
         }
     }
 
-    // Store tail with a release memory barrier
-    __c11_atomic_store((_Atomic UInt32 *)&dataQueue->tail, newTail, __ATOMIC_RELEASE);
+	// Publish the data we just enqueued
+	__c11_atomic_store((_Atomic UInt32 *)&dataQueue->tail, newTail, __ATOMIC_RELEASE);
 
-    // Send notification (via mach message) that data is available.
+	if (tail != head) {
+		//
+		// The memory barrier below paris with the one in ::dequeue
+		// so that either our store to the tail cannot be missed by
+		// the next dequeue attempt, or we will observe the dequeuer
+		// making the queue empty.
+		//
+		// Of course, if we already think the queue is empty,
+		// there's no point paying this extra cost.
+		//
+		__c11_atomic_thread_fence(__ATOMIC_SEQ_CST);
+		head = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED);
+	}
 
-    if ( ( head == tail )                /* queue was empty prior to enqueue() */
-    ||   ( tail == __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_ACQUIRE) ) )   /* queue was emptied during enqueue() */
-    {
-        sendDataAvailableNotification();
-    }
-
-    return true;
+	if (tail == head) {
+		// Send notification (via mach message) that data is now available.
+		sendDataAvailableNotification();
+	}
+	return true;
 }
 
 void IODataQueue::setNotificationPort(mach_port_t port)

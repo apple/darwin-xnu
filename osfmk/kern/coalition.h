@@ -68,10 +68,10 @@ boolean_t task_coalition_adjust_focal_count(task_t task, int count, uint32_t *ne
 uint32_t task_coalition_focal_count(task_t task);
 boolean_t task_coalition_adjust_nonfocal_count(task_t task, int count, uint32_t *new_count);
 uint32_t task_coalition_nonfocal_count(task_t task);
-thread_group_t task_coalition_get_thread_group(task_t task);
-void	 coalition_set_thread_group(coalition_t coal, thread_group_t tg);
-thread_group_t kdp_coalition_get_thread_group(coalition_t coal);
-thread_group_t coalition_get_thread_group(coalition_t coal);
+struct thread_group *task_coalition_get_thread_group(task_t task);
+void	 coalition_set_thread_group(coalition_t coal, struct thread_group *tg);
+struct thread_group *kdp_coalition_get_thread_group(coalition_t coal);
+struct thread_group *coalition_get_thread_group(coalition_t coal);
 void task_coalition_thread_group_focal_update(task_t task);
 
 void coalition_for_each_task(coalition_t coal, void *ctx,

@@ -67,4 +67,12 @@ uint64_t mt_core_snap(unsigned int ctr);
 void mt_core_set_snap(unsigned int ctr, uint64_t snap);
 void mt_mtc_set_snap(struct mt_cpu *mtc, unsigned int ctr, uint64_t snap);
 
+typedef void (*mt_pmi_fn)(bool user_mode, void *ctx);
+extern bool mt_microstackshots;
+extern unsigned int mt_microstackshot_ctr;
+extern mt_pmi_fn mt_microstackshot_pmi_handler;
+extern void *mt_microstackshot_ctx;
+extern uint64_t mt_core_reset_values[MT_CORE_NFIXED];
+int mt_microstackshot_start_arch(uint64_t period);
+
 #endif /* !defined(MACHINE_MONOTONIC_H) */

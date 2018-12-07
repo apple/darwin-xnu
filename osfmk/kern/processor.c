@@ -80,6 +80,11 @@
 
 #include <security/mac_mach_internal.h>
 
+#if defined(CONFIG_XNUPOST)
+
+#include <tests/xnupost.h>
+
+#endif /* CONFIG_XNUPOST */
 
 /*
  * Exported interface
@@ -114,6 +119,36 @@ boolean_t		sched_stats_active = FALSE;
 
 processor_t		processor_array[MAX_SCHED_CPUS] = { 0 };
 
+#if defined(CONFIG_XNUPOST)
+kern_return_t ipi_test(void);
+extern void arm64_ipi_test(void);
+
+kern_return_t
+ipi_test()
+{
+#if __arm64__
+	processor_t p;
+
+	for (p = processor_list; p != NULL; p = p->processor_list) {
+		thread_bind(p);
+		thread_block(THREAD_CONTINUE_NULL);
+		kprintf("Running IPI test on cpu %d\n", p->cpu_id);
+		arm64_ipi_test();
+	}
+
+	/* unbind thread from specific cpu */
+	thread_bind(PROCESSOR_NULL);
+	thread_block(THREAD_CONTINUE_NULL);
+
+	T_PASS("Done running IPI tests");
+#else
+	T_PASS("Unsupported platform. Not running IPI tests");
+
+#endif /* __arm64__ */
+
+	return KERN_SUCCESS;
+}
+#endif /* defined(CONFIG_XNUPOST) */
 
 
 void
@@ -154,6 +189,8 @@ processor_init(
 		SCHED(processor_init)(processor);
 	}
 
+	assert(cpu_id < MAX_SCHED_CPUS);
+
 	processor->state = PROCESSOR_OFF_LINE;
 	processor->active_thread = processor->next_thread = processor->idle_thread = THREAD_NULL;
 	processor->processor_set = pset;
@@ -171,6 +208,8 @@ processor_init(
 	processor->processor_self = IP_NULL;
 	processor_data_init(processor);
 	processor->processor_list = NULL;
+	processor->cpu_quiesce_state = CPU_QUIESCE_COUNTER_NONE;
+	processor->cpu_quiesce_last_checkin = 0;
 
 	s = splsched();
 	pset_lock(pset);
@@ -191,7 +230,6 @@ processor_init(
 		processor_list_tail->processor_list = processor;
 	processor_list_tail = processor;
 	processor_count++;
-	assert(cpu_id < MAX_SCHED_CPUS);
 	processor_array[cpu_id] = processor;
 	simple_unlock(&processor_list_lock);
 }
@@ -216,6 +254,9 @@ processor_set_primary(
 		/* Mark both processors as SMT siblings */
 		primary->is_SMT = TRUE;
 		processor->is_SMT = TRUE;
+
+		processor_set_t pset = processor->processor_set;
+		atomic_bit_clear(&pset->primary_map, processor->cpu_id, memory_order_relaxed);
 	}
 }
 
@@ -328,17 +369,18 @@ pset_init(
 		SCHED(rt_init)(pset);
 	}
 
-	queue_init(&pset->active_queue);
-	queue_init(&pset->idle_queue);
-	queue_init(&pset->idle_secondary_queue);
-	queue_init(&pset->unused_queue);
 	pset->online_processor_count = 0;
-	pset->active_processor_count = 0;
 	pset->load_average = 0;
 	pset->cpu_set_low = pset->cpu_set_hi = 0;
 	pset->cpu_set_count = 0;
+	pset->last_chosen = -1;
 	pset->cpu_bitmask = 0;
 	pset->recommended_bitmask = ~0ULL;
+	pset->primary_map = ~0ULL;
+	pset->cpu_state_map[PROCESSOR_OFF_LINE] = ~0ULL;
+	for (uint i = PROCESSOR_SHUTDOWN; i < PROCESSOR_STATE_LEN; i++) {
+		pset->cpu_state_map[i] = 0;
+	}
 	pset->pending_AST_cpu_mask = 0;
 #if defined(CONFIG_SCHED_DEFERRED_AST)
 	pset->pending_deferred_AST_cpu_mask = 0;
@@ -540,7 +582,7 @@ processor_start(
 		return (KERN_FAILURE);
 	}
 
-	processor->state = PROCESSOR_START;
+	pset_update_processor_state(pset, processor, PROCESSOR_START);
 	pset_unlock(pset);
 	splx(s);
 
@@ -552,7 +594,7 @@ processor_start(
 		if (result != KERN_SUCCESS) {
 			s = splsched();
 			pset_lock(pset);
-			processor->state = PROCESSOR_OFF_LINE;
+			pset_update_processor_state(pset, processor, PROCESSOR_OFF_LINE);
 			pset_unlock(pset);
 			splx(s);
 
@@ -571,7 +613,7 @@ processor_start(
 		if (result != KERN_SUCCESS) {
 			s = splsched();
 			pset_lock(pset);
-			processor->state = PROCESSOR_OFF_LINE;
+			pset_update_processor_state(pset, processor, PROCESSOR_OFF_LINE);
 			pset_unlock(pset);
 			splx(s);
 
@@ -597,7 +639,7 @@ processor_start(
 	if (result != KERN_SUCCESS) {
 		s = splsched();
 		pset_lock(pset);
-		processor->state = PROCESSOR_OFF_LINE;
+		pset_update_processor_state(pset, processor, PROCESSOR_OFF_LINE);
 		pset_unlock(pset);
 		splx(s);
 

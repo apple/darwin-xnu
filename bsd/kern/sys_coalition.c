@@ -315,7 +315,7 @@ static int sysctl_coalition_get_ids SYSCTL_HANDLER_ARGS
 	int error, pid;
 	proc_t tproc;
 	uint64_t value;
-	uint64_t ids[COALITION_NUM_TYPES];
+	uint64_t ids[COALITION_NUM_TYPES] = {};
 
 
 	error = SYSCTL_IN(req, &value, sizeof(value));
@@ -349,7 +349,7 @@ static int sysctl_coalition_get_roles SYSCTL_HANDLER_ARGS
 	int error, pid;
 	proc_t tproc;
 	int value;
-	int roles[COALITION_NUM_TYPES];
+	int roles[COALITION_NUM_TYPES] = {};
 
 
 	error = SYSCTL_IN(req, &value, sizeof(value));

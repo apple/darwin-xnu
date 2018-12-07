@@ -260,7 +260,6 @@ main(
 	DECLARE("PGSHIFT", ARM_PGSHIFT);
 	DECLARE("PGMASK", ARM_PGMASK);
 
-
 	DECLARE("VM_MIN_ADDRESS",	VM_MIN_ADDRESS);
 	DECLARE("VM_MAX_ADDRESS",	VM_MAX_ADDRESS);
 	DECLARE("VM_MIN_KERNEL_ADDRESS",	VM_MIN_KERNEL_ADDRESS);
@@ -292,10 +291,6 @@ main(
 		offsetof(cpu_data_t, excepstackptr));
         DECLARE("CPU_EXCEPSTACK_TOP",
 		offsetof(cpu_data_t, excepstack_top));
-        DECLARE("CPU_FIQSTACKPTR",
-		offsetof(cpu_data_t, fiqstackptr));
-        DECLARE("CPU_FIQSTACK_TOP",
-		offsetof(cpu_data_t, fiqstack_top));
 #if __ARM_KERNEL_PROTECT__
 	DECLARE("CPU_EXC_VECTORS",
 		offsetof(cpu_data_t, cpu_exc_vectors));
@@ -356,6 +351,8 @@ main(
 		offsetof(cpu_data_t, cpu_phys_id));
 	DECLARE("RTCLOCK_DATAP",
 		offsetof(cpu_data_t, rtclock_datap));
+	DECLARE("CLUSTER_MASTER",
+		offsetof(cpu_data_t, cluster_master));
 
 	DECLARE("RTCLOCKDataSize",
 		sizeof(rtclock_data_t));
@@ -382,8 +379,10 @@ main(
 
 	DECLARE("CPU_DATA_PADDR",	offsetof(struct cpu_data_entry, cpu_data_paddr));
 
-
 	DECLARE("INTSTACK_SIZE",	INTSTACK_SIZE);
+	DECLARE("EXCEPSTACK_SIZE",	EXCEPSTACK_SIZE);
+
+	DECLARE("PAGE_MAX_SIZE",	PAGE_MAX_SIZE);
 
 	DECLARE("TIMER_TSTAMP",
 		offsetof(struct timer, tstamp));
@@ -420,6 +419,8 @@ main(
 		offsetof(struct boot_args, deviceTreeP));
 	DECLARE("BA_DEVICE_TREE_LENGTH",
 		offsetof(struct boot_args, deviceTreeLength));
+	DECLARE("BA_BOOT_FLAGS",
+		offsetof(struct boot_args, bootFlags));
 
 	DECLARE("ENTROPY_INDEX_PTR",
 		offsetof(entropy_data_t, index_ptr));
@@ -428,6 +429,7 @@ main(
 	DECLARE("ENTROPY_DATA_SIZE", sizeof(struct entropy_data));
 
 	DECLARE("SR_RESTORE_TCR_EL1", offsetof(struct sysreg_restore, tcr_el1));
+
 
 
 	return (0);

@@ -50,6 +50,8 @@
 #include <corecrypto/cc_priv.h>
 #include "ccsha2_internal.h"
 
+#if !CC_KERNEL || !CC_USE_ASM
+
 // Various logical functions
 #define Ch(x,y,z)       (z ^ (x & (y ^ z)))
 #define Maj(x,y,z)      (((x | y) & z) | (x & y))
@@ -91,7 +93,7 @@
     d += t0;                                                   \
     h  = t0 + t1;
 
-// compress 512-bits 
+// compress 512-bits
 void ccsha256_ltc_compress(ccdigest_state_t state, size_t nblocks, const void *in)
 {
     uint32_t W[64], t0, t1;
@@ -136,7 +138,7 @@ void ccsha256_ltc_compress(ccdigest_state_t state, size_t nblocks, const void *i
             RND(S2,S3,S4,S5,S6,S7,S0,S1,i+6);
             RND(S1,S2,S3,S4,S5,S6,S7,S0,i+7);
         }
-        
+
         // feedback
         s[0] += S0;
         s[1] += S1;
@@ -150,3 +152,5 @@ void ccsha256_ltc_compress(ccdigest_state_t state, size_t nblocks, const void *i
         buf+=CCSHA256_BLOCK_SIZE/sizeof(buf[0]);
     }
 }
+
+#endif

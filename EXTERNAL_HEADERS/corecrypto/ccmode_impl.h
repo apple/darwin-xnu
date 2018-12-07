@@ -35,7 +35,7 @@ struct ccmode_ecb {
  *   1- ccmod_xxx_init()
  *   2- ccmod_xxx_decrypt()
  *   3- ccmod_xxx_encrypt()
- * 
+ *
  * stateful modes CCM and GCM: They provide 7 interface functions that return error codes if a function is called out of state
  *   1- ccmod_xxx_init()
  *   2- ccmod_xxx_setiv()
@@ -131,7 +131,7 @@ struct ccmode_xts {
     size_t tweak_size;  /* first argument to ccxts_tweak_decl(). Size of the tweak structure, not the expected tweak size */
     size_t block_size;
 
-    /* Create a xts key from a xts mode object.  
+    /* Create a xts key from a xts mode object.
      key must point to at least 'size' bytes of free storage.
      tweak_key must point to at least 'tweak_size' bytes of free storage.
      key and tweak_key must differ.
@@ -139,7 +139,7 @@ struct ccmode_xts {
      */
     int (*init)(const struct ccmode_xts *xts, ccxts_ctx *ctx,
                 size_t key_nbytes, const void *data_key, const void *tweak_key);
-    
+
     void (*key_sched)(const struct ccmode_xts *xts, ccxts_ctx *ctx,
                       size_t key_nbytes, const void *data_key, const void *tweak_key);
 
@@ -174,7 +174,7 @@ struct ccmode_gcm {
     const void *custom;
 };
 
-//8- GCM mode, statful
+//8- CCM mode, stateful
 cc_aligned_struct(16) ccccm_ctx;
 cc_aligned_struct(16) ccccm_nonce;
 
@@ -193,6 +193,20 @@ struct ccmode_ccm {
     const void *custom;
 };
 
+/* We need to expose this (currently)to keep CommonCrypto happy. */
+struct _ccmode_ccm_nonce {
+    unsigned char A_i[16];      /* crypto block iv */
+    unsigned char B_i[16];      /* mac block iv */
+    unsigned char MAC[16];      /* crypted mac */
+    unsigned char buf[16];      /* crypt buffer */
+
+    uint32_t mode;         /* mode: IV -> AD -> DATA */
+    uint32_t buflen;       /* length of data in buf */
+    uint32_t b_i_len;      /* length of cbcmac data in B_i */
+
+    size_t nonce_size;
+    size_t mac_size;
+};
 
 /* OMAC mode. */
 cc_aligned_struct(16) ccomac_ctx;

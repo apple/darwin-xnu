@@ -81,7 +81,6 @@ extern kern_return_t fbt_perfCallback(int, struct savearea_t *, uintptr_t *, int
 
 #define DTRACE_PROBE_PREFIX "_dtrace_probe$"
 
-static dev_info_t		*sdt_devi;
 static int			sdt_verbose = 0;
 sdt_probe_t		**sdt_probetab;
 int			sdt_probetab_size;
@@ -328,23 +327,22 @@ err:
 }
 
 static dtrace_pops_t sdt_pops = {
-	NULL,
-	sdt_provide_module,
-	sdt_enable,
-	sdt_disable,
-	NULL,
-	NULL,
-	sdt_getargdesc,
-	sdt_getarg,
-	NULL,
-	sdt_destroy
+	.dtps_provide =		NULL,
+	.dtps_provide_module =	sdt_provide_module,
+	.dtps_enable =		sdt_enable,
+	.dtps_disable =		sdt_disable,
+	.dtps_suspend =		NULL,
+	.dtps_resume =		NULL,
+	.dtps_getargdesc =	sdt_getargdesc,
+	.dtps_getargval =	sdt_getarg,
+	.dtps_usermode =	NULL,
+	.dtps_destroy =		sdt_destroy,
 };
 
 /*ARGSUSED*/
 static int
-sdt_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
+sdt_attach(dev_info_t *devi)
 {
-#pragma unused(cmd)
 	sdt_provider_t *prov;
 
 	if (ddi_create_minor_node(devi, "sdt", S_IFCHR,
@@ -353,9 +351,6 @@ sdt_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		ddi_remove_minor_node(devi, NULL);
 		return (DDI_FAILURE);
 	}
-
-	ddi_report_dev(devi);
-	sdt_devi = devi;
 
 	if (sdt_probetab_size == 0)
 		sdt_probetab_size = SDT_PROBETAB_SIZE;
@@ -446,164 +441,162 @@ static struct cdevsw sdt_cdevsw =
 	0					/* type */
 };
 
-static int gSDTInited = 0;
 static struct modctl g_sdt_kernctl;
 static struct module g_sdt_mach_module;
 
 #include <mach-o/nlist.h>
 #include <libkern/kernel_mach_header.h>
 
-void sdt_init( void )
+void sdt_early_init( void )
 {
-	if (0 == gSDTInited)
-	{
-		int majdevno = cdevsw_add(SDT_MAJOR, &sdt_cdevsw);
+	if (dtrace_sdt_probes_restricted()) {
+		return;
+	}
+	if (MH_MAGIC_KERNEL != _mh_execute_header.magic) {
+		g_sdt_kernctl.mod_address = (vm_address_t)NULL;
+		g_sdt_kernctl.mod_size = 0;
+	} else {
+		kernel_mach_header_t        *mh;
+		struct load_command         *cmd;
+		kernel_segment_command_t    *orig_ts = NULL, *orig_le = NULL;
+		struct symtab_command       *orig_st = NULL;
+		kernel_nlist_t		    *sym = NULL;
+		char                        *strings;
+		unsigned int 		    i;
 		
-		if (majdevno < 0) {
-			printf("sdt_init: failed to allocate a major number!\n");
-			gSDTInited = 0;
-			return;
-		}
-
-		if (dtrace_sdt_probes_restricted()) {
-			return;
-		}
-
-		if (MH_MAGIC_KERNEL != _mh_execute_header.magic) {
-			g_sdt_kernctl.mod_address = (vm_address_t)NULL;
-			g_sdt_kernctl.mod_size = 0;
-		} else {
-			kernel_mach_header_t        *mh;
-			struct load_command         *cmd;
-			kernel_segment_command_t    *orig_ts = NULL, *orig_le = NULL;
-			struct symtab_command       *orig_st = NULL;
-			kernel_nlist_t		    *sym = NULL;
-			char                        *strings;
-			unsigned int 		    i;
-			
-			g_sdt_mach_module.sdt_nprobes = 0;
-			g_sdt_mach_module.sdt_probes = NULL;
-			
-			g_sdt_kernctl.mod_address = (vm_address_t)&g_sdt_mach_module;
-			g_sdt_kernctl.mod_size = 0;
-			strncpy((char *)&(g_sdt_kernctl.mod_modname), "mach_kernel", KMOD_MAX_NAME);
-			
-			g_sdt_kernctl.mod_next = NULL;
-			g_sdt_kernctl.mod_stale = NULL;
-			g_sdt_kernctl.mod_id = 0;
-			g_sdt_kernctl.mod_loadcnt = 1;
-			g_sdt_kernctl.mod_loaded = 1;
-			g_sdt_kernctl.mod_flags = 0;
-			g_sdt_kernctl.mod_nenabled = 0;
-			
-			mh = &_mh_execute_header;
-			cmd = (struct load_command*) &mh[1];
-			for (i = 0; i < mh->ncmds; i++) {
-				if (cmd->cmd == LC_SEGMENT_KERNEL) {
-					kernel_segment_command_t *orig_sg = (kernel_segment_command_t *) cmd;
-					
-					if (LIT_STRNEQL(orig_sg->segname, SEG_TEXT))
-						orig_ts = orig_sg;
-					else if (LIT_STRNEQL(orig_sg->segname, SEG_LINKEDIT))
-						orig_le = orig_sg;
-					else if (LIT_STRNEQL(orig_sg->segname, ""))
-						orig_ts = orig_sg; /* kexts have a single unnamed segment */
-				}
-				else if (cmd->cmd == LC_SYMTAB)
-					orig_st = (struct symtab_command *) cmd;
+		g_sdt_mach_module.sdt_nprobes = 0;
+		g_sdt_mach_module.sdt_probes = NULL;
+		
+		g_sdt_kernctl.mod_address = (vm_address_t)&g_sdt_mach_module;
+		g_sdt_kernctl.mod_size = 0;
+		strncpy((char *)&(g_sdt_kernctl.mod_modname), "mach_kernel", KMOD_MAX_NAME);
+		
+		g_sdt_kernctl.mod_next = NULL;
+		g_sdt_kernctl.mod_stale = NULL;
+		g_sdt_kernctl.mod_id = 0;
+		g_sdt_kernctl.mod_loadcnt = 1;
+		g_sdt_kernctl.mod_loaded = 1;
+		g_sdt_kernctl.mod_flags = 0;
+		g_sdt_kernctl.mod_nenabled = 0;
+		
+		mh = &_mh_execute_header;
+		cmd = (struct load_command*) &mh[1];
+		for (i = 0; i < mh->ncmds; i++) {
+			if (cmd->cmd == LC_SEGMENT_KERNEL) {
+				kernel_segment_command_t *orig_sg = (kernel_segment_command_t *) cmd;
 				
-				cmd = (struct load_command *) ((uintptr_t) cmd + cmd->cmdsize);
+				if (LIT_STRNEQL(orig_sg->segname, SEG_TEXT))
+					orig_ts = orig_sg;
+				else if (LIT_STRNEQL(orig_sg->segname, SEG_LINKEDIT))
+					orig_le = orig_sg;
+				else if (LIT_STRNEQL(orig_sg->segname, ""))
+					orig_ts = orig_sg; /* kexts have a single unnamed segment */
 			}
+			else if (cmd->cmd == LC_SYMTAB)
+				orig_st = (struct symtab_command *) cmd;
 			
-			if ((orig_ts == NULL) || (orig_st == NULL) || (orig_le == NULL))
-				return;
+			cmd = (struct load_command *) ((uintptr_t) cmd + cmd->cmdsize);
+		}
+		
+		if ((orig_ts == NULL) || (orig_st == NULL) || (orig_le == NULL))
+			return;
+		
+		sym = (kernel_nlist_t *)(orig_le->vmaddr + orig_st->symoff - orig_le->fileoff);
+		strings = (char *)(orig_le->vmaddr + orig_st->stroff - orig_le->fileoff);
+		
+		for (i = 0; i < orig_st->nsyms; i++) {
+			uint8_t n_type = sym[i].n_type & (N_TYPE | N_EXT);
+			char *name = strings + sym[i].n_un.n_strx;
+			const char *prev_name;
+			unsigned long best;
+			unsigned int j;
 			
-			sym = (kernel_nlist_t *)(orig_le->vmaddr + orig_st->symoff - orig_le->fileoff);
-			strings = (char *)(orig_le->vmaddr + orig_st->stroff - orig_le->fileoff);
+			/* Check that the symbol is a global and that it has a name. */
+			if (((N_SECT | N_EXT) != n_type && (N_ABS | N_EXT) != n_type))
+				continue;
 			
-			for (i = 0; i < orig_st->nsyms; i++) {
-				uint8_t n_type = sym[i].n_type & (N_TYPE | N_EXT);
-				char *name = strings + sym[i].n_un.n_strx;
-				const char *prev_name;
-				unsigned long best;
-				unsigned int j;
+			if (0 == sym[i].n_un.n_strx) /* iff a null, "", name. */
+				continue;
+			
+			/* Lop off omnipresent leading underscore. */
+			if (*name == '_')
+				name += 1;
+			
+			if (strncmp(name, DTRACE_PROBE_PREFIX, sizeof(DTRACE_PROBE_PREFIX) - 1) == 0) {
+				sdt_probedesc_t *sdpd = kmem_alloc(sizeof(sdt_probedesc_t), KM_SLEEP);
+				int len = strlen(name) + 1;
 				
-				/* Check that the symbol is a global and that it has a name. */
-				if (((N_SECT | N_EXT) != n_type && (N_ABS | N_EXT) != n_type))
-					continue;
+				sdpd->sdpd_name = kmem_alloc(len, KM_SLEEP);
+				strncpy(sdpd->sdpd_name, name, len); /* NUL termination is ensured. */
 				
-				if (0 == sym[i].n_un.n_strx) /* iff a null, "", name. */
-					continue;
+				prev_name = "<unknown>";
+				best = 0;
 				
-				/* Lop off omnipresent leading underscore. */
-				if (*name == '_')
-					name += 1;
-				
-				if (strncmp(name, DTRACE_PROBE_PREFIX, sizeof(DTRACE_PROBE_PREFIX) - 1) == 0) {
-					sdt_probedesc_t *sdpd = kmem_alloc(sizeof(sdt_probedesc_t), KM_SLEEP);
-					int len = strlen(name) + 1;
-					
-					sdpd->sdpd_name = kmem_alloc(len, KM_SLEEP);
-					strncpy(sdpd->sdpd_name, name, len); /* NUL termination is ensured. */
-					
-					prev_name = "<unknown>";
-					best = 0;
-					
-					/*
-					 * Find the symbol immediately preceding the sdt probe site just discovered,
-					 * that symbol names the function containing the sdt probe.
-					 */
-					for (j = 0; j < orig_st->nsyms; j++) {
-						uint8_t jn_type = sym[j].n_type & N_TYPE;
-						char *jname = strings + sym[j].n_un.n_strx;
-						
-						if ((N_SECT != jn_type && N_ABS != jn_type))
-							continue;
-						
-						if (0 == sym[j].n_un.n_strx) /* iff a null, "", name. */
-							continue;
-						
-						if (*jname == '_')
-							jname += 1;
-						
-						if (*(unsigned long *)sym[i].n_value <= (unsigned long)sym[j].n_value)
-							continue;
-						
-						if ((unsigned long)sym[j].n_value > best) {
-							best = (unsigned long)sym[j].n_value;
-							prev_name = jname;
-						}
+				/*
+				 * Find the symbol immediately preceding the sdt probe site just discovered,
+				 * that symbol names the function containing the sdt probe.
+				 */
+				for (j = 0; j < orig_st->nsyms; j++) {
+					uint8_t jn_type = sym[j].n_type & N_TYPE;
+					char *jname = strings + sym[j].n_un.n_strx;
+
+					if ((N_SECT != jn_type && N_ABS != jn_type))
+						continue;
+
+					if (0 == sym[j].n_un.n_strx) /* iff a null, "", name. */
+						continue;
+
+					if (*jname == '_')
+						jname += 1;
+
+					if (*(unsigned long *)sym[i].n_value <= (unsigned long)sym[j].n_value)
+						continue;
+
+					if ((unsigned long)sym[j].n_value > best) {
+						best = (unsigned long)sym[j].n_value;
+						prev_name = jname;
 					}
-					
-					sdpd->sdpd_func = kmem_alloc((len = strlen(prev_name) + 1), KM_SLEEP);
-					strncpy(sdpd->sdpd_func, prev_name, len); /* NUL termination is ensured. */
-					
-					sdpd->sdpd_offset = *(unsigned long *)sym[i].n_value;
+				}
+
+				sdpd->sdpd_func = kmem_alloc((len = strlen(prev_name) + 1), KM_SLEEP);
+				strncpy(sdpd->sdpd_func, prev_name, len); /* NUL termination is ensured. */
+				
+				sdpd->sdpd_offset = *(unsigned long *)sym[i].n_value;
 #if defined(__arm__)
-					/* PR8353094 - mask off thumb-bit */
-					sdpd->sdpd_offset &= ~0x1U;
+				/* PR8353094 - mask off thumb-bit */
+				sdpd->sdpd_offset &= ~0x1U;
 #elif defined(__arm64__)
-					sdpd->sdpd_offset &= ~0x1LU;
+				sdpd->sdpd_offset &= ~0x1LU;
 #endif  /* __arm__ */
 
 #if 0
-					printf("sdt_init: sdpd_offset=0x%lx, n_value=0x%lx, name=%s\n",
-					    sdpd->sdpd_offset,  *(unsigned long *)sym[i].n_value, name);
+				printf("sdt_init: sdpd_offset=0x%lx, n_value=0x%lx, name=%s\n",
+				    sdpd->sdpd_offset,  *(unsigned long *)sym[i].n_value, name);
 #endif
 
-					sdpd->sdpd_next = g_sdt_mach_module.sdt_probes;
-					g_sdt_mach_module.sdt_probes = sdpd;
-				} else {
-					prev_name = name;
-				}
+				sdpd->sdpd_next = g_sdt_mach_module.sdt_probes;
+				g_sdt_mach_module.sdt_probes = sdpd;
+			} else {
+				prev_name = name;
 			}
 		}
+	}
+}
+
+void sdt_init( void )
+{
+	int majdevno = cdevsw_add(SDT_MAJOR, &sdt_cdevsw);
 		
-		sdt_attach( (dev_info_t	*)(uintptr_t)majdevno, DDI_ATTACH );
-		
-		gSDTInited = 1;
-	} else
-		panic("sdt_init: called twice!\n");
+	if (majdevno < 0) {
+		printf("sdt_init: failed to allocate a major number!\n");
+		return;
+	}
+
+	if (dtrace_sdt_probes_restricted()) {
+		return;
+	}
+
+	sdt_attach((dev_info_t*)(uintptr_t)majdevno);
 }
 
 #undef SDT_MAJOR

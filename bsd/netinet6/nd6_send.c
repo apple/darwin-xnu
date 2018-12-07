@@ -116,7 +116,7 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 #endif
 
 	MALLOC(buffer, char *, SYSCTL_CGA_PARAMETERS_BUFFER_SIZE, M_IP6CGA,
-	    M_WAITOK);
+	    M_WAITOK | M_ZERO);
 	if (buffer == NULL) {
 		log(LOG_ERR, "%s: could not allocate marshaling buffer.\n",
 		    __func__);

@@ -88,11 +88,11 @@ void OSKextVLog(
 void OSKextRemoveKextBootstrap(void);
 
 kern_return_t OSRuntimeInitializeCPP(
-    kmod_info_t * kmodInfo,
-    void *        data);
+    OSKext * kext);
 kern_return_t OSRuntimeFinalizeCPP(
-    kmod_info_t * kmodInfo,
-    void        * data);
+    OSKext * kext);
+void OSRuntimeUnloadCPPForSegment(
+    kernel_segment_command_t * segment);
 
 kern_return_t is_io_catalog_send_data(
     mach_port_t              masterPort,
@@ -212,11 +212,11 @@ class OSKext : public OSObject
         __unused thread_call_param_t p1);
 
     friend kern_return_t OSRuntimeInitializeCPP(
-        kmod_info_t * kmodInfo,
-        void *        data);
+        OSKext * kext);
     friend kern_return_t OSRuntimeFinalizeCPP(
-        kmod_info_t * kmodInfo,
-        void        * data);
+        OSKext * kext);
+	friend void OSRuntimeUnloadCPPForSegment(
+        kernel_segment_command_t * segment);
 
     friend kern_return_t is_io_catalog_send_data(
             mach_port_t              masterPort,
@@ -275,6 +275,7 @@ private:
         unsigned int interface:1;
         unsigned int kernelComponent:1;
         unsigned int prelinked:1;
+        unsigned int builtin:1;
         unsigned int loaded:1;
         unsigned int dtraceInitialized:1;
         unsigned int starting:1;
@@ -292,6 +293,7 @@ private:
     struct list_head pendingPgoHead;
     uuid_t instance_uuid;
     OSKextAccount * account;
+    uint32_t builtinKmodIdx;
 
 #if PRAGMA_MARK
 /**************************************/
@@ -307,6 +309,10 @@ public:
     static OSDictionary * copyKexts(void);
     static OSReturn       removeKextBootstrap(void);
     static void           willShutdown(void);  // called by IOPMrootDomain on shutdown
+    static  void reportOSMetaClassInstances(
+        const char     * kextIdentifier,
+        OSKextLogSpec    msgLogSpec);
+
 #endif /* XNU_KERNEL_PRIVATE */
 
 private:
@@ -500,9 +506,7 @@ private:
         OSMetaClass * aClass);
     virtual bool    hasOSMetaClassInstances(void);
     virtual OSSet * getMetaClasses(void);
-    static  void reportOSMetaClassInstances(
-        const char     * kextIdentifier,
-        OSKextLogSpec    msgLogSpec);
+
     virtual void reportOSMetaClassInstances(
         OSKextLogSpec msgLogSpec);
 
@@ -565,11 +569,13 @@ private:
     void updateLoadedKextSummary(OSKextLoadedKextSummary *summary);
     void updateActiveAccount(OSKextActiveAccount *accountp);
 
+#ifdef XNU_KERNEL_PRIVATE
+public:
+#endif /* XNU_KERNEL_PRIVATE */
+
     /* C++ Initialization.
      */
     virtual void               setCPPInitialized(bool initialized=true);
-
-
 
 #if PRAGMA_MARK
 /**************************************/
@@ -645,6 +651,8 @@ public:
     virtual OSKextLoadTag      getLoadTag(void);
     virtual void               getSizeInfo(uint32_t *loadSize, uint32_t *wiredSize);
     virtual OSData           * copyUUID(void);
+    OSData                   * copyTextUUID(void);
+    OSData                   * copyMachoUUID(const kernel_mach_header_t * header);
     virtual OSArray          * copyPersonalitiesArray(void);
     
    /* This removes personalities naming the kext (by CFBundleIdentifier),

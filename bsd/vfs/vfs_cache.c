@@ -82,6 +82,7 @@
 #include <sys/kauth.h>
 #include <sys/user.h>
 #include <sys/paths.h>
+#include <os/overflow.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -876,10 +877,8 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 {
 	struct	namecache *ncp;
         vnode_t	old_parentvp = NULLVP;
-#if NAMEDSTREAMS
 	int isstream = (vp->v_flag & VISNAMEDSTREAM);
 	int kusecountbumped = 0;
-#endif
 	kauth_cred_t tcred = NULL;
 	const char *vname = NULL;
 	const char *tname = NULL;
@@ -888,7 +887,6 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 	        if (dvp && vnode_ref(dvp) != 0) {
 			dvp = NULLVP;
 		}
-#if NAMEDSTREAMS
 		/* Don't count a stream's parent ref during unmounts */
 		if (isstream && dvp && (dvp != vp) && (dvp != vp->v_parent) && (dvp->v_type == VREG)) {
 			vnode_lock_spin(dvp);
@@ -896,7 +894,6 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 			kusecountbumped = 1;
 			vnode_unlock(dvp);
 		}
-#endif
 	} else {
 	        dvp = NULLVP;
 	}
@@ -960,7 +957,6 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 			kauth_cred_unref(&tcred);
 	}
 	if (dvp != NULLVP) {
-#if NAMEDSTREAMS
 		/* Back-out the ref we took if we lost a race for vp->v_parent. */
 		if (kusecountbumped) {
 			vnode_lock_spin(dvp);
@@ -968,20 +964,17 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 				--dvp->v_kusecount;  
 			vnode_unlock(dvp);
 		}
-#endif
 	        vnode_rele(dvp);
 	}
 	if (old_parentvp) {
 	        struct  uthread *ut;
 
-#if NAMEDSTREAMS
 		if (isstream) {
 		        vnode_lock_spin(old_parentvp);
 			if ((old_parentvp->v_type != VDIR) && (old_parentvp->v_kusecount > 0))
 				--old_parentvp->v_kusecount;
 			vnode_unlock(old_parentvp);
 		}
-#endif
 	        ut = get_bsdthread_info(current_thread());
 
 		/*
@@ -1437,7 +1430,7 @@ skiprsrcfork:
 				 * Force directory hardlinks to go to
 				 * file system for ".." requests.
 				 */
-				if (dp && (dp->v_flag & VISHARDLINK)) {
+				if ((dp->v_flag & VISHARDLINK)) {
 					break;
 				}
 				/*
@@ -2167,28 +2160,35 @@ name_cache_unlock(void)
 
 
 int
-resize_namecache(u_int newsize)
+resize_namecache(int newsize)
 {
     struct nchashhead	*new_table;
     struct nchashhead	*old_table;
     struct nchashhead	*old_head, *head;
     struct namecache 	*entry, *next;
     uint32_t		i, hashval;
-    int			dNodes, dNegNodes;
+    int			dNodes, dNegNodes, nelements;
     u_long		new_size, old_size;
+
+    if (newsize < 0)
+        return EINVAL;
 
     dNegNodes = (newsize / 10);
     dNodes = newsize + dNegNodes;
-
     // we don't support shrinking yet
     if (dNodes <= desiredNodes) {
-	return 0;
+        return 0;
     }
-    new_table = hashinit(2 * dNodes, M_CACHE, &nchashmask);
+
+    if (os_mul_overflow(dNodes, 2, &nelements)) {
+        return EINVAL;
+    }
+
+    new_table = hashinit(nelements, M_CACHE, &nchashmask);
     new_size  = nchashmask + 1;
 
     if (new_table == NULL) {
-	return ENOMEM;
+        return ENOMEM;
     }
 
     NAME_CACHE_LOCK();

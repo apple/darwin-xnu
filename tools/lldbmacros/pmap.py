@@ -920,6 +920,10 @@ def DecodeTTE(cmd_args=None):
     else:
         raise NotImplementedError("decode_tte does not support {0}".format(kern.arch))
 
+
+PVH_HIGH_FLAGS_ARM64 = (1 << 62) | (1 << 61) | (1 << 60) | (1 << 59)
+PVH_HIGH_FLAGS_ARM32 = (1 << 31)
+
 def PVWalkARM(pa):
     """ Walk a physical-to-virtual reverse mapping list maintained by the arm pmap
         pa: physical address (NOT page number).  Does not need to be page-aligned 
@@ -928,10 +932,19 @@ def PVWalkARM(pa):
     vm_last_phys = unsigned(kern.globals.vm_last_phys)
     if pa < vm_first_phys or pa >= vm_last_phys:
         raise ArgumentError("PA {:#x} is outside range of managed physical addresses: [{:#x}, {:#x})".format(pa, vm_first_phys, vm_last_phys))
-    page_size = kern.globals.arm_hardware_page_size
+    page_size = kern.globals.page_size
     pn = (pa - unsigned(kern.globals.vm_first_phys)) / page_size
     pvh = unsigned(kern.globals.pv_head_table[pn])
     pvh_type = pvh & 0x3
+    print "PVH raw value: ({:#x})".format(pvh)
+    if kern.arch.startswith('arm64'):
+        iommu_flag = 0x4
+        iommu_table_flag = 1 << 63
+        pvh = pvh | PVH_HIGH_FLAGS_ARM64
+    else:
+        iommu_flag = 0
+        iommu_table_flag = 0 
+        pvh = pvh | PVH_HIGH_FLAGS_ARM32
     if pvh_type == 0:
         print "PVH type: NULL"
         return
@@ -940,8 +953,16 @@ def PVWalkARM(pa):
         return
     elif pvh_type == 2:
         ptep = pvh & ~0x3
+        pte_str = ''
         print "PVH type: single PTE"
-        print "PTE {:#x}: {:#x}".format(ptep, dereference(kern.GetValueFromAddress(ptep, 'pt_entry_t *')))
+        if ptep & iommu_flag:
+            ptep = ptep & ~iommu_flag
+            if ptep & iommu_table_flag:
+                pte_str = ' (IOMMU table), entry'
+            else:
+                pte_str = ' (IOMMU state), descriptor'
+                ptep = ptep | iommu_table_flag
+        print "PTE {:#x}{:s}: {:#x}".format(ptep, pte_str, dereference(kern.GetValueFromAddress(ptep, 'pt_entry_t *')))
     elif pvh_type == 1:
         pvep = pvh & ~0x3
         print "PVH type: PTE list"
@@ -954,6 +975,13 @@ def PVWalkARM(pa):
             current_pvep = pvep
             pvep = unsigned(pve.pve_next) & ~0x1
             ptep = unsigned(pve.pve_ptep) & ~0x3
+            if ptep & iommu_flag:
+                ptep = ptep & ~iommu_flag
+                if ptep & iommu_table_flag:
+                    pve_str = ' (IOMMU table), entry'
+                else:
+                    pve_str = ' (IOMMU state), descriptor'
+                    ptep = ptep | iommu_table_flag
             print "PVE {:#x}, PTE {:#x}{:s}: {:#x}".format(current_pvep, ptep, pve_str, dereference(kern.GetValueFromAddress(ptep, 'pt_entry_t *')))
 
 @lldb_command('pv_walk')
@@ -967,15 +995,50 @@ def PVWalk(cmd_args=None):
         raise NotImplementedError("pv_walk does not support {0}".format(kern.arch))
     PVWalkARM(kern.GetValueFromAddress(cmd_args[0], 'unsigned long'))
 
+@lldb_command('kvtophys')
+def KVToPhys(cmd_args=None):
+    """ Translate a kernel virtual address to the corresponding physical address.
+        Assumes the virtual address falls within the kernel static region.
+        Syntax: (lldb) kvtophys <kernel virtual address>
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        raise ArgumentError("Too few arguments to kvtophys.")
+    if kern.arch.startswith('arm'):
+        print "{:#x}".format(KVToPhysARM(long(unsigned(kern.GetValueFromAddress(cmd_args[0], 'unsigned long')))))
+    elif kern.arch == 'x86_64':
+        print "{:#x}".format(long(unsigned(kern.GetValueFromAddress(cmd_args[0], 'unsigned long'))) - unsigned(kern.globals.physmap_base))
+
+@lldb_command('phystokv')
+def PhysToKV(cmd_args=None):
+    """ Translate a physical address to the corresponding static kernel virtual address.
+        Assumes the physical address corresponds to managed DRAM.
+        Syntax: (lldb) phystokv <physical address>
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        raise ArgumentError("Too few arguments to phystokv.")
+    print "{:#x}".format(kern.PhysToKernelVirt(long(unsigned(kern.GetValueFromAddress(cmd_args[0], 'unsigned long')))))
+
+def KVToPhysARM(addr):
+    if kern.arch.startswith('arm64'):
+        ptov_table = kern.globals.ptov_table
+        for i in range(0, kern.globals.ptov_index):
+            if (addr >= long(unsigned(ptov_table[i].va))) and (addr < (long(unsigned(ptov_table[i].va)) + long(unsigned(ptov_table[i].len)))):
+                return (addr - long(unsigned(ptov_table[i].va)) + long(unsigned(ptov_table[i].pa)))
+    return (addr - unsigned(kern.globals.gVirtBase) + unsigned(kern.globals.gPhysBase))
+
 def ShowPTEARM(pte):
     """ Display vital information about an ARM page table entry
         pte: kernel virtual address of the PTE.  Should be L3 PTE.  May also work with L2 TTEs for certain devices.
     """
     page_size = kern.globals.arm_hardware_page_size
-    pn = (pte - unsigned(kern.globals.gVirtBase) + unsigned(kern.globals.gPhysBase) - unsigned(kern.globals.vm_first_phys)) / page_size
-    pvh = kern.globals.pv_head_table[pn]
+    pn = (KVToPhysARM(pte) - unsigned(kern.globals.vm_first_phys)) / page_size
+    pvh = unsigned(kern.globals.pv_head_table[pn])
+    if kern.arch.startswith('arm64'):
+        pvh = pvh | PVH_HIGH_FLAGS_ARM64
+    else:
+        pvh = pvh | PVH_HIGH_FLAGS_ARM32
     pvh_type = pvh & 0x3
-    if pvh_type != 0x3 and pvh_type != 0x0:
+    if pvh_type != 0x3:
         raise ValueError("PV head {:#x} does not correspond to a page-table descriptor".format(pvh))
     ptd = kern.GetValueFromAddress(pvh & ~0x3, 'pt_desc_t *')
     print "descriptor: {:#x}".format(ptd)
@@ -1137,7 +1200,7 @@ def ShowAllMappings(cmd_args=None):
     ScanPageTables(printMatchedMapping, targetPmap)
 
 def checkPVList(pmap, level, type, tte, paddr, granule):
-    """ Checks an ARM physical-to-virtual mapping list for consistency error.
+    """ Checks an ARM physical-to-virtual mapping list for consistency errors.
         pmap: owner of the translation table
         level: translation table level.  PV lists will only be checked for L2 (arm32) or L3 (arm64) tables.
         type: unused
@@ -1147,20 +1210,22 @@ def checkPVList(pmap, level, type, tte, paddr, granule):
     """
     vm_first_phys = unsigned(kern.globals.vm_first_phys)
     vm_last_phys = unsigned(kern.globals.vm_last_phys)
-    page_size = kern.globals.arm_hardware_page_size
+    page_size = kern.globals.page_size
     if kern.arch.startswith('arm64'):
         page_offset_mask = (page_size - 1)
         page_base_mask = ((1 << ARM64_VMADDR_BITS) - 1) & (~page_offset_mask)
         paddr = paddr & page_base_mask
         max_level = 3
+        pvh_set_bits = PVH_HIGH_FLAGS_ARM64
     elif kern.arch == 'arm':
         page_base_mask = 0xFFFFF000
         paddr = paddr & page_base_mask
         max_level = 2
+        pvh_set_bits = PVH_HIGH_FLAGS_ARM32
     if level < max_level or paddr < vm_first_phys or paddr >= vm_last_phys:
         return
     pn = (paddr - vm_first_phys) / page_size
-    pvh = unsigned(kern.globals.pv_head_table[pn])
+    pvh = unsigned(kern.globals.pv_head_table[pn]) | pvh_set_bits
     pvh_type = pvh & 0x3
     if pmap is not None:
         pmap_str = "pmap: {:#x}: ".format(pmap)
@@ -1207,7 +1272,7 @@ def PVCheck(cmd_args=None, cmd_options={}):
             -P        : Interpret <addr> as a physical address rather than a PTE
     """
     if cmd_args == None or len(cmd_args) < 1:
-        raise ArgumentError("Too few arguments to showallmappings.")
+        raise ArgumentError("Too few arguments to pv_check.")
     if kern.arch == 'arm':
         level = 2
     elif kern.arch.startswith('arm64'):

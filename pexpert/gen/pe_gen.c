@@ -48,6 +48,8 @@ static uint32_t gPEKernelConfigurationBitmask;
 
 int32_t gPESerialBaud = -1;
 
+int debug_cpu_performance_degradation_factor = 1;
+
 void pe_init_debug(void)
 {
 	boolean_t boot_arg_value;
@@ -86,6 +88,21 @@ void pe_init_debug(void)
 #endif
 	gPEKernelConfigurationBitmask |= (boot_arg_value ? kPEICanHasDiagnosticAPI : 0);
 
+
+	int factor = 1;
+	boolean_t have_bootarg = PE_parse_boot_argn("cpu-factor", &factor, sizeof (factor));
+	if (have_bootarg) {
+		debug_cpu_performance_degradation_factor = factor;
+	} else {
+		DTEntry		root;
+		if (DTLookupEntry(NULL, "/", &root) == kSuccess) {
+			void *prop = NULL;
+			uint32_t size = 0;
+			if (DTGetProperty(root, "target-is-fpga", &prop, &size) == kSuccess) {
+				debug_cpu_performance_degradation_factor = 10;
+			}
+		}
+	}
 }
 
 void PE_enter_debugger(const char *cause)

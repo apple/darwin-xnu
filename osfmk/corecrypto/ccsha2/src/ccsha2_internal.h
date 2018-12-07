@@ -2,9 +2,9 @@
  *  ccsha2_internal.h
  *  corecrypto
  *
- *  Created on 12/07/2010
+ *  Created on 12/19/2017
  *
- *  Copyright (c) 2010,2011,2012,2014,2015 Apple Inc. All rights reserved.
+ *  Copyright (c) 2017 Apple Inc. All rights reserved.
  *
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
@@ -37,8 +37,10 @@
 
 #include <corecrypto/ccdigest.h>
 
-void ccsha256_ltc_compress(ccdigest_state_t state, size_t nblocks, const void *buf);
+extern const struct ccdigest_info ccsha256_v6m_di;
 void ccsha256_v6m_compress(ccdigest_state_t state, size_t nblocks, const void *buf);
+
+void ccsha256_ltc_compress(ccdigest_state_t state, size_t nblocks, const void *buf);
 void ccsha512_ltc_compress(ccdigest_state_t state, size_t nblocks, const void *in);
 
 #if  CCSHA2_VNG_INTEL
@@ -49,9 +51,30 @@ void ccsha256_vng_intel_ssse3_compress(ccdigest_state_t state, size_t nblocks, c
 void ccsha512_vng_intel_avx2_compress(ccdigest_state_t state, size_t nblocks, const void *in);
 void ccsha512_vng_intel_avx1_compress(ccdigest_state_t state, size_t nblocks, const void *in);
 void ccsha512_vng_intel_ssse3_compress(ccdigest_state_t state, size_t nblocks, const void *in);
+
+extern const struct ccdigest_info ccsha224_vng_intel_AVX2_di;
+extern const struct ccdigest_info ccsha224_vng_intel_AVX1_di;
+extern const struct ccdigest_info ccsha256_vng_intel_AVX2_di;
+extern const struct ccdigest_info ccsha256_vng_intel_AVX1_di;
+extern const struct ccdigest_info ccsha384_vng_intel_AVX2_di;
+extern const struct ccdigest_info ccsha384_vng_intel_AVX1_di;
+extern const struct ccdigest_info ccsha384_vng_intel_SupplementalSSE3_di;
+extern const struct ccdigest_info ccsha512_vng_intel_AVX2_di;
+extern const struct ccdigest_info ccsha512_vng_intel_AVX1_di;
+extern const struct ccdigest_info ccsha512_vng_intel_SupplementalSSE3_di;
 #endif
 void ccsha256_vng_intel_sse3_compress(ccdigest_state_t state, size_t nblocks, const void *in);
 #endif
+
+#if  CCSHA2_VNG_ARMV7NEON
+extern const struct ccdigest_info ccsha384_vng_arm64_di;
+extern const struct ccdigest_info ccsha384_vng_armv7neon_di;
+extern const struct ccdigest_info ccsha512_vng_arm64_di;
+extern const struct ccdigest_info ccsha512_vng_armv7neon_di;
+#endif
+
+extern const uint32_t ccsha256_K[64];
+extern const uint64_t ccsha512_K[80];
 
 void ccsha512_final(const struct ccdigest_info *di, ccdigest_ctx_t ctx, unsigned char *digest);
 
@@ -59,5 +82,6 @@ extern const uint32_t ccsha224_initial_state[8];
 extern const uint32_t ccsha256_initial_state[8];
 extern const uint64_t ccsha384_initial_state[8];
 extern const uint64_t ccsha512_initial_state[8];
+
 
 #endif /* _CORECRYPTO_CCSHA2_INTERNAL_H_ */

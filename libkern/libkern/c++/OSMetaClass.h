@@ -318,87 +318,14 @@ public:
  *  @abstract Release an object if not <code>NULL</code>, then set it to <code>NULL</code>.
  *  @param    inst  Instance of an OSObject, may be <code>NULL</code>.
  */
-#define OSSafeReleaseNULL(inst)   do { if (inst) (inst)->release(); (inst) = NULL; } while (0)
+#define OSSafeReleaseNULL(inst)   do { if (inst != NULL) (inst)->release(); (inst) = NULL; } while (0)
 
 typedef void (*_ptf_t)(void);
 
-#if APPLE_KEXT_LEGACY_ABI
-
-// Arcane evil code interprets a C++ pointer to function as specified in the
-// -fapple-kext ABI, i.e. the gcc-2.95 generated code.  IT DOES NOT ALLOW
-// the conversion of functions that are from MULTIPLY inherited classes.
-
-static inline _ptf_t
-_ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
-{
-    union {
-        void (OSMetaClassBase::*fIn)(void);
-        struct {     // Pointer to member function 2.95
-            unsigned short fToff;
-            short  fVInd;
-            union {
-                _ptf_t fPFN;
-                short  fVOff;
-            } u;
-        } fptmf2;
-    } map;
-
-    map.fIn = func;
-    if (map.fptmf2.fToff) {
-        panic("Multiple inheritance is not supported");
-        return 0;
-    } else if (map.fptmf2.fVInd < 0) {
-        // Not virtual, i.e. plain member func
-        return map.fptmf2.u.fPFN;
-    } else {
-        union {
-            const OSMetaClassBase *fObj;
-            _ptf_t **vtablep;
-        } u;
-        u.fObj = self;
-
-        // Virtual member function so dereference vtable
-        return (*u.vtablep)[map.fptmf2.fVInd - 1];
-    }
-}
-
-#else /* !APPLE_KEXT_LEGACY_ABI */
 #if defined(__arm__) || defined(__arm64__)
-typedef long int ptrdiff_t;
-/*
- * Ugly reverse engineered ABI.  Where does it come from?  Nobody knows.
- * <rdar://problem/5641129> gcc 4.2-built ARM kernel panics with multiple inheritance (no, really)
- */
-static inline _ptf_t
-_ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
-{
-    struct ptmf_t {
-        _ptf_t fPFN;
-        ptrdiff_t delta;
-    };
-    union {
-        void (OSMetaClassBase::*fIn)(void);
-        struct ptmf_t pTMF;
-    } map;
 
+    static _ptf_t _ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void));
 
-    map.fIn = func;
-
-    if (map.pTMF.delta & 1) {
-        // virtual
-        union {
-            const OSMetaClassBase *fObj;
-            _ptf_t **vtablep;
-        } u;
-        u.fObj = self;
-
-        // Virtual member function so dereference table
-        return *(_ptf_t *)(((uintptr_t)*u.vtablep) + (uintptr_t)map.pTMF.fPFN);
-    } else {
-        // Not virtual, i.e. plain member func
-        return map.pTMF.fPFN;
-    } 
-}
 #elif defined(__i386__) || defined(__x86_64__)
 
 // Slightly less arcane and slightly less evil code to do
@@ -436,7 +363,6 @@ _ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
 #error Unknown architecture.
 #endif /* __arm__ */
 
-#endif /* !APPLE_KEXT_LEGACY_ABI */
 
    /*!
     * @define OSMemberFunctionCast

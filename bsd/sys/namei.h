@@ -260,6 +260,7 @@ int	relookup(struct vnode *dvp, struct vnode **vpp,
 		struct componentname *cnp);
 int	lookup_traverse_union(vnode_t dvp, vnode_t *new_dvp, vfs_context_t ctx);
 void	lookup_compound_vnop_post_hook(int error, vnode_t dvp, vnode_t vp, struct nameidata *ndp, int did_create);
+void	kdebug_lookup(struct vnode *dp, struct componentname *cnp);
 
 /*
  * namecache function prototypes

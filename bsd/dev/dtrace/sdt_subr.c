@@ -136,6 +136,7 @@ sdt_argdesc_t sdt_args[] = {
 	{ "proc", "exec-failure", 0, 0, "int", NULL },
 	/* proc:::exec-success has no arguments */
 	{ "proc", "exit", 0, 0, "int", NULL },
+	{ "proc", "exited", 0, 0, "struct proc *", "psinfo_t *"},
 	{ "proc", "fault", 0, 0, "int", NULL },
 	{ "proc", "fault", 1, 1, "siginfo_t *", NULL },
 	{ "proc", "lwp-create", 0, 0, "struct thread *", "lwpsinfo_t *" },

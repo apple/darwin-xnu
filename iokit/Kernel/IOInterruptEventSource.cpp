@@ -220,6 +220,19 @@ IOInterruptEventSource::interruptEventSource(OSObject *inOwner,
     return me;
 }
 
+IOInterruptEventSource *
+IOInterruptEventSource::interruptEventSource(OSObject *inOwner,
+					     IOService *inProvider,
+					     int inIntIndex,
+					     ActionBlock inAction)
+{
+    IOInterruptEventSource * ies;
+    ies = IOInterruptEventSource::interruptEventSource(inOwner, (Action) NULL, inProvider, inIntIndex);
+    if (ies) ies->setActionBlock((IOEventSource::ActionBlock) inAction);
+
+    return ies;
+}
+
 void IOInterruptEventSource::free()
 {
     if (provider && intIndex >= 0)
@@ -300,6 +313,7 @@ bool IOInterruptEventSource::checkForWork()
     unsigned int cacheProdCount = producerCount;
     int numInts = cacheProdCount - consumerCount;
     IOInterruptEventAction intAction = (IOInterruptEventAction) action;
+    ActionBlock intActionBlock = (ActionBlock) actionBlock;
 	bool trace = (gIOKitTrace & kIOTraceIntEventSource) ? true : false;
 	
     IOStatisticsCheckForWork();
@@ -322,7 +336,8 @@ bool IOInterruptEventSource::checkForWork()
 		}
 
 		// Call the handler
-		(*intAction)(owner, this, numInts);
+		if (kActionBlock & flags) (intActionBlock)(this, numInts);
+		else                      (*intAction)(owner, this, numInts);
 
 		if (reserved->statistics) {
 			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelCountIndex)) {
@@ -368,7 +383,8 @@ bool IOInterruptEventSource::checkForWork()
 		}
 		
 		// Call the handler
-		(*intAction)(owner, this, -numInts);
+		if (kActionBlock & flags) (intActionBlock)(this, numInts);
+		else                      (*intAction)(owner, this, numInts);
 
 		if (reserved->statistics) {
 			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelCountIndex)) {

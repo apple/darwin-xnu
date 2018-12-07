@@ -318,7 +318,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	 * The sleep implementation uses indirect noreturn calls, so we miss stack
 	 * unpoisoning. Do it explicitly.
 	 */
-	__asan_handle_no_return();
+	kasan_unpoison_curstack(true);
 #endif
 
 #if HIBERNATION

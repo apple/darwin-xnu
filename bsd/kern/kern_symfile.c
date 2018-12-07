@@ -52,6 +52,7 @@
 #include <sys/disk.h>
 #include <sys/conf.h>
 #include <sys/content_protection.h>
+#include <sys/fsctl.h>
 
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
@@ -60,6 +61,9 @@
 #include <vm/vm_kern.h>
 #include <pexpert/pexpert.h>
 #include <IOKit/IOPolledInterface.h>
+
+#define HIBERNATE_MIN_PHYSICAL_LBA    (34)
+#define HIBERNATE_MIN_FILE_SIZE       (1024*1024)
 
 /* This function is called from kern_sysctl in the current process context;
  * it is exported with the System6.0.exports, but this appears to be a legacy
@@ -75,13 +79,15 @@ get_kernel_symfile(__unused proc_t p, __unused char const **symfile)
 
 struct kern_direct_file_io_ref_t
 {
-    vfs_context_t  ctx;
-    struct vnode * vp;
-    dev_t          device;
-    uint32_t	   blksize;
-    off_t          filelength;
-    char           cf;
-    char           pinned;
+    vfs_context_t      ctx;
+    struct vnode      * vp;
+    dev_t               device;
+    uint32_t	        blksize;
+    off_t               filelength;
+    char                cf;
+    char                pinned;
+    char                frozen;
+    char                wbcranged;
 };
 
 
@@ -201,7 +207,7 @@ extern uint32_t freespace_mb(vnode_t vp);
 
 struct kern_direct_file_io_ref_t *
 kern_open_file_for_direct_io(const char * name, 
-			     boolean_t create_file,
+			     uint32_t iflags,
 			     kern_get_file_extents_callback_t callback, 
 			     void * callback_ref,
                              off_t set_file_size,
@@ -219,17 +225,18 @@ kern_open_file_for_direct_io(const char * name,
 
     proc_t            p;
     struct vnode_attr va;
+    dk_apfs_wbc_range_t wbc_range;
     int               error;
     off_t             f_offset;
     uint64_t          fileblk;
     size_t            filechunk;
-    uint64_t          physoffset;
+    uint64_t          physoffset, minoffset;
     dev_t             device;
     dev_t             target = 0;
     int               isssd = 0;
     uint32_t          flags = 0;
     uint32_t          blksize;
-    off_t             maxiocount, count, segcount;
+    off_t             maxiocount, count, segcount, wbctotal;
     boolean_t         locked = FALSE;
     int               fmode, cmode;
     struct            nameidata nd;
@@ -253,7 +260,7 @@ kern_open_file_for_direct_io(const char * name,
     p = kernproc;
     ref->ctx = vfs_context_kernel();
 
-    fmode  = (create_file) ? (O_CREAT | FWRITE) : FWRITE;
+    fmode  = (kIOPolledFileCreate & iflags) ? (O_CREAT | FWRITE) : FWRITE;
     cmode =  S_IRUSR | S_IWUSR;
     ndflags = NOFOLLOW;
     NDINIT(&nd, LOOKUP, OP_OPEN, ndflags, UIO_SYSSPACE, CAST_USER_ADDR_T(name), ref->ctx);
@@ -276,10 +283,10 @@ kern_open_file_for_direct_io(const char * name,
 
     if (write_file_addr && write_file_len)
     {
-	if ((error = kern_write_file(ref, write_file_offset, write_file_addr, write_file_len, IO_SKIP_ENCRYPTION))) {
-		kprintf("kern_write_file() failed with error: %d\n", error);
-		goto out;
-	}
+        if ((error = kern_write_file(ref, write_file_offset, write_file_addr, write_file_len, IO_SKIP_ENCRYPTION))) {
+            kprintf("kern_write_file() failed with error: %d\n", error);
+            goto out;
+        }
     }
 
     VATTR_INIT(&va);
@@ -292,6 +299,7 @@ kern_open_file_for_direct_io(const char * name,
     error = EFAULT;
     if (vnode_getattr(ref->vp, &va, ref->ctx)) goto out;
 
+    wbctotal = 0;
     mpFree = freespace_mb(ref->vp);
     mpFree <<= 20;
     kprintf("kern_direct_file(%s): vp size %qd, alloc %qd, mp free %qd, keep free %qd\n", 
@@ -309,8 +317,31 @@ kern_open_file_for_direct_io(const char * name,
         p2 = p;
         do_ioctl = &file_ioctl;
 
+        if (kIOPolledFileHibernate & iflags)
+        {
+            error = do_ioctl(p1, p2, DKIOCAPFSGETWBCRANGE, (caddr_t) &wbc_range);
+            ref->wbcranged = (error == 0);
+        }
+        if (ref->wbcranged)
+        {
+            uint32_t idx;
+            assert(wbc_range.count <= (sizeof(wbc_range.extents) / sizeof(wbc_range.extents[0])));
+            for (idx = 0; idx < wbc_range.count; idx++) wbctotal += wbc_range.extents[idx].length;
+            kprintf("kern_direct_file(%s): wbc %qd\n", name, wbctotal);
+            if (wbctotal) target = wbc_range.dev;
+        }
+
         if (set_file_size)
         {
+            if (wbctotal)
+            {
+                if (wbctotal >= set_file_size) set_file_size = HIBERNATE_MIN_FILE_SIZE;
+                else
+                {
+                    set_file_size -= wbctotal;
+                    if (set_file_size < HIBERNATE_MIN_FILE_SIZE) set_file_size = HIBERNATE_MIN_FILE_SIZE;
+                }
+            }
             if (fs_free_size)
             {
 		mpFree += va.va_data_alloc;
@@ -354,6 +385,8 @@ kern_open_file_for_direct_io(const char * name,
     if (error)
         goto out;
 
+    minoffset = HIBERNATE_MIN_PHYSICAL_LBA * ref->blksize;
+
     if (ref->vp->v_type != VREG)
     {
         error = do_ioctl(p1, p2, DKIOCGETBLOCKCOUNT, (caddr_t) &fileblk);
@@ -361,11 +394,17 @@ kern_open_file_for_direct_io(const char * name,
 	ref->filelength = fileblk * ref->blksize;    
     }
 
-    // pin logical extents
+    // pin logical extents, CS version
 
     error = kern_ioctl_file_extents(ref, _DKIOCCSPINEXTENT, 0, ref->filelength);
     if (error && (ENOTTY != error)) goto out;
     ref->pinned = (error == 0);
+
+    // pin logical extents, apfs version
+
+    error = VNOP_IOCTL(ref->vp, FSCTL_FREEZE_EXTENTS, NULL, 0, ref->ctx);
+    if (error && (ENOTTY != error)) goto out;
+    ref->frozen = (error == 0);
 
     // generate the block list
 
@@ -412,6 +451,9 @@ kern_open_file_for_direct_io(const char * name,
                 error = ENOTSUP;
                 goto out;
             }
+
+            assert(getphysreq.offset >= minoffset);
+
 #if HIBFRAGMENT
 	    uint64_t rev;
 	    for (rev = 4096; rev <= getphysreq.length; rev += 4096)
@@ -422,6 +464,15 @@ kern_open_file_for_direct_io(const char * name,
             callback(callback_ref, getphysreq.offset, getphysreq.length);
 #endif
             physoffset += getphysreq.length;
+        }
+    }
+    if (ref->wbcranged)
+    {
+        uint32_t idx;
+        for (idx = 0; idx < wbc_range.count; idx++)
+        {
+            assert(wbc_range.extents[idx].offset >= minoffset);
+            callback(callback_ref, wbc_range.extents[idx].offset, wbc_range.extents[idx].length);
         }
     }
     callback(callback_ref, 0ULL, 0ULL);
@@ -529,15 +580,24 @@ out:
 
     if (error && ref)
     {
-	if (ref->vp)
-	{
-	    (void) kern_ioctl_file_extents(ref, _DKIOCCSUNPINEXTENT, 0, (ref->pinned && ref->cf) ? ref->filelength : 0);
-	    vnode_close(ref->vp, FWRITE, ref->ctx);
-	    ref->vp = NULLVP;
-	}
-	ref->ctx = NULL;
-	kfree(ref, sizeof(struct kern_direct_file_io_ref_t));
-	ref = NULL;
+        if (ref->vp)
+        {
+            (void) kern_ioctl_file_extents(ref, _DKIOCCSUNPINEXTENT, 0, (ref->pinned && ref->cf) ? ref->filelength : 0);
+
+            if (ref->frozen)
+            {
+                (void) VNOP_IOCTL(ref->vp, FSCTL_THAW_EXTENTS, NULL, 0, ref->ctx);
+            }
+            if (ref->wbcranged)
+            {
+                (void) do_ioctl(p1, p2, DKIOCAPFSRELEASEWBCRANGE, (caddr_t) NULL);
+            }
+            vnode_close(ref->vp, FWRITE, ref->ctx);
+            ref->vp = NULLVP;
+        }
+        ref->ctx = NULL;
+        kfree(ref, sizeof(struct kern_direct_file_io_ref_t));
+        ref = NULL;
     }
 
     return(ref);
@@ -586,6 +646,9 @@ kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref,
         void * p1;
         void * p2;
 
+        discard_offset = ((discard_offset + ref->blksize - 1) & ~(((off_t) ref->blksize) - 1));
+        discard_end    = ((discard_end)                       & ~(((off_t) ref->blksize) - 1));
+
         if (ref->vp->v_type == VREG)
         {
             p1 = &ref->device;
@@ -614,6 +677,15 @@ kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref,
         if (will_unmap)
         {
             (void) kern_ioctl_file_extents(ref, DKIOCUNMAP, discard_offset, (ref->cf) ? ref->filelength : discard_end);
+        }
+
+        if (ref->frozen)
+        {
+            (void) VNOP_IOCTL(ref->vp, FSCTL_THAW_EXTENTS, NULL, 0, ref->ctx);
+        }
+        if (ref->wbcranged)
+        {
+            (void) do_ioctl(p1, p2, DKIOCAPFSRELEASEWBCRANGE, (caddr_t) NULL);
         }
 
         if (addr && write_length)

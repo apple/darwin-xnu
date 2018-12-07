@@ -179,13 +179,15 @@ def GetASTSummary(ast):
         D - AST_DTRACE
         I - AST_TELEMETRY_IO
         E - AST_KEVENT
+        R - AST_REBALANCE
+        N - AST_UNQUIESCE
     """
     out_string = ""
     state = int(ast)
     thread_state_chars = {0x0:'', 0x1:'P', 0x2:'Q', 0x4:'U', 0x8:'H', 0x10:'Y', 0x20:'A',
                           0x40:'L', 0x80:'B', 0x100:'K', 0x200:'M',
                           0x1000:'G', 0x2000:'T', 0x4000:'T', 0x8000:'T', 0x10000:'S',
-                          0x20000: 'D', 0x40000: 'I', 0x80000: 'E'}
+                          0x20000: 'D', 0x40000: 'I', 0x80000: 'E', 0x100000: 'R', 0x200000: 'N'}
     state_str = ''
     mask = 0x1
     while mask <= 0x80000:
@@ -553,7 +555,7 @@ def ShowAllCoalitions(cmd_args=None):
 
 # Macro: showallthreadgroups
 
-@lldb_type_summary(['thread_group_t', 'thread_group *'])
+@lldb_type_summary(['struct thread_group *', 'thread_group *'])
 @header("{0: <20s} {1: <5s} {2: <16s} {3: <5s} {4: <8s} {5: <20s}".format("thread_group", "id", "name", "refc", "flags", "recommendation"))
 def GetThreadGroupSummary(tg):
     if unsigned(tg) == 0:
@@ -1500,7 +1502,7 @@ def GetProcessorSummary(processor):
             preemption_disable_str)
     return out_str   
 
-def GetLedgerEntrySummary(ledger_template, ledger, i):
+def GetLedgerEntrySummary(ledger_template, ledger, i, show_footprint_interval_max=False):
     """ Internal function to get internals of a ledger entry (*not* a ledger itself)
         params: ledger_template - value representing struct ledger_template_t for the task or thread
                 ledger - value representing struct ledger_entry *
@@ -1517,14 +1519,13 @@ def GetLedgerEntrySummary(ledger_template, ledger, i):
     out_str += "{: >32s} {:<2d}:".format(ledger_template.lt_entries[i].et_key, i)
     out_str += "{: >15d} ".format(unsigned(ledger.le_credit) - unsigned(ledger.le_debit))
     if (ledger.le_flags & lf_tracking_max):
-        out_str += "{:9d} {:5d} ".format(ledger._le.le_maxtracking.le_peaks[0].le_max, now - unsigned(ledger._le.le_maxtracking.le_peaks[0].le_time))
+        if (show_footprint_interval_max):
+            out_str += "{:12d} ".format(ledger._le._le_max.le_interval_max)
+        out_str += "{:14d} ".format(ledger._le._le_max.le_lifetime_max)
     else:
-        out_str += "        -     -"
-
-    if (ledger.le_flags & lf_tracking_max):
-        out_str += "{:12d} ".format(ledger._le.le_maxtracking.le_lifetime_max)
-    else:
-        out_str += "             -"
+        if (show_footprint_interval_max):
+            out_str += "           - "
+        out_str += "             - "
     out_str += "{:12d} {:12d} ".format(unsigned(ledger.le_credit), unsigned(ledger.le_debit))
     if (unsigned(ledger.le_limit) != ledger_limit_infinity):
         out_str += "{:12d} ".format(unsigned(ledger.le_limit))
@@ -1569,11 +1570,7 @@ def GetThreadLedgerSummary(thread_val):
             i = i + 1
     return out_str
 
-@header("{0: <15s} {1: >16s} {2: <2s} {3: >15s} {4: >9s} {5: >6s} {6: >12s} {7: >11s} \
-    {8: >7s} {9: >13s}   {10: <15s} {11: <8s} {12: <9s} {13: <6s} {14: >6s}".format(
-    "task [thread]", "entry", "#", "balance", "peakA", "(age)", "lifemax", "credit",
-     "debit", "limit", "refill period", "lim pct", "warn pct", "over?", "flags"))
-def GetTaskLedgers(task_val):
+def GetTaskLedgers(task_val, show_footprint_interval_max=False):
     """ Internal function to get summary of ledger entries from the task and its threads
         params: task_val - value representing struct task *
         return: str - formatted output information for ledger entries of the input task
@@ -1588,7 +1585,7 @@ def GetTaskLedgers(task_val):
     else:
         out_str += "Invalid process:\n"
     while i != task_ledgerp.l_template.lt_cnt:
-        out_str += GetLedgerEntrySummary(kern.globals.task_ledger_template, task_ledgerp.l_entries[i], i)
+        out_str += GetLedgerEntrySummary(kern.globals.task_ledger_template, task_ledgerp.l_entries[i], i, show_footprint_interval_max)
         i = i + 1
 
     # Now walk threads
@@ -1599,11 +1596,14 @@ def GetTaskLedgers(task_val):
 
 # Macro: showtaskledgers
 
-@lldb_command('showtaskledgers', 'F:') 
+@lldb_command('showtaskledgers', 'F:I') 
 def ShowTaskLedgers(cmd_args=None, cmd_options={}):
     """  Routine to print a summary  of ledger entries for the task and all of its threads
-         Usage: showtaskledgers <address of task>
-         or   : showtaskledgers -F <name of task>
+         or   : showtaskledgers [ -I ] [ -F ] <task>
+         options:
+            -I: show footprint interval max (DEV/DEBUG only)
+            -F: specify task via name instead of address
+        -
     """
     if "-F" in cmd_options:
         task_list = FindTasksByName(cmd_options["-F"])
@@ -1614,24 +1614,34 @@ def ShowTaskLedgers(cmd_args=None, cmd_options={}):
     
     if not cmd_args:
         raise ArgumentError("No arguments passed.")
+    show_footprint_interval_max = False
+    if "-I" in cmd_options:
+        show_footprint_interval_max = True
     tval = kern.GetValueFromAddress(cmd_args[0], 'task *')
     if not tval:
         raise ArgumentError("unknown arguments: %r" %cmd_args)
-    print GetTaskLedgers.header
-    print GetTaskLedgers(tval)
+    if (show_footprint_interval_max):
+        print "{0: <15s} {1: >16s} {2: <2s} {3: >15s} {4: >12s} {5: >14s} {6: >12s} {7: >12s} {8: >12s}   {9: <15s} {10: <8s} {11: <9s} {12: <6s} {13: >6s}".format(
+        "task [thread]", "entry", "#", "balance", "intrvl_max", "lifetime_max", "credit",
+        "debit", "limit", "refill period", "lim pct", "warn pct", "over?", "flags")
+    else:
+        print "{0: <15s} {1: >16s} {2: <2s} {3: >15s} {4: >14s} {5: >12s} {6: >12s} {7: >12s}   {8: <15s} {9: <8s} {10: <9s} {11: <6s} {12: >6s}".format(
+        "task [thread]", "entry", "#", "balance", "lifetime_max", "credit",
+        "debit", "limit", "refill period", "lim pct", "warn pct", "over?", "flags")
+    print GetTaskLedgers(tval, show_footprint_interval_max)
 
 # EndMacro: showtaskledgers
 
 # Macro: showalltaskledgers
 
 @lldb_command('showalltaskledgers') 
-def ShowAllTaskLedgers(cmd_args=None):
+def ShowAllTaskLedgers(cmd_args=None, cmd_options={}):
     """  Routine to print a summary  of ledger entries for all tasks and respective threads
          Usage: showalltaskledgers
     """
     for t in kern.tasks:
         task_val = unsigned(t)
-        ShowTaskLedgers([task_val])
+        ShowTaskLedgers([task_val], cmd_options=cmd_options)
     
 # EndMacro: showalltaskledgers
 

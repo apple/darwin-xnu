@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -71,6 +71,7 @@
 #include <net/kpi_protocol.h>
 
 #include <kern/locks.h>
+#include <kern/zalloc.h>
 
 #ifdef INET
 #include <netinet/in.h>
@@ -106,14 +107,24 @@ static int if_fake_debug = 0;
 SYSCTL_INT(_net_link_fake, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&if_fake_debug, 0, "Fake interface debug logs");
 
+static int if_fake_wmm_mode = 0;
+SYSCTL_INT(_net_link_fake, OID_AUTO, wmm_mode, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&if_fake_wmm_mode, 0, "Fake interface in 802.11 WMM mode");
+
 /**
  ** virtual ethernet structures, types
  **/
+
+#define	IFF_NUM_TX_RINGS_WMM_MODE	4
+#define	IFF_NUM_RX_RINGS_WMM_MODE	1
+#define	IFF_MAX_TX_RINGS	IFF_NUM_TX_RINGS_WMM_MODE
+#define	IFF_MAX_RX_RINGS	IFF_NUM_RX_RINGS_WMM_MODE
 
 typedef uint16_t	iff_flags_t;
 #define IFF_FLAGS_HWCSUM		0x0001
 #define IFF_FLAGS_BSD_MODE		0x0002
 #define IFF_FLAGS_DETACHING		0x0004
+#define	IFF_FLAGS_WMM_MODE		0x0008
 
 
 struct if_fake {
@@ -169,6 +180,9 @@ feth_enable_dequeue_stall(ifnet_t ifp, uint32_t enable)
 	return (error);
 }
 
+
+#define	FETH_MAXUNIT 	IF_MAXUNIT
+#define	FETH_ZONE_MAX_ELEM	MIN(IFNETS_MAX, FETH_MAXUNIT)
 #define M_FAKE 		M_DEVBUF
 
 static	int feth_clone_create(struct if_clone *, u_int32_t, void *);
@@ -183,10 +197,12 @@ static	void feth_free(if_fake_ref fakeif);
 
 static struct if_clone
 feth_cloner = IF_CLONE_INITIALIZER(FAKE_ETHER_NAME,
-				   feth_clone_create, 
-				   feth_clone_destroy, 
-				   0, 
-				   IF_MAXUNIT);
+    feth_clone_create,
+    feth_clone_destroy,
+    0,
+    FETH_MAXUNIT,
+    FETH_ZONE_MAX_ELEM,
+    sizeof(struct if_fake));
 static	void interface_link_event(ifnet_t ifp, u_int32_t event_code);
 
 /* some media words to pretend to be ethernet */
@@ -280,7 +296,7 @@ feth_free(if_fake_ref fakeif)
 	}
 
 	FETH_DPRINTF("%s\n", fakeif->iff_name);
-	FREE(fakeif, M_FAKE);
+	if_clone_softc_deallocate(&feth_cloner, fakeif);
 }
 
 static void
@@ -363,7 +379,7 @@ feth_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	ifnet_t				ifp;
 	uint8_t				mac_address[ETHER_ADDR_LEN];
 
-	fakeif = _MALLOC(sizeof(struct if_fake), M_FAKE, M_WAITOK | M_ZERO);
+	fakeif = if_clone_softc_allocate(&feth_cloner);
 	if (fakeif == NULL) {
 		return ENOBUFS;
 	}

@@ -499,3 +499,5 @@ __ZTV8IOSyncer
 __ZTVN8IOSyncer9MetaClassE
 _ev_try_lock
 _ev_unlock
+
+__ZN9IOService23addMatchingNotificationEPK8OSSymbolP12OSDictionaryiU13block_pointerFbPS_P10IONotifierE

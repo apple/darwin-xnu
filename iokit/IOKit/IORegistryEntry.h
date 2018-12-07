@@ -57,6 +57,14 @@ enum {
     kIORegistryIterateParents       = 0x00000002,
 };
 
+#ifdef KERNEL_PRIVATE
+enum
+{
+	kIORegistryEntryIndexedPropertyCLPC = 0,
+	kIORegistryEntryIndexedPropertyCount,
+};
+#endif /* KERNEL_PRIVATE */
+
 /*! @class IORegistryEntry : public OSObject
     @abstract The base class for all objects in the registry.
     @discussion The IORegistryEntry base class provides functions for describing graphs of connected registry entries, each with a dictionary-based property table. Entries may be connected in different planes, with differing topologies. Access to the registry is protected against multiple threads. Inside the kernel planes are specified with plane objects and are published by the creator - IOService exports the gIOServicePlane plane object for example. Non kernel clients specify planes by their name.
@@ -279,6 +287,11 @@ public:
     @result true on success or false on a resource failure. */
 
     virtual bool setProperty(const OSSymbol * aKey, OSObject * anObject);
+
+#ifdef KERNEL_PRIVATE
+    OSObject * setIndexedProperty(uint32_t index, OSObject * anObject);
+    OSObject * getIndexedProperty(uint32_t index) const;
+#endif /* KERNEL_PRIVATE */
 
 /*! @function setProperty
     @abstract Synchronized method to add a property to a registry entry's property table.

@@ -23,20 +23,6 @@ or the current thread.  The policy of the I/O of the given type
 can be get or set for the given
 .Fa scope .
 .Pp
-The I/O type is specified in the argument
-.Fa iotype .
-The only currently supported I/O type is 
-.Dv IOPOL_TYPE_DISK ,
-which can mean either the I/O policy for I/Os to local disks or to
-remote volumes.
-I/Os to local disks are I/Os sent to the media without going through a network,
-including I/Os to internal and external hard drives, optical media in internal
-and external drives, flash drives, floppy disks, ram disks, and mounted disk
-images which reside on these media.
-I/Os to remote volumes are I/Os that require network activity to complete the
-operation.
-This is currently only supported for remote volumes mounted by SMB or AFP.
-.Pp
 The scope that the I/O policy takes effect is specified in the argument
 .Fa scope
 as follows:
@@ -55,8 +41,24 @@ the argument
 .Fa policy
 is an integer which contains the new I/O policy to be set for the given I/O
 type and scope.
-.Fa Policy
-can have the following values:
+.Pp
+The I/O type is specified in the argument
+.Fa iotype .
+The currently supported I/O types are as follows:
+.Bl -tag -width F1
+.It IOPOL_TYPE_DISK
+This can mean either the I/O policy for I/Os to local disks or to
+remote volumes.
+I/Os to local disks are I/Os sent to the media without going through a network,
+including I/Os to internal and external hard drives, optical media in internal
+and external drives, flash drives, floppy disks, ram disks, and mounted disk
+images which reside on these media.
+I/Os to remote volumes are I/Os that require network activity to complete the
+operation.
+This is currently only supported for remote volumes mounted by SMB or AFP.
+.Pp
+IOPOL_TYPE_DISK supports following values for
+.Fa policy:
 .Bl -tag -width IOPOL_PASSIVEXXX
 .It IOPOL_IMPORTANT
 I/Os with the IMPORTANT policy are unrestricted.  This policy should only be
@@ -102,6 +104,28 @@ broken into smaller requests which are then issued serially.
 The I/O policy of a newly created process is inherited from its parent
 process.  The I/O policy of an I/O request is the lowest priority
 policy of the current thread and the current process.
+.It IOPOL_TYPE_VFS_ATIME_UPDATES
+This
+.Fa iotype
+lets users change the access time updates policy for the files accessed
+by the current thread or process.
+.Pp
+IOPOL_TYPE_VFS_ATIME_UPDATES supports following values for
+.Fa policy:
+.Bl -tag -width IOPOL_ATIME_UPDATES_DEFAULT
+.It IOPOL_ATIME_UPDATES_OFF
+The ATIME_UPDATES_OFF policy turns off access time updation for files accessed.
+This policy is useful for applications which access a large number of files
+to reduce the metadata I/O writes.
+.It IOPOL_ATIME_UPDATES_DEFAULT
+This is the default I/O policy for new threads.
+.El
+.El
+.Pp
+Like with IOPOL_TYPE_DISK, the I/O policy of a newly created process is
+inherited from its parent process.  Access time updates are turned off if the
+I/O policy is set to IOPOL_ATIME_UPDATES_OFF for the current thread or current
+process.
 .Sh RETURN VALUES
 The
 .Fn getiopolicy_np

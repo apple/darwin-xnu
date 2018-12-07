@@ -118,6 +118,8 @@ public:
     IOReturn getPageCounts(IOByteCount * residentPageCount,
                            IOByteCount * dirtyPageCount);
 
+    virtual uint64_t getPreparationID( void ) APPLE_KEXT_OVERRIDE;
+
 #define IOMULTIMEMORYDESCRIPTOR_SUPPORTS_GETPAGECOUNTS	1
 
 private:

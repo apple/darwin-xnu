@@ -112,6 +112,7 @@
 #include <netinet/in_var.h>
 #include <netinet/in_tclass.h>
 #include <netinet/ip_var.h>
+#include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet/ip_var.h>
 #include <netinet/tcp.h>
@@ -502,9 +503,12 @@ if_clone_create(char *name, int len, void *params)
 	if (unit > ifc->ifc_maxunit)
 		return (ENXIO);
 
+	lck_mtx_lock(&ifc->ifc_mutex);
 	err = (*ifc->ifc_create)(ifc, unit, params);
-	if (err != 0)
+	if (err != 0) {
+		lck_mtx_unlock(&ifc->ifc_mutex);
 		return (err);
+	}
 
 	if (!wildcard) {
 		bytoff = unit >> 3;
@@ -533,6 +537,7 @@ if_clone_create(char *name, int len, void *params)
 		}
 
 	}
+	lck_mtx_unlock(&ifc->ifc_mutex);
 
 	return (0);
 }
@@ -543,36 +548,55 @@ if_clone_create(char *name, int len, void *params)
 static int
 if_clone_destroy(const char *name)
 {
-	struct if_clone *ifc;
-	struct ifnet *ifp;
+	struct if_clone *ifc = NULL;
+	struct ifnet *ifp = NULL;
 	int bytoff, bitoff;
 	u_int32_t unit;
+	int error = 0;
 
 	ifc = if_clone_lookup(name, &unit);
-	if (ifc == NULL)
-		return (EINVAL);
 
-	if (unit < ifc->ifc_minifs)
-		return (EINVAL);
+	if (ifc == NULL) {
+		error = EINVAL;
+		goto done;
+	}
 
-	ifp = ifunit(name);
-	if (ifp == NULL)
-		return (ENXIO);
+	if (unit < ifc->ifc_minifs) {
+		error = EINVAL;
+		goto done;
+	}
 
-	if (ifc->ifc_destroy == NULL)
-		return (EOPNOTSUPP);
+	ifp = ifunit_ref(name);
+	if (ifp == NULL) {
+		error = ENXIO;
+		goto done;
+	}
 
-	(*ifc->ifc_destroy)(ifp);
+	if (ifc->ifc_destroy == NULL) {
+		error = EOPNOTSUPP;
+		goto done;
+	}
 
-	/*
-	 * Compute offset in the bitmap and deallocate the unit.
-	 */
+	lck_mtx_lock(&ifc->ifc_mutex);
+	error = (*ifc->ifc_destroy)(ifp);
+
+	if (error) {
+		lck_mtx_unlock(&ifc->ifc_mutex);
+		goto done;
+	}
+
+	/* Compute offset in the bitmap and deallocate the unit. */
 	bytoff = unit >> 3;
 	bitoff = unit - (bytoff << 3);
 	KASSERT((ifc->ifc_units[bytoff] & (1 << bitoff)) != 0,
 	    ("%s: bit is already cleared", __func__));
 	ifc->ifc_units[bytoff] &= ~(1 << bitoff);
-	return (0);
+	lck_mtx_unlock(&ifc->ifc_mutex);
+
+done:
+	if (ifp != NULL)
+		ifnet_decr_iorefcnt(ifp);
+	return (error);
 }
 
 /*
@@ -617,6 +641,28 @@ found_name:
 	return (ifc);
 }
 
+void *
+if_clone_softc_allocate(const struct if_clone *ifc)
+{
+	void *p_clone = NULL;
+
+	VERIFY(ifc != NULL);
+
+	p_clone = zalloc(ifc->ifc_zone);
+	if (p_clone != NULL)
+		bzero(p_clone, ifc->ifc_softc_size);
+
+	return (p_clone);
+}
+
+void
+if_clone_softc_deallocate(const struct if_clone *ifc, void *p_softc)
+{
+	VERIFY(ifc != NULL && p_softc != NULL);
+	bzero(p_softc, ifc->ifc_softc_size);
+	zfree(ifc->ifc_zone, p_softc);
+}
+
 /*
  * Register a network interface cloner.
  */
@@ -643,6 +689,18 @@ if_clone_attach(struct if_clone *ifc)
 	if (ifc->ifc_units == NULL)
 		return (ENOBUFS);
 	ifc->ifc_bmlen = len;
+	lck_mtx_init(&ifc->ifc_mutex, ifnet_lock_group, ifnet_lock_attr);
+
+	if (ifc->ifc_softc_size != 0) {
+		ifc->ifc_zone = zinit(ifc->ifc_softc_size, 
+		    ifc->ifc_zone_max_elem * ifc->ifc_softc_size, 0, ifc->ifc_name);
+		if (ifc->ifc_zone == NULL) {
+			FREE(ifc->ifc_units, M_CLONE);
+			return (ENOBUFS);
+		}
+		zone_change(ifc->ifc_zone, Z_EXPAND, TRUE);
+		zone_change(ifc->ifc_zone, Z_CALLERACCT, FALSE);
+	}
 
 	LIST_INSERT_HEAD(&if_cloners, ifc, ifc_list);
 	if_cloners_count++;
@@ -670,6 +728,10 @@ if_clone_detach(struct if_clone *ifc)
 {
 	LIST_REMOVE(ifc, ifc_list);
 	FREE(ifc->ifc_units, M_CLONE);
+	if (ifc->ifc_softc_size != 0)
+		zdestroy(ifc->ifc_zone);
+
+	lck_mtx_destroy(&ifc->ifc_mutex, ifnet_lock_group);
 	if_cloners_count--;
 }
 
@@ -728,6 +790,8 @@ if_functional_type(struct ifnet *ifp, bool exclude_delegate)
 			ret = IFRTYPE_FUNCTIONAL_INTCOPROC;
 		} else if ((exclude_delegate &&
 		    (ifp->if_family == IFNET_FAMILY_ETHERNET ||
+		    ifp->if_family == IFNET_FAMILY_BOND ||
+		    ifp->if_family == IFNET_FAMILY_VLAN ||
 		    ifp->if_family == IFNET_FAMILY_FIREWIRE)) ||
 		    (!exclude_delegate && IFNET_IS_WIRED(ifp))) {
 			ret = IFRTYPE_FUNCTIONAL_WIRED;
@@ -2235,50 +2299,6 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 		break;
 	}
 
-	case SIOCGIFORDER: {		/* struct if_order */
-		struct if_order *ifo = (struct if_order *)(void *)data;
-		u_int32_t ordered_count = *((volatile u_int32_t *)&if_ordered_count);
-
-		if (ifo->ifo_count == 0 ||
-			ordered_count == 0) {
-			ifo->ifo_count = 0;
-		} else if (ifo->ifo_ordered_indices != USER_ADDR_NULL) {
-			u_int32_t count_to_copy =
-			    MIN(ordered_count, ifo->ifo_count);
-			size_t length =	(count_to_copy * sizeof(u_int32_t));
-			struct ifnet *ifp = NULL;
-			u_int32_t cursor = 0;
-
-			ordered_indices = _MALLOC(length, M_NECP, M_WAITOK | M_ZERO);
-			if (ordered_indices == NULL) {
-				error = ENOMEM;
-				break;
-			}
-
-			ifnet_head_lock_shared();
-			TAILQ_FOREACH(ifp, &ifnet_ordered_head, if_ordered_link) {
-				if (cursor >= count_to_copy ||
-				    cursor >= if_ordered_count) {
-					break;
-				}
-				ordered_indices[cursor] = ifp->if_index;
-				cursor++;
-			}
-			ifnet_head_done();
-
-			/* We might have parsed less than the original length
-			 * because the list could have changed.
-			 */
-			length = cursor * sizeof(u_int32_t);
-			ifo->ifo_count = cursor;
-			error = copyout(ordered_indices,
-			    ifo->ifo_ordered_indices, length);
-		} else {
-			error = EINVAL;
-		}
-		break;
-	}
-
 	default: {
 		VERIFY(0);
 		/* NOTREACHED */
@@ -2342,15 +2362,49 @@ ifioctl_nat64prefix(struct ifnet *ifp, u_long cmd, caddr_t data)
 	switch (cmd) {
 	case SIOCSIFNAT64PREFIX:		/* struct if_nat64req */
 		error = ifnet_set_nat64prefix(ifp, ifnat64->ifnat64_prefixes);
+		if (error != 0)
+			ip6stat.ip6s_clat464_plat64_pfx_setfail++;
 		break;
 
 	case SIOCGIFNAT64PREFIX:		/* struct if_nat64req */
 		error = ifnet_get_nat64prefix(ifp, ifnat64->ifnat64_prefixes);
+		if (error != 0)
+			ip6stat.ip6s_clat464_plat64_pfx_getfail++;
 		break;
 
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+	}
+
+	return (error);
+}
+
+static __attribute__((noinline)) int
+ifioctl_clat46addr(struct ifnet *ifp, u_long cmd, caddr_t data)
+{
+	struct if_clat46req *ifclat46 = (struct if_clat46req *)(void *)data;
+	struct in6_ifaddr *ia6_clat = NULL;
+	int error = 0;
+
+	VERIFY(ifp != NULL);
+
+	switch (cmd) {
+		case SIOCGIFCLAT46ADDR:
+			ia6_clat = in6ifa_ifpwithflag(ifp, IN6_IFF_CLAT46);
+			if (ia6_clat == NULL) {
+				error = ENOENT;
+				break;
+			}
+
+			bcopy(&ia6_clat->ia_addr.sin6_addr, &ifclat46->ifclat46_addr.v6_address,
+			    sizeof(ifclat46->ifclat46_addr.v6_address));
+			ifclat46->ifclat46_addr.v6_prefixlen = ia6_clat->ia_plen;
+			IFA_REMREF(&ia6_clat->ia_ifa);
+			break;
+		default:
+			VERIFY(0);
+			/* NOTREACHED */
 	}
 
 	return (error);
@@ -2380,7 +2434,7 @@ ifioctl_get_protolist(struct ifnet *ifp, u_int32_t * ret_count,
 	if (count == 0) {
 		goto done;
 	}
-	list = _MALLOC(count * sizeof(*list), M_TEMP, M_WAITOK);
+	list = _MALLOC(count * sizeof(*list), M_TEMP, M_WAITOK | M_ZERO);
 	if (list == NULL) {
 		error = ENOMEM;
 		goto done;
@@ -2567,7 +2621,6 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		goto done;
 
 	case SIOCSIFORDER:			/* struct if_order */
-	case SIOCGIFORDER:		/* struct if_order */
 		error = ifioctl_iforder(cmd, data);
 		goto done;
 
@@ -2652,6 +2705,8 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCGQOSMARKINGENABLED:		/* struct ifreq */
 	case SIOCSIFLOWINTERNET:		/* struct ifreq */
 	case SIOCGIFLOWINTERNET:		/* struct ifreq */
+	case SIOCGIFLOWPOWER:			/* struct ifreq */
+	case SIOCSIFLOWPOWER:			/* struct ifreq */
 	{			/* struct ifreq */
 		struct ifreq ifr;
 		bcopy(data, &ifr, sizeof (ifr));
@@ -2851,9 +2906,13 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		break;
 
 #if INET6
-	case SIOCSIFNAT64PREFIX:		/* struct if_nsreq */
-	case SIOCGIFNAT64PREFIX:		/* struct if_nsreq */
+	case SIOCSIFNAT64PREFIX:		/* struct if_nat64req */
+	case SIOCGIFNAT64PREFIX:		/* struct if_nat64req */
 		error = ifioctl_nat64prefix(ifp, cmd, data);
+		break;
+
+	case SIOCGIFCLAT46ADDR:			/* struct if_clat46req */
+		error = ifioctl_clat46addr(ifp, cmd, data);
 		break;
 #endif
 
@@ -3581,6 +3640,17 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 			ifr->ifr_low_internet |=
 			    IFRTYPE_LOW_INTERNET_ENABLE_DL;
 		ifnet_lock_done(ifp);
+		break;
+	case SIOCGIFLOWPOWER:
+		ifr->ifr_low_power_mode =
+		    !!(ifp->if_xflags & IFXF_LOW_POWER);
+		break;
+	case SIOCSIFLOWPOWER:
+#if (DEVELOPMENT || DEBUG)
+		error = if_set_low_power(ifp, !!(ifr->ifr_low_power_mode));
+#else /* DEVELOPMENT || DEBUG */
+		error = EOPNOTSUPP;
+#endif /* DEVELOPMENT || DEBUG */
 		break;
 	default:
 		VERIFY(0);
@@ -4603,8 +4673,15 @@ if_rtmtu(struct radix_node *rn, void *arg)
 		 * has not been locked (RTV_MTU is not set) and
 		 * if it was non-zero to begin with.
 		 */
-		if (!(rt->rt_rmx.rmx_locks & RTV_MTU) && rt->rt_rmx.rmx_mtu)
+		if (!(rt->rt_rmx.rmx_locks & RTV_MTU) && rt->rt_rmx.rmx_mtu) {
 			rt->rt_rmx.rmx_mtu = ifp->if_mtu;
+			if (rt_key(rt)->sa_family == AF_INET &&
+			    INTF_ADJUST_MTU_FOR_CLAT46(ifp)) {
+				rt->rt_rmx.rmx_mtu = IN6_LINKMTU(ifp);
+				/* Further adjust the size for CLAT46 expansion */
+				rt->rt_rmx.rmx_mtu -= CLAT46_HDR_EXPANSION_OVERHD;
+			}
+		}
 	}
 	RT_UNLOCK(rt);
 
@@ -5134,9 +5211,6 @@ ifioctl_cassert(void)
 	case SIOCGIFAGENTIDS64:
 	case SIOCGIFAGENTDATA32:
 	case SIOCGIFAGENTDATA64:
-	case SIOCGIFAGENTLIST32:
-	case SIOCGIFAGENTLIST64:
-
 
 	case SIOCSIFINTERFACESTATE:
 	case SIOCGIFINTERFACESTATE:
@@ -5150,13 +5224,37 @@ ifioctl_cassert(void)
 	case SIOCGECNMODE:
 	case SIOCSECNMODE:
 
+	case SIOCSIFORDER:
+
 	case SIOCSQOSMARKINGMODE:
 	case SIOCSQOSMARKINGENABLED:
 	case SIOCGQOSMARKINGMODE:
 	case SIOCGQOSMARKINGENABLED:
 
+	case SIOCSIFTIMESTAMPENABLE:
+	case SIOCSIFTIMESTAMPDISABLE:
+	case SIOCGIFTIMESTAMPENABLED:
+
+	case SIOCSIFDISABLEOUTPUT:
+
+	case SIOCGIFAGENTLIST32:
+	case SIOCGIFAGENTLIST64:
+
+	case SIOCSIFLOWINTERNET:
+	case SIOCGIFLOWINTERNET:
+
+#if INET6
+	case SIOCGIFNAT64PREFIX:
+	case SIOCSIFNAT64PREFIX:
+
+	case SIOCGIFCLAT46ADDR:
+#endif /* INET6 */
+
 	case SIOCGIFPROTOLIST32:
 	case SIOCGIFPROTOLIST64:
+
+	case SIOCGIFLOWPOWER:
+	case SIOCSIFLOWPOWER:
 		;
 	}
 }

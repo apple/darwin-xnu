@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -339,6 +339,32 @@ struct	ip6stat {
 
 	/* NECP policy related drop */
 	u_quad_t ip6s_necp_policy_drop;
+
+	/* CLAT46 stats */
+	u_quad_t ip6s_clat464_in_tooshort_drop;
+	u_quad_t ip6s_clat464_in_nov6addr_drop;
+	u_quad_t ip6s_clat464_in_nov4addr_drop;
+	u_quad_t ip6s_clat464_in_v4synthfail_drop;
+	u_quad_t ip6s_clat464_in_64transfail_drop;
+	u_quad_t ip6s_clat464_in_64proto_transfail_drop;
+	u_quad_t ip6s_clat464_in_64frag_transfail_drop;
+	u_quad_t ip6s_clat464_in_invalpbuf_drop;
+	u_quad_t ip6s_clat464_in_success;
+	u_quad_t ip6s_clat464_in_drop;
+	u_quad_t ip6s_clat464_in_v4_drop;
+
+	u_quad_t ip6s_clat464_out_nov6addr_drop;
+	u_quad_t ip6s_clat464_out_v6synthfail_drop;
+	u_quad_t ip6s_clat464_out_46transfail_drop;
+	u_quad_t ip6s_clat464_out_46proto_transfail_drop;
+	u_quad_t ip6s_clat464_out_46frag_transfail_drop;
+	u_quad_t ip6s_clat464_out_invalpbuf_drop;
+	u_quad_t ip6s_clat464_out_success;
+	u_quad_t ip6s_clat464_out_drop;
+
+	u_quad_t ip6s_clat464_v6addr_conffail;
+	u_quad_t ip6s_clat464_plat64_pfx_setfail;
+	u_quad_t ip6s_clat464_plat64_pfx_getfail;
 };
 
 enum ip6s_sources_rule_index {
@@ -421,6 +447,7 @@ struct ip6_out_args {
 #define	IP6OAF_AWDL_UNRESTRICTED 0x00000040	/* privileged AWDL */
 #define	IP6OAF_QOSMARKING_ALLOWED 0x00000080	/* policy allows Fastlane DSCP marking */
 #define IP6OAF_INTCOPROC_ALLOWED 0x00000100	/* access to internal coproc interfaces */
+#define	IP6OAF_NO_LOW_POWER	0x00000200	/* skip low power */
 	u_int32_t	ip6oa_retflags;	/* IP6OARF return flags (see below) */
 #define	IP6OARF_IFDENIED	0x00000001	/* denied access to interface */
 	int		ip6oa_sotc;		/* traffic class for Fastlane DSCP mapping */

@@ -148,6 +148,66 @@ void OSMetaClassBase::_RESERVEDOSMetaClassBase6()
     { panic("OSMetaClassBase::_RESERVEDOSMetaClassBase%d called.", 6); }
 #endif
 
+
+/*********************************************************************
+*********************************************************************/
+
+#if defined(__arm__) || defined(__arm64__)
+
+
+
+/*
+IHI0059A "C++ Application Binary Interface Standard for the ARM 64 - bit Architecture":
+
+3.2.1 Representation of pointer to member function The generic C++ ABI [GC++ABI]
+specifies that a pointer to member function is a pair of words <ptr, adj>. The
+least significant bit of ptr discriminates between (0) the address of a non-
+virtual member function and (1) the offset in the class's virtual table of the
+address of a virtual function. This encoding cannot work for the AArch64
+instruction set where the architecture reserves all bits of code addresses. This
+ABI specifies that adj contains twice the this adjustment, plus 1 if the member
+function is virtual. The least significant bit of adj then makes exactly the
+same discrimination as the least significant bit of ptr does for Itanium. A
+pointer to member function is NULL when ptr = 0 and the least significant bit of
+adj is zero.
+*/
+
+OSMetaClassBase::_ptf_t
+OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
+{
+	typedef long int ptrdiff_t;
+    struct ptmf_t {
+        _ptf_t fPFN;
+        ptrdiff_t delta;
+    };
+    union {
+        void (OSMetaClassBase::*fIn)(void);
+        struct ptmf_t pTMF;
+    } map;
+    _ptf_t pfn;
+
+    map.fIn = func;
+    pfn     = map.pTMF.fPFN;
+
+    if (map.pTMF.delta & 1) {
+        // virtual
+        union {
+            const OSMetaClassBase *fObj;
+            _ptf_t **vtablep;
+        } u;
+        u.fObj = self;
+
+        // Virtual member function so dereference table
+        pfn = *(_ptf_t *)(((uintptr_t)*u.vtablep) + (uintptr_t)pfn);
+        return pfn;
+
+    } else {
+        // Not virtual, i.e. plain member func
+        return pfn;
+    }
+}
+
+#endif /* defined(__arm__) || defined(__arm64__) */
 /*********************************************************************
 * These used to be inline in the header but gcc didn't believe us
 * Now we MUST pull the inline out at least until the compiler is

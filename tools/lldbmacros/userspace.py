@@ -195,7 +195,6 @@ def PrintUserspaceData(cmd_args=None, cmd_options={}):
 
     return True
 
-
 @lldb_command('showtaskuserargs')
 def ShowTaskUserArgs(cmd_args=None, cmd_options={}):
     """ Read the process argv, env, and apple strings from the user stack
@@ -208,8 +207,9 @@ def ShowTaskUserArgs(cmd_args=None, cmd_options={}):
 
     task = kern.GetValueFromAddress(cmd_args[0], 'task *')
     proc = Cast(task.bsd_info, 'proc *')
+    ptrsize = 8 if int(task.t_flags) & 0x1 else 4
 
-    format_string = "Q" if kern.ptrsize == 8 else "I"
+    format_string = "Q" if ptrsize == 8 else "I"
 
     string_area_size = proc.p_argslen
     string_area_addr = proc.user_stack - string_area_size
@@ -220,7 +220,7 @@ def ShowTaskUserArgs(cmd_args=None, cmd_options={}):
         return False
 
     i = 0
-    pos = string_area_addr - kern.ptrsize
+    pos = string_area_addr - ptrsize
 
     for name in ["apple", "env", "argv"] :
         while True:
@@ -229,9 +229,9 @@ def ShowTaskUserArgs(cmd_args=None, cmd_options={}):
                     break
                 i += 1
 
-            pos -= kern.ptrsize
+            pos -= ptrsize
 
-            user_data_string = GetUserDataAsString(task, pos, kern.ptrsize)
+            user_data_string = GetUserDataAsString(task, pos, ptrsize)
             ptr = struct.unpack(format_string, user_data_string)[0]          
 
             if ptr == 0:

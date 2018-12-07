@@ -19,19 +19,23 @@
 
 #define ARM64_REG_HID1						S3_0_c15_c1_0
 #define ARM64_REG_HID1_disCmpBrFusion				(1<<14)
+#define ARM64_REG_HID1_rccForceAllIexL3ClksOn			(1<<23)
 #define ARM64_REG_HID1_rccDisStallInactiveIexCtl		(1<<24)
 #define ARM64_REG_HID1_disLspFlushWithContextSwitch		(1<<25)
 #define ARM64_REG_HID1_disAESFuseAcrossGrp			(1<<44)
+#define ARM64_REG_HID1_enaBrKillLimit				(1ULL << 60)
 
 #define ARM64_REG_HID2						S3_0_c15_c2_0
 #define ARM64_REG_HID2_disMMUmtlbPrefetch			(1<<13)
 
 #define ARM64_REG_HID3						S3_0_c15_c3_0
-#define ARM64_REG_HID3_DisDcZvaCmdOnly			(1<<25)
+#define ARM64_REG_HID3_DisDcZvaCmdOnly				(1<<25)
 #define ARM64_REG_HID3_DisXmonSnpEvictTriggerL2StarvationMode	(1<<54)
+#define ARM64_REG_HID3_DisColorOpt				(1<<2)
 
 #define ARM64_REG_EHID3						S3_0_c15_c3_1
-#define ARM64_REG_EHID3_DisDcZvaCmdOnly			(1<<25)
+#define ARM64_REG_EHID3_DisColorOpt				(1<<2)
+#define ARM64_REG_EHID3_DisDcZvaCmdOnly				(1<<25)
 
 #define ARM64_REG_HID4						S3_0_c15_c4_0
 #define ARM64_REG_EHID4						S3_0_c15_c4_1
@@ -45,6 +49,7 @@
 #define ARM64_REG_HID5_DisHwpLd					(1<<44)
 #define ARM64_REG_HID5_DisHwpSt					(1<<45)
 #define ARM64_REG_HID5_DisFullLineWr				(1ULL << 57)
+#define ARM64_REG_HID5_EnableDnFIFORdStall			(1ULL << 54)
 #define ARM64_REG_HID5_CrdEdbSnpRsvd_mask			(3ULL << 14)
 #define ARM64_REG_HID5_CrdEdbSnpRsvd_VALUE			(2ULL << 14)
 
@@ -70,11 +75,15 @@
 #define ARM64_REG_HID10						S3_0_c15_c10_0
 #define ARM64_REG_HID10_DisHwpGups				(1ULL << 0)
 
+#define ARM64_REG_EHID10						S3_0_c15_c10_1
+#define ARM64_REG_EHID10_rccDisPwrSavePrfClkOff	(1ULL << 19)
+
 #if defined(APPLECYCLONE) || defined(APPLETYPHOON) || defined(APPLETWISTER)
 #define ARM64_REG_HID11						S3_0_c15_c13_0
 #else
 #define ARM64_REG_HID11						S3_0_c15_c11_0
 #endif
+#define ARM64_REG_HID11_DisX64NTLnchOpt				(1ULL << 1)
 #define ARM64_REG_HID11_DisFillC1BubOpt				(1<<7)
 #define ARM64_REG_HID11_DisFastDrainOpt				(1ULL << 23)
 
@@ -87,9 +96,11 @@
 #define ARM64_REG_CYC_CFG_deepSleep				(1ULL<<24)
 #else
 #define ARM64_REG_ACC_OVRD					S3_5_c15_c6_0
+#if defined(APPLEMONSOON)
+#define ARM64_REG_ACC_EBLK_OVRD					S3_5_c15_c6_1	// EBLK_OVRD on Zephyr
+#endif
 #define ARM64_REG_ACC_OVRD_enDeepSleep				(1ULL << 34)
-
-
+#define ARM64_REG_ACC_OVRD_disPioOnWfiCpu			(1ULL << 32)
 #define ARM64_REG_ACC_OVRD_dsblClkDtr				(1ULL << 29)
 #define ARM64_REG_ACC_OVRD_cpmWakeUp_mask			(3ULL << 27)
 #define ARM64_REG_ACC_OVRD_cpmWakeUp_force			(3ULL << 27)
@@ -107,7 +118,12 @@
 #define ARM64_REG_CYC_OVRD					S3_5_c15_c5_0
 #define ARM64_REG_CYC_OVRD_ok2pwrdn_force_up			(2<<24)
 #define ARM64_REG_CYC_OVRD_ok2pwrdn_force_down			(3<<24)
+#define ARM64_REG_CYC_OVRD_disWfiRetn				(1<<0)
 
+#if defined(APPLEMONSOON)
+#define ARM64_REG_CYC_OVRD_dsblSnoopTime_mask			(3ULL << 30)
+#define ARM64_REG_CYC_OVRD_dsblSnoopPTime			(1ULL << 31)	/// Don't fetch the timebase from the P-block
+#endif /* APPLEMONSOON */
 
 #define ARM64_REG_LSU_ERR_STS				S3_3_c15_c0_0
 #define ARM64_REG_LSU_ERR_STS_L1DTlbMultiHitEN	(1ULL<<54)
@@ -166,6 +182,10 @@
  *	 0=>not a p-core, non-zero=>p-core
  */
 .macro ARM64_IS_PCORE
+#if defined(APPLEMONSOON) || HAS_CLUSTER
+	mrs		$0, MPIDR_EL1
+	and		$0, $0, #(MPIDR_PNE)
+#endif
 .endmacro
 
 /*
@@ -176,6 +196,14 @@
  * arg3: SPR to use for p-core or non-AMP architecture
  */
 .macro ARM64_READ_EP_SPR
+#if defined(APPLEMONSOON) || HAS_CLUSTER
+	cbnz		$0, 1f
+// e-core
+	mrs		$1, $2
+	b		2f
+// p-core
+1:
+#endif
 	mrs		$1, $3
 2:
 .endmacro
@@ -188,6 +216,14 @@
  * arg3: SPR to use for p-core or non-AMP architecture
  */
 .macro ARM64_WRITE_EP_SPR
+#if defined(APPLEMONSOON) || HAS_CLUSTER
+	cbnz		$0, 1f
+// e-core
+	msr		$2, $1
+	b		2f
+// p-core
+1:
+#endif
 	msr		$3, $1
 2:
 .endmacro

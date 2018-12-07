@@ -122,6 +122,7 @@
 #include <net/net_osdep.h>
 #include <net/net_perf.h>
 
+#include <netinet/ip.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
@@ -2555,6 +2556,13 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 				optp = &in6p->in6p_outputopts;
 				error = ip6_pcbopt(optname, (u_char *)&optval,
 				    sizeof (optval), optp, uproto);
+
+				if (optname == IPV6_TCLASS) {
+					// Add in the ECN flags
+					u_int8_t tos = (in6p->inp_ip_tos & ~IPTOS_ECN_MASK);
+					u_int8_t ecn = optval & IPTOS_ECN_MASK;
+					in6p->inp_ip_tos = tos | ecn;
+				}
 				break;
 			}
 

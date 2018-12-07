@@ -120,6 +120,8 @@ extern kmod_info_t g_kernel_kmod_info;
 
 extern void dtrace_suspend(void);
 extern void dtrace_resume(void);
+extern void dtrace_early_init(void);
+extern int dtrace_keep_kernel_symbols(void);
 extern void dtrace_init(void);
 extern void helper_init(void);
 extern void fasttrap_init(void);
@@ -131,6 +133,7 @@ extern void dtrace_postinit(void);
 extern void dtrace_proc_fork(proc_t*, proc_t*, int);
 extern void dtrace_proc_exec(proc_t*);
 extern void dtrace_proc_exit(proc_t*);
+
 /*
  * DTrace Tunable Variables
  *
@@ -205,13 +208,14 @@ unsigned int	dtrace_max_cpus = 0;		/* number of enabled cpus */
  */
 static dev_info_t	*dtrace_devi;		/* device info */
 static vmem_t		*dtrace_arena;		/* probe ID arena */
-static taskq_t		*dtrace_taskq;		/* task queue */
 static dtrace_probe_t	**dtrace_probes;	/* array of all probes */
 static int		dtrace_nprobes;		/* number of probes */
 static dtrace_provider_t *dtrace_provider;	/* provider list */
 static dtrace_meta_t	*dtrace_meta_pid;	/* user-land meta provider */
 static int		dtrace_opens;		/* number of opens */
 static int		dtrace_helpers;		/* number of helpers */
+static dtrace_hash_t	*dtrace_strings;
+static dtrace_hash_t	*dtrace_byprov;		/* probes hashed by provider */
 static dtrace_hash_t	*dtrace_bymod;		/* probes hashed by module */
 static dtrace_hash_t	*dtrace_byfunc;		/* probes hashed by function */
 static dtrace_hash_t	*dtrace_byname;		/* probes hashed by name */
@@ -237,7 +241,7 @@ static int		dtrace_dof_mode;	/* See dtrace_impl.h for a description of Darwin's 
 			 */
 int			dtrace_kernel_symbol_mode;	/* See dtrace_impl.h for a description of Darwin's kernel symbol modes. */
 static uint32_t		dtrace_wake_clients;
-
+static uint8_t      dtrace_kerneluuid[16];	/* the 128-bit uuid */
 
 /*
  * To save memory, some common memory allocations are given a
@@ -328,17 +332,17 @@ dtrace_enable_nullop(void)
     return (0);
 }
 
-static dtrace_pops_t	dtrace_provider_ops = {
-	(void (*)(void *, const dtrace_probedesc_t *))dtrace_nullop,
-	(void (*)(void *, struct modctl *))dtrace_nullop,
-	(int (*)(void *, dtrace_id_t, void *))dtrace_enable_nullop,
-	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
-	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
-	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
-	NULL,
-	NULL,
-	NULL,
-	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop
+static dtrace_pops_t dtrace_provider_ops = {
+	.dtps_provide =	(void (*)(void *, const dtrace_probedesc_t *))dtrace_nullop,
+	.dtps_provide_module =	(void (*)(void *, struct modctl *))dtrace_nullop,
+	.dtps_enable =	(int (*)(void *, dtrace_id_t, void *))dtrace_nullop,
+	.dtps_disable =	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
+	.dtps_suspend =	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
+	.dtps_resume =	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
+	.dtps_getargdesc =	NULL,
+	.dtps_getargval =	NULL,
+	.dtps_usermode =	NULL,
+	.dtps_destroy =	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
 };
 
 static dtrace_id_t	dtrace_probeid_begin;	/* special BEGIN probe */
@@ -393,18 +397,22 @@ static lck_mtx_t dtrace_errlock;
  * outside of the implementation.  There is no real structure to this cpp
  * mishmash -- but is there ever?
  */
-#define	DTRACE_HASHSTR(hash, probe)	\
-	dtrace_hash_str(*((char **)((uintptr_t)(probe) + (hash)->dth_stroffs)))
 
-#define	DTRACE_HASHNEXT(hash, probe)	\
-	(dtrace_probe_t **)((uintptr_t)(probe) + (hash)->dth_nextoffs)
+#define	DTRACE_GETSTR(hash, elm)	\
+	(hash->dth_getstr(elm, hash->dth_stroffs))
 
-#define	DTRACE_HASHPREV(hash, probe)	\
-	(dtrace_probe_t **)((uintptr_t)(probe) + (hash)->dth_prevoffs)
+#define	DTRACE_HASHSTR(hash, elm)	\
+	dtrace_hash_str(DTRACE_GETSTR(hash, elm))
+
+#define	DTRACE_HASHNEXT(hash, elm)	\
+	(void**)((uintptr_t)(elm) + (hash)->dth_nextoffs)
+
+#define	DTRACE_HASHPREV(hash, elm)	\
+	(void**)((uintptr_t)(elm) + (hash)->dth_prevoffs)
 
 #define	DTRACE_HASHEQ(hash, lhs, rhs)	\
-	(strcmp(*((char **)((uintptr_t)(lhs) + (hash)->dth_stroffs)), \
-	    *((char **)((uintptr_t)(rhs) + (hash)->dth_stroffs))) == 0)
+	(strcmp(DTRACE_GETSTR(hash, lhs), \
+	    DTRACE_GETSTR(hash, rhs)) == 0)
 
 #define	DTRACE_AGGHASHSIZE_SLEW		17
 
@@ -756,6 +764,9 @@ sysctl_dtrace_dof_maxsize SYSCTL_HANDLER_ARGS
 	if (value <= 0)
 		return (ERANGE);
 
+	if (value >= dtrace_copy_maxsize())
+		return (ERANGE);
+
 	lck_mtx_lock(&dtrace_lock);
 		dtrace_dof_maxsize = value;
 	lck_mtx_unlock(&dtrace_lock);
@@ -850,6 +861,15 @@ SYSCTL_PROC(_kern_dtrace, OID_AUTO, provide_private_probes,
 	CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
 	&dtrace_provide_private_probes, 0,
 	sysctl_dtrace_provide_private_probes, "I", "provider must provide the private probes");
+
+/*
+ * kern.dtrace.dof_mode
+ *
+ * Returns the current DOF mode.
+ * This value is read-only.
+ */
+SYSCTL_INT(_kern_dtrace, OID_AUTO, dof_mode, CTLFLAG_RD | CTLFLAG_LOCKED,
+	&dtrace_dof_mode, 0, "dtrace dof mode");
 
 /*
  * DTrace Probe Context Functions
@@ -7012,12 +7032,33 @@ dtrace_hash_str(const char *p)
 	return (hval);
 }
 
+static const char*
+dtrace_strkey_probe_provider(void *elm, uintptr_t offs)
+{
+#pragma unused(offs)
+	dtrace_probe_t *probe = (dtrace_probe_t*)elm;
+	return probe->dtpr_provider->dtpv_name;
+}
+
+static const char*
+dtrace_strkey_offset(void *elm, uintptr_t offs)
+{
+	return ((char *)((uintptr_t)(elm) + offs));
+}
+
+static const char*
+dtrace_strkey_deref_offset(void *elm, uintptr_t offs)
+{
+	return *((char **)((uintptr_t)(elm) + offs));
+}
+
 static dtrace_hash_t *
-dtrace_hash_create(uintptr_t stroffs, uintptr_t nextoffs, uintptr_t prevoffs)
+dtrace_hash_create(dtrace_strkey_f func, uintptr_t arg, uintptr_t nextoffs, uintptr_t prevoffs)
 {
 	dtrace_hash_t *hash = kmem_zalloc(sizeof (dtrace_hash_t), KM_SLEEP);
 
-	hash->dth_stroffs = stroffs;
+	hash->dth_getstr = func;
+	hash->dth_stroffs = arg;
 	hash->dth_nextoffs = nextoffs;
 	hash->dth_prevoffs = prevoffs;
 
@@ -7066,10 +7107,10 @@ dtrace_hash_resize(dtrace_hash_t *hash)
 
 	for (i = 0; i < size; i++) {
 		for (bucket = hash->dth_tab[i]; bucket != NULL; bucket = next) {
-			dtrace_probe_t *probe = bucket->dthb_chain;
+			void *elm = bucket->dthb_chain;
 
-			ASSERT(probe != NULL);
-			ndx = DTRACE_HASHSTR(hash, probe) & new_mask;
+			ASSERT(elm != NULL);
+			ndx = DTRACE_HASHSTR(hash, elm) & new_mask;
 
 			next = bucket->dthb_next;
 			bucket->dthb_next = new_tab[ndx];
@@ -7084,12 +7125,12 @@ dtrace_hash_resize(dtrace_hash_t *hash)
 }
 
 static void
-dtrace_hash_add(dtrace_hash_t *hash, dtrace_probe_t *new)
+dtrace_hash_add(dtrace_hash_t *hash, void *new)
 {
 	int hashval = DTRACE_HASHSTR(hash, new);
 	int ndx = hashval & hash->dth_mask;
 	dtrace_hashbucket_t *bucket = hash->dth_tab[ndx];
-	dtrace_probe_t **nextp, **prevp;
+	void **nextp, **prevp;
 
 	for (; bucket != NULL; bucket = bucket->dthb_next) {
 		if (DTRACE_HASHEQ(hash, bucket->dthb_chain, new))
@@ -7122,23 +7163,29 @@ add:
 	bucket->dthb_len++;
 }
 
-static dtrace_probe_t *
-dtrace_hash_lookup(dtrace_hash_t *hash, dtrace_probe_t *template)
+static void *
+dtrace_hash_lookup_string(dtrace_hash_t *hash, const char *str)
 {
-	int hashval = DTRACE_HASHSTR(hash, template);
+	int hashval = dtrace_hash_str(str);
 	int ndx = hashval & hash->dth_mask;
 	dtrace_hashbucket_t *bucket = hash->dth_tab[ndx];
 
 	for (; bucket != NULL; bucket = bucket->dthb_next) {
-		if (DTRACE_HASHEQ(hash, bucket->dthb_chain, template))
+		if (strcmp(str, DTRACE_GETSTR(hash, bucket->dthb_chain)) == 0)
 			return (bucket->dthb_chain);
 	}
 
 	return (NULL);
 }
 
+static dtrace_probe_t *
+dtrace_hash_lookup(dtrace_hash_t *hash, void *template)
+{
+	return dtrace_hash_lookup_string(hash, DTRACE_GETSTR(hash, template));
+}
+
 static int
-dtrace_hash_collisions(dtrace_hash_t *hash, dtrace_probe_t *template)
+dtrace_hash_collisions(dtrace_hash_t *hash, void *template)
 {
 	int hashval = DTRACE_HASHSTR(hash, template);
 	int ndx = hashval & hash->dth_mask;
@@ -7153,19 +7200,19 @@ dtrace_hash_collisions(dtrace_hash_t *hash, dtrace_probe_t *template)
 }
 
 static void
-dtrace_hash_remove(dtrace_hash_t *hash, dtrace_probe_t *probe)
+dtrace_hash_remove(dtrace_hash_t *hash, void *elm)
 {
-	int ndx = DTRACE_HASHSTR(hash, probe) & hash->dth_mask;
+	int ndx = DTRACE_HASHSTR(hash, elm) & hash->dth_mask;
 	dtrace_hashbucket_t *bucket = hash->dth_tab[ndx];
 
-	dtrace_probe_t **prevp = DTRACE_HASHPREV(hash, probe);
-	dtrace_probe_t **nextp = DTRACE_HASHNEXT(hash, probe);
+	void **prevp = DTRACE_HASHPREV(hash, elm);
+	void **nextp = DTRACE_HASHNEXT(hash, elm);
 
 	/*
-	 * Find the bucket that we're removing this probe from.
+	 * Find the bucket that we're removing this elm from.
 	 */
 	for (; bucket != NULL; bucket = bucket->dthb_next) {
-		if (DTRACE_HASHEQ(hash, bucket->dthb_chain, probe))
+		if (DTRACE_HASHEQ(hash, bucket->dthb_chain, elm))
 			break;
 	}
 
@@ -7174,12 +7221,12 @@ dtrace_hash_remove(dtrace_hash_t *hash, dtrace_probe_t *probe)
 	if (*prevp == NULL) {
 		if (*nextp == NULL) {
 			/*
-			 * The removed probe was the only probe on this
+			 * The removed element was the only element on this
 			 * bucket; we need to remove the bucket.
 			 */
 			dtrace_hashbucket_t *b = hash->dth_tab[ndx];
 
-			ASSERT(bucket->dthb_chain == probe);
+			ASSERT(bucket->dthb_chain == elm);
 			ASSERT(b != NULL);
 
 			if (b == bucket) {
@@ -7219,20 +7266,63 @@ dtrace_badattr(const dtrace_attribute_t *a)
 }
 
 /*
- * Return a duplicate copy of a string.  If the specified string is NULL,
- * this function returns a zero-length string.
- * APPLE NOTE: Darwin employs size bounded string operation.
+ * Returns a dtrace-managed copy of a string, and will
+ * deduplicate copies of the same string.
+ * If the specified string is NULL, returns an empty string
  */
 static char *
-dtrace_strdup(const char *str)
+dtrace_strref(const char *str)
 {
+	dtrace_string_t *s = NULL;
 	size_t bufsize = (str != NULL ? strlen(str) : 0) + 1;
-	char *new = kmem_zalloc(bufsize, KM_SLEEP);
 
-	if (str != NULL)
-		(void) strlcpy(new, str, bufsize);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
-	return (new);
+	if (str == NULL)
+		str = "";
+
+	for (s = dtrace_hash_lookup_string(dtrace_strings, str); s != NULL;
+	     s = *(DTRACE_HASHNEXT(dtrace_strings, s)))  {
+		if (strncmp(str, s->dtst_str, bufsize) != 0) {
+			continue;
+		}
+		ASSERT(s->dtst_refcount != UINT32_MAX);
+		s->dtst_refcount++;
+		return s->dtst_str;
+	}
+
+	s = kmem_zalloc(sizeof(dtrace_string_t) + bufsize, KM_SLEEP);
+	s->dtst_refcount = 1;
+	(void) strlcpy(s->dtst_str, str, bufsize);
+
+	dtrace_hash_add(dtrace_strings, s);
+
+	return s->dtst_str;
+}
+
+static void
+dtrace_strunref(const char *str)
+{
+	ASSERT(str != NULL);
+	dtrace_string_t *s = NULL;
+	size_t bufsize = strlen(str) + 1;
+
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+
+	for (s = dtrace_hash_lookup_string(dtrace_strings, str); s != NULL;
+	     s = *(DTRACE_HASHNEXT(dtrace_strings, s)))  {
+		if (strncmp(str, s->dtst_str, bufsize) != 0) {
+			continue;
+		}
+		ASSERT(s->dtst_refcount != 0);
+		s->dtst_refcount--;
+		if (s->dtst_refcount == 0) {
+			dtrace_hash_remove(dtrace_strings, s);
+			kmem_free(s, sizeof(dtrace_string_t) + bufsize);
+		}
+		return;
+	}
+	panic("attempt to unref non-existent string %s", str);
 }
 
 #define	DTRACE_ISALPHA(c)	\
@@ -7529,9 +7619,27 @@ static int
 dtrace_match_string(const char *s, const char *p, int depth)
 {
 #pragma unused(depth) /* __APPLE__ */
+	return (s != NULL && s == p);
+}
 
-	/* APPLE NOTE: Darwin employs size bounded string operation. */
-	return (s != NULL && strncmp(s, p, strlen(s) + 1) == 0);
+/*ARGSUSED*/
+static int
+dtrace_match_module(const char *s, const char *p, int depth)
+{
+#pragma unused(depth) /* __APPLE__ */
+	size_t len;
+	if (s == NULL || p == NULL)
+		return (0);
+
+	len = strlen(p);
+
+	if (strncmp(p, s, len) != 0)
+		return (0);
+
+	if (s[len] == '.' || s[len] == '\0')
+		return (1);
+
+	return (0);
 }
 
 /*ARGSUSED*/
@@ -7554,7 +7662,18 @@ static int
 dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
     zoneid_t zoneid, int (*matched)(dtrace_probe_t *, void *, void *), void *arg1, void *arg2)
 {
-	dtrace_probe_t template, *probe;
+	dtrace_probe_t *probe;
+	dtrace_provider_t prov_template = {
+		.dtpv_name = (char *)(uintptr_t)pkp->dtpk_prov
+	};
+
+	dtrace_probe_t template = {
+		.dtpr_provider = &prov_template,
+		.dtpr_mod = (char *)(uintptr_t)pkp->dtpk_mod,
+		.dtpr_func = (char *)(uintptr_t)pkp->dtpk_func,
+		.dtpr_name = (char *)(uintptr_t)pkp->dtpk_name
+	};
+
 	dtrace_hash_t *hash = NULL;
 	int len, rc, best = INT_MAX, nmatched = 0;
 	dtrace_id_t i;
@@ -7575,16 +7694,19 @@ dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
 		return (nmatched);
 	}
 
-	template.dtpr_mod =  (char *)(uintptr_t)pkp->dtpk_mod;
-	template.dtpr_func = (char *)(uintptr_t)pkp->dtpk_func;
-	template.dtpr_name = (char *)(uintptr_t)pkp->dtpk_name;
-
 	/*
-	 * We want to find the most distinct of the module name, function
-	 * name, and name.  So for each one that is not a glob pattern or
-	 * empty string, we perform a lookup in the corresponding hash and
-	 * use the hash table with the fewest collisions to do our search.
+	 * We want to find the most distinct of the provider name, module name,
+	 * function name, and name.  So for each one that is not a glob
+	 * pattern or empty string, we perform a lookup in the corresponding
+	 * hash and use the hash table with the fewest collisions to do our
+	 * search.
 	 */
+	if (pkp->dtpk_pmatch == &dtrace_match_string &&
+	    (len = dtrace_hash_collisions(dtrace_byprov, &template)) < best) {
+		best = len;
+		hash = dtrace_byprov;
+	}
+
 	if (pkp->dtpk_mmatch == &dtrace_match_string &&
 	    (len = dtrace_hash_collisions(dtrace_bymod, &template)) < best) {
 		best = len;
@@ -7671,6 +7793,24 @@ dtrace_probekey_func(const char *p)
 	return (&dtrace_match_string);
 }
 
+static dtrace_probekey_f *
+dtrace_probekey_module_func(const char *p)
+{
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+
+	dtrace_probekey_f *f = dtrace_probekey_func(p);
+	if (f == &dtrace_match_string) {
+		dtrace_probe_t template = {
+			.dtpr_mod = (char *)(uintptr_t)p,
+		};
+		if (dtrace_hash_lookup(dtrace_bymod, &template) == NULL) {
+			return (&dtrace_match_module);
+		}
+		return (&dtrace_match_string);
+	}
+	return f;
+}
+
 /*
  * Build a probe comparison key for use with dtrace_match_probe() from the
  * given probe description.  By convention, a null key only matches anchored
@@ -7680,16 +7820,17 @@ dtrace_probekey_func(const char *p)
 static void
 dtrace_probekey(const dtrace_probedesc_t *pdp, dtrace_probekey_t *pkp)
 {
-	pkp->dtpk_prov = pdp->dtpd_provider;
+
+	pkp->dtpk_prov = dtrace_strref(pdp->dtpd_provider);
 	pkp->dtpk_pmatch = dtrace_probekey_func(pdp->dtpd_provider);
 
-	pkp->dtpk_mod = pdp->dtpd_mod;
-	pkp->dtpk_mmatch = dtrace_probekey_func(pdp->dtpd_mod);
+	pkp->dtpk_mod = dtrace_strref(pdp->dtpd_mod);
+	pkp->dtpk_mmatch = dtrace_probekey_module_func(pdp->dtpd_mod);
 
-	pkp->dtpk_func = pdp->dtpd_func;
+	pkp->dtpk_func = dtrace_strref(pdp->dtpd_func);
 	pkp->dtpk_fmatch = dtrace_probekey_func(pdp->dtpd_func);
 
-	pkp->dtpk_name = pdp->dtpd_name;
+	pkp->dtpk_name = dtrace_strref(pdp->dtpd_name);
 	pkp->dtpk_nmatch = dtrace_probekey_func(pdp->dtpd_name);
 
 	pkp->dtpk_id = pdp->dtpd_id;
@@ -7700,6 +7841,15 @@ dtrace_probekey(const dtrace_probedesc_t *pdp, dtrace_probekey_t *pkp)
 	    pkp->dtpk_fmatch == &dtrace_match_nul &&
 	    pkp->dtpk_nmatch == &dtrace_match_nul)
 		pkp->dtpk_fmatch = &dtrace_match_nonzero;
+}
+
+static void
+dtrace_probekey_release(dtrace_probekey_t *pkp)
+{
+	dtrace_strunref(pkp->dtpk_prov);
+	dtrace_strunref(pkp->dtpk_mod);
+	dtrace_strunref(pkp->dtpk_func);
+	dtrace_strunref(pkp->dtpk_name);
 }
 
 static int
@@ -7779,13 +7929,6 @@ dtrace_register(const char *name, const dtrace_pattr_t *pap, uint32_t priv,
 
 	provider = kmem_zalloc(sizeof (dtrace_provider_t), KM_SLEEP);
 
-	/* APPLE NOTE: Darwin employs size bounded string operation. */
-	{
-	size_t bufsize = strlen(name) + 1;
-	provider->dtpv_name = kmem_alloc(bufsize, KM_SLEEP);
-	(void) strlcpy(provider->dtpv_name, name, bufsize);
-	}
-
 	provider->dtpv_attr = *pap;
 	provider->dtpv_priv.dtpp_flags = priv;
 	if (cr != NULL) {
@@ -7820,6 +7963,9 @@ dtrace_register(const char *name, const dtrace_pattr_t *pap, uint32_t priv,
 	if (pops == &dtrace_provider_ops) {
 		LCK_MTX_ASSERT(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
 		LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+
+		provider->dtpv_name = dtrace_strref(name);
+
 		ASSERT(dtrace_anon.dta_enabling == NULL);
 
 		/*
@@ -7833,6 +7979,8 @@ dtrace_register(const char *name, const dtrace_pattr_t *pap, uint32_t priv,
 
 	lck_mtx_lock(&dtrace_provider_lock);
 	lck_mtx_lock(&dtrace_lock);
+
+	provider->dtpv_name = dtrace_strref(name);
 
 	/*
 	 * If there is at least one provider registered, we'll add this
@@ -7878,8 +8026,11 @@ dtrace_unregister(dtrace_provider_id_t id)
 {
 	dtrace_provider_t *old = (dtrace_provider_t *)id;
 	dtrace_provider_t *prev = NULL;
-	int i, self = 0;
-	dtrace_probe_t *probe, *first = NULL;
+	int self = 0;
+	dtrace_probe_t *probe, *first = NULL, *next = NULL;
+	dtrace_probe_t template = {
+		.dtpr_provider = old
+	};
 
 	if (old->dtpv_pops.dtps_enable ==
 	    (int (*)(void *, dtrace_id_t, void *))dtrace_enable_nullop) {
@@ -7940,14 +8091,12 @@ dtrace_unregister(dtrace_provider_id_t id)
 	 * All of the probes for this provider are disabled; we can safely
 	 * remove all of them from their hash chains and from the probe array.
 	 */
-	for (i = 0; i < dtrace_nprobes && old->dtpv_probe_count!=0; i++) {
-		if ((probe = dtrace_probes[i]) == NULL)
-			continue;
-
+	for (probe = dtrace_hash_lookup(dtrace_byprov, &template); probe != NULL;
+	    probe = *(DTRACE_HASHNEXT(dtrace_byprov, probe))) {
 		if (probe->dtpr_provider != old)
 			continue;
 
-		dtrace_probes[i] = NULL;
+		dtrace_probes[probe->dtpr_id - 1] = NULL;
 		old->dtpv_probe_count--;
 
 		dtrace_hash_remove(dtrace_bymod, probe);
@@ -7958,9 +8107,17 @@ dtrace_unregister(dtrace_provider_id_t id)
 			first = probe;
 			probe->dtpr_nextmod = NULL;
 		} else {
+			/*
+			 * Use nextmod as the chain of probes to remove
+			 */
 			probe->dtpr_nextmod = first;
 			first = probe;
 		}
+	}
+
+	for (probe = first; probe != NULL; probe = next) {
+		next = probe->dtpr_nextmod;
+		dtrace_hash_remove(dtrace_byprov, probe);
 	}
 
 	/*
@@ -7970,14 +8127,14 @@ dtrace_unregister(dtrace_provider_id_t id)
 	 */
 	dtrace_sync();
 
-	for (probe = first; probe != NULL; probe = first) {
-		first = probe->dtpr_nextmod;
+	for (probe = first; probe != NULL; probe = next) {
+		next = probe->dtpr_nextmod;
 
 		old->dtpv_pops.dtps_destroy(old->dtpv_arg, probe->dtpr_id,
 		    probe->dtpr_arg);
-		kmem_free(probe->dtpr_mod, strlen(probe->dtpr_mod) + 1);
-		kmem_free(probe->dtpr_func, strlen(probe->dtpr_func) + 1);
-		kmem_free(probe->dtpr_name, strlen(probe->dtpr_name) + 1);
+		dtrace_strunref(probe->dtpr_mod);
+		dtrace_strunref(probe->dtpr_func);
+		dtrace_strunref(probe->dtpr_name);
 		vmem_free(dtrace_arena, (void *)(uintptr_t)(probe->dtpr_id), 1);
 		zfree(dtrace_probe_t_zone, probe);
 	}
@@ -7998,13 +8155,14 @@ dtrace_unregister(dtrace_provider_id_t id)
 		prev->dtpv_next = old->dtpv_next;
 	}
 
+	dtrace_strunref(old->dtpv_name);
+
 	if (!self) {
 		lck_mtx_unlock(&dtrace_lock);
 		lck_mtx_unlock(&mod_lock);
 		lck_mtx_unlock(&dtrace_provider_lock);
 	}
 
-	kmem_free(old->dtpv_name, strlen(old->dtpv_name) + 1);
 	kmem_free(old, sizeof (dtrace_provider_t));
 
 	return (0);
@@ -8054,8 +8212,10 @@ int
 dtrace_condense(dtrace_provider_id_t id)
 {
 	dtrace_provider_t *prov = (dtrace_provider_t *)id;
-	int i;
-	dtrace_probe_t *probe;
+	dtrace_probe_t *probe, *first = NULL;
+	dtrace_probe_t template = {
+		.dtpr_provider = prov
+	};
 
 	/*
 	 * Make sure this isn't the dtrace provider itself.
@@ -8069,9 +8229,8 @@ dtrace_condense(dtrace_provider_id_t id)
 	/*
 	 * Attempt to destroy the probes associated with this provider.
 	 */
-	for (i = 0; i < dtrace_nprobes; i++) {
-		if ((probe = dtrace_probes[i]) == NULL)
-			continue;
+	for (probe = dtrace_hash_lookup(dtrace_byprov, &template); probe != NULL;
+	    probe = *(DTRACE_HASHNEXT(dtrace_byprov, probe))) {
 
 		if (probe->dtpr_provider != prov)
 			continue;
@@ -8079,20 +8238,35 @@ dtrace_condense(dtrace_provider_id_t id)
 		if (probe->dtpr_ecb != NULL)
 			continue;
 
-		dtrace_probes[i] = NULL;
+		dtrace_probes[probe->dtpr_id - 1] = NULL;
 		prov->dtpv_probe_count--;
 
 		dtrace_hash_remove(dtrace_bymod, probe);
 		dtrace_hash_remove(dtrace_byfunc, probe);
 		dtrace_hash_remove(dtrace_byname, probe);
 
-		prov->dtpv_pops.dtps_destroy(prov->dtpv_arg, i + 1,
+		prov->dtpv_pops.dtps_destroy(prov->dtpv_arg, probe->dtpr_id,
 		    probe->dtpr_arg);
-		kmem_free(probe->dtpr_mod, strlen(probe->dtpr_mod) + 1);
-		kmem_free(probe->dtpr_func, strlen(probe->dtpr_func) + 1);
-		kmem_free(probe->dtpr_name, strlen(probe->dtpr_name) + 1);
+		dtrace_strunref(probe->dtpr_mod);
+		dtrace_strunref(probe->dtpr_func);
+		dtrace_strunref(probe->dtpr_name);
+		if (first == NULL) {
+			first = probe;
+			probe->dtpr_nextmod = NULL;
+		} else {
+			/*
+			 * Use nextmod as the chain of probes to remove
+			 */
+			probe->dtpr_nextmod = first;
+			first = probe;
+		}
+	}
+
+	for (probe = first; probe != NULL; probe = first) {
+		first = probe->dtpr_nextmod;
+		dtrace_hash_remove(dtrace_byprov, probe);
+		vmem_free(dtrace_arena, (void *)((uintptr_t)probe->dtpr_id), 1);
 		zfree(dtrace_probe_t_zone, probe);
-		vmem_free(dtrace_arena, (void *)((uintptr_t)i + 1), 1);
 	}
 
 	lck_mtx_unlock(&dtrace_lock);
@@ -8136,13 +8310,14 @@ dtrace_probe_create(dtrace_provider_id_t prov, const char *mod,
 
 	probe->dtpr_id = id;
 	probe->dtpr_gen = dtrace_probegen++;
-	probe->dtpr_mod = dtrace_strdup(mod);
-	probe->dtpr_func = dtrace_strdup(func);
-	probe->dtpr_name = dtrace_strdup(name);
+	probe->dtpr_mod = dtrace_strref(mod);
+	probe->dtpr_func = dtrace_strref(func);
+	probe->dtpr_name = dtrace_strref(name);
 	probe->dtpr_arg = arg;
 	probe->dtpr_aframes = aframes;
 	probe->dtpr_provider = provider;
 
+	dtrace_hash_add(dtrace_byprov, probe);
 	dtrace_hash_add(dtrace_bymod, probe);
 	dtrace_hash_add(dtrace_byfunc, probe);
 	dtrace_hash_add(dtrace_byname, probe);
@@ -8225,19 +8400,23 @@ dtrace_probe_lookup(dtrace_provider_id_t prid, const char *mod,
 	dtrace_id_t id;
 	int match;
 
-	pkey.dtpk_prov = ((dtrace_provider_t *)prid)->dtpv_name;
+	lck_mtx_lock(&dtrace_lock);
+
+	pkey.dtpk_prov = dtrace_strref(((dtrace_provider_t *)prid)->dtpv_name);
 	pkey.dtpk_pmatch = &dtrace_match_string;
-	pkey.dtpk_mod = mod;
+	pkey.dtpk_mod = dtrace_strref(mod);
 	pkey.dtpk_mmatch = mod ? &dtrace_match_string : &dtrace_match_nul;
-	pkey.dtpk_func = func;
+	pkey.dtpk_func = dtrace_strref(func);
 	pkey.dtpk_fmatch = func ? &dtrace_match_string : &dtrace_match_nul;
-	pkey.dtpk_name = name;
+	pkey.dtpk_name = dtrace_strref(name);
 	pkey.dtpk_nmatch = name ? &dtrace_match_string : &dtrace_match_nul;
 	pkey.dtpk_id = DTRACE_IDNONE;
 
-	lck_mtx_lock(&dtrace_lock);
 	match = dtrace_match(&pkey, DTRACE_PRIV_ALL, 0, 0,
 	    dtrace_probe_lookup_match, &id, NULL);
+
+	dtrace_probekey_release(&pkey);
+
 	lck_mtx_unlock(&dtrace_lock);
 
 	ASSERT(match == 1 || match == 0);
@@ -8382,6 +8561,7 @@ dtrace_probe_enable(const dtrace_probedesc_t *desc, dtrace_enabling_t *enab, dtr
 	uint32_t priv;
 	uid_t uid;
 	zoneid_t zoneid;
+	int err;
 
 	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
@@ -8400,8 +8580,11 @@ dtrace_probe_enable(const dtrace_probedesc_t *desc, dtrace_enabling_t *enab, dtr
 	dtrace_cred2priv(enab->dten_vstate->dtvs_state->dts_cred.dcr_cred,
 	    &priv, &uid, &zoneid);
 
-	return (dtrace_match(&pkey, priv, uid, zoneid, dtrace_ecb_create_enable,
-	    enab, ep));
+	err = dtrace_match(&pkey, priv, uid, zoneid, dtrace_ecb_create_enable, enab, ep);
+
+	dtrace_probekey_release(&pkey);
+
+	return err;
 }
 
 /*
@@ -8637,14 +8820,6 @@ dtrace_meta_register(const char *name, const dtrace_mops_t *mops, void *arg,
 
 	meta = kmem_zalloc(sizeof (dtrace_meta_t), KM_SLEEP);
 	meta->dtm_mops = *mops;
-
-	/* APPLE NOTE: Darwin employs size bounded string operation. */
-	{
-	size_t bufsize = strlen(name) + 1;
-	meta->dtm_name = kmem_alloc(bufsize, KM_SLEEP);
-	(void) strlcpy(meta->dtm_name, name, bufsize);
-	}
-
 	meta->dtm_arg = arg;
 
 	lck_mtx_lock(&dtrace_meta_lock);
@@ -8655,10 +8830,11 @@ dtrace_meta_register(const char *name, const dtrace_mops_t *mops, void *arg,
 		lck_mtx_unlock(&dtrace_meta_lock);
 		cmn_err(CE_WARN, "failed to register meta-register %s: "
 		    "user-land meta-provider exists", name);
-		kmem_free(meta->dtm_name, strlen(meta->dtm_name) + 1);
 		kmem_free(meta, sizeof (dtrace_meta_t));
 		return (EINVAL);
 	}
+
+	meta->dtm_name = dtrace_strref(name);
 
 	dtrace_meta_pid = meta;
 	*idp = (dtrace_meta_provider_id_t)meta;
@@ -8718,10 +8894,11 @@ dtrace_meta_unregister(dtrace_meta_provider_id_t id)
 
 	*pp = NULL;
 
+	dtrace_strunref(old->dtm_name);
+
 	lck_mtx_unlock(&dtrace_lock);
 	lck_mtx_unlock(&dtrace_meta_lock);
 
-	kmem_free(old->dtm_name, strlen(old->dtm_name) + 1);
 	kmem_free(old, sizeof (dtrace_meta_t));
 
 	return (0);
@@ -12024,7 +12201,7 @@ dtrace_dof_create(dtrace_state_t *state)
 
 	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
-	dof = dt_kmem_zalloc_aligned(len, 8, KM_SLEEP);
+	dof = kmem_zalloc_aligned(len, 8, KM_SLEEP);
 	dof->dofh_ident[DOF_ID_MAG0] = DOF_MAG_MAG0;
 	dof->dofh_ident[DOF_ID_MAG1] = DOF_MAG_MAG1;
 	dof->dofh_ident[DOF_ID_MAG2] = DOF_MAG_MAG2;
@@ -12102,11 +12279,11 @@ dtrace_dof_copyin(user_addr_t uarg, int *errp)
 		return (NULL);
 	}
 
-	dof = dt_kmem_alloc_aligned(hdr.dofh_loadsz, 8, KM_SLEEP);
+	dof = kmem_alloc_aligned(hdr.dofh_loadsz, 8, KM_SLEEP);
 
         if (copyin(uarg, dof, hdr.dofh_loadsz) != 0  ||
 	  dof->dofh_loadsz != hdr.dofh_loadsz) {
-	    dt_kmem_free_aligned(dof, hdr.dofh_loadsz);
+	    kmem_free_aligned(dof, hdr.dofh_loadsz);
 	    *errp = EFAULT;
 	    return (NULL);
 	}	    
@@ -12146,10 +12323,10 @@ dtrace_dof_copyin_from_proc(proc_t* p, user_addr_t uarg, int *errp)
 		return (NULL);
 	}
 
-	dof = dt_kmem_alloc_aligned(hdr.dofh_loadsz, 8, KM_SLEEP);
+	dof = kmem_alloc_aligned(hdr.dofh_loadsz, 8, KM_SLEEP);
 
 	if (uread(p, dof, hdr.dofh_loadsz, uarg) != KERN_SUCCESS) {
-		dt_kmem_free_aligned(dof, hdr.dofh_loadsz);
+		kmem_free_aligned(dof, hdr.dofh_loadsz);
 		*errp = EFAULT;
 		return (NULL);
 	}
@@ -12160,13 +12337,13 @@ dtrace_dof_copyin_from_proc(proc_t* p, user_addr_t uarg, int *errp)
 static void
 dtrace_dof_destroy(dof_hdr_t *dof)
 {
-	dt_kmem_free_aligned(dof, dof->dofh_loadsz);
+	kmem_free_aligned(dof, dof->dofh_loadsz);
 }
 
 static dof_hdr_t *
 dtrace_dof_property(const char *name)
 {
-	unsigned int len;
+	unsigned int len = 0;
 	dof_hdr_t *dof;
 
 	if (dtrace_is_restricted() && !dtrace_are_restrictions_relaxed()) {
@@ -12177,7 +12354,7 @@ dtrace_dof_property(const char *name)
 		return NULL;
 	}
 
-	dof = dt_kmem_alloc_aligned(len, 8, KM_SLEEP);
+	dof = kmem_alloc_aligned(len, 8, KM_SLEEP);
 
 	if (!PEReadNVRAMProperty(name, dof, &len)) {
 		dtrace_dof_destroy(dof);
@@ -12789,8 +12966,8 @@ dtrace_dof_slurp(dof_hdr_t *dof, dtrace_vstate_t *vstate, cred_t *cr,
 		return (-1);
 	}
 
-	if (dof->dofh_secsize == 0) {
-		dtrace_dof_error(dof, "zero section header size");
+	if (dof->dofh_secsize < sizeof(dof_sec_t)) {
+		dtrace_dof_error(dof, "invalid section header size");
 		return (-1);
 	}
 
@@ -13183,7 +13360,7 @@ dtrace_state_create(dev_t *devp, cred_t *cr, dtrace_state_t **new_state)
 		major = ddi_driver_major(dtrace_devi);
 	}
 
-	state->dts_dev = makedevice(major, minor);
+	state->dts_dev = makedev(major, minor);
 
 	if (devp != NULL)
 		*devp = state->dts_dev;
@@ -13231,6 +13408,10 @@ dtrace_state_create(dev_t *devp, cred_t *cr, dtrace_state_t **new_state)
 	 * the normal checks are bypassed.
 	 */
 #if defined(__APPLE__)
+	if (cr != NULL) {
+		kauth_cred_ref(cr);
+		state->dts_cred.dcr_cred = cr;
+	}
 	if (cr == NULL || PRIV_POLICY_ONLY(cr, PRIV_ALL, B_FALSE)) {
 		if (dtrace_is_restricted() && !dtrace_are_restrictions_relaxed()) {
 			/*
@@ -13927,7 +14108,7 @@ dtrace_state_destroy(dtrace_state_t *state)
 	 * Release the credential hold we took in dtrace_state_create().
 	 */
 	if (state->dts_cred.dcr_cred != NULL)
-		crfree(state->dts_cred.dcr_cred);
+		kauth_cred_unref(&state->dts_cred.dcr_cred);
 
 	/*
 	 * Now we can safely disable and destroy any enabled probes.  Because
@@ -14006,6 +14187,20 @@ dtrace_state_destroy(dtrace_state_t *state)
 /*
  * DTrace Anonymous Enabling Functions
  */
+
+int
+dtrace_keep_kernel_symbols(void)
+{
+	if (dtrace_is_restricted() && !dtrace_are_restrictions_relaxed()) {
+		return 0;
+	}
+
+	if (dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_ALWAYS_FROM_KERNEL)
+		return 1;
+
+	return 0;
+}
+
 static dtrace_state_t *
 dtrace_anon_grab(void)
 {
@@ -14049,6 +14244,7 @@ dtrace_anon_property(void)
 			break;
 		}
 
+#ifdef illumos
 		/*
 		 * We want to create anonymous state, so we need to transition
 		 * the kernel debugger to indicate that DTrace is active.  If
@@ -14061,6 +14257,7 @@ dtrace_anon_property(void)
 			dtrace_dof_destroy(dof);
 			break;
 		}
+#endif
 
 		/*
 		 * If we haven't allocated an anonymous state, we'll do so now.
@@ -14308,6 +14505,7 @@ dtrace_helper_destroygen(proc_t* p, int gen)
 	dtrace_vstate_t *vstate;
 	uint_t i;
 
+	LCK_MTX_ASSERT(&dtrace_meta_lock, LCK_MTX_ASSERT_OWNED);
 	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (help == NULL || gen > help->dthps_generation)
@@ -14373,13 +14571,11 @@ dtrace_helper_destroygen(proc_t* p, int gen)
 		/*
 		 * If we have a meta provider, remove this helper provider.
 		 */
-		lck_mtx_lock(&dtrace_meta_lock);
 		if (dtrace_meta_pid != NULL) {
 			ASSERT(dtrace_deferred_pid == NULL);
 			dtrace_helper_provider_remove(&prov->dthp_prov,
 			    p);
 		}
-		lck_mtx_unlock(&dtrace_meta_lock);
 
 		dtrace_helper_provider_destroy(prov);
 
@@ -14485,9 +14681,9 @@ static void
 dtrace_helper_provider_register(proc_t *p, dtrace_helpers_t *help,
     dof_helper_t *dofhp)
 {
+	LCK_MTX_ASSERT(&dtrace_meta_lock, LCK_MTX_ASSERT_OWNED);
 	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_NOTOWNED);
 
-	lck_mtx_lock(&dtrace_meta_lock);
 	lck_mtx_lock(&dtrace_lock);
 
 	if (!dtrace_attached() || dtrace_meta_pid == NULL) {
@@ -14536,8 +14732,6 @@ dtrace_helper_provider_register(proc_t *p, dtrace_helpers_t *help,
 				p);
 		}
 	}
-
-	lck_mtx_unlock(&dtrace_meta_lock);
 }
 
 static int
@@ -14843,6 +15037,7 @@ dtrace_helper_slurp(proc_t* p, dof_hdr_t *dof, dof_helper_t *dhp)
 	int i, gen, rv, nhelpers = 0, nprovs = 0, destroy = 1;
 	uintptr_t daddr = (uintptr_t)dof;
 
+	LCK_MTX_ASSERT(&dtrace_meta_lock, LCK_MTX_ASSERT_OWNED);
 	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if ((help = p->p_dtrace_helpers) == NULL)
@@ -15008,7 +15203,7 @@ dtrace_lazy_dofs_add(proc_t *p, dof_ioctl_data_t* incoming_dofs, int *dofs_claim
 	 * Any existing helpers force non-lazy behavior.
 	 */
 	if (dtrace_dof_mode == DTRACE_DOF_MODE_LAZY_ON && (p->p_dtrace_helpers == NULL)) {
-		lck_mtx_lock(&p->p_dtrace_sprlock);
+		dtrace_sprlock(p);
 
 		dof_ioctl_data_t* existing_dofs = p->p_dtrace_lazy_dofs;
 		unsigned int existing_dofs_count = (existing_dofs) ? existing_dofs->dofiod_count : 0;
@@ -15071,7 +15266,7 @@ dtrace_lazy_dofs_add(proc_t *p, dof_ioctl_data_t* incoming_dofs, int *dofs_claim
 #endif /* DEBUG */
 
 unlock:
-		lck_mtx_unlock(&p->p_dtrace_sprlock);
+		dtrace_sprunlock(p);
 	} else {
 		rval = EACCES;
 	}
@@ -15101,7 +15296,7 @@ dtrace_lazy_dofs_remove(proc_t *p, int generation)
 	 * Any existing helpers force non-lazy behavior.
 	 */
 	if (dtrace_dof_mode == DTRACE_DOF_MODE_LAZY_ON && (p->p_dtrace_helpers == NULL)) {
-		lck_mtx_lock(&p->p_dtrace_sprlock);
+		dtrace_sprlock(p);
 
 		dof_ioctl_data_t* existing_dofs = p->p_dtrace_lazy_dofs;
 		
@@ -15158,9 +15353,8 @@ dtrace_lazy_dofs_remove(proc_t *p, int generation)
 #endif
 
 		}
-
-		lck_mtx_unlock(&p->p_dtrace_sprlock);
-	} else {		
+		dtrace_sprunlock(p);
+	} else {
 		rval = EACCES;
 	}
 	
@@ -15173,14 +15367,14 @@ void
 dtrace_lazy_dofs_destroy(proc_t *p)
 {
 	lck_rw_lock_shared(&dtrace_dof_mode_lock);
-	lck_mtx_lock(&p->p_dtrace_sprlock);
+	dtrace_sprlock(p);
 	
 	ASSERT(p->p_dtrace_lazy_dofs == NULL || p->p_dtrace_helpers == NULL);
 
 	dof_ioctl_data_t* lazy_dofs = p->p_dtrace_lazy_dofs;
 	p->p_dtrace_lazy_dofs = NULL;
 
-	lck_mtx_unlock(&p->p_dtrace_sprlock);
+	dtrace_sprunlock(p);
 	lck_rw_unlock_shared(&dtrace_dof_mode_lock);
 
 	if (lazy_dofs) {
@@ -15205,7 +15399,7 @@ dtrace_lazy_dofs_process(proc_t *p) {
 	 * fault in the dof. We could fix this by holding locks longer,
 	 * but the errors are benign.
 	 */
-	lck_mtx_lock(&p->p_dtrace_sprlock);
+	dtrace_sprlock(p);
 
 
 	ASSERT(p->p_dtrace_lazy_dofs == NULL || p->p_dtrace_helpers == NULL);
@@ -15214,8 +15408,8 @@ dtrace_lazy_dofs_process(proc_t *p) {
 	dof_ioctl_data_t* lazy_dofs = p->p_dtrace_lazy_dofs;
 	p->p_dtrace_lazy_dofs = NULL;
 
-	lck_mtx_unlock(&p->p_dtrace_sprlock);
-
+	dtrace_sprunlock(p);
+	lck_mtx_lock(&dtrace_meta_lock);
 	/*
 	 * Process each dof_helper_t
 	 */
@@ -15270,8 +15464,10 @@ dtrace_lazy_dofs_process(proc_t *p) {
 				lck_mtx_unlock(&dtrace_lock);
 			}
 		}
-
+		lck_mtx_unlock(&dtrace_meta_lock);
 		kmem_free(lazy_dofs, DOF_IOCTL_DATA_T_SIZE(lazy_dofs->dofiod_count));
+	} else {
+		lck_mtx_unlock(&dtrace_meta_lock);
 	}
 }
 
@@ -15295,7 +15491,7 @@ dtrace_lazy_dofs_duplicate(proc_t *parent, proc_t *child)
 	LCK_MTX_ASSERT(&child->p_dtrace_sprlock, LCK_MTX_ASSERT_NOTOWNED);
 
 	lck_rw_lock_shared(&dtrace_dof_mode_lock);
-	lck_mtx_lock(&parent->p_dtrace_sprlock);
+	dtrace_sprlock(parent);
 
 	/*
 	 * We need to make sure that the transition to lazy dofs -> helpers
@@ -15315,12 +15511,12 @@ dtrace_lazy_dofs_duplicate(proc_t *parent, proc_t *child)
 		bcopy(parent_dofs, child_dofs, parent_dofs_size);
 	}
 
-	lck_mtx_unlock(&parent->p_dtrace_sprlock);
+	dtrace_sprunlock(parent);
 
 	if (child_dofs) {
-		lck_mtx_lock(&child->p_dtrace_sprlock);
+		dtrace_sprlock(child);
 		child->p_dtrace_lazy_dofs = child_dofs;
-		lck_mtx_unlock(&child->p_dtrace_sprlock);
+		dtrace_sprunlock(child);
 		/**
 		 * We process the DOF at this point if the mode is set to
 		 * LAZY_OFF. This can happen if DTrace is still processing the
@@ -15365,6 +15561,7 @@ dtrace_helpers_destroy(proc_t* p)
 	dtrace_vstate_t *vstate;
 	uint_t i;
 
+	lck_mtx_lock(&dtrace_meta_lock);
 	lck_mtx_lock(&dtrace_lock);
 
 	ASSERT(p->p_dtrace_helpers != NULL);
@@ -15398,7 +15595,6 @@ dtrace_helpers_destroy(proc_t* p)
 	 * Destroy the helper providers.
 	 */
 	if (help->dthps_maxprovs > 0) {
-		lck_mtx_lock(&dtrace_meta_lock);
 		if (dtrace_meta_pid != NULL) {
 			ASSERT(dtrace_deferred_pid == NULL);
 
@@ -15428,7 +15624,6 @@ dtrace_helpers_destroy(proc_t* p)
 			lck_mtx_unlock(&dtrace_lock);
 		}
 
-		lck_mtx_unlock(&dtrace_meta_lock);
 
 		for (i = 0; i < help->dthps_nprovs; i++) {
 			dtrace_helper_provider_destroy(help->dthps_provs[i]);
@@ -15447,6 +15642,7 @@ dtrace_helpers_destroy(proc_t* p)
 
 	--dtrace_helpers;
 	lck_mtx_unlock(&dtrace_lock);
+	lck_mtx_unlock(&dtrace_meta_lock);
 }
 
 static void
@@ -15459,6 +15655,7 @@ dtrace_helpers_duplicate(proc_t *from, proc_t *to)
 	uint_t i;
 	int j, sz, hasprovs = 0;
 
+	lck_mtx_lock(&dtrace_meta_lock);
 	lck_mtx_lock(&dtrace_lock);
 	ASSERT(from->p_dtrace_helpers != NULL);
 	ASSERT(dtrace_helpers > 0);
@@ -15530,6 +15727,8 @@ dtrace_helpers_duplicate(proc_t *from, proc_t *to)
 
 	if (hasprovs)
 		dtrace_helper_provider_register(to, newhelp, NULL);
+
+	lck_mtx_unlock(&dtrace_meta_lock);
 }
 
 /**
@@ -15550,7 +15749,7 @@ dtrace_proc_fork(proc_t *parent_proc, proc_t *child_proc, int spawn)
 		 * the p_dtrace_sprlock lock. A full sprlock would
 		 * task_suspend the parent.
 		 */
-		lck_mtx_lock(&parent_proc->p_dtrace_sprlock);
+		dtrace_sprlock(parent_proc);
 
 		/*
 		 * Remove all DTrace tracepoints from the child process. We
@@ -15561,7 +15760,7 @@ dtrace_proc_fork(proc_t *parent_proc, proc_t *child_proc, int spawn)
 			dtrace_fasttrap_fork(parent_proc, child_proc);
 		}
 
-		lck_mtx_unlock(&parent_proc->p_dtrace_sprlock);
+		dtrace_sprunlock(parent_proc);
 
 		/*
 		 * Duplicate any lazy dof(s). This must be done while NOT
@@ -15851,7 +16050,7 @@ dtrace_module_loaded(struct kmod_info *kmod, uint32_t flag)
 		ctl->mod_loaded = 1;
 		ctl->mod_flags = 0;
 		ctl->mod_user_symbols = NULL;
-		
+
 		/*
 		 * Find the UUID for this module, if it has one
 		 */
@@ -15870,6 +16069,15 @@ dtrace_module_loaded(struct kmod_info *kmod, uint32_t flag)
 		
 		if (ctl->mod_address == g_kernel_kmod_info.address) {
 			ctl->mod_flags |= MODCTL_IS_MACH_KERNEL;
+			memcpy(dtrace_kerneluuid, ctl->mod_uuid, sizeof(dtrace_kerneluuid));
+		}
+		/*
+		 * Static kexts have a UUID that is not used for symbolication, as all their
+		 * symbols are in kernel
+		 */
+		else if ((flag & KMOD_DTRACE_STATIC_KEXT) == KMOD_DTRACE_STATIC_KEXT) {
+			memcpy(ctl->mod_uuid, dtrace_kerneluuid, sizeof(dtrace_kerneluuid));
+			ctl->mod_flags |= MODCTL_IS_STATIC_KEXT;
 		}
 	}
 	dtrace_modctl_add(ctl);
@@ -16078,6 +16286,7 @@ syncloop:
 		probe->dtpr_provider->dtpv_probe_count--;					
 
 		next = probe->dtpr_nextmod;
+		dtrace_hash_remove(dtrace_byprov, probe);
 		dtrace_hash_remove(dtrace_bymod, probe);
 		dtrace_hash_remove(dtrace_byfunc, probe);
 		dtrace_hash_remove(dtrace_byname, probe);
@@ -16103,9 +16312,9 @@ syncloop:
 		prov = probe->dtpr_provider;
 		prov->dtpv_pops.dtps_destroy(prov->dtpv_arg, probe->dtpr_id,
 		    probe->dtpr_arg);
-		kmem_free(probe->dtpr_mod, strlen(probe->dtpr_mod) + 1);
-		kmem_free(probe->dtpr_func, strlen(probe->dtpr_func) + 1);
-		kmem_free(probe->dtpr_name, strlen(probe->dtpr_name) + 1);
+		dtrace_strunref(probe->dtpr_mod);
+		dtrace_strunref(probe->dtpr_func);
+		dtrace_strunref(probe->dtpr_name);
 		vmem_free(dtrace_arena, (void *)(uintptr_t)probe->dtpr_id, 1);
 
 		zfree(dtrace_probe_t_zone, probe);
@@ -16242,9 +16451,8 @@ dtrace_toxrange_add(uintptr_t base, uintptr_t limit)
  */
 /*ARGSUSED*/
 static int
-dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
+dtrace_attach(dev_info_t *devi)
 {
-#pragma unused(cmd) /* __APPLE__ */
 	dtrace_provider_id_t id;
 	dtrace_state_t *state = NULL;
 	dtrace_enabling_t *enab;
@@ -16254,8 +16462,6 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	lck_mtx_lock(&dtrace_lock);
 
 	/* Darwin uses BSD cloning device driver to automagically obtain minor device number. */
-
-	ddi_report_dev(devi);
 	dtrace_devi = devi;
 
 	dtrace_modload = dtrace_module_loaded;
@@ -16274,8 +16480,6 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 
 	dtrace_arena = vmem_create("dtrace", (void *)1, UINT32_MAX, 1,
 	    NULL, NULL, NULL, 0, VM_SLEEP | VMC_IDENTIFIER);
-	dtrace_taskq = taskq_create("dtrace_taskq", 1, maxclsyspri,
-	    1, INT_MAX, 0);
 
 	dtrace_state_cache = kmem_cache_create("dtrace_state_cache",
 	    sizeof (dtrace_dstate_percpu_t) * (int)NCPU, DTRACE_STATE_ALIGN,
@@ -16283,15 +16487,23 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 
 	LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
 
-	dtrace_bymod = dtrace_hash_create(offsetof(dtrace_probe_t, dtpr_mod),
+	dtrace_byprov = dtrace_hash_create(dtrace_strkey_probe_provider,
+	    0, /* unused */
+	    offsetof(dtrace_probe_t, dtpr_nextprov),
+	    offsetof(dtrace_probe_t, dtpr_prevprov));
+
+	dtrace_bymod = dtrace_hash_create(dtrace_strkey_deref_offset,
+	    offsetof(dtrace_probe_t, dtpr_mod),
 	    offsetof(dtrace_probe_t, dtpr_nextmod),
 	    offsetof(dtrace_probe_t, dtpr_prevmod));
 
-	dtrace_byfunc = dtrace_hash_create(offsetof(dtrace_probe_t, dtpr_func),
+	dtrace_byfunc = dtrace_hash_create(dtrace_strkey_deref_offset,
+	    offsetof(dtrace_probe_t, dtpr_func),
 	    offsetof(dtrace_probe_t, dtpr_nextfunc),
 	    offsetof(dtrace_probe_t, dtpr_prevfunc));
 
-	dtrace_byname = dtrace_hash_create(offsetof(dtrace_probe_t, dtpr_name),
+	dtrace_byname = dtrace_hash_create(dtrace_strkey_deref_offset,
+	    offsetof(dtrace_probe_t, dtpr_name),
 	    offsetof(dtrace_probe_t, dtpr_nextname),
 	    offsetof(dtrace_probe_t, dtpr_prevname));
 
@@ -16443,6 +16655,7 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 	dtrace_opens++;
 	dtrace_membar_producer();
 
+#ifdef illumos
 	/*
 	 * If the kernel debugger is active (that is, if the kernel debugger
 	 * modified text in some way), we won't allow the open.
@@ -16453,13 +16666,17 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 		lck_mtx_unlock(&cpu_lock);
 		return (EBUSY);
 	}
+#endif
 
 	rv = dtrace_state_create(devp, cred_p, &state);
 	lck_mtx_unlock(&cpu_lock);
 
 	if (rv != 0 || state == NULL) {
-		if (--dtrace_opens == 0 && dtrace_anon.dta_enabling == NULL)
+		if (--dtrace_opens == 0 && dtrace_anon.dta_enabling == NULL) {
+#ifdef illumos
 			(void) kdi_dtrace_set(KDI_DTSET_DTRACE_DEACTIVATE);
+#endif
+		}
 		lck_mtx_unlock(&dtrace_lock);
 		/* propagate EAGAIN or ERESTART */
 		return (rv);
@@ -16557,9 +16774,12 @@ dtrace_close(dev_t dev, int flag, int otyp, cred_t *cred_p)
 	 * Only relinquish control of the kernel debugger interface when there
 	 * are no consumers and no anonymous enablings.
 	 */
-	if (--dtrace_opens == 0 && dtrace_anon.dta_enabling == NULL)
+	if (--dtrace_opens == 0 && dtrace_anon.dta_enabling == NULL) {
+#ifdef illumos
 		(void) kdi_dtrace_set(KDI_DTSET_DTRACE_DEACTIVATE);
-	
+#endif
+	}
+
 	lck_mtx_unlock(&dtrace_lock);
 	lck_mtx_unlock(&cpu_lock);
 
@@ -16700,6 +16920,7 @@ dtrace_ioctl_helper(u_long cmd, caddr_t arg, int *rv)
 					dof_hdr_t *dof = dtrace_dof_copyin(dhp->dofhp_dof, &rval);
 					
 					if (dof != NULL) {					
+						lck_mtx_lock(&dtrace_meta_lock);
 						lck_mtx_lock(&dtrace_lock);
 						
 						/*
@@ -16711,6 +16932,7 @@ dtrace_ioctl_helper(u_long cmd, caddr_t arg, int *rv)
 						}
 						
 						lck_mtx_unlock(&dtrace_lock);
+						lck_mtx_unlock(&dtrace_meta_lock);
 					}
 				} while (++i < multi_dof->dofiod_count && rval == 0);
 			}
@@ -16751,9 +16973,11 @@ dtrace_ioctl_helper(u_long cmd, caddr_t arg, int *rv)
 			 * EACCES means non-lazy
 			 */
 			if (rval == EACCES) {
+				lck_mtx_lock(&dtrace_meta_lock);
 				lck_mtx_lock(&dtrace_lock);
 				rval = dtrace_helper_destroygen(p, generation);
 				lck_mtx_unlock(&dtrace_lock);
+				lck_mtx_unlock(&dtrace_meta_lock);
 			}
 
 			return (rval);
@@ -17106,17 +17330,15 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 			desc.dtpd_id++;
 		}
 
-		if (cmd == DTRACEIOC_PROBEMATCH)  {
-			dtrace_probekey(&desc, &pkey);
-			pkey.dtpk_id = DTRACE_IDNONE;
-		}
-
 		dtrace_cred2priv(cr, &priv, &uid, &zoneid);
 
 		lck_mtx_lock(&dtrace_lock);
 
-		if (cmd == DTRACEIOC_PROBEMATCH) {
-                        /* Quiet compiler warning */
+		if (cmd == DTRACEIOC_PROBEMATCH)  {
+			dtrace_probekey(&desc, &pkey);
+			pkey.dtpk_id = DTRACE_IDNONE;
+
+			/* Quiet compiler warning */
 			for (i = desc.dtpd_id; i <= (dtrace_id_t)dtrace_nprobes; i++) {
 				if ((probe = dtrace_probes[i - 1]) != NULL &&
 					(m = dtrace_match_probe(probe, &pkey,
@@ -17128,6 +17350,7 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 				lck_mtx_unlock(&dtrace_lock);
 				return (EINVAL);
 			}
+			dtrace_probekey_release(&pkey);
 
 		} else {
                         /* Quiet compiler warning */
@@ -17639,7 +17862,7 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 					ctl->mod_flags |= MODCTL_FBT_PROVIDE_PRIVATE_PROBES;
 
 				ASSERT(!MOD_HAS_USERSPACE_SYMBOLS(ctl));
-				if (!MOD_SYMBOLS_DONE(ctl)) {
+				if (!MOD_SYMBOLS_DONE(ctl) && !MOD_IS_STATIC_KEXT(ctl)) {
 					dtmul_count++;
 					rval = EINVAL;
 				}
@@ -17695,7 +17918,7 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 			 * are available, add user syms if the module might use them.
 			 */
 			ASSERT(!MOD_HAS_USERSPACE_SYMBOLS(ctl));
-			if (!MOD_SYMBOLS_DONE(ctl)) {
+			if (!MOD_SYMBOLS_DONE(ctl) && !MOD_IS_STATIC_KEXT(ctl)) {
 				UUID* uuid = &uuids_list->dtmul_uuid[dtmul_count];
 				if (dtmul_count++ < uuids_list->dtmul_count) {
 					memcpy(uuid, ctl->mod_uuid, sizeof(UUID));
@@ -17811,32 +18034,24 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 				ctl->mod_flags |= MODCTL_FBT_PROVIDE_PRIVATE_PROBES;
 
 			ASSERT(!MOD_HAS_USERSPACE_SYMBOLS(ctl));
-			if (MOD_HAS_UUID(ctl) && !MOD_SYMBOLS_DONE(ctl)) {
-				if (memcmp(module_symbols->dtmodsyms_uuid, ctl->mod_uuid, sizeof(UUID)) == 0) {
-					/* BINGO! */
-					ctl->mod_user_symbols = module_symbols;
-					break;
-				}
+			if (MOD_HAS_UUID(ctl) && !MOD_SYMBOLS_DONE(ctl) && memcmp(module_symbols->dtmodsyms_uuid, ctl->mod_uuid, sizeof(UUID)) == 0) {
+				dtrace_provider_t *prv;
+				ctl->mod_user_symbols = module_symbols;
+
+				/*
+				 * We're going to call each providers per-module provide operation
+				 * specifying only this module.
+				 */
+				for (prv = dtrace_provider; prv != NULL; prv = prv->dtpv_next)
+					prv->dtpv_pops.dtps_provide_module(prv->dtpv_arg, ctl);
+				/*
+				 * We gave every provider a chance to provide with the user syms, go ahead and clear them
+				 */
+				ctl->mod_user_symbols = NULL; /* MUST reset this to clear HAS_USERSPACE_SYMBOLS */
 			}
 			ctl = ctl->mod_next;
 		}
 
-		if (ctl) {
-			dtrace_provider_t *prv;
-
-			/*
-			 * We're going to call each providers per-module provide operation
-			 * specifying only this module.
-			 */
-			for (prv = dtrace_provider; prv != NULL; prv = prv->dtpv_next)
-				prv->dtpv_pops.dtps_provide_module(prv->dtpv_arg, ctl);	
-						
-			/*
-			 * We gave every provider a chance to provide with the user syms, go ahead and clear them
-			 */
-			ctl->mod_user_symbols = NULL; /* MUST reset this to clear HAS_USERSPACE_SYMBOLS */
-		}
-		
 		lck_mtx_unlock(&mod_lock);
 		lck_mtx_unlock(&dtrace_provider_lock);
 
@@ -17972,9 +18187,13 @@ dtrace_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	dtrace_probes = NULL;
 	dtrace_nprobes = 0;
 
+	dtrace_hash_destroy(dtrace_strings);
+	dtrace_hash_destroy(dtrace_byprov);
 	dtrace_hash_destroy(dtrace_bymod);
 	dtrace_hash_destroy(dtrace_byfunc);
 	dtrace_hash_destroy(dtrace_byname);
+	dtrace_strings = NULL;
+	dtrace_byprov = NULL;
 	dtrace_bymod = NULL;
 	dtrace_byfunc = NULL;
 	dtrace_byname = NULL;
@@ -18002,6 +18221,7 @@ dtrace_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	lck_mtx_unlock(&dtrace_lock);
 	lck_mtx_unlock(&dtrace_provider_lock);
 
+#ifdef illumos
 	/*
 	 * We don't destroy the task queue until after we have dropped our
 	 * locks (taskq_destroy() may block on running tasks).  To prevent
@@ -18012,6 +18232,7 @@ dtrace_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	 */
 	taskq_destroy(dtrace_taskq);
 	dtrace_taskq = NULL;
+#endif
 
 	return (DDI_SUCCESS);
 }
@@ -18223,6 +18444,19 @@ lck_grp_t* dtrace_lck_grp;
 
 static int gMajDevNo;
 
+void dtrace_early_init (void)
+{
+	dtrace_restriction_policy_load();
+
+	/*
+	 * See dtrace_impl.h for a description of kernel symbol modes.
+	 * The default is to wait for symbols from userspace (lazy symbols).
+	 */
+	if (!PE_parse_boot_argn("dtrace_kernel_symbol_mode", &dtrace_kernel_symbol_mode, sizeof (dtrace_kernel_symbol_mode))) {
+		dtrace_kernel_symbol_mode = DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE;
+	}
+}
+
 void
 dtrace_init( void )
 {
@@ -18273,13 +18507,6 @@ dtrace_init( void )
 			gDTraceInited = 0;
 			return;
 		}
-
-#if defined(DTRACE_MEMORY_ZONES)
-		/*
-		 * Initialize the dtrace kalloc-emulation zones.
-		 */
-		dtrace_alloc_init();
-#endif /* DTRACE_MEMORY_ZONES */
 
 		/*
 		 * Allocate the dtrace_probe_t zone
@@ -18347,6 +18574,11 @@ dtrace_init( void )
 
 		(void)dtrace_abs_to_nano(0LL); /* Force once only call to clock_timebase_info (which can take a lock) */
 
+		dtrace_strings = dtrace_hash_create(dtrace_strkey_offset,
+		    offsetof(dtrace_string_t, dtst_str),
+		    offsetof(dtrace_string_t, dtst_next),
+		    offsetof(dtrace_string_t, dtst_prev));
+
 		dtrace_isa_init();
 		/*
 		 * See dtrace_impl.h for a description of dof modes.
@@ -18386,16 +18618,6 @@ dtrace_init( void )
 				break;
 		}
 
-		/*
-		 * See dtrace_impl.h for a description of kernel symbol modes.
-		 * The default is to wait for symbols from userspace (lazy symbols).
-		 */
-		if (!PE_parse_boot_argn("dtrace_kernel_symbol_mode", &dtrace_kernel_symbol_mode, sizeof (dtrace_kernel_symbol_mode))) {
-			dtrace_kernel_symbol_mode = DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE;
-		}
-
-		dtrace_restriction_policy_load();
-
 		gDTraceInited = 1;
 
 	} else
@@ -18410,7 +18632,7 @@ dtrace_postinit(void)
 	 * run. That way, anonymous DOF enabled under dtrace_attach() is safe
 	 * to go.
 	 */
-	dtrace_attach( (dev_info_t *)(uintptr_t)makedev(gMajDevNo, 0), 0 ); /* Punning a dev_t to a dev_info_t* */
+	dtrace_attach( (dev_info_t *)(uintptr_t)makedev(gMajDevNo, 0)); /* Punning a dev_t to a dev_info_t* */
 	
 	/*
 	 * Add the mach_kernel to the module list for lazy processing

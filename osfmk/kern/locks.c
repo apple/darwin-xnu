@@ -71,10 +71,10 @@
 #include <kern/processor.h>
 #include <kern/sched_prim.h>
 #include <kern/debug.h>
+#include <libkern/section_keywords.h>
 #include <machine/atomic.h>
 #include <machine/machine_cpu.h>
 #include <string.h>
-
 
 #include <sys/kdebug.h>
 
@@ -120,6 +120,8 @@ static unsigned int	lck_grp_cnt;
 decl_lck_mtx_data(static,lck_grp_lock)
 static lck_mtx_ext_t lck_grp_lock_ext;
 
+SECURITY_READ_ONLY_LATE(boolean_t) spinlock_timeout_panic = TRUE;
+
 lck_grp_attr_t	LockDefaultGroupAttr;
 lck_grp_t		LockCompatGroup;
 lck_attr_t		LockDefaultLckAttr;
@@ -131,6 +133,14 @@ uint64_t dtrace_spin_threshold = 500; // 500ns
 uint64_t dtrace_spin_threshold = LOCK_PANIC_TIMEOUT / 1000000; // 500ns
 #endif
 #endif
+
+uintptr_t
+unslide_for_kdebug(void* object) {
+	if (__improbable(kdebug_enable))
+		return VM_KERNEL_UNSLIDE_OR_PERM(object);
+	else
+		return 0;
+}
 
 /*
  * Routine:	lck_mod_init
@@ -535,20 +545,11 @@ hw_lock_lock_contended(hw_lock_t lock, uintptr_t data, uint64_t timeout, boolean
 }
 #endif	// __SMP__
 
-/*
- *	Routine: hw_lock_lock
- *
- *	Acquire lock, spinning until it becomes available,
- *	return with preemption disabled.
- */
-void
-hw_lock_lock(hw_lock_t lock)
+static inline void
+hw_lock_lock_internal(hw_lock_t lock, thread_t thread)
 {
-	thread_t	thread;
 	uintptr_t	state;
 
-	thread = current_thread();
-	disable_preemption_for_thread(thread);
 	state = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
 #if	__SMP__
 
@@ -563,7 +564,7 @@ hw_lock_lock(hw_lock_t lock)
 #if	LOCK_PRETEST
 contended:
 #endif	// LOCK_PRETEST
-	hw_lock_lock_contended(lock, state, 0, TRUE);
+	hw_lock_lock_contended(lock, state, 0, spinlock_timeout_panic);
 end:
 #else	// __SMP__
 	if (lock->lock_data)
@@ -574,6 +575,34 @@ end:
 	LOCKSTAT_RECORD(LS_LCK_SPIN_LOCK_ACQUIRE, lock, 0);
 #endif
 	return;
+}
+
+/*
+ *	Routine: hw_lock_lock
+ *
+ *	Acquire lock, spinning until it becomes available,
+ *	return with preemption disabled.
+ */
+void
+hw_lock_lock(hw_lock_t lock)
+{
+	thread_t thread = current_thread();
+	disable_preemption_for_thread(thread);
+	hw_lock_lock_internal(lock, thread);
+}
+
+/*
+ *	Routine: hw_lock_lock_nopreempt
+ *
+ *	Acquire lock, spinning until it becomes available.
+ */
+void
+hw_lock_lock_nopreempt(hw_lock_t lock)
+{
+	thread_t thread = current_thread();
+	if (__improbable(!preemption_disabled_for_thread(thread)))
+		panic("Attempt to take no-preempt spinlock %p in preemptible context", lock);
+	hw_lock_lock_internal(lock, thread);
 }
 
 /*
@@ -628,18 +657,10 @@ end:
  *
  *	returns with preemption disabled on success.
  */
-unsigned int
-hw_lock_try(hw_lock_t lock)
+static inline unsigned int
+hw_lock_try_internal(hw_lock_t lock, thread_t thread)
 {
-	thread_t	thread = current_thread();
 	int		success = 0;
-#if	LOCK_TRY_DISABLE_INT
-	long		intmask;
-
-	intmask = disable_interrupts();
-#else
-	disable_preemption_for_thread(thread);
-#endif	// LOCK_TRY_DISABLE_INT
 
 #if	__SMP__
 #if	LOCK_PRETEST
@@ -655,20 +676,9 @@ hw_lock_try(hw_lock_t lock)
 	}
 #endif	// __SMP__
 
-#if	LOCK_TRY_DISABLE_INT
-	if (success)
-		disable_preemption_for_thread(thread);
 #if	LOCK_PRETEST
 failed:
 #endif	// LOCK_PRETEST
-	restore_interrupts(intmask);
-#else
-#if	LOCK_PRETEST
-failed:
-#endif	// LOCK_PRETEST
-	if (!success)
-		enable_preemption();
-#endif	// LOCK_TRY_DISABLE_INT
 #if CONFIG_DTRACE
 	if (success)
 		LOCKSTAT_RECORD(LS_LCK_SPIN_LOCK_ACQUIRE, lock, 0);
@@ -676,13 +686,33 @@ failed:
 	return success;
 }
 
+unsigned int
+hw_lock_try(hw_lock_t lock)
+{
+	thread_t thread = current_thread();
+	disable_preemption_for_thread(thread);
+	unsigned int success = hw_lock_try_internal(lock, thread);
+	if (!success)
+		enable_preemption();
+	return success;
+}
+
+unsigned int
+hw_lock_try_nopreempt(hw_lock_t lock)
+{
+	thread_t thread = current_thread();
+	if (__improbable(!preemption_disabled_for_thread(thread)))
+		panic("Attempt to test no-preempt spinlock %p in preemptible context", lock);
+	return hw_lock_try_internal(lock, thread);
+}
+
 /*
  *	Routine: hw_lock_unlock
  *
  *	Unconditionally release lock, release preemption level.
  */
-void
-hw_lock_unlock(hw_lock_t lock)
+static inline void
+hw_lock_unlock_internal(hw_lock_t lock)
 {
 	__c11_atomic_store((_Atomic uintptr_t *)&lock->lock_data, 0, memory_order_release_smp);
 #if __arm__ || __arm64__
@@ -692,7 +722,21 @@ hw_lock_unlock(hw_lock_t lock)
 #if	CONFIG_DTRACE
 	LOCKSTAT_RECORD(LS_LCK_SPIN_UNLOCK_RELEASE, lock, 0);
 #endif /* CONFIG_DTRACE */
+}
+
+void
+hw_lock_unlock(hw_lock_t lock)
+{
+	hw_lock_unlock_internal(lock);
 	enable_preemption();
+}
+
+void
+hw_lock_unlock_nopreempt(hw_lock_t lock)
+{
+	if (__improbable(!preemption_disabled_for_thread(current_thread())))
+		panic("Attempt to release no-preempt spinlock %p in preemptible context", lock);
+	hw_lock_unlock_internal(lock);
 }
 
 /*
@@ -765,40 +809,6 @@ lck_spin_sleep_deadline(
 	return res;
 }
 
-
-/*
- * Routine:	lck_mtx_clear_promoted
- *
- * Handle clearing of TH_SFLAG_PROMOTED,
- * adjusting thread priority as needed.
- *
- * Called with thread lock held
- */
-static void
-lck_mtx_clear_promoted (
-	thread_t 			thread,
-	__kdebug_only uintptr_t		trace_lck)
-{
-	thread->sched_flags &= ~TH_SFLAG_PROMOTED;
-
-	if (thread->sched_flags & TH_SFLAG_RW_PROMOTED) {
-		/* Thread still has a RW lock promotion */
-	} else if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
-		KERNEL_DEBUG_CONSTANT(
-			MACHDBG_CODE(DBG_MACH_SCHED,MACH_DEMOTE) | DBG_FUNC_NONE,
-				thread->sched_pri, DEPRESSPRI, 0, trace_lck, 0);
-		set_sched_pri(thread, DEPRESSPRI);
-	} else {
-		if (thread->base_pri < thread->sched_pri) {
-			KERNEL_DEBUG_CONSTANT(
-				MACHDBG_CODE(DBG_MACH_SCHED,MACH_DEMOTE) | DBG_FUNC_NONE,
-					thread->sched_pri, thread->base_pri, 0, trace_lck, 0);
-		}
-		thread_recompute_sched_pri(thread, FALSE);
-	}
-}
-
-
 /*
  * Routine:	lck_mtx_sleep
  */
@@ -848,7 +858,7 @@ lck_mtx_sleep(
 	if (lck_sleep_action & LCK_SLEEP_PROMOTED_PRI) {
 		if ((thread->rwlock_count-- == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
 			/* sched_flags checked without lock, but will be rechecked while clearing */
-			lck_rw_clear_promotion(thread);
+			lck_rw_clear_promotion(thread, unslide_for_kdebug(event));
 		}
 	}
 
@@ -903,7 +913,7 @@ lck_mtx_sleep_deadline(
 	if (lck_sleep_action & LCK_SLEEP_PROMOTED_PRI) {
 		if ((thread->rwlock_count-- == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
 			/* sched_flags checked without lock, but will be rechecked while clearing */
-			lck_rw_clear_promotion(thread);
+			lck_rw_clear_promotion(thread, unslide_for_kdebug(event));
 		}
 	}
 
@@ -913,12 +923,58 @@ lck_mtx_sleep_deadline(
 }
 
 /*
- * Routine: 	lck_mtx_lock_wait
+ * Lock Boosting Invariants:
+ *
+ * The lock owner is always promoted to the max priority of all its waiters.
+ * Max priority is capped at MAXPRI_PROMOTE.
+ *
+ * lck_mtx_pri being set implies that the lock owner is promoted to at least lck_mtx_pri
+ *      This prevents the thread from dropping in priority while holding a mutex
+ *      (note: Intel locks currently don't do this, to avoid thread lock churn)
+ *
+ * thread->promotions has a +1 for every mutex currently promoting the thread
+ * and 1 for was_promoted_on_wakeup being set.
+ * TH_SFLAG_PROMOTED is set on a thread whenever it has any promotions
+ * from any mutex (i.e. thread->promotions != 0)
+ *
+ * was_promoted_on_wakeup is set on a thread which is woken up by a mutex when
+ * it raises the priority of the woken thread to match lck_mtx_pri.
+ * It can be set for multiple iterations of wait, fail to acquire, re-wait, etc
+ * was_promoted_on_wakeup being set always implies a +1 promotions count.
+ *
+ * The last waiter is not given a promotion when it wakes up or acquires the lock.
+ * When the last waiter is waking up, a new contender can always come in and
+ * steal the lock without having to wait for the last waiter to make forward progress.
+ *
+ * lck_mtx_waiters has a +1 for every waiter currently between wait and acquire
+ * This prevents us from asserting that every wakeup wakes up a thread.
+ * This also causes excess thread_wakeup calls in the unlock path.
+ * It can only be fooled into thinking there are more waiters than are
+ * actually blocked, not less.
+ * It does allows us to reduce the complexity of the lock state.
+ *
+ * This also means that a starved bg thread as the last waiter could end up
+ * keeping the lock in the contended state for a long period of time, which
+ * may keep lck_mtx_pri artificially high for a very long time even though
+ * it is not participating or blocking anyone else.
+ * Intel locks don't have this problem because they can go uncontended
+ * as soon as there are no blocked threads involved.
+ */
+
+/*
+ * Routine: lck_mtx_lock_wait
  *
  * Invoked in order to wait on contention.
  *
  * Called with the interlock locked and
  * returns it unlocked.
+ *
+ * Always aggressively sets the owning thread to promoted,
+ * even if it's the same or higher priority
+ * This prevents it from lowering its own priority while holding a lock
+ *
+ * TODO: Come up with a more efficient way to handle same-priority promotions
+ *      <rdar://problem/30737670> ARM mutex contention logic could avoid taking the thread lock
  */
 void
 lck_mtx_lock_wait (
@@ -927,10 +983,8 @@ lck_mtx_lock_wait (
 {
 	thread_t		self = current_thread();
 	lck_mtx_t		*mutex;
-	__kdebug_only uintptr_t	trace_lck = VM_KERNEL_UNSLIDE_OR_PERM(lck);
-	__kdebug_only uintptr_t	trace_holder = VM_KERNEL_UNSLIDE_OR_PERM(holder);
-	integer_t		priority;
-	spl_t			s = splsched();
+	__kdebug_only uintptr_t trace_lck = unslide_for_kdebug(lck);
+
 #if	CONFIG_DTRACE
 	uint64_t		sleep_start = 0;
 
@@ -944,49 +998,64 @@ lck_mtx_lock_wait (
 	else
 		mutex = &lck->lck_mtx_ptr->lck_mtx;
 
-	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_START, trace_lck, trace_holder, 0, 0, 0);
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_START,
+	             trace_lck, (uintptr_t)thread_tid(thread), 0, 0, 0);
 
-	priority = self->sched_pri;
-	if (priority < self->base_pri)
-		priority = self->base_pri;
-	if (priority < BASEPRI_DEFAULT)
-		priority = BASEPRI_DEFAULT;
+	spl_t s = splsched();
+	thread_lock(holder);
 
-	/* Do not promote past promotion ceiling */
+	assert_promotions_invariant(holder);
+
+	if ((holder->sched_flags & TH_SFLAG_DEPRESS) == 0)
+		assert(holder->sched_pri >= mutex->lck_mtx_pri);
+
+	integer_t priority = self->sched_pri;
+	priority = MAX(priority, self->base_pri);
+	priority = MAX(priority, BASEPRI_DEFAULT);
 	priority = MIN(priority, MAXPRI_PROMOTE);
 
-	thread_lock(holder);
 	if (mutex->lck_mtx_pri == 0) {
-		holder->promotions++;
-		holder->sched_flags |= TH_SFLAG_PROMOTED;
+		/* This is the first promotion for this mutex */
+		if (holder->promotions++ == 0) {
+			/* This is the first promotion for holder */
+			sched_thread_promote_to_pri(holder, priority, trace_lck);
+		} else {
+			/* Holder was previously promoted due to a different mutex, raise to match this one */
+			sched_thread_update_promotion_to_pri(holder, priority, trace_lck);
+		}
+	} else {
+		/* Holder was previously promoted due to this mutex, check if the pri needs to go up */
+		sched_thread_update_promotion_to_pri(holder, priority, trace_lck);
 	}
 
-	if (mutex->lck_mtx_pri < priority && holder->sched_pri < priority) {
-		KERNEL_DEBUG_CONSTANT(
-			MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
-					holder->sched_pri, priority, trace_holder, trace_lck, 0);
-		set_sched_pri(holder, priority);
-	}
+	assert(holder->promotions > 0);
+	assert(holder->promotion_priority >= priority);
+
+	if ((holder->sched_flags & TH_SFLAG_DEPRESS) == 0)
+		assert(holder->sched_pri >= mutex->lck_mtx_pri);
+
+	assert_promotions_invariant(holder);
+
 	thread_unlock(holder);
 	splx(s);
 
 	if (mutex->lck_mtx_pri < priority)
 		mutex->lck_mtx_pri = priority;
-	if (self->pending_promoter[self->pending_promoter_index] == NULL) {
-		self->pending_promoter[self->pending_promoter_index] = mutex;
-		mutex->lck_mtx_waiters++;
-	}
-	else
-	if (self->pending_promoter[self->pending_promoter_index] != mutex) {
-		self->pending_promoter[++self->pending_promoter_index] = mutex;
+
+	if (self->waiting_for_mutex == NULL) {
+		self->waiting_for_mutex = mutex;
 		mutex->lck_mtx_waiters++;
 	}
 
+	assert(self->waiting_for_mutex == mutex);
+
 	thread_set_pending_block_hint(self, kThreadWaitKernelMutex);
-	assert_wait(LCK_MTX_EVENT(mutex), THREAD_UNINT);
+	assert_wait(LCK_MTX_EVENT(mutex), THREAD_UNINT | THREAD_WAIT_NOREPORT_USER);
 	lck_mtx_ilk_unlock(mutex);
 
 	thread_block(THREAD_CONTINUE_NULL);
+
+	assert(mutex->lck_mtx_waiters > 0);
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_END, 0, 0, 0, 0, 0);
 #if	CONFIG_DTRACE
@@ -1023,49 +1092,79 @@ lck_mtx_lock_acquire(
 	thread_t		thread = current_thread();
 	lck_mtx_t		*mutex;
 	integer_t		priority;
-	spl_t			s;
-	__kdebug_only uintptr_t	trace_lck = VM_KERNEL_UNSLIDE_OR_PERM(lck);
 
 	if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT)
 		mutex = lck;
 	else
 		mutex = &lck->lck_mtx_ptr->lck_mtx;
 
-	if (thread->pending_promoter[thread->pending_promoter_index] == mutex) {
-		thread->pending_promoter[thread->pending_promoter_index] = NULL;
-		if (thread->pending_promoter_index > 0)
-			thread->pending_promoter_index--;
+	/*
+	 * If waiting_for_mutex is set, then this thread was previously blocked waiting on this lock
+	 * If it's un-set, then this thread stole the lock from another waiter.
+	 */
+	if (thread->waiting_for_mutex == mutex) {
+		assert(mutex->lck_mtx_waiters > 0);
+
+		thread->waiting_for_mutex = NULL;
 		mutex->lck_mtx_waiters--;
 	}
 
-	if (mutex->lck_mtx_waiters)
+	assert(thread->waiting_for_mutex == NULL);
+
+	if (mutex->lck_mtx_waiters > 0) {
 		priority = mutex->lck_mtx_pri;
-	else {
+	} else {
+		/* I was the last waiter, so the mutex is no longer promoted or contended */
 		mutex->lck_mtx_pri = 0;
 		priority = 0;
 	}
 
 	if (priority || thread->was_promoted_on_wakeup) {
-		s = splsched();
+		__kdebug_only uintptr_t trace_lck = unslide_for_kdebug(lck);
+
+		/*
+		 * Note: was_promoted_on_wakeup can happen for multiple wakeups in a row without
+		 * an intervening acquire if a thread keeps failing to acquire the lock
+		 *
+		 * If priority is true but not promoted on wakeup,
+		 * then this is a lock steal of a promoted mutex, so it needs a ++ of promotions.
+		 *
+		 * If promoted on wakeup is true, but priority is not,
+		 * then this is the last owner, and the last owner does not need a promotion.
+		 */
+
+		spl_t s = splsched();
 		thread_lock(thread);
 
+		assert_promotions_invariant(thread);
+
+		if (thread->was_promoted_on_wakeup)
+			assert(thread->promotions > 0);
+
 		if (priority) {
-			thread->promotions++;
-			thread->sched_flags |= TH_SFLAG_PROMOTED;
-			if (thread->sched_pri < priority) {
-				KERNEL_DEBUG_CONSTANT(
-					MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
-							thread->sched_pri, priority, 0, trace_lck, 0);
-				/* Do not promote past promotion ceiling */
-				assert(priority <= MAXPRI_PROMOTE);
-				set_sched_pri(thread, priority);
+			if (thread->promotions++ == 0) {
+				/* This is the first promotion for holder */
+				sched_thread_promote_to_pri(thread, priority, trace_lck);
+			} else {
+				/*
+				 * Holder was previously promoted due to a different mutex, raise to match this one
+				 * Or, this thread was promoted on wakeup but someone else later contended on mutex
+				 * at higher priority before we got here
+				 */
+				sched_thread_update_promotion_to_pri(thread, priority, trace_lck);
 			}
 		}
+
 		if (thread->was_promoted_on_wakeup) {
 			thread->was_promoted_on_wakeup = 0;
-			if (thread->promotions == 0)
-				lck_mtx_clear_promoted(thread, trace_lck);
+			if (--thread->promotions == 0)
+				sched_thread_unpromote(thread, trace_lck);
 		}
+
+		assert_promotions_invariant(thread);
+
+		if (priority && (thread->sched_flags & TH_SFLAG_DEPRESS) == 0)
+			assert(thread->sched_pri >= priority);
 
 		thread_unlock(thread);
 		splx(s);
@@ -1089,6 +1188,10 @@ lck_mtx_lock_acquire(
  * Invoked on unlock when there is contention.
  *
  * Called with the interlock locked.
+ *
+ * TODO: the 'waiters' flag does not indicate waiters exist on the waitqueue,
+ * it indicates waiters exist between wait and acquire.
+ * This means that here we may do extra unneeded wakeups.
  */
 void
 lck_mtx_unlock_wakeup (
@@ -1097,7 +1200,7 @@ lck_mtx_unlock_wakeup (
 {
 	thread_t		thread = current_thread();
 	lck_mtx_t		*mutex;
-	__kdebug_only uintptr_t trace_lck = VM_KERNEL_UNSLIDE_OR_PERM(lck);
+	__kdebug_only uintptr_t trace_lck = unslide_for_kdebug(lck);
 
 	if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT)
 		mutex = lck;
@@ -1107,20 +1210,36 @@ lck_mtx_unlock_wakeup (
 	if (thread != holder)
 		panic("lck_mtx_unlock_wakeup: mutex %p holder %p\n", mutex, holder);
 
-	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_UNLCK_WAKEUP_CODE) | DBG_FUNC_START, trace_lck, VM_KERNEL_UNSLIDE_OR_PERM(holder), 0, 0, 0);
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_UNLCK_WAKEUP_CODE) | DBG_FUNC_START,
+	             trace_lck, (uintptr_t)thread_tid(thread), 0, 0, 0);
 
 	assert(mutex->lck_mtx_waiters > 0);
+	assert(thread->was_promoted_on_wakeup == 0);
+	assert(thread->waiting_for_mutex == NULL);
+
+	/*
+	 * The waiters count does not precisely match the number of threads on the waitqueue,
+	 * therefore we cannot assert that we actually wake up a thread here
+	 */
 	if (mutex->lck_mtx_waiters > 1)
 		thread_wakeup_one_with_pri(LCK_MTX_EVENT(lck), lck->lck_mtx_pri);
 	else
 		thread_wakeup_one(LCK_MTX_EVENT(lck));
 
-	if (thread->promotions > 0) {
-		spl_t		s = splsched();
-
+	/* When mutex->lck_mtx_pri is set, it means means I as the owner have a promotion. */
+	if (mutex->lck_mtx_pri) {
+		spl_t s = splsched();
 		thread_lock(thread);
-		if (--thread->promotions == 0 && (thread->sched_flags & TH_SFLAG_PROMOTED))
-			lck_mtx_clear_promoted(thread, trace_lck);
+
+		assert(thread->promotions > 0);
+
+		assert_promotions_invariant(thread);
+
+		if (--thread->promotions == 0)
+			sched_thread_unpromote(thread, trace_lck);
+
+		assert_promotions_invariant(thread);
+
 		thread_unlock(thread);
 		splx(s);
 	}
@@ -1128,21 +1247,50 @@ lck_mtx_unlock_wakeup (
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_UNLCK_WAKEUP_CODE) | DBG_FUNC_END, 0, 0, 0, 0, 0);
 }
 
+/*
+ * Callout from the waitqueue code from inside thread_wakeup_one_with_pri
+ * At splsched, thread is pulled from waitq, still locked, not on runqueue yet
+ *
+ * We always make sure to set the promotion flag, even if the thread is already at this priority,
+ * so that it doesn't go down.
+ */
 void
-lck_mtx_unlockspin_wakeup (
-	lck_mtx_t			*lck)
+lck_mtx_wakeup_adjust_pri(thread_t thread, integer_t priority)
 {
-	assert(lck->lck_mtx_waiters > 0);
-	thread_wakeup_one(LCK_MTX_EVENT(lck));
+	assert(priority <= MAXPRI_PROMOTE);
+	assert(thread->waiting_for_mutex != NULL);
 
-	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_UNLCK_WAKEUP_CODE) | DBG_FUNC_NONE, VM_KERNEL_UNSLIDE_OR_PERM(lck), 0, 0, 1, 0);
-#if CONFIG_DTRACE
-	/*
-	 * When there are waiters, we skip the hot-patch spot in the
-	 * fastpath, so we record it here.
-	 */
-	LOCKSTAT_RECORD(LS_LCK_MTX_UNLOCK_RELEASE, lck, 0);
-#endif
+	__kdebug_only uintptr_t trace_lck = unslide_for_kdebug(thread->waiting_for_mutex);
+
+	assert_promotions_invariant(thread);
+
+	if (thread->was_promoted_on_wakeup) {
+		/* Thread was previously promoted, but contended again */
+		sched_thread_update_promotion_to_pri(thread, priority, trace_lck);
+		return;
+	}
+
+	if (thread->promotions > 0 && priority <= thread->promotion_priority) {
+		/*
+		 * Thread is already promoted to the right level, no need to do more
+		 * I can draft off of another promotion here, which is OK
+		 * because I know the thread will soon run acquire to get its own promotion
+		 */
+		assert((thread->sched_flags & TH_SFLAG_PROMOTED) == TH_SFLAG_PROMOTED);
+		return;
+	}
+
+	thread->was_promoted_on_wakeup = 1;
+
+	if (thread->promotions++ == 0) {
+		/* This is the first promotion for this thread */
+		sched_thread_promote_to_pri(thread, priority, trace_lck);
+	} else {
+		/* Holder was previously promoted due to a different mutex, raise to match this one */
+		sched_thread_update_promotion_to_pri(thread, priority, trace_lck);
+	}
+
+	assert_promotions_invariant(thread);
 }
 
 
@@ -1265,7 +1413,7 @@ lck_rw_sleep(
 			/* Only if the caller wanted the lck_rw_t returned unlocked should we drop to 0 */
 			assert(lck_sleep_action & LCK_SLEEP_UNLOCK);
 
-			lck_rw_clear_promotion(thread);
+			lck_rw_clear_promotion(thread, unslide_for_kdebug(event));
 		}
 	}
 
@@ -1319,7 +1467,7 @@ lck_rw_sleep_deadline(
 			/* Only if the caller wanted the lck_rw_t returned unlocked should we drop to 0 */
 			assert(lck_sleep_action & LCK_SLEEP_UNLOCK);
 
-			lck_rw_clear_promotion(thread);
+			lck_rw_clear_promotion(thread, unslide_for_kdebug(event));
 		}
 	}
 
@@ -1331,11 +1479,11 @@ lck_rw_sleep_deadline(
  *
  * We support a limited form of reader-writer
  * lock promotion whose effects are:
- * 
+ *
  *   * Qualifying threads have decay disabled
  *   * Scheduler priority is reset to a floor of
  *     of their statically assigned priority
- *     or BASEPRI_BACKGROUND
+ *     or MINPRI_RWLOCK
  *
  * The rationale is that lck_rw_ts do not have
  * a single owner, so we cannot apply a directed
@@ -1381,32 +1529,16 @@ lck_rw_sleep_deadline(
  * lck_rw_clear_promotion: Undo priority promotions when the last RW
  * lock is released by a thread (if a promotion was active)
  */
-void lck_rw_clear_promotion(thread_t thread)
+void lck_rw_clear_promotion(thread_t thread, uintptr_t trace_obj)
 {
 	assert(thread->rwlock_count == 0);
 
 	/* Cancel any promotions if the thread had actually blocked while holding a RW lock */
 	spl_t s = splsched();
-
 	thread_lock(thread);
 
-	if (thread->sched_flags & TH_SFLAG_RW_PROMOTED) {
-		thread->sched_flags &= ~TH_SFLAG_RW_PROMOTED;
-
-		if (thread->sched_flags & TH_SFLAG_PROMOTED) {
-			/* Thread still has a mutex promotion */
-		} else if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_RW_DEMOTE) | DBG_FUNC_NONE,
-			                      (uintptr_t)thread_tid(thread), thread->sched_pri, DEPRESSPRI, 0, 0);
-
-			set_sched_pri(thread, DEPRESSPRI);
-		} else {
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_RW_DEMOTE) | DBG_FUNC_NONE,
-			                      (uintptr_t)thread_tid(thread), thread->sched_pri, thread->base_pri, 0, 0);
-
-			thread_recompute_sched_pri(thread, FALSE);
-		}
-	}
+	if (thread->sched_flags & TH_SFLAG_RW_PROMOTED)
+		sched_thread_unpromote_reason(thread, TH_SFLAG_RW_PROMOTED, trace_obj);
 
 	thread_unlock(thread);
 	splx(s);
@@ -1424,27 +1556,10 @@ lck_rw_set_promotion_locked(thread_t thread)
 	if (LcksOpts & disLkRWPrio)
 		return;
 
-	integer_t priority;
+	assert(thread->rwlock_count > 0);
 
-	priority = thread->sched_pri;
-
-	if (priority < thread->base_pri)
-		priority = thread->base_pri;
-	if (priority < BASEPRI_BACKGROUND)
-		priority = BASEPRI_BACKGROUND;
-
-	if ((thread->sched_pri < priority) ||
-	    !(thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
-		KERNEL_DEBUG_CONSTANT(
-		        MACHDBG_CODE(DBG_MACH_SCHED, MACH_RW_PROMOTE) | DBG_FUNC_NONE,
-		        (uintptr_t)thread_tid(thread), thread->sched_pri,
-		        thread->base_pri, priority, 0);
-
-		thread->sched_flags |= TH_SFLAG_RW_PROMOTED;
-
-		if (thread->sched_pri < priority)
-			set_sched_pri(thread, priority);
-	}
+	if (!(thread->sched_flags & TH_SFLAG_RW_PROMOTED))
+		sched_thread_promote_reason(thread, TH_SFLAG_RW_PROMOTED, 0);
 }
 
 kern_return_t

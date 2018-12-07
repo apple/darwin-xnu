@@ -2,7 +2,7 @@
  * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -100,7 +100,7 @@ log2(vm_offset_t size)
 static inline vm_offset_t
 roundup_pow2(vm_offset_t size)
 {
-	return 1UL << (log2(size - 1) + 1); 
+	return 1UL << (log2(size - 1) + 1);
 }
 
 static vm_offset_t stack_alloc_internal(void);
@@ -110,7 +110,7 @@ void
 stack_init(void)
 {
 	simple_lock_init(&stack_lock_data, 0);
-	
+
 	kernel_stack_pages = KERNEL_STACK_SIZE / PAGE_SIZE;
 	kernel_stack_size = KERNEL_STACK_SIZE;
 	kernel_stack_mask = -KERNEL_STACK_SIZE;
@@ -127,7 +127,7 @@ stack_init(void)
 	if (kernel_stack_size < round_page(kernel_stack_size))
 		panic("stack_init: stack size %p not a multiple of page size %d\n",
 			(void *) kernel_stack_size, PAGE_SIZE);
-	
+
 	stack_addr_mask = roundup_pow2(kernel_stack_size) - 1;
 	kernel_stack_mask = ~stack_addr_mask;
 }
@@ -139,7 +139,7 @@ stack_init(void)
  *	block.
  */
 
-static vm_offset_t 
+static vm_offset_t
 stack_alloc_internal(void)
 {
 	vm_offset_t		stack = 0;
@@ -163,7 +163,7 @@ stack_alloc_internal(void)
 	stack_free_delta--;
 	stack_unlock();
 	splx(s);
-		
+
 	if (stack == 0) {
 
 		/*
@@ -172,7 +172,7 @@ stack_alloc_internal(void)
 		 * for these.
 		 */
 
-		flags = KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT;
+		flags = KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT | KMA_ZERO;
 		kr = kernel_memory_allocate(kernel_map, &stack,
 					   kernel_stack_size + (2*PAGE_SIZE),
 					   stack_addr_mask,
@@ -219,11 +219,6 @@ stack_free(
 {
     vm_offset_t		stack = machine_stack_detach(thread);
 
-#if KASAN
-	kasan_unpoison_stack(stack, kernel_stack_size);
-	kasan_unpoison_fakestack(thread);
-#endif
-
 	assert(stack);
 	if (stack != thread->reserved_stack) {
 		stack_free_stack(stack);
@@ -235,9 +230,6 @@ stack_free_reserved(
 	thread_t	thread)
 {
 	if (thread->reserved_stack != thread->kernel_stack) {
-#if KASAN
-		kasan_unpoison_stack(thread->reserved_stack, kernel_stack_size);
-#endif
 		stack_free_stack(thread->reserved_stack);
 	}
 }
@@ -248,6 +240,11 @@ stack_free_stack(
 {
 	struct stack_cache	*cache;
 	spl_t				s;
+
+#if KASAN_DEBUG
+	/* Sanity check - stack should be unpoisoned by now */
+	assert(kasan_check_shadow(stack, kernel_stack_size, 0));
+#endif
 
 	s = splsched();
 	cache = &PROCESSOR_DATA(current_processor(), stack_cache);
@@ -416,7 +413,7 @@ stack_fake_zone_init(int zone_index)
 }
 
 void
-stack_fake_zone_info(int *count, 
+stack_fake_zone_info(int *count,
 		     vm_size_t *cur_size, vm_size_t *max_size, vm_size_t *elem_size, vm_size_t *alloc_size,
 		     uint64_t *sum_size, int *collectable, int *exhaustable, int *caller_acct)
 {

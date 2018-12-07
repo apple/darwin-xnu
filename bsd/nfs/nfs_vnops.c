@@ -6925,7 +6925,7 @@ nfs_vnop_ioctl(
 	vfs_context_t ctx = ap->a_context;
 	vnode_t vp = ap->a_vp;
 	struct nfsmount *mp = VTONMP(vp);
-	struct user_nfs_gss_principal gprinc;
+	struct user_nfs_gss_principal gprinc = {};
 	uint32_t len;
 	int error = ENOTTY;
 

@@ -37,6 +37,10 @@ inflate.o_CWARNFLAGS_ADD = -Wno-cast-qual
 trees.o_CWARNFLAGS_ADD = -Wno-cast-qual
 uncompr.o_CWARNFLAGS_ADD = -Wno-cast-qual
 
+# libclosure
+runtime.cpo_CXXWARNFLAGS_ADD = -Wno-cast-qual
+
+
 # warnings in bison-generated code
 OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-uninitialized -Wno-unreachable-code -Wno-unreachable-code-break
 OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code

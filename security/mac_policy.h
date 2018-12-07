@@ -4550,6 +4550,19 @@ typedef int mpo_proc_check_run_cs_invalid_t(
 );
 
 /**
+ @brief Notification a process is finished with exec and will jump to userspace
+ @param p Object process
+
+ Notifies all MAC policies that a process has completed an exec and is about to
+ jump to userspace to continue execution. This may result in process termination
+ via signals. Hook is designed to hold no/minimal locks so it can be used for any
+ necessary upcalls.
+ */
+typedef void mpo_proc_notify_exec_complete_t(
+	struct proc *p
+);
+
+/**
   @brief Perform MAC-related events when a thread returns to user space
   @param thread Mach (not BSD) thread that is returning
 
@@ -5390,6 +5403,7 @@ typedef int mpo_vnode_check_setutimes_t(
   @brief Access control check after determining the code directory hash
   @param vp vnode vnode to combine into proc
   @param label label associated with the vnode
+  @param cpu_type cpu type of the signature being checked
   @param cs_blob the code signature to check
   @param cs_flags update code signing flags if needed
   @param signer_type output parameter for the code signature's signer type
@@ -5403,6 +5417,7 @@ typedef int mpo_vnode_check_setutimes_t(
 typedef int mpo_vnode_check_signature_t(
 	struct vnode *vp,
 	struct label *label,
+	cpu_type_t cpu_type,
 	struct cs_blob *cs_blob,
 	unsigned int *cs_flags,
 	unsigned int *signer_type,
@@ -6262,56 +6277,6 @@ typedef int mpo_kext_check_query_t(
 	kauth_cred_t cred
 );
 
-/**
-  @brief Access control check for getting NVRAM variables.
-  @param cred Subject credential
-  @param name NVRAM variable to get
-
-  Determine whether the subject identifier by the credential can get the
-  value of the named NVRAM variable.
-
-  @return Return 0 if access is granted, otherwise an appropriate value for
-  errno should be returned.  Suggested failure: EPERM for lack of privilege.
-*/
-typedef int mpo_iokit_check_nvram_get_t(
-	kauth_cred_t cred,
-	const char *name
-);
-
-/**
-  @brief Access control check for setting NVRAM variables.
-  @param cred Subject credential
-  @param name NVRAM variable to set
-  @param value The new value for the NVRAM variable
-
-  Determine whether the subject identifier by the credential can set the
-  value of the named NVRAM variable.
-
-  @return Return 0 if access is granted, otherwise an appropriate value for
-  errno should be returned.  Suggested failure: EPERM for lack of privilege.
-*/
-typedef int mpo_iokit_check_nvram_set_t(
-	kauth_cred_t cred,
-	const char *name,
-	io_object_t value
-);
-
-/**
-  @brief Access control check for deleting NVRAM variables.
-  @param cred Subject credential
-  @param name NVRAM variable to delete
-
-  Determine whether the subject identifier by the credential can delete the
-  named NVRAM variable.
-
-  @return Return 0 if access is granted, otherwise an appropriate value for
-  errno should be returned.  Suggested failure: EPERM for lack of privilege.
-*/
-typedef int mpo_iokit_check_nvram_delete_t(
-	kauth_cred_t cred,
-	const char *name
-);
-
 /*
  * Placeholder for future events that may need mac hooks.
  */
@@ -6323,7 +6288,7 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 53 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 55 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t		*mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t		*mpo_audit_check_preselect;
@@ -6462,9 +6427,9 @@ struct mac_policy_ops {
 	mpo_proc_check_inherit_ipc_ports_t	*mpo_proc_check_inherit_ipc_ports;
 	mpo_vnode_check_rename_t		*mpo_vnode_check_rename;
 	mpo_kext_check_query_t			*mpo_kext_check_query;
-	mpo_iokit_check_nvram_get_t		*mpo_iokit_check_nvram_get;
-	mpo_iokit_check_nvram_set_t		*mpo_iokit_check_nvram_set;
-	mpo_iokit_check_nvram_delete_t		*mpo_iokit_check_nvram_delete;
+	mpo_proc_notify_exec_complete_t		*mpo_proc_notify_exec_complete;
+	mpo_reserved_hook_t			*mpo_reserved5;
+	mpo_reserved_hook_t			*mpo_reserved6;
 	mpo_proc_check_expose_task_t		*mpo_proc_check_expose_task;
 	mpo_proc_check_set_host_special_port_t	*mpo_proc_check_set_host_special_port;
 	mpo_proc_check_set_host_exception_port_t *mpo_proc_check_set_host_exception_port;

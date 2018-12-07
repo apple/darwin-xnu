@@ -152,6 +152,20 @@
 	movk $0, #((($1) >> 00) & 0x000000000000FFFF), lsl #00
 .endmacro
 
+.macro ARM64_STACK_PROLOG
+#if __has_feature(ptrauth_returns)
+	pacibsp
+#endif
+.endmacro
+
+.macro ARM64_STACK_EPILOG
+#if __has_feature(ptrauth_returns)
+	retab
+#else
+	ret
+#endif
+.endmacro
+
 #define PUSH_FRAME			\
 	stp fp, lr, [sp, #-16]!		%% \
 	mov fp, sp			%%

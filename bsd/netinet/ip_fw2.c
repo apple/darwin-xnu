@@ -3646,7 +3646,7 @@ ipfw_ctl(struct sockopt *sopt)
 			struct ip_old_fw	*buf2, *rule_vers0;
 			
 			lck_mtx_lock(ipfw_mutex);
-			buf2 = _MALLOC(static_count * sizeof(struct ip_old_fw), M_TEMP, M_WAITOK);
+			buf2 = _MALLOC(static_count * sizeof(struct ip_old_fw), M_TEMP, M_WAITOK | M_ZERO);
 			if (buf2 == 0) {
 				lck_mtx_unlock(ipfw_mutex);
 				error = ENOBUFS;
@@ -3687,7 +3687,7 @@ ipfw_ctl(struct sockopt *sopt)
 			buf_size = static_count * ipfwcompsize + 
 						dyn_count * ipfwdyncompsize;
 						
-			buf2 = _MALLOC(buf_size, M_TEMP, M_WAITOK);
+			buf2 = _MALLOC(buf_size, M_TEMP, M_WAITOK | M_ZERO);
 			if (buf2 == 0) {
 				lck_mtx_unlock(ipfw_mutex);
 				error = ENOBUFS;

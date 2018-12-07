@@ -21,7 +21,7 @@
 #ifndef __FIREHOSE_FIREHOSE_PRIVATE__
 #define __FIREHOSE_FIREHOSE_PRIVATE__
 
-#define FIREHOSE_SPI_VERSION 20170907
+#define FIREHOSE_SPI_VERSION 20180416
 
 #include "firehose_types_private.h"
 #include "tracepoint_private.h"

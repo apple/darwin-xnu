@@ -146,15 +146,8 @@ struct linker_set_entry {
  *	Iterates over the members of _set within _object.  Since the set contains
  *	pointers to its elements, for a set of elements of type etyp, _pvar must
  *	be (etyp **).
- * set_member_type **LINKER_SET_OBJECT_ITEM(_object, _set, _i)
- *	Returns a pointer to the _i'th element of _set within _object.
- *
- * void **LINKER_SET_BEGIN(_set)
- * void **LINKER_SET_LIMINT(_set)
  * LINKER_SET_FOREACH((set_member_type **)_pvar, _cast, _set)
- * set_member_type **LINKER_SET_ITEM(_set, _i)
- *	These versions implicitly reference the kernel/application object.
- * 
+ *
  * Example of _cast: For the _pvar "struct sysctl_oid **oidpp", _cast would be
  * 	 	     "struct sysctl_oid **"
  *
@@ -168,17 +161,11 @@ struct linker_set_entry {
      	     _pvar < (_cast) LINKER_SET_OBJECT_LIMIT(_object, _set);	\
 	     _pvar++)
 
-#define LINKER_SET_OBJECT_ITEM(_object, _set, _i)			\
-	((LINKER_SET_OBJECT_BEGIN(_object, _set))[_i])
+#define LINKER_SET_OBJECT_ITEM(_object, _cast, _set, _i)		\
+	(((_cast)(LINKER_SET_OBJECT_BEGIN(_object, _set)))[_i])
 
-#define LINKER_SET_BEGIN(_set)						\
-		LINKER_SET_OBJECT_BEGIN((kernel_mach_header_t *)&_mh_execute_header, _set)
-#define LINKER_SET_LIMIT(_set)						\
-		LINKER_SET_OBJECT_LIMIT((kernel_mach_header_t *)&_mh_execute_header, _set)
 #define LINKER_SET_FOREACH(_pvar, _cast, _set)					\
 	LINKER_SET_OBJECT_FOREACH((kernel_mach_header_t *)&_mh_execute_header, _pvar, _cast, _set)
-#define LINKER_SET_ITEM(_set, _i)					\
-      	LINKER_SET_OBJECT_ITEM((kernel_mach_header_t *)&_mh_execute_header, _set, _i)
 
 /*
  * Implementation.

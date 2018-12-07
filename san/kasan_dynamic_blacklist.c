@@ -350,7 +350,7 @@ addr_to_func(uintptr_t addr, const kernel_mach_header_t *mh)
 	return cur_name;
 }
 
-bool __attribute__((noinline))
+bool OS_NOINLINE
 kasan_is_blacklisted(access_t type)
 {
 	uint32_t nframes = 0;

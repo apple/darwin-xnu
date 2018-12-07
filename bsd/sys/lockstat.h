@@ -182,7 +182,7 @@ extern void (lockstat_probe_wrapper)(int, uintptr_t, int);
 #define	LOCKSTAT_RECORD4(probe, lp, arg0, arg1, arg2, arg3)		\
 	{								\
 		dtrace_id_t id;						\
-		if ((id = lockstat_probemap[(probe)])) {		\
+		if (__improbable(id = lockstat_probemap[(probe)])) {		\
 			(*lockstat_probe)(id, (uintptr_t)(lp), (arg0),	\
 			    (arg1), (arg2), (arg3));			\
 		}							\

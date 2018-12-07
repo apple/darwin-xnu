@@ -53,6 +53,7 @@
 #include <security/audit/audit.h>
 #include <security/audit/audit_bsd.h>
 #include <security/audit/audit_private.h>
+#include <IOKit/IOBSD.h>
 
 #if CONFIG_AUDIT
 /*
@@ -104,8 +105,46 @@ out:
 }
 
 /*
+ * Return a new class mask that allows changing the reserved class bit
+ * only if the current task is entitled to do so or if this is being done
+ * from the kernel task. If the current task is not allowed to make the
+ * change, the reserved bit is reverted to its previous state and the rest
+ * of the mask is left intact.
+ */
+static au_class_t
+au_class_protect(au_class_t old_class, au_class_t new_class)
+{
+	au_class_t result = new_class;
+
+	/* Check if the reserved class bit has been flipped */
+	if ((old_class & AU_CLASS_MASK_RESERVED) !=
+		(new_class & AU_CLASS_MASK_RESERVED)) {
+
+		task_t task = current_task();
+		if (task != kernel_task &&
+			!IOTaskHasEntitlement(task, AU_CLASS_RESERVED_ENTITLEMENT)) {
+			/*
+			 * If the caller isn't entitled, revert the class bit:
+			 * - First remove the reserved bit from the new_class mask
+			 * - Next get the state of the old_class mask's reserved bit
+			 * - Finally, OR the result from the first two operations
+			 */
+			result = (new_class & ~AU_CLASS_MASK_RESERVED) |
+				(old_class & AU_CLASS_MASK_RESERVED);
+		}
+	}
+
+	return result;
+}
+
+/*
  * Insert a event to class mapping. If the event already exists in the
  * mapping, then replace the mapping with the new one.
+ *
+ * IMPORTANT: This function should only be called from the kernel during
+ * initialization (e.g. during au_evclassmap_init). Calling afterwards can
+ * have adverse effects on other system components that rely on event/class
+ * map state.
  *
  * XXX There is currently no constraints placed on the number of mappings.
  * May want to either limit to a number, or in terms of memory usage.
@@ -135,7 +174,7 @@ au_evclassmap_insert(au_event_t event, au_class_t class)
 	evcl = &evclass_hash[event % EVCLASSMAP_HASH_TABLE_SIZE];
 	LIST_FOREACH(evc, &evcl->head, entry) {
 		if (evc->event == event) {
-			evc->class = class;
+			evc->class = au_class_protect(evc->class, class);
 			EVCLASS_WUNLOCK();
 			free(evc_new, M_AUDITEVCLASS);
 			return;
@@ -143,7 +182,11 @@ au_evclassmap_insert(au_event_t event, au_class_t class)
 	}
 	evc = evc_new;
 	evc->event = event;
-	evc->class = class;
+	/*
+	 * Mappings that require a new element must use 0 as the "old_class" since
+	 * there is no previous state.
+	 */
+	evc->class = au_class_protect(0, class);
 	LIST_INSERT_HEAD(&evcl->head, evc, entry);
 	EVCLASS_WUNLOCK();
 }

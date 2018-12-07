@@ -140,7 +140,16 @@ def Cast(obj, target_type):
     """
     return cast(obj, target_type)
 
-    
+def ContainerOf(obj, target_type, field_name):
+    """ Type cast an object to another C type from a pointer to a field.
+        params:
+            obj - core.value  object representing some C construct in lldb
+            target_type - str : ex 'struct thread'
+                        - lldb.SBType :
+            field_name - the field name within the target_type obj is a pointer to
+    """
+    return containerof(obj, target_type, field_name)
+
 def loadLLDB():
     """ Util function to load lldb python framework in case not available in common include paths.
     """
@@ -461,3 +470,7 @@ def print_hex_data(data, begin_offset=0, desc=""):
             char_buf = ""
     print "{:08x} {: <50s} |{: <16s}|".format(begin_offset + index - 16, hex_buf, char_buf)
     return
+
+def Ones(x):
+    return (1 << x)-1
+

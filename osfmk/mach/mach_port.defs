@@ -611,4 +611,16 @@ routine mach_port_space_basic_info(
 		task		: ipc_space_inspect_t;
 	out	basic_info	: ipc_info_space_basic_t);
 
+#if KERNEL || !LIBSYSCALL_INTERFACE
+/*
+ *	Returns sync ipc turnstile link status
+ *	for special reply ports.
+ */
+routine mach_port_special_reply_port_reset_link(
+		task            : ipc_space_t;
+		name            : mach_port_name_t;
+	out	srp_lost_link	: boolean_t);
+#else
+skip;
+#endif
 /* vim: set ft=c : */

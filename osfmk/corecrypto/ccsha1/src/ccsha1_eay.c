@@ -81,8 +81,10 @@
 
 
 #include <corecrypto/ccsha1.h>
+#include "ccsha1_internal.h"
 #include <corecrypto/cc_priv.h>
 #include <corecrypto/ccdigest_priv.h>
+#include "ccdigest_internal.h"
 
 
 #ifndef SHA_LONG_LOG2

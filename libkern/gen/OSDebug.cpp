@@ -43,6 +43,7 @@
 #include <sys/kdebug.h>
 #include <kern/thread.h>
 
+
 extern int etext;
 __BEGIN_DECLS
 // From osmfk/kern/thread.h but considered to be private

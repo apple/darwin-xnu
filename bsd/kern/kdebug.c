@@ -182,6 +182,12 @@ static void typefilter_reject_all(typefilter_t tf)
 	memset(tf, 0, KDBG_TYPEFILTER_BITMAP_SIZE);
 }
 
+static void typefilter_allow_all(typefilter_t tf)
+{
+	assert(tf != NULL);
+	memset(tf, ~0, KDBG_TYPEFILTER_BITMAP_SIZE);
+}
+
 static void typefilter_allow_class(typefilter_t tf, uint8_t class)
 {
 	assert(tf != NULL);
@@ -248,6 +254,8 @@ kdbg_timestamp(void)
 	}
 }
 
+static int kdbg_debug = 0;
+
 #if KDEBUG_MOJO_TRACE
 #include <sys/kdebugevents.h>
 static void kdebug_serial_print( /* forward */
@@ -303,7 +311,6 @@ static void delete_buffers(void);
 
 extern int tasks_count;
 extern int threads_count;
-extern char *proc_best_name(proc_t p);
 extern void IOSleep(int);
 
 /* trace enable status */
@@ -606,7 +613,7 @@ kdbg_set_flags(int slowflag, int enableflag, boolean_t enabled)
 /*
  * Disable wrapping and return true if trace wrapped, false otherwise.
  */
-boolean_t
+static boolean_t
 disable_wrap(uint32_t *old_slowcheck, uint32_t *old_flags)
 {
 	boolean_t wrapped;
@@ -626,8 +633,8 @@ disable_wrap(uint32_t *old_slowcheck, uint32_t *old_flags)
 	return wrapped;
 }
 
-void
-enable_wrap(uint32_t old_slowcheck, boolean_t lostevents)
+static void
+enable_wrap(uint32_t old_slowcheck)
 {
 	int s = ml_set_interrupts_enabled(FALSE);
 	lck_spin_lock(kds_spin_lock);
@@ -636,9 +643,6 @@ enable_wrap(uint32_t old_slowcheck, boolean_t lostevents)
 
 	if ( !(old_slowcheck & SLOW_NOLOG))
 		kd_ctrl_page.kdebug_slowcheck &= ~SLOW_NOLOG;
-
-	if (lostevents == TRUE)
-		kd_ctrl_page.kdebug_flags |= KDBG_WRAPPED;
 
 	lck_spin_unlock(kds_spin_lock);
 	ml_set_interrupts_enabled(s);
@@ -861,13 +865,20 @@ allocate_storage_unit(int cpu)
 		if (kdsp_actual->kds_bufindx < EVENTS_PER_STORAGE_UNIT)
 			goto out;
 	}
-	
+
 	if ((kdsp = kd_ctrl_page.kds_free_list).raw != KDS_PTR_NULL) {
+		/*
+		 * If there's a free page, grab it from the free list.
+		 */
 		kdsp_actual = POINTER_FROM_KDS_PTR(kdsp);
 		kd_ctrl_page.kds_free_list = kdsp_actual->kds_next;
 
 		kd_ctrl_page.kds_inuse_count++;
 	} else {
+		/*
+		 * Otherwise, we're going to lose events and repurpose the oldest
+		 * storage unit we can find.
+		 */
 		if (kd_ctrl_page.kdebug_flags & KDBG_NOWRAP) {
 			kd_ctrl_page.kdebug_slowcheck |= SLOW_NOLOG;
 			kdbp->kd_lostevents = TRUE;
@@ -929,7 +940,9 @@ allocate_storage_unit(int cpu)
 		} else
 			kdbp_vict->kd_lostevents = TRUE;
 
-		kd_ctrl_page.oldest_time = oldest_ts;
+		if (kd_ctrl_page.oldest_time < oldest_ts) {
+			kd_ctrl_page.oldest_time = oldest_ts;
+		}
 		kd_ctrl_page.kdebug_flags |= KDBG_WRAPPED;
 	}
 	kdsp_actual->kds_timestamp = kdbg_timestamp();
@@ -939,7 +952,7 @@ allocate_storage_unit(int cpu)
 
 	kdsp_actual->kds_lostevents = kdbp->kd_lostevents;
 	kdbp->kd_lostevents = FALSE;
-	kdsp_actual->kds_bufindx  = 0;
+	kdsp_actual->kds_bufindx = 0;
 
 	if (kdbp->kd_list_head.raw == KDS_PTR_NULL)
 		kdbp->kd_list_head = kdsp;
@@ -1130,24 +1143,72 @@ out1:
 	}
 }
 
+/*
+ * Check if the given debug ID is allowed to be traced on the current process.
+ *
+ * Returns true if allowed and false otherwise.
+ */
+static inline bool
+kdebug_debugid_procfilt_allowed(uint32_t debugid)
+{
+	uint32_t procfilt_flags = kd_ctrl_page.kdebug_flags &
+			(KDBG_PIDCHECK | KDBG_PIDEXCLUDE);
+
+	if (!procfilt_flags) {
+		return true;
+	}
+
+	/*
+	 * DBG_TRACE and MACH_SCHED tracepoints ignore the process filter.
+	 */
+	if ((debugid & 0xffff0000) == MACHDBG_CODE(DBG_MACH_SCHED, 0) ||
+		(debugid >> 24 == DBG_TRACE)) {
+		return true;
+	}
+
+	struct proc *curproc = current_proc();
+	/*
+	 * If the process is missing (early in boot), allow it.
+	 */
+	if (!curproc) {
+		return true;
+	}
+
+	if (procfilt_flags & KDBG_PIDCHECK) {
+		/*
+		 * Allow only processes marked with the kdebug bit.
+		 */
+		return curproc->p_kdebug;
+	} else if (procfilt_flags & KDBG_PIDEXCLUDE) {
+		/*
+		 * Exclude any process marked with the kdebug bit.
+		 */
+		return !curproc->p_kdebug;
+	} else {
+		panic("kdebug: invalid procfilt flags %x", kd_ctrl_page.kdebug_flags);
+		__builtin_unreachable();
+	}
+}
+
 static void
 kernel_debug_internal(
-	boolean_t only_filter,
-	uint32_t  debugid,
+	uint32_t debugid,
 	uintptr_t arg1,
 	uintptr_t arg2,
 	uintptr_t arg3,
 	uintptr_t arg4,
-	uintptr_t arg5)
+	uintptr_t arg5,
+	uint64_t flags)
 {
-	struct proc	*curproc;
-	uint64_t 	now;
-	uint32_t	bindx;
-	kd_buf		*kd;
-	int		cpu;
+	uint64_t now;
+	uint32_t bindx;
+	kd_buf *kd;
+	int cpu;
 	struct kd_bufinfo *kdbp;
 	struct kd_storage *kdsp_actual;
-	union  kds_ptr kds_raw;
+	union kds_ptr kds_raw;
+	bool only_filter = flags & KDBG_FLAG_FILTERED;
+	bool observe_procfilt = !(flags & KDBG_FLAG_NOPROCFILT);
 
 	if (kd_ctrl_page.kdebug_slowcheck) {
 		if ((kd_ctrl_page.kdebug_slowcheck & SLOW_NOLOG) ||
@@ -1156,29 +1217,9 @@ kernel_debug_internal(
 			goto out1;
 		}
 
-		if ( !ml_at_interrupt_context()) {
-			if (kd_ctrl_page.kdebug_flags & KDBG_PIDCHECK) {
-				/*
-				 * If kdebug flag is not set for current proc, return
-				 */
-				curproc = current_proc();
-
-				if ((curproc && !(curproc->p_kdebug)) &&
-				    ((debugid & 0xffff0000) != (MACHDBG_CODE(DBG_MACH_SCHED, 0) | DBG_FUNC_NONE)) &&
-				      (debugid >> 24 != DBG_TRACE))
-					goto out1;
-			}
-			else if (kd_ctrl_page.kdebug_flags & KDBG_PIDEXCLUDE) {
-				/*
-				 * If kdebug flag is set for current proc, return
-				 */
-				curproc = current_proc();
-
-				if ((curproc && curproc->p_kdebug) &&
-				    ((debugid & 0xffff0000) != (MACHDBG_CODE(DBG_MACH_SCHED, 0) | DBG_FUNC_NONE)) &&
-				      (debugid >> 24 != DBG_TRACE))
-					goto out1;
-			}
+		if (!ml_at_interrupt_context() && observe_procfilt &&
+				!kdebug_debugid_procfilt_allowed(debugid)) {
+			goto out1;
 		}
 
 		if (kd_ctrl_page.kdebug_flags & KDBG_TYPEFILTER_CHECK) {
@@ -1186,14 +1227,14 @@ kernel_debug_internal(
 				goto record_event;
 
 			goto out1;
-		} else if (only_filter == TRUE) {
+		} else if (only_filter) {
 			goto out1;
 		}
 		else if (kd_ctrl_page.kdebug_flags & KDBG_RANGECHECK) {
 			/* Always record trace system info */
 			if (KDBG_EXTRACT_CLASS(debugid) == DBG_TRACE)
 				goto record_event;
-				
+
 			if (debugid < kdlog_beg || debugid > kdlog_end)
 				goto out1;
 		}
@@ -1201,14 +1242,14 @@ kernel_debug_internal(
 			/* Always record trace system info */
 			if (KDBG_EXTRACT_CLASS(debugid) == DBG_TRACE)
 				goto record_event;
-		
+
 			if ((debugid & KDBG_EVENTID_MASK) != kdlog_value1 &&
 			    (debugid & KDBG_EVENTID_MASK) != kdlog_value2 &&
 			    (debugid & KDBG_EVENTID_MASK) != kdlog_value3 &&
 			    (debugid & KDBG_EVENTID_MASK) != kdlog_value4)
 				goto out1;
 		}
-	} else if (only_filter == TRUE) {
+	} else if (only_filter) {
 		goto out1;
 	}
 
@@ -1237,7 +1278,7 @@ retry_q:
 	} else {
 		kdsp_actual = NULL;
 		bindx = EVENTS_PER_STORAGE_UNIT;
-	}	
+	}
 
 	if (kdsp_actual == NULL || bindx >= EVENTS_PER_STORAGE_UNIT) {
 		if (allocate_storage_unit(cpu) == FALSE) {
@@ -1249,6 +1290,7 @@ retry_q:
 		}
 		goto retry_q;
 	}
+
 	now = kdbg_timestamp() & KDBG_TIMESTAMP_MASK;
 
 	if ( !OSCompareAndSwap(bindx, bindx + 1, &kdsp_actual->kds_bufindx))
@@ -1296,8 +1338,8 @@ kernel_debug(
 	uintptr_t	arg4,
 	__unused uintptr_t arg5)
 {
-	kernel_debug_internal(FALSE, debugid, arg1, arg2, arg3, arg4,
-		(uintptr_t)thread_tid(current_thread()));
+	kernel_debug_internal(debugid, arg1, arg2, arg3, arg4,
+		(uintptr_t)thread_tid(current_thread()), 0);
 }
 
 void
@@ -1309,19 +1351,31 @@ kernel_debug1(
 	uintptr_t	arg4,
 	uintptr_t	arg5)
 {
-	kernel_debug_internal(FALSE, debugid, arg1, arg2, arg3, arg4, arg5);
+	kernel_debug_internal(debugid, arg1, arg2, arg3, arg4, arg5, 0);
+}
+
+void
+kernel_debug_flags(
+	uint32_t debugid,
+	uintptr_t arg1,
+	uintptr_t arg2,
+	uintptr_t arg3,
+	uintptr_t arg4,
+	uint64_t flags)
+{
+	kernel_debug_internal(debugid, arg1, arg2, arg3, arg4,
+		(uintptr_t)thread_tid(current_thread()), flags);
 }
 
 void
 kernel_debug_filtered(
-	uint32_t  debugid,
+	uint32_t debugid,
 	uintptr_t arg1,
 	uintptr_t arg2,
 	uintptr_t arg3,
 	uintptr_t arg4)
 {
-	kernel_debug_internal(TRUE, debugid, arg1, arg2, arg3, arg4,
-		(uintptr_t)thread_tid(current_thread()));
+	kernel_debug_flags(debugid, arg1, arg2, arg3, arg4, KDBG_FLAG_FILTERED);
 }
 
 void
@@ -1358,10 +1412,10 @@ kernel_debug_string_simple(uint32_t eventid, const char *str)
 		debugid |= DBG_FUNC_END;
 	}
 
-	kernel_debug_internal(FALSE, debugid, str_buf[0],
-	                                      str_buf[1],
-	                                      str_buf[2],
-	                                      str_buf[3], thread_id);
+	kernel_debug_internal(debugid, str_buf[0],
+	                               str_buf[1],
+	                               str_buf[2],
+	                               str_buf[3], thread_id, 0);
 
 	debugid &= KDBG_EVENTID_MASK;
 	int i = 4;
@@ -1372,10 +1426,10 @@ kernel_debug_string_simple(uint32_t eventid, const char *str)
 		if ((written + (4 * sizeof(uintptr_t))) >= len) {
 			debugid |= DBG_FUNC_END;
 		}
-		kernel_debug_internal(FALSE, debugid, str_buf[i],
-		                                      str_buf[i + 1],
-		                                      str_buf[i + 2],
-		                                      str_buf[i + 3], thread_id);
+		kernel_debug_internal(debugid, str_buf[i],
+		                               str_buf[i + 1],
+		                               str_buf[i + 2],
+		                               str_buf[i + 3], thread_id, 0);
 	}
 }
 
@@ -1545,6 +1599,7 @@ kdebug_typefilter(__unused struct proc* p,
 				    TYPEFILTER_ALLOC_SIZE,		// initial size
 				    0,					// mask (alignment?)
 				    VM_FLAGS_ANYWHERE,			// flags
+				    VM_MAP_KERNEL_FLAGS_NONE,
 				    VM_KERN_MEMORY_NONE,
 				    kdbg_typefilter_memory_entry,	// port (memory entry!)
 				    0,					// offset (in memory entry)
@@ -1601,12 +1656,9 @@ int kdebug_trace64(__unused struct proc *p, struct kdebug_trace64_args *uap, __u
 		return err;
 	}
 
-	kernel_debug_internal(FALSE, uap->code,
-	                      (uintptr_t)uap->arg1,
-	                      (uintptr_t)uap->arg2,
-	                      (uintptr_t)uap->arg3,
-	                      (uintptr_t)uap->arg4,
-	                      (uintptr_t)thread_tid(current_thread()));
+	kernel_debug_internal(uap->code, (uintptr_t)uap->arg1,
+			(uintptr_t)uap->arg2, (uintptr_t)uap->arg3, (uintptr_t)uap->arg4,
+			(uintptr_t)thread_tid(current_thread()), 0);
 
 	return(0);
 }
@@ -1651,9 +1703,8 @@ kernel_debug_string_internal(uint32_t debugid, uint64_t str_id, void *vstr,
 
 	/* if the ID is being invalidated, just emit that */
 	if (str_id != 0 && str_len == 0) {
-		kernel_debug_internal(FALSE, trace_debugid | DBG_FUNC_START | DBG_FUNC_END,
-		                      (uintptr_t)debugid, (uintptr_t)str_id, 0, 0,
-		                      thread_id);
+		kernel_debug_internal(trace_debugid | DBG_FUNC_START | DBG_FUNC_END,
+				(uintptr_t)debugid, (uintptr_t)str_id, 0, 0, thread_id, 0);
 		return str_id;
 	}
 
@@ -1669,9 +1720,8 @@ kernel_debug_string_internal(uint32_t debugid, uint64_t str_id, void *vstr,
 		trace_debugid |= DBG_FUNC_END;
 	}
 
-	kernel_debug_internal(FALSE, trace_debugid, (uintptr_t)debugid,
-	                      (uintptr_t)str_id, str[0],
-	                                         str[1], thread_id);
+	kernel_debug_internal(trace_debugid, (uintptr_t)debugid, (uintptr_t)str_id,
+			str[0], str[1], thread_id, 0);
 
 	trace_debugid &= KDBG_EVENTID_MASK;
 	i = 2;
@@ -1681,10 +1731,10 @@ kernel_debug_string_internal(uint32_t debugid, uint64_t str_id, void *vstr,
 		if ((written + (4 * sizeof(uintptr_t))) >= str_len) {
 			trace_debugid |= DBG_FUNC_END;
 		}
-		kernel_debug_internal(FALSE, trace_debugid, str[i],
-		                                            str[i + 1],
-		                                            str[i + 2],
-		                                            str[i + 3], thread_id);
+		kernel_debug_internal(trace_debugid, str[i],
+		                                     str[i + 1],
+		                                     str[i + 2],
+		                                     str[i + 3], thread_id, 0);
 	}
 
 	return str_id;
@@ -2276,8 +2326,11 @@ kdebug_reset(void)
 void
 kdebug_free_early_buf(void)
 {
-	/* Must be done with the buffer, so release it back to the VM. */
+#if !CONFIG_EMBEDDED
+	/* Must be done with the buffer, so release it back to the VM.
+	 * On embedded targets this buffer is freed when the BOOTDATA segment is freed. */
 	ml_static_mfree((vm_offset_t)&kd_early_buffer, sizeof(kd_early_buffer));
+#endif
 }
 
 int
@@ -2468,6 +2521,7 @@ kdbg_enable_typefilter(void)
 static void
 kdbg_disable_typefilter(void)
 {
+	bool notify_iops = kd_ctrl_page.kdebug_flags & KDBG_TYPEFILTER_CHECK;
 	kd_ctrl_page.kdebug_flags &= ~KDBG_TYPEFILTER_CHECK;
 
 	if ((kd_ctrl_page.kdebug_flags & (KDBG_PIDCHECK | KDBG_PIDEXCLUDE))) {
@@ -2476,6 +2530,17 @@ kdbg_disable_typefilter(void)
 		kdbg_set_flags(SLOW_CHECKS, 0, FALSE);
 	}
 	commpage_update_kdebug_state();
+
+	if (notify_iops) {
+		/*
+		 * Notify IOPs that the typefilter will now allow everything.
+		 * Otherwise, they won't know a typefilter is no longer in
+		 * effect.
+		 */
+		typefilter_allow_all(kdbg_typefilter);
+		kdbg_iop_list_callback(kd_ctrl_page.kdebug_iops,
+				KD_CALLBACK_TYPEFILTER_CHANGED, kdbg_typefilter);
+	}
 }
 
 uint32_t
@@ -3587,7 +3652,6 @@ kdbg_read(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx, uin
 	uint32_t tempbuf_number;
 	uint32_t old_kdebug_flags;
 	uint32_t old_kdebug_slowcheck;
-	boolean_t lostevents = FALSE;
 	boolean_t out_of_events = FALSE;
 	boolean_t wrapped = FALSE;
 
@@ -3641,14 +3705,11 @@ kdbg_read(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx, uin
 	}
 
 	/*
-	 * If the buffers have wrapped, capture the earliest time where there
-	 * are events for all CPUs and do not emit additional lost events for
+	 * If the buffers have wrapped, do not emit additional lost events for the
 	 * oldest storage units.
 	 */
 	if (wrapped) {
-		barrier_min = kd_ctrl_page.oldest_time;
 		kd_ctrl_page.kdebug_flags &= ~KDBG_WRAPPED;
-		kd_ctrl_page.oldest_time = 0;
 
 		for (cpu = 0, kdbp = &kdbip[0]; cpu < kd_ctrl_page.kdebug_cpus; cpu++, kdbp++) {
 			if ((kdsp = kdbp->kd_list_head).raw == KDS_PTR_NULL) {
@@ -3658,13 +3719,23 @@ kdbg_read(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx, uin
 			kdsp_actual->kds_lostevents = FALSE;
 		}
 	}
+	/*
+	 * Capture the earliest time where there are events for all CPUs and don't
+	 * emit events with timestamps prior.
+	 */
+	barrier_min = kd_ctrl_page.oldest_time;
 
 	while (count) {
 		tempbuf = kdcopybuf;
 		tempbuf_number = 0;
 
 		if (wrapped) {
-			/* Trace a single lost events event for wrapping. */
+			/*
+			 * Emit a lost events tracepoint to indicate that previous events
+			 * were lost -- the thread map cannot be trusted.  A new one must
+			 * be taken so tools can analyze the trace in a backwards-facing
+			 * fashion.
+			 */
 			kdbg_set_timestamp_and_cpu(&lostevent, barrier_min, 0);
 			*tempbuf = lostevent;
 			wrapped = FALSE;
@@ -3673,94 +3744,138 @@ kdbg_read(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx, uin
 
 		/* While space left in merged events scratch buffer. */
 		while (tempbuf_count) {
+			bool lostevents = false;
+			int lostcpu = 0;
 			earliest_time = UINT64_MAX;
 			min_kdbp = NULL;
 			min_cpu = 0;
 
-			/* Check each CPU's buffers. */
+			/* Check each CPU's buffers for the earliest event. */
 			for (cpu = 0, kdbp = &kdbip[0]; cpu < kd_ctrl_page.kdebug_cpus; cpu++, kdbp++) {
-				/* Skip CPUs without data. */
+				/* Skip CPUs without data in their oldest storage unit. */
 				if ((kdsp = kdbp->kd_list_head).raw == KDS_PTR_NULL) {
 next_cpu:
 					continue;
 				}
-				/* Debugging aid: maintain a copy of the "kdsp"
-				 * index.
-				 */
-				volatile union kds_ptr kdsp_shadow;
-
-				kdsp_shadow = kdsp;
-
 				/* From CPU data to buffer header to buffer. */
 				kdsp_actual = POINTER_FROM_KDS_PTR(kdsp);
 
-				volatile struct kd_storage *kdsp_actual_shadow;
-
-				kdsp_actual_shadow = kdsp_actual;
-
-				/* Skip buffer if there are no events left. */
+next_event:
+				/* The next event to be read from this buffer. */
 				rcursor = kdsp_actual->kds_readlast;
 
+				/* Skip this buffer if there are no events left. */
 				if (rcursor == kdsp_actual->kds_bufindx) {
 					continue;
 				}
 
-				t = kdbg_get_timestamp(&kdsp_actual->kds_records[rcursor]);
+				/*
+				 * Check that this storage unit wasn't stolen and events were
+				 * lost.  This must have happened while wrapping was disabled
+				 * in this function.
+				 */
+				if (kdsp_actual->kds_lostevents) {
+					lostevents = true;
+					kdsp_actual->kds_lostevents = FALSE;
 
-				/* Ignore events that have aged out due to wrapping. */
-				while (t < barrier_min) {
-					rcursor = ++kdsp_actual->kds_readlast;
-
-					if (rcursor >= EVENTS_PER_STORAGE_UNIT) {
-						release_storage_unit(cpu, kdsp.raw);
-
-						if ((kdsp = kdbp->kd_list_head).raw == KDS_PTR_NULL) {
-							goto next_cpu;
-						}
-						kdsp_shadow = kdsp;
-						kdsp_actual = POINTER_FROM_KDS_PTR(kdsp);
-						kdsp_actual_shadow = kdsp_actual;
-						rcursor = kdsp_actual->kds_readlast;
+					/*
+					 * The earliest event we can trust is the first one in this
+					 * stolen storage unit.
+					 */
+					uint64_t lost_time =
+							kdbg_get_timestamp(&kdsp_actual->kds_records[0]);
+					if (kd_ctrl_page.oldest_time < lost_time) {
+						/*
+						 * If this is the first time we've seen lost events for
+						 * this gap, record its timestamp as the oldest
+						 * timestamp we're willing to merge for the lost events
+						 * tracepoint.
+						 */
+						kd_ctrl_page.oldest_time = barrier_min = lost_time;
+						lostcpu = cpu;
 					}
-
-					t = kdbg_get_timestamp(&kdsp_actual->kds_records[rcursor]);
 				}
 
+				t = kdbg_get_timestamp(&kdsp_actual->kds_records[rcursor]);
+
 				if ((t > barrier_max) && (barrier_max > 0)) {
+					if (kdbg_debug) {
+						printf("kdebug: FUTURE EVENT: debugid %#8x: "
+								"time %lld from CPU %u "
+								"(barrier at time %lld, read %lu events)\n",
+								kdsp_actual->kds_records[rcursor].debugid,
+								t, cpu, barrier_max, *number + tempbuf_number);
+					}
 					/*
-					 * Need to flush IOPs again before we
-					 * can sort any more data from the
-					 * buffers.
+					 * Need to flush IOPs again before we can sort any more
+					 * data from the buffers.
 					 */
 					out_of_events = TRUE;
 					break;
 				}
 				if (t < kdsp_actual->kds_timestamp) {
 					/*
-					 * indicates we've not yet completed filling
-					 * in this event...
-					 * this should only occur when we're looking
-					 * at the buf that the record head is utilizing
-					 * we'll pick these events up on the next
-					 * call to kdbg_read
-					 * we bail at this point so that we don't
-					 * get an out-of-order timestream by continuing
-					 * to read events from the other CPUs' timestream(s)
+					 * This indicates the event emitter hasn't completed
+					 * filling in the event (becuase we're looking at the
+					 * buffer that the record head is using).  The max barrier
+					 * timestamp should have saved us from seeing these kinds
+					 * of things, but other CPUs might be slow on the up-take.
+					 *
+					 * Bail out so we don't get out-of-order events by
+					 * continuing to read events from other CPUs' events.
 					 */
 					out_of_events = TRUE;
 					break;
 				}
+
+				/*
+				 * Ignore events that have aged out due to wrapping or storage
+				 * unit exhaustion while merging events.
+				 */
+				if (t < barrier_min) {
+					kdsp_actual->kds_readlast++;
+
+					if (kdsp_actual->kds_readlast >= EVENTS_PER_STORAGE_UNIT) {
+						release_storage_unit(cpu, kdsp.raw);
+
+						if ((kdsp = kdbp->kd_list_head).raw == KDS_PTR_NULL) {
+							goto next_cpu;
+						}
+						kdsp_actual = POINTER_FROM_KDS_PTR(kdsp);
+					}
+
+					goto next_event;
+				}
+
+				/*
+				 * Don't worry about merging any events -- just walk through
+				 * the CPUs and find the latest timestamp of lost events.
+				 */
+				if (lostevents) {
+					continue;
+				}
+
 				if (t < earliest_time) {
 					earliest_time = t;
 					min_kdbp = kdbp;
 					min_cpu = cpu;
 				}
 			}
-			if (min_kdbp == NULL || out_of_events == TRUE) {
+			if (lostevents) {
 				/*
-				 * all buffers ran empty
+				 * If any lost events were hit in the buffers, emit an event
+				 * with the latest timestamp.
 				 */
+				kdbg_set_timestamp_and_cpu(&lostevent, barrier_min, lostcpu);
+				*tempbuf = lostevent;
+				tempbuf->arg1 = 1;
+				goto nextevent;
+			}
+			if (min_kdbp == NULL) {
+				/* All buffers ran empty. */
 				out_of_events = TRUE;
+			}
+			if (out_of_events) {
 				break;
 			}
 
@@ -3774,11 +3889,12 @@ next_cpu:
 				release_storage_unit(min_cpu, kdsp.raw);
 
 			/*
-			 * Watch for out of order timestamps
+			 * Watch for out of order timestamps (from IOPs).
 			 */
 			if (earliest_time < min_kdbp->kd_prev_timebase) {
 				/*
 				 * If we haven't already, emit a retrograde events event.
+				 * Otherwise, ignore this event.
 				 */
 				if (traced_retrograde) {
 					continue;
@@ -3803,6 +3919,14 @@ nextevent:
 				break;
 		}
 		if (tempbuf_number) {
+			/*
+			 * Remember the latest timestamp of events that we've merged so we
+			 * don't think we've lost events later.
+			 */
+			uint64_t latest_time = kdbg_get_timestamp(tempbuf - 1);
+			if (kd_ctrl_page.oldest_time < latest_time) {
+				kd_ctrl_page.oldest_time = latest_time;
+			}
 			if (file_version == RAW_VERSION3) {
 				if ( !(kdbg_write_v3_event_chunk_header(buffer, V3_RAW_EVENTS, (tempbuf_number * sizeof(kd_buf)), vp, ctx))) {
 					error = EFAULT;
@@ -3820,7 +3944,7 @@ nextevent:
 				error = kdbg_write_to_vnode((caddr_t)kdcopybuf, write_size, vp, ctx, RAW_file_offset);
 				if (!error)
 					RAW_file_offset += write_size;
-	
+
 				if (RAW_file_written >= RAW_FLUSH_SIZE) {
 					error = VNOP_FSYNC(vp, MNT_NOWAIT, ctx);
 
@@ -3849,7 +3973,7 @@ check_error:
 		        tempbuf_count = KDCOPYBUF_COUNT;
 	}
 	if ( !(old_kdebug_flags & KDBG_NOWRAP)) {
-		enable_wrap(old_kdebug_slowcheck, lostevents);
+		enable_wrap(old_kdebug_slowcheck);
 	}
 	thread_clear_eager_preempt(current_thread());
 	return (error);
@@ -3883,6 +4007,12 @@ kdbg_test(size_t flavor)
 		KDBG_FILTERED(KDEBUG_TEST_CODE(code), 1, 2, 3); code++;
 		KDBG_FILTERED(KDEBUG_TEST_CODE(code), 1, 2, 3, 4); code++;
 
+		KDBG_RELEASE_NOPROCFILT(KDEBUG_TEST_CODE(code)); code++;
+		KDBG_RELEASE_NOPROCFILT(KDEBUG_TEST_CODE(code), 1); code++;
+		KDBG_RELEASE_NOPROCFILT(KDEBUG_TEST_CODE(code), 1, 2); code++;
+		KDBG_RELEASE_NOPROCFILT(KDEBUG_TEST_CODE(code), 1, 2, 3); code++;
+		KDBG_RELEASE_NOPROCFILT(KDEBUG_TEST_CODE(code), 1, 2, 3, 4); code++;
+
 		KDBG_DEBUG(KDEBUG_TEST_CODE(code)); code++;
 		KDBG_DEBUG(KDEBUG_TEST_CODE(code), 1); code++;
 		KDBG_DEBUG(KDEBUG_TEST_CODE(code), 1, 2); code++;
@@ -3906,6 +4036,7 @@ kdbg_test(size_t flavor)
 				(uintptr_t)thread_tid(current_thread()));
 		code++;
 		break;
+
 	default:
 		return ENOTSUP;
 	}
@@ -4180,6 +4311,10 @@ SYSCTL_PROC(_kern_kdbg, OID_AUTO, experimental_continuous,
 		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, 0,
 		sizeof(int), kdbg_sysctl_continuous, "I",
 		"Set kdebug to use mach_continuous_time");
+
+SYSCTL_INT(_kern_kdbg, OID_AUTO, debug,
+		CTLFLAG_RW | CTLFLAG_LOCKED,
+		&kdbg_debug, 0, "Set kdebug debug mode");
 
 SYSCTL_QUAD(_kern_kdbg, OID_AUTO, oldest_time,
 		CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,

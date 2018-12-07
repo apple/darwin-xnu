@@ -57,7 +57,6 @@
 #include <mach/exception_types.h>
 #include <mach/i386/thread_status.h>
 #include <mach/i386/fp_reg.h>
-#include <mach/branch_predicates.h>
 
 #include <kern/mach_param.h>
 #include <kern/processor.h>
@@ -557,7 +556,7 @@ static void fpu_load_registers(void *fstate) {
 	fp_save_layout_t layout = ifps->fp_save_layout;
 
 	assert(current_task() == NULL ||				\
-	       (thread_is_64bit(current_thread()) ?			\
+	       (thread_is_64bit_addr(current_thread()) ?			\
 			(layout == FXSAVE64 || layout == XSAVE64) :	\
 			(layout == FXSAVE32 || layout == XSAVE32)));
 	assert(ALIGNED(ifps, 64));
@@ -701,7 +700,10 @@ fpu_switch_context(thread_t old, thread_t new)
 		 */
 		clear_ts();
 		/* registers are in FPU - save to memory */
-		fpu_store_registers(ifps, (thread_is_64bit(old) && is_saved_state64(old->machine.iss)));
+		boolean_t is64 = (thread_is_64bit_addr(old) &&
+		    is_saved_state64(old->machine.iss));
+
+		fpu_store_registers(ifps, is64);
 		ifps->fp_valid = TRUE;
 
 		if (fpu_ZMM_capable && (cdp->cpu_xstate == AVX512)) {
@@ -839,13 +841,13 @@ fpu_set_fxstate(
 			panic("fpu_set_fxstate() UNDEFINED xstate");
 			break;
 		    case FP:
-			ifps->fp_save_layout = thread_is_64bit(thr_act) ? FXSAVE64 : FXSAVE32;
+			ifps->fp_save_layout = thread_is_64bit_addr(thr_act) ? FXSAVE64 : FXSAVE32;
 			break;
 		    case AVX: {
 			struct x86_avx_thread_state *iavx = (void *) ifps;
 			x86_avx_state64_t *xs = (x86_avx_state64_t *) state;
 
-			iavx->fp.fp_save_layout = thread_is_64bit(thr_act) ? XSAVE64 : XSAVE32;
+			iavx->fp.fp_save_layout = thread_is_64bit_addr(thr_act) ? XSAVE64 : XSAVE32;
 
 			/* Sanitize XSAVE header */
 			bzero(&iavx->_xh.xhrsvd[0], sizeof(iavx->_xh.xhrsvd));
@@ -870,7 +872,7 @@ fpu_set_fxstate(
 				x86_avx512_state64_t *s64;
 			} xs = { .ts = tstate };
 
-			iavx->fp.fp_save_layout = thread_is_64bit(thr_act) ? XSAVE64 : XSAVE32;
+			iavx->fp.fp_save_layout = thread_is_64bit_addr(thr_act) ? XSAVE64 : XSAVE32;
 
 			/* Sanitize XSAVE header */
 			bzero(&iavx->_xh.xhrsvd[0], sizeof(iavx->_xh.xhrsvd));
@@ -1182,7 +1184,7 @@ fpnoextflt(void)
 	        ifps = fp_state_alloc(xstate);
 		bcopy((char *)&initial_fp_state, (char *)ifps,
 		    fp_state_size[xstate]);
-		if (!thread_is_64bit(thr_act)) {
+		if (!thread_is_64bit_addr(thr_act)) {
 			ifps->fp_save_layout = fpu_YMM_capable ? XSAVE32 : FXSAVE32;
 		}
 		else
@@ -1343,7 +1345,7 @@ fp_save(
 		assert((get_cr0() & CR0_TS) == 0);
 		/* registers are in FPU */
 		ifps->fp_valid = TRUE;
-		fpu_store_registers(ifps, thread_is_64bit(thr_act));
+		fpu_store_registers(ifps, thread_is_64bit_addr(thr_act));
 	}
 }
 

@@ -33,7 +33,6 @@
 #include <vm/vm_map.h>
 #include <i386/pmap_internal.h>
 #include <i386/pmap_pcid.h>
-#include <mach/branch_predicates.h>
 
 /*
  * PCID (Process context identifier) aka tagged TLB support.

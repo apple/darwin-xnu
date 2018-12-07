@@ -105,11 +105,13 @@ void os_reason_free(os_reason_t cur_reason);
 #define OS_REASON_WATCHDOG      20
 #define OS_REASON_METAL         21
 #define OS_REASON_WATCHKIT      22
+#define OS_REASON_GUARD         23
+#define OS_REASON_ANALYTICS     24
 
 /*
  * Update whenever new OS_REASON namespaces are added.
  */
-#define OS_REASON_MAX_VALID_NAMESPACE OS_REASON_WATCHKIT
+#define OS_REASON_MAX_VALID_NAMESPACE OS_REASON_ANALYTICS
 
 #define OS_REASON_BUFFER_MAX_SIZE 5120
 
@@ -122,11 +124,12 @@ void os_reason_free(os_reason_t cur_reason);
 #define OS_REASON_FLAG_CONSISTENT_FAILURE       0x40  /* Whatever caused this reason to be created will happen again */
 #define OS_REASON_FLAG_ONE_TIME_FAILURE         0x80  /* Whatever caused this reason to be created was a one time issue */
 #define OS_REASON_FLAG_NO_CRASHED_TID           0x100 /* Don't include the TID that processed the exit in the crash report */
+#define OS_REASON_FLAG_ABORT                    0x200 /* Reason created from abort_* rather than terminate_* */
 
 /*
  * Set of flags that are allowed to be passed from userspace
  */
-#define OS_REASON_FLAG_MASK_ALLOWED_FROM_USER	(OS_REASON_FLAG_CONSISTENT_FAILURE | OS_REASON_FLAG_ONE_TIME_FAILURE | OS_REASON_FLAG_NO_CRASH_REPORT)
+#define OS_REASON_FLAG_MASK_ALLOWED_FROM_USER (OS_REASON_FLAG_CONSISTENT_FAILURE | OS_REASON_FLAG_ONE_TIME_FAILURE | OS_REASON_FLAG_NO_CRASH_REPORT | OS_REASON_FLAG_ABORT)
 
 /*
  * Macros to encode the exit reason namespace and first 32 bits of code in exception code
@@ -233,6 +236,13 @@ int terminate_with_payload(int pid, uint32_t reason_namespace, uint64_t reason_c
 #define EXEC_EXIT_REASON_DECRYPT            11
 #define EXEC_EXIT_REASON_UPX                12
 #define EXEC_EXIT_REASON_NO32EXEC           13
+
+/*
+ * guard reasons
+ */
+#define GUARD_REASON_VNODE       1
+#define GUARD_REASON_VIRT_MEMORY 2
+#define GUARD_REASON_MACH_PORT   3
 
 __END_DECLS
 

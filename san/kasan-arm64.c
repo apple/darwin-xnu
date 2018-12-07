@@ -51,7 +51,9 @@
 
 extern uint64_t *cpu_tte;
 extern unsigned long gVirtBase, gPhysBase;
-#define phystokv(a) ((vm_address_t)(a) - gPhysBase + gVirtBase)
+
+typedef uint64_t pmap_paddr_t;
+extern vm_map_address_t phystokv(pmap_paddr_t pa);
 
 vm_offset_t physmap_vbase;
 vm_offset_t physmap_vtop;
@@ -111,10 +113,12 @@ align_to_page(vm_offset_t *addrp, vm_offset_t *sizep)
 static void
 kasan_map_shadow_internal(vm_offset_t address, vm_size_t size, bool is_zero, bool back_page)
 {
+	size = (size + 0x7UL) & ~0x7UL;
 	vm_offset_t shadow_base = vm_map_trunc_page(SHADOW_FOR_ADDRESS(address), ARM_PGMASK);
 	vm_offset_t shadow_top = vm_map_round_page(SHADOW_FOR_ADDRESS(address + size), ARM_PGMASK);
 
 	assert(shadow_base >= KASAN_SHADOW_MIN && shadow_top <= KASAN_SHADOW_MAX);
+	assert((size & 0x7) == 0);
 
 	for (; shadow_base < shadow_top; shadow_base += ARM_PGBYTES) {
 		uint64_t *base = cpu_tte;

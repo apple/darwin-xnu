@@ -248,11 +248,7 @@ int proc_tal_disk_tier        = THROTTLE_LEVEL_TIER1;
 
 int proc_graphics_timer_qos   = (LATENCY_QOS_TIER_0 & 0xFF);
 
-#if CONFIG_EMBEDDED
-const int proc_default_bg_iotier  = THROTTLE_LEVEL_TIER3;
-#else
 const int proc_default_bg_iotier  = THROTTLE_LEVEL_TIER2;
-#endif
 
 /* Latency/throughput QoS fields remain zeroed, i.e. TIER_UNSPECIFIED at creation */
 const struct task_requested_policy default_task_requested_policy = {
@@ -323,8 +319,12 @@ qos_throughput_policy_package(uint32_t qv) {
 	return (qv == THROUGHPUT_QOS_TIER_UNSPECIFIED) ? THROUGHPUT_QOS_TIER_UNSPECIFIED : ((0xFE << 16) | qv);
 }
 
+#define TASK_POLICY_SUPPRESSION_DISABLE  0x1
+#define TASK_POLICY_SUPPRESSION_IOTIER2  0x2
+#define TASK_POLICY_SUPPRESSION_NONDONOR 0x4
 /* TEMPORARY boot-arg controlling task_policy suppression (App Nap) */
-static boolean_t task_policy_suppression_disable = FALSE;
+static boolean_t task_policy_suppression_flags = TASK_POLICY_SUPPRESSION_IOTIER2 |
+                                                 TASK_POLICY_SUPPRESSION_NONDONOR;
 
 kern_return_t
 task_policy_set(
@@ -462,7 +462,8 @@ task_policy_set(
 			return kr;
 
 		/* TEMPORARY disablement of task suppression */
-		if (task_policy_suppression_disable && info->active)
+		if (info->active &&
+		    (task_policy_suppression_flags & TASK_POLICY_SUPPRESSION_DISABLE))
 			return KERN_SUCCESS;
 
 		struct task_pend_token pend_token = {};
@@ -826,6 +827,11 @@ task_policy_update_internal_locked(task_t task, boolean_t in_create, task_pend_t
 				next.tep_qos_ceiling = THREAD_QOS_UTILITY;
 				break;
 
+			case TASK_DARWINBG_APPLICATION:
+				/* i.e. 'DARWIN_BG throttled background application' */
+				next.tep_qos_ceiling = THREAD_QOS_BACKGROUND;
+				break;
+
 			case TASK_UNSPECIFIED:
 			default:
 				/* Apps that don't have an application role get
@@ -849,16 +855,21 @@ task_policy_update_internal_locked(task_t task, boolean_t in_create, task_pend_t
 	 *
 	 * Backgrounding due to apptype does.
 	 */
-	if (requested.trp_int_darwinbg || requested.trp_ext_darwinbg)
+	if (requested.trp_int_darwinbg || requested.trp_ext_darwinbg ||
+	    next.tep_role == TASK_DARWINBG_APPLICATION)
 		wants_watchersbg = wants_all_sockets_bg = wants_darwinbg = TRUE;
 
-	/* Background TAL apps are throttled when TAL is enabled */
+	/*
+	 * Deprecated TAL implementation for TAL apptype
+	 * Background TAL apps are throttled when TAL is enabled
+	 */
 	if (requested.trp_apptype       == TASK_APPTYPE_APP_TAL         &&
 	    requested.trp_role          == TASK_BACKGROUND_APPLICATION  &&
 	    requested.trp_tal_enabled   == 1) {
 		next.tep_tal_engaged = 1;
 	}
 
+	/* New TAL implementation based on TAL role alone, works for all apps */
 	if ((requested.trp_apptype      == TASK_APPTYPE_APP_DEFAULT ||
 	     requested.trp_apptype      == TASK_APPTYPE_APP_TAL)    &&
 	     requested.trp_role         == TASK_THROTTLE_APPLICATION) {
@@ -941,13 +952,13 @@ task_policy_update_internal_locked(task_t task, boolean_t in_create, task_pend_t
 		next.tep_io_passive = 1;
 
 	/* Calculate suppression-active flag */
-	boolean_t memorystatus_appnap_transition = FALSE;
+	boolean_t appnap_transition = FALSE;
 
 	if (requested.trp_sup_active && requested.trp_boosted == 0)
 		next.tep_sup_active = 1;
 
 	if (task->effective_policy.tep_sup_active != next.tep_sup_active)
-		memorystatus_appnap_transition = TRUE;
+		appnap_transition = TRUE;
 
 	/* Calculate timer QOS */
 	int latency_qos = requested.trp_base_latency_qos;
@@ -1001,10 +1012,14 @@ task_policy_update_internal_locked(task_t task, boolean_t in_create, task_pend_t
 	switch (requested.trp_apptype) {
 		case TASK_APPTYPE_APP_TAL:
 		case TASK_APPTYPE_APP_DEFAULT:
-			if (requested.trp_ext_darwinbg == 0)
-				next.tep_live_donor = 1;
-			else
+			if (requested.trp_ext_darwinbg == 1 ||
+			    (next.tep_sup_active == 1 &&
+			     (task_policy_suppression_flags & TASK_POLICY_SUPPRESSION_NONDONOR)) ||
+			    next.tep_role == TASK_DARWINBG_APPLICATION) {
 				next.tep_live_donor = 0;
+			} else {
+				next.tep_live_donor = 1;
+			}
 			break;
 
 		case TASK_APPTYPE_DAEMON_INTERACTIVE:
@@ -1193,11 +1208,13 @@ task_policy_update_internal_locked(task_t task, boolean_t in_create, task_pend_t
 
 	/*
 	 * Use the app-nap transitions to influence the
-	 * transition of the process within the jetsam band.
+	 * transition of the process within the jetsam band
+	 * [and optionally its live-donor status]
 	 * On macOS only.
 	 */
-	if (memorystatus_appnap_transition == TRUE) {
+	if (appnap_transition == TRUE) {
 		if (task->effective_policy.tep_sup_active == 1) {
+			
 			memorystatus_update_priority_for_appnap(((proc_t) task->bsd_info), TRUE);
 		} else {
 			memorystatus_update_priority_for_appnap(((proc_t) task->bsd_info), FALSE);
@@ -1761,6 +1778,9 @@ proc_darwin_role_to_task_role(int darwin_role, int* task_role)
 		case PRIO_DARWIN_ROLE_TAL_LAUNCH:
 			role = TASK_THROTTLE_APPLICATION;
 			break;
+		case PRIO_DARWIN_ROLE_DARWIN_BG:
+			role = TASK_DARWINBG_APPLICATION;
+			break;
 		default:
 			return EINVAL;
 	}
@@ -1784,6 +1804,8 @@ proc_task_role_to_darwin_role(int task_role)
 			return PRIO_DARWIN_ROLE_UI;
 		case TASK_THROTTLE_APPLICATION:
 			return PRIO_DARWIN_ROLE_TAL_LAUNCH;
+		case TASK_DARWINBG_APPLICATION:
+			return PRIO_DARWIN_ROLE_DARWIN_BG;
 		case TASK_UNSPECIFIED:
 		default:
 			return PRIO_DARWIN_ROLE_DEFAULT;
@@ -2305,9 +2327,14 @@ proc_init_cpumon_params(void)
 	proc_max_cpumon_interval *= NSEC_PER_SEC;
 
 	/* TEMPORARY boot arg to control App suppression */
-	PE_parse_boot_argn("task_policy_suppression_disable",
-			   &task_policy_suppression_disable,
-			   sizeof(task_policy_suppression_disable));
+	PE_parse_boot_argn("task_policy_suppression_flags",
+			   &task_policy_suppression_flags,
+			   sizeof(task_policy_suppression_flags));
+
+	/* adjust suppression disk policy if called for in boot arg */
+	if (task_policy_suppression_flags & TASK_POLICY_SUPPRESSION_IOTIER2) {
+		proc_suppressed_disk_tier = THROTTLE_LEVEL_TIER2;
+	}
 }
 
 /*
@@ -3183,8 +3210,48 @@ task_importance_reset(__imp_only task_t task)
 #endif /* IMPORTANCE_INHERITANCE */
 }
 
+void
+task_importance_init_from_parent(__imp_only task_t new_task, __imp_only task_t parent_task)
+{
 #if IMPORTANCE_INHERITANCE
+	ipc_importance_task_t new_task_imp = IIT_NULL;
 
+	new_task->task_imp_base = NULL;
+	if (!parent_task) return;
+
+	if (task_is_marked_importance_donor(parent_task)) {
+		new_task_imp = ipc_importance_for_task(new_task, FALSE);
+		assert(IIT_NULL != new_task_imp);
+		ipc_importance_task_mark_donor(new_task_imp, TRUE);
+	}
+	if (task_is_marked_live_importance_donor(parent_task)) {
+		if (IIT_NULL == new_task_imp)
+			new_task_imp = ipc_importance_for_task(new_task, FALSE);
+		assert(IIT_NULL != new_task_imp);
+		ipc_importance_task_mark_live_donor(new_task_imp, TRUE);
+	}
+	/* Do not inherit 'receiver' on fork, vfexec or true spawn */
+	if (task_is_exec_copy(new_task) &&
+				task_is_marked_importance_receiver(parent_task)) {
+		if (IIT_NULL == new_task_imp)
+			new_task_imp = ipc_importance_for_task(new_task, FALSE);
+		assert(IIT_NULL != new_task_imp);
+		ipc_importance_task_mark_receiver(new_task_imp, TRUE);
+	}
+	if (task_is_marked_importance_denap_receiver(parent_task)) {
+		if (IIT_NULL == new_task_imp)
+			new_task_imp = ipc_importance_for_task(new_task, FALSE);
+		assert(IIT_NULL != new_task_imp);
+		ipc_importance_task_mark_denap_receiver(new_task_imp, TRUE);
+	}
+	if (IIT_NULL != new_task_imp) {
+		assert(new_task->task_imp_base == new_task_imp);
+		ipc_importance_task_release(new_task_imp);
+	}
+#endif /* IMPORTANCE_INHERITANCE */
+}
+
+#if IMPORTANCE_INHERITANCE
 /*
  * Sets the task boost bit to the provided value.  Does NOT run the update function.
  *

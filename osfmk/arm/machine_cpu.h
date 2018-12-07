@@ -44,7 +44,7 @@ extern void cpu_signal_handler_internal(boolean_t disable_signal);
 extern void cpu_doshutdown(void (*doshutdown)(processor_t), processor_t processor);
 
 extern void cpu_idle(void);
-extern void cpu_idle_exit(void) __attribute__((noreturn));
+extern void cpu_idle_exit(boolean_t from_reset) __attribute__((noreturn));
 extern void cpu_idle_tickle(void);
 
 extern void cpu_machine_idle_init(boolean_t from_boot);

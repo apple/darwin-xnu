@@ -414,12 +414,13 @@ tcp_connect_complete(struct socket *so)
 
 	/* TFO delays the tcp_output until later, when the app calls write() */
 	if (so->so_flags1 & SOF1_PRECONNECT_DATA) {
-		if (!necp_socket_is_allowed_to_send_recv(sotoinpcb(so), NULL, NULL))
+		if (!necp_socket_is_allowed_to_send_recv(sotoinpcb(so), NULL, NULL, NULL))
 			return (EHOSTUNREACH);
 
 		/* Initialize enough state so that we can actually send data */
 		tcp_mss(tp, -1, IFSCOPE_NONE);
 		tp->snd_wnd = tp->t_maxseg;
+		tp->max_sndwnd = tp->snd_wnd;
 	} else {
 		error = tcp_output(tp);
 	}
@@ -1068,6 +1069,7 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 			if (error)
 				goto out;
 			tp->snd_wnd = TTCP_CLIENT_SND_WND;
+			tp->max_sndwnd = tp->snd_wnd;
 			tcp_mss(tp, -1, IFSCOPE_NONE);
 		}
 
@@ -1119,6 +1121,7 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 			if (error)
 				goto out;
 			tp->snd_wnd = TTCP_CLIENT_SND_WND;
+			tp->max_sndwnd = tp->snd_wnd;
 			tcp_mss(tp, -1, IFSCOPE_NONE);
 		}
 		tp->snd_up = tp->snd_una + so->so_snd.sb_cc;
@@ -1380,7 +1383,7 @@ skip_oinp:
 	if (inp->inp_flowhash == 0)
 		inp->inp_flowhash = inp_calc_flowhash(inp);
 
-	tcp_set_max_rwinscale(tp, so, TCP_AUTORCVBUF_MAX(outif));
+	tcp_set_max_rwinscale(tp, so, outif);
 
 	soisconnecting(so);
 	tcpstat.tcps_connattempt++;
@@ -1474,7 +1477,7 @@ tcp6_connect(struct tcpcb *tp, struct sockaddr *nam, struct proc *p)
 		    (htonl(inp->inp_flowhash) & IPV6_FLOWLABEL_MASK);
 	}
 
-	tcp_set_max_rwinscale(tp, so, TCP_AUTORCVBUF_MAX(outif));
+	tcp_set_max_rwinscale(tp, so, outif);
 
 	soisconnecting(so);
 	tcpstat.tcps_connattempt++;

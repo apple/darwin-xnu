@@ -303,7 +303,8 @@ const char *memname[] = {
 	"Event Handler",/* 125 M_EVENTHANDLER */
 	"Link Layer Table",	/* 126 M_LLTABLE */
 	"Network Work Queue",	/* 127 M_NWKWQ */
-	""
+	"Content Filter", /* 128 M_CFIL */
+    ""
 };
 
 /* for use with kmzones.kz_zalloczone */
@@ -491,6 +492,7 @@ struct kmzones {
 	{ 0,		KMZ_MALLOC, FALSE },		/* 125 M_EVENTHANDLER */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 126 M_LLTABLE */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 127 M_NWKWQ */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 128 M_CFIL */
 #undef	SOS
 #undef	SOX
 };

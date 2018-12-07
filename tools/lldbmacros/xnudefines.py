@@ -88,7 +88,7 @@ kn_state_strings = { 0x0000: '',
                      0x0002: 'QUEUED',
                      0x0004: 'DISABLED',
                      0x0008: 'DROPPING',
-                     0x0010: 'USERWAIT',
+                     0x0010: 'LOCKED',
                      0x0020: 'ATTACHING',
                      0x0040: 'STAYACTIVE',
                      0x0080: 'DEFERDROP',
@@ -96,17 +96,16 @@ kn_state_strings = { 0x0000: '',
                      0x0200: 'DISPATCH',
                      0x0400: 'UDATASPEC',
                      0x0800: 'SUPPRESS',
-                     0x1000: 'STOLENDROP',
+                     0x1000: 'MERGE_QOS',
                      0x2000: 'REQVANISH',
                      0x4000: 'VANISHED' }
 
-kqrequest_state_strings = { 0x01: 'PROCESSING',
+kqrequest_state_strings = { 0x01: 'WORKLOOP',
                             0x02: 'THREQUESTED',
                             0x04: 'WAKEUP',
-                            0x08: 'BOUND',
-                            0x20: 'THOVERCOMMIT',
-                            0x40: 'DRAIN' }
-
+                            0x08: 'THOVERCOMMIT',
+                            0x10: 'R2K_ARMED',
+                            0x20: 'ALLOC_TURNSTILE' }
 thread_qos_short_strings = { 0: '--',
                              1: 'MT',
                              2: 'BG',
@@ -118,7 +117,7 @@ thread_qos_short_strings = { 0: '--',
 
 KQ_WORKQ = 0x40
 KQ_WORKLOOP = 0x80
-KQWQ_NBUCKETS = 22
+KQWQ_NBUCKETS = 8
 KQWL_NBUCKETS = 8
 
 DTYPE_VNODE = 1
@@ -182,7 +181,8 @@ proc_flag_explain_strings = ["!0x00000004 - process is 32 bit",  #only exception
 # string representations for Kobject types
 kobject_types = ['', 'THREAD', 'TASK', 'HOST', 'HOST_PRIV', 'PROCESSOR', 'PSET', 'PSET_NAME', 'TIMER', 'PAGER_REQ', 'DEVICE', 'XMM_OBJECT', 'XMM_PAGER', 'XMM_KERNEL', 'XMM_REPLY', 
                      'NOTDEF 15', 'NOTDEF 16', 'HOST_SEC', 'LEDGER', 'MASTER_DEV', 'TASK_NAME', 'SUBSYTEM', 'IO_DONE_QUE', 'SEMAPHORE', 'LOCK_SET', 'CLOCK', 'CLOCK_CTRL' , 'IOKIT_SPARE', 
-                      'NAMED_MEM', 'IOKIT_CON', 'IOKIT_OBJ', 'UPL', 'MEM_OBJ_CONTROL', 'AU_SESSIONPORT', 'FILEPORT', 'LABELH', 'TASK_RESUME', 'VOUCHER', 'VOUCHER_ATTR_CONTROL', 'IKOT_WORK_INTERVAL']
+                      'NAMED_MEM', 'IOKIT_CON', 'IOKIT_OBJ', 'UPL', 'MEM_OBJ_CONTROL', 'AU_SESSIONPORT', 'FILEPORT', 'LABELH', 'TASK_RESUME', 'VOUCHER', 'VOUCHER_ATTR_CONTROL', 'WORK_INTERVAL',
+                      'UX_HANDLER']
 
 def populate_kobject_types(xnu_dir_path):
     """ Function to read data from header file xnu/osfmk/kern/ipc_kobject.h
@@ -195,6 +195,9 @@ def populate_kobject_types(xnu_dir_path):
     for v in object_regex.findall(filedata):
         kobject_found_types.append(v[0])
     return kobject_found_types
+
+FSHIFT = 11
+FSCALE = 1 << FSHIFT
 
 KDBG_BFINIT         = 0x80000000
 KDBG_WRAPPED        = 0x008

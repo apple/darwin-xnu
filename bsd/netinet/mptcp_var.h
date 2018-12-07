@@ -47,6 +47,7 @@ struct mpt_itf_info {
 	uint32_t ifindex;
 	uint32_t has_v4_conn:1,
 		 has_v6_conn:1,
+		 has_nat64_conn:1,
 		 no_mptcp_support:1;
 };
 
@@ -106,6 +107,7 @@ struct mptses {
 	uint32_t	mpte_used_cell:1,
 			mpte_used_wifi:1,
 			mpte_initial_cell:1,
+			mpte_triggered_cell,
 			mpte_handshake_success:1;
 
 	struct mptcp_itf_stats	mpte_itfstats[MPTCP_ITFSTATS_SIZE];
@@ -652,9 +654,10 @@ extern u_int32_t mptcp_get_notsent_lowat(struct mptses *mpte);
 extern int mptcp_notsent_lowat_check(struct socket *so);
 extern void mptcp_ask_symptoms(struct mptses *mpte);
 extern void mptcp_control_register(void);
-extern int mptcp_is_wifi_unusable(void);
+extern int mptcp_is_wifi_unusable(struct mptses *mpte);
+extern boolean_t mptcp_subflow_is_bad(struct mptses *mpte, struct mptsub *mpts);
 extern void mptcp_ask_for_nat64(struct ifnet *ifp);
-extern void mptcp_session_necp_cb(void *, int, struct necp_client_flow *);
+extern void mptcp_session_necp_cb(void *, int, uint32_t, uint32_t, bool *);
 extern void mptcp_set_restrictions(struct socket *mp_so);
 extern int mptcp_freeq(struct mptcb *);
 extern void mptcp_set_cellicon(struct mptses *mpte);

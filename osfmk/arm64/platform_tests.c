@@ -56,6 +56,7 @@
 
 #define LOCK_PRIVATE 1
 
+#include <vm/pmap.h>
 #include <kern/kalloc.h>
 #include <kern/locks.h>
 #include <kern/misc_protos.h>
@@ -78,6 +79,7 @@
 #include <sys/munge.h>
 #include <machine/cpu_capabilities.h>
 #include <arm/cpu_data_internal.h>
+#include <arm/pmap.h>
 
 kern_return_t arm64_lock_test(void);
 kern_return_t arm64_munger_test(void);
@@ -1055,6 +1057,7 @@ ex_cb_test()
 	return KERN_SUCCESS;
 }
 
+
 #if __ARM_PAN_AVAILABLE__
 kern_return_t
 arm64_pan_test()
@@ -1118,4 +1121,5 @@ arm64_munger_test()
 	mt_test_mungers();
 	return 0;
 }
+
 

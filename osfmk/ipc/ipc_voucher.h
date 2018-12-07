@@ -32,6 +32,7 @@
 #include <mach/mach_voucher_types.h>
 #include <mach/boolean.h>
 #include <ipc/ipc_types.h>
+#include <os/refcnt.h>
 
 #ifdef MACH_KERNEL_PRIVATE
 
@@ -49,8 +50,6 @@ extern void ipc_voucher_init(void);
 /* some shorthand for longer types */
 typedef mach_voucher_attr_value_handle_t        iv_value_handle_t;
 typedef mach_voucher_attr_value_reference_t     iv_value_refs_t;
-
-typedef natural_t		iv_refs_t;
 
 typedef natural_t 		iv_index_t;
 #define IV_UNUSED_VALINDEX	((iv_index_t) 0)
@@ -71,7 +70,7 @@ typedef iv_index_t	 	*iv_entry_t;
 struct ipc_voucher {
 	iv_index_t		iv_hash;	/* checksum hash */
 	iv_index_t		iv_sum;		/* checksum of values */
-	iv_refs_t		iv_refs;	/* reference count */
+	os_refcnt_t		iv_refs;	/* reference count */
 	iv_index_t		iv_table_size;	/* size of the voucher table */
 	iv_index_t		iv_inline_table[IV_ENTRIES_INLINE];
 	iv_entry_t		iv_table;	/* table of voucher attr entries */
@@ -142,7 +141,7 @@ typedef ivac_entry              *ivac_entry_t;
 #define IVAC_ENTRIES_MAX        524288
 
 struct ipc_voucher_attr_control {
-	iv_refs_t               ivac_refs;
+	os_refcnt_t             ivac_refs;
 	boolean_t               ivac_is_growing;	/* is the table being grown */
 	ivac_entry_t            ivac_table;		/* table of voucher attr value entries */
 	iv_index_t              ivac_table_size;	/* size of the attr value table */
@@ -182,20 +181,20 @@ extern void ivac_dealloc(ipc_voucher_attr_control_t ivac);
 static inline void
 ivac_reference(ipc_voucher_attr_control_t ivac)
 {
-	(void)hw_atomic_add(&ivac->ivac_refs, 1);
+	if (ivac == IVAC_NULL)
+		return;
+	os_ref_retain(&ivac->ivac_refs);
 }
 
 static inline void
 ivac_release(ipc_voucher_attr_control_t ivac)
 {
-	iv_refs_t refs;
-
 	if (IVAC_NULL == ivac)
 		return;
 
-	refs = hw_atomic_sub(&ivac->ivac_refs, 1);
-	if (refs == 0)
+	if (os_ref_release(&ivac->ivac_refs) == 0) {
 		ivac_dealloc(ivac);
+	}
 }
 
 #define IVAM_NULL IPC_VOUCHER_ATTR_MANAGER_NULL

@@ -90,13 +90,6 @@
 #include <ipc/ipc_importance.h>
 #include <security/mac_mach_internal.h>
 
-/* Allow IPC to generate mach port guard exceptions */
-extern kern_return_t
-mach_port_guard_exception(
-	mach_port_name_t	name,
-	uint64_t		inguard,
-	uint64_t		portguard,
-	unsigned		reason);
 /*
  *	Routine:	ipc_right_lookup_write
  *	Purpose:
@@ -170,10 +163,12 @@ ipc_right_lookup_two_write(
 
 	if ((entry1 = ipc_entry_lookup(space, name1)) == IE_NULL) {
 		is_write_unlock(space);
+		mach_port_guard_exception(name1, 0, 0, kGUARD_EXC_INVALID_NAME);
 		return KERN_INVALID_NAME;
 	}
 	if ((entry2 = ipc_entry_lookup(space, name2)) == IE_NULL) {
 		is_write_unlock(space);
+		mach_port_guard_exception(name2, 0, 0, kGUARD_EXC_INVALID_NAME);
 		return KERN_INVALID_NAME;
 	}
 	*entryp1 = entry1;
@@ -1042,6 +1037,7 @@ ipc_right_dealloc(
 
 	    default:
 		is_write_unlock(space);
+		mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_RIGHT);
 		return KERN_INVALID_RIGHT;
 	}
 
@@ -1075,7 +1071,6 @@ ipc_right_delta(
 
 	bits = entry->ie_bits;
 
-
 /*
  *	The following is used (for case MACH_PORT_RIGHT_DEAD_NAME) in the
  *	switch below. It is used to keep track of those cases (in DIPC)
@@ -1093,8 +1088,10 @@ ipc_right_delta(
 	    case MACH_PORT_RIGHT_PORT_SET: {
 		ipc_pset_t pset;
 
-		if ((bits & MACH_PORT_TYPE_PORT_SET) == 0)
+		if ((bits & MACH_PORT_TYPE_PORT_SET) == 0) {
+			mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_RIGHT);
 			goto invalid_right;
+		}
 
 		assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_PORT_SET);
 		assert(IE_BITS_UREFS(bits) == 0);
@@ -1123,8 +1120,10 @@ ipc_right_delta(
 	    case MACH_PORT_RIGHT_RECEIVE: {
 		ipc_port_t request = IP_NULL;
 
-		if ((bits & MACH_PORT_TYPE_RECEIVE) == 0)
+		if ((bits & MACH_PORT_TYPE_RECEIVE) == 0) {
+			mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_RIGHT);
 			goto invalid_right;
+		}
 
 		if (delta == 0)
 			goto success;
@@ -1230,6 +1229,7 @@ ipc_right_delta(
 
 		if (ipc_right_check(space, port, name, entry)) {
 			assert(!(entry->ie_bits & MACH_PORT_TYPE_SEND_ONCE));
+			mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_RIGHT);
 			goto invalid_right;
 		}
 		/* port is locked and active */
@@ -1274,12 +1274,14 @@ ipc_right_delta(
 				/* port is locked and active */
 				ip_unlock(port);
 				port = IP_NULL;
+				mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_RIGHT);
 				goto invalid_right;
 			}
 			bits = entry->ie_bits;
 			relport = port;
 			port = IP_NULL;
 		} else if ((bits & MACH_PORT_TYPE_DEAD_NAME) == 0) {
+			mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_RIGHT);
 			goto invalid_right;
 		}
 
@@ -1334,8 +1336,13 @@ ipc_right_delta(
 		ipc_port_t port_to_release = IP_NULL;
 		mach_port_mscount_t mscount = 0;
 
-		if ((bits & MACH_PORT_TYPE_SEND) == 0)
+		if ((bits & MACH_PORT_TYPE_SEND) == 0) {
+			/* invalid right exception only when not live/dead confusion */
+			if ((bits & MACH_PORT_TYPE_DEAD_NAME) == 0) {
+				mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_RIGHT);
+			}
 			goto invalid_right;
+		}
 
 		/* maximum urefs for send is MACH_PORT_UREFS_MAX */
 
@@ -1454,6 +1461,7 @@ ipc_right_delta(
 
     invalid_value:
 	is_write_unlock(space);
+	mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_VALUE);
 	return KERN_INVALID_VALUE;
 
     guard_failure:
@@ -1491,12 +1499,13 @@ ipc_right_destruct(
 	mach_port_mscount_t mscount = 0;
 
 	bits = entry->ie_bits;
-	
+
 	assert(is_active(space));
 
 	if (((bits & MACH_PORT_TYPE_RECEIVE) == 0) ||
 	    (srdelta && ((bits & MACH_PORT_TYPE_SEND) == 0))) {
 		is_write_unlock(space);
+		mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_RIGHT);
 		return KERN_INVALID_RIGHT;
 	}
 
@@ -1636,8 +1645,8 @@ ipc_right_destruct(
 	
     invalid_value:
 	is_write_unlock(space);
+	mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_VALUE);
 	return KERN_INVALID_VALUE;
-
 }
 
 
@@ -1933,8 +1942,10 @@ ipc_right_copyin(
 		ipc_entry_modified(space, name, entry);
 
 		(void)ipc_port_clear_receiver(port, FALSE); /* don't destroy the port/mqueue */
+		imq_lock(&port->ip_messages);
 		port->ip_receiver_name = MACH_PORT_NULL;
 		port->ip_destination = IP_NULL;
+		imq_unlock(&port->ip_messages);
 
 #if IMPORTANCE_INHERITANCE
 		/*
@@ -2545,8 +2556,8 @@ ipc_right_copyout(
 		assert(port->ip_sorights > 0);
 
 		if (port->ip_specialreply) {
-			ipc_port_unlink_special_reply_port_locked(port,
-				current_thread()->ith_knote, IPC_PORT_UNLINK_SR_NONE);
+			ipc_port_adjust_special_reply_port_locked(port,
+				current_thread()->ith_knote, IPC_PORT_ADJUST_SR_LINK_WORKLOOP, FALSE);
 			/* port unlocked on return */
 		} else {
 			ip_unlock(port);
@@ -2610,29 +2621,41 @@ ipc_right_copyout(
 
 	    case MACH_MSG_TYPE_PORT_RECEIVE: {
 		ipc_port_t dest;
-		sync_qos_count_t max_sync_qos = THREAD_QOS_UNSPECIFIED;
-		sync_qos_count_t sync_qos_delta_add[THREAD_QOS_LAST] = {0};
-		sync_qos_count_t sync_qos_delta_sub[THREAD_QOS_LAST] = {0};
+		turnstile_inheritor_t inheritor = TURNSTILE_INHERITOR_NULL;
+		struct turnstile *ts = TURNSTILE_NULL;
 
 #if IMPORTANCE_INHERITANCE
 		natural_t assertcnt = port->ip_impcount;
 #endif /* IMPORTANCE_INHERITANCE */
-		/* Capture the sync qos count delta */
-		for (int i = 0; i < THREAD_QOS_LAST; i++) {
-			sync_qos_delta_sub[i] = port_sync_qos(port, i);
-			if (sync_qos_delta_sub[i] != 0) {
-				max_sync_qos = i;
-			}
-		}
 
 		assert(port->ip_mscount == 0);
 		assert(port->ip_receiver_name == MACH_PORT_NULL);
+
+		imq_lock(&port->ip_messages);
 		dest = port->ip_destination;
 
 		port->ip_receiver_name = name;
 		port->ip_receiver = space;
 
 		assert((bits & MACH_PORT_TYPE_RECEIVE) == 0);
+
+		/* Update the port's turnstile linkage to WL turnstile */
+		ts = port_send_turnstile(port);
+		if (ts) {
+			struct knote *kn = current_thread()->ith_knote;
+			if (ITH_KNOTE_VALID(kn, MACH_MSG_TYPE_PORT_RECEIVE)) {
+				inheritor = filt_machport_stash_port(kn, port, NULL);
+				if (inheritor) {
+					turnstile_reference(inheritor);
+					IMQ_SET_INHERITOR(&port->ip_messages, inheritor);
+				}
+			}
+			turnstile_reference(ts);
+			turnstile_update_inheritor(ts, inheritor,
+				(TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_TURNSTILE));
+		}
+
+		imq_unlock(&port->ip_messages);
 
 		if (bits & MACH_PORT_TYPE_SEND) {
 			assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_SEND);
@@ -2643,9 +2666,7 @@ ipc_right_copyout(
 			ip_release(port);
 
 			/* entry is locked holding ref, so can use port */
-
-			ipc_hash_delete(space, (ipc_object_t) port,
-					name, entry);
+			ipc_hash_delete(space, (ipc_object_t) port, name, entry);
 		} else {
 			assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_NONE);
 			assert(IE_BITS_UREFS(bits) == 0);
@@ -2656,9 +2677,9 @@ ipc_right_copyout(
 		entry->ie_bits = bits | MACH_PORT_TYPE_RECEIVE;
 		ipc_entry_modified(space, name, entry);
 
-		/* update the sync qos count on knote */
-		if (ITH_KNOTE_VALID(current_thread()->ith_knote)) {
-			knote_adjust_sync_qos(current_thread()->ith_knote, max_sync_qos, TRUE);
+		if (ts) {
+			turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_NOT_HELD);
+			turnstile_deallocate_safe(ts);
 		}
 
 		if (dest != IP_NULL) {
@@ -2673,8 +2694,9 @@ ipc_right_copyout(
 			ipc_port_impcount_delta(dest, 0 - assertcnt, IP_NULL);
 			ip_unlock(dest);
 #endif /* IMPORTANCE_INHERITANCE */
-			/* Adjust the sync qos of destination */
-			ipc_port_adjust_sync_qos(dest, sync_qos_delta_add, sync_qos_delta_sub);
+
+			/* Drop turnstile ref on dest */
+			ipc_port_send_turnstile_complete(dest);
 			ip_release(dest);
 		}
 		break;
@@ -2775,11 +2797,13 @@ ipc_right_rename(
 		assert(port != IP_NULL);
 
 		ip_lock(port);
+		imq_lock(&port->ip_messages);
 		assert(ip_active(port));
 		assert(port->ip_receiver_name == oname);
 		assert(port->ip_receiver == space);
 
 		port->ip_receiver_name = nname;
+		imq_unlock(&port->ip_messages);
 		ip_unlock(port);
 		break;
 	    }

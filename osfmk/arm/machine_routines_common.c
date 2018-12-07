@@ -40,6 +40,7 @@
 #include <kern/thread_group.h>
 #include <kern/policy_internal.h>
 #include <machine/config.h>
+#include <pexpert/pexpert.h>
 
 #if MONOTONIC
 #include <kern/monotonic.h>
@@ -361,7 +362,7 @@ machine_thread_going_on_core(thread_t   new_thread,
 	on_core.energy_estimate_nj = 0;
 	on_core.qos_class = proc_get_effective_thread_policy(new_thread, TASK_POLICY_QOS);
 	on_core.urgency = urgency;
-	on_core.is_32_bit = thread_is_64bit(new_thread) ? FALSE : TRUE;
+	on_core.is_32_bit = thread_is_64bit_data(new_thread) ? FALSE : TRUE;
 	on_core.is_kernel_thread = new_thread->task == kernel_task;
 	on_core.scheduling_latency = sched_latency;
 	on_core.start_time = timestamp;
@@ -467,7 +468,7 @@ machine_perfcontrol_deadline_passed(uint64_t deadline)
 void
 ml_spin_debug_reset(thread_t thread)
 {
-    thread->machine.intmask_timestamp = mach_absolute_time();
+	thread->machine.intmask_timestamp = mach_absolute_time();
 }
 
 /*
@@ -478,7 +479,7 @@ ml_spin_debug_reset(thread_t thread)
 void
 ml_spin_debug_clear(thread_t thread)
 {
-    thread->machine.intmask_timestamp = 0;
+	thread->machine.intmask_timestamp = 0;
 }
 
 /*
@@ -495,28 +496,28 @@ ml_spin_debug_clear_self()
 void
 ml_check_interrupts_disabled_duration(thread_t thread)
 {
-    uint64_t start;
-    uint64_t now;
+	uint64_t start;
+	uint64_t now;
 
-    start = thread->machine.intmask_timestamp;
-    if (start != 0) {
-        now = mach_absolute_time();
+	start = thread->machine.intmask_timestamp;
+	if (start != 0) {
+		now = mach_absolute_time();
 
-        if ((now - start) > interrupt_masked_timeout) {
-            mach_timebase_info_data_t timebase;
-            clock_timebase_info(&timebase);
+		if ((now - start) > interrupt_masked_timeout * debug_cpu_performance_degradation_factor) {
+			mach_timebase_info_data_t timebase;
+			clock_timebase_info(&timebase);
 
 #ifndef KASAN
-            /*
-             * Disable the actual panic for KASAN due to the overhead of KASAN itself, leave the rest of the
-             * mechanism enabled so that KASAN can catch any bugs in the mechanism itself.
-             */
-            panic("Interrupts held disabled for %llu nanoseconds", (((now - start) * timebase.numer)/timebase.denom));
+			/*
+			* Disable the actual panic for KASAN due to the overhead of KASAN itself, leave the rest of the
+			* mechanism enabled so that KASAN can catch any bugs in the mechanism itself.
+			*/
+			panic("Interrupts held disabled for %llu nanoseconds", (((now - start) * timebase.numer)/timebase.denom));
 #endif
-        }
-    }
+		}
+	}
 
-    return;
+	return;
 }
 #endif // INTERRUPT_MASKED_DEBUG
 
@@ -524,84 +525,121 @@ ml_check_interrupts_disabled_duration(thread_t thread)
 boolean_t
 ml_set_interrupts_enabled(boolean_t enable)
 {
-    thread_t	thread;
-    uint64_t	state;
+	thread_t	thread;
+	uint64_t	state;
 
 #if __arm__
 #define INTERRUPT_MASK PSR_IRQF
-    state = __builtin_arm_rsr("cpsr");
+	state = __builtin_arm_rsr("cpsr");
 #else
 #define INTERRUPT_MASK DAIF_IRQF
-    state = __builtin_arm_rsr("DAIF");
+	state = __builtin_arm_rsr("DAIF");
 #endif
-    if (enable) {
+	if (enable && (state & INTERRUPT_MASK)) {
 #if INTERRUPT_MASKED_DEBUG
-        if (interrupt_masked_debug && (state & INTERRUPT_MASK)) {
-            // Interrupts are currently masked, we will enable them (after finishing this check)
-            thread = current_thread();
-            ml_check_interrupts_disabled_duration(thread);
-            thread->machine.intmask_timestamp = 0;
-        }
+		if (interrupt_masked_debug) {
+			// Interrupts are currently masked, we will enable them (after finishing this check)
+			thread = current_thread();
+			ml_check_interrupts_disabled_duration(thread);
+			thread->machine.intmask_timestamp = 0;
+		}
 #endif	// INTERRUPT_MASKED_DEBUG
-        if (get_preemption_level() == 0) {
-            thread = current_thread();
-            while (thread->machine.CpuDatap->cpu_pending_ast & AST_URGENT) {
+		if (get_preemption_level() == 0) {
+			thread = current_thread();
+			while (thread->machine.CpuDatap->cpu_pending_ast & AST_URGENT) {
 #if __ARM_USER_PROTECT__
-                uintptr_t up = arm_user_protect_begin(thread);
+				uintptr_t up = arm_user_protect_begin(thread);
 #endif
-                ast_taken_kernel();
+				ast_taken_kernel();
 #if __ARM_USER_PROTECT__
-                arm_user_protect_end(thread, up, FALSE);
+				arm_user_protect_end(thread, up, FALSE);
 #endif
-            }
-        }
+			}
+		}
 #if __arm__
-        __asm__ volatile ("cpsie if" ::: "memory"); // Enable IRQ FIQ
+		__asm__ volatile ("cpsie if" ::: "memory"); // Enable IRQ FIQ
 #else
-        __builtin_arm_wsr("DAIFClr", (DAIFSC_IRQF | DAIFSC_FIQF));
+		__builtin_arm_wsr("DAIFClr", (DAIFSC_IRQF | DAIFSC_FIQF));
 #endif
-    } else {
+	} else if (!enable && ((state & INTERRUPT_MASK) == 0)) {
 #if __arm__
-        __asm__ volatile ("cpsid if" ::: "memory"); // Mask IRQ FIQ
+		__asm__ volatile ("cpsid if" ::: "memory"); // Mask IRQ FIQ
 #else
-        __builtin_arm_wsr("DAIFSet", (DAIFSC_IRQF | DAIFSC_FIQF));
+		__builtin_arm_wsr("DAIFSet", (DAIFSC_IRQF | DAIFSC_FIQF));
 #endif
 #if INTERRUPT_MASKED_DEBUG
-        if (interrupt_masked_debug && ((state & INTERRUPT_MASK) == 0)) {
-            // Interrupts were enabled, we just masked them
-            current_thread()->machine.intmask_timestamp = mach_absolute_time();
-        }
+		if (interrupt_masked_debug) {
+			// Interrupts were enabled, we just masked them
+			current_thread()->machine.intmask_timestamp = mach_absolute_time();
+		}
 #endif
-    }
-    return ((state & INTERRUPT_MASK) == 0);
+	}
+	return ((state & INTERRUPT_MASK) == 0);
+}
+
+/*
+ *	Routine:        ml_at_interrupt_context
+ *	Function:	Check if running at interrupt context
+ */
+boolean_t
+ml_at_interrupt_context(void)
+{
+	/* Do not use a stack-based check here, as the top-level exception handler
+	 * is free to use some other stack besides the per-CPU interrupt stack.
+	 * Interrupts should always be disabled if we're at interrupt context.
+	 * Check that first, as we may be in a preemptible non-interrupt context, in
+	 * which case we could be migrated to a different CPU between obtaining
+	 * the per-cpu data pointer and loading cpu_int_state.  We then might end
+	 * up checking the interrupt state of a different CPU, resulting in a false
+	 * positive.  But if interrupts are disabled, we also know we cannot be
+	 * preempted. */
+	return (!ml_get_interrupts_enabled() && (getCpuDatap()->cpu_int_state != NULL));
+}
+
+vm_offset_t 
+ml_stack_remaining(void)
+{
+	uintptr_t local = (uintptr_t) &local;
+	vm_offset_t     intstack_top_ptr;
+
+	/* Since this is a stack-based check, we don't need to worry about
+	 * preemption as we do in ml_at_interrupt_context().  If we are preemptible,
+	 * then the sp should never be within any CPU's interrupt stack unless
+	 * something has gone horribly wrong. */
+	intstack_top_ptr = getCpuDatap()->intstack_top;
+	if ((local < intstack_top_ptr) && (local > intstack_top_ptr - INTSTACK_SIZE)) {
+		return (local - (getCpuDatap()->intstack_top - INTSTACK_SIZE));
+	} else {
+		return (local - current_thread()->kernel_stack);
+	}
 }
 
 static boolean_t ml_quiescing;
 
 void ml_set_is_quiescing(boolean_t quiescing)
 {
-    assert(FALSE == ml_get_interrupts_enabled());
-    ml_quiescing = quiescing;
+	assert(FALSE == ml_get_interrupts_enabled());
+	ml_quiescing = quiescing;
 }
 
 boolean_t ml_is_quiescing(void)
 {
-    assert(FALSE == ml_get_interrupts_enabled());
-    return (ml_quiescing);
+	assert(FALSE == ml_get_interrupts_enabled());
+	return (ml_quiescing);
 }
 
 uint64_t ml_get_booter_memory_size(void)
 {
-    enum { kRoundSize = 512*1024*1024ULL };
 	uint64_t size;
+	uint64_t roundsize = 512*1024*1024ULL;
 	size = BootArgs->memSizeActual;
-    if (!size)
-    {
+	if (!size) {
 		size  = BootArgs->memSize;
-		size  = (size + kRoundSize - 1) & ~(kRoundSize - 1);
+		if (size < (2 * roundsize)) roundsize >>= 1;
+		size  = (size + roundsize - 1) & ~(roundsize - 1);
 		size -= BootArgs->memSize;
-    }
-    return (size);
+	}
+	return (size);
 }
 
 uint64_t

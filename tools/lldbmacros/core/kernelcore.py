@@ -6,6 +6,7 @@
 from cvalue import *
 from lazytarget import *
 from configuration import *
+from utils import *
 import caching
 import lldb
 
@@ -222,6 +223,30 @@ def IterateRBTreeEntry(element, element_type, field_name):
                 elt = cast(elt, element_type)
 
 
+def IteratePriorityQueueEntry(root, element_type, field_name):
+    """ iterate over a priority queue as defined with struct priority_queue from osfmk/kern/priority_queue.h
+            root         - value : Value object for the priority queue
+            element_type - str   : Type of the link element
+            field_name   - str   : Name of the field in link element's structure
+        returns:
+            A generator does not return. It is used for iterating
+            value  : an object thats of type (element_type). Always a pointer object
+    """
+    def _make_pqe(addr):
+        return value(root.GetSBValue().CreateValueFromExpression(None,'(struct priority_queue_entry *)'+str(addr)))
+
+    queue = [unsigned(root.pq_root_packed) & ~3]
+
+    while len(queue):
+        elt = _make_pqe(queue.pop())
+
+        while elt:
+            yield containerof(elt, element_type, field_name)
+            addr = unsigned(elt.child)
+            if addr: queue.append(addr)
+            elt = elt.next
+
+
 class KernelTarget(object):
     """ A common kernel object that provides access to kernel objects and information.
         The class holds global lists for  task, terminated_tasks, procs, zones, zombroc etc.
@@ -399,9 +424,19 @@ class KernelTarget(object):
         val = ((addr + size) & (unsigned(self.GetGlobalVariable("page_size"))-1))
         return (val < size and val > 0)
 
+
+    def PhysToKVARM64(self, addr):
+        ptov_table = self.GetGlobalVariable('ptov_table')
+        for i in range(0, self.GetGlobalVariable('ptov_index')):
+            if (addr >= long(unsigned(ptov_table[i].pa))) and (addr < (long(unsigned(ptov_table[i].pa)) + long(unsigned(ptov_table[i].len)))):
+                return (addr - long(unsigned(ptov_table[i].pa)) + long(unsigned(ptov_table[i].va)))
+        return (addr - unsigned(self.GetGlobalVariable("gPhysBase")) + unsigned(self.GetGlobalVariable("gVirtBase")))
+
     def PhysToKernelVirt(self, addr):
         if self.arch == 'x86_64':
             return (addr + unsigned(self.GetGlobalVariable('physmap_base')))
+        elif self.arch.startswith('arm64'):
+            return self.PhysToKVARM64(addr)
         elif self.arch.startswith('arm'):
             return (addr - unsigned(self.GetGlobalVariable("gPhysBase")) + unsigned(self.GetGlobalVariable("gVirtBase")))
         else:
@@ -548,7 +583,7 @@ class KernelTarget(object):
             self._ptrsize = caching.GetStaticCacheData("kern.ptrsize", None)
             if self._ptrsize != None : return self._ptrsize
             arch = LazyTarget.GetTarget().triple.split('-')[0]
-            if arch in ('x86_64', 'arm64'):
+            if arch == 'x86_64' or arch.startswith('arm64'):
                 self._ptrsize = 8
             else:
                 self._ptrsize = 4
@@ -558,7 +593,7 @@ class KernelTarget(object):
         if name == 'VM_MIN_KERNEL_ADDRESS':
             if self.arch == 'x86_64':
                 return unsigned(0xFFFFFF8000000000)
-            elif self.arch == 'arm64':
+            elif self.arch.startswith('arm64'):
                 return unsigned(0xffffffe000000000)
             else:
                 return unsigned(0x80000000)

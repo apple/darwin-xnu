@@ -145,10 +145,6 @@
 
 extern u_int32_t necp_debug;
 
-// proc_best_name() is declared here in advance of it landing in a header file.
-// See comment in kern_proc.c
-extern char *proc_best_name(proc_t p);
-
 static int noop_read(struct fileproc *, struct uio *, int, vfs_context_t);
 static int noop_write(struct fileproc *, struct uio *, int, vfs_context_t);
 static int noop_ioctl(struct fileproc *, unsigned long, caddr_t,
@@ -192,15 +188,17 @@ extern unsigned int get_maxmtu(struct rtentry *);
 #define NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT			0x00040
 #define NECP_PARSED_PARAMETERS_FIELD_PROHIBITED_AGENT		0x00080
 #define NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT		0x00100
-#define NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT_TYPE	0x00200
-#define NECP_PARSED_PARAMETERS_FIELD_PROHIBITED_AGENT_TYPE	0x00400
-#define NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT_TYPE	0x00800
-#define NECP_PARSED_PARAMETERS_FIELD_FLAGS					0x01000
-#define NECP_PARSED_PARAMETERS_FIELD_IP_PROTOCOL			0x02000
-#define NECP_PARSED_PARAMETERS_FIELD_EFFECTIVE_PID			0x04000
-#define NECP_PARSED_PARAMETERS_FIELD_EFFECTIVE_UUID			0x08000
-#define NECP_PARSED_PARAMETERS_FIELD_TRAFFIC_CLASS			0x10000
-#define NECP_PARSED_PARAMETERS_FIELD_LOCAL_PORT				0x20000
+#define NECP_PARSED_PARAMETERS_FIELD_AVOIDED_AGENT			0x00200
+#define NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT_TYPE	0x00400
+#define NECP_PARSED_PARAMETERS_FIELD_PROHIBITED_AGENT_TYPE	0x00800
+#define NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT_TYPE	0x01000
+#define NECP_PARSED_PARAMETERS_FIELD_AVOIDED_AGENT_TYPE		0x02000
+#define NECP_PARSED_PARAMETERS_FIELD_FLAGS					0x04000
+#define NECP_PARSED_PARAMETERS_FIELD_IP_PROTOCOL			0x08000
+#define NECP_PARSED_PARAMETERS_FIELD_EFFECTIVE_PID			0x10000
+#define NECP_PARSED_PARAMETERS_FIELD_EFFECTIVE_UUID			0x20000
+#define NECP_PARSED_PARAMETERS_FIELD_TRAFFIC_CLASS			0x40000
+#define NECP_PARSED_PARAMETERS_FIELD_LOCAL_PORT				0x80000
 
 #define NECP_MAX_PARSED_PARAMETERS 16
 struct necp_client_parsed_parameters {
@@ -215,9 +213,11 @@ struct necp_client_parsed_parameters {
 	struct necp_client_parameter_netagent_type required_netagent_types[NECP_MAX_PARSED_PARAMETERS];
 	struct necp_client_parameter_netagent_type prohibited_netagent_types[NECP_MAX_PARSED_PARAMETERS];
 	struct necp_client_parameter_netagent_type preferred_netagent_types[NECP_MAX_PARSED_PARAMETERS];
+	struct necp_client_parameter_netagent_type avoided_netagent_types[NECP_MAX_PARSED_PARAMETERS];
 	uuid_t required_netagents[NECP_MAX_PARSED_PARAMETERS];
 	uuid_t prohibited_netagents[NECP_MAX_PARSED_PARAMETERS];
 	uuid_t preferred_netagents[NECP_MAX_PARSED_PARAMETERS];
+	uuid_t avoided_netagents[NECP_MAX_PARSED_PARAMETERS];
 	u_int16_t ip_protocol;
 	pid_t effective_pid;
 	uuid_t effective_uuid;
@@ -226,7 +226,7 @@ struct necp_client_parsed_parameters {
 
 static bool
 necp_find_matching_interface_index(struct necp_client_parsed_parameters *parsed_parameters,
-								   u_int *return_ifindex);
+								   u_int *return_ifindex, bool *validate_agents);
 
 static bool
 necp_ifnet_matches_local_address(struct ifnet *ifp, struct sockaddr *sa);
@@ -234,7 +234,8 @@ necp_ifnet_matches_local_address(struct ifnet *ifp, struct sockaddr *sa);
 static bool
 necp_ifnet_matches_parameters(struct ifnet *ifp,
 							  struct necp_client_parsed_parameters *parsed_parameters,
-							  u_int32_t *preferred_count, bool ignore_require_if);
+							  u_int32_t *preferred_count,
+							  bool secondary_interface);
 
 static const struct fileops necp_fd_ops = {
 	.fo_type = DTYPE_NETPOLICY,
@@ -254,6 +255,8 @@ struct necp_client_assertion {
 
 struct necp_client_flow_header {
 	struct necp_tlv_header outer_header;
+	struct necp_tlv_header flow_id_tlv_header;
+	uuid_t flow_id;
 	struct necp_tlv_header flags_tlv_header;
 	u_int32_t flags_value;
 	struct necp_tlv_header interface_tlv_header;
@@ -274,10 +277,64 @@ struct necp_client_nexus_flow_header {
 } __attribute__((__packed__));
 
 
+struct necp_client_flow {
+	LIST_ENTRY(necp_client_flow) flow_chain;
+	unsigned invalid : 1;
+	unsigned nexus : 1; // If true, flow is a nexus; if false, flow is attached to socket
+	unsigned socket : 1;
+	unsigned viable : 1;
+	unsigned assigned : 1;
+	unsigned has_protoctl_event : 1;
+	unsigned check_tcp_heuristics : 1;
+	unsigned _reserved : 1;
+	union {
+		uuid_t nexus_agent;
+		struct {
+			void *socket_handle;
+			necp_client_flow_cb cb;
+		};
+	} u;
+	uint32_t interface_index;
+	uint16_t interface_flags;
+	uint32_t necp_flow_flags;
+	struct necp_client_flow_protoctl_event protoctl_event;
+	union necp_sockaddr_union local_addr;
+	union necp_sockaddr_union remote_addr;
+
+	size_t assigned_results_length;
+	u_int8_t *assigned_results;
+};
+
+struct necp_client_flow_registration {
+	RB_ENTRY(necp_client_flow_registration) fd_link;
+	RB_ENTRY(necp_client_flow_registration) global_link;
+	RB_ENTRY(necp_client_flow_registration) client_link;
+	LIST_ENTRY(necp_client_flow_registration) collect_stats_chain;
+	uuid_t registration_id;
+	u_int32_t flags;
+	unsigned flow_result_read : 1;
+	unsigned defunct : 1;
+	void *interface_handle;
+	necp_client_flow_cb interface_cb;
+	struct necp_client *client;
+	LIST_HEAD(_necp_registration_flow_list, necp_client_flow) flow_list;
+	u_int64_t last_interface_details __attribute__((aligned(sizeof(u_int64_t))));
+};
+
+static int necp_client_flow_id_cmp(struct necp_client_flow_registration *flow0, struct necp_client_flow_registration *flow1);
+
+RB_HEAD(_necp_client_flow_tree, necp_client_flow_registration);
+RB_PROTOTYPE_PREV(_necp_client_flow_tree, necp_client_flow_registration, client_link, necp_client_flow_id_cmp);
+RB_GENERATE_PREV(_necp_client_flow_tree, necp_client_flow_registration, client_link, necp_client_flow_id_cmp);
+
+#define NECP_CLIENT_INTERFACE_OPTION_STATIC_COUNT 4
+#define NECP_CLIENT_MAX_INTERFACE_OPTIONS 16
+
+#define NECP_CLIENT_INTERFACE_OPTION_EXTRA_COUNT (NECP_CLIENT_MAX_INTERFACE_OPTIONS - NECP_CLIENT_INTERFACE_OPTION_STATIC_COUNT)
+
 struct necp_client {
 	RB_ENTRY(necp_client) link;
 	RB_ENTRY(necp_client) global_link;
-	LIST_ENTRY(necp_client) collect_stats_chain;
 
 	decl_lck_mtx_data(, lock);
 	decl_lck_mtx_data(, route_lock);
@@ -285,10 +342,9 @@ struct necp_client {
 
 	uuid_t client_id;
 	unsigned result_read : 1;
-	unsigned flow_result_read : 1;
 	unsigned allow_multiple_flows : 1;
+	unsigned legacy_client_is_flow : 1;
 
-	unsigned defunct : 1;
 	unsigned background : 1;
 	unsigned background_update : 1;
 	unsigned platform_binary : 1;
@@ -301,13 +357,18 @@ struct necp_client {
 	u_int16_t ip_protocol;
 	int proc_pid;
 
-	LIST_HEAD(_necp_client_flow_list, necp_client_flow) flow_list;
+	struct _necp_client_flow_tree flow_registrations;
 	LIST_HEAD(_necp_client_assertion_list, necp_client_assertion) assertion_list;
 
 	struct rtentry *current_route;
 
-	void *interface_handle;
-	void (*interface_cb)(void *handle, int action, struct necp_client_flow *flow);
+	struct necp_client_interface_option interface_options[NECP_CLIENT_INTERFACE_OPTION_STATIC_COUNT];
+	struct necp_client_interface_option *extra_interface_options;
+	u_int8_t interface_option_count; // Number in interface_options + extra_interface_options
+
+	struct necp_client_result_netagent failed_trigger_agent;
+
+	void *agent_handle;
 
 	size_t parameters_length;
 	u_int8_t parameters[0];
@@ -331,18 +392,19 @@ necp_client_add_assertion(struct necp_client *client, uuid_t netagent_uuid);
 static bool
 necp_client_remove_assertion(struct necp_client *client, uuid_t netagent_uuid);
 
-LIST_HEAD(_necp_client_list, necp_client);
-static struct _necp_client_list necp_collect_stats_client_list;
+LIST_HEAD(_necp_flow_registration_list, necp_client_flow_registration);
+static struct _necp_flow_registration_list necp_collect_stats_flow_list;
 
-struct necp_client_defunct {
-	LIST_ENTRY(necp_client_defunct) chain;
+struct necp_flow_defunct {
+	LIST_ENTRY(necp_flow_defunct) chain;
 
-	uuid_t client_id;
+	uuid_t flow_id;
 	uuid_t nexus_agent;
+	void *agent_handle;
 	int proc_pid;
 };
 
-LIST_HEAD(_necp_client_defunct_list, necp_client_defunct);
+LIST_HEAD(_necp_flow_defunct_list, necp_flow_defunct);
 
 static int necp_client_id_cmp(struct necp_client *client0, struct necp_client *client1);
 
@@ -354,7 +416,16 @@ RB_HEAD(_necp_client_global_tree, necp_client);
 RB_PROTOTYPE_PREV(_necp_client_global_tree, necp_client, global_link, necp_client_id_cmp);
 RB_GENERATE_PREV(_necp_client_global_tree, necp_client, global_link, necp_client_id_cmp);
 
+RB_HEAD(_necp_fd_flow_tree, necp_client_flow_registration);
+RB_PROTOTYPE_PREV(_necp_fd_flow_tree, necp_client_flow_registration, fd_link, necp_client_flow_id_cmp);
+RB_GENERATE_PREV(_necp_fd_flow_tree, necp_client_flow_registration, fd_link, necp_client_flow_id_cmp);
+
+RB_HEAD(_necp_client_flow_global_tree, necp_client_flow_registration);
+RB_PROTOTYPE_PREV(_necp_client_flow_global_tree, necp_client_flow_registration, global_link, necp_client_flow_id_cmp);
+RB_GENERATE_PREV(_necp_client_flow_global_tree, necp_client_flow_registration, global_link, necp_client_flow_id_cmp);
+
 static struct _necp_client_global_tree necp_client_global_tree;
+static struct _necp_client_flow_global_tree necp_client_flow_global_tree;
 
 struct necp_client_update {
 	TAILQ_ENTRY(necp_client_update) chain;
@@ -366,10 +437,15 @@ struct necp_client_update {
 };
 
 
+#define	NAIF_ATTACHED	0x1	// arena is attached to list
+#define	NAIF_REDIRECT	0x2	// arena mmap has been redirected
+#define	NAIF_DEFUNCT	0x4	// arena is now defunct
+
 struct necp_fd_data {
 	u_int8_t necp_fd_type;
 	LIST_ENTRY(necp_fd_data) chain;
 	struct _necp_client_tree clients;
+	struct _necp_fd_flow_tree flows;
 	TAILQ_HEAD(_necp_client_update_list, necp_client_update) update_list;
 	int update_count;
 	int flags;
@@ -392,11 +468,17 @@ static LIST_HEAD(_necp_fd_observer_list, necp_fd_data) necp_fd_observer_list;
 static unsigned int necp_client_fd_size;	/* size of zone element */
 static struct zone *necp_client_fd_zone;	/* zone for necp_fd_data */
 
-#define	NECP_FLOW_ZONE_MAX			512
-#define	NECP_FLOW_ZONE_NAME			"necp.flow"
+#define	NECP_FLOW_ZONE_NAME					"necp.flow"
+#define	NECP_FLOW_REGISTRATION_ZONE_NAME	"necp.flowregistration"
 
 static unsigned int necp_flow_size;		/* size of necp_client_flow */
-static struct mcache *necp_flow_cache;		/* cache for necp_client_flow */
+static struct mcache *necp_flow_cache;	/* cache for necp_client_flow */
+
+static unsigned int necp_flow_registration_size;	/* size of necp_client_flow_registration */
+static struct mcache *necp_flow_registration_cache;	/* cache for necp_client_flow_registration */
+
+#define	NECP_ARENA_INFO_ZONE_MAX		128
+#define	NECP_ARENA_INFO_ZONE_NAME		"necp.arenainfo"
 
 
 static	lck_grp_attr_t	*necp_fd_grp_attr	= NULL;
@@ -406,6 +488,7 @@ static	lck_grp_t		*necp_fd_mtx_grp	= NULL;
 decl_lck_rw_data(static, necp_fd_lock);
 decl_lck_rw_data(static, necp_observer_lock);
 decl_lck_rw_data(static, necp_client_tree_lock);
+decl_lck_rw_data(static, necp_flow_tree_lock);
 decl_lck_rw_data(static, necp_collect_stats_list_lock);
 
 #define NECP_STATS_LIST_LOCK_EXCLUSIVE() lck_rw_lock_exclusive(&necp_collect_stats_list_lock)
@@ -415,6 +498,12 @@ decl_lck_rw_data(static, necp_collect_stats_list_lock);
 #define NECP_CLIENT_TREE_LOCK_EXCLUSIVE() lck_rw_lock_exclusive(&necp_client_tree_lock)
 #define NECP_CLIENT_TREE_LOCK_SHARED() lck_rw_lock_shared(&necp_client_tree_lock)
 #define NECP_CLIENT_TREE_UNLOCK() lck_rw_done(&necp_client_tree_lock)
+#define NECP_CLIENT_TREE_ASSERT_LOCKED() LCK_RW_ASSERT(&necp_client_tree_lock, LCK_RW_ASSERT_HELD)
+
+#define NECP_FLOW_TREE_LOCK_EXCLUSIVE() lck_rw_lock_exclusive(&necp_flow_tree_lock)
+#define NECP_FLOW_TREE_LOCK_SHARED() lck_rw_lock_shared(&necp_flow_tree_lock)
+#define NECP_FLOW_TREE_UNLOCK() lck_rw_done(&necp_flow_tree_lock)
+#define NECP_FLOW_TREE_ASSERT_LOCKED() LCK_RW_ASSERT(&necp_flow_tree_lock, LCK_RW_ASSERT_HELD)
 
 #define NECP_FD_LIST_LOCK_EXCLUSIVE() lck_rw_lock_exclusive(&necp_fd_lock)
 #define NECP_FD_LIST_LOCK_SHARED() lck_rw_lock_shared(&necp_fd_lock)
@@ -428,7 +517,8 @@ decl_lck_rw_data(static, necp_collect_stats_list_lock);
 
 // Take NECP_FD_LIST_LOCK when accessing or modifying the necp_fd_list
 // Take NECP_CLIENT_TREE_LOCK when accessing or modifying the necp_client_global_tree
-// Take NECP_STATS_LIST_LOCK when accessing or modifying the necp_collect_stats_client_list
+// Take NECP_FLOW_TREE_LOCK when accessing or modifying the necp_client_flow_global_tree
+// Take NECP_STATS_LIST_LOCK when accessing or modifying the necp_collect_stats_flow_list
 // Take NECP_FD_LOCK when accessing or modifying an necp_fd_data entry
 // Take NECP_CLIENT_LOCK when accessing or modifying a single necp_client
 // Take NECP_CLIENT_ROUTE_LOCK when accessing or modifying a client's route
@@ -438,8 +528,9 @@ decl_lck_rw_data(static, necp_collect_stats_list_lock);
 // 2. NECP_FD_LOCK (any)
 // 3. NECP_CLIENT_TREE_LOCK
 // 4. NECP_CLIENT_LOCK (any)
-// 5. NECP_STATS_LIST_LOCK
-// 6. NECP_CLIENT_ROUTE_LOCK (any)
+// 5. NECP_FLOW_TREE_LOCK
+// 6. NECP_STATS_LIST_LOCK
+// 7. NECP_CLIENT_ROUTE_LOCK (any)
 
 static thread_call_t necp_client_update_tcall;
 
@@ -489,6 +580,19 @@ necp_fd_notify(struct necp_fd_data *fd_data, bool locked)
 	}
 }
 
+static inline bool
+necp_client_has_unread_flows(struct necp_client *client)
+{
+	NECP_CLIENT_ASSERT_LOCKED(client);
+	struct necp_client_flow_registration *flow_registration = NULL;
+	RB_FOREACH(flow_registration, _necp_client_flow_tree, &client->flow_registrations) {
+		if (!flow_registration->flow_result_read) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static int
 necp_fd_poll(struct necp_fd_data *fd_data, int events, void *wql, struct proc *p, int is_kevent)
 {
@@ -508,7 +612,7 @@ necp_fd_poll(struct necp_fd_data *fd_data, int events, void *wql, struct proc *p
 			bool has_unread_clients = FALSE;
 			RB_FOREACH(client, _necp_client_tree, &fd_data->clients) {
 				NECP_CLIENT_LOCK(client);
-				if (!client->result_read || !client->flow_result_read) {
+				if (!client->result_read || necp_client_has_unread_flows(client)) {
 					has_unread_clients = TRUE;
 				}
 				NECP_CLIENT_UNLOCK(client);
@@ -526,14 +630,96 @@ necp_fd_poll(struct necp_fd_data *fd_data, int events, void *wql, struct proc *p
 	return (revents);
 }
 
+static inline void
+necp_generate_client_id(uuid_t client_id, bool is_flow)
+{
+	uuid_generate_random(client_id);
+
+	if (is_flow) {
+		client_id[9] |= 0x01;
+	} else {
+		client_id[9] &= ~0x01;
+	}
+}
+
+static inline bool
+necp_client_id_is_flow(uuid_t client_id)
+{
+	return (client_id[9] & 0x01);
+}
+
+static struct necp_client *
+necp_find_client_and_lock(uuid_t client_id)
+{
+	NECP_CLIENT_TREE_ASSERT_LOCKED();
+
+	struct necp_client *client = NULL;
+
+	if (necp_client_id_is_flow(client_id)) {
+		NECP_FLOW_TREE_LOCK_SHARED();
+		struct necp_client_flow_registration find;
+		uuid_copy(find.registration_id, client_id);
+		struct necp_client_flow_registration *flow = RB_FIND(_necp_client_flow_global_tree, &necp_client_flow_global_tree, &find);
+		if (flow != NULL) {
+			client = flow->client;
+		}
+		NECP_FLOW_TREE_UNLOCK();
+	} else {
+		struct necp_client find;
+		uuid_copy(find.client_id, client_id);
+		client = RB_FIND(_necp_client_global_tree, &necp_client_global_tree, &find);
+	}
+
+	if (client != NULL) {
+		NECP_CLIENT_LOCK(client);
+	}
+
+	return (client);
+}
+
+static struct necp_client_flow_registration *
+necp_client_find_flow(struct necp_client *client, uuid_t flow_id)
+{
+	NECP_CLIENT_ASSERT_LOCKED(client);
+	struct necp_client_flow_registration *flow = NULL;
+
+	if (necp_client_id_is_flow(flow_id)) {
+		struct necp_client_flow_registration find;
+		uuid_copy(find.registration_id, flow_id);
+		flow = RB_FIND(_necp_client_flow_tree, &client->flow_registrations, &find);
+	} else {
+		flow = RB_ROOT(&client->flow_registrations);
+	}
+
+	return (flow);
+}
+
+static struct necp_client *
+necp_client_fd_find_client_unlocked(struct necp_fd_data *client_fd, uuid_t client_id)
+{
+	NECP_FD_ASSERT_LOCKED(client_fd);
+	struct necp_client *client = NULL;
+
+	if (necp_client_id_is_flow(client_id)) {
+		struct necp_client_flow_registration find;
+		uuid_copy(find.registration_id, client_id);
+		struct necp_client_flow_registration *flow = RB_FIND(_necp_fd_flow_tree, &client_fd->flows, &find);
+		if (flow != NULL) {
+			client = flow->client;
+		}
+	} else {
+		struct necp_client find;
+		uuid_copy(find.client_id, client_id);
+		client = RB_FIND(_necp_client_tree, &client_fd->clients, &find);
+	}
+
+	return (client);
+}
+
 static struct necp_client *
 necp_client_fd_find_client_and_lock(struct necp_fd_data *client_fd, uuid_t client_id)
 {
-	struct necp_client find;
-	NECP_FD_ASSERT_LOCKED(client_fd);
-	uuid_copy(find.client_id, client_id);
-	struct necp_client *client = RB_FIND(_necp_client_tree, &client_fd->clients, &find);
-
+	struct necp_client *client = necp_client_fd_find_client_unlocked(client_fd, client_id);
 	if (client != NULL) {
 		NECP_CLIENT_LOCK(client);
 	}
@@ -545,6 +731,12 @@ static inline int
 necp_client_id_cmp(struct necp_client *client0, struct necp_client *client1)
 {
 	return (uuid_compare(client0->client_id, client1->client_id));
+}
+
+static inline int
+necp_client_flow_id_cmp(struct necp_client_flow_registration *flow0, struct necp_client_flow_registration *flow1)
+{
+	return (uuid_compare(flow0->registration_id, flow1->registration_id));
 }
 
 static int
@@ -630,8 +822,6 @@ necp_fd_knrtouch(struct knote *kn, struct kevent_internal_s *kev)
 	fd_data = (struct necp_fd_data *)kn->kn_hook;
 
 	NECP_FD_LOCK(fd_data);
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 	revents = necp_fd_poll(fd_data, POLLIN, NULL, current_proc(), 1);
 	NECP_FD_UNLOCK(fd_data);
 
@@ -681,58 +871,47 @@ necpop_kqfilter(struct fileproc *fp, struct knote *kn,
 	return ((revents & POLLIN) != 0);
 }
 
+#define INTERFACE_FLAGS_SHIFT   32
+#define INTERFACE_FLAGS_MASK    0xffff
+#define INTERFACE_INDEX_SHIFT   0
+#define INTERFACE_INDEX_MASK    0xffffffff
 
-static bool
-necp_set_client_defunct(struct necp_client *client)
+static uint64_t
+combine_interface_details(uint32_t interface_index, uint16_t interface_flags)
 {
-	bool updated = FALSE;
-	u_int32_t flags = 0;
-	u_int32_t value_size = 0;
-
-	client->defunct = TRUE;
-
-	u_int8_t *flags_pointer = necp_buffer_get_tlv_value(client->result, 0, &value_size);
-	if (flags_pointer && value_size == sizeof(flags)) {
-		memcpy(&flags, flags_pointer, value_size);
-
-		flags |= NECP_CLIENT_RESULT_FLAG_DEFUNCT;
-
-		(void)necp_buffer_write_tlv_if_different(client->result, NECP_CLIENT_RESULT_FLAGS,
-												 sizeof(flags), &flags, &updated, client->result, sizeof(client->result));
-
-        if (updated) {
-            client->result_read = FALSE;
-        }
-	}
-
-	return (updated);
+    return (((uint64_t)interface_flags & INTERFACE_FLAGS_MASK) << INTERFACE_FLAGS_SHIFT |
+            ((uint64_t)interface_index & INTERFACE_INDEX_MASK) << INTERFACE_INDEX_SHIFT);
 }
 
+
 static void
-necp_defunct_client_for_policy(struct necp_client *client,
-							   struct _necp_client_defunct_list *defunct_list)
+necp_defunct_flow_registration(struct necp_client *client,
+							   struct necp_client_flow_registration *flow_registration,
+							   struct _necp_flow_defunct_list *defunct_list)
 {
 	NECP_CLIENT_ASSERT_LOCKED(client);
-	
-	if (!client->defunct) {
+
+	if (!flow_registration->defunct) {
 		bool needs_defunct = false;
 		struct necp_client_flow *search_flow = NULL;
-		LIST_FOREACH(search_flow, &client->flow_list, flow_chain) {
+		LIST_FOREACH(search_flow, &flow_registration->flow_list, flow_chain) {
 			if (search_flow->nexus &&
-				!uuid_is_null(search_flow->u.nexus_agent) &&
-				search_flow->requested_nexus) {
+				!uuid_is_null(search_flow->u.nexus_agent)) {
 
 				// Save defunct values for the nexus
 				if (defunct_list != NULL) {
 					// Sleeping alloc won't fail; copy only what's necessary
-					struct necp_client_defunct *client_defunct = _MALLOC(sizeof (struct necp_client_defunct),
-																		 M_NECP, M_WAITOK | M_ZERO);
-					uuid_copy(client_defunct->nexus_agent, search_flow->u.nexus_agent);
-					uuid_copy(client_defunct->client_id, client->client_id);
-					client_defunct->proc_pid = client->proc_pid;
+					struct necp_flow_defunct *flow_defunct = _MALLOC(sizeof (struct necp_flow_defunct),
+																	 M_NECP, M_WAITOK | M_ZERO);
+					uuid_copy(flow_defunct->nexus_agent, search_flow->u.nexus_agent);
+					uuid_copy(flow_defunct->flow_id, ((flow_registration->flags & NECP_CLIENT_FLOW_FLAGS_USE_CLIENT_ID) ?
+													  client->client_id :
+													  flow_registration->registration_id));
+					flow_defunct->proc_pid = client->proc_pid;
+					flow_defunct->agent_handle = client->agent_handle;
 
 					// Add to the list provided by caller
-					LIST_INSERT_HEAD(defunct_list, client_defunct, chain);
+					LIST_INSERT_HEAD(defunct_list, flow_defunct, chain);
 				}
 
 				needs_defunct = true;
@@ -740,9 +919,22 @@ necp_defunct_client_for_policy(struct necp_client *client,
 		}
 
 		if (needs_defunct) {
+
 			// Only set defunct if there was some assigned flow
-			client->defunct = true;
+			flow_registration->defunct = true;
 		}
+	}
+}
+
+static void
+necp_defunct_client_for_policy(struct necp_client *client,
+							   struct _necp_flow_defunct_list *defunct_list)
+{
+	NECP_CLIENT_ASSERT_LOCKED(client);
+
+	struct necp_client_flow_registration *flow_registration = NULL;
+	RB_FOREACH(flow_registration, _necp_client_flow_tree, &client->flow_registrations) {
+		necp_defunct_flow_registration(client, flow_registration, defunct_list);
 	}
 }
 
@@ -752,6 +944,9 @@ necp_client_free(struct necp_client *client)
 	NECP_CLIENT_ASSERT_LOCKED(client);
 
 	NECP_CLIENT_UNLOCK(client);
+
+	FREE(client->extra_interface_options, M_NECP);
+	client->extra_interface_options = NULL;
 
 	lck_mtx_destroy(&client->route_lock, necp_fd_mtx_grp);
 	lck_mtx_destroy(&client->lock, necp_fd_mtx_grp);
@@ -927,32 +1122,26 @@ necp_client_update_observer_remove(struct necp_client *client)
 }
 
 static void
-necp_destroy_client(struct necp_client *client, pid_t pid, bool abort)
+necp_destroy_client_flow_registration(struct necp_client *client,
+									  struct necp_client_flow_registration *flow_registration,
+									  pid_t pid, bool abort)
 {
-	NECP_CLIENT_ASSERT_UNLOCKED(client);
+	NECP_CLIENT_ASSERT_LOCKED(client);
 
-	necp_client_update_observer_remove(client);
 
-	NECP_CLIENT_LOCK(client);
-
-	// Free route
-	NECP_CLIENT_ROUTE_LOCK(client);
-	if (client->current_route != NULL) {
-		rtfree(client->current_route);
-		client->current_route = NULL;
-	}
-	NECP_CLIENT_ROUTE_UNLOCK(client);
-
-	// Remove flow assignments
 	struct necp_client_flow *search_flow = NULL;
 	struct necp_client_flow *temp_flow = NULL;
-	LIST_FOREACH_SAFE(search_flow, &client->flow_list, flow_chain, temp_flow) {
+	LIST_FOREACH_SAFE(search_flow, &flow_registration->flow_list, flow_chain, temp_flow) {
 		if (search_flow->nexus &&
-			!uuid_is_null(search_flow->u.nexus_agent) &&
-			search_flow->requested_nexus) {
+			!uuid_is_null(search_flow->u.nexus_agent)) {
 			// Note that if we had defuncted the client earlier, this would result in a harmless ENOENT
-			int netagent_error = netagent_client_message(search_flow->u.nexus_agent, client->client_id, pid,
-			    abort ? NETAGENT_MESSAGE_TYPE_ABORT_NEXUS : NETAGENT_MESSAGE_TYPE_CLOSE_NEXUS);
+			int netagent_error = netagent_client_message(search_flow->u.nexus_agent,
+														 ((flow_registration->flags & NECP_CLIENT_FLOW_FLAGS_USE_CLIENT_ID) ?
+														  client->client_id :
+														  flow_registration->registration_id),
+														 pid, client->agent_handle,
+														 (abort ? NETAGENT_MESSAGE_TYPE_ABORT_NEXUS :
+														  NETAGENT_MESSAGE_TYPE_CLOSE_NEXUS));
 			if (netagent_error != 0 && netagent_error != ENOENT) {
 				NECPLOG(LOG_ERR, "necp_client_remove close nexus error (%d)", netagent_error);
 			}
@@ -971,11 +1160,42 @@ necp_destroy_client(struct necp_client *client, pid_t pid, bool abort)
 		mcache_free(necp_flow_cache, search_flow);
 	}
 
+	RB_REMOVE(_necp_client_flow_tree, &client->flow_registrations, flow_registration);
+	flow_registration->client = NULL;
+
+	mcache_free(necp_flow_registration_cache, flow_registration);
+}
+
+static void
+necp_destroy_client(struct necp_client *client, pid_t pid, bool abort)
+{
+	NECP_CLIENT_ASSERT_UNLOCKED(client);
+
+	necp_client_update_observer_remove(client);
+
+	NECP_CLIENT_LOCK(client);
+
+	// Free route
+	NECP_CLIENT_ROUTE_LOCK(client);
+	if (client->current_route != NULL) {
+		rtfree(client->current_route);
+		client->current_route = NULL;
+	}
+	NECP_CLIENT_ROUTE_UNLOCK(client);
+
+	// Remove flow assignments
+	struct necp_client_flow_registration *flow_registration = NULL;
+	struct necp_client_flow_registration *temp_flow_registration = NULL;
+	RB_FOREACH_SAFE(flow_registration, _necp_client_flow_tree, &client->flow_registrations, temp_flow_registration) {
+		necp_destroy_client_flow_registration(client, flow_registration, pid, abort);
+	}
+
 	// Remove agent assertions
 	struct necp_client_assertion *search_assertion = NULL;
 	struct necp_client_assertion *temp_assertion = NULL;
 	LIST_FOREACH_SAFE(search_assertion, &client->assertion_list, assertion_chain, temp_assertion) {
-		int netagent_error = netagent_client_message(search_assertion->asserted_netagent, client->client_id, pid, NETAGENT_MESSAGE_TYPE_CLIENT_UNASSERT);
+		int netagent_error = netagent_client_message(search_assertion->asserted_netagent, client->client_id, pid,
+													 client->agent_handle, NETAGENT_MESSAGE_TYPE_CLIENT_UNASSERT);
 		if (netagent_error != 0) {
 			NECPLOG((netagent_error == ENOENT ? LOG_DEBUG : LOG_ERR),
 					"necp_client_remove unassert agent error (%d)", netagent_error);
@@ -1018,6 +1238,16 @@ necpop_close(struct fileglob *fg, vfs_context_t ctx)
 
 		NECP_FD_LOCK(fd_data);
 		pid_t pid = fd_data->proc_pid;
+
+		struct necp_client_flow_registration *flow_registration = NULL;
+		struct necp_client_flow_registration *temp_flow_registration = NULL;
+		RB_FOREACH_SAFE(flow_registration, _necp_fd_flow_tree, &fd_data->flows, temp_flow_registration) {
+			NECP_FLOW_TREE_LOCK_EXCLUSIVE();
+			RB_REMOVE(_necp_client_flow_global_tree, &necp_client_flow_global_tree, flow_registration);
+			NECP_FLOW_TREE_UNLOCK();
+			RB_REMOVE(_necp_fd_flow_tree, &fd_data->flows, flow_registration);
+		}
+
 		struct necp_client *client = NULL;
 		struct necp_client *temp_client = NULL;
 		RB_FOREACH_SAFE(client, _necp_client_tree, &fd_data->clients, temp_client) {
@@ -1089,75 +1319,143 @@ necp_find_fd_data(int fd, struct necp_fd_data **fd_data)
 	}
 	*fd_data = (struct necp_fd_data *)fp->f_fglob->fg_data;
 
+	if ((*fd_data)->necp_fd_type != necp_fd_type_client) {
+		// Not a client fd, ignore
+		error = EINVAL;
+		goto done;
+	}
+
 done:
 	proc_fdunlock(p);
 	return (error);
 }
 
 
-static void
-necp_client_add_socket_flow(struct necp_client *client, struct inpcb *inp)
-{
-	struct necp_client_flow *new_flow = mcache_alloc(necp_flow_cache, MCR_SLEEP);
-	if (new_flow == NULL) {
-		NECPLOG0(LOG_ERR, "Failed to allocate socket flow");
-		return;
-	}
-
-	memset(new_flow, 0, sizeof(*new_flow));
-
-	new_flow->socket = TRUE;
-	new_flow->u.socket_handle = inp;
-	new_flow->u.cb = inp->necp_cb;
-
-	OSIncrementAtomic(&necp_socket_flow_count);
-
-	LIST_INSERT_HEAD(&client->flow_list, new_flow, flow_chain);
-}
-
-static void
-necp_client_add_interface_flow(struct necp_client *client, uint32_t interface_index)
+static struct necp_client_flow *
+necp_client_add_interface_flow(struct necp_client_flow_registration *flow_registration,
+							   uint32_t interface_index)
 {
 	struct necp_client_flow *new_flow = mcache_alloc(necp_flow_cache, MCR_SLEEP);
 	if (new_flow == NULL) {
 		NECPLOG0(LOG_ERR, "Failed to allocate interface flow");
-		return;
+		return NULL;
 	}
 
 	memset(new_flow, 0, sizeof(*new_flow));
 
 	// Neither nexus nor socket
 	new_flow->interface_index = interface_index;
-	new_flow->u.socket_handle = client->interface_handle;
-	new_flow->u.cb = client->interface_cb;
+	new_flow->u.socket_handle = flow_registration->interface_handle;
+	new_flow->u.cb = flow_registration->interface_cb;
 
 	OSIncrementAtomic(&necp_if_flow_count);
 
-	LIST_INSERT_HEAD(&client->flow_list, new_flow, flow_chain);
+	LIST_INSERT_HEAD(&flow_registration->flow_list, new_flow, flow_chain);
+
+	return new_flow;
 }
 
-static void
-necp_client_add_interface_flow_if_needed(struct necp_client *client, uint32_t interface_index)
+static struct necp_client_flow *
+necp_client_add_interface_flow_if_needed(struct necp_client *client,
+										 struct necp_client_flow_registration *flow_registration,
+										 uint32_t interface_index)
 {
 	if (!client->allow_multiple_flows ||
 		interface_index == IFSCOPE_NONE) {
 		// Interface not set, or client not allowed to use this mode
-		return;
+		return NULL;
 	}
 
 	struct necp_client_flow *flow = NULL;
-	LIST_FOREACH(flow, &client->flow_list, flow_chain) {
+	LIST_FOREACH(flow, &flow_registration->flow_list, flow_chain) {
 		if (!flow->nexus && !flow->socket && flow->interface_index == interface_index) {
 			// Already have the flow
 			flow->invalid = FALSE;
+			flow->u.socket_handle = flow_registration->interface_handle;
+			flow->u.cb = flow_registration->interface_cb;
+			return NULL;
+		}
+	}
+	return necp_client_add_interface_flow(flow_registration, interface_index);
+}
 
-			flow->u.socket_handle = client->interface_handle;
-			flow->u.cb = client->interface_cb;
-			return;
+static void
+necp_client_add_interface_option_if_needed(struct necp_client *client,
+										   uint32_t interface_index,
+										   uint32_t interface_generation,
+										   uuid_t *nexus_agent)
+{
+	if (interface_index == IFSCOPE_NONE ||
+		(client->interface_option_count != 0 && !client->allow_multiple_flows)) {
+		// Interface not set, or client not allowed to use this mode
+		return;
+	}
+
+	if (client->interface_option_count >= NECP_CLIENT_MAX_INTERFACE_OPTIONS) {
+		// Cannot take any more interface options
+		return;
+	}
+
+	// Check if already present
+	for (u_int32_t option_i = 0; option_i < client->interface_option_count; option_i++) {
+		if (option_i < NECP_CLIENT_INTERFACE_OPTION_STATIC_COUNT) {
+			struct necp_client_interface_option *option = &client->interface_options[option_i];
+			if (option->interface_index == interface_index) {
+				if (nexus_agent == NULL) {
+					return;
+				}
+				if (uuid_compare(option->nexus_agent, *nexus_agent) == 0) {
+					return;
+				}
+				if (uuid_is_null(option->nexus_agent)) {
+					uuid_copy(option->nexus_agent, *nexus_agent);
+					return;
+				}
+				// If we get to this point, this is a new nexus flow
+			}
+		} else {
+			struct necp_client_interface_option *option = &client->extra_interface_options[option_i - NECP_CLIENT_INTERFACE_OPTION_STATIC_COUNT];
+			if (option->interface_index == interface_index) {
+				if (nexus_agent == NULL) {
+					return;
+				}
+				if (uuid_compare(option->nexus_agent, *nexus_agent) == 0) {
+					return;
+				}
+				if (uuid_is_null(option->nexus_agent)) {
+					uuid_copy(option->nexus_agent, *nexus_agent);
+					return;
+				}
+				// If we get to this point, this is a new nexus flow
+			}
 		}
 	}
 
-	necp_client_add_interface_flow(client, interface_index);
+	// Add a new entry
+	if (client->interface_option_count < NECP_CLIENT_INTERFACE_OPTION_STATIC_COUNT) {
+		// Add to static
+		struct necp_client_interface_option *option = &client->interface_options[client->interface_option_count];
+		option->interface_index = interface_index;
+		option->interface_generation = interface_generation;
+		if (nexus_agent != NULL) {
+			uuid_copy(option->nexus_agent, *nexus_agent);
+		}
+		client->interface_option_count++;
+	} else {
+		// Add to extra
+		if (client->extra_interface_options == NULL) {
+			client->extra_interface_options = _MALLOC(sizeof(struct necp_client_interface_option) * NECP_CLIENT_INTERFACE_OPTION_EXTRA_COUNT, M_NECP, M_WAITOK | M_ZERO);
+		}
+		if (client->extra_interface_options != NULL) {
+			struct necp_client_interface_option *option = &client->extra_interface_options[client->interface_option_count - NECP_CLIENT_INTERFACE_OPTION_STATIC_COUNT];
+			option->interface_index = interface_index;
+			option->interface_generation = interface_generation;
+			if (nexus_agent != NULL) {
+				uuid_copy(option->nexus_agent, *nexus_agent);
+			}
+			client->interface_option_count++;
+		}
+	}
 }
 
 static bool
@@ -1179,66 +1477,110 @@ necp_client_flow_is_viable(proc_t proc, struct necp_client *client,
 			result.routing_result != NECP_KERNEL_POLICY_RESULT_DROP);
 }
 
+static void
+necp_flow_add_interface_flows(proc_t proc,
+							  struct necp_client *client,
+							  struct necp_client_flow_registration *flow_registration,
+							  bool send_initial)
+{
+	// Traverse all interfaces and add a tracking flow if needed
+	for (u_int32_t option_i = 0; option_i < client->interface_option_count; option_i++) {
+		if (option_i < NECP_CLIENT_INTERFACE_OPTION_STATIC_COUNT) {
+			struct necp_client_interface_option *option = &client->interface_options[option_i];
+			struct necp_client_flow *flow = necp_client_add_interface_flow_if_needed(client, flow_registration, option->interface_index);
+			if (flow != NULL && send_initial) {
+				flow->viable = necp_client_flow_is_viable(proc, client, flow);
+				if (flow->viable && flow->u.cb) {
+					bool viable = flow->viable;
+					flow->u.cb(flow_registration->interface_handle, NECP_CLIENT_CBACTION_INITIAL, flow->interface_index, flow->necp_flow_flags, &viable);
+					flow->viable = viable;
+				}
+			}
+		} else {
+			struct necp_client_interface_option *option = &client->extra_interface_options[option_i - NECP_CLIENT_INTERFACE_OPTION_STATIC_COUNT];
+			struct necp_client_flow *flow = necp_client_add_interface_flow_if_needed(client, flow_registration, option->interface_index);
+			if (flow != NULL && send_initial) {
+				flow->viable = necp_client_flow_is_viable(proc, client, flow);
+				if (flow->viable && flow->u.cb) {
+					bool viable = flow->viable;
+					flow->u.cb(flow_registration->interface_handle, NECP_CLIENT_CBACTION_INITIAL, flow->interface_index, flow->necp_flow_flags, &viable);
+					flow->viable = viable;
+				}
+			}
+		}
+	}
+}
+
 static bool
 necp_client_update_flows(proc_t proc,
 						 struct necp_client *client,
-						 struct _necp_client_defunct_list *defunct_list,
-						 bool *defuncted_by_flow)
+						 struct _necp_flow_defunct_list *defunct_list)
 {
 	NECP_CLIENT_ASSERT_LOCKED(client);
 
 	bool client_updated = FALSE;
 	struct necp_client_flow *flow = NULL;
 	struct necp_client_flow *temp_flow = NULL;
-	LIST_FOREACH_SAFE(flow, &client->flow_list, flow_chain, temp_flow) {
-		// Check policy result for flow
-		int old_flags = flow->necp_flow_flags;
-		bool viable = necp_client_flow_is_viable(proc, client, flow);
-
-		// TODO: Defunct nexus flows that are blocked by policy
-
-		if (flow->viable != viable) {
-			flow->viable = viable;
-			client_updated = TRUE;
+	struct necp_client_flow_registration *flow_registration = NULL;
+	RB_FOREACH(flow_registration, _necp_client_flow_tree, &client->flow_registrations) {
+		if (flow_registration->interface_cb != NULL) {
+			// Add any interface flows that are not already tracked
+			necp_flow_add_interface_flows(proc, client, flow_registration, false);
 		}
 
-		if ((old_flags & (NECP_CLIENT_RESULT_FLAG_HAS_IPV4 | NECP_CLIENT_RESULT_FLAG_HAS_IPV6)) !=
-		    (flow->necp_flow_flags & (NECP_CLIENT_RESULT_FLAG_HAS_IPV4 | NECP_CLIENT_RESULT_FLAG_HAS_IPV6))) {
-			client_updated = TRUE;
-		}
+		LIST_FOREACH_SAFE(flow, &flow_registration->flow_list, flow_chain, temp_flow) {
+			// Check policy result for flow
+			int old_flags = flow->necp_flow_flags;
+			bool viable = necp_client_flow_is_viable(proc, client, flow);
 
-		if (flow->viable && client_updated && (flow->socket || (!flow->socket && !flow->nexus)) && flow->u.cb) {
-			flow->u.cb(flow->u.socket_handle, NECP_CLIENT_CBACTION_VIABLE, flow);
-		}
+			// TODO: Defunct nexus flows that are blocked by policy
 
-		if (!flow->viable || flow->invalid) {
-			if (client_updated && (flow->socket || (!flow->socket && !flow->nexus)) && flow->u.cb) {
-				flow->u.cb(flow->u.socket_handle, NECP_CLIENT_CBACTION_NONVIABLE, flow);
+			if (flow->viable != viable) {
+				flow->viable = viable;
+				client_updated = TRUE;
 			}
-			// The callback might change the viable-flag of the
-			// flow depending on its policy. Thus, we need to
-			// check again the flags after the callback.
-		}
 
-		(void)defunct_list;
-		(void)defuncted_by_flow;
+			if ((old_flags & NECP_CLIENT_RESULT_FLAG_FORCE_UPDATE) !=
+				(flow->necp_flow_flags & NECP_CLIENT_RESULT_FLAG_FORCE_UPDATE)) {
+				client_updated = TRUE;
+			}
 
-		// Handle flows that no longer match
-		if (!flow->viable || flow->invalid) {
-			// Drop them as long as they aren't assigned data
-			if (!flow->requested_nexus && !flow->assigned) {
-				if (flow->assigned_results != NULL) {
-					FREE(flow->assigned_results, M_NETAGENT);
-					flow->assigned_results = NULL;
-					client_updated = TRUE;
+			if (flow->viable && client_updated && (flow->socket || (!flow->socket && !flow->nexus)) && flow->u.cb) {
+				bool flow_viable = flow->viable;
+				flow->u.cb(flow->u.socket_handle, NECP_CLIENT_CBACTION_VIABLE, flow->interface_index, flow->necp_flow_flags, &viable);
+				flow->viable = flow_viable;
+			}
+
+			if (!flow->viable || flow->invalid) {
+				if (client_updated && (flow->socket || (!flow->socket && !flow->nexus)) && flow->u.cb) {
+					bool flow_viable = flow->viable;
+					flow->u.cb(flow->u.socket_handle, NECP_CLIENT_CBACTION_NONVIABLE, flow->interface_index, flow->necp_flow_flags, &viable);
+					flow->viable = flow_viable;
 				}
-				LIST_REMOVE(flow, flow_chain);
-				if (flow->socket) {
-					OSDecrementAtomic(&necp_socket_flow_count);
-				} else {
-					OSDecrementAtomic(&necp_if_flow_count);
+				// The callback might change the viable-flag of the
+				// flow depending on its policy. Thus, we need to
+				// check the flags again after the callback.
+			}
+
+			(void)defunct_list;
+
+			// Handle flows that no longer match
+			if (!flow->viable || flow->invalid) {
+				// Drop them as long as they aren't assigned data
+				if (!flow->nexus && !flow->assigned) {
+					if (flow->assigned_results != NULL) {
+						FREE(flow->assigned_results, M_NETAGENT);
+						flow->assigned_results = NULL;
+						client_updated = TRUE;
+					}
+					LIST_REMOVE(flow, flow_chain);
+					if (flow->socket) {
+						OSDecrementAtomic(&necp_socket_flow_count);
+					} else {
+						OSDecrementAtomic(&necp_if_flow_count);
+					}
+					mcache_free(necp_flow_cache, flow);
 				}
-				mcache_free(necp_flow_cache, flow);
 			}
 		}
 	}
@@ -1249,23 +1591,29 @@ necp_client_update_flows(proc_t proc,
 static void
 necp_client_mark_all_nonsocket_flows_as_invalid(struct necp_client *client)
 {
+	struct necp_client_flow_registration *flow_registration = NULL;
 	struct necp_client_flow *flow = NULL;
-	LIST_FOREACH(flow, &client->flow_list, flow_chain) {
-		if (!flow->socket) { // Socket flows are not marked as invalid
-			flow->invalid = TRUE;
+	RB_FOREACH(flow_registration, _necp_client_flow_tree, &client->flow_registrations) {
+		LIST_FOREACH(flow, &flow_registration->flow_list, flow_chain) {
+			if (!flow->socket) { // Socket flows are not marked as invalid
+				flow->invalid = TRUE;
+			}
 		}
 	}
+
+	// Reset option count every update
+	client->interface_option_count = 0;
 }
 
 static bool
-necp_netagent_applies_to_client(__unused struct necp_client *client,
+necp_netagent_applies_to_client(struct necp_client *client,
 								const struct necp_client_parsed_parameters *parameters,
-								uuid_t netagent_uuid, bool allow_nexus,
-								uint32_t interface_index, u_int16_t interface_flags)
+								uuid_t *netagent_uuid, bool allow_nexus,
+								uint32_t interface_index, uint32_t interface_generation)
 {
-#pragma unused(interface_index, interface_flags)
+#pragma unused(interface_index, interface_generation)
 	bool applies = FALSE;
-	u_int32_t flags = netagent_get_flags(netagent_uuid);
+	u_int32_t flags = netagent_get_flags(*netagent_uuid);
 	if (!(flags & NETAGENT_FLAG_REGISTERED)) {
 		// Unregistered agents never apply
 		return (applies);
@@ -1279,6 +1627,17 @@ necp_netagent_applies_to_client(__unused struct necp_client *client,
 		return (applies);
 	}
 
+	if (uuid_compare(client->failed_trigger_agent.netagent_uuid, *netagent_uuid) == 0) {
+		if (client->failed_trigger_agent.generation == netagent_get_generation(*netagent_uuid)) {
+			// If this agent was triggered, and failed, and hasn't changed, keep hiding it
+			return (applies);
+		} else {
+			// Mismatch generation, clear out old trigger
+			uuid_clear(client->failed_trigger_agent.netagent_uuid);
+			client->failed_trigger_agent.generation = 0;
+		}
+	}
+
 	if (flags & NETAGENT_FLAG_SPECIFIC_USE_ONLY) {
 		// Specific use agents only apply when required
 		bool required = FALSE;
@@ -1288,7 +1647,7 @@ necp_netagent_applies_to_client(__unused struct necp_client *client,
 				if (uuid_is_null(parameters->required_netagents[i])) {
 					break;
 				}
-				if (uuid_compare(parameters->required_netagents[i], netagent_uuid) == 0) {
+				if (uuid_compare(parameters->required_netagents[i], *netagent_uuid) == 0) {
 					required = TRUE;
 					break;
 				}
@@ -1309,7 +1668,7 @@ necp_netagent_applies_to_client(__unused struct necp_client *client,
 					}
 
 					if (!fetched_type) {
-						if (netagent_get_agent_domain_and_type(netagent_uuid, netagent_domain, netagent_type)) {
+						if (netagent_get_agent_domain_and_type(*netagent_uuid, netagent_domain, netagent_type)) {
 							fetched_type = TRUE;
 						} else {
 							break;
@@ -1337,18 +1696,18 @@ necp_netagent_applies_to_client(__unused struct necp_client *client,
 }
 
 static void
-necp_client_add_agent_flows_for_interface(struct necp_client *client,
-										  const struct necp_client_parsed_parameters *parsed_parameters,
-										  ifnet_t ifp)
+necp_client_add_agent_interface_options(struct necp_client *client,
+										const struct necp_client_parsed_parameters *parsed_parameters,
+										ifnet_t ifp)
 {
 	if (ifp != NULL && ifp->if_agentids != NULL) {
 		for (u_int32_t i = 0; i < ifp->if_agentcount; i++) {
 			if (uuid_is_null(ifp->if_agentids[i])) {
 				continue;
 			}
-			u_int16_t if_flags = nstat_ifnet_to_flags(ifp);
 			// Relies on the side effect that nexus agents that apply will create flows
-			(void)necp_netagent_applies_to_client(client, parsed_parameters, ifp->if_agentids[i], TRUE, ifp->if_index, if_flags);
+			(void)necp_netagent_applies_to_client(client, parsed_parameters, &ifp->if_agentids[i], TRUE,
+												  ifp->if_index, ifnet_get_generation(ifp));
 		}
 	}
 }
@@ -1378,9 +1737,11 @@ necp_client_parse_parameters(u_int8_t *parameters,
 	u_int32_t num_required_agents = 0;
 	u_int32_t num_prohibited_agents = 0;
 	u_int32_t num_preferred_agents = 0;
+	u_int32_t num_avoided_agents = 0;
 	u_int32_t num_required_agent_types = 0;
 	u_int32_t num_prohibited_agent_types = 0;
 	u_int32_t num_preferred_agent_types = 0;
+	u_int32_t num_avoided_agent_types = 0;
 
 	if (parsed_parameters == NULL) {
 		return (EINVAL);
@@ -1536,6 +1897,17 @@ necp_client_parse_parameters(u_int8_t *parameters,
 						}
 						break;
 					}
+					case NECP_CLIENT_PARAMETER_AVOID_AGENT: {
+						if (num_avoided_agents >= NECP_MAX_PARSED_PARAMETERS) {
+							break;
+						}
+						if (length >= sizeof(uuid_t)) {
+							memcpy(&parsed_parameters->avoided_netagents[num_avoided_agents], value, sizeof(uuid_t));
+							num_avoided_agents++;
+							parsed_parameters->valid_fields |= NECP_PARSED_PARAMETERS_FIELD_AVOIDED_AGENT;
+						}
+						break;
+					}
 					case NECP_CLIENT_PARAMETER_REQUIRE_AGENT_TYPE: {
 						if (num_required_agent_types >= NECP_MAX_PARSED_PARAMETERS) {
 							break;
@@ -1566,6 +1938,17 @@ necp_client_parse_parameters(u_int8_t *parameters,
 							memcpy(&parsed_parameters->preferred_netagent_types[num_preferred_agent_types], value, sizeof(struct necp_client_parameter_netagent_type));
 							num_preferred_agent_types++;
 							parsed_parameters->valid_fields |= NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT_TYPE;
+						}
+						break;
+					}
+					case NECP_CLIENT_PARAMETER_AVOID_AGENT_TYPE: {
+						if (num_avoided_agent_types >= NECP_MAX_PARSED_PARAMETERS) {
+							break;
+						}
+						if (length >= sizeof(struct necp_client_parameter_netagent_type)) {
+							memcpy(&parsed_parameters->avoided_netagent_types[num_avoided_agent_types], value, sizeof(struct necp_client_parameter_netagent_type));
+							num_avoided_agent_types++;
+							parsed_parameters->valid_fields |= NECP_PARSED_PARAMETERS_FIELD_AVOIDED_AGENT_TYPE;
 						}
 						break;
 					}
@@ -1621,8 +2004,10 @@ static int
 necp_client_parse_result(u_int8_t *result,
 						 u_int32_t result_size,
 						 union necp_sockaddr_union *local_address,
-						 union necp_sockaddr_union *remote_address)
+						 union necp_sockaddr_union *remote_address,
+						 void **flow_stats)
 {
+#pragma unused(flow_stats)
 	int error = 0;
 	size_t offset = 0;
 
@@ -1665,37 +2050,109 @@ necp_client_parse_result(u_int8_t *result,
 	return (error);
 }
 
+static struct necp_client_flow_registration *
+necp_client_create_flow_registration(struct necp_fd_data *fd_data, struct necp_client *client)
+{
+	NECP_FD_ASSERT_LOCKED(fd_data);
+	NECP_CLIENT_ASSERT_LOCKED(client);
+
+	struct necp_client_flow_registration *new_registration = mcache_alloc(necp_flow_registration_cache, MCR_SLEEP);
+	if (new_registration == NULL) {
+		return NULL;
+	}
+
+	memset(new_registration, 0, sizeof(*new_registration));
+
+	new_registration->last_interface_details = combine_interface_details(IFSCOPE_NONE, NSTAT_IFNET_IS_UNKNOWN_TYPE);
+
+	necp_generate_client_id(new_registration->registration_id, true);
+	LIST_INIT(&new_registration->flow_list);
+
+	// Add registration to client list
+	RB_INSERT(_necp_client_flow_tree, &client->flow_registrations, new_registration);
+
+	// Add registration to fd list
+	RB_INSERT(_necp_fd_flow_tree, &fd_data->flows, new_registration);
+
+	// Add registration to global tree for lookup
+	NECP_FLOW_TREE_LOCK_EXCLUSIVE();
+	RB_INSERT(_necp_client_flow_global_tree, &necp_client_flow_global_tree, new_registration);
+	NECP_FLOW_TREE_UNLOCK();
+
+	new_registration->client = client;
+
+	// Start out assuming there is nothing to read from the flow
+	new_registration->flow_result_read = true;
+
+	return new_registration;
+}
+
+static void
+necp_client_add_socket_flow(struct necp_client_flow_registration *flow_registration,
+							struct inpcb *inp)
+{
+	struct necp_client_flow *new_flow = mcache_alloc(necp_flow_cache, MCR_SLEEP);
+	if (new_flow == NULL) {
+		NECPLOG0(LOG_ERR, "Failed to allocate socket flow");
+		return;
+	}
+
+	memset(new_flow, 0, sizeof(*new_flow));
+
+	new_flow->socket = TRUE;
+	new_flow->u.socket_handle = inp;
+	new_flow->u.cb = inp->necp_cb;
+
+	OSIncrementAtomic(&necp_socket_flow_count);
+
+	LIST_INSERT_HEAD(&flow_registration->flow_list, new_flow, flow_chain);
+}
+
 int
 necp_client_register_socket_flow(pid_t pid, uuid_t client_id, struct inpcb *inp)
 {
 	int error = 0;
+	struct necp_fd_data *client_fd = NULL;
 	bool found_client = FALSE;
 
-	NECP_CLIENT_TREE_LOCK_SHARED();
+	NECP_FD_LIST_LOCK_SHARED();
+	LIST_FOREACH(client_fd, &necp_fd_list, chain) {
+		NECP_FD_LOCK(client_fd);
+		struct necp_client *client = necp_client_fd_find_client_and_lock(client_fd, client_id);
+		if (client != NULL) {
+			if (!pid || client->proc_pid == pid) {
+				struct necp_client_flow_registration *flow_registration = necp_client_find_flow(client, client_id);
+				if (flow_registration != NULL) {
+					// Found the right client and flow registration, add a new flow
+					found_client = TRUE;
+					necp_client_add_socket_flow(flow_registration, inp);
+				} else if (RB_EMPTY(&client->flow_registrations) && !necp_client_id_is_flow(client_id)) {
+					// No flows yet on this client, add a new registration
+					flow_registration = necp_client_create_flow_registration(client_fd, client);
+					if (flow_registration == NULL) {
+						error = ENOMEM;
+					} else {
+						// Add a new flow
+						found_client = TRUE;
+						necp_client_add_socket_flow(flow_registration, inp);
+					}
+				}
+			}
 
-	struct necp_client find;
-	uuid_copy(find.client_id, client_id);
-	struct necp_client *client = RB_FIND(_necp_client_global_tree, &necp_client_global_tree, &find);
-	if (client != NULL) {
-		NECP_CLIENT_LOCK(client);
-
-		if (!pid || client->proc_pid == pid) {
-			// Found the right client!
-			found_client = TRUE;
-			necp_client_add_socket_flow(client, inp);
+			NECP_CLIENT_UNLOCK(client);
 		}
+		NECP_FD_UNLOCK(client_fd);
 
-		NECP_CLIENT_UNLOCK(client);
+		if (found_client) {
+			break;
+		}
 	}
-
-	NECP_CLIENT_TREE_UNLOCK();
+	NECP_FD_LIST_UNLOCK();
 
 	if (!found_client) {
 		error = ENOENT;
 	} else {
-		/*
-		 * Count the sockets that have the NECP client UUID set
-		 */
+		// Count the sockets that have the NECP client UUID set
 		struct socket *so = inp->inp_socket;
 		if (!(so->so_flags1 & SOF1_HAS_NECP_CLIENT_UUID)) {
 			so->so_flags1 |= SOF1_HAS_NECP_CLIENT_UUID;
@@ -1707,61 +2164,191 @@ necp_client_register_socket_flow(pid_t pid, uuid_t client_id, struct inpcb *inp)
 }
 
 static void
-necp_client_add_multipath_cb(struct necp_client *client, struct mppcb *mpp)
+necp_client_add_multipath_interface_flows(struct necp_client_flow_registration *flow_registration,
+										  struct necp_client *client,
+										  struct mppcb *mpp)
 {
-	struct necp_client_flow *flow = NULL;
+	flow_registration->interface_handle = mpp;
+	flow_registration->interface_cb = mpp->necp_cb;
 
-	client->interface_handle = mpp;
-	client->interface_cb = mpp->necp_cb;
-
-	LIST_FOREACH(flow, &client->flow_list, flow_chain) {
-		if (flow->nexus || flow->socket) {
-			continue;
-		}
-
-		flow->u.socket_handle = mpp;
-		flow->u.cb = mpp->necp_cb;
-
-		if (flow->viable && flow->u.cb) {
-			flow->u.cb(mpp, NECP_CLIENT_CBACTION_INITIAL, flow);
-		}
+	proc_t proc = proc_find(client->proc_pid);
+	if (proc == PROC_NULL) {
+		return;
 	}
+
+	// Traverse all interfaces and add a tracking flow if needed
+	necp_flow_add_interface_flows(proc, client, flow_registration, true);
+
+	proc_rele(proc);
+	proc = PROC_NULL;
 }
 
 int
 necp_client_register_multipath_cb(pid_t pid, uuid_t client_id, struct mppcb *mpp)
 {
 	int error = 0;
+	struct necp_fd_data *client_fd = NULL;
 	bool found_client = FALSE;
 
-	NECP_CLIENT_TREE_LOCK_SHARED();
+	NECP_FD_LIST_LOCK_SHARED();
+	LIST_FOREACH(client_fd, &necp_fd_list, chain) {
+		NECP_FD_LOCK(client_fd);
+		struct necp_client *client = necp_client_fd_find_client_and_lock(client_fd, client_id);
+		if (client != NULL) {
+			if (!pid || client->proc_pid == pid) {
+				struct necp_client_flow_registration *flow_registration = necp_client_find_flow(client, client_id);
+				if (flow_registration != NULL) {
+					// Found the right client and flow registration, add a new flow
+					found_client = TRUE;
+					necp_client_add_multipath_interface_flows(flow_registration, client, mpp);
+				} else if (RB_EMPTY(&client->flow_registrations) && !necp_client_id_is_flow(client_id)) {
+					// No flows yet on this client, add a new registration
+					flow_registration = necp_client_create_flow_registration(client_fd, client);
+					if (flow_registration == NULL) {
+						error = ENOMEM;
+					} else {
+						// Add a new flow
+						found_client = TRUE;
+						necp_client_add_multipath_interface_flows(flow_registration, client, mpp);
+					}
+				}
+			}
 
-	struct necp_client find;
-	uuid_copy(find.client_id, client_id);
-	struct necp_client *client = RB_FIND(_necp_client_global_tree, &necp_client_global_tree, &find);
-	if (client != NULL) {
-		NECP_CLIENT_LOCK(client);
-
-		if (!pid || client->proc_pid == pid) {
-			// Found the right client!
-			found_client = TRUE;
-			necp_client_add_multipath_cb(client, mpp);
+			NECP_CLIENT_UNLOCK(client);
 		}
+		NECP_FD_UNLOCK(client_fd);
 
-		NECP_CLIENT_UNLOCK(client);
+		if (found_client) {
+			break;
+		}
 	}
+	NECP_FD_LIST_UNLOCK();
 
-	NECP_CLIENT_TREE_UNLOCK();
-
-	if (!found_client) {
+	if (!found_client && error == 0) {
 		error = ENOENT;
 	}
 
 	return (error);
 }
 
-#define	NETAGENT_DOMAIN_NETEXT	"NetworkExtension"
-#define	NETAGENT_TYPE_PATHCTRL	"PathController"
+#define	NETAGENT_DOMAIN_RADIO_MANAGER	"WirelessRadioManager"
+#define	NETAGENT_TYPE_RADIO_MANAGER	"WirelessRadioManager:BB Manager"
+
+static int
+necp_client_lookup_bb_radio_manager(struct necp_client *client,
+				    uuid_t netagent_uuid)
+{
+	char netagent_domain[NETAGENT_DOMAINSIZE];
+	char netagent_type[NETAGENT_TYPESIZE];
+	struct necp_aggregate_result result;
+	proc_t proc;
+	int error;
+
+	proc = proc_find(client->proc_pid);
+	if (proc == PROC_NULL) {
+		return ESRCH;
+	}
+
+	error = necp_application_find_policy_match_internal(proc, client->parameters, (u_int32_t)client->parameters_length,
+				&result, NULL, 0, NULL, NULL, NULL, true);
+
+	proc_rele(proc);
+	proc = PROC_NULL;
+
+	if (error) {
+		return error;
+	}
+
+	for (int i = 0; i < NECP_MAX_NETAGENTS; i++) {
+		if (uuid_is_null(result.netagents[i])) {
+			// Passed end of valid agents
+			break;
+		}
+
+		memset(&netagent_domain, 0, NETAGENT_DOMAINSIZE);
+		memset(&netagent_type, 0, NETAGENT_TYPESIZE);
+		if (netagent_get_agent_domain_and_type(result.netagents[i], netagent_domain, netagent_type) == FALSE) {
+			continue;
+		}
+
+		if (strncmp(netagent_domain, NETAGENT_DOMAIN_RADIO_MANAGER, NETAGENT_DOMAINSIZE) != 0) {
+			continue;
+		}
+
+		if (strncmp(netagent_type, NETAGENT_TYPE_RADIO_MANAGER, NETAGENT_TYPESIZE) != 0) {
+			continue;
+		}
+
+		uuid_copy(netagent_uuid, result.netagents[i]);
+
+		break;
+	}
+
+	return 0;
+}
+
+static int
+necp_client_assert_bb_radio_manager_common(struct necp_client *client, bool assert)
+{
+	uuid_t netagent_uuid;
+	uint8_t assert_type;
+	int error;
+
+	error = necp_client_lookup_bb_radio_manager(client, netagent_uuid);
+	if (error) {
+		NECPLOG0(LOG_ERR, "BB radio manager agent not found");
+		return error;
+	}
+
+	// Before unasserting, verify that the assertion was already taken
+	if (assert == FALSE) {
+		assert_type = NETAGENT_MESSAGE_TYPE_CLIENT_UNASSERT;
+
+		if (!necp_client_remove_assertion(client, netagent_uuid)) {
+			return EINVAL;
+		}
+	} else {
+		assert_type = NETAGENT_MESSAGE_TYPE_CLIENT_ASSERT;
+	}
+
+	error = netagent_client_message(netagent_uuid, client->client_id, client->proc_pid, client->agent_handle, assert_type);
+	if (error) {
+		NECPLOG0(LOG_ERR, "netagent_client_message failed");
+		return error;
+	}
+
+	// Only save the assertion if the action succeeded
+	if (assert == TRUE) {
+		necp_client_add_assertion(client, netagent_uuid);
+	}
+
+	return 0;
+}
+
+int
+necp_client_assert_bb_radio_manager(uuid_t client_id, bool assert)
+{
+	struct necp_client *client;
+	int error = 0;
+
+	NECP_CLIENT_TREE_LOCK_SHARED();
+
+	client = necp_find_client_and_lock(client_id);
+
+	if (client) {
+		// Found the right client!
+		error = necp_client_assert_bb_radio_manager_common(client, assert);
+
+		NECP_CLIENT_UNLOCK(client);
+	} else {
+		NECPLOG0(LOG_ERR, "Couldn't find client");
+		error = ENOENT;
+	}
+
+	NECP_CLIENT_TREE_UNLOCK();
+
+	return (error);
+}
 
 static int
 necp_client_unregister_socket_flow(uuid_t client_id, void *handle)
@@ -1777,22 +2364,26 @@ necp_client_unregister_socket_flow(uuid_t client_id, void *handle)
 
 		struct necp_client *client = necp_client_fd_find_client_and_lock(client_fd, client_id);
 		if (client != NULL) {
-			// Found the right client!
-			found_client = TRUE;
+			struct necp_client_flow_registration *flow_registration = necp_client_find_flow(client, client_id);
+			if (flow_registration != NULL) {
+				// Found the right client and flow!
+				found_client = TRUE;
 
-			// Remove flow assignment
-			struct necp_client_flow *search_flow = NULL;
-			struct necp_client_flow *temp_flow = NULL;
-			LIST_FOREACH_SAFE(search_flow, &client->flow_list, flow_chain, temp_flow) {
-				if (search_flow->socket && search_flow->u.socket_handle == handle) {
-					if (search_flow->assigned_results != NULL) {
-						FREE(search_flow->assigned_results, M_NETAGENT);
-						search_flow->assigned_results = NULL;
+				// Remove flow assignment
+				struct necp_client_flow *search_flow = NULL;
+				struct necp_client_flow *temp_flow = NULL;
+				LIST_FOREACH_SAFE(search_flow, &flow_registration->flow_list, flow_chain, temp_flow) {
+					if (search_flow->socket && search_flow->u.socket_handle == handle) {
+						if (search_flow->assigned_results != NULL) {
+							FREE(search_flow->assigned_results, M_NETAGENT);
+							search_flow->assigned_results = NULL;
+						}
+						client_updated = TRUE;
+						flow_registration->flow_result_read = FALSE;
+						LIST_REMOVE(search_flow, flow_chain);
+						OSDecrementAtomic(&necp_socket_flow_count);
+						mcache_free(necp_flow_cache, search_flow);
 					}
-					client_updated = TRUE;
-					LIST_REMOVE(search_flow, flow_chain);
-					OSDecrementAtomic(&necp_socket_flow_count);
-					mcache_free(necp_flow_cache, search_flow);
 				}
 			}
 
@@ -1800,7 +2391,6 @@ necp_client_unregister_socket_flow(uuid_t client_id, void *handle)
 		}
 
 		if (client_updated) {
-			client->flow_result_read = FALSE;
 			necp_fd_notify(client_fd, true);
 		}
 		NECP_FD_UNLOCK(client_fd);
@@ -1826,28 +2416,27 @@ necp_client_unregister_multipath_cb(uuid_t client_id, void *handle)
 
 	NECP_CLIENT_TREE_LOCK_SHARED();
 
-	struct necp_client find;
-	uuid_copy(find.client_id, client_id);
-	struct necp_client *client = RB_FIND(_necp_client_global_tree, &necp_client_global_tree, &find);
+	struct necp_client *client = necp_find_client_and_lock(client_id);
 	if (client != NULL) {
-		NECP_CLIENT_LOCK(client);
+		struct necp_client_flow_registration *flow_registration = necp_client_find_flow(client, client_id);
+		if (flow_registration != NULL) {
+			// Found the right client and flow!
+			found_client = TRUE;
 
-		// Found the right client!
-		found_client = TRUE;
-
-		// Remove flow assignment
-		struct necp_client_flow *search_flow = NULL;
-		struct necp_client_flow *temp_flow = NULL;
-		LIST_FOREACH_SAFE(search_flow, &client->flow_list, flow_chain, temp_flow) {
-			if (!search_flow->socket && !search_flow->nexus &&
-				search_flow->u.socket_handle == handle) {
-				search_flow->u.socket_handle = NULL;
-				search_flow->u.cb = NULL;
+			// Remove flow assignment
+			struct necp_client_flow *search_flow = NULL;
+			struct necp_client_flow *temp_flow = NULL;
+			LIST_FOREACH_SAFE(search_flow, &flow_registration->flow_list, flow_chain, temp_flow) {
+				if (!search_flow->socket && !search_flow->nexus &&
+					search_flow->u.socket_handle == handle) {
+					search_flow->u.socket_handle = NULL;
+					search_flow->u.cb = NULL;
+				}
 			}
-		}
 
-		client->interface_handle = NULL;
-		client->interface_cb = NULL;
+			flow_registration->interface_handle = NULL;
+			flow_registration->interface_cb = NULL;
+		}
 
 		NECP_CLIENT_UNLOCK(client);
 	}
@@ -1884,58 +2473,68 @@ necp_client_assign_from_socket(pid_t pid, uuid_t client_id, struct inpcb *inp)
 
 		struct necp_client *client = necp_client_fd_find_client_and_lock(client_fd, client_id);
 		if (client != NULL) {
-			// Found the right client!
-			found_client = TRUE;
+			struct necp_client_flow_registration *flow_registration = necp_client_find_flow(client, client_id);
+			if (flow_registration == NULL && RB_EMPTY(&client->flow_registrations) && !necp_client_id_is_flow(client_id)) {
+				// No flows yet on this client, add a new registration
+				flow_registration = necp_client_create_flow_registration(client_fd, client);
+				if (flow_registration == NULL) {
+					error = ENOMEM;
+				}
+			}
+			if (flow_registration != NULL) {
+				// Found the right client and flow!
+				found_client = TRUE;
 
-			struct necp_client_flow *flow = NULL;
-			LIST_FOREACH(flow, &client->flow_list, flow_chain) {
-				if (flow->socket && flow->u.socket_handle == inp) {
-					// Release prior results and route
-					if (flow->assigned_results != NULL) {
-						FREE(flow->assigned_results, M_NETAGENT);
-						flow->assigned_results = NULL;
+				struct necp_client_flow *flow = NULL;
+				LIST_FOREACH(flow, &flow_registration->flow_list, flow_chain) {
+					if (flow->socket && flow->u.socket_handle == inp) {
+						// Release prior results and route
+						if (flow->assigned_results != NULL) {
+							FREE(flow->assigned_results, M_NETAGENT);
+							flow->assigned_results = NULL;
+						}
+
+						ifnet_t ifp = NULL;
+						if ((inp->inp_flags & INP_BOUND_IF) && inp->inp_boundifp) {
+							ifp = inp->inp_boundifp;
+						} else {
+							ifp = inp->inp_last_outifp;
+						}
+
+						if (ifp != NULL) {
+							flow->interface_index = ifp->if_index;
+						} else {
+							flow->interface_index = IFSCOPE_NONE;
+						}
+
+						if (inp->inp_vflag & INP_IPV4) {
+							flow->local_addr.sin.sin_family = AF_INET;
+							flow->local_addr.sin.sin_len = sizeof(struct sockaddr_in);
+							flow->local_addr.sin.sin_port = inp->inp_lport;
+							memcpy(&flow->local_addr.sin.sin_addr, &inp->inp_laddr, sizeof(struct in_addr));
+
+							flow->remote_addr.sin.sin_family = AF_INET;
+							flow->remote_addr.sin.sin_len = sizeof(struct sockaddr_in);
+							flow->remote_addr.sin.sin_port = inp->inp_fport;
+							memcpy(&flow->remote_addr.sin.sin_addr, &inp->inp_faddr, sizeof(struct in_addr));
+						} else if (inp->inp_vflag & INP_IPV6) {
+							in6_ip6_to_sockaddr(&inp->in6p_laddr, inp->inp_lport, &flow->local_addr.sin6, sizeof(flow->local_addr));
+							in6_ip6_to_sockaddr(&inp->in6p_faddr, inp->inp_fport, &flow->remote_addr.sin6, sizeof(flow->remote_addr));
+						}
+
+						flow->viable = necp_client_flow_is_viable(proc, client, flow);
+
+						uuid_t empty_uuid;
+						uuid_clear(empty_uuid);
+						flow->assigned = TRUE;
+						flow->assigned_results = necp_create_nexus_assign_message(empty_uuid, 0, NULL, 0,
+																				  (struct necp_client_endpoint *)&flow->local_addr,
+																				  (struct necp_client_endpoint *)&flow->remote_addr,
+																				  0, NULL, &flow->assigned_results_length);
+						flow_registration->flow_result_read = FALSE;
+						client_updated = TRUE;
+						break;
 					}
-
-					ifnet_t ifp = NULL;
-					if ((inp->inp_flags & INP_BOUND_IF) && inp->inp_boundifp) {
-						ifp = inp->inp_boundifp;
-					} else {
-						ifp = inp->inp_last_outifp;
-					}
-
-					if (ifp != NULL) {
-						flow->interface_index = ifp->if_index;
-					} else {
-						flow->interface_index = IFSCOPE_NONE;
-					}
-
-					if (inp->inp_vflag & INP_IPV4) {
-						flow->local_addr.sin.sin_family = AF_INET;
-						flow->local_addr.sin.sin_len = sizeof(struct sockaddr_in);
-						flow->local_addr.sin.sin_port = inp->inp_lport;
-						memcpy(&flow->local_addr.sin.sin_addr, &inp->inp_laddr, sizeof(struct in_addr));
-
-						flow->remote_addr.sin.sin_family = AF_INET;
-						flow->remote_addr.sin.sin_len = sizeof(struct sockaddr_in);
-						flow->remote_addr.sin.sin_port = inp->inp_fport;
-						memcpy(&flow->remote_addr.sin.sin_addr, &inp->inp_faddr, sizeof(struct in_addr));
-					} else if (inp->inp_vflag & INP_IPV6) {
-						in6_ip6_to_sockaddr(&inp->in6p_laddr, inp->inp_lport, &flow->local_addr.sin6, sizeof(flow->local_addr));
-						in6_ip6_to_sockaddr(&inp->in6p_faddr, inp->inp_fport, &flow->remote_addr.sin6, sizeof(flow->remote_addr));
-					}
-
-					flow->viable = necp_client_flow_is_viable(proc, client, flow);
-
-					uuid_t empty_uuid;
-					uuid_clear(empty_uuid);
-					flow->assigned = TRUE;
-					flow->assigned_results = necp_create_nexus_assign_message(empty_uuid, 0, NULL, 0,
-																			  (struct necp_client_endpoint *)&flow->local_addr,
-																			  (struct necp_client_endpoint *)&flow->remote_addr,
-																			  0, &flow->assigned_results_length);
-					client->flow_result_read = FALSE;
-					client_updated = TRUE;
-					break;
 				}
 			}
 
@@ -1955,10 +2554,12 @@ necp_client_assign_from_socket(pid_t pid, uuid_t client_id, struct inpcb *inp)
 	}
 	NECP_FD_LIST_UNLOCK();
 
-	if (!found_client) {
-		error = ENOENT;
-	} else if (!client_updated) {
-		error = EINVAL;
+	if (error == 0) {
+		if (!found_client) {
+			error = ENOENT;
+		} else if (!client_updated) {
+			error = EINVAL;
+		}
 	}
 
 	return (error);
@@ -1985,22 +2586,25 @@ necp_update_flow_protoctl_event(uuid_t netagent_uuid, uuid_t client_id,
 
 		struct necp_client *client = necp_client_fd_find_client_and_lock(client_fd, client_id);
 		if (client != NULL) {
-			/* Found the right client! */
-			found_client = TRUE;
+			struct necp_client_flow_registration *flow_registration = necp_client_find_flow(client, client_id);
+			if (flow_registration != NULL) {
+				// Found the right client and flow!
+				found_client = TRUE;
 
-			struct necp_client_flow *flow = NULL;
-			LIST_FOREACH(flow, &client->flow_list, flow_chain) {
-				// Verify that the client nexus agent matches
-				if (flow->nexus &&
-				    uuid_compare(flow->u.nexus_agent,
-				    netagent_uuid) == 0) {
-					flow->has_protoctl_event = TRUE;
-					flow->protoctl_event.protoctl_event_code = protoctl_event_code;
-					flow->protoctl_event.protoctl_event_val = protoctl_event_val;
-					flow->protoctl_event.protoctl_event_tcp_seq_num = protoctl_event_tcp_seq_number;
-					client->flow_result_read = FALSE;
-					client_updated = TRUE;
-					break;
+				struct necp_client_flow *flow = NULL;
+				LIST_FOREACH(flow, &flow_registration->flow_list, flow_chain) {
+					// Verify that the client nexus agent matches
+					if (flow->nexus &&
+						uuid_compare(flow->u.nexus_agent,
+						netagent_uuid) == 0) {
+						flow->has_protoctl_event = TRUE;
+						flow->protoctl_event.protoctl_event_code = protoctl_event_code;
+						flow->protoctl_event.protoctl_event_val = protoctl_event_val;
+						flow->protoctl_event.protoctl_event_tcp_seq_num = protoctl_event_tcp_seq_number;
+						flow_registration->flow_result_read = FALSE;
+						client_updated = TRUE;
+						break;
+					}
 				}
 			}
 
@@ -2033,6 +2637,7 @@ static bool
 necp_assign_client_result_locked(struct proc *proc,
 								 struct necp_fd_data *client_fd,
 								 struct necp_client *client,
+								 struct necp_client_flow_registration *flow_registration,
 								 uuid_t netagent_uuid,
 								 u_int8_t *assigned_results,
 								 size_t assigned_results_length,
@@ -2044,7 +2649,7 @@ necp_assign_client_result_locked(struct proc *proc,
 	NECP_CLIENT_ASSERT_LOCKED(client);
 
 	struct necp_client_flow *flow = NULL;
-	LIST_FOREACH(flow, &client->flow_list, flow_chain) {
+	LIST_FOREACH(flow, &flow_registration->flow_list, flow_chain) {
 		// Verify that the client nexus agent matches
 		if (flow->nexus &&
 			uuid_compare(flow->u.nexus_agent, netagent_uuid) == 0) {
@@ -2054,9 +2659,10 @@ necp_assign_client_result_locked(struct proc *proc,
 				flow->assigned_results = NULL;
 			}
 
+			void *nexus_stats = NULL;
 			if (assigned_results != NULL && assigned_results_length > 0) {
 				int error = necp_client_parse_result(assigned_results, (u_int32_t)assigned_results_length,
-												 &flow->local_addr, &flow->remote_addr);
+												 &flow->local_addr, &flow->remote_addr, &nexus_stats);
 				VERIFY(error == 0);
 			}
 
@@ -2065,7 +2671,7 @@ necp_assign_client_result_locked(struct proc *proc,
 			flow->assigned = TRUE;
 			flow->assigned_results = assigned_results;
 			flow->assigned_results_length = assigned_results_length;
-			client->flow_result_read = FALSE;
+			flow_registration->flow_result_read = FALSE;
 			client_updated = TRUE;
 			break;
 		}
@@ -2099,12 +2705,14 @@ necp_assign_client_result(uuid_t netagent_uuid, uuid_t client_id,
 		NECP_FD_LOCK(client_fd);
 		struct necp_client *client = necp_client_fd_find_client_and_lock(client_fd, client_id);
 		if (client != NULL) {
-			// Found the right client!
-			found_client = TRUE;
-
-			if (necp_assign_client_result_locked(proc, client_fd, client, netagent_uuid,
-												 assigned_results, assigned_results_length, true)) {
-				client_updated = TRUE;
+			struct necp_client_flow_registration *flow_registration = necp_client_find_flow(client, client_id);
+			if (flow_registration != NULL) {
+				// Found the right client and flow!
+				found_client = TRUE;
+				if (necp_assign_client_result_locked(proc, client_fd, client, flow_registration, netagent_uuid,
+													 assigned_results, assigned_results_length, true)) {
+					client_updated = TRUE;
+				}
 			}
 
 			NECP_CLIENT_UNLOCK(client);
@@ -2134,16 +2742,231 @@ necp_assign_client_result(uuid_t netagent_uuid, uuid_t client_id,
 /// Client updating
 
 static bool
+necp_update_parsed_parameters(struct necp_client_parsed_parameters *parsed_parameters,
+							  struct necp_aggregate_result *result)
+{
+	if (parsed_parameters == NULL ||
+		result == NULL) {
+		return (false);
+	}
+
+	bool updated = false;
+	for (int i = 0; i < NECP_MAX_NETAGENTS; i++) {
+		if (uuid_is_null(result->netagents[i])) {
+			// Passed end of valid agents
+			break;
+		}
+
+		if (!(result->netagent_use_flags[i] & NECP_AGENT_USE_FLAG_SCOPE)) {
+			// Not a scoped agent, ignore
+			continue;
+		}
+
+		// This is a scoped agent. Add it to the required agents.
+		if (parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT) {
+			// Already some required agents, add this at the end
+			for (int j = 0; j < NECP_MAX_PARSED_PARAMETERS; j++) {
+				if (uuid_compare(parsed_parameters->required_netagents[j], result->netagents[i]) == 0) {
+					// Already required, break
+					break;
+				}
+				if (uuid_is_null(parsed_parameters->required_netagents[j])) {
+					// Add here
+					memcpy(&parsed_parameters->required_netagents[j], result->netagents[i], sizeof(uuid_t));
+					updated = true;
+					break;
+				}
+			}
+		} else {
+			// No required agents yet, add this one
+			parsed_parameters->valid_fields |= NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT;
+			memcpy(&parsed_parameters->required_netagents[0], result->netagents[i], sizeof(uuid_t));
+			updated = true;
+		}
+
+		// Remove requirements for agents of the same type
+		if (parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT_TYPE) {
+			char remove_agent_domain[NETAGENT_DOMAINSIZE] = { 0 };
+			char remove_agent_type[NETAGENT_TYPESIZE] = { 0 };
+			if (netagent_get_agent_domain_and_type(result->netagents[i], remove_agent_domain, remove_agent_type)) {
+				for (int j = 0; j < NECP_MAX_PARSED_PARAMETERS; j++) {
+					if (strlen(parsed_parameters->required_netagent_types[j].netagent_domain) == 0 &&
+						strlen(parsed_parameters->required_netagent_types[j].netagent_type) == 0) {
+						break;
+					}
+
+					if (strncmp(parsed_parameters->required_netagent_types[j].netagent_domain, remove_agent_domain, NETAGENT_DOMAINSIZE) == 0 &&
+						strncmp(parsed_parameters->required_netagent_types[j].netagent_type, remove_agent_type, NETAGENT_TYPESIZE) == 0) {
+
+						updated = true;
+
+						if (j == NECP_MAX_PARSED_PARAMETERS - 1) {
+							// Last field, just clear and break
+							memset(&parsed_parameters->required_netagent_types[NECP_MAX_PARSED_PARAMETERS - 1], 0, sizeof(struct necp_client_parameter_netagent_type));
+							break;
+						} else {
+							// Move the parameters down, clear the last entry
+							memmove(&parsed_parameters->required_netagent_types[j],
+									&parsed_parameters->required_netagent_types[j + 1],
+									sizeof(struct necp_client_parameter_netagent_type) * (NECP_MAX_PARSED_PARAMETERS - (j + 1)));
+							memset(&parsed_parameters->required_netagent_types[NECP_MAX_PARSED_PARAMETERS - 1], 0, sizeof(struct necp_client_parameter_netagent_type));
+							// Continue, don't increment but look at the new shifted item instead
+							continue;
+						}
+					}
+
+					// Increment j to look at the next agent type parameter
+					j++;
+				}
+			}
+		}
+	}
+
+	if (updated &&
+		parsed_parameters->required_interface_index != IFSCOPE_NONE &&
+		(parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_FIELD_REQUIRED_IF) == 0) {
+		// A required interface index was added after the fact. Clear it.
+		parsed_parameters->required_interface_index = IFSCOPE_NONE;
+	}
+
+
+	return (updated);
+}
+
+static inline bool
+necp_agent_types_match(const char *agent_domain1, const char *agent_type1,
+					   const char *agent_domain2, const char *agent_type2)
+{
+	return ((strlen(agent_domain1) == 0 ||
+			 strncmp(agent_domain2, agent_domain1, NETAGENT_DOMAINSIZE) == 0) &&
+			(strlen(agent_type1) == 0 ||
+			 strncmp(agent_type2, agent_type1, NETAGENT_TYPESIZE) == 0));
+}
+
+static inline bool
+necp_calculate_client_result(proc_t proc,
+							 struct necp_client *client,
+							 struct necp_client_parsed_parameters *parsed_parameters,
+							 struct necp_aggregate_result *result,
+							 u_int32_t *flags)
+{
+	struct rtentry *route = NULL;
+
+	// Check parameters to find best interface
+	bool validate_agents = false;
+	u_int matching_if_index = 0;
+	if (necp_find_matching_interface_index(parsed_parameters, &matching_if_index, &validate_agents)) {
+		if (matching_if_index != 0) {
+			parsed_parameters->required_interface_index = matching_if_index;
+		}
+		// Interface found or not needed, match policy.
+		memset(result, 0, sizeof(*result));
+		int error = necp_application_find_policy_match_internal(proc, client->parameters,
+																(u_int32_t)client->parameters_length,
+																result, flags, matching_if_index,
+																NULL, NULL, &route, false);
+		if (error != 0) {
+			if (route != NULL) {
+				rtfree(route);
+			}
+			return (FALSE);
+		}
+
+		if (validate_agents) {
+			bool requirement_failed = FALSE;
+			if (parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT) {
+				for (int i = 0; i < NECP_MAX_PARSED_PARAMETERS; i++) {
+					if (uuid_is_null(parsed_parameters->required_netagents[i])) {
+						break;
+					}
+
+					bool requirement_found = FALSE;
+					for (int j = 0; j < NECP_MAX_NETAGENTS; j++) {
+						if (uuid_is_null(result->netagents[j])) {
+							break;
+						}
+
+						if (uuid_compare(parsed_parameters->required_netagents[i], result->netagents[j]) == 0) {
+							requirement_found = TRUE;
+							break;
+						}
+					}
+
+					if (!requirement_found) {
+						requirement_failed = TRUE;
+						break;
+					}
+				}
+			}
+
+			if (!requirement_failed && parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT_TYPE) {
+				for (int i = 0; i < NECP_MAX_PARSED_PARAMETERS; i++) {
+					if (strlen(parsed_parameters->required_netagent_types[i].netagent_domain) == 0 &&
+						strlen(parsed_parameters->required_netagent_types[i].netagent_type) == 0) {
+						break;
+					}
+
+					bool requirement_found = FALSE;
+					for (int j = 0; j < NECP_MAX_NETAGENTS; j++) {
+						if (uuid_is_null(result->netagents[j])) {
+							break;
+						}
+
+						char policy_agent_domain[NETAGENT_DOMAINSIZE] = { 0 };
+						char policy_agent_type[NETAGENT_TYPESIZE] = { 0 };
+
+						if (netagent_get_agent_domain_and_type(result->netagents[j], policy_agent_domain, policy_agent_type)) {
+							if (necp_agent_types_match(parsed_parameters->required_netagent_types[i].netagent_domain,
+													   parsed_parameters->required_netagent_types[i].netagent_type,
+													   policy_agent_domain, policy_agent_type)) {
+								requirement_found = TRUE;
+								break;
+							}
+						}
+					}
+
+					if (!requirement_found) {
+						requirement_failed = TRUE;
+						break;
+					}
+				}
+			}
+
+			if (requirement_failed) {
+				// Agent requirement failed. Clear out the whole result, make everything fail.
+				memset(result, 0, sizeof(*result));
+				if (route != NULL) {
+					rtfree(route);
+				}
+				return (TRUE);
+			}
+		}
+
+		// Reset current route
+		NECP_CLIENT_ROUTE_LOCK(client);
+		if (client->current_route != NULL) {
+			rtfree(client->current_route);
+		}
+		client->current_route = route;
+		NECP_CLIENT_ROUTE_UNLOCK(client);
+	} else {
+		// Interface not found. Clear out the whole result, make everything fail.
+		memset(result, 0, sizeof(*result));
+	}
+
+	return (TRUE);
+}
+
+static bool
 necp_update_client_result(proc_t proc,
 						  struct necp_fd_data *client_fd,
 						  struct necp_client *client,
-						  struct _necp_client_defunct_list *defunct_list)
+						  struct _necp_flow_defunct_list *defunct_list)
 {
 	struct necp_client_result_netagent netagent;
 	struct necp_aggregate_result result;
 	struct necp_client_parsed_parameters *parsed_parameters = NULL;
 	u_int32_t flags = 0;
-	struct rtentry *route = NULL;
 
 	NECP_CLIENT_ASSERT_LOCKED(client);
 
@@ -2165,35 +2988,18 @@ necp_update_client_result(proc_t proc,
 	// Update saved IP protocol
 	client->ip_protocol = parsed_parameters->ip_protocol;
 
-	// Check parameters to find best interface
-	u_int matching_if_index = 0;
-	if (necp_find_matching_interface_index(parsed_parameters, &matching_if_index)) {
-		if (matching_if_index != 0) {
-			parsed_parameters->required_interface_index = matching_if_index;
-		}
-		// Interface found or not needed, match policy.
-		error = necp_application_find_policy_match_internal(proc, client->parameters,
-															(u_int32_t)client->parameters_length,
-															&result, &flags, matching_if_index,
-															NULL, NULL, &route, false);
-		if (error != 0) {
-			if (route != NULL) {
-				rtfree(route);
-			}
+	// Calculate the policy result
+	if (!necp_calculate_client_result(proc, client, parsed_parameters, &result, &flags)) {
+		FREE(parsed_parameters, M_NECP);
+		return (FALSE);
+	}
+
+	if (necp_update_parsed_parameters(parsed_parameters, &result)) {
+		// Changed the parameters based on result, try again (only once)
+		if (!necp_calculate_client_result(proc, client, parsed_parameters, &result, &flags)) {
 			FREE(parsed_parameters, M_NECP);
 			return (FALSE);
 		}
-
-		// Reset current route
-		NECP_CLIENT_ROUTE_LOCK(client);
-		if (client->current_route != NULL) {
-			rtfree(client->current_route);
-		}
-		client->current_route = route;
-		NECP_CLIENT_ROUTE_UNLOCK(client);
-	} else {
-		// Interface not found. Clear out the whole result, make everything fail.
-		memset(&result, 0, sizeof(result));
 	}
 
 	// Save the last policy id on the client
@@ -2223,9 +3029,6 @@ necp_update_client_result(proc_t proc,
 	}
 
 	// Recalculate flags
-	if (client->defunct) {
-		flags |= NECP_CLIENT_RESULT_FLAG_DEFUNCT;
-	}
 	if (parsed_parameters->flags & NECP_CLIENT_PARAMETER_FLAG_LISTENER) {
 		// Listeners are valid as long as they aren't dropped
 		if (result.routing_result != NECP_KERNEL_POLICY_RESULT_DROP) {
@@ -2303,7 +3106,7 @@ necp_update_client_result(proc_t proc,
 		}
 		uuid_copy(netagent.netagent_uuid, result.netagents[i]);
 		netagent.generation = netagent_get_generation(netagent.netagent_uuid);
-		if (necp_netagent_applies_to_client(client, parsed_parameters, netagent.netagent_uuid, TRUE, 0, 0)) {
+		if (necp_netagent_applies_to_client(client, parsed_parameters, &netagent.netagent_uuid, TRUE, 0, 0)) {
 			cursor = necp_buffer_write_tlv_if_different(cursor, NECP_CLIENT_RESULT_NETAGENT, sizeof(netagent), &netagent, &updated,
 														client->result, sizeof(client->result));
 		}
@@ -2374,10 +3177,11 @@ necp_update_client_result(proc_t proc,
 		TAILQ_FOREACH(multi_interface, &ifnet_ordered_head, if_ordered_link) {
 			if (necp_ifnet_matches_parameters(multi_interface, parsed_parameters, NULL, true)) {
 				// Add multipath interface flows for kernel MPTCP
-				necp_client_add_interface_flow_if_needed(client, multi_interface->if_index);
+				necp_client_add_interface_option_if_needed(client, multi_interface->if_index,
+														   ifnet_get_generation(multi_interface), NULL);
 
 				// Add nexus agents for multipath
-				necp_client_add_agent_flows_for_interface(client, parsed_parameters, multi_interface);
+				necp_client_add_agent_interface_options(client, parsed_parameters, multi_interface);
 			}
 		}
 	} else if ((parsed_parameters->flags & NECP_CLIENT_PARAMETER_FLAG_LISTENER) &&
@@ -2385,9 +3189,9 @@ necp_update_client_result(proc_t proc,
 		// Get listener interface options from global list
 		struct ifnet *listen_interface = NULL;
 		TAILQ_FOREACH(listen_interface, &ifnet_head, if_link) {
-			if (necp_ifnet_matches_parameters(listen_interface, parsed_parameters, NULL, false)) {
+			if (necp_ifnet_matches_parameters(listen_interface, parsed_parameters, NULL, true)) {
 				// Add nexus agents for listeners
-				necp_client_add_agent_flows_for_interface(client, parsed_parameters, listen_interface);
+				necp_client_add_agent_interface_options(client, parsed_parameters, listen_interface);
 			}
 		}
 	}
@@ -2400,10 +3204,10 @@ necp_update_client_result(proc_t proc,
 				if (uuid_is_null(original_scoped_interface->if_agentids[i])) {
 					continue;
 				}
-				u_int16_t if_flags = nstat_ifnet_to_flags(original_scoped_interface);
 				uuid_copy(netagent.netagent_uuid, original_scoped_interface->if_agentids[i]);
 				netagent.generation = netagent_get_generation(netagent.netagent_uuid);
-				if (necp_netagent_applies_to_client(client, parsed_parameters, netagent.netagent_uuid, FALSE, original_scoped_interface->if_index, if_flags)) {
+				if (necp_netagent_applies_to_client(client, parsed_parameters, &netagent.netagent_uuid, FALSE,
+													original_scoped_interface->if_index, ifnet_get_generation(original_scoped_interface))) {
 					cursor = necp_buffer_write_tlv_if_different(cursor, NECP_CLIENT_RESULT_NETAGENT, sizeof(netagent), &netagent, &updated,
 																client->result, sizeof(client->result));
 				}
@@ -2418,10 +3222,10 @@ necp_update_client_result(proc_t proc,
 				if (uuid_is_null(direct_interface->if_agentids[i])) {
 					continue;
 				}
-				u_int16_t if_flags = nstat_ifnet_to_flags(direct_interface);
 				uuid_copy(netagent.netagent_uuid, direct_interface->if_agentids[i]);
 				netagent.generation = netagent_get_generation(netagent.netagent_uuid);
-				if (necp_netagent_applies_to_client(client, parsed_parameters, netagent.netagent_uuid, TRUE, direct_interface->if_index, if_flags)) {
+				if (necp_netagent_applies_to_client(client, parsed_parameters, &netagent.netagent_uuid, TRUE,
+													direct_interface->if_index, ifnet_get_generation(direct_interface))) {
 					cursor = necp_buffer_write_tlv_if_different(cursor, NECP_CLIENT_RESULT_NETAGENT, sizeof(netagent), &netagent, &updated,
 																client->result, sizeof(client->result));
 				}
@@ -2436,10 +3240,10 @@ necp_update_client_result(proc_t proc,
 				if (uuid_is_null(delegate_interface->if_agentids[i])) {
 					continue;
 				}
-				u_int16_t if_flags = nstat_ifnet_to_flags(delegate_interface);
 				uuid_copy(netagent.netagent_uuid, delegate_interface->if_agentids[i]);
 				netagent.generation = netagent_get_generation(netagent.netagent_uuid);
-				if (necp_netagent_applies_to_client(client, parsed_parameters, netagent.netagent_uuid, FALSE, delegate_interface->if_index, if_flags)) {
+				if (necp_netagent_applies_to_client(client, parsed_parameters, &netagent.netagent_uuid, FALSE,
+													delegate_interface->if_index, ifnet_get_generation(delegate_interface))) {
 					cursor = necp_buffer_write_tlv_if_different(cursor, NECP_CLIENT_RESULT_NETAGENT, sizeof(netagent), &netagent, &updated,
 																client->result, sizeof(client->result));
 				}
@@ -2449,6 +3253,19 @@ necp_update_client_result(proc_t proc,
 	}
 	ifnet_head_done();
 
+	// Add interface options
+	for (u_int32_t option_i = 0; option_i < client->interface_option_count; option_i++) {
+		if (option_i < NECP_CLIENT_INTERFACE_OPTION_STATIC_COUNT) {
+			struct necp_client_interface_option *option = &client->interface_options[option_i];
+			cursor = necp_buffer_write_tlv_if_different(cursor, NECP_CLIENT_RESULT_INTERFACE_OPTION, sizeof(*option), option, &updated,
+														client->result, sizeof(client->result));
+		} else {
+			struct necp_client_interface_option *option = &client->extra_interface_options[option_i - NECP_CLIENT_INTERFACE_OPTION_STATIC_COUNT];
+			cursor = necp_buffer_write_tlv_if_different(cursor, NECP_CLIENT_RESULT_INTERFACE_OPTION, sizeof(*option), option, &updated,
+														client->result, sizeof(client->result));
+		}
+	}
+
 	size_t new_result_length = (cursor - client->result);
 	if (new_result_length != client->result_length) {
 		client->result_length = new_result_length;
@@ -2456,14 +3273,8 @@ necp_update_client_result(proc_t proc,
 	}
 
 	// Update flow viability/flags
-	bool defuncted_by_flow = FALSE;
-	if (necp_client_update_flows(proc, client, defunct_list, &defuncted_by_flow)) {
+	if (necp_client_update_flows(proc, client, defunct_list)) {
 		updated = TRUE;
-		if (defuncted_by_flow && client->defunct) {
-			// Reset initial TLV
-			flags |= NECP_CLIENT_RESULT_FLAG_DEFUNCT;
-			(void)necp_buffer_write_tlv_if_different(client->result, NECP_CLIENT_RESULT_FLAGS, sizeof(flags), &flags, &updated, client->result, sizeof(client->result));
-		}
 	}
 
 	if (updated) {
@@ -2476,7 +3287,7 @@ necp_update_client_result(proc_t proc,
 }
 
 static inline void
-necp_defunct_client_fd_locked(struct necp_fd_data *client_fd, struct _necp_client_defunct_list *defunct_list, struct proc *proc)
+necp_defunct_client_fd_locked(struct necp_fd_data *client_fd, struct _necp_flow_defunct_list *defunct_list, struct proc *proc)
 {
 #pragma unused(proc)
 	bool updated_result = FALSE;
@@ -2485,27 +3296,34 @@ necp_defunct_client_fd_locked(struct necp_fd_data *client_fd, struct _necp_clien
 	NECP_FD_ASSERT_LOCKED(client_fd);
 
 	RB_FOREACH(client, _necp_client_tree, &client_fd->clients) {
+		struct necp_client_flow_registration *flow_registration = NULL;
+
 		NECP_CLIENT_LOCK(client);
-		if (!client->defunct) {
-			updated_result = necp_set_client_defunct(client);
 
-			// Prepare close events to be sent to the nexus to effectively remove the flows
-			struct necp_client_flow *search_flow = NULL;
-			LIST_FOREACH(search_flow, &client->flow_list, flow_chain) {
+		// Prepare close events to be sent to the nexus to effectively remove the flows
+		struct necp_client_flow *search_flow = NULL;
+		RB_FOREACH(flow_registration, _necp_client_flow_tree, &client->flow_registrations) {
+			LIST_FOREACH(search_flow, &flow_registration->flow_list, flow_chain) {
 				if (search_flow->nexus &&
-					!uuid_is_null(search_flow->u.nexus_agent) &&
-					search_flow->requested_nexus) {
+					!uuid_is_null(search_flow->u.nexus_agent)) {
 
-					struct necp_client_defunct *client_defunct;
+					struct necp_flow_defunct *flow_defunct;
 
 					// Sleeping alloc won't fail; copy only what's necessary
-					client_defunct = _MALLOC(sizeof (struct necp_client_defunct), M_NECP, M_WAITOK | M_ZERO);
-					uuid_copy(client_defunct->nexus_agent, search_flow->u.nexus_agent);
-					uuid_copy(client_defunct->client_id, client->client_id);
-					client_defunct->proc_pid = client->proc_pid;
+					flow_defunct = _MALLOC(sizeof (struct necp_flow_defunct), M_NECP, M_WAITOK | M_ZERO);
+					uuid_copy(flow_defunct->nexus_agent, search_flow->u.nexus_agent);
+					uuid_copy(flow_defunct->flow_id, ((flow_registration->flags & NECP_CLIENT_FLOW_FLAGS_USE_CLIENT_ID) ?
+													  client->client_id :
+													  flow_registration->registration_id));
+					flow_defunct->proc_pid = client->proc_pid;
+					flow_defunct->agent_handle = client->agent_handle;
 
 					// Add to the list provided by caller
-					LIST_INSERT_HEAD(defunct_list, client_defunct, chain);
+					LIST_INSERT_HEAD(defunct_list, flow_defunct, chain);
+
+					flow_registration->defunct = true;
+					flow_registration->flow_result_read = false;
+					updated_result = true;
 				}
 			}
 		}
@@ -2521,7 +3339,7 @@ necp_defunct_client_fd_locked(struct necp_fd_data *client_fd, struct _necp_clien
 static inline void
 necp_update_client_fd_locked(struct necp_fd_data *client_fd,
 							 proc_t proc,
-							 struct _necp_client_defunct_list *defunct_list)
+							 struct _necp_flow_defunct_list *defunct_list)
 {
 	struct necp_client *client = NULL;
 	bool updated_result = FALSE;
@@ -2545,7 +3363,7 @@ necp_update_all_clients_callout(__unused thread_call_param_t dummy,
 {
 	struct necp_fd_data *client_fd = NULL;
 
-	struct _necp_client_defunct_list defunct_list;
+	struct _necp_flow_defunct_list defunct_list;
 	LIST_INIT(&defunct_list);
 
 	NECP_FD_LIST_LOCK_SHARED();
@@ -2569,25 +3387,26 @@ necp_update_all_clients_callout(__unused thread_call_param_t dummy,
 
 	// Handle the case in which some clients became newly defunct
 	if (!LIST_EMPTY(&defunct_list)) {
-		struct necp_client_defunct *client_defunct = NULL;
-		struct necp_client_defunct *temp_client_defunct = NULL;
+		struct necp_flow_defunct *flow_defunct = NULL;
+		struct necp_flow_defunct *temp_flow_defunct = NULL;
 
 		// For each newly defunct client, send a message to the nexus to remove the flow
-		LIST_FOREACH_SAFE(client_defunct, &defunct_list, chain, temp_client_defunct) {
-			if (!uuid_is_null(client_defunct->nexus_agent)) {
-				int netagent_error = netagent_client_message(client_defunct->nexus_agent,
-															 client_defunct->client_id,
-															 client_defunct->proc_pid,
+		LIST_FOREACH_SAFE(flow_defunct, &defunct_list, chain, temp_flow_defunct) {
+			if (!uuid_is_null(flow_defunct->nexus_agent)) {
+				int netagent_error = netagent_client_message(flow_defunct->nexus_agent,
+															 flow_defunct->flow_id,
+															 flow_defunct->proc_pid,
+															 flow_defunct->agent_handle,
 															 NETAGENT_MESSAGE_TYPE_ABORT_NEXUS);
 				if (netagent_error != 0) {
 					char namebuf[MAXCOMLEN+1];
 					(void) strlcpy(namebuf, "unknown", sizeof (namebuf));
-					proc_name(client_defunct->proc_pid, namebuf, sizeof (namebuf));
-					NECPLOG((netagent_error == ENOENT ? LOG_DEBUG : LOG_ERR), "necp_update_client abort nexus error (%d) for pid %d %s", netagent_error, client_defunct->proc_pid, namebuf);
+					proc_name(flow_defunct->proc_pid, namebuf, sizeof (namebuf));
+					NECPLOG((netagent_error == ENOENT ? LOG_DEBUG : LOG_ERR), "necp_update_client abort nexus error (%d) for pid %d %s", netagent_error, flow_defunct->proc_pid, namebuf);
 				}
 			}
-			LIST_REMOVE(client_defunct, chain);
-			FREE(client_defunct, M_NECP);
+			LIST_REMOVE(flow_defunct, chain);
+			FREE(flow_defunct, M_NECP);
 		}
 	}
 	ASSERT(LIST_EMPTY(&defunct_list));
@@ -2646,11 +3465,14 @@ necp_set_client_as_background(proc_t proc,
 		NECP_CLIENT_LOCK(client);
 
 		bool has_assigned_flow = FALSE;
+		struct necp_client_flow_registration *flow_registration = NULL;
 		struct necp_client_flow *search_flow = NULL;
-		LIST_FOREACH(search_flow, &client->flow_list, flow_chain) {
-			if (search_flow->assigned) {
-				has_assigned_flow = TRUE;
-				break;
+		RB_FOREACH(flow_registration, _necp_client_flow_tree, &client->flow_registrations) {
+			LIST_FOREACH(search_flow, &flow_registration->flow_list, flow_chain) {
+				if (search_flow->assigned) {
+					has_assigned_flow = TRUE;
+					break;
+				}
 			}
 		}
 
@@ -2683,7 +3505,7 @@ necp_fd_memstatus(proc_t proc, uint32_t status,
 void
 necp_fd_defunct(proc_t proc, struct necp_fd_data *client_fd)
 {
-	struct _necp_client_defunct_list defunct_list;
+	struct _necp_flow_defunct_list defunct_list;
 
 	ASSERT(proc != PROC_NULL);
 	ASSERT(client_fd != NULL);
@@ -2702,22 +3524,23 @@ necp_fd_defunct(proc_t proc, struct necp_fd_data *client_fd)
 	NECP_FD_UNLOCK(client_fd);
 
 	if (!LIST_EMPTY(&defunct_list)) {
-		struct necp_client_defunct *client_defunct = NULL;
-		struct necp_client_defunct *temp_client_defunct = NULL;
+		struct necp_flow_defunct *flow_defunct = NULL;
+		struct necp_flow_defunct *temp_flow_defunct = NULL;
 
 		// For each defunct client, remove flow from the nexus
-		LIST_FOREACH_SAFE(client_defunct, &defunct_list, chain, temp_client_defunct) {
-			if (!uuid_is_null(client_defunct->nexus_agent)) {
-				int netagent_error = netagent_client_message(client_defunct->nexus_agent,
-															 client_defunct->client_id,
-															 client_defunct->proc_pid,
+		LIST_FOREACH_SAFE(flow_defunct, &defunct_list, chain, temp_flow_defunct) {
+			if (!uuid_is_null(flow_defunct->nexus_agent)) {
+				int netagent_error = netagent_client_message(flow_defunct->nexus_agent,
+															 flow_defunct->flow_id,
+															 flow_defunct->proc_pid,
+															 flow_defunct->agent_handle,
 															 NETAGENT_MESSAGE_TYPE_ABORT_NEXUS);
 				if (netagent_error != 0) {
 					NECPLOG((netagent_error == ENOENT ? LOG_DEBUG : LOG_ERR), "necp_defunct_client abort nexus error (%d)", netagent_error);
 				}
 			}
-			LIST_REMOVE(client_defunct, chain);
-			FREE(client_defunct, M_NECP);
+			LIST_REMOVE(flow_defunct, chain);
+			FREE(flow_defunct, M_NECP);
 		}
 	}
 	ASSERT(LIST_EMPTY(&defunct_list));
@@ -2757,7 +3580,7 @@ necp_client_remove_agent_from_result(struct necp_client *client, uuid_t netagent
 }
 
 void
-necp_force_update_client(uuid_t client_id, uuid_t remove_netagent_uuid)
+necp_force_update_client(uuid_t client_id, uuid_t remove_netagent_uuid, u_int32_t agent_generation)
 {
 	struct necp_fd_data *client_fd = NULL;
 
@@ -2768,10 +3591,12 @@ necp_force_update_client(uuid_t client_id, uuid_t remove_netagent_uuid)
 		NECP_FD_LOCK(client_fd);
 		struct necp_client *client = necp_client_fd_find_client_and_lock(client_fd, client_id);
 		if (client != NULL) {
+			client->failed_trigger_agent.generation = agent_generation;
+			uuid_copy(client->failed_trigger_agent.netagent_uuid, remove_netagent_uuid);
 			if (!uuid_is_null(remove_netagent_uuid)) {
 				necp_client_remove_agent_from_result(client, remove_netagent_uuid);
 			}
-			client->flow_result_read = FALSE;
+			client->result_read = FALSE;
 			// Found the client, break
 			updated_result = TRUE;
 			NECP_CLIENT_UNLOCK(client);
@@ -2799,19 +3624,28 @@ necp_force_update_client(uuid_t client_id, uuid_t remove_netagent_uuid)
 														 NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT |			\
 														 NECP_PARSED_PARAMETERS_FIELD_PROHIBITED_AGENT |		\
 														 NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT |			\
+														 NECP_PARSED_PARAMETERS_FIELD_AVOIDED_AGENT |			\
 														 NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT_TYPE |		\
 														 NECP_PARSED_PARAMETERS_FIELD_PROHIBITED_AGENT_TYPE |	\
-														 NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT_TYPE)
+														 NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT_TYPE |	\
+														 NECP_PARSED_PARAMETERS_FIELD_AVOIDED_AGENT_TYPE)
 
-#define NECP_PARSED_PARAMETERS_SCOPED_IFNET_FIELDS (NECP_PARSED_PARAMETERS_FIELD_LOCAL_ADDR |			\
-													NECP_PARSED_PARAMETERS_FIELD_REQUIRED_IFTYPE |		\
-													NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT |		\
-													NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT |		\
-													NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT_TYPE |	\
-													NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT_TYPE)
+#define NECP_PARSED_PARAMETERS_SCOPED_FIELDS (NECP_PARSED_PARAMETERS_FIELD_LOCAL_ADDR |			\
+											  NECP_PARSED_PARAMETERS_FIELD_REQUIRED_IFTYPE |		\
+											  NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT |		\
+											  NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT |		\
+											  NECP_PARSED_PARAMETERS_FIELD_AVOIDED_AGENT |		\
+											  NECP_PARSED_PARAMETERS_FIELD_REQUIRED_AGENT_TYPE |	\
+											  NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT_TYPE |	\
+											  NECP_PARSED_PARAMETERS_FIELD_AVOIDED_AGENT_TYPE)
 
-#define NECP_PARSED_PARAMETERS_PREFERRED_IFNET_FIELDS (NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT | \
-													   NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT_TYPE)
+#define NECP_PARSED_PARAMETERS_SCOPED_IFNET_FIELDS (NECP_PARSED_PARAMETERS_FIELD_LOCAL_ADDR |		\
+													NECP_PARSED_PARAMETERS_FIELD_REQUIRED_IFTYPE)
+
+#define NECP_PARSED_PARAMETERS_PREFERRED_FIELDS (NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT | 		\
+												 NECP_PARSED_PARAMETERS_FIELD_AVOIDED_AGENT |			\
+												 NECP_PARSED_PARAMETERS_FIELD_PREFERRED_AGENT_TYPE |	\
+												 NECP_PARSED_PARAMETERS_FIELD_AVOIDED_AGENT_TYPE)
 
 static bool
 necp_ifnet_matches_type(struct ifnet *ifp, u_int8_t interface_type, bool check_delegates)
@@ -2872,7 +3706,7 @@ necp_ifnet_matches_agent(struct ifnet *ifp, uuid_t *agent_uuid, bool check_deleg
 }
 
 static bool
-necp_necp_ifnet_matches_agent_type(struct ifnet *ifp, const char *agent_domain, const char *agent_type, bool check_delegates)
+necp_ifnet_matches_agent_type(struct ifnet *ifp, const char *agent_domain, const char *agent_type, bool check_delegates)
 {
 	struct ifnet *check_ifp = ifp;
 
@@ -2888,13 +3722,10 @@ necp_necp_ifnet_matches_agent_type(struct ifnet *ifp, const char *agent_domain, 
 				char if_agent_type[NETAGENT_TYPESIZE] = { 0 };
 
 				if (netagent_get_agent_domain_and_type(check_ifp->if_agentids[index], if_agent_domain, if_agent_type)) {
-					if ((strlen(agent_domain) == 0 ||
-						 strncmp(if_agent_domain, agent_domain, NETAGENT_DOMAINSIZE) == 0) &&
-						(strlen(agent_type) == 0 ||
-						 strncmp(if_agent_type, agent_type, NETAGENT_TYPESIZE) == 0)) {
-							ifnet_lock_done(check_ifp);
-							return (TRUE);
-						}
+					if (necp_agent_types_match(agent_domain, agent_type, if_agent_domain, if_agent_type)) {
+						ifnet_lock_done(check_ifp);
+						return (TRUE);
+					}
 				}
 			}
 		}
@@ -2952,10 +3783,13 @@ necp_interface_type_is_primary_eligible(u_int8_t interface_type)
 
 #define NECP_IFP_IS_ON_ORDERED_LIST(_ifp) ((_ifp)->if_ordered_link.tqe_next != NULL || (_ifp)->if_ordered_link.tqe_prev != NULL)
 
+// Secondary interface flag indicates that the interface is being
+// used for multipath or a listener as an extra path
 static bool
 necp_ifnet_matches_parameters(struct ifnet *ifp,
 							  struct necp_client_parsed_parameters *parsed_parameters,
-							  u_int32_t *preferred_count, bool ignore_require_if)
+							  u_int32_t *preferred_count,
+							  bool secondary_interface)
 {
 	if (preferred_count) {
 		*preferred_count = 0;
@@ -2974,7 +3808,9 @@ necp_ifnet_matches_parameters(struct ifnet *ifp,
 		}
 	}
 
-	if (!ignore_require_if &&
+	if ((!secondary_interface || // Enforce interface type if this is the primary interface
+		 !(parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_FIELD_FLAGS) || // or if there are no flags
+		 !(parsed_parameters->flags & NECP_CLIENT_PARAMETER_FLAG_ONLY_PRIMARY_REQUIRES_TYPE)) && // or if the flags don't give an exception
 	    (parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_FIELD_REQUIRED_IFTYPE) &&
 		!necp_ifnet_matches_type(ifp, parsed_parameters->required_interface_type, FALSE)) {
 		return (FALSE);
@@ -3035,7 +3871,7 @@ necp_ifnet_matches_parameters(struct ifnet *ifp,
 				break;
 			}
 
-			if (!necp_necp_ifnet_matches_agent_type(ifp, parsed_parameters->required_netagent_types[i].netagent_domain, parsed_parameters->required_netagent_types[i].netagent_type, FALSE)) {
+			if (!necp_ifnet_matches_agent_type(ifp, parsed_parameters->required_netagent_types[i].netagent_domain, parsed_parameters->required_netagent_types[i].netagent_type, FALSE)) {
 				return (FALSE);
 			}
 		}
@@ -3048,7 +3884,7 @@ necp_ifnet_matches_parameters(struct ifnet *ifp,
 				break;
 			}
 
-			if (necp_necp_ifnet_matches_agent_type(ifp, parsed_parameters->prohibited_netagent_types[i].netagent_domain, parsed_parameters->prohibited_netagent_types[i].netagent_type, TRUE)) {
+			if (necp_ifnet_matches_agent_type(ifp, parsed_parameters->prohibited_netagent_types[i].netagent_domain, parsed_parameters->prohibited_netagent_types[i].netagent_type, TRUE)) {
 				return (FALSE);
 			}
 		}
@@ -3075,7 +3911,33 @@ necp_ifnet_matches_parameters(struct ifnet *ifp,
 					break;
 				}
 
-				if (necp_necp_ifnet_matches_agent_type(ifp, parsed_parameters->preferred_netagent_types[i].netagent_domain, parsed_parameters->preferred_netagent_types[i].netagent_type, TRUE)) {
+				if (necp_ifnet_matches_agent_type(ifp, parsed_parameters->preferred_netagent_types[i].netagent_domain, parsed_parameters->preferred_netagent_types[i].netagent_type, TRUE)) {
+					(*preferred_count)++;
+				}
+			}
+		}
+
+		if (parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_FIELD_AVOIDED_AGENT) {
+			for (int i = 0; i < NECP_MAX_PARSED_PARAMETERS; i++) {
+				if (uuid_is_null(parsed_parameters->avoided_netagents[i])) {
+					break;
+				}
+
+				if (!necp_ifnet_matches_agent(ifp, &parsed_parameters->avoided_netagents[i], TRUE)) {
+					(*preferred_count)++;
+				}
+			}
+		}
+
+		if (parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_FIELD_AVOIDED_AGENT_TYPE) {
+			for (int i = 0; i < NECP_MAX_PARSED_PARAMETERS; i++) {
+				if (strlen(parsed_parameters->avoided_netagent_types[i].netagent_domain) == 0 &&
+					strlen(parsed_parameters->avoided_netagent_types[i].netagent_type) == 0) {
+					break;
+				}
+
+				if (!necp_ifnet_matches_agent_type(ifp, parsed_parameters->avoided_netagent_types[i].netagent_domain,
+														parsed_parameters->avoided_netagent_types[i].netagent_type, TRUE)) {
 					(*preferred_count)++;
 				}
 			}
@@ -3086,7 +3948,8 @@ necp_ifnet_matches_parameters(struct ifnet *ifp,
 }
 
 static bool
-necp_find_matching_interface_index(struct necp_client_parsed_parameters *parsed_parameters, u_int *return_ifindex)
+necp_find_matching_interface_index(struct necp_client_parsed_parameters *parsed_parameters,
+								   u_int *return_ifindex, bool *validate_agents)
 {
 	struct ifnet *ifp = NULL;
 	u_int32_t best_preferred_count = 0;
@@ -3102,12 +3965,12 @@ necp_find_matching_interface_index(struct necp_client_parsed_parameters *parsed_
 		return (TRUE);
 	}
 
-	has_preferred_fields = (parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_PREFERRED_IFNET_FIELDS);
+	has_preferred_fields = (parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_PREFERRED_FIELDS);
 
 	// We have interesting parameters to parse and find a matching interface
 	ifnet_head_lock_shared();
 
-	if (!(parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_SCOPED_IFNET_FIELDS)) {
+	if (!(parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_SCOPED_FIELDS)) {
 		// We do have fields to match, but they are only prohibitory
 		// If the first interface in the list matches, or there are no ordered interfaces, we don't need to scope
 		ifp = TAILQ_FIRST(&ifnet_ordered_head);
@@ -3137,7 +4000,7 @@ necp_find_matching_interface_index(struct necp_client_parsed_parameters *parsed_
 	}
 
 	// Then check the remaining interfaces
-	if ((parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_SCOPED_IFNET_FIELDS) &&
+	if ((parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_SCOPED_FIELDS) &&
 		((!(parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_FIELD_REQUIRED_IFTYPE)) ||
 		 !necp_interface_type_is_primary_eligible(parsed_parameters->required_interface_type)) &&
 		*return_ifindex == 0) {
@@ -3165,10 +4028,18 @@ necp_find_matching_interface_index(struct necp_client_parsed_parameters *parsed_
 
 	ifnet_head_done();
 
-	if ((parsed_parameters->valid_fields == (parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_PREFERRED_IFNET_FIELDS)) &&
+	if ((parsed_parameters->valid_fields == (parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_PREFERRED_FIELDS)) &&
 		best_preferred_count == 0) {
 		// If only has preferred fields, and nothing was found, clear the interface index and return TRUE
 		*return_ifindex = 0;
+		return (TRUE);
+	}
+
+	if (*return_ifindex == 0 &&
+		!(parsed_parameters->valid_fields & NECP_PARSED_PARAMETERS_SCOPED_IFNET_FIELDS)) {
+		// Has required fields, but not including specific interface fields. Pass for now, and check
+		// to see if agents are satisfied by policy.
+		*validate_agents = TRUE;
 		return (TRUE);
 	}
 
@@ -3194,7 +4065,8 @@ necp_open(struct proc *p, struct necp_open_args *uap, int *retval)
 	struct fileproc *fp = NULL;
 	int fd = -1;
 
-	if (uap->flags & NECP_OPEN_FLAG_OBSERVER) {
+	if (uap->flags & NECP_OPEN_FLAG_OBSERVER ||
+		uap->flags & NECP_OPEN_FLAG_PUSH_OBSERVER) {
 		if (necp_skywalk_priv_check_cred(p, kauth_cred_get()) != 0 &&
 			priv_check_cred(kauth_cred_get(), PRIV_NET_PRIVILEGED_NETWORK_STATISTICS, 0) != 0) {
 			NECPLOG0(LOG_ERR, "Client does not hold necessary entitlement to observe other NECP clients");
@@ -3218,6 +4090,7 @@ necp_open(struct proc *p, struct necp_open_args *uap, int *retval)
 	fd_data->necp_fd_type = necp_fd_type_client;
 	fd_data->flags = uap->flags;
 	RB_INIT(&fd_data->clients);
+	RB_INIT(&fd_data->flows);
 	TAILQ_INIT(&fd_data->update_list);
 	lck_mtx_init(&fd_data->fd_lock, necp_fd_mtx_grp, necp_fd_mtx_attr);
 	klist_init(&fd_data->si.si_note);
@@ -3309,11 +4182,12 @@ necp_client_add(struct proc *p, struct necp_fd_data *fd_data, struct necp_client
 
 	client->parameters_length = uap->buffer_size;
 	client->proc_pid = fd_data->proc_pid; // Save off proc pid in case the client will persist past fd
+	client->agent_handle = (void *)fd_data;
 	client->platform_binary = ((csproc_get_platform_binary(p) == 0) ? 0 : 1);
 
-	uuid_generate_random(client->client_id);
+	necp_generate_client_id(client->client_id, false);
 	LIST_INIT(&client->assertion_list);
-	LIST_INIT(&client->flow_list);
+	RB_INIT(&client->flow_registrations);
 
 	error = copyout(client->client_id, uap->client_id, sizeof(uuid_t));
 	if (error) {
@@ -3351,8 +4225,6 @@ static int
 necp_client_remove(struct necp_fd_data *fd_data, struct necp_client_action_args *uap, int *retval)
 {
 	int error = 0;
-	struct necp_client *client = NULL;
-	struct necp_client find = {};
 	uuid_t client_id = {};
 	struct ifnet_stats_per_flow flow_ifnet_stats = {};
 
@@ -3382,14 +4254,26 @@ necp_client_remove(struct necp_fd_data *fd_data, struct necp_client_action_args 
 	NECP_FD_LOCK(fd_data);
 
 	pid_t pid = fd_data->proc_pid;
-	uuid_copy(find.client_id, client_id);
-	client = RB_FIND(_necp_client_tree, &fd_data->clients, &find);
+	struct necp_client *client = necp_client_fd_find_client_unlocked(fd_data, client_id);
 	if (client != NULL) {
+		// Remove any flow registrations that match
+		struct necp_client_flow_registration *flow_registration = NULL;
+		struct necp_client_flow_registration *temp_flow_registration = NULL;
+		RB_FOREACH_SAFE(flow_registration, _necp_fd_flow_tree, &fd_data->flows, temp_flow_registration) {
+			if (flow_registration->client == client) {
+				NECP_FLOW_TREE_LOCK_EXCLUSIVE();
+				RB_REMOVE(_necp_client_flow_global_tree, &necp_client_flow_global_tree, flow_registration);
+				NECP_FLOW_TREE_UNLOCK();
+				RB_REMOVE(_necp_fd_flow_tree, &fd_data->flows, flow_registration);
+			}
+		}
+		// Remove client from lists
 		NECP_CLIENT_TREE_LOCK_EXCLUSIVE();
 		RB_REMOVE(_necp_client_global_tree, &necp_client_global_tree, client);
 		NECP_CLIENT_TREE_UNLOCK();
 		RB_REMOVE(_necp_client_tree, &fd_data->clients, client);
 	}
+
 
 	NECP_FD_UNLOCK(fd_data);
 
@@ -3400,12 +4284,12 @@ necp_client_remove(struct necp_fd_data *fd_data, struct necp_client_action_args 
 		error = ENOENT;
 		NECPLOG(LOG_ERR, "necp_client_remove invalid client_id (%d)", error);
 	}
-
 done:
 	*retval = error;
 
 	return (error);
 }
+
 
 static int
 necp_client_check_tcp_heuristics(struct necp_client *client, struct necp_client_flow *flow, u_int32_t *flags, u_int8_t *tfo_cookie, u_int8_t *tfo_cookie_len)
@@ -3492,188 +4376,278 @@ do_unlock:
 	return (error);
 }
 
-static int
-necp_client_copy_internal(struct necp_client *client, bool client_is_observed, struct necp_client_action_args *uap, int *retval)
+static size_t
+necp_client_calculate_flow_tlv_size(struct necp_client_flow_registration *flow_registration)
 {
+	size_t assigned_results_size = 0;
+	struct necp_client_flow *flow = NULL;
+	LIST_FOREACH(flow, &flow_registration->flow_list, flow_chain) {
+		if (flow->assigned) {
+			size_t header_length = 0;
+			if (flow->nexus) {
+				header_length = sizeof(struct necp_client_nexus_flow_header);
+			} else {
+				header_length = sizeof(struct necp_client_flow_header);
+			}
+			assigned_results_size += (header_length + flow->assigned_results_length);
+
+			if (flow->has_protoctl_event) {
+				assigned_results_size += sizeof(struct necp_client_flow_protoctl_event_header);
+			}
+		}
+	}
+	return assigned_results_size;
+}
+
+static int
+necp_client_fillout_flow_tlvs(struct necp_client *client,
+							  bool client_is_observed,
+							  struct necp_client_flow_registration *flow_registration,
+							  struct necp_client_action_args *uap,
+							  size_t *assigned_results_cursor)
+{
+	int error = 0;
+	struct necp_client_flow *flow = NULL;
+	LIST_FOREACH(flow, &flow_registration->flow_list, flow_chain) {
+		if (flow->assigned) {
+			// Write TLV headers
+			struct necp_client_nexus_flow_header header = {};
+			u_int32_t length = 0;
+			u_int32_t flags = 0;
+			u_int8_t tfo_cookie_len = 0;
+			u_int8_t type = 0;
+
+			type = NECP_CLIENT_RESULT_FLOW_ID;
+			length = sizeof(header.flow_header.flow_id);
+			memcpy(&header.flow_header.flow_id_tlv_header.type, &type, sizeof(type));
+			memcpy(&header.flow_header.flow_id_tlv_header.length, &length, sizeof(length));
+			uuid_copy(header.flow_header.flow_id, flow_registration->registration_id);
+
+			if (flow->nexus) {
+				if (flow->check_tcp_heuristics) {
+					u_int8_t tfo_cookie[NECP_TFO_COOKIE_LEN_MAX];
+					tfo_cookie_len = NECP_TFO_COOKIE_LEN_MAX;
+
+					if (necp_client_check_tcp_heuristics(client, flow, &flags,
+														 tfo_cookie, &tfo_cookie_len) != 0) {
+						tfo_cookie_len = 0;
+					} else {
+						flow->check_tcp_heuristics = FALSE;
+
+						if (tfo_cookie_len != 0) {
+							type = NECP_CLIENT_RESULT_TFO_COOKIE;
+							length = tfo_cookie_len;
+							memcpy(&header.tfo_cookie_tlv_header.type, &type, sizeof(type));
+							memcpy(&header.tfo_cookie_tlv_header.length, &length, sizeof(length));
+							memcpy(&header.tfo_cookie_value, tfo_cookie, tfo_cookie_len);
+						}
+					}
+				}
+			}
+
+			size_t header_length = 0;
+			if (flow->nexus) {
+				if (tfo_cookie_len != 0) {
+					header_length = sizeof(struct necp_client_nexus_flow_header) - (NECP_TFO_COOKIE_LEN_MAX - tfo_cookie_len);
+				} else {
+					header_length = sizeof(struct necp_client_nexus_flow_header) - sizeof(struct necp_tlv_header) - NECP_TFO_COOKIE_LEN_MAX;
+				}
+			} else {
+				header_length = sizeof(struct necp_client_flow_header);
+			}
+
+			type = NECP_CLIENT_RESULT_FLAGS;
+			length = sizeof(header.flow_header.flags_value);
+			memcpy(&header.flow_header.flags_tlv_header.type, &type, sizeof(type));
+			memcpy(&header.flow_header.flags_tlv_header.length, &length, sizeof(length));
+			if (flow->assigned) {
+				flags |= NECP_CLIENT_RESULT_FLAG_FLOW_ASSIGNED;
+			}
+			if (flow->viable) {
+				flags |= NECP_CLIENT_RESULT_FLAG_FLOW_VIABLE;
+			}
+			if (flow_registration->defunct) {
+				flags |= NECP_CLIENT_RESULT_FLAG_DEFUNCT;
+			}
+			flags |= flow->necp_flow_flags;
+			memcpy(&header.flow_header.flags_value, &flags, sizeof(flags));
+
+			type = NECP_CLIENT_RESULT_INTERFACE;
+			length = sizeof(header.flow_header.interface_value);
+			memcpy(&header.flow_header.interface_tlv_header.type, &type, sizeof(type));
+			memcpy(&header.flow_header.interface_tlv_header.length, &length, sizeof(length));
+
+			struct necp_client_result_interface interface_struct;
+			interface_struct.generation = 0;
+			interface_struct.index = flow->interface_index;
+
+			memcpy(&header.flow_header.interface_value, &interface_struct, sizeof(interface_struct));
+			if (flow->nexus) {
+				type = NECP_CLIENT_RESULT_NETAGENT;
+				length = sizeof(header.agent_value);
+				memcpy(&header.agent_tlv_header.type, &type, sizeof(type));
+				memcpy(&header.agent_tlv_header.length, &length, sizeof(length));
+
+				struct necp_client_result_netagent agent_struct;
+				agent_struct.generation = 0;
+				uuid_copy(agent_struct.netagent_uuid, flow->u.nexus_agent);
+
+				memcpy(&header.agent_value, &agent_struct, sizeof(agent_struct));
+			}
+
+			// Don't include outer TLV header in length field
+			type = NECP_CLIENT_RESULT_FLOW;
+			length = (header_length - sizeof(struct necp_tlv_header) + flow->assigned_results_length);
+			if (flow->has_protoctl_event) {
+				length += sizeof(struct necp_client_flow_protoctl_event_header);
+			}
+			memcpy(&header.flow_header.outer_header.type, &type, sizeof(type));
+			memcpy(&header.flow_header.outer_header.length, &length, sizeof(length));
+
+			error = copyout(&header, uap->buffer + client->result_length + *assigned_results_cursor, header_length);
+			if (error) {
+				NECPLOG(LOG_ERR, "necp_client_copy assigned results tlv_header copyout error (%d)", error);
+				return (error);
+			}
+			*assigned_results_cursor += header_length;
+
+			if (flow->assigned_results && flow->assigned_results_length) {
+				// Write inner TLVs
+				error = copyout(flow->assigned_results, uap->buffer + client->result_length + *assigned_results_cursor,
+								flow->assigned_results_length);
+				if (error) {
+					NECPLOG(LOG_ERR, "necp_client_copy assigned results copyout error (%d)", error);
+					return (error);
+				}
+			}
+			*assigned_results_cursor += flow->assigned_results_length;
+
+			/* Read the protocol event and reset it */
+			if (flow->has_protoctl_event) {
+				struct necp_client_flow_protoctl_event_header protoctl_event_header = {};
+
+				type = NECP_CLIENT_RESULT_PROTO_CTL_EVENT;
+				length = sizeof(protoctl_event_header.protoctl_event);
+
+				memcpy(&protoctl_event_header.protoctl_tlv_header.type, &type, sizeof(type));
+				memcpy(&protoctl_event_header.protoctl_tlv_header.length, &length, sizeof(length));
+				memcpy(&protoctl_event_header.protoctl_event, &flow->protoctl_event,
+					   sizeof(flow->protoctl_event));
+
+				error = copyout(&protoctl_event_header, uap->buffer + client->result_length + *assigned_results_cursor,
+								sizeof(protoctl_event_header));
+
+				if (error) {
+					NECPLOG(LOG_ERR, "necp_client_copy protocol control event results"
+							" tlv_header copyout error (%d)", error);
+					return (error);
+				}
+				*assigned_results_cursor += sizeof(protoctl_event_header);
+				flow->has_protoctl_event = FALSE;
+				flow->protoctl_event.protoctl_event_code = 0;
+				flow->protoctl_event.protoctl_event_val = 0;
+				flow->protoctl_event.protoctl_event_tcp_seq_num = 0;
+			}
+		}
+	}
+	if (!client_is_observed) {
+		flow_registration->flow_result_read = TRUE;
+	}
+	return (0);
+}
+
+static int
+necp_client_copy_internal(struct necp_client *client, uuid_t client_id, bool client_is_observed, struct necp_client_action_args *uap, int *retval)
+{
+	NECP_CLIENT_ASSERT_LOCKED(client);
 	int error = 0;
 	// Copy results out
 	if (uap->action == NECP_CLIENT_ACTION_COPY_PARAMETERS) {
 		if (uap->buffer_size < client->parameters_length) {
-			error = EINVAL;
-			goto done;
+			return (EINVAL);
 		}
 		error = copyout(client->parameters, uap->buffer, client->parameters_length);
 		if (error) {
 			NECPLOG(LOG_ERR, "necp_client_copy parameters copyout error (%d)", error);
-			goto done;
+			return (error);
 		}
 		*retval = client->parameters_length;
 	} else if (uap->action == NECP_CLIENT_ACTION_COPY_UPDATED_RESULT &&
-			   client->result_read && client->flow_result_read) {
+			   client->result_read && !necp_client_has_unread_flows(client)) {
 		// Copy updates only, but nothing to read
 		// Just return 0 for bytes read
 		*retval = 0;
 	} else if (uap->action == NECP_CLIENT_ACTION_COPY_RESULT ||
 			   uap->action == NECP_CLIENT_ACTION_COPY_UPDATED_RESULT) {
 		size_t assigned_results_size = 0;
-		struct necp_client_flow *flow = NULL;
-		LIST_FOREACH(flow, &client->flow_list, flow_chain) {
-			if (flow->nexus || (flow->socket && flow->assigned)) {
-				size_t header_length = 0;
-				if (flow->nexus) {
-					header_length = sizeof(struct necp_client_nexus_flow_header);
-				} else {
-					header_length = sizeof(struct necp_client_flow_header);
-				}
-				assigned_results_size += (header_length + flow->assigned_results_length);
 
-				if (flow->has_protoctl_event) {
-					assigned_results_size += sizeof(struct necp_client_flow_protoctl_event_header);
+		bool some_flow_is_defunct = false;
+		struct necp_client_flow_registration *single_flow_registration = NULL;
+		if (necp_client_id_is_flow(client_id)) {
+			single_flow_registration = necp_client_find_flow(client, client_id);
+			if (single_flow_registration != NULL) {
+				assigned_results_size += necp_client_calculate_flow_tlv_size(single_flow_registration);
+			}
+		} else {
+			// This request is for the client, so copy everything
+			struct necp_client_flow_registration *flow_registration = NULL;
+			RB_FOREACH(flow_registration, _necp_client_flow_tree, &client->flow_registrations) {
+				if (flow_registration->defunct) {
+					some_flow_is_defunct = true;
 				}
+				assigned_results_size += necp_client_calculate_flow_tlv_size(flow_registration);
 			}
 		}
 		if (uap->buffer_size < (client->result_length + assigned_results_size)) {
-			error = EINVAL;
-			goto done;
+			return (EINVAL);
 		}
+
+		u_int32_t original_flags = 0;
+		bool flags_updated = false;
+		if (some_flow_is_defunct && client->legacy_client_is_flow) {
+			// If our client expects the defunct flag in the client, add it now
+			u_int32_t client_flags = 0;
+			u_int32_t value_size = 0;
+			u_int8_t *flags_pointer = necp_buffer_get_tlv_value(client->result, 0, &value_size);
+			if (flags_pointer != NULL && value_size == sizeof(client_flags)) {
+				memcpy(&client_flags, flags_pointer, value_size);
+				original_flags = client_flags;
+				client_flags |= NECP_CLIENT_RESULT_FLAG_DEFUNCT;
+				(void)necp_buffer_write_tlv_if_different(client->result, NECP_CLIENT_RESULT_FLAGS,
+														 sizeof(client_flags), &client_flags, &flags_updated,
+														 client->result, sizeof(client->result));
+			}
+		}
+
 		error = copyout(client->result, uap->buffer, client->result_length);
+
+		if (flags_updated) {
+			// Revert stored flags
+			(void)necp_buffer_write_tlv_if_different(client->result, NECP_CLIENT_RESULT_FLAGS,
+													 sizeof(original_flags), &original_flags, &flags_updated,
+													 client->result, sizeof(client->result));
+		}
+
 		if (error) {
 			NECPLOG(LOG_ERR, "necp_client_copy result copyout error (%d)", error);
-			goto done;
+			return (error);
 		}
 
 		size_t assigned_results_cursor = 0;
-
-		flow = NULL;
-		LIST_FOREACH(flow, &client->flow_list, flow_chain) {
-			if (flow->nexus || (flow->socket && flow->assigned)) {
-				// Write TLV headers
-				struct necp_client_nexus_flow_header header = {};
-				u_int32_t length = 0;
-				u_int32_t flags = 0;
-				u_int8_t tfo_cookie_len = 0;
-				u_int8_t type = 0;
-
-				if (flow->nexus) {
-					if (flow->check_tcp_heuristics) {
-						u_int8_t tfo_cookie[NECP_TFO_COOKIE_LEN_MAX];
-						tfo_cookie_len = NECP_TFO_COOKIE_LEN_MAX;
-
-						if (necp_client_check_tcp_heuristics(client, flow, &flags,
-										    tfo_cookie, &tfo_cookie_len) != 0) {
-							tfo_cookie_len = 0;
-						} else {
-							flow->check_tcp_heuristics = FALSE;
-
-							if (tfo_cookie_len != 0) {
-								type = NECP_CLIENT_RESULT_TFO_COOKIE;
-								length = tfo_cookie_len;
-								memcpy(&header.tfo_cookie_tlv_header.type, &type, sizeof(type));
-								memcpy(&header.tfo_cookie_tlv_header.length, &length, sizeof(length));
-								memcpy(&header.tfo_cookie_value, tfo_cookie, tfo_cookie_len);
-							}
-						}
-					}
+		if (necp_client_id_is_flow(client_id)) {
+			if (single_flow_registration != NULL) {
+				error = necp_client_fillout_flow_tlvs(client, client_is_observed, single_flow_registration, uap, &assigned_results_cursor);
+				if (error != 0) {
+					return (error);
 				}
-
-				size_t header_length = 0;
-				if (flow->nexus) {
-					if (tfo_cookie_len != 0) {
-						header_length = sizeof(struct necp_client_nexus_flow_header) - (NECP_TFO_COOKIE_LEN_MAX - tfo_cookie_len);
-					} else {
-						header_length = sizeof(struct necp_client_nexus_flow_header) - sizeof(struct necp_tlv_header) - NECP_TFO_COOKIE_LEN_MAX;
-					}
-				} else {
-					header_length = sizeof(struct necp_client_flow_header);
-				}
-
-				type = NECP_CLIENT_RESULT_FLAGS;
-				length = sizeof(header.flow_header.flags_value);
-				memcpy(&header.flow_header.flags_tlv_header.type, &type, sizeof(type));
-				memcpy(&header.flow_header.flags_tlv_header.length, &length, sizeof(length));
-				if (flow->assigned) {
-					flags |= NECP_CLIENT_RESULT_FLAG_FLOW_ASSIGNED;
-				}
-				if (flow->viable) {
-					flags |= NECP_CLIENT_RESULT_FLAG_FLOW_VIABLE;
-				}
-				memcpy(&header.flow_header.flags_value, &flags, sizeof(flags));
-
-				type = NECP_CLIENT_RESULT_INTERFACE;
-				length = sizeof(header.flow_header.interface_value);
-				memcpy(&header.flow_header.interface_tlv_header.type, &type, sizeof(type));
-				memcpy(&header.flow_header.interface_tlv_header.length, &length, sizeof(length));
-
-				struct necp_client_result_interface interface_struct;
-				interface_struct.generation = 0;
-				interface_struct.index = flow->interface_index;
-
-				memcpy(&header.flow_header.interface_value, &interface_struct, sizeof(interface_struct));
-				if (flow->nexus) {
-					type = NECP_CLIENT_RESULT_NETAGENT;
-					length = sizeof(header.agent_value);
-					memcpy(&header.agent_tlv_header.type, &type, sizeof(type));
-					memcpy(&header.agent_tlv_header.length, &length, sizeof(length));
-
-					struct necp_client_result_netagent agent_struct;
-					agent_struct.generation = 0;
-					uuid_copy(agent_struct.netagent_uuid, flow->u.nexus_agent);
-
-					memcpy(&header.agent_value, &agent_struct, sizeof(agent_struct));
-				}
-
-				// Don't include outer TLV header in length field
-				type = NECP_CLIENT_RESULT_FLOW;
-				length = (header_length - sizeof(struct necp_tlv_header) + flow->assigned_results_length);
-				if (flow->has_protoctl_event) {
-					length += sizeof(struct necp_client_flow_protoctl_event_header);
-				}
-				memcpy(&header.flow_header.outer_header.type, &type, sizeof(type));
-				memcpy(&header.flow_header.outer_header.length, &length, sizeof(length));
-
-				error = copyout(&header, uap->buffer + client->result_length + assigned_results_cursor, header_length);
-				if (error) {
-					NECPLOG(LOG_ERR, "necp_client_copy assigned results tlv_header copyout error (%d)", error);
-					goto done;
-				}
-				assigned_results_cursor += header_length;
-
-				if (flow->assigned_results && flow->assigned_results_length) {
-					// Write inner TLVs
-					error = copyout(flow->assigned_results, uap->buffer + client->result_length + assigned_results_cursor,
-									flow->assigned_results_length);
-					if (error) {
-						NECPLOG(LOG_ERR, "necp_client_copy assigned results copyout error (%d)", error);
-						goto done;
-					}
-				}
-				assigned_results_cursor += flow->assigned_results_length;
-
-				/* Read the protocol event and reset it */
-				if (flow->has_protoctl_event) {
-					struct necp_client_flow_protoctl_event_header protoctl_event_header = {};
-
-					type = NECP_CLIENT_RESULT_PROTO_CTL_EVENT;
-					length = sizeof(protoctl_event_header.protoctl_event);
-
-					memcpy(&protoctl_event_header.protoctl_tlv_header.type, &type, sizeof(type));
-					memcpy(&protoctl_event_header.protoctl_tlv_header.length, &length, sizeof(length));
-					memcpy(&protoctl_event_header.protoctl_event, &flow->protoctl_event,
-					    sizeof(flow->protoctl_event));
-
-					error = copyout(&protoctl_event_header, uap->buffer + client->result_length + assigned_results_cursor,
-					    sizeof(protoctl_event_header));
-
-					if (error) {
-						NECPLOG(LOG_ERR, "necp_client_copy protocol control event results"
-						    " tlv_header copyout error (%d)", error);
-						goto done;
-					}
-					assigned_results_cursor += sizeof(protoctl_event_header);
-					flow->has_protoctl_event = FALSE;
-					flow->protoctl_event.protoctl_event_code = 0;
-					flow->protoctl_event.protoctl_event_val = 0;
-					flow->protoctl_event.protoctl_event_tcp_seq_num = 0;
+			}
+		} else {
+			// This request is for the client, so copy everything
+			struct necp_client_flow_registration *flow_registration = NULL;
+			RB_FOREACH(flow_registration, _necp_client_flow_tree, &client->flow_registrations) {
+				error = necp_client_fillout_flow_tlvs(client, client_is_observed, flow_registration, uap, &assigned_results_cursor);
+				if (error != 0) {
+					return (error);
 				}
 			}
 		}
@@ -3682,12 +4656,10 @@ necp_client_copy_internal(struct necp_client *client, bool client_is_observed, s
 
 		if (!client_is_observed) {
 			client->result_read = TRUE;
-			client->flow_result_read = TRUE;
 		}
 	}
 
-done:
-	return (error);
+	return (0);
 }
 
 static int
@@ -3701,28 +4673,25 @@ necp_client_copy(struct necp_fd_data *fd_data, struct necp_client_action_args *u
 	*retval = 0;
 
 	if (uap->buffer_size == 0 || uap->buffer == 0) {
-		error = EINVAL;
-		goto done;
+		return (EINVAL);
 	}
 
 	if (uap->action != NECP_CLIENT_ACTION_COPY_PARAMETERS &&
 		uap->action != NECP_CLIENT_ACTION_COPY_RESULT &&
 		uap->action != NECP_CLIENT_ACTION_COPY_UPDATED_RESULT) {
-		error = EINVAL;
-		goto done;
+		return (EINVAL);
 	}
 
 	if (uap->client_id) {
 		if (uap->client_id_len != sizeof(uuid_t)) {
 			NECPLOG(LOG_ERR, "Incorrect length (got %d, expected %d)", uap->client_id_len, sizeof(uuid_t));
-			error = ERANGE;
-			goto done;
+			return (ERANGE);
 		}
 
 		error = copyin(uap->client_id, client_id, sizeof(uuid_t));
 		if (error) {
 			NECPLOG(LOG_ERR, "necp_client_copy client_id copyin error (%d)", error);
-			goto done;
+			return (error);
 		}
 	}
 
@@ -3735,7 +4704,7 @@ necp_client_copy(struct necp_fd_data *fd_data, struct necp_client_action_args *u
 			struct necp_client *find_client = NULL;
 			RB_FOREACH(find_client, _necp_client_tree, &fd_data->clients) {
 				NECP_CLIENT_LOCK(find_client);
-				if (!find_client->result_read || !find_client->flow_result_read) {
+				if (!find_client->result_read || necp_client_has_unread_flows(find_client)) {
 					client = find_client;
 					// Leave the client locked, and break
 					break;
@@ -3749,7 +4718,7 @@ necp_client_copy(struct necp_fd_data *fd_data, struct necp_client_action_args *u
 
 	if (client != NULL) {
 		// If client is set, it is locked
-		error = necp_client_copy_internal(client, FALSE, uap, retval);
+		error = necp_client_copy_internal(client, client_id, FALSE, uap, retval);
 		NECP_CLIENT_UNLOCK(client);
 	}
 
@@ -3765,16 +4734,11 @@ necp_client_copy(struct necp_fd_data *fd_data, struct necp_client_action_args *u
 
 			bool found_client = FALSE;
 
-			struct necp_client find;
-			uuid_copy(find.client_id, client_id);
-			client = RB_FIND(_necp_client_global_tree, &necp_client_global_tree, &find);
+			client = necp_find_client_and_lock(client_id);
 			if (client != NULL) {
-				NECP_CLIENT_LOCK(client);
-
 				// Matched, copy out data
 				found_client = TRUE;
-				error = necp_client_copy_internal(client, TRUE, uap, retval);
-
+				error = necp_client_copy_internal(client, client_id, TRUE, uap, retval);
 				NECP_CLIENT_UNLOCK(client);
 			}
 
@@ -3783,17 +4747,14 @@ necp_client_copy(struct necp_fd_data *fd_data, struct necp_client_action_args *u
 
 			// No client found, fail
 			if (!found_client) {
-				error = ENOENT;
-				goto done;
+				return (ENOENT);
 			}
 		} else {
 			// No client found, and not allowed to search other fds, fail
-			error = ENOENT;
-			goto done;
+			return (ENOENT);
 		}
 	}
 
-done:
 	return (error);
 }
 
@@ -3856,7 +4817,8 @@ necp_client_copy_client_update(struct necp_fd_data *fd_data, struct necp_client_
 }
 
 static int
-necp_client_copy_parameters_locked(struct necp_client *client, struct necp_client_nexus_parameters *parameters)
+necp_client_copy_parameters_locked(struct necp_client *client,
+								   struct necp_client_nexus_parameters *parameters)
 {
 	VERIFY(parameters != NULL);
 
@@ -3888,44 +4850,6 @@ necp_client_copy_parameters_locked(struct necp_client *client, struct necp_clien
 	parameters->allow_qos_marking = (client_result_flags & NECP_CLIENT_RESULT_FLAG_ALLOW_QOS_MARKING) ? 1 : 0;
 
 	return (error);
-}
-
-int
-necp_client_copy_parameters(uuid_t client_id, struct necp_client_nexus_parameters *parameters)
-{
-	int error = 0;
-	struct necp_client *client = NULL;
-
-	if (parameters == NULL) {
-		return EINVAL;
-	}
-
-	// Lock tree
-	NECP_CLIENT_TREE_LOCK_SHARED();
-
-	bool found_client = FALSE;
-	struct necp_client find;
-	uuid_copy(find.client_id, client_id);
-	client = RB_FIND(_necp_client_global_tree, &necp_client_global_tree, &find);
-	if (client != NULL) {
-		NECP_CLIENT_LOCK(client);
-
-		// Matched, parse parameters
-		found_client = TRUE;
-		error = necp_client_copy_parameters_locked(client, parameters);
-
-		NECP_CLIENT_UNLOCK(client);
-	}
-
-	// Unlock tree
-	NECP_CLIENT_TREE_UNLOCK();
-
-	// No client found, fail
-	if (!found_client) {
-		return ENOENT;
-	}
-
-	return error;
 }
 
 static int
@@ -4145,6 +5069,7 @@ necp_client_agent_action(struct necp_fd_data *fd_data, struct necp_client_action
 						error = netagent_client_message_with_params(agent_uuid,
 																	client_id,
 																	fd_data->proc_pid,
+																	client->agent_handle,
 																	netagent_message_type,
 																	&parsed_parameters,
 																	NULL, NULL);
@@ -4316,6 +5241,12 @@ necp_client_copy_interface(__unused struct necp_fd_data *fd_data, struct necp_cl
 		if ((interface->if_eflags & IFEF_NOACKPRI) == IFEF_NOACKPRI) {
 			interface_details.flags |= NECP_INTERFACE_FLAG_NOACKPRI;
 		}
+		if ((interface->if_eflags & IFEF_3CA) == IFEF_3CA) {
+			interface_details.flags |= NECP_INTERFACE_FLAG_3CARRIERAGG;
+		}
+		if (IFNET_IS_LOW_POWER(interface)) {
+			interface_details.flags |= NECP_INTERFACE_FLAG_IS_LOW_POWER;
+		}
 		interface_details.mtu = interface->if_mtu;
 
 		u_int8_t ipv4_signature_len = sizeof(interface_details.ipv4_signature.signature);
@@ -4439,9 +5370,17 @@ necp_client_update_cache(struct necp_fd_data *fd_data, struct necp_client_action
 		goto done;
 	}
 
+	struct necp_client_flow_registration *flow_registration = necp_client_find_flow(client, client_id);
+	if (flow_registration == NULL) {
+		NECP_CLIENT_UNLOCK(client);
+		NECP_FD_UNLOCK(fd_data);
+		error = ENOENT;
+		goto done;
+	}
+
 	NECP_CLIENT_ROUTE_LOCK(client);
 	// This needs to be changed when TFO/ECN is supported by multiple flows
-	struct necp_client_flow *flow = LIST_FIRST(&client->flow_list);
+	struct necp_client_flow *flow = LIST_FIRST(&flow_registration->flow_list);
 	if (flow == NULL ||
 		(flow->remote_addr.sa.sa_family != AF_INET &&
 		 flow->remote_addr.sa.sa_family != AF_INET6) ||
@@ -4608,7 +5547,7 @@ necp_match_policy(struct proc *p, struct necp_match_policy_args *uap, int32_t *r
 {
 #pragma unused(retval)
 	u_int8_t *parameters = NULL;
-	struct necp_aggregate_result returned_result = {};
+	struct necp_aggregate_result returned_result;
 	int error = 0;
 
 	if (uap == NULL) {
@@ -4821,7 +5760,7 @@ done:
 void *
 necp_create_nexus_assign_message(uuid_t nexus_instance, u_int32_t nexus_port, void *key, uint32_t key_length,
 								 struct necp_client_endpoint *local_endpoint, struct necp_client_endpoint *remote_endpoint,
-								 u_int32_t flow_adv_index, size_t *message_length)
+								 u_int32_t flow_adv_index, void *flow_stats, size_t *message_length)
 {
 	u_int8_t *buffer = NULL;
 	u_int8_t *cursor = NULL;
@@ -4845,6 +5784,9 @@ necp_create_nexus_assign_message(uuid_t nexus_instance, u_int32_t nexus_port, vo
 	}
 	if (remote_endpoint != NULL) {
 		valsize += sizeof(struct necp_tlv_header) + sizeof(struct necp_client_endpoint);
+	}
+	if (flow_stats != NULL) {
+		valsize += sizeof(struct necp_tlv_header) + sizeof(void *);
 	}
 	if (valsize == 0) {
 		return (NULL);
@@ -4871,6 +5813,9 @@ necp_create_nexus_assign_message(uuid_t nexus_instance, u_int32_t nexus_port, vo
 	}
 	if (remote_endpoint != NULL) {
 		cursor = necp_buffer_write_tlv(cursor, NECP_CLIENT_RESULT_REMOTE_ENDPOINT, sizeof(struct necp_client_endpoint), remote_endpoint, buffer, valsize);
+	}
+	if (flow_stats != NULL) {
+		cursor = necp_buffer_write_tlv(cursor, NECP_CLIENT_RESULT_NEXUS_FLOW_STATS, sizeof(void *), &flow_stats, buffer, valsize);
 	}
 
 	*message_length = valsize;
@@ -4949,6 +5894,13 @@ necp_client_init(void)
 		/* NOTREACHED */
 	}
 
+	necp_flow_registration_size = sizeof(struct necp_client_flow_registration);
+	necp_flow_registration_cache = mcache_create(NECP_FLOW_REGISTRATION_ZONE_NAME, necp_flow_registration_size, sizeof (uint64_t), 0, MCR_SLEEP);
+	if (necp_flow_registration_cache == NULL) {
+		panic("mcache_create(necp_client_flow_registration) failed\n");
+		/* NOTREACHED */
+	}
+
 	necp_client_update_tcall = thread_call_allocate_with_options(necp_update_all_clients_callout, NULL,
 																 THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
 	VERIFY(necp_client_update_tcall != NULL);
@@ -4956,13 +5908,15 @@ necp_client_init(void)
 	lck_rw_init(&necp_fd_lock, necp_fd_mtx_grp, necp_fd_mtx_attr);
 	lck_rw_init(&necp_observer_lock, necp_fd_mtx_grp, necp_fd_mtx_attr);
 	lck_rw_init(&necp_client_tree_lock, necp_fd_mtx_grp, necp_fd_mtx_attr);
+    lck_rw_init(&necp_flow_tree_lock, necp_fd_mtx_grp, necp_fd_mtx_attr);
 	lck_rw_init(&necp_collect_stats_list_lock, necp_fd_mtx_grp, necp_fd_mtx_attr);
 
 	LIST_INIT(&necp_fd_list);
 	LIST_INIT(&necp_fd_observer_list);
-	LIST_INIT(&necp_collect_stats_client_list);
+	LIST_INIT(&necp_collect_stats_flow_list);
 
 	RB_INIT(&necp_client_global_tree);
+	RB_INIT(&necp_client_flow_global_tree);
 
 	return (0);
 }
@@ -4971,5 +5925,6 @@ void
 necp_client_reap_caches(boolean_t purge)
 {
 	mcache_reap_now(necp_flow_cache, purge);
+	mcache_reap_now(necp_flow_registration_cache, purge);
 }
 

@@ -53,13 +53,12 @@ uint32_t qos_override_mode;
 #define QOS_OVERRIDE_MODE_OVERHANG_PEAK 0
 #define QOS_OVERRIDE_MODE_IGNORE_OVERRIDE 1
 #define QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE 2
-#define QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE_BUT_IGNORE_DISPATCH 3
-#define QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE_BUT_SINGLE_MUTEX_OVERRIDE 4
+#define QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE_BUT_SINGLE_MUTEX_OVERRIDE 3
 
 extern zone_t thread_qos_override_zone;
 
-static boolean_t
-proc_thread_qos_remove_override_internal(thread_t thread, user_addr_t resource, int resource_type, boolean_t reset, boolean_t squash);
+static void
+proc_thread_qos_remove_override_internal(thread_t thread, user_addr_t resource, int resource_type, boolean_t reset);
 
 /*
  * THREAD_QOS_UNSPECIFIED is assigned the highest tier available, so it does not provide a limit
@@ -83,15 +82,6 @@ const qos_policy_params_t thread_qos_policy_params = {
 	 * This table defines the highest IO priority that a thread marked with this
 	 * QoS class can have.
 	 */
-#if CONFIG_EMBEDDED
-	.qos_iotier[THREAD_QOS_UNSPECIFIED]             = THROTTLE_LEVEL_TIER0,
-	.qos_iotier[THREAD_QOS_USER_INTERACTIVE]        = THROTTLE_LEVEL_TIER0,
-	.qos_iotier[THREAD_QOS_USER_INITIATED]          = THROTTLE_LEVEL_TIER0,
-	.qos_iotier[THREAD_QOS_LEGACY]                  = THROTTLE_LEVEL_TIER0,
-	.qos_iotier[THREAD_QOS_UTILITY]                 = THROTTLE_LEVEL_TIER0,
-	.qos_iotier[THREAD_QOS_BACKGROUND]              = THROTTLE_LEVEL_TIER3,
-	.qos_iotier[THREAD_QOS_MAINTENANCE]             = THROTTLE_LEVEL_TIER3,
-#else
 	.qos_iotier[THREAD_QOS_UNSPECIFIED]             = THROTTLE_LEVEL_TIER0,
 	.qos_iotier[THREAD_QOS_USER_INTERACTIVE]        = THROTTLE_LEVEL_TIER0,
 	.qos_iotier[THREAD_QOS_USER_INITIATED]          = THROTTLE_LEVEL_TIER0,
@@ -99,7 +89,6 @@ const qos_policy_params_t thread_qos_policy_params = {
 	.qos_iotier[THREAD_QOS_UTILITY]                 = THROTTLE_LEVEL_TIER1,
 	.qos_iotier[THREAD_QOS_BACKGROUND]              = THROTTLE_LEVEL_TIER2, /* possibly overridden by bg_iotier */
 	.qos_iotier[THREAD_QOS_MAINTENANCE]             = THROTTLE_LEVEL_TIER3,
-#endif
 
 	/*
 	 * This table defines the highest QoS level that
@@ -643,35 +632,133 @@ unlock:
 	return kr;
 }
 
+uint8_t
+thread_workq_pri_for_qos(thread_qos_t qos)
+{
+	assert(qos < THREAD_QOS_LAST);
+	return (uint8_t)thread_qos_policy_params.qos_pri[qos];
+}
+
+thread_qos_t
+thread_workq_qos_for_pri(int priority)
+{
+	int qos;
+	if (priority > thread_qos_policy_params.qos_pri[THREAD_QOS_USER_INTERACTIVE]) {
+		// indicate that workq should map >UI threads to workq's
+		// internal notation for above-UI work.
+		return THREAD_QOS_UNSPECIFIED;
+	}
+	for (qos = THREAD_QOS_USER_INTERACTIVE; qos > THREAD_QOS_MAINTENANCE; qos--) {
+		// map a given priority up to the next nearest qos band.
+		if (thread_qos_policy_params.qos_pri[qos - 1] < priority) {
+			return qos;
+		}
+	}
+	return THREAD_QOS_MAINTENANCE;
+}
+
 /*
- * KPI for pthread kext
+ * private interface for pthread workqueues
  *
  * Set scheduling policy & absolute priority for thread
- * May be called from waitqueue callout context with spinlocks held
+ * May be called with spinlocks held
  * Thread mutex lock is not held
  */
-kern_return_t
+void
+thread_reset_workq_qos(thread_t thread, uint32_t qos)
+{
+	struct task_pend_token pend_token = {};
+
+	assert(qos < THREAD_QOS_LAST);
+
+	spl_t s = splsched();
+	thread_lock(thread);
+
+	proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
+			TASK_POLICY_QOS_AND_RELPRIO, qos, 0, &pend_token);
+	proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
+			TASK_POLICY_QOS_WORKQ_OVERRIDE, THREAD_QOS_UNSPECIFIED, 0,
+			&pend_token);
+
+	assert(pend_token.tpt_update_sockets == 0);
+
+	thread_unlock(thread);
+	splx(s);
+
+	thread_policy_update_complete_unlocked(thread, &pend_token);
+}
+
+/*
+ * private interface for pthread workqueues
+ *
+ * Set scheduling policy & absolute priority for thread
+ * May be called with spinlocks held
+ * Thread mutex lock is held
+ */
+void
+thread_set_workq_override(thread_t thread, uint32_t qos)
+{
+	struct task_pend_token pend_token = {};
+
+	assert(qos < THREAD_QOS_LAST);
+
+	spl_t s = splsched();
+	thread_lock(thread);
+
+	proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
+			TASK_POLICY_QOS_WORKQ_OVERRIDE, qos, 0, &pend_token);
+
+	assert(pend_token.tpt_update_sockets == 0);
+
+	thread_unlock(thread);
+	splx(s);
+
+	thread_policy_update_complete_unlocked(thread, &pend_token);
+}
+
+/*
+ * private interface for pthread workqueues
+ *
+ * Set scheduling policy & absolute priority for thread
+ * May be called with spinlocks held
+ * Thread mutex lock is not held
+ */
+void
 thread_set_workq_pri(thread_t  thread,
+                     thread_qos_t qos,
                      integer_t priority,
                      integer_t policy)
 {
 	struct task_pend_token pend_token = {};
 	sched_mode_t mode = convert_policy_to_sched_mode(policy);
 
+	assert(qos < THREAD_QOS_LAST);
 	assert(thread->static_param);
-	if (!thread->static_param)
-		return KERN_FAILURE;
+
+	if (!thread->static_param || !thread->active)
+		return;
+
+	spl_t s = splsched();
+	thread_lock(thread);
+
+	proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
+			TASK_POLICY_QOS_AND_RELPRIO, qos, 0, &pend_token);
+	proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
+			TASK_POLICY_QOS_WORKQ_OVERRIDE, THREAD_QOS_UNSPECIFIED,
+			0, &pend_token);
+
+	thread_unlock(thread);
+	splx(s);
 
 	/* Concern: this doesn't hold the mutex... */
-	if (!thread->active)
-		return KERN_TERMINATED;
 
-	kern_return_t kr = thread_set_mode_and_absolute_pri_internal(thread, mode, priority, &pend_token);
+	__assert_only kern_return_t kr;
+	kr = thread_set_mode_and_absolute_pri_internal(thread, mode, priority,
+			&pend_token);
+	assert(kr == KERN_SUCCESS);
 
 	if (pend_token.tpt_update_thread_sfi)
 		sfi_reevaluate(thread);
-
-	return kr;
 }
 
 /*
@@ -762,7 +849,7 @@ thread_update_qos_cpu_time_locked(thread_t thread)
 	 * last context switch (embedded) or last user/kernel boundary transition (desktop)
 	 * because user_timer and system_timer are only updated then.
 	 *
-	 * TODO: Consider running a thread_timer_event operation here to update it first.
+	 * TODO: Consider running a timer_update operation here to update it first.
 	 *       Maybe doable with interrupts disabled from current thread.
 	 *       If the thread is on a different core, may not be easy to get right.
 	 *
@@ -779,7 +866,7 @@ thread_update_qos_cpu_time_locked(thread_t thread)
 
 	/* Update the task-level effective and requested qos stats atomically, because we don't have the task lock. */
 	switch (thread->effective_policy.thep_qos) {
-		case THREAD_QOS_DEFAULT:            task_counter = &task->cpu_time_eqos_stats.cpu_time_qos_default;          break;
+		case THREAD_QOS_UNSPECIFIED:        task_counter = &task->cpu_time_eqos_stats.cpu_time_qos_default;          break;
 		case THREAD_QOS_MAINTENANCE:        task_counter = &task->cpu_time_eqos_stats.cpu_time_qos_maintenance;      break;
 		case THREAD_QOS_BACKGROUND:         task_counter = &task->cpu_time_eqos_stats.cpu_time_qos_background;       break;
 		case THREAD_QOS_UTILITY:            task_counter = &task->cpu_time_eqos_stats.cpu_time_qos_utility;          break;
@@ -794,7 +881,7 @@ thread_update_qos_cpu_time_locked(thread_t thread)
 
 	/* Update the task-level qos stats atomically, because we don't have the task lock. */
 	switch (thread->requested_policy.thrp_qos) {
-		case THREAD_QOS_DEFAULT:            task_counter = &task->cpu_time_rqos_stats.cpu_time_qos_default;          break;
+		case THREAD_QOS_UNSPECIFIED:        task_counter = &task->cpu_time_rqos_stats.cpu_time_qos_default;          break;
 		case THREAD_QOS_MAINTENANCE:        task_counter = &task->cpu_time_rqos_stats.cpu_time_qos_maintenance;      break;
 		case THREAD_QOS_BACKGROUND:         task_counter = &task->cpu_time_rqos_stats.cpu_time_qos_background;       break;
 		case THREAD_QOS_UTILITY:            task_counter = &task->cpu_time_rqos_stats.cpu_time_qos_utility;          break;
@@ -1183,7 +1270,7 @@ thread_policy_get(
 			info->thps_requested_policy = *(uint64_t*)(void*)(&thread->requested_policy);
 			info->thps_effective_policy = *(uint64_t*)(void*)(&thread->effective_policy);
 
-			info->thps_user_promotions          = thread->user_promotions;
+			info->thps_user_promotions          = 0;
 			info->thps_user_promotion_basepri   = thread->user_promotion_basepri;
 			info->thps_ipc_overrides            = thread->ipc_overrides;
 
@@ -1346,14 +1433,10 @@ thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_pr
 	uint32_t next_qos = requested.thrp_qos;
 
 	if (requested.thrp_qos != THREAD_QOS_UNSPECIFIED) {
-		if (requested.thrp_qos_override != THREAD_QOS_UNSPECIFIED)
-			next_qos = MAX(requested.thrp_qos_override, next_qos);
-
-		if (requested.thrp_qos_promote != THREAD_QOS_UNSPECIFIED)
-			next_qos = MAX(requested.thrp_qos_promote, next_qos);
-
-		if (requested.thrp_qos_ipc_override != THREAD_QOS_UNSPECIFIED)
-			next_qos = MAX(requested.thrp_qos_ipc_override, next_qos);
+		next_qos = MAX(requested.thrp_qos_override, next_qos);
+		next_qos = MAX(requested.thrp_qos_promote, next_qos);
+		next_qos = MAX(requested.thrp_qos_ipc_override, next_qos);
+		next_qos = MAX(requested.thrp_qos_workq_override, next_qos);
 	}
 
 	next.thep_qos = next_qos;
@@ -1379,8 +1462,7 @@ thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_pr
 	}
 
 	/* Apply the sync ipc qos override */
-	if (requested.thrp_qos_sync_ipc_override != THREAD_QOS_UNSPECIFIED)
-		next.thep_qos = MAX(requested.thrp_qos_sync_ipc_override, next.thep_qos);
+	assert(requested.thrp_qos_sync_ipc_override == THREAD_QOS_UNSPECIFIED);
 
 	/*
 	 * The QoS relative priority is only applicable when the original programmer's
@@ -1598,55 +1680,6 @@ proc_set_thread_policy(thread_t   thread,
 }
 
 /*
- * KPI for pthread kext to call to set thread base QoS values during a workq wakeup
- * May be called with interrupts disabled and workqueue/waitqueue/kqueue locks held
- *
- * Does NOT do update completion, so the thread MUST be in a safe place WRT
- * IO throttling and SFI.
- *
- * TODO: Can I assert 'it must be in a safe place'?
- */
-kern_return_t
-thread_set_workq_qos(thread_t   thread,
-                     int        qos_tier,
-                     int        relprio) /* relprio is -16 to 0 */
-{
-	assert(qos_tier >= 0 && qos_tier <= THREAD_QOS_LAST);
-	assert(relprio  <= 0 && relprio  >= THREAD_QOS_MIN_TIER_IMPORTANCE);
-
-	if (!(qos_tier >= 0 && qos_tier <= THREAD_QOS_LAST))
-		return KERN_FAILURE;
-	if (!(relprio  <= 0 && relprio  >= THREAD_QOS_MIN_TIER_IMPORTANCE))
-		return KERN_FAILURE;
-
-	if (qos_tier == THREAD_QOS_UNSPECIFIED) {
-		assert(relprio == 0);
-		if (relprio != 0)
-			return KERN_FAILURE;
-	}
-
-	assert(thread->static_param);
-	if (!thread->static_param) {
-		return KERN_FAILURE;
-	}
-
-	/* Concern: this doesn't hold the mutex... */
-	//if (!thread->active)
-	//	return KERN_TERMINATED;
-
-	struct task_pend_token pend_token = {};
-
-	proc_set_thread_policy_locked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS_AND_RELPRIO, qos_tier, -relprio, &pend_token);
-
-	assert(pend_token.tpt_update_sockets == 0);
-	/* we don't need to update throttle or sfi because pthread kext promises the thread is in a safe place */
-	/* TODO: Do we need to update SFI to ensure it gets tagged with the AST? */
-
-	return KERN_SUCCESS;
-}
-
-
-/*
  * Do the things that can't be done while holding a thread mutex.
  * These are set up to call back into thread policy to get the latest value,
  * so they don't have to be synchronized with the update.
@@ -1804,6 +1837,11 @@ thread_set_requested_policy_spinlocked(thread_t     thread,
 			DTRACE_BOOST3(qos_set, uint64_t, thread->thread_id, int, requested.thrp_qos, int, requested.thrp_qos_relprio);
 			break;
 
+		case TASK_POLICY_QOS_WORKQ_OVERRIDE:
+			assert(category == TASK_POLICY_ATTRIBUTE);
+			requested.thrp_qos_workq_override = value;
+			break;
+
 		case TASK_POLICY_QOS_PROMOTE:
 			assert(category == TASK_POLICY_ATTRIBUTE);
 			requested.thrp_qos_promote = value;
@@ -1812,11 +1850,6 @@ thread_set_requested_policy_spinlocked(thread_t     thread,
 		case TASK_POLICY_QOS_IPC_OVERRIDE:
 			assert(category == TASK_POLICY_ATTRIBUTE);
 			requested.thrp_qos_ipc_override = value;
-			break;
-
-		case TASK_POLICY_QOS_SYNC_IPC_OVERRIDE:
-			assert(category == TASK_POLICY_ATTRIBUTE);
-			requested.thrp_qos_sync_ipc_override = value;
 			break;
 
 		case TASK_POLICY_TERMINATED:
@@ -1922,6 +1955,10 @@ thread_get_requested_policy_spinlocked(thread_t thread,
 		case TASK_POLICY_THROUGH_QOS:
 			assert(category == TASK_POLICY_ATTRIBUTE);
 			value = requested.thrp_through_qos;
+			break;
+		case TASK_POLICY_QOS_WORKQ_OVERRIDE:
+			assert(category == TASK_POLICY_ATTRIBUTE);
+			value = requested.thrp_qos_workq_override;
 			break;
 		case TASK_POLICY_QOS_AND_RELPRIO:
 			assert(category == TASK_POLICY_ATTRIBUTE);
@@ -2218,11 +2255,6 @@ static void canonicalize_resource_and_type(user_addr_t *resource, int *resource_
 		*resource_type = THREAD_QOS_OVERRIDE_TYPE_UNKNOWN;
 	} else if (qos_override_mode == QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE) {
 		/* no transform */
-	} else if (qos_override_mode == QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE_BUT_IGNORE_DISPATCH) {
-		/* Map all dispatch overrides to a single one, to avoid memory overhead */
-		if (*resource_type == THREAD_QOS_OVERRIDE_TYPE_DISPATCH_ASYNCHRONOUS_OVERRIDE) {
-			*resource = USER_ADDR_NULL;
-		}
 	} else if (qos_override_mode == QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE_BUT_SINGLE_MUTEX_OVERRIDE) {
 		/* Map all mutex overrides to a single one, to avoid memory overhead */
 		if (*resource_type == THREAD_QOS_OVERRIDE_TYPE_PTHREAD_MUTEX) {
@@ -2314,11 +2346,7 @@ calculate_requested_qos_override(thread_t thread)
 
 	override = thread->overrides;
 	while (override) {
-		if (qos_override_mode != QOS_OVERRIDE_MODE_FINE_GRAINED_OVERRIDE_BUT_IGNORE_DISPATCH ||
-			override->override_resource_type != THREAD_QOS_OVERRIDE_TYPE_DISPATCH_ASYNCHRONOUS_OVERRIDE) {
-			qos_override = MAX(qos_override, override->override_qos);
-		}
-
+		qos_override = MAX(qos_override, override->override_qos);
 		override = override->override_next;
 	}
 
@@ -2329,19 +2357,13 @@ calculate_requested_qos_override(thread_t thread)
  * Returns:
  * - 0 on success
  * - EINVAL if some invalid input was passed
- * - EFAULT if user_lock_addr != NULL and needs to be faulted (userland has to
- *   fault and retry)
- * - ESTALE if user_lock_addr != NULL &&
- *   ulock_owner_value_to_port_name(*user_lock_addr) != user_lock_owner
  */
 static int
 proc_thread_qos_add_override_internal(thread_t         thread,
                                       int              override_qos,
                                       boolean_t        first_override_for_resource,
                                       user_addr_t      resource,
-                                      int              resource_type,
-                                      user_addr_t      user_lock_addr,
-                                      mach_port_name_t user_lock_owner)
+                                      int              resource_type)
 {
 	struct task_pend_token pend_token = {};
 	int rc = 0;
@@ -2372,26 +2394,6 @@ proc_thread_qos_add_override_internal(thread_t         thread,
 		override_new = zalloc(thread_qos_override_zone);
 		thread_mtx_lock(thread);
 		override = find_qos_override(thread, resource, resource_type);
-	}
-	if (user_lock_addr) {
-		uint64_t val;
-		/* Workaround lack of explicit support for 'no-fault copyin'
-		 * <rdar://problem/24999882>, as disabling preemption prevents paging in
-		 */
-		disable_preemption();
-		rc = copyin_word(user_lock_addr, &val, sizeof(user_lock_owner));
-		enable_preemption();
-		if (rc == 0 && ulock_owner_value_to_port_name((uint32_t)val) != user_lock_owner) {
-			rc = ESTALE;
-		}
-		if (rc) {
-			prev_qos_override = proc_get_thread_policy_locked(thread,
-					TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS_OVERRIDE, NULL);
-			new_qos_override = prev_qos_override;
-			new_effective_qos = proc_get_effective_thread_policy(thread, TASK_POLICY_QOS);
-			thread_mtx_unlock(thread);
-			goto out;
-		}
 	}
 	if (first_override_for_resource && override) {
 		/* Someone else already allocated while the thread lock was dropped */
@@ -2435,7 +2437,6 @@ proc_thread_qos_add_override_internal(thread_t         thread,
 
 	thread_policy_update_complete_unlocked(thread, &pend_token);
 
-out:
 	if (override_new) {
 		zfree(thread_qos_override_zone, override_new);
 	}
@@ -2450,20 +2451,6 @@ out:
 }
 
 int
-proc_thread_qos_add_override_check_owner(thread_t thread,
-                                         int override_qos,
-                                         boolean_t first_override_for_resource,
-                                         user_addr_t resource,
-                                         int resource_type,
-                                         user_addr_t user_lock_addr,
-                                         mach_port_name_t user_lock_owner)
-{
-	return proc_thread_qos_add_override_internal(thread, override_qos,
-			first_override_for_resource, resource, resource_type,
-			user_lock_addr, user_lock_owner);
-}
-
-boolean_t
 proc_thread_qos_add_override(task_t           task,
                              thread_t         thread,
                              uint64_t         tid,
@@ -2482,33 +2469,31 @@ proc_thread_qos_add_override(task_t           task,
 		if (thread == THREAD_NULL) {
 			KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_ADD_OVERRIDE)) | DBG_FUNC_NONE,
 								  tid, 0, 0xdead, 0, 0);
-			return FALSE;
+			return ESRCH;
 		}
 		has_thread_reference = TRUE;
 	} else {
 		assert(thread->task == task);
 	}
 	rc = proc_thread_qos_add_override_internal(thread, override_qos,
-			first_override_for_resource, resource, resource_type, 0, 0);
+			first_override_for_resource, resource, resource_type);
 	if (has_thread_reference) {
 		thread_deallocate(thread);
 	}
 
-	return rc == 0;
+	return rc;
 }
 
-static int
+static void
 proc_thread_qos_remove_override_internal(thread_t       thread,
                                          user_addr_t    resource,
                                          int            resource_type,
-                                         boolean_t      reset,
-                                         boolean_t      squash)
+                                         boolean_t      reset)
 {
 	struct task_pend_token pend_token = {};
 
 	struct thread_qos_override *deferred_free_override_list = NULL;
-	int new_qos_override, prev_qos_override, new_effective_qos, prev_qos;
-	int new_qos = THREAD_QOS_UNSPECIFIED;
+	int new_qos_override, prev_qos_override, new_effective_qos;
 
 	thread_mtx_lock(thread);
 
@@ -2536,24 +2521,6 @@ proc_thread_qos_remove_override_internal(thread_t       thread,
 	 */
 	prev_qos_override = thread_get_requested_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS_OVERRIDE, NULL);
 
-	if (squash) {
-		int prev_ipc_override;
-		int prev_override;
-
-		/*
-		 * Remove the specified overrides, and set the current override as the new base QoS.
-		 * Return the new QoS value.
-		 */
-		prev_ipc_override = thread_get_requested_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS_IPC_OVERRIDE, NULL);
-		prev_override = MAX(prev_qos_override, prev_ipc_override);
-
-		prev_qos = thread_get_requested_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS, NULL);
-
-		new_qos = MAX(prev_qos, prev_override);
-		if (new_qos != prev_qos)
-			proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS, new_qos, 0, &pend_token);
-	}
-
 	if (new_qos_override != prev_qos_override)
 		proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS_OVERRIDE, new_qos_override, 0, &pend_token);
 
@@ -2577,12 +2544,10 @@ proc_thread_qos_remove_override_internal(thread_t       thread,
 	              int, new_qos_override, int, new_effective_qos);
 
 	KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_REMOVE_OVERRIDE)) | DBG_FUNC_END,
-	                      thread_tid(thread), squash, 0, 0, 0);
-
-	return new_qos;
+	                      thread_tid(thread), 0, 0, 0, 0);
 }
 
-boolean_t
+int
 proc_thread_qos_remove_override(task_t      task,
                                 thread_t    thread,
                                 uint64_t    tid,
@@ -2598,80 +2563,24 @@ proc_thread_qos_remove_override(task_t      task,
 		if (thread == THREAD_NULL) {
 			KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_REMOVE_OVERRIDE)) | DBG_FUNC_NONE,
 			                      tid, 0, 0xdead, 0, 0);
-			return FALSE;
+			return ESRCH;
 		}
 		has_thread_reference = TRUE;
 	} else {
 		assert(task == thread->task);
 	}
 
-	proc_thread_qos_remove_override_internal(thread, resource, resource_type, FALSE, FALSE);
+	proc_thread_qos_remove_override_internal(thread, resource, resource_type, FALSE);
 
 	if (has_thread_reference)
 		thread_deallocate(thread);
 
-	return TRUE;
-}
-
-boolean_t
-proc_thread_qos_reset_override(task_t       task,
-                               thread_t     thread,
-                               uint64_t     tid,
-                               user_addr_t  resource,
-                               int          resource_type)
-
-{
-	boolean_t has_thread_reference = FALSE;
-
-	if (thread == THREAD_NULL) {
-		thread = task_findtid(task, tid);
-		/* returns referenced thread */
-
-		if (thread == THREAD_NULL) {
-			KERNEL_DEBUG_CONSTANT((IMPORTANCE_CODE(IMP_USYNCH_QOS_OVERRIDE, IMP_USYNCH_REMOVE_OVERRIDE)) | DBG_FUNC_NONE,
-			                      tid, 0, 0xdead, 0, 0);
-			return FALSE;
-		}
-		has_thread_reference = TRUE;
-	} else {
-		assert(task == thread->task);
-	}
-
-	proc_thread_qos_remove_override_internal(thread, resource, resource_type, TRUE, FALSE);
-
-	if (has_thread_reference)
-		thread_deallocate(thread);
-
-	return TRUE;
-}
-
-/*
- * Clears the requested overrides, and replaces the current QoS with the max
- * of the current QoS and the current override, then returns the new QoS.
- *
- * This is useful in order to reset overrides before parking a workqueue thread,
- * but avoid dropping priority and getting preempted right before parking.
- *
- * Called without any locks held.
- */
-int
-proc_thread_qos_squash_override(thread_t thread, user_addr_t resource, int resource_type)
-{
-	return proc_thread_qos_remove_override_internal(thread, resource, resource_type, TRUE, TRUE);
+	return 0;
 }
 
 /* Deallocate before thread termination */
 void proc_thread_qos_deallocate(thread_t thread)
 {
-	/*
-	 * There are no more references to this thread,
-	 * therefore this thread must not own any more locks,
-	 * therefore there must not be any more user promotions.
-	 */
-	assert(thread->user_promotions == 0);
-	assert(thread->requested_policy.thrp_qos_promote == THREAD_QOS_UNSPECIFIED);
-	assert(thread->user_promotion_basepri == 0);
-
 	/* This thread must have no more IPC overrides. */
 	assert(thread->ipc_overrides == 0);
 	assert(thread->requested_policy.thrp_qos_ipc_override == THREAD_QOS_UNSPECIFIED);
@@ -2746,147 +2655,76 @@ task_get_default_manager_qos(task_t task)
 	return primordial_qos;
 }
 
-
 /*
- * Promote thread with the user level properties of 'promoter'
- * Mutexes may be held, but it's OK to take the throttle lock
+ * Check if the user promotion on thread has changed
+ * and apply it.
  *
- * if 'new_promotion' is TRUE, this is a new promotion.
- * if FALSE, we are updating an existing promotion.
+ * thread locked on entry, might drop the thread lock
+ * and reacquire it.
  */
-static void
-thread_user_promotion_promote(thread_t  thread,
-                              thread_t  promoter,
-                              struct promote_token* promote_token,
-                              boolean_t new_promotion)
+boolean_t
+thread_recompute_user_promotion_locked(thread_t thread)
 {
+	boolean_t needs_update = FALSE;
 	struct task_pend_token pend_token = {};
+	int user_promotion_basepri = MIN(thread_get_inheritor_turnstile_priority(thread), MAXPRI_USER);
+	int old_base_pri = thread->base_pri;
+	thread_qos_t qos_promotion;
 
-	uint32_t promoter_base_pri = 0, promoter_qos = THREAD_QOS_UNSPECIFIED;
-
-	spl_t s = splsched();
-	thread_lock(promoter);
-
-	/*
-	 * We capture the 'promotion qos' here, which is captured
-	 * before task-level clamping.
-	 *
-	 * This means that if the process gets unclamped while a promotion,
-	 * is in effect, the owning thread ends up with the correct QoS.
-	 *
-	 * This does NOT work correctly across processes, as the correct QoS
-	 * in one is not necessarily the correct QoS in another.
-	 * When we add support for multi-process ulock boosting, we need to
-	 * do something more complex.
-	 */
-	promoter_qos = promoter->effective_policy.thep_qos_promote;
-
-	/* TODO: extract 'effective unclamped base pri' instead */
-	promoter_base_pri = promoter->base_pri;
-
-	thread_unlock(promoter);
-	splx(s);
-
-	/* clamp out realtime to max user pri */
-	promoter_base_pri = MIN(promoter_base_pri, MAXPRI_USER);
-
-	/* add in the saved promotion token */
-	assert(promote_token->pt_basepri <= MAXPRI_USER);
-
-	promoter_base_pri = MAX(promoter_base_pri, promote_token->pt_basepri);
-	promoter_qos = MAX(promoter_qos, promote_token->pt_qos);
-
-	/* save the max for later */
-	promote_token->pt_basepri = promoter_base_pri;
-	promote_token->pt_qos = promoter_qos;
-
-	s = splsched();
-	thread_lock(thread);
-
-	if (new_promotion) {
-		if (thread->user_promotions == 0) {
-			assert(thread->requested_policy.thrp_qos_promote == THREAD_QOS_UNSPECIFIED);
-			assert(thread->user_promotion_basepri == 0);
-		}
-
-		thread->user_promotions++;
+	/* Check if user promotion has changed */
+	if (thread->user_promotion_basepri == user_promotion_basepri) {
+		return needs_update;
 	} else {
-		assert(thread->user_promotions > 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+			(TURNSTILE_CODE(TURNSTILE_PRIORITY_OPERATIONS, (THREAD_USER_PROMOTION_CHANGE))) | DBG_FUNC_NONE,
+			thread_tid(thread),
+			user_promotion_basepri,
+			thread->user_promotion_basepri,
+			0, 0);
 	}
 
-	uint32_t thread_qos     = thread->requested_policy.thrp_qos_promote;
-	uint32_t thread_basepri = thread->user_promotion_basepri;
+	/* Update the user promotion base pri */
+	thread->user_promotion_basepri = user_promotion_basepri;
+	pend_token.tpt_force_recompute_pri = 1;
 
-	uint32_t new_qos     = MAX(thread_qos, promoter_qos);
-	uint32_t new_basepri = MAX(thread_basepri, promoter_base_pri);
+	if (user_promotion_basepri <= MAXPRI_THROTTLE) {
+		qos_promotion = THREAD_QOS_UNSPECIFIED;
+	} else {
+		qos_promotion = thread_user_promotion_qos_for_pri(user_promotion_basepri);
+	}
 
-	/* TODO: Fast path the 'new is lower than effective' case to avoid full reevaluation */
-	if (thread_qos != new_qos || thread_basepri != new_basepri) {
+	proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
+			TASK_POLICY_QOS_PROMOTE, qos_promotion, 0, &pend_token);
 
-		thread->user_promotion_basepri = new_basepri;
-
-		pend_token.tpt_force_recompute_pri = 1;
-
-		proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
-		                                  TASK_POLICY_QOS_PROMOTE, new_qos,
-		                                  0, &pend_token);
+	if (thread_get_waiting_turnstile(thread) &&
+	    thread->base_pri != old_base_pri) {
+		needs_update = TRUE;
 	}
 
 	thread_unlock(thread);
-	splx(s);
 
 	thread_policy_update_complete_unlocked(thread, &pend_token);
-}
 
-/* Add a user promotion to thread */
-void
-thread_user_promotion_add(thread_t thread,
-                          thread_t promoter,
-                          struct promote_token* promote_token)
-{
-	thread_user_promotion_promote(thread, promoter, promote_token, TRUE);
-}
+	thread_lock(thread);
 
-/* Update an existing user promotion on thread */
-void
-thread_user_promotion_update(thread_t thread,
-                             thread_t promoter,
-                             struct promote_token* promote_token)
-{
-	thread_user_promotion_promote(thread, promoter, promote_token, FALSE);
+	return needs_update;
 }
 
 /*
- * Drop a user promotion on thread
- * Mutexes may be held, but it's OK to take the throttle lock
+ * Convert the thread user promotion base pri to qos for threads in qos world.
+ * For priority above UI qos, the qos would be set to UI.
  */
-void
-thread_user_promotion_drop(thread_t thread)
+thread_qos_t
+thread_user_promotion_qos_for_pri(int priority)
 {
-	struct task_pend_token pend_token = {};
-
-	spl_t s = splsched();
-	thread_lock(thread);
-
-	assert(thread->user_promotions > 0);
-
-	if (--thread->user_promotions == 0) {
-		thread->requested_policy.thrp_qos_promote = THREAD_QOS_UNSPECIFIED;
-		thread->user_promotion_basepri = 0;
-
-		pend_token.tpt_force_recompute_pri = 1;
-
-		proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
-		                                  TASK_POLICY_QOS_PROMOTE, THREAD_QOS_UNSPECIFIED,
-		                                  0, &pend_token);
+	int qos;
+	for (qos = THREAD_QOS_USER_INTERACTIVE; qos > THREAD_QOS_MAINTENANCE; qos--) {
+		if (thread_qos_policy_params.qos_pri[qos] <= priority) {
+			return qos;
+		}
 	}
-
-	thread_unlock(thread);
-	splx(s);
-
-	thread_policy_update_complete_unlocked(thread, &pend_token);
+	return THREAD_QOS_MAINTENANCE;
 }
-
 
 /*
  * Set the thread's QoS IPC override
@@ -2914,6 +2752,7 @@ thread_ipc_override(thread_t    thread,
 
 	assert(qos_override > THREAD_QOS_UNSPECIFIED);
 	assert(qos_override < THREAD_QOS_LAST);
+
 	if (is_new_override) {
 		if (thread->ipc_overrides++ == 0) {
 			/* This add is the first override for this thread */
@@ -2948,10 +2787,6 @@ thread_ipc_override(thread_t    thread,
 	thread_unlock(thread);
 	splx(s);
 
-	/*
-	 * this is only safe after rethrottle_thread supports
-	 * being called from spinlock context
-	 */
 	thread_policy_update_complete_unlocked(thread, &pend_token);
 }
 
@@ -2993,88 +2828,20 @@ thread_drop_ipc_override(thread_t thread)
 	thread_unlock(thread);
 	splx(s);
 
-	/*
-	 * this is only safe after rethrottle_thread supports
-	 * being called from spinlock context
-	 */
 	thread_policy_update_complete_unlocked(thread, &pend_token);
 }
 
-void
-thread_add_sync_ipc_override(thread_t	thread)
+/* Get current requested qos / relpri, may be called from spinlock context */
+thread_qos_t
+thread_get_requested_qos(thread_t thread, int *relpri)
 {
-	struct task_pend_token pend_token = {};
+	int relprio_value = 0;
+	thread_qos_t qos;
 
-	spl_t s = splsched();
-	thread_lock(thread);
-
-	uint32_t old_override __unused = thread->requested_policy.thrp_qos_sync_ipc_override;
-
-	if (thread->sync_ipc_overrides++ == 0) {
-		/* This add is the first override for this thread */
-		assert(old_override == THREAD_QOS_UNSPECIFIED);
-	} else {
-		/* There are already other overrides in effect for this thread */
-		assert(old_override == THREAD_QOS_USER_INTERACTIVE);
-		thread_unlock(thread);
-		splx(s);
-		return;
-	}
-
-	uint32_t new_override = THREAD_QOS_USER_INTERACTIVE;
-
-	proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
-	                                  TASK_POLICY_QOS_SYNC_IPC_OVERRIDE,
-	                                  new_override, 0, &pend_token);
-
-	assert(pend_token.tpt_update_sockets == 0);
-
-	thread_unlock(thread);
-	splx(s);
-
-	/*
-	 * this is only safe after rethrottle_thread supports
-	 * being called from spinlock context
-	 */
-	thread_policy_update_complete_unlocked(thread, &pend_token);
-}
-
-void
-thread_drop_sync_ipc_override(thread_t thread)
-{
-	struct task_pend_token pend_token = {};
-
-	spl_t s = splsched();
-	thread_lock(thread);
-
-	assert(thread->sync_ipc_overrides > 0);
-
-	if (--thread->sync_ipc_overrides == 0) {
-		/*
-		 * There are no more overrides for this thread, so we should
-		 * clear out the saturated override value
-		 */
-
-		proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
-		                                  TASK_POLICY_QOS_SYNC_IPC_OVERRIDE, THREAD_QOS_UNSPECIFIED,
-		                                  0, &pend_token);
-	}
-
-	thread_unlock(thread);
-	splx(s);
-
-	/*
-	 * this is only safe after rethrottle_thread supports
-	 * being called from spinlock context
-	 */
-	thread_policy_update_complete_unlocked(thread, &pend_token);
-}
-
-/* Get current IPC override, may be called from spinlock context */
-uint32_t
-thread_get_ipc_override(thread_t thread)
-{
-	return proc_get_thread_policy_locked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS_IPC_OVERRIDE, NULL);
+	qos = proc_get_thread_policy_locked(thread, TASK_POLICY_ATTRIBUTE,
+			TASK_POLICY_QOS_AND_RELPRIO, &relprio_value);
+	if (relpri) *relpri = -relprio_value;
+	return qos;
 }
 
 /*
@@ -3082,27 +2849,16 @@ thread_get_ipc_override(thread_t thread)
  * since exec could block other threads calling
  * proc_find on the proc. This boost must be removed
  * via call to thread_clear_exec_promotion.
+ *
+ * This should be replaced with a generic 'priority inheriting gate' mechanism (24194397)
  */
 void
 thread_set_exec_promotion(thread_t thread)
 {
-	spl_t s;
-
-	s = splsched();
+	spl_t s = splsched();
 	thread_lock(thread);
 
-	assert((thread->sched_flags & TH_SFLAG_EXEC_PROMOTED) == 0);
-
-	if (thread->sched_pri < EXEC_BOOST_PRIORITY ||
-	    !(thread->sched_flags & TH_SFLAG_EXEC_PROMOTED)) {
-		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_EXEC_PROMOTE) | DBG_FUNC_NONE,
-				      (uintptr_t)thread_tid(thread),
-				      thread->sched_pri, thread->base_pri,
-				      EXEC_BOOST_PRIORITY, 0);
-		thread->sched_flags |= TH_SFLAG_EXEC_PROMOTED;
-		if (thread->sched_pri < EXEC_BOOST_PRIORITY)
-			set_sched_pri(thread, EXEC_BOOST_PRIORITY);
-	}
+	sched_thread_promote_reason(thread, TH_SFLAG_EXEC_PROMOTED, 0);
 
 	thread_unlock(thread);
 	splx(s);
@@ -3115,34 +2871,12 @@ thread_set_exec_promotion(thread_t thread)
 void
 thread_clear_exec_promotion(thread_t thread)
 {
-	spl_t s;
-
-	s = splsched();
+	spl_t s = splsched();
 	thread_lock(thread);
-	assert(thread->sched_flags & TH_SFLAG_EXEC_PROMOTED);
 
-	if (thread->sched_flags & TH_SFLAG_EXEC_PROMOTED) {
-		thread->sched_flags &= ~TH_SFLAG_EXEC_PROMOTED;
-
-		if (thread->sched_flags & TH_SFLAG_PROMOTED_MASK) {
-			/* it still has other promotions (mutex/rw_lock) */
-		} else if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_EXEC_DEMOTE) | DBG_FUNC_NONE,
-					      (uintptr_t)thread_tid(thread),
-					      thread->sched_pri,
-					      thread->base_pri,
-					      DEPRESSPRI, 0);
-			set_sched_pri(thread, DEPRESSPRI);
-		} else {
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_EXEC_DEMOTE) | DBG_FUNC_NONE,
-					      (uintptr_t)thread_tid(thread),
-					      thread->sched_pri,
-					      thread->base_pri,
-					      thread->base_pri, 0);
-			thread_recompute_sched_pri(thread, FALSE);
-		}
-	}
+	sched_thread_unpromote_reason(thread, TH_SFLAG_EXEC_PROMOTED, 0);
 
 	thread_unlock(thread);
 	splx(s);
 }
+

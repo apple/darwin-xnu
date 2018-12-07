@@ -69,6 +69,8 @@
  */
 #define HOST_SECURITY_PORT               0
 
+#define HOST_MIN_SPECIAL_PORT            HOST_SECURITY_PORT
+
 /*
  * Always provided by kernel (cannot be set from user-space).
  */
@@ -76,6 +78,8 @@
 #define HOST_PRIV_PORT                   2
 #define HOST_IO_MASTER_PORT              3
 #define HOST_MAX_SPECIAL_KERNEL_PORT     7 /* room to grow */
+
+#define HOST_LAST_SPECIAL_KERNEL_PORT    HOST_IO_MASTER_PORT
 
 /*
  * Not provided by kernel
@@ -101,9 +105,10 @@
 #define HOST_NODE_PORT			(19 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_RESOURCE_NOTIFY_PORT	(20 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_CLOSURED_PORT		(21 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_SYSPOLICYD_PORT		(22 + HOST_MAX_SPECIAL_KERNEL_PORT)
 
-#define HOST_MAX_SPECIAL_PORT		HOST_CLOSURED_PORT
-                                        /* MAX = last since rdar://19421223 */
+#define HOST_MAX_SPECIAL_PORT		HOST_SYSPOLICYD_PORT
+                                        /* MAX = last since rdar://35861175 */
 
 /* obsolete name */
 #define HOST_CHUD_PORT HOST_LAUNCHCTL_PORT
@@ -248,6 +253,12 @@
 	HOST_LOCAL_NODE, HOST_CLOSURED_PORT, (port)))
 #define host_set_closured_port(host, port)	\
 	(host_set_special_port((host), HOST_CLOSURED_PORT, (port)))
+
+#define host_get_syspolicyd_port(host, port)	\
+	(host_get_special_port((host),				\
+	HOST_LOCAL_NODE, HOST_SYSPOLICYD_PORT, (port)))
+#define host_set_syspolicyd_port(host, port)	\
+	(host_set_special_port((host), HOST_SYSPOLICYD_PORT, (port)))
 
 /* HOST_RESOURCE_NOTIFY_PORT doesn't #defines these conveniences.
    All lookups go through send_resource_violation()

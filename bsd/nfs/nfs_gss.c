@@ -1598,13 +1598,15 @@ nfs_gss_clnt_ctx_callserver(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 		FREE(cp->gss_clnt_handle, M_TEMP);
 		cp->gss_clnt_handle = NULL;
 	}
-	if (cp->gss_clnt_handle_len > 0) {
+	if (cp->gss_clnt_handle_len > 0 && cp->gss_clnt_handle_len < GSS_MAX_CTX_HANDLE_LEN) {
 		MALLOC(cp->gss_clnt_handle, u_char *, cp->gss_clnt_handle_len, M_TEMP, M_WAITOK);
 		if (cp->gss_clnt_handle == NULL) {
 			error = ENOMEM;
 			goto nfsmout;
 		}
 		nfsm_chain_get_opaque(error, &nmrep, cp->gss_clnt_handle_len, cp->gss_clnt_handle);
+	} else {
+		error = EBADRPC;
 	}
 	nfsm_chain_get_32(error, &nmrep, cp->gss_clnt_major);
 	nfsm_chain_get_32(error, &nmrep, cp->gss_clnt_minor);
@@ -1612,13 +1614,15 @@ nfs_gss_clnt_ctx_callserver(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	nfsm_chain_get_32(error, &nmrep, cp->gss_clnt_tokenlen);
 	if (error)
 		goto nfsmout;
-	if (cp->gss_clnt_tokenlen > 0) {
+	if (cp->gss_clnt_tokenlen > 0 && cp->gss_clnt_tokenlen < GSS_MAX_TOKEN_LEN) {
 		MALLOC(cp->gss_clnt_token, u_char *, cp->gss_clnt_tokenlen, M_TEMP, M_WAITOK);
 		if (cp->gss_clnt_token == NULL) {
 			error = ENOMEM;
 			goto nfsmout;
 		}
 		nfsm_chain_get_opaque(error, &nmrep, cp->gss_clnt_tokenlen, cp->gss_clnt_token);
+	} else {
+		error = EBADRPC;
 	}
 
 	/*
@@ -3065,7 +3069,9 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 			nmc_tmp = *nmc;
 			nfsm_chain_adv(error, &nmc_tmp, arglen);
 			nfsm_chain_get_32(error, &nmc_tmp, cksum.length);
-			MALLOC(cksum.value, void *, cksum.length, M_TEMP, M_WAITOK);
+			cksum.value = NULL;
+			if (cksum.length > 0 && cksum.length < GSS_MAX_MIC_LEN)
+				MALLOC(cksum.value, void *, cksum.length, M_TEMP, M_WAITOK);
 
 			if (cksum.value == NULL) {
 				error = EBADRPC;
@@ -3354,11 +3360,9 @@ nfs_gss_svc_ctx_init(struct nfsrv_descript *nd, struct nfsrv_sock *slp, mbuf_t *
 	case RPCSEC_GSS_CONTINUE_INIT:
 		/* Get the token from the request */
 		nfsm_chain_get_32(error, nmreq, cp->gss_svc_tokenlen);
-		if (cp->gss_svc_tokenlen == 0) {
-			autherr = RPCSEC_GSS_CREDPROBLEM;
-			break;
-		}
-		MALLOC(cp->gss_svc_token, u_char *, cp->gss_svc_tokenlen, M_TEMP, M_WAITOK);
+		cp->gss_svc_token = NULL;
+		if (cp->gss_svc_tokenlen > 0 && cp->gss_svc_tokenlen < GSS_MAX_TOKEN_LEN)
+			MALLOC(cp->gss_svc_token, u_char *, cp->gss_svc_tokenlen, M_TEMP, M_WAITOK);
 		if (cp->gss_svc_token == NULL) {
 			autherr = RPCSEC_GSS_CREDPROBLEM;
 			break;

@@ -29,6 +29,7 @@
 #ifndef _ARM_ATOMIC_H_
 #define _ARM_ATOMIC_H_
 
+#include <mach/boolean.h>
 #include <arm/smp.h>
 
 // Parameter for __builtin_arm_dmb
@@ -213,6 +214,7 @@ atomic_compare_exchange(uintptr_t *target, uintptr_t oldval, uintptr_t newval,
 #endif // ATOMIC_PRIVATE
 
 #if __arm__
+#undef os_atomic_rmw_loop
 #define os_atomic_rmw_loop(p, ov, nv, m, ...)  ({ \
 		boolean_t _result = FALSE; uint32_t _err = 0; \
 		typeof(atomic_load(p)) *_p = (typeof(atomic_load(p)) *)(p); \
@@ -234,7 +236,14 @@ atomic_compare_exchange(uintptr_t *target, uintptr_t oldval, uintptr_t newval,
 		} \
 		_result; \
 	})
+
+#undef os_atomic_rmw_loop_give_up
+#define os_atomic_rmw_loop_give_up(expr) \
+		({ __builtin_arm_clrex(); expr; __builtin_trap(); })
+
 #else
+
+#undef os_atomic_rmw_loop
 #define os_atomic_rmw_loop(p, ov, nv, m, ...)  ({ \
 		boolean_t _result = FALSE; \
 		typeof(atomic_load(p)) *_p = (typeof(atomic_load(p)) *)(p); \
@@ -253,9 +262,25 @@ atomic_compare_exchange(uintptr_t *target, uintptr_t oldval, uintptr_t newval,
 		} while (__builtin_expect(!_result, 0)); \
 		_result; \
 	})
-#endif
 
+#undef os_atomic_rmw_loop_give_up
 #define os_atomic_rmw_loop_give_up(expr) \
 		({ __builtin_arm_clrex(); expr; __builtin_trap(); })
+#endif
+
+#undef os_atomic_force_dependency_on
+#if defined(__arm64__)
+#define os_atomic_force_dependency_on(p, e) ({ \
+		unsigned long _v; \
+		__asm__("and %x[_v], %x[_e], xzr" : [_v] "=r" (_v) : [_e] "r" (e)); \
+		(typeof(*(p)) *)((char *)(p) + _v); \
+	})
+#else
+#define os_atomic_force_dependency_on(p, e) ({ \
+		unsigned long _v; \
+		__asm__("and %[_v], %[_e], #0" : [_v] "=r" (_v) : [_e] "r" (e)); \
+		(typeof(*(p)) *)((char *)(p) + _v); \
+	})
+#endif // defined(__arm64__)
 
 #endif // _ARM_ATOMIC_H_

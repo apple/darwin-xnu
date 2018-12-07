@@ -967,7 +967,7 @@ static int
 dev_dup_entry(devnode_t * parent, devdirent_t * back, devdirent_t * *dnm_pp,
 	      struct devfsmount *dvm)
 {
-	devdirent_t *	entry_p;
+	devdirent_t *	entry_p = NULL;
 	devdirent_t *	newback;
 	devdirent_t *	newfront;
 	int	error;
@@ -978,10 +978,14 @@ dev_dup_entry(devnode_t * parent, devdirent_t * back, devdirent_t * *dnm_pp,
 	 * go get the node made (if we need to)
 	 * use the back one as a prototype
 	 */
-	if ((error = dev_add_entry(back->de_name, parent, type,
-				NULL, dnp,
-				parent?parent->dn_dvm:dvm, &entry_p)) != 0) {
+    error = dev_add_entry(back->de_name, parent, type, NULL, dnp,
+                          parent?parent->dn_dvm:dvm, &entry_p);
+    if (!error && (entry_p == NULL)) {
+        error = ENOMEM; /* Really can't happen, but make static analyzer happy */
+    }
+	if (error != 0) {
 		printf("duplicating %s failed\n",back->de_name);
+        goto out;
 	}
 
 	/*
@@ -1009,6 +1013,7 @@ dev_dup_entry(devnode_t * parent, devdirent_t * back, devdirent_t * *dnm_pp,
 			}
 		}
 	}
+out:
 	*dnm_pp = entry_p;
 	return error;
 }

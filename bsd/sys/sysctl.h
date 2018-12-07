@@ -1139,6 +1139,7 @@ extern char	machine[];
 extern char	osrelease[];
 extern char	ostype[];
 extern char	osversion[];
+extern char	osbuild_config[];
 
 struct linker_set;
 

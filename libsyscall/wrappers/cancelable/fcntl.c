@@ -21,7 +21,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#if defined(__LP64__) || defined(__arm__)
+#if !defined(__i386__)
 
 #undef __DARWIN_NON_CANCELABLE
 #define __DARWIN_NON_CANCELABLE 1

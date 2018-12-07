@@ -81,6 +81,9 @@
 #include <net/kext_net.h>
 #include <sys/ev.h>
 #include <uuid/uuid.h>
+#ifdef BSD_KERNEL_PRIVATE
+#include <sys/eventhandler.h>
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* KERNEL_PRIVATE */
 
 typedef	u_quad_t so_gen_t;
@@ -310,7 +313,11 @@ struct socket {
 	struct msg_state *so_msg_state;		/* unordered snd/rcv state */
 	struct flow_divert_pcb	*so_fd_pcb;	/* Flow Divert control block */
 
-	struct cfil_info	*so_cfil;
+#if CONTENT_FILTER
+	struct cfil_info    *so_cfil;
+	struct cfil_db      *so_cfil_db;
+	u_int32_t           so_state_change_cnt; /* incr for each connect, disconnect */
+#endif
 
 	u_int32_t	so_eventmask;		/* event mask */
 
@@ -748,6 +755,7 @@ __BEGIN_DECLS
 /* Exported */
 extern int sbappendaddr(struct sockbuf *sb, struct sockaddr *asa,
     struct mbuf *m0, struct mbuf *control, int *error_out);
+extern int sbappendchain(struct sockbuf *sb, struct mbuf *m, int space);
 extern int sbappendrecord(struct sockbuf *sb, struct mbuf *m0);
 extern void sbflush(struct sockbuf *sb);
 extern int sbspace(struct sockbuf *sb);
@@ -776,11 +784,17 @@ extern void soreserve_preconnect(struct socket *so, unsigned int pre_cc);
 extern void sorwakeup(struct socket *so);
 extern int sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
     struct mbuf *top, struct mbuf *control, int flags);
+extern int sosend_reinject(struct socket *so, struct sockaddr *addr, struct mbuf *top,
+						   struct mbuf *control, uint32_t sendflags);
 extern int sosend_list(struct socket *so, struct uio **uio, u_int uiocnt,
     int flags);
 extern int soreceive_list(struct socket *so, struct recv_msg_elem *msgarray,
     u_int msgcnt, int *flags);
 extern void sonullevent(struct socket *so, void *arg, uint32_t hint);
+extern struct mbuf *sbconcat_mbufs(struct sockbuf *sb, struct sockaddr *asa, struct mbuf *m0,
+								   struct mbuf *control);
+
+
 __END_DECLS
 
 #ifdef BSD_KERNEL_PRIVATE

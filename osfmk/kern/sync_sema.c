@@ -66,6 +66,8 @@ static unsigned int semaphore_event;
 zone_t semaphore_zone;
 unsigned int semaphore_max;
 
+os_refgrp_decl(static, sema_refgrp, "semaphore", NULL);
+
 /* Forward declarations */
 
 
@@ -184,7 +186,7 @@ semaphore_create(
 	 * Initialize the semaphore values.
 	 */
 	s->port	= IP_NULL;
-	s->ref_count = 1;
+	os_ref_init(&s->ref_count, &sema_refgrp);
 	s->count = value;
 	s->active = TRUE;
 	s->owner = task;
@@ -280,11 +282,12 @@ semaphore_destroy(
 
 	if (semaphore->owner != task) {
 		semaphore_unlock(semaphore);
+		semaphore_dereference(semaphore);
 		splx(spl_level);
 		task_unlock(task);
 		return KERN_INVALID_ARGUMENT;
 	}
-			
+
 	semaphore_destroy_internal(task, semaphore);
 	/* semaphore unlocked */
 
@@ -1105,7 +1108,7 @@ void
 semaphore_reference(
 	semaphore_t		semaphore)
 {
-	(void)hw_atomic_add(&semaphore->ref_count, 1);
+	os_ref_retain(&semaphore->ref_count);
 }
 
 /*
@@ -1124,8 +1127,9 @@ semaphore_dereference(
 	if (semaphore == NULL)
 		return;
 
-	if (hw_atomic_sub(&semaphore->ref_count, 1) != 0)
+	if (os_ref_release(&semaphore->ref_count) > 0) {
 		return;
+	}
 
 	/*
 	 * Last ref, clean up the port [if any]

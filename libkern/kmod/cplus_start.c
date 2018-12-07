@@ -42,7 +42,3 @@
     The linkline must look like this.
         *.o -lkmodc++ kmod_info.o -lkmod
  */
-
-/* The following preprocessor test must match exactly with the architectures
- * that define the CONFIG_STATIC_CPPINIT config option.
- */

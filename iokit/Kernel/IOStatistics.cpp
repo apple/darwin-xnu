@@ -762,7 +762,7 @@ int IOStatistics::getWorkLoopStatistics(sysctl_req *req)
 		error = ENOMEM;
 		goto exit;
 	}
-
+	memset(buffer, 0, calculatedSize);
 	header = (IOStatisticsWorkLoopHeader*)((void*)buffer);
 	
 	header->sig = IOSTATISTICS_SIG_WORKLOOP;
@@ -827,7 +827,7 @@ int IOStatistics::getUserClientStatistics(sysctl_req *req)
 		error = ENOMEM;
 		goto exit;
 	}
-
+	memset(buffer, 0, calculatedSize);
 	header = (IOStatisticsUserClientHeader*)((void*)buffer);
 
 	header->sig = IOSTATISTICS_SIG_USERCLIENT;

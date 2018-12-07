@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -141,7 +141,6 @@
 
 /* TODO: this should be in a header file somewhere */
 extern char *proc_name_address(void *p);
-extern char *proc_best_name(proc_t);
 
 static u_int32_t	so_cache_hw;	/* High water mark for socache */
 static u_int32_t	so_cache_timeouts;	/* number of timeouts */
@@ -2332,12 +2331,12 @@ sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 
 					if ((m->m_flags & M_EXT))
 						mlen = m->m_ext.ext_size -
-						    m_leadingspace(m);
+						    M_LEADINGSPACE(m);
 					else if ((m->m_flags & M_PKTHDR))
 						mlen =
-						    MHLEN - m_leadingspace(m);
+						    MHLEN - M_LEADINGSPACE(m);
 					else
-						mlen = MLEN - m_leadingspace(m);
+						mlen = MLEN - M_LEADINGSPACE(m);
 					len = imin(mlen, bytes_to_copy);
 
 					chainlength += len;
@@ -2431,8 +2430,7 @@ sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 				 * Content filter processing
 				 */
 				error = cfil_sock_data_out(so, addr, top,
-				    control, (sendflags & MSG_OOB) ?
-				    sock_data_filt_flag_oob : 0);
+				    control, sendflags);
 				if (error) {
 					if (error == EJUSTRETURN) {
 						error = 0;
@@ -2498,6 +2496,51 @@ out_locked:
 	    so->so_snd.sb_cc, space, error);
 
 	return (error);
+}
+
+int
+sosend_reinject(struct socket *so, struct sockaddr *addr, struct mbuf *top, struct mbuf *control, uint32_t sendflags)
+{
+	struct mbuf *m0, *control_end;
+
+	socket_lock_assert_owned(so);
+
+	/*
+	 * top must points to mbuf chain to be sent.
+	 * If control is not NULL, top must be packet header
+	 */
+	VERIFY(top != NULL &&
+		   (control == NULL || top->m_flags & M_PKTHDR));
+
+	/*
+	 * If control is not passed in, see if we can get it
+	 * from top.
+	 */
+	if (control == NULL && (top->m_flags & M_PKTHDR) == 0) {
+		// Locate start of control if present and start of data
+		for (m0 = top; m0 != NULL; m0 = m0->m_next) {
+			if (m0->m_flags & M_PKTHDR) {
+				top = m0;
+				break;
+			} else if (m0->m_type == MT_CONTROL) {
+				if (control == NULL) {
+					// Found start of control
+					control = m0;
+				}
+				if (control != NULL && m0->m_next != NULL && m0->m_next->m_type != MT_CONTROL) {
+					// Found end of control
+					control_end = m0;
+				}
+			}
+		}
+		if (control_end != NULL)
+			control_end->m_next = NULL;
+	}
+
+	int error = (*so->so_proto->pr_usrreqs->pru_send)
+			(so, sendflags, top, addr, control, current_proc());
+
+	return error;
 }
 
 /*
@@ -2684,12 +2727,12 @@ sosend_list(struct socket *so, struct uio **uioarray, u_int uiocnt, int flags)
 			for (n = m; n != NULL; n = n->m_next) {
 				if ((m->m_flags & M_EXT))
 					mlen = m->m_ext.ext_size -
-					    m_leadingspace(m);
+					    M_LEADINGSPACE(m);
 				else if ((m->m_flags & M_PKTHDR))
 					mlen =
-					    MHLEN - m_leadingspace(m);
+					    MHLEN - M_LEADINGSPACE(m);
 				else
-					mlen = MLEN - m_leadingspace(m);
+					mlen = MLEN - M_LEADINGSPACE(m);
 				len = imin(mlen, bytes_to_copy);
 
 				/*
@@ -4798,6 +4841,7 @@ sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 		case SO_OOBINLINE:
 		case SO_TIMESTAMP:
 		case SO_TIMESTAMP_MONOTONIC:
+		case SO_TIMESTAMP_CONTINUOUS:
 		case SO_DONTTRUNC:
 		case SO_WANTMORE:
 		case SO_WANTOOBFLAG:
@@ -5495,6 +5539,7 @@ sogetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 		case SO_OOBINLINE:
 		case SO_TIMESTAMP:
 		case SO_TIMESTAMP_MONOTONIC:
+		case SO_TIMESTAMP_CONTINUOUS:
 		case SO_DONTTRUNC:
 		case SO_WANTMORE:
 		case SO_WANTOOBFLAG:
@@ -6187,8 +6232,6 @@ filt_sortouch(struct knote *kn, struct kevent_internal_s *kev)
 	/* save off the new input fflags and data */
 	kn->kn_sfflags = kev->fflags;
 	kn->kn_sdata = kev->data;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 
 	/* determine if changes result in fired events */
 	retval = filt_soread_common(kn, so);
@@ -6341,8 +6384,6 @@ filt_sowtouch(struct knote *kn, struct kevent_internal_s *kev)
 	/*save off the new input fflags and data */
 	kn->kn_sfflags = kev->fflags;
 	kn->kn_sdata = kev->data;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 
 	/* determine if these changes result in a triggered event */
 	ret = filt_sowrite_common(kn, so);
@@ -6547,8 +6588,6 @@ filt_socktouch(
 	/* save off the new input fflags and data */
 	kn->kn_sfflags = kev->fflags;
 	kn->kn_sdata = kev->data;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 
 	/* restrict the current results to the (smaller?) set of new interest */
 	/*
@@ -6838,23 +6877,29 @@ sosetdefunct(struct proc *p, struct socket *so, int level, boolean_t noforce)
 	if (so->so_flags & SOF_NODEFUNCT) {
 		if (noforce) {
 			err = EOPNOTSUPP;
+			if (p != PROC_NULL) {
+				SODEFUNCTLOG("%s[%d, %s]: (target pid %d "
+				    "name %s level %d) so 0x%llx [%d,%d] "
+				    "is not eligible for defunct "
+				    "(%d)\n", __func__, proc_selfpid(),
+				    proc_best_name(current_proc()), proc_pid(p),
+				    proc_best_name(p), level,
+				    (uint64_t)DEBUG_KERNEL_ADDRPERM(so),
+				    SOCK_DOM(so), SOCK_TYPE(so), err);
+			}
+			return (err);
+		}
+		so->so_flags &= ~SOF_NODEFUNCT;
+		if (p != PROC_NULL) {
 			SODEFUNCTLOG("%s[%d, %s]: (target pid %d "
 			    "name %s level %d) so 0x%llx [%d,%d] "
-			    "is not eligible for defunct "
+			    "defunct by force "
 			    "(%d)\n", __func__, proc_selfpid(),
 			    proc_best_name(current_proc()), proc_pid(p),
 			    proc_best_name(p), level,
 			    (uint64_t)DEBUG_KERNEL_ADDRPERM(so),
 			    SOCK_DOM(so), SOCK_TYPE(so), err);
-			return (err);
 		}
-		so->so_flags &= ~SOF_NODEFUNCT;
-		SODEFUNCTLOG("%s[%d, %s]: (target pid %d name %s level %d) "
-		    "so 0x%llx [%d,%d] defunct by force\n", __func__,
-		    proc_selfpid(), proc_best_name(current_proc()),
-		    proc_pid(p), proc_best_name(p), level,
-		    (uint64_t)DEBUG_KERNEL_ADDRPERM(so),
-		    SOCK_DOM(so), SOCK_TYPE(so));
 	} else if (so->so_flags1 & SOF1_EXTEND_BK_IDLE_WANTED) {
 		struct inpcb *inp = (struct inpcb *)so->so_pcb;
 		struct ifnet *ifp = inp->inp_last_outifp;
@@ -6865,7 +6910,7 @@ sosetdefunct(struct proc *p, struct socket *so, int level, boolean_t noforce)
 			OSIncrementAtomic(&soextbkidlestat.so_xbkidle_nodlgtd);
 		} else if (soextbkidlestat.so_xbkidle_time == 0) {
 			OSIncrementAtomic(&soextbkidlestat.so_xbkidle_notime);
-		} else if (noforce) {
+		} else if (noforce && p != PROC_NULL) {
 			OSIncrementAtomic(&soextbkidlestat.so_xbkidle_active);
 
 			so->so_flags1 |= SOF1_EXTEND_BK_IDLE_INPROG;
@@ -6875,14 +6920,14 @@ sosetdefunct(struct proc *p, struct socket *so, int level, boolean_t noforce)
 			inpcb_timer_sched(inp->inp_pcbinfo, INPCB_TIMER_LAZY);
 
 			err = EOPNOTSUPP;
-			SODEFUNCTLOG("%s[%d, %s]: (target pid %d name %s "
-			    "level %d) extend bk idle so 0x%llx rcv hw %d "
-			    "cc %d\n",
-			    __func__, proc_selfpid(),
+			SODEFUNCTLOG("%s[%d, %s]: (target pid %d "
+			    "name %s level %d) so 0x%llx [%d,%d] "
+			    "extend bk idle "
+			    "(%d)\n", __func__, proc_selfpid(),
 			    proc_best_name(current_proc()), proc_pid(p),
 			    proc_best_name(p), level,
 			    (uint64_t)DEBUG_KERNEL_ADDRPERM(so),
-			    so->so_rcv.sb_hiwat, so->so_rcv.sb_cc);
+			    SOCK_DOM(so), SOCK_TYPE(so), err);
 			return (err);
 		} else {
 			OSIncrementAtomic(&soextbkidlestat.so_xbkidle_forced);
@@ -6908,13 +6953,16 @@ sosetdefunct(struct proc *p, struct socket *so, int level, boolean_t noforce)
 	}
 
 done:
-	SODEFUNCTLOG("%s[%d, %s]: (target pid %d name %s level %d) "
-	    "so 0x%llx [%d,%d] %s defunct%s\n", __func__, proc_selfpid(),
-	    proc_best_name(current_proc()), proc_pid(p), proc_best_name(p),
-	    level, (uint64_t)DEBUG_KERNEL_ADDRPERM(so), SOCK_DOM(so),
-	    SOCK_TYPE(so), defunct ? "is already" : "marked as",
-	    (so->so_flags1 & SOF1_EXTEND_BK_IDLE_WANTED) ? " extbkidle" : "");
-
+	if (p != PROC_NULL) {
+		SODEFUNCTLOG("%s[%d, %s]: (target pid %d name %s level %d) "
+		    "so 0x%llx [%d,%d] %s defunct%s\n", __func__,
+		    proc_selfpid(), proc_best_name(current_proc()),
+		    proc_pid(p), proc_best_name(p), level,
+		    (uint64_t)DEBUG_KERNEL_ADDRPERM(so), SOCK_DOM(so),
+		    SOCK_TYPE(so), defunct ? "is already" : "marked as",
+		    (so->so_flags1 & SOF1_EXTEND_BK_IDLE_WANTED) ?
+		    " extbkidle" : "");
+	}
 	return (err);
 }
 
@@ -6938,23 +6986,29 @@ sodefunct(struct proc *p, struct socket *so, int level)
 		char d[MAX_IPv6_STR_LEN];
 		struct inpcb *inp = sotoinpcb(so);
 
-		SODEFUNCTLOG("%s[%d, %s]: (target pid %d name %s level %d) "
-		    "so 0x%llx [%s %s:%d -> %s:%d] is now defunct "
-		    "[rcv_si 0x%x, snd_si 0x%x, rcv_fl 0x%x, snd_fl 0x%x]\n",
-		    __func__, proc_selfpid(), proc_best_name(current_proc()),
-		    proc_pid(p), proc_best_name(p), level,
-		    (uint64_t)DEBUG_KERNEL_ADDRPERM(so),
-		    (SOCK_TYPE(so) == SOCK_STREAM) ? "TCP" : "UDP",
-		    inet_ntop(SOCK_DOM(so), ((SOCK_DOM(so) == PF_INET) ?
-		    (void *)&inp->inp_laddr.s_addr : (void *)&inp->in6p_laddr),
-		    s, sizeof (s)), ntohs(inp->in6p_lport),
-		    inet_ntop(SOCK_DOM(so), (SOCK_DOM(so) == PF_INET) ?
-		    (void *)&inp->inp_faddr.s_addr : (void *)&inp->in6p_faddr,
-		    d, sizeof (d)), ntohs(inp->in6p_fport),
-		    (uint32_t)rcv->sb_sel.si_flags,
-		    (uint32_t)snd->sb_sel.si_flags,
-		    rcv->sb_flags, snd->sb_flags);
-	} else {
+		if (p != PROC_NULL) {
+			SODEFUNCTLOG(
+			    "%s[%d, %s]: (target pid %d name %s level %d) "
+			    "so 0x%llx [%s %s:%d -> %s:%d] is now defunct "
+			    "[rcv_si 0x%x, snd_si 0x%x, rcv_fl 0x%x, "
+			    " snd_fl 0x%x]\n", __func__,
+			    proc_selfpid(), proc_best_name(current_proc()),
+			    proc_pid(p), proc_best_name(p), level,
+			    (uint64_t)DEBUG_KERNEL_ADDRPERM(so),
+			    (SOCK_TYPE(so) == SOCK_STREAM) ? "TCP" : "UDP",
+			    inet_ntop(SOCK_DOM(so), ((SOCK_DOM(so) == PF_INET) ?
+			    (void *)&inp->inp_laddr.s_addr :
+			    (void *)&inp->in6p_laddr),
+			    s, sizeof (s)), ntohs(inp->in6p_lport),
+			    inet_ntop(SOCK_DOM(so), (SOCK_DOM(so) == PF_INET) ?
+			    (void *)&inp->inp_faddr.s_addr :
+			    (void *)&inp->in6p_faddr,
+			    d, sizeof (d)), ntohs(inp->in6p_fport),
+			    (uint32_t)rcv->sb_sel.si_flags,
+			    (uint32_t)snd->sb_sel.si_flags,
+			    rcv->sb_flags, snd->sb_flags);
+		}
+	} else if (p != PROC_NULL)  {
 		SODEFUNCTLOG("%s[%d, %s]: (target pid %d name %s level %d) "
 		    "so 0x%llx [%d,%d] is now defunct [rcv_si 0x%x, "
 		    "snd_si 0x%x, rcv_fl 0x%x, snd_fl 0x%x]\n", __func__,

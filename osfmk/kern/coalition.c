@@ -220,7 +220,7 @@ struct i_jetsam_coalition {
 	queue_head_t extensions;
 	queue_head_t services;
 	queue_head_t other;
-	thread_group_t thread_group;
+	struct thread_group *thread_group;
 };
 
 

@@ -77,6 +77,8 @@
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #include <mach/vm_param.h>
+#include <libkern/crc.h>
+#include <libkern/copyio.h>
 
 #if defined(__arm__) || defined(__arm64__)
 #include <arm/arch.h> /* for _ARM_ARCH_* */
@@ -191,8 +193,6 @@ __nosan_crc16(uint16_t crc, const void *bufp, size_t len) { return crc16(crc, bu
 int	copystr(const void *kfaddr, void *kdaddr, size_t len, size_t *done);
 int	copyinstr(const user_addr_t uaddr, void *kaddr, size_t len, size_t *done);
 int	copyoutstr(const void *kaddr, user_addr_t udaddr, size_t len, size_t *done);
-int	copyin(const user_addr_t uaddr, void *kaddr, size_t len);
-int	copyout(const void *kaddr, user_addr_t udaddr, size_t len);
 #if XNU_KERNEL_PRIVATE
 extern int copyin_word(const user_addr_t user_addr, uint64_t *kernel_addr, vm_size_t nbytes);
 #endif

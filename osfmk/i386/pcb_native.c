@@ -374,7 +374,7 @@ machine_thread_create(
 
 	bzero((char *)pcb->iss, sizeof(x86_saved_state_t));
 
-        if (task_has_64BitAddr(task)) {
+        if (task_has_64Bit_addr(task)) {
 		pcb->iss->flavor = x86_SAVED_STATE64;
 
 		pcb->iss->ss_64.isf.cs = USER64_CS;
@@ -447,7 +447,7 @@ machine_thread_set_tsd_base(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_addr(thread)) {
 		/* check for canonical address, set 0 otherwise  */
 		if (!IS_USERADDR64_CANONICAL(tsd_base))
 			tsd_base = 0ULL;
@@ -459,7 +459,7 @@ machine_thread_set_tsd_base(
 	pcb_t pcb = THREAD_TO_PCB(thread);
 	pcb->cthread_self = tsd_base;
 
-	if (!thread_is_64bit(thread)) {
+	if (!thread_is_64bit_addr(thread)) {
 		/* Set up descriptor for later use */
 		struct real_descriptor desc = {
 			.limit_low = 1,
@@ -478,7 +478,7 @@ machine_thread_set_tsd_base(
 	/* For current thread, make the TSD base active immediately */
 	if (thread == current_thread()) {
 
-		if (thread_is_64bit(thread)) {
+		if (thread_is_64bit_addr(thread)) {
 			cpu_data_t              *cdp;
 
 			mp_disable_preemption();

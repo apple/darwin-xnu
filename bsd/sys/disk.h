@@ -78,6 +78,8 @@
  * DKIOCGETIOMINSATURATIONBYTECOUNT      get minimum byte count to saturate storage bandwidth
  *
  * DKIOCGETERRORDESCRIPTION              get description of any drive error
+ *
+ * DKIOCGETMAXSWAPWRITE                  get maximum swap file write per day in bytes
  */
 
 #define DK_FEATURE_BARRIER                    0x00000002
@@ -338,6 +340,18 @@ typedef enum {
 } dk_apfs_flavour_t;
 
 #define DKIOCGETAPFSFLAVOUR	_IOR('d', 91, dk_apfs_flavour_t)
+
+// Extent's offset and length returned in bytes
+typedef struct dk_apfs_wbc_range {
+	dev_t dev;              // Physical device for extents
+	uint32_t count;         // Number of extents
+	dk_extent_t extents[2]; // Addresses are relative to device we return
+} dk_apfs_wbc_range_t;
+
+#define DKIOCAPFSGETWBCRANGE           _IOR('d', 92, dk_apfs_wbc_range_t)
+#define DKIOCAPFSRELEASEWBCRANGE       _IO('d', 93)
+
+#define DKIOCGETMAXSWAPWRITE           _IOR('d', 94, uint64_t)
 
 #endif /* PRIVATE */
 #endif /* KERNEL */

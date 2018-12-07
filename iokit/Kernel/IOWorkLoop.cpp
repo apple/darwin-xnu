@@ -416,11 +416,14 @@ restartThread:
     } while(workToDo);
 
 exitThread:
-	thread_t thread = workThread;
+    closeGate();
+    thread_t thread = workThread;
     workThread = 0;	// Say we don't have a loop and free ourselves
+    openGate();
+
     free();
 
-	thread_deallocate(thread);
+    thread_deallocate(thread);
     (void) thread_terminate(thread);
 }
 
@@ -492,6 +495,18 @@ int IOWorkLoop::sleepGate(void *event, AbsoluteTime deadline, UInt32 interuptibl
 void IOWorkLoop::wakeupGate(void *event, bool oneThread)
 {
     IORecursiveLockWakeup(gateLock, event, oneThread);
+}
+
+static IOReturn IOWorkLoopActionToBlock(OSObject *owner,
+			       void *arg0, void *arg1,
+			       void *arg2, void *arg3)
+{
+    return ((IOWorkLoop::ActionBlock) arg0)();
+}
+
+IOReturn IOWorkLoop::runActionBlock(ActionBlock action)
+{
+    return (runAction(&IOWorkLoopActionToBlock, this, action));
 }
 
 IOReturn IOWorkLoop::runAction(Action inAction, OSObject *target,

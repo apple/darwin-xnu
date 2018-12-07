@@ -175,6 +175,7 @@ extern void kmod_panic_dump(vm_offset_t * addr, unsigned int dump_cnt);
  * flag overrides system mode in dtrace_modload().
  */
 #define KMOD_DTRACE_FORCE_INIT	0x01
+#define KMOD_DTRACE_STATIC_KEXT	0x02
 #endif /* CONFIG_DTRACE */
 
 #endif    /* KERNEL_PRIVATE */

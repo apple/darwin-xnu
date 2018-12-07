@@ -87,6 +87,7 @@
 #include <kern/misc_protos.h>
 #include <kern/sync_lock.h>
 #include <kern/sync_sema.h>
+#include <kern/ux_handler.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 
@@ -130,8 +131,6 @@ lck_grp_t 		ipc_lck_grp;
 lck_attr_t 		ipc_lck_attr;
 
 static lck_grp_attr_t	ipc_lck_grp_attr;
-
-extern void ikm_cache_init(void);
 
 /*
  *	Routine:	ipc_bootstrap
@@ -190,6 +189,7 @@ ipc_bootstrap(void)
 			      IKM_SAVED_KMSG_SIZE,
 			      "ipc kmsgs");
 	zone_change(ipc_kmsg_zone, Z_CALLERACCT, FALSE);
+	zone_change(ipc_kmsg_zone, Z_CACHING_ENABLED, TRUE);
 
 	/* create special spaces */
 
@@ -275,6 +275,8 @@ ipc_init(void)
 	msg_ool_size_small -= cpy_kdata_hdr_sz;
 
 	ipc_host_init();
+	ux_handler_init();
+
 }
 
 
@@ -291,3 +293,4 @@ ipc_thread_call_init(void)
 	ipc_importance_thread_call_init();
 #endif
 }
+

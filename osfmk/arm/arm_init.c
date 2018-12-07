@@ -83,9 +83,10 @@ extern int	serial_init(void);
 extern void sleep_token_buffer_init(void);
 
 extern vm_offset_t intstack_top;
-extern vm_offset_t fiqstack_top;
 #if __arm64__
 extern vm_offset_t excepstack_top;
+#else
+extern vm_offset_t fiqstack_top;
 #endif
 
 extern const char version[];
@@ -133,9 +134,73 @@ unsigned int page_shift_user32;	/* for page_size as seen by a 32-bit task */
 
 
 /*
+ * JOP rebasing
+ */
+
+
+// Note, the following should come from a header from dyld
+static void
+rebase_chain(uintptr_t chainStartAddress, uint64_t stepMultiplier, uintptr_t baseAddress __unused, uint64_t slide)
+{
+	uint64_t delta = 0;
+	uintptr_t address = chainStartAddress;
+	do {
+		uint64_t value = *(uint64_t*)address;
+
+		bool isAuthenticated = (value & (1ULL << 63)) != 0;
+		bool isRebase = (value & (1ULL << 62)) == 0;
+		if (isRebase) {
+			if (isAuthenticated) {
+				// The new value for a rebase is the low 32-bits of the threaded value plus the slide.
+				uint64_t newValue = (value & 0xFFFFFFFF) + slide;
+				// Add in the offset from the mach_header
+				newValue += baseAddress;
+				*(uint64_t*)address = newValue;
+
+			} else
+			{
+				// Regular pointer which needs to fit in 51-bits of value.
+				// C++ RTTI uses the top bit, so we'll allow the whole top-byte
+				// and the bottom 43-bits to be fit in to 51-bits.
+				uint64_t top8Bits = value & 0x0007F80000000000ULL;
+				uint64_t bottom43Bits = value & 0x000007FFFFFFFFFFULL;
+				uint64_t targetValue = ( top8Bits << 13 ) | (((intptr_t)(bottom43Bits << 21) >> 21) & 0x00FFFFFFFFFFFFFF);
+				targetValue = targetValue + slide;
+				*(uint64_t*)address = targetValue;
+			}
+		}
+
+		// The delta is bits [51..61]
+		// And bit 62 is to tell us if we are a rebase (0) or bind (1)
+		value &= ~(1ULL << 62);
+		delta = ( value & 0x3FF8000000000000 ) >> 51;
+		address += delta * stepMultiplier;
+	} while ( delta != 0 );
+}
+
+// Note, the following method should come from a header from dyld
+static bool
+rebase_threaded_starts(uint32_t *threadArrayStart, uint32_t *threadArrayEnd,
+	                    uintptr_t macho_header_addr, uintptr_t macho_header_vmaddr, size_t slide)
+{
+	uint32_t threadStartsHeader = *threadArrayStart;
+	uint64_t stepMultiplier = (threadStartsHeader & 1) == 1 ? 8 : 4;
+	for (uint32_t* threadOffset = threadArrayStart + 1; threadOffset != threadArrayEnd; ++threadOffset) {
+		if (*threadOffset == 0xFFFFFFFF)
+			break;
+		rebase_chain(macho_header_addr + *threadOffset, stepMultiplier, macho_header_vmaddr, slide);
+	}
+	return true;
+}
+
+/*
  *		Routine:		arm_init
  *		Function:
  */
+
+extern uint32_t __thread_starts_sect_start[] __asm("section$start$__TEXT$__thread_starts");
+extern uint32_t __thread_starts_sect_end[]   __asm("section$end$__TEXT$__thread_starts");
+
 void
 arm_init(
 	boot_args	*args)
@@ -146,15 +211,27 @@ arm_init(
 	thread_t        thread;
 	processor_t     my_master_proc;
 
+    // rebase and sign jops
+	if (&__thread_starts_sect_end[0] != &__thread_starts_sect_start[0])
+	{
+		uintptr_t mh    = (uintptr_t) &_mh_execute_header;
+		uintptr_t slide = mh - VM_KERNEL_LINK_ADDRESS;
+		rebase_threaded_starts( &__thread_starts_sect_start[0],
+								&__thread_starts_sect_end[0],
+								mh, mh - slide, slide);
+	}
+
 	/* If kernel integrity is supported, use a constant copy of the boot args. */
 	const_boot_args = *args;
-	BootArgs = &const_boot_args;
+	BootArgs = args = &const_boot_args;
 
 	cpu_data_init(&BootCpuData);
 
-	PE_init_platform(FALSE, args);	/* Get platform expert set up */
+	PE_init_platform(FALSE, args); /* Get platform expert set up */
 
 #if __arm64__
+
+
 	{
 		unsigned int    tmp_16k = 0;
 
@@ -221,11 +298,12 @@ arm_init(
 #endif
 	BootCpuData.intstack_top = (vm_offset_t) & intstack_top;
 	BootCpuData.istackptr = BootCpuData.intstack_top;
-	BootCpuData.fiqstack_top = (vm_offset_t) & fiqstack_top;
-	BootCpuData.fiqstackptr = BootCpuData.fiqstack_top;
 #if __arm64__
 	BootCpuData.excepstack_top = (vm_offset_t) & excepstack_top;
 	BootCpuData.excepstackptr = BootCpuData.excepstack_top;
+#else
+	BootCpuData.fiqstack_top = (vm_offset_t) & fiqstack_top;
+	BootCpuData.fiqstackptr = BootCpuData.fiqstack_top;
 #endif
 	BootCpuData.cpu_processor = cpu_processor_alloc(TRUE);
 	BootCpuData.cpu_console_buf = (void *)NULL;
@@ -312,6 +390,10 @@ arm_init(
 
 	printf_init();
 	panic_init();
+#if __arm64__
+	/* Enable asynchronous exceptions */
+	__builtin_arm_wsr("DAIFClr", DAIFSC_ASYNCF);
+#endif
 #if __arm64__ && WITH_CLASSIC_S2R
 	sleep_token_buffer_init();
 #endif
@@ -367,7 +449,7 @@ arm_init(
 
 	PE_init_platform(TRUE, &BootCpuData);
 	cpu_timebase_init(TRUE);
-	fiq_context_init(TRUE);
+	fiq_context_bootstrap(TRUE);
 
 
 	/*
@@ -407,8 +489,10 @@ arm_init_cpu(
 	machine_set_current_thread(cpu_data_ptr->cpu_active_thread);
 
 #if __arm64__
+	pmap_clear_user_ttb();
+	flush_mmu_tlb();
 	/* Enable asynchronous exceptions */
-        __builtin_arm_wsr("DAIFClr", DAIFSC_ASYNCF);
+	__builtin_arm_wsr("DAIFClr", DAIFSC_ASYNCF);
 #endif
 
 	cpu_machine_idle_init(FALSE);
@@ -455,10 +539,11 @@ arm_init_cpu(
 #if CONFIG_TELEMETRY
 		bootprofile_wake_from_sleep();
 #endif /* CONFIG_TELEMETRY */
-#if MONOTONIC && defined(__arm64__)
-		mt_wake();
-#endif /* MONOTONIC && defined(__arm64__) */
 	}
+#if MONOTONIC && defined(__arm64__)
+	mt_wake_per_core();
+#endif /* MONOTONIC && defined(__arm64__) */
+
 
 	slave_main(NULL);
 }
@@ -481,8 +566,10 @@ arm_init_idle_cpu(
 	machine_set_current_thread(cpu_data_ptr->cpu_active_thread);
 
 #if __arm64__
+	pmap_clear_user_ttb();
+	flush_mmu_tlb();
 	/* Enable asynchronous exceptions */
-        __builtin_arm_wsr("DAIFClr", DAIFSC_ASYNCF);
+	__builtin_arm_wsr("DAIFClr", DAIFSC_ASYNCF);
 #endif
 
 #if	(__ARM_ARCH__ == 7)
@@ -496,5 +583,5 @@ arm_init_idle_cpu(
 
 	fiq_context_init(FALSE);
 
-	cpu_idle_exit();
+	cpu_idle_exit(TRUE);
 }

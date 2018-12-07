@@ -71,7 +71,7 @@ machine_task_set_state(
 	case ARM_DEBUG_STATE:
 	{
 		arm_legacy_debug_state_t *tstate = (arm_legacy_debug_state_t *) state;
-		if (task_has_64BitAddr(task) ||
+		if (task_has_64Bit_data(task) ||
 				(state_count != ARM_LEGACY_DEBUG_STATE_COUNT) ||
 				(!debug_legacy_state_is_valid(tstate))) {
 			return KERN_INVALID_ARGUMENT;
@@ -90,7 +90,7 @@ machine_task_set_state(
 	case ARM_DEBUG_STATE32:
 	{
 		arm_debug_state32_t *tstate = (arm_debug_state32_t *) state;
-		if (task_has_64BitAddr(task) ||
+		if (task_has_64Bit_data(task) ||
 				(state_count != ARM_DEBUG_STATE32_COUNT) ||
 				(!debug_state_is_valid32(tstate))) {
 			return KERN_INVALID_ARGUMENT;
@@ -110,7 +110,7 @@ machine_task_set_state(
 	{
 		arm_debug_state64_t *tstate = (arm_debug_state64_t *) state;
 		
-		if ((!task_has_64BitAddr(task)) ||
+		if ((!task_has_64Bit_data(task)) ||
 				(state_count != ARM_DEBUG_STATE64_COUNT) ||
 				(!debug_state_is_valid64(tstate))) {
 			return KERN_INVALID_ARGUMENT;
@@ -156,7 +156,7 @@ machine_task_get_state(task_t task,
 	{
 		arm_legacy_debug_state_t *tstate = (arm_legacy_debug_state_t *) state;
 		
-		if (task_has_64BitAddr(task) || (*state_count != ARM_LEGACY_DEBUG_STATE_COUNT)) {
+		if (task_has_64Bit_data(task) || (*state_count != ARM_LEGACY_DEBUG_STATE_COUNT)) {
 			return KERN_INVALID_ARGUMENT;
 		}
 		
@@ -172,7 +172,7 @@ machine_task_get_state(task_t task,
 	{
 		arm_debug_state32_t *tstate = (arm_debug_state32_t *) state;
 		
-		if (task_has_64BitAddr(task) || (*state_count != ARM_DEBUG_STATE32_COUNT)) {
+		if (task_has_64Bit_data(task) || (*state_count != ARM_DEBUG_STATE32_COUNT)) {
 			return KERN_INVALID_ARGUMENT;
 		}
 		
@@ -188,7 +188,7 @@ machine_task_get_state(task_t task,
 	{
 		arm_debug_state64_t *tstate = (arm_debug_state64_t *) state;
 		
-		if ((!task_has_64BitAddr(task)) || (*state_count != ARM_DEBUG_STATE64_COUNT)) {
+		if ((!task_has_64Bit_data(task)) || (*state_count != ARM_DEBUG_STATE64_COUNT)) {
 			return KERN_INVALID_ARGUMENT;
 		}
 		
@@ -233,8 +233,8 @@ machine_thread_inherit_taskwide(
 		int flavor;
 		mach_msg_type_number_t count;
 
-		flavor = task_has_64BitAddr(parent_task) ? ARM_DEBUG_STATE64 : ARM_DEBUG_STATE32;
-		count = task_has_64BitAddr(parent_task) ? ARM_DEBUG_STATE64_COUNT : ARM_DEBUG_STATE32_COUNT;
+		flavor = task_has_64Bit_data(parent_task) ? ARM_DEBUG_STATE64 : ARM_DEBUG_STATE32;
+		count = task_has_64Bit_data(parent_task) ? ARM_DEBUG_STATE64_COUNT : ARM_DEBUG_STATE32_COUNT;
 
 		return machine_thread_set_state(thread, flavor, parent_task->task_debug, count);
 	}

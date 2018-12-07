@@ -255,8 +255,6 @@ typedef struct {
 
 #define LOCK_PANIC_TIMEOUT	0xc00000	// 12.5 m ticks = 250ms with 24MHz OSC
 
-#define LOCK_TRY_DISABLE_INT 1	// Disable interrupts for a quick acquire attempt
-
 #define PLATFORM_LCK_ILOCK LCK_ILOCK
 
 
@@ -276,6 +274,7 @@ typedef struct {
 #define LCK_MTX_THREAD_MASK (~(uintptr_t)(LCK_ILOCK | ARM_LCK_WAITERS))
 
 #define disable_preemption_for_thread(t) ((volatile thread_t)t)->machine.preemption_count++
+#define preemption_disabled_for_thread(t) (((volatile thread_t)t)->machine.preemption_count > 0)
 
 
 __unused static void disable_interrupts_noread(void)

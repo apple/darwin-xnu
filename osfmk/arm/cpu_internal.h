@@ -69,5 +69,9 @@ extern void			cpu_signal_cancel(
 
 extern unsigned int real_ncpus;
 
+#if defined(CONFIG_XNUPOST) && __arm64__ 
+extern void arm64_ipi_test(void);
+#endif /* defined(CONFIG_XNUPOST) && __arm64__ */
+
 
 #endif	/* _ARM_CPU_INTERNAL_H_ */

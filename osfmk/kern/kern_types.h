@@ -116,12 +116,25 @@ typedef	void (*thread_continue_t)(void *, wait_result_t);
  *    You must provide this value for any unbounded wait - otherwise you will
  *    pend user signals forever.
  *
+ * THREAD_WAIT_NOREPORT:
+ *    The scheduler has a callback (sched_call) that some subsystems use to
+ *    decide whether more threads should be thrown at a given problem by trying
+ *    to maintain a good level of concurrency.
+ *
+ *    When the wait will not be helped by adding more threads (e.g. lock
+ *    contention), using this flag as an argument to assert_wait* (or any of its
+ *    wrappers) will prevent the next wait/block to cause thread creation.
+ *
+ *    This comes in two flavors: THREAD_WAIT_NOREPORT_KERNEL, and
+ *    THREAD_WAIT_NOREPORT_USER to prevent reporting about the wait for kernel
+ *    and user threads respectively.
+ *
  * Thread interrupt mask:
  *
- *   The current maximum interruptible state for the thread, as set by
- *   thread_interrupt_level(), will limit the conditions that will cause a wake.
- *   This is useful for code that can't be interrupted to set before calling code
- *   that doesn't know that.
+ *    The current maximum interruptible state for the thread, as set by
+ *    thread_interrupt_level(), will limit the conditions that will cause a wake.
+ *    This is useful for code that can't be interrupted to set before calling code
+ *    that doesn't know that.
  *
  * Thread termination vs safe abort:
  *
@@ -152,9 +165,12 @@ typedef	void (*thread_continue_t)(void *, wait_result_t);
  *    call will always either return or call the passed in continuation.
  */
 typedef int wait_interrupt_t;
-#define THREAD_UNINT			0		/* not interruptible      */
-#define THREAD_INTERRUPTIBLE	1		/* may not be restartable */
-#define THREAD_ABORTSAFE		2		/* abortable safely       */
+#define THREAD_UNINT                    0x00000000  /* not interruptible      */
+#define THREAD_INTERRUPTIBLE            0x00000001  /* may not be restartable */
+#define THREAD_ABORTSAFE                0x00000002  /* abortable safely       */
+#define THREAD_WAIT_NOREPORT_KERNEL     0x80000000
+#define THREAD_WAIT_NOREPORT_USER       0x40000000
+#define THREAD_WAIT_NOREPORT            (THREAD_WAIT_NOREPORT_KERNEL | THREAD_WAIT_NOREPORT_USER)
 
 typedef int wait_timeout_urgency_t;
 #define TIMEOUT_URGENCY_SYS_NORMAL	0x00		/* use default leeway thresholds for system */

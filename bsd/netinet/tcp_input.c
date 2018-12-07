@@ -237,13 +237,6 @@ SYSCTL_SKMEM_TCP_INT(OID_AUTO, autorcvbufmax,
     CTLFLAG_RW | CTLFLAG_LOCKED, u_int32_t, tcp_autorcvbuf_max, 512 * 1024,
     "Maximum receive socket buffer size");
 
-u_int32_t tcp_autorcvbuf_max_ca = 512 * 1024;
-#if (DEBUG || DEVELOPMENT)
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, autorcvbufmaxca,
-    CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_autorcvbuf_max_ca, 0,
-    "Maximum receive socket buffer size");
-#endif /* (DEBUG || DEVELOPMENT) */
-
 #if CONFIG_EMBEDDED
 int sw_lro = 1;
 #else
@@ -290,6 +283,13 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, disable_access_to_stats,
     CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_disable_access_to_stats, 0,
     "Disable access to tcpstat");
 
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, challengeack_limit,
+    CTLFLAG_RW | CTLFLAG_LOCKED, uint32_t, tcp_challengeack_limit, 10,
+    "Maximum number of challenge ACKs per connection per second");
+
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, do_rfc5961,
+    CTLFLAG_RW | CTLFLAG_LOCKED, static int, tcp_do_rfc5961, 1,
+    "Enable/Disable full RFC 5961 compliance");
 
 extern int tcp_TCPTV_MIN;
 extern int tcp_acc_iaj_high;
@@ -550,6 +550,40 @@ void compute_iaj_meat(struct tcpcb *tp, uint32_t cur_iaj)
 	return;
 }
 #endif /* TRAFFIC_MGT */
+
+/*
+ * Perform rate limit check per connection per second
+ * tp->t_challengeack_last is the last_time diff was greater than 1sec
+ * tp->t_challengeack_count is the number of ACKs sent (within 1sec)
+ * Return TRUE if we shouldn't send the ACK due to rate limitation
+ * Return FALSE if it is still ok to send challenge ACK
+ */
+static boolean_t
+tcp_is_ack_ratelimited(struct tcpcb *tp)
+{
+	boolean_t ret = TRUE;
+	uint32_t now = tcp_now;
+	int32_t diff = 0;
+
+	diff = timer_diff(now, 0, tp->t_challengeack_last, 0);
+	/* If it is first time or diff > 1000ms,
+	 * update the challengeack_last and reset the
+	 * current count of ACKs
+	 */
+	if (tp->t_challengeack_last == 0 || diff >= 1000) {
+		tp->t_challengeack_last = now;
+		tp->t_challengeack_count = 0;
+		ret = FALSE;
+	} else if (tp->t_challengeack_count < tcp_challengeack_limit) {
+		ret = FALSE;
+	}
+
+	/* Careful about wrap-around */
+	if (ret == FALSE && (tp->t_challengeack_count + 1 > 0))
+		tp->t_challengeack_count++;
+
+	return (ret);
+}
 
 /* Check if enough amount of data has been acknowledged since
  * bw measurement was started
@@ -1815,7 +1849,7 @@ tcp_update_window(struct tcpcb *tp, int thflags, struct tcphdr * th,
 			tp->max_sndwnd = tp->snd_wnd;
 
 		if (tp->t_inpcb->inp_socket->so_flags & SOF_MP_SUBFLOW)
-			mptcp_update_window_fallback(tp);
+			mptcp_update_window_wakeup(tp);
 		return (true);
 	}
 	return (false);
@@ -2247,7 +2281,7 @@ findpcb:
 	if (so->so_state & SS_ISCONNECTED) {
 		// Connected TCP sockets have a fully-bound local and remote,
 		// so the policy check doesn't need to override addresses
-		if (!necp_socket_is_allowed_to_send_recv(inp, NULL, NULL)) {
+		if (!necp_socket_is_allowed_to_send_recv(inp, NULL, NULL, NULL)) {
 			IF_TCP_STATINC(ifp, badformat);
 			goto drop;
 		}
@@ -2256,7 +2290,7 @@ findpcb:
 		if (isipv6) {
 			if (!necp_socket_is_allowed_to_send_recv_v6(inp,
 				th->th_dport, th->th_sport, &ip6->ip6_dst,
-				&ip6->ip6_src, ifp, NULL, NULL)) {
+				&ip6->ip6_src, ifp, NULL, NULL, NULL)) {
 				IF_TCP_STATINC(ifp, badformat);
 				goto drop;
 			}
@@ -2265,7 +2299,7 @@ findpcb:
 		{
 			if (!necp_socket_is_allowed_to_send_recv_v4(inp,
 				th->th_dport, th->th_sport, &ip->ip_dst, &ip->ip_src,
-				ifp, NULL, NULL)) {
+				ifp, NULL, NULL, NULL)) {
 				IF_TCP_STATINC(ifp, badformat);
 				goto drop;
 			}
@@ -2280,6 +2314,10 @@ findpcb:
 		goto dropwithreset;
 	}
 	if (tp->t_state == TCPS_CLOSED)
+		goto drop;
+
+	/* If none of the FIN|SYN|RST|ACK flag is set, drop */
+	if (tcp_do_rfc5961 && (thflags & TH_ACCEPT) == 0)
 		goto drop;
 
 	/* Unscale the window into a 32-bit value. */
@@ -2603,7 +2641,7 @@ findpcb:
 			/* now drop the reference on the listener */
 			socket_unlock(oso, 1);
 
-			tcp_set_max_rwinscale(tp, so, TCP_AUTORCVBUF_MAX(ifp));
+			tcp_set_max_rwinscale(tp, so, ifp);
 
 			KERNEL_DEBUG(DBG_FNC_TCP_NEWCONN | DBG_FUNC_END,0,0,0,0,0);
 		}
@@ -3212,6 +3250,7 @@ findpcb:
 		 *   initialize CCsend and CCrecv.
 		 */
 		tp->snd_wnd = tiwin;	/* initial send-window */
+		tp->max_sndwnd = tp->snd_wnd;
 		tp->t_flags |= TF_ACKNOW;
 		tp->t_unacksegs = 0;
 		DTRACE_TCP4(state__change, void, NULL, struct inpcb *, inp,
@@ -3317,6 +3356,7 @@ findpcb:
 		if ((thflags & TH_SYN) == 0)
 			goto drop;
 		tp->snd_wnd = th->th_win;	/* initial send window */
+		tp->max_sndwnd = tp->snd_wnd;
 
 		tp->irs = th->th_seq;
 		tcp_rcvseqinit(tp);
@@ -3524,11 +3564,20 @@ trimthenstep6:
 	/* Received a SYN while connection is already established.
 	 * This is a "half open connection and other anomalies" described
 	 * in RFC793 page 34, send an ACK so the remote reset the connection
-	 * or recovers by adjusting its sequence numberering
+	 * or recovers by adjusting its sequence numbering. Sending an ACK is
+	 * in accordance with RFC 5961 Section 4.2
 	 */
 	case TCPS_ESTABLISHED:
-		if (thflags & TH_SYN)
-			goto dropafterack;
+		if (thflags & TH_SYN) {
+			/* Drop the packet silently if we have reached the limit */
+			if (tcp_do_rfc5961 && tcp_is_ack_ratelimited(tp)) {
+				goto drop;
+			} else {
+				/* Send challenge ACK */
+				tcpstat.tcps_synchallenge++;
+				goto dropafterack;
+			}
+		}
 		break;
 	}
 
@@ -3566,6 +3615,11 @@ trimthenstep6:
 	 *   only accepting RSTs where the sequence number is equal to
 	 *   last_ack_sent.  In all other states (the states in which a
 	 *   RST is more likely), the more permissive check is used.
+	 * RFC 5961 Section 3.2: if the RST bit is set, sequence # is
+	 *    within the receive window and last_ack_sent == seq,
+	 *    then reset the connection. Otherwise if the seq doesn't
+	 *    match last_ack_sent, TCP must send challenge ACK. Perform
+	 *    rate limitation when sending the challenge ACK.
 	 * If we have multiple segments in flight, the intial reset
 	 * segment sequence numbers will be to the left of last_ack_sent,
 	 * but they will eventually catch up.
@@ -3606,52 +3660,64 @@ trimthenstep6:
 		    (tp->rcv_wnd == 0 &&
 		    ((tp->last_ack_sent == th->th_seq) ||
 		    ((tp->last_ack_sent -1) == th->th_seq)))) {
-			switch (tp->t_state) {
+			if (tcp_do_rfc5961 == 0 || tp->last_ack_sent == th->th_seq) {
+				switch (tp->t_state) {
 
-			case TCPS_SYN_RECEIVED:
-				IF_TCP_STATINC(ifp, rstinsynrcv);
-				so->so_error = ECONNREFUSED;
-				goto close;
+				case TCPS_SYN_RECEIVED:
+					IF_TCP_STATINC(ifp, rstinsynrcv);
+					so->so_error = ECONNREFUSED;
+					goto close;
 
-			case TCPS_ESTABLISHED:
-				if (tp->last_ack_sent != th->th_seq) {
-					tcpstat.tcps_badrst++;
-					goto drop;
-				}
-				if (TCP_ECN_ENABLED(tp) &&
-				    tp->snd_una == tp->iss + 1 &&
-				    SEQ_GT(tp->snd_max, tp->snd_una)) {
+				case TCPS_ESTABLISHED:
+					if (tcp_do_rfc5961 == 0 && tp->last_ack_sent != th->th_seq) {
+						tcpstat.tcps_badrst++;
+						goto drop;
+					}
+					if (TCP_ECN_ENABLED(tp) &&
+					    tp->snd_una == tp->iss + 1 &&
+					    SEQ_GT(tp->snd_max, tp->snd_una)) {
+						/*
+						 * If the first data packet on an
+						 * ECN connection, receives a RST
+						 * increment the heuristic
+						 */
+						tcp_heuristic_ecn_droprst(tp);
+					}
+				case TCPS_FIN_WAIT_1:
+				case TCPS_CLOSE_WAIT:
 					/*
-					 * If the first data packet on an
-					 * ECN connection, receives a RST
-					 * increment the heuristic
-					 */
-					tcp_heuristic_ecn_droprst(tp);
+					  Drop through ...
+					*/
+				case TCPS_FIN_WAIT_2:
+					so->so_error = ECONNRESET;
+				close:
+					postevent(so, 0, EV_RESET);
+					soevent(so,
+					    (SO_FILT_HINT_LOCKED |
+					    SO_FILT_HINT_CONNRESET));
+
+					tcpstat.tcps_drops++;
+					tp = tcp_close(tp);
+					break;
+
+				case TCPS_CLOSING:
+				case TCPS_LAST_ACK:
+					tp = tcp_close(tp);
+					break;
+
+				case TCPS_TIME_WAIT:
+					break;
 				}
-			case TCPS_FIN_WAIT_1:
-			case TCPS_CLOSE_WAIT:
-				/*
-				  Drop through ...
-				*/
-			case TCPS_FIN_WAIT_2:
-				so->so_error = ECONNRESET;
-			close:
-				postevent(so, 0, EV_RESET);
-				soevent(so,
-				    (SO_FILT_HINT_LOCKED |
-				    SO_FILT_HINT_CONNRESET));
-
-				tcpstat.tcps_drops++;
-				tp = tcp_close(tp);
-				break;
-
-			case TCPS_CLOSING:
-			case TCPS_LAST_ACK:
-				tp = tcp_close(tp);
-				break;
-
-			case TCPS_TIME_WAIT:
-				break;
+			} else if (tcp_do_rfc5961) {
+				tcpstat.tcps_badrst++;
+				/* Drop if we have reached the ACK limit */
+				if (tcp_is_ack_ratelimited(tp)) {
+					goto drop;
+				} else {
+					/* Send challenge ACK */
+					tcpstat.tcps_rstchallenge++;
+					goto dropafterack;
+				}
 			}
 		}
 		goto drop;
@@ -3728,9 +3794,16 @@ trimthenstep6:
 		goto dropwithreset;
 	}
 
+	/*
+	 * Check if there is old data at the beginning of the window
+	 * i.e. the sequence number is before rcv_nxt
+	 */
 	todrop = tp->rcv_nxt - th->th_seq;
 	if (todrop > 0) {
+		boolean_t is_syn_set = FALSE;
+
 		if (thflags & TH_SYN) {
+			is_syn_set = TRUE;
 			thflags &= ~TH_SYN;
 			th->th_seq++;
 			if (th->th_urp > 1)
@@ -3741,6 +3814,8 @@ trimthenstep6:
 		}
 		/*
 		 * Following if statement from Stevens, vol. 2, p. 960.
+		 * The amount of duplicate data is greater than or equal
+		 * to the size of the segment - entire segment is duplicate
 		 */
 		if (todrop > tlen
 		    || (todrop == tlen && (thflags & TH_FIN) == 0)) {
@@ -3754,8 +3829,19 @@ trimthenstep6:
 			/*
 			 * Send an ACK to resynchronize and drop any data.
 			 * But keep on processing for RST or ACK.
+			 *
+			 * If the SYN bit was originally set, then only send
+			 * an ACK if we are not rate-limiting this connection.
 			 */
-			tp->t_flags |= TF_ACKNOW;
+			if (tcp_do_rfc5961 && is_syn_set) {
+				if (!tcp_is_ack_ratelimited(tp)) {
+					tcpstat.tcps_synchallenge++;
+					tp->t_flags |= TF_ACKNOW;
+				}
+			} else {
+				tp->t_flags |= TF_ACKNOW;
+			}
+
 			if (todrop == 1) {
 				/* This could be a keepalive */
 				soevent(so, SO_FILT_HINT_LOCKED |
@@ -3898,15 +3984,31 @@ trimthenstep6:
 	}
 
 	/*
-	 * If a SYN is in the window, then this is an
+	 * Stevens: If a SYN is in the window, then this is an
 	 * error and we send an RST and drop the connection.
+	 *
+	 * RFC 5961 Section 4.2
+	 * Send challenge ACK for any SYN in synchronized state
+	 * Perform rate limitation in doing so.
 	 */
 	if (thflags & TH_SYN) {
-		tp = tcp_drop(tp, ECONNRESET);
-		rstreason = BANDLIM_UNLIMITED;
-		postevent(so, 0, EV_RESET);
-		IF_TCP_STATINC(ifp, synwindow);
-		goto dropwithreset;
+		if (tcp_do_rfc5961) {
+			tcpstat.tcps_badsyn++;
+			/* Drop if we have reached ACK limit */
+			if (tcp_is_ack_ratelimited(tp)) {
+				goto drop;
+			} else {
+				/* Send challenge ACK */
+				tcpstat.tcps_synchallenge++;
+				goto dropafterack;
+			}
+		} else {
+			tp = tcp_drop(tp, ECONNRESET);
+			rstreason = BANDLIM_UNLIMITED;
+			postevent(so, 0, EV_RESET);
+			IF_TCP_STATINC(ifp, synwindow);
+			goto dropwithreset;
+		}
 	}
 
 	/*
@@ -3969,6 +4071,7 @@ trimthenstep6:
 			tp->snd_scale = tp->requested_s_scale;
 			tp->rcv_scale = tp->request_r_scale;
 			tp->snd_wnd = th->th_win << tp->snd_scale;
+			tp->max_sndwnd = tp->snd_wnd;
 			tiwin = tp->snd_wnd;
 		}
 		/*
@@ -4088,7 +4191,18 @@ trimthenstep6:
 	case TCPS_TIME_WAIT:
 		if (SEQ_GT(th->th_ack, tp->snd_max)) {
 			tcpstat.tcps_rcvacktoomuch++;
-			goto dropafterack;
+			if (tcp_do_rfc5961 && tcp_is_ack_ratelimited(tp)) {
+				goto drop;
+			} else {
+				goto dropafterack;
+			}
+		}
+		if (tcp_do_rfc5961 && SEQ_LT(th->th_ack, tp->snd_una - tp->max_sndwnd)) {
+			if (tcp_is_ack_ratelimited(tp)) {
+				goto drop;
+			} else {
+				goto dropafterack;
+			}
 		}
 		if (SACK_ENABLED(tp) && to.to_nsacks > 0) {
 			recvd_dsack = tcp_sack_process_dsack(tp, &to, th);
@@ -5607,12 +5721,22 @@ static inline unsigned int
 tcp_maxmtu(struct rtentry *rt)
 {
 	unsigned int maxmtu;
+	int interface_mtu = 0;
 
 	RT_LOCK_ASSERT_HELD(rt);
+	interface_mtu = rt->rt_ifp->if_mtu;
+
+	if (rt_key(rt)->sa_family == AF_INET &&
+	    INTF_ADJUST_MTU_FOR_CLAT46(rt->rt_ifp)) {
+		interface_mtu = IN6_LINKMTU(rt->rt_ifp);
+		/* Further adjust the size for CLAT46 expansion */
+		interface_mtu -= CLAT46_HDR_EXPANSION_OVERHD;
+	}
+
 	if (rt->rt_rmx.rmx_mtu == 0)
-		maxmtu = rt->rt_ifp->if_mtu;
+		maxmtu = interface_mtu;
 	else
-		maxmtu = MIN(rt->rt_rmx.rmx_mtu, rt->rt_ifp->if_mtu);
+		maxmtu = MIN(rt->rt_rmx.rmx_mtu, interface_mtu);
 
 	return (maxmtu);
 }
@@ -6563,6 +6687,7 @@ tcp_input_checksum(int af, struct mbuf *m, struct tcphdr *th, int off, int tlen)
 
 	return (0);
 }
+
 
 SYSCTL_PROC(_net_inet_tcp, TCPCTL_STATS, stats,
     CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0, tcp_getstat,

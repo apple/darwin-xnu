@@ -121,15 +121,15 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 		break;
 	}
     
-        case KCDATA_TYPE_TYPEDEFINTION: {
-            i = 0;
-            setup_subtype_description(&subtypes[i++], KC_ST_UINT32, offsetof(struct kcdata_type_definition, kct_type_identifier), "typeID");
-            setup_subtype_description(&subtypes[i++], KC_ST_UINT32, offsetof(struct kcdata_type_definition, kct_num_elements), "numOfFields");
-            setup_subtype_array_description(&subtypes[i++], KC_ST_CHAR, offsetof(struct kcdata_type_definition, kct_name), KCDATA_DESC_MAXLEN, "name");
-            // Note "fields" is an array of run time defined length. So we populate fields at parsing time.
-            setup_type_definition(retval, type_id, i, "typedef");
-            break;
-        }
+	case KCDATA_TYPE_TYPEDEFINTION: {
+		i = 0;
+		setup_subtype_description(&subtypes[i++], KC_ST_UINT32, offsetof(struct kcdata_type_definition, kct_type_identifier), "typeID");
+		setup_subtype_description(&subtypes[i++], KC_ST_UINT32, offsetof(struct kcdata_type_definition, kct_num_elements), "numOfFields");
+		setup_subtype_array_description(&subtypes[i++], KC_ST_CHAR, offsetof(struct kcdata_type_definition, kct_name), KCDATA_DESC_MAXLEN, "name");
+		// Note "fields" is an array of run time defined length. So we populate fields at parsing time.
+		setup_type_definition(retval, type_id, i, "typedef");
+		break;
+	}
 
 	case KCDATA_TYPE_CONTAINER_BEGIN: {
 		i = 0;
@@ -536,8 +536,9 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 
 	case STACKSHOT_KCTYPE_CPU_TIMES: {
 		i = 0;
-		_SUBTYPE(KC_ST_UINT64, struct stackshot_cpu_times, user_usec);
-		_SUBTYPE(KC_ST_UINT64, struct stackshot_cpu_times, system_usec);
+		_SUBTYPE(KC_ST_UINT64, struct stackshot_cpu_times_v2, user_usec);
+		_SUBTYPE(KC_ST_UINT64, struct stackshot_cpu_times_v2, system_usec);
+		_SUBTYPE(KC_ST_UINT64, struct stackshot_cpu_times_v2, runnable_usec);
 		setup_type_definition(retval, type_id, i, "cpu_times");
 		break;
 	}
@@ -613,6 +614,14 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 		setup_type_definition(retval, type_id, i, "instrs_cycles_snapshot");
 		break;
 	 }
+
+	case STACKSHOT_KCTYPE_USER_STACKTOP: {
+		i = 0;
+		_SUBTYPE(KC_ST_UINT64, struct stack_snapshot_stacktop, sp);
+		_SUBTYPE_ARRAY(KC_ST_UINT8, struct stack_snapshot_stacktop, stack_contents, 8);
+		setup_type_definition(retval, type_id, i, "user_stacktop");
+		break;
+	}
 
 	case TASK_CRASHINFO_PROC_STARTTIME: {
 		i = 0;
@@ -784,8 +793,8 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 		_SUBTYPE(KC_ST_UINT8, struct codesigning_exit_reason_info, ceri_page_dirty);
 		_SUBTYPE(KC_ST_UINT32, struct codesigning_exit_reason_info, ceri_page_shadow_depth);
 		setup_type_definition(retval, type_id, i, "exit_reason_codesigning_info");
-
 		break;
+	}
 
 	case EXIT_REASON_WORKLOOP_ID: {
 		i = 0;
@@ -801,8 +810,28 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 		break;
 	}
 
+	case STACKSHOT_KCTYPE_ASID: {
+		i = 0;
+		setup_subtype_description(&subtypes[i++], KC_ST_UINT32, 0, "ts_asid");
+		setup_type_definition(retval, type_id, i, "ts_asid");
+		break;
 	}
 
+	case STACKSHOT_KCTYPE_PAGE_TABLES: {
+		i = 0;
+		setup_subtype_description(&subtypes[i++], KC_ST_UINT64, 0, "ts_pagetable");
+		setup_type_definition(retval, type_id, i, "ts_pagetable");
+		break;
+	}
+
+	case STACKSHOT_KCTYPE_SYS_SHAREDCACHE_LAYOUT: {
+		i = 0;
+		_SUBTYPE(KC_ST_UINT64, struct user64_dyld_uuid_info, imageLoadAddress);
+		_SUBTYPE_ARRAY(KC_ST_UINT8, struct user64_dyld_uuid_info, imageUUID, 16);
+		setup_type_definition(retval, type_id, i, "system_shared_cache_layout");
+		break;
+	}
+    
 	default:
 		retval = NULL;
 		break;

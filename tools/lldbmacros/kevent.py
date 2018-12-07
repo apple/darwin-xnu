@@ -99,7 +99,7 @@ def GetKnoteKqueue(kn):
             kn - the knote object
         returns: kq - the kqueue corresponding to the knote
     """
-    return kern.GetValueFromAddress(kn.kn_kq_packed + kern.VM_MIN_KERNEL_AND_KEXT_ADDRESS, 'struct kqueue *')
+    return kern.GetValueFromAddress(int(kn.kn_kq_packed), 'struct kqueue *')
 
 @lldb_type_summary(['knote *'])
 @header('{:<20s} {:<20s} {:<10s} {:<20s} {:<20s} {:<30s} {:<10} {:<10} {:<10} {:<30s}'.format('knote', 'ident', 'kev_flags', 'kqueue', 'udata', 'filtops', 'qos_use', 'qos_req', 'qos_ovr', 'status'))
@@ -148,7 +148,7 @@ def IterateKqueueKnotes(kq):
         yield kn
 
 @lldb_type_summary(['struct kqrequest *'])
-@header('{:<20s} {:<20s} {:<5s} {:<5s} {:<5s} {:<5s} {:s}'.format('kqrequest', 'thread', 'qos', 'ovr_qos', 'w_qos', 'sa_qos', 'state'))
+@header('{:<20s} {:<20s} {:<5s} {:<5s} {:<5s} {:s}'.format('kqrequest', 'thread', 'qos', 'ovr_qos', 'sa_qos', 'state'))
 def GetKqrequestSummary(kqr):
     """ Summarize kqrequest information
 
@@ -156,12 +156,11 @@ def GetKqrequestSummary(kqr):
             kqr - the kqrequest object
         returns: str - summary of kqrequest
     """
-    fmt = '{kqrp: <#020x} {kqr.kqr_bound.kqrb_thread: <#020x} {qos: <5s} {ovr_qos: <5s} {w_qos: <5s} {sa_qos: <5s} {state_str:<s}'
+    fmt = '{kqrp: <#020x} {kqr.kqr_thread: <#020x} {qos: <5s} {ovr_qos: <5s} {sa_qos: <5s} {state_str:<s}'
     return fmt.format(kqrp=int(kqr),
             kqr=kqr,
             qos=xnudefines.thread_qos_short_strings[int(kqr.kqr_qos_index)],
             ovr_qos=xnudefines.thread_qos_short_strings[int(kqr.kqr_override_index)],
-            w_qos=xnudefines.thread_qos_short_strings[int(kqr.kqr_dsync_waiters_qos)],
             sa_qos=xnudefines.thread_qos_short_strings[int(kqr.kqr_stayactive_qos)],
             state_str=xnudefines.GetStateString(xnudefines.kqrequest_state_strings, kqr.kqr_state))
 
@@ -280,7 +279,7 @@ def GetKqworkloopSummary(kqwl):
             dyn_id=kqwl.kqwl_dynamicid,
             kqr_state=xnudefines.GetStateString(xnudefines.kqrequest_state_strings, kqwl.kqwl_request.kqr_state),
             st_str=xnudefines.GetStateString(xnudefines.kq_state_strings, state),
-            servicer=int(kqwl.kqwl_request.kqr_bound.kqrb_thread),
+            servicer=int(kqwl.kqwl_request.kqr_thread),
             owner=int(kqwl.kqwl_owner)
             )
 

@@ -177,10 +177,6 @@ int pagerdebug=0;
 
 extern int proc_resetpcontrol(int);
 
-#if DEVELOPMENT || DEBUG
-extern unsigned long vm_cs_validated_resets;
-#endif
-
 
 extern int	uiomove64(addr64_t, int, void *);
 #define	MAX_RUN	32
@@ -240,7 +236,7 @@ memory_object_control_uiomove(
 			        break;
 
 
-			if (dst_page->busy || dst_page->cleaning) {
+			if (dst_page->vmp_busy || dst_page->vmp_cleaning) {
 				/*
 				 * someone else is playing with the page... if we've
 				 * already collected pages into this run, go ahead
@@ -253,28 +249,28 @@ memory_object_control_uiomove(
 				PAGE_SLEEP(object, dst_page, THREAD_UNINT);
 				continue;
 			}
-			if (dst_page->laundry)
+			if (dst_page->vmp_laundry)
 				vm_pageout_steal_laundry(dst_page, FALSE);
 
 		        if (mark_dirty) {
-				if (dst_page->dirty == FALSE)
+				if (dst_page->vmp_dirty == FALSE)
 					dirty_count++;
 				SET_PAGE_DIRTY(dst_page, FALSE);
-				if (dst_page->cs_validated && 
-				    !dst_page->cs_tainted) {
+				if (dst_page->vmp_cs_validated && 
+				    !dst_page->vmp_cs_tainted) {
 					/*
 					 * CODE SIGNING:
 					 * We're modifying a code-signed
 					 * page: force revalidate
 					 */
-					dst_page->cs_validated = FALSE;
-#if DEVELOPMENT || DEBUG
-                                        vm_cs_validated_resets++;
-#endif
+					dst_page->vmp_cs_validated = FALSE;
+
+					VM_PAGEOUT_DEBUG(vm_cs_validated_resets, 1);
+
 					pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(dst_page));
 				}
 			}
-			dst_page->busy = TRUE;
+			dst_page->vmp_busy = TRUE;
 
 			page_run[cur_run++] = dst_page;
 
@@ -334,7 +330,7 @@ memory_object_control_uiomove(
 			 * update clustered and speculative state
 			 * 
 			 */
-			if (dst_page->clustered)
+			if (dst_page->vmp_clustered)
 				VM_PAGE_CONSUME_CLUSTERED(dst_page);
 
 			PAGE_WAKEUP_DONE(dst_page);
@@ -370,6 +366,8 @@ vnode_pager_bootstrap(void)
 #if __arm64__
 	fourk_pager_bootstrap();
 #endif /* __arm64__ */
+	shared_region_pager_bootstrap();
+
 	return;
 }
 
@@ -474,6 +472,21 @@ vnode_pager_data_unlock(
 	__unused vm_prot_t		desired_access)
 {
 	return KERN_FAILURE;
+}
+
+void
+vnode_pager_dirtied(
+	memory_object_t		mem_obj,
+	vm_object_offset_t	s_offset,
+	vm_object_offset_t	e_offset)
+{
+	vnode_pager_t	vnode_object;
+
+	if (mem_obj && mem_obj->mo_pager_ops == &vnode_pager_ops) {
+
+		vnode_object = vnode_pager_lookup(mem_obj);
+		vnode_pager_was_dirtied(vnode_object->vnode_handle, s_offset, e_offset);
+	}
 }
 
 kern_return_t

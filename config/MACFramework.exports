@@ -12,10 +12,6 @@ _mac_label_set
 _mac_audit_text
 
 _mac_iokit_check_hid_control
-_mac_iokit_check_nvram_delete
-_mac_iokit_check_nvram_get
-_mac_iokit_check_nvram_set
-
 _mac_vnode_check_trigger_resolve
 
 _sbuf_cat

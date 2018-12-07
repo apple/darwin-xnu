@@ -103,6 +103,7 @@ static void		setthetime(
 					struct timeval	*tv);
 
 void time_zone_slock_init(void);
+static boolean_t timeval_fixusec(struct timeval *t1);
 
 /*
  * Time of day and interval timer support.
@@ -209,8 +210,10 @@ settimeofday(__unused struct proc *p, struct settimeofday_args  *uap, __unused i
 	if (uap->tzp && (error = copyin(uap->tzp, (caddr_t)&atz, sizeof(atz))))
 		return (error);
 	if (uap->tv) {
-		timevalfix(&atv);
-		if (atv.tv_sec < 0 || (atv.tv_sec == 0 && atv.tv_usec < 0))
+		/* only positive values of sec/usec are accepted */
+		if (atv.tv_sec < 0 || atv.tv_usec < 0)
+			return (EPERM);
+		if (!timeval_fixusec(&atv))
 			return (EPERM);
 		setthetime(&atv);
 	}
@@ -709,6 +712,22 @@ timevalfix(
 		t1->tv_sec++;
 		t1->tv_usec -= 1000000;
 	}
+}
+
+static boolean_t
+timeval_fixusec(
+	struct timeval *t1)
+{
+	assert(t1->tv_usec >= 0);
+	assert(t1->tv_sec >= 0);
+
+	if (t1->tv_usec >= 1000000) {
+		if (os_add_overflow(t1->tv_sec, t1->tv_usec / 1000000, &t1->tv_sec))
+			return FALSE;
+		t1->tv_usec = t1->tv_usec % 1000000;
+	}
+
+	return TRUE;
 }
 
 /*

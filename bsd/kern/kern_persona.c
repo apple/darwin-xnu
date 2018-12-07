@@ -41,11 +41,9 @@
 #include <sys/proc_info.h>
 #include <sys/resourcevar.h>
 
-#define pna_info(fmt, ...) \
-	printf("%s:  " fmt "\n", __func__, ## __VA_ARGS__)
-
+#include <os/log.h>
 #define pna_err(fmt, ...) \
-	printf("ERROR[%s]:  " fmt "\n", __func__, ## __VA_ARGS__)
+	os_log_error(OS_LOG_DEFAULT, "ERROR: " fmt, ## __VA_ARGS__)
 
 #define MAX_PERSONAS     512
 
@@ -57,7 +55,10 @@
 #define PERSONA_SYSTEM_UID    ((uid_t)99)
 #define PERSONA_SYSTEM_LOGIN  "system"
 
+#define PERSONA_ALLOC_TOKEN   (0x7a0000ae)
+#define PERSONA_INIT_TOKEN    (0x7500005e)
 #define PERSONA_MAGIC         (0x0aa55aa0)
+#define persona_initialized(p) ((p)->pna_valid == PERSONA_MAGIC || (p)->pna_valid == PERSONA_INIT_TOKEN)
 #define persona_valid(p)      ((p)->pna_valid == PERSONA_MAGIC)
 #define persona_mkinvalid(p)  ((p)->pna_valid = ~(PERSONA_MAGIC))
 
@@ -73,6 +74,8 @@ lck_mtx_t all_personas_lock;
 lck_attr_t *persona_lck_attr;
 lck_grp_t *persona_lck_grp;
 lck_grp_attr_t *persona_lck_grp_attr;
+
+os_refgrp_decl(static, persona_refgrp, "persona", NULL);
 
 static zone_t persona_zone;
 
@@ -126,15 +129,18 @@ void personas_bootstrap(void)
 	g_system_persona = persona_alloc(PERSONA_SYSTEM_UID,
 					 PERSONA_SYSTEM_LOGIN,
 					 PERSONA_SYSTEM, NULL);
+	int err = persona_init_begin(g_system_persona);
+	assert(err == 0);
+
+	persona_init_end(g_system_persona, err);
+
 	assert(g_system_persona != NULL);
 }
 
 struct persona *persona_alloc(uid_t id, const char *login, int type, int *error)
 {
-	struct persona *persona, *tmp;
+	struct persona *persona;
 	int err = 0;
-	kauth_cred_t tmp_cred;
-	gid_t new_group;
 
 	if (!login) {
 		pna_err("Must provide a login name for a new persona!");
@@ -167,10 +173,11 @@ struct persona *persona_alloc(uid_t id, const char *login, int type, int *error)
 	}
 
 	strncpy(persona->pna_login, login, sizeof(persona->pna_login)-1);
+	persona_dbg("Starting persona allocation for: '%s'", persona->pna_login);
 
 	LIST_INIT(&persona->pna_members);
 	lck_mtx_init(&persona->pna_lock, persona_lck_grp, persona_lck_attr);
-	persona->pna_refcount = 1;
+	os_ref_init(&persona->pna_refcount, &persona_refgrp);
 
 	/*
 	 * Setup initial (temporary) kauth_cred structure
@@ -184,18 +191,71 @@ struct persona *persona_alloc(uid_t id, const char *login, int type, int *error)
 		goto out_error;
 	}
 
+	persona->pna_type = type;
+	persona->pna_id = id;
+	persona->pna_valid = PERSONA_ALLOC_TOKEN;
+
+	/*
+	 * NOTE: this persona has not been fully initialized. A subsequent
+	 * call to persona_init_begin() followed by persona_init_end() will make
+	 * the persona visible to the rest of the system.
+	 */
+	if (error) {
+		*error = 0;
+	}
+	return persona;
+
+out_error:
+	(void)hw_atomic_add(&g_total_personas, -1);
+	zfree(persona_zone, persona);
+	if (error) {
+		*error = err;
+	}
+	return NULL;
+}
+
+/**
+ * persona_init_begin
+ *
+ * This function begins initialization of a persona. It first acquires the
+ * global persona list lock via lock_personas(), then selects an appropriate
+ * persona ID and sets up the persona's credentials. This function *must* be
+ * followed by a call to persona_init_end() which will mark the persona
+ * structure as valid
+ *
+ * Conditions:
+ * 	persona has been allocated via persona_alloc()
+ * 	nothing locked
+ *
+ * Returns:
+ * 	global persona list is locked (even on error)
+ */
+int persona_init_begin(struct persona *persona)
+{
+	struct persona *tmp;
+	int err = 0;
+	kauth_cred_t tmp_cred;
+	gid_t new_group;
+	uid_t id;
+
+	if (!persona || (persona->pna_valid != PERSONA_ALLOC_TOKEN)) {
+		return EINVAL;
+	}
+
+	id = persona->pna_id;
+
 	lock_personas();
 try_again:
-	if (id != PERSONA_ID_NONE)
-		persona->pna_id = id;
-	else
+	if (id == PERSONA_ID_NONE)
 		persona->pna_id = g_next_persona_id;
 
-	persona_dbg("Adding %d (%s) to global list...", persona->pna_id, persona->pna_login);
+	persona_dbg("Beginning Initialization of %d:%d (%s)...", id, persona->pna_id, persona->pna_login);
 
 	err = 0;
 	LIST_FOREACH(tmp, &all_personas, pna_list) {
-		if (id == PERSONA_ID_NONE && tmp->pna_id == id) {
+		persona_lock(tmp);
+		if (id == PERSONA_ID_NONE && tmp->pna_id == persona->pna_id) {
+			persona_unlock(tmp);
 			/*
 			 * someone else manually claimed this ID, and we're
 			 * trying to allocate an ID for the caller: try again
@@ -203,8 +263,9 @@ try_again:
 			g_next_persona_id += PERSONA_ID_STEP;
 			goto try_again;
 		}
-		if (strncmp(tmp->pna_login, login, sizeof(tmp->pna_login)) == 0
-		    || tmp->pna_id == id) {
+		if (strncmp(tmp->pna_login, persona->pna_login, sizeof(tmp->pna_login)) == 0 ||
+		    tmp->pna_id == persona->pna_id) {
+			persona_unlock(tmp);
 			/*
 			 * Disallow use of identical login names and re-use
 			 * of previously allocated persona IDs
@@ -212,9 +273,10 @@ try_again:
 			err = EEXIST;
 			break;
 		}
+		persona_unlock(tmp);
 	}
 	if (err)
-		goto out_unlock;
+		goto out;
 
 	/* ensure the cred has proper UID/GID defaults */
 	kauth_cred_ref(persona->pna_cred);
@@ -227,7 +289,7 @@ try_again:
 
 	if (!persona->pna_cred) {
 		err = EACCES;
-		goto out_unlock;
+		goto out;
 	}
 
 	/* it should be a member of exactly 1 group (equal to its UID) */
@@ -243,54 +305,79 @@ try_again:
 
 	if (!persona->pna_cred) {
 		err = EACCES;
-		goto out_unlock;
+		goto out;
 	}
-
-	persona->pna_type = type;
-
-	/* insert the, now valid, persona into the global list! */
-	persona->pna_valid = PERSONA_MAGIC;
-	LIST_INSERT_HEAD(&all_personas, persona, pna_list);
 
 	/* if the kernel supplied the persona ID, increment for next time */
 	if (id == PERSONA_ID_NONE)
 		g_next_persona_id += PERSONA_ID_STEP;
 
-out_unlock:
-	unlock_personas();
+	persona->pna_valid = PERSONA_INIT_TOKEN;
 
-	if (err) {
-		switch (err) {
-		case EEXIST:
-			persona_dbg("Login '%s' (%d) already exists",
-				    login, persona->pna_id);
-			break;
-		case EACCES:
-			persona_dbg("kauth_error for persona:%d", persona->pna_id);
-			break;
-		default:
-			persona_dbg("Unknown error:%d", err);
-		}
-		goto out_error;
+out:
+	if (err != 0) {
+		persona_dbg("ERROR:%d while initializing %d:%d (%s)...", err, id, persona->pna_id, persona->pna_login);
+		/*
+		 * mark the persona with an error so that persona_init_end()
+		 * will *not* add it to the global list.
+		 */
+		persona->pna_id = PERSONA_ID_NONE;
 	}
 
-	return persona;
+	/*
+	 * leave the global persona list locked: it will be
+	 * unlocked in a call to persona_init_end()
+	 */
+	return err;
+}
 
-out_error:
-	(void)hw_atomic_add(&g_total_personas, -1);
-	zfree(persona_zone, persona);
-	if (error)
-		*error = err;
-	return NULL;
+/**
+ * persona_init_end
+ *
+ * This function finalizes the persona initialization by marking it valid and
+ * adding it to the global list of personas. After unlocking the global list,
+ * the persona will be visible to the reset of the system. The function will
+ * only mark the persona valid if the input parameter 'error' is 0.
+ *
+ * Conditions:
+ * 	persona is initialized via persona_init_begin()
+ * 	global persona list is locked via lock_personas()
+ *
+ * Returns:
+ * 	global persona list is unlocked
+ */
+void persona_init_end(struct persona *persona, int error)
+{
+	if (persona == NULL) {
+		return;
+	}
+
+	/*
+	 * If the pna_valid member is set to the INIT_TOKEN value, then it has
+	 * successfully gone through persona_init_begin(), and we can mark it
+	 * valid and make it visible to the rest of the system. However, if
+	 * there was an error either during initialization or otherwise, we
+	 * need to decrement the global count of personas because this one
+	 * will be disposed-of by the callers invocation of persona_put().
+	 */
+	if (error != 0 || persona->pna_valid == PERSONA_ALLOC_TOKEN) {
+		persona_dbg("ERROR:%d after initialization of %d (%s)", error, persona->pna_id, persona->pna_login);
+		/* remove this persona from the global count */
+		(void)hw_atomic_add(&g_total_personas, -1);
+	} else if (error == 0 &&
+	           persona->pna_valid == PERSONA_INIT_TOKEN) {
+		persona->pna_valid = PERSONA_MAGIC;
+		LIST_INSERT_HEAD(&all_personas, persona, pna_list);
+		persona_dbg("Initialization of %d (%s) Complete.", persona->pna_id, persona->pna_login);
+	}
+
+	unlock_personas();
 }
 
 static struct persona *persona_get_locked(struct persona *persona)
 {
-	if (persona->pna_refcount) {
-		persona->pna_refcount++;
-		return persona;
-	}
-	return NULL;
+	os_ref_retain_locked(&persona->pna_refcount);
+	return persona;
 }
 
 struct persona *persona_get(struct persona *persona)
@@ -313,9 +400,8 @@ void persona_put(struct persona *persona)
 		return;
 
 	persona_lock(persona);
-	if (persona->pna_refcount >= 0) {
-		if (--(persona->pna_refcount) == 0)
-			destroy = 1;
+	if (os_ref_release_locked(&persona->pna_refcount) == 0) {
+		destroy = 1;
 	}
 	persona_unlock(persona);
 
@@ -851,7 +937,7 @@ int persona_set_cred(struct persona *persona, kauth_cred_t cred)
 		return EINVAL;
 
 	persona_lock(persona);
-	if (!persona_valid(persona)) {
+	if (!persona_initialized(persona)) {
 		ret = EINVAL;
 		goto out_unlock;
 	}
@@ -888,7 +974,7 @@ int persona_set_cred_from_proc(struct persona *persona, proc_t proc)
 		return EINVAL;
 
 	persona_lock(persona);
-	if (!persona_valid(persona)) {
+	if (!persona_initialized(persona)) {
 		ret = EINVAL;
 		goto out_unlock;
 	}
@@ -969,7 +1055,7 @@ int persona_set_gid(struct persona *persona, gid_t gid)
 		return EINVAL;
 
 	persona_lock(persona);
-	if (!persona_valid(persona)) {
+	if (!persona_initialized(persona)) {
 		ret = EINVAL;
 		goto out_unlock;
 	}
@@ -1016,7 +1102,7 @@ int persona_set_groups(struct persona *persona, gid_t *groups, unsigned ngroups,
 		return EINVAL;
 
 	persona_lock(persona);
-	if (!persona_valid(persona)) {
+	if (!persona_initialized(persona)) {
 		ret = EINVAL;
 		goto out_unlock;
 	}

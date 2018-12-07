@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -84,6 +84,9 @@
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/in_arp.h>
+#include <netinet/ip.h>
+#include <netinet/ip6.h>
+#include <netinet6/nd6.h>
 
 extern int tvtohz(struct timeval *);
 
@@ -163,8 +166,14 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 	}
 
 	if (!rt->rt_rmx.rmx_mtu && !(rt->rt_rmx.rmx_locks & RTV_MTU) &&
-	    rt->rt_ifp)
+	    rt->rt_ifp) {
 		rt->rt_rmx.rmx_mtu = rt->rt_ifp->if_mtu;
+		if (INTF_ADJUST_MTU_FOR_CLAT46(rt->rt_ifp)) {
+			rt->rt_rmx.rmx_mtu = IN6_LINKMTU(rt->rt_ifp);
+			/* Further adjust the size for CLAT46 expansion */
+			rt->rt_rmx.rmx_mtu -= CLAT46_HDR_EXPANSION_OVERHD;
+		}
+	}
 
 	ret = rn_addroute(v_arg, n_arg, head, treenodes);
 	if (ret == NULL && (rt->rt_flags & RTF_HOST)) {

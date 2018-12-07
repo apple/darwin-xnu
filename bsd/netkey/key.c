@@ -838,7 +838,9 @@ found:
 	return sp;
 }
 
-struct secasvar *key_alloc_outbound_sav_for_interface(ifnet_t interface, int family)
+struct secasvar *key_alloc_outbound_sav_for_interface(ifnet_t interface, int family,
+													  struct sockaddr *src,
+													  struct sockaddr *dst)
 {
 	struct secashead *sah;
 	struct secasvar *sav;
@@ -848,47 +850,75 @@ struct secasvar *key_alloc_outbound_sav_for_interface(ifnet_t interface, int fam
 	int arraysize;
 	struct sockaddr_in *sin;
 	u_int16_t dstport;
+	bool strict = true;
     
-	if (interface == NULL)
+	if (interface == NULL) {
         return NULL;
+	}
 	
 	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	lck_mtx_lock(sadb_mutex);
-	
-	LIST_FOREACH(sah, &sahtree, chain) {
-		if (sah->state == SADB_SASTATE_DEAD) {
-			continue;
-		}
-		if (sah->ipsec_if == interface &&
-			(family == AF_INET6 || family == AF_INET) &&
-			sah->dir == IPSEC_DIR_OUTBOUND) {
-			/* This SAH is linked to the IPSec interface, and the right family. We found it! */
-			if (key_preferred_oldsa) {
-				saorder_state_valid = saorder_state_valid_prefer_old;
-				arraysize = _ARRAYLEN(saorder_state_valid_prefer_old);
-			} else {
-				saorder_state_valid = saorder_state_valid_prefer_new;
-				arraysize = _ARRAYLEN(saorder_state_valid_prefer_new);
+
+	do {
+		LIST_FOREACH(sah, &sahtree, chain) {
+			if (sah->state == SADB_SASTATE_DEAD) {
+				continue;
 			}
-			
-			sin = (struct sockaddr_in *)&sah->saidx.dst;
-			dstport = sin->sin_port;
-			if (sah->saidx.mode == IPSEC_MODE_TRANSPORT)
-				sin->sin_port = IPSEC_PORT_ANY;
-			
-			for (stateidx = 0; stateidx < arraysize; stateidx++) {
-				state = saorder_state_valid[stateidx];
-				sav = key_do_allocsa_policy(sah, state, dstport);
-				if (sav != NULL) {
-					lck_mtx_unlock(sadb_mutex);
-					return sav;
+			if (sah->ipsec_if == interface &&
+				(family == AF_INET6 || family == AF_INET) &&
+				sah->dir == IPSEC_DIR_OUTBOUND) {
+
+				if (strict &&
+					sah->saidx.mode == IPSEC_MODE_TRANSPORT &&
+					src != NULL && dst != NULL) {
+					// Validate addresses for transport mode
+					if (key_sockaddrcmp((struct sockaddr *)&sah->saidx.src, src, 0) != 0) {
+						// Source doesn't match
+						continue;
+					}
+
+					if (key_sockaddrcmp((struct sockaddr *)&sah->saidx.dst, dst, 0) != 0) {
+						// Destination doesn't match
+						continue;
+					}
 				}
+
+				/* This SAH is linked to the IPSec interface, and the right family. We found it! */
+				if (key_preferred_oldsa) {
+					saorder_state_valid = saorder_state_valid_prefer_old;
+					arraysize = _ARRAYLEN(saorder_state_valid_prefer_old);
+				} else {
+					saorder_state_valid = saorder_state_valid_prefer_new;
+					arraysize = _ARRAYLEN(saorder_state_valid_prefer_new);
+				}
+
+				sin = (struct sockaddr_in *)&sah->saidx.dst;
+				dstport = sin->sin_port;
+				if (sah->saidx.mode == IPSEC_MODE_TRANSPORT) {
+					sin->sin_port = IPSEC_PORT_ANY;
+				}
+
+				for (stateidx = 0; stateidx < arraysize; stateidx++) {
+					state = saorder_state_valid[stateidx];
+					sav = key_do_allocsa_policy(sah, state, dstport);
+					if (sav != NULL) {
+						lck_mtx_unlock(sadb_mutex);
+						return sav;
+					}
+				}
+
+				break;
 			}
-			
+		}
+		if (strict) {
+			// If we didn't find anything, try again without strict
+			strict = false;
+		} else {
+			// We already were on the second try, bail
 			break;
 		}
-	}
+	} while (true);
 	
 	lck_mtx_unlock(sadb_mutex);
 	return NULL;
@@ -9232,7 +9262,7 @@ key_promisc(
 	}
 }
 
-static int (*key_typesw[])(struct socket *, struct mbuf *,
+static int (*const key_typesw[])(struct socket *, struct mbuf *,
 						   const struct sadb_msghdr *) = {
 	NULL,		/* SADB_RESERVED */
 	key_getspi,	/* SADB_GETSPI */

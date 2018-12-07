@@ -12,9 +12,16 @@ __BEGIN_DECLS
  * XXX These declarations are subject to change at any time.
  */
 
+#define MT_IOC(x) _IO('m', (x))
+
+#define MT_IOC_RESET MT_IOC(0)
+
+#define MT_IOC_ADD MT_IOC(1)
+
 struct monotonic_config {
 	uint64_t event;
 	uint64_t allowed_ctr_mask;
+	uint64_t cpu_mask;
 };
 
 union monotonic_ctl_add {
@@ -27,11 +34,19 @@ union monotonic_ctl_add {
 	} out;
 };
 
+/*
+ * - Consider a separate IOC for disable -- to avoid the copyin to determine
+ *   which way to set it.
+ */
+#define MT_IOC_ENABLE MT_IOC(2)
+
 union monotonic_ctl_enable {
 	struct {
 		bool enable;
 	} in;
 };
+
+#define MT_IOC_COUNTS MT_IOC(3)
 
 union monotonic_ctl_counts {
 	struct {
@@ -43,23 +58,14 @@ union monotonic_ctl_counts {
 	} out;
 };
 
-#define MT_IOC(x) _IO('m', (x))
+#define MT_IOC_GET_INFO MT_IOC(4)
 
-/*
- * FIXME
- *
- * - Consider a separate IOC for disable -- to avoid the copyin to determine which way to set it.
- *
- * - Maybe IOC_COUNTS should just return all the enable counters' counts.
- */
-enum monotonic_ioc {
-	MT_IOC_RESET = MT_IOC(0),
-	MT_IOC_ADD = MT_IOC(1),
-	MT_IOC_ENABLE = MT_IOC(2),
-	MT_IOC_COUNTS = MT_IOC(3),
+union monotonic_ctl_info {
+	struct {
+		unsigned int nmonitors;
+		unsigned int ncounters;
+	} out;
 };
-
-#undef MT_IOC
 
 #if XNU_KERNEL_PRIVATE
 
@@ -125,18 +131,22 @@ enum monotonic_ioc {
 #define MT_KDBG_TMPTH_START(CODE) MT_KDBG_TMPTH_(CODE, DBG_FUNC_START)
 #define MT_KDBG_TMPTH_END(CODE) MT_KDBG_TMPTH_(CODE, DBG_FUNC_END)
 
-/* maybe provider, bank, group, set, unit, pmu */
-
-struct monotonic_dev {
+struct mt_device {
 	const char *mtd_name;
-	int (*mtd_init)(void);
-	int (*mtd_add)(struct monotonic_config *config, uint32_t *ctr_out);
-	void (*mtd_reset)(void);
-	void (*mtd_enable)(bool enable);
-	int (*mtd_read)(uint64_t ctr_mask, uint64_t *counts_out);
-};
+	int (* const mtd_init)(struct mt_device *dev);
+	int (* const mtd_add)(struct monotonic_config *config, uint32_t *ctr_out);
+	void (* const mtd_reset)(void);
+	void (* const mtd_enable)(bool enable);
+	int (* const mtd_read)(uint64_t ctr_mask, uint64_t *counts_out);
+	decl_lck_mtx_data(, mtd_lock);
 
-extern const struct monotonic_dev monotonic_devs[];
+	uint8_t mtd_nmonitors;
+	uint8_t mtd_ncounters;
+	bool mtd_inuse;
+};
+typedef struct mt_device *mt_device_t;
+
+extern struct mt_device mt_devices[];
 
 extern lck_grp_t *mt_lock_grp;
 

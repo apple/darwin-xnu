@@ -182,6 +182,9 @@ struct _posix_spawn_persona_info {
  * can be set, as well as any metadata whose validity is signalled by the
  * presence of a bit in the flags field.  All fields are initialized to the
  * appropriate default values by posix_spawnattr_init().
+ *
+ * Fields must be added at the end of this, but before extensions array
+ * pointers.
  */
 
 typedef struct _posix_spawnattr {
@@ -205,6 +208,9 @@ typedef struct _posix_spawnattr {
 
 	uint64_t        psa_qos_clamp;          /* QoS Clamp to set on the new process */
 	uint64_t        psa_darwin_role;           /* PRIO_DARWIN_ROLE to set on the new process */
+	int             psa_thread_limit;	/* thread limit */
+
+	uint64_t        psa_max_addr;           /* Max valid VM address */
 
 	/*
 	 * NOTE: Extensions array pointers must stay at the end so that

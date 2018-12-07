@@ -162,10 +162,6 @@ extern struct tty cons;
 
 extern int cs_debug;
 
-#if DEVELOPMENT || DEBUG
-extern int cs_enforcement_enable;
-#endif
-
 #if DEBUG
 #define __PROC_INTERNAL_DEBUG 1
 #endif
@@ -188,13 +184,9 @@ typedef uint64_t unaligned_u64 __attribute__((aligned(1)));
 
 static void orphanpg(struct pgrp * pg);
 void proc_name_kdp(task_t t, char * buf, int size);
-void * proc_get_uthread_uu_threadlist(void * uthread_v);
 int proc_threadname_kdp(void * uth, char * buf, size_t size);
 void proc_starttime_kdp(void * p, unaligned_u64 *tv_sec, unaligned_u64 *tv_usec, unaligned_u64 *abstime);
 char * proc_name_address(void * p);
-
-/* TODO: make a header that's exported and usable in osfmk */
-char* proc_best_name(proc_t p);
 
 static void  pgrp_add(struct pgrp * pgrp, proc_t parent, proc_t child);
 static void pgrp_remove(proc_t p);
@@ -211,9 +203,6 @@ struct fixjob_iterargs {
 };
 
 int fixjob_callback(proc_t, void *);
-
-uint64_t get_current_unique_pid(void);
-
 
 uint64_t
 get_current_unique_pid(void)
@@ -1011,6 +1000,17 @@ proc_exiting(proc_t p)
 }
 
 int
+proc_in_teardown(proc_t p)
+{
+	int retval = 0;
+
+	if (p)
+		retval = p->p_lflag & P_LPEXIT;
+	return(retval? 1: 0);
+
+}
+
+int
 proc_forcequota(proc_t p)
 {
 	int retval = 0;
@@ -1077,6 +1077,13 @@ int
 proc_is64bit(proc_t p)
 {
 	return(IS_64BIT_PROCESS(p));
+}
+
+int
+proc_is64bit_data(proc_t p)
+{
+	assert(p->task);
+	return (int)task_get_64bit_data(p->task);
 }
 
 int
@@ -1950,6 +1957,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 		case CS_OPS_ENTITLEMENTS_BLOB:
 		case CS_OPS_IDENTITY:
 		case CS_OPS_BLOB:
+		case CS_OPS_TEAMID:
 			break;	/* not restricted to root */
 		default:
 			if (forself == 0 && kauth_cred_issuser(kauth_cred_get()) != TRUE)
@@ -2000,12 +2008,16 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 
 			proc_lock(pt);
 			retflags = pt->p_csflags;
-			if (cs_enforcement(pt))
+			if (cs_process_enforcement(pt))
 				retflags |= CS_ENFORCEMENT;
 			if (csproc_get_platform_binary(pt))
 				retflags |= CS_PLATFORM_BINARY;
 			if (csproc_get_platform_path(pt))
 				retflags |= CS_PLATFORM_PATH;
+			//Don't return CS_REQUIRE_LV if we turned it on with CS_FORCED_LV but still report CS_FORCED_LV
+			if ((pt->p_csflags & CS_FORCED_LV) == CS_FORCED_LV) {
+				retflags &= (~CS_REQUIRE_LV);
+			}
 			proc_unlock(pt);
 
 			if (uaddr != USER_ADDR_NULL)
@@ -2154,7 +2166,8 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 			error = csops_copy_token(start, length, usize, uaddr);
 			break;
 		}
-		case CS_OPS_IDENTITY: {
+		case CS_OPS_IDENTITY:
+		case CS_OPS_TEAMID: {
 			const char *identity;
 			uint8_t fakeheader[8];
 			uint32_t idlen;
@@ -2178,7 +2191,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 				break;
 			}
 
-			identity = cs_identity_get(pt);
+			identity = ops == CS_OPS_TEAMID ? csproc_get_teamid(pt) : cs_identity_get(pt);
 			proc_unlock(pt);
 			if (identity == NULL) {
 				error = ENOENT;
@@ -2209,7 +2222,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 
 		case CS_OPS_CLEARPLATFORM:
 #if DEVELOPMENT || DEBUG
-			if (cs_enforcement_enable) {
+			if (cs_process_global_enforcement()) {
 				error = ENOTSUP;
 				break;
 			}
@@ -2248,7 +2261,7 @@ proc_iterate(
 	proc_iterate_fn_t filterfn,
 	void *filterarg)
 {
-	pid_t *pid_list;
+	pid_t *pid_list = NULL;
 	vm_size_t pid_list_size = 0;
 	vm_size_t pid_list_size_needed = 0;
 	int pid_count = 0;
@@ -2260,7 +2273,7 @@ proc_iterate(
 	for (;;) {
 		proc_list_lock();
 
-		pid_count_available = nprocs + 1; //kernel_task is not counted in nprocs
+		pid_count_available = nprocs + 1 /* kernel_task not counted in nprocs */;
 		assert(pid_count_available > 0);
 
 		pid_list_size_needed = pid_count_available * sizeof(pid_t);
@@ -2278,6 +2291,7 @@ proc_iterate(
 		}
 		pid_list_size = pid_list_size_needed;
 	}
+	assert(pid_list != NULL);
 
 	/* filter pids into pid_list */
 
@@ -3229,7 +3243,7 @@ extern boolean_t kill_on_no_paging_space;
 #endif /* DEVELOPMENT || DEBUG */
 
 #define MB_SIZE	(1024 * 1024ULL)
-boolean_t	memorystatus_kill_on_VM_thrashing(boolean_t);
+boolean_t	memorystatus_kill_on_VM_compressor_space_shortage(boolean_t);
 
 extern int32_t	max_kill_priority;
 extern int	memorystatus_get_proccnt_upto_priority(int32_t max_bucket_index);
@@ -3305,7 +3319,7 @@ no_paging_space_action()
 	if (memorystatus_get_proccnt_upto_priority(max_kill_priority) > 0) {
 
 		last_no_space_action = now;
-		memorystatus_kill_on_VM_thrashing(TRUE /* async */);
+		memorystatus_kill_on_VM_compressor_space_shortage(TRUE /* async */);
 		return (1);
 	}
 
@@ -3432,11 +3446,17 @@ proc_chrooted(proc_t p)
 	return retval;
 }
 
-void *
-proc_get_uthread_uu_threadlist(void * uthread_v)
+boolean_t
+proc_send_synchronous_EXC_RESOURCE(proc_t p)
 {
-	uthread_t uth = (uthread_t)uthread_v;
-	return (uth != NULL) ? uth->uu_threadlist : NULL;
+	if (p == PROC_NULL)
+		return FALSE;
+
+	/* Send sync EXC_RESOURCE if the process is traced */
+	if (ISSET(p->p_lflag, P_LTRACED)) {
+		return TRUE;
+	}
+	return FALSE;
 }
 
 #ifdef CONFIG_32BIT_TELEMETRY

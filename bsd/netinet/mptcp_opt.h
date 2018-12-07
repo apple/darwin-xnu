@@ -42,7 +42,7 @@
 
 __BEGIN_DECLS
 extern void mptcp_data_ack_rcvd(struct mptcb *mp_tp, struct tcpcb *tp, u_int64_t full_dack);
-extern void mptcp_update_window_fallback(struct tcpcb *tp);
+extern void mptcp_update_window_wakeup(struct tcpcb *tp);
 extern void tcp_do_mptcp_options(struct tcpcb *, u_char *, struct tcphdr *,
     struct tcpopt *, int);
 extern unsigned mptcp_setup_syn_opts(struct socket *, u_char*, unsigned);

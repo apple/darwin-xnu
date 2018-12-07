@@ -327,6 +327,15 @@ in6_selectsrc_core(struct sockaddr_in6 *dstsock, uint32_t hint_mask,
 		IFA_LOCK(&ia->ia_ifa);
 
 		/*
+		 * Simply skip addresses reserved for CLAT46
+		 */
+		if (ia->ia6_flags & IN6_IFF_CLAT46) {
+			SASEL_LOG("NEXT ia %s address on ifp1 %s skipped as it is "
+			    "reserved for CLAT46", s_src, ifp1->if_xname);
+			goto next;
+		}
+
+		/*
 		 * XXX By default we are strong end system and will
 		 * limit candidate set of source address to the ones
 		 * configured on the outgoing interface.
@@ -687,7 +696,7 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 			goto done;
 		}
 		IFA_LOCK_SPIN(&ia6->ia_ifa);
-		if ((ia6->ia6_flags & (IN6_IFF_ANYCAST | IN6_IFF_NOTREADY)) ||
+		if ((ia6->ia6_flags & (IN6_IFF_ANYCAST | IN6_IFF_NOTREADY | IN6_IFF_CLAT46)) ||
 		    (inp && inp_restricted_send(inp, ia6->ia_ifa.ifa_ifp))) {
 			IFA_UNLOCK(&ia6->ia_ifa);
 			IFA_REMREF(&ia6->ia_ifa);
@@ -1429,8 +1438,7 @@ in6_pcbsetport(struct in6_addr *laddr, struct inpcb *inp, struct proc *p,
 	bool found;
 	struct inpcbinfo *pcbinfo = inp->inp_pcbinfo;
 	kauth_cred_t cred;
-
-	(void)laddr;
+#pragma unused(laddr)
 	if (!locked) { /* Make sure we don't run into a deadlock: 4052373 */
 		if (!lck_rw_try_lock_exclusive(pcbinfo->ipi_lock)) {
 			socket_unlock(inp->inp_socket, 0);

@@ -109,6 +109,7 @@
 #include <kern/cpu_number.h>
 #include <kern/smp.h>
 #include <kern/queue.h>
+
 #include <kern/timer.h>
 #include <kern/simple_lock.h>
 #include <kern/locks.h>
@@ -123,6 +124,7 @@
 #include <kern/affinity.h>
 #include <kern/debug.h>
 #include <kern/block_hint.h>
+#include <kern/turnstile.h>
 
 #include <kern/waitq.h>
 #include <san/kasan.h>
@@ -131,6 +133,11 @@
 
 #include <machine/cpu_data.h>
 #include <machine/thread.h>
+
+#ifdef XNU_KERNEL_PRIVATE
+/* priority queue static asserts fail for __ARM64_ARCH_8_32__ kext builds */
+#include <kern/priority_queue.h>
+#endif /* XNU_KERNEL_PRIVATE */
 
 #if MONOTONIC
 #include <stdatomic.h>
@@ -163,14 +170,18 @@ struct thread {
 	 *	anywhere in the thread structure.
 	 */
 	union {
-		queue_chain_t           runq_links;     /* run queue links */
-		queue_chain_t           wait_links;     /* wait queue links */
+		queue_chain_t                   runq_links;     	/* run queue links */
+		queue_chain_t                   wait_links;     	/* wait queue links */
+		struct priority_queue_entry     wait_prioq_links;	/* priority ordered waitq links */
 	};
 
 	processor_t             runq;           /* run queue assignment */
 
 	event64_t               wait_event;     /* wait queue event */
 	struct waitq           *waitq;          /* wait queue this thread is enqueued on */
+	struct turnstile       *turnstile;      /* thread's turnstile, protected by primitives interlock */
+	void                   *inheritor;      /* inheritor of the primitive the thread will block on */
+	struct priority_queue  inheritor_queue; /* Inheritor queue */
 
 	/* Data updated during assert_wait/thread_wakeup */
 #if __SMP__
@@ -218,9 +229,10 @@ struct thread {
 #define TH_SUSP			0x02			/* stopped or requested to stop */
 #define TH_RUN			0x04			/* running or on runq */
 #define TH_UNINT		0x08			/* waiting uninteruptibly */
-#define TH_TERMINATE		0x10			/* halted at termination */
-#define TH_TERMINATE2		0x20			/* added to termination queue */
-
+#define TH_TERMINATE	0x10			/* halted at termination */
+#define TH_TERMINATE2	0x20			/* added to termination queue */
+#define TH_WAIT_REPORT	0x40			/* the wait is using the sched_call,
+										   only set if TH_WAIT is also set */
 #define TH_IDLE			0x80			/* idling processor */
 
 	/* Scheduling information */
@@ -240,7 +252,7 @@ struct thread {
 #define TH_SFLAG_THROTTLED		0x0004		/* throttled thread forced to timeshare mode (may be applied in addition to failsafe) */
 #define TH_SFLAG_DEMOTED_MASK      (TH_SFLAG_THROTTLED | TH_SFLAG_FAILSAFE)	/* saved_mode contains previous sched_mode */
 
-#define	TH_SFLAG_PROMOTED		0x0008		/* sched pri has been promoted */
+#define	TH_SFLAG_PROMOTED               0x0008          /* sched pri has been promoted by kernel mutex priority promotion */
 #define TH_SFLAG_ABORT			0x0010		/* abort interruptible waits */
 #define TH_SFLAG_ABORTSAFELY		0x0020		/* ... but only those at safe point */
 #define TH_SFLAG_ABORTED_MASK		(TH_SFLAG_ABORT | TH_SFLAG_ABORTSAFELY)
@@ -249,13 +261,15 @@ struct thread {
 #define TH_SFLAG_DEPRESSED_MASK		(TH_SFLAG_DEPRESS | TH_SFLAG_POLLDEPRESS)
 /* unused TH_SFLAG_PRI_UPDATE           0x0100 */
 #define TH_SFLAG_EAGERPREEMPT		0x0200		/* Any preemption of this thread should be treated as if AST_URGENT applied */
-#define TH_SFLAG_RW_PROMOTED		0x0400		/* sched pri has been promoted due to blocking with RW lock held */
+#define TH_SFLAG_RW_PROMOTED		0x0400		/* promote reason: blocking with RW lock held */
 /* unused TH_SFLAG_THROTTLE_DEMOTED     0x0800 */
-#define TH_SFLAG_WAITQ_PROMOTED		0x1000		/* sched pri promoted from waitq wakeup (generally for IPC receive) */
+#define TH_SFLAG_WAITQ_PROMOTED		0x1000		/* promote reason: waitq wakeup (generally for IPC receive) */
 
 
-#define TH_SFLAG_EXEC_PROMOTED          0x8000		/* sched pri has been promoted since thread is in an exec */
-#define TH_SFLAG_PROMOTED_MASK	        (TH_SFLAG_PROMOTED | TH_SFLAG_RW_PROMOTED | TH_SFLAG_WAITQ_PROMOTED | TH_SFLAG_EXEC_PROMOTED)
+#define TH_SFLAG_EXEC_PROMOTED          0x8000		/* promote reason: thread is in an exec */
+
+/* 'promote reasons' that request a priority floor only, not a custom priority */
+#define TH_SFLAG_PROMOTE_REASON_MASK    (TH_SFLAG_RW_PROMOTED | TH_SFLAG_WAITQ_PROMOTED | TH_SFLAG_EXEC_PROMOTED)
 
 #define TH_SFLAG_RW_PROMOTED_BIT	(10)	/* 0x400 */
 
@@ -263,22 +277,24 @@ struct thread {
 	int16_t                         base_pri;               /* base priority */
 	int16_t                         max_priority;           /* copy of max base priority */
 	int16_t                         task_priority;          /* copy of task base priority */
+	int16_t                         promotion_priority;     /* priority thread is currently promoted to */
 
 #if defined(CONFIG_SCHED_GRRR)
 #if 0
 	uint16_t			grrr_deficit;		/* fixed point (1/1000th quantum) fractional deficit */
 #endif
 #endif
-	
+
 	int16_t				promotions;			/* level of promotion */
-	int16_t				pending_promoter_index;
+	int				iotier_override; /* atomic operations to set, cleared on ret to user */
 	_Atomic uint32_t		ref_count;		/* number of references to me */
-	void				*pending_promoter[2];
+
+	lck_mtx_t*                      waiting_for_mutex;      /* points to mutex we're waiting for until we acquire it */
 
 	uint32_t			rwlock_count;	/* Number of lck_rw_t locks held by thread */
 
 	integer_t			importance;			/* task-relative importance */
-	uint32_t                        was_promoted_on_wakeup;
+	uint32_t                        was_promoted_on_wakeup;         /* thread promoted on wakeup to acquire mutex */
 
 	/* Priority depression expiration */
 	integer_t			depress_timer_active;
@@ -321,7 +337,7 @@ struct thread {
 #if defined(CONFIG_SCHED_PROTO)
 	uint32_t			runqueue_generation;	/* last time runqueue was drained */
 #endif
-	
+
 	/* Statistics and timesharing calculations */
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 	natural_t			sched_stamp;	/* last scheduler tick */
@@ -347,6 +363,7 @@ struct thread {
 	uint64_t			vtimer_qos_save;
 
 	timer_data_t		ptime;			/* time executing in P mode */
+	timer_data_t		runnable_timer;		/* time the thread is runnable (including running) */
 
 #if CONFIG_SCHED_SFI
 	/* Timing for wait state */
@@ -369,13 +386,13 @@ struct thread {
 	/* Various bits of state to stash across a continuation, exclusive to the current thread block point */
 	union {
 		struct {
-		  	mach_msg_return_t	state;		/* receive state */
+			mach_msg_return_t	state;		/* receive state */
 			mach_port_seqno_t	seqno;		/* seqno of recvd message */
-		  	ipc_object_t		object;		/* object received on */
-		  	mach_vm_address_t	msg_addr;	/* receive buffer pointer */
+			ipc_object_t		object;		/* object received on */
+			mach_vm_address_t	msg_addr;	/* receive buffer pointer */
 			mach_msg_size_t		rsize;		/* max size for recvd msg */
 			mach_msg_size_t		msize;		/* actual size for recvd msg */
-		  	mach_msg_option_t	option;		/* options for receive */
+			mach_msg_option_t	option;		/* options for receive */
 			mach_port_name_t	receiver_name;	/* the receive port name */
 			struct knote		*knote;		/* knote fired for rcv */
 			union {
@@ -389,16 +406,12 @@ struct thread {
 			mach_msg_continue_t	continuation;
 		} receive;
 		struct {
-			struct semaphore	*waitsemaphore;  	/* semaphore ref */
+			struct semaphore	*waitsemaphore;		/* semaphore ref */
 			struct semaphore	*signalsemaphore;	/* semaphore ref */
 			int					options;			/* semaphore options */
 			kern_return_t		result;				/* primary result */
 			mach_msg_continue_t continuation;
 		} sema;
-	  	struct {
-			int					option;		/* switch option */
-			boolean_t				reenable_workq_callback;	/* on entry, callbacks were suspended */
-		} swtch;
 	} saved;
 
 	/* Only user threads can cause guard exceptions, only kernel threads can be thread call threads */
@@ -439,6 +452,9 @@ struct thread {
 		/* Task membership */
 		struct task				*task;
 		vm_map_t				map;
+#if DEVELOPMENT || DEBUG
+	boolean_t pmap_footprint_suspended;
+#endif /* DEVELOPMENT || DEBUG */
 
 		decl_lck_mtx_data(,mutex)
 
@@ -543,17 +559,12 @@ struct thread {
 		user_addr_t	override_resource;
 	} *overrides;
 
-	_Atomic uint32_t kqwl_owning_count;
 	uint32_t        ipc_overrides;
+	_Atomic uint32_t kqwl_owning_count;
 	uint32_t        sync_ipc_overrides;
-	uint32_t        user_promotions;
 	uint16_t        user_promotion_basepri;
 	_Atomic uint16_t kevent_ast_bits;
 
-	block_hint_t    pending_block_hint;
-	block_hint_t    block_hint;      /* What type of primitive last caused us to block. */
-
-	int	iotier_override; /* atomic operations to set, cleared on ret to user */
 	io_stat_info_t  		thread_io_stats; /* per-thread I/O statistics */
 
 #if CONFIG_EMBEDDED
@@ -582,6 +593,9 @@ struct thread {
 #if	SCHED_TRACE_THREAD_WAKEUPS
 	uintptr_t		thread_wakeup_bt[64];
 #endif
+	turnstile_update_flags_t inheritor_flags; /* inheritor flags for inheritor field */
+	block_hint_t    pending_block_hint;
+	block_hint_t    block_hint;      /* What type of primitive last caused us to block. */
 };
 
 #define ith_state           saved.receive.state
@@ -607,7 +621,15 @@ struct thread {
 
 #define ITH_KNOTE_NULL      ((void *)NULL)
 #define ITH_KNOTE_PSEUDO    ((void *)0xdeadbeef)
-#define ITH_KNOTE_VALID(kn) ((kn) != ITH_KNOTE_NULL && (kn) != ITH_KNOTE_PSEUDO)
+/*
+ * The ith_knote is used during message delivery, and can safely be interpreted
+ * only when used for one of these codepaths, which the test for the msgt_name
+ * being RECEIVE or SEND_ONCE is about.
+ */
+#define ITH_KNOTE_VALID(kn, msgt_name) \
+		(((kn) != ITH_KNOTE_NULL && (kn) != ITH_KNOTE_PSEUDO) && \
+		 ((msgt_name) == MACH_MSG_TYPE_PORT_RECEIVE || \
+		 (msgt_name) == MACH_MSG_TYPE_PORT_SEND_ONCE))
 
 #if MACH_ASSERT
 #define assert_thread_magic(thread) assertf((thread)->thread_magic == THREAD_MAGIC, \
@@ -667,6 +689,9 @@ extern void			thread_copy_resource_info(
 						thread_t src_thread);
 
 extern void			thread_terminate_crashed_threads(void);
+
+extern void			turnstile_deallocate_enqueue(
+						struct turnstile *turnstile);
 
 extern void			thread_stack_enqueue(
 						thread_t		thread);
@@ -778,9 +803,22 @@ extern kern_return_t	machine_thread_get_state(
 							thread_state_t			state,
 							mach_msg_type_number_t	*count);
 
+extern kern_return_t	machine_thread_state_convert_from_user(
+							thread_t				thread,
+							thread_flavor_t			flavor,
+							thread_state_t			tstate,
+							mach_msg_type_number_t	count);
+
+extern kern_return_t	machine_thread_state_convert_to_user(
+							thread_t				thread,
+							thread_flavor_t			flavor,
+							thread_state_t			tstate,
+							mach_msg_type_number_t	*count);
+
 extern kern_return_t	machine_thread_dup(
 							thread_t		self,
-							thread_t		target);
+							thread_t		target,
+							boolean_t		is_corpse);
 
 extern void				machine_thread_init(void);
 
@@ -838,6 +876,10 @@ extern void thread_set_options(uint32_t thopt);
 #else	/* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
+
+extern void thread_mtx_lock(thread_t thread);
+
+extern void thread_mtx_unlock(thread_t thread);
 
 extern thread_t		current_thread(void);
 
@@ -900,6 +942,7 @@ __BEGIN_DECLS
 
 uint16_t	thread_set_tag(thread_t, uint16_t);
 uint16_t	thread_get_tag(thread_t);
+uint64_t	thread_last_run_time(thread_t);
 
 extern kern_return_t    thread_state_initialize(
 							thread_t				thread);
@@ -910,7 +953,19 @@ extern kern_return_t	thread_setstatus(
 							thread_state_t			tstate,
 							mach_msg_type_number_t	count);
 
+extern kern_return_t	thread_setstatus_from_user(
+							thread_t				thread,
+							int						flavor,
+							thread_state_t			tstate,
+							mach_msg_type_number_t	count);
+
 extern kern_return_t	thread_getstatus(
+							thread_t				thread,
+							int						flavor,
+							thread_state_t			tstate,
+							mach_msg_type_number_t	*count);
+
+extern kern_return_t	thread_getstatus_to_user(
 							thread_t				thread,
 							int						flavor,
 							thread_state_t			tstate,
@@ -926,21 +981,15 @@ extern kern_return_t thread_create_waiting(task_t               task,
                                            event_t              event,
                                            thread_t             *new_thread);
 
-extern kern_return_t	thread_create_workq(
-							task_t			task,
-							thread_continue_t	thread_return,
-							thread_t		*new_thread);
-
 extern kern_return_t	thread_create_workq_waiting(
 							task_t			task,
 							thread_continue_t	thread_return,
-							event_t         event,
 							thread_t		*new_thread);
 
 extern	void	thread_yield_internal(
 	mach_msg_timeout_t	interval);
 
-extern void 	thread_yield_to_preemption(void);
+extern void		thread_yield_to_preemption(void);
 
 /*
  * Thread-private CPU limits: apply a private CPU limit to this thread only. Available actions are:
@@ -963,9 +1012,10 @@ extern int thread_get_cpulimit(int *action, uint8_t *percentage, uint64_t *inter
 extern int thread_set_cpulimit(int action, uint8_t percentage, uint64_t interval_ns);
 
 extern void			thread_read_times(
-						thread_t 		thread,
+						thread_t		thread,
 						time_value_t	*user_time,
-						time_value_t	*system_time);
+						time_value_t	*system_time,
+						time_value_t	*runnable_time);
 
 extern uint64_t		thread_get_runtime_self(void);
 
@@ -1034,29 +1084,27 @@ extern void		thread_sched_call(
 					thread_t		thread,
 					sched_call_t	call);
 
-extern sched_call_t	thread_disable_sched_call(
-					thread_t		thread,
-					sched_call_t	call);
-
-extern void	thread_reenable_sched_call(
-					thread_t		thread,
-					sched_call_t	call);
-
-extern void		thread_static_param(
-					thread_t		thread,
-					boolean_t		state);
-
 extern boolean_t	thread_is_static_param(
 					thread_t		thread);
 
 extern task_t	get_threadtask(thread_t);
-#define thread_is_64bit(thd)	\
-	task_has_64BitAddr(get_threadtask(thd))
 
+/*
+ * Thread is running within a 64-bit address space.
+ */
+#define thread_is_64bit_addr(thd)	\
+	task_has_64Bit_addr(get_threadtask(thd))
+
+/*
+ * Thread is using 64-bit machine state.
+ */
+#define thread_is_64bit_data(thd)	\
+	task_has_64Bit_data(get_threadtask(thd))
 
 extern void		*get_bsdthread_info(thread_t);
 extern void		set_bsdthread_info(thread_t, void *);
 extern void		*uthread_alloc(task_t, thread_t, int);
+extern event_t	workq_thread_init_and_wq_lock(task_t, thread_t); // bsd/pthread/
 extern void		uthread_cleanup_name(void *uthread);
 extern void		uthread_cleanup(task_t, void *, void *);
 extern void		uthread_zone_free(void *); 
@@ -1119,6 +1167,8 @@ extern void vn_guard_ast(thread_t,
 #endif
 extern void mach_port_guard_ast(thread_t,
 	mach_exception_code_t, mach_exception_subcode_t);
+extern void virt_memory_guard_ast(thread_t,
+	mach_exception_code_t, mach_exception_subcode_t);
 extern void thread_guard_violation(thread_t,
 	mach_exception_code_t, mach_exception_subcode_t);
 extern void thread_update_io_stats(thread_t, int size, int io_flags);
@@ -1147,6 +1197,23 @@ extern void thread_set_thread_name(thread_t th, const char* name);
 
 extern void thread_enable_send_importance(thread_t thread, boolean_t enable);
 
+/*
+ * Translate signal context data pointer to userspace representation
+ */
+
+extern kern_return_t	machine_thread_siguctx_pointer_convert_to_user(
+							thread_t thread,
+							user_addr_t *uctxp);
+
+/*
+ * Translate array of function pointer syscall arguments from userspace representation
+ */
+
+extern kern_return_t 	machine_thread_function_pointers_convert_from_user(
+							thread_t thread,
+							user_addr_t *fptrs,
+							uint32_t count);
+
 /* Get a backtrace for a threads kernel or user stack (user_p), with pc and optionally
  * frame pointer (getfp). Returns bytes added to buffer, and kThreadTruncatedBT in
  * thread_trace_flags if a user page is not present after kdp_lightweight_fault() is
@@ -1163,12 +1230,18 @@ extern int 				machine_trace_thread(
 							uint32_t *thread_trace_flags);
 
 extern int 				machine_trace_thread64(thread_t thread,
-							char *tracepos,
-							char *tracebound,
-							int nframes,
-							boolean_t user_p,
-							boolean_t getfp,
-							uint32_t *thread_trace_flags);
+											   char *tracepos,
+											   char *tracebound,
+											   int nframes,
+											   boolean_t user_p,
+											   boolean_t getfp,
+											   uint32_t *thread_trace_flags,
+											   uint64_t *sp);
+
+/*
+ * Get the duration of the given thread's last wait.
+ */
+uint64_t thread_get_last_wait_duration(thread_t thread);
 
 #endif	/* XNU_KERNEL_PRIVATE */
 

@@ -109,7 +109,7 @@ def print_alloc_free_entry(addr, orig_ptr):
             print " #{:}: {}".format(btframes-i-1, GetSourceInformationForAddress(fr))
 
     print "",
-    print_hexdump(addr, asz, 0)
+    print_hexdump(addr, asz, 1)
 
 alloc_header_sz = 16
 
@@ -177,7 +177,7 @@ def print_alloc_info(_addr):
                     print " #{:}: {}".format(btframes-i-1, GetSourceInformationForAddress(fr))
 
                 print "",
-                print_hexdump(base, asz, 0)
+                print_hexdump(base, asz, 1)
             return
 
         elif magic_for_addr(addr, 0xf233) == unsigned(freeh.magic):
@@ -202,8 +202,14 @@ def print_whatis(_addr, ctx):
     rightrz = None
     extra = "Live"
 
-    shbyte = get_shadow_byte(shadow_for_address(addr, shift))
-    maxsearch = 4096 * 2
+    shaddr = shadow_for_address(addr, shift)
+    try:
+        shbyte = get_shadow_byte(shaddr)
+    except:
+        print "Unmapped shadow 0x{:x} for address 0x{:x}".format(shaddr, addr)
+        return
+
+    maxsearch = 8*4096
 
     if shbyte in [0xfa, 0xfb, 0xfd, 0xf5]:
         print_alloc_info(_addr)
@@ -266,9 +272,12 @@ def print_whatis(_addr, ctx):
     print "Valid range: 0x{:x} -- 0x{:x} ({} bytes)".format(base, base+total_size-1, total_size)
     print "Offset:      {} bytes".format(_addr - base)
     print "",
-    print_hexdump(base, total_size, 0)
+    print_hexdump(base, total_size, 1)
 
 def print_hexdump(base, size, ctx):
+    if size < 16:
+        size = 16
+    base -= base % 16
     start = base - 16*ctx
     size += size % 16
     size = min(size + 16*2*ctx, 256)
@@ -294,7 +303,7 @@ def kasan_subcommand(cmd, args, opts):
         print("0x{:02x} @ 0x{:016x} [{}]\n\n".format(sb, shadow, shadow_byte_to_string(sb)))
         ctx = long(opts.get("-C", 5))
         print_shadow_context(addr, ctx)
-    elif cmd == 'legend':
+    elif cmd == 'key' or cmd == 'legend':
         print_legend()
     elif cmd == 'info':
         pages_used = unsigned(kern.globals.shadow_pages_used)
@@ -308,6 +317,8 @@ def kasan_subcommand(cmd, args, opts):
         print_whatis(addr, ctx)
     elif cmd == 'alloc' or cmd == 'heap':
         print_alloc_info(addr)
+    else:
+        print "Unknown subcommand: `{}'".format(cmd)
 
 @lldb_command('kasan', 'C:')
 def Kasan(cmd_args=None, cmd_options={}):

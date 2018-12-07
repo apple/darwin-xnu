@@ -270,8 +270,8 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				 */
 				IFA_LOCK_SPIN(ifa);
 				if (((struct in6_ifaddr *)ifa)->ia6_flags &
-				    (IN6_IFF_ANYCAST|IN6_IFF_NOTREADY|
-				    IN6_IFF_DETACHED)) {
+				    (IN6_IFF_ANYCAST | IN6_IFF_NOTREADY|
+				    IN6_IFF_DETACHED | IN6_IFF_CLAT46)) {
 					IFA_UNLOCK(ifa);
 					IFA_REMREF(ifa);
 					lck_rw_done(pcbinfo->ipi_lock);
@@ -295,9 +295,9 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 			struct inpcb *t;
 			uid_t u;
 
-			/* GROSS */
 #if !CONFIG_EMBEDDED
-			if (ntohs(lport) < IPV6PORT_RESERVED) {
+			if (ntohs(lport) < IPV6PORT_RESERVED &&
+				!IN6_IS_ADDR_UNSPECIFIED(&sin6.sin6_addr)) {
 				cred = kauth_cred_proc_ref(p);
 				error = priv_check_cred(cred,
 				    PRIV_NETINET_RESERVEDPORT, 0);
@@ -533,6 +533,11 @@ in6_pcbconnect(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	struct ifnet *outif = NULL;
 	struct socket *so = inp->inp_socket;
 
+#if CONTENT_FILTER
+	if (so)
+		so->so_state_change_cnt++;
+#endif
+
 	if (so->so_proto->pr_protocol == IPPROTO_UDP &&
 	    sin6->sin6_port == htons(53) && !(so->so_flags1 & SOF1_DNS_COUNTED)) {
 	    	so->so_flags1 |= SOF1_DNS_COUNTED;
@@ -597,6 +602,11 @@ void
 in6_pcbdisconnect(struct inpcb *inp)
 {
 	struct socket *so = inp->inp_socket;
+
+#if CONTENT_FILTER
+	if (so)
+		so->so_state_change_cnt++;
+#endif
 
 	if (!lck_rw_try_lock_exclusive(inp->inp_pcbinfo->ipi_lock)) {
 		/* lock inversion issue, mostly with udp multicast packets */

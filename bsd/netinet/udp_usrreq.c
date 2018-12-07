@@ -119,6 +119,10 @@ extern int esp_udp_encap_port;
 #include <netinet/flow_divert.h>
 #endif /* FLOW_DIVERT */
 
+#if CONTENT_FILTER
+#include <net/content_filter.h>
+#endif /* CONTENT_FILTER */
+
 #define	DBG_LAYER_IN_BEG	NETDBG_CODE(DBG_NETUDP, 0)
 #define	DBG_LAYER_IN_END	NETDBG_CODE(DBG_NETUDP, 2)
 #define	DBG_LAYER_OUT_BEG	NETDBG_CODE(DBG_NETUDP, 1)
@@ -258,7 +262,11 @@ udp_init(struct protosw *pp, struct domain *dp)
 	if (udp_initialized)
 		return;
 	udp_initialized = 1;
-
+	uint32_t pool_size = (nmbclusters << MCLSHIFT) >> MBSHIFT;
+	if (pool_size >= 96) {
+		/* Improves 10GbE UDP performance. */
+		udp_recvspace = 786896;
+	}
 	LIST_INIT(&udb);
 	udbinfo.ipi_listhead = &udb;
 	udbinfo.ipi_hashbase = hashinit(UDBHASHSIZE, M_PCB,
@@ -516,7 +524,7 @@ udp_input(struct mbuf *m, int iphlen)
 			skipit = 0;
 			if (!necp_socket_is_allowed_to_send_recv_v4(inp,
 			    uh->uh_dport, uh->uh_sport, &ip->ip_dst,
-			    &ip->ip_src, ifp, NULL, NULL)) {
+			    &ip->ip_src, ifp, NULL, NULL, NULL)) {
 				/* do not inject data to pcb */
 				skipit = 1;
 			}
@@ -691,7 +699,7 @@ udp_input(struct mbuf *m, int iphlen)
 	}
 #if NECP
 	if (!necp_socket_is_allowed_to_send_recv_v4(inp, uh->uh_dport,
-	    uh->uh_sport, &ip->ip_dst, &ip->ip_src, ifp, NULL, NULL)) {
+	    uh->uh_sport, &ip->ip_dst, &ip->ip_src, ifp, NULL, NULL, NULL)) {
 		udp_unlock(inp->inp_socket, 1, 0);
 		IF_UDP_STATINC(ifp, badipsec);
 		goto bad;
@@ -706,7 +714,8 @@ udp_input(struct mbuf *m, int iphlen)
 	udp_in.sin_addr = ip->ip_src;
 	if ((inp->inp_flags & INP_CONTROLOPTS) != 0 ||
 	    (inp->inp_socket->so_options & SO_TIMESTAMP) != 0 ||
-	    (inp->inp_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+	    (inp->inp_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
+		(inp->inp_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 #if INET6
 		if (inp->inp_vflag & INP_IPV6) {
 			int savedflags;
@@ -811,7 +820,8 @@ udp_append(struct inpcb *last, struct ip *ip, struct mbuf *n, int off,
 #endif /* CONFIG_MACF_NET */
 	if ((last->inp_flags & INP_CONTROLOPTS) != 0 ||
 	    (last->inp_socket->so_options & SO_TIMESTAMP) != 0 ||
-	    (last->inp_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+	    (last->inp_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
+		(last->inp_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 #if INET6
 		if (last->inp_vflag & INP_IPV6) {
 			int savedflags;
@@ -1309,9 +1319,9 @@ __private_extern__ void
 udp_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
     bitstr_t *bitfield)
 {
-		inpcb_get_ports_used(ifindex, protocol, flags, bitfield,
-		    &udbinfo);
-	}
+	inpcb_get_ports_used(ifindex, protocol, flags, bitfield,
+	    &udbinfo);
+}
 
 __private_extern__ uint32_t
 udp_count_opportunistic(unsigned int ifindex, u_int32_t flags)
@@ -1415,6 +1425,13 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	struct ip_moptions *mopts;
 	struct route ro;
 	struct ip_out_args ipoa;
+#if CONTENT_FILTER
+	struct m_tag *cfil_tag = NULL;
+	bool cfil_faddr_use = false;
+	uint32_t cfil_so_state_change_cnt = 0;
+	short cfil_so_options = 0;
+	struct sockaddr *cfil_faddr = NULL;
+#endif
 
 	bzero(&ipoa, sizeof(ipoa));
 	ipoa.ipoa_boundif = IFSCOPE_NONE;
@@ -1434,6 +1451,35 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	KERNEL_DEBUG(DBG_FNC_UDP_OUTPUT | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
 	socket_lock_assert_owned(so);
+
+#if CONTENT_FILTER
+	/*
+	 * If socket is subject to UDP Content Filter and no addr is passed in,
+	 * retrieve CFIL saved state from mbuf and use it if necessary.
+	 */
+	if (so->so_cfil_db && !addr) {
+		cfil_tag = cfil_udp_get_socket_state(m, &cfil_so_state_change_cnt, &cfil_so_options, &cfil_faddr);
+		if (cfil_tag) {
+			sin = (struct sockaddr_in *)(void *)cfil_faddr;
+			if (inp && inp->inp_faddr.s_addr == INADDR_ANY) {
+				/*
+				 * Socket is unconnected, simply use the saved faddr as 'addr' to go through
+				 * the connect/disconnect logic.
+				 */
+				addr = (struct sockaddr *)cfil_faddr;
+			} else if ((so->so_state_change_cnt != cfil_so_state_change_cnt) &&
+					   (inp->inp_fport != sin->sin_port ||
+						inp->inp_faddr.s_addr != sin->sin_addr.s_addr)) {
+				/*
+				 * Socket is connected but socket state and dest addr/port changed.
+				 * We need to use the saved faddr info.
+				 */
+				cfil_faddr_use = true;
+			}
+		}
+	}
+#endif
+
 	if (control != NULL) {
 		sotc = so_tc_from_control(control, &netsvctype);
 		VERIFY(outif == NULL);
@@ -1496,8 +1542,15 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	 * If there was a routing change, discard cached route and check
 	 * that we have a valid source address.  Reacquire a new source
 	 * address if INADDR_ANY was specified.
+	 *
+	 * If we are using cfil saved state, go through this cache cleanup
+	 * so that we can get a new route.
 	 */
-	if (ROUTE_UNUSABLE(&inp->inp_route)) {
+	if (ROUTE_UNUSABLE(&inp->inp_route)
+#if CONTENT_FILTER
+		|| cfil_faddr_use
+#endif
+		) {
 		struct in_ifaddr *ia = NULL;
 
 		ROUTE_RELEASE(&inp->inp_route);
@@ -1550,6 +1603,14 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	faddr = inp->inp_faddr;
 	lport = inp->inp_lport;
 	fport = inp->inp_fport;
+
+#if CONTENT_FILTER
+	if (cfil_faddr_use)
+	{
+		faddr = ((struct sockaddr_in *)(void *)cfil_faddr)->sin_addr;
+		fport = ((struct sockaddr_in *)(void *)cfil_faddr)->sin_port;
+	}
+#endif
 
 	if (addr) {
 		sin = (struct sockaddr_in *)(void *)addr;
@@ -1659,9 +1720,26 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	ui->ui_ulen = htons((u_short)len + sizeof (struct udphdr));
 
 	/*
-	 * Set up checksum and output datagram.
+	 * Set up checksum to pseudo header checksum and output datagram.
+	 *
+	 * Treat flows to be CLAT46'd as IPv6 flow and compute checksum
+	 * no matter what, as IPv6 mandates checksum for UDP.
+	 *
+	 * Here we only compute the one's complement sum of the pseudo header.
+	 * The payload computation and final complement is delayed to much later
+	 * in IP processing to decide if remaining computation needs to be done
+	 * through offload.
+	 *
+	 * That is communicated by setting CSUM_UDP in csum_flags.
+	 * The offset of checksum from the start of ULP header is communicated
+	 * through csum_data.
+	 *
+	 * Note since this already contains the pseudo checksum header, any
+	 * later operation at IP layer that modify the values used here must
+	 * update the checksum as well (for example NAT etc).
 	 */
-	if (udpcksum && !(inp->inp_flags & INP_UDP_NOCKSUM)) {
+	if ((inp->inp_flags2 & INP2_CLAT46_FLOW) ||
+	    (udpcksum && !(inp->inp_flags & INP_UDP_NOCKSUM))) {
 		ui->ui_sum = in_pseudo(ui->ui_src.s_addr, ui->ui_dst.s_addr,
 		    htons((u_short)len + sizeof (struct udphdr) + IPPROTO_UDP));
 		m->m_pkthdr.csum_flags = (CSUM_UDP|CSUM_ZERO_INVERT);
@@ -1680,6 +1758,7 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 #if NECP
 	{
 		necp_kernel_policy_id policy_id;
+		necp_kernel_policy_id skip_policy_id;
 		u_int32_t route_rule_id;
 
 		/*
@@ -1715,12 +1794,12 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		}
 
 		if (!necp_socket_is_allowed_to_send_recv_v4(inp, lport, fport,
-		    &laddr, &faddr, NULL, &policy_id, &route_rule_id)) {
+		    &laddr, &faddr, NULL, &policy_id, &route_rule_id, &skip_policy_id)) {
 			error = EHOSTUNREACH;
 			goto abort;
 		}
 
-		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id);
+		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id, skip_policy_id);
 
 		if (net_qos_policy_restricted != 0) {
 			necp_socket_update_qos_marking(inp,
@@ -1739,7 +1818,13 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 #endif /* IPSEC */
 
 	inpopts = inp->inp_options;
-	soopts |= (inp->inp_socket->so_options & (SO_DONTROUTE | SO_BROADCAST));
+#if CONTENT_FILTER
+	if (cfil_tag && (inp->inp_socket->so_options != cfil_so_options))
+		soopts |= (cfil_so_options & (SO_DONTROUTE | SO_BROADCAST));
+	else
+#endif
+		soopts |= (inp->inp_socket->so_options & (SO_DONTROUTE | SO_BROADCAST));
+
 	mopts = inp->inp_moptions;
 	if (mopts != NULL) {
 		IMO_LOCK(mopts);
@@ -1763,6 +1848,11 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	m->m_pkthdr.pkt_flags |= (PKTF_FLOW_ID | PKTF_FLOW_LOCALSRC);
 	if (flowadv)
 		m->m_pkthdr.pkt_flags |= PKTF_FLOW_ADV;
+	m->m_pkthdr.tx_udp_pid = so->last_pid;
+	if (so->so_flags & SOF_DELEGATED)
+		m->m_pkthdr.tx_udp_e_pid = so->e_pid;
+	else
+		m->m_pkthdr.tx_udp_e_pid = 0;
 
 	if (ipoa.ipoa_boundif != IFSCOPE_NONE)
 		ipoa.ipoa_flags |= IPOAF_BOUND_IF;
@@ -1826,6 +1916,15 @@ abort:
 
 		if (rt->rt_flags & (RTF_MULTICAST|RTF_BROADCAST))
 			rt = NULL;	/* unusable */
+
+#if CONTENT_FILTER
+		/*
+		 * Discard temporary route for cfil case
+		 */
+		if (cfil_faddr_use)
+			rt = NULL;	/* unusable */
+#endif
+
 		/*
 		 * Always discard if it is a multicast or broadcast route.
 		 */
@@ -1867,6 +1966,11 @@ release:
 
 	if (outif != NULL)
 		ifnet_release(outif);
+
+#if CONTENT_FILTER
+	if (cfil_tag)
+		m_tag_free(cfil_tag);
+#endif
 
 	return (error);
 }

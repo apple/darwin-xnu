@@ -837,4 +837,66 @@ btlog_copy_backtraces_for_elements(btlog_t      * btlog,
 	btlog_unlock(btlog);
 }
 
+/*
+ * Returns the number of records in the btlog struct.
+ *
+ * Called by the mach_zone_get_btlog_records() MIG routine.
+ */
+size_t
+get_btlog_records_count(btlog_t *btlog)
+{
+	if (btlog->btlog_buffersize < sizeof(btlog_t)) {
+		return 0;
+	}
+	return ((btlog->btlog_buffersize - sizeof(btlog_t))/btlog->btrecord_size);
+}
+
+/*
+ * Copies out relevant info from btlog_record_t's to zone_btrecord_t's. 'numrecs' points to the number of records
+ * the 'records' buffer can hold. Upon return 'numrecs' points to the number of records actually copied out.
+ *
+ * Called by the mach_zone_get_btlog_records() MIG routine.
+ */
+void
+get_btlog_records(btlog_t *btlog, zone_btrecord_t *records, unsigned int *numrecs)
+{
+	unsigned int count, recs_copied, frame;
+	zone_btrecord_t *current_rec;
+	btlog_record_t *zstack_record;
+	btlog_recordindex_t	zstack_index = BTLOG_RECORDINDEX_NONE;
+
+	btlog_lock(btlog);
+
+	count = 0;
+	if (btlog->btlog_buffersize > sizeof(btlog_t)) {
+		count = (unsigned int)((btlog->btlog_buffersize - sizeof(btlog_t))/btlog->btrecord_size);
+	}
+	/* Copy out only as many records as the pre-allocated buffer size permits. */
+	if (count > *numrecs) {
+		count = *numrecs;
+	}
+	zstack_index = btlog->head;
+
+	current_rec = &records[0];
+	recs_copied = 0;
+	while (recs_copied < count && (zstack_index != BTLOG_RECORDINDEX_NONE)) {
+		zstack_record = lookup_btrecord(btlog, zstack_index);
+		current_rec->operation_type = (uint32_t)(zstack_record->operation);
+		current_rec->ref_count = zstack_record->ref_count;
+
+		frame = 0;
+		while (frame < MIN(btlog->btrecord_btdepth, MAX_ZTRACE_DEPTH)) {
+			current_rec->bt[frame] = (uint64_t)VM_KERNEL_UNSLIDE(zstack_record->bt[frame]);
+			frame++;
+		}
+
+		zstack_index = zstack_record->next;
+		recs_copied++;
+		current_rec++;
+	}
+	*numrecs = recs_copied;
+
+	btlog_unlock(btlog);
+}
+
 #endif  /* DEBUG || DEVELOPMENT */

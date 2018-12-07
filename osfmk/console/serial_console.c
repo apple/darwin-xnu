@@ -51,6 +51,13 @@
 #include <arm/cpu_data_internal.h>
 #endif
 
+#ifdef CONFIG_XNUPOST
+#include <tests/xnupost.h>
+kern_return_t console_serial_test(void);
+kern_return_t console_serial_alloc_rel_tests(void);
+kern_return_t console_serial_parallel_log_tests(void);
+#define MAX_CPU_SLOTS (MAX_CPUS + 2)
+#endif
 
 #ifndef MAX_CPU_SLOTS
 #define MAX_CPU_SLOTS (MAX_CPUS)
@@ -127,7 +134,7 @@ SECURITY_READ_ONLY_EARLY(uint32_t) nconsops = (sizeof cons_ops / sizeof cons_ops
 
 uint32_t cons_ops_index = VC_CONS_OPS;
 
-#ifdef __arm__
+#if defined(__x86_64__) || defined(__arm__)
 // NMI static variables
 #define NMI_STRING_SIZE 32
 char nmi_string[NMI_STRING_SIZE] = "afDIGHr84A84jh19Kphgp428DNPdnapq";
@@ -598,7 +605,7 @@ _serial_getc(__unused int a, __unused int b, boolean_t wait, __unused boolean_t 
 		c = serial_getc();
 	} while (wait && c < 0);
 
-#ifdef __arm__
+#if defined(__x86_64__) || defined(__arm__)
 	// Check for the NMI string
 	if (c == nmi_string[nmi_counter]) {
 		nmi_counter++;
@@ -645,3 +652,174 @@ vcgetc(__unused int l, __unused int u, __unused boolean_t wait, __unused boolean
 		return 0;
 }
 
+#ifdef CONFIG_XNUPOST
+static uint32_t cons_test_ops_count = 0;
+
+/*
+ * Try to do multiple cpu buffer allocs and free and intentionally
+ * allow for pre-emption.
+ */
+static void
+alloc_free_func(void * arg, wait_result_t wres __unused)
+{
+	console_buf_t * cbp = NULL;
+	int count           = (int)arg;
+
+	T_LOG("Doing %d iterations of console cpu alloc and free.", count);
+
+	while (count-- > 0) {
+		(void)hw_atomic_add(&cons_test_ops_count, 1);
+		cbp = (console_buf_t *)console_cpu_alloc(0);
+		if (cbp == NULL) {
+			T_ASSERT_NOTNULL(cbp, "cpu allocation failed");
+		}
+		console_cpu_free(cbp);
+		cbp = NULL;
+		/* give chance to another thread to come in */
+		delay(10);
+	}
+}
+
+/*
+ * Log to console by multiple methods - printf, unbuffered write, console_write()
+ */
+static void
+log_to_console_func(void * arg __unused, wait_result_t wres __unused)
+{
+	uint64_t thread_id = current_thread()->thread_id;
+	char somedata[10] = "123456789";
+	for (int i = 0; i < 26; i++) {
+		(void)hw_atomic_add(&cons_test_ops_count, 1);
+		printf(" thid: %llu printf iteration %d\n", thread_id, i);
+		cnputc_unbuffered((char)('A' + i));
+		cnputc_unbuffered('\n');
+		console_write((char *)somedata, sizeof(somedata));
+		delay(10);
+	}
+	printf("finished the log_to_console_func operations\n\n");
+}
+
+kern_return_t
+console_serial_parallel_log_tests(void)
+{
+	thread_t thread;
+	kern_return_t kr;
+	cons_test_ops_count = 0;
+
+	kr = kernel_thread_start(log_to_console_func, NULL, &thread);
+	T_ASSERT_EQ_INT(kr, KERN_SUCCESS, "kernel_thread_start returned successfully");
+
+	delay(100);
+
+	log_to_console_func(NULL, 0);
+
+	/* wait until other thread has also finished */
+	while (cons_test_ops_count < 52) {
+		delay(1000);
+	}
+
+	thread_deallocate(thread);
+	T_LOG("parallel_logging tests is now complete. From this point forward we expect full lines\n");
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+console_serial_alloc_rel_tests(void)
+{
+	unsigned long i, free_buf_count = 0;
+	uint32_t * p;
+	console_buf_t * cbp;
+	thread_t thread;
+	kern_return_t kr;
+
+	T_LOG("doing alloc/release tests");
+
+	for (i = 0; i < MAX_CPU_SLOTS; i++) {
+		p   = (uint32_t *)((uintptr_t)console_ring.buffer + console_ring.len + (i * sizeof(console_buf_t)));
+		cbp = (console_buf_t *)(void *)p;
+		/* p should either be allocated cpu buffer or have CPU_BUF_FREE_HEX in it */
+		T_ASSERT(*p == CPU_BUF_FREE_HEX || cbp->buf_base == &cbp->buf[0], "");
+		if (*p == CPU_BUF_FREE_HEX) {
+			free_buf_count++;
+		}
+	}
+
+	T_ASSERT_GE_ULONG(free_buf_count, 2, "At least 2 buffers should be free");
+	cons_test_ops_count = 0;
+
+	kr = kernel_thread_start(alloc_free_func, (void *)1000, &thread);
+	T_ASSERT_EQ_INT(kr, KERN_SUCCESS, "kernel_thread_start returned successfully");
+
+	/* yeild cpu to give other thread chance to get on-core */
+	delay(100);
+
+	alloc_free_func((void *)1000, 0);
+
+	/* wait until other thread finishes its tasks */
+	while (cons_test_ops_count < 2000) {
+		delay(1000);
+	}
+
+	thread_deallocate(thread);
+	/* verify again that atleast 2 slots are free */
+	free_buf_count = 0;
+	for (i = 0; i < MAX_CPU_SLOTS; i++) {
+		p   = (uint32_t *)((uintptr_t)console_ring.buffer + console_ring.len + (i * sizeof(console_buf_t)));
+		cbp = (console_buf_t *)(void *)p;
+		/* p should either be allocated cpu buffer or have CPU_BUF_FREE_HEX in it */
+		T_ASSERT(*p == CPU_BUF_FREE_HEX || cbp->buf_base == &cbp->buf[0], "");
+		if (*p == CPU_BUF_FREE_HEX) {
+			free_buf_count++;
+		}
+	}
+	T_ASSERT_GE_ULONG(free_buf_count, 2, "At least 2 buffers should be free after alloc free tests");
+
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+console_serial_test(void)
+{
+	unsigned long i;
+	char buffer[CPU_BUFFER_LEN];
+	uint32_t * p;
+	console_buf_t * cbp;
+
+	T_LOG("Checking console_ring status.");
+	T_ASSERT_EQ_INT(console_ring.len, KERN_CONSOLE_RING_SIZE, "Console ring size is not correct.");
+	T_ASSERT_GT_INT(KERN_CONSOLE_BUF_SIZE, KERN_CONSOLE_RING_SIZE, "kernel console buffer size is < allocation.");
+
+	/* select the next slot from the per cpu buffers at end of console_ring.buffer */
+	for (i = 0; i < MAX_CPU_SLOTS; i++) {
+		p   = (uint32_t *)((uintptr_t)console_ring.buffer + console_ring.len + (i * sizeof(console_buf_t)));
+		cbp = (console_buf_t *)(void *)p;
+		/* p should either be allocated cpu buffer or have CPU_BUF_FREE_HEX in it */
+		T_ASSERT(*p == CPU_BUF_FREE_HEX || cbp->buf_base == &cbp->buf[0], "verified initialization of cpu buffers p=%p", (void *)p);
+	}
+
+	/* setup buffer to be chars */
+	for (i = 0; i < CPU_BUFFER_LEN; i++) {
+		buffer[i] = (char)('0' + (i % 10));
+	}
+	buffer[CPU_BUFFER_LEN - 1] = '\0';
+
+	T_LOG("Printing %d char string to serial one char at a time.", CPU_BUFFER_LEN);
+	for (i = 0; i < CPU_BUFFER_LEN; i++) {
+		printf("%c", buffer[i]);
+	}
+	printf("End\n");
+	T_LOG("Printing %d char string to serial as a whole", CPU_BUFFER_LEN);
+	printf("%s\n", buffer);
+
+	T_LOG("Using console_write call repeatedly for 100 iterations");
+	for (i = 0; i < 100; i++) {
+		console_write(&buffer[0], 14);
+		if ((i % 6) == 0)
+			printf("\n");
+	}
+	printf("\n");
+
+	T_LOG("Using T_LOG to print buffer %s", buffer);
+	return KERN_SUCCESS;
+}
+#endif

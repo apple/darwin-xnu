@@ -113,7 +113,7 @@ kern_return_t do_pgo_reset_counters()
 static kern_return_t
 kextpgo_trap()
 {
-    return DebuggerTrapWithState(DBOP_RESET_PGO_COUNTERS, NULL, NULL, NULL, 0, FALSE, 0);
+    return DebuggerTrapWithState(DBOP_RESET_PGO_COUNTERS, NULL, NULL, NULL, 0, NULL, FALSE, 0);
 }
 
 static kern_return_t

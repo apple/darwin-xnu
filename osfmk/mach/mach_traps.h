@@ -222,6 +222,14 @@ extern kern_return_t _kernelrpc_mach_port_insert_right_trap(
 				mach_msg_type_name_t polyPoly
 );
 
+extern kern_return_t _kernelrpc_mach_port_get_attributes_trap(
+				mach_port_name_t target,
+				mach_port_name_t name,
+				mach_port_flavor_t flavor,
+				mach_port_info_t port_info_out,
+				mach_msg_type_number_t *port_info_outCnt
+);
+
 extern kern_return_t _kernelrpc_mach_port_insert_member_trap(
 				mach_port_name_t target,
 				mach_port_name_t name,
@@ -713,6 +721,16 @@ struct _kernelrpc_mach_port_insert_right_args {
 };
 extern kern_return_t _kernelrpc_mach_port_insert_right_trap(
 				struct _kernelrpc_mach_port_insert_right_args *args);
+
+struct _kernelrpc_mach_port_get_attributes_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_name_t, name);
+	PAD_ARG_(mach_port_flavor_t, flavor);
+	PAD_ARG_(user_addr_t, info);
+	PAD_ARG_(user_addr_t, count);
+};
+extern kern_return_t _kernelrpc_mach_port_get_attributes_trap(
+				struct _kernelrpc_mach_port_get_attributes_args *args);
 
 struct _kernelrpc_mach_port_insert_member_args {
 	PAD_ARG_(mach_port_name_t, target);

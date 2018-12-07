@@ -133,7 +133,9 @@
 #define PRIV_VFS_SNAPSHOT_REVERT	14003	/* Allow reverting filesystem to a previous snapshot */
 
 #define PRIV_APFS_EMBED_DRIVER		14100	/* Allow embedding an EFI driver into the APFS container */
-#define PRIV_APFS_FUSION_DEBUG      14101   /* Allow getting internal statistics and controlling the APFS fusion container */
+#define PRIV_APFS_FUSION_DEBUG      14101   /* Allow getting internal statistics and controlling the APFS Fusion container */
+#define PRIV_APFS_FUSION_ALLOW_PIN_FASTPROMOTE  14102   /* Allow changing pinned/fastPromote inode flags in APFS Fusion container */
+
 #ifdef KERNEL
 /*
  * Privilege check interface.  No flags are currently defined for the API.

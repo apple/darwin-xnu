@@ -61,6 +61,8 @@ OPTIONS/config_dtrace		optional config_dtrace
 
 OPTIONS/no_kextd		optional no_kextd
 
+OPTIONS/config_quiesce_counter  optional config_quiesce_counter
+
 #
 # gssd files
 #
@@ -119,6 +121,7 @@ osfmk/kern/clock.c			standard
 osfmk/kern/clock_oldops.c		standard
 osfmk/kern/coalition.c			optional config_coalitions
 osfmk/kern/counters.c			standard
+osfmk/kern/cpu_quiesce.c		optional config_quiesce_counter
 osfmk/kern/debug.c			standard
 osfmk/kern/energy_perf.c		standard
 osfmk/kern/exception.c		standard
@@ -133,7 +136,7 @@ osfmk/kern/ipc_misc.c			standard
 osfmk/kern/ipc_sync.c			standard
 osfmk/kern/ipc_tt.c			standard
 osfmk/kern/kalloc.c			standard
-osfmk/kern/kern_ecc.c			optional config_ecc_logging
+osfmk/kern/ecc_logging.c			optional config_ecc_logging
 osfmk/kern/ktrace_background_notify.c	standard
 osfmk/kern/ledger.c			standard
 osfmk/kern/locks.c			standard
@@ -145,6 +148,7 @@ osfmk/kern/mk_timer.c		standard
 osfmk/kern/page_decrypt.c	standard
 osfmk/kern/printf.c			standard
 osfmk/kern/priority.c			standard
+osfmk/kern/priority_queue.c		standard
 osfmk/kern/processor.c		standard
 osfmk/kern/processor_data.c		standard
 osfmk/kern/sched_average.c		standard
@@ -166,6 +170,8 @@ osfmk/kern/sysdiagnose.c	optional config_sysdiagnose
 osfmk/kern/task.c			standard
 osfmk/kern/task_policy.c	standard
 osfmk/kern/task_swap.c		standard
+osfmk/kern/test_lock.c		optional development
+osfmk/kern/test_lock.c          optional debug
 osfmk/kern/thread.c			standard
 osfmk/kern/thread_act.c		standard
 osfmk/kern/thread_call.c	standard
@@ -173,10 +179,13 @@ osfmk/kern/thread_group.c	standard
 osfmk/kern/thread_policy.c	standard
 osfmk/kern/timer.c			standard
 osfmk/kern/timer_call.c		standard
+osfmk/kern/turnstile.c  	standard
+osfmk/kern/ux_handler.c		standard
 osfmk/kern/waitq.c			standard
 osfmk/kern/work_interval.c		standard
 osfmk/kern/xpr.c			optional xpr_debug
 osfmk/kern/zalloc.c			standard
+osfmk/kern/zcache.c		optional config_zcache
 osfmk/kern/gzalloc.c		optional config_gzalloc
 osfmk/kern/bsd_kern.c		optional mach_bsd
 osfmk/kern/hibernate.c		optional hibernation
@@ -200,6 +209,7 @@ osfmk/kern/copyout_shim.c	optional copyout_shim
 ./mach/mach_vm_server.c			standard
 ./mach/mach_voucher_server.c		standard
 ./mach/mach_voucher_attr_control_server.c		standard
+./mach/memory_entry_server.c		standard
 ./mach/memory_object_control_server.c	standard
 ./mach/resource_notify_user.c		standard
 ./mach/upl_server.c			standard
@@ -207,6 +217,14 @@ osfmk/kern/copyout_shim.c	optional copyout_shim
 ./mach/task_access_user.c          	standard
 osfmk/corpses/corpse.c			standard
 osfmk/kern/kern_cdata.c			standard
+osfmk/tests/kernel_tests.c		optional config_xnupost
+osfmk/tests/ktest.c			optional config_xnupost
+osfmk/tests/ktest_accessor.c		optional config_xnupost
+osfmk/tests/ktest_emit.c		optional config_xnupost
+osfmk/tests/ktest_global.c		optional config_xnupost
+osfmk/tests/pmap_tests.c		optional config_xnupost
+osfmk/tests/bitmap_test.c		optional config_xnupost
+osfmk/tests/test_thread_call.c          optional config_xnupost
 ./mach/telemetry_notification_user.c optional config_telemetry
 osfmk/bank/bank.c			standard
 osfmk/atm/atm.c			optional config_atm
@@ -248,6 +266,7 @@ osfmk/vm/vm_pageout.c			standard
 osfmk/vm/vm_purgeable.c			standard
 osfmk/vm/vm_resident.c			standard
 osfmk/vm/vm_shared_region.c		standard
+osfmk/vm/vm_shared_region_pager.c	standard
 osfmk/vm/vm_swapfile_pager.c		standard
 osfmk/vm/vm_user.c			standard
 osfmk/vm/vm32_user.c			standard
@@ -281,6 +300,7 @@ osfmk/kperf/meminfo.c                   optional kperf
 osfmk/kperf/kperf_timer.c               optional kperf
 osfmk/kperf/kperf_kpc.c                 optional kperf
 osfmk/kperf/kdebug_trigger.c            optional kperf
+osfmk/kperf/lazy.c                      optional kperf
 osfmk/kern/kpc_thread.c                 optional kpc
 osfmk/kern/kpc_common.c                 optional kpc
 
@@ -315,17 +335,4 @@ osfmk/corecrypto/ccsha2/src/ccsha256_K.c	standard
 osfmk/corecrypto/ccsha2/src/ccsha256_ltc_compress.c	standard
 osfmk/corecrypto/ccsha2/src/ccsha256_ltc_di.c	standard
 
-osfmk/corecrypto/ccaes/src/ccaes_ltc_ecb_encrypt_mode.c	standard
-osfmk/corecrypto/ccmode/src/ccmode_ctr_crypt.c	standard
-osfmk/corecrypto/ccmode/src/ccmode_ctr_init.c	standard
-osfmk/corecrypto/ccmode/src/ccmode_ctr_setctr.c	standard
-osfmk/corecrypto/ccmode/src/ccmode_factory_ctr_crypt.c	standard
-
-osfmk/prng/random.c			standard
-osfmk/prng/prng_yarrow.c		standard
-osfmk/prng/fips_sha1.c			standard
-osfmk/prng/YarrowCoreLib/port/smf.c	standard
-osfmk/prng/YarrowCoreLib/src/comp.c	standard
-osfmk/prng/YarrowCoreLib/src/prng.c	standard
-osfmk/prng/YarrowCoreLib/src/sha1mod.c	standard
-osfmk/prng/YarrowCoreLib/src/yarrowUtils.c	standard
+osfmk/prng/prng_random.c		standard

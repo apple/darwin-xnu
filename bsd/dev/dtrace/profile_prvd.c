@@ -65,7 +65,6 @@ extern struct arm_saved_state *find_kern_regs(thread_t);
 
 extern void profile_init(void);
 
-static dev_info_t *profile_devi;
 static dtrace_provider_id_t profile_id;
 
 /*
@@ -645,30 +644,21 @@ static dtrace_pattr_t profile_attr = {
 };
 
 static dtrace_pops_t profile_pops = {
-	profile_provide,
-	NULL,
-	profile_enable,
-	profile_disable,
-	NULL,
-	NULL,
-	profile_getargdesc,
-	profile_getarg,
-	profile_usermode,
-	profile_destroy
+	.dtps_provide =		profile_provide,
+	.dtps_provide_module =	NULL,
+	.dtps_enable =		profile_enable,
+	.dtps_disable =		profile_disable,
+	.dtps_suspend =		NULL,
+	.dtps_resume =		NULL,
+	.dtps_getargdesc =	profile_getargdesc,
+	.dtps_getargval =	profile_getarg,
+	.dtps_usermode =	profile_usermode,
+	.dtps_destroy =		profile_destroy
 };
 
 static int
-profile_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
+profile_attach(dev_info_t *devi)
 {
-	switch (cmd) {
-	case DDI_ATTACH:
-		break;
-	case DDI_RESUME:
-		return (DDI_SUCCESS);
-	default:
-		return (DDI_FAILURE);
-	}
-
 	if (ddi_create_minor_node(devi, "profile", S_IFCHR, 0,
 	    DDI_PSEUDO, 0) == DDI_FAILURE ||
 	    dtrace_register("profile", &profile_attr,
@@ -680,8 +670,6 @@ profile_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 
 	profile_max = PROFILE_MAX_DEFAULT;
 
-	ddi_report_dev(devi);
-	profile_devi = devi;
 	return (DDI_SUCCESS);
 }
 
@@ -741,24 +729,15 @@ static struct cdevsw profile_cdevsw =
 	0					/* type */
 };
 
-static int gProfileInited = 0;
-
 void profile_init( void )
 {
-	if (0 == gProfileInited)
-	{
-		int majdevno = cdevsw_add(PROFILE_MAJOR, &profile_cdevsw);
-		
-		if (majdevno < 0) {
-			printf("profile_init: failed to allocate a major number!\n");
-			gProfileInited = 0;
-			return;
-		}
+	int majdevno = cdevsw_add(PROFILE_MAJOR, &profile_cdevsw);
 
-		profile_attach( (dev_info_t	*)(uintptr_t)majdevno, DDI_ATTACH );
+	if (majdevno < 0) {
+		printf("profile_init: failed to allocate a major number!\n");
+		return;
+	}
 
-		gProfileInited = 1;
-	} else
-		panic("profile_init: called twice!\n");
+	profile_attach( (dev_info_t*)(uintptr_t)majdevno);
 }
 #undef PROFILE_MAJOR

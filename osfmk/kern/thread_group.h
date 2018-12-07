@@ -33,7 +33,6 @@
 #define _KERN_THREAD_GROUP_H_
 
 struct thread_group;
-typedef struct thread_group *thread_group_t;
 
 #include <mach/thread_status.h> /* for proc_reg.h / CONFIG_THREAD_GROUPS */
 

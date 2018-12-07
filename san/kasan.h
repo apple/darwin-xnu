@@ -46,6 +46,7 @@ typedef uintptr_t uptr;
 
 #if KASAN
 
+#define KASAN_DEBUG  0
 #define KASAN_KALLOC 1
 #define KASAN_ZALLOC 1
 #define KASAN_DYNAMIC_BLACKLIST 1
@@ -101,8 +102,10 @@ void kasan_notify_address(vm_offset_t address, vm_size_t size);
 void kasan_notify_address_nopoison(vm_offset_t address, vm_size_t size);
 void kasan_unpoison_stack(vm_offset_t stack, vm_size_t size);
 void kasan_unpoison_curstack(bool whole_stack);
-void kasan_unpoison_fakestack(thread_t thread);
+bool kasan_check_shadow(vm_address_t base, vm_size_t sz, uint8_t shadow);
 
+void kasan_fakestack_drop(thread_t thread); /* mark all fakestack entries for thread as unused */
+void kasan_fakestack_gc(thread_t thread);   /* free and poison all unused fakestack objects for thread */
 void kasan_fakestack_suspend(void);
 void kasan_fakestack_resume(void);
 
@@ -126,6 +129,7 @@ extern unsigned shadow_stolen_idx;
 extern vm_offset_t shadow_pnext, shadow_ptop;
 #endif
 #endif
+
 /*
  * Allocator hooks
  */

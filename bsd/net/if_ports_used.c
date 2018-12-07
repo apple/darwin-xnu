@@ -34,13 +34,13 @@
 #include <sys/kauth.h>
 #include <sys/bitstring.h>
 #include <sys/priv.h>
+#include <sys/protosw.h>
 #include <sys/socket.h>
 
 #include <kern/locks.h>
 #include <kern/zalloc.h>
 
 #include <libkern/libkern.h>
-#include <mach/branch_predicates.h>
 
 #include <net/kpi_interface.h>
 #include <net/if_var.h>
@@ -461,13 +461,13 @@ sysctl_wakeuuid_not_set_last_time SYSCTL_HANDLER_ARGS
 #pragma unused(oidp, arg1, arg2)
 
 	if (proc_is64bit(req->p)) {
-		struct user64_timeval tv;
+		struct user64_timeval tv = {};
 
 		tv.tv_sec = wakeuuid_not_set_last_time.tv_sec;
 		tv.tv_usec = wakeuuid_not_set_last_time.tv_usec;
 		return SYSCTL_OUT(req, &tv, sizeof(tv));
 	} else {
-		struct user32_timeval tv;
+		struct user32_timeval tv = {};
 
 		tv.tv_sec = wakeuuid_not_set_last_time.tv_sec;
 		tv.tv_usec = wakeuuid_not_set_last_time.tv_usec;

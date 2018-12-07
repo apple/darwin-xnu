@@ -33,6 +33,7 @@
 #include <kern/debug.h>
 #include <sys/cdefs.h>
 #include <stdint.h>
+#include <mach_debug/zone_info.h>
 
 #ifdef	XNU_KERNEL_PRIVATE
 
@@ -87,6 +88,13 @@ void btlog_copy_backtraces_for_elements(btlog_t      * btlog,
                                         uint32_t       zoneSize,
                                         leak_site_proc proc,
                                         void         * refCon);
+
+size_t get_btlog_records_count(btlog_t *btlog);
+
+void get_btlog_records(btlog_t *btlog,
+                       zone_btrecord_t *records,
+                       unsigned int *numrecs);
+
 #endif  /* DEBUG || DEVELOPMENT */
 
 #endif	/* XNU_KERNEL_PRIVATE */

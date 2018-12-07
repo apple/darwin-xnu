@@ -46,6 +46,9 @@
 #include <sys/sysent.h>
 #include <sys/ucontext.h>
 #include <sys/wait.h>
+
+#include <sys/ux_exception.h>
+
 #include <mach/thread_act.h>	/* for thread_abort_safely */
 #include <mach/thread_status.h>	
 
@@ -62,8 +65,6 @@
 
 
 /* Forward: */
-extern boolean_t machine_exception(int, mach_exception_code_t, 
-		mach_exception_subcode_t, int *, mach_exception_subcode_t *);
 extern kern_return_t thread_getstatus(thread_t act, int flavor,
 			thread_state_t tstate, mach_msg_type_number_t *count);
 extern kern_return_t thread_setstatus(thread_t thread, int flavor,
@@ -99,6 +100,7 @@ struct sigframe32 {
 	int		sig;
 	user32_addr_t	sinfo;	/* siginfo32_t* */
 	user32_addr_t	uctx;	/* struct ucontext32 */
+	user32_addr_t	token;
 };
 
 /*
@@ -190,6 +192,8 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 	int stack_size = 0;
 	int infostyle = UC_TRAD;
 	xstate_t	sig_xstate;
+	user_addr_t     token_uctx;
+	kern_return_t   kr;
 
 	thread = current_thread();
 	ut = get_bsdthread_info(thread);
@@ -216,6 +220,7 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 	if (proc_is64bit(p)) {
 	        x86_thread_state64_t	*tstate64;
 	        struct user_ucontext64 	uctx64;
+		user64_addr_t token;
 
 	        flavor = x86_THREAD_STATE64;
 		state_count = x86_THREAD_STATE64_COUNT;
@@ -274,6 +279,14 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 		ua_fp -= sizeof(user_addr_t);
 
 		/*
+		 * Generate the validation token for sigreturn
+		 */
+		token_uctx = ua_uctxp;
+		kr = machine_thread_siguctx_pointer_convert_to_user(thread, &token_uctx);
+		assert(kr == KERN_SUCCESS);
+		token = (user64_addr_t)token_uctx ^ (user64_addr_t)ps->ps_sigreturn_token;
+
+		/*
 		 * Build the signal context to be used by sigreturn.
 		 */
 		bzero(&uctx64, sizeof(uctx64));
@@ -318,11 +331,12 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 		tstate64->rdx = sig;
 		tstate64->rcx = ua_sip;
 		tstate64->r8  = ua_uctxp;
-
+		tstate64->r9  = token;
 	} else {
 	        x86_thread_state32_t	*tstate32;
 	        struct user_ucontext32 	uctx32;
 		struct sigframe32	frame32;
+		user32_addr_t token;
 
 	        flavor = x86_THREAD_STATE32;
 		state_count = x86_THREAD_STATE32_COUNT;
@@ -380,6 +394,15 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 		 */
 		ua_fp -= sizeof(frame32.retaddr);
 
+		/*
+		 * Generate the validation token for sigreturn
+		 */
+		token_uctx = ua_uctxp;
+		kr = machine_thread_siguctx_pointer_convert_to_user(thread, &token_uctx);
+		assert(kr == KERN_SUCCESS);
+		token = CAST_DOWN_EXPLICIT(user32_addr_t, token_uctx) ^
+				CAST_DOWN_EXPLICIT(user32_addr_t, ps->ps_sigreturn_token);
+
 		/* 
 		 * Build the argument list for the signal handler.
 		 * Handler should call sigreturn to get out of it
@@ -390,6 +413,7 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 		frame32.catcher = CAST_DOWN_EXPLICIT(user32_addr_t, ua_catcher);
 		frame32.sinfo = CAST_DOWN_EXPLICIT(user32_addr_t, ua_sip);
 		frame32.uctx = CAST_DOWN_EXPLICIT(user32_addr_t, ua_uctxp);
+		frame32.token = token;
 
 		if (copyout((caddr_t)&frame32, ua_fp, sizeof (frame32))) 
 		        goto bad;
@@ -674,6 +698,7 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 
 	thread_t thread = current_thread();
 	struct uthread * ut;
+	struct sigacts *ps = p->p_sigacts;
 	int	error;
 	int	onstack = 0;
 
@@ -685,6 +710,9 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 	void		    *  fs;
 	int		       rval = EJUSTRETURN;
 	xstate_t	       sig_xstate;
+	uint32_t            sigreturn_validation;
+	user_addr_t         token_uctx;
+	kern_return_t       kr;
 
 	ut = (struct uthread *)get_bsdthread_info(thread);
 
@@ -704,8 +732,15 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 
 	sig_xstate = current_xstate();
 
+	sigreturn_validation = atomic_load_explicit(
+			&ps->ps_sigreturn_validation, memory_order_relaxed);
+	token_uctx = uap->uctx;
+	kr = machine_thread_siguctx_pointer_convert_to_user(thread, &token_uctx);
+	assert(kr == KERN_SUCCESS);
+
 	if (proc_is64bit(p)) {
 	        struct user_ucontext64	uctx64;
+		user64_addr_t token;
 
 	        if ((error = copyin(uap->uctx, (void *)&uctx64, sizeof (uctx64))))
 		        return(error);
@@ -724,8 +759,19 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 		fs_count  = thread_state64[sig_xstate].state_count;
 		fs = (void *)&mctxp->mctx_avx64.fs;
 
+		token = (user64_addr_t)token_uctx ^ (user64_addr_t)ps->ps_sigreturn_token;
+		if ((user64_addr_t)uap->token != token) {
+#if DEVELOPMENT || DEBUG
+			printf("process %s[%d] sigreturn token mismatch: received 0x%llx expected 0x%llx\n",
+					p->p_comm, p->p_pid, (user64_addr_t)uap->token, token);
+#endif /* DEVELOPMENT || DEBUG */
+			if (sigreturn_validation != PS_SIGRETURN_VALIDATION_DISABLED) {
+				rval = EINVAL;
+			}
+		}
       } else {
 	        struct user_ucontext32	uctx32;
+		user32_addr_t token;
 
 	        if ((error = copyin(uap->uctx, (void *)&uctx32, sizeof (uctx32)))) 
 		        return(error);
@@ -743,6 +789,18 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 		fs_flavor = thread_state32[sig_xstate].flavor;
 		fs_count  = thread_state32[sig_xstate].state_count;
 		fs = (void *)&mctxp->mctx_avx32.fs;
+
+		token = CAST_DOWN_EXPLICIT(user32_addr_t, uap->uctx) ^
+				CAST_DOWN_EXPLICIT(user32_addr_t, ps->ps_sigreturn_token);
+		if ((user32_addr_t)uap->token != token) {
+#if DEVELOPMENT || DEBUG
+			printf("process %s[%d] sigreturn token mismatch: received 0x%x expected 0x%x\n",
+					p->p_comm, p->p_pid, (user32_addr_t)uap->token, token);
+#endif /* DEVELOPMENT || DEBUG */
+			if (sigreturn_validation != PS_SIGRETURN_VALIDATION_DISABLED) {
+				rval = EINVAL;
+			}
+		}
 	}
 
 	if (onstack)
@@ -752,12 +810,21 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 
 	if (ut->uu_siglist & ~ut->uu_sigmask)
 		signal_setast(thread);
+
+	if (rval == EINVAL) {
+		goto error_ret;
+	}
+
 	/*
 	 * thread_set_state() does all the needed checks for the passed in
 	 * content
 	 */
 	if (thread_setstatus(thread, ts_flavor, ts, ts_count) != KERN_SUCCESS) {
 		rval = EINVAL;
+#if DEVELOPMENT || DEBUG
+		printf("process %s[%d] sigreturn thread_setstatus error %d\n",
+				p->p_comm, p->p_pid, rval);
+#endif /* DEVELOPMENT || DEBUG */
 		goto error_ret;
 	}
 	
@@ -765,6 +832,10 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 
 	if (thread_setstatus(thread, fs_flavor, fs, fs_count)  != KERN_SUCCESS) {
 		rval = EINVAL;
+#if DEVELOPMENT || DEBUG
+		printf("process %s[%d] sigreturn thread_setstatus error %d\n",
+				p->p_comm, p->p_pid, rval);
+#endif /* DEVELOPMENT || DEBUG */
 		goto error_ret;
 
 	}
@@ -774,55 +845,39 @@ error_ret:
 
 
 /*
- * machine_exception() performs MD translation
- * of a mach exception to a unix signal and code.
+ * machine_exception() performs machine-dependent translation
+ * of a mach exception to a unix signal.
  */
-
-boolean_t
-machine_exception(
-	int				exception,
-	mach_exception_code_t		code,
-	__unused mach_exception_subcode_t subcode,
-	int 				*unix_signal,
-	mach_exception_code_t		*unix_code)
+int
+machine_exception(int                           exception,
+                  mach_exception_code_t         code,
+         __unused mach_exception_subcode_t      subcode)
 {
-
 	switch(exception) {
-
-	case EXC_BAD_ACCESS:
-		/* Map GP fault to SIGSEGV, otherwise defer to caller */
-		if (code == EXC_I386_GPFLT) {
-			*unix_signal = SIGSEGV;
-			*unix_code = code;
+		case EXC_BAD_ACCESS:
+			/* Map GP fault to SIGSEGV, otherwise defer to caller */
+			if (code == EXC_I386_GPFLT) {
+				return SIGSEGV;
+			}
 			break;
-		}
-		return(FALSE);
 
-	case EXC_BAD_INSTRUCTION:
-		*unix_signal = SIGILL;
-		*unix_code = code;
-		break;
+		case EXC_BAD_INSTRUCTION:
+			return SIGILL;
 
-	case EXC_ARITHMETIC:
-		*unix_signal = SIGFPE;
-		*unix_code = code;
-		break;
+		case EXC_ARITHMETIC:
+			return SIGFPE;
 
-	case EXC_SOFTWARE:
-		if (code == EXC_I386_BOUND) {
-			/*
-			 * Map #BR, the Bound Range Exceeded exception, to
-			 * SIGTRAP.
-			 */
-			*unix_signal = SIGTRAP;
-			*unix_code = code;
+		case EXC_SOFTWARE:
+			if (code == EXC_I386_BOUND) {
+				/*
+				 * Map #BR, the Bound Range Exceeded exception, to
+				 * SIGTRAP.
+				 */
+				return SIGTRAP;
+			}
 			break;
-		}
-
-	default:
-		return(FALSE);
 	}
-   
-	return(TRUE);
+
+	return 0;
 }
 

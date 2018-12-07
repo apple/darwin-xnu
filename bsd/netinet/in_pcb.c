@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -92,6 +92,7 @@
 #include <net/route.h>
 #include <net/flowhash.h>
 #include <net/flowadv.h>
+#include <net/nat464_utils.h>
 #include <net/ntstat.h>
 
 #include <netinet/in.h>
@@ -131,8 +132,6 @@ static u_int16_t inpcb_timeout_run = 0;	/* INPCB timer is scheduled to run */
 static boolean_t inpcb_garbage_collecting = FALSE; /* gc timer is scheduled */
 static boolean_t inpcb_ticking = FALSE;		/* "slow" timer is scheduled */
 static boolean_t inpcb_fast_timer_on = FALSE;
-
-extern char *proc_best_name(proc_t);
 
 #define	INPCB_GCREQ_THRESHOLD	50000
 
@@ -219,6 +218,8 @@ static boolean_t apn_fallbk_enabled = TRUE;
 
 SYSCTL_DECL(_net_inet);
 SYSCTL_NODE(_net_inet, OID_AUTO, apn_fallback, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "APN Fallback");
+SYSCTL_UINT(_net_inet_apn_fallback, OID_AUTO, enable, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &apn_fallbk_enabled, 0, "APN fallback enable");
 SYSCTL_UINT(_net_inet_apn_fallback, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_LOCKED,
     &apn_fallbk_debug, 0, "APN fallback debug enable");
 #else
@@ -806,7 +807,8 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 			uid_t u;
 
 #if !CONFIG_EMBEDDED
-			if (ntohs(lport) < IPPORT_RESERVED) {
+			if (ntohs(lport) < IPPORT_RESERVED &&
+				SIN(nam)->sin_addr.s_addr != 0) {
 				cred = kauth_cred_proc_ref(p);
 				error = priv_check_cred(cred,
 				    PRIV_NETINET_RESERVEDPORT, 0);
@@ -1148,7 +1150,7 @@ apn_fallback_required (proc_t proc, struct socket *so, struct sockaddr_in *p_dst
 }
 
 static void
-apn_fallback_trigger(proc_t proc)
+apn_fallback_trigger(proc_t proc, struct socket *so)
 {
 	pid_t pid = 0;
 	struct kev_msg ev_msg;
@@ -1168,8 +1170,14 @@ apn_fallback_trigger(proc_t proc)
 	ev_msg.event_code       = KEV_NETEVENT_APNFALLBACK;
 
 	bzero(&apnfallbk_data, sizeof(apnfallbk_data));
-	apnfallbk_data.epid = pid;
-	uuid_copy(apnfallbk_data.euuid, application_uuid);
+
+	if (so->so_flags & SOF_DELEGATED) {
+		apnfallbk_data.epid = so->e_pid;
+		uuid_copy(apnfallbk_data.euuid, so->e_uuid);
+	} else {
+		apnfallbk_data.epid = so->last_pid;
+		uuid_copy(apnfallbk_data.euuid, so->last_uuid);
+	}
 
 	ev_msg.dv[0].data_ptr   = &apnfallbk_data;
 	ev_msg.dv[0].data_length = sizeof(apnfallbk_data);
@@ -1306,7 +1314,7 @@ in_pcbladdr(struct inpcb *inp, struct sockaddr *nam, struct in_addr *laddr,
 
 		if (apn_fallback_required(proc, inp->inp_socket,
 		    (void *)nam))
-			apn_fallback_trigger(proc);
+			apn_fallback_trigger(proc, inp->inp_socket);
 
 		goto done;
 	}
@@ -1333,6 +1341,20 @@ in_pcbladdr(struct inpcb *inp, struct sockaddr *nam, struct in_addr *laddr,
 			RT_CONVERT_LOCK(ro->ro_rt);
 			ia = ifatoia(ro->ro_rt->rt_ifa);
 			IFA_ADDREF(&ia->ia_ifa);
+
+			/*
+			 * Mark the control block for notification of
+			 * a possible flow that might undergo clat46
+			 * translation.
+			 *
+			 * We defer the decision to a later point when
+			 * inpcb is being disposed off.
+			 * The reason is that we only want to send notification
+			 * if the flow was ever used to send data.
+			 */
+			if (IS_INTF_CLAT46(ro->ro_rt->rt_ifp))
+				inp->inp_flags2 |= INP2_CLAT46_FLOW;
+
 			RT_UNLOCK(ro->ro_rt);
 			error = 0;
 		}
@@ -1464,6 +1486,11 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr *nam, struct proc *p,
 	int error;
 	struct socket *so = inp->inp_socket;
 
+#if CONTENT_FILTER
+	if (so)
+		so->so_state_change_cnt++;
+#endif
+
 	/*
 	 *   Call inner routine, to assign local interface address.
 	 */
@@ -1548,6 +1575,11 @@ in_pcbdisconnect(struct inpcb *inp)
 	inp->inp_faddr.s_addr = INADDR_ANY;
 	inp->inp_fport = 0;
 
+#if CONTENT_FILTER
+	if (so)
+		so->so_state_change_cnt++;
+#endif
+
 	if (!lck_rw_try_lock_exclusive(inp->inp_pcbinfo->ipi_lock)) {
 		/* lock inversion issue, mostly with udp multicast packets */
 		socket_unlock(so, 0);
@@ -1624,6 +1656,35 @@ in_pcbdetach(struct inpcb *inp)
 		inp->inp_moptions = NULL;
 		sofreelastref(so, 0);
 		inp->inp_state = INPCB_STATE_DEAD;
+
+		/*
+		 * Enqueue an event to send kernel event notification
+		 * if the flow has to CLAT46 for data packets
+		 */
+		if (inp->inp_flags2 & INP2_CLAT46_FLOW) {
+			/*
+			 * If there has been any exchange of data bytes
+			 * over this flow.
+			 * Schedule a notification to report that flow is
+			 * using client side translation.
+			 */
+			if (inp->inp_stat != NULL &&
+			    (inp->inp_stat->txbytes != 0 ||
+			     inp->inp_stat->rxbytes !=0)) {
+				if (so->so_flags & SOF_DELEGATED) {
+					in6_clat46_event_enqueue_nwk_wq_entry(
+					    IN6_CLAT46_EVENT_V4_FLOW,
+					    so->e_pid,
+					    so->e_uuid);
+				} else {
+					in6_clat46_event_enqueue_nwk_wq_entry(
+                                            IN6_CLAT46_EVENT_V4_FLOW,
+                                            so->last_pid,
+                                            so->last_uuid);
+				}
+			}
+		}
+
 		/* makes sure we're not called twice from so_close */
 		so->so_flags |= SOF_PCBCLEARING;
 

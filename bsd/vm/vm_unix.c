@@ -103,6 +103,10 @@
 #include <security/mac_framework.h>
 #endif
 
+#if CONFIG_CSR
+#include <sys/csr.h>
+#endif /* CONFIG_CSR */
+
 int _shared_region_map_and_slide(struct proc*, int, unsigned int, struct shared_file_mapping_np*, uint32_t, user_addr_t, user_addr_t);
 int shared_region_copyin_mappings(struct proc*, user_addr_t, unsigned int, struct shared_file_mapping_np *);
 
@@ -276,12 +280,6 @@ extern int allow_stack_exec, allow_data_exec;
 SYSCTL_INT(_vm, OID_AUTO, allow_stack_exec, CTLFLAG_RW | CTLFLAG_LOCKED, &allow_stack_exec, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, allow_data_exec, CTLFLAG_RW | CTLFLAG_LOCKED, &allow_data_exec, 0, "");
 
-#if __arm64__
-extern int fourk_binary_compatibility_unsafe;
-extern int fourk_binary_compatibility_allow_wx;
-SYSCTL_INT(_vm, OID_AUTO, fourk_binary_compatibility_unsafe, CTLFLAG_RW | CTLFLAG_LOCKED, &fourk_binary_compatibility_unsafe, 0, "");
-SYSCTL_INT(_vm, OID_AUTO, fourk_binary_compatibility_allow_wx, CTLFLAG_RW | CTLFLAG_LOCKED, &fourk_binary_compatibility_allow_wx, 0, "");
-#endif /* __arm64__ */
 #endif /* DEVELOPMENT || DEBUG */
 
 static const char *prot_values[] = {
@@ -330,7 +328,18 @@ static char scdir_path[] = "/System/Library/Caches/com.apple.dyld/";
 #endif
 
 #ifndef SECURE_KERNEL
-SYSCTL_INT(_vm, OID_AUTO, enforce_shared_cache_dir, CTLFLAG_RW | CTLFLAG_LOCKED, &scdir_enforce, 0, "");
+static int sysctl_scdir_enforce SYSCTL_HANDLER_ARGS
+{
+#if CONFIG_CSR
+	if (csr_check(CSR_ALLOW_UNRESTRICTED_FS) != 0) {
+		printf("Failed attempt to set vm.enforce_shared_cache_dir sysctl\n");
+		return EPERM;
+	}
+#endif /* CONFIG_CSR */
+	return sysctl_handle_int(oidp, arg1, arg2, req);
+}
+
+SYSCTL_PROC(_vm, OID_AUTO, enforce_shared_cache_dir, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &scdir_enforce, 0, sysctl_scdir_enforce, "I", "");
 #endif
 
 /* These log rate throttling state variables aren't thread safe, but
@@ -1759,7 +1768,7 @@ _shared_region_map_and_slide(
 	}
 
 	/* check that the mappings are properly covered by code signatures */
-	if (!cs_enforcement(NULL)) {
+	if (!cs_system_enforcement()) {
 		/* code signing is not enforced: no need to check */
 	} else for (i = 0; i < mappings_count; i++) {
 		if (mappings[i].sfm_init_prot & VM_PROT_ZF) {
@@ -1790,7 +1799,7 @@ _shared_region_map_and_slide(
 	}
 
 	/* get the process's shared region (setup in vm_map_exec()) */
-	shared_region = vm_shared_region_get(current_task());
+	shared_region = vm_shared_region_trim_and_get(current_task());
 	if (shared_region == NULL) {
 		SHARED_REGION_TRACE_ERROR(
 			("shared_region: %p [%d(%s)] map(%p:'%s'): "
@@ -1798,6 +1807,7 @@ _shared_region_map_and_slide(
 			 (void *)VM_KERNEL_ADDRPERM(current_thread()),
 			 p->p_pid, p->p_comm,
 			 (void *)VM_KERNEL_ADDRPERM(vp), vp->v_name));
+		error = EINVAL;
 		goto done;
 	}
 
@@ -1970,9 +1980,8 @@ extern unsigned int	vm_page_free_target;
 SYSCTL_INT(_vm, OID_AUTO, vm_page_free_target, CTLFLAG_RD | CTLFLAG_LOCKED, 
 		   &vm_page_free_target, 0, "Pageout daemon free target");
 
-extern unsigned int	vm_memory_pressure;
 SYSCTL_INT(_vm, OID_AUTO, memory_pressure, CTLFLAG_RD | CTLFLAG_LOCKED,
-	   &vm_memory_pressure, 0, "Memory pressure indicator");
+	   &vm_pageout_state.vm_memory_pressure, 0, "Memory pressure indicator");
 
 static int
 vm_ctl_page_free_wanted SYSCTL_HANDLER_ARGS
@@ -1995,9 +2004,42 @@ extern unsigned int	vm_page_purgeable_wired_count;
 SYSCTL_INT(_vm, OID_AUTO, page_purgeable_wired_count, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_purgeable_wired_count, 0, "Wired purgeable page count");
 
-extern unsigned int	vm_pageout_purged_objects;
+#if DEVELOPMENT || DEBUG
+extern uint64_t get_pages_grabbed_count(void);
+
+static int
+pages_grabbed SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2, oidp)
+	uint64_t value = get_pages_grabbed_count();
+	return SYSCTL_OUT(req, &value, sizeof(value));
+}
+
+SYSCTL_PROC(_vm, OID_AUTO, pages_grabbed, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
+	    0, 0, &pages_grabbed, "QU", "Total pages grabbed");
+SYSCTL_ULONG(_vm, OID_AUTO, pages_freed, CTLFLAG_RD | CTLFLAG_LOCKED,
+	     &vm_pageout_vminfo.vm_page_pages_freed, "Total pages freed");
+
 SYSCTL_INT(_vm, OID_AUTO, pageout_purged_objects, CTLFLAG_RD | CTLFLAG_LOCKED,
-	   &vm_pageout_purged_objects, 0, "System purged object count");
+	   &vm_pageout_debug.vm_pageout_purged_objects, 0, "System purged object count");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_busy, CTLFLAG_RD | CTLFLAG_LOCKED,
+	    &vm_pageout_debug.vm_pageout_cleaned_busy, 0, "Cleaned pages busy (deactivated)");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_nolock, CTLFLAG_RD | CTLFLAG_LOCKED,
+	    &vm_pageout_debug.vm_pageout_cleaned_nolock, 0, "Cleaned pages no-lock (deactivated)");
+
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_volatile_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED,
+	    &vm_pageout_debug.vm_pageout_cleaned_volatile_reactivated, 0, "Cleaned pages volatile reactivated");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_fault_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED,
+	    &vm_pageout_debug.vm_pageout_cleaned_fault_reactivated, 0, "Cleaned pages fault reactivated");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED,
+	    &vm_pageout_debug.vm_pageout_cleaned_reactivated, 0, "Cleaned pages reactivated"); /* sum of all reactivated AND busy and nolock (even though those actually get reDEactivated */
+SYSCTL_ULONG(_vm, OID_AUTO, pageout_cleaned, CTLFLAG_RD | CTLFLAG_LOCKED,
+	    &vm_pageout_vminfo.vm_pageout_freed_cleaned, "Cleaned pages freed");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_reference_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED,
+	    &vm_pageout_debug.vm_pageout_cleaned_reference_reactivated, 0, "Cleaned pages reference reactivated");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_enqueued_cleaned, CTLFLAG_RD | CTLFLAG_LOCKED,
+	    &vm_pageout_debug.vm_pageout_enqueued_cleaned, 0, ""); /* sum of next two */
+#endif
 
 extern int madvise_free_debug;
 SYSCTL_INT(_vm, OID_AUTO, madvise_free_debug, CTLFLAG_RW | CTLFLAG_LOCKED,
@@ -2049,34 +2091,16 @@ SYSCTL_UINT(_vm, OID_AUTO, page_pageable_internal_count, CTLFLAG_RD | CTLFLAG_LO
 SYSCTL_UINT(_vm, OID_AUTO, page_pageable_external_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_pageable_external_count, 0, "");
 
 /* pageout counts */
-extern unsigned int vm_pageout_inactive_dirty_internal, vm_pageout_inactive_dirty_external, vm_pageout_inactive_clean, vm_pageout_speculative_clean, vm_pageout_inactive_used;
-extern unsigned int vm_pageout_freed_from_inactive_clean, vm_pageout_freed_from_speculative;
-SYSCTL_UINT(_vm, OID_AUTO, pageout_inactive_dirty_internal, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_inactive_dirty_internal, 0, "");
-SYSCTL_UINT(_vm, OID_AUTO, pageout_inactive_dirty_external, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_inactive_dirty_external, 0, "");
-SYSCTL_UINT(_vm, OID_AUTO, pageout_inactive_clean, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_inactive_clean, 0, "");
-SYSCTL_UINT(_vm, OID_AUTO, pageout_speculative_clean, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_speculative_clean, 0, "");
-SYSCTL_UINT(_vm, OID_AUTO, pageout_inactive_used, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_inactive_used, 0, "");
-SYSCTL_UINT(_vm, OID_AUTO, pageout_freed_from_inactive_clean, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_freed_from_inactive_clean, 0, "");
-SYSCTL_UINT(_vm, OID_AUTO, pageout_freed_from_speculative, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_freed_from_speculative, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_inactive_clean, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_state.vm_pageout_inactive_clean, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, pageout_inactive_used, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_state.vm_pageout_inactive_used, 0, "");
 
-extern unsigned int vm_pageout_freed_from_cleaned;
-SYSCTL_UINT(_vm, OID_AUTO, pageout_freed_from_cleaned, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_freed_from_cleaned, 0, "");
+SYSCTL_ULONG(_vm, OID_AUTO, pageout_inactive_dirty_internal, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_vminfo.vm_pageout_inactive_dirty_internal, "");
+SYSCTL_ULONG(_vm, OID_AUTO, pageout_inactive_dirty_external, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_vminfo.vm_pageout_inactive_dirty_external, "");
+SYSCTL_ULONG(_vm, OID_AUTO, pageout_speculative_clean, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_vminfo.vm_pageout_freed_speculative, "");
+SYSCTL_ULONG(_vm, OID_AUTO, pageout_freed_external, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_vminfo.vm_pageout_freed_external, "");
+SYSCTL_ULONG(_vm, OID_AUTO, pageout_freed_speculative, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_vminfo.vm_pageout_freed_speculative, "");
+SYSCTL_ULONG(_vm, OID_AUTO, pageout_freed_cleaned, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_vminfo.vm_pageout_freed_cleaned, "");
 
-/* counts of pages entering the cleaned queue */
-extern unsigned int vm_pageout_enqueued_cleaned, vm_pageout_enqueued_cleaned_from_inactive_dirty;
-SYSCTL_UINT(_vm, OID_AUTO, pageout_enqueued_cleaned, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_enqueued_cleaned, 0, ""); /* sum of next two */
-SYSCTL_UINT(_vm, OID_AUTO, pageout_enqueued_cleaned_from_inactive_dirty, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_enqueued_cleaned_from_inactive_dirty, 0, "");
-
-/* counts of pages leaving the cleaned queue */
-extern unsigned int vm_pageout_cleaned_reclaimed, vm_pageout_cleaned_reactivated, vm_pageout_cleaned_reference_reactivated, vm_pageout_cleaned_volatile_reactivated, vm_pageout_cleaned_fault_reactivated, vm_pageout_cleaned_commit_reactivated, vm_pageout_cleaned_busy, vm_pageout_cleaned_nolock;
-SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_reclaimed, 0, "Cleaned pages reclaimed");
-SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_reactivated, 0, "Cleaned pages reactivated"); /* sum of all reactivated AND busy and nolock (even though those actually get reDEactivated */
-SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_reference_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_reference_reactivated, 0, "Cleaned pages reference reactivated");
-SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_volatile_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_volatile_reactivated, 0, "Cleaned pages volatile reactivated");
-SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_fault_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_fault_reactivated, 0, "Cleaned pages fault reactivated");
-SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_commit_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_commit_reactivated, 0, "Cleaned pages commit reactivated");
-SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_busy, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_busy, 0, "Cleaned pages busy (deactivated)");
-SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_nolock, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_cleaned_nolock, 0, "Cleaned pages no-lock (deactivated)");
 
 /* counts of pages prefaulted when entering a memory object */
 extern int64_t vm_prefault_nb_pages, vm_prefault_nb_bailout;
@@ -2133,9 +2157,6 @@ SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_failure_state, CTLFLAG_RD | CTLFLA
 SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_failure_dirty, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.grab_failure_dirty, 0, "");
 SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_for_iokit, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.grab_for_iokit, 0, "");
 SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_for_iokit_success, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.grab_for_iokit_success, 0, "");
-
-extern uint64_t vm_pageout_secluded_burst_count;
-SYSCTL_QUAD(_vm, OID_AUTO, pageout_secluded_burst_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_secluded_burst_count, "");
 
 #endif /* CONFIG_SECLUDED_MEMORY */
 
@@ -2289,10 +2310,12 @@ SYSCTL_ULONG(_vm, OID_AUTO, vm_max_kernel_address, CTLFLAG_RD, (unsigned long *)
 extern uint32_t vm_page_pages;
 SYSCTL_UINT(_vm, OID_AUTO, pages, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_pages, 0, "");
 
+extern uint32_t vm_page_busy_absent_skipped;
+SYSCTL_UINT(_vm, OID_AUTO, page_busy_absent_skipped, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_busy_absent_skipped, 0, "");
+
 #if (__arm__ || __arm64__) && (DEVELOPMENT || DEBUG)
-extern int pacified_footprint_suspend;
-int footprint_suspend_allowed = 0;
-SYSCTL_INT(_vm, OID_AUTO, footprint_suspend_allowed, CTLFLAG_RW | CTLFLAG_LOCKED, &footprint_suspend_allowed, 0, "");
+extern int vm_footprint_suspend_allowed;
+SYSCTL_INT(_vm, OID_AUTO, footprint_suspend_allowed, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_footprint_suspend_allowed, 0, "");
 
 extern void pmap_footprint_suspend(vm_map_t map, boolean_t suspend);
 static int
@@ -2309,8 +2332,7 @@ sysctl_vm_footprint_suspend SYSCTL_HANDLER_ARGS
 	if (error) {
 		return error;
 	}
-	if (pacified_footprint_suspend &&
-	    !footprint_suspend_allowed) {
+	if (!vm_footprint_suspend_allowed) {
 		if (new_value != 0) {
 			/* suspends are not allowed... */
 			return 0;
@@ -2329,3 +2351,46 @@ SYSCTL_PROC(_vm, OID_AUTO, footprint_suspend,
 	    CTLTYPE_INT|CTLFLAG_WR|CTLFLAG_ANYBODY|CTLFLAG_LOCKED|CTLFLAG_MASKED,
 	    0, 0, &sysctl_vm_footprint_suspend, "I", "");
 #endif /* (__arm__ || __arm64__) && (DEVELOPMENT || DEBUG) */
+
+extern uint64_t vm_map_corpse_footprint_count;
+extern uint64_t vm_map_corpse_footprint_size_avg;
+extern uint64_t vm_map_corpse_footprint_size_max;
+extern uint64_t vm_map_corpse_footprint_full;
+extern uint64_t vm_map_corpse_footprint_no_buf;
+SYSCTL_QUAD(_vm, OID_AUTO, corpse_footprint_count,
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_corpse_footprint_count, "");
+SYSCTL_QUAD(_vm, OID_AUTO, corpse_footprint_size_avg,
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_corpse_footprint_size_avg, "");
+SYSCTL_QUAD(_vm, OID_AUTO, corpse_footprint_size_max,
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_corpse_footprint_size_max, "");
+SYSCTL_QUAD(_vm, OID_AUTO, corpse_footprint_full,
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_corpse_footprint_full, "");
+SYSCTL_QUAD(_vm, OID_AUTO, corpse_footprint_no_buf,
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_corpse_footprint_no_buf, "");
+
+#if PMAP_CS
+extern uint64_t vm_cs_defer_to_pmap_cs;
+extern uint64_t vm_cs_defer_to_pmap_cs_not;
+SYSCTL_QUAD(_vm, OID_AUTO, cs_defer_to_pmap_cs,
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_cs_defer_to_pmap_cs, "");
+SYSCTL_QUAD(_vm, OID_AUTO, cs_defer_to_pmap_cs_not,
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_cs_defer_to_pmap_cs_not, "");
+#endif /* PMAP_CS */
+
+extern uint64_t shared_region_pager_copied;
+extern uint64_t shared_region_pager_slid;
+extern uint64_t shared_region_pager_slid_error;
+extern uint64_t shared_region_pager_reclaimed;
+SYSCTL_QUAD(_vm, OID_AUTO, shared_region_pager_copied,
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &shared_region_pager_copied, "");
+SYSCTL_QUAD(_vm, OID_AUTO, shared_region_pager_slid,
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &shared_region_pager_slid, "");
+SYSCTL_QUAD(_vm, OID_AUTO, shared_region_pager_slid_error,
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &shared_region_pager_slid_error, "");
+SYSCTL_QUAD(_vm, OID_AUTO, shared_region_pager_reclaimed,
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &shared_region_pager_reclaimed, "");
+
+#if MACH_ASSERT
+extern int pmap_ledgers_panic_leeway;
+SYSCTL_INT(_vm, OID_AUTO, pmap_ledgers_panic_leeway, CTLFLAG_RW | CTLFLAG_LOCKED, &pmap_ledgers_panic_leeway, 0, "");
+#endif /* MACH_ASSERT */

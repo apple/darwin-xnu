@@ -263,9 +263,7 @@ void *exec_spawnattr_getmacpolicyinfo(const void *macextensions, const char *pol
 
 #ifdef BSD_KERNEL_PRIVATE
 
-#define THROTTLE_IO_ENABLE	1
-#define THROTTLE_IO_DISABLE	0
-void sys_override_io_throttle(int flag);
+void sys_override_io_throttle(boolean_t enable_override);
 
 #endif /* BSD_KERNEL_PRIVATE */
 

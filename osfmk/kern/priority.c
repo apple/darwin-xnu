@@ -117,12 +117,14 @@ thread_quantum_expire(
 	/*
 	 * We bill CPU time to both the individual thread and its task.
 	 *
-	 * Because this balance adjustment could potentially attempt to wake this very
-	 * thread, we must credit the ledger before taking the thread lock. The ledger
-	 * pointers are only manipulated by the thread itself at the ast boundary.
+	 * Because this balance adjustment could potentially attempt to wake this
+	 * very thread, we must credit the ledger before taking the thread lock.
+	 * The ledger pointers are only manipulated by the thread itself at the ast
+	 * boundary.
 	 *
-	 * TODO: This fails to account for the time between when the timer was armed and when it fired.
-	 * It should be based on the system_timer and running a thread_timer_event operation here.
+	 * TODO: This fails to account for the time between when the timer was
+	 * armed and when it fired.  It should be based on the system_timer and
+	 * running a timer_update operation here.
 	 */
 	ledger_credit(thread->t_ledger, task_ledgers.cpu_time, thread->quantum_remaining);
 	ledger_credit(thread->t_threadledger, thread_ledgers.cpu_time, thread->quantum_remaining);
@@ -154,14 +156,15 @@ thread_quantum_expire(
 	/*
 	 *	Check for fail-safe trip.
 	 */
- 	if ((thread->sched_mode == TH_MODE_REALTIME || thread->sched_mode == TH_MODE_FIXED) && 
- 	    !(thread->sched_flags & TH_SFLAG_PROMOTED_MASK) &&
- 	    !(thread->options & TH_OPT_SYSTEM_CRITICAL)) {
- 		uint64_t new_computation;
-  
- 		new_computation = ctime - thread->computation_epoch;
- 		new_computation += thread->computation_metered;
- 		if (new_computation > max_unsafe_computation) {
+	if ((thread->sched_mode == TH_MODE_REALTIME || thread->sched_mode == TH_MODE_FIXED) &&
+	    !(thread->sched_flags & TH_SFLAG_PROMOTED) &&
+	    !(thread->sched_flags & TH_SFLAG_PROMOTE_REASON_MASK) &&
+	    !(thread->options & TH_OPT_SYSTEM_CRITICAL)) {
+		uint64_t new_computation;
+
+		new_computation = ctime - thread->computation_epoch;
+		new_computation += thread->computation_metered;
+		if (new_computation > max_unsafe_computation) {
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_FAILSAFE)|DBG_FUNC_NONE,
 					(uintptr_t)thread->sched_pri, (uintptr_t)thread->sched_mode, 0, 0, 0);
 
@@ -199,12 +202,9 @@ thread_quantum_expire(
 	 * during privilege transitions, synthesize an event now.
 	 */
 	if (!thread->precise_user_kernel_time) {
-		timer_switch(PROCESSOR_DATA(processor, current_state),
-					 ctime,
-					 PROCESSOR_DATA(processor, current_state));
-		timer_switch(PROCESSOR_DATA(processor, thread_timer),
-					 ctime,
-					 PROCESSOR_DATA(processor, thread_timer));
+		timer_update(PROCESSOR_DATA(processor, current_state), ctime);
+		timer_update(PROCESSOR_DATA(processor, thread_timer), ctime);
+		timer_update(&thread->runnable_timer, ctime);
 	}
 
 
@@ -301,7 +301,7 @@ sched_set_thread_base_priority(thread_t thread, int priority)
 	}
 	sched_update_thread_bucket(thread);
 
-	thread_recompute_sched_pri(thread, FALSE);
+	thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
 }
 
 /*
@@ -311,28 +311,54 @@ sched_set_thread_base_priority(thread_t thread, int priority)
  *	according to its base priority if the
  *	thread has not been promoted or depressed.
  *
- *	This is the standard way to push base_pri changes into sched_pri,
- *	or to recalculate the appropriate sched_pri after clearing
+ *	This is the only way to push base_pri changes into sched_pri,
+ *	or to recalculate the appropriate sched_pri after changing
  *	a promotion or depression.
  *
  *	Called at splsched with the thread locked.
+ *
+ *	TODO: Add an 'update urgency' flag to avoid urgency callouts on every rwlock operation
  */
 void
-thread_recompute_sched_pri(
-                           thread_t thread,
-                           boolean_t override_depress)
+thread_recompute_sched_pri(thread_t thread, set_sched_pri_options_t options)
 {
-	int priority;
+	uint32_t     sched_flags = thread->sched_flags;
+	sched_mode_t sched_mode  = thread->sched_mode;
 
-	if (thread->sched_mode == TH_MODE_TIMESHARE)
+	int priority = thread->base_pri;
+
+	if (sched_mode == TH_MODE_TIMESHARE)
 		priority = SCHED(compute_timeshare_priority)(thread);
-	else
-		priority = thread->base_pri;
 
-	if ((!(thread->sched_flags & TH_SFLAG_PROMOTED_MASK)  || (priority > thread->sched_pri)) &&
-	    (!(thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) || override_depress)) {
-		set_sched_pri(thread, priority);
+	if (sched_flags & TH_SFLAG_DEPRESS) {
+		/* thread_yield_internal overrides kernel mutex promotion */
+		priority = DEPRESSPRI;
+	} else {
+		/* poll-depress is overridden by mutex promotion and promote-reasons */
+		if ((sched_flags & TH_SFLAG_POLLDEPRESS)) {
+			priority = DEPRESSPRI;
+		}
+
+		if (sched_flags & TH_SFLAG_PROMOTED) {
+			priority = MAX(priority, thread->promotion_priority);
+
+			if (sched_mode != TH_MODE_REALTIME)
+				priority = MIN(priority, MAXPRI_PROMOTE);
+		}
+
+		if (sched_flags & TH_SFLAG_PROMOTE_REASON_MASK) {
+			if (sched_flags & TH_SFLAG_RW_PROMOTED)
+				priority = MAX(priority, MINPRI_RWLOCK);
+
+			if (sched_flags & TH_SFLAG_WAITQ_PROMOTED)
+				priority = MAX(priority, MINPRI_WAITQ);
+
+			if (sched_flags & TH_SFLAG_EXEC_PROMOTED)
+				priority = MAX(priority, MINPRI_EXEC);
+		}
 	}
+
+	set_sched_pri(thread, priority, options);
 }
 
 void
@@ -380,23 +406,8 @@ lightweight_update_priority(thread_t thread)
 
 		priority = sched_compute_timeshare_priority(thread);
 
-		/*
-		 * Adjust the scheduled priority like thread_recompute_sched_pri,
-		 * except with the benefit of knowing the thread is on this core.
-		 */
-		if ((!(thread->sched_flags & TH_SFLAG_PROMOTED_MASK)  || (priority > thread->sched_pri)) &&
-		    (!(thread->sched_flags & TH_SFLAG_DEPRESSED_MASK)) &&
-		    priority != thread->sched_pri) {
-
-			thread->sched_pri = priority;
-
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_CHANGE_PRIORITY),
-			                      (uintptr_t)thread_tid(thread),
-			                      thread->base_pri,
-			                      thread->sched_pri,
-			                      thread->sched_usage,
-			                      0);
-		}
+		if (priority != thread->sched_pri)
+			thread_recompute_sched_pri(thread, SETPRI_LAZY);
 	}
 }
 
@@ -512,8 +523,6 @@ update_priority(
 
 	thread->sched_stamp += ticks;
 
-	thread->pri_shift = sched_pri_shifts[thread->th_sched_bucket];
-
 	/* If requested, accelerate aging of sched_usage */
 	if (sched_decay_usage_age_factor > 1)
 		ticks *= sched_decay_usage_age_factor;
@@ -524,9 +533,9 @@ update_priority(
 	thread_timer_delta(thread, delta);
 	if (ticks < SCHED_DECAY_TICKS) {
 		/*
-		 *	Accumulate timesharing usage only
-		 *	during contention for processor
-		 *	resources.
+		 *	Accumulate timesharing usage only during contention for processor
+		 *	resources. Use the pri_shift from the previous tick window to 
+		 *	determine if the system was in a contended state.
 		 */
 		if (thread->pri_shift < INT8_MAX)
 			thread->sched_usage += delta;
@@ -561,36 +570,17 @@ update_priority(
 	}
 
 	/*
-	 *	Recompute scheduled priority if appropriate.
+	 * Now that the thread's CPU usage has been accumulated and aged
+	 * based on contention of the previous tick window, update the
+	 * pri_shift of the thread to match the current global load/shift
+	 * values. The updated pri_shift would be used to calculate the
+	 * new priority of the thread.
 	 */
-	if (thread->sched_mode == TH_MODE_TIMESHARE) {
-		int priority = sched_compute_timeshare_priority(thread);
+	thread->pri_shift = sched_pri_shifts[thread->th_sched_bucket];
 
-		/*
-		 * Adjust the scheduled priority like thread_recompute_sched_pri,
-		 * except without setting an AST.
-		 */
-		if ((!(thread->sched_flags & TH_SFLAG_PROMOTED_MASK)  || (priority > thread->sched_pri)) &&
-		    (!(thread->sched_flags & TH_SFLAG_DEPRESSED_MASK)) &&
-		    priority != thread->sched_pri) {
-
-			boolean_t removed = thread_run_queue_remove(thread);
-
-			thread->sched_pri = priority;
-
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_CHANGE_PRIORITY),
-			                      (uintptr_t)thread_tid(thread),
-			                      thread->base_pri,
-			                      thread->sched_pri,
-			                      thread->sched_usage,
-			                      0);
-
-			if (removed)
-				thread_run_queue_reinsert(thread, SCHED_TAILQ);
-		}
-	}
-
-	return;
+	/* Recompute scheduled priority if appropriate. */
+	if (thread->sched_mode == TH_MODE_TIMESHARE)
+		thread_recompute_sched_pri(thread, SETPRI_LAZY);
 }
 
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
@@ -662,8 +652,10 @@ sched_update_thread_bucket(thread_t thread)
 		break;
 
 	case TH_MODE_TIMESHARE:
-		if (thread->base_pri > BASEPRI_UTILITY)
+		if (thread->base_pri > BASEPRI_DEFAULT)
 			new_bucket = TH_BUCKET_SHARE_FG;
+		else if (thread->base_pri > BASEPRI_UTILITY)
+			new_bucket = TH_BUCKET_SHARE_DF;
 		else if (thread->base_pri > MAXPRI_THROTTLE)
 			new_bucket = TH_BUCKET_SHARE_UT;
 		else
@@ -777,6 +769,170 @@ sched_thread_mode_undemote(thread_t thread, uint32_t reason)
 
 	if (removed)
 		thread_run_queue_reinsert(thread, SCHED_TAILQ);
+}
+
+/*
+ * Promote thread to a specific priority
+ *
+ * Promotion must not last past syscall boundary
+ * Clients must always pair promote and unpromote 1:1
+ *
+ * Called at splsched with thread locked
+ */
+void
+sched_thread_promote_to_pri(thread_t    thread,
+                            int         priority,
+              __kdebug_only uintptr_t   trace_obj /* already unslid */)
+{
+	assert((thread->sched_flags & TH_SFLAG_PROMOTED) != TH_SFLAG_PROMOTED);
+	assert(thread->promotion_priority == 0);
+	assert(priority <= MAXPRI_PROMOTE);
+	assert(priority > 0);
+
+	KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_PROMOTED),
+	     thread_tid(thread), trace_obj, priority);
+
+	thread->sched_flags |= TH_SFLAG_PROMOTED;
+	thread->promotion_priority = priority;
+
+	thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
+}
+
+
+/*
+ * Update a pre-existing priority promotion to have a higher priority floor
+ * Priority can only go up from the previous value
+ * Update must occur while a promotion is active
+ *
+ * Called at splsched with thread locked
+ */
+void
+sched_thread_update_promotion_to_pri(thread_t   thread,
+                                     int        priority,
+                       __kdebug_only uintptr_t  trace_obj /* already unslid */)
+{
+	assert(thread->promotions > 0);
+	assert((thread->sched_flags & TH_SFLAG_PROMOTED) == TH_SFLAG_PROMOTED);
+	assert(thread->promotion_priority > 0);
+	assert(priority <= MAXPRI_PROMOTE);
+
+	if (thread->promotion_priority < priority) {
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_PROMOTED_UPDATE),
+		     thread_tid(thread), trace_obj, priority);
+
+		thread->promotion_priority = priority;
+		thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
+	}
+}
+
+/*
+ * End a priority promotion
+ * Demotes a thread back to its expected priority without the promotion in place
+ *
+ * Called at splsched with thread locked
+ */
+void
+sched_thread_unpromote(thread_t     thread,
+         __kdebug_only uintptr_t    trace_obj /* already unslid */)
+{
+	assert((thread->sched_flags & TH_SFLAG_PROMOTED) == TH_SFLAG_PROMOTED);
+	assert(thread->promotion_priority > 0);
+
+	KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_UNPROMOTED),
+	     thread_tid(thread), trace_obj, 0);
+
+	thread->sched_flags &= ~TH_SFLAG_PROMOTED;
+	thread->promotion_priority = 0;
+
+	thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
+}
+
+/* called with thread locked */
+void
+assert_promotions_invariant(thread_t thread)
+{
+	if (thread->promotions > 0)
+		assert((thread->sched_flags & TH_SFLAG_PROMOTED) == TH_SFLAG_PROMOTED);
+
+	if (thread->promotions == 0)
+		assert((thread->sched_flags & TH_SFLAG_PROMOTED) != TH_SFLAG_PROMOTED);
+}
+
+/*
+ * Promote thread to have a sched pri floor for a specific reason
+ *
+ * Promotion must not last past syscall boundary
+ * Clients must always pair promote and demote 1:1,
+ * Handling nesting of the same promote reason is the client's responsibility
+ *
+ * Called at splsched with thread locked
+ */
+void
+sched_thread_promote_reason(thread_t    thread,
+                            uint32_t    reason,
+              __kdebug_only uintptr_t   trace_obj /* already unslid */)
+{
+	assert(reason & TH_SFLAG_PROMOTE_REASON_MASK);
+	assert((thread->sched_flags & reason) != reason);
+
+	switch (reason) {
+	case TH_SFLAG_RW_PROMOTED:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_RW_PROMOTE),
+		     thread_tid(thread), thread->sched_pri,
+		     thread->base_pri, trace_obj);
+		break;
+	case TH_SFLAG_WAITQ_PROMOTED:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_WAITQ_PROMOTE),
+		     thread_tid(thread), thread->sched_pri,
+		     thread->base_pri, trace_obj);
+		break;
+	case TH_SFLAG_EXEC_PROMOTED:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_EXEC_PROMOTE),
+		     thread_tid(thread), thread->sched_pri,
+		     thread->base_pri, trace_obj);
+		break;
+	}
+
+	thread->sched_flags |= reason;
+
+	thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
+}
+
+/*
+ * End a specific promotion reason
+ * Demotes a thread back to its expected priority without the promotion in place
+ *
+ * Called at splsched with thread locked
+ */
+void
+sched_thread_unpromote_reason(thread_t  thread,
+                              uint32_t  reason,
+                __kdebug_only uintptr_t trace_obj /* already unslid */)
+{
+	assert(reason & TH_SFLAG_PROMOTE_REASON_MASK);
+	assert((thread->sched_flags & reason) == reason);
+
+	switch (reason) {
+	case TH_SFLAG_RW_PROMOTED:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_RW_DEMOTE),
+		     thread_tid(thread), thread->sched_pri,
+		     thread->base_pri, trace_obj);
+		break;
+	case TH_SFLAG_WAITQ_PROMOTED:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_WAITQ_DEMOTE),
+		     thread_tid(thread), thread->sched_pri,
+		     thread->base_pri, trace_obj);
+		break;
+	case TH_SFLAG_EXEC_PROMOTED:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_EXEC_DEMOTE),
+		     thread_tid(thread), thread->sched_pri,
+		     thread->base_pri, trace_obj);
+		break;
+	}
+
+	thread->sched_flags &= ~reason;
+
+	thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
 }
 
 

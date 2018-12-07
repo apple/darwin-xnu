@@ -92,6 +92,8 @@ uint32_t PE_i_can_has_debugger(
 	uint32_t *);
 
 #if defined(__arm__) || defined(__arm64__)
+boolean_t PE_panic_debugging_enabled(void);
+
 void PE_mark_hwaccess(uint64_t thread);
 #endif /* defined(__arm__) || defined(__arm64__) */
 
@@ -172,6 +174,8 @@ struct clock_frequency_info_t {
   unsigned long long mem_frequency_max_hz;
   unsigned long long fix_frequency_hz;
 };
+
+extern int debug_cpu_performance_degradation_factor;
 
 typedef struct clock_frequency_info_t clock_frequency_info_t;
 
@@ -396,6 +400,8 @@ extern void PE_arm_debug_enable_trace(void);
 extern uint8_t PE_smc_stashed_x86_power_state;
 extern uint8_t PE_smc_stashed_x86_efi_boot_state;
 extern uint8_t PE_smc_stashed_x86_system_state;
+extern uint8_t PE_smc_stashed_x86_shutdown_cause;
+extern uint64_t PE_smc_stashed_x86_prev_power_transitions;
 extern uint32_t PE_pcie_stashed_link_state;
 #endif
 

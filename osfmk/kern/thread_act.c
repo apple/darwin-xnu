@@ -49,6 +49,7 @@
  *
  *	Thread management routines
  */
+
 #include <mach/mach_types.h>
 #include <mach/kern_return.h>
 #include <mach/thread_act_server.h>
@@ -315,27 +316,26 @@ thread_resume(thread_t thread)
 }
 
 /*
- *	thread_depress_abort:
+ *	thread_depress_abort_from_user:
  *
  *	Prematurely abort priority depression if there is one.
  */
 kern_return_t
-thread_depress_abort(
-	thread_t	thread)
+thread_depress_abort_from_user(thread_t thread)
 {
-	kern_return_t		result;
+	kern_return_t result;
 
-    if (thread == THREAD_NULL)
+	if (thread == THREAD_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-    thread_mtx_lock(thread);
+	thread_mtx_lock(thread);
 
 	if (thread->active)
-		result = thread_depress_abort_internal(thread);
+		result = thread_depress_abort(thread);
 	else
 		result = KERN_TERMINATED;
 
-    thread_mtx_unlock(thread);
+	thread_mtx_unlock(thread);
 
 	return (result);
 }
@@ -358,6 +358,7 @@ act_abort(
 	if (!(thread->sched_flags & TH_SFLAG_ABORT)) {
 		thread->sched_flags |= TH_SFLAG_ABORT;
 		thread_set_apc_ast_locked(thread);
+		thread_depress_abort_locked(thread);
 	} else {
 		thread->sched_flags &= ~TH_SFLAG_ABORTSAFELY;
 	}
@@ -409,6 +410,7 @@ thread_abort_safely(
 			if (!(thread->sched_flags & TH_SFLAG_ABORT)) {
 				thread->sched_flags |= TH_SFLAG_ABORTED_MASK;
 				thread_set_apc_ast_locked(thread);
+				thread_depress_abort_locked(thread);
 			}
 		}
 		thread_unlock(thread);
@@ -452,12 +454,13 @@ thread_info(
 	return (result);
 }
 
-kern_return_t
-thread_get_state(
+static inline kern_return_t
+thread_get_state_internal(
 	thread_t		thread,
 	int						flavor,
 	thread_state_t			state,			/* pointer to OUT array */
-	mach_msg_type_number_t	*state_count)	/*IN/OUT*/
+	mach_msg_type_number_t	*state_count,	/*IN/OUT*/
+	boolean_t				to_user)
 {
 	kern_return_t		result = KERN_SUCCESS;
 
@@ -497,16 +500,50 @@ thread_get_state(
 	else
 		result = KERN_TERMINATED;
 
+	if (to_user && result == KERN_SUCCESS) {
+		result = machine_thread_state_convert_to_user(thread, flavor, state,
+				state_count);
+	}
+
 	thread_mtx_unlock(thread);
 
 	return (result);
+}
+
+/* No prototype, since thread_act_server.h has the _to_user version if KERNEL_SERVER */
+
+kern_return_t
+thread_get_state(
+	thread_t		thread,
+	int						flavor,
+	thread_state_t			state,
+	mach_msg_type_number_t	*state_count);
+
+kern_return_t
+thread_get_state(
+	thread_t		thread,
+	int						flavor,
+	thread_state_t			state,			/* pointer to OUT array */
+	mach_msg_type_number_t	*state_count)	/*IN/OUT*/
+{
+	return thread_get_state_internal(thread, flavor, state, state_count, FALSE);
+}
+
+kern_return_t
+thread_get_state_to_user(
+	thread_t		thread,
+	int						flavor,
+	thread_state_t			state,			/* pointer to OUT array */
+	mach_msg_type_number_t	*state_count)	/*IN/OUT*/
+{
+	return thread_get_state_internal(thread, flavor, state, state_count, TRUE);
 }
 
 /*
  *	Change thread's machine-dependent state.  Called with nothing
  *	locked.  Returns same way.
  */
-static kern_return_t
+static inline kern_return_t
 thread_set_state_internal(
 	thread_t		thread,
 	int						flavor,
@@ -522,6 +559,13 @@ thread_set_state_internal(
 	thread_mtx_lock(thread);
 
 	if (thread->active) {
+		if (from_user) {
+			result = machine_thread_state_convert_from_user(thread, flavor,
+					state, state_count);
+			if (result != KERN_SUCCESS) {
+				goto out;
+			}
+		}
 		if (thread != current_thread()) {
 			thread_hold(thread);
 
@@ -550,6 +594,7 @@ thread_set_state_internal(
 	if ((result == KERN_SUCCESS) && from_user)
 		extmod_statistics_incr_thread_set_state(thread);
 
+out:
 	thread_mtx_unlock(thread);
 
 	return (result);
@@ -650,7 +695,8 @@ thread_dup(
 
 		if (thread_stop(target, TRUE)) {
 			thread_mtx_lock(target);
-			result = machine_thread_dup(self, target);
+			result = machine_thread_dup(self, target, FALSE);
+
 			if (self->affinity_set != AFFINITY_SET_NULL)
 				thread_affinity_dup(self, target);
 			thread_unstop(target);
@@ -699,7 +745,7 @@ thread_dup2(
 
 		if (thread_stop(target, TRUE)) {
 			thread_mtx_lock(target);
-			result = machine_thread_dup(source, target);
+			result = machine_thread_dup(source, target, TRUE);
 			if (source->affinity_set != AFFINITY_SET_NULL)
 				thread_affinity_dup(source, target);
 			thread_unstop(target);
@@ -736,6 +782,17 @@ thread_setstatus(
 	return (thread_set_state(thread, flavor, tstate, count));
 }
 
+kern_return_t
+thread_setstatus_from_user(
+	thread_t		thread,
+	int						flavor,
+	thread_state_t			tstate,
+	mach_msg_type_number_t	count)
+{
+
+	return (thread_set_state_from_user(thread, flavor, tstate, count));
+}
+
 /*
  *	thread_getstatus:
  *
@@ -749,6 +806,16 @@ thread_getstatus(
 	mach_msg_type_number_t	*count)
 {
 	return (thread_get_state(thread, flavor, tstate, count));
+}
+
+kern_return_t
+thread_getstatus_to_user(
+	thread_t		thread,
+	int						flavor,
+	thread_state_t			tstate,
+	mach_msg_type_number_t	*count)
+{
+	return (thread_get_state_to_user(thread, flavor, tstate, count));
 }
 
 /*
@@ -826,16 +893,6 @@ thread_set_apc_ast(thread_t thread)
 static void
 thread_set_apc_ast_locked(thread_t thread)
 {
-	/*
-	 * Temporarily undepress, so target has
-	 * a chance to do locking required to
-	 * block itself in thread_suspended.
-	 *
-	 * Leaves the depress flag set so we can reinstate when it's blocked.
-	 */
-	if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK)
-		thread_recompute_sched_pri(thread, TRUE);
-
 	thread_ast_set(thread, AST_APC);
 
 	if (thread == current_thread()) {
@@ -861,9 +918,7 @@ thread_set_apc_ast_locked(thread_t thread)
  *
  * Continuation routine for thread suspension.  It checks
  * to see whether there has been any new suspensions.  If so, it
- * installs the AST_APC handler again.  Otherwise, it checks to see
- * if the current depression needs to be re-instated (it may have
- * been temporarily removed in order to get to this point in a hurry).
+ * installs the AST_APC handler again.
  */
 __attribute__((noreturn))
 static void
@@ -878,27 +933,8 @@ thread_suspended(__unused void *parameter, wait_result_t result)
 	else
 		assert(thread->suspend_parked == FALSE);
 
-	if (thread->suspend_count > 0) {
+	if (thread->suspend_count > 0)
 		thread_set_apc_ast(thread);
-	} else {
-		spl_t s = splsched();
-
-		thread_lock(thread);
-		if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
-			thread->sched_pri = DEPRESSPRI;
-			thread->last_processor->current_pri = thread->sched_pri;
-			thread->last_processor->current_perfctl_class = thread_get_perfcontrol_class(thread);
-
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_CHANGE_PRIORITY),
-			                      (uintptr_t)thread_tid(thread),
-			                      thread->base_pri,
-			                      thread->sched_pri,
-			                      thread->sched_usage,
-			                      0);
-		}
-		thread_unlock(thread);
-		splx(s);
-	}
 
 	thread_mtx_unlock(thread);
 
@@ -938,7 +974,8 @@ thread_apc_ast(thread_t thread)
 	/* If we're suspended, go to sleep and wait for someone to wake us up. */
 	if (thread->suspend_count > 0) {
 		thread->suspend_parked = TRUE;
-		assert_wait(&thread->suspend_count, THREAD_ABORTSAFE);
+		assert_wait(&thread->suspend_count,
+				THREAD_ABORTSAFE | THREAD_WAIT_NOREPORT_USER);
 		thread_mtx_unlock(thread);
 
 		thread_block(thread_suspended);
@@ -984,6 +1021,14 @@ act_set_state_from_user(
     
 }
 
+/* Prototype, see justification above */
+kern_return_t
+act_get_state(
+	thread_t				thread,
+	int						flavor,
+	thread_state_t			state,
+	mach_msg_type_number_t	*count);
+
 kern_return_t
 act_get_state(
 	thread_t				thread,
@@ -995,6 +1040,19 @@ act_get_state(
 	    return (KERN_INVALID_ARGUMENT);
 
     return (thread_get_state(thread, flavor, state, count));
+}
+
+kern_return_t
+act_get_state_to_user(
+	thread_t				thread,
+	int						flavor,
+	thread_state_t			state,
+	mach_msg_type_number_t	*count)
+{
+    if (thread == current_thread())
+	    return (KERN_INVALID_ARGUMENT);
+
+    return (thread_get_state_to_user(thread, flavor, state, count));
 }
 
 static void

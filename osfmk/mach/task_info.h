@@ -479,7 +479,8 @@ typedef struct task_flags_info * task_flags_info_t;
 #define TASK_FLAGS_INFO_COUNT  ((mach_msg_type_number_t) \
 		(sizeof(task_flags_info_data_t) / sizeof (natural_t)))
 
-#define TF_LP64                 0x00000001                              /* task has 64-bit addressing */
+#define TF_LP64		0x00000001 /* task has 64-bit addressing */
+#define TF_64B_DATA	0x00000002 /* task has 64-bit data registers */
 
 #define TASK_DEBUG_INFO_INTERNAL    29 /* Used for kernel internal development tests. */
 

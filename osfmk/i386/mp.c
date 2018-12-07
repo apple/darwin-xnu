@@ -572,7 +572,7 @@ cpu_signal_handler(x86_saved_state_t *regs)
 }
 
 extern void kprintf_break_lock(void);
-static int
+int
 NMIInterruptHandler(x86_saved_state_t *regs)
 {
 	void 		*stackptr;
@@ -690,7 +690,7 @@ NMI_cpus(void)
 	uint64_t	tsc_timeout;
 
 	intrs_enabled = ml_set_interrupts_enabled(FALSE);
-
+	NMIPI_enable(TRUE);
 	for (cpu = 0; cpu < real_ncpus; cpu++) {
 		if (!cpu_is_running(cpu))
 			continue;
@@ -707,6 +707,7 @@ NMI_cpus(void)
 		}
 		cpu_datap(cpu)->cpu_NMI_acknowledged = FALSE;
 	}
+	NMIPI_enable(FALSE);
 
 	ml_set_interrupts_enabled(intrs_enabled);
 }
@@ -849,6 +850,13 @@ mp_rendezvous_action(__unused void *null)
 	boolean_t	intrs_enabled;
 	uint64_t	tsc_spin_start;
 
+	/*
+	 * Note that mp_rv_lock was acquired by the thread that initiated the
+	 * rendezvous and must have been acquired before we enter
+	 * mp_rendezvous_action().
+	 */
+	current_cpu_datap()->cpu_rendezvous_in_progress = TRUE;
+
 	/* setup function */
 	if (mp_rv_setup_func != NULL)
 		mp_rv_setup_func(mp_rv_func_arg);
@@ -886,6 +894,8 @@ mp_rendezvous_action(__unused void *null)
 	if (mp_rv_teardown_func != NULL)
 		mp_rv_teardown_func(mp_rv_func_arg);
 
+	current_cpu_datap()->cpu_rendezvous_in_progress = FALSE;
+
 	/* Bump completion count */
 	atomic_incl(&mp_rv_complete, 1);
 }
@@ -909,7 +919,7 @@ mp_rendezvous(void (*setup_func)(void *),
 	}
 		
 	/* obtain rendezvous lock */
-	(void) mp_safe_spin_lock(&mp_rv_lock);
+	mp_rendezvous_lock();
 
 	/* set static function pointers */
 	mp_rv_setup_func = setup_func;
@@ -948,6 +958,18 @@ mp_rendezvous(void (*setup_func)(void *),
 	mp_rv_func_arg = NULL;
 
 	/* release lock */
+	mp_rendezvous_unlock();
+}
+
+void
+mp_rendezvous_lock(void)
+{
+	(void) mp_safe_spin_lock(&mp_rv_lock);
+}
+
+void
+mp_rendezvous_unlock(void)
+{
 	simple_unlock(&mp_rv_lock);
 }
 
@@ -1024,7 +1046,8 @@ mp_call_head_lock(mp_call_queue_t *cqp)
  */
 void
 NMIPI_panic(cpumask_t cpu_mask, NMI_reason_t why) {
-	unsigned int cpu, cpu_bit;
+	unsigned int cpu;
+	cpumask_t cpu_bit;
 	uint64_t deadline;
 
 	NMIPI_enable(TRUE);
@@ -1575,7 +1598,7 @@ mp_kdp_enter(boolean_t proceed_on_failure)
 		}
 		if (proceed_on_failure) {
 			if (mach_absolute_time() - start_time > 500000000ll) {
-				kprintf("mp_kdp_enter() can't get x86_topo_lock! Debugging anyway! #YOLO\n");
+				paniclog_append_noflush("mp_kdp_enter() can't get x86_topo_lock! Debugging anyway! #YOLO\n");
 				break;
 			}
 			locked = simple_lock_try(&x86_topo_lock);
@@ -1648,13 +1671,16 @@ mp_kdp_enter(boolean_t proceed_on_failure)
 			NMIPI_enable(TRUE);
 		}
 		if (mp_kdp_ncpus != ncpus) {
-			cpumask_t cpus_NMI_pending = 0;
-			DBG("mp_kdp_enter() timed-out on cpu %d, NMI-ing\n", my_cpu);
+			unsigned int wait_cycles = 0;
+			if (proceed_on_failure)
+				paniclog_append_noflush("mp_kdp_enter() timed-out on cpu %d, NMI-ing\n", my_cpu);
+			else
+				DBG("mp_kdp_enter() timed-out on cpu %d, NMI-ing\n", my_cpu);
 			for (cpu = 0; cpu < real_ncpus; cpu++) {
 				if (cpu == my_cpu || !cpu_is_running(cpu))
 					continue;
 				if (cpu_signal_pending(cpu, MP_KDP)) {
-					cpus_NMI_pending |= cpu_to_cpumask(cpu);
+					cpu_datap(cpu)->cpu_NMI_acknowledged = FALSE;
 					cpu_NMI_interrupt(cpu);
 				}
 			}
@@ -1663,9 +1689,24 @@ mp_kdp_enter(boolean_t proceed_on_failure)
 			while (mp_kdp_ncpus != ncpus && rdtsc64() < tsc_timeout) {
 				handle_pending_TLB_flushes();
 				cpu_pause();
+				++wait_cycles;
 			}
 			if (mp_kdp_ncpus != ncpus) {
-				kdb_printf("mp_kdp_enter(): %llu, %lu, %u TIMED-OUT WAITING FOR NMI-ACK, PROCEEDING\n", cpus_NMI_pending, mp_kdp_ncpus, ncpus);
+				paniclog_append_noflush("mp_kdp_enter() NMI pending on cpus:");
+				for (cpu = 0; cpu < real_ncpus; cpu++) {
+					if (cpu_is_running(cpu) && !cpu_datap(cpu)->cpu_NMI_acknowledged)
+						paniclog_append_noflush(" %d", cpu);
+				}
+				paniclog_append_noflush("\n");
+				if (proceed_on_failure) {
+					paniclog_append_noflush("mp_kdp_enter() timed-out during %s wait after NMI;"
+					    "expected %u acks but received %lu after %u loops in %llu ticks\n",
+					     (locked ? "locked" : "unlocked"), ncpus, mp_kdp_ncpus, wait_cycles, LockTimeOutTSC);
+				} else {
+					panic("mp_kdp_enter() timed-out during %s wait after NMI;"
+					    "expected %u acks but received %lu after %u loops in %llu ticks",
+					     (locked ? "locked" : "unlocked"), ncpus, mp_kdp_ncpus, wait_cycles, LockTimeOutTSC);
+				}
 			}
 		}
 	}
@@ -1684,6 +1725,22 @@ mp_kdp_enter(boolean_t proceed_on_failure)
 	    (int)mp_kdp_ncpus, (mp_kdp_ncpus == ncpus) ? "OK" : "timed out");
 	
 	postcode(MP_KDP_ENTER);
+}
+
+boolean_t
+mp_kdp_all_cpus_halted()
+{
+	unsigned int ncpus = 0, cpu = 0, my_cpu = 0;
+
+	my_cpu = cpu_number();
+	ncpus = 1; /* current CPU */
+	for (cpu = 0; cpu < real_ncpus; cpu++) {
+		if (cpu == my_cpu || !cpu_is_running(cpu))
+			continue;
+		ncpus++;
+	}
+
+	return (mp_kdp_ncpus == ncpus);
 }
 
 static boolean_t

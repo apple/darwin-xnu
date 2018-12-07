@@ -646,7 +646,10 @@ struct kqueue_dyninfo {
 	uint8_t  kqdi_async_qos;
 	uint16_t kqdi_request_state;
 	uint8_t  kqdi_events_qos;
-	uint8_t  _kqdi_reserved0[7];
+	uint8_t	 kqdi_pri;
+	uint8_t	 kqdi_pol;
+	uint8_t	 kqdi_cpupercent;
+	uint8_t  _kqdi_reserved0[4];
 	uint64_t _kqdi_reserved1[4];
 };
 
@@ -724,7 +727,6 @@ struct proc_fileportinfo {
 #define PROC_PIDLISTTHREADS		6
 #define PROC_PIDLISTTHREADS_SIZE	(2* sizeof(uint32_t))
 
-
 #define PROC_PIDREGIONINFO		7
 #define PROC_PIDREGIONINFO_SIZE		(sizeof(struct proc_regioninfo))
 
@@ -793,8 +795,12 @@ struct proc_fileportinfo {
 #define PROC_PIDLISTDYNKQUEUES      27
 #define PROC_PIDLISTDYNKQUEUES_SIZE (sizeof(kqueue_id_t))
 
-#endif
+#define PROC_PIDLISTTHREADIDS		28
+#define PROC_PIDLISTTHREADIDS_SIZE	(2* sizeof(uint32_t))
 
+#define PROC_PIDVMRTFAULTINFO		29
+#define PROC_PIDVMRTFAULTINFO_SIZE (7 * sizeof(uint64_t))
+#endif /* PRIVATE */
 /* Flavors for proc_pidfdinfo */
 
 #define PROC_PIDFDVNODEINFO		1
@@ -865,6 +871,7 @@ struct proc_fileportinfo {
 #define PROC_DIRTY_ALLOW_IDLE_EXIT      0x2
 #define PROC_DIRTY_DEFER                0x4
 #define PROC_DIRTY_LAUNCH_IN_PROGRESS   0x8
+#define PROC_DIRTY_DEFER_ALWAYS         0x10
 
 /* proc_get_dirty() flags */
 #define PROC_DIRTY_TRACKED              0x1
@@ -929,7 +936,6 @@ struct proc_fileportinfo {
 #define PROC_INFO_CALL_CANUSEFGHW        0xc
 #define PROC_INFO_CALL_PIDDYNKQUEUEINFO  0xd
 #define PROC_INFO_CALL_UDATA_INFO        0xe
-
 #endif /* PRIVATE */
 
 #ifdef XNU_KERNEL_PRIVATE

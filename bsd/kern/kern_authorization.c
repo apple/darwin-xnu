@@ -512,6 +512,10 @@ kauth_authorize_process_callback(kauth_cred_t credential, __unused void *idata, 
  *		arg0 is pointer to vnode (vnode *) for file to be closed.
  *		arg1 is pointer to path (char *) of file to be closed.
  *		arg2 is close flags.
+ * arguments passed to KAUTH_FILEOP_WILL_RENAME listeners
+ *		arg0 is pointer to vnode (vnode *) of the file being renamed
+ *		arg1 is pointer to the "from" path (char *)
+ *		arg2 is pointer to the "to" path (char *)
  * arguments passed to KAUTH_FILEOP_RENAME listeners
  *		arg0 is pointer to "from" path (char *).
  *		arg1 is pointer to "to" path (char *).
@@ -550,7 +554,10 @@ kauth_authorize_fileop(kauth_cred_t credential, kauth_action_t action, uintptr_t
 		return(0);
 	}
 
-	if (action == KAUTH_FILEOP_OPEN || action == KAUTH_FILEOP_CLOSE || action == KAUTH_FILEOP_EXEC) {
+	if (action == KAUTH_FILEOP_OPEN ||
+	    action == KAUTH_FILEOP_CLOSE ||
+	    action == KAUTH_FILEOP_EXEC ||
+	    action == KAUTH_FILEOP_WILL_RENAME) {
 		/* get path to the given vnode as a convenience to our listeners.
 		 */
 		namep = get_pathbuff();
@@ -559,8 +566,15 @@ kauth_authorize_fileop(kauth_cred_t credential, kauth_action_t action, uintptr_t
 			release_pathbuff(namep);
 			return(0);
 		}
-		if (action == KAUTH_FILEOP_CLOSE) {
-			arg2 = arg1;  /* close has some flags that come in via arg1 */
+		if (action == KAUTH_FILEOP_CLOSE ||
+		    action == KAUTH_FILEOP_WILL_RENAME) {
+			/*
+			 * - Close has some flags that come in via arg1.
+			 * - Will-rename wants to pass the vnode and
+			 *   both paths to the listeners ("to" path
+			 *   starts in arg1, moves to arg2).
+			 */
+			arg2 = arg1;
 		}
 		arg1 = (uintptr_t)namep;
 	}	
@@ -948,7 +962,6 @@ out:
 int
 kauth_copyinfilesec(user_addr_t xsecurity, kauth_filesec_t *xsecdestpp)
 {
-	user_addr_t uaddr, known_bound;
 	int error;
 	kauth_filesec_t fsec;
 	u_int32_t count;
@@ -965,10 +978,18 @@ kauth_copyinfilesec(user_addr_t xsecurity, kauth_filesec_t *xsecdestpp)
 	 *
 	 * The upper bound must be less than KAUTH_ACL_MAX_ENTRIES.  The
 	 * value here is fairly arbitrary.  It's ok to have a zero count.
+	 *
+	 * Because we're just using these values to make a guess about the
+	 * number of entries, the actual address doesn't matter, only their
+	 * relative offsets into the page.  We take advantage of this to
+	 * avoid an overflow in the rounding step (this is a user-provided
+	 * parameter, so caution pays off).
 	 */
-	known_bound = xsecurity +  KAUTH_FILESEC_SIZE(0);
-	uaddr = mach_vm_round_page(known_bound);
-	count = (uaddr - known_bound) / sizeof(struct kauth_ace);
+	{
+		user_addr_t known_bound = (xsecurity & PAGE_MASK) + KAUTH_FILESEC_SIZE(0);
+		user_addr_t uaddr = mach_vm_round_page(known_bound);
+		count = (uaddr - known_bound) / sizeof(struct kauth_ace);
+	}
 	if (count > 32)
 		count = 32;
 restart:

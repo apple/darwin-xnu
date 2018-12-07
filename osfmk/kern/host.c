@@ -307,6 +307,31 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 #endif
 	}
 
+	case HOST_PREFERRED_USER_ARCH: {
+		host_preferred_user_arch_t user_arch_info;
+
+		/*
+		 *	Basic information about this host.
+		 */
+		if (*count < HOST_PREFERRED_USER_ARCH_COUNT)
+			return (KERN_FAILURE);
+
+		user_arch_info = (host_preferred_user_arch_t)info;
+
+#if defined(PREFERRED_USER_CPU_TYPE) && defined(PREFERRED_USER_CPU_SUBTYPE)
+		user_arch_info->cpu_type = PREFERRED_USER_CPU_TYPE;
+		user_arch_info->cpu_subtype = PREFERRED_USER_CPU_SUBTYPE;
+#else
+		int master_id = master_processor->cpu_id;
+		user_arch_info->cpu_type = slot_type(master_id);
+		user_arch_info->cpu_subtype = slot_subtype(master_id);
+#endif
+
+		*count = HOST_PREFERRED_USER_ARCH_COUNT;
+
+		return (KERN_SUCCESS);
+	}
+
 	default: return (KERN_INVALID_ARGUMENT);
 	}
 }
@@ -939,6 +964,27 @@ set_sched_stats_active(boolean_t active)
 	return (KERN_SUCCESS);
 }
 
+
+uint64_t
+get_pages_grabbed_count(void)
+{
+	processor_t processor;
+        uint64_t pages_grabbed_count = 0;
+
+	simple_lock(&processor_list_lock);
+
+	processor = processor_list;
+
+	while (processor) {
+	        pages_grabbed_count += PROCESSOR_DATA(processor, page_grab_count);
+		processor = processor->processor_list;
+	}
+	simple_unlock(&processor_list_lock);
+
+	return(pages_grabbed_count);
+}
+
+
 kern_return_t
 get_sched_statistics(struct _processor_statistics_np * out, uint32_t * count)
 {
@@ -1150,6 +1196,14 @@ host_processor_info(host_t host,
 	return (KERN_SUCCESS);
 }
 
+static bool
+is_valid_host_special_port(int id)
+{
+	return (id <= HOST_MAX_SPECIAL_PORT) &&
+	       (id >= HOST_MIN_SPECIAL_PORT) &&
+	       ((id <= HOST_LAST_SPECIAL_KERNEL_PORT) || (id > HOST_MAX_SPECIAL_KERNEL_PORT));
+}
+
 /*
  *      Kernel interface for setting a special port.
  */
@@ -1158,9 +1212,12 @@ kernel_set_special_port(host_priv_t host_priv, int id, ipc_port_t port)
 {
 	ipc_port_t old_port;
 
+	if (!is_valid_host_special_port(id))
+		panic("attempted to set invalid special port %d", id);
+
 #if !MACH_FLIPC
-    if (id == HOST_NODE_PORT)
-        return (KERN_NOT_SUPPORTED);
+	if (id == HOST_NODE_PORT)
+		return (KERN_NOT_SUPPORTED);
 #endif
 
 	host_lock(host_priv);
@@ -1169,7 +1226,7 @@ kernel_set_special_port(host_priv_t host_priv, int id, ipc_port_t port)
 	host_unlock(host_priv);
 
 #if MACH_FLIPC
-    if (id == HOST_NODE_PORT)
+	if (id == HOST_NODE_PORT)
 		mach_node_port_changed();
 #endif
 
@@ -1184,10 +1241,13 @@ kernel_set_special_port(host_priv_t host_priv, int id, ipc_port_t port)
 kern_return_t
 kernel_get_special_port(host_priv_t host_priv, int id, ipc_port_t * portp)
 {
-        host_lock(host_priv);
-        *portp = host_priv->special[id];
-        host_unlock(host_priv);
-        return (KERN_SUCCESS);
+	if (!is_valid_host_special_port(id))
+		panic("attempted to get invalid special port %d", id);
+
+	host_lock(host_priv);
+	*portp = host_priv->special[id];
+	host_unlock(host_priv);
+	return (KERN_SUCCESS);
 }
 
 /*
@@ -1227,7 +1287,7 @@ host_get_special_port(host_priv_t host_priv, __unused int node, int id, ipc_port
 {
 	ipc_port_t port;
 
-	if (host_priv == HOST_PRIV_NULL || id == HOST_SECURITY_PORT || id > HOST_MAX_SPECIAL_PORT || id < 0)
+	if (host_priv == HOST_PRIV_NULL || id == HOST_SECURITY_PORT || id > HOST_MAX_SPECIAL_PORT || id < HOST_MIN_SPECIAL_PORT)
 		return (KERN_INVALID_ARGUMENT);
 
 	host_lock(host_priv);

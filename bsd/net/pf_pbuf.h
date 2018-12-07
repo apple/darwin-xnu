@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -68,7 +68,7 @@ typedef struct pbuf {
 	uint32_t	pb_packet_len;
 	uint32_t	pb_contig_len;
 	uint32_t	*pb_csum_flags;
-	uint32_t	*pb_csum_data;
+	uint32_t	*pb_csum_data;    /* data field used by csum routines */
 	uint8_t		*pb_proto;
 	uint8_t		*pb_flowsrc;
 	uint32_t	*pb_flowid;
@@ -76,6 +76,7 @@ typedef struct pbuf {
 	struct pf_mtag	*pb_pftag;
 	struct ifnet	*pb_ifp;
 	struct pbuf	*pb_next;
+
 } pbuf_t;
 
 #define pbuf_is_valid(pb) (!((pb) == NULL || (pb)->pb_type == PBUF_TYPE_ZOMBIE))

@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+
 #include <sys/systm.h>
 #include <sys/kern_control.h>
 #include <net/kpi_protocol.h>
@@ -370,6 +371,7 @@ ipsec_interface_isvalid (ifnet_t interface)
     return 1;
 }
 
+#if IPSEC_NEXUS
 boolean_t
 ipsec_interface_needs_netagent(ifnet_t interface)
 {
@@ -387,6 +389,7 @@ ipsec_interface_needs_netagent(ifnet_t interface)
 
 	return (pcb->ipsec_needs_netagent == true);
 }
+#endif // IPSEC_NEXUS
 
 static errno_t
 ipsec_ifnet_set_attrs(ifnet_t ifp)
@@ -2072,6 +2075,12 @@ ipsec_enable_channel(struct ipsec_pcb *pcb, struct proc *proc)
 	struct kern_pbufpool_init pp_init;
 	errno_t result;
 
+	kauth_cred_t cred = kauth_cred_get();
+	result = priv_check_cred(cred, PRIV_SKYWALK_REGISTER_KERNEL_PIPE, 0);
+	if (result) {
+		return result;
+	}
+
 	result = ipsec_register_kernel_pipe_nexus();
 	if (result) {
 		return result;
@@ -2703,7 +2712,7 @@ ipsec_ctl_setopt(__unused kern_ctl_ref	kctlref,
 			if (result == 0) {
 				printf("%s IPSEC_OPT_SET_DELEGATE_INTERFACE %s to %s\n",
 					__func__, pcb->ipsec_ifp->if_xname, 
-					del_ifp->if_xname);
+					del_ifp ? del_ifp->if_xname : "NULL");
 
 				result = ifnet_set_delegate(pcb->ipsec_ifp, del_ifp);
 				if (del_ifp)
@@ -3317,12 +3326,14 @@ ipsec_ioctl(ifnet_t interface,
 			u_long command,
 			void *data)
 {
+#if IPSEC_NEXUS
+	struct ipsec_pcb *pcb = ifnet_softc(interface);
+#endif
 	errno_t	result = 0;
 	
 	switch(command) {
 		case SIOCSIFMTU: {
 #if IPSEC_NEXUS
-			struct ipsec_pcb *pcb = ifnet_softc(interface);
 			if (pcb->ipsec_use_netif) {
 				// Make sure we can fit packets in the channel buffers
 				if (((uint64_t)((struct ifreq*)data)->ifr_mtu) > pcb->ipsec_slot_size) {
@@ -3430,7 +3441,7 @@ ipsec_attach_proto(ifnet_t				interface,
 
 errno_t
 ipsec_inject_inbound_packet(ifnet_t	interface,
-							mbuf_t packet)
+			    mbuf_t	packet)
 {
 #if IPSEC_NEXUS
 	struct ipsec_pcb *pcb = ifnet_softc(interface);

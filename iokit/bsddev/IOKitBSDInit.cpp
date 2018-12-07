@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -38,6 +38,7 @@ extern "C" {
 
 #include <pexpert/pexpert.h>
 #include <kern/clock.h>
+#include <mach/machine.h>
 #include <uuid/uuid.h>
 #include <sys/vnode_internal.h>
 #include <sys/mount.h>
@@ -57,30 +58,33 @@ extern void mdevremoveall(void);
 extern int mdevgetrange(int devid, uint64_t *base, uint64_t *size);
 extern void di_root_ramfile(IORegistryEntry * entry);
 
-
 #if CONFIG_EMBEDDED
 #define IOPOLLED_COREFILE 	(CONFIG_KDP_INTERACTIVE_DEBUGGING)
 
 #if defined(XNU_TARGET_OS_BRIDGE)
+
 #define kIOCoreDumpSize         150ULL*1024ULL*1024ULL
 // leave free space on volume:
 #define kIOCoreDumpFreeSize     150ULL*1024ULL*1024ULL
 #define kIOCoreDumpPath         "/private/var/internal/kernelcore"
-#else
-#define kIOCoreDumpSize         350ULL*1024ULL*1024ULL
+
+#else /* defined(XNU_TARGET_OS_BRIDGE) */
+#define kIOCoreDumpMinSize      350ULL*1024ULL*1024ULL
+#define kIOCoreDumpLargeSize    500ULL*1024ULL*1024ULL
 // leave free space on volume:
 #define kIOCoreDumpFreeSize     350ULL*1024ULL*1024ULL
 #define kIOCoreDumpPath         "/private/var/vm/kernelcore"
-#endif
 
-#elif DEVELOPMENT
+#endif /* defined(XNU_TARGET_OS_BRIDGE) */
+
+#elif DEVELOPMENT /* CONFIG_EMBEDDED */
 #define IOPOLLED_COREFILE  	1
 // no sizing
 #define kIOCoreDumpSize		0ULL
 #define kIOCoreDumpFreeSize	0ULL
-#else
+#else /* CONFIG_EMBEDDED */
 #define IOPOLLED_COREFILE  	0
-#endif
+#endif /* CONFIG_EMBEDDED */
 
 
 #if IOPOLLED_COREFILE
@@ -764,7 +768,7 @@ kern_return_t IOBSDGetPlatformUUID( uuid_t uuid, mach_timespec_t timeout )
 #include <IOKit/IOBufferMemoryDescriptor.h>
 
 IOPolledFileIOVars * gIOPolledCoreFileVars;
-
+kern_return_t gIOPolledCoreFileOpenRet = kIOReturnNotReady;
 #if IOPOLLED_COREFILE
 
 static IOReturn 
@@ -772,6 +776,7 @@ IOOpenPolledCoreFile(const char * filename)
 {
     IOReturn err;
     unsigned int debug;
+    uint64_t corefile_size_bytes = 0;
 
     if (gIOPolledCoreFileVars)                             return (kIOReturnBusy);
     if (!IOPolledInterface::gMetaClass.getInstanceCount()) return (kIOReturnUnsupported);
@@ -780,15 +785,89 @@ IOOpenPolledCoreFile(const char * filename)
     PE_parse_boot_argn("debug", &debug, sizeof (debug));
     if (DB_DISABLE_LOCAL_CORE & debug)                     return (kIOReturnUnsupported);
 
-    err = IOPolledFileOpen(filename, kIOCoreDumpSize, kIOCoreDumpFreeSize,
-			    NULL, 0,
-			    &gIOPolledCoreFileVars, NULL, NULL, 0);
-    if (kIOReturnSuccess != err)                           return (err);
+#if CONFIG_EMBEDDED
+    unsigned int requested_corefile_size = 0;
+    if (PE_parse_boot_argn("corefile_size_mb", &requested_corefile_size, sizeof(requested_corefile_size))) {
+        IOLog("Boot-args specify %d MB kernel corefile\n", requested_corefile_size);
+
+        corefile_size_bytes = (requested_corefile_size * 1024ULL * 1024ULL);
+    }
+#endif
+
+
+    do {
+#if defined(kIOCoreDumpLargeSize)
+        if (0 == corefile_size_bytes)
+        {
+                // If no custom size was requested and we're on a device with >3GB of DRAM, attempt
+                // to allocate a large corefile otherwise use a small file.
+                if (max_mem > (3 * 1024ULL * 1024ULL * 1024ULL))
+                {
+                        corefile_size_bytes = kIOCoreDumpLargeSize;
+                        err = IOPolledFileOpen(filename,
+                                                kIOPolledFileCreate,
+                                                corefile_size_bytes, kIOCoreDumpFreeSize,
+                                                NULL, 0,
+                                                &gIOPolledCoreFileVars, NULL, NULL, 0);
+                        if (kIOReturnSuccess == err)
+                        {
+                                break;
+                        }
+                        else if (kIOReturnNoSpace == err)
+                        {
+                                IOLog("Failed to open corefile of size %llu MB (low disk space)",
+                                        (corefile_size_bytes / (1024ULL * 1024ULL)));
+                                if (corefile_size_bytes == kIOCoreDumpMinSize)
+                                {
+                                        gIOPolledCoreFileOpenRet = err;
+                                        return (err);
+                                }
+                                // Try to open a smaller corefile (set size and fall-through)
+                                corefile_size_bytes = kIOCoreDumpMinSize;
+                        }
+                        else
+                        {
+                                IOLog("Failed to open corefile of size %llu MB (returned error 0x%x)\n",
+                                        (corefile_size_bytes / (1024ULL * 1024ULL)), err);
+                                gIOPolledCoreFileOpenRet = err;
+                                return (err);
+                        }
+                }
+                else
+                {
+                        corefile_size_bytes = kIOCoreDumpMinSize;
+                }
+        }
+#else /* defined(kIOCoreDumpLargeSize) */
+        if (0 == corefile_size_bytes)
+        {
+            corefile_size_bytes = kIOCoreDumpSize;
+        }
+#endif /* defined(kIOCoreDumpLargeSize) */
+        err = IOPolledFileOpen(filename,
+                    kIOPolledFileCreate,
+                    corefile_size_bytes, kIOCoreDumpFreeSize,
+                    NULL, 0,
+                    &gIOPolledCoreFileVars, NULL, NULL, 0);
+        if (kIOReturnSuccess != err)
+        {
+                IOLog("Failed to open corefile of size %llu MB (returned error 0x%x)\n",
+                                (corefile_size_bytes / (1024ULL * 1024ULL)), err);
+                gIOPolledCoreFileOpenRet = err;
+                return (err);
+        }
+    } while (false);
 
     err = IOPolledFilePollersSetup(gIOPolledCoreFileVars, kIOPolledPreflightCoreDumpState);
     if (kIOReturnSuccess != err)
     {
-	IOPolledFileClose(&gIOPolledCoreFileVars, NULL, NULL, 0, 0, 0);
+        IOPolledFileClose(&gIOPolledCoreFileVars, NULL, NULL, 0, 0, 0);
+        IOLog("IOPolledFilePollersSetup for corefile failed with error: 0x%x\n", err);
+        gIOPolledCoreFileOpenRet = err;
+    }
+    else
+    {
+        IOLog("Opened corefile of size %llu MB\n", (corefile_size_bytes / (1024ULL * 1024ULL)));
     }
 
     return (err);
@@ -797,6 +876,7 @@ IOOpenPolledCoreFile(const char * filename)
 static void 
 IOClosePolledCoreFile(void)
 {
+    gIOPolledCoreFileOpenRet = kIOReturnNotOpen;
     IOPolledFilePollersClose(gIOPolledCoreFileVars, kIOPolledPostflightCoreDumpState);
     IOPolledFileClose(&gIOPolledCoreFileVars, NULL, NULL, 0, 0, 0);
 }
@@ -939,7 +1019,6 @@ IOBSDMountChange(struct mount * mp, uint32_t op)
 #endif /* CONFIG_EMBEDDED */
 #endif /* IOPOLLED_COREFILE */
 }
-
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 

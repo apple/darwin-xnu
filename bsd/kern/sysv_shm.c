@@ -488,6 +488,7 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 			 map_size,
 			 0,
 			 vm_flags,
+			 VM_MAP_KERNEL_FLAGS_NONE,
 			 VM_KERN_MEMORY_NONE,
 			 IPC_PORT_NULL,
 			 0,

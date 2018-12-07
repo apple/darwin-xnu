@@ -173,6 +173,19 @@ extern memory_object_t apple_protect_pager_setup(
 	vm_object_offset_t	crypto_end);
 #endif	/* CONFIG_CODE_DECRYPTION */
 
+struct vm_shared_region_slide_info;
+extern kern_return_t vm_map_shared_region(
+	vm_map_t		map,
+	vm_map_offset_t		start,
+	vm_map_offset_t		end,
+	vm_object_offset_t	backing_offset,
+	struct vm_shared_region_slide_info *slide_info);
+extern void shared_region_pager_bootstrap(void);
+extern memory_object_t shared_region_pager_setup(
+	vm_object_t		backing_object,
+	vm_object_offset_t	backing_offset,
+	struct vm_shared_region_slide_info *slide_info);
+
 struct vnode;
 extern void swapfile_pager_bootstrap(void);
 extern memory_object_t swapfile_pager_setup(struct vnode *vp);
@@ -217,6 +230,11 @@ extern void *upl_get_internal_page_list(
 
 extern void vnode_setswapmount(struct vnode *);
 extern int64_t vnode_getswappin_avail(struct vnode *);
+
+extern void vnode_pager_was_dirtied(
+        struct vnode *,
+	vm_object_offset_t,
+	vm_object_offset_t);
 
 typedef int pager_return_t;
 extern pager_return_t	vnode_pagein(
@@ -294,6 +312,10 @@ extern kern_return_t vnode_pager_get_object_devvp(
         uintptr_t *);
 #endif
 
+extern void vnode_pager_dirtied(
+	memory_object_t,
+	vm_object_offset_t,
+	vm_object_offset_t);
 extern kern_return_t vnode_pager_get_isinuse(
 	memory_object_t,
 	uint32_t *);
@@ -462,11 +484,25 @@ extern boolean_t cs_validate_range(struct vnode *vp,
 				   const void *data,
 				   vm_size_t size,
 				   unsigned *result);
+#if PMAP_CS
+extern kern_return_t cs_associate_blob_with_mapping(
+	void *pmap,
+	vm_map_offset_t start,
+	vm_map_size_t size,
+	vm_object_offset_t offset,
+	void *blobs_p);
+#endif /* PMAP_CS */
 
 extern kern_return_t memory_entry_purgeable_control_internal(
 	ipc_port_t	entry_port,
 	vm_purgable_t	control,
 	int		*state);
+
+extern kern_return_t memory_entry_access_tracking_internal(
+	ipc_port_t	entry_port,
+	int		*access_tracking,
+	uint32_t	*access_tracking_reads,
+	uint32_t	*access_tracking_writes);
 
 extern kern_return_t mach_memory_entry_purgable_control(
 	ipc_port_t	entry_port,
@@ -531,6 +567,11 @@ extern int proc_get_memstat_priority(struct proc*, boolean_t);
 /* returns TRUE if an object was purged, otherwise FALSE. */
 boolean_t vm_purgeable_object_purge_one_unlocked(int force_purge_below_group);
 void vm_purgeable_disown(task_t task);
+void vm_purgeable_nonvolatile_owner_update(task_t	owner,
+					   int		delta);
+void vm_purgeable_volatile_owner_update(task_t		owner,
+					int		delta);
+
 
 struct trim_list {
 	uint64_t	tl_offset;
@@ -597,9 +638,22 @@ extern kern_return_t mach_make_memory_entry_internal(
 	ipc_port_t		*object_handle,
 	ipc_port_t		parent_handle);
 
+#define	roundup(x, y)	((((x) % (y)) == 0) ? \
+			(x) : ((x) + ((y) - ((x) % (y)))))
+
 #ifdef __cplusplus
 }
 #endif
+
+/*
+ * Flags for the VM swapper/reclaimer.
+ * Used by vm_swap_consider_defragment()
+ * to force defrag/reclaim by the swap
+ * GC thread.
+ */
+#define VM_SWAP_FLAGS_NONE             0
+#define VM_SWAP_FLAGS_FORCE_DEFRAG     1
+#define VM_SWAP_FLAGS_FORCE_RECLAIM    2
 
 #endif	/* _VM_VM_PROTOS_H_ */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -49,7 +49,6 @@
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 #include <sys/kern_event.h>
-
 #include <net/bpf.h>
 #include <net/ethernet.h>
 #include <net/if.h>
@@ -68,6 +67,7 @@
 #include <net/kpi_protocol.h>
 
 #include <kern/locks.h>
+#include <kern/zalloc.h>
 #include <libkern/OSAtomic.h>
 
 #include <netinet/in.h>
@@ -83,9 +83,14 @@ static struct ether_addr slow_proto_multicast = {
     IEEE8023AD_SLOW_PROTO_MULTICAST
 };
 
+typedef struct ifbond_s ifbond, * ifbond_ref;
+typedef struct bondport_s bondport, * bondport_ref;
+
 #define	BOND_MAXUNIT		128
-#define BONDNAME		"bond"
-#define M_BOND	 		M_DEVBUF
+#define	BOND_ZONE_MAX_ELEM	MIN(IFNETS_MAX, BOND_MAXUNIT)
+#define	BONDNAME		"bond"
+
+#define M_BOND			M_DEVBUF
 
 #define EA_FORMAT	"%x:%x:%x:%x:%x:%x"
 #define EA_CH(e, i)	((u_char)((u_char *)(e))[(i)])
@@ -617,24 +622,26 @@ bondport_collecting(bondport_ref p)
 static int bond_clone_create(struct if_clone *, u_int32_t, void *);
 static int bond_clone_destroy(struct ifnet *);
 static int bond_input(ifnet_t ifp, protocol_family_t protocol, mbuf_t m,
-					  char *frame_header);
+    char *frame_header);
 static int bond_output(struct ifnet *ifp, struct mbuf *m);
 static int bond_ioctl(struct ifnet *ifp, u_long cmd, void * addr);
 static int bond_set_bpf_tap(struct ifnet * ifp, bpf_tap_mode mode,
-			    bpf_packet_func func);
+    bpf_packet_func func);
 static int bond_attach_protocol(struct ifnet *ifp);
 static int bond_detach_protocol(struct ifnet *ifp);
 static int bond_setmulti(struct ifnet *ifp);
 static int bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp);
 static int bond_remove_interface(ifbond_ref ifb, struct ifnet * port_ifp);
 static void bond_if_free(struct ifnet * ifp);
+static  void interface_link_event(struct ifnet * ifp, u_int32_t event_code);
 
 static struct if_clone bond_cloner = IF_CLONE_INITIALIZER(BONDNAME,
-							  bond_clone_create, 
-							  bond_clone_destroy, 
-							  0,
-							  BOND_MAXUNIT);
-static	void interface_link_event(struct ifnet * ifp, u_int32_t event_code);
+    bond_clone_create,
+    bond_clone_destroy,
+    0,
+    BOND_MAXUNIT,
+    BOND_ZONE_MAX_ELEM,
+    sizeof(ifbond));
 
 static int
 siocsifmtu(struct ifnet * ifp, int mtu)
@@ -699,7 +706,7 @@ ifbond_release(ifbond_ref ifb)
 	if (ifb->ifb_distributing_array != NULL) {
 	    FREE(ifb->ifb_distributing_array, M_BOND);
 	}
-	FREE(ifb, M_BOND);
+	if_clone_softc_deallocate(&bond_cloner, ifb);
 	break;
     default:
 	break;
@@ -1092,7 +1099,7 @@ bond_clone_create(struct if_clone * ifc, u_int32_t unit, __unused void *params)
 		return (error);
 	}
 	
-	ifb = _MALLOC(sizeof(ifbond), M_BOND, M_WAITOK | M_ZERO);
+	ifb = if_clone_softc_allocate(&bond_cloner);
 	if (ifb == NULL) {
 		return (ENOMEM);
 	}

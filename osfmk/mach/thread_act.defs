@@ -96,7 +96,12 @@ routine thread_terminate(
  *	may be stale.  [Flavor THREAD_STATE_FLAVOR_LIST provides a
  *	list of valid flavors for the target thread.]
  */
-routine act_get_state(
+routine
+#ifdef KERNEL_SERVER
+act_get_state_to_user(
+#else
+act_get_state(
+#endif
 		target_act	: thread_act_t;
 		flavor		: int;
 	out	old_state	: thread_state_t, CountInOut);
@@ -125,7 +130,12 @@ act_set_state(
  *	may be stale.  [Flavor THREAD_STATE_FLAVOR_LIST provides a
  *	list of valid flavors for the target thr_act.]
  */
-routine thread_get_state(
+routine
+#ifdef KERNEL_SERVER
+thread_get_state_to_user(
+#else
+thread_get_state(
+#endif
 		target_act	: thread_act_t;
 		flavor		: thread_state_flavor_t;
 	out	old_state	: thread_state_t, CountInOut);
@@ -191,7 +201,12 @@ routine thread_abort_safely(
 		target_act	: thread_act_t);
 
 
-routine thread_depress_abort(
+routine
+#ifdef KERNEL_SERVER
+thread_depress_abort_from_user(
+#else
+thread_depress_abort(
+#endif
 		thread		: thread_act_t);
 
 

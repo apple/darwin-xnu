@@ -54,6 +54,8 @@ static boolean_t lpss_uart_supported = 0; /* 1 if LPSS UART is supported on plat
 static unsigned int lpss_uart_enabled = 0; /* 1 if it is LPSS UART is in D0 state */
 static void lpss_uart_re_init (void);
 
+static boolean_t pcie_uart_enabled = 0; /* 1 if PCIe UART is supported on platform */
+
 #define DEFAULT_UART_BAUD_RATE 115200
 
 static unsigned uart_baud_rate = DEFAULT_UART_BAUD_RATE;
@@ -434,6 +436,131 @@ static struct pe_serial_functions mmio_uart_serial_functions = {
 };
 
 // =============================================================================
+// PCIE_MMIO UART 
+// =============================================================================
+
+#define PCIE_MMIO_UART_BASE         0xFE410000
+
+#define PCIE_MMIO_WRITE(r, v)  ml_phys_write_byte(pcie_mmio_uart_base + PCIE_MMIO_UART_##r, v)
+#define PCIE_MMIO_READ(r)      ml_phys_read_byte(pcie_mmio_uart_base + PCIE_MMIO_UART_##r)
+
+enum {
+    PCIE_MMIO_UART_RBR = 0x0,   /* receive buffer Register   (R) */
+    PCIE_MMIO_UART_THR = 0x0,   /* transmit holding register (W) */
+    PCIE_MMIO_UART_IER = 0x1,   /* interrupt enable register     */
+    PCIE_MMIO_UART_FCR = 0x2,   /* fifo control register (W)     */
+    PCIE_MMIO_UART_LCR = 0x4,   /* line control register         */
+    PCIE_MMIO_UART_MCR = 0x4,  /* modem control register        */
+    PCIE_MMIO_UART_LSR = 0x5,  /* line status register          */
+    PCIE_MMIO_UART_DLL = 0x8,   /* DLAB = 1, divisor latch (LSB) */
+    PCIE_MMIO_UART_DLM = 0x9,   /* DLAB = 1, divisor latch (MSB) */
+    PCIE_MMIO_UART_SCR = 0x30,   /* scratch register              */
+};
+
+static vm_offset_t pcie_mmio_uart_base = 0;
+ 
+static int
+pcie_mmio_uart_present( void )
+{
+
+    PCIE_MMIO_WRITE( SCR, 0x5a );
+    if (PCIE_MMIO_READ(SCR) != 0x5a) return 0;
+    PCIE_MMIO_WRITE( SCR, 0xa5 );
+    if (PCIE_MMIO_READ(SCR) != 0xa5) return 0;
+
+    return 1;
+}
+
+static int
+pcie_mmio_uart_probe( void )
+{
+    unsigned new_pcie_mmio_uart_base = 0;
+
+    // if specified, pcie_mmio_uart overrides all probing
+    if (PE_parse_boot_argn("pcie_mmio_uart", &new_pcie_mmio_uart_base, sizeof (new_pcie_mmio_uart_base)))
+    {
+        // pcie_mmio_uart=0 will disable pcie_mmio_uart support
+        if (new_pcie_mmio_uart_base == 0) {
+            return 0;
+        }
+        pcie_mmio_uart_base = new_pcie_mmio_uart_base;
+        return 1;
+    }
+
+    pcie_mmio_uart_base = PCIE_MMIO_UART_BASE;
+    if (pcie_mmio_uart_present()) {
+      return 1;
+    }
+
+    // no pcie_mmio uart found
+    return 0;
+}
+
+static void
+pcie_mmio_uart_set_baud_rate( __unused int unit, __unused uint32_t baud_rate )
+{
+    const unsigned char lcr = PCIE_MMIO_READ( LCR );
+    unsigned long       div;
+
+    if (baud_rate == 0) baud_rate = 9600;
+    div = LEGACY_UART_CLOCK / 16 / baud_rate;
+
+    PCIE_MMIO_WRITE( LCR, lcr | UART_LCR_DLAB );
+    PCIE_MMIO_WRITE( DLM, (unsigned char)(div >> 8) );
+    PCIE_MMIO_WRITE( DLL, (unsigned char) div );
+    PCIE_MMIO_WRITE( LCR, lcr & ~UART_LCR_DLAB);
+}
+
+static int
+pcie_mmio_uart_tr0( void )
+{
+    return (PCIE_MMIO_READ(LSR) & UART_LSR_THRE);
+}
+
+static void
+pcie_mmio_uart_td0( int c )
+{
+    PCIE_MMIO_WRITE( THR, c );
+}
+
+static void
+pcie_mmio_uart_init( void )
+{
+    uart_initted = 1;
+}
+
+static int
+pcie_mmio_uart_rr0( void ) 
+{
+    unsigned char lsr;
+
+    lsr = PCIE_MMIO_READ( LSR );
+
+    if ( lsr & (UART_LSR_FE | UART_LSR_PE | UART_LSR_OE) )
+    {
+        PCIE_MMIO_READ( RBR ); /* discard */
+        return 0;
+    }
+    
+    return (lsr & UART_LSR_DR);
+}
+
+static int
+pcie_mmio_uart_rd0( void ) 
+{
+    return PCIE_MMIO_READ( RBR );
+}
+
+static struct pe_serial_functions pcie_mmio_uart_serial_functions = {
+    .uart_init = pcie_mmio_uart_init,
+    .uart_set_baud_rate = pcie_mmio_uart_set_baud_rate,
+    .tr0 = pcie_mmio_uart_tr0,
+    .td0 = pcie_mmio_uart_td0,
+    .rr0 = pcie_mmio_uart_rr0,
+    .rd0 = pcie_mmio_uart_rd0
+};
+
+// =============================================================================
 // Generic serial support below
 // =============================================================================
 
@@ -465,6 +592,13 @@ serial_init( void )
         legacy_uart_enabled = 1;
         return 1;
     }
+    else if ( pcie_mmio_uart_probe() )
+    {
+        gPESF = &pcie_mmio_uart_serial_functions;
+        gPESF->uart_init();
+        pcie_uart_enabled = 1;
+        return 1;
+    }
     else
     {
         return 0;
@@ -475,7 +609,7 @@ serial_init( void )
 static void
 uart_putc(char c)
 {
-	if (uart_initted && (legacy_uart_enabled || lpss_uart_enabled)) {
+	if (uart_initted && (legacy_uart_enabled || lpss_uart_enabled || pcie_uart_enabled)) {
         while (!gPESF->tr0());  /* Wait until THR is empty. */
         gPESF->td0(c);
     }
@@ -484,7 +618,7 @@ uart_putc(char c)
 static int
 uart_getc(void)
 {
-    if (uart_initted && (legacy_uart_enabled || lpss_uart_enabled)) {
+    if (uart_initted && (legacy_uart_enabled || lpss_uart_enabled || pcie_uart_enabled)) {
         if (!gPESF->rr0())
             return -1;
         return gPESF->rd0();

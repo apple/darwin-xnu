@@ -16,7 +16,7 @@
 .\" 
 .\"     @(#)searchfs.2
 .
-.Dd October 13, 2008
+.Dd November 16, 2017
 .Dt SEARCHFS 2
 .Os Darwin
 .Sh NAME
@@ -26,7 +26,7 @@
 .Fd #include <sys/attr.h>
 .Fd #include <unistd.h>
 .Ft int
-.Fn searchfs "const char* path" "struct fssearchblock* searchBlock" "unsigned int* numMatches" "unsigned int scriptCode" "unsigned int options" "struct searchstate* state"
+.Fn searchfs "const char* path" "struct fssearchblock* searchBlock" "unsigned long* numMatches" "unsigned int scriptCode" "unsigned int options" "struct searchstate* state"
 .
 .Sh DESCRIPTION
 The
@@ -818,8 +818,8 @@ static int SearchFSDemo(
     SearchAttrBuf   lower;
     SearchAttrBuf   upper;
     static const unsigned char kAllOnes[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
-    unsigned int    matchCount;
-    unsigned int    matchIndex;
+    unsigned long   matchCount;
+    unsigned long   matchIndex;
     unsigned int    options;
     searchstate_t   state;
     ResultAttrBuf * thisEntry;

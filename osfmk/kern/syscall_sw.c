@@ -142,7 +142,7 @@ const mach_trap_t	mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 37 */	MACH_TRAP(semaphore_wait_signal_trap, 2, 2, munge_ww),
 /* 38 */	MACH_TRAP(semaphore_timedwait_trap, 3, 3, munge_www),
 /* 39 */	MACH_TRAP(semaphore_timedwait_signal_trap, 4, 4, munge_wwww),
-/* 40 */	MACH_TRAP(kern_invalid, 0, 0, NULL),
+/* 40 */	MACH_TRAP(_kernelrpc_mach_port_get_attributes_trap, 5, 5, munge_wwwww),
 /* 41 */	MACH_TRAP(_kernelrpc_mach_port_guard_trap, 4, 5, munge_wwlw),
 /* 42 */	MACH_TRAP(_kernelrpc_mach_port_unguard_trap, 3, 4, munge_wwl),
 /* 43 */	MACH_TRAP(mach_generate_activity_id, 3, 3, munge_www),

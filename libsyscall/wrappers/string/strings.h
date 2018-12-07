@@ -72,8 +72,17 @@ char	*strsep(char **, const char *);
 void	 bcopy(const void *, void *, size_t);
 void	 bzero(void *, size_t);
 char	*index(const char *, int);
+char	*strchr(const char *, int);
 
 #include "string.h"
 
-#endif  /* _STRINGS_H_ */
+void    *_libkernel_memmove(void *, const void *, size_t);
+void    *_libkernel_memset(void *, int, size_t);
+int      _libkernel_strcmp(const char *, const char *);
+char    *_libkernel_strcpy(char *, const char *);
+size_t   _libkernel_strlen(const char *);
+size_t   _libkernel_strlcpy(char *, const char *, size_t);
+void     _libkernel_bzero(void *, size_t);
+char    *_libkernel_strchr(const char *, int);
 
+#endif  /* _STRINGS_H_ */

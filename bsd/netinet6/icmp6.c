@@ -2068,7 +2068,8 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 			if ((n = m_copy(m, 0, (int)M_COPYALL)) != NULL) {
 				if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
 				    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
-				    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+				    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
+					(last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 					ret = ip6_savecontrol(last, n, &opts);
 					if (ret != 0) {
 						m_freem(n);
@@ -2093,7 +2094,8 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 	if (last) {
 		if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
 		    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
-		    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+		    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
+			(last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 			ret = ip6_savecontrol(last, m, &opts);
 			if (ret != 0) {
 				goto error;
@@ -2232,7 +2234,7 @@ icmp6_reflect(struct mbuf *m, size_t off)
 	for (ia = in6_ifaddrs; ia; ia = ia->ia_next) {
 		IFA_LOCK(&ia->ia_ifa);
 		if (IN6_ARE_ADDR_EQUAL(&t, &ia->ia_addr.sin6_addr) &&
-		    (ia->ia6_flags & (IN6_IFF_ANYCAST|IN6_IFF_NOTREADY)) == 0) {
+		    (ia->ia6_flags & (IN6_IFF_ANYCAST|IN6_IFF_NOTREADY|IN6_IFF_CLAT46)) == 0) {
 			IFA_UNLOCK(&ia->ia_ifa);
 			src = &t;
 			break;
@@ -2651,8 +2653,8 @@ icmp6_redirect_output(struct mbuf *m0, struct rtentry *rt)
 		/* get ip6 linklocal address for ifp(my outgoing interface). */
 		struct in6_ifaddr *ia;
 		if ((ia = in6ifa_ifpforlinklocal(ifp,
-						 IN6_IFF_NOTREADY|
-						 IN6_IFF_ANYCAST)) == NULL)
+		    IN6_IFF_NOTREADY|
+		    IN6_IFF_ANYCAST)) == NULL)
 			goto fail;
 		IFA_LOCK(&ia->ia_ifa);
 		ifp_ll6 = ia->ia_addr.sin6_addr;

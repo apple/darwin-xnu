@@ -32,6 +32,5 @@ struct kperf_timer;
 bool kperf_mp_broadcast_other_running(struct kperf_timer *trigger);
 
 void kperf_signal_handler(unsigned int cpu_number);
-kern_return_t kperf_get_phys_footprint(task_t, uint64_t *);
 
 #endif /* KPERF_ARCH_H */

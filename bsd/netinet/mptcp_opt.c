@@ -1080,39 +1080,31 @@ mptcp_data_ack_rcvd(struct mptcb *mp_tp, struct tcpcb *tp, u_int64_t full_dack)
 }
 
 void
-mptcp_update_window_fallback(struct tcpcb *tp)
+mptcp_update_window_wakeup(struct tcpcb *tp)
 {
 	struct mptcb *mp_tp = tptomptp(tp);
 
 	mpte_lock_assert_held(mp_tp->mpt_mpte);
 
-	if (!(mp_tp->mpt_flags & MPTCPF_FALLBACK_TO_TCP))
-		return;
-
-	mptcplog((LOG_DEBUG, "%s: update window to %u\n", __func__, tp->snd_wnd),
-		 MPTCP_SOCKET_DBG, MPTCP_LOGLVL_VERBOSE);
-
-	mp_tp->mpt_sndwnd = tp->snd_wnd;
-	mp_tp->mpt_sndwl1 = mp_tp->mpt_rcvnxt;
-	mp_tp->mpt_sndwl2 = mp_tp->mpt_snduna;
+	if (mp_tp->mpt_flags & MPTCPF_FALLBACK_TO_TCP) {
+		mp_tp->mpt_sndwnd = tp->snd_wnd;
+		mp_tp->mpt_sndwl1 = mp_tp->mpt_rcvnxt;
+		mp_tp->mpt_sndwl2 = mp_tp->mpt_snduna;
+	}
 
 	sowwakeup(tp->t_inpcb->inp_socket);
 }
 
 static void
-mptcp_update_window(struct mptcb *mp_tp, u_int64_t ack, u_int64_t seq,
-    u_int32_t tiwin)
+mptcp_update_window(struct mptcb *mp_tp, u_int64_t ack, u_int64_t seq, u_int32_t tiwin)
 {
-	/* Don't look at the window if there is no ACK flag */
-	if ((SEQ_LT(mp_tp->mpt_sndwl1, seq) ||
-	    (mp_tp->mpt_sndwl1 == seq && (SEQ_LT(mp_tp->mpt_sndwl2, ack) ||
-	    (mp_tp->mpt_sndwl2 == ack && tiwin > mp_tp->mpt_sndwnd))))) {
+	if (SEQ_LT(mp_tp->mpt_sndwl1, seq) ||
+	    (mp_tp->mpt_sndwl1 == seq &&
+	     (SEQ_LT(mp_tp->mpt_sndwl2, ack) ||
+	      (mp_tp->mpt_sndwl2 == ack && tiwin > mp_tp->mpt_sndwnd)))) {
 		mp_tp->mpt_sndwnd = tiwin;
 		mp_tp->mpt_sndwl1 = seq;
 		mp_tp->mpt_sndwl2 = ack;
-
-		mptcplog((LOG_DEBUG, "%s: Updating window to %u\n", __func__,
-			  mp_tp->mpt_sndwnd), MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
 	}
 }
 
@@ -1138,11 +1130,11 @@ mptcp_do_dss_opt_ack_meat(u_int64_t full_dack, u_int64_t full_dsn,
 		if (close_notify)
 			mptcp_notify_close(tp->t_inpcb->inp_socket);
 	} else {
-		mptcplog((LOG_ERR,"%s: unexpected dack %u snduna %u sndmax %u\n", __func__,
-		    (u_int32_t)full_dack, (u_int32_t)mp_tp->mpt_snduna,
-		    (u_int32_t)mp_tp->mpt_sndmax),
-		    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),
-		    MPTCP_LOGLVL_LOG);
+		os_log_error(mptcp_log_handle,
+			     "%s: unexpected dack %u snduna %u sndmax %u\n",
+			     __func__, (u_int32_t)full_dack,
+			     (u_int32_t)mp_tp->mpt_snduna,
+			     (u_int32_t)mp_tp->mpt_sndmax);
 	}
 
 	mptcp_update_window(mp_tp, full_dack, full_dsn, tiwin);

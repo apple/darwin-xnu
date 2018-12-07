@@ -127,8 +127,8 @@ __END_DECLS
 /*
  * Capability bits used in the definition of cpu_type.
  */
-#define	CPU_ARCH_MASK	0xff000000		/* mask for architecture bits */
-#define CPU_ARCH_ABI64	0x01000000		/* 64 bit ABI */
+#define	CPU_ARCH_MASK		0xff000000	/* mask for architecture bits */
+#define CPU_ARCH_ABI64		0x01000000	/* 64 bit ABI */
 
 /*
  *	Machine types known by all.
@@ -151,7 +151,7 @@ __END_DECLS
 #define CPU_TYPE_MC98000	((cpu_type_t) 10)
 #define CPU_TYPE_HPPA           ((cpu_type_t) 11)
 #define CPU_TYPE_ARM		((cpu_type_t) 12)
-#define CPU_TYPE_ARM64          (CPU_TYPE_ARM | CPU_ARCH_ABI64)
+#define CPU_TYPE_ARM64		(CPU_TYPE_ARM | CPU_ARCH_ABI64)
 #define CPU_TYPE_MC88000	((cpu_type_t) 13)
 #define CPU_TYPE_SPARC		((cpu_type_t) 14)
 #define CPU_TYPE_I860		((cpu_type_t) 15)
@@ -368,6 +368,7 @@ __END_DECLS
 #define CPU_SUBTYPE_ARM64_ALL           ((cpu_subtype_t) 0)
 #define CPU_SUBTYPE_ARM64_V8            ((cpu_subtype_t) 1)
 
+
 #endif /* !__ASSEMBLER__ */
 
 /*
@@ -407,6 +408,7 @@ __END_DECLS
 #define CPUFAMILY_ARM_TYPHOON		0x2c91a47e
 #define CPUFAMILY_ARM_TWISTER		0x92fb37c8
 #define CPUFAMILY_ARM_HURRICANE		0x67ceee93
+#define CPUFAMILY_ARM_MONSOON_MISTRAL	0xe81e7ef6
 
 /* The following synonyms are deprecated: */
 #define CPUFAMILY_INTEL_6_23	CPUFAMILY_INTEL_PENRYN

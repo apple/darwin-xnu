@@ -91,11 +91,12 @@ extern vm_map_t current_map(void);
 
 /* Setup reserved areas in a new VM map */
 extern kern_return_t	vm_map_exec(
-				vm_map_t		new_map,
-				task_t			task,
-				boolean_t		is64bit,
-				void			*fsroot,
-				cpu_type_t		cpu);
+	vm_map_t		new_map,
+	task_t			task,
+	boolean_t		is64bit,
+	void			*fsroot,
+	cpu_type_t		cpu,
+	cpu_subtype_t		cpu_subtype);
 
 __END_DECLS
 
@@ -147,6 +148,9 @@ typedef union vm_map_object {
 #define named_entry_lock_destroy(object)	lck_mtx_destroy(&(object)->Lock, &vm_object_lck_grp)
 #define named_entry_lock(object)		lck_mtx_lock(&(object)->Lock)
 #define named_entry_unlock(object)		lck_mtx_unlock(&(object)->Lock)   
+#if VM_NAMED_ENTRY_LIST
+extern queue_head_t vm_named_entry_list;
+#endif /* VM_NAMED_ENTRY_LIST */
 
 /*
  *	Type:		vm_named_entry_t [internal use only]
@@ -182,6 +186,13 @@ struct vm_named_entry {
 	/* boolean_t */		internal:1,	/* ... an internal object */
 	/* boolean_t */		is_sub_map:1,	/* ... a submap? */
 	/* boolean_t */		is_copy:1;	/* ... a VM map copy */
+#if VM_NAMED_ENTRY_LIST
+	queue_chain_t		named_entry_list;
+	int			named_entry_alias;
+	mach_port_t		named_entry_port;
+#define NAMED_ENTRY_BT_DEPTH 16
+	void			*named_entry_bt[NAMED_ENTRY_BT_DEPTH];
+#endif /* VM_NAMED_ENTRY_LIST */
 };
 
 /*
@@ -323,6 +334,7 @@ struct vm_map_entry {
 					     * this entry it is being deleted
 					     * without unwiring them */
 	/* boolean_t */	used_for_jit:1,
+	/* boolean_t */ pmap_cs_associated:1, /* pmap_cs will validate */
 	/* boolean_t */	from_reserved_zone:1, /* Allocated from
 					       * kernel reserved zone	 */
 
@@ -331,7 +343,7 @@ struct vm_map_entry {
 	/* boolean_t */ vme_resilient_codesign:1,
 	/* boolean_t */ vme_resilient_media:1,
 	/* boolean_t */ vme_atomic:1, /* entry cannot be split/coalesced */
-		__unused:5;
+		__unused:4;
 ;
 
 	unsigned short		wired_count;	/* can be paged if = 0 */
@@ -405,7 +417,7 @@ struct vm_map_header {
  *		quickly find free space.
  */
 struct _vm_map {
-	lck_rw_t			lock;		/* map lock */
+	lck_rw_t		lock;		/* map lock */
 	struct vm_map_header	hdr;		/* Map entry header */
 #define min_offset		hdr.links.start	/* start of range */
 #define max_offset		hdr.links.end	/* end of range */
@@ -433,23 +445,29 @@ struct _vm_map {
 	} vmu1;
 #define highest_entry_end	vmu1.vmu1_highest_entry_end
 #define lowest_unnestable_start	vmu1.vmu1_lowest_unnestable_start
+	decl_lck_mtx_data(,	s_lock)		/* Lock ref, res fields */
+	lck_mtx_ext_t		s_lock_ext;
+	vm_map_entry_t		hint;		/* hint for quick lookups */
+	union {
+		struct vm_map_links* vmmap_hole_hint;	/* hint for quick hole lookups */
+		struct vm_map_corpse_footprint_header *vmmap_corpse_footprint;
+	} vmmap_u_1;
+#define hole_hint vmmap_u_1.vmmap_hole_hint
+#define vmmap_corpse_footprint vmmap_u_1.vmmap_corpse_footprint
+	union{
+		vm_map_entry_t		_first_free;	/* First free space hint */
+		struct vm_map_links*	_holes;		/* links all holes between entries */
+	} f_s;						/* Union for free space data structures being used */
 
-	int			ref_count;	/* Reference count */
+#define first_free		f_s._first_free
+#define holes_list		f_s._holes
+
+	int			map_refcnt;	/* Reference count */
+
 #if	TASK_SWAPPER
 	int			res_count;	/* Residence count (swap) */
 	int			sw_state;	/* Swap state */
 #endif	/* TASK_SWAPPER */
-	decl_lck_mtx_data(,	s_lock)		/* Lock ref, res fields */
-	lck_mtx_ext_t		s_lock_ext;
-	vm_map_entry_t		hint;		/* hint for quick lookups */
-	struct vm_map_links*	hole_hint;	/* hint for quick hole lookups */
-	union{
-		vm_map_entry_t		_first_free;	/* First free space hint */
-		struct vm_map_links*	_holes;		/* links all holes between entries */
-	}f_s;						/* Union for free space data structures being used */
-
-#define first_free		f_s._first_free
-#define holes_list		f_s._holes
 
 	unsigned int		
 	/* boolean_t */		wait_for_space:1, /* Should callers wait for space? */
@@ -462,14 +480,15 @@ struct _vm_map {
 	/* boolean_t */		holelistenabled:1,
 	/* boolean_t */		is_nested_map:1,
 	/* boolean_t */		map_disallow_new_exec:1, /* Disallow new executable code */
-	/* reserved */		pad:22;
+ 	/* boolean_t */		jit_entry_exists:1,
+	/* boolean_t */		has_corpse_footprint:1,
+	/* boolean_t */		warned_delete_gap:1,
+	/* reserved */		pad:19;
 	unsigned int		timestamp;	/* Version number */
-	unsigned int		color_rr;	/* next color (not protected by a lock) */
+};
 
- 	boolean_t		jit_entry_exists;
-} ;
-
-#define vm_map_to_entry(map)	((struct vm_map_entry *) &(map)->hdr.links)
+#define CAST_TO_VM_MAP_ENTRY(x) ((struct vm_map_entry *)(uintptr_t)(x))
+#define vm_map_to_entry(map) CAST_TO_VM_MAP_ENTRY(&(map)->hdr.links)
 #define vm_map_first_entry(map)	((map)->hdr.links.next)
 #define vm_map_last_entry(map)	((map)->hdr.links.prev)
 
@@ -563,8 +582,7 @@ struct vm_map_copy {
  *	Useful macros for entry list copy objects
  */
 
-#define vm_map_copy_to_entry(copy)		\
-		((struct vm_map_entry *) &(copy)->cpy_hdr.links)
+#define vm_map_copy_to_entry(copy) CAST_TO_VM_MAP_ENTRY(&(copy)->cpy_hdr.links)
 #define vm_map_copy_first_entry(copy)		\
 		((copy)->cpy_hdr.links.next)
 #define vm_map_copy_last_entry(copy)		\
@@ -745,7 +763,7 @@ MACRO_BEGIN					\
 	if (Map) {				\
 		lck_mtx_lock(&Map->s_lock);	\
 		Map->res_count++;		\
-		Map->ref_count++;		\
+		Map->map_refcnt++;		\
 		lck_mtx_unlock(&Map->s_lock);	\
 	}					\
 MACRO_END
@@ -780,7 +798,7 @@ MACRO_END
 MACRO_BEGIN				\
 	vm_map_t Map = (map);		\
 	lck_mtx_lock(&Map->s_lock);	\
-	++Map->ref_count;		\
+	++Map->map_refcnt;		\
 	vm_map_res_reference(Map);	\
 	lck_mtx_unlock(&Map->s_lock);	\
 MACRO_END
@@ -799,7 +817,7 @@ MACRO_BEGIN					\
 	vm_map_t Map = (map);			\
 	if (Map) {				\
 		lck_mtx_lock(&Map->s_lock);	\
-		Map->ref_count++;		\
+		Map->map_refcnt++;		\
 		lck_mtx_unlock(&Map->s_lock);	\
 	}					\
 MACRO_END
@@ -953,6 +971,7 @@ extern vm_map_t		vm_map_fork(
 				int			options);
 #define VM_MAP_FORK_SHARE_IF_INHERIT_NONE	0x00000001
 #define VM_MAP_FORK_PRESERVE_PURGEABLE		0x00000002
+#define VM_MAP_FORK_CORPSE_FOOTPRINT		0x00000004
 
 /* Change inheritance */
 extern kern_return_t	vm_map_inherit(
@@ -1049,6 +1068,13 @@ extern kern_return_t vm_map_set_cache_attr(
 
 extern int override_nx(vm_map_t map, uint32_t user_tag);
 
+#if PMAP_CS
+extern kern_return_t vm_map_entry_cs_associate(
+	vm_map_t		map,
+	vm_map_entry_t		entry,
+	vm_map_kernel_flags_t	vmk_flags);
+#endif /* PMAP_CS */
+
 extern void vm_map_region_top_walk(
         vm_map_entry_t entry,
 	vm_region_top_info_t top);
@@ -1062,6 +1088,46 @@ extern void vm_map_region_walk(
 	boolean_t look_for_pages,
 	mach_msg_type_number_t count);
 
+
+struct vm_map_corpse_footprint_header {
+	vm_size_t	cf_size;	/* allocated buffer size */
+	uint32_t	cf_last_region;	/* offset of last region in buffer */
+	union {
+		uint32_t cfu_last_zeroes; /* during creation:
+					  * number of "zero" dispositions at
+					  * end of last region */
+		uint32_t cfu_hint_region; /* during lookup:
+					  * offset of last looked up region */
+#define cf_last_zeroes cfu.cfu_last_zeroes
+#define cf_hint_region cfu.cfu_hint_region
+	} cfu;
+};
+struct vm_map_corpse_footprint_region {
+	vm_map_offset_t	cfr_vaddr;	/* region start virtual address */
+	uint32_t	cfr_num_pages;	/* number of pages in this "region" */
+	unsigned char	cfr_disposition[0];	/* disposition of each page */
+} __attribute__((packed));
+
+extern kern_return_t vm_map_corpse_footprint_collect(
+	vm_map_t	old_map,
+	vm_map_entry_t	old_entry,
+	vm_map_t	new_map);
+extern void vm_map_corpse_footprint_collect_done(
+	vm_map_t	new_map);
+
+extern kern_return_t vm_map_corpse_footprint_query_page_info(
+	vm_map_t	map,
+	vm_map_offset_t	va,
+	int		*disp);
+
+extern void vm_map_copy_footprint_ledgers(
+	task_t	old_task,
+	task_t	new_task);
+extern void vm_map_copy_ledger(
+	task_t	old_task,
+	task_t	new_task,
+	int	ledger_entry);
+
 #endif /* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
@@ -1072,6 +1138,15 @@ extern vm_map_t		vm_map_create(
 				vm_map_offset_t 	min_off,
 				vm_map_offset_t 	max_off,
 				boolean_t		pageable);
+extern vm_map_t vm_map_create_options(
+	pmap_t			pmap,
+	vm_map_offset_t 	min_off,
+	vm_map_offset_t 	max_off,
+	int			options);
+#define VM_MAP_CREATE_PAGEABLE		0x00000001
+#define VM_MAP_CREATE_CORPSE_FOOTPRINT	0x00000002
+#define VM_MAP_CREATE_ALL_OPTIONS (VM_MAP_CREATE_PAGEABLE | \
+				   VM_MAP_CREATE_CORPSE_FOOTPRINT)
 
 extern void		vm_map_disable_hole_optimization(vm_map_t map);
 
@@ -1320,6 +1395,9 @@ extern void		vm_map_set_32bit(
 extern void		vm_map_set_jumbo(
 			        vm_map_t		map);
 
+extern void		vm_map_set_max_addr(
+			        vm_map_t		map, vm_map_offset_t new_max_offset);
+
 extern boolean_t	vm_map_has_hard_pagezero(
 		       		vm_map_t		map,
 				vm_map_offset_t		pagezero_size);
@@ -1479,7 +1557,7 @@ extern kern_return_t vm_map_set_page_shift(vm_map_t map, int pageshift);
 /*
  * Flags for vm_map_remove() and vm_map_delete()
  */
-#define	VM_MAP_NO_FLAGS	  		0x0
+#define	VM_MAP_REMOVE_NO_FLAGS 		0x0
 #define	VM_MAP_REMOVE_KUNWIRE	  	0x1
 #define	VM_MAP_REMOVE_INTERRUPTIBLE  	0x2
 #define	VM_MAP_REMOVE_WAIT_FOR_KWIRE  	0x4
@@ -1488,6 +1566,7 @@ extern kern_return_t vm_map_set_page_shift(vm_map_t map, int pageshift);
 #define VM_MAP_REMOVE_NO_MAP_ALIGN	0x20
 #define VM_MAP_REMOVE_NO_UNNESTING	0x40
 #define VM_MAP_REMOVE_IMMUTABLE		0x80
+#define VM_MAP_REMOVE_GAPS_OK		0x100
 
 /* Support for UPLs from vm_maps */
 
@@ -1535,13 +1614,23 @@ extern int vm_map_disconnect_page_mappings(
 #if CONFIG_FREEZE
 
 extern kern_return_t vm_map_freeze(
-             	vm_map_t map,
+             	vm_map_t     map,
              	unsigned int *purgeable_count,
              	unsigned int *wired_count,
              	unsigned int *clean_count,
              	unsigned int *dirty_count,
              	unsigned int dirty_budget,
-             	boolean_t *has_shared);
+                unsigned int *shared_count,
+		int	     *freezer_error_code,
+		boolean_t    eval_only);
+
+
+#define FREEZER_ERROR_GENERIC			(-1)
+#define FREEZER_ERROR_EXCESS_SHARED_MEMORY	(-2)
+#define FREEZER_ERROR_LOW_PRIVATE_SHARED_RATIO	(-3)
+#define FREEZER_ERROR_NO_COMPRESSOR_SPACE	(-4)
+#define FREEZER_ERROR_NO_SWAP_SPACE		(-5)
+
 #endif
 
 __END_DECLS

@@ -14,6 +14,7 @@
 #include	<mach/machine.h>
 #include	<kern/cpu_number.h>
 #include	<machine/exec.h>
+#include	<pexpert/arm64/board_config.h>
 
 #if __arm64__
 extern int bootarg_no64exec;	/* bsd_init.c */
@@ -49,7 +50,8 @@ int
 grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
 {
 #if __arm64__
-	cpu_subtype_t hostsubtype = (exectype & CPU_ARCH_ABI64) ? cpu_subtype() : cpu_subtype32();
+	cpu_subtype_t hostsubtype =
+		(exectype & CPU_ARCH_ABI64) ? cpu_subtype() : cpu_subtype32();
 #else
 	cpu_subtype_t hostsubtype = cpu_subtype();
 #endif /* __arm64__ */
@@ -63,14 +65,14 @@ grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
 		case CPU_SUBTYPE_ARM64_V8:
 			switch (execsubtype) {
 			case CPU_SUBTYPE_ARM64_V8:
-				return 9;
+				return 10;
 			case CPU_SUBTYPE_ARM64_ALL:
-				return 8;
+				return 9;
 			}
 			break;
 
+		} /* switch (hostsubtype) */
 
-		break;
 #else /* __arm64__ */
 
 	case CPU_TYPE_ARM:

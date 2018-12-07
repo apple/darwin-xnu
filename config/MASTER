@@ -1,7 +1,7 @@
 #
 # Mach Operating System
 # Copyright (c) 1986 Carnegie-Mellon University
-# Copyright 2001-2014 Apple Inc.
+# Copyright 2001-2018 Apple Inc.
 #
 # All rights reserved.  The CMU software License Agreement
 # specifies the terms and conditions for use and redistribution.
@@ -116,6 +116,7 @@ options		CONFIG_IMAGEBOOT	# local image boot	# <config_imageboot>
 options		CONFIG_MBUF_JUMBO	# jumbo cluster pool	# <config_mbuf_jumbo>
 
 options		CONFIG_WORKQUEUE	# <config_workqueue>
+options		CONFIG_WORKLOOP_DEBUG	# <config_workloop_debug>
 
 #
 #	4.4 filesystems 
@@ -141,6 +142,7 @@ options		CONFIG_TRIGGERS	# trigger vnodes		# <config_triggers>
 options		CONFIG_EXT_RESOLVER # e.g. memberd		# <config_ext_resolver>
 options		CONFIG_SEARCHFS	# searchfs syscall support	# <config_searchfs>
 options		CONFIG_MNT_SUID # allow suid binaries  # <config_mnt_suid>
+options		CONFIG_MNT_ROOTSNAP # allow rooting from snapshot # <config_mnt_rootsnap>
 
 #
 # NFS support
@@ -171,6 +173,8 @@ pseudo-device   stf 	1 				# <stf>
 options			CRYPTO				# <ipsec,crypto>
 options			CRYPTO_SHA2			# <crypto_sha2>
 options			ENCRYPTED_SWAP			# <encrypted_swap>
+
+options			CONFIG_IMG4			# <config_img4>
 
 options		ZLIB	# inflate/deflate support	# <zlib>
 
@@ -307,6 +311,12 @@ options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
 #
 options   CONFIG_FINE_LOCK_GROUPS               # <medium,large,xlarge>
 
+#
+# configurable kernel - general switch to say we are building for an
+# embedded device
+#
+options   CONFIG_EMBEDDED			# <config_embedded>
+
 
 # support dynamic signing of code
 #
@@ -325,6 +335,9 @@ options		CONFIG_CODE_DECRYPTION		# <config_code_decryption>
 # User Content Protection, used on embedded
 #
 options		CONFIG_PROTECT			# <config_protect>
+
+#allow write-protection of key page
+options		CONFIG_KEYPAGE_WP		# <config_keypage_wp>
 
 #
 # enable per-process memory priority tracking
@@ -370,6 +383,11 @@ options		VM_PRESSURE_EVENTS		# <vm_pressure_events>
 options		CONFIG_SECLUDED_MEMORY		# <config_secluded_memory>
 
 options		CONFIG_BACKGROUND_QUEUE		# <config_background_queue>
+
+#
+# Ledger features
+#
+options		CONFIG_LEDGER_INTERVAL_MAX	# <config_ledger_interval_max>
 
 #
 # I/O Scheduling
@@ -477,6 +495,7 @@ options         NO_KERNEL_HID           		# <no_kernel_hid>
 #
 
 options		LIBKERNCPP		# C++ implementation	# <libkerncpp>
+options		CONFIG_BLOCKS		# Blocks runtime	# <config_blocks>
 options		CONFIG_KXLD		# kxld/runtime linking of kexts # <config_kxld>
 options		CONFIG_KEC_FIPS		# Kernel External Components for FIPS compliance (KEC_FIPS) # <config_kec_fips>
 
@@ -554,7 +573,7 @@ options		MACH_MP_DEBUG	#				# <debug>
 #	operations on each element.
 #
 options		ZONE_DEBUG	#		# <debug>
-
+options		CONFIG_ZCACHE 	#Enable per-cpu caching for zones	# <config_zcache>
 options		CONFIG_ZLEAKS	# Live zone leak debugging	# <zleaks>
 
 #
@@ -740,3 +759,6 @@ options		COPYOUT_SHIM			# Shim for copyout memory analysis via kext #<copyout_sh
 # Telemetry for 32-bit process launch
 #
 options		CONFIG_32BIT_TELEMETRY # # <config_32bit_telemetry>
+
+options		CONFIG_QUIESCE_COUNTER # Support for _COMM_PAGE_CPU_QUIESCENT_COUNTER # <config_quiesce_counter>
+

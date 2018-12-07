@@ -95,6 +95,7 @@
 
 #include <vm/vm_map.h>
 
+#include <ipc/port.h>
 #include <ipc/ipc_types.h>
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_mqueue.h>
@@ -151,8 +152,8 @@ mach_msg_rcv_link_special_reply_port(
 	ipc_port_t special_reply_port,
 	mach_port_name_t dest_name_port);
 
-static void
-mach_msg_rcv_unlink_special_reply_port(void);
+void
+mach_msg_receive_results_complete(ipc_object_t object);
 
 security_token_t KERNEL_SECURITY_TOKEN = KERNEL_SECURITY_TOKEN_VALUE;
 audit_token_t KERNEL_AUDIT_TOKEN = KERNEL_AUDIT_TOKEN_VALUE;
@@ -204,6 +205,8 @@ mach_msg_send(
 	mach_msg_return_t mr;
 	mach_msg_size_t	msg_and_trailer_size;
 	mach_msg_max_trailer_t	*trailer;
+
+	option |= MACH_SEND_KERNEL;
 
 	if ((send_size & 3) ||
 	    send_size < sizeof(mach_msg_header_t) ||
@@ -320,8 +323,11 @@ mach_msg_receive_results(
 	mach_msg_trailer_size_t trailer_size;
 	mach_msg_size_t   size = 0;
 
-	/* unlink the special_reply_port before releasing reference to object */
-	mach_msg_rcv_unlink_special_reply_port();
+	/*
+	 * unlink the special_reply_port before releasing reference to object.
+	 * get the thread's turnstile, if the thread donated it's turnstile to the port
+	 */
+	mach_msg_receive_results_complete(object);
 	io_release(object);
 
 	if (mr != MACH_MSG_SUCCESS) {
@@ -415,33 +421,6 @@ mach_msg_receive_results(
 		*sizep = size;
 	return mr;
 }
-#ifndef _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG
-#define _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG 0x02000000 /* pthread event manager bit */
-#endif
-#ifndef _PTHREAD_PRIORITY_OVERCOMMIT_FLAG
-#define _PTHREAD_PRIORITY_OVERCOMMIT_FLAG    0x80000000 /* request overcommit threads */
-#endif
-#ifndef _PTHREAD_PRIORITY_QOS_CLASS_MASK
-#define _PTHREAD_PRIORITY_QOS_CLASS_MASK    0x003fff00  /* QoS class mask */
-#endif
-
-/* JMM - this needs to invoke a pthread function to compute this */
-mach_msg_priority_t
-mach_msg_priority_combine(mach_msg_priority_t msg_qos,
-                          mach_msg_priority_t recv_qos)
-{
-    mach_msg_priority_t overcommit;
-	mach_msg_priority_t no_oc_qos;
-	mach_msg_priority_t res;
-
-	assert(msg_qos < _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG);
-	overcommit = recv_qos & _PTHREAD_PRIORITY_OVERCOMMIT_FLAG;
-	no_oc_qos =  recv_qos & ~overcommit; 
-	res = (no_oc_qos > msg_qos) ? no_oc_qos : msg_qos;
-	res |= overcommit;
-
-	return res;
-}
 
 /*
  *	Routine:	mach_msg_receive [Kernel Internal]
@@ -451,7 +430,7 @@ mach_msg_priority_combine(mach_msg_priority_t msg_qos,
  *		Unlike being dispatched to by ipc_kobject_server() or the
  *		reply part of mach_msg_rpc_from_kernel(), this routine
  *		looks up the receive port name in the kernel's port
- * 		namespace and copies out received port rights to that namespace
+ *		namespace and copies out received port rights to that namespace
  *		as well.  Out-of-line memory is copied out the kernel's
  *		address space (rather than just providing the vm_map_copy_t).
  *	Conditions:
@@ -586,6 +565,7 @@ mach_msg_overwrite_trap(
 
 		mr = ipc_mqueue_copyin(space, rcv_name, &mqueue, &object);
 		if (mr != MACH_MSG_SUCCESS) {
+			mach_port_guard_exception(rcv_name, 0, 0, kGUARD_EXC_RCV_INVALID_NAME);
 			return mr;
 		}
 		/* hold ref for object */
@@ -640,7 +620,6 @@ mach_msg_rcv_link_special_reply_port(
 {
 	ipc_port_t dest_port = IP_NULL;
 	kern_return_t kr;
-	int qos;
 
 	if (current_thread()->ith_special_reply_port != special_reply_port) {
 		return MACH_RCV_INVALID_NOTIFY;
@@ -660,12 +639,8 @@ mach_msg_rcv_link_special_reply_port(
 	 * do not fail the receive in that case.
 	 */
 	if (kr == KERN_SUCCESS && IP_VALID(dest_port)) {
-
-		/* Get the effective qos of the thread */
-		qos = proc_get_effective_thread_policy(current_thread(), TASK_POLICY_QOS);
-
-		ipc_port_link_special_reply_port_with_qos(special_reply_port,
-			dest_port, qos);
+		ipc_port_link_special_reply_port(special_reply_port,
+			dest_port);
 
 		/* release the send right */
 		ipc_port_release_send(dest_port);
@@ -674,29 +649,47 @@ mach_msg_rcv_link_special_reply_port(
 }
 
 /*
- *	Routine:	mach_msg_rcv_unlink_special_reply_port
+ *	Routine:	mach_msg_receive_results_complete
  *	Purpose:
- *		Unlink the special reply port to the other end
- *		of the sync ipc channel.
+ *		Get thread's turnstile back from the object and
+ *              if object is a special reply port then reset its
+ *		linkage.
  *	Condition:
  *		Nothing locked.
  *	Returns:
  *		None.
  */
-static void
-mach_msg_rcv_unlink_special_reply_port(void)
+void
+mach_msg_receive_results_complete(ipc_object_t object)
 {
 	thread_t self = current_thread();
-	ipc_port_t special_reply_port = self->ith_special_reply_port;
-	mach_msg_option_t option = self->ith_option;
+	ipc_port_t port = IPC_PORT_NULL;
+	boolean_t get_turnstile = self->turnstile ? FALSE : TRUE;
 
-	if ((special_reply_port == IP_NULL) ||
-	    !(option & MACH_RCV_SYNC_WAIT)) {
+	if (io_otype(object) == IOT_PORT) {
+		__IGNORE_WCASTALIGN(port = (ipc_port_t) object);
+	} else {
+		assert(self->turnstile != TURNSTILE_NULL);
 		return;
 	}
 
-	ipc_port_unlink_special_reply_port(special_reply_port,
-		IPC_PORT_UNLINK_SR_ALLOW_SYNC_QOS_LINKAGE);
+	uint8_t flags = IPC_PORT_ADJUST_SR_ALLOW_SYNC_LINKAGE;
+
+	/*
+	 * Don't clear the ip_srp_msg_sent bit if...
+	 */
+	if (!((self->ith_state == MACH_RCV_TOO_LARGE && self->ith_option & MACH_RCV_LARGE) || //msg was too large and the next receive will get it
+		self->ith_state == MACH_RCV_INTERRUPTED ||
+		self->ith_state == MACH_RCV_TIMED_OUT ||
+		self->ith_state == MACH_RCV_PORT_CHANGED ||
+		self->ith_state == MACH_PEEK_READY)) {
+
+		flags |= IPC_PORT_ADJUST_SR_RECEIVED_MSG;
+	}
+
+	ipc_port_adjust_special_reply_port(port,
+		flags, get_turnstile);
+	/* thread now has a turnstile */
 }
 
 /*

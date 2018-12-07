@@ -74,7 +74,10 @@ static bank_account_t bank_account_alloc_init(bank_task_t bank_holder, bank_task
 static bank_task_t get_bank_task_context(task_t task, boolean_t initialize);
 static void bank_task_dealloc(bank_task_t bank_task, mach_voucher_attr_value_reference_t sync);
 static kern_return_t bank_account_dealloc_with_sync(bank_account_t bank_account, mach_voucher_attr_value_reference_t sync);
-static void bank_rollup_chit_to_tasks(ledger_t bill, bank_task_t bank_holder, bank_task_t bank_merchant);
+static void bank_rollup_chit_to_tasks(ledger_t bill, ledger_t bank_holder_ledger, ledger_t bank_merchant_ledger,
+	int bank_holder_pid, int bank_merchant_pid);
+static ledger_t bank_get_bank_task_ledger_with_ref(bank_task_t bank_task);
+static void bank_destroy_bank_task_ledger(bank_task_t bank_task);
 static void init_bank_ledgers(void);
 static boolean_t bank_task_is_propagate_entitled(task_t t);
 static struct thread_group *bank_get_bank_task_thread_group(bank_task_t bank_task __unused);
@@ -729,7 +732,7 @@ bank_release(
  * Purpose: Allocate and initialize a bank task structure.
  * Returns: bank_task_t on Success.
  *          BANK_TASK_NULL: on Failure.
- * Notes:   Leaves the task and creditcard blank and has only 1 ref,
+ * Notes:   Leaves the task and ledger blank and has only 1 ref,
             needs to take 1 extra ref after the task field is initialized.
  */
 static bank_task_t
@@ -745,7 +748,7 @@ bank_task_alloc_init(task_t task)
 	new_bank_task->bt_voucher_ref = 0;
 	new_bank_task->bt_refs = 1;
 	new_bank_task->bt_made = 0;
-	new_bank_task->bt_creditcard = NULL;
+	new_bank_task->bt_ledger = LEDGER_NULL;
 	new_bank_task->bt_hasentitlement = bank_task_is_propagate_entitled(task);
 	queue_init(&new_bank_task->bt_accounts_to_pay);
 	queue_init(&new_bank_task->bt_accounts_to_charge);
@@ -813,7 +816,7 @@ bank_account_alloc_init(
 	boolean_t entry_found = FALSE;
 	ledger_t new_ledger = ledger_instantiate(bank_ledger_template, LEDGER_CREATE_INACTIVE_ENTRIES);
 
-	if (new_ledger == NULL)
+	if (new_ledger == LEDGER_NULL)
 		return BANK_ACCOUNT_NULL;
 
 	ledger_entry_setactive(new_ledger, bank_ledgers.cpu_time);
@@ -919,7 +922,7 @@ get_bank_task_context
 		return BANK_TASK_NULL;
 	}
 	/* We won the race. Take a ref on the ledger and initialize bank task. */
-	bank_task->bt_creditcard = task->ledger;
+	bank_task->bt_ledger = task->ledger;
 #if DEVELOPMENT || DEBUG
 	bank_task->bt_task = task;
 #endif
@@ -954,7 +957,7 @@ bank_task_dealloc(
 	assert(queue_empty(&bank_task->bt_accounts_to_pay));
 	assert(queue_empty(&bank_task->bt_accounts_to_charge));
 
-	ledger_dereference(bank_task->bt_creditcard);
+	assert(!LEDGER_VALID(bank_task->bt_ledger));
 	lck_mtx_destroy(&bank_task->bt_acc_to_pay_lock, &bank_lock_grp);
 	lck_mtx_destroy(&bank_task->bt_acc_to_charge_lock, &bank_lock_grp);
 
@@ -983,12 +986,22 @@ bank_account_dealloc_with_sync(
 	bank_task_t bank_merchant = bank_account->ba_merchant;
 	bank_task_t bank_secureoriginator = bank_account->ba_secureoriginator;
 	bank_task_t bank_proximateprocess = bank_account->ba_proximateprocess;
+	ledger_t bank_merchant_ledger = LEDGER_NULL;
+
+	/*
+	 * Grab a reference on the bank_merchant_ledger, since we would not be able
+	 * to take bt_acc_to_pay_lock for bank_merchant later.
+	 */
+	bank_merchant_ledger = bank_get_bank_task_ledger_with_ref(bank_merchant);
 
 	/* Grab the acc to pay list lock and check the sync value */
 	lck_mtx_lock(&bank_holder->bt_acc_to_pay_lock);
 
 	if (bank_account->ba_made != sync) {
 		lck_mtx_unlock(&bank_holder->bt_acc_to_pay_lock);
+		if (bank_merchant_ledger) {
+			ledger_dereference(bank_merchant_ledger);
+		}
 		return KERN_FAILURE;
 	}
 		
@@ -1001,8 +1014,10 @@ bank_account_dealloc_with_sync(
 	/* Grab both the acc to pay and acc to charge locks */
 	lck_mtx_lock(&bank_merchant->bt_acc_to_charge_lock);
 
-	bank_rollup_chit_to_tasks(bank_account->ba_bill, bank_holder, bank_merchant);
-	
+	/* No need to take ledger reference for bank_holder ledger since bt_acc_to_pay_lock is locked */
+	bank_rollup_chit_to_tasks(bank_account->ba_bill, bank_holder->bt_ledger, bank_merchant_ledger,
+		bank_holder->bt_pid, bank_merchant->bt_pid);
+
 	/* Remove the account entry from Accounts need to pay account link list. */
 	queue_remove(&bank_holder->bt_accounts_to_pay, bank_account, bank_account_t, ba_next_acc_to_pay);
 	
@@ -1012,6 +1027,9 @@ bank_account_dealloc_with_sync(
 	lck_mtx_unlock(&bank_merchant->bt_acc_to_charge_lock);
 	lck_mtx_unlock(&bank_holder->bt_acc_to_pay_lock);
 
+	if (bank_merchant_ledger) {
+		ledger_dereference(bank_merchant_ledger);
+	}
 	ledger_dereference(bank_account->ba_bill);
 
 	/* Drop the reference of bank holder and merchant */
@@ -1038,38 +1056,50 @@ bank_account_dealloc_with_sync(
 static void
 bank_rollup_chit_to_tasks(
 	ledger_t bill,
-	bank_task_t bank_holder,
-	bank_task_t bank_merchant)
+	ledger_t bank_holder_ledger,
+	ledger_t bank_merchant_ledger,
+	int bank_holder_pid,
+	int bank_merchant_pid)
 {
 	ledger_amount_t credit;
 	ledger_amount_t debit;
 	kern_return_t ret;
 
-	if (bank_holder == bank_merchant)
+	if (bank_holder_ledger == bank_merchant_ledger)
 		return;
 
 	ret = ledger_get_entries(bill, bank_ledgers.cpu_time, &credit, &debit);
 	if (ret == KERN_SUCCESS) {
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 			(BANK_CODE(BANK_ACCOUNT_INFO, (BANK_SETTLE_CPU_TIME))) | DBG_FUNC_NONE,
-			bank_merchant->bt_pid, bank_holder->bt_pid, credit, debit, 0);
-		ledger_credit(bank_holder->bt_creditcard, task_ledgers.cpu_time_billed_to_me, credit);
-		ledger_debit(bank_holder->bt_creditcard, task_ledgers.cpu_time_billed_to_me, debit);
+			bank_merchant_pid, bank_holder_pid, credit, debit, 0);
 
-		ledger_credit(bank_merchant->bt_creditcard, task_ledgers.cpu_time_billed_to_others, credit);
-		ledger_debit(bank_merchant->bt_creditcard, task_ledgers.cpu_time_billed_to_others, debit);
+		if (bank_holder_ledger) {
+			ledger_credit(bank_holder_ledger, task_ledgers.cpu_time_billed_to_me, credit);
+			ledger_debit(bank_holder_ledger, task_ledgers.cpu_time_billed_to_me, debit);
+		}
+
+		if (bank_merchant_ledger) {
+			ledger_credit(bank_merchant_ledger, task_ledgers.cpu_time_billed_to_others, credit);
+			ledger_debit(bank_merchant_ledger, task_ledgers.cpu_time_billed_to_others, debit);
+		}
 	}
 
 	ret = ledger_get_entries(bill, bank_ledgers.energy, &credit, &debit);
 	if (ret == KERN_SUCCESS) {
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 			(BANK_CODE(BANK_ACCOUNT_INFO, (BANK_SETTLE_ENERGY))) | DBG_FUNC_NONE,
-			bank_merchant->bt_pid, bank_holder->bt_pid, credit, debit, 0);
-		ledger_credit(bank_holder->bt_creditcard, task_ledgers.energy_billed_to_me, credit);
-		ledger_debit(bank_holder->bt_creditcard, task_ledgers.energy_billed_to_me, debit);
+			bank_merchant_pid, bank_holder_pid, credit, debit, 0);
 
-		ledger_credit(bank_merchant->bt_creditcard, task_ledgers.energy_billed_to_others, credit);
-		ledger_debit(bank_merchant->bt_creditcard, task_ledgers.energy_billed_to_others, debit);
+		if (bank_holder_ledger) {
+			ledger_credit(bank_holder_ledger, task_ledgers.energy_billed_to_me, credit);
+			ledger_debit(bank_holder_ledger, task_ledgers.energy_billed_to_me, debit);
+		}
+
+		if (bank_merchant_ledger) {
+			ledger_credit(bank_merchant_ledger, task_ledgers.energy_billed_to_others, credit);
+			ledger_debit(bank_merchant_ledger, task_ledgers.energy_billed_to_others, debit);
+		}
 	}
 }
 
@@ -1091,6 +1121,7 @@ bank_task_destroy(task_t task)
 	task->bank_context = NULL;
 	global_bank_task_unlock();
 
+	bank_destroy_bank_task_ledger(bank_task);
 	bank_task_dealloc(bank_task, 1);
 }
 
@@ -1200,19 +1231,22 @@ bank_billed_balance(bank_task_t bank_task, uint64_t *cpu_time, uint64_t *energy)
 	
 	lck_mtx_lock(&bank_task->bt_acc_to_pay_lock);
 
-	kr = ledger_get_balance(bank_task->bt_creditcard, task_ledgers.cpu_time_billed_to_me, &temp);
-	if (kr == KERN_SUCCESS && temp >= 0) {
-		cpu_balance += temp;
-	}
+	/* bt_acc_to_pay_lock locked, no need to take ledger reference for bt_ledger */
+	if (bank_task->bt_ledger != LEDGER_NULL) {
+		kr = ledger_get_balance(bank_task->bt_ledger, task_ledgers.cpu_time_billed_to_me, &temp);
+		if (kr == KERN_SUCCESS && temp >= 0) {
+			cpu_balance += temp;
+		}
 #if DEVELOPMENT || DEBUG
-	else {
-		printf("bank_bill_time: ledger_get_balance failed or negative balance in ledger: %lld\n", temp);
-	}
+		else {
+			printf("bank_bill_time: ledger_get_balance failed or negative balance in ledger: %lld\n", temp);
+		}
 #endif /* DEVELOPMENT || DEBUG */
 
-	kr = ledger_get_balance(bank_task->bt_creditcard, task_ledgers.energy_billed_to_me, &temp);
-	if (kr == KERN_SUCCESS && temp >= 0) {
-		energy_balance += temp;
+		kr = ledger_get_balance(bank_task->bt_ledger, task_ledgers.energy_billed_to_me, &temp);
+		if (kr == KERN_SUCCESS && temp >= 0) {
+			energy_balance += temp;
+		}
 	}
 
 	queue_iterate(&bank_task->bt_accounts_to_pay, bank_account, bank_account_t, ba_next_acc_to_pay) {
@@ -1297,27 +1331,33 @@ bank_serviced_balance(bank_task_t bank_task, uint64_t *cpu_time, uint64_t *energ
 	bank_account_t bank_account;
 	int64_t temp = 0;
 	kern_return_t kr;
+	ledger_t ledger = LEDGER_NULL;
 	if (bank_task == BANK_TASK_NULL) {
 		*cpu_time = 0;
 		*energy = 0;
 		return;
 	}
 
+	/* Grab a ledger reference on bt_ledger for bank_task */
+	ledger = bank_get_bank_task_ledger_with_ref(bank_task);
+
 	lck_mtx_lock(&bank_task->bt_acc_to_charge_lock);
 
-	kr = ledger_get_balance(bank_task->bt_creditcard, task_ledgers.cpu_time_billed_to_others, &temp);
-	if (kr == KERN_SUCCESS && temp >= 0) {
-		cpu_balance += temp;
-	}
+	if (ledger) {
+		kr = ledger_get_balance(ledger, task_ledgers.cpu_time_billed_to_others, &temp);
+		if (kr == KERN_SUCCESS && temp >= 0) {
+			cpu_balance += temp;
+		}
 #if DEVELOPMENT || DEBUG
-	else {
-		printf("bank_serviced_time: ledger_get_balance failed or negative balance in ledger: %lld\n", temp);
-	}
+		else {
+			printf("bank_serviced_time: ledger_get_balance failed or negative balance in ledger: %lld\n", temp);
+		}
 #endif /* DEVELOPMENT || DEBUG */
 
-	kr = ledger_get_balance(bank_task->bt_creditcard, task_ledgers.energy_billed_to_others, &temp);
-	if (kr == KERN_SUCCESS && temp >= 0) {
-		energy_balance += temp;
+		kr = ledger_get_balance(ledger, task_ledgers.energy_billed_to_others, &temp);
+		if (kr == KERN_SUCCESS && temp >= 0) {
+			energy_balance += temp;
+		}
 	}
 
 	queue_iterate(&bank_task->bt_accounts_to_charge, bank_account, bank_account_t, ba_next_acc_to_charge) {
@@ -1338,6 +1378,9 @@ bank_serviced_balance(bank_task_t bank_task, uint64_t *cpu_time, uint64_t *energ
 		}
 	}
 	lck_mtx_unlock(&bank_task->bt_acc_to_charge_lock);
+	if (ledger) {
+		ledger_dereference(ledger);
+	}
 	*cpu_time = (uint64_t)cpu_balance;
 	*energy = (uint64_t)energy_balance;
 	return;
@@ -1402,13 +1445,51 @@ bank_get_voucher_bank_account(ipc_voucher_t voucher)
 }
 
 /*
+ * Routine: bank_get_bank_task_ledger_with_ref
+ * Purpose: Get the bank ledger from the bank task and return a reference to it.
+ */
+static ledger_t
+bank_get_bank_task_ledger_with_ref(bank_task_t bank_task)
+{
+	ledger_t ledger = LEDGER_NULL;
+
+	lck_mtx_lock(&bank_task->bt_acc_to_pay_lock);
+	ledger = bank_task->bt_ledger;
+	if (ledger) {
+		ledger_reference(ledger);
+	}
+	lck_mtx_unlock(&bank_task->bt_acc_to_pay_lock);
+
+	return ledger;
+}
+
+/*
+ * Routine: bank_destroy_bank_task_ledger
+ * Purpose: Drop the bank task reference on the task ledger.
+ */
+static void
+bank_destroy_bank_task_ledger(bank_task_t bank_task)
+{
+	ledger_t ledger;
+
+	/* Remove the ledger reference from the bank task */
+	lck_mtx_lock(&bank_task->bt_acc_to_pay_lock);
+	assert(LEDGER_VALID(bank_task->bt_ledger));
+	ledger = bank_task->bt_ledger;
+	bank_task->bt_ledger = LEDGER_NULL;
+	lck_mtx_unlock(&bank_task->bt_acc_to_pay_lock);
+
+	ledger_dereference(ledger);
+}
+
+/*
  * Routine: bank_get_bank_account_ledger
  * Purpose: Get the bankledger from the bank account if ba_merchant different than ba_holder
  */
 static ledger_t
 bank_get_bank_account_ledger(bank_account_t bank_account)
 {
-	ledger_t bankledger = NULL;
+	ledger_t bankledger = LEDGER_NULL;
 
 	if (bank_account != BANK_ACCOUNT_NULL &&
 		bank_account->ba_holder != bank_account->ba_merchant)
@@ -1437,7 +1518,7 @@ bank_get_bank_task_thread_group(bank_task_t bank_task __unused)
 static struct thread_group *
 bank_get_bank_account_thread_group(bank_account_t bank_account __unused)
 {
-	thread_group_t banktg = NULL;
+	struct thread_group *banktg = NULL;
 
 
 	return (banktg);
@@ -1453,7 +1534,7 @@ kern_return_t
 bank_get_bank_ledger_and_thread_group(
 	ipc_voucher_t     voucher,
 	ledger_t          *bankledger,
-	thread_group_t    *banktg)
+	struct thread_group **banktg)
 {
 	bank_account_t bank_account;
 	struct thread_group *thread_group = NULL;
@@ -1488,7 +1569,7 @@ bank_swap_thread_bank_ledger(thread_t thread __unused, ledger_t new_ledger __unu
 	int64_t effective_energy_consumed = 0;
 	uint64_t thread_energy;
 	
-	if (old_ledger == NULL && new_ledger == NULL)
+	if (old_ledger == LEDGER_NULL && new_ledger == LEDGER_NULL)
 		return;
 
 	assert((thread == current_thread() || thread->started == 0));
@@ -1534,7 +1615,7 @@ bank_swap_thread_bank_ledger(thread_t thread __unused, ledger_t new_ledger __unu
 	thread_unlock(thread);
 	splx(s);
 	
-	if (old_ledger != NULL) {
+	if (old_ledger != LEDGER_NULL) {
 		ledger_credit(old_ledger,
 			bank_ledgers.cpu_time,
 			effective_ledger_time_consumed);

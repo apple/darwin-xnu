@@ -48,7 +48,7 @@ typedef	int word;		/* "word" used for optimal copy speed */
  */
 
 __attribute__((visibility("hidden")))
-void * memcpy(void *dst0, const void *src0, size_t length)
+void * _libkernel_memmove(void *dst0, const void *src0, size_t length)
 {
 	char *dst = dst0;
 	const char *src = src0;
@@ -111,13 +111,6 @@ void * memcpy(void *dst0, const void *src0, size_t length)
 	}
 done:
 	return (dst0);
-}
-
-__attribute__((visibility("hidden")))
-void *
-memmove(void *s1, const void *s2, size_t n)
-{
-	return memcpy(s1, s2, n);
 }
 
 __attribute__((visibility("hidden")))

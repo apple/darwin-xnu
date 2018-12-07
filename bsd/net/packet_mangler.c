@@ -1068,6 +1068,7 @@ static void chksm_update(mbuf_t data)
 	u_int16_t ip_sum;
 	u_int16_t tsum;
 	struct tcphdr *tcp;
+	errno_t err;
 
 	unsigned char *ptr = (unsigned char *)mbuf_data(data);
 	struct ip *ip = (struct ip *)(void *)ptr;
@@ -1076,16 +1077,17 @@ static void chksm_update(mbuf_t data)
 	}
 
 	ip->ip_sum = 0;
-	mbuf_inet_cksum(data, 0, 0, ip->ip_hl << 2, &ip_sum); // ip sum
-
-	ip->ip_sum = ip_sum;
+	err = mbuf_inet_cksum(data, 0, 0, ip->ip_hl << 2, &ip_sum); // ip sum
+	if (err == 0)
+		ip->ip_sum = ip_sum;
 	switch (ip->ip_p) {
 		case IPPROTO_TCP:
 			tcp = (struct tcphdr *)(void *)(ptr + (ip->ip_hl << 2));
 			tcp->th_sum = 0;
-			mbuf_inet_cksum(data, IPPROTO_TCP, ip->ip_hl << 2,
+			err = mbuf_inet_cksum(data, IPPROTO_TCP, ip->ip_hl << 2,
 			    ntohs(ip->ip_len) - (ip->ip_hl << 2), &tsum);
-			tcp->th_sum = tsum;
+			if (err == 0)
+				tcp->th_sum = tsum;
 			break;
 		case IPPROTO_UDP:
 			/* Don't handle UDP */

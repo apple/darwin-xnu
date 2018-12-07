@@ -38,10 +38,16 @@
 
 void cchmac_final(const struct ccdigest_info *di, cchmac_ctx_t hc,
                   unsigned char *mac) {
+
+    // Finalize the inner state of the data being HMAC'd, i.e., H((key \oplus ipad) || m)
     ccdigest_final(di, cchmac_digest_ctx(di, hc), cchmac_data(di, hc));
-    /* typecast: output size will alwys fit in an unsigned int */
-    cchmac_num(di, hc) = (unsigned int)di->output_size;
+
+    // Set the HMAC output size based on the digest algorithm
+    cchmac_num(di, hc) = (unsigned int)di->output_size; /* typecast: output size will alwys fit in an unsigned int */
     cchmac_nbits(di, hc) = di->block_size * 8;
+
+    // Copy the pre-computed compress(key \oplus opad) back to digest state,
+    // and then run through the digest once more to finish the HMAC
     ccdigest_copy_state(di, cchmac_istate32(di, hc), cchmac_ostate32(di, hc));
     ccdigest_final(di, cchmac_digest_ctx(di, hc), mac);
 }

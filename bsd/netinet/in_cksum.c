@@ -305,7 +305,6 @@ inet_cksum_buffer(const void *buffer, uint32_t nxt, uint32_t off,
 }
 
 #if DEBUG || DEVELOPMENT
-#include <mach/branch_predicates.h>
 #include <pexpert/pexpert.h>
 
 #define	CKSUM_ERR kprintf

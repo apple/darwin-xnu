@@ -53,26 +53,22 @@
 
 #endif /* __APPLE_API_UNSTABLE */
 
-#ifdef	KERNEL
-#ifdef __APPLE_API_PRIVATE
-/*
- *	Kernel data structures for Unix exception handler.
- */
+#ifdef XNU_KERNEL_PRIVATE
 
-#include <mach/port.h>
+/* Kernel functions for Unix exception handler. */
 
-#if defined(__x86_64__) || defined(__arm64__)
-extern mach_port_t			ux_exception_port;
-#else
-extern mach_port_name_t			ux_exception_port;
-#endif /* __x86_64__ */
+#include <mach/mach_types.h>
 
-boolean_t	machine_exception(int exception, mach_exception_code_t code, 
-			mach_exception_subcode_t subcode,
-			int *unix_signal, mach_exception_code_t *unix_code);
-void	ux_handler_init(void);
+extern int
+machine_exception(int exception, mach_exception_code_t code,
+                  mach_exception_subcode_t subcode);
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+extern kern_return_t
+handle_ux_exception(thread_t thread, int exception,
+                    mach_exception_code_t code,
+                    mach_exception_subcode_t subcode);
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 #endif	/* _SYS_UX_EXCEPTION_H_ */
+

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -53,6 +53,7 @@
 #include <security/mac_policy.h>
 #include <pexpert/pexpert.h>
 #include <sys/sysctl.h>
+#include <sys/reason.h>
 #endif
 
 
@@ -1202,11 +1203,39 @@ vng_file_label_destroy(struct label *label)
 	lck_rw_unlock_exclusive(&llock);
 }
 
+static os_reason_t
+vng_reason_from_pathname(const char *path, uint32_t pathlen)
+{
+	os_reason_t r = os_reason_create(OS_REASON_GUARD, GUARD_REASON_VNODE);
+	if (NULL == r)
+		return (r);
+	/*
+	 * If the pathname is very long, just keep the trailing part
+	 */
+	const uint32_t pathmax = 3 * EXIT_REASON_USER_DESC_MAX_LEN / 4;
+	if (pathlen > pathmax) {
+		path += (pathlen - pathmax);
+		pathlen = pathmax;
+	}
+	uint32_t rsize = kcdata_estimate_required_buffer_size(1, pathlen);
+	if (0 == os_reason_alloc_buffer(r, rsize)) {
+		struct kcdata_descriptor *kcd = &r->osr_kcd_descriptor;
+		mach_vm_address_t addr;
+		if (kcdata_get_memory_addr(kcd,
+		    EXIT_REASON_USER_DESC, pathlen, &addr) == KERN_SUCCESS) {
+			kcdata_memcpy(kcd, addr, path, pathlen);
+			return (r);
+		}
+	}
+	os_reason_free(r);
+	return (OS_REASON_NULL);
+}
+
 static int vng_policy_flags;
 
 static int
 vng_guard_violation(const struct vng_info *vgi,
-    unsigned opval, const char *nm)
+    unsigned opval, vnode_t vp)
 {
 	int retval = 0;
 
@@ -1215,7 +1244,7 @@ vng_guard_violation(const struct vng_info *vgi,
 		retval = EPERM;
 	}
 
-	if (vng_policy_flags & kVNG_POLICY_LOGMSG) {
+	if (vng_policy_flags & (kVNG_POLICY_LOGMSG|kVNG_POLICY_UPRINTMSG)) {
 		/* log a message */
 		const char *op;
 		switch (opval) {
@@ -1244,16 +1273,33 @@ vng_guard_violation(const struct vng_info *vgi,
 			op = "(unknown)";
 			break;
 		}
+
+		const char *nm = vnode_getname(vp);
 		proc_t p = current_proc();
 		const struct vng_owner *vgo;
 		TAILQ_FOREACH(vgo, &vgi->vgi_owners, vgo_link) {
-			printf("%s[%d]: %s%s: '%s' guarded by %s[%d] (0x%llx)\n",
-			    proc_name_address(p), proc_pid(p), op,
-			    0 != retval ? " denied" : "",
-			    NULL != nm ? nm : "(unknown)",
-			    proc_name_address(vgo->vgo_p), proc_pid(vgo->vgo_p),
-			    vgi->vgi_guard);
+			const char fmt[] =
+			    "%s[%d]: %s%s: '%s' guarded by %s[%d] (0x%llx)\n";
+
+			if (vng_policy_flags & kVNG_POLICY_LOGMSG) {
+				printf(fmt,
+				    proc_name_address(p), proc_pid(p), op,
+				    0 != retval ? " denied" : "",
+				    NULL != nm ? nm : "(unknown)",
+				    proc_name_address(vgo->vgo_p),
+				    proc_pid(vgo->vgo_p), vgi->vgi_guard);
+			}
+			if (vng_policy_flags & kVNG_POLICY_UPRINTMSG) {
+				uprintf(fmt,
+				    proc_name_address(p), proc_pid(p), op,
+				    0 != retval ? " denied" : "",
+				    NULL != nm ? nm : "(unknown)",
+				    proc_name_address(vgo->vgo_p),
+				    proc_pid(vgo->vgo_p), vgi->vgi_guard);
+			}
 		}
+		if (NULL != nm)
+			vnode_putname(nm);
 	}
 
 	if (vng_policy_flags & (kVNG_POLICY_EXC|kVNG_POLICY_EXC_CORPSE)) {
@@ -1270,8 +1316,20 @@ vng_guard_violation(const struct vng_info *vgi,
 		subcode = vgi->vgi_guard;
 
 		if (vng_policy_flags & kVNG_POLICY_EXC_CORPSE) {
-			task_violated_guard(code, subcode, NULL);
-			/* not fatal */
+			char *path;
+			int len = MAXPATHLEN;
+			MALLOC(path, char *, len, M_TEMP, M_WAITOK);
+			os_reason_t r = NULL;
+			if (NULL != path) {
+				vn_getpath(vp, path, &len);
+				if (*path && len)
+					r = vng_reason_from_pathname(path, len);
+			}
+			task_violated_guard(code, subcode, r); /* not fatal */
+			if (NULL != r)
+				os_reason_free(r);
+			if (NULL != path)
+				FREE(path, M_TEMP);
 		} else {
 			thread_t t = current_thread();
 			thread_guard_violation(t, code, subcode);
@@ -1281,11 +1339,11 @@ vng_guard_violation(const struct vng_info *vgi,
 		psignal(p, SIGKILL);
 	}
 
-	return retval;
+	return (retval);
 }
 
 /*
- * A vnode guard was tripped on this thread.
+ * A fatal vnode guard was tripped on this thread.
  *
  * (Invoked before returning to userland from the syscall handler.)
  */
@@ -1305,11 +1363,11 @@ vn_guard_ast(thread_t __unused t,
 static int
 vng_vnode_check_rename(kauth_cred_t __unused cred,
     struct vnode *__unused dvp, struct label *__unused dlabel,
-    struct vnode *__unused vp, struct label *label,
-    struct componentname *cnp,
+    struct vnode *vp, struct label *label,
+    struct componentname *__unused cnp,
     struct vnode *__unused tdvp, struct label *__unused tdlabel,
-    struct vnode *__unused tvp, struct label *tlabel,
-    struct componentname *tcnp)
+    struct vnode *tvp, struct label *tlabel,
+    struct componentname *__unused tcnp)
 {
 	int error = 0;
 	if (NULL != label || NULL != tlabel) {
@@ -1317,17 +1375,16 @@ vng_vnode_check_rename(kauth_cred_t __unused cred,
 		const struct vng_info *vgi =
 		    vng_lbl_get_withattr(label, VNG_RENAME_FROM);
 		if (NULL != vgi)
-			error = vng_guard_violation(vgi,
-			    VNG_RENAME_FROM, cnp->cn_nameptr);
+			error = vng_guard_violation(vgi, VNG_RENAME_FROM, vp);
 		if (0 == error) {
 			vgi = vng_lbl_get_withattr(tlabel, VNG_RENAME_TO);
 			if (NULL != vgi)
 				error = vng_guard_violation(vgi,
-				    VNG_RENAME_TO, tcnp->cn_nameptr);
+				    VNG_RENAME_TO, tvp);
 		}
 		lck_rw_unlock_shared(&llock);
 	}
-	return error;
+	return (error);
 }
 
 static int
@@ -1340,21 +1397,17 @@ vng_vnode_check_link(kauth_cred_t __unused cred,
 		lck_rw_lock_shared(&llock);
 		const struct vng_info *vgi =
 			vng_lbl_get_withattr(label, VNG_LINK);
-		if (vgi) {
-			const char *nm = vnode_getname(vp);
-			error = vng_guard_violation(vgi, VNG_LINK, nm);
-			if (nm)
-				vnode_putname(nm);
-		}
+		if (vgi)
+			error = vng_guard_violation(vgi, VNG_LINK, vp);
 		lck_rw_unlock_shared(&llock);
 	}
-	return error;
+	return (error);
 }
 
 static int
 vng_vnode_check_unlink(kauth_cred_t __unused cred,
     struct vnode *__unused dvp, struct label *__unused dlabel,
-    struct vnode *__unused vp, struct label *label, struct componentname *cnp)
+    struct vnode *vp, struct label *label, struct componentname *__unused cnp)
 {
 	int error = 0;
 	if (NULL != label) {
@@ -1362,11 +1415,10 @@ vng_vnode_check_unlink(kauth_cred_t __unused cred,
 		const struct vng_info *vgi =
 		    vng_lbl_get_withattr(label, VNG_UNLINK);
 		if (vgi)
-			error = vng_guard_violation(vgi, VNG_UNLINK,
-			    cnp->cn_nameptr);
+			error = vng_guard_violation(vgi, VNG_UNLINK, vp);
 		lck_rw_unlock_shared(&llock);
 	}
-	return error;
+	return (error);
 }
 
 /*
@@ -1388,16 +1440,12 @@ vng_vnode_check_write(kauth_cred_t __unused actv_cred,
 				if (vgo->vgo_p == p)
 					goto done;
 			}
-			const char *nm = vnode_getname(vp);
-			error = vng_guard_violation(vgi,
-			    VNG_WRITE_OTHER, nm);
-			if (nm)
-				vnode_putname(nm);
+			error = vng_guard_violation(vgi, VNG_WRITE_OTHER, vp);
 		}
 	done:
 		lck_rw_unlock_shared(&llock);
 	}
-	return error;
+	return (error);
 }
 
 /*
@@ -1420,11 +1468,7 @@ vng_vnode_check_truncate(kauth_cred_t __unused actv_cred,
 				if (vgo->vgo_p == p)
 					goto done;
 			}
-			const char *nm = vnode_getname(vp);
-			error = vng_guard_violation(vgi,
-			    VNG_TRUNC_OTHER, nm);
-			if (nm)
-				vnode_putname(nm);
+			error = vng_guard_violation(vgi, VNG_TRUNC_OTHER, vp);
 		}
 	done:
 		lck_rw_unlock_shared(&llock);
@@ -1442,26 +1486,28 @@ vng_vnode_check_exchangedata(kauth_cred_t __unused cred,
 		lck_rw_lock_shared(&llock);
 		const struct vng_info *vgi =
 			vng_lbl_get_withattr(flabel, VNG_EXCHDATA);
-		if (NULL != vgi) {
-                        const char *nm = vnode_getname(fvp);
-			error = vng_guard_violation(vgi,
-			    VNG_EXCHDATA, nm);
-			if (nm)
-				vnode_putname(nm);
-		}
+		if (NULL != vgi)
+			error = vng_guard_violation(vgi, VNG_EXCHDATA, fvp);
 		if (0 == error) {
 			vgi = vng_lbl_get_withattr(slabel, VNG_EXCHDATA);
-			if (NULL != vgi) {
-				const char *nm = vnode_getname(svp);
+			if (NULL != vgi)
 				error = vng_guard_violation(vgi,
-				    VNG_EXCHDATA, nm);
-				if (nm)
-					vnode_putname(nm);
-			}
+				    VNG_EXCHDATA, svp);
 		}
 		lck_rw_unlock_shared(&llock);
 	}
-	return error;
+	return (error);
+}
+
+/* Intercept open-time truncations (by "other") of a guarded vnode */
+
+static int
+vng_vnode_check_open(kauth_cred_t cred,
+    struct vnode *vp, struct label *label, int acc_mode)
+{
+	if (0 == (acc_mode & O_TRUNC))
+		return (0);
+	return (vng_vnode_check_truncate(cred, NULL, vp, label));
 }
 
 /*
@@ -1484,6 +1530,7 @@ SECURITY_READ_ONLY_EARLY(static struct mac_policy_ops) vng_policy_ops = {
 	.mpo_vnode_check_write = vng_vnode_check_write,
 	.mpo_vnode_check_truncate = vng_vnode_check_truncate,
 	.mpo_vnode_check_exchangedata = vng_vnode_check_exchangedata,
+	.mpo_vnode_check_open = vng_vnode_check_open,
 
 	.mpo_policy_syscall = vng_policy_syscall,
 	.mpo_policy_init = vng_init,
@@ -1513,7 +1560,8 @@ vnguard_policy_init(void)
 {
 	if (0 == PE_i_can_has_debugger(NULL))
 		return;
-	vng_policy_flags = kVNG_POLICY_LOGMSG | kVNG_POLICY_EXC_CORPSE;
+	vng_policy_flags = kVNG_POLICY_LOGMSG |
+		kVNG_POLICY_EXC_CORPSE | kVNG_POLICY_UPRINTMSG;
 	PE_parse_boot_argn("vnguard", &vng_policy_flags, sizeof (vng_policy_flags));
 	if (vng_policy_flags)
 		mac_policy_register(&vng_policy_conf, &vng_policy_handle, NULL);

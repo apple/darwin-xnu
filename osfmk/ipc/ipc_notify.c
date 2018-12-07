@@ -158,7 +158,7 @@ void
 ipc_notify_send_once(
 	ipc_port_t	port)
 {
-	ipc_port_unlink_special_reply_port(port, IPC_PORT_UNLINK_SR_NONE);
+	ipc_port_adjust_special_reply_port(port, IPC_PORT_ADJUST_SR_NONE, FALSE);
 
 	(void)mach_notify_send_once(port);
 	/* send-once right consumed */

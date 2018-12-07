@@ -47,8 +47,9 @@ int fakestack_enabled = 0;
 #define FAKESTACK_HEADER_SZ 64
 #define FAKESTACK_NUM_SZCLASS 7
 
-#define FAKESTACK_FREED     0 /* forced by clang */
+#define FAKESTACK_UNUSED    0 /* waiting to be collected at next gc - forced by clang */
 #define FAKESTACK_ALLOCATED 1
+#define FAKESTACK_FREED     2
 
 #if FAKESTACK
 
@@ -120,29 +121,38 @@ ptr_is_on_stack(uptr ptr)
 }
 
 /* free all unused fakestack entries */
-static void NOINLINE
+void
 kasan_fakestack_gc(thread_t thread)
 {
 	struct fakestack_header *cur, *tmp;
 	LIST_HEAD(, fakestack_header) tofree = LIST_HEAD_INITIALIZER(tofree);
 
-	/* move all the freed elements off the main list */
+	boolean_t flags;
+	if (!thread_enter_fakestack(&flags)) {
+		panic("expected success entering fakestack\n");
+	}
+
+	/* move the unused objects off the per-thread list... */
 	struct fakestack_header_list *head = &kasan_get_thread_data(thread)->fakestack_head;
 	LIST_FOREACH_SAFE(cur, head, list, tmp) {
-		if (cur->flag == FAKESTACK_FREED) {
+		if (cur->flag == FAKESTACK_UNUSED) {
 			LIST_REMOVE(cur, list);
 			LIST_INSERT_HEAD(&tofree, cur, list);
+			cur->flag = FAKESTACK_FREED;
 		}
 	}
 
+	kasan_unlock(flags);
+
 	/* ... then actually free them */
 	LIST_FOREACH_SAFE(cur, &tofree, list, tmp) {
-		zone_t zone = fakestack_zones[cur->sz_class];
-		size_t sz = (fakestack_min << cur->sz_class) + FAKESTACK_HEADER_SZ;
 		LIST_REMOVE(cur, list);
 
+		zone_t zone = fakestack_zones[cur->sz_class];
+		size_t sz = (fakestack_min << cur->sz_class) + FAKESTACK_HEADER_SZ;
+
 		void *ptr = (void *)cur;
-		kasan_free_internal(&ptr, &sz, KASAN_HEAP_FAKESTACK, &zone, cur->realsz, 1, FAKESTACK_QUARANTINE);
+		kasan_free_internal(&ptr, &sz, KASAN_HEAP_FAKESTACK, &zone, cur->realsz, 0, FAKESTACK_QUARANTINE);
 		if (ptr) {
 			zfree(zone, ptr);
 		}
@@ -178,8 +188,6 @@ kasan_fakestack_alloc(int sz_class, size_t realsz)
 	if (!thread_enter_fakestack(&flags)) {
 		return 0;
 	}
-
-	kasan_fakestack_gc(current_thread()); /* XXX: optimal? */
 
 	ret = (uptr)zget(zone);
 
@@ -241,7 +249,7 @@ kasan_fakestack_free(int sz_class, uptr dst, size_t realsz)
 }
 
 void NOINLINE
-kasan_unpoison_fakestack(thread_t thread)
+kasan_fakestack_drop(thread_t thread)
 {
 	boolean_t flags;
 	if (!thread_enter_fakestack(&flags)) {
@@ -252,11 +260,10 @@ kasan_unpoison_fakestack(thread_t thread)
 	struct fakestack_header *cur;
 	LIST_FOREACH(cur, head, list) {
 		if (cur->flag == FAKESTACK_ALLOCATED) {
-			cur->flag = FAKESTACK_FREED;
+			cur->flag = FAKESTACK_UNUSED;
 		}
 	}
 
-	kasan_fakestack_gc(thread);
 	kasan_unlock(flags);
 }
 

@@ -44,6 +44,8 @@
 #include <kern/ledger.h>
 #include <kern/policy_internal.h>
 
+#include <machine/atomic.h>
+
 #include <pexpert/pexpert.h>
 
 #include <libkern/kernel_mach_header.h>
@@ -59,10 +61,6 @@
 #else
 #define dprintf(...) do { } while(0)
 #endif
-
-#ifdef MACH_BSD
-extern sched_call_t workqueue_get_sched_callback(void);
-#endif /* MACH_BSD */
 
 /*
  * SFI (Selective Forced Idle) operates by enabling a global
@@ -131,36 +129,43 @@ typedef struct {
  * 5) Modify thermald to use the SFI class
  */
 
-static inline void _sfi_wait_cleanup(sched_call_t callback);
+static inline void _sfi_wait_cleanup(void);
 
-#define SFI_CLASS_REGISTER(class_id, ledger_name)					\
-extern char compile_time_assert_ ## class_id[SFI_CLASS_ ## class_id < MAX_SFI_CLASS_ID ? 1 : -1];  \
-void __attribute__((noinline,noreturn)) SFI_ ## class_id ## _THREAD_IS_WAITING(void *callback, wait_result_t wret __unused); \
-void SFI_ ## class_id ## _THREAD_IS_WAITING(void *callback, wait_result_t wret __unused) \
-{																		\
-	_sfi_wait_cleanup(callback);										\
-	thread_exception_return();											\
-}																		\
-																		\
-sfi_class_registration_t SFI_ ## class_id ## _registration __attribute__((section("__DATA,__sfi_class_reg"),used)) = { SFI_CLASS_ ## class_id, SFI_ ## class_id ## _THREAD_IS_WAITING, "SFI_CLASS_" # class_id, "SFI_CLASS_" # ledger_name };
+#define SFI_CLASS_REGISTER(clsid, ledger_name)								\
+static void __attribute__((noinline, noreturn))								\
+SFI_ ## clsid ## _THREAD_IS_WAITING(void *arg __unused, wait_result_t wret __unused) \
+{																			\
+	_sfi_wait_cleanup();													\
+	thread_exception_return();												\
+}																			\
+																			\
+_Static_assert(SFI_CLASS_ ## clsid < MAX_SFI_CLASS_ID, "Invalid ID");		\
+																			\
+__attribute__((section("__DATA,__sfi_class_reg"), used))					\
+static sfi_class_registration_t SFI_ ## clsid ## _registration = {			\
+	.class_id = SFI_CLASS_ ## clsid,										\
+	.class_continuation = SFI_ ## clsid ## _THREAD_IS_WAITING,				\
+	.class_name = "SFI_CLASS_" # clsid,										\
+	.class_ledger_name = "SFI_CLASS_" # ledger_name,						\
+}
 
 /* SFI_CLASS_UNSPECIFIED not included here */
-SFI_CLASS_REGISTER(MAINTENANCE,               MAINTENANCE)
-SFI_CLASS_REGISTER(DARWIN_BG,                 DARWIN_BG)
-SFI_CLASS_REGISTER(APP_NAP,                   APP_NAP)
-SFI_CLASS_REGISTER(MANAGED_FOCAL,             MANAGED)
-SFI_CLASS_REGISTER(MANAGED_NONFOCAL,          MANAGED)
-SFI_CLASS_REGISTER(UTILITY,                   UTILITY)
-SFI_CLASS_REGISTER(DEFAULT_FOCAL,             DEFAULT)
-SFI_CLASS_REGISTER(DEFAULT_NONFOCAL,          DEFAULT)
-SFI_CLASS_REGISTER(LEGACY_FOCAL,              LEGACY)
-SFI_CLASS_REGISTER(LEGACY_NONFOCAL,           LEGACY)
-SFI_CLASS_REGISTER(USER_INITIATED_FOCAL,      USER_INITIATED)
-SFI_CLASS_REGISTER(USER_INITIATED_NONFOCAL,   USER_INITIATED)
-SFI_CLASS_REGISTER(USER_INTERACTIVE_FOCAL,    USER_INTERACTIVE)
-SFI_CLASS_REGISTER(USER_INTERACTIVE_NONFOCAL, USER_INTERACTIVE)
-SFI_CLASS_REGISTER(KERNEL,                    OPTED_OUT)
-SFI_CLASS_REGISTER(OPTED_OUT,                 OPTED_OUT)
+SFI_CLASS_REGISTER(MAINTENANCE,               MAINTENANCE);
+SFI_CLASS_REGISTER(DARWIN_BG,                 DARWIN_BG);
+SFI_CLASS_REGISTER(APP_NAP,                   APP_NAP);
+SFI_CLASS_REGISTER(MANAGED_FOCAL,             MANAGED);
+SFI_CLASS_REGISTER(MANAGED_NONFOCAL,          MANAGED);
+SFI_CLASS_REGISTER(UTILITY,                   UTILITY);
+SFI_CLASS_REGISTER(DEFAULT_FOCAL,             DEFAULT);
+SFI_CLASS_REGISTER(DEFAULT_NONFOCAL,          DEFAULT);
+SFI_CLASS_REGISTER(LEGACY_FOCAL,              LEGACY);
+SFI_CLASS_REGISTER(LEGACY_NONFOCAL,           LEGACY);
+SFI_CLASS_REGISTER(USER_INITIATED_FOCAL,      USER_INITIATED);
+SFI_CLASS_REGISTER(USER_INITIATED_NONFOCAL,   USER_INITIATED);
+SFI_CLASS_REGISTER(USER_INTERACTIVE_FOCAL,    USER_INTERACTIVE);
+SFI_CLASS_REGISTER(USER_INTERACTIVE_NONFOCAL, USER_INTERACTIVE);
+SFI_CLASS_REGISTER(KERNEL,                    OPTED_OUT);
+SFI_CLASS_REGISTER(OPTED_OUT,                 OPTED_OUT);
 
 struct sfi_class_state {
 	uint64_t	off_time_usecs;
@@ -788,12 +793,15 @@ sfi_class_id_t sfi_thread_classify(thread_t thread)
 		break;
 	case TASK_BACKGROUND_APPLICATION:
 	case TASK_DEFAULT_APPLICATION:
-	case TASK_THROTTLE_APPLICATION:
 	case TASK_UNSPECIFIED:
 		/* Focal if the task is in a coalition with a FG/focal app */
 		if (task_coalition_focal_count(thread->task) > 0)
 			focal = TRUE;
 		break;
+	case TASK_THROTTLE_APPLICATION:
+	case TASK_DARWINBG_APPLICATION:
+	case TASK_NONUI_APPLICATION:
+		/* Definitely not focal */
 	default:
 		break;
 	}
@@ -894,29 +902,50 @@ ast_t sfi_processor_needs_ast(processor_t processor)
 
 }
 
-static inline void _sfi_wait_cleanup(sched_call_t callback) {
+static inline void _sfi_wait_cleanup(void)
+{
 	thread_t self = current_thread();
-	sfi_class_id_t current_sfi_wait_class = SFI_CLASS_UNSPECIFIED;
-	int64_t sfi_wait_time, sfi_wait_begin = 0;
 
 	spl_t s = splsched();
-	thread_lock(self);
-	if (callback) {
-		thread_sched_call(self, callback);
-	}
-	sfi_wait_begin = self->wait_sfi_begin_time;
-	thread_unlock(self);
-
 	simple_lock(&sfi_lock);
-	sfi_wait_time = mach_absolute_time() - sfi_wait_begin;
-	current_sfi_wait_class = self->sfi_wait_class;
+
+	sfi_class_id_t current_sfi_wait_class = self->sfi_wait_class;
+
+	assert((SFI_CLASS_UNSPECIFIED < current_sfi_wait_class) &&
+	       (current_sfi_wait_class < MAX_SFI_CLASS_ID));
+
 	self->sfi_wait_class = SFI_CLASS_UNSPECIFIED;
+
 	simple_unlock(&sfi_lock);
 	splx(s);
-	assert((SFI_CLASS_UNSPECIFIED < current_sfi_wait_class) && (current_sfi_wait_class < MAX_SFI_CLASS_ID));
-#if !CONFIG_EMBEDDED	
-	ledger_credit(self->task->ledger, task_ledgers.sfi_wait_times[current_sfi_wait_class], sfi_wait_time);
+
+	/*
+	 * It's possible for the thread to be woken up due to the SFI period
+	 * ending *before* it finishes blocking. In that case,
+	 * wait_sfi_begin_time won't be set.
+	 *
+	 * Derive the time sacrificed to SFI by looking at when this thread was
+	 * awoken by the on-timer, to avoid counting the time this thread spent
+	 * waiting to get scheduled.
+	 *
+	 * Note that last_made_runnable_time could be reset if this thread
+	 * gets preempted before we read the value. To fix that, we'd need to
+	 * track wait time in a thread timer, sample the timer before blocking,
+	 * pass the value through thread->parameter, and subtract that.
+	 */
+
+	if (self->wait_sfi_begin_time != 0) {
+#if !CONFIG_EMBEDDED
+		uint64_t made_runnable = os_atomic_load(&self->last_made_runnable_time, relaxed);
+		int64_t sfi_wait_time = made_runnable - self->wait_sfi_begin_time;
+		assert(sfi_wait_time >= 0);
+
+		ledger_credit(self->task->ledger, task_ledgers.sfi_wait_times[current_sfi_wait_class],
+		              sfi_wait_time);
 #endif /* !CONFIG_EMBEDDED */
+
+		self->wait_sfi_begin_time = 0;
+	}
 }
 
 /*
@@ -932,9 +961,7 @@ void sfi_ast(thread_t thread)
 	struct sfi_class_state	*sfi_class;
 	wait_result_t	waitret;
 	boolean_t	did_wait = FALSE;
-	uint64_t	tid;
 	thread_continue_t	continuation;
-	sched_call_t	workq_callback = workqueue_get_sched_callback();
 
 	s = splsched();
 
@@ -955,7 +982,7 @@ void sfi_ast(thread_t thread)
 
 	thread_lock(thread);
 	thread->sfi_class = class_id = sfi_thread_classify(thread);
-	tid = thread_tid(thread);
+	thread_unlock(thread);
 
 	/*
 	 * Once the sfi_lock is taken and the thread's ->sfi_class field is updated, we
@@ -967,23 +994,15 @@ void sfi_ast(thread_t thread)
 	 * classification.
 	 */
 
-	/* Optimistically clear workq callback while thread is already locked */
-	if (workq_callback && (thread->sched_call == workq_callback)) {
-		thread_sched_call(thread, NULL);
-	} else {
-		workq_callback = NULL;
-	}
-	thread_unlock(thread);
-
 	sfi_class = &sfi_classes[class_id];
 	if (!sfi_class->class_in_on_phase) {
 		/* Need to block thread in wait queue */
-		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SFI, SFI_THREAD_DEFER), tid, class_id, 0, 0, 0);
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SFI, SFI_THREAD_DEFER),
+				thread_tid(thread), class_id, 0, 0, 0);
 
 		waitret = waitq_assert_wait64(&sfi_class->waitq,
 					      CAST_EVENT64_T(class_id),
-					      THREAD_INTERRUPTIBLE,
-					      0);
+					      THREAD_INTERRUPTIBLE | THREAD_WAIT_NOREPORT, 0);
 		if (waitret == THREAD_WAITING) {
 			thread->sfi_wait_class = class_id;
 			did_wait = TRUE;
@@ -994,13 +1013,13 @@ void sfi_ast(thread_t thread)
 		}
 	}
 	simple_unlock(&sfi_lock);
-	
+
 	splx(s);
 
 	if (did_wait) {
-		thread_block_reason(continuation, workq_callback, AST_SFI);
-	} else if (workq_callback) {
-		thread_reenable_sched_call(thread, workq_callback);
+		assert(thread->wait_sfi_begin_time == 0);
+
+		thread_block_reason(continuation, NULL, AST_SFI);
 	}
 }
 

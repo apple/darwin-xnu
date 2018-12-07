@@ -54,12 +54,13 @@ libkern/uuid/uuid.c					standard
 libkern/os/log.c					standard
 libkern/os/object.c					standard
 libkern/os/internal.c					standard
+libkern/os/refcnt.c					standard
 
 libkern/kernel_mach_header.c                            standard
 
 libkern/zlib/adler32.c                                  optional zlib
 libkern/zlib/compress.c                                 optional zlib
-libkern/zlib/crc32.c                                    optional zlib
+libkern/zlib/z_crc32.c                                  optional zlib
 libkern/zlib/deflate.c                                  optional zlib
 libkern/zlib/infback.c                                  optional zlib
 libkern/zlib/inffast.c                                  optional zlib
@@ -79,6 +80,8 @@ libkern/crypto/corecrypto_aesxts.c		optional crypto
 libkern/crypto/corecrypto_rand.c		optional crypto
 libkern/crypto/corecrypto_rsa.c		    optional crypto
 libkern/crypto/corecrypto_chacha20poly1305.c	optional	crypto
+
+libkern/img4/interface.c 		standard
 
 libkern/stack_protector.c       standard
 
@@ -101,3 +104,6 @@ libkern/kxld/kxld_uuid.c        optional config_kxld
 libkern/kxld/kxld_versionmin.c  optional config_kxld
 libkern/kxld/kxld_vtable.c      optional config_kxld
 libkern/kxld/kxld_stubs.c       standard
+
+libkern/libclosure/runtime.cpp      optional config_blocks
+libkern/libclosure/libclosuredata.c optional config_blocks

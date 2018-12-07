@@ -54,6 +54,7 @@
 #include <vm/vm_kern.h>
 
 #include <sys/kdebug.h>
+#include <kperf/kperf.h>
 
 #include <kern/policy_internal.h>
 #if CONFIG_TELEMETRY
@@ -122,6 +123,7 @@ static void inspect_instruction_abort(uint32_t, fault_status_t *, vm_prot_t *);
 static void inspect_data_abort(uint32_t, fault_status_t *, vm_prot_t *);
 
 static int is_vm_fault(fault_status_t);
+static int is_translation_fault(fault_status_t);
 static int is_alignment_fault(fault_status_t);
 
 typedef void(*abort_handler_t)(arm_saved_state_t *, uint32_t, vm_offset_t, fault_status_t, vm_prot_t, vm_offset_t);
@@ -177,6 +179,12 @@ extern boolean_t pgtrace_enabled;
 #endif
 
 #if __ARM_PAN_AVAILABLE__
+#ifdef CONFIG_XNUPOST
+extern vm_offset_t pan_test_addr;
+extern vm_offset_t pan_ro_addr;
+extern volatile int pan_exception_level;
+extern volatile char pan_fault_value;
+#endif
 #endif
 
 #if defined(APPLECYCLONE)
@@ -206,6 +214,8 @@ extern boolean_t pgtrace_enabled;
 #define WT_REASON_REG_VIOLATION  8
 #endif
 
+
+extern vm_offset_t static_memory_end;
 
 static inline unsigned
 __ror(unsigned value, unsigned shift)
@@ -284,6 +294,7 @@ arm64_implementation_specific_error(arm_saved_state_t *state, uint32_t esr, vm_o
 	            (void *)llc_err_sts, (void *)llc_err_adr, (void *)llc_err_inf);
 #endif
 #else // !defined(APPLE_ARM64_ARCH_FAMILY)
+#pragma unused (state, esr, far)
 	panic_plain("Unhandled implementation specific error\n");
 #endif
 }
@@ -437,8 +448,8 @@ sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far)
 		assert(0); /* Unreachable */
 
 	case ESR_EC_IABORT_EL1:
-		panic("Kernel instruction fetch abort: pc=%p iss=0x%x far=%p. Note: the faulting frame may be missing in the backtrace.",
-			  (void *)get_saved_state_pc(state), ESR_ISS(esr), (void*)far);
+			
+		panic_with_thread_kernel_state("Kernel instruction fetch abort", state);
 
 	case ESR_EC_PC_ALIGN:
 		handle_pc_align(state);
@@ -609,13 +620,13 @@ sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far)
 static void
 handle_uncategorized(arm_saved_state_t *state, boolean_t instrLen2)
 {
-	exception_type_t 			exception = EXC_BAD_INSTRUCTION;
-	mach_exception_data_type_t 	codes[2] = {EXC_ARM_UNDEFINED};
-	mach_msg_type_number_t 		numcodes = 2;
-	uint32_t					instr;
+	exception_type_t           exception = EXC_BAD_INSTRUCTION;
+	mach_exception_data_type_t codes[2] = {EXC_ARM_UNDEFINED};
+	mach_msg_type_number_t     numcodes = 2;
+	uint32_t                   instr = 0;
 
 	if (instrLen2) {
-		uint16_t	instr16;
+		uint16_t instr16 = 0;
 		COPYIN(get_saved_state_pc(state), (char *)&instr16, sizeof(instr16));
 
 		instr = instr16;
@@ -886,6 +897,20 @@ is_vm_fault(fault_status_t status)
 	}
 }
 
+static int
+is_translation_fault(fault_status_t status)
+{
+	switch (status) {
+	case FSC_TRANSLATION_FAULT_L0:
+	case FSC_TRANSLATION_FAULT_L1:
+	case FSC_TRANSLATION_FAULT_L2:
+	case FSC_TRANSLATION_FAULT_L3:
+		return TRUE;
+	default:
+		return FALSE;
+	}
+}
+
 #if __ARM_PAN_AVAILABLE__
 static int
 is_permission_fault(fault_status_t status)
@@ -940,9 +965,9 @@ handle_user_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_addr
 	thread->iotier_override = THROTTLE_LEVEL_NONE; /* Reset IO tier override before handling abort from userspace */
 
 	if (is_vm_fault(fault_code)) {
-		kern_return_t	result = KERN_FAILURE;
-		vm_map_t		map = thread->map;
-		vm_offset_t		vm_fault_addr = fault_addr;
+		kern_return_t   result = KERN_FAILURE;
+		vm_map_t        map = thread->map;
+		vm_offset_t     vm_fault_addr = fault_addr;
 
 		assert(map != kernel_map);
 
@@ -981,7 +1006,7 @@ handle_user_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_addr
 
 		/* check to see if it is just a pmap ref/modify fault */
 
-		if (result != KERN_SUCCESS) {
+		if ((result != KERN_SUCCESS) && !is_translation_fault(fault_code)) {
 			result = arm_fast_fault(map->pmap, trunc_page(vm_fault_addr), fault_type, TRUE);
 		}
 		if (result != KERN_SUCCESS) {
@@ -1082,9 +1107,9 @@ handle_kernel_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_ad
 #endif
 
 	if (is_vm_fault(fault_code)) {
-		kern_return_t		result;
-		vm_map_t		map;
-		int 			interruptible;
+		kern_return_t   result = KERN_FAILURE;
+		vm_map_t        map;
+		int             interruptible;
 
 		/*
 		 * Ensure no faults in the physical aperture. This could happen if
@@ -1093,7 +1118,20 @@ handle_kernel_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_ad
 		 */
 
 
-		if (fault_addr >= gVirtBase && fault_addr < (gVirtBase+gPhysSize)) {
+#if __ARM_PAN_AVAILABLE__ && defined(CONFIG_XNUPOST)
+		if (is_permission_fault(fault_code) && !(get_saved_state_cpsr(state) & PSR64_PAN) &&
+		    (pan_ro_addr != 0) && (fault_addr == pan_ro_addr)) {
+			++pan_exception_level;
+			// On an exception taken from a PAN-disabled context, verify
+			// that PAN is re-enabled for the exception handler and that
+			// accessing the test address produces a PAN fault.
+			pan_fault_value = *(char *)pan_test_addr;
+			set_saved_state_pc(state, get_saved_state_pc(state) + 4);
+			return;
+		}
+#endif
+
+		if (fault_addr >= gVirtBase && fault_addr < static_memory_end) {
 			panic_with_thread_kernel_state("Unexpected fault in kernel static region\n",state);
 		}
 
@@ -1117,9 +1155,12 @@ handle_kernel_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_ad
 #endif
 
 		/* check to see if it is just a pmap ref/modify fault */
-		result = arm_fast_fault(map->pmap, trunc_page(fault_addr), fault_type, FALSE);
-		if (result == KERN_SUCCESS) return;
+		if (!is_translation_fault(fault_code)) {
+			result = arm_fast_fault(map->pmap, trunc_page(fault_addr), fault_type, FALSE);
+			if (result == KERN_SUCCESS) return;
+		}
 
+		if (result != KERN_PROTECTION_FAILURE)
 		{
 			/*
 			 *  We have to "fault" the page in.
@@ -1141,6 +1182,22 @@ handle_kernel_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_ad
 
 #if __ARM_PAN_AVAILABLE__
 		if (is_pan_fault(state, esr, fault_addr, fault_code)) {
+#ifdef CONFIG_XNUPOST
+			if ((pan_test_addr != 0) && (fault_addr == pan_test_addr))
+			{
+				++pan_exception_level;
+				// read the user-accessible value to make sure
+				// pan is enabled and produces a 2nd fault from
+				// the exception handler
+				if (pan_exception_level == 1)
+					pan_fault_value = *(char *)pan_test_addr;	
+				// this fault address is used for PAN test
+				// disable PAN and rerun
+				set_saved_state_cpsr(state,
+					get_saved_state_cpsr(state) & (~PSR64_PAN));
+				return;
+			}
+#endif
 			panic_with_thread_kernel_state("Privileged access never abort.", state);
 		}
 #endif
@@ -1232,10 +1289,10 @@ handle_mach_continuous_time_trap(arm_saved_state_t *state)
 static void
 handle_msr_trap(arm_saved_state_t *state, uint32_t iss)
 {
-	exception_type_t 			exception = EXC_BAD_INSTRUCTION;
-	mach_exception_data_type_t 	codes[2] = {EXC_ARM_UNDEFINED};
-	mach_msg_type_number_t 		numcodes = 2;
-	uint32_t					instr;
+	exception_type_t           exception = EXC_BAD_INSTRUCTION;
+	mach_exception_data_type_t codes[2] = {EXC_ARM_UNDEFINED};
+	mach_msg_type_number_t     numcodes = 2;
+	uint32_t                   instr = 0;
 
 	(void)iss;
 
@@ -1256,10 +1313,10 @@ handle_msr_trap(arm_saved_state_t *state, uint32_t iss)
 static void
 handle_user_trapped_instruction32(arm_saved_state_t *state, uint32_t esr)
 {
-	exception_type_t 			exception = EXC_BAD_INSTRUCTION;
-	mach_exception_data_type_t 	codes[2] = {EXC_ARM_UNDEFINED};
-	mach_msg_type_number_t 		numcodes = 2;
-	uint32_t					instr;
+	exception_type_t           exception = EXC_BAD_INSTRUCTION;
+	mach_exception_data_type_t codes[2] = {EXC_ARM_UNDEFINED};
+	mach_msg_type_number_t     numcodes = 2;
+	uint32_t                   instr = 0;
 
 	if (is_saved_state64(state)) {
 		panic("ESR (0x%x) for instruction trapped from U32, but saved state is 64-bit.", esr);
@@ -1278,10 +1335,10 @@ handle_user_trapped_instruction32(arm_saved_state_t *state, uint32_t esr)
 static void
 handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
 {
-	exception_type_t 			exception = EXC_BAD_INSTRUCTION;
-	mach_exception_data_type_t 	codes[2] = {EXC_ARM_UNDEFINED};
-	mach_msg_type_number_t 		numcodes = 2;
-	uint32_t					instr;
+	exception_type_t           exception = EXC_BAD_INSTRUCTION;
+	mach_exception_data_type_t codes[2] = {EXC_ARM_UNDEFINED};
+	mach_msg_type_number_t     numcodes = 2;
+	uint32_t                   instr = 0;
 
 	if (PSR64_IS_KERNEL(get_saved_state_cpsr(state))) {
 		panic("ESR (0x%x) for SIMD trap from userland, actually came from kernel?", esr);
@@ -1301,6 +1358,9 @@ sleh_irq(arm_saved_state_t *state)
 	uint32_t *   old_entropy_data_ptr = NULL;
 	uint32_t *   new_entropy_data_ptr = NULL;
 	cpu_data_t * cdp                  = getCpuDatap();
+#if DEVELOPMENT || DEBUG
+	int preemption_level = get_preemption_level();
+#endif
 
 	sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_OTHER);
 
@@ -1334,24 +1394,44 @@ sleh_irq(arm_saved_state_t *state)
 	*old_entropy_data_ptr = (uint32_t)timestamp ^ __ror(old_entropy_data, 9);
 
 	sleh_interrupt_handler_epilogue();
+#if DEVELOPMENT || DEBUG
+	if (preemption_level != get_preemption_level())
+		panic("irq handler %p changed preemption level from %d to %d", cdp->interrupt_handler, preemption_level, get_preemption_level());
+#endif
 }
 
 void
 sleh_fiq(arm_saved_state_t *state)
 {
 	unsigned int type   = DBG_INTR_TYPE_UNKNOWN;
+#if DEVELOPMENT || DEBUG
+	int preemption_level = get_preemption_level();
+#endif
+#if MONOTONIC
+	uint64_t pmsr = 0, upmsr = 0;
+#endif /* MONOTONIC */
+
+#if MONOTONIC
+	if (mt_pmi_pending(&pmsr, &upmsr)) {
+		type = DBG_INTR_TYPE_PMI;
+	} else
+#endif /* MONOTONIC */
 	if (ml_get_timer_pending()) {
 		type = DBG_INTR_TYPE_TIMER;
 	}
 
 	sleh_interrupt_handler_prologue(state, type);
 
+#if MONOTONIC
+	if (type == DBG_INTR_TYPE_PMI) {
+		mt_fiq(getCpuDatap(), pmsr, upmsr);
+	} else
+#endif /* MONOTONIC */
 	{
 		/*
 		 * We don't know that this is a timer, but we don't have insight into
 		 * the other interrupts that go down this path.
 		 */
-
 
 		cpu_data_t *cdp = getCpuDatap();
 
@@ -1366,15 +1446,26 @@ sleh_fiq(arm_saved_state_t *state)
 	}
 
 	sleh_interrupt_handler_epilogue();
+#if DEVELOPMENT || DEBUG
+	if (preemption_level != get_preemption_level())
+		panic("fiq type %u changed preemption level from %d to %d", type, preemption_level, get_preemption_level());
+#endif
 }
 
 void
 sleh_serror(arm_context_t *context, uint32_t esr, vm_offset_t far)
 {
 	arm_saved_state_t 	  	*state = &context->ss;
+#if DEVELOPMENT || DEBUG
+	int preemption_level = get_preemption_level();
+#endif
 
 	ASSERT_CONTEXT_SANITY(context);
 	arm64_platform_error(state, esr, far);
+#if DEVELOPMENT || DEBUG
+	if (preemption_level != get_preemption_level())
+		panic("serror changed preemption level from %d to %d", preemption_level, get_preemption_level());
+#endif
 }
 
 void
@@ -1434,7 +1525,7 @@ sleh_interrupt_handler_prologue(arm_saved_state_t *state, unsigned int type)
 
 #if CONFIG_TELEMETRY
 	if (telemetry_needs_record) {
-		telemetry_mark_curthread((boolean_t)is_user);
+		telemetry_mark_curthread((boolean_t)is_user, FALSE);
 	}
 #endif /* CONFIG_TELEMETRY */
 }
@@ -1442,6 +1533,9 @@ sleh_interrupt_handler_prologue(arm_saved_state_t *state, unsigned int type)
 static void
 sleh_interrupt_handler_epilogue(void)
 {
+#if KPERF
+	kperf_interrupt();
+#endif /* KPERF */
 	KDBG_RELEASE(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END);
 }
 

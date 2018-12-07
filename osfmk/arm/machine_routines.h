@@ -131,6 +131,11 @@ typedef void (*platform_error_handler_t)(void *refcon, vm_offset_t fault_addr);
 typedef enum
 {
 	EXCB_CLASS_ILLEGAL_INSTR_SET,
+#ifdef CONFIG_XNUPOST
+	EXCB_CLASS_TEST1,
+	EXCB_CLASS_TEST2,
+	EXCB_CLASS_TEST3,
+#endif
 	EXCB_CLASS_MAX		// this must be last
 }
 ex_cb_class_t;
@@ -140,6 +145,9 @@ typedef enum
 {
 	EXCB_ACTION_RERUN,	// re-run the faulting instruction
 	EXCB_ACTION_NONE,	// continue normal exception handling
+#ifdef CONFIG_XNUPOST
+	EXCB_ACTION_TEST_FAIL,
+#endif
 }
 ex_cb_action_t;
 
@@ -288,6 +296,12 @@ ml_static_vtop(
 vm_offset_t
 ml_static_ptovirt(
 	vm_offset_t);
+
+vm_offset_t ml_static_slide(
+	vm_offset_t vaddr);
+
+vm_offset_t ml_static_unslide(
+	vm_offset_t vaddr);
 
 /* Offset required to obtain absolute time value from tick counter */
 uint64_t ml_get_abstime_offset(void);
@@ -527,10 +541,15 @@ vm_offset_t ml_stack_remaining(void);
 uint32_t	get_fpscr(void);
 void		set_fpscr(uint32_t);
 
+#ifdef __arm64__
+unsigned long update_mdscr(unsigned long clear, unsigned long set);
+#endif /* __arm64__ */
+
 extern	void		init_vfp(void);
 extern	boolean_t	get_vfp_enabled(void);
 extern	void		arm_debug_set_cp14(arm_debug_state_t *debug_state);
 extern	void		fiq_context_init(boolean_t enable_fiq);
+extern	void		fiq_context_bootstrap(boolean_t enable_fiq);
 
 extern	void		reenable_async_aborts(void);
 extern	void		cpu_idle_wfi(boolean_t wfi_fast);
@@ -849,6 +868,8 @@ extern void sched_perfcontrol_register_callbacks(sched_perfcontrol_callbacks_t c
 
 extern void sched_perfcontrol_update_recommended_cores(uint32_t recommended_cores);
 extern void sched_perfcontrol_thread_group_recommend(void *data, cluster_type_t recommendation);
+extern void sched_override_recommended_cores_for_sleep(void);
+extern void sched_restore_recommended_cores_after_sleep(void);
 
 /*
  * Update the deadline after which sched_perfcontrol_deadline_passed will be called.
@@ -890,7 +911,6 @@ void ml_get_power_state(boolean_t *, boolean_t *);
 boolean_t user_cont_hwclock_allowed(void);
 boolean_t user_timebase_allowed(void);
 boolean_t ml_thread_is64bit(thread_t thread);
-void ml_task_set_rop_pid(task_t task, task_t parent_task, boolean_t inherit);
 
 #ifdef __arm64__
 void ml_set_align_checking(void);

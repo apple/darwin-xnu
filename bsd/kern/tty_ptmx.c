@@ -597,9 +597,6 @@ ptsd_kqops_touch(struct knote *kn, struct kevent_internal_s *kev)
 	/* accept new kevent state */
 	kn->kn_sfflags = kev->fflags;
 	kn->kn_sdata = kev->data;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0) {
-		kn->kn_udata = kev->udata;
-	}
 
 	/* recapture fired state of knote */
 	ret = ptsd_kqops_common(kn, tp);
@@ -832,6 +829,7 @@ ptmx_kqops_common(struct knote *kn, struct ptmx_ioctl *pti, struct tty *tp)
 		/* there's data on the TTY and it's not stopped */
 		if (tp->t_outq.c_cc && !(tp->t_state & TS_TTSTOP)) {
 			retval = tp->t_outq.c_cc;
+			kn->kn_data = retval;
 		} else if (((pti->pt_flags & PF_PKT) && pti->pt_send) ||
 				((pti->pt_flags & PF_UCNTL) && pti->pt_ucntl)) {
 			retval = 1;
@@ -907,9 +905,6 @@ ptmx_kqops_touch(struct knote *kn, struct kevent_internal_s *kev)
 	/* accept new kevent state */
 	kn->kn_sfflags = kev->fflags;
 	kn->kn_sdata = kev->data;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0) {
-		kn->kn_udata = kev->udata;
-	}
 
 	/* recapture fired state of knote */
 	ret = ptmx_kqops_common(kn, pti, tp);

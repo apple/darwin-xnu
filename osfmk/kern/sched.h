@@ -167,8 +167,13 @@
 #define MAXPRI_THROTTLE		(MINPRI + 4)					/*  4 */
 #define MINPRI_USER		MINPRI						/*  0 */
 
-#define DEPRESSPRI		MINPRI			/* depress priority */
-#define MAXPRI_PROMOTE		(MAXPRI_KERNEL)		/* ceiling for mutex promotion */
+#define DEPRESSPRI              (MINPRI)                /* depress priority */
+
+#define MAXPRI_PROMOTE          (MAXPRI_KERNEL)         /* ceiling for mutex promotion */
+#define MINPRI_RWLOCK           (BASEPRI_BACKGROUND)    /* floor when holding rwlock count */
+#define MINPRI_EXEC             (BASEPRI_DEFAULT)       /* floor when in exec state */
+#define MINPRI_WAITQ            (BASEPRI_DEFAULT)       /* floor when in waitq handover state */
+
 
 /* Type used for thread->sched_mode and saved_mode */
 typedef enum {
@@ -182,7 +187,8 @@ typedef enum {
 typedef enum {
 	TH_BUCKET_RUN = 0,      /* All runnable threads */
 	TH_BUCKET_FIXPRI,       /* Fixed-priority */
-	TH_BUCKET_SHARE_FG,     /* Timeshare thread above BASEPRI_UTILITY */
+	TH_BUCKET_SHARE_FG,     /* Timeshare thread above BASEPRI_DEFAULT */
+	TH_BUCKET_SHARE_DF,     /* Timeshare thread between BASEPRI_DEFAULT and BASEPRI_UTILITY */
 	TH_BUCKET_SHARE_UT,     /* Timeshare thread between BASEPRI_UTILITY and MAXPRI_THROTTLE */
 	TH_BUCKET_SHARE_BG,     /* Timeshare thread between MAXPRI_THROTTLE and MINPRI */
 	TH_BUCKET_MAX,
@@ -306,6 +312,8 @@ extern void		thread_quantum_expire(
 extern ast_t	csw_check(processor_t		processor,
 						ast_t			check_reason);
 
+extern void sched_update_generation_count(void);
+
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 extern uint32_t	std_quantum, min_std_quantum;
 extern uint32_t	std_quantum_us;
@@ -338,15 +346,14 @@ extern uint32_t		sched_tick_interval;
 extern uint64_t		sched_one_second_interval;
 
 /* Periodic computation of various averages */
+extern void            compute_sched_load(void);
+
 extern void		compute_averages(uint64_t);
 
 extern void		compute_averunnable(
 					void			*nrun);
 
 extern void		compute_stack_target(
-					void			*arg);
-
-extern void		compute_memory_pressure(
 					void			*arg);
 
 extern void		compute_pageout_gc_throttle(

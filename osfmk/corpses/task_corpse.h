@@ -68,8 +68,6 @@ extern kern_return_t task_deliver_crash_notification(task_t, thread_t, exception
 
 extern kcdata_descriptor_t task_get_corpseinfo(task_t task);
 
-extern unsigned long total_corposes_count(void) __attribute__((pure));
-
 extern kcdata_descriptor_t  task_crashinfo_alloc_init(
 					mach_vm_address_t crash_data_p,
 					unsigned size, uint32_t kc_u_flags, unsigned kc_flags);

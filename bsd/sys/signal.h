@@ -473,6 +473,9 @@ struct	__kern_sigaction {
 /* This will provide 64bit register set in a 32bit user address space */
 #define	SA_64REGSET	0x0200	/* signal handler with SA_SIGINFO args with 64bit regs information */
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+#ifdef	BSD_KERNEL_PRIVATE
+#define	SA_VALIDATE_SIGRETURN_FROM_SIGTRAMP	0x0400	/* use token to validate sigreturn was called from matching sigtramp */
+#endif	/* BSD_KERNEL_PRIVATE */
 
 /* the following are the only bits we support from user space, the 
  * rest are for kernel use only.

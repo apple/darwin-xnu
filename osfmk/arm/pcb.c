@@ -285,13 +285,14 @@ void
 call_continuation(
 		  thread_continue_t continuation,
 		  void *parameter,
-		  wait_result_t wresult)
+		  wait_result_t wresult, 
+		  boolean_t enable_interrupts)
 {
 #define call_continuation_kprintf(x...)	/* kprintf("call_continuation_kprintf:
 					 *  " x) */
 
 	call_continuation_kprintf("thread = %x continuation = %x, stack = %x\n", current_thread(), continuation, current_thread()->machine.kstackptr);
-	Call_continuation(continuation, parameter, wresult, current_thread()->machine.kstackptr);
+	Call_continuation(continuation, parameter, wresult, enable_interrupts);
 }
 
 void arm_debug_set(arm_debug_state_t *debug_state)

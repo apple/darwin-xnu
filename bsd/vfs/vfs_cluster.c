@@ -207,18 +207,25 @@ static int cluster_write_direct(vnode_t vp, struct uio *uio, off_t oldEOF, off_t
 static int cluster_write_contig(vnode_t vp, struct uio *uio, off_t newEOF,
 				int *write_type, u_int32_t *write_length, int (*)(buf_t, void *), void *callback_arg, int bflag);
 
+static void cluster_update_state_internal(vnode_t vp, struct cl_extent *cl, int flags, boolean_t defer_writes, boolean_t *first_pass,
+					  off_t write_off, int write_cnt, off_t newEOF, int (*callback)(buf_t, void *), void *callback_arg, boolean_t vm_initiated);
+
 static int cluster_align_phys_io(vnode_t vp, struct uio *uio, addr64_t usr_paddr, u_int32_t xsize, int flags, int (*)(buf_t, void *), void *callback_arg);
 
 static int 	cluster_read_prefetch(vnode_t vp, off_t f_offset, u_int size, off_t filesize, int (*callback)(buf_t, void *), void *callback_arg, int bflag);
-static void	cluster_read_ahead(vnode_t vp, struct cl_extent *extent, off_t filesize, struct cl_readahead *ra, int (*callback)(buf_t, void *), void *callback_arg, int bflag);
+static void	cluster_read_ahead(vnode_t vp, struct cl_extent *extent, off_t filesize, struct cl_readahead *ra,
+				   int (*callback)(buf_t, void *), void *callback_arg, int bflag);
 
-static int	cluster_push_now(vnode_t vp, struct cl_extent *, off_t EOF, int flags, int (*)(buf_t, void *), void *callback_arg);
+static int	cluster_push_now(vnode_t vp, struct cl_extent *, off_t EOF, int flags, int (*)(buf_t, void *), void *callback_arg, boolean_t vm_ioitiated);
 
-static int	cluster_try_push(struct cl_writebehind *, vnode_t vp, off_t EOF, int push_flag, int flags, int (*)(buf_t, void *), void *callback_arg, int *err);
+static int	cluster_try_push(struct cl_writebehind *, vnode_t vp, off_t EOF, int push_flag, int flags, int (*)(buf_t, void *),
+				 void *callback_arg, int *err, boolean_t vm_initiated);
 
-static void	sparse_cluster_switch(struct cl_writebehind *, vnode_t vp, off_t EOF, int (*)(buf_t, void *), void *callback_arg);
-static int	sparse_cluster_push(void **cmapp, vnode_t vp, off_t EOF, int push_flag, int io_flags, int (*)(buf_t, void *), void *callback_arg);
-static void	sparse_cluster_add(void **cmapp, vnode_t vp, struct cl_extent *, off_t EOF, int (*)(buf_t, void *), void *callback_arg);
+static int	sparse_cluster_switch(struct cl_writebehind *, vnode_t vp, off_t EOF, int (*)(buf_t, void *), void *callback_arg, boolean_t vm_initiated);
+static int	sparse_cluster_push(struct cl_writebehind *, void **cmapp, vnode_t vp, off_t EOF, int push_flag,
+				    int io_flags, int (*)(buf_t, void *), void *callback_arg, boolean_t vm_initiated);
+static int	sparse_cluster_add(struct cl_writebehind *, void **cmapp, vnode_t vp, struct cl_extent *, off_t EOF,
+				   int (*)(buf_t, void *), void *callback_arg, boolean_t vm_initiated);
 
 static kern_return_t vfs_drt_mark_pages(void **cmapp, off_t offset, u_int length, u_int *setcountp);
 static kern_return_t vfs_drt_get_cluster(void **cmapp, off_t *offsetp, u_int *lengthp);
@@ -487,7 +494,7 @@ cluster_syncup(vnode_t vp, off_t newEOF, int (*callback)(buf_t, void *), void *c
 	        if (wbp->cl_number) {
 		        lck_mtx_lock(&wbp->cl_lockw);
 
-			cluster_try_push(wbp, vp, newEOF, PUSH_ALL | flags, 0, callback, callback_arg, NULL);
+			cluster_try_push(wbp, vp, newEOF, PUSH_ALL | flags, 0, callback, callback_arg, NULL, FALSE);
 
 			lck_mtx_unlock(&wbp->cl_lockw);
 		}
@@ -704,9 +711,9 @@ cluster_ioerror(upl_t upl, int upl_offset, int abort_size, int error, int io_fla
 			 * leave pages in the cache unchanged on error
 			 */
 		        upl_abort_code = UPL_ABORT_FREE_ON_EMPTY;
-		else if (page_out && ((error != ENXIO) || vnode_isswap(vp)))
+		else if (((io_flags & B_READ) == 0)  && ((error != ENXIO) || vnode_isswap(vp)))
 		        /*
-			 * transient error... leave pages unchanged
+			 * transient error on pageout/write path... leave pages unchanged
 			 */
 		        upl_abort_code = UPL_ABORT_FREE_ON_EMPTY;
 		else if (page_in)
@@ -830,9 +837,9 @@ cluster_iodone(buf_t bp, void *callback_arg)
 
 	if (ISSET(b_flags, B_COMMIT_UPL)) {
 		cluster_handle_associated_upl(iostate,
-									  cbp_head->b_upl,
-									  upl_offset,
-									  transaction_size);
+					      cbp_head->b_upl,
+					      upl_offset,
+					      transaction_size);
 	}
 
 	if (error == 0 && total_resid)
@@ -881,12 +888,15 @@ cluster_iodone(buf_t bp, void *callback_arg)
 	}
 
 	if (b_flags & B_COMMIT_UPL) {
+
 		pg_offset   = upl_offset & PAGE_MASK;
 		commit_size = (pg_offset + transaction_size + (PAGE_SIZE - 1)) & ~PAGE_MASK;
 
-		if (error)
+		if (error) {
+		        upl_set_iodone_error(upl, error);
+
 			upl_flags = cluster_ioerror(upl, upl_offset - pg_offset, commit_size, error, b_flags, vp);
-		else {
+		} else {
 			upl_flags = UPL_COMMIT_FREE_ON_EMPTY;
 
 			if ((b_flags & B_PHYS) && (b_flags & B_READ)) 
@@ -2977,6 +2987,280 @@ cluster_zero_range(upl_t upl, upl_page_info_t *pl, int flags, int io_offset, off
 }
 
 
+void
+cluster_update_state(vnode_t vp, vm_object_offset_t s_offset, vm_object_offset_t e_offset, boolean_t vm_initiated)
+{
+	struct cl_extent cl;
+	boolean_t first_pass = TRUE;
+
+	assert(s_offset < e_offset);
+	assert((s_offset & PAGE_MASK_64) == 0);
+	assert((e_offset & PAGE_MASK_64) == 0);
+
+	cl.b_addr = (daddr64_t)(s_offset / PAGE_SIZE_64);
+	cl.e_addr = (daddr64_t)(e_offset / PAGE_SIZE_64);
+
+	cluster_update_state_internal(vp, &cl, 0, TRUE, &first_pass, s_offset, (int)(e_offset - s_offset),
+				      vp->v_un.vu_ubcinfo->ui_size, NULL, NULL, vm_initiated);
+}
+
+
+static void
+cluster_update_state_internal(vnode_t vp, struct cl_extent *cl, int flags, boolean_t defer_writes,
+			      boolean_t *first_pass, off_t write_off, int write_cnt, off_t newEOF,
+			      int (*callback)(buf_t, void *), void *callback_arg, boolean_t vm_initiated)
+{
+	struct cl_writebehind *wbp;
+	int	cl_index;
+	int	ret_cluster_try_push;
+	u_int	max_cluster_pgcount;
+
+
+	max_cluster_pgcount = MAX_CLUSTER_SIZE(vp) / PAGE_SIZE;
+
+	/*
+	 * take the lock to protect our accesses
+	 * of the writebehind and sparse cluster state
+	 */
+	wbp = cluster_get_wbp(vp, CLW_ALLOCATE | CLW_RETURNLOCKED);
+
+	if (wbp->cl_scmap) {
+
+		if ( !(flags & IO_NOCACHE)) {
+		        /*
+			 * we've fallen into the sparse
+			 * cluster method of delaying dirty pages
+			 */
+		        sparse_cluster_add(wbp, &(wbp->cl_scmap), vp, cl, newEOF, callback, callback_arg, vm_initiated);
+
+			lck_mtx_unlock(&wbp->cl_lockw);
+			return;
+		}
+		/*
+		 * must have done cached writes that fell into
+		 * the sparse cluster mechanism... we've switched
+		 * to uncached writes on the file, so go ahead
+		 * and push whatever's in the sparse map
+		 * and switch back to normal clustering
+		 */
+		wbp->cl_number = 0;
+
+		sparse_cluster_push(wbp, &(wbp->cl_scmap), vp, newEOF, PUSH_ALL, 0, callback, callback_arg, vm_initiated);
+		/*
+		 * no clusters of either type present at this point
+		 * so just go directly to start_new_cluster since
+		 * we know we need to delay this I/O since we've
+		 * already released the pages back into the cache
+		 * to avoid the deadlock with sparse_cluster_push
+		 */
+		goto start_new_cluster;
+	}
+	if (*first_pass == TRUE) {
+		if (write_off == wbp->cl_last_write)
+			wbp->cl_seq_written += write_cnt;
+		else
+			wbp->cl_seq_written = write_cnt;
+
+		wbp->cl_last_write = write_off + write_cnt;
+
+		*first_pass = FALSE;
+	}
+	if (wbp->cl_number == 0)
+		/*
+		 * no clusters currently present
+		 */
+		goto start_new_cluster;
+
+	for (cl_index = 0; cl_index < wbp->cl_number; cl_index++) {
+		/*
+		 * check each cluster that we currently hold
+		 * try to merge some or all of this write into
+		 * one or more of the existing clusters... if
+		 * any portion of the write remains, start a
+		 * new cluster
+		 */
+		if (cl->b_addr >= wbp->cl_clusters[cl_index].b_addr) {
+			/*
+			 * the current write starts at or after the current cluster
+			 */
+			if (cl->e_addr <= (wbp->cl_clusters[cl_index].b_addr + max_cluster_pgcount)) {
+				/*
+				 * we have a write that fits entirely
+				 * within the existing cluster limits
+				 */
+				if (cl->e_addr > wbp->cl_clusters[cl_index].e_addr)
+					/*
+					 * update our idea of where the cluster ends
+					 */
+					wbp->cl_clusters[cl_index].e_addr = cl->e_addr;
+				break;
+			}
+			if (cl->b_addr < (wbp->cl_clusters[cl_index].b_addr + max_cluster_pgcount)) {
+				/*
+				 * we have a write that starts in the middle of the current cluster
+				 * but extends beyond the cluster's limit... we know this because
+				 * of the previous checks
+				 * we'll extend the current cluster to the max
+				 * and update the b_addr for the current write to reflect that
+				 * the head of it was absorbed into this cluster...
+				 * note that we'll always have a leftover tail in this case since
+				 * full absorbtion would have occurred in the clause above
+				 */
+				wbp->cl_clusters[cl_index].e_addr = wbp->cl_clusters[cl_index].b_addr + max_cluster_pgcount;
+
+				cl->b_addr = wbp->cl_clusters[cl_index].e_addr;
+			}
+			/*
+			 * we come here for the case where the current write starts
+			 * beyond the limit of the existing cluster or we have a leftover
+			 * tail after a partial absorbtion
+			 *
+			 * in either case, we'll check the remaining clusters before 
+			 * starting a new one
+			 */
+		} else {
+			/*
+			 * the current write starts in front of the cluster we're currently considering
+			 */
+			if ((wbp->cl_clusters[cl_index].e_addr - cl->b_addr) <= max_cluster_pgcount) {
+				/*
+				 * we can just merge the new request into
+				 * this cluster and leave it in the cache
+				 * since the resulting cluster is still 
+				 * less than the maximum allowable size
+				 */
+				wbp->cl_clusters[cl_index].b_addr = cl->b_addr;
+
+				if (cl->e_addr > wbp->cl_clusters[cl_index].e_addr) {
+					/*
+					 * the current write completely
+					 * envelops the existing cluster and since
+					 * each write is limited to at most max_cluster_pgcount pages
+					 * we can just use the start and last blocknos of the write
+					 * to generate the cluster limits
+					 */
+					wbp->cl_clusters[cl_index].e_addr = cl->e_addr;
+				}
+				break;
+			}
+			/*
+			 * if we were to combine this write with the current cluster
+			 * we would exceed the cluster size limit.... so,
+			 * let's see if there's any overlap of the new I/O with
+			 * the cluster we're currently considering... in fact, we'll
+			 * stretch the cluster out to it's full limit and see if we
+			 * get an intersection with the current write
+			 * 
+			 */
+			if (cl->e_addr > wbp->cl_clusters[cl_index].e_addr - max_cluster_pgcount) {
+				/*
+				 * the current write extends into the proposed cluster
+				 * clip the length of the current write after first combining it's
+				 * tail with the newly shaped cluster
+				 */
+				wbp->cl_clusters[cl_index].b_addr = wbp->cl_clusters[cl_index].e_addr - max_cluster_pgcount;
+
+				cl->e_addr = wbp->cl_clusters[cl_index].b_addr;
+			}
+			/*
+			 * if we get here, there was no way to merge
+			 * any portion of this write with this cluster 
+			 * or we could only merge part of it which 
+			 * will leave a tail...
+			 * we'll check the remaining clusters before starting a new one
+			 */
+		}
+	}
+	if (cl_index < wbp->cl_number)
+		/*
+		 * we found an existing cluster(s) that we
+		 * could entirely merge this I/O into
+		 */
+		goto delay_io;
+
+	if (defer_writes == FALSE &&
+	    wbp->cl_number == MAX_CLUSTERS &&
+	    wbp->cl_seq_written >= (MAX_CLUSTERS * (max_cluster_pgcount * PAGE_SIZE))) {
+		uint32_t	n;
+
+		if (vp->v_mount->mnt_minsaturationbytecount) {
+			n = vp->v_mount->mnt_minsaturationbytecount / MAX_CLUSTER_SIZE(vp);
+					
+			if (n > MAX_CLUSTERS)
+				n = MAX_CLUSTERS;
+		} else
+			n = 0;
+
+		if (n == 0) {
+			if (disk_conditioner_mount_is_ssd(vp->v_mount))
+				n = WRITE_BEHIND_SSD;
+			else
+				n = WRITE_BEHIND;
+		}
+		while (n--)
+		        cluster_try_push(wbp, vp, newEOF, 0, 0, callback, callback_arg, NULL, vm_initiated);
+	}
+	if (wbp->cl_number < MAX_CLUSTERS) {
+		/*
+		 * we didn't find an existing cluster to
+		 * merge into, but there's room to start
+		 * a new one
+		 */
+		goto start_new_cluster;
+	}
+	/*
+	 * no exisitng cluster to merge with and no
+	 * room to start a new one... we'll try 
+	 * pushing one of the existing ones... if none of
+	 * them are able to be pushed, we'll switch
+	 * to the sparse cluster mechanism
+	 * cluster_try_push updates cl_number to the
+	 * number of remaining clusters... and
+	 * returns the number of currently unused clusters
+	 */
+	ret_cluster_try_push = 0;
+
+	/*
+	 * if writes are not deferred, call cluster push immediately
+	 */
+	if (defer_writes == FALSE) {
+		
+	        ret_cluster_try_push = cluster_try_push(wbp, vp, newEOF, (flags & IO_NOCACHE) ? 0 : PUSH_DELAY, 0, callback, callback_arg, NULL, vm_initiated);
+	}
+	/*
+	 * execute following regardless of writes being deferred or not
+	 */
+	if (ret_cluster_try_push == 0) {
+		/*
+		 * no more room in the normal cluster mechanism
+		 * so let's switch to the more expansive but expensive
+		 * sparse mechanism....
+		 */
+	        sparse_cluster_switch(wbp, vp, newEOF, callback, callback_arg, vm_initiated);
+		sparse_cluster_add(wbp, &(wbp->cl_scmap), vp, cl, newEOF, callback, callback_arg, vm_initiated);
+		
+		lck_mtx_unlock(&wbp->cl_lockw);
+		return;
+	}
+start_new_cluster:
+	wbp->cl_clusters[wbp->cl_number].b_addr = cl->b_addr;
+	wbp->cl_clusters[wbp->cl_number].e_addr = cl->e_addr;
+
+	wbp->cl_clusters[wbp->cl_number].io_flags = 0;
+
+	if (flags & IO_NOCACHE)
+		wbp->cl_clusters[wbp->cl_number].io_flags |= CLW_IONOCACHE;
+
+	if (flags & IO_PASSIVE)
+		wbp->cl_clusters[wbp->cl_number].io_flags |= CLW_IOPASSIVE;
+
+	wbp->cl_number++;
+delay_io:
+	lck_mtx_unlock(&wbp->cl_lockw);
+	return;
+}
+
+
 static int
 cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t oldEOF, off_t newEOF, off_t headOff,
 		   off_t tailOff, int flags, int (*callback)(buf_t, void *), void *callback_arg)
@@ -3005,9 +3289,7 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 	int		 write_cnt = 0;
 	boolean_t	 first_pass = FALSE;
 	struct cl_extent cl;
-	struct cl_writebehind *wbp;
 	int              bflag;
-	u_int		 max_cluster_pgcount;
 	u_int		 max_io_size;
 
 	if (uio) {
@@ -3036,7 +3318,6 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 	zero_off  = 0;
 	zero_off1 = 0;
 
-	max_cluster_pgcount = MAX_CLUSTER_SIZE(vp) / PAGE_SIZE;
 	max_io_size = cluster_max_io_size(vp->v_mount, CL_WRITE);
 
 	if (flags & IO_HEADZEROFILL) {
@@ -3293,7 +3574,7 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 			retval = cluster_copy_upl_data(uio, upl, io_offset, (int *)&io_requested);
 
 			if (retval) {
-				ubc_upl_abort_range(upl, 0, upl_size, UPL_ABORT_DUMP_PAGES | UPL_ABORT_FREE_ON_EMPTY);
+				ubc_upl_abort_range(upl, 0, upl_size, UPL_ABORT_FREE_ON_EMPTY);
 
 				KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 45)) | DBG_FUNC_NONE,
 					     upl, 0, 0, retval, 0);
@@ -3318,19 +3599,14 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 			io_offset  += bytes_to_zero;
 		}
 		if (retval == 0) {
-			int cl_index;
-			int ret_cluster_try_push;
 			int do_zeroing = 1;
-
 			
 			io_size += start_offset;
-			
 
 			/* Force more restrictive zeroing behavior only on APFS */
 			if ((vnode_tag(vp) == VT_APFS) && (newEOF < oldEOF)) {
 				do_zeroing = 0;
 			}
-
 
 			if (do_zeroing && (upl_f_offset + io_size) >= newEOF && (u_int)io_size < upl_size) {
 
@@ -3370,269 +3646,28 @@ check_cluster:
 			cl.e_addr = (daddr64_t)((upl_f_offset + (off_t)upl_size) / PAGE_SIZE_64);
 
 			if (flags & IO_SYNC) {
-			        /*
-				 * if the IO_SYNC flag is set than we need to 
-				 * bypass any clusters and immediately issue
-				 * the I/O
-				 */
-			        goto issue_io;
-			}
-			/*
-			 * take the lock to protect our accesses
-			 * of the writebehind and sparse cluster state
-			 */
-			wbp = cluster_get_wbp(vp, CLW_ALLOCATE | CLW_RETURNLOCKED);
-
-			if (wbp->cl_scmap) {
-
-			        if ( !(flags & IO_NOCACHE)) {
-				        /*
-					 * we've fallen into the sparse
-					 * cluster method of delaying dirty pages
-					 */
-					sparse_cluster_add(&(wbp->cl_scmap), vp, &cl, newEOF, callback, callback_arg);
-
-					lck_mtx_unlock(&wbp->cl_lockw);
-
-					continue;
-				}
 				/*
-				 * must have done cached writes that fell into
-				 * the sparse cluster mechanism... we've switched
-				 * to uncached writes on the file, so go ahead
-				 * and push whatever's in the sparse map
-				 * and switch back to normal clustering
+				 * if the IO_SYNC flag is set than we need to bypass
+				 * any clustering and immediately issue the I/O
+				 *
+				 * we don't hold the lock at this point
+				 *
+				 * we've already dropped the current upl, so pick it back up with COPYOUT_FROM set
+				 * so that we correctly deal with a change in state of the hardware modify bit...
+				 * we do this via cluster_push_now... by passing along the IO_SYNC flag, we force
+				 * cluster_push_now to wait until all the I/Os have completed... cluster_push_now is also
+				 * responsible for generating the correct sized I/O(s)
 				 */
-				wbp->cl_number = 0;
+			        retval = cluster_push_now(vp, &cl, newEOF, flags, callback, callback_arg, FALSE);
+			} else {
+				boolean_t defer_writes = FALSE;
 
-				sparse_cluster_push(&(wbp->cl_scmap), vp, newEOF, PUSH_ALL, 0, callback, callback_arg);
-				/*
-				 * no clusters of either type present at this point
-				 * so just go directly to start_new_cluster since
-				 * we know we need to delay this I/O since we've
-				 * already released the pages back into the cache
-				 * to avoid the deadlock with sparse_cluster_push
-				 */
-				goto start_new_cluster;
+				if (vfs_flags(vp->v_mount) & MNT_DEFWRITE)
+					defer_writes = TRUE;
+
+				cluster_update_state_internal(vp, &cl, flags, defer_writes, &first_pass,
+							      write_off, write_cnt, newEOF, callback, callback_arg, FALSE);
 			}
-			if (first_pass) {
-				if (write_off == wbp->cl_last_write)
-					wbp->cl_seq_written += write_cnt;
-				else
-					wbp->cl_seq_written = write_cnt;
-
-				wbp->cl_last_write = write_off + write_cnt;
-
-				first_pass = FALSE;
-			}
-			if (wbp->cl_number == 0)
-			        /*
-				 * no clusters currently present
-				 */
-			        goto start_new_cluster;
-
-			for (cl_index = 0; cl_index < wbp->cl_number; cl_index++) {
-			        /*
-				 * check each cluster that we currently hold
-				 * try to merge some or all of this write into
-				 * one or more of the existing clusters... if
-				 * any portion of the write remains, start a
-				 * new cluster
-				 */
-			        if (cl.b_addr >= wbp->cl_clusters[cl_index].b_addr) {
-				        /*
-					 * the current write starts at or after the current cluster
-					 */
-				        if (cl.e_addr <= (wbp->cl_clusters[cl_index].b_addr + max_cluster_pgcount)) {
-					        /*
-						 * we have a write that fits entirely
-						 * within the existing cluster limits
-						 */
-					        if (cl.e_addr > wbp->cl_clusters[cl_index].e_addr)
-						        /*
-							 * update our idea of where the cluster ends
-							 */
-						        wbp->cl_clusters[cl_index].e_addr = cl.e_addr;
-						break;
-					}
-					if (cl.b_addr < (wbp->cl_clusters[cl_index].b_addr + max_cluster_pgcount)) {
-					        /*
-						 * we have a write that starts in the middle of the current cluster
-						 * but extends beyond the cluster's limit... we know this because
-						 * of the previous checks
-						 * we'll extend the current cluster to the max
-						 * and update the b_addr for the current write to reflect that
-						 * the head of it was absorbed into this cluster...
-						 * note that we'll always have a leftover tail in this case since
-						 * full absorbtion would have occurred in the clause above
-						 */
-					        wbp->cl_clusters[cl_index].e_addr = wbp->cl_clusters[cl_index].b_addr + max_cluster_pgcount;
-
-						cl.b_addr = wbp->cl_clusters[cl_index].e_addr;
-					}
-					/*
-					 * we come here for the case where the current write starts
-					 * beyond the limit of the existing cluster or we have a leftover
-					 * tail after a partial absorbtion
-					 *
-					 * in either case, we'll check the remaining clusters before 
-					 * starting a new one
-					 */
-				} else {
-				        /*
-					 * the current write starts in front of the cluster we're currently considering
-					 */
-				        if ((wbp->cl_clusters[cl_index].e_addr - cl.b_addr) <= max_cluster_pgcount) {
-					        /*
-						 * we can just merge the new request into
-						 * this cluster and leave it in the cache
-						 * since the resulting cluster is still 
-						 * less than the maximum allowable size
-						 */
-					        wbp->cl_clusters[cl_index].b_addr = cl.b_addr;
-
-						if (cl.e_addr > wbp->cl_clusters[cl_index].e_addr) {
-						        /*
-							 * the current write completely
-							 * envelops the existing cluster and since
-							 * each write is limited to at most max_cluster_pgcount pages
-							 * we can just use the start and last blocknos of the write
-							 * to generate the cluster limits
-							 */
-						        wbp->cl_clusters[cl_index].e_addr = cl.e_addr;
-						}
-						break;
-					}
-
-					/*
-					 * if we were to combine this write with the current cluster
-					 * we would exceed the cluster size limit.... so,
-					 * let's see if there's any overlap of the new I/O with
-					 * the cluster we're currently considering... in fact, we'll
-					 * stretch the cluster out to it's full limit and see if we
-					 * get an intersection with the current write
-					 * 
-					 */
-					if (cl.e_addr > wbp->cl_clusters[cl_index].e_addr - max_cluster_pgcount) {
-					        /*
-						 * the current write extends into the proposed cluster
-						 * clip the length of the current write after first combining it's
-						 * tail with the newly shaped cluster
-						 */
-					        wbp->cl_clusters[cl_index].b_addr = wbp->cl_clusters[cl_index].e_addr - max_cluster_pgcount;
-
-						cl.e_addr = wbp->cl_clusters[cl_index].b_addr;
-					}
-					/*
-					 * if we get here, there was no way to merge
-					 * any portion of this write with this cluster 
-					 * or we could only merge part of it which 
-					 * will leave a tail...
-					 * we'll check the remaining clusters before starting a new one
-					 */
-				}
-			}
-			if (cl_index < wbp->cl_number)
-			        /*
-				 * we found an existing cluster(s) that we
-				 * could entirely merge this I/O into
-				 */
-			        goto delay_io;
-
-			if (!((unsigned int)vfs_flags(vp->v_mount) & MNT_DEFWRITE) &&
-			    wbp->cl_number == MAX_CLUSTERS &&
-			    wbp->cl_seq_written >= (MAX_CLUSTERS * (max_cluster_pgcount * PAGE_SIZE))) {
-				uint32_t	n;
-
-				if (vp->v_mount->mnt_minsaturationbytecount) {
-					n = vp->v_mount->mnt_minsaturationbytecount / MAX_CLUSTER_SIZE(vp);
-					
-					if (n > MAX_CLUSTERS)
-						n = MAX_CLUSTERS;
-				} else
-					n = 0;
-
-				if (n == 0) {
-					if (disk_conditioner_mount_is_ssd(vp->v_mount))
-						n = WRITE_BEHIND_SSD;
-					else
-						n = WRITE_BEHIND;
-				}
-				while (n--)
-					cluster_try_push(wbp, vp, newEOF, 0, 0, callback, callback_arg, NULL);
-			}
-			if (wbp->cl_number < MAX_CLUSTERS) {
-			        /*
-				 * we didn't find an existing cluster to
-				 * merge into, but there's room to start
-				 * a new one
-				 */
-			        goto start_new_cluster;
-			}
-			/*
-			 * no exisitng cluster to merge with and no
-			 * room to start a new one... we'll try 
-			 * pushing one of the existing ones... if none of
-			 * them are able to be pushed, we'll switch
-			 * to the sparse cluster mechanism
-			 * cluster_try_push updates cl_number to the
-			 * number of remaining clusters... and
-			 * returns the number of currently unused clusters
-			 */
-			ret_cluster_try_push = 0;
-
-			/*
-			 * if writes are not deferred, call cluster push immediately
-			 */
-			if (!((unsigned int)vfs_flags(vp->v_mount) & MNT_DEFWRITE)) {
-				
-				ret_cluster_try_push = cluster_try_push(wbp, vp, newEOF, (flags & IO_NOCACHE) ? 0 : PUSH_DELAY, 0, callback, callback_arg, NULL);
-			}
-
-			/*
-			 * execute following regardless of writes being deferred or not
-			 */
-			if (ret_cluster_try_push == 0) {
-			        /*
-				 * no more room in the normal cluster mechanism
-				 * so let's switch to the more expansive but expensive
-				 * sparse mechanism....
-				 */
-			        sparse_cluster_switch(wbp, vp, newEOF, callback, callback_arg);
-				sparse_cluster_add(&(wbp->cl_scmap), vp, &cl, newEOF, callback, callback_arg);
-
-				lck_mtx_unlock(&wbp->cl_lockw);
-
-				continue;
-			}
-start_new_cluster:
-			wbp->cl_clusters[wbp->cl_number].b_addr = cl.b_addr;
-			wbp->cl_clusters[wbp->cl_number].e_addr = cl.e_addr;
-
-			wbp->cl_clusters[wbp->cl_number].io_flags = 0;
-
-			if (flags & IO_NOCACHE)
-			        wbp->cl_clusters[wbp->cl_number].io_flags |= CLW_IONOCACHE;
-
-			if (bflag & CL_PASSIVE)
-			        wbp->cl_clusters[wbp->cl_number].io_flags |= CLW_IOPASSIVE;
-
-			wbp->cl_number++;
-delay_io:
-			lck_mtx_unlock(&wbp->cl_lockw);
-
-			continue;
-issue_io:
-			/*
-			 * we don't hold the lock at this point
-			 *
-			 * we've already dropped the current upl, so pick it back up with COPYOUT_FROM set
-			 * so that we correctly deal with a change in state of the hardware modify bit...
-			 * we do this via cluster_push_now... by passing along the IO_SYNC flag, we force
-			 * cluster_push_now to wait until all the I/Os have completed... cluster_push_now is also
-			 * responsible for generating the correct sized I/O(s)
-			 */
-			retval = cluster_push_now(vp, &cl, newEOF, flags, callback, callback_arg);
 		}
 	}
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 40)) | DBG_FUNC_END, retval, 0, io_resid, 0, 0);
@@ -4368,7 +4403,6 @@ cluster_read_direct(vnode_t vp, struct uio *uio, off_t filesize, int *read_type,
 	u_int32_t        max_rd_size;
 	u_int32_t        max_rd_ahead;
 	u_int32_t        max_vector_size;
-	boolean_t	 strict_uncached_IO = FALSE;
 	boolean_t	 io_throttled = FALSE;
 
 	u_int32_t	 vector_upl_iosize = 0;
@@ -4432,8 +4466,6 @@ cluster_read_direct(vnode_t vp, struct uio *uio, off_t filesize, int *read_type,
                 */
                devblocksize = PAGE_SIZE;
 	}
-
-	strict_uncached_IO = ubc_strict_uncached_IO(vp);
 
 	orig_iov_base = uio_curriovbase(uio);
 	last_iov_base = orig_iov_base;
@@ -4512,7 +4544,7 @@ next_dread:
 		 * cluster_copy_ubc_data returns the resid
 		 * in io_size
 		 */
-		if ((strict_uncached_IO == FALSE) && ((flags & IO_ENCRYPTED) == 0)) {
+		if ((flags & IO_ENCRYPTED) == 0) {
 			retval = cluster_copy_ubc_data_internal(vp, uio, (int *)&io_size, 0, 0);
 		}
 		/*
@@ -4602,7 +4634,7 @@ next_dread:
 		 * Don't re-check the UBC data if we are looking for uncached IO
 		 * or asking for encrypted blocks.
 		 */
-		if ((strict_uncached_IO == FALSE) && ((flags & IO_ENCRYPTED) == 0)) {
+		if ((flags & IO_ENCRYPTED) == 0) {
 
 			if ((xsize = io_size) > max_rd_size)
 				xsize = max_rd_size;
@@ -4865,7 +4897,16 @@ wait_for_dreads:
 		 * we couldn't handle the tail of this request in DIRECT mode
 		 * so fire it through the copy path
 		 */
-	        retval = cluster_read_copy(vp, uio, io_req_size, filesize, flags, callback, callback_arg);
+		if (flags & IO_ENCRYPTED) {
+			/*
+			 * We cannot fall back to the copy path for encrypted I/O. If this
+			 * happens, there is something wrong with the user buffer passed
+			 * down.
+			 */
+			retval = EFAULT;
+		} else {
+			retval = cluster_read_copy(vp, uio, io_req_size, filesize, flags, callback, callback_arg);
+		}
 
 		*read_type = IO_UNKNOWN;
 	}
@@ -5371,6 +5412,7 @@ cluster_push_err(vnode_t vp, int flags, int (*callback)(buf_t, void *), void *ca
         int	retval;
 	int	my_sparse_wait = 0;
 	struct	cl_writebehind *wbp;
+	int	local_err = 0;
 
 	if (err)
 		*err = 0;
@@ -5440,22 +5482,35 @@ cluster_push_err(vnode_t vp, int flags, int (*callback)(buf_t, void *), void *ca
 
 			lck_mtx_unlock(&wbp->cl_lockw);
 
-			retval = sparse_cluster_push(&scmap, vp, ubc_getsize(vp), PUSH_ALL, flags, callback, callback_arg);
+			retval = sparse_cluster_push(wbp, &scmap, vp, ubc_getsize(vp), PUSH_ALL, flags, callback, callback_arg, FALSE);
 
 			lck_mtx_lock(&wbp->cl_lockw);
 
 			wbp->cl_sparse_pushes--;
+
+			if (retval) {
+				if (wbp->cl_scmap != NULL) {
+					panic("cluster_push_err: Expected NULL cl_scmap\n");
+				}
+
+				wbp->cl_scmap = scmap;
+			}
 			
 			if (wbp->cl_sparse_wait && wbp->cl_sparse_pushes == 0)
 				wakeup((caddr_t)&wbp->cl_sparse_pushes);
 		} else {
-			retval = sparse_cluster_push(&(wbp->cl_scmap), vp, ubc_getsize(vp), PUSH_ALL, flags, callback, callback_arg);
+		        retval = sparse_cluster_push(wbp, &(wbp->cl_scmap), vp, ubc_getsize(vp), PUSH_ALL, flags, callback, callback_arg, FALSE);
 		}
+
+		local_err = retval;
+
 		if (err)
 			*err = retval;
 		retval = 1;
 	} else {
-		retval = cluster_try_push(wbp, vp, ubc_getsize(vp), PUSH_ALL, flags, callback, callback_arg, err);
+		retval = cluster_try_push(wbp, vp, ubc_getsize(vp), PUSH_ALL, flags, callback, callback_arg, &local_err, FALSE);
+		if (err)
+			*err = local_err;
 	}
 	lck_mtx_unlock(&wbp->cl_lockw);
 
@@ -5476,7 +5531,7 @@ cluster_push_err(vnode_t vp, int flags, int (*callback)(buf_t, void *), void *ca
 		lck_mtx_unlock(&wbp->cl_lockw);
 	}
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 53)) | DBG_FUNC_END,
-		     wbp->cl_scmap, wbp->cl_number, retval, 0, 0);
+		     wbp->cl_scmap, wbp->cl_number, retval, local_err, 0);
 
 	return (retval);
 }
@@ -5516,7 +5571,7 @@ cluster_release(struct ubc_info *ubc)
 
 
 static int
-cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_flag, int io_flags, int (*callback)(buf_t, void *), void *callback_arg, int *err)
+cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_flag, int io_flags, int (*callback)(buf_t, void *), void *callback_arg, int *err, boolean_t vm_initiated)
 {
         int cl_index;
 	int cl_index1;
@@ -5597,6 +5652,9 @@ cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_fla
 		                goto dont_try;
 		}
 	}
+	if (vm_initiated == TRUE)
+		lck_mtx_unlock(&wbp->cl_lockw);
+
 	for (cl_index = 0; cl_index < cl_len; cl_index++) {
 	        int	flags;
 		struct	cl_extent cl;
@@ -5619,19 +5677,23 @@ cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_fla
 		cl.b_addr = l_clusters[cl_index].b_addr;
 		cl.e_addr = l_clusters[cl_index].e_addr;
 
-		retval = cluster_push_now(vp, &cl, EOF, flags, callback, callback_arg);
+		retval = cluster_push_now(vp, &cl, EOF, flags, callback, callback_arg, vm_initiated);
 
-		if (error == 0 && retval)
+		if (retval == 0) {
+			cl_pushed++;
+
+			l_clusters[cl_index].b_addr = 0;
+			l_clusters[cl_index].e_addr = 0;
+		} else if (error == 0) {
 			error = retval;
-
-		l_clusters[cl_index].b_addr = 0;
-		l_clusters[cl_index].e_addr = 0;
-
-		cl_pushed++;
+		}
 
 		if ( !(push_flag & PUSH_ALL) )
 		        break;
 	}
+	if (vm_initiated == TRUE)
+		lck_mtx_lock(&wbp->cl_lockw);
+
 	if (err)
 		*err = error;
 
@@ -5651,7 +5713,7 @@ dont_try:
 			 *
 			 * collect the active public clusters...
 			 */
-		        sparse_cluster_switch(wbp, vp, EOF, callback, callback_arg);
+		        sparse_cluster_switch(wbp, vp, EOF, callback, callback_arg, vm_initiated);
 
 		        for (cl_index = 0, cl_index1 = 0; cl_index < cl_len; cl_index++) {
 			        if (l_clusters[cl_index].b_addr == l_clusters[cl_index].e_addr)
@@ -5671,7 +5733,7 @@ dont_try:
 			 * and collect the original clusters that were moved into the 
 			 * local storage for sorting purposes
 			 */
-		        sparse_cluster_switch(wbp, vp, EOF, callback, callback_arg);
+		        sparse_cluster_switch(wbp, vp, EOF, callback, callback_arg, vm_initiated);
 
 		} else {
 		        /*
@@ -5701,7 +5763,8 @@ dont_try:
 
 
 static int
-cluster_push_now(vnode_t vp, struct cl_extent *cl, off_t EOF, int flags, int (*callback)(buf_t, void *), void *callback_arg)
+cluster_push_now(vnode_t vp, struct cl_extent *cl, off_t EOF, int flags,
+		 int (*callback)(buf_t, void *), void *callback_arg, boolean_t vm_initiated)
 {
 	upl_page_info_t *pl;
 	upl_t            upl;
@@ -5758,6 +5821,13 @@ cluster_push_now(vnode_t vp, struct cl_extent *cl, off_t EOF, int flags, int (*c
 	} else
 	        size = upl_size;
 
+
+	if (vm_initiated) {
+	        vnode_pageout(vp, NULL, (upl_offset_t)0, upl_f_offset, (upl_size_t)upl_size,
+			      UPL_MSYNC | UPL_VNODE_PAGER | UPL_KEEPCACHED, &error);
+
+		return (error);
+	}
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 41)) | DBG_FUNC_START, upl_size, size, 0, 0, 0);
 
 	/*
@@ -5868,7 +5938,7 @@ cluster_push_now(vnode_t vp, struct cl_extent *cl, off_t EOF, int flags, int (*c
 
 		size -= io_size;
 	}
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 51)) | DBG_FUNC_END, 1, 3, 0, 0, 0);
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 51)) | DBG_FUNC_END, 1, 3, error, 0, 0);
 
 	return(error);
 }
@@ -5877,12 +5947,13 @@ cluster_push_now(vnode_t vp, struct cl_extent *cl, off_t EOF, int flags, int (*c
 /*
  * sparse_cluster_switch is called with the write behind lock held
  */
-static void
-sparse_cluster_switch(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int (*callback)(buf_t, void *), void *callback_arg)
+static int
+sparse_cluster_switch(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int (*callback)(buf_t, void *), void *callback_arg, boolean_t vm_initiated)
 {
         int	cl_index;
+	int	error;
 
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 78)) | DBG_FUNC_START, kdebug_vnode(vp), wbp->cl_scmap, 0, 0, 0);
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 78)) | DBG_FUNC_START, kdebug_vnode(vp), wbp->cl_scmap, wbp->cl_number, 0, 0);
 
 	for (cl_index = 0; cl_index < wbp->cl_number; cl_index++) {
 	        int	  flags;
@@ -5894,14 +5965,20 @@ sparse_cluster_switch(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int (*c
 			        if (flags & UPL_POP_DIRTY) {
 				        cl.e_addr = cl.b_addr + 1;
 
-				        sparse_cluster_add(&(wbp->cl_scmap), vp, &cl, EOF, callback, callback_arg);
+				        error = sparse_cluster_add(wbp, &(wbp->cl_scmap), vp, &cl, EOF, callback, callback_arg, vm_initiated);
+
+					if (error) {
+						break;
+					}
 				}
 			}
 		}
 	}
-	wbp->cl_number = 0;
+	wbp->cl_number -= cl_index;
 
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 78)) | DBG_FUNC_END, kdebug_vnode(vp), wbp->cl_scmap, 0, 0, 0);
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 78)) | DBG_FUNC_END, kdebug_vnode(vp), wbp->cl_scmap, wbp->cl_number, error, 0);
+
+	return error;
 }
 
 
@@ -5911,11 +5988,13 @@ sparse_cluster_switch(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int (*c
  * from the write-behind context (the cluster_push case), the wb lock is not held
  */
 static int
-sparse_cluster_push(void **scmap, vnode_t vp, off_t EOF, int push_flag, int io_flags, int (*callback)(buf_t, void *), void *callback_arg)
+sparse_cluster_push(struct cl_writebehind *wbp, void **scmap, vnode_t vp, off_t EOF, int push_flag,
+		    int io_flags, int (*callback)(buf_t, void *), void *callback_arg, boolean_t vm_initiated)
 {
         struct cl_extent cl;
         off_t		offset;
 	u_int		length;
+	void            *l_scmap;
 	int error = 0;
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 79)) | DBG_FUNC_START, kdebug_vnode(vp), (*scmap), 0, push_flag, 0);
@@ -5923,22 +6002,44 @@ sparse_cluster_push(void **scmap, vnode_t vp, off_t EOF, int push_flag, int io_f
 	if (push_flag & PUSH_ALL)
 	        vfs_drt_control(scmap, 1);
 
+	l_scmap = *scmap;
+
 	for (;;) {
 		int retval;
+
 	        if (vfs_drt_get_cluster(scmap, &offset, &length) != KERN_SUCCESS)
 			break;
+
+		if (vm_initiated == TRUE)
+		        lck_mtx_unlock(&wbp->cl_lockw);
 
 		cl.b_addr = (daddr64_t)(offset / PAGE_SIZE_64);
 		cl.e_addr = (daddr64_t)((offset + length) / PAGE_SIZE_64);
 
-		retval = cluster_push_now(vp, &cl, EOF, io_flags & (IO_PASSIVE|IO_CLOSE), callback, callback_arg);
+		retval = cluster_push_now(vp, &cl, EOF, io_flags, callback, callback_arg, vm_initiated);
 		if (error == 0 && retval)
 			error = retval;
 
-		if ( !(push_flag & PUSH_ALL) )
+		if (vm_initiated == TRUE) {
+		        lck_mtx_lock(&wbp->cl_lockw);
+
+			if (*scmap != l_scmap)
+			        break;
+		}
+
+		if (error) {
+			if (vfs_drt_mark_pages(scmap, offset, length, NULL) != KERN_SUCCESS) {
+				panic("Failed to restore dirty state on failure\n");
+			}
+
+			break;
+		}
+
+		if ( !(push_flag & PUSH_ALL)) {
 		        break;
+		}
 	}
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 79)) | DBG_FUNC_END, kdebug_vnode(vp), (*scmap), 0, 0, 0);
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 79)) | DBG_FUNC_END, kdebug_vnode(vp), (*scmap), error, 0, 0);
 
 	return error;
 }
@@ -5947,12 +6048,14 @@ sparse_cluster_push(void **scmap, vnode_t vp, off_t EOF, int push_flag, int io_f
 /*
  * sparse_cluster_add is called with the write behind lock held
  */
-static void
-sparse_cluster_add(void **scmap, vnode_t vp, struct cl_extent *cl, off_t EOF, int (*callback)(buf_t, void *), void *callback_arg)
+static int
+sparse_cluster_add(struct cl_writebehind *wbp, void **scmap, vnode_t vp, struct cl_extent *cl, off_t EOF,
+		   int (*callback)(buf_t, void *), void *callback_arg, boolean_t vm_initiated)
 {
         u_int	new_dirty;
 	u_int	length;
 	off_t	offset;
+	int	error;
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 80)) | DBG_FUNC_START, (*scmap), 0, cl->b_addr, (int)cl->e_addr, 0);
 
@@ -5965,12 +6068,18 @@ sparse_cluster_add(void **scmap, vnode_t vp, struct cl_extent *cl, off_t EOF, in
 		 * only a partial update was done
 		 * push out some pages and try again
 		 */
-	        sparse_cluster_push(scmap, vp, EOF, 0, 0, callback, callback_arg);
+	        error = sparse_cluster_push(wbp, scmap, vp, EOF, 0, 0, callback, callback_arg, vm_initiated);
+
+		if (error) {
+			break;
+		}
 
 		offset += (new_dirty * PAGE_SIZE_64);
 		length -= (new_dirty * PAGE_SIZE);
 	}
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 80)) | DBG_FUNC_END, kdebug_vnode(vp), (*scmap), 0, 0, 0);
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 80)) | DBG_FUNC_END, kdebug_vnode(vp), (*scmap), error, 0, 0);
+
+	return error;
 }
 
 
@@ -6259,7 +6368,7 @@ is_file_clean(vnode_t vp, off_t filesize)
  * single hashtable entry.  Each hashtable entry is aligned to this
  * size within the file.
  */
-#define DRT_BITVECTOR_PAGES		((1024 * 1024) / PAGE_SIZE)
+#define DRT_BITVECTOR_PAGES		((1024 * 256) / PAGE_SIZE)
 
 /*
  * File offset handling.
@@ -6306,6 +6415,7 @@ is_file_clean(vnode_t vp, off_t filesize)
 	} while(0);
 
 
+#if CONFIG_EMBEDDED
 /*
  * Hash table moduli.
  *
@@ -6314,13 +6424,14 @@ is_file_clean(vnode_t vp, off_t filesize)
  * both being prime and fitting within the desired allocation
  * size, these values need to be manually determined.
  *
- * For DRT_BITVECTOR_SIZE = 256, the entry size is 40 bytes.
+ * For DRT_BITVECTOR_SIZE = 64, the entry size is 16 bytes.
  *
- * The small hashtable allocation is 1024 bytes, so the modulus is 23.
- * The large hashtable allocation is 16384 bytes, so the modulus is 401.
+ * The small hashtable allocation is 4096 bytes, so the modulus is 251.
+ * The large hashtable allocation is 32768 bytes, so the modulus is 2039.
  */
-#define DRT_HASH_SMALL_MODULUS	23
-#define DRT_HASH_LARGE_MODULUS	401
+
+#define DRT_HASH_SMALL_MODULUS	251
+#define DRT_HASH_LARGE_MODULUS	2039
 
 /*
  * Physical memory required before the large hash modulus is permitted.
@@ -6330,10 +6441,57 @@ is_file_clean(vnode_t vp, off_t filesize)
  */
 #define DRT_HASH_LARGE_MEMORY_REQUIRED	(1024LL * 1024LL * 1024LL)	/* 1GiB */
 
-#define DRT_SMALL_ALLOCATION	1024	/* 104 bytes spare */
-#define DRT_LARGE_ALLOCATION	16384	/* 344 bytes spare */
+#define DRT_SMALL_ALLOCATION	4096	/* 80 bytes spare */
+#define DRT_LARGE_ALLOCATION	32768	/* 144 bytes spare */
+
+#else
+/*
+ * Hash table moduli.
+ *
+ * Since the hashtable entry's size is dependent on the size of
+ * the bitvector, and since the hashtable size is constrained to
+ * both being prime and fitting within the desired allocation
+ * size, these values need to be manually determined.
+ *
+ * For DRT_BITVECTOR_SIZE = 64, the entry size is 16 bytes.
+ *
+ * The small hashtable allocation is 16384 bytes, so the modulus is 1019.
+ * The large hashtable allocation is 131072 bytes, so the modulus is 8179.
+ */
+
+#define DRT_HASH_SMALL_MODULUS	1019
+#define DRT_HASH_LARGE_MODULUS	8179
+
+/*
+ * Physical memory required before the large hash modulus is permitted.
+ *
+ * On small memory systems, the large hash modulus can lead to phsyical
+ * memory starvation, so we avoid using it there.
+ */
+#define DRT_HASH_LARGE_MEMORY_REQUIRED	(4 * 1024LL * 1024LL * 1024LL)	/* 4GiB */
+
+#define DRT_SMALL_ALLOCATION	16384	/* 80 bytes spare */
+#define DRT_LARGE_ALLOCATION	131072	/* 208 bytes spare */
+
+#endif
 
 /* *** nothing below here has secret dependencies on DRT_BITVECTOR_PAGES *** */
+
+/*
+ * Hashtable entry.
+ */
+struct vfs_drt_hashentry {
+	u_int64_t	dhe_control;
+/*
+* dhe_bitvector was declared as dhe_bitvector[DRT_BITVECTOR_PAGES / 32];
+* DRT_BITVECTOR_PAGES is defined as ((1024 * 256) / PAGE_SIZE)
+* Since PAGE_SIZE is only known at boot time, 
+*	-define MAX_DRT_BITVECTOR_PAGES for smallest supported page size (4k) 
+*	-declare dhe_bitvector array for largest possible length
+*/
+#define MAX_DRT_BITVECTOR_PAGES (1024 * 256)/( 4 * 1024)
+	u_int32_t	dhe_bitvector[MAX_DRT_BITVECTOR_PAGES/32];
+};
 
 /*
  * Hashtable bitvector handling.
@@ -6351,30 +6509,12 @@ is_file_clean(vnode_t vp, off_t filesize)
 	((scm)->scm_hashtable[(i)].dhe_bitvector[(bit) / 32] & (1 << ((bit) % 32)))
     
 #define DRT_BITVECTOR_CLEAR(scm, i) 				\
-	bzero(&(scm)->scm_hashtable[(i)].dhe_bitvector[0], (DRT_BITVECTOR_PAGES / 32) * sizeof(u_int32_t))
+	bzero(&(scm)->scm_hashtable[(i)].dhe_bitvector[0], (MAX_DRT_BITVECTOR_PAGES / 32) * sizeof(u_int32_t))
 
 #define DRT_BITVECTOR_COPY(oscm, oi, scm, i)			\
 	bcopy(&(oscm)->scm_hashtable[(oi)].dhe_bitvector[0],	\
 	    &(scm)->scm_hashtable[(i)].dhe_bitvector[0],	\
-	    (DRT_BITVECTOR_PAGES / 32) * sizeof(u_int32_t))
-
-
- 
-/*
- * Hashtable entry.
- */
-struct vfs_drt_hashentry {
-	u_int64_t	dhe_control;
-/*
-* dhe_bitvector was declared as dhe_bitvector[DRT_BITVECTOR_PAGES / 32];
-* DRT_BITVECTOR_PAGES is defined as ((1024 * 1024) / PAGE_SIZE)
-* Since PAGE_SIZE is only known at boot time, 
-*	-define MAX_DRT_BITVECTOR_PAGES for smallest supported page size (4k) 
-*	-declare dhe_bitvector array for largest possible length
-*/
-#define MAX_DRT_BITVECTOR_PAGES (1024 * 1024)/( 4 * 1024)
-	u_int32_t	dhe_bitvector[MAX_DRT_BITVECTOR_PAGES/32];
-};
+	    (MAX_DRT_BITVECTOR_PAGES / 32) * sizeof(u_int32_t))
 
 /*
  * Dirty Region Tracking structure.
@@ -6754,12 +6894,17 @@ vfs_drt_do_mark_pages(
 		for (i = 0; i < pgcount; i++) {
 			if (dirty) {
 				if (!DRT_HASH_TEST_BIT(cmap, index, pgoff + i)) {
+				        if (ecount >= DRT_BITVECTOR_PAGES)
+					        panic("ecount >= DRT_BITVECTOR_PAGES, cmap = %p, index = %d, bit = %d", cmap, index, pgoff+i);
 					DRT_HASH_SET_BIT(cmap, index, pgoff + i);
 					ecount++;
 					setcount++;
 				}
 			} else {
 				if (DRT_HASH_TEST_BIT(cmap, index, pgoff + i)) {
+				        if (ecount <= 0)
+					        panic("ecount <= 0, cmap = %p, index = %d, bit = %d", cmap, index, pgoff+i);
+				        assert(ecount > 0);
 					DRT_HASH_CLEAR_BIT(cmap, index, pgoff + i);
 					ecount--;
 					setcount++;
@@ -6870,7 +7015,8 @@ vfs_drt_get_cluster(void **cmapp, off_t *offsetp, u_int *lengthp)
 		}
 		if (fs == -1) {
 		        /*  didn't find any bits set */
-		        panic("vfs_drt: entry summary count > 0 but no bits set in map");
+		        panic("vfs_drt: entry summary count > 0 but no bits set in map, cmap = %p, index = %d, count = %lld",
+			      cmap, index, DRT_HASH_GET_COUNT(cmap, index));
 		}
 		for (ls = 0; i < DRT_BITVECTOR_PAGES; i++, ls++) {
 			if (!DRT_HASH_TEST_BIT(cmap, index, i))

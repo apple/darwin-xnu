@@ -586,7 +586,8 @@ machine_trace_thread64(thread_t thread,
                        int nframes,
                        boolean_t user_p,
                        boolean_t trace_fp,
-                       uint32_t * thread_trace_flags)
+                       uint32_t * thread_trace_flags,
+                       uint64_t *sp)
 {
 	uint64_t * tracebuf = (uint64_t *)tracepos;
 	unsigned framesize  = (trace_fp ? 2 : 1) * sizeof(addr64_t);
@@ -607,6 +608,9 @@ machine_trace_thread64(thread_t thread,
 		prev_rip = iss64->isf.rip;
 		stackptr = iss64->rbp;
 		bt_vm_map = thread->task->map;
+        if (sp && user_p) {
+            *sp = iss64->isf.rsp;
+        }
 	}
 	else {
 		stackptr = STACK_IKS(thread->kernel_stack)->k_rbp;

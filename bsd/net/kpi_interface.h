@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -3133,7 +3133,7 @@ typedef errno_t (*ifnet_clone_destroy_func)(ifnet_t interface);
 	@field ifc_destroy The function to destroy an interface.
 */
 struct ifnet_clone_params {
-	const char					*ifc_name;
+	const char			*ifc_name;
 	ifnet_clone_create_func		ifc_create;
 	ifnet_clone_destroy_func	ifc_destroy;
 };
@@ -3555,6 +3555,27 @@ extern errno_t ifnet_get_buffer_status(const ifnet_t interface,
 
  */
 extern void ifnet_normalise_unsent_data(void);
+
+/*************************************************************************/
+/* Low Power Mode                                                        */
+/*************************************************************************/
+
+/*!
+	@function ifnet_set_low_power_mode
+	@param interface The interface.
+	@param on Set the truth value that the interface is in low power mode.
+	@result Returns 0 on success, error number otherwise.
+ */
+extern errno_t ifnet_set_low_power_mode(ifnet_t interface, boolean_t on);
+
+/*!
+	@function ifnet_get_low_power_mode
+	@param interface The interface.
+	@param on On output contains the truth value that the interface
+		is in low power mode.
+	@result Returns 0 on success, error number otherwise.
+ */
+extern errno_t ifnet_get_low_power_mode(ifnet_t interface, boolean_t *on);
 
 /*!
  @function ifnet_touch_lastupdown

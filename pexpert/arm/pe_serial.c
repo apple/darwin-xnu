@@ -11,6 +11,7 @@
 #include <kern/debug.h>
 #include <libkern/OSBase.h>
 #include <mach/mach_time.h>
+#include <machine/atomic.h>
 #include <machine/machine_routines.h>
 #include <pexpert/pexpert.h>
 #include <pexpert/protos.h>
@@ -41,7 +42,6 @@ static struct pe_serial_functions *gPESF;
 static int	uart_initted = 0;	/* 1 if init'ed */
 
 static vm_offset_t	uart_base;
-
 
 /*****************************************************************************/
 
@@ -645,8 +645,7 @@ static void dockchannel_uart_init(void)
 	rDOCKCHANNELS_DEV_DRAIN_CFG(DOCKCHANNEL_UART_CHANNEL) = max_dockchannel_drain_period;
 
 	// Drain timer doesn't get loaded with value from drain period register if fifo
-	// is already full. Drop a character from the fifo.  See chapter 8 of the Cayman
-	// DockChannels specification for more details.
+	// is already full. Drop a character from the fifo. 
 	rDOCKCHANNELS_DOCK_RDATA1(DOCKCHANNEL_UART_CHANNEL);
 }
 
@@ -662,8 +661,91 @@ static struct pe_serial_functions dockchannel_uart_serial_functions =
 
 #endif /* DOCKCHANNEL_UART */
 
-/*****************************************************************************/
+/****************************************************************************/
+#ifdef 	PI3_UART
+vm_offset_t pi3_gpio_base_vaddr;
+vm_offset_t pi3_aux_base_vaddr;
+static int pi3_uart_tr0(void)
+{
+		return (int) BCM2837_GET32(BCM2837_AUX_MU_LSR_REG_V) & 0x20;
+}
 
+static void pi3_uart_td0(int c)
+{
+		BCM2837_PUT32(BCM2837_AUX_MU_IO_REG_V, (uint32_t) c);
+}
+
+static int pi3_uart_rr0(void)
+{	
+		return (int) BCM2837_GET32(BCM2837_AUX_MU_LSR_REG_V) & 0x01;
+}
+
+static int pi3_uart_rd0(void)
+{
+		return (int) BCM2837_GET32(BCM2837_AUX_MU_IO_REG_V) & 0xff;
+}
+
+static void pi3_uart_init(void)
+{
+	// Scratch variable
+	uint32_t i;
+
+	// Reset mini uart registers
+	BCM2837_PUT32(BCM2837_AUX_ENABLES_V, 1);
+	BCM2837_PUT32(BCM2837_AUX_MU_CNTL_REG_V, 0);
+	BCM2837_PUT32(BCM2837_AUX_MU_LCR_REG_V, 3);
+	BCM2837_PUT32(BCM2837_AUX_MU_MCR_REG_V, 0);
+	BCM2837_PUT32(BCM2837_AUX_MU_IER_REG_V, 0);
+	BCM2837_PUT32(BCM2837_AUX_MU_IIR_REG_V, 0xC6);
+	BCM2837_PUT32(BCM2837_AUX_MU_BAUD_REG_V, 270);
+
+        i = BCM2837_FSEL_REG(14);
+	// Configure GPIOs 14 & 15 for alternate function 5
+	i &= ~(BCM2837_FSEL_MASK(14));
+	i |= (BCM2837_FSEL_ALT5 << BCM2837_FSEL_OFFS(14));
+	i &= ~(BCM2837_FSEL_MASK(15));
+	i |= (BCM2837_FSEL_ALT5 << BCM2837_FSEL_OFFS(15));
+
+	BCM2837_PUT32(BCM2837_FSEL_REG(14), i);
+
+	BCM2837_PUT32(BCM2837_GPPUD_V, 0);
+
+	// Barrier before AP spinning for 150 cycles
+	__builtin_arm_isb(ISB_SY);
+
+	for(i = 0; i < 150; i++) {
+		asm volatile("add x0, x0, xzr");
+	}
+
+	__builtin_arm_isb(ISB_SY);
+
+	BCM2837_PUT32(BCM2837_GPPUDCLK0_V,(1 << 14) | (1 << 15));
+
+	__builtin_arm_isb(ISB_SY);
+
+	for(i = 0; i < 150; i++) {
+		asm volatile("add x0, x0, xzr");
+	}
+
+	__builtin_arm_isb(ISB_SY);
+
+	BCM2837_PUT32(BCM2837_GPPUDCLK0_V, 0);
+
+	BCM2837_PUT32(BCM2837_AUX_MU_CNTL_REG_V, 3);
+}
+
+static struct pe_serial_functions pi3_uart_serial_functions =
+{
+	.uart_init = pi3_uart_init,
+	.uart_set_baud_rate = NULL,
+	.tr0 = pi3_uart_tr0,
+	.td0 = pi3_uart_td0,
+	.rr0 = pi3_uart_rr0,
+	.rd0 = pi3_uart_rd0
+};
+
+#endif /* PI3_UART */
+/*****************************************************************************/
 int
 serial_init(void)
 {
@@ -682,12 +764,16 @@ serial_init(void)
 #ifdef DOCKCHANNEL_UART
 	uint32_t	no_dockchannel_uart;
 #endif
+#ifdef PI3_UART
+	uint32_t	is_pi3;
+#endif
 
-	if (uart_initted) {
+	if (uart_initted && gPESF) {
 		gPESF->uart_init();
 		kprintf("reinit serial\n");
 		return 1;
 	}
+
 	dccmode = 0;
 	if (PE_parse_boot_argn("dcc", &dccmode, sizeof (dccmode))) {
 		gPESF = &dcc_serial_functions;
@@ -703,6 +789,19 @@ serial_init(void)
 		return 1;
 	}
 #endif /* SHMCON */
+
+#ifdef PI3_UART
+#pragma unused(prop_value)
+	is_pi3 = 0;
+	if (PE_parse_boot_argn("-pi3", &is_pi3, sizeof(is_pi3))) { // FIXME: remove the not operator after boot args are set up.
+		pi3_gpio_base_vaddr = ml_io_map((vm_offset_t)BCM2837_GPIO_BASE, BCM2837_GPIO_SIZE);
+		pi3_aux_base_vaddr = ml_io_map((vm_offset_t)BCM2837_AUX_BASE, BCM2837_AUX_SIZE);
+		gPESF = &pi3_uart_serial_functions;
+		gPESF->uart_init();
+		uart_initted = 1;
+		return 1;
+	}
+#endif /* PI3_UART */
 
 	soc_base = pe_arm_get_soc_base_phys();
 

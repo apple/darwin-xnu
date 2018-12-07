@@ -458,6 +458,7 @@ struct	in6_ndifreq_64 {
 #define	NDPRF_PROCESSED_ONLINK	0x08000
 #define	NDPRF_PROCESSED_SERVICE	0x10000
 #define	NDPRF_DEFUNCT		0x20000
+#define	NDPRF_CLAT46		0x40000
 #endif
 
 /* protocol constants */
@@ -871,6 +872,8 @@ extern void nd6_alt_node_present(struct ifnet *, struct sockaddr_in6 *,
 extern void nd6_alt_node_absent(struct ifnet *, struct sockaddr_in6 *);
 
 /* nd6_rtr.c */
+extern struct in6_ifaddr *in6_pfx_newpersistaddr(struct nd_prefix *, int,
+    int *, boolean_t);
 extern void nd6_rtr_init(void);
 extern void nd6_rs_input(struct mbuf *, int, int);
 extern void nd6_ra_input(struct mbuf *, int, int);

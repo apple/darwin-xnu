@@ -77,8 +77,6 @@
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#include <mach/branch_predicates.h>
-
 /* Initialization */
 extern void		sched_init(void);
 
@@ -144,12 +142,23 @@ extern void			thread_continue(
 extern void		call_continuation(
 					thread_continue_t	continuation,
 					void				*parameter,
-					wait_result_t		wresult);
+					wait_result_t		wresult,
+					boolean_t           enable_interrupts);
+
+/*
+ * Flags that can be passed to set_sched_pri
+ * to skip side effects
+ */
+typedef enum {
+	SETPRI_DEFAULT  = 0x0,
+	SETPRI_LAZY     = 0x1,  /* Avoid setting AST flags or sending IPIs */
+} set_sched_pri_options_t;
 
 /* Set the current scheduled priority */
-extern void		set_sched_pri(
-					thread_t		thread,
-					int				priority);
+extern void set_sched_pri(
+                          thread_t      thread,
+                          int           priority,
+                          set_sched_pri_options_t options);
 
 /* Set base priority of the specified thread */
 extern void		sched_set_thread_base_priority(
@@ -166,16 +175,22 @@ extern void             sched_thread_mode_demote(thread_t thread,
 extern void             sched_thread_mode_undemote(thread_t thread,
                                                    uint32_t reason);
 
+extern void sched_thread_promote_to_pri(thread_t thread, int priority, uintptr_t trace_obj);
+extern void sched_thread_update_promotion_to_pri(thread_t thread, int priority, uintptr_t trace_obj);
+extern void sched_thread_unpromote(thread_t thread, uintptr_t trace_obj);
+
+extern void assert_promotions_invariant(thread_t thread);
+
+extern void sched_thread_promote_reason(thread_t thread, uint32_t reason, uintptr_t trace_obj);
+extern void sched_thread_unpromote_reason(thread_t thread, uint32_t reason, uintptr_t trace_obj);
+
 /* Re-evaluate base priority of thread (thread locked) */
 void thread_recompute_priority(thread_t thread);
 
-/* Re-evaluate base priority of thread (thread unlocked) */
-void thread_recompute_qos(thread_t thread);
-
-/* Reset scheduled priority of thread */
-extern void		thread_recompute_sched_pri(
-					thread_t		thread,
-					boolean_t		override_depress);
+/* Re-evaluate scheduled priority of thread (thread locked) */
+extern void thread_recompute_sched_pri(
+                                       thread_t thread,
+                                       set_sched_pri_options_t options);
 
 /* Periodic scheduler activity */
 extern void		sched_init_thread(void (*)(void));
@@ -435,12 +450,6 @@ extern void	active_rt_threads(
 extern perfcontrol_class_t thread_get_perfcontrol_class(
 					thread_t	thread);
 
-#define PSET_LOAD_NUMERATOR_SHIFT   16
-#define PSET_LOAD_FRACTIONAL_SHIFT   4
-
-extern int sched_get_pset_load_average(processor_set_t pset);
-extern void sched_update_pset_load_average(processor_set_t pset);
-
 /* Generic routine for Non-AMP schedulers to calculate parallelism */
 extern uint32_t sched_qos_max_parallelism(int qos, uint64_t options);
 
@@ -451,9 +460,7 @@ __BEGIN_DECLS
 #ifdef	XNU_KERNEL_PRIVATE
 
 /* Toggles a global override to turn off CPU Throttling */
-#define CPU_THROTTLE_DISABLE	0
-#define CPU_THROTTLE_ENABLE	1
-extern void	sys_override_cpu_throttle(int flag);
+extern void	sys_override_cpu_throttle(boolean_t enable_override);
 
 /*
  ****************** Only exported until BSD stops using ********************
@@ -479,7 +486,11 @@ extern char sched_string[SCHED_STRING_MAX_LENGTH];
 extern thread_t port_name_to_thread_for_ulock(mach_port_name_t	thread_name);
 
 /* Attempt to context switch to a specific runnable thread */
-extern wait_result_t thread_handoff(thread_t thread);
+extern wait_result_t thread_handoff_deallocate(thread_t thread);
+
+__attribute__((nonnull(1, 2)))
+extern void thread_handoff_parameter(thread_t thread,
+		thread_continue_t continuation, void *parameter) __dead2;
 
 extern struct waitq	*assert_wait_queue(event_t event);
 
@@ -498,8 +509,13 @@ extern void		thread_set_pending_block_hint(
 #define QOS_PARALLELISM_COUNT_LOGICAL   0x1
 #define QOS_PARALLELISM_REALTIME        0x2
 extern uint32_t qos_max_parallelism(int qos, uint64_t options);
-
 #endif /* KERNEL_PRIVATE */
+
+#if XNU_KERNEL_PRIVATE
+extern void		thread_yield_with_continuation(
+						thread_continue_t	continuation,
+						void				*parameter) __dead2;
+#endif
 
 /* Context switch */
 extern wait_result_t	thread_block(
@@ -582,8 +598,8 @@ extern boolean_t preemption_enabled(void);
  * For DEV & REL kernels, use a static dispatch table instead of 
  * using the indirect function table.
  */
-extern const struct sched_dispatch_table sched_multiq_dispatch;
-#define SCHED(f) (sched_multiq_dispatch.f)
+extern const struct sched_dispatch_table sched_dualq_dispatch;
+#define SCHED(f) (sched_dualq_dispatch.f)
 
 #endif /* DEBUG */
 

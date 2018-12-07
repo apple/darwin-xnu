@@ -62,6 +62,8 @@ void uuid_generate(uuid_t out);
 void uuid_generate_random(uuid_t out);
 void uuid_generate_time(uuid_t out);
 
+void uuid_generate_early_random(uuid_t out);
+
 int uuid_is_null(const uuid_t uu);
 
 int uuid_parse(const uuid_string_t in, uuid_t uu);

@@ -40,7 +40,6 @@ typedef uintptr_t uptr;
 /*
  * KASAN features and config
  */
-#define KASAN_DEBUG   0
 #define FAKESTACK     1
 /* KASAN_KALLOC defined in kasan.h */
 /* KASAN_ZALLOC defined in kasan.h */
@@ -57,9 +56,13 @@ typedef uintptr_t uptr;
 /* Works out at about 25% of 512 MiB and 15% of 3GiB system */
 # define STOLEN_MEM_PERCENT  13UL
 # define STOLEN_MEM_BYTES    MiB(62)
+# define HW_PAGE_SIZE        (ARM_PGBYTES)
+# define HW_PAGE_MASK        (ARM_PGMASK)
 #else
 # define STOLEN_MEM_PERCENT  25UL
 # define STOLEN_MEM_BYTES    0
+# define HW_PAGE_SIZE        (PAGE_SIZE)
+# define HW_PAGE_MASK        (PAGE_MASK)
 #endif
 
 /* boot-args */
@@ -81,7 +84,7 @@ typedef uintptr_t uptr;
 #define SHADOW_FOR_ADDRESS(x) (uint8_t *)(((x) >> 3) + KASAN_SHIFT)
 
 #if KASAN_DEBUG
-# define NOINLINE __attribute__ ((noinline))
+# define NOINLINE OS_NOINLINE
 #else
 # define NOINLINE
 #endif
@@ -191,7 +194,7 @@ struct asan_global {
 #endif
 
 typedef int jmp_buf[_JBLEN];
-void _longjmp(jmp_buf env, int val);
-int _setjmp(jmp_buf env);
+void _longjmp(jmp_buf env, int val) OS_NORETURN;
+int _setjmp(jmp_buf env) __attribute__((returns_twice));
 
 #endif /* _KASAN_INTERNAL_H_ */

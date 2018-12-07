@@ -27,6 +27,7 @@
  */
 
 #include "vm_compressor_backing_store.h"
+#include <vm/vm_pageout.h>
 #include <vm/vm_protos.h>
 
 #include <IOKit/IOHibernatePrivate.h>
@@ -37,12 +38,12 @@ boolean_t	compressor_store_stop_compaction = FALSE;
 boolean_t	vm_swapfile_create_needed = FALSE;
 boolean_t	vm_swapfile_gc_needed = FALSE;
 
-int		swapper_throttle = -1;
-boolean_t	swapper_throttle_inited = FALSE;
+int		vm_swapper_throttle = -1;
 uint64_t	vm_swapout_thread_id;
 
 uint64_t	vm_swap_put_failures = 0;
 uint64_t	vm_swap_get_failures = 0;
+int		vm_num_swap_files_config = 0;
 int		vm_num_swap_files = 0;
 int		vm_num_pinned_swap_files = 0;
 int		vm_swapout_thread_processed_segments = 0;
@@ -110,18 +111,21 @@ static void vm_swap_do_delayed_trim(struct swapfile *);
 static void vm_swap_wait_on_trim_handling_in_progress(void);
 
 
+boolean_t vm_swap_force_defrag = FALSE, vm_swap_force_reclaim = FALSE;
+
 #if CONFIG_EMBEDDED
-/*
- * Only 1 swap file currently allowed.
- */
-#define VM_MAX_SWAP_FILE_NUM		1
+
+#if DEVELOPMENT || DEBUG
+#define VM_MAX_SWAP_FILE_NUM		100
+#else /* DEVELOPMENT || DEBUG */
+#define VM_MAX_SWAP_FILE_NUM		5
+#endif /* DEVELOPMENT || DEBUG */
+
 #define	VM_SWAPFILE_DELAYED_TRIM_MAX	4
 
-#define	VM_SWAP_SHOULD_DEFRAGMENT()	(c_swappedout_sparse_count > (vm_swapfile_total_segs_used / 16) ? 1 : 0)
-#define VM_SWAP_SHOULD_RECLAIM()	FALSE
-#define VM_SWAP_SHOULD_ABORT_RECLAIM()	FALSE
+#define	VM_SWAP_SHOULD_DEFRAGMENT()	(((vm_swap_force_defrag == TRUE) || (c_swappedout_sparse_count > (vm_swapfile_total_segs_used / 16))) ? 1 : 0)
 #define VM_SWAP_SHOULD_PIN(_size)	FALSE
-#define VM_SWAP_SHOULD_CREATE(cur_ts)	((vm_num_swap_files < VM_MAX_SWAP_FILE_NUM) && ((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) < (unsigned int)VM_SWAPFILE_HIWATER_SEGS) && \
+#define VM_SWAP_SHOULD_CREATE(cur_ts)	((vm_num_swap_files < vm_num_swap_files_config) && ((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) < (unsigned int)VM_SWAPFILE_HIWATER_SEGS) && \
 					 ((cur_ts - vm_swapfile_last_failed_to_create_ts) > VM_SWAPFILE_DELAYED_CREATE) ? 1 : 0)
 #define VM_SWAP_SHOULD_TRIM(swf)	((swf->swp_delayed_trim_count >= VM_SWAPFILE_DELAYED_TRIM_MAX) ? 1 : 0)
 
@@ -130,19 +134,19 @@ static void vm_swap_wait_on_trim_handling_in_progress(void);
 #define VM_MAX_SWAP_FILE_NUM		100
 #define	VM_SWAPFILE_DELAYED_TRIM_MAX	128
 
-#define	VM_SWAP_SHOULD_DEFRAGMENT()	(c_swappedout_sparse_count > (vm_swapfile_total_segs_used / 4) ? 1 : 0)
-#define VM_SWAP_SHOULD_RECLAIM()	(((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) >= SWAPFILE_RECLAIM_THRESHOLD_SEGS) ? 1 : 0)
-#define VM_SWAP_SHOULD_ABORT_RECLAIM()	(((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) <= SWAPFILE_RECLAIM_MINIMUM_SEGS) ? 1 : 0)
+#define	VM_SWAP_SHOULD_DEFRAGMENT()	(((vm_swap_force_defrag == TRUE) || (c_swappedout_sparse_count > (vm_swapfile_total_segs_used / 4))) ? 1 : 0)
 #define VM_SWAP_SHOULD_PIN(_size)	(vm_swappin_avail > 0 && vm_swappin_avail >= (int64_t)(_size))
-#define VM_SWAP_SHOULD_CREATE(cur_ts)	((vm_num_swap_files < VM_MAX_SWAP_FILE_NUM) && ((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) < (unsigned int)VM_SWAPFILE_HIWATER_SEGS) && \
+#define VM_SWAP_SHOULD_CREATE(cur_ts)	((vm_num_swap_files < vm_num_swap_files_config) && ((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) < (unsigned int)VM_SWAPFILE_HIWATER_SEGS) && \
 					 ((cur_ts - vm_swapfile_last_failed_to_create_ts) > VM_SWAPFILE_DELAYED_CREATE) ? 1 : 0)
 #define VM_SWAP_SHOULD_TRIM(swf)	((swf->swp_delayed_trim_count >= VM_SWAPFILE_DELAYED_TRIM_MAX) ? 1 : 0)
 
 #endif /* CONFIG_EMBEDDED */
 
+#define VM_SWAP_SHOULD_RECLAIM()	(((vm_swap_force_reclaim == TRUE) || ((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) >= SWAPFILE_RECLAIM_THRESHOLD_SEGS)) ? 1 : 0)
+#define VM_SWAP_SHOULD_ABORT_RECLAIM()	(((vm_swap_force_reclaim == FALSE) && ((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) <= SWAPFILE_RECLAIM_MINIMUM_SEGS)) ? 1 : 0)
 #define	VM_SWAPFILE_DELAYED_CREATE	15
 
-#define VM_SWAP_BUSY()	((c_swapout_count && (swapper_throttle == THROTTLE_LEVEL_COMPRESSOR_TIER1 || swapper_throttle == THROTTLE_LEVEL_COMPRESSOR_TIER0)) ? 1 : 0)
+#define VM_SWAP_BUSY()	((c_swapout_count && (vm_swapper_throttle == THROTTLE_LEVEL_COMPRESSOR_TIER0)) ? 1 : 0)
 
 
 #if CHECKSUM_THE_SWAP
@@ -197,152 +201,149 @@ vm_swapfile_for_handle(uint64_t f_offset)
 
 #if ENCRYPTED_SWAP
 
-#include <libkern/crypto/aes.h>
-extern u_int32_t random(void);	/* from <libkern/libkern.h> */
+#include <libkern/crypto/aesxts.h>
 
-#define SWAP_CRYPT_AES_KEY_SIZE 128     /* XXX 192 and 256 don't work ! */
+extern int cc_rand_generate(void *, size_t);     /* from libkern/cyrpto/rand.h> */
 
-boolean_t		swap_crypt_ctx_initialized;
-void 			swap_crypt_ctx_initialize(void);
+boolean_t	swap_crypt_initialized;
+void 		swap_crypt_initialize(void);
 
-aes_ctx			swap_crypt_ctx;
-const unsigned char     swap_crypt_null_iv[AES_BLOCK_SIZE] = {0xa, };
-uint32_t                swap_crypt_key[8]; /* big enough for a 256 key */
+symmetric_xts   xts_modectx;
+uint32_t        swap_crypt_key1[8];   /* big enough for a 256 bit random key */
+uint32_t        swap_crypt_key2[8];   /* big enough for a 256 bit random key */
 
-unsigned long 		vm_page_encrypt_counter;
-unsigned long 		vm_page_decrypt_counter;
+#if DEVELOPMENT || DEBUG
+boolean_t	swap_crypt_xts_tested = FALSE;
+unsigned char   swap_crypt_test_page_ref[4096] __attribute__((aligned(4096)));
+unsigned char   swap_crypt_test_page_encrypt[4096] __attribute__((aligned(4096)));
+unsigned char   swap_crypt_test_page_decrypt[4096] __attribute__((aligned(4096)));
+#endif /* DEVELOPMENT || DEBUG */
+
+unsigned long 	vm_page_encrypt_counter;
+unsigned long 	vm_page_decrypt_counter;
 
 
-#if DEBUG
-boolean_t		swap_crypt_ctx_tested = FALSE;
-unsigned char swap_crypt_test_page_ref[4096] __attribute__((aligned(4096)));
-unsigned char swap_crypt_test_page_encrypt[4096] __attribute__((aligned(4096)));
-unsigned char swap_crypt_test_page_decrypt[4096] __attribute__((aligned(4096)));
-#endif /* DEBUG */
-
-/*
- * Initialize the encryption context: key and key size.
- */
-void swap_crypt_ctx_initialize(void); /* forward */
 void
-swap_crypt_ctx_initialize(void)
+swap_crypt_initialize(void)
 {
-	unsigned int	i;
+        uint8_t  *enckey1, *enckey2;
+	int      keylen1, keylen2;
+	int      error;
 
-	/*
-	 * No need for locking to protect swap_crypt_ctx_initialized
-	 * because the first use of encryption will come from the
-	 * pageout thread (we won't pagein before there's been a pageout)
-	 * and there's only one pageout thread.
-	 */
-	if (swap_crypt_ctx_initialized == FALSE) {
-		for (i = 0;
-		     i < (sizeof (swap_crypt_key) /
-			  sizeof (swap_crypt_key[0]));
-		     i++) {
-			swap_crypt_key[i] = random();
-		}
-		aes_encrypt_key((const unsigned char *) swap_crypt_key,
-				SWAP_CRYPT_AES_KEY_SIZE,
-				&swap_crypt_ctx.encrypt);
-		aes_decrypt_key((const unsigned char *) swap_crypt_key,
-				SWAP_CRYPT_AES_KEY_SIZE,
-				&swap_crypt_ctx.decrypt);
-		swap_crypt_ctx_initialized = TRUE;
-	}
+	assert(swap_crypt_initialized == FALSE);
 
-#if DEBUG
+	keylen1 = sizeof(swap_crypt_key1);
+	enckey1 = (uint8_t *)&swap_crypt_key1;
+	keylen2 = sizeof(swap_crypt_key2);
+	enckey2 = (uint8_t *)&swap_crypt_key2;
+
+	error = cc_rand_generate((void *)enckey1, keylen1);
+	assert(!error);
+
+	error = cc_rand_generate((void *)enckey2, keylen2);
+	assert(!error);
+
+	error = xts_start(0, NULL, enckey1, keylen1, enckey2, keylen2, 0, 0, &xts_modectx);
+	assert(!error);
+
+	swap_crypt_initialized = TRUE;
+
+#if DEVELOPMENT || DEBUG
+        uint8_t *encptr;
+        uint8_t *decptr;
+        uint8_t *refptr;
+	uint8_t *iv;
+	uint64_t ivnum[2];
+	int size = 0;
+	int i    = 0;
+	int rc   = 0;
+
+	assert(swap_crypt_xts_tested == FALSE);
+
 	/*
 	 * Validate the encryption algorithms.
+	 *
+	 * First initialize the test data.
 	 */
-	if (swap_crypt_ctx_tested == FALSE) {
-		/* initialize */
-		for (i = 0; i < 4096; i++) {
-			swap_crypt_test_page_ref[i] = (char) i;
-		}
-		/* encrypt */
-		aes_encrypt_cbc(swap_crypt_test_page_ref,
-				swap_crypt_null_iv,
-				PAGE_SIZE / AES_BLOCK_SIZE,
-				swap_crypt_test_page_encrypt,
-				&swap_crypt_ctx.encrypt);
-		/* decrypt */
-		aes_decrypt_cbc(swap_crypt_test_page_encrypt,
-				swap_crypt_null_iv,
-				PAGE_SIZE / AES_BLOCK_SIZE,
-				swap_crypt_test_page_decrypt,
-				&swap_crypt_ctx.decrypt);
-		/* compare result with original */
-		for (i = 0; i < 4096; i ++) {
-			if (swap_crypt_test_page_decrypt[i] !=
-			    swap_crypt_test_page_ref[i]) {
-				panic("encryption test failed");
-			}
-		}
-
-		/* encrypt again */
-		aes_encrypt_cbc(swap_crypt_test_page_decrypt,
-				swap_crypt_null_iv,
-				PAGE_SIZE / AES_BLOCK_SIZE,
-				swap_crypt_test_page_decrypt,
-				&swap_crypt_ctx.encrypt);
-		/* decrypt in place */
-		aes_decrypt_cbc(swap_crypt_test_page_decrypt,
-				swap_crypt_null_iv,
-				PAGE_SIZE / AES_BLOCK_SIZE,
-				swap_crypt_test_page_decrypt,
-				&swap_crypt_ctx.decrypt);
-		for (i = 0; i < 4096; i ++) {
-			if (swap_crypt_test_page_decrypt[i] !=
-			    swap_crypt_test_page_ref[i]) {
-				panic("in place encryption test failed");
-			}
-		}
-
-		swap_crypt_ctx_tested = TRUE;
+	for (i = 0; i < 4096; i++) {
+	        swap_crypt_test_page_ref[i] = (char) i;
 	}
-#endif /* DEBUG */
+	ivnum[0] = (uint64_t)0xaa;
+	ivnum[1] = 0;
+	iv = (uint8_t *)ivnum;
+	
+	refptr = (uint8_t *)swap_crypt_test_page_ref;
+	encptr = (uint8_t *)swap_crypt_test_page_encrypt;
+	decptr = (uint8_t *)swap_crypt_test_page_decrypt;
+	size = 4096;
+
+	/* encrypt */
+	rc = xts_encrypt(refptr, size, encptr, iv, &xts_modectx);
+	assert(!rc);
+
+	/* compare result with original - should NOT match */
+	for (i = 0; i < 4096; i ++) {
+	        if (swap_crypt_test_page_encrypt[i] !=
+		    swap_crypt_test_page_ref[i]) {
+		        break;
+		}
+	}
+	assert(i != 4096);
+
+	/* decrypt */
+	rc = xts_decrypt(encptr, size, decptr, iv, &xts_modectx);
+	assert(!rc);
+
+	/* compare result with original */
+	for (i = 0; i < 4096; i ++) {
+	        if (swap_crypt_test_page_decrypt[i] !=
+		    swap_crypt_test_page_ref[i]) {
+		        panic("encryption test failed");
+		}
+	}
+	/* encrypt in place */
+	rc = xts_encrypt(decptr, size, decptr, iv, &xts_modectx);
+	assert(!rc);
+
+	/* decrypt in place */
+	rc = xts_decrypt(decptr, size, decptr, iv, &xts_modectx);
+	assert(!rc);
+
+	for (i = 0; i < 4096; i ++) {
+	        if (swap_crypt_test_page_decrypt[i] !=
+		    swap_crypt_test_page_ref[i]) {
+		        panic("in place encryption test failed");
+		}
+	}
+	swap_crypt_xts_tested = TRUE;
+#endif /* DEVELOPMENT || DEBUG */
 }
 
 
 void
 vm_swap_encrypt(c_segment_t c_seg)
 {
-	vm_offset_t	kernel_vaddr = 0;
-	uint64_t	size = 0;
+        uint8_t *ptr;
+	uint8_t *iv;
+	uint64_t ivnum[2];
+	int size = 0;
+	int rc   = 0;
 
-	union {
-		unsigned char	aes_iv[AES_BLOCK_SIZE];
-		void		*c_seg;
-	} encrypt_iv;
-	
-	assert(swap_crypt_ctx_initialized);
-	
+	if (swap_crypt_initialized == FALSE)
+		swap_crypt_initialize();
+
 #if DEVELOPMENT || DEBUG
 	C_SEG_MAKE_WRITEABLE(c_seg);
 #endif
-	bzero(&encrypt_iv.aes_iv[0], sizeof (encrypt_iv.aes_iv));
-
-	encrypt_iv.c_seg = (void*)c_seg;
-
-	/* encrypt the "initial vector" */
-	aes_encrypt_cbc((const unsigned char *) &encrypt_iv.aes_iv[0],
-			swap_crypt_null_iv,
-			1,
-			&encrypt_iv.aes_iv[0],
-			&swap_crypt_ctx.encrypt);
-
-	kernel_vaddr = (vm_offset_t) c_seg->c_store.c_buffer;
+	ptr = (uint8_t *)c_seg->c_store.c_buffer;
 	size = round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset));
 
-	/*
-	 * Encrypt the c_segment.
-	 */
-	aes_encrypt_cbc((const unsigned char *) kernel_vaddr,
-			&encrypt_iv.aes_iv[0],
-			(unsigned int)(size / AES_BLOCK_SIZE),
-			(unsigned char *) kernel_vaddr,
-			&swap_crypt_ctx.encrypt);
+	ivnum[0] = (uint64_t)c_seg;
+	ivnum[1] = 0;
+	iv = (uint8_t *)ivnum;
+
+	rc = xts_encrypt(ptr, size, ptr, iv, &xts_modectx);
+	assert(!rc);
 
 	vm_page_encrypt_counter += (size/PAGE_SIZE_64);
 
@@ -354,48 +355,26 @@ vm_swap_encrypt(c_segment_t c_seg)
 void
 vm_swap_decrypt(c_segment_t c_seg)
 {
+        uint8_t *ptr;
+	uint8_t *iv;
+	uint64_t ivnum[2];
+	int size = 0;
+	int rc   = 0;
 
-	vm_offset_t	kernel_vaddr = 0;
-	uint64_t	size = 0;
-
-	union {
-		unsigned char	aes_iv[AES_BLOCK_SIZE];
-		void		*c_seg;
-	} decrypt_iv;
-	
-	
-	assert(swap_crypt_ctx_initialized);
+	assert(swap_crypt_initialized);
 
 #if DEVELOPMENT || DEBUG
 	C_SEG_MAKE_WRITEABLE(c_seg);
 #endif
-	/*
-	 * Prepare an "initial vector" for the decryption.
-	 * It has to be the same as the "initial vector" we
-	 * used to encrypt that page.
-	 */
-	bzero(&decrypt_iv.aes_iv[0], sizeof (decrypt_iv.aes_iv));
-
-	decrypt_iv.c_seg = (void*)c_seg;
-
-	/* encrypt the "initial vector" */
-	aes_encrypt_cbc((const unsigned char *) &decrypt_iv.aes_iv[0],
-			swap_crypt_null_iv,
-			1,
-			&decrypt_iv.aes_iv[0],
-			&swap_crypt_ctx.encrypt);
-	
-	kernel_vaddr = (vm_offset_t) c_seg->c_store.c_buffer;
+	ptr = (uint8_t *)c_seg->c_store.c_buffer;
 	size = round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset));
 
-	/*
-	 * Decrypt the c_segment.
-	 */
-	aes_decrypt_cbc((const unsigned char *) kernel_vaddr,
-			&decrypt_iv.aes_iv[0],
-			(unsigned int) (size / AES_BLOCK_SIZE),
-			(unsigned char *) kernel_vaddr,
-			&swap_crypt_ctx.decrypt);
+	ivnum[0] = (uint64_t)c_seg;
+	ivnum[1] = 0;
+	iv = (uint8_t *)ivnum;
+
+	rc = xts_decrypt(ptr, size, ptr, iv, &xts_modectx);
+	assert(!rc);
 
 	vm_page_decrypt_counter += (size/PAGE_SIZE_64);
 
@@ -428,6 +407,7 @@ vm_compressor_swap_init()
 					 BASEPRI_VM, &thread) != KERN_SUCCESS) {
 		panic("vm_swapout_thread: create failed");
 	}
+	thread_set_thread_name(thread, "VM_swapout");
 	vm_swapout_thread_id = thread->thread_id;
 
 	thread_deallocate(thread);
@@ -437,24 +417,20 @@ vm_compressor_swap_init()
 		panic("vm_swapfile_create_thread: create failed");
 	}
 
+	thread_set_thread_name(thread, "VM_swapfile_create");
 	thread_deallocate(thread);
 
 	if (kernel_thread_start_priority((thread_continue_t)vm_swapfile_gc_thread, NULL,
 				 BASEPRI_VM, &thread) != KERN_SUCCESS) {
 		panic("vm_swapfile_gc_thread: create failed");
 	}
+	thread_set_thread_name(thread, "VM_swapfile_gc");
 	thread_deallocate(thread);
 
 	proc_set_thread_policy_with_tid(kernel_task, thread->thread_id,
 	                                TASK_POLICY_INTERNAL, TASK_POLICY_IO, THROTTLE_LEVEL_COMPRESSOR_TIER2);
 	proc_set_thread_policy_with_tid(kernel_task, thread->thread_id,
 	                                TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
-
-#if ENCRYPTED_SWAP
-	if (swap_crypt_ctx_initialized == FALSE) {
-		swap_crypt_ctx_initialize();
-	}
-#endif /* ENCRYPTED_SWAP */
 
 #if CONFIG_EMBEDDED
 	/*
@@ -465,6 +441,9 @@ vm_compressor_swap_init()
 	 */
 	c_overage_swapped_limit = 16;
 #endif
+
+	vm_num_swap_files_config = VM_MAX_SWAP_FILE_NUM;
+
 	printf("VM Swap Subsystem is ON\n");
 }
 
@@ -521,9 +500,23 @@ vm_compaction_swapper_do_init(void)
 		if (vp) {
 			
 			if (vnode_pager_isSSD(vp) == FALSE) {
-				vm_compressor_minorcompact_threshold_divisor = 18;
-				vm_compressor_majorcompact_threshold_divisor = 22;
-				vm_compressor_unthrottle_threshold_divisor = 32;
+			        /*
+				 * swap files live on an HDD, so let's make sure to start swapping
+				 * much earlier since we're not worried about SSD write-wear and 
+				 * we have so little write bandwidth to work with
+				 * these values were derived expermentially by running the performance
+				 * teams stock test for evaluating HDD performance against various 
+				 * combinations and looking and comparing overall results.
+				 * Note that the > relationship between these 4 values must be maintained
+				 */
+			        if (vm_compressor_minorcompact_threshold_divisor_overridden == 0)
+				        vm_compressor_minorcompact_threshold_divisor = 15;
+			        if (vm_compressor_majorcompact_threshold_divisor_overridden == 0)
+				        vm_compressor_majorcompact_threshold_divisor = 18;
+			        if (vm_compressor_unthrottle_threshold_divisor_overridden == 0)
+				        vm_compressor_unthrottle_threshold_divisor = 24;
+				if (vm_compressor_catchup_threshold_divisor_overridden == 0)
+				        vm_compressor_catchup_threshold_divisor = 30;
 			}
 #if !CONFIG_EMBEDDED
 			vnode_setswapmount(vp);
@@ -542,15 +535,25 @@ vm_compaction_swapper_do_init(void)
 }
 
 
-
 void
-vm_swap_consider_defragmenting()
+vm_swap_consider_defragmenting(int flags)
 {
-	if (compressor_store_stop_compaction == FALSE && !VM_SWAP_BUSY() &&
-	    (VM_SWAP_SHOULD_DEFRAGMENT() || VM_SWAP_SHOULD_RECLAIM())) {
+	boolean_t force_defrag = (flags & VM_SWAP_FLAGS_FORCE_DEFRAG);
+	boolean_t force_reclaim = (flags & VM_SWAP_FLAGS_FORCE_RECLAIM);
 
-		if (!vm_swapfile_gc_thread_running) {
+	if (compressor_store_stop_compaction == FALSE && !VM_SWAP_BUSY() &&
+	    (force_defrag || force_reclaim || VM_SWAP_SHOULD_DEFRAGMENT() || VM_SWAP_SHOULD_RECLAIM())) {
+
+		if (!vm_swapfile_gc_thread_running || force_defrag || force_reclaim) {
 			lck_mtx_lock(&vm_swap_data_lock);
+
+			if (force_defrag) {
+				vm_swap_force_defrag = TRUE;
+			}
+
+			if (force_reclaim) {
+				vm_swap_force_reclaim = TRUE;
+			}
 
 			if (!vm_swapfile_gc_thread_running)
 				thread_wakeup((event_t) &vm_swapfile_gc_needed);
@@ -783,6 +786,9 @@ vm_swapfile_gc_thread(void)
 		if (need_defragment == FALSE && need_reclaim == FALSE)
 			break;
 
+		vm_swap_force_defrag = FALSE;
+		vm_swap_force_reclaim = FALSE;
+
 		lck_mtx_unlock(&vm_swap_data_lock);
 
 		if (need_defragment == TRUE)
@@ -806,98 +812,217 @@ vm_swapfile_gc_thread(void)
 
 
 
-int	  swapper_entered_T0 = 0;
-int	  swapper_entered_T1 = 0;
-int	  swapper_entered_T2 = 0;
+#define   VM_SWAPOUT_LIMIT_T2P  4
+#define   VM_SWAPOUT_LIMIT_T1P  4
+#define   VM_SWAPOUT_LIMIT_T0P  6
+#define   VM_SWAPOUT_LIMIT_T0   8
+#define   VM_SWAPOUT_LIMIT_MAX  8
+
+#define   VM_SWAPOUT_START      0
+#define   VM_SWAPOUT_T2_PASSIVE 1
+#define   VM_SWAPOUT_T1_PASSIVE 2
+#define   VM_SWAPOUT_T0_PASSIVE 3
+#define   VM_SWAPOUT_T0         4
+
+int vm_swapout_state = VM_SWAPOUT_START;
+int vm_swapout_limit = 1;
+
+int vm_swapper_entered_T0  = 0;
+int vm_swapper_entered_T0P = 0;
+int vm_swapper_entered_T1P = 0;
+int vm_swapper_entered_T2P = 0;
+
 
 static void
 vm_swapout_thread_throttle_adjust(void)
 {
-	int swapper_throttle_new;
 
-	if (swapper_throttle_inited == FALSE) {
-		/*
-		 * force this thread to be set to the correct
-		 * throttling tier
-		 */
-		swapper_throttle_new = THROTTLE_LEVEL_COMPRESSOR_TIER2;
-		swapper_throttle = THROTTLE_LEVEL_COMPRESSOR_TIER1;
-		swapper_throttle_inited = TRUE;
-		swapper_entered_T2++;
-		goto done;
-	}
-	swapper_throttle_new = swapper_throttle;
+	switch(vm_swapout_state) {
 
+	case VM_SWAPOUT_START:
+	  
+		vm_swapper_throttle = THROTTLE_LEVEL_COMPRESSOR_TIER2;
+		vm_swapper_entered_T2P++;
 
-	switch(swapper_throttle) {
-
-	case THROTTLE_LEVEL_COMPRESSOR_TIER2:
-
-		if (SWAPPER_NEEDS_TO_UNTHROTTLE() || swapout_target_age || hibernate_flushing == TRUE) {
-			swapper_throttle_new = THROTTLE_LEVEL_COMPRESSOR_TIER1;
-			swapper_entered_T1++;
-			break;
-		}
-		break;
-
-	case THROTTLE_LEVEL_COMPRESSOR_TIER1:
-
-		if (VM_PAGEOUT_SCAN_NEEDS_TO_THROTTLE()) {
-			swapper_throttle_new = THROTTLE_LEVEL_COMPRESSOR_TIER0;
-			swapper_entered_T0++;
-			break;
-		}
-		if (COMPRESSOR_NEEDS_TO_SWAP() == 0 && swapout_target_age == 0 && hibernate_flushing == FALSE) {
-			swapper_throttle_new = THROTTLE_LEVEL_COMPRESSOR_TIER2;
-			swapper_entered_T2++;
-			break;
-		}
-		break;
-
-	case THROTTLE_LEVEL_COMPRESSOR_TIER0:
-
-		if (COMPRESSOR_NEEDS_TO_SWAP() == 0) {
-			swapper_throttle_new = THROTTLE_LEVEL_COMPRESSOR_TIER2;
-			swapper_entered_T2++;
-			break;
-		}
-		if (SWAPPER_NEEDS_TO_UNTHROTTLE() == 0) {
-			swapper_throttle_new = THROTTLE_LEVEL_COMPRESSOR_TIER1;
-			swapper_entered_T1++;
-			break;
-		}
-		break;
-	}
-done:
-	if (swapper_throttle != swapper_throttle_new) {
 		proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
-		                                TASK_POLICY_INTERNAL, TASK_POLICY_IO, swapper_throttle_new);
+		                                TASK_POLICY_INTERNAL, TASK_POLICY_IO, vm_swapper_throttle);
 		proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
-		                                TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
+						TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
+		vm_swapout_limit = VM_SWAPOUT_LIMIT_T2P;
+		vm_swapout_state = VM_SWAPOUT_T2_PASSIVE;
 
-		swapper_throttle = swapper_throttle_new;
+		break;
+
+	case VM_SWAPOUT_T2_PASSIVE:
+
+		if (SWAPPER_NEEDS_TO_UNTHROTTLE()) {
+			vm_swapper_throttle = THROTTLE_LEVEL_COMPRESSOR_TIER0;
+			vm_swapper_entered_T0P++;
+
+			proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+							TASK_POLICY_INTERNAL, TASK_POLICY_IO, vm_swapper_throttle);
+			proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+							TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
+			vm_swapout_limit = VM_SWAPOUT_LIMIT_T0P;
+			vm_swapout_state = VM_SWAPOUT_T0_PASSIVE;
+
+			break;
+		}
+		if (swapout_target_age || hibernate_flushing == TRUE) {
+			vm_swapper_throttle = THROTTLE_LEVEL_COMPRESSOR_TIER1;
+			vm_swapper_entered_T1P++;
+
+			proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+							TASK_POLICY_INTERNAL, TASK_POLICY_IO, vm_swapper_throttle);
+			proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+							TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
+			vm_swapout_limit = VM_SWAPOUT_LIMIT_T1P;
+			vm_swapout_state = VM_SWAPOUT_T1_PASSIVE;
+		}
+		break;
+
+	case VM_SWAPOUT_T1_PASSIVE:
+
+		if (SWAPPER_NEEDS_TO_UNTHROTTLE()) {
+			vm_swapper_throttle = THROTTLE_LEVEL_COMPRESSOR_TIER0;
+			vm_swapper_entered_T0P++;
+
+			proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+							TASK_POLICY_INTERNAL, TASK_POLICY_IO, vm_swapper_throttle);
+			proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+							TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
+			vm_swapout_limit = VM_SWAPOUT_LIMIT_T0P;
+			vm_swapout_state = VM_SWAPOUT_T0_PASSIVE;
+
+			break;
+		}
+		if (swapout_target_age == 0 && hibernate_flushing == FALSE) {
+
+		        vm_swapper_throttle = THROTTLE_LEVEL_COMPRESSOR_TIER2;
+			vm_swapper_entered_T2P++;
+
+			proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+							TASK_POLICY_INTERNAL, TASK_POLICY_IO, vm_swapper_throttle);
+			proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+							TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
+			vm_swapout_limit = VM_SWAPOUT_LIMIT_T2P;
+			vm_swapout_state = VM_SWAPOUT_T2_PASSIVE;
+		}
+	        break;
+
+	case VM_SWAPOUT_T0_PASSIVE:
+
+	        if (SWAPPER_NEEDS_TO_RETHROTTLE()) {
+			vm_swapper_throttle = THROTTLE_LEVEL_COMPRESSOR_TIER2;
+			vm_swapper_entered_T2P++;
+
+			proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+							TASK_POLICY_INTERNAL, TASK_POLICY_IO, vm_swapper_throttle);
+			proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+							TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
+			vm_swapout_limit = VM_SWAPOUT_LIMIT_T2P;
+			vm_swapout_state = VM_SWAPOUT_T2_PASSIVE;
+
+			break;
+		}
+		if (SWAPPER_NEEDS_TO_CATCHUP()) {
+		        vm_swapper_entered_T0++;
+
+			proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+							TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_DISABLE);
+			vm_swapout_limit = VM_SWAPOUT_LIMIT_T0;
+			vm_swapout_state = VM_SWAPOUT_T0;
+		}
+		break;
+
+	case VM_SWAPOUT_T0:
+
+		if (SWAPPER_HAS_CAUGHTUP()) {
+		        vm_swapper_entered_T0P++;
+
+			proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+							TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
+			vm_swapout_limit = VM_SWAPOUT_LIMIT_T0P;
+			vm_swapout_state = VM_SWAPOUT_T0_PASSIVE;
+		}
+		break;
 	}
 }
 
-
 int vm_swapout_found_empty = 0;
+
+struct swapout_io_completion vm_swapout_ctx[VM_SWAPOUT_LIMIT_MAX];
+
+int vm_swapout_soc_busy = 0;
+int vm_swapout_soc_done = 0;
+
+
+static struct swapout_io_completion *
+vm_swapout_find_free_soc(void)
+{       int      i;
+
+        for (i = 0; i < VM_SWAPOUT_LIMIT_MAX; i++) {
+	        if (vm_swapout_ctx[i].swp_io_busy == 0)
+		        return (&vm_swapout_ctx[i]);
+	}
+	assert(vm_swapout_soc_busy == VM_SWAPOUT_LIMIT_MAX);
+
+	return NULL;
+}
+
+static struct swapout_io_completion *
+vm_swapout_find_done_soc(void)
+{       int      i;
+
+        if (vm_swapout_soc_done) {
+	        for (i = 0; i < VM_SWAPOUT_LIMIT_MAX; i++) {
+		        if (vm_swapout_ctx[i].swp_io_done)
+			        return (&vm_swapout_ctx[i]);
+		}
+	}
+	return NULL;
+}
+
+static void
+vm_swapout_complete_soc(struct swapout_io_completion *soc)
+{
+        kern_return_t  kr;
+
+        if (soc->swp_io_error)
+	        kr = KERN_FAILURE;
+	else
+	        kr = KERN_SUCCESS;
+
+	lck_mtx_unlock_always(c_list_lock);
+
+	vm_swap_put_finish(soc->swp_swf, &soc->swp_f_offset, soc->swp_io_error);
+	vm_swapout_finish(soc->swp_c_seg, soc->swp_f_offset, soc->swp_c_size, kr);
+
+	lck_mtx_lock_spin_always(c_list_lock);
+
+	soc->swp_io_done = 0;
+	soc->swp_io_busy = 0;
+
+	vm_swapout_soc_busy--;
+	vm_swapout_soc_done--;
+}
+
 
 static void
 vm_swapout_thread(void)
 {
-	uint64_t	f_offset = 0;
 	uint32_t	size = 0;
 	c_segment_t 	c_seg = NULL;
 	kern_return_t	kr = KERN_SUCCESS;
-	vm_offset_t	addr = 0;
+	struct swapout_io_completion *soc;
 
 	current_thread()->options |= TH_OPT_VMPRIV;
 
 	vm_swapout_thread_awakened++;
 
 	lck_mtx_lock_spin_always(c_list_lock);
-
-	while (!queue_empty(&c_swapout_list_head)) {
+again:
+	while (!queue_empty(&c_swapout_list_head) && vm_swapout_soc_busy < vm_swapout_limit) {
 		
 		c_seg = (c_segment_t)queue_first(&c_swapout_list_head);
 
@@ -934,14 +1059,13 @@ vm_swapout_thread(void)
 		C_SEG_BUSY(c_seg);
 		c_seg->c_busy_swapping = 1;
 
+		c_seg_switch_state(c_seg, C_ON_SWAPIO_Q, FALSE);
+
 		lck_mtx_unlock_always(c_list_lock);
-
-		addr = (vm_offset_t) c_seg->c_store.c_buffer;
-
 		lck_mtx_unlock_always(&c_seg->c_lock);
 
 #if CHECKSUM_THE_SWAP	
-		c_seg->cseg_hash = hash_string((char*)addr, (int)size);
+		c_seg->cseg_hash = hash_string((char *)c_seg->c_store.c_buffer, (int)size);
 		c_seg->cseg_swap_size = size;
 #endif /* CHECKSUM_THE_SWAP */
 
@@ -949,71 +1073,45 @@ vm_swapout_thread(void)
 		vm_swap_encrypt(c_seg);
 #endif /* ENCRYPTED_SWAP */
 
-		vm_swapout_thread_throttle_adjust();
+		soc = vm_swapout_find_free_soc();
+		assert(soc);
 
-		kr = vm_swap_put((vm_offset_t) addr, &f_offset, size, c_seg);
+		soc->swp_upl_ctx.io_context = (void *)soc;
+		soc->swp_upl_ctx.io_done = (void *)vm_swapout_iodone;
+		soc->swp_upl_ctx.io_error = 0;
 
-		PAGE_REPLACEMENT_DISALLOWED(TRUE);
+		kr = vm_swap_put((vm_offset_t)c_seg->c_store.c_buffer, &soc->swp_f_offset, size, c_seg, soc);
 
-		if (kr == KERN_SUCCESS) {
-			kernel_memory_depopulate(compressor_map, (vm_offset_t) addr, size, KMA_COMPRESSOR);
-		}
-#if ENCRYPTED_SWAP
-		else {
-			vm_swap_decrypt(c_seg);
-		}
-#endif /* ENCRYPTED_SWAP */
-		lck_mtx_lock_spin_always(c_list_lock);
-		lck_mtx_lock_spin_always(&c_seg->c_lock);
+		if (kr != KERN_SUCCESS) {
+		        if (soc->swp_io_done) {
+			        lck_mtx_lock_spin_always(c_list_lock);
 
-	       	if (kr == KERN_SUCCESS) {
-			int		new_state = C_ON_SWAPPEDOUT_Q;
-			boolean_t	insert_head = FALSE;
+			        soc->swp_io_done = 0;
+				vm_swapout_soc_done--;
 
-			if (hibernate_flushing == TRUE) {
-				if (c_seg->c_generation_id >= first_c_segment_to_warm_generation_id &&
-				    c_seg->c_generation_id <= last_c_segment_to_warm_generation_id)
-					insert_head = TRUE;
-			} else if (C_SEG_ONDISK_IS_SPARSE(c_seg))
-				new_state = C_ON_SWAPPEDOUTSPARSE_Q;
-
-			c_seg_switch_state(c_seg, new_state, insert_head);
-
-			c_seg->c_store.c_swap_handle = f_offset;
-
-			VM_STAT_INCR_BY(swapouts, size >> PAGE_SHIFT);
-			
-			if (c_seg->c_bytes_used)
-				OSAddAtomic64(-c_seg->c_bytes_used, &compressor_bytes_used);
-		} else {
-			if (c_seg->c_overage_swap == TRUE) {
-				c_seg->c_overage_swap = FALSE;
-				c_overage_swapped_count--;
+				lck_mtx_unlock_always(c_list_lock);
 			}
-			c_seg_switch_state(c_seg, C_ON_AGE_Q, FALSE);
-
-			if (!c_seg->c_on_minorcompact_q && C_SEG_UNUSED_BYTES(c_seg) >= PAGE_SIZE)
-				c_seg_need_delayed_compaction(c_seg, TRUE);
+		        vm_swapout_finish(c_seg, soc->swp_f_offset, size, kr);
+		} else {
+		        soc->swp_io_busy = 1;
+			vm_swapout_soc_busy++;
 		}
-		assert(c_seg->c_busy_swapping);
-		assert(c_seg->c_busy);
-
-		c_seg->c_busy_swapping = 0;
-		lck_mtx_unlock_always(c_list_lock);
-
-		C_SEG_WAKEUP_DONE(c_seg);
-		lck_mtx_unlock_always(&c_seg->c_lock);
-
-		PAGE_REPLACEMENT_DISALLOWED(FALSE);
-
+		vm_swapout_thread_throttle_adjust();
 		vm_pageout_io_throttle();
+
 c_seg_is_empty:
 		if (c_swapout_count == 0)
-			vm_swap_consider_defragmenting();
+		        vm_swap_consider_defragmenting(VM_SWAP_FLAGS_NONE);
 
 		lck_mtx_lock_spin_always(c_list_lock);
-	}
 
+		if ((soc = vm_swapout_find_done_soc()))
+		        vm_swapout_complete_soc(soc);
+	}
+	if ((soc = vm_swapout_find_done_soc())) {
+	        vm_swapout_complete_soc(soc);
+		goto again;
+	}
 	assert_wait((event_t)&c_swapout_list_head, THREAD_UNINT);
 
 	lck_mtx_unlock_always(c_list_lock);
@@ -1022,6 +1120,85 @@ c_seg_is_empty:
 	
 	/* NOTREACHED */
 }
+
+
+void
+vm_swapout_iodone(void *io_context, int error)
+{
+        struct swapout_io_completion *soc;
+
+	soc = (struct swapout_io_completion *)io_context;
+
+	lck_mtx_lock_spin_always(c_list_lock);
+
+	soc->swp_io_done = 1;
+	soc->swp_io_error = error;
+	vm_swapout_soc_done++;
+	
+	thread_wakeup((event_t)&c_swapout_list_head);
+	
+	lck_mtx_unlock_always(c_list_lock);
+}
+
+
+static void
+vm_swapout_finish(c_segment_t c_seg, uint64_t f_offset,  uint32_t size, kern_return_t kr)
+{
+
+	PAGE_REPLACEMENT_DISALLOWED(TRUE);
+
+	if (kr == KERN_SUCCESS) {
+	        kernel_memory_depopulate(compressor_map, (vm_offset_t)c_seg->c_store.c_buffer, size, KMA_COMPRESSOR);
+	}
+#if ENCRYPTED_SWAP
+	else {
+	        vm_swap_decrypt(c_seg);
+	}
+#endif /* ENCRYPTED_SWAP */
+	lck_mtx_lock_spin_always(c_list_lock);
+	lck_mtx_lock_spin_always(&c_seg->c_lock);
+
+	if (kr == KERN_SUCCESS) {
+	        int		new_state = C_ON_SWAPPEDOUT_Q;
+		boolean_t	insert_head = FALSE;
+
+		if (hibernate_flushing == TRUE) {
+		        if (c_seg->c_generation_id >= first_c_segment_to_warm_generation_id &&
+			          c_seg->c_generation_id <= last_c_segment_to_warm_generation_id)
+			        insert_head = TRUE;
+		} else if (C_SEG_ONDISK_IS_SPARSE(c_seg))
+		        new_state = C_ON_SWAPPEDOUTSPARSE_Q;
+
+		c_seg_switch_state(c_seg, new_state, insert_head);
+
+		c_seg->c_store.c_swap_handle = f_offset;
+
+		VM_STAT_INCR_BY(swapouts, size >> PAGE_SHIFT);
+			
+		if (c_seg->c_bytes_used)
+		        OSAddAtomic64(-c_seg->c_bytes_used, &compressor_bytes_used);
+	} else {
+	        if (c_seg->c_overage_swap == TRUE) {
+		        c_seg->c_overage_swap = FALSE;
+			c_overage_swapped_count--;
+		}
+		c_seg_switch_state(c_seg, C_ON_AGE_Q, FALSE);
+
+		if (!c_seg->c_on_minorcompact_q && C_SEG_UNUSED_BYTES(c_seg) >= PAGE_SIZE)
+		        c_seg_need_delayed_compaction(c_seg, TRUE);
+	}
+	assert(c_seg->c_busy_swapping);
+	assert(c_seg->c_busy);
+
+	c_seg->c_busy_swapping = 0;
+	lck_mtx_unlock_always(c_list_lock);
+
+	C_SEG_WAKEUP_DONE(c_seg);
+	lck_mtx_unlock_always(&c_seg->c_lock);
+
+	PAGE_REPLACEMENT_DISALLOWED(FALSE);
+}
+
 
 boolean_t
 vm_swap_create_file()
@@ -1199,7 +1376,7 @@ vm_swap_get(c_segment_t c_seg, uint64_t f_offset, uint64_t size)
 	C_SEG_MAKE_WRITEABLE(c_seg);
 #endif
 	file_offset = (f_offset & SWAP_SLOT_MASK);
-	retval = vm_swapfile_io(swf->swp_vp, file_offset, (uint64_t)c_seg->c_store.c_buffer, (int)(size / PAGE_SIZE_64), SWAP_READ);
+	retval = vm_swapfile_io(swf->swp_vp, file_offset, (uint64_t)c_seg->c_store.c_buffer, (int)(size / PAGE_SIZE_64), SWAP_READ, NULL);
 
 #if DEVELOPMENT || DEBUG
 	C_SEG_WRITE_PROTECT(c_seg);
@@ -1232,7 +1409,7 @@ done:
 }
 
 kern_return_t
-vm_swap_put(vm_offset_t addr, uint64_t *f_offset, uint64_t size, c_segment_t c_seg)
+vm_swap_put(vm_offset_t addr, uint64_t *f_offset, uint32_t size, c_segment_t c_seg, struct swapout_io_completion *soc)
 {
 	unsigned int	segidx = 0;
 	struct swapfile *swf = NULL;
@@ -1246,6 +1423,7 @@ vm_swap_put(vm_offset_t addr, uint64_t *f_offset, uint64_t size, c_segment_t c_s
 	int		error = 0;
 	clock_sec_t	sec;
 	clock_nsec_t	nsec;
+	void            *upl_ctx = NULL;
 
 	if (addr == 0 || f_offset == NULL) {
 		return KERN_FAILURE;
@@ -1278,8 +1456,9 @@ retry:
 				file_offset = segidx * COMPRESSED_SWAP_CHUNK_SIZE;
 				swf->swp_nseginuse++;
 				swf->swp_io_count++;
-				swapfile_index = swf->swp_index;
+				swf->swp_csegs[segidx] = c_seg;
 
+				swapfile_index = swf->swp_index;
 				vm_swapfile_total_segs_used++;
 
 				clock_get_system_nanotime(&sec, &nsec);
@@ -1289,7 +1468,7 @@ retry:
 
 				lck_mtx_unlock(&vm_swap_data_lock);
 		
-				goto done;
+				goto issue_io;
 			}
 		}
 		swf = (struct swapfile*) queue_next(&swf->swp_queue);
@@ -1336,39 +1515,54 @@ retry:
 
 	return KERN_FAILURE;
 
-done:	
+issue_io:	
 	assert(c_seg->c_busy_swapping);
 	assert(c_seg->c_busy);
 	assert(!c_seg->c_on_minorcompact_q);
 
-	error = vm_swapfile_io(swf->swp_vp, file_offset, addr, (int) (size / PAGE_SIZE_64), SWAP_WRITE);
+	*f_offset = (swapfile_index << SWAP_DEVICE_SHIFT) | file_offset;
 
+	if (soc) {
+		soc->swp_c_seg = c_seg;
+		soc->swp_c_size = size;
+
+	        soc->swp_swf = swf;
+
+		soc->swp_io_error = 0;
+		soc->swp_io_done = 0;
+
+		upl_ctx = (void *)&soc->swp_upl_ctx;
+	}
+	error = vm_swapfile_io(swf->swp_vp, file_offset, addr, (int) (size / PAGE_SIZE_64), SWAP_WRITE, upl_ctx);
+
+	if (error || upl_ctx == NULL)
+		return (vm_swap_put_finish(swf, f_offset, error));
+
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+vm_swap_put_finish(struct swapfile *swf, uint64_t *f_offset, int error)
+{
 	lck_mtx_lock(&vm_swap_data_lock);
 
-	swf->swp_csegs[segidx] = c_seg;
-
 	swf->swp_io_count--;
-
-	*f_offset = (swapfile_index << SWAP_DEVICE_SHIFT) | file_offset;
 
 	if ((swf->swp_flags & SWAP_WANTED) && swf->swp_io_count == 0) {
 	
 		swf->swp_flags &= ~SWAP_WANTED;
 		thread_wakeup((event_t) &swf->swp_flags);
 	}
-
 	lck_mtx_unlock(&vm_swap_data_lock);
 
 	if (error) {
 		vm_swap_free(*f_offset);
-
 		vm_swap_put_failures++;
 
 		return KERN_FAILURE;
 	}
 	return KERN_SUCCESS;
 }
-
 
 
 static void
@@ -1737,7 +1931,7 @@ ReTry_for_cseg:
 
 		lck_mtx_unlock_always(&c_seg->c_lock);
 
-		if (vm_swapfile_io(swf->swp_vp, f_offset, addr, (int)(c_size / PAGE_SIZE_64), SWAP_READ)) {
+		if (vm_swapfile_io(swf->swp_vp, f_offset, addr, (int)(c_size / PAGE_SIZE_64), SWAP_READ, NULL)) {
 
 			/*
 			 * reading the data back in failed, so convert c_seg
@@ -1753,7 +1947,7 @@ ReTry_for_cseg:
 		}
 		VM_STAT_INCR_BY(swapins, c_size >> PAGE_SHIFT);
 
-		if (vm_swap_put(addr, &f_offset, c_size, c_seg)) {
+		if (vm_swap_put(addr, &f_offset, c_size, c_seg, NULL)) {
 			vm_offset_t	c_buffer;
 
 			/*
@@ -1896,9 +2090,67 @@ vm_swap_files_pinned(void)
         boolean_t result;
 
 	if (vm_swappin_enabled == FALSE)
-		return(TRUE);
+		return (TRUE);
 
         result = (vm_num_pinned_swap_files == vm_num_swap_files);
 
         return (result);
 }
+
+#if CONFIG_FREEZE
+boolean_t
+vm_swap_max_budget(uint64_t *freeze_daily_budget)
+{
+	boolean_t	use_device_value = FALSE;
+	struct swapfile *swf = NULL;
+
+	if (vm_num_swap_files) {
+		lck_mtx_lock(&vm_swap_data_lock);
+
+		swf = (struct swapfile*) queue_first(&swf_global_queue);
+
+		if (swf) {
+			while(queue_end(&swf_global_queue, (queue_entry_t)swf) == FALSE) {
+
+				if (swf->swp_flags == SWAP_READY) {
+
+					assert(swf->swp_vp);
+
+					if (vm_swap_vol_get_budget(swf->swp_vp, freeze_daily_budget) == 0) {
+						use_device_value = TRUE;
+					}
+					break;
+				}
+				swf = (struct swapfile*) queue_next(&swf->swp_queue);
+			}
+		}
+
+		lck_mtx_unlock(&vm_swap_data_lock);
+
+	} else {
+
+		/*
+		 * This block is used for the initial budget value before any swap files
+		 * are created. We create a temp swap file to get the budget.
+		 */
+
+		struct vnode *temp_vp = NULL;
+
+		vm_swapfile_open(swapfilename, &temp_vp);
+
+		if (temp_vp) {
+
+			if (vm_swap_vol_get_budget(temp_vp, freeze_daily_budget) == 0) {
+				use_device_value = TRUE;
+			}
+
+			vm_swapfile_close((uint64_t)&swapfilename, temp_vp);
+			temp_vp = NULL;
+		} else {
+			*freeze_daily_budget = 0;
+		}
+	}
+
+	return use_device_value;
+}
+#endif /* CONFIG_FREEZE */

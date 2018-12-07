@@ -75,7 +75,7 @@
 #ifdef PRIVATE
 #include <net/route.h>
 #endif
-#ifdef BSD_KERN_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 #include <sys/eventhandler.h>
 #endif
 
@@ -649,6 +649,8 @@ struct	ifqueue {
 };
 
 #ifdef BSD_KERNEL_PRIVATE
+#define	IFNETS_MAX	64
+
 /*
  * Internal storage of if_data. This is bound to change. Various places in the
  * stack will translate this data structure in to the externally visible
@@ -996,6 +998,8 @@ struct ifnet {
 	uuid_t			*if_agentids;	/* network agents attached to interface */
 	u_int32_t		if_agentcount;
 
+	volatile uint32_t	if_low_power_gencnt;
+
 	u_int32_t		if_generation;	/* generation to use with NECP clients */
 	u_int32_t		if_fg_sendts;	/* last send on a fg socket in seconds */
 
@@ -1036,6 +1040,7 @@ typedef enum {
 	INTF_EVENT_CODE_IPADDR_DETACHED,
 	INTF_EVENT_CODE_LLADDR_UPDATE,
 	INTF_EVENT_CODE_MTU_CHANGED,
+	INTF_EVENT_CODE_LOW_POWER_UPDATE,
 } intf_event_code_t;
 
 typedef void (*ifnet_event_fn)(struct eventhandler_entry_arg, struct ifnet *, struct sockaddr *, intf_event_code_t);
@@ -1072,20 +1077,34 @@ EVENTHANDLER_DECLARE(ifnet_event, ifnet_event_fn);
  */
 struct if_clone {
 	LIST_ENTRY(if_clone) ifc_list;	/* on list of cloners */
+	decl_lck_mtx_data(, ifc_mutex);	/* To serialize clone create/delete */
 	const char	*ifc_name;	/* name of device, e.g. `vlan' */
 	size_t		ifc_namelen;	/* length of name */
 	u_int32_t	ifc_minifs;	/* minimum number of interfaces */
 	u_int32_t	ifc_maxunit;	/* maximum unit number */
 	unsigned char	*ifc_units;	/* bitmap to handle units */
 	u_int32_t	ifc_bmlen;	/* bitmap length */
-
+	u_int32_t	ifc_zone_max_elem;	/* Max elements for this zone type */
+	u_int32_t	ifc_softc_size;	/* size of softc for the device */
+	struct zone 	*ifc_zone;	/* if_clone allocation zone */
 	int		(*ifc_create)(struct if_clone *, u_int32_t, void *);
 	int		(*ifc_destroy)(struct ifnet *);
 };
 
-#define IF_CLONE_INITIALIZER(name, create, destroy, minifs, maxunit) {	      \
-	{ NULL, NULL }, name, (sizeof (name) - 1), minifs, maxunit, NULL, 0,  \
-	create, destroy							      \
+#define IF_CLONE_INITIALIZER(name, create, destroy, minifs, maxunit, zone_max_elem, softc_size) {	\
+	.ifc_list = { NULL, NULL },									\
+	.ifc_mutex = {},										\
+	.ifc_name = name,										\
+	.ifc_namelen =	(sizeof (name) - 1),								\
+	.ifc_minifs = minifs,										\
+	.ifc_maxunit = maxunit,										\
+	.ifc_units = NULL,										\
+	.ifc_bmlen = 0,											\
+	.ifc_zone_max_elem = zone_max_elem,								\
+	.ifc_softc_size = softc_size,									\
+	.ifc_zone = NULL,										\
+	.ifc_create = create,										\
+	.ifc_destroy = destroy										\
 }
 
 #define M_CLONE         M_IFADDR
@@ -1381,6 +1400,12 @@ struct ifmultiaddr {
 	((_ifp)->if_eflags & IFEF_EXPENSIVE ||				\
 	(_ifp)->if_delegated.expensive)
 
+#define	IFNET_IS_LOW_POWER(_ifp)					\
+	(if_low_power_restricted != 0 &&				\
+	((_ifp)->if_xflags & IFXF_LOW_POWER) ||				\
+	((_ifp)->if_delegated.ifp != NULL &&				\
+	((_ifp)->if_delegated.ifp->if_xflags & IFXF_LOW_POWER)))
+
 /*
  * We don't support AWDL interface delegation.
  */
@@ -1430,7 +1455,8 @@ extern void if_qflush_sc(struct ifnet *, mbuf_svc_class_t, u_int32_t,
 extern struct if_clone *if_clone_lookup(const char *, u_int32_t *);
 extern int if_clone_attach(struct if_clone *);
 extern void if_clone_detach(struct if_clone *);
-
+extern void *if_clone_softc_allocate(const struct if_clone *);
+extern void if_clone_softc_deallocate(const struct if_clone *, void *);
 extern u_int32_t if_functional_type(struct ifnet *, bool);
 
 extern errno_t if_mcasts_update(struct ifnet *);
@@ -1794,6 +1820,12 @@ __private_extern__ void ifnet_enqueue_multi_setup(struct ifnet *, uint16_t,
     uint16_t);
 __private_extern__ errno_t ifnet_enqueue_mbuf(struct ifnet *, struct mbuf *,
     boolean_t, boolean_t *);
+
+extern int if_low_power_verbose;
+extern int if_low_power_restricted;
+extern void if_low_power_evhdlr_init(void);
+extern int if_set_low_power(struct ifnet *, bool);
+
 #endif /* BSD_KERNEL_PRIVATE */
 #ifdef XNU_KERNEL_PRIVATE
 /* for uuid.c */

@@ -776,7 +776,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 	char *pop;
 	struct vnode *vp = NULLVP;	/* for AUDIT_ARG() at end */
 	int i, tmp, error, error2, flg = 0;
-	struct flock fl;
+	struct flock fl = {};
 	struct flocktimeout fltimeout;
 	struct timespec *timeout = NULL;
 	struct vfs_context context;
@@ -1139,10 +1139,8 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 
 	case F_GETLK:
 	case F_OFD_GETLK:
-#if CONFIG_EMBEDDED
 	case F_GETLKPID:
 	case F_OFD_GETLKPID:
-#endif
 		if (fp->f_type != DTYPE_VNODE) {
 			error = EBADF;
 			goto out;
@@ -1553,7 +1551,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 
 	case F_LOG2PHYS:
 	case F_LOG2PHYS_EXT: {
-		struct log2phys l2p_struct;    /* structure for allocate command */
+		struct log2phys l2p_struct = {};    /* structure for allocate command */
 		int devBlockSize;
 
 		off_t file_offset = 0;
@@ -1865,12 +1863,16 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			if (uap->cmd == F_ADDFILESIGS_FOR_DYLD_SIM) {
 				error = ubc_cs_blob_revalidate(vp, blob, NULL, blob_add_flags);
 				if (error) {
-					vnode_put(vp);
-					goto outdrop;
+					blob = NULL;
+					if (error != EAGAIN) {
+						vnode_put(vp);
+						goto outdrop;
+					}
 				}
 			}
+		}
 
-		} else {
+		if (blob == NULL) {
 			/*
 			 * An arbitrary limit, to prevent someone from mapping in a 20GB blob.  This should cover
 			 * our use cases for the immediate future, but note that at the time of this commit, some
@@ -2086,7 +2088,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			.len = CP_MAX_WRAPPEDKEYSIZE,
 		};
 
-		MALLOC(k.key, char *, k.len, M_TEMP, M_WAITOK);
+		MALLOC(k.key, char *, k.len, M_TEMP, M_WAITOK | M_ZERO);
 
 		error = VNOP_IOCTL(vp, F_TRANSCODEKEY, (caddr_t)&k, 1, &context);
 
@@ -2168,7 +2170,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		/* For now, special case HFS+ only, since this is SPI. */
 		src_vp = (struct vnode *)fp->f_data;
 		if (src_vp->v_tag != VT_HFS) {
-			error = EINVAL;
+			error = ENOTSUP;
 			goto out;
 		}
 
@@ -2188,7 +2190,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		dst_vp = (struct vnode *)fp2->f_data;
 		if (dst_vp->v_tag != VT_HFS) {
 			fp_drop(p, fd2, fp2, 1);
-			error = EINVAL;
+			error = ENOTSUP;
 			goto out;
 		}
 
@@ -2886,7 +2888,7 @@ close_internal_locked(proc_t p, int fd, struct fileproc *fp, int flags)
 	}
 
 	if (fd < fdp->fd_knlistsize)
-		knote_fdclose(p, fd, FALSE);
+		knote_fdclose(p, fd);
 
 	if (fp->f_flags & FP_WAITEVENT)
 		(void)waitevent_close(p, fp);
@@ -4694,9 +4696,8 @@ fdexec(proc_t p, short flags, int self_exec)
 	 * If the current thread is bound as a workq/workloop
 	 * servicing thread, we need to unbind it first.
 	 */
-	if (ut->uu_kqueue_bound && self_exec) {
-		kevent_qos_internal_unbind(p, 0, self,
-		                           ut->uu_kqueue_flags);
+	if (ut->uu_kqr_bound && self_exec) {
+		kqueue_threadreq_unbind(p, ut->uu_kqr_bound);
 	}
 
 	proc_fdlock(p);
@@ -5047,6 +5048,12 @@ fdfree(proc_t p)
 	knotes_dealloc(p);
 	assert(fdp->fd_knlistsize == -1);
 	assert(fdp->fd_knhashmask == 0);
+
+	/*
+	 * dealloc all workloops that have outstanding retains
+	 * when created with scheduling parameters.
+	 */
+	kqworkloops_dealloc(p);
 
 	/* close file descriptors */
 	if (fdp->fd_nfiles > 0 && fdp->fd_ofiles) {

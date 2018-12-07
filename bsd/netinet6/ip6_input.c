@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -313,6 +313,11 @@ ip6_init(struct ip6protosw *pp, struct domain *dp)
 	eventhandler_lists_ctxt_init(&in6_evhdlr_ctxt);
 	(void)EVENTHANDLER_REGISTER(&in6_evhdlr_ctxt, in6_event,
 	    in6_eventhdlr_callback, eventhandler_entry_dummy_arg,
+	    EVENTHANDLER_PRI_ANY);
+
+	eventhandler_lists_ctxt_init(&in6_clat46_evhdlr_ctxt);
+	(void)EVENTHANDLER_REGISTER(&in6_clat46_evhdlr_ctxt, in6_clat46_event,
+	    in6_clat46_eventhdlr_callback, eventhandler_entry_dummy_arg,
 	    EVENTHANDLER_PRI_ANY);
 
 	for (i = 0; i < IN6_EVENT_MAX; i++)
@@ -895,7 +900,7 @@ check_with_pf:
 		 * a lot of things in the address are set once and never
 		 * changed (e.g. ia_ifp.)
 		 */
-		if (!(ia6->ia6_flags & IN6_IFF_NOTREADY)) {
+		if (!(ia6->ia6_flags & (IN6_IFF_NOTREADY | IN6_IFF_CLAT46))) {
 			/* this address is ready */
 			ours = 1;
 			deliverifp = ia6->ia_ifp;
@@ -1613,6 +1618,15 @@ ip6_savecontrol_v4(struct inpcb *inp, struct mbuf *m, struct mbuf **mp,
 		if (*mp == NULL)
 			return (NULL);
 	}
+	if ((inp->inp_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
+		uint64_t time;
+
+		time = mach_continuous_time();
+		mp = sbcreatecontrol_mbuf((caddr_t)&time, sizeof (time),
+			SCM_TIMESTAMP_CONTINUOUS, SOL_SOCKET, mp);
+		if (*mp == NULL)
+			return (NULL);
+	}
 	if ((inp->inp_socket->so_flags & SOF_RECV_TRAFFIC_CLASS) != 0) {
 		int tc = m_get_traffic_class(m);
 
@@ -1622,13 +1636,43 @@ ip6_savecontrol_v4(struct inpcb *inp, struct mbuf *m, struct mbuf **mp,
 			return (NULL);
 	}
 
+#define	IS2292(inp, x, y)	(((inp)->inp_flags & IN6P_RFC2292) ? (x) : (y))
 	if ((ip6->ip6_vfc & IPV6_VERSION_MASK) != IPV6_VERSION) {
-		if (v4only != NULL)
+		if (v4only != NULL) {
 			*v4only = 1;
+		}
+
+		// Send ECN flags for v4-mapped addresses
+		if ((inp->inp_flags & IN6P_TCLASS) != 0) {
+			struct ip *ip_header = mtod(m, struct ip *);
+			u_int8_t tos = (ip_header->ip_tos & IPTOS_ECN_MASK);
+
+			mp = sbcreatecontrol_mbuf((caddr_t)&tos, sizeof(tos),
+									  IPV6_TCLASS, IPPROTO_IPV6, mp);
+			if (*mp == NULL)
+				return (NULL);
+		}
+
+		// Send IN6P_PKTINFO for v4-mapped address
+		if ((inp->inp_flags & IN6P_PKTINFO) != 0) {
+			struct in6_pktinfo pi6 = {
+				.ipi6_addr = IN6ADDR_V4MAPPED_INIT,
+				.ipi6_ifindex = (m && m->m_pkthdr.rcvif) ? m->m_pkthdr.rcvif->if_index : 0,
+			};
+
+			struct ip *ip_header = mtod(m, struct ip *);
+			bcopy(&ip_header->ip_dst, &pi6.ipi6_addr.s6_addr32[3], sizeof(struct in_addr));
+
+			mp = sbcreatecontrol_mbuf((caddr_t)&pi6,
+									  sizeof (struct in6_pktinfo),
+									  IS2292(inp, IPV6_2292PKTINFO, IPV6_PKTINFO),
+									  IPPROTO_IPV6, mp);
+			if (*mp == NULL)
+				return (NULL);
+		}
 		return (mp);
 	}
 
-#define	IS2292(inp, x, y)	(((inp)->inp_flags & IN6P_RFC2292) ? (x) : (y))
 	/* RFC 2292 sec. 5 */
 	if ((inp->inp_flags & IN6P_PKTINFO) != 0) {
 		struct in6_pktinfo pi6;

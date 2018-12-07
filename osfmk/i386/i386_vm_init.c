@@ -113,6 +113,9 @@ vm_offset_t vm_prelink_einfo;
 vm_offset_t vm_slinkedit;
 vm_offset_t vm_elinkedit;
 
+vm_offset_t vm_kernel_builtinkmod_text;
+vm_offset_t vm_kernel_builtinkmod_text_end;
+
 #define MAXLORESERVE	(32 * 1024 * 1024)
 
 ppnum_t		max_ppnum = 0;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -27,6 +27,7 @@
  */
 
 #include <kern/locks.h>
+#include <kern/zalloc.h>
 
 #include <sys/types.h>
 #include <sys/kernel_types.h>
@@ -107,12 +108,17 @@ static ipfilter_t iptap_ipf4, iptap_ipf6;
 
 void iptap_bpf_tap(struct mbuf *m, u_int32_t proto,  int outgoing);
 
+#define	IPTAP_MAXUNIT	IF_MAXUNIT
+#define	IPTAP_ZONE_MAX_ELEM	MIN(IFNETS_MAX, IPTAP_MAXUNIT)
+
 static struct if_clone iptap_cloner = 
 	IF_CLONE_INITIALIZER(IPTAP_IFNAME, 
 		iptap_clone_create, 
 		iptap_clone_destroy,
 		0, 
-		IF_MAXUNIT);
+		IPTAP_MAXUNIT,
+		IPTAP_ZONE_MAX_ELEM,
+		sizeof(struct iptap_softc));
 
 SYSCTL_DECL(_net_link);
 SYSCTL_NODE(_net_link, OID_AUTO, iptap, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
@@ -189,7 +195,7 @@ iptap_clone_create(struct if_clone *ifc, u_int32_t unit, void *params)
 	struct iptap_softc *iptap = NULL;
 	struct ifnet_init_eparams if_init;
 	
-	iptap = _MALLOC(sizeof(struct iptap_softc), M_DEVBUF, M_WAITOK | M_ZERO);
+	iptap = if_clone_softc_allocate(&iptap_cloner);
 	if (iptap == NULL) {
 		printf("%s: _MALLOC failed\n", __func__);
 		error = ENOMEM;
@@ -253,7 +259,7 @@ iptap_clone_create(struct if_clone *ifc, u_int32_t unit, void *params)
 done:
 	if (error != 0) {
 		if (iptap != NULL)
-			_FREE(iptap, M_DEVBUF);
+			if_clone_softc_deallocate(&iptap_cloner, iptap);
 	}
 	return (error);
 }
@@ -445,7 +451,7 @@ done:
 __private_extern__ void
 iptap_detach(ifnet_t ifp)
 {
-	struct iptap_softc *iptap;
+	struct iptap_softc *iptap = NULL;
 	
 	iptap_lock_exclusive();
 
@@ -460,8 +466,7 @@ iptap_detach(ifnet_t ifp)
 
 	/* Drop reference as it's no more on the global list */
 	ifnet_release(ifp);
-	
-	_FREE(iptap, M_DEVBUF);
+	if_clone_softc_deallocate(&iptap_cloner, iptap);
 
 	/* This is for the reference taken by ifnet_attach() */
 	(void) ifnet_release(ifp);

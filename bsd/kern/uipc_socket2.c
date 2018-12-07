@@ -106,8 +106,6 @@
 #define	DBG_FNC_SBDROP		NETDBG_CODE(DBG_NETSOCK, 4)
 #define	DBG_FNC_SBAPPEND	NETDBG_CODE(DBG_NETSOCK, 5)
 
-extern char *proc_best_name(proc_t p);
-
 SYSCTL_DECL(_kern_ipc);
 
 __private_extern__ u_int32_t net_io_policy_throttle_best_effort = 0;
@@ -116,8 +114,6 @@ SYSCTL_INT(_kern_ipc, OID_AUTO, throttle_best_effort,
 
 static inline void sbcompress(struct sockbuf *, struct mbuf *, struct mbuf *);
 static struct socket *sonewconn_internal(struct socket *, int);
-static int sbappendaddr_internal(struct sockbuf *, struct sockaddr *,
-    struct mbuf *, struct mbuf *);
 static int sbappendcontrol_internal(struct sockbuf *, struct mbuf *,
     struct mbuf *);
 static void soevent_ifdenied(struct socket *);
@@ -1110,23 +1106,20 @@ again:
 }
 
 /*
- * Append address and data, and optionally, control (ancillary) data
- * to the receive queue of a socket.  If present,
- * m0 must include a packet header with total length.
- * Returns 0 if no space in sockbuf or insufficient mbufs.
+ * Concatenate address (optional), control (optional) and data into one
+ * single mbuf chain.  If sockbuf *sb is passed in, space check will be
+ * performed.
  *
- * Returns:	0			No space/out of mbufs
- *		1			Success
+ * Returns:	mbuf chain pointer if succeeded, NULL if failed
  */
-static int
-sbappendaddr_internal(struct sockbuf *sb, struct sockaddr *asa,
-    struct mbuf *m0, struct mbuf *control)
+struct mbuf *
+sbconcat_mbufs(struct sockbuf *sb, struct sockaddr *asa, struct mbuf *m0, struct mbuf *control)
 {
-	struct mbuf *m, *n, *nlast;
-	int space = asa->sa_len;
+	struct mbuf *m = NULL, *n = NULL;
+	int space = 0;
 
 	if (m0 && (m0->m_flags & M_PKTHDR) == 0)
-		panic("sbappendaddr");
+		panic("sbconcat_mbufs");
 
 	if (m0)
 		space += m0->m_pkthdr.len;
@@ -1135,22 +1128,59 @@ sbappendaddr_internal(struct sockbuf *sb, struct sockaddr *asa,
 		if (n->m_next == 0)	/* keep pointer to last control buf */
 			break;
 	}
-	if (space > sbspace(sb))
-		return (0);
-	if (asa->sa_len > MLEN)
-		return (0);
-	MGET(m, M_DONTWAIT, MT_SONAME);
-	if (m == 0)
-		return (0);
-	m->m_len = asa->sa_len;
-	bcopy((caddr_t)asa, mtod(m, caddr_t), asa->sa_len);
+
+	if (asa != NULL) {
+		if (asa->sa_len > MLEN)
+			return (NULL);
+		space += asa->sa_len;
+	}
+
+	if (sb != NULL && space > sbspace(sb))
+		return (NULL);
+
 	if (n)
 		n->m_next = m0;		/* concatenate data to control */
 	else
 		control = m0;
-	m->m_next = control;
 
-	SBLASTRECORDCHK(sb, "sbappendadddr 1");
+	if (asa != NULL) {
+		MGET(m, M_DONTWAIT, MT_SONAME);
+		if (m == 0) {
+			if (n) {
+				/* unchain control and data if necessary */
+				n->m_next = NULL;
+			}
+			return (NULL);
+		}
+		m->m_len = asa->sa_len;
+		bcopy((caddr_t)asa, mtod(m, caddr_t), asa->sa_len);
+
+		m->m_next = control;
+	} else {
+		m = control;
+	}
+
+	return (m);
+}
+
+/*
+ * Queue mbuf chain to the receive queue of a socket.
+ * Parameter space is the total len of the mbuf chain.
+ * If passed in, sockbuf space will be checked.
+ *
+ * Returns:	0		Invalid mbuf chain
+ *			1		Success
+ */
+int
+sbappendchain(struct sockbuf *sb, struct mbuf *m, int space)
+{
+	struct mbuf *n, *nlast;
+
+	if (m == NULL)
+		return (0);
+
+	if (space != 0 && space > sbspace(sb))
+		return (0);
 
 	for (n = m; n->m_next != NULL; n = n->m_next)
 		sballoc(sb, n);
@@ -1186,6 +1216,7 @@ sbappendaddr(struct sockbuf *sb, struct sockaddr *asa, struct mbuf *m0,
 {
 	int result = 0;
 	boolean_t sb_unix = (sb->sb_flags & SB_UNIX);
+	struct mbuf *mbuf_chain = NULL;
 
 	if (error_out)
 		*error_out = 0;
@@ -1230,7 +1261,9 @@ sbappendaddr(struct sockbuf *sb, struct sockaddr *asa, struct mbuf *m0,
 		m0->m_flags &= ~M_SKIPCFIL;
 	}
 
-	result = sbappendaddr_internal(sb, asa, m0, control);
+	mbuf_chain = sbconcat_mbufs(sb, asa, m0, control);
+	SBLASTRECORDCHK(sb, "sbappendadddr 1");
+	result = sbappendchain(sb, mbuf_chain, 0);
 	if (result == 0) {
 		if (m0)
 			m_freem(m0);
@@ -1358,6 +1391,9 @@ sbappendmsgstream_rcv(struct sockbuf *sb, struct mbuf *m, uint32_t seqnum,
 	u_int32_t data_len = 0;
 	int ret = 0;
 	struct socket *so = sb->sb_so;
+
+	if (m == NULL)
+		return (0);
 
 	VERIFY((m->m_flags & M_PKTHDR) && m_pktlen(m) > 0);
 	VERIFY(so->so_msg_state != NULL);

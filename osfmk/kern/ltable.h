@@ -208,6 +208,15 @@ struct lt_elem *ltable_alloc_elem(struct link_table *table, int type,
 	                          int nelem, int nattempts);
 
 
+#if DEVELOPMENT || DEBUG
+/**
+ * ltable_nelem: returns how many elements are used in this
+ * table.
+ */
+extern
+int ltable_nelem(struct link_table *table);
+#endif
+
 /**
  * ltable_realloc_elem: convert a reserved element to a particular type
  *
