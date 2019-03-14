@@ -98,6 +98,8 @@ extern void	bzero(void *, size_t);
 #include <san/memintrinsics.h>
 #endif
 
+#include <AvailabilityMacros.h>
+
 #if defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_10_13
 /* older deployment target */
 #elif defined(KASAN) || (defined (_FORTIFY_SOURCE) && _FORTIFY_SOURCE == 0)
