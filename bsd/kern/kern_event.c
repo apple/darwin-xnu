@@ -8595,7 +8595,11 @@ kevent_copyout_proc_dynkqids(void *proc, user_addr_t ubuf, uint32_t ubufsize,
 			goto out;
 		}
 		kq_ids = kalloc(bufsize);
-		assert(kq_ids != NULL);
+		if (!kq_ids) {
+			err = ENOMEM;
+			goto out;
+		}
+		bzero(kq_ids, bufsize);
 	}
 
 	kqhash_lock(p);
@@ -8618,7 +8622,7 @@ kevent_copyout_proc_dynkqids(void *proc, user_addr_t ubuf, uint32_t ubufsize,
 
 	if (kq_ids) {
 		size_t copysize;
-		if (os_mul_overflow(sizeof(kqueue_id_t), min(ubuflen, nkqueues), &copysize)) {
+		if (os_mul_overflow(sizeof(kqueue_id_t), min(buflen, nkqueues), &copysize)) {
 			err = ERANGE;
 			goto out;
 		}

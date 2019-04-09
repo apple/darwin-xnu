@@ -645,11 +645,8 @@ void
 panic_with_thread_context(unsigned int reason, void *ctx, uint64_t debugger_options_mask, thread_t thread, const char *str, ...)
 {
 	va_list panic_str_args;
-	__assert_only uint32_t th_ref_count;
 
 	assert_thread_magic(thread);
-	th_ref_count = atomic_load_explicit(&thread->ref_count, memory_order_acquire);
-	assertf(th_ref_count > 0, "panic_with_thread_context called with invalid thread %p with refcount %u", thread, th_ref_count);
 
 	/* Take a reference on the thread so it doesn't disappear by the time we try to backtrace it */
 	thread_reference(thread);

@@ -73,7 +73,7 @@ struct trust_cache_module1 {
 #define TC_LOOKUP_RESULT_MASK                   0xffL
 
 #define TC_LOOKUP_FOUND         1
-#define TC_LOOKUP_FALLBACK      2
+// #define TC_LOOKUP_FALLBACK      2 /* obsolete with removal of legacy static trust caches */
 
 #ifdef XNU_KERNEL_PRIVATE
 
@@ -85,22 +85,6 @@ struct serialized_trust_caches {
        uint32_t offsets[0];
 } __attribute__((__packed__));
 
-
-// Legacy Static Trust Cache
-
-/* This is the old legacy trust cache baked into the AMFI kext.
- * We support it for a transitionary period, until external trust caches
- * are fully established, and the AMFI trust cache can be removed. */
-
-struct legacy_trust_cache_bucket {
-	uint16_t count;
-	uint16_t offset;
-} __attribute__((__packed__));
-
-#define LEGACY_TRUST_CACHE_ENTRY_LEN (CS_CDHASH_LEN-1)
-#define LEGACY_TRUST_CACHE_BUCKET_COUNT (256)
-
-typedef uint8_t pmap_cs_legacy_stc_entry[CS_CDHASH_LEN-1]; // bucketized with first byte
 
 void trust_cache_init(void);
 

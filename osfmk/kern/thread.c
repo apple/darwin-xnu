@@ -244,6 +244,8 @@ void __attribute__((noinline)) SENDING_NOTIFICATION__TASK_HAS_TOO_MANY_THREADS(t
  */
 #define MINIMUM_CPULIMIT_INTERVAL_MS 1
 
+os_refgrp_decl(static, thread_refgrp, "thread", NULL);
+
 void
 thread_bootstrap(void)
 {
@@ -256,8 +258,6 @@ thread_bootstrap(void)
 #endif /* MACH_ASSERT */
 
 	thread_template.runq = PROCESSOR_NULL;
-
-	thread_template.ref_count = 2;
 
 	thread_template.reason = AST_NONE;
 	thread_template.at_safe_point = FALSE;
@@ -413,6 +413,7 @@ thread_bootstrap(void)
 	thread_template.th_work_interval = NULL;
 
 	init_thread = thread_template;
+
 	machine_set_current_thread(&init_thread);
 }
 
@@ -687,49 +688,34 @@ thread_terminate_self(void)
 	/*NOTREACHED*/
 }
 
+static bool
+thread_ref_release(thread_t thread)
+{
+	if (thread == THREAD_NULL) {
+		return false;
+	}
+
+	assert_thread_magic(thread);
+
+	return os_ref_release(&thread->ref_count) == 0;
+}
+
 /* Drop a thread refcount safely without triggering a zfree */
 void
 thread_deallocate_safe(thread_t thread)
 {
-	__assert_only uint32_t		th_ref_count;
-
-	if (thread == THREAD_NULL)
-		return;
-
-	assert_thread_magic(thread);
-
-	if (__probable(atomic_fetch_sub_explicit(&thread->ref_count, 1,
-                       memory_order_release) - 1 > 0)) {
-                return;
-        }
-
-	th_ref_count = atomic_load_explicit(&thread->ref_count, memory_order_acquire);
-	assert(th_ref_count == 0);
-
-	/* enqueue the thread for thread deallocate deamon to call thread_deallocate_complete */
-	thread_deallocate_enqueue(thread);
+	if (__improbable(thread_ref_release(thread))) {
+		/* enqueue the thread for thread deallocate deamon to call thread_deallocate_complete */
+		thread_deallocate_enqueue(thread);
+	}
 }
 
 void
-thread_deallocate(
-	thread_t			thread)
+thread_deallocate(thread_t thread)
 {
-	__assert_only uint32_t		th_ref_count;
-
-	if (thread == THREAD_NULL)
-		return;
-
-	assert_thread_magic(thread);
-
-	if (__probable(atomic_fetch_sub_explicit(&thread->ref_count, 1,
-                       memory_order_release) - 1 > 0)) {
-                return;
-        }
-
-	th_ref_count = atomic_load_explicit(&thread->ref_count, memory_order_acquire);
-	assert(th_ref_count == 0);
-
-	thread_deallocate_complete(thread);
+	if (__improbable(thread_ref_release(thread))) {
+		thread_deallocate_complete(thread);
+	}
 }
 
 void
@@ -740,7 +726,7 @@ thread_deallocate_complete(
 
 	assert_thread_magic(thread);
 
-	assert(thread->ref_count == 0);
+	assert(os_ref_get_count(&thread->ref_count) == 0);
 
 	assert(thread_owned_workloops_count(thread) == 0);
 
@@ -1331,6 +1317,8 @@ thread_create_internal(
 
 	if (new_thread != first_thread)
 		*new_thread = thread_template;
+
+	os_ref_init_count(&new_thread->ref_count, &thread_refgrp, 2);
 
 #ifdef MACH_BSD
 	new_thread->uthread = uthread_alloc(parent_task, new_thread, (options & TH_OPTION_NOCRED) != 0);

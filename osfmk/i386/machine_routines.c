@@ -760,6 +760,8 @@ ml_delay_should_spin(uint64_t interval)
 	return (interval < delay_spin_threshold) ? TRUE : FALSE;
 }
 
+void ml_delay_on_yield(void) {}
+
 /*
  * This is called from the machine-independent layer
  * to perform machine-dependent info updates. Defer to cpu_thread_init().

@@ -774,8 +774,10 @@ mptcp_trigger_cell_bringup(struct mptses *mpte)
 		uuid_string_t uuidstr;
 		int err;
 
+		mpte_unlock(mpte);
 		err = necp_client_assert_bb_radio_manager(mpsotomppcb(mp_so)->necp_client_uuid,
 							  TRUE);
+		mpte_lock(mpte);
 
 		if (err == 0)
 			mpte->mpte_triggered_cell = 1;

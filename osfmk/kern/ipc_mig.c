@@ -500,6 +500,92 @@ mach_msg_rpc_from_kernel_body(
 	return mr;
 }
 
+/*
+ *	Routine:	mach_msg_destroy_from_kernel_proper
+ *	Purpose:
+ *		mach_msg_destroy_from_kernel_proper is used to destroy
+ *		an unwanted/unexpected reply message from a MIG
+ *		kernel-specific user-side stub.	It is like ipc_kmsg_destroy(),
+ *		except we no longer have the kmsg - just the contents.
+ */
+void
+mach_msg_destroy_from_kernel_proper(mach_msg_header_t *msg)
+{
+    mach_msg_bits_t mbits = msg->msgh_bits;
+	ipc_object_t object;
+
+	object = (ipc_object_t) msg->msgh_remote_port;
+	if (IO_VALID(object)) {
+		ipc_object_destroy(object, MACH_MSGH_BITS_REMOTE(mbits));
+	}
+
+	/*
+	 * The destination (now in msg->msgh_local_port via
+	 * ipc_kmsg_copyout_to_kernel) has been consumed with
+	 * ipc_object_copyout_dest.
+	 */
+
+	/* MIG kernel users don't receive vouchers */
+	assert(!MACH_PORT_VALID(msg->msgh_voucher_port));
+
+	/* For simple messages, we're done */
+	if ((mbits & MACH_MSGH_BITS_COMPLEX) == 0) {
+		return;
+	}
+
+	/* Discard descriptor contents */
+	mach_msg_body_t *body = (mach_msg_body_t *)(msg + 1);
+	mach_msg_descriptor_t *daddr = (mach_msg_descriptor_t *)(body + 1);
+	mach_msg_size_t i;
+
+	for (i = 0 ; i < body->msgh_descriptor_count; i++, daddr++ ) {
+		switch (daddr->type.type) {
+
+		case MACH_MSG_PORT_DESCRIPTOR: {
+			mach_msg_port_descriptor_t *dsc = &daddr->port;
+			if (IO_VALID((ipc_object_t) dsc->name)) {
+				ipc_object_destroy((ipc_object_t) dsc->name, dsc->disposition);
+			}
+			break;
+		}
+		case MACH_MSG_OOL_VOLATILE_DESCRIPTOR:
+		case MACH_MSG_OOL_DESCRIPTOR : {
+			mach_msg_ool_descriptor_t *dsc =
+			    (mach_msg_ool_descriptor_t *)&daddr->out_of_line;
+
+			if (dsc->size > 0) {
+				vm_map_copy_discard((vm_map_copy_t) dsc->address);
+			} else {
+				assert(dsc->address == (void *) 0);
+			}
+			break;
+		}
+		case MACH_MSG_OOL_PORTS_DESCRIPTOR : {
+			ipc_object_t             	*objects;
+			mach_msg_type_number_t   	j;
+			mach_msg_ool_ports_descriptor_t	*dsc;
+
+			dsc = (mach_msg_ool_ports_descriptor_t	*)&daddr->ool_ports;
+			objects = (ipc_object_t *) dsc->address;
+
+			if (dsc->count == 0) {
+				break;
+			}
+			assert(objects != 0);
+			for (j = 0; j < dsc->count; j++) {
+				object = objects[j];
+				if (IO_VALID(object)) {
+					ipc_object_destroy(object, dsc->disposition);
+				}
+			}
+			kfree(dsc->address, (vm_size_t) dsc->count * sizeof(mach_port_t));
+			break;
+		}
+		default :
+			break;
+		}
+	}
+}
 
 /************** These Calls are set up for kernel-loaded tasks/threads **************/
 

@@ -88,6 +88,8 @@ void ml_init_delay_spin_threshold(int);
 
 boolean_t ml_delay_should_spin(uint64_t interval);
 
+extern void ml_delay_on_yield(void);
+
 vm_offset_t
 ml_static_ptovirt(
 	vm_offset_t);

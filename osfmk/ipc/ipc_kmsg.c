@@ -4615,13 +4615,13 @@ ipc_kmsg_copyout_to_kernel(
 	ipc_space_t	space)
 {
 	ipc_object_t dest;
-	ipc_object_t reply;
+	mach_port_t reply;
 	mach_msg_type_name_t dest_type;
 	mach_msg_type_name_t reply_type;
-	mach_port_name_t dest_name, reply_name;
+	mach_port_name_t dest_name;
 
 	dest = (ipc_object_t) kmsg->ikm_header->msgh_remote_port;
-	reply = (ipc_object_t) kmsg->ikm_header->msgh_local_port;
+	reply = kmsg->ikm_header->msgh_local_port;
 	dest_type = MACH_MSGH_BITS_REMOTE(kmsg->ikm_header->msgh_bits);
 	reply_type = MACH_MSGH_BITS_LOCAL(kmsg->ikm_header->msgh_bits);
 
@@ -4637,13 +4637,11 @@ ipc_kmsg_copyout_to_kernel(
 		dest_name = MACH_PORT_DEAD;
 	}
 
-	reply_name = CAST_MACH_PORT_TO_NAME(reply);
-
 	kmsg->ikm_header->msgh_bits =
 		(MACH_MSGH_BITS_OTHER(kmsg->ikm_header->msgh_bits) |
 					MACH_MSGH_BITS(reply_type, dest_type));
 	kmsg->ikm_header->msgh_local_port =  CAST_MACH_NAME_TO_PORT(dest_name);
-	kmsg->ikm_header->msgh_remote_port = CAST_MACH_NAME_TO_PORT(reply_name);
+	kmsg->ikm_header->msgh_remote_port = reply;
 }
 
 #if IKM_SUPPORT_LEGACY

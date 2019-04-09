@@ -196,6 +196,51 @@ static void pmEventTimeStamp(uint64_t *recordTS);
 static const OSSymbol *sleepSupportedPEFunction = NULL;
 static const OSSymbol *sleepMessagePEFunction   = NULL;
 
+static const OSSymbol *		gIOPMPSExternalConnectedKey;
+static const OSSymbol *		gIOPMPSExternalChargeCapableKey;
+static const OSSymbol *		gIOPMPSBatteryInstalledKey;
+static const OSSymbol *		gIOPMPSIsChargingKey;
+static const OSSymbol *		gIOPMPSAtWarnLevelKey;
+static const OSSymbol *		gIOPMPSAtCriticalLevelKey;
+static const OSSymbol *		gIOPMPSCurrentCapacityKey;
+static const OSSymbol *		gIOPMPSMaxCapacityKey;
+static const OSSymbol *		gIOPMPSDesignCapacityKey;
+static const OSSymbol *		gIOPMPSTimeRemainingKey;
+static const OSSymbol *		gIOPMPSAmperageKey;
+static const OSSymbol *		gIOPMPSVoltageKey;
+static const OSSymbol *		gIOPMPSCycleCountKey;
+static const OSSymbol *		gIOPMPSMaxErrKey;
+static const OSSymbol *		gIOPMPSAdapterInfoKey;
+static const OSSymbol *		gIOPMPSLocationKey;
+static const OSSymbol *		gIOPMPSErrorConditionKey;
+static const OSSymbol *		gIOPMPSManufacturerKey;
+static const OSSymbol *		gIOPMPSManufactureDateKey;
+static const OSSymbol *		gIOPMPSModelKey;
+static const OSSymbol *		gIOPMPSSerialKey;
+static const OSSymbol *		gIOPMPSLegacyBatteryInfoKey;
+static const OSSymbol *		gIOPMPSBatteryHealthKey;
+static const OSSymbol *		gIOPMPSHealthConfidenceKey;
+static const OSSymbol *		gIOPMPSCapacityEstimatedKey;
+static const OSSymbol *		gIOPMPSBatteryChargeStatusKey;
+static const OSSymbol *		gIOPMPSBatteryTemperatureKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsKey;
+static const OSSymbol *		gIOPMPSChargerConfigurationKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsIDKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsWattsKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsRevisionKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsSerialNumberKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsFamilyKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsAmperageKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsDescriptionKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsPMUConfigurationKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsSourceIDKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsErrorFlagsKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsSharedSourceKey;
+static const OSSymbol *		gIOPMPSAdapterDetailsCloakedKey;
+static const OSSymbol *		gIOPMPSInvalidWakeSecondsKey;
+static const OSSymbol *		gIOPMPSPostChargeWaitSecondsKey;
+static const OSSymbol *		gIOPMPSPostDishargeWaitSecondsKey;
+
 #define kIOSleepSupportedKey        "IOSleepSupported"
 #define kIOPMSystemCapabilitiesKey  "System Capabilities"
 
@@ -9591,6 +9636,51 @@ static IOPMPowerState patriarchPowerStates[2] =
 
 void IORootParent::initialize( void )
 {
+
+    gIOPMPSExternalConnectedKey = OSSymbol::withCStringNoCopy(kIOPMPSExternalConnectedKey);
+    gIOPMPSExternalChargeCapableKey = OSSymbol::withCStringNoCopy(kIOPMPSExternalChargeCapableKey);
+    gIOPMPSBatteryInstalledKey = OSSymbol::withCStringNoCopy(kIOPMPSBatteryInstalledKey);
+    gIOPMPSIsChargingKey = OSSymbol::withCStringNoCopy(kIOPMPSIsChargingKey);
+    gIOPMPSAtWarnLevelKey = OSSymbol::withCStringNoCopy(kIOPMPSAtWarnLevelKey);
+    gIOPMPSAtCriticalLevelKey = OSSymbol::withCStringNoCopy(kIOPMPSAtCriticalLevelKey);
+    gIOPMPSCurrentCapacityKey = OSSymbol::withCStringNoCopy(kIOPMPSCurrentCapacityKey);
+    gIOPMPSMaxCapacityKey = OSSymbol::withCStringNoCopy(kIOPMPSMaxCapacityKey);
+    gIOPMPSDesignCapacityKey = OSSymbol::withCStringNoCopy(kIOPMPSDesignCapacityKey);
+    gIOPMPSTimeRemainingKey = OSSymbol::withCStringNoCopy(kIOPMPSTimeRemainingKey);
+    gIOPMPSAmperageKey = OSSymbol::withCStringNoCopy(kIOPMPSAmperageKey);
+    gIOPMPSVoltageKey = OSSymbol::withCStringNoCopy(kIOPMPSVoltageKey);
+    gIOPMPSCycleCountKey = OSSymbol::withCStringNoCopy(kIOPMPSCycleCountKey);
+    gIOPMPSMaxErrKey = OSSymbol::withCStringNoCopy(kIOPMPSMaxErrKey);
+    gIOPMPSAdapterInfoKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterInfoKey);
+    gIOPMPSLocationKey = OSSymbol::withCStringNoCopy(kIOPMPSLocationKey);
+    gIOPMPSErrorConditionKey = OSSymbol::withCStringNoCopy(kIOPMPSErrorConditionKey);
+    gIOPMPSManufacturerKey = OSSymbol::withCStringNoCopy(kIOPMPSManufacturerKey);
+    gIOPMPSManufactureDateKey = OSSymbol::withCStringNoCopy(kIOPMPSManufactureDateKey);
+    gIOPMPSModelKey = OSSymbol::withCStringNoCopy(kIOPMPSModelKey);
+    gIOPMPSSerialKey = OSSymbol::withCStringNoCopy(kIOPMPSSerialKey);
+    gIOPMPSLegacyBatteryInfoKey = OSSymbol::withCStringNoCopy(kIOPMPSLegacyBatteryInfoKey);
+    gIOPMPSBatteryHealthKey = OSSymbol::withCStringNoCopy(kIOPMPSBatteryHealthKey);
+    gIOPMPSHealthConfidenceKey = OSSymbol::withCStringNoCopy(kIOPMPSHealthConfidenceKey);
+    gIOPMPSCapacityEstimatedKey = OSSymbol::withCStringNoCopy(kIOPMPSCapacityEstimatedKey);
+    gIOPMPSBatteryChargeStatusKey = OSSymbol::withCStringNoCopy(kIOPMPSBatteryChargeStatusKey);
+    gIOPMPSBatteryTemperatureKey = OSSymbol::withCStringNoCopy(kIOPMPSBatteryTemperatureKey);
+    gIOPMPSAdapterDetailsKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsKey);
+    gIOPMPSChargerConfigurationKey = OSSymbol::withCStringNoCopy(kIOPMPSChargerConfigurationKey);
+    gIOPMPSAdapterDetailsIDKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsIDKey);
+    gIOPMPSAdapterDetailsWattsKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsWattsKey);
+    gIOPMPSAdapterDetailsRevisionKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsRevisionKey);
+    gIOPMPSAdapterDetailsSerialNumberKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsSerialNumberKey);
+    gIOPMPSAdapterDetailsFamilyKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsFamilyKey);
+    gIOPMPSAdapterDetailsAmperageKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsAmperageKey);
+    gIOPMPSAdapterDetailsDescriptionKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsDescriptionKey);
+    gIOPMPSAdapterDetailsPMUConfigurationKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsPMUConfigurationKey);
+    gIOPMPSAdapterDetailsSourceIDKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsSourceIDKey);
+    gIOPMPSAdapterDetailsErrorFlagsKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsErrorFlagsKey);
+    gIOPMPSAdapterDetailsSharedSourceKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsSharedSourceKey);
+    gIOPMPSAdapterDetailsCloakedKey = OSSymbol::withCStringNoCopy(kIOPMPSAdapterDetailsCloakedKey);
+    gIOPMPSInvalidWakeSecondsKey = OSSymbol::withCStringNoCopy(kIOPMPSInvalidWakeSecondsKey);
+    gIOPMPSPostChargeWaitSecondsKey = OSSymbol::withCStringNoCopy(kIOPMPSPostChargeWaitSecondsKey);
+    gIOPMPSPostDishargeWaitSecondsKey = OSSymbol::withCStringNoCopy(kIOPMPSPostDishargeWaitSecondsKey);
 }
 
 bool IORootParent::start( IOService * nub )

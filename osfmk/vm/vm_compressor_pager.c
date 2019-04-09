@@ -707,8 +707,10 @@ vm_compressor_pager_put(
 {
 	compressor_pager_t	pager;
 	compressor_slot_t	*slot_p;
+#if __arm__ || __arm64__
 	unsigned int		prev_wimg = VM_WIMG_DEFAULT;
 	boolean_t		set_cache_attr = FALSE;
+#endif
 
 	compressor_pager_stats.put++;
 
@@ -749,6 +751,7 @@ vm_compressor_pager_put(
 		*compressed_count_delta_p -= 1;
 	}
 
+#if __arm__ || __arm64__
 	/*
 	 * cacheability should be set to the system default (usually writeback)
 	 * during compressor operations, both for performance and correctness,
@@ -772,6 +775,11 @@ vm_compressor_pager_put(
 			pmap_set_cache_attributes(ppnum, prev_wimg);
 	        return KERN_RESOURCE_SHORTAGE;
 	}
+#else
+	if (vm_compressor_put(ppnum, slot_p, current_chead, scratch_buf)) {
+	        return KERN_RESOURCE_SHORTAGE;
+	}
+#endif
 	*compressed_count_delta_p += 1;
 
 	return KERN_SUCCESS;
@@ -820,6 +828,7 @@ vm_compressor_pager_get(
 		
 	if (kr == KERN_SUCCESS) {
 		int	retval;
+#if __arm__ || __arm64__
 		unsigned int prev_wimg = VM_WIMG_DEFAULT;
 		boolean_t set_cache_attr = FALSE;
 
@@ -835,7 +844,7 @@ vm_compressor_pager_get(
 			set_cache_attr = TRUE;
 			pmap_set_cache_attributes(ppnum, VM_WIMG_DEFAULT);
 		}
-
+#endif
 		/* get the page from the compressor */
 		retval = vm_compressor_get(ppnum, slot_p, flags);
 		if (retval == -1)
@@ -846,8 +855,10 @@ vm_compressor_pager_get(
 			assert((flags & C_DONT_BLOCK));
 			kr = KERN_FAILURE;
 		}
+#if __arm__ || __arm64__
 		if (set_cache_attr)
 			pmap_set_cache_attributes(ppnum, prev_wimg);
+#endif
 	}
 
 	if (kr == KERN_SUCCESS) {

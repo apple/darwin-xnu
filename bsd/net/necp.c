@@ -8826,6 +8826,9 @@ necp_socket_is_allowed_to_send_recv_internal(struct inpcb *inp, struct sockaddr 
 			if (return_route_rule_id) {
 				*return_route_rule_id = inp->inp_policyresult.results.route_rule_id;
 			}
+			if (return_skip_policy_id) {
+				*return_skip_policy_id = inp->inp_policyresult.skip_policy_id;
+			}
 		}
 		lck_rw_done(&necp_kernel_policy_lock);
 		goto done;

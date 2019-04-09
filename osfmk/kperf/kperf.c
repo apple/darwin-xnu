@@ -344,7 +344,7 @@ kperf_port_to_pid(mach_port_name_t portname)
 	}
 	pid_t pid = task_pid(task);
 	/* drop the ref taken by port_name_to_task */
-	task_deallocate_internal(task);
+	(void)task_deallocate_internal(task);
 
 	return pid;
 }

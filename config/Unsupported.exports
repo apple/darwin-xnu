@@ -119,6 +119,7 @@ _mach_make_memory_entry_64
 _mach_memory_entry_page_op
 _mach_memory_entry_range_op
 _mach_msg_rpc_from_kernel_proper
+_mach_msg_destroy_from_kernel_proper
 _mach_vm_region
 _max_mem
 _mem_size

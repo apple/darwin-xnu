@@ -127,6 +127,7 @@
 #include <kern/thread.h>
 #include <mach/coalition.h>
 #include <stdatomic.h>
+#include <os/refcnt.h>
 
 #ifdef CONFIG_ATM
 #include <atm/atm_internal.h>
@@ -147,7 +148,7 @@ struct _cpu_time_qos_stats {
 struct task {
 	/* Synchronization/destruction information */
 	decl_lck_mtx_data(,lock)		/* Task's lock */
-	_Atomic uint32_t	ref_count;	/* Number of references to me */
+	os_refcnt_t	ref_count;	/* Number of references to me */
 	boolean_t	active;		/* Task has not been terminated */
 	boolean_t	halting;	/* Task is being halted */
 	/* Virtual timers */
@@ -477,13 +478,10 @@ task_violated_guard(mach_exception_code_t, mach_exception_subcode_t, void *);
 
 #if TASK_REFERENCE_LEAK_DEBUG
 extern void task_reference_internal(task_t task);
-extern uint32_t task_deallocate_internal(task_t task);
+extern os_ref_count_t task_deallocate_internal(task_t task);
 #else
-#define task_reference_internal(task)		\
-			(void)atomic_fetch_add_explicit(&(task)->ref_count, 1, memory_order_relaxed)
-
-#define task_deallocate_internal(task)		\
-			(atomic_fetch_sub_explicit(&task->ref_count, 1, memory_order_release) - 1)
+#define task_reference_internal(task) os_ref_retain(&(task)->ref_count)
+#define task_deallocate_internal(task) os_ref_release(&(task)->ref_count)
 #endif
 
 #define task_reference(task)					\

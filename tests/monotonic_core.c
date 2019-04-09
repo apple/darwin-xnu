@@ -155,6 +155,68 @@ T_DECL(core_fixed_kdebug, "check that the kdebug macros for monotonic work",
 	dispatch_main();
 }
 
+static void *
+spin_thread_self_counts(__unused void *arg)
+{
+	extern int thread_selfcounts(int, void *, size_t);
+	uint64_t counts[2] = { 0 };
+	while (true) {
+		(void)thread_selfcounts(1, &counts, sizeof(counts));
+	}
+}
+
+static void *
+spin_task_inspect(__unused void *arg)
+{
+	task_t task = mach_task_self();
+	uint64_t counts[2] = { 0 };
+	unsigned int size = 0;
+	while (true) {
+		size = (unsigned int)sizeof(counts);
+		(void)task_inspect(task, TASK_INSPECT_BASIC_COUNTS,
+				(task_inspect_info_t)&counts[0], &size);
+		/*
+		 * Not realistic for a process to see count values with the high bit
+		 * set, but kernel pointers will be that high.
+		 */
+		T_QUIET; T_ASSERT_LT(counts[0], 1ULL << 63,
+				"check for valid count entry 1");
+		T_QUIET; T_ASSERT_LT(counts[1], 1ULL << 63,
+				"check for valid count entry 2");
+	}
+}
+
+T_DECL(core_fixed_stack_leak_race,
+		"ensure no stack data is leaked by TASK_INSPECT_BASIC_COUNTS")
+{
+	T_SETUPBEGIN;
+
+	int ncpus = 0;
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("hw.logicalcpu_max", &ncpus,
+			&(size_t){ sizeof(ncpus) }, NULL, 0), "get number of CPUs");
+	T_QUIET; T_ASSERT_GT(ncpus, 0, "got non-zero number of CPUs");
+	pthread_t *threads = calloc((unsigned long)ncpus, sizeof(*threads));
+
+	T_QUIET; T_ASSERT_NOTNULL(threads, "allocated space for threads");
+
+	T_LOG("creating %d threads to attempt to race around task counts", ncpus);
+	/*
+	 * Have half the threads hammering thread_self_counts and the other half
+	 * trying to get an error to occur inside TASK_INSPECT_BASIC_COUNTS and see
+	 * uninitialized kernel memory.
+	 */
+	for (int i = 0; i < ncpus; i++) {
+		T_QUIET; T_ASSERT_POSIX_ZERO(pthread_create(&threads[i], NULL,
+				i & 1 ? spin_task_inspect : spin_thread_self_counts, NULL),
+				NULL);
+	}
+
+	T_SETUPEND;
+
+	sleep(10);
+	T_PASS("ending test after 10 seconds");
+}
+
 static void
 perf_sysctl_deltas(const char *sysctl_name, const char *stat_name)
 {

@@ -87,8 +87,6 @@ static kern_return_t atm_value_register(atm_value_t atm_value, atm_task_descript
 static kern_return_t atm_listener_delete(atm_value_t atm_value, atm_task_descriptor_t task_descriptor, atm_guard_t guard);
 static void atm_link_get_reference(atm_link_object_t link_object) __unused;
 static void atm_link_dealloc(atm_link_object_t link_object);
-kern_return_t atm_invoke_collection(atm_value_t atm_value, mach_atm_subaid_t subaid, uint32_t flags);
-kern_return_t atm_send_user_notification(aid_t aid, mach_atm_subaid_t sub_aid, mach_port_t *buffers_array, uint64_t *sizes_array, mach_msg_type_number_t count, uint32_t flags);
 
 kern_return_t
 atm_release_value(
@@ -479,43 +477,15 @@ atm_command(
 	uint32_t aid_array_count = 0;
 	atm_task_descriptor_t task_descriptor = ATM_TASK_DESCRIPTOR_NULL;
 	task_t task;
-	uint32_t collection_flags = ATM_ACTION_LOGFAIL;
 	kern_return_t kr = KERN_SUCCESS;
 	atm_guard_t guard;
 	
 	switch (command) {
 	case ATM_ACTION_COLLECT:
-		collection_flags = ATM_ACTION_COLLECT;
 		/* Fall through */
 
-	case ATM_ACTION_LOGFAIL: {
-		mach_atm_subaid_t sub_aid = 0;
-
-		if (disable_atm || (atm_get_diagnostic_config() & ATM_TRACE_DISABLE))
-			return KERN_NOT_SUPPORTED;
-
-		/* find the first non-default atm_value */
-		for (i = 0; i < value_count; i++) {
-			atm_value = HANDLE_TO_ATM_VALUE(values[i]);
-			if (atm_value != VAM_DEFAULT_VALUE)
-				break;
-		}
-		
-		/* if we are not able to find any atm values
-		 * in stack then this call was made in error
-		 */
-		if (atm_value == NULL) {
-			return KERN_FAILURE;
-		}
-
-		if (in_content_size >= sizeof(mach_atm_subaid_t)) {
-			sub_aid = *(mach_atm_subaid_t *)(void *)in_content;
-		}
-
-		*out_content_size = 0;
-		kr = atm_invoke_collection(atm_value, sub_aid, collection_flags);
-		break;
-	}
+	case ATM_ACTION_LOGFAIL:
+		return KERN_NOT_SUPPORTED;
 
 	case ATM_FIND_MIN_SUB_AID:
 		if ((in_content_size/sizeof(aid_t)) > (*out_content_size/sizeof(mach_atm_subaid_t)))
@@ -610,202 +580,6 @@ atm_release(
 	assert(manager == &atm_manager);
 }
 
-
-/*
- * Routine: atm_invoke_collection
- * Purpose: Sends a notification with array of memory buffer.
- * Note: may block till user daemon responds.
- */
-kern_return_t
-atm_invoke_collection(
-	atm_value_t atm_value,
-	mach_atm_subaid_t sub_aid,
-	uint32_t flags)
-{
-	aid_t aid = atm_value->aid;
-	kern_return_t kr = KERN_SUCCESS;
-	uint32_t array_count = 0, i = 0, j = 0, requestor_index = 0;
-	uint64_t *sizes_array = NULL;
-	atm_link_object_t link_object = NULL;
-	mach_port_t *mem_array = NULL;
-	boolean_t need_swap_first = FALSE;
-	atm_task_descriptor_t requesting_descriptor = current_task()->atm_context;
-
-	lck_mtx_lock(&atm_value->listener_lock);
-	array_count = atm_value->listener_count;
-	lck_mtx_unlock(&atm_value->listener_lock);
-
-	if (array_count == 0){
-		return KERN_SUCCESS;
-	}
-
-	mem_array = kalloc(sizeof(mach_port_t) * array_count);
-	if (mem_array == NULL){
-		return KERN_NO_SPACE;
-	}
-
-	sizes_array = kalloc(sizeof(uint64_t) * array_count);
-	if (sizes_array == NULL){
-		kfree(mem_array, sizeof(mach_port_t) * array_count);
-		return KERN_NO_SPACE;
-	}
-
-	lck_mtx_lock(&atm_value->listener_lock);
-	queue_iterate(&atm_value->listeners, link_object, atm_link_object_t, listeners_element) {
-		if (i >= array_count){
-			break;
-		}
-
-		if (!need_swap_first && requesting_descriptor == link_object->descriptor){
-			assert(requesting_descriptor != NULL);
-			requestor_index = i;
-			need_swap_first = TRUE;
-		}
-
-		sizes_array[i] = link_object->descriptor->trace_buffer_size;
-		mem_array[i] = ipc_port_copy_send(link_object->descriptor->trace_buffer);
-		if (!IPC_PORT_VALID(mem_array[i])){
-			mem_array[i] = NULL;
-		}
-		i++;
-	}
-	lck_mtx_unlock(&atm_value->listener_lock);
-
-	/*
-	 * Swap the position of requesting task ahead, diagnostics can 
-	 * process its buffers the first.
-	 */
-	if (need_swap_first && requestor_index != 0){
-		assert(requestor_index < array_count);
-		mach_port_t tmp_port = mem_array[0];
-		uint64_t tmp_size = sizes_array[0];
-		mem_array[0] = mem_array[requestor_index];
-		sizes_array[0] = sizes_array[requestor_index];
-		mem_array[requestor_index] = tmp_port;
-		sizes_array[requestor_index] = tmp_size;
-	}
-
-	if (i > 0) {
-		kr = atm_send_user_notification(aid, sub_aid, mem_array, sizes_array, i, flags);
-	}
-
-	for (j = 0; j < i; j++) {
-		if (mem_array[j] != NULL)
-			ipc_port_release_send(mem_array[j]);
-	}
-
-	kfree(mem_array, sizeof(mach_port_t) * array_count);
-	kfree(sizes_array, sizeof(uint64_t) * array_count);
-
-	return kr;
-}
-
-/*
- * Routine: atm_send_user_notification
- * Purpose: Make an upcall to user space daemon if its listening for atm notifications.
- * Returns: KERN_SUCCESS for successful delivery.
- *			KERN_FAILURE if port is dead or NULL.
- */
-kern_return_t
-atm_send_user_notification(
-	aid_t aid,
-	mach_atm_subaid_t sub_aid,
-	mach_port_t *buffers_array,
-	uint64_t *sizes_array,
-	mach_msg_type_number_t count,
-	uint32_t flags)
-{
-	mach_port_t user_port;
-	int			error;
-	thread_t th = current_thread();
-	kern_return_t kr;
-
-	error = host_get_atm_notification_port(host_priv_self(), &user_port);
-	if ((error != KERN_SUCCESS) || !IPC_PORT_VALID(user_port)) {
-		return KERN_FAILURE;
-	}
-
-	thread_set_honor_qlimit(th);
-	kr = atm_collect_trace_info(user_port, aid, sub_aid, flags, buffers_array, count, sizes_array, count);
-	thread_clear_honor_qlimit(th);
-
-	if (kr != KERN_SUCCESS) {
-		ipc_port_release_send(user_port);
-
-		if (kr == MACH_SEND_TIMED_OUT) {
-			kr = KERN_SUCCESS;
-		}
-	}
-
-	return kr;
-}
-
-/*
- * Routine: atm_send_proc_inspect_notification
- * Purpose: Make an upcall to user space daemon if its listening for trace 
- *          notifications for per process inspection.
- * Returns: KERN_SUCCESS for successful delivery.
- *			KERN_FAILURE if port is dead or NULL.
- */
-
-kern_return_t
-atm_send_proc_inspect_notification(
-	task_t task,
-	int32_t traced_pid,
-	uint64_t traced_uniqueid)
-{
-	mach_port_t user_port = MACH_PORT_NULL;
-	mach_port_t memory_port = MACH_PORT_NULL;
-	kern_return_t kr;
-	atm_task_descriptor_t task_descriptor = ATM_TASK_DESCRIPTOR_NULL;
-	uint64_t buffer_size = 0;
-	int			error;
-	thread_t th = current_thread();
-
-	if (disable_atm || (atm_get_diagnostic_config() & ATM_TRACE_DISABLE))
-		return KERN_NOT_SUPPORTED;
-
-	/* look for the requested memory in target task */
-	if (!task)
-		return KERN_INVALID_TASK;
-
-	task_lock(task);
-	if (task->atm_context){
-		task_descriptor = task->atm_context;
-		atm_descriptor_get_reference(task_descriptor);
-	}
-	task_unlock(task);
-
-	if (task_descriptor == ATM_TASK_DESCRIPTOR_NULL){
-		return KERN_FAILURE;
-	}
-
-	memory_port = ipc_port_copy_send(task_descriptor->trace_buffer);
-	buffer_size =  task_descriptor->trace_buffer_size;
-	atm_task_descriptor_dealloc(task_descriptor);
-
-	/* get the communication port */
-	error = host_get_atm_notification_port(host_priv_self(), &user_port);
-	if ((error != KERN_SUCCESS) || !IPC_PORT_VALID(user_port)) {
-		ipc_port_release_send(memory_port);
-		return KERN_FAILURE;
-	}
-
-	thread_set_honor_qlimit(th);
-	kr =  atm_inspect_process_buffer(user_port, traced_pid, traced_uniqueid, buffer_size, memory_port);
-	thread_clear_honor_qlimit(th);
-
-	if (kr != KERN_SUCCESS) {
-		ipc_port_release_send(user_port);
-
-		if (kr == MACH_SEND_TIMED_OUT) {
-			kr = KERN_SUCCESS;
-		}
-	}
-
-	ipc_port_release_send(memory_port);
-	return kr;
-}
 
 /*
  * Routine: atm_value_alloc_init

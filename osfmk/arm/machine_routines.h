@@ -444,6 +444,8 @@ void ml_init_lock_timeout(void);
 
 boolean_t ml_delay_should_spin(uint64_t interval);
 
+void ml_delay_on_yield(void);
+
 uint32_t ml_get_decrementer(void);
 
 #if !CONFIG_SKIP_PRECISE_USER_KERNEL_TIME

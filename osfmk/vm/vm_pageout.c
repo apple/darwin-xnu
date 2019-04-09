@@ -1742,6 +1742,7 @@ void update_vm_info(void)
 	record_memory_pressure();
 }
 
+extern boolean_t hibernation_vmqueues_inspection;
 
 void
 vm_page_balance_inactive(int max_to_move)
@@ -1750,6 +1751,17 @@ vm_page_balance_inactive(int max_to_move)
 
 	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 
+	if (hibernation_vmqueues_inspection == TRUE) {
+		/*
+		 * It is likely that the hibernation code path is
+		 * dealing with these very queues as we are about
+		 * to move pages around in/from them and completely
+		 * change the linkage of the pages.
+		 *
+		 * And so we skip the rebalancing of these queues.
+		 */
+		return;
+	}
 	vm_page_inactive_target = VM_PAGE_INACTIVE_TARGET(vm_page_active_count +
 							  vm_page_inactive_count +
 							  vm_page_speculative_count);

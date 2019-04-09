@@ -72,6 +72,8 @@ uint32_t LockTimeOutUsec;
 uint64_t MutexSpin;
 boolean_t is_clock_configured = FALSE;
 
+uint32_t yield_delay_us = 42; /* Less than cpu_idle_latency to ensure ml_delay_should_spin is true */
+
 extern int mach_assert;
 extern volatile uint32_t debug_enabled;
 
@@ -437,6 +439,8 @@ machine_startup(__unused boot_args * args)
 	if (PE_parse_boot_argn("bg_preempt", &boot_arg, sizeof (boot_arg))) {
 		default_bg_preemption_rate = boot_arg;
 	}
+
+	PE_parse_boot_argn("yield_delay_us", &yield_delay_us, sizeof (yield_delay_us));
 
 	machine_conf();
 
@@ -1809,6 +1813,11 @@ ml_delay_should_spin(uint64_t interval)
 		 */
 		return FALSE;
 	}
+}
+
+void
+ml_delay_on_yield(void)
+{
 }
 
 boolean_t ml_thread_is64bit(thread_t thread) {

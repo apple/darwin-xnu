@@ -1186,7 +1186,7 @@ flow_divert_create_connect_packet(struct flow_divert_pcb *fd_cb, struct sockaddr
 	if (fd_cb->local_address != NULL) {
 		/* socket is bound. */
 		error = flow_divert_packet_append_tlv(connect_packet, FLOW_DIVERT_TLV_LOCAL_ADDR,
-		                                      sizeof(struct sockaddr_storage), fd_cb->local_address);
+		                                      fd_cb->local_address->sa_len, fd_cb->local_address);
 		if (error) {
 			goto done;
 		}
@@ -2017,10 +2017,6 @@ flow_divert_handle_data(struct flow_divert_pcb *fd_cb, mbuf_t packet, size_t off
 			}
 		}
 		socket_unlock(fd_cb->so, 0);
-
-		if (data != NULL) {
-			mbuf_freem(data);
-		}
 	}
 	FDUNLOCK(fd_cb);
 }

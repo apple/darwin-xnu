@@ -1104,7 +1104,7 @@ fill_task_monotonic_rusage(task_t task, rusage_info_current *ri)
 
 	assert(task != TASK_NULL);
 
-	uint64_t counts[MT_CORE_NFIXED] = {};
+	uint64_t counts[MT_CORE_NFIXED] = { 0 };
 	mt_fixed_task_counts(task, counts);
 #ifdef MT_CORE_INSTRS
 	ri->ri_instructions = counts[MT_CORE_INSTRS];

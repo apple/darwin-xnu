@@ -655,24 +655,24 @@ task_reference_internal(task_t task)
 	void *       bt[TASK_REF_BTDEPTH];
 	int             numsaved = 0;
 
+	os_ref_retain(&task->ref_count);
+
 	numsaved = OSBacktrace(bt, TASK_REF_BTDEPTH);
-	
-	(void)hw_atomic_add(&(task)->ref_count, 1);
 	btlog_add_entry(task_ref_btlog, task, TASK_REF_OP_INCR,
 					bt, numsaved);
 }
 
-uint32_t
+os_ref_count_t
 task_deallocate_internal(task_t task)
 {
 	void *       bt[TASK_REF_BTDEPTH];
 	int             numsaved = 0;
 
 	numsaved = OSBacktrace(bt, TASK_REF_BTDEPTH);
-
 	btlog_add_entry(task_ref_btlog, task, TASK_REF_OP_DECR,
 					bt, numsaved);
-	return hw_atomic_sub(&(task)->ref_count, 1);
+
+	return os_ref_release(&task->ref_count);
 }
 
 #endif /* TASK_REFERENCE_LEAK_DEBUG */
@@ -1115,6 +1115,8 @@ init_task_ledgers(void)
 	task_ledger_template = t;
 }
 
+os_refgrp_decl(static, task_refgrp, "task", NULL);
+
 kern_return_t
 task_create_internal(
 	task_t		parent_task,
@@ -1136,7 +1138,7 @@ task_create_internal(
 		return(KERN_RESOURCE_SHORTAGE);
 
 	/* one ref for just being alive; one for our caller */
-	new_task->ref_count = 2;
+	os_ref_init_count(&new_task->ref_count, &task_refgrp, 2);
 
 	/* allocate with active entries */
 	assert(task_ledger_template != NULL);
@@ -1530,7 +1532,7 @@ task_deallocate(
 	task_t		task)
 {
 	ledger_amount_t credit, debit, interrupt_wakeups, platform_idle_wakeups;
-	uint32_t refs;
+	os_ref_count_t refs;
 
 	if (task == TASK_NULL)
 	    return;
@@ -1538,30 +1540,23 @@ task_deallocate(
 	refs = task_deallocate_internal(task);
 
 #if IMPORTANCE_INHERITANCE
-	if (refs > 1)
-		return;
-
-	atomic_load_explicit(&task->ref_count, memory_order_acquire);
-	
 	if (refs == 1) {
 		/*
 		 * If last ref potentially comes from the task's importance,
 		 * disconnect it.  But more task refs may be added before
 		 * that completes, so wait for the reference to go to zero
-		 * naturually (it may happen on a recursive task_deallocate()
+		 * naturally (it may happen on a recursive task_deallocate()
 		 * from the ipc_importance_disconnect_task() call).
 		 */
 		if (IIT_NULL != task->task_imp_base)
 			ipc_importance_disconnect_task(task);
 		return;
 	}
-#else
-	if (refs > 0)
-		return;
-
-	atomic_load_explicit(&task->ref_count, memory_order_acquire);
-
 #endif /* IMPORTANCE_INHERITANCE */
+
+	if (refs > 0) {
+		return;
+	}
 
 	lck_mtx_lock(&tasks_threads_lock);
 	queue_remove(&terminated_tasks, task, task_t, tasks);
@@ -3653,22 +3648,13 @@ host_security_set_task_token(
 
 kern_return_t
 task_send_trace_memory(
-	task_t        target_task,
+	__unused task_t   target_task,
 	__unused uint32_t pid,
 	__unused uint64_t uniqueid)
 {
-	kern_return_t kr = KERN_INVALID_ARGUMENT;
-	if (target_task == TASK_NULL)
-		return (KERN_INVALID_ARGUMENT);
-
-#if CONFIG_ATM
-	kr = atm_send_proc_inspect_notification(target_task,
-				  pid,
-				  uniqueid);
-
-#endif
-	return (kr);
+	return KERN_INVALID_ARGUMENT;
 }
+
 /*
  * This routine was added, pretty much exclusively, for registering the
  * RPC glue vector for in-kernel short circuited tasks.  Rather than
@@ -6202,7 +6188,7 @@ task_inspect(task_inspect_t task_insp, task_inspect_flavor_t flavor,
 	switch (flavor) {
 	case TASK_INSPECT_BASIC_COUNTS: {
 		struct task_inspect_basic_counts *bc;
-		uint64_t task_counts[MT_CORE_NFIXED];
+		uint64_t task_counts[MT_CORE_NFIXED] = { 0 };
 
 		if (size < TASK_INSPECT_BASIC_COUNTS_COUNT) {
 			kr = KERN_INVALID_ARGUMENT;

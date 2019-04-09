@@ -4749,7 +4749,9 @@ fdexec(proc_t p, short flags, int self_exec)
 				msleep(&p->p_fpdrainwait, &p->p_fdmlock, PRIBIO,
 				    "fpdrain", NULL);
 			}
-
+			if (fp->f_flags & FP_WAITEVENT) {
+				(void)waitevent_close(p, fp);
+			}
 			closef_locked(fp, fp->f_fglob, p);
 
 			fileproc_free(fp);

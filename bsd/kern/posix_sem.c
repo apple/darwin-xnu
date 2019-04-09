@@ -819,6 +819,10 @@ sem_close(proc_t p, struct sem_close_args *uap, __unused int32_t *retval)
 		proc_fdunlock(p);
 		return(error);
 	}
+	if (fp->f_type != DTYPE_PSXSEM) {
+		proc_fdunlock(p);
+		return(EBADF);
+	}
 	procfdtbl_markclosefd(p, fd);
 	fileproc_drain(p, fp);
 	fdrelse(p, fd);

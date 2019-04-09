@@ -134,6 +134,8 @@ int		speculative_age_index = 0;
 int		speculative_steal_index = 0;
 struct vm_speculative_age_q vm_page_queue_speculative[VM_PAGE_MAX_SPECULATIVE_AGE_Q + 1];
 
+boolean_t	hibernation_vmqueues_inspection = FALSE; /* Tracks if the hibernation code is looking at the VM queues.
+							  * Updated and checked behind the vm_page_queues_lock. */
 
 __private_extern__ void		vm_page_init_lck_grp(void);
 
@@ -7043,6 +7045,10 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
 	lck_mtx_lock(&vm_page_queue_free_lock);
     }
 
+    LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
+
+    hibernation_vmqueues_inspection = TRUE;
+
     m = (vm_page_t) hibernate_gobble_queue;
     while (m)
     {
@@ -7324,6 +7330,8 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
     *pagesOut = pages - count_discard_active - count_discard_inactive - count_discard_purgeable - count_discard_speculative - count_discard_cleaned;
 
     if (preflight && will_discard) *pagesOut -= count_compressor + count_throttled + count_anonymous + count_inactive + count_cleaned + count_speculative + count_active;
+
+    hibernation_vmqueues_inspection = FALSE;
 
 #if MACH_ASSERT || DEBUG
     if (!preflight)

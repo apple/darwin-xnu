@@ -305,8 +305,8 @@ int thread_selfcounts(__unused struct proc *p,
 {
 	switch (uap->type) {
 	case 1: {
-		uint64_t counts[2] = {};
-		uint64_t thread_counts[MT_CORE_NFIXED];
+		uint64_t counts[2] = { 0 };
+		uint64_t thread_counts[MT_CORE_NFIXED] = { 0 };
 
 		mt_cur_thread_fixed_counts(thread_counts);
 
@@ -338,8 +338,8 @@ static int
 mt_sysctl SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg2)
-	uint64_t start[MT_CORE_NFIXED], end[MT_CORE_NFIXED];
-	uint64_t counts[2] = {};
+	uint64_t start[MT_CORE_NFIXED] = { 0 }, end[MT_CORE_NFIXED] = { 0 };
+	uint64_t counts[2] = { 0 };
 
 	switch ((enum mt_sysctl)arg1) {
 	case MT_SUPPORTED:

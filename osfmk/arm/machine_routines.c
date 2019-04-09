@@ -1009,6 +1009,8 @@ ml_delay_should_spin(uint64_t interval)
 	}
 }
 
+void ml_delay_on_yield(void) {}
+
 boolean_t ml_thread_is64bit(thread_t thread)
 {
 	return (thread_is_64bit_addr(thread));

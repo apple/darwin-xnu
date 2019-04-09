@@ -155,6 +155,12 @@ mach_msg_rpc_from_kernel_proper(
 
 #define mach_msg_rpc_from_kernel mach_msg_rpc_from_kernel_proper
 
+extern void
+mach_msg_destroy_from_kernel_proper(
+	mach_msg_header_t	*msg);
+
+#define mach_msg_destroy_from_kernel mach_msg_destroy_from_kernel_proper
+
 #ifdef XNU_KERNEL_PRIVATE
 extern mach_msg_return_t mach_msg_send_from_kernel_with_options_legacy(
 	mach_msg_header_t	*msg,

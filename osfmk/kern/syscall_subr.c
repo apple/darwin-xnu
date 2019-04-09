@@ -110,6 +110,8 @@ swtch_continue(void)
 	result = SCHED(thread_should_yield)(myprocessor, current_thread());
 	enable_preemption();
 
+	ml_delay_on_yield();
+
 	thread_syscall_return(result);
 	/*NOTREACHED*/
 }
@@ -147,6 +149,8 @@ swtch_pri_continue(void)
 	result = SCHED(thread_should_yield)(myprocessor, current_thread());
 	mp_enable_preemption();
 
+	ml_delay_on_yield();
+
 	thread_syscall_return(result);
 	/*NOTREACHED*/
 }
@@ -181,6 +185,8 @@ thread_switch_continue(void *parameter, __unused int ret)
 
 	if (option == SWITCH_OPTION_DEPRESS || option == SWITCH_OPTION_OSLOCK_DEPRESS)
 		thread_depress_abort(self);
+
+	ml_delay_on_yield();
 
 	thread_syscall_return(KERN_SUCCESS);
 	/*NOTREACHED*/
@@ -314,10 +320,22 @@ thread_switch(
 		thread_deallocate(thread);
 	}
 
-	if (wait_option)
+	if (wait_option) {
 		assert_wait_timeout((event_t)assert_wait_timeout, interruptible, option_time, scale_factor);
-	else if (depress_option)
-		thread_depress_ms(option_time);
+	} else {
+		disable_preemption();
+		bool should_yield = SCHED(thread_should_yield)(current_processor(), current_thread());
+		enable_preemption();
+
+		if (should_yield == false) {
+			/* Early-return if yielding to the scheduler will not be beneficial */
+			return KERN_SUCCESS;
+		}
+
+		if (depress_option) {
+			thread_depress_ms(option_time);
+		}
+	}
 
 	thread_yield_with_continuation(thread_switch_continue, (void *)(intptr_t)option);
 	__builtin_unreachable();
