@@ -289,7 +289,9 @@ bool OSData::appendBytes(const void *bytes, unsigned int inLength)
     if (capacity == EXTERNAL)
         return false;
     
-    newSize = length + inLength;
+    if (os_add_overflow(length, inLength, &newSize))
+        return false;
+
     if ( (newSize > capacity) && newSize > ensureCapacity(newSize) )
         return false;
 
@@ -313,7 +315,9 @@ bool OSData::appendByte(unsigned char byte, unsigned int inLength)
     if (capacity == EXTERNAL)
         return false;
     
-    newSize = length + inLength;
+    if (os_add_overflow(length, inLength, &newSize))
+        return false;
+
     if ( (newSize > capacity) && newSize > ensureCapacity(newSize) )
         return false;
 

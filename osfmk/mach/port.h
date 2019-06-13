@@ -405,11 +405,25 @@ typedef mach_port_options_t *mach_port_options_ptr_t;
 
 /* Reasons for exception for a guarded mach port */
 enum mach_port_guard_exception_codes {
-	kGUARD_EXC_DESTROY		= 1u << 0,
-	kGUARD_EXC_MOD_REFS		= 1u << 1,
-	kGUARD_EXC_SET_CONTEXT		= 1u << 2,
-	kGUARD_EXC_UNGUARDED		= 1u << 3,
-	kGUARD_EXC_INCORRECT_GUARD	= 1u << 4
+	kGUARD_EXC_DESTROY		         = 1u << 0,
+	kGUARD_EXC_MOD_REFS		         = 1u << 1,
+	kGUARD_EXC_SET_CONTEXT		     = 1u << 2,
+	kGUARD_EXC_UNGUARDED		     = 1u << 3,
+	kGUARD_EXC_INCORRECT_GUARD	     = 1u << 4,
+	 /* start of non-fatal guards */
+	kGUARD_EXC_INVALID_RIGHT         = 1u << 8,
+	kGUARD_EXC_INVALID_NAME          = 1u << 9,
+	kGUARD_EXC_INVALID_VALUE         = 1u << 10,
+	kGUARD_EXC_INVALID_ARGUMENT      = 1u << 11,
+	kGUARD_EXC_RIGHT_EXISTS          = 1u << 12,
+	kGUARD_EXC_KERN_NO_SPACE         = 1u << 13,
+	kGUARD_EXC_KERN_FAILURE          = 1u << 14,
+	kGUARD_EXC_KERN_RESOURCE         = 1u << 15,
+	kGUARD_EXC_SEND_INVALID_REPLY    = 1u << 16,
+	kGUARD_EXC_SEND_INVALID_VOUCHER  = 1u << 16,
+	kGUARD_EXC_SEND_INVALID_RIGHT    = 1u << 17,
+	kGUARD_EXC_RCV_INVALID_NAME      = 1u << 18,
+	kGUARD_EXC_RCV_INVALID_NOTIFY    = 1u << 19
 };
 
 #if	!__DARWIN_UNIX03 && !defined(_NO_PORT_T_FROM_MACH)

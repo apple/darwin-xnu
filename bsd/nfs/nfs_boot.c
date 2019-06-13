@@ -460,6 +460,7 @@ bp_whoami(struct sockaddr_in *bpsin,
 	size_t msg_len, cn_len, dn_len;
 	u_char *p;
 	int32_t *lp;
+        size_t encapsulated_size;
 
 	/*
 	 * Get message buffer of sufficient size.
@@ -508,8 +509,10 @@ bp_whoami(struct sockaddr_in *bpsin,
 	bpsin->sin_addr.s_addr = sin.sin_addr.s_addr;
 
 	/* length of encapsulated results */
-	if (msg_len < (ntohl(*lp) + sizeof(*lp)))
+	if (os_add_overflow((size_t) ntohl(*lp), sizeof(*lp), &encapsulated_size)
+		|| msg_len < encapsulated_size) {
 		goto bad;
+	}
 	msg_len = ntohl(*lp++);
 	p = (u_char*)lp;
 
@@ -518,7 +521,7 @@ bp_whoami(struct sockaddr_in *bpsin,
 		goto bad;
 	str = (struct rpc_string *)p;
 	cn_len = ntohl(str->len);
-	if (msg_len < cn_len)
+	if ((msg_len - 4) < cn_len)
 		goto bad;
 	if (cn_len >= MAXHOSTNAMELEN)
 		goto bad;
@@ -533,7 +536,7 @@ bp_whoami(struct sockaddr_in *bpsin,
 		goto bad;
 	str = (struct rpc_string *)p;
 	dn_len = ntohl(str->len);
-	if (msg_len < dn_len)
+	if ((msg_len - 4) < dn_len)
 		goto bad;
 	if (dn_len >= MAXHOSTNAMELEN)
 		goto bad;
@@ -585,8 +588,8 @@ bp_getfile(struct sockaddr_in *bpsin,
 	struct bp_inaddr *bia;
 	struct sockaddr_in *sin;
 	u_char *p, *q;
-	int error, msg_len;
-	int cn_len, key_len, sn_len, path_len;
+	int error;
+	size_t msg_len, cn_len, key_len, sn_len, path_len;
 
 	/*
 	 * Get message buffer of sufficient size.
@@ -628,11 +631,11 @@ bp_getfile(struct sockaddr_in *bpsin,
 	msg_len = mbuf_len(m);
 
 	/* server name */
-	if (msg_len < (int)sizeof(*str))
+	if (msg_len < sizeof(*str))
 		goto bad;
 	str = (struct rpc_string *)p;
 	sn_len = ntohl(str->len);
-	if (msg_len < sn_len)
+	if ((msg_len - 4) < sn_len)
 		goto bad;
 	if (sn_len >= MAXHOSTNAMELEN)
 		goto bad;
@@ -642,7 +645,7 @@ bp_getfile(struct sockaddr_in *bpsin,
 	msg_len -= RPC_STR_SIZE(sn_len);
 
 	/* server IP address (mountd) */
-	if (msg_len < (int)sizeof(*bia))
+	if (msg_len < sizeof(*bia))
 		goto bad;
 	bia = (struct bp_inaddr *)p;
 	if (bia->atype != htonl(1))
@@ -660,11 +663,11 @@ bp_getfile(struct sockaddr_in *bpsin,
 	msg_len -= sizeof(*bia);
 
 	/* server pathname */
-	if (msg_len < (int)sizeof(*str))
+	if (msg_len < sizeof(*str))
 		goto bad;
 	str = (struct rpc_string *)p;
 	path_len = ntohl(str->len);
-	if (msg_len < path_len)
+	if ((msg_len - 4) < path_len)
 		goto bad;
 	if (path_len >= MAXPATHLEN)
 		goto bad;
@@ -702,7 +705,8 @@ md_mount(struct sockaddr_in *mdsin,		/* mountd server address */
 		u_char	data[NFSX_V3FHMAX + sizeof(u_int32_t)];
 	} *rdata;
 	mbuf_t m;
-	int error, mlen, slen;
+	size_t mlen;
+	int error, slen;
 	int mntversion = v3 ? RPCMNT_VER3 : RPCMNT_VER1;
 	int proto = (sotype == SOCK_STREAM) ? IPPROTO_TCP : IPPROTO_UDP;
 	in_port_t mntport, nfsport;
@@ -742,7 +746,7 @@ md_mount(struct sockaddr_in *mdsin,		/* mountd server address */
 	 * + a v3 filehandle length + a v3 filehandle
 	 */
 	mlen = mbuf_len(m);
-	if (mlen < (int)sizeof(u_int32_t))
+	if (mlen < sizeof(u_int32_t))
 		goto bad;
 	rdata = mbuf_data(m);
 	error = ntohl(rdata->errno);
@@ -751,16 +755,17 @@ md_mount(struct sockaddr_in *mdsin,		/* mountd server address */
 	if (v3) {
 		u_int32_t fhlen;
 		u_char *fh;
-		if (mlen < (int)sizeof(u_int32_t)*2)
+		if (mlen < sizeof(u_int32_t)*2)
 			goto bad;
 		fhlen = ntohl(*(u_int32_t*)rdata->data);
 		fh = rdata->data + sizeof(u_int32_t);
-		if (mlen < (int)(sizeof(u_int32_t)*2 + fhlen))
+		if (mlen < (sizeof(u_int32_t)*2 + fhlen)
+			|| fhlen >= (NFSX_V3FHMAX + sizeof(u_int32_t)))
 			goto bad;
 		bcopy(fh, fhp, fhlen);
 		*fhlenp = fhlen;
 	} else {
-		if (mlen < ((int)sizeof(u_int32_t) + NFSX_V2FH))
+		if (mlen < (sizeof(u_int32_t) + NFSX_V2FH))
 			goto bad;
 		bcopy(rdata->data, fhp, NFSX_V2FH);
 		*fhlenp = NFSX_V2FH;

@@ -102,3 +102,37 @@ OSCollection *  OSCollection::copyCollection(OSDictionary *cycleDict)
 	return this;
     }
 }
+
+bool OSCollection::iterateObjects(void * refcon, bool (*callback)(void * refcon, OSObject * object))
+{
+    uint64_t     iteratorStore[2];
+    unsigned int initialUpdateStamp;
+    bool         done;
+
+    assert(iteratorSize() < sizeof(iteratorStore));
+
+    if (!initIterator(&iteratorStore[0])) return (false);
+
+    initialUpdateStamp = updateStamp;
+    done = false;
+    do
+    {
+        OSObject * object;
+        if (!getNextObjectForIterator(&iteratorStore[0], &object)) break;
+        done = callback(refcon, object);
+    }
+    while (!done && (initialUpdateStamp == updateStamp));
+
+    return initialUpdateStamp == updateStamp;
+}
+
+static bool OSCollectionIterateObjectsBlock(void * refcon, OSObject * object)
+{
+    bool (^block)(OSObject * object) = (typeof(block)) refcon;
+    return (block(object));
+}
+
+bool OSCollection::iterateObjects(bool (^block)(OSObject * object))
+{
+    return (iterateObjects((void *) block, OSCollectionIterateObjectsBlock));
+}

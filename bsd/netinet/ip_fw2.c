@@ -3646,7 +3646,7 @@ ipfw_ctl(struct sockopt *sopt)
 			struct ip_old_fw	*buf2, *rule_vers0;
 			
 			lck_mtx_lock(ipfw_mutex);
-			buf2 = _MALLOC(static_count * sizeof(struct ip_old_fw), M_TEMP, M_WAITOK);
+			buf2 = _MALLOC(static_count * sizeof(struct ip_old_fw), M_TEMP, M_WAITOK | M_ZERO);
 			if (buf2 == 0) {
 				lck_mtx_unlock(ipfw_mutex);
 				error = ENOBUFS;
@@ -3687,7 +3687,7 @@ ipfw_ctl(struct sockopt *sopt)
 			buf_size = static_count * ipfwcompsize + 
 						dyn_count * ipfwdyncompsize;
 						
-			buf2 = _MALLOC(buf_size, M_TEMP, M_WAITOK);
+			buf2 = _MALLOC(buf_size, M_TEMP, M_WAITOK | M_ZERO);
 			if (buf2 == 0) {
 				lck_mtx_unlock(ipfw_mutex);
 				error = ENOBUFS;
@@ -3792,21 +3792,21 @@ ipfw_ctl(struct sockopt *sopt)
 				if (!error && sopt->sopt_dir == SOPT_GET) {
 					/* convert back if necessary and copyout */
 					if (api_version == IP_FW_VERSION_0) {
-						struct ip_old_fw	rule_vers0;
+						struct ip_old_fw	rule_vers0 = {};
 						
 						ipfw_convert_from_latest(rule, &rule_vers0, api_version, is64user);
 						sopt->sopt_valsize = sizeof(struct ip_old_fw);
 						
 						error = sooptcopyout(sopt, &rule_vers0, sizeof(struct ip_old_fw));
 					} else if (api_version == IP_FW_VERSION_1) {
-						struct ip_fw_compat	rule_vers1;
+						struct ip_fw_compat	rule_vers1 = {};
 						ipfw_convert_from_latest(rule, &rule_vers1, api_version, is64user);
 						sopt->sopt_valsize = sizeof(struct ip_fw_compat);
 						
 						error = sooptcopyout(sopt, &rule_vers1, sizeof(struct ip_fw_compat));
 					} else {
 						char *userrule;
-						userrule = _MALLOC(savedsopt_valsize, M_TEMP, M_WAITOK);
+						userrule = _MALLOC(savedsopt_valsize, M_TEMP, M_WAITOK | M_ZERO);
 						if ( userrule == NULL )
 							userrule = (char*)rule;
 						if (proc_is64bit(sopt->sopt_p)){

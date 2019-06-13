@@ -66,7 +66,7 @@ typedef struct bank_element * bank_element_t;
 struct bank_task {
 	struct bank_element       bt_elem;                 /* Bank element */
 	struct proc_persona_info  bt_proc_persona;         /* Persona of the process */
-	ledger_t                  bt_creditcard;           /* Ledger of the customer task */
+	ledger_t                  bt_ledger;               /* Ledger of the customer task */
 	queue_head_t              bt_accounts_to_pay;      /* List of accounts worked for me and need to pay */
 	queue_head_t              bt_accounts_to_charge;   /* List of accounts I did work and need to charge */
 	decl_lck_mtx_data(,       bt_acc_to_pay_lock)      /* Lock to protect accounts to pay list */
@@ -176,7 +176,7 @@ extern void bank_billed_balance(bank_task_t bank_task, uint64_t *cpu_time, uint6
 extern void bank_serviced_balance_safe(task_t task, uint64_t *cpu_time, uint64_t *energy);
 extern void bank_serviced_balance(bank_task_t bank_task, uint64_t *cpu_time, uint64_t *energy);
 extern kern_return_t bank_get_bank_ledger_and_thread_group(ipc_voucher_t voucher,
-	ledger_t *bankledger, thread_group_t *banktg);
+	ledger_t *bankledger, struct thread_group **banktg);
 extern void bank_swap_thread_bank_ledger(thread_t thread, ledger_t ledger);
 
 #endif /* MACH_KERNEL_PRIVATE */

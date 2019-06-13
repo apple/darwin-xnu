@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -87,6 +87,7 @@ struct gif_softc {
 #endif
 	} gifsc_gifscr;
 	int		gif_flags;
+#define	IFGIF_DETACHING	0x1
 	int		gif_called;
 	const struct encaptab *encap_cookie4;
 	const struct encaptab *encap_cookie6;

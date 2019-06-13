@@ -25,12 +25,11 @@ COMMON_TARGETS = unit_tests \
 		MPMMTest		\
 		packetdrill		\
 		affinity		\
-		execperf		\
 		superpages		\
 		zero-to-n		\
 		jitter			\
 		perf_index		\
-		darwintests		\
+		personas		\
 		unixconf	 	\
 		testkext/pgokext.kext
 

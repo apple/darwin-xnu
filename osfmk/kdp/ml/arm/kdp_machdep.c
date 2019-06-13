@@ -65,7 +65,8 @@ int machine_trace_thread64(thread_t thread,
                            int nframes,
                            boolean_t user_p,
                            boolean_t trace_fp,
-                           uint32_t * thread_trace_flags);
+                           uint32_t * thread_trace_flags,
+						   uint64_t *sp);
 
 void kdp_trap(unsigned int, struct arm_saved_state * saved_state);
 
@@ -495,11 +496,22 @@ machine_trace_thread(thread_t thread,
 					if(target_cpu_datap == (cpu_data_t *)NULL)
 						continue;
 					
-					if ((prevfp >= (target_cpu_datap->intstack_top-INTSTACK_SIZE) && prevfp < target_cpu_datap->intstack_top) ||
-						(prevfp >= (target_cpu_datap->fiqstack_top-PAGE_SIZE) && prevfp < target_cpu_datap->fiqstack_top)) {
+					if (prevfp >= (target_cpu_datap->intstack_top-INTSTACK_SIZE) && prevfp < target_cpu_datap->intstack_top) {
 						prev_in_interrupt_stack = TRUE;
 						break;
 					}
+
+#if defined(__arm__)
+					if (prevfp >= (target_cpu_datap->fiqstack_top-FIQSTACK_SIZE) && prevfp < target_cpu_datap->fiqstack_top) {
+						prev_in_interrupt_stack = TRUE;
+						break;
+					}
+#elif defined(__arm64__)
+					if (prevfp >= (target_cpu_datap->excepstack_top-EXCEPSTACK_SIZE) && prevfp < target_cpu_datap->excepstack_top) {
+						prev_in_interrupt_stack = TRUE;
+						break;
+					}
+#endif
 				}
 			}
 
@@ -555,8 +567,10 @@ machine_trace_thread64(thread_t thread,
                        int nframes,
                        boolean_t user_p,
                        boolean_t trace_fp,
-                       uint32_t * thread_trace_flags)
+                       uint32_t * thread_trace_flags,
+					   uint64_t *sp_out)
 {
+#pragma unused(sp_out)
 #if defined(__arm__)
 #pragma unused(thread, tracepos, tracebound, nframes, user_p, trace_fp, thread_trace_flags)
 	return 0;
@@ -577,6 +591,8 @@ machine_trace_thread64(thread_t thread,
 	vm_offset_t kern_virt_addr    = 0;
 	vm_map_t bt_vm_map            = VM_MAP_NULL;
 
+	const boolean_t is_64bit_addr = thread_is_64bit_addr(thread);
+
 	nframes = (tracebound > tracepos) ? MIN(nframes, (int)((tracebound - tracepos) / framesize)) : 0;
 	if (!nframes) {
 		return (0);
@@ -586,8 +602,8 @@ machine_trace_thread64(thread_t thread,
 	if (user_p) {
 		/* Examine the user savearea */
 		state = thread->machine.upcb;
-		stacklimit = MACH_VM_MAX_ADDRESS;
-		stacklimit_bottom = MACH_VM_MIN_ADDRESS;
+		stacklimit = (is_64bit_addr) ? MACH_VM_MAX_ADDRESS : VM_MAX_ADDRESS;
+		stacklimit_bottom = (is_64bit_addr) ? MACH_VM_MIN_ADDRESS : VM_MIN_ADDRESS;
 
 		/* Fake up a stack frame for the PC */
 		*tracebuf++ = get_saved_state_pc(state);
@@ -666,12 +682,21 @@ machine_trace_thread64(thread_t thread,
 					if(target_cpu_datap == (cpu_data_t *)NULL)
 						continue;
 
-					if ((prevfp >= (target_cpu_datap->intstack_top-INTSTACK_SIZE) && prevfp < target_cpu_datap->intstack_top) ||
-						(prevfp >= (target_cpu_datap->fiqstack_top-PAGE_SIZE) && prevfp < target_cpu_datap->fiqstack_top)) {
+					if (prevfp >= (target_cpu_datap->intstack_top-INTSTACK_SIZE) && prevfp < target_cpu_datap->intstack_top) {
 						switched_stacks = TRUE;
 						break;
 					}
-
+#if defined(__arm__)
+					if (prevfp >= (target_cpu_datap->fiqstack_top-FIQSTACK_SIZE) && prevfp < target_cpu_datap->fiqstack_top) {
+						switched_stacks = TRUE;
+						break;
+					}
+#elif defined(__arm64__)
+					if (prevfp >= (target_cpu_datap->excepstack_top-EXCEPSTACK_SIZE) && prevfp < target_cpu_datap->excepstack_top) {
+						switched_stacks = TRUE;
+						break;
+					}
+#endif
 				}
 
 			}

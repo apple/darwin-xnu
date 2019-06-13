@@ -74,27 +74,6 @@
 #include <netinet/in.h>
 #endif
 
-#if !defined(__i386__) && !defined(__x86_64__)
-#define BPF_ALIGN 1
-#else /* defined(__i386__) || defined(__x86_64__) */
-#define BPF_ALIGN 0
-#endif /* defined(__i386__) || defined(__x86_64__) */
-
-#if !BPF_ALIGN
-#define EXTRACT_SHORT(p)	((u_int16_t)ntohs(*(u_int16_t *)(void *)p))
-#define EXTRACT_LONG(p)		(ntohl(*(u_int32_t *)(void *)p))
-#else
-#define EXTRACT_SHORT(p)\
-	((u_int16_t)\
-		((u_int16_t)*((u_char *)p+0)<<8|\
-		 (u_int16_t)*((u_char *)p+1)<<0))
-#define EXTRACT_LONG(p)\
-		((u_int32_t)*((u_char *)p+0)<<24|\
-		 (u_int32_t)*((u_char *)p+1)<<16|\
-		 (u_int32_t)*((u_char *)p+2)<<8|\
-		 (u_int32_t)*((u_char *)p+3)<<0)
-#endif
-
 #ifdef KERNEL
 #include <sys/mbuf.h>
 #endif

@@ -416,6 +416,18 @@ def cast(obj, target_type):
         print "ERROR: You cannot cast an 'int' to %s, please use kern.GetValueFromAddress() for such purposes." % str(target_type) 
     raise TypeError("object of type %s cannot be casted to %s" % (str(type(obj)), str(target_type)))
 
+def containerof(obj, target_type, field_name):
+    """ Type cast an object to another C type from a pointer to a field.
+        params:
+            obj - core.value  object representing some C construct in lldb
+            target_type - str : ex 'struct thread'
+                        - lldb.SBType :
+            field_name - the field name within the target_type obj is a pointer to
+    """
+    addr = int(obj) - getfieldoffset(target_type, field_name)
+    obj = value(obj.GetSBValue().CreateValueFromExpression(None,'(void *)'+str(addr)))
+    return cast(obj, target_type + " *")
+
 
 _value_types_cache={}
 

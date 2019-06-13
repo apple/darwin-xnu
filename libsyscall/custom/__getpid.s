@@ -159,7 +159,7 @@ MI_ENTRY_POINT(___getpid)
 	MI_GET_ADDRESS(x9, __current_pid)	// Get address of cached value
 	ldr		w0, [x9]					// Load it
 	cmp		w0, #0						// See if there's a cached value
-	b.ls	L_notcached					// If not, make syscall
+	b.le	L_notcached					// If not, make syscall
 	ret									// Else, we're done
 L_notcached:
 	SYSCALL_NONAME(getpid, 0, cerror_nocancel)

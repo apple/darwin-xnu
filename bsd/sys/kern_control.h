@@ -417,6 +417,31 @@ typedef void (*ctl_rcvd_func)(kern_ctl_ref kctlref, u_int32_t unit, void *unitin
  */
 typedef errno_t (*ctl_send_list_func)(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo,
 					mbuf_t m, int flags);
+
+/*!
+	@typedef ctl_bind_func
+ 	@discussion The ctl_bind_func is an optional function that allows the client
+ 	 	to set up their unitinfo prior to connecting.
+ 	@param kctlref The control ref for the kernel control the client is
+  	 	binding to.
+  	@param sac The address used to connect to this control. The field sc_unit
+  	 	contains the unit number of the kernel control instance the client is
+  	 	binding to. If CTL_FLAG_REG_ID_UNIT was set when the kernel control
+  	 	was registered, sc_unit is the ctl_unit of the kern_ctl_reg structure.
+  	 	If CTL_FLAG_REG_ID_UNIT was not set when the kernel control was
+  	 	registered, sc_unit is the dynamically allocated unit number of
+  	 	the new kernel control instance that is used for this connection.
+  	@param unitinfo A placeholder for a pointer to the optional user-defined
+  	 	private data associated with this kernel control instance.  This
+  	 	opaque info will be provided to the user when the rest of the
+  	 	callback routines are executed.  For example, it can be used
+  	 	to pass a pointer to an instance-specific data structure in
+  	 	order for the user to keep track of the states related to this
+  	 	kernel control instance.
+ */
+typedef errno_t (*ctl_bind_func)(kern_ctl_ref kctlref,
+								 struct sockaddr_ctl *sac,
+								 void **unitinfo);
 #endif /* KERNEL_PRIVATE */
 
 /*!
@@ -474,6 +499,7 @@ struct kern_ctl_reg
 #ifdef KERNEL_PRIVATE
     ctl_rcvd_func		ctl_rcvd;	/* Only valid if CTL_FLAG_REG_EXTENDED is set */
     ctl_send_list_func		ctl_send_list;	/* Only valid if CTL_FLAG_REG_EXTENDED is set */
+	ctl_bind_func		ctl_bind;
 #endif /* KERNEL_PRIVATE */
 };
 

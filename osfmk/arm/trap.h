@@ -239,7 +239,6 @@
 	 || (((op) & THUMB_SIMD_VFP_MASK2) == THUMB_SIMD_VFP_CODE2 )	\
 	 || (((op) & THUMB_SIMD_VFP_MASK3) == THUMB_SIMD_VFP_CODE3))
 
-extern boolean_t arm_swap_readable_type(vm_map_address_t, unsigned int /* spsr */);
 extern boolean_t arm_force_fast_fault(ppnum_t, vm_prot_t, int, void *);
 extern kern_return_t arm_fast_fault(pmap_t, vm_map_address_t, vm_prot_t, boolean_t);
 
@@ -250,9 +249,7 @@ extern kern_return_t arm_fast_fault(pmap_t, vm_map_address_t, vm_prot_t, boolean
        (((((op)&ARM_CDX_MASK) == ARM_STC) || \
 	 (((op)&ARM_STRH_MASK) == ARM_STRH) || \
 	 (((op)&ARM_BDX_MASK) == ARM_STM) || \
-	 (((op)&ARM_SDX_MASK) == ARM_STR) || \
-	 ((((op)&ARM_SWP_MASK) == ARM_SWP) && \
-		arm_swap_readable_type(vaddr,spsr))) ?  \
+	 (((op)&ARM_SDX_MASK) == ARM_STR)) ?  \
 			(VM_PROT_WRITE|VM_PROT_READ) : (VM_PROT_READ))
 	
 #define thumb_fault_type(op,spsr,vaddr) \
@@ -272,12 +269,6 @@ typedef kern_return_t (*perfCallback)(
 				struct arm_saved_state	*ss,
 				uintptr_t *,
 				      int);
-
-typedef kern_return_t (*perfASTCallback)(ast_t reasons, ast_t *myast);
-
-extern volatile perfCallback perfTrapHook;
-extern volatile perfASTCallback perfASTHook;
-extern volatile perfCallback perfIntHook;
 
 #endif	/* !ASSEMBLER && MACH_KERNEL */
 

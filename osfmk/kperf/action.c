@@ -2,7 +2,7 @@
  * Copyright (c) 2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -38,6 +38,7 @@
 #include <kern/thread.h>
 #include <sys/errno.h>
 #include <sys/vm.h>
+#include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_pageout.h>
 
@@ -57,8 +58,7 @@
 #define ACTION_MAX (32)
 
 /* the list of different actions to take */
-struct action
-{
+struct action {
 	uint32_t sample;
 	uint32_t ucallstack_depth;
 	uint32_t kcallstack_depth;
@@ -67,14 +67,14 @@ struct action
 };
 
 /* the list of actions */
-static unsigned actionc = 0;
+static unsigned int actionc = 0;
 static struct action *actionv = NULL;
 
 /* should emit tracepoint on context switch */
 int kperf_kdebug_cswitch = 0;
 
 bool
-kperf_sample_has_non_system(unsigned actionid)
+kperf_action_has_non_system(unsigned int actionid)
 {
 	if (actionid > actionc) {
 		return false;
@@ -87,6 +87,26 @@ kperf_sample_has_non_system(unsigned actionid)
 	}
 }
 
+bool
+kperf_action_has_task(unsigned int actionid)
+{
+	if (actionid > actionc) {
+		return false;
+	}
+
+	return (actionv[actionid - 1].sample & SAMPLER_TASK_MASK);
+}
+
+bool
+kperf_action_has_thread(unsigned int actionid)
+{
+	if (actionid > actionc) {
+		return false;
+	}
+
+	return (actionv[actionid - 1].sample & SAMPLER_THREAD_MASK);
+}
+
 static void
 kperf_system_memory_log(void)
 {
@@ -94,6 +114,10 @@ kperf_system_memory_log(void)
 			(uintptr_t)vm_page_wire_count, (uintptr_t)vm_page_external_count,
 			(uintptr_t)(vm_page_active_count + vm_page_inactive_count +
 			vm_page_speculative_count));
+	BUF_DATA(PERF_MI_SYS_DATA_2, (uintptr_t)vm_page_anonymous_count,
+			(uintptr_t)vm_page_internal_count,
+			(uintptr_t)vm_pageout_vminfo.vm_pageout_compressions,
+			(uintptr_t)VM_PAGE_COMPRESSOR_COUNT);
 }
 
 static kern_return_t
@@ -106,6 +130,7 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 	int pended_th_dispatch = 0;
 	bool on_idle_thread = false;
 	uint32_t userdata = actionid;
+	bool task_only = false;
 
 	/* not much point continuing here, but what to do ? return
 	 * Shutdown? cut a tracepoint and continue?
@@ -123,8 +148,20 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 		sample_what &= SAMPLER_SYS_MEM;
 	}
 
-	context->cur_thread->kperf_pet_gen = kperf_pet_gen;
-	boolean_t is_kernel = (context->cur_pid == 0);
+	assert((sample_flags & (SAMPLE_FLAG_THREAD_ONLY | SAMPLE_FLAG_TASK_ONLY))
+			!= (SAMPLE_FLAG_THREAD_ONLY | SAMPLE_FLAG_TASK_ONLY));
+	if (sample_flags & SAMPLE_FLAG_THREAD_ONLY) {
+		sample_what &= SAMPLER_THREAD_MASK;
+	}
+	if (sample_flags & SAMPLE_FLAG_TASK_ONLY) {
+		task_only = true;
+		sample_what &= SAMPLER_TASK_MASK;
+	}
+
+	if (!task_only) {
+		context->cur_thread->kperf_pet_gen = kperf_pet_gen;
+	}
+	bool is_kernel = (context->cur_pid == 0);
 
 	if (actionid && actionid <= actionc) {
 		sbuf->kcallstack.nframes = actionv[actionid - 1].kcallstack_depth;
@@ -175,13 +212,13 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 		}
 	}
 	if (sample_what & SAMPLER_TK_SNAPSHOT) {
-		kperf_task_snapshot_sample(&(sbuf->tk_snapshot), context);
+		kperf_task_snapshot_sample(context->cur_task, &(sbuf->tk_snapshot));
 	}
 
 	/* sensitive ones */
 	if (!is_kernel) {
 		if (sample_what & SAMPLER_MEMINFO) {
-			kperf_meminfo_sample(&(sbuf->meminfo), context);
+			kperf_meminfo_sample(context->cur_task, &(sbuf->meminfo));
 		}
 
 		if (sample_flags & SAMPLE_FLAG_PEND_USER) {
@@ -257,6 +294,9 @@ log_sample:
 	if (sample_what & SAMPLER_TK_SNAPSHOT) {
 		kperf_task_snapshot_log(&(sbuf->tk_snapshot));
 	}
+	if (sample_what & SAMPLER_TK_INFO) {
+		kperf_task_info_log(context);
+	}
 
 	/* dump user stuff */
 	if (!is_kernel) {
@@ -331,7 +371,6 @@ void
 kperf_kdebug_handler(uint32_t debugid, uintptr_t *starting_fp)
 {
 	uint32_t sample_flags = SAMPLE_FLAG_PEND_USER;
-	struct kperf_context ctx;
 	struct kperf_sample *sample = NULL;
 	kern_return_t kr = KERN_SUCCESS;
 	int s;
@@ -342,10 +381,15 @@ kperf_kdebug_handler(uint32_t debugid, uintptr_t *starting_fp)
 
 	BUF_VERB(PERF_KDBG_HNDLR | DBG_FUNC_START, debugid);
 
-	ctx.cur_thread = current_thread();
-	ctx.cur_pid = task_pid(get_threadtask(ctx.cur_thread));
-	ctx.trigger_type = TRIGGER_TYPE_KDEBUG;
-	ctx.trigger_id = 0;
+	thread_t thread = current_thread();
+	task_t task = get_threadtask(thread);
+	struct kperf_context ctx = {
+		.cur_thread = thread,
+		.cur_task = task,
+		.cur_pid = task_pid(task),
+		.trigger_type = TRIGGER_TYPE_KDEBUG,
+		.trigger_id = 0,
+	};
 
 	s = ml_set_interrupts_enabled(0);
 
@@ -385,9 +429,11 @@ kperf_thread_ast_handler(thread_t thread)
 	}
 
 	/* make a context, take a sample */
-	struct kperf_context ctx;
-	ctx.cur_thread = thread;
-	ctx.cur_pid = task_pid(task);
+	struct kperf_context ctx = {
+		.cur_thread = thread,
+		.cur_task = task,
+		.cur_pid = task_pid(task),
+	};
 
 	/* decode the flags to determine what to sample */
 	unsigned int sample_what = 0;

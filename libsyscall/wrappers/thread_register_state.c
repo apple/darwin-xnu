@@ -74,8 +74,6 @@ thread_get_register_pointer_values(thread_t thread, uintptr_t *sp, size_t *lengt
 #if defined(__i386__)
     if (sp) *sp = state.__esp;
 
-    push_register_value(state.__eip);
-
     push_register_value(state.__eax);
     push_register_value(state.__ebx);
     push_register_value(state.__ecx);
@@ -90,8 +88,6 @@ thread_get_register_pointer_values(thread_t thread, uintptr_t *sp, size_t *lengt
 	else
 		*sp = 0;
     }
-
-    push_register_value(state.__rip);
 
     push_register_value(state.__rax);
     push_register_value(state.__rbx);
@@ -110,7 +106,6 @@ thread_get_register_pointer_values(thread_t thread, uintptr_t *sp, size_t *lengt
 #elif defined(__arm__)
     if (sp) *sp = state.__sp;
 
-    push_register_value(state.__pc);
     push_register_value(state.__lr);
 
     for (int i = 0; i < 13; i++){
@@ -118,14 +113,14 @@ thread_get_register_pointer_values(thread_t thread, uintptr_t *sp, size_t *lengt
     }
 #elif defined(__arm64__)
     if (sp) {
-	if (state.__sp > 128)
-		*sp = state.__sp - 128 /* redzone */;
+	uintptr_t __sp = arm_thread_state64_get_sp(state);
+	if (__sp > 128)
+		*sp = __sp - 128 /* redzone */;
 	else
 		*sp = 0;
     }
 
-    push_register_value(state.__pc);
-    push_register_value(state.__lr);
+    push_register_value(arm_thread_state64_get_lr(state));
 
     for (int i = 0; i < 29; i++){
         push_register_value(state.__x[i]);

@@ -330,12 +330,10 @@ lf_advlock(struct vnop_advlock_args *ap)
 		FREE(lock, M_LOCKF);
 		break;
 
-#if CONFIG_EMBEDDED
 	case F_GETLKPID:
 		error = lf_getlock(lock, fl, fl->l_pid);
 		FREE(lock, M_LOCKF);
 		break;
-#endif
 
 	default:
 		FREE(lock, M_LOCKF);

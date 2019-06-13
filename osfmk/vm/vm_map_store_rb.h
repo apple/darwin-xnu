@@ -39,7 +39,6 @@ void vm_map_store_walk_rb( struct _vm_map*, struct vm_map_entry**, struct vm_map
 boolean_t vm_map_store_lookup_entry_rb( struct _vm_map*, vm_map_offset_t, struct vm_map_entry**);
 void 	vm_map_store_entry_link_rb( struct vm_map_header*, struct vm_map_entry*, struct vm_map_entry*);
 void	vm_map_store_entry_unlink_rb( struct vm_map_header*, struct vm_map_entry*);
-void	vm_map_store_copy_insert_rb( struct _vm_map*, struct vm_map_entry*, struct vm_map_copy*);
 void	vm_map_store_copy_reset_rb( struct vm_map_copy*, struct vm_map_entry*, int);
 void	update_first_free_rb(struct _vm_map*, struct vm_map_entry*, boolean_t new_entry_creation);
 

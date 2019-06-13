@@ -266,6 +266,9 @@ proto_input(protocol_family_t protocol, mbuf_t packet_list)
 			break;
 	}
 
+	if (entry == NULL)
+		return (-1);
+
 	if (entry->domain && !(entry->domain->dom_flags & DOM_REENTRANT)) {
 		lck_mtx_lock(entry->domain->dom_mtx);
 		locked = 1;

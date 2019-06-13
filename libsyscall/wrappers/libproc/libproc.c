@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -183,6 +183,12 @@ proc_piddynkqueueinfo(int pid, int flavor, kqueue_id_t kq_id, void *buffer, int 
 }
 
 int
+proc_udata_info(int pid, int flavor, void *buffer, int buffersize)
+{
+	return (__proc_info(PROC_INFO_CALL_UDATA_INFO, pid, flavor, 0, buffer, buffersize));
+}
+
+int
 proc_name(int pid, void * buffer, uint32_t buffersize)
 {
 	int retval = 0, len;
@@ -218,7 +224,7 @@ proc_regionfilename(int pid, uint64_t address, void * buffer, uint32_t buffersiz
 		return(0);
 	}
 	
-	retval = proc_pidinfo(pid, PROC_PIDREGIONPATHINFO, (uint64_t)address, &reginfo, sizeof(struct proc_regionwithpathinfo));
+	retval = proc_pidinfo(pid, PROC_PIDREGIONPATHINFO2, (uint64_t)address, &reginfo, sizeof(struct proc_regionwithpathinfo));
 	if (retval != -1) {
 		return ((int)(strlcpy(buffer, reginfo.prp_vip.vip_path, MAXPATHLEN)));
 	}
@@ -493,7 +499,7 @@ proc_set_cpumon_params_fatal(pid_t pid, int percentage, int interval)
 		return (ret);
 	}
 	
-	if ((ret = proc_rlimit_control(pid, RLIMIT_CPU_USAGE_MONITOR, CPUMON_MAKE_FATAL)) != 0) {
+	if ((ret = proc_rlimit_control(pid, RLIMIT_CPU_USAGE_MONITOR, (void *)(uintptr_t)CPUMON_MAKE_FATAL)) != 0) {
 		/* Failed to set termination, back out the CPU monitor settings. */
 		(void)proc_disable_cpumon(pid);
 	}
@@ -584,6 +590,12 @@ proc_setcpu_percentage(pid_t pid, int action, int percentage)
 		return(0);
 	else
 		return(errno);
+}
+
+int
+proc_reset_footprint_interval(pid_t pid)
+{
+	return (proc_rlimit_control(pid, RLIMIT_FOOTPRINT_INTERVAL, (void *)(uintptr_t)FOOTPRINT_INTERVAL_RESET));
 }
 
 int
@@ -706,7 +718,7 @@ proc_pidbind(int pid, uint64_t threadid, int bind)
 int
 proc_can_use_foreground_hw(int pid, uint32_t *reason)
 {
-	return __proc_info(PROC_INFO_CALL_CANUSEFGHW, pid, 0,  NULL,  reason, sizeof(*reason));
+	return __proc_info(PROC_INFO_CALL_CANUSEFGHW, pid, 0,  0,  reason, sizeof(*reason));
 }
 #endif /* TARGET_OS_EMBEDDED */
 

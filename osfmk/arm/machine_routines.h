@@ -131,6 +131,11 @@ typedef void (*platform_error_handler_t)(void *refcon, vm_offset_t fault_addr);
 typedef enum
 {
 	EXCB_CLASS_ILLEGAL_INSTR_SET,
+#ifdef CONFIG_XNUPOST
+	EXCB_CLASS_TEST1,
+	EXCB_CLASS_TEST2,
+	EXCB_CLASS_TEST3,
+#endif
 	EXCB_CLASS_MAX		// this must be last
 }
 ex_cb_class_t;
@@ -140,6 +145,9 @@ typedef enum
 {
 	EXCB_ACTION_RERUN,	// re-run the faulting instruction
 	EXCB_ACTION_NONE,	// continue normal exception handling
+#ifdef CONFIG_XNUPOST
+	EXCB_ACTION_TEST_FAIL,
+#endif
 }
 ex_cb_action_t;
 
@@ -288,6 +296,12 @@ ml_static_vtop(
 vm_offset_t
 ml_static_ptovirt(
 	vm_offset_t);
+
+vm_offset_t ml_static_slide(
+	vm_offset_t vaddr);
+
+vm_offset_t ml_static_unslide(
+	vm_offset_t vaddr);
 
 /* Offset required to obtain absolute time value from tick counter */
 uint64_t ml_get_abstime_offset(void);
@@ -527,14 +541,15 @@ vm_offset_t ml_stack_remaining(void);
 uint32_t	get_fpscr(void);
 void		set_fpscr(uint32_t);
 
+#ifdef __arm64__
+unsigned long update_mdscr(unsigned long clear, unsigned long set);
+#endif /* __arm64__ */
+
 extern	void		init_vfp(void);
 extern	boolean_t	get_vfp_enabled(void);
-#if     (__ARM_VFP__ >= 3)
-extern	unsigned int	get_mvfr0(void);
-extern	unsigned int	get_mvfr1(void);
-#endif
 extern	void		arm_debug_set_cp14(arm_debug_state_t *debug_state);
 extern	void		fiq_context_init(boolean_t enable_fiq);
+extern	void		fiq_context_bootstrap(boolean_t enable_fiq);
 
 extern	void		reenable_async_aborts(void);
 extern	void		cpu_idle_wfi(boolean_t wfi_fast);
@@ -551,6 +566,9 @@ void rorgn_stash_range(void);
 void rorgn_lockdown(void);
 #endif /* defined(KERNEL_INTEGRITY_KTRR)*/
 
+#if __ARM_KERNEL_PROTECT__
+extern void set_vbar_el1(uint64_t);
+#endif /* __ARM_KERNEL_PROTECT__ */
 #endif /* MACH_KERNEL_PRIVATE */
 
 extern	uint32_t	arm_debug_read_dscr(void);
@@ -630,6 +648,26 @@ struct perfcontrol_work_interval {
 };
 typedef struct perfcontrol_work_interval *perfcontrol_work_interval_t;
 
+typedef enum {
+	WORK_INTERVAL_START,
+	WORK_INTERVAL_UPDATE,
+	WORK_INTERVAL_FINISH
+} work_interval_ctl_t;
+
+struct perfcontrol_work_interval_instance {
+	work_interval_ctl_t	ctl;
+	uint32_t		create_flags;
+	uint64_t		complexity;
+	uint64_t		thread_id;
+	uint64_t		work_interval_id;
+	uint64_t		instance_id; /* out: start, in: update/finish */
+	uint64_t		start;
+	uint64_t		finish;
+	uint64_t		deadline;
+	uint64_t		thread_group_id;
+	void			*thread_group_data;
+};
+typedef struct perfcontrol_work_interval_instance *perfcontrol_work_interval_instance_t;
 
 /* 
  * Structure to export per-CPU counters as part of the CLPC callout. 
@@ -729,6 +767,11 @@ typedef void (*sched_perfcontrol_max_runnable_latency_t)(perfcontrol_max_runnabl
 typedef void (*sched_perfcontrol_work_interval_notify_t)(perfcontrol_state_t, perfcontrol_work_interval_t);
 
 /*
+ * Start, update and finish work interval instance with optional complexity estimate.
+ */
+typedef void (*sched_perfcontrol_work_interval_ctl_t)(perfcontrol_state_t, perfcontrol_work_interval_instance_t);
+
+/*
  * These callbacks are used when thread groups are added, removed or properties
  * updated.
  * No blocking allocations (or anything else blocking) are allowed inside these
@@ -779,7 +822,6 @@ typedef void (*sched_perfcontrol_state_update_t)(
 	perfcontrol_event event, uint32_t cpu_id, uint64_t timestamp, uint32_t flags,
 	struct perfcontrol_thread_data *thr_data, __unused void *unused);
 
-
 /*
  * Callers should always use the CURRENT version so that the kernel can detect both older
  * and newer structure layouts. New callbacks should always be added at the end of the
@@ -795,6 +837,7 @@ typedef void (*sched_perfcontrol_state_update_t)(
 #define SCHED_PERFCONTROL_CALLBACKS_VERSION_4 (4) /* up-to deadline_passed */
 #define SCHED_PERFCONTROL_CALLBACKS_VERSION_5 (5) /* up-to state_update */
 #define SCHED_PERFCONTROL_CALLBACKS_VERSION_6 (6) /* up-to thread_group_flags_update */
+#define SCHED_PERFCONTROL_CALLBACKS_VERSION_7 (7) /* up-to work_interval_ctl */
 #define SCHED_PERFCONTROL_CALLBACKS_VERSION_CURRENT SCHED_PERFCONTROL_CALLBACKS_VERSION_6
 
 struct sched_perfcontrol_callbacks {
@@ -810,6 +853,7 @@ struct sched_perfcontrol_callbacks {
 	sched_perfcontrol_csw_t                       csw;
 	sched_perfcontrol_state_update_t              state_update;
 	sched_perfcontrol_thread_group_flags_update_t thread_group_flags_update;
+	sched_perfcontrol_work_interval_ctl_t         work_interval_ctl;
 };
 typedef struct sched_perfcontrol_callbacks *sched_perfcontrol_callbacks_t;
 
@@ -824,6 +868,8 @@ extern void sched_perfcontrol_register_callbacks(sched_perfcontrol_callbacks_t c
 
 extern void sched_perfcontrol_update_recommended_cores(uint32_t recommended_cores);
 extern void sched_perfcontrol_thread_group_recommend(void *data, cluster_type_t recommendation);
+extern void sched_override_recommended_cores_for_sleep(void);
+extern void sched_restore_recommended_cores_after_sleep(void);
 
 /*
  * Update the deadline after which sched_perfcontrol_deadline_passed will be called.
@@ -865,7 +911,6 @@ void ml_get_power_state(boolean_t *, boolean_t *);
 boolean_t user_cont_hwclock_allowed(void);
 boolean_t user_timebase_allowed(void);
 boolean_t ml_thread_is64bit(thread_t thread);
-void ml_task_set_rop_pid(task_t task, task_t parent_task, boolean_t inherit);
 
 #ifdef __arm64__
 void ml_set_align_checking(void);

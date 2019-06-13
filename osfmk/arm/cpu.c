@@ -157,7 +157,7 @@ cpu_idle(void)
 	platform_cache_idle_exit();
 
 	ClearIdlePop(TRUE);
-	cpu_idle_exit();
+	cpu_idle_exit(FALSE);
 }
 
 /*
@@ -165,7 +165,7 @@ cpu_idle(void)
  *	Function:
  */
 void
-cpu_idle_exit(void)
+cpu_idle_exit(boolean_t from_reset __unused)
 {
 	uint64_t	new_idle_timeout_ticks = 0x0ULL;
 	cpu_data_t     *cpu_data_ptr = getCpuDatap();
@@ -267,54 +267,34 @@ cpu_init(void)
 
 }
 
-cpu_data_t *
-cpu_data_alloc(boolean_t is_boot_cpu)
+void
+cpu_stack_alloc(cpu_data_t *cpu_data_ptr)
 {
-	cpu_data_t		*cpu_data_ptr = NULL;
+	vm_offset_t		irq_stack = 0;
+	vm_offset_t		fiq_stack = 0;
 
-	if (is_boot_cpu)
-		cpu_data_ptr = &BootCpuData;
-	else {
-		void	*irq_stack = NULL;
-		void	*fiq_stack = NULL;
+	kern_return_t kr = kernel_memory_allocate(kernel_map, &irq_stack,
+				   INTSTACK_SIZE + (2 * PAGE_SIZE),
+				   PAGE_MASK,
+				   KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT,
+				   VM_KERN_MEMORY_STACK);
+	if (kr != KERN_SUCCESS)
+		panic("Unable to allocate cpu interrupt stack\n");
 
-		if ((kmem_alloc(kernel_map, (vm_offset_t *)&cpu_data_ptr, sizeof(cpu_data_t), VM_KERN_MEMORY_CPU)) != KERN_SUCCESS)
-			goto cpu_data_alloc_error;
+	cpu_data_ptr->intstack_top = irq_stack + PAGE_SIZE + INTSTACK_SIZE;
+	cpu_data_ptr->istackptr = cpu_data_ptr->intstack_top;
 
-		bzero((void *)cpu_data_ptr, sizeof(cpu_data_t));
+	kr = kernel_memory_allocate(kernel_map, &fiq_stack,
+				   FIQSTACK_SIZE + (2 * PAGE_SIZE),
+				   PAGE_MASK,
+				   KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT,
+				   VM_KERN_MEMORY_STACK);
+	if (kr != KERN_SUCCESS)
+		panic("Unable to allocate cpu exception stack\n");
 
-		if ((irq_stack = kalloc(INTSTACK_SIZE)) == 0) 
-			goto cpu_data_alloc_error;
-#if __BIGGEST_ALIGNMENT__
-		/* force 16-byte alignment */
-		if ((uint32_t)irq_stack & 0x0F)
-			irq_stack = (void *)((uint32_t)irq_stack + (0x10 - ((uint32_t)irq_stack & 0x0F)));
-#endif
-		cpu_data_ptr->intstack_top = (vm_offset_t)irq_stack + INTSTACK_SIZE ;
-		cpu_data_ptr->istackptr = cpu_data_ptr->intstack_top;
-
-		if ((fiq_stack = kalloc(PAGE_SIZE)) == 0) 
-			goto cpu_data_alloc_error;
-#if __BIGGEST_ALIGNMENT__
-		/* force 16-byte alignment */
-		if ((uint32_t)fiq_stack & 0x0F)
-			fiq_stack = (void *)((uint32_t)fiq_stack + (0x10 - ((uint32_t)fiq_stack & 0x0F)));
-#endif
-		cpu_data_ptr->fiqstack_top = (vm_offset_t)fiq_stack + PAGE_SIZE ;
-		cpu_data_ptr->fiqstackptr = cpu_data_ptr->fiqstack_top;
-	}
-
-	cpu_data_ptr->cpu_processor = cpu_processor_alloc(is_boot_cpu);
-	if (cpu_data_ptr->cpu_processor == (struct processor *)NULL)
-		goto cpu_data_alloc_error;
-
-	return cpu_data_ptr;
-
-cpu_data_alloc_error:
-	panic("cpu_data_alloc() failed\n");
-	return (cpu_data_t *)NULL;
+	cpu_data_ptr->fiqstack_top = fiq_stack + PAGE_SIZE + FIQSTACK_SIZE;
+	cpu_data_ptr->fiqstackptr = cpu_data_ptr->fiqstack_top;
 }
-
 
 void
 cpu_data_free(cpu_data_t *cpu_data_ptr)
@@ -324,7 +304,7 @@ cpu_data_free(cpu_data_t *cpu_data_ptr)
 
 	cpu_processor_free( cpu_data_ptr->cpu_processor);
 	kfree( (void *)(cpu_data_ptr->intstack_top - INTSTACK_SIZE), INTSTACK_SIZE);
-	kfree( (void *)(cpu_data_ptr->fiqstack_top - PAGE_SIZE), PAGE_SIZE);
+	kfree( (void *)(cpu_data_ptr->fiqstack_top - FIQSTACK_SIZE), FIQSTACK_SIZE);
 	kmem_free(kernel_map, (vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t));
 }
 
@@ -579,7 +559,7 @@ cpu_machine_idle_init(boolean_t from_boot)
 		                     ((unsigned int)&(ResetHandlerData.cpu_data_entries) - (unsigned int)&ExceptionLowVectorsBase)),
 		           4);
 
-		CleanPoC_DcacheRegion((vm_offset_t) phystokv((char *) (gPhysBase)), PAGE_SIZE);
+		CleanPoC_DcacheRegion((vm_offset_t) phystokv(gPhysBase), PAGE_SIZE);
 
 		resume_idle_cpu_paddr = (unsigned int)ml_static_vtop((vm_offset_t)&resume_idle_cpu);
 

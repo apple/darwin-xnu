@@ -7,9 +7,10 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
-        machine \
-	c++ \
-	crypto
+    machine \
+    c++ \
+    crypto \
+    img4
 INSTINC_SUBDIRS_X86_64 = \
         i386
 INSTINC_SUBDIRS_X86_64H = \
@@ -42,7 +43,9 @@ KERNELFILES = \
 	sysctl.h \
 	tree.h \
 	zconf.h	\
-	zlib.h
+	zlib.h \
+	crc.h \
+	Block.h
 
 PRIVATE_KERNELFILES = \
 	OSKextLibPrivate.h \
@@ -50,7 +53,8 @@ PRIVATE_KERNELFILES = \
 	kext_request_keys.h \
 	mkext.h \
 	prelink.h \
-	section_keywords.h
+	section_keywords.h \
+	Block_private.h
 
 PRIVATE_DATAFILES = \
 	${PRIVATE_KERNELFILES} \

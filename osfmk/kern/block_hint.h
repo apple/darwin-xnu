@@ -29,7 +29,6 @@
 #ifndef	_KERN_BLOCK_HINT_H_
 #define _KERN_BLOCK_HINT_H_
 
-/* This must fit inside a short  */
 typedef enum thread_snapshot_wait_flags {
 	kThreadWaitNone			= 0x00,
 	kThreadWaitKernelMutex          = 0x01,
@@ -48,7 +47,11 @@ typedef enum thread_snapshot_wait_flags {
 	kThreadWaitPThreadCondVar       = 0x0e,
 	kThreadWaitParkedWorkQueue      = 0x0f,
 	kThreadWaitWorkloopSyncWait     = 0x10,
+	kThreadWaitOnProcess            = 0x11,
 } __attribute__((packed)) block_hint_t;
+
+_Static_assert(sizeof(block_hint_t) <= sizeof(short),
+		"block_hint_t must fit within a short");
 
 #ifdef XNU_KERNEL_PRIVATE
 
@@ -66,6 +69,7 @@ extern void kdp_rwlck_find_owner(struct waitq * waitq, event64_t event, thread_w
 extern void kdp_pthread_find_owner(thread_t thread, thread_waitinfo_t *waitinfo);
 extern void *kdp_pthread_get_thread_kwq(thread_t thread);
 extern void kdp_workloop_sync_wait_find_owner(thread_t thread, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_wait4_find_process(thread_t thread, event64_t event, thread_waitinfo_t *waitinfo);
 
 #endif /* XNU_KERNEL_PRIVATE */
 

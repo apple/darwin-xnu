@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1027,6 +1027,7 @@ vfs_rootmountalloc(const char *fstypename, const char *devname, mount_t *mpp)
 	return (ENOMEM);
 }
 
+#define DBG_MOUNTROOT (FSDBG_CODE(DBG_MOUNT, 0))
 
 /*
  * Find an appropriate filesystem to use for the root. If a filesystem
@@ -1049,15 +1050,20 @@ vfs_mountroot(void)
 	mount_t mp;
 	vnode_t	bdevvp_rootvp;
 
+	KDBG_RELEASE(DBG_MOUNTROOT | DBG_FUNC_START);
 	if (mountroot != NULL) {
 		/*
 		 * used for netboot which follows a different set of rules
 		 */
 		error = (*mountroot)();
+
+		KDBG_RELEASE(DBG_MOUNTROOT | DBG_FUNC_END, error, 0);
 		return (error);
 	}
 	if ((error = bdevvp(rootdev, &rootvp))) {
 		printf("vfs_mountroot: can't setup bdevvp\n");
+
+		KDBG_RELEASE(DBG_MOUNTROOT | DBG_FUNC_END, error, 1);
 		return (error);
 	}
 	/*
@@ -1170,8 +1176,10 @@ vfs_mountroot(void)
 			vnode_put(rootvp);
 
 #if CONFIG_MACF
-			if ((vfs_flags(mp) & MNT_MULTILABEL) == 0)
+			if ((vfs_flags(mp) & MNT_MULTILABEL) == 0) {
+				KDBG_RELEASE(DBG_MOUNTROOT | DBG_FUNC_END, 0, 2);
 				return (0);
+			}
 
 			error = VFS_ROOT(mp, &vp, ctx);
 			if (error) {
@@ -1193,16 +1201,18 @@ vfs_mountroot(void)
 				goto fail;
 			}
 #endif
+			KDBG_RELEASE(DBG_MOUNTROOT | DBG_FUNC_END, 0, 3);
 			return (0);
 		}
 #if CONFIG_MACF
 fail:
 #endif
 		vfs_rootmountfailed(mp);
-		
+
 		if (error != EINVAL)
 			printf("%s_mountroot failed: %d\n", vfsp->vfc_name, error);
 	}
+	KDBG_RELEASE(DBG_MOUNTROOT | DBG_FUNC_END, error ? error : ENODEV, 4);
 	return (ENODEV);
 }
 
@@ -3316,7 +3326,7 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 		temp = MNT_DEFAULT_IOQUEUE_DEPTH;
 
 	mp->mnt_ioqueue_depth = temp;
-	mp->mnt_ioscale = (mp->mnt_ioqueue_depth + (MNT_DEFAULT_IOQUEUE_DEPTH - 1)) / MNT_DEFAULT_IOQUEUE_DEPTH;
+	mp->mnt_ioscale = MNT_IOSCALE(mp->mnt_ioqueue_depth);
 
 	if (mp->mnt_ioscale > 1)
 		printf("ioqueue_depth = %d,   ioscale = %d\n", (int)mp->mnt_ioqueue_depth, (int)mp->mnt_ioscale);
@@ -3492,7 +3502,7 @@ again:
 	if (space < req->oldlen)
 		return (ENOMEM);
 
-	MALLOC(fsidlst, fsid_t *, req->oldlen, M_TEMP, M_WAITOK);
+	MALLOC(fsidlst, fsid_t *, req->oldlen, M_TEMP, M_WAITOK | M_ZERO);
 	if (fsidlst == NULL) {
 		return (ENOMEM);
 	}
@@ -3772,8 +3782,6 @@ filt_fstouch(struct knote *kn, struct kevent_internal_s *kev)
 	lck_mtx_lock(fs_klist_lock);
 
 	kn->kn_sfflags = kev->fflags;
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
 
 	/*
 	 * the above filter function sets bits even if nobody is looking for them.
@@ -3861,7 +3869,7 @@ sysctl_vfs_generic_conf SYSCTL_HANDLER_ARGS
 {
 	int *name, namelen;
 	struct vfstable *vfsp;
-	struct vfsconf vfsc;
+	struct vfsconf vfsc = {};
 	
 	(void)oidp;
 	name = arg1;
@@ -3909,7 +3917,7 @@ SYSCTL_PROC(_vfs_generic, OID_AUTO, noremotehang, CTLFLAG_RW | CTLFLAG_ANYBODY,
 SYSCTL_INT(_vfs_generic, VFS_MAXTYPENUM, maxtypenum,
 		   CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED,
 		   &maxvfstypenum, 0, "");
-SYSCTL_INT(_vfs_generic, OID_AUTO, sync_timeout, CTLFLAG_RW | CTLFLAG_LOCKED, &sync_timeout, 0, "");
+SYSCTL_INT(_vfs_generic, OID_AUTO, sync_timeout, CTLFLAG_RW | CTLFLAG_LOCKED, &sync_timeout_seconds, 0, "");
 SYSCTL_NODE(_vfs_generic, VFS_CONF, conf,
 		   CTLFLAG_RD | CTLFLAG_LOCKED,
 		   sysctl_vfs_generic_conf, "");
@@ -5123,12 +5131,17 @@ vnode_create_internal(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp,
 	ut = get_bsdthread_info(current_thread());
 
 	if ((current_proc()->p_lflag & P_LRAGE_VNODES) ||
-	    (ut->uu_flag & UT_RAGE_VNODES)) {
+	    (ut->uu_flag & (UT_RAGE_VNODES | UT_KERN_RAGE_VNODES))) {
 		/*
 		 * process has indicated that it wants any
 		 * vnodes created on its behalf to be rapidly
 		 * aged to reduce the impact on the cached set
 		 * of vnodes
+		 *
+		 * if UT_KERN_RAGE_VNODES is set, then the
+		 * kernel internally wants vnodes to be rapidly
+		 * aged, even if the process hasn't requested
+		 * this
 		 */
 		vp->v_flag |= VRAGE;
 	}
@@ -5833,8 +5846,16 @@ error:
 		if (!batched) {
 			*vpp = (vnode_t) 0;
 			vnode_put(vp);
+			vp = NULLVP;
 		}
 	}
+
+	/*
+	 * For creation VNOPs, this is the equivalent of
+	 * lookup_handle_found_vnode.
+	 */
+	if (kdebug_enable && *vpp)
+		kdebug_lookup(*vpp, cnp);
 
 out:
 	vn_attribute_cleanup(vap, defaulted);
@@ -6125,6 +6146,15 @@ vn_authorize_renamex(struct vnode *fdvp,  struct vnode *fvp,  struct componentna
 					 struct vnode *tdvp,  struct vnode *tvp,  struct componentname *tcnp,
 					 vfs_context_t ctx, vfs_rename_flags_t flags, void *reserved)
 {
+
+	return vn_authorize_renamex_with_paths(fdvp, fvp, fcnp, NULL, tdvp, tvp, tcnp, NULL, ctx, flags, reserved);
+}
+
+int
+vn_authorize_renamex_with_paths(struct vnode *fdvp,  struct vnode *fvp,  struct componentname *fcnp, const char *from_path,
+					 struct vnode *tdvp,  struct vnode *tvp,  struct componentname *tcnp, const char *to_path,
+					 vfs_context_t ctx, vfs_rename_flags_t flags, void *reserved)
+{
 	int error = 0;
 	int moving = 0;
 	bool swap = flags & VFS_RENAME_SWAP;
@@ -6221,6 +6251,23 @@ vn_authorize_renamex(struct vnode *fdvp,  struct vnode *fvp,  struct componentna
 
 	/***** <Kauth> *****/
 
+	/*
+	 * As part of the Kauth step, we call out to allow 3rd-party
+	 * fileop notification of "about to rename".  This is needed
+	 * in the event that 3rd-parties need to know that the DELETE
+	 * authorization is actually part of a rename.  It's important
+	 * that we guarantee that the DELETE call-out will always be
+	 * made if the WILL_RENAME call-out is made.  Another fileop
+	 * call-out will be performed once the operation is completed.
+	 * We can ignore the result of kauth_authorize_fileop().
+	 *
+	 * N.B. We are passing the vnode and *both* paths to each
+	 * call; kauth_authorize_fileop() extracts the "from" path
+	 * when posting a KAUTH_FILEOP_WILL_RENAME notification.
+	 * As such, we only post these notifications if all of the
+	 * information we need is provided.
+	 */
+
 	if (swap) {
 		kauth_action_t f = 0, t = 0;
 
@@ -6234,9 +6281,19 @@ vn_authorize_renamex(struct vnode *fdvp,  struct vnode *fvp,  struct componentna
 			if (vnode_isdir(tvp))
 				t = KAUTH_VNODE_ADD_SUBDIRECTORY;
 		}
+		if (to_path != NULL)
+			kauth_authorize_fileop(vfs_context_ucred(ctx),
+					KAUTH_FILEOP_WILL_RENAME,
+					(uintptr_t)fvp,
+					(uintptr_t)to_path);
 		error = vnode_authorize(fvp, fdvp, KAUTH_VNODE_DELETE | f, ctx);
 		if (error)
 			goto out;
+		if (from_path != NULL)
+			kauth_authorize_fileop(vfs_context_ucred(ctx),
+					KAUTH_FILEOP_WILL_RENAME,
+					(uintptr_t)tvp,
+					(uintptr_t)from_path);
 		error = vnode_authorize(tvp, tdvp, KAUTH_VNODE_DELETE | t, ctx);
 		if (error)
 			goto out;
@@ -6268,6 +6325,11 @@ vn_authorize_renamex(struct vnode *fdvp,  struct vnode *fvp,  struct componentna
 		 * If fvp is a directory, and we are changing it's parent,
 		 * then we also need rights to rewrite its ".." entry as well.
 		 */
+		if (to_path != NULL)
+			kauth_authorize_fileop(vfs_context_ucred(ctx),
+					KAUTH_FILEOP_WILL_RENAME,
+					(uintptr_t)fvp,
+					(uintptr_t)to_path);
 		if (vnode_isdir(fvp)) {
 			if ((error = vnode_authorize(fvp, fdvp, KAUTH_VNODE_DELETE | KAUTH_VNODE_ADD_SUBDIRECTORY, ctx)) != 0)
 				goto out;
@@ -8782,7 +8844,6 @@ vfs_setcompoundopen(mount_t mp)
 	mount_unlock(mp);
 }
 
-
 void
 vnode_setswapmount(vnode_t vp)
 {
@@ -9503,6 +9564,12 @@ vnode_trigger_resolve(vnode_t vp, struct nameidata *ndp, vfs_context_t ctx)
 
 	lck_mtx_unlock(&rp->vr_lock);
 
+#if CONFIG_MACF
+	int rv = mac_vnode_check_trigger_resolve(ctx, vp, &ndp->ni_cnd);
+	if (rv != 0)
+		return rv;
+#endif
+
 	/*
 	 * XXX
 	 * assumes that resolver will not access this trigger vnode (otherwise the kernel will deadlock)
@@ -9865,7 +9932,8 @@ static int vnode_trace_path_callback(struct vnode *vp, void *arg) {
 	/* vn_getpath() NUL-terminates, and len includes the NUL */
 
 	if (!rv) {
-		kdebug_lookup_gen_events(ctx->path, len, vp, TRUE);
+		kdebug_vfs_lookup(ctx->path, len, vp,
+				KDBG_VFS_LOOKUP_FLAG_LOOKUP | KDBG_VFS_LOOKUP_FLAG_NOPROCFILT);
 
 		if (++(ctx->count) == 1000) {
 			thread_yield_to_preemption();

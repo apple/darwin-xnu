@@ -141,12 +141,6 @@ typedef kern_return_t (*perfCallback)(
 				uintptr_t		*lo_spp,
 				      int);
 
-typedef kern_return_t (*perfASTCallback)(ast_t reasons, ast_t *myast);
-
-extern volatile perfCallback perfTrapHook;
-extern volatile perfASTCallback perfASTHook;
-extern volatile perfCallback perfIntHook;
-
 extern void		panic_i386_backtrace(void *, int, const char *, boolean_t, x86_saved_state_t *);
 extern void 	print_one_backtrace(pmap_t pmap, vm_offset_t topfp, const char *cur_marker, boolean_t is_64_bit);
 extern void	print_thread_num_that_crashed(task_t task);

@@ -1,0 +1,3 @@
+# KASAN
+san/kasan-arm64.c standard
+san/kasan-test-arm64.s standard

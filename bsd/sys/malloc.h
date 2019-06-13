@@ -220,8 +220,9 @@
 #define M_EVENTHANDLER	125	/* Eventhandler */
 #define M_LLTABLE	126	/* Link layer table */
 #define M_NWKWQ		127	/* Network work queue */
+#define M_CFIL      128 /* Content Filter */
 
-#define	M_LAST		128	/* Must be last type + 1 */
+#define	M_LAST		129	/* Must be last type + 1 */
 
 #else /* BSD_KERNEL_PRIVATE */
 

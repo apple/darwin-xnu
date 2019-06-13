@@ -279,6 +279,11 @@ routine purgable_control(
 		control		: vm_purgable_t;
 	inout	state		: int);
 
+
+routine _map_exec_lockdown(
+		target_task : vm_map_t);
+
+
 #endif /* VM32_SUPPORT */
 
 /* vim: set ft=c : */

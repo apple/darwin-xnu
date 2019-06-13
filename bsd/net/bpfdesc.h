@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -75,8 +75,10 @@
  * The items in this header file should be wrapped in #ifdef KERNEL.
  */
 
+#include <sys/proc.h>
 #include <sys/select.h>
 #include <kern/thread_call.h>
+#include <uuid/uuid.h>
 
 /*
  * Descriptor associated with each open bpf file.
@@ -145,6 +147,9 @@ struct bpf_d {
 	void		*bd_unref_lr[BPF_REF_HIST];
 	int		bd_next_ref_lr;
 	int		bd_next_unref_lr;
+
+	struct proc	*bd_opened_by;
+	uuid_t		bd_uuid;
 };
 
 /* Values for bd_state */
@@ -159,13 +164,15 @@ struct bpf_d {
 			  (bd)->bd_slen != 0))
 
 /* Values for bd_flags */
-#define	BPF_EXTENDED_HDR	0x01	/* process req. the extended header */
-#define	BPF_WANT_PKTAP		0x02	/* knows how to handle DLT_PKTAP */
-#define	BPF_FINALIZE_PKTAP	0x04	/* finalize pktap header on read */
-#define	BPF_KNOTE		0x08	/* kernel note attached */
-#define	BPF_DETACHING		0x10	/* bpf_d is being detached */
-#define	BPF_DETACHED		0x20	/* bpf_d is detached */
-#define	BPF_CLOSING		0x40	/* bpf_d is being closed */
+#define	BPF_EXTENDED_HDR	0x0001	/* process req. the extended header */
+#define	BPF_WANT_PKTAP		0x0002	/* knows how to handle DLT_PKTAP */
+#define	BPF_FINALIZE_PKTAP	0x0004	/* finalize pktap header on read */
+#define	BPF_KNOTE		0x0008	/* kernel note attached */
+#define	BPF_DETACHING		0x0010	/* bpf_d is being detached */
+#define	BPF_DETACHED		0x0020	/* bpf_d is detached */
+#define	BPF_CLOSING		0x0040	/* bpf_d is being closed */
+#define	BPF_TRUNCATE		0x0080	/* truncate the packet payload */
+#define	BPF_PKTHDRV2            0x0100  /* pktap header version 2 */
 
 /*
  * Descriptor associated with each attached hardware interface.

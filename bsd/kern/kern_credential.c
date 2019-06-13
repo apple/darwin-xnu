@@ -593,7 +593,7 @@ identitysvc(__unused struct proc *p, struct identitysvc_args *uap, __unused int3
 	int opcode = uap->opcode;
 	user_addr_t message = uap->message;
 	struct kauth_resolver_work *workp;
-	struct kauth_cache_sizes sz_arg;
+	struct kauth_cache_sizes sz_arg = {};
 	int error;
 	pid_t new_id;
 
@@ -789,7 +789,7 @@ kauth_resolver_getwork_continue(int result)
 
 	thread = current_thread();
 	ut = get_bsdthread_info(thread);
-	message = ut->uu_kevent.uu_kauth.message;
+	message = ut->uu_save.uus_kauth.message;
 	return(kauth_resolver_getwork2(message));
 }
 
@@ -916,7 +916,7 @@ kauth_resolver_getwork(user_addr_t message)
 		thread_t thread = current_thread();
 		struct uthread *ut = get_bsdthread_info(thread);
 
-		ut->uu_kevent.uu_kauth.message = message;
+		ut->uu_save.uus_kauth.message = message;
 		error = msleep0(&kauth_resolver_unsubmitted, kauth_resolver_mtx, PCATCH, "GRGetWork", 0, kauth_resolver_getwork_continue);
 		KAUTH_RESOLVER_UNLOCK();
 		/*
@@ -5657,7 +5657,7 @@ sysctl_dump_creds( __unused struct sysctl_oid *oidp, __unused void *arg1, __unus
 		return 0;
 	}
 
-	MALLOC( cred_listp, debug_ucred *, req->oldlen, M_TEMP, M_WAITOK );
+	MALLOC( cred_listp, debug_ucred *, req->oldlen, M_TEMP, M_WAITOK | M_ZERO);
 	if ( cred_listp == NULL ) {
 		return (ENOMEM);
 	}
@@ -5756,7 +5756,7 @@ sysctl_dump_cred_backtraces( __unused struct sysctl_oid *oidp, __unused void *ar
 		return (ENOMEM);
 	}
 
-	MALLOC( bt_bufp, cred_debug_buffer *, req->oldlen, M_TEMP, M_WAITOK );
+	MALLOC( bt_bufp, cred_debug_buffer *, req->oldlen, M_TEMP, M_WAITOK | M_ZERO);
 	if ( bt_bufp == NULL ) {
 		return (ENOMEM);
 	}

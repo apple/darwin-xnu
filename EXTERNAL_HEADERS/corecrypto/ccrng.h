@@ -13,18 +13,6 @@
 
 #include <corecrypto/cc.h>
 
-#define CCERR_DEVICE                   -100
-#define CCERR_INTERUPTS                -101
-#define CCERR_CRYPTO_CONFIG            -102
-#define CCERR_PERMS                    -103
-#define CCERR_PARAMETER                -104
-#define CCERR_MEMORY                   -105
-#define CCERR_FILEDESC                 -106
-#define CCERR_OUT_OF_ENTROPY           -107
-#define CCERR_INTERNAL                 -108
-#define CCERR_ATFORK                   -109
-#define CCERR_OVERFLOW                 -110
-
 #define CCRNG_STATE_COMMON                                                          \
     int (*generate)(struct ccrng_state *rng, size_t outlen, void *out);
 
@@ -55,6 +43,6 @@ struct ccrng_state {
 struct ccrng_state *ccrng(int *error);
 
 //call this macro with the rng argument set to output of the call to the ccrng() function
-#define ccrng_generate(rng, outlen, out) ((rng)->generate((rng), (outlen), (out)))
+#define ccrng_generate(rng, outlen, out) ((rng)->generate((struct ccrng_state *)(rng), (outlen), (out)))
 
 #endif /* _CORECRYPTO_CCRNG_H_ */

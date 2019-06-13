@@ -12,9 +12,9 @@
 #define _CORECRYPTO_CC_CONFIG_H_
 
 /* A word about configuration macros:
- 
+
     Conditional configuration macros specific to corecrypto should be named CORECRYPTO_xxx
-    or CCxx_yyy and be defined to be either 0 or 1 in this file. You can add an 
+    or CCxx_yyy and be defined to be either 0 or 1 in this file. You can add an
     #ifndef #error construct at the end of this file to make sure it's always defined.
 
     They should always be tested using the #if directive, never the #ifdef directive.
@@ -23,23 +23,23 @@
 
     Configuration Macros that are defined outside of corecrypto (eg: KERNEL, DEBUG, ...)
     shall only be used in this file to define CCxxx macros.
- 
+
     External macros should be assumed to be either undefined, defined with no value,
     or defined as true or false. We shall strive to build with -Wundef whenever possible,
     so the following construct should be used to test external macros in this file:
-  
+
          #if defined(DEBUG) && (DEBUG)
          #define CORECRYPTO_DEBUG 1
          #else
          #define CORECRYPTO_DEBUG 0
          #endif
-  
+
 
     It is acceptable to define a conditional CC_xxxx macro in an implementation file,
     to be used only in this file.
- 
+
     The current code is not guaranteed to follow those rules, but should be fixed to.
- 
+
     Corecrypto requires GNU and C99 compatibility.
     Typically enabled by passing --gnu --c99 to the compiler (eg. armcc)
 
@@ -51,17 +51,6 @@
 //Do not set these macros to 1, unless you are developing/testing for Windows under macOS
 #define CORECRYPTO_SIMULATE_WINDOWS_ENVIRONMENT 0
 #define CORECRYPTO_HACK_FOR_WINDOWS_DEVELOPMENT 0 //to be removed after <rdar://problem/27304763> port corecrypto to Windows
-
-//this macro is used to turn on/off usage of transparent union in corecrypto
-//it should be commented out in corecrypto and be used only by the software that use corecrypto
-//#define CORECRYPTO_DONOT_USE_TRANSPARENT_UNION
-#if defined(__cplusplus)
-#define CORECRYPTO_USE_TRANSPARENT_UNION 0
-#elif defined(CORECRYPTO_DONOT_USE_TRANSPARENT_UNION)
- #define CORECRYPTO_USE_TRANSPARENT_UNION !CORECRYPTO_DONOT_USE_TRANSPARENT_UNION
-#else
- #define CORECRYPTO_USE_TRANSPARENT_UNION 1
-#endif
 
 #if (defined(DEBUG) && (DEBUG)) || defined(_DEBUG) //MSVC defines _DEBUG
 /* CC_DEBUG is already used in CommonCrypto */
@@ -97,6 +86,12 @@
  #define CC_RTKIT 1
 #else
  #define CC_RTKIT 0
+#endif
+
+#if defined(RTKITROM) && (RTKITROM)
+#define CC_RTKITROM 1
+#else
+#define CC_RTKITROM 0
 #endif
 
 #if defined(USE_SEPROM) && (USE_SEPROM)
@@ -170,11 +165,22 @@
 // warning: pointer of type 'void *' used in arithmetic
   #pragma GCC diagnostic ignored "-Wpointer-arith"
  #endif // __arm__
+#define CC_SMALL_CODE 1
+
 #endif // CC_BASEBAND
+
+#if CC_RTKIT || CC_RTKITROM
+#define CC_SMALL_CODE 1
+#endif
+
+
+#ifndef CC_SMALL_CODE
+#define CC_SMALL_CODE 0
+#endif
 
 //CC_XNU_KERNEL_AVAILABLE indicates the availibity of XNU kernel functions,
 //like what we have on OSX, iOS, tvOS, Watch OS
-#if defined(__APPLE__) && defined(__MACH__)  
+#if defined(__APPLE__) && defined(__MACH__)
  #define CC_XNU_KERNEL_AVAILABLE 1
 #else
  #define CC_XNU_KERNEL_AVAILABLE 0
@@ -186,7 +192,7 @@
 #endif
 
 #if !defined(CCN_UNIT_SIZE)
- #if defined(__arm64__) || defined(__x86_64__)  || defined(_WIN64) 
+ #if defined(__arm64__) || defined(__x86_64__)  || defined(_WIN64)
   #define CCN_UNIT_SIZE  8
  #elif defined(__arm__) || defined(__i386__) || defined(_WIN32)
   #define CCN_UNIT_SIZE  4
@@ -221,7 +227,7 @@
 
 #if defined(_MSC_VER)
     #if defined(__clang__)
-        #define CC_ALIGNED(x) __attribute__ ((aligned(x))) //clang compiler  
+        #define CC_ALIGNED(x) __attribute__ ((aligned(x))) //clang compiler
     #else
         #define CC_ALIGNED(x) __declspec(align(x)) //MS complier
     #endif
@@ -235,7 +241,7 @@
 
 #if defined(__arm__)
 //this is copied from <arm/arch.h>, because <arm/arch.h> is not available on SEPROM environment
- #if defined (__ARM_ARCH_7A__) || defined (__ARM_ARCH_7S__) || defined (__ARM_ARCH_7F__) || defined (__ARM_ARCH_7K__)
+#if defined (__ARM_ARCH_7A__) || defined (__ARM_ARCH_7S__) || defined (__ARM_ARCH_7F__) || defined (__ARM_ARCH_7K__) || defined(__ARM_ARCH_7EM__)
   #define _ARM_ARCH_7
  #endif
 
@@ -250,7 +256,7 @@
 #elif defined(__x86_64__) || defined(__i386__)
  #define CCN_IOS				   0
  #define CCN_OSX				   1
-#endif 
+#endif
 
 #if CC_USE_L4 || CC_USE_S3
 /* No dynamic linking allowed in L4, e.g. avoid nonlazy symbols */
@@ -259,7 +265,7 @@
 #endif
 
 #if !defined(CC_USE_HEAP_FOR_WORKSPACE)
- #if CC_USE_S3 || CC_USE_SEPROM || CC_RTKIT
+ #if CC_USE_S3 || CC_USE_SEPROM || CC_RTKITROM
   #define CC_USE_HEAP_FOR_WORKSPACE 0
  #else
   #define CC_USE_HEAP_FOR_WORKSPACE 1
@@ -288,16 +294,23 @@
 #define CC_DISABLE_RSAKEYGEN 0 /* default */
 #endif
 
+// see rdar://problem/26636018
+#if (CCN_UNIT_SIZE == 8) && !( defined(_MSC_VER) && defined(__clang__))
+#define CCEC25519_CURVE25519DONNA_64BIT 1
+#else
+#define CCEC25519_CURVE25519DONNA_64BIT 0
+#endif
+
 //- functions implemented in assembly ------------------------------------------
 //this the list of corecrypto clients that use assembly and the clang compiler
-#if !(CC_XNU_KERNEL_AVAILABLE || CC_KERNEL || CC_USE_L4 || CC_IBOOT || CC_RTKIT || CC_USE_SEPROM || CC_USE_S3) && !defined(_WIN32) && CORECRYPTO_DEBUG
+#if !(CC_XNU_KERNEL_AVAILABLE || CC_KERNEL || CC_USE_L4 || CC_IBOOT || CC_RTKIT || CC_RTKITROM || CC_USE_SEPROM || CC_USE_S3) && !defined(_WIN32) && CORECRYPTO_DEBUG
  #warning "You are using the default corecrypto configuration, assembly optimizations may not be available for your platform"
 #endif
 
 // Use this macro to strictly disable assembly regardless of cpu/os/compiler/etc.
 // Our assembly code is not gcc compatible. Clang defines the __GNUC__ macro as well.
 #if !defined(CC_USE_ASM)
- #if defined(_WIN32) || CC_EFI || CC_BASEBAND || CC_XNU_KERNEL_PRIVATE || (defined(__GNUC__) && !defined(__clang__)) || defined(__ANDROID_API__)
+ #if defined(_WIN32) || CC_EFI || CC_BASEBAND || CC_XNU_KERNEL_PRIVATE || (defined(__GNUC__) && !defined(__clang__)) || defined(__ANDROID_API__) || CC_RTKIT || CC_RTKITROM
   #define CC_USE_ASM 0
  #else
   #define CC_USE_ASM 1
@@ -306,7 +319,7 @@
 
 //-(1) ARM V7
 #if defined(_ARM_ARCH_7) && __clang__ && CC_USE_ASM
- #define CCN_DEDICATED_SQR      1
+ #define CCN_DEDICATED_SQR      CC_SMALL_CODE
  #define CCN_MUL_KARATSUBA      0 // no performance improvement
  #define CCN_ADD_ASM            1
  #define CCN_SUB_ASM            1
@@ -321,7 +334,7 @@
  #define CCN_SHIFT_RIGHT_ASM    1
  #define CCAES_ARM_ASM          1
  #define CCAES_INTEL_ASM        0
- #if CC_KERNEL || CC_USE_L4 || CC_IBOOT || CC_RTKIT || CC_USE_SEPROM || CC_USE_S3
+ #if CC_KERNEL || CC_USE_L4 || CC_IBOOT || CC_RTKIT || CC_RTKITROM || CC_USE_SEPROM || CC_USE_S3
   #define CCAES_MUX             0
  #else
   #define CCAES_MUX             1
@@ -341,7 +354,7 @@
 
 //-(2) ARM 64
 #elif defined(__arm64__) && __clang__ && CC_USE_ASM
- #define CCN_DEDICATED_SQR      1
+ #define CCN_DEDICATED_SQR      CC_SMALL_CODE
  #define CCN_MUL_KARATSUBA      1 // 4*n CCN_UNIT extra memory required.
  #define CCN_ADD_ASM            1
  #define CCN_SUB_ASM            1
@@ -404,7 +417,7 @@
  #define CCSHA2_VNG_ARMV7NEON   0
  #define CCSHA256_ARMV6M_ASM    0
 
-//-(4) disable assembly  
+//-(4) disable assembly
 #else
  #if CCN_UINT128_SUPPORT_FOR_64BIT_ARCH
   #define CCN_DEDICATED_SQR     1
@@ -437,25 +450,11 @@
 
 #define CC_INLINE static inline
 
-#if CORECRYPTO_USE_TRANSPARENT_UNION
-// Non null for transparent unions is ambiguous and cause problems
-// for most tools (GCC and others: 23919290).
- #define CC_NONNULL_TU(N)
-#else
- #define CC_NONNULL_TU(N)  CC_NONNULL(N)
-#endif
-
 #ifdef __GNUC__
  #define CC_NORETURN __attribute__((__noreturn__))
  #define CC_NOTHROW __attribute__((__nothrow__))
  #define CC_NONNULL(N) __attribute__((__nonnull__ N))
- #define CC_NONNULL1 __attribute__((__nonnull__(1)))
- #define CC_NONNULL2 __attribute__((__nonnull__(2)))
- #define CC_NONNULL3 __attribute__((__nonnull__(3)))
- #define CC_NONNULL4 __attribute__((__nonnull__(4)))
- #define CC_NONNULL5 __attribute__((__nonnull__(5)))
- #define CC_NONNULL6 __attribute__((__nonnull__(6)))
- #define CC_NONNULL7 __attribute__((__nonnull__(7)))
+ #define CC_NONNULL4 CC_NONNULL((4))
  #define CC_NONNULL_ALL __attribute__((__nonnull__))
  #define CC_SENTINEL __attribute__((__sentinel__))
  #define CC_CONST __attribute__((__const__))
@@ -469,23 +468,11 @@
 /*! @parseOnly */
  #define CC_NONNULL(N)
 /*! @parseOnly */
+ #define CC_NONNULL4
+/*! @parseOnly */
  #define CC_NORETURN
 /*! @parseOnly */
  #define CC_NOTHROW
-/*! @parseOnly */
- #define CC_NONNULL1
-/*! @parseOnly */
- #define CC_NONNULL2
-/*! @parseOnly */
- #define CC_NONNULL3
-/*! @parseOnly */
- #define CC_NONNULL4
-/*! @parseOnly */
- #define CC_NONNULL5
-/*! @parseOnly */
- #define CC_NONNULL6
-/*! @parseOnly */
- #define CC_NONNULL7
 /*! @parseOnly */
  #define CC_NONNULL_ALL
 /*! @parseOnly */

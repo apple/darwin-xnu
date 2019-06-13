@@ -51,18 +51,20 @@
 
 #define DTRACE_LABEL(p, n)			\
 	".pushsection __DATA, __data\n\t"	\
-        ".globl " DTRACE_LAB(p, n) "\n\t"	\
-        DTRACE_LAB(p, n) ":" ".long 1f""\n\t"	\
+	".p2align	2\n\t"			\
+	".globl " DTRACE_LAB(p, n) "\n\t"	\
+	DTRACE_LAB(p, n) ":" ".long 1f""\n\t"	\
 	".popsection" "\n\t"			\
 	"1:"
 #else /* __arm64__ */
 #define DTRACE_LAB(p, n)                                                                        \
-    "__dtrace_probe$" DTRACE_TOSTRING(%=__LINE__) DTRACE_STRINGIFY(_##p##___##n)
+	"__dtrace_probe$" DTRACE_TOSTRING(%=__LINE__) DTRACE_STRINGIFY(_##p##___##n)
 
 #define DTRACE_LABEL(p, n)			\
 	".pushsection __DATA, __data\n\t"	\
-        ".globl " DTRACE_LAB(p, n) "\n\t"	\
-        DTRACE_LAB(p, n) ":" ".quad 1f""\n\t"	\
+	".p2align	3\n\t"			\
+	".globl " DTRACE_LAB(p, n) "\n\t"	\
+	DTRACE_LAB(p, n) ":" ".quad 1f""\n\t"	\
 	".popsection" "\n\t"			\
 	"1:"
 #endif

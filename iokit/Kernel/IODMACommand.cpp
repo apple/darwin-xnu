@@ -379,7 +379,8 @@ IODMACommand::setMemoryDescriptor(const IOMemoryDescriptor *mem, bool autoPrepar
 	fInternalState->fNewMD = true;
 	mem->retain();
 	fMemory = mem;
-	if (!fMapper) mem->dmaCommandOperation(kIOMDSetDMAActive, this, 0);
+	fInternalState->fSetActiveNoMapper = (!fMapper);
+	if (fInternalState->fSetActiveNoMapper) mem->dmaCommandOperation(kIOMDSetDMAActive, this, 0);
 	if (autoPrepare) {
 	    err = prepare();
 	    if (err) {
@@ -399,7 +400,7 @@ IODMACommand::clearMemoryDescriptor(bool autoComplete)
     if (fMemory)
     {
 	while (fActive) complete();
-	if (!fMapper) fMemory->dmaCommandOperation(kIOMDSetDMAInactive, this, 0);
+	if (fInternalState->fSetActiveNoMapper) fMemory->dmaCommandOperation(kIOMDSetDMAInactive, this, 0);
 	fMemory->release();
 	fMemory = 0;
     }
@@ -823,8 +824,6 @@ IODMACommand::prepare(UInt64 offset, UInt64 length, bool flushCache, bool synchr
 	state->fLocalMapperAllocValid  = false;
 	state->fLocalMapperAllocLength = 0;
 
-	state->fLocalMapper    = (fMapper && (fMapper != IOMapper::gSystem));
-
 	state->fSourceAlignMask = fAlignMask;
 	if (fMapper)
 	    state->fSourceAlignMask &= page_mask;
@@ -1138,8 +1137,16 @@ IODMACommand::genIOVMSegments(uint32_t op,
 	internalState->fIOVMAddrValid = state->fIOVMAddr = 0;
 	internalState->fNextRemapPage                    = NULL;
 	internalState->fNewMD	                         = false;
-	state->fMapped                                   = (0 != fMapper);
 	mdOp                                             = kIOMDFirstSegment;
+	if (fMapper)
+	{
+	    if (internalState->fLocalMapperAllocValid)
+	    {
+		state->fMapped = kIOMDDMAWalkMappedLocal;
+		state->fMappedBase = internalState->fLocalMapperAlloc;
+	    }
+	    else state->fMapped = true;
+	}
     };
 	
     UInt32    segIndex = 0;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -81,6 +81,7 @@
 #define	KEV_DL_AWDL_UNRESTRICTED                27
 #define	KEV_DL_RRC_STATE_CHANGED                28
 #define	KEV_DL_QOS_MODE_CHANGED			29
+#define	KEV_DL_LOW_POWER_MODE_CHANGED		30
 
 #ifdef PRIVATE
 #define	KEV_NETPOLICY_SUBCLASS  3	/* Network policy subclass */
@@ -135,6 +136,7 @@
 #define	KEV_NETEVENT_SUBCLASS	11	/* Generic Net events subclass */
 /* KEV_NETEVENT_SUBCLASS event codes */
 #define	KEV_NETEVENT_APNFALLBACK                1
+#define	KEV_NETEVENT_CLAT46_EVENT		2
 
 #define	KEV_MPTCP_SUBCLASS	12	/* Global MPTCP events subclass */
 /* KEV_MPTCP_SUBCLASS event codes */

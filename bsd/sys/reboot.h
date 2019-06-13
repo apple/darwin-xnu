@@ -87,11 +87,17 @@
 #define RB_UPSDELAY 0x200   /* Delays restart by 5 minutes */
 #define RB_QUICK	0x400	/* quick and ungraceful reboot with file system caches flushed*/
 #define RB_PANIC	0x800   /* panic the kernel */
+#define RB_PANIC_ZPRINT	0x1000   /* add zprint info to panic string */
 
 #ifndef KERNEL
 __BEGIN_DECLS
 /* userspace reboot control */
 int usrctl(uint32_t flags);
+/* The normal reboot syscall. */
+int reboot(int howto);
+/* Used with RB_PANIC to panic the kernel from userspace with a message.
+ * Requires an entitlement on Release. */
+int reboot_np(int howto, const char *message);
 __END_DECLS
 #endif
 

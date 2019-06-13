@@ -97,10 +97,12 @@ LEXT(machine_load_context)
 	bx		lr									// Return
 
 /*
- *	void Call_continuation( void (*continuation)(void), 
- *				void *param, 
- *				wait_result_t wresult, 
- *				vm_offset_t stack_ptr)
+ *  typedef void (*thread_continue_t)(void *param, wait_result_t)
+ *
+ *	void Call_continuation( thread_continue_t continuation,
+ *	            			void *param, 
+ *				            wait_result_t wresult,
+ *                          bool enable interrupts)
  */
 	.text
 	.align	5
@@ -110,10 +112,21 @@ LEXT(Call_continuation)
 	mrc		p15, 0, r9, c13, c0, 4				// Read TPIDRPRW
 	ldr		sp, [r9, TH_KSTACKPTR]				// Set stack pointer
 	mov		r7, #0								// Clear frame pointer
-	mov		r6,r0								// Load continuation
-	mov		r0,r1								// Set first parameter
-	mov		r1,r2								// Set wait result arg
-	blx		r6									// Branch to continuation
+
+	mov		r4,r0								// Load continuation
+	mov		r5,r1								// continuation parameter
+	mov		r6,r2								// Set wait result arg
+
+    teq     r3, #0
+    beq     1f
+    mov     r0, #1
+    bl _ml_set_interrupts_enabled
+1:
+    
+	mov		r0,r5								// Set first parameter
+	mov		r1,r6								// Set wait result arg
+	blx		r4									// Branch to continuation
+
 	mrc		p15, 0, r0, c13, c0, 4				// Read TPIDRPRW
 	LOAD_ADDR_PC(thread_terminate)
 	b		.									// Not reach

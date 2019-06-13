@@ -269,12 +269,14 @@ extern vm_offset_t		vm_kernel_base;
 extern vm_offset_t		vm_kernel_top;
 extern vm_offset_t		vm_hib_base;
 
-#define VM_KERNEL_IS_SLID(_o)						       \
-		(((vm_offset_t)(_o) >= vm_kernel_slid_base) &&		       \
-		 ((vm_offset_t)(_o) <  vm_kernel_slid_top))
+extern vm_offset_t		vm_kernel_builtinkmod_text;
+extern vm_offset_t		vm_kernel_builtinkmod_text_end;
 
-#define VM_KERNEL_SLIDE(_u)						       \
-		((vm_offset_t)(_u) + vm_kernel_slide)
+#define VM_KERNEL_IS_SLID(_o)						  \
+	(((vm_offset_t)VM_KERNEL_STRIP_PTR(_o) >= vm_kernel_slid_base) && \
+	 ((vm_offset_t)VM_KERNEL_STRIP_PTR(_o) <  vm_kernel_slid_top))
+
+#define VM_KERNEL_SLIDE(_u) ((vm_offset_t)(_u) + vm_kernel_slide)
 
 /*
  * The following macros are to be used when exposing kernel addresses to
@@ -319,20 +321,20 @@ __BEGIN_DECLS
 extern vm_offset_t vm_kernel_addrhash(vm_offset_t addr);
 __END_DECLS
 
-#define __DO_UNSLIDE(_v) ((vm_offset_t)(_v) - vm_kernel_slide)
+#define __DO_UNSLIDE(_v) ((vm_offset_t)VM_KERNEL_STRIP_PTR(_v) - vm_kernel_slide)
 
 #if DEBUG || DEVELOPMENT
-# define VM_KERNEL_ADDRHIDE(_v) (VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : (vm_address_t)(_v))
+#define VM_KERNEL_ADDRHIDE(_v) (VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : (vm_address_t)VM_KERNEL_STRIP_PTR(_v))
 #else
-# define VM_KERNEL_ADDRHIDE(_v) (VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : (vm_address_t)0)
-#endif
+#define VM_KERNEL_ADDRHIDE(_v) (VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : (vm_address_t)0)
+#endif /* DEBUG || DEVELOPMENT */
 
 #define VM_KERNEL_ADDRHASH(_v) vm_kernel_addrhash((vm_offset_t)(_v))
 
 #define VM_KERNEL_UNSLIDE_OR_PERM(_v) ({ \
 		VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : \
-		VM_KERNEL_ADDRESS(_v) ? ((vm_offset_t)(_v) + vm_kernel_addrperm) : \
-		(vm_offset_t)(_v); \
+		VM_KERNEL_ADDRESS(_v) ? ((vm_offset_t)VM_KERNEL_STRIP_PTR(_v) + vm_kernel_addrperm) : \
+		(vm_offset_t)VM_KERNEL_STRIP_PTR(_v); \
 	})
 
 #define VM_KERNEL_UNSLIDE(_v) ({ \

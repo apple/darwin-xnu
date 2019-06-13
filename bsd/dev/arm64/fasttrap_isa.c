@@ -36,7 +36,6 @@
 #define _KERNEL			/* Solaris vs. Darwin */
 #endif
 #endif
-
 #include <sys/fasttrap_isa.h>
 #include <sys/fasttrap_impl.h>
 #include <sys/dtrace.h>
@@ -53,6 +52,11 @@
 #include <kern/debug.h>
 
 #include <pexpert/pexpert.h>
+
+#if __has_include(<ptrauth.h>)
+#include <ptrauth.h>
+#endif
+
 
 extern dtrace_id_t dtrace_probeid_error;
 
@@ -117,17 +121,6 @@ extern int dtrace_decode_thumb(uint32_t instr);
 #define ARM_LDR_UF (1 << 23)
 #define ARM_LDR_BF (1 << 22)
 
-static void
-flush_caches(void)
-{
-	/* TODO There were some problems with flushing just the cache line that had been modified.
-	 * For now, we'll flush the entire cache, until we figure out how to flush just the patched block.
-	 */
-	FlushPoU_Dcache();
-	InvalidatePoU_Icache();
-}
-
-
 static int fasttrap_tracepoint_init32 (proc_t *, fasttrap_tracepoint_t *, user_addr_t, fasttrap_probe_type_t);
 static int fasttrap_tracepoint_init64 (proc_t *, fasttrap_tracepoint_t *, user_addr_t, fasttrap_probe_type_t);
 
@@ -135,7 +128,7 @@ int
 fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp,
 			 user_addr_t pc, fasttrap_probe_type_t type)
 {
-	if (proc_is64bit(p)) {
+	if (proc_is64bit_data(p)) {
 		return fasttrap_tracepoint_init64(p, tp, pc, type);
 	} else {
 		return fasttrap_tracepoint_init32(p, tp, pc, type);
@@ -250,6 +243,8 @@ fasttrap_tracepoint_init64(proc_t *p, fasttrap_tracepoint_t *tp,
 	if (tp->ftt_fntype != FASTTRAP_FN_DONE_INIT) {
 		switch(tp->ftt_fntype) {
 		case FASTTRAP_FN_UNKNOWN:
+		case FASTTRAP_FN_ARM64:
+		case FASTTRAP_FN_ARM64_32:
 			/*
 			 * On arm64 there is no distinction between
 			 * arm vs. thumb mode instruction types.
@@ -299,90 +294,6 @@ fasttrap_tracepoint_init64(proc_t *p, fasttrap_tracepoint_t *tp,
 	return (0);
 }
 
-// These are not exported from vm_map.h.
-extern kern_return_t vm_map_write_user(vm_map_t map, void *src_p, vm_map_address_t dst_addr, vm_size_t size);
-
-/* Patches the instructions. Almost like uwrite, but need special instructions on ARM to flush the caches. */
-static
-int patchInst(proc_t *p, void *buf, user_size_t len, user_addr_t a)
-{
-	kern_return_t ret;
-
-	ASSERT(p != NULL);
-	ASSERT(p->task != NULL);
-
-	task_t task = p->task;
-
-	/*
-	 * Grab a reference to the task vm_map_t to make sure
-	 * the map isn't pulled out from under us.
-	 *
-	 * Because the proc_lock is not held at all times on all code
-	 * paths leading here, it is possible for the proc to have
-	 * exited. If the map is null, fail.
-	 */
-	vm_map_t map = get_task_map_reference(task);
-	if (map) {
-		/* Find the memory permissions. */
-		uint32_t nestingDepth=999999;
-		vm_region_submap_short_info_data_64_t info;
-		mach_msg_type_number_t count = VM_REGION_SUBMAP_SHORT_INFO_COUNT_64;
-		mach_vm_address_t address = (mach_vm_address_t)a;
-		mach_vm_size_t sizeOfRegion = (mach_vm_size_t)len;
-
-		ret = mach_vm_region_recurse(map, &address, &sizeOfRegion, &nestingDepth, (vm_region_recurse_info_t)&info, &count);
-		if (ret != KERN_SUCCESS)
-			goto done;
-
-		vm_prot_t reprotect;
-
-		if (!(info.protection & VM_PROT_WRITE)) {
-			/* Save the original protection values for restoration later */
-			reprotect = info.protection;
-			if (info.max_protection & VM_PROT_WRITE) {
-				/* The memory is not currently writable, but can be made writable. */
-				/* Making it both writable and executable at the same time causes warning on embedded */
-				ret = mach_vm_protect (map, (mach_vm_offset_t)a, (mach_vm_size_t)len, 0, (reprotect & ~VM_PROT_EXECUTE) | VM_PROT_WRITE);
-			} else {
-				/*
-				 * The memory is not currently writable, and cannot be made writable. We need to COW this memory.
-				 *
-				 * Strange, we can't just say "reprotect | VM_PROT_COPY", that fails.
-				 */
-				ret = mach_vm_protect (map, (mach_vm_offset_t)a, (mach_vm_size_t)len, 0, VM_PROT_COPY | VM_PROT_READ | VM_PROT_WRITE);
-			}
-
-			if (ret != KERN_SUCCESS)
-				goto done;
-
-		} else {
-			/* The memory was already writable. */
-			reprotect = VM_PROT_NONE;
-		}
-
-		ret = vm_map_write_user( map,
-					 buf,
-					 (vm_map_address_t)a,
-					 (vm_size_t)len);
-
-		flush_caches();
-
-		if (ret != KERN_SUCCESS)
-			goto done;
-
-		if (reprotect != VM_PROT_NONE) {
-			ASSERT(reprotect & VM_PROT_EXECUTE);
-			ret = mach_vm_protect (map, (mach_vm_offset_t)a, (mach_vm_size_t)len, 0, reprotect);
-		}
-
-done:
-		vm_map_deallocate(map);
-	} else
-		ret = KERN_TERMINATED;
-
-	return (int)ret;
-}
-
 int
 fasttrap_tracepoint_install(proc_t *p, fasttrap_tracepoint_t *tp)
 {
@@ -390,7 +301,7 @@ fasttrap_tracepoint_install(proc_t *p, fasttrap_tracepoint_t *tp)
 	uint32_t instr;
 	int size;
 
-	if (proc_is64bit(p)) {
+	if (proc_is64bit_data(p)) {
 		size = 4;
 		instr = FASTTRAP_ARM64_INSTR;
 	}
@@ -403,7 +314,7 @@ fasttrap_tracepoint_install(proc_t *p, fasttrap_tracepoint_t *tp)
 		}
 	}
 
-	if (patchInst(p, &instr, size, tp->ftt_pc) != 0)
+	if (uwrite(p, &instr, size, tp->ftt_pc) != 0)
 		return (-1);
 
 	tp->ftt_installed = 1;
@@ -418,7 +329,7 @@ fasttrap_tracepoint_remove(proc_t *p, fasttrap_tracepoint_t *tp)
 	uint32_t instr;
 	int size;
 
-	if (proc_is64bit(p)) {
+	if (proc_is64bit_data(p)) {
 		/*
 		 * Distinguish between read or write failures and a changed
 		 * instruction.
@@ -447,7 +358,7 @@ fasttrap_tracepoint_remove(proc_t *p, fasttrap_tracepoint_t *tp)
 		}
 	}
 
-	if (patchInst(p, &tp->ftt_instr, size, tp->ftt_pc) != 0)
+	if (uwrite(p, &tp->ftt_instr, size, tp->ftt_pc) != 0)
 		return (-1);
 
 end:
@@ -501,7 +412,7 @@ fasttrap_return_common(proc_t *p, arm_saved_state_t *regs, user_addr_t pc, user_
 		}
 		else {
 			/* ARM64_TODO  - check for FASTTRAP_T_RET */
-			if ((tp->ftt_type != FASTTRAP_T_ARM64_RET) &&
+			if ((tp->ftt_type != FASTTRAP_T_ARM64_RET || tp->ftt_type != FASTTRAP_T_ARM64_RETAB) &&
 				new_pc - probe->ftp_faddr < probe->ftp_fsize)
 				continue;
 		}
@@ -1214,7 +1125,7 @@ fasttrap_pid_probe_handle_patched_instr32(arm_saved_state_t *state, fasttrap_tra
 				SET32(scratch+i, FASTTRAP_ARM32_RET_INSTR); i += 4;
 			}
 
-			if (patchInst(p, scratch, i, uthread->t_dtrace_scratch->write_addr) != KERN_SUCCESS) {
+			if (uwrite(p, scratch, i, uthread->t_dtrace_scratch->write_addr) != KERN_SUCCESS) {
 				fasttrap_sigtrap(p, uthread, pc);
 				new_pc = pc;
 				break;
@@ -1280,7 +1191,7 @@ fasttrap_pid_probe_thunk_instr64(arm_saved_state_t *state, fasttrap_tracepoint_t
 		return;
 	}
 
-	if (patchInst(p, local_scratch, (num_instrs + 1) * sizeof(uint32_t), user_scratch_area) != KERN_SUCCESS) {
+	if (uwrite(p, local_scratch, (num_instrs + 1) * sizeof(uint32_t), user_scratch_area) != KERN_SUCCESS) {
 		fasttrap_sigtrap(p, uthread, pc);
 		*pc_out = pc;
 		return;
@@ -1292,6 +1203,7 @@ fasttrap_pid_probe_thunk_instr64(arm_saved_state_t *state, fasttrap_tracepoint_t
 	/* We may or may not be about to run a return probe (but we wouldn't thunk ret lr)*/
 	uthread->t_dtrace_ret = (tp->ftt_retids != NULL);
 	assert(tp->ftt_type != FASTTRAP_T_ARM64_RET);
+	assert(tp->ftt_type != FASTTRAP_T_ARM64_RETAB);
 
 	/* Set address of instruction we've patched */
 	uthread->t_dtrace_pc = pc;
@@ -1729,10 +1641,22 @@ fasttrap_pid_probe_handle_patched_instr64(arm_saved_state_t *state, fasttrap_tra
 
 			/* Set PC to register value (xzr, not sp) */
 			new_pc = get_saved_state64_regno(regs64, regno, 1);
+
 			*was_simulated = 1;
 			break;
 		}
+		case FASTTRAP_T_ARM64_RETAB:
+		{
+			/* Set PC to register value (xzr, not sp) */
+			new_pc = get_saved_state64_regno(regs64, 30, 1);
+#if __has_feature(ptrauth_calls)
+			new_pc = (user_addr_t) ptrauth_strip((void *)new_pc, ptrauth_key_return_address);
+#endif
 
+			*was_simulated = 1;
+			break;
+
+		}
 		/*
 		 * End branches.
 		 */

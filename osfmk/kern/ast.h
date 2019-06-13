@@ -118,16 +118,17 @@ typedef uint32_t ast_t;
 #define AST_BSD			0x80
 #define AST_KPERF		0x100   /* kernel profiling */
 #define	AST_MACF		0x200	/* MACF user ret pending */
-#define AST_CHUD		0x400 
-#define AST_CHUD_URGENT		0x800
+/* 0x400, 0x800 unused */
 #define AST_GUARD		0x1000
 #define AST_TELEMETRY_USER	0x2000	/* telemetry sample requested on interrupt from userspace */
 #define AST_TELEMETRY_KERNEL	0x4000	/* telemetry sample requested on interrupt from kernel */
+#define AST_TELEMETRY_PMI	0x8000	/* telemetry sample requested on PMI */
 #define AST_SFI			0x10000	/* Evaluate if SFI wait is needed before return to userspace */
 #define AST_DTRACE		0x20000
 #define AST_TELEMETRY_IO	0x40000 /* telemetry sample requested for I/O */
 #define AST_KEVENT		0x80000
 #define AST_REBALANCE           0x100000 /* thread context switched due to rebalancing */
+#define AST_UNQUIESCE           0x200000 /* catch unquiesced processor before returning to userspace */
 
 #define AST_NONE		0x00
 #define AST_ALL			(~AST_NONE)
@@ -135,8 +136,8 @@ typedef uint32_t ast_t;
 #define AST_SCHEDULING	(AST_PREEMPTION | AST_YIELD | AST_HANDOFF)
 #define AST_PREEMPTION	(AST_PREEMPT | AST_QUANTUM | AST_URGENT)
 
-#define AST_CHUD_ALL	(AST_CHUD_URGENT|AST_CHUD)
-#define AST_TELEMETRY_ALL	(AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL | AST_TELEMETRY_IO)
+#define AST_TELEMETRY_ALL (AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL | \
+		AST_TELEMETRY_PMI | AST_TELEMETRY_IO)
 
 /* Per-thread ASTs follow the thread at context-switch time. */
 #define AST_PER_THREAD	(AST_APC | AST_BSD | AST_MACF | AST_LEDGER | AST_GUARD | AST_TELEMETRY_ALL | AST_KEVENT)

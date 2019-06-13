@@ -405,6 +405,22 @@ void ltable_grow(struct link_table *table, uint32_t min_free)
 	return;
 }
 
+#if DEVELOPMENT || DEBUG
+
+int
+ltable_nelem(struct link_table *table)
+{
+	int nelem = 0;
+
+	lck_mtx_lock(&table->lock);
+
+	nelem = table->used_elem;
+
+	lck_mtx_unlock(&table->lock);
+
+	return nelem;
+}
+#endif
 
 /**
  * ltable_alloc_elem: allocate one or more elements from a given table

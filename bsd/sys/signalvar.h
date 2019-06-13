@@ -67,6 +67,9 @@
 #include <sys/appleapiopts.h>
 
 #ifdef BSD_KERNEL_PRIVATE
+
+#include <stdatomic.h>
+
 /*
  * Kernel signal definitions and data structures,
  * not exported to user programs.
@@ -86,13 +89,13 @@ struct	sigacts {
 	sigset_t ps_signodefer;		/* signals not masked while handled */
 	sigset_t ps_siginfo;		/* signals that want SA_SIGINFO args */
 	sigset_t ps_oldmask;		/* saved mask from before sigpause */
+	user_addr_t ps_sigreturn_token; /* random token used to validate sigreturn arguments */
+	_Atomic uint32_t ps_sigreturn_validation; /* sigreturn argument validation state */
 	int	ps_flags;		/* signal flags, below */
 	struct kern_sigaltstack ps_sigstk;	/* sp, length & flags */
 	int	ps_sig;			/* for core dump/debugger XXX */
 	int	ps_code;		/* for core dump/debugger XXX */
 	int	ps_addr;		/* for core dump/debugger XXX */
-	sigset_t ps_usertramp;		/* SunOS compat; libc sigtramp XXX */
-	sigset_t ps_64regset;		/* signals that want SA_EXSIGINFO args */
 };
 
 /* signal flags */
@@ -107,6 +110,11 @@ struct	sigacts {
 #define	KERN_SIG_CATCH	CAST_USER_ADDR_T(2)
 #define	KERN_SIG_HOLD	CAST_USER_ADDR_T(3)
 #define	KERN_SIG_WAIT	CAST_USER_ADDR_T(4)
+
+/* Values for ps_sigreturn_validation */
+#define PS_SIGRETURN_VALIDATION_DEFAULT 0x0u
+#define PS_SIGRETURN_VALIDATION_ENABLED 0x1u
+#define PS_SIGRETURN_VALIDATION_DISABLED 0x2u
 
 /*
  * get signal action for process and signal; currently only for current process

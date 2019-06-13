@@ -202,11 +202,13 @@ ipc_object_translate_two(
 
 	if ((entry1->ie_bits & MACH_PORT_TYPE(right1)) == MACH_PORT_TYPE_NONE) {
 		is_read_unlock(space);
+		mach_port_guard_exception(name1, 0, 0, kGUARD_EXC_INVALID_RIGHT);
 		return KERN_INVALID_RIGHT;
 	}
 
 	if ((entry2->ie_bits & MACH_PORT_TYPE(right2)) == MACH_PORT_TYPE_NONE) {
 		is_read_unlock(space);
+		mach_port_guard_exception(name2, 0, 0, kGUARD_EXC_INVALID_RIGHT);
 		return KERN_INVALID_RIGHT;
 	}
 
@@ -576,6 +578,7 @@ ipc_object_copyin_from_kernel(
 		ipc_port_t port = (ipc_port_t) object;
 
 		ip_lock(port);
+		imq_lock(&port->ip_messages);
 		assert(ip_active(port));
 		if (port->ip_destination != IP_NULL) {
 			assert(port->ip_receiver == ipc_space_kernel);
@@ -586,6 +589,7 @@ ipc_object_copyin_from_kernel(
 			port->ip_receiver_name = MACH_PORT_NULL;
 			port->ip_destination = IP_NULL;
 		}
+		imq_unlock(&port->ip_messages);
 		ip_unlock(port);
 		break;
 	    }
@@ -748,12 +752,18 @@ ipc_object_copyout(
 	boolean_t		overflow,
 	mach_port_name_t	*namep)
 {
+	struct knote *kn = current_thread()->ith_knote;
 	mach_port_name_t name;
 	ipc_entry_t entry;
 	kern_return_t kr;
 
 	assert(IO_VALID(object));
 	assert(io_otype(object) == IOT_PORT);
+
+	if (ITH_KNOTE_VALID(kn, msgt_name)) {
+		filt_machport_turnstile_prepare_lazily(kn,
+				msgt_name, (ipc_port_t)object);
+	}
 
 	is_write_lock(space);
 
@@ -842,6 +852,7 @@ ipc_object_copyout_name(
 	ipc_entry_t oentry;
 	ipc_entry_t entry;
 	kern_return_t kr;
+	struct knote *kn = current_thread()->ith_knote;
 
 #if IMPORTANCE_INHERITANCE
 	int assertcnt = 0;
@@ -850,6 +861,11 @@ ipc_object_copyout_name(
 
 	assert(IO_VALID(object));
 	assert(io_otype(object) == IOT_PORT);
+
+	if (ITH_KNOTE_VALID(kn, msgt_name)) {
+		filt_machport_turnstile_prepare_lazily(kn,
+				msgt_name, (ipc_port_t)object);
+	}
 
 	kr = ipc_entry_alloc_name(space, name, &entry);
 	if (kr != KERN_SUCCESS)

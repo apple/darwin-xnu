@@ -190,6 +190,13 @@ kern_asl_msg_va(int level, const char *facility, int num_pairs, va_list vargs, .
 	/* Print the key-value pairs in ASL format */
 	vaddlog(fmt, vargs);
 
+	/*
+	 * Note: can't use os_log_with_args() here because 'fmt' is
+	 * constructed on the stack i.e. doesn't come from a text
+	 * section. More importantly, the newer logging system
+	 * doesn't grok ASL either.
+	 */
+
 	return (err);
 }
 

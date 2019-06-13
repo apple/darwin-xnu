@@ -84,7 +84,13 @@ extern void			hw_lock_init(
 extern void			hw_lock_lock(
 					hw_lock_t);
 
+extern void			hw_lock_lock_nopreempt(
+					hw_lock_t);
+
 extern void			hw_lock_unlock(
+					hw_lock_t);
+
+extern void			hw_lock_unlock_nopreempt(
 					hw_lock_t);
 
 extern unsigned int		hw_lock_to(
@@ -92,6 +98,9 @@ extern unsigned int		hw_lock_to(
 					uint64_t);
 
 extern unsigned int		hw_lock_try(
+					hw_lock_t);
+
+extern unsigned int		hw_lock_try_nopreempt(
 					hw_lock_t);
 
 extern unsigned int		hw_lock_held(

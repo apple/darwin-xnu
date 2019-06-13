@@ -36,11 +36,12 @@ struct kperf_context {
 	/* who was running during the event */
 	int cur_pid;
 	thread_t cur_thread;
+	task_t cur_task;
 	uintptr_t *starting_fp;
 
 	/* who caused the event */
-	unsigned trigger_type;
-	unsigned trigger_id;
+	unsigned int trigger_type;
+	unsigned int trigger_id;
 };
 
 #endif /* !defined(KPERF_CONTEXT_H) */

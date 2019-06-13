@@ -475,17 +475,18 @@ strtouq(const char *nptr,
 char *
 strncat(char *s1, const char *s2, unsigned long n)
 {
-	char *os1;
-	int i = n;
+	if (n != 0) {
+		char *d = s1;
+		const char *s = s2;
 
-	os1 = s1;
-	while (*s1++)
-		;
-	--s1;
-	while ((*s1++ = *s2++))
-		if (--i < 0) {
-			*--s1 = '\0';
-			break;
-		}
-	return(os1);
+		while (*d != 0)
+			d++;
+		do {
+			if ((*d = *s++) == '\0')
+				break;
+			d++;
+		} while (--n != 0);
+		*d = '\0';
+	}
+	return (s1);
 }

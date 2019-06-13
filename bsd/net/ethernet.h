@@ -82,18 +82,18 @@
 /*
  * Structure of a 10Mb/s Ethernet header.
  */
-struct	ether_header {
+typedef struct	ether_header {
 	u_char	ether_dhost[ETHER_ADDR_LEN];
 	u_char	ether_shost[ETHER_ADDR_LEN];
 	u_short	ether_type;
-};
+} ether_header_t;
 
 /*
  * Structure of a 48-bit Ethernet address.
  */
-struct	ether_addr {
+typedef struct	ether_addr {
 	u_char octet[ETHER_ADDR_LEN];
-};
+} ether_addr_t;
 
 #define ether_addr_octet octet
 

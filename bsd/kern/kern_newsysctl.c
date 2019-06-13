@@ -84,6 +84,7 @@
 #include <security/mac_framework.h>
 #endif
 
+
 lck_grp_t * sysctl_lock_group = NULL;
 lck_rw_t * sysctl_geometry_lock = NULL;
 lck_mtx_t * sysctl_unlocked_node_lock = NULL;
@@ -206,6 +207,7 @@ sysctl_register_oid(struct sysctl_oid *new_oidp)
 			new_oidp->oid_number = oidp->oid_number;
 	}
 
+
 	/*
 	 * Insert the oid into the parent's list in order.
 	 */
@@ -262,6 +264,7 @@ sysctl_unregister_oid(struct sysctl_oid *oidp)
 			break;			/* rejects unknown version */
 		}
 	}
+
 
 	/*
 	 * We've removed it from the list at this point, but we don't want
@@ -642,7 +645,7 @@ sysctl_sysctl_name(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 	int error = 0;
 	struct sysctl_oid *oid;
 	struct sysctl_oid_list *lsp = &sysctl__children, *lsp2;
-	char tempbuf[10];
+	char tempbuf[10] = {};
 
 	lck_rw_lock_shared(sysctl_geometry_lock);
 	while (namelen) {
@@ -834,7 +837,7 @@ sysctl_sysctl_next(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 	int i, j, error;
 	struct sysctl_oid *oid;
 	struct sysctl_oid_list *lsp = &sysctl__children;
-	int newoid[CTL_MAXNAME];
+	int newoid[CTL_MAXNAME] = {};
 
 	lck_rw_lock_shared(sysctl_geometry_lock);
 	i = sysctl_sysctl_next_ls (lsp, name, namelen, newoid, &j, 1, &oid);
@@ -966,7 +969,7 @@ sysctl_sysctl_name2oid(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	__unused int arg2, struct sysctl_req *req)
 {
 	char *p;
-	int error, oid[CTL_MAXNAME];
+	int error, oid[CTL_MAXNAME] = {};
 	u_int len = 0;		/* set by name2oid() */
 
 	if (req->newlen < 1) 
@@ -1327,6 +1330,7 @@ sysctl_root(boolean_t from_kernel, boolean_t string_is_canonical, char *namestri
 	int i;
 	struct sysctl_oid *oid;
 	struct sysctl_oid_list *lsp = &sysctl__children;
+	sysctl_handler_t oid_handler = NULL;
 	int error;
 	boolean_t unlocked_node_found = FALSE;
 	boolean_t namestring_started = FALSE;
@@ -1464,7 +1468,12 @@ found:
 	    (error = proc_suser(req->p)))
 		goto err;
 
-	if (!oid->oid_handler) {
+	/*
+	 * sysctl_unregister_oid() may change the handler value, so grab it
+	 * under the lock.
+	 */
+	oid_handler = oid->oid_handler;
+	if (!oid_handler) {
 	    error = EINVAL;
 		goto err;
 	}
@@ -1503,14 +1512,11 @@ found:
 		lck_mtx_lock(sysctl_unlocked_node_lock);
 	}
 
+
 	if ((oid->oid_kind & CTLTYPE) == CTLTYPE_NODE) {
-		i = (oid->oid_handler) (oid,
-					name + indx, namelen - indx,
-					req);
+		i = oid_handler(oid, name + indx, namelen - indx, req);
 	} else {
-		i = (oid->oid_handler) (oid,
-					oid->oid_arg1, oid->oid_arg2,
-					req);
+		i = oid_handler(oid, oid->oid_arg1, oid->oid_arg2, req);
 	}
 	error = i;
 

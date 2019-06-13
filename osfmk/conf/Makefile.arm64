@@ -8,6 +8,7 @@ CWARNFLAGS = $(CWARNFLAGS_STD) -Wshorten-64-to-32
 HIB_FILES=
 
 lz4.o_CFLAGS_ADD += -fbuiltin -O3
+
 ######################################################################
 #END	Machine dependent Makefile fragment for arm64
 ######################################################################

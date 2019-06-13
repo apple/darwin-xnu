@@ -42,13 +42,12 @@
 #include <sys/kdebug.h>
 #include <IOKit/IOBSD.h>
 #include <mach/mach_voucher_attr_control.h>
+#include <pthread/priority_private.h>
 
 ipc_voucher_attr_control_t  ipc_pthread_priority_voucher_attr_control;    /* communication channel from PTHPRIORITY to voucher system */
 
 #define IPC_PTHREAD_PRIORITY_VALUE_TO_HANDLE(x) ((mach_voucher_attr_value_handle_t)(x))
 #define HANDLE_TO_IPC_PTHREAD_PRIORITY_VALUE(x) ((ipc_pthread_priority_value_t)(x))
-
-extern unsigned long pthread_priority_canonicalize(unsigned long priority, boolean_t for_propagation);
 
 kern_return_t
 ipc_pthread_priority_release_value(
@@ -200,8 +199,8 @@ ipc_pthread_priority_get_value(
 		}
 
 		/* Callout to pthread kext to get the canonicalized value */
-		canonicalize_priority_value = (ipc_pthread_priority_value_t) pthread_priority_canonicalize(
-						(unsigned long)ipc_pthread_priority_value, true);
+		canonicalize_priority_value = (ipc_pthread_priority_value_t)
+				_pthread_priority_normalize_for_ipc((unsigned long)ipc_pthread_priority_value);
 
 		*out_value = IPC_PTHREAD_PRIORITY_VALUE_TO_HANDLE(canonicalize_priority_value);
 		*out_flags = MACH_VOUCHER_ATTR_VALUE_FLAGS_PERSIST;

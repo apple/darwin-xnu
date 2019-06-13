@@ -71,6 +71,8 @@ extern int			audit_panic_on_write_fail;
 extern int			audit_fail_stop;
 extern int			audit_argv;
 extern int			audit_arge;
+extern au_ctlmode_t	audit_ctl_mode;
+extern au_expire_after_t	audit_expire_after;
 
 /*
  * Kernel mask that is used to check to see if system calls need to be audited.
@@ -182,12 +184,24 @@ union auditon_udata {
 	au_stat_t		au_stat;
 	au_fstat_t		au_fstat;
 	auditinfo_addr_t	au_kau_info;
+	au_ctlmode_t	au_ctl_mode;
+	au_expire_after_t	au_expire_after;
 };
 
 struct posix_ipc_perm {
 	uid_t	pipc_uid;
 	gid_t	pipc_gid;
 	mode_t	pipc_mode;
+};
+
+struct au_identity_info {
+	u_int32_t	signer_type;
+	char		*signing_id;
+	u_char		signing_id_trunc;
+	char		*team_id;
+	u_char		team_id_trunc;
+	u_int8_t	*cdhash;
+	u_int16_t	cdhash_len;
 };
 
 struct audit_record {
@@ -285,6 +299,7 @@ struct audit_record {
 	LIST_HEAD(mac_audit_record_list_t, mac_audit_record)	*ar_mac_records;
 	int			ar_forced_by_mac;
 #endif
+	struct au_identity_info	ar_arg_identity;
 };
 
 /*
@@ -333,7 +348,7 @@ struct kaudit_record	*audit_new(int event, proc_t p, struct uthread *td);
  */
 struct au_record;
 int	 kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau);
-int	 bsm_rec_verify(void *rec);
+int	 bsm_rec_verify(void *rec, int length);
 
 /*
  * Kernel versions of the libbsm audit record functions.
@@ -421,6 +436,10 @@ void			 audit_free(struct kaudit_record *ar);
 void			 audit_rotate_vnode(struct ucred *cred,
 			    struct vnode *vp);
 void			 audit_worker_init(void);
+void			 audit_identity_info_construct(
+			    struct au_identity_info *id_info);
+void			 audit_identity_info_destruct(
+			    struct au_identity_info *id_info);
 
 /*
  * Audit pipe functions.
@@ -458,6 +477,36 @@ int	audit_session_lookup(au_asid_t asid, auditinfo_addr_t *ret_aia);
  */
 #define	ASSIGNED_ASID_MIN	(PID_MAX + 1)
 #define	ASSIGNED_ASID_MAX	(0xFFFFFFFF - 1)
+
+/*
+ * Entitlement required to control various audit subsystem settings
+ */
+#define AU_CLASS_RESERVED_ENTITLEMENT "com.apple.private.dz.audit"
+
+/*
+ * Entitlement required to control auditctl sys call
+ */
+#define AU_AUDITCTL_RESERVED_ENTITLEMENT "com.apple.private.protected-audit-control"
+
+/*
+ * Max sizes used by the kernel for signing id and team id values of the
+ * identity tokens. These lengths include space for the null terminator.
+ */
+#define MAX_AU_IDENTITY_SIGNING_ID_LENGTH 129
+#define MAX_AU_IDENTITY_TEAM_ID_LENGTH 17
+
+struct __attribute__((__packed__)) hdr_tok_partial {
+	u_char type;
+	uint32_t len;
+};
+static_assert(sizeof(struct hdr_tok_partial) == 5);
+
+struct __attribute__((__packed__)) trl_tok_partial {
+	u_char type;
+	uint16_t magic;
+	uint32_t len;
+};
+static_assert(sizeof(struct trl_tok_partial) == 7);
 
 #endif /* defined(KERNEL) || defined(_KERNEL) */
 

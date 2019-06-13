@@ -55,6 +55,7 @@
 #define CS_OPS_IDENTITY		11	/* get codesign identity */
 #define CS_OPS_CLEARINSTALLER	12	/* clear INSTALLER flag */
 #define CS_OPS_CLEARPLATFORM 13 /* clear platform binary status (DEVELOPMENT-only) */
+#define CS_OPS_TEAMID       14  /* get team id */
 
 #define CS_MAX_TEAMID_LEN	64
 
@@ -71,6 +72,7 @@ __END_DECLS
 
 #else /* !KERNEL */
 
+#include <mach/machine.h>
 #include <mach/vm_types.h>
 
 #include <sys/cdefs.h>
@@ -82,8 +84,11 @@ struct fileglob;
 
 __BEGIN_DECLS
 int	cs_valid(struct proc *);
-int	cs_enforcement(struct proc *);
+int	cs_process_enforcement(struct proc *);
+int cs_process_global_enforcement(void);
+int cs_system_enforcement(void);
 int	cs_require_lv(struct proc *);
+int csproc_forced_lv(struct proc* p);
 int	cs_system_require_lv(void);
 uint32_t cs_entitlement_flags(struct proc *p);
 int	cs_entitlements_blob_get(struct proc *, void **, size_t *);
@@ -108,6 +113,11 @@ unsigned int	csblob_get_signer_type(struct cs_blob *);
 void			csproc_clear_platform_binary(struct proc *);
 #endif
 
+void csproc_disable_enforcement(struct proc* p);
+void csproc_mark_invalid_allowed(struct proc* p);
+int csproc_check_invalid_allowed(struct proc* p);
+int csproc_hardened_runtime(struct proc* p);
+
 int		csblob_get_entitlements(struct cs_blob *, void **, size_t *);
 
 const CS_GenericBlob *
@@ -131,9 +141,22 @@ int 	csfg_get_platform_binary(struct fileglob *);
 uint8_t * csfg_get_cdhash(struct fileglob *, uint64_t, size_t *);
 int csfg_get_prod_signed(struct fileglob *);
 unsigned int csfg_get_signer_type(struct fileglob *);
+const char *csfg_get_identity(struct fileglob *fg, off_t offset);
 unsigned int csproc_get_signer_type(struct proc *);
 
+uint8_t csfg_get_platform_identifier(struct fileglob *, off_t);
+uint8_t csvnode_get_platform_identifier(struct vnode *, off_t);
+uint8_t csproc_get_platform_identifier(struct proc *);
+
 extern int cs_debug;
+extern int cs_debug_fail_on_unsigned_code;
+extern unsigned int cs_debug_unsigned_exec_failures;
+extern unsigned int cs_debug_unsigned_mmap_failures;
+
+int cs_blob_create_validated(vm_address_t* addr, vm_size_t size,
+							 struct cs_blob ** ret_blob, CS_CodeDirectory const **ret_cd);
+
+void cs_blob_free(struct cs_blob *blob);
 
 #ifdef XNU_KERNEL_PRIVATE
 

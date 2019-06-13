@@ -67,6 +67,28 @@ typedef const struct _libkernel_functions {
 	/* Subsequent versions must only add pointers! */
 } *_libkernel_functions_t;
 
+typedef const struct _libkernel_string_functions {
+	/* The following functions are included in version 1 of this structure */
+	unsigned long version;
+	void (*bzero)(void *s, size_t n);
+	void * (*memchr)(const void *s, int c, size_t n);
+	int (*memcmp)(const void *s1, const void *s2, size_t n);
+	void * (*memmove)(void *dst, const void *src, size_t n);
+	void * (*memccpy)(void *__restrict dst, const void *__restrict src, int c, size_t n);
+	void * (*memset)(void *b, int c, size_t len);
+	char * (*strchr)(const char *s, int c);
+	int (*strcmp)(const char *s1, const char *s2);
+	char * (*strcpy)(char * restrict dst, const char * restrict src);
+	size_t (*strlcat)(char * restrict dst, const char * restrict src, size_t maxlen);
+	size_t (*strlcpy)(char * restrict dst, const char * restrict src, size_t maxlen);
+	size_t (*strlen)(const char *str);
+	int (*strncmp)(const char *s1, const char *s2, size_t n);
+	char * (*strncpy)(char * restrict dst, const char * restrict src, size_t maxlen);
+	size_t (*strnlen)(const char *s, size_t maxlen);
+	char * (*strstr)(const char *s, const char *find);
+	/* Subsequent versions must only add pointers! */
+} *_libkernel_string_functions_t;
+
 typedef const struct _libkernel_voucher_functions {
 	/* The following functions are included in version 1 of this structure */
 	unsigned long version;
@@ -82,6 +104,8 @@ struct ProgramVars; /* forward reference */
 
 void __libkernel_init(_libkernel_functions_t fns, const char *envp[],
 		const char *apple[], const struct ProgramVars *vars);
+
+kern_return_t __libkernel_platform_init(_libkernel_string_functions_t fns);
 
 kern_return_t __libkernel_voucher_init(_libkernel_voucher_functions_t fns);
 

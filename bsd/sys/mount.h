@@ -1368,7 +1368,7 @@ __END_DECLS
 #define	NFSV3_MAX_FH_SIZE	64
 #define	NFSV2_MAX_FH_SIZE	32
 struct fhandle {
-	int		fh_len;				/* length of file handle */
+	unsigned int	fh_len;				/* length of file handle */
 	unsigned char	fh_data[NFS_MAX_FH_SIZE];	/* file handle value */
 };
 typedef struct fhandle	fhandle_t;

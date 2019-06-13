@@ -96,33 +96,6 @@ vm_map_store_update( vm_map_t map, vm_map_entry_t entry, int update_type )
 	}
 }
 
-void	vm_map_store_copy_insert( vm_map_t map, vm_map_entry_t after_where, vm_map_copy_t copy)
-{
-	if (__improbable(vm_debug_events)) {
-		vm_map_entry_t entry;
-		for (entry = vm_map_copy_first_entry(copy); entry != vm_map_copy_to_entry(copy); entry = entry->vme_next) {
-			DTRACE_VM4(map_entry_link_copy, vm_map_t, map, vm_map_entry_t, entry, vm_address_t, entry->links.start, vm_address_t, entry->links.end);
-		}
-	}
-
-	if (map->holelistenabled) {
-		vm_map_entry_t entry = NULL;
-
-		entry = vm_map_copy_first_entry(copy);
-		while (entry != vm_map_copy_to_entry(copy)) {
-			vm_map_store_update_first_free(map, entry, TRUE);
-			entry = entry->vme_next;
-		}
-	}
-
-	vm_map_store_copy_insert_ll(map, after_where, copy);
-#ifdef VM_MAP_STORE_USE_RB
-	if (vm_map_store_has_RB_support( &map->hdr )) {
-		vm_map_store_copy_insert_rb(map, after_where, copy);
-	}
-#endif
-}
-
 /*
  *	vm_map_entry_{un,}link:
  *
@@ -156,7 +129,11 @@ _vm_map_store_entry_link( struct vm_map_header * mapHdr, vm_map_entry_t after_wh
 }
 
 void
-vm_map_store_entry_link( vm_map_t map, vm_map_entry_t after_where, vm_map_entry_t entry)
+vm_map_store_entry_link(
+	vm_map_t		map,
+	vm_map_entry_t		after_where,
+	vm_map_entry_t		entry,
+	vm_map_kernel_flags_t	vmk_flags)
 {
 	vm_map_t VMEL_map;
 	vm_map_entry_t VMEL_entry;
@@ -174,6 +151,11 @@ vm_map_store_entry_link( vm_map_t map, vm_map_entry_t after_where, vm_map_entry_
 		}
 #endif
 	}
+#if PMAP_CS
+	(void) vm_map_entry_cs_associate(map, entry, vmk_flags);
+#else /* PMAP_CS */
+	(void) vmk_flags;
+#endif /* PMAP_CS */
 }
 
 void

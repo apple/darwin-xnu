@@ -130,6 +130,7 @@ extern int	audit_syscalls;
 #define	ARG_DATA		0x0010000000000000ULL	/* darwin-only */
 #define	ARG_ADDR64		0x0020000000000000ULL	/* darwin-only */
 #define	ARG_FD2			0x0040000000000000ULL	/* darwin-only */
+#define	ARG_IDENTITY		0x0080000000000000ULL	/* darwin-only */
 #define	ARG_NONE		0x0000000000000000ULL
 #define	ARG_ALL			0xFFFFFFFFFFFFFFFFULL
 
@@ -242,6 +243,7 @@ void	 audit_arg_argv(struct kaudit_record *ar, char *argv, int argc,
 		int length); 
 void	 audit_arg_envv(struct kaudit_record *ar, char *envv, int envc,
 		int length);
+void	audit_arg_identity(struct kaudit_record *ar);
 
 void	 audit_arg_mach_port1(struct kaudit_record *ar, mach_port_name_t port);
 void	 audit_arg_mach_port2(struct kaudit_record *ar, mach_port_name_t port);
@@ -323,7 +325,7 @@ extern au_event_t sys_au_event[];
 	if (AUDIT_SYSCALLS()) {						\
 		struct kaudit_record *__ar = AUDIT_RECORD(); 		\
 		if (AUDIT_AUDITING(__ar)) 				\
-			audit_arg_ ## op (__ar, args);			\
+			audit_arg_ ## op (__ar, ## args);		\
 	}								\
 } while (0)
 

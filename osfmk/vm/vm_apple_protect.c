@@ -354,7 +354,6 @@ apple_protect_pager_data_request(
 	unsigned int		pl_count;
 	vm_object_t		src_top_object, src_page_object, dst_object;
 	kern_return_t		kr, retval;
-	vm_map_offset_t		kernel_mapping;
 	vm_offset_t		src_vaddr, dst_vaddr;
 	vm_offset_t		cur_offset;
 	vm_offset_t		offset_in_page;
@@ -370,10 +369,9 @@ apple_protect_pager_data_request(
 	retval = KERN_SUCCESS;
 	src_top_object = VM_OBJECT_NULL;
 	src_page_object = VM_OBJECT_NULL;
-	kernel_mapping = 0;
 	upl = NULL;
 	upl_pl = NULL;
-	fault_info = *((struct vm_object_fault_info *) mo_fault_info);
+	fault_info = *((struct vm_object_fault_info *)(uintptr_t)mo_fault_info);
 	fault_info.stealth = TRUE;
 	fault_info.io_sync = FALSE;
 	fault_info.mark_zf_absent = FALSE;
@@ -385,6 +383,9 @@ apple_protect_pager_data_request(
 	assert(pager->ref_count > 1); /* pager is alive and mapped */
 
 	PAGER_DEBUG(PAGER_PAGEIN, ("apple_protect_pager_data_request: %p, %llx, %x, %x, pager %p\n", mem_obj, offset, length, protection_required, pager));
+
+	fault_info.lo_offset += pager->backing_offset;
+	fault_info.hi_offset += pager->backing_offset;
 
 	/*
 	 * Gather in a UPL all the VM pages requested by VM.
@@ -408,39 +409,6 @@ apple_protect_pager_data_request(
 	}
 	dst_object = mo_control->moc_object;
 	assert(dst_object != VM_OBJECT_NULL);
-
-
-#if __x86_64__ || __arm__ || __arm64__
-	/* we'll use the 1-to-1 mapping of physical memory */
-	src_vaddr = 0;
-	dst_vaddr = 0;
-#else /* __x86_64__ || __arm__ || __arm64__ */
-	/*
-	 * Reserve 2 virtual pages in the kernel address space to map each
-	 * source and destination physical pages when it's their turn to
-	 * be processed.
-	 */
-	vm_map_entry_t		map_entry;
-
-	vm_object_reference(kernel_object);	/* ref. for mapping */
-	kr = vm_map_find_space(kernel_map,
-			       &kernel_mapping,
-			       2 * PAGE_SIZE_64,
-			       0,
-			       0,
-			       VM_MAP_KERNEL_FLAGS_NONE,
-			       &map_entry);
-	if (kr != KERN_SUCCESS) {
-		vm_object_deallocate(kernel_object);
-		retval = kr;
-		goto done;
-	}
-	map_entry->object.vm_object = kernel_object;
-	map_entry->offset = kernel_mapping;
-	vm_map_unlock(kernel_map);
-	src_vaddr = CAST_DOWN(vm_offset_t, kernel_mapping);
-	dst_vaddr = CAST_DOWN(vm_offset_t, kernel_mapping + PAGE_SIZE_64);
-#endif /* __x86_64__ || __arm__ || __arm64__ */
 
 	/*
 	 * We'll map the encrypted data in the kernel address space from the 
@@ -522,66 +490,42 @@ apple_protect_pager_data_request(
 			      kr);
 		}
 		assert(src_page != VM_PAGE_NULL);
-		assert(src_page->busy);
+		assert(src_page->vmp_busy);
 
-		if (( !VM_PAGE_NON_SPECULATIVE_PAGEABLE(src_page))) {
+		if (src_page->vmp_q_state != VM_PAGE_ON_SPECULATIVE_Q) {
 
 			vm_page_lockspin_queues();
 
-			if (( !VM_PAGE_NON_SPECULATIVE_PAGEABLE(src_page))) {
-				vm_page_deactivate(src_page);
+			if (src_page->vmp_q_state != VM_PAGE_ON_SPECULATIVE_Q) {
+			        vm_page_speculate(src_page, FALSE);
 			}
 			vm_page_unlock_queues();
 		}
 
 		/*
-		 * Establish an explicit mapping of the source
-		 * physical page.
+		 * Establish pointers to the source
+		 * and destination physical pages.
 		 */
+		dst_pnum = (ppnum_t)
+		        upl_phys_page(upl_pl, (int)(cur_offset / PAGE_SIZE));
+                assert(dst_pnum != 0);
 #if __x86_64__
 		src_vaddr = (vm_map_offset_t)
 			PHYSMAP_PTOV((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
 				     << PAGE_SHIFT);
+		dst_vaddr = (vm_map_offset_t)
+			PHYSMAP_PTOV((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
+
 #elif __arm__ || __arm64__
 		src_vaddr = (vm_map_offset_t)
 			phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
 				 << PAGE_SHIFT);
-#else
-		kr = pmap_enter(kernel_pmap,
-		                src_vaddr,
-		                VM_PAGE_GET_PHYS_PAGE(src_page),
-		                VM_PROT_READ,
-		                VM_PROT_NONE,
-		                0,
-		                TRUE);
-
-		assert(kr == KERN_SUCCESS);
-#endif
-		/*
-		 * Establish an explicit pmap mapping of the destination
-		 * physical page.
-		 * We can't do a regular VM mapping because the VM page
-		 * is "busy".
-		 */
-		dst_pnum = (ppnum_t)
-			upl_phys_page(upl_pl, (int)(cur_offset / PAGE_SIZE));
-		assert(dst_pnum != 0);
-#if __x86_64__
-		dst_vaddr = (vm_map_offset_t)
-			PHYSMAP_PTOV((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
-#elif __arm__ || __arm64__
 		dst_vaddr = (vm_map_offset_t)
 			phystokv((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
 #else
-		kr = pmap_enter(kernel_pmap,
-		                dst_vaddr,
-		                dst_pnum,
-		                VM_PROT_READ | VM_PROT_WRITE,
-		                VM_PROT_NONE,
-		                0,
-		                TRUE);
-
-		assert(kr == KERN_SUCCESS);
+#error "vm_paging_map_object: no 1-to-1 kernel mapping of physical memory..."
+		src_vaddr = 0;
+		dst_vaddr = 0;
 #endif
 		src_page_object = VM_PAGE_OBJECT(src_page);
 
@@ -597,11 +541,11 @@ apple_protect_pager_data_request(
 		 * ... and transfer the results to the destination page.
 		 */
 		UPL_SET_CS_VALIDATED(upl_pl, cur_offset / PAGE_SIZE,
-				     src_page->cs_validated);
+				     src_page->vmp_cs_validated);
 		UPL_SET_CS_TAINTED(upl_pl, cur_offset / PAGE_SIZE,
-				   src_page->cs_tainted);
+				   src_page->vmp_cs_tainted);
 		UPL_SET_CS_NX(upl_pl, cur_offset / PAGE_SIZE,
-				   src_page->cs_nx);
+				   src_page->vmp_cs_nx);
 
 		/*
 		 * page_decrypt() might access a mapped file, so let's release
@@ -610,7 +554,7 @@ apple_protect_pager_data_request(
 		 * "paging_in_progress" reference on its object, so it's safe
 		 * to unlock the object here.
 		 */
-		assert(src_page->busy);
+		assert(src_page->vmp_busy);
 		assert(src_page_object->paging_in_progress > 0);
 		vm_object_unlock(src_page_object);
 
@@ -630,6 +574,7 @@ apple_protect_pager_data_request(
 						     offset_in_page),
 				      (char *)(dst_vaddr + offset_in_page),
 				      4096);
+
 				if (apple_protect_pager_data_request_debug) {
 					printf("apple_protect_data_request"
 					       "(%p,0x%llx+0x%llx+0x%04llx): "
@@ -651,9 +596,9 @@ apple_protect_pager_data_request(
 					       *(uint64_t *)(dst_vaddr+
 							     offset_in_page+8),
 					       src_page_object->code_signed,
-					       src_page->cs_validated,
-					       src_page->cs_tainted,
-					       src_page->cs_nx);
+					       src_page->vmp_cs_validated,
+					       src_page->vmp_cs_tainted,
+					       src_page->vmp_cs_nx);
 				}
 				ret = 0;
 				continue;
@@ -667,6 +612,7 @@ apple_protect_pager_data_request(
 				 cur_offset +
 				 offset_in_page),
 				pager->crypt_info->crypt_ops);
+
 			if (apple_protect_pager_data_request_debug) {
 				printf("apple_protect_data_request"
 				       "(%p,0x%llx+0x%llx+0x%04llx): "
@@ -697,9 +643,9 @@ apple_protect_pager_data_request(
 				       *(uint64_t *)(dst_vaddr+offset_in_page),
 				       *(uint64_t *)(dst_vaddr+offset_in_page+8),
 				       src_page_object->code_signed,
-				       src_page->cs_validated,
-				       src_page->cs_tainted,
-				       src_page->cs_nx,
+				       src_page->vmp_cs_validated,
+				       src_page->vmp_cs_tainted,
+				       src_page->vmp_cs_nx,
 				       ret);
 			}
 			if (ret) {
@@ -714,53 +660,18 @@ apple_protect_pager_data_request(
 		}
 
 		assert(VM_PAGE_OBJECT(src_page) == src_page_object);
-		assert(src_page->busy);
+		assert(src_page->vmp_busy);
 		assert(src_page_object->paging_in_progress > 0);
 		vm_object_lock(src_page_object);
-
-#if __x86_64__ || __arm__ || __arm64__
-		/* we used the 1-to-1 mapping of physical memory */
-		src_vaddr = 0;
-		dst_vaddr = 0;
-#else /* __x86_64__ || __arm__ || __arm64__ */
-		/*
-		 * Remove the pmap mapping of the source and destination pages
-		 * in the kernel.
-		 */
-		pmap_remove(kernel_pmap,
-			    (addr64_t) kernel_mapping,
-			    (addr64_t) (kernel_mapping + (2 * PAGE_SIZE_64)));
-#endif /* __x86_64__ || __arm__ || __arm64__ */
 
 		/*
 		 * Cleanup the result of vm_fault_page() of the source page.
 		 */
-		if (retval == KERN_SUCCESS &&
-		    src_page->busy &&
-		    !VM_PAGE_WIRED(src_page) &&
-		    !src_page->dirty &&
-		    !src_page->precious &&
-		    !src_page->laundry &&
-		    !src_page->cleaning) {
-			int refmod_state;
-
-			refmod_state = pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(src_page));
-
-			if (refmod_state & VM_MEM_MODIFIED) {
-				SET_PAGE_DIRTY(src_page, FALSE);
-			}
-			if (!src_page->dirty) {
-				vm_page_free_unlocked(src_page, TRUE);
-				src_page = VM_PAGE_NULL;
-			} else {
-				PAGE_WAKEUP_DONE(src_page);
-			}
-		} else {
-			PAGE_WAKEUP_DONE(src_page);
-		}
+		PAGE_WAKEUP_DONE(src_page);
 		src_page = VM_PAGE_NULL;
 		vm_object_paging_end(src_page_object);
 		vm_object_unlock(src_page_object);
+
 		if (top_page != VM_PAGE_NULL) {
 			assert(VM_PAGE_OBJECT(top_page) == src_top_object);
 			vm_object_lock(src_top_object);
@@ -824,21 +735,9 @@ done:
 		upl_deallocate(upl);
 		upl = NULL;
 	}
-	if (kernel_mapping != 0) {
-		/* clean up the mapping of the source and destination pages */
-		kr = vm_map_remove(kernel_map,
-				   kernel_mapping,
-				   kernel_mapping + (2 * PAGE_SIZE_64),
-				   VM_MAP_NO_FLAGS);
-		assert(kr == KERN_SUCCESS);
-		kernel_mapping = 0;
-		src_vaddr = 0;
-		dst_vaddr = 0;
-	}
 	if (src_top_object != VM_OBJECT_NULL) {
 		vm_object_deallocate(src_top_object);
 	}
-
 	return retval;
 }
 
@@ -1125,7 +1024,7 @@ apple_protect_pager_lookup(
 	apple_protect_pager_t	pager;
 
 	assert(mem_obj->mo_pager_ops == &apple_protect_pager_ops);
-	pager = (apple_protect_pager_t) mem_obj;
+	pager = (apple_protect_pager_t)(uintptr_t) mem_obj;
 	assert(pager->ref_count > 0);
 	return pager;
 }

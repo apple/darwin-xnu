@@ -77,6 +77,7 @@
 #include <kern/kern_types.h>
 #include <kern/counters.h>
 #include <kern/cpu_data.h>
+#include <kern/cpu_quiesce.h>
 #include <kern/ipc_host.h>
 #include <kern/host.h>
 #include <kern/machine.h>
@@ -126,10 +127,7 @@ processor_up(
 	pset = processor->processor_set;
 	pset_lock(pset);
 	++pset->online_processor_count;
-	enqueue_tail(&pset->active_queue, (queue_entry_t)processor);
-	processor->state = PROCESSOR_RUNNING;
-	pset->active_processor_count++;
-	sched_update_pset_load_average(pset);
+	pset_update_processor_state(pset, processor, PROCESSOR_RUNNING);
 	(void)hw_atomic_add(&processor_avail_count, 1);
 	commpage_update_active_cpus();
 	pset_unlock(pset);
@@ -230,15 +228,7 @@ processor_shutdown(
 		return (KERN_SUCCESS);
 	}
 
-	if (processor->state == PROCESSOR_IDLE) {
-		remqueue((queue_entry_t)processor);
-	} else if (processor->state == PROCESSOR_RUNNING) {
-		remqueue((queue_entry_t)processor);
-		pset->active_processor_count--;
-		sched_update_pset_load_average(pset);
-	}
-
-	processor->state = PROCESSOR_SHUTDOWN;
+	pset_update_processor_state(pset, processor, PROCESSOR_SHUTDOWN);
 
 	pset_unlock(pset);
 
@@ -285,7 +275,7 @@ processor_doshutdown(
 
 	pset = processor->processor_set;
 	pset_lock(pset);
-	processor->state = PROCESSOR_OFF_LINE;
+	pset_update_processor_state(pset, processor, PROCESSOR_OFF_LINE);
 	--pset->online_processor_count;
 	(void)hw_atomic_sub(&processor_avail_count, 1);
 	commpage_update_active_cpus();
@@ -331,6 +321,12 @@ processor_offline(
 	thread_t old_thread = processor->active_thread;
 	thread_t new_thread = processor->idle_thread;
 
+	if (!new_thread->kernel_stack) {
+		/* the idle thread has a reserved stack, so this will never fail */
+		if (!stack_alloc_try(new_thread))
+			panic("processor_offline");
+	}
+
 	processor->active_thread = new_thread;
 	processor_state_update_idle(processor);
 	processor->starting_pri = IDLEPRI;
@@ -343,7 +339,7 @@ processor_offline(
 	old_thread->last_run_time = ctime;
 
 	/* Update processor->thread_timer and ->kernel_timer to point to the new thread */
-	thread_timer_event(ctime, &new_thread->system_timer);
+	processor_timer_switch_thread(ctime, &new_thread->system_timer);
 	PROCESSOR_DATA(processor, kernel_timer) = &new_thread->system_timer;
 	timer_stop(PROCESSOR_DATA(processor, current_state), ctime);
 
@@ -355,6 +351,8 @@ processor_offline(
 	machine_set_current_thread(new_thread);
 
 	thread_dispatch(old_thread, new_thread);
+
+	cpu_quiescent_counter_leave(processor->last_dispatch);
 
 	PMAP_DEACTIVATE_KERNEL(processor->cpu_id);
 

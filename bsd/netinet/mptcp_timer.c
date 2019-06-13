@@ -82,8 +82,7 @@ mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
 			break;
 		if ((now_msecs - mp_tp->mpt_rxtstart) >
 		    (mptcp_rto*hz)) {
-			if (MPTCP_SEQ_GT(mp_tp->mpt_snduna,
-			    mp_tp->mpt_rtseq)) {
+			if (MPTCP_SEQ_GT(mp_tp->mpt_snduna, mp_tp->mpt_rtseq)) {
 				mp_tp->mpt_timer_vals = 0;
 				mp_tp->mpt_rtseq = 0;
 				break;
@@ -94,10 +93,10 @@ mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
 				DTRACE_MPTCP1(error, struct mptcb *, mp_tp);
 			} else {
 				mp_tp->mpt_sndnxt = mp_tp->mpt_rtseq;
-				mptcplog((LOG_DEBUG, "MPTCP Socket: "
-				   "%s: REXMT %d times.\n",
-				    __func__, mp_tp->mpt_rxtshift),
-				    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
+				os_log_info(mptcp_log_handle,
+					    "%s: REXMT %d sndnxt %u\n",
+					    __func__, mp_tp->mpt_rxtshift,
+					    (uint32_t)mp_tp->mpt_sndnxt);
 				mptcp_output(mpte);
 			}
 		} else {

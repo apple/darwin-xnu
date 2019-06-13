@@ -122,6 +122,7 @@
 #include <net/net_osdep.h>
 #include <net/net_perf.h>
 
+#include <netinet/ip.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
@@ -1055,8 +1056,8 @@ skip_ipsec:
 		exthdrs.ip6e_ip6 = m;
 
 		ipsec_state.m = m;
-		route_copyout(&ipsec_state.ro, (struct route *)ro,
-		    sizeof (ipsec_state.ro));
+		route_copyout((struct route *)&ipsec_state.ro, (struct route *)ro,
+		    sizeof (struct route_in6));
 		ipsec_state.dst = SA(dst);
 
 		/* So that we can see packets inside the tunnel */
@@ -2555,6 +2556,13 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 				optp = &in6p->in6p_outputopts;
 				error = ip6_pcbopt(optname, (u_char *)&optval,
 				    sizeof (optval), optp, uproto);
+
+				if (optname == IPV6_TCLASS) {
+					// Add in the ECN flags
+					u_int8_t tos = (in6p->inp_ip_tos & ~IPTOS_ECN_MASK);
+					u_int8_t ecn = optval & IPTOS_ECN_MASK;
+					in6p->inp_ip_tos = tos | ecn;
+				}
 				break;
 			}
 

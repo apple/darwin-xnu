@@ -42,6 +42,7 @@ __BEGIN_DECLS
 #include <string.h>
 #include <mach/mach_types.h>
 #include <libkern/kernel_mach_header.h>
+#include <libkern/prelink.h>
 #include <stdarg.h>
 
 #if PRAGMA_MARK
@@ -169,160 +170,189 @@ kern_os_realloc(
 }
 
 #if PRAGMA_MARK
-#pragma mark C++ Runtime Load/Unload
+#pragma mark Libkern Init
 #endif /* PRAGMA_MARK */
 /*********************************************************************
-* kern_os C++ Runtime Load/Unload
+* Libkern Init
 *********************************************************************/
 
-/*********************************************************************
-*********************************************************************/
 #if __GNUC__ >= 3
 void __cxa_pure_virtual( void )    { panic("%s", __FUNCTION__); }
 #else
 void __pure_virtual( void )        { panic("%s", __FUNCTION__); }
 #endif
 
+extern lck_grp_t * IOLockGroup;
+extern kmod_info_t g_kernel_kmod_info;
+
+enum {
+    kOSSectionNamesDefault     = 0,
+    kOSSectionNamesBuiltinKext = 1,
+    kOSSectionNamesCount       = 2,
+};
+enum {
+    kOSSectionNameInitializer = 0,
+    kOSSectionNameFinalizer   = 1,
+    kOSSectionNameCount       = 2
+};
+
+static const char *
+gOSStructorSectionNames[kOSSectionNamesCount][kOSSectionNameCount] = {
+    { SECT_MODINITFUNC,    SECT_MODTERMFUNC },
+    { kBuiltinInitSection, kBuiltinTermSection }
+};
+
+void OSlibkernInit(void)
+{
+    // This must be called before calling OSRuntimeInitializeCPP.
+    OSMetaClassBase::initialize();
+
+    g_kernel_kmod_info.address = (vm_address_t) &_mh_execute_header;
+    if (kOSReturnSuccess != OSRuntimeInitializeCPP(NULL)) {
+    // &g_kernel_kmod_info, gOSSectionNamesStandard, 0, 0)) {
+        panic("OSRuntime: C++ runtime failed to initialize.");
+    }
+
+    gKernelCPPInitialized = true;
+
+    return;
+}
+
+__END_DECLS
+
+#if PRAGMA_MARK
+#pragma mark C++ Runtime Load/Unload
+#endif /* PRAGMA_MARK */
+/*********************************************************************
+* kern_os C++ Runtime Load/Unload
+*********************************************************************/
+
+
 typedef void (*structor_t)(void);
 
-/*********************************************************************
-*********************************************************************/
-static boolean_t
-sectionIsDestructor(kernel_section_t * section)
-{
-    boolean_t result;
-
-    result = !strncmp(section->sectname, SECT_MODTERMFUNC,
-        sizeof(SECT_MODTERMFUNC) - 1);
-#if !__LP64__
-    result = result || !strncmp(section->sectname, SECT_DESTRUCTOR, 
-        sizeof(SECT_DESTRUCTOR) - 1);
-#endif
-
-    return result;
-}
-
-/*********************************************************************
-*********************************************************************/
-static boolean_t
-sectionIsConstructor(kernel_section_t * section)
-{
-    boolean_t result;
-
-    result = !strncmp(section->sectname, SECT_MODINITFUNC,
-        sizeof(SECT_MODINITFUNC) - 1);
-#if !__LP64__
-    result = result || !strncmp(section->sectname, SECT_CONSTRUCTOR, 
-        sizeof(SECT_CONSTRUCTOR) - 1);
-#endif
-
-    return result;
-}
-
-
-/*********************************************************************
-* OSRuntimeUnloadCPPForSegment()
-*
-* Given a pointer to a mach object segment, iterate the segment to
-* obtain a destructor section for C++ objects, and call each of the
-* destructors there.
-*********************************************************************/
-
-void
-OSRuntimeUnloadCPPForSegmentInKmod(
+static bool
+OSRuntimeCallStructorsInSection(
+    OSKext                   * theKext,
+    kmod_info_t              * kmodInfo,
+    void                     * metaHandle,
     kernel_segment_command_t * segment,
-    kmod_info_t              * kmodInfo)
+    const char               * sectionName,
+    uintptr_t                  textStart,
+    uintptr_t                  textEnd)
 {
-
-    kernel_section_t * section = NULL;  // do not free
-    OSKext           * theKext = NULL;  // must release
-
-    if (gKernelCPPInitialized && kmodInfo) {
-        theKext = OSKext::lookupKextWithIdentifier(kmodInfo->name);
-    }
+    kernel_section_t * section;
+    bool result = TRUE;
 
     for (section = firstsect(segment);
-         section != 0;
-         section = nextsect(segment, section)) {
+         section != NULL;
+         section = nextsect(segment, section))
+    {
+        if (strncmp(section->sectname, sectionName, sizeof(section->sectname) - 1)) continue;
 
-        if (sectionIsDestructor(section)) {
-            structor_t * destructors = (structor_t *)section->addr;
+        structor_t * structors = (structor_t *)section->addr;
+        if (!structors) continue;
 
-            if (destructors) {
-                int num_destructors = section->size / sizeof(structor_t);
-                int hit_null_destructor = 0;
+        structor_t structor;
+        unsigned int num_structors = section->size / sizeof(structor_t);
+        unsigned int hit_null_structor = 0;
+        unsigned int firstIndex = 0;
 
-                for (int i = 0; i < num_destructors; i++) {
-                    if (destructors[i]) {
-                        (*destructors[i])();
-                    } else if (!hit_null_destructor) {
-                        hit_null_destructor = 1;
-                        OSRuntimeLog(theKext, kOSRuntimeLogSpec,
-                            "Null destructor in kext %s segment %s!",
-                            kmodInfo ? kmodInfo->name : "(unknown)",
-                            section->segname);
+        if (textStart)
+        {
+            // bsearch for any in range
+            unsigned int baseIdx;
+            unsigned int lim;
+            uintptr_t value;
+            firstIndex = num_structors;
+            for (lim = num_structors, baseIdx = 0; lim; lim >>= 1)
+            {
+                value = (uintptr_t) structors[baseIdx + (lim >> 1)];
+                if (!value) panic("%s: null structor", kmodInfo->name);
+                if ((value >= textStart) && (value < textEnd))
+                {
+                    firstIndex = (baseIdx + (lim >> 1));
+                    // scan back for the first in range
+                    for (; firstIndex; firstIndex--)
+                    {
+                        value = (uintptr_t) structors[firstIndex - 1];
+                        if ((value < textStart) || (value >= textEnd)) break;
                     }
+                    break;
                 }
-            } /* if (destructors) */
-        } /* if (strncmp...) */
-    } /* for (section...) */
-
-    OSSafeReleaseNULL(theKext);
-    return;
-}
-
-void
-OSRuntimeUnloadCPPForSegment(kernel_segment_command_t * segment) {
-    OSRuntimeUnloadCPPForSegmentInKmod(segment, NULL);
-}
-
-/*********************************************************************
-*********************************************************************/
-void
-OSRuntimeUnloadCPP(
-    kmod_info_t * kmodInfo,
-    void        * data __unused)
-{
-    if (kmodInfo && kmodInfo->address) {
-
-        kernel_segment_command_t * segment;
-        kernel_mach_header_t * header;
-
-        OSSymbol::checkForPageUnload((void *)kmodInfo->address,
-            (void *)(kmodInfo->address + kmodInfo->size));
-
-        header = (kernel_mach_header_t *)kmodInfo->address;
-        segment = firstsegfromheader(header);
-
-        for (segment = firstsegfromheader(header);
-             segment != 0;
-             segment = nextsegfromheader(header, segment)) {
-
-            OSRuntimeUnloadCPPForSegmentInKmod(segment, kmodInfo);
+                if (textStart > value)
+                {
+                    // move right
+                    baseIdx += (lim >> 1) + 1;
+                    lim--;
+                }
+                // else move left
+            }
+            baseIdx = (baseIdx + (lim >> 1));
         }
-    }
+        for (;
+             (firstIndex < num_structors)
+              && (!metaHandle || OSMetaClass::checkModLoad(metaHandle));
+             firstIndex++)
+        {
+            if ((structor = structors[firstIndex]))
+            {
+                if ((textStart && ((uintptr_t) structor < textStart))
+                 || (textEnd && ((uintptr_t) structor >= textEnd))) break;
 
-    return;
+                (*structor)();
+            }
+            else if (!hit_null_structor)
+            {
+                hit_null_structor = 1;
+                OSRuntimeLog(theKext, kOSRuntimeLogSpec,
+                    "Null structor in kext %s segment %s!",
+                    kmodInfo->name, section->segname);
+            }
+        }
+        if (metaHandle) result = OSMetaClass::checkModLoad(metaHandle);
+        break;
+    } /* for (section...) */
+    return (result);
 }
 
 /*********************************************************************
 *********************************************************************/
 kern_return_t
 OSRuntimeFinalizeCPP(
-    kmod_info_t * kmodInfo,
-    void        * data __unused)
+    OSKext                   * theKext)
 {
-    kern_return_t   result = KMOD_RETURN_FAILURE;
-    void          * metaHandle = NULL;  // do not free
-    OSKext        * theKext    = NULL;  // must release
+    kern_return_t              result = KMOD_RETURN_FAILURE;
+    void                     * metaHandle = NULL;  // do not free
+    kernel_mach_header_t     * header;
+    kernel_segment_command_t * segment;
+    kmod_info_t              * kmodInfo;
+    const char              ** sectionNames;
+    uintptr_t                  textStart;
+    uintptr_t                  textEnd;
 
-    if (gKernelCPPInitialized) {
-        theKext = OSKext::lookupKextWithIdentifier(kmodInfo->name);
-    }
-
-    if (theKext && !theKext->isCPPInitialized()) {
-        result = KMOD_RETURN_SUCCESS;
-        goto finish;
+    textStart    = 0;
+    textEnd      = 0;
+    sectionNames = gOSStructorSectionNames[kOSSectionNamesDefault];
+    if (theKext) {
+        if (!theKext->isCPPInitialized()) {
+            result = KMOD_RETURN_SUCCESS;
+            goto finish;
+        }
+        kmodInfo = theKext->kmod_info;
+        if (!kmodInfo || !kmodInfo->address) {
+            result = kOSKextReturnInvalidArgument;
+            goto finish;
+        }
+        header = (kernel_mach_header_t *)kmodInfo->address;
+        if (theKext->flags.builtin) {
+            header       = (kernel_mach_header_t *)g_kernel_kmod_info.address;
+            textStart    = kmodInfo->address;
+            textEnd      = textStart + kmodInfo->size;
+            sectionNames = gOSStructorSectionNames[kOSSectionNamesBuiltinKext];
+        }
+    } else {
+        kmodInfo = &g_kernel_kmod_info;
+        header   = (kernel_mach_header_t *)kmodInfo->address;
     }
 
    /* OSKext checks for this condition now, but somebody might call
@@ -344,7 +374,21 @@ OSRuntimeFinalizeCPP(
     * return a failure (it only does actual work on the init path anyhow).
     */
     metaHandle = OSMetaClass::preModLoad(kmodInfo->name);
-    OSRuntimeUnloadCPP(kmodInfo, 0);
+
+    OSSymbol::checkForPageUnload((void *)kmodInfo->address,
+        (void *)(kmodInfo->address + kmodInfo->size));
+
+    header = (kernel_mach_header_t *)kmodInfo->address;
+    segment = firstsegfromheader(header);
+
+    for (segment = firstsegfromheader(header);
+         segment != 0;
+         segment = nextsegfromheader(header, segment)) {
+
+        OSRuntimeCallStructorsInSection(theKext, kmodInfo, NULL, segment,
+                sectionNames[kOSSectionNameFinalizer], textStart, textEnd);
+    }
+
     (void)OSMetaClass::postModLoad(metaHandle);
 
     if (theKext) {
@@ -352,42 +396,52 @@ OSRuntimeFinalizeCPP(
     }
     result = KMOD_RETURN_SUCCESS;
 finish:
-    OSSafeReleaseNULL(theKext);
     return result;
 }
-
-// Functions used by the extenTools/kmod library project
 
 /*********************************************************************
 *********************************************************************/
 kern_return_t
 OSRuntimeInitializeCPP(
-    kmod_info_t * kmodInfo,
-    void *        data __unused)
+    OSKext                   * theKext)
 {
     kern_return_t              result          = KMOD_RETURN_FAILURE;
-    OSKext                   * theKext         = NULL;  // must release
     kernel_mach_header_t     * header          = NULL;
     void                     * metaHandle      = NULL;  // do not free
     bool                       load_success    = true;
     kernel_segment_command_t * segment         = NULL;  // do not free
     kernel_segment_command_t * failure_segment = NULL;  // do not free
+    kmod_info_t             *  kmodInfo;
+    const char              ** sectionNames;
+    uintptr_t                  textStart;
+    uintptr_t                  textEnd;
 
-    if (!kmodInfo || !kmodInfo->address) {
-        result = kOSKextReturnInvalidArgument;
-        goto finish;
+    textStart    = 0;
+    textEnd      = 0;
+    sectionNames = gOSStructorSectionNames[kOSSectionNamesDefault];
+    if (theKext) {
+        if (theKext->isCPPInitialized()) {
+            result = KMOD_RETURN_SUCCESS;
+            goto finish;
+        }
+
+        kmodInfo = theKext->kmod_info;
+        if (!kmodInfo || !kmodInfo->address) {
+            result = kOSKextReturnInvalidArgument;
+            goto finish;
+        }
+        header = (kernel_mach_header_t *)kmodInfo->address;
+
+        if (theKext->flags.builtin) {
+            header       = (kernel_mach_header_t *)g_kernel_kmod_info.address;
+            textStart    = kmodInfo->address;
+            textEnd      = textStart + kmodInfo->size;
+            sectionNames = gOSStructorSectionNames[kOSSectionNamesBuiltinKext];
+        }
+    } else {
+        kmodInfo = &g_kernel_kmod_info;
+        header   = (kernel_mach_header_t *)kmodInfo->address;
     }
-
-    if (gKernelCPPInitialized) {
-        theKext = OSKext::lookupKextWithIdentifier(kmodInfo->name);
-    }
-
-    if (theKext && theKext->isCPPInitialized()) {
-        result = KMOD_RETURN_SUCCESS;
-        goto finish;
-    }
-
-    header = (kernel_mach_header_t *)kmodInfo->address;
 
    /* Tell the meta class system that we are starting the load
     */
@@ -404,45 +458,15 @@ OSRuntimeInitializeCPP(
     */
     for (segment = firstsegfromheader(header);
          segment != NULL && load_success;
-         segment = nextsegfromheader(header, segment)) {
-
-        kernel_section_t * section;
-
+         segment = nextsegfromheader(header, segment))
+    {
        /* Record the current segment in the event of a failure.
         */
         failure_segment = segment;
-
-        for (section = firstsect(segment);
-             section != NULL;
-             section = nextsect(segment, section)) {
-
-            if (sectionIsConstructor(section)) {
-                structor_t * constructors = (structor_t *)section->addr;
-
-                if (constructors) {
-                    int num_constructors = section->size / sizeof(structor_t);
-                    int hit_null_constructor = 0;
-
-                    for (int i = 0;
-                         i < num_constructors &&
-                         OSMetaClass::checkModLoad(metaHandle);
-                         i++) {
-
-                        if (constructors[i]) {
-                            (*constructors[i])();
-                        } else if (!hit_null_constructor) {
-                            hit_null_constructor = 1;
-                            OSRuntimeLog(theKext, kOSRuntimeLogSpec,
-                                "Null constructor in kext %s segment %s!",
-                                kmodInfo->name, section->segname);
-                        }
-                    }
-                    load_success = OSMetaClass::checkModLoad(metaHandle);
-
-                    break;
-                } /* if (constructors) */
-            } /* if (strncmp...) */
-        } /* for (section...) */
+        load_success = OSRuntimeCallStructorsInSection(
+                            theKext, kmodInfo, metaHandle, segment,
+                            sectionNames[kOSSectionNameInitializer],
+                            textStart, textEnd);
     } /* for (segment...) */
 
    /* We failed so call all of the destructors. We must do this before
@@ -458,7 +482,8 @@ OSRuntimeInitializeCPP(
              segment != failure_segment && segment != 0;
              segment = nextsegfromheader(header, segment)) {
 
-            OSRuntimeUnloadCPPForSegment(segment);
+            OSRuntimeCallStructorsInSection(theKext, kmodInfo, NULL, segment,
+                    sectionNames[kOSSectionNameFinalizer], textStart, textEnd);
 
         } /* for (segment...) */
     }
@@ -478,45 +503,27 @@ OSRuntimeInitializeCPP(
     * classes, and there had better not be any created on the C++ init path.
     */
     if (load_success && result != KMOD_RETURN_SUCCESS) {
-        (void)OSRuntimeFinalizeCPP(kmodInfo, NULL);
+        (void)OSRuntimeFinalizeCPP(theKext); //kmodInfo, sectionNames, textStart, textEnd);
     }
 
     if (theKext && load_success && result == KMOD_RETURN_SUCCESS) {
         theKext->setCPPInitialized(true);
     }
 finish:
-    OSSafeReleaseNULL(theKext);
     return result;
 }
 
-#if PRAGMA_MARK
-#pragma mark Libkern Init
-#endif /* PRAGMA_MARK */
 /*********************************************************************
-* Libkern Init
+Unload a kernel segment.
 *********************************************************************/
 
-/*********************************************************************
-*********************************************************************/
-extern lck_grp_t * IOLockGroup;
-extern kmod_info_t g_kernel_kmod_info;
-
-void OSlibkernInit(void)
+void
+OSRuntimeUnloadCPPForSegment(
+    kernel_segment_command_t * segment)
 {
-    // This must be called before calling OSRuntimeInitializeCPP.
-    OSMetaClassBase::initialize();
-    
-    g_kernel_kmod_info.address = (vm_address_t) &_mh_execute_header;
-    if (kOSReturnSuccess != OSRuntimeInitializeCPP(&g_kernel_kmod_info, 0)) {
-        panic("OSRuntime: C++ runtime failed to initialize.");
-    }
-    
-    gKernelCPPInitialized = true;
-
-    return;
+    OSRuntimeCallStructorsInSection(NULL, &g_kernel_kmod_info, NULL, segment,
+                    gOSStructorSectionNames[kOSSectionNamesDefault][kOSSectionNameFinalizer], 0, 0);
 }
-
-__END_DECLS
 
 #if PRAGMA_MARK
 #pragma mark C++ Allocators & Deallocators
@@ -526,9 +533,6 @@ __END_DECLS
 *********************************************************************/
 void *
 operator new(size_t size)
-#if __cplusplus >= 201103L
-								noexcept
-#endif
 {
     void * result;
 
@@ -548,9 +552,6 @@ operator delete(void * addr)
 
 void *
 operator new[](unsigned long sz)
-#if __cplusplus >= 201103L
-								noexcept
-#endif
 {
     if (sz == 0) sz = 1;
     return kern_os_malloc(sz);
@@ -584,4 +585,3 @@ __throw_length_error(const char *msg __unused)
 }
 
 };
-

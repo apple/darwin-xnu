@@ -239,12 +239,6 @@ vm_map_store_entry_unlink_ll( struct vm_map_header *mapHdr, vm_map_entry_t entry
 }
 
 void
-vm_map_store_copy_insert_ll( vm_map_t map, vm_map_entry_t after_where, vm_map_copy_t copy)
-{
-	_vm_map_copy_insert_ll( map, after_where, copy);
-}
-
-void
 vm_map_store_copy_reset_ll( vm_map_copy_t copy, __unused vm_map_entry_t entry, __unused int nentries)
 {
 	copy->cpy_hdr.nentries = 0;

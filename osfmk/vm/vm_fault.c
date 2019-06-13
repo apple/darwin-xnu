@@ -139,11 +139,12 @@ uint64_t vm_hard_throttle_threshold;
 
 
 #define NEED_TO_HARD_THROTTLE_THIS_TASK()	(vm_wants_task_throttled(current_task()) ||	\
-						 (vm_page_free_count < vm_page_throttle_limit && \
-						  proc_get_effective_thread_policy(current_thread(), TASK_POLICY_IO) > THROTTLE_LEVEL_THROTTLED))
+						 ((vm_page_free_count < vm_page_throttle_limit || \
+						   HARD_THROTTLE_LIMIT_REACHED()) && \
+						  proc_get_effective_thread_policy(current_thread(), TASK_POLICY_IO) >= THROTTLE_LEVEL_THROTTLED))
 
 
-#define HARD_THROTTLE_DELAY	5000	/* 5000 us == 5 ms */
+#define HARD_THROTTLE_DELAY	10000	/* 10000 us == 10 ms */
 #define SOFT_THROTTLE_DELAY	200	/* 200 us == .2 ms */
 
 #define	VM_PAGE_CREATION_THROTTLE_PERIOD_SECS	6
@@ -197,12 +198,34 @@ unsigned long vm_cs_revalidates = 0;
 unsigned long vm_cs_query_modified = 0;
 unsigned long vm_cs_validated_dirtied = 0;
 unsigned long vm_cs_bitmap_validated = 0;
+#if PMAP_CS
+uint64_t vm_cs_defer_to_pmap_cs = 0;
+uint64_t vm_cs_defer_to_pmap_cs_not = 0;
+#endif /* PMAP_CS */
 
 void vm_pre_fault(vm_map_offset_t);
 
 extern char *kdp_compressor_decompressed_page;
 extern addr64_t	kdp_compressor_decompressed_page_paddr;
 extern ppnum_t	kdp_compressor_decompressed_page_ppnum;
+
+struct vmrtfr {
+	int vmrtfr_maxi;
+	int vmrtfr_curi;
+	int64_t vmrtf_total;
+	vm_rtfault_record_t *vm_rtf_records;
+} vmrtfrs;
+#define VMRTF_DEFAULT_BUFSIZE (4096)
+#define VMRTF_NUM_RECORDS_DEFAULT (VMRTF_DEFAULT_BUFSIZE / sizeof(vm_rtfault_record_t))
+int vmrtf_num_records = VMRTF_NUM_RECORDS_DEFAULT;
+
+static void vm_rtfrecord_lock(void);
+static void vm_rtfrecord_unlock(void);
+static void vm_record_rtfault(thread_t, uint64_t, vm_map_offset_t, int);
+
+lck_spin_t vm_rtfr_slock;
+extern lck_grp_t vm_page_lck_grp_bucket;
+extern lck_attr_t vm_page_lck_attr;
 
 /*
  *	Routine:	vm_fault_init
@@ -245,11 +268,20 @@ vm_fault_init(void)
 		/* If no boot arg or incorrect boot arg, try device tree. */
 		PE_get_default("kern.vm_compressor", &vm_compressor_mode, sizeof(vm_compressor_mode));
 	}
-	PE_parse_boot_argn("vm_compressor_threads", &vm_compressor_thread_count, sizeof (vm_compressor_thread_count));
-
 	printf("\"vm_compressor_mode\" is %d\n", vm_compressor_mode);
 }
 
+void vm_rtfault_record_init(void) {
+	PE_parse_boot_argn("vm_rtfault_records", &vmrtf_num_records, sizeof(vmrtf_num_records));
+
+	assert(vmrtf_num_records >= 1);
+	vmrtf_num_records = MAX(vmrtf_num_records, 1);
+	size_t kallocsz = vmrtf_num_records * sizeof(vm_rtfault_record_t);
+	vmrtfrs.vm_rtf_records = kalloc(kallocsz);
+	bzero(vmrtfrs.vm_rtf_records, kallocsz);
+	vmrtfrs.vmrtfr_maxi = vmrtf_num_records - 1;
+	lck_spin_init(&vm_rtfr_slock, &vm_page_lck_grp_bucket, &vm_page_lck_attr);
+}
 /*
  *	Routine:	vm_fault_cleanup
  *	Purpose:
@@ -281,24 +313,6 @@ vm_fault_cleanup(
 		vm_object_unlock(object);
 	}
 }
-
-#if	MACH_CLUSTER_STATS
-#define MAXCLUSTERPAGES 16
-struct {
-	unsigned long pages_in_cluster;
-	unsigned long pages_at_higher_offsets;
-	unsigned long pages_at_lower_offsets;
-} cluster_stats_in[MAXCLUSTERPAGES];
-#define CLUSTER_STAT(clause)	clause
-#define CLUSTER_STAT_HIGHER(x)	\
-	((cluster_stats_in[(x)].pages_at_higher_offsets)++)
-#define CLUSTER_STAT_LOWER(x)	\
-	 ((cluster_stats_in[(x)].pages_at_lower_offsets)++)
-#define CLUSTER_STAT_CLUSTER(x)	\
-	((cluster_stats_in[(x)].pages_in_cluster)++)
-#else	/* MACH_CLUSTER_STATS */
-#define CLUSTER_STAT(clause)
-#endif	/* MACH_CLUSTER_STATS */
 
 #define ALIGNED(x) (((x) & (PAGE_SIZE_64 - 1)) == 0)
 
@@ -530,7 +544,7 @@ vm_fault_deactivate_behind(
         for (n = 0; n < max_pages_in_run; n++) {
 		m = vm_page_lookup(object, offset + run_offset + (n * pg_offset));
 
-		if (m && !m->laundry && !m->busy && !m->no_cache && (m->vm_page_q_state != VM_PAGE_ON_THROTTLED_Q) && !m->fictitious && !m->absent) {
+		if (m && !m->vmp_laundry && !m->vmp_busy && !m->vmp_no_cache && (m->vmp_q_state != VM_PAGE_ON_THROTTLED_Q) && !m->vmp_fictitious && !m->vmp_absent) {
 			page_run[pages_in_run++] = m;
 
 			/*
@@ -630,7 +644,7 @@ vm_page_throttled(boolean_t page_kept)
 				thread->t_page_creation_time = tv_sec;
 				thread->t_page_creation_count = VM_PAGE_CREATION_THROTTLE_RATE_PER_SEC * (VM_PAGE_CREATION_THROTTLE_PERIOD_SECS - 1);
 			}
-			++vm_page_throttle_count;
+			VM_PAGEOUT_DEBUG(vm_page_throttle_count, 1);
 
 			thread->t_page_creation_throttled = 1;
 
@@ -664,10 +678,10 @@ no_throttle:
  * cleanup is based on being called from vm_fault_page
  *
  * object must be locked
- * object == m->object
+ * object == m->vmp_object
  */
 static vm_fault_return_t
-vm_fault_check(vm_object_t object, vm_page_t m, vm_page_t first_m, boolean_t interruptible_state, boolean_t page_throttle)
+vm_fault_check(vm_object_t object, vm_page_t m, vm_page_t first_m, wait_interrupt_t interruptible_state, boolean_t page_throttle)
 {
 	int throttle_delay;
 
@@ -687,26 +701,6 @@ vm_fault_check(vm_object_t object, vm_page_t m, vm_page_t first_m, boolean_t int
 		thread_interrupt_level(interruptible_state);
 
 		return (VM_FAULT_MEMORY_ERROR);
-	}
-	if (vm_backing_store_low) {
-	        /*
-		 * are we protecting the system from
-		 * backing store exhaustion.  If so
-		 * sleep unless we are privileged.
-		 */
-	        if (!(current_task()->priv_flags & VM_BACKING_STORE_PRIV)) {
-
-			if (m != VM_PAGE_NULL)
-			        VM_PAGE_FREE(m);
-			vm_fault_cleanup(object, first_m);
-
-		        assert_wait((event_t)&vm_backing_store_low, THREAD_UNINT);
-
-			thread_block(THREAD_CONTINUE_NULL);
-			thread_interrupt_level(interruptible_state);
-
-			return (VM_FAULT_RETRY);
-		}
 	}
 	if (page_throttle == TRUE) {
 		if ((throttle_delay = vm_page_throttled(FALSE))) {
@@ -739,7 +733,7 @@ vm_fault_check(vm_object_t object, vm_page_t m, vm_page_t first_m, boolean_t int
  * do the work to zero fill a page and
  * inject it into the correct paging queue
  *
- * m->object must be locked
+ * m->vmp_object must be locked
  * page queue lock must NOT be held
  */
 static int
@@ -765,16 +759,16 @@ vm_fault_zero_page(vm_page_t m, boolean_t no_zero_fill)
 	 * sending a program into this area.  We
 	 * choose this approach for performance
 	 */
-	m->pmapped = TRUE;
+	m->vmp_pmapped = TRUE;
 
-	m->cs_validated = FALSE;
-	m->cs_tainted = FALSE;
-	m->cs_nx = FALSE;
+	m->vmp_cs_validated = FALSE;
+	m->vmp_cs_tainted = FALSE;
+	m->vmp_cs_nx = FALSE;
 
 	if (no_zero_fill == TRUE) {
 		my_fault = DBG_NZF_PAGE_FAULT;
 
-		if (m->absent && m->busy)
+		if (m->vmp_absent && m->vmp_busy)
 			return (my_fault);
 	} else {
 		vm_page_zero_fill(m);
@@ -782,9 +776,9 @@ vm_fault_zero_page(vm_page_t m, boolean_t no_zero_fill)
 		VM_STAT_INCR(zero_fill_count);
 		DTRACE_VM2(zfod, int, 1, (uint64_t *), NULL);
 	}
-	assert(!m->laundry);
+	assert(!m->vmp_laundry);
 	assert(object != kernel_object);
-	//assert(m->pageq.next == 0 && m->pageq.prev == 0);
+	//assert(m->vmp_pageq.next == 0 && m->vmp_pageq.prev == 0);
 
 	if (!VM_DYNAMIC_PAGING_ENABLED() &&
 		(object->purgable == VM_PURGABLE_DENY ||
@@ -802,8 +796,8 @@ vm_fault_zero_page(vm_page_t m, boolean_t no_zero_fill)
 			 */
 			vm_page_queues_remove(m, TRUE);
 			vm_page_check_pageable_safe(m);
-			vm_page_queue_enter(&vm_page_queue_throttled, m, vm_page_t, pageq);
-			m->vm_page_q_state = VM_PAGE_ON_THROTTLED_Q;
+			vm_page_queue_enter(&vm_page_queue_throttled, m, vm_page_t, vmp_pageq);
+			m->vmp_q_state = VM_PAGE_ON_THROTTLED_Q;
 			vm_page_throttled_count++;
 		}
 		vm_page_unlock_queues();
@@ -897,10 +891,8 @@ vm_fault_page(
 	boolean_t		force_fault_retry = FALSE;
 	vm_prot_t		access_required = fault_type;
 	vm_prot_t		wants_copy_flag;
-	CLUSTER_STAT(int pages_at_higher_offsets;)
-	CLUSTER_STAT(int pages_at_lower_offsets;)
 	kern_return_t		wait_result;
-	boolean_t		interruptible_state;
+	wait_interrupt_t	interruptible_state;
 	boolean_t		data_already_requested = FALSE;
 	vm_behavior_t		orig_behavior;
 	vm_size_t		orig_cluster_size;
@@ -1072,7 +1064,7 @@ vm_fault_page(
 #endif
 		if (m != VM_PAGE_NULL) {
 
-			if (m->busy) {
+			if (m->vmp_busy) {
 			        /*
 				 * The page is being brought in,
 				 * wait for it and then retry.
@@ -1099,10 +1091,10 @@ vm_fault_page(
 				}
 				continue;
 			}
-			if (m->laundry) {
-				m->free_when_done = FALSE;
+			if (m->vmp_laundry) {
+				m->vmp_free_when_done = FALSE;
 
-				if (!m->cleaning)
+				if (!m->vmp_cleaning)
 					vm_pageout_steal_laundry(m, FALSE);
 			}
 			if (VM_PAGE_GET_PHYS_PAGE(m) == vm_page_guard_addr) {
@@ -1116,7 +1108,7 @@ vm_fault_page(
 					 * be just to wire or unwire it.
 					 * Let's pretend it succeeded...
 					 */
-					m->busy = TRUE;
+					m->vmp_busy = TRUE;
 					*result_page = m;
 					assert(first_m == VM_PAGE_NULL);
 					*top_page = first_m;
@@ -1135,7 +1127,7 @@ vm_fault_page(
 				}
 			}
 
-			if (m->error) {
+			if (m->vmp_error) {
 			        /*
 				 * The page is in error, give up now.
 				 */
@@ -1151,7 +1143,7 @@ vm_fault_page(
 
 				return (VM_FAULT_MEMORY_ERROR);
 			}
-			if (m->restart) {
+			if (m->vmp_restart) {
 			        /*
 				 * The pager wants us to restart
 				 * at the top of the chain,
@@ -1168,7 +1160,7 @@ vm_fault_page(
 
 				return (VM_FAULT_RETRY);
 			}
-			if (m->absent) {
+			if (m->vmp_absent) {
 			        /*
 				 * The page isn't busy, but is absent,
 				 * therefore it's deemed "unavailable".
@@ -1238,11 +1230,11 @@ vm_fault_page(
 						 * we're going to use the absent page we just found
 						 * so convert it to a 'busy' page
 						 */
-					        m->absent = FALSE;
-						m->busy = TRUE;
+					        m->vmp_absent = FALSE;
+						m->vmp_busy = TRUE;
 					}
 					if (fault_info->mark_zf_absent && no_zero_fill == TRUE)
-						m->absent = TRUE;
+						m->vmp_absent = TRUE;
 					/*
 					 * zero-fill the page and put it on
 					 * the correct paging queue
@@ -1258,8 +1250,8 @@ vm_fault_page(
 						VM_PAGE_FREE(m);
 					} else {
 						first_m = m;
-						m->absent = FALSE;
-						m->busy = TRUE;
+						m->vmp_absent = FALSE;
+						m->vmp_busy = TRUE;
 
 						vm_page_lockspin_queues();
 						vm_page_queues_remove(m, FALSE);
@@ -1289,7 +1281,7 @@ vm_fault_page(
 					continue;
 				}
 			}
-			if ((m->cleaning)
+			if ((m->vmp_cleaning)
 			    && ((object != first_object) || (object->copy != VM_OBJECT_NULL))
 			    && (fault_type & VM_PROT_WRITE)) {
 				/*
@@ -1322,7 +1314,7 @@ vm_fault_page(
 
 				m = vm_page_lookup(object, offset);
 
-				if (m != VM_PAGE_NULL && m->cleaning) {
+				if (m != VM_PAGE_NULL && m->vmp_cleaning) {
 					PAGE_ASSERT_WAIT(m, interruptible);
 
 					vm_object_unlock(object);
@@ -1339,14 +1331,14 @@ vm_fault_page(
 					return (VM_FAULT_RETRY);
 				}
 			}
-			if (type_of_fault == NULL && (m->vm_page_q_state == VM_PAGE_ON_SPECULATIVE_Q) &&
+			if (type_of_fault == NULL && (m->vmp_q_state == VM_PAGE_ON_SPECULATIVE_Q) &&
 			    !(fault_info != NULL && fault_info->stealth)) {
 			        /*
 				 * If we were passed a non-NULL pointer for
 				 * "type_of_fault", than we came from
 				 * vm_fault... we'll let it deal with
 				 * this condition, since it
-				 * needs to see m->speculative to correctly
+				 * needs to see m->vmp_speculative to correctly
 				 * account the pageins, otherwise...
 				 * take it off the speculative queue, we'll
 				 * let the caller of vm_fault_page deal
@@ -1357,7 +1349,7 @@ vm_fault_page(
 				 * the page in the speculative queue.
 				 */
 			        vm_page_lockspin_queues();
-				if (m->vm_page_q_state == VM_PAGE_ON_SPECULATIVE_Q)
+				if (m->vmp_q_state == VM_PAGE_ON_SPECULATIVE_Q)
 					vm_page_queues_remove(m, FALSE);
 			        vm_page_unlock_queues();
 			}
@@ -1388,10 +1380,10 @@ vm_fault_page(
 			XPR(XPR_VM_FAULT,
 			    "vm_f_page: found page obj 0x%X, offset 0x%X, page 0x%X\n",
 				object, offset, m, 0, 0);
-			assert(!m->busy);
-			assert(!m->absent);
+			assert(!m->vmp_busy);
+			assert(!m->vmp_absent);
 
-			m->busy = TRUE;
+			m->vmp_busy = TRUE;
 			break;
 		}
 
@@ -1561,16 +1553,16 @@ vm_fault_page(
 						return (VM_FAULT_MEMORY_SHORTAGE);
 					}
 
-					m->absent = TRUE;
+					m->vmp_absent = TRUE;
 					if (fault_info && fault_info->batch_pmap_op == TRUE) {
 						vm_page_insert_internal(m, object, offset, VM_KERN_MEMORY_NONE, FALSE, TRUE, TRUE, FALSE, NULL);
 					} else {
 						vm_page_insert(m, object, offset);
 					}
 				}
-				assert(m->busy);
+				assert(m->vmp_busy);
 
-				m->absent = TRUE;
+				m->vmp_absent = TRUE;
 				pager = object->pager;
 
 				assert(object->paging_in_progress > 0);
@@ -1610,8 +1602,8 @@ vm_fault_page(
 
 				switch (rc) {
 				case KERN_SUCCESS:
-					m->absent = FALSE;
-					m->dirty = TRUE;
+					m->vmp_absent = FALSE;
+					m->vmp_dirty = TRUE;
 					if ((object->wimg_bits &
 					     VM_WIMG_MASK) !=
 					    VM_WIMG_USE_DEFAULT) {
@@ -1624,7 +1616,7 @@ vm_fault_page(
 						pmap_sync_page_attributes_phys(
 							VM_PAGE_GET_PHYS_PAGE(m));
 					} else {
-						m->written_by_kernel = TRUE;
+						m->vmp_written_by_kernel = TRUE;
 					}
 
 					/*
@@ -1635,27 +1627,28 @@ vm_fault_page(
 					 * "compressed purgeable" ledger, so
 					 * update that now.
 					 */
-					if ((object->purgable !=
-					     VM_PURGABLE_DENY) &&
-					    (object->vo_purgeable_owner !=
+					if (((object->purgable !=
+					      VM_PURGABLE_DENY) ||
+					     object->vo_ledger_tag) &&
+					    (object->vo_owner !=
 					     NULL)) {
 						/*
 						 * One less compressed
-						 * purgeable page.
+						 * purgeable/tagged page.
 						 */
-						vm_purgeable_compressed_update(
+						vm_object_owner_compressed_update(
 							object,
 							-1);
 					}
 
 					break;
 				case KERN_MEMORY_FAILURE:
-					m->unusual = TRUE;
-					m->error = TRUE;
-					m->absent = FALSE;
+					m->vmp_unusual = TRUE;
+					m->vmp_error = TRUE;
+					m->vmp_absent = FALSE;
 					break;
 				case KERN_MEMORY_ERROR:
-					assert(m->absent);
+					assert(m->vmp_absent);
 					break;
 				default:
 					panic("vm_fault_page(): unexpected "
@@ -1698,7 +1691,7 @@ vm_fault_page(
 			 * so we can release the object lock.
 			 */
 
-			if (object->object_slid == TRUE) {
+			if (object->object_is_shared_cache) {
 				set_thread_rwlock_boost();
 			}
 
@@ -1786,7 +1779,7 @@ vm_fault_page(
 #endif
 			vm_object_lock(object);
 
-			if (object->object_slid == TRUE) {
+			if (object->object_is_shared_cache) {
 				clear_thread_rwlock_boost();
 			}
 
@@ -1859,7 +1852,7 @@ dont_look_for_page:
 		 * We get here if the object has no pager, or an existence map
 		 * exists and indicates the page isn't present on the pager
 		 * or we're unwiring a page.  If a pager exists, but there
-		 * is no existence map, then the m->absent case above handles
+		 * is no existence map, then the m->vmp_absent case above handles
 		 * the ZF case when the pager can't provide the page
 		 */
 #if TRACEFAULTPAGE
@@ -1920,7 +1913,7 @@ dont_look_for_page:
 				vm_page_insert(m, object, offset);
 			}
 			if (fault_info->mark_zf_absent && no_zero_fill == TRUE)
-				m->absent = TRUE;
+				m->vmp_absent = TRUE;
 
 			my_fault = vm_fault_zero_page(m, no_zero_fill);
 
@@ -1969,10 +1962,10 @@ dont_look_for_page:
 	dbgTrace(0xBEEF0015, (unsigned int) object, (unsigned int) m);	/* (TEST/DEBUG) */
 #endif
 #if	EXTRA_ASSERTIONS
-	assert(m->busy && !m->absent);
+	assert(m->vmp_busy && !m->vmp_absent);
 	assert((first_m == VM_PAGE_NULL) ||
-	       (first_m->busy && !first_m->absent &&
-		!first_m->active && !first_m->inactive && !first_m->secluded));
+	       (first_m->vmp_busy && !first_m->vmp_absent &&
+		!first_m->vmp_active && !first_m->vmp_inactive && !first_m->vmp_secluded));
 #endif	/* EXTRA_ASSERTIONS */
 
 	XPR(XPR_VM_FAULT,
@@ -2000,25 +1993,6 @@ dont_look_for_page:
 			 */
 			assert(!must_be_resident);
 
-			/*
-			 * are we protecting the system from
-			 * backing store exhaustion.  If so
-			 * sleep unless we are privileged.
-			 */
-			if (vm_backing_store_low) {
-				if (!(current_task()->priv_flags & VM_BACKING_STORE_PRIV)) {
-
-					RELEASE_PAGE(m);
-					vm_fault_cleanup(object, first_m);
-
-					assert_wait((event_t)&vm_backing_store_low, THREAD_UNINT);
-
-					thread_block(THREAD_CONTINUE_NULL);
-					thread_interrupt_level(interruptible_state);
-
-					return (VM_FAULT_RETRY);
-				}
-			}
 			/*
 			 * If we try to collapse first_object at this
 			 * point, we may deadlock when we try to get
@@ -2067,14 +2041,14 @@ dont_look_for_page:
 			 * access to this page, then we could
 			 * avoid the pmap_disconnect() call.
 			 */
-			if (m->pmapped)
+			if (m->vmp_pmapped)
 			        pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(m));
 
-			if (m->clustered) {
+			if (m->vmp_clustered) {
 				VM_PAGE_COUNT_AS_PAGEIN(m);
 				VM_PAGE_CONSUME_CLUSTERED(m);
 			}
-			assert(!m->cleaning);
+			assert(!m->vmp_cleaning);
 
 			/*
 			 * We no longer need the old page or object.
@@ -2114,7 +2088,7 @@ dont_look_for_page:
 			 * and replace it with the
 			 * page we just copied into
 			 */
-			assert(copy_m->busy);
+			assert(copy_m->vmp_busy);
 			vm_page_insert(copy_m, object, offset);
 			SET_PAGE_DIRTY(copy_m, TRUE);
 
@@ -2200,7 +2174,7 @@ dont_look_for_page:
 			/*
 			 * Page currently exists in the copy object
 			 */
-			if (copy_m->busy) {
+			if (copy_m->vmp_busy) {
 				/*
 				 * If the page is being brought
 				 * in, wait for it and then retry.
@@ -2223,7 +2197,7 @@ dont_look_for_page:
 				assert(copy_object->ref_count > 0);
 				copy_m = vm_page_lookup(copy_object, copy_offset);
 
-				if (copy_m != VM_PAGE_NULL && copy_m->busy) {
+				if (copy_m != VM_PAGE_NULL && copy_m->vmp_busy) {
 					PAGE_ASSERT_WAIT(copy_m, interruptible);
 
 					vm_object_unlock(copy_object);
@@ -2249,32 +2223,7 @@ dont_look_for_page:
 			 * for example) or it hasn't been paged out.
 			 * (VM_EXTERNAL_STATE_UNKNOWN||VM_EXTERNAL_STATE_ABSENT)
 			 * We must copy the page to the copy object.
-			 */
-
-			if (vm_backing_store_low) {
-			        /*
-				 * we are protecting the system from
-				 * backing store exhaustion.  If so
-				 * sleep unless we are privileged.
-				 */
-				if (!(current_task()->priv_flags & VM_BACKING_STORE_PRIV)) {
-					assert_wait((event_t)&vm_backing_store_low, THREAD_UNINT);
-
-					RELEASE_PAGE(m);
-					VM_OBJ_RES_DECR(copy_object);
-					vm_object_lock_assert_exclusive(copy_object);
-					copy_object->ref_count--;
-					assert(copy_object->ref_count > 0);
-
-					vm_object_unlock(copy_object);
-					vm_fault_cleanup(object, first_m);
-					thread_block(THREAD_CONTINUE_NULL);
-					thread_interrupt_level(interruptible_state);
-
-					return (VM_FAULT_RETRY);
-				}
-			}
-			/*
+			 *
 			 * Allocate a page for the copy
 			 */
 			copy_m = vm_page_alloc(copy_object, copy_offset);
@@ -2304,10 +2253,10 @@ dont_look_for_page:
 			 * from all pmaps.  (We can't know which
 			 * pmaps use it.)
 			 */
-			if (m->pmapped)
+			if (m->vmp_pmapped)
 			        pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(m));
 
-			if (m->clustered) {
+			if (m->vmp_clustered) {
 				VM_PAGE_COUNT_AS_PAGEIN(m);
 				VM_PAGE_CONSUME_CLUSTERED(m);
 			}
@@ -2321,7 +2270,7 @@ dont_look_for_page:
 			   ) {
 
 				vm_page_lockspin_queues();
-				assert(!m->cleaning);
+				assert(!m->vmp_cleaning);
 				vm_page_activate(copy_m);
 				vm_page_unlock_queues();
 
@@ -2330,8 +2279,8 @@ dont_look_for_page:
 
 			} else {
 
-				assert(copy_m->busy == TRUE);
-				assert(!m->cleaning);
+				assert(copy_m->vmp_busy == TRUE);
+				assert(!m->vmp_cleaning);
 
 				/*
 				 * dirty is protected by the object lock
@@ -2384,8 +2333,8 @@ dont_look_for_page:
 			 * wait result].  Can't turn off the page's
 			 * busy bit because we're not done with it.
 			 */
-			if (m->wanted) {
-				m->wanted = FALSE;
+			if (m->vmp_wanted) {
+				m->vmp_wanted = FALSE;
 				thread_wakeup_with_result((event_t) m, THREAD_RESTART);
 			}
 		}
@@ -2434,8 +2383,20 @@ done:
 			 * state being up to date
 			 */
 		        vm_fault_is_sequential(object, offset, fault_info->behavior);
-
 			vm_fault_deactivate_behind(object, offset, fault_info->behavior);
+
+		} else if (type_of_fault == NULL && my_fault == DBG_CACHE_HIT_FAULT) {
+		        /*
+			 * we weren't called from vm_fault, so handle the
+			 * accounting here for hits in the cache
+			 */
+		        if (m->vmp_clustered) {
+			        VM_PAGE_COUNT_AS_PAGEIN(m);
+				VM_PAGE_CONSUME_CLUSTERED(m);
+			}
+		        vm_fault_is_sequential(object, offset, fault_info->behavior);
+			vm_fault_deactivate_behind(object, offset, fault_info->behavior);
+
 		} else if (my_fault == DBG_COMPRESSOR_FAULT || my_fault == DBG_COMPRESSOR_SWAPIN_FAULT) {
 
 			VM_STAT_INCR(decompressions);
@@ -2477,16 +2438,16 @@ backoff:
  */
 #define VM_FAULT_NEED_CS_VALIDATION(pmap, page, page_obj)		\
 	((pmap) != kernel_pmap /*1*/ &&					\
-	 !(page)->cs_tainted /*2*/ &&					\
+	 !(page)->vmp_cs_tainted /*2*/ &&					\
 	 (page_obj)->code_signed /*3*/ &&					\
-	 (!(page)->cs_validated || (page)->wpmapped /*4*/))
+	 (!(page)->vmp_cs_validated || (page)->vmp_wpmapped /*4*/))
 
 
 /*
  * page queue lock must NOT be held
- * m->object must be locked
+ * m->vmp_object must be locked
  *
- * NOTE: m->object could be locked "shared" only if we are called
+ * NOTE: m->vmp_object could be locked "shared" only if we are called
  * from vm_fault() as part of a soft fault.  If so, we must be
  * careful not to modify the VM object in any way that is not
  * legal under a shared lock...
@@ -2505,20 +2466,21 @@ vm_fault_enter(vm_page_t m,
 	       boolean_t wired,
 	       boolean_t change_wiring,
 	       vm_tag_t  wire_tag,
-	       boolean_t no_cache,
-	       boolean_t cs_bypass,
-	       __unused int	 user_tag,
-	       int	 pmap_options,
+	       vm_object_fault_info_t fault_info,
 	       boolean_t *need_retry,
 	       int *type_of_fault)
 {
 	kern_return_t	kr, pe_result;
-	boolean_t	previously_pmapped = m->pmapped;
+	boolean_t	previously_pmapped = m->vmp_pmapped;
 	boolean_t	must_disconnect = 0;
 	boolean_t	map_is_switched, map_is_switch_protected;
+	boolean_t	cs_violation;
 	int		cs_enforcement_enabled;
 	vm_prot_t       fault_type;
 	vm_object_t	object;
+	boolean_t	no_cache = fault_info->no_cache;
+	boolean_t	cs_bypass = fault_info->cs_bypass;
+	int	 	pmap_options = fault_info->pmap_options;
 
 	fault_type = change_wiring ? VM_PROT_NONE : caller_prot;
 	object = VM_PAGE_OBJECT(m);
@@ -2534,7 +2496,7 @@ vm_fault_enter(vm_page_t m,
 	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_NOTOWNED);
 
 	if (VM_PAGE_GET_PHYS_PAGE(m) == vm_page_guard_addr) {
-		assert(m->fictitious);
+		assert(m->vmp_fictitious);
 		return KERN_SUCCESS;
 	}
 
@@ -2542,7 +2504,12 @@ vm_fault_enter(vm_page_t m,
 
 		vm_object_lock_assert_exclusive(object);
 
-	} else if ((fault_type & VM_PROT_WRITE) == 0 && !m->wpmapped) {
+	} else if ((fault_type & VM_PROT_WRITE) == 0 &&
+		   (!m->vmp_wpmapped
+#if VM_OBJECT_ACCESS_TRACKING
+		    || object->access_tracking
+#endif /* VM_OBJECT_ACCESS_TRACKING */
+			   )) {
 		/*
 		 * This is not a "write" fault, so we
 		 * might not have taken the object lock
@@ -2562,13 +2529,13 @@ vm_fault_enter(vm_page_t m,
 			assert(cs_bypass);
 		}
 	}
-	if (m->pmapped == FALSE) {
+	if (m->vmp_pmapped == FALSE) {
 
-		if (m->clustered) {
+		if (m->vmp_clustered) {
 			if (*type_of_fault == DBG_CACHE_HIT_FAULT) {
 				/*
 				 * found it in the cache, but this
-				 * is the first fault-in of the page (m->pmapped == FALSE)
+				 * is the first fault-in of the page (m->vmp_pmapped == FALSE)
 				 * so it must have come in as part of
 				 * a cluster... account 1 pagein against it
 				 */
@@ -2592,20 +2559,43 @@ vm_fault_enter(vm_page_t m,
 	}
 
 	/* Validate code signature if necessary. */
-	if (VM_FAULT_NEED_CS_VALIDATION(pmap, m, object)) {
+	if (!cs_bypass &&
+	    VM_FAULT_NEED_CS_VALIDATION(pmap, m, object)) {
 		vm_object_lock_assert_exclusive(object);
 
-		if (m->cs_validated) {
+		if (m->vmp_cs_validated) {
 			vm_cs_revalidates++;
 		}
 
 		/* VM map is locked, so 1 ref will remain on VM object -
 		 * so no harm if vm_page_validate_cs drops the object lock */
+
+#if PMAP_CS
+		if (fault_info->pmap_cs_associated &&
+		    pmap_cs_enforced(pmap) &&
+		    !m->vmp_cs_validated &&
+		    !m->vmp_cs_tainted &&
+		    !m->vmp_cs_nx &&
+		    (prot & VM_PROT_EXECUTE) &&
+		    (caller_prot & VM_PROT_EXECUTE)) {
+			/*
+			 * With pmap_cs, the pmap layer will validate the
+			 * code signature for any executable pmap mapping.
+			 * No need for us to validate this page too:
+			 * in pmap_cs we trust...
+			 */
+			vm_cs_defer_to_pmap_cs++;
+		} else {
+			vm_cs_defer_to_pmap_cs_not++;
+			vm_page_validate_cs(m);
+		}
+#else /* PMAP_CS */
 		vm_page_validate_cs(m);
+#endif /* PMAP_CS */
 	}
 
-#define page_immutable(m,prot) ((m)->cs_validated /*&& ((prot) & VM_PROT_EXECUTE)*/)
-#define page_nx(m) ((m)->cs_nx)
+#define page_immutable(m,prot) ((m)->vmp_cs_validated /*&& ((prot) & VM_PROT_EXECUTE)*/)
+#define page_nx(m) ((m)->vmp_cs_nx)
 
 	map_is_switched = ((pmap != vm_map_pmap(current_task()->map)) &&
 			   (pmap == vm_map_pmap(current_thread()->map)));
@@ -2621,7 +2611,7 @@ vm_fault_enter(vm_page_t m,
 	 * from the current map. We do that below right before we do the
 	 * PMAP_ENTER.
 	 */
-	cs_enforcement_enabled = cs_enforcement(NULL);
+	cs_enforcement_enabled = cs_process_enforcement(NULL);
 
 	if(cs_enforcement_enabled && map_is_switched &&
 	   map_is_switch_protected && page_immutable(m, prot) &&
@@ -2636,31 +2626,6 @@ vm_fault_enter(vm_page_t m,
 		return KERN_CODESIGN_ERROR;
 	}
 
-	if (cs_enforcement_enabled &&
-	    !m->cs_validated &&
-	    (prot & VM_PROT_EXECUTE) &&
-	    !(caller_prot & VM_PROT_EXECUTE)) {
-		/*
-		 * FOURK PAGER:
-		 * This page has not been validated and will not be
-		 * allowed to be mapped for "execute".
-		 * But the caller did not request "execute" access for this
-		 * fault, so we should not raise a code-signing violation
-		 * (and possibly kill the process) below.
-		 * Instead, let's just remove the "execute" access request.
-		 *
-		 * This can happen on devices with a 4K page size if a 16K
-		 * page contains a mix of signed&executable and
-		 * unsigned&non-executable 4K pages, making the whole 16K
-		 * mapping "executable".
-		 */
-		if (!pmap_has_prot_policy(prot)) {
-			prot &= ~VM_PROT_EXECUTE;
-		} else {
-			assert(cs_bypass);
-		}
-	}
-
 	/* A page could be tainted, or pose a risk of being tainted later.
 	 * Check whether the receiving process wants it, and make it feel
 	 * the consequences (that hapens in cs_invalid_page()).
@@ -2671,28 +2636,52 @@ vm_fault_enter(vm_page_t m,
 	 *   can be changed without the kernel noticing, therefore unsigned
 	 *   code can be created
 	 */
-	if (!cs_bypass &&
-	    (m->cs_tainted ||
-	     (cs_enforcement_enabled &&
-	      (/* The page is unsigned and wants to be executable */
-	       (!m->cs_validated && (prot & VM_PROT_EXECUTE))  ||
-	       /* The page should be immutable, but is in danger of being modified
-		* This is the case where we want policy from the code directory -
-		* is the page immutable or not? For now we have to assume that
-		* code pages will be immutable, data pages not.
-		* We'll assume a page is a code page if it has a code directory
-		* and we fault for execution.
-		* That is good enough since if we faulted the code page for
-		* writing in another map before, it is wpmapped; if we fault
-		* it for writing in this map later it will also be faulted for executing
-		* at the same time; and if we fault for writing in another map
-		* later, we will disconnect it from this pmap so we'll notice
-		* the change.
-		*/
-	      (page_immutable(m, prot) && ((prot & VM_PROT_WRITE) || m->wpmapped))
-	      ))
-		    ))
-	{
+	if (cs_bypass) {
+		/* code-signing is bypassed */
+		cs_violation = FALSE;
+	} else if (m->vmp_cs_tainted) {
+		/* tainted page */
+		cs_violation = TRUE;
+	} else if (!cs_enforcement_enabled) {
+		/* no further code-signing enforcement */
+		cs_violation = FALSE;
+	} else if (page_immutable(m, prot) &&
+		   ((prot & VM_PROT_WRITE) ||
+		    m->vmp_wpmapped)) {
+		/*
+		 * The page should be immutable, but is in danger of being
+		 * modified.
+		 * This is the case where we want policy from the code
+		 * directory - is the page immutable or not? For now we have
+		 * to assume that code pages will be immutable, data pages not.
+		 * We'll assume a page is a code page if it has a code directory
+		 * and we fault for execution.
+		 * That is good enough since if we faulted the code page for
+		 * writing in another map before, it is wpmapped; if we fault
+		 * it for writing in this map later it will also be faulted for
+		 * executing at the same time; and if we fault for writing in
+		 * another map later, we will disconnect it from this pmap so
+		 * we'll notice the change.
+		 */
+		cs_violation = TRUE;
+	} else if (!m->vmp_cs_validated &&
+		   (prot & VM_PROT_EXECUTE)
+#if PMAP_CS
+		   /*
+		    * Executable pages will be validated by pmap_cs;
+		    * in pmap_cs we trust...
+		    * If pmap_cs is turned off, this is a code-signing
+		    * violation.
+		    */
+		   && ! (pmap_cs_enforced(pmap))
+#endif /* PMAP_CS */
+		) {
+		cs_violation = TRUE;
+	} else {
+		cs_violation = FALSE;
+	}
+
+	if (cs_violation) {
 		/* We will have a tainted page. Have to handle the special case
 		 * of a switched map now. If the map is not switched, standard
 		 * procedure applies - call cs_invalid_page().
@@ -2707,12 +2696,11 @@ vm_fault_enter(vm_page_t m,
 			reject_page = FALSE;
 		} else {
 			if (cs_debug > 5)
-				printf("vm_fault: signed: %s validate: %s tainted: %s wpmapped: %s slid: %s prot: 0x%x\n",
+				printf("vm_fault: signed: %s validate: %s tainted: %s wpmapped: %s prot: 0x%x\n",
 				       object->code_signed ? "yes" : "no",
-				       m->cs_validated ? "yes" : "no",
-				       m->cs_tainted ? "yes" : "no",
-				       m->wpmapped ? "yes" : "no",
-				       m->slid ? "yes" : "no",
+				       m->vmp_cs_validated ? "yes" : "no",
+				       m->vmp_cs_tainted ? "yes" : "no",
+				       m->vmp_wpmapped ? "yes" : "no",
 				       (int)prot);
 			reject_page = cs_invalid_page((addr64_t) vaddr, &cs_killed);
 		}
@@ -2744,7 +2732,7 @@ vm_fault_enter(vm_page_t m,
 
 			/* get file's VM object */
 			file_object = object;
-			file_offset = m->offset;
+			file_offset = m->vmp_offset;
 			for (shadow = file_object->shadow,
 				     shadow_depth = 0;
 			     shadow != VM_OBJECT_NULL;
@@ -2798,7 +2786,7 @@ vm_fault_enter(vm_page_t m,
 			       "from offset 0x%llx in file \"%s%s%s\" "
 			       "(cs_mtime:%lu.%ld %s mtime:%lu.%ld) "
 			       "(signed:%d validated:%d tainted:%d nx:%d "
-			       "wpmapped:%d slid:%d dirty:%d depth:%d)\n",
+			       "wpmapped:%d dirty:%d depth:%d)\n",
 			       pid, procname, (addr64_t) vaddr,
 			       file_offset,
 			       (pathname ? pathname : "<nil>"),
@@ -2811,12 +2799,11 @@ vm_fault_enter(vm_page_t m,
 				: "!="),
 			       mtime.tv_sec, mtime.tv_nsec,
 			       object->code_signed,
-			       m->cs_validated,
-			       m->cs_tainted,
-			       m->cs_nx,
-			       m->wpmapped,
-			       m->slid,
-			       m->dirty,
+			       m->vmp_cs_validated,
+			       m->vmp_cs_tainted,
+			       m->vmp_cs_nx,
+			       m->vmp_wpmapped,
+			       m->vmp_dirty,
 			       shadow_depth);
 
 			/*
@@ -2861,12 +2848,12 @@ vm_fault_enter(vm_page_t m,
 							ceri->ceri_page_modtime_secs = mtime.tv_sec;
 							ceri->ceri_page_modtime_nsecs = mtime.tv_nsec;
 							ceri->ceri_object_codesigned = (object->code_signed);
-							ceri->ceri_page_codesig_validated = (m->cs_validated);
-							ceri->ceri_page_codesig_tainted = (m->cs_tainted);
-							ceri->ceri_page_codesig_nx = (m->cs_nx);
-							ceri->ceri_page_wpmapped = (m->wpmapped);
-							ceri->ceri_page_slid = (m->slid);
-							ceri->ceri_page_dirty = (m->dirty);
+							ceri->ceri_page_codesig_validated = (m->vmp_cs_validated);
+							ceri->ceri_page_codesig_tainted = (m->vmp_cs_tainted);
+							ceri->ceri_page_codesig_nx = (m->vmp_cs_nx);
+							ceri->ceri_page_wpmapped = (m->vmp_wpmapped);
+							ceri->ceri_page_slid = 0;
+							ceri->ceri_page_dirty = (m->vmp_dirty);
 							ceri->ceri_page_shadow_depth = shadow_depth;
 						} else {
 #if DEBUG || DEVELOPMENT
@@ -2883,13 +2870,13 @@ vm_fault_enter(vm_page_t m,
 				set_thread_exit_reason(current_thread(), codesigning_exit_reason, FALSE);
 			}
 			if (panic_on_cs_killed &&
-			    object->object_slid) {
+			    object->object_is_shared_cache) {
 				panic("CODE SIGNING: process %d[%s]: "
 				      "rejecting invalid page at address 0x%llx "
 				      "from offset 0x%llx in file \"%s%s%s\" "
 				      "(cs_mtime:%lu.%ld %s mtime:%lu.%ld) "
 				      "(signed:%d validated:%d tainted:%d nx:%d"
-				      "wpmapped:%d slid:%d dirty:%d depth:%d)\n",
+				      "wpmapped:%d dirty:%d depth:%d)\n",
 				      pid, procname, (addr64_t) vaddr,
 				      file_offset,
 				      (pathname ? pathname : "<nil>"),
@@ -2902,12 +2889,11 @@ vm_fault_enter(vm_page_t m,
 				       : "!="),
 				      mtime.tv_sec, mtime.tv_nsec,
 				      object->code_signed,
-				      m->cs_validated,
-				      m->cs_tainted,
-				      m->cs_nx,
-				      m->wpmapped,
-				      m->slid,
-				      m->dirty,
+				      m->vmp_cs_validated,
+				      m->vmp_cs_tainted,
+				      m->vmp_cs_nx,
+				      m->vmp_wpmapped,
+				      m->vmp_dirty,
 				      shadow_depth);
 			}
 
@@ -2922,7 +2908,7 @@ vm_fault_enter(vm_page_t m,
 		} else {
 			/* proceed with the invalid page */
 			kr = KERN_SUCCESS;
-			if (!m->cs_validated &&
+			if (!m->vmp_cs_validated &&
 			    !object->code_signed) {
 				/*
 				 * This page has not been (fully) validated but
@@ -2951,8 +2937,8 @@ vm_fault_enter(vm_page_t m,
 				 * through that code path for re-consideration
 				 * of the validity of that page.
 				 */
-				must_disconnect = !m->cs_tainted;
-				m->cs_tainted = TRUE;
+				must_disconnect = !m->vmp_cs_tainted;
+				m->vmp_cs_tainted = TRUE;
 			}
 			cs_enter_tainted_accepted++;
 		}
@@ -2995,12 +2981,12 @@ MACRO_END
 	 * the page queues.  Change wiring
 	 * case is obvious.
 	 */
-	assert((m->vm_page_q_state == VM_PAGE_USED_BY_COMPRESSOR) || object != compressor_object);
+	assert((m->vmp_q_state == VM_PAGE_USED_BY_COMPRESSOR) || object != compressor_object);
 
 #if CONFIG_BACKGROUND_QUEUE
 	vm_page_update_background_state(m);
 #endif
-	if (m->vm_page_q_state == VM_PAGE_USED_BY_COMPRESSOR) {
+	if (m->vmp_q_state == VM_PAGE_USED_BY_COMPRESSOR) {
 		/*
 		 * Compressor pages are neither wired
 		 * nor pageable and should never change.
@@ -3030,10 +3016,10 @@ MACRO_END
 		        __VM_PAGE_LOCKSPIN_QUEUES_IF_NEEDED();
 		        vm_page_deactivate(m);
 			/* we keep the page queues lock, if we need it later */
-		} else if (((m->vm_page_q_state == VM_PAGE_NOT_ON_Q) ||
-			    (m->vm_page_q_state == VM_PAGE_ON_SPECULATIVE_Q) ||
-			    (m->vm_page_q_state == VM_PAGE_ON_INACTIVE_CLEANED_Q) ||
-			    ((m->vm_page_q_state != VM_PAGE_ON_THROTTLED_Q) && no_cache)) &&
+		} else if (((m->vmp_q_state == VM_PAGE_NOT_ON_Q) ||
+			    (m->vmp_q_state == VM_PAGE_ON_SPECULATIVE_Q) ||
+			    (m->vmp_q_state == VM_PAGE_ON_INACTIVE_CLEANED_Q) ||
+			    ((m->vmp_q_state != VM_PAGE_ON_THROTTLED_Q) && no_cache)) &&
 			   !VM_PAGE_WIRED(m)) {
 
 			if (vm_page_local_q &&
@@ -3042,7 +3028,7 @@ MACRO_END
 				struct vpl	*lq;
 				uint32_t	lid;
 
-				assert(m->vm_page_q_state == VM_PAGE_NOT_ON_Q);
+				assert(m->vmp_q_state == VM_PAGE_NOT_ON_Q);
 
 				__VM_PAGE_UNLOCK_QUEUES_IF_NEEDED();
 				vm_object_lock_assert_exclusive(object);
@@ -3069,9 +3055,9 @@ MACRO_END
 
 				vm_page_check_pageable_safe(m);
 				vm_page_queue_enter(&lq->vpl_queue, m,
-						    vm_page_t, pageq);
-				m->vm_page_q_state = VM_PAGE_ON_ACTIVE_LOCAL_Q;
-				m->local_id = lid;
+						    vm_page_t, vmp_pageq);
+				m->vmp_q_state = VM_PAGE_ON_ACTIVE_LOCAL_Q;
+				m->vmp_local_id = lid;
 				lq->vpl_count++;
 
 				if (object->internal)
@@ -3110,11 +3096,11 @@ MACRO_END
 				 * page queue lock
 				 */
 				if (!VM_PAGE_WIRED(m)) {
-					if (m->vm_page_q_state == VM_PAGE_ON_INACTIVE_CLEANED_Q) {
+					if (m->vmp_q_state == VM_PAGE_ON_INACTIVE_CLEANED_Q) {
 						vm_page_queues_remove(m, FALSE);
 
-						vm_pageout_cleaned_reactivated++;
-						vm_pageout_cleaned_fault_reactivated++;
+						VM_PAGEOUT_DEBUG(vm_pageout_cleaned_reactivated, 1);
+						VM_PAGEOUT_DEBUG(vm_pageout_cleaned_fault_reactivated, 1);
 					}
 
 					if ( !VM_PAGE_ACTIVE_OR_INACTIVE(m) ||
@@ -3134,10 +3120,10 @@ MACRO_END
 
 						if (no_cache &&
 						    (!previously_pmapped ||
-						     m->no_cache)) {
-							m->no_cache = TRUE;
+						     m->vmp_no_cache)) {
+							m->vmp_no_cache = TRUE;
 
-							if (m->vm_page_q_state != VM_PAGE_ON_SPECULATIVE_Q)
+							if (m->vmp_q_state != VM_PAGE_ON_SPECULATIVE_Q)
 								vm_page_speculate(m, FALSE);
 
 						} else if ( !VM_PAGE_ACTIVE_OR_INACTIVE(m)) {
@@ -3166,7 +3152,7 @@ MACRO_END
 		 * properly serialize updating the pmapped and
 		 * xpmapped bits
 		 */
-		if ((prot & VM_PROT_EXECUTE) && !m->xpmapped) {
+		if ((prot & VM_PROT_EXECUTE) && !m->vmp_xpmapped) {
 			ppnum_t	phys_page = VM_PAGE_GET_PHYS_PAGE(m);
 
 			pmap_lock_phys_page(phys_page);
@@ -3176,11 +3162,11 @@ MACRO_END
 			 * need to grab this lock a 2nd time
 			 * just below
 			 */
-			m->pmapped = TRUE;
+			m->vmp_pmapped = TRUE;
 
-			if (!m->xpmapped) {
+			if (!m->vmp_xpmapped) {
 
-				m->xpmapped = TRUE;
+				m->vmp_xpmapped = TRUE;
 
 				pmap_unlock_phys_page(phys_page);
 
@@ -3210,44 +3196,23 @@ MACRO_END
 			} else
 				pmap_unlock_phys_page(phys_page);
 		} else {
-			if (m->pmapped == FALSE) {
+			if (m->vmp_pmapped == FALSE) {
 				ppnum_t	phys_page = VM_PAGE_GET_PHYS_PAGE(m);
 
 				pmap_lock_phys_page(phys_page);
-				m->pmapped = TRUE;
+				m->vmp_pmapped = TRUE;
 				pmap_unlock_phys_page(phys_page);
-			}
-		}
-		if (vm_page_is_slideable(m)) {
-			boolean_t was_busy = m->busy;
-
-			vm_object_lock_assert_exclusive(object);
-
-			m->busy = TRUE;
-			kr = vm_page_slide(m, 0);
-			assert(m->busy);
-			if(!was_busy) {
-				PAGE_WAKEUP_DONE(m);
-			}
-			if (kr != KERN_SUCCESS) {
-				/*
-				 * This page has not been slid correctly,
-				 * do not do the pmap_enter() !
-				 * Let vm_fault_enter() return the error
-				 * so the caller can fail the fault.
-				 */
-				goto after_the_pmap_enter;
 			}
 		}
 
 		if (fault_type & VM_PROT_WRITE) {
 
-			if (m->wpmapped == FALSE) {
+			if (m->vmp_wpmapped == FALSE) {
 				vm_object_lock_assert_exclusive(object);
 				if (!object->internal && object->pager) {
 					task_update_logical_writes(current_task(), PAGE_SIZE, TASK_WRITE_DEFERRED, vnode_pager_lookup_vnode(object->pager));
 				}
-				m->wpmapped = TRUE;
+				m->vmp_wpmapped = TRUE;
 			}
 			if (must_disconnect) {
 				/*
@@ -3272,6 +3237,33 @@ MACRO_END
 			}
 		}
 		assert(VM_PAGE_OBJECT(m) == object);
+
+#if VM_OBJECT_ACCESS_TRACKING
+		if (object->access_tracking) {
+			DTRACE_VM2(access_tracking, vm_map_offset_t, vaddr, int, fault_type);
+			if (fault_type & VM_PROT_WRITE) {
+				object->access_tracking_writes++;
+				vm_object_access_tracking_writes++;
+			} else {
+				object->access_tracking_reads++;
+				vm_object_access_tracking_reads++;
+			}
+		}
+#endif /* VM_OBJECT_ACCESS_TRACKING */
+
+#if PMAP_CS
+		/*
+		 * If CS enforcement is on, we don't ask for an executable page if the
+		 * fault does not call for execution, because that can fail in
+		 * situations where the caller only actually wanted read access.
+		 * However, it may be better to instead retry without execute on
+		 * failure, or pass a flag into pmap_enter to do the right thing.
+		 */
+		// TODO: <rdar://problem/30997388> maybe do something better than masking out VM_PROT_EXECUTE on non-execute faults
+		if (pmap_cs_enforced(pmap) && !(caller_prot & VM_PROT_EXECUTE)) {
+			prot &= ~VM_PROT_EXECUTE;
+		}
+#endif
 
 		/* Prevent a deadlock by not
 		 * holding the object lock if we need to wait for a page in
@@ -3317,11 +3309,11 @@ MACRO_END
 			 * at the level above us, so
 			 * use the blocking version instead. Requires marking
 			 * the page busy and unlocking the object */
-			boolean_t was_busy = m->busy;
+			boolean_t was_busy = m->vmp_busy;
 
 			vm_object_lock_assert_exclusive(object);
 
-			m->busy = TRUE;
+			m->vmp_busy = TRUE;
 			vm_object_unlock(object);
 
 			PMAP_ENTER_OPTIONS(pmap, vaddr, m, prot, fault_type,
@@ -3335,7 +3327,7 @@ MACRO_END
 
 			/* If the page was busy, someone else will wake it up.
 			 * Otherwise, we have to do it now. */
-			assert(m->busy);
+			assert(m->vmp_busy);
 			if(!was_busy) {
 				PAGE_WAKEUP_DONE(m);
 			}
@@ -3449,19 +3441,22 @@ vm_fault_internal(
 	vm_object_t		new_object;
 	int                     type_of_fault;
 	pmap_t			pmap;
-	boolean_t		interruptible_state;
+	wait_interrupt_t	interruptible_state;
 	vm_map_t		real_map = map;
 	vm_map_t		original_map = map;
 	boolean_t		object_locks_dropped = FALSE;
 	vm_prot_t		fault_type;
 	vm_prot_t		original_fault_type;
-	struct vm_object_fault_info fault_info;
+	struct vm_object_fault_info fault_info = {};
 	boolean_t		need_collapse = FALSE;
 	boolean_t		need_retry = FALSE;
 	boolean_t		*need_retry_ptr = NULL;
 	int			object_lock_type = 0;
 	int			cur_object_lock_type;
 	vm_object_t		top_object = VM_OBJECT_NULL;
+	vm_object_t		written_on_object = VM_OBJECT_NULL;
+	memory_object_t		written_on_pager = NULL;
+	vm_object_offset_t	written_on_offset = 0;
 	int			throttle_delay;
 	int			compressed_count_delta;
 	int			grab_options;
@@ -3502,6 +3497,14 @@ vm_fault_internal(
 		return (KERN_FAILURE);
 	}
 
+	thread_t cthread = current_thread();
+	boolean_t rtfault = (cthread->sched_mode == TH_MODE_REALTIME);
+	uint64_t fstart = 0;
+
+	if (rtfault) {
+		fstart = mach_continuous_time();
+	}
+
 	interruptible_state = thread_interrupt_level(interruptible);
 
 	fault_type = (change_wiring ? VM_PROT_NONE : caller_prot);
@@ -3526,6 +3529,8 @@ vm_fault_internal(
 		}
 	}
 RetryFault:
+	assert(written_on_object == VM_OBJECT_NULL);
+
 	/*
 	 * assume we will hit a page in the cache
 	 * otherwise, explicitly override with
@@ -3677,7 +3682,7 @@ RetryFault:
 		if (m != VM_PAGE_NULL) {
 			m_object = cur_object;
 
-			if (m->busy) {
+			if (m->vmp_busy) {
 			        wait_result_t	result;
 
 				/*
@@ -3726,9 +3731,9 @@ RetryFault:
 						continue;
 					}
 				}
-				if ((m->vm_page_q_state == VM_PAGE_ON_PAGEOUT_Q) && m_object->internal) {
+				if ((m->vmp_q_state == VM_PAGE_ON_PAGEOUT_Q) && m_object->internal) {
 					/*
-					 * m->busy == TRUE and the object is locked exclusively
+					 * m->vmp_busy == TRUE and the object is locked exclusively
 					 * if m->pageout_queue == TRUE after we acquire the
 					 * queues lock, we are guaranteed that it is stable on
 					 * the pageout queue and therefore reclaimable
@@ -3740,7 +3745,7 @@ RetryFault:
 
 					vm_page_lock_queues();
 
-					if (m->vm_page_q_state == VM_PAGE_ON_PAGEOUT_Q) {
+					if (m->vmp_q_state == VM_PAGE_ON_PAGEOUT_Q) {
 						vm_pageout_throttle_up(m);
 						vm_page_unlock_queues();
 
@@ -3772,7 +3777,7 @@ RetryFault:
 				goto done;
 			}
 reclaimed_from_pageout:
-			if (m->laundry) {
+			if (m->vmp_laundry) {
 				if (object != cur_object) {
 					if (cur_object_lock_type == OBJECT_LOCK_SHARED) {
 						cur_object_lock_type = OBJECT_LOCK_EXCLUSIVE;
@@ -3815,7 +3820,7 @@ reclaimed_from_pageout:
 				 */
 				break;
 			}
-			if (m->unusual && (m->error || m->restart || m->private || m->absent)) {
+			if (m->vmp_unusual && (m->vmp_error || m->vmp_restart || m->vmp_private || m->vmp_absent)) {
 			        /*
 				 * Unusual case... let the slow path deal with it
 				 */
@@ -3830,32 +3835,6 @@ reclaimed_from_pageout:
 				vm_object_unlock(cur_object);
 				kr = KERN_MEMORY_ERROR;
 				goto done;
-			}
-			if (vm_page_is_slideable(m)) {
-				/*
-				 * We might need to slide this page, and so,
-				 * we want to hold the VM object exclusively.
-				 */
-			        if (object != cur_object) {
-					if (cur_object_lock_type == OBJECT_LOCK_SHARED) {
-						vm_object_unlock(object);
-						vm_object_unlock(cur_object);
-
-					        cur_object_lock_type = OBJECT_LOCK_EXCLUSIVE;
-
-						vm_map_unlock_read(map);
-						if (real_map != map)
-							vm_map_unlock(real_map);
-
-						goto RetryFault;
-					}
-				} else if (object_lock_type == OBJECT_LOCK_SHARED) {
-
-					vm_object_unlock(object);
-				        object_lock_type = OBJECT_LOCK_EXCLUSIVE;
-					vm_map_unlock_read(map);
-					goto RetryFault;
-				}
 			}
 			assert(m_object == VM_PAGE_OBJECT(m));
 
@@ -3963,7 +3942,7 @@ FastPmapEnter:
 				 * prepare for the pmap_enter...
 				 * object and map are both locked
 				 * m contains valid data
-				 * object == m->object
+				 * object == m->vmp_object
 				 * cur_object == NULL or it's been unlocked
 				 * no paging references on either object or cur_object
 				 */
@@ -3981,10 +3960,7 @@ FastPmapEnter:
 							    wired,
 							    change_wiring,
 							    wire_tag,
-							    fault_info.no_cache,
-							    fault_info.cs_bypass,
-							    fault_info.user_tag,
-							    fault_info.pmap_options,
+							    &fault_info,
 							    need_retry_ptr,
 							    &type_of_fault);
 				} else {
@@ -3996,10 +3972,7 @@ FastPmapEnter:
 							    wired,
 							    change_wiring,
 							    wire_tag,
-							    fault_info.no_cache,
-							    fault_info.cs_bypass,
-							    fault_info.user_tag,
-							    fault_info.pmap_options,
+							    &fault_info,
 							    need_retry_ptr,
 							    &type_of_fault);
 				}
@@ -4009,14 +3982,14 @@ FastPmapEnter:
 
 				if (m_object->internal)
 					event_code = (MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_REAL_FAULT_ADDR_INTERNAL));
-				else if (m_object->object_slid)
+				else if (m_object->object_is_shared_cache)
 					event_code = (MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_REAL_FAULT_ADDR_SHAREDCACHE));
 				else
 					event_code = (MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_REAL_FAULT_ADDR_EXTERNAL));
 
-				KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, event_code, trace_real_vaddr, (fault_info.user_tag << 16) | (caller_prot << 8) | type_of_fault, m->offset, get_current_unique_pid(), 0);
+				KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, event_code, trace_real_vaddr, (fault_info.user_tag << 16) | (caller_prot << 8) | type_of_fault, m->vmp_offset, get_current_unique_pid(), 0);
 
-				DTRACE_VM6(real_fault, vm_map_offset_t, real_vaddr, vm_map_offset_t, m->offset, int, event_code, int, caller_prot, int, type_of_fault, int, fault_info.user_tag);
+				DTRACE_VM6(real_fault, vm_map_offset_t, real_vaddr, vm_map_offset_t, m->vmp_offset, int, event_code, int, caller_prot, int, type_of_fault, int, fault_info.user_tag);
 				}
 #endif
 				if (kr == KERN_SUCCESS &&
@@ -4025,7 +3998,7 @@ FastPmapEnter:
 					*physpage_p = VM_PAGE_GET_PHYS_PAGE(m);
 					if (prot & VM_PROT_WRITE) {
 						vm_object_lock_assert_exclusive(m_object);
-						m->dirty = TRUE;
+						m->vmp_dirty = TRUE;
 					}
 				}
 
@@ -4053,16 +4026,25 @@ FastPmapEnter:
 					 * vm_fault_deactivate_behind depends on the
 					 * state being up to date
 					 */
-				        vm_fault_is_sequential(object, cur_offset, fault_info.behavior);
+				        vm_fault_is_sequential(m_object, cur_offset, fault_info.behavior);
 
-					vm_fault_deactivate_behind(object, cur_offset, fault_info.behavior);
+					vm_fault_deactivate_behind(m_object, cur_offset, fault_info.behavior);
 				}
 				/*
 				 * That's it, clean up and return.
 				 */
-				if (m->busy)
+				if (m->vmp_busy)
 				        PAGE_WAKEUP_DONE(m);
 
+				if (need_retry == FALSE && !m_object->internal && (fault_type & VM_PROT_WRITE)) {
+					
+					vm_object_paging_begin(m_object);
+
+					assert(written_on_object == VM_OBJECT_NULL);
+					written_on_object = m_object;
+					written_on_pager = m_object->pager;
+					written_on_offset = m_object->paging_offset + m->vmp_offset;
+				}
 				vm_object_unlock(object);
 
 				vm_map_unlock_read(map);
@@ -4156,10 +4138,10 @@ FastPmapEnter:
 			/*
 			 * Now cope with the source page and object
 			 */
-			if (object->ref_count > 1 && cur_m->pmapped)
+			if (object->ref_count > 1 && cur_m->vmp_pmapped)
 			        pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(cur_m));
 
-			if (cur_m->clustered) {
+			if (cur_m->vmp_clustered) {
 				VM_PAGE_COUNT_AS_PAGEIN(cur_m);
 				VM_PAGE_CONSUME_CLUSTERED(cur_m);
 				vm_fault_is_sequential(cur_object, cur_offset, fault_info.behavior);
@@ -4349,7 +4331,7 @@ FastPmapEnter:
 						m = VM_PAGE_NULL;
 						break;
 					}
-					m->dirty = TRUE;
+					m->vmp_dirty = TRUE;
 
 					/*
 					 * If the object is purgeable, its
@@ -4377,22 +4359,25 @@ FastPmapEnter:
 						 * no ledger update in that
 						 * case.
 						 */
-					} else if ((cur_object->purgable ==
-						    VM_PURGABLE_DENY) ||
-						   (cur_object->vo_purgeable_owner ==
+					} else if (((cur_object->purgable ==
+						     VM_PURGABLE_DENY) &&
+						    (!cur_object->vo_ledger_tag)) ||
+						   (cur_object->vo_owner ==
 						    NULL)) {
 						/*
 						 * "cur_object" is not purgeable
-						 * or is not owned, so no
-						 * purgeable ledgers to update.
+						 * and is not ledger-taged, or
+						 * there's no owner for it,
+						 * so no owner's ledgers to
+						 * update.
 						 */
 					} else {
 						/*
 						 * One less compressed
-						 * purgeable page for
+						 * purgeable/tagged page for
 						 * cur_object's owner.
 						 */
-						vm_purgeable_compressed_update(
+						vm_object_owner_compressed_update(
 							cur_object,
 							-1);
 					}
@@ -4459,16 +4444,6 @@ FastPmapEnter:
 
 					kr = KERN_MEMORY_ERROR;
 					goto done;
-				}
-				if (vm_backing_store_low) {
-				        /*
-					 * we are protecting the system from
-					 * backing store exhaustion...
-					 * must take the slow path if we're
-					 * not privileged
-					 */
-					if (!(current_task()->priv_flags & VM_BACKING_STORE_PRIV))
-					        break;
 				}
 			  	if (cur_object != object) {
 					vm_object_unlock(cur_object);
@@ -4891,10 +4866,7 @@ handle_copy_delay:
 					    wired,
 					    change_wiring,
 					    wire_tag,
-					    fault_info.no_cache,
-					    fault_info.cs_bypass,
-					    fault_info.user_tag,
-					    fault_info.pmap_options,
+					    &fault_info,
 					    NULL,
 					    &type_of_fault);
 		} else {
@@ -4906,10 +4878,7 @@ handle_copy_delay:
 					    wired,
 					    change_wiring,
 					    wire_tag,
-					    fault_info.no_cache,
-					    fault_info.cs_bypass,
-					    fault_info.user_tag,
-					    fault_info.pmap_options,
+					    &fault_info,
 					    NULL,
 					    &type_of_fault);
 		}
@@ -4921,15 +4890,15 @@ handle_copy_delay:
 
 		if (m_object->internal)
 			event_code = (MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_REAL_FAULT_ADDR_INTERNAL));
-		else if (m_object->object_slid)
+		else if (m_object->object_is_shared_cache)
 			event_code = (MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_REAL_FAULT_ADDR_SHAREDCACHE));
 		else
 			event_code = (MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_REAL_FAULT_ADDR_EXTERNAL));
 
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, event_code, trace_real_vaddr, (fault_info.user_tag << 16) | (caller_prot << 8) | type_of_fault, m->offset, get_current_unique_pid(), 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, event_code, trace_real_vaddr, (fault_info.user_tag << 16) | (caller_prot << 8) | type_of_fault, m->vmp_offset, get_current_unique_pid(), 0);
 
-		DTRACE_VM6(real_fault, vm_map_offset_t, real_vaddr, vm_map_offset_t, m->offset, int, event_code, int, caller_prot, int, type_of_fault, int, fault_info.user_tag);
-		}
+		DTRACE_VM6(real_fault, vm_map_offset_t, real_vaddr, vm_map_offset_t, m->vmp_offset, int, event_code, int, caller_prot, int, type_of_fault, int, fault_info.user_tag);
+	}
 #endif
 		if (kr != KERN_SUCCESS) {
 			/* abort this page fault */
@@ -4946,7 +4915,7 @@ handle_copy_delay:
 			*physpage_p = VM_PAGE_GET_PHYS_PAGE(m);
 			if (prot & VM_PROT_WRITE) {
 				vm_object_lock_assert_exclusive(m_object);
-				m->dirty = TRUE;
+				m->vmp_dirty = TRUE;
 			}
 		}
 	} else {
@@ -4959,28 +4928,6 @@ handle_copy_delay:
 		 * do a pmap block mapping from the physical address
 		 * in the object
 		 */
-
-#ifdef ppc
-		/* While we do not worry about execution protection in   */
-		/* general, certian pages may have instruction execution */
-		/* disallowed.  We will check here, and if not allowed   */
-		/* to execute, we return with a protection failure.      */
-
-		if ((fault_type & VM_PROT_EXECUTE) &&
-			(!pmap_eligible_for_execute((ppnum_t)(object->vo_shadow_offset >> 12)))) {
-
-			vm_map_unlock_read(map);
-
-			if (real_map != map)
-				vm_map_unlock(real_map);
-
-			vm_fault_cleanup(object, top_page);
-			vm_object_deallocate(object);
-
-			kr = KERN_PROTECTION_FAILURE;
-			goto done;
-		}
-#endif	/* ppc */
 
 		if (real_map != map)
 			vm_map_unlock(real_map);
@@ -5098,6 +5045,15 @@ cleanup:
 	if (m != VM_PAGE_NULL) {
 		assert(VM_PAGE_OBJECT(m) == m_object);
 
+		if (!m_object->internal && (fault_type & VM_PROT_WRITE)) {
+			
+			vm_object_paging_begin(m_object);
+
+			assert(written_on_object == VM_OBJECT_NULL);
+			written_on_object = m_object;
+			written_on_pager = m_object->pager;
+			written_on_offset = m_object->paging_offset + m->vmp_offset;
+		}
 		PAGE_WAKEUP_DONE(m);
 
 		vm_fault_cleanup(m_object, top_page);
@@ -5133,6 +5089,22 @@ done:
 			}
 		}
 	}
+
+	if (written_on_object) {
+
+		vnode_pager_dirtied(written_on_pager, written_on_offset, written_on_offset + PAGE_SIZE_64);
+
+		vm_object_lock(written_on_object);
+		vm_object_paging_end(written_on_object);
+		vm_object_unlock(written_on_object);
+
+		written_on_object = VM_OBJECT_NULL;
+	}
+
+	if (rtfault) {
+		vm_record_rtfault(cthread, fstart, trace_vaddr, type_of_fault);
+	}
+
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 			      (MACHDBG_CODE(DBG_MACH_VM, 2)) | DBG_FUNC_END,
 			      ((uint64_t)trace_vaddr >> 32),
@@ -5231,7 +5203,7 @@ vm_fault_unwire(
 	vm_map_offset_t	va;
 	vm_map_offset_t	end_addr = entry->vme_end;
 	vm_object_t		object;
-	struct vm_object_fault_info fault_info;
+	struct vm_object_fault_info fault_info = {};
 	unsigned int    unwired_pages;
 
 	object = (entry->is_sub_map) ? VM_OBJECT_NULL : VME_OBJECT(entry);
@@ -5248,7 +5220,6 @@ vm_fault_unwire(
 	fault_info.interruptible = THREAD_UNINT;
 	fault_info.behavior = entry->behavior;
 	fault_info.user_tag = VME_ALIAS(entry);
-	fault_info.pmap_options = 0;
 	if (entry->iokit_acct ||
 	    (!entry->is_sub_map && !entry->use_pmap)) {
 		fault_info.pmap_options |= PMAP_OPTIONS_ALT_ACCT;
@@ -5257,10 +5228,6 @@ vm_fault_unwire(
 	fault_info.hi_offset = (entry->vme_end - entry->vme_start) + VME_OFFSET(entry);
 	fault_info.no_cache = entry->no_cache;
 	fault_info.stealth = TRUE;
-	fault_info.io_sync = FALSE;
-	fault_info.cs_bypass = FALSE;
-	fault_info.mark_zf_absent = FALSE;
-	fault_info.batch_pmap_op = FALSE;
 
 	unwired_pages = 0;
 
@@ -5285,13 +5252,12 @@ vm_fault_unwire(
 			vm_object_t	result_object;
 			vm_fault_return_t result;
 
-			if (end_addr - va > (vm_size_t) -1) {
-				/* 32-bit overflow */
-				fault_info.cluster_size = (vm_size_t) (0 - PAGE_SIZE);
-			} else {
-				fault_info.cluster_size = (vm_size_t) (end_addr - va);
-				assert(fault_info.cluster_size == end_addr - va);
+			/* cap cluster size at maximum UPL size */
+			upl_size_t cluster_size;
+			if (os_sub_overflow(end_addr, va, &cluster_size)) {
+				cluster_size = 0 - (upl_size_t)PAGE_SIZE;
 			}
+			fault_info.cluster_size = cluster_size;
 
 			do {
 				prot = VM_PROT_NONE;
@@ -5427,6 +5393,7 @@ vm_fault_wire_fast(
 	thread_t           	thread = current_thread();
 	int			type_of_fault;
 	kern_return_t		kr;
+	struct vm_object_fault_info fault_info = {};
 
 	VM_STAT_INCR(faults);
 
@@ -5511,12 +5478,12 @@ vm_fault_wire_fast(
 	 *	there's something going on, give up.
 	 */
 	m = vm_page_lookup(object, offset);
-	if ((m == VM_PAGE_NULL) || (m->busy) ||
-	    (m->unusual && ( m->error || m->restart || m->absent))) {
+	if ((m == VM_PAGE_NULL) || (m->vmp_busy) ||
+	    (m->vmp_unusual && ( m->vmp_error || m->vmp_restart || m->vmp_absent))) {
 
 		GIVE_UP;
 	}
-	if (m->fictitious &&
+	if (m->vmp_fictitious &&
 	    VM_PAGE_GET_PHYS_PAGE(m) == vm_page_guard_addr) {
 		/*
 		 * Guard pages are fictitious pages and are never
@@ -5538,9 +5505,9 @@ vm_fault_wire_fast(
 	/*
 	 *	Mark page busy for other threads.
 	 */
-	assert(!m->busy);
-	m->busy = TRUE;
-	assert(!m->absent);
+	assert(!m->vmp_busy);
+	m->vmp_busy = TRUE;
+	assert(!m->vmp_absent);
 
 	/*
 	 *	Give up if the page is being written and there's a copy object
@@ -5548,6 +5515,13 @@ vm_fault_wire_fast(
 	if ((object->copy != VM_OBJECT_NULL) && (prot & VM_PROT_WRITE)) {
 		RELEASE_PAGE(m);
 		GIVE_UP;
+	}
+
+	fault_info.user_tag = VME_ALIAS(entry);
+	fault_info.pmap_options = 0;
+	if (entry->iokit_acct ||
+	    (!entry->is_sub_map && !entry->use_pmap)) {
+		fault_info.pmap_options |= PMAP_OPTIONS_ALT_ACCT;
 	}
 
 	/*
@@ -5562,13 +5536,7 @@ vm_fault_wire_fast(
 			    TRUE,  /* wired */
 			    FALSE, /* change_wiring */
 			    wire_tag,
-			    FALSE, /* no_cache */
-			    FALSE, /* cs_bypass */
-			    VME_ALIAS(entry),
-			    ((entry->iokit_acct ||
-			      (!entry->is_sub_map && !entry->use_pmap))
-			     ? PMAP_OPTIONS_ALT_ACCT
-			     : 0),
+			    &fault_info,
 			    NULL,
 			    &type_of_fault);
 	if (kr != KERN_SUCCESS) {
@@ -5588,7 +5556,7 @@ done:
 			*physpage_p = VM_PAGE_GET_PHYS_PAGE(m);
 			if (prot & VM_PROT_WRITE) {
 				vm_object_lock_assert_exclusive(object);
-				m->dirty = TRUE;
+				m->vmp_dirty = TRUE;
 			}
 		} else {
 			*physpage_p = 0;
@@ -5699,8 +5667,8 @@ vm_fault_copy(
 	vm_fault_return_t	result;
 
 	vm_map_size_t		part_size;
-	struct vm_object_fault_info fault_info_src;
-	struct vm_object_fault_info fault_info_dst;
+	struct vm_object_fault_info fault_info_src = {};
+	struct vm_object_fault_info fault_info_dst = {};
 
 	/*
 	 * In order not to confuse the clustered pageins, align
@@ -5717,29 +5685,15 @@ vm_fault_copy(
 
 	fault_info_src.interruptible = interruptible;
 	fault_info_src.behavior = VM_BEHAVIOR_SEQUENTIAL;
-	fault_info_src.user_tag  = 0;
-	fault_info_src.pmap_options = 0;
 	fault_info_src.lo_offset = vm_object_trunc_page(src_offset);
 	fault_info_src.hi_offset = fault_info_src.lo_offset + amount_left;
-	fault_info_src.no_cache   = FALSE;
 	fault_info_src.stealth = TRUE;
-	fault_info_src.io_sync = FALSE;
-	fault_info_src.cs_bypass = FALSE;
-	fault_info_src.mark_zf_absent = FALSE;
-	fault_info_src.batch_pmap_op = FALSE;
 
 	fault_info_dst.interruptible = interruptible;
 	fault_info_dst.behavior = VM_BEHAVIOR_SEQUENTIAL;
-	fault_info_dst.user_tag  = 0;
-	fault_info_dst.pmap_options = 0;
 	fault_info_dst.lo_offset = vm_object_trunc_page(dst_offset);
 	fault_info_dst.hi_offset = fault_info_dst.lo_offset + amount_left;
-	fault_info_dst.no_cache   = FALSE;
 	fault_info_dst.stealth = TRUE;
-	fault_info_dst.io_sync = FALSE;
-	fault_info_dst.cs_bypass = FALSE;
-	fault_info_dst.mark_zf_absent = FALSE;
-	fault_info_dst.batch_pmap_op = FALSE;
 
 	do { /* while (amount_left > 0) */
 		/*
@@ -5756,13 +5710,12 @@ vm_fault_copy(
 		vm_object_lock(dst_object);
 		vm_object_paging_begin(dst_object);
 
-		if (amount_left > (vm_size_t) -1) {
-			/* 32-bit overflow */
-			fault_info_dst.cluster_size = (vm_size_t) (0 - PAGE_SIZE);
-		} else {
-			fault_info_dst.cluster_size = (vm_size_t) amount_left;
-			assert(fault_info_dst.cluster_size == amount_left);
+		/* cap cluster size at maximum UPL size */
+		upl_size_t cluster_size;
+		if (os_convert_overflow(amount_left, &cluster_size)) {
+			cluster_size = 0 - (upl_size_t)PAGE_SIZE;
 		}
+		fault_info_dst.cluster_size = cluster_size;
 
 		XPR(XPR_VM_FAULT,"vm_fault_copy -> vm_fault_page\n",0,0,0,0,0);
 		dst_page = VM_PAGE_NULL;
@@ -5851,13 +5804,11 @@ vm_fault_copy(
 				src_prot = VM_PROT_READ;
 				vm_object_paging_begin(src_object);
 
-				if (amount_left > (vm_size_t) -1) {
-					/* 32-bit overflow */
-					fault_info_src.cluster_size = (vm_size_t) (0 - PAGE_SIZE);
-				} else {
-					fault_info_src.cluster_size = (vm_size_t) amount_left;
-					assert(fault_info_src.cluster_size == amount_left);
+				/* cap cluster size at maximum UPL size */
+				if (os_convert_overflow(amount_left, &cluster_size)) {
+					cluster_size = 0 - (upl_size_t)PAGE_SIZE;
 				}
+				fault_info_src.cluster_size = cluster_size;
 
 				XPR(XPR_VM_FAULT,
 					"vm_fault_copy(2) -> vm_fault_page\n",
@@ -5972,7 +5923,7 @@ vm_fault_copy(
 						  dst_page,
 						  (vm_offset_t) dst_po,
 						  (vm_size_t)part_size);
-				if(!dst_page->dirty){
+				if(!dst_page->vmp_dirty){
 					vm_object_lock(dst_object);
 					SET_PAGE_DIRTY(dst_page, TRUE);
 					vm_object_unlock(dst_object);
@@ -5989,7 +5940,7 @@ vm_fault_copy(
 				vm_page_copy(result_page, dst_page);
 				vm_object_unlock(result_page_object);
 
-				if(!dst_page->dirty){
+				if(!dst_page->vmp_dirty){
 					vm_object_lock(dst_object);
 					SET_PAGE_DIRTY(dst_page, TRUE);
 					vm_object_unlock(dst_object);
@@ -6050,7 +6001,7 @@ vm_fault_classify(vm_object_t		object,
 	while (TRUE) {
 		m = vm_page_lookup(object, offset);
 		if (m != VM_PAGE_NULL) {
-		        if (m->busy || m->error || m->restart || m->absent) {
+		        if (m->vmp_busy || m->vmp_error || m->vmp_restart || m->vmp_absent) {
 				type = VM_FAULT_TYPE_OTHER;
 				break;
 			}
@@ -6164,23 +6115,23 @@ kdp_lightweight_fault(vm_map_t map, vm_offset_t cur_target_addr)
 				return 0;
 			}
 
-			if (m->laundry || m->busy || m->free_when_done || m->absent || m->error || m->cleaning ||
-				m->overwriting || m->restart || m->unusual) {
+			if (m->vmp_laundry || m->vmp_busy || m->vmp_free_when_done || m->vmp_absent || m->vmp_error || m->vmp_cleaning ||
+				m->vmp_overwriting || m->vmp_restart || m->vmp_unusual) {
 				return 0;
 			}
 
-			assert(!m->private);
-			if (m->private) {
+			assert(!m->vmp_private);
+			if (m->vmp_private) {
 				return 0;
 			}
 
-			assert(!m->fictitious);
-			if (m->fictitious) {
+			assert(!m->vmp_fictitious);
+			if (m->vmp_fictitious) {
 				return 0;
 			}
 
-			assert(m->vm_page_q_state != VM_PAGE_USED_BY_COMPRESSOR);
-			if (m->vm_page_q_state == VM_PAGE_USED_BY_COMPRESSOR) {
+			assert(m->vmp_q_state != VM_PAGE_USED_BY_COMPRESSOR);
+			if (m->vmp_q_state == VM_PAGE_USED_BY_COMPRESSOR) {
 				return 0;
 			}
 
@@ -6212,23 +6163,26 @@ kdp_lightweight_fault(vm_map_t map, vm_offset_t cur_target_addr)
 
 }
 
-void
-vm_page_validate_cs_mapped(
-	vm_page_t	page,
-	const void 	*kaddr)
+/*
+ * vm_page_validate_cs_fast():
+ * Performs a few quick checks to determine if the page's code signature
+ * really needs to be fully validated.  It could:
+ *	1. have been modified (i.e. automatically tainted),
+ *	2. have already been validated,
+ *	3. have already been found to be tainted,
+ *	4. no longer have a backing store.
+ * Returns FALSE if the page needs to be fully validated.
+ */
+static boolean_t
+vm_page_validate_cs_fast(
+	vm_page_t	page)
 {
-	vm_object_t		object;
-	vm_object_offset_t	offset;
-	memory_object_t		pager;
-	struct vnode		*vnode;
-	boolean_t		validated;
-	unsigned		tainted;
+	vm_object_t	object;
 
-	assert(page->busy);
 	object = VM_PAGE_OBJECT(page);
-	vm_object_lock_assert_exclusive(object);
+	vm_object_lock_assert_held(object);
 
-	if (page->wpmapped && !page->cs_tainted) {
+	if (page->vmp_wpmapped && !page->vmp_cs_tainted) {
 		/*
 		 * This page was mapped for "write" access sometime in the
 		 * past and could still be modifiable in the future.
@@ -6236,38 +6190,76 @@ vm_page_validate_cs_mapped(
 		 * [ If the page was already found to be "tainted", no
 		 * need to re-validate. ]
 		 */
-		page->cs_validated = TRUE;
-		page->cs_tainted = TRUE;
+		vm_object_lock_assert_exclusive(object);
+		page->vmp_cs_validated = TRUE;
+		page->vmp_cs_tainted = TRUE;
 		if (cs_debug) {
-			printf("CODESIGNING: vm_page_validate_cs: "
+			printf("CODESIGNING: %s: "
 			       "page %p obj %p off 0x%llx "
 			       "was modified\n",
-			       page, object, page->offset);
+			       __FUNCTION__,
+			       page, object, page->vmp_offset);
 		}
 		vm_cs_validated_dirtied++;
 	}
 
-	if (page->cs_validated || page->cs_tainted) {
-		return;
+	if (page->vmp_cs_validated || page->vmp_cs_tainted) {
+		return TRUE;
 	}
+	vm_object_lock_assert_exclusive(object);
 
-	vm_cs_validates++;
+#if CHECK_CS_VALIDATION_BITMAP
+	kern_return_t kr;
 
-	assert(object->code_signed);
-	offset = page->offset;
+	kr = vnode_pager_cs_check_validation_bitmap(
+		object->pager,
+		page->vmp_offset + object->paging_offset,
+		CS_BITMAP_CHECK);
+	if (kr == KERN_SUCCESS) {
+		page->vmp_cs_validated = TRUE;
+		page->vmp_cs_tainted = FALSE;
+		vm_cs_bitmap_validated++;
+		return TRUE;
+	}
+#endif /* CHECK_CS_VALIDATION_BITMAP */
 
 	if (!object->alive || object->terminating || object->pager == NULL) {
 		/*
 		 * The object is terminating and we don't have its pager
 		 * so we can't validate the data...
 		 */
-		return;
+		return TRUE;
 	}
+
+	/* we need to really validate this page */
+	vm_object_lock_assert_exclusive(object);
+	return FALSE;
+}
+
+void
+vm_page_validate_cs_mapped_slow(
+	vm_page_t	page,
+	const void 	*kaddr)
+{
+	vm_object_t		object;
+	memory_object_offset_t	mo_offset;
+	memory_object_t		pager;
+	struct vnode		*vnode;
+	boolean_t		validated;
+	unsigned		tainted;
+
+	assert(page->vmp_busy);
+	object = VM_PAGE_OBJECT(page);
+	vm_object_lock_assert_exclusive(object);
+
+	vm_cs_validates++;
+
 	/*
 	 * Since we get here to validate a page that was brought in by
 	 * the pager, we know that this pager is all setup and ready
 	 * by now.
 	 */
+	assert(object->code_signed);
 	assert(!object->internal);
 	assert(object->pager != NULL);
 	assert(object->pager_ready);
@@ -6275,26 +6267,43 @@ vm_page_validate_cs_mapped(
 	pager = object->pager;
 	assert(object->paging_in_progress);
 	vnode = vnode_pager_lookup_vnode(pager);
+	mo_offset = page->vmp_offset + object->paging_offset;
 
 	/* verify the SHA1 hash for this page */
 	tainted = 0;
 	validated = cs_validate_range(vnode,
 				      pager,
-				      (object->paging_offset +
-				       offset),
+				      mo_offset,
 				      (const void *)((const char *)kaddr),
 				      PAGE_SIZE_64,
 				      &tainted);
 
 	if (tainted & CS_VALIDATE_TAINTED) {
-		page->cs_tainted = TRUE;
+		page->vmp_cs_tainted = TRUE;
 	}
 	if (tainted & CS_VALIDATE_NX) {
-		page->cs_nx = TRUE;
+		page->vmp_cs_nx = TRUE;
+	}
+	if (validated) {
+		page->vmp_cs_validated = TRUE;
 	}
 
-	if (validated) {
-		page->cs_validated = TRUE;
+#if CHECK_CS_VALIDATION_BITMAP
+	if (page->vmp_cs_validated && !page->vmp_cs_tainted) {
+		vnode_pager_cs_check_validation_bitmap(object->pager,
+						       mo_offset,
+						       CS_BITMAP_SET);
+	}
+#endif /* CHECK_CS_VALIDATION_BITMAP */
+}
+
+void
+vm_page_validate_cs_mapped(
+	vm_page_t	page,
+	const void	*kaddr)
+{
+	if (!vm_page_validate_cs_fast(page)) {
+		vm_page_validate_cs_mapped_slow(page, kaddr);
 	}
 }
 
@@ -6314,53 +6323,18 @@ vm_page_validate_cs(
 	object = VM_PAGE_OBJECT(page);
 	vm_object_lock_assert_held(object);
 
-	if (page->wpmapped && !page->cs_tainted) {
-		vm_object_lock_assert_exclusive(object);
-
-		/*
-		 * This page was mapped for "write" access sometime in the
-		 * past and could still be modifiable in the future.
-		 * Consider it tainted.
-		 * [ If the page was already found to be "tainted", no
-		 * need to re-validate. ]
-		 */
-		page->cs_validated = TRUE;
-		page->cs_tainted = TRUE;
-		if (cs_debug) {
-			printf("CODESIGNING: vm_page_validate_cs: "
-			       "page %p obj %p off 0x%llx "
-			       "was modified\n",
-			       page, object, page->offset);
-		}
-		vm_cs_validated_dirtied++;
-	}
-
-	if (page->cs_validated || page->cs_tainted) {
+	if (vm_page_validate_cs_fast(page)) {
 		return;
 	}
-
-	if (page->slid) {
-		panic("vm_page_validate_cs(%p): page is slid\n", page);
-	}
-	assert(!page->slid);
-
-#if CHECK_CS_VALIDATION_BITMAP
-	if ( vnode_pager_cs_check_validation_bitmap( object->pager, trunc_page(page->offset + object->paging_offset), CS_BITMAP_CHECK ) == KERN_SUCCESS) {
-		page->cs_validated = TRUE;
-		page->cs_tainted = FALSE;
-		vm_cs_bitmap_validated++;
-		return;
-	}
-#endif
 	vm_object_lock_assert_exclusive(object);
 
 	assert(object->code_signed);
-	offset = page->offset;
+	offset = page->vmp_offset;
 
-	busy_page = page->busy;
+	busy_page = page->vmp_busy;
 	if (!busy_page) {
 		/* keep page busy while we map (and unlock) the VM object */
-		page->busy = TRUE;
+		page->vmp_busy = TRUE;
 	}
 
 	/*
@@ -6383,19 +6357,14 @@ vm_page_validate_cs(
 				  &koffset,
 				  &need_unmap);
 	if (kr != KERN_SUCCESS) {
-		panic("vm_page_validate_cs: could not map page: 0x%x\n", kr);
+		panic("%s: could not map page: 0x%x\n", __FUNCTION__, kr);
 	}
 	kaddr = CAST_DOWN(vm_offset_t, koffset);
 
 	/* validate the mapped page */
-	vm_page_validate_cs_mapped(page, (const void *) kaddr);
+	vm_page_validate_cs_mapped_slow(page, (const void *) kaddr);
 
-#if CHECK_CS_VALIDATION_BITMAP
-	if ( page->cs_validated == TRUE && page->cs_tainted == FALSE ) {
-		vnode_pager_cs_check_validation_bitmap( object->pager, trunc_page( offset + object->paging_offset), CS_BITMAP_SET );
-	}
-#endif
-	assert(page->busy);
+	assert(page->vmp_busy);
 	assert(object == VM_PAGE_OBJECT(page));
 	vm_object_lock_assert_exclusive(object);
 
@@ -6431,12 +6400,12 @@ vm_page_validate_cs_mapped_chunk(
 	*validated_p = FALSE;
 	*tainted_p = 0;
 
-	assert(page->busy);
+	assert(page->vmp_busy);
 	object = VM_PAGE_OBJECT(page);
 	vm_object_lock_assert_exclusive(object);
 
 	assert(object->code_signed);
-	offset = page->offset;
+	offset = page->vmp_offset;
 
 	if (!object->alive || object->terminating || object->pager == NULL) {
 		/*
@@ -6478,4 +6447,99 @@ vm_page_validate_cs_mapped_chunk(
 	if (tainted) {
 		*tainted_p = tainted;
 	}
+}
+
+static void vm_rtfrecord_lock(void) {
+	lck_spin_lock(&vm_rtfr_slock);
+}
+
+static void vm_rtfrecord_unlock(void) {
+	lck_spin_unlock(&vm_rtfr_slock);
+}
+
+unsigned int vmrtfaultinfo_bufsz(void) {
+	return (vmrtf_num_records * sizeof(vm_rtfault_record_t));
+}
+
+#include <kern/backtrace.h>
+
+static void vm_record_rtfault(thread_t cthread, uint64_t fstart, vm_map_offset_t fault_vaddr, int type_of_fault) {
+	uint64_t fend = mach_continuous_time();
+
+	uint64_t cfpc = 0;
+	uint64_t ctid = cthread->thread_id;
+	uint64_t cupid = get_current_unique_pid();
+
+	uintptr_t bpc = 0;
+	uint32_t bfrs = 0;
+	bool u64 = false;
+
+	/* Capture a single-frame backtrace; this extracts just the program
+	 * counter at the point of the fault into "bpc", and should perform no
+	 * further user stack traversals, thus avoiding copyin()s and further
+	 * faults.
+	 */
+	int btr = backtrace_thread_user(cthread, &bpc, 1U, &bfrs, &u64);
+
+	if ((btr == 0) && (bfrs > 0)) {
+		cfpc = bpc;
+	}
+
+	assert((fstart != 0) && fend >= fstart);
+	vm_rtfrecord_lock();
+	assert(vmrtfrs.vmrtfr_curi <= vmrtfrs.vmrtfr_maxi);
+
+	vmrtfrs.vmrtf_total++;
+	vm_rtfault_record_t *cvmr = &vmrtfrs.vm_rtf_records[vmrtfrs.vmrtfr_curi++];
+
+	cvmr->rtfabstime = fstart;
+	cvmr->rtfduration = fend - fstart;
+	cvmr->rtfaddr = fault_vaddr;
+	cvmr->rtfpc = cfpc;
+	cvmr->rtftype = type_of_fault;
+	cvmr->rtfupid = cupid;
+	cvmr->rtftid = ctid;
+
+	if (vmrtfrs.vmrtfr_curi > vmrtfrs.vmrtfr_maxi) {
+		vmrtfrs.vmrtfr_curi = 0;
+	}
+
+	vm_rtfrecord_unlock();
+}
+
+int vmrtf_extract(uint64_t cupid, __unused boolean_t isroot, int vrecordsz, void *vrecords, int *vmrtfrv) {
+	vm_rtfault_record_t *cvmrd = vrecords;
+	size_t residue = vrecordsz;
+	int numextracted = 0;
+	boolean_t early_exit = FALSE;
+
+	vm_rtfrecord_lock();
+
+	for (int vmfi = 0; vmfi <= vmrtfrs.vmrtfr_maxi; vmfi++) {
+
+		if (residue < sizeof(vm_rtfault_record_t)) {
+			early_exit = TRUE;
+			break;
+		}
+
+		if (vmrtfrs.vm_rtf_records[vmfi].rtfupid != cupid) {
+#if	DEVELOPMENT || DEBUG
+			if (isroot == FALSE) {
+				continue;
+			}
+#else
+			continue;
+#endif /* DEVDEBUG */
+		}
+
+		*cvmrd = vmrtfrs.vm_rtf_records[vmfi];
+		cvmrd++;
+		residue -= sizeof(vm_rtfault_record_t);
+		numextracted++;
+	}
+
+	vm_rtfrecord_unlock();
+
+	*vmrtfrv = numextracted;
+	return (early_exit);
 }

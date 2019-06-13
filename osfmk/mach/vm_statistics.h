@@ -275,6 +275,9 @@ typedef struct pmap_statistics	*pmap_statistics_t;
  * VM_FLAGS_PURGABLE
  *	Create a purgable VM object for that new VM region.
  *
+ * VM_FLAGS_4GB_CHUNK
+ *	The new VM region will be chunked up into 4GB sized pieces.
+ *
  * VM_FLAGS_NO_PMAP_CHECK
  *	(for DEBUG kernel config only, ignored for other configs)
  *	Do not check that there is no stale pmap mapping for the new VM region.
@@ -294,6 +297,7 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_FLAGS_FIXED		0x0000
 #define VM_FLAGS_ANYWHERE	0x0001
 #define VM_FLAGS_PURGABLE	0x0002
+#define VM_FLAGS_4GB_CHUNK	0x0004
 #define VM_FLAGS_RANDOM_ADDR	0x0008
 #define VM_FLAGS_NO_CACHE	0x0010
 #define VM_FLAGS_RESILIENT_CODESIGN	0x0020
@@ -320,6 +324,7 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_FLAGS_USER_ALLOCATE	(VM_FLAGS_FIXED |		\
 				 VM_FLAGS_ANYWHERE |		\
 				 VM_FLAGS_PURGABLE |		\
+				 VM_FLAGS_4GB_CHUNK |		\
 				 VM_FLAGS_RANDOM_ADDR |		\
 				 VM_FLAGS_NO_CACHE |		\
 				 VM_FLAGS_OVERWRITE |		\
@@ -345,6 +350,15 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_FLAGS_SUPERPAGE_SIZE_2MB (SUPERPAGE_SIZE_2MB<<VM_FLAGS_SUPERPAGE_SHIFT)
 #endif
 
+/*
+ * EXC_GUARD definitions for virtual memory.
+ */
+#define GUARD_TYPE_VIRT_MEMORY	0x5
+
+/* Reasons for exception for virtual memory */
+enum virtual_memory_guard_exception_codes {
+	kGUARD_EXC_DEALLOC_GAP	= 1u << 0
+};
 
 #ifdef KERNEL_PRIVATE
 typedef struct {
@@ -362,7 +376,10 @@ typedef struct {
 		vmkf_keep_map_locked:1,
 		vmkf_fourk:1,
 		vmkf_overwrite_immutable:1,
-		__vmkf_unused:19;
+		vmkf_remap_prot_copy:1,
+		vmkf_cs_enforcement_override:1,
+		vmkf_cs_enforcement:1,
+		__vmkf_unused:16;
 } vm_map_kernel_flags_t;
 #define VM_MAP_KERNEL_FLAGS_NONE (vm_map_kernel_flags_t) {		\
 	.vmkf_atomic_entry = 0,	/* keep entry atomic (no coalescing) */ \
@@ -378,6 +395,9 @@ typedef struct {
 	.vmkf_keep_map_locked = 0, /* keep map locked when returning from vm_map_enter() */ \
 	.vmkf_fourk = 0,	/* use fourk pager */			\
 	.vmkf_overwrite_immutable = 0,	/* can overwrite immutable mappings */ \
+	.vmkf_remap_prot_copy = 0, /* vm_remap for VM_PROT_COPY */ 	\
+	.vmkf_cs_enforcement_override = 0, /* override CS_ENFORCEMENT */ \
+	.vmkf_cs_enforcement = 0,  /* new value for CS_ENFORCEMENT */ 	\
 	.__vmkf_unused = 0						\
 }
 #endif /* KERNEL_PRIVATE */
@@ -530,6 +550,23 @@ typedef struct {
 #define VM_MEMORY_AUDIO 90
 
 #define VM_MEMORY_VIDEOBITSTREAM 91
+
+/* memory allocated by CoreMedia */
+#define VM_MEMORY_CM_XPC 92
+
+#define VM_MEMORY_CM_RPC 93
+
+#define VM_MEMORY_CM_MEMORYPOOL 94
+
+#define VM_MEMORY_CM_READCACHE 95
+
+#define VM_MEMORY_CM_CRABS 96
+
+/* memory allocated for QuickLookThumbnailing */
+#define VM_MEMORY_QUICKLOOK_THUMBNAILS 97
+
+/* memory allocated by Accounts framework */
+#define VM_MEMORY_ACCOUNTS 98
 
 /* Reserve 240-255 for application */
 #define VM_MEMORY_APPLICATION_SPECIFIC_1 240

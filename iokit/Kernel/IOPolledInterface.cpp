@@ -44,7 +44,7 @@
 
 OSDefineMetaClassAndAbstractStructors(IOPolledInterface, OSObject);
 
-OSMetaClassDefineReservedUnused(IOPolledInterface, 0);
+OSMetaClassDefineReservedUsed(IOPolledInterface, 0);
 OSMetaClassDefineReservedUnused(IOPolledInterface, 1);
 OSMetaClassDefineReservedUnused(IOPolledInterface, 2);
 OSMetaClassDefineReservedUnused(IOPolledInterface, 3);
@@ -293,6 +293,38 @@ IOPolledFilePollersClose(IOPolledFileIOVars * filevars, uint32_t state)
 
     return (err);
 }
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+IOReturn IOPolledInterface::setEncryptionKey(const uint8_t * key, size_t keySize)
+{
+    return (kIOReturnUnsupported);
+}
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+IOReturn
+IOPolledFilePollersSetEncryptionKey(IOPolledFileIOVars * filevars,
+				    const uint8_t * key, size_t keySize)
+{
+    IOReturn              ret = kIOReturnUnsupported;
+    IOReturn              err;
+    int32_t		  idx;
+    IOPolledFilePollers * vars = filevars->pollers;
+    IOPolledInterface   * poller;
+
+    for (idx = 0;
+         (poller = (IOPolledInterface *) vars->pollers->getObject(idx));
+         idx++)
+    {
+        poller = (IOPolledInterface *) vars->pollers->getObject(idx);
+        err = poller->setEncryptionKey(key, keySize);
+	if (kIOReturnSuccess == err) ret = err;
+    }
+
+    return (ret);
+}
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 IOMemoryDescriptor *
@@ -471,7 +503,7 @@ IOCopyMediaForDev(dev_t device)
 
 static IOReturn 
 IOGetVolumeCryptKey(dev_t block_dev,  OSString ** pKeyUUID, 
-		    uint8_t * volumeCryptKey, size_t keySize)
+		    uint8_t * volumeCryptKey, size_t * keySize)
 {
     IOReturn         err;
     IOService *      part;
@@ -479,20 +511,30 @@ IOGetVolumeCryptKey(dev_t block_dev,  OSString ** pKeyUUID,
     OSString *       keyStoreUUID = 0;
     uuid_t           volumeKeyUUID;
     aks_volume_key_t vek;
+    size_t           callerKeySize;
 
     static IOService * sKeyStore;
 
     part = IOCopyMediaForDev(block_dev);
     if (!part) return (kIOReturnNotFound);
 
+    callerKeySize = *keySize;
     // Try APFS first
     {
         uuid_t volUuid = {0};
-        size_t sizeOut = 0;
-        err = part->callPlatformFunction(APFSMEDIA_GETHIBERKEY, false, &volUuid, volumeCryptKey, &keySize, &sizeOut);
-        if (err == kIOReturnSuccess) {
+        err = part->callPlatformFunction(APFSMEDIA_GETHIBERKEY, false, &volUuid, volumeCryptKey, keySize, keySize);
+	if (kIOReturnBadArgument == err)
+	{
+	    // apfs fails on buffer size >32
+	    *keySize = 32;
+	    err = part->callPlatformFunction(APFSMEDIA_GETHIBERKEY, false, &volUuid, volumeCryptKey, keySize, keySize);
+	}
+        if (err != kIOReturnSuccess) *keySize = 0;
+        else
+        {
             // No need to create uuid string if it's not requested
-            if (pKeyUUID) {
+            if (pKeyUUID)
+            {
                 uuid_string_t volUuidStr;
                 uuid_unparse(volUuid, volUuidStr);
                 *pKeyUUID = OSString::withCString(volUuidStr);
@@ -522,15 +564,19 @@ IOGetVolumeCryptKey(dev_t block_dev,  OSString ** pKeyUUID,
             IOLog("volume key err 0x%x\n", err);
         else
         {
-            if (vek.key.keybytecount < keySize) keySize = vek.key.keybytecount;
-            bcopy(&vek.key.keybytes[0], volumeCryptKey, keySize);
+            if (vek.key.keybytecount <= callerKeySize) *keySize = vek.key.keybytecount;
+            bcopy(&vek.key.keybytes[0], volumeCryptKey, *keySize);
         }
         bzero(&vek, sizeof(vek));
+
+        if (pKeyUUID)
+        {
+            // Create a copy because the caller would release it
+            *pKeyUUID = OSString::withString(keyUUID);
+        }
     }
 
     part->release();
-    if (pKeyUUID) *pKeyUUID = keyUUID;
-
     return (err);
 }
 
@@ -538,11 +584,12 @@ IOGetVolumeCryptKey(dev_t block_dev,  OSString ** pKeyUUID,
 
 IOReturn
 IOPolledFileOpen(const char * filename,
-		 uint64_t setFileSize, uint64_t fsFreeSize,
-		 void * write_file_addr, size_t write_file_len,
-		 IOPolledFileIOVars ** fileVars,
-		 OSData ** imagePath,
-		 uint8_t * volumeCryptKey, size_t keySize)
+                 uint32_t flags,
+                 uint64_t setFileSize, uint64_t fsFreeSize,
+                 void * write_file_addr, size_t write_file_len,
+                 IOPolledFileIOVars ** fileVars,
+                 OSData ** imagePath,
+                 uint8_t * volumeCryptKey, size_t * keySize)
 {
     IOReturn             err = kIOReturnSuccess;
     IOPolledFileIOVars * vars;
@@ -562,66 +609,66 @@ IOPolledFileOpen(const char * filename,
 
     do
     {
-    	extentsData = OSData::withCapacity(32);
-   	ctx.extents = extentsData;
-	ctx.size    = 0;
-	clock_get_uptime(&startTime);
+        extentsData = OSData::withCapacity(32);
+        ctx.extents = extentsData;
+        ctx.size    = 0;
+        clock_get_uptime(&startTime);
 
-	vars->fileRef = kern_open_file_for_direct_io(filename, 
-                                                     (write_file_addr != NULL) || (0 != setFileSize),
-						     &file_extent_callback, &ctx, 
-						     setFileSize,
-						     fsFreeSize,
-						     // write file:
+        vars->fileRef = kern_open_file_for_direct_io(filename,
+                                                     flags,
+                                                     &file_extent_callback, &ctx,
+                                                     setFileSize,
+                                                     fsFreeSize,
+                                                     // write file:
                                                      0, write_file_addr, write_file_len,
                                                      // results
-						     &block_dev,
-						     &image_dev,
+                                                     &block_dev,
+                                                     &image_dev,
                                                      &vars->block0,
                                                      &vars->maxiobytes,
                                                      &vars->flags);
 #if 0
-	uint32_t msDelay = (131071 & random());
-	HIBLOG("sleep %d\n", msDelay);
-	IOSleep(msDelay);
+        uint32_t msDelay = (131071 & random());
+        HIBLOG("sleep %d\n", msDelay);
+        IOSleep(msDelay);
 #endif
         clock_get_uptime(&endTime);
         SUB_ABSOLUTETIME(&endTime, &startTime);
         absolutetime_to_nanoseconds(endTime, &nsec);
 
-	if (!vars->fileRef) err = kIOReturnNoSpace;
+        if (!vars->fileRef) err = kIOReturnNoSpace;
 
         HIBLOG("kern_open_file_for_direct_io took %qd ms\n", nsec / 1000000ULL);
-	if (kIOReturnSuccess != err) break;
+        if (kIOReturnSuccess != err) break;
 
-	HIBLOG("Opened file %s, size %qd, extents %ld, maxio %qx ssd %d\n", filename, ctx.size, 
-                    (extentsData->getLength() / sizeof(IOPolledFileExtent)) - 1,
-                    vars->maxiobytes, kIOPolledFileSSD & vars->flags);
-	assert(!vars->block0);
-	if (extentsData->getLength() < sizeof(IOPolledFileExtent))
-	{
-	    err = kIOReturnNoSpace;
-	    break;
-	}
+        HIBLOG("Opened file %s, size %qd, extents %ld, maxio %qx ssd %d\n", filename, ctx.size,
+               (extentsData->getLength() / sizeof(IOPolledFileExtent)) - 1,
+               vars->maxiobytes, kIOPolledFileSSD & vars->flags);
+        assert(!vars->block0);
+        if (extentsData->getLength() < sizeof(IOPolledFileExtent))
+        {
+            err = kIOReturnNoSpace;
+            break;
+        }
 
-	vars->fileSize = ctx.size;
-	vars->extentMap = (IOPolledFileExtent *) extentsData->getBytesNoCopy();
+        vars->fileSize = ctx.size;
+        vars->extentMap = (IOPolledFileExtent *) extentsData->getBytesNoCopy();
 
         part = IOCopyMediaForDev(image_dev);
         if (!part)
         {
             err = kIOReturnNotFound;
             break;
-	}
+        }
 
-	if (!(vars->pollers = IOPolledFilePollers::copyPollers(part))) break;
+        if (!(vars->pollers = IOPolledFilePollers::copyPollers(part))) break;
 
-	if ((num = OSDynamicCast(OSNumber, part->getProperty(kIOMediaPreferredBlockSizeKey))))
-               vars->blockSize = num->unsigned32BitValue();
-	if (vars->blockSize < 4096) vars->blockSize = 4096;
+        if ((num = OSDynamicCast(OSNumber, part->getProperty(kIOMediaPreferredBlockSizeKey))))
+            vars->blockSize = num->unsigned32BitValue();
+        if (vars->blockSize < 4096) vars->blockSize = 4096;
 
         HIBLOG("polled file major %d, minor %d, blocksize %ld, pollers %d\n",
-               major(image_dev), minor(image_dev), (long)vars->blockSize, 
+               major(image_dev), minor(image_dev), (long)vars->blockSize,
                vars->pollers->pollers->getCount());
 
         OSString * keyUUID = NULL;
@@ -630,45 +677,52 @@ IOPolledFileOpen(const char * filename,
             err = IOGetVolumeCryptKey(block_dev, &keyUUID, volumeCryptKey, keySize);
         }
 
-	*fileVars    = vars;
-	vars->fileExtents = extentsData;
-    
-	// make imagePath
-	OSData * data;
-	if (imagePath)
-	{
+        *fileVars    = vars;
+        vars->fileExtents = extentsData;
+
+        // make imagePath
+        OSData * data;
+        if (imagePath)
+        {
 #if defined(__i386__) || defined(__x86_64__)
-	    char str2[24 + sizeof(uuid_string_t) + 2];
+            char str2[24 + sizeof(uuid_string_t) + 2];
 
             if (keyUUID)
-                snprintf(str2, sizeof(str2), "%qx:%s", 
-                                vars->extentMap[0].start, keyUUID->getCStringNoCopy());
+                snprintf(str2, sizeof(str2), "%qx:%s",
+                         vars->extentMap[0].start, keyUUID->getCStringNoCopy());
             else
                 snprintf(str2, sizeof(str2), "%qx", vars->extentMap[0].start);
 
-	    err = IOService::getPlatform()->callPlatformFunction(
-						gIOCreateEFIDevicePathSymbol, false,
-						(void *) part, (void *) str2,
-						(void *) (uintptr_t) true, (void *) &data);
+            err = IOService::getPlatform()->callPlatformFunction(
+                                                                 gIOCreateEFIDevicePathSymbol, false,
+                                                                 (void *) part, (void *) str2,
+                                                                 (void *) (uintptr_t) true, (void *) &data);
 #else
-	    data = 0;
-	    err = kIOReturnSuccess;
+            data = 0;
+            err = kIOReturnSuccess;
 #endif
-	    if (kIOReturnSuccess != err)
-	    {
-		HIBLOG("error 0x%x getting path\n", err);
-		break;
-	    }
-	    *imagePath = data;
-	}
+            if (kIOReturnSuccess != err)
+            {
+                HIBLOG("error 0x%x getting path\n", err);
+                break;
+            }
+            *imagePath = data;
+        }
+
+        // Release key UUID if we have one
+        if (keyUUID)
+        {
+            keyUUID->release();
+            keyUUID = NULL; // Just in case
+        }
     }
     while (false);
 
     if (kIOReturnSuccess != err)
     {
         HIBLOG("error 0x%x opening polled file\n", err);
-    	IOPolledFileClose(&vars, 0, 0, 0, 0, 0);
-	if (extentsData) extentsData->release();
+        IOPolledFileClose(&vars, 0, 0, 0, 0, 0);
+        if (extentsData) extentsData->release();
     }
 
     if (part) part->release();
@@ -816,7 +870,15 @@ IOPolledFileWrite(IOPolledFileIOVars * vars,
 
 	if (bytes)
 	{
+#if KASAN
+	  /* Since this may copy mach-o segments in bulk, use the nosan variants of bcopy to
+	   * avoid triggering global redzone sanitizer violations when accessing
+	   * interstices between 'C' structures
+	   */
+	    __nosan_bcopy(bytes, vars->buffer + vars->bufferHalf + vars->bufferOffset, copy);
+#else
 	    bcopy(bytes, vars->buffer + vars->bufferHalf + vars->bufferOffset, copy);
+#endif
 	    bytes += copy;
 	}
         else
@@ -955,7 +1017,11 @@ IOPolledFileRead(IOPolledFileIOVars * vars,
 
 	if (bytes)
 	{
-	    bcopy(vars->buffer + vars->bufferHalf + vars->bufferOffset, bytes, copy);
+#if KASAN
+	  __nosan_bcopy(vars->buffer + vars->bufferHalf + vars->bufferOffset, bytes, copy);
+#else
+	  bcopy(vars->buffer + vars->bufferHalf + vars->bufferOffset, bytes, copy);
+#endif
 	    bytes += copy;
 	}
 	size -= copy;

@@ -103,10 +103,12 @@
 #include <sys/user.h>
 #include <sys/lockf.h>
 #include <sys/xattr.h>
+#include <sys/kdebug.h>
 
 #include <kern/assert.h>
 #include <kern/kalloc.h>
 #include <kern/task.h>
+#include <kern/policy_internal.h>
 
 #include <libkern/OSByteOrder.h>
 
@@ -118,6 +120,10 @@
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
+#endif
+
+#if NULLFS
+#include <miscfs/nullfs/nullfs.h>
 #endif
 
 #include <sys/sdt.h>
@@ -1595,11 +1601,15 @@ vfs_ctx_skipatime (vfs_context_t ctx) {
 		if (proc->p_lflag & P_LRAGE_VNODES) {
 			return 1;
 		}
-		
+
 		if (ut) {
-			if  (ut->uu_flag & UT_RAGE_VNODES) {
+			if  (ut->uu_flag & (UT_RAGE_VNODES | UT_ATIME_UPDATE)) {
 				return 1;
 			}
+		}
+
+		if (proc->p_vfs_iopolicy & P_VFS_IOPOLICY_ATIME_UPDATES) {
+			return 1;
 		}
 	}
 	return 0;
@@ -2904,6 +2914,20 @@ vnode_ismonitored(vnode_t vp) {
 	return (vp->v_knotes.slh_first != NULL);
 }
 
+int
+vnode_getbackingvnode(vnode_t in_vp, vnode_t* out_vpp)
+{
+	if (out_vpp) {
+		*out_vpp = NULLVP;
+	}
+#if NULLFS
+	return nullfs_getbackingvnode(in_vp, out_vpp);
+#else
+#pragma unused(in_vp)
+	return ENOENT;
+#endif
+}
+
 /*
  * Initialize a struct vnode_attr and activate the attributes required
  * by the vnode_notify() call.
@@ -4003,36 +4027,34 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 		 * in the rename syscall. It's OK if the source file does not exist, since this
 		 * is only for AppleDouble files.
 		 */
-		if (xfromname != NULL) {
-			MALLOC(fromnd, struct nameidata *, sizeof (struct nameidata), M_TEMP, M_WAITOK);
-			NDINIT(fromnd, RENAME, OP_RENAME, NOFOLLOW | USEDVP | CN_NBMOUNTLOOK,
-			       UIO_SYSSPACE, CAST_USER_ADDR_T(xfromname), ctx);
-			fromnd->ni_dvp = fdvp;
-			error = namei(fromnd);
-		
-			/* 
-			 * If there was an error looking up source attribute file, 
-			 * we'll behave as if it didn't exist. 
-			 */
+		MALLOC(fromnd, struct nameidata *, sizeof (struct nameidata), M_TEMP, M_WAITOK);
+		NDINIT(fromnd, RENAME, OP_RENAME, NOFOLLOW | USEDVP | CN_NBMOUNTLOOK,
+				UIO_SYSSPACE, CAST_USER_ADDR_T(xfromname), ctx);
+		fromnd->ni_dvp = fdvp;
+		error = namei(fromnd);
 
-			if (error == 0) {
-				if (fromnd->ni_vp) {
-					/* src_attr_vp indicates need to call vnode_put / nameidone later */
-					src_attr_vp = fromnd->ni_vp;
-										
-					if (fromnd->ni_vp->v_type != VREG) {
-						src_attr_vp = NULLVP;
-						vnode_put(fromnd->ni_vp);
-					}
-				} 
-				/*
-				 * Either we got an invalid vnode type (not a regular file) or the namei lookup 
-				 * suppressed ENOENT as a valid error since we're renaming. Either way, we don't 
-				 * have a vnode here, so we drop our namei buffer for the source attribute file
-				 */
-				if (src_attr_vp == NULLVP) {
-					nameidone(fromnd);
+		/*
+		 * If there was an error looking up source attribute file,
+		 * we'll behave as if it didn't exist.
+		 */
+
+		if (error == 0) {
+			if (fromnd->ni_vp) {
+				/* src_attr_vp indicates need to call vnode_put / nameidone later */
+				src_attr_vp = fromnd->ni_vp;
+
+				if (fromnd->ni_vp->v_type != VREG) {
+					src_attr_vp = NULLVP;
+					vnode_put(fromnd->ni_vp);
 				}
+			}
+			/*
+			 * Either we got an invalid vnode type (not a regular file) or the namei lookup
+			 * suppressed ENOENT as a valid error since we're renaming. Either way, we don't
+			 * have a vnode here, so we drop our namei buffer for the source attribute file
+			 */
+			if (src_attr_vp == NULLVP) {
+				nameidone(fromnd);
 			}
 		}
 	}
@@ -5466,8 +5488,11 @@ VNOP_CLONEFILE(vnode_t fvp, vnode_t dvp, vnode_t *vpp,
 
 	_err = (*dvp->v_op[vnop_clonefile_desc.vdesc_offset])(&a);
 
-	if (_err == 0 && *vpp)
+	if (_err == 0 && *vpp) {
 		DTRACE_FSINFO(clonefile, vnode_t, *vpp);
+		if (kdebug_enable)
+			kdebug_lookup(*vpp, cnp);
+	}
 
 	post_event_if_success(dvp, _err, NOTE_WRITE);
 

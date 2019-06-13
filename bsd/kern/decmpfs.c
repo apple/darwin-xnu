@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -486,17 +486,28 @@ decmpfs_fetch_compressed_header(vnode_t vp, decmpfs_cnode *cp, decmpfs_header **
      and return ERANGE in that case
      */
     
-	size_t read_size             = 0;
-	size_t attr_size             = 0;
+    size_t read_size             = 0;
+    size_t attr_size             = 0;
     uio_t attr_uio               = NULL;
     int err                      = 0;
     char *data                   = NULL;
+    const bool no_additional_data= ((cp != NULL)
+        && (cp->cmp_type != 0)
+        && (cp->cmp_minimal_xattr != 0));
+    char uio_buf[ UIO_SIZEOF(1) ];
     decmpfs_header *hdr = NULL;
-	char uio_buf[ UIO_SIZEOF(1) ];
+
+    /*
+     * Trace the following parameters on entry with event-id 0x03120004
+     *
+     * @vp->v_id:       vnode-id for which to fetch compressed header.
+     * @no_additional_data: If set true then xattr didn't have any extra data.
+     * @returnInvalid:  return the header even though the type is out of range.
+     */
+    DECMPFS_EMIT_TRACE_ENTRY(DECMPDBG_FETCH_COMPRESSED_HEADER, vp->v_id,
+        no_additional_data, returnInvalid);
     
-    if ((cp != NULL) &&
-        (cp->cmp_type != 0) &&
-        (cp->cmp_minimal_xattr != 0)) {
+    if (no_additional_data) {
         /* this file's xattr didn't have any extra data when we fetched it, so we can synthesize a header from the data in the cnode */
         
         MALLOC(data, char *, sizeof(decmpfs_header), M_TEMP, M_WAITOK);
@@ -571,6 +582,13 @@ out:
     } else {
         *hdrOut = hdr;
     }
+    /*
+     * Trace the following parameters on return with event-id 0x03120004.
+     *
+     * @vp->v_id:       vnode-id for which to fetch compressed header.
+     * @err:            value returned from this function.
+     */
+    DECMPFS_EMIT_TRACE_RETURN(DECMPDBG_FETCH_COMPRESSED_HEADER, vp->v_id, err);
     return err;
 }
 
@@ -679,14 +697,15 @@ decmpfs_file_is_compressed(vnode_t vp, decmpfs_cnode *cp)
      */
     
     int ret = 0;
-	int error = 0;
-	uint32_t cmp_state;
-	struct vnode_attr va_fetch;
+    int error = 0;
+    uint32_t cmp_state;
+    struct vnode_attr va_fetch;
     decmpfs_header *hdr = NULL;
     mount_t mp = NULL;
-	int cnode_locked = 0;
+    int cnode_locked = 0;
     int saveInvalid = 0; // save the header data even though the type was out of range
     uint64_t decompression_flags = 0;
+    bool is_mounted, is_local_fs;
 	
     if (vnode_isnamedstream(vp)) {
         /*
@@ -721,9 +740,25 @@ decmpfs_file_is_compressed(vnode_t vp, decmpfs_cnode *cp)
         ret = FILE_IS_NOT_COMPRESSED;
         goto done;
     }
-    
-    mp = vnode_mount(vp); 
-    if (mp == NULL) {
+
+    is_mounted = false;
+    is_local_fs = false;
+    mp = vnode_mount(vp);
+    if (mp)
+        is_mounted = true;
+    if (is_mounted)
+        is_local_fs = ((mp->mnt_flag & MNT_LOCAL));
+    /*
+     * Trace the following parameters on entry with event-id 0x03120014.
+     *
+     * @vp->v_id:       vnode-id of the file being queried.
+     * @is_mounted:     set to true if @vp belongs to a mounted fs.
+     * @is_local_fs:    set to true if @vp belongs to local fs.
+     */
+    DECMPFS_EMIT_TRACE_ENTRY(DECMPDBG_FILE_IS_COMPRESSED, vp->v_id,
+        is_mounted, is_local_fs);
+
+    if (!is_mounted) {
         /*
          this should only be true before we mount the root filesystem
          we short-cut this return to avoid the call to getattr below, which
@@ -732,7 +767,8 @@ decmpfs_file_is_compressed(vnode_t vp, decmpfs_cnode *cp)
         ret = FILE_IS_NOT_COMPRESSED;
         goto done;
     }
-    if ((mp->mnt_flag & MNT_LOCAL) == 0) {
+
+    if (!is_local_fs) {
         /* compression only supported on local filesystems */
         ret = FILE_IS_NOT_COMPRESSED;
         goto done;
@@ -811,17 +847,25 @@ done:
 	if (cnode_locked) decmpfs_unlock_compressed_data(cp, 1);
     
     if (hdr) FREE(hdr, M_TEMP);
-	
-	switch(ret) {
-        case FILE_IS_NOT_COMPRESSED:
-			return 0;
-        case FILE_IS_COMPRESSED:
-        case FILE_IS_CONVERTING:
-			return 1;
-        default:
-            /* unknown state, assume file is not compressed */
-            ErrorLogWithPath("unknown ret %d\n", ret);
-            return 0;
+    /*
+     * Trace the following parameters on return with event-id 0x03120014.
+     *
+     * @vp->v_id:       vnode-id of the file being queried.
+     * @return:         set to 1 is file is compressed.
+     */
+    switch(ret) {
+    case FILE_IS_NOT_COMPRESSED:
+	    DECMPFS_EMIT_TRACE_RETURN(DECMPDBG_FILE_IS_COMPRESSED, vp->v_id, 0);
+	    return 0;
+    case FILE_IS_COMPRESSED:
+    case FILE_IS_CONVERTING:
+	    DECMPFS_EMIT_TRACE_RETURN(DECMPDBG_FILE_IS_COMPRESSED, vp->v_id, 1);
+	    return 1;
+    default:
+	    /* unknown state, assume file is not compressed */
+	    DECMPFS_EMIT_TRACE_RETURN(DECMPDBG_FILE_IS_COMPRESSED, vp->v_id, 0);
+	    ErrorLogWithPath("unknown ret %d\n", ret);
+	    return 0;
     }
 }
 
@@ -1058,7 +1102,20 @@ decmpfs_fetch_uncompressed_data(vnode_t vp, decmpfs_cnode *cp, decmpfs_header *h
         err = 0;
         goto out;
     }
-    
+
+    /*
+     * Trace the following parameters on entry with event-id 0x03120008.
+     *
+     * @vp->v_id:       vnode-id of the file being decompressed.
+     * @hdr->compression_type: compression type.
+     * @offset:         offset from where to fetch uncompressed data.
+     * @size:           amount of uncompressed data to fetch.
+     *
+     * Please NOTE: @offset and @size can overflow in theory but
+     * here it is safe.
+     */
+    DECMPFS_EMIT_TRACE_ENTRY(DECMPDBG_FETCH_UNCOMPRESSED_DATA, vp->v_id,
+        hdr->compression_type, (int)offset, (int)size);
     lck_rw_lock_shared(decompressorsLock);
     decmpfs_fetch_uncompressed_data_func fetch = decmp_get_func(vp, hdr->compression_type, fetch);
     if (fetch) {
@@ -1079,7 +1136,17 @@ decmpfs_fetch_uncompressed_data(vnode_t vp, decmpfs_cnode *cp, decmpfs_header *h
         err = ENOTSUP;
         lck_rw_unlock_shared(decompressorsLock);
     }
-    
+    /*
+     * Trace the following parameters on return with event-id 0x03120008.
+     *
+     * @vp->v_id:       vnode-id of the file being decompressed.
+     * @bytes_read:     amount of uncompressed bytes fetched in bytes.
+     * @err:            value returned from this function.
+     *
+     * Please NOTE: @bytes_read can overflow in theory but here it is safe.
+     */
+    DECMPFS_EMIT_TRACE_RETURN(DECMPDBG_FETCH_UNCOMPRESSED_DATA, vp->v_id,
+        (int)*bytes_read, err);
 out:
     return err;
 }
@@ -1512,8 +1579,15 @@ decmpfs_free_compressed_data(vnode_t vp, decmpfs_cnode *cp)
      call out to the decompressor to free remove any data associated with this compressed file
      then delete the file's compression xattr
      */
-    
     decmpfs_header *hdr = NULL;
+
+    /*
+     * Trace the following parameters on entry with event-id 0x03120010.
+     *
+     * @vp->v_id:       vnode-id of the file for which to free compressed data.
+     */
+    DECMPFS_EMIT_TRACE_ENTRY(DECMPDBG_FREE_COMPRESSED_DATA, vp->v_id);
+
     int err = decmpfs_fetch_compressed_header(vp, cp, &hdr, 0);
     if (err) {
         ErrorLogWithPath("decmpfs_fetch_compressed_header err %d\n", err);
@@ -1532,6 +1606,13 @@ decmpfs_free_compressed_data(vnode_t vp, decmpfs_cnode *cp)
             ErrorLogWithPath("decompressor err %d\n", err);
         }
     }
+    /*
+     * Trace the following parameters on return with event-id 0x03120010.
+     *
+     * @vp->v_id:       vnode-id of the file for which to free compressed data.
+     * @err:            value returned from this function.
+     */
+    DECMPFS_EMIT_TRACE_RETURN(DECMPDBG_FREE_COMPRESSED_DATA, vp->v_id, err);
     
     /* delete the xattr */
 	err = vn_removexattr(vp, DECMPFS_XATTR_NAME, 0, decmpfs_ctx);
@@ -1585,10 +1666,23 @@ decmpfs_decompress_file(vnode_t vp, decmpfs_cnode *cp, off_t toSize, int truncat
 	uint32_t new_state           = 0;
 	int update_file_state        = 0;
 	int allocSize                = 0;
-	decmpfs_header *hdr = NULL;
+	decmpfs_header *hdr          = NULL;
 	int cmpdata_locked           = 0;
 	off_t remaining              = 0;
 	uint64_t uncompressed_size   = 0;
+
+	/*
+	 * Trace the following parameters on entry with event-id 0x03120000.
+	 *
+	 * @vp->v_id:		vnode-id of the file being decompressed.
+	 * @toSize:		uncompress given bytes of the file.
+	 * @truncate_okay:	on error it is OK to truncate.
+	 * @skiplock:		compressed data is locked, skip locking again.
+	 *
+	 * Please NOTE: @toSize can overflow in theory but here it is safe.
+	 */
+	DECMPFS_EMIT_TRACE_ENTRY(DECMPDBG_DECOMPRESS_FILE, vp->v_id,
+		(int)toSize, truncate_okay, skiplock);
 	
 	if (!skiplock) {
 		decmpfs_lock_compressed_data(cp, 1); cmpdata_locked = 1;
@@ -1786,7 +1880,13 @@ out:
 	}
 	
 	if (cmpdata_locked) decmpfs_unlock_compressed_data(cp, 1);
-	
+	/*
+	 * Trace the following parameters on return with event-id 0x03120000.
+	 *
+	 * @vp->v_id:	vnode-id of the file being decompressed.
+	 * @err:	value returned from this function.
+	 */
+	DECMPFS_EMIT_TRACE_RETURN(DECMPDBG_DECOMPRESS_FILE, vp->v_id, err);
 	return err;
 }
 

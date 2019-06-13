@@ -127,6 +127,7 @@ int proc_clear_dirty(pid_t pid, uint32_t flags);
 int proc_terminate(pid_t pid, int *sig);
 
 #ifdef PRIVATE
+#include <sys/event.h>
 /*
  * Enumerate potential userspace pointers embedded in kernel data structures.
  * Currently inspects kqueues only.
@@ -143,6 +144,8 @@ int proc_list_dynkqueueids(int pid, kqueue_id_t *buf, uint32_t bufsz);
 int proc_piddynkqueueinfo(int pid, int flavor, kqueue_id_t kq_id, void *buffer,
 		int buffersize);
 #endif /* PRIVATE */
+
+int proc_udata_info(int pid, int flavor, void *buffer, int buffersize);
 
 __END_DECLS
 

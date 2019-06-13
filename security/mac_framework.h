@@ -238,9 +238,6 @@ int	mac_iokit_check_set_properties(kauth_cred_t cred, io_object_t registry_entry
 int	mac_iokit_check_filter_properties(kauth_cred_t cred, io_object_t registry_entry);
 int	mac_iokit_check_get_property(kauth_cred_t cred, io_object_t registry_entry, const char *name);
 int	mac_iokit_check_hid_control(kauth_cred_t cred);
-int	mac_iokit_check_nvram_delete(kauth_cred_t cred, const char *name);
-int	mac_iokit_check_nvram_get(kauth_cred_t cred, const char *name);
-int	mac_iokit_check_nvram_set(kauth_cred_t cred, const char *name, io_object_t value);
 void	mac_ipq_label_associate(struct mbuf *fragment, struct ipq *ipq);
 int	mac_ipq_label_compare(struct mbuf *fragment, struct ipq *ipq);
 void	mac_ipq_label_destroy(struct ipq *ipq);
@@ -534,11 +531,13 @@ int	mac_vnode_check_setowner(vfs_context_t ctx, struct vnode *vp,
 int	mac_vnode_check_setutimes(vfs_context_t ctx, struct vnode *vp,
 	    struct timespec atime, struct timespec mtime);
 int	mac_vnode_check_signature(struct vnode *vp,
-		struct cs_blob *cs_blob, struct image_params *imgp,
-		unsigned int *cs_flags, unsigned int *signer_type,
-		int flags);
+	    struct cs_blob *cs_blob, struct image_params *imgp,
+	    unsigned int *cs_flags, unsigned int *signer_type,
+	    int flags);
 int	mac_vnode_check_stat(vfs_context_t ctx,
 	    kauth_cred_t file_cred, struct vnode *vp);
+int	mac_vnode_check_trigger_resolve(vfs_context_t ctx, struct vnode *dvp,
+	    struct componentname *cnp);
 int	mac_vnode_check_truncate(vfs_context_t ctx,
 	    kauth_cred_t file_cred, struct vnode *vp);
 int	mac_vnode_check_uipc_bind(vfs_context_t ctx, struct vnode *dvp,

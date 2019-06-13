@@ -51,7 +51,7 @@
 
 #ifdef ATOMIC_PRIVATE
 
-static boolean_t
+static inline boolean_t
 atomic_compare_exchange(uintptr_t *target, uintptr_t oldval, uintptr_t newval,
 			enum memory_order ord, boolean_t wait)
 {
@@ -59,22 +59,14 @@ atomic_compare_exchange(uintptr_t *target, uintptr_t oldval, uintptr_t newval,
 	return __c11_atomic_compare_exchange_strong((_Atomic uintptr_t *)target, &oldval, newval, ord, memory_order_relaxed);
 }
 
+static inline boolean_t
+atomic_compare_exchange32(uint32_t *target, uint32_t oldval, uint32_t newval,
+			enum memory_order ord, boolean_t wait)
+{
+	(void)wait;
+	return __c11_atomic_compare_exchange_strong((_Atomic uint32_t *)target, &oldval, newval, ord, memory_order_relaxed);
+}
+
 #endif // ATOMIC_PRIVATE
-
-#define os_atomic_rmw_loop(p, ov, nv, m, ...)  ({ \
-		bool _result = false; \
-		typeof(p) _p = (p); \
-		ov = atomic_load_explicit(_p, memory_order_relaxed); \
-		do { \
-			__VA_ARGS__; \
-			typeof(ov) _r = (ov); \
-			_result = atomic_compare_exchange_weak_explicit(_p, &_r, nv, \
-					memory_order_##m, memory_order_relaxed); \
-			(ov) = _r; \
-		} while (__builtin_expect(!_result, 0)); \
-		_result; \
-	})
-
-#define os_atomic_rmw_loop_give_up(expr) ({ expr; __builtin_trap(); })
 
 #endif // _I386_ATOMIC_H_

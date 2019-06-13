@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -74,6 +74,7 @@
 #include <sys/syslog.h>
 #include <sys/queue.h>
 #include <sys/mcache.h>
+#include <sys/priv.h>
 #include <sys/protosw.h>
 #include <sys/kernel.h>
 #include <kern/locks.h>
@@ -91,6 +92,7 @@
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
+#include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet/in_arp.h>
 
@@ -1485,8 +1487,14 @@ create:
 done:
 	if (rt != NULL) {
 		RT_LOCK_ASSERT_NOTHELD(rt);
-		if (rtp && !error)
-			*rtp = rt;
+		if (!error) {
+			/* Enqueue event to refresh flow route entries */
+			route_event_enqueue_nwk_wq_entry(rt, NULL, ROUTE_ENTRY_REFRESH, NULL, FALSE);
+			if (rtp)
+				*rtp = rt;
+			else
+				rtfree_locked(rt);
+		}
 		else
 			rtfree_locked(rt);
 	}
@@ -1676,6 +1684,16 @@ ifa_ifwithroute_common_locked(int flags, const struct sockaddr *dst,
 	 */
 	if ((flags & RTF_IFSCOPE) &&
 	    ifa != NULL && ifa->ifa_ifp->if_index != ifscope) {
+		IFA_REMREF(ifa);
+		ifa = NULL;
+	}
+
+	/*
+	 * ifa's address family must match destination's address family
+	 * after all is said and done.
+	 */
+	if (ifa != NULL &&
+	    ifa->ifa_addr->sa_family != dst->sa_family) {
 		IFA_REMREF(ifa);
 		ifa = NULL;
 	}
@@ -1919,6 +1937,9 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 		 * necp client watchers to re-evaluate
 		 */
 		if (SA_DEFAULT(rt_key(rt))) {
+			if (rt->rt_ifp != NULL) {
+				ifnet_touch_lastupdown(rt->rt_ifp);
+			}
 			necp_update_all_clients();
 		}
 #endif /* NECP */
@@ -2228,6 +2249,9 @@ makeroute:
 		 * necp client watchers to re-evaluate
 		 */
 		if (SA_DEFAULT(rt_key(rt))) {
+			if (rt->rt_ifp != NULL) {
+				ifnet_touch_lastupdown(rt->rt_ifp);
+			}
 			necp_update_all_clients();
 		}
 #endif /* NECP */
@@ -3451,8 +3475,15 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 			 * If rmx_mtu is not locked, update it
 			 * to the MTU used by the new interface.
 			 */
-			if (!(rt->rt_rmx.rmx_locks & RTV_MTU))
+			if (!(rt->rt_rmx.rmx_locks & RTV_MTU)) {
 				rt->rt_rmx.rmx_mtu = rt->rt_ifp->if_mtu;
+				if (dst->sa_family == AF_INET &&
+				    INTF_ADJUST_MTU_FOR_CLAT46(rt->rt_ifp)) {
+					rt->rt_rmx.rmx_mtu = IN6_LINKMTU(rt->rt_ifp);
+					/* Further adjust the size for CLAT46 expansion */
+					rt->rt_rmx.rmx_mtu -= CLAT46_HDR_EXPANSION_OVERHD;
+				}
+			}
 
 			/*
 			 * Now ask the protocol to check if it needs
@@ -4364,4 +4395,38 @@ route_event2str(int route_event)
 	return  route_event_str;
 }
 
+int
+route_op_entitlement_check(struct socket *so,
+    kauth_cred_t cred,
+    int route_op_type,
+    boolean_t allow_root)
+{
+	if (so != NULL) {
+		if (route_op_type == ROUTE_OP_READ) {
+			/*
+			 * If needed we can later extend this for more
+			 * granular entitlements and return a bit set of
+			 * allowed accesses.
+			 */
+			if (soopt_cred_check(so, PRIV_NET_RESTRICTED_ROUTE_NC_READ,
+			    allow_root) == 0)
+				return (0);
+			else
+				return (-1);
+		}
+	} else if (cred != NULL) {
+		uid_t uid = kauth_cred_getuid(cred);
 
+		/* uid is 0 for root */
+		if (uid != 0 || !allow_root) {
+			if (route_op_type == ROUTE_OP_READ) {
+				if (priv_check_cred(cred,
+				    PRIV_NET_RESTRICTED_ROUTE_NC_READ, 0) == 0)
+					return (0);
+				else
+					return (-1);
+			}
+		}
+	}
+	return (-1);
+}

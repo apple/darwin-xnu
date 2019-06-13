@@ -721,7 +721,9 @@ typedef integer_t mach_msg_option_t;
 #define MACH_SEND_NODENAP	MACH_SEND_NOIMPORTANCE
 #define MACH_SEND_IMPORTANCE	0x00080000	/* msg carries importance - kernel only */
 #define MACH_SEND_SYNC_OVERRIDE	0x00100000	/* msg should do sync ipc override */
-
+#define MACH_SEND_PROPAGATE_QOS  0x00200000	/* IPC should propagate the caller's QoS */
+#define MACH_SEND_SYNC_USE_THRPRI	MACH_SEND_PROPAGATE_QOS /* obsolete name */
+#define MACH_SEND_KERNEL    0x00400000  /* full send from kernel space - kernel only */
 
 #define MACH_RCV_TIMEOUT	0x00000100	/* timeout value applies to receive */	
 #define MACH_RCV_NOTIFY		0x00000200	/* reserved - legacy */
@@ -740,7 +742,7 @@ typedef integer_t mach_msg_option_t;
  * If more than one thread attempts to MACH_PEEK_MSG on a port or set, one of
  * the threads may miss messages (in fact, it may never wake up).
  */
-#define MACH_PEEK_MSG		0x00100000	/* receive, but leave msgs queued */
+#define MACH_PEEK_MSG		0x80000000	/* receive, but leave msgs queued */
 
 #endif
 
@@ -772,7 +774,7 @@ typedef integer_t mach_msg_option_t;
 #define MACH_SEND_USER (MACH_SEND_MSG | MACH_SEND_TIMEOUT | \
 						MACH_SEND_NOTIFY | MACH_SEND_OVERRIDE | \
 						MACH_SEND_TRAILER | MACH_SEND_NOIMPORTANCE | \
-						MACH_SEND_SYNC_OVERRIDE)
+						MACH_SEND_SYNC_OVERRIDE | MACH_SEND_PROPAGATE_QOS)
 
 #define MACH_RCV_USER (MACH_RCV_MSG | MACH_RCV_TIMEOUT | \
 					   MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY | \
@@ -1016,8 +1018,6 @@ extern kern_return_t		mach_voucher_deallocate(
 
 extern mach_msg_return_t	mach_msg_receive_results(mach_msg_size_t *size);
 
-extern mach_msg_priority_t mach_msg_priority_combine(mach_msg_priority_t msg_qos,
-                                                     mach_msg_priority_t recv_qos);
 #endif	/* KERNEL */
 
 __END_DECLS

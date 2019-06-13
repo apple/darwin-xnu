@@ -100,7 +100,7 @@
 #include <kern/locks.h>
 
 /* XXX should be in a common header somewhere */
-extern void logwakeup(void);
+extern void logwakeup(struct msgbuf *);
 extern void oslogwakeup(void);
 extern void oslog_streamwakeup(void);
 static void oslog_streamwakeup_locked(void);
@@ -117,17 +117,21 @@ extern uint32_t oslog_s_error_count;
 #define LOG_ASYNC	0x04
 #define LOG_RDWAIT	0x08
 
-#define MAX_UNREAD_CHARS (CONFIG_MSG_BSIZE/2)
 /* All globals should be accessed under LOG_LOCK() */
+
+static char amsg_bufc[1024];
+static struct msgbuf aslbuf = {MSG_MAGIC, sizeof (amsg_bufc), 0, 0, amsg_bufc};
+struct msgbuf *aslbufp __attribute__((used)) = &aslbuf;
 
 /* logsoftc only valid while log_open=1 */
 struct logsoftc {
 	int	sc_state;		/* see above for possibilities */
 	struct	selinfo sc_selp;	/* thread waiting for select */
 	int	sc_pgid;		/* process/group for async I/O */
+	struct msgbuf *sc_mbp;
 } logsoftc;
 
-int	log_open;			/* also used in log() */
+static int log_open;
 char smsg_bufc[CONFIG_MSG_BSIZE]; /* static buffer */
 char oslog_stream_bufc[FIREHOSE_CHUNK_SIZE]; /* static buffer */
 struct firehose_chunk_s oslog_boot_buf = {
@@ -140,8 +144,8 @@ struct firehose_chunk_s oslog_boot_buf = {
 	},
 }; /* static buffer */
 firehose_chunk_t firehose_boot_chunk = &oslog_boot_buf;
-struct msgbuf msgbuf = {MSG_MAGIC,sizeof(smsg_bufc),0,0,smsg_bufc};
-struct msgbuf oslog_stream_buf = {MSG_MAGIC,0,0,0,NULL};
+struct msgbuf msgbuf = {MSG_MAGIC, sizeof(smsg_bufc), 0, 0, smsg_bufc};
+struct msgbuf oslog_stream_buf = {MSG_MAGIC, 0, 0, 0, NULL};
 struct msgbuf *msgbufp __attribute__((used)) = &msgbuf;
 struct msgbuf *oslog_streambufp __attribute__((used)) = &oslog_stream_buf;
 
@@ -157,6 +161,9 @@ int	oslog_stream_open = 0;
 int	oslog_stream_buf_size = OSLOG_STREAM_BUF_SIZE;
 int	oslog_stream_num_entries = OSLOG_NUM_STREAM_ENTRIES;
 
+uint8_t __firehose_buffer_kernel_chunk_count = FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT;
+uint8_t __firehose_num_kernel_io_pages = FIREHOSE_BUFFER_KERNEL_DEFAULT_IO_PAGES;
+
 /* oslogsoftc only valid while oslog_open=1 */
 struct oslogsoftc {
 	int	sc_state;		/* see above for possibilities */
@@ -168,7 +175,7 @@ struct oslog_streamsoftc {
 	int	sc_state;		/* see above for possibilities */
 	struct	selinfo sc_selp;	/* thread waiting for select */
 	int	sc_pgid;		/* process/group for async I/O */
-}oslog_streamsoftc;
+} oslog_streamsoftc;
 
 STAILQ_HEAD(, oslog_stream_buf_entry_s) oslog_stream_free_head =
 		STAILQ_HEAD_INITIALIZER(oslog_stream_free_head);
@@ -233,9 +240,7 @@ static void oslog_streamwrite_append_bytes(const char *buffer, int buflen);
 #endif
 
 static int sysctl_kern_msgbuf(struct sysctl_oid *oidp,
-				void *arg1,
-				int arg2,
-				struct sysctl_req *req);
+	void *arg1, int arg2, struct sysctl_req *req);
 
 /*ARGSUSED*/
 int
@@ -245,6 +250,16 @@ logopen(__unused dev_t dev, __unused int flags, __unused int mode, struct proc *
 	if (log_open) {
 		LOG_UNLOCK();
 		return (EBUSY);
+	}
+	if (atm_get_diagnostic_config() & ATM_ENABLE_LEGACY_LOGGING) {
+		logsoftc.sc_mbp = msgbufp;
+	} else {
+		/*
+		 * Support for messagetracer (kern_asl_msg())
+		 * In this mode, /dev/klog exports only ASL-formatted messages
+		 * written into aslbufp via vaddlog().
+		 */
+		logsoftc.sc_mbp = aslbufp;
 	}
 	logsoftc.sc_pgid = p->p_pid;		/* signal process only */
 	log_open = 1;
@@ -408,9 +423,10 @@ logread(__unused dev_t dev, struct uio *uio, int flag)
 {
 	int l;
 	int error = 0;
+	struct msgbuf *mbp = logsoftc.sc_mbp;
 
 	LOG_LOCK();
-	while (msgbufp->msg_bufr == msgbufp->msg_bufx) {
+	while (mbp->msg_bufr == mbp->msg_bufx) {
 		if (flag & IO_NDELAY) {
 			error = EWOULDBLOCK;
 			goto out;
@@ -425,7 +441,7 @@ logread(__unused dev_t dev, struct uio *uio, int flag)
 		 * If the wakeup is missed 
 		 * then wait for 5 sec and reevaluate 
 		 */
-		if ((error = tsleep((caddr_t)msgbufp, LOG_RDPRI | PCATCH,
+		if ((error = tsleep((caddr_t)mbp, LOG_RDPRI | PCATCH,
 				"klog", 5 * hz)) != 0) {
 			/* if it times out; ignore */
 			if (error != EWOULDBLOCK)
@@ -438,23 +454,22 @@ logread(__unused dev_t dev, struct uio *uio, int flag)
 	while (uio_resid(uio) > 0) {
 		int readpos;
 
-		l = msgbufp->msg_bufx - msgbufp->msg_bufr;
+		l = mbp->msg_bufx - mbp->msg_bufr;
 		if (l < 0)
-			l = msgbufp->msg_size - msgbufp->msg_bufr;
+			l = mbp->msg_size - mbp->msg_bufr;
 		l = min(l, uio_resid(uio));
 		if (l == 0)
 			break;
 
-		readpos = msgbufp->msg_bufr;
+		readpos = mbp->msg_bufr;
 		LOG_UNLOCK();
-		error = uiomove((caddr_t)&msgbufp->msg_bufc[readpos],
-			l, uio);
+		error = uiomove((caddr_t)&mbp->msg_bufc[readpos], l, uio);
 		LOG_LOCK();
 		if (error)
 			break;
-		msgbufp->msg_bufr = readpos + l;
-		if (msgbufp->msg_bufr >= msgbufp->msg_size)
-			msgbufp->msg_bufr = 0;
+		mbp->msg_bufr = readpos + l;
+		if (mbp->msg_bufr >= mbp->msg_size)
+			mbp->msg_bufr = 0;
 	}
 out:
 	LOG_UNLOCK();
@@ -588,11 +603,13 @@ oslog_streamread(__unused dev_t dev, struct uio *uio, int flag)
 int
 logselect(__unused dev_t dev, int rw, void * wql, struct proc *p)
 {
+	const struct msgbuf *mbp = logsoftc.sc_mbp;
+
 	switch (rw) {
 
 	case FREAD:
 		LOG_LOCK();	
-		if (msgbufp->msg_bufr != msgbufp->msg_bufx) {
+		if (mbp->msg_bufr != mbp->msg_bufx) {
 			LOG_UNLOCK();
 			return (1);
 		}
@@ -643,10 +660,8 @@ oslog_streamselect(__unused dev_t dev, int rw, void * wql, struct proc *p)
 }
 
 void
-logwakeup(void)
+logwakeup(struct msgbuf *mbp)
 {
-	int pgid;
-
 	/* cf. r24974766 & r25201228*/
 	if (oslog_is_safe() == FALSE) {
 		return;
@@ -657,9 +672,13 @@ logwakeup(void)
 		LOG_UNLOCK();
 		return;
 	}
+	if (NULL == mbp)
+		mbp = logsoftc.sc_mbp;
+	if (mbp != logsoftc.sc_mbp)
+		goto out;
 	selwakeup(&logsoftc.sc_selp);
 	if (logsoftc.sc_state & LOG_ASYNC) {
-		pgid = logsoftc.sc_pgid;
+		int pgid = logsoftc.sc_pgid;
 		LOG_UNLOCK();
 		if (pgid < 0)
 			gsignal(-pgid, SIGIO); 
@@ -668,9 +687,10 @@ logwakeup(void)
 		LOG_LOCK();
 	}
 	if (logsoftc.sc_state & LOG_RDWAIT) {
-		wakeup((caddr_t)msgbufp);
+		wakeup((caddr_t)mbp);
 		logsoftc.sc_state &= ~LOG_RDWAIT;
 	}
+out:
 	LOG_UNLOCK();
 }
 
@@ -719,15 +739,16 @@ int
 logioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __unused struct proc *p)
 {
 	int l;
+	const struct msgbuf *mbp = logsoftc.sc_mbp;
 
 	LOG_LOCK();
 	switch (com) {
 
 	/* return number of characters immediately available */
 	case FIONREAD:
-		l = msgbufp->msg_bufx - msgbufp->msg_bufr;
+		l = mbp->msg_bufx - mbp->msg_bufr;
 		if (l < 0)
-			l += msgbufp->msg_size;
+			l += mbp->msg_size;
 		*(off_t *)data = l;
 		break;
 
@@ -766,7 +787,7 @@ int
 oslogioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __unused struct proc *p)
 {
 	int ret = 0;
-	mach_vm_size_t buffer_size = (FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT * FIREHOSE_CHUNK_SIZE);
+	mach_vm_size_t buffer_size = (__firehose_buffer_kernel_chunk_count * FIREHOSE_CHUNK_SIZE);
 	firehose_buffer_map_info_t map_info = {0, 0};
 	firehose_buffer_t kernel_firehose_buffer = NULL;
 	mach_vm_address_t user_addr = 0;
@@ -791,6 +812,7 @@ oslogioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __un
 					  buffer_size,
 					  0, /*  mask */
 					  VM_FLAGS_ANYWHERE,
+					  VM_MAP_KERNEL_FLAGS_NONE,
 					  VM_KERN_MEMORY_NONE,
 					  mem_entry_ptr,
 					  0, /* offset */
@@ -858,7 +880,18 @@ void
 oslog_init(void)
 {
 	kern_return_t kr;
-	vm_size_t size = FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT * FIREHOSE_CHUNK_SIZE;
+	if (!PE_parse_boot_argn("firehose_chunk_count", &__firehose_buffer_kernel_chunk_count, sizeof(__firehose_buffer_kernel_chunk_count))) {
+		__firehose_buffer_kernel_chunk_count = FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT;
+	}
+	if (!PE_parse_boot_argn("firehose_io_pages", &__firehose_num_kernel_io_pages, sizeof(__firehose_num_kernel_io_pages))) {
+		__firehose_num_kernel_io_pages = FIREHOSE_BUFFER_KERNEL_DEFAULT_IO_PAGES;
+	}
+	if (!__firehose_kernel_configuration_valid(__firehose_buffer_kernel_chunk_count, __firehose_num_kernel_io_pages)) {
+		printf("illegal firehose configuration %u/%u, using defaults\n", __firehose_buffer_kernel_chunk_count, __firehose_num_kernel_io_pages);
+		__firehose_buffer_kernel_chunk_count = FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT;
+		__firehose_num_kernel_io_pages = FIREHOSE_BUFFER_KERNEL_DEFAULT_IO_PAGES;
+	}
+	vm_size_t size = __firehose_buffer_kernel_chunk_count * FIREHOSE_CHUNK_SIZE;
 
 	oslog_lock_init();
 
@@ -873,7 +906,7 @@ oslog_init(void)
 	/* register buffer with firehose */
 	kernel_firehose_addr = (vm_offset_t)__firehose_buffer_create((size_t *) &size);
 
-	kprintf("oslog_init completed\n");
+	printf("oslog_init completed, %u chunks, %u io pages\n", __firehose_buffer_kernel_chunk_count, __firehose_num_kernel_io_pages);
 }
 
 /*
@@ -892,13 +925,10 @@ oslog_init(void)
  *		SMP reentrancy.
  */
 void
-log_putc_locked(char c)
+log_putc_locked(struct msgbuf *mbp, char c)
 {
-	struct msgbuf *mbp;
-
-	mbp = msgbufp; 
 	mbp->msg_bufc[mbp->msg_bufx++] = c;
-	if (mbp->msg_bufx >= msgbufp->msg_size)
+	if (mbp->msg_bufx >= mbp->msg_size)
 		mbp->msg_bufx = 0;
 }
 
@@ -953,7 +983,8 @@ oslog_streamwrite_metadata_locked(oslog_stream_buf_entry_t m_entry)
 	return;
 }
 
-static void oslog_streamwrite_append_bytes(const char *buffer, int buflen)
+static void
+oslog_streamwrite_append_bytes(const char *buffer, int buflen)
 {
 	struct msgbuf *mbp;
 
@@ -1080,7 +1111,7 @@ oslog_streamwrite_locked(firehose_tracepoint_id_u ftid,
  *
  * Returns:	(void)
  *
- * Notes:	This function is used for syingle byte output to the log.  It
+ * Notes:	This function is used for single byte output to the log.  It
  *		primarily exists to maintain binary backward compatibility.
  */
 void
@@ -1088,14 +1119,14 @@ log_putc(char c)
 {
 	int unread_count = 0;
 	LOG_LOCK();
-	log_putc_locked(c);
+	log_putc_locked(msgbufp, c);
 	unread_count = msgbufp->msg_bufx - msgbufp->msg_bufr;
 	LOG_UNLOCK();
 
 	if (unread_count < 0)
 		unread_count = 0 - unread_count;
-	if (c == '\n' || unread_count >= MAX_UNREAD_CHARS)
-		logwakeup();
+	if (c == '\n' || unread_count >= (msgbufp->msg_size / 2))
+		logwakeup(msgbufp);
 }
 
 
@@ -1109,7 +1140,8 @@ log_putc(char c)
  * memory is dynamically allocated. Memory management must already be up.
  */
 int
-log_setsize(int size) {
+log_setsize(int size)
+{
 	char *new_logdata;
 	int new_logsize, new_bufr, new_bufx;
 	char *old_logdata;
@@ -1210,12 +1242,13 @@ void oslog_setsize(int size)
 	printf("oslog_setsize: new buffer size = %d, new num entries= %d\n", oslog_stream_buf_size, oslog_stream_num_entries);
 }
 
-SYSCTL_PROC(_kern, OID_AUTO, msgbuf, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0, sysctl_kern_msgbuf, "I", "");
+SYSCTL_PROC(_kern, OID_AUTO, msgbuf,
+	CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0,
+	sysctl_kern_msgbuf, "I", "");
 
-static int sysctl_kern_msgbuf(struct sysctl_oid *oidp __unused,
-							  void *arg1 __unused,
-							  int arg2 __unused,
-							  struct sysctl_req *req)
+static int
+sysctl_kern_msgbuf(struct sysctl_oid *oidp __unused,
+	void *arg1 __unused, int arg2 __unused, struct sysctl_req *req)
 {
 	int old_bufsize, bufsize;
 	int error;
@@ -1241,7 +1274,8 @@ static int sysctl_kern_msgbuf(struct sysctl_oid *oidp __unused,
  * It returns as much data still in the buffer as possible.
  */
 int
-log_dmesg(user_addr_t buffer, uint32_t buffersize, int32_t * retval) {
+log_dmesg(user_addr_t buffer, uint32_t buffersize, int32_t * retval)
+{
 	uint32_t i;
 	uint32_t localbuff_size;
 	int error = 0, newl, skip;
@@ -1314,3 +1348,46 @@ log_dmesg(user_addr_t buffer, uint32_t buffersize, int32_t * retval) {
 	return (error);
 }
 
+#ifdef CONFIG_XNUPOST
+
+uint32_t find_pattern_in_buffer(char * pattern, uint32_t len, int expected_count);
+
+/*
+ * returns count of pattern found in systemlog buffer.
+ * stops searching further if count reaches expected_count.
+ */
+uint32_t
+find_pattern_in_buffer(char * pattern, uint32_t len, int expected_count)
+{
+	int match_count = 0;
+	int i           = 0;
+	int j           = 0;
+	int no_match    = 0;
+	int pos         = 0;
+	char ch         = 0;
+
+	if (pattern == NULL || len == 0 || expected_count == 0) {
+		return 0;
+	}
+
+	for (i = 0; i < msgbufp->msg_size; i++) {
+		no_match = 0;
+		for (j = 0; j < (int)len; j++) {
+			pos = (msgbufp->msg_bufx + i + j) % msgbufp->msg_size;
+			ch  = msgbufp->msg_bufc[pos];
+			if (ch != pattern[j]) {
+				no_match = 1;
+				break;
+			}
+		}
+		if (no_match == 0) {
+			match_count++;
+			if (match_count >= expected_count) {
+				break;
+			}
+		}
+	}
+	return match_count;
+}
+
+#endif

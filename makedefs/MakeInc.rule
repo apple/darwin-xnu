@@ -112,7 +112,7 @@ $(3)/.UNIFDEF_FLAGS: ALWAYS | $(3)_MKDIR
 	$$(_v)$$(REPLACECONTENTS) $$@ $$(UNIFDEF) $(4)
 
 $(1): $(dir $(firstword $(1)))% : $(if $(2),%,$$(SOURCE)/%) | $(3)_MKDIR
-	@echo "$$(ColorH)INSTALLHDR$(Color0)    $$(ColorF)$$*$$(Color0)"
+	@echo "$$(ColorH)INSTALLHDR$$(Color0)    $$(ColorF)$$*$$(Color0)"
 	$$(_v)$$(UNIFDEF) $(4) $$< > ./$(3)/$$*.unifdef.$$$$$$$$;	\
 	if [ $$$$? -eq 2 ]; then						\
 		echo Parse failure for $$<;				\
@@ -124,6 +124,43 @@ $(1): $(dir $(firstword $(1)))% : $(if $(2),%,$$(SOURCE)/%) | $(3)_MKDIR
 		$$(INSTALL) $$(INSTALL_FLAGS) ./$(3)/$$*.unifdef.$$$$$$$$ $$@ || exit 1;	\
 	fi;								\
 	$$(RM) ./$(3)/$$*.unifdef.$$$$$$$$ ./$(3)/$$*.strip.$$$$$$$$
+endef
+
+# $(1) is the list of install paths
+# $(2) is the source path pattern (using % to match with $(5)) or source file
+# $(3) is the local temp directory for processing
+# $(4) is the unifdef flags
+# $(5) is the destination directory (when pattern matching) or empty
+#
+# $$$$$$$$ is a double-escaped "$$" to represent the current pid
+# of the shell process for creating uniquely named temporary files
+
+define INSTALLPYTHON_RULE_template
+
+.PHONY: $(3)_MKDIR
+
+$(3)_MKDIR:
+	$$(_v)$$(MKDIR) ./$(3)
+
+# Rebuild if unifdef flags change
+$(1): $(3)/.UNIFDEF_FLAGS
+$(3)/.UNIFDEF_FLAGS: ALWAYS | $(3)_MKDIR
+	$$(_v)$$(REPLACECONTENTS) $$@ $$(UNIFDEF) -t $(4)
+
+$(1): $(5)% : $(2) | $(3)_MKDIR
+	@echo "$$(ColorH)INSTALLPY$$(Color0)    $$(ColorF)$$*$$(Color0)"
+	$$(_v)$$(MKDIR) $$(dir $$@) $$(dir ./$(3)/$$*)
+	$$(_v)$$(UNIFDEF) -t $(4) $$< > ./$(3)/$$*.unifdef.$$$$$$$$$$(suffix $$*); \
+	if [ $$$$? -eq 2 ]; then						\
+		echo Parse failure for $$<;				\
+		exit 1;							\
+	fi;								\
+	$$(INSTALL) $$(DATA_INSTALL_FLAGS) \
+		./$(3)/$$*.unifdef.$$$$$$$$$$(suffix $$*) $$@ || exit 1; \
+	$$(PYTHON) $$(LLDBMACROS_SOURCE)/core/syntax_checker.py \
+		./$(3)/$$*.unifdef.$$$$$$$$$$(suffix $$*) $$(_vstdout) || exit 1; \
+	$$(RM) ./$(3)/$$*.unifdef.$$$$$$$$$$(suffix $$*)
+	$$(_v)if [ -n "$(5)" ]; then $$(TOUCH) "$(5)"; fi
 endef
 
 #

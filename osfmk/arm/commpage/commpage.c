@@ -36,6 +36,7 @@
  *	File:		arm/commpage/commpage.c
  *	Purpose:	Set up and export a RO/RW page
  */
+#include <libkern/section_keywords.h>
 #include <mach/mach_types.h>
 #include <mach/machine.h>
 #include <mach/vm_map.h>
@@ -60,11 +61,13 @@
 static void commpage_init_cpu_capabilities( void );
 static int commpage_cpus( void );
 
-vm_address_t	commPagePtr=0;
-vm_address_t	sharedpage_rw_addr = 0;
-uint32_t	_cpu_capabilities = 0;
+SECURITY_READ_ONLY_LATE(vm_address_t)	commPagePtr=0;
+SECURITY_READ_ONLY_LATE(vm_address_t)	sharedpage_rw_addr = 0;
+SECURITY_READ_ONLY_LATE(uint32_t)	_cpu_capabilities = 0;
 
-extern int	gARMv81Atomics; /* For sysctl access from BSD side */
+/* For sysctl access from BSD side */
+extern int	gARMv81Atomics;
+extern int	gARMv8Crc32;
 
 void
 commpage_populate(
@@ -229,6 +232,12 @@ commpage_cpus( void )
 	return cpus;
 }
 
+vm_address_t
+_get_commpage_priv_address(void)
+{
+	return sharedpage_rw_addr;
+}
+
 /*
  * Initialize _cpu_capabilities vector
  */
@@ -263,22 +272,16 @@ commpage_init_cpu_capabilities( void )
 	bits |= (cpus << kNumCPUsShift);
 
 	bits |= kFastThreadLocalStorage;        // TPIDRURO for TLS
+
 #if	__ARM_VFP__
 	bits |= kHasVfp;
-#if	(__ARM_VFP__ >= 3)
-	bits |= kHasNeon;
-
-#if defined(__arm64__)
-	bits |= kHasNeonHPFP;
-#else
-	boolean_t intr = ml_set_interrupts_enabled(FALSE);
-	unsigned int mvfr1 = get_mvfr1();
-	
-	if (mvfr1 & MVFR_ASIMD_HPFP)
+	arm_mvfp_info_t *mvfp_info = arm_mvfp_info();
+	if (mvfp_info->neon)
+		bits |= kHasNeon;
+	if (mvfp_info->neon_hpfp)
 		bits |= kHasNeonHPFP;
-	(void) ml_set_interrupts_enabled(intr);
-#endif
-#endif
+	if (mvfp_info->neon_fp16)
+		bits |= kHasNeonFP16;
 #endif
 #if defined(__arm64__)
 	bits |= kHasFMA;
@@ -296,9 +299,14 @@ commpage_init_cpu_capabilities( void )
 	bits |= kHasARMv8Crypto;
 #endif
 #ifdef __arm64__
-	if ((__builtin_arm_rsr64("ID_AA64ISAR0_EL1") & ID_AA64ISAR0_EL1_ATOMIC_MASK) == ID_AA64ISAR0_EL1_ATOMIC_8_1) {
+	uint64_t isar0 = __builtin_arm_rsr64("ID_AA64ISAR0_EL1");
+	if ((isar0 & ID_AA64ISAR0_EL1_ATOMIC_MASK) == ID_AA64ISAR0_EL1_ATOMIC_8_1) {
 		bits |= kHasARMv81Atomics;
 		gARMv81Atomics = 1;
+	}
+	if ((isar0 & ID_AA64ISAR0_EL1_CRC32_MASK) == ID_AA64ISAR0_EL1_CRC32_EN) {
+		bits |= kHasARMv8Crc32;
+		gARMv8Crc32 = 1;
 	}
 #endif
 	_cpu_capabilities = bits;
@@ -430,3 +438,42 @@ commpage_update_boottime(uint64_t value)
 #endif /* __arm64__ */
 	}
 }
+
+
+/*
+ * After this counter has incremented, all running CPUs are guaranteed to
+ * have quiesced, i.e. executed serially dependent memory barriers.
+ * This is only tracked for CPUs running in userspace, therefore only useful
+ * outside the kernel.
+ *
+ * Note that you can't know which side of those barriers your read was from,
+ * so you have to observe 2 increments in order to ensure that you saw a
+ * serially dependent barrier chain across all running CPUs.
+ */
+uint64_t
+commpage_increment_cpu_quiescent_counter(void)
+{
+	if (!commPagePtr)
+		return 0;
+
+	uint64_t old_gen;
+
+	_Atomic uint64_t *sched_gen = (_Atomic uint64_t *)(_COMM_PAGE_CPU_QUIESCENT_COUNTER +
+	                                                   _COMM_PAGE_RW_OFFSET);
+	/*
+	 * On 32bit architectures, double-wide atomic load or stores are a CAS,
+	 * so the atomic increment is the most efficient way to increment the
+	 * counter.
+	 *
+	 * On 64bit architectures however, because the update is synchronized by
+	 * the cpu mask, relaxed loads and stores is more efficient.
+	 */
+#if __LP64__
+	old_gen = atomic_load_explicit(sched_gen, memory_order_relaxed);
+	atomic_store_explicit(sched_gen, old_gen + 1, memory_order_relaxed);
+#else
+	old_gen = atomic_fetch_add_explicit(sched_gen, 1, memory_order_relaxed);
+#endif
+	return old_gen;
+}
+

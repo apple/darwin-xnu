@@ -28,11 +28,15 @@
 
 #define MACH__POSIX_C_SOURCE_PRIVATE 1	/* pulls in suitable savearea from
 					 * mach/ppc/thread_status.h */
+#include <arm/caches_internal.h>
 #include <arm/proc_reg.h>
 
 #include <kern/thread.h>
 #include <mach/thread_status.h>
 
+#if __has_include(<ptrauth.h>)
+#include <ptrauth.h>
+#endif
 #include <stdarg.h>
 #include <string.h>
 #include <sys/malloc.h>
@@ -194,6 +198,11 @@ dtrace_getreg(struct regs * savearea, uint_t reg)
 {
 	struct arm_saved_state *regs = (struct arm_saved_state *) savearea;
 
+	if (regs == NULL) {
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+		return (0);
+	}
+
 	if (is_saved_state32(regs)) {
 		// Fix special registers if user is 32 bits
 		switch (reg) {
@@ -231,7 +240,7 @@ dtrace_getustack_common(uint64_t * pcstack, int pcstack_limit, user_addr_t pc,
 			user_addr_t sp)
 {
 	int ret = 0;
-	boolean_t is64bit = proc_is64bit(current_proc());
+	boolean_t is64bit = proc_is64bit_data(current_proc());
 	
 	ASSERT(pcstack == NULL || pcstack_limit > 0);
 
@@ -359,7 +368,7 @@ void
 dtrace_getufpstack(uint64_t * pcstack, uint64_t * fpstack, int pcstack_limit)
 {
 	thread_t        thread = current_thread();
-	boolean_t       is64bit = proc_is64bit(current_proc());
+	boolean_t       is64bit = proc_is64bit_data(current_proc());
 	savearea_t      *regs;
 	user_addr_t     pc, sp;
 	volatile        uint16_t  *flags = (volatile uint16_t *) & cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
@@ -608,7 +617,11 @@ dtrace_getarg(int arg, int aframes, dtrace_mstate_t *mstate, dtrace_vstate_t *vs
 
 	for (i = 1; i <= aframes; ++i) {
 		fp = fp->backchain;
+#if __has_feature(ptrauth_returns)
+		pc = (uintptr_t)ptrauth_strip((void*)fp->retaddr, ptrauth_key_return_address);
+#else
 		pc = fp->retaddr;
+#endif
 
 		if (dtrace_invop_callsite_pre != NULL
 		    && pc >  (uintptr_t) dtrace_invop_callsite_pre
@@ -628,7 +641,7 @@ dtrace_getarg(int arg, int aframes, dtrace_mstate_t *mstate, dtrace_vstate_t *vs
 			} else {
 				/* the argument will be found in the stack */
 				fp = (struct frame*) saved_state->sp;
-				stack = (uintptr_t*) &fp[1]; 
+				stack = (uintptr_t*) &fp[1];
 				arg -= (inreg + 1);
 			}
 
@@ -692,5 +705,14 @@ dtrace_toxic_ranges(void (*func)(uintptr_t base, uintptr_t limit))
 	func(0x0, VM_MIN_KERNEL_ADDRESS);
 	if (VM_MAX_KERNEL_ADDRESS < ~(uintptr_t)0)
 			func(VM_MAX_KERNEL_ADDRESS + 1, ~(uintptr_t)0);
+}
+
+void dtrace_flush_caches(void)
+{
+	/* TODO There were some problems with flushing just the cache line that had been modified.
+	 * For now, we'll flush the entire cache, until we figure out how to flush just the patched block.
+	 */
+	FlushPoU_Dcache();
+	InvalidatePoU_Icache();
 }
 

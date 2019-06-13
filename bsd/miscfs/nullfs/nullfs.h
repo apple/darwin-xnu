@@ -142,6 +142,8 @@ int null_getnewvnode(
     struct mount * mp, struct vnode * lowervp, struct vnode * dvp, struct vnode ** vpp, struct componentname * cnp, int root);
 void null_hashrem(struct null_node * xp);
 
+int nullfs_getbackingvnode(vnode_t in_vp, vnode_t* out_vpp);
+
 #define NULLVPTOLOWERVP(vp) (VTONULL(vp)->null_lowervp)
 #define NULLVPTOLOWERVID(vp) (VTONULL(vp)->null_lowervid)
 #define NULLVPTOMYVID(vp) (VTONULL(vp)->null_myvid)
@@ -149,9 +151,6 @@ void null_hashrem(struct null_node * xp);
 extern struct vnodeopv_desc nullfs_vnodeop_opv_desc;
 
 extern vop_t * nullfs_vnodeop_p;
-
-// int     nullfs_install_filesys(void);
-// int     nullfs_uninstall_filesys(void);
 
 __END_DECLS
 

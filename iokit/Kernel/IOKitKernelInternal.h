@@ -38,6 +38,7 @@ __BEGIN_DECLS
 #include <mach/memory_object_types.h>
 #include <device/device_port.h>
 #include <IOKit/IODMACommand.h>
+#include <IOKit/IOKitServer.h>
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -97,16 +98,6 @@ IOMemoryMapTracking(IOTrackingUser * tracking, task_t * task,
 
 extern vm_size_t debug_iomallocpageable_size;
 
-// osfmk/device/iokit_rpc.c
-extern kern_return_t IOMapPages(vm_map_t map, mach_vm_address_t va, mach_vm_address_t pa,
-                                 mach_vm_size_t length, unsigned int mapFlags);
-extern kern_return_t IOUnmapPages(vm_map_t map, mach_vm_address_t va, mach_vm_size_t length);
-
-extern kern_return_t IOProtectCacheMode(vm_map_t map, mach_vm_address_t va,
-					mach_vm_size_t length, unsigned int mapFlags);
-
-extern ppnum_t IOGetLastPageNumber(void);
-
 extern ppnum_t gIOLastPage;
 
 extern IOSimpleLock * gIOPageAllocLock;
@@ -140,10 +131,10 @@ struct IODMACommandInternal
     UInt8  fPrepared;
     UInt8  fDoubleBuffer;
     UInt8  fNewMD;
-    UInt8  fLocalMapper;
     UInt8  fLocalMapperAllocValid;
     UInt8  fIOVMAddrValid;
     UInt8  fForceDoubleBuffer;
+    UInt8  fSetActiveNoMapper;
 
     vm_page_t fCopyPageAlloc;
     vm_page_t fCopyNext;
@@ -222,6 +213,9 @@ extern OSSet * gIORemoveOnReadProperties;
 extern "C" void IOKitInitializeTime( void );
 
 extern "C" OSString * IOCopyLogNameForPID(int pid);
+
+extern "C" void IOKitKernelLogBuffer(const char * title, const void * buffer, size_t size,
+                          void (*output)(const char *format, ...));
 
 #if defined(__i386__) || defined(__x86_64__)
 #ifndef __cplusplus

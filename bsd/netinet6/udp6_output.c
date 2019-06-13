@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -136,6 +136,10 @@
 
 #include <net/net_osdep.h>
 
+#if CONTENT_FILTER
+#include <net/content_filter.h>
+#endif /* CONTENT_FILTER */
+
 /*
  * UDP protocol inplementation.
  * Per RFC 768, August, 1980.
@@ -161,12 +165,22 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	struct	in6_addr storage;
 	int sotc = SO_TC_UNSPEC;
 	int netsvctype = _NET_SERVICE_TYPE_UNSPEC;
-	struct ip6_out_args ip6oa =
-	    { IFSCOPE_NONE, { 0 }, IP6OAF_SELECT_SRCIF, 0, 0, 0 };
+	struct ip6_out_args ip6oa;
 	struct flowadv *adv = &ip6oa.ip6oa_flowadv;
 	struct socket *so = in6p->in6p_socket;
 	struct route_in6 ro;
 	int flowadv = 0;
+#if CONTENT_FILTER
+	struct m_tag *cfil_tag = NULL;
+	bool cfil_faddr_use = false;
+	uint32_t cfil_so_state_change_cnt = 0;
+	struct sockaddr *cfil_faddr = NULL;
+	struct sockaddr_in6 *cfil_sin6 = NULL;
+#endif
+
+	bzero(&ip6oa, sizeof(ip6oa));
+	ip6oa.ip6oa_boundif = IFSCOPE_NONE;
+	ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF;
 
 	/* Enable flow advisory only when connected */
 	flowadv = (so->so_state & SS_ISCONNECTED) ? 1 : 0;
@@ -188,6 +202,28 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		ip6oa.ip6oa_flags |= IP6OAF_AWDL_UNRESTRICTED;
 	if (INP_INTCOPROC_ALLOWED(in6p))
 		ip6oa.ip6oa_flags |= IP6OAF_INTCOPROC_ALLOWED;
+
+#if CONTENT_FILTER
+	/*
+	 * If socket is subject to UDP Content Filter and no addr is passed in,
+	 * retrieve CFIL saved state from mbuf and use it if necessary.
+	 */
+	if (so->so_cfil_db && !addr6) {
+		cfil_tag = cfil_udp_get_socket_state(m, &cfil_so_state_change_cnt, NULL, &cfil_faddr);
+		if (cfil_tag) {
+			cfil_sin6 = (struct sockaddr_in6 *)(void *)cfil_faddr;
+			if ((so->so_state_change_cnt != cfil_so_state_change_cnt) &&
+				(in6p->in6p_fport != cfil_sin6->sin6_port ||
+				 !IN6_ARE_ADDR_EQUAL(&in6p->in6p_faddr, &cfil_sin6->sin6_addr))) {
+				/*
+				 * Socket is connected but socket state and dest addr/port changed.
+				 * We need to use the saved faddr info.
+				 */
+				cfil_faddr_use = true;
+			}
+		}
+	}
+#endif
 
 	if (control) {
 		sotc = so_tc_from_control(control, &netsvctype);
@@ -281,7 +317,20 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			error = ENOTCONN;
 			goto release;
 		}
-		if (IN6_IS_ADDR_V4MAPPED(&in6p->in6p_faddr)) {
+		laddr = &in6p->in6p_laddr;
+		faddr = &in6p->in6p_faddr;
+		fport = in6p->in6p_fport;
+#if CONTENT_FILTER
+		if (cfil_faddr_use)
+		{
+			faddr = &((struct sockaddr_in6 *)(void *)cfil_faddr)->sin6_addr;
+			fport = ((struct sockaddr_in6 *)(void *)cfil_faddr)->sin6_port;
+
+			/* Do not use cached route */
+			ROUTE_RELEASE(&in6p->in6p_route);
+		}
+#endif
+		if (IN6_IS_ADDR_V4MAPPED(faddr)) {
 			if ((in6p->in6p_flags & IN6P_IPV6_V6ONLY)) {
 				/*
 				 * XXX: this case would happen when the
@@ -297,9 +346,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			} else
 				af = AF_INET;
 		}
-		laddr = &in6p->in6p_laddr;
-		faddr = &in6p->in6p_faddr;
-		fport = in6p->in6p_fport;
+
 	}
 
 	if (in6p->inp_flowhash == 0)
@@ -371,6 +418,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 #if NECP
 		{
 			necp_kernel_policy_id policy_id;
+			necp_kernel_policy_id skip_policy_id;
 			u_int32_t route_rule_id;
 
 			/*
@@ -405,12 +453,12 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 				in6p->inp_policyresult.results.qos_marking_gencount = 0;
 			}
 
-			if (!necp_socket_is_allowed_to_send_recv_v6(in6p, in6p->in6p_lport, fport, laddr, faddr, NULL, &policy_id, &route_rule_id)) {
+			if (!necp_socket_is_allowed_to_send_recv_v6(in6p, in6p->in6p_lport, fport, laddr, faddr, NULL, &policy_id, &route_rule_id, &skip_policy_id)) {
 				error = EHOSTUNREACH;
 				goto release;
 			}
 
-			necp_mark_packet_from_socket(m, in6p, policy_id, route_rule_id);
+			necp_mark_packet_from_socket(m, in6p, policy_id, route_rule_id, skip_policy_id);
 
 			if (net_qos_policy_restricted != 0) {
 				necp_socket_update_qos_marking(in6p, in6p->in6p_route.ro_rt,
@@ -444,6 +492,11 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		m->m_pkthdr.pkt_flags |= (PKTF_FLOW_ID | PKTF_FLOW_LOCALSRC);
 		if (flowadv)
 			m->m_pkthdr.pkt_flags |= PKTF_FLOW_ADV;
+		m->m_pkthdr.tx_udp_pid = so->last_pid;
+		if (so->so_flags & SOF_DELEGATED)
+			m->m_pkthdr.tx_udp_e_pid = so->e_pid;
+		else
+			m->m_pkthdr.tx_udp_e_pid = 0;
 
 		im6o = in6p->in6p_moptions;
 		if (im6o != NULL) {
@@ -520,6 +573,14 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			if (rt->rt_flags & RTF_MULTICAST)
 				rt = NULL;	/* unusable */
 
+#if CONTENT_FILTER
+			/*
+			 * Discard temporary route for cfil case
+			 */
+			if (cfil_faddr_use)
+				rt = NULL;	/* unusable */
+#endif
+			
 			/*
 			 * Always discard the cached route for unconnected
 			 * socket or if it is a multicast route.
@@ -571,5 +632,9 @@ releaseopt:
 			ip6_clearpktopts(optp, -1);
 		m_freem(control);
 	}
+#if CONTENT_FILTER
+	if (cfil_tag)
+		m_tag_free(cfil_tag);
+#endif
 	return (error);
 }

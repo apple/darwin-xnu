@@ -68,7 +68,11 @@ with buffers smaller than this size.
 The data in the buffer is a series of
 .Em dirent
 structures (see
-.Xr dir 5 )
+.Xr dir 5)
+The order of the directory entries vended out via 
+.Fn getdirentries
+is not specified. Some filesystems may return entries in lexicographic sort order
+and others may not. 
 .Pp
 The
 .Fa d_fileno

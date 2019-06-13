@@ -137,6 +137,7 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 	set_ds(NULL_SEG);
 	set_es(NULL_SEG);
 	set_fs(NULL_SEG);
+
 	if (get_gs() != NULL_SEG) {
 		swapgs();		/* switch to user's GS context */
 		set_gs(NULL_SEG);
@@ -158,15 +159,15 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 	/* require 16-byte alignment */
 	assert((pcb_stack_top & 0xF) == 0);
 
-	/* Interrupt stack is pcb */
-	current_ktss64()->rsp0 = pcb_stack_top;
-
+	current_ktss64()->rsp0 = cdp->cpu_desc_index.cdi_sstku;
 	/*
 	 * Top of temporary sysenter stack points to pcb stack.
 	 * Although this is not normally used by 64-bit users,
 	 * it needs to be set in case a sysenter is attempted.
 	 */
 	*current_sstk64() = pcb_stack_top;
+
+	cdp->cd_estack = cpu_shadowp(cdp->cpu_number)->cd_estack = cdp->cpu_desc_index.cdi_sstku;
 
 	if (is_saved_state64(pcb->iss)) {
 
@@ -195,7 +196,6 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 				wrmsr64(MSR_IA32_KERNEL_GS_BASE, pcb->cthread_self);
 			}
 		}
-
 	} else {
 
 		cdp->cpu_task_map = TASK_MAP_32BIT;
@@ -374,7 +374,7 @@ machine_thread_create(
 
 	bzero((char *)pcb->iss, sizeof(x86_saved_state_t));
 
-        if (task_has_64BitAddr(task)) {
+        if (task_has_64Bit_addr(task)) {
 		pcb->iss->flavor = x86_SAVED_STATE64;
 
 		pcb->iss->ss_64.isf.cs = USER64_CS;
@@ -403,9 +403,7 @@ machine_thread_create(
 	 * segment.
 	 */
 	if ((pcb->cthread_desc.access & ACC_P) == 0) {
-		struct real_descriptor  *ldtp;
-		ldtp = (struct real_descriptor *)current_ldt();
-		pcb->cthread_desc = ldtp[sel_idx(USER_DS)];
+		pcb->cthread_desc = *gdt_desc_p(USER_DS);
 	}
 
 	return(KERN_SUCCESS);
@@ -449,7 +447,7 @@ machine_thread_set_tsd_base(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_addr(thread)) {
 		/* check for canonical address, set 0 otherwise  */
 		if (!IS_USERADDR64_CANONICAL(tsd_base))
 			tsd_base = 0ULL;
@@ -461,7 +459,7 @@ machine_thread_set_tsd_base(
 	pcb_t pcb = THREAD_TO_PCB(thread);
 	pcb->cthread_self = tsd_base;
 
-	if (!thread_is_64bit(thread)) {
+	if (!thread_is_64bit_addr(thread)) {
 		/* Set up descriptor for later use */
 		struct real_descriptor desc = {
 			.limit_low = 1,
@@ -480,7 +478,7 @@ machine_thread_set_tsd_base(
 	/* For current thread, make the TSD base active immediately */
 	if (thread == current_thread()) {
 
-		if (thread_is_64bit(thread)) {
+		if (thread_is_64bit_addr(thread)) {
 			cpu_data_t              *cdp;
 
 			mp_disable_preemption();

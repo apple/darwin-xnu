@@ -87,6 +87,7 @@ struct fq_if_classq;
 
 /* Function definitions */
 extern void fq_codel_init(void);
+extern void fq_codel_reap_caches(boolean_t);
 extern fq_t *fq_alloc(classq_pkt_type_t);
 extern void fq_destroy(fq_t *);
 extern int fq_addq(struct fq_codel_sched_data *, pktsched_pkt_t *,

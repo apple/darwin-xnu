@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -350,6 +350,7 @@ STUB(ifnet_get_fastlane_capable);
 STUB(ifnet_get_unsent_bytes);
 STUB(ifnet_get_buffer_status);
 STUB(ifnet_normalise_unsent_data);
+STUB(ifnet_set_low_power_mode);
 STUB(in6_localaddr);
 STUB(in_localaddr);
 STUB(in6addr_local);
@@ -365,7 +366,6 @@ STUB(m_mtod);
 STUB(m_prepend_2);
 STUB(m_pullup);
 STUB(m_split);
-STUB(m_trailingspace);
 STUB(mbuf_get_driver_scratch);
 STUB(mbuf_get_unsent_data_bytes);
 STUB(mbuf_get_buffer_status);
@@ -461,8 +461,8 @@ STUB(sock_socket_internal);
 /*
  * Called from vm_pageout.c. Nothing to be done when there's no networking.
  */
-void m_drain(void);
-void m_drain(void)
+void mbuf_drain(boolean_t);
+void mbuf_drain(boolean_t)
 {
 	return;
 }

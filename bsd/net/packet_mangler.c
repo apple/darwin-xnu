@@ -838,9 +838,7 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 	struct packet_mangler *p_pkt_mnglr = (struct packet_mangler *)cookie;
 	struct ip ip;
 	struct tcphdr tcp;
-	char tcp_opt_buf[TCP_MAX_OPTLEN] = {0};
-	int orig_tcp_optlen;
-	int tcp_optlen = 0;
+	int ip_pld_len;
 	errno_t error = 0;
 
 	if (p_pkt_mnglr == NULL) {
@@ -902,6 +900,8 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 		goto input_done;
 	}
 
+	ip_pld_len = ntohs(ip.ip_len) - (ip.ip_hl << 2);
+
 	if (protocol != p_pkt_mnglr->proto) {
 		PKT_MNGLR_LOG(LOG_INFO, "Skip: Protocol mismatch");
 		goto input_done;
@@ -909,6 +909,11 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 
 	switch (protocol) {
 		case IPPROTO_TCP:
+			if (ip_pld_len < (int) sizeof(tcp)) {
+				PKT_MNGLR_LOG(LOG_ERR, "IP total len not big enough for TCP: %d", ip_pld_len);
+				goto drop_it;
+			}
+
 			error = mbuf_copydata(*data, offset, sizeof(tcp), &tcp);
 			if (error) {
 				PKT_MNGLR_LOG(LOG_ERR, "Could not make local TCP header copy");
@@ -942,20 +947,33 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 	switch (protocol) {
 		case IPPROTO_TCP:
 			if (p_pkt_mnglr->proto_action_mask) {
-				int i = 0;
-				tcp_optlen = (tcp.th_off << 2)-sizeof(struct tcphdr);
+				char tcp_opt_buf[TCP_MAX_OPTLEN] = {0};
+				int orig_tcp_optlen;
+				int tcp_optlen = 0;
+				int i = 0, off;
+
+				off = (tcp.th_off << 2);
+
+				if (off < (int) sizeof(struct tcphdr) || off > ip_pld_len) {
+					PKT_MNGLR_LOG(LOG_ERR, "TCP header offset is wrong: %d", off);
+					goto drop_it;
+				}
+
+
+				tcp_optlen = off - sizeof(struct tcphdr);
+
 				PKT_MNGLR_LOG(LOG_INFO, "Packet from F5 is TCP\n");
 				PKT_MNGLR_LOG(LOG_INFO, "Optlen: %d\n", tcp_optlen);
 				orig_tcp_optlen = tcp_optlen;
 				if (orig_tcp_optlen) {
 					error = mbuf_copydata(*data, offset+sizeof(struct tcphdr), orig_tcp_optlen, tcp_opt_buf);
 					if (error) {
-						PKT_MNGLR_LOG(LOG_ERR, "Failed to copy tcp options");
+						PKT_MNGLR_LOG(LOG_ERR, "Failed to copy tcp options: error %d offset %d optlen %d", error, offset, orig_tcp_optlen);
 						goto input_done;
 					}
 				}
 
-				while (tcp_optlen) {
+				while (tcp_optlen > 0) {
 					if (tcp_opt_buf[i] == 0x1) {
 						PKT_MNGLR_LOG(LOG_INFO, "Skipping NOP\n");
 						tcp_optlen--;
@@ -963,12 +981,18 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 						continue;
 					} else if ((tcp_opt_buf[i] != 0) && (tcp_opt_buf[i] != TCP_OPT_MULTIPATH_TCP)) {
 						PKT_MNGLR_LOG(LOG_INFO, "Skipping option %x\n", tcp_opt_buf[i]);
+
+						/* Minimum TCP option size is 2 */
+						if (tcp_opt_buf[i+1] < 2) {
+							PKT_MNGLR_LOG(LOG_ERR, "Received suspicious TCP option");
+							goto drop_it;
+						}
 						tcp_optlen -= tcp_opt_buf[i+1];
 						i += tcp_opt_buf[i+1];
 						continue;
 					} else if (tcp_opt_buf[i] == TCP_OPT_MULTIPATH_TCP) {
 						int j = 0;
-						int mptcpoptlen = tcp_opt_buf[i+1];
+						unsigned char mptcpoptlen = tcp_opt_buf[i+1];
 						uint8_t sbtver = tcp_opt_buf[i+MPTCP_SBT_VER_OFFSET];
 						uint8_t subtype = sbtver >> 4;
 
@@ -984,7 +1008,7 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 						}
 
 						PKT_MNGLR_LOG(LOG_INFO, "Got MPTCP option %x\n", tcp_opt_buf[i]);
-						for (; j < mptcpoptlen; j++) {
+						for (; j < mptcpoptlen && j < tcp_optlen; j++) {
 							if (p_pkt_mnglr->proto_action_mask &
 							    PKT_MNGLR_TCP_ACT_NOP_MPTCP) {
 								tcp_opt_buf[i+j] = 0x1;
@@ -997,14 +1021,18 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 						i++;
 					}
 				}
-				error = mbuf_copyback(*data,
-				    offset+sizeof(struct tcphdr),
-				    orig_tcp_optlen, tcp_opt_buf, MBUF_WAITOK);
 
-				if (error) {
-					PKT_MNGLR_LOG(LOG_ERR,
-					    "Failed to copy tcp options");
-					goto input_done;
+				if (orig_tcp_optlen) {
+					error = mbuf_copyback(*data,
+					    offset+sizeof(struct tcphdr),
+					    orig_tcp_optlen, tcp_opt_buf, MBUF_WAITOK);
+
+					if (error) {
+						PKT_MNGLR_LOG(LOG_ERR,
+						    "Failed to copy tcp options back: error %d offset %d optlen %d",
+						    error, offset, orig_tcp_optlen);
+						goto input_done;
+					}
 				}
 			}
 			break;
@@ -1040,6 +1068,7 @@ static void chksm_update(mbuf_t data)
 	u_int16_t ip_sum;
 	u_int16_t tsum;
 	struct tcphdr *tcp;
+	errno_t err;
 
 	unsigned char *ptr = (unsigned char *)mbuf_data(data);
 	struct ip *ip = (struct ip *)(void *)ptr;
@@ -1048,16 +1077,17 @@ static void chksm_update(mbuf_t data)
 	}
 
 	ip->ip_sum = 0;
-	mbuf_inet_cksum(data, 0, 0, ip->ip_hl << 2, &ip_sum); // ip sum
-
-	ip->ip_sum = ip_sum;
+	err = mbuf_inet_cksum(data, 0, 0, ip->ip_hl << 2, &ip_sum); // ip sum
+	if (err == 0)
+		ip->ip_sum = ip_sum;
 	switch (ip->ip_p) {
 		case IPPROTO_TCP:
 			tcp = (struct tcphdr *)(void *)(ptr + (ip->ip_hl << 2));
 			tcp->th_sum = 0;
-			mbuf_inet_cksum(data, IPPROTO_TCP, ip->ip_hl << 2,
+			err = mbuf_inet_cksum(data, IPPROTO_TCP, ip->ip_hl << 2,
 			    ntohs(ip->ip_len) - (ip->ip_hl << 2), &tsum);
-			tcp->th_sum = tsum;
+			if (err == 0)
+				tcp->th_sum = tsum;
 			break;
 		case IPPROTO_UDP:
 			/* Don't handle UDP */

@@ -1,0 +1,9 @@
+[.*]
+src:./san/ubsan*
+
+[alignment]
+
+src:./libsa/bootstrap.cpp
+src:./bsd/net/necp_client.c
+src:./pexpert/arm/pe_identify_machine.c
+

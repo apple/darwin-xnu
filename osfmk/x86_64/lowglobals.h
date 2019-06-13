@@ -53,7 +53,7 @@ typedef struct lowglo {
 	uint64_t	lgZero;			/* 0xffffff8000002008 Double constant 0 */
 	uint64_t	lgStext;		/* 0xffffff8000002010 Start of kernel text */
 	uint64_t	lgRsv018;		/* 0xffffff8000002018 Reserved */
-	uint64_t	lgCHUDXNUfnStart;	/* 0xffffff8000002020 CHUD XNU function glue table */
+	uint64_t	lgRsv020;		/* 0xffffff8000002020 Reserved */
 	uint64_t	lgRsv028;		/* 0xffffff8000002028 Reserved */
 	uint64_t	lgVersion;		/* 0xffffff8000002030 Pointer to kernel version string */
 	uint64_t	lgRsv038[280];		/* 0xffffff8000002038 Reserved */

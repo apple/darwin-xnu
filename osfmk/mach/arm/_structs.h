@@ -112,11 +112,58 @@ _STRUCT_ARM_THREAD_STATE64
 	__uint64_t    fp;		/* Frame pointer x29 */
 	__uint64_t    lr;		/* Link register x30 */
 	__uint64_t    sp;		/* Stack pointer x31 */
-	__uint64_t    pc; 		/* Program counter */
+	__uint64_t    pc;		/* Program counter */
 	__uint32_t    cpsr;		/* Current program status register */
 	__uint32_t    __pad;    /* Same size for 32-bit or 64-bit clients */
 };
 #endif /* __DARWIN_UNIX03 */
+#if !defined(KERNEL)
+#if __DARWIN_C_LEVEL >= __DARWIN_C_FULL && defined(__arm64__)
+#if __DARWIN_UNIX03
+#define __darwin_arm_thread_state64_get_pc(ts) \
+		((ts).__pc)
+#define __darwin_arm_thread_state64_get_pc_fptr(ts) \
+		((void*)(uintptr_t)((ts).__pc))
+#define __darwin_arm_thread_state64_set_pc_fptr(ts, fptr) \
+		((ts).__pc = (uintptr_t)(fptr))
+#define __darwin_arm_thread_state64_get_lr(ts) \
+		((ts).__lr)
+#define __darwin_arm_thread_state64_get_lr_fptr(ts) \
+		((void*)(uintptr_t)((ts).__lr))
+#define __darwin_arm_thread_state64_set_lr_fptr(ts, fptr) \
+		((ts).__lr = (uintptr_t)(fptr))
+#define __darwin_arm_thread_state64_get_sp(ts) \
+		((ts).__sp)
+#define __darwin_arm_thread_state64_set_sp(ts, ptr) \
+		((ts).__sp = (uintptr_t)(ptr))
+#define __darwin_arm_thread_state64_get_fp(ts) \
+		((ts).__fp)
+#define __darwin_arm_thread_state64_set_fp(ts, ptr) \
+		((ts).__fp = (uintptr_t)(ptr))
+#else /* !__DARWIN_UNIX03 */
+#define __darwin_arm_thread_state64_get_pc(ts) \
+		((ts).pc)
+#define __darwin_arm_thread_state64_get_pc_fptr(ts) \
+		((void*)(uintptr_t)((ts).pc))
+#define __darwin_arm_thread_state64_set_pc_fptr(ts, fptr) \
+		((ts).pc = (uintptr_t)(fptr))
+#define __darwin_arm_thread_state64_get_lr(ts) \
+		((ts).lr)
+#define __darwin_arm_thread_state64_get_lr_fptr(ts) \
+		((void*)(uintptr_t)((ts).lr))
+#define __darwin_arm_thread_state64_set_lr_fptr(ts, fptr) \
+		((ts).lr = (uintptr_t)(fptr))
+#define __darwin_arm_thread_state64_get_sp(ts) \
+		((ts).sp)
+#define __darwin_arm_thread_state64_set_sp(ts, ptr) \
+		((ts).sp = (uintptr_t)(ptr))
+#define __darwin_arm_thread_state64_get_fp(ts) \
+		((ts).fp)
+#define __darwin_arm_thread_state64_set_fp(ts, ptr) \
+		((ts).fp = (uintptr_t)(ptr))
+#endif /* __DARWIN_UNIX03 */
+#endif /* __DARWIN_C_LEVEL >= __DARWIN_C_FULL && defined(__arm64__) */
+#endif /* !defined(KERNEL) */
 
 #if __DARWIN_UNIX03
 #define _STRUCT_ARM_VFP_STATE		struct __darwin_arm_vfp_state

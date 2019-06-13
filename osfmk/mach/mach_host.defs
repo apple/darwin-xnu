@@ -214,7 +214,12 @@ routine mach_memory_object_memory_entry_64(
 /*
  *	Return statistics from this host.
  */
-routine host_statistics(
+routine
+#ifdef KERNEL_SERVER
+host_statistics_from_user(
+#else
+host_statistics(
+#endif
 		host_priv	: host_t;
 		flavor		: host_flavor_t;
 	out	host_info_out	: host_info_t, CountInOut);
@@ -232,7 +237,12 @@ routine host_lockgroup_info(
 /*
  *	Return 64-bit statistics from this host.
  */
-routine host_statistics64(
+routine
+#ifdef KERNEL_SERVER
+host_statistics64_from_user(
+#else
+host_statistics64(
+#endif
 		host_priv	: host_t;
 		flavor		: host_flavor_t;
 	out	host_info64_out	: host_info64_t, CountInOut);
@@ -341,5 +351,55 @@ routine host_check_multiuser_mode(
 #else
 skip;
 #endif // !KERNEL && LIBSYSCALL_INTERFACE
+
+/*
+ * Returns information about a specific zone.
+ * The zone name is passed in via the argument name,
+ * info returns the zone info.
+ */
+routine mach_zone_info_for_zone(
+		host		: host_priv_t;
+		name		: mach_zone_name_t;
+	out	info		: mach_zone_info_t);
+
+#ifdef PRIVATE
+/*
+ * Returns information about the largest zone.
+ * name returns the zone name, info returns the zone info.
+ */
+routine mach_zone_info_for_largest_zone(
+		host		: host_priv_t;
+	out	name		: mach_zone_name_t;
+	out	info		: mach_zone_info_t);
+#else
+skip;
+#endif
+
+#ifdef PRIVATE
+/*
+ * Returns names of zones that have zlog enabled.
+ */
+routine mach_zone_get_zlog_zones(
+		host		: host_priv_t;
+	out	names		: mach_zone_name_array_t,
+					Dealloc);
+#else
+skip;
+#endif
+
+#ifdef PRIVATE
+/*
+ * Returns BTLog records for a specific zone.
+ * The zone name is passed in via the argument name,
+ * recs returns an array of zone_btrecord_t's.
+ */
+routine mach_zone_get_btlog_records(
+		host		: host_priv_t;
+		name		: mach_zone_name_t;
+	out	recs		: zone_btrecord_array_t,
+					Dealloc);
+#else
+skip;
+#endif
 
 /* vim: set ft=c : */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1259,7 +1259,7 @@ after_sack_rexmit:
 	 * space. So we have to be able to go backwards and announce a smaller
 	 * window.
 	 */
-	if (!(so->so_flags & SOF_MPTCP_TRUE) &&
+	if (!(so->so_flags & SOF_MP_SUBFLOW) &&
 	    recwin < (int32_t)(tp->rcv_adv - tp->rcv_nxt))
 		recwin = (int32_t)(tp->rcv_adv - tp->rcv_nxt);
 
@@ -2287,13 +2287,13 @@ timer:
 		 *
 		 * Every time new data is sent PTO will get reset.
 		 */
-		if (tcp_enable_tlp && tp->t_state == TCPS_ESTABLISHED &&
-		    SACK_ENABLED(tp) && !IN_FASTRECOVERY(tp)
-		    && tp->snd_nxt == tp->snd_max
-		    && SEQ_GT(tp->snd_nxt, tp->snd_una)
-		    && tp->t_rxtshift == 0
-		    && (tp->t_flagsext & (TF_SENT_TLPROBE|TF_PKTS_REORDERED)) == 0) {
-			u_int32_t pto, srtt, new_rto = 0;
+		if (tcp_enable_tlp && len != 0 && tp->t_state == TCPS_ESTABLISHED &&
+		    SACK_ENABLED(tp) && !IN_FASTRECOVERY(tp) &&
+		    tp->snd_nxt == tp->snd_max &&
+		    SEQ_GT(tp->snd_nxt, tp->snd_una) &&
+		    tp->t_rxtshift == 0 &&
+		    (tp->t_flagsext & (TF_SENT_TLPROBE|TF_PKTS_REORDERED)) == 0) {
+			u_int32_t pto, srtt;
 
 			/*
 			 * Using SRTT alone to set PTO can cause spurious
@@ -2311,21 +2311,9 @@ timer:
 				pto = max(10, pto);
 
 			/* if RTO is less than PTO, choose RTO instead */
-			if (tp->t_rxtcur < pto) {
-				/*
-				 * Schedule PTO instead of RTO in favor of
-				 * fast recovery.
-				 */
+			if (tp->t_rxtcur < pto)
 				pto = tp->t_rxtcur;
 
-				/* Reset the next RTO to be after PTO. */
-				TCPT_RANGESET(new_rto,
-				    (pto + TCP_REXMTVAL(tp)),
-				    max(tp->t_rttmin, tp->t_rttcur + 2),
-				    TCPTV_REXMTMAX, 0);
-				tp->t_timer[TCPT_REXMT] =
-				    OFFSET_FROM_START(tp, new_rto);
-			}
 			tp->t_timer[TCPT_PTO] = OFFSET_FROM_START(tp, pto);
 		}
 	} else {
@@ -2412,13 +2400,14 @@ timer:
 #if NECP
 	{
 		necp_kernel_policy_id policy_id;
+		necp_kernel_policy_id skip_policy_id;
 		u_int32_t route_rule_id;
-		if (!necp_socket_is_allowed_to_send_recv(inp, &policy_id, &route_rule_id)) {
+		if (!necp_socket_is_allowed_to_send_recv(inp, &policy_id, &route_rule_id, &skip_policy_id)) {
 			m_freem(m);
 			error = EHOSTUNREACH;
 			goto out;
 		}
-		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id);
+		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id, skip_policy_id);
 
 		if (net_qos_policy_restricted != 0) {
 			necp_socket_update_qos_marking(inp, inp->inp_route.ro_rt,
@@ -2445,6 +2434,11 @@ timer:
 	m->m_pkthdr.pkt_flowid = inp->inp_flowhash;
 	m->m_pkthdr.pkt_flags |= (PKTF_FLOW_ID | PKTF_FLOW_LOCALSRC | PKTF_FLOW_ADV);
 	m->m_pkthdr.pkt_proto = IPPROTO_TCP;
+	m->m_pkthdr.tx_tcp_pid = so->last_pid;
+	if (so->so_flags & SOF_DELEGATED)
+		m->m_pkthdr.tx_tcp_e_pid = so->e_pid;
+	else
+		m->m_pkthdr.tx_tcp_e_pid = 0;
 
 	m->m_nextpkt = NULL;
 
@@ -2607,9 +2601,14 @@ out:
 		TCP_PKTLIST_CLEAR(tp);
 
 		if (error == ENOBUFS) {
+			/*
+			 * Set retransmit timer if not currently set
+			 * when we failed to send a segment that can be
+			 * retransmitted (i.e. not pure ack or rst)
+			 */
 			if (!tp->t_timer[TCPT_REXMT] &&
 			    !tp->t_timer[TCPT_PERSIST] &&
-			    (SEQ_GT(tp->snd_max, tp->snd_una) ||
+			    (len != 0 || (flags & (TH_SYN | TH_FIN)) != 0 ||
 			    so->so_snd.sb_cc > 0))
 				tp->t_timer[TCPT_REXMT] =
 					OFFSET_FROM_START(tp, tp->t_rxtcur);
@@ -2677,16 +2676,25 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 	boolean_t unlocked = FALSE;
 	boolean_t ifdenied = FALSE;
 	struct inpcb *inp = tp->t_inpcb;
-	struct ip_out_args ipoa =
-	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF|IPOAF_BOUND_SRCADDR, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip_out_args ipoa;
 	struct route ro;
 	struct ifnet *outif = NULL;
+
+	bzero(&ipoa, sizeof(ipoa));
+	ipoa.ipoa_boundif = IFSCOPE_NONE;
+	ipoa.ipoa_flags = IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR;
+	ipoa.ipoa_sotc = SO_TC_UNSPEC;
+	ipoa.ipoa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 #if INET6
-	struct ip6_out_args ip6oa =
-	    { IFSCOPE_NONE, { 0 }, IP6OAF_SELECT_SRCIF|IP6OAF_BOUND_SRCADDR, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip6_out_args ip6oa;
 	struct route_in6 ro6;
+
+	bzero(&ip6oa, sizeof(ip6oa));
+	ip6oa.ip6oa_boundif = IFSCOPE_NONE;
+	ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR;
+	ip6oa.ip6oa_sotc = SO_TC_UNSPEC;
+	ip6oa.ip6oa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
+
 	struct flowadv *adv =
 	    (isipv6 ? &ip6oa.ip6oa_flowadv : &ipoa.ipoa_flowadv);
 #else /* INET6 */

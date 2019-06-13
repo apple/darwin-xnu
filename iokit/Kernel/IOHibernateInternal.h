@@ -53,9 +53,11 @@ struct IOHibernateVars
     uint8_t *				consoleMapping;
     uint8_t				haveFastBoot;
     uint8_t				saveBootAudioVolume;
+    uint8_t				hwEncrypt;
     uint8_t				wiredCryptKey[kIOHibernateAESKeySize / 8];
     uint8_t				cryptKey[kIOHibernateAESKeySize / 8];
-    uint8_t				volumeCryptKey[kIOHibernateAESKeySize / 8];
+    size_t				volumeCryptKeySize;
+    uint8_t				volumeCryptKey[64];
 };
 typedef struct IOHibernateVars IOHibernateVars;
 

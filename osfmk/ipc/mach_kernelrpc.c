@@ -269,6 +269,44 @@ done:
 }
 
 int
+_kernelrpc_mach_port_get_attributes_trap(struct _kernelrpc_mach_port_get_attributes_args *args)
+{
+	task_inspect_t task = port_name_to_task_inspect(args->target);
+	int rv = MACH_SEND_INVALID_DEST;
+	mach_msg_type_number_t count;
+
+	if (task != current_task())
+		goto done;
+
+	// MIG does not define the type or size of the mach_port_info_t out array
+	// anywhere, so derive them from the field in the generated reply struct
+#define MACH_PORT_INFO_OUT (((__Reply__mach_port_get_attributes_t*)NULL)->port_info_out)
+#define MACH_PORT_INFO_STACK_LIMIT 80 // current size is 68 == 17 * sizeof(integer_t)
+	_Static_assert(sizeof(MACH_PORT_INFO_OUT) < MACH_PORT_INFO_STACK_LIMIT,
+			"mach_port_info_t has grown significantly, reevaluate stack usage");
+	const mach_msg_type_number_t max_count = (sizeof(MACH_PORT_INFO_OUT)/sizeof(MACH_PORT_INFO_OUT[0]));
+	typeof(MACH_PORT_INFO_OUT[0]) info[max_count];
+
+	if (copyin(CAST_USER_ADDR_T(args->count), &count, sizeof(count))) {
+		rv = MACH_SEND_INVALID_DATA;
+		goto done;
+	}
+	if (count > max_count)
+		count = max_count;
+
+	rv = mach_port_get_attributes(task->itk_space, args->name, args->flavor, info, &count);
+	if (rv == KERN_SUCCESS)
+		rv = copyout(&count, CAST_USER_ADDR_T(args->count), sizeof(count));
+	if (rv == KERN_SUCCESS && count > 0)
+		rv = copyout(info, CAST_USER_ADDR_T(args->info), count * sizeof(info[0]));
+
+done:
+	if (task)
+		task_deallocate(task);
+	return (rv);
+}
+
+int
 _kernelrpc_mach_port_insert_member_trap(struct _kernelrpc_mach_port_insert_member_args *args)
 {
 	task_t task = port_name_to_task(args->target);
@@ -487,7 +525,8 @@ mach_voucher_extract_attr_recipe_trap(struct mach_voucher_extract_attr_recipe_ar
 		kfree(krecipe, (vm_size_t)max_sz);
 	}
 
-	kr = copyout(&sz, args->recipe_size, sizeof(sz));
+	if (kr == KERN_SUCCESS)
+		kr = copyout(&sz, args->recipe_size, sizeof(sz));
 
 done:
 	ipc_voucher_release(voucher);

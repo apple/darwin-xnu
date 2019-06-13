@@ -66,7 +66,7 @@ protected:
   ipi_handler_t          ipi_handler;
 
   struct ExpansionData { };
-  ExpansionData *reserved;
+  ExpansionData *iocpu_reserved;
 
   virtual void           setCPUNumber(UInt32 cpuNumber);
   virtual void           setCPUState(UInt32 cpuState);
@@ -110,7 +110,7 @@ extern "C" kern_return_t IOCPURunPlatformQuiesceActions(void);
 extern "C" kern_return_t IOCPURunPlatformActiveActions(void);
 extern "C" kern_return_t IOCPURunPlatformHaltRestartActions(uint32_t message);
 extern "C" kern_return_t IOCPURunPlatformPanicActions(uint32_t message);
-extern "C" kern_return_t IOCPURunPlatformPanicSyncAction(void *addr, size_t len);
+extern "C" kern_return_t IOCPURunPlatformPanicSyncAction(void *addr, uint32_t offset, uint32_t len);
 
 class IOCPUInterruptController : public IOInterruptController
 {
@@ -124,7 +124,7 @@ protected:
   int   numSources;
 
   struct ExpansionData { };
-  ExpansionData *reserved;
+  ExpansionData *iocpuic_reserved;
 
 public:
   virtual IOReturn initCPUInterruptController(int sources);

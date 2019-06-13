@@ -1,0 +1,7 @@
+framework module kdd {
+    header "kcdata.h"
+    module kdd_kdd {
+        requires objc
+        header "kdd.h"
+    }
+}

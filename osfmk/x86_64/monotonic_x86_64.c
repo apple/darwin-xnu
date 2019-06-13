@@ -29,6 +29,7 @@
 #include <i386/cpu_data.h>
 #include <i386/cpuid.h>
 #include <i386/lapic.h>
+#include <i386/mp.h>
 #include <i386/proc_reg.h>
 #include <kern/assert.h> /* static_assert, assert */
 #include <kern/monotonic.h>
@@ -89,7 +90,7 @@ mt_core_snap(unsigned int ctr)
 		return __builtin_ia32_rdpmc(PMC2_RD);
 	default:
 		panic("monotonic: invalid core counter read: %u", ctr);
-		__builtin_trap();
+		__builtin_unreachable();
 	}
 }
 
@@ -112,7 +113,7 @@ mt_core_set_snap(unsigned int ctr, uint64_t count)
 		break;
 	default:
 		panic("monotonic: invalid core counter write: %u", ctr);
-		__builtin_trap();
+		__builtin_unreachable();
 	}
 }
 
@@ -131,7 +132,8 @@ mt_core_set_snap(unsigned int ctr, uint64_t count)
  * Fixed counters are enabled in all rings, so hard-code this register state to
  * enable in all rings and deliver PMIs.
  */
-#define FIXED_CTR_CTRL_INIT (0x888 | 0x333)
+#define FIXED_CTR_CTRL_INIT (0x888)
+#define FIXED_CTR_CTRL_ENABLE (0x333)
 
 /*
  * GLOBAL_CTRL controls which counters are enabled -- the high 32-bits control
@@ -184,7 +186,7 @@ core_up(cpu_data_t *cpu)
 	for (int i = 0; i < MT_CORE_NFIXED; i++) {
 		mt_core_set_snap(i, mtc->mtc_snaps[i]);
 	}
-	wrmsr64(FIXED_CTR_CTRL, FIXED_CTR_CTRL_INIT);
+	wrmsr64(FIXED_CTR_CTRL, FIXED_CTR_CTRL_INIT | FIXED_CTR_CTRL_ENABLE);
 	wrmsr64(GLOBAL_CTRL, GLOBAL_CTRL_FIXED_EN);
 }
 
@@ -208,7 +210,6 @@ mt_pmi_x86_64(x86_saved_state_t *state)
 {
 	uint64_t status;
 	struct mt_cpu *mtc;
-	bool fixed_ovf = false;
 
 	assert(ml_get_interrupts_enabled() == FALSE);
 	mtc = mt_cur_cpu();
@@ -216,18 +217,28 @@ mt_pmi_x86_64(x86_saved_state_t *state)
 
 	(void)atomic_fetch_add_explicit(&mt_pmis, 1, memory_order_relaxed);
 
-	for (int i = 0; i < MT_CORE_NFIXED; i++) {
+	for (unsigned int i = 0; i < MT_CORE_NFIXED; i++) {
 		if (status & CTR_FIX_POS(i)) {
-			fixed_ovf = true;
-			uint64_t prior;
-
-			prior = CTR_MAX - mtc->mtc_snaps[i];
+			uint64_t prior = CTR_MAX - mtc->mtc_snaps[i];
 			assert(prior <= CTR_MAX);
 			prior += 1; /* wrapped */
 
-			mtc->mtc_counts[i] += prior;
-			mtc->mtc_snaps[i] = 0;
-			mt_mtc_update_count(mtc, i);
+			uint64_t delta = mt_mtc_update_count(mtc, i);
+			mtc->mtc_counts[i] += delta;
+
+			if (mt_microstackshots && mt_microstackshot_ctr == i) {
+				x86_saved_state64_t *state64 = saved_state64(state);
+				bool user_mode = (state64->isf.cs & 0x3) ? true : false;
+				KDBG_RELEASE(KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_DEBUG, 1),
+						mt_microstackshot_ctr, user_mode);
+				mt_microstackshot_pmi_handler(user_mode, mt_microstackshot_ctx);
+			} else if (mt_debug) {
+				KDBG(KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_DEBUG, 2),
+						mt_microstackshot_ctr, i);
+			}
+
+			mtc->mtc_snaps[i] = mt_core_reset_values[i];
+			mt_core_set_snap(i, mt_core_reset_values[i]);
 		}
 	}
 
@@ -239,34 +250,61 @@ mt_pmi_x86_64(x86_saved_state_t *state)
 	return 0;
 }
 
-void
-mt_init(void)
+static void
+mt_microstackshot_start_remote(__unused void *arg)
 {
-	uint32_t cpuinfo[4];
+	struct mt_cpu *mtc = mt_cur_cpu();
 
-	do_cpuid(0xA, cpuinfo);
+	wrmsr64(FIXED_CTR_CTRL, FIXED_CTR_CTRL_INIT);
 
-	if ((cpuinfo[0] & 0xff) >= 2) {
+	for (int i = 0; i < MT_CORE_NFIXED; i++) {
+		uint64_t delta = mt_mtc_update_count(mtc, i);
+		mtc->mtc_counts[i] += delta;
+		mt_core_set_snap(i, mt_core_reset_values[i]);
+		mtc->mtc_snaps[i] = mt_core_reset_values[i];
+	}
+
+	wrmsr64(FIXED_CTR_CTRL, FIXED_CTR_CTRL_INIT | FIXED_CTR_CTRL_ENABLE);
+}
+
+int
+mt_microstackshot_start_arch(uint64_t period)
+{
+	if (!mt_core_supported) {
+		return ENOTSUP;
+	}
+
+	mt_core_reset_values[mt_microstackshot_ctr] = CTR_MAX - period;
+	mp_cpus_call(CPUMASK_ALL, ASYNC, mt_microstackshot_start_remote,
+			NULL);
+	return 0;
+}
+
+void
+mt_early_init(void)
+{
+	i386_cpu_info_t *info = cpuid_info();
+	if (info->cpuid_arch_perf_leaf.version >= 2) {
 		lapic_set_pmi_func((i386_intr_func_t)mt_pmi_x86_64);
 		mt_core_supported = true;
 	}
 }
 
 static int
-core_init(void)
+core_init(__unused mt_device_t dev)
 {
 	return ENOTSUP;
 }
 
 #pragma mark common hooks
 
-const struct monotonic_dev monotonic_devs[] = {
+struct mt_device mt_devices[] = {
 	[0] = {
-		.mtd_name = "monotonic/core",
+		.mtd_name = "core",
 		.mtd_init = core_init
 	}
 };
 
 static_assert(
-		(sizeof(monotonic_devs) / sizeof(monotonic_devs[0])) == MT_NDEVS,
-		"MT_NDEVS macro should be same as the length of monotonic_devs");
+		(sizeof(mt_devices) / sizeof(mt_devices[0])) == MT_NDEVS,
+		"MT_NDEVS macro should be same as the length of mt_devices");

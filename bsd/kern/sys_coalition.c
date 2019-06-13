@@ -216,7 +216,7 @@ static int __attribute__ ((noinline))
 coalition_info_resource_usage(coalition_t coal, user_addr_t buffer, user_size_t bufsize)
 {
 	kern_return_t kr;
-	struct coalition_resource_usage cru;
+	struct coalition_resource_usage cru = {};
 
 	kr = coalition_resource_usage_internal(coal, &cru);
 
@@ -315,7 +315,7 @@ static int sysctl_coalition_get_ids SYSCTL_HANDLER_ARGS
 	int error, pid;
 	proc_t tproc;
 	uint64_t value;
-	uint64_t ids[COALITION_NUM_TYPES];
+	uint64_t ids[COALITION_NUM_TYPES] = {};
 
 
 	error = SYSCTL_IN(req, &value, sizeof(value));
@@ -349,7 +349,7 @@ static int sysctl_coalition_get_roles SYSCTL_HANDLER_ARGS
 	int error, pid;
 	proc_t tproc;
 	int value;
-	int roles[COALITION_NUM_TYPES];
+	int roles[COALITION_NUM_TYPES] = {};
 
 
 	error = SYSCTL_IN(req, &value, sizeof(value));
@@ -483,6 +483,11 @@ static int sysctl_coalition_get_pid_list SYSCTL_HANDLER_ARGS
 
 out:
 	proc_rele(tproc);
+
+	if (npids < 0) {
+		/* npids is a negative errno */
+		return -npids;
+	}
 
 	if (npids == 0)
 		return ENOENT;

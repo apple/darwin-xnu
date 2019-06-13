@@ -114,6 +114,7 @@
 
 #include <sys/sdt.h>
 #include <sys/codesign.h>
+#include <sys/random.h>
 #include <libkern/section_keywords.h>
 
 #if CONFIG_MACF
@@ -140,7 +141,8 @@ extern void doexception(int exc, mach_exception_code_t code,
 		mach_exception_subcode_t sub);
 
 static void stop(proc_t, proc_t);
-int cansignal(proc_t, kauth_cred_t, proc_t, int, int);
+static int cansignal_nomac(proc_t, kauth_cred_t, proc_t, int);
+int cansignal(proc_t, kauth_cred_t, proc_t, int);
 int killpg1(proc_t, int, int, int, int);
 kern_return_t do_bsdexception(int, int, int);
 void __posix_sem_syscall_return(kern_return_t);
@@ -168,19 +170,18 @@ SECURITY_READ_ONLY_EARLY(struct filterops) sig_filtops = {
 
 /* structures  and fns for killpg1 iterartion callback and filters */
 struct killpg1_filtargs {
-	int  posix;
-	proc_t cp;
+	bool posix;
+	proc_t curproc;
 };
 
 struct killpg1_iterargs {
-	proc_t cp;
+	proc_t curproc;
 	kauth_cred_t uc;
 	int signum;
-	int * nfoundp;
-	int zombie;
+	int nfound;
 };
 
-static int killpg1_filt(proc_t p, void * arg);
+static int killpg1_allfilt(proc_t p, void * arg);
 static int killpg1_pgrpfilt(proc_t p, __unused void * arg);
 static int killpg1_callback(proc_t p, void * arg);
 
@@ -261,6 +262,11 @@ __sigaction_user32_to_kern(struct __user32_sigaction *in, struct __kern_sigactio
 	out->sa_tramp = CAST_USER_ADDR_T(in->sa_tramp);
 	out->sa_mask = in->sa_mask;
 	out->sa_flags = in->sa_flags;
+
+	kern_return_t kr;
+	kr = machine_thread_function_pointers_convert_from_user(current_thread(),
+			&out->sa_tramp, 1);
+	assert(kr == KERN_SUCCESS);
 }
 
 static void
@@ -270,6 +276,11 @@ __sigaction_user64_to_kern(struct __user64_sigaction *in, struct __kern_sigactio
 	out->sa_tramp = in->sa_tramp;
 	out->sa_mask = in->sa_mask;
 	out->sa_flags = in->sa_flags;
+
+	kern_return_t kr;
+	kr = machine_thread_function_pointers_convert_from_user(current_thread(),
+			&out->sa_tramp, 1);
+	assert(kr == KERN_SUCCESS);
 }
 
 #if SIGNAL_DEBUG
@@ -291,75 +302,87 @@ signal_setast(thread_t sig_actthread)
 	act_set_astbsd(sig_actthread);
 }
 
-/*
- * Can process p, with ucred uc, send the signal signum to process q?
- * uc is refcounted  by the caller so internal fileds can be used safely
- * when called with zombie arg, list lock is held
- */
-int
-cansignal(proc_t p, kauth_cred_t uc, proc_t q, int signum, int zombie)
+static int
+cansignal_nomac(proc_t src, kauth_cred_t uc_src, proc_t dst, int signum)
 {
-	kauth_cred_t my_cred;
-	struct session * p_sessp = SESSION_NULL;
-	struct session * q_sessp = SESSION_NULL;
-#if CONFIG_MACF
-	int error;
-
-	error = mac_proc_check_signal(p, q, signum);
-	if (error)
-		return (0);
-#endif
-
 	/* you can signal yourself */
-	if (p == q)
-		return(1);
-
-	/* you can't send launchd SIGKILL, even if root */
-	if (signum == SIGKILL && q == initproc)
-		return(0);
-
-	if (!suser(uc, NULL))
-		return (1);		/* root can always signal */
-
-	if (zombie == 0)
-		proc_list_lock();
-	if (p->p_pgrp != PGRP_NULL)
-		p_sessp = p->p_pgrp->pg_session;
-	if (q->p_pgrp != PGRP_NULL)
-		q_sessp = q->p_pgrp->pg_session;
-
-	if (signum == SIGCONT && q_sessp == p_sessp) {
-		if (zombie == 0)
-			proc_list_unlock();
-		return (1);		/* SIGCONT in session */
+	if (src == dst) {
+		return 1;
 	}
 
-	if (zombie == 0) 
+	/* you can't send the init proc SIGKILL, even if root */
+	if (signum == SIGKILL && dst == initproc) {
+		return 0;
+	}
+
+	 /* otherwise, root can always signal */
+	if (kauth_cred_issuser(uc_src)) {
+		return 1;
+	}
+
+	/* processes in the same session can send SIGCONT to each other */
+	{
+		struct session *sess_src = SESSION_NULL;
+		struct session *sess_dst = SESSION_NULL;
+
+		/* The session field is protected by the list lock. */
+		proc_list_lock();
+		if (src->p_pgrp != PGRP_NULL) {
+			sess_src = src->p_pgrp->pg_session;
+		}
+		if (dst->p_pgrp != PGRP_NULL) {
+			sess_dst = dst->p_pgrp->pg_session;
+		}
 		proc_list_unlock();
 
-	/*
-	 * If the real or effective UID of the sender matches the real
-	 * or saved UID of the target, permit the signal to
-	 * be sent.
-	 */
-	if (zombie == 0)
-		my_cred = kauth_cred_proc_ref(q);
-	else
-		my_cred = proc_ucred(q);
-
-	if (kauth_cred_getruid(uc) == kauth_cred_getruid(my_cred) ||
-	    kauth_cred_getruid(uc) == kauth_cred_getsvuid(my_cred) ||
-	    kauth_cred_getuid(uc) == kauth_cred_getruid(my_cred) ||
-	    kauth_cred_getuid(uc) == kauth_cred_getsvuid(my_cred)) {
-		if (zombie == 0)
-			kauth_cred_unref(&my_cred);
-		return (1);
+		/* allow SIGCONT within session and for processes without session */
+		if (signum == SIGCONT && sess_src == sess_dst) {
+			return 1;
+		}
 	}
 
-	if (zombie == 0)
-		kauth_cred_unref(&my_cred);
+	/* the source process must be authorized to signal the target */
+	{
+		int allowed = 0;
+		kauth_cred_t uc_dst = NOCRED, uc_ref = NOCRED;
 
-	return (0);
+		uc_dst = uc_ref = kauth_cred_proc_ref(dst);
+
+		/*
+		 * If the real or effective UID of the sender matches the real or saved
+		 * UID of the target, allow the signal to be sent.
+		 */
+		if (kauth_cred_getruid(uc_src) == kauth_cred_getruid(uc_dst) ||
+			kauth_cred_getruid(uc_src) == kauth_cred_getsvuid(uc_dst) ||
+			kauth_cred_getuid(uc_src) == kauth_cred_getruid(uc_dst) ||
+			kauth_cred_getuid(uc_src) == kauth_cred_getsvuid(uc_dst)) {
+			allowed = 1;
+		}
+
+		if (uc_ref != NOCRED) {
+			kauth_cred_unref(&uc_ref);
+			uc_ref = NOCRED;
+		}
+
+		return allowed;
+	}
+}
+
+/*
+ * Can process `src`, with ucred `uc_src`, send the signal `signum` to process
+ * `dst`?  The ucred is referenced by the caller so internal fileds can be used
+ * safely.
+ */
+int
+cansignal(proc_t src, kauth_cred_t uc_src, proc_t dst, int signum)
+{
+#if CONFIG_MACF
+	if (mac_proc_check_signal(src, dst, signum)) {
+		return 0;
+	}
+#endif
+
+	return cansignal_nomac(src, uc_src, dst, signum);
 }
 
 /*
@@ -432,6 +455,7 @@ sigaction(proc_t p, struct sigaction_args *uap, __unused int32_t *retval)
 
 	int signum;
 	int bit, error=0;
+	uint32_t sigreturn_validation = PS_SIGRETURN_VALIDATION_DEFAULT;
 
 	signum = uap->signum;
 	if (signum <= 0 || signum >= NSIG ||
@@ -450,6 +474,9 @@ sigaction(proc_t p, struct sigaction_args *uap, __unused int32_t *retval)
 		}
 		if (error)
 			return (error);
+
+		sigreturn_validation = (__vec.sa_flags & SA_VALIDATE_SIGRETURN_FROM_SIGTRAMP) ?
+				PS_SIGRETURN_VALIDATION_ENABLED : PS_SIGRETURN_VALIDATION_DISABLED;
 		__vec.sa_flags &= SA_USERSPACE_MASK; /* Only pass on valid sa_flags */
 
 		if ((__vec.sa_flags & SA_SIGINFO) || __vec.sa_handler != SIG_DFL) {
@@ -476,8 +503,6 @@ sigaction(proc_t p, struct sigaction_args *uap, __unused int32_t *retval)
 			sa->sa_flags |= SA_SIGINFO;
 		if (ps->ps_signodefer & bit)
 			sa->sa_flags |= SA_NODEFER;
-		if (ps->ps_64regset & bit)
-			sa->sa_flags |= SA_64REGSET;
 		if ((signum == SIGCHLD) && (p->p_flag & P_NOCLDSTOP))
 			sa->sa_flags |= SA_NOCLDSTOP;
 		if ((signum == SIGCHLD) && (p->p_flag & P_NOCLDWAIT))
@@ -497,6 +522,13 @@ sigaction(proc_t p, struct sigaction_args *uap, __unused int32_t *retval)
 	}
 
 	if (uap->nsa) {
+		uint32_t old_sigreturn_validation = atomic_load_explicit(
+				&ps->ps_sigreturn_validation, memory_order_relaxed);
+		if (old_sigreturn_validation == PS_SIGRETURN_VALIDATION_DEFAULT) {
+			atomic_compare_exchange_strong_explicit(&ps->ps_sigreturn_validation,
+					&old_sigreturn_validation, sigreturn_validation,
+					memory_order_relaxed, memory_order_relaxed);
+		}
 		error = setsigvec(p, current_thread(), signum, &__vec, FALSE);
 	}
 
@@ -661,10 +693,6 @@ setsigvec(proc_t p, __unused thread_t thread, int signum, struct __kern_sigactio
 		ps->ps_siginfo |= bit;
 	else
 		ps->ps_siginfo &= ~bit;
-	if (sa->sa_flags & SA_64REGSET)
-		ps->ps_64regset |= bit;
-	else
-		ps->ps_64regset &= ~bit;
 	if ((sa->sa_flags & SA_RESTART) == 0)
 		ps->ps_sigintr |= bit;
 	else
@@ -673,10 +701,6 @@ setsigvec(proc_t p, __unused thread_t thread, int signum, struct __kern_sigactio
 		ps->ps_sigonstack |= bit;
 	else
 		ps->ps_sigonstack &= ~bit;
-	if (sa->sa_flags & SA_USERTRAMP)
-		ps->ps_usertramp |= bit;
-	else
-		ps->ps_usertramp &= ~bit;
 	if (sa->sa_flags & SA_RESETHAND)
 		ps->ps_sigreset |= bit;
 	else
@@ -773,6 +797,11 @@ execsigs(proc_t p, thread_t thread)
 		}
 		ps->ps_sigact[nc] = SIG_DFL;
 	}
+
+	atomic_store_explicit(&ps->ps_sigreturn_validation,
+			PS_SIGRETURN_VALIDATION_DEFAULT, memory_order_relaxed);
+	/* Generate random token value used to validate sigreturn arguments */
+	read_random(&ps->ps_sigreturn_token, sizeof(ps->ps_sigreturn_token));
 
 	/*
 	 * Reset stack state to the user stack.
@@ -1462,8 +1491,8 @@ kill(proc_t cp, struct kill_args *uap, __unused int32_t *retval)
 	kauth_cred_t uc = kauth_cred_get();
 	int posix = uap->posix;		/* !0 if posix behaviour desired */
 
-       AUDIT_ARG(pid, uap->pid);
-       AUDIT_ARG(signum, uap->signum);
+	AUDIT_ARG(pid, uap->pid);
+	AUDIT_ARG(signum, uap->signum);
 
 	if ((u_int)uap->signum >= NSIG)
 		return (EINVAL);
@@ -1472,15 +1501,15 @@ kill(proc_t cp, struct kill_args *uap, __unused int32_t *retval)
 		if ((p = proc_find(uap->pid)) == NULL) {
 			if ((p = pzfind(uap->pid)) != NULL) {
 				/*
-				 * IEEE Std 1003.1-2001: return success
-				 * when killing a zombie.
+				 * POSIX 1003.1-2001 requires returning success when killing a
+				 * zombie; see Rationale for kill(2).
 				 */
 				return (0);
 			}
 			return (ESRCH);
 		}
 		AUDIT_ARG(process, p);
-		if (!cansignal(cp, uc, p, uap->signum, 0)) {
+		if (!cansignal(cp, uc, p, uap->signum)) {
 			proc_rele(p);
 			return(EPERM);
 		}
@@ -1490,11 +1519,11 @@ kill(proc_t cp, struct kill_args *uap, __unused int32_t *retval)
 		return (0);
 	}
 	switch (uap->pid) {
-	case -1:		/* broadcast signal */
+	case -1: /* broadcast signal */
 		return (killpg1(cp, uap->signum, 0, 1, posix));
-	case 0:			/* signal own process group */
+	case 0: /* signal own process group */
 		return (killpg1(cp, uap->signum, 0, 0, posix));
-	default:		/* negative explicit process group */
+	default: /* negative explicit process group */
 		return (killpg1(cp, uap->signum, -(uap->pid), 0, posix));
 	}
 	/* NOTREACHED */
@@ -1661,9 +1690,18 @@ terminate_with_payload_internal(struct proc *cur_proc, int target_pid, uint32_t 
 
 	AUDIT_ARG(process, target_proc);
 
-	if (!cansignal(cur_proc, cur_cred, target_proc, SIGKILL, 0)) {
+	if (!cansignal(cur_proc, cur_cred, target_proc, SIGKILL)) {
 		proc_rele(target_proc);
 		return EPERM;
+	}
+
+	if (target_pid != cur_proc->p_pid) {
+		/*
+		 * FLAG_ABORT should only be set on terminate_with_reason(getpid()) that
+		 * was a fallback from an unsuccessful abort_with_reason(). In that case
+		 * caller's pid matches the target one. Otherwise remove the flag.
+		 */
+		reason_flags &= ~((typeof(reason_flags))OS_REASON_FLAG_ABORT);
 	}
 
 	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
@@ -1698,108 +1736,85 @@ terminate_with_payload(struct proc *cur_proc, struct terminate_with_payload_args
 }
 
 static int
-killpg1_filt(proc_t p, void * arg)
+killpg1_allfilt(proc_t p, void * arg)
 {
 	struct killpg1_filtargs * kfargp = (struct killpg1_filtargs *)arg;
-	proc_t cp = kfargp->cp;
-	int posix = kfargp->posix;
 
-
-	if (p->p_pid <= 1 || p->p_flag & P_SYSTEM ||
-		(!posix && p == cp))
-		return(0);
-	else
-		return(1);
+	/*
+	 * Don't signal initproc, a system process, or the current process if POSIX
+	 * isn't specified.
+	 */
+	return (p->p_pid > 1 && !(p->p_flag & P_SYSTEM) &&
+			(kfargp->posix ? true : p != kfargp->curproc));
 }
-
 
 static int
 killpg1_pgrpfilt(proc_t p, __unused void * arg)
 {
-        if (p->p_pid <= 1 || p->p_flag & P_SYSTEM ||
-                (p->p_stat == SZOMB))
-                return(0);
-        else
-                return(1);
+	/* XXX shouldn't this allow signalling zombies? */
+	return (p->p_pid > 1 && !(p->p_flag & P_SYSTEM) && p->p_stat != SZOMB);
 }
 
-
-
 static int
-killpg1_callback(proc_t p, void * arg)
+killpg1_callback(proc_t p, void *arg)
 {
-	struct killpg1_iterargs * kargp = (struct killpg1_iterargs *)arg;
-        proc_t cp = kargp->cp;
-        kauth_cred_t uc = kargp->uc;   /* refcounted by the caller safe to use internal fields */
-        int signum = kargp->signum;
-	int * nfoundp = kargp->nfoundp;
-	int n;
-	int zombie = 0;
-	int error = 0;
+	struct killpg1_iterargs *kargp = (struct killpg1_iterargs *)arg;
+	int signum = kargp->signum;
 
-	if ((kargp->zombie != 0) && ((p->p_listflag & P_LIST_EXITED) == P_LIST_EXITED))
-		zombie = 1;
-
-	if (zombie != 0) {
-		proc_list_lock();
-		error = cansignal(cp, uc, p, signum, zombie);
-		proc_list_unlock();
-	
-		if (error != 0 && nfoundp != NULL) {
-			n = *nfoundp;
-			*nfoundp = n+1;
+	if ((p->p_listflag & P_LIST_EXITED) == P_LIST_EXITED) {
+		/*
+		 * Count zombies as found for the purposes of signalling, since POSIX
+		 * 1003.1-2001 sees signalling zombies as successful.  If killpg(2) or
+		 * kill(2) with pid -1 only finds zombies that can be signalled, it
+		 * shouldn't return ESRCH.  See the Rationale for kill(2).
+		 *
+		 * Don't call into MAC -- it's not expecting signal checks for exited
+		 * processes.
+		 */
+		if (cansignal_nomac(kargp->curproc, kargp->uc, p, signum)) {
+			kargp->nfound++;
 		}
-	} else {
-		if (cansignal(cp, uc, p, signum, 0) == 0)
-			return(PROC_RETURNED);
+	} else if (cansignal(kargp->curproc, kargp->uc, p, signum)) {
+		kargp->nfound++;
 
-		if (nfoundp != NULL) {
-			n = *nfoundp;
-			*nfoundp = n+1;
-		}
-		if (signum != 0)
+		if (signum != 0) {
 			psignal(p, signum);
+		}
 	}
 
-	return(PROC_RETURNED);
+	return PROC_RETURNED;
 }
 
 /*
  * Common code for kill process group/broadcast kill.
- * cp is calling process.
  */
 int
-killpg1(proc_t cp, int signum, int pgid, int all, int posix)
+killpg1(proc_t curproc, int signum, int pgid, int all, int posix)
 {
 	kauth_cred_t uc;
 	struct pgrp *pgrp;
-	int nfound = 0;
-	struct killpg1_iterargs karg;
-	struct killpg1_filtargs kfarg;
 	int error = 0;
-	
-	uc = kauth_cred_proc_ref(cp);
+
+	uc = kauth_cred_proc_ref(curproc);
+	struct killpg1_iterargs karg = {
+		.curproc = curproc, .uc = uc, .nfound = 0, .signum = signum
+	};
+
 	if (all) {
-		/* 
-		 * broadcast 
+		/*
+		 * Broadcast to all processes that the user can signal (pid was -1).
 		 */
-		kfarg.posix = posix;
-		kfarg.cp = cp;
-
-		karg.cp = cp;
-		karg.uc = uc;
-		karg.nfoundp = &nfound;
-		karg.signum = signum;
-		karg.zombie = 1;
-
-		proc_iterate((PROC_ALLPROCLIST | PROC_ZOMBPROCLIST), killpg1_callback, &karg, killpg1_filt, (void *)&kfarg);
-
+		struct killpg1_filtargs kfarg = {
+			.posix = posix, .curproc = curproc
+		};
+		proc_iterate(PROC_ALLPROCLIST | PROC_ZOMBPROCLIST, killpg1_callback,
+				&karg, killpg1_allfilt, &kfarg);
 	} else {
 		if (pgid == 0) {
-			/* 
-			 * zero pgid means send to my process group.
+			/*
+			 * Send to current the current process' process group.
 			 */
-			pgrp = proc_pgrp(cp);
+			pgrp = proc_pgrp(curproc);
 		 } else {
 			pgrp = pgfind(pgid);
 			if (pgrp == NULL) {
@@ -1808,23 +1823,15 @@ killpg1(proc_t cp, int signum, int pgid, int all, int posix)
 			}
 		}
 
-                karg.nfoundp = &nfound;
-                karg.uc = uc;
-                karg.signum = signum;
-		karg.cp = cp;
-		karg.zombie = 0;
-
-
 		/* PGRP_DROPREF drops the pgrp refernce */
 		pgrp_iterate(pgrp, PGRP_DROPREF, killpg1_callback, &karg,
-			killpg1_pgrpfilt, NULL);
+				killpg1_pgrpfilt, NULL);
 	}
-	error =  (nfound ? 0 : (posix ? EPERM : ESRCH));
+	error = (karg.nfound > 0 ? 0 : (posix ? EPERM : ESRCH));
 out:
 	kauth_cred_unref(&uc);
 	return (error);
 }
-
 
 /*
  * Send a signal to a process group.
@@ -3082,6 +3089,7 @@ postsig_locked(int signum)
 	uint32_t code;
 	int mask, returnmask;
 	struct uthread * ut;
+	os_reason_t ut_exit_reason = OS_REASON_NULL;
 
 #if DIAGNOSTIC
 	if (signum == 0)
@@ -3112,6 +3120,15 @@ postsig_locked(int signum)
 		 * the process.  (Other cases were ignored above.)
 		 */
 		sig_lock_to_exit(p);
+
+		/*
+		 * exit_with_reason() below will consume a reference to the thread's exit reason, so we take another
+		 * reference so the thread still has one even after we call exit_with_reason(). The thread's reference will
+		 * ultimately be destroyed in uthread_cleanup().
+		 */
+		ut_exit_reason = ut->uu_exit_reason;
+		os_reason_ref(ut_exit_reason);
+
 		p->p_acflag |= AXSIG;
 		if (sigprop[signum] & SA_CORE) {
 			p->p_sigacts->ps_sig = signum;
@@ -3151,12 +3168,7 @@ postsig_locked(int signum)
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_FRCEXIT) | DBG_FUNC_NONE,
 					      p->p_pid, W_EXITCODE(0, signum), 3, 0, 0);
 
-		/*
-		 * exit_with_reason() will consume a reference to the thread's exit reason, so we take another
-		 * reference for the thread. This reference will be destroyed in uthread_cleanup().
-		 */
-		os_reason_ref(ut->uu_exit_reason);
-		exit_with_reason(p, W_EXITCODE(0, signum), (int *)NULL, TRUE, TRUE, 0, ut->uu_exit_reason);
+		exit_with_reason(p, W_EXITCODE(0, signum), (int *)NULL, TRUE, TRUE, 0, ut_exit_reason);
 
 		proc_lock(p);
 		return;
@@ -3285,11 +3297,8 @@ filt_signaltouch(
 
 	proc_klist_lock();
 
-	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
-		kn->kn_udata = kev->udata;
-	/* 
-	 * No data to save - 
-	 * just capture if it is already fired
+	/*
+	 * No data to save - just capture if it is already fired
 	 */
 	res = (kn->kn_data > 0);
 
@@ -3440,11 +3449,16 @@ bsd_ast(thread_t thread)
 	}
 	proc_unlock(p);
 
+#ifdef CONFIG_32BIT_TELEMETRY
+	if (task_consume_32bit_log_flag(p->task)) {
+		proc_log_32bit_telemetry(p);
+	}
+#endif /* CONFIG_32BIT_TELEMETRY */
+
 	if (!bsd_init_done) {
 		bsd_init_done = 1;
 		bsdinit_task();
 	}
-
 }
 
 /* ptrace set runnable */

@@ -52,12 +52,19 @@
 // idle period until assumed disk spin down
 #define DISK_IDLE_SEC (10 * 60)
 
+struct saved_mount_fields {
+	uint32_t	mnt_maxreadcnt;		/* Max. byte count for read */
+	uint32_t	mnt_maxwritecnt;	/* Max. byte count for write */
+	uint32_t	mnt_segreadcnt;		/* Max. segment count for read */
+	uint32_t	mnt_segwritecnt;	/* Max. segment count for write */
+	uint32_t	mnt_ioqueue_depth;	/* the maxiumum number of commands a device can accept */
+	uint32_t	mnt_ioscale;		/* scale the various throttles/limits imposed on the amount of I/O in flight */
+};
+
 struct _disk_conditioner_info_t {
-	boolean_t enabled; // if other fields have any effect
-	uint64_t access_time_usec; // maximum latency before an I/O transfer begins
-	uint64_t read_throughput_mbps; // throughput of an I/O read
-	uint64_t write_throughput_mbps; // throughput of an I/O write
-	boolean_t is_ssd; // behave like an SSD (for both conditioning and affecting behavior in other parts of VFS)
+	disk_conditioner_info dcinfo; // all the original data from fsctl
+	struct saved_mount_fields mnt_fields; // fields to restore in mount_t when conditioner is disabled
+
 	daddr64_t last_blkno; // approx. last transfered block for simulating seek times
 	struct timeval last_io_timestamp; // the last time an I/O completed
 };
@@ -85,25 +92,33 @@ disk_conditioner_delay(buf_t bp, int extents, int total_size, uint64_t already_e
 	daddr64_t blkdiff;
 	daddr64_t last_blkno;
 	double access_time_scale;
-	struct _disk_conditioner_info_t *info = NULL;
+	struct _disk_conditioner_info_t *internal_info = NULL;
+	disk_conditioner_info *info = NULL;
 	struct timeval elapsed;
 	struct timeval start;
+	vnode_t vp;
 
-	mp = buf_vnode(bp)->v_mount;
+	vp = buf_vnode(bp);
+	if (!vp) {
+		return;
+	}
+
+	mp = vp->v_mount;
 	if (!mp) {
 		return;
 	}
 
-	info = mp->mnt_disk_conditioner_info;
-	if (!info || !info->enabled) {
+	internal_info = mp->mnt_disk_conditioner_info;
+	if (!internal_info || !internal_info->dcinfo.enabled) {
 		return;
 	}
+	info = &(internal_info->dcinfo);
 
 	if (!info->is_ssd) {
 		// calculate approximate seek time based on difference in block number
-		last_blkno = info->last_blkno;
+		last_blkno = internal_info->last_blkno;
 		blkdiff = bp->b_blkno > last_blkno ? bp->b_blkno - last_blkno : last_blkno - bp->b_blkno;
-		info->last_blkno = bp->b_blkno + bp->b_bcount;
+		internal_info->last_blkno = bp->b_blkno + bp->b_bcount;
 	} else {
 		blkdiff = BLK_MAX(mp);
 	}
@@ -122,15 +137,15 @@ disk_conditioner_delay(buf_t bp, int extents, int total_size, uint64_t already_e
 	// try simulating disk spinup based on time since last I/O
 	if (!info->is_ssd) {
 		microuptime(&elapsed);
-		timevalsub(&elapsed, &info->last_io_timestamp);
+		timevalsub(&elapsed, &internal_info->last_io_timestamp);
 		// avoid this delay right after boot (assuming last_io_timestamp is 0 and disk is already spinning)
-		if (elapsed.tv_sec > DISK_IDLE_SEC && info->last_io_timestamp.tv_sec != 0) {
+		if (elapsed.tv_sec > DISK_IDLE_SEC && internal_info->last_io_timestamp.tv_sec != 0) {
 			delay_usec += DISK_SPINUP_SEC * USEC_PER_SEC;
 		}
 	}
 
 	if (delay_usec <= already_elapsed_usec) {
-		microuptime(&info->last_io_timestamp);
+		microuptime(&internal_info->last_io_timestamp);
 		return;
 	}
 
@@ -153,7 +168,7 @@ disk_conditioner_delay(buf_t bp, int extents, int total_size, uint64_t already_e
 		}
 	}
 
-	microuptime(&info->last_io_timestamp);
+	microuptime(&internal_info->last_io_timestamp);
 }
 
 int
@@ -167,23 +182,29 @@ disk_conditioner_get_info(mount_t mp, disk_conditioner_info *uinfo)
 
 	info = mp->mnt_disk_conditioner_info;
 
-	if (!info) {
-		return 0;
+	if (info) {
+		memcpy(uinfo, &(info->dcinfo), sizeof(disk_conditioner_info));
 	}
 
-	uinfo->enabled = info->enabled;
-	uinfo->access_time_usec = info->access_time_usec;
-	uinfo->read_throughput_mbps = info->read_throughput_mbps;
-	uinfo->write_throughput_mbps = info->write_throughput_mbps;
-	uinfo->is_ssd = info->is_ssd;
-
 	return 0;
+}
+
+static inline void
+disk_conditioner_restore_mount_fields(mount_t mp, struct saved_mount_fields *mnt_fields) {
+	mp->mnt_maxreadcnt = mnt_fields->mnt_maxreadcnt;
+	mp->mnt_maxwritecnt = mnt_fields->mnt_maxwritecnt;
+	mp->mnt_segreadcnt = mnt_fields->mnt_segreadcnt;
+	mp->mnt_segwritecnt = mnt_fields->mnt_segwritecnt;
+	mp->mnt_ioqueue_depth = mnt_fields->mnt_ioqueue_depth;
+	mp->mnt_ioscale = mnt_fields->mnt_ioscale;
 }
 
 int
 disk_conditioner_set_info(mount_t mp, disk_conditioner_info *uinfo)
 {
-	struct _disk_conditioner_info_t *info;
+	struct _disk_conditioner_info_t *internal_info;
+	disk_conditioner_info *info;
+	struct saved_mount_fields *mnt_fields;
 
 	if (!kauth_cred_issuser(kauth_cred_get()) || !IOTaskHasEntitlement(current_task(), DISK_CONDITIONER_SET_ENTITLEMENT)) {
 		return EPERM;
@@ -193,18 +214,62 @@ disk_conditioner_set_info(mount_t mp, disk_conditioner_info *uinfo)
 		return EINVAL;
 	}
 
-	info = mp->mnt_disk_conditioner_info;
-	if (!info) {
-		info = mp->mnt_disk_conditioner_info = kalloc(sizeof(struct _disk_conditioner_info_t));
-		bzero(info, sizeof(struct _disk_conditioner_info_t));
+	mount_lock(mp);
+
+	internal_info = mp->mnt_disk_conditioner_info;
+	if (!internal_info) {
+		internal_info = mp->mnt_disk_conditioner_info = kalloc(sizeof(struct _disk_conditioner_info_t));
+		bzero(internal_info, sizeof(struct _disk_conditioner_info_t));
+		mnt_fields = &(internal_info->mnt_fields);
+
+		/* save mount_t fields for restoration later */
+		mnt_fields->mnt_maxreadcnt = mp->mnt_maxreadcnt;
+		mnt_fields->mnt_maxwritecnt = mp->mnt_maxwritecnt;
+		mnt_fields->mnt_segreadcnt = mp->mnt_segreadcnt;
+		mnt_fields->mnt_segwritecnt = mp->mnt_segwritecnt;
+		mnt_fields->mnt_ioqueue_depth = mp->mnt_ioqueue_depth;
+		mnt_fields->mnt_ioscale = mp->mnt_ioscale;
 	}
 
-	info->enabled = uinfo->enabled;
-	info->access_time_usec = uinfo->access_time_usec;
-	info->read_throughput_mbps = uinfo->read_throughput_mbps;
-	info->write_throughput_mbps = uinfo->write_throughput_mbps;
-	info->is_ssd = uinfo->is_ssd;
-	microuptime(&info->last_io_timestamp);
+	info = &(internal_info->dcinfo);
+	mnt_fields = &(internal_info->mnt_fields);
+
+	if (!uinfo->enabled && info->enabled) {
+		/* disk conditioner is being disabled when already enabled */
+		disk_conditioner_restore_mount_fields(mp, mnt_fields);
+	}
+
+	memcpy(info, uinfo, sizeof(disk_conditioner_info));
+
+	/* scale back based on hardware advertised limits */
+	if (uinfo->ioqueue_depth == 0 || uinfo->ioqueue_depth > mnt_fields->mnt_ioqueue_depth) {
+		info->ioqueue_depth = mnt_fields->mnt_ioqueue_depth;
+	}
+	if (uinfo->maxreadcnt == 0 || uinfo->maxreadcnt > mnt_fields->mnt_maxreadcnt) {
+		info->maxreadcnt = mnt_fields->mnt_maxreadcnt;
+	}
+	if (uinfo->maxwritecnt == 0 || uinfo->maxwritecnt > mnt_fields->mnt_maxwritecnt) {
+		info->maxwritecnt = mnt_fields->mnt_maxwritecnt;
+	}
+	if (uinfo->segreadcnt == 0 || uinfo->segreadcnt > mnt_fields->mnt_segreadcnt) {
+		info->segreadcnt = mnt_fields->mnt_segreadcnt;
+	}
+	if (uinfo->segwritecnt == 0 || uinfo->segwritecnt > mnt_fields->mnt_segwritecnt) {
+		info->segwritecnt = mnt_fields->mnt_segwritecnt;
+	}
+
+	if (uinfo->enabled) {
+		mp->mnt_maxreadcnt = info->maxreadcnt;
+		mp->mnt_maxwritecnt = info->maxwritecnt;
+		mp->mnt_segreadcnt = info->segreadcnt;
+		mp->mnt_segwritecnt = info->segwritecnt;
+		mp->mnt_ioqueue_depth = info->ioqueue_depth;
+		mp->mnt_ioscale = MNT_IOSCALE(info->ioqueue_depth);
+	}
+
+	mount_unlock(mp);
+
+	microuptime(&internal_info->last_io_timestamp);
 
 	// make sure throttling picks up the new periods
 	throttle_info_mount_reset_period(mp, info->is_ssd);
@@ -215,21 +280,27 @@ disk_conditioner_set_info(mount_t mp, disk_conditioner_info *uinfo)
 void
 disk_conditioner_unmount(mount_t mp)
 {
-	if (!mp->mnt_disk_conditioner_info) {
+	struct _disk_conditioner_info_t *internal_info = mp->mnt_disk_conditioner_info;
+
+	if (!internal_info) {
 		return;
 	}
-	kfree(mp->mnt_disk_conditioner_info, sizeof(struct _disk_conditioner_info_t));
+
+	if (internal_info->dcinfo.enabled) {
+		disk_conditioner_restore_mount_fields(mp, &(internal_info->mnt_fields));
+	}
 	mp->mnt_disk_conditioner_info = NULL;
+	kfree(internal_info, sizeof(struct _disk_conditioner_info_t));
 }
 
 boolean_t
 disk_conditioner_mount_is_ssd(mount_t mp)
 {
-	struct _disk_conditioner_info_t *info = mp->mnt_disk_conditioner_info;
+	struct _disk_conditioner_info_t *internal_info = mp->mnt_disk_conditioner_info;
 
-	if (!info || !info->enabled) {
-		return (mp->mnt_kern_flag & MNTK_SSD);
+	if (!internal_info || !internal_info->dcinfo.enabled) {
+		return !!(mp->mnt_kern_flag & MNTK_SSD);
 	}
 
-	return info->is_ssd;
+	return internal_info->dcinfo.is_ssd;
 }

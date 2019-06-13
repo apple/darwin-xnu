@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -84,6 +84,8 @@
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/in_arp.h>
+#include <netinet/ip.h>
+#include <netinet/ip6.h>
 #include <netinet6/nd6.h>
 
 extern struct rtstat rtstat;
@@ -461,7 +463,6 @@ route_output(struct mbuf *m, struct socket *so)
 	if (info.rti_info[RTAX_GATEWAY] != NULL &&
 	    info.rti_info[RTAX_GATEWAY]->sa_family == AF_INET)
 		sin_set_ifscope(info.rti_info[RTAX_GATEWAY], IFSCOPE_NONE);
-
 	switch (rtm->rtm_type) {
 	case RTM_ADD:
 		if (info.rti_info[RTAX_GATEWAY] == NULL)
@@ -549,9 +550,12 @@ route_output(struct mbuf *m, struct socket *so)
 		switch (rtm->rtm_type) {
 		case RTM_GET: {
 			kauth_cred_t cred;
+			kauth_cred_t* credp;
 			struct ifaddr *ifa2;
 report:
 			cred = kauth_cred_proc_ref(current_proc());
+			credp = &cred;
+
 			ifa2 = NULL;
 			RT_LOCK_ASSERT_HELD(rt);
 			info.rti_info[RTAX_DST] = rt_key(rt);
@@ -580,27 +584,26 @@ report:
 			}
 			if (ifa2 != NULL)
 				IFA_LOCK(ifa2);
-			len = rt_msg2(rtm->rtm_type, &info, NULL, NULL, &cred);
+			len = rt_msg2(rtm->rtm_type, &info, NULL, NULL, credp);
 			if (ifa2 != NULL)
 				IFA_UNLOCK(ifa2);
-			if (len > rtm->rtm_msglen) {
-				struct rt_msghdr *new_rtm;
-				R_Malloc(new_rtm, struct rt_msghdr *, len);
-				if (new_rtm == NULL) {
-					RT_UNLOCK(rt);
-					if (ifa2 != NULL)
-						IFA_REMREF(ifa2);
-					senderr(ENOBUFS);
-				}
-				Bcopy(rtm, new_rtm, rtm->rtm_msglen);
-				R_Free(rtm); rtm = new_rtm;
+			struct rt_msghdr *out_rtm;
+			R_Malloc(out_rtm, struct rt_msghdr *, len);
+			if (out_rtm == NULL) {
+				RT_UNLOCK(rt);
+				if (ifa2 != NULL)
+					IFA_REMREF(ifa2);
+				senderr(ENOBUFS);
 			}
+			Bcopy(rtm, out_rtm, sizeof(struct rt_msghdr));
 			if (ifa2 != NULL)
 				IFA_LOCK(ifa2);
-			(void) rt_msg2(rtm->rtm_type, &info, (caddr_t)rtm,
+			(void) rt_msg2(out_rtm->rtm_type, &info, (caddr_t)out_rtm,
 			    NULL, &cred);
 			if (ifa2 != NULL)
 				IFA_UNLOCK(ifa2);
+			R_Free(rtm);
+			rtm = out_rtm;
 			rtm->rtm_flags = rt->rt_flags;
 			rt_getmetrics(rt, &rtm->rtm_rmx);
 			rtm->rtm_addrs = info.rti_addrs;
@@ -676,7 +679,6 @@ report:
 		}
 		RT_UNLOCK(rt);
 		break;
-
 	default:
 		senderr(EOPNOTSUPP);
 	}
@@ -956,8 +958,15 @@ rt_setif(struct rtentry *rt, struct sockaddr *Ifpaddr, struct sockaddr *Ifaaddr,
 			 * If rmx_mtu is not locked, update it
 			 * to the MTU used by the new interface.
 			 */
-			if (!(rt->rt_rmx.rmx_locks & RTV_MTU))
+			if (!(rt->rt_rmx.rmx_locks & RTV_MTU)) {
 				rt->rt_rmx.rmx_mtu = rt->rt_ifp->if_mtu;
+				if (rt_key(rt)->sa_family == AF_INET &&
+				    INTF_ADJUST_MTU_FOR_CLAT46(ifp)) {
+					rt->rt_rmx.rmx_mtu = IN6_LINKMTU(rt->rt_ifp);
+					/* Further adjust the size for CLAT46 expansion */
+					rt->rt_rmx.rmx_mtu -= CLAT46_HDR_EXPANSION_OVERHD;
+				}
+			}
 
 			if (rt->rt_ifa != NULL) {
 				IFA_LOCK_SPIN(rt->rt_ifa);
@@ -1514,12 +1523,28 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	int error = 0, size;
 	struct rt_addrinfo info;
 	kauth_cred_t cred;
+	kauth_cred_t *credp;
 
 	cred = kauth_cred_proc_ref(current_proc());
+	credp = &cred;
 
 	RT_LOCK(rt);
-	if (w->w_op == NET_RT_FLAGS && !(rt->rt_flags & w->w_arg))
+	if ((w->w_op == NET_RT_FLAGS || w->w_op == NET_RT_FLAGS_PRIV) &&
+	    !(rt->rt_flags & w->w_arg))
 		goto done;
+
+	/*
+	 * If the matching route has RTF_LLINFO set, then we can skip scrubbing the MAC
+	 * only if the outgoing interface is not loopback and the process has entitlement
+	 * for neighbor cache read.
+	 */
+	if (w->w_op == NET_RT_FLAGS_PRIV && (rt->rt_flags & RTF_LLINFO)) {
+		if (rt->rt_ifp != lo_ifp &&
+		    (route_op_entitlement_check(NULL, cred, ROUTE_OP_READ, TRUE) == 0)) {
+			credp = NULL;
+		}
+	}
+
 	bzero((caddr_t)&info, sizeof (info));
 	info.rti_info[RTAX_DST] = rt_key(rt);
 	info.rti_info[RTAX_GATEWAY] = rt->rt_gateway;
@@ -1527,7 +1552,7 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	info.rti_info[RTAX_GENMASK] = rt->rt_genmask;
 
 	if (w->w_op != NET_RT_DUMP2) {
-		size = rt_msg2(RTM_GET, &info, NULL, w, &cred);
+		size = rt_msg2(RTM_GET, &info, NULL, w, credp);
 		if (w->w_req != NULL && w->w_tmem != NULL) {
 			struct rt_msghdr *rtm =
 			    (struct rt_msghdr *)(void *)w->w_tmem;
@@ -1543,7 +1568,7 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 			error = SYSCTL_OUT(w->w_req, (caddr_t)rtm, size);
 		}
 	} else {
-		size = rt_msg2(RTM_GET2, &info, NULL, w, &cred);
+		size = rt_msg2(RTM_GET2, &info, NULL, w, credp);
 		if (w->w_req != NULL && w->w_tmem != NULL) {
 			struct rt_msghdr2 *rtm =
 			    (struct rt_msghdr2 *)(void *)w->w_tmem;
@@ -1709,6 +1734,12 @@ sysctl_iflist(int af, struct walkarg *w)
 					IFA_UNLOCK(ifa);
 					continue;
 				}
+				if (ifa->ifa_addr->sa_family == AF_INET6 &&
+				    (((struct in6_ifaddr *)ifa)->ia6_flags &
+				     IN6_IFF_CLAT46) != 0) {
+					IFA_UNLOCK(ifa);
+					continue;
+				}
 				info.rti_info[RTAX_IFA] = ifa->ifa_addr;
 				info.rti_info[RTAX_NETMASK] = ifa->ifa_netmask;
 				info.rti_info[RTAX_BRD] = ifa->ifa_dstaddr;
@@ -1866,6 +1897,13 @@ sysctl_iflist2(int af, struct walkarg *w)
 					IFA_UNLOCK(ifa);
 					continue;
 				}
+				if (ifa->ifa_addr->sa_family == AF_INET6 &&
+				    (((struct in6_ifaddr *)ifa)->ia6_flags &
+				     IN6_IFF_CLAT46) != 0) {
+					IFA_UNLOCK(ifa);
+					continue;
+				}
+
 				info.rti_info[RTAX_IFA] = ifa->ifa_addr;
 				info.rti_info[RTAX_NETMASK] = ifa->ifa_netmask;
 				info.rti_info[RTAX_BRD] = ifa->ifa_dstaddr;
@@ -2040,6 +2078,7 @@ sysctl_rtsock SYSCTL_HANDLER_ARGS
 	case NET_RT_DUMP:
 	case NET_RT_DUMP2:
 	case NET_RT_FLAGS:
+	case NET_RT_FLAGS_PRIV:
 		lck_mtx_lock(rnh_lock);
 		for (i = 1; i <= AF_MAX; i++)
 			if ((rnh = rt_tables[i]) && (af == 0 || af == i) &&

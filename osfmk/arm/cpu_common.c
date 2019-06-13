@@ -54,8 +54,6 @@
 #include <sys/kdebug.h>
 #include <arm/machine_routines.h>
 #include <libkern/OSAtomic.h>
-#include <chud/chud_xnu.h>
-#include <chud/chud_xnu_private.h>
 
 #if KPERF
 void kperf_signal_handler(unsigned int cpu_number);
@@ -406,10 +404,6 @@ cpu_signal_handler_internal(boolean_t disable_signal)
 			(void)hw_atomic_and(&cpu_data_ptr->cpu_signal, ~SIGPdec);
 			rtclock_intr(FALSE);
 		}
-		if (cpu_signal & SIGPchud) {
-			(void)hw_atomic_and(&cpu_data_ptr->cpu_signal, ~SIGPchud);
-			chudxnu_cpu_signal_handler();
-		}
 #if KPERF
 		if (cpu_signal & SIGPkptimer) {
 			(void)hw_atomic_and(&cpu_data_ptr->cpu_signal, ~SIGPkptimer);
@@ -519,6 +513,33 @@ processor_to_cpu_datap(processor_t processor)
 	assert(target_cpu_datap->cpu_processor == processor);
 
 	return target_cpu_datap;
+}
+
+cpu_data_t *
+cpu_data_alloc(boolean_t is_boot_cpu)
+{
+	cpu_data_t		*cpu_data_ptr = NULL;
+
+	if (is_boot_cpu)
+		cpu_data_ptr = &BootCpuData;
+	else {
+		if ((kmem_alloc(kernel_map, (vm_offset_t *)&cpu_data_ptr, sizeof(cpu_data_t), VM_KERN_MEMORY_CPU)) != KERN_SUCCESS)
+			goto cpu_data_alloc_error;
+
+		bzero((void *)cpu_data_ptr, sizeof(cpu_data_t));
+
+		cpu_stack_alloc(cpu_data_ptr);
+	}
+
+	cpu_data_ptr->cpu_processor = cpu_processor_alloc(is_boot_cpu);
+	if (cpu_data_ptr->cpu_processor == (struct processor *)NULL)
+		goto cpu_data_alloc_error;
+
+	return cpu_data_ptr;
+
+cpu_data_alloc_error:
+	panic("cpu_data_alloc() failed\n");
+	return (cpu_data_t *)NULL;
 }
 
 ast_t *

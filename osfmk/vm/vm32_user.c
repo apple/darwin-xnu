@@ -547,12 +547,26 @@ vm32__task_wire(
 	if (map == VM_MAP_NULL)
 		return(KERN_INVALID_ARGUMENT);
 
-	if (must_wire)
-		map->wiring_required = TRUE;
-	else
-		map->wiring_required = FALSE;
+	vm_map_lock(map);
+	map->wiring_required = (must_wire == TRUE);
+	vm_map_unlock(map);
 
 	return(KERN_SUCCESS);
 }
+
+kern_return_t
+vm32__map_exec_lockdown(
+	vm_map_t 	map)
+{
+	if (map == VM_MAP_NULL)
+		return(KERN_INVALID_ARGUMENT);
+
+	vm_map_lock(map);
+	map->map_disallow_new_exec = TRUE;
+	vm_map_unlock(map);
+
+	return(KERN_SUCCESS);
+}
+
 
 #endif /* VM32_SUPPORT */

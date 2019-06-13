@@ -42,6 +42,8 @@
 #include <mach/vm_statistics.h>
 #include <kern/processor.h>
 
+extern
+uint64_t get_pages_grabbed_count(void);
 
 #define VM_STAT_INCR(event)									\
 MACRO_BEGIN											\

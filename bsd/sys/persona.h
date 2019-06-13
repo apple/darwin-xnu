@@ -177,10 +177,12 @@ int kpersona_find(const char *name, uid_t uid, uid_t *id, size_t *idlen);
 #include <sys/cdefs.h>
 #include <sys/kauth.h>
 #include <libkern/libkern.h>
+#include <os/refcnt.h>
 
 #ifdef PERSONA_DEBUG
+#include <os/log.h>
 #define persona_dbg(fmt, ...) \
-	printf("[%4d] %s:  " fmt "\n", \
+	os_log(OS_LOG_DEFAULT, "[%4d] %s:  " fmt "\n", \
 	       current_proc() ? current_proc()->p_pid : -1, \
 	       __func__, ## __VA_ARGS__)
 #else
@@ -193,7 +195,7 @@ int kpersona_find(const char *name, uid_t uid, uid_t *id, size_t *idlen);
 #ifdef XNU_KERNEL_PRIVATE
 /* only XNU proper needs to see the persona structure */
 struct persona {
-	int32_t      pna_refcount;
+	os_refcnt_t  pna_refcount;
 	int32_t      pna_valid;
 
 	uid_t        pna_id;
@@ -322,7 +324,11 @@ void personas_bootstrap(void);
 
 struct persona *persona_alloc(uid_t id, const char *login,
 			      int type, int *error);
-int persona_invalidate(struct persona *persona);
+
+int persona_init_begin(struct persona *persona);
+void persona_init_end(struct persona *persona, int error);
+
+struct persona *persona_lookup_and_invalidate(uid_t id);
 
 static inline int proc_has_persona(proc_t p)
 {
@@ -354,8 +360,8 @@ uid_t persona_get_uid(struct persona *persona);
 int persona_set_gid(struct persona *persona, gid_t gid);
 gid_t persona_get_gid(struct persona *persona);
 
-int persona_set_groups(struct persona *persona, gid_t *groups, int ngroups, uid_t gmuid);
-int persona_get_groups(struct persona *persona, int *ngroups, gid_t *groups, int groups_sz);
+int persona_set_groups(struct persona *persona, gid_t *groups, unsigned ngroups, uid_t gmuid);
+int persona_get_groups(struct persona *persona, unsigned *ngroups, gid_t *groups, unsigned groups_sz);
 
 uid_t persona_get_gmuid(struct persona *persona);
 

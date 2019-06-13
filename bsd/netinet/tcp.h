@@ -102,6 +102,7 @@ struct tcphdr {
 #define	TH_ECE	0x40
 #define	TH_CWR	0x80
 #define	TH_FLAGS	(TH_FIN|TH_SYN|TH_RST|TH_ACK|TH_URG|TH_ECE|TH_CWR)
+#define	TH_ACCEPT	(TH_FIN|TH_SYN|TH_RST|TH_ACK)
 
 	unsigned short	th_win;		/* window */
 	unsigned short	th_sum;		/* checksum */
@@ -296,6 +297,8 @@ struct tcp_notify_ack_complete {
 #define	TCP_RXT_MINIMUM_TIMEOUT		0x215
 
 #define	TCP_RXT_MINIMUM_TIMEOUT_LIMIT	(5 * 60) /* Limit is 5 minutes */
+
+#define MPTCP_ALTERNATE_PORT		0x216
 
 /*
  * The TCP_INFO socket option is a private API and is subject to change

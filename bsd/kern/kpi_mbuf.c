@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -386,7 +386,7 @@ mbuf_freem_list(mbuf_t mbuf)
 size_t
 mbuf_leadingspace(const mbuf_t mbuf)
 {
-	return (m_leadingspace(mbuf));
+	return (M_LEADINGSPACE(mbuf));
 }
 
 /*
@@ -397,7 +397,7 @@ mbuf_leadingspace(const mbuf_t mbuf)
 size_t
 mbuf_trailingspace(const mbuf_t mbuf)
 {
-	return (m_trailingspace(mbuf));
+	return (M_TRAILINGSPACE(mbuf));
 }
 
 /* Manipulation */
@@ -1723,6 +1723,21 @@ get_tx_compl_callback_index(mbuf_tx_compl_func callback)
 	lck_rw_unlock_shared(mbuf_tx_compl_tbl_lock);
 
 	return (i);
+}
+
+mbuf_tx_compl_func
+m_get_tx_compl_callback(u_int32_t idx)
+{
+	mbuf_tx_compl_func cb;
+
+	if (idx >= MAX_MBUF_TX_COMPL_FUNC) {
+		ASSERT(0);
+		return (NULL);
+	}
+	lck_rw_lock_shared(mbuf_tx_compl_tbl_lock);
+	cb = mbuf_tx_compl_table[idx];
+	lck_rw_unlock_shared(mbuf_tx_compl_tbl_lock);
+	return (cb);
 }
 
 errno_t

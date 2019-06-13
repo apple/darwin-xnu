@@ -88,11 +88,11 @@ extern vm_external_state_t vm_compressor_pager_state_get(
 						  (object));		\
 		}							\
 		if (_num_pages_cleared &&				\
-		    (object)->purgable != VM_PURGABLE_DENY &&		\
-		    (object)->vo_purgeable_owner != NULL) {		\
-			/* less compressed purgeable pages */		\
+		    ((object)->purgable != VM_PURGABLE_DENY ||		\
+		     (object)->vo_ledger_tag)) {			\
+			/* less compressed purgeable/tagged pages */	\
 			assert(_num_pages_cleared == 1);		\
-			vm_purgeable_compressed_update(			\
+			vm_object_owner_compressed_update(		\
 				(object),				\
 				-_num_pages_cleared);			\
 		}							\

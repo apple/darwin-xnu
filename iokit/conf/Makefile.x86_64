@@ -9,7 +9,7 @@ UNCONFIGURED_HIB_FILES=	\
 HIB_FILES=$(filter $(UNCONFIGURED_HIB_FILES),$(OBJS))
 
 # Unconfigured __HIB files must be Mach-O for "setsegname"
-IOHibernateRestoreKernel.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
+IOHibernateRestoreKernel.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
 
 ######################################################################
 #END    Machine dependent Makefile fragment for x86_64

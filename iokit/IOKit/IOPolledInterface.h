@@ -91,7 +91,9 @@ public:
 
     virtual IOReturn checkForWork(void) = 0;
 
-    OSMetaClassDeclareReservedUnused(IOPolledInterface, 0);
+    virtual IOReturn setEncryptionKey(const uint8_t * key, size_t keySize);
+
+    OSMetaClassDeclareReservedUsed(IOPolledInterface, 0);
     OSMetaClassDeclareReservedUnused(IOPolledInterface, 1);
     OSMetaClassDeclareReservedUnused(IOPolledInterface, 2);
     OSMetaClassDeclareReservedUnused(IOPolledInterface, 3);
@@ -117,9 +119,17 @@ public:
 #include <IOKit/IOTypes.h>
 #include <IOKit/IOHibernatePrivate.h>
 
+// kern_open_file_for_direct_io() flags
 enum
 {
-    kIOPolledFileSSD = 0x00000001
+    kIOPolledFileCreate    = 0x00000001,
+    kIOPolledFileHibernate = 0x00000002,
+};
+
+// kern_open_file_for_direct_io() oflags
+enum
+{
+    kIOPolledFileSSD    = 0x00000001
 };
 
 #if !defined(__cplusplus)
@@ -172,12 +182,13 @@ typedef struct IOPolledFileCryptVars IOPolledFileCryptVars;
 
 #if defined(__cplusplus)
 
-IOReturn IOPolledFileOpen(const char * filename, 
+IOReturn IOPolledFileOpen(const char * filename,
+			  uint32_t flags,
 			  uint64_t setFileSize, uint64_t fsFreeSize,
 			  void * write_file_addr, size_t write_file_len,
 			  IOPolledFileIOVars ** fileVars,
 			  OSData ** imagePath,
-			  uint8_t * volumeCryptKey, size_t keySize);
+			  uint8_t * volumeCryptKey, size_t * keySize);
 
 IOReturn IOPolledFileClose(IOPolledFileIOVars ** pVars,
 			   off_t write_offset, void * addr, size_t write_length,
@@ -210,6 +221,9 @@ extern __C IOReturn IOPolledFilePollersOpen(IOPolledFileIOVars * vars, uint32_t 
 
 extern __C IOReturn IOPolledFilePollersClose(IOPolledFileIOVars * vars, uint32_t state);
 
+extern __C IOReturn IOPolledFilePollersSetEncryptionKey(IOPolledFileIOVars * vars,
+				    const uint8_t * key, size_t keySize);
+
 extern __C IOPolledFileIOVars * gCoreFileVars;
 
 #ifdef _SYS_CONF_H_
@@ -219,7 +233,8 @@ __BEGIN_DECLS
 typedef void (*kern_get_file_extents_callback_t)(void * ref, uint64_t start, uint64_t size);
 
 struct kern_direct_file_io_ref_t *
-kern_open_file_for_direct_io(const char * name, boolean_t create_file,
+kern_open_file_for_direct_io(const char * name,
+			     uint32_t flags,
 			     kern_get_file_extents_callback_t callback, 
 			     void * callback_ref,
                              off_t set_file_size,

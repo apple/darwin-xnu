@@ -75,7 +75,8 @@
 kern_return_t
 machine_thread_dup(
     thread_t		parent,
-    thread_t		child
+    thread_t		child,
+    __unused boolean_t	is_corpse
 )
 {
 	
@@ -85,7 +86,7 @@ machine_thread_dup(
 	/*
 	 * Copy over the x86_saved_state registers
 	 */
-	if (thread_is_64bit(parent))
+	if (thread_is_64bit_addr(parent))
 		bcopy(USER_REGS64(parent), USER_REGS64(child), sizeof(x86_saved_state64_t));
 	else
 		bcopy(USER_REGS32(parent), USER_REGS32(child), sizeof(x86_saved_state32_t));
@@ -101,7 +102,7 @@ machine_thread_dup(
 	 * Copy the parent's cthread id and USER_CTHREAD descriptor, if 32-bit.
 	 */
 	child_pcb->cthread_self = parent_pcb->cthread_self;
-	if (!thread_is_64bit(parent))
+	if (!thread_is_64bit_addr(parent))
 		child_pcb->cthread_desc = parent_pcb->cthread_desc;
 
 	/*
@@ -125,7 +126,7 @@ thread_set_parent(thread_t parent, int pid)
 {
 	pal_register_cache_state(parent, DIRTY);
 
-	if (thread_is_64bit(parent)) {
+	if (thread_is_64bit_addr(parent)) {
 		x86_saved_state64_t	*iss64;
 
 		iss64 = USER_REGS64(parent);

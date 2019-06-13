@@ -46,6 +46,8 @@
 #include <sys/dtrace_impl.h>
 #include <sys/proc.h>
 
+#include <security/mac_framework.h>
+
 #include <miscfs/devfs/devfs.h>
 #include <sys/proc_internal.h>
 #include <sys/dtrace_glue.h>
@@ -143,7 +145,6 @@ qsort(void *a, size_t n, size_t es, int (*cmp)(const void *, const void *));
  *	never hold the provider lock and creation lock simultaneously
  */
 
-static dev_info_t *fasttrap_devi;
 static dtrace_meta_provider_id_t fasttrap_meta_id;
 
 static thread_t fasttrap_cleanup_thread;
@@ -401,7 +402,6 @@ fasttrap_pid_cleanup_providers(void)
 	return later;
 }
 
-#ifdef FASTTRAP_ASYNC_REMOVE
 typedef struct fasttrap_tracepoint_spec {
 	pid_t fttps_pid;
 	user_addr_t fttps_pc;
@@ -473,13 +473,13 @@ fasttrap_tracepoint_retire(proc_t *p, fasttrap_tracepoint_t *tp)
 	s->fttps_pc = tp->ftt_pc;
 
 	if (fasttrap_cur_retired == fasttrap_retired_size) {
-		fasttrap_retired_size *= 2;
 		fasttrap_tracepoint_spec_t *new_retired = kmem_zalloc(
-					fasttrap_retired_size *
-					sizeof(fasttrap_tracepoint_t*),
+					fasttrap_retired_size * 2 *
+					sizeof(*fasttrap_retired_spec),
 					KM_SLEEP);
-		memcpy(new_retired, fasttrap_retired_spec, sizeof(fasttrap_tracepoint_t*) * fasttrap_retired_size);
-		kmem_free(fasttrap_retired_spec, sizeof(fasttrap_tracepoint_t*) * (fasttrap_retired_size / 2));
+		memcpy(new_retired, fasttrap_retired_spec, sizeof(*fasttrap_retired_spec) * fasttrap_retired_size);
+		kmem_free(fasttrap_retired_spec, sizeof(*fasttrap_retired_spec) * fasttrap_retired_size);
+		fasttrap_retired_size *= 2;
 		fasttrap_retired_spec = new_retired;
 	}
 
@@ -489,15 +489,6 @@ fasttrap_tracepoint_retire(proc_t *p, fasttrap_tracepoint_t *tp)
 
 	fasttrap_pid_cleanup(FASTTRAP_CLEANUP_TRACEPOINT);
 }
-#else
-void fasttrap_tracepoint_retire(proc_t *p, fasttrap_tracepoint_t *tp)
-{
-	if (tp->ftt_retired)
-		return;
-
-	fasttrap_tracepoint_remove(p, tp);
-}
-#endif
 
 static void
 fasttrap_pid_cleanup_compute_priority(void)
@@ -533,11 +524,9 @@ fasttrap_pid_cleanup_cb(void)
 		if (work & FASTTRAP_CLEANUP_PROVIDER) {
 			later = fasttrap_pid_cleanup_providers();
 		}
-#ifdef FASTTRAP_ASYNC_REMOVE
 		if (work & FASTTRAP_CLEANUP_TRACEPOINT) {
 			fasttrap_tracepoint_cleanup();
 		}
-#endif
 		lck_mtx_lock(&fasttrap_cleanup_mtx);
 
 		fasttrap_pid_cleanup_compute_priority();
@@ -1162,6 +1151,25 @@ fasttrap_pid_enable(void *arg, dtrace_id_t id, void *parg)
 	    return(0);
 	}
 
+	if ((p->p_csflags & (CS_KILL|CS_HARD))) {
+		proc_unlock(p);
+		for (i = 0; i < DTRACE_NCLIENTS; i++) {
+			dtrace_state_t *state = dtrace_state_get(i);
+			if (state == NULL)
+				continue;
+			if (state->dts_cred.dcr_cred == NULL)
+				continue;
+			mac_proc_check_get_task(state->dts_cred.dcr_cred, p);
+		}
+		rc = cs_allow_invalid(p);
+		proc_lock(p);
+		if (rc == 0) {
+			sprunlock(p);
+			cmn_err(CE_WARN, "process doesn't allow invalid code pages, failing to install fasttrap probe\n");
+			return (0);
+		}
+	}
+
 	/*
 	 * APPLE NOTE: We do not have an equivalent thread structure to Solaris.
 	 * Solaris uses its ulwp_t struct for scratch space to support the pid provider.
@@ -1380,29 +1388,29 @@ static const dtrace_pattr_t pid_attr = {
 };
 
 static dtrace_pops_t pid_pops = {
-	fasttrap_pid_provide,
-	NULL,
-	fasttrap_pid_enable,
-	fasttrap_pid_disable,
-	NULL,
-	NULL,
-	fasttrap_pid_getargdesc,
-	fasttrap_pid_getarg,
-	NULL,
-	fasttrap_pid_destroy
+	.dtps_provide =		fasttrap_pid_provide,
+	.dtps_provide_module =	NULL,
+	.dtps_enable =		fasttrap_pid_enable,
+	.dtps_disable =		fasttrap_pid_disable,
+	.dtps_suspend =		NULL,
+	.dtps_resume =		NULL,
+	.dtps_getargdesc =	fasttrap_pid_getargdesc,
+	.dtps_getargval =	fasttrap_pid_getarg,
+	.dtps_usermode =	NULL,
+	.dtps_destroy =		fasttrap_pid_destroy
 };
 
 static dtrace_pops_t usdt_pops = {
-	fasttrap_pid_provide,
-	NULL,
-	fasttrap_pid_enable,
-	fasttrap_pid_disable,
-	NULL,
-	NULL,
-	fasttrap_pid_getargdesc,
-	fasttrap_usdt_getarg,
-	NULL,
-	fasttrap_pid_destroy
+	.dtps_provide =		fasttrap_pid_provide,
+	.dtps_provide_module =	NULL,
+	.dtps_enable =		fasttrap_pid_enable,
+	.dtps_disable =		fasttrap_pid_disable,
+	.dtps_suspend =		NULL,
+	.dtps_resume =		NULL,
+	.dtps_getargdesc =	fasttrap_pid_getargdesc,
+	.dtps_getargval =	fasttrap_usdt_getarg,
+	.dtps_usermode =	NULL,
+	.dtps_destroy =		fasttrap_pid_destroy
 };
 
 static fasttrap_proc_t *
@@ -1593,10 +1601,7 @@ fasttrap_provider_lookup(proc_t *p, fasttrap_provider_type_t provider_type, cons
 	 * APPLE NOTE:  We have no equivalent to crhold,
 	 * even though there is a cr_ref filed in ucred.
 	 */
-	// lck_mtx_lock(&p->p_crlock;
-	crhold(p->p_ucred);
-	cred = p->p_ucred;
-	// lck_mtx_unlock(&p->p_crlock);
+	cred = kauth_cred_proc_ref(p);
 	proc_unlock(p);
 
 	new_fp = kmem_zalloc(sizeof (fasttrap_provider_t), KM_SLEEP);
@@ -1625,7 +1630,7 @@ fasttrap_provider_lookup(proc_t *p, fasttrap_provider_type_t provider_type, cons
 			lck_mtx_lock(&fp->ftp_mtx);
 			lck_mtx_unlock(&bucket->ftb_mtx);
 			fasttrap_provider_free(new_fp);
-			crfree(cred);
+			kauth_cred_unref(&cred);
 			return (fp);
 		}
 	}
@@ -1647,7 +1652,7 @@ fasttrap_provider_lookup(proc_t *p, fasttrap_provider_type_t provider_type, cons
 	    &new_fp->ftp_provid) != 0) {
 		lck_mtx_unlock(&bucket->ftb_mtx);
 		fasttrap_provider_free(new_fp);
-		crfree(cred);
+		kauth_cred_unref(&cred);
 		return (NULL);
 	}
 
@@ -1657,7 +1662,8 @@ fasttrap_provider_lookup(proc_t *p, fasttrap_provider_type_t provider_type, cons
 	lck_mtx_lock(&new_fp->ftp_mtx);
 	lck_mtx_unlock(&bucket->ftb_mtx);
 
-	crfree(cred);
+	kauth_cred_unref(&cred);
+
 	return (new_fp);
 }
 
@@ -1850,16 +1856,6 @@ fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 	if (p == PROC_NULL)
 		return (ESRCH);
 
-	/*
-	 * Set that the process is allowed to run modified code and
-	 * bail if it is not allowed to
-	 */
-#if CONFIG_EMBEDDED
-	if ((p->p_csflags & (CS_KILL|CS_HARD)) && !cs_allow_invalid(p)) {
-		proc_rele(p);
-		return (EPERM);
-	}
-#endif
 	if ((provider = fasttrap_provider_lookup(p, pdata->ftps_provider_type,
 						 provider_name, &pid_attr)) == NULL) {
 		proc_rele(p);
@@ -2339,10 +2335,10 @@ fasttrap_meta_provider_name(void *arg)
 }
 
 static dtrace_mops_t fasttrap_mops = {
-	fasttrap_meta_create_probe,
-	fasttrap_meta_provide,
-	fasttrap_meta_remove,
-	fasttrap_meta_provider_name
+	.dtms_create_probe =	fasttrap_meta_create_probe,
+	.dtms_provide_proc =	fasttrap_meta_provide,
+	.dtms_remove_proc =	fasttrap_meta_remove,
+	.dtms_provider_name =	fasttrap_meta_provider_name
 };
 
 /*
@@ -2522,22 +2518,11 @@ err:
 	return (EINVAL);
 }
 
-static int
-fasttrap_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
+static void
+fasttrap_attach(void)
 {
 	ulong_t nent;
-
-	switch (cmd) {
-	case DDI_ATTACH:
-		break;
-	case DDI_RESUME:
-		return (DDI_SUCCESS);
-	default:
-		return (DDI_FAILURE);
-	}
-
-	ddi_report_dev(devi);
-	fasttrap_devi = devi;
+	unsigned int i;
 
 	/*
 	 * Install our hooks into fork(2), exec(2), and exit(2).
@@ -2553,17 +2538,6 @@ fasttrap_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	 */
 	fasttrap_max = (sane_size >> 28) * 100000;
 
-#if CONFIG_EMBEDDED
-#if defined(__LP64__)
-	/*
-	 * On embedded, the zone map does not grow with the memory size over 1GB
-	 * (see osfmk/vm/vm_init.c)
-	 */
-	if (fasttrap_max > 400000) {
-		fasttrap_max = 400000;
-	}
-#endif
-#endif
 	if (fasttrap_max == 0)
 		fasttrap_max = 50000;
 
@@ -2573,8 +2547,12 @@ fasttrap_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	/*
 	 * Conjure up the tracepoints hashtable...
 	 */
+#ifdef illumos
 	nent = ddi_getprop(DDI_DEV_T_ANY, devi, DDI_PROP_DONTPASS,
 	    "fasttrap-hash-size", FASTTRAP_TPOINTS_DEFAULT_SIZE);
+#else
+	nent = FASTTRAP_TPOINTS_DEFAULT_SIZE;
+#endif
 
 	if (nent <= 0 || nent > 0x1000000)
 		nent = FASTTRAP_TPOINTS_DEFAULT_SIZE;
@@ -2589,11 +2567,7 @@ fasttrap_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	    sizeof (fasttrap_bucket_t), KM_SLEEP);
 	ASSERT(fasttrap_tpoints.fth_table != NULL);
 
-	/*
-	 * APPLE NOTE:  explicitly initialize all locks...
-	 */
-	unsigned int i;
-	for (i=0; i<fasttrap_tpoints.fth_nent; i++) {
+	for (i = 0; i < fasttrap_tpoints.fth_nent; i++) {
 		lck_mtx_init(&fasttrap_tpoints.fth_table[i].ftb_mtx, fasttrap_lck_grp, fasttrap_lck_attr);
 	}
 
@@ -2611,10 +2585,7 @@ fasttrap_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	    sizeof (fasttrap_bucket_t), KM_SLEEP);
 	ASSERT(fasttrap_provs.fth_table != NULL);
 
-	/*
-	 * APPLE NOTE: explicitly initialize all locks...
-	 */
-	for (i=0; i<fasttrap_provs.fth_nent; i++) {
+	for (i = 0; i < fasttrap_provs.fth_nent; i++) {
 		lck_mtx_init(&fasttrap_provs.fth_table[i].ftb_mtx, fasttrap_lck_grp, fasttrap_lck_attr);
 	}
 
@@ -2632,17 +2603,14 @@ fasttrap_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	    sizeof (fasttrap_bucket_t), KM_SLEEP);
 	ASSERT(fasttrap_procs.fth_table != NULL);
 
-	/*
-	 * APPLE NOTE: explicitly initialize all locks...
-	 */
-	for (i=0; i<fasttrap_procs.fth_nent; i++) {
+#ifndef illumos
+	for (i = 0; i < fasttrap_procs.fth_nent; i++) {
 		lck_mtx_init(&fasttrap_procs.fth_table[i].ftb_mtx, fasttrap_lck_grp, fasttrap_lck_attr);
 	}
+#endif
 
 	(void) dtrace_meta_register("fasttrap", &fasttrap_mops, NULL,
 	    &fasttrap_meta_id);
-
-	return (DDI_SUCCESS);
 }
 
 static int 
@@ -2676,7 +2644,7 @@ _fasttrap_ioctl(dev_t dev, u_long cmd, caddr_t data, int fflag, struct proc *p)
 		return 0;
 }
 
-static int gFasttrapInited = 0;
+static int fasttrap_inited = 0;
 
 #define FASTTRAP_MAJOR  -24 /* let the kernel pick the device number */
 
@@ -2714,7 +2682,7 @@ fasttrap_init( void )
 	 *
 	 * The reason is to delay allocating the (rather large) resources as late as possible.
 	 */
-	if (0 == gFasttrapInited) {
+	if (!fasttrap_inited) {
 		int majdevno = cdevsw_add(FASTTRAP_MAJOR, &fasttrap_cdevsw);
 
 		if (majdevno < 0) {
@@ -2763,12 +2731,7 @@ fasttrap_init( void )
 		lck_mtx_init(&fasttrap_cleanup_mtx, fasttrap_lck_grp, fasttrap_lck_attr);
 		lck_mtx_init(&fasttrap_count_mtx, fasttrap_lck_grp, fasttrap_lck_attr);
 
-		if (DDI_FAILURE == fasttrap_attach((dev_info_t *)(uintptr_t)device, 0 )) {
-			// FIX ME! Do we remove the devfs node here?
-			// What kind of error reporting?
-			printf("fasttrap_init: Call to fasttrap_attach failed.\n");
-			return;
-		}
+		fasttrap_attach();
 
 		/*
 		 * Start the fasttrap cleanup thread
@@ -2779,14 +2742,12 @@ fasttrap_init( void )
 		}
 		thread_set_thread_name(fasttrap_cleanup_thread, "dtrace_fasttrap_cleanup_thread");
 
-#ifdef FASTTRAP_ASYNC_REMOVE
 		fasttrap_retired_size = DEFAULT_RETIRED_SIZE;
-		fasttrap_retired_spec = kmem_zalloc(fasttrap_retired_size * sizeof(fasttrap_tracepoint_t*),
+		fasttrap_retired_spec = kmem_zalloc(fasttrap_retired_size * sizeof(*fasttrap_retired_spec),
 					KM_SLEEP);
 		lck_mtx_init(&fasttrap_retired_mtx, fasttrap_lck_grp, fasttrap_lck_attr);
-#endif
 
-		gFasttrapInited = 1;
+		fasttrap_inited = 1;
 	}
 }
 

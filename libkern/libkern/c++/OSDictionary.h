@@ -925,6 +925,48 @@ public:
     OSArray * copyKeys(void);
 #endif /* XNU_KERNEL_PRIVATE */
 
+
+   /*!
+    * @function iterateObjects
+    *
+    * @abstract
+    * Invoke a callback for each member of the collection.
+    *
+    * @param refcon   A reference constant for the callback.
+    * @param callback The callback function,
+    *                 called with the refcon and each member key & object
+    *                 of the dictionary in turn, on the callers thread.
+    *                 The callback should return true to early terminate
+    *                 the iteration, false otherwise.
+    *
+    * @result
+    * False if the dictionary iteration was made invalid
+    * (see OSCollectionIterator::isValid()) otherwise true.
+    */
+    bool iterateObjects(void * refcon, bool (*callback)(void * refcon, const OSSymbol * key, OSObject * object));
+
+#ifdef __BLOCKS__
+
+   /*!
+    * @function iterateObjects
+    *
+    * @abstract
+    * Invoke a block for each member of the collection.
+    *
+    * @param block    The block,
+    *                 called with the refcon and each member key & object
+    *                 of the dictionary in turn, on the callers thread.
+    *                 The callback should return true to early terminate
+    *                 the iteration, false otherwise.
+    *
+    * @result
+    * False if the dictionary iteration was made invalid
+    * (see OSCollectionIterator::isValid()) otherwise true.
+    */
+    bool iterateObjects(bool (^block)(const OSSymbol * key, OSObject * object));
+
+#endif /* __BLOCKS__ */
+
     OSMetaClassDeclareReservedUnused(OSDictionary, 0);
     OSMetaClassDeclareReservedUnused(OSDictionary, 1);
     OSMetaClassDeclareReservedUnused(OSDictionary, 2);

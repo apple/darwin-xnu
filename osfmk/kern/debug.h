@@ -156,7 +156,9 @@ struct micro_snapshot {
 } __attribute__ ((packed));
 
 
-
+/*
+ * mirrors the dyld_cache_header struct defined in dyld_cache_format.h from dyld source code
+ */
 struct _dyld_cache_header
 {
     char    	magic[16];				// e.g. "dyld_v0    i386"
@@ -172,14 +174,47 @@ struct _dyld_cache_header
     uint64_t    localSymbolsOffset;     // file offset of where local symbols are stored
     uint64_t    localSymbolsSize;       // size of local symbols information
     uint8_t     uuid[16];               // unique value for each shared cache file
+    uint64_t    cacheType;              // 0 for development, 1 for production
+    uint32_t    branchPoolsOffset;      // file offset to table of uint64_t pool addresses
+    uint32_t    branchPoolsCount;       // number of uint64_t entries
+    uint64_t    accelerateInfoAddr;     // (unslid) address of optimization info
+    uint64_t    accelerateInfoSize;     // size of optimization info
+    uint64_t    imagesTextOffset;       // file offset to first dyld_cache_image_text_info
+    uint64_t    imagesTextCount;        // number of dyld_cache_image_text_info entries
+    uint64_t    dylibsImageGroupAddr;   // (unslid) address of ImageGroup for dylibs in this cache
+    uint64_t    dylibsImageGroupSize;   // size of ImageGroup for dylibs in this cache
+    uint64_t    otherImageGroupAddr;    // (unslid) address of ImageGroup for other OS dylibs
+    uint64_t    otherImageGroupSize;    // size of oImageGroup for other OS dylibs
+    uint64_t    progClosuresAddr;       // (unslid) address of list of program launch closures
+    uint64_t    progClosuresSize;       // size of list of program launch closures
+    uint64_t    progClosuresTrieAddr;   // (unslid) address of trie of indexes into program launch closures
+    uint64_t    progClosuresTrieSize;   // size of trie of indexes into program launch closures
+    uint32_t    platform;               // platform number (macOS=1, etc)
+    uint32_t    formatVersion        : 8,  // dyld3::closure::kFormatVersion
+                dylibsExpectedOnDisk : 1,  // dyld should expect the dylib exists on disk and to compare inode/mtime to see if cache is valid
+                simulator            : 1,  // for simulator of specified platform
+                locallyBuiltCache    : 1,  // 0 for B&I built cache, 1 for locally built cache
+                padding              : 21; // TBD
+};
+
+/*
+ * mirrors the dyld_cache_image_text_info struct defined in dyld_cache_format.h from dyld source code
+ */
+struct _dyld_cache_image_text_info
+{
+    uuid_t      uuid;
+    uint64_t    loadAddress;            // unslid address of start of __TEXT
+    uint32_t    textSegmentSize;
+    uint32_t    pathOffset;             // offset from start of cache file
 };
 
 
 enum micro_snapshot_flags {
 	kInterruptRecord	= 0x1,
 	kTimerArmingRecord	= 0x2,
-	kUserMode 		= 0x4, /* interrupted usermode, or armed by usermode */
-	kIORecord 		= 0x8,
+	kUserMode		= 0x4, /* interrupted usermode, or armed by usermode */
+	kIORecord		= 0x8,
+	kPMIRecord		= 0x10,
 };
 
 /*
@@ -209,25 +244,8 @@ enum {
 	STACKSHOT_KCDATA_FORMAT                    = 0x10000,
 	STACKSHOT_ENABLE_BT_FAULTING               = 0x20000,
 	STACKSHOT_COLLECT_DELTA_SNAPSHOT           = 0x40000,
-	/*
-	 * STACKSHOT_TAILSPIN flips on several features aimed at minimizing the size
-	 * of stackshots.  It is meant to be used only by the tailspin daemon.  Its
-	 * behavior may be changed at any time to suit the needs of the tailspin
-	 * daemon.  Seriously, if you are not the tailspin daemon, don't use this
-	 * flag.  If you need these features, ask us to add a stable SPI for what
-	 * you need.   That being said, the features it turns on are:
-	 *
-	 * minimize_uuids: If the set of loaded dylibs or kexts has not changed in
-	 * the delta period, do then not report them.
-	 *
-	 * iostats: do not include io statistics.
-	 *
-	 * trace_fp: do not include the frame pointers in stack traces.
-	 *
-	 * minimize_nonrunnables: Do not report detailed information about threads
-	 * which were not runnable in the delta period.
-	 */
-	STACKSHOT_TAILSPIN                         = 0x80000,
+	/* Include the layout of the system shared cache */
+	STACKSHOT_COLLECT_SHAREDCACHE_LAYOUT 	   = 0x80000,
 	/*
 	 * Kernel consumers of stackshot (via stack_snapshot_from_kernel) can ask
 	 * that we try to take the stackshot lock, and fail if we don't get it.
@@ -241,6 +259,8 @@ enum {
 	STACKSHOT_THREAD_GROUP                     = 0x2000000,
 	STACKSHOT_SAVE_JETSAM_COALITIONS           = 0x4000000,
 	STACKSHOT_INSTRS_CYCLES                    = 0x8000000,
+	STACKSHOT_ASID                             = 0x10000000,
+	STACKSHOT_PAGE_TABLES                      = 0x20000000,
 };
 
 #define STACKSHOT_THREAD_SNAPSHOT_MAGIC     0xfeedface
@@ -266,7 +286,7 @@ boolean_t kern_feature_override(uint32_t fmask);
  *       and be done alongside astris and DumpPanic changes.
  */
 struct embedded_panic_header {
-	uint32_t eph_magic;                /* PANIC_MAGIC if valid */
+	uint32_t eph_magic;                /* EMBEDDED_PANIC_MAGIC if valid */
 	uint32_t eph_crc;                  /* CRC of everything following the ph_crc in the header and the contents */
 	uint32_t eph_version;              /* embedded_panic_header version */
 	uint64_t eph_panic_flags;          /* Flags indicating any state or relevant details */
@@ -276,6 +296,15 @@ struct embedded_panic_header {
 	uint32_t eph_stackshot_len;        /* length of the panic stackshot (0 if not valid ) */
 	uint32_t eph_other_log_offset;     /* Offset of the other log (any logging subsequent to the stackshot) from the beginning of the header */
 	uint32_t eph_other_log_len;        /* length of the other log */
+	union {
+		struct {
+			uint64_t eph_x86_power_state:8,
+				 eph_x86_efi_boot_state:8,
+				 eph_x86_system_state:8,
+				 eph_x86_unused_bits:40;
+		}; // anonymous struct to group the bitfields together.
+		uint64_t eph_x86_do_not_use; /* Used for offsetof/sizeof when parsing header */
+	};
 } __attribute__((packed));
 
 #define EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_COMPLETE             0x01
@@ -287,26 +316,40 @@ struct embedded_panic_header {
 #define EMBEDDED_PANIC_HEADER_FLAG_NESTED_PANIC                  0x40
 #define EMBEDDED_PANIC_HEADER_FLAG_BUTTON_RESET_PANIC            0x80
 #define EMBEDDED_PANIC_HEADER_FLAG_COPROC_INITIATED_PANIC        0x100
+#define EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_FAILED               0x200
 
-#define EMBEDDED_PANIC_HEADER_CURRENT_VERSION 1
+#define EMBEDDED_PANIC_HEADER_CURRENT_VERSION 2
 #define EMBEDDED_PANIC_MAGIC 0x46554E4B /* FUNK */
 
 struct macos_panic_header {
-	uint32_t mph_magic;              /* PANIC_MAGIC if valid */
-	uint32_t mph_crc;                /* CRC of everything following mph_crc in the header and the contents */
-	uint32_t mph_version;            /* macos_panic_header version */
-	uint32_t mph_padding;            /* unused */
-	uint64_t mph_panic_flags;        /* Flags indicating any state or relevant details */
-	uint32_t mph_panic_log_offset;   /* Offset of the panic log from the beginning of the header */
-	uint32_t mph_panic_log_len;      /* length of the panic log */
-	char     mph_data[];             /* panic data -- DO NOT ACCESS THIS FIELD DIRECTLY. Use the offsets above relative to the beginning of the header */
+	uint32_t mph_magic;                   /* MACOS_PANIC_MAGIC if valid */
+	uint32_t mph_crc;                     /* CRC of everything following mph_crc in the header and the contents */
+	uint32_t mph_version;                 /* macos_panic_header version */
+	uint32_t mph_padding;                 /* unused */
+	uint64_t mph_panic_flags;             /* Flags indicating any state or relevant details */
+	uint32_t mph_panic_log_offset;        /* Offset of the panic log from the beginning of the header */
+	uint32_t mph_panic_log_len;           /* length of the panic log */
+	uint32_t mph_stackshot_offset;  /* Offset of the panic stackshot from the beginning of the header */
+	uint32_t mph_stackshot_len;     /* length of the panic stackshot */
+	uint32_t mph_other_log_offset;        /* Offset of the other log (any logging subsequent to the stackshot) from the beginning of the header */
+	uint32_t mph_other_log_len;           /* length of the other log */
+	char     mph_data[];                  /* panic data -- DO NOT ACCESS THIS FIELD DIRECTLY. Use the offsets above relative to the beginning of the header */
 } __attribute__((packed));
 
-#define MACOS_PANIC_HEADER_CURRENT_VERSION 1
+#define MACOS_PANIC_HEADER_CURRENT_VERSION 2
 #define MACOS_PANIC_MAGIC 0x44454544 /* DEED */
 
-#define MACOS_PANIC_HEADER_FLAG_NESTED_PANIC            0x01
-#define MACOS_PANIC_HEADER_FLAG_COPROC_INITIATED_PANIC  0x02
+#define MACOS_PANIC_HEADER_FLAG_NESTED_PANIC                  0x01
+#define MACOS_PANIC_HEADER_FLAG_COPROC_INITIATED_PANIC        0x02
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_SUCCEEDED           0x04
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_DATA_COMPRESSED     0x08
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_DEBUGGERSYNC 0x10
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR        0x20
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_INCOMPLETE   0x40
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_NESTED       0x80
+#define MACOS_PANIC_HEADER_FLAG_COREDUMP_COMPLETE             0x100
+#define MACOS_PANIC_HEADER_FLAG_COREDUMP_FAILED               0x200
+#define MACOS_PANIC_HEADER_FLAG_STACKSHOT_KERNEL_ONLY         0x400
 
 #endif /* __APPLE_API_UNSTABLE */
 #endif /* __APPLE_API_PRIVATE */
@@ -323,6 +366,12 @@ __END_DECLS
 
 #ifdef KERNEL_PRIVATE
 #if DEBUG
+#ifndef DKPR
+#define DKPR 1
+#endif
+#endif
+
+#if DKPR
 /*
  * For the DEBUG kernel, support the following:
  *	sysctl -w debug.kprint_syscall=<syscall_mask> 
@@ -390,19 +439,29 @@ enum {
 #define DB_PRT_KDEBUG   	0x10000 /* kprintf KDEBUG traces */
 #define DB_DISABLE_LOCAL_CORE   0x20000 /* ignore local kernel core dump support */
 #define DB_DISABLE_GZIP_CORE    0x40000 /* don't gzip kernel core dumps */
+#define DB_DISABLE_CROSS_PANIC  0x80000 /* x86 only - don't trigger cross panics. Only
+                                         * necessary to enable x86 kernel debugging on
+                                         * configs with a dev-fused co-processor running
+                                         * release bridgeOS.
+                                         */
+#define DB_REBOOT_ALWAYS        0x100000 /* Don't wait for debugger connection */
 
 /*
  * Values for a 64-bit mask that's passed to the debugger.
  */
-#define DEBUGGER_OPTION_NONE			0x0ULL
-#define DEBUGGER_OPTION_PANICLOGANDREBOOT	0x1ULL /* capture a panic log and then reboot immediately */
-#define DEBUGGER_OPTION_RECURPANIC_ENTRY        0x2ULL
-#define DEBUGGER_OPTION_RECURPANIC_PRELOG       0x4ULL
-#define DEBUGGER_OPTION_RECURPANIC_POSTLOG      0x8ULL
-#define DEBUGGER_OPTION_RECURPANIC_POSTCORE     0x10ULL
-#define DEBUGGER_OPTION_INITPROC_PANIC          0x20ULL
-#define DEBUGGER_OPTION_COPROC_INITIATED_PANIC  0x40ULL /* panic initiated by a co-processor */
-#define DEBUGGER_OPTION_SKIP_LOCAL_COREDUMP     0x80ULL /* don't try to save local coredumps for this panic */
+#define DEBUGGER_OPTION_NONE                        0x0ULL
+#define DEBUGGER_OPTION_PANICLOGANDREBOOT           0x1ULL /* capture a panic log and then reboot immediately */
+#define DEBUGGER_OPTION_RECURPANIC_ENTRY            0x2ULL
+#define DEBUGGER_OPTION_RECURPANIC_PRELOG           0x4ULL
+#define DEBUGGER_OPTION_RECURPANIC_POSTLOG          0x8ULL
+#define DEBUGGER_OPTION_RECURPANIC_POSTCORE         0x10ULL
+#define DEBUGGER_OPTION_INITPROC_PANIC              0x20ULL
+#define DEBUGGER_OPTION_COPROC_INITIATED_PANIC      0x40ULL /* panic initiated by a co-processor */
+#define DEBUGGER_OPTION_SKIP_LOCAL_COREDUMP         0x80ULL /* don't try to save local coredumps for this panic */
+#define DEBUGGER_OPTION_ATTEMPTCOREDUMPANDREBOOT    0x100ULL /* attempt to save coredump. always reboot */
+#define DEBUGGER_INTERNAL_OPTION_THREAD_BACKTRACE   0x200ULL /* backtrace the specified thread in the paniclog (x86 only) */
+
+#define DEBUGGER_INTERNAL_OPTIONS_MASK              (DEBUGGER_INTERNAL_OPTION_THREAD_BACKTRACE)
 
 __BEGIN_DECLS
 
@@ -418,7 +477,6 @@ __BEGIN_DECLS
 #define panic(ex, ...) (panic)(# ex "@" PANIC_LOCATION, ## __VA_ARGS__)
 #endif
 
-void panic_context(unsigned int reason, void *ctx, const char *string, ...);
 void panic_with_options(unsigned int reason, void *ctx, uint64_t debugger_options_mask, const char *str, ...);
 void Debugger(const char * message);
 void populate_model_name(char *);
@@ -431,9 +489,16 @@ __END_DECLS
 
 #if XNU_KERNEL_PRIVATE
 
+#if defined (__x86_64__)
+struct thread;
+
+void panic_with_thread_context(unsigned int reason, void *ctx, uint64_t debugger_options_mask, struct thread* th, const char *str, ...);
+#endif
+
 boolean_t oslog_is_safe(void);
 boolean_t debug_mode_active(void);
 boolean_t stackshot_active(void);
+void panic_stackshot_reset_state(void);
 
 /*
  * @function stack_snapshot_from_kernel
@@ -461,6 +526,7 @@ stack_snapshot_from_kernel(int pid, void *buf, uint32_t size, uint32_t flags,
 #if !CONFIG_EMBEDDED
 extern char debug_buf[];
 extern boolean_t coprocessor_paniclog_flush;
+extern boolean_t extended_debug_log_enabled;;
 #endif /* !CONFIG_EMBEDDED */
 
 extern char	*debug_buf_base;
@@ -471,8 +537,13 @@ extern size_t	panic_disk_error_description_size;
 
 extern unsigned char	*kernel_uuid;
 extern unsigned int	debug_boot_arg;
+#if DEVELOPMENT || DEBUG
+extern boolean_t	debug_boot_arg_inited;
+#endif
 
-#ifdef XNU_KERNEL_PRIVATE
+extern boolean_t kernelcache_uuid_valid;
+extern uuid_t kernelcache_uuid;
+extern uuid_string_t kernelcache_uuid_string;
 
 #ifdef __cplusplus
 extern "C" {
@@ -498,12 +569,7 @@ extern unsigned int	kdebug_serial;
 extern const char	*debugger_panic_str;
 
 extern char *debug_buf_ptr;
-
-#if CONFIG_EMBEDDED
 extern unsigned int debug_buf_size;
-#else
-extern const unsigned int debug_buf_size;
-#endif
 
 extern void	debug_log_init(void);
 extern void	debug_putc(char);
@@ -511,6 +577,8 @@ extern void	debug_putc(char);
 extern void	panic_init(void);
 
 #if defined (__x86_64__)
+extern void extended_debug_log_init(void);
+
 int	packA(char *inbuf, uint32_t length, uint32_t buflen);
 void	unpackA(char *inbuf, uint32_t length);
 
@@ -522,7 +590,7 @@ extern size_t panic_stackshot_len;
 #endif /* DEVELOPMENT || DEBUG */
 #endif /* defined (__x86_64__) */
 
-void 	SavePanicInfo(const char *message, uint64_t panic_options);
+void 	SavePanicInfo(const char *message, void *panic_data, uint64_t panic_options);
 void    paniclog_flush(void);
 void	panic_display_system_configuration(boolean_t launchd_exit);
 void	panic_display_zprint(void);
@@ -536,7 +604,6 @@ void	panic_display_ztrace(void);
 #if CONFIG_ECC_LOGGING
 void 	panic_display_ecc_errors(void);
 #endif /* CONFIG_ECC_LOGGING */
-#endif /* MACH_KERNEL_PRIVATE */
 
 /*
  * @var not_in_kdp
@@ -558,7 +625,7 @@ typedef enum {
 } debugger_op;
 
 kern_return_t DebuggerTrapWithState(debugger_op db_op, const char *db_message, const char *db_panic_str, va_list *db_panic_args,
-		uint64_t db_panic_options, boolean_t db_proceed_on_sync_failure, unsigned long db_panic_caller);
+		uint64_t db_panic_options, void *db_panic_data_ptr, boolean_t db_proceed_on_sync_failure, unsigned long db_panic_caller);
 void handle_debugger_trap(unsigned int exception, unsigned int code, unsigned int subcode, void *state);
 
 void DebuggerWithContext(unsigned int reason, void *ctx, const char *message, uint64_t debugger_options_mask);

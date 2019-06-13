@@ -43,11 +43,13 @@
 
 #include <arm/proc_reg.h>
 #include <arm/caches_internal.h>
+#include <arm/cpu_data_internal.h>
 #include <arm/pmap.h>
 #include <arm/misc_protos.h>
 #include <arm/lowglobals.h>
 
 #include <pexpert/arm/boot.h>
+#include <pexpert/device_tree.h>
 
 #include <libkern/kernel_mach_header.h>
 
@@ -77,6 +79,9 @@ vm_offset_t vm_elinkedit;
 vm_offset_t vm_prelink_sdata;
 vm_offset_t vm_prelink_edata;
 
+vm_offset_t vm_kernel_builtinkmod_text;
+vm_offset_t vm_kernel_builtinkmod_text_end;
+
 unsigned long gVirtBase, gPhysBase, gPhysSize;	    /* Used by <mach/arm/vm_param.h> */
 
 vm_offset_t   mem_size;                             /* Size of actual physical memory present
@@ -93,6 +98,9 @@ addr64_t      vm_last_addr = VM_MAX_KERNEL_ADDRESS; /* Highest kernel
                                                      * virtual address known
                                                      * to the VM system */
 
+vm_offset_t            segEXTRADATA;
+unsigned long          segSizeEXTRADATA;
+vm_offset_t            segLOWESTTEXT;
 static vm_offset_t     segTEXTB;
 static unsigned long   segSizeTEXT;
 static vm_offset_t     segDATAB;
@@ -105,6 +113,11 @@ static vm_offset_t     segLASTB;
 static unsigned long   segSizeLAST;
 static vm_offset_t     sectCONSTB;
 static unsigned long   sectSizeCONST;
+vm_offset_t            segBOOTDATAB;
+unsigned long          segSizeBOOTDATA;
+extern vm_offset_t     intstack_low_guard;
+extern vm_offset_t     intstack_high_guard;
+extern vm_offset_t     fiqstack_high_guard;
 
 vm_offset_t     segPRELINKTEXTB;
 unsigned long   segSizePRELINKTEXT;
@@ -139,6 +152,11 @@ extern vm_offset_t ExceptionVectorsBase; /* the code we want to load there */
 #define round_x_table(x) \
 	(((pmap_paddr_t)(x) + (ARM_PGBYTES<<2) - 1) & ~((ARM_PGBYTES<<2) - 1))
 
+vm_map_address_t
+phystokv(pmap_paddr_t pa)
+{
+	return (pa - gPhysBase + gVirtBase);
+}
 
 static void
 arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va, 
@@ -154,6 +172,11 @@ arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va,
 
 		pa = va - gVirtBase + gPhysBase;
 
+		if (pa >= avail_end)
+			return;
+
+		assert(_end >= va);
+
 		if (ARM_TTE_TYPE_TABLE == (tmplate & ARM_TTE_TYPE_MASK)) {
 			/* pick up the existing page table. */
 			ppte = (pt_entry_t *)phystokv((tmplate & ARM_TTE_TABLE_MASK));
@@ -161,12 +184,16 @@ arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va,
 			/* TTE must be reincarnated COARSE. */
 			ppte = (pt_entry_t *)phystokv(avail_start);
 			avail_start += ARM_PGBYTES;
-
-			pmap_init_pte_static_page(kernel_pmap, ppte, pa);
+			bzero(ppte, ARM_PGBYTES);
 
 			for (i = 0; i < 4; ++i)
 				tte[i] = pa_to_tte(kvtophys((vm_offset_t)ppte) + (i * 0x400)) | ARM_TTE_TYPE_TABLE;
 		}
+
+		vm_offset_t len = _end - va;
+		if ((pa + len) > avail_end)
+			_end -= (pa + len - avail_end);
+		assert((start - gVirtBase + gPhysBase) >= gPhysBase);
 
 		/* Apply the desired protections to the specified page range */
 		for (i = 0; i < (ARM_PGBYTES / sizeof(*ppte)); i++) {
@@ -189,7 +216,7 @@ arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va,
 
 static void
 arm_vm_page_granular_prot(vm_offset_t start, unsigned long size, 
-                          int tte_prot_XN, int pte_prot_APX, int pte_prot_XN, int forceCoarse)
+                          int tte_prot_XN, int pte_prot_APX, int pte_prot_XN, int force_page_granule)
 {
 	vm_offset_t _end = start + size;
 	vm_offset_t align_start = (start + ARM_TT_L1_PT_OFFMASK) & ~ARM_TT_L1_PT_OFFMASK;
@@ -198,7 +225,7 @@ arm_vm_page_granular_prot(vm_offset_t start, unsigned long size,
 	arm_vm_page_granular_helper(start, _end, start, pte_prot_APX, pte_prot_XN);
 
 	while (align_start < align_end) {
-		if (forceCoarse) {
+		if (force_page_granule) {
 			arm_vm_page_granular_helper(align_start, align_end, align_start + 1, 
 			                            pte_prot_APX, pte_prot_XN);
 		} else {
@@ -221,27 +248,27 @@ arm_vm_page_granular_prot(vm_offset_t start, unsigned long size,
 }
 
 static inline void
-arm_vm_page_granular_RNX(vm_offset_t start, unsigned long size, int forceCoarse)
+arm_vm_page_granular_RNX(vm_offset_t start, unsigned long size, int force_page_granule)
 {
-	arm_vm_page_granular_prot(start, size, 1, AP_RONA, 1, forceCoarse);
+	arm_vm_page_granular_prot(start, size, 1, AP_RONA, 1, force_page_granule);
 }
 
 static inline void
-arm_vm_page_granular_ROX(vm_offset_t start, unsigned long size, int forceCoarse)
+arm_vm_page_granular_ROX(vm_offset_t start, unsigned long size, int force_page_granule)
 {
-	arm_vm_page_granular_prot(start, size, 0, AP_RONA, 0, forceCoarse);
+	arm_vm_page_granular_prot(start, size, 0, AP_RONA, 0, force_page_granule);
 }
 
 static inline void
-arm_vm_page_granular_RWNX(vm_offset_t start, unsigned long size, int forceCoarse)
+arm_vm_page_granular_RWNX(vm_offset_t start, unsigned long size, int force_page_granule)
 {
-	arm_vm_page_granular_prot(start, size, 1, AP_RWNA, 1, forceCoarse);
+	arm_vm_page_granular_prot(start, size, 1, AP_RWNA, 1, force_page_granule);
 }
 
 static inline void
-arm_vm_page_granular_RWX(vm_offset_t start, unsigned long size, int forceCoarse)
+arm_vm_page_granular_RWX(vm_offset_t start, unsigned long size, int force_page_granule)
 {
-	arm_vm_page_granular_prot(start, size, 0, AP_RWNA, 0, forceCoarse);
+	arm_vm_page_granular_prot(start, size, 0, AP_RWNA, 0, force_page_granule);
 }
 
 void
@@ -276,6 +303,10 @@ arm_vm_prot_init(boot_args * args)
 		/* If we aren't protecting const, just map DATA as a single blob. */
 		arm_vm_page_granular_RWNX(segDATAB, segSizeDATA, FALSE);
 	}
+	arm_vm_page_granular_RWNX(segBOOTDATAB, segSizeBOOTDATA, TRUE);
+	arm_vm_page_granular_RNX((vm_offset_t)&intstack_low_guard, PAGE_MAX_SIZE, TRUE);
+	arm_vm_page_granular_RNX((vm_offset_t)&intstack_high_guard, PAGE_MAX_SIZE, TRUE);
+	arm_vm_page_granular_RNX((vm_offset_t)&fiqstack_high_guard, PAGE_MAX_SIZE, TRUE);
 
 	arm_vm_page_granular_ROX(segKLDB, segSizeKLD, force_coarse_physmap);
 	arm_vm_page_granular_RWNX(segLINKB, segSizeLINK, force_coarse_physmap);
@@ -283,7 +314,8 @@ arm_vm_prot_init(boot_args * args)
 	arm_vm_page_granular_RWNX(segPRELINKTEXTB, segSizePRELINKTEXT, TRUE); // Refined in OSKext::readPrelinkedExtensions
 	arm_vm_page_granular_RWNX(segPRELINKTEXTB + segSizePRELINKTEXT,
 	                             end_kern - (segPRELINKTEXTB + segSizePRELINKTEXT), force_coarse_physmap); // PreLinkInfoDictionary
-	arm_vm_page_granular_RWNX(end_kern, phystokv(args->topOfKernelData) - end_kern, force_coarse_physmap); // Device Tree, RAM Disk (if present), bootArgs
+	arm_vm_page_granular_RWNX(end_kern, phystokv(args->topOfKernelData) - end_kern, force_coarse_physmap); // Device Tree, RAM Disk (if present), bootArgs, trust caches
+	arm_vm_page_granular_RNX(segEXTRADATA, segSizeEXTRADATA, FALSE); // tighter trust cache protection
 	arm_vm_page_granular_RWNX(phystokv(args->topOfKernelData), ARM_PGBYTES * 8, FALSE); // boot_tte, cpu_tte
 
 	/*
@@ -319,6 +351,8 @@ arm_vm_prot_init(boot_args * args)
 void
 arm_vm_prot_finalize(boot_args * args)
 {
+	cpu_stack_alloc(&BootCpuData);
+	ml_static_mfree(segBOOTDATAB, segSizeBOOTDATA);
 	/*
 	 * Naively we could have:
 	 * arm_vm_page_granular_ROX(segTEXTB, segSizeTEXT, FALSE);
@@ -334,6 +368,13 @@ arm_vm_prot_finalize(boot_args * args)
 #endif
 	flush_mmu_tlb();
 }
+
+/* used in the chosen/memory-map node, populated by iBoot. */
+typedef struct MemoryMapFileInfo {
+       vm_offset_t paddr;
+       size_t length;
+} MemoryMapFileInfo;
+
 
 void
 arm_vm_init(uint64_t memory_size, boot_args * args)
@@ -391,9 +432,9 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	}
 
 	while (tte < tte_limit) {
-			*tte = ARM_TTE_TYPE_FAULT; 
-			tte++;
-		}
+		*tte = ARM_TTE_TYPE_FAULT; 
+		tte++;
+	}
 		
 	/* Skip 6 pages (four L1 + two L2 entries) */
 	avail_start = cpu_ttep + ARM_PGBYTES * 6;
@@ -404,12 +445,33 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 * from MACH-O headers for the currently running 32 bit kernel.
 	 */
 	segTEXTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__TEXT", &segSizeTEXT);
+	segLOWESTTEXT = segTEXTB;
 	segDATAB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__DATA", &segSizeDATA);
 	segLINKB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__LINKEDIT", &segSizeLINK);
 	segKLDB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__KLD", &segSizeKLD);
 	segLASTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__LAST", &segSizeLAST);
 	segPRELINKTEXTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PRELINK_TEXT", &segSizePRELINKTEXT);
 	segPRELINKINFOB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PRELINK_INFO", &segSizePRELINKINFO);
+	segBOOTDATAB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__BOOTDATA", &segSizeBOOTDATA);
+
+	segEXTRADATA = 0;
+	segSizeEXTRADATA = 0;
+
+	DTEntry memory_map;
+	MemoryMapFileInfo *trustCacheRange;
+	unsigned int trustCacheRangeSize;
+	int err;
+
+	err = DTLookupEntry(NULL, "chosen/memory-map", &memory_map);
+	assert(err == kSuccess);
+
+	err = DTGetProperty(memory_map, "TrustCache", (void**)&trustCacheRange, &trustCacheRangeSize);
+	if (err == kSuccess) {
+		assert(trustCacheRangeSize == sizeof(MemoryMapFileInfo));
+
+		segEXTRADATA = phystokv(trustCacheRange->paddr);
+		segSizeEXTRADATA = trustCacheRange->length;
+	}
 
 	etext = (vm_offset_t) segTEXTB + segSizeTEXT;
 	sdata = (vm_offset_t) segDATAB;
@@ -492,7 +554,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 
 	sane_size = mem_size - (avail_start - gPhysBase);
 	max_mem = mem_size;
-	vm_kernel_slide = gVirtBase-0x80000000;
+	vm_kernel_slide = gVirtBase-VM_KERNEL_LINK_ADDRESS;
 	vm_kernel_stext = segTEXTB;
 	vm_kernel_etext = segTEXTB + segSizeTEXT;
 	vm_kernel_base = gVirtBase;

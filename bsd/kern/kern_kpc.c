@@ -66,24 +66,10 @@ static lck_grp_attr_t *sysctl_lckgrp_attr = NULL;
 static lck_grp_t *sysctl_lckgrp = NULL;
 static lck_mtx_t sysctl_lock;
 
-#if defined(__x86_64__)
-/* 18 cores, 7 counters each */
-#define KPC_MAX_COUNTERS_COPIED (18 * 7)
-#elif defined(__arm64__)
-#include <pexpert/arm64/board_config.h>
-#if defined(CPU_COUNT)
-#define KPC_MAX_COUNTERS_COPIED (CPU_COUNT * 10)
-#else /* defined(CPU_COUNT) */
-#define KPC_MAX_COUNTERS_COPIED (2 * 10)
-#endif /* !defined(CPU_COUNT) */
-#elif defined(__arm__)
-#define KPC_MAX_COUNTERS_COPIED (16)
-#else /* !defined(__arm__) && !defined(__arm64__) && !defined(__x86_64__) */
-#error "unknown architecture for kpc buffer sizes"
-#endif /* !defined(__arm__) && !defined(__arm64__) && !defined(__x86_64__) */
-
-static_assert((KPC_MAX_COUNTERS_COPIED * sizeof(uint64_t)) < 1024,
-		"kpc's stack could grow too large");
+/*
+ * Another element is needed to hold the CPU number when getting counter values.
+ */
+#define KPC_MAX_BUF_LEN (KPC_MAX_COUNTERS_COPIED + 1)
 
 typedef int (*setget_func_t)(int);
 
@@ -99,6 +85,29 @@ kpc_init(void)
 	kpc_thread_init();
 
 	kpc_initted = 1;
+}
+
+static uint64_t *
+kpc_get_bigarray(uint32_t *size_out)
+{
+	static uint64_t *bigarray = NULL;
+
+	LCK_MTX_ASSERT(&sysctl_lock, LCK_MTX_ASSERT_OWNED);
+
+	uint32_t size = kpc_get_counterbuf_size() + sizeof(uint64_t);
+	*size_out = size;
+
+	if (bigarray) {
+		return bigarray;
+	}
+
+	/*
+	 * Another element is needed to hold the CPU number when getting counter
+	 * values.
+	 */
+	bigarray = kalloc_tag(size, VM_KERN_MEMORY_DIAG);
+	assert(bigarray != NULL);
+	return bigarray;
 }
 
 /* abstract sysctl handlers */
@@ -276,8 +285,8 @@ static int
 sysctl_get_bigarray(struct sysctl_req *req,
 		int (*get_fn)(uint32_t, uint32_t*, void*))
 {
-	uint64_t buf[KPC_MAX_COUNTERS_COPIED] = {};
-	uint32_t bufsize = sizeof(buf);
+	uint32_t bufsize = 0;
+	uint64_t *buf = kpc_get_bigarray(&bufsize);
 	uint32_t arg = 0;
 
 	/* get the argument */
@@ -286,9 +295,9 @@ sysctl_get_bigarray(struct sysctl_req *req,
 		return error;
 	}
 
-	error = get_fn(arg, &bufsize, &buf);
+	error = get_fn(arg, &bufsize, buf);
 	if (!error) {
-		error = SYSCTL_OUT(req, &buf, bufsize);
+		error = SYSCTL_OUT(req, buf, bufsize);
 	}
 
 	return error;
@@ -318,9 +327,10 @@ sysctl_getset_bigarray(struct sysctl_req *req, int (*size_fn)(uint32_t arg),
 		int (*get_fn)(uint32_t, void*), int (*set_fn)(uint32_t, void*))
 {
 	int error = 0;
-	uint64_t buf[KPC_MAX_COUNTERS_COPIED] = {};
-	uint32_t bufsize = sizeof(buf);
 	uint64_t arg;
+
+	uint32_t bufsize = 0;
+	uint64_t *buf = kpc_get_bigarray(&bufsize);
 
 	/* get the config word */
 	error = SYSCTL_IN(req, &arg, sizeof(arg));
@@ -337,11 +347,11 @@ sysctl_getset_bigarray(struct sysctl_req *req, int (*size_fn)(uint32_t arg),
 	/* if writing */
 	if (req->newptr) {
 		/* copy the rest -- SYSCTL_IN knows the copyin should be shifted */
-		error = SYSCTL_IN(req, &buf, regsize);
+		error = SYSCTL_IN(req, buf, regsize);
 
 		/* SYSCTL_IN failure means only need to read */
 		if (!error) {
-			error = set_fn((uint32_t)arg, &buf);
+			error = set_fn((uint32_t)arg, buf);
 			if (error) {
 				return error;
 			}
@@ -350,12 +360,12 @@ sysctl_getset_bigarray(struct sysctl_req *req, int (*size_fn)(uint32_t arg),
 
 	/* if reading */
 	if (req->oldptr) {
-		error = get_fn((uint32_t)arg, &buf);
+		error = get_fn((uint32_t)arg, buf);
 		if (error) {
 			return error;
 		}
 
-		error = SYSCTL_OUT(req, &buf, regsize);
+		error = SYSCTL_OUT(req, buf, regsize);
 	}
 
 	return error;
@@ -369,8 +379,13 @@ kpc_sysctl SYSCTL_HANDLER_ARGS
 	// __unused struct sysctl_oid *unused_oidp = oidp;
 	(void)arg2;
 
-	if( !kpc_initted )
+	if (!kpc_initted) {
 		panic("kpc_init not called");
+	}
+
+	if (!kpc_supported) {
+		return ENOTSUP;
+	}
 
 	ktrace_lock();
 
@@ -486,74 +501,74 @@ SYSCTL_NODE(, OID_AUTO, kpc, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 
 /* values */
 SYSCTL_PROC(_kpc, OID_AUTO, classes,
-            CTLTYPE_INT|CTLFLAG_RD|CTLFLAG_ANYBODY,
+            CTLTYPE_INT|CTLFLAG_RD|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void*)REQ_CLASSES, 
             sizeof(int), kpc_sysctl, "I", "Available classes");
 
 SYSCTL_PROC(_kpc, OID_AUTO, counting,
-            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
+            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void*)REQ_COUNTING, 
             sizeof(int), kpc_sysctl, "I", "PMCs counting");
 
 SYSCTL_PROC(_kpc, OID_AUTO, thread_counting,
-            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
+            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void*)REQ_THREAD_COUNTING, 
             sizeof(int), kpc_sysctl, "I", "Thread accumulation");
 
 SYSCTL_PROC(_kpc, OID_AUTO, pmu_version,
-            CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_ANYBODY,
+            CTLTYPE_INT|CTLFLAG_RD|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void *)REQ_PMU_VERSION,
             sizeof(int), kpc_sysctl, "I", "PMU version for hardware");
 
 /* faux values */
 SYSCTL_PROC(_kpc, OID_AUTO, config_count,
-            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
+            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void*)REQ_CONFIG_COUNT, 
             sizeof(int), kpc_sysctl, "S", "Config count");
 
 SYSCTL_PROC(_kpc, OID_AUTO, counter_count,
-            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
+            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void*)REQ_COUNTER_COUNT, 
             sizeof(int), kpc_sysctl, "S", "Counter count");
 
 SYSCTL_PROC(_kpc, OID_AUTO, sw_inc,
-            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
+            CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void*)REQ_SW_INC, 
             sizeof(int), kpc_sysctl, "S", "Software increment");
 
 /* arrays */
 SYSCTL_PROC(_kpc, OID_AUTO, thread_counters,
-            CTLFLAG_RD|CTLFLAG_WR|CTLFLAG_ANYBODY,
+            CTLFLAG_RD|CTLFLAG_WR|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void*)REQ_THREAD_COUNTERS, 
             sizeof(uint64_t), kpc_sysctl, 
             "QU", "Current thread counters");
 
 SYSCTL_PROC(_kpc, OID_AUTO, counters,
-            CTLFLAG_RD|CTLFLAG_WR|CTLFLAG_ANYBODY,
+            CTLFLAG_RD|CTLFLAG_WR|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void*)REQ_COUNTERS, 
             sizeof(uint64_t), kpc_sysctl, 
             "QU", "Current counters");
 
 SYSCTL_PROC(_kpc, OID_AUTO, shadow_counters,
-            CTLFLAG_RD|CTLFLAG_WR|CTLFLAG_ANYBODY,
+            CTLFLAG_RD|CTLFLAG_WR|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void*)REQ_SHADOW_COUNTERS, 
             sizeof(uint64_t), kpc_sysctl, 
             "QU", "Current shadow counters");
 
 SYSCTL_PROC(_kpc, OID_AUTO, config,
-            CTLFLAG_RD|CTLFLAG_WR|CTLFLAG_ANYBODY,
+            CTLFLAG_RD|CTLFLAG_WR|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void*)REQ_CONFIG, 
             sizeof(uint64_t), kpc_sysctl, 
             "QU", "Set counter configs");
 
 SYSCTL_PROC(_kpc, OID_AUTO, period,
-            CTLFLAG_RD|CTLFLAG_WR|CTLFLAG_ANYBODY,
+            CTLFLAG_RD|CTLFLAG_WR|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void*)REQ_PERIOD, 
             sizeof(uint64_t), kpc_sysctl, 
             "QU", "Set counter periods");
 
 SYSCTL_PROC(_kpc, OID_AUTO, actionid,
-            CTLFLAG_RD|CTLFLAG_WR|CTLFLAG_ANYBODY,
+            CTLFLAG_RD|CTLFLAG_WR|CTLFLAG_ANYBODY|CTLFLAG_MASKED|CTLFLAG_LOCKED,
             (void*)REQ_ACTIONID, 
             sizeof(uint32_t), kpc_sysctl, 
             "QU", "Set counter actionids");

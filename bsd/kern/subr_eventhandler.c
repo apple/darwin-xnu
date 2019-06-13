@@ -72,13 +72,19 @@ SYSCTL_NODE(_kern, OID_AUTO, eventhandler, CTLFLAG_RW | CTLFLAG_LOCKED,
 SYSCTL_INT(_kern_eventhandler, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_LOCKED,
     &evh_debug, 0, "Eventhandler debug mode");
 
-struct eventhandler_entry_arg eventhandler_entry_dummy_arg = {{0}};
+struct eventhandler_entry_arg eventhandler_entry_dummy_arg = { { 0 }, { 0 } };
 
 /* List of 'slow' lists */
 static struct eventhandler_lists_ctxt evthdlr_lists_ctxt_glb;
 static lck_grp_attr_t   *eventhandler_mutex_grp_attr;
 static lck_grp_t        *eventhandler_mutex_grp;
 static lck_attr_t       *eventhandler_mutex_attr;
+
+static unsigned int eg_size;	/* size of eventhandler_entry_generic */
+static struct mcache *eg_cache;	/* mcache for eventhandler_entry_generic */
+
+static unsigned int el_size;	/* size of eventhandler_list */
+static struct mcache *el_cache;	/* mcache for eventhandler_list */
 
 static lck_grp_attr_t   *el_lock_grp_attr;
 lck_grp_t        *el_lock_grp;
@@ -121,6 +127,21 @@ eventhandler_init(void)
 	el_lock_attr = lck_attr_alloc_init();
 
 	eventhandler_lists_ctxt_init(&evthdlr_lists_ctxt_glb);
+
+	eg_size = sizeof (struct eventhandler_entry_generic);
+	eg_cache = mcache_create("eventhdlr_generic", eg_size,
+	    sizeof (uint64_t), 0, MCR_SLEEP);
+
+	el_size = sizeof (struct eventhandler_list);
+	el_cache = mcache_create("eventhdlr_list", el_size,
+	    sizeof (uint64_t), 0, MCR_SLEEP);
+}
+
+void
+eventhandler_reap_caches(boolean_t purge)
+{
+	mcache_reap_now(eg_cache, purge);
+	mcache_reap_now(el_cache, purge);
 }
 
 /*
@@ -136,6 +157,8 @@ eventhandler_register_internal(
 	struct eventhandler_list		*new_list;
 	struct eventhandler_entry		*ep;
 
+	VERIFY(strlen(name) <= (sizeof (new_list->el_name) - 1));
+
 	if (evthdlr_lists_ctxt == NULL)
 		evthdlr_lists_ctxt = &evthdlr_lists_ctxt_glb;
 
@@ -143,7 +166,7 @@ eventhandler_register_internal(
 	VERIFY(epn != NULL); /* cannot register NULL event */
 
 	/* lock the eventhandler lists */
-	lck_mtx_lock(&evthdlr_lists_ctxt->eventhandler_mutex);
+	lck_mtx_lock_spin(&evthdlr_lists_ctxt->eventhandler_mutex);
 
 	/* Do we need to find/create the (slow) list? */
 	if (list == NULL) {
@@ -152,27 +175,16 @@ eventhandler_register_internal(
 
 		/* Do we need to create the list? */
 		if (list == NULL) {
-			lck_mtx_unlock(&evthdlr_lists_ctxt->eventhandler_mutex);
-
-			MALLOC(new_list, struct eventhandler_list *,
-			    sizeof(struct eventhandler_list) + strlen(name) + 1,
-			    M_EVENTHANDLER, M_WAITOK);
-
-			/* If someone else created it already, then use that one. */
-			lck_mtx_lock(&evthdlr_lists_ctxt->eventhandler_mutex);
-			list = _eventhandler_find_list(evthdlr_lists_ctxt, name);
-			if (list != NULL) {
-				FREE(new_list, M_EVENTHANDLER);
-			} else {
-				evhlog((LOG_DEBUG, "%s: creating list \"%s\"", __func__, name));
-				list = new_list;
-				list->el_flags = 0;
-				list->el_runcount = 0;
-				bzero(&list->el_lock, sizeof(list->el_lock));
-				list->el_name = (char *)list + sizeof(struct eventhandler_list);
-				strlcpy(list->el_name, name, strlen(name) + 1);
-				TAILQ_INSERT_HEAD(&evthdlr_lists_ctxt->eventhandler_lists, list, el_link);
-			}
+			lck_mtx_convert_spin(&evthdlr_lists_ctxt->eventhandler_mutex);
+			new_list = mcache_alloc(el_cache, MCR_SLEEP);
+			bzero(new_list, el_size);
+			evhlog((LOG_DEBUG, "%s: creating list \"%s\"", __func__, name));
+			list = new_list;
+			list->el_flags = 0;
+			list->el_runcount = 0;
+			bzero(&list->el_lock, sizeof(list->el_lock));
+			(void) snprintf(list->el_name, sizeof (list->el_name), "%s", name);
+			TAILQ_INSERT_HEAD(&evthdlr_lists_ctxt->eventhandler_lists, list, el_link);
 		}
 	}
 	if (!(list->el_flags & EHL_INITTED)) {
@@ -210,10 +222,8 @@ eventhandler_register(struct eventhandler_lists_ctxt *evthdlr_lists_ctxt,
 	struct eventhandler_entry_generic	*eg;
 
 	/* allocate an entry for this handler, populate it */
-	MALLOC(eg, struct eventhandler_entry_generic *,
-	    sizeof(struct eventhandler_entry_generic),
-	    M_EVENTHANDLER, M_WAITOK | M_ZERO);
-
+	eg = mcache_alloc(eg_cache, MCR_SLEEP);
+	bzero(eg, eg_size);
 	eg->func = func;
 	eg->ee.ee_arg = arg;
 	eg->ee.ee_priority = priority;
@@ -239,7 +249,8 @@ eventhandler_deregister(struct eventhandler_list *list, eventhandler_tag tag)
 			 */
 			if (!TAILQ_EMPTY(&list->el_entries))
 				TAILQ_REMOVE(&list->el_entries, ep, ee_link);
-			FREE(ep, M_EVENTHANDLER);
+			EHL_LOCK_CONVERT(list);
+			mcache_free(eg_cache, ep);
 		} else {
 			evhlog((LOG_DEBUG, "%s: marking item %p from \"%s\" as dead", __func__,
 			    VM_KERNEL_ADDRPERM(ep), list->el_name));
@@ -250,10 +261,11 @@ eventhandler_deregister(struct eventhandler_list *list, eventhandler_tag tag)
 		if (list->el_runcount == 0) {
 			evhlog((LOG_DEBUG, "%s: removing all items from \"%s\"", __func__,
 			    list->el_name));
+			EHL_LOCK_CONVERT(list);
 			while (!TAILQ_EMPTY(&list->el_entries)) {
 				ep = TAILQ_FIRST(&list->el_entries);
 				TAILQ_REMOVE(&list->el_entries, ep, ee_link);
-				FREE(ep, M_EVENTHANDLER);
+				mcache_free(eg_cache, ep);
 			}
 		} else {
 			evhlog((LOG_DEBUG, "%s: marking all items from \"%s\" as dead",
@@ -263,7 +275,7 @@ eventhandler_deregister(struct eventhandler_list *list, eventhandler_tag tag)
 		}
 	}
 	while (list->el_runcount > 0)
-		msleep((caddr_t)list, &list->el_lock, 0, "evhrm", 0);
+		msleep((caddr_t)list, &list->el_lock, PSPIN, "evhrm", 0);
 	EHL_UNLOCK(list);
 }
 
@@ -302,10 +314,12 @@ eventhandler_find_list(struct eventhandler_lists_ctxt *evthdlr_lists_ctxt,
 		return(NULL);
 
 	/* scan looking for the requested list */
-	lck_mtx_lock(&evthdlr_lists_ctxt->eventhandler_mutex);
+	lck_mtx_lock_spin(&evthdlr_lists_ctxt->eventhandler_mutex);
 	list = _eventhandler_find_list(evthdlr_lists_ctxt, name);
-	if (list != NULL)
-		EHL_LOCK(list);
+	if (list != NULL) {
+		lck_mtx_convert_spin(&evthdlr_lists_ctxt->eventhandler_mutex);
+		EHL_LOCK_SPIN(list);
+	}
 	lck_mtx_unlock(&evthdlr_lists_ctxt->eventhandler_mutex);
 
 	return(list);
@@ -325,7 +339,7 @@ eventhandler_prune_list(struct eventhandler_list *list)
 	TAILQ_FOREACH_SAFE(ep, &list->el_entries, ee_link, en) {
 		if (ep->ee_priority == EHE_DEAD_PRIORITY) {
 			TAILQ_REMOVE(&list->el_entries, ep, ee_link);
-			FREE(ep, M_EVENTHANDLER);
+			mcache_free(eg_cache, ep);
 			pruned++;
 		}
 	}
@@ -350,7 +364,7 @@ eventhandler_lists_ctxt_destroy(struct eventhandler_lists_ctxt *evthdlr_lists_ct
 	    el_link, list_next) {
 		VERIFY(TAILQ_EMPTY(&list->el_entries));
 		EHL_LOCK_DESTROY(list);
-		FREE(list, M_EVENTHANDLER);
+		mcache_free(el_cache, list);
 	}
 	lck_mtx_unlock(&evthdlr_lists_ctxt->eventhandler_mutex);
 	lck_mtx_destroy(&evthdlr_lists_ctxt->eventhandler_mutex,

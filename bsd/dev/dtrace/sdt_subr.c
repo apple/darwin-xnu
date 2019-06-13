@@ -136,6 +136,7 @@ sdt_argdesc_t sdt_args[] = {
 	{ "proc", "exec-failure", 0, 0, "int", NULL },
 	/* proc:::exec-success has no arguments */
 	{ "proc", "exit", 0, 0, "int", NULL },
+	{ "proc", "exited", 0, 0, "struct proc *", "psinfo_t *"},
 	{ "proc", "fault", 0, 0, "int", NULL },
 	{ "proc", "fault", 1, 1, "siginfo_t *", NULL },
 	{ "proc", "lwp-create", 0, 0, "struct thread *", "lwpsinfo_t *" },
@@ -946,6 +947,16 @@ sdt_argdesc_t sdt_args[] = {
 	{ "mptcp", "disconnectx", 2, 2, "sae_connid_t", "sae_connid_t" },
 	{ "mptcp", "disconnectx", 3, 3, "struct socket *", "sockinfo_t *" },
 	{ "mptcp", "disconnectx", 4, 4, "struct mptcb *", "mptsinfo_t *" },
+	{"vminfo", "kalloc", 0, 0, "vm_size_t", "vm_size_t" },
+	{"vminfo", "kalloc", 1, 1, "vm_size_t", "vm_size_t" },
+	{"vminfo", "kalloc", 2, 2, "void*", "void*" },
+	{"vminfo", "kfree", 0, 0, "vm_size_t", "vm_size_t" },
+	{"vminfo", "kfree", 1, 1, "vm_size_t", "vm_size_t" },
+	{"vminfo", "kfree", 2, 2, "void*", "void*" },
+	{"vminfo", "zalloc", 0, 0, "zone_t", "zone_t" },
+	{"vminfo", "zalloc", 1, 1, "void*", "void*" },
+	{"vminfo", "zfree", 0, 0, "zone_t", "zone_t" },
+	{"vminfo", "zfree", 1, 1, "void*", "void*" },
 	{ NULL, NULL, 0, 0, NULL, NULL }
 };
 

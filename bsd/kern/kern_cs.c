@@ -79,19 +79,42 @@ unsigned long cs_procs_invalidated = 0;
 int cs_force_kill = 0;
 int cs_force_hard = 0;
 int cs_debug = 0;
+// If set, AMFI will error out early on unsigned code, before evaluation the normal policy.
+int cs_debug_fail_on_unsigned_code = 0;
+// If the previous mode is enabled, we count the resulting failures here.
+unsigned int cs_debug_unsigned_exec_failures = 0;
+unsigned int cs_debug_unsigned_mmap_failures = 0;
+
 #if SECURE_KERNEL
-const int cs_enforcement_enable = 1;
+/*
+Here we split cs_enforcement_enable into cs_system_enforcement_enable and cs_process_enforcement_enable
+
+cs_system_enforcement_enable governs whether or not system level code signing enforcement mechanisms
+are applied on the system. Today, the only such mechanism is code signing enforcement of the dyld shared
+cache.
+
+cs_process_enforcement_enable governs whether code signing enforcement mechanisms are applied to all
+processes or only those that opt into such enforcement.
+
+(On iOS and related, both of these are set by default. On macOS, only cs_system_enforcement_enable
+is set by default. Processes can then be opted into code signing enforcement on a case by case basis.)
+ */
+const int cs_system_enforcement_enable = 1;
+const int cs_process_enforcement_enable = 1;
 const int cs_library_val_enable = 1;
 #else /* !SECURE_KERNEL */
 int cs_enforcement_panic=0;
 int cs_relax_platform_task_ports = 0;
 
 #if CONFIG_ENFORCE_SIGNED_CODE
-#define DEFAULT_CS_ENFORCEMENT_ENABLE 1
+#define DEFAULT_CS_SYSTEM_ENFORCEMENT_ENABLE 1
+#define DEFAULT_CS_PROCESS_ENFORCEMENT_ENABLE 1
 #else
-#define DEFAULT_CS_ENFORCEMENT_ENABLE 0
+#define DEFAULT_CS_SYSTEM_ENFORCEMENT_ENABLE 1
+#define DEFAULT_CS_PROCESS_ENFORCEMENT_ENABLE 0
 #endif
-SECURITY_READ_ONLY_LATE(int) cs_enforcement_enable = DEFAULT_CS_ENFORCEMENT_ENABLE;
+SECURITY_READ_ONLY_LATE(int) cs_system_enforcement_enable = DEFAULT_CS_SYSTEM_ENFORCEMENT_ENABLE;
+SECURITY_READ_ONLY_LATE(int) cs_process_enforcement_enable = DEFAULT_CS_PROCESS_ENFORCEMENT_ENABLE;
 
 #if CONFIG_ENFORCE_LIBRARY_VALIDATION
 #define DEFAULT_CS_LIBRARY_VA_ENABLE 1
@@ -108,15 +131,22 @@ static lck_grp_t *cs_lockgrp;
 SYSCTL_INT(_vm, OID_AUTO, cs_force_kill, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_force_kill, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, cs_force_hard, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_force_hard, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, cs_debug, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_debug, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, cs_debug_fail_on_unsigned_code, CTLFLAG_RW | CTLFLAG_LOCKED,
+			   &cs_debug_fail_on_unsigned_code, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, cs_debug_unsigned_exec_failures, CTLFLAG_RD | CTLFLAG_LOCKED,
+			   &cs_debug_unsigned_exec_failures, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, cs_debug_unsigned_mmap_failures, CTLFLAG_RD | CTLFLAG_LOCKED,
+			   &cs_debug_unsigned_mmap_failures, 0, "");
 
 SYSCTL_INT(_vm, OID_AUTO, cs_all_vnodes, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_all_vnodes, 0, "");
 
 #if !SECURE_KERNEL
-SYSCTL_INT(_vm, OID_AUTO, cs_enforcement, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_enforcement_enable, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, cs_system_enforcement, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_system_enforcement_enable, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, cs_process_enforcement, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_process_enforcement_enable, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, cs_enforcement_panic, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_enforcement_panic, 0, "");
 
 #if !CONFIG_ENFORCE_LIBRARY_VALIDATION
-SYSCTL_INT(_vm, OID_AUTO, cs_library_validation, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_library_val_enable, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, cs_library_validation, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_library_val_enable, 0, "");
 #endif
 #endif /* !SECURE_KERNEL */
 
@@ -125,17 +155,20 @@ int panic_on_cs_killed = 0;
 void
 cs_init(void)
 {
-#if MACH_ASSERT && __x86_64__
+#if MACH_ASSERT
+#if PLATFORM_WatchOS || __x86_64__
 	panic_on_cs_killed = 1;
-#endif /* MACH_ASSERT && __x86_64__ */
+#endif /* watchos || x86_64 */
+#endif /* MACH_ASSERT */
 	PE_parse_boot_argn("panic_on_cs_killed", &panic_on_cs_killed,
 			   sizeof (panic_on_cs_killed));
 #if !SECURE_KERNEL
 	int disable_cs_enforcement = 0;
 	PE_parse_boot_argn("cs_enforcement_disable", &disable_cs_enforcement, 
 			   sizeof (disable_cs_enforcement));
-	if (disable_cs_enforcement) {
-		cs_enforcement_enable = 0;
+	if (disable_cs_enforcement && PE_i_can_has_debugger(NULL) != 0) {
+		cs_system_enforcement_enable = 0;
+		cs_process_enforcement_enable = 0;
 	} else {
 		int panic = 0;
 		PE_parse_boot_argn("cs_enforcement_panic", &panic, sizeof(panic));
@@ -165,7 +198,7 @@ cs_allow_invalid(struct proc *p)
 #if MACH_ASSERT
 	lck_mtx_assert(&p->p_mlock, LCK_MTX_ASSERT_NOTOWNED);
 #endif
-#if CONFIG_MACF && CONFIG_ENFORCE_SIGNED_CODE
+#if CONFIG_MACF
 	/* There needs to be a MAC policy to implement this hook, or else the
 	 * kill bits will be cleared here every time. If we have 
 	 * CONFIG_ENFORCE_SIGNED_CODE, we can assume there is a policy
@@ -262,10 +295,10 @@ cs_invalid_page(addr64_t vaddr, boolean_t *cs_killed)
  */
 
 int
-cs_enforcement(struct proc *p)
+cs_process_enforcement(struct proc *p)
 {
 
-	if (cs_enforcement_enable)
+	if (cs_process_enforcement_enable)
 		return 1;
 	
 	if (p == NULL)
@@ -275,6 +308,18 @@ cs_enforcement(struct proc *p)
 		return 1;
 
 	return 0;
+}
+
+int
+cs_process_global_enforcement(void)
+{
+	return cs_process_enforcement_enable ? 1 : 0;
+}
+
+int
+cs_system_enforcement(void)
+{
+	return cs_system_enforcement_enable ? 1 : 0;
 }
 
 /*
@@ -312,6 +357,18 @@ cs_require_lv(struct proc *p)
 	return 0;
 }
 
+int
+csproc_forced_lv(struct proc* p)
+{
+	if (p == NULL) {
+		p = current_proc();
+	}
+	if (p != NULL && (p->p_csflags & CS_FORCED_LV)) {
+		return 1;
+	}
+	return 0;
+}
+
 /*
  * <rdar://problem/24634089> added to allow system level library
  *  validation check at mac_cred_label_update_execve time
@@ -325,7 +382,7 @@ cs_system_require_lv(void)
 /*
  * Function: csblob_get_base_offset
  *
- * Description: This function returns the base offset into the Mach-O binary
+ * Description: This function returns the base offset into the (possibly universal) binary
  *		for a given blob.
 */
 
@@ -413,11 +470,15 @@ csproc_get_blob(struct proc *p)
 	if (NULL == p->p_textvp)
 		return NULL;
 
+	if ((p->p_csflags & CS_SIGNED) == 0) {
+		return NULL;
+	}
+
 	return ubc_cs_blob_get(p->p_textvp, -1, p->p_textoff);
 }
 
 /*
- * Function: csproc_get_blob
+ * Function: csvnode_get_blob
  *
  * Description: This function returns the cs_blob
  *		for the vnode vp
@@ -579,7 +640,9 @@ csproc_get_platform_binary(struct proc *p)
 int
 csproc_get_platform_path(struct proc *p)
 {
-	struct cs_blob *csblob = csproc_get_blob(p);
+	struct cs_blob *csblob;
+
+    csblob = csproc_get_blob(p);
 
 	return (csblob == NULL) ? 0 : csblob->csb_platform_path;
 }
@@ -603,6 +666,56 @@ csproc_clear_platform_binary(struct proc *p)
 	task_set_platform_binary(proc_task(p), FALSE);
 }
 #endif
+
+void
+csproc_disable_enforcement(struct proc* __unused p)
+{
+#if !CONFIG_ENFORCE_SIGNED_CODE
+	if (p != NULL) {
+		proc_lock(p);
+		p->p_csflags &= (~CS_ENFORCEMENT);
+		proc_unlock(p);
+	}
+#endif
+}
+
+/* Function: csproc_mark_invalid_allowed
+ *
+ * Description: Mark the process as being allowed to go invalid. Called as part of
+ *		task_for_pid and ptrace policy. Note CS_INVALID_ALLOWED only matters for
+ *		processes that have been opted into CS_ENFORCEMENT.
+ */
+void
+csproc_mark_invalid_allowed(struct proc* __unused p)
+{
+#if !CONFIG_ENFORCE_SIGNED_CODE
+	if (p != NULL) {
+		proc_lock(p);
+		p->p_csflags |= CS_INVALID_ALLOWED;
+		proc_unlock(p);
+	}
+#endif
+}
+
+/*
+ * Function: csproc_check_invalid_allowed
+ *
+ * Description: Returns 1 if the process has been marked as allowed to go invalid
+ *		because it gave its task port to an allowed process.
+ */
+int
+csproc_check_invalid_allowed(struct proc* __unused p)
+{
+#if !CONFIG_ENFORCE_SIGNED_CODE
+	if (p == NULL) {
+		p = current_proc();
+	}
+
+	if (p != NULL && (p->p_csflags & CS_INVALID_ALLOWED))
+		return 1;
+#endif
+	return 0;
+}
 
 /*
  * Function: csproc_get_prod_signed
@@ -802,6 +915,93 @@ out:
 	return prod_signed;
 }
 
+/*
+ * Function: csfg_get_identity
+ *
+ * Description: This function returns the codesign identity
+ *		for the fileglob
+ */
+const char *
+csfg_get_identity(struct fileglob *fg, off_t offset)
+{
+	vnode_t vp;
+	struct cs_blob *csblob = NULL;
+
+	if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE)
+		return NULL;
+
+	vp = (struct vnode *)fg->fg_data;
+	if (vp == NULL)
+		return NULL;
+
+	csblob = ubc_cs_blob_get(vp, -1, offset);
+	if (csblob == NULL)
+		return NULL;
+
+	return csblob_get_identity(csblob);
+}
+
+/*
+ * Function: csfg_get_platform_identifier
+ *
+ * Description: This function returns the codesign platform
+ *		identifier for the fileglob.  Assumes the fileproc
+ *		is being held busy to keep the fileglob consistent.
+ */
+uint8_t
+csfg_get_platform_identifier(struct fileglob *fg, off_t offset)
+{
+	vnode_t vp;
+
+	if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE)
+		return 0;
+
+	vp = (struct vnode *)fg->fg_data;
+	if (vp == NULL)
+		return 0;
+
+	return csvnode_get_platform_identifier(vp, offset);
+}
+
+/*
+ * Function: csvnode_get_platform_identifier
+ *
+ * Description: This function returns the codesign platform
+ *		identifier for the vnode.  Assumes a vnode reference
+ *		is held.
+ */
+uint8_t
+csvnode_get_platform_identifier(struct vnode *vp, off_t offset)
+{
+	struct cs_blob *csblob;
+	const CS_CodeDirectory *code_dir;
+
+	csblob = ubc_cs_blob_get(vp, -1, offset);
+	if (csblob == NULL)
+		return 0;
+
+	code_dir = csblob->csb_cd;
+	if (code_dir == NULL || ntohl(code_dir->length) < 8)
+		return 0;
+
+	return code_dir->platform;
+}
+
+/*
+ * Function: csproc_get_platform_identifier
+ *
+ * Description: This function returns the codesign platform
+ *		identifier for the proc.  Assumes proc will remain
+ *		valid through call.
+ */
+uint8_t
+csproc_get_platform_identifier(struct proc *p)
+{
+	if (NULL == p->p_textvp)
+		return 0;
+
+	return csvnode_get_platform_identifier(p->p_textvp, p->p_textoff);
+}
 
 uint32_t
 cs_entitlement_flags(struct proc *p)
@@ -813,6 +1013,12 @@ int
 cs_restricted(struct proc *p)
 {
 	return (p->p_csflags & CS_RESTRICT) ? 1 : 0;
+}
+
+int
+csproc_hardened_runtime(struct proc* p)
+{
+	return (p->p_csflags & CS_RUNTIME) ? 1 : 0;
 }
 
 /*
@@ -858,6 +1064,10 @@ cs_entitlements_blob_get(proc_t p, void **out_start, size_t *out_length)
 	*out_start = NULL;
 	*out_length = 0;
 
+	if ((p->p_csflags & CS_SIGNED) == 0) {
+		return 0;
+	}
+
 	if (NULL == p->p_textvp)
 		return EINVAL;
 
@@ -878,6 +1088,10 @@ cs_identity_get(proc_t p)
 {
 	struct cs_blob *csblob;
 
+	if ((p->p_csflags & CS_SIGNED) == 0) {
+		return NULL;
+	}
+
 	if (NULL == p->p_textvp)
 		return NULL;
 
@@ -887,15 +1101,13 @@ cs_identity_get(proc_t p)
 	return csblob_get_identity(csblob);
 }
 
-
-/* Retrieve the codesign blob for a process.
- * Returns:
- *   EINVAL	no text vnode associated with the process
- *   0		no error occurred
+/*
+ * DO NOT USE THIS FUNCTION!
+ * Use the properly guarded csproc_get_blob instead.
  *
- * On success, out_start and out_length will point to the
- * cms blob if found; or will be set to NULL/zero
- * if there were no blob.
+ * This is currently here to allow detached signatures to work
+ * properly. The only user of this function is also checking
+ * for CS_VALID.
  */
 
 int
@@ -926,6 +1138,10 @@ uint8_t *
 cs_get_cdhash(struct proc *p)
 {
 	struct cs_blob *csblob;
+
+	if ((p->p_csflags & CS_SIGNED) == 0) {
+		return NULL;
+	}
 
 	if (NULL == p->p_textvp)
 		return NULL;

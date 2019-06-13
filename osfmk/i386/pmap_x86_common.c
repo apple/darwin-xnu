@@ -1969,12 +1969,14 @@ phys_attribute_clear(
 					pte_bits &= ept_bits_to_clear;
 				}
 			}
+			if (options & PMAP_OPTIONS_CLEAR_WRITE)
+			        pte_bits |= PTE_WRITE(is_ept);
 
 			 /*
 			  * Clear modify and/or reference bits.
 			  */
 			if (pte_bits) {
-				pmap_update_pte(pte, bits, 0);
+				pmap_update_pte(pte, pte_bits, 0);
 
 				/* Ensure all processors using this translation
 				 * invalidate this TLB entry. The invalidation
@@ -2234,9 +2236,11 @@ pmap_map_bd(
 	unsigned int	flags)
 {
 	pt_entry_t	template;
-	pt_entry_t	*pte;
-	spl_t           spl;
+	pt_entry_t	*ptep;
+
 	vm_offset_t	base = virt;
+	boolean_t	doflush = FALSE;
+
 	template = pa_to_pte(start_addr)
 		| INTEL_PTE_REF
 		| INTEL_PTE_MOD
@@ -2249,29 +2253,78 @@ pmap_map_bd(
 			template |= INTEL_PTE_PTA;
 	}
 
-#if    defined(__x86_64__)
 	if ((prot & VM_PROT_EXECUTE) == 0)
 		template |= INTEL_PTE_NX;
-#endif
 
 	if (prot & VM_PROT_WRITE)
 		template |= INTEL_PTE_WRITE;
 
 	while (start_addr < end_addr) {
-	        spl = splhigh();
-		pte = pmap_pte(kernel_pmap, (vm_map_offset_t)virt);
-		if (pte == PT_ENTRY_NULL) {
-			panic("pmap_map_bd: Invalid kernel address\n");
+		ptep = pmap_pte(kernel_pmap, (vm_map_offset_t)virt);
+		if (ptep == PT_ENTRY_NULL) {
+			panic("pmap_map_bd: Invalid kernel address");
 		}
-		pmap_store_pte(pte, template);
-		splx(spl);
+		if (pte_to_pa(*ptep)) {
+			doflush = TRUE;
+		}
+		pmap_store_pte(ptep, template);
 		pte_increment_pa(template);
 		virt += PAGE_SIZE;
 		start_addr += PAGE_SIZE;
 	}
-	flush_tlb_raw();
-	PMAP_UPDATE_TLBS(kernel_pmap, base, base + end_addr - start_addr);
+	if (doflush) {
+		flush_tlb_raw();
+		PMAP_UPDATE_TLBS(kernel_pmap, base, base + end_addr - start_addr);
+	}
 	return(virt);
+}
+
+/* Create a virtual alias beginning at 'ava' of the specified kernel virtual
+ * range. The aliased pagetable range is expanded if
+ * PMAP_EXPAND_OPTIONS_ALIASMAP is specified. Performs no synchronization,
+ * assumes caller has stabilized the source and destination ranges. Currently
+ * used to populate sections of the trampoline "doublemap" at CPU startup.
+ */
+
+void
+pmap_alias(
+	vm_offset_t	ava,
+	vm_map_offset_t	start_addr,
+	vm_map_offset_t	end_addr,
+	vm_prot_t	prot,
+	unsigned int	eoptions)
+{
+	pt_entry_t	prot_template, template;
+	pt_entry_t	*aptep, *sptep;
+
+	prot_template =  INTEL_PTE_REF | INTEL_PTE_MOD | INTEL_PTE_WIRED | INTEL_PTE_VALID;
+	if ((prot & VM_PROT_EXECUTE) == 0)
+		prot_template |= INTEL_PTE_NX;
+
+	if (prot & VM_PROT_WRITE)
+		prot_template |= INTEL_PTE_WRITE;
+	assert(((start_addr | end_addr) & PAGE_MASK) == 0);
+	while (start_addr < end_addr) {
+		aptep = pmap_pte(kernel_pmap, (vm_map_offset_t)ava);
+		if (aptep == PT_ENTRY_NULL) {
+			if (eoptions & PMAP_EXPAND_OPTIONS_ALIASMAP) {
+				pmap_expand(kernel_pmap, ava, PMAP_EXPAND_OPTIONS_ALIASMAP);
+				aptep = pmap_pte(kernel_pmap, (vm_map_offset_t)ava);
+			} else {
+				panic("pmap_alias: Invalid alias address");
+			}
+		}
+		/* The aliased range should not have any active mappings */
+		assert(pte_to_pa(*aptep) == 0);
+
+		sptep = pmap_pte(kernel_pmap, start_addr);
+		assert(sptep != PT_ENTRY_NULL && (pte_to_pa(*sptep) != 0));
+		template = pa_to_pte(pte_to_pa(*sptep)) | prot_template;
+		pmap_store_pte(aptep, template);
+
+		ava += PAGE_SIZE;
+		start_addr += PAGE_SIZE;
+	}
 }
 
 mach_vm_size_t
@@ -2421,13 +2474,15 @@ done:
 	return KERN_SUCCESS;
 }
 
-void pmap_set_jit_entitled(__unused pmap_t pmap)
+void
+pmap_set_jit_entitled(__unused pmap_t pmap)
 {
 	/* The x86 pmap layer does not care if a map has a JIT entry. */
 	return;
 }
 
-bool pmap_has_prot_policy(__unused vm_prot_t prot)
+bool
+pmap_has_prot_policy(__unused vm_prot_t prot)
 {
 	/*
 	 * The x86 pmap layer does not apply any policy to any protection
@@ -2436,8 +2491,43 @@ bool pmap_has_prot_policy(__unused vm_prot_t prot)
 	return FALSE;
 }
 
-void pmap_release_pages_fast(void)
+uint64_t
+pmap_release_pages_fast(void)
+{
+	return 0;
+}
+
+void
+pmap_trim(__unused pmap_t grand, __unused pmap_t subord, __unused addr64_t vstart, __unused addr64_t nstart, __unused uint64_t size)
 {
 	return;
+}
+
+void pmap_ledger_alloc_init(size_t size)
+{
+	panic("%s: unsupported, "
+	      "size=%lu",
+	      __func__, size);
+}
+
+ledger_t pmap_ledger_alloc(void)
+{
+	panic("%s: unsupported",
+	      __func__);
+
+	return NULL;
+}
+
+void pmap_ledger_free(ledger_t ledger)
+{
+	panic("%s: unsupported, "
+	      "ledger=%p",
+	      __func__, ledger);
+}
+
+size_t
+pmap_dump_page_tables(pmap_t pmap __unused, void *bufp __unused, void *buf_end __unused)
+{
+	return (size_t)-1;
 }
 

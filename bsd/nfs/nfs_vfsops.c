@@ -204,7 +204,7 @@ int	nfs_vfs_fhtovp(mount_t, int, unsigned char *, vnode_t *, vfs_context_t);
 int	nfs_vfs_init(struct vfsconf *);
 int	nfs_vfs_sysctl(int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, vfs_context_t);
 
-struct vfsops nfs_vfsops = {
+const struct vfsops nfs_vfsops = {
 	.vfs_mount       = nfs_vfs_mount,
 	.vfs_start       = nfs_vfs_start,
 	.vfs_unmount     = nfs_vfs_unmount,
@@ -237,7 +237,7 @@ int nfs3_getquota(struct nfsmount *, vfs_context_t, uid_t, int, struct dqblk *);
 int nfs4_getquota(struct nfsmount *, vfs_context_t, uid_t, int, struct dqblk *);
 #endif
 
-struct nfs_funcs nfs3_funcs = {
+const struct nfs_funcs nfs3_funcs = {
 	nfs3_mount,
 	nfs3_update_statfs,
 	nfs3_getquota,
@@ -258,7 +258,7 @@ struct nfs_funcs nfs3_funcs = {
 	nfs3_unlock_rpc,
 	nfs3_getlock_rpc
 	};
-struct nfs_funcs nfs4_funcs = {
+const struct nfs_funcs nfs4_funcs = {
 	nfs4_mount,
 	nfs4_update_statfs,
 	nfs4_getquota,
@@ -2328,6 +2328,9 @@ nocomponents:
 		nfsmout_if(error);
 		nfsm_chain_op_check(error, &nmrep, NFS_OP_GETFH);
 		nfsm_chain_get_32(error, &nmrep, fh.fh_len);
+		if (fh.fh_len > sizeof(fh.fh_data))
+			error = EBADRPC;
+		nfsmout_if(error);
 		nfsm_chain_get_opaque(error, &nmrep, fh.fh_len, fh.fh_data);
 		nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
 		if (!error) {
@@ -2811,8 +2814,9 @@ mountnfs(
 	xb_get_32(error, &xb, val); /* version */
 	xb_get_32(error, &xb, argslength); /* args length */
 	xb_get_32(error, &xb, val); /* XDR args version */
-	if (val != NFS_XDRARGS_VERSION_0)
+	if (val != NFS_XDRARGS_VERSION_0 || argslength < ((4 + NFS_MATTR_BITMAP_LEN + 1) * XDRWORD)) {
 		error = EINVAL;
+	}
 	len = NFS_MATTR_BITMAP_LEN;
 	xb_get_bitmap(error, &xb, mattrs, len); /* mount attribute bitmap */
 	attrslength = 0;
@@ -3030,8 +3034,7 @@ mountnfs(
 			error = ENOMEM;
 		xb_get_32(error, &xb, nmp->nm_fh->fh_len);
 		nfsmerr_if(error);
-		if (nmp->nm_fh->fh_len < 0 ||
-		    (size_t)nmp->nm_fh->fh_len > sizeof(nmp->nm_fh->fh_data))
+		if ((size_t)nmp->nm_fh->fh_len > sizeof(nmp->nm_fh->fh_data))
 			error = EINVAL;
 		else
 			error = xb_get_bytes(&xb, (char*)&nmp->nm_fh->fh_data[0], nmp->nm_fh->fh_len, 0);
@@ -4458,6 +4461,7 @@ nfs_mount_zombie(struct nfsmount *nmp, int nm_state_flags)
 	if ((nmp->nm_vers >= NFS_VER4) && nmp->nm_renew_timer) {
 		thread_call_cancel(nmp->nm_renew_timer);
 		thread_call_free(nmp->nm_renew_timer);
+		nmp->nm_renew_timer = NULL;
 	}
 
 	lck_mtx_unlock(&nmp->nm_lock);
@@ -4483,6 +4487,7 @@ nfs_mount_zombie(struct nfsmount *nmp, int nm_state_flags)
 		if (nmp->nm_longid->nci_id)
 			FREE(nmp->nm_longid->nci_id, M_TEMP);
 		FREE(nmp->nm_longid, M_TEMP);
+		nmp->nm_longid = NULL;
 		lck_mtx_unlock(nfs_global_mutex);
 	}
 
@@ -4519,6 +4524,8 @@ nfs_mount_zombie(struct nfsmount *nmp, int nm_state_flags)
 	/* Since we've drop the request mutex we can now safely unreference the request */
 	TAILQ_FOREACH_SAFE(req, &resendq, r_rchain, treq) {
 		TAILQ_REMOVE(&resendq, req, r_rchain);
+		/* Make sure we don't try and remove again in nfs_request_destroy */
+		req->r_rchain.tqe_next = NFSREQNOLIST;
 		nfs_request_rele(req);
 	}
 
@@ -5464,10 +5471,10 @@ nfs_vfs_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	struct nfs_exportfs *nxfs;
 	struct nfs_export *nx;
 	struct nfs_active_user_list *ulist;
-	struct nfs_export_stat_desc stat_desc;
+	struct nfs_export_stat_desc stat_desc = {};
 	struct nfs_export_stat_rec statrec;
 	struct nfs_user_stat_node *unode, *unode_next;
-	struct nfs_user_stat_desc ustat_desc;
+	struct nfs_user_stat_desc ustat_desc = {};
 	struct nfs_user_stat_user_rec ustat_rec;
 	struct nfs_user_stat_path_rec upath_rec;
 	uint bytes_avail, bytes_total, recs_copied;

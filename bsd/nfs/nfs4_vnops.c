@@ -1193,6 +1193,9 @@ nfs4_lookup_rpc_async_finish(
 	nfsmout_if(error || !fhp || !nvap);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETFH);
 	nfsm_chain_get_32(error, &nmrep, fhp->fh_len);
+	if (error == 0 && fhp->fh_len > sizeof(fhp->fh_data))
+		error = EBADRPC;
+	nfsmout_if(error);
 	nfsm_chain_get_opaque(error, &nmrep, fhp->fh_len, fhp->fh_data);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
 	if ((error == NFSERR_MOVED) || (error == NFSERR_INVAL)) {

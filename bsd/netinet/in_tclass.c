@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -116,6 +116,10 @@ SYSCTL_INT(_net_qos_policy, OID_AUTO, restrict_avapps,
 int net_qos_policy_wifi_enabled = 0;
 SYSCTL_INT(_net_qos_policy, OID_AUTO, wifi_enabled,
     CTLFLAG_RW | CTLFLAG_LOCKED, &net_qos_policy_wifi_enabled, 0, "");
+
+int net_qos_policy_none_wifi_enabled = 0;
+SYSCTL_INT(_net_qos_policy, OID_AUTO, none_wifi_enabled,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &net_qos_policy_none_wifi_enabled, 0, "");
 
 int net_qos_policy_capable_enabled = 0;
 SYSCTL_INT(_net_qos_policy, OID_AUTO, capable_enabled,
@@ -255,8 +259,6 @@ mbuf_svc_class_t wifi_dscp_to_msc_array[DSCP_ARRAY_SIZE];
 #define	TCP_BG_SWITCH_TIME 2 /* seconds */
 
 #if (DEVELOPMENT || DEBUG)
-
-extern char *proc_best_name(proc_t p);
 
 static int tfp_count = 0;
 
@@ -1304,6 +1306,9 @@ so_tc2msc(int tc)
 	case _SO_TC_VI:
 		msc = MBUF_SC_VI;
 		break;
+	case SO_TC_NETSVC_SIG:
+		msc = MBUF_SC_SIG;
+		break;
 	case SO_TC_VO:
 	case _SO_TC_VO:
 		msc = MBUF_SC_VO;
@@ -1340,6 +1345,8 @@ so_svc2tc(mbuf_svc_class_t svc)
 		return (SO_TC_RV);
 	case MBUF_SC_VI:
 		return (SO_TC_VI);
+	case MBUF_SC_SIG:
+		return (SO_TC_NETSVC_SIG);
 	case MBUF_SC_VO:
 		return (SO_TC_VO);
 	case MBUF_SC_CTL:
@@ -1463,11 +1470,13 @@ set_netsvctype_dscp_map(size_t in_count,
 			case NET_SERVICE_TYPE_AV:
 			case NET_SERVICE_TYPE_OAM:
 			case NET_SERVICE_TYPE_RD: {
-				int sotcix;
+				size_t sotcix;
 
 				sotcix = sotc_index(sotc_by_netservicetype[netsvctype]);
-				net_qos_dscp_map->sotc_to_dscp[sotcix]  =
-				    netsvctype_dscp_map[netsvctype].dscp;
+				if (sotcix != SIZE_T_MAX) {
+					net_qos_dscp_map->sotc_to_dscp[sotcix]  =
+					    netsvctype_dscp_map[netsvctype].dscp;
+				}
 				break;
 			}
 			case  NET_SERVICE_TYPE_SIG:
@@ -1546,7 +1555,7 @@ sysctl_default_netsvctype_to_dscp_map SYSCTL_HANDLER_ARGS
 	const size_t max_netsvctype_to_dscp_map_len =
 	    _NET_SERVICE_TYPE_COUNT * sizeof(struct netsvctype_dscp_map);
 	size_t len;
-	struct netsvctype_dscp_map netsvctype_dscp_map[_NET_SERVICE_TYPE_COUNT];
+	struct netsvctype_dscp_map netsvctype_dscp_map[_NET_SERVICE_TYPE_COUNT] = {};
 	size_t count;
 
 	if (req->oldptr == USER_ADDR_NULL) {
@@ -1619,7 +1628,7 @@ set_packet_qos(struct mbuf *m, struct ifnet *ifp, boolean_t qos_allowed,
 		 * We still want to prioritize control traffic on the interface
 		 * so we do not change the mbuf service class for SO_TC_CTL
 		 */
-		if (netsvctype != _NET_SERVICE_TYPE_UNSPEC &&
+		if (IS_VALID_NET_SERVICE_TYPE(netsvctype) &&
 		    netsvctype != NET_SERVICE_TYPE_BE) {
 			dscp = default_net_qos_dscp_map.netsvctype_to_dscp[netsvctype];
 
@@ -1630,17 +1639,18 @@ set_packet_qos(struct mbuf *m, struct ifnet *ifp, boolean_t qos_allowed,
 				if (sotc != SO_TC_CTL)
 					m_set_service_class(m, MBUF_SC_BE);
 			}
-		} else {
+		} else if (sotc != SO_TC_UNSPEC) {
 			size_t sotcix = sotc_index(sotc);
+			if (sotcix != SIZE_T_MAX) {
+				dscp = default_net_qos_dscp_map.sotc_to_dscp[sotcix];
 
-			dscp = default_net_qos_dscp_map.sotc_to_dscp[sotcix];
-
-			if (qos_allowed == FALSE && sotc != SO_TC_BE &&
-			    sotc != SO_TC_BK && sotc != SO_TC_BK_SYS &&
-			    sotc != SO_TC_CTL) {
-				dscp = _DSCP_DF;
-				if (sotc != SO_TC_CTL)
-					m_set_service_class(m, MBUF_SC_BE);
+				if (qos_allowed == FALSE && sotc != SO_TC_BE &&
+				    sotc != SO_TC_BK && sotc != SO_TC_BK_SYS &&
+				    sotc != SO_TC_CTL) {
+					dscp = _DSCP_DF;
+					if (sotc != SO_TC_CTL)
+						m_set_service_class(m, MBUF_SC_BE);
+				}
 			}
 		}
 		if (net_qos_verbose != 0)
@@ -1748,7 +1758,7 @@ sysctl_dscp_to_wifi_ac_map SYSCTL_HANDLER_ARGS
 #pragma unused(oidp, arg1, arg2)
 	int error = 0;
 	size_t len = DSCP_ARRAY_SIZE * sizeof(struct netsvctype_dscp_map);
-	struct netsvctype_dscp_map netsvctype_dscp_map[DSCP_ARRAY_SIZE];
+	struct netsvctype_dscp_map netsvctype_dscp_map[DSCP_ARRAY_SIZE] = {};
 	struct dcsp_msc_map dcsp_msc_map[DSCP_ARRAY_SIZE];
 	size_t count;
 	u_int32_t i;

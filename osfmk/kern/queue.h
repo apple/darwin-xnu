@@ -226,7 +226,6 @@ typedef	struct queue_entry	*queue_entry_t;
 
 #ifdef XNU_KERNEL_PRIVATE
 #include <kern/debug.h>
-#include <mach/branch_predicates.h>
 static inline void __QUEUE_ELT_VALIDATE(queue_entry_t elt) {
 	queue_entry_t	elt_next, elt_prev;
 	
@@ -730,12 +729,24 @@ movqueue(queue_t _old, queue_t _new)
  *			<field> is the chain field in (*<type>)
  *	Note:
  *		This should only be used with Method 2 queue iteration (element chains)
+ *
+ *		We insert a compiler barrier after setting the fields in the element
+ *		to ensure that the element is updated before being added to the queue,
+ *		which is especially important because stackshot, which operates from
+ *		debugger context, iterates several queues that use this macro (the tasks
+ *		lists and threads lists) without locks. Without this barrier, the
+ *		compiler may re-order the instructions for this macro in a way that
+ *		could cause stackshot to trip over an inconsistent queue during
+ *		iteration.
  */
 #define queue_enter(head, elt, type, field)			\
 MACRO_BEGIN							\
 	queue_entry_t __prev;					\
 								\
 	__prev = (head)->prev;					\
+	(elt)->field.prev = __prev;				\
+	(elt)->field.next = head;				\
+	__compiler_barrier();					\
 	if ((head) == __prev) {					\
 		(head)->next = (queue_entry_t) (elt);		\
 	}							\
@@ -743,8 +754,6 @@ MACRO_BEGIN							\
 		((type)(void *)__prev)->field.next =		\
 			(queue_entry_t)(elt);			\
 	}							\
-	(elt)->field.prev = __prev;				\
-	(elt)->field.next = head;				\
 	(head)->prev = (queue_entry_t) elt;			\
 MACRO_END
 

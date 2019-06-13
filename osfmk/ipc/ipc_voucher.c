@@ -98,26 +98,22 @@ static lck_spin_t ivgt_lock_data;
 
 ipc_voucher_t iv_alloc(iv_index_t entries);
 void iv_dealloc(ipc_voucher_t iv, boolean_t unhash);
-extern int thread_qos_from_pthread_priority(unsigned long, unsigned long *);
 
-static inline iv_refs_t
+os_refgrp_decl(static, iv_refgrp, "voucher", NULL);
+os_refgrp_decl(static, ivac_refgrp, "voucher attribute control", NULL);
+
+static inline void
 iv_reference(ipc_voucher_t iv)
 {
-	iv_refs_t refs;
-
-	refs = hw_atomic_add(&iv->iv_refs, 1);
-	return refs;
+	os_ref_retain(&iv->iv_refs);
 }
 
 static inline void
 iv_release(ipc_voucher_t iv)
 {
-	iv_refs_t refs;
-
-	assert(0 < iv->iv_refs);
-	refs = hw_atomic_sub(&iv->iv_refs, 1);
-	if (0 == refs)
+	if (os_ref_release(&iv->iv_refs) == 0) {
 		iv_dealloc(iv, TRUE);
+	}
 }
 
 /*
@@ -242,7 +238,7 @@ iv_alloc(iv_index_t entries)
 	if (IV_NULL == iv)
 		return IV_NULL;
 		
-	iv->iv_refs = 1;
+	os_ref_init(&iv->iv_refs, &iv_refgrp);
 	iv->iv_sum = 0;
 	iv->iv_hash = 0;
 	iv->iv_port = IP_NULL;
@@ -298,7 +294,7 @@ iv_dealloc(ipc_voucher_t iv, boolean_t unhash)
 	 */
 	if (unhash) {
 		ivht_lock();
-		assert(0 == iv->iv_refs);
+		assert(os_ref_get_count(&iv->iv_refs) == 0);
 		assert(IV_HASH_BUCKETS > iv->iv_hash);
 		queue_remove(&ivht_bucket[iv->iv_hash], iv, ipc_voucher_t, iv_hash_link);
 		ivht_count--;
@@ -307,8 +303,10 @@ iv_dealloc(ipc_voucher_t iv, boolean_t unhash)
 		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_VOUCHER_DESTROY) | DBG_FUNC_NONE,
 				      VM_KERNEL_ADDRPERM((uintptr_t)iv), 0, ivht_count, 0, 0);
 
-	} else
-		assert(0 == --iv->iv_refs);
+	} else {
+		os_ref_count_t cnt __assert_only = os_ref_release(&iv->iv_refs);
+		assert(cnt == 0);
+	}
 
 	/*
 	 * if a port was allocated for this voucher,
@@ -451,13 +449,10 @@ convert_port_name_to_voucher(
 void
 ipc_voucher_reference(ipc_voucher_t voucher)
 {
-	iv_refs_t refs;
-
 	if (IPC_VOUCHER_NULL == voucher)
 		return;
 
-	refs = iv_reference(voucher);
-	assert(1 < refs);
+	iv_reference(voucher);
 }
 
 void
@@ -505,7 +500,7 @@ convert_voucher_to_port(ipc_voucher_t voucher)
 	if (IV_NULL == voucher)
 		return (IP_NULL);
 
-	assert(0 < voucher->iv_refs);
+	assert(os_ref_get_count(&voucher->iv_refs) > 0);
 
 	/* create a port if needed */
 	port = voucher->iv_port;
@@ -579,7 +574,7 @@ ivac_alloc(iv_index_t key_index)
 	if (IVAC_NULL == ivac)
 		return IVAC_NULL;
 		
-	ivac->ivac_refs = 1;
+	os_ref_init(&ivac->ivac_refs, &ivac_refgrp);
 	ivac->ivac_is_growing = FALSE;
 	ivac->ivac_port = IP_NULL;
 
@@ -617,7 +612,7 @@ ivac_dealloc(ipc_voucher_attr_control_t ivac)
 	 * that the reference count is still zero.
 	 */
 	ivgt_lock();
-	if (ivac->ivac_refs > 0) {
+	if (os_ref_get_count(&ivac->ivac_refs) > 0) {
 		ivgt_unlock();
 		return;
 	}
@@ -1617,8 +1612,7 @@ iv_dedup(ipc_voucher_t new_iv)
 		assert(iv->iv_hash == hash);
 
 		/* if not already deallocating and sums match... */
-		if (0 < iv->iv_refs && iv->iv_sum == sum) {
-			iv_refs_t refs;
+		if ((os_ref_get_count(&iv->iv_refs) > 0) && (iv->iv_sum == sum)) {
 			iv_index_t i;
 
 			assert(iv->iv_table_size <= new_iv->iv_table_size);
@@ -1641,16 +1635,12 @@ iv_dedup(ipc_voucher_t new_iv)
 
 			/* can we get a ref before it hits 0
 			 *
-			 * This is thread safe. The reference is just an atomic
-			 * add. If the reference count is zero when we adjust it,
-			 * no other thread can have a reference to the voucher.
+			 * This is thread safe. If the reference count is zero before we
+			 * adjust it, no other thread can have a reference to the voucher.
 			 * The dealloc code requires holding the ivht_lock, so
 			 * the voucher cannot be yanked out from under us.
 			 */
-			refs = iv_reference(iv);
-			if (1 == refs) {
-				/* drats! going away. Put back to zero */
-				iv->iv_refs = 0;
+			if (!os_ref_retain_try(&iv->iv_refs)) {
 				continue;
 			}
 
@@ -1724,24 +1714,21 @@ iv_dedup(ipc_voucher_t new_iv)
 				}
 			}
 
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_VOUCHER_CREATE) | DBG_FUNC_NONE,
-					      voucher_addr,
-					      new_iv->iv_table_size, ivht_count, payload_size, 0);
+			KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_VOUCHER_CREATE),
+					voucher_addr, new_iv->iv_table_size, ivht_count,
+					payload_size);
 
 			uintptr_t index = 0;
 			while (attr_tracepoints_needed--) {
-				KERNEL_DEBUG_CONSTANT1(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_VOUCHER_CREATE_ATTR_DATA) | DBG_FUNC_NONE,
-						       payload[index],
-						       payload[index+1],
-						       payload[index+2],
-						       payload[index+3],
-						       voucher_addr);
+				KDBG(MACHDBG_CODE(DBG_MACH_IPC,
+						MACH_IPC_VOUCHER_CREATE_ATTR_DATA), payload[index],
+						payload[index + 1], payload[index + 2],
+						payload[index + 3]);
 				index += 4;
 			}
 		} else {
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_VOUCHER_CREATE) | DBG_FUNC_NONE,
-					      voucher_addr,
-					      new_iv->iv_table_size, ivht_count, 0, 0);
+			KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_VOUCHER_CREATE),
+					voucher_addr, new_iv->iv_table_size, ivht_count);
 		}
 	}
 #endif /* KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD */
@@ -2353,7 +2340,7 @@ mach_voucher_attr_control_get_values(
 
 	key_index = control->ivac_key_index;
 
-	assert(0 < voucher->iv_refs);
+	assert(os_ref_get_count(&voucher->iv_refs) > 0);
 	value_index = iv_lookup(voucher, key_index);
 	ivace_lookup_values(key_index, value_index,
 			    out_values, in_out_size);

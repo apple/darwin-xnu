@@ -109,9 +109,17 @@ def print_alloc_free_entry(addr, orig_ptr):
             print " #{:}: {}".format(btframes-i-1, GetSourceInformationForAddress(fr))
 
     print "",
-    print_hexdump(addr, asz, 0)
+    print_hexdump(addr, asz, 1)
 
 alloc_header_sz = 16
+
+def magic_for_addr(addr, xor):
+    magic = addr & 0xffff
+    magic ^= (addr >> 16) & 0xffff
+    magic ^= (addr >> 32) & 0xffff
+    magic ^= (addr >> 48) & 0xffff
+    magic ^= xor
+    return magic
 
 def print_alloc_info(_addr):
     addr = (_addr & ~0x7)
@@ -144,10 +152,7 @@ def print_alloc_info(_addr):
             print "No allocation found at 0x{:x} (found shadow {:x})".format(_addr, shbyte)
             return
 
-        live_magic = (addr & 0xffffffff) ^ 0xA110C8ED
-        free_magic = (addr & 0xffffffff) ^ 0xF23333D
-
-        if live_magic == unsigned(liveh.magic):
+        if magic_for_addr(addr, 0x3a65) == unsigned(liveh.magic):
             usz = unsigned(liveh.user_size)
             asz = unsigned(liveh.alloc_size)
             leftrz = unsigned(liveh.left_rz)
@@ -156,11 +161,12 @@ def print_alloc_info(_addr):
             if _addr >= base and _addr < base + asz:
                 footer = kern.GetValueFromAddress(addr + usz, 'struct kasan_alloc_footer *')
                 rightrz = asz - usz - leftrz
+                offset = _addr - addr
 
                 print "Live heap object"
                 print "Valid range: 0x{:x} -- 0x{:x} ({} bytes)".format(addr, addr + usz - 1, usz)
                 print "Total range: 0x{:x} -- 0x{:x} ({} bytes)".format(base, base + asz - 1, asz)
-                print "Offset:      {} bytes (shadow: 0x{:02x} {})".format(_addr - addr, _shbyte, _shstr)
+                print "Offset:      {} bytes (shadow: 0x{:02x} {}, remaining: {} bytes)".format(offset, _shbyte, _shstr, usz - offset)
                 print "Redzone:     {} / {} bytes".format(leftrz, rightrz)
 
                 btframes = unsigned(liveh.frames)
@@ -171,10 +177,10 @@ def print_alloc_info(_addr):
                     print " #{:}: {}".format(btframes-i-1, GetSourceInformationForAddress(fr))
 
                 print "",
-                print_hexdump(base, asz, 0)
+                print_hexdump(base, asz, 1)
             return
 
-        elif free_magic == unsigned(freeh.magic):
+        elif magic_for_addr(addr, 0xf233) == unsigned(freeh.magic):
             asz = unsigned(freeh.size)
             if _addr >= addr and _addr < addr + asz:
                 print_alloc_free_entry(addr, _addr)
@@ -196,8 +202,14 @@ def print_whatis(_addr, ctx):
     rightrz = None
     extra = "Live"
 
-    shbyte = get_shadow_byte(shadow_for_address(addr, shift))
-    maxsearch = 4096 * 2
+    shaddr = shadow_for_address(addr, shift)
+    try:
+        shbyte = get_shadow_byte(shaddr)
+    except:
+        print "Unmapped shadow 0x{:x} for address 0x{:x}".format(shaddr, addr)
+        return
+
+    maxsearch = 8*4096
 
     if shbyte in [0xfa, 0xfb, 0xfd, 0xf5]:
         print_alloc_info(_addr)
@@ -260,9 +272,12 @@ def print_whatis(_addr, ctx):
     print "Valid range: 0x{:x} -- 0x{:x} ({} bytes)".format(base, base+total_size-1, total_size)
     print "Offset:      {} bytes".format(_addr - base)
     print "",
-    print_hexdump(base, total_size, 0)
+    print_hexdump(base, total_size, 1)
 
 def print_hexdump(base, size, ctx):
+    if size < 16:
+        size = 16
+    base -= base % 16
     start = base - 16*ctx
     size += size % 16
     size = min(size + 16*2*ctx, 256)
@@ -288,7 +303,7 @@ def kasan_subcommand(cmd, args, opts):
         print("0x{:02x} @ 0x{:016x} [{}]\n\n".format(sb, shadow, shadow_byte_to_string(sb)))
         ctx = long(opts.get("-C", 5))
         print_shadow_context(addr, ctx)
-    elif cmd == 'legend':
+    elif cmd == 'key' or cmd == 'legend':
         print_legend()
     elif cmd == 'info':
         pages_used = unsigned(kern.globals.shadow_pages_used)
@@ -302,6 +317,8 @@ def kasan_subcommand(cmd, args, opts):
         print_whatis(addr, ctx)
     elif cmd == 'alloc' or cmd == 'heap':
         print_alloc_info(addr)
+    else:
+        print "Unknown subcommand: `{}'".format(cmd)
 
 @lldb_command('kasan', 'C:')
 def Kasan(cmd_args=None, cmd_options={}):

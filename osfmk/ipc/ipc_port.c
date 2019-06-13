@@ -92,6 +92,7 @@
 #include <ipc/ipc_table.h>
 #include <ipc/ipc_importance.h>
 #include <machine/machlimits.h>
+#include <kern/turnstile.h>
 
 #include <security/mac_mach_internal.h>
 
@@ -638,10 +639,14 @@ ipc_port_init(
 	port->ip_impcount    = 0;
 
 	port->ip_specialreply = 0;
-	port->ip_link_sync_qos = 0;
+	port->ip_sync_link_state = PORT_SYNC_LINK_ANY;
+
+	reset_ip_srp_bits(port);
+
+	port->ip_send_turnstile = TURNSTILE_NULL;
 
 	ipc_mqueue_init(&port->ip_messages,
-			FALSE /* !set */, NULL /* no reserved link */);
+			FALSE /* !set */);
 }
 
 /*
@@ -919,13 +924,15 @@ ipc_port_destroy(ipc_port_t port)
 		port->ip_pdrequest = IP_NULL;
 
 		/* make port be in limbo */
+		imq_lock(&port->ip_messages);
 		port->ip_receiver_name = MACH_PORT_NULL;
 		port->ip_destination = IP_NULL;
+		imq_unlock(&port->ip_messages);
 		ip_unlock(port);
 
 		if (special_reply) {
-			ipc_port_unlink_special_reply_port(port,
-				IPC_PORT_UNLINK_SR_ALLOW_SYNC_QOS_LINKAGE);
+			ipc_port_adjust_special_reply_port(port,
+				IPC_PORT_ADJUST_SR_ALLOW_SYNC_LINKAGE, FALSE);
 		}
 		/* consumes our refs for port and pdrequest */
 		ipc_notify_port_destroyed(pdrequest, port);
@@ -933,8 +940,11 @@ ipc_port_destroy(ipc_port_t port)
 		goto drop_assertions;
 	}
 
+	/* port active bit needs to be guarded under mqueue lock for turnstiles */
+	imq_lock(&port->ip_messages);
 	port->ip_object.io_bits &= ~IO_BITS_ACTIVE;
 	port->ip_timestamp = ipc_port_timestamp();
+	imq_unlock(&port->ip_messages);
 	nsrequest = port->ip_nsrequest;
 
 	/*
@@ -966,7 +976,7 @@ ipc_port_destroy(ipc_port_t port)
 		kmsg = port->ip_premsg;
 		assert(kmsg != IKM_NULL);
 		inuse_port = ikm_prealloc_inuse_port(kmsg);
-		IP_CLEAR_PREALLOC(port, kmsg);
+		ipc_kmsg_clear_prealloc(kmsg, port);
 		ip_unlock(port);
 		if (inuse_port != IP_NULL) {
 			assert(inuse_port == port);
@@ -979,8 +989,8 @@ ipc_port_destroy(ipc_port_t port)
 
 	/* unlink the kmsg from special reply port */
 	if (special_reply) {
-		ipc_port_unlink_special_reply_port(port,
-			IPC_PORT_UNLINK_SR_ALLOW_SYNC_QOS_LINKAGE);
+		ipc_port_adjust_special_reply_port(port,
+			IPC_PORT_ADJUST_SR_ALLOW_SYNC_LINKAGE, FALSE);
 	}
 
 	/* throw away no-senders request */
@@ -1056,9 +1066,6 @@ ipc_port_check_circularity(
 	return ipc_importance_check_circularity(port, dest);
 #else
 	ipc_port_t base;
-	sync_qos_count_t sync_qos_delta_add[THREAD_QOS_LAST] = {0};
-	sync_qos_count_t sync_qos_delta_sub[THREAD_QOS_LAST] = {0};
-	boolean_t update_knote = FALSE;
 
 	assert(port != IP_NULL);
 	assert(dest != IP_NULL);
@@ -1066,6 +1073,9 @@ ipc_port_check_circularity(
 	if (port == dest)
 		return TRUE;
 	base = dest;
+
+	/* Check if destination needs a turnstile */
+	ipc_port_send_turnstile_prepare(dest);
 
 	/*
 	 *	First try a quick check that can run in parallel.
@@ -1115,19 +1125,21 @@ ipc_port_check_circularity(
 		assert(port->ip_receiver_name == MACH_PORT_NULL);
 		assert(port->ip_destination == IP_NULL);
 
-		while (dest != IP_NULL) {
+		base = dest;
+		while (base != IP_NULL) {
 			ipc_port_t next;
 
 			/* dest is in transit or in limbo */
 
-			assert(ip_active(dest));
-			assert(dest->ip_receiver_name == MACH_PORT_NULL);
+			assert(ip_active(base));
+			assert(base->ip_receiver_name == MACH_PORT_NULL);
 
-			next = dest->ip_destination;
-			ip_unlock(dest);
-			dest = next;
+			next = base->ip_destination;
+			ip_unlock(base);
+			base = next;
 		}
 
+		ipc_port_send_turnstile_complete(dest);
 		return TRUE;
 	}
 
@@ -1141,7 +1153,7 @@ ipc_port_check_circularity(
 	ipc_port_multiple_unlock();
 
 not_circular:
-	imq_lock(&base->ip_messages);
+	imq_lock(&port->ip_messages);
 
 	/* port is in limbo */
 
@@ -1152,18 +1164,27 @@ not_circular:
 	ip_reference(dest);
 	port->ip_destination = dest;
 
-	/* Capture the sync qos count delta */
-	for (int i = 0; i < THREAD_QOS_LAST; i++) {
-		sync_qos_delta_add[i] = port_sync_qos(port, i);
+	/* Setup linkage for source port if it has sync ipc push */
+	struct turnstile *send_turnstile = TURNSTILE_NULL;
+	if (port_send_turnstile(port)) {
+		send_turnstile = turnstile_prepare((uintptr_t)port,
+			port_send_turnstile_address(port),
+			TURNSTILE_NULL, TURNSTILE_SYNC_IPC);
+
+		turnstile_update_inheritor(send_turnstile, port_send_turnstile(dest),
+			(TURNSTILE_INHERITOR_TURNSTILE | TURNSTILE_IMMEDIATE_UPDATE));
+
+		/* update complete and turnstile complete called after dropping all locks */
 	}
+	imq_unlock(&port->ip_messages);
 
 	/* now unlock chain */
 
 	ip_unlock(port);
 
 	for (;;) {
-		/* every port along chain tracks override behind it */
-		update_knote = ipc_port_sync_qos_delta(dest, sync_qos_delta_add, sync_qos_delta_sub);
+		ipc_port_t next;
+
 		if (dest == base)
 			break;
 
@@ -1173,9 +1194,9 @@ not_circular:
 		assert(dest->ip_receiver_name == MACH_PORT_NULL);
 		assert(dest->ip_destination != IP_NULL);
 
-		port = dest->ip_destination;
+		next = dest->ip_destination;
 		ip_unlock(dest);
-		dest = port;
+		dest = next;
 	}
 
 	/* base is not in transit */
@@ -1183,172 +1204,294 @@ not_circular:
 	       (base->ip_receiver_name != MACH_PORT_NULL) ||
 	       (base->ip_destination == IP_NULL));
 
-	if (update_knote) {
-		KNOTE(&base->ip_messages.imq_klist, 0);
-	}
-	imq_unlock(&base->ip_messages);
-
 	ip_unlock(base);
+
+	/* All locks dropped, call turnstile_update_inheritor_complete for source port's turnstile */
+	if (send_turnstile) {
+		turnstile_update_inheritor_complete(send_turnstile, TURNSTILE_INTERLOCK_NOT_HELD);
+
+		/* Take the mq lock to call turnstile complete */
+		imq_lock(&port->ip_messages);
+		turnstile_complete((uintptr_t)port, port_send_turnstile_address(port), NULL);
+		send_turnstile = TURNSTILE_NULL;
+		imq_unlock(&port->ip_messages);
+		turnstile_cleanup();
+	}
 
 	return FALSE;
 #endif /* !IMPORTANCE_INHERITANCE */
 }
 
+struct turnstile *
+ipc_port_get_inheritor(ipc_port_t port)
+{
+	ipc_mqueue_t mqueue = &port->ip_messages;
+	struct knote *kn;
+
+	assert(imq_held(mqueue));
+
+	if (!IMQ_KLIST_VALID(mqueue)) {
+		return IMQ_INHERITOR(mqueue);
+	}
+
+	SLIST_FOREACH(kn, &port->ip_messages.imq_klist, kn_selnext) {
+		if ((kn->kn_sfflags & MACH_RCV_MSG) && (kn->kn_status & KN_DISPATCH)) {
+			return filt_machport_kqueue_turnstile(kn);
+		}
+	}
+
+	return TURNSTILE_NULL;
+}
+
 /*
- *	Routine:	ipc_port_link_special_reply_port_with_qos
+ *	Routine:	ipc_port_send_turnstile_prepare
  *	Purpose:
- *		Link the special reply port with the destination port.
- *		Update the sync qos count of special reply port,
- *		destination port.
+ *		Get a reference on port's send turnstile, if
+ *		port does not have a send turnstile then allocate one.
  *
  *	Conditions:
  *		Nothing is locked.
  */
-kern_return_t
-ipc_port_link_special_reply_port_with_qos(
-	ipc_port_t special_reply_port,
-	ipc_port_t dest_port,
-	int qos)
+void
+ipc_port_send_turnstile_prepare(ipc_port_t port)
 {
-	ipc_port_t next, base;
-	sync_qos_count_t sync_qos_delta_add[THREAD_QOS_LAST] = {0};
-	sync_qos_count_t sync_qos_delta_sub[THREAD_QOS_LAST] = {0};
-	boolean_t update_knote = FALSE;
-	boolean_t multiple_lock = FALSE;
+	struct turnstile *turnstile = TURNSTILE_NULL;
+	struct turnstile *inheritor = TURNSTILE_NULL;
+	struct turnstile *send_turnstile = TURNSTILE_NULL;
 
-	ip_lock(dest_port);
+retry_alloc:
+	imq_lock(&port->ip_messages);
 
-	/* Check if dest is active */
-	if (!ip_active(dest_port)) {
-		ip_unlock(dest_port);
-		return KERN_FAILURE;
-	}
+	if (port_send_turnstile(port) == NULL ||
+	    port_send_turnstile(port)->ts_port_ref == 0) {
 
-	if ((dest_port->ip_receiver_name == MACH_PORT_NULL) &&
-	    (dest_port->ip_destination != IP_NULL)) {
-		/* dest_port is in transit; need to take the serialize lock */
-		ip_unlock(dest_port);
-		goto take_multiple_lock;
-	}
+		if (turnstile == TURNSTILE_NULL) {
+			imq_unlock(&port->ip_messages);
+			turnstile = turnstile_alloc();
+			goto retry_alloc;
+		}
 
-	/* Check if the port is a special reply port */
-	if (ip_lock_try(special_reply_port)) {
-		if (!special_reply_port->ip_specialreply ||
-		    !special_reply_port->ip_link_sync_qos ||
-		    (special_reply_port->ip_sync_qos_override_port != IP_NULL &&
-		     special_reply_port->ip_sync_qos_override_port != dest_port)) {
+		send_turnstile = turnstile_prepare((uintptr_t)port,
+			port_send_turnstile_address(port),
+			turnstile, TURNSTILE_SYNC_IPC);
+		turnstile = TURNSTILE_NULL;
 
-			boolean_t link_sync_qos = special_reply_port->ip_link_sync_qos;
-			ip_unlock(special_reply_port);
-			ip_unlock(dest_port);
-			/* return KERN_SUCCESS when link_sync_qos is not set */
-			if (!link_sync_qos) {
-				return KERN_SUCCESS;
-			}
-			return KERN_FAILURE;
+		/*
+		 * if port in transit, setup linkage for its turnstile,
+		 * otherwise the link it to WL turnstile.
+		 */
+		if (ip_active(port) &&
+		    port->ip_receiver_name == MACH_PORT_NULL &&
+		    port->ip_destination != IP_NULL) {
+			assert(port->ip_receiver_name == MACH_PORT_NULL);
+			assert(port->ip_destination != IP_NULL);
+
+			inheritor = port_send_turnstile(port->ip_destination);
 		} else {
-			goto both_ports_locked;
+			inheritor = ipc_port_get_inheritor(port);
 		}
+		turnstile_update_inheritor(send_turnstile, inheritor,
+			TURNSTILE_INHERITOR_TURNSTILE | TURNSTILE_IMMEDIATE_UPDATE);
+		/* turnstile complete will be called in ipc_port_send_turnstile_complete */
 	}
 
-	ip_unlock(dest_port);
+	/* Increment turnstile counter */
+	port_send_turnstile(port)->ts_port_ref++;
+	imq_unlock(&port->ip_messages);
 
-take_multiple_lock:
-
-	ipc_port_multiple_lock(); /* massive serialization */
-	multiple_lock = TRUE;
-
-	ip_lock(special_reply_port);
-
-	/* Check if the special reply port is marked regular */
-	if (!special_reply_port->ip_specialreply ||
-	    !special_reply_port->ip_link_sync_qos ||
-	    (special_reply_port->ip_sync_qos_override_port != IP_NULL &&
-	     special_reply_port->ip_sync_qos_override_port != dest_port)) {
-
-		boolean_t link_sync_qos = special_reply_port->ip_link_sync_qos;
-		ip_unlock(special_reply_port);
-		ipc_port_multiple_unlock();
-		/* return KERN_SUCCESS when link_sync_qos is not set */
-		if (!link_sync_qos) {
-			return KERN_SUCCESS;
-		}
-		return KERN_FAILURE;
+	if (send_turnstile) {
+		turnstile_update_inheritor_complete(send_turnstile,
+			TURNSTILE_INTERLOCK_NOT_HELD);
 	}
-
-	ip_lock(dest_port);
-
-both_ports_locked:
-	next = dest_port;
-
-	/* Apply the qos to special reply port, capture the old qos */
-	if (special_reply_port->ip_sync_qos_override_port != IP_NULL) {
-		/* Check if qos needs to be updated */
-		if ((sync_qos_count_t)qos <= port_special_qos(special_reply_port)) {
-			imq_lock(&dest_port->ip_messages);
-			goto done_update;
-		}
-		sync_qos_delta_sub[port_special_qos(special_reply_port)]++;
+	if (turnstile != TURNSTILE_NULL) {
+		turnstile_deallocate(turnstile);
 	}
-
-	set_port_special_qos(special_reply_port, (sync_qos_count_t)qos);
-	sync_qos_delta_add[qos]++;
-
-	/* Link the special reply port to dest port */
-	if (special_reply_port->ip_sync_qos_override_port == IP_NULL) {
-		/* take a reference on dest_port */
-		ip_reference(dest_port);
-		special_reply_port->ip_sync_qos_override_port = dest_port;
-	}
-
-	/* Apply the sync qos delta to all in-transit ports */
-	for (;;) {
-		boolean_t port_not_in_transit = FALSE;
-		if (!ip_active(next) ||
-		    (next->ip_receiver_name != MACH_PORT_NULL) ||
-		    (next->ip_destination == IP_NULL)) {
-			/* Get the mqueue lock for destination port to update knotes */
-			imq_lock(&next->ip_messages);
-			port_not_in_transit = TRUE;
-		}
-		/* Apply the sync qos delta */
-		update_knote = ipc_port_sync_qos_delta(next, sync_qos_delta_add, sync_qos_delta_sub);
-
-		if (port_not_in_transit)
-			break;
-
-		next = next->ip_destination;
-		ip_lock(next);
-	}
-done_update:
-
-	if (multiple_lock) {
-		ipc_port_multiple_unlock();
-	}
-
-	ip_unlock(special_reply_port);
-	base = next;
-	next = dest_port;
-
-	while (next != base) {
-		ipc_port_t prev = next;
-		next = next->ip_destination;
-
-		ip_unlock(prev);
-	}
-
-	if (update_knote) {
-		KNOTE(&base->ip_messages.imq_klist, 0);
-	}
-	imq_unlock(&base->ip_messages);
-	ip_unlock(base);
-	return KERN_SUCCESS;
 }
 
+
 /*
- *	Routine:	ipc_port_unlink_special_reply_port_locked
+ *	Routine:	ipc_port_send_turnstile_complete
  *	Purpose:
- *		If the special port is linked to a port, adjust it's sync qos override and unlink the port.
+ *		Drop a ref on the port's send turnstile, if the
+ *		ref becomes zero, deallocate the turnstile.
+ *
+ *	Conditions:
+ *		The space might be locked, use safe deallocate.
+ */
+void
+ipc_port_send_turnstile_complete(ipc_port_t port)
+{
+	struct turnstile *turnstile = TURNSTILE_NULL;
+
+	/* Drop turnstile count on dest port */
+	imq_lock(&port->ip_messages);
+
+	port_send_turnstile(port)->ts_port_ref--;
+	if (port_send_turnstile(port)->ts_port_ref == 0) {
+		turnstile_complete((uintptr_t)port, port_send_turnstile_address(port),
+				&turnstile);
+		assert(turnstile != TURNSTILE_NULL);
+	}
+	imq_unlock(&port->ip_messages);
+	turnstile_cleanup();
+
+	if (turnstile != TURNSTILE_NULL) {
+		turnstile_deallocate_safe(turnstile);
+		turnstile = TURNSTILE_NULL;
+	}
+}
+
+
+/*
+ *	Routine:	ipc_port_rcv_turnstile_waitq
+ *	Purpose:
+ *		Given the mqueue's waitq, find the port's
+ *              rcv turnstile and return its waitq.
+ *
+ *	Conditions:
+ *		mqueue locked or thread waiting on turnstile is locked.
+ */
+struct waitq *
+ipc_port_rcv_turnstile_waitq(struct waitq *waitq)
+{
+	struct waitq *safeq;
+
+	ipc_mqueue_t mqueue = imq_from_waitq(waitq);
+	ipc_port_t port = ip_from_mq(mqueue);
+	struct turnstile *rcv_turnstile = ipc_port_rcv_turnstile(port);
+
+	/* Check if the port has a rcv turnstile */
+	if (rcv_turnstile != TURNSTILE_NULL) {
+		safeq = &rcv_turnstile->ts_waitq;
+	} else {
+		safeq = global_eventq(waitq);
+	}
+	return safeq;
+}
+
+
+/*
+ *	Routine:	ipc_port_rcv_turnstile
+ *	Purpose:
+ *		Get the port's receive turnstile
+ *
+ *	Conditions:
+ *		mqueue locked or thread waiting on turnstile is locked.
+ */
+struct turnstile *
+ipc_port_rcv_turnstile(ipc_port_t port)
+{
+	return turnstile_lookup_by_proprietor((uintptr_t)port);
+}
+
+
+/*
+ *	Routine:	ipc_port_link_special_reply_port
+ *	Purpose:
+ *		Link the special reply port with the destination port.
+ *              Allocates turnstile to dest port.
+ *
+ *	Conditions:
+ *		Nothing is locked.
+ */
+void
+ipc_port_link_special_reply_port(
+	ipc_port_t special_reply_port,
+	ipc_port_t dest_port)
+{
+	boolean_t drop_turnstile_ref = FALSE;
+
+	/* Check if dest_port needs a turnstile */
+	ipc_port_send_turnstile_prepare(dest_port);
+
+	/* Lock the special reply port and establish the linkage */
+	ip_lock(special_reply_port);
+	imq_lock(&special_reply_port->ip_messages);
+
+	/* Check if we need to drop the acquired turnstile ref on dest port */
+	if (!special_reply_port->ip_specialreply ||
+	    special_reply_port->ip_sync_link_state != PORT_SYNC_LINK_ANY ||
+	    special_reply_port->ip_sync_inheritor_port != IPC_PORT_NULL) {
+		drop_turnstile_ref = TRUE;
+	} else {
+		/* take a reference on dest_port */
+		ip_reference(dest_port);
+		special_reply_port->ip_sync_inheritor_port = dest_port;
+		special_reply_port->ip_sync_link_state = PORT_SYNC_LINK_PORT;
+	}
+
+	imq_unlock(&special_reply_port->ip_messages);
+	ip_unlock(special_reply_port);
+
+	if (drop_turnstile_ref) {
+		ipc_port_send_turnstile_complete(dest_port);
+	}
+
+	return;
+}
+
+#if DEVELOPMENT || DEBUG
+inline void
+reset_ip_srp_bits(ipc_port_t special_reply_port)
+{
+	special_reply_port->ip_srp_lost_link = 0;
+	special_reply_port->ip_srp_msg_sent = 0;
+}
+
+inline void
+reset_ip_srp_msg_sent(ipc_port_t special_reply_port)
+{
+	if (special_reply_port->ip_specialreply == 1) {
+		special_reply_port->ip_srp_msg_sent = 0;
+	}
+}
+
+inline void
+set_ip_srp_msg_sent(ipc_port_t special_reply_port)
+{
+	if (special_reply_port->ip_specialreply == 1) {
+		special_reply_port->ip_srp_msg_sent = 1;
+	}
+}
+
+inline void
+set_ip_srp_lost_link(ipc_port_t special_reply_port)
+{
+	if (special_reply_port->ip_specialreply == 1 && special_reply_port->ip_srp_msg_sent == 0) {
+		special_reply_port->ip_srp_lost_link = 1;
+	}
+}
+
+#else /* DEVELOPMENT || DEBUG */
+inline void
+reset_ip_srp_bits(__unused ipc_port_t special_reply_port)
+{
+	return;
+}
+
+inline void
+reset_ip_srp_msg_sent(__unused ipc_port_t special_reply_port)
+{
+	return;
+}
+
+inline void
+set_ip_srp_msg_sent(__unused ipc_port_t special_reply_port)
+{
+	return;
+}
+
+inline void
+set_ip_srp_lost_link(__unused ipc_port_t special_reply_port)
+{
+	return;
+}
+#endif /* DEVELOPMENT || DEBUG */
+
+/*
+ *	Routine:	ipc_port_adjust_special_reply_port_locked
+ *	Purpose:
+ *		If the special port has a turnstile, update it's inheritor.
  *	Condition:
  *		Special reply port locked on entry.
  *		Special reply port unlocked on return.
@@ -1356,283 +1499,181 @@ done_update:
  *		None.
  */
 void
-ipc_port_unlink_special_reply_port_locked(
+ipc_port_adjust_special_reply_port_locked(
 	ipc_port_t special_reply_port,
 	struct knote *kn,
-	uint8_t flags)
+	uint8_t flags,
+	boolean_t get_turnstile)
 {
-	ipc_port_t dest_port;
-	sync_qos_count_t sync_qos;
-	sync_qos_count_t sync_qos_delta_add[THREAD_QOS_LAST] = {0};
-	sync_qos_count_t sync_qos_delta_sub[THREAD_QOS_LAST] = {0};
+	ipc_port_t dest_port = IPC_PORT_NULL;
+	int sync_link_state = PORT_SYNC_LINK_NO_LINKAGE;
+	turnstile_inheritor_t inheritor = TURNSTILE_INHERITOR_NULL;
+	struct turnstile *dest_ts = TURNSTILE_NULL, *ts = TURNSTILE_NULL;
 
-	/* Return if called from copy out in pseudo receive */
-	if (kn == ITH_KNOTE_PSEUDO) {
-		ip_unlock(special_reply_port);
-		return;
+	imq_lock(&special_reply_port->ip_messages);
+
+	if (flags & IPC_PORT_ADJUST_SR_RECEIVED_MSG) {
+		reset_ip_srp_msg_sent(special_reply_port);
 	}
 
-	/* check if special port has a port linked to it */
+	/* Check if the special reply port is marked non-special */
 	if (special_reply_port->ip_specialreply == 0 ||
-	    special_reply_port->ip_sync_qos_override_port == IP_NULL) {
-		set_port_special_qos(special_reply_port, 0);
-		if (flags & IPC_PORT_UNLINK_SR_CLEAR_SPECIAL_REPLY) {
-			special_reply_port->ip_specialreply = 0;
+			special_reply_port->ip_sync_link_state == PORT_SYNC_LINK_ANY) {
+		if (get_turnstile) {
+			turnstile_complete((uintptr_t)special_reply_port,
+				port_rcv_turnstile_address(special_reply_port),
+			NULL);
 		}
-		if (flags & IPC_PORT_UNLINK_SR_ALLOW_SYNC_QOS_LINKAGE) {
-			special_reply_port->ip_link_sync_qos = 1;
-		}
+		imq_unlock(&special_reply_port->ip_messages);
 		ip_unlock(special_reply_port);
+		if (get_turnstile) {
+			turnstile_cleanup();
+		}
 		return;
 	}
 
-	/*
-	 * port->ip_sync_qos_override_port is not null and it is safe
-	 * to access it since ip_specialreply is set.
-	 */
-	dest_port = special_reply_port->ip_sync_qos_override_port;
-	sync_qos_delta_sub[port_special_qos(special_reply_port)]++;
-	sync_qos = port_special_qos(special_reply_port);
-
-	/* Clear qos delta for special reply port */
-	set_port_special_qos(special_reply_port, 0);
-	special_reply_port->ip_sync_qos_override_port = IP_NULL;
-	if (flags & IPC_PORT_UNLINK_SR_CLEAR_SPECIAL_REPLY) {
+	/* Clear thread's special reply port and clear linkage */
+	if (flags & IPC_PORT_ADJUST_SR_CLEAR_SPECIAL_REPLY) {
+		/* This option should only be specified by a non blocking thread */
+		assert(get_turnstile == FALSE);
 		special_reply_port->ip_specialreply = 0;
+
+		reset_ip_srp_bits(special_reply_port);
+
+		/* Check if need to break linkage */
+		if (special_reply_port->ip_sync_link_state == PORT_SYNC_LINK_NO_LINKAGE) {
+			imq_unlock(&special_reply_port->ip_messages);
+			ip_unlock(special_reply_port);
+			return;
+		}
+	} else if (flags & IPC_PORT_ADJUST_SR_LINK_WORKLOOP) {
+		if (special_reply_port->ip_sync_link_state == PORT_SYNC_LINK_ANY ||
+		    special_reply_port->ip_sync_link_state == PORT_SYNC_LINK_PORT) {
+			if (ITH_KNOTE_VALID(kn, MACH_MSG_TYPE_PORT_SEND_ONCE)) {
+				inheritor = filt_machport_stash_port(kn, special_reply_port,
+						&sync_link_state);
+			}
+		}
+	} else if (flags & IPC_PORT_ADJUST_SR_ALLOW_SYNC_LINKAGE) {
+		sync_link_state = PORT_SYNC_LINK_ANY;
 	}
 
-	if (flags & IPC_PORT_UNLINK_SR_ALLOW_SYNC_QOS_LINKAGE) {
-		special_reply_port->ip_link_sync_qos = 1;
+	switch (special_reply_port->ip_sync_link_state) {
+	case PORT_SYNC_LINK_PORT:
+		dest_port = special_reply_port->ip_sync_inheritor_port;
+		special_reply_port->ip_sync_inheritor_port = IPC_PORT_NULL;
+		break;
+	case PORT_SYNC_LINK_WORKLOOP_KNOTE:
+		special_reply_port->ip_sync_inheritor_knote = NULL;
+		break;
+	case PORT_SYNC_LINK_WORKLOOP_STASH:
+		dest_ts = special_reply_port->ip_sync_inheritor_ts;
+		special_reply_port->ip_sync_inheritor_ts = NULL;
+		break;
+	}
+
+	special_reply_port->ip_sync_link_state = sync_link_state;
+
+	switch (sync_link_state) {
+	case PORT_SYNC_LINK_WORKLOOP_KNOTE:
+		special_reply_port->ip_sync_inheritor_knote = kn;
+		break;
+	case PORT_SYNC_LINK_WORKLOOP_STASH:
+		turnstile_reference(inheritor);
+		special_reply_port->ip_sync_inheritor_ts = inheritor;
+		break;
+	case PORT_SYNC_LINK_NO_LINKAGE:
+		if (flags & IPC_PORT_ADJUST_SR_ENABLE_EVENT) {
+			set_ip_srp_lost_link(special_reply_port);
+		}
+		break;
+	}
+
+	/* Get thread's turnstile donated to special reply port */
+	if (get_turnstile) {
+		turnstile_complete((uintptr_t)special_reply_port,
+			port_rcv_turnstile_address(special_reply_port),
+			NULL);
 	} else {
-		special_reply_port->ip_link_sync_qos = 0;
+		ts = ipc_port_rcv_turnstile(special_reply_port);
+		if (ts) {
+			turnstile_reference(ts);
+			turnstile_update_inheritor(ts, inheritor,
+					(TURNSTILE_INHERITOR_TURNSTILE | TURNSTILE_IMMEDIATE_UPDATE));
+		}
 	}
 
+	imq_unlock(&special_reply_port->ip_messages);
 	ip_unlock(special_reply_port);
 
-	/* Add the sync qos on knote */
-	if (ITH_KNOTE_VALID(kn)) {
-		knote_adjust_sync_qos(kn, sync_qos, TRUE);
+	if (get_turnstile) {
+		turnstile_cleanup();
+	} else if (ts) {
+		/* Call turnstile cleanup after dropping the interlock */
+		turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_NOT_HELD);
+		turnstile_deallocate_safe(ts);
 	}
 
-	/* Adjust the sync qos of destination */
-	ipc_port_adjust_sync_qos(dest_port, sync_qos_delta_add, sync_qos_delta_sub);
-	ip_release(dest_port);
+	/* Release the ref on the dest port and it's turnstile */
+	if (dest_port) {
+		ipc_port_send_turnstile_complete(dest_port);
+		/* release the reference on the dest port */
+		ip_release(dest_port);
+	}
+
+	if (dest_ts) {
+		turnstile_deallocate_safe(dest_ts);
+	}
 }
 
 /*
- *	Routine:	ipc_port_unlink_special_reply_port
+ *	Routine:	ipc_port_adjust_special_reply_port
  *	Purpose:
- *		If the special port is linked to a port, adjust it's sync qos override and unlink the port.
+ *		If the special port has a turnstile, update it's inheritor.
  *	Condition:
  *		Nothing locked.
  *	Returns:
  *		None.
  */
 void
-ipc_port_unlink_special_reply_port(
+ipc_port_adjust_special_reply_port(
 	ipc_port_t special_reply_port,
-	uint8_t flags)
+	uint8_t flags,
+	boolean_t get_turnstile)
 {
 	ip_lock(special_reply_port);
-	ipc_port_unlink_special_reply_port_locked(special_reply_port, NULL, flags);
+	ipc_port_adjust_special_reply_port_locked(special_reply_port, NULL, flags, get_turnstile);
 	/* special_reply_port unlocked */
 }
 
 /*
- *	Routine:	ipc_port_sync_qos_delta
+ *	Routine:	ipc_port_get_special_reply_port_inheritor
  *	Purpose:
- *		Adjust the sync qos count associated with a port.
- *
- *		For now, be defensive during deductions to make sure the
- *		sync_qos count for the port doesn't underflow zero.
+ *		Returns the current inheritor of the special reply port
+ *	Condition:
+ *		mqueue is locked, port is a special reply port
  *	Returns:
- *		TRUE: if max sync qos of the port changes.
- *		FALSE: otherwise.
- *	Conditions:
- *		The port is referenced and locked.
- *		The mqueue is locked if port is not in-transit.
+ *		the current inheritor
  */
-boolean_t
-ipc_port_sync_qos_delta(
-	ipc_port_t        port,
-	sync_qos_count_t *sync_qos_delta_add,
-	sync_qos_count_t *sync_qos_delta_sub)
+turnstile_inheritor_t
+ipc_port_get_special_reply_port_inheritor(
+	ipc_port_t port)
 {
-	sync_qos_count_t max_sync_qos_index;
+	assert(port->ip_specialreply);
+	imq_held(&port->ip_messages);
 
-	if (!ip_active(port)) {
-		return FALSE;
-	}
-
-	max_sync_qos_index = ipc_port_get_max_sync_qos_index(port);
-
-	for (int i = 0; i < THREAD_QOS_LAST; i++) {
-		sync_qos_count_t port_sync_qos_count = port_sync_qos(port, i);
-		/* Do not let the sync qos underflow */
-		if (sync_qos_delta_sub[i] > port_sync_qos_count) {
-			KDBG_FILTERED(IMPORTANCE_CODE(IMP_SYNC_IPC_QOS, IMP_SYNC_IPC_QOS_UNDERFLOW),
-			      i, VM_KERNEL_UNSLIDE_OR_PERM(port),
-			      port_sync_qos_count, sync_qos_delta_sub[i]);
-
-			set_port_sync_qos(port, i, 0);
-		} else if (sync_qos_delta_sub[i] != 0) {
-			KDBG_FILTERED(IMPORTANCE_CODE(IMP_SYNC_IPC_QOS, IMP_SYNC_IPC_QOS_REMOVED),
-			      i, VM_KERNEL_UNSLIDE_OR_PERM(port),
-			      port_sync_qos_count, sync_qos_delta_sub[i]);
-
-			set_port_sync_qos(port, i, (port_sync_qos_count - sync_qos_delta_sub[i]));
+	switch (port->ip_sync_link_state) {
+	case PORT_SYNC_LINK_PORT:
+		if (port->ip_sync_inheritor_port != NULL) {
+			return port_send_turnstile(port->ip_sync_inheritor_port);
 		}
-
-		port_sync_qos_count = port_sync_qos(port, i);
-		/* Do not let the sync qos overflow */
-		if (UCHAR_MAX - sync_qos_delta_add[i] < port_sync_qos_count) {
-			KDBG_FILTERED(IMPORTANCE_CODE(IMP_SYNC_IPC_QOS, IMP_SYNC_IPC_QOS_OVERFLOW),
-			      i, VM_KERNEL_UNSLIDE_OR_PERM(port),
-			      port_sync_qos_count, sync_qos_delta_add[i]);
-
-			set_port_sync_qos(port, i, UCHAR_MAX);
-		} else if (sync_qos_delta_add[i] != 0) {
-			KDBG_FILTERED(IMPORTANCE_CODE(IMP_SYNC_IPC_QOS, IMP_SYNC_IPC_QOS_APPLIED),
-			      i, VM_KERNEL_UNSLIDE_OR_PERM(port),
-			      port_sync_qos_count, sync_qos_delta_add[i]);
-
-			set_port_sync_qos(port, i, (port_sync_qos_count + sync_qos_delta_add[i]));
-		}
+		break;
+	case PORT_SYNC_LINK_WORKLOOP_KNOTE:
+		return filt_machport_stashed_special_reply_port_turnstile(port);
+	case PORT_SYNC_LINK_WORKLOOP_STASH:
+		return port->ip_sync_inheritor_ts;
 	}
-	return (ipc_port_get_max_sync_qos_index(port) != max_sync_qos_index);
-}
-
-/*
- *	Routine:	ipc_port_get_max_sync_qos_index
- *	Purpose:
- *		Return the max sync qos of the port.
- *
- *	Conditions:
- */
-sync_qos_count_t
-ipc_port_get_max_sync_qos_index(
-	ipc_port_t	port)
-{
-	int i;
-	for (i = THREAD_QOS_LAST - 1; i >= 0; i--) {
-		if (port_sync_qos(port, i) != 0) {
-			return i;
-		}
-	}
-	return THREAD_QOS_UNSPECIFIED;
-}
-
-/*
- *	Routine:	ipc_port_adjust_sync_qos
- *	Purpose:
- *		Adjust sync qos of the port and it's destination
- *		port if the port is in transit.
- *	Conditions:
- *		Nothing locked.
- *	Returns:
- *		None.
- */
-void
-ipc_port_adjust_sync_qos(
-	ipc_port_t port,
-	sync_qos_count_t *sync_qos_delta_add,
-	sync_qos_count_t *sync_qos_delta_sub)
-{
-	boolean_t update_knote;
-	boolean_t multiple_lock = FALSE;
-	ipc_port_t dest, base, next;
-
-	ip_lock(port);
-
-	/* Check if the port is in transit */
-	if (!ip_active(port) ||
-	    (port->ip_receiver_name != MACH_PORT_NULL) ||
-	    (port->ip_destination == IP_NULL)) {
-		/* lock the mqueue since port is not in-transit */
-		imq_lock(&port->ip_messages);
-		update_knote = ipc_port_sync_qos_delta(port, sync_qos_delta_add, sync_qos_delta_sub);
-		if (update_knote) {
-			KNOTE(&port->ip_messages.imq_klist, 0);
-		}
-		imq_unlock(&port->ip_messages);
-		ip_unlock(port);
-		return;
-	}
-
-	dest = port->ip_destination;
-	assert(dest != IP_NULL);
-
-	if (ip_lock_try(dest)) {
-		if (!ip_active(dest) ||
-		    (dest->ip_receiver_name != MACH_PORT_NULL) ||
-		    (dest->ip_destination == IP_NULL)) {
-			update_knote = ipc_port_sync_qos_delta(port, sync_qos_delta_add, sync_qos_delta_sub);
-			ip_unlock(port);
-
-			/* lock the mqueue since dest is not in-transit */
-			imq_lock(&dest->ip_messages);
-			update_knote = ipc_port_sync_qos_delta(dest, sync_qos_delta_add, sync_qos_delta_sub);
-			if (update_knote) {
-				KNOTE(&dest->ip_messages.imq_klist, 0);
-			}
-			imq_unlock(&dest->ip_messages);
-			ip_unlock(dest);
-			return;
-		}
-
-		/* dest is in transit; need to take the serialize lock */
-		ip_unlock(dest);
-	}
-
-	ip_unlock(port);
-
-	ipc_port_multiple_lock(); /* massive serialization */
-	multiple_lock = TRUE;
-
-	ip_lock(port);
-	next = port;
-
-	/* Apply the sync qos delta to all in-transit ports */
-	for (;;) {
-		boolean_t port_not_in_transit = FALSE;
-
-		if (!ip_active(next) ||
-		    (next->ip_receiver_name != MACH_PORT_NULL) ||
-		    (next->ip_destination == IP_NULL)) {
-			/* Get the mqueue lock for destination port to update knotes */
-			imq_lock(&next->ip_messages);
-			port_not_in_transit = TRUE;
-		}
-
-		/* Apply the sync qos delta */
-		update_knote = ipc_port_sync_qos_delta(next, sync_qos_delta_add, sync_qos_delta_sub);
-
-		if (port_not_in_transit)
-			break;
-
-		next = next->ip_destination;
-		ip_lock(next);
-	}
-
-	if (multiple_lock) {
-		ipc_port_multiple_unlock();
-	}
-
-	base = next;
-	next = port;
-
-	while (next != base) {
-		ipc_port_t prev = next;
-		next = next->ip_destination;
-
-		ip_unlock(prev);
-	}
-
-	if (update_knote) {
-		KNOTE(&base->ip_messages.imq_klist, 0);
-	}
-	imq_unlock(&base->ip_messages);
-	ip_unlock(base);
+	return TURNSTILE_INHERITOR_NULL;
 }
 
 /*
@@ -2053,6 +2094,40 @@ ipc_port_copyout_send(
 }
 
 /*
+ *	Routine:	ipc_port_copyout_name_send
+ *	Purpose:
+ *		Copyout a naked send right (possibly null/dead) to given name,
+ *		or if that fails, destroy the right.
+ *	Conditions:
+ *		Nothing locked.
+ */
+
+mach_port_name_t
+ipc_port_copyout_name_send(
+	ipc_port_t	sright,
+	ipc_space_t	space,
+	mach_port_name_t name)
+{
+	if (IP_VALID(sright)) {
+		kern_return_t kr;
+
+		kr = ipc_object_copyout_name(space, (ipc_object_t) sright,
+					MACH_MSG_TYPE_PORT_SEND, TRUE, name);
+		if (kr != KERN_SUCCESS) {
+			ipc_port_release_send(sright);
+
+			if (kr == KERN_INVALID_CAPABILITY)
+				name = MACH_PORT_DEAD;
+			else
+				name = MACH_PORT_NULL;
+		}
+	} else
+		name = CAST_MACH_PORT_TO_NAME(sright);
+
+	return name;
+}
+
+/*
  *	Routine:	ipc_port_release_send
  *	Purpose:
  *		Release a naked send right.
@@ -2165,7 +2240,7 @@ ipc_port_release_sonce(
 	if (!IP_VALID(port))
 		return;
 
-	ipc_port_unlink_special_reply_port(port, IPC_PORT_UNLINK_SR_NONE);
+	ipc_port_adjust_special_reply_port(port, IPC_PORT_ADJUST_SR_NONE, FALSE);
 
 	ip_lock(port);
 
@@ -2205,8 +2280,10 @@ ipc_port_release_receive(
 
 	ipc_port_destroy(port); /* consumes ref, unlocks */
 
-	if (dest != IP_NULL)
+	if (dest != IP_NULL) {
+		ipc_port_send_turnstile_complete(dest);
 		ip_release(dest);
+	}
 }
 
 /*
@@ -2272,8 +2349,10 @@ ipc_port_dealloc_special(
 	 *	the ipc_space_kernel check in ipc_mqueue_send.
 	 */
 
+	imq_lock(&port->ip_messages);
 	port->ip_receiver_name = MACH_PORT_NULL;
 	port->ip_receiver = IS_NULL;
+	imq_unlock(&port->ip_messages);
 
 	/* relevant part of ipc_port_clear_receiver */
 	ipc_port_set_mscount(port, 0);
@@ -2297,7 +2376,13 @@ ipc_port_finalize(
 {
 	ipc_port_request_t requests = port->ip_requests;
 
-	assert(!ip_active(port));
+	assert(port_send_turnstile(port) == TURNSTILE_NULL);
+	assert(ipc_port_rcv_turnstile(port) == TURNSTILE_NULL);
+
+	if (ip_active(port)) {
+		panic("Trying to free an active port. port %p", port);
+	}
+
 	if (requests != IPR_NULL) {
 		ipc_table_size_t its = requests->ipr_size;
 		it_requests_free(its, requests);
@@ -2327,11 +2412,13 @@ ipc_port_finalize(
 void
 kdp_mqueue_send_find_owner(struct waitq * waitq, __assert_only event64_t event, thread_waitinfo_t * waitinfo)
 {
+	struct turnstile *turnstile;
 	assert(waitinfo->wait_type == kThreadWaitPortSend);
 	assert(event == IPC_MQUEUE_FULL);
+	assert(waitq_is_turnstile_queue(waitq));
 
-	ipc_mqueue_t mqueue = imq_from_waitq(waitq);
-	ipc_port_t port     = ip_from_mq(mqueue); /* we are blocking on send */
+	turnstile = waitq_to_turnstile(waitq);
+	ipc_port_t port     = (ipc_port_t)turnstile->ts_proprietor; /* we are blocking on send */
 	assert(kdp_is_in_zone(port, "ipc ports"));
 
 	waitinfo->owner = 0;

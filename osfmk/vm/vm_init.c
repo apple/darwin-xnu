@@ -179,9 +179,10 @@ vm_mem_bootstrap(void)
 
 	if (zsize < ZONE_MAP_MIN)
 		zsize = ZONE_MAP_MIN;	/* Clamp to min */
+
 #if defined(__LP64__)
 	zsize += zsize >> 1;
-#endif  /* __LP64__ */
+#endif /* __LP64__ */
 	if (zsize > sane_size >> 1)
 		zsize = sane_size >> 1;	/* Clamp to half of RAM max */
 #if !__LP64__
@@ -189,25 +190,6 @@ vm_mem_bootstrap(void)
 		zsize = ZONE_MAP_MAX;	/* Clamp to 1.5GB max for K32 */
 #endif /* !__LP64__ */
 
-#if CONFIG_EMBEDDED
-#if defined(__LP64__)
-	{
-	mach_vm_size_t max_zsize;
-
-	/*
-	 * because of the limited kernel virtual space for embedded systems,
-	 * we need to clamp the size of the zone map being created... replicate
-	 * the above calculation for a 1Gbyte, LP64 system and use that as the
-	 * maximum size for the zone map
-	 */
-	max_zsize = (1024ULL * 1024ULL * 1024ULL) >> 2ULL;
-	max_zsize += max_zsize >> 1;
-
-	if (zsize > max_zsize)
-		zsize = max_zsize;
-	}
-#endif
-#endif
 	vm_mem_bootstrap_log("kext_alloc_init");
 	kext_alloc_init();
 
@@ -242,6 +224,11 @@ vm_mem_bootstrap(void)
 	vm_paging_map_init();
 
 	vm_mem_bootstrap_log("vm_mem_bootstrap done");
+
+#ifdef	CONFIG_ZCACHE
+	zcache_bootstrap();
+#endif
+	vm_rtfault_record_init();
 }
 
 void

@@ -130,6 +130,7 @@ typedef uint8_t OSKextExcludeLevel;
 #define kOSBundlePathKey                        "OSBundlePath"
 #define kOSBundleExecutablePathKey              "OSBundleExecutablePath"
 #define kOSBundleUUIDKey                        "OSBundleUUID"
+#define kOSBundleTextUUIDKey                    "OSBundleTextUUID"
 #define kOSBundleStartedKey                     "OSBundleStarted"
 #define kOSBundlePrelinkedKey                   "OSBundlePrelinked"
 #define kOSBundleLoadTagKey                     "OSBundleLoadTag"
@@ -140,6 +141,11 @@ typedef uint8_t OSKextExcludeLevel;
 #define kOSBundleWiredSizeKey                   "OSBundleWiredSize"
 #define kOSBundleDependenciesKey                "OSBundleDependencies"
 #define kOSBundleRetainCountKey                 "OSBundleRetainCount"
+#define kOSBundleCacheLoadAddressKey            "OSBundleCacheLoadAddress"
+// Kernel TEXT encompasses kexts
+#define kOSBundleKextsInKernelTextKey           "OSBundleKextsInKernelText"
+// OSKextCopyLoadedKextInfo includes non-started kexts when present:
+#define kOSBundleAllPrelinkedKey                "OSBundleAllPrelinked"
 
 /* Dictionary of metaclass info keyed by classname.
  */
@@ -933,6 +939,10 @@ extern void                         OSKextFreeSite(vm_allocation_site_t * site);
 #if CONFIG_IMAGEBOOT
 extern int OSKextGetUUIDForName(const char *, uuid_t);
 #endif
+
+extern vm_tag_t gIOSurfaceTag;
+
+extern void *OSKextKextForAddress(const void *addr);
 
 #endif /* XNU_KERNEL_PRIVATE */
 

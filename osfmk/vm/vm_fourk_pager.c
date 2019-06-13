@@ -1068,7 +1068,7 @@ fourk_pager_data_request(
 				      kr);
 			}
 			assert(src_page != VM_PAGE_NULL);
-			assert(src_page->busy);
+			assert(src_page->vmp_busy);
 
 			src_page_object = VM_PAGE_OBJECT(src_page);
 
@@ -1164,7 +1164,7 @@ fourk_pager_data_request(
 				       offset, cur_offset,
 				       (sub_page-sub_page_idx)*FOURK_PAGE_SIZE,
 				       src_page_object,
-				       src_page->offset + offset_in_src_page,
+				       src_page->vmp_offset + offset_in_src_page,
 				       *(uint64_t *)(dst_vaddr +
 						     ((sub_page-sub_page_idx) *
 						      FOURK_PAGE_SIZE)),
@@ -1302,7 +1302,7 @@ done:
 		kr = vm_map_remove(kernel_map,
 				   kernel_mapping,
 				   kernel_mapping + (2 * PAGE_SIZE_64),
-				   VM_MAP_NO_FLAGS);
+				   VM_MAP_REMOVE_NO_FLAGS);
 		assert(kr == KERN_SUCCESS);
 		kernel_mapping = 0;
 		src_vaddr = 0;

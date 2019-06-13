@@ -63,11 +63,11 @@ struct kern_work_interval_create_args {
  */
 extern kern_return_t
 kern_work_interval_create(thread_t thread, struct kern_work_interval_create_args *create_params);
+
 extern kern_return_t
 kern_work_interval_destroy(thread_t thread, uint64_t work_interval_id);
 extern kern_return_t
 kern_work_interval_join(thread_t thread, mach_port_name_t port_name);
-
 
 extern kern_return_t
 kern_work_interval_notify(thread_t thread, struct kern_work_interval_args* kwi_args);

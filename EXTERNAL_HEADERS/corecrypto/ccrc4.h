@@ -26,19 +26,8 @@ struct ccrc4_info {
     void (*crypt)(ccrc4_ctx *ctx, size_t nbytes, const void *in, void *out);
 };
 
-
 const struct ccrc4_info *ccrc4(void);
 
 extern const struct ccrc4_info ccrc4_eay;
-
-struct ccrc4_vector {
-    size_t keylen;
-    const void *key;
-    size_t datalen;
-    const void *pt;
-    const void *ct;
-};
-
-int ccrc4_test(const struct ccrc4_info *rc4, const struct ccrc4_vector *v);
 
 #endif /* _CORECRYPTO_CCRC4_H_ */

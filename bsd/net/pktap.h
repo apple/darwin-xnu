@@ -33,6 +33,7 @@
 #include <stdint.h>
 #include <net/if.h>
 #include <uuid/uuid.h>
+#include <string.h>
 
 #ifdef PRIVATE
 
@@ -123,23 +124,113 @@ struct pktap_header {
 };
 
 /*
- *
+ * The original version 1 of the pktap_header structure always had the field
+ * pth_type_next set to PTH_TYPE_PACKET
  */
 #define PTH_TYPE_NONE	0		/* No more data following */
 #define PTH_TYPE_PACKET	1		/* Actual captured packet data */
 
-#define PTH_FLAG_DIR_IN			0x0001	/* Outgoing packet */
-#define PTH_FLAG_DIR_OUT		0x0002	/* Incoming packet */
-#define PTH_FLAG_PROC_DELEGATED		0x0004	/* Process delegated */
-#define PTH_FLAG_IF_DELEGATED		0x0008	/* Interface delegated */
+/*
+ * Size of buffer that can contain any pktap header
+ * followed by the optional 4 bytes protocol field
+ * or 16 bytes link layer header
+ */
+union pktap_header_extra {
+		uint8_t		llhdr[16];
+		uint32_t	proto;
+};
+
+/*
+ * Version 2 version of the header
+ *
+ * The field pth_flags is at the same offset as the orignal pktap_header and
+ * the flag PTH_FLAG_V2_HDR allows to differentiate the header version.
+ */
+
+#define PKTAP_MAX_COMM_SIZE (MAXCOMLEN + 1)
+
+struct pktap_v2_hdr {
+	uint8_t			pth_length;			/* length of this header */
+	uint8_t			pth_uuid_offset;		/* max size: sizeof(uuid_t) */
+	uint8_t			pth_e_uuid_offset;		/* max size: sizeof(uuid_t) */
+	uint8_t			pth_ifname_offset;		/* max size: PKTAP_IFXNAMESIZE*/
+	uint8_t			pth_comm_offset;		/* max size: PKTAP_MAX_COMM_SIZE */
+	uint8_t			pth_e_comm_offset;		/* max size: PKTAP_MAX_COMM_SIZE */
+	uint16_t		pth_dlt;			/* DLT of packet */
+	uint16_t		pth_frame_pre_length;
+	uint16_t		pth_frame_post_length;
+	uint16_t		pth_iftype;
+	uint16_t		pth_ipproto;
+	uint32_t		pth_protocol_family;
+	uint32_t		pth_svc;			/* service class */
+	uint32_t		pth_flowid;
+	pid_t			pth_pid;			/* process ID */
+	pid_t			pth_e_pid;			/* effective process ID */
+	uint32_t		pth_flags;			/* flags */
+};
+
+struct pktap_v2_hdr_space {
+	struct pktap_v2_hdr pth_hdr;
+	uint8_t pth_uuid[sizeof(uuid_t)];
+	uint8_t pth_e_uuid[sizeof(uuid_t)];
+	uint8_t pth_ifname[PKTAP_IFXNAMESIZE];
+	uint8_t pth_comm[PKTAP_MAX_COMM_SIZE];
+	uint8_t pth_e_comm[PKTAP_MAX_COMM_SIZE];
+};
+
+struct pktap_buffer_v2_hdr_extra {
+	struct pktap_v2_hdr_space hdr_space;
+	union pktap_header_extra extra;
+};
+
+#define COPY_PKTAP_COMMON_FIELDS_TO_V2(pktap_v2_hdr_dst, pktap_header_src) { \
+	(pktap_v2_hdr_dst)->pth_length = sizeof(struct pktap_v2_hdr); \
+	(pktap_v2_hdr_dst)->pth_uuid_offset = 0; \
+	(pktap_v2_hdr_dst)->pth_e_uuid_offset = 0; \
+	(pktap_v2_hdr_dst)->pth_ifname_offset = 0; \
+	(pktap_v2_hdr_dst)->pth_comm_offset = 0; \
+	(pktap_v2_hdr_dst)->pth_e_comm_offset = 0; \
+	(pktap_v2_hdr_dst)->pth_dlt = (pktap_header_src)->pth_dlt; \
+	(pktap_v2_hdr_dst)->pth_frame_pre_length = (pktap_header_src)->pth_frame_pre_length; \
+	(pktap_v2_hdr_dst)->pth_frame_post_length = (pktap_header_src)->pth_frame_post_length; \
+	(pktap_v2_hdr_dst)->pth_iftype = (pktap_header_src)->pth_iftype; \
+	(pktap_v2_hdr_dst)->pth_ipproto = (pktap_header_src)->pth_ipproto; \
+	(pktap_v2_hdr_dst)->pth_protocol_family = (pktap_header_src)->pth_protocol_family; \
+	(pktap_v2_hdr_dst)->pth_svc = (pktap_header_src)->pth_svc; \
+	(pktap_v2_hdr_dst)->pth_flowid = (pktap_header_src)->pth_flowid; \
+	(pktap_v2_hdr_dst)->pth_pid = (pktap_header_src)->pth_pid; \
+	(pktap_v2_hdr_dst)->pth_e_pid = (pktap_header_src)->pth_epid; \
+	(pktap_v2_hdr_dst)->pth_flags = (pktap_header_src)->pth_flags; \
+	(pktap_v2_hdr_dst)->pth_flags |= PTH_FLAG_V2_HDR; \
+}
+
+/*
+ * Values for field pth_flags
+ */
+#define	PTH_FLAG_DIR_IN		0x00000001 /* Outgoing packet */
+#define	PTH_FLAG_DIR_OUT	0x00000002 /* Incoming packet */
+#define	PTH_FLAG_PROC_DELEGATED	0x00000004 /* Process delegated */
+#define	PTH_FLAG_IF_DELEGATED	0x00000008 /* Interface delegated */
 #ifdef BSD_KERNEL_PRIVATE
-#define PTH_FLAG_DELAY_PKTAP		0x1000	/* Finalize pktap header on read */
+#define	PTH_FLAG_DELAY_PKTAP	0x00001000 /* Finalize pktap header on read */
 #endif /* BSD_KERNEL_PRIVATE */
-#define PTH_FLAG_TSTAMP			0x2000	/* Has time stamp */
-#define	PTH_FLAG_NEW_FLOW		0x4000	/* Packet from a new flow */
-#define	PTH_FLAG_MSFSW			0x8000	/* Multi stack flow switch */
+#define	PTH_FLAG_TSTAMP		0x00002000 /* Has time stamp */
+#define	PTH_FLAG_NEW_FLOW	0x00004000 /* Packet from a new flow */
+#define	PTH_FLAG_REXMIT		0x00008000 /* Packet is a retransmission */
+#define	PTH_FLAG_KEEP_ALIVE	0x00010000 /* Is keep alive packet */
+#define	PTH_FLAG_SOCKET		0x00020000 /* Packet on a Socket */
+#define	PTH_FLAG_NEXUS_CHAN	0x00040000 /* Packet on a nexus channel */
+#define	PTH_FLAG_V2_HDR		0x00080000 /* Version 2 of pktap */
 
 #ifdef BSD_KERNEL_PRIVATE
+
+#include <net/bpf.h>
+
+struct pktap_header_buffer {
+	struct pktap_header		pkth;
+	union pktap_header_extra	extra;
+} ;
+
 extern uint32_t pktap_total_tap_count;
 
 extern void pktap_init(void);
@@ -149,7 +240,8 @@ extern void pktap_output(struct ifnet *, protocol_family_t, struct mbuf *,
 extern void pktap_fill_proc_info(struct pktap_header *, protocol_family_t , 
 	struct mbuf *, u_int32_t , int , struct ifnet *);
 extern void pktap_finalize_proc_info(struct pktap_header *);
-
+extern void pktap_v2_finalize_proc_info(struct pktap_v2_hdr *);
+extern void convert_to_pktap_header_to_v2(struct bpf_packet *bpf_pkt, bool truncate);
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* PRIVATE */
 

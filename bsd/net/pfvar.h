@@ -780,6 +780,7 @@ struct pf_rule {
 #define	SC_AV			0x15
 #define	SC_RV			0x16
 #define	SC_VI			0x17
+#define	SC_SIG			0x17
 #define	SC_VO			0x18
 #define	SC_CTL			0x19
 

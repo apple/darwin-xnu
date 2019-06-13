@@ -30,6 +30,7 @@
 #define KPERF_TASK_SAMPLERS_H
 
 #include <kperf/context.h>
+#include <kern/task.h>
 
 struct kperf_task_snapshot {
 	uint64_t kptksn_flags;
@@ -46,9 +47,11 @@ struct kperf_task_snapshot {
 #define KPERF_TASK_FLAG_WQ_FLAGS_VALID          (1U << 4)
 #define KPERF_TASK_FLAG_WQ_EXCEEDED_TOTAL       (1U << 5)
 #define KPERF_TASK_FLAG_WQ_EXCEEDED_CONSTRAINED (1U << 6)
+#define KPERF_TASK_FLAG_DIRTY_TRACKED           (1U << 7)
+#define KPERF_TASK_ALLOW_IDLE_EXIT              (1U << 8)
 
-void kperf_task_snapshot_sample(struct kperf_task_snapshot *tksn,
-                                struct kperf_context *ctx);
+void kperf_task_snapshot_sample(task_t task, struct kperf_task_snapshot *tksn);
 void kperf_task_snapshot_log(struct kperf_task_snapshot *tksn);
+void kperf_task_info_log(struct kperf_context *ctx);
 
 #endif /* !defined(KPERF_TASK_SAMPLERS_H) */

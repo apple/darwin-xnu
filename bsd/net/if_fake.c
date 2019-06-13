@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -71,6 +71,7 @@
 #include <net/kpi_protocol.h>
 
 #include <kern/locks.h>
+#include <kern/zalloc.h>
 
 #ifdef INET
 #include <netinet/in.h>
@@ -106,14 +107,24 @@ static int if_fake_debug = 0;
 SYSCTL_INT(_net_link_fake, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&if_fake_debug, 0, "Fake interface debug logs");
 
+static int if_fake_wmm_mode = 0;
+SYSCTL_INT(_net_link_fake, OID_AUTO, wmm_mode, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&if_fake_wmm_mode, 0, "Fake interface in 802.11 WMM mode");
+
 /**
  ** virtual ethernet structures, types
  **/
+
+#define	IFF_NUM_TX_RINGS_WMM_MODE	4
+#define	IFF_NUM_RX_RINGS_WMM_MODE	1
+#define	IFF_MAX_TX_RINGS	IFF_NUM_TX_RINGS_WMM_MODE
+#define	IFF_MAX_RX_RINGS	IFF_NUM_RX_RINGS_WMM_MODE
 
 typedef uint16_t	iff_flags_t;
 #define IFF_FLAGS_HWCSUM		0x0001
 #define IFF_FLAGS_BSD_MODE		0x0002
 #define IFF_FLAGS_DETACHING		0x0004
+#define	IFF_FLAGS_WMM_MODE		0x0008
 
 
 struct if_fake {
@@ -156,7 +167,22 @@ feth_is_detaching(if_fake_ref fakeif)
 	return ((fakeif->iff_flags & IFF_FLAGS_DETACHING) != 0);
 }
 
+static int
+feth_enable_dequeue_stall(ifnet_t ifp, uint32_t enable)
+{
+	int error;
 
+	if (enable != 0)
+		error = ifnet_disable_output(ifp);
+	else
+		error = ifnet_enable_output(ifp);
+
+	return (error);
+}
+
+
+#define	FETH_MAXUNIT 	IF_MAXUNIT
+#define	FETH_ZONE_MAX_ELEM	MIN(IFNETS_MAX, FETH_MAXUNIT)
 #define M_FAKE 		M_DEVBUF
 
 static	int feth_clone_create(struct if_clone *, u_int32_t, void *);
@@ -171,10 +197,12 @@ static	void feth_free(if_fake_ref fakeif);
 
 static struct if_clone
 feth_cloner = IF_CLONE_INITIALIZER(FAKE_ETHER_NAME,
-				   feth_clone_create, 
-				   feth_clone_destroy, 
-				   0, 
-				   IF_MAXUNIT);
+    feth_clone_create,
+    feth_clone_destroy,
+    0,
+    FETH_MAXUNIT,
+    FETH_ZONE_MAX_ELEM,
+    sizeof(struct if_fake));
 static	void interface_link_event(ifnet_t ifp, u_int32_t event_code);
 
 /* some media words to pretend to be ethernet */
@@ -268,7 +296,7 @@ feth_free(if_fake_ref fakeif)
 	}
 
 	FETH_DPRINTF("%s\n", fakeif->iff_name);
-	FREE(fakeif, M_FAKE);
+	if_clone_softc_deallocate(&feth_cloner, fakeif);
 }
 
 static void
@@ -351,7 +379,7 @@ feth_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	ifnet_t				ifp;
 	uint8_t				mac_address[ETHER_ADDR_LEN];
 
-	fakeif = _MALLOC(sizeof(struct if_fake), M_FAKE, M_WAITOK | M_ZERO);
+	fakeif = if_clone_softc_allocate(&feth_cloner);
 	if (fakeif == NULL) {
 		return ENOBUFS;
 	}
@@ -496,6 +524,7 @@ copy_mbuf(struct mbuf *m)
 	}
 	mbuf_setlen(copy_m, pkt_len);
 	copy_m->m_pkthdr.len = pkt_len;
+	copy_m->m_pkthdr.pkt_svc = m->m_pkthdr.pkt_svc;
 	offset = 0;
 	while (m != NULL && offset < pkt_len) {
 		uint32_t	frag_len;
@@ -713,14 +742,10 @@ feth_config(ifnet_t ifp, ifnet_t peer)
 
 	/* generate link status event if we connect or disconnect */
 	if (connected) {
-		ifnet_set_flags(ifp, IFF_RUNNING, IFF_RUNNING);
-		ifnet_set_flags(peer, IFF_RUNNING, IFF_RUNNING);
 		interface_link_event(ifp, KEV_DL_LINK_ON);
 		interface_link_event(peer, KEV_DL_LINK_ON);
 	}
 	else if (disconnected) {
-		ifnet_set_flags(ifp, 0, IFF_RUNNING);
-		ifnet_set_flags(peer, 0, IFF_RUNNING);
 		interface_link_event(ifp, KEV_DL_LINK_OFF);
 		interface_link_event(peer, KEV_DL_LINK_OFF);
 	}
@@ -822,6 +847,14 @@ feth_set_drvspec(ifnet_t ifp, uint32_t cmd, u_int32_t len,
 			break;
 		}
 		error = feth_set_media(ifp, &iffr);
+		break;
+	case IF_FAKE_S_CMD_SET_DEQUEUE_STALL:
+		error = if_fake_request_copyin(user_addr, &iffr, len);
+		if (error != 0) {
+			break;
+		}
+		error = feth_enable_dequeue_stall(ifp,
+		    iffr.iffr_dequeue_stall);
 		break;
 	default:
 		error = EOPNOTSUPP;
@@ -980,7 +1013,17 @@ feth_ioctl(ifnet_t ifp, u_long cmd, void * data)
 		break;
 
 	case SIOCSIFFLAGS:
-		error = 0;
+		if ((ifp->if_flags & IFF_UP) != 0) {
+			/* marked up, set running if not already set */
+			if ((ifp->if_flags & IFF_RUNNING) == 0) {
+				/* set running */
+				error = ifnet_set_flags(ifp, IFF_RUNNING,
+				    IFF_RUNNING);
+			}
+		} else if ((ifp->if_flags & IFF_RUNNING) != 0) {
+			/* marked down, clear running */
+			error = ifnet_set_flags(ifp, 0, IFF_RUNNING);
+		}
 		break;
 
 	case SIOCADDMULTI:

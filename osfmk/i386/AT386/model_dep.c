@@ -125,9 +125,7 @@
 
 #include <libkern/kernel_mach_header.h>
 #include <libkern/OSKextLibPrivate.h>
-
-#include <mach/branch_predicates.h>
-#include <libkern/section_keywords.h>
+#include <libkern/crc.h>
 
 #if	DEBUG || DEVELOPMENT
 #define DPRINTF(x...)	kprintf(x)
@@ -135,9 +133,25 @@
 #define DPRINTF(x...)
 #endif
 
+#ifndef ROUNDUP
+#define ROUNDUP(a, b) (((a) + ((b) - 1)) & (~((b) - 1)))
+#endif
+
+#ifndef ROUNDDOWN
+#define ROUNDDOWN(x,y) (((x)/(y))*(y))
+#endif
+
 static void machine_conf(void);
 void panic_print_symbol_name(vm_address_t search);
 void RecordPanicStackshot(void);
+
+typedef enum paniclog_flush_type {
+    kPaniclogFlushBase		= 1, /* Flush the initial log and paniclog header */
+    kPaniclogFlushStackshot	= 2, /* Flush only the stackshot data, then flush the header */
+    kPaniclogFlushOtherLog	= 3  /* Flush the other log, then flush the header */
+} paniclog_flush_type_t;
+
+void paniclog_flush_internal(paniclog_flush_type_t variant);
 
 extern const char	version[];
 extern char 	osversion[];
@@ -173,22 +187,20 @@ static unsigned panic_io_port;
 static unsigned	commit_paniclog_to_nvram;
 boolean_t coprocessor_paniclog_flush = FALSE;
 
-#if DEVELOPMENT || DEBUG
 struct kcdata_descriptor kc_panic_data;
 static boolean_t begun_panic_stackshot = FALSE;
-
-vm_offset_t panic_stackshot_buf = 0;
-size_t panic_stackshot_len = 0;
-
 extern kern_return_t	do_stackshot(void *);
+
 extern void	 	kdp_snapshot_preflight(int pid, void *tracebuf,
 					       uint32_t tracebuf_size, uint32_t flags,
 					       kcdata_descriptor_t data_p,
 						boolean_t enable_faulting);
 extern int 		kdp_stack_snapshot_bytes_traced(void);
-#endif
 
-SECURITY_READ_ONLY_LATE(unsigned int) debug_boot_arg;
+#if DEVELOPMENT || DEBUG
+vm_offset_t panic_stackshot_buf = 0;
+size_t panic_stackshot_len = 0;
+#endif
 
 /*
  * Backtrace a single frame.
@@ -279,20 +291,6 @@ machine_startup(void)
             halt_in_debugger = halt_in_debugger ? 0 : 1;
 #endif
 
-	if (PE_parse_boot_argn("debug", &debug_boot_arg, sizeof (debug_boot_arg))) {
-		panicDebugging = TRUE;
-#if DEVELOPMENT || DEBUG
-		if (debug_boot_arg & DB_HALT) halt_in_debugger=1;
-#endif
-#if KDEBUG_MOJO_TRACE
-		if (debug_boot_arg & DB_PRT_KDEBUG) {
-			kdebug_serial = TRUE;
-		}
-#endif
-	} else {
-		debug_boot_arg = 0;
-	}
-
 	if (!PE_parse_boot_argn("nvram_paniclog", &commit_paniclog_to_nvram, sizeof (commit_paniclog_to_nvram)))
 		commit_paniclog_to_nvram = 1;
 
@@ -303,9 +301,6 @@ machine_startup(void)
 	if (PE_parse_boot_argn("pmsafe_debug", &boot_arg, sizeof (boot_arg)))
 	    pmsafe_debug = boot_arg;
 
-#if NOTYET
-	hw_lock_init(&debugger_lock);	/* initialize debugger lock */
-#endif
 	hw_lock_init(&pbtlock);		/* initialize print backtrace lock */
 
 	if (PE_parse_boot_argn("preempt", &boot_arg, sizeof (boot_arg))) {
@@ -346,111 +341,8 @@ machine_conf(void)
 	machine_info.memory_size = (typeof(machine_info.memory_size))mem_size;
 }
 
-
 extern void *gPEEFIRuntimeServices;
 extern void *gPEEFISystemTable;
-
-/*-
- *  COPYRIGHT (C) 1986 Gary S. Brown.  You may use this program, or
- *  code or tables extracted from it, as desired without restriction.
- *
- *  First, the polynomial itself and its table of feedback terms.  The
- *  polynomial is
- *  X^32+X^26+X^23+X^22+X^16+X^12+X^11+X^10+X^8+X^7+X^5+X^4+X^2+X^1+X^0
- *
- *  Note that we take it "backwards" and put the highest-order term in
- *  the lowest-order bit.  The X^32 term is "implied"; the LSB is the
- *  X^31 term, etc.  The X^0 term (usually shown as "+1") results in
- *  the MSB being 1
- *
- *  Note that the usual hardware shift register implementation, which
- *  is what we're using (we're merely optimizing it by doing eight-bit
- *  chunks at a time) shifts bits into the lowest-order term.  In our
- *  implementation, that means shifting towards the right.  Why do we
- *  do it this way?  Because the calculated CRC must be transmitted in
- *  order from highest-order term to lowest-order term.  UARTs transmit
- *  characters in order from LSB to MSB.  By storing the CRC this way
- *  we hand it to the UART in the order low-byte to high-byte; the UART
- *  sends each low-bit to hight-bit; and the result is transmission bit
- *  by bit from highest- to lowest-order term without requiring any bit
- *  shuffling on our part.  Reception works similarly
- *
- *  The feedback terms table consists of 256, 32-bit entries.  Notes
- *
- *      The table can be generated at runtime if desired; code to do so
- *      is shown later.  It might not be obvious, but the feedback
- *      terms simply represent the results of eight shift/xor opera
- *      tions for all combinations of data and CRC register values
- *
- *      The values must be right-shifted by eight bits by the "updcrc
- *      logic; the shift must be unsigned (bring in zeroes).  On some
- *      hardware you could probably optimize the shift in assembler by
- *      using byte-swap instructions
- *      polynomial $edb88320
- *
- *
- * CRC32 code derived from work by Gary S. Brown.
- */
-
-static uint32_t crc32_tab[] = {
-	0x00000000, 0x77073096, 0xee0e612c, 0x990951ba, 0x076dc419, 0x706af48f,
-	0xe963a535, 0x9e6495a3,	0x0edb8832, 0x79dcb8a4, 0xe0d5e91e, 0x97d2d988,
-	0x09b64c2b, 0x7eb17cbd, 0xe7b82d07, 0x90bf1d91, 0x1db71064, 0x6ab020f2,
-	0xf3b97148, 0x84be41de,	0x1adad47d, 0x6ddde4eb, 0xf4d4b551, 0x83d385c7,
-	0x136c9856, 0x646ba8c0, 0xfd62f97a, 0x8a65c9ec,	0x14015c4f, 0x63066cd9,
-	0xfa0f3d63, 0x8d080df5,	0x3b6e20c8, 0x4c69105e, 0xd56041e4, 0xa2677172,
-	0x3c03e4d1, 0x4b04d447, 0xd20d85fd, 0xa50ab56b,	0x35b5a8fa, 0x42b2986c,
-	0xdbbbc9d6, 0xacbcf940,	0x32d86ce3, 0x45df5c75, 0xdcd60dcf, 0xabd13d59,
-	0x26d930ac, 0x51de003a, 0xc8d75180, 0xbfd06116, 0x21b4f4b5, 0x56b3c423,
-	0xcfba9599, 0xb8bda50f, 0x2802b89e, 0x5f058808, 0xc60cd9b2, 0xb10be924,
-	0x2f6f7c87, 0x58684c11, 0xc1611dab, 0xb6662d3d,	0x76dc4190, 0x01db7106,
-	0x98d220bc, 0xefd5102a, 0x71b18589, 0x06b6b51f, 0x9fbfe4a5, 0xe8b8d433,
-	0x7807c9a2, 0x0f00f934, 0x9609a88e, 0xe10e9818, 0x7f6a0dbb, 0x086d3d2d,
-	0x91646c97, 0xe6635c01, 0x6b6b51f4, 0x1c6c6162, 0x856530d8, 0xf262004e,
-	0x6c0695ed, 0x1b01a57b, 0x8208f4c1, 0xf50fc457, 0x65b0d9c6, 0x12b7e950,
-	0x8bbeb8ea, 0xfcb9887c, 0x62dd1ddf, 0x15da2d49, 0x8cd37cf3, 0xfbd44c65,
-	0x4db26158, 0x3ab551ce, 0xa3bc0074, 0xd4bb30e2, 0x4adfa541, 0x3dd895d7,
-	0xa4d1c46d, 0xd3d6f4fb, 0x4369e96a, 0x346ed9fc, 0xad678846, 0xda60b8d0,
-	0x44042d73, 0x33031de5, 0xaa0a4c5f, 0xdd0d7cc9, 0x5005713c, 0x270241aa,
-	0xbe0b1010, 0xc90c2086, 0x5768b525, 0x206f85b3, 0xb966d409, 0xce61e49f,
-	0x5edef90e, 0x29d9c998, 0xb0d09822, 0xc7d7a8b4, 0x59b33d17, 0x2eb40d81,
-	0xb7bd5c3b, 0xc0ba6cad, 0xedb88320, 0x9abfb3b6, 0x03b6e20c, 0x74b1d29a,
-	0xead54739, 0x9dd277af, 0x04db2615, 0x73dc1683, 0xe3630b12, 0x94643b84,
-	0x0d6d6a3e, 0x7a6a5aa8, 0xe40ecf0b, 0x9309ff9d, 0x0a00ae27, 0x7d079eb1,
-	0xf00f9344, 0x8708a3d2, 0x1e01f268, 0x6906c2fe, 0xf762575d, 0x806567cb,
-	0x196c3671, 0x6e6b06e7, 0xfed41b76, 0x89d32be0, 0x10da7a5a, 0x67dd4acc,
-	0xf9b9df6f, 0x8ebeeff9, 0x17b7be43, 0x60b08ed5, 0xd6d6a3e8, 0xa1d1937e,
-	0x38d8c2c4, 0x4fdff252, 0xd1bb67f1, 0xa6bc5767, 0x3fb506dd, 0x48b2364b,
-	0xd80d2bda, 0xaf0a1b4c, 0x36034af6, 0x41047a60, 0xdf60efc3, 0xa867df55,
-	0x316e8eef, 0x4669be79, 0xcb61b38c, 0xbc66831a, 0x256fd2a0, 0x5268e236,
-	0xcc0c7795, 0xbb0b4703, 0x220216b9, 0x5505262f, 0xc5ba3bbe, 0xb2bd0b28,
-	0x2bb45a92, 0x5cb36a04, 0xc2d7ffa7, 0xb5d0cf31, 0x2cd99e8b, 0x5bdeae1d,
-	0x9b64c2b0, 0xec63f226, 0x756aa39c, 0x026d930a, 0x9c0906a9, 0xeb0e363f,
-	0x72076785, 0x05005713, 0x95bf4a82, 0xe2b87a14, 0x7bb12bae, 0x0cb61b38,
-	0x92d28e9b, 0xe5d5be0d, 0x7cdcefb7, 0x0bdbdf21, 0x86d3d2d4, 0xf1d4e242,
-	0x68ddb3f8, 0x1fda836e, 0x81be16cd, 0xf6b9265b, 0x6fb077e1, 0x18b74777,
-	0x88085ae6, 0xff0f6a70, 0x66063bca, 0x11010b5c, 0x8f659eff, 0xf862ae69,
-	0x616bffd3, 0x166ccf45, 0xa00ae278, 0xd70dd2ee, 0x4e048354, 0x3903b3c2,
-	0xa7672661, 0xd06016f7, 0x4969474d, 0x3e6e77db, 0xaed16a4a, 0xd9d65adc,
-	0x40df0b66, 0x37d83bf0, 0xa9bcae53, 0xdebb9ec5, 0x47b2cf7f, 0x30b5ffe9,
-	0xbdbdf21c, 0xcabac28a, 0x53b39330, 0x24b4a3a6, 0xbad03605, 0xcdd70693,
-	0x54de5729, 0x23d967bf, 0xb3667a2e, 0xc4614ab8, 0x5d681b02, 0x2a6f2b94,
-	0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d
-};
-
-static uint32_t
-crc32(uint32_t crc, const void *buf, size_t size)
-{
-	const uint8_t *p;
-
-	p = buf;
-	crc = crc ^ ~0U;
-
-	while (size--)
-		crc = crc32_tab[(crc ^ *p++) & 0xFF] ^ (crc >> 8);
-
-	return crc ^ ~0U;
-}
 
 static void
 efi_set_tables_64(EFI_SYSTEM_TABLE_64 * system_table)
@@ -857,26 +749,144 @@ uint64_t panic_restart_timeout = ~(0ULL);
 
 #define PANIC_RESTART_TIMEOUT (3ULL * NSEC_PER_SEC)
 
+/*
+ * We should always return from this function with the other log offset
+ * set in the panic_info structure.
+ */
 void
 RecordPanicStackshot()
 {
-#if DEVELOPMENT || DEBUG
-	int err = 0, bytes_traced = 0, bytes_used = 0;
-	/* Try to take a stackshot once at panic time */
+	int err = 0, bytes_traced = 0, bytes_used = 0, bytes_remaining = 0;
+	char *stackshot_begin_loc = NULL;
+
+	/* Don't re-enter this code if we panic here */
 	if (begun_panic_stackshot) {
+		if (panic_info->mph_other_log_offset == 0) {
+			panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+		}
 		return;
 	}
 	begun_panic_stackshot = TRUE;
 
+	/* The panic log length should have been set before we came to capture a stackshot */
+	if (panic_info->mph_panic_log_len == 0) {
+		kdb_printf("Found zero length panic log, skipping capturing panic stackshot\n");
+		if (panic_info->mph_other_log_offset == 0) {
+			panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+		}
+		return;
+	}
+
+	/*
+	 * Try to capture an in memory panic_stackshot (enabled during boot
+	 * on systems with co-processors).
+	 */
+	if (extended_debug_log_enabled) {
+		if (stackshot_active()) {
+			panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_NESTED;
+			panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+			kdb_printf("Panicked during stackshot, skipping panic stackshot\n");
+			return;
+		} else {
+			stackshot_begin_loc = debug_buf_ptr;
+
+			bytes_remaining = debug_buf_size - (unsigned int)((uintptr_t)stackshot_begin_loc - (uintptr_t)debug_buf_base);
+			err = kcdata_memory_static_init(&kc_panic_data, (mach_vm_address_t)stackshot_begin_loc,
+					KCDATA_BUFFER_BEGIN_STACKSHOT, bytes_remaining, KCFLAG_USE_MEMCOPY);
+			if (err != KERN_SUCCESS) {
+				panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR;
+				panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+				kdb_printf("Failed to initialize kcdata buffer for in-memory panic stackshot, skipping ...\n");
+				return;
+			}
+
+			kdp_snapshot_preflight(-1, (void *) stackshot_begin_loc, bytes_remaining,
+									(STACKSHOT_SAVE_KEXT_LOADINFO | STACKSHOT_SAVE_LOADINFO | STACKSHOT_KCDATA_FORMAT |
+									STACKSHOT_ENABLE_BT_FAULTING | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_FROM_PANIC |
+									STACKSHOT_NO_IO_STATS | STACKSHOT_THREAD_WAITINFO), &kc_panic_data, 0);
+			err = do_stackshot(NULL);
+			bytes_traced = (int) kdp_stack_snapshot_bytes_traced();
+			bytes_used = (int) kcdata_memory_get_used_bytes(&kc_panic_data);
+
+			if ((err != KERN_SUCCESS) && (bytes_used > 0)) {
+				/*
+				 * We ran out of space while trying to capture a stackshot, try again without user frames.
+				 * It's not safe to log from here, but append a flag to the panic flags.
+				 */
+				panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_KERNEL_ONLY;
+				panic_stackshot_reset_state();
+
+				/* Erase the stackshot data (this region is pre-populated with the NULL character) */
+				memset(stackshot_begin_loc, '\0', bytes_used);
+
+				err = kcdata_memory_static_init(&kc_panic_data, (mach_vm_address_t)stackshot_begin_loc,
+					KCDATA_BUFFER_BEGIN_STACKSHOT, bytes_remaining, KCFLAG_USE_MEMCOPY);
+				if (err != KERN_SUCCESS) {
+					panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR;
+					panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+					kdb_printf("Failed to re-initialize kcdata buffer for kernel only in-memory panic stackshot, skipping ...\n");
+					return;
+				}
+
+				kdp_snapshot_preflight(-1, (void *) stackshot_begin_loc, bytes_remaining, (STACKSHOT_KCDATA_FORMAT |
+						STACKSHOT_NO_IO_STATS | STACKSHOT_SAVE_KEXT_LOADINFO | STACKSHOT_ACTIVE_KERNEL_THREADS_ONLY |
+						STACKSHOT_FROM_PANIC | STACKSHOT_THREAD_WAITINFO), &kc_panic_data, 0);
+				err = do_stackshot(NULL);
+				bytes_traced = (int) kdp_stack_snapshot_bytes_traced();
+				bytes_used = (int) kcdata_memory_get_used_bytes(&kc_panic_data);
+			}
+
+			if (err == KERN_SUCCESS) {
+				debug_buf_ptr += bytes_traced;
+				panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_SUCCEEDED;
+				panic_info->mph_stackshot_offset = PE_get_offset_into_panic_region(stackshot_begin_loc);
+				panic_info->mph_stackshot_len = bytes_traced;
+
+				panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+				kdb_printf("\n** In Memory Panic Stackshot Succeeded ** Bytes Traced %d **\n", bytes_traced);
+			} else {
+				if (bytes_used > 0) {
+					/* Erase the stackshot data (this region is pre-populated with the NULL character) */
+					memset(stackshot_begin_loc, '\0', bytes_used);
+					panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_INCOMPLETE;
+
+					panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+					kdb_printf("\n** In Memory Panic Stackshot Incomplete ** Bytes Filled %d ** Err %d\n", bytes_used, err);
+				} else {
+					bzero(stackshot_begin_loc, bytes_used);
+					panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR;
+
+					panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+					kdb_printf("\n** In Memory Panic Stackshot Failed ** Bytes Traced %d, err %d\n", bytes_traced, err);
+				}
+			}
+		}
+#if DEVELOPMENT || DEBUG
+		if (panic_stackshot_buf != 0) {
+			/* We're going to try to take another stackshot, reset the state. */
+			panic_stackshot_reset_state();
+		}
+#endif /* DEVELOPMENT || DEBUG */
+	} else {
+		panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+	}
+
+#if DEVELOPMENT || DEBUG
+
 	if (panic_stackshot_buf == 0) {
-		kdb_printf("No stackshot buffer allocated, skipping...\n");
+		kdb_printf("No stackshot buffer allocated for file backed panic stackshot, skipping...\n");
+		return;
+	}
+
+	if (stackshot_active()) {
+		kdb_printf("Panicked during stackshot, skipping file backed panic stackshot\n");
 		return;
 	}
 
 	err = kcdata_memory_static_init(&kc_panic_data, (mach_vm_address_t)panic_stackshot_buf, KCDATA_BUFFER_BEGIN_STACKSHOT,
 			PANIC_STACKSHOT_BUFSIZE, KCFLAG_USE_MEMCOPY);
 	if (err != KERN_SUCCESS) {
-		kdb_printf("Failed to initialize kcdata buffer for panic stackshot, skipping ...\n");
+		kdb_printf("Failed to initialize kcdata buffer for file backed panic stackshot, skipping ...\n");
 		return;
 	}
 
@@ -887,25 +897,28 @@ RecordPanicStackshot()
 	bytes_traced = (int) kdp_stack_snapshot_bytes_traced();
 	if (bytes_traced > 0 && !err) {
 		panic_stackshot_len = bytes_traced;
-		kdb_printf("Panic stackshot succeeded, length: %u bytes\n", bytes_traced);
+		kdb_printf("File backed panic stackshot succeeded, length: %u bytes\n", bytes_traced);
 	} else {
 		bytes_used = (int) kcdata_memory_get_used_bytes(&kc_panic_data);
 		if (bytes_used > 0) {
-			kdb_printf("Panic stackshot incomplete, consumed %u bytes\n", bytes_used);
+			kdb_printf("File backed panic stackshot incomplete, consumed %u bytes, error : %d \n", bytes_used, err);
 		} else {
-			kdb_printf("Panic stackshot incomplete, consumed %u bytes, error : %d \n", bytes_used, err);
+			kdb_printf("File backed panic stackshot incomplete, consumed %u bytes, error : %d \n", bytes_used, err);
 		}
 	}
-
 #endif /* DEVELOPMENT || DEBUG */
+
 	return;
 }
 
 void
 SavePanicInfo(
-	__unused const char *message, uint64_t panic_options)
+	__unused const char *message, void *panic_data, uint64_t panic_options)
 {
-	void *stackptr;
+	void *stackptr  = NULL;
+	thread_t thread_to_trace = (thread_t) panic_data;
+	cframe_t synthetic_stack_frame = { };
+	char *debugger_msg = NULL;
 	int cn = cpu_number();
 
 	/*
@@ -914,52 +927,131 @@ SavePanicInfo(
 	 */
 	panic_io_port_read();
 
-	/* Obtain current frame pointer */
-	__asm__ volatile("movq %%rbp, %0" : "=m" (stackptr));
+	/* Obtain frame pointer for stack to trace */
+	if (panic_options & DEBUGGER_INTERNAL_OPTION_THREAD_BACKTRACE) {
+		if (!mp_kdp_all_cpus_halted()) {
+			debugger_msg = "Backtracing panicked thread because failed to halt all CPUs\n";
+		} else if (thread_to_trace == THREAD_NULL) {
+			debugger_msg = "Backtracing panicked thread because no thread pointer provided\n";
+		} else if (kvtophys((vm_offset_t)thread_to_trace) == 0ULL) {
+			debugger_msg = "Backtracing panicked thread because unable to access specified thread\n";
+		} else if (thread_to_trace->kernel_stack == 0) {
+			debugger_msg = "Backtracing panicked thread because kernel_stack is NULL for specified thread\n";
+		} else if (kvtophys(STACK_IKS(thread_to_trace->kernel_stack) == 0ULL)) {
+			debugger_msg = "Backtracing panicked thread because unable to access kernel_stack for specified thread\n";
+		} else {
+			debugger_msg = "Backtracing specified thread\n";
+			/* We construct a synthetic stack frame so we can include the current instruction pointer */
+			synthetic_stack_frame.prev = (cframe_t *)STACK_IKS(thread_to_trace->kernel_stack)->k_rbp;
+			synthetic_stack_frame.caller = (uintptr_t) STACK_IKS(thread_to_trace->kernel_stack)->k_rip;
+			stackptr = (void *) &synthetic_stack_frame;
+		}
+	}
 
-    /* Print backtrace - callee is internally synchronized */
+	if (stackptr == NULL) {
+		__asm__ volatile("movq %%rbp, %0" : "=m" (stackptr));
+	}
+
+	/* Print backtrace - callee is internally synchronized */
 	if (panic_options & DEBUGGER_OPTION_INITPROC_PANIC) {
 		/* Special handling of launchd died panics */
 		print_launchd_info();
 	} else {
-		panic_i386_backtrace(stackptr, ((panic_double_fault_cpu == cn) ? 80: 48), NULL, FALSE, NULL);
+		panic_i386_backtrace(stackptr, ((panic_double_fault_cpu == cn) ? 80: 48), debugger_msg, FALSE, NULL);
 	}
 
 	if (panic_options & DEBUGGER_OPTION_COPROC_INITIATED_PANIC) {
 		panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_COPROC_INITIATED_PANIC;
 	}
 
-	/* Flush the paniclog */
-	paniclog_flush();
+	if (PE_get_offset_into_panic_region(debug_buf_ptr) < panic_info->mph_panic_log_offset) {
+		kdb_printf("Invalid panic log offset found (not properly initialized?): debug_buf_ptr : 0x%p, panic_info: 0x%p mph_panic_log_offset: 0x%x\n",
+			debug_buf_ptr, panic_info, panic_info->mph_panic_log_offset);
+		panic_info->mph_panic_log_len = 0;
+	} else {
+		panic_info->mph_panic_log_len = PE_get_offset_into_panic_region(debug_buf_ptr) - panic_info->mph_panic_log_offset;
+	}
+
+	/* Flush the panic log */
+	paniclog_flush_internal(kPaniclogFlushBase);
 
 	/* Try to take a panic stackshot */
 	RecordPanicStackshot();
-}
-
-void
-paniclog_flush()
-{
-	unsigned long pi_size = 0;
-
-	assert(panic_info != NULL);
-	panic_info->mph_panic_log_len = PE_get_offset_into_panic_region(debug_buf_ptr) - panic_info->mph_panic_log_offset;
 
 	/*
-	 * If we've detected that we're on a co-processor system we flush the panic log via the kPEPanicSync
+	 * Flush the panic log again with the stackshot or any relevant logging
+	 * from when we tried to capture it.
+	 */
+	if (extended_debug_log_enabled) {
+		paniclog_flush_internal(kPaniclogFlushStackshot);
+	}
+}
+
+void paniclog_flush_internal(paniclog_flush_type_t variant)
+{
+	/* Update the other log offset if we've opened the other log */
+	if (panic_info->mph_other_log_offset != 0) {
+		panic_info->mph_other_log_len = PE_get_offset_into_panic_region(debug_buf_ptr) - panic_info->mph_other_log_offset;
+	}
+
+	/*
+	 * If we've detected that we're on a co-processor system, we flush the panic log via the kPEPanicSync
 	 * panic callbacks, otherwise we flush via nvram (unless that has been disabled).
 	 */
 	if (coprocessor_paniclog_flush) {
-		/* Only need to calculate the CRC for co-processor platforms */
-		panic_info->mph_crc = crc32(0L, &panic_info->mph_version, (debug_buf_size - offsetof(struct macos_panic_header, mph_version)));
+		uint32_t overall_buffer_size = debug_buf_size;
+		uint32_t size_to_flush = 0, offset_to_flush = 0;
+		if (extended_debug_log_enabled) {
+			/*
+			 * debug_buf_size for the extended log does not include the length of the header.
+			 * There may be some extra data at the end of the 'basic' log that wouldn't get flushed
+			 * for the non-extended case (this is a concession we make to not shrink the paniclog data
+			 * for non-coprocessor systems that only use the basic log).
+			 */
+			overall_buffer_size = debug_buf_size + sizeof(struct macos_panic_header);
+		}
 
-		PESavePanicInfoAction(debug_buf, debug_buf_size);
-	} else if(commit_paniclog_to_nvram) {
+		/* Update the CRC */
+		panic_info->mph_crc = crc32(0L, &panic_info->mph_version, (overall_buffer_size - offsetof(struct macos_panic_header, mph_version)));
+
+		if (variant == kPaniclogFlushBase) {
+			/* Flush the header and base panic log. */
+			kprintf("Flushing base panic log\n");
+			size_to_flush = ROUNDUP((panic_info->mph_panic_log_offset + panic_info->mph_panic_log_len), PANIC_FLUSH_BOUNDARY);
+			offset_to_flush = 0;
+			PESavePanicInfoAction(panic_info, offset_to_flush, size_to_flush);
+		} else if ((variant == kPaniclogFlushStackshot) || (variant == kPaniclogFlushOtherLog)) {
+			if (variant == kPaniclogFlushStackshot) {
+				/*
+				 * We flush the stackshot before flushing the updated header because the stackshot
+				 * can take a while to flush. We want the paniclog header to be as consistent as possible even
+				 * if the stackshot isn't flushed completely. Flush starting from the end of the panic log.
+				 */
+				kprintf("Flushing panic log stackshot\n");
+				offset_to_flush = ROUNDDOWN((panic_info->mph_panic_log_offset + panic_info->mph_panic_log_len), PANIC_FLUSH_BOUNDARY);
+				size_to_flush = ROUNDUP((panic_info->mph_stackshot_len + (panic_info->mph_stackshot_offset - offset_to_flush)), PANIC_FLUSH_BOUNDARY);
+				PESavePanicInfoAction(panic_info, offset_to_flush, size_to_flush);
+			}
+
+			/* Flush the other log -- everything after the stackshot */
+			kprintf("Flushing panic 'other' log\n");
+			offset_to_flush = ROUNDDOWN((panic_info->mph_stackshot_offset + panic_info->mph_stackshot_len), PANIC_FLUSH_BOUNDARY);
+			size_to_flush = ROUNDUP((panic_info->mph_other_log_len + (panic_info->mph_other_log_offset - offset_to_flush)), PANIC_FLUSH_BOUNDARY);
+			PESavePanicInfoAction(panic_info, offset_to_flush, size_to_flush);
+
+			/* Flush the header -- everything before the paniclog */
+			kprintf("Flushing panic log header\n");
+			size_to_flush = ROUNDUP(panic_info->mph_panic_log_offset, PANIC_FLUSH_BOUNDARY);
+			offset_to_flush = 0;
+			PESavePanicInfoAction(panic_info, offset_to_flush, size_to_flush);
+		}
+	} else if (commit_paniclog_to_nvram) {
 		assert(debug_buf_size != 0);
 		unsigned int bufpos;
+		unsigned long pi_size = 0;
 		uintptr_t cr0;
 
 		debug_putc(0);
-
 
 		/*
 		 * Now call the compressor
@@ -1007,6 +1099,14 @@ paniclog_flush()
 			unpackA(debug_buf_base, bufpos);
 		}
 	}
+}
+
+void
+paniclog_flush()
+{
+	/* Called outside of this file to update logging appended to the "other" log */
+	paniclog_flush_internal(kPaniclogFlushOtherLog);
+	return;
 }
 
 char *

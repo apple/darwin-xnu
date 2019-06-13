@@ -74,7 +74,7 @@ protected:
   IOSimpleLock      *controllerLock;
 
   struct ExpansionData { };
-  ExpansionData *reserved;
+  ExpansionData *ioic_reserved;
 
 public:
   virtual IOReturn registerInterrupt(IOService *nub, int source,
@@ -135,7 +135,7 @@ private:
   bool              sourceIsLevel;
 
   struct ExpansionData { };
-  ExpansionData *reserved;
+  ExpansionData *iosic_reserved __unused;
 
 public:
   virtual IOReturn initInterruptController(IOInterruptController *parentController, OSData *parentSource);

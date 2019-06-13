@@ -39,6 +39,7 @@ MIG_DEFS =	\
 	mach_vm.defs \
 	mach_voucher.defs \
 	mach_voucher_attr_control.defs \
+	memory_entry.defs \
 	notify.defs \
 	processor.defs \
 	processor_set.defs \
@@ -86,6 +87,7 @@ MIG_UUHDRS = \
 	mach_vm.h \
 	mach_voucher.h \
 	mach_voucher_attr_control.h \
+	memory_entry.h \
 	memory_object_control.h \
 	processor.h \
 	processor_set.h \
@@ -205,7 +207,6 @@ INSTALL_MI_GEN_LIST =
 INSTALL_MI_DIR = mach
 
 EXPORT_MI_LIST	= \
-	branch_predicates.h \
 	coalition.h \
 	mach_interface.h \
 	resource_monitors.h \
@@ -302,6 +303,7 @@ MIG_KSHDRS = \
 	mach_vm_server.h \
 	mach_voucher_server.h \
 	mach_voucher_attr_control_server.h \
+	memory_entry_server.h \
 	memory_object_control_server.h \
 	memory_object_default_server.h \
 	processor_server.h \
@@ -326,6 +328,7 @@ MIG_KSSRC = \
 	mach_vm_server.c \
 	mach_voucher_server.c \
 	mach_voucher_attr_control_server.c \
+	memory_entry_server.c \
 	memory_object_control_server.c \
 	memory_object_default_server.c \
 	processor_server.c \

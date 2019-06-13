@@ -71,7 +71,7 @@
 #include <kern/kalloc.h>
 #include <vm/vm_kern.h>
 
-ipc_table_size_t ipc_table_entries;
+ipc_table_size_t ipc_table_entries = NULL;
 unsigned int ipc_table_entries_size = CONFIG_IPC_TABLE_ENTRIES_STEPS;
 
 ipc_table_size_t ipc_table_requests;
@@ -147,6 +147,41 @@ ipc_table_init(void)
 
 	ipc_table_requests[ipc_table_requests_size - 1].its_size = 0;
 }
+
+
+/*
+ *	Routine: ipc_table_max_entries
+ *	Purpose:
+ *		returns the maximum number of entries an IPC space
+ *		is allowed to contain (the maximum size to which it will grow)
+ *	Conditions:
+ *		none
+ */
+unsigned int
+ipc_table_max_entries(void)
+{
+	if (!ipc_table_entries || ipc_table_entries_size < 2)
+		return 0;
+	return (unsigned int)ipc_table_entries[ipc_table_entries_size - 1].its_size;
+}
+
+
+/*
+ *	Routine: ipc_table_max_requests
+ *	Purpose:
+ *		returns the maximum number of requests an IPC request table
+ *		is allowed to contain (the maximum size to which it will grow)
+ *	Conditions:
+ *		none
+ */
+unsigned int
+ipc_table_max_requests(void)
+{
+	if (!ipc_table_requests || ipc_table_requests_size < 2)
+		return 0;
+	return (unsigned int)ipc_table_requests[ipc_table_requests_size - 2].its_size;
+}
+
 
 /*
  *	Routine:	ipc_table_alloc

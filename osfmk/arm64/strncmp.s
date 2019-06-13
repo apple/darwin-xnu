@@ -34,6 +34,8 @@
  * of the first mismatched characters interpreted as uint8_t.
  */
 
+#include <arm64/asm.h>
+
 .globl _strncmp
 
 /*****************************************************************************
@@ -41,13 +43,14 @@
  *****************************************************************************/
 
 .macro EstablishFrame
+	ARM64_STACK_PROLOG
 	stp       fp, lr, [sp, #-16]!
 	mov       fp,      sp
 .endm
 
 .macro ClearFrameAndReturn
 	ldp       fp, lr, [sp], #16
-	ret
+	ARM64_STACK_EPILOG
 .endm
 
 #include "../mach/arm/vm_param.h"

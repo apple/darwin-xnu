@@ -94,10 +94,8 @@ struct ipc_pset {
 #define	ips_release(pset)	io_release(&(pset)->ips_object)
 
 /* get an ipc_pset pointer from an ipc_mqueue pointer */
-#define	ips_from_mq(mq)		((struct ipc_pset *)((void *)( \
-					(char *)(mq) - \
-					__offsetof(struct ipc_pset, ips_messages)) \
-				))
+#define	ips_from_mq(mq) \
+		__container_of(mq, struct ipc_pset, ips_messages)
 
 /* Allocate a port set */
 extern kern_return_t ipc_pset_alloc(
@@ -132,6 +130,11 @@ extern kern_return_t ipc_pset_remove(
 	ipc_pset_t	pset,
 	ipc_port_t	port);
 
+/* lazily initialize the wqset of a port set */
+extern kern_return_t ipc_pset_lazy_allocate(
+	ipc_space_t	 space,
+	mach_port_name_t psname);
+
 /* Remove a port from all its current port sets */
 extern kern_return_t ipc_pset_remove_from_all(
 	ipc_port_t	port);
@@ -139,5 +142,23 @@ extern kern_return_t ipc_pset_remove_from_all(
 /* Destroy a port_set */
 extern void ipc_pset_destroy(
 	ipc_pset_t	pset);
+
+#if MACH_KERNEL_PRIVATE
+extern struct turnstile *filt_machport_kqueue_turnstile(
+	struct knote *kn);
+
+extern struct turnstile *filt_machport_stashed_special_reply_port_turnstile(
+	ipc_port_t port);
+
+extern void filt_machport_turnstile_prepare_lazily(
+	struct knote *kn,
+	mach_msg_type_name_t	msgt_name,
+	ipc_port_t port);
+
+extern struct turnstile *filt_machport_stash_port(
+	struct knote *kn,
+	ipc_port_t port,
+	int *link);
+#endif
 
 #endif	/* _IPC_IPC_PSET_H_ */

@@ -3,3 +3,5 @@ san/kasan-fakestack.c standard
 san/kasan-test.c standard
 san/kasan-memintrinsics.c standard
 san/kasan_dynamic_blacklist.c standard
+san/ubsan.c standard
+san/ubsan_log.c standard

@@ -119,17 +119,79 @@ struct ipc_entry {
 #define	IE_BITS_GEN_MASK	0xff000000	/* 8 bits for generation */
 #define	IE_BITS_GEN(bits)	((bits) & IE_BITS_GEN_MASK)
 #define	IE_BITS_GEN_ONE		0x04000000	/* low bit of generation */
-#define IE_BITS_NEW_GEN(old)	(((old) + IE_BITS_GEN_ONE) & IE_BITS_GEN_MASK)
+#define IE_BITS_ROLL_POS	22		/* LSB pos of generation rollover */
+#define IE_BITS_ROLL_BITS	2		/* number of generation rollover bits */
+#define IE_BITS_ROLL_MASK	(((1 << IE_BITS_ROLL_BITS) - 1) << IE_BITS_ROLL_POS)
+#define IE_BITS_ROLL(bits)	((((bits) & IE_BITS_ROLL_MASK) << 8) ^ IE_BITS_GEN_MASK)
+
+/*
+ * Restart a generation counter with the specified bits for the rollover point.
+ * There are 4 different rollover points:
+ * bits    rollover period
+ * 0 0     64
+ * 0 1     48
+ * 1 0     32
+ * 1 1     16
+ */
+static inline ipc_entry_bits_t ipc_entry_new_rollpoint(
+	ipc_entry_bits_t rollbits)
+{
+	rollbits = (rollbits << IE_BITS_ROLL_POS) & IE_BITS_ROLL_MASK;
+	ipc_entry_bits_t newgen = IE_BITS_GEN_MASK + IE_BITS_GEN_ONE;
+	return (newgen | rollbits);
+}
+
+/*
+ * Get the next gencount, modulo the entry's rollover point. If the sum rolls over,
+ * the caller should re-start the generation counter with a different rollpoint.
+ */
+static inline ipc_entry_bits_t ipc_entry_new_gen(
+	ipc_entry_bits_t oldgen)
+{
+	ipc_entry_bits_t sum  = (oldgen + IE_BITS_GEN_ONE) & IE_BITS_GEN_MASK;
+	ipc_entry_bits_t roll = oldgen & IE_BITS_ROLL_MASK;
+	ipc_entry_bits_t newgen = (sum % IE_BITS_ROLL(oldgen)) | roll;
+	return newgen;
+}
+
+/* Determine if a gencount has rolled over or not. */
+static inline boolean_t ipc_entry_gen_rolled(
+	ipc_entry_bits_t oldgen,
+	ipc_entry_bits_t newgen)
+{
+	return (oldgen & IE_BITS_GEN_MASK) > (newgen & IE_BITS_GEN_MASK);
+}
+
 #else
 #define	IE_BITS_GEN_MASK	0
 #define	IE_BITS_GEN(bits)	0
 #define	IE_BITS_GEN_ONE		0
-#define IE_BITS_NEW_GEN(old)	(old)
+#define IE_BITS_ROLL_POS	0
+#define IE_BITS_ROLL_MASK	0
+#define IE_BITS_ROLL(bits)	(bits)
+
+static inline ipc_entry_bits_t ipc_entry_new_rollpoint(
+	ipc_entry_bits_t rollbits)
+{
+	return 0;
+}
+
+static inline ipc_entry_bits_t ipc_entry_new_gen(
+	ipc_entry_bits_t oldgen)
+{
+	return 0;
+}
+
+static inline boolean_t ipc_entry_gen_rolled(
+	ipc_entry_bits_t oldgen,
+	ipc_entry_bits_t newgen)
+{
+	return FALSE;
+}
+
 #endif	/* !USE_PORT_GEN */
 
-
 #define	IE_BITS_RIGHT_MASK	0x007fffff	/* relevant to the right */
-
 /*
  * Exported interfaces
  */

@@ -113,10 +113,23 @@ typedef struct mach_zone_info_data {
 	uint64_t	mzi_alloc_size;	/* size used for more memory */
 	uint64_t	mzi_sum_size;	/* sum of all allocs (life of zone) */
 	uint64_t	mzi_exhaustible;	/* merely return if empty? */
-	uint64_t	mzi_collectable;	/* garbage collect elements? */
+	uint64_t	mzi_collectable;	/* garbage collect elements? and how much? */
 } mach_zone_info_t;
 
 typedef mach_zone_info_t *mach_zone_info_array_t;
+
+/*
+ * The lowest bit of mzi_collectable indicates whether or not the zone
+ * is collectable by zone_gc(). The higher bits contain the size in bytes
+ * that can be collected.
+ */
+#define GET_MZI_COLLECTABLE_BYTES(val)	((val) >> 1)
+#define GET_MZI_COLLECTABLE_FLAG(val)	((val) & 1)
+
+#define SET_MZI_COLLECTABLE_BYTES(val, size)	\
+	(val) = ((val) & 1) | ((size) << 1)
+#define SET_MZI_COLLECTABLE_FLAG(val, flag)		\
+	(val) = (flag) ? ((val) | 1) : (val)
 
 typedef struct task_zone_info_data {
 	uint64_t	tzi_count;	/* count of elements in use */
@@ -153,5 +166,36 @@ typedef struct mach_memory_info {
 } mach_memory_info_t;
 
 typedef mach_memory_info_t *mach_memory_info_array_t;
+
+/*
+ * MAX_ZTRACE_DEPTH configures how deep of a stack trace is taken on each zalloc in the zone of interest.  15
+ * levels is usually enough to get past all the layers of code in kalloc and IOKit and see who the actual
+ * caller is up above these lower levels.
+ *
+ * This is used both for the zone leak detector and the zone corruption log. Make sure this isn't greater than
+ * BTLOG_MAX_DEPTH defined in btlog.h. Also make sure to update the definition of zone_btrecord_t in
+ * mach_debug_types.defs if this changes.
+ */
+
+#define MAX_ZTRACE_DEPTH	15
+
+/*
+ * Opcodes for the btlog operation field:
+ */
+
+#define ZOP_ALLOC	1
+#define ZOP_FREE	0
+
+/*
+ * Structure used to copy out btlog records to userspace, via the MIG call
+ * mach_zone_get_btlog_records().
+ */
+typedef struct zone_btrecord {
+	uint32_t    ref_count;					/* no. of active references on the record */
+	uint32_t	operation_type;				/* operation type (alloc/free) */
+	uint64_t	bt[MAX_ZTRACE_DEPTH];		/* backtrace */
+} zone_btrecord_t;
+
+typedef zone_btrecord_t *zone_btrecord_array_t;
 
 #endif	/* _MACH_DEBUG_ZONE_INFO_H_ */

@@ -112,15 +112,16 @@ kern_return_t	task_policy_get(
 
 
 enum task_role {
-	TASK_RENICED = -1,
-	TASK_UNSPECIFIED = 0,
-	TASK_FOREGROUND_APPLICATION,
-	TASK_BACKGROUND_APPLICATION,
-	TASK_CONTROL_APPLICATION,
-	TASK_GRAPHICS_SERVER,
-	TASK_THROTTLE_APPLICATION,
-	TASK_NONUI_APPLICATION,
-	TASK_DEFAULT_APPLICATION
+	TASK_RENICED                    = -1,
+	TASK_UNSPECIFIED                = 0,
+	TASK_FOREGROUND_APPLICATION     = 1,
+	TASK_BACKGROUND_APPLICATION     = 2,
+	TASK_CONTROL_APPLICATION        = 3,
+	TASK_GRAPHICS_SERVER            = 4,
+	TASK_THROTTLE_APPLICATION       = 5,
+	TASK_NONUI_APPLICATION          = 6,
+	TASK_DEFAULT_APPLICATION        = 7,
+	TASK_DARWINBG_APPLICATION       = 8,
 };
 
 typedef integer_t	task_role_t;
@@ -193,7 +194,7 @@ typedef struct task_qos_policy *task_qos_policy_t;
  * When they do, we will update TASK_POLICY_INTERNAL_STRUCT_VERSION.
  */
 
-#define TASK_POLICY_INTERNAL_STRUCT_VERSION 1
+#define TASK_POLICY_INTERNAL_STRUCT_VERSION 2
 
 struct task_requested_policy {
 	uint64_t        trp_int_darwinbg        :1,     /* marked as darwinbg via setpriority */
@@ -209,7 +210,7 @@ struct task_requested_policy {
 
 	                trp_apptype             :3,     /* What apptype did launchd tell us this was (inherited) */
 	                trp_boosted             :1,     /* Has a non-zero importance assertion count */
-	                trp_role                :3,     /* task's system role */
+	                trp_role                :4,     /* task's system role */
 	                trp_tal_enabled         :1,     /* TAL mode is enabled */
 	                trp_over_latency_qos    :3,     /* Timer latency QoS override */
 	                trp_over_through_qos    :3,     /* Computation throughput QoS override */
@@ -225,7 +226,7 @@ struct task_requested_policy {
 	                trp_sup_cpu             :1,     /* Wants suppressed CPU priority (MAXPRI_SUPPRESSED) */
 	                trp_sup_bg_sockets      :1,     /* Wants background sockets */
 
-	                trp_reserved            :18;
+	                trp_reserved            :17;
 };
 
 struct task_effective_policy {
@@ -244,14 +245,14 @@ struct task_effective_policy {
 	                tep_tal_engaged         :1,     /* TAL mode is in effect */
 	                tep_watchers_bg         :1,     /* watchers are BG-ed */
 	                tep_sup_active          :1,     /* suppression behaviors are in effect */
-	                tep_role                :3,     /* task's system role */
+	                tep_role                :4,     /* task's system role */
 	                tep_suppressed_cpu      :1,     /* cpu priority == MAXPRI_SUPPRESSED (trumped by lowpri_cpu) */
 	                tep_sfi_managed         :1,     /* SFI Managed task */
 	                tep_live_donor          :1,     /* task is a live importance boost donor */
 	                tep_qos_clamp           :3,     /* task qos clamp (applies to qos-disabled threads too) */
 	                tep_qos_ceiling         :3,     /* task qos ceiling (applies to only qos-participating threads) */
 
-	                tep_reserved            :32;
+	                tep_reserved            :31;
 };
 
 #endif /* PRIVATE */

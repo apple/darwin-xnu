@@ -670,6 +670,12 @@ out:
  *		execution.
  */
 int
+proc_issetugid (proc_t p)
+{
+	return (p->p_flag & P_SUGID) ? 1 : 0;
+}
+
+int
 issetugid(proc_t p, __unused struct issetugid_args *uap, int32_t *retval)
 {
 	/*
@@ -681,7 +687,7 @@ issetugid(proc_t p, __unused struct issetugid_args *uap, int32_t *retval)
 	 * that libc *might* have put in their data segment.
 	 */
 
-	*retval = (p->p_flag & P_SUGID) ? 1 : 0;
+	*retval = proc_issetugid(p);
 	return (0);
 }
 

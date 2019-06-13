@@ -33,14 +33,7 @@
 typedef uint64_t kpc_config_t;
 
 #define KPC_ARM64_FIXED_COUNT        (2)
-#if NO_MONITOR
-/* Addition of 2 counters to the SoC happens to coincide with removal of
- * EL3 monitor.   If this changes again in the future, consider moving
- * counter config to per-SoC headers. */
-#define KPC_ARM64_CONFIGURABLE_COUNT (8)
-#else
-#define KPC_ARM64_CONFIGURABLE_COUNT (6)
-#endif
+#define KPC_ARM64_CONFIGURABLE_COUNT (CORE_NCTRS - KPC_ARM64_FIXED_COUNT)
 
 #define KPC_ARM64_COUNTER_WIDTH    (47)
 #define KPC_ARM64_COUNTER_MASK     ((UINT64_C(1) << KPC_ARM64_COUNTER_WIDTH) - 1)

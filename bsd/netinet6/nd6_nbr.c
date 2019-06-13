@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -572,18 +572,20 @@ nd6_ns_output(
 	int flags;
 	caddr_t mac;
 	struct route_in6 ro;
-	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 },
-	    IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR |
-	    IP6OAF_AWDL_UNRESTRICTED | IP6OAF_INTCOPROC_ALLOWED, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip6_out_args ip6oa;
 	u_int32_t rtflags = 0;
 
 	if ((ifp->if_eflags & IFEF_IPV6_ND6ALT) || IN6_IS_ADDR_MULTICAST(taddr6))
 		return;
 
 	bzero(&ro, sizeof(ro));
-
+	bzero(&ip6oa, sizeof(ip6oa));
 	ip6oa.ip6oa_boundif = ifp->if_index;
+	ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR |
+	    IP6OAF_AWDL_UNRESTRICTED | IP6OAF_INTCOPROC_ALLOWED;
+	ip6oa.ip6oa_sotc = SO_TC_UNSPEC;
+	ip6oa.ip6oa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
+
 	ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
 
 	/* estimate the size of message */
@@ -1173,16 +1175,17 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 			 * issue a callback for LLENTRY changed.
 			 */
 			/* Enqueue work item to invoke callback for this route entry */
-			route_event_enqueue_nwk_wq_entry(rt, NULL,
-			    ROUTE_LLENTRY_CHANGED, NULL, TRUE);
+			if (llchange) {
+				route_event_enqueue_nwk_wq_entry(rt, NULL,
+				    ROUTE_LLENTRY_CHANGED, NULL, TRUE);
+			}
 
 			/*
-			 * If the entry is no longer a router, the logic post this processing
-			 * gets rid of all the route entries having the current entry as a next
-			 * hop.
-			 * So only walk the tree here when there's no such change.
+			 * If the router's link-layer address has changed,
+			 * notify routes using this as gateway so they can
+			 * update any cached information.
 			 */
-			if (ln->ln_router && is_router) {
+			if (ln->ln_router && is_router && llchange) {
 				struct radix_node_head  *rnh = NULL;
 				struct route_event rt_ev;
 				route_event_init(&rt_ev, rt, NULL, ROUTE_LLENTRY_CHANGED);
@@ -1342,16 +1345,19 @@ nd6_na_output(
 	struct sockaddr_in6 dst_sa;
 	int icmp6len, maxlen, error;
         struct ifnet *outif = NULL;
-	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 },
-	    IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR |
-	    IP6OAF_AWDL_UNRESTRICTED | IP6OAF_INTCOPROC_ALLOWED, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
 
+	struct ip6_out_args ip6oa;
 	bzero(&ro, sizeof(ro));
 
 	daddr6 = *daddr6_0;	/* make a local copy for modification */
 
+	bzero(&ip6oa, sizeof(ip6oa));
 	ip6oa.ip6oa_boundif = ifp->if_index;
+	ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR |
+	    IP6OAF_AWDL_UNRESTRICTED | IP6OAF_INTCOPROC_ALLOWED;
+	ip6oa.ip6oa_sotc = SO_TC_UNSPEC;
+	ip6oa.ip6oa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
+
 	ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
 
 	/* estimate the size of message */

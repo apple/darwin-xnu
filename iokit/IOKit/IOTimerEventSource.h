@@ -130,7 +130,9 @@ protected:
 
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
+    APPLE_KEXT_WSHADOW_PUSH;
     ExpansionData *reserved;
+    APPLE_KEXT_WSHADOW_POP;
 
 /*! @function timeout
     @abstract Function that routes the call from the OS' timeout mechanism into a work-loop context.
@@ -157,6 +159,10 @@ public:
     @param sender The object that timed out. */
     typedef void (*Action)(OSObject *owner, IOTimerEventSource *sender);
 
+#ifdef __BLOCKS__
+    typedef void (^ActionBlock)(IOTimerEventSource *sender);
+#endif /* __BLOCKS__ */
+
     static IOTimerEventSource *
 	timerEventSource(OSObject *owner, Action action = 0);
 
@@ -168,6 +174,22 @@ public:
     */
     static IOTimerEventSource *
 	timerEventSource(uint32_t options, OSObject *owner, Action action = 0);
+
+#ifdef __BLOCKS__
+/*! @function timerEventSource
+    @abstract Allocates and returns an initialized timer instance.
+    @param options Mask of kIOTimerEventSourceOptions* options.
+    @param inOwner The object that that will be passed to the Action callback.
+    @param action Block for the callout routine of this event source.
+    */
+    static IOTimerEventSource *
+	timerEventSource(uint32_t options, OSObject *inOwner, ActionBlock action);
+#endif /* __BLOCKS__ */
+
+#if XNU_KERNEL_PRIVATE
+	__inline__ void invokeAction(IOTimerEventSource::Action action, IOTimerEventSource * ts,
+	     OSObject * owner, IOWorkLoop * workLoop);
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*! @function init
     @abstract Initializes the timer with an owner, and a handler to call when the timeout expires.

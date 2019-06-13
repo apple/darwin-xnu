@@ -56,6 +56,7 @@
 
 #define LOCK_PRIVATE 1
 
+#include <vm/pmap.h>
 #include <kern/kalloc.h>
 #include <kern/locks.h>
 #include <kern/misc_protos.h>
@@ -78,8 +79,8 @@
 #include <sys/munge.h>
 #include <machine/cpu_capabilities.h>
 #include <arm/cpu_data_internal.h>
+#include <arm/pmap.h>
 
-extern boolean_t arm_pan_enabled;
 kern_return_t arm64_lock_test(void);
 kern_return_t arm64_munger_test(void);
 kern_return_t ex_cb_test(void);
@@ -87,7 +88,11 @@ kern_return_t arm64_pan_test(void);
 
 // exception handler ignores this fault address during PAN test
 #if __ARM_PAN_AVAILABLE__
-vm_offset_t pan_test_addr;
+const uint64_t pan_ro_value = 0xFEEDB0B0DEADBEEF;
+vm_offset_t pan_test_addr = 0;
+vm_offset_t pan_ro_addr = 0;
+volatile int pan_exception_level = 0;
+volatile char pan_fault_value = 0;
 #endif
 
 #include <libkern/OSAtomic.h>
@@ -422,6 +427,7 @@ static kern_return_t
 lt_test_trylocks()
 {
 	boolean_t success; 
+	extern unsigned int real_ncpus;
 	
 	/* 
 	 * First mtx try lock succeeds, second fails.
@@ -509,9 +515,15 @@ lt_test_trylocks()
 	lt_start_trylock_thread(lt_trylock_hw_lock_with_to);
 	success = hw_lock_to(&lt_hw_lock, 100);
 	T_ASSERT_NOTNULL(success, "First spin lock with timeout should succeed");
+	if (real_ncpus == 1) {
+		mp_enable_preemption(); /* if we re-enable preemption, the other thread can timeout and exit */
+	}
 	OSIncrementAtomic((volatile SInt32*)&lt_thread_lock_grabbed);
 	lt_wait_for_lock_test_threads();
 	T_ASSERT_NULL(lt_thread_lock_success, "Second spin lock with timeout should fail and timeout");
+	if (real_ncpus == 1) {
+		mp_disable_preemption(); /* don't double-enable when we unlock */
+	}
 	hw_lock_unlock(&lt_hw_lock);
 
 	lt_reset();
@@ -521,9 +533,15 @@ lt_test_trylocks()
 	OSMemoryBarrier();
 	lt_start_trylock_thread(lt_trylock_hw_lock_with_to);
 	hw_lock_lock(&lt_hw_lock);
+	if (real_ncpus == 1) {
+		mp_enable_preemption(); /* if we re-enable preemption, the other thread can timeout and exit */
+	}
 	OSIncrementAtomic((volatile SInt32*)&lt_thread_lock_grabbed);
 	lt_wait_for_lock_test_threads();
 	T_ASSERT_NULL(lt_thread_lock_success, "after taking a spin lock, lock attempt with timeout should fail");
+	if (real_ncpus == 1) {
+		mp_disable_preemption(); /* don't double-enable when we unlock */
+	}
 	hw_lock_unlock(&lt_hw_lock);
 
 	success = lck_spin_try_lock(&lt_lck_spin_t);
@@ -538,9 +556,15 @@ lt_test_trylocks()
 	lt_target_done_threads = 1;
 	lt_start_trylock_thread(lt_trylock_spin_try_lock);
 	lck_spin_lock(&lt_lck_spin_t);
+	if (real_ncpus == 1) {
+		mp_enable_preemption(); /* if we re-enable preemption, the other thread can timeout and exit */
+	}
 	OSIncrementAtomic((volatile SInt32*)&lt_thread_lock_grabbed);
 	lt_wait_for_lock_test_threads();
 	T_ASSERT_NULL(lt_thread_lock_success, "spin trylock attempt of previously held lock should fail");
+	if (real_ncpus == 1) {
+		mp_disable_preemption(); /* don't double-enable when we unlock */
+	}
 	lck_spin_unlock(&lt_lck_spin_t);
 
 	return KERN_SUCCESS;
@@ -1033,40 +1057,53 @@ ex_cb_test()
 	return KERN_SUCCESS;
 }
 
+
 #if __ARM_PAN_AVAILABLE__
 kern_return_t
 arm64_pan_test()
 {
-	unsigned long last_pan_config;
 	vm_offset_t priv_addr = _COMM_PAGE_SIGNATURE;
 
 	T_LOG("Testing PAN.");
 
-	last_pan_config = __builtin_arm_rsr("pan");
-	if (!last_pan_config) {
-		T_ASSERT(!arm_pan_enabled, "PAN is not enabled even though it is configured to be"); 
-		__builtin_arm_wsr("pan", 1);
-	}
-		
 	T_ASSERT(__builtin_arm_rsr("pan") != 0, NULL);
 
+	pan_exception_level = 0;
+	pan_fault_value = 0xDE;
 	// convert priv_addr to one that is accessible from user mode
-	pan_test_addr = priv_addr + _COMM_PAGE64_BASE_ADDRESS - 
+	pan_test_addr = priv_addr + _COMM_HIGH_PAGE64_BASE_ADDRESS -
 		_COMM_PAGE_START_ADDRESS;
 
-	// Below should trigger a PAN exception as pan_test_addr is accessible 
+	// Below should trigger a PAN exception as pan_test_addr is accessible
 	// in user mode
 	// The exception handler, upon recognizing the fault address is pan_test_addr,
 	// will disable PAN and rerun this instruction successfully
 	T_ASSERT(*(char *)pan_test_addr == *(char *)priv_addr, NULL);
-	pan_test_addr = 0;
+
+	T_ASSERT(pan_exception_level == 2, NULL);
 
 	T_ASSERT(__builtin_arm_rsr("pan") == 0, NULL);
 
-	// restore previous PAN config value
-	if (last_pan_config)
-		__builtin_arm_wsr("pan", 1);
+	T_ASSERT(pan_fault_value == *(char *)priv_addr, NULL);
 
+	pan_exception_level = 0;
+	pan_fault_value = 0xAD;
+	pan_ro_addr = (vm_offset_t) &pan_ro_value;
+
+	// Force a permission fault while PAN is disabled to make sure PAN is
+	// re-enabled during the exception handler.
+	*((volatile uint64_t*)pan_ro_addr) = 0xFEEDFACECAFECAFE;
+
+	T_ASSERT(pan_exception_level == 2, NULL);
+
+	T_ASSERT(__builtin_arm_rsr("pan") == 0, NULL);
+
+	T_ASSERT(pan_fault_value == *(char *)priv_addr, NULL);
+
+	pan_test_addr = 0;
+	pan_ro_addr = 0;
+
+	__builtin_arm_wsr("pan", 1);
 	return KERN_SUCCESS;
 }
 #endif
@@ -1084,4 +1121,5 @@ arm64_munger_test()
 	mt_test_mungers();
 	return 0;
 }
+
 

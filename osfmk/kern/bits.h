@@ -39,13 +39,38 @@ typedef unsigned int			uint;
 
 #define BIT(b)				(1ULL << (b))
 
-#define mask(width)			(BIT(width) - 1)
+#define mask(width)			(width >= 64 ? -1 : (BIT(width) - 1))
 #define extract(x, shift, width)	((((uint64_t)(x)) >> (shift)) & mask(width))
 #define bits(x, hi, lo)			extract((x), (lo), (hi) - (lo) + 1)
 
 #define bit_set(x, b)			((x) |= BIT(b))
 #define bit_clear(x, b)			((x) &= ~BIT(b))
 #define bit_test(x, b)			((bool)((x) & BIT(b)))
+
+inline static uint64_t
+bit_ror64(uint64_t bitmap, uint n)
+{
+#if defined(__arm64__)
+	uint64_t result;
+	uint64_t _n = (uint64_t)n;
+	asm volatile("ror %0, %1, %2" : "=r" (result) : "r" (bitmap), "r" (_n));
+	return result;
+#else
+	n = n & 63;
+	return ((bitmap >> n) | (bitmap << (64 - n)));
+#endif
+}
+
+inline static uint64_t
+bit_rol64(uint64_t bitmap, uint n)
+{
+#if defined(__arm64__)
+	return bit_ror64(bitmap, 64U - n);
+#else
+	n = n & 63;
+	return ((bitmap << n) | (bitmap >> (64 - n)));
+#endif
+}
 
 /* Non-atomically clear the bit and returns whether the bit value was changed */
 inline static bool

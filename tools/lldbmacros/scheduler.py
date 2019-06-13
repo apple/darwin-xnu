@@ -147,18 +147,13 @@ def ShowCurremtAbsTime(cmd_args=None):
          Usage: showcurrentabstime
     """
     pset = addressof(kern.globals.pset0)
+    processor_array = kern.globals.processor_array
     cur_abstime = 0
 
     while unsigned(pset) != 0:
-        for processor in ParanoidIterateLinkageChain(pset.active_queue, "processor_t", "processor_queue"):
-            if unsigned(processor.last_dispatch) > cur_abstime:
-                cur_abstime = unsigned(processor.last_dispatch)
-
-        for processor in ParanoidIterateLinkageChain(pset.idle_queue, "processor_t", "processor_queue"):
-            if unsigned(processor.last_dispatch) > cur_abstime:
-                cur_abstime = unsigned(processor.last_dispatch)
-
-        for processor in ParanoidIterateLinkageChain(pset.idle_secondary_queue, "processor_t", "processor_queue"):
+        cpu_bitmap = int(pset.cpu_bitmask)
+        for cpuid in IterateBitmap(cpu_bitmap):
+            processor = processor_array[cpuid]
             if unsigned(processor.last_dispatch) > cur_abstime:
                 cur_abstime = unsigned(processor.last_dispatch)
 
@@ -377,20 +372,22 @@ def ShowSchedHistory(cmd_args=None, cmd_options=None):
     run_count      = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_RUN')]
     fixpri_count   = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_FIXPRI')]
     share_fg_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_FG')]
+    share_df_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_DF')]
     share_ut_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_UT')]
     share_bg_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_BG')]
 
     sched_pri_shifts = kern.globals.sched_run_buckets
 
     share_fg_shift = sched_pri_shifts[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_FG')]
+    share_df_shift = sched_pri_shifts[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_DF')]
     share_ut_shift = sched_pri_shifts[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_UT')]
     share_bg_shift = sched_pri_shifts[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_BG')]
 
 
     print "Processors: {g.processor_avail_count:d} Runnable threads: {:d} Fixpri threads: {:d}\n".format(run_count, fixpri_count, g=kern.globals)
-    print "FG Timeshare threads: {:d} UT Timeshare threads: {:d} BG Timeshare threads: {:d}\n".format(share_fg_count, share_ut_count, share_bg_count)
+    print "FG Timeshare threads: {:d} DF Timeshare threads: {:d} UT Timeshare threads: {:d} BG Timeshare threads: {:d}\n".format(share_fg_count, share_df_count, share_ut_count, share_bg_count)
     print "Mach factor: {g.sched_mach_factor:d} Load factor: {g.sched_load_average:d} Sched tick: {g.sched_tick:d} timestamp: {g.sched_tick_last_abstime:d} interval:{g.sched_tick_interval:d}\n".format(g=kern.globals)
-    print "Fixed shift: {g.sched_fixed_shift:d} FG shift: {:d} UT shift: {:d} BG shift: {:d}\n".format(share_fg_shift, share_ut_shift, share_bg_shift, g=kern.globals)
+    print "Fixed shift: {g.sched_fixed_shift:d} FG shift: {:d} DF shift: {:d} UT shift: {:d} BG shift: {:d}\n".format(share_fg_shift, share_df_shift, share_ut_shift, share_bg_shift, g=kern.globals)
     print "sched_pri_decay_band_limit: {g.sched_pri_decay_band_limit:d} sched_decay_usage_age_factor: {g.sched_decay_usage_age_factor:d}\n".format(g=kern.globals)
 
     if kern.arch == 'x86_64':
@@ -572,11 +569,12 @@ def ShowScheduler(cmd_args=None):
     run_count      = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_RUN')]
     fixpri_count   = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_FIXPRI')]
     share_fg_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_FG')]
+    share_df_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_DF')]
     share_ut_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_UT')]
     share_bg_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_BG')]
 
     print "Processors: {g.processor_avail_count:d} Runnable threads: {:d} Fixpri threads: {:d}\n".format(run_count, fixpri_count, g=kern.globals)
-    print "FG Timeshare threads: {:d} UT Timeshare threads: {:d} BG Timeshare threads: {:d}\n".format(share_fg_count, share_ut_count, share_bg_count)
+    print "FG Timeshare threads: {:d} DF Timeshare threads: {:d} UT Timeshare threads: {:d} BG Timeshare threads: {:d}\n".format(share_fg_count, share_df_count, share_ut_count, share_bg_count)
 
     if show_group_pset_runq:
         if hasattr(kern.globals, "multiq_sanity_check"):
@@ -620,41 +618,69 @@ def ShowScheduler(cmd_args=None):
                         print "Group {: <#012x} Task {: <#012x}\n".format(unsigned(group), unsigned(task))
                         ShowRunQSummary(group.runq)
             print " \n"
+            
+            processor_array = kern.globals.processor_array
 
             print "Active Processors:\n"
-            for processor in ParanoidIterateLinkageChain(pset.active_queue, "processor_t", "processor_queue"):
-                print "    " + GetProcessorSummary(processor)
-                ShowActiveThread(processor)
-                ShowNextThread(processor)
+            active_bitmap = int(pset.cpu_state_map[5]) | int(pset.cpu_state_map[6])
+            for cpuid in IterateBitmap(active_bitmap):
+                processor = processor_array[cpuid]
+                if processor != 0:
+                    print "    " + GetProcessorSummary(processor)
+                    ShowActiveThread(processor)
+                    ShowNextThread(processor)
 
-                if show_priority_runq:
-                    runq = processor.runq
-                    ShowRunQSummary(runq)
-                if show_grrr:
-                    grrr_runq = processor.grrr_runq
-                    ShowGrrrSummary(grrr_runq)
+                    if show_priority_runq:
+                        runq = processor.runq
+                        ShowRunQSummary(runq)
+                    if show_grrr:
+                        grrr_runq = processor.grrr_runq
+                        ShowGrrrSummary(grrr_runq)
             print " \n"
 
 
             print "Idle Processors:\n"
-            for processor in ParanoidIterateLinkageChain(pset.idle_queue, "processor_t", "processor_queue"):
-                print "    " + GetProcessorSummary(processor)
-                ShowActiveThread(processor)
-                ShowNextThread(processor)
+            idle_bitmap = int(pset.cpu_state_map[4]) & int(pset.primary_map)
+            for cpuid in IterateBitmap(idle_bitmap):
+                processor = processor_array[cpuid]
+                if processor != 0:
+                    print "    " + GetProcessorSummary(processor)
+                    ShowActiveThread(processor)
+                    ShowNextThread(processor)
 
-                if show_priority_runq:
-                    ShowRunQSummary(processor.runq)
+                    if show_priority_runq:
+                        ShowRunQSummary(processor.runq)
             print " \n"
 
 
             print "Idle Secondary Processors:\n"
-            for processor in ParanoidIterateLinkageChain(pset.idle_secondary_queue, "processor_t", "processor_queue"):
-                print "    " + GetProcessorSummary(processor)
-                ShowActiveThread(processor)
-                ShowNextThread(processor)
+            idle_bitmap = int(pset.cpu_state_map[4]) & ~(int(pset.primary_map))
+            for cpuid in IterateBitmap(idle_bitmap):
+                processor = processor_array[cpuid]
+                if processor != 0:
+                    print "    " + GetProcessorSummary(processor)
+                    ShowActiveThread(processor)
+                    ShowNextThread(processor)
 
-                if show_priority_runq:
-                    print ShowRunQSummary(processor.runq)
+                    if show_priority_runq:
+                        print ShowRunQSummary(processor.runq)
+            print " \n"
+
+
+            print "Other Processors:\n"
+            other_bitmap = 0
+            for i in range(0, 4):
+                other_bitmap |= int(pset.cpu_state_map[i])
+            other_bitmap &= int(pset.cpu_bitmask)
+            for cpuid in IterateBitmap(other_bitmap):
+                processor = processor_array[cpuid]
+                if processor != 0:
+                    print "    " + GetProcessorSummary(processor)
+                    ShowActiveThread(processor)
+                    ShowNextThread(processor)
+
+                    if show_priority_runq:
+                        ShowRunQSummary(processor.runq)
             print " \n"
 
 
@@ -790,6 +816,32 @@ def ParanoidIterateLinkageChain(queue_head, element_type, field_name, field_ofst
 
 ParanoidIterateLinkageChain.enable_paranoia = True
 ParanoidIterateLinkageChain.enable_debug = False
+
+def bit_first(bitmap):
+    return bitmap.bit_length() - 1
+
+def lsb_first(bitmap):
+    bitmap = bitmap & -bitmap
+    return bit_first(bitmap)
+
+def IterateBitmap(bitmap):
+    """ Iterate over a bitmap, returning the index of set bits starting from 0
+
+        params:
+            bitmap       - value       : bitmap
+        returns:
+            A generator does not return. It is used for iterating.
+            value  : index of a set bit
+        example usage:
+            for cpuid in IterateBitmap(running_bitmap):
+                print processor_array[cpuid]
+    """
+    i = lsb_first(bitmap)
+    while (i >= 0):
+        yield i
+        bitmap = bitmap & ~((1 << (i + 1)) - 1)
+        i = lsb_first(bitmap)
+
 
 # Macro: showallcallouts
 

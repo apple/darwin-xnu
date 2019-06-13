@@ -109,9 +109,7 @@ enum {
     kIOMemoryPreparedReadOnly	= 0x00008000,
 #endif
     kIOMemoryPersistent		= 0x00010000,
-#ifdef XNU_KERNEL_PRIVATE
     kIOMemoryMapCopyOnWrite	= 0x00020000,
-#endif
     kIOMemoryRemote		= 0x00040000,
     kIOMemoryThreadSafe		= 0x00100000,	// Shared with Buffer MD
     kIOMemoryClearEncrypt	= 0x00200000,	// Shared with Buffer MD
@@ -234,8 +232,14 @@ struct IOMDDMAWalkSegmentArgs {
     UInt64 fOffset;			// Input/Output offset
     UInt64 fIOVMAddr, fLength;		// Output variables
     UInt8 fMapped;			// Input Variable, Require mapped IOVMA
+    UInt64 fMappedBase;			// Input base of mapping
 };
 typedef UInt8 IOMDDMAWalkSegmentState[128];
+// fMapped:
+enum
+{
+	kIOMDDMAWalkMappedLocal = 2
+};
 
 #endif /* KERNEL_PRIVATE */
 

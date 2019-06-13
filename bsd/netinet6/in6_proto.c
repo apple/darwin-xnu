@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -104,6 +104,7 @@
 #include <net/if.h>
 #include <net/radix.h>
 #include <net/route.h>
+#include <net/nat464_utils.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -477,7 +478,7 @@ u_int32_t	rip6_sendspace = RIPV6SNDQ;
 u_int32_t	rip6_recvspace = RIPV6RCVQ;
 
 /* ICMPV6 parameters */
-int	icmp6_rediraccept = 0;		/* accept and process redirects */
+int	icmp6_rediraccept = 1;		/* accept and process redirects */
 int	icmp6_redirtimeout = 10 * 60;	/* 10 minutes */
 int	icmp6errppslim = 500;		/* 500 packets per second */
 int	icmp6rappslim = 10;		/* 10 packets per second */
@@ -630,6 +631,8 @@ SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXDYNROUTES,
 SYSCTL_INT(_net_inet6_ip6, OID_AUTO,
 	only_allow_rfc4193_prefixes, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&ip6_only_allow_rfc4193_prefix,	0, "");
+SYSCTL_INT(_net_inet6_ip6, OID_AUTO,
+	clat_debug, CTLFLAG_RW | CTLFLAG_LOCKED,	&clat_debug,		0, "");
 
 /* net.inet6.icmp6 */
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_REDIRACCEPT,

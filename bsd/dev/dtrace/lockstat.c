@@ -176,25 +176,6 @@ lockstat_probe_t lockstat_probes[] =
 
 dtrace_id_t lockstat_probemap[LS_NPROBES];
 
-#if CONFIG_DTRACE
-#if defined(__x86_64__)
-extern void lck_mtx_lock_lockstat_patch_point(void);
-extern void lck_mtx_try_lock_lockstat_patch_point(void);
-extern void lck_mtx_try_lock_spin_lockstat_patch_point(void);
-extern void lck_mtx_unlock_lockstat_patch_point(void);
-extern void lck_mtx_lock_ext_lockstat_patch_point(void);
-extern void lck_mtx_ext_unlock_lockstat_patch_point(void);
-extern void lck_mtx_lock_spin_lockstat_patch_point(void);
-#endif
-#if defined (__arm__)
-
-#endif
-
-#if defined (__arm64__)
-
-#endif
-#endif /* CONFIG_DTRACE */
-
 typedef struct lockstat_assembly_probe {
 	int lsap_probe;
 	vm_offset_t * lsap_patch_point;
@@ -203,26 +184,8 @@ typedef struct lockstat_assembly_probe {
 
 	lockstat_assembly_probe_t assembly_probes[] =
 	{
-#if CONFIG_DTRACE
-#if defined(__x86_64__)
-		/*
-		 * On x86 these points are better done via hot patches, which ensure
-		 * there is zero overhead when not in use.  On x86 these patch points
-		 * are swapped between the return instruction and a no-op, with the
-		 * Dtrace call following the return.
-		 */ 
-		{ LS_LCK_MTX_LOCK_ACQUIRE,		(vm_offset_t *) lck_mtx_lock_lockstat_patch_point },
-		{ LS_LCK_MTX_TRY_LOCK_ACQUIRE,		(vm_offset_t *) lck_mtx_try_lock_lockstat_patch_point },
-		{ LS_LCK_MTX_TRY_SPIN_LOCK_ACQUIRE,	(vm_offset_t *) lck_mtx_try_lock_spin_lockstat_patch_point },
-		{ LS_LCK_MTX_UNLOCK_RELEASE,		(vm_offset_t *) lck_mtx_unlock_lockstat_patch_point },
-		{ LS_LCK_MTX_EXT_LOCK_ACQUIRE,		(vm_offset_t *) lck_mtx_lock_ext_lockstat_patch_point },
-		{ LS_LCK_MTX_EXT_UNLOCK_RELEASE,	(vm_offset_t *) lck_mtx_ext_unlock_lockstat_patch_point },
-		{ LS_LCK_MTX_LOCK_SPIN_ACQUIRE,		(vm_offset_t *) lck_mtx_lock_spin_lockstat_patch_point },
-#endif
-		/* No assembly patch points for ARM */
-#endif /* CONFIG_DTRACE */
 		{ LS_LCK_INVALID, NULL }
-};
+	};
 
 
 /*
@@ -290,7 +253,6 @@ lockstat_probe_wrapper(int probe, uintptr_t lp, int rwflag)
 	}
 }
 
-static dev_info_t	*lockstat_devi;	/* saved in xxattach() for xxinfo() */
 static dtrace_provider_id_t lockstat_id;
 
 /*ARGSUSED*/
@@ -410,30 +372,21 @@ static dtrace_pattr_t lockstat_attr = {
 };
 
 static dtrace_pops_t lockstat_pops = {
-	lockstat_provide,
-	NULL,
-	lockstat_enable,
-	lockstat_disable,
-	NULL,
-	NULL,
-	lockstat_getargdesc,
-	NULL,
-	NULL,
-	lockstat_destroy
+	.dtps_provide =		lockstat_provide,
+	.dtps_provide_module =	NULL,
+	.dtps_enable =		lockstat_enable,
+	.dtps_disable =		lockstat_disable,
+	.dtps_suspend =		NULL,
+	.dtps_resume =		NULL,
+	.dtps_getargdesc =	lockstat_getargdesc,
+	.dtps_getargval =	NULL,
+	.dtps_usermode =	NULL,
+	.dtps_destroy =		lockstat_destroy
 };
 
 static int
-lockstat_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
+lockstat_attach(dev_info_t *devi)
 {
-	switch (cmd) {
-	case DDI_ATTACH:
-		break;
-	case DDI_RESUME:
-		return (DDI_SUCCESS);
-	default:
-		return (DDI_FAILURE);
-	}
-
 	if (ddi_create_minor_node(devi, "lockstat", S_IFCHR, 0,
 	    DDI_PSEUDO, 0) == DDI_FAILURE ||
 	    dtrace_register("lockstat", &lockstat_attr, DTRACE_PRIV_KERNEL,
@@ -445,8 +398,6 @@ lockstat_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	lockstat_probe = dtrace_probe;
 	membar_producer();
 
-	ddi_report_dev(devi);
-	lockstat_devi = devi;
 	return (DDI_SUCCESS);
 }
 
@@ -482,25 +433,17 @@ static struct cdevsw lockstat_cdevsw =
 	0					/* type */
 };
 
-static int gLockstatInited = 0;
-
 void lockstat_init( void );
 
 void lockstat_init( void )
 {
-	if (0 == gLockstatInited)
-	{
-		int majdevno = cdevsw_add(LOCKSTAT_MAJOR, &lockstat_cdevsw);
-		
-		if (majdevno < 0) {
-			printf("lockstat_init: failed to allocate a major number!\n");
-			gLockstatInited = 0;
-			return;
-		}
+	int majdevno = cdevsw_add(LOCKSTAT_MAJOR, &lockstat_cdevsw);
 
-		lockstat_attach( (dev_info_t	*)(uintptr_t)majdevno, DDI_ATTACH );
-		gLockstatInited = 1;
-	} else
-		panic("lockstat_init: called twice!\n");
+	if (majdevno < 0) {
+		printf("lockstat_init: failed to allocate a major number!\n");
+		return;
+	}
+
+	lockstat_attach((dev_info_t*)(uintptr_t)majdevno);
 }
 #undef LOCKSTAT_MAJOR

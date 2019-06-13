@@ -1,12 +1,29 @@
 /*
- * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
  *
- * This document is the property of Apple Inc.
- * It is considered confidential and proprietary.
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
- * This document may not be reproduced or transmitted in any form,
- * in whole or in part, without the express written permission of
- * Apple Inc.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /* 
@@ -34,9 +51,15 @@
  * routine expects "mbuf-like" argument, and it does not expect the mbuf to be
  * authentic; it only cares about 3 fields.
  */
+#if defined(__LP64__)
 #define	M_NEXT	0
 #define	M_DATA	16	// 8-byte address, would be aligned to 8-byte boundary
 #define	M_LEN	24
+#else
+#define	M_NEXT	0
+#define	M_DATA	8
+#define	M_LEN	12
+#endif
 
 	.globl	_os_cpu_in_cksum_mbuf
 	.text
@@ -81,6 +104,14 @@ _os_cpu_in_cksum_mbuf:
 	#define	Wmlen			w6
 	#define t       x7
 	#define	data	x8
+#if defined(__LP64__)
+	#define ptr_m		x0
+	#define ptr_data	x8
+#else
+	#define ptr_m		w0
+	#define ptr_data	w8
+#endif
+
 
 	mov	needs_swap, #0		// needs_swap = FALSE;
 	mov	started_on_odd, #0	// started_on_odd = FALSE;
@@ -111,7 +142,7 @@ _os_cpu_in_cksum_mbuf:
 	ldr	Wmlen, [m, #M_LEN]	// mlen = m->m_len;
 	cmp	mlen, off
 	b.le	1f
-	ldr	data, [m, #M_DATA]	// mtod(m, uint8_t *)
+	ldr	ptr_data, [m, #M_DATA]	// mtod(m, uint8_t *)
 	sub	mlen, mlen, off		// mlen -= off;
 	add	data, data, off		// data = mtod(m, uint8_t *) + off;
 	b	L_post_initial_offset
@@ -121,7 +152,7 @@ _os_cpu_in_cksum_mbuf:
 	mov	x0, x3
 	ret	lr
 2:
-	ldr	m, [m, #M_NEXT]
+	ldr	ptr_m, [m, #M_NEXT]
 	b	0b
 
 L_loop:	// for (; len > 0; m = m->m_next) {
@@ -135,7 +166,7 @@ L_loop:	// for (; len > 0; m = m->m_next) {
  */
 	cbz	m, Lin_cksum_whoops	// if (m == NULL) return -1;
 	ldr	Wmlen, [m, #M_LEN]	// mlen = m->m_len;
-	ldr	data, [m, #M_DATA]	// mtod(m, uint8_t *)
+	ldr	ptr_data, [m, #M_DATA]	// mtod(m, uint8_t *)
 
 L_post_initial_offset:
 /*
@@ -357,7 +388,7 @@ L0_bytes:
 
 L_continue:
 	cmp	len, #0
-	ldr     m, [m, #M_NEXT]			// m = m->m_next
+	ldr     ptr_m, [m, #M_NEXT]			// m = m->m_next
 	b.gt	L_loop
 
 /*

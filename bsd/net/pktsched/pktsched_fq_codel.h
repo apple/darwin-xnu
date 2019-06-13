@@ -105,6 +105,7 @@ enum fq_if_state {
 #define	FQ_IF_AV_INDEX	4
 #define	FQ_IF_RV_INDEX	3
 #define	FQ_IF_VI_INDEX	2
+#define	FQ_IF_SIG_INDEX	2
 #define	FQ_IF_VO_INDEX	1
 #define	FQ_IF_CTL_INDEX	0
 

@@ -375,6 +375,7 @@ struct tcp_last_report_stats {
 	u_int32_t	tcps_mptcp_back_to_wifi;
 	u_int32_t	tcps_mptcp_wifi_proxy;
 	u_int32_t	tcps_mptcp_cell_proxy;
+	u_int32_t	tcps_mptcp_triggered_cell;
 };
 
 
@@ -842,6 +843,7 @@ tcp_pmtud_revert_segment_size(struct tcpcb *tp)
 	optlen = tp->t_maxopd - tp->t_maxseg;
 	tp->t_maxopd = tp->t_pmtud_saved_maxopd;
 	tp->t_maxseg = tp->t_maxopd - optlen;
+
 	/*
 	 * Reset the slow-start flight size as it
 	 * may depend on the new MSS
@@ -991,10 +993,8 @@ retransmit_packet:
 #if MPTCP
 		if ((tp->t_rxtshift >= mptcp_fail_thresh) &&
 		    (tp->t_state == TCPS_ESTABLISHED) &&
-		    (tp->t_mpflags & TMPF_MPTCP_TRUE)) {
+		    (tp->t_mpflags & TMPF_MPTCP_TRUE))
 			mptcp_act_on_txfail(so);
-
-		}
 
 		if (so->so_flags & SOF_MP_SUBFLOW) {
 			struct mptses *mpte = tptomptp(tp)->mpt_mpte;
@@ -1040,7 +1040,7 @@ retransmit_packet:
 		    (tp->t_tfo_stats & TFO_S_SYN_DATA_SENT) &&
 		    !(tp->t_tfo_flags & TFO_F_NO_SNDPROBING) &&
 		    ((tp->t_state != TCPS_SYN_SENT && tp->t_rxtshift > 1) ||
-		     tp->t_rxtshift > 2)) {
+		     tp->t_rxtshift > 4)) {
 			/*
 			 * For regular retransmissions, a first one is being
 			 * done for tail-loss probe.
@@ -1062,7 +1062,7 @@ retransmit_packet:
 
 		if (!(tp->t_tfo_flags & TFO_F_HEURISTIC_DONE) &&
 		    (tp->t_tfo_stats & TFO_S_SYN_DATA_ACKED) &&
-		    tp->t_rxtshift > 1) {
+		    tp->t_rxtshift > 3) {
 			if (TSTMP_GT(tp->t_sndtime - 10 * TCP_RETRANSHZ, tp->t_rcvtime)) {
 				tcp_heuristic_tfo_middlebox(tp);
 
@@ -1125,7 +1125,7 @@ retransmit_packet:
 				if (tp->t_maxopd > tcp_pmtud_black_hole_mss) {
 					tp->t_maxopd = tcp_pmtud_black_hole_mss;
 				} else {
-					tp->t_maxopd = 	/* use the default MSS */
+					tp->t_maxopd = /* use the default MSS */
 #if INET6
 						isipv6 ? tcp_v6mssdflt :
 #endif /* INET6 */
@@ -1134,9 +1134,9 @@ retransmit_packet:
 				tp->t_maxseg = tp->t_maxopd - optlen;
 
 				/*
-	 			 * Reset the slow-start flight size
+				 * Reset the slow-start flight size
 				 * as it may depend on the new MSS
-	 			 */
+				 */
 				if (CC_ALGO(tp)->cwnd_init != NULL)
 					CC_ALGO(tp)->cwnd_init(tp);
 				tp->snd_cwnd = tp->t_maxseg;
@@ -1299,7 +1299,7 @@ fc_output:
 		    (tp->t_flagsext & TF_DETECT_READSTALL) ||
 		    (tp->t_tfo_probe_state == TFO_PROBE_PROBING)) &&
 		    (tp->t_state <= TCPS_CLOSING || tp->t_state == TCPS_FIN_WAIT_2)) {
-		    	if (idle_time >= TCP_CONN_KEEPIDLE(tp) + TCP_CONN_MAXIDLE(tp))
+			if (idle_time >= TCP_CONN_KEEPIDLE(tp) + TCP_CONN_MAXIDLE(tp))
 				goto dropit;
 			/*
 			 * Send a packet designed to force a response
@@ -1488,9 +1488,10 @@ fc_output:
 		 * send a probe
 		 */
 		if (tp->t_state != TCPS_ESTABLISHED ||
-		    (tp->t_rxtshift > 0 && !(tp->t_flagsext & TF_PROBING))
-		    || tp->snd_max == tp->snd_una ||
-		    !SACK_ENABLED(tp) || !TAILQ_EMPTY(&tp->snd_holes) ||
+		    (tp->t_rxtshift > 0 && !(tp->t_flagsext & TF_PROBING)) ||
+		    tp->snd_max == tp->snd_una ||
+		    !SACK_ENABLED(tp) ||
+		    !TAILQ_EMPTY(&tp->snd_holes) ||
 		    IN_FASTRECOVERY(tp))
 			break;
 
@@ -1521,6 +1522,15 @@ fc_output:
 		tp->t_tlpstart = tcp_now;
 
 		tp->snd_cwnd += tp->t_maxseg;
+
+		/*
+		 * When tail-loss-probe fires, we reset the RTO timer, because
+		 * a probe just got sent, so we are good to push out the timer.
+		 *
+		 * Set to 0 to ensure that tcp_output() will reschedule it
+		 */
+		tp->t_timer[TCPT_REXMT] = 0;
+
 		(void )tcp_output(tp);
 		tp->snd_cwnd -= tp->t_maxseg;
 
@@ -2387,7 +2397,8 @@ tcp_report_stats(void)
 	    &prev.tcps_mptcp_wifi_proxy , &stat.mptcp_wifi_proxy);
 	tcp_cumulative_stat(tcpstat.tcps_mptcp_cell_proxy,
 	    &prev.tcps_mptcp_cell_proxy , &stat.mptcp_cell_proxy);
-
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_triggered_cell,
+	    &prev.tcps_mptcp_triggered_cell, &stat.mptcp_triggered_cell);
 
 	nstat_sysinfo_send_data(&data);
 

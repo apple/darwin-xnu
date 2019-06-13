@@ -91,6 +91,8 @@ struct cpu_data;
 extern boolean_t kpc_register_cpu(struct cpu_data *cpu_data);
 extern void kpc_unregister_cpu(struct cpu_data *cpu_data);
 
+extern bool kpc_supported;
+
 /* bootstrap */
 extern void kpc_init(void);
 
@@ -155,6 +157,7 @@ extern void kpc_thread_destroy(thread_t thread);
 /* allocate a buffer big enough for all counters */
 extern uint64_t *kpc_counterbuf_alloc(void);
 extern void      kpc_counterbuf_free(uint64_t*);
+extern uint32_t  kpc_get_counterbuf_size(void);
 
 /* whether we're currently accounting into threads */
 extern int kpc_threads_counting;

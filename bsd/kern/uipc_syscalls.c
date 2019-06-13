@@ -90,6 +90,7 @@
 #include <kern/task.h>
 #include <sys/priv.h>
 #include <sys/sysctl.h>
+#include <sys/sys_domain.h>
 
 #include <security/audit/audit.h>
 
@@ -328,7 +329,8 @@ bind(__unused proc_t p, struct bind_args *uap, __unused int32_t *retval)
 		goto out;
 	AUDIT_ARG(sockaddr, vfs_context_cwd(vfs_context_current()), sa);
 #if CONFIG_MACF_SOCKET_SUBSET
-	if ((error = mac_socket_check_bind(kauth_cred_get(), so, sa)) == 0)
+	if ((sa != NULL && sa->sa_family == AF_SYSTEM) ||
+		(error = mac_socket_check_bind(kauth_cred_get(), so, sa)) == 0)
 		error = sobindlock(so, sa, 1);	/* will lock socket */
 #else
 		error = sobindlock(so, sa, 1);	/* will lock socket */
@@ -822,11 +824,15 @@ connectx_nocancel(struct proc *p, struct connectx_args *uap, int *retval)
 
 	if (uap->iov != USER_ADDR_NULL) {
 		/* Verify range before calling uio_create() */
-		if (uap->iovcnt <= 0 || uap->iovcnt > UIO_MAXIOV)
-			return (EINVAL);
+		if (uap->iovcnt <= 0 || uap->iovcnt > UIO_MAXIOV){
+			error = EINVAL;
+			goto out;
+		}
 
-		if (uap->len == USER_ADDR_NULL)
-			return (EINVAL);
+		if (uap->len == USER_ADDR_NULL){
+			error = EINVAL;
+			goto out;
+		}
 
 		/* allocate a uio to hold the number of iovecs passed */
 		auio = uio_create(uap->iovcnt, 0,
@@ -1729,7 +1735,7 @@ copyout_control(struct proc *p, struct mbuf *m, user_addr_t control,
 			 * different size for 32 bits and 64 bits processes
 			 */
 			if (cp->cmsg_level == SOL_SOCKET && cp->cmsg_type == SCM_TIMESTAMP) {
-				unsigned char tmp_buffer[CMSG_SPACE(sizeof(struct user64_timeval))];
+				unsigned char tmp_buffer[CMSG_SPACE(sizeof(struct user64_timeval))] = {};
 				struct cmsghdr *tmp_cp = (struct cmsghdr *)(void *)tmp_buffer;
 				int tmp_space;
 				struct timeval *tv = (struct timeval *)(void *)CMSG_DATA(cp);

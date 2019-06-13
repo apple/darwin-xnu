@@ -42,6 +42,7 @@
 
 #include <IOKit/IOKitDebug.h>
 #include <libkern/OSDebug.h>
+#include <libkern/OSKextLibPrivate.h>
 
 #include "IOKitKernelInternal.h"
 
@@ -67,10 +68,6 @@ __BEGIN_DECLS
 
 extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
 extern void ipc_port_release_send(ipc_port_t port);
-
-// osfmk/device/iokit_rpc.c
-unsigned int IODefaultCacheBits(addr64_t pa);
-unsigned int  IOTranslateCacheBits(struct phys_entry *pp);
 
 __END_DECLS
 
@@ -571,7 +568,14 @@ IOGeneralMemoryDescriptor::memoryReferenceCreate(
 	{
 	    // IOBufferMemoryDescriptor alloc - set flags for entry + object create
 	    prot |= MAP_MEM_NAMED_CREATE;
-	    if (kIOMemoryBufferPurgeable & _flags) prot |= (MAP_MEM_PURGABLE | MAP_MEM_PURGABLE_KERNEL_ONLY);
+	    if (kIOMemoryBufferPurgeable & _flags)
+	    {
+		prot |= (MAP_MEM_PURGABLE | MAP_MEM_PURGABLE_KERNEL_ONLY);
+		if (VM_KERN_MEMORY_SKYWALK == tag)
+		{
+		    prot |= MAP_MEM_LEDGER_TAG_NETWORK;
+		}
+	    }
 	    if (kIOMemoryUseReserve & _flags)      prot |= MAP_MEM_GRAB_SECLUDED;
 
 	    prot |= VM_PROT_WRITE;
@@ -608,7 +612,7 @@ IOGeneralMemoryDescriptor::memoryReferenceCreate(
 		    else                                                  prot &= ~MAP_MEM_NAMED_REUSE;
 		}
 
-		err = mach_make_memory_entry_64(map,
+		err = mach_make_memory_entry_internal(map,
 			&actualSize, entryAddr, prot, &entry, cloneEntry);
 
 		if (KERN_SUCCESS != err) break;
@@ -870,7 +874,7 @@ IOGeneralMemoryDescriptor::memoryReferenceMap(
      * kIOMapPrefault is redundant in that case, so don't try to use it for UPL
      * operations.
      */ 
-    if ((reserved != NULL) && (reserved->dp.devicePager) && (_memoryEntries == NULL) && (_wireCount != 0))
+    if ((reserved != NULL) && (reserved->dp.devicePager) && (_wireCount != 0))
         options &= ~kIOMapPrefault;
 
     /*
@@ -1701,6 +1705,7 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
 	      && (VM_KERN_MEMORY_NONE == _kernelTag))
             {
 		_kernelTag = IOMemoryTag(kernel_map);
+                if (_kernelTag == gIOSurfaceTag) _userTag = VM_MEMORY_IOSURFACE;
             }
 
 	    if ( (kIOMemoryPersistent & _flags) && !_memRef)
@@ -1959,7 +1964,11 @@ IOByteCount IOMemoryDescriptor::writeBytes
 
     assert(!remaining);
 
+#if defined(__x86_64__)
+    // copypv does not cppvFsnk on intel
+#else
     if (!srcAddr) performOperation(kIOMemoryIncoherentIOFlush, inoffset, length);
+#endif
 
     return length - remaining;
 }
@@ -2075,6 +2084,8 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 	    keepMap = (data->fMapper == gIOSystemMapper);
 	    keepMap &= ((data->fOffset == 0) && (data->fLength == _length));
 
+	    if ((data->fMapper == gIOSystemMapper) && _prepareLock) IOLockLock(_prepareLock);
+
 	    remap = (!keepMap);
 	    remap |= (dataP->fDMAMapNumAddressBits < 64)
 	    	  && ((dataP->fMappedBase + _length) > (1ULL << dataP->fDMAMapNumAddressBits));
@@ -2099,6 +2110,8 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 		md->dmaMapRecord(data->fMapper, data->fCommand, dataP->fMappedLength);
 	    }
 	    data->fMapContig = !dataP->fDiscontig;
+
+	    if ((data->fMapper == gIOSystemMapper) && _prepareLock) IOLockUnlock(_prepareLock);
 	}
 	return (err);				
     }
@@ -2193,7 +2206,8 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 
     isP = (InternalState *) vData;
     UInt offset = isP->fIO.fOffset;
-    bool mapped = isP->fIO.fMapped;
+    uint8_t mapped = isP->fIO.fMapped;
+    uint64_t mappedBase;
 
     if (mapped && (kIOMemoryRemote & _flags)) return (kIOReturnNotAttached);
 
@@ -2218,6 +2232,20 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 	}
     }
 
+    if (kIOMDDMAWalkMappedLocal == mapped) mappedBase = isP->fIO.fMappedBase;
+    else if (mapped)
+    {
+	if (IOMapper::gSystem
+		&& (!(kIOMemoryHostOnly & _flags))
+		&& _memoryEntries
+		&& (dataP = getDataP(_memoryEntries))
+		&& dataP->fMappedBaseValid)
+	{
+	    mappedBase = dataP->fMappedBase;
+	}
+	else mapped = 0;
+    }
+
     if (offset >= _length)
 	return (offset == _length)? kIOReturnOverrun : kIOReturnInternalError;
 
@@ -2232,7 +2260,6 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 
     UInt length;
     UInt64 address;
-
 
     if ( (_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical) {
 
@@ -2250,10 +2277,9 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 	length   = off2Ind - offset;
 	address  = physP[ind - 1].address + len - length;
 
-	if (true && mapped && _memoryEntries 
-		&& (dataP = getDataP(_memoryEntries)) && dataP->fMappedBaseValid)
+	if (true && mapped)
 	{
-	    address = dataP->fMappedBase + offset;
+	    address = mappedBase + offset;
 	}
 	else
 	{
@@ -2287,10 +2313,9 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 	length   = off2Ind - offset;
 	address  = physP[ind - 1].address + len - length;
 
-	if (true && mapped && _memoryEntries 
-		&& (dataP = getDataP(_memoryEntries)) && dataP->fMappedBaseValid)
+	if (true && mapped)
 	{
-	    address = dataP->fMappedBase + offset;
+	    address = mappedBase + offset;
 	}
 	else
 	{
@@ -2339,9 +2364,9 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 
 	// If a mapped address is requested and this is a pre-mapped IOPL
 	// then just need to compute an offset relative to the mapped base.
-	if (mapped && dataP->fMappedBaseValid) {
+	if (mapped) {
 	    offset += (ioplInfo.fPageOffset & PAGE_MASK);
-	    address = trunc_page_64(dataP->fMappedBase) + ptoa_64(ioplInfo.fMappedPage) + offset;
+	    address = trunc_page_64(mappedBase) + ptoa_64(ioplInfo.fMappedPage) + offset;
 	    continue;	// Done leave do/while(false) now
 	}
 
@@ -3084,14 +3109,15 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
 
         for (UInt range = 0; range < _rangesCount; range++) {
             ioPLBlock iopl;
-            mach_vm_address_t startPage;
+            mach_vm_address_t startPage, startPageOffset;
             mach_vm_size_t    numBytes;
             ppnum_t highPage = 0;
 
             // Get the startPage address and length of vec[range]
             getAddrLenForInd(startPage, numBytes, type, vec, range);
-            iopl.fPageOffset = startPage & PAGE_MASK;
-            numBytes += iopl.fPageOffset;
+            startPageOffset = startPage & PAGE_MASK;
+            iopl.fPageOffset = startPageOffset;
+            numBytes += startPageOffset;
             startPage = trunc_page_64(startPage);
 
             if (mapper)
@@ -3186,7 +3212,7 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
 
                 iopl.fIOMDOffset = mdOffset;
                 iopl.fPageInfo = pageIndex;
-                if (mapper && pageIndex && (page_mask & (mdOffset + iopl.fPageOffset))) dataP->fDiscontig = true;
+                if (mapper && pageIndex && (page_mask & (mdOffset + startPageOffset))) dataP->fDiscontig = true;
 
                 if (!_memoryEntries->appendBytes(&iopl, sizeof(iopl))) {
                     // Clean up partial created and unsaved iopl
@@ -3622,6 +3648,7 @@ IOReturn IOGeneralMemoryDescriptor::doMap(
      && (mapping->fAddressTask == _task)
      && (mapping->fAddressMap == get_task_map(_task)) 
      && (options & kIOMapAnywhere)
+     && (!(kIOMapUnique & options))
      && (1 == _rangesCount) 
      && (0 == offset)
      && range0Addr 
@@ -4515,9 +4542,8 @@ IOMemoryMap * IOMemoryDescriptor::makeMapping(
     if (!(kIOMap64Bit & options)) panic("IOMemoryDescriptor::makeMapping !64bit");
 #endif /* !__LP64__ */
 
-    IOMemoryDescriptor * mapDesc = 0;
-    IOMemoryMap *	 result = 0;
-    OSIterator *	 iter;
+    IOMemoryDescriptor *  mapDesc = 0;
+    __block IOMemoryMap * result  = 0;
 
     IOMemoryMap *  mapping = (IOMemoryMap *) __address;
     mach_vm_size_t offset  = mapping->fOffset + __offset;
@@ -4562,20 +4588,17 @@ IOMemoryMap * IOMemoryDescriptor::makeMapping(
 	else
 	{
 	    // look for a compatible existing mapping
-	    if( (iter = OSCollectionIterator::withCollection(_mappings)))
+	    if (_mappings) _mappings->iterateObjects(^(OSObject * object)
 	    {
-		IOMemoryMap * lookMapping;
-		while ((lookMapping = (IOMemoryMap *) iter->getNextObject()))
+		IOMemoryMap * lookMapping = (IOMemoryMap *) object;
+		if ((result = lookMapping->copyCompatible(mapping)))
 		{
-		    if ((result = lookMapping->copyCompatible(mapping)))
-		    {
-			addMapping(result);
-			result->setMemoryDescriptor(this, offset);
-			break;
-		    }
+		    addMapping(result);
+		    result->setMemoryDescriptor(this, offset);
+		    return (true);
 		}
-		iter->release();
-	    }
+		return (false);
+	    });
 	    if (result || (options & kIOMapReference))
 	    {
 	        if (result != mapping)
@@ -4695,16 +4718,17 @@ void * IOMemoryDescriptor::getVirtualSegment(IOByteCount offset,
 
 bool IOGeneralMemoryDescriptor::serialize(OSSerialize * s) const
 {
-    OSSymbol const *keys[2];
-    OSObject *values[2];
+    OSSymbol const *keys[2] = {0};
+    OSObject *values[2] = {0};
     OSArray * array;
+    vm_size_t vcopy_size;
 
     struct SerData {
 	user_addr_t address;
 	user_size_t length;
-    } *vcopy;
+    } *vcopy = NULL;
     unsigned int index, nRanges;
-    bool result;
+    bool result = false;
 
     IOOptionBits type = _flags & kIOMemoryTypeMask;
 
@@ -4714,16 +4738,18 @@ bool IOGeneralMemoryDescriptor::serialize(OSSerialize * s) const
     if (!array)  return (false);
 
     nRanges = _rangesCount;
-    vcopy = (SerData *) IOMalloc(sizeof(SerData) * nRanges);
-    if (vcopy == 0) return false;
+    if (os_mul_overflow(sizeof(SerData), nRanges, &vcopy_size)) {
+        result = false;
+        goto bail;
+    }
+    vcopy = (SerData *) IOMalloc(vcopy_size);
+    if (vcopy == 0) {
+        result = false;
+        goto bail;
+    }
 
     keys[0] = OSSymbol::withCString("address");
     keys[1] = OSSymbol::withCString("length");
-
-    result = false;
-    values[0] = values[1] = 0;
-
-    // From this point on we can go to bail.
 
     // Copy the volatile data so we don't have to allocate memory
     // while the lock is held.
@@ -4784,7 +4810,7 @@ bool IOGeneralMemoryDescriptor::serialize(OSSerialize * s) const
     if (keys[1])
       keys[1]->release();
     if (vcopy)
-        IOFree(vcopy, sizeof(SerData) * nRanges);
+      IOFree(vcopy, vcopy_size);
 
     return result;
 }

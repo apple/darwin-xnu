@@ -368,14 +368,16 @@ struct user32_stat64 {
 	__uint32_t	st_gen;					/* file generation number */
 	__uint32_t	st_lspare;				/* RESERVED: DO NOT USE! */
 	__int64_t	st_qspare[2];			/* RESERVED: DO NOT USE! */
-#if __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
-/* For the newer ARMv7k ABI where 64-bit types are 64-bit aligned, but pointers
- * are 32-bit:
- * Applying attributes here causes a mismatch with the user-space struct stat64
+#if defined(__x86_64__)
+/*
+ * This packing is required to ensure symmetry between userspace and kernelspace
+ * when the kernel is 64-bit and the user application is 32-bit. All currently
+ * supported ARM slices (arm64/armv7k/arm64_32) contain the same struct
+ * alignment ABI so this packing isn't needed for ARM.
  */
-};
-#else
 } __attribute__((packed,aligned(4)));
+#else
+};
 #endif
 
 extern void munge_user64_stat64(struct stat64 *sbp, struct user64_stat64 *usbp);

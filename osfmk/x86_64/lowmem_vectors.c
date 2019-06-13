@@ -76,8 +76,6 @@ lowglo lowGlo __attribute__ ((aligned(PAGE_SIZE))) = {
 
 	.lgVerCode		= { 'C','a','t','f','i','s','h',' ' },
 
-	.lgCHUDXNUfnStart	= 0,
-
 	.lgVersion		= (uint64_t) &version,
 
 	.lgKmodptr		= (uint64_t) &kmod,

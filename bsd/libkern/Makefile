@@ -7,7 +7,7 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 KERNELFILES = \
-	libkern.h
+	libkern.h copyio.h
 
 EXPORT_MI_LIST = ${KERNELFILES}
 

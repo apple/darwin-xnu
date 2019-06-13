@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -235,7 +235,7 @@ rip_input(struct mbuf *m, int iphlen)
 
 #if NECP
 			if (n && !necp_socket_is_allowed_to_send_recv_v4(last, 0, 0,
-				&ip->ip_dst, &ip->ip_src, ifp, NULL, NULL)) {
+				&ip->ip_dst, &ip->ip_src, ifp, NULL, NULL, NULL)) {
 				m_freem(n);
 				/* do not inject data to pcb */
 				skipit = 1;
@@ -254,7 +254,8 @@ rip_input(struct mbuf *m, int iphlen)
 				int error = 0;
 				if ((last->inp_flags & INP_CONTROLOPTS) != 0 ||
 				    (last->inp_socket->so_options & SO_TIMESTAMP) != 0 ||
-				    (last->inp_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+				    (last->inp_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
+					(last->inp_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 					ret = ip_savecontrol(last, &opts, ip, n);
 					if (ret != 0) {
 						m_freem(n);
@@ -288,7 +289,7 @@ rip_input(struct mbuf *m, int iphlen)
 	skipit = 0;
 #if NECP
 	if (last && !necp_socket_is_allowed_to_send_recv_v4(last, 0, 0,
-		&ip->ip_dst, &ip->ip_src, ifp, NULL, NULL)) {
+		&ip->ip_dst, &ip->ip_src, ifp, NULL, NULL, NULL)) {
 		m_freem(m);
 		OSAddAtomic(1, &ipstat.ips_delivered);
 		/* do not inject data to pcb */
@@ -307,7 +308,8 @@ rip_input(struct mbuf *m, int iphlen)
 		if (last) {
 			if ((last->inp_flags & INP_CONTROLOPTS) != 0 ||
 				(last->inp_socket->so_options & SO_TIMESTAMP) != 0 ||
-				(last->inp_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+				(last->inp_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
+				(last->inp_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 				ret = ip_savecontrol(last, &opts, ip, m);
 				if (ret != 0) {
 					m_freem(m);
@@ -355,12 +357,17 @@ rip_output(
 	struct ip *ip;
 	struct inpcb *inp = sotoinpcb(so);
 	int flags = (so->so_options & SO_DONTROUTE) | IP_ALLOWBROADCAST;
-	struct ip_out_args ipoa =
-	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0, 0, 0 };
+	struct ip_out_args ipoa;
 	struct ip_moptions *imo;
 	int error = 0;
+
+	bzero(&ipoa, sizeof(ipoa));
+	ipoa.ipoa_boundif = IFSCOPE_NONE;
+	ipoa.ipoa_flags = IPOAF_SELECT_SRCIF;
+
 	int sotc = SO_TC_UNSPEC;
 	int netsvctype = _NET_SERVICE_TYPE_UNSPEC;
+
 
 	if (control != NULL) {
 		sotc = so_tc_from_control(control, &netsvctype);
@@ -450,6 +457,7 @@ rip_output(
 #if NECP
 	{
 		necp_kernel_policy_id policy_id;
+		necp_kernel_policy_id skip_policy_id;
 		u_int32_t route_rule_id;
 
 		/*
@@ -487,12 +495,12 @@ rip_output(
 		}
 
 		if (!necp_socket_is_allowed_to_send_recv_v4(inp, 0, 0,
-			&ip->ip_src, &ip->ip_dst, NULL, &policy_id, &route_rule_id)) {
+			&ip->ip_src, &ip->ip_dst, NULL, &policy_id, &route_rule_id, &skip_policy_id)) {
 			m_freem(m);
 			return(EHOSTUNREACH);
 		}
 
-		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id);
+		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id, skip_policy_id);
 
 		if (net_qos_policy_restricted != 0) {
 			struct ifnet *rt_ifp = NULL;
@@ -524,6 +532,12 @@ rip_output(
 	m->m_pkthdr.pkt_flags |= (PKTF_FLOW_ID | PKTF_FLOW_LOCALSRC |
 	    PKTF_FLOW_RAWSOCK);
 	m->m_pkthdr.pkt_proto = inp->inp_ip_p;
+	m->m_pkthdr.tx_rawip_pid = so->last_pid;
+	m->m_pkthdr.tx_rawip_e_pid = so->e_pid;
+	if (so->so_flags & SOF_DELEGATED)
+		m->m_pkthdr.tx_rawip_e_pid = so->e_pid;
+	else
+		m->m_pkthdr.tx_rawip_e_pid = 0;
 
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_inpcb(inp, m);

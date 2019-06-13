@@ -87,6 +87,7 @@
 #include <mach/mach_port_server.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
+#include <ipc/port.h>
 #include <ipc/ipc_entry.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_object.h>
@@ -119,14 +120,6 @@ void mach_port_gst_helper(
 	ipc_entry_num_t		maxnames,
 	mach_port_name_t	*names,
 	ipc_entry_num_t		*actualp);
-
-
-kern_return_t
-mach_port_guard_exception(
-	mach_port_name_t	name,
-	uint64_t		inguard,
-	uint64_t		portguard,
-	unsigned		reason);
 
 /* Needs port locked */
 void mach_port_get_status_helper(
@@ -464,8 +457,10 @@ mach_port_type(
 	}
 
 	kr = ipc_right_lookup_write(space, name, &entry);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
+		mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_NAME);
 		return kr;
+	}
 
 	/* space is write-locked and active */
 	kr = ipc_right_info(space, name, entry, typep, &urefs);
@@ -677,12 +672,14 @@ mach_port_allocate_full(
 		} else {
 			mach_msg_size_t size = qosp->len + MAX_TRAILER_SIZE;
 
-			if (right != MACH_PORT_RIGHT_RECEIVE)
+			if (right != MACH_PORT_RIGHT_RECEIVE) {
 				return (KERN_INVALID_VALUE);
+			}
 
 			kmsg = (ipc_kmsg_t)ipc_kmsg_prealloc(size);
-			if (kmsg == IKM_NULL)
+			if (kmsg == IKM_NULL) {
 				return (KERN_RESOURCE_SHORTAGE);
+			}
 		}
 	}
 
@@ -763,8 +760,10 @@ mach_port_destroy(
 		return KERN_SUCCESS;
 
 	kr = ipc_right_lookup_write(space, name, &entry);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
+		mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_NAME);
 		return kr;
+	}
 	/* space is write-locked and active */
 
 	kr = ipc_right_destroy(space, name, entry, TRUE, 0); /* unlocks space */
@@ -804,8 +803,10 @@ mach_port_deallocate(
 		return KERN_SUCCESS;
 
 	kr = ipc_right_lookup_write(space, name, &entry);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
+		mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_NAME);
 		return kr;
+	}
 	/* space is write-locked */
 
 	kr = ipc_right_dealloc(space, name, entry); /* unlocks space */
@@ -857,8 +858,10 @@ mach_port_get_refs(
 	}
 
 	kr = ipc_right_lookup_write(space, name, &entry);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
+		mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_NAME);
 		return kr;
+	}
 
 	/* space is write-locked and active */
 	kr = ipc_right_info(space, name, entry, &type, &urefs);
@@ -937,8 +940,11 @@ mach_port_mod_refs(
 	}
 
 	kr = ipc_right_lookup_write(space, name, &entry);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
+		mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_NAME);
 		return kr;
+	}
+
 	/* space is write-locked and active */
 
 	kr = ipc_right_delta(space, name, entry, right, delta);	/* unlocks */
@@ -1011,14 +1017,21 @@ mach_port_peek(
 	 * leaking the context pointer and to avoid variable-sized context issues.
 	 */
 	if (GET_RCV_ELEMENTS(trailer_type) > MACH_RCV_TRAILER_AUDIT ||
-	    REQUESTED_TRAILER_SIZE(TRUE, trailer_type) > *trailer_sizep) 
+	    REQUESTED_TRAILER_SIZE(TRUE, trailer_type) > *trailer_sizep) {
+		mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_VALUE);
 		return KERN_INVALID_VALUE;
+	}
 
 	*trailer_sizep = REQUESTED_TRAILER_SIZE(TRUE, trailer_type);
 
 	kr = ipc_port_translate_receive(space, name, &port);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
+		mach_port_guard_exception(name, 0, 0,
+		                          ((KERN_INVALID_NAME == kr) ?
+		                           kGUARD_EXC_INVALID_NAME :
+		                           kGUARD_EXC_INVALID_RIGHT));
 		return kr;
+	}
 
 	/* Port locked and active */
 
@@ -1392,6 +1405,9 @@ mach_port_move_member(
 		wq_link_id = waitq_link_reserve(NULL);
 		wq_reserved_prepost = waitq_prepost_reserve(NULL, 10,
 		                                            WAITQ_DONT_LOCK);
+		kr = ipc_pset_lazy_allocate(space, after);
+		if (kr != KERN_SUCCESS)
+			goto done;
 	}
 
 	kr = ipc_right_lookup_read(space, member, &entry);
@@ -2048,6 +2064,10 @@ mach_port_insert_member(
 	wq_link_id = waitq_link_reserve(NULL);
 	wq_reserved_prepost = waitq_prepost_reserve(NULL, 10,
 						    WAITQ_DONT_LOCK);
+	kr = ipc_pset_lazy_allocate(space, psname);
+	if (kr != KERN_SUCCESS)
+		goto done;
+
 
 	kr = ipc_object_translate_two(space, 
 				      name, MACH_PORT_RIGHT_RECEIVE, &obj,
@@ -2224,7 +2244,7 @@ mach_port_unguard_locked(
  *	Returns:
  *		KERN_FAILURE		Thread marked with AST_GUARD.
  */
-kern_return_t
+void
 mach_port_guard_exception(
 	mach_port_name_t 	name,
 	__unused uint64_t 	inguard,
@@ -2238,7 +2258,6 @@ mach_port_guard_exception(
 	mach_exception_subcode_t subcode = (uint64_t)portguard;
 	thread_t t = current_thread();
 	thread_guard_violation(t, code, subcode);
-	return KERN_FAILURE;
 }
 
 
@@ -2253,16 +2272,65 @@ mach_port_guard_exception(
  */
 
 void
-mach_port_guard_ast(thread_t __unused t,
+mach_port_guard_ast(thread_t t,
 	mach_exception_data_type_t code, mach_exception_data_type_t subcode)
 {
-	assert(t->task != kernel_task);
+	unsigned int reason = EXC_GUARD_DECODE_GUARD_FLAVOR(code);
+	task_t task = t->task;
+	unsigned int behavior = task->task_exc_guard;
+	assert(task == current_task());
+	assert(task != kernel_task);
 
-	/* Raise an EXC_GUARD exception */
-	task_exception_notify(EXC_GUARD, code, subcode);
+	switch (reason) {
+		/*
+		 * Fatal Mach port guards - always delivered synchronously
+		 */
+	case kGUARD_EXC_DESTROY:
+	case kGUARD_EXC_MOD_REFS:
+	case kGUARD_EXC_SET_CONTEXT:
+	case kGUARD_EXC_UNGUARDED:
+	case kGUARD_EXC_INCORRECT_GUARD:
+		task_exception_notify(EXC_GUARD, code, subcode);
+		task_bsdtask_kill(task);
+		break;
 
-	/* Terminate task which caused the exception */
-	task_bsdtask_kill(current_task());
+	default:
+		/*
+		 * Mach port guards controlled by task settings.
+		 */
+
+		/* Is delivery enabled */
+		if ((behavior & TASK_EXC_GUARD_MP_DELIVER) == 0) {
+			return;
+		}
+
+		/* If only once, make sure we're that once */
+		while (behavior & TASK_EXC_GUARD_MP_ONCE) {
+			uint32_t new_behavior = behavior & ~TASK_EXC_GUARD_MP_DELIVER;
+
+			if (OSCompareAndSwap(behavior, new_behavior, &task->task_exc_guard)) {
+				break;
+			}
+			behavior = task->task_exc_guard;
+			if ((behavior & TASK_EXC_GUARD_MP_DELIVER) == 0) {
+				return;
+			}
+		}
+
+		/* Raise exception via corpse fork or synchronously */
+		if ((task->task_exc_guard & TASK_EXC_GUARD_MP_CORPSE) &&
+		    (task->task_exc_guard & TASK_EXC_GUARD_MP_FATAL) == 0) {
+			task_violated_guard(code, subcode, NULL);
+		} else {
+			task_exception_notify(EXC_GUARD, code, subcode);
+		}
+
+		/* Terminate the task if desired */
+		if (task->task_exc_guard & TASK_EXC_GUARD_MP_FATAL) {
+			task_bsdtask_kill(task);
+		}
+		break;
+	}
 }
 
 /*
@@ -2390,8 +2458,10 @@ mach_port_destruct(
 
 	/* Remove reference for receive right */
 	kr = ipc_right_lookup_write(space, name, &entry);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
+		mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_NAME);
 		return kr;
+	}
 	/* space is write-locked and active */
 	kr = ipc_right_destruct(space, name, entry, srdelta, guard);	/* unlocks */
 
@@ -2431,15 +2501,23 @@ mach_port_guard(
 
 	/* Guard can be applied only to receive rights */
 	kr = ipc_port_translate_receive(space, name, &port);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
+		mach_port_guard_exception(name, 0, 0,
+		                          ((KERN_INVALID_NAME == kr) ?
+		                           kGUARD_EXC_INVALID_NAME :
+		                           kGUARD_EXC_INVALID_RIGHT));
 		return kr;
+	}
 
 	/* Port locked and active */
 	kr = mach_port_guard_locked(port, guard, strict);
 	ip_unlock(port);
 
-	return kr;
+	if (KERN_INVALID_ARGUMENT == kr) {
+		mach_port_guard_exception(name, 0, 0, kGUARD_EXC_INVALID_ARGUMENT);
+	}
 
+	return kr;
 }
 
 /*
@@ -2474,12 +2552,18 @@ mach_port_unguard(
 		return KERN_INVALID_NAME;
 
 	kr = ipc_port_translate_receive(space, name, &port);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
+		mach_port_guard_exception(name, 0, 0,
+		                          ((KERN_INVALID_NAME == kr) ?
+		                           kGUARD_EXC_INVALID_NAME :
+		                           kGUARD_EXC_INVALID_RIGHT));
 		return kr;
+	}
 
 	/* Port locked and active */
 	kr = mach_port_unguard_locked(port, name, guard);
 	ip_unlock(port);
+
 	return kr;
 }
 

@@ -113,16 +113,6 @@ extern int dtrace_decode_thumb(uint32_t instr);
 
 extern int dtrace_arm_condition_true(int cond, int cpsr);
 
-static
-void flush_caches(void)
-{
-	/* TODO There were some problems with flushing just the cache line that had been modified.
-	 * For now, we'll flush the entire cache, until we figure out how to flush just the patched block.
-	 */
-	FlushPoU_Dcache();
-	InvalidatePoU_Icache();
-}
-
 int
 fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp,
 			 user_addr_t pc, fasttrap_probe_type_t type)
@@ -202,90 +192,6 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp,
 	return (0);
 }
 
-// These are not exported from vm_map.h.
-extern kern_return_t vm_map_write_user(vm_map_t map, void *src_p, vm_map_address_t dst_addr, vm_size_t size);
-
-/* Patches the instructions. Almost like uwrite, but need special instructions on ARM to flush the caches. */
-static
-int patchInst(proc_t *p, void *buf, user_size_t len, user_addr_t a)
-{
-	kern_return_t ret;
-
-	ASSERT(p != NULL);
-	ASSERT(p->task != NULL);
-
-	task_t task = p->task;
-
-	/*
-	 * Grab a reference to the task vm_map_t to make sure
-	 * the map isn't pulled out from under us.
-	 *
-	 * Because the proc_lock is not held at all times on all code
-	 * paths leading here, it is possible for the proc to have
-	 * exited. If the map is null, fail.
-	 */
-	vm_map_t map = get_task_map_reference(task);
-	if (map) {
-		/* Find the memory permissions. */
-		uint32_t nestingDepth=999999;
-		vm_region_submap_short_info_data_64_t info;
-		mach_msg_type_number_t count = VM_REGION_SUBMAP_SHORT_INFO_COUNT_64;
-		mach_vm_address_t address = (mach_vm_address_t)a;
-		mach_vm_size_t sizeOfRegion = (mach_vm_size_t)len;
-
-		ret = mach_vm_region_recurse(map, &address, &sizeOfRegion, &nestingDepth, (vm_region_recurse_info_t)&info, &count);
-		if (ret != KERN_SUCCESS)
-			goto done;
-
-		vm_prot_t reprotect;
-
-		if (!(info.protection & VM_PROT_WRITE)) {
-			/* Save the original protection values for restoration later */
-			reprotect = info.protection;
-			if (info.max_protection & VM_PROT_WRITE) {
-				/* The memory is not currently writable, but can be made writable. */
-				/* Making it both writable and executable at the same time causes warning on embedded */
-				ret = mach_vm_protect (map, (mach_vm_offset_t)a, (mach_vm_size_t)len, 0, (reprotect & ~VM_PROT_EXECUTE) | VM_PROT_WRITE);
-			} else {
-				/*
-				 * The memory is not currently writable, and cannot be made writable. We need to COW this memory.
-				 *
-				 * Strange, we can't just say "reprotect | VM_PROT_COPY", that fails.
-				 */
-				ret = mach_vm_protect (map, (mach_vm_offset_t)a, (mach_vm_size_t)len, 0, VM_PROT_COPY | VM_PROT_READ | VM_PROT_WRITE);
-			}
-
-			if (ret != KERN_SUCCESS)
-				goto done;
-
-		} else {
-			/* The memory was already writable. */
-			reprotect = VM_PROT_NONE;
-		}
-
-		ret = vm_map_write_user( map,
-					 buf,
-					 (vm_map_address_t)a,
-					 (vm_size_t)len);
-
-		flush_caches();
-
-		if (ret != KERN_SUCCESS)
-			goto done;
-
-		if (reprotect != VM_PROT_NONE) {
-			ASSERT(reprotect & VM_PROT_EXECUTE);
-			ret = mach_vm_protect (map, (mach_vm_offset_t)a, (mach_vm_size_t)len, 0, reprotect);
-		}
-
-done:
-		vm_map_deallocate(map);
-	} else
-		ret = KERN_TERMINATED;
-
-	return (int)ret;
-}
-
 int
 fasttrap_tracepoint_install(proc_t *p, fasttrap_tracepoint_t *tp)
 {
@@ -299,7 +205,7 @@ fasttrap_tracepoint_install(proc_t *p, fasttrap_tracepoint_t *tp)
 		instr = FASTTRAP_ARM_INSTR;
 	}
 
-	if (patchInst(p, &instr, size, tp->ftt_pc) != 0)
+	if (uwrite(p, &instr, size, tp->ftt_pc) != 0)
 		return (-1);
 
 	tp->ftt_installed = 1;
@@ -327,7 +233,7 @@ fasttrap_tracepoint_remove(proc_t *p, fasttrap_tracepoint_t *tp)
 		if (instr != FASTTRAP_ARM_INSTR)
 			goto end;
 	}
-	if (patchInst(p, &tp->ftt_instr, size, tp->ftt_pc) != 0)
+	if (uwrite(p, &tp->ftt_instr, size, tp->ftt_pc) != 0)
 		return (-1);
 
 end:
@@ -1154,7 +1060,7 @@ fasttrap_pid_probe(arm_saved_state_t *regs)
 				SET32(scratch+i, FASTTRAP_ARM_RET_INSTR); i += 4;
 			}
 
-			if (patchInst(p, scratch, i, uthread->t_dtrace_scratch->write_addr) != KERN_SUCCESS) {
+			if (uwrite(p, scratch, i, uthread->t_dtrace_scratch->write_addr) != KERN_SUCCESS) {
 				fasttrap_sigtrap(p, uthread, pc);
 				new_pc = pc;
 				break;

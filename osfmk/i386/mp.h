@@ -112,8 +112,9 @@ extern  uint32_t spinlock_timeout_NMI(uintptr_t thread_addr);
 
 extern	uint64_t	LastDebuggerEntryAllowance;
 
-extern	void	mp_kdp_enter(boolean_t proceed_on_failure);
-extern	void	mp_kdp_exit(void);
+extern	void	  mp_kdp_enter(boolean_t proceed_on_failure);
+extern	void	  mp_kdp_exit(void);
+extern	boolean_t mp_kdp_all_cpus_halted(void);
 
 extern	boolean_t	mp_recent_debugger_activity(void);
 extern	void	kernel_spin(uint64_t spin_ns);
@@ -130,6 +131,8 @@ extern void mp_rendezvous_no_intrs(
 		void (*action_func)(void *),
 		void *arg);
 extern void mp_rendezvous_break_lock(void);
+extern void mp_rendezvous_lock(void);
+extern void mp_rendezvous_unlock(void);
 
 /*
  * All cpu broadcast.

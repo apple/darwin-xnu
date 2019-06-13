@@ -3247,6 +3247,7 @@ again:
 	case ECONNREFUSED:
 	case EHOSTDOWN:
 	case EHOSTUNREACH:
+	/* case ECANCELED??? */
 		needrecon = 1;
 		break;
 	}
@@ -3281,7 +3282,15 @@ again:
 	/* only allow the following errors to be returned */
 	if ((error != EINTR) && (error != ERESTART) && (error != EIO) &&
 	    (error != ENXIO) && (error != ETIMEDOUT))
-		error = 0;
+		/*
+		 * We got some error we don't know what do do with,
+		 * i.e., we're not reconnecting, we map it to
+		 * EIO. Presumably our send failed and we better tell
+		 * the caller so they don't wait for a reply that is
+		 * never going to come.  If we are reconnecting we
+		 * return 0 and the request will be resent.
+		 */
+		error = needrecon ? 0 : EIO;
 	return (error);
 }
 
@@ -4740,6 +4749,7 @@ nfs_request_timer(__unused void *param0, __unused void *param1)
 	int timeo, maxtime, finish_asyncio, error;
 	struct timeval now;
 	TAILQ_HEAD(nfs_mount_pokeq, nfsmount) nfs_mount_poke_queue;
+	TAILQ_INIT(&nfs_mount_poke_queue);
 
 restart:
 	lck_mtx_lock(nfs_request_mutex);
@@ -4751,7 +4761,6 @@ restart:
 	}
 
 	nfs_reqbusy(req);
-	TAILQ_INIT(&nfs_mount_poke_queue);
 
 	microuptime(&now);
 	for ( ; req != NULL ; req = nfs_reqnext(req)) {
@@ -5336,7 +5345,8 @@ nfs_portmap_lookup(
 	struct sockaddr *saddr = (struct sockaddr*)&ss;
 	struct nfsm_chain nmreq, nmrep;
 	mbuf_t mreq;
-	int error = 0, ip, pmprog, pmvers, pmproc, ualen = 0;
+	int error = 0, ip, pmprog, pmvers, pmproc;
+	uint32_t ualen = 0;
 	uint32_t port;
 	uint64_t xid = 0;
 	char uaddr[MAX_IPv6_STR_LEN+16];
@@ -5397,7 +5407,7 @@ tryagain:
 		/* get uaddr string and convert to sockaddr */
 		nfsm_chain_get_32(error, &nmrep, ualen);
 		if (!error) {
-			if (ualen > ((int)sizeof(uaddr)-1))
+			if (ualen > (sizeof(uaddr)-1))
 				error = EIO;
 			if (ualen < 1) {
 				/* program is not available, just return a zero port */

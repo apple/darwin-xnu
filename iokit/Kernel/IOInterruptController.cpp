@@ -466,8 +466,6 @@ IOReturn IOSharedInterruptController::initInterruptController(IOInterruptControl
 {
   int      cnt, interruptType;
   IOReturn error;
-
-  reserved = NULL;
   
   if (!super::init())
     return kIOReturnNoResources;

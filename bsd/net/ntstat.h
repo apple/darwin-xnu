@@ -316,9 +316,10 @@ enum
 	,NSTAT_SYSINFO_MPTCP_WIFI_PROXY = 184
 	,NSTAT_SYSINFO_MPTCP_CELL_PROXY = 185
 	,NSTAT_SYSINFO_ECN_IFNET_FALLBACK_SYNRST = 186
+	,NSTAT_SYSINFO_MPTCP_TRIGGERED_CELL = 187
 
 // NSTAT_SYSINFO_ENUM_VERSION must be updated any time a value is added
-#define	NSTAT_SYSINFO_ENUM_VERSION	20170623
+#define	NSTAT_SYSINFO_ENUM_VERSION	20180416
 };
 
 #define	NSTAT_SYSINFO_API_FIRST	NSTAT_SYSINFO_API_IF_FLTR_ATTACH
@@ -1058,9 +1059,11 @@ typedef struct nstat_sysinfo_tcp_stats
 	u_int64_t		mptcp_aggregate_all_bytes;
 	u_int32_t		mptcp_wifi_proxy;		/* Total number of new subflows that fell back to regular TCP on cell */
 	u_int32_t		mptcp_cell_proxy;		/* Total number of new subflows that fell back to regular TCP on WiFi */
+	u_int32_t		mptcp_triggered_cell;		/* Total number of times an MPTCP-connection triggered cell bringup */
+	u_int32_t		_padding;
 	/* When adding/removing here, also adjust NSTAT_SYSINFO_TCP_STATS_COUNT */
 } nstat_sysinfo_tcp_stats;
-#define NSTAT_SYSINFO_TCP_STATS_COUNT	70
+#define NSTAT_SYSINFO_TCP_STATS_COUNT	71
 
 enum {
 	NSTAT_IFNET_ECN_PROTO_IPV4 = 1
@@ -1157,6 +1160,8 @@ void nstat_pcb_invalidate_cache(struct inpcb *inp);
 void nstat_ifnet_threshold_reached(unsigned int ifindex);
 
 void nstat_sysinfo_send_data(struct nstat_sysinfo_data *);
+
+int ntstat_tcp_progress_indicators(struct sysctl_req *req);
 
 
 // Utilities for userland stats reporting

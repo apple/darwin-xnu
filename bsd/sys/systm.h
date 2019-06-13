@@ -229,6 +229,7 @@ void	throttle_info_release(void *throttle_info);
 void	throttle_info_update(void *throttle_info, int flags);
 uint32_t throttle_lowpri_io(int sleep_amount);
 void	throttle_set_thread_io_policy(int policy);
+int		throttle_get_thread_effective_io_policy(void);
 
 typedef struct __throttle_info_handle *throttle_info_handle_t;
 int	throttle_info_ref_by_mask(uint64_t throttle_mask, throttle_info_handle_t *throttle_info_handle);
@@ -262,9 +263,7 @@ void *exec_spawnattr_getmacpolicyinfo(const void *macextensions, const char *pol
 
 #ifdef BSD_KERNEL_PRIVATE
 
-#define THROTTLE_IO_ENABLE	1
-#define THROTTLE_IO_DISABLE	0
-void sys_override_io_throttle(int flag);
+void sys_override_io_throttle(boolean_t enable_override);
 
 #endif /* BSD_KERNEL_PRIVATE */
 

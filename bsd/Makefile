@@ -19,6 +19,7 @@ INSTINC_SUBDIRS = \
 	netkey \
 	nfs \
 	security \
+	pthread \
 	sys \
 	uuid \
 	vfs
@@ -49,6 +50,7 @@ EXPINC_SUBDIRS = \
 	netinet6 \
 	netkey \
 	security \
+	pthread \
 	sys \
 	uuid \
 	vfs \

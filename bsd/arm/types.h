@@ -128,10 +128,17 @@ typedef __int32_t		user32_ssize_t;
 typedef __int32_t		user32_long_t;
 typedef __uint32_t		user32_ulong_t;
 typedef __int32_t		user32_time_t;
-#if __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
-typedef __int64_t		user32_off_t;
+
+/*
+ * This alignment is required to ensure symmetry between userspace and kernelspace
+ * when the kernel is 64-bit and the user application is 32-bit. All currently
+ * supported ARM slices (arm64/armv7k/arm64_32) contain the same type alignment
+ * ABI so this alignment isn't needed for ARM.
+ */
+#if defined(__x86_64__)
+typedef __int64_t		user32_off_t __attribute__((aligned(4)));
 #else
-typedef __int64_t		user32_off_t  __attribute__((aligned(4)));
+typedef __int64_t		user32_off_t;
 #endif
 
 #endif /* KERNEL */

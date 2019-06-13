@@ -1111,6 +1111,7 @@ mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 
 	 char *vn_path = NULL;
 	 vm_size_t vn_pathlen = MAXPATHLEN;
+	 cpu_type_t cpu_type = (imgp == NULL) ? CPU_TYPE_ANY : imgp->ip_origcputype;
 
 
 #if SECURITY_MAC_CHECK_ENFORCE
@@ -1119,7 +1120,7 @@ mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 		  return 0;
 #endif
 
-	 MAC_CHECK(vnode_check_signature, vp, vp->v_label, cs_blob,
+	 MAC_CHECK(vnode_check_signature, vp, vp->v_label, cpu_type, cs_blob,
 			   cs_flags, signer_type, flags, &fatal_failure_desc, &fatal_failure_desc_len);
 
 	 if (fatal_failure_desc_len) {
@@ -1696,6 +1697,25 @@ mac_vnode_check_stat(vfs_context_t ctx, struct ucred *file_cred,
 		return (0);
 	MAC_CHECK(vnode_check_stat, cred, file_cred, vp,
 	    vp->v_label);
+	return (error);
+}
+
+int
+mac_vnode_check_trigger_resolve(vfs_context_t ctx, struct vnode *dvp,
+    struct componentname *cnp)
+{
+	kauth_cred_t cred;
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_vnode_enforce)
+		return 0;
+#endif
+	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
+	MAC_CHECK(vnode_check_trigger_resolve, cred, dvp, dvp->v_label, cnp);
 	return (error);
 }
 

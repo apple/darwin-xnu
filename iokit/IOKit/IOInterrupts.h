@@ -50,6 +50,16 @@ struct IOInterruptSource {
 };
 typedef struct IOInterruptSource IOInterruptSource;
 
+#ifdef XNU_KERNEL_PRIVATE
+
+struct IOInterruptSourcePrivate {
+    void * vectorBlock;
+};
+typedef struct IOInterruptSourcePrivate IOInterruptSourcePrivate;
+
+#endif /* XNU_KERNEL_PRIVATE */
+
+
 #endif /* __cplusplus */
 
 typedef void (*IOInterruptHandler)(void *target, void *refCon,

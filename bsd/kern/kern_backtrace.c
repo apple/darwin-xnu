@@ -68,7 +68,7 @@ backtrace_sysctl SYSCTL_HANDLER_ARGS
 	if (!bt) {
 		return ENOBUFS;
 	}
-
+	bzero(bt, sizeof(uintptr_t) * bt_len);
 	err = backtrace_user(bt, bt_len, &bt_filled, &user_64);
 	if (err) {
 		goto out;

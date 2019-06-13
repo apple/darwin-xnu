@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -226,6 +226,11 @@ struct icmp {
 	(type) == ICMP_TSTAMP || (type) == ICMP_TSTAMPREPLY || \
 	(type) == ICMP_IREQ || (type) == ICMP_IREQREPLY || \
 	(type) == ICMP_MASKREQ || (type) == ICMP_MASKREPLY)
+
+#define ICMP_ERRORTYPE(type) \
+	((type) == ICMP_UNREACH || (type) == ICMP_SOURCEQUENCH || \
+	(type) == ICMP_REDIRECT || (type) == ICMP_TIMXCEED || \
+	(type) == ICMP_PARAMPROB)
 
 #ifdef BSD_KERNEL_PRIVATE
 void	icmp_error(struct mbuf *, int, int, n_long, u_int32_t);

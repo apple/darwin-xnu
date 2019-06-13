@@ -2603,3 +2603,57 @@ in_lltattach(struct ifnet *ifp)
 
 	return (llt);
 }
+
+struct in_ifaddr*
+inifa_ifpwithflag(struct ifnet * ifp, uint32_t flag)
+{
+	struct ifaddr *ifa;
+
+	ifnet_lock_shared(ifp);
+	TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_link)
+	{
+		IFA_LOCK_SPIN(ifa);
+		if (ifa->ifa_addr->sa_family != AF_INET) {
+			IFA_UNLOCK(ifa);
+			continue;
+		}
+		if ((((struct in_ifaddr *)ifa)->ia_flags & flag) == flag) {
+			IFA_ADDREF_LOCKED(ifa);
+			IFA_UNLOCK(ifa);
+			break;
+		}
+		IFA_UNLOCK(ifa);
+	}
+	ifnet_lock_done(ifp);
+
+	return ((struct in_ifaddr *)ifa);
+}
+
+struct in_ifaddr *
+inifa_ifpclatv4(struct ifnet * ifp)
+{
+	struct ifaddr *ifa;
+
+	ifnet_lock_shared(ifp);
+	TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_link)
+	{
+		uint32_t addr = 0;
+		IFA_LOCK_SPIN(ifa);
+		if (ifa->ifa_addr->sa_family != AF_INET) {
+			IFA_UNLOCK(ifa);
+			continue;
+		}
+
+		addr = ntohl(SIN(ifa->ifa_addr)->sin_addr.s_addr);
+		if (!IN_LINKLOCAL(addr) &&
+		    !IN_LOOPBACK(addr)) {
+			IFA_ADDREF_LOCKED(ifa);
+			IFA_UNLOCK(ifa);
+			break;
+		}
+		IFA_UNLOCK(ifa);
+	}
+	ifnet_lock_done(ifp);
+
+	return ((struct in_ifaddr *)ifa);
+}

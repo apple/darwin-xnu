@@ -182,10 +182,7 @@ extern kern_return_t vm_fault_enter(
 	boolean_t wired,
 	boolean_t change_wiring,
 	vm_tag_t  wire_tag,  	 	/* if wiring must pass tag != VM_KERN_MEMORY_NONE */
-	boolean_t no_cache,
-	boolean_t cs_bypass,
-	int	  user_tag,
-	int	  pmap_options,
+	vm_object_fault_info_t fault_info,
 	boolean_t *need_retry,
 	int *type_of_fault);
 
@@ -193,6 +190,7 @@ extern vm_offset_t kdp_lightweight_fault(
 		vm_map_t map,
 		vm_offset_t cur_target_addr);
 
+extern void vm_rtfault_record_init(void);
 
 #endif	/* MACH_KERNEL_PRIVATE */
 

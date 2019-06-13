@@ -45,8 +45,6 @@
 #include <kperf/context.h>
 #include <kperf/action.h>
 
-#include <chud/chud_xnu.h>
-
 uint32_t kpc_actionid[KPC_MAX_COUNTERS];
 
 #define COUNTERBUF_SIZE_PER_CPU (KPC_MAX_COUNTERS * sizeof(uint64_t))
@@ -70,8 +68,8 @@ static bool kpc_calling_pm = false;
 #endif /* MACH_ASSERT */
 
 boolean_t kpc_context_switch_active = FALSE;
+bool kpc_supported = true;
 
-void kpc_common_init(void);
 void
 kpc_common_init(void)
 {
@@ -152,9 +150,9 @@ kpc_task_set_forced_all_ctrs(task_t task, boolean_t state)
 
 	task_lock(task);
 	if (state)
-		task->t_chud |= TASK_KPC_FORCED_ALL_CTRS;
+		task->t_kpc |= TASK_KPC_FORCED_ALL_CTRS;
 	else
-		task->t_chud &= ~TASK_KPC_FORCED_ALL_CTRS;
+		task->t_kpc &= ~TASK_KPC_FORCED_ALL_CTRS;
 	task_unlock(task);
 }
 
@@ -162,7 +160,7 @@ static boolean_t
 kpc_task_get_forced_all_ctrs(task_t task)
 {
 	assert(task);
-	return task->t_chud & TASK_KPC_FORCED_ALL_CTRS ? TRUE : FALSE;
+	return task->t_kpc & TASK_KPC_FORCED_ALL_CTRS ? TRUE : FALSE;
 }
 
 int
@@ -505,13 +503,19 @@ kpc_set_config(uint32_t classes, kpc_config_t *configv)
 	return ret;
 }
 
+uint32_t
+kpc_get_counterbuf_size(void)
+{
+	return COUNTERBUF_SIZE;
+}
+
 /* allocate a buffer large enough for all possible counters */
 uint64_t *
 kpc_counterbuf_alloc(void)
 {
 	uint64_t *buf = NULL;
 
-	buf = kalloc(COUNTERBUF_SIZE);
+	buf = kalloc_tag(COUNTERBUF_SIZE, VM_KERN_MEMORY_DIAG);
 	if (buf) {
 		bzero(buf, COUNTERBUF_SIZE);
 	}
@@ -531,16 +535,19 @@ void
 kpc_sample_kperf(uint32_t actionid)
 {
 	struct kperf_sample sbuf;
-	struct kperf_context ctx;
 
 	BUF_DATA(PERF_KPC_HNDLR | DBG_FUNC_START);
 
-	ctx.cur_pid = 0;
-	ctx.cur_thread = current_thread();
-	ctx.cur_pid = task_pid(current_task());
+	thread_t thread = current_thread();
+	task_t task = get_threadtask(thread);
 
-	ctx.trigger_type = TRIGGER_TYPE_PMI;
-	ctx.trigger_id = 0;
+	struct kperf_context ctx = {
+		.cur_thread = thread,
+		.cur_task = task,
+		.cur_pid = task_pid(task),
+		.trigger_type = TRIGGER_TYPE_PMI,
+		.trigger_id = 0,
+	};
 
 	int r = kperf_sample(&sbuf, &ctx, actionid, SAMPLE_FLAG_PEND_USER);
 

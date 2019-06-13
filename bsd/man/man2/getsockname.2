@@ -63,6 +63,17 @@ On return it contains the actual size of the address
 returned (in bytes).
 .Pp
 The address is truncated if the buffer provided is too small.
+.Pp
+Note: For the UNIX domain, the address length returned is the
+.Fa address_len
+parameter passed to the previous
+.Xr bind 2
+system call and not the
+.Va sa_len
+field of the
+.Fa address
+parameter passed to
+.Xr bind 2 .
 .Sh RETURN VALUES
 .Rv -std getsockname
 .Sh ERRORS

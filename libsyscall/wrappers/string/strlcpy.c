@@ -25,12 +25,12 @@
 
 __attribute__((visibility("hidden")))
 size_t
-strlcpy(char * restrict dst, const char * restrict src, size_t maxlen) {
-    const size_t srclen = strlen(src);
+_libkernel_strlcpy(char * restrict dst, const char * restrict src, size_t maxlen) {
+    const size_t srclen = _libkernel_strlen(src);
     if (srclen < maxlen) {
-        memcpy(dst, src, srclen+1);
+        _libkernel_memmove(dst, src, srclen+1);
     } else if (maxlen != 0) {
-        memcpy(dst, src, maxlen-1);
+        _libkernel_memmove(dst, src, maxlen-1);
         dst[maxlen-1] = '\0';
     }
     return srclen;

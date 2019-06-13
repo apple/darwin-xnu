@@ -166,6 +166,7 @@ IODataQueueEntry * IOSharedDataQueue::peek()
     }
 
     // Read head and tail with acquire barrier
+    // See rdar://problem/40780584 for an explanation of relaxed/acquire barriers
     headOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED);
     tailOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_ACQUIRE);
 
@@ -211,8 +212,9 @@ Boolean IOSharedDataQueue::enqueue(void * data, UInt32 dataSize)
     IODataQueueEntry * entry;
     
     // Force a single read of head and tail
-    head = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED);
+    // See rdar://problem/40780584 for an explanation of relaxed/acquire barriers
     tail = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_RELAXED);
+    head = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_ACQUIRE);
 
     // Check for overflow of entrySize
     if (dataSize > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) {
@@ -283,18 +285,28 @@ Boolean IOSharedDataQueue::enqueue(void * data, UInt32 dataSize)
         }
     }
 
-    // Update tail with release barrier
-    __c11_atomic_store((_Atomic UInt32 *)&dataQueue->tail, newTail, __ATOMIC_RELEASE);
-    
-    // Send notification (via mach message) that data is available.
-    
-    if ( ( tail == head )                                                   /* queue was empty prior to enqueue() */
-      || ( tail == __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED) ) )   /* queue was emptied during enqueue() */
-    {
-        sendDataAvailableNotification();
-    }
-    
-    return true;
+	// Publish the data we just enqueued
+	__c11_atomic_store((_Atomic UInt32 *)&dataQueue->tail, newTail, __ATOMIC_RELEASE);
+
+	if (tail != head) {
+		//
+		// The memory barrier below paris with the one in ::dequeue
+		// so that either our store to the tail cannot be missed by
+		// the next dequeue attempt, or we will observe the dequeuer
+		// making the queue empty.
+		//
+		// Of course, if we already think the queue is empty,
+		// there's no point paying this extra cost.
+		//
+		__c11_atomic_thread_fence(__ATOMIC_SEQ_CST);
+		head = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED);
+	}
+
+	if (tail == head) {
+		// Send notification (via mach message) that data is now available.
+		sendDataAvailableNotification();
+	}
+	return true;
 }
 
 Boolean IOSharedDataQueue::dequeue(void *data, UInt32 *dataSize)
@@ -306,13 +318,14 @@ Boolean IOSharedDataQueue::dequeue(void *data, UInt32 *dataSize)
     UInt32              tailOffset      = 0;
     UInt32              newHeadOffset   = 0;
 
-    if (!dataQueue) {
+	if (!dataQueue || (data && !dataSize)) {
         return false;
     }
 
     // Read head and tail with acquire barrier
-    tailOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_RELAXED);
-    headOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_ACQUIRE);
+    // See rdar://problem/40780584 for an explanation of relaxed/acquire barriers
+    headOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED);
+    tailOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_ACQUIRE);
 
     if (headOffset != tailOffset) {
         IODataQueueEntry *  head        = 0;
@@ -353,30 +366,30 @@ Boolean IOSharedDataQueue::dequeue(void *data, UInt32 *dataSize)
             }
             newHeadOffset   = headOffset + entrySize + DATA_QUEUE_ENTRY_HEADER_SIZE;
         }
-    }
+	} else {
+		// empty queue
+		return false;
+	}
 
-    if (entry) {
-        if (data) {
-            if (dataSize) {
-                if (entrySize <= *dataSize) {
-                    memcpy(data, &(entry->data), entrySize);
-                    __c11_atomic_store((_Atomic UInt32 *)&dataQueue->head, newHeadOffset, __ATOMIC_RELEASE);
-                } else {
-                    retVal = FALSE;
-                }
-            } else {
-                retVal = FALSE;
-            }
-        } else {
-            __c11_atomic_store((_Atomic UInt32 *)&dataQueue->head, newHeadOffset, __ATOMIC_RELEASE);
-        }
+	if (data) {
+		if (entrySize > *dataSize) {
+			// not enough space
+			return false;
+		}
+		memcpy(data, &(entry->data), entrySize);
+		*dataSize = entrySize;
+	}
 
-        if (dataSize) {
-            *dataSize = entrySize;
-        }
-    } else {
-        retVal = FALSE;
-    }
+	__c11_atomic_store((_Atomic UInt32 *)&dataQueue->head, newHeadOffset, __ATOMIC_RELEASE);
+
+	if (newHeadOffset == tailOffset) {
+		//
+		// If we are making the queue empty, then we need to make sure
+		// that either the enqueuer notices, or we notice the enqueue
+		// that raced with our making of the queue empty.
+		//
+		__c11_atomic_thread_fence(__ATOMIC_SEQ_CST);
+	}
     
     return retVal;
 }

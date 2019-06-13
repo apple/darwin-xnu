@@ -157,13 +157,13 @@ kperf_kdebug_set_filter(user_addr_t user_filter, uint32_t user_size)
 		return err;
 	}
 
+	n_debugids_provided = (uint32_t)KPERF_KDEBUG_N_DEBUGIDS(user_size);
+
 	/* detect disabling the filter completely */
-	if (user_filter == USER_ADDR_NULL || user_size == 0) {
+	if (n_debugids_provided == 0) {
 		bzero(kperf_kdebug_filter, sizeof(*kperf_kdebug_filter));
 		goto out;
 	}
-
-	n_debugids_provided = (uint32_t)KPERF_KDEBUG_N_DEBUGIDS(user_size);
 
 	if ((err = kperf_kdebug_set_n_debugids(n_debugids_provided))) {
 		goto out;

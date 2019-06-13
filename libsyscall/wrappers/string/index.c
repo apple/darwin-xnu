@@ -31,8 +31,7 @@
 
 __attribute__((visibility("hidden")))
 char *
-index
-(const char *p, int ch)
+_libkernel_strchr(const char *p, int ch)
 {
 	char c;
 

@@ -21,7 +21,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#if defined(__LP64__) || defined(__arm__)
+#if !defined(__i386__)
 
 #include <fcntl.h>
 #define __FCNTL	__fcntl

@@ -474,6 +474,7 @@ _proc_exiting
 _proc_find
 _proc_forcequota
 _proc_is64bit
+_proc_is64bit_data
 _proc_is_classic
 _proc_isinferior
 _proc_issignal

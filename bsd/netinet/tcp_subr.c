@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -90,6 +90,7 @@
 #include <net/route.h>
 #include <net/if.h>
 #include <net/content_filter.h>
+#include <net/ntstat.h>
 
 #define	tcp_minmssoverload fring
 #define	_IP_VHL
@@ -401,8 +402,6 @@ get_tcp_str_size(void)
 	return (sizeof(struct tcpcb));
 }
 
-int	tcp_freeq(struct tcpcb *tp);
-
 static int scale_to_powerof2(int size);
 
 /*
@@ -486,7 +485,8 @@ tcp_init(struct protosw *pp, struct domain *dp)
 
 	/* expose initial uptime/now via systcl for utcp to keep time sync */
 	tcp_now_init = tcp_now;
-	tcp_microuptime_init = tcp_uptime.tv_sec * 1000 + tcp_uptime.tv_usec;
+	tcp_microuptime_init =
+	    tcp_uptime.tv_usec + (tcp_uptime.tv_sec * USEC_PER_SEC);
 	SYSCTL_SKMEM_UPDATE_FIELD(tcp.microuptime_init, tcp_microuptime_init);
 	SYSCTL_SKMEM_UPDATE_FIELD(tcp.now_init, tcp_now_init);
 
@@ -639,21 +639,11 @@ tcp_init(struct protosw *pp, struct domain *dp)
 	 * maximum allowed receive and send socket buffer size.
 	 */
 	if (nmbclusters > 30720) {
-		#if CONFIG_EMBEDDED
-			tcp_autorcvbuf_max = 2 * 1024 * 1024;
-			tcp_autosndbuf_max = 2 * 1024 * 1024;
-		#else
-			tcp_autorcvbuf_max = 1024 * 1024;
-			tcp_autosndbuf_max = 1024 * 1024;
-		#endif /* CONFIG_EMBEDDED */
+		tcp_autorcvbuf_max = 2 * 1024 * 1024;
+		tcp_autosndbuf_max = 2 * 1024 * 1024;
+
 		SYSCTL_SKMEM_UPDATE_FIELD(tcp.autorcvbufmax, tcp_autorcvbuf_max);
 		SYSCTL_SKMEM_UPDATE_FIELD(tcp.autosndbufmax, tcp_autosndbuf_max);
-
-		/*
-		 * Receive buffer max for cellular interfaces supporting
-		 * Carrier Aggregation is higher
-		 */
-		tcp_autorcvbuf_max_ca = 2 * 1024 * 1024;
 	}
 }
 
@@ -926,7 +916,7 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 #endif
 
 #if NECP
-	necp_mark_packet_from_socket(m, tp ? tp->t_inpcb : NULL, 0, 0);
+	necp_mark_packet_from_socket(m, tp ? tp->t_inpcb : NULL, 0, 0, 0);
 #endif /* NECP */
 
 #if IPSEC
@@ -951,13 +941,18 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 		m->m_pkthdr.pkt_flowid = tp->t_inpcb->inp_flowhash;
 		m->m_pkthdr.pkt_flags |= (PKTF_FLOW_ID | PKTF_FLOW_LOCALSRC | PKTF_FLOW_ADV);
 		m->m_pkthdr.pkt_proto = IPPROTO_TCP;
+		m->m_pkthdr.tx_tcp_pid = tp->t_inpcb->inp_socket->last_pid;
+		m->m_pkthdr.tx_tcp_e_pid = tp->t_inpcb->inp_socket->e_pid;
 	}
 
 #if INET6
 	if (isipv6) {
-		struct ip6_out_args ip6oa = { tra->ifscope, { 0 },
-		    IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR, 0,
-		    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC};
+		struct ip6_out_args ip6oa;
+		bzero(&ip6oa, sizeof(ip6oa));
+		ip6oa.ip6oa_boundif = tra->ifscope;
+		ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR;
+		ip6oa.ip6oa_sotc = SO_TC_UNSPEC;
+		ip6oa.ip6oa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 		if (tra->ifscope != IFSCOPE_NONE)
 			ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
@@ -989,9 +984,12 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 	} else
 #endif /* INET6 */
 	{
-		struct ip_out_args ipoa = { tra->ifscope, { 0 },
-		    IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR, 0,
-		    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+		struct ip_out_args ipoa;
+		bzero(&ipoa, sizeof(ipoa));
+		ipoa.ipoa_boundif = tra->ifscope;
+		ipoa.ipoa_flags = IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR;
+		ipoa.ipoa_sotc = SO_TC_UNSPEC;
+		ipoa.ipoa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 		if (tra->ifscope != IFSCOPE_NONE)
 			ipoa.ipoa_flags |= IPOAF_BOUND_IF;
@@ -2133,16 +2131,28 @@ tcp_pcblist_n SYSCTL_HANDLER_ARGS
 
 
 SYSCTL_PROC(_net_inet_tcp, OID_AUTO, pcblist_n,
-	    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
-	    tcp_pcblist_n, "S,xtcpcb_n", "List of active TCP connections");
+	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
+	tcp_pcblist_n, "S,xtcpcb_n", "List of active TCP connections");
+
+static int
+tcp_progress_indicators SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+
+	return (ntstat_tcp_progress_indicators(req));
+}
+
+SYSCTL_PROC(_net_inet_tcp, OID_AUTO, progress,
+	CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY, 0, 0,
+	tcp_progress_indicators, "S", "Various items that indicate the current state of progress on the link");
 
 
 __private_extern__ void
 tcp_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
     bitstr_t *bitfield)
 {
-		inpcb_get_ports_used(ifindex, protocol, flags, bitfield,
-		    &tcbinfo);
+	inpcb_get_ports_used(ifindex, protocol, flags, bitfield,
+	    &tcbinfo);
 }
 
 __private_extern__ uint32_t
@@ -2404,7 +2414,7 @@ tcp6_ctlinput(int cmd, struct sockaddr *sa, void *d, __unused struct ifnet *ifp)
 	}
 
 	if (m == NULL ||
-	    (m->m_pkthdr.len < (int32_t) (off + offsetof(struct tcphdr, th_seq))))
+	    (m->m_pkthdr.len < (int32_t) (off + offsetof(struct tcphdr, th_ack))))
 		return;
 
 	th = (struct tcphdr *)(void *)mtodo(m, off);
@@ -2674,6 +2684,8 @@ tcp_mtudisc(
 
 		tp->t_maxseg = mss;
 
+		ASSERT(tp->t_maxseg);
+
 		/*
 		 * Reset the slow-start flight size as it may depends on the
 		 * new MSS
@@ -2866,15 +2878,15 @@ tcp_rtlookup6(struct inpcb *inp, unsigned int input_ifscope)
 		if (inp->inp_last_outifp == NULL) {
 			inp->inp_last_outifp = rt->rt_ifp;
 		}
-	}
 
-	/* Note if the peer is local */
-	if (rt != NULL && !(rt->rt_ifp->if_flags & IFF_POINTOPOINT) &&
-		(IN6_IS_ADDR_LOOPBACK(&inp->in6p_faddr) ||
-		IN6_IS_ADDR_LINKLOCAL(&inp->in6p_faddr) ||
-		rt->rt_gateway->sa_family == AF_LINK ||
-		in6_localaddr(&inp->in6p_faddr))) {
-		tp->t_flags |= TF_LOCAL;
+		/* Note if the peer is local */
+		if (!(rt->rt_ifp->if_flags & IFF_POINTOPOINT) &&
+                    (IN6_IS_ADDR_LOOPBACK(&inp->in6p_faddr) ||
+		     IN6_IS_ADDR_LINKLOCAL(&inp->in6p_faddr) ||
+		     rt->rt_gateway->sa_family == AF_LINK ||
+		     in6_localaddr(&inp->in6p_faddr))) {
+			tp->t_flags |= TF_LOCAL;
+		}
 	}
 
 	/*
@@ -3304,14 +3316,24 @@ calculate_tcp_clock(void)
  * defined by the constant tcp_autorcvbuf_max.
  */
 void
-tcp_set_max_rwinscale(struct tcpcb *tp, struct socket *so,
-    u_int32_t rcvbuf_max)
+tcp_set_max_rwinscale(struct tcpcb *tp, struct socket *so, struct ifnet *ifp)
 {
-	u_int32_t maxsockbufsize;
+	uint32_t maxsockbufsize;
+	uint32_t rcvbuf_max;
+
 	if (!tcp_do_rfc1323) {
 		tp->request_r_scale = 0;
 		return;
 	}
+
+	/*
+	 * When we start a connection and don't know about the interface, set
+	 * the scaling factor simply to the max - we can always announce less.
+	 */
+	if (!ifp || (IFNET_IS_CELLULAR(ifp) && (ifp->if_eflags & IFEF_3CA)))
+		rcvbuf_max = (tcp_autorcvbuf_max << 1);
+	else
+		rcvbuf_max = tcp_autorcvbuf_max;
 
 	tp->request_r_scale = max(tcp_win_scale, tp->request_r_scale);
 	maxsockbufsize = ((so->so_rcv.sb_flags & SB_USRSIZE) != 0) ?
@@ -3325,12 +3347,18 @@ tcp_set_max_rwinscale(struct tcpcb *tp, struct socket *so,
 }
 
 int
-tcp_notsent_lowat_check(struct socket *so) {
+tcp_notsent_lowat_check(struct socket *so)
+{
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp = NULL;
 	int notsent = 0;
+
 	if (inp != NULL) {
 		tp = intotcpcb(inp);
+	}
+
+	if (tp == NULL) {
+		return (0);
 	}
 
 	notsent = so->so_snd.sb_cc -

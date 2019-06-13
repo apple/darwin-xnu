@@ -67,17 +67,23 @@ __commpage_gettimeofday_internal(struct timeval *tp, uint64_t *tbr_out)
 
 	do {
 		TimeStamp_tick = *gtod_TimeStamp_tick_p;
-		TimeStamp_sec = *gtod_TimeStamp_sec_p;
-		TimeStamp_frac = *gtod_TimeStamp_frac_p;
-		Tick_scale = *gtod_Ticks_scale_p;
-		Ticks_per_sec = *gtod_Ticks_per_sec_p;
-
 		/*
 		 * This call contains an instruction barrier which will ensure that the
 		 * second read of the abs time isn't speculated above the reads of the
 		 * other values above
 		 */
 		now = mach_absolute_time();
+		TimeStamp_sec = *gtod_TimeStamp_sec_p;
+		TimeStamp_frac = *gtod_TimeStamp_frac_p;
+		Tick_scale = *gtod_Ticks_scale_p;
+		Ticks_per_sec = *gtod_Ticks_per_sec_p;
+		/*
+		 * This barrier prevents the reordering of the second read of gtod_TimeStamp_tick_p
+		 * w.r.t the values read just after mach_absolute_time is invoked.
+		 */
+#if	(__ARM_ARCH__ >= 7)
+		__asm__ volatile("dmb ishld" ::: "memory");
+#endif
 	} while (TimeStamp_tick != *gtod_TimeStamp_tick_p);
 
 	if (TimeStamp_tick == 0)
@@ -89,7 +95,11 @@ __commpage_gettimeofday_internal(struct timeval *tp, uint64_t *tbr_out)
 	if (delta >= Ticks_per_sec)
 		return(1);
 
-	tp->tv_sec = TimeStamp_sec;
+	if (TimeStamp_sec > __LONG_MAX__) {
+		return(1);
+	}
+
+	tp->tv_sec = (__darwin_time_t)TimeStamp_sec;
 
 	over = multi_overflow(Tick_scale, delta);
 	if(over){

@@ -130,6 +130,20 @@ ml_static_ptovirt(
 #endif
 } 
 
+vm_offset_t
+ml_static_slide(
+	vm_offset_t vaddr)
+{
+	return VM_KERNEL_SLIDE(vaddr);
+}
+
+vm_offset_t
+ml_static_unslide(
+	vm_offset_t vaddr)
+{
+	return VM_KERNEL_UNSLIDE(vaddr);
+}
+
 
 /*
  *	Routine:        ml_static_mfree
@@ -413,10 +427,6 @@ register_cpu(
 	if (this_cpu_datap->cpu_console_buf == NULL)
 		goto failed;
 
-	this_cpu_datap->cpu_chud = chudxnu_cpu_alloc(boot_cpu);
-	if (this_cpu_datap->cpu_chud == NULL)
-		goto failed;
-
 #if KPC
 	if (kpc_register_cpu(this_cpu_datap) != TRUE)
 		goto failed;
@@ -452,11 +462,10 @@ failed:
 #if NCOPY_WINDOWS > 0
 	pmap_cpu_free(this_cpu_datap->cpu_pmap);
 #endif
-	chudxnu_cpu_free(this_cpu_datap->cpu_chud);
 	console_cpu_free(this_cpu_datap->cpu_console_buf);
 #if KPC
 	kpc_unregister_cpu(this_cpu_datap);
-#endif
+#endif /* KPC */
 
 	return KERN_FAILURE;
 }
@@ -510,7 +519,7 @@ ml_processor_register(
     /* allocate and initialize other per-cpu structures */
     if (!boot_cpu) {
 	mp_cpus_call_cpu_init(cpunum);
-	prng_cpu_init(cpunum);
+	early_random_cpu_init(cpunum);
     }
 
     /* output arg */
@@ -801,7 +810,7 @@ boolean_t ml_is64bit(void) {
 
 boolean_t ml_thread_is64bit(thread_t thread) {
   
-        return (thread_is_64bit(thread));
+        return (thread_is_64bit_addr(thread));
 }
 
 
@@ -878,20 +887,21 @@ kernel_preempt_check(void)
 
 	assert(get_preemption_level() == 0);
 
-	__asm__ volatile("pushf; pop	%0" :  "=r" (flags));
-
-	intr = ((flags & EFL_IF) != 0);
-
-	if ((*ast_pending() & AST_URGENT) && intr == TRUE) {
+	if (__improbable(*ast_pending() & AST_URGENT)) {
 		/*
 		 * can handle interrupts and preemptions 
 		 * at this point
 		 */
+		__asm__ volatile("pushf; pop	%0" :  "=r" (flags));
+
+		intr = ((flags & EFL_IF) != 0);
 
 		/*
 		 * now cause the PRE-EMPTION trap
 		 */
-		__asm__ volatile ("int %0" :: "N" (T_PREEMPT));
+		if (intr == TRUE){
+			__asm__ volatile ("int %0" :: "N" (T_PREEMPT));
+		}
 	}
 }
 

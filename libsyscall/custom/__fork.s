@@ -132,6 +132,7 @@ Lparent:
 #include <mach/arm64/asm.h>
 	
 MI_ENTRY_POINT(___fork)
+	ARM64_STACK_PROLOG
 	PUSH_FRAME
 	// ARM moves a 1 in to r1 here, but I can't see why.
 	mov		x16, #SYS_fork				// Syscall code
@@ -144,14 +145,14 @@ MI_ENTRY_POINT(___fork)
 	mov		w0, #0	
 	str		w0, [x9]					// Clear cached current pid				
 	POP_FRAME							// And done
-	ret
+	ARM64_STACK_EPILOG
 
 Lbotch:
 	MI_CALL_EXTERNAL(_cerror)			// Handle error
 	mov		w0, #-1						// Return value is -1
 Lparent:
 	POP_FRAME							// Return
-	ret
+	ARM64_STACK_EPILOG
 
 #else
 #error Unsupported architecture

@@ -158,7 +158,13 @@ extern boolean_t task_is_exec_copy(task_t);
 thread_t cloneproc(task_t, coalition_t *, proc_t, int, int);
 proc_t forkproc(proc_t);
 void forkproc_free(proc_t);
-thread_t fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t child, int inherit_memory, int is64bit, int in_exec);
+thread_t fork_create_child(task_t parent_task,
+						   coalition_t *parent_coalitions,
+						   proc_t child,
+						   int inherit_memory,
+						   int is_64bit_addr,
+						   int is_64bit_data,
+						   int in_exec);
 void proc_vfork_begin(proc_t parent_proc);
 void proc_vfork_end(proc_t parent_proc);
 
@@ -738,14 +744,15 @@ vfork_return(proc_t child_proc, int32_t *retval, int rval)
  *
  * Parameters:	parent_task		parent task
  *		parent_coalitions	parent's set of coalitions
- *		child_proc		child process
+ *		child_proc			child process
  *		inherit_memory		TRUE, if the parents address space is
- *					to be inherited by the child
- *		is64bit			TRUE, if the child being created will
- *					be associated with a 64 bit process
- *					rather than a 32 bit process
- *		in_exec			TRUE, if called from execve or posix spawn set exec
- *					FALSE, if called from fork or vfexec
+ *							to be inherited by the child
+ *		is_64bit_addr		TRUE, if the child being created will
+ *							be associated with a 64 bit address space
+ *		is_64bit_data		TRUE if the child being created will use a
+							64-bit register state
+ *		in_exec				TRUE, if called from execve or posix spawn set exec
+ *							FALSE, if called from fork or vfexec
  *
  * Note:	This code is called in the fork() case, from the execve() call
  *		graph, if implementing an execve() following a vfork(), from
@@ -764,7 +771,13 @@ vfork_return(proc_t child_proc, int32_t *retval, int rval)
  *		in this case, 'inherit_memory' MUST be FALSE.
  */
 thread_t
-fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t child_proc, int inherit_memory, int is64bit, int in_exec)
+fork_create_child(task_t parent_task,
+				  coalition_t *parent_coalitions,
+				  proc_t child_proc,
+				  int inherit_memory,
+				  int is_64bit_addr,
+				  int is_64bit_data,
+				  int in_exec)
 {
 	thread_t	child_thread = NULL;
 	task_t		child_task;
@@ -774,7 +787,8 @@ fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t chi
 	result = task_create_internal(parent_task,
 					parent_coalitions,
 					inherit_memory,
-					is64bit,
+					is_64bit_addr,
+					is_64bit_data,
 					TF_LRETURNWAIT | TF_LRETURNWAITER,         /* All created threads will wait in task_wait_to_return */
 					in_exec ? TPF_EXEC_COPY : TPF_NONE,   /* Mark the task exec copy if in execve */
 					&child_task);
@@ -968,7 +982,26 @@ cloneproc(task_t parent_task, coalition_t *parent_coalitions, proc_t parent_proc
 		goto bad;
 	}
 
-	child_thread = fork_create_child(parent_task, parent_coalitions, child_proc, inherit_memory, parent_proc->p_flag & P_LP64, FALSE);
+	/*
+	 * In the case where the parent_task is TASK_NULL (during the init path)
+	 * we make the assumption that the register size will be the same as the
+	 * address space size since there's no way to determine the possible
+	 * register size until an image is exec'd.
+	 *
+	 * The only architecture that has different address space and register sizes
+	 * (arm64_32) isn't being used within kernel-space, so the above assumption
+	 * always holds true for the init path.
+	 */
+	const int parent_64bit_addr = parent_proc->p_flag & P_LP64;
+	const int parent_64bit_data = (parent_task == TASK_NULL) ? parent_64bit_addr : task_get_64bit_data(parent_task);
+
+	child_thread = fork_create_child(parent_task,
+									 parent_coalitions,
+									 child_proc,
+									 inherit_memory,
+									 parent_64bit_addr,
+									 parent_64bit_data,
+									 FALSE);
 
 	if (child_thread == NULL) {
 		/*
@@ -980,11 +1013,9 @@ cloneproc(task_t parent_task, coalition_t *parent_coalitions, proc_t parent_proc
 	}
 
 	child_task = get_threadtask(child_thread);
-	if (parent_proc->p_flag & P_LP64) {
-		task_set_64bit(child_task, TRUE);
+	if (parent_64bit_addr) {
 		OSBitOrAtomic(P_LP64, (UInt32 *)&child_proc->p_flag);
 	} else {
-		task_set_64bit(child_task, FALSE);
 		OSBitAndAtomic(~((uint32_t)P_LP64), (UInt32 *)&child_proc->p_flag);
 	}
 
@@ -1110,7 +1141,10 @@ forkproc_free(proc_t p)
 
 	/* Free allocated memory */
 	FREE_ZONE(p->p_sigacts, sizeof *p->p_sigacts, M_SIGACTS);
+	p->p_sigacts = NULL;
 	FREE_ZONE(p->p_stats, sizeof *p->p_stats, M_PSTATS);
+	p->p_stats = NULL;
+
 	proc_checkdeadrefs(p);
 	FREE_ZONE(p, sizeof *p, M_PROC);
 }
@@ -1162,6 +1196,7 @@ forkproc(proc_t parent_proc)
 	if (child_proc->p_sigacts == NULL) {
 		printf("forkproc: M_SUBPROC zone exhausted (p_sigacts)\n");
 		FREE_ZONE(child_proc->p_stats, sizeof *child_proc->p_stats, M_PSTATS);
+		child_proc->p_stats = NULL;
 		FREE_ZONE(child_proc, sizeof *child_proc, M_PROC);
 		child_proc = NULL;
 		goto bad;
@@ -1171,7 +1206,9 @@ forkproc(proc_t parent_proc)
 	child_proc->p_rcall = thread_call_allocate((thread_call_func_t)realitexpire, child_proc);
 	if (child_proc->p_rcall == NULL) {
 		FREE_ZONE(child_proc->p_sigacts, sizeof *child_proc->p_sigacts, M_SIGACTS);
+		child_proc->p_sigacts = NULL;
 		FREE_ZONE(child_proc->p_stats, sizeof *child_proc->p_stats, M_PSTATS);
+		child_proc->p_stats = NULL;
 		FREE_ZONE(child_proc, sizeof *child_proc, M_PROC);
 		child_proc = NULL;
 		goto bad;
@@ -1266,7 +1303,7 @@ retry:
 	if (parent_proc->p_flag & P_PROFIL)
 		startprofclock(child_proc);
 
-	child_proc->p_vfs_iopolicy = (parent_proc->p_vfs_iopolicy & (P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY));
+	child_proc->p_vfs_iopolicy = (parent_proc->p_vfs_iopolicy & (P_VFS_IOPOLICY_VALID_MASK));
 
 	/*
 	 * Note that if the current thread has an assumed identity, this
@@ -1416,7 +1453,7 @@ retry:
 	child_proc->p_memstat_memlimit_active   = 0;
 	child_proc->p_memstat_memlimit_inactive = 0;
 #if CONFIG_FREEZE
-	child_proc->p_memstat_suspendedfootprint = 0;
+	child_proc->p_memstat_freeze_sharedanon_pages = 0;
 #endif
 	child_proc->p_memstat_dirty = 0;
 	child_proc->p_memstat_idledeadline = 0;
@@ -1646,12 +1683,8 @@ uthread_cleanup(task_t task, void *uthread, void * bsd_info)
 	 */
 	assert(uth->uu_ar == NULL);
 
-	if (uth->uu_kqueue_bound) {
-		kevent_qos_internal_unbind(p,
-		                           0, /* didn't save qos_class */
-		                           uth->uu_thread,
-		                           uth->uu_kqueue_flags);
-		assert(uth->uu_kqueue_override_is_sync == 0);
+	if (uth->uu_kqr_bound) {
+		kqueue_threadreq_unbind(p, uth->uu_kqr_bound);
 	}
 
 	sel = &uth->uu_select;

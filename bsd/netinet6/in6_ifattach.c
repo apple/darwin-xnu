@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -746,10 +746,6 @@ skipmcast:
 		    sizeof(IN6_IFEXTRA(ifp)->icmp6_ifstat));
 		bzero(&IN6_IFEXTRA(ifp)->in6_ifstat,
 		    sizeof(IN6_IFEXTRA(ifp)->in6_ifstat));
-		IN6_IFEXTRA(ifp)->netsig_len = 0;
-		bzero(&IN6_IFEXTRA(ifp)->netsig,
-		    sizeof(IN6_IFEXTRA(ifp)->netsig));
-		bzero(IN6_IFEXTRA(ifp)->nat64_prefixes, sizeof(IN6_IFEXTRA(ifp)->nat64_prefixes));
 		/* XXX TBD Purge the layer two table */
 		/*
 		 * XXX When recycling, nd_ifinfo gets initialized, other
@@ -758,7 +754,7 @@ skipmcast:
 	}
 
 	/*
-	 * XXX Only initialize NDP ifinfo for the interface
+	 * XXX Only initialize IPv6 configuration for the interface
 	 * if interface has not yet been configured with
 	 * link local IPv6 address.
 	 * Could possibly be optimized with an interface flag if need
@@ -766,6 +762,11 @@ skipmcast:
 	 */
 	ia6 = in6ifa_ifpforlinklocal(ifp, 0);
 	if (ia6 == NULL) {
+		IN6_IFEXTRA(ifp)->netsig_len = 0;
+		bzero(&IN6_IFEXTRA(ifp)->netsig,
+		    sizeof(IN6_IFEXTRA(ifp)->netsig));
+		bzero(IN6_IFEXTRA(ifp)->nat64_prefixes,
+		    sizeof(IN6_IFEXTRA(ifp)->nat64_prefixes));
 		/* initialize NDP variables */
 		nd6_ifattach(ifp);
 	} else {

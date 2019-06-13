@@ -808,6 +808,12 @@ routine io_registry_entry_from_path_ool(
 
 #endif
 
+routine io_device_tree_entry_exists_with_name(
+	    master_port		: mach_port_t;
+	in  name		: io_name_t;
+	out exists		: boolean_t
+	);
+
 #endif /* IOKIT */
 
 /* vim: set ft=c : */

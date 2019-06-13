@@ -417,7 +417,7 @@ void vm_compressor_algorithm_init(void) {
 
 	PE_parse_boot_argn("vm_compressor_codec", &new_codec, sizeof(new_codec));
 	assertf(((new_codec == VM_COMPRESSOR_DEFAULT_CODEC) || (new_codec == CMODE_WK) ||
-		(new_codec == CMODE_LZ4) || (new_codec = CMODE_HYB)),
+		(new_codec == CMODE_LZ4) || (new_codec == CMODE_HYB)),
 	    "Invalid VM compression codec: %u", new_codec);
 
 #if defined(__arm__)||defined(__arm64__)

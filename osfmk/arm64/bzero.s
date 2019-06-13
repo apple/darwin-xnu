@@ -50,6 +50,7 @@
 .align 4
 _bzero:
 ___bzero:
+    ARM64_STACK_PROLOG
     PUSH_FRAME
     mov     x2,      x1
     eor     x1,      x1, x1
@@ -85,7 +86,7 @@ L_bzeroLarge:
     stp     x1, x1, [x3, #32]
     stp     x1, x1, [x3, #48]
     POP_FRAME
-	ret
+    ARM64_STACK_EPILOG
 
 /*****************************************************************************
  *  memset entrypoint                                                        *
@@ -98,6 +99,7 @@ L_bzeroLarge:
  */
 _secure_memset:
 _memset:
+    ARM64_STACK_PROLOG
     PUSH_FRAME
     and     x1,      x1, #0xff
     orr     x3,      xzr,#0x0101010101010101
@@ -134,7 +136,7 @@ L_memsetLarge:
     stp     x1, x1, [x3, #32]
     stp     x1, x1, [x3, #48]
     POP_FRAME
-	ret
+    ARM64_STACK_EPILOG
 
 /*****************************************************************************
  *  Small buffer store engine                                                *
@@ -150,4 +152,5 @@ L_memsetSmall:
     subs    x2,      x2, #1
     b.ne    1b
 2:  POP_FRAME
-	ret
+    ARM64_STACK_EPILOG
+

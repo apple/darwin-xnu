@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -50,6 +50,7 @@
 #include <net/if_ether.h>
 #include <net/net_api_stats.h>
 #include <net/route.h>
+#include <net/if_ports_used.h>
 #include <libkern/libkern.h>
 #include <libkern/OSAtomic.h>
 #include <kern/locks.h>
@@ -225,16 +226,18 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		}
 	}
 
+
+	/* Initialize external name (name + unit) */
+	(void) snprintf(if_xname, sizeof (if_xname), "%s%d",
+	    einit.name, einit.unit);
+
 	if (einit.uniqueid == NULL) {
-		/* Initialize external name (name + unit) */
-		(void) snprintf(if_xname, sizeof (if_xname), "%s%d",
-		    einit.name, einit.unit);
 		einit.uniqueid = if_xname;
 		einit.uniqueid_len = strlen(if_xname);
 	}
 
 	error = dlil_if_acquire(einit.family, einit.uniqueid,
-	    einit.uniqueid_len, &ifp);
+	    einit.uniqueid_len, if_xname, &ifp);
 
 	if (error == 0) {
 		u_int64_t br;
@@ -279,7 +282,7 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 
 		/* Initialize external name (name + unit) */
 		snprintf(__DECONST(char *, ifp->if_xname), IFXNAMSIZ,
-		    "%s%d", ifp->if_name, ifp->if_unit);
+		    "%s", if_xname);
 
 		/*
 		 * On embedded, framer() is already in the extended form;
@@ -1701,6 +1704,35 @@ ifnet_lastchange(ifnet_t interface, struct timeval *last_change)
 }
 
 errno_t
+ifnet_touch_lastupdown(ifnet_t interface)
+{
+	if (interface == NULL) {
+		return (EINVAL);
+	}
+
+	TOUCHLASTCHANGE(&interface->if_lastupdown);
+
+	return (0);
+}
+
+errno_t
+ifnet_updown_delta(ifnet_t interface, struct timeval *updown_delta)
+{
+	if (interface == NULL) {
+		return (EINVAL);
+	}
+
+	/* Calculate the delta */
+	updown_delta->tv_sec = net_uptime();
+	if (updown_delta->tv_sec > interface->if_data.ifi_lastupdown.tv_sec) {
+		updown_delta->tv_sec -= interface->if_data.ifi_lastupdown.tv_sec;
+	}
+	updown_delta->tv_usec = 0;
+
+	return (0);
+}
+
+errno_t
 ifnet_get_address_list(ifnet_t interface, ifaddr_t **addresses)
 {
 	return (addresses == NULL ? EINVAL :
@@ -2438,7 +2470,7 @@ ifaddr_findbestforaddr(const struct sockaddr *addr, ifnet_t interface)
 	if (addr == NULL || interface == NULL)
 		return (NULL);
 
-	return (ifaof_ifpforaddr(addr, interface));
+	return (ifaof_ifpforaddr_select(addr, interface));
 }
 
 errno_t
@@ -2612,7 +2644,10 @@ ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
 	}
 
 	/* bit string is long enough to hold 16-bit port values */
-	bzero(bitfield, bitstr_size(65536));
+	bzero(bitfield, bitstr_size(IP_PORTRANGE_SIZE));
+
+	if_ports_used_update_wakeuuid(ifp);
+
 
 		inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_WILDCARDOK) ?
 			INPCB_GET_PORTS_USED_WILDCARDOK : 0);
@@ -2625,7 +2660,6 @@ ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
 		inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_ACTIVEONLY) ?
 			INPCB_GET_PORTS_USED_ACTIVEONLY : 0);
 
-		
 		ifindex = (ifp != NULL) ? ifp->if_index : 0;
 
 		if (!(flags & IFNET_GET_LOCAL_PORTS_TCPONLY))
@@ -2635,6 +2669,7 @@ ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
 		if (!(flags & IFNET_GET_LOCAL_PORTS_UDPONLY))
 			tcp_get_ports_used(ifindex, protocol, inp_flags,
 			    bitfield);
+
 	return (0);
 }
 
@@ -2824,6 +2859,10 @@ ifnet_get_keepalive_offload_frames(ifnet_t ifp,
 
 	*used_frames_count = 0;
 	if (frames_array_count == 0)
+		return (0);
+
+	/* Keep-alive offload not required for CLAT interface */
+	if (IS_INTF_CLAT46(ifp))
 		return (0);
 
 	for (i = 0; i < frames_array_count; i++) {
@@ -3092,4 +3131,25 @@ ifnet_normalise_unsent_data(void)
 		ifnet_lock_done(ifp);
 	}
 	ifnet_head_done();
+}
+
+errno_t
+ifnet_set_low_power_mode(ifnet_t ifp, boolean_t on)
+{
+	errno_t error;
+
+	error = if_set_low_power(ifp, on);
+
+	return (error);
+}
+
+errno_t
+ifnet_get_low_power_mode(ifnet_t ifp, boolean_t *on)
+{
+	if (ifp == NULL || on == NULL)
+		return (EINVAL);
+
+	*on  = !!(ifp->if_xflags & IFXF_LOW_POWER);
+
+	return (0);
 }

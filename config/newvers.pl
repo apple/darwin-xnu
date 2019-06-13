@@ -14,6 +14,7 @@
 #   ###KERNEL_VERSION_REVISION###           3
 #   ###KERNEL_VERSION_STAGE###              VERSION_STAGE_BETA	(see libkern/version.h)
 #   ###KERNEL_VERSION_PRERELEASE_LEVEL###   4
+#   ###KERNEL_BUILD_CONFIG###               development
 #   ###KERNEL_BUILDER###                    root
 #   ###KERNEL_BUILD_OBJROOT###              xnu/xnu-690.obj~2/RELEASE_PPC
 #   ###KERNEL_BUILD_DATE###                 Sun Oct 24 05:33:28 PDT 2004
@@ -56,6 +57,8 @@ my $BUILD_OBJPATH=$ENV{'TARGET'} || $ENV{'OBJROOT'};
 $BUILD_OBJPATH =~ s,/+$,,;
 my $BUILD_DATE = `date`;
 $BUILD_DATE =~ s/[\n\t]//g;
+my $BUILD_CONFIG = "unknown";
+$BUILD_CONFIG = $ENV{'CURRENT_KERNEL_CONFIG_LC'} if defined($ENV{'CURRENT_KERNEL_CONFIG_LC'});
 my $BUILDER=`whoami`;
 $BUILDER =~ s/[\n\t]//g;
 my $RC_STRING = $ENV{'RC_ProjectNameAndSourceVersion'} . "~" . $ENV{'RC_ProjectBuildVersion'} if defined($ENV{'RC_XBS'});
@@ -166,6 +169,7 @@ foreach $file (@ARGV) {
   $count += $data =~ s/###KERNEL_VERSION_REVISION###/$VERSION_REVISION/g;
   $count += $data =~ s/###KERNEL_VERSION_STAGE###/$VERSION_STAGE/g;
   $count += $data =~ s/###KERNEL_VERSION_PRERELEASE_LEVEL###/$VERSION_PRERELEASE_LEVEL/g;
+  $count += $data =~ s/###KERNEL_BUILD_CONFIG###/$BUILD_CONFIG/g;
   $count += $data =~ s/###KERNEL_BUILDER###/$BUILDER/g;
   $count += $data =~ s/###KERNEL_BUILD_OBJROOT###/$BUILD_OBJROOT/g;
   $count += $data =~ s/###KERNEL_BUILD_DATE###/$BUILD_DATE/g;
@@ -183,6 +187,7 @@ if (0==scalar @ARGV) {
   print "newvers.pl: ###KERNEL_VERSION_REVISION### = $VERSION_REVISION\n";
   print "newvers.pl: ###KERNEL_VERSION_STAGE### = $VERSION_STAGE\n";
   print "newvers.pl: ###KERNEL_VERSION_PRERELEASE_LEVEL### = $VERSION_PRERELEASE_LEVEL\n";
+  print "newvers.pl: ###KERNEL_BUILD_CONFIG### = $BUILD_CONFIG\n";
   print "newvers.pl: ###KERNEL_BUILDER### = $BUILDER\n";
   print "newvers.pl: ###KERNEL_BUILD_OBJROOT### = $BUILD_OBJROOT\n";
   print "newvers.pl: ###KERNEL_BUILD_DATE### = $BUILD_DATE\n";

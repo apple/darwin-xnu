@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010, 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -150,11 +150,12 @@ struct task {
 	_Atomic uint32_t	ref_count;	/* Number of references to me */
 	boolean_t	active;		/* Task has not been terminated */
 	boolean_t	halting;	/* Task is being halted */
+	/* Virtual timers */
+	uint32_t		vtimers;
 
 	/* Miscellaneous */
 	vm_map_t	map;		/* Address space description */
 	queue_chain_t	tasks;	/* global list of tasks */
-	void		*user_data;	/* Arbitrary data settable via IPC */
 
 #if defined(CONFIG_SCHED_MULTIQ)
 	sched_group_t sched_group;
@@ -182,14 +183,12 @@ struct task {
 	/* Task security and audit tokens */
 	security_token_t sec_token;
 	audit_token_t	audit_token;
-        
+
 	/* Statistics */
 	uint64_t		total_user_time;	/* terminated threads only */
 	uint64_t		total_system_time;
 	uint64_t		total_ptime;
-	
-	/* Virtual timers */
-	uint32_t		vtimers;
+	uint64_t		total_runnable_time;
 
 	/* IPC structures */
 	decl_lck_mtx_data(,itk_lock_data)
@@ -210,11 +209,10 @@ struct task {
 
 	struct ipc_space *itk_space;
 
+	ledger_t	ledger;
 	/* Synchronizer ownership information */
 	queue_head_t	semaphore_list;		/* list of owned semaphores   */
 	int		semaphores_owned;	/* number of semaphores owned */
-
-	ledger_t	ledger;
 
 	unsigned int	priv_flags;			/* privilege resource flags */
 #define VM_BACKING_STORE_PRIV	0x1
@@ -256,15 +254,28 @@ struct task {
 #define TF_LRETURNWAIT          0x00000100                              /* task is waiting for fork/posix_spawn/exec to complete */
 #define TF_LRETURNWAITER        0x00000200                              /* task is waiting for TF_LRETURNWAIT to get cleared */
 #define TF_PLATFORM             0x00000400                              /* task is a platform binary */
+#define TF_CA_CLIENT_WI         0x00000800                              /* task has CA_CLIENT work interval */
+#define TF_DARKWAKE_MODE        0x00001000                              /* task is in darkwake mode */
 
-#define task_has_64BitAddr(task)	\
-	 (((task)->t_flags & TF_64B_ADDR) != 0)
-#define task_set_64BitAddr(task)	\
-	 ((task)->t_flags |= TF_64B_ADDR)
-#define task_clear_64BitAddr(task)	\
-	 ((task)->t_flags &= ~TF_64B_ADDR)
-#define task_has_64BitData(task)    \
-	 (((task)->t_flags & TF_64B_DATA) != 0)
+/*
+ * Task is running within a 64-bit address space.
+ */
+#define task_has_64Bit_addr(task)	\
+	(((task)->t_flags & TF_64B_ADDR) != 0)
+#define task_set_64Bit_addr(task)	\
+	((task)->t_flags |= TF_64B_ADDR)
+#define task_clear_64Bit_addr(task)	\
+	((task)->t_flags &= ~TF_64B_ADDR)
+
+/*
+ * Task is using 64-bit machine state.
+ */
+#define task_has_64Bit_data(task)	\
+	(((task)->t_flags & TF_64B_DATA) != 0)
+#define task_set_64Bit_data(task)	\
+	((task)->t_flags |= TF_64B_DATA)
+#define task_clear_64Bit_data(task)	\
+	((task)->t_flags &= ~TF_64B_DATA)
 
 #define task_is_a_corpse(task)      \
 	 (((task)->t_flags & TF_CORPSE) != 0)
@@ -288,6 +299,9 @@ struct task {
 #define TPF_NONE                 0
 #define TPF_DID_EXEC             0x00000001                              /* task has been execed to a new task */
 #define TPF_EXEC_COPY            0x00000002                              /* task is the new copy of an exec */
+#ifdef CONFIG_32BIT_TELEMETRY
+#define TPF_LOG_32BIT_TELEMETRY  0x00000004                              /* task should log identifying information */
+#endif
 
 #define task_did_exec_internal(task)		\
 	(((task)->t_procflags & TPF_DID_EXEC) != 0)
@@ -298,12 +312,10 @@ struct task {
 	mach_vm_address_t	all_image_info_addr; /* dyld __all_image_info     */
 	mach_vm_size_t		all_image_info_size; /* section location and size */
 
-#if KPERF
-#define TASK_PMC_FLAG			0x1	/* Bit in "t_chud" signifying PMC interest */
-#define TASK_KPC_FORCED_ALL_CTRS	0x2	/* Bit in "t_chud" signifying KPC forced all counters */
-
-	uint32_t t_chud;		/* CHUD flags, used for Shark */
-#endif
+#if KPC
+#define TASK_KPC_FORCED_ALL_CTRS	0x2	/* Bit in "t_kpc" signifying this task forced all counters */
+	uint32_t t_kpc; /* kpc flags */
+#endif /* KPC */
 
 	boolean_t pidsuspended; /* pid_suspend called; no threads can execute */
 	boolean_t frozen;       /* frozen; private resident pages committed to swap */
@@ -314,8 +326,11 @@ struct task {
 	         applied_ru_cpu_ext     :4;
 	uint8_t  rusage_cpu_flags;
 	uint8_t  rusage_cpu_percentage;		/* Task-wide CPU limit percentage */
-	uint64_t rusage_cpu_interval;		/* Task-wide CPU limit interval */
 	uint8_t  rusage_cpu_perthr_percentage;  /* Per-thread CPU limit percentage */
+#if MACH_ASSERT
+	int8_t		suspends_outstanding;	/* suspends this task performed in excess of resumes */
+#endif
+	uint64_t rusage_cpu_interval;		/* Task-wide CPU limit interval */
 	uint64_t rusage_cpu_perthr_interval;    /* Per-thread CPU limit interval */
 	uint64_t rusage_cpu_deadline;
 	thread_call_t rusage_cpu_callt;
@@ -335,10 +350,6 @@ struct task {
 #endif /* IMPORTANCE_INHERITANCE */
 
 	vm_extmod_statistics_data_t	extmod_statistics;
-
-#if MACH_ASSERT
-	int8_t		suspends_outstanding;	/* suspends this task performed in excess of resumes */
-#endif
 
 	struct task_requested_policy requested_policy;
 	struct task_effective_policy effective_policy;
@@ -368,7 +379,8 @@ struct task {
 	/* 
 	 * The cpu_time_qos_stats fields are protected by the task lock
 	 */
-	struct _cpu_time_qos_stats 	cpu_time_qos_stats;
+	struct _cpu_time_qos_stats 	cpu_time_eqos_stats;
+	struct _cpu_time_qos_stats 	cpu_time_rqos_stats;
 
 	/* Statistics accumulated for terminated threads from this task */
 	uint32_t	task_timer_wakeups_bin_1;
@@ -387,7 +399,16 @@ struct task {
 	int		task_nonvolatile_objects;
 	boolean_t	task_purgeable_disowning;
 	boolean_t	task_purgeable_disowned;
+	queue_head_t	task_objq;
+	decl_lck_mtx_data(,task_objq_lock) /* protects "task_objq" */
 
+	unsigned int	task_thread_limit:16;
+#if __arm64__
+	unsigned int	task_legacy_footprint:1;
+#endif /* __arm64__ */
+	unsigned int	task_region_footprint:1;
+	unsigned int	task_has_crossed_thread_limit:1;
+	uint32_t	exec_token;
 	/*
 	 * A task's coalition set is "adopted" in task_create_internal
 	 * and unset in task_deallocate_internal, so each array member
@@ -409,19 +430,43 @@ struct task {
 #endif /* HYPERVISOR */
 
 #if CONFIG_SECLUDED_MEMORY
-	boolean_t	task_can_use_secluded_mem;
-	boolean_t	task_could_use_secluded_mem;
-	boolean_t	task_could_also_use_secluded_mem;
+	uint8_t	task_can_use_secluded_mem;
+	uint8_t	task_could_use_secluded_mem;
+	uint8_t	task_could_also_use_secluded_mem;
+	uint8_t	task_suppressed_secluded;
 #endif /* CONFIG_SECLUDED_MEMORY */
 
+	uint32_t task_exc_guard;
+
 	queue_head_t    io_user_clients;
-	uint32_t	exec_token;
 };
+
+#define TASK_EXC_GUARD_VM_DELIVER            0x01 /* Deliver virtual memory EXC_GUARD exceptions */
+#define TASK_EXC_GUARD_VM_ONCE               0x02 /* Deliver them only once */
+#define TASK_EXC_GUARD_VM_CORPSE             0x04 /* Deliver them via a forked corpse */
+#define TASK_EXC_GUARD_VM_FATAL              0x08 /* Virtual Memory EXC_GUARD delivery is fatal */
+#define TASK_EXC_GUARD_VM_ALL                0x0f
+
+#define TASK_EXC_GUARD_MP_DELIVER            0x10 /* Deliver mach port EXC_GUARD exceptions */
+#define TASK_EXC_GUARD_MP_ONCE               0x20 /* Deliver them only once */
+#define TASK_EXC_GUARD_MP_CORPSE             0x04 /* Deliver them via a forked corpse */
+#define TASK_EXC_GUARD_MP_FATAL              0x80 /* mach port EXC_GUARD delivery is fatal */
+
+extern uint32_t task_exc_guard_default;
+
+extern kern_return_t
+task_violated_guard(mach_exception_code_t, mach_exception_subcode_t, void *);
 
 #define task_lock(task)		 	lck_mtx_lock(&(task)->lock)
 #define	task_lock_assert_owned(task)	LCK_MTX_ASSERT(&(task)->lock, LCK_MTX_ASSERT_OWNED)
 #define task_lock_try(task)	 	lck_mtx_try_lock(&(task)->lock)
 #define task_unlock(task)	 	lck_mtx_unlock(&(task)->lock)
+
+#define	task_objq_lock_init(task)	lck_mtx_init(&(task)->task_objq_lock, &vm_object_lck_grp, &vm_object_lck_attr)
+#define task_objq_lock(task)		lck_mtx_lock(&(task)->task_objq_lock)
+#define	task_objq_lock_assert_owned(task)	LCK_MTX_ASSERT(&(task)->task_objq_lock, LCK_MTX_ASSERT_OWNED)
+#define task_objq_lock_try(task)	lck_mtx_try_lock(&(task)->task_objq_lock)
+#define task_objq_unlock(task)	 	lck_mtx_unlock(&(task)->task_objq_lock)
 
 #define	itk_lock_init(task)	lck_mtx_init(&(task)->itk_lock_data, &ipc_lck_grp, &ipc_lck_attr)
 #define	itk_lock_destroy(task)	lck_mtx_destroy(&(task)->itk_lock_data, &ipc_lck_grp)
@@ -464,7 +509,6 @@ extern void		init_task_ledgers(void);
 
 extern lck_attr_t      task_lck_attr;
 extern lck_grp_t       task_lck_grp;
-
 
 #else	/* MACH_KERNEL_PRIVATE */
 
@@ -540,8 +584,9 @@ extern kern_return_t	task_freeze(
 							uint32_t	*clean_count,
 							uint32_t	*dirty_count,
 							uint32_t	dirty_budget,
-							boolean_t	*shared,
-							boolean_t	walk_only);
+							uint32_t	*shared_count,
+							int		*freezer_error_code,
+							boolean_t	eval_only);
 
 /* Thaw a currently frozen task */
 extern kern_return_t	task_thaw(
@@ -565,6 +610,7 @@ extern kern_return_t	task_create_internal(
 							coalition_t	*parent_coalitions,
 							boolean_t	inherit_memory,
 							boolean_t	is_64bit,
+							boolean_t	is_64bit_data,
 							uint32_t	flags,
 							uint32_t	procflags,
 							task_t		*child_task);	/* OUT */
@@ -589,6 +635,10 @@ extern uint64_t		task_energy(
 
 extern uint64_t		task_cpu_ptime(
 							task_t	 task);
+extern void		task_update_cpu_time_qos_stats(
+							task_t	 task,
+							uint64_t *eqos_stats,
+							uint64_t *rqos_stats);
 
 extern void		task_vtimer_set(
 					task_t		task,
@@ -609,14 +659,18 @@ extern void		task_vtimer_update(
 
 extern void		task_set_64bit(
 					task_t		task,
-					boolean_t	is64bit);
+					boolean_t	is_64bit,
+					boolean_t	is_64bit_data);
+
+extern boolean_t	task_get_64bit_data(
+						task_t task);
 
 extern void 	task_set_platform_binary(
 					task_t task,
 					boolean_t is_platform);
-
-extern void		task_backing_store_privileged(
-					task_t		task);
+extern bool	task_set_ca_client_wi(
+					task_t task,
+					boolean_t ca_client_wi);
 
 extern void		task_set_dyld_info(
     					task_t		task,
@@ -648,7 +702,9 @@ extern uint64_t	get_task_resident_size(task_t);
 extern uint64_t	get_task_compressed(task_t);
 extern uint64_t	get_task_resident_max(task_t);
 extern uint64_t	get_task_phys_footprint(task_t);
-extern uint64_t	get_task_phys_footprint_recent_max(task_t);
+#if CONFIG_LEDGER_INTERVAL_MAX
+extern uint64_t	get_task_phys_footprint_interval_max(task_t, int reset);
+#endif /* CONFIG_FOOTPRINT_INTERVAL_MAX */
 extern uint64_t	get_task_phys_footprint_lifetime_max(task_t);
 extern uint64_t	get_task_phys_footprint_limit(task_t);
 extern uint64_t	get_task_purgeable_size(task_t);
@@ -667,6 +723,9 @@ extern uint64_t get_task_alternate_accounting(task_t);
 extern uint64_t get_task_alternate_accounting_compressed(task_t);
 extern uint64_t get_task_memory_region_count(task_t);
 extern uint64_t get_task_page_table(task_t);
+extern uint64_t get_task_network_nonvolatile(task_t);
+extern uint64_t get_task_network_nonvolatile_compressed(task_t);
+extern uint64_t get_task_wired_mem(task_t);
 
 extern kern_return_t task_convert_phys_footprint_limit(int, int *);
 extern kern_return_t task_set_phys_footprint_limit_internal(task_t, int, int *, boolean_t, boolean_t);
@@ -679,6 +738,9 @@ extern void task_set_memlimit_is_active(task_t task, boolean_t memlimit_is_activ
 extern void task_set_memlimit_is_fatal(task_t task, boolean_t memlimit_is_fatal);
 extern boolean_t task_has_triggered_exc_resource(task_t task, boolean_t memlimit_is_active);
 extern void task_mark_has_triggered_exc_resource(task_t task, boolean_t memlimit_is_active);
+
+extern void task_set_thread_limit(task_t task, uint16_t thread_limit);
+
 
 extern boolean_t	is_kerneltask(task_t task);
 extern boolean_t	is_corpsetask(task_t task);
@@ -716,6 +778,10 @@ struct _task_ledger_indices {
 	int purgeable_nonvolatile;
 	int purgeable_volatile_compressed;
 	int purgeable_nonvolatile_compressed;
+	int network_volatile;
+	int network_nonvolatile;
+	int network_volatile_compressed;
+	int network_nonvolatile_compressed;
 	int platform_idle_wakeups;
 	int interrupt_wakeups;
 #if CONFIG_SCHED_SFI
@@ -742,10 +808,14 @@ extern void task_set_did_exec_flag(task_t task);
 extern void task_clear_exec_copy_flag(task_t task);
 extern boolean_t task_is_exec_copy(task_t);
 extern boolean_t task_did_exec(task_t task);
+#ifdef CONFIG_32BIT_TELEMETRY
+extern boolean_t task_consume_32bit_log_flag(task_t task);
+extern void task_set_32bit_log_flag(task_t task);
+#endif /* CONFIG_32BIT_TELEMETRY */
 extern boolean_t task_is_active(task_t task);
 extern boolean_t task_is_halting(task_t task);
 extern void task_clear_return_wait(task_t task);
-extern void task_wait_to_return(void);
+extern void task_wait_to_return(void) __attribute__((noreturn));
 extern event_t task_get_return_wait_event(task_t task);
 
 extern void task_atm_reset(task_t task);
@@ -803,9 +873,18 @@ extern void task_set_could_use_secluded_mem(
 extern void task_set_could_also_use_secluded_mem(
 	task_t task,
 	boolean_t could_also_use_secluded_mem);
-extern boolean_t task_can_use_secluded_mem(task_t task);
+extern boolean_t task_can_use_secluded_mem(
+	task_t task,
+	boolean_t is_allocate);
 extern boolean_t task_could_use_secluded_mem(task_t task);
 #endif /* CONFIG_SECLUDED_MEMORY */
+
+extern void task_set_darkwake_mode(task_t, boolean_t);
+extern boolean_t task_get_darkwake_mode(task_t);
+
+#if __arm64__
+extern void task_set_legacy_footprint(task_t task, boolean_t new_val);
+#endif /* __arm64__ */
 
 #if CONFIG_MACF
 extern struct label *get_task_crash_label(task_t task);
@@ -826,6 +905,10 @@ extern void		task_inspect_deallocate(
 
 extern void		task_suspension_token_deallocate(
 					task_suspension_token_t	token);
+
+extern boolean_t task_self_region_footprint(void);
+extern void task_self_region_footprint_set(boolean_t newval);
+
 __END_DECLS
 
 #endif	/* _KERN_TASK_H_ */

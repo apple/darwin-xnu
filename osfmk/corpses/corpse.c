@@ -369,9 +369,11 @@ task_purge_all_corpses(void)
 			       * Final cleanup:
 			       * + no unnesting
 			       * + remove immutable mappings
+			       * + allow gaps in the range
 			       */
 			      (VM_MAP_REMOVE_NO_UNNESTING |
-			       VM_MAP_REMOVE_IMMUTABLE));
+			       VM_MAP_REMOVE_IMMUTABLE |
+			       VM_MAP_REMOVE_GAPS_OK));
 	}
 
 	lck_mtx_unlock(&tasks_corpse_lock);
@@ -413,7 +415,9 @@ task_generate_corpse(
 	if (kr != KERN_SUCCESS) {
 		return kr;
 	}
-	assert(thread == THREAD_NULL);
+	if (thread != THREAD_NULL) {
+		thread_deallocate(thread);
+	}
 
 	/* wait for all the threads in the task to terminate */
 	task_lock(new_task);
@@ -476,7 +480,9 @@ task_enqueue_exception_with_corpse(
 	kr = task_generate_corpse_internal(task, &new_task, &thread,
 			etype, code[0], code[1], reason);
 	if (kr == KERN_SUCCESS) {
-		assert(thread != THREAD_NULL);
+		if (thread == THREAD_NULL) {
+			return KERN_FAILURE;
+		}
 		assert(new_task != TASK_NULL);
 		assert(etype == EXC_RESOURCE || etype == EXC_GUARD);
 		thread_exception_enqueue(new_task, thread, etype);
@@ -512,7 +518,8 @@ task_generate_corpse_internal(
 	thread_t thread_next = THREAD_NULL;
 	kern_return_t kr;
 	struct proc *p = NULL;
-	int is64bit;
+	int is_64bit_addr;
+	int is_64bit_data;
 	int t_flags;
 	uint64_t *udata_buffer = NULL;
 	int size = 0;
@@ -543,8 +550,13 @@ task_generate_corpse_internal(
 		goto error_task_generate_corpse;
 	}
 
-	is64bit = IS_64BIT_PROCESS(p);
-	t_flags = TF_CORPSE_FORK | TF_PENDING_CORPSE | TF_CORPSE | (is64bit ? TF_64B_ADDR : TF_NONE);
+	is_64bit_addr = IS_64BIT_PROCESS(p);
+	is_64bit_data = (task == TASK_NULL) ? is_64bit_addr : task_get_64bit_data(task);
+	t_flags = TF_CORPSE_FORK |
+			  TF_PENDING_CORPSE |
+			  TF_CORPSE |
+			  (is_64bit_addr ? TF_64B_ADDR : TF_NONE) |
+			  (is_64bit_data ? TF_64B_DATA : TF_NONE);
 
 #if CONFIG_MACF
 	/* Create the corpse label credentials from the process. */
@@ -555,7 +567,8 @@ task_generate_corpse_internal(
 	kr = task_create_internal(task,
 				NULL,
 				TRUE,
-				is64bit,
+				is_64bit_addr,
+				is_64bit_data,
 				t_flags,
 				TPF_NONE,
 				&new_task);

@@ -169,6 +169,25 @@ PRIVATE_KERNELFILES = \
 	fsevents.h \
 	work_interval.h \
 
+XNU_ONLY_EXPORTS = \
+	bsdtask_info.h \
+	file_internal.h \
+	filedesc.h \
+	guarded.h \
+	linker_set.h \
+	mount_internal.h \
+	munge.h \
+	pipe.h \
+	proc_internal.h \
+	pthread_internal.h \
+	resourcevar.h \
+	semaphore.h \
+	tree.h \
+	uio_internal.h \
+	ulock.h \
+	ux_exception.h \
+	vnode_internal.h
+
 # /usr/include
 INSTALL_MI_LIST	= ${DATAFILES}
 
@@ -176,9 +195,7 @@ INSTALL_MI_GEN_LIST = syscall.h _posix_availability.h _symbol_aliasing.h
 
 INSTALL_MI_DIR = sys
 
-EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} linker_set.h bsdtask_info.h pthread_internal.h filedesc.h pipe.h resourcevar.h semaphore.h \
-								vnode_internal.h proc_internal.h file_internal.h mount_internal.h \
-								uio_internal.h tree.h munge.h guarded.h ulock.h
+EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} ${XNU_ONLY_EXPORTS}
 
 EXPORT_MI_GEN_LIST = syscall.h sysproto.h kdebugevents.h
 

@@ -37,7 +37,6 @@ extern "C" {
 #include <sys/types.h>
 #include <sys/queue.h>
 #include <mach/boolean.h>
-#include <mach/branch_predicates.h>
 #include <kern/locks.h>
 #include <libkern/OSAtomic.h>
 

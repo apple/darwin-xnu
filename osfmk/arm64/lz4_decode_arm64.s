@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <vm/lz4_assembly_select.h>
+#include <arm64/asm.h>
 #if LZ4_ENABLE_ASSEMBLY_DECODE_ARM64
 
 /*
@@ -73,13 +74,14 @@
 #define src_good          x20
 
 .macro establish_frame
+    ARM64_STACK_PROLOG
     stp     fp, lr,    [sp, #-16]!
     mov     fp, sp
 .endm
 
 .macro clear_frame_and_return
     ldp     fp, lr,    [sp], #16
-    ret     lr
+    ARM64_STACK_EPILOG
 .endm
 
 // copy_1x16 SOURCE_ADDR DESTINATION_ADDR

@@ -94,6 +94,8 @@ typedef struct {
 /* Returns the count (n) of a ccn vector that can represent _size_ bytes. */
 #define ccn_nof_size(_size_)  (((_size_) + CCN_UNIT_SIZE - 1) / CCN_UNIT_SIZE)
 
+#define ccn_nof_sizeof(_expr_) ccn_nof_size(sizeof (_expr_))
+
 /* Return the max number of bits a ccn vector of _n_ units can hold. */
 #define ccn_bitsof_n(_n_)  ((_n_) * CCN_UNIT_BITS)
 
@@ -283,7 +285,7 @@ typedef struct {
 #define CCN521_N  ccn_nof(521)
 
 /* Return the number of used units after stripping leading 0 units.  */
-CC_PURE CC_NONNULL2
+CC_PURE CC_NONNULL((2))
 cc_size ccn_n(cc_size n, const cc_unit *s);
 
 /* s >> k -> r return bits shifted out of least significant word in bits [0, n>
@@ -292,28 +294,12 @@ cc_size ccn_n(cc_size n, const cc_unit *s);
  word shifts.  */
 CC_NONNULL((2, 3))
 cc_unit ccn_shift_right(cc_size n, cc_unit *r, const cc_unit *s, size_t k);
-CC_NONNULL((2, 3))
-void ccn_shift_right_multi(cc_size n, cc_unit *r,const cc_unit *s, size_t k);
-
-/* s << k -> r return bits shifted out of most significant word in bits [0, n>
- { N bit, scalar -> N bit } N = n * sizeof(cc_unit) * 8
- the _multi version doesn't return the shifted bits, but does support multiple
- word shifts */
-CC_NONNULL((2, 3))
-cc_unit ccn_shift_left(cc_size n, cc_unit *r, const cc_unit *s, size_t k);
-CC_NONNULL((2, 3))
-void ccn_shift_left_multi(cc_size n, cc_unit *r, const cc_unit *s, size_t k);
 
 /* s == 0 -> return 0 | s > 0 -> return index (starting at 1) of most
  significant bit that is 1.
  { N bit } N = n * sizeof(cc_unit) * 8 */
-CC_NONNULL2
+CC_NONNULL((2))
 size_t ccn_bitlen(cc_size n, const cc_unit *s);
-
-/* Returns the number of bits which are zero before the first one bit
-   counting from least to most significant bit. */
-CC_NONNULL2
-size_t ccn_trailing_zeros(cc_size n, const cc_unit *s);
 
 /* s == 0 -> return true | s != 0 -> return false
  { N bit } N = n * sizeof(cc_unit) * 8 */
@@ -347,9 +333,6 @@ int ccn_cmpn(cc_size ns, const cc_unit *s,
  { N bit, N bit -> N bit } N = n * sizeof(cc_unit) * 8 */
 CC_NONNULL((2, 3, 4))
 cc_unit ccn_sub(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit *t);
-
-/* |s - t| -> r return 1 iff t > s, 0 otherwise */
-cc_unit ccn_abs(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit *t);
 
 /* s - v -> r return 1 iff v > s return 0 otherwise.
  { N bit, sizeof(cc_unit) * 8 bit -> N bit } N = n * sizeof(cc_unit) * 8 */
@@ -388,22 +371,11 @@ cc_unit ccn_addn(cc_size n, cc_unit *r, const cc_unit *s,
 }
 
 
-CC_NONNULL((2, 3, 4))
-void ccn_lcm(cc_size n, cc_unit *r2n, const cc_unit *s, const cc_unit *t);
-
-
 /* s * t -> r_2n                   r_2n must not overlap with s nor t
  { n bit, n bit -> 2 * n bit } n = count * sizeof(cc_unit) * 8
  { N bit, N bit -> 2N bit } N = ccn_bitsof(n) */
 CC_NONNULL((2, 3, 4))
 void ccn_mul(cc_size n, cc_unit *r_2n, const cc_unit *s, const cc_unit *t);
-
-/* s * t -> r_2n                   r_2n must not overlap with s nor t
- { n bit, n bit -> 2 * n bit } n = count * sizeof(cc_unit) * 8
- { N bit, N bit -> 2N bit } N = ccn_bitsof(n) 
- Provide a workspace for potential speedup */
-CC_NONNULL((1, 3, 4, 5))
-void ccn_mul_ws(cc_ws_t ws, cc_size count, cc_unit *r, const cc_unit *s, const cc_unit *t);
 
 /* s[0..n) * v -> r[0..n)+return value
  { N bit, sizeof(cc_unit) * 8 bit -> N + sizeof(cc_unit) * 8 bit } N = n * sizeof(cc_unit) * 8 */
@@ -422,28 +394,18 @@ CC_NONNULL((2, 3, 4))
 void ccn_mod(cc_size n, cc_unit *r, const cc_unit *a_2n, const cc_unit *d);
 #endif
 
-/* r = gcd(s, t).
-   N bit, N bit -> N bit */
-CC_NONNULL((2, 3, 4))
-void ccn_gcd(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit *t);
-
-/* r = gcd(s, t).
- N bit, N bit -> O bit */
-CC_NONNULL((2, 4, 6))
-void ccn_gcdn(cc_size rn, cc_unit *r, cc_size sn, const cc_unit *s, cc_size tn, const cc_unit *t);
-
 /* r = (data, len) treated as a big endian byte array, return -1 if data
  doesn't fit in r, return 0 otherwise. */
 CC_NONNULL((2, 4))
 int ccn_read_uint(cc_size n, cc_unit *r, size_t data_size, const uint8_t *data);
 
 /* r = (data, len) treated as a big endian byte array, return -1 if data
- doesn't fit in r, return 0 otherwise. 
+ doesn't fit in r, return 0 otherwise.
  ccn_read_uint strips leading zeroes and doesn't care about sign. */
 #define ccn_read_int(n, r, data_size, data) ccn_read_uint(n, r, data_size, data)
 
 /* Return actual size in bytes needed to serialize s. */
-CC_PURE CC_NONNULL2
+CC_PURE CC_NONNULL((2))
 size_t ccn_write_uint_size(cc_size n, const cc_unit *s);
 
 /* Serialize s, to out.
@@ -473,9 +435,9 @@ cc_size ccn_write_uint_padded(cc_size n, const cc_unit* s, size_t out_size, uint
 }
 
 
-/*  Return actual size in bytes needed to serialize s as int 
+/*  Return actual size in bytes needed to serialize s as int
     (adding leading zero if high bit is set). */
-CC_PURE CC_NONNULL2
+CC_PURE CC_NONNULL((2))
 size_t ccn_write_int_size(cc_size n, const cc_unit *s);
 
 /*  Serialize s, to out.
@@ -491,55 +453,25 @@ size_t ccn_write_int_size(cc_size n, const cc_unit *s);
 CC_NONNULL((2, 4))
 void ccn_write_int(cc_size n, const cc_unit *s, size_t out_size, void *out);
 
-#if CCN_DEDICATED_SQR
-
-/* s^2 -> r
- { n bit -> 2 * n bit } */
-CC_NONNULL((2, 3))
-void ccn_sqr(cc_size n, cc_unit *r, const cc_unit *s);
-
-/* s^2 -> r
- { n bit -> 2 * n bit } */
-CC_NONNULL((1, 3, 4))
-void ccn_sqr_ws(cc_ws_t ws, cc_size n, cc_unit *r, const cc_unit *s);
-
-#else
-
-/* s^2 -> r
- { n bit -> 2 * n bit } */
-CC_INLINE CC_NONNULL((2, 3))
-void ccn_sqr(cc_size n, cc_unit *r, const cc_unit *s) {
-    ccn_mul(n, r, s, s);
-}
-
-/* s^2 -> r
- { n bit -> 2 * n bit } */
-CC_INLINE CC_NONNULL((2, 3, 4))
-void ccn_sqr_ws(cc_ws_t ws, cc_size n, cc_unit *r, const cc_unit *s) {
-    ccn_mul_ws(ws, n, r, s, s);
-}
-
-#endif
-
 /* s -> r
  { n bit -> n bit } */
 CC_NONNULL((2, 3))
 void ccn_set(cc_size n, cc_unit *r, const cc_unit *s);
 
-CC_INLINE CC_NONNULL2
+CC_INLINE CC_NONNULL((2))
 void ccn_zero(cc_size n, cc_unit *r) {
     cc_zero(ccn_sizeof_n(n),r);
 }
 
-CC_INLINE CC_NONNULL2
+CC_INLINE CC_NONNULL((2))
 void ccn_clear(cc_size n, cc_unit *r) {
     cc_clear(ccn_sizeof_n(n),r);
 }
 
-CC_NONNULL2
+CC_NONNULL((2))
 void ccn_zero_multi(cc_size n, cc_unit *r, ...);
 
-CC_INLINE CC_NONNULL2
+CC_INLINE CC_NONNULL((2))
 void ccn_seti(cc_size n, cc_unit *r, cc_unit v) {
     /* assert(n > 0); */
     r[0] = v;
@@ -589,7 +521,7 @@ void ccn_setn(cc_size n, cc_unit *r, const cc_size s_size, const cc_unit *s) {
 #endif
 
 /* Swap units in r in place from cc_unit vector byte order to big endian byte order (or back). */
-CC_INLINE CC_NONNULL2
+CC_INLINE CC_NONNULL((2))
 void ccn_swap(cc_size n, cc_unit *r) {
     cc_unit *e;
     for (e = r + n - 1; r < e; ++r, --e) {
@@ -609,9 +541,9 @@ void ccn_xor(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit *t) {
 }
 
 /* Debugging */
-CC_NONNULL2
+CC_NONNULL((2))
 void ccn_print(cc_size n, const cc_unit *s);
-CC_NONNULL3
+CC_NONNULL((3))
 void ccn_lprint(cc_size n, const char *label, const cc_unit *s);
 
 /* Forward declaration so we don't depend on ccrng.h. */
@@ -630,16 +562,6 @@ int ccn_random(cc_size n, cc_unit *r, struct ccrng_state *rng) {
 /* Make a ccn of size ccn_nof(nbits) units with up to nbits sized random value. */
 CC_NONNULL((2, 3))
 int ccn_random_bits(cc_size nbits, cc_unit *r, struct ccrng_state *rng);
-
-/*!
- @brief ccn_make_recip(cc_size nd, cc_unit *recip, const cc_unit *d) computes the reciprocal of d: recip = 2^2b/d where b=bitlen(d)
-
- @param nd      length of array d
- @param recip   returned reciprocal of size nd+1
- @param d       input number d
-*/
-CC_NONNULL((2, 3))
-int ccn_make_recip(cc_size nd, cc_unit *recip, const cc_unit *d);
 
 CC_NONNULL((6, 8))
 int ccn_div_euclid(cc_size nq, cc_unit *q, cc_size nr, cc_unit *r, cc_size na, const cc_unit *a, cc_size nd, const cc_unit *d);

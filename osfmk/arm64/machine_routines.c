@@ -51,11 +51,12 @@
 #include <pexpert/device_tree.h>
 
 #include <IOKit/IOPlatformExpert.h>
-#include <libkern/section_keywords.h>
 
 #if defined(KERNEL_INTEGRITY_KTRR)
 #include <libkern/kernel_mach_header.h>
 #endif
+
+#include <libkern/section_keywords.h>
 
 #if KPC
 #include <kern/kpc.h>
@@ -73,18 +74,24 @@ boolean_t is_clock_configured = FALSE;
 
 extern int mach_assert;
 extern volatile uint32_t debug_enabled;
-SECURITY_READ_ONLY_LATE(unsigned int) debug_boot_arg;
+
+extern vm_offset_t   segEXTRADATA;
+extern vm_offset_t   segLOWESTTEXT;
+extern vm_offset_t   segLASTB;
+extern unsigned long segSizeLAST;
 
 
 void machine_conf(void);
 
 thread_t Idle_context(void);
 
-static uint32_t cpu_phys_ids[MAX_CPUS] = {[0 ... MAX_CPUS - 1] = (uint32_t)-1};
-static unsigned int avail_cpus = 0;
-static int boot_cpu = -1;
-static int max_cpu_number = 0;
-cluster_type_t boot_cluster = CLUSTER_TYPE_SMP;
+SECURITY_READ_ONLY_LATE(static uint32_t) cpu_phys_ids[MAX_CPUS] = {[0 ... MAX_CPUS - 1] = (uint32_t)-1};
+SECURITY_READ_ONLY_LATE(static unsigned int) avail_cpus = 0;
+SECURITY_READ_ONLY_LATE(static int) boot_cpu = -1;
+SECURITY_READ_ONLY_LATE(static int) max_cpu_number = 0;
+SECURITY_READ_ONLY_LATE(cluster_type_t) boot_cluster = CLUSTER_TYPE_SMP;
+
+SECURITY_READ_ONLY_LATE(static uint32_t) fiq_eventi = UINT32_MAX; 
 
 lockdown_handler_t lockdown_handler;
 void *lockdown_this;
@@ -185,14 +192,6 @@ pmap_paddr_t get_mmu_ttb(void)
 	return value;
 }
 
-MARK_AS_PMAP_TEXT
-void set_mmu_ttb(pmap_paddr_t value)
-{
-	__builtin_arm_dsb(DSB_ISH);
-	MSR("TTBR0_EL1", value);
-	__builtin_arm_isb(ISB_SY);
-}
-
 static uint32_t get_midr_el1(void)
 {
 	uint64_t value;
@@ -264,7 +263,15 @@ void rorgn_stash_range(void)
 	}
 #endif
 
-	/* Get the AMC values, and stash them into rorgn_begin, rorgn_end. */
+	/* Get the AMC values, and stash them into rorgn_begin, rorgn_end.
+	 * gPhysBase is the base of DRAM managed by xnu. we need DRAM_BASE as
+	 * the AMCC RO region begin/end registers are in units of 16KB page
+	 * numbers from DRAM_BASE so we'll truncate gPhysBase at 512MB granule
+	 * and assert the value is the canonical DRAM_BASE PA of 0x8_0000_0000 for arm64.
+	 */
+
+	uint64_t dram_base = gPhysBase & ~0x1FFFFFFFULL;  /* 512MB */
+	assert(dram_base == 0x800000000ULL);
 
 #if defined(KERNEL_INTEGRITY_KTRR)
 	uint64_t soc_base = 0;
@@ -285,8 +292,8 @@ void rorgn_stash_range(void)
 
 #if defined(KERNEL_INTEGRITY_KTRR)
 	assert(rRORGNENDADDR > rRORGNBASEADDR);
-	rorgn_begin = (rRORGNBASEADDR << ARM_PGSHIFT) + gPhysBase;
-	rorgn_end   = (rRORGNENDADDR << ARM_PGSHIFT) + gPhysBase;
+	rorgn_begin = (rRORGNBASEADDR << AMCC_PGSHIFT) + dram_base;
+	rorgn_end   = (rRORGNENDADDR << AMCC_PGSHIFT) + dram_base;
 #else
 #error KERNEL_INTEGRITY config error
 #endif /* defined (KERNEL_INTEGRITY_KTRR) */
@@ -355,7 +362,7 @@ static void assert_amcc_cache_disabled() {
 void rorgn_lockdown(void)
 {
 	vm_offset_t ktrr_begin, ktrr_end;
-	unsigned long plt_segsz, last_segsz;
+	unsigned long last_segsz;
 
 #if DEVELOPMENT || DEBUG
 	boolean_t ktrr_disable = FALSE;
@@ -374,22 +381,24 @@ void rorgn_lockdown(void)
 	assert_unlocked();
 
 	/* [x] - Use final method of determining all kernel text range or expect crashes */
-
-	ktrr_begin = (uint64_t) getsegdatafromheader(&_mh_execute_header, "__PRELINK_TEXT", &plt_segsz);
+	ktrr_begin = segEXTRADATA;
 	assert(ktrr_begin && gVirtBase && gPhysBase);
 
 	ktrr_begin = kvtophys(ktrr_begin);
 
+	ktrr_end   = kvtophys(segLASTB);
+	last_segsz = segSizeLAST;
+#if defined(KERNEL_INTEGRITY_KTRR)
 	/* __LAST is not part of the MMU KTRR region (it is however part of the AMCC KTRR region) */
-	ktrr_end = (uint64_t) getsegdatafromheader(&_mh_execute_header, "__LAST", &last_segsz);
-	ktrr_end = (kvtophys(ktrr_end) - 1) & ~PAGE_MASK;
-
+	ktrr_end = (ktrr_end - 1) & ~AMCC_PGMASK;
 	/* ensure that iboot and xnu agree on the ktrr range */
 	assert(rorgn_begin == ktrr_begin && rorgn_end == (ktrr_end + last_segsz));
 	/* assert that __LAST segment containing privileged insns is only a single page */
 	assert(last_segsz == PAGE_SIZE);
+#endif
 
-#if DEBUG
+
+#if DEBUG || DEVELOPMENT
 	printf("KTRR Begin: %p End: %p, setting lockdown\n", (void *)ktrr_begin, (void *)ktrr_end);
 #endif
 
@@ -398,7 +407,7 @@ void rorgn_lockdown(void)
 	assert_amcc_cache_disabled();
 
 	CleanPoC_DcacheRegion_Force(phystokv(ktrr_begin),
-		(unsigned)((ktrr_end + last_segsz) - ktrr_begin + PAGE_MASK));
+		(unsigned)((ktrr_end + last_segsz) - ktrr_begin + AMCC_PGMASK));
 
 	lock_amcc();
 
@@ -419,19 +428,6 @@ machine_startup(__unused boot_args * args)
 {
 	int boot_arg;
 
-
-#if MACH_KDP
-	if (PE_parse_boot_argn("debug", &debug_boot_arg, sizeof (debug_boot_arg)) &&
-	    debug_enabled) {
-		if (debug_boot_arg & DB_HALT)
-			halt_in_debugger = 1;
-		if (debug_boot_arg & DB_NMI)
-			panicDebugging = TRUE;
-	} else {
-		debug_boot_arg = 0;
-	}
-
-#endif
 
 	PE_parse_boot_argn("assert", &mach_assert, sizeof (mach_assert));
 
@@ -456,7 +452,7 @@ void machine_lockdown_preflight(void)
 #if CONFIG_KERNEL_INTEGRITY
 
 #if defined(KERNEL_INTEGRITY_KTRR)
-       rorgn_stash_range();
+	rorgn_stash_range();
 #endif
 
 #endif
@@ -480,13 +476,13 @@ void machine_lockdown(void)
 
 
 #if defined(KERNEL_INTEGRITY_KTRR)
-        /* KTRR
-         *
-         * Lock physical KTRR region. KTRR region is read-only. Memory outside
-         * the region is not executable at EL1.
-         */
+	/* KTRR
+	 *
+	 * Lock physical KTRR region. KTRR region is read-only. Memory outside
+	 * the region is not executable at EL1.
+	 */
 
-         rorgn_lockdown();
+	rorgn_lockdown();
 #endif /* defined(KERNEL_INTEGRITY_KTRR)*/
 
 
@@ -843,6 +839,16 @@ ml_parse_cpu_topology(void)
 
 	if (boot_cpu == -1)
 		panic("unable to determine boot cpu!");
+
+	/*
+	 * Set TPIDRRO_EL0 to indicate the correct cpu number, as we may
+	 * not be booting from cpu 0.  Userspace will consume the current
+	 * CPU number through this register.  For non-boot cores, this is
+	 * done in start.s (start_cpu) using the cpu_number field of the
+	 * per-cpu data object.
+	 */
+	assert(__builtin_arm_rsr64("TPIDRRO_EL0") == 0);
+	__builtin_arm_wsr64("TPIDRRO_EL0", (uint64_t)boot_cpu);
 }
 
 unsigned int
@@ -885,6 +891,7 @@ void ml_lockdown_init() {
     assert(lockdown_handler_grp != NULL);
 
     lck_mtx_init(&lockdown_handler_lck, lockdown_handler_grp, NULL);
+
 }
 
 kern_return_t
@@ -952,9 +959,6 @@ ml_processor_register(
 
 	this_cpu_datap->cpu_id = in_processor_info->cpu_id;
 
-	this_cpu_datap->cpu_chud = chudxnu_cpu_alloc(is_boot_cpu);
-	if (this_cpu_datap->cpu_chud == (void *)NULL)
-		goto processor_register_error;
 	this_cpu_datap->cpu_console_buf = console_cpu_alloc(is_boot_cpu);
 	if (this_cpu_datap->cpu_console_buf == (void *)(NULL))
 		goto processor_register_error;
@@ -1019,7 +1023,7 @@ ml_processor_register(
 #endif
 
 	if (!is_boot_cpu) {
-		prng_cpu_init(this_cpu_datap->cpu_number);
+		early_random_cpu_init(this_cpu_datap->cpu_number);
 		// now let next CPU register itself
 		OSIncrementAtomic((SInt32*)&real_ncpus);
 	}
@@ -1030,8 +1034,6 @@ processor_register_error:
 #if KPC
 	kpc_unregister_cpu(this_cpu_datap);
 #endif
-	if (this_cpu_datap->cpu_chud != (void *)NULL)
-		chudxnu_cpu_free(this_cpu_datap->cpu_chud);
 	if (!is_boot_cpu)
 		cpu_data_free(this_cpu_datap);
 
@@ -1071,20 +1073,6 @@ cause_ast_check(
 	}
 }
 
-
-/*
- *	Routine:        ml_at_interrupt_context
- *	Function:	Check if running at interrupt context
- */
-boolean_t
-ml_at_interrupt_context(void)
-{
-	unsigned int	local;
-	vm_offset_t     intstack_top_ptr;
-
-	intstack_top_ptr = getCpuDatap()->intstack_top;
-	return (((vm_offset_t)(&local) < intstack_top_ptr) && ((vm_offset_t)(&local) > (intstack_top_ptr - INTSTACK_SIZE)));
-}
 extern uint32_t cpu_idle_count;
 
 void ml_get_power_state(boolean_t *icp, boolean_t *pidlep) {
@@ -1143,13 +1131,20 @@ ml_static_ptovirt(
 }
 
 vm_offset_t
-ml_static_vtop(
-		  vm_offset_t vaddr)
+ml_static_slide(
+	vm_offset_t vaddr)
 {
-	if (((vm_address_t)(vaddr) - gVirtBase) >= gPhysSize)
-		panic("ml_static_ptovirt(): illegal vaddr: %p\n", (void*)vaddr);
-	return ((vm_address_t)(vaddr) - gVirtBase + gPhysBase);
+	return phystokv(vaddr + vm_kernel_slide - gVirtBase + gPhysBase);
 }
+
+vm_offset_t
+ml_static_unslide(
+	vm_offset_t vaddr)
+{
+	return (ml_static_vtop(vaddr) - gPhysBase + gVirtBase - vm_kernel_slide) ;
+}
+
+extern tt_entry_t *arm_kva_to_tte(vm_offset_t va);
 
 kern_return_t
 ml_static_protect(
@@ -1196,21 +1191,12 @@ ml_static_protect(
 	     vaddr_cur += PAGE_SIZE) {
 		ppn = pmap_find_phys(kernel_pmap, vaddr_cur);
 		if (ppn != (vm_offset_t) NULL) {
-#if __ARM64_TWO_LEVEL_PMAP__
 			tt_entry_t	*tte2;
-#else
-			tt_entry_t	*tte1, *tte2;
-#endif
 			pt_entry_t	*pte_p;
 			pt_entry_t	ptmp;
 
 
-#if __ARM64_TWO_LEVEL_PMAP__
-			tte2 = &kernel_pmap->tte[(((vaddr_cur) & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT)];
-#else
-			tte1 = &kernel_pmap->tte[(((vaddr_cur) & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT)];
-			tte2 = &((tt_entry_t*) phystokv((*tte1) & ARM_TTE_TABLE_MASK))[(((vaddr_cur) & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT)];
-#endif
+			tte2 = arm_kva_to_tte(vaddr_cur);
 
 			if (((*tte2) & ARM_TTE_TYPE_MASK) != ARM_TTE_TYPE_TABLE) {
 				if ((((*tte2) & ARM_TTE_TYPE_MASK) == ARM_TTE_TYPE_BLOCK) &&
@@ -1467,18 +1453,6 @@ machine_choose_processor(__unused processor_set_t pset, processor_t processor)
 	return (processor);
 }
 
-vm_offset_t
-ml_stack_remaining(void)
-{
-	uintptr_t local = (uintptr_t) &local;
-
-	if (ml_at_interrupt_context()) {
-	    return (local - (getCpuDatap()->intstack_top - INTSTACK_SIZE));
-	} else {
-	    return (local - current_thread()->kernel_stack);
-	}
-}
-
 #if KASAN
 vm_offset_t ml_stack_base(void);
 vm_size_t ml_stack_size(void);
@@ -1486,19 +1460,27 @@ vm_size_t ml_stack_size(void);
 vm_offset_t
 ml_stack_base(void)
 {
-	if (ml_at_interrupt_context()) {
-	    return getCpuDatap()->intstack_top - INTSTACK_SIZE;
+	uintptr_t local = (uintptr_t) &local;
+	vm_offset_t     intstack_top_ptr;
+
+	intstack_top_ptr = getCpuDatap()->intstack_top;
+	if ((local < intstack_top_ptr) && (local > intstack_top_ptr - INTSTACK_SIZE)) {
+		return intstack_top_ptr - INTSTACK_SIZE;
 	} else {
-	    return current_thread()->kernel_stack;
+		return current_thread()->kernel_stack;
 	}
 }
 vm_size_t
 ml_stack_size(void)
 {
-	if (ml_at_interrupt_context()) {
-	    return INTSTACK_SIZE;
+	uintptr_t local = (uintptr_t) &local;
+	vm_offset_t     intstack_top_ptr;
+
+	intstack_top_ptr = getCpuDatap()->intstack_top;
+	if ((local < intstack_top_ptr) && (local > intstack_top_ptr - INTSTACK_SIZE)) {
+		return INTSTACK_SIZE;
 	} else {
-	    return kernel_stack_size;
+		return kernel_stack_size;
 	}
 }
 #endif
@@ -1620,7 +1602,7 @@ dcache_flush_trap(vm_map_address_t start, vm_map_size_t size)
 	vm_offset_t old_recover = thread->recover;
 
 	/* Check bounds */
-	if (task_has_64BitAddr(current_task())) {
+	if (task_has_64Bit_addr(current_task())) {
 		if (end > MACH_VM_MAX_ADDRESS) {
 			cache_trap_error(thread, end & ((1 << ARM64_CLINE_SHIFT) - 1));
 		}
@@ -1637,17 +1619,12 @@ dcache_flush_trap(vm_map_address_t start, vm_map_size_t size)
 	/* Set recovery function */
 	thread->recover = (vm_address_t)cache_trap_recover;
 
-#if defined(APPLE_ARM64_ARCH_FAMILY)
 	/*
 	 * We're coherent on Apple ARM64 CPUs, so this could be a nop.  However,
 	 * if the region given us is bad, it would be good to catch it and
 	 * crash, ergo we still do the flush.
 	 */
-	assert((size & 0xFFFFFFFF00000000ULL) == 0);
 	FlushPoC_DcacheRegion(start, (uint32_t)size);
-#else
-#error "Make sure you don't need to xcall."
-#endif
 
 	/* Restore recovery function */
 	thread->recover = old_recover;
@@ -1663,7 +1640,7 @@ icache_invalidate_trap(vm_map_address_t start, vm_map_size_t size)
 	vm_offset_t old_recover = thread->recover;
 
 	/* Check bounds */
-	if (task_has_64BitAddr(current_task())) {
+	if (task_has_64Bit_addr(current_task())) {
 		if (end > MACH_VM_MAX_ADDRESS) {
 			cache_trap_error(thread, end & ((1 << ARM64_CLINE_SHIFT) - 1));
 		}
@@ -1680,15 +1657,14 @@ icache_invalidate_trap(vm_map_address_t start, vm_map_size_t size)
 	/* Set recovery function */
 	thread->recover = (vm_address_t)cache_trap_recover;
 
-#if defined(APPLE_ARM64_ARCH_FAMILY)
-	/* Clean dcache to unification, except we're coherent on Apple ARM64 CPUs */
-#else
-#error Make sure not cleaning is right for this platform!
-#endif
+	CleanPoU_DcacheRegion(start, (uint32_t) size);
 
 	/* Invalidate iCache to point of unification */
-	assert((size & 0xFFFFFFFF00000000ULL) == 0);
+#if __ARM_IC_NOALIAS_ICACHE__
 	InvalidatePoU_IcacheRegion(start, (uint32_t)size);
+#else
+	InvalidatePoU_Icache();
+#endif
 
 	/* Restore recovery function */
 	thread->recover = old_recover;
@@ -1774,7 +1750,17 @@ _enable_virtual_timer(void)
 void
 fiq_context_init(boolean_t enable_fiq __unused)
 {
-#if defined(APPLE_ARM64_ARCH_FAMILY)
+	_enable_timebase_event_stream(fiq_eventi);
+
+	/* Interrupts still disabled. */
+	assert(ml_get_interrupts_enabled() == FALSE);
+	_enable_virtual_timer();
+}
+
+void
+fiq_context_bootstrap(boolean_t enable_fiq)
+{
+#if defined(APPLE_ARM64_ARCH_FAMILY) || defined(BCM2837)
 	/* Could fill in our own ops here, if we needed them */
 	uint64_t 	ticks_per_sec, ticks_per_event, events_per_sec;
 	uint32_t	bit_index;
@@ -1790,9 +1776,8 @@ fiq_context_init(boolean_t enable_fiq __unused)
 	bit_index = flsll(ticks_per_event) - 1; /* Highest bit set */
 
 	/* Round up to power of two */
-	if ((ticks_per_event & ((1 << bit_index) - 1)) != 0) {
+	if ((ticks_per_event & ((1 << bit_index) - 1)) != 0)
 		bit_index++;
-	}
 
 	/*
 	 * The timer can only trigger on rising or falling edge,
@@ -1803,89 +1788,11 @@ fiq_context_init(boolean_t enable_fiq __unused)
 	if (bit_index != 0)
 		bit_index--;
 
-	_enable_timebase_event_stream(bit_index);
+	fiq_eventi = bit_index;
 #else
 #error Need a board configuration.
 #endif
-
-	/* Interrupts still disabled. */
-	assert(ml_get_interrupts_enabled() == FALSE);
-	_enable_virtual_timer();
-}
-
-/*
- * ARM64_TODO: remove me (just a convenience while we don't have crashreporter)
- */
-extern int copyinframe(vm_address_t, char *, boolean_t);
-size_t 		_OSUserBacktrace(char *buffer, size_t bufsize);
-
-size_t _OSUserBacktrace(char *buffer, size_t bufsize) 
-{
-	thread_t thread = current_thread();
-	boolean_t is64bit = thread_is_64bit(thread);
-	size_t trace_size_bytes = 0, lr_size;
-	vm_address_t frame_addr; // Should really by mach_vm_offset_t...
-
-	if (bufsize < 8) {
-		return 0;
-	}
-
-	if (get_threadtask(thread) == kernel_task) {
-		panic("%s: Should never be called from a kernel thread.", __FUNCTION__);
-	}
-
-	frame_addr = get_saved_state_fp(thread->machine.upcb);
-	if (is64bit) {
-		uint64_t frame[2];
-		lr_size = sizeof(frame[1]);
-
-		*((uint64_t*)buffer) = get_saved_state_pc(thread->machine.upcb);
-		trace_size_bytes = lr_size;
-
-		while (trace_size_bytes + lr_size < bufsize) {
-			if (!(frame_addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS)) {
-				break;
-			}
-
-			if (0 != copyinframe(frame_addr, (char*)frame, TRUE)) {
-				break;
-			}
-
-			*((uint64_t*)(buffer + trace_size_bytes)) = frame[1]; /* lr */
-			frame_addr = frame[0];
-			trace_size_bytes += lr_size;
-
-			if (frame[0] == 0x0ULL) {
-				break;
-			}
-		}
-	} else {
-		uint32_t frame[2];
-		lr_size = sizeof(frame[1]);
-
-		*((uint32_t*)buffer) = (uint32_t)get_saved_state_pc(thread->machine.upcb);
-		trace_size_bytes = lr_size;
-
-		while (trace_size_bytes + lr_size < bufsize) {
-			if (!(frame_addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS)) {
-				break;
-			}
-
-			if (0 != copyinframe(frame_addr, (char*)frame, FALSE)) {
-				break;
-			}
-
-			*((uint32_t*)(buffer + trace_size_bytes)) = frame[1]; /* lr */
-			frame_addr = frame[0];
-			trace_size_bytes += lr_size;
-
-			if (frame[0] == 0x0ULL) {
-				break;
-			}
-		}
-	}
-
-	return trace_size_bytes;
+	fiq_context_init(enable_fiq);
 }
 
 boolean_t
@@ -1905,7 +1812,7 @@ ml_delay_should_spin(uint64_t interval)
 }
 
 boolean_t ml_thread_is64bit(thread_t thread) {
-	return (thread_is_64bit(thread));
+	return (thread_is_64bit_addr(thread));
 }
 
 void ml_timer_evaluate(void) {

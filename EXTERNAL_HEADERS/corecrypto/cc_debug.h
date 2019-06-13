@@ -26,7 +26,7 @@
     #if !CONFIG_EMBEDDED
         extern int printf(const char *format, ...) __printflike(1,2);
     #endif
-#elif CC_USE_S3 || CC_IBOOT || CC_RTKIT
+#elif CC_USE_S3 || CC_IBOOT || CC_RTKIT || CC_RTKITROM
     #include <stdio.h>
     #define cc_printf(x...) printf(x)
 #elif defined(__ANDROID_API__)

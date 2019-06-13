@@ -65,12 +65,14 @@ enum {
     kIOServiceNeedWillTerminate = 0x00080000,
     kIOServiceWaitDetachState   = 0x00040000,
     kIOServiceConfigRunning     = 0x00020000,
+    kIOServiceFinalized         = 0x00010000,
 };
 
 // notify state
 enum {
     kIOServiceNotifyEnable	= 0x00000001,
-    kIOServiceNotifyWaiter	= 0x00000002
+    kIOServiceNotifyWaiter	= 0x00000002,
+    kIOServiceNotifyBlock	= 0x00000004
 };
 
 struct _IOServiceNotifierInvocation
@@ -223,6 +225,13 @@ extern const OSSymbol * gIOConsoleSessionUIDKey;
 extern const OSSymbol *	gIOConsoleSessionAuditIDKey;
 extern const OSSymbol * gIOConsoleSessionOnConsoleKey;
 extern const OSSymbol * gIOConsoleSessionSecureInputPIDKey;
+
+
+#define _interruptSourcesPrivate(service)   \
+    ((IOInterruptSourcePrivate *)(&(service)->_interruptSources[(service)->_numInterruptSources]))
+
+#define sizeofAllIOInterruptSource          \
+    (sizeof(IOInterruptSourcePrivate) + sizeof(IOInterruptSource))
 
 #endif /* ! _IOKIT_IOSERVICEPRIVATE_H */
 

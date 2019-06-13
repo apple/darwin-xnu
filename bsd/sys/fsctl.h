@@ -251,6 +251,13 @@ typedef struct disk_conditioner_info {
   uint64_t read_throughput_mbps; // maximum throughput for reads
   uint64_t write_throughput_mbps; // maximum throughput for writes
   int is_ssd; // behave like an SSD
+
+  /* revision 2 */
+  uint32_t ioqueue_depth;
+  uint32_t maxreadcnt;
+  uint32_t maxwritecnt;
+  uint32_t segreadcnt;
+  uint32_t segwritecnt;
 } disk_conditioner_info;
 
 #define	FSCTL_SYNC_FULLSYNC	(1<<0)	/* Flush the data fully to disk, if supported by the filesystem */
@@ -327,6 +334,14 @@ typedef struct disk_conditioner_info {
 #define SPOTLIGHT_FSCTL_GET_MOUNT_TIME		  IOCBASECMD(SPOTLIGHT_IOC_GET_MOUNT_TIME)
 #define SPOTLIGHT_IOC_GET_LAST_MTIME		  _IOR('h', 19, u_int32_t)
 #define SPOTLIGHT_FSCTL_GET_LAST_MTIME		  IOCBASECMD(SPOTLIGHT_IOC_GET_LAST_MTIME)
+
+/* Mark file's extents as "frozen" because someone has references to physical address */
+#define FSIOC_FREEZE_EXTENTS				_IO('h', 20)
+#define FSCTL_FREEZE_EXTENTS				IOCBASECMD(FSIOC_FREEZE_EXTENTS)
+
+/* Clear the "frozen" status of file's extents */
+#define FSIOC_THAW_EXTENTS				_IO('h', 21)
+#define FSCTL_THAW_EXTENTS				IOCBASECMD(FSIOC_THAW_EXTENTS)
 
 #ifndef KERNEL
 

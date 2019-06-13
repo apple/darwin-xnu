@@ -502,4 +502,9 @@ routine PREFIX(vm_purgable_control) (
 		control		: vm_purgable_t;
 	inout	state		: int);
 
+
+routine vm_map_exec_lockdown(
+		target_task 	: vm_map_t);
+
+
 /* vim: set ft=c : */

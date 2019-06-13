@@ -33,6 +33,61 @@
 
 #include <arm/proc_reg.h>
 
+#if __ARM_KERNEL_PROTECT__
+/*
+ * __ARM_KERNEL_PROTECT__ is a feature intended to guard against potential
+ * architectural or microarchitectural vulnerabilities that could allow cores to
+ * read/access EL1-only mappings while in EL0 mode.  This is achieved by
+ * removing as many mappings as possible when the core transitions to EL0 mode
+ * from EL1 mode, and restoring those mappings when the core transitions to EL1
+ * mode from EL0 mode.
+ *
+ * At the moment, this is achieved through use of ASIDs and TCR_EL1.  TCR_EL1 is
+ * used to map and unmap the ordinary kernel mappings, by contracting and
+ * expanding translation zone size for TTBR1 when exiting and entering EL1,
+ * respectively:
+ *
+ * Kernel EL0 Mappings: TTBR1 mappings that must remain mapped while the core is
+ *   is in EL0.
+ * Kernel EL1 Mappings: TTBR1 mappings that must be mapped while the core is in
+ *   EL1.
+ *
+ * T1SZ_USER: T1SZ_BOOT + 1
+ * TTBR1_EL1_BASE_BOOT: (2^64) - (2^(64 - T1SZ_BOOT)
+ * TTBR1_EL1_BASE_USER: (2^64) - (2^(64 - T1SZ_USER)
+ * TTBR1_EL1_MAX: (2^64) - 1
+ *
+ * When in EL1, we program TCR_EL1 (specifically, TCR_EL1.T1SZ) to give the
+ * the following TTBR1 layout:
+ *
+ *  TTBR1_EL1_BASE_BOOT   TTBR1_EL1_BASE_USER   TTBR1_EL1_MAX
+ * +---------------------------------------------------------+
+ * | Kernel EL0 Mappings |        Kernel EL1 Mappings        |
+ * +---------------------------------------------------------+
+ *
+ * And when in EL0, we program TCR_EL1 to give the following TTBR1 layout:
+ *
+ *  TTBR1_EL1_BASE_USER                         TTBR1_EL1_MAX
+ * +---------------------------------------------------------+
+ * |                   Kernel EL0 Mappings                   |
+ * +---------------------------------------------------------+
+ *
+ * With the current implementation, both the EL0 and EL1 mappings for the kernel
+ * use otherwise empty translation tables for mapping the exception vectors (so
+ * that we do not need to TLB flush the exception vector address when switching
+ * between EL0 and EL1).  The rationale here is that the TLBI would require a
+ * DSB, and DSBs can be extremely expensive.
+ *
+ * Each pmap is given two ASIDs: (n & ~1) as an EL0 ASID, and (n | 1) as an EL1
+ * ASID.  The core switches between ASIDs on EL transitions, so that the TLB
+ * does not need to be fully invalidated on an EL transition.
+ *
+ * Most kernel mappings will be marked non-global in this configuration, as
+ * global mappings would be visible to userspace unless we invalidate them on
+ * eret.
+ */
+#endif /* __ARM_KERNEL_PROTECT */
+
 /*
  * 64-bit Program Status Register (PSR64)
  *
@@ -146,14 +201,6 @@
 
 #define SCTLR_RESERVED			((3 << 28) | (1 << 22) | (1 << 20) | (1 << 11))
 
-// 31		PACIA_ENABLED		 AddPACIA and AuthIA functions enabled
-#define SCTLR_PACIA_ENABLED		(1 << 31)
-// 30		PACIB_ENABLED		 AddPACIB and AuthIB functions enabled
-#define SCTLR_PACIB_ENABLED		(1 << 30)
-// 29:28	RES1	11
-// 27		PACDA_ENABLED		 AddPACDA and AuthDA functions enabled
-#define SCTLR_PACDA_ENABLED		(1 << 27)
-
 // 26		UCI		User Cache Instructions
 #define SCTLR_UCI_ENABLED		(1 << 26)
 
@@ -187,7 +234,8 @@
 // 14		DZE		User Data Cache Zero (DC ZVA)
 #define SCTLR_DZE_ENABLED		(1 << 14)
 
-// 13		RES0	0
+// 13		PACDB_ENABLED		 AddPACDB and AuthDB functions enabled
+#define SCTLR_PACDB_ENABLED		(1 << 13)
 
 // 12		I		Instruction cache enable
 #define SCTLR_I_ENABLED			(1 << 12)
@@ -224,14 +272,9 @@
 // 0		M		MMU enable
 #define SCTLR_M_ENABLED			(1 << 0)
 
-#define SCTLR_PAC_DEFAULT		0
-
-#define SCTLR_EL1_DEFAULT		(SCTLR_PAC_DEFAULT | SCTLR_RESERVED | SCTLR_UCI_ENABLED | SCTLR_nTWE_WFE_ENABLED | SCTLR_DZE_ENABLED | \
-								 SCTLR_I_ENABLED | SCTLR_SED_DISABLED | SCTLR_CP15BEN_ENABLED | \
- 								 SCTLR_SA0_ENABLED | SCTLR_SA_ENABLED | SCTLR_PAN_UNCHANGED | \
-								 SCTLR_C_ENABLED | SCTLR_M_ENABLED)
-
-
+#define SCTLR_EL1_DEFAULT		(SCTLR_RESERVED | SCTLR_UCI_ENABLED | SCTLR_nTWE_WFE_ENABLED | SCTLR_DZE_ENABLED | \
+						SCTLR_I_ENABLED | SCTLR_SED_DISABLED | SCTLR_CP15BEN_ENABLED |             \
+ 						SCTLR_SA0_ENABLED | SCTLR_SA_ENABLED | SCTLR_C_ENABLED | SCTLR_M_ENABLED)
 
 /*
  * Coprocessor Access Control Register (CPACR)
@@ -466,11 +509,11 @@
  *	Aff1	Cluster ID
  *	Aff0	CPU ID
  */
-#define MPIDR_PNE_SHIFT				16	// pcore not ecore
-#define MPIDR_PNE						(1 << MPIDR_PNE_SHIFT)
 #define MPIDR_AFF0_MASK				0xFF
 #define MPIDR_AFF1_MASK				0xFF00
+#define MPIDR_AFF1_SHIFT			8
 #define MPIDR_AFF2_MASK				0xFF0000
+#define MPIDR_AFF2_SHIFT			16
 
 /*
  * We currently use a 3 level page table (rather than the full 4
@@ -487,22 +530,30 @@
  * we support the following:
  *
  * 4KB pages, full page L1: 39 bit range.
- * 4KB pages, sub-page L1: 36 bit range.
+ * 4KB pages, sub-page L1: 38 bit range.
  * 16KB pages, full page L1: 47 bit range.
- * 16KB pages, sub-page L1: 37 bit range.
+ * 16KB pages, sub-page L1: 39 bit range.
  * 16KB pages, two level page tables: 36 bit range.
  */
+#if __ARM_KERNEL_PROTECT__
+/*
+ * If we are configured to use __ARM_KERNEL_PROTECT__, the first half of the
+ * address space is used for the mappings that will remain in place when in EL0.
+ * As a result, 1 bit less of address space is available to the rest of the
+ * the kernel.
+ */
+#endif /* __ARM_KERNEL_PROTECT__ */
 #ifdef __ARM_16K_PG__
 #if __ARM64_TWO_LEVEL_PMAP__
 #define T0SZ_BOOT						28ULL
 #elif __ARM64_PMAP_SUBPAGE_L1__
-#define T0SZ_BOOT						27ULL
+#define T0SZ_BOOT						25ULL
 #else /* __ARM64_TWO_LEVEL_PMAP__ */
 #define T0SZ_BOOT						17ULL
 #endif /* __ARM64_TWO_LEVEL_PMAP__ */
 #else /* __ARM_16K_PG__ */
 #if __ARM64_PMAP_SUBPAGE_L1__
-#define T0SZ_BOOT						28ULL
+#define T0SZ_BOOT						26ULL
 #else /* __ARM64_PMAP_SUBPAGE_L1__ */
 #define T0SZ_BOOT						25ULL
 #endif /* __ARM64_PMAP_SUBPAGE_L1__ */
@@ -516,22 +567,32 @@
 #if __ARM64_TWO_LEVEL_PMAP__
 #define T1SZ_BOOT						28ULL
 #elif __ARM64_PMAP_SUBPAGE_L1__
-#define T1SZ_BOOT						27ULL
+#define T1SZ_BOOT						25ULL
 #else /* __ARM64_TWO_LEVEL_PMAP__ */
 #define T1SZ_BOOT						17ULL
 #endif /* __ARM64_TWO_LEVEL_PMAP__ */
 #else /* __ARM_16K_PG__ */
 #if __ARM64_PMAP_SUBPAGE_L1__
-#define T1SZ_BOOT						28ULL
+#define T1SZ_BOOT						26ULL
 #else /* __ARM64_PMAP_SUBPAGE_L1__ */
 #define T1SZ_BOOT						25ULL
 #endif /*__ARM64_PMAP_SUBPAGE_L1__*/
 #endif /* __ARM_16K_PG__ */
 #endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
 
-#define TCR_EL1_BOOT	(TCR_IPS_40BITS | \
+#define TCR_EL1_BASE	(TCR_IPS_40BITS | \
 						 TCR_SH0_OUTER | TCR_ORGN0_WRITEBACK |  TCR_IRGN0_WRITEBACK | (T0SZ_BOOT << TCR_T0SZ_SHIFT) | (TCR_TG0_GRANULE_SIZE) |\
-						 TCR_SH1_OUTER | TCR_ORGN1_WRITEBACK |  TCR_IRGN1_WRITEBACK | (T1SZ_BOOT << TCR_T1SZ_SHIFT) | (TCR_TG1_GRANULE_SIZE))
+						 TCR_SH1_OUTER | TCR_ORGN1_WRITEBACK |  TCR_IRGN1_WRITEBACK | (TCR_TG1_GRANULE_SIZE))
+
+#if __ARM_KERNEL_PROTECT__
+#define TCR_EL1_BOOT	(TCR_EL1_BASE | \
+						 (T1SZ_BOOT << TCR_T1SZ_SHIFT) | TCR_TBI0_TOPBYTE_IGNORED)
+#define T1SZ_USER	(T1SZ_BOOT + 1)
+#define TCR_EL1_USER	(TCR_EL1_BASE | (T1SZ_USER << TCR_T1SZ_SHIFT) | TCR_TBI0_TOPBYTE_IGNORED)
+#else
+#define TCR_EL1_BOOT	(TCR_EL1_BASE | \
+						 (T1SZ_BOOT << TCR_T1SZ_SHIFT))
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 /*
  * Translation Table Base Register (TTBR)
@@ -689,22 +750,31 @@
 #define ARM_TT_L1_OFFMASK				0x0000000fffffffffULL		/* offset within an L1 entry */
 #define ARM_TT_L1_SHIFT					36							/* page descriptor shift */
 #ifdef __ARM64_PMAP_SUBPAGE_L1__
-/* This config supports 128GB per TTBR. */
-#define ARM_TT_L1_INDEX_MASK			0x0000001000000000ULL		/* mask for getting index into L1 table from virtual address */
-#else
+/* This config supports 512GB per TTBR. */
+#define ARM_TT_L1_INDEX_MASK			0x0000007000000000ULL		/* mask for getting index into L1 table from virtual address */
+#else /* __ARM64_PMAP_SUBPAGE_L1__ */
 #define ARM_TT_L1_INDEX_MASK			0x00007ff000000000ULL		/* mask for getting index into L1 table from virtual address */
-#endif
-#else
+#endif /* __ARM64_PMAP_SUBPAGE_L1__ */
+#else /* __ARM_16K_PG__ */
 #define ARM_TT_L1_SIZE					0x0000000040000000ULL		/* size of area covered by a tte */
 #define ARM_TT_L1_OFFMASK				0x000000003fffffffULL		/* offset within an L1 entry */
 #define ARM_TT_L1_SHIFT					30							/* page descriptor shift */
 #ifdef __ARM64_PMAP_SUBPAGE_L1__
-/* This config supports 64GB per TTBR. */
-#define ARM_TT_L1_INDEX_MASK			0x0000000fc0000000ULL		/* mask for getting index into L1 table from virtual address */
-#else
+/* This config supports 256GB per TTBR. */
+#define ARM_TT_L1_INDEX_MASK			0x0000003fc0000000ULL		/* mask for getting index into L1 table from virtual address */
+#else /* __ARM64_PMAP_SUBPAGE_L1__ */
 #define ARM_TT_L1_INDEX_MASK			0x0000007fc0000000ULL		/* mask for getting index into L1 table from virtual address */
+#endif /* __ARM64_PMAP_SUBPAGE_L1__ */
 #endif
-#endif
+
+/* some sugar for getting pointers to page tables and entries */
+
+#define L1_TABLE_INDEX(va) (((va) & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT)
+#define L2_TABLE_INDEX(va) (((va) & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT)
+#define L3_TABLE_INDEX(va) (((va) & ARM_TT_L3_INDEX_MASK) >> ARM_TT_L3_SHIFT)
+
+#define L2_TABLE_VA(tte) ((tt_entry_t*) phystokv((*(tte)) & ARM_TTE_TABLE_MASK))
+#define L3_TABLE_VA(tte2) ((pt_entry_t*) phystokv((*(tte2)) & ARM_TTE_TABLE_MASK))
 
 /*
  *  L2 Translation table
@@ -762,6 +832,7 @@
  * Convenience definitions for:
  *   ARM_TT_LEAF: The last level of the configured page table format.
  *   ARM_TT_TWIG: The second to last level of the configured page table format.
+ *   ARM_TT_ROOT: The first level of the configured page table format.
  *
  *   My apologies to any botanists who may be reading this.
  */
@@ -774,6 +845,18 @@
 #define ARM_TT_TWIG_OFFMASK				ARM_TT_L2_OFFMASK
 #define ARM_TT_TWIG_SHIFT				ARM_TT_L2_SHIFT
 #define ARM_TT_TWIG_INDEX_MASK			ARM_TT_L2_INDEX_MASK
+
+#if __ARM64_TWO_LEVEL_PMAP__
+#define ARM_TT_ROOT_SIZE				ARM_TT_L2_SIZE
+#define ARM_TT_ROOT_OFFMASK				ARM_TT_L2_OFFMASK
+#define ARM_TT_ROOT_SHIFT				ARM_TT_L2_SHIFT
+#define ARM_TT_ROOT_INDEX_MASK			ARM_TT_L2_INDEX_MASK
+#else
+#define ARM_TT_ROOT_SIZE				ARM_TT_L1_SIZE
+#define ARM_TT_ROOT_OFFMASK				ARM_TT_L1_OFFMASK
+#define ARM_TT_ROOT_SHIFT				ARM_TT_L1_SHIFT
+#define ARM_TT_ROOT_INDEX_MASK			ARM_TT_L1_INDEX_MASK
+#endif
 
 /*
  * 4KB granule size:
@@ -911,7 +994,7 @@
 #define ARM_TTE_BLOCK_NS_MASK		0x0000000000000020ULL	/* notSecure mapping mask */
 
 #define ARM_TTE_BLOCK_PNX			0x0020000000000000ULL	/* value for privilege no execute bit */
-#define ARM_TTE_BLOCK_PNXMASK		0x0020000000000000ULL	/* privilege execute mask */
+#define ARM_TTE_BLOCK_PNXMASK		0x0020000000000000ULL	/* privilege no execute mask */
 
 #define ARM_TTE_BLOCK_NX			0x0040000000000000ULL	/* value for no execute */
 #define ARM_TTE_BLOCK_NXMASK		0x0040000000000000ULL	/* no execute mask */
@@ -944,8 +1027,14 @@
 #define ARM_TTE_TABLE_PXN			0x0800000000000000ULL	/* value for privilege no execute bit */
 #define ARM_TTE_TABLE_PXNMASK		0x0800000000000000ULL	/* privilege execute mask */
 
+#if __ARM_KERNEL_PROTECT__
+#define ARM_TTE_BOOT_BLOCK			(ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID |  ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY)	\
+									 | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITEBACK) | ARM_TTE_BLOCK_AF \
+									 | ARM_TTE_BLOCK_NG)
+#else /* __ARM_KERNEL_PROTECT__ */
 #define ARM_TTE_BOOT_BLOCK			(ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID |  ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY)	\
 									 | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITEBACK) | ARM_TTE_BLOCK_AF)
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 #define ARM_TTE_BOOT_TABLE			(ARM_TTE_TYPE_TABLE | ARM_TTE_VALID )
 /*
@@ -1062,18 +1151,20 @@
 #define ARM_PTE_HINT_ENTRIES_SHIFT	7ULL					/* shift to construct the number of entries */
 #define ARM_PTE_HINT_ADDR_MASK		0x0000FFFFFFE00000ULL			/* mask to extract the starting hint address */
 #define ARM_PTE_HINT_ADDR_SHIFT		21					/* shift for the hint address */
+#define ARM_KVA_HINT_ADDR_MASK		0xFFFFFFFFFFE00000ULL			/* mask to extract the starting hint address */
 #else
 #define ARM_PTE_HINT_ENTRIES		16ULL					/* number of entries the hint covers */
 #define ARM_PTE_HINT_ENTRIES_SHIFT	4ULL					/* shift to construct the number of entries */
 #define ARM_PTE_HINT_ADDR_MASK		0x0000FFFFFFFF0000ULL			/* mask to extract the starting hint address */
 #define ARM_PTE_HINT_ADDR_SHIFT		16					/* shift for the hint address */
+#define ARM_KVA_HINT_ADDR_MASK		0xFFFFFFFFFFFF0000ULL			/* mask to extract the starting hint address */
 #endif
 
-#define ARM_PTE_PNX					0x0020000000000000ULL	/* value for no execute */
-#define ARM_PTE_PNXMASK				0x0020000000000000ULL	/* no execute mask */
+#define ARM_PTE_PNX					0x0020000000000000ULL	/* value for privilege no execute bit */
+#define ARM_PTE_PNXMASK				0x0020000000000000ULL	/* privilege no execute mask */
 
-#define ARM_PTE_NX					0x0040000000000000ULL	/* value for privilege no execute bit */
-#define ARM_PTE_NXMASK				0x0040000000000000ULL	/* privilege execute mask */
+#define ARM_PTE_NX					0x0040000000000000ULL	/* value for no execute bit */
+#define ARM_PTE_NXMASK				0x0040000000000000ULL	/* no execute mask */
 
 #define ARM_PTE_WIRED				0x0080000000000000ULL	/* value for software wired bit */
 #define ARM_PTE_WIRED_MASK			0x0080000000000000ULL	/* software wired mask */
@@ -1086,8 +1177,25 @@
 #define ARM_PTE_PGTRACE_MASK        0x0200000000000000ULL   /* software trace mask */
 #endif
 
-#define ARM_PTE_BOOT_PAGE			(ARM_PTE_TYPE_VALID |  ARM_PTE_SH(SH_OUTER_MEMORY)	\
+#define ARM_PTE_BOOT_PAGE_BASE			(ARM_PTE_TYPE_VALID |  ARM_PTE_SH(SH_OUTER_MEMORY) \
 									 | ARM_PTE_ATTRINDX(CACHE_ATTRINDX_WRITEBACK) | ARM_PTE_AF)
+
+#if __ARM_KERNEL_PROTECT__
+#define ARM_PTE_BOOT_PAGE			(ARM_PTE_BOOT_PAGE_BASE | ARM_PTE_NG)
+#else /* __ARM_KERNEL_PROTECT__ */
+#define ARM_PTE_BOOT_PAGE			(ARM_PTE_BOOT_PAGE_BASE)
+#endif /* __ARM_KERNEL_PROTECT__ */
+
+/*
+ * TLBI appers to only deal in 4KB page addresses, so give
+ * it an explicit shift of 12.
+ */
+#define TLBI_ADDR_SIZE  (44)
+#define TLBI_ADDR_MASK  ((1ULL << TLBI_ADDR_SIZE) - 1)
+#define TLBI_ADDR_SHIFT (12)
+#define TLBI_ASID_SHIFT (48)
+#define TLBI_ASID_SIZE  (16)
+#define TLBI_ASID_MASK  (((1ULL << TLBI_ASID_SIZE) - 1) << TLBI_ASID_SHIFT)
 
 /*
  * Exception Syndrome Register

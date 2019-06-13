@@ -70,10 +70,6 @@ subs_entry_t kext_identifier_substring_subs[] = {
     { "Controller", 'C' },
     { "Bluetooth",  'B' },
     { "Intel",      'I' },
-    
-    // CHUD kexts, typically not on user installs
-    { "Profile",    'P' },
-    { "Action",     'a' },   // maybe K if we want to stick to all-caps
 
     { (char *)0,    '\0' }
 };

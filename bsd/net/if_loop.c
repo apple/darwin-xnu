@@ -698,6 +698,13 @@ loopattach(void)
 		    __func__, result);
 		/* NOTREACHED */
 	}
+	/*
+	 * Disable ECN on loopback as ECN serves no purpose and otherwise
+	 * TCP connections are subject to heuristics like SYN retransmits on RST
+	 */
+	lo_ifp->if_eflags &= ~IFEF_ECN_ENABLE;
+	lo_ifp->if_eflags |= IFEF_ECN_DISABLE;
+
 	bpfattach(lo_ifp, DLT_NULL, sizeof (u_int32_t));
 }
 

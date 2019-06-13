@@ -29,11 +29,13 @@
 #include <arm64/asm.h>
 #include <arm64/proc_reg.h>
 #include <pexpert/arm64/board_config.h>
-#include <pexpert/arm64/cyclone.h>
-#include <pexpert/arm64/hurricane.h>
 #include <mach_assert.h>
 #include <machine/asm.h>
 #include "assym.s"
+
+#if __ARM_KERNEL_PROTECT__
+#include <arm/pmap.h>
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 
 .macro MSR_VBAR_EL1_X0
@@ -100,6 +102,7 @@ LEXT(LowResetVectorBase)
 
 	// Unlock the core for debugging
 	msr		OSLAR_EL1, xzr
+	msr		DAIFSet, #(DAIFSC_ALL)				// Disable all interrupts
 
 #if !(defined(KERNEL_INTEGRITY_KTRR))
 	// Set low reset vector before attempting any loads
@@ -119,18 +122,19 @@ LEXT(LowResetVectorBase)
 	 * If either values are zero, we're debugging kernel so skip programming KTRR.
 	 */
 
+
 	// load stashed rorgn_begin
 	adrp	x17, EXT(rorgn_begin)@page
 	add		x17, x17, EXT(rorgn_begin)@pageoff
 	ldr		x17, [x17]
 	// if rorgn_begin is zero, we're debugging. skip enabling ktrr
-	cbz		x17, 1f
+	cbz		x17, Lskip_ktrr
 
 	// load stashed rorgn_end
 	adrp	x19, EXT(rorgn_end)@page
 	add		x19, x19, EXT(rorgn_end)@pageoff
 	ldr		x19, [x19]
-	cbz		x19, 1f
+	cbz		x19, Lskip_ktrr
 
 	// program and lock down KTRR
 	// subtract one page from rorgn_end to make pinst insns NX
@@ -139,9 +143,8 @@ LEXT(LowResetVectorBase)
 	msr		ARM64_REG_KTRR_UPPER_EL1, x19
 	mov		x17, #1
 	msr		ARM64_REG_KTRR_LOCK_EL1, x17
-
-1:
-#endif /* defined(KERNEL_INTEGRITY_KTRR) */
+Lskip_ktrr:
+#endif /* defined(KERNEL_INTEGRITY_KTRR)*/
 
 	// Process reset handlers
 	adrp	x19, EXT(ResetHandlerData)@page			// Get address of the reset handler data
@@ -179,6 +182,15 @@ Lfound_cpu_data_entry:
 1:
 
 
+
+#if __ARM_KERNEL_PROTECT__ && defined(KERNEL_INTEGRITY_KTRR)
+	/*
+	 * Populate TPIDR_EL1 (in case the CPU takes an exception while
+	 * turning on the MMU).
+	 */
+	ldr		x13, [x21, CPU_ACTIVE_THREAD]
+	msr		TPIDR_EL1, x13
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 	blr		x0
 Lskip_cpu_reset_handler:
@@ -291,13 +303,13 @@ start_cpu:
 
 	// x20 set to BootArgs phys address
 	// x21 set to cpu data phys address
-	msr		DAIFSet, #(DAIFSC_ALL)				// Disable all interrupts
 
 	// Get the kernel memory parameters from the boot args
 	ldr		x22, [x20, BA_VIRT_BASE]			// Get the kernel virt base
 	ldr		x23, [x20, BA_PHYS_BASE]			// Get the kernel phys base
 	ldr		x24, [x20, BA_MEM_SIZE]				// Get the physical memory size
 	ldr		x25, [x20, BA_TOP_OF_KERNEL_DATA]	// Get the top of the kernel data
+	ldr		x26, [x20, BA_BOOT_FLAGS]			// Get the kernel boot flags
 
 	// Set TPIDRRO_EL0 with the CPU number
 	ldr		x0, [x21, CPU_NUMBER_GS]
@@ -383,6 +395,52 @@ start_cpu:
 .endmacro
 
 /*
+ *  arg0 - virtual start address
+ *  arg1 - physical start address
+ *  arg2 - number of entries to map
+ *  arg3 - L1 table address
+ *  arg4 - free space pointer
+ *  arg5 - scratch (entries mapped per loop)
+ *  arg6 - scratch
+ *  arg7 - scratch
+ *  arg8 - scratch
+ *  arg9 - scratch
+ */
+.macro create_bootstrap_mapping
+	/* calculate entries left in this page */
+	and	$5, $0, #(ARM_TT_L2_INDEX_MASK)
+	lsr	$5, $5, #(ARM_TT_L2_SHIFT)
+	mov	$6, #(TTE_PGENTRIES)
+	sub	$5, $6, $5
+
+	/* allocate an L2 table */
+3:	add	$4, $4, PGBYTES
+
+	/* create_l1_table_entry(virt_base, L1 table, L2 table, scratch1, scratch2, scratch3) */
+	create_l1_table_entry	$0, $3, $4, $6, $7, $8
+
+	/* determine how many entries to map this loop - the smaller of entries
+	 * remaining in page and total entries left */
+	cmp	$2, $5
+	csel	$5, $2, $5, lt
+
+	/* create_l2_block_entries(virt_base, phys_base, L2 table, num_ents, scratch1, scratch2, scratch3) */
+	create_l2_block_entries	$0, $1, $4, $5, $6, $7, $8, $9
+
+	/* subtract entries just mapped and bail out if we're done */
+	subs	$2, $2, $5
+	beq	2f
+
+	/* entries left to map - advance base pointers */
+	add 	$0, $0, $5, lsl #(ARM_TT_L2_SHIFT)
+	add 	$1, $1, $5, lsl #(ARM_TT_L2_SHIFT)
+
+	mov	$5, #(TTE_PGENTRIES)  /* subsequent loops map (up to) a whole L2 page */
+	b	3b
+2:
+.endmacro
+
+/*
  * _start_first_cpu
  * Cold boot init routine.  Called from __start
  *   x0 - Boot args
@@ -393,8 +451,9 @@ LEXT(start_first_cpu)
 
 	// Unlock the core for debugging
 	msr		OSLAR_EL1, xzr
+	msr		DAIFSet, #(DAIFSC_ALL)				// Disable all interrupts
 	mov		x20, x0
-	mov		x21, xzr
+	mov		x21, #0
 
 	// Set low reset vector before attempting any loads
 	adrp	x0, EXT(LowExceptionVectorBase)@page
@@ -402,14 +461,16 @@ LEXT(start_first_cpu)
 	MSR_VBAR_EL1_X0
 
 
-
 	// Get the kernel memory parameters from the boot args
 	ldr		x22, [x20, BA_VIRT_BASE]			// Get the kernel virt base
 	ldr		x23, [x20, BA_PHYS_BASE]			// Get the kernel phys base
 	ldr		x24, [x20, BA_MEM_SIZE]				// Get the physical memory size
 	ldr		x25, [x20, BA_TOP_OF_KERNEL_DATA]	// Get the top of the kernel data
+	ldr		x26, [x20, BA_BOOT_FLAGS]			// Get the kernel boot flags
 
-	// Set CPU number to 0
+	// Clear the register that will be used to store the userspace thread pointer and CPU number.
+	// We may not actually be booting from ordinal CPU 0, so this register will be updated
+	// in ml_parse_cpu_topology(), which happens later in bootstrap.
 	msr		TPIDRRO_EL0, x21
 
 	// Set up exception stack pointer
@@ -467,20 +528,10 @@ LEXT(start_first_cpu)
 #else
 	lsl		x2, x2, #2							// Shift by 2 for num entries on 4 pages
 #endif
-	sub		x2, x2, #1							// Subtract one to terminate on last entry
 Linvalidate_bootstrap:							// do {
 	str		x0, [x1], #(1 << TTE_SHIFT)			//   Invalidate and advance
 	subs	x2, x2, #1							//   entries--
 	b.ne	Linvalidate_bootstrap				// } while (entries != 0)
-
-	/* Load addresses for page table construction macros
-	 *  x0 - Physical base (used to identify V=P section to set up)
-	 *	x1 - V=P L1 table base
-	 *	x2 - V=P L2 table base
-	 *	x3 - KVA L1 table base
-	 *	x4 - KVA L2 table base
-	 *	x5 - Mem size in entries (up to 1GB)
-	 */
 
 	/*
 	 * In order to reclaim memory on targets where TZ0 (or some other entity)
@@ -499,53 +550,55 @@ Linvalidate_bootstrap:							// do {
 	 * mapping TZ0.
 	 */
 	adrp	x0, EXT(_mh_execute_header)@page	// Use xnu's mach header as the start address
-	add		x0, x0, EXT(_mh_execute_header)@pageoff
-#if __ARM64_TWO_LEVEL_PMAP__
+	add	x0, x0, EXT(_mh_execute_header)@pageoff
+
 	/*
-	 * We don't need the L1 entries in this case, so skip them.
+	 * Adjust physical and virtual base addresses to account for physical
+	 * memory preceeding xnu Mach-O header
+	 * x22 - Kernel virtual base
+	 * x23 - Kernel physical base
+	 * x24 - Physical memory size
 	 */
-	mov		x2, x25								// Load V=P L2 table address
-	add		x4, x2, PGBYTES						// Load KVA L2 table address
-#else
-	mov		x1, x25								// Load V=P L1 table address
-	add		x2, x1, PGBYTES						// Load V=P L2 table address
-	add		x3, x2, PGBYTES						// Load KVA L1 table address
-	add		x4, x3, PGBYTES						// Load KVA L2 table address
-#endif
+	sub		x18, x0, x23
+	sub		x24, x24, x18
+	add		x22, x22, x18
+	add		x23, x23, x18
+
 	/*
-	 * We must adjust the amount we wish to map in order to account for the
-	 * memory preceeding xnu's mach header.
+	 * x0  - V=P virtual cursor
+	 * x4  - V=P physical cursor
+	 * x14 - KVA virtual cursor
+	 * x15 - KVA physical cursor
 	 */
-	sub		x5, x0, x23							// Map from the mach header up to the end of our memory
-	sub		x5, x24, x5
-	lsr		x5, x5, #(ARM_TT_L2_SHIFT)
-	mov		x6, #(TTE_PGENTRIES)				// Load number of L2 entries per page
-	cmp		x5, x6								// If memsize requires more than 1 page of entries
-	csel	x5, x5, x6, lt						// ... round down to a single page (first 1GB)
+	mov		x4, x0
+	mov		x14, x22
+	mov		x15, x23
 
-#if !__ARM64_TWO_LEVEL_PMAP__
-	/* Create entry for L2 table in V=P L1 table
-	 * create_l1_table_entry(V=P, L1 table, L2 table, scratch1, scratch2, scratch3)
+	/*
+	 * Allocate L1 tables
+	 * x1 - V=P L1 page
+	 * x3 - KVA L1 page
+	 * x2 - free mem pointer from which we allocate a variable number of L2
+	 * pages. The maximum number of bootstrap page table pages is limited to
+	 * BOOTSTRAP_TABLE_SIZE. For a 2G 4k page device, assuming the worst-case
+	 * slide, we need 1xL1 and up to 3xL2 pages (1GB mapped per L1 entry), so
+	 * 8 total pages for V=P and KVA.
 	 */
-	create_l1_table_entry	x0, x1, x2, x10, x11, x12
-#endif
+	mov		x1, x25
+	add		x3, x1, PGBYTES
+	mov		x2, x3
 
-	/* Create block entry in V=P L2 table
-	 * create_l2_block_entries(V=P virt, V=P phys, L2 table, num_ents, scratch1, scratch2, scratch3)
+	/*
+	 * Setup the V=P bootstrap mapping
+	 * x5 - total number of L2 entries to allocate
 	 */
-	create_l2_block_entries x0, x0, x2, x5, x10, x11, x12, x13
+	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
+	/* create_bootstrap_mapping(vbase, pbase, num_ents, L1 table, freeptr) */
+	create_bootstrap_mapping x0,  x4,  x5, x1, x2, x6, x10, x11, x12, x13
 
-#if !__ARM64_TWO_LEVEL_PMAP__
-	/* Create entry for L2 table in KVA L1 table
-	 * create_l1_table_entry(virt_base, L1 table, L2 table, scratch1, scratch2, scratch3)
-	 */
-	create_l1_table_entry	x22, x3, x4, x10, x11, x12
-#endif
-
-	/* Create block entries in KVA L2 table
-	 * create_l2_block_entries(virt_base, phys_base, L2 table, num_ents, scratch1, scratch2, scratch3)
-	 */
-	create_l2_block_entries	x22, x23, x4, x5, x10, x11, x12, x13
+	/* Setup the KVA bootstrap mapping */
+	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
+	create_bootstrap_mapping x14, x15, x5, x3, x2, x9, x10, x11, x12, x13
 
 	/* Ensure TTEs are visible */
 	dsb		ish
@@ -560,8 +613,7 @@ Linvalidate_bootstrap:							// do {
  *	x21 - zero on cold boot, PA of cpu data on warm reset
  *	x22 - Kernel virtual base
  *	x23 - Kernel physical base
- *	x24	- Physical memory size
- *	x25 - PA of the end of the kernl
+ *	x25 - PA of the end of the kernel
  *	 lr - KVA of C init routine
  *	 sp - SP_EL0 selected
  *
@@ -578,7 +630,7 @@ common_start:
 
 	/* Set up translation table base registers.
 	 *	TTBR0 - V=P table @ top of kernel
-	 *	TTBR1 - KVA table @ top of kernel + 2 pages
+	 *	TTBR1 - KVA table @ top of kernel + 1 page
 	 */
 #if defined(KERNEL_INTEGRITY_KTRR)
 	/* Note that for KTRR configurations, the V=P map will be modified by
@@ -586,21 +638,10 @@ common_start:
 	 */
 #endif
 	and		x0, x25, #(TTBR_BADDR_MASK)
-	msr		TTBR0_EL1, x0
-#if __ARM64_TWO_LEVEL_PMAP__
-	/*
-	 * If we're using a two level pmap, we'll only need a
-	 * single page per bootstrap pmap.
-	 */
-	mov		x12, #1
-#else
-	/*
-	 * If we're using a three level pmap, we'll need two
-	 * pages per bootstrap pmap.
-	 */
-	mov		x12, #2
-#endif
-	add		x0, x25, x12, lsl PGSHIFT
+	mov		x19, lr
+	bl		EXT(set_mmu_ttb)
+	mov		lr, x19
+	add		x0, x25, PGBYTES
 	and		x0, x0, #(TTBR_BADDR_MASK)
 	MSR_TTBR1_EL1_X0
 
@@ -620,9 +661,6 @@ common_start:
 	orr		x0, x0, x1
 	msr		MAIR_EL1, x0
 
-	// Disable interrupts
-	msr     DAIFSet, #(DAIFSC_IRQF | DAIFSC_FIQF)
-
 #if defined(APPLEHURRICANE)
 
 	// <rdar://problem/26726624> Increase Snoop reservation in EDB to reduce starvation risk
@@ -632,6 +670,19 @@ common_start:
 	orr x12, x12, ARM64_REG_HID5_CrdEdbSnpRsvd_VALUE
 	msr	ARM64_REG_HID5, x12
 
+#endif
+
+#if defined(BCM2837)
+	// Setup timer interrupt routing; must be done before MMU is enabled
+	mrs		x15, MPIDR_EL1						// Load MPIDR to get CPU number
+	and		x15, x15, #0xFF						// CPU number is in MPIDR Affinity Level 0
+	mov		x0, #0x4000
+	lsl		x0, x0, #16
+	add		x0, x0, #0x0040						// x0: 0x4000004X Core Timers interrupt control
+	add		x0, x0, x15, lsl #2
+	mov		w1, #0xF0 						// x1: 0xF0 	  Route to Core FIQs
+	str		w1, [x0]
+	isb		sy
 #endif
 
 
@@ -656,10 +707,20 @@ common_start:
 1:
 
 	// Set up the exception vectors
+#if __ARM_KERNEL_PROTECT__
+	/* If this is not the first reset of the boot CPU, the alternate mapping
+	 * for the exception vectors will be set up, so use it.  Otherwise, we
+	 * should use the mapping located in the kernelcache mapping.
+	 */
+	MOV64	x0, ARM_KERNEL_PROTECT_EXCEPTION_START
+
+	cbnz		x21, 1f
+#endif /* __ARM_KERNEL_PROTECT__ */
 	adrp	x0, EXT(ExceptionVectorsBase)@page			// Load exception vectors base address
 	add		x0, x0, EXT(ExceptionVectorsBase)@pageoff
 	add		x0, x0, x22									// Convert exception vector address to KVA
 	sub		x0, x0, x23
+1:
 	MSR_VBAR_EL1_X0
 
 
@@ -685,6 +746,15 @@ common_start:
 	// Clear thread pointer
 	mov		x0, #0
 	msr		TPIDR_EL1, x0						// Set thread register
+
+#if defined(APPLE_ARM64_ARCH_FAMILY)
+	// Initialization common to all Apple targets
+	ARM64_IS_PCORE x15
+	ARM64_READ_EP_SPR x15, x12, ARM64_REG_EHID4, ARM64_REG_HID4
+	orr		x12, x12, ARM64_REG_HID4_DisDcMVAOps
+	orr		x12, x12, ARM64_REG_HID4_DisDcSWL2Ops
+	ARM64_WRITE_EP_SPR x15, x12, ARM64_REG_EHID4, ARM64_REG_HID4
+#endif  // APPLE_ARM64_ARCH_FAMILY
 
 #if defined(APPLECYCLONE) || defined(APPLETYPHOON)
 	//
@@ -713,15 +783,6 @@ common_start:
 	orr		x12, x12, ARM64_REG_HID3_DisXmonSnpEvictTriggerL2StarvationMode
 	msr		ARM64_REG_HID3, x12
 
-	// Do not disable cache ops -- XNU's cache operations already are no-op'ed for Cyclone, but explicit _Force variants are provided
-	// for when we really do need the L2 cache to be cleaned: <rdar://problem/14350417> Innsbruck11A416: Panic logs not preserved on h6
-/*
-	mrs		x12, ARM64_REG_HID4
-	orr		x12, x12, ARM64_REG_HID4_DisDcMVAOps
-	orr		x12, x12, ARM64_REG_HID4_DisDcSWL2Ops
-	msr		ARM64_REG_HID4, x12
-*/
-
 	mrs		x12, ARM64_REG_HID5
 	and		x12, x12, (~ARM64_REG_HID5_DisHwpLd)
 	and		x12, x12, (~ARM64_REG_HID5_DisHwpSt)
@@ -738,20 +799,37 @@ common_start:
 #endif	// APPLECYCLONE || APPLETYPHOON
 
 #if defined(APPLETWISTER)
-	mrs 	x12, ARM64_REG_HID11
-	and 	x12, x12, (~ARM64_REG_HID11_DisFillC1BubOpt)
-	msr 	ARM64_REG_HID11, x12
+
+	// rdar://problem/36112905: Set CYC_CFG:skipInit to pull in isAlive by one DCLK
+	// to work around potential hang.  Must only be applied to Maui C0.
+	mrs		x12, MIDR_EL1
+	ubfx		x13, x12, #MIDR_EL1_PNUM_SHIFT, #12
+	cmp		x13, #4		// Part number 4 => Maui, 5 => Malta/Elba
+	bne		Lskip_isalive
+	ubfx		x13, x12, #MIDR_EL1_VAR_SHIFT, #4
+	cmp		x13, #2		// variant 2 => Maui C0
+	b.lt		Lskip_isalive
+
+	mrs		x12, ARM64_REG_CYC_CFG
+	orr		x12, x12, ARM64_REG_CYC_CFG_skipInit
+	msr		ARM64_REG_CYC_CFG, x12
+
+Lskip_isalive:
+
+	mrs		x12, ARM64_REG_HID11
+	and		x12, x12, (~ARM64_REG_HID11_DisFillC1BubOpt)
+	msr		ARM64_REG_HID11, x12
 
 	// Change the default memcache data set ID from 0 to 15 for all agents
 	mrs		x12, ARM64_REG_HID8
 	orr		x12, x12, (ARM64_REG_HID8_DataSetID0_VALUE | ARM64_REG_HID8_DataSetID1_VALUE)
-	orr 	x12, x12, (ARM64_REG_HID8_DataSetID2_VALUE | ARM64_REG_HID8_DataSetID3_VALUE)
+	orr		x12, x12, (ARM64_REG_HID8_DataSetID2_VALUE | ARM64_REG_HID8_DataSetID3_VALUE)
 	msr		ARM64_REG_HID8, x12
 
 	// Use 4-cycle MUL latency to avoid denormal stalls
-	mrs 	x12, ARM64_REG_HID7
-	orr 	x12, x12, #ARM64_REG_HID7_disNexFastFmul
-	msr 	ARM64_REG_HID7, x12
+	mrs		x12, ARM64_REG_HID7
+	orr		x12, x12, #ARM64_REG_HID7_disNexFastFmul
+	msr		ARM64_REG_HID7, x12
 
 	// disable reporting of TLB-multi-hit-error
 	// <rdar://problem/22163216> 
@@ -787,7 +865,6 @@ common_start:
 #if defined(ARM64_BOARD_CONFIG_T8011)
 	// Clear DisDcZvaCmdOnly 
 	// Per Myst A0/B0 tunables document
-	// https://seg-docs.csg.apple.com/projects/myst//release/UserManual/tunables_a0/ACC.html
 	// <rdar://problem/27627428> Myst: Confirm ACC Per-CPU Tunables
 	mrs		x12, ARM64_REG_HID3
 	and             x12, x12, ~ARM64_REG_HID3_DisDcZvaCmdOnly
@@ -799,6 +876,83 @@ common_start:
 #endif /* defined(ARM64_BOARD_CONFIG_T8011) */
 
 #endif // APPLEHURRICANE
+
+#if defined(APPLEMONSOON)
+
+	/***** Tunables that apply to all skye cores, all chip revs *****/
+
+	// <rdar://problem/28512310> SW WAR/eval: WKdm write ack lost when bif_wke_colorWrAck_XXaH asserts concurrently for both colors
+	mrs		x12, ARM64_REG_HID8
+	orr		x12, x12, #ARM64_REG_HID8_WkeForceStrictOrder
+	msr		ARM64_REG_HID8, x12
+
+	// Skip if not E-core
+	ARM64_IS_PCORE x15
+	cbnz		x15, Lskip_skye_ecore_only
+
+	/***** Tunables that only apply to skye e-cores, all chip revs *****/
+
+	// <rdar://problem/30423928>: Atomic launch eligibility is erroneously taken away when a store at SMB gets invalidated
+	mrs		x12, ARM64_REG_EHID11
+	and		x12, x12, ~(ARM64_REG_EHID11_SmbDrainThresh_mask)
+	msr		ARM64_REG_EHID11, x12
+
+Lskip_skye_ecore_only:
+
+	SKIP_IF_CPU_VERSION_GREATER_OR_EQUAL x12, MONSOON_CPU_VERSION_B0, Lskip_skye_a0_workarounds
+
+	// Skip if not E-core
+	cbnz		x15, Lskip_skye_a0_ecore_only
+
+	/***** Tunables that only apply to skye e-cores, chip revs < B0 *****/
+
+	// Disable downstream fill bypass logic
+	// <rdar://problem/28545159> [Tunable] Skye - L2E fill bypass collision from both pipes to ecore
+	mrs		x12, ARM64_REG_EHID5
+	orr		x12, x12, ARM64_REG_EHID5_DisFillByp
+	msr		ARM64_REG_EHID5, x12
+
+	// Disable forwarding of return addresses to the NFP 
+	// <rdar://problem/30387067> Skye: FED incorrectly taking illegal va exception
+	mrs		x12, ARM64_REG_EHID0
+	orr		x12, x12, ARM64_REG_EHID0_nfpRetFwdDisb
+	msr		ARM64_REG_EHID0, x12
+
+Lskip_skye_a0_ecore_only:
+
+	/***** Tunables that apply to all skye cores, chip revs < B0 *****/
+
+	// Disable clock divider gating
+	// <rdar://problem/30854420> [Tunable/Errata][cpu_1p_1e] [CPGV2] ACC power down issue when link FSM switches from GO_DN to CANCEL and at the same time upStreamDrain request is set.
+	mrs		x12, ARM64_REG_HID6
+	orr		x12, x12, ARM64_REG_HID6_DisClkDivGating
+	msr		ARM64_REG_HID6, x12
+
+	// Disable clock dithering
+	// <rdar://problem/29022199> [Tunable] Skye A0: Linux: LLC PIO Errors
+	mrs		x12, ARM64_REG_ACC_OVRD
+	orr		x12, x12, ARM64_REG_ACC_OVRD_dsblClkDtr
+	msr		ARM64_REG_ACC_OVRD, x12
+
+	mrs		x12, ARM64_REG_ACC_EBLK_OVRD
+	orr		x12, x12, ARM64_REG_ACC_OVRD_dsblClkDtr
+	msr		ARM64_REG_ACC_EBLK_OVRD, x12
+
+Lskip_skye_a0_workarounds:
+
+	SKIP_IF_CPU_VERSION_LESS_THAN x12, MONSOON_CPU_VERSION_B0, Lskip_skye_post_a1_workarounds
+
+	/***** Tunables that apply to all skye cores, chip revs >= B0 *****/
+
+	// <rdar://problem/32512836>: Disable refcount syncing between E and P
+	mrs		x12, ARM64_REG_CYC_OVRD
+	and		x12, x12, ~ARM64_REG_CYC_OVRD_dsblSnoopTime_mask
+	orr		x12, x12, ARM64_REG_CYC_OVRD_dsblSnoopPTime
+	msr		ARM64_REG_CYC_OVRD, x12
+
+Lskip_skye_post_a1_workarounds:
+
+#endif /* defined(APPLEMONSOON) */
 
 
 	// If x21 != 0, we're doing a warm reset, so we need to trampoline to the kernel pmap.
@@ -870,25 +1024,12 @@ arm_init_tramp:
 	 *  +---Kernel Base---+
 	 */
 
-
-	adrp	x0, EXT(invalid_ttep)@page
-	add		x0, x0, EXT(invalid_ttep)@pageoff
-	ldr		x0, [x0]
-
-	msr		TTBR0_EL1, x0
-
+	mov		x19, lr
 	// Convert CPU data PA to VA and set as first argument
-	add		x0, x21, x22
-	sub		x0, x0, x23
-	mov		x1, #0
+	mov		x0, x21
+	bl		EXT(phystokv)
 
-	// Make sure that the TLB flush happens after the registers are set!
-	isb		sy
-
-	// Synchronize system for TTBR updates
-	tlbi	vmalle1
-	dsb		sy
-	isb		sy
+	mov		lr, x19
 
 	/* Return to arm_init() */
 	ret

@@ -96,6 +96,31 @@ typedef _STRUCT_ARM_THREAD_STATE		arm_thread_state_t;
 typedef _STRUCT_ARM_THREAD_STATE		arm_thread_state32_t;
 typedef _STRUCT_ARM_THREAD_STATE64		arm_thread_state64_t;
 
+#if !defined(KERNEL)
+#if __DARWIN_C_LEVEL >= __DARWIN_C_FULL && defined(__arm64__)
+#define arm_thread_state64_get_pc(ts) \
+		__darwin_arm_thread_state64_get_pc(ts)
+#define arm_thread_state64_get_pc_fptr(ts) \
+		__darwin_arm_thread_state64_get_pc_fptr(ts)
+#define arm_thread_state64_set_pc_fptr(ts, fptr) \
+		__darwin_arm_thread_state64_set_pc_fptr(ts, fptr)
+#define arm_thread_state64_get_lr(ts) \
+		__darwin_arm_thread_state64_get_lr(ts)
+#define arm_thread_state64_get_lr_fptr(ts) \
+		__darwin_arm_thread_state64_get_lr_fptr(ts)
+#define arm_thread_state64_set_lr_fptr(ts, fptr) \
+		__darwin_arm_thread_state64_set_lr_fptr(ts, fptr)
+#define arm_thread_state64_get_sp(ts) \
+		__darwin_arm_thread_state64_get_sp(ts)
+#define arm_thread_state64_set_sp(ts, ptr) \
+		__darwin_arm_thread_state64_set_sp(ts, ptr)
+#define arm_thread_state64_get_fp(ts) \
+		__darwin_arm_thread_state64_get_fp(ts)
+#define arm_thread_state64_set_fp(ts, ptr) \
+		__darwin_arm_thread_state64_set_fp(ts, ptr)
+#endif /* __DARWIN_C_LEVEL >= __DARWIN_C_FULL && defined(__arm64__) */
+#endif /* !defined(KERNEL) */
+
 struct arm_unified_thread_state {
 	arm_state_hdr_t ash;
 	union {
@@ -364,12 +389,12 @@ typedef struct arm_saved_state32_tagged arm_saved_state32_tagged_t;
 		(sizeof (arm_saved_state32_t)/sizeof(unsigned int)))
 
 struct arm_saved_state64 {
-	uint64_t    x[29];		/* General purpose registers x0-x28 */
-	uint64_t    fp;			/* Frame pointer x29 */
-	uint64_t    lr;			/* Link register x30 */
-	uint64_t    sp;			/* Stack pointer x31 */
-	uint64_t    pc;			/* Program counter */
-	uint32_t    cpsr;		/* Current program status register */
+	uint64_t	x[29];		/* General purpose registers x0-x28 */
+	uint64_t	fp;			/* Frame pointer x29 */
+	uint64_t	lr;			/* Link register x30 */
+	uint64_t	sp;			/* Stack pointer x31 */
+	uint64_t	pc;			/* Program counter */
+	uint32_t	cpsr;		/* Current program status register */
 	uint32_t	reserved;	/* Reserved padding */
 	uint64_t	far;		/* Virtual fault address */
 	uint32_t	esr;		/* Exception syndrome register */

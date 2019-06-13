@@ -30,7 +30,13 @@ extern struct arm_saved_state *get_user_regs(thread_t);
 extern user_addr_t thread_get_cthread_self(void);
 extern kern_return_t thread_getstatus(thread_t act, int flavor,
 		thread_state_t tstate, mach_msg_type_number_t *count);
+extern kern_return_t thread_getstatus_to_user(thread_t act, int flavor,
+		thread_state_t tstate, mach_msg_type_number_t *count);
+extern kern_return_t machine_thread_state_convert_to_user(thread_t act, int flavor,
+		thread_state_t tstate, mach_msg_type_number_t *count);
 extern kern_return_t thread_setstatus(thread_t thread, int flavor,
+		thread_state_t tstate, mach_msg_type_number_t count);
+extern kern_return_t thread_setstatus_from_user(thread_t thread, int flavor,
 		thread_state_t tstate, mach_msg_type_number_t count);
 /* XXX Put these someplace smarter... */
 typedef struct mcontext32 mcontext32_t; 
@@ -50,16 +56,22 @@ typedef struct mcontext64 mcontext64_t;
 #endif
 
 static int
-sendsig_get_state32(thread_t th_act, mcontext32_t *mcp)
+sendsig_get_state32(thread_t th_act, arm_thread_state_t *ts, mcontext32_t *mcp)
 {
 	void *tstate;
 	mach_msg_type_number_t state_count;
 
-	assert(!proc_is64bit(current_proc()));
+	assert(!proc_is64bit_data(current_proc()));
 
-	tstate = (void *) &mcp->ss;
+	tstate = (void *) ts;
 	state_count = ARM_THREAD_STATE_COUNT;
 	if (thread_getstatus(th_act, ARM_THREAD_STATE, (thread_state_t) tstate, &state_count) != KERN_SUCCESS)
+		return EINVAL;
+
+	mcp->ss = *ts;
+	tstate = (void *) &mcp->ss;
+	state_count = ARM_THREAD_STATE_COUNT;
+	if (machine_thread_state_convert_to_user(th_act, ARM_THREAD_STATE, (thread_state_t) tstate, &state_count) != KERN_SUCCESS)
 		return EINVAL;
 
 	tstate = (void *) &mcp->es;
@@ -69,7 +81,7 @@ sendsig_get_state32(thread_t th_act, mcontext32_t *mcp)
 
 	tstate = (void *) &mcp->fs;
 	state_count = ARM_VFP_STATE_COUNT;
-	if (thread_getstatus(th_act, ARM_VFP_STATE, (thread_state_t) tstate, &state_count) != KERN_SUCCESS)
+	if (thread_getstatus_to_user(th_act, ARM_VFP_STATE, (thread_state_t) tstate, &state_count) != KERN_SUCCESS)
 		return EINVAL;
 
 	return 0;
@@ -77,23 +89,29 @@ sendsig_get_state32(thread_t th_act, mcontext32_t *mcp)
 
 #if defined(__arm64__)
 struct user_sigframe64 {
-	/* We can pass the last arg in a register for ARM64 */
+	/* We can pass the last two args in registers for ARM64 */
 	user64_siginfo_t	sinfo;
 	struct user_ucontext64 	uctx;
 	mcontext64_t		mctx;
 };
 
 static int
-sendsig_get_state64(thread_t th_act, mcontext64_t *mcp)
+sendsig_get_state64(thread_t th_act, arm_thread_state64_t *ts, mcontext64_t *mcp)
 {
 	void *tstate;
 	mach_msg_type_number_t state_count;
 
-	assert(proc_is64bit(current_proc()));
+	assert(proc_is64bit_data(current_proc()));
 
-	tstate = (void *) &mcp->ss;
+	tstate = (void *) ts;
 	state_count = ARM_THREAD_STATE64_COUNT;
 	if (thread_getstatus(th_act, ARM_THREAD_STATE64, (thread_state_t) tstate, &state_count) != KERN_SUCCESS)
+		return EINVAL;
+
+	mcp->ss = *ts;
+	tstate = (void *) &mcp->ss;
+	state_count = ARM_THREAD_STATE64_COUNT;
+	if (machine_thread_state_convert_to_user(th_act, ARM_THREAD_STATE64, (thread_state_t) tstate, &state_count) != KERN_SUCCESS)
 		return EINVAL;
 
 	tstate = (void *) &mcp->es;
@@ -103,7 +121,7 @@ sendsig_get_state64(thread_t th_act, mcontext64_t *mcp)
 
 	tstate = (void *) &mcp->ns;
 	state_count = ARM_NEON_STATE64_COUNT;
-	if (thread_getstatus(th_act, ARM_NEON_STATE64, (thread_state_t) tstate, &state_count) != KERN_SUCCESS)
+	if (thread_getstatus_to_user(th_act, ARM_NEON_STATE64, (thread_state_t) tstate, &state_count) != KERN_SUCCESS)
 		return EINVAL;
 
 	return 0;
@@ -127,15 +145,16 @@ sendsig_fill_uctx64(user_ucontext64_t *uctx, int oonstack, int mask, user64_addr
 static kern_return_t
 sendsig_set_thread_state64(arm_thread_state64_t *regs, 
 		user64_addr_t catcher, int infostyle, int sig, user64_addr_t p_sinfo, 
-		user64_addr_t p_uctx, user64_addr_t trampact, user64_addr_t sp, thread_t th_act)
+		user64_addr_t p_uctx, user64_addr_t token, user64_addr_t trampact, user64_addr_t sp, thread_t th_act)
 {
-	assert(proc_is64bit(current_proc()));
+	assert(proc_is64bit_data(current_proc()));
 
 	regs->x[0] = catcher;
 	regs->x[1] = infostyle;
 	regs->x[2] = sig;
 	regs->x[3] = p_sinfo;
 	regs->x[4] = p_uctx;
+	regs->x[5] = token;
 	regs->pc = trampact;
 	regs->cpsr = PSR64_USER64_DEFAULT;
 	regs->sp = sp;
@@ -165,7 +184,7 @@ sendsig_set_thread_state32(arm_thread_state_t *regs,
 		user32_addr_t trampact, user32_addr_t sp, thread_t th_act)
 {
 
-	assert(!proc_is64bit(current_proc()));
+	assert(!proc_is64bit_data(current_proc()));
 
 	regs->r[0] = catcher;
 	regs->r[1] = infostyle;
@@ -220,6 +239,7 @@ sendsig_do_dtrace(uthread_t ut, user_siginfo_t *sinfo, int sig, user_addr_t catc
 	
 struct user_sigframe32 {
 	user32_addr_t		puctx;
+	user32_addr_t		token;
 	user32_siginfo_t 	sinfo;
 	struct user_ucontext32 	uctx;
 	mcontext32_t		mctx;
@@ -238,6 +258,16 @@ sendsig(
 	__unused uint32_t code
 )
 {
+	union {
+		struct ts32 {
+			arm_thread_state_t ss;
+		} ts32;
+#if defined(__arm64__)
+		struct ts64 {
+			arm_thread_state64_t ss;
+		} ts64;
+#endif
+	} ts;
 	union { 
 		struct user_sigframe32 uf32;
 #if defined(__arm64__)
@@ -252,10 +282,13 @@ sendsig(
 	thread_t        th_act;
 	struct uthread *ut;
 	user_size_t	stack_size = 0;
+	user_addr_t     p_uctx, token_uctx;
+	kern_return_t   kr;
 
 	th_act = current_thread();
 	ut = get_bsdthread_info(th_act);
 
+	bzero(&ts, sizeof(ts));
 	bzero(&user_frame, sizeof(user_frame));
 
 	if (p->p_sigacts->ps_siginfo & sigmask(sig))
@@ -269,16 +302,16 @@ sendsig(
 	/*
 	 * Get sundry thread state.
 	 */
-	if (proc_is64bit(p)) {
+	if (proc_is64bit_data(p)) {
 #ifdef __arm64__
-		if (sendsig_get_state64(th_act, &user_frame.uf64.mctx) != 0) {
+		if (sendsig_get_state64(th_act, &ts.ts64.ss, &user_frame.uf64.mctx) != 0) {
 			goto bad2;
 		}
 #else
 	panic("Shouldn't have 64-bit thread states on a 32-bit kernel.");
 #endif
 	} else {
-		if (sendsig_get_state32(th_act, &user_frame.uf32.mctx) != 0) {
+		if (sendsig_get_state32(th_act, &ts.ts32.ss, &user_frame.uf32.mctx) != 0) {
 			goto bad2;
 		}
 	}
@@ -297,15 +330,15 @@ sendsig(
 		 * Get stack pointer, and allocate enough space
 		 * for signal handler data.
 		 */
-		if (proc_is64bit(p)) {
+		if (proc_is64bit_data(p)) {
 #if defined(__arm64__)
-			sp = CAST_USER_ADDR_T(user_frame.uf64.mctx.ss.sp);
+			sp = CAST_USER_ADDR_T(ts.ts64.ss.sp);
 			sp = (sp - sizeof(user_frame.uf64) - C_64_REDZONE_LEN) & ~0xf; /* Make sure to align to 16 bytes and respect red zone */
 #else
 			panic("Shouldn't have 64-bit thread states on a 32-bit kernel.");
 #endif
 		} else {
-			sp = CAST_USER_ADDR_T(user_frame.uf32.mctx.ss.sp);
+			sp = CAST_USER_ADDR_T(ts.ts32.ss.sp);
 			sp -= sizeof(user_frame.uf32);
 #if defined(__arm__) && (__BIGGEST_ALIGNMENT__ > 4)
 			sp &= ~0xf; /* Make sure to align to 16 bytes for armv7k */
@@ -318,7 +351,7 @@ sendsig(
 	/*
 	 * Fill in ucontext (points to mcontext, i.e. thread states).
 	 */
-	if (proc_is64bit(p)) {
+	if (proc_is64bit_data(p)) {
 #if defined(__arm64__)
 		sendsig_fill_uctx64(&user_frame.uf64.uctx, oonstack, mask, sp, (user64_size_t)stack_size,
 				(user64_addr_t)&((struct user_sigframe64*)sp)->mctx);
@@ -336,16 +369,16 @@ sendsig(
 	bzero((caddr_t) & sinfo, sizeof(sinfo));
 	sinfo.si_signo = sig;
 
-	if (proc_is64bit(p)) {
+	if (proc_is64bit_data(p)) {
 #if defined(__arm64__)
-		sinfo.si_addr = user_frame.uf64.mctx.ss.pc;
-		sinfo.pad[0] = user_frame.uf64.mctx.ss.sp;
+		sinfo.si_addr = ts.ts64.ss.pc;
+		sinfo.pad[0] = ts.ts64.ss.sp;
 #else
 		panic("Shouldn't have 64-bit thread states on a 32-bit kernel.");
 #endif
 	} else {
-		sinfo.si_addr = user_frame.uf32.mctx.ss.pc;
-		sinfo.pad[0] = user_frame.uf32.mctx.ss.sp;
+		sinfo.si_addr = ts.ts32.ss.pc;
+		sinfo.pad[0] = ts.ts32.ss.sp;
 	}
 
 	switch (sig) {
@@ -368,7 +401,7 @@ sendsig(
 		break;
 
 	case SIGBUS:
-		if (proc_is64bit(p)) {
+		if (proc_is64bit_data(p)) {
 #if defined(__arm64__)
 			sinfo.si_addr = user_frame.uf64.mctx.es.far;
 #else
@@ -382,7 +415,7 @@ sendsig(
 		break;
 
 	case SIGSEGV:
-		if (proc_is64bit(p)) {
+		if (proc_is64bit_data(p)) {
 #if defined(__arm64__)
 			sinfo.si_addr = user_frame.uf64.mctx.es.far;
 #else
@@ -460,40 +493,64 @@ sendsig(
 	/* 
 	 * Copy signal-handling frame out to user space, set thread state.
 	 */
-	if (proc_is64bit(p)) {
+	if (proc_is64bit_data(p)) {
 #if defined(__arm64__)
+		user64_addr_t token;
+
 		/*
 		 * mctx filled in when we get state.  uctx filled in by 
 		 * sendsig_fill_uctx64(). We fill in the sinfo now.
 		 */
 		siginfo_user_to_user64(&sinfo, &user_frame.uf64.sinfo);
 
+		p_uctx = (user_addr_t)&((struct user_sigframe64*)sp)->uctx;
+		/*
+		 * Generate the validation token for sigreturn
+		 */
+		token_uctx = p_uctx;
+		kr = machine_thread_siguctx_pointer_convert_to_user(th_act, &token_uctx);
+		assert(kr == KERN_SUCCESS);
+		token = (user64_addr_t)token_uctx ^ (user64_addr_t)ps->ps_sigreturn_token;
+
 		if (copyout(&user_frame.uf64, sp, sizeof(user_frame.uf64)) != 0) {
 			goto bad; 
 		} 
 
-		if (sendsig_set_thread_state64(&user_frame.uf64.mctx.ss,
+		if (sendsig_set_thread_state64(&ts.ts64.ss,
 			catcher, infostyle, sig, (user64_addr_t)&((struct user_sigframe64*)sp)->sinfo,
-			(user64_addr_t)&((struct user_sigframe64*)sp)->uctx, trampact, sp, th_act) != KERN_SUCCESS)
+			(user64_addr_t)p_uctx, token, trampact, sp, th_act) != KERN_SUCCESS)
 			goto bad;
 
 #else
 	panic("Shouldn't have 64-bit thread states on a 32-bit kernel.");
 #endif
 	} else {
+		user32_addr_t token;
+
 		/*
 		 * mctx filled in when we get state.  uctx filled in by 
-		 * sendsig_fill_uctx32(). We fill in the sinfo and *pointer* 
-		 * to uctx now.
+		 * sendsig_fill_uctx32(). We fill in the sinfo, *pointer*
+		 * to uctx and token now.
 		 */
 		siginfo_user_to_user32(&sinfo, &user_frame.uf32.sinfo);
-		user_frame.uf32.puctx = (user32_addr_t) &((struct user_sigframe32*)sp)->uctx;
+
+		p_uctx = (user_addr_t)&((struct user_sigframe32*)sp)->uctx;
+		/*
+		 * Generate the validation token for sigreturn
+		 */
+		token_uctx = (user_addr_t)p_uctx;
+		kr = machine_thread_siguctx_pointer_convert_to_user(th_act, &token_uctx);
+		assert(kr == KERN_SUCCESS);
+		token = (user32_addr_t)token_uctx ^ (user32_addr_t)ps->ps_sigreturn_token;
+
+		user_frame.uf32.puctx = (user32_addr_t)p_uctx;
+		user_frame.uf32.token = token;
 
 		if (copyout(&user_frame.uf32, sp, sizeof(user_frame.uf32)) != 0) {
 			goto bad; 
 		} 
 
-		if (sendsig_set_thread_state32(&user_frame.uf32.mctx.ss,
+		if (sendsig_set_thread_state32(&ts.ts32.ss,
 			CAST_DOWN_EXPLICIT(user32_addr_t, catcher), infostyle, sig, (user32_addr_t)&((struct user_sigframe32*)sp)->sinfo,
 			CAST_DOWN_EXPLICIT(user32_addr_t, trampact), CAST_DOWN_EXPLICIT(user32_addr_t, sp), th_act) != KERN_SUCCESS)
 			goto bad;
@@ -530,7 +587,7 @@ sigreturn_copyin_ctx32(struct user_ucontext32 *uctx, mcontext32_t *mctx, user_ad
 {
 	int error;
 
-	assert(!proc_is64bit(current_proc()));
+	assert(!proc_is64bit_data(current_proc()));
 
 	error = copyin(uctx_addr, uctx, sizeof(*uctx));
 	if (error) {
@@ -557,7 +614,7 @@ sigreturn_copyin_ctx32(struct user_ucontext32 *uctx, mcontext32_t *mctx, user_ad
 static int
 sigreturn_set_state32(thread_t th_act, mcontext32_t *mctx) 
 {
-	assert(!proc_is64bit(current_proc()));
+	assert(!proc_is64bit_data(current_proc()));
 
 	/* validate the thread state, set/reset appropriate mode bits in cpsr */
 #if defined(__arm__)
@@ -568,10 +625,10 @@ sigreturn_set_state32(thread_t th_act, mcontext32_t *mctx)
 #error Unknown architecture.
 #endif
 
-	if (thread_setstatus(th_act, ARM_THREAD_STATE, (void *)&mctx->ss, ARM_THREAD_STATE_COUNT) != KERN_SUCCESS) {
+	if (thread_setstatus_from_user(th_act, ARM_THREAD_STATE, (void *)&mctx->ss, ARM_THREAD_STATE_COUNT) != KERN_SUCCESS) {
 		return (EINVAL);
 	}
-	if (thread_setstatus(th_act, ARM_VFP_STATE, (void *)&mctx->fs, ARM_VFP_STATE_COUNT) != KERN_SUCCESS) {
+	if (thread_setstatus_from_user(th_act, ARM_VFP_STATE, (void *)&mctx->fs, ARM_VFP_STATE_COUNT) != KERN_SUCCESS) {
 		return (EINVAL);
 	}
 
@@ -584,7 +641,7 @@ sigreturn_copyin_ctx64(struct user_ucontext64 *uctx, mcontext64_t *mctx, user_ad
 {
 	int error;
 
-	assert(proc_is64bit(current_proc()));
+	assert(proc_is64bit_data(current_proc()));
 
 	error = copyin(uctx_addr, uctx, sizeof(*uctx));
 	if (error) {
@@ -611,15 +668,15 @@ sigreturn_copyin_ctx64(struct user_ucontext64 *uctx, mcontext64_t *mctx, user_ad
 static int
 sigreturn_set_state64(thread_t th_act, mcontext64_t *mctx) 
 {
-	assert(proc_is64bit(current_proc()));
+	assert(proc_is64bit_data(current_proc()));
 
 	/* validate the thread state, set/reset appropriate mode bits in cpsr */
 	mctx->ss.cpsr = (mctx->ss.cpsr & ~PSR64_MODE_MASK) | PSR64_USER64_DEFAULT;
 
-	if (thread_setstatus(th_act, ARM_THREAD_STATE64, (void *)&mctx->ss, ARM_THREAD_STATE64_COUNT) != KERN_SUCCESS) {
+	if (thread_setstatus_from_user(th_act, ARM_THREAD_STATE64, (void *)&mctx->ss, ARM_THREAD_STATE64_COUNT) != KERN_SUCCESS) {
 		return (EINVAL);
 	}
-	if (thread_setstatus(th_act, ARM_NEON_STATE64, (void *)&mctx->ns, ARM_NEON_STATE64_COUNT) != KERN_SUCCESS) {
+	if (thread_setstatus_from_user(th_act, ARM_NEON_STATE64, (void *)&mctx->ns, ARM_NEON_STATE64_COUNT) != KERN_SUCCESS) {
 		return (EINVAL);
 	}
 
@@ -648,14 +705,18 @@ sigreturn(
 #endif
 	} mctx;
 
+	struct sigacts *ps = p->p_sigacts;
 	int             error, sigmask = 0, onstack = 0;
 	thread_t        th_act;
 	struct uthread *ut;
+	uint32_t        sigreturn_validation;
+	user_addr_t     token_uctx;
+	kern_return_t   kr;
 
 	th_act = current_thread();
 	ut = (struct uthread *) get_bsdthread_info(th_act);
 
-	if (proc_is64bit(p)) {
+	if (proc_is64bit_data(p)) {
 #if defined(__arm64__)
 		error = sigreturn_copyin_ctx64(&uctx.uc64, &mctx.mc64, uap->uctx);
 		if (error != 0) {
@@ -686,18 +747,54 @@ sigreturn(
 	if (ut->uu_siglist & ~ut->uu_sigmask)
 		signal_setast(current_thread());
 
-	if (proc_is64bit(p)) {
+	sigreturn_validation = atomic_load_explicit(
+			&ps->ps_sigreturn_validation, memory_order_relaxed);
+	token_uctx = uap->uctx;
+	kr = machine_thread_siguctx_pointer_convert_to_user(th_act, &token_uctx);
+	assert(kr == KERN_SUCCESS);
+
+	if (proc_is64bit_data(p)) {
 #if defined(__arm64__)
+		user64_addr_t token;
+		token = (user64_addr_t)token_uctx ^ (user64_addr_t)ps->ps_sigreturn_token;
+		if ((user64_addr_t)uap->token != token) {
+#if DEVELOPMENT || DEBUG
+			printf("process %s[%d] sigreturn token mismatch: received 0x%llx expected 0x%llx\n",
+					p->p_comm, p->p_pid, (user64_addr_t)uap->token, token);
+#endif /* DEVELOPMENT || DEBUG */
+			if (sigreturn_validation != PS_SIGRETURN_VALIDATION_DISABLED) {
+				return EINVAL;
+			}
+		}
 		error = sigreturn_set_state64(th_act, &mctx.mc64);
 		if (error != 0) {
+#if DEVELOPMENT || DEBUG
+		printf("process %s[%d] sigreturn set_state64 error %d\n",
+				p->p_comm, p->p_pid, error);
+#endif /* DEVELOPMENT || DEBUG */
 			return error;
 		}
 #else
 		panic("Shouldn't have 64-bit thread states on a 32-bit kernel.");
 #endif
 	} else {
+		user32_addr_t token;
+		token = (user32_addr_t)token_uctx ^ (user32_addr_t)ps->ps_sigreturn_token;
+		if ((user32_addr_t)uap->token != token) {
+#if DEVELOPMENT || DEBUG
+			printf("process %s[%d] sigreturn token mismatch: received 0x%x expected 0x%x\n",
+					p->p_comm, p->p_pid, (user32_addr_t)uap->token, token);
+#endif /* DEVELOPMENT || DEBUG */
+			if (sigreturn_validation != PS_SIGRETURN_VALIDATION_DISABLED) {
+				return EINVAL;
+			}
+		}
 		error = sigreturn_set_state32(th_act, &mctx.mc32);
 		if (error != 0) {
+#if DEVELOPMENT || DEBUG
+		printf("process %s[%d] sigreturn sigreturn_set_state32 error %d\n",
+				p->p_comm, p->p_pid, error);
+#endif /* DEVELOPMENT || DEBUG */
 			return error;
 		}
 	}
@@ -706,32 +803,22 @@ sigreturn(
 }
 
 /*
- * machine_exception() performs MD translation
- * of a mach exception to a unix signal and code.
+ * machine_exception() performs machine-dependent translation
+ * of a mach exception to a unix signal.
  */
-
-boolean_t
-machine_exception(
-		  int exception,
-		  mach_exception_subcode_t code,
-		  __unused mach_exception_subcode_t subcode,
-		  int *unix_signal,
-		  mach_exception_subcode_t * unix_code
-)
+int
+machine_exception(int                           exception,
+         __unused mach_exception_code_t         code,
+         __unused mach_exception_subcode_t      subcode)
 {
 	switch (exception) {
-	case EXC_BAD_INSTRUCTION:
-		*unix_signal = SIGILL;
-		*unix_code = code;
-		break;
+		case EXC_BAD_INSTRUCTION:
+			return SIGILL;
 
-	case EXC_ARITHMETIC:
-		*unix_signal = SIGFPE;
-		*unix_code = code;
-		break;
-
-	default:
-		return (FALSE);
+		case EXC_ARITHMETIC:
+			return SIGFPE;
 	}
-	return (TRUE);
+
+	return 0;
 }
+

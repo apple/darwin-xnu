@@ -63,6 +63,7 @@ extern void IOBSDMountChange(struct mount * mp, uint32_t op);
 extern boolean_t IOTaskHasEntitlement(task_t task, const char * entitlement);
 
 extern struct IOPolledFileIOVars * gIOPolledCoreFileVars;
+extern kern_return_t gIOPolledCoreFileOpenRet;
 
 #ifdef __cplusplus
 }

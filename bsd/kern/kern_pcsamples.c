@@ -228,7 +228,7 @@ pcsamples_control(int *name, __unused u_int namelen, user_addr_t where, size_t *
     int ret=0;
     size_t size=*sizep;
     int value = name[1];
-    pcinfo_t pc_bufinfo;
+    pcinfo_t pc_bufinfo = {};
     pid_t *pidcheck;
 
     pid_t curpid;

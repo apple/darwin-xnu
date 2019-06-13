@@ -159,6 +159,19 @@ SECURITY_READ_ONLY_EARLY(struct clock_ops) calend_ops = {
 };
 
 /*
+ * List of clock devices.
+ */
+SECURITY_READ_ONLY_LATE(struct	clock) clock_list[] = {
+
+	/* SYSTEM_CLOCK */
+	{ &sysclk_ops, 0, 0 },
+
+	/* CALENDAR_CLOCK */
+	{ &calend_ops, 0, 0 }
+};
+int	clock_count = sizeof(clock_list) / sizeof(clock_list[0]);
+
+/*
  *	Macros to lock/unlock clock system.
  */
 #define LOCK_ALARM(s)			\
@@ -499,7 +512,7 @@ clock_sleep_trap(
 	int					sleep_nsec = args->sleep_nsec;
 	mach_vm_address_t	wakeup_time_addr = args->wakeup_time;  
 	clock_t				clock;
-	mach_timespec_t		swtime;
+	mach_timespec_t		swtime = {};
 	kern_return_t		rvalue;
 
 	/*

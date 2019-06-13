@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1133,8 +1133,14 @@ icmp6_notify_error(struct mbuf *m, int off, int icmp6len, int code)
 
 		ctlfunc = ip6_protox[nxt]->pr_ctlinput;
 		if (ctlfunc) {
+			LCK_MTX_ASSERT(inet6_domain_mutex, LCK_MTX_ASSERT_OWNED);
+
+			lck_mtx_unlock(inet6_domain_mutex);
+
 			(void) (*ctlfunc)(code, (struct sockaddr *)&icmp6dst,
 			    &ip6cp, m->m_pkthdr.rcvif);
+
+			lck_mtx_lock(inet6_domain_mutex);
 		}
 	}
 	return(0);
@@ -2062,7 +2068,8 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 			if ((n = m_copy(m, 0, (int)M_COPYALL)) != NULL) {
 				if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
 				    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
-				    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+				    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
+					(last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 					ret = ip6_savecontrol(last, n, &opts);
 					if (ret != 0) {
 						m_freem(n);
@@ -2087,7 +2094,8 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 	if (last) {
 		if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
 		    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
-		    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+		    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
+			(last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 			ret = ip6_savecontrol(last, m, &opts);
 			if (ret != 0) {
 				goto error;
@@ -2132,10 +2140,14 @@ icmp6_reflect(struct mbuf *m, size_t off)
 	struct sockaddr_in6 sa6_src, sa6_dst;
 	struct nd_ifinfo *ndi = NULL;
 	u_int32_t oflow;
-	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 },
-	    IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR |
-	    IP6OAF_INTCOPROC_ALLOWED | IP6OAF_AWDL_UNRESTRICTED, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip6_out_args ip6oa;
+
+	bzero(&ip6oa, sizeof(ip6oa));
+	ip6oa.ip6oa_boundif = IFSCOPE_NONE;
+	ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR |
+	    IP6OAF_INTCOPROC_ALLOWED | IP6OAF_AWDL_UNRESTRICTED;
+	ip6oa.ip6oa_sotc = SO_TC_UNSPEC;
+	ip6oa.ip6oa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 	if (!(m->m_pkthdr.pkt_flags & PKTF_LOOP) && m->m_pkthdr.rcvif != NULL) {
 		ip6oa.ip6oa_boundif = m->m_pkthdr.rcvif->if_index;
@@ -2222,7 +2234,7 @@ icmp6_reflect(struct mbuf *m, size_t off)
 	for (ia = in6_ifaddrs; ia; ia = ia->ia_next) {
 		IFA_LOCK(&ia->ia_ifa);
 		if (IN6_ARE_ADDR_EQUAL(&t, &ia->ia_addr.sin6_addr) &&
-		    (ia->ia6_flags & (IN6_IFF_ANYCAST|IN6_IFF_NOTREADY)) == 0) {
+		    (ia->ia6_flags & (IN6_IFF_ANYCAST|IN6_IFF_NOTREADY|IN6_IFF_CLAT46)) == 0) {
 			IFA_UNLOCK(&ia->ia_ifa);
 			src = &t;
 			break;
@@ -2563,9 +2575,13 @@ icmp6_redirect_output(struct mbuf *m0, struct rtentry *rt)
 	u_char *p;
 	struct ifnet *outif = NULL;
 	struct sockaddr_in6 src_sa;
-	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 },
-	    IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip6_out_args ip6oa;
+
+	bzero(&ip6oa, sizeof(ip6oa));
+	ip6oa.ip6oa_boundif = IFSCOPE_NONE;
+	ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR;
+	ip6oa.ip6oa_sotc = SO_TC_UNSPEC;
+	ip6oa.ip6oa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 	icmp6_errcount(&icmp6stat.icp6s_outerrhist, ND_REDIRECT, 0);
 
@@ -2637,8 +2653,8 @@ icmp6_redirect_output(struct mbuf *m0, struct rtentry *rt)
 		/* get ip6 linklocal address for ifp(my outgoing interface). */
 		struct in6_ifaddr *ia;
 		if ((ia = in6ifa_ifpforlinklocal(ifp,
-						 IN6_IFF_NOTREADY|
-						 IN6_IFF_ANYCAST)) == NULL)
+		    IN6_IFF_NOTREADY|
+		    IN6_IFF_ANYCAST)) == NULL)
 			goto fail;
 		IFA_LOCK(&ia->ia_ifa);
 		ifp_ll6 = ia->ia_addr.sin6_addr;

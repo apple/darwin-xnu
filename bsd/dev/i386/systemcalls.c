@@ -34,7 +34,6 @@
 #include <kern/debug.h>
 #include <mach/machine/thread_status.h>
 #include <mach/thread_act.h>
-#include <mach/branch_predicates.h>
 
 #include <sys/kernel.h>
 #include <sys/vm.h>

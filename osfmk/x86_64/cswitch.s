@@ -118,7 +118,7 @@ Entry(Switch_context)
 
 
 Entry(Thread_continue)
-	movq	%rax, %rdi			/* load thread argument */
+	movq	%rax, %rdi			/* this is the old thread from Switch_context */
 	xorq	%rbp,%rbp			/* zero frame pointer */
 	call	*%rbx				/* call real continuation */
 

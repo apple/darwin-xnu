@@ -59,6 +59,15 @@
 #ifndef _SYS_QUEUE_H_
 #define	_SYS_QUEUE_H_
 
+#ifdef KERNEL_PRIVATE
+#include <kern/debug.h> /* panic function call */
+#include <sys/cdefs.h>	/* __improbable in kernelspace */
+#else
+#ifndef __improbable
+#define __improbable(x) (x)		/* noop in userspace */
+#endif /* __improbable */
+#endif /* KERNEL_PRIVATE */
+
 /*
  * This file defines five types of data structures: singly-linked lists,
  * singly-linked tail queues, lists, tail queues, and circular queues.
@@ -436,30 +445,32 @@ __MISMATCH_TAGS_POP
  * List functions.
  */
 
-#if (defined(_KERNEL) && defined(INVARIANTS)) || defined(QUEUE_MACRO_DEBUG)
-#define	QMD_LIST_CHECK_HEAD(head, field) do {				\
-	if (LIST_FIRST((head)) != NULL &&				\
-	    LIST_FIRST((head))->field.le_prev !=			\
-	     &LIST_FIRST((head)))					\
-		panic("Bad list head %p first->prev != head", (head));	\
+#ifdef KERNEL_PRIVATE
+#define	LIST_CHECK_HEAD(head, field) do {				\
+	if (__improbable(						\
+	      LIST_FIRST((head)) != NULL &&				\
+	      LIST_FIRST((head))->field.le_prev !=			\
+	      &LIST_FIRST((head))))					\
+		     panic("Bad list head %p first->prev != head", (head));	\
 } while (0)
 
-#define	QMD_LIST_CHECK_NEXT(elm, field) do {				\
-	if (LIST_NEXT((elm), field) != NULL &&				\
-	    LIST_NEXT((elm), field)->field.le_prev !=			\
-	     &((elm)->field.le_next))					\
-	     	panic("Bad link elm %p next->prev != elm", (elm));	\
+#define	LIST_CHECK_NEXT(elm, field) do {				\
+	if (__improbable(						\
+	      LIST_NEXT((elm), field) != NULL &&			\
+	      LIST_NEXT((elm), field)->field.le_prev !=			\
+	      &((elm)->field.le_next)))					\
+		     panic("Bad link elm %p next->prev != elm", (elm));	\
 } while (0)
 
-#define	QMD_LIST_CHECK_PREV(elm, field) do {				\
-	if (*(elm)->field.le_prev != (elm))				\
+#define	LIST_CHECK_PREV(elm, field) do {				\
+	if (__improbable(*(elm)->field.le_prev != (elm)))		\
 		panic("Bad link elm %p prev->next != elm", (elm));	\
 } while (0)
 #else
-#define	QMD_LIST_CHECK_HEAD(head, field)
-#define	QMD_LIST_CHECK_NEXT(elm, field)
-#define	QMD_LIST_CHECK_PREV(elm, field)
-#endif /* (_KERNEL && INVARIANTS) || QUEUE_MACRO_DEBUG */
+#define	LIST_CHECK_HEAD(head, field)
+#define	LIST_CHECK_NEXT(elm, field)
+#define	LIST_CHECK_PREV(elm, field)
+#endif /* KERNEL_PRIVATE */
 
 #define	LIST_EMPTY(head)	((head)->lh_first == NULL)
 
@@ -480,7 +491,7 @@ __MISMATCH_TAGS_POP
 } while (0)
 
 #define	LIST_INSERT_AFTER(listelm, elm, field) do {			\
-	QMD_LIST_CHECK_NEXT(listelm, field);				\
+	LIST_CHECK_NEXT(listelm, field);				\
 	if ((LIST_NEXT((elm), field) = LIST_NEXT((listelm), field)) != NULL)\
 		LIST_NEXT((listelm), field)->field.le_prev =		\
 		    &LIST_NEXT((elm), field);				\
@@ -489,7 +500,7 @@ __MISMATCH_TAGS_POP
 } while (0)
 
 #define	LIST_INSERT_BEFORE(listelm, elm, field) do {			\
-	QMD_LIST_CHECK_PREV(listelm, field);				\
+	LIST_CHECK_PREV(listelm, field);				\
 	(elm)->field.le_prev = (listelm)->field.le_prev;		\
 	LIST_NEXT((elm), field) = (listelm);				\
 	*(listelm)->field.le_prev = (elm);				\
@@ -497,7 +508,7 @@ __MISMATCH_TAGS_POP
 } while (0)
 
 #define	LIST_INSERT_HEAD(head, elm, field) do {				\
-	QMD_LIST_CHECK_HEAD((head), field);				\
+	LIST_CHECK_HEAD((head), field);				\
 	if ((LIST_NEXT((elm), field) = LIST_FIRST((head))) != NULL)	\
 		LIST_FIRST((head))->field.le_prev = &LIST_NEXT((elm), field);\
 	LIST_FIRST((head)) = (elm);					\
@@ -507,8 +518,8 @@ __MISMATCH_TAGS_POP
 #define	LIST_NEXT(elm, field)	((elm)->field.le_next)
 
 #define	LIST_REMOVE(elm, field) do {					\
-	QMD_LIST_CHECK_NEXT(elm, field);				\
-	QMD_LIST_CHECK_PREV(elm, field);				\
+	LIST_CHECK_NEXT(elm, field);				\
+	LIST_CHECK_PREV(elm, field);				\
 	if (LIST_NEXT((elm), field) != NULL)				\
 		LIST_NEXT((elm), field)->field.le_prev = 		\
 		    (elm)->field.le_prev;				\
@@ -557,6 +568,33 @@ __MISMATCH_TAGS_POP
 /*
  * Tail queue functions.
  */
+#ifdef KERNEL_PRIVATE
+#define TAILQ_CHECK_HEAD(head, field) do {				\
+       if (__improbable(						\
+	      TAILQ_FIRST((head)) != NULL &&				\
+	      TAILQ_FIRST((head))->field.tqe_prev !=			\
+	      &TAILQ_FIRST((head))))					\
+		     panic("Bad tailq head %p first->prev != head", (head));	\
+} while (0)
+
+#define TAILQ_CHECK_NEXT(elm, field) do {				\
+       if (__improbable(						\
+	      TAILQ_NEXT((elm), field) != NULL &&			\
+	      TAILQ_NEXT((elm), field)->field.tqe_prev !=		\
+	      &((elm)->field.tqe_next)))				\
+		     panic("Bad tailq elm %p next->prev != elm", (elm));	\
+} while(0)
+
+#define	TAILQ_CHECK_PREV(elm, field) do {				\
+       if (__improbable(*(elm)->field.tqe_prev != (elm)))		\
+	      panic("Bad tailq elm %p prev->next != elm", (elm));	\
+} while(0)
+#else
+#define	TAILQ_CHECK_HEAD(head, field)
+#define	TAILQ_CHECK_NEXT(elm, field)
+#define	TAILQ_CHECK_PREV(elm, field)
+#endif /* KERNEL_PRIVATE */
+
 #define	TAILQ_CONCAT(head1, head2, field) do {				\
 	if (!TAILQ_EMPTY(head2)) {					\
 		*(head1)->tqh_last = (head2)->tqh_first;		\
@@ -598,7 +636,9 @@ __MISMATCH_TAGS_POP
 	QMD_TRACE_HEAD(head);						\
 } while (0)
 
+
 #define	TAILQ_INSERT_AFTER(head, listelm, elm, field) do {		\
+        TAILQ_CHECK_NEXT(listelm, field);				\
 	if ((TAILQ_NEXT((elm), field) = TAILQ_NEXT((listelm), field)) != NULL)\
 		TAILQ_NEXT((elm), field)->field.tqe_prev = 		\
 		    &TAILQ_NEXT((elm), field);				\
@@ -613,6 +653,7 @@ __MISMATCH_TAGS_POP
 } while (0)
 
 #define	TAILQ_INSERT_BEFORE(listelm, elm, field) do {			\
+        TAILQ_CHECK_PREV(listelm, field);				\
 	(elm)->field.tqe_prev = (listelm)->field.tqe_prev;		\
 	TAILQ_NEXT((elm), field) = (listelm);				\
 	*(listelm)->field.tqe_prev = (elm);				\
@@ -622,6 +663,7 @@ __MISMATCH_TAGS_POP
 } while (0)
 
 #define	TAILQ_INSERT_HEAD(head, elm, field) do {			\
+        TAILQ_CHECK_HEAD(head, field);					\
 	if ((TAILQ_NEXT((elm), field) = TAILQ_FIRST((head))) != NULL)	\
 		TAILQ_FIRST((head))->field.tqe_prev =			\
 		    &TAILQ_NEXT((elm), field);				\
@@ -655,6 +697,8 @@ __MISMATCH_TAGS_PUSH							\
 __MISMATCH_TAGS_POP
 
 #define	TAILQ_REMOVE(head, elm, field) do {				\
+        TAILQ_CHECK_NEXT(elm, field);					\
+        TAILQ_CHECK_PREV(elm, field);					\
 	if ((TAILQ_NEXT((elm), field)) != NULL)				\
 		TAILQ_NEXT((elm), field)->field.tqe_prev = 		\
 		    (elm)->field.tqe_prev;				\
@@ -713,6 +757,31 @@ __MISMATCH_TAGS_POP
 /*
  * Circular queue functions.
  */
+#ifdef KERNEL_PRIVATE
+#define	CIRCLEQ_CHECK_HEAD(head, field) do {				\
+       if (__improbable(						\
+	      CIRCLEQ_FIRST((head)) != ((void*)(head)) &&		\
+	      CIRCLEQ_FIRST((head))->field.cqe_prev != ((void*)(head))))\
+		     panic("Bad circleq head %p first->prev != head", (head));	\
+} while(0)
+#define	CIRCLEQ_CHECK_NEXT(head, elm, field) do {			\
+       if (__improbable(						\
+	      CIRCLEQ_NEXT((elm), field) != ((void*)(head)) &&		\
+	      CIRCLEQ_NEXT((elm), field)->field.cqe_prev != (elm)))	\
+		     panic("Bad circleq elm %p next->prev != elm", (elm));	\
+} while(0)
+#define	CIRCLEQ_CHECK_PREV(head, elm, field) do {			\
+       if (__improbable(						\
+	      CIRCLEQ_PREV((elm), field) != ((void*)(head)) &&		\
+	      CIRCLEQ_PREV((elm), field)->field.cqe_next != (elm)))	\
+		     panic("Bad circleq elm %p prev->next != elm", (elm));	\
+} while(0)
+#else
+#define	CIRCLEQ_CHECK_HEAD(head, field)
+#define	CIRCLEQ_CHECK_NEXT(head, elm, field)
+#define	CIRCLEQ_CHECK_PREV(head, elm, field)
+#endif /* KERNEL_PRIVATE */
+
 #define CIRCLEQ_EMPTY(head) ((head)->cqh_first == (void *)(head))
 
 #define CIRCLEQ_FIRST(head) ((head)->cqh_first)
@@ -728,6 +797,7 @@ __MISMATCH_TAGS_POP
 } while (0)
 
 #define CIRCLEQ_INSERT_AFTER(head, listelm, elm, field) do {		\
+        CIRCLEQ_CHECK_NEXT(head, listelm, field);			\
 	(elm)->field.cqe_next = (listelm)->field.cqe_next;		\
 	(elm)->field.cqe_prev = (listelm);				\
 	if ((listelm)->field.cqe_next == (void *)(head))		\
@@ -738,6 +808,7 @@ __MISMATCH_TAGS_POP
 } while (0)
 
 #define CIRCLEQ_INSERT_BEFORE(head, listelm, elm, field) do {		\
+        CIRCLEQ_CHECK_PREV(head, listelm, field);			\
 	(elm)->field.cqe_next = (listelm);				\
 	(elm)->field.cqe_prev = (listelm)->field.cqe_prev;		\
 	if ((listelm)->field.cqe_prev == (void *)(head))		\
@@ -748,6 +819,7 @@ __MISMATCH_TAGS_POP
 } while (0)
 
 #define CIRCLEQ_INSERT_HEAD(head, elm, field) do {			\
+        CIRCLEQ_CHECK_HEAD(head, field);				\
 	(elm)->field.cqe_next = (head)->cqh_first;			\
 	(elm)->field.cqe_prev = (void *)(head);				\
 	if ((head)->cqh_last == (void *)(head))				\
@@ -774,6 +846,8 @@ __MISMATCH_TAGS_POP
 #define CIRCLEQ_PREV(elm,field) ((elm)->field.cqe_prev)
 
 #define	CIRCLEQ_REMOVE(head, elm, field) do {				\
+        CIRCLEQ_CHECK_NEXT(head, elm, field);				\
+        CIRCLEQ_CHECK_PREV(head, elm, field);				\
 	if ((elm)->field.cqe_next == (void *)(head))			\
 		(head)->cqh_last = (elm)->field.cqe_prev;		\
 	else								\
@@ -801,12 +875,37 @@ struct quehead {
 };
 
 #ifdef __GNUC__
+#ifdef KERNEL_PRIVATE
+static __inline void
+chkquenext(void *a)
+{
+       struct quehead *element = (struct quehead *)a;
+       if (__improbable(element->qh_link != NULL &&
+			    element->qh_link->qh_rlink != element)) {
+	      panic("Bad que elm %p next->prev != elm", a);
+       }
+}
+
+static __inline void
+chkqueprev(void *a)
+{
+       struct quehead *element = (struct quehead *)a;
+       if (__improbable(element->qh_rlink != NULL &&
+			    element->qh_rlink->qh_link != element)) {
+	      panic("Bad que elm %p prev->next != elm", a);
+       }
+}
+#else /* !KERNEL_PRIVATE */
+#define chkquenext(a)
+#define chkqueprev(a)
+#endif /* KERNEL_PRIVATE */
 
 static __inline void
 insque(void *a, void *b)
 {
 	struct quehead *element = (struct quehead *)a,
 		 *head = (struct quehead *)b;
+	chkquenext(head);
 
 	element->qh_link = head->qh_link;
 	element->qh_rlink = head;
@@ -818,6 +917,8 @@ static __inline void
 remque(void *a)
 {
 	struct quehead *element = (struct quehead *)a;
+	chkquenext(element);
+	chkqueprev(element);
 
 	element->qh_link->qh_rlink = element->qh_rlink;
 	element->qh_rlink->qh_link = element->qh_link;
@@ -831,7 +932,7 @@ void	remque(void *a);
 
 #endif /* __GNUC__ */
 
-#endif
+#endif /* NOTFB31 */
 #endif /* _KERNEL */
 
 #endif /* !_SYS_QUEUE_H_ */

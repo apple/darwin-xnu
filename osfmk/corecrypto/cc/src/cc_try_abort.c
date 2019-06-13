@@ -41,10 +41,10 @@
 #include <kern/debug.h>
 void cc_try_abort(const char * msg CC_UNUSED , ...)
 {
-    panic(msg);
+    panic("%s", msg);
 }
 
-#elif CC_USE_SEPROM || CC_USE_S3 || CC_BASEBAND || CC_EFI || CC_IBOOT || CC_RTKIT
+#elif CC_USE_SEPROM || CC_USE_S3 || CC_BASEBAND || CC_EFI || CC_IBOOT || CC_RTKIT || CC_RTKITROM
 void cc_try_abort(const char * msg CC_UNUSED, ...)
 {
     //Do nothing and return because we don't have panic() in those

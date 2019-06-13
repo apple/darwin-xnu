@@ -84,6 +84,7 @@
 
 #include <kern/assert.h>
 #include <kern/kern_types.h>
+#include <kern/turnstile.h>
 
 #include <ipc/ipc_types.h>
 #include <ipc/ipc_object.h>
@@ -128,18 +129,18 @@ struct ipc_port {
 	union {
 		ipc_kobject_t kobject;
 		ipc_importance_task_t imp_task;
-		ipc_port_t sync_qos_override_port;
+		ipc_port_t sync_inheritor_port;
+		struct knote *sync_inheritor_knote;
+		struct turnstile *sync_inheritor_ts;
 	} kdata;
-		
+
 	struct ipc_port *ip_nsrequest;
 	struct ipc_port *ip_pdrequest;
 	struct ipc_port_request *ip_requests;
 	union {
 		struct ipc_kmsg *premsg;
-		struct {
-			sync_qos_count_t sync_qos[THREAD_QOS_LAST];
-			sync_qos_count_t special_port_qos;
-		} qos_counter;
+		struct turnstile *send_turnstile;
+		SLIST_ENTRY(ipc_port) dealloc_elm;
 	} kdata2;
 
 	mach_vm_address_t ip_context;
@@ -151,8 +152,8 @@ struct ipc_port {
 		  ip_guarded:1,         /* port guarded (use context value as guard) */
 		  ip_strict_guard:1,	/* Strict guarding; Prevents user manipulation of context values directly */
 		  ip_specialreply:1,	/* port is a special reply port */
-		  ip_link_sync_qos:1,	/* link the special reply port to destination port */
-		  ip_impcount:24;	/* number of importance donations in nested queue */
+		  ip_sync_link_state:3,	/* link the special reply port to destination port/ Workloop */
+		  ip_impcount:22;	/* number of importance donations in nested queue */
 
 	mach_port_mscount_t ip_mscount;
 	mach_port_rights_t ip_srights;
@@ -167,6 +168,10 @@ struct ipc_port {
 	uintptr_t	ip_callstack[IP_CALLSTACK_MAX]; /* stack trace */
 	unsigned long	ip_spares[IP_NSPARES]; /* for debugging */
 #endif	/* MACH_ASSERT */
+#if DEVELOPMENT || DEBUG
+	uint8_t		ip_srp_lost_link:1,	/* special reply port turnstile link chain broken */
+			ip_srp_msg_sent:1;	/* special reply port msg sent */
+#endif
 };
 
 
@@ -182,32 +187,63 @@ struct ipc_port {
 
 #define ip_kobject		kdata.kobject
 #define ip_imp_task		kdata.imp_task
-#define ip_sync_qos_override_port	kdata.sync_qos_override_port
+#define ip_sync_inheritor_port	kdata.sync_inheritor_port
+#define ip_sync_inheritor_knote	kdata.sync_inheritor_knote
+#define ip_sync_inheritor_ts	kdata.sync_inheritor_ts
 
 #define ip_premsg		kdata2.premsg
-#define ip_sync_qos		kdata2.qos_counter.sync_qos
-#define ip_special_port_qos     kdata2.qos_counter.special_port_qos
+#define ip_send_turnstile	kdata2.send_turnstile
+#define ip_dealloc_elm		kdata2.dealloc_elm
 
-#define port_sync_qos(port, i)	(IP_PREALLOC(port) ? (port)->ip_premsg->sync_qos[(i)] : (port)->ip_sync_qos[(i)])
-#define port_special_qos(port)  (IP_PREALLOC(port) ? (port)->ip_premsg->special_port_qos : (port)->ip_special_port_qos)
+#define port_send_turnstile(port)	(IP_PREALLOC(port) ? (port)->ip_premsg->ikm_turnstile : (port)->ip_send_turnstile)
 
-#define set_port_sync_qos(port, i, value)               \
-MACRO_BEGIN                                             \
-if (IP_PREALLOC(port)) {                                \
-        (port)->ip_premsg->sync_qos[(i)] = (value);     \
-} else {                                                \
-        (port)->ip_sync_qos[(i)] = (value);             \
-}                                                       \
+#define set_port_send_turnstile(port, value)                 \
+MACRO_BEGIN                                                  \
+if (IP_PREALLOC(port)) {                                     \
+        (port)->ip_premsg->ikm_turnstile = (value);          \
+} else {                                                     \
+        (port)->ip_send_turnstile = (value);                 \
+}                                                            \
 MACRO_END
 
-#define set_port_special_qos(port, value)               \
-MACRO_BEGIN                                             \
-if (IP_PREALLOC(port)) {                                \
-        (port)->ip_premsg->special_port_qos = (value);  \
-} else {                                                \
-        (port)->ip_special_port_qos = (value);          \
-}                                                       \
-MACRO_END
+#define port_send_turnstile_address(port)                    \
+(IP_PREALLOC(port) ? &((port)->ip_premsg->ikm_turnstile) : &((port)->ip_send_turnstile))
+
+#define port_rcv_turnstile_address(port) (NULL)
+
+
+/*
+ * SYNC IPC state flags for special reply port.
+ *
+ * PORT_SYNC_LINK_ANY
+ *    Special reply port is not linked to any other port
+ *    or WL and linkage should be allowed.
+ *
+ * PORT_SYNC_LINK_PORT
+ *    Special reply port is linked to the port and
+ *    ip_sync_inheritor_port contains the inheritor
+ *    port.
+ *
+ * PORT_SYNC_LINK_WORKLOOP_KNOTE
+ *    Special reply port is linked to a WL (via a knote).
+ *    ip_sync_inheritor_knote contains a pointer to the knote
+ *    the port is stashed on.
+ *
+ * PORT_SYNC_LINK_WORKLOOP_STASH
+ *    Special reply port is linked to a WL (via a knote stash).
+ *    ip_sync_inheritor_ts contains a pointer to the turnstile with a +1
+ *    the port is stashed on.
+ *
+ * PORT_SYNC_LINK_NO_LINKAGE
+ *    Message sent to special reply port, do
+ *    not allow any linkages till receive is
+ *    complete.
+ */
+#define PORT_SYNC_LINK_ANY              (0)
+#define PORT_SYNC_LINK_PORT             (0x1)
+#define PORT_SYNC_LINK_WORKLOOP_KNOTE   (0x2)
+#define PORT_SYNC_LINK_WORKLOOP_STASH   (0x3)
+#define PORT_SYNC_LINK_NO_LINKAGE       (0x4)
 
 #define IP_NULL			IPC_PORT_NULL
 #define IP_DEAD			IPC_PORT_DEAD
@@ -224,10 +260,8 @@ MACRO_END
 #define	ip_release(port)	io_release(&(port)->ip_object)
 
 /* get an ipc_port pointer from an ipc_mqueue pointer */
-#define	ip_from_mq(mq)		((struct ipc_port *)((void *)( \
-					(char *)(mq) - \
-					__offsetof(struct ipc_port, ip_messages)) \
-				))
+#define	ip_from_mq(mq) \
+		__container_of(mq, struct ipc_port, ip_messages)
 
 #define	ip_reference_mq(mq)	ip_reference(ip_from_mq(mq))
 #define	ip_release_mq(mq)	ip_release(ip_from_mq(mq))
@@ -475,46 +509,60 @@ enum {
 };
 
 /* link the destination port with special reply port */
-kern_return_t
-ipc_port_link_special_reply_port_with_qos(
+void
+ipc_port_link_special_reply_port(
 	ipc_port_t special_reply_port,
-	ipc_port_t dest_port,
-	int qos);
+	ipc_port_t dest_port);
 
-/* link the destination port with locked special reply port */
-void ipc_port_unlink_special_reply_port_locked(
+#define IPC_PORT_ADJUST_SR_NONE                      0
+#define IPC_PORT_ADJUST_SR_CLEAR_SPECIAL_REPLY       0x1
+#define IPC_PORT_ADJUST_SR_ALLOW_SYNC_LINKAGE        0x2
+#define IPC_PORT_ADJUST_SR_LINK_WORKLOOP             0x4
+
+#define IPC_PORT_ADJUST_SR_RECEIVED_MSG		     0x8
+#define IPC_PORT_ADJUST_SR_ENABLE_EVENT		     0x10
+
+void
+reset_ip_srp_bits(ipc_port_t special_reply_port);
+
+void
+reset_ip_srp_msg_sent(ipc_port_t special_reply_port);
+
+void
+set_ip_srp_msg_sent(ipc_port_t special_reply_port);
+
+void
+set_ip_srp_lost_link(ipc_port_t special_reply_port);
+
+/* Adjust special reply port linkage */
+void ipc_port_adjust_special_reply_port_locked(
 	ipc_port_t special_reply_port,
 	struct knote *kn,
-	uint8_t flags);
+	uint8_t flags,
+	boolean_t get_turnstile);
 
-/* Unlink the destination port from special reply port */
+/* Adjust special reply port linkage */
 void
-ipc_port_unlink_special_reply_port(
+ipc_port_adjust_special_reply_port(
 	ipc_port_t special_reply_port,
-	uint8_t flags);
+	uint8_t flags,
+	boolean_t get_turnstile);
 
-#define IPC_PORT_UNLINK_SR_NONE                      0
-#define IPC_PORT_UNLINK_SR_CLEAR_SPECIAL_REPLY       0x1
-#define IPC_PORT_UNLINK_SR_ALLOW_SYNC_QOS_LINKAGE    0x2
+turnstile_inheritor_t
+ipc_port_get_special_reply_port_inheritor(
+	ipc_port_t special_reply_port);
 
-/* Get the max sync qos override index applied to the port */
-sync_qos_count_t
-ipc_port_get_max_sync_qos_index(
-	ipc_port_t	port);
-
-/* Apply qos delta to the port */
-boolean_t
-ipc_port_sync_qos_delta(
-	ipc_port_t        port,
-	sync_qos_count_t *sync_qos_delta_add,
-	sync_qos_count_t *sync_qos_delta_sub);
-
-/* Adjust the sync qos of the port and it's destination port */
 void
-ipc_port_adjust_sync_qos(
-	ipc_port_t port,
-	sync_qos_count_t *sync_qos_delta_add,
-	sync_qos_count_t *sync_qos_delta_sub);
+ipc_port_send_turnstile_prepare(ipc_port_t port);
+
+void
+ipc_port_send_turnstile_complete(ipc_port_t port);
+
+struct waitq *
+ipc_port_rcv_turnstile_waitq(struct waitq *waitq);
+
+struct turnstile *
+ipc_port_rcv_turnstile(ipc_port_t port);
 
 /* apply importance delta to port only */
 extern mach_port_delta_t
@@ -560,6 +608,12 @@ extern ipc_port_t ipc_port_copy_send(
 extern mach_port_name_t ipc_port_copyout_send(
 	ipc_port_t	sright,
 	ipc_space_t	space);
+
+/* Copyout a naked send right to given name */
+extern mach_port_name_t ipc_port_copyout_name_send(
+	ipc_port_t	sright,
+	ipc_space_t	space,
+	mach_port_name_t name);
 
 #endif /* MACH_KERNEL_PRIVATE */
 
@@ -616,6 +670,9 @@ extern void ipc_port_track_dealloc(
 /* Initialize general port debugging state */
 extern void ipc_port_debug_init(void);
 #endif	/* MACH_ASSERT */
+
+extern struct turnstile *ipc_port_get_inheritor(
+	ipc_port_t port);
 
 #define	ipc_port_alloc_kernel()		\
 		ipc_port_alloc_special(ipc_space_kernel)

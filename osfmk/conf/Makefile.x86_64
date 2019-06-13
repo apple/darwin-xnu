@@ -16,16 +16,20 @@ UNCONFIGURED_HIB_FILES=					\
 HIB_FILES=$(filter $(UNCONFIGURED_HIB_FILES),$(OBJS))
 
 # Unconfigured __HIB files must be Mach-O for "setsegname"
-WKdmDecompress_new.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
-WKdmData_new.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
-hibernate_restore.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
-hibernate_bootstrap.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
-bcopy.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
-bzero.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLAG)
+WKdmDecompress_new.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
+WKdmData_new.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
+hibernate_restore.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
+hibernate_bootstrap.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
+bcopy.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
+bzero.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
+fp_simd.o_SFLAGS_ADD += -mavx512f
 
 # To appear at the beginning of the __HIB segment, emit
 # as Mach-O so that the linker can enforce symbol order
 boot_pt.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
+
+# fast path lock C leaf functions must be built without stack frames
+locks_i386_opt.o_CFLAGS_ADD += -momit-leaf-frame-pointer -O2
 
 ######################################################################
 #END	Machine dependent Makefile fragment for x86_64

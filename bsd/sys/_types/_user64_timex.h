@@ -30,19 +30,19 @@
 #define _STRUCT_USER64_TIMEX	struct user64_timex
 _STRUCT_USER64_TIMEX
 {
-	u_int64_t modes;
+	u_int32_t modes;
 	user64_long_t	offset;
 	user64_long_t	freq;
 	user64_long_t	maxerror;
 	user64_long_t	esterror;
-	__int64_t	status;
+	__int32_t	status;
 	user64_long_t	constant;
 	user64_long_t	precision;
 	user64_long_t	tolerance;
 
 	user64_long_t	ppsfreq;
 	user64_long_t	jitter;
-	__int64_t	shift;
+	__int32_t	shift;
 	user64_long_t	stabil;
 	user64_long_t	jitcnt;
 	user64_long_t	calcnt;

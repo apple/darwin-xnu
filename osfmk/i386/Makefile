@@ -22,6 +22,7 @@ EXPORT_ONLY_FILES =	\
 		    lapic.h \
 		    lock.h \
 		    locks.h \
+		    locks_i386_inlines.h \
 		    machine_routines.h \
 		    machine_cpu.h \
 		    mtrr.h \

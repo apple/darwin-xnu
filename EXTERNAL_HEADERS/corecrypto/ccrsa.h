@@ -21,17 +21,6 @@
 // This limit is relaxed to accommodate potential third-party consumers
 #define CCRSA_KEYGEN_MAX_NBITS 8192
 
-// Program error: buffer too small or encrypted message is too small
-#define CCRSA_INVALID_INPUT        -1
-// Invalid crypto configuration: Hash length versus RSA key size
-#define CCRSA_INVALID_CONFIG       -2
-// The data is invalid (we won't say more for security
-#define CCRSA_DECRYPTION_ERROR     -3
-
-#define CCRSA_ENCODING_ERROR       -4
-#define CCRSA_DECODING_ERROR       -5
-#define CCRSA_SIGNATURE_GEN_ERROR  -6
-
 struct ccrsa_full_ctx {
     __CCZP_ELEMENTS_DEFINITIONS(pb_)
 } CC_ALIGNED(CCN_UNIT_SIZE);
@@ -44,32 +33,9 @@ struct ccrsa_priv_ctx {
     __CCZP_ELEMENTS_DEFINITIONS(pv_)
 } CC_ALIGNED(CCN_UNIT_SIZE);
 
-
-#if CORECRYPTO_USE_TRANSPARENT_UNION
-    typedef union {
-        cczp_t zp;
-        struct ccrsa_pub_ctx* pub;
-        struct ccrsa_full_ctx *full;
-    } ccrsa_full_ctx_t __attribute__((transparent_union));
-    typedef struct ccrsa_full_ctx ccrsa_full_ctx;
-    typedef struct ccrsa_priv_ctx ccrsa_priv_ctx;
-
-    typedef union {
-        cczp_t zp;
-        ccrsa_priv_ctx *priv;
-    } ccrsa_priv_ctx_t __attribute__((transparent_union));
-
-
-typedef ccrsa_full_ctx_t ccrsa_pub_ctx_t;
-typedef struct ccrsa_pub_ctx ccrsa_pub_ctx;
-
-#else
-    typedef struct ccrsa_full_ctx* ccrsa_full_ctx_t;
-    typedef struct ccrsa_pub_ctx* ccrsa_pub_ctx_t;
-    typedef struct ccrsa_priv_ctx* ccrsa_priv_ctx_t;
-#endif
-
-
+typedef struct ccrsa_full_ctx* ccrsa_full_ctx_t;
+typedef struct ccrsa_pub_ctx* ccrsa_pub_ctx_t;
+typedef struct ccrsa_priv_ctx* ccrsa_priv_ctx_t;
 
 /*
  public key cczp      d=e^-1 mod phi(m) priv key cczp             priv key cczq             dp, dq, qinv
@@ -90,7 +56,7 @@ typedef struct ccrsa_pub_ctx ccrsa_pub_ctx;
 
 /* Declare a fully scheduled rsa key.  Size is the size in bytes each ccn in
    the key.  For example to declare (on the stack or in a struct) a 1021 bit
-   rsa public key named foo use ccrsa_pub_ctx_decl(ccn_sizeof(1021), foo). 
+   rsa public key named foo use ccrsa_pub_ctx_decl(ccn_sizeof(1021), foo).
  */
 #define ccrsa_full_ctx_decl(_size_, _name_)   cc_ctx_decl(struct ccrsa_full_ctx, ccrsa_full_ctx_size(_size_), _name_)
 #define ccrsa_full_ctx_clear(_size_, _name_)  cc_clear(ccrsa_full_ctx_size(_size_), _name_)
@@ -101,19 +67,9 @@ typedef struct ccrsa_pub_ctx ccrsa_pub_ctx;
 // The offsets are computed using pb_ccn. If any object other than ccrsa_full_ctx_t
 // or ccrsa_pub_ctx_t is passed to the macros, compiler error is generated.
 
-
-
-#if CORECRYPTO_USE_TRANSPARENT_UNION
-//#define ccrsa_ctx_zm(_ctx_)        (((ccrsa_pub_ctx_t)(_ctx_)).zp)
-
-    CC_CONST CC_INLINE cczp_t ccrsa_ctx_zm(ccrsa_full_ctx_t _ctx_) { return ((cczp_t)(struct cczp *)((_ctx_).full)); }
-    CC_CONST CC_INLINE cc_unit  *ccrsa_ctx_m(ccrsa_full_ctx_t _ctx_){ return        ((_ctx_).full->pb_ccn);}
-    #define ccrsa_ctx_n(_ctx_)         (ccrsa_ctx_zm(_ctx_).zp->n)
-#else
-    #define ccrsa_ctx_zm(_ctx_)        ((cczp_t)(_ctx_))
-    #define ccrsa_ctx_n(_ctx_)         (ccrsa_ctx_zm(_ctx_)->n)
-    #define ccrsa_ctx_m(_ctx_)         ((_ctx_)->pb_ccn)
-#endif
+#define ccrsa_ctx_zm(_ctx_)        ((cczp_t)(_ctx_))
+#define ccrsa_ctx_n(_ctx_)         (ccrsa_ctx_zm(_ctx_)->n)
+#define ccrsa_ctx_m(_ctx_)         ((_ctx_)->pb_ccn)
 
 #define ccrsa_ctx_e(_ctx_)         (ccrsa_ctx_m(_ctx_) + 2 * ccrsa_ctx_n(_ctx_) + 1)
 #define ccrsa_ctx_d(_ctx_)         (ccrsa_ctx_m(_ctx_) + 3 * ccrsa_ctx_n(_ctx_) + 1)
@@ -121,36 +77,13 @@ typedef struct ccrsa_pub_ctx ccrsa_pub_ctx;
 // accessors to ccrsa private key fields
 // The offsets are computed using pv_ccn. If any object other than ccrsa_priv_ctx_t
 // is passed to the macros, compiler error is generated.
-#if CORECRYPTO_USE_TRANSPARENT_UNION
-
-/* rvalue accessors to ccec_key fields. */
-CC_CONST CC_INLINE
-ccrsa_priv_ctx_t ccrsa_get_private_ctx_ptr(ccrsa_full_ctx_t fk) {
-    cc_unit *p = (cc_unit *)fk.full;
-    cc_size p_size = ccrsa_ctx_n(fk);
-    p += ccn_nof_size(ccrsa_pub_ctx_size(ccn_sizeof_n(p_size))) + p_size;
-    ccrsa_priv_ctx *priv = (ccrsa_priv_ctx *)p;
-    return (ccrsa_priv_ctx_t)priv;
-}
-
-CC_CONST CC_INLINE
-ccrsa_pub_ctx_t ccrsa_ctx_public(ccrsa_full_ctx_t fk) {
-    return (ccrsa_pub_ctx_t) fk.full;
-}
-
-#define ccrsa_ctx_private_zp(FK)   ((ccrsa_get_private_ctx_ptr(FK)).zp)
-#define ccrsa_ctx_private_zq(FK)   ((cczp_t)((ccrsa_get_private_ctx_ptr(FK)).zp.zp->ccn + 2 * ccrsa_ctx_private_zp(FK).zp->n + 1))
-#define ccrsa_ctx_private_dp(FK)   ((ccrsa_get_private_ctx_ptr(FK)).zp.zp->ccn + 4 * ccrsa_ctx_private_zp(FK).zp->n + 2 + ccn_nof_size(sizeof(struct cczp)))
-#define ccrsa_ctx_private_dq(FK)   ((ccrsa_get_private_ctx_ptr(FK)).zp.zp->ccn + 5 * ccrsa_ctx_private_zp(FK).zp->n + 2 + ccn_nof_size(sizeof(struct cczp)))
-#define ccrsa_ctx_private_qinv(FK) ((ccrsa_get_private_ctx_ptr(FK)).zp.zp->ccn + 6 * ccrsa_ctx_private_zp(FK).zp->n + 2 + ccn_nof_size(sizeof(struct cczp)))
-
-#else
 #define ccrsa_ctx_private_zp(FK)   ((cczp_t)ccrsa_get_private_ctx_ptr(FK))
 #define ccrsa_ctx_private_zq(FK)   ((cczp_t)((ccrsa_get_private_ctx_ptr(FK))->pv_ccn + 2 * ccrsa_ctx_private_zp(FK)->n + 1))
 #define ccrsa_ctx_private_dp(FK)   ((ccrsa_get_private_ctx_ptr(FK))->pv_ccn + 4 * ccrsa_ctx_private_zp(FK)->n + 2 + ccn_nof_size(sizeof(struct cczp)))
 #define ccrsa_ctx_private_dq(FK)   ((ccrsa_get_private_ctx_ptr(FK))->pv_ccn + 5 * ccrsa_ctx_private_zp(FK)->n + 2 + ccn_nof_size(sizeof(struct cczp)))
 #define ccrsa_ctx_private_qinv(FK) ((ccrsa_get_private_ctx_ptr(FK))->pv_ccn + 6 * ccrsa_ctx_private_zp(FK)->n + 2 + ccn_nof_size(sizeof(struct cczp)))
 
+/* rvalue accessors to ccec_key fields. */
 CC_CONST CC_INLINE
 ccrsa_priv_ctx_t ccrsa_get_private_ctx_ptr(ccrsa_full_ctx_t fk) {
     ccrsa_priv_ctx_t priv = (ccrsa_priv_ctx_t)(ccrsa_ctx_d(fk)+ccrsa_ctx_n(fk));
@@ -168,8 +101,6 @@ ccrsa_pub_ctx_t ccrsa_ctx_public(ccrsa_full_ctx_t fk) {
     return (ccrsa_pub_ctx_t) fk;
 }
 
-#endif
-
 /* Return exact key bit size */
 static inline size_t
 ccrsa_pubkeylength(ccrsa_pub_ctx_t pubk) {
@@ -181,13 +112,13 @@ ccrsa_pubkeylength(ccrsa_pub_ctx_t pubk) {
 #define CCRSA_PKCS1_PAD_ENCRYPT  2
 
 /* Initialize key based on modulus and e as cc_unit.  key->zp.n must already be set. */
-CC_NONNULL_TU((1)) CC_NONNULL((2, 3))
+CC_NONNULL((1, 2, 3))
 int ccrsa_init_pub(ccrsa_pub_ctx_t key, const cc_unit *modulus,
                     const cc_unit *e);
 
 /* Initialize key based on modulus and e as big endian byte array
     key->zp.n must already be set. */
-CC_NONNULL_TU((1)) CC_NONNULL((3 ,5))
+CC_NONNULL((1, 3, 5))
 int ccrsa_make_pub(ccrsa_pub_ctx_t pubk,
                               size_t exp_nbytes, const uint8_t *exp,
                               size_t mod_nbytes, const uint8_t *mod);
@@ -196,7 +127,7 @@ int ccrsa_make_pub(ccrsa_pub_ctx_t pubk,
    the result in out. Both in and out should be cc_unit aligned and
    ccrsa_key_n(key) units long. Clients should use ccn_read_uint() to
    convert bytes to a cc_unit to use for this API.*/
-CC_NONNULL_TU((1)) CC_NONNULL((2, 3))
+CC_NONNULL((1, 2, 3))
 int ccrsa_pub_crypt(ccrsa_pub_ctx_t key, cc_unit *out, const cc_unit *in);
 
 /* Generate an nbit rsa key pair in key, which should be allocated using
@@ -204,19 +135,19 @@ int ccrsa_pub_crypt(ccrsa_pub_ctx_t key, cc_unit *out, const cc_unit *in);
    byte array exponent e of length e_size is used as the exponent. It's an
    error to call this function with an exponent larger than nbits. rng
    must be a pointer to an initialized struct ccrng_state. */
-CC_NONNULL_TU((2)) CC_NONNULL((4, 5))
+CC_NONNULL((2, 4, 5))
 int ccrsa_generate_key(size_t nbits, ccrsa_full_ctx_t rsa_ctx,
                        size_t e_size, const void *e, struct ccrng_state *rng) CC_WARN_RESULT;
 
 /* Generate RSA key in conformance with FIPS186-4 standard */
-CC_NONNULL_TU((2)) CC_NONNULL((4, 5, 6))
+CC_NONNULL((2, 4, 5, 6))
 int
 ccrsa_generate_fips186_key(size_t nbits, ccrsa_full_ctx_t fk,
                            size_t e_size, const void *eBytes,
                            struct ccrng_state *rng1, struct ccrng_state *rng2) CC_WARN_RESULT;
 
 /* Construct RSA key from fix input in conformance with FIPS186-4 standard */
-CC_NONNULL_TU((16)) CC_NONNULL((3, 5, 7, 9, 11, 13, 15))
+CC_NONNULL((3, 5, 7, 9, 11, 13, 15, 16))
 int
 ccrsa_make_fips186_key(size_t nbits,
                        const cc_size e_n, const cc_unit *e,
@@ -262,14 +193,14 @@ ccrsa_make_fips186_key(size_t nbits,
  * @param   sigSize           The length of generated signature in bytes, which equals the size of the RSA modulus.
  * @return                   0:ok, non-zero:error
  */
-CC_NONNULL((2,3,5,7,8,9))
+CC_NONNULL((2, 3, 5, 7, 8, 9))
 int ccrsa_sign_pss(ccrsa_full_ctx_t key,
                    const struct ccdigest_info* hashAlgorithm, const struct ccdigest_info* MgfHashAlgorithm,
                    size_t saltSize, struct ccrng_state *rng,
                    size_t hSize, const uint8_t *mHash,
                    size_t *sigSize, uint8_t *sig);
 
-CC_NONNULL((2,3,5,7,9))
+CC_NONNULL((2, 3, 5, 7, 9))
 int ccrsa_verify_pss(ccrsa_pub_ctx_t key,
                      const struct ccdigest_info* di, const struct ccdigest_info* MgfDi,
                      size_t digestSize, const uint8_t *digest,
@@ -290,37 +221,38 @@ int ccrsa_verify_pss(ccrsa_pub_ctx_t key,
                         for the output signature
 
  @result     0 iff successful.
- 
+
   @discussion Null OID is a special case, required to support RFC 4346 where the padding
  is based on SHA1+MD5. In general it is not recommended to use a NULL OID,
  except when strictly required for interoperability
 
  */
-CC_NONNULL_TU((1)) CC_NONNULL((4, 5, 6))
+CC_NONNULL((1, 4, 5, 6))
 int ccrsa_sign_pkcs1v15(ccrsa_full_ctx_t key, const uint8_t *oid,
                         size_t digest_len, const uint8_t *digest,
                         size_t *sig_len, uint8_t *sig);
 
 
 /*!
- @function   ccrsa_sign_pkcs1v15
- @abstract   RSA signature with PKCS#1 v1.5 format per PKCS#1 v2.2
+  @function   ccrsa_verify_pkcs1v15
+  @abstract   RSA signature with PKCS#1 v1.5 format per PKCS#1 v2.2
 
- @param      key        Public key
- @param      oid        OID describing the type of digest passed in
- @param      digest_len Byte length of the digest
- @param      digest     Byte array of digest_len bytes containing the digest
- @param      sig_len    Number of byte of the signature sig.
- @param      sig        Pointer to the signature buffer of sig_len
- @param      valid      Output boolean, true if the signature is valid.
+  @param      key        Public key
+  @param      oid        OID describing the type of digest passed in
+  @param      digest_len Byte length of the digest
+  @param      digest     Byte array of digest_len bytes containing the digest
+  @param      sig_len    Number of byte of the signature sig.
+  @param      sig        Pointer to the signature buffer of sig_len
+  @param      valid      Output boolean, true if the signature is valid.
 
- @result     0 iff successful.
- 
-  @discussion Null OID is a special case, required to support RFC 4346 where the padding
- is based on SHA1+MD5. In general it is not recommended to use a NULL OID, 
- except when strictly required for interoperability
- */
-CC_NONNULL_TU((1)) CC_NONNULL((4, 6, 7))
+  @result     0 iff successful.
+
+  @discussion Null OID is a special case, required to support RFC 4346
+  where the padding is based on SHA1+MD5. In general it is not
+  recommended to use a NULL OID, except when strictly required for
+  interoperability.
+*/
+CC_NONNULL((1, 4, 6, 7))
 int ccrsa_verify_pkcs1v15(ccrsa_pub_ctx_t key, const uint8_t *oid,
                           size_t digest_len, const uint8_t *digest,
                           size_t sig_len, const uint8_t *sig,
@@ -329,80 +261,80 @@ int ccrsa_verify_pkcs1v15(ccrsa_pub_ctx_t key, const uint8_t *oid,
 /*!
  @function   ccder_encode_rsa_pub_size
  @abstract   Calculate size of public key export format data package.
- 
+
  @param      key        Public key
- 
+
  @result     Returns size required for encoding.
  */
 
-CC_NONNULL_TU((1))
+CC_NONNULL((1))
 size_t ccder_encode_rsa_pub_size(const ccrsa_pub_ctx_t key);
 
 /*!
  @function   ccrsa_export_priv_pkcs1
  @abstract   Export a public key.
- 
+
  @param      key        Public key
  @param      der        Beginning of output DER buffer
  @param      der_end    End of output DER buffer
  */
 
-CC_NONNULL_TU((1)) CC_NONNULL((2)) CC_NONNULL((3))
+CC_NONNULL((1, 2, 3))
 uint8_t *ccder_encode_rsa_pub(const ccrsa_pub_ctx_t key, uint8_t *der, uint8_t *der_end);
 
 
 /*!
  @function   ccder_encode_rsa_priv_size
  @abstract   Calculate size of full key exported in PKCS#1 format.
- 
+
  @param      key        Full key
- 
+
  @result     Returns size required for encoding.
  */
 
-CC_NONNULL_TU((1))
+CC_NONNULL((1))
 size_t ccder_encode_rsa_priv_size(const ccrsa_full_ctx_t key);
 
 /*!
  @function   ccder_encode_rsa_priv
  @abstract   Export a full key in PKCS#1 format.
- 
+
  @param      key        Full key
  @param      der        Beginning of output DER buffer
  @param      der_end    End of output DER buffer
  */
 
-CC_NONNULL_TU((1)) CC_NONNULL((2)) CC_NONNULL((3))
+CC_NONNULL((1, 2, 3))
 uint8_t *ccder_encode_rsa_priv(const ccrsa_full_ctx_t key, const uint8_t *der, uint8_t *der_end);
 
 /*!
  @function   ccder_decode_rsa_pub_n
  @abstract   Calculate "n" for a public key imported from a data package.
         PKCS #1 format
- 
+
  @param      der        Beginning of input DER buffer
  @param      der_end    End of input DER buffer
- 
+
  @result the "n" of the RSA key that would result from the import.  This can be used
  to declare the key itself.
  */
 
-CC_NONNULL((1)) CC_NONNULL((2))
+CC_NONNULL((1, 2))
 cc_size ccder_decode_rsa_pub_n(const uint8_t *der, const uint8_t *der_end);
 
 /*!
  @function   ccder_decode_rsa_pub
  @abstract   Import a public RSA key from a package in public key format.
         PKCS #1 format
- 
+
  @param      key          Public key (n must be set)
  @param      der        Beginning of input DER buffer
  @param      der_end    End of input DER buffer
- 
+
  @result     Key is initialized using the data in the public key message.
  */
 
-CC_NONNULL_TU((1)) CC_NONNULL((2)) CC_NONNULL((3))
+CC_NONNULL((1, 2, 3))
 const uint8_t *ccder_decode_rsa_pub(const ccrsa_pub_ctx_t key, const uint8_t *der, const uint8_t *der_end);
 
 /*!
@@ -416,7 +348,7 @@ const uint8_t *ccder_decode_rsa_pub(const ccrsa_pub_ctx_t key, const uint8_t *de
  to declare the key itself.
  */
 
-CC_NONNULL((1)) CC_NONNULL((2))
+CC_NONNULL((1, 2))
 cc_size ccder_decode_rsa_pub_x509_n(const uint8_t *der, const uint8_t *der_end);
 
 /*!
@@ -430,48 +362,48 @@ cc_size ccder_decode_rsa_pub_x509_n(const uint8_t *der, const uint8_t *der_end);
  @result     Key is initialized using the data in the public key message.
  */
 
-CC_NONNULL_TU((1)) CC_NONNULL((2)) CC_NONNULL((3))
+CC_NONNULL((1, 2, 3))
 const uint8_t *ccder_decode_rsa_pub_x509(const ccrsa_pub_ctx_t key, const uint8_t *der, const uint8_t *der_end);
 
 
 /*!
  @function   ccder_decode_rsa_priv_n
  @abstract   Calculate "n" for a private key imported from a data package.
- 
+
  @param      der        Beginning of input DER buffer
  @param      der_end    End of input DER buffer
- 
+
  @result the "n" of the RSA key that would result from the import.  This can be used
  to declare the key itself.
  */
 
-CC_NONNULL((1)) CC_NONNULL((2))
+CC_NONNULL((1, 2))
 cc_size ccder_decode_rsa_priv_n(const uint8_t *der, const uint8_t *der_end);
 
 /*!
  @function   ccder_decode_rsa_priv
  @abstract   Import a private RSA key from a package in PKCS#1 format.
- 
+
  @param      key          Full key (n must be set)
  @param      der        Beginning of input DER buffer
  @param      der_end    End of input DER buffer
- 
+
  @result     Key is initialized using the data in the public key message.
  */
 
-CC_NONNULL_TU((1)) CC_NONNULL((2)) CC_NONNULL((3))
+CC_NONNULL((1, 2, 3))
 const uint8_t *ccder_decode_rsa_priv(const ccrsa_full_ctx_t key, const uint8_t *der, const uint8_t *der_end);
 
 /*!
  @function   ccrsa_export_pub_size
  @abstract   Calculate size of public key exported data package.
- 
+
  @param      key        Public key
- 
+
  @result     Returns size required for encoding.
  */
 
-CC_CONST CC_INLINE CC_NONNULL_TU((1))
+CC_CONST CC_INLINE CC_NONNULL((1))
 size_t ccrsa_export_pub_size(const ccrsa_pub_ctx_t key) {
     return ccder_encode_rsa_pub_size(key);
 }
@@ -479,21 +411,21 @@ size_t ccrsa_export_pub_size(const ccrsa_pub_ctx_t key) {
 /*!
  @function   ccrsa_export_pub
  @abstract   Export a public key in public key format.
- 
+
  @param      key        Public key
  @param      out_len    Allocated size
  @param      out        Output buffer
  */
 
-CC_NONNULL_TU((1)) CC_NONNULL((3))
+CC_NONNULL((1, 3))
 int ccrsa_export_pub(const ccrsa_pub_ctx_t key, size_t out_len, uint8_t *out);
 /*!
  @function   ccrsa_import_pub_n
  @abstract   Calculate "n" for a public key imported from a data package.
- 
+
  @param      inlen        Length of public key package data
  @param      der          pointer to public key package data
- 
+
  @result the "n" of the RSA key that would result from the import.  This can be used
  to declare the key itself.
  */
@@ -510,27 +442,27 @@ cc_size ccrsa_import_pub_n(size_t inlen, const uint8_t *der) {
 /*!
  @function   ccrsa_import_pub
  @abstract   Import a public RSA key from a package in public key format.
- 
+
  @param      key          Public key (n must be set)
  @param      inlen        Length of public key package data
  @param      der           pointer to public key package data
- 
+
  @result     Key is initialized using the data in the public key message.
  */
 
-CC_NONNULL_TU((1)) CC_NONNULL((3))
+CC_NONNULL((1, 3))
 int ccrsa_import_pub(ccrsa_pub_ctx_t key, size_t inlen, const uint8_t *der);
 
 /*!
  @function   ccrsa_export_priv_size
  @abstract   Calculate size of full key exported in PKCS#1 format.
- 
+
  @param      key        Full key
- 
+
  @result     Returns size required for encoding.
  */
 
-CC_CONST CC_INLINE CC_NONNULL_TU((1))
+CC_CONST CC_INLINE CC_NONNULL((1))
 size_t ccrsa_export_priv_size(const ccrsa_full_ctx_t key) {
     return ccder_encode_rsa_priv_size(key);
 }
@@ -538,13 +470,13 @@ size_t ccrsa_export_priv_size(const ccrsa_full_ctx_t key) {
 /*!
  @function   ccrsa_export_priv
  @abstract   Export a full key in PKCS#1 format.
- 
+
  @param      key        Full key
  @param      out_len    Allocated size
  @param      out        Output buffer
  */
 
-CC_CONST CC_INLINE CC_NONNULL_TU((1)) CC_NONNULL((3))
+CC_CONST CC_INLINE CC_NONNULL((1, 3))
 int ccrsa_export_priv(const ccrsa_full_ctx_t key, size_t out_len, uint8_t *out) {
     return (ccder_encode_rsa_priv(key, out, out+out_len) != out);
 }
@@ -552,10 +484,10 @@ int ccrsa_export_priv(const ccrsa_full_ctx_t key, size_t out_len, uint8_t *out) 
 /*!
  @function   ccrsa_import_priv_n
  @abstract   Calculate size of full key exported in PKCS#1 format.
- 
+
  @param      inlen        Length of PKCS#1 package data
  @param      der           pointer to PKCS#1 package data
- 
+
  @result the "n" of the RSA key that would result from the import.  This can be used
  to declare the key itself.
  */
@@ -568,24 +500,24 @@ cc_size ccrsa_import_priv_n(size_t inlen, const uint8_t *der) {
 /*!
  @function   ccrsa_import_priv
  @abstract   Import a full RSA key from a package in PKCS#1 format.
- 
+
  @param      key          Full key (n must be set)
  @param      inlen        Length of PKCS#1 package data
  @param      der           pointer to PKCS#1 package data
- 
+
  @result     Key is initialized using the data in the PKCS#1 message.
  */
 
-CC_CONST CC_INLINE CC_NONNULL_TU((1)) CC_NONNULL((3))
+CC_CONST CC_INLINE CC_NONNULL((1, 3))
 int ccrsa_import_priv(ccrsa_full_ctx_t key, size_t inlen, const uint8_t *der) {
     return (ccder_decode_rsa_priv(key, der, der+inlen) == NULL);
 }
 
 
-CC_NONNULL_TU((1)) CC_NONNULL2
+CC_NONNULL((1, 2))
 int ccrsa_get_pubkey_components(const ccrsa_pub_ctx_t pubkey, uint8_t *modulus, size_t *modulusLength, uint8_t *exponent, size_t *exponentLength);
 
-CC_NONNULL_TU((1)) CC_NONNULL2
+CC_NONNULL((1, 2))
 int ccrsa_get_fullkey_components(const ccrsa_full_ctx_t key, uint8_t *modulus, size_t *modulusLength, uint8_t *exponent, size_t *exponentLength,
                                  uint8_t *p, size_t *pLength, uint8_t *q, size_t *qLength);
 

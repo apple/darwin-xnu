@@ -105,8 +105,6 @@
 #define VOLFS_MIN_PATH_LEN  9
 
 
-static	void kdebug_lookup(struct vnode *dp, struct componentname *cnp);
-
 #if CONFIG_VOLFS
 static int vfs_getrealpath(const char * path, char * realpath, size_t bufsize, vfs_context_t ctx);
 #define MAX_VOLFS_RESTARTS 5
@@ -1746,24 +1744,33 @@ nameidone(struct nameidata *ndp)
 #if (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST)
 
 void
-kdebug_lookup_gen_events(long *dbg_parms, int dbg_namelen, void *dp, boolean_t lookup)
+kdebug_vfs_lookup(long *dbg_parms, int dbg_namelen, void *dp, uint32_t flags)
 {
 	int code;
 	unsigned int i;
+	bool lookup = flags & KDBG_VFS_LOOKUP_FLAG_LOOKUP;
+	bool noprocfilt = flags & KDBG_VFS_LOOKUP_FLAG_NOPROCFILT;
 
 	/*
 	 * In the event that we collect multiple, consecutive pathname
 	 * entries, we must mark the start of the path's string and the end.
 	 */
-	if (lookup == TRUE)
+	if (lookup) {
 		code = VFS_LOOKUP | DBG_FUNC_START;
-	else
+	} else {
 		code = VFS_LOOKUP_DONE | DBG_FUNC_START;
+	}
 
 	if (dbg_namelen <= (int)(3 * sizeof(long)))
 		code |= DBG_FUNC_END;
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, code, kdebug_vnode(dp), dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
+	if (noprocfilt) {
+		KDBG_RELEASE_NOPROCFILT(code, kdebug_vnode(dp), dbg_parms[0],
+				dbg_parms[1], dbg_parms[2]);
+	} else {
+		KDBG_RELEASE(code, kdebug_vnode(dp), dbg_parms[0], dbg_parms[1],
+				dbg_parms[2]);
+	}
 
 	code &= ~DBG_FUNC_START;
 
@@ -1771,11 +1778,25 @@ kdebug_lookup_gen_events(long *dbg_parms, int dbg_namelen, void *dp, boolean_t l
 		if (dbg_namelen <= (int)(4 * sizeof(long)))
 			code |= DBG_FUNC_END;
 
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, code, dbg_parms[i], dbg_parms[i+1], dbg_parms[i+2], dbg_parms[i+3], 0);
+		if (noprocfilt) {
+			KDBG_RELEASE_NOPROCFILT(code, dbg_parms[i], dbg_parms[i + 1],
+					dbg_parms[i + 2], dbg_parms[i + 3]);
+		} else {
+			KDBG_RELEASE(code, dbg_parms[i], dbg_parms[i + 1], dbg_parms[i + 2],
+					dbg_parms[i + 3]);
+		}
 	}
 }
 
-static void
+void
+kdebug_lookup_gen_events(long *dbg_parms, int dbg_namelen, void *dp,
+		boolean_t lookup)
+{
+	kdebug_vfs_lookup(dbg_parms, dbg_namelen, dp,
+			lookup ? KDBG_VFS_LOOKUP_FLAG_LOOKUP : 0);
+}
+
+void
 kdebug_lookup(vnode_t dp, struct componentname *cnp)
 {
 	int dbg_namelen;
@@ -1799,13 +1820,15 @@ kdebug_lookup(vnode_t dp, struct componentname *cnp)
 		       *(cnp->cn_nameptr + cnp->cn_namelen) ? '>' : 0,
 		       sizeof(dbg_parms) - dbg_namelen);
 	}
-	kdebug_lookup_gen_events(dbg_parms, dbg_namelen, (void *)dp, TRUE);
-}	
+	kdebug_vfs_lookup(dbg_parms, dbg_namelen, (void *)dp,
+			KDBG_VFS_LOOKUP_FLAG_LOOKUP);
+}
 
 #else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
 
 void
-kdebug_lookup_gen_events(long *dbg_parms __unused, int dbg_namelen __unused, void *dp __unused)
+kdebug_vfs_lookup(long *dbg_parms __unused, int dbg_namelen __unused,
+		void *dp __unused, __unused uint32_t flags)
 {
 }
 

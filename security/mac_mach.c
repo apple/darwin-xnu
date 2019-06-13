@@ -149,6 +149,21 @@ mac_thread_userret(struct thread *td)
 	MAC_PERFORM(thread_userret, td);
 }
 
+void
+mac_proc_notify_exec_complete(struct proc *proc)
+{
+	thread_t thread = current_thread();
+
+	/*
+	 * Since this MAC hook was designed to support upcalls, make sure the hook
+	 * is called with kernel importance propagation enabled so any daemons
+	 * can get any appropriate importance donations.
+	 */
+	thread_enable_send_importance(thread, TRUE);
+	MAC_PERFORM(proc_notify_exec_complete, proc);
+	thread_enable_send_importance(thread, FALSE);
+}
+
 /**** Exception Policy
  *
  * Note that the functions below do not fully follow the usual convention for mac policy functions

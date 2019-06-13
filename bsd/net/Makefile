@@ -46,6 +46,7 @@ PRIVATE_DATAFILES = \
 	if_media.h \
 	if_mib.h \
 	if_pflog.h \
+	if_ports_used.h \
 	if_ppp.h \
 	if_utun.h \
 	if_var.h \
@@ -68,7 +69,8 @@ PRIVATE_DATAFILES = \
 	raw_cb.h \
 	route.h \
 	net_perf.h \
-	net_kev.h
+	net_kev.h \
+	nat464_utils.h
 
 PRIVATE_KERNELFILES = $(filter-out radix.h,${KERNELFILES}) \
 	bpfdesc.h ppp_comp.h \

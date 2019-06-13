@@ -126,6 +126,11 @@
 #define	AUT_SOCKINET128		0x81		/* XXX */
 #define	AUT_SOCKUNIX		0x82		/* XXX */
 
+/* Apple specific tokens*/
+#define	AUT_IDENTITY		0xed
+#define	AUT_KRB5_PRINCIPAL	0xee
+#define	AUT_CERT_HASH		0xef
+
 /* print values for the arbitrary token */
 #define AUP_BINARY      0
 #define AUP_OCTAL       1
@@ -272,14 +277,21 @@ token_t	*au_to_subject64_ex(au_id_t auid, uid_t euid, gid_t egid, uid_t ruid,
 #if defined(_KERNEL) || defined(KERNEL)
 token_t	*au_to_exec_args(char *args, int argc);
 token_t	*au_to_exec_env(char *envs, int envc);
+token_t	*au_to_certificate_hash(char *hash, int hashc);
+token_t	*au_to_krb5_principal(char *principal, int princ);
 #else
 token_t	*au_to_exec_args(char **argv);
 token_t	*au_to_exec_env(char **envp);
+token_t	*au_to_certificate_hash(char **hash);
+token_t	*au_to_krb5_principal(char **principal);
 #endif
 token_t	*au_to_text(const char *text);
 token_t	*au_to_kevent(struct kevent *kev);
 token_t	*au_to_trailer(int rec_size);
 token_t	*au_to_zonename(const char *zonename);
+token_t	*au_to_identity(uint32_t signer_type, const char* signing_id,
+	    u_char signing_id_trunc, const char* team_id, u_char team_id_trunc,
+	    uint8_t* cdhash, uint16_t cdhash_len);
 
 /*
  * BSM library routines for converting between local and BSM constant spaces.

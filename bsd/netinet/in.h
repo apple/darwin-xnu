@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -391,6 +391,10 @@ struct sockaddr_in {
 	struct	in_addr sin_addr;
 	char		sin_zero[8];
 };
+
+#define IN_ARE_ADDR_EQUAL(a, b) \
+    (bcmp(&(a)->s_addr, &(b)->s_addr, \
+        sizeof (struct in_addr)) == 0)
 
 #ifdef PRIVATE
 /*
@@ -811,6 +815,8 @@ union sockaddr_in_4_6 {
 	struct sockaddr_in6     sin6;
 };
 
+#define	CLAT46_HDR_EXPANSION_OVERHD	(sizeof(struct ip6_hdr) - sizeof(struct ip))
+
 /*
  * Recommended DiffServ Code Point values
  */
@@ -880,6 +886,8 @@ extern uint32_t in_cksum_mbuf_ref(struct mbuf *, int, int, uint32_t);
 extern int in_getconninfo(struct socket *, sae_connid_t, uint32_t *,
     uint32_t *, int32_t *, user_addr_t, socklen_t *, user_addr_t, socklen_t *,
     uint32_t *, user_addr_t, uint32_t *);
+extern struct in_ifaddr * inifa_ifpwithflag(struct ifnet *, uint32_t);
+extern struct in_ifaddr * inifa_ifpclatv4(struct ifnet *);
 
 #define	in_cksum(_m, _l)			\
 	inet_cksum(_m, 0, 0, _l)

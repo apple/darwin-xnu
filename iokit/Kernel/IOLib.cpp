@@ -99,7 +99,6 @@ __doprnt(
 extern void cons_putc_locked(char);
 extern void bsd_log_lock(void);
 extern void bsd_log_unlock(void);
-extern void logwakeup();
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -549,8 +548,8 @@ IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxP
         alignment = 1;
 
     alignMask = alignment - 1;
-    adjustedSize = (2 * size) + sizeofIOLibPageMallocHeader;
-    if (adjustedSize < size) return (0);
+
+    if (os_mul_and_add_overflow(2, size, sizeofIOLibPageMallocHeader, &adjustedSize)) return (0);
 
     contiguous = (contiguous && (adjustedSize > page_size))
                    || (alignment > page_size);
@@ -1190,6 +1189,40 @@ void IOPanic(const char *reason)
 	panic("%s", reason);
 }
 #endif
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+void IOKitKernelLogBuffer(const char * title, const void * buffer, size_t size,
+                          void (*output)(const char *format, ...))
+{
+    uint8_t c, chars[17];
+    size_t idx;
+
+    output("%s(0x%x):\n", title, size);
+    if (size > 4096) size = 4096;
+    chars[16] = idx = 0;
+    while (true) {
+        if (!(idx & 15)) {
+            if (idx) output(" |%s|\n", chars);
+            if (idx >= size) break;
+            output("%04x:  ", idx);
+        }
+        else if (!(idx & 7)) output(" ");
+
+        c =  ((char *)buffer)[idx];
+        output("%02x ", c);
+        chars[idx & 15] = ((c >= 0x20) && (c <= 0x7f)) ? c : ' ';
+
+        idx++;
+        if ((idx == size) && (idx & 15)) {
+            chars[idx & 15] = 0;
+            while (idx & 15) {
+                idx++;
+                output("   ");
+            }
+        }
+    }
+}
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 

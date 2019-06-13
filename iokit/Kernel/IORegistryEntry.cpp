@@ -33,7 +33,7 @@
 #include <IOKit/IOTimeStamp.h>
 
 #include <IOKit/IOLib.h>
-
+#include <stdatomic.h>
 #include <IOKit/assert.h>
 
 #include "IOKitKernelInternal.h"
@@ -60,9 +60,10 @@ OSDefineMetaClassAndStructors(IORegistryEntry, OSObject)
 
 struct IORegistryEntry::ExpansionData
 {
-    IORecursiveLock * fLock;
-    uint64_t	      fRegistryEntryID;
-    SInt32            fRegistryEntryGenerationCount;
+    IORecursiveLock *        fLock;
+    uint64_t	             fRegistryEntryID;
+    SInt32                   fRegistryEntryGenerationCount;
+    OSObject       **_Atomic fIndexedProperties;
 };
 
 
@@ -404,7 +405,15 @@ void IORegistryEntry::free( void )
 
     if (reserved)
     {
-	if (reserved->fLock) IORecursiveLockFree(reserved->fLock);
+	if (reserved->fIndexedProperties)
+	{
+	    for (int idx = 0; idx < kIORegistryEntryIndexedPropertyCount; idx++)
+	    {
+		if (reserved->fIndexedProperties[idx]) reserved->fIndexedProperties[idx]->release();
+	    }
+	    IODelete(reserved->fIndexedProperties, OSObject *, kIORegistryEntryIndexedPropertyCount);
+	}
+	if (reserved->fLock)              IORecursiveLockFree(reserved->fLock);
 	IODelete(reserved, ExpansionData, 1);
     }
 
@@ -744,6 +753,40 @@ IORegistryEntry::setProperty( const char *      aKey,
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+OSObject * IORegistryEntry::setIndexedProperty(uint32_t index, OSObject * anObject)
+{
+    OSObject ** array;
+    OSObject *  prior;
+
+    if (index >= kIORegistryEntryIndexedPropertyCount) return (0);
+
+    array = atomic_load_explicit(&reserved->fIndexedProperties, memory_order_acquire);
+    if (!array)
+    {
+	array = IONew(OSObject *, kIORegistryEntryIndexedPropertyCount);
+	if (!array) return (0);
+	bzero(array, kIORegistryEntryIndexedPropertyCount * sizeof(array[0]));
+	if (!OSCompareAndSwapPtr(NULL, array, &reserved->fIndexedProperties)) IODelete(array, OSObject *, kIORegistryEntryIndexedPropertyCount);
+    }
+    if (!reserved->fIndexedProperties) return (0);
+
+    prior = reserved->fIndexedProperties[index];
+    if (anObject) anObject->retain();
+    reserved->fIndexedProperties[index] = anObject;
+
+    return (prior);
+}
+
+OSObject * IORegistryEntry::getIndexedProperty(uint32_t index) const
+{
+    if (index >= kIORegistryEntryIndexedPropertyCount) return (0);
+    if (!reserved->fIndexedProperties) return (0);
+
+    return (reserved->fIndexedProperties[index]);
+}
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 /* Name, location, paths */
 
 const char * IORegistryEntry::getName( const IORegistryPlane * plane ) const
@@ -886,7 +929,7 @@ IORegistryEntry::compareName( OSString * name, OSString ** matched ) const
     const OSSymbol *	sym = copyName();
     bool		isEqual;
 
-    isEqual = sym->isEqualTo( name );
+    isEqual = (sym && sym->isEqualTo(name));
 
     if( isEqual && matched) {
 	name->retain();

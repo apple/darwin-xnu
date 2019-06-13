@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -83,9 +83,41 @@
 #include <sys/cdefs.h>
 #include <stdint.h>
 
+#ifdef PRIVATE
+#include <net/if_var.h>
+#include <uuid/uuid.h>
+
+struct bpf_setup_args {
+	uuid_t	bsa_uuid;
+	char    bsa_ifname[IFNAMSIZ];
+};
+#endif /* PRIVATE */
+
 #ifdef KERNEL
 #include <sys/kernel_types.h>
+
+#if !defined(__i386__) && !defined(__x86_64__)
+#define BPF_ALIGN 1
+#else /* defined(__i386__) || defined(__x86_64__) */
+#define BPF_ALIGN 0
+#endif /* defined(__i386__) || defined(__x86_64__) */
+
+#if !BPF_ALIGN
+#define EXTRACT_SHORT(p)        ((u_int16_t)ntohs(*(u_int16_t *)(void *)p))
+#define EXTRACT_LONG(p)         (ntohl(*(u_int32_t *)(void *)p))
+#else
+#define EXTRACT_SHORT(p)\
+        ((u_int16_t)\
+                ((u_int16_t)*((u_char *)p+0)<<8|\
+                 (u_int16_t)*((u_char *)p+1)<<0))
+#define EXTRACT_LONG(p)\
+                ((u_int32_t)*((u_char *)p+0)<<24|\
+                 (u_int32_t)*((u_char *)p+1)<<16|\
+                 (u_int32_t)*((u_char *)p+2)<<8|\
+                 (u_int32_t)*((u_char *)p+3)<<0)
 #endif
+
+#endif /* KERNEL */
 
 /* BSD style release date */
 #define	BPF_RELEASE 199606
@@ -113,7 +145,8 @@ struct bpf_program {
 };
 
 #ifdef KERNEL_PRIVATE
-/* LP64 version of bpf_program.  all pointers 
+/*
+ * LP64 version of bpf_program.  all pointers
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with bpf_program
  */
@@ -211,6 +244,11 @@ struct bpf_version {
 #define	BIOCSWANTPKTAP	_IOWR('B', 127, u_int)
 #define BIOCSHEADDROP   _IOW('B', 128, int)
 #define BIOCGHEADDROP   _IOR('B', 128, int)
+#define BIOCSTRUNCATE	_IOW('B', 129, u_int)
+#define	BIOCGETUUID	_IOR('B', 130, uuid_t)
+#define	BIOCSETUP	_IOW('B', 131, struct bpf_setup_args)
+#define	BIOCSPKTHDRV2	_IOW('B', 132, int)
+#define	BIOCGPKTHDRV2	_IOW('B', 133, int)
 #endif /* PRIVATE */
 /*
  * Structure prepended to each packet.
@@ -268,6 +306,7 @@ struct bpf_mtag {
 #define	BPF_MTAG_DIR_IN		0
 #define	BPF_MTAG_DIR_OUT	1
 };
+
 #endif /* PRIVATE */
 
 /*
@@ -1299,6 +1338,13 @@ struct bpf_dltlist {
 #pragma pack()
 
 #ifdef KERNEL_PRIVATE
+#define BPF_MIN_PKT_SIZE 40
+#define PORT_DNS 53
+#define PORT_BOOTPS 67
+#define PORT_BOOTPC 68
+#define PORT_ISAKMP 500
+#define PORT_ISAKMP_NATT 4500	/* rfc3948 */
+
 /* Forward declerations */
 struct ifnet;
 struct mbuf;

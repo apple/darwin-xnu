@@ -582,6 +582,7 @@ __END_DECLS
 #define KAUTH_FILEOP_LINK			5
 #define KAUTH_FILEOP_EXEC			6
 #define KAUTH_FILEOP_DELETE			7
+#define	KAUTH_FILEOP_WILL_RENAME		8
 
 /*
  * arguments passed to KAUTH_FILEOP_OPEN listeners
@@ -591,6 +592,10 @@ __END_DECLS
  *		arg0 is pointer to vnode (vnode *) for file to be closed.
  *		arg1 is pointer to path (char *) of file to be closed.
  *		arg2 is close flags.
+ * arguments passed to KAUTH_FILEOP_WILL_RENAME listeners
+ *		arg0 is pointer to vnode (vnode *) of the file being renamed
+ *		arg1 is pointer to the "from" path (char *)
+ *		arg2 is pointer to the "to" path (char *)
  * arguments passed to KAUTH_FILEOP_RENAME listeners
  *		arg0 is pointer to "from" path (char *).
  *		arg1 is pointer to "to" path (char *).

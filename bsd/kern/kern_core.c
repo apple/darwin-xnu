@@ -134,7 +134,7 @@ process_cpu_type(proc_t core_proc)
 {
 	cpu_type_t what_we_think;
 #if defined (__i386__) || defined (__x86_64__)
-    if (IS_64BIT_PROCESS(core_proc)) {
+	if (IS_64BIT_PROCESS(core_proc)) {
 		what_we_think = CPU_TYPE_X86_64;
 	} else {
 		what_we_think = CPU_TYPE_I386;
@@ -146,6 +146,7 @@ process_cpu_type(proc_t core_proc)
 		what_we_think = CPU_TYPE_ARM;
 	}
 #endif
+
 	return what_we_think;
 }
 
@@ -154,13 +155,13 @@ process_cpu_subtype(proc_t core_proc)
 {
 	cpu_type_t what_we_think;
 #if defined (__i386__) || defined (__x86_64__)
-    if (IS_64BIT_PROCESS(core_proc)) {
+	if (IS_64BIT_PROCESS(core_proc)) {
 		what_we_think = CPU_SUBTYPE_X86_64_ALL;
 	} else {
 		what_we_think = CPU_SUBTYPE_I386_ALL;
 	}
 #elif defined (__arm__) || defined(__arm64__)
-    if (IS_64BIT_PROCESS(core_proc)) {
+	if (IS_64BIT_PROCESS(core_proc)) {
 		what_we_think = CPU_SUBTYPE_ARM64_ALL;
 	} else {
 		what_we_think = CPU_SUBTYPE_ARM_ALL;

@@ -156,6 +156,7 @@ kext_alloc(vm_offset_t *_addr, vm_size_t size, boolean_t fixed)
                        size, 
                        0,
                        flags,
+		       VM_MAP_KERNEL_FLAGS_NONE,
                        VM_KERN_MEMORY_KEXT,
                        MACH_PORT_NULL,
                        0,

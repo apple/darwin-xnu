@@ -1085,7 +1085,7 @@ select_internal(struct proc *p, struct select_nocancel_args *uap, uint64_t timeo
 	th_act = current_thread();
 	uth = get_bsdthread_info(th_act);
 	sel = &uth->uu_select;
-	seldata = &uth->uu_kevent.ss_select_data;
+	seldata = &uth->uu_save.uus_select_data;
 	*retval = 0;
 
 	seldata->args = uap;
@@ -1270,7 +1270,7 @@ selprocess(int error, int sel_pass)
 	th_act = current_thread();
 	uth = get_bsdthread_info(th_act);
 	sel = &uth->uu_select;
-	seldata = &uth->uu_kevent.ss_select_data;
+	seldata = &uth->uu_save.uus_select_data;
 	uap = seldata->args;
 	retval = seldata->retval;
 
@@ -1483,16 +1483,7 @@ static uint64_t sellinkfp(struct fileproc *fp, void **wq_data, struct waitq_set 
 	}
 
 	if ((fp->f_flags & FP_SELCONFLICT) == FP_SELCONFLICT) {
-		/*
-		 * The conflict queue requires disabling interrupts, so we
-		 * need to explicitly reserve a link object to avoid a
-		 * panic/assert in the waitq code. Hopefully this extra step
-		 * can be avoided if we can split the waitq structure into
-		 * blocking and linkage sub-structures.
-		 */
-		uint64_t reserved_link = waitq_link_reserve(&select_conflict_queue);
-		waitq_link(&select_conflict_queue, wqset, WAITQ_SHOULD_LOCK, &reserved_link);
-		waitq_link_release(reserved_link);
+		waitq_link(&select_conflict_queue, wqset, WAITQ_SHOULD_LOCK, NULL);
 	}
 
 	/*
@@ -1610,6 +1601,8 @@ selscan(struct proc *p, struct _select *sel, struct _select_data * seldata,
 						fp->f_flags |= FP_SELCONFLICT;
 					else
 						fp->f_flags |= FP_INSELECT;
+
+					waitq_set_lazy_init_link(wqset);
 				}
 
 				context.vc_ucred = fp->f_cred;
@@ -1731,6 +1724,8 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 	OSBitOrAtomic(P_SELECT, &p->p_flag);
 	for (i = 0; i < nfds; i++) {
 		short events = fds[i].events;
+		KNOTE_LOCK_CTX(knlc);
+		__assert_only int rc;
 
 		/* per spec, ignore fd values below zero */
 		if (fds[i].fd < 0) {
@@ -1749,14 +1744,16 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 			kev.filter = EVFILT_READ;
 			if (events & ( POLLPRI | POLLRDBAND ))
 				kev.flags |= EV_OOBAND;
-			kevent_register(kq, &kev, p);
+			rc = kevent_register(kq, &kev, &knlc);
+			assert((rc & FILTER_REGISTER_WAIT) == 0);
 		}
 
 		/* Handle output events */
 		if ((kev.flags & EV_ERROR) == 0 &&
 		    (events & ( POLLOUT | POLLWRNORM | POLLWRBAND ))) {
 			kev.filter = EVFILT_WRITE;
-			kevent_register(kq, &kev, p);
+			rc = kevent_register(kq, &kev, &knlc);
+			assert((rc & FILTER_REGISTER_WAIT) == 0);
 		}
 
 		/* Handle BSD extension vnode events */
@@ -1772,7 +1769,8 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 				kev.fflags |= NOTE_LINK;
 			if (events & POLLWRITE)
 				kev.fflags |= NOTE_WRITE;
-			kevent_register(kq, &kev, p);
+			rc = kevent_register(kq, &kev, &knlc);
+			assert((rc & FILTER_REGISTER_WAIT) == 0);
 		}
 
 		if (kev.flags & EV_ERROR) {
@@ -2028,7 +2026,7 @@ seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wak
 	}
 
 	nw = howmany(nfd, NFDBITS);
-	seldata = &uth->uu_kevent.ss_select_data;
+	seldata = &uth->uu_save.uus_select_data;
 
 	nc = 0;
 	for (msk = 0; msk < 3; msk++) {
@@ -2741,7 +2739,7 @@ waitevent(proc_t p, struct waitevent_args *uap, int *retval)
 	union {
 	        struct eventreq64 er64;
 	        struct eventreq32 er32;
-	} uer;
+	} uer = {};
 
 	interval = 0;
 
@@ -3112,7 +3110,7 @@ gethostuuid(struct proc *p, struct gethostuuid_args *uap, __unused int32_t *retv
 	kern_return_t kret;
 	int error;
 	mach_timespec_t mach_ts;	/* for IOKit call */
-	__darwin_uuid_t uuid_kern;	/* for IOKit call */
+	__darwin_uuid_t uuid_kern = {};	/* for IOKit call */
 
 	if (!uap->spi) {
 #if CONFIG_EMBEDDED
@@ -3227,7 +3225,7 @@ ledger(struct proc *p, struct ledger_args *args, __unused int32_t *retval)
 		}
 #endif
 		case LEDGER_INFO: {
-			struct ledger_info info;
+			struct ledger_info info = {};
 
 			rval = ledger_info(task, &info);
 			proc_rele(proc);
@@ -3286,6 +3284,9 @@ telemetry(__unused struct proc *p, struct telemetry_args *args, __unused int32_t
 #if CONFIG_TELEMETRY
 	case TELEMETRY_CMD_TIMER_EVENT:
 		error = telemetry_timer_event(args->deadline, args->interval, args->leeway);
+		break;
+	case TELEMETRY_CMD_PMI_SETUP:
+		error = telemetry_pmi_setup((enum telemetry_pmi)args->deadline, args->interval);
 		break;
 #endif /* CONFIG_TELEMETRY */
 	case TELEMETRY_CMD_VOUCHER_NAME:
@@ -3681,6 +3682,26 @@ SYSCTL_PROC(_kern, OID_AUTO, wqset_clear_preposts, CTLTYPE_QUAD | CTLFLAG_RW | C
 	    0, 0, sysctl_wqset_clear_preposts, "Q", "clear preposts on given waitq set");
 
 #endif /* CONFIG_WAITQ_DEBUG */
+
+static int
+sysctl_waitq_set_nelem SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+        int nelem;
+
+	/* Read only  */
+	if (req->newptr != USER_ADDR_NULL)
+		return (EPERM);
+
+	nelem = sysctl_helper_waitq_set_nelem();
+
+	return SYSCTL_OUT(req, &nelem, sizeof(nelem));
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, n_ltable_entries, CTLFLAG_RD | CTLFLAG_LOCKED,
+                0, 0, sysctl_waitq_set_nelem, "I", "ltable elementis currently used");
+
+
 #endif /* DEVELOPMENT || DEBUG */
 
 

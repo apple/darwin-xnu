@@ -37,6 +37,7 @@
 #include <i386/cpu_data.h>
 #include <i386/lapic.h>
 #include <i386/machine_routines.h>
+#include <stddef.h>
 
 __private_extern__ void qsort(
     void * array,
@@ -50,16 +51,28 @@ static x86_affinity_set_t *find_cache_affinity(x86_cpu_cache_t *L2_cachep);
 x86_affinity_set_t	*x86_affinities = NULL;
 static int		x86_affinity_count = 0;
 
+extern cpu_data_t cpshadows[];
+/* Re-sort double-mapped CPU data shadows after topology discovery sorts the
+ * primary CPU data structures by physical/APIC CPU ID.
+ */
+static void cpu_shadow_sort(int ncpus) {
+	for (int i = 0; i < ncpus; i++) {
+		cpu_data_t	*cpup = cpu_datap(i);
+		ptrdiff_t	coff = cpup - cpu_datap(0);
+
+		cpup->cd_shadow = &cpshadows[coff];
+	}
+}
+
 /*
- * cpu_topology_sort() is called after all processors have been registered
- * but before any non-boot processor id started.
- * We establish canonical logical processor numbering - logical cpus must be
- * contiguous, zero-based and assigned in physical (local apic id) order.
- * This step is required because the discovery/registration order is
- * non-deterministic - cores are registered in differing orders over boots.
- * Enforcing canonical numbering simplifies identification
- * of processors - in particular, for stopping/starting from CHUD.
- */ 
+ * cpu_topology_sort() is called after all processors have been registered but
+ * before any non-boot processor id started.  We establish canonical logical
+ * processor numbering - logical cpus must be contiguous, zero-based and
+ * assigned in physical (local apic id) order.  This step is required because
+ * the discovery/registration order is non-deterministic - cores are registered
+ * in differing orders over boots.  Enforcing canonical numbering simplifies
+ * identification of processors.
+ */
 void
 cpu_topology_sort(int ncpus)
 {
@@ -122,6 +135,7 @@ cpu_topology_sort(int ncpus)
 		x86_set_logical_topology(&cpup->lcpu, cpup->cpu_phys_number, i);
 	}
 
+	cpu_shadow_sort(ncpus);
 	x86_validate_topology();
 
 	ml_set_interrupts_enabled(istate);

@@ -61,6 +61,10 @@
  */
 
 subsystem
+#if	KERNEL_SERVER
+	  KernelServer
+#endif	/* KERNEL_SERVER */
+
 #if	KERNEL_USER
 	  KernelUser
 #endif
@@ -80,6 +84,14 @@ routine		exception_raise(
 			task		: mach_port_t;
 			exception	: exception_type_t;
 			code		: exception_data_t
+#if EXC_SERVER_SECTOKEN
+ ;
+ ServerSecToken stoken	: security_token_t
+#endif
+#if EXC_SERVER_AUDITTOKEN
+ ;
+ ServerAuditToken atoken: audit_token_t
+#endif
 			);
 
 routine		exception_raise_state(
@@ -88,7 +100,16 @@ routine		exception_raise_state(
 			code		: exception_data_t, const;
 		  inout flavor		: int;
 			old_state	: thread_state_t, const;
-		    out new_state	: thread_state_t);
+		    out new_state	: thread_state_t
+#if EXC_SERVER_SECTOKEN
+ ;
+ ServerSecToken stoken	: security_token_t
+#endif
+#if EXC_SERVER_AUDITTOKEN
+ ;
+ ServerAuditToken atoken: audit_token_t
+#endif
+			);
 
 routine		exception_raise_state_identity(
 			exception_port  : mach_port_t;
@@ -98,6 +119,15 @@ routine		exception_raise_state_identity(
 			code            : exception_data_t;
 		  inout flavor          : int;
 			old_state       : thread_state_t;
-		    out new_state       : thread_state_t);
+		    out new_state       : thread_state_t
+#if EXC_SERVER_SECTOKEN
+ ;
+ ServerSecToken stoken	: security_token_t
+#endif
+#if EXC_SERVER_AUDITTOKEN
+ ;
+ ServerAuditToken atoken: audit_token_t
+#endif
+			);
 
 /* vim: set ft=c : */

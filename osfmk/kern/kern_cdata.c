@@ -185,35 +185,42 @@ static kern_return_t kcdata_get_memory_addr_with_flavor(
 		uint64_t flags,
 		mach_vm_address_t *user_addr)
 {
+	kern_return_t kr;
 	struct kcdata_item info;
-	uint32_t total_size;
 
-	if (user_addr == NULL || data == NULL) {
+	uint32_t orig_size = size;
+	/* make sure 16 byte aligned */
+	uint32_t padding = kcdata_calc_padding(size);
+	size += padding;
+	uint32_t total_size  = size + sizeof(info);
+
+	if (user_addr == NULL || data == NULL || total_size + sizeof(info) < orig_size) {
 		return KERN_INVALID_ARGUMENT;
 	}
-
-	/* make sure 16 byte aligned */
-	size += kcdata_calc_padding(size);
 
 	bzero(&info, sizeof(info));
 	info.type  = type;
 	info.size = size;
 	info.flags = flags;
-	total_size = size + sizeof(info);
 
 	/* check available memory, including trailer size for KCDATA_TYPE_BUFFER_END */
-	if (data->kcd_length < ((data->kcd_addr_end - data->kcd_addr_begin) + total_size + sizeof(info))) {
+	if (total_size + sizeof(info) > data->kcd_length ||
+		data->kcd_length - (total_size + sizeof(info)) < data->kcd_addr_end - data->kcd_addr_begin) {
 		return KERN_RESOURCE_SHORTAGE;
 	}
 
-	if (data->kcd_flags & KCFLAG_USE_COPYOUT) {
-		if (copyout(&info, data->kcd_addr_end, sizeof(info)))
-			return KERN_NO_ACCESS;
-	} else {
-		memcpy((void *)data->kcd_addr_end, &info, sizeof(info));
-	}
+	kr = kcdata_memcpy(data, data->kcd_addr_end, &info, sizeof(info));
+	if (kr)
+		return kr;
 
 	data->kcd_addr_end += sizeof(info);
+
+	if (padding) {
+		kr = kcdata_bzero(data, data->kcd_addr_end + size - padding, padding);
+		if (kr)
+			return kr;
+	}
+
 	*user_addr = data->kcd_addr_end;
 	data->kcd_addr_end += size;
 
@@ -316,7 +323,7 @@ kcdata_undo_add_container_begin(kcdata_descriptor_t data)
  * returns: KERN_NO_ACCESS if copyout fails.
  */
 
-kern_return_t kcdata_memcpy(kcdata_descriptor_t data, mach_vm_address_t dst_addr, void *src_addr, uint32_t size)
+kern_return_t kcdata_memcpy(kcdata_descriptor_t data, mach_vm_address_t dst_addr, const void *src_addr, uint32_t size)
 {
 	if (data->kcd_flags & KCFLAG_USE_COPYOUT) {
 		if (copyout(src_addr, dst_addr, size))
@@ -325,6 +332,30 @@ kern_return_t kcdata_memcpy(kcdata_descriptor_t data, mach_vm_address_t dst_addr
 		memcpy((void *)dst_addr, src_addr, size);
 	}
 	return KERN_SUCCESS;
+}
+
+/*
+ * Routine: kcdata_bzero
+ * Desc: zero out a portion of a kcdata buffer.
+ */
+kern_return_t
+kcdata_bzero(kcdata_descriptor_t data, mach_vm_address_t dst_addr, uint32_t size)
+{
+	kern_return_t kr = KERN_SUCCESS;
+	if (data->kcd_flags & KCFLAG_USE_COPYOUT) {
+		uint8_t zeros[16] = {};
+		while (size) {
+			uint32_t block_size = MIN(size, 16);
+			kr = copyout(&zeros, dst_addr, block_size);
+			if (kr)
+				return KERN_NO_ACCESS;
+			size -= block_size;
+		}
+		return KERN_SUCCESS;
+	} else {
+		bzero((void*)dst_addr, size);
+		return KERN_SUCCESS;
+	}
 }
 
 /*

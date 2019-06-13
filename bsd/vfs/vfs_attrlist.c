@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 1995-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -340,7 +340,7 @@ static struct getvolattrlist_attrtab getvolattrlist_common_tab[] = {
 static struct getvolattrlist_attrtab getvolattrlist_vol_tab[] = {
 	{ATTR_VOL_FSTYPE,		0,						sizeof(uint32_t)},
 	{ATTR_VOL_SIGNATURE,		VFSATTR_BIT(f_signature),			sizeof(uint32_t)},
-	{ATTR_VOL_SIZE,			VFSATTR_BIT(f_blocks),				sizeof(off_t)},
+	{ATTR_VOL_SIZE,				VFSATTR_BIT(f_blocks)  |  VFSATTR_BIT(f_bsize),				sizeof(off_t)},
 	{ATTR_VOL_SPACEFREE,		VFSATTR_BIT(f_bfree) | VFSATTR_BIT(f_bsize),	sizeof(off_t)},
 	{ATTR_VOL_SPACEAVAIL,		VFSATTR_BIT(f_bavail) | VFSATTR_BIT(f_bsize),	sizeof(off_t)},
 	{ATTR_VOL_MINALLOCATION,	VFSATTR_BIT(f_bsize),				sizeof(off_t)},
@@ -1136,12 +1136,33 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 	 * Note that since we won't ever copy out more than the caller requested,
 	 * we never need to allocate more than they offer.
 	 */
-	ab.allocated = ulmin(bufferSize, fixedsize + varsize);
-	if (ab.allocated > ATTR_MAX_BUFFER) {
+	ab.allocated = fixedsize + varsize;
+	if (((size_t)ab.allocated) > ATTR_MAX_BUFFER) {
 		error = ENOMEM;
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: buffer size too large (%d limit %d)", ab.allocated, ATTR_MAX_BUFFER);
 		goto out;
 	}
+
+	if (return_valid &&
+	    (ab.allocated < (ssize_t)(sizeof(uint32_t) + sizeof(attribute_set_t))) &&
+	    !(options & FSOPT_REPORT_FULLSIZE)) {
+		uint32_t num_bytes_valid = sizeof(uint32_t);
+		/*
+		 * Not enough to return anything and we don't have to report
+		 * how much space is needed. Get out now.
+		 * N.B. - We have only been called after having verified that
+		 * attributeBuffer is at least sizeof(uint32_t);
+		 */
+		if (UIO_SEG_IS_USER_SPACE(segflg)) {
+			error = copyout(&num_bytes_valid,
+			    CAST_USER_ADDR_T(attributeBuffer), num_bytes_valid);
+		} else {
+			bcopy(&num_bytes_valid, (void *)attributeBuffer,
+			    (size_t)num_bytes_valid);
+		}
+		goto out;
+	}
+
 	MALLOC(ab.base, char *, ab.allocated, M_TEMP, M_ZERO | M_WAITOK);
 	if (ab.base == NULL) {
 		error = ENOMEM;
@@ -1161,6 +1182,10 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 	ab.needed = fixedsize + varsize;
 
 	/* common attributes **************************************************/
+	if (alp->commonattr & ATTR_CMN_ERROR) {
+		ATTR_PACK4(ab, 0);
+		ab.actual.commonattr |= ATTR_CMN_ERROR;
+	}
 	if (alp->commonattr & ATTR_CMN_NAME) {
 		attrlist_pack_string(&ab, cnp, cnl);
 		ab.actual.commonattr |= ATTR_CMN_NAME;
@@ -1456,10 +1481,11 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 	 * of the result buffer, even if we copied less out.  The caller knows how big a buffer
 	 * they gave us, so they can always check for truncation themselves.
 	 */
-	*(uint32_t *)ab.base = (options & FSOPT_REPORT_FULLSIZE) ? ab.needed : imin(ab.allocated, ab.needed);
-	
+	*(uint32_t *)ab.base = (options & FSOPT_REPORT_FULLSIZE) ? ab.needed : imin(bufferSize, ab.needed);
+
 	/* Return attribute set output if requested. */
-	if (return_valid) {
+	if (return_valid &&
+	    (ab.allocated >= (ssize_t)(sizeof(uint32_t) + sizeof(ab.actual)))) {
 		ab.actual.commonattr |= ATTR_CMN_RETURNED_ATTRS;
 		if (pack_invalid) {
 			/* Only report the attributes that are valid */
@@ -1471,9 +1497,9 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 
 	if (UIO_SEG_IS_USER_SPACE(segflg))
 		error = copyout(ab.base, CAST_USER_ADDR_T(attributeBuffer),
-		                ab.allocated);
+		                ulmin(bufferSize, ab.needed));
 	else
-		bcopy(ab.base, (void *)attributeBuffer, (size_t)ab.allocated);
+		bcopy(ab.base, (void *)attributeBuffer, (size_t)ulmin(bufferSize, ab.needed));
 
 out:
 	if (vs.f_vol_name != NULL)
@@ -2775,6 +2801,9 @@ getattrlist_internal(vfs_context_t ctx, vnode_t vp, struct attrlist  *alp,
 	// must be true for fork attributes to be used as new common attributes
 	const int use_fork = (options & FSOPT_ATTR_CMN_EXTENDED) != 0;
 
+	if (bufferSize < sizeof(uint32_t))
+		return (ERANGE);
+
 	proc_is64 = proc_is64bit(vfs_context_proc(ctx));
 
 	if (segflg == UIO_USERSPACE) {
@@ -3675,6 +3704,7 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 	struct fileproc *fp;
 	struct fd_vn_data *fvdata;
 	vfs_context_t ctx;
+	uthread_t ut;
 	enum uio_seg segflg;
 	int count;
 	uio_t auio = NULL;
@@ -3694,6 +3724,7 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 	fvdata = NULL;
 	eofflag = 0;
 	ctx = vfs_context_current();
+	ut = get_bsdthread_info(current_thread());
 	segflg = IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32;
 
 	if ((fp->f_fglob->fg_flag & FREAD) == 0) {
@@ -3840,8 +3871,14 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 			(void)getattrlist_setupvattr_all(&al, &va, VNON, NULL,
 			    IS_64BIT_PROCESS(p), (uap->options & FSOPT_ATTR_CMN_EXTENDED));
 
+			/*
+			 * Set UT_KERN_RAGE_VNODES to cause all vnodes created by the
+			 * filesystem to be rapidly aged.
+			 */
+			ut->uu_flag |= UT_KERN_RAGE_VNODES;
 			error = VNOP_GETATTRLISTBULK(dvp, &al, &va, auio, NULL,
 			    options, &eofflag, &count, ctx);
+			ut->uu_flag &= ~UT_KERN_RAGE_VNODES;
 
 			FREE(va_name, M_TEMP);
 
@@ -3862,8 +3899,10 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 		eofflag = 0;
 		count = 0;
 
+		ut->uu_flag |= UT_KERN_RAGE_VNODES;
 		error = readdirattr(dvp, fvdata, auio, &al, options,
 		    &count, &eofflag, ctx);
+		ut->uu_flag &= ~UT_KERN_RAGE_VNODES;
 	}
 
 	if (count) {

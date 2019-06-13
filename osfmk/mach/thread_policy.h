@@ -295,6 +295,7 @@ typedef struct thread_policy_state		*thread_policy_state_t;
 #define THREAD_QOS_POLICY               9
 #define THREAD_QOS_POLICY_OVERRIDE      10
 
+typedef uint8_t thread_qos_t;
 #define THREAD_QOS_UNSPECIFIED          0
 #define THREAD_QOS_DEFAULT              THREAD_QOS_UNSPECIFIED  /* Temporary rename */
 #define THREAD_QOS_MAINTENANCE          1
@@ -336,18 +337,6 @@ typedef struct thread_policy_state		*thread_policy_state_t;
  * either be a memory allocation in userspace, or the pthread_t of the
  * overrider if no allocation was used.
  *
- * THREAD_QOS_OVERRIDE_TYPE_DISPATCH_ASYNCHRONOUS_OVERRIDE are used to
- * override the QoS of a thread currently draining a serial dispatch
- * queue, so that it can get to a block of higher QoS than its
- * predecessors. The override is applied by a thread enqueueing work
- * with resource=&queue, and reset by the thread that was overriden
- * once it has drained the queue. Since the ++ and reset are
- * asynchronous, there is the possibility of a ++ after the target
- * thread has issued a reset, in which case the workqueue thread may
- * issue a reset-all in its outermost scope before deciding whether it
- * should return to dequeueing work from the global concurrent queues,
- * or return to the kernel.
- *
  * THREAD_QOS_OVERRIDE_TYPE_WILDCARD is a catch-all which will reset every
  * resource matching the resource value.  Passing
  * THREAD_QOS_OVERRIDE_RESOURCE_WILDCARD as well will reset everything.
@@ -357,7 +346,6 @@ typedef struct thread_policy_state		*thread_policy_state_t;
 #define THREAD_QOS_OVERRIDE_TYPE_PTHREAD_MUTEX                  (1)
 #define THREAD_QOS_OVERRIDE_TYPE_PTHREAD_RWLOCK                 (2)
 #define THREAD_QOS_OVERRIDE_TYPE_PTHREAD_EXPLICIT_OVERRIDE      (3)
-#define THREAD_QOS_OVERRIDE_TYPE_DISPATCH_ASYNCHRONOUS_OVERRIDE (4)
 #define THREAD_QOS_OVERRIDE_TYPE_WILDCARD                       (5)
 
 /* A special resource value to indicate a resource wildcard */
@@ -385,7 +373,7 @@ typedef struct thread_qos_policy      *thread_qos_policy_t;
  * When they do, we will update THREAD_POLICY_INTERNAL_STRUCT_VERSION.
  */
 
-#define THREAD_POLICY_INTERNAL_STRUCT_VERSION 4
+#define THREAD_POLICY_INTERNAL_STRUCT_VERSION 5
 
 struct thread_requested_policy {
 	uint64_t        thrp_int_darwinbg       :1,     /* marked as darwinbg via setpriority */
@@ -404,9 +392,10 @@ struct thread_requested_policy {
 	                thrp_qos_promote        :3,     /* thread qos class from promotion */
 	                thrp_qos_ipc_override   :3,     /* thread qos class from ipc override */
 	                thrp_terminated         :1,     /* heading for termination */
-	                thrp_qos_sync_ipc_override:3,   /* thread qos class from sync ipc override */
+	                thrp_qos_sync_ipc_override:3,   /* now unused */
+	                thrp_qos_workq_override :3,     /* thread qos class override (workq) */
 
-	                thrp_reserved           :29;
+	                thrp_reserved           :26;
 };
 
 struct thread_effective_policy {

@@ -38,7 +38,9 @@ class IOWatchDogTimer : public IOService
 protected:
   IONotifier *notifier;
   struct ExpansionData { };
+  APPLE_KEXT_WSHADOW_PUSH;
   ExpansionData *reserved;
+  APPLE_KEXT_WSHADOW_POP;
   
 public:
   virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;

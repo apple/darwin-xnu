@@ -222,6 +222,11 @@ struct mount {
  */
 #define MNT_DEFAULT_IOQUEUE_DEPTH	32
 
+/*
+ * mnt_ioscale value for the given ioqueue depth
+ */
+#define MNT_IOSCALE(ioqueue_depth)	((ioqueue_depth + (MNT_DEFAULT_IOQUEUE_DEPTH - 1)) / MNT_DEFAULT_IOQUEUE_DEPTH)
+
 /* mount point to which dead vps point to */
 extern struct mount * dead_mountp;
 
@@ -288,7 +293,7 @@ extern struct mount * dead_mountp;
 #define	NFSV3_MAX_FH_SIZE	64
 #define	NFSV2_MAX_FH_SIZE	32
 struct fhandle {
-	int		fh_len;				/* length of file handle */
+	unsigned int	fh_len;				/* length of file handle */
 	unsigned char	fh_data[NFS_MAX_FH_SIZE];	/* file handle value */
 };
 typedef struct fhandle	fhandle_t;
@@ -484,7 +489,7 @@ extern int num_trailing_0(uint64_t n);
 /* sync lock */
 extern lck_mtx_t * sync_mtx_lck;
 
-extern int sync_timeout;
+extern int sync_timeout_seconds;
 
 __END_DECLS
 

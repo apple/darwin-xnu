@@ -106,9 +106,10 @@ extern kern_return_t task_importance(task_t task, integer_t importance);
 #define TASK_POLICY_QOS                 0x35
 #define TASK_POLICY_QOS_OVERRIDE        0x36
 #define TASK_POLICY_QOS_AND_RELPRIO     0x38 /* QoS as value1, relative priority as value2 */
+#define TASK_POLICY_QOS_WORKQ_OVERRIDE  0x3B
 #define TASK_POLICY_QOS_PROMOTE         0x3C
 #define TASK_POLICY_QOS_IPC_OVERRIDE    0x3D
-#define TASK_POLICY_QOS_SYNC_IPC_OVERRIDE    0x3E
+// was TASK_POLICY_QOS_SYNC_IPC_OVERRIDE 0x3E
 
 #define TASK_POLICY_MAX                 0x3F
 
@@ -152,13 +153,8 @@ extern void proc_inherit_task_role(task_t new_task, task_t old_task);
 #define THROTTLE_LEVEL_COMPRESSOR_TIER1         THROTTLE_LEVEL_TIER1
 #define THROTTLE_LEVEL_COMPRESSOR_TIER2         THROTTLE_LEVEL_TIER2
 
-#if CONFIG_EMBEDDED
-#define THROTTLE_LEVEL_PAGEOUT_THROTTLED        THROTTLE_LEVEL_TIER3
-#define THROTTLE_LEVEL_PAGEOUT_UNTHROTTLED      THROTTLE_LEVEL_TIER1
-#else
 #define THROTTLE_LEVEL_PAGEOUT_THROTTLED        THROTTLE_LEVEL_TIER2
 #define THROTTLE_LEVEL_PAGEOUT_UNTHROTTLED      THROTTLE_LEVEL_TIER1
-#endif
 
 #if CONFIG_IOSCHED
 #define IOSCHED_METADATA_TIER                   THROTTLE_LEVEL_TIER1
@@ -172,22 +168,17 @@ extern void proc_apply_task_networkbg(void * bsd_info, thread_t thread);
 #endif /* MACH_BSD */
 
 /* Functions used by pthread_shims.c */
-extern boolean_t proc_thread_qos_add_override(task_t task, thread_t thread, uint64_t tid,
+extern int proc_thread_qos_add_override(task_t task, thread_t thread, uint64_t tid,
                                               int override_qos, boolean_t first_override_for_resource,
                                               user_addr_t resource, int resource_type);
-extern int proc_thread_qos_add_override_check_owner(thread_t thread, int override_qos,
-		boolean_t first_override_for_resource, user_addr_t resource, int resource_type,
-		user_addr_t user_lock_addr, mach_port_name_t user_lock_owner);
-extern boolean_t proc_thread_qos_remove_override(task_t task, thread_t thread, uint64_t tid,
+extern int proc_thread_qos_remove_override(task_t task, thread_t thread, uint64_t tid,
                                                  user_addr_t resource, int resource_type);
-extern boolean_t proc_thread_qos_reset_override(task_t task, thread_t thread, uint64_t tid,
-                                                 user_addr_t resource, int resource_type);
-extern int proc_thread_qos_squash_override(thread_t thread, user_addr_t resource, int resource_type);
 
-extern kern_return_t
-thread_set_workq_qos(thread_t thread, int qos_tier, int relprio);
-extern kern_return_t
-thread_set_workq_pri(thread_t thread, integer_t priority, integer_t policy);
+extern void thread_reset_workq_qos(thread_t thread, uint32_t qos);
+extern void thread_set_workq_override(thread_t thread, uint32_t qos);
+extern void thread_set_workq_pri(thread_t thread, thread_qos_t qos, integer_t priority, integer_t policy);
+extern uint8_t thread_workq_pri_for_qos(thread_qos_t qos) __pure2;
+extern thread_qos_t thread_workq_qos_for_pri(int priority);
 
 extern int
 task_get_default_manager_qos(task_t task);
@@ -204,6 +195,7 @@ extern int proc_lf_pidbind(task_t curtask, uint64_t tid, task_t target_task, int
 /* Importance inheritance functions not under IMPORTANCE_INHERITANCE */
 extern void task_importance_mark_donor(task_t task, boolean_t donating);
 extern void task_importance_reset(task_t task);
+extern void task_importance_init_from_parent(task_t new_task, task_t parent_task);
 
 #if IMPORTANCE_INHERITANCE
 extern boolean_t task_is_importance_donor(task_t task);
@@ -252,19 +244,8 @@ extern int task_importance_estimate(task_t task);
 extern kern_return_t thread_policy_set_internal(thread_t thread, thread_policy_flavor_t flavor,
                                                 thread_policy_t policy_info, mach_msg_type_number_t count);
 
-struct promote_token {
-	uint16_t        pt_basepri;
-	uint16_t        pt_qos;
-};
-
-#define PROMOTE_TOKEN_INIT ((struct promote_token){.pt_basepri = 0, .pt_qos = 0})
-
-extern void thread_user_promotion_add(thread_t thread, thread_t promoter, struct promote_token* promote_token);
-extern void thread_user_promotion_update(thread_t thread, thread_t promoter, struct promote_token* promote_token);
-extern void thread_user_promotion_drop(thread_t thread);
-
-/* for thread exec promotion */
-#define EXEC_BOOST_PRIORITY 31
+extern boolean_t thread_recompute_user_promotion_locked(thread_t thread);
+extern thread_qos_t thread_user_promotion_qos_for_pri(int priority);
 
 extern void thread_set_exec_promotion(thread_t thread);
 extern void thread_clear_exec_promotion(thread_t thread);
@@ -273,9 +254,9 @@ extern void thread_clear_exec_promotion(thread_t thread);
 extern void thread_add_ipc_override(thread_t thread, uint32_t qos_override);
 extern void thread_update_ipc_override(thread_t thread, uint32_t qos_override);
 extern void thread_drop_ipc_override(thread_t thread);
-extern void thread_add_sync_ipc_override(thread_t thread);
-extern void thread_drop_sync_ipc_override(thread_t thread);
-extern uint32_t thread_get_ipc_override(thread_t thread);
+
+/* for ipc_pset.c */
+extern thread_qos_t thread_get_requested_qos(thread_t thread, int *relpri);
 
 /*
  ******************************

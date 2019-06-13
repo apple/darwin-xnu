@@ -107,6 +107,7 @@ typedef struct fasttrap_machtp {
 #define FASTTRAP_T_ARM64_ADR			36
 #define FASTTRAP_T_ARM64_PRFM			37
 #define FASTTRAP_T_ARM64_EXCLUSIVE_MEM		38
+#define FASTTRAP_T_ARM64_RETAB			39
 #endif
 
 #if defined (__arm__)                           
@@ -130,6 +131,8 @@ typedef struct fasttrap_machtp {
 #define FASTTRAP_FN_ARM 1
 #define FASTTRAP_FN_THUMB 2
 #define FASTTRAP_FN_USDT 3
+#define FASTTRAP_FN_ARM64 4
+#define FASTTRAP_FN_ARM64_32 5
 
 #define ARM_RM(x) ((x) & 0xF)
 #define ARM_RS(x) (((x) >> 8) & 0xF)
@@ -221,6 +224,9 @@ typedef struct fasttrap_machtp {
 
 #define FASTTRAP_ARM64_OP_MASK_EXCL_MEM		0x3f000000 /* Bits  to check for exclusive memory operation */
 #define FASTTRAP_ARM64_OP_VALUE_EXCL_MEM 	0x08000000 /* Value to find */
+
+#define FASTTRAP_ARM64_OP_MASK_RETAB		0xfffffc1f /* Bits to check for retab Rt */
+#define FASTTRAP_ARM64_OP_VALUE_RETAB		0xd65f0c1f /* Value to find */
 #endif /* defined(__arm64__) */
 
 #ifdef	__cplusplus

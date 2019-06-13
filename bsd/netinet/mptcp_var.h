@@ -41,11 +41,13 @@
 #include <mach/boolean.h>
 #include <netinet/mp_pcb.h>
 #include <netinet/tcp_var.h>
+#include <os/log.h>
 
 struct mpt_itf_info {
 	uint32_t ifindex;
 	uint32_t has_v4_conn:1,
 		 has_v6_conn:1,
+		 has_nat64_conn:1,
 		 no_mptcp_support:1;
 };
 
@@ -79,6 +81,10 @@ struct mptses {
 		struct sockaddr_in6 __mpte_dst_v6;
 	};
 
+	struct sockaddr_in mpte_dst_v4_nat64;
+
+	uint16_t	mpte_alternate_port;	/* Alternate port for subflow establishment (network-byte-order) */
+
 	struct mptsub	*mpte_active_sub;	/* ptr to last active subf */
 	uint8_t	mpte_flags;			/* per mptcp session flags */
 #define	MPTE_SND_REM_ADDR	0x01		/* Send Remove_addr option */
@@ -101,6 +107,7 @@ struct mptses {
 	uint32_t	mpte_used_cell:1,
 			mpte_used_wifi:1,
 			mpte_initial_cell:1,
+			mpte_triggered_cell,
 			mpte_handshake_success:1;
 
 	struct mptcp_itf_stats	mpte_itfstats[MPTCP_ITFSTATS_SIZE];
@@ -223,7 +230,7 @@ static inline int
 mptcp_subflow_cwnd_space(struct socket *so)
 {
 	struct tcpcb *tp = sototcpcb(so);
-	int cwnd = min(tp->snd_wnd, tp->snd_cwnd) - (tp->snd_nxt - tp->snd_una);
+	int cwnd = min(tp->snd_wnd, tp->snd_cwnd) - (so->so_snd.sb_cc);
 
 	return (min(cwnd, sbspace(&so->so_snd)));
 }
@@ -481,6 +488,7 @@ SYSCTL_DECL(_net_inet_mptcp);
 
 extern struct mppcbinfo mtcbinfo;
 extern struct pr_usrreqs mptcp_usrreqs;
+extern os_log_t mptcp_log_handle;
 
 /* Encryption algorithm related definitions */
 #define	SHA1_TRUNCATED		8
@@ -586,6 +594,7 @@ extern void mptcp_subflow_workloop(struct mptses *);
 
 extern void mptcp_sched_create_subflows(struct mptses *);
 
+extern void mptcp_finish_usrclosed(struct mptses *mpte);
 extern struct mptopt *mptcp_sopt_alloc(int);
 extern const char *mptcp_sopt2str(int, int);
 extern void mptcp_sopt_free(struct mptopt *);
@@ -609,6 +618,7 @@ extern int mptcp_subflow_sogetopt(struct mptses *, struct socket *,
     struct mptopt *);
 
 extern void mptcp_input(struct mptses *, struct mbuf *);
+extern boolean_t mptcp_can_send_more(struct mptcb *mp_tp, boolean_t ignore_reinject);
 extern int mptcp_output(struct mptses *);
 extern void mptcp_close_fsm(struct mptcb *, uint32_t);
 
@@ -644,8 +654,10 @@ extern u_int32_t mptcp_get_notsent_lowat(struct mptses *mpte);
 extern int mptcp_notsent_lowat_check(struct socket *so);
 extern void mptcp_ask_symptoms(struct mptses *mpte);
 extern void mptcp_control_register(void);
-extern int mptcp_is_wifi_unusable(void);
-extern void mptcp_session_necp_cb(void *, int, struct necp_client_flow *);
+extern int mptcp_is_wifi_unusable(struct mptses *mpte);
+extern boolean_t mptcp_subflow_is_bad(struct mptses *mpte, struct mptsub *mpts);
+extern void mptcp_ask_for_nat64(struct ifnet *ifp);
+extern void mptcp_session_necp_cb(void *, int, uint32_t, uint32_t, bool *);
 extern void mptcp_set_restrictions(struct socket *mp_so);
 extern int mptcp_freeq(struct mptcb *);
 extern void mptcp_set_cellicon(struct mptses *mpte);
@@ -653,7 +665,8 @@ extern void mptcp_unset_cellicon(void);
 extern void mptcp_reset_rexmit_state(struct tcpcb *tp);
 extern void mptcp_reset_keepalive(struct tcpcb *tp);
 extern int mptcp_validate_csum(struct tcpcb *tp, struct mbuf *m, uint64_t dsn,
-			       uint32_t sseq, uint16_t dlen, uint16_t csum);
+			       uint32_t sseq, uint16_t dlen, uint16_t csum,
+			       uint16_t dfin);
 __END_DECLS
 
 #endif /* BSD_KERNEL_PRIVATE */

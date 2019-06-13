@@ -41,7 +41,6 @@ typedef enum {
 	MP_AST,
 	MP_IDLE,
 	MP_UNIDLE,
-	MP_CHUD,
 	MP_CALL,
 	MP_CALL_PM,
 	MP_LAST
@@ -55,7 +54,6 @@ const char *mp_event_name[] = {	\
 	"MP_AST",		\
 	"MP_IDLE",		\
 	"MP_UNIDLE",		\
-	"MP_CHUD",		\
 	"MP_CALL",		\
 	"MP_CALL_PM",		\
 	"MP_LAST"		\

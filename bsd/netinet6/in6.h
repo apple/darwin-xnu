@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -99,7 +99,6 @@
 #define	_NETINET6_IN6_H_
 #include <sys/appleapiopts.h>
 #include <sys/_types.h>
-
 #include <sys/_types/_sa_family_t.h>
 
 /*
@@ -149,13 +148,13 @@
 /*
  * IPv6 address
  */
-struct in6_addr {
+typedef struct in6_addr {
 	union {
 		__uint8_t   __u6_addr8[16];
 		__uint16_t  __u6_addr16[8];
 		__uint32_t  __u6_addr32[4];
 	} __u6_addr;			/* 128-bit IP6 address */
-};
+} in6_addr_t;
 
 #define	s6_addr   __u6_addr.__u6_addr8
 #ifdef KERNEL	/* XXX nonstandard */
@@ -887,7 +886,6 @@ extern uint32_t in6_finalize_cksum(struct mbuf *, uint32_t, int32_t,
 
 /* IPv6 protocol events */
 extern struct eventhandler_lists_ctxt in6_evhdlr_ctxt;
-
 /*
  * XXX Avoid reordering the enum values below.
  * If the order is changed, please make sure
@@ -923,7 +921,6 @@ struct in6_event2kev {
 	const char              *in6_event_str;
 };
 extern struct in6_event2kev in6_event2kev_array[];
-
 extern void in6_eventhdlr_callback(struct eventhandler_entry_arg, in6_evhdlr_code_t,
     struct ifnet *, struct in6_addr *, uint32_t);
 extern void in6_event_enqueue_nwk_wq_entry(in6_evhdlr_code_t,
@@ -932,6 +929,33 @@ extern void in6_event_enqueue_nwk_wq_entry(in6_evhdlr_code_t,
 typedef void (*in6_event_fn) (struct eventhandler_entry_arg, in6_evhdlr_code_t,
     struct ifnet *, struct in6_addr *, uint32_t);
 EVENTHANDLER_DECLARE(in6_event, in6_event_fn);
+#endif /* BSD_KERNEL_PRIVATE */
+
+#ifdef PRIVATE
+/* CLAT46 events */
+typedef enum in6_clat46_evhdlr_code_t {
+	IN6_CLAT46_EVENT_V4_FLOW,
+	IN6_CLAT46_EVENT_V6_ADDR_CONFFAIL,
+} in6_clat46_evhdlr_code_t;
+
+struct kev_netevent_clat46_data {
+	in6_clat46_evhdlr_code_t clat46_event_code;
+	pid_t epid;
+	uuid_t euuid;
+};
+#endif /* PRIVATE */
+
+#ifdef BSD_KERNEL_PRIVATE
+/* CLAT46 events */
+extern struct eventhandler_lists_ctxt in6_clat46_evhdlr_ctxt;
+extern void in6_clat46_eventhdlr_callback(struct eventhandler_entry_arg,
+    in6_clat46_evhdlr_code_t, pid_t, uuid_t);
+extern void in6_clat46_event_enqueue_nwk_wq_entry(in6_clat46_evhdlr_code_t,
+    pid_t, uuid_t);
+
+typedef void (*in6_clat46_event_fn) (struct eventhandler_entry_arg, in6_clat46_evhdlr_code_t,
+    pid_t, uuid_t);
+EVENTHANDLER_DECLARE(in6_clat46_event, in6_clat46_event_fn);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE

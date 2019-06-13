@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -221,7 +221,7 @@ struct inpcb {
 	} inp_necp_attributes;
 	struct necp_inpcb_result inp_policyresult;
 	uuid_t necp_client_uuid;
-	void	(*necp_cb)(void *, int, struct necp_client_flow *);
+	necp_client_flow_cb necp_cb;
 #endif
 	u_char *inp_keepalive_data;	/* for keepalive offload */
 	u_int8_t inp_keepalive_datalen; /* keepalive data length */
@@ -692,7 +692,7 @@ struct inpcbinfo {
 	IN6P_RTHDR|IN6P_RTHDRDSTOPTS|IN6P_TCLASS|IN6P_RFC2292|IN6P_MTU)
 
 #define	INP_UNMAPPABLEOPTS \
-	(IN6P_HOPOPTS|IN6P_DSTOPTS|IN6P_RTHDR| IN6P_TCLASS|IN6P_AUTOFLOWLABEL)
+	(IN6P_HOPOPTS|IN6P_DSTOPTS|IN6P_RTHDR|IN6P_AUTOFLOWLABEL)
 
 /*
  * Flags for inp_flags2.
@@ -706,8 +706,9 @@ struct inpcbinfo {
 #define	INP2_INHASHLIST		0x00000010 /* pcb is in inp_hash list */
 #define	INP2_AWDL_UNRESTRICTED	0x00000020 /* AWDL restricted mode allowed */
 #define	INP2_KEEPALIVE_OFFLOAD	0x00000040 /* Enable UDP or TCP keepalive offload */
-#define INP2_INTCOPROC_ALLOWED	0x00000080 /* Allow communication via internal co-processor interfaces */
-#define INP2_CONNECT_IN_PROGRESS	0x00000100 /* A connect call is in progress, so binds are intermediate steps */
+#define	INP2_INTCOPROC_ALLOWED	0x00000080 /* Allow communication via internal co-processor interfaces */
+#define	INP2_CONNECT_IN_PROGRESS	0x00000100 /* A connect call is in progress, so binds are intermediate steps */
+#define	INP2_CLAT46_FLOW	0x00000200 /* The flow is going to use CLAT46 path */
 
 /*
  * Flags passed to in_pcblookup*() functions.

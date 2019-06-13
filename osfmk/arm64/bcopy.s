@@ -90,6 +90,7 @@ _memmove:
 //	can only be smaller than length if the buffers do not overlap, so we don't
 //	need to worry about false positives due to the overflow (they happen, but
 //	only in cases where copying in either order is correct).
+	ARM64_STACK_PROLOG
 	PUSH_FRAME
 	sub     x3,      x0, x1
 	cmp     x3,      x2
@@ -178,7 +179,7 @@ L_forwardCleanup:
 	stp     x12,x13,[x3, #32]
 	stp     x14,x15,[x3, #48]
 	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG
 
 /*****************************************************************************
  *  forward small copy                                                       *
@@ -204,7 +205,7 @@ L_forwardSmallCopy:
 	subs    x2,      x2, #1
 	b.ne    1b
 2:	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG
 
 /*****************************************************************************
  *  Reverse copy engines                                                     *
@@ -271,7 +272,7 @@ L_reverseCleanup:
 	stp     x12,x13,[x0, #16] // In the forward copy, we need to compute the
 	stp     x14,x15,[x0]      // address of these stores, but here we already
 	POP_FRAME       // have a pointer to the start of the buffer.
-	ret
+	ARM64_STACK_EPILOG
 
 /*****************************************************************************
  *  reverse small copy                                                       *
@@ -289,8 +290,9 @@ L_reverseSmallCopy:
 	subs    x2,      x2, #1
 	b.ne    1b
 2:	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG
+
 
 L_return:
 	POP_FRAME
-	ret
+	ARM64_STACK_EPILOG

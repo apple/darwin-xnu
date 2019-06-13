@@ -40,6 +40,7 @@ errno_t ipsec_register_control(void);
 
 /* Helpers */
 int ipsec_interface_isvalid (ifnet_t interface);
+boolean_t ipsec_interface_needs_netagent(ifnet_t interface);
 
 errno_t ipsec_inject_inbound_packet(ifnet_t	interface, mbuf_t packet);
 
@@ -71,6 +72,12 @@ void ipsec_set_ip6oa_for_interface(ifnet_t interface, struct ip6_out_args *ip6oa
 #define IPSEC_OPT_GET_CHANNEL_UUID				9	/* get the uuid of the kernel pipe nexus instance */
 #define IPSEC_OPT_ENABLE_FLOWSWITCH				10	/* enable a flowswitch nexus that clients can use */
 #define IPSEC_OPT_INPUT_FRAG_SIZE				11	/* set the maximum size of input packets before fragmenting as a uint32_t */
+
+#define IPSEC_OPT_ENABLE_NETIF					12		/* Must be set before connecting */
+#define IPSEC_OPT_SLOT_SIZE						13		/* Must be set before connecting */
+#define IPSEC_OPT_NETIF_RING_SIZE				14		/* Must be set before connecting */
+#define IPSEC_OPT_TX_FSW_RING_SIZE				15		/* Must be set before connecting */
+#define IPSEC_OPT_RX_FSW_RING_SIZE				16		/* Must be set before connecting */
 
 /*
  * ipsec stats parameter structure

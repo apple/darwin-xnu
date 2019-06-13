@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -116,6 +116,8 @@
 
 #define	PRIV_NET_PRIVILEGED_MULTIPATH		10009	/* Multipath usage */
 #define	PRIV_NET_RESTRICTED_MULTIPATH_EXTENDED	10010	/* Extended multipath (more aggressive on cell) */
+#define	PRIV_NET_RESTRICTED_ROUTE_NC_READ	10011	/* Enable route neighbhor cache read operations */
+
 /*
  * IPv4 and IPv6 privileges.
  */
@@ -131,7 +133,9 @@
 #define PRIV_VFS_SNAPSHOT_REVERT	14003	/* Allow reverting filesystem to a previous snapshot */
 
 #define PRIV_APFS_EMBED_DRIVER		14100	/* Allow embedding an EFI driver into the APFS container */
-#define PRIV_APFS_FUSION_DEBUG      14101   /* Allow getting internal statistics and controlling the APFS fusion container */
+#define PRIV_APFS_FUSION_DEBUG      14101   /* Allow getting internal statistics and controlling the APFS Fusion container */
+#define PRIV_APFS_FUSION_ALLOW_PIN_FASTPROMOTE  14102   /* Allow changing pinned/fastPromote inode flags in APFS Fusion container */
+
 #ifdef KERNEL
 /*
  * Privilege check interface.  No flags are currently defined for the API.

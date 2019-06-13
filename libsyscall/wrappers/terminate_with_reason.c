@@ -73,7 +73,7 @@ static void abort_with_payload_wrapper_internal(uint32_t reason_namespace, uint6
 
 	/* If sending a SIGABRT failed, we fall back to SIGKILL */
 	terminate_with_payload(getpid(), reason_namespace, reason_code, payload, payload_size,
-			reason_string, reason_flags);
+			reason_string, reason_flags | OS_REASON_FLAG_ABORT);
 
 	__builtin_unreachable();
 }

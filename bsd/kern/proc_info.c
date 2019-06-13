@@ -67,6 +67,7 @@
 #include <mach/task_info.h>
 #include <mach/thread_info.h>
 #include <mach/vm_region.h>
+#include <mach/vm_types.h>
 
 #include <sys/mount_internal.h>
 #include <sys/proc_info.h>
@@ -154,9 +155,9 @@ int __attribute__ ((noinline)) proc_pidfdlist(proc_t p, user_addr_t buffer, uint
 int __attribute__ ((noinline)) proc_pidbsdinfo(proc_t p, struct proc_bsdinfo *pbsd, int zombie);
 int __attribute__ ((noinline)) proc_pidshortbsdinfo(proc_t p, struct proc_bsdshortinfo *pbsd_shortp, int zombie);
 int __attribute__ ((noinline)) proc_pidtaskinfo(proc_t p, struct proc_taskinfo *ptinfo);
-int __attribute__ ((noinline)) proc_pidthreadinfo(proc_t p, uint64_t arg,  int thuniqueid, struct proc_threadinfo *pthinfo);
+int __attribute__ ((noinline)) proc_pidthreadinfo(proc_t p, uint64_t arg,  bool thuniqueid, struct proc_threadinfo *pthinfo);
 int __attribute__ ((noinline)) proc_pidthreadpathinfo(proc_t p, uint64_t arg,  struct proc_threadwithpathinfo *pinfo);
-int __attribute__ ((noinline)) proc_pidlistthreads(proc_t p,  user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+int __attribute__ ((noinline)) proc_pidlistthreads(proc_t p,  bool thuniqueid, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int __attribute__ ((noinline)) proc_pidregioninfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int __attribute__ ((noinline)) proc_pidregionpathinfo(proc_t p,  uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int __attribute__ ((noinline)) proc_pidregionpathinfo2(proc_t p,  uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
@@ -173,6 +174,10 @@ int __attribute__ ((noinline)) proc_pidexitreasoninfo(proc_t p, struct proc_exit
 int __attribute__ ((noinline)) proc_pidoriginatorpid_uuid(uuid_t uuid, uint32_t buffersize, pid_t *pid);
 int __attribute__ ((noinline)) proc_pidlistuptrs(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int __attribute__ ((noinline)) proc_piddynkqueueinfo(pid_t pid, int flavor, kqueue_id_t id, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+
+#if !CONFIG_EMBEDDED
+int __attribute__ ((noinline)) proc_udata_info(pid_t pid, int flavor, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+#endif
 
 /* protos for proc_pidfdinfo calls */
 int __attribute__ ((noinline)) pid_vnodeinfo(vnode_t vp, uint32_t vid, struct fileproc * fp,proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
@@ -194,7 +199,7 @@ static void munge_vinfo_stat(struct stat64 *sbp, struct vinfo_stat *vsbp);
 static int proc_piduuidinfo(pid_t pid, uuid_t uuid_buf, uint32_t buffersize);
 int proc_pidpathinfo_internal(proc_t p, __unused uint64_t arg, char *buf, uint32_t buffersize, __unused int32_t *retval);
 
-extern int cansignal(struct proc *, kauth_cred_t, struct proc *, int, int);
+extern int cansignal(struct proc *, kauth_cred_t, struct proc *, int);
 extern int proc_get_rusage(proc_t proc, int flavor, user_addr_t buffer, int is_zombie);
 
 #define CHECK_SAME_USER         TRUE
@@ -272,6 +277,10 @@ proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t b
 			return proc_can_use_foreground_hw(pid, buffer, buffersize, retval);
 		case PROC_INFO_CALL_PIDDYNKQUEUEINFO:
 			return proc_piddynkqueueinfo(pid, flavor, (kqueue_id_t)arg, buffer, buffersize, retval);
+#if !CONFIG_EMBEDDED
+		case PROC_INFO_CALL_UDATA_INFO:
+			return proc_udata_info(pid, flavor, buffer, buffersize, retval);
+#endif /* !CONFIG_EMBEDDED */
 		default:
 			return EINVAL;
 	}
@@ -788,7 +797,7 @@ proc_pidtaskinfo(proc_t p, struct proc_taskinfo * ptinfo)
 
 
 int 
-proc_pidthreadinfo(proc_t p, uint64_t arg,  int thuniqueid, struct proc_threadinfo *pthinfo)
+proc_pidthreadinfo(proc_t p, uint64_t arg, bool thuniqueid, struct proc_threadinfo *pthinfo)
 {
 	int error = 0;
 	uint64_t threadaddr = (uint64_t)arg;
@@ -918,7 +927,7 @@ proc_pidthreadpathinfo(proc_t p, uint64_t arg,  struct proc_threadwithpathinfo *
 
 
 int 
-proc_pidlistthreads(proc_t p,  user_addr_t buffer, uint32_t  buffersize, int32_t *retval)
+proc_pidlistthreads(proc_t p, bool thuniqueid, user_addr_t buffer, uint32_t  buffersize, int32_t *retval)
 {
 	uint32_t count = 0;
 	int ret = 0;
@@ -942,7 +951,7 @@ proc_pidlistthreads(proc_t p,  user_addr_t buffer, uint32_t  buffersize, int32_t
 		return(ENOMEM);
 	bzero(kbuf, numthreads * sizeof(uint64_t));
 	
-	ret = fill_taskthreadlist(p->task, kbuf, numthreads);
+	ret = fill_taskthreadlist(p->task, kbuf, numthreads, thuniqueid);
 	
 	error = copyout(kbuf, buffer, ret);
 	kfree(kbuf, numthreads * sizeof(uint64_t));
@@ -1349,7 +1358,7 @@ proc_pidoriginatorinfo(int pid, int flavor, user_addr_t buffer, uint32_t  buffer
 
 	switch (flavor) {
 		case PROC_PIDORIGINATOR_UUID: {
-			uuid_t uuid;
+			uuid_t uuid = {};
 
 			error = proc_pidoriginatoruuid(uuid, sizeof(uuid));
 			if (error != 0)
@@ -1377,7 +1386,7 @@ proc_pidoriginatorinfo(int pid, int flavor, user_addr_t buffer, uint32_t  buffer
 		break;
 
 		case PROC_PIDORIGINATOR_BGSTATE: {
-			uint32_t is_backgrounded;
+			uint32_t is_backgrounded = 0;
 			error = proc_get_originatorbgstate(&is_backgrounded);
 			if (error)
 				goto out;
@@ -1676,7 +1685,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 	int shortversion = 0;
 	uint32_t size;
 	int zombie = 0;
-	int thuniqueid = 0;
+	bool thuniqueid = false;
 	int uniqidversion = 0;
 	boolean_t check_same_user;
 
@@ -1697,6 +1706,9 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 			break;
 		case PROC_PIDTHREADINFO:
 			size = PROC_PIDTHREADINFO_SIZE;
+			break;
+		case PROC_PIDLISTTHREADIDS:
+			size = PROC_PIDLISTTHREADIDS_SIZE;
 			break;
 		case PROC_PIDLISTTHREADS:
 			size = PROC_PIDLISTTHREADS_SIZE;
@@ -1776,6 +1788,12 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 			break;
 		case PROC_PIDLISTDYNKQUEUES:
 			size = PROC_PIDLISTDYNKQUEUES_SIZE;
+			if (buffer == USER_ADDR_NULL) {
+				size = 0;
+			}
+			break;
+		case PROC_PIDVMRTFAULTINFO:
+			size = sizeof(vm_rtfault_record_t);
 			if (buffer == USER_ADDR_NULL) {
 				size = 0;
 			}
@@ -1909,7 +1927,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		break;
 
 		case PROC_PIDTHREADID64INFO:
-			thuniqueid = 1;
+			thuniqueid = true;
 		case PROC_PIDTHREADINFO:{
 		struct proc_threadinfo pthinfo;
 
@@ -1922,8 +1940,10 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		}
 		break;
 
+		case PROC_PIDLISTTHREADIDS:
+			thuniqueid = true;
 		case PROC_PIDLISTTHREADS:{
-			error =  proc_pidlistthreads(p,  buffer, buffersize, retval);
+			error =  proc_pidlistthreads(p, thuniqueid, buffer, buffersize, retval);
 		}
 		break;
 
@@ -2062,7 +2082,48 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		case PROC_PIDLISTDYNKQUEUES:
 			error = kevent_copyout_proc_dynkqids(p, buffer, buffersize, retval);
 			break;
+		case PROC_PIDVMRTFAULTINFO: {
+			/* This interface can only be employed on the current
+			 * process. We will eventually enforce an entitlement.
+			 */
+			*retval = 0;
 
+			if (p != current_proc()) {
+				error = EINVAL;
+				break;
+			}
+
+			size_t kbufsz = MIN(buffersize, vmrtfaultinfo_bufsz());
+			void *vmrtfbuf = kalloc(kbufsz);
+
+			if (vmrtfbuf == NULL) {
+				error = ENOMEM;
+				break;
+			}
+
+			bzero(vmrtfbuf, kbufsz);
+
+			uint64_t effpid = get_current_unique_pid();
+			/* The VM may choose to provide more comprehensive records
+			 * for root-privileged users on internal configurations.
+			 */
+			boolean_t isroot = (suser(kauth_cred_get(), (u_short *)0) == 0);
+			int vmf_residue = vmrtf_extract(effpid, isroot, kbufsz, vmrtfbuf, retval);
+			int vmfsz = *retval * sizeof(vm_rtfault_record_t);
+
+			error = 0;
+			if (vmfsz) {
+				error = copyout(vmrtfbuf, buffer, vmfsz);
+			}
+
+			if (error == 0) {
+				if (vmf_residue) {
+					error = ENOMEM;
+				}
+			}
+			kfree(vmrtfbuf, kbufsz);
+		}
+			break;
 		default:
 			error = ENOTSUP;
 			break;
@@ -2472,11 +2533,14 @@ proc_pidlistuptrs(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *re
 		count = buffersize / sizeof(uint64_t);
 		if (count > MAX_UPTRS) {
 			count = MAX_UPTRS;
-			buffersize = count * sizeof(uint64_t);
 		}
 		if (count > 0) {
+			buffersize = count * sizeof(uint64_t);
 			kbuf = kalloc(buffersize);
+			bzero(kbuf, buffersize);
 			assert(kbuf != NULL);
+		} else {
+			buffersize = 0;
 		}
 	} else {
 		buffersize = 0;
@@ -2825,7 +2889,7 @@ proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t *retval) {
 
 		case PROC_DIRTYCONTROL_SET: {			
 			/* Check privileges; use cansignal() here since the process could be terminated */
-			if (!cansignal(current_proc(), my_cred, target_p, SIGKILL, 0)) {
+			if (!cansignal(current_proc(), my_cred, target_p, SIGKILL)) {
 				error = EPERM;
 				goto out;
 			}
@@ -2846,7 +2910,7 @@ proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t *retval) {
 		
 		case PROC_DIRTYCONTROL_CLEAR: {			
 			/* Check privileges; use cansignal() here since the process could be terminated */
-			if (!cansignal(current_proc(), my_cred, target_p, SIGKILL, 0)) {
+			if (!cansignal(current_proc(), my_cred, target_p, SIGKILL)) {
 				error = EPERM;
 				goto out;
 			}
@@ -2909,7 +2973,7 @@ proc_terminate(int pid, int32_t *retval)
 #endif
 
 	/* Check privileges; if SIGKILL can be issued, then SIGTERM is also OK */
-	if (!cansignal(current_proc(), uc, p, SIGKILL, 0)) {
+	if (!cansignal(current_proc(), uc, p, SIGKILL)) {
 		error = EPERM;
 		goto out;
 	}
@@ -3203,3 +3267,51 @@ out:
 
 	return err;
 }
+
+#if !CONFIG_EMBEDDED
+int
+proc_udata_info(int pid, int flavor, user_addr_t buffer, uint32_t bufsize, int32_t *retval)
+{
+	int err = 0;
+	proc_t p;
+
+	p = proc_find(pid);
+	if (p == PROC_NULL) {
+		return ESRCH;
+	}
+
+	/*
+	 * Only support calls against oneself for the moment.
+	 */
+	if (p->p_pid != proc_selfpid()) {
+		err = EACCES;
+		goto out;
+	}
+
+	if (bufsize != sizeof (p->p_user_data)) {
+		err = EINVAL;
+		goto out;
+	}
+
+	switch (flavor) {
+	case PROC_UDATA_INFO_SET:
+		err = copyin(buffer, &p->p_user_data, sizeof (p->p_user_data));
+		break;
+	case PROC_UDATA_INFO_GET:
+		err = copyout(&p->p_user_data, buffer, sizeof (p->p_user_data));
+		break;
+	default:
+		err = ENOTSUP;
+		break;
+	}
+
+out:
+	proc_rele(p);
+
+	if (err == 0) {
+		*retval = 0;
+	}
+
+	return err;
+}
+#endif /* !CONFIG_EMBEDDED */

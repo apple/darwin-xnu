@@ -422,6 +422,8 @@ extern void cfil_sock_buf_update(struct sockbuf *sb);
 
 extern cfil_sock_id_t cfil_sock_id_from_socket(struct socket *so);
 
+extern struct m_tag *cfil_udp_get_socket_state(struct mbuf *m, uint32_t *state_change_cnt,
+											   short *options, struct sockaddr **faddr);
 #endif /* BSD_KERNEL_PRIVATE */
 
 __END_DECLS

@@ -811,6 +811,7 @@ machine_work_interval_notify(__unused thread_t thread,
 {
 }
 
+
 void machine_switch_perfcontrol_context(__unused perfcontrol_event event,
 					__unused uint64_t timestamp,
 					__unused uint32_t flags,

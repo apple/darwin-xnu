@@ -46,13 +46,14 @@
 
 #include <kern/queue.h>
 #include <kern/waitq.h>
+#include <os/refcnt.h>
 
 typedef struct semaphore {
 	queue_chain_t	  task_link;  /* chain of semaphores owned by a task */
 	struct waitq	  waitq;      /* queue of blocked threads & lock     */
 	task_t		  owner;      /* task that owns semaphore            */
 	ipc_port_t	  port;	      /* semaphore port	 		     */
-	uint32_t	  ref_count;  /* reference count		     */
+	os_refcnt_t	  ref_count;  /* reference count		     */
 	int		  count;      /* current count value	             */
 	boolean_t	  active;     /* active status			     */
 } Semaphore;

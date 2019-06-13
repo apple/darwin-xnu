@@ -33,6 +33,7 @@
 #include <sys/work_interval.h>
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
+#include <kern/task.h>
 #include <kern/work_interval.h>
 
 #include <libkern/libkern.h>
@@ -46,7 +47,6 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
 	kern_return_t   kret = KERN_SUCCESS;
 	struct work_interval_notification notification;
 
-	/* Two different structs, because headers are complicated */
 	struct work_interval_create_params create_params;
 	struct kern_work_interval_create_args create_args;
 
@@ -59,15 +59,12 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
 			if (uap->len < sizeof(create_params))
 				return EINVAL;
 
-			/*
-			 * Privilege check performed up-front, and then the work
-			 * ID is allocated for use by the thread
-			 */
-			if ((error = priv_check_cred(kauth_cred_get(), PRIV_WORK_INTERVAL, 0)))
-				return error;
-
 			if ((error = copyin(uap->arg, &create_params, sizeof(create_params))))
 				return error;
+
+			if ((error = priv_check_cred(kauth_cred_get(), PRIV_WORK_INTERVAL, 0)) != 0) {
+				return error;
+			}
 
 			create_args = (struct kern_work_interval_create_args) {
 				.wica_id            = create_params.wicp_id,
@@ -95,9 +92,10 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
 				.wicp_create_flags = create_args.wica_create_flags,
 			};
 
-			if ((error = copyout(&create_params, uap->arg, sizeof(create_params))))
+			if ((error = copyout(&create_params, uap->arg, sizeof(create_params)))) {
+				kern_work_interval_destroy(current_thread(), create_args.wica_id);
 				return error;
-
+			}
 			break;
 		case WORK_INTERVAL_OPERATION_DESTROY:
 			if (uap->arg != USER_ADDR_NULL || uap->work_interval_id == 0) {

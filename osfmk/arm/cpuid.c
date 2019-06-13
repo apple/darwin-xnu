@@ -172,6 +172,10 @@ cpuid_get_cpufamily(void)
 		case CPU_PART_HURRICANE_MYST:
 			cpufamily = CPUFAMILY_ARM_HURRICANE;
 			break;
+		case CPU_PART_MONSOON:
+		case CPU_PART_MISTRAL:
+			cpufamily = CPUFAMILY_ARM_MONSOON_MISTRAL;
+			break;
 		default:
 			cpufamily = CPUFAMILY_UNKNOWN;
 			break;

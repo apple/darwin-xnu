@@ -5471,7 +5471,8 @@ nfs_dir_buf_search(
 	struct nfs_dir_buf_header *ndbhp;
 	struct nfs_vattr *nvattrp;
 	daddr64_t nextlbn = 0;
-	int i, error = ESRCH, fhlen;
+	int i, error = ESRCH;
+	uint32_t fhlen;
 
 	/* scan the buffer for the name */
 	ndbhp = (struct nfs_dir_buf_header*)bp->nb_data;
@@ -6924,7 +6925,7 @@ nfs_vnop_ioctl(
 	vfs_context_t ctx = ap->a_context;
 	vnode_t vp = ap->a_vp;
 	struct nfsmount *mp = VTONMP(vp);
-	struct user_nfs_gss_principal gprinc;
+	struct user_nfs_gss_principal gprinc = {};
 	uint32_t len;
 	int error = ENOTTY;
 

@@ -135,6 +135,7 @@
 #define kIOMinimumSegmentAlignmentByteCountKey  "IOMinimumSegmentAlignmentByteCount"  // (OSNumber)
 #define kIOMaximumSegmentAddressableBitCountKey "IOMaximumSegmentAddressableBitCount" // (OSNumber)
 #define kIOMinimumSaturationByteCountKey        "IOMinimumSaturationByteCount"        // (OSNumber)
+#define kIOMaximumSwapWriteKey                  "IOMaximumSwapWrite"                  // (OSNumber)
 
 // properties found in services that wish to describe an icon
 //

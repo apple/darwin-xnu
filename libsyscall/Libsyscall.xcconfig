@@ -28,7 +28,7 @@ GCC_TREAT_WARNINGS_AS_ERRORS = YES
 GCC_WARN_ABOUT_MISSING_NEWLINE = YES
 CODE_SIGN_IDENTITY = -
 DYLIB_CURRENT_VERSION = $(RC_ProjectSourceVersion)
-DYLIB_LDFLAGS = -umbrella System -all_load -lCrashReporterClient
+DYLIB_LDFLAGS = -umbrella System -all_load
 DYLIB_LDFLAGS[sdk=iphoneos*] = $(inherited) -Wl,-sectalign,__DATA,__data,1000
 DYLIB_LDFLAGS[sdk=watchos*] = $(inherited) -Wl,-sectalign,__DATA,__data,1000
 DYLIB_LDFLAGS[sdk=tvos*] = $(inherited) -Wl,-sectalign,__DATA,__data,1000

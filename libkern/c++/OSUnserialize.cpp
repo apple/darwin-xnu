@@ -185,11 +185,7 @@ static OSObject	*parsedObject;
 
 #define YYSTYPE object_t *
 
-extern "C" {
-extern void *kern_os_malloc(size_t size);
-extern void *kern_os_realloc(void * addr, size_t size);
-extern void kern_os_free(void * addr);
-} /* extern "C" */
+#include <libkern/OSRuntime.h>
 
 #define malloc(s) kern_os_malloc(s)
 #define realloc(a, s) kern_os_realloc(a, s)

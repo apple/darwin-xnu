@@ -318,7 +318,7 @@ ptsclose(dev_t dev, int flag, __unused int mode, __unused proc_t p)
 	struct tty_dev_t *driver;
 	struct ptmx_ioctl *pti = pty_get_ioctl(dev, 0, &driver);
 	struct tty *tp;
-	
+
 	if (pti == NULL)
 		return (ENXIO);
 
@@ -328,9 +328,16 @@ ptsclose(dev_t dev, int flag, __unused int mode, __unused proc_t p)
 	save_timeout = tp->t_timeout;
 	tp->t_timeout = 60;
 #endif
+	/*
+	 * Close the line discipline and backing TTY structures.
+	 */
 	err = (*linesw[tp->t_line].l_close)(tp, flag);
-	ptsstop(tp, FREAD|FWRITE);
-	(void) ttyclose(tp);
+	(void)ttyclose(tp);
+
+	/*
+	 * Flush data and notify any waiters on the master side of this PTY.
+	 */
+	ptsstop(tp, FREAD | FWRITE);
 #ifdef	FIX_VSX_HANG
 	tp->t_timeout = save_timeout;
 #endif
@@ -496,10 +503,12 @@ ptcwakeup(struct tty *tp, int flag)
 	if (flag & FREAD) {
 		selwakeup(&pti->pt_selr);
 		wakeup(TSA_PTC_READ(tp));
+		KNOTE(&pti->pt_selr.si_note, 1);
 	}
 	if (flag & FWRITE) {
 		selwakeup(&pti->pt_selw);
 		wakeup(TSA_PTC_WRITE(tp));
+		KNOTE(&pti->pt_selw.si_note, 1);
 	}
 }
 
@@ -554,29 +563,46 @@ ptcclose(dev_t dev, __unused int flags, __unused int fmt, __unused proc_t p)
 	struct tty_dev_t *driver;
 	struct ptmx_ioctl *pti = pty_get_ioctl(dev, 0, &driver);
 	struct tty *tp;
+	struct knote *kn;
 
-	if (pti == NULL)
-		return (ENXIO);
+	if (!pti) {
+		return ENXIO;
+	}
+
 	tp = pti->pt_tty;
 	tty_lock(tp);
 
-	(void)(*linesw[tp->t_line].l_modem)(tp, 0);
-
 	/*
-	 * XXX MDMBUF makes no sense for ptys but would inhibit the above
-	 * l_modem().  CLOCAL makes sense but isn't supported.   Special
-	 * l_modem()s that ignore carrier drop make no sense for ptys but
-	 * may be in use because other parts of the line discipline make
-	 * sense for ptys.  Recover by doing everything that a normal
-	 * ttymodem() would have done except for sending a SIGHUP.
+	 * XXX MDMBUF makes no sense for PTYs, but would inhibit an `l_modem`.
+	 * CLOCAL makes sense but isn't supported.  Special `l_modem`s that ignore
+	 * carrier drop make no sense for PTYs but may be in use because other parts
+	 * of the line discipline make sense for PTYs.  Recover by doing everything
+	 * that a normal `ttymodem` would have done except for sending SIGHUP.
 	 */
+	(void)(*linesw[tp->t_line].l_modem)(tp, 0);
 	if (tp->t_state & TS_ISOPEN) {
 		tp->t_state &= ~(TS_CARR_ON | TS_CONNECTED);
 		tp->t_state |= TS_ZOMBIE;
 		ttyflush(tp, FREAD | FWRITE);
 	}
 
-	tp->t_oproc = 0;		/* mark closed */
+	/*
+	 * Null out the backing TTY struct's open procedure to prevent starting
+	 * slaves through `ptsstart`.
+	 */
+	tp->t_oproc = NULL;
+
+	/*
+	 * Clear any select or kevent waiters under the lock.
+	 */
+	SLIST_FOREACH(kn, &pti->pt_selr.si_note, kn_selnext) {
+		KNOTE_DETACH(&pti->pt_selr.si_note, kn);
+	}
+	selthreadclear(&pti->pt_selr);
+	SLIST_FOREACH(kn, &pti->pt_selw.si_note, kn_selnext) {
+		KNOTE_DETACH(&pti->pt_selw.si_note, kn);
+	}
+	selthreadclear(&pti->pt_selw);
 
 	tty_unlock(tp);
 
@@ -776,10 +802,10 @@ ptcselect(dev_t dev, int rw, void *wql, proc_t p)
 		}
 		/* FALLTHROUGH */
 
-	case 0:					/* exceptional */
+	case 0: /* exceptional */
 		if ((tp->t_state&TS_ISOPEN) &&
-		    ((pti->pt_flags & PF_PKT && pti->pt_send) ||
-		     (pti->pt_flags & PF_UCNTL && pti->pt_ucntl))) {
+				(((pti->pt_flags & PF_PKT) && pti->pt_send) ||
+				 ((pti->pt_flags & PF_UCNTL) && pti->pt_ucntl))) {
 			retval = 1;
 			break;
 		}
@@ -790,21 +816,21 @@ ptcselect(dev_t dev, int rw, void *wql, proc_t p)
 	case FWRITE:
 		if (tp->t_state&TS_ISOPEN) {
 			if (pti->pt_flags & PF_REMOTE) {
-			    if (tp->t_canq.c_cc == 0) {
-				retval = (driver->fix_7828447) ? (TTYHOG - 1) : 1;
-				break;
+				if (tp->t_canq.c_cc == 0) {
+					retval = (driver->fix_7828447) ? (TTYHOG - 1) : 1;
+					break;
 			    }
 			} else {
-			    retval = (TTYHOG - 2) - (tp->t_rawq.c_cc + tp->t_canq.c_cc);
-			    if (retval > 0) {
-				    retval = (driver->fix_7828447) ? retval : 1;
-				    break;
-			    }
-			    if (tp->t_canq.c_cc == 0 && (tp->t_lflag&ICANON)) {
-				    retval = 1;
-				    break;
-			    }
-			    retval = 0;
+				retval = (TTYHOG - 2) - (tp->t_rawq.c_cc + tp->t_canq.c_cc);
+				if (retval > 0) {
+					retval = (driver->fix_7828447) ? retval : 1;
+					break;
+				}
+				if (tp->t_canq.c_cc == 0 && (tp->t_lflag&ICANON)) {
+					retval = 1;
+					break;
+				}
+				retval = 0;
 			}
 		}
 		selrecord(p, &pti->pt_selw, wql);

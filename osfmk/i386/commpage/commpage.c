@@ -126,22 +126,25 @@ commpage_allocate(
 	vm_map_entry_t	entry;
 	ipc_port_t	handle;
 	kern_return_t	kr;
+	vm_map_kernel_flags_t vmk_flags;
 
 	if (submap == NULL)
 		panic("commpage submap is null");
 
-	if ((kr = vm_map_kernel(kernel_map,
-			 &kernel_addr,
-			 area_used,
-			 0,
-			 VM_FLAGS_ANYWHERE,
-			 VM_KERN_MEMORY_OSFMK,
-			 NULL,
-			 0,
-			 FALSE,
-			 VM_PROT_ALL,
-			 VM_PROT_ALL,
-			 VM_INHERIT_NONE)))
+	kr = vm_map_kernel(kernel_map,
+			   &kernel_addr,
+			   area_used,
+			   0,
+			   VM_FLAGS_ANYWHERE,
+			   VM_MAP_KERNEL_FLAGS_NONE,
+			   VM_KERN_MEMORY_OSFMK,
+			   NULL,
+			   0,
+			   FALSE,
+			   VM_PROT_ALL,
+			   VM_PROT_ALL,
+			   VM_INHERIT_NONE);
+	if (kr != KERN_SUCCESS)
 		panic("cannot allocate commpage %d", kr);
 
 	if ((kr = vm_map_wire_kernel(kernel_map,
@@ -171,18 +174,31 @@ commpage_allocate(
 				    NULL )))		// parent_entry (what is this?)
 		panic("cannot make entry for commpage %d", kr);
 
-	if ((kr = vm_map_64_kernel(	submap,				// target map (shared submap)
-			&zero,				// address (map into 1st page in submap)
-			area_used,			// size
-			0,				// mask
-			VM_FLAGS_FIXED,			// flags (it must be 1st page in submap)
-			VM_KERN_MEMORY_NONE,
-			handle,				// port is the memory entry we just made
-			0,                              // offset (map 1st page in memory entry)
-			FALSE,                          // copy
-			uperm,   // cur_protection (R-only in user map)
-			uperm,   // max_protection
-		        VM_INHERIT_SHARE )))             // inheritance
+	vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
+	if (uperm == (VM_PROT_READ | VM_PROT_EXECUTE)) {
+		/*
+		 * Mark this unsigned executable mapping as "jit" to avoid
+		 * code-signing violations when attempting to execute unsigned
+		 * code.
+		 */
+		vmk_flags.vmkf_map_jit = TRUE;
+	}
+
+	kr = vm_map_64_kernel(
+		submap,			// target map (shared submap)
+		&zero,			// address (map into 1st page in submap)
+		area_used,		// size
+		0,			// mask
+		VM_FLAGS_FIXED,		// flags (it must be 1st page in submap)
+		vmk_flags,
+		VM_KERN_MEMORY_NONE,
+		handle,			// port is the memory entry we just made
+		0,			// offset (map 1st page in memory entry)
+		FALSE,			// copy
+		uperm,			// cur_protection (R-only in user map)
+		uperm,			// max_protection
+		VM_INHERIT_SHARE); 	// inheritance
+	if (kr != KERN_SUCCESS)
 		panic("cannot map commpage %d", kr);
 
 	ipc_port_release(handle);
@@ -307,9 +323,9 @@ commpage_init_cpu_capabilities( void )
 					CPUID_LEAF7_FEATURE_HLE);
 	setif(bits, kHasAVX2_0,  cpuid_leaf7_features() &
 					CPUID_LEAF7_FEATURE_AVX2);
-	setif(bits, kHasRDSEED,  cpuid_features() &
+	setif(bits, kHasRDSEED,  cpuid_leaf7_features() &
 					CPUID_LEAF7_FEATURE_RDSEED);
-	setif(bits, kHasADX,     cpuid_features() &
+	setif(bits, kHasADX,     cpuid_leaf7_features() &
 					CPUID_LEAF7_FEATURE_ADX);
 	
 #if 0	/* The kernel doesn't support MPX or SGX */

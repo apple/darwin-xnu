@@ -29,7 +29,7 @@
 
 /* Syscall entry points */
 int __coalition(uint32_t operation, uint64_t *cid, uint32_t flags);
-int __coalition_info(uint32_t operation, uint64_t *cid, void *buffer, size_t bufsize);
+int __coalition_info(uint32_t operation, uint64_t *cid, void *buffer, size_t *bufsize);
 
 int coalition_create(uint64_t *cid_out, uint32_t flags)
 {

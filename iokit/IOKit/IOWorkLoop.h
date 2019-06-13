@@ -74,6 +74,11 @@ member function's parameter list.
     typedef IOReturn (*Action)(OSObject *target,
 			       void *arg0, void *arg1,
 			       void *arg2, void *arg3);
+
+#ifdef __BLOCKS__
+    typedef IOReturn (^ActionBlock)();
+#endif /* __BLOCKS__ */
+
     enum {
 	kPreciousStack  = 0x00000001,
 	kTimeLockPanics = 0x00000002,
@@ -291,6 +296,16 @@ public:
     virtual IOReturn runAction(Action action, OSObject *target,
 			       void *arg0 = 0, void *arg1 = 0,
 			       void *arg2 = 0, void *arg3 = 0);
+
+#ifdef __BLOCKS__
+/*! @function runAction
+    @abstract Single thread a call to an action with the work-loop.
+    @discussion Client function that causes the given action to be called in a single threaded manner.  Beware: the work-loop's gate is recursive and runAction can cause direct or indirect re-entrancy.  When executing on a client's thread, runAction will sleep until the work-loop's gate opens for execution of client actions, the action is single threaded against all other work-loop event sources.
+    @param action Block to be executed in work-loop context.
+    @result Returns the result of the action block.
+*/
+    IOReturn runActionBlock(ActionBlock action);
+#endif /* __BLOCKS__ */
 
 /*! @function runEventSources
     @discussion Consists of the inner 2 loops of the threadMain function(qv).

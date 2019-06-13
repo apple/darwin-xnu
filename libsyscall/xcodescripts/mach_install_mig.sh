@@ -39,6 +39,7 @@ MIG_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/mach"
 MIG_PRIVATE_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/local/include/mach"
 SERVER_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/servers"
 MACH_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/mach"
+MACH_PRIVATE_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/local/include/mach"
 
 # from old Libsystem makefiles
 MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 1`
@@ -46,16 +47,20 @@ if [[ ( "$MACHINE_ARCH" =~ ^"arm64" || "$MACHINE_ARCH" =~ ^"x86_64" ) && `echo $
 then
 	# MACHINE_ARCH needs to be a 32-bit arch to generate vm_map_internal.h correctly.
 	MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 2`
-    if [[ ( "$MACHINE_ARCH" =~ ^"arm64" || "$MACHINE_ARCH" =~ ^"x86_64" ) && `echo $ARCHS | wc -w` -gt 1 ]]
-    then
-	    # MACHINE_ARCH needs to be a 32-bit arch to generate vm_map_internal.h correctly.
-	    MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 3`
-    fi
+	if [[ ( "$MACHINE_ARCH" =~ ^"arm64" || "$MACHINE_ARCH" =~ ^"x86_64" ) && `echo $ARCHS | wc -w` -gt 2 ]]
+	then
+		# MACHINE_ARCH needs to be a 32-bit arch to generate vm_map_internal.h correctly.
+		MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 3`
+	fi
 fi
+# MACHINE_ARCH *really* needs to be a 32-bit arch to generate vm_map_internal.h correctly, even if there are no 32-bit targets.
 if [[ ( "$MACHINE_ARCH" =~ ^"arm64" ) ]]
 then
-    # MACHINE_ARCH *really* needs to be a 32-bit arch to generate vm_map_internal.h correctly, even if there are no 32-bit targets.
-    MACHINE_ARCH="armv7"
+	MACHINE_ARCH="armv7"
+fi
+if [[ ( "$MACHINE_ARCH" =~ ^"x86_64" ) ]]
+then
+	MACHINE_ARCH="i386"
 fi
 
 SRC="$SRCROOT/mach"
@@ -109,11 +114,15 @@ MACH_HDRS="mach.h
 	mach_error.h
 	mach_init.h
 	mach_interface.h
+	mach_right.h
 	port_obj.h
 	sync.h
 	vm_task.h
 	vm_page_size.h
 	thread_state.h"
+
+MACH_PRIVATE_HDRS="port_descriptions.h
+	mach_sync_ipc.h"
 
 MIG_FILTERS="watchos_prohibited_mig.txt tvos_prohibited_mig.txt"
 
@@ -127,6 +136,12 @@ done
 mkdir -p $MACH_HEADER_DST
 for hdr in $MACH_HDRS; do
 	install $ASROOT -c -m 444 $SRC/mach/$hdr $MACH_HEADER_DST
+done
+
+# install /usr/local/include/mach headers
+mkdir -p $MACH_PRIVATE_HEADER_DST
+for hdr in $MACH_PRIVATE_HDRS; do
+	install $ASROOT -c -m 444 $SRC/mach/$hdr $MACH_PRIVATE_HEADER_DST
 done
 
 # special case because we only have one to do here
@@ -153,7 +168,7 @@ for mig in $MIGS_PRIVATE $MIGS_DUAL_PUBLIC_PRIVATE; do
 	MIG_NAME=`basename $mig .defs`
 	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_PRIVATE_HEADER_DST/$MIG_NAME.h" $MIG_DEFINES $MIG_PRIVATE_DEFS_INCFLAGS $SRC/$mig
 	if [ ! -e "$MIG_HEADER_DST/$MIG_NAME.h" ]; then
-	    echo "#error $MIG_NAME.h unsupported." > "$MIG_HEADER_DST/$MIG_NAME.h"
+		echo "#error $MIG_NAME.h unsupported." > "$MIG_HEADER_DST/$MIG_NAME.h"
 	fi
 done
 

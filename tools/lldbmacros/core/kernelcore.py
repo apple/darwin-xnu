@@ -6,6 +6,7 @@
 from cvalue import *
 from lazytarget import *
 from configuration import *
+from utils import *
 import caching
 import lldb
 
@@ -46,30 +47,13 @@ def IterateLinkedList(element, field_name):
         elt = elt.__getattr__(field_name)
     #end of while loop
 
-def IterateSListEntry(element, element_type, field_name, slist_prefix=''):
-    """ iterate over a list as defined with SLIST_HEAD in bsd/sys/queue.h
-        params:
-            element      - value : Value object for slh_first
-            element_type - str   : Type of the next element
-            field_name   - str   : Name of the field in next element's structure
-        returns:
-            A generator does not return. It is used for iterating
-            value  : an object thats of type (element_type) head->sle_next. Always a pointer object
-    """
-    elt = element.__getattr__(slist_prefix + 'slh_first')
-    if type(element_type) == str:
-        element_type = gettype(element_type)
-    while unsigned(elt) != 0:
-        yield elt
-        next_el = elt.__getattr__(field_name).__getattr__(slist_prefix + 'sle_next')
-        elt = cast(next_el, element_type)
-
 def IterateListEntry(element, element_type, field_name, list_prefix=''):
     """ iterate over a list as defined with LIST_HEAD in bsd/sys/queue.h
         params:
             element      - value : Value object for lh_first
             element_type - str   : Type of the next element
             field_name   - str   : Name of the field in next element's structure
+            list_prefix  - str   : use 's' here to iterate SLIST_HEAD instead
         returns:
             A generator does not return. It is used for iterating
             value  : an object thats of type (element_type) head->le_next. Always a pointer object
@@ -176,6 +160,91 @@ def IterateQueue(queue_head, element_ptr_type, element_field_name, backwards=Fal
             cur_elt = unpack_ptr_and_recast(elt.GetChildMemberWithName(element_field_name).GetChildMemberWithName('prev'))
         else:
             cur_elt = unpack_ptr_and_recast(elt.GetChildMemberWithName(element_field_name).GetChildMemberWithName('next'))
+
+
+def IterateRBTreeEntry(element, element_type, field_name):
+    """ iterate over a rbtree as defined with RB_HEAD in libkern/tree.h
+            element      - value : Value object for rbh_root
+            element_type - str   : Type of the link element
+            field_name   - str   : Name of the field in link element's structure
+        returns:
+            A generator does not return. It is used for iterating
+            value  : an object thats of type (element_type) head->sle_next. Always a pointer object
+    """
+    elt = element.__getattr__('rbh_root')
+    if type(element_type) == str:
+        element_type = gettype(element_type)
+
+    # Walk to find min
+    parent = elt
+    while unsigned(elt) != 0:
+        parent = elt
+        elt = cast(elt.__getattr__(field_name).__getattr__('rbe_left'), element_type)
+    elt = parent
+
+    # Now elt is min
+    while unsigned(elt) != 0:
+        yield elt
+        # implementation cribbed from RB_NEXT in libkern/tree.h
+        right = cast(elt.__getattr__(field_name).__getattr__('rbe_right'), element_type)
+        if unsigned(right) != 0:
+            elt = right
+            left = cast(elt.__getattr__(field_name).__getattr__('rbe_left'), element_type)
+            while unsigned(left) != 0:
+                elt = left
+                left = cast(elt.__getattr__(field_name).__getattr__('rbe_left'), element_type)
+        else:
+
+            # avoid using GetValueFromAddress
+            addr = elt.__getattr__(field_name).__getattr__('rbe_parent')&~1
+            parent = value(elt.GetSBValue().CreateValueFromExpression(None,'(void *)'+str(addr)))
+            parent = cast(parent, element_type)
+
+            if unsigned(parent) != 0:
+                left = cast(parent.__getattr__(field_name).__getattr__('rbe_left'), element_type)
+            if (unsigned(parent) != 0) and (unsigned(elt) == unsigned(left)):
+                elt = parent
+            else:
+                if unsigned(parent) != 0:
+                    right = cast(parent.__getattr__(field_name).__getattr__('rbe_right'), element_type)
+                while unsigned(parent) != 0 and (unsigned(elt) == unsigned(right)):
+                    elt = parent
+
+                    # avoid using GetValueFromAddress
+                    addr = elt.__getattr__(field_name).__getattr__('rbe_parent')&~1
+                    parent = value(elt.GetSBValue().CreateValueFromExpression(None,'(void *)'+str(addr)))
+                    parent = cast(parent, element_type)
+
+                    right = cast(parent.__getattr__(field_name).__getattr__('rbe_right'), element_type)
+
+                # avoid using GetValueFromAddress
+                addr = elt.__getattr__(field_name).__getattr__('rbe_parent')&~1
+                elt = value(elt.GetSBValue().CreateValueFromExpression(None,'(void *)'+str(addr)))
+                elt = cast(elt, element_type)
+
+
+def IteratePriorityQueueEntry(root, element_type, field_name):
+    """ iterate over a priority queue as defined with struct priority_queue from osfmk/kern/priority_queue.h
+            root         - value : Value object for the priority queue
+            element_type - str   : Type of the link element
+            field_name   - str   : Name of the field in link element's structure
+        returns:
+            A generator does not return. It is used for iterating
+            value  : an object thats of type (element_type). Always a pointer object
+    """
+    def _make_pqe(addr):
+        return value(root.GetSBValue().CreateValueFromExpression(None,'(struct priority_queue_entry *)'+str(addr)))
+
+    queue = [unsigned(root.pq_root_packed) & ~3]
+
+    while len(queue):
+        elt = _make_pqe(queue.pop())
+
+        while elt:
+            yield containerof(elt, element_type, field_name)
+            addr = unsigned(elt.child)
+            if addr: queue.append(addr)
+            elt = elt.next
 
 
 class KernelTarget(object):
@@ -355,9 +424,19 @@ class KernelTarget(object):
         val = ((addr + size) & (unsigned(self.GetGlobalVariable("page_size"))-1))
         return (val < size and val > 0)
 
+
+    def PhysToKVARM64(self, addr):
+        ptov_table = self.GetGlobalVariable('ptov_table')
+        for i in range(0, self.GetGlobalVariable('ptov_index')):
+            if (addr >= long(unsigned(ptov_table[i].pa))) and (addr < (long(unsigned(ptov_table[i].pa)) + long(unsigned(ptov_table[i].len)))):
+                return (addr - long(unsigned(ptov_table[i].pa)) + long(unsigned(ptov_table[i].va)))
+        return (addr - unsigned(self.GetGlobalVariable("gPhysBase")) + unsigned(self.GetGlobalVariable("gVirtBase")))
+
     def PhysToKernelVirt(self, addr):
         if self.arch == 'x86_64':
             return (addr + unsigned(self.GetGlobalVariable('physmap_base')))
+        elif self.arch.startswith('arm64'):
+            return self.PhysToKVARM64(addr)
         elif self.arch.startswith('arm'):
             return (addr - unsigned(self.GetGlobalVariable("gPhysBase")) + unsigned(self.GetGlobalVariable("gVirtBase")))
         else:
@@ -504,7 +583,7 @@ class KernelTarget(object):
             self._ptrsize = caching.GetStaticCacheData("kern.ptrsize", None)
             if self._ptrsize != None : return self._ptrsize
             arch = LazyTarget.GetTarget().triple.split('-')[0]
-            if arch in ('x86_64', 'arm64'):
+            if arch == 'x86_64' or arch.startswith('arm64'):
                 self._ptrsize = 8
             else:
                 self._ptrsize = 4
@@ -514,7 +593,7 @@ class KernelTarget(object):
         if name == 'VM_MIN_KERNEL_ADDRESS':
             if self.arch == 'x86_64':
                 return unsigned(0xFFFFFF8000000000)
-            elif self.arch == 'arm64':
+            elif self.arch.startswith('arm64'):
                 return unsigned(0xffffffe000000000)
             else:
                 return unsigned(0x80000000)

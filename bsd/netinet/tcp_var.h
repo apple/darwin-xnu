@@ -216,6 +216,7 @@ struct mpt_dsn_map {
 	uint32_t		mpt_sseq;	/* relative subflow # */
 	uint16_t		mpt_len;	/* length of mapping */
 	uint16_t		mpt_csum;	/* checksum value if on */
+	uint8_t			mpt_dfin;	/* It's a DATA_FIN */
 };
 #define tcp6cb		tcpcb  /* for KAME src sync over BSD*'s */
 
@@ -619,6 +620,8 @@ struct tcpcb {
 	SLIST_HEAD(,tcp_notify_ack_marker) t_notify_ack; /* state for notifying data acknowledgements */
 	u_int32_t	t_recv_throttle_ts;	/* TS for start of recv throttle */
 	u_int32_t	t_rxt_minimum_timeout;	/* minimum retransmit timeout in ms */
+	uint32_t	t_challengeack_last;	/* last time challenge ACK was sent per sec */
+	uint32_t	t_challengeack_count;	/* # of challenge ACKs already sent per sec */
 };
 
 #define IN_FASTRECOVERY(tp)	(tp->t_flags & TF_FASTRECOVERY)
@@ -717,9 +720,8 @@ extern int tcprexmtthresh;
 	mptcp_reset_rexmit_state((_tp_)); \
 } while(0);
 
-#define	TCP_AUTORCVBUF_MAX(_ifp_) (((_ifp_) != NULL && \
-	((_ifp_)->if_eflags & IFEF_3CA)) ? tcp_autorcvbuf_max_ca : \
-	tcp_autorcvbuf_max)
+#define	TCP_AUTORCVBUF_MAX(_ifp_) (((_ifp_) != NULL && (IFNET_IS_CELLULAR((_ifp_))) && ((_ifp_)->if_eflags & IFEF_3CA)) ? \
+		(tcp_autorcvbuf_max << 1) : tcp_autorcvbuf_max)
 
 enum tcp_cc_event {
 	TCP_CC_CWND_INIT,	/* 0 */
@@ -1002,9 +1004,12 @@ struct	tcpstat {
 	u_int32_t	tcps_badsyn;		/* bogus SYN, e.g. premature ACK */
 	u_int32_t	tcps_mturesent;		/* resends due to MTU discovery */
 	u_int32_t	tcps_listendrop;	/* listen queue overflows */
+	u_int32_t	tcps_synchallenge;	/* challenge ACK due to bad SYN */
+	u_int32_t	tcps_rstchallenge;	/* challenge ACK due to bad RST */
 
 	/* new stats from FreeBSD 5.4 sync up */
 	u_int32_t	tcps_minmssdrops;	/* average minmss too low drops */
+
 	u_int32_t	tcps_sndrexmitbad;	/* unnecessary packet retransmissions */
 	u_int32_t	tcps_badrst;		/* ignored RSTs in the window */
 
@@ -1201,6 +1206,7 @@ struct	tcpstat {
 	u_int32_t	tcps_mptcp_back_to_wifi;	/* Total number of connections that succeed to move traffic away from cell (when starting on cell) */
 	u_int32_t	tcps_mptcp_wifi_proxy;		/* Total number of new subflows that fell back to regular TCP on cell */
 	u_int32_t	tcps_mptcp_cell_proxy;		/* Total number of new subflows that fell back to regular TCP on WiFi */
+	u_int32_t	tcps_mptcp_triggered_cell;	/* Total number of times an MPTCP-connection triggered cell bringup */
 };
 
 
@@ -1421,7 +1427,37 @@ struct  xtcpcb_n {
 #define	TCP_RTTVAR_SCALE	16	/* multiplier for rttvar; 4 bits */
 #define	TCP_RTTVAR_SHIFT	4	/* shift for rttvar; 4 bits */
 #define	TCP_DELTA_SHIFT		2	/* see tcp_input.c */
-	
+
+
+/*
+ * TCP structure with information that gives insight into forward progress on an interface,
+ * exported to user-land via sysctl(3).
+ */
+struct  xtcpprogress_indicators {
+	u_int32_t	xp_numflows;            /* Total number of flows */
+	u_int32_t	xp_conn_probe_fails;    /* Count of connection failures */
+	u_int32_t	xp_read_probe_fails;    /* Count of read probe failures */
+	u_int32_t	xp_write_probe_fails;   /* Count of write failures */
+	u_int32_t	xp_recentflows;	    	/* Total of "recent" flows */
+	u_int32_t	xp_recentflows_unacked;	/* Total of "recent" flows with unacknowledged data */
+	u_int64_t	xp_recentflows_rxbytes;	/* Total of "recent" flows received bytes */
+	u_int64_t	xp_recentflows_txbytes;	/* Total of "recent" flows transmitted bytes */
+	u_int64_t	xp_recentflows_rxooo;	/* Total of "recent" flows received out of order bytes */
+	u_int64_t	xp_recentflows_rxdup;	/* Total of "recent" flows received duplicate bytes */
+	u_int64_t	xp_recentflows_retx;	/* Total of "recent" flows retransmitted bytes */
+	u_int64_t	xp_reserved1;			/* Expansion */
+	u_int64_t	xp_reserved2;			/* Expansion */
+	u_int64_t	xp_reserved3;			/* Expansion */
+	u_int64_t	xp_reserved4;			/* Expansion */
+};
+
+struct tcpprogressreq {
+	u_int64_t	ifindex;				/* Interface index for progress indicators */
+	u_int64_t	recentflow_maxduration;	/* In mach_absolute_time, max duration for flow to be counted as "recent" */
+	u_int64_t	xp_reserved1;			/* Expansion */
+	u_int64_t	xp_reserved2;			/* Expansion */
+};
+
 #endif /* PRIVATE */
 
 #pragma pack()
@@ -1504,7 +1540,6 @@ extern int tcp_ecn_outbound;
 extern int tcp_ecn_inbound;
 extern u_int32_t tcp_do_autorcvbuf;
 extern u_int32_t tcp_autorcvbuf_max;
-extern u_int32_t tcp_autorcvbuf_max_ca;
 extern u_int32_t tcp_autorcvbuf_inc_shift;
 extern int tcp_recv_bg;
 
@@ -1574,8 +1609,7 @@ void	 tcp_reset_stretch_ack(struct tcpcb *tp);
 extern void tcp_get_ports_used(u_int32_t, int, u_int32_t, bitstr_t *);
 uint32_t tcp_count_opportunistic(unsigned int ifindex, u_int32_t flags);
 uint32_t tcp_find_anypcb_byaddr(struct ifaddr *ifa);
-void	 tcp_set_max_rwinscale(struct tcpcb *tp, struct socket *so,
-    u_int32_t maxrcvbuf);
+void tcp_set_max_rwinscale(struct tcpcb *tp, struct socket *so, struct ifnet *ifp);
 struct bwmeas* tcp_bwmeas_alloc(struct tcpcb *tp);
 void tcp_bwmeas_free(struct tcpcb *tp);
 extern int32_t timer_diff(uint32_t t1, uint32_t toff1, uint32_t t2, uint32_t toff2);
@@ -1634,6 +1668,7 @@ extern boolean_t tfo_enabled(const struct tcpcb *tp);
 extern void tcp_disable_tfo(struct tcpcb *tp);
 extern void tcp_tfo_gen_cookie(struct inpcb *inp, u_char *out, size_t blk_size);
 #define	TCP_FASTOPEN_KEYLEN 16
+extern int tcp_freeq(struct tcpcb *tp);
 extern errno_t tcp_notify_ack_id_valid(struct tcpcb *, struct socket *, u_int32_t);
 extern errno_t tcp_add_notify_ack_marker(struct tcpcb *, u_int32_t);
 extern void tcp_notify_ack_free(struct tcpcb *);
@@ -1648,11 +1683,12 @@ extern int get_tcp_inp_list(struct inpcb **, int, inp_gen_t);
 extern bool tcp_notify_ack_active(struct socket *so);
 
 #if MPTCP
-extern int mptcp_input_preproc(struct tcpcb *, struct mbuf *, int);
+extern int mptcp_input_preproc(struct tcpcb *tp, struct mbuf *m,
+			       struct tcphdr *th, int drop_hdrlen);
 extern uint32_t mptcp_output_csum(struct mbuf *m, uint64_t dss_val,
 				  uint32_t sseq, uint16_t dlen);
 extern int mptcp_adj_mss(struct tcpcb *, boolean_t);
-extern void mptcp_insert_rmap(struct tcpcb *, struct mbuf *);
+extern void mptcp_insert_rmap(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th);
 #endif
 
 __private_extern__ void tcp_update_stats_per_flow(

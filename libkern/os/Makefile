@@ -17,7 +17,8 @@ KERNELFILES = \
 
 PRIVATE_KERNELFILES = \
 	object_private.h \
-	reason_private.h
+	reason_private.h \
+	refcnt.h
 
 PRIVATE_DATAFILES = \
 	reason_private.h

@@ -47,11 +47,22 @@
 
 #include <stdbool.h>
 
+#define PMSR "s3_1_c15_c13_0"
+#define PMSR_PMI(REG) ((REG) & ((1 << CORE_NCTRS) - 1))
 
-static inline void
-mt_fiq(void)
+
+static inline bool
+mt_pmi_pending(uint64_t * restrict pmsr, uint64_t * restrict upmsr)
 {
+	*pmsr = __builtin_arm_rsr64(PMSR);
+	bool pmi = PMSR_PMI(*pmsr);
+
+#pragma unused(upmsr)
+
+	return pmi;
 }
+
+void mt_fiq(void *cpu, uint64_t pmsr, uint64_t upmsr);
 
 #endif /* MACH_KERNEL_PRIVATE */
 

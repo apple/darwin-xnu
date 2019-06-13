@@ -39,6 +39,9 @@ each directory entry like
 Note: when
 .Fn getattrlistbulk
 returns information about a symbolic link, the information returned is about the link itself, not the target of the link.
+The order of the directory entries (and their associated metadata) vended by
+.Fn getattrlistbulk
+is not specified.  Some file systems may return entries in lexicographic sort order and others may not.
 .Pp
 The function reads directory entries from the directory referenced by the file
 descriptor 

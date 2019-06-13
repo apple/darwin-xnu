@@ -206,6 +206,7 @@ fq_if_service_to_priority(fq_if_t *fqs, mbuf_svc_class_t svc)
 		case MBUF_SC_AV:
 		case MBUF_SC_RV:
 		case MBUF_SC_VI:
+		case MBUF_SC_SIG:
 			pri = FQ_IF_VI_INDEX;
 			break;
 		case MBUF_SC_VO:
@@ -244,6 +245,9 @@ fq_if_service_to_priority(fq_if_t *fqs, mbuf_svc_class_t svc)
 		break;
 	case MBUF_SC_VI:
 		pri = FQ_IF_VI_INDEX;
+		break;
+	case MBUF_SC_SIG:
+		pri = FQ_IF_SIG_INDEX;
 		break;
 	case MBUF_SC_VO:
 		pri = FQ_IF_VO_INDEX;
@@ -827,6 +831,10 @@ fq_if_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags,
 		fq_if_classq_init(fqs, FQ_IF_VO_INDEX, 600,
 		    8, MBUF_SC_VO);
 	} else {
+		/* SIG shares same INDEX with VI */
+		_CASSERT(SCIDX_SIG == SCIDX_VI);
+		_CASSERT(FQ_IF_SIG_INDEX == FQ_IF_VI_INDEX);
+
 		fq_if_classq_init(fqs, FQ_IF_BK_SYS_INDEX, 1500,
 		    2, MBUF_SC_BK_SYS);
 		fq_if_classq_init(fqs, FQ_IF_BK_INDEX, 1500,

@@ -164,7 +164,8 @@ acpi_hibernate(void *refcon)
 extern void			slave_pstart(void);
 extern void			hibernate_rebuild_vm_structs(void);
 
-extern	unsigned int		wake_nkdbufs;
+extern unsigned int wake_nkdbufs;
+extern unsigned int trace_wrap;
 
 void
 acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
@@ -317,7 +318,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	 * The sleep implementation uses indirect noreturn calls, so we miss stack
 	 * unpoisoning. Do it explicitly.
 	 */
-	__asan_handle_no_return();
+	kasan_unpoison_curstack(true);
 #endif
 
 #if HIBERNATION
@@ -332,7 +333,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	if (kdebug_enable == 0) {
 		if (wake_nkdbufs) {
 			start = mach_absolute_time();
-			kdebug_trace_start(wake_nkdbufs, NULL, TRUE);
+			kdebug_trace_start(wake_nkdbufs, NULL, trace_wrap != 0, TRUE);
 			elapsed_trace_start += mach_absolute_time() - start;
 		}
 	}
@@ -409,6 +410,12 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 		ml_set_interrupts_enabled(FALSE);
 	}
 
+	if (current_cpu_datap()->cpu_hibernate)  {
+        /* Call hibernate_write_image() to put disk to low power state */
+        hibernate_write_image();
+        cpu_datap(0)->cpu_hibernate = 0;
+    }
+
 	/*
 	 * Call back to caller to indicate that interrupts will remain
 	 * disabled while we deep idle, wake and return.
@@ -460,7 +467,7 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 	if (kdebug_enable == 0) {
 		if (wake_nkdbufs) {
 			__kdebug_only uint64_t start = mach_absolute_time();
-			kdebug_trace_start(wake_nkdbufs, NULL, TRUE);
+			kdebug_trace_start(wake_nkdbufs, NULL, trace_wrap != 0, TRUE);
 			KDBG(IOKDBG_CODE(DBG_HIBERNATE, 15), start);
 		}
 	}

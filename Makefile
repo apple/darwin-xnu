@@ -220,7 +220,7 @@ EXPINC_SUBDIRS_X86_64H = $(EXPINC_SUBDIRS)
 EXPINC_SUBDIRS_ARM = $(EXPINC_SUBDIRS)
 EXPINC_SUBDIRS_ARM64 = $(EXPINC_SUBDIRS)
 
-SETUP_SUBDIRS = SETUP san
+SETUP_SUBDIRS = SETUP osfmk san
 
 COMP_SUBDIRS_X86_64 = $(ALL_SUBDIRS)
 COMP_SUBDIRS_X86_64H = $(ALL_SUBDIRS)
@@ -238,9 +238,29 @@ endif # CURRENT_BUILD_CONFIG
 
 endif # all other RC_ProjectName
 
-installhdrs_libkdd install_libkdd:
+installapi_libkdd installhdrs_libkdd install_libkdd:
 	cd libkdd; \
-		xcodebuild -target libkdd $(subst _libkdd,,$@)	\
+		xcodebuild -target Default $(subst _libkdd,,$@)	\
+			"SRCROOT=$(SRCROOT)/libkdd"		\
+			"OBJROOT=$(OBJROOT)"			\
+			"SYMROOT=$(SYMROOT)"			\
+			"DSTROOT=$(DSTROOT)"			\
+			"SDKROOT=$(SDKROOT)"
+
+
+installapi_libkdd_tests installhdrs_libkdd_tests install_libkdd_tests:
+	cd libkdd; \
+		xcodebuild -target tests $(subst _libkdd_tests,,$@)	\
+			"SRCROOT=$(SRCROOT)/libkdd"		\
+			"OBJROOT=$(OBJROOT)"			\
+			"SYMROOT=$(SYMROOT)"			\
+			"DSTROOT=$(DSTROOT)"			\
+			"SDKROOT=$(SDKROOT)"
+
+
+installapi_libkdd_host installhdrs_libkdd_host install_libkdd_host:
+	cd libkdd; \
+		xcodebuild -configuration ReleaseHost -target kdd.framework $(subst _libkdd_host,,$@)	\
 			"SRCROOT=$(SRCROOT)/libkdd"		\
 			"OBJROOT=$(OBJROOT)"			\
 			"SYMROOT=$(SYMROOT)"			\
@@ -255,3 +275,5 @@ installhdrs_libkdd install_libkdd:
 xnu_tests:
 	$(MAKE) -C $(SRCROOT)/tools/tests	$(if $(filter -j,$(MAKEFLAGS)),,$(MAKEJOBS)) \
 		SRCROOT=$(SRCROOT)/tools/tests
+	$(MAKE) -C $(SRCROOT)/tests	$(if $(filter -j,$(MAKEFLAGS)),,$(MAKEJOBS)) \
+		SRCROOT=$(SRCROOT)/tests

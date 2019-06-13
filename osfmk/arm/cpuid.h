@@ -132,6 +132,12 @@ typedef union {
 /* H9G (ARMv8 architecture) */
 #define CPU_PART_HURRICANE_MYST 0x7
 
+/* H10 p-Core (ARMv8 architecture) */
+#define CPU_PART_MONSOON	0x8
+
+/* H10 e-Core (ARMv8 architecture) */
+#define CPU_PART_MISTRAL	0x9
+
 
 /* Cache type identification */
 
@@ -198,6 +204,7 @@ typedef union {
 typedef struct {
 	uint32_t		neon;
 	uint32_t		neon_hpfp;
+	uint32_t		neon_fp16;
 } arm_mvfp_info_t;
 
 #ifdef __cplusplus

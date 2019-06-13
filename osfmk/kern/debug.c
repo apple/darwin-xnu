@@ -96,6 +96,7 @@
 #include <libkern/OSKextLibPrivate.h>
 #include <libkern/OSAtomic.h>
 #include <libkern/kernel_mach_header.h>
+#include <libkern/section_keywords.h>
 #include <uuid/uuid.h>
 #include <mach_debug/zone_info.h>
 
@@ -108,6 +109,10 @@
 extern volatile struct xnu_hw_shmem_dbg_command_info *hwsd_info;
 #endif
 
+#if CONFIG_XNUPOST
+#include <tests/xnupost.h>
+extern int vsnprintf(char *, size_t, const char *, va_list);
+#endif
 
 unsigned int	halt_in_debugger = 0;
 unsigned int	current_debugger = 0;
@@ -141,6 +146,7 @@ unsigned int	kernel_debugger_entry_count = 0;
 #define CPUPANICSTR PROCESSOR_DATA(current_processor(), debugger_state).db_panic_str
 #define CPUPANICARGS PROCESSOR_DATA(current_processor(), debugger_state).db_panic_args
 #define CPUPANICOPTS PROCESSOR_DATA(current_processor(), debugger_state).db_panic_options
+#define CPUPANICDATAPTR PROCESSOR_DATA(current_processor(), debugger_state).db_panic_data_ptr
 #define CPUDEBUGGERSYNC PROCESSOR_DATA(current_processor(), debugger_state).db_proceed_on_sync_failure
 #define CPUDEBUGGERCOUNT PROCESSOR_DATA(current_processor(), debugger_state).db_entry_count
 #define CPUDEBUGGERRET PROCESSOR_DATA(current_processor(), debugger_state).db_op_return
@@ -159,11 +165,13 @@ MACRO_END
 debugger_op debugger_current_op = DBOP_NONE;
 const char *debugger_panic_str = NULL;
 va_list *debugger_panic_args = NULL;
+void *debugger_panic_data = NULL;
 uint64_t debugger_panic_options = 0;
 const char *debugger_message = NULL;
 unsigned long debugger_panic_caller = 0;
 
-void panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsigned int reason, void *ctx, uint64_t panic_options_mask, unsigned long panic_caller);
+void panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsigned int reason, void *ctx,
+				uint64_t panic_options_mask, void *panic_data, unsigned long panic_caller);
 static void kdp_machine_reboot_type(unsigned int type);
 __attribute__((noreturn)) void panic_spin_forever(void);
 extern kern_return_t do_stackshot(void);
@@ -177,8 +185,10 @@ int mach_assert = 1;
 #define KDBG_TRACE_PANIC_FILENAME "/var/log/panic.trace"
 #else
 /*
- * DEBUG_BUF_SIZE can't grow without updates to SMC and iBoot to store larger panic logs on co-processor systems */
+ * EXTENDED_/DEBUG_BUF_SIZE can't grow without updates to SMC and iBoot to store larger panic logs on co-processor systems */
 #define DEBUG_BUF_SIZE ((3 * PAGE_SIZE) + offsetof(struct macos_panic_header, mph_data))
+#define EXTENDED_DEBUG_BUF_SIZE 0x0013ff80
+static_assert(((EXTENDED_DEBUG_BUF_SIZE % PANIC_FLUSH_BOUNDARY) == 0), "Extended debug buf size must match SMC alignment requirements");
 #define KDBG_TRACE_PANIC_FILENAME "/var/tmp/panic.trace"
 #endif
 
@@ -198,7 +208,9 @@ char *debug_buf_ptr = (debug_buf + offsetof(struct macos_panic_header, mph_data)
  * On co-processor platforms, we lose sizeof(struct macos_panic_header) bytes from the end of
  * the end of the log because we only support writing (3*PAGESIZE) bytes.
  */
-const unsigned int debug_buf_size = (DEBUG_BUF_SIZE - offsetof(struct macos_panic_header, mph_data));
+unsigned int debug_buf_size = (DEBUG_BUF_SIZE - offsetof(struct macos_panic_header, mph_data));
+
+boolean_t extended_debug_log_enabled = FALSE;
 #endif
 
 /* Debugger state */
@@ -210,6 +222,10 @@ unsigned int   debugger_context = 0;
 static char model_name[64];
 unsigned char *kernel_uuid;
 
+boolean_t kernelcache_uuid_valid = FALSE;
+uuid_t kernelcache_uuid;
+uuid_string_t kernelcache_uuid_string;
+
 /*
  * By default we treat Debugger() the same as calls to panic(), unless
  * we have debug boot-args present and the DB_KERN_DUMP_ON_NMI *NOT* set.
@@ -219,13 +235,18 @@ unsigned char *kernel_uuid;
  */
 static boolean_t debugger_is_panic = TRUE;
 
+#if DEVELOPMENT || DEBUG
+boolean_t debug_boot_arg_inited = FALSE;
+#endif
+
+SECURITY_READ_ONLY_LATE(unsigned int) debug_boot_arg;
 
 char kernel_uuid_string[37]; /* uuid_string_t */
+char kernelcache_uuid_string[37]; /* uuid_string_t */
 char   panic_disk_error_description[512];
 size_t panic_disk_error_description_size = sizeof(panic_disk_error_description);
 
 extern unsigned int write_trace_on_panic;
-
 int kext_assertions_enable =
 #if DEBUG || DEVELOPMENT
 			TRUE;
@@ -249,15 +270,78 @@ panic_init(void)
 		mach_assert = 1;
 	}
 
-#if !CONFIG_EMBEDDED
-	uint32_t debug_flags = 0;
+	/*
+	 * Initialize the value of the debug boot-arg
+	 */
+	debug_boot_arg = 0;
+#if ((CONFIG_EMBEDDED && MACH_KDP) || defined(__x86_64__))
+	if (PE_parse_boot_argn("debug", &debug_boot_arg, sizeof (debug_boot_arg))) {
+#if DEVELOPMENT || DEBUG
+		if (debug_boot_arg & DB_HALT) {
+			halt_in_debugger=1;
+		}
+#endif
 
-	if (PE_i_can_has_debugger(&debug_flags) && !(debug_flags & DB_KERN_DUMP_ON_NMI)) {
+#if CONFIG_EMBEDDED
+		if (debug_boot_arg & DB_NMI) {
+			panicDebugging  = TRUE;
+		}
+#else
+		panicDebugging = TRUE;
+#if KDEBUG_MOJO_TRACE
+		if (debug_boot_arg & DB_PRT_KDEBUG) {
+			kdebug_serial = TRUE;
+		}
+#endif
+#endif /* CONFIG_EMBEDDED */
+	}
+#endif /* ((CONFIG_EMBEDDED && MACH_KDP) || defined(__x86_64__)) */
+
+#if DEVELOPMENT || DEBUG
+	debug_boot_arg_inited = TRUE;
+#endif
+
+#if !CONFIG_EMBEDDED
+	/*
+	 * By default we treat Debugger() the same as calls to panic(), unless
+	 * we have debug boot-args present and the DB_KERN_DUMP_ON_NMI *NOT* set.
+	 * If DB_KERN_DUMP_ON_NMI is *NOT* set, return from Debugger() is supported.
+	 * This is because writing an on-device corefile is a destructive operation.
+	 *
+	 * Return from Debugger() is currently only implemented on x86
+	 */
+	if (PE_i_can_has_debugger(NULL) && !(debug_boot_arg & DB_KERN_DUMP_ON_NMI)) {
 		debugger_is_panic = FALSE;
 	}
 #endif
 
 }
+
+#if defined (__x86_64__)
+void
+extended_debug_log_init(void)
+{
+	assert(coprocessor_paniclog_flush);
+	/*
+	 * Allocate an extended panic log buffer that has space for the panic
+	 * stackshot at the end. Update the debug buf pointers appropriately
+	 * to point at this new buffer.
+	 */
+	char *new_debug_buf = kalloc(EXTENDED_DEBUG_BUF_SIZE);
+	/*
+	 * iBoot pre-initializes the panic region with the NULL character. We set this here
+	 * so we can accurately calculate the CRC for the region without needing to flush the
+	 * full region over SMC.
+	 */
+	memset(new_debug_buf, '\0', EXTENDED_DEBUG_BUF_SIZE);
+
+	panic_info = (struct macos_panic_header *)new_debug_buf;
+	debug_buf_ptr = debug_buf_base = (new_debug_buf + offsetof(struct macos_panic_header, mph_data));
+	debug_buf_size = (EXTENDED_DEBUG_BUF_SIZE - offsetof(struct macos_panic_header, mph_data));
+
+	extended_debug_log_enabled = TRUE;
+}
+#endif /* defined (__x86_64__) */
 
 void
 debug_log_init(void)
@@ -272,10 +356,11 @@ debug_log_init(void)
 	debug_buf_ptr = debug_buf_base;
 	debug_buf_size = gPanicSize - sizeof(struct embedded_panic_header);
 #else
+	bzero(panic_info, DEBUG_BUF_SIZE);
+
 	assert(debug_buf_base != NULL);
 	assert(debug_buf_ptr != NULL);
 	assert(debug_buf_size != 0);
-	bzero(debug_buf, sizeof(debug_buf));
 #endif
 }
 
@@ -339,7 +424,7 @@ DebuggerResumeOtherCores()
 
 static void
 DebuggerSaveState(debugger_op db_op, const char *db_message, const char *db_panic_str,
-		va_list *db_panic_args, uint64_t db_panic_options,
+		va_list *db_panic_args, uint64_t db_panic_options, void *db_panic_data_ptr,
 		boolean_t db_proceed_on_sync_failure, unsigned long db_panic_caller)
 {
 	CPUDEBUGGEROP = db_op;
@@ -349,9 +434,12 @@ DebuggerSaveState(debugger_op db_op, const char *db_message, const char *db_pani
 		CPUDEBUGGERMSG = db_message;
 		CPUPANICSTR = db_panic_str;
 		CPUPANICARGS = db_panic_args;
+		CPUPANICDATAPTR = db_panic_data_ptr;
 		CPUPANICCALLER = db_panic_caller;
 	} else if (CPUDEBUGGERCOUNT > 1 && db_panic_str != NULL) {
-		kprintf("Nested panic detected: %s", db_panic_str);
+		kprintf("Nested panic detected:");
+		if (db_panic_str != NULL)
+			_doprnt(db_panic_str, db_panic_args, PE_kputc, 0);
 	}
 
 	CPUDEBUGGERSYNC = db_proceed_on_sync_failure;
@@ -369,21 +457,21 @@ DebuggerSaveState(debugger_op db_op, const char *db_message, const char *db_pani
  */
 kern_return_t
 DebuggerTrapWithState(debugger_op db_op, const char *db_message, const char *db_panic_str,
-		va_list *db_panic_args, uint64_t db_panic_options,
+		va_list *db_panic_args, uint64_t db_panic_options, void *db_panic_data_ptr,
 		boolean_t db_proceed_on_sync_failure, unsigned long db_panic_caller)
 {
 	kern_return_t ret;
 
 	assert(ml_get_interrupts_enabled() == FALSE);
-	DebuggerSaveState(db_op, db_message, db_panic_str,
-		db_panic_args, db_panic_options, db_proceed_on_sync_failure,
-		db_panic_caller);
+	DebuggerSaveState(db_op, db_message, db_panic_str, db_panic_args,
+				db_panic_options, db_panic_data_ptr,
+				db_proceed_on_sync_failure, db_panic_caller);
 
 	TRAP_DEBUGGER;
 
 	ret = CPUDEBUGGERRET;
 
-	DebuggerSaveState(DBOP_NONE, NULL, NULL, NULL, 0, FALSE, 0);
+	DebuggerSaveState(DBOP_NONE, NULL, NULL, NULL, 0, NULL, FALSE, 0);
 
 	return ret;
 }
@@ -450,13 +538,13 @@ DebuggerWithContext(unsigned int reason, void *ctx, const char *message,
 
 	if (ctx != NULL) {
 		DebuggerSaveState(DBOP_DEBUGGER, message,
-			NULL, NULL, debugger_options_mask, TRUE, 0);
+			NULL, NULL, debugger_options_mask, NULL, TRUE, 0);
 		handle_debugger_trap(reason, 0, 0, ctx);
 		DebuggerSaveState(DBOP_NONE, NULL, NULL,
-			NULL, 0, FALSE, 0);
+			NULL, 0, NULL, FALSE, 0);
 	} else {
 		DebuggerTrapWithState(DBOP_DEBUGGER, message,
-			NULL, NULL, debugger_options_mask, TRUE, 0);
+			NULL, NULL, debugger_options_mask, NULL, TRUE, 0);
 	}
 
 	CPUDEBUGGERCOUNT--;
@@ -529,7 +617,7 @@ panic(const char *str, ...)
 	va_list panic_str_args;
 
 	va_start(panic_str_args, str);
-	panic_trap_to_debugger(str, &panic_str_args, 0, NULL, 0, (unsigned long)(char *)__builtin_return_address(0));
+	panic_trap_to_debugger(str, &panic_str_args, 0, NULL, 0, NULL, (unsigned long)(char *)__builtin_return_address(0));
 	va_end(panic_str_args);
 }
 
@@ -539,25 +627,47 @@ panic_with_options(unsigned int reason, void *ctx, uint64_t debugger_options_mas
 	va_list panic_str_args;
 
 	va_start(panic_str_args, str);
-	panic_trap_to_debugger(str, &panic_str_args, reason, ctx, debugger_options_mask, (unsigned long)(char *)__builtin_return_address(0));
+	panic_trap_to_debugger(str, &panic_str_args, reason, ctx, (debugger_options_mask & ~DEBUGGER_INTERNAL_OPTIONS_MASK),
+				NULL, (unsigned long)(char *)__builtin_return_address(0));
 	va_end(panic_str_args);
 }
 
+#if defined (__x86_64__)
+/*
+ * panic_with_thread_context() is used on x86 platforms to specify a different thread that should be backtraced in the paniclog.
+ * We don't generally need this functionality on embedded platforms because embedded platforms include a panic time stackshot
+ * from customer devices. We plumb the thread pointer via the debugger trap mechanism and backtrace the kernel stack from the
+ * thread when writing the panic log.
+ *
+ * NOTE: panic_with_thread_context() should be called with an explicit thread reference held on the passed thread.
+ */
 void
-panic_context(unsigned int reason, void *ctx, const char *str, ...)
+panic_with_thread_context(unsigned int reason, void *ctx, uint64_t debugger_options_mask, thread_t thread, const char *str, ...)
 {
 	va_list panic_str_args;
+	__assert_only uint32_t th_ref_count;
+
+	assert_thread_magic(thread);
+	th_ref_count = atomic_load_explicit(&thread->ref_count, memory_order_acquire);
+	assertf(th_ref_count > 0, "panic_with_thread_context called with invalid thread %p with refcount %u", thread, th_ref_count);
+
+	/* Take a reference on the thread so it doesn't disappear by the time we try to backtrace it */
+	thread_reference(thread);
 
 	va_start(panic_str_args, str);
-	panic_trap_to_debugger(str, &panic_str_args, reason, ctx, 0, (unsigned long)(char *)__builtin_return_address(0));
+	panic_trap_to_debugger(str, &panic_str_args, reason, ctx, ((debugger_options_mask & ~DEBUGGER_INTERNAL_OPTIONS_MASK) | DEBUGGER_INTERNAL_OPTION_THREAD_BACKTRACE),
+				thread, (unsigned long)(char *)__builtin_return_address(0));
+
 	va_end(panic_str_args);
+
 }
+#endif /* defined (__x86_64__) */
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
 void
-panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsigned int reason, void
-			*ctx, uint64_t panic_options_mask, unsigned long panic_caller)
+panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsigned int reason, void *ctx,
+			uint64_t panic_options_mask, void *panic_data_ptr, unsigned long panic_caller)
 {
 #pragma clang diagnostic pop
 
@@ -609,7 +719,7 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 	if (write_trace_on_panic && kdebug_enable) {
 		if (get_preemption_level() == 0 && !ml_at_interrupt_context()) {
 			ml_set_interrupts_enabled(TRUE);
-			KDBG(TRACE_PANIC);
+			KDBG_RELEASE(TRACE_PANIC);
 			kdbg_dump_trace_to_file(KDBG_TRACE_PANIC_FILENAME);
 		}
 	}
@@ -631,7 +741,7 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 		 */
 		DebuggerSaveState(DBOP_PANIC, "panic",
 				panic_format_str, panic_args,
-				panic_options_mask, TRUE, panic_caller);
+				panic_options_mask, panic_data_ptr, TRUE, panic_caller);
 		handle_debugger_trap(reason, 0, 0, ctx);
 	}
 
@@ -643,7 +753,7 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 #endif /* defined(__arm64__) */
 
 	DebuggerTrapWithState(DBOP_PANIC, "panic", panic_format_str,
-			panic_args, panic_options_mask, TRUE, panic_caller);
+			panic_args, panic_options_mask, panic_data_ptr, TRUE, panic_caller);
 
 	/*
 	 * Not reached.
@@ -692,7 +802,7 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 #endif
 
 #if defined(__x86_64__)
-	kprintf("Debugger called: <%s>\n", debugger_message);
+	kprintf("Debugger called: <%s>\n", debugger_message ? debugger_message : "");
 #endif
 	/*
 	 * DB_HALT (halt_in_debugger) can be requested on startup, we shouldn't generate
@@ -707,7 +817,7 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 	}
 
 	if ((debugger_current_op == DBOP_PANIC) ||
-		(debugger_current_op == DBOP_DEBUGGER && debugger_is_panic)) {
+		((debugger_current_op == DBOP_DEBUGGER) && debugger_is_panic)) {
 		/*
 		 * Attempt to notify listeners once and only once that we've started
 		 * panicking. Only do this for Debugger() calls if we're treating
@@ -745,14 +855,17 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 		}
 		paniclog_append_noflush("\n");
 	}
+#if defined(__x86_64__)
+	else if (((debugger_current_op == DBOP_DEBUGGER) && debugger_is_panic)) {
+		paniclog_append_noflush("Debugger called: <%s>\n", debugger_message ? debugger_message : "");
+	}
 
 	/*
 	 * Debugger() is treated like panic() on embedded -- for example we use it for WDT
 	 * panics (so we need to write a paniclog). On desktop Debugger() is used in the
 	 * conventional sense.
 	 */
-#if defined(__x86_64__)
-	if (debugger_current_op == DBOP_PANIC)
+	if (debugger_current_op == DBOP_PANIC || ((debugger_current_op == DBOP_DEBUGGER) && debugger_is_panic))
 #endif
 	{
 		kdp_callouts(KDP_EVENT_PANICLOG);
@@ -762,7 +875,7 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 		 * TODO: Need to clear panic log when return from debugger
 		 * hooked up for embedded
 		 */
-		SavePanicInfo(debugger_message, debugger_panic_options);
+		SavePanicInfo(debugger_message, debugger_panic_data, debugger_panic_options);
 
 #if DEVELOPMENT || DEBUG
 		DEBUGGER_DEBUGGING_NESTED_PANIC_IF_REQUESTED((debugger_panic_options & DEBUGGER_OPTION_RECURPANIC_POSTLOG));
@@ -774,16 +887,13 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 	}
 
 #if CONFIG_KDP_INTERACTIVE_DEBUGGING
-	uint32_t debug_flags = 0;
-	PE_i_can_has_debugger(&debug_flags);
-
 	/*
 	 * If reboot on panic is enabled and the caller of panic indicated that we should skip
 	 * local coredumps, don't try to write these and instead go straight to reboot. This
 	 * allows us to persist any data that's stored in the panic log.
 	 */
 	if ((debugger_panic_options & DEBUGGER_OPTION_SKIP_LOCAL_COREDUMP) &&
-		(debug_flags & DB_REBOOT_POST_CORE)) {
+		(debug_boot_arg & DB_REBOOT_POST_CORE)) {
 		kdp_machine_reboot_type(kPEPanicRestartCPU);
 	}
 
@@ -791,31 +901,56 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 	 * Consider generating a local corefile if the infrastructure is configured
 	 * and we haven't disabled on-device coredumps.
 	 */
-	if (kdp_has_polled_corefile() && !(debug_flags & DB_DISABLE_LOCAL_CORE)) {
-		int ret = -1;
+	if (!(debug_boot_arg & DB_DISABLE_LOCAL_CORE)) {
+		if (!kdp_has_polled_corefile()) {
+			if (debug_boot_arg & (DB_KERN_DUMP_ON_PANIC | DB_KERN_DUMP_ON_NMI)) {
+				paniclog_append_noflush("skipping local kernel core because core file could not be opened prior to panic (error : 0x%x)",
+							kdp_polled_corefile_error());
+#if CONFIG_EMBEDDED
+				panic_info->eph_panic_flags |= EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_FAILED;
+				paniclog_flush();
+#else /* CONFIG_EMBEDDED */
+				if (panic_info->mph_panic_log_offset != 0) {
+					panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_COREDUMP_FAILED;
+					paniclog_flush();
+				}
+#endif /* CONFIG_EMBEDDED */
+			}
+		} else {
+			int ret = -1;
 
 #if defined (__x86_64__)
-		/* On x86 we don't do a coredump on Debugger unless the DB_KERN_DUMP_ON_NMI boot-arg is specified. */
-		if (debugger_current_op != DBOP_DEBUGGER || (debug_flags & DB_KERN_DUMP_ON_NMI))
+			/* On x86 we don't do a coredump on Debugger unless the DB_KERN_DUMP_ON_NMI boot-arg is specified. */
+			if (debugger_current_op != DBOP_DEBUGGER || (debug_boot_arg & DB_KERN_DUMP_ON_NMI))
 #endif
-		{
-			/*
-			 * Doing an on-device coredump leaves the disk driver in a state
-			 * that can not be resumed.
-			 */
-			debugger_safe_to_return = FALSE;
-			begin_panic_transfer();
-			ret = kern_dump(KERN_DUMP_DISK);
-			abort_panic_transfer();
+			{
+				/*
+				 * Doing an on-device coredump leaves the disk driver in a state
+				 * that can not be resumed.
+				 */
+				debugger_safe_to_return = FALSE;
+				begin_panic_transfer();
+				ret = kern_dump(KERN_DUMP_DISK);
+				abort_panic_transfer();
 
 #if DEVELOPMENT || DEBUG
-			DEBUGGER_DEBUGGING_NESTED_PANIC_IF_REQUESTED((debugger_panic_options & DEBUGGER_OPTION_RECURPANIC_POSTCORE));
+				DEBUGGER_DEBUGGING_NESTED_PANIC_IF_REQUESTED((debugger_panic_options & DEBUGGER_OPTION_RECURPANIC_POSTCORE));
 #endif
-		}
+			}
 
-		/* If we wrote a corefile and DB_REBOOT_POST_CORE is set, reboot */
-		if (ret == 0 && (debug_flags & DB_REBOOT_POST_CORE))
-			kdp_machine_reboot_type(kPEPanicRestartCPU);
+			/*
+			 * If DB_REBOOT_POST_CORE is set, then reboot if coredump is sucessfully saved
+			 * or if option to ignore failures is set.
+			 */
+			if ((debug_boot_arg & DB_REBOOT_POST_CORE) &&
+					((ret == 0) || (debugger_panic_options & DEBUGGER_OPTION_ATTEMPTCOREDUMPANDREBOOT))) {
+				kdp_machine_reboot_type(kPEPanicRestartCPU);
+			}
+		}
+	}
+
+	if (debug_boot_arg & DB_REBOOT_ALWAYS) {
+		kdp_machine_reboot_type(kPEPanicRestartCPU);
 	}
 
 	/* If KDP is configured, try to trap to the debugger */
@@ -904,6 +1039,7 @@ handle_debugger_trap(unsigned int exception, unsigned int code, unsigned int sub
 		if (debugger_panic_str == NULL) {
 			debugger_panic_str = CPUPANICSTR;
 			debugger_panic_args = CPUPANICARGS;
+			debugger_panic_data = CPUPANICDATAPTR;
 			debugger_message = CPUDEBUGGERMSG;
 			debugger_panic_caller = CPUPANICCALLER;
 		}
@@ -946,6 +1082,7 @@ handle_debugger_trap(unsigned int exception, unsigned int code, unsigned int sub
 	if (debugger_current_op != DBOP_BREAKPOINT) {
 		debugger_panic_str = NULL;
 		debugger_panic_args = NULL;
+		debugger_panic_data = NULL;
 		debugger_panic_options = 0;
 		debugger_message = NULL;
 	}

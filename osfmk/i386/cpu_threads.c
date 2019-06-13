@@ -1019,20 +1019,15 @@ x86_validate_topology(void)
 	debug_topology_print();
 
     /*
-     * XXX
-     *
-     * Right now this only works if the number of CPUs started is the total
-     * number of CPUs.  However, when specifying cpus=n the topology is only
-     * partially constructed and the checks below will fail.
-     *
-     * We should *always* build the complete topology and only start the CPUs
-     * indicated by cpus=n.  Until that happens, this code will not check the
-     * topology if the number of cpus defined is < that described the the
-     * topology parameters.
+     * Called after processors are registered but before non-boot processors
+     * are started:
+     *  - real_ncpus: number of registered processors driven from MADT
+     *  - max_ncpus:  max number of processors that will be started 
      */
     nCPUs = topoParms.nPackages * topoParms.nLThreadsPerPackage;
-    if (nCPUs > real_ncpus)
-	return;
+    if (nCPUs != real_ncpus)
+	panic("x86_validate_topology() %d threads but %d registered from MADT",
+	      nCPUs, real_ncpus);
 
     pkg = x86_pkgs;
     while (pkg != NULL) {

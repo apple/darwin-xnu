@@ -35,6 +35,8 @@
 
 #include <libkern/version.h>
 
+// for what(1):
+const char __kernelVersionString[] __attribute__((used)) = "@(#)VERSION: " OSTYPE " Kernel Version ###KERNEL_VERSION_LONG###: ###KERNEL_BUILD_DATE###; ###KERNEL_BUILDER###:###KERNEL_BUILD_OBJROOT###";
 const char version[] = OSTYPE " Kernel Version ###KERNEL_VERSION_LONG###: ###KERNEL_BUILD_DATE###; ###KERNEL_BUILDER###:###KERNEL_BUILD_OBJROOT###";
 const int  version_major = VERSION_MAJOR;
 const int  version_minor = VERSION_MINOR;
@@ -42,6 +44,7 @@ const int  version_revision = VERSION_REVISION;
 const int  version_stage = VERSION_STAGE;
 const int  version_prerelease_level = VERSION_PRERELEASE_LEVEL;
 const char version_variant[] = VERSION_VARIANT;
+const char osbuild_config[] = "###KERNEL_BUILD_CONFIG###";
 const char osbuilder[] = "###KERNEL_BUILDER###";
 const char osrelease[] = OSRELEASE;
 const char ostype[] = OSTYPE;

@@ -190,11 +190,6 @@ extern fasttrap_hash_t		fasttrap_tpoints;
 #define	FASTTRAP_TPOINTS_INDEX(pid, pc) \
 	(((pc) / sizeof (fasttrap_instr_t) + (pid)) & fasttrap_tpoints.fth_mask)
 
-
-#ifdef CONFIG_EMBEDDED
-#define FASTTRAP_ASYNC_REMOVE
-#endif
-
 extern void fasttrap_tracepoint_retire(proc_t *p, fasttrap_tracepoint_t *tp);
 
 /*

@@ -236,7 +236,7 @@ io_release(ipc_object_t io) {
 	}
 }
 
-/*   
+/*
  * Retrieve a label for use in a kernel call that takes a security
  * label as a parameter. If necessary, io_getlabel acquires internal
  * (not io_lock) locks, and io_unlocklabel releases them.

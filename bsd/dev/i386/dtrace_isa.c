@@ -183,6 +183,11 @@ dtrace_getreg(struct regs *savearea, uint_t reg)
 	boolean_t is64Bit = proc_is64bit(current_proc());
 	x86_saved_state_t *regs = (x86_saved_state_t *)savearea;
 
+	if (regs == NULL) {
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+		return (0);
+	}
+
 	if (is64Bit) {
 	    if (reg <= SS) {
 		reg = regmap[reg];

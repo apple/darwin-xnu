@@ -21,20 +21,10 @@
 #include <corecrypto/cc.h>
 #include <corecrypto/ccdrbg_impl.h>
 
-/* error codes */
-#define CCDRBG_STATUS_OK 0
-#define CCDRBG_STATUS_ERROR (-1)
-#define CCDRBG_STATUS_NEED_RESEED (-2)
-#define CCDRBG_STATUS_PARAM_ERROR (-3)
-// If this value is returned, the caller must abort or panic the process for security reasons.
-// for example in the case of catastrophic error in
-// http://csrc.nist.gov/publications/drafts/800-90/sp800_90a_r1_draft.pdf
-// ccdrbg calls abort() or panic(), if they are available in the system.
-#define CCDRBG_STATUS_ABORT (-4)
 /*
- * The maximum length of the entropy_input,  additional_input (max_additional_input_length) , personalization string 
+ * The maximum length of the entropy_input,  additional_input (max_additional_input_length) , personalization string
  * (max_personalization_string_length) and max_number_of_bits_per_request  are implementation dependent
- * but shall fit in a 32 bit register and be be less than or equal to the specified maximum length for the 
+ * but shall fit in a 32 bit register and be be less than or equal to the specified maximum length for the
  * selected DRBG mechanism (NIST 800-90A Section 10).
  */
 
@@ -87,9 +77,9 @@ CC_INLINE void ccdrbg_done(const struct ccdrbg_info *info,
 	info->done(drbg);
 }
 
-CC_INLINE size_t ccdrbg_context_size(const struct ccdrbg_info *drbg)
+CC_INLINE size_t ccdrbg_context_size(const struct ccdrbg_info *info)
 {
-    return drbg->size;
+    return info->size;
 }
 
 
@@ -110,19 +100,11 @@ void ccdrbg_factory_nistctr(struct ccdrbg_info *info, const struct ccdrbg_nistct
  * NIST SP 800-90 HMAC_DRBG
  * the maximum security strengh of drbg is half of output size of the input hash function and it internally is limited to 256 bits
  */
-extern struct ccdrbg_info ccdrbg_nistdigest_info;
-
 struct ccdrbg_nisthmac_custom {
     const struct ccdigest_info *di;
     int strictFIPS;
 };
 
 void ccdrbg_factory_nisthmac(struct ccdrbg_info *info, const struct ccdrbg_nisthmac_custom *custom);
-
-
-/*
- * Dummy DRBG
- */
-extern struct ccdrbg_info ccdrbg_dummy_info;
 
 #endif /* _CORECRYPTO_CCDRBG_H_ */

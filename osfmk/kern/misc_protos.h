@@ -46,6 +46,7 @@
 #include <mach/machine/vm_types.h>
 #include <ipc/ipc_types.h>
 #include <kern/debug.h>
+#include <libkern/copyio.h>
 
 #ifndef MIN
 #define MIN(a,b) (((a)<(b))?(a):(b))
@@ -85,12 +86,6 @@ extern int testbit(
 	int		which,
 	int		*bitmap);
 
-/* Move arbitrarily-aligned data from a user space to kernel space */
-extern int copyin(
-	const user_addr_t   user_addr,
-	char                *kernel_addr,
-	vm_size_t           nbytes);
-
 /* Move an aligned 32 or 64-bit word from user space to kernel space
  * using a single read instruction
  *
@@ -115,12 +110,6 @@ extern int copyinmsg(
 	const user_addr_t   user_addr,
 	char                *kernel_addr,
 	mach_msg_size_t     nbytes);
-
-/* Move arbitrarily-aligned data from a kernel space to user space */
-extern int copyout(
-	const void      *kernel_addr,
-	user_addr_t     user_addr,
-	vm_size_t       nbytes);
 
 /* Move arbitrarily-aligned data from a kernel space to user space */
 extern int copyoutmsg(

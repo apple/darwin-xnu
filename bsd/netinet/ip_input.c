@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -3835,9 +3835,14 @@ ip_forward(struct mbuf *m, int srcrt, struct sockaddr_in *next_hop)
 	n_long dest;
 	struct in_addr pkt_dst;
 	u_int32_t nextmtu = 0, len;
-	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, 0, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip_out_args ipoa;
 	struct ifnet *rcvifp = m->m_pkthdr.rcvif;
+
+	bzero(&ipoa, sizeof(ipoa));
+	ipoa.ipoa_boundif = IFSCOPE_NONE;
+	ipoa.ipoa_sotc = SO_TC_UNSPEC;
+	ipoa.ipoa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
+
 #if IPSEC
 	struct secpolicy *sp = NULL;
 	int ipsecerror;
@@ -4117,7 +4122,7 @@ ip_forward(struct mbuf *m, int srcrt, struct sockaddr_in *next_hop)
 			if (sav != NULL) {
 				lck_mtx_lock(sadb_mutex);
 				if (sav->sah != NULL) {
-					ro = &sav->sah->sa_route;
+					ro = (struct route *)&sav->sah->sa_route;
 					if (ro->ro_rt != NULL) {
 						RT_LOCK(ro->ro_rt);
 						if (ro->ro_rt->rt_ifp != NULL) {
@@ -4188,6 +4193,16 @@ ip_savecontrol(struct inpcb *inp, struct mbuf **mp, struct ip *ip,
 		time = mach_absolute_time();
 		mp = sbcreatecontrol_mbuf((caddr_t)&time, sizeof (time),
 		    SCM_TIMESTAMP_MONOTONIC, SOL_SOCKET, mp);
+		if (*mp == NULL) {
+			goto no_mbufs;
+		}
+	}
+	if (inp->inp_socket->so_options & SO_TIMESTAMP_CONTINUOUS) {
+		uint64_t time;
+
+		time = mach_continuous_time();
+		mp = sbcreatecontrol_mbuf((caddr_t)&time, sizeof (time),
+			SCM_TIMESTAMP_CONTINUOUS, SOL_SOCKET, mp);
 		if (*mp == NULL) {
 			goto no_mbufs;
 		}

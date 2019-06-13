@@ -81,144 +81,7 @@
 #include <kern/sched.h>
 #include <mach/sfi_class.h>
 #include <kern/processor_data.h>
-
-typedef enum {
-	PSET_SMP,
-} pset_cluster_type_t;
-
-struct processor_set {
-	queue_head_t		active_queue;	/* active processors */
-	queue_head_t		idle_queue;		/* idle processors */
-	queue_head_t		idle_secondary_queue;	/* idle secondary processors */
-	queue_head_t		unused_queue;		/* processors not recommended by CLPC */
-
-	int					online_processor_count;
-	int					active_processor_count;
-	int					load_average;
-
-	int					cpu_set_low, cpu_set_hi;
-	int					cpu_set_count;
-	uint64_t				cpu_bitmask;
-	uint64_t				recommended_bitmask;
-
-#if __SMP__
-	decl_simple_lock_data(,sched_lock)	/* lock for above */
-#endif
-
-#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_MULTIQ)
-	struct run_queue	pset_runq;      /* runq for this processor set */
-#endif
-	struct rt_queue		rt_runq;	/* realtime runq for this processor set */
-
-#if defined(CONFIG_SCHED_TRADITIONAL)
-	int					pset_runq_bound_count;
-		/* # of threads in runq bound to any processor in pset */
-#endif
-
-	/* CPUs that have been sent an unacknowledged remote AST for scheduling purposes */
-	uint64_t			pending_AST_cpu_mask;
-#if defined(CONFIG_SCHED_DEFERRED_AST)
-	/*
-	 * A separate mask, for ASTs that we may be able to cancel.  This is dependent on
-	 * some level of support for requesting an AST on a processor, and then quashing
-	 * that request later.
-	 *
-	 * The purpose of this field (and the associated codepaths) is to infer when we
-	 * no longer need a processor that is DISPATCHING to come up, and to prevent it
-	 * from coming out of IDLE if possible.  This should serve to decrease the number
-	 * of spurious ASTs in the system, and let processors spend longer periods in
-	 * IDLE.
-	 */
-	uint64_t			pending_deferred_AST_cpu_mask;
-#endif
-	uint64_t			pending_spill_cpu_mask;
-
-	struct ipc_port	*	pset_self;		/* port for operations */
-	struct ipc_port *	pset_name_self;	/* port for information */
-
-	processor_set_t		pset_list;		/* chain of associated psets */
-	pset_node_t		node;
-	uint32_t		pset_cluster_id;
-	pset_cluster_type_t	pset_cluster_type;
-};
-
-extern struct processor_set	pset0;
-
-struct pset_node {
-	processor_set_t		psets;			/* list of associated psets */
-
-	pset_node_t			nodes;			/* list of associated subnodes */
-	pset_node_t			node_list;		/* chain of associated nodes */
-
-	pset_node_t			parent;
-};
-
-extern struct pset_node	pset_node0;
-
-extern queue_head_t		tasks, terminated_tasks, threads, corpse_tasks; /* Terminated tasks are ONLY for stackshot */
-extern int				tasks_count, terminated_tasks_count, threads_count;
-decl_lck_mtx_data(extern,tasks_threads_lock)
-decl_lck_mtx_data(extern,tasks_corpse_lock)
-
-struct processor {
-	queue_chain_t		processor_queue;/* idle/active queue link,
-										 * MUST remain the first element */
-	int					state;			/* See below */
-	boolean_t		is_SMT;
-	boolean_t		is_recommended;
-	struct thread
-						*active_thread,	/* thread running on processor */
-						*next_thread,	/* next thread when dispatched */
-						*idle_thread;	/* this processor's idle thread. */
-
-	processor_set_t		processor_set;	/* assigned set */
-
-	int			current_pri;	/* priority of current thread */
-	sfi_class_id_t		current_sfi_class;	/* SFI class of current thread */
-	perfcontrol_class_t	current_perfctl_class;	/* Perfcontrol class for current thread */
-	int                     starting_pri;       /* priority of current thread as it was when scheduled */
-	pset_cluster_type_t	current_recommended_pset_type;	/* Cluster type recommended for current thread */
-	int			cpu_id;			/* platform numeric id */
-
-	timer_call_data_t	quantum_timer;	/* timer for quantum expiration */
-	uint64_t			quantum_end;	/* time when current quantum ends */
-	uint64_t			last_dispatch;	/* time of last dispatch */
-
-	uint64_t			deadline;		/* current deadline */
-	boolean_t               first_timeslice;                /* has the quantum expired since context switch */
-
-#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_MULTIQ)
-	struct run_queue	runq;			/* runq for this processor */
-#endif
-
-#if defined(CONFIG_SCHED_TRADITIONAL)
-	int					runq_bound_count; /* # of threads bound to this processor */
-#endif
-#if defined(CONFIG_SCHED_GRRR)
-	struct grrr_run_queue	grrr_runq;      /* Group Ratio Round-Robin runq */
-#endif
-
-	processor_t			processor_primary;	/* pointer to primary processor for
-											 * secondary SMT processors, or a pointer
-											 * to ourselves for primaries or non-SMT */
-	processor_t		processor_secondary;
-	struct ipc_port *	processor_self;	/* port for operations */
-
-	processor_t			processor_list;	/* all existing processors */
-	processor_data_t	processor_data;	/* per-processor data */
-};
-
-extern processor_t		processor_list;
-decl_simple_lock_data(extern,processor_list_lock)
-
-#define MAX_SCHED_CPUS          64 /* Maximum number of CPUs supported by the scheduler.  bits.h:bitmap_*() macros need to be used to support greater than 64 */
-extern processor_t              processor_array[MAX_SCHED_CPUS]; /* array indexed by cpuid */
-
-extern uint32_t			processor_avail_count;
-
-extern processor_t		master_processor;
-
-extern boolean_t		sched_stats_active;
+#include <kern/cpu_quiesce.h>
 
 /*
  *	Processor state is accessed by locking the scheduling lock
@@ -274,6 +137,145 @@ extern boolean_t		sched_stats_active;
 #define	PROCESSOR_IDLE			4	/* Idle (available) */
 #define PROCESSOR_DISPATCHING	5	/* Dispatching (idle -> active) */
 #define	PROCESSOR_RUNNING		6	/* Normal execution */
+#define PROCESSOR_STATE_LEN             (PROCESSOR_RUNNING+1)
+
+typedef enum {
+	PSET_SMP,
+} pset_cluster_type_t;
+
+typedef bitmap_t cpumap_t;
+
+struct processor_set {
+	int                     online_processor_count;
+	int                     load_average;
+
+	int                     cpu_set_low, cpu_set_hi;
+	int                     cpu_set_count;
+	int                     last_chosen;
+	cpumap_t                cpu_bitmask;
+	cpumap_t                recommended_bitmask;
+	cpumap_t                cpu_state_map[PROCESSOR_STATE_LEN];
+	cpumap_t                primary_map;
+
+#if __SMP__
+	decl_simple_lock_data(,sched_lock)	/* lock for above */
+#endif
+
+#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_MULTIQ)
+	struct run_queue	pset_runq;      /* runq for this processor set */
+#endif
+	struct rt_queue		rt_runq;	/* realtime runq for this processor set */
+
+#if defined(CONFIG_SCHED_TRADITIONAL)
+	int					pset_runq_bound_count;
+		/* # of threads in runq bound to any processor in pset */
+#endif
+
+	/* CPUs that have been sent an unacknowledged remote AST for scheduling purposes */
+	cpumap_t			pending_AST_cpu_mask;
+#if defined(CONFIG_SCHED_DEFERRED_AST)
+	/*
+	 * A separate mask, for ASTs that we may be able to cancel.  This is dependent on
+	 * some level of support for requesting an AST on a processor, and then quashing
+	 * that request later.
+	 *
+	 * The purpose of this field (and the associated codepaths) is to infer when we
+	 * no longer need a processor that is DISPATCHING to come up, and to prevent it
+	 * from coming out of IDLE if possible.  This should serve to decrease the number
+	 * of spurious ASTs in the system, and let processors spend longer periods in
+	 * IDLE.
+	 */
+	cpumap_t			pending_deferred_AST_cpu_mask;
+#endif
+	cpumap_t			pending_spill_cpu_mask;
+
+	struct ipc_port	*	pset_self;		/* port for operations */
+	struct ipc_port *	pset_name_self;	/* port for information */
+
+	processor_set_t		pset_list;		/* chain of associated psets */
+	pset_node_t		node;
+	uint32_t		pset_cluster_id;
+	pset_cluster_type_t	pset_cluster_type;
+};
+
+extern struct processor_set	pset0;
+
+struct pset_node {
+	processor_set_t		psets;			/* list of associated psets */
+
+	pset_node_t			nodes;			/* list of associated subnodes */
+	pset_node_t			node_list;		/* chain of associated nodes */
+
+	pset_node_t			parent;
+};
+
+extern struct pset_node	pset_node0;
+
+extern queue_head_t		tasks, terminated_tasks, threads, corpse_tasks; /* Terminated tasks are ONLY for stackshot */
+extern int				tasks_count, terminated_tasks_count, threads_count;
+decl_lck_mtx_data(extern,tasks_threads_lock)
+decl_lck_mtx_data(extern,tasks_corpse_lock)
+
+struct processor {
+	int                     state;                  /* See above */
+	bool                    is_SMT;
+	bool                    is_recommended;
+	struct thread           *active_thread;         /* thread running on processor */
+	struct thread           *next_thread;           /* next thread when dispatched */
+	struct thread           *idle_thread;           /* this processor's idle thread. */
+
+	processor_set_t		processor_set;	/* assigned set */
+
+	int			current_pri;	/* priority of current thread */
+	sfi_class_id_t		current_sfi_class;	/* SFI class of current thread */
+	perfcontrol_class_t	current_perfctl_class;	/* Perfcontrol class for current thread */
+	int                     starting_pri;       /* priority of current thread as it was when scheduled */
+	pset_cluster_type_t	current_recommended_pset_type;	/* Cluster type recommended for current thread */
+	int			cpu_id;			/* platform numeric id */
+	cpu_quiescent_state_t   cpu_quiesce_state;
+	uint64_t                cpu_quiesce_last_checkin;
+
+	timer_call_data_t	quantum_timer;	/* timer for quantum expiration */
+	uint64_t			quantum_end;	/* time when current quantum ends */
+	uint64_t			last_dispatch;	/* time of last dispatch */
+
+	uint64_t			kperf_last_sample_time;	/* time of last kperf sample */
+
+	uint64_t			deadline;		/* current deadline */
+	bool                    first_timeslice;        /* has the quantum expired since context switch */
+
+#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_MULTIQ)
+	struct run_queue	runq;			/* runq for this processor */
+#endif
+
+#if defined(CONFIG_SCHED_TRADITIONAL)
+	int					runq_bound_count; /* # of threads bound to this processor */
+#endif
+#if defined(CONFIG_SCHED_GRRR)
+	struct grrr_run_queue	grrr_runq;      /* Group Ratio Round-Robin runq */
+#endif
+
+	processor_t			processor_primary;	/* pointer to primary processor for
+											 * secondary SMT processors, or a pointer
+											 * to ourselves for primaries or non-SMT */
+	processor_t		processor_secondary;
+	struct ipc_port *	processor_self;	/* port for operations */
+
+	processor_t			processor_list;	/* all existing processors */
+	processor_data_t	processor_data;	/* per-processor data */
+};
+
+extern processor_t		processor_list;
+decl_simple_lock_data(extern,processor_list_lock)
+
+#define MAX_SCHED_CPUS          64 /* Maximum number of CPUs supported by the scheduler.  bits.h:bitmap_*() macros need to be used to support greater than 64 */
+extern processor_t              processor_array[MAX_SCHED_CPUS]; /* array indexed by cpuid */
+
+extern uint32_t			processor_avail_count;
+
+extern processor_t		master_processor;
+
+extern boolean_t		sched_stats_active;
 
 extern processor_t	current_processor(void);
 
@@ -283,6 +285,12 @@ extern processor_t	current_processor(void);
 #define pset_lock(p)			simple_lock(&(p)->sched_lock)
 #define pset_unlock(p)			simple_unlock(&(p)->sched_lock)
 #define pset_lock_init(p)		simple_lock_init(&(p)->sched_lock, 0)
+#if defined(__arm__) || defined(__arm64__)
+#define pset_assert_locked(p)           LCK_SPIN_ASSERT(&(p)->sched_lock, LCK_ASSERT_OWNED)
+#else
+/* See <rdar://problem/39630910> pset_lock() should be converted to use lck_spin_lock() instead of simple_lock() */
+#define pset_assert_locked(p)           do { (void)p; } while(0)
+#endif
 
 #define rt_lock_lock(p)			simple_lock(&SCHED(rt_runq)(p)->rt_lock)
 #define rt_lock_unlock(p)		simple_unlock(&SCHED(rt_runq)(p)->rt_lock)
@@ -291,6 +299,7 @@ extern processor_t	current_processor(void);
 #define pset_lock(p)			do { (void)p; } while(0)
 #define pset_unlock(p)			do { (void)p; } while(0)
 #define pset_lock_init(p)		do { (void)p; } while(0)
+#define pset_assert_locked(p)           do { (void)p; } while(0)
 
 #define rt_lock_lock(p)			do { (void)p; } while(0)
 #define rt_lock_unlock(p)		do { (void)p; } while(0)
@@ -368,6 +377,40 @@ extern void processor_state_update_from_thread(processor_t processor, thread_t t
 extern void processor_state_update_explicit(processor_t processor, int pri,
 	sfi_class_id_t sfi_class, pset_cluster_type_t pset_type, 
 	perfcontrol_class_t perfctl_class);
+
+#define PSET_LOAD_NUMERATOR_SHIFT   16
+#define PSET_LOAD_FRACTIONAL_SHIFT   4
+
+inline static int
+sched_get_pset_load_average(processor_set_t pset)
+{
+	return pset->load_average >> (PSET_LOAD_NUMERATOR_SHIFT - PSET_LOAD_FRACTIONAL_SHIFT);
+}
+extern void sched_update_pset_load_average(processor_set_t pset);
+
+inline static void
+pset_update_processor_state(processor_set_t pset, processor_t processor, uint new_state)
+{
+	pset_assert_locked(pset);
+
+	uint old_state = processor->state;
+	uint cpuid = processor->cpu_id;
+
+	assert(processor->processor_set == pset);
+	assert(bit_test(pset->cpu_bitmask, cpuid));
+
+	assert(old_state < PROCESSOR_STATE_LEN);
+	assert(new_state < PROCESSOR_STATE_LEN);
+
+	processor->state = new_state;
+
+	bit_clear(pset->cpu_state_map[old_state], cpuid);
+	bit_set(pset->cpu_state_map[new_state], cpuid);
+
+	if ((old_state == PROCESSOR_RUNNING) || (new_state == PROCESSOR_RUNNING)) {
+		sched_update_pset_load_average(pset);
+	}
+}
 
 #else	/* MACH_KERNEL_PRIVATE */
 

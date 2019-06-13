@@ -80,6 +80,7 @@ void	IOLockWakeup(IOLock * lock, void *event, bool oneThread)
 	thread_wakeup_prim((event_t) event, oneThread, THREAD_AWAKENED);
 }   
 
+
 #if defined(__x86_64__)
 /*
  * For backwards compatibility, kexts built against pre-Darwin 14 headers will bind at runtime to this function,
@@ -307,6 +308,30 @@ lck_spin_t * IOSimpleLockGetMachLock( IOSimpleLock * lock)
 {
     return( (lck_spin_t *)lock);
 }
+
+#ifndef IOLOCKS_INLINE
+/*
+ * Lock assertions
+ */
+
+void
+IOLockAssert(IOLock * lock, IOLockAssertState type)
+{
+    LCK_MTX_ASSERT(lock, type);
+}
+
+void
+IORWLockAssert(IORWLock * lock, IORWLockAssertState type)
+{
+    LCK_RW_ASSERT(lock, type);
+}
+
+void
+IOSimpleLockAssert(IOSimpleLock *lock, IOSimpleLockAssertState type)
+{
+    LCK_SPIN_ASSERT(l, type);
+}
+#endif /* !IOLOCKS_INLINE */
 
 } /* extern "C" */
 

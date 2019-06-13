@@ -1124,7 +1124,8 @@ struct arm64_decode_entry arm64_decode_table[] = {
 		{ .mask = FASTTRAP_ARM64_OP_MASK_ADRP, 		.value = FASTTRAP_ARM64_OP_VALUE_ADRP, 		.type = FASTTRAP_T_ARM64_ADRP },
 		{ .mask = FASTTRAP_ARM64_OP_MASK_ADR, 		.value = FASTTRAP_ARM64_OP_VALUE_ADR, 		.type = FASTTRAP_T_ARM64_ADR },
 		{ .mask = FASTTRAP_ARM64_OP_MASK_PRFM,		.value = FASTTRAP_ARM64_OP_VALUE_PRFM, 		.type = FASTTRAP_T_ARM64_PRFM },
-		{ .mask = FASTTRAP_ARM64_OP_MASK_EXCL_MEM,	.value = FASTTRAP_ARM64_OP_VALUE_EXCL_MEM, 	.type = FASTTRAP_T_ARM64_EXCLUSIVE_MEM }}; 
+		{ .mask = FASTTRAP_ARM64_OP_MASK_EXCL_MEM,	.value = FASTTRAP_ARM64_OP_VALUE_EXCL_MEM, 	.type = FASTTRAP_T_ARM64_EXCLUSIVE_MEM },
+		{ .mask = FASTTRAP_ARM64_OP_MASK_RETAB, 	.value = FASTTRAP_ARM64_OP_VALUE_RETAB, 	.type = FASTTRAP_T_ARM64_RETAB }};
 
 #define NUM_DECODE_ENTRIES (sizeof(arm64_decode_table) / sizeof(struct arm64_decode_entry))
 

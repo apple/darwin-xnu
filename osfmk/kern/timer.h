@@ -56,7 +56,7 @@
 /*
  */
 
-#ifndef	_KERN_TIMER_H_
+#ifndef _KERN_TIMER_H_
 #define _KERN_TIMER_H_
 
 #include <kern/kern_types.h>
@@ -80,85 +80,78 @@ extern int precise_user_kernel_time;
  * thread-local value (or in kernel debugger context). In the future,
  * we make take into account task-level or thread-level policy.
  */
-#define use_precise_user_kernel_time(thread) ( precise_user_kernel_time ) 
+#define use_precise_user_kernel_time(thread) (precise_user_kernel_time)
 
 /*
- *	Definitions for high resolution timers.  A check
- *	word on the high portion allows atomic updates.
+ * Definitions for high resolution timers.
  */
 
 struct timer {
-	uint64_t	tstamp;
-#if	defined(__LP64__)
-	uint64_t	all_bits;
-#else
-	uint32_t	low_bits;
-	uint32_t	high_bits;
-	uint32_t	high_bits_check;
-#endif
+	uint64_t tstamp;
+#if defined(__LP64__)
+	uint64_t all_bits;
+#else /* defined(__LP64__) */
+	/* A check word on the high portion allows atomic updates. */
+	uint32_t low_bits;
+	uint32_t high_bits;
+	uint32_t high_bits_check;
+#endif /* !defined(__LP64__) */
 };
 
-typedef struct timer	timer_data_t, *timer_t;
+typedef struct timer timer_data_t, *timer_t;
 
 /*
- *	Exported kernel interface to timers
+ * Initialize the `timer`.
  */
-
-/* Start a timer by setting the timestamp */
-extern void		timer_start(
-					timer_t		timer,
-					uint64_t	tstamp);
-
-/* Stop a timer by updating from the timestamp */
-extern void		timer_stop(
-					timer_t		timer,
-					uint64_t	tstamp);
-
-/* Update the timer and start a new one */
-extern void		timer_switch(
-					timer_t		timer,
-					uint64_t	tstamp,
-					timer_t		new_timer);
-
-/* Update the thread timer at an event */
-extern void		thread_timer_event(
-					uint64_t	tstamp,
-					timer_t		new_timer);
-
-/* Initialize a timer */
-extern void		timer_init(
-					timer_t		timer);
-
-/* Update a saved timer value and return delta to current value */
-extern uint64_t	timer_delta(
-					timer_t		timer,
-					uint64_t	*save);
-
-/* Advance a timer by a 64 bit value */
-extern void		timer_advance(
-					timer_t		timer,
-					uint64_t	delta);
+void timer_init(timer_t timer);
 
 /*
- *	Exported hardware interface to timers
+ * Start the `timer` at time `tstamp`.
  */
+void timer_start(timer_t timer, uint64_t tstamp);
 
-/* Read timer value */
-#if	defined(__LP64__)
-static inline uint64_t timer_grab(
-					timer_t		timer)
+/*
+ * Stop the `timer` and update it with time `tstamp`.
+ */
+void timer_stop(timer_t timer, uint64_t tstamp);
+
+/*
+ * Update the `timer` at time `tstamp`, leaving it running.
+ */
+void timer_update(timer_t timer, uint64_t tstamp);
+
+/*
+ * Update the `timer` with time `tstamp` and start `new_timer`.
+ */
+void timer_switch(timer_t timer, uint64_t tstamp, timer_t new_timer);
+
+/*
+ * Update the thread timer at an "event," like a context switch, at time
+ * `tstamp`.  This stops the current timer and starts the `new_timer` running.
+ *
+ * Must be called with interrupts disabled.
+ */
+void processor_timer_switch_thread(uint64_t tstamp, timer_t new_timer);
+
+/*
+ * Return the difference between the `timer` and a previous value pointed to by
+ * `prev_in_cur_out`.  Store the current value of the timer to
+ * `prev_in_cur_out`.
+ */
+uint64_t timer_delta(timer_t timer, uint64_t *prev_in_cur_out);
+
+/*
+ * Read the accumulated time of `timer`.
+ */
+#if defined(__LP64__)
+static inline
+uint64_t
+timer_grab(timer_t timer)
 {
 	return timer->all_bits;
 }
-#else
-extern uint64_t	timer_grab(
-					timer_t		timer);
+#else /* defined(__LP64__) */
+uint64_t timer_grab(timer_t timer);
+#endif /* !defined(__LP64__) */
 
-/* Update timer value */
-extern void		timer_update(
-					timer_t		timer,
-					uint32_t	new_high,
-					uint32_t	new_low);
-#endif	/* defined(__LP64__) */
-
-#endif	/* _KERN_TIMER_H_ */
+#endif /* _KERN_TIMER_H_ */

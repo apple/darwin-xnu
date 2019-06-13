@@ -12,8 +12,13 @@
 #define _CORECRYPTO_CC_H_
 
 #include <corecrypto/cc_config.h>
+#include <corecrypto/cc_error.h>
 #include <string.h>
 #include <stdint.h>
+
+/* Provide a general purpose macro concat method. */
+#define cc_concat_(a, b) a##b
+#define cc_concat(a, b) cc_concat_(a, b)
 
 /* Manage asserts here because a few functions in header public files do use asserts */
 #define cc_assert(x) assert(x)
@@ -24,6 +29,10 @@
 #else
 #include <assert.h>
 #endif
+
+/* Provide a static assert that can be used to create compile-type failures. */
+#define cc_static_assert(e,m)                                               \
+    ;enum { cc_concat(static_assert_, __COUNTER__) = 1/(int)(!!(e)) }
 
 /* Declare a struct element with a guarenteed alignment of _alignment_.
    The resulting struct can be used to create arrays that are aligned by
@@ -61,12 +70,12 @@ uint8_t b[_alignment_]; \
  @param len number of bytes to be cleared in dst
  @param dst input array
  */
-CC_NONNULL2
+CC_NONNULL((2))
 void cc_clear(size_t len, void *dst);
 
 #define cc_copy(_size_, _dst_, _src_) memcpy(_dst_, _src_, _size_)
 
-CC_INLINE CC_NONNULL2 CC_NONNULL3 CC_NONNULL4
+CC_INLINE CC_NONNULL((2, 3, 4))
 void cc_xor(size_t size, void *r, const void *s, const void *t) {
     uint8_t *_r=(uint8_t *)r;
     const uint8_t *_s=(const uint8_t *)s;
@@ -84,7 +93,7 @@ void cc_xor(size_t size, void *r, const void *s, const void *t) {
  @param ptr2 input array
  @return  returns 0 if the num bytes starting at ptr1 are identical to the num bytes starting at ptr2 and 1 if they are different or if num is 0 (empty arrays).
  */
-CC_NONNULL2 CC_NONNULL3
+CC_NONNULL((2, 3))
 int cc_cmp_safe (size_t num, const void * ptr1, const void * ptr2);
 
 /* Exchange S and T of any type.  NOTE: Both and S and T are evaluated

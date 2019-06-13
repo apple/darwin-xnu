@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -217,6 +217,58 @@ do { \
 	goto out;		/* XXX: we can't use 'break' here */ \
 } while (0)
 
+
+struct ifaddr *
+in6_selectsrc_core_ifa(struct sockaddr_in6 *addr, struct ifnet *ifp, int srcsel_debug) {
+	int err = 0;
+	struct ifnet *src_ifp = NULL;
+	struct in6_addr src_storage = {};
+	struct in6_addr *in6 = NULL;
+	struct ifaddr *ifa = NULL;
+
+	if((in6 = in6_selectsrc_core(addr,
+	    (ip6_prefer_tempaddr ? IPV6_SRCSEL_HINT_PREFER_TMPADDR : 0),
+	    ifp, 0, &src_storage, &src_ifp, &err, &ifa)) == NULL) {
+		if (err == 0)
+			err = EADDRNOTAVAIL;
+		VERIFY(src_ifp == NULL);
+		if (ifa != NULL) {
+			IFA_REMREF(ifa);
+			ifa = NULL;
+		}
+		goto done;
+	}
+
+	if (src_ifp != ifp) {
+		if (err == 0)
+			err = ENETUNREACH;
+		if (ifa != NULL) {
+			IFA_REMREF(ifa);
+			ifa = NULL;
+		}
+		goto done;
+	}
+
+	VERIFY(ifa != NULL);
+	ifnet_lock_shared(ifp);
+	if ((ifa->ifa_debug & IFD_DETACHING) != 0) {
+		err = EHOSTUNREACH;
+		ifnet_lock_done(ifp);
+		if (ifa != NULL) {
+			IFA_REMREF(ifa);
+			ifa = NULL;
+		}
+		goto done;
+	}
+	ifnet_lock_done(ifp);
+
+done:
+	SASEL_LOG("Returned with error: %d", err);
+	if (src_ifp != NULL)
+		ifnet_release(src_ifp);
+	return (ifa);
+}
+
 struct in6_addr *
 in6_selectsrc_core(struct sockaddr_in6 *dstsock, uint32_t hint_mask,
     struct ifnet *ifp, int srcsel_debug, struct in6_addr *src_storage,
@@ -273,6 +325,15 @@ in6_selectsrc_core(struct sockaddr_in6 *dstsock, uint32_t hint_mask,
 			    s_src, sizeof (s_src));
 
 		IFA_LOCK(&ia->ia_ifa);
+
+		/*
+		 * Simply skip addresses reserved for CLAT46
+		 */
+		if (ia->ia6_flags & IN6_IFF_CLAT46) {
+			SASEL_LOG("NEXT ia %s address on ifp1 %s skipped as it is "
+			    "reserved for CLAT46", s_src, ifp1->if_xname);
+			goto next;
+		}
 
 		/*
 		 * XXX By default we are strong end system and will
@@ -554,12 +615,17 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	struct ifnet *ifp = NULL;
 	struct in6_pktinfo *pi = NULL;
 	struct ip6_moptions *mopts;
-	struct ip6_out_args ip6oa = { ifscope, { 0 }, IP6OAF_SELECT_SRCIF, 0,
-	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
+	struct ip6_out_args ip6oa;
 	boolean_t inp_debug = FALSE;
 	uint32_t hint_mask = 0;
 	int prefer_tempaddr = 0;
 	struct ifnet *sifp = NULL;
+
+	bzero(&ip6oa, sizeof(ip6oa));
+	ip6oa.ip6oa_boundif = ifscope;
+	ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF;
+	ip6oa.ip6oa_sotc = SO_TC_UNSPEC;
+	ip6oa.ip6oa_netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 	*errorp = 0;
 	if (ifpp != NULL)
@@ -630,7 +696,7 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 			goto done;
 		}
 		IFA_LOCK_SPIN(&ia6->ia_ifa);
-		if ((ia6->ia6_flags & (IN6_IFF_ANYCAST | IN6_IFF_NOTREADY)) ||
+		if ((ia6->ia6_flags & (IN6_IFF_ANYCAST | IN6_IFF_NOTREADY | IN6_IFF_CLAT46)) ||
 		    (inp && inp_restricted_send(inp, ia6->ia_ifa.ifa_ifp))) {
 			IFA_UNLOCK(&ia6->ia_ifa);
 			IFA_REMREF(&ia6->ia_ifa);
@@ -1365,13 +1431,14 @@ int
 in6_pcbsetport(struct in6_addr *laddr, struct inpcb *inp, struct proc *p,
     int locked)
 {
-#pragma unused(laddr)
 	struct socket *so = inp->inp_socket;
 	u_int16_t lport = 0, first, last, *lastport;
 	int count, error = 0, wild = 0;
+	boolean_t counting_down;
 	bool found;
 	struct inpcbinfo *pcbinfo = inp->inp_pcbinfo;
 	kauth_cred_t cred;
+#pragma unused(laddr)
 	if (!locked) { /* Make sure we don't run into a deadlock: 4052373 */
 		if (!lck_rw_try_lock_exclusive(pcbinfo->ipi_lock)) {
 			socket_unlock(inp->inp_socket, 0);
@@ -1423,63 +1490,43 @@ in6_pcbsetport(struct in6_addr *laddr, struct inpcb *inp, struct proc *p,
 	/*
 	 * Simple check to ensure all ports are not used up causing
 	 * a deadlock here.
-	 *
-	 * We split the two cases (up and down) so that the direction
-	 * is not being tested on each round of the loop.
 	 */
+	found = false;
 	if (first > last) {
-		/*
-		 * counting down
-		 */
+		/* counting down */
 		count = first - last;
-		found = false;
-
-		do {
-			if (count-- < 0) {	/* completely used? */
-				/*
-				 * Undo any address bind that may have
-				 * occurred above.
-				 */
-				inp->in6p_laddr = in6addr_any;
-				inp->in6p_last_outifp = NULL;
-				if (!locked)
-					lck_rw_done(pcbinfo->ipi_lock);
-				return (EAGAIN);
-			}
-			--*lastport;
-			if (*lastport > first || *lastport < last)
-				*lastport = first;
-			lport = htons(*lastport);
-
-			found = in6_pcblookup_local(pcbinfo, &inp->in6p_laddr,
-			    lport, wild) == NULL;
-		} while (!found);
+		counting_down = TRUE;
 	} else {
 		/* counting up */
 		count = last - first;
-		found = false;
-
-		do {
-			if (count-- < 0) {	/* completely used? */
-				/*
-				 * Undo any address bind that may have
-				 * occurred above.
-				 */
-				inp->in6p_laddr = in6addr_any;
-				inp->in6p_last_outifp = NULL;
-				if (!locked)
-					lck_rw_done(pcbinfo->ipi_lock);
-				return (EAGAIN);
+		counting_down = FALSE;
+	}
+	do {
+		if (count-- < 0) {	/* completely used? */
+			/*
+			 * Undo any address bind that may have
+			 * occurred above.
+			 */
+			inp->in6p_laddr = in6addr_any;
+			inp->in6p_last_outifp = NULL;
+			if (!locked)
+				lck_rw_done(pcbinfo->ipi_lock);
+			return (EAGAIN);
+		}
+		if (counting_down) {
+			--*lastport;
+			if (*lastport > first || *lastport < last) {
+				*lastport = first;
 			}
+		} else {
 			++*lastport;
 			if (*lastport < first || *lastport > last)
 				*lastport = first;
-			lport = htons(*lastport);
-
-			found = in6_pcblookup_local(pcbinfo, &inp->in6p_laddr,
-			    lport, wild) == NULL;
-		} while (!found);
-	}
+		}
+		lport = htons(*lastport);
+		found = (in6_pcblookup_local(pcbinfo, &inp->in6p_laddr,
+					     lport, wild) == NULL);
+	} while (!found);
 
 	inp->inp_lport = lport;
 	inp->inp_flags |= INP_ANONPORT;

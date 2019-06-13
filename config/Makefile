@@ -50,6 +50,10 @@ EXPORTS_FILES = $(foreach symbolset,$(SYMBOL_COMPONENT_LIST),$(symbolset).export
 
 SYMBOL_SET_BUILD = $(foreach symbolset, $(SYMBOL_COMPONENT_LIST), $(OBJPATH)/$(symbolset).symbolset)
 
+ifeq ($(KASAN),1)
+KASAN_EXPORTS = $(SRCROOT)/san/Kasan_kasan.exports
+endif
+
 $(OBJPATH)/allsymbols: $(OBJPATH)/$(KERNEL_FILE_NAME)
 	$(_v)$(NM) -gj $< > $@
 
@@ -140,9 +144,12 @@ endif
 
 
 $(OBJPATH)/all-kpi.exp: $(EXPORTS_FILES)
-	$(_v)$(SOURCE)/generate_linker_exports.sh $@ $+
+	$(_v)$(SOURCE)/generate_linker_exports.sh $@ $+ $(KASAN_EXPORTS)
 
-do_build_all:: $(OBJPATH)/all-kpi.exp
+$(OBJPATH)/all-alias.exp: $(EXPORTS_FILES)
+	$(_v)$(SOURCE)/generate_linker_aliases.sh $@ $+ $(KASAN_EXPORTS)
+
+do_build_all:: $(OBJPATH)/all-kpi.exp $(OBJPATH)/all-alias.exp
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

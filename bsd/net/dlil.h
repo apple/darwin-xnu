@@ -326,6 +326,8 @@ extern void dlil_proto_unplumb_all(ifnet_t);
 extern void dlil_post_msg(struct ifnet *, u_int32_t, u_int32_t,
     struct net_event_data *, u_int32_t);
 
+extern void dlil_post_sifflags_msg(struct ifnet *);
+
 extern int dlil_post_complete_msg(struct ifnet *, struct kev_msg *);
 
 extern int dlil_alloc_local_stats(struct ifnet *);
@@ -334,7 +336,7 @@ extern int dlil_alloc_local_stats(struct ifnet *);
 /*
  * dlil_if_acquire is obsolete. Use ifnet_allocate.
  */
-extern int dlil_if_acquire(u_int32_t, const void *, size_t, struct ifnet **);
+extern int dlil_if_acquire(u_int32_t, const void *, size_t, const char *, struct ifnet **);
 /*
  * dlil_if_release is obsolete. The equivalent is called automatically when
  * an interface is detached.

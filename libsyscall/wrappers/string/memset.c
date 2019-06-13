@@ -40,9 +40,9 @@
 // a recursive call to bzero.
 __attribute__((visibility("hidden")))
 void
-bzero(void *dst0, size_t length)
+_libkernel_bzero(void *dst0, size_t length)
 {
-    return (void)memset(dst0, 0, length);
+    return (void)_libkernel_memset(dst0, 0, length);
 }
 
 #define	RETURN	return (dst0)
@@ -51,7 +51,7 @@ bzero(void *dst0, size_t length)
 
 __attribute__((visibility("hidden")))
 void *
-memset(void *dst0, int c0, size_t length)
+_libkernel_memset(void *dst0, int c0, size_t length)
 {
 	size_t t;
 	u_int c;

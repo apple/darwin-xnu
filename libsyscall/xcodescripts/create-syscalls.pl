@@ -94,6 +94,17 @@ my %TypeBytes = (
     'uuid_t'		=> 4,
 );
 
+# Types that potentially have different sizes in user-space compared to
+# kernel-space as well as whether the value should be sign/zero-extended when
+# passing the user/kernel boundary.
+my %UserKernelMismatchTypes = (
+    'long'          => 'SIGN_EXTEND',
+    'size_t'        => 'ZERO_EXTEND',
+    'u_long'        => 'ZERO_EXTEND',
+    'user_size_t'   => 'ZERO_EXTEND',
+    'user_ssize_t'  => 'SIGN_EXTEND'
+);
+
 # Moving towards storing all data in this hash, then we always know
 # if data is aliased or not, or promoted or not.
 my %Symbols = (
@@ -106,6 +117,7 @@ my %Symbols = (
         nargs => 0,
         bytes => 0,
         aliases => {},
+        mismatch_args => {}, # Arguments that might need to be zero/sign-extended
     },
 );
 
@@ -178,12 +190,15 @@ sub readMaster {
         $args =~ s/\s+$//;
         my $argbytes = 0;
         my $nargs = 0;
+        my %mismatch_args;
         if($args ne '' && $args ne 'void') {
             my @a = split(',', $args);
             $nargs = scalar(@a);
-            # Calculate the size of all the arguments (only used for i386)
+            my $index = 0;
             for my $type (@a) {
                 $type =~ s/\s*\w+$//; # remove the argument name
+
+                # Calculate the size of all the arguments (only used for i386)
                 if($type =~ /\*$/) {
                     $argbytes += 4; # a pointer type
                 } else {
@@ -192,6 +207,12 @@ sub readMaster {
                     die "$MyName: $name: unknown type '$type'\n" unless defined($b);
                     $argbytes += $b;
                 }
+                # Determine which arguments might need to be zero/sign-extended
+                if(exists $UserKernelMismatchTypes{$type}) {
+                    $mismatch_args{$index} = $UserKernelMismatchTypes{$type};
+                }
+
+                $index++;
             }
         }
         $Symbols{$name} = {
@@ -203,6 +224,7 @@ sub readMaster {
             nargs => $nargs,
             bytes => $argbytes,
             aliases => {},
+            mismatch_args => \%mismatch_args, # Arguments that might need to be zero/sign-extended
             except => [],
         };
     }
@@ -301,23 +323,47 @@ sub writeStubForSymbol {
     my ($f, $symbol) = @_;
     
     my @conditions;
+    my $has_arm64 = 0;
     for my $subarch (@Architectures) {
         (my $arch = $subarch) =~ s/arm(v.*)/arm/;
         $arch =~ s/x86_64(.*)/x86_64/;
         $arch =~ s/arm64(.*)/arm64/;
         push(@conditions, "defined(__${arch}__)") unless grep { $_ eq $arch } @{$$symbol{except}};
+
+        if($arch == 'arm64') {
+            $has_arm64 = 1 unless grep { $_ eq $arch } @{$$symbol{except}};
+        }
     }
 
 	my %is_cancel;
 	for (@Cancelable) { $is_cancel{$_} = 1 };
-    
+
     print $f "#define __SYSCALL_32BIT_ARG_BYTES $$symbol{bytes}\n";
     print $f "#include \"SYS.h\"\n\n";
+
     if (scalar(@conditions)) {
         printf $f "#ifndef SYS_%s\n", $$symbol{syscall};
         printf $f "#error \"SYS_%s not defined. The header files libsyscall is building against do not match syscalls.master.\"\n", $$symbol{syscall};
-        printf $f "#endif\n\n";    
-        my $nc = ($is_cancel{$$symbol{syscall}} ? "cerror" : "cerror_nocancel");
+        printf $f "#endif\n\n";
+    }
+
+    my $nc = ($is_cancel{$$symbol{syscall}} ? "cerror" : "cerror_nocancel");
+
+    if($has_arm64) {
+        printf $f "#if defined(__arm64__)\n";
+        printf $f "MI_ENTRY_POINT(%s)\n", $$symbol{asm_sym};
+        if(keys %{$$symbol{mismatch_args}}) {
+            while(my($argnum, $extend) = each %{$$symbol{mismatch_args}}) {
+                printf $f "%s(%d)\n", $extend, $argnum;
+            }
+        }
+
+        printf $f "SYSCALL_NONAME(%s, %d, %s)\n", $$symbol{syscall}, $$symbol{nargs}, $nc;
+        printf $f "ret\n";
+        printf $f "#else\n";
+    }
+
+    if (scalar(@conditions)) {
         printf $f "#if " . join(" || ", @conditions) . "\n";
         printf $f "__SYSCALL2(%s, %s, %d, %s)\n", $$symbol{asm_sym}, $$symbol{syscall}, $$symbol{nargs}, $nc;
         if (!$$symbol{is_private} && (scalar(@conditions) < scalar(@Architectures))) {
@@ -328,6 +374,10 @@ sub writeStubForSymbol {
     } else {
         # actually this isnt an inconsistency. kernel can expose what it wants but if all our arches
         # override it we need to honour that.
+    }
+
+    if($has_arm64) {
+        printf $f "#endif\n\n";
     }
 }
 

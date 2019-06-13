@@ -41,6 +41,7 @@
 #include <net/classq/classq.h>
 #include <pexpert/pexpert.h>
 #include <net/classq/classq_sfb.h>
+#include <net/classq/classq_fq_codel.h>
 #include <net/pktsched/pktsched.h>
 #include <net/pktsched/pktsched_fq_codel.h>
 
@@ -792,4 +793,10 @@ ifclassq_calc_update_interval(u_int64_t *update_interval)
 		uint = IFQ_UPDATE_INTERVAL;
 
 	*update_interval = uint;
+}
+
+void
+ifclassq_reap_caches(boolean_t purge)
+{
+	fq_codel_reap_caches(purge);
 }

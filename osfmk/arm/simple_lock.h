@@ -78,7 +78,15 @@ extern void	hw_lock_bit(
 				hw_lock_bit_t *,
 				unsigned int);
 
+extern void	hw_lock_bit_nopreempt(
+				hw_lock_bit_t *,
+				unsigned int);
+
 extern void	hw_unlock_bit(
+				hw_lock_bit_t *,
+				unsigned int);
+
+extern void	hw_unlock_bit_nopreempt(
 				hw_lock_bit_t *,
 				unsigned int);
 
@@ -179,8 +187,11 @@ extern void	arm_usimple_lock_init(simple_lock_t, __unused unsigned short);
 
 #define simple_lock_init(l,t)	arm_usimple_lock_init(l,t)
 #define simple_lock(l)			lck_spin_lock(l)
+#define simple_lock_nopreempt(l)	lck_spin_lock_nopreempt(l)
 #define simple_unlock(l)		lck_spin_unlock(l)
+#define simple_unlock_nopreempt(l)	lck_spin_unlock_nopreempt(l)
 #define simple_lock_try(l)		lck_spin_try_lock(l)
+#define simple_lock_try_nopreempt(l)	lck_spin_try_lock_nopreempt(l)
 #define simple_lock_try_lock_loop(l)	simple_lock(l)
 #define simple_lock_addr(l)		(&(l))
 #define simple_lock_assert(l,t)	lck_spin_assert(l,t)

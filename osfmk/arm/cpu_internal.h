@@ -57,7 +57,7 @@ extern void			cpu_signal_cancel(
 
 #define SIGPnop			0x00000000U		/* Send IPI with no service */
 #define SIGPdec			0x00000001U		/* Request decremeter service */
-#define	SIGPchud		0x00000002U		/* CHUD CPU Signal request types */
+/* 0x2U unused */
 #define SIGPxcall		0x00000004U		/* Call a function on a processor */
 #define SIGPast			0x00000008U		/* Request AST check */
 #define SIGPdebug		0x00000010U		/* Request Debug call */
@@ -67,13 +67,11 @@ extern void			cpu_signal_cancel(
 
 #define SIGPdisabled		0x80000000U		/* Signal disabled */
 
-extern void * 					chudxnu_cpu_alloc(
-										boolean_t boot_processor);
-
-extern void						chudxnu_cpu_free(
-										void *per_proc_chud);
-
 extern unsigned int real_ncpus;
+
+#if defined(CONFIG_XNUPOST) && __arm64__ 
+extern void arm64_ipi_test(void);
+#endif /* defined(CONFIG_XNUPOST) && __arm64__ */
 
 
 #endif	/* _ARM_CPU_INTERNAL_H_ */

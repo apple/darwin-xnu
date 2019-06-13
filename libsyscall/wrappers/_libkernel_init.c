@@ -46,6 +46,7 @@ void* (*_dlsym)(void*, const char*) __attribute__((visibility("hidden")));
 __attribute__((visibility("hidden")))
 _libkernel_functions_t _libkernel_functions;
 
+
 void
 __libkernel_init(_libkernel_functions_t fns,
 		const char *envp[] __attribute__((unused)),

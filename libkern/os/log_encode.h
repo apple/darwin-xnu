@@ -27,6 +27,11 @@
 #include "log_encode_types.h"
 #include <sys/param.h>
 
+#if __has_feature(ptrauth_calls)
+#include <mach/vm_param.h>
+#include <ptrauth.h>
+#endif /* __has_feature(ptrauth_calls) */
+
 #ifdef KERNEL
 #define isdigit(ch) (((ch) >= '0') && ((ch) <= '9'))
 extern boolean_t doprnt_hide_pointers;
@@ -156,13 +161,21 @@ _os_log_encode_arg(void *arg, uint16_t arg_len, os_log_value_type_t ctype, bool 
         unsigned long long value = 0;
         memcpy(&value, arg, arg_len);
 
+#if __has_feature(ptrauth_calls)
+			/**
+			 * Strip out the pointer authentication code before
+			 * checking whether the pointer is a kernel address.
+			 */
+			value = (unsigned long long)VM_KERNEL_STRIP_PTR(value);
+#endif /* __has_feature(ptrauth_calls) */
+
         if (value >= VM_MIN_KERNEL_AND_KEXT_ADDRESS && value <= VM_MAX_KERNEL_ADDRESS) {
             is_private = true;
             bzero(arg, arg_len);
         }
     }
 #endif
-    
+
     content->type = ctype;
     content->flags = (is_private ? OS_LOG_CONTENT_FLAG_PRIVATE : 0);
     

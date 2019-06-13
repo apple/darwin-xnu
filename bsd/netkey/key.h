@@ -57,7 +57,9 @@ extern struct secpolicy *key_allocsp(struct secpolicyindex *, u_int);
 extern struct secasvar *key_allocsa_policy(struct secasindex *);
 extern struct secpolicy *key_gettunnel(struct sockaddr *,
 	struct sockaddr *, struct sockaddr *, struct sockaddr *);
-extern struct secasvar *key_alloc_outbound_sav_for_interface(ifnet_t, int);
+extern struct secasvar *key_alloc_outbound_sav_for_interface(ifnet_t interface, int family,
+															 struct sockaddr *src,
+															 struct sockaddr *dst);
 extern int key_checkrequest(struct ipsecrequest *isr, struct secasindex *,
 	struct secasvar **sav);
 extern struct secasvar *key_allocsa(u_int, caddr_t, caddr_t,

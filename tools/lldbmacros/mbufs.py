@@ -626,6 +626,28 @@ def GetMbufTraceLeak(trace):
                 cnt += 1
     return out_string
 
+@lldb_command('mbuf_largefailures')
+def MbufLargeFailures(cmd_args=None):
+    """ Print the largest allocation failures
+    """
+    topcnt = 0
+    if (int(len(cmd_args)) > 0 and int(cmd_args[0]) < 5):
+        maxcnt = cmd_args[0]
+    else:
+        maxcnt = 5
+    while (topcnt < maxcnt):
+        trace = kern.globals.mtracelarge_table[topcnt]
+        if (trace.size == 0):
+            topcnt += 1
+            continue
+        print str(trace.size)
+        if (trace.depth != 0):
+            cnt = 0
+            while (cnt < trace.depth):
+                print str(cnt + 1) + ": " + GetPc(trace.addr[cnt])
+                cnt += 1
+        topcnt += 1
+
 
 # Macro: mbuf_traceleak
 @lldb_command('mbuf_traceleak')
@@ -758,3 +780,12 @@ def McacheShowCache(cmd_args=None):
     out_string += "Total # of objects cached:\t\t" + str(total) + "\n"
     print out_string
 # EndMacro: mcache_showcache
+
+# Macro: mbuf_wdlog
+@lldb_command('mbuf_wdlog')
+def McacheShowCache(cmd_args=None):
+    """Display the watchdog log
+    """
+    lldb_run_command('settings set max-string-summary-length 4096')
+    print('%s' % lldb_run_command('p/s mbwdog_logging').replace("\\n","\n"))
+# EndMacro: mbuf_wdlog

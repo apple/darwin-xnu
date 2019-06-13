@@ -73,7 +73,7 @@ OS_ENUM(firehose_stream, uint8_t,
 	firehose_stream_special								= 1,
 	firehose_stream_memory								= 2,
 	firehose_stream_metadata							= 3,
-	firehose_stream_memory_high_traffic					= 4,
+	firehose_stream_signpost							= 4,
 	firehose_stream_memory_wifi							= 5,
 	firehose_stream_memory_baseband						= 6,
 
@@ -92,6 +92,7 @@ OS_ENUM(firehose_tracepoint_namespace, uint8_t,
 	firehose_tracepoint_namespace_log					= 0x04,
 	firehose_tracepoint_namespace_metadata				= 0x05,
 	firehose_tracepoint_namespace_signpost				= 0x06,
+	firehose_tracepoint_namespace_loss					= 0x07,
 );
 
 /*!
@@ -203,6 +204,7 @@ OS_ENUM(_firehose_tracepoint_flags_log, uint16_t,
 	_firehose_tracepoint_flags_log_has_subsystem		= 0x0200,
 	_firehose_tracepoint_flags_log_has_rules			= 0x0400,
 	_firehose_tracepoint_flags_log_has_oversize			= 0x0800,
+	_firehose_tracepoint_flags_log_has_context_data    	= 0x1000,
 );
 
 /*!
@@ -239,12 +241,15 @@ OS_ENUM(_firehose_tracepoint_type_signpost, firehose_tracepoint_type_t,
  *
  * @abstract
  * Flags for Log tracepoints (namespace signpost).
+ *
+ * When flags are shared with the log type, they should have the same values.
  */
 OS_ENUM(_firehose_tracepoint_flags_signpost, uint16_t,
 	_firehose_tracepoint_flags_signpost_has_private_data	= 0x0100,
 	_firehose_tracepoint_flags_signpost_has_subsystem		= 0x0200,
 	_firehose_tracepoint_flags_signpost_has_rules			= 0x0400,
 	_firehose_tracepoint_flags_signpost_has_oversize		= 0x0800,
+	_firehose_tracepoint_flags_signpost_has_context_data   	= 0x1000,
 );
 
 /* MIG firehose push reply structure */

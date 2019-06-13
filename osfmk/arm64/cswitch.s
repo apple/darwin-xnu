@@ -78,6 +78,7 @@
  *   arg1 - Scratch register
  */
 .macro	load_general_registers
+
 	ldp		x16, x17, [$0, SS64_X16]
 	ldp		x19, x20, [$0, SS64_X19]
 	ldp		x21, x22, [$0, SS64_X21]
@@ -134,14 +135,16 @@ LEXT(machine_load_context)
 	set_thread_registers 	x0, x1, x2
 	ldr		x1, [x0, TH_KSTACKPTR]				// Get top of kernel stack
 	load_general_registers 	x1, x2
-	mov		x0, xzr								// Clear argument to thread_continue
+	mov		x0, #0								// Clear argument to thread_continue
 	ret
 
 /*
- *	void Call_continuation( void (*continuation)(void), 
- *				void *param, 
- *				wait_result_t wresult, 
- *				vm_offset_t stack_ptr)
+ *  typedef void (*thread_continue_t)(void *param, wait_result_t)
+ *
+ *	void Call_continuation( thread_continue_t continuation,
+ *	            			void *param,
+ *				            wait_result_t wresult,
+ *                          bool enable interrupts)
  */
 	.text
 	.align	5
@@ -153,12 +156,21 @@ LEXT(Call_continuation)
 	/* ARM64_TODO arm loads the kstack top instead of arg4. What should we use? */
 	ldr		x5, [x4, TH_KSTACKPTR]				// Get the top of the kernel stack
 	mov		sp, x5								// Set stack pointer
+	mov		fp, #0								// Clear the frame pointer
 
-	mov		fp, xzr								// Clear the frame pointer
-	mov		x4, x0								// Load the continuation
-	mov		x0, x1								// Set the first parameter
-	mov		x1, x2								// Set the wait result arg
-	blr		x4									// Branch to the continuation
+
+    mov x20, x0  //continuation
+    mov x21, x1  //continuation parameter
+    mov x22, x2  //wait result
+
+    cbz x3, 1f
+    mov x0, #1
+    bl _ml_set_interrupts_enabled
+1:
+
+	mov		x0, x21								// Set the first parameter
+	mov		x1, x22								// Set the wait result arg
+	blr		x20									// Branch to the continuation
 	mrs		x0, TPIDR_EL1						// Get the current thread pointer
 	b		EXT(thread_terminate)				// Kill the thread
 

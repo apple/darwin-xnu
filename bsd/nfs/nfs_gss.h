@@ -54,6 +54,22 @@ enum rpcsec_gss_service {
 extern u_char krb5_mech_oid[11];
 
 
+/*
+ * RFC 2203 and friends don't define maximums for token lengths
+ * and context handles. We try to pick reasonable values here.
+ *
+ * N.B. Kerberos mech tokens can be quite large from the output
+ * of a gss_init_sec_context if it includes a large PAC.
+ */
+
+#define GSS_MAX_CTX_HANDLE_LEN		256
+#define GSS_MAX_TOKEN_LEN		64*1024
+
+/*
+ * Put a "reasonble" bound on MIC lengths
+ */
+#define GSS_MAX_MIC_LEN			2048
+
 #define GSS_MAXSEQ			0x80000000	// The biggest sequence number
 #define GSS_SVC_MAXCONTEXTS		500000		// Max contexts supported
 #define GSS_SVC_SEQWINDOW		256		// Server's sequence window

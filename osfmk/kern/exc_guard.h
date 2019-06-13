@@ -64,6 +64,8 @@
 
 /* EXC_GUARD types */
 
+#define GUARD_TYPE_NONE         0x0
+
 /*
  * Mach port guards use the exception codes like this:
  *
@@ -127,6 +129,22 @@
  */
 
 #define GUARD_TYPE_VN		0x4	/* guarded vnode */
+
+/*
+ * VM guards use the exception codes like this:
+ *
+ * code:
+ * +-------------------------------+----------------+-----------------+
+ * |[63:61] GUARD_TYPE_VIRT_MEMORY | [60:32] flavor | [31:0] unused   |
+ * +-------------------------------+----------------+-----------------+
+ *
+ * subcode:
+ * +----------------------------------------------------------------+
+ * |[63:0] offset                                                   |
+ * +----------------------------------------------------------------+
+ */
+
+#define GUARD_TYPE_VIRT_MEMORY	0x5	/* VM operation violating guard */
 
 #ifdef KERNEL
 

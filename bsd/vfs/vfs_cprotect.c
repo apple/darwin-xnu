@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -33,6 +33,9 @@
 #include <sys/content_protection.h>
 #include <libkern/crypto/sha1.h>
 #include <libkern/libkern.h>
+//for write protection
+#include <vm/vm_kern.h>
+#include <vm/vm_map.h>
 
 #define PTR_ADD(type, base, offset)		(type)((uintptr_t)(base) + (offset))
 
@@ -54,7 +57,10 @@ enum {
 	// Using AES IV context generated from key
 	CPX_IV_AES_CTX_VFS			= 0x08,
 	CPX_SYNTHETIC_OFFSET_FOR_IV = 0x10,
-    CPX_COMPOSITEKEY            = 0x20
+	CPX_COMPOSITEKEY            = 0x20, 
+	
+	//write page protection
+	CPX_WRITE_PROTECTABLE		= 0x40
 };
 
 struct cpx {
@@ -88,13 +94,59 @@ size_t cpx_sizex(const struct cpx *cpx)
 
 cpx_t cpx_alloc(size_t key_len)
 {
-	cpx_t cpx;
-
+	cpx_t cpx = NULL;
+	
+#if CONFIG_KEYPAGE_WP
+	/* 
+	 * Macs only use 1 key per volume, so force it into its own page.
+	 * This way, we can write-protect as needed.
+	 */
+	size_t cpsize = cpx_size (key_len);
+	if (cpsize < PAGE_SIZE) {
+		/* 
+		 * Don't use MALLOC to allocate the page-sized structure.  Instead, 
+		 * use kmem_alloc to bypass KASAN since we are supplying our own
+		 * unilateral write protection on this page. Note that kmem_alloc 
+		 * can block.
+		 */
+		if (kmem_alloc (kernel_map, (vm_offset_t *)&cpx, PAGE_SIZE, VM_KERN_MEMORY_FILE)) {
+			/*
+			 * returning NULL at this point (due to failed allocation) would just 
+			 * result in a panic. fall back to attempting a normal MALLOC, and don't
+			 * let the cpx get marked PROTECTABLE.
+			 */
+			MALLOC(cpx, cpx_t, cpx_size(key_len), M_TEMP, M_WAITOK);
+		}
+		else {
+			//mark the page as protectable, since kmem_alloc succeeded.
+			cpx->cpx_flags |= CPX_WRITE_PROTECTABLE;
+		}
+	}
+	else {
+		panic ("cpx_size too large ! (%lu)", cpsize);
+	}
+#else
+	/* If key page write protection disabled, just switch to kernel MALLOC */
 	MALLOC(cpx, cpx_t, cpx_size(key_len), M_TEMP, M_WAITOK);
-
+#endif
 	cpx_init(cpx, key_len);
 
 	return cpx;
+}
+
+/* this is really a void function */
+void cpx_writeprotect (cpx_t cpx) 
+{
+#if CONFIG_KEYPAGE_WP
+	void *cpxstart = (void*)cpx;
+	void *cpxend = (void*)((uint8_t*)cpx + PAGE_SIZE);
+	if (cpx->cpx_flags & CPX_WRITE_PROTECTABLE) {
+		vm_map_protect (kernel_map, (vm_map_offset_t)cpxstart, (vm_map_offset_t)cpxend, (VM_PROT_READ), FALSE);
+	}
+#else
+	(void) cpx;
+#endif
+	return;
 }
 
 #if DEBUG
@@ -104,12 +156,32 @@ static const uint32_t cpx_magic2 = 0x7870637d;		// }cpx
 
 void cpx_free(cpx_t cpx)
 {
+
 #if DEBUG
 	assert(cpx->cpx_magic1 == cpx_magic1);
 	assert(*PTR_ADD(uint32_t *, cpx, cpx_sizex(cpx) - 4) == cpx_magic2);
 #endif
+	
+#if CONFIG_KEYPAGE_WP
+	/* unprotect the page before bzeroing */
+	void *cpxstart = (void*)cpx;
+	void *cpxend = (void*)((uint8_t*)cpx + PAGE_SIZE); 
+	if (cpx->cpx_flags & CPX_WRITE_PROTECTABLE) {
+		vm_map_protect (kernel_map, (vm_map_offset_t)cpxstart, (vm_map_offset_t)cpxend, (VM_PROT_DEFAULT), FALSE);
+
+		//now zero the memory after un-protecting it
+		bzero(cpx->cpx_cached_key, cpx->cpx_max_key_len);
+
+		//If we are here, then we used kmem_alloc to get the page. Must use kmem_free to drop it.
+		kmem_free(kernel_map, (vm_offset_t)cpx, PAGE_SIZE);
+		return;
+	}
+#else 
 	bzero(cpx->cpx_cached_key, cpx->cpx_max_key_len);
 	FREE(cpx, M_TEMP);
+	return;
+#endif
+
 }
 
 void cpx_init(cpx_t cpx, size_t key_len)

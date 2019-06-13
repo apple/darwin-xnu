@@ -301,7 +301,7 @@ struct ipsecstat {
 struct ipsec_output_state {
 	int tunneled;
 	struct mbuf *m;
-	struct route ro;
+	struct route_in6 ro;
 	struct sockaddr *dst;
 	u_int outgoing_if;
 };

@@ -110,6 +110,7 @@
 #define __ARM_ENABLE_SWAP__ 1
 #define __ARM_V8_CRYPTO_EXTENSIONS__ 1
 #define __ARM64_PMAP_SUBPAGE_L1__ 1
+#define __ARM_KERNEL_PROTECT__ 1
 
 #elif defined (APPLETYPHOON)
 #define	__ARM_ARCH__	8
@@ -124,6 +125,7 @@
 #define __ARM_ENABLE_SWAP__ 1
 #define __ARM_V8_CRYPTO_EXTENSIONS__ 1
 #define __ARM64_PMAP_SUBPAGE_L1__ 1
+#define __ARM_KERNEL_PROTECT__ 1
 
 #elif defined (APPLETWISTER)
 #define	__ARM_ARCH__	8
@@ -138,7 +140,8 @@
 #define __ARM_ENABLE_SWAP__ 1
 #define __ARM_V8_CRYPTO_EXTENSIONS__ 1
 #define	__ARM_16K_PG__	1
-#define __ARM64_TWO_LEVEL_PMAP__ 1
+#define __ARM64_PMAP_SUBPAGE_L1__ 1
+#define __ARM_KERNEL_PROTECT__ 1
 
 #elif defined (APPLEHURRICANE)
 #define	__ARM_ARCH__	8
@@ -154,12 +157,56 @@
 #define __ARM_V8_CRYPTO_EXTENSIONS__ 1
 #define	__ARM_16K_PG__	1
 #define __ARM64_PMAP_SUBPAGE_L1__ 1
+#define __ARM_KERNEL_PROTECT__ 1
 #define __ARM_GLOBAL_SLEEP_BIT__ 1
 #define __ARM_PAN_AVAILABLE__ 1
 
+#elif defined (APPLEMONSOON)
+#define	__ARM_ARCH__	8
+#define __ARM_VMSA__	8
+#define	__ARM_SMP__	1
+#define	__ARM_AMP__	1
+#define	__ARM_VFP__	4
+#define __ARM_COHERENT_CACHE__ 1
+#define __ARM_COHERENT_IO__ 1
+#define	__ARM_IC_NOALIAS_ICACHE__ 1
+#define __ARM_L1_PTW__ 1
+#define __ARM_DEBUG__	7
+#define __ARM_ENABLE_SWAP__ 1
+#define __ARM_V8_CRYPTO_EXTENSIONS__ 1
+#define	__ARM_16K_PG__	1
+#define __ARM64_PMAP_SUBPAGE_L1__ 1
+#define __ARM_KERNEL_PROTECT__ 1
+#define __ARM_GLOBAL_SLEEP_BIT__ 1
+#define __ARM_PAN_AVAILABLE__ 1
+#define __ARM_WKDM_ISA_AVAILABLE__ 1
+#define __PLATFORM_WKDM_ALIGNMENT_MASK__ (0x3FULL)
+#define __PLATFORM_WKDM_ALIGNMENT_BOUNDARY__ (64)
+#define __ARM_CLUSTER_COUNT__ 2
+
+#elif defined (BCM2837)
+#define	__ARM_ARCH__	8
+#define __ARM_VMSA__	8
+#define	__ARM_SMP__ 	1
+#define	__ARM_VFP__		4
+#define __ARM_COHERENT_CACHE__ 1
+#define __ARM_L1_PTW__ 1
+#define __ARM_DEBUG__	7
+#define __ARM64_PMAP_SUBPAGE_L1__ 1
 #else
 #error processor not supported
 #endif
+
+#if __ARM_KERNEL_PROTECT__
+/*
+ * This feature is not currently implemented for 32-bit ARM CPU architectures.
+ * A discussion of this feature for 64-bit ARM CPU architectures can be found
+ * in the ARM64 version of this file.
+ */
+#if __arm__
+#error __ARM_KERNEL_PROTECT__ is not supported on ARM32
+#endif
+#endif /* __ARM_KERNEL_PROTECT__ */
 
 #if defined(ARM_BOARD_WFE_TIMEOUT_NS)
 #define __ARM_ENABLE_WFE_ 1
@@ -281,7 +328,7 @@
 
 #define	DFSR_WRITE		0x00000800	/* write data abort fault */
 
-#if defined (ARMA7) || defined (APPLE_ARM64_ARCH_FAMILY)
+#if defined (ARMA7) || defined (APPLE_ARM64_ARCH_FAMILY) || defined (BCM2837)
 
 #define TEST_FSR_VMFAULT(status)	\
 				(((status) == FSR_PFAULT)	\
@@ -291,6 +338,10 @@
 				|| ((status) == FSR_ICFAULT)	\
 				|| ((status) == FSR_SACCESS)	\
 				|| ((status) == FSR_PACCESS))
+
+#define TEST_FSR_TRANSLATION_FAULT(status)	\
+				(((status) == FSR_SFAULT)	\
+				|| ((status) == FSR_PFAULT))
 
 #else
 
@@ -450,6 +501,70 @@
 
 #define L2_SWAY	(L2_CSIZE - L2_NWAY)		/* set size 1<<L2_SWAY */
 #define L2_NSET	(L2_SWAY - L2_CLINE)		/* lines per way 1<<L2_NSET */
+
+#elif defined (APPLEMONSOON)
+
+/* I-Cache, 96KB for Monsoon, 48KB for Mistral, 6-way. */
+#define MMU_I_CLINE	6		/* cache line size as 1<<MMU_I_CLINE (64) */
+
+/* D-Cache, 64KB for Monsoon, 32KB for Mistral, 4-way. */
+#define MMU_CSIZE	16		/* cache size as 1<<MMU_CSIZE (64K) */
+#define MMU_CLINE	6		/* cache line size is 1<<MMU_CLINE (64) */
+#define MMU_NWAY	2		/* set associativity 1<<MMU_NWAY (4) */
+#define MMU_I7SET	6		/* cp15 c7 set incrementer 1<<MMU_I7SET */
+#define MMU_I7WAY	30		/* cp15 c7 way incrementer 1<<MMU_I7WAY */
+#define MMU_I9WAY	30		/* cp15 c9 way incrementer 1<<MMU_I9WAY */
+
+#define MMU_SWAY	(MMU_CSIZE - MMU_NWAY)	/* set size 1<<MMU_SWAY */
+#define MMU_NSET	(MMU_SWAY - MMU_CLINE)	/* lines per way 1<<MMU_NSET */
+
+/* L2-Cache */
+#define __ARM_L2CACHE__ 1
+
+/*
+ * LLC (Monsoon L2, Mistral L3): 8MB, 128-byte lines, 16-way.
+ * L2E (Mistral L2): 1MB, 64-byte lines, 8-way.
+ *
+ * TODO: Our L2 cahes have different line sizes.  I begin to suspect
+ * this may be a problem.
+ */
+#define L2_CSIZE	__ARM_L2CACHE_SIZE_LOG__	/* cache size as 1<<L2_CSIZE */
+#define L2_CLINE	7		/* cache line size as 1<<L2_CLINE (128) */
+#define L2_NWAY		4		/* set associativity as 1<<L2_NWAY (16) */
+#define L2_I7SET	6		/* TODO: cp15 c7 set incrementer 1<<L2_I7SET */
+#define L2_I7WAY	28		/* TODO: cp15 c7 way incrementer 1<<L2_I7WAY */
+#define L2_I9WAY	28		/* TODO: cp15 c9 way incremenber 1<<L2_I9WAY */
+
+#define L2_SWAY	(L2_CSIZE - L2_NWAY)		/* set size 1<<L2_SWAY */
+#define L2_NSET	(L2_SWAY - L2_CLINE)		/* lines per way 1<<L2_NSET */
+
+#elif defined (BCM2837) /* Raspberry Pi 3 */
+
+/* I-Cache. We don't have detailed spec so we just follow the ARM technical reference. */
+#define MMU_I_CLINE	6
+
+/* D-Cache. */
+#define MMU_CSIZE	15
+#define MMU_CLINE 	6
+#define MMU_NWAY	4
+
+#define MMU_I7SET	6
+#define MMU_I7WAY	30
+#define MMU_I9WAY	30
+
+#define MMU_SWAY	(MMU_CSIZE - MMU_NWAY)
+#define MMU_NSET	(MMU_SWAY - MMU_CLINE)
+
+#define __ARM_L2CACHE__ 1
+
+#define L2_CSIZE	__ARM_L2CACHE_SIZE_LOG__
+#define L2_CLINE	6
+#define L2_NWAY		4		
+#define L2_I7SET	6		
+#define L2_I7WAY	28		
+#define L2_I9WAY	28		
+#define L2_SWAY	(L2_CSIZE - L2_NWAY)
+#define L2_NSET	(L2_SWAY - L2_CLINE)
 
 #else
 #error processor not supported
@@ -678,6 +793,7 @@
  * Convenience definitions for:
  *   ARM_TT_LEAF: The last level of the configured page table format.
  *   ARM_TT_TWIG: The second to last level of the configured page table format.
+ *   ARM_TT_ROOT: The first level of the configured page table format.
  *
  *   My apologies to any botanists who may be reading this.
  */
@@ -690,6 +806,11 @@
 #define ARM_TT_TWIG_OFFMASK				ARM_TT_L1_OFFMASK
 #define ARM_TT_TWIG_SHIFT				ARM_TT_L1_SHIFT
 #define ARM_TT_TWIG_INDEX_MASK			ARM_TT_L1_INDEX_MASK
+
+#define ARM_TT_ROOT_SIZE				ARM_TT_L1_SIZE
+#define ARM_TT_ROOT_OFFMASK				ARM_TT_L1_OFFMASK
+#define ARM_TT_ROOT_SHIFT				ARM_TT_L1_SHIFT
+#define ARM_TT_ROOT_INDEX_MASK			ARM_TT_L1_INDEX_MASK
 
 /*
  *	Level 1 Translation Table Entry
@@ -867,8 +988,8 @@
 #define ARM_PTE_NG						0x00000800			 /* value for a per-process mapping */
 
 #define ARM_PTE_SHSHIFT					10
-#define ARM_PTE_SH_MASK					0x00000400			 /* shared (SMP) mapping mask */
-#define ARM_PTE_SH						0x00000400			 /* shared (SMP) mapping */
+#define ARM_PTE_SHMASK					0x00000400			 /* shared (SMP) mapping mask */
+#define ARM_PTE_SH					0x00000400			 /* shared (SMP) mapping */
 
 #define ARM_PTE_CBSHIFT					2
 #define ARM_PTE_CB(x)					((x)<<ARM_PTE_CBSHIFT)
@@ -1007,6 +1128,9 @@
 #define ARM_DBG_CR_SECURITY_STATE_BOTH      (0 << 14)
 #define ARM_DBG_CR_SECURITY_STATE_NONSECURE (1 << 14)
 #define ARM_DBG_CR_SECURITY_STATE_SECURE    (2 << 14)
+#define ARM_DBG_CR_HIGHER_MODE_MASK         (1 << 13)   /* BCR & WCR */
+#define ARM_DBG_CR_HIGHER_MODE_ENABLE       (1 << 13)
+#define ARM_DBG_CR_HIGHER_MODE_DISABLE      (0 << 13)
 #define ARM_DBGWCR_BYTE_ADDRESS_SELECT_MASK 0x00001FE0  /* WCR only  */
 #define ARM_DBG_CR_BYTE_ADDRESS_SELECT_MASK 0x000001E0  /* BCR & WCR */
 #define ARM_DBGWCR_ACCESS_CONTROL_MASK      (3 << 3)    /* WCR only */
@@ -1015,7 +1139,7 @@
 #define ARM_DBCWCR_ACCESS_CONTROL_ANY       (3 << 3)
 #define ARM_DBG_CR_MODE_CONTROL_MASK        (3 << 1)    /* BCR & WCR */
 #define ARM_DBG_CR_MODE_CONTROL_U_S_S       (0 << 1)    /* BCR only  */
-#define ARM_DBG_CR_MODE_CONTROL_PRIVILEDGED (1 << 1)    /* BCR & WCR */
+#define ARM_DBG_CR_MODE_CONTROL_PRIVILEGED  (1 << 1)    /* BCR & WCR */
 #define ARM_DBG_CR_MODE_CONTROL_USER        (2 << 1)    /* BCR & WCR */
 #define ARM_DBG_CR_MODE_CONTROL_ANY         (3 << 1)    /* BCR & WCR */
 #define ARM_DBG_CR_ENABLE_MASK              (1 << 0)    /* BCR & WCR */

@@ -318,6 +318,7 @@ mach_node_register(mach_node_t	node)
         goto out;
     }
 
+    waitq_set_lazy_init_link(pp_set);
     /* Add the bootstrap port to the proxy port set */
     uint64_t wq_link_id = waitq_link_reserve(NULL);
     uint64_t wq_reserved_prepost = waitq_prepost_reserve(NULL, 10,

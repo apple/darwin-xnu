@@ -17,8 +17,6 @@
 #define CCMD5_OUTPUT_SIZE  16
 #define CCMD5_STATE_SIZE   16
 
-extern const uint32_t ccmd5_initial_state[4];
-
 /* Selector */
 const struct ccdigest_info *ccmd5_di(void);
 

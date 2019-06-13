@@ -1688,8 +1688,15 @@ nfs_getattrcache(nfsnode_t np, struct nfs_vattr *nvaper, int flags)
 	 * and return cached attributes.
 	 */
 	if (!nfs_use_cache(nmp)) {
-		timeo = nfs_attrcachetimeout(np);
 		microuptime(&nowup);
+		if (np->n_attrstamp > nowup.tv_sec) {
+			printf("NFS: Attribute time stamp is in the future by %ld seconds. Invalidating cache\n",
+			       np->n_attrstamp - nowup.tv_sec);
+			NATTRINVALIDATE(np);
+			NACCESSINVALIDATE(np);
+			return (ENOENT);
+		}
+		timeo = nfs_attrcachetimeout(np);
 		if ((nowup.tv_sec - np->n_attrstamp) >= timeo) {
 			FSDBG(528, np, 0, 0xffffff02, ENOENT);
 			OSAddAtomic64(1, &nfsstats.attrcache_misses);
@@ -3272,6 +3279,10 @@ nfsrv_export_lookup(struct nfs_export *nx, mbuf_t nam)
 	/* Lookup in the export list first. */
 	if (nam != NULL) {
 		saddr = mbuf_data(nam);
+		if (saddr->sa_family > AF_MAX) {
+			/* Bogus sockaddr?  Don't match anything. */
+			return (NULL);
+		}
 		rnh = nx->nx_rtable[saddr->sa_family];
 		if (rnh != NULL) {
 			no = (struct nfs_netopt *)

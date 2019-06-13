@@ -39,7 +39,7 @@ uint32_t phantom_cache_thrashing_threshold_ssd = 1000;
 #if CONFIG_EMBEDDED
 uint32_t phantom_cache_thrashing_threshold = 500;
 #else
-uint32_t phantom_cache_thrashing_threshold = 100;
+uint32_t phantom_cache_thrashing_threshold = 50;
 #endif
 
 /*
@@ -100,6 +100,7 @@ struct phantom_cache_stats {
 
 	uint32_t	pcs_updated_phantom_state;
 } phantom_cache_stats;
+
 
 
 void
@@ -173,7 +174,7 @@ vm_phantom_cache_add_ghost(vm_page_t m)
 	if (vm_phantom_cache_num_entries == 0)
 		return;
 	
-	pg_mask = pg_masks[(m->offset >> PAGE_SHIFT) & VM_GHOST_PAGE_MASK];
+	pg_mask = pg_masks[(m->vmp_offset >> PAGE_SHIFT) & VM_GHOST_PAGE_MASK];
 
 	if (object->phantom_object_id == 0) {
 
@@ -239,7 +240,7 @@ vm_phantom_cache_add_ghost(vm_page_t m)
 		phantom_cache_stats.pcs_added_new_entry++;
 
 	vpce->g_pages_held = pg_mask;
-	vpce->g_obj_offset = (m->offset >> (PAGE_SHIFT + VM_GHOST_PAGE_SHIFT)) & VM_GHOST_OFFSET_MASK;
+	vpce->g_obj_offset = (m->vmp_offset >> (PAGE_SHIFT + VM_GHOST_PAGE_SHIFT)) & VM_GHOST_OFFSET_MASK;
 	vpce->g_obj_id = object->phantom_object_id;
 
 	ghost_hash_index = vm_phantom_hash(vpce->g_obj_id, vpce->g_obj_offset);
@@ -247,6 +248,8 @@ vm_phantom_cache_add_ghost(vm_page_t m)
 	vm_phantom_cache_hash[ghost_hash_index] = ghost_index;
 
 done:
+	vm_pageout_vminfo.vm_phantom_cache_added_ghost++;
+
 	if (object->phantom_isssd)
 		OSAddAtomic(1, &sample_period_ghost_added_count_ssd);
 	else
@@ -270,7 +273,7 @@ vm_phantom_cache_lookup_ghost(vm_page_t m, uint32_t pg_mask)
 		 */
 		return (NULL);
 	}
-	g_obj_offset = (m->offset >> (PAGE_SHIFT + VM_GHOST_PAGE_SHIFT)) & VM_GHOST_OFFSET_MASK;
+	g_obj_offset = (m->vmp_offset >> (PAGE_SHIFT + VM_GHOST_PAGE_SHIFT)) & VM_GHOST_OFFSET_MASK;
 
 	ghost_index = vm_phantom_cache_hash[vm_phantom_hash(g_obj_id, g_obj_offset)];
 
@@ -314,13 +317,14 @@ vm_phantom_cache_update(vm_page_t m)
 	if (vm_phantom_cache_num_entries == 0)
 		return;
 	
-	pg_mask = pg_masks[(m->offset >> PAGE_SHIFT) & VM_GHOST_PAGE_MASK];
+	pg_mask = pg_masks[(m->vmp_offset >> PAGE_SHIFT) & VM_GHOST_PAGE_MASK];
 	
 	if ( (vpce = vm_phantom_cache_lookup_ghost(m, pg_mask)) ) {
 
 		vpce->g_pages_held &= ~pg_mask;
 
 		phantom_cache_stats.pcs_updated_phantom_state++;
+		vm_pageout_vminfo.vm_phantom_cache_found_ghost++;
 
 		if (object->phantom_isssd)
 			OSAddAtomic(1, &sample_period_ghost_found_count_ssd);

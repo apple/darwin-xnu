@@ -218,7 +218,7 @@ int _NumCPUs( void )
 /* Align following entries to next cache line */
 #define _COMM_PAGE_CONT_TIMEBASE	(_COMM_PAGE_START_ADDRESS+0x0C0)	/* used by mach_continuous_time() */
 #define _COMM_PAGE_BOOTTIME_USEC	(_COMM_PAGE_START_ADDRESS+0x0C8)	/* uint64_t boottime */
-#define _COMM_PAGE_NEWTIMEOFDAY_DATA	(_COMM_PAGE_START_ADDRESS+0x0D0) 	/* used by gettimeofday(). Currently, sizeof(new_commpage_timeofday_data_t) = 40*/
+#define _COMM_PAGE_NEWTIMEOFDAY_DATA	(_COMM_PAGE_START_ADDRESS+0x0D0) 	/* used by gettimeofday(). Currently, sizeof(new_commpage_timeofday_data_t) = 40 */
 
 #define _COMM_PAGE_END			(_COMM_PAGE_START_ADDRESS+0xfff)	/* end of common page */
 

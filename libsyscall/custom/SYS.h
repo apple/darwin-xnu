@@ -228,9 +228,9 @@ LEAF(pseudo, 0)					;\
 #endif
 
 #define MI_ENTRY_POINT(name)				\
+	.text									;\
 	.align 2	;\
 	.globl  name							;\
-	.text									;\
 name:
 
 /* load the syscall number into r12 and trap */
@@ -424,6 +424,18 @@ pseudo:									;\
 #include <mach/arm/syscall_sw.h>
 #include <mach/arm/vm_param.h>
 #include <mach/arm64/asm.h>
+
+#if defined(__arm64__) && !defined(__LP64__)
+#define ZERO_EXTEND(argnum) uxtw  x ## argnum, w ## argnum
+#else
+#define ZERO_EXTEND(argnum)
+#endif
+
+#if defined(__arm64__) && !defined(__LP64__)
+#define SIGN_EXTEND(argnum) sxtw  x ## argnum, w ## argnum
+#else
+#define SIGN_EXTEND(argnum)
+#endif
 
 /*
  * ARM64 system call interface:

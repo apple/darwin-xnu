@@ -79,9 +79,9 @@
 /*
  * IPC types.
  */
-#define	AT_IPC_MSG	((u_char)1)	/* Message IPC id. */
-#define	AT_IPC_SEM	((u_char)2)	/* Semaphore IPC id. */
-#define	AT_IPC_SHM	((u_char)3)	/* Shared mem IPC id. */
+#define	AT_IPC_MSG	((unsigned char)1)	/* Message IPC id. */
+#define	AT_IPC_SEM	((unsigned char)2)	/* Semaphore IPC id. */
+#define	AT_IPC_SHM	((unsigned char)3)	/* Shared mem IPC id. */
 
 /*
  * Audit conditions.
@@ -127,6 +127,10 @@
 #define	A_SETCOND	38
 #define	A_GETSFLAGS	39
 #define	A_SETSFLAGS	40
+#define	A_GETCTLMODE	41
+#define	A_SETCTLMODE	42
+#define	A_GETEXPAFTER	43
+#define	A_SETEXPAFTER	44
 
 /*
  * Audit policy controls.
@@ -167,6 +171,24 @@
 #define	AU_IPv4		4
 #define	AU_IPv6		16
 
+/*
+ * Reserved audit class mask indicating which classes are unable to have
+ * events added or removed by unentitled processes.
+ */
+#define AU_CLASS_MASK_RESERVED 0x10000000
+
+/*
+ * Audit control modes
+ */
+#define AUDIT_CTLMODE_NORMAL ((unsigned char)1)
+#define AUDIT_CTLMODE_EXTERNAL ((unsigned char)2)
+
+/*
+ * Audit file expire_after op modes
+ */
+#define AUDIT_EXPIRE_OP_AND ((unsigned char)0)
+#define AUDIT_EXPIRE_OP_OR ((unsigned char)1)
+
 __BEGIN_DECLS
 
 typedef	uid_t		au_id_t;
@@ -175,6 +197,7 @@ typedef	u_int16_t	au_event_t;
 typedef	u_int16_t	au_emod_t;
 typedef	u_int32_t	au_class_t;
 typedef	u_int64_t	au_asflgs_t __attribute__ ((aligned (8)));
+typedef	unsigned char	au_ctlmode_t;
 
 struct au_tid {
 	dev_t		port;
@@ -236,6 +259,13 @@ struct au_session {
 	au_mask_t		 as_mask;	/* Process Audit Masks. */
 };
 typedef struct au_session       au_session_t;
+
+struct au_expire_after {
+	time_t age;		/* Age after which trail files should be expired */
+	size_t size;	/* Aggregate trail size when files should be expired */
+	unsigned char op_type; /* Operator used with the above values to determine when files should be expired */
+};
+typedef struct au_expire_after au_expire_after_t;
 
 /*
  * Contents of token_t are opaque outside of libbsm.

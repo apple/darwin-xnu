@@ -63,17 +63,20 @@ typedef struct _load_result {
 
 	mach_vm_address_t	all_image_info_addr;
 	mach_vm_size_t		all_image_info_size;
-    
+
 	int			thread_count;
 	unsigned int
 		/* boolean_t */	unixproc	:1,
-				needs_dynlinker : 1,
-				dynlinker	:1,
-				validentry	:1,
-				has_pagezero    :1,
-				using_lcmain	:1,
-				is64bit         :1,
-						:0;
+				needs_dynlinker 	:1,
+				dynlinker			:1,
+				validentry			:1,
+				has_pagezero		:1,
+				using_lcmain		:1,
+#if __arm64__
+				legacy_footprint	:1,
+#endif /* __arm64__ */
+				is_64bit_addr		:1,
+				is_64bit_data		:1;
 	unsigned int		csflags;
 	unsigned char		uuid[16];
 	mach_vm_address_t	min_vm_addr;
@@ -104,5 +107,7 @@ load_return_t load_machfile(
 #define	LOAD_IOERROR		9	/* IO error */
 #define	LOAD_DECRYPTFAIL	10	/* FP decrypt failure */
 #define	LOAD_BADMACHO_UPX	11	/* malformed mach-o file */
+#define	LOAD_BADARCH_X86	12	/* -no32exec boot-arg + attempted load
+					   of 32bit x86 binary */
 
 #endif	/* _BSD_KERN_MACH_LOADER_H_ */

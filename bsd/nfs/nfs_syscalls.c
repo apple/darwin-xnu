@@ -123,10 +123,8 @@ kern_return_t	thread_terminate(thread_t); /* XXX */
 
 #if NFSSERVER
 
-extern int (*nfsrv_procs[NFS_NPROCS])(struct nfsrv_descript *nd,
-					    struct nfsrv_sock *slp,
-					    vfs_context_t ctx,
-					    mbuf_t *mrepp);
+extern const nfsrv_proc_t nfsrv_procs[NFS_NPROCS];
+
 extern int nfsrv_wg_delay;
 extern int nfsrv_wg_delay_v3;
 

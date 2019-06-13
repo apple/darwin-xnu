@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -93,6 +93,7 @@
 #include <kern/telemetry.h>
 #endif
 #include <sys/kdebug.h>
+#include <kperf/kperf.h>
 #include <prng/random.h>
 
 #include <string.h>
@@ -119,8 +120,6 @@ static void user_page_fault_continue(kern_return_t kret);
 static void panic_trap(x86_saved_state64_t *saved_state, uint32_t pl, kern_return_t fault_result);
 static void set_recovery_ip(x86_saved_state64_t *saved_state, vm_offset_t ip);
 
-volatile perfCallback perfTrapHook = NULL; /* Pointer to CHUD trap hook routine */
-
 #if CONFIG_DTRACE
 /* See <rdar://problem/4613924> */
 perfCallback tempDTraceTrapHook = NULL; /* Pointer to DTrace fbt trap hook routine */
@@ -142,7 +141,7 @@ thread_syscall_return(
 
 	pal_register_cache_state(thr_act, DIRTY);
 
-        if (thread_is_64bit(thr_act)) {
+        if (thread_is_64bit_addr(thr_act)) {
 	        x86_saved_state64_t	*regs;
 		
 		regs = USER_REGS64(thr_act);
@@ -213,7 +212,7 @@ user_page_fault_continue(
 	thread_t	thread = current_thread();
 	user_addr_t	vaddr;
 
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_addr(thread)) {
 		x86_saved_state64_t	*uregs;
 
 		uregs = USER_REGS64(thread);
@@ -385,7 +384,7 @@ interrupt(x86_saved_state_t *state)
 
 #if CONFIG_TELEMETRY
 	if (telemetry_needs_record) {
-		telemetry_mark_curthread(user_mode);
+		telemetry_mark_curthread(user_mode, FALSE);
 	}
 #endif
 
@@ -456,13 +455,16 @@ interrupt(x86_saved_state_t *state)
 				(long) depth, (long) VM_KERNEL_UNSLIDE(rip), 0, 0, 0);
 		}
 	}
-	
+
 	if (cnum == master_cpu)
 		ml_entropy_collect();
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-		MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END,
-		interrupt_num, 0, 0, 0, 0);
+#if KPERF
+	kperf_interrupt();
+#endif /* KPERF */
+
+	KDBG_RELEASE(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END,
+			interrupt_num);
 
 	assert(ml_get_interrupts_enabled() == FALSE);
 }
@@ -498,7 +500,6 @@ kernel_trap(
 	kern_return_t		result = KERN_FAILURE;
 	kern_return_t		fault_result = KERN_SUCCESS;
 	thread_t		thread;
-	ast_t			*myast;
 	boolean_t               intr;
 	vm_prot_t		prot;
         struct recovery		*rp;
@@ -524,17 +525,7 @@ kernel_trap(
 	intr  = (saved_state->isf.rflags & EFL_IF) != 0;	/* state of ints at trap */
 	kern_ip = (vm_offset_t)saved_state->isf.rip;
 
-	myast = ast_pending();
-
 	is_user = (vaddr < VM_MAX_USER_PAGE_ADDRESS);
-
-	perfASTCallback astfn = perfASTHook;
-	if (__improbable(astfn != NULL)) {
-		if (*myast & AST_CHUD_ALL)
-			astfn(AST_CHUD_ALL, myast);
-	} else
-		*myast &= ~AST_CHUD_ALL;
-
 
 #if CONFIG_DTRACE
 	/*
@@ -672,9 +663,14 @@ kernel_trap(
 		return;
 
 	    case T_SSE_FLOAT_ERROR:
-	        fpSSEexterrflt();
+		fpSSEexterrflt();
 		return;
- 	    case T_DEBUG:
+
+	    case T_INVALID_OPCODE:
+		fpUDflt(kern_ip);
+		goto debugger_entry;
+
+	    case T_DEBUG:
 		    if ((saved_state->isf.rflags & EFL_TF) == 0 && NO_WATCHPOINTS)
 		    {
 			    /* We've somehow encountered a debug
@@ -686,10 +682,8 @@ kernel_trap(
 			    return;
 		    }
 		    goto debugger_entry;
-#ifdef __x86_64__
 	    case T_INT3:
 	      goto debugger_entry;
-#endif
 	    case T_PAGE_FAULT:
 
 #if CONFIG_DTRACE
@@ -790,7 +784,6 @@ debugger_entry:
 	 */
 }
 
-
 static void
 set_recovery_ip(x86_saved_state64_t  *saved_state, vm_offset_t ip)
 {
@@ -814,8 +807,8 @@ panic_trap(x86_saved_state64_t *regs, uint32_t pl, kern_return_t fault_result)
 	 */
 	panic_io_port_read();
 
-	kprintf("panic trap number 0x%x, rip 0x%016llx\n",
-		regs->isf.trapno, regs->isf.rip);
+	kprintf("CPU %d panic trap number 0x%x, rip 0x%016llx\n",
+	    cpu_number(), regs->isf.trapno, regs->isf.rip);
 	kprintf("cr0 0x%016llx cr2 0x%016llx cr3 0x%016llx cr4 0x%016llx\n",
 		cr0, cr2, cr3, cr4);
 
@@ -871,6 +864,11 @@ panic_trap(x86_saved_state64_t *regs, uint32_t pl, kern_return_t fault_result)
 extern kern_return_t dtrace_user_probe(x86_saved_state_t *);
 #endif
 
+#if DEBUG
+uint32_t fsigs[2];
+uint32_t fsigns, fsigcs;
+#endif
+
 /*
  *	Trap from user mode.
  */
@@ -886,13 +884,12 @@ user_trap(
 	user_addr_t		vaddr;
 	vm_prot_t		prot;
 	thread_t		thread = current_thread();
-	ast_t			*myast;
 	kern_return_t		kret;
 	user_addr_t		rip;
 	unsigned long 		dr6 = 0; /* 32 bit for i386, 64 bit for x86_64 */
 
-	assert((is_saved_state32(saved_state) && !thread_is_64bit(thread)) ||
-	       (is_saved_state64(saved_state) &&  thread_is_64bit(thread)));
+	assert((is_saved_state32(saved_state) && !thread_is_64bit_addr(thread)) ||
+	       (is_saved_state64(saved_state) &&  thread_is_64bit_addr(thread)));
 
 	if (is_saved_state64(saved_state)) {
 	        x86_saved_state64_t	*regs;
@@ -940,26 +937,6 @@ user_trap(
 	subcode = 0;
 	exc = 0;
 
-#if DEBUG_TRACE
-	kprintf("user_trap(0x%08x) type=%d vaddr=0x%016llx\n",
-		saved_state, type, vaddr);
-#endif
-
-	perfASTCallback astfn = perfASTHook;
-	if (__improbable(astfn != NULL)) {
-		myast = ast_pending();
-		if (*myast & AST_CHUD_ALL) {
-			astfn(AST_CHUD_ALL, myast);
-		}
-	}
-
-	/* Is there a hook? */
-	perfCallback fn = perfTrapHook;
-	if (__improbable(fn != NULL)) {
-		if (fn(type, saved_state, 0, 0) == KERN_SUCCESS)
-			return;	/* If it succeeds, we are done... */
-	}
-
 #if CONFIG_DTRACE
 	/*
 	 * DTrace does not consume all user traps, only INT_3's for now.
@@ -994,7 +971,7 @@ user_trap(
 				 * because the high order bits are not
 				 * used on x86_64
 				 */
-				if (thread_is_64bit(thread)) {
+				if (thread_is_64bit_addr(thread)) {
 					x86_debug_state64_t *ids = pcb->ids;
 					ids->dr6 = dr6;
 				} else { /* 32 bit thread */
@@ -1087,11 +1064,33 @@ user_trap(
 		        prot |= VM_PROT_WRITE;
 		if (__improbable(err & T_PF_EXECUTE))
 		        prot |= VM_PROT_EXECUTE;
+#if DEVELOPMENT || DEBUG
+		uint32_t fsig = 0;
+		fsig = thread_fpsimd_hash(thread);
+#if DEBUG
+		fsigs[0] = fsig;
+#endif
+#endif
 		kret = vm_fault(thread->map,
 				vaddr,
 				prot, FALSE, VM_KERN_MEMORY_NONE,
 				THREAD_ABORTSAFE, NULL, 0);
-
+#if DEVELOPMENT || DEBUG
+		if (fsig) {
+			uint32_t fsig2 = thread_fpsimd_hash(thread);
+#if DEBUG
+			fsigcs++;
+			fsigs[1] = fsig2;
+#endif
+			if (fsig != fsig2) {
+				panic("FP/SIMD state hash mismatch across fault thread: %p 0x%x->0x%x", thread, fsig, fsig2);
+			}
+		} else {
+#if DEBUG
+			fsigns++;
+#endif
+		}
+#endif
 		if (__probable((kret == KERN_SUCCESS) || (kret == KERN_ABORTED))) {
 			thread_exception_return();
 			/*NOTREACHED*/
@@ -1245,16 +1244,20 @@ sync_iss_to_iks_unconditionally(__unused x86_saved_state_t *saved_state) {
 }
 
 #if DEBUG
+#define TERI 1
+#endif
+
+#if TERI
 extern void	thread_exception_return_internal(void) __dead2;
 
 void thread_exception_return(void) {
 	thread_t thread = current_thread();
 	ml_set_interrupts_enabled(FALSE);
-	if (thread_is_64bit(thread) != task_has_64BitAddr(thread->task)) {
-		panic("Task/thread bitness mismatch %p %p, task: %d, thread: %d", thread, thread->task, thread_is_64bit(thread),  task_has_64BitAddr(thread->task));
+	if (thread_is_64bit_addr(thread) != task_has_64Bit_addr(thread->task)) {
+		panic("Task/thread bitness mismatch %p %p, task: %d, thread: %d", thread, thread->task, thread_is_64bit_addr(thread),  task_has_64Bit_addr(thread->task));
 	}
 
-	if (thread_is_64bit(thread)) {
+	if (thread_is_64bit_addr(thread)) {
 		if ((gdt_desc_p(USER64_CS)->access & ACC_PL_U) == 0) {
 			panic("64-GDT mismatch %p, descriptor: %p", thread, gdt_desc_p(USER64_CS));
 		}

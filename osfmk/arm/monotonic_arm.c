@@ -32,7 +32,7 @@
 bool mt_core_supported = false;
 
 void
-mt_init(void)
+mt_early_init(void)
 {
 }
 
@@ -48,4 +48,10 @@ mt_cur_cpu(void)
 	return &getCpuDatap()->cpu_monotonic;
 }
 
-const struct monotonic_dev monotonic_devs[0];
+int
+mt_microstackshot_start_arch(__unused uint64_t period)
+{
+	return 1;
+}
+
+struct mt_device mt_devices[0];

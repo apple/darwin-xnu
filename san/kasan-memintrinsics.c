@@ -36,123 +36,92 @@
 #include <kasan_internal.h>
 #include <memintrinsics.h>
 
-#if MEMINTRINSICS
-static bool check_intrinsics = true;
-#else
-static bool check_intrinsics = false;
-#endif
-
 void
 __asan_bcopy(const void *src, void *dst, size_t sz)
 {
-	if (check_intrinsics) {
-		kasan_check_range(src, sz, TYPE_MEMLD);
-		kasan_check_range(dst, sz, TYPE_MEMSTR);
-	}
+	kasan_check_range(src, sz, TYPE_MEMR);
+	kasan_check_range(dst, sz, TYPE_MEMW);
 	__nosan_bcopy(src, dst, sz);
 }
 
 void *
 __asan_memmove(void *src, const void *dst, size_t sz)
 {
-	if (check_intrinsics) {
-		kasan_check_range(src, sz, TYPE_MEMLD);
-		kasan_check_range(dst, sz, TYPE_MEMSTR);
-	}
+	kasan_check_range(src, sz, TYPE_MEMR);
+	kasan_check_range(dst, sz, TYPE_MEMW);
 	return __nosan_memmove(src, dst, sz);
 }
 
 void *
 __asan_memcpy(void *dst, const void *src, size_t sz)
 {
-	if (check_intrinsics) {
-		kasan_check_range(src, sz, TYPE_MEMLD);
-		kasan_check_range(dst, sz, TYPE_MEMSTR);
-	}
+	kasan_check_range(src, sz, TYPE_MEMR);
+	kasan_check_range(dst, sz, TYPE_MEMW);
 	return __nosan_memcpy(dst, src, sz);
 }
 
 void *
 __asan_memset(void *dst, int c, size_t sz)
 {
-	if (check_intrinsics) {
-		kasan_check_range(dst, sz, TYPE_MEMSTR);
-	}
+	kasan_check_range(dst, sz, TYPE_MEMW);
 	return __nosan_memset(dst, c, sz);
 }
 
 void
 __asan_bzero(void *dst, size_t sz)
 {
-	if (check_intrinsics) {
-		kasan_check_range(dst, sz, TYPE_MEMSTR);
-	}
+	kasan_check_range(dst, sz, TYPE_MEMW);
 	__nosan_bzero(dst, sz);
 }
 
 int
 __asan_bcmp(const void *a, const void *b, size_t len)
 {
-	if (check_intrinsics) {
-		kasan_check_range(a, len, TYPE_MEMLD);
-		kasan_check_range(b, len, TYPE_MEMLD);
-	}
+	kasan_check_range(a, len, TYPE_MEMR);
+	kasan_check_range(b, len, TYPE_MEMR);
 	return __nosan_bcmp(a, b, len);
 }
 
 int
 __asan_memcmp(const void *a, const void *b, size_t n)
 {
-	if (check_intrinsics) {
-		kasan_check_range(a, n, TYPE_MEMLD);
-		kasan_check_range(b, n, TYPE_MEMLD);
-	}
+	kasan_check_range(a, n, TYPE_MEMR);
+	kasan_check_range(b, n, TYPE_MEMR);
 	return __nosan_memcmp(a, b, n);
 }
 
 size_t
 __asan_strlcpy(char *dst, const char *src, size_t sz)
 {
-	if (check_intrinsics) {
-		kasan_check_range(dst, sz, TYPE_STRINGSTR);
-	}
+	kasan_check_range(dst, sz, TYPE_STRW);
 	return __nosan_strlcpy(dst, src, sz);
 }
 
 size_t
 __asan_strlcat(char *dst, const char *src, size_t sz)
 {
-	if (check_intrinsics) {
-		kasan_check_range(dst, sz, TYPE_STRINGSTR);
-	}
+	kasan_check_range(dst, sz, TYPE_STRW);
 	return __nosan_strlcat(dst, src, sz);
 }
 
 char *
 __asan_strncpy(char *dst, const char *src, size_t sz)
 {
-	if (check_intrinsics) {
-		kasan_check_range(dst, sz, TYPE_STRINGSTR);
-	}
+	kasan_check_range(dst, sz, TYPE_STRW);
 	return __nosan_strncpy(dst, src, sz);
 }
 
 char *
 __asan_strncat(char *dst, const char *src, size_t sz)
 {
-	if (check_intrinsics) {
-		kasan_check_range(dst, strlen(dst) + sz + 1, TYPE_STRINGSTR);
-	}
+	kasan_check_range(dst, strlen(dst) + sz + 1, TYPE_STRW);
 	return __nosan_strncat(dst, src, sz);
 }
 
 size_t
 __asan_strnlen(const char *src, size_t sz)
 {
-	if (check_intrinsics) {
-		kasan_check_range(src, sz, TYPE_STRINGLD);
-	}
-
+	kasan_check_range(src, sz, TYPE_STRR);
 	return __nosan_strnlen(src, sz);
 }
 
@@ -160,8 +129,6 @@ size_t
 __asan_strlen(const char *src)
 {
 	size_t sz = __nosan_strlen(src);
-	if (check_intrinsics) {
-		kasan_check_range(src, sz + 1, TYPE_STRINGLD);
-	}
+	kasan_check_range(src, sz + 1, TYPE_STRR);
 	return sz;
 }

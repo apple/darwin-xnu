@@ -1831,6 +1831,9 @@ nfs4_parsefattr(
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_FILEHANDLE)) {
 		nfsm_chain_get_32(error, nmc, val);
+		if (error == 0 && val > NFS_MAX_FH_SIZE)
+			error = EBADRPC;
+		nfsmout_if(error);
 		if (fhp) {
 			fhp->fh_len = val;
 			nfsm_chain_get_opaque(error, nmc, nfsm_rndup(val), fhp->fh_data);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -126,6 +126,7 @@ typedef __uint64_t	rlim_t;
 #define PRIO_DARWIN_ROLE_NON_UI         0x3     /* Off screen, non-focal UI */
 #define PRIO_DARWIN_ROLE_UI_NON_FOCAL   0x4     /* On  screen, non-focal UI */
 #define PRIO_DARWIN_ROLE_TAL_LAUNCH     0x5     /* Throttled-launch (for OS X TAL resume) */
+#define PRIO_DARWIN_ROLE_DARWIN_BG      0x6     /* Throttled for running in the background */
 
 #endif /* PRIVATE */
 
@@ -337,8 +338,9 @@ struct rusage_info_v4 {
 	uint64_t ri_cycles;
 	uint64_t ri_billed_energy;
 	uint64_t ri_serviced_energy;
-	// We're reserving 2 counters for future extension
-	uint64_t ri_unused[2];
+        uint64_t ri_interval_max_phys_footprint; 
+	// 1 reserve counter(s) remaining for future extension
+	uint64_t ri_unused[1];
 };
 
 typedef struct rusage_info_v4 rusage_info_current;
@@ -454,6 +456,7 @@ struct rlimit {
 #define RLIMIT_WAKEUPS_MONITOR		0x1 /* Configure the wakeups monitor. */
 #define	RLIMIT_CPU_USAGE_MONITOR	0x2 /* Configure the CPU usage monitor. */
 #define	RLIMIT_THREAD_CPULIMITS		0x3 /* Configure a blocking, per-thread, CPU limits. */
+#define	RLIMIT_FOOTPRINT_INTERVAL	0x4 /* Configure memory footprint interval tracking */
 
 /*
  * Flags for wakeups monitor control.
@@ -463,10 +466,16 @@ struct rlimit {
 #define WAKEMON_GET_PARAMS		0x04
 #define WAKEMON_SET_DEFAULTS		0x08
 #define	WAKEMON_MAKE_FATAL		0x10 /* Configure the task so that violations are fatal. */
+
 /*
  * Flags for CPU usage monitor control.
  */
 #define	CPUMON_MAKE_FATAL		0x1000
+
+/*
+ * Flags for memory footprint interval tracking.
+ */
+#define	FOOTPRINT_INTERVAL_RESET	0x1 /* Reset the footprint interval counter to zero */
 
 struct proc_rlimit_control_wakeupmon {
 	uint32_t wm_flags;
@@ -488,6 +497,7 @@ struct proc_rlimit_control_wakeupmon {
 #if PRIVATE
 #define IOPOL_TYPE_VFS_HFS_CASE_SENSITIVITY 1
 #endif
+#define IOPOL_TYPE_VFS_ATIME_UPDATES 2
 
 /* scope */
 #define IOPOL_SCOPE_PROCESS   0
@@ -510,6 +520,9 @@ struct proc_rlimit_control_wakeupmon {
 #define IOPOL_VFS_HFS_CASE_SENSITIVITY_DEFAULT	0
 #define IOPOL_VFS_HFS_CASE_SENSITIVITY_FORCE_CASE_SENSITIVE	1
 #endif
+
+#define IOPOL_ATIME_UPDATES_DEFAULT	0
+#define IOPOL_ATIME_UPDATES_OFF		1
 
 #ifdef PRIVATE
 /*

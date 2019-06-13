@@ -23,6 +23,7 @@
     #define CC_HAS_SupplementalSSE3() ((cpuid_features() & CPUID_FEATURE_SSSE3) != 0)
     #define CC_HAS_AVX1() ((cpuid_features() & CPUID_FEATURE_AVX1_0) != 0)
     #define CC_HAS_AVX2() ((cpuid_info()->cpuid_leaf7_features & CPUID_LEAF7_FEATURE_AVX2) != 0)
+    #define CC_HAS_AVX512_AND_IN_KERNEL()    ((cpuid_info()->cpuid_leaf7_features & CPUID_LEAF7_FEATURE_AVX512F) !=0)
 
 #elif CC_XNU_KERNEL_AVAILABLE
     # include <System/i386/cpu_capabilities.h>
@@ -36,11 +37,13 @@
     #define CC_HAS_SupplementalSSE3() (_cpu_capabilities & kHasSupplementalSSE3)
     #define CC_HAS_AVX1() (_cpu_capabilities & kHasAVX1_0)
     #define CC_HAS_AVX2() (_cpu_capabilities & kHasAVX2_0)
+    #define CC_HAS_AVX512_AND_IN_KERNEL() 0
 #else
     #define CC_HAS_AESNI() 0
     #define CC_HAS_SupplementalSSE3() 0
     #define CC_HAS_AVX1() 0
     #define CC_HAS_AVX2() 0
+    #define CC_HAS_AVX512_AND_IN_KERNEL()  0
 #endif
 
 #endif /* !(defined(__x86_64__) || defined(__i386__)) */

@@ -199,7 +199,7 @@ D. Kernel type summaries.
 ==========================
 i. Using summaries
 ------------------
-The lldb debugger provides ways for user to customize how a particular type of object be decsribed when printed. These are very useful in displaying complex and large structures
+The lldb debugger provides ways for user to customize how a particular type of object be described when printed. These are very useful in displaying complex and large structures
 where only certain fields are important based on some flag or value in some field or variable. The way it works is every time lldb wants to print an object it checks
 for registered summaries. We can define python functions and hook it up with lldb as callbacks for type summaries.  For example.
 

@@ -459,6 +459,8 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 	if (sndfin) {							\
 		dsn_opt.mdss_copt.mdss_flags |= MDSS_F;			\
 		dsn_opt.mdss_data_len += 1;				\
+		if (do_csum)						\
+			dss_csum = in_addword(dss_csum, 1);		\
 	}								\
 }
 
@@ -755,11 +757,23 @@ do_ack64_only:
 	}
 
 	if (tp->t_mpflags & TMPF_SEND_DFIN) {
+		unsigned int dssoptlen = sizeof(struct mptcp_dss_ack_opt);
 		struct mptcp_dss_ack_opt dss_ack_opt;
-		unsigned int dssoptlen = sizeof (struct mptcp_dss_ack_opt);
+		uint16_t dss_csum;
 
-		if (do_csum)
+		if (do_csum) {
+			uint64_t dss_val = mptcp_hton64(mp_tp->mpt_sndmax - 1);
+			uint16_t dlen = htons(1);
+			uint32_t sseq = 0;
+			uint32_t sum;
+
+
 			dssoptlen += 2;
+
+			sum = in_pseudo64(dss_val, sseq, dlen);
+			ADDCARRY(sum);
+			dss_csum = ~sum & 0xffff;
+		}
 
 		CHECK_OPTLEN;
 
@@ -769,7 +783,7 @@ do_ack64_only:
 		 * Data FIN occupies one sequence space.
 		 * Don't send it if it has been Acked.
 		 */
-		if (((mp_tp->mpt_sndnxt + 1) != mp_tp->mpt_sndmax) ||
+		if ((mp_tp->mpt_sndnxt + 1 != mp_tp->mpt_sndmax) ||
 		    (mp_tp->mpt_snduna == mp_tp->mpt_sndmax))
 			goto ret_optlen;
 
@@ -780,11 +794,14 @@ do_ack64_only:
 		dss_ack_opt.mdss_ack =
 		    htonl(MPTCP_DATAACK_LOW32(mp_tp->mpt_rcvnxt));
 		dss_ack_opt.mdss_dsn =
-		    htonl(MPTCP_DATASEQ_LOW32(mp_tp->mpt_sndnxt));
+		    htonl(MPTCP_DATASEQ_LOW32(mp_tp->mpt_sndmax - 1));
 		dss_ack_opt.mdss_subflow_seqn = 0;
 		dss_ack_opt.mdss_data_len = 1;
 		dss_ack_opt.mdss_data_len = htons(dss_ack_opt.mdss_data_len);
 		memcpy(opt + optlen, &dss_ack_opt, sizeof (dss_ack_opt));
+		if (do_csum)
+			*((uint16_t *)(void *)(opt + optlen + sizeof (dss_ack_opt))) = dss_csum;
+
 		optlen += dssoptlen;
 	}
 
@@ -937,7 +954,6 @@ mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 	}
 	tcp_heuristic_mptcp_success(tp);
 	tp->t_mpflags |= (TMPF_SND_KEYS | TMPF_MPTCP_TRUE);
-	tp->t_inpcb->inp_socket->so_flags |= SOF_MPTCP_TRUE;
 }
 
 
@@ -1021,9 +1037,7 @@ mptcp_validate_join_hmac(struct tcpcb *tp, u_char* hmac, int mac_len)
 void
 mptcp_data_ack_rcvd(struct mptcb *mp_tp, struct tcpcb *tp, u_int64_t full_dack)
 {
-	u_int64_t acked = 0;
-
-	acked = full_dack - mp_tp->mpt_snduna;
+	u_int64_t acked = full_dack - mp_tp->mpt_snduna;
 
 	if (acked) {
 		struct socket *mp_so = mptetoso(mp_tp->mpt_mpte);
@@ -1066,39 +1080,31 @@ mptcp_data_ack_rcvd(struct mptcb *mp_tp, struct tcpcb *tp, u_int64_t full_dack)
 }
 
 void
-mptcp_update_window_fallback(struct tcpcb *tp)
+mptcp_update_window_wakeup(struct tcpcb *tp)
 {
 	struct mptcb *mp_tp = tptomptp(tp);
 
 	mpte_lock_assert_held(mp_tp->mpt_mpte);
 
-	if (!(mp_tp->mpt_flags & MPTCPF_FALLBACK_TO_TCP))
-		return;
-
-	mptcplog((LOG_DEBUG, "%s: update window to %u\n", __func__, tp->snd_wnd),
-		 MPTCP_SOCKET_DBG, MPTCP_LOGLVL_VERBOSE);
-
-	mp_tp->mpt_sndwnd = tp->snd_wnd;
-	mp_tp->mpt_sndwl1 = mp_tp->mpt_rcvnxt;
-	mp_tp->mpt_sndwl2 = mp_tp->mpt_snduna;
+	if (mp_tp->mpt_flags & MPTCPF_FALLBACK_TO_TCP) {
+		mp_tp->mpt_sndwnd = tp->snd_wnd;
+		mp_tp->mpt_sndwl1 = mp_tp->mpt_rcvnxt;
+		mp_tp->mpt_sndwl2 = mp_tp->mpt_snduna;
+	}
 
 	sowwakeup(tp->t_inpcb->inp_socket);
 }
 
 static void
-mptcp_update_window(struct mptcb *mp_tp, u_int64_t ack, u_int64_t seq,
-    u_int32_t tiwin)
+mptcp_update_window(struct mptcb *mp_tp, u_int64_t ack, u_int64_t seq, u_int32_t tiwin)
 {
-	/* Don't look at the window if there is no ACK flag */
-	if ((SEQ_LT(mp_tp->mpt_sndwl1, seq) ||
-	    (mp_tp->mpt_sndwl1 == seq && (SEQ_LT(mp_tp->mpt_sndwl2, ack) ||
-	    (mp_tp->mpt_sndwl2 == ack && tiwin > mp_tp->mpt_sndwnd))))) {
+	if (SEQ_LT(mp_tp->mpt_sndwl1, seq) ||
+	    (mp_tp->mpt_sndwl1 == seq &&
+	     (SEQ_LT(mp_tp->mpt_sndwl2, ack) ||
+	      (mp_tp->mpt_sndwl2 == ack && tiwin > mp_tp->mpt_sndwnd)))) {
 		mp_tp->mpt_sndwnd = tiwin;
 		mp_tp->mpt_sndwl1 = seq;
 		mp_tp->mpt_sndwl2 = ack;
-
-		mptcplog((LOG_DEBUG, "%s: Updating window to %u\n", __func__,
-			  mp_tp->mpt_sndwnd), MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
 	}
 }
 
@@ -1124,11 +1130,11 @@ mptcp_do_dss_opt_ack_meat(u_int64_t full_dack, u_int64_t full_dsn,
 		if (close_notify)
 			mptcp_notify_close(tp->t_inpcb->inp_socket);
 	} else {
-		mptcplog((LOG_ERR,"%s: unexpected dack %u snduna %u sndmax %u\n", __func__,
-		    (u_int32_t)full_dack, (u_int32_t)mp_tp->mpt_snduna,
-		    (u_int32_t)mp_tp->mpt_sndmax),
-		    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),
-		    MPTCP_LOGLVL_LOG);
+		os_log_error(mptcp_log_handle,
+			     "%s: unexpected dack %u snduna %u sndmax %u\n",
+			     __func__, (u_int32_t)full_dack,
+			     (u_int32_t)mp_tp->mpt_snduna,
+			     (u_int32_t)mp_tp->mpt_sndmax);
 	}
 
 	mptcp_update_window(mp_tp, full_dack, full_dsn, tiwin);
@@ -1367,33 +1373,6 @@ mptcp_do_dss_opt_meat(u_char *cp, struct tcpcb *tp, struct tcphdr *th)
 }
 
 static void
-mptcp_do_fin_opt(struct tcpcb *tp)
-{
-	struct mptcb *mp_tp = tptomptp(tp);
-
-	if (!(tp->t_mpflags & TMPF_RECV_DFIN)) {
-		if (mp_tp != NULL) {
-			mptcp_close_fsm(mp_tp, MPCE_RECV_DATA_FIN);
-
-			if (tp->t_inpcb->inp_socket != NULL) {
-				soevent(tp->t_inpcb->inp_socket,
-				    SO_FILT_HINT_LOCKED |
-				    SO_FILT_HINT_MPCANTRCVMORE);
-			}
-
-		}
-		tp->t_mpflags |= TMPF_RECV_DFIN;
-	}
-
-	tp->t_mpflags |= TMPF_MPTCP_ACKNOW;
-	/*
-	 * Since this is a data level FIN, TCP needs to be explicitly told
-	 * to send back an ACK on which the Data ACK is piggybacked.
-	 */
-	tp->t_flags |= TF_ACKNOW;
-}
-
-static void
 mptcp_do_dss_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 {
 #pragma unused(optlen)
@@ -1408,9 +1387,8 @@ mptcp_do_dss_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 		struct mptcp_dss_copt *dss_rsp = (struct mptcp_dss_copt *)cp;
 
 		if (dss_rsp->mdss_subtype == MPO_DSS) {
-			if (dss_rsp->mdss_flags & MDSS_F) {
-				mptcp_do_fin_opt(tp);
-			}
+			if (dss_rsp->mdss_flags & MDSS_F)
+				tp->t_rcv_map.mpt_dfin = 1;
 
 			mptcp_do_dss_opt_meat(cp, tp, th);
 		}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -150,8 +150,6 @@ enum guard_vn_exception_codes {
 	kGUARD_EXC_EXCHDATA	= VNG_EXCHDATA,
 };
 
-#if defined(KERNEL)
-
 /* Guard violation behaviors: not all combinations make sense */
 
 #define kVNG_POLICY_LOGMSG	(1u << 0)
@@ -159,7 +157,9 @@ enum guard_vn_exception_codes {
 #define kVNG_POLICY_EXC		(1u << 2)
 #define kVNG_POLICY_EXC_CORPSE	(1u << 3)
 #define kVNG_POLICY_SIGKILL	(1u << 4)
+#define kVNG_POLICY_UPRINTMSG	(1u << 5)
 
+#if defined(KERNEL)
 extern int vnguard_exceptions_active(void);
 extern void vnguard_policy_init(void);
 #endif /* KERNEL */

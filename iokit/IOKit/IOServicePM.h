@@ -72,6 +72,7 @@ struct IOPMDriverCallEntry {
     queue_chain_t   link;
     thread_t        thread;
     IOService *     target;
+    const void  *callMethod;
 };
 
 // Power clients (desires)

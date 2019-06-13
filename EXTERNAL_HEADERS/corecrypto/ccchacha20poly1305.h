@@ -107,8 +107,6 @@ struct ccchacha20poly1305_info {
 
 };
 
-extern const struct ccchacha20poly1305_info ccchacha20poly1305_info_default;
-
 const struct ccchacha20poly1305_info *ccchacha20poly1305_info(void);
 
 /*!

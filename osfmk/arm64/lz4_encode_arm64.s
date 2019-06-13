@@ -28,6 +28,7 @@
 
 #include <vm/lz4_assembly_select.h>
 #include <vm/lz4_constants.h>
+#include <arm64/asm.h>
 
 #if LZ4_ENABLE_ASSEMBLY_ENCODE_ARM64
 
@@ -54,6 +55,7 @@
 _lz4_encode_2gb:
 
     // esteblish frame
+    ARM64_STACK_PROLOG
     stp     fp, lr,    [sp, #-16]!
     mov     fp, sp
 
@@ -391,7 +393,7 @@ L_done:
 
     // clear frame
     ldp     fp, lr,    [sp], #16
-    ret     lr
+    ARM64_STACK_EPILOG
 
 L_revert_x9_and_done:
     sub x9, x9, #1
