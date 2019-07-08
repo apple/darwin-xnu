@@ -819,7 +819,7 @@ audit_pipe_ioctl(dev_t dev, u_long cmd, caddr_t data,
 
 	case AUDITPIPE_SET_QLIMIT:
 		/* Lockless integer write. */
-		if (*(u_int *)data >= AUDIT_PIPE_QLIMIT_MIN ||
+		if (*(u_int *)data >= AUDIT_PIPE_QLIMIT_MIN &&
 		    *(u_int *)data <= AUDIT_PIPE_QLIMIT_MAX) {
 			ap->ap_qlimit = *(u_int *)data;
 			error = 0;
