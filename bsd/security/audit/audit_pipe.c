@@ -465,20 +465,14 @@ audit_pipe_append(struct audit_pipe *ap, void *record, u_int record_len)
 		return;
 	}
 
-	ape = malloc(sizeof(*ape), M_AUDIT_PIPE_ENTRY, M_NOWAIT | M_ZERO);
+	ape = malloc(sizeof(*ape) + record_len, M_AUDIT_PIPE_ENTRY, M_WAITOK | M_ZERO);
 	if (ape == NULL) {
 		ap->ap_drops++;
 		audit_pipe_drops++;
 		return;
 	}
-
-	ape->ape_record = malloc(record_len, M_AUDIT_PIPE_ENTRY, M_NOWAIT);
-	if (ape->ape_record == NULL) {
-		free(ape, M_AUDIT_PIPE_ENTRY);
-		ap->ap_drops++;
-		audit_pipe_drops++;
-		return;
-	}
+	
+	ape->ape_record = ape + sizeof(*ape);
 
 	bcopy(record, ape->ape_record, record_len);
 	ape->ape_record_len = record_len;
