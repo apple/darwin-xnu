@@ -287,6 +287,12 @@ _kernelrpc_mach_port_get_attributes_trap(struct _kernelrpc_mach_port_get_attribu
 	const mach_msg_type_number_t max_count = (sizeof(MACH_PORT_INFO_OUT)/sizeof(MACH_PORT_INFO_OUT[0]));
 	typeof(MACH_PORT_INFO_OUT[0]) info[max_count];
 
+	/*
+	 * zero out our stack buffer because not all flavors of
+	 * port_get_attributes initialize the whole struct
+	 */
+	bzero(info, sizeof(MACH_PORT_INFO_OUT));
+
 	if (copyin(CAST_USER_ADDR_T(args->count), &count, sizeof(count))) {
 		rv = MACH_SEND_INVALID_DATA;
 		goto done;

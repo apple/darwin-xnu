@@ -227,6 +227,13 @@ kau_free(struct au_record *rec)
 	}								\
 } while (0)
 
+#define KPATH2_TOKENS do {						\
+	if (ARG_IS_VALID(kar, ARG_KPATH2)) {				\
+		tok = au_to_path(ar->ar_arg_kpath2);			\
+		kau_write(rec, tok);					\
+	}								\
+} while (0)
+
 #define	VNODE1_TOKENS do {						\
 	if (ARG_IS_VALID(kar, ARG_KPATH1)) {				\
 		tok = au_to_path(ar->ar_arg_kpath1);			\
@@ -1188,6 +1195,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_RENAME:
 		UPATH1_VNODE1_TOKENS;
 		UPATH2_TOKENS;
+		KPATH2_TOKENS;
 		break;
 
 	case AUE_MKDIR_EXTENDED:

@@ -4826,8 +4826,7 @@ ipc_kmsg_add_trailer(ipc_kmsg_t kmsg, ipc_space_t space __unused,
 		goto done;
 	}
 
-	if (MACH_RCV_TRAILER_ELEMENTS(option) >= 
-			MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AV)){
+	if (GET_RCV_ELEMENTS(option) >= MACH_RCV_TRAILER_AV) {
 		trailer->msgh_ad = 0;
 	}
 

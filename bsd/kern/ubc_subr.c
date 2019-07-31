@@ -1128,7 +1128,7 @@ errno_t ubc_setsize_ex(struct vnode *vp, off_t nsize, ubc_setsize_opts_t opts)
 		 * zero the tail of this page if it's currently
 		 * present in the cache
 		 */
-		kret = ubc_create_upl_kernel(vp, lastpg, PAGE_SIZE, &upl, &pl, UPL_SET_LITE, VM_KERN_MEMORY_FILE);
+		kret = ubc_create_upl_kernel(vp, lastpg, PAGE_SIZE, &upl, &pl, UPL_SET_LITE | UPL_WILL_MODIFY, VM_KERN_MEMORY_FILE);
 
 		if (kret != KERN_SUCCESS)
 		        panic("ubc_setsize: ubc_create_upl (error = %d)\n", kret);

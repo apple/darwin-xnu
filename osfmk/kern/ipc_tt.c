@@ -163,16 +163,23 @@ ipc_task_init(
 	task->itk_space = space;
 
 #if CONFIG_MACF
+	task->exc_actions[0].label = NULL;
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 		mac_exc_associate_action_label(&task->exc_actions[i], mac_exc_create_label());
 	}
 #endif
-	
+
+	/* always zero-out the first (unused) array element */
+
+	bzero(&task->exc_actions[0], sizeof(task->exc_actions[0]));
 	if (parent == TASK_NULL) {
 		ipc_port_t port;
 
 		for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 			task->exc_actions[i].port = IP_NULL;
+			task->exc_actions[i].flavor = 0;
+			task->exc_actions[i].behavior = 0;
+			task->exc_actions[i].privileged = FALSE;
 		}/* for */
 		
 		kr = host_get_host_port(host_priv_self(), &port);

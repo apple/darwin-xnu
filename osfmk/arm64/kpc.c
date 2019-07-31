@@ -941,13 +941,19 @@ kpc_reload_counter(uint32_t ctr)
 {
 	assert(ctr < (kpc_configurable_count() + kpc_fixed_count()));
 
-	/* don't reload counters reserved for power management */
-	if (!kpc_controls_counter(ctr))
-		return 0ULL;
-
 	uint64_t old = read_counter(ctr);
-	write_counter(ctr, FIXED_RELOAD(ctr));
-	return old & KPC_ARM64_COUNTER_MASK;
+
+	if (kpc_controls_counter(ctr)) {
+		write_counter(ctr, FIXED_RELOAD(ctr));
+		return old & KPC_ARM64_COUNTER_MASK;
+	} else {
+		/*
+		 * Unset the overflow bit to clear the condition that drives
+		 * PMIs.  The power manager is not interested in handling PMIs.
+		 */
+		write_counter(ctr, old & KPC_ARM64_COUNTER_MASK);
+		return 0;
+	}
 }
 
 static uint32_t kpc_reload_sync;

@@ -220,6 +220,8 @@ void	 audit_arg_auditinfo_addr(struct kaudit_record *ar,
 		struct auditinfo_addr *au_info);
 void	 audit_arg_upath(struct kaudit_record *ar, struct vnode *cwd_vp,
 		char *upath, u_int64_t flags);
+void	 audit_arg_kpath(struct kaudit_record *ar,
+		char *kpath, u_int64_t flags);
 void	 audit_arg_vnpath(struct kaudit_record *ar, struct vnode *vp,
 		u_int64_t flags);
 void	 audit_arg_vnpath_withref(struct kaudit_record *ar, struct vnode *vp,
@@ -316,6 +318,8 @@ extern au_event_t sys_au_event[];
 #define AUDIT_AUDITING(x)	(NULL != (x))
 
 #endif /* AUDIT_USE_BUILTIN_EXPECT */
+
+#define AUDIT_RECORD_EXISTS() (AUDIT_ENABLED() && AUDIT_AUDITING(AUDIT_RECORD()))
 
 /*
  * Define a macro to wrap the audit_arg_* calls by checking the global

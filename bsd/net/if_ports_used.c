@@ -72,6 +72,7 @@ SYSCTL_PROC(_net_link_generic_system_port_used, OID_AUTO, list,
 
 static int use_test_wakeuuid = 0;
 static uuid_t test_wakeuuid;
+static uuid_string_t test_wakeuuid_str;
 
 #if (DEVELOPMENT || DEBUG)
 SYSCTL_INT(_net_link_generic_system_port_used, OID_AUTO, use_test_wakeuuid,
@@ -87,6 +88,11 @@ int sysctl_clear_test_wakeuuid SYSCTL_HANDLER_ARGS;
 SYSCTL_PROC(_net_link_generic_system_port_used, OID_AUTO, clear_test_wakeuuid,
     CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0,
     sysctl_clear_test_wakeuuid, "S,uuid_t", "");
+
+int sysctl_test_wakeuuid_str SYSCTL_HANDLER_ARGS;
+SYSCTL_PROC(_net_link_generic_system_port_used, OID_AUTO, test_wakeuuid_str,
+    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0,
+    sysctl_test_wakeuuid_str, "A", "");
 
 SYSCTL_OPAQUE(_net_link_generic_system_port_used, OID_AUTO, test_wakeuuid,
     CTLFLAG_RD|CTLFLAG_LOCKED,
@@ -209,12 +215,17 @@ net_port_entry_list_clear(void)
 }
 
 static bool
-get_test_wake_uuid(uuid_t wakeuuid)
+get_test_wake_uuid(uuid_string_t wakeuuid_str, size_t len)
 {
 	if (__improbable(use_test_wakeuuid)) {
 		if (!uuid_is_null(test_wakeuuid)) {
-			if (wakeuuid != NULL) {
-				uuid_copy(wakeuuid, test_wakeuuid);
+			if (wakeuuid_str != NULL && len != 0) {
+				uuid_unparse(test_wakeuuid, wakeuuid_str);
+			}
+			return (true);
+		} else if (strlen(test_wakeuuid_str) != 0) {
+			if (wakeuuid_str != NULL && len != 0) {
+				strlcpy(wakeuuid_str, test_wakeuuid_str, len);
 			}
 			return (true);
 		} else {
@@ -232,7 +243,7 @@ is_wakeuuid_set(void)
 	 * IOPMCopySleepWakeUUIDKey() tells if SleepWakeUUID is currently set
 	 * That means we are currently in a sleep/wake cycle
 	 */
-	return (get_test_wake_uuid(NULL) || IOPMCopySleepWakeUUIDKey(NULL, 0));
+	return (get_test_wake_uuid(NULL, 0) || IOPMCopySleepWakeUUIDKey(NULL, 0));
 }
 
 void
@@ -241,16 +252,25 @@ if_ports_used_update_wakeuuid(struct ifnet *ifp)
 	uuid_t wakeuuid;
 	bool wakeuuid_is_set = false;
 	bool updated = false;
+	uuid_string_t wakeuuid_str;
+
+	uuid_clear(wakeuuid);
 
 	if (__improbable(use_test_wakeuuid)) {
-		wakeuuid_is_set = get_test_wake_uuid(wakeuuid);
+		wakeuuid_is_set = get_test_wake_uuid(wakeuuid_str,
+		    sizeof(wakeuuid_str));
 	} else {
-		uuid_string_t wakeuuid_str;
 
 		wakeuuid_is_set = IOPMCopySleepWakeUUIDKey(wakeuuid_str,
 		    sizeof(wakeuuid_str));
-		if (wakeuuid_is_set) {
-			uuid_parse(wakeuuid_str, wakeuuid);
+	}
+
+	if (wakeuuid_is_set) {
+		if (uuid_parse(wakeuuid_str, wakeuuid) != 0) {
+			os_log(OS_LOG_DEFAULT,
+			    "%s: IOPMCopySleepWakeUUIDKey got bad value %s\n",
+			    __func__, wakeuuid_str);
+			wakeuuid_is_set = false;
 		}
 	}
 
@@ -446,9 +466,29 @@ sysctl_clear_test_wakeuuid SYSCTL_HANDLER_ARGS
 	}
 	if (req->newptr != USER_ADDR_NULL) {
 		uuid_clear(test_wakeuuid);
+		test_wakeuuid_str[0] = 0;
 	}
 	error = SYSCTL_OUT(req, test_wakeuuid,
 	    MIN(sizeof(uuid_t), req->oldlen));
+
+	return (error);
+}
+
+int
+sysctl_test_wakeuuid_str SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error = 0;
+	int changed;
+
+	if (kauth_cred_issuser(kauth_cred_get()) == 0) {
+		return (EPERM);
+	}
+	error = sysctl_io_string(req, test_wakeuuid_str, sizeof(test_wakeuuid_str), 1, &changed);
+	if (changed) {
+		os_log_info(OS_LOG_DEFAULT, "%s: test_wakeuuid_str %s",
+		    __func__, test_wakeuuid_str);
+	}
 
 	return (error);
 }

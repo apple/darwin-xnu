@@ -122,6 +122,7 @@ MACH_HDRS="mach.h
 	thread_state.h"
 
 MACH_PRIVATE_HDRS="port_descriptions.h
+	mach_right_private.h
 	mach_sync_ipc.h"
 
 MIG_FILTERS="watchos_prohibited_mig.txt tvos_prohibited_mig.txt"

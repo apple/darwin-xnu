@@ -131,13 +131,18 @@ void ipc_host_init(void)
 
 	/* the rest of the special ports will be set up later */
 
+	bzero(&realhost.exc_actions[0], sizeof(realhost.exc_actions[0]));
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 			realhost.exc_actions[i].port = IP_NULL;
 			/* The mac framework is not yet initialized, so we defer
 			 * initializing the labels to later, when they are set
 			 * for the first time. */
 			realhost.exc_actions[i].label = NULL;
-		}/* for */
+			/* initialize the entire exception action struct */
+			realhost.exc_actions[i].behavior = 0;
+			realhost.exc_actions[i].flavor = 0;
+			realhost.exc_actions[i].privileged = FALSE;
+	}/* for */
 
 	/*
 	 *	Set up ipc for default processor set.

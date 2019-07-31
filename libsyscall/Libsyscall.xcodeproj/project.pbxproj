@@ -252,6 +252,8 @@
 		E214BDC81C2E358300CEE8A3 /* clonefile.c in Sources */ = {isa = PBXBuildFile; fileRef = E214BDC71C2E34E200CEE8A3 /* clonefile.c */; };
 		E2A0F3341C3B17D100A11F8A /* fs_snapshot.c in Sources */ = {isa = PBXBuildFile; fileRef = E2A0F3331C3B17D100A11F8A /* fs_snapshot.c */; };
 		E4216C311822D404006F2632 /* mach_voucher.defs in Sources */ = {isa = PBXBuildFile; fileRef = E4216C301822D404006F2632 /* mach_voucher.defs */; };
+		E4512B8C21AFDF1600673F73 /* mach_right_private.h in Headers */ = {isa = PBXBuildFile; fileRef = E4512B8B21AFDF1500673F73 /* mach_right_private.h */; };
+		E4512B8D21AFDF1600673F73 /* mach_right_private.h in Headers */ = {isa = PBXBuildFile; fileRef = E4512B8B21AFDF1500673F73 /* mach_right_private.h */; };
 		E453AF351700FD3C00F2C94C /* getiopolicy_np.c in Sources */ = {isa = PBXBuildFile; fileRef = E453AF341700FD3C00F2C94C /* getiopolicy_np.c */; };
 		E453AF3617013CBF00F2C94C /* libproc.h in Headers */ = {isa = PBXBuildFile; fileRef = E4D45C2B16F868ED0002AF25 /* libproc.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		E453AF3717013CC200F2C94C /* libproc_internal.h in Headers */ = {isa = PBXBuildFile; fileRef = E4D45C2C16F868ED0002AF25 /* libproc_internal.h */; settings = {ATTRIBUTES = (Private, ); }; };
@@ -513,7 +515,7 @@
 		40DF0F731E5CD7B30035A864 /* cpu_copy_in_cksum_gen.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cpu_copy_in_cksum_gen.c; path = skywalk/cpu_copy_in_cksum_gen.c; sourceTree = "<group>"; };
 		435F3CA91B06B7BA005ED9EF /* work_interval.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = work_interval.c; sourceTree = "<group>"; };
 		467DAFD3157E8AF200CE68F0 /* guarded_open_np.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = guarded_open_np.c; sourceTree = "<group>"; };
-		4BCDD8AE20741A4700FA37A3 /* mach_right.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mach_right.h; sourceTree = "<group>"; };
+		4BCDD8AE20741A4700FA37A3 /* mach_right.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = mach_right.h; sourceTree = "<group>"; };
 		4BCDD8B120741C2F00FA37A3 /* mach_right.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = mach_right.c; sourceTree = "<group>"; };
 		4BDD5F1B1891AB2F004BF300 /* mach_approximate_time.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mach_approximate_time.c; sourceTree = "<group>"; };
 		4BDD5F1C1891AB2F004BF300 /* mach_approximate_time.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = mach_approximate_time.s; sourceTree = "<group>"; };
@@ -621,6 +623,7 @@
 		E214BDC71C2E34E200CEE8A3 /* clonefile.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = clonefile.c; sourceTree = "<group>"; };
 		E2A0F3331C3B17D100A11F8A /* fs_snapshot.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = fs_snapshot.c; sourceTree = "<group>"; };
 		E4216C301822D404006F2632 /* mach_voucher.defs */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.mig; path = mach_voucher.defs; sourceTree = "<group>"; };
+		E4512B8B21AFDF1500673F73 /* mach_right_private.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = mach_right_private.h; sourceTree = "<group>"; };
 		E453AF341700FD3C00F2C94C /* getiopolicy_np.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = getiopolicy_np.c; sourceTree = "<group>"; };
 		E4D45C2116F856900002AF25 /* __commpage_gettimeofday.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = __commpage_gettimeofday.c; sourceTree = "<group>"; };
 		E4D45C2316F856900002AF25 /* mach_absolute_time.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = mach_absolute_time.s; sourceTree = "<group>"; };
@@ -1023,6 +1026,7 @@
 				C9D9BCDD114B00600000D8B9 /* mach_interface.h */,
 				9C6DA3D120A3D09F0090330B /* mach_sync_ipc.h */,
 				4BCDD8AE20741A4700FA37A3 /* mach_right.h */,
+				E4512B8B21AFDF1500673F73 /* mach_right_private.h */,
 				C9D9BCDF114B00600000D8B9 /* port_obj.h */,
 				C9D9BCE0114B00600000D8B9 /* sync.h */,
 				928336A21B8412C100873B90 /* thread_state.h */,
@@ -1089,6 +1093,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C6D3EFB616542C510052CF30 /* errorlib.h in Headers */,
+				E4512B8D21AFDF1600673F73 /* mach_right_private.h in Headers */,
 				C6D3EFB716542C510052CF30 /* externs.h in Headers */,
 				C6AB38DB174202C10036DD9F /* gethostuuid.h in Headers */,
 				C6D3EFB816542C510052CF30 /* errorlib.h in Headers */,
@@ -1151,6 +1156,7 @@
 				24B028F511FF5C3500CA64A9 /* _libkernel_init.h in Headers */,
 				A59CB95616669EFB00B064B3 /* stack_logging_internal.h in Headers */,
 				E4D45C3F16FB20D30002AF25 /* spawn.h in Headers */,
+				E4512B8C21AFDF1600673F73 /* mach_right_private.h in Headers */,
 				9C6DA3D220A3D09F0090330B /* mach_sync_ipc.h in Headers */,
 				E4D45C4016FB20DC0002AF25 /* spawn_private.h in Headers */,
 				E4D45C2F16F868ED0002AF25 /* libproc.h in Headers */,

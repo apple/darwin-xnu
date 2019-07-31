@@ -11197,6 +11197,8 @@ vm_map_copyin_internal(
 		    (src_object == VM_OBJECT_NULL ||
 		     (src_object->internal &&
 		      src_object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC &&
+		      src_entry->vme_start <= src_addr &&
+		      src_entry->vme_end >= src_end &&
 		      !map_share))) {
 			/*
 			 * If we are destroying the source, and the object
@@ -11205,6 +11207,12 @@ vm_map_copyin_internal(
 			 * copy-on-write only if the source is.
 			 * We make another reference to the object, because
 			 * destroying the source entry will deallocate it.
+			 *
+			 * This memory transfer has to be atomic (to prevent
+			 * the VM object from being shared or copied while
+			 * it's being moved here), so we can only do this
+			 * if we won't have to unlock the VM map, i.e. the
+			 * entire range must be covered by this map entry.
 			 */
 			vm_object_reference(src_object);
 

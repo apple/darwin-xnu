@@ -5986,9 +5986,11 @@ kqueue_threadreq_initiate(struct kqueue *kq, struct kqrequest *kqr,
 	 * Provide the pthread kext a pointer to a workq_threadreq_s structure for
 	 * its use until a corresponding kqueue_threadreq_bind callback.
 	 */
+#if 0 // 45129862
 	if ((kq->kq_state & KQ_WORKLOOP) && current_proc() == kq->kq_p) {
 		flags |= WORKQ_THREADREQ_SET_AST_ON_FAILURE;
 	}
+#endif
 	if (qos == KQWQ_QOS_MANAGER) {
 		qos = WORKQ_THREAD_QOS_MANAGER;
 	}
@@ -6062,9 +6064,11 @@ kqueue_threadreq_modify(struct kqueue *kq, struct kqrequest *kqr, kq_index_t qos
 	kq_req_held(kq);
 
 	int flags = 0;
+#if 0 // 45129862
 	if ((kq->kq_state & KQ_WORKLOOP) && kq->kq_p == current_proc()) {
 		flags |= WORKQ_THREADREQ_SET_AST_ON_FAILURE;
 	}
+#endif
 	workq_kern_threadreq_modify(kq->kq_p, kqr, qos, flags);
 }
 

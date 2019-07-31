@@ -696,6 +696,31 @@ audit_arg_upath(struct kaudit_record *ar, struct vnode *cwd_vp, char *upath, u_i
 	}
 }
 
+void
+audit_arg_kpath(struct kaudit_record *ar, char *kpath, u_int64_t flag)
+{
+	char **pathp;
+
+	KASSERT(kpath != NULL, ("audit_arg_kpath: kpath == NULL"));
+	KASSERT((flag == ARG_KPATH1) || (flag == ARG_KPATH2),
+	    ("audit_arg_kpath: flag %llu", (unsigned long long)flag));
+	KASSERT((flag != ARG_KPATH1) || (flag != ARG_KPATH2),
+	    ("audit_arg_kpath: flag %llu", (unsigned long long)flag));
+
+	if (flag == ARG_KPATH1)
+		pathp = &ar->k_ar.ar_arg_kpath1;
+	else
+		pathp = &ar->k_ar.ar_arg_kpath2;
+
+	if (*pathp == NULL)
+		*pathp = malloc(MAXPATHLEN, M_AUDITPATH, M_WAITOK);
+	else
+		return;
+
+	strlcpy(*pathp, kpath, MAXPATHLEN);
+	ARG_SET_VALID(ar, flag);
+}
+
 /*
  * Function to save the path and vnode attr information into the audit
  * record.

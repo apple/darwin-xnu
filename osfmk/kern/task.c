@@ -6003,15 +6003,18 @@ task_set_mach_voucher(
 
 kern_return_t
 task_swap_mach_voucher(
-	task_t			task,
-	ipc_voucher_t		new_voucher,
-	ipc_voucher_t		*in_out_old_voucher)
+	__unused task_t         task,
+	__unused ipc_voucher_t  new_voucher,
+	ipc_voucher_t          *in_out_old_voucher)
 {
-	if (TASK_NULL == task)
-		return KERN_INVALID_TASK;
-
-	*in_out_old_voucher = new_voucher;
-	return KERN_SUCCESS;
+	/*
+	 * Currently this function is only called from a MIG generated
+	 * routine which doesn't release the reference on the voucher
+	 * addressed by in_out_old_voucher. To avoid leaking this reference,
+	 * a call to release it has been added here.
+	 */
+	ipc_voucher_release(*in_out_old_voucher);
+	return KERN_NOT_SUPPORTED;
 }
 
 void task_set_gpu_denied(task_t task, boolean_t denied)
