@@ -2,7 +2,7 @@
  * Copyright (c) 2004-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -44,113 +44,111 @@
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-boolean_t	need_to_unlock_decompressor = FALSE;
+boolean_t       need_to_unlock_decompressor = FALSE;
 
-kern_return_t 
+kern_return_t
 hibernate_alloc_page_lists(
-		hibernate_page_list_t ** page_list_ret,
-		hibernate_page_list_t ** page_list_wired_ret,
-		hibernate_page_list_t ** page_list_pal_ret)
+	hibernate_page_list_t ** page_list_ret,
+	hibernate_page_list_t ** page_list_wired_ret,
+	hibernate_page_list_t ** page_list_pal_ret)
 {
-    kern_return_t	retval = KERN_SUCCESS;
+	kern_return_t       retval = KERN_SUCCESS;
 
-    hibernate_page_list_t * page_list = NULL;
-    hibernate_page_list_t * page_list_wired = NULL;
-    hibernate_page_list_t * page_list_pal = NULL;
+	hibernate_page_list_t * page_list = NULL;
+	hibernate_page_list_t * page_list_wired = NULL;
+	hibernate_page_list_t * page_list_pal = NULL;
 
-    page_list = hibernate_page_list_allocate(TRUE);
-    if (!page_list) {
+	page_list = hibernate_page_list_allocate(TRUE);
+	if (!page_list) {
+		retval = KERN_RESOURCE_SHORTAGE;
+		goto done;
+	}
+	page_list_wired = hibernate_page_list_allocate(FALSE);
+	if (!page_list_wired) {
+		kfree(page_list, page_list->list_size);
 
-	    retval = KERN_RESOURCE_SHORTAGE;
-	    goto done;
-    }
-    page_list_wired = hibernate_page_list_allocate(FALSE);
-    if (!page_list_wired)
-    {
-	    kfree(page_list, page_list->list_size);
+		retval = KERN_RESOURCE_SHORTAGE;
+		goto done;
+	}
+	page_list_pal = hibernate_page_list_allocate(FALSE);
+	if (!page_list_pal) {
+		kfree(page_list, page_list->list_size);
+		kfree(page_list_wired, page_list_wired->list_size);
 
-	    retval = KERN_RESOURCE_SHORTAGE;
-	    goto done;
-    }
-    page_list_pal = hibernate_page_list_allocate(FALSE);
-    if (!page_list_pal)
-    {
-	    kfree(page_list, page_list->list_size);
-	    kfree(page_list_wired, page_list_wired->list_size);
-
-	    retval = KERN_RESOURCE_SHORTAGE;
-	    goto done;
-    }
-    *page_list_ret        = page_list;
-    *page_list_wired_ret  = page_list_wired;
-    *page_list_pal_ret    = page_list_pal;
+		retval = KERN_RESOURCE_SHORTAGE;
+		goto done;
+	}
+	*page_list_ret        = page_list;
+	*page_list_wired_ret  = page_list_wired;
+	*page_list_pal_ret    = page_list_pal;
 
 done:
-    return (retval);
-
+	return retval;
 }
 
 extern int sync_internal(void);
 
-kern_return_t 
+kern_return_t
 hibernate_setup(IOHibernateImageHeader * header,
-                        boolean_t vmflush,
-			hibernate_page_list_t * page_list __unused,
-			hibernate_page_list_t * page_list_wired __unused,
-			hibernate_page_list_t * page_list_pal __unused)
+    boolean_t vmflush,
+    hibernate_page_list_t * page_list __unused,
+    hibernate_page_list_t * page_list_wired __unused,
+    hibernate_page_list_t * page_list_pal __unused)
 {
-    kern_return_t	retval = KERN_SUCCESS;
+	kern_return_t       retval = KERN_SUCCESS;
 
-    hibernate_create_paddr_map();
+	hibernate_create_paddr_map();
 
-    hibernate_reset_stats();
-    
-    if (vmflush && VM_CONFIG_COMPRESSOR_IS_PRESENT) {
-	    
-	    sync_internal();
+	hibernate_reset_stats();
 
-	    vm_decompressor_lock();
-	    need_to_unlock_decompressor = TRUE;
+	if (vmflush && VM_CONFIG_COMPRESSOR_IS_PRESENT) {
+		sync_internal();
 
-	    hibernate_flush_memory();
-    }
+		vm_decompressor_lock();
+		need_to_unlock_decompressor = TRUE;
 
-    // no failures hereafter
+		hibernate_flush_memory();
+	}
 
-    hibernate_processor_setup(header);
+	// no failures hereafter
 
-    HIBLOG("hibernate_alloc_pages act %d, inact %d, anon %d, throt %d, spec %d, wire %d, wireinit %d\n",
-    	    vm_page_active_count, vm_page_inactive_count, 
-	    vm_page_anonymous_count,  vm_page_throttled_count, vm_page_speculative_count,
+	hibernate_processor_setup(header);
+
+	HIBLOG("hibernate_alloc_pages act %d, inact %d, anon %d, throt %d, spec %d, wire %d, wireinit %d\n",
+	    vm_page_active_count, vm_page_inactive_count,
+	    vm_page_anonymous_count, vm_page_throttled_count, vm_page_speculative_count,
 	    vm_page_wire_count, vm_page_wire_count_initial);
 
-    if (retval != KERN_SUCCESS && need_to_unlock_decompressor == TRUE) {
-	    need_to_unlock_decompressor = FALSE;
-	    vm_decompressor_unlock();
-    }
-    return (retval);
+	if (retval != KERN_SUCCESS && need_to_unlock_decompressor == TRUE) {
+		need_to_unlock_decompressor = FALSE;
+		vm_decompressor_unlock();
+	}
+	return retval;
 }
 
-kern_return_t 
+kern_return_t
 hibernate_teardown(hibernate_page_list_t * page_list,
-                    hibernate_page_list_t * page_list_wired,
-		    hibernate_page_list_t * page_list_pal)
+    hibernate_page_list_t * page_list_wired,
+    hibernate_page_list_t * page_list_pal)
 {
-    hibernate_free_gobble_pages();
+	hibernate_free_gobble_pages();
 
-    if (page_list)
-        kfree(page_list, page_list->list_size);
-    if (page_list_wired)
-        kfree(page_list_wired, page_list_wired->list_size);
-    if (page_list_pal)
-        kfree(page_list_pal, page_list_pal->list_size);
+	if (page_list) {
+		kfree(page_list, page_list->list_size);
+	}
+	if (page_list_wired) {
+		kfree(page_list_wired, page_list_wired->list_size);
+	}
+	if (page_list_pal) {
+		kfree(page_list_pal, page_list_pal->list_size);
+	}
 
-    if (VM_CONFIG_COMPRESSOR_IS_PRESENT) {
-	    if (need_to_unlock_decompressor == TRUE) {
-		    need_to_unlock_decompressor = FALSE;
-		    vm_decompressor_unlock();
-	    }
-	    vm_compressor_delay_trim();
-    }
-    return (KERN_SUCCESS);
+	if (VM_CONFIG_COMPRESSOR_IS_PRESENT) {
+		if (need_to_unlock_decompressor == TRUE) {
+			need_to_unlock_decompressor = FALSE;
+			vm_decompressor_unlock();
+		}
+		vm_compressor_delay_trim();
+	}
+	return KERN_SUCCESS;
 }

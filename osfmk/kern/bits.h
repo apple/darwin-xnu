@@ -35,17 +35,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef unsigned int			uint;
+typedef unsigned int                    uint;
 
-#define BIT(b)				(1ULL << (b))
+#define BIT(b)                          (1ULL << (b))
 
-#define mask(width)			(width >= 64 ? -1 : (BIT(width) - 1))
-#define extract(x, shift, width)	((((uint64_t)(x)) >> (shift)) & mask(width))
-#define bits(x, hi, lo)			extract((x), (lo), (hi) - (lo) + 1)
+#define mask(width)                     (width >= 64 ? -1 : (BIT(width) - 1))
+#define extract(x, shift, width)        ((((uint64_t)(x)) >> (shift)) & mask(width))
+#define bits(x, hi, lo)                 extract((x), (lo), (hi) - (lo) + 1)
 
-#define bit_set(x, b)			((x) |= BIT(b))
-#define bit_clear(x, b)			((x) &= ~BIT(b))
-#define bit_test(x, b)			((bool)((x) & BIT(b)))
+#define bit_set(x, b)                   ((x) |= BIT(b))
+#define bit_clear(x, b)                 ((x) &= ~BIT(b))
+#define bit_test(x, b)                  ((bool)((x) & BIT(b)))
 
 inline static uint64_t
 bit_ror64(uint64_t bitmap, uint n)
@@ -53,11 +53,11 @@ bit_ror64(uint64_t bitmap, uint n)
 #if defined(__arm64__)
 	uint64_t result;
 	uint64_t _n = (uint64_t)n;
-	asm volatile("ror %0, %1, %2" : "=r" (result) : "r" (bitmap), "r" (_n));
+	asm volatile ("ror %0, %1, %2" : "=r" (result) : "r" (bitmap), "r" (_n));
 	return result;
 #else
 	n = n & 63;
-	return ((bitmap >> n) | (bitmap << (64 - n)));
+	return (bitmap >> n) | (bitmap << (64 - n));
 #endif
 }
 
@@ -68,7 +68,7 @@ bit_rol64(uint64_t bitmap, uint n)
 	return bit_ror64(bitmap, 64U - n);
 #else
 	n = n & 63;
-	return ((bitmap << n) | (bitmap >> (64 - n)));
+	return (bitmap << n) | (bitmap >> (64 - n));
 #endif
 }
 
@@ -76,18 +76,18 @@ bit_rol64(uint64_t bitmap, uint n)
 inline static bool
 bit_clear_if_set(uint64_t bitmap, int bit)
 {
-    bool bit_is_set = bit_test(bitmap, bit);
-    bit_clear(bitmap, bit);
-    return bit_is_set;
+	bool bit_is_set = bit_test(bitmap, bit);
+	bit_clear(bitmap, bit);
+	return bit_is_set;
 }
 
 /* Non-atomically set the bit and returns whether the bit value was changed */
 inline static bool
 bit_set_if_clear(uint64_t bitmap, int bit)
 {
-    bool bit_is_set = bit_test(bitmap, bit);
-    bit_set(bitmap, bit);
-    return !bit_is_set;
+	bool bit_is_set = bit_test(bitmap, bit);
+	bit_set(bitmap, bit);
+	return !bit_is_set;
 }
 
 /* Returns the most significant '1' bit, or -1 if all zeros */
@@ -96,7 +96,7 @@ bit_first(uint64_t bitmap)
 {
 #if defined(__arm64__)
 	int64_t result;
-	asm volatile("clz %0, %1" : "=r" (result) : "r" (bitmap));
+	asm volatile ("clz %0, %1" : "=r" (result) : "r" (bitmap));
 	return 63 - (int)result;
 #else
 	return (bitmap == 0) ? -1 : 63 - __builtin_clzll(bitmap);
@@ -168,13 +168,13 @@ bit_ceiling(uint64_t n)
 }
 
 /* If n is a power of 2, bit_log2(n) == bit_floor(n) == bit_ceiling(n) */
-#define bit_log2(n)		bit_floor((uint64_t)(n))
+#define bit_log2(n)             bit_floor((uint64_t)(n))
 
-typedef _Atomic uint64_t		bitmap_t;
+typedef uint64_t                bitmap_t;
 
 
 inline static bool
-atomic_bit_set(bitmap_t *map, int n, int mem_order)
+atomic_bit_set(_Atomic bitmap_t *map, int n, int mem_order)
 {
 	bitmap_t prev;
 	prev = __c11_atomic_fetch_or(map, BIT(n), mem_order);
@@ -182,7 +182,7 @@ atomic_bit_set(bitmap_t *map, int n, int mem_order)
 }
 
 inline static bool
-atomic_bit_clear(bitmap_t *map, int n, int mem_order)
+atomic_bit_clear(_Atomic bitmap_t *map, int n, int mem_order)
 {
 	bitmap_t prev;
 	prev = __c11_atomic_fetch_and(map, ~BIT(n), mem_order);
@@ -190,10 +190,10 @@ atomic_bit_clear(bitmap_t *map, int n, int mem_order)
 }
 
 
-#define BITMAP_LEN(n)	(((uint)(n) + 63) >> 6)		/* Round to 64bit bitmap_t */
-#define BITMAP_SIZE(n)	(size_t)(BITMAP_LEN(n) << 3)		/* Round to 64bit bitmap_t, then convert to bytes */
-#define bitmap_bit(n)	bits(n, 5, 0)
-#define bitmap_index(n)	bits(n, 63, 6)
+#define BITMAP_LEN(n)   (((uint)(n) + 63) >> 6)         /* Round to 64bit bitmap_t */
+#define BITMAP_SIZE(n)  (size_t)(BITMAP_LEN(n) << 3)            /* Round to 64bit bitmap_t, then convert to bytes */
+#define bitmap_bit(n)   bits(n, 5, 0)
+#define bitmap_index(n) bits(n, 63, 6)
 
 inline static bitmap_t *
 bitmap_zero(bitmap_t *map, uint nbits)
@@ -238,13 +238,13 @@ bitmap_clear(bitmap_t *map, uint n)
 }
 
 inline static bool
-atomic_bitmap_set(bitmap_t *map, uint n, int mem_order)
+atomic_bitmap_set(_Atomic bitmap_t *map, uint n, int mem_order)
 {
 	return atomic_bit_set(&map[bitmap_index(n)], bitmap_bit(n), mem_order);
 }
 
 inline static bool
-atomic_bitmap_clear(bitmap_t *map, uint n, int mem_order)
+atomic_bitmap_clear(_Atomic bitmap_t *map, uint n, int mem_order)
 {
 	return atomic_bit_clear(&map[bitmap_index(n)], bitmap_bit(n), mem_order);
 }

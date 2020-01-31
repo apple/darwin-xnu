@@ -16,7 +16,7 @@ T_GLOBAL_META(
 	T_META_ASROOT(true),
 	T_META_LTEPHASE(LTE_SINGLEUSER),
 	T_META_TAG_PERF
-);
+	);
 #if TARGET_OS_WATCH
 #define TEST_TIMEOUT 3600 * (NSEC_PER_SEC)
 #else
@@ -58,7 +58,9 @@ static _Atomic bool tracing_on = false;
 
 void run_exit_test(int proc_wired_mem, int nthreads);
 
-static void cleanup(void) {
+static void
+cleanup(void)
+{
 	free(begin_ts);
 	dispatch_release(spawn_queue);
 	dispatch_release(processing_queue);
@@ -113,10 +115,9 @@ T_DECL(exit, "exit(2) time from syscall start to end", T_META_TIMEOUT(TEST_TIMEO
 		consumer_i++;
 		dt_stat_finalize(s);
 		if (consumer_i >= TEST_CASES_COUNT) {
-			ktrace_end(session, 1);
-		}
-		else {
-			s = create_stat(test_cases[consumer_i].wired_mem, test_cases[consumer_i].threads);
+		        ktrace_end(session, 1);
+		} else {
+		        s = create_stat(test_cases[consumer_i].wired_mem, test_cases[consumer_i].threads);
 		}
 	});
 
@@ -129,7 +130,7 @@ T_DECL(exit, "exit(2) time from syscall start to end", T_META_TIMEOUT(TEST_TIMEO
 		T_ASSERT_LE(e->pid, PID_MAX, "pid %d is valid in end tracepoint", e->pid);
 
 		if (begin_ts[e->pid] == 0) {
-			return;
+		        return;
 		}
 
 		T_QUIET; T_ASSERT_LE(begin_ts[e->pid], e->timestamp, "timestamps are monotonically increasing");
@@ -137,7 +138,7 @@ T_DECL(exit, "exit(2) time from syscall start to end", T_META_TIMEOUT(TEST_TIMEO
 
 
 		if (dt_stat_stable(s) && producer_i == consumer_i) {
-			dispatch_sync(spawn_queue, ^(void) {
+		        dispatch_sync(spawn_queue, ^(void) {
 				producer_i++;
 				T_ASSERT_POSIX_ZERO(kdebug_trace(NEXT_CASE_EVENTID, producer_i, 0, 0, 0), "kdebug_trace returns 0");
 			});
@@ -154,7 +155,7 @@ T_DECL(exit, "exit(2) time from syscall start to end", T_META_TIMEOUT(TEST_TIMEO
 		char nthreads_buf[32], mem_buf[32];
 
 		if (producer_i >= TEST_CASES_COUNT || !tracing_on) {
-			return;
+		        return;
 		}
 
 		snprintf(nthreads_buf, 32, "%d", test_cases[producer_i].threads);
@@ -170,8 +171,9 @@ T_DECL(exit, "exit(2) time from syscall start to end", T_META_TIMEOUT(TEST_TIMEO
 		bret = waitpid(pid, &status, 0);
 		T_QUIET; T_ASSERT_POSIX_SUCCESS(bret, "waited for process %d\n", pid);
 
-		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-			T_ASSERT_FAIL("child process failed to run");
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+		        T_ASSERT_FAIL("child process failed to run");
+		}
 
 		// Avoid saturating the CPU with new processes
 		usleep(1000);
@@ -187,4 +189,3 @@ T_DECL(exit, "exit(2) time from syscall start to end", T_META_TIMEOUT(TEST_TIMEO
 
 	dispatch_main();
 }
-

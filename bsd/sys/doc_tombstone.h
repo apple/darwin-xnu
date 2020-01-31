@@ -45,13 +45,13 @@
  * uthread structure.
  */
 struct doc_tombstone {
-	struct vnode	 *t_lastop_parent;
-	struct vnode	 *t_lastop_item;
-	uint32_t		  t_lastop_parent_vid;
-	uint32_t		  t_lastop_item_vid;
+	struct vnode     *t_lastop_parent;
+	struct vnode     *t_lastop_item;
+	uint32_t                  t_lastop_parent_vid;
+	uint32_t                  t_lastop_item_vid;
 	uint64_t          t_lastop_fileid;
 	uint64_t          t_lastop_document_id;
-	unsigned char     t_lastop_filename[NAME_MAX+1];
+	unsigned char     t_lastop_filename[NAME_MAX + 1];
 };
 
 struct componentname;
@@ -59,11 +59,11 @@ struct componentname;
 struct doc_tombstone *doc_tombstone_get(void);
 void doc_tombstone_clear(struct doc_tombstone *ut, struct vnode **old_vpp);
 void doc_tombstone_save(struct vnode *dvp, struct vnode *vp,
-						struct componentname *cnp, uint64_t doc_id,
-						ino64_t file_id);
+    struct componentname *cnp, uint64_t doc_id,
+    ino64_t file_id);
 bool doc_tombstone_should_ignore_name(const char *nameptr, int len);
 bool doc_tombstone_should_save(struct doc_tombstone *ut, struct vnode *vp,
-							   struct componentname *cnp);
+    struct componentname *cnp);
 
 #endif // defined(KERNEL_PRIVATE)
 

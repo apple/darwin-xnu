@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -110,16 +110,16 @@
 
 #include <UserNotification/UNDReplyServer.h>
 
-#if	CONFIG_AUDIT
+#if     CONFIG_AUDIT
 #include <kern/audit_sessionport.h>
 #endif
 
 #if     MACH_MACHINE_ROUTINES
 #include <machine/machine_routines.h>
-#endif	/* MACH_MACHINE_ROUTINES */
-#if	XK_PROXY
+#endif  /* MACH_MACHINE_ROUTINES */
+#if     XK_PROXY
 #include <uk_xkern/xk_uproxy_server.h>
-#endif	/* XK_PROXY */
+#endif  /* XK_PROXY */
 
 #include <kern/ipc_tt.h>
 #include <kern/ipc_mig.h>
@@ -149,14 +149,14 @@ extern int proc_pid(void *p);
  */
 boolean_t
 ipc_kobject_notify(
-        mach_msg_header_t *request_header,
-        mach_msg_header_t *reply_header);
+	mach_msg_header_t *request_header,
+	mach_msg_header_t *reply_header);
 
 typedef struct {
-        mach_msg_id_t num;
-        mig_routine_t routine;
+	mach_msg_id_t num;
+	mig_routine_t routine;
 	int size;
-#if	MACH_COUNTERS
+#if     MACH_COUNTERS
 	mach_counter_t callcount;
 #endif
 } mig_hash_t;
@@ -165,7 +165,7 @@ typedef struct {
 #define MIG_HASH(x) (x)
 
 #ifndef max
-#define max(a,b)        (((a) > (b)) ? (a) : (b))
+#define max(a, b)        (((a) > (b)) ? (a) : (b))
 #endif /* max */
 
 static mig_hash_t mig_buckets[MAX_MIG_ENTRIES];
@@ -175,16 +175,16 @@ static mach_msg_size_t mig_reply_size = sizeof(mig_reply_error_t);
 
 
 const struct mig_subsystem *mig_e[] = {
-        (const struct mig_subsystem *)&mach_vm_subsystem,
-        (const struct mig_subsystem *)&mach_port_subsystem,
-        (const struct mig_subsystem *)&mach_host_subsystem,
-        (const struct mig_subsystem *)&host_priv_subsystem,
-        (const struct mig_subsystem *)&host_security_subsystem,
-        (const struct mig_subsystem *)&clock_subsystem,
-        (const struct mig_subsystem *)&clock_priv_subsystem,
-        (const struct mig_subsystem *)&processor_subsystem,
-        (const struct mig_subsystem *)&processor_set_subsystem,
-        (const struct mig_subsystem *)&is_iokit_subsystem,
+	(const struct mig_subsystem *)&mach_vm_subsystem,
+	(const struct mig_subsystem *)&mach_port_subsystem,
+	(const struct mig_subsystem *)&mach_host_subsystem,
+	(const struct mig_subsystem *)&host_priv_subsystem,
+	(const struct mig_subsystem *)&host_security_subsystem,
+	(const struct mig_subsystem *)&clock_subsystem,
+	(const struct mig_subsystem *)&clock_priv_subsystem,
+	(const struct mig_subsystem *)&processor_subsystem,
+	(const struct mig_subsystem *)&processor_set_subsystem,
+	(const struct mig_subsystem *)&is_iokit_subsystem,
 	(const struct mig_subsystem *)&lock_set_subsystem,
 	(const struct mig_subsystem *)&task_subsystem,
 	(const struct mig_subsystem *)&thread_act_subsystem,
@@ -197,58 +197,60 @@ const struct mig_subsystem *mig_e[] = {
 	(const struct mig_subsystem *)&memory_entry_subsystem,
 
 #if     XK_PROXY
-        (const struct mig_subsystem *)&do_uproxy_xk_uproxy_subsystem,
+	(const struct mig_subsystem *)&do_uproxy_xk_uproxy_subsystem,
 #endif /* XK_PROXY */
 #if     MACH_MACHINE_ROUTINES
-        (const struct mig_subsystem *)&MACHINE_SUBSYSTEM,
+	(const struct mig_subsystem *)&MACHINE_SUBSYSTEM,
 #endif  /* MACH_MACHINE_ROUTINES */
 #if     MCMSG && iPSC860
 	(const struct mig_subsystem *)&mcmsg_info_subsystem,
 #endif  /* MCMSG && iPSC860 */
-        (const struct mig_subsystem *)&catch_exc_subsystem,
-        (const struct mig_subsystem *)&catch_mach_exc_subsystem,
-
+	(const struct mig_subsystem *)&catch_exc_subsystem,
+	(const struct mig_subsystem *)&catch_mach_exc_subsystem,
 };
 
 void
 mig_init(void)
 {
-    unsigned int i, n = sizeof(mig_e)/sizeof(const struct mig_subsystem *);
-    int howmany;
-    mach_msg_id_t j, pos, nentry, range;
-	
-    for (i = 0; i < n; i++) {
-	range = mig_e[i]->end - mig_e[i]->start;
-	if (!mig_e[i]->start || range < 0)
-	    panic("the msgh_ids in mig_e[] aren't valid!");
+	unsigned int i, n = sizeof(mig_e) / sizeof(const struct mig_subsystem *);
+	int howmany;
+	mach_msg_id_t j, pos, nentry, range;
 
-	for  (j = 0; j < range; j++) {
-	  if (mig_e[i]->routine[j].stub_routine) { 
-	    /* Only put real entries in the table */
-	    nentry = j + mig_e[i]->start;	
-	    for (pos = MIG_HASH(nentry) % MAX_MIG_ENTRIES, howmany = 1;
-		 mig_buckets[pos].num;
-		 pos++, pos = pos % MAX_MIG_ENTRIES, howmany++) {
-	         if (mig_buckets[pos].num == nentry) {
-		        printf("message id = %d\n", nentry);
-		 	panic("multiple entries with the same msgh_id");
-	         }
-		 if (howmany == MAX_MIG_ENTRIES)
-		       panic("the mig dispatch table is too small");
-	    }
-		
-	    mig_buckets[pos].num = nentry;
-	    mig_buckets[pos].routine = mig_e[i]->routine[j].stub_routine;
-	    if (mig_e[i]->routine[j].max_reply_msg)
-		    mig_buckets[pos].size = mig_e[i]->routine[j].max_reply_msg;
-	    else
-		    mig_buckets[pos].size = mig_e[i]->maxsize;
+	for (i = 0; i < n; i++) {
+		range = mig_e[i]->end - mig_e[i]->start;
+		if (!mig_e[i]->start || range < 0) {
+			panic("the msgh_ids in mig_e[] aren't valid!");
+		}
 
-	    mig_table_max_displ = max(howmany, mig_table_max_displ);
-	  }
+		for (j = 0; j < range; j++) {
+			if (mig_e[i]->routine[j].stub_routine) {
+				/* Only put real entries in the table */
+				nentry = j + mig_e[i]->start;
+				for (pos = MIG_HASH(nentry) % MAX_MIG_ENTRIES, howmany = 1;
+				    mig_buckets[pos].num;
+				    pos++, pos = pos % MAX_MIG_ENTRIES, howmany++) {
+					if (mig_buckets[pos].num == nentry) {
+						printf("message id = %d\n", nentry);
+						panic("multiple entries with the same msgh_id");
+					}
+					if (howmany == MAX_MIG_ENTRIES) {
+						panic("the mig dispatch table is too small");
+					}
+				}
+
+				mig_buckets[pos].num = nentry;
+				mig_buckets[pos].routine = mig_e[i]->routine[j].stub_routine;
+				if (mig_e[i]->routine[j].max_reply_msg) {
+					mig_buckets[pos].size = mig_e[i]->routine[j].max_reply_msg;
+				} else {
+					mig_buckets[pos].size = mig_e[i]->maxsize;
+				}
+
+				mig_table_max_displ = max(howmany, mig_table_max_displ);
+			}
+		}
 	}
-    }
-    printf("mig_table_max_displ = %d\n", mig_table_max_displ);
+	printf("mig_table_max_displ = %d\n", mig_table_max_displ);
 }
 
 
@@ -264,7 +266,7 @@ mig_init(void)
 
 ipc_kmsg_t
 ipc_kobject_server(
-	ipc_kmsg_t	request,
+	ipc_kmsg_t      request,
 	mach_msg_option_t __unused option)
 {
 	mach_msg_size_t reply_size;
@@ -283,26 +285,26 @@ ipc_kobject_server(
 	 * Find out corresponding mig_hash entry if any
 	 */
 	{
-	    unsigned int i = (unsigned int)MIG_HASH(request_msgh_id);
-	    int max_iter = mig_table_max_displ;
+		unsigned int i = (unsigned int)MIG_HASH(request_msgh_id);
+		int max_iter = mig_table_max_displ;
 
-	    do {
-		ptr = &mig_buckets[i++ % MAX_MIG_ENTRIES];
-	    } while (request_msgh_id != ptr->num && ptr->num && --max_iter);
+		do {
+			ptr = &mig_buckets[i++ % MAX_MIG_ENTRIES];
+		} while (request_msgh_id != ptr->num && ptr->num && --max_iter);
 
-	    if (!ptr->routine || request_msgh_id != ptr->num) {
-	        ptr = (mig_hash_t *)0;
-		reply_size = mig_reply_size;
-	    } else {
-		reply_size = ptr->size;
-#if	MACH_COUNTER
-		ptr->callcount++;
+		if (!ptr->routine || request_msgh_id != ptr->num) {
+			ptr = (mig_hash_t *)0;
+			reply_size = mig_reply_size;
+		} else {
+			reply_size = ptr->size;
+#if     MACH_COUNTER
+			ptr->callcount++;
 #endif
-	    }
+		}
 	}
 
 	/* round up for trailer size */
-        reply_size += MAX_TRAILER_SIZE;
+	reply_size += MAX_TRAILER_SIZE;
 	reply = ipc_kmsg_alloc(reply_size);
 
 	if (reply == IKM_NULL) {
@@ -316,28 +318,28 @@ ipc_kobject_server(
 	 * Initialize reply message.
 	 */
 	{
-#define	InP	((mach_msg_header_t *) request->ikm_header)
-#define	OutP	((mig_reply_error_t *) reply->ikm_header)
+#define InP     ((mach_msg_header_t *) request->ikm_header)
+#define OutP    ((mig_reply_error_t *) reply->ikm_header)
 
-	    /* 
-	     * MIG should really assure no data leakage -
-	     * but until it does, pessimistically zero the
-	     * whole reply buffer.
-	     */
-	    bzero((void *)OutP, reply_size);
+		/*
+		 * MIG should really assure no data leakage -
+		 * but until it does, pessimistically zero the
+		 * whole reply buffer.
+		 */
+		bzero((void *)OutP, reply_size);
 
-	    OutP->NDR = NDR_record;
-	    OutP->Head.msgh_size = sizeof(mig_reply_error_t);
+		OutP->NDR = NDR_record;
+		OutP->Head.msgh_size = sizeof(mig_reply_error_t);
 
-	    OutP->Head.msgh_bits =
-		MACH_MSGH_BITS_SET(MACH_MSGH_BITS_LOCAL(InP->msgh_bits), 0, 0, 0);
-	    OutP->Head.msgh_remote_port = InP->msgh_local_port;
-	    OutP->Head.msgh_local_port = MACH_PORT_NULL;
-	    OutP->Head.msgh_voucher_port = MACH_PORT_NULL;
-	    OutP->Head.msgh_id = InP->msgh_id + 100;
+		OutP->Head.msgh_bits =
+		    MACH_MSGH_BITS_SET(MACH_MSGH_BITS_LOCAL(InP->msgh_bits), 0, 0, 0);
+		OutP->Head.msgh_remote_port = InP->msgh_local_port;
+		OutP->Head.msgh_local_port = MACH_PORT_NULL;
+		OutP->Head.msgh_voucher_port = MACH_PORT_NULL;
+		OutP->Head.msgh_id = InP->msgh_id + 100;
 
-#undef	InP
-#undef	OutP
+#undef  InP
+#undef  OutP
 	}
 
 	/*
@@ -346,50 +348,49 @@ ipc_kobject_server(
 	 */
 	ipc_kmsg_trace_send(request, option);
 	{
-	    if (ptr) {
-		/*
-		 * Check if the port is a task port, if its a task port then
-		 * snapshot the task exec token before the mig routine call.
-		 */
-		ipc_port_t port = request->ikm_header->msgh_remote_port;
-		if (IP_VALID(port) && ip_kotype(port) == IKOT_TASK) {
-			task = convert_port_to_task_with_exec_token(port, &exec_token);
-		}
-
-		(*ptr->routine)(request->ikm_header, reply->ikm_header);
-
-		/* Check if the exec token changed during the mig routine */
-		if (task != TASK_NULL) {
-			if (exec_token != task->exec_token) {
-				exec_token_changed = TRUE;
+		if (ptr) {
+			/*
+			 * Check if the port is a task port, if its a task port then
+			 * snapshot the task exec token before the mig routine call.
+			 */
+			ipc_port_t port = request->ikm_header->msgh_remote_port;
+			if (IP_VALID(port) && ip_kotype(port) == IKOT_TASK) {
+				task = convert_port_to_task_with_exec_token(port, &exec_token);
 			}
-			task_deallocate(task);
-		}
 
-		kernel_task->messages_received++;
-	    }
-	    else {
-		if (!ipc_kobject_notify(request->ikm_header, reply->ikm_header)){
+			(*ptr->routine)(request->ikm_header, reply->ikm_header);
+
+			/* Check if the exec token changed during the mig routine */
+			if (task != TASK_NULL) {
+				if (exec_token != task->exec_token) {
+					exec_token_changed = TRUE;
+				}
+				task_deallocate(task);
+			}
+
+			kernel_task->messages_received++;
+		} else {
+			if (!ipc_kobject_notify(request->ikm_header, reply->ikm_header)) {
 #if DEVELOPMENT || DEBUG
-		    printf("ipc_kobject_server: bogus kernel message, id=%d\n",
-			request->ikm_header->msgh_id);
-#endif	/* DEVELOPMENT || DEBUG */
-		    _MIG_MSGID_INVALID(request->ikm_header->msgh_id);
+				printf("ipc_kobject_server: bogus kernel message, id=%d\n",
+				    request->ikm_header->msgh_id);
+#endif  /* DEVELOPMENT || DEBUG */
+				_MIG_MSGID_INVALID(request->ikm_header->msgh_id);
 
-		    ((mig_reply_error_t *) reply->ikm_header)->RetCode
-			= MIG_BAD_ID;
+				((mig_reply_error_t *) reply->ikm_header)->RetCode
+				        = MIG_BAD_ID;
+			} else {
+				kernel_task->messages_received++;
+			}
 		}
-		else
-		  kernel_task->messages_received++;
-	    }
-	    kernel_task->messages_sent++;
+		kernel_task->messages_sent++;
 	}
 
 	/*
 	 *	Destroy destination. The following code differs from
 	 *	ipc_object_destroy in that we release the send-once
 	 *	right instead of generating a send-once notification
-	 * 	(which would bring us here again, creating a loop).
+	 *      (which would bring us here again, creating a loop).
 	 *	It also differs in that we only expect send or
 	 *	send-once rights, never receive rights.
 	 *
@@ -398,16 +399,16 @@ ipc_kobject_server(
 	 */
 	destp = (ipc_port_t *) &request->ikm_header->msgh_remote_port;
 	switch (MACH_MSGH_BITS_REMOTE(request->ikm_header->msgh_bits)) {
-		case MACH_MSG_TYPE_PORT_SEND:
-		    ipc_port_release_send(*destp);
-		    break;
-		
-		case MACH_MSG_TYPE_PORT_SEND_ONCE:
-		    ipc_port_release_sonce(*destp);
-		    break;
-		
-		default:
-		    panic("ipc_kobject_server: strange destination rights");
+	case MACH_MSG_TYPE_PORT_SEND:
+		ipc_port_release_send(*destp);
+		break;
+
+	case MACH_MSG_TYPE_PORT_SEND_ONCE:
+		ipc_port_release_sonce(*destp);
+		break;
+
+	default:
+		panic("ipc_kobject_server: strange destination rights");
 	}
 	*destp = IP_NULL;
 
@@ -417,16 +418,17 @@ ipc_kobject_server(
 	 */
 	if (IP_VALID(request->ikm_voucher)) {
 		assert(MACH_MSG_TYPE_PORT_SEND ==
-		       MACH_MSGH_BITS_VOUCHER(request->ikm_header->msgh_bits));
+		    MACH_MSGH_BITS_VOUCHER(request->ikm_header->msgh_bits));
 		ipc_port_release_send(request->ikm_voucher);
 		request->ikm_voucher = IP_NULL;
 	}
 
-        if (!(reply->ikm_header->msgh_bits & MACH_MSGH_BITS_COMPLEX) &&
-           ((mig_reply_error_t *) reply->ikm_header)->RetCode != KERN_SUCCESS)
-	 	kr = ((mig_reply_error_t *) reply->ikm_header)->RetCode;
-	else
+	if (!(reply->ikm_header->msgh_bits & MACH_MSGH_BITS_COMPLEX) &&
+	    ((mig_reply_error_t *) reply->ikm_header)->RetCode != KERN_SUCCESS) {
+		kr = ((mig_reply_error_t *) reply->ikm_header)->RetCode;
+	} else {
 		kr = KERN_SUCCESS;
+	}
 
 	if ((kr == KERN_SUCCESS) || (kr == MIG_NO_REPLY)) {
 		/*
@@ -437,7 +439,6 @@ ipc_kobject_server(
 		 *	to free the kmsg.
 		 */
 		ipc_kmsg_free(request);
-
 	} else {
 		/*
 		 *	The message contents of the request are intact.
@@ -474,8 +475,8 @@ ipc_kobject_server(
 		 */
 #if DEVELOPMENT || DEBUG
 		printf("%s: refusing to send reply to kobject %d port (id:%d)\n",
-		       __func__, ip_kotype(replyp), request_msgh_id);
-#endif	/* DEVELOPMENT || DEBUG */
+		    __func__, ip_kotype(replyp), request_msgh_id);
+#endif  /* DEVELOPMENT || DEBUG */
 		ipc_kmsg_destroy(reply);
 		return IKM_NULL;
 	}
@@ -496,23 +497,23 @@ ipc_kobject_server(
 		 *	Initialize the new reply message.
 		 */
 		{
-#define	OutP_new	((mig_reply_error_t *) new_reply->ikm_header)
-#define	OutP_old	((mig_reply_error_t *) reply->ikm_header)
+#define OutP_new        ((mig_reply_error_t *) new_reply->ikm_header)
+#define OutP_old        ((mig_reply_error_t *) reply->ikm_header)
 
-		    bzero((void *)OutP_new, reply_size);
+			bzero((void *)OutP_new, reply_size);
 
-		    OutP_new->NDR = OutP_old->NDR;
-		    OutP_new->Head.msgh_size = sizeof(mig_reply_error_t);
-		    OutP_new->Head.msgh_bits = OutP_old->Head.msgh_bits & ~MACH_MSGH_BITS_COMPLEX;
-		    OutP_new->Head.msgh_remote_port = OutP_old->Head.msgh_remote_port;
-		    OutP_new->Head.msgh_local_port = MACH_PORT_NULL;
-		    OutP_new->Head.msgh_voucher_port = MACH_PORT_NULL;
-		    OutP_new->Head.msgh_id = OutP_old->Head.msgh_id;
+			OutP_new->NDR = OutP_old->NDR;
+			OutP_new->Head.msgh_size = sizeof(mig_reply_error_t);
+			OutP_new->Head.msgh_bits = OutP_old->Head.msgh_bits & ~MACH_MSGH_BITS_COMPLEX;
+			OutP_new->Head.msgh_remote_port = OutP_old->Head.msgh_remote_port;
+			OutP_new->Head.msgh_local_port = MACH_PORT_NULL;
+			OutP_new->Head.msgh_voucher_port = MACH_PORT_NULL;
+			OutP_new->Head.msgh_id = OutP_old->Head.msgh_id;
 
-		    /* Set the error as KERN_INVALID_TASK */
-		    OutP_new->RetCode = KERN_INVALID_TASK;
+			/* Set the error as KERN_INVALID_TASK */
+			OutP_new->RetCode = KERN_INVALID_TASK;
 
-#undef	OutP_new
+#undef  OutP_new
 #undef  OutP_old
 		}
 
@@ -526,12 +527,12 @@ ipc_kobject_server(
 		reply = new_reply;
 	}
 
- 	trailer = (mach_msg_format_0_trailer_t *)
-		((vm_offset_t)reply->ikm_header + (int)reply->ikm_header->msgh_size);
+	trailer = (mach_msg_format_0_trailer_t *)
+	    ((vm_offset_t)reply->ikm_header + (int)reply->ikm_header->msgh_size);
 
- 	trailer->msgh_sender = KERNEL_SECURITY_TOKEN;
- 	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
- 	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
+	trailer->msgh_sender = KERNEL_SECURITY_TOKEN;
+	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
+	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
 
 	return reply;
 }
@@ -549,9 +550,9 @@ ipc_kobject_server(
  */
 void
 ipc_kobject_set(
-	ipc_port_t			port,
-	ipc_kobject_t		kobject,
-	ipc_kobject_type_t	type)
+	ipc_port_t                      port,
+	ipc_kobject_t           kobject,
+	ipc_kobject_type_t      type)
 {
 	ip_lock(port);
 	ipc_kobject_set_atomically(port, kobject, type);
@@ -560,15 +561,15 @@ ipc_kobject_set(
 
 void
 ipc_kobject_set_atomically(
-	ipc_port_t			port,
-	ipc_kobject_t		kobject,
-	ipc_kobject_type_t	type)
+	ipc_port_t                      port,
+	ipc_kobject_t           kobject,
+	ipc_kobject_type_t      type)
 {
 	assert(type == IKOT_NONE || ip_active(port));
-#if	MACH_ASSERT
+#if     MACH_ASSERT
 	port->ip_spares[2] = (port->ip_bits & IO_BITS_KOTYPE);
-#endif	/* MACH_ASSERT */
-	port->ip_bits = (port->ip_bits &~ IO_BITS_KOTYPE) | type;
+#endif  /* MACH_ASSERT */
+	port->ip_bits = (port->ip_bits & ~IO_BITS_KOTYPE) | type;
 	port->ip_kobject = kobject;
 }
 
@@ -588,10 +589,9 @@ ipc_kobject_set_atomically(
 
 void
 ipc_kobject_destroy(
-	ipc_port_t		port)
+	ipc_port_t              port)
 {
 	switch (ip_kotype(port)) {
-
 	case IKOT_TIMER:
 		mk_timer_port_destroy(port);
 		break;
@@ -621,7 +621,7 @@ ipc_kobject_notify(
 	((mig_reply_error_t *) reply_header)->RetCode = MIG_NO_REPLY;
 
 	trailer = (mach_msg_max_trailer_t *)
-	          ((vm_offset_t)request_header + request_header->msgh_size);
+	    ((vm_offset_t)request_header + request_header->msgh_size);
 
 	/*
 	 * The kobject notification is privileged and can change the
@@ -629,95 +629,93 @@ ipc_kobject_notify(
 	 * that the message wasn't faked!
 	 */
 	if (0 != bcmp(&trailer->msgh_audit, &KERNEL_AUDIT_TOKEN,
-			sizeof(trailer->msgh_audit))) {
+	    sizeof(trailer->msgh_audit))) {
 		return FALSE;
 	}
 	if (0 != bcmp(&trailer->msgh_sender, &KERNEL_SECURITY_TOKEN,
-			sizeof(trailer->msgh_sender))) {
+	    sizeof(trailer->msgh_sender))) {
 		return FALSE;
 	}
 
 	switch (request_header->msgh_id) {
-		case MACH_NOTIFY_NO_SENDERS:
-			switch (ip_kotype(port)) {
-			case IKOT_VOUCHER:
-				ipc_voucher_notify(request_header);
-				return TRUE;
+	case MACH_NOTIFY_NO_SENDERS:
+		switch (ip_kotype(port)) {
+		case IKOT_VOUCHER:
+			ipc_voucher_notify(request_header);
+			return TRUE;
 
-			case IKOT_VOUCHER_ATTR_CONTROL:
-				ipc_voucher_attr_control_notify(request_header);
-				return TRUE;
+		case IKOT_VOUCHER_ATTR_CONTROL:
+			ipc_voucher_attr_control_notify(request_header);
+			return TRUE;
 
-			case IKOT_SEMAPHORE:
-				semaphore_notify(request_header);
-				return TRUE;
+		case IKOT_SEMAPHORE:
+			semaphore_notify(request_header);
+			return TRUE;
 
-			case IKOT_TASK:
-				task_port_notify(request_header);
-				return TRUE;
-				
-			case IKOT_NAMED_ENTRY:
-				ip_lock(port);
+		case IKOT_TASK:
+			task_port_notify(request_header);
+			return TRUE;
 
-				/*
-				 * Bring the sequence number and mscount in
-				 * line with ipc_port_destroy assertion.
-				 */
-				port->ip_mscount = 0;
-				port->ip_messages.imq_seqno = 0;
-				ipc_port_destroy(port); /* releases lock */
-				return TRUE;
+		case IKOT_NAMED_ENTRY:
+			ip_lock(port);
 
-			case IKOT_UPL:
-				upl_no_senders(
-					request_header->msgh_remote_port, 
-					(mach_port_mscount_t) 
-					((mach_no_senders_notification_t *) 
-					 request_header)->not_count);
-				reply_header->msgh_remote_port = MACH_PORT_NULL;
-				return TRUE;
+			/*
+			 * Bring the sequence number and mscount in
+			 * line with ipc_port_destroy assertion.
+			 */
+			port->ip_mscount = 0;
+			port->ip_messages.imq_seqno = 0;
+			ipc_port_destroy(port);         /* releases lock */
+			return TRUE;
 
-#if	CONFIG_AUDIT
-			case IKOT_AU_SESSIONPORT:
-				audit_session_nosenders(request_header);
-				return TRUE;
+		case IKOT_UPL:
+			upl_no_senders(
+				request_header->msgh_remote_port,
+				(mach_port_mscount_t)
+				((mach_no_senders_notification_t *)
+				request_header)->not_count);
+			reply_header->msgh_remote_port = MACH_PORT_NULL;
+			return TRUE;
+
+#if     CONFIG_AUDIT
+		case IKOT_AU_SESSIONPORT:
+			audit_session_nosenders(request_header);
+			return TRUE;
 #endif
-			case IKOT_FILEPORT:
-				fileport_notify(request_header);
-				return TRUE;
+		case IKOT_FILEPORT:
+			fileport_notify(request_header);
+			return TRUE;
 
-			case IKOT_WORK_INTERVAL:
-				work_interval_port_notify(request_header);
-				return TRUE;
-
-			}
+		case IKOT_WORK_INTERVAL:
+			work_interval_port_notify(request_header);
+			return TRUE;
+		}
 		break;
 
-		case MACH_NOTIFY_PORT_DELETED:
-		case MACH_NOTIFY_PORT_DESTROYED:
-		case MACH_NOTIFY_SEND_ONCE:
-		case MACH_NOTIFY_DEAD_NAME:
+	case MACH_NOTIFY_PORT_DELETED:
+	case MACH_NOTIFY_PORT_DESTROYED:
+	case MACH_NOTIFY_SEND_ONCE:
+	case MACH_NOTIFY_DEAD_NAME:
 		break;
 
-		default:
+	default:
 		return FALSE;
 	}
 	switch (ip_kotype(port)) {
-
 #ifdef IOKIT
-		case IKOT_IOKIT_OBJECT:
-		case IKOT_IOKIT_CONNECT:
-		case IKOT_IOKIT_IDENT:
-		{
-                return iokit_notify(request_header);
-		}
+	case IKOT_IOKIT_OBJECT:
+	case IKOT_IOKIT_CONNECT:
+	case IKOT_IOKIT_IDENT:
+	{
+		return iokit_notify(request_header);
+	}
 #endif
-		case IKOT_TASK_RESUME:
-		{
-			return task_suspension_notify(request_header);
-		}
+	case IKOT_TASK_RESUME:
+	{
+		return task_suspension_notify(request_header);
+	}
 
-		default:
-                return FALSE;
-        }
+	default:
+		return FALSE;
+	}
 }

@@ -1,10 +1,9 @@
-
 /*
  * rc4.h
  *
  * Copyright (c) 1996-2000 Whistle Communications, Inc.
  * All rights reserved.
- * 
+ *
  * Subject to the following obligations and disclaimer of warranty, use and
  * redistribution of this software, in source or object code forms, with or
  * without modifications are expressly permitted by Whistle Communications;
@@ -15,7 +14,7 @@
  *    Communications, Inc. trademarks, including the mark "WHISTLE
  *    COMMUNICATIONS" on advertising, endorsements, or otherwise except as
  *    such appears in the above copyright notice or in the software.
- * 
+ *
  * THIS SOFTWARE IS BEING PROVIDED BY WHISTLE COMMUNICATIONS "AS IS", AND
  * TO THE MAXIMUM EXTENT PERMITTED BY LAW, WHISTLE COMMUNICATIONS MAKES NO
  * REPRESENTATIONS OR WARRANTIES, EXPRESS OR IMPLIED, REGARDING THIS SOFTWARE,
@@ -41,14 +40,13 @@
 #define _SYS_CRYPTO_RC4_RC4_H_
 
 struct rc4_state {
-	u_char	perm[256];
-	u_char	index1;
-	u_char	index2;
+	u_char  perm[256];
+	u_char  index1;
+	u_char  index2;
 };
 
 extern void rc4_init(struct rc4_state *state, const u_char *key, int keylen);
 extern void rc4_crypt(struct rc4_state *state,
-		const u_char *inbuf, u_char *outbuf, int buflen);
+    const u_char *inbuf, u_char *outbuf, int buflen);
 
 #endif
-

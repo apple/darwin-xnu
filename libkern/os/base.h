@@ -73,7 +73,7 @@
 #define OS_ALWAYS_INLINE __attribute__((__always_inline__))
 #define OS_TRANSPARENT_UNION __attribute__((__transparent_union__))
 #define OS_ALIGNED(n) __attribute__((__aligned__((n))))
-#define OS_FORMAT_PRINTF(x,y) __attribute__((__format__(printf,x,y)))
+#define OS_FORMAT_PRINTF(x, y) __attribute__((__format__(printf,x,y)))
 #define OS_EXPORT extern __attribute__((__visibility__("default")))
 #define OS_INLINE static __inline__
 #define OS_EXPECT(x, v) __builtin_expect((x), (v))
@@ -110,7 +110,7 @@
 #define OS_ALWAYS_INLINE
 #define OS_TRANSPARENT_UNION
 #define OS_ALIGNED(n)
-#define OS_FORMAT_PRINTF(x,y)
+#define OS_FORMAT_PRINTF(x, y)
 #define OS_EXPORT extern
 #define OS_INLINE static inline
 #define OS_EXPECT(x, v) (x)
@@ -144,16 +144,16 @@
 
 #if __has_feature(objc_fixed_enum) || __has_extension(cxx_strong_enums)
 #define OS_ENUM(_name, _type, ...) \
-		typedef enum : _type { __VA_ARGS__ } _name##_t
+	        typedef enum : _type { __VA_ARGS__ } _name##_t
 #else
 #define OS_ENUM(_name, _type, ...) \
-		enum { __VA_ARGS__ }; typedef _type _name##_t
+	        enum { __VA_ARGS__ }; typedef _type _name##_t
 #endif
 
 #if __has_feature(attribute_availability_swift)
 // equivalent to __SWIFT_UNAVAILABLE from Availability.h
 #define OS_SWIFT_UNAVAILABLE(_msg) \
-		__attribute__((__availability__(swift, unavailable, message=_msg)))
+	        __attribute__((__availability__(swift, unavailable, message=_msg)))
 #else
 #define OS_SWIFT_UNAVAILABLE(_msg)
 #endif

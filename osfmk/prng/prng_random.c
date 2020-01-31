@@ -71,7 +71,7 @@ rdseed_step(uint64_t * seed)
 {
 	uint8_t ok;
 
-	asm volatile("rdseed %0; setc %1" : "=r"(*seed), "=qm"(ok));
+	asm volatile ("rdseed %0; setc %1" : "=r"(*seed), "=qm"(ok));
 
 	return (int)ok;
 }
@@ -85,7 +85,7 @@ rdseed_retry(uint64_t * seed, size_t nretries)
 		if (rdseed_step(seed)) {
 			return 1;
 		} else {
-			asm volatile("pause");
+			asm volatile ("pause");
 		}
 	}
 
@@ -117,7 +117,7 @@ rdrand_step(uint64_t * rand)
 {
 	uint8_t ok;
 
-	asm volatile("rdrand %0; setc %1" : "=r"(*rand), "=qm"(ok));
+	asm volatile ("rdrand %0; setc %1" : "=r"(*rand), "=qm"(ok));
 
 	return (int)ok;
 }
@@ -198,9 +198,9 @@ void entropy_buffer_read(void * buffer, size_t * count);
 typedef void (*entropysource)(void * buf, size_t * nbytes);
 
 static const entropysource entropysources[] = {
-    entropy_buffer_read,
+	entropy_buffer_read,
 #if defined(__x86_64__)
-    intel_entropysource,
+	intel_entropysource,
 #endif
 };
 
@@ -290,9 +290,9 @@ static struct {
 	struct ccdrbg_info drbg_info;
 	const struct ccdrbg_nisthmac_custom drbg_custom;
 } erandom = {.drbg_custom = {
-                 .di         = &ccsha1_eay_di,
-                 .strictFIPS = 0,
-             }};
+		     .di         = &ccsha1_eay_di,
+		     .strictFIPS = 0,
+	     }};
 
 static void read_erandom(void * buf, uint32_t nbytes);
 
@@ -310,26 +310,28 @@ entropy_buffer_read(void * buffer, size_t * count)
 		*count = ENTROPY_BUFFER_BYTE_SIZE;
 	}
 
-	current_state = ml_set_interrupts_enabled(FALSE);
+	current_state = ml_early_set_interrupts_enabled(FALSE);
 
 	memcpy(buffer, EntropyData.buffer, *count);
 
 	/* Consider removing this mixing step rdar://problem/31668239 */
-	for (i = 0, j = (ENTROPY_BUFFER_SIZE - 1); i < ENTROPY_BUFFER_SIZE; j = i, i++)
+	for (i = 0, j = (ENTROPY_BUFFER_SIZE - 1); i < ENTROPY_BUFFER_SIZE; j = i, i++) {
 		EntropyData.buffer[i] = EntropyData.buffer[i] ^ EntropyData.buffer[j];
+	}
 
-	(void)ml_set_interrupts_enabled(current_state);
+	(void) ml_early_set_interrupts_enabled(current_state);
 
 #if DEVELOPMENT || DEBUG
 	uint32_t * word = buffer;
 	/* Good for both 32-bit and 64-bit kernels. */
-	for (i = 0; i < ENTROPY_BUFFER_SIZE; i += 4)
+	for (i = 0; i < ENTROPY_BUFFER_SIZE; i += 4) {
 		/*
 		 * We use "EARLY" here so that we can grab early entropy on
 		 * ARM, where tracing is not started until after PRNG is
 		 * initialized.
 		 */
 		KERNEL_DEBUG_EARLY(ENTROPY_READ(i / 4), word[i + 0], word[i + 1], word[i + 2], word[i + 3]);
+	}
 #endif
 }
 
@@ -406,17 +408,35 @@ early_random(void)
 		ps    = 0; /* boot cpu */
 		rc    = ccdrbg_init(&erandom.drbg_info, state, sizeof(erandom.seed), erandom.seed, sizeof(nonce), &nonce, sizeof(ps), &ps);
 		cc_clear(sizeof(nonce), &nonce);
-		if (rc != CCDRBG_STATUS_OK)
+		if (rc != CCDRBG_STATUS_OK) {
 			panic("ccdrbg_init() returned %d", rc);
+		}
 
 		/* Generate output */
 		rc = ccdrbg_generate(&erandom.drbg_info, state, sizeof(result), &result, 0, NULL);
-		if (rc != CCDRBG_STATUS_OK)
+		if (rc != CCDRBG_STATUS_OK) {
 			panic("ccdrbg_generate() returned %d", rc);
+		}
 
 		return result;
-	};
+	}
+	;
 
+#if defined(__x86_64__)
+	/*
+	 * Calling read_erandom() before gsbase is initialized is potentially
+	 * catastrophic, so assert that it's not set to the magic value set
+	 * in i386_init.c before proceeding with the call.  We cannot use
+	 * assert here because it ultimately calls panic, which executes
+	 * operations that involve accessing %gs-relative data (and additionally
+	 * causes a debug trap which will not work properly this early in boot.)
+	 */
+	if (rdmsr64(MSR_IA32_GS_BASE) == EARLY_GSBASE_MAGIC) {
+		kprintf("[early_random] Cannot proceed: GSBASE is not initialized\n");
+		hlt();
+		/*NOTREACHED*/
+	}
+#endif
 	read_erandom(&result, sizeof(result));
 
 	return result;
@@ -437,16 +457,18 @@ read_erandom(void * buffer, u_int numBytes)
 	for (;;) {
 		/* Generate output */
 		rc = ccdrbg_generate(&erandom.drbg_info, state, numBytes, buffer, 0, NULL);
-		if (rc == CCDRBG_STATUS_OK)
+		if (rc == CCDRBG_STATUS_OK) {
 			break;
+		}
 		if (rc == CCDRBG_STATUS_NEED_RESEED) {
 			/* It's time to reseed. Get more entropy */
 			nbytes = entropy_readall(erandom.seed, EARLY_RANDOM_SEED_SIZE);
 			assert(nbytes >= EARLY_RANDOM_SEED_SIZE);
 			rc = ccdrbg_reseed(&erandom.drbg_info, state, sizeof(erandom.seed), erandom.seed, 0, NULL);
 			cc_clear(sizeof(erandom.seed), erandom.seed);
-			if (rc == CCDRBG_STATUS_OK)
+			if (rc == CCDRBG_STATUS_OK) {
 				continue;
+			}
 			panic("read_erandom reseed error %d\n", rc);
 		}
 		panic("read_erandom ccdrbg error %d\n", rc);
@@ -500,8 +522,9 @@ early_random_cpu_init(int cpu)
 	nonce = ml_get_timebase();
 	rc    = ccdrbg_init(&erandom.drbg_info, state, sizeof(erandom.seed), erandom.seed, sizeof(nonce), &nonce, sizeof(cpu), &cpu);
 	cc_clear(sizeof(nonce), &nonce);
-	if (rc != CCDRBG_STATUS_OK)
+	if (rc != CCDRBG_STATUS_OK) {
 		panic("ccdrbg_init() returned %d", rc);
+	}
 }
 
 void
@@ -552,8 +575,9 @@ read_random(void * buffer, u_int numbytes)
 	 */
 	for (;;) {
 		PRNG_CCKPRNG(err = prng_generate(&prng.ctx, numbytes, buffer));
-		if (err == CCKPRNG_OK)
+		if (err == CCKPRNG_OK) {
 			break;
+		}
 		if (err == CCKPRNG_NEED_ENTROPY) {
 			Reseed();
 			continue;
@@ -607,7 +631,7 @@ random_bool_init(struct bool_gen * bg)
 void
 random_bool_gen_entropy(struct bool_gen * bg, unsigned int * buffer, int count)
 {
-	simple_lock(&bg->lock);
+	simple_lock(&bg->lock, LCK_GRP_NULL);
 	int i, t;
 	for (i = 0; i < count; i++) {
 		bg->seed[1] ^= (bg->seed[1] << 5);
@@ -634,8 +658,9 @@ random_bool_gen_bits(struct bool_gen * bg, unsigned int * buffer, unsigned int c
 		 * Find a portion of the buffer that hasn't been emptied.
 		 * We might have emptied our last index in the previous iteration.
 		 */
-		while (index < count && buffer[index] == 0)
+		while (index < count && buffer[index] == 0) {
 			index++;
+		}
 
 		/* If we've exhausted the pool, refill it. */
 		if (index == count) {

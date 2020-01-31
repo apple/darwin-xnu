@@ -127,12 +127,14 @@
 
 #if NETHER == 0
 
-int nfs_boot_init(__unused struct nfs_diskless *nd)
+int
+nfs_boot_init(__unused struct nfs_diskless *nd)
 {
 	panic("nfs_boot_init: no ether");
 }
 
-int nfs_boot_getfh(__unused struct nfs_diskless *nd, __unused int v3, __unused int sotype)
+int
+nfs_boot_getfh(__unused struct nfs_diskless *nd, __unused int v3, __unused int sotype)
 {
 	panic("nfs_boot_getfh: no ether");
 }
@@ -161,21 +163,21 @@ int nfs_boot_getfh(__unused struct nfs_diskless *nd, __unused int v3, __unused i
 
 /* bootparam RPC */
 static int bp_whoami(struct sockaddr_in *bpsin,
-	struct in_addr *my_ip, struct in_addr *gw_ip);
+    struct in_addr *my_ip, struct in_addr *gw_ip);
 static int bp_getfile(struct sockaddr_in *bpsin, const char *key,
-	struct sockaddr_in *mdsin, char *servname, char *path);
+    struct sockaddr_in *mdsin, char *servname, char *path);
 
 /* mountd RPC */
 static int md_mount(struct sockaddr_in *mdsin, char *path, int v3, int sotype,
-	u_char *fhp, u_int32_t *fhlenp);
+    u_char *fhp, u_int32_t *fhlenp);
 
 /* other helpers */
 static int get_file_handle(struct nfs_dlmount *ndmntp);
 
 
-#define IP_FORMAT	"%d.%d.%d.%d"
-#define IP_CH(ip)	((u_char *)ip)
-#define IP_LIST(ip)	IP_CH(ip)[0],IP_CH(ip)[1],IP_CH(ip)[2],IP_CH(ip)[3]
+#define IP_FORMAT       "%d.%d.%d.%d"
+#define IP_CH(ip)       ((u_char *)ip)
+#define IP_LIST(ip)     IP_CH(ip)[0],IP_CH(ip)[1],IP_CH(ip)[2],IP_CH(ip)[3]
 
 #include <sys/netboot.h>
 
@@ -185,46 +187,47 @@ static int get_file_handle(struct nfs_dlmount *ndmntp);
 int
 nfs_boot_init(struct nfs_diskless *nd)
 {
-	struct sockaddr_in 	bp_sin;
-	boolean_t		do_bpwhoami = TRUE;
-	boolean_t		do_bpgetfile = TRUE;
-	int 			error = 0;
-	struct in_addr 		my_ip;
-	struct sockaddr_in *	sin_p;
+	struct sockaddr_in      bp_sin;
+	boolean_t               do_bpwhoami = TRUE;
+	boolean_t               do_bpgetfile = TRUE;
+	int                     error = 0;
+	struct in_addr          my_ip;
+	struct sockaddr_in *    sin_p;
 
 	/* make sure mbuf constants are set up */
-	if (!nfs_mbuf_mhlen)
+	if (!nfs_mbuf_mhlen) {
 		nfs_mbuf_init();
+	}
 
 	/* by this point, networking must already have been configured */
 	if (netboot_iaddr(&my_ip) == FALSE) {
-	    printf("nfs_boot: networking is not initialized\n");
-	    error = ENXIO;
-	    goto failed;
+		printf("nfs_boot: networking is not initialized\n");
+		error = ENXIO;
+		goto failed;
 	}
 
 	/* get the root path information */
 	MALLOC_ZONE(nd->nd_root.ndm_path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
 	if (!nd->nd_root.ndm_path) {
-	    printf("nfs_boot: can't allocate root path buffer\n");
-	    error = ENOMEM;
-	    goto failed;
+		printf("nfs_boot: can't allocate root path buffer\n");
+		error = ENOMEM;
+		goto failed;
 	}
 	MALLOC_ZONE(nd->nd_root.ndm_mntfrom, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
 	if (!nd->nd_root.ndm_mntfrom) {
-	    printf("nfs_boot: can't allocate root mntfrom buffer\n");
-	    error = ENOMEM;
-	    goto failed;
+		printf("nfs_boot: can't allocate root mntfrom buffer\n");
+		error = ENOMEM;
+		goto failed;
 	}
 	sin_p = &nd->nd_root.ndm_saddr;
 	bzero((caddr_t)sin_p, sizeof(*sin_p));
 	sin_p->sin_len = sizeof(*sin_p);
 	sin_p->sin_family = AF_INET;
 	if (netboot_rootpath(&sin_p->sin_addr, nd->nd_root.ndm_host,
-			     sizeof(nd->nd_root.ndm_host),
-			     nd->nd_root.ndm_path, MAXPATHLEN) == TRUE) {
-	    do_bpgetfile = FALSE;
-	    do_bpwhoami = FALSE;
+	    sizeof(nd->nd_root.ndm_host),
+	    nd->nd_root.ndm_path, MAXPATHLEN) == TRUE) {
+		do_bpgetfile = FALSE;
+		do_bpwhoami = FALSE;
 	}
 	nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
 
@@ -249,20 +252,20 @@ nfs_boot_init(struct nfs_diskless *nd)
 			printf("nfs_boot: bootparam whoami, error=%d", error);
 			goto failed;
 		}
-		printf("nfs_boot: BOOTPARAMS server " IP_FORMAT "\n", 
-		       IP_LIST(&bp_sin.sin_addr));
+		printf("nfs_boot: BOOTPARAMS server " IP_FORMAT "\n",
+		    IP_LIST(&bp_sin.sin_addr));
 		printf("nfs_boot: hostname %s\n", hostname);
 	}
 	if (do_bpgetfile) {
 		error = bp_getfile(&bp_sin, "root", &nd->nd_root.ndm_saddr,
-				   nd->nd_root.ndm_host, nd->nd_root.ndm_path);
+		    nd->nd_root.ndm_host, nd->nd_root.ndm_path);
 		if (error) {
 			printf("nfs_boot: bootparam get root: %d\n", error);
 			goto failed;
 		}
 	}
 
-#if !defined(NO_MOUNT_PRIVATE) 
+#if !defined(NO_MOUNT_PRIVATE)
 	if (do_bpgetfile) { /* get private path */
 		MALLOC_ZONE(nd->nd_private.ndm_path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
 		if (!nd->nd_private.ndm_path) {
@@ -276,13 +279,13 @@ nfs_boot_init(struct nfs_diskless *nd)
 			error = ENOMEM;
 			goto failed;
 		}
-		error = bp_getfile(&bp_sin, "private", 
-				   &nd->nd_private.ndm_saddr,
-				   nd->nd_private.ndm_host,
-				   nd->nd_private.ndm_path);
+		error = bp_getfile(&bp_sin, "private",
+		    &nd->nd_private.ndm_saddr,
+		    nd->nd_private.ndm_host,
+		    nd->nd_private.ndm_path);
 		if (!error) {
 			char * check_path = NULL;
-			
+
 			MALLOC_ZONE(check_path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
 			if (!check_path) {
 				printf("nfs_boot: can't allocate check_path buffer\n");
@@ -290,25 +293,23 @@ nfs_boot_init(struct nfs_diskless *nd)
 				goto failed;
 			}
 			snprintf(check_path, MAXPATHLEN, "%s/private", nd->nd_root.ndm_path);
-			if ((nd->nd_root.ndm_saddr.sin_addr.s_addr 
-			     == nd->nd_private.ndm_saddr.sin_addr.s_addr)
+			if ((nd->nd_root.ndm_saddr.sin_addr.s_addr
+			    == nd->nd_private.ndm_saddr.sin_addr.s_addr)
 			    && (strncmp(check_path, nd->nd_private.ndm_path, MAXPATHLEN) == 0)) {
 				/* private path is prefix of root path, don't mount */
 				nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
 			}
 			FREE_ZONE(check_path, MAXPATHLEN, M_NAMEI);
-		}
-		else { 
+		} else {
 			/* private key not defined, don't mount */
 			nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
 		}
-	}
-	else {
+	} else {
 		error = 0;
 	}
 #endif /* NO_MOUNT_PRIVATE */
 failed:
-	return (error);
+	return error;
 }
 
 /*
@@ -325,11 +326,11 @@ nfs_boot_getfh(struct nfs_diskless *nd, int v3, int sotype)
 	error = get_file_handle(&nd->nd_root);
 	if (error) {
 		printf("nfs_boot: get_file_handle(v%d) root failed, %d\n",
-			v3 ? 3 : 2, error);
+		    v3 ? 3 : 2, error);
 		goto failed;
 	}
 
-#if !defined(NO_MOUNT_PRIVATE) 
+#if !defined(NO_MOUNT_PRIVATE)
 	if (nd->nd_private.ndm_saddr.sin_addr.s_addr) {
 		/* get private file handle */
 		nd->nd_private.ndm_nfsv3 = v3;
@@ -337,13 +338,13 @@ nfs_boot_getfh(struct nfs_diskless *nd, int v3, int sotype)
 		error = get_file_handle(&nd->nd_private);
 		if (error) {
 			printf("nfs_boot: get_file_handle(v%d) private failed, %d\n",
-				v3 ? 3 : 2, error);
+			    v3 ? 3 : 2, error);
 			goto failed;
 		}
 	}
 #endif /* NO_MOUNT_PRIVATE */
 failed:
-	return (error);
+	return error;
 }
 
 static int
@@ -357,22 +358,25 @@ get_file_handle(struct nfs_dlmount *ndmntp)
 	 * using RPC to mountd/mount
 	 */
 	error = md_mount(&ndmntp->ndm_saddr, ndmntp->ndm_path, ndmntp->ndm_nfsv3,
-			ndmntp->ndm_sotype, ndmntp->ndm_fh, &ndmntp->ndm_fhlen);
-	if (error)
-		return (error);
+	    ndmntp->ndm_sotype, ndmntp->ndm_fh, &ndmntp->ndm_fhlen);
+	if (error) {
+		return error;
+	}
 
 	/* Construct remote path (for getmntinfo(3)) */
 	dp = ndmntp->ndm_mntfrom;
 	endp = dp + MAXPATHLEN - 1;
-	for (sp = ndmntp->ndm_host; *sp && dp < endp;)
+	for (sp = ndmntp->ndm_host; *sp && dp < endp;) {
 		*dp++ = *sp++;
-	if (dp < endp)
+	}
+	if (dp < endp) {
 		*dp++ = ':';
-	for (sp = ndmntp->ndm_path; *sp && dp < endp;)
+	}
+	for (sp = ndmntp->ndm_path; *sp && dp < endp;) {
 		*dp++ = *sp++;
+	}
 	*dp = '\0';
-	return (0);
-
+	return 0;
 }
 
 
@@ -385,20 +389,22 @@ mbuf_get_with_len(size_t msg_len, mbuf_t *m)
 {
 	int error;
 	error = mbuf_gethdr(MBUF_WAITOK, MBUF_TYPE_DATA, m);
-	if (error)
-		return (error);
+	if (error) {
+		return error;
+	}
 	if (msg_len > mbuf_maxlen(*m)) {
 		error = mbuf_mclget(MBUF_WAITOK, MBUF_TYPE_DATA, m);
 		if (error) {
 			mbuf_freem(*m);
-			return (error);
+			return error;
 		}
-		if (msg_len > mbuf_maxlen(*m))
+		if (msg_len > mbuf_maxlen(*m)) {
 			panic("nfs_boot: msg_len > MCLBYTES");
+		}
 	}
 	mbuf_setlen(*m, msg_len);
 	mbuf_pkthdr_setlen(*m, msg_len);
-	return (0);
+	return 0;
 }
 
 
@@ -406,12 +412,12 @@ mbuf_get_with_len(size_t msg_len, mbuf_t *m)
  * String representation for RPC.
  */
 struct rpc_string {
-	u_int32_t len;		/* length without null or padding */
-	u_char data[4];	/* data (longer, of course) */
-    /* data is padded to a long-word boundary */
+	u_int32_t len;          /* length without null or padding */
+	u_char data[4]; /* data (longer, of course) */
+	/* data is padded to a long-word boundary */
 };
 /* Compute space used given string length. */
-#define	RPC_STR_SIZE(slen) (4 + ((slen + 3) & ~3))
+#define RPC_STR_SIZE(slen) (4 + ((slen + 3) & ~3))
 
 /*
  * Inet address in RPC messages
@@ -419,7 +425,7 @@ struct rpc_string {
  */
 struct bp_inaddr {
 	u_int32_t  atype;
-	int32_t	addr[4];
+	int32_t addr[4];
 };
 
 
@@ -440,8 +446,8 @@ struct bp_inaddr {
  */
 static int
 bp_whoami(struct sockaddr_in *bpsin,
-	struct in_addr *my_ip,
-	struct in_addr *gw_ip)
+    struct in_addr *my_ip,
+    struct in_addr *gw_ip)
 {
 	/* RPC structures for PMAPPROC_CALLIT */
 	struct whoami_call {
@@ -460,15 +466,16 @@ bp_whoami(struct sockaddr_in *bpsin,
 	size_t msg_len, cn_len, dn_len;
 	u_char *p;
 	int32_t *lp;
-        size_t encapsulated_size;
+	size_t encapsulated_size;
 
 	/*
 	 * Get message buffer of sufficient size.
 	 */
 	msg_len = sizeof(*call);
 	error = mbuf_get_with_len(msg_len, &m);
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	/*
 	 * Build request message for PMAPPROC_CALLIT.
@@ -483,17 +490,18 @@ bp_whoami(struct sockaddr_in *bpsin,
 	call->call_ia.atype = htonl(1);
 	p = (u_char*)my_ip;
 	lp = call->call_ia.addr;
-	*lp++ = htonl(*p);	p++;
-	*lp++ = htonl(*p);	p++;
-	*lp++ = htonl(*p);	p++;
-	*lp++ = htonl(*p);	p++;
+	*lp++ = htonl(*p); p++;
+	*lp++ = htonl(*p); p++;
+	*lp++ = htonl(*p); p++;
+	*lp++ = htonl(*p); p++;
 
 	/* RPC: portmap/callit */
 	bpsin->sin_port = htons(PMAPPORT);
 
 	error = krpc_call(bpsin, SOCK_DGRAM, PMAPPROG, PMAPVERS, PMAPPROC_CALLIT, &m, &sin);
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	/*
 	 * Parse result message.
@@ -502,29 +510,33 @@ bp_whoami(struct sockaddr_in *bpsin,
 	lp = mbuf_data(m);
 
 	/* bootparam server port (also grab from address). */
-	if (msg_len < sizeof(*lp))
+	if (msg_len < sizeof(*lp)) {
 		goto bad;
+	}
 	msg_len -= sizeof(*lp);
 	bpsin->sin_port = htons((short)ntohl(*lp++));
 	bpsin->sin_addr.s_addr = sin.sin_addr.s_addr;
 
 	/* length of encapsulated results */
 	if (os_add_overflow((size_t) ntohl(*lp), sizeof(*lp), &encapsulated_size)
-		|| msg_len < encapsulated_size) {
+	    || msg_len < encapsulated_size) {
 		goto bad;
 	}
 	msg_len = ntohl(*lp++);
 	p = (u_char*)lp;
 
 	/* client name */
-	if (msg_len < sizeof(*str))
+	if (msg_len < sizeof(*str)) {
 		goto bad;
+	}
 	str = (struct rpc_string *)p;
 	cn_len = ntohl(str->len);
-	if ((msg_len - 4) < cn_len)
+	if ((msg_len - 4) < cn_len) {
 		goto bad;
-	if (cn_len >= MAXHOSTNAMELEN)
+	}
+	if (cn_len >= MAXHOSTNAMELEN) {
 		goto bad;
+	}
 	bcopy(str->data, hostname, cn_len);
 	hostname[cn_len] = '\0';
 	hostnamelen = cn_len;
@@ -532,14 +544,17 @@ bp_whoami(struct sockaddr_in *bpsin,
 	msg_len -= RPC_STR_SIZE(cn_len);
 
 	/* domain name */
-	if (msg_len < sizeof(*str))
+	if (msg_len < sizeof(*str)) {
 		goto bad;
+	}
 	str = (struct rpc_string *)p;
 	dn_len = ntohl(str->len);
-	if ((msg_len - 4) < dn_len)
+	if ((msg_len - 4) < dn_len) {
 		goto bad;
-	if (dn_len >= MAXHOSTNAMELEN)
+	}
+	if (dn_len >= MAXHOSTNAMELEN) {
 		goto bad;
+	}
 	bcopy(str->data, domainname, dn_len);
 	domainname[dn_len] = '\0';
 	domainnamelen = dn_len;
@@ -547,11 +562,13 @@ bp_whoami(struct sockaddr_in *bpsin,
 	msg_len -= RPC_STR_SIZE(dn_len);
 
 	/* gateway address */
-	if (msg_len < sizeof(*bia))
+	if (msg_len < sizeof(*bia)) {
 		goto bad;
+	}
 	bia = (struct bp_inaddr *)p;
-	if (bia->atype != htonl(1))
+	if (bia->atype != htonl(1)) {
 		goto bad;
+	}
 	p = (u_char*)gw_ip;
 	*p++ = ntohl(bia->addr[0]);
 	*p++ = ntohl(bia->addr[1]);
@@ -565,7 +582,7 @@ bad:
 
 out:
 	mbuf_freem(m);
-	return(error);
+	return error;
 }
 
 
@@ -578,10 +595,10 @@ out:
  */
 static int
 bp_getfile(struct sockaddr_in *bpsin,
-	const char *key,
-	struct sockaddr_in *md_sin,
-	char *serv_name,
-	char *pathname)
+    const char *key,
+    struct sockaddr_in *md_sin,
+    char *serv_name,
+    char *pathname)
 {
 	struct rpc_string *str;
 	mbuf_t m;
@@ -600,8 +617,9 @@ bp_getfile(struct sockaddr_in *bpsin,
 	msg_len += RPC_STR_SIZE(cn_len);
 	msg_len += RPC_STR_SIZE(key_len);
 	error = mbuf_get_with_len(msg_len, &m);
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	/*
 	 * Build request message.
@@ -620,9 +638,10 @@ bp_getfile(struct sockaddr_in *bpsin,
 
 	/* RPC: bootparam/getfile */
 	error = krpc_call(bpsin, SOCK_DGRAM, BOOTPARAM_PROG, BOOTPARAM_VERS,
-			BOOTPARAM_GETFILE, &m, NULL);
-	if (error)
+	    BOOTPARAM_GETFILE, &m, NULL);
+	if (error) {
 		return error;
+	}
 
 	/*
 	 * Parse result message.
@@ -631,25 +650,30 @@ bp_getfile(struct sockaddr_in *bpsin,
 	msg_len = mbuf_len(m);
 
 	/* server name */
-	if (msg_len < sizeof(*str))
+	if (msg_len < sizeof(*str)) {
 		goto bad;
+	}
 	str = (struct rpc_string *)p;
 	sn_len = ntohl(str->len);
-	if ((msg_len - 4) < sn_len)
+	if ((msg_len - 4) < sn_len) {
 		goto bad;
-	if (sn_len >= MAXHOSTNAMELEN)
+	}
+	if (sn_len >= MAXHOSTNAMELEN) {
 		goto bad;
+	}
 	bcopy(str->data, serv_name, sn_len);
 	serv_name[sn_len] = '\0';
 	p += RPC_STR_SIZE(sn_len);
 	msg_len -= RPC_STR_SIZE(sn_len);
 
 	/* server IP address (mountd) */
-	if (msg_len < sizeof(*bia))
+	if (msg_len < sizeof(*bia)) {
 		goto bad;
+	}
 	bia = (struct bp_inaddr *)p;
-	if (bia->atype != htonl(1))
+	if (bia->atype != htonl(1)) {
 		goto bad;
+	}
 	sin = md_sin;
 	bzero((caddr_t)sin, sizeof(*sin));
 	sin->sin_len = sizeof(*sin);
@@ -663,14 +687,17 @@ bp_getfile(struct sockaddr_in *bpsin,
 	msg_len -= sizeof(*bia);
 
 	/* server pathname */
-	if (msg_len < sizeof(*str))
+	if (msg_len < sizeof(*str)) {
 		goto bad;
+	}
 	str = (struct rpc_string *)p;
 	path_len = ntohl(str->len);
-	if ((msg_len - 4) < path_len)
+	if ((msg_len - 4) < path_len) {
 		goto bad;
-	if (path_len >= MAXPATHLEN)
+	}
+	if (path_len >= MAXPATHLEN) {
 		goto bad;
+	}
 	bcopy(str->data, pathname, path_len);
 	pathname[path_len] = '\0';
 	goto out;
@@ -681,7 +708,7 @@ bad:
 
 out:
 	mbuf_freem(m);
-	return(0);
+	return 0;
 }
 
 
@@ -691,18 +718,18 @@ out:
  * Also, sets sin->sin_port to the NFS service port.
  */
 static int
-md_mount(struct sockaddr_in *mdsin,		/* mountd server address */
-	char *path,
-	int v3,
-	int sotype,
-	u_char *fhp,
-	u_int32_t *fhlenp)
+md_mount(struct sockaddr_in *mdsin,             /* mountd server address */
+    char *path,
+    int v3,
+    int sotype,
+    u_char *fhp,
+    u_int32_t *fhlenp)
 {
 	/* The RPC structures */
 	struct rpc_string *str;
 	struct rdata {
-		u_int32_t	errno;
-		u_char	data[NFSX_V3FHMAX + sizeof(u_int32_t)];
+		u_int32_t       errno;
+		u_char  data[NFSX_V3FHMAX + sizeof(u_int32_t)];
 	} *rdata;
 	mbuf_t m;
 	size_t mlen;
@@ -713,14 +740,16 @@ md_mount(struct sockaddr_in *mdsin,		/* mountd server address */
 
 	/* Get port number for MOUNTD. */
 	error = krpc_portmap(mdsin, RPCPROG_MNT, mntversion, proto, &mntport);
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	/* Get port number for NFS use. */
 	/* (If NFS/proto unavailable, don't bother with the mount call) */
 	error = krpc_portmap(mdsin, NFS_PROG, v3 ? NFS_VER3 : NFS_VER2, proto, &nfsport);
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	/* Set port number for MOUNTD */
 	mdsin->sin_port = mntport;
@@ -729,44 +758,50 @@ md_mount(struct sockaddr_in *mdsin,		/* mountd server address */
 	mlen = RPC_STR_SIZE(slen);
 
 	error = mbuf_get_with_len(mlen, &m);
-	if (error)
+	if (error) {
 		return error;
+	}
 	str = mbuf_data(m);
 	str->len = htonl(slen);
 	bcopy(path, str->data, slen);
 
 	/* Do RPC to mountd. */
 	error = krpc_call(mdsin, sotype, RPCPROG_MNT, mntversion, RPCMNT_MOUNT, &m, NULL);
-	if (error)
-		return error;	/* message already freed */
-
+	if (error) {
+		return error;   /* message already freed */
+	}
 	/*
 	 * the reply must be long enough to hold the errno plus either of:
 	 * + a v2 filehandle
 	 * + a v3 filehandle length + a v3 filehandle
 	 */
 	mlen = mbuf_len(m);
-	if (mlen < sizeof(u_int32_t))
+	if (mlen < sizeof(u_int32_t)) {
 		goto bad;
+	}
 	rdata = mbuf_data(m);
 	error = ntohl(rdata->errno);
-	if (error)
+	if (error) {
 		goto out;
+	}
 	if (v3) {
 		u_int32_t fhlen;
 		u_char *fh;
-		if (mlen < sizeof(u_int32_t)*2)
+		if (mlen < sizeof(u_int32_t) * 2) {
 			goto bad;
+		}
 		fhlen = ntohl(*(u_int32_t*)rdata->data);
 		fh = rdata->data + sizeof(u_int32_t);
-		if (mlen < (sizeof(u_int32_t)*2 + fhlen)
-			|| fhlen >= (NFSX_V3FHMAX + sizeof(u_int32_t)))
+		if (mlen < (sizeof(u_int32_t) * 2 + fhlen)
+		    || fhlen >= (NFSX_V3FHMAX + sizeof(u_int32_t))) {
 			goto bad;
+		}
 		bcopy(fh, fhp, fhlen);
 		*fhlenp = fhlen;
 	} else {
-		if (mlen < (sizeof(u_int32_t) + NFSX_V2FH))
+		if (mlen < (sizeof(u_int32_t) + NFSX_V2FH)) {
 			goto bad;
+		}
 		bcopy(rdata->data, fhp, NFSX_V2FH);
 		*fhlenp = NFSX_V2FH;
 	}

@@ -372,18 +372,27 @@ type processor_t = mach_port_t
 #endif	/* KERNEL_SERVER */
 		;
 
-type processor_array_t 	= ^array[] of processor_t;
+type processor_array_t = ^array[] of processor_t;
 
-		/* processor_info_t: variable-sized inline array that can
+		/*
+		 * processor_info_t: variable-sized inline array that can
 		 * contain:
-		 * processor_basic_info_t:   (5 ints)
-		 * processor_cpu_load_info_t:(4 ints)
-		 * processor_machine_info_t :(12 ints)
+		 *
+		 * - processor_basic_info_t:    (5 ints)
+		 * - processor_cpu_load_info_t: (4 ints)
+		 * - processor_machine_info_t:  (12 ints)
+		 * - processor_cpu_stat_t:      (10 ints)
+		 * - processor_cpu_stat64_t:    (20 ints)
+		 *
 		 * If other processor_info flavors are added, this definition
-		 * may need to be changed. (See mach/processor_info.h) */
-type processor_flavor_t		= int;
-type processor_info_t		= array[*:12] of integer_t;
-type processor_info_array_t	= ^array[] of integer_t;
+		 * may need to be changed.
+		 *
+		 * See mach/processor_info.h and mach/arm/processor_info.h.
+		 */
+
+type processor_flavor_t     = int;
+type processor_info_t       = array[*:20] of integer_t;
+type processor_info_array_t = ^array[] of integer_t;
 
 type processor_set_t = mach_port_t
 #if	KERNEL_SERVER

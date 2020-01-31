@@ -40,12 +40,12 @@
 /* Security Association Index */
 /* NOTE: Ensure to be same address family */
 struct secasindex {
-	struct sockaddr_storage src;	/* srouce address for SA */
-	struct sockaddr_storage dst;	/* destination address for SA */
-	u_int16_t proto;		/* IPPROTO_ESP or IPPROTO_AH */
-	u_int8_t mode;			/* mode of protocol, see ipsec.h */
-	u_int32_t reqid;		/* reqid id who owned this SA */
-					/* see IPSEC_MANUAL_REQID_MAX. */
+	struct sockaddr_storage src;    /* srouce address for SA */
+	struct sockaddr_storage dst;    /* destination address for SA */
+	u_int16_t proto;                /* IPPROTO_ESP or IPPROTO_AH */
+	u_int8_t mode;                  /* mode of protocol, see ipsec.h */
+	u_int32_t reqid;                /* reqid id who owned this SA */
+	                                /* see IPSEC_MANUAL_REQID_MAX. */
 	u_int ipsec_ifindex;
 };
 
@@ -55,73 +55,73 @@ struct secashead {
 
 	struct secasindex saidx;
 
-	struct sadb_ident *idents;	/* source identity */
-	struct sadb_ident *identd;	/* destination identity */
-					/* XXX I don't know how to use them. */
+	struct sadb_ident *idents;      /* source identity */
+	struct sadb_ident *identd;      /* destination identity */
+	                                /* XXX I don't know how to use them. */
 
 	ifnet_t ipsec_if;
 	u_int outgoing_if;
 	u_int8_t dir;                   /* IPSEC_DIR_INBOUND or IPSEC_DIR_OUTBOUND */
-	u_int8_t state;			/* MATURE or DEAD. */
-	LIST_HEAD(_satree, secasvar) savtree[SADB_SASTATE_MAX+1];
-					/* SA chain */
-					/* The first of this list is newer SA */
+	u_int8_t state;                 /* MATURE or DEAD. */
+	LIST_HEAD(_satree, secasvar) savtree[SADB_SASTATE_MAX + 1];
+	/* SA chain */
+	/* The first of this list is newer SA */
 
-	struct route_in6 sa_route;		/* route cache */
+	struct route_in6 sa_route;              /* route cache */
 };
 
 /* Security Association */
 struct secasvar {
 	LIST_ENTRY(secasvar) chain;
 	LIST_ENTRY(secasvar) spihash;
-	int refcnt;			/* reference count */
-	u_int8_t state;			/* Status of this Association */
+	int refcnt;                     /* reference count */
+	u_int8_t state;                 /* Status of this Association */
 
-	u_int8_t alg_auth;		/* Authentication Algorithm Identifier*/
-	u_int8_t alg_enc;		/* Cipher Algorithm Identifier */
-	u_int32_t spi;			/* SPI Value, network byte order */
-	u_int32_t flags;		/* holder for SADB_KEY_FLAGS */
-	u_int16_t flags2;		/* holder for SADB_SA2_KEY_FLAGS */
+	u_int8_t alg_auth;              /* Authentication Algorithm Identifier*/
+	u_int8_t alg_enc;               /* Cipher Algorithm Identifier */
+	u_int32_t spi;                  /* SPI Value, network byte order */
+	u_int32_t flags;                /* holder for SADB_KEY_FLAGS */
+	u_int16_t flags2;               /* holder for SADB_SA2_KEY_FLAGS */
 
-	struct sadb_key *key_auth;	/* Key for Authentication */
-	struct sadb_key *key_enc;	/* Key for Encryption */
-	caddr_t iv;			/* Initilization Vector */
-	u_int ivlen;			/* length of IV */
-	void *sched;			/* intermediate encryption key */
+	struct sadb_key *key_auth;      /* Key for Authentication */
+	struct sadb_key *key_enc;       /* Key for Encryption */
+	caddr_t iv;                     /* Initilization Vector */
+	u_int ivlen;                    /* length of IV */
+	void *sched;                    /* intermediate encryption key */
 	size_t schedlen;
 
-	struct secreplay *replay;	/* replay prevention */
-	long created;			/* for lifetime */
+	struct secreplay *replay;       /* replay prevention */
+	long created;                   /* for lifetime */
 
-	struct sadb_lifetime *lft_c;	/* CURRENT lifetime, it's constant. */
-	struct sadb_lifetime *lft_h;	/* HARD lifetime */
-	struct sadb_lifetime *lft_s;	/* SOFT lifetime */
+	struct sadb_lifetime *lft_c;    /* CURRENT lifetime, it's constant. */
+	struct sadb_lifetime *lft_h;    /* HARD lifetime */
+	struct sadb_lifetime *lft_s;    /* SOFT lifetime */
 
 	struct socket *so; /* Associated socket */
 
-	u_int32_t seq;			/* sequence number */
-	pid_t pid;			/* message's pid */
+	u_int32_t seq;                  /* sequence number */
+	pid_t pid;                      /* message's pid */
 
-	struct secashead *sah;		/* back pointer to the secashead */
-	
+	struct secashead *sah;          /* back pointer to the secashead */
+
 	/* Nat Traversal related bits */
-	u_int64_t	natt_last_activity;
-	u_int16_t	remote_ike_port;
-	u_int16_t	natt_encapsulated_src_port;	/* network byte order */
-	u_int16_t	natt_interval; /* Interval in seconds */
-	u_int16_t	natt_offload_interval; /* Hardware Offload Interval in seconds */
-	
-	u_int8_t	always_expire; /* Send expire/delete messages even if unused */
+	u_int64_t       natt_last_activity;
+	u_int16_t       remote_ike_port;
+	u_int16_t       natt_encapsulated_src_port;     /* network byte order */
+	u_int16_t       natt_interval; /* Interval in seconds */
+	u_int16_t       natt_offload_interval; /* Hardware Offload Interval in seconds */
+
+	u_int8_t        always_expire; /* Send expire/delete messages even if unused */
 };
 
 /* replay prevention */
 struct secreplay {
 	u_int32_t count;
-	u_int wsize;		/* window size, i.g. 4 bytes */
-	u_int32_t seq;		/* used by sender */
-	u_int32_t lastseq;	/* used by receiver */
-	caddr_t bitmap;		/* used by receiver */
-	int overflow;		/* overflow flag */
+	u_int wsize;            /* window size, i.g. 4 bytes */
+	u_int32_t seq;          /* used by sender */
+	u_int32_t lastseq;      /* used by receiver */
+	caddr_t bitmap;         /* used by receiver */
+	int overflow;           /* overflow flag */
 };
 
 /* socket table due to send PF_KEY messages. */
@@ -138,16 +138,16 @@ struct secacq {
 
 	struct secasindex saidx;
 
-	u_int32_t seq;		/* sequence number */
-	long created;		/* for lifetime */
-	int count;		/* for lifetime */
+	u_int32_t seq;          /* sequence number */
+	long created;           /* for lifetime */
+	int count;              /* for lifetime */
 };
 #endif
 
 /* Sensitivity Level Specification */
 /* nothing */
 
-#define SADB_KILL_INTERVAL	600	/* six seconds */
+#define SADB_KILL_INTERVAL      600     /* six seconds */
 
 struct key_cb {
 	int key_count;

@@ -2,7 +2,7 @@
  * Copyright (c) 2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -61,17 +61,17 @@ callstack_fixup_user(struct callstack *cs, thread_t thread)
 
 	user_64 = is_saved_state64(state);
 	if (user_64) {
-	    sp_user = saved_state64(state)->isf.rsp;
+		sp_user = saved_state64(state)->isf.rsp;
 	} else {
 		sp_user = saved_state32(state)->uesp;
 	}
 
 	if (thread == current_thread()) {
 		(void)copyin(sp_user, (char *)&fixup_val,
-			user_64 ? sizeof(uint64_t) : sizeof(uint32_t));
+		    user_64 ? sizeof(uint64_t) : sizeof(uint32_t));
 	} else {
 		(void)vm_map_read_user(get_task_map(get_threadtask(thread)), sp_user,
-			&fixup_val, user_64 ? sizeof(uint64_t) : sizeof(uint32_t));
+		    &fixup_val, user_64 ? sizeof(uint64_t) : sizeof(uint32_t));
 	}
 
 #elif defined(__arm64__) || defined(__arm__)
@@ -135,7 +135,7 @@ interrupted_kernel_sp_value(uintptr_t *sp_val)
 	bottom = current_thread()->kernel_stack;
 	top = bottom + kernel_stack_size;
 	if (sp >= bottom && sp < top) {
-	    return KERN_FAILURE;
+		return KERN_FAILURE;
 	}
 
 	*sp_val = *(uintptr_t *)sp;
@@ -242,7 +242,7 @@ kperf_backtrace_sample(struct callstack *cs, struct kperf_context *context)
 	BUF_VERB(PERF_CS_BACKTRACE | DBG_FUNC_START, 1);
 
 	cs->nframes = backtrace_frame((uintptr_t *)&(cs->frames), cs->nframes - 1,
-	                              context->starting_fp);
+	    context->starting_fp);
 	if (cs->nframes > 0) {
 		cs->flags |= CALLSTACK_VALID;
 		/*
@@ -257,8 +257,8 @@ kperf_backtrace_sample(struct callstack *cs, struct kperf_context *context)
 }
 
 kern_return_t chudxnu_thread_get_callstack64_kperf(thread_t thread,
-		uint64_t *callStack, mach_msg_type_number_t *count,
-		boolean_t user_only);
+    uint64_t *callStack, mach_msg_type_number_t *count,
+    boolean_t user_only);
 
 void
 kperf_kcallstack_sample(struct callstack *cs, struct kperf_context *context)
@@ -273,7 +273,7 @@ kperf_kcallstack_sample(struct callstack *cs, struct kperf_context *context)
 	assert(thread != NULL);
 
 	BUF_INFO(PERF_CS_KSAMPLE | DBG_FUNC_START, (uintptr_t)thread_tid(thread),
-		cs->nframes);
+	    cs->nframes);
 
 	cs->flags = CALLSTACK_KERNEL;
 
@@ -285,7 +285,7 @@ kperf_kcallstack_sample(struct callstack *cs, struct kperf_context *context)
 		assert(thread == current_thread());
 		cs->flags |= CALLSTACK_KERNEL_WORDS;
 		cs->nframes = backtrace_interrupted((uintptr_t *)cs->frames,
-			cs->nframes - 1);
+		    cs->nframes - 1);
 		if (cs->nframes != 0) {
 			callstack_fixup_interrupted(cs);
 		}
@@ -296,7 +296,7 @@ kperf_kcallstack_sample(struct callstack *cs, struct kperf_context *context)
 		 */
 		kern_return_t kr;
 		kr = chudxnu_thread_get_callstack64_kperf(thread, cs->frames,
-			&cs->nframes, FALSE);
+		    &cs->nframes, FALSE);
 		if (kr == KERN_SUCCESS) {
 			cs->flags |= CALLSTACK_VALID;
 		} else if (kr == KERN_RESOURCE_SHORTAGE) {
@@ -330,12 +330,12 @@ kperf_ucallstack_sample(struct callstack *cs, struct kperf_context *context)
 	assert(thread != NULL);
 
 	BUF_INFO(PERF_CS_USAMPLE | DBG_FUNC_START, (uintptr_t)thread_tid(thread),
-		cs->nframes);
+	    cs->nframes);
 
 	cs->flags = 0;
 
 	err = backtrace_thread_user(thread, (uintptr_t *)cs->frames,
-		cs->nframes - 1, &cs->nframes, &user_64);
+	    cs->nframes - 1, &cs->nframes, &user_64);
 	cs->flags |= CALLSTACK_KERNEL_WORDS;
 	if (user_64) {
 		cs->flags |= CALLSTACK_64BIT;
@@ -350,7 +350,7 @@ kperf_ucallstack_sample(struct callstack *cs, struct kperf_context *context)
 	}
 
 	BUF_INFO(PERF_CS_USAMPLE | DBG_FUNC_END, (uintptr_t)thread_tid(thread),
-		cs->flags, cs->nframes);
+	    cs->flags, cs->nframes);
 }
 
 static inline uintptr_t
@@ -400,20 +400,20 @@ callstack_log(struct callstack *cs, uint32_t hcode, uint32_t dcode)
 		for (unsigned int i = 0; i < n; i++) {
 			unsigned int j = i * 4;
 			BUF_DATA(dcode,
-				scrub_word(frames, nframes, j + 0, kern),
-				scrub_word(frames, nframes, j + 1, kern),
-				scrub_word(frames, nframes, j + 2, kern),
-				scrub_word(frames, nframes, j + 3, kern));
+			    scrub_word(frames, nframes, j + 0, kern),
+			    scrub_word(frames, nframes, j + 1, kern),
+			    scrub_word(frames, nframes, j + 2, kern),
+			    scrub_word(frames, nframes, j + 3, kern));
 		}
 	} else {
 		for (unsigned int i = 0; i < n; i++) {
 			uint64_t *frames = cs->frames;
 			unsigned int j = i * 4;
 			BUF_DATA(dcode,
-				scrub_frame(frames, nframes, j + 0),
-				scrub_frame(frames, nframes, j + 1),
-				scrub_frame(frames, nframes, j + 2),
-				scrub_frame(frames, nframes, j + 3));
+			    scrub_frame(frames, nframes, j + 0),
+			    scrub_frame(frames, nframes, j + 1),
+			    scrub_frame(frames, nframes, j + 2),
+			    scrub_frame(frames, nframes, j + 3));
 		}
 	}
 
@@ -444,16 +444,16 @@ kperf_ucallstack_pend(struct kperf_context * context, uint32_t depth)
 static kern_return_t
 chudxnu_kern_read(void *dstaddr, vm_offset_t srcaddr, vm_size_t size)
 {
-	return ((ml_nofault_copy(srcaddr, (vm_offset_t)dstaddr, size) == size) ?
-			KERN_SUCCESS : KERN_FAILURE);
+	return (ml_nofault_copy(srcaddr, (vm_offset_t)dstaddr, size) == size) ?
+	       KERN_SUCCESS : KERN_FAILURE;
 }
 
 static kern_return_t
 chudxnu_task_read(
-		task_t      task,
-		void        *kernaddr,
-		uint64_t    usraddr,
-		vm_size_t   size)
+	task_t      task,
+	void        *kernaddr,
+	uint64_t    usraddr,
+	vm_size_t   size)
 {
 	//ppc version ported to arm
 	kern_return_t ret = KERN_SUCCESS;
@@ -463,13 +463,9 @@ chudxnu_task_read(
 	}
 
 	if (current_task() == task) {
-		thread_t      cur_thr = current_thread();
-		vm_offset_t   recover_handler = cur_thr->recover; 
-
 		if (copyin(usraddr, kernaddr, size)) {
 			ret = KERN_FAILURE;
 		}
-		cur_thr->recover = recover_handler;
 	} else {
 		vm_map_t map = get_task_map(task);
 		ret = vm_map_read_user(map, usraddr, kernaddr, size);
@@ -481,8 +477,9 @@ chudxnu_task_read(
 static inline uint64_t
 chudxnu_vm_unslide( uint64_t ptr, int kaddr )
 {
-	if (!kaddr)
+	if (!kaddr) {
 		return ptr;
+	}
 
 	return VM_KERNEL_UNSLIDE(ptr);
 }
@@ -492,38 +489,39 @@ chudxnu_vm_unslide( uint64_t ptr, int kaddr )
 #define CS_FLAG_EXTRASP  1  // capture extra sp register
 static kern_return_t
 chudxnu_thread_get_callstack64_internal(
-	thread_t		thread,
-	uint64_t		*callStack,
-	mach_msg_type_number_t	*count,
-	boolean_t		user_only,
+	thread_t                thread,
+	uint64_t                *callStack,
+	mach_msg_type_number_t  *count,
+	boolean_t               user_only,
 	int flags)
 {
 	kern_return_t kr;
-	task_t			task;
-	uint64_t		currPC=0ULL, currLR=0ULL, currSP=0ULL;
-	uint64_t		prevPC = 0ULL;
-	uint32_t		kernStackMin = thread->kernel_stack;
-	uint32_t		kernStackMax = kernStackMin + kernel_stack_size;
+	task_t                  task;
+	uint64_t                currPC = 0ULL, currLR = 0ULL, currSP = 0ULL;
+	uint64_t                prevPC = 0ULL;
+	uint32_t                kernStackMin = thread->kernel_stack;
+	uint32_t                kernStackMax = kernStackMin + kernel_stack_size;
 	uint64_t       *buffer = callStack;
-	uint32_t		frame[2];
+	uint32_t                frame[2];
 	int             bufferIndex = 0;
 	int             bufferMaxIndex = 0;
 	boolean_t       supervisor = FALSE;
 	struct arm_saved_state *state = NULL;
-	uint32_t		*fp=NULL, *nextFramePointer=NULL, *topfp=NULL;
-	uint64_t		pc = 0ULL;
+	uint32_t                *fp = NULL, *nextFramePointer = NULL, *topfp = NULL;
+	uint64_t                pc = 0ULL;
 
 	task = get_threadtask(thread);
 
 	bufferMaxIndex = *count;
 	//get thread state
-	if (user_only)
+	if (user_only) {
 		state = find_user_regs(thread);
-	else
+	} else {
 		state = find_kern_regs(thread);
+	}
 
 	if (!state) {
-		*count = 0; 
+		*count = 0;
 		return KERN_FAILURE;
 	}
 
@@ -531,13 +529,14 @@ chudxnu_thread_get_callstack64_internal(
 	supervisor = ARM_SUPERVISOR_MODE(state->cpsr);
 
 	/* can't take a kernel callstack if we've got a user frame */
-	if( !user_only && !supervisor )
+	if (!user_only && !supervisor) {
 		return KERN_FAILURE;
+	}
 
 	/*
-	* Reserve space for saving LR (and sometimes SP) at the end of the
-	* backtrace.
-	*/
+	 * Reserve space for saving LR (and sometimes SP) at the end of the
+	 * backtrace.
+	 */
 	if (flags & CS_FLAG_EXTRASP) {
 		bufferMaxIndex -= 2;
 	} else {
@@ -550,9 +549,9 @@ chudxnu_thread_get_callstack64_internal(
 	}
 
 	currPC = (uint64_t)state->pc; /* r15 */
-	if (state->cpsr & PSR_TF)
-		currPC |= 1ULL;	/* encode thumb mode into low bit of PC */
-
+	if (state->cpsr & PSR_TF) {
+		currPC |= 1ULL; /* encode thumb mode into low bit of PC */
+	}
 	currLR = (uint64_t)state->lr; /* r14 */
 	currSP = (uint64_t)state->sp; /* r13 */
 
@@ -580,7 +579,7 @@ chudxnu_thread_get_callstack64_internal(
 		 * necessary.
 		 */
 
-		if((uint32_t)fp == 0 || ((uint32_t)fp & 0x3) != 0) {
+		if ((uint32_t)fp == 0 || ((uint32_t)fp & 0x3) != 0) {
 			/* frame pointer is invalid - stop backtracing */
 			pc = 0ULL;
 			break;
@@ -592,8 +591,8 @@ chudxnu_thread_get_callstack64_internal(
 				kr = KERN_FAILURE;
 			} else {
 				kr = chudxnu_kern_read(&frame,
-						(vm_offset_t)fp,
-						(vm_size_t)sizeof(frame));
+				    (vm_offset_t)fp,
+				    (vm_size_t)sizeof(frame));
 				if (kr == KERN_SUCCESS) {
 					pc = (uint64_t)frame[1];
 					nextFramePointer = (uint32_t *) (frame[0]);
@@ -605,9 +604,9 @@ chudxnu_thread_get_callstack64_internal(
 			}
 		} else {
 			kr = chudxnu_task_read(task,
-						&frame,
-						(((uint64_t)(uint32_t)fp) & 0x00000000FFFFFFFFULL),
-						sizeof(frame));
+			    &frame,
+			    (((uint64_t)(uint32_t)fp) & 0x00000000FFFFFFFFULL),
+			    sizeof(frame));
 			if (kr == KERN_SUCCESS) {
 				pc = (uint64_t) frame[1];
 				nextFramePointer = (uint32_t *) (frame[0]);
@@ -628,10 +627,11 @@ chudxnu_thread_get_callstack64_internal(
 			prevPC = pc;
 		}
 
-		if (nextFramePointer < fp)
+		if (nextFramePointer < fp) {
 			break;
-		else
+		} else {
 			fp = nextFramePointer;
+		}
 	}
 
 	if (bufferIndex >= bufferMaxIndex) {
@@ -643,21 +643,20 @@ chudxnu_thread_get_callstack64_internal(
 
 	// Save link register and R13 (sp) at bottom of stack (used for later fixup).
 	buffer[bufferIndex++] = chudxnu_vm_unslide(currLR, supervisor);
-	if( flags & CS_FLAG_EXTRASP )
+	if (flags & CS_FLAG_EXTRASP) {
 		buffer[bufferIndex++] = chudxnu_vm_unslide(currSP, supervisor);
+	}
 
 	*count = bufferIndex;
 	return kr;
-
-
 }
 
 kern_return_t
 chudxnu_thread_get_callstack64_kperf(
-	thread_t		thread,
-	uint64_t		*callStack,
-	mach_msg_type_number_t	*count,
-	boolean_t		user_only)
+	thread_t                thread,
+	uint64_t                *callStack,
+	mach_msg_type_number_t  *count,
+	boolean_t               user_only)
 {
 	return chudxnu_thread_get_callstack64_internal( thread, callStack, count, user_only, 0 );
 }
@@ -682,41 +681,42 @@ chudxnu_thread_get_callstack64_kperf(
 
 static kern_return_t
 chudxnu_thread_get_callstack64_internal(
-	thread_t		thread,
-	uint64_t		*callStack,
-	mach_msg_type_number_t	*count,
-	boolean_t		user_only,
+	thread_t                thread,
+	uint64_t                *callStack,
+	mach_msg_type_number_t  *count,
+	boolean_t               user_only,
 	int flags)
 {
 	kern_return_t   kr = KERN_SUCCESS;
-	task_t			task;
-	uint64_t		currPC=0ULL, currLR=0ULL, currSP=0ULL;
-	uint64_t		prevPC = 0ULL;
-	uint64_t		kernStackMin = thread->kernel_stack;
-	uint64_t		kernStackMax = kernStackMin + kernel_stack_size;
+	task_t                  task;
+	uint64_t                currPC = 0ULL, currLR = 0ULL, currSP = 0ULL;
+	uint64_t                prevPC = 0ULL;
+	uint64_t                kernStackMin = thread->kernel_stack;
+	uint64_t                kernStackMax = kernStackMin + kernel_stack_size;
 	uint64_t       *buffer = callStack;
 	int             bufferIndex = 0;
 	int             bufferMaxIndex = 0;
 	boolean_t       kernel = FALSE;
 	struct arm_saved_state *sstate = NULL;
-	uint64_t		pc = 0ULL;
+	uint64_t                pc = 0ULL;
 
 	task = get_threadtask(thread);
 	bufferMaxIndex = *count;
 	//get thread state
-	if (user_only)
+	if (user_only) {
 		sstate = find_user_regs(thread);
-	else
+	} else {
 		sstate = find_kern_regs(thread);
+	}
 
 	if (!sstate) {
-		*count = 0; 
+		*count = 0;
 		return KERN_FAILURE;
 	}
 
 	if (is_saved_state64(sstate)) {
 		struct arm_saved_state64 *state = NULL;
-		uint64_t *fp=NULL, *nextFramePointer=NULL, *topfp=NULL;
+		uint64_t *fp = NULL, *nextFramePointer = NULL, *topfp = NULL;
 		uint64_t frame[2];
 
 		state = saved_state64(sstate);
@@ -725,8 +725,9 @@ chudxnu_thread_get_callstack64_internal(
 		kernel = PSR64_IS_KERNEL(state->cpsr);
 
 		/* can't take a kernel callstack if we've got a user frame */
-		if( !user_only && !kernel )
+		if (!user_only && !kernel) {
 			return KERN_FAILURE;
+		}
 
 		/*
 		 * Reserve space for saving LR (and sometimes SP) at the end of the
@@ -773,7 +774,7 @@ chudxnu_thread_get_callstack64_internal(
 			 * necessary.
 			 */
 
-			if((uint64_t)fp == 0 || ((uint64_t)fp & 0x3) != 0) {
+			if ((uint64_t)fp == 0 || ((uint64_t)fp & 0x3) != 0) {
 				/* frame pointer is invalid - stop backtracing */
 				pc = 0ULL;
 				break;
@@ -785,8 +786,8 @@ chudxnu_thread_get_callstack64_internal(
 					kr = KERN_FAILURE;
 				} else {
 					kr = chudxnu_kern_read(&frame,
-							(vm_offset_t)fp,
-							(vm_size_t)sizeof(frame));
+					    (vm_offset_t)fp,
+					    (vm_size_t)sizeof(frame));
 					if (kr == KERN_SUCCESS) {
 						pc = frame[1];
 						nextFramePointer = (uint64_t *)frame[0];
@@ -798,9 +799,9 @@ chudxnu_thread_get_callstack64_internal(
 				}
 			} else {
 				kr = chudxnu_task_read(task,
-							&frame,
-							(vm_offset_t)fp,
-							(vm_size_t)sizeof(frame));
+				    &frame,
+				    (vm_offset_t)fp,
+				    (vm_size_t)sizeof(frame));
 				if (kr == KERN_SUCCESS) {
 					pc = frame[1];
 					nextFramePointer = (uint64_t *)(frame[0]);
@@ -821,10 +822,11 @@ chudxnu_thread_get_callstack64_internal(
 				prevPC = pc;
 			}
 
-			if (nextFramePointer < fp)
+			if (nextFramePointer < fp) {
 				break;
-			else
+			} else {
 				fp = nextFramePointer;
+			}
 		}
 
 		BUF_VERB(PERF_CS_BACKTRACE | DBG_FUNC_END, bufferIndex);
@@ -838,24 +840,26 @@ chudxnu_thread_get_callstack64_internal(
 
 		// Save link register and SP at bottom of stack (used for later fixup).
 		buffer[bufferIndex++] = chudxnu_vm_unslide(currLR, kernel);
-		if( flags & CS_FLAG_EXTRASP )
-			buffer[bufferIndex++] = chudxnu_vm_unslide(currSP, kernel);	
+		if (flags & CS_FLAG_EXTRASP) {
+			buffer[bufferIndex++] = chudxnu_vm_unslide(currSP, kernel);
+		}
 	} else {
 		struct arm_saved_state32 *state = NULL;
-		uint32_t *fp=NULL, *nextFramePointer=NULL, *topfp=NULL;
+		uint32_t *fp = NULL, *nextFramePointer = NULL, *topfp = NULL;
 
 		/* 64-bit kernel stacks, 32-bit user stacks */
 		uint64_t frame[2];
 		uint32_t frame32[2];
-	
+
 		state = saved_state32(sstate);
 
 		/* make sure it is safe to dereference before you do it */
 		kernel = ARM_SUPERVISOR_MODE(state->cpsr);
 
 		/* can't take a kernel callstack if we've got a user frame */
-		if( !user_only && !kernel )
+		if (!user_only && !kernel) {
 			return KERN_FAILURE;
+		}
 
 		/*
 		 * Reserve space for saving LR (and sometimes SP) at the end of the
@@ -873,9 +877,9 @@ chudxnu_thread_get_callstack64_internal(
 		}
 
 		currPC = (uint64_t)state->pc; /* r15 */
-		if (state->cpsr & PSR_TF)
-			currPC |= 1ULL;	/* encode thumb mode into low bit of PC */
-
+		if (state->cpsr & PSR_TF) {
+			currPC |= 1ULL; /* encode thumb mode into low bit of PC */
+		}
 		currLR = (uint64_t)state->lr; /* r14 */
 		currSP = (uint64_t)state->sp; /* r13 */
 
@@ -905,7 +909,7 @@ chudxnu_thread_get_callstack64_internal(
 			 * necessary.
 			 */
 
-			if((uint32_t)fp == 0 || ((uint32_t)fp & 0x3) != 0) {
+			if ((uint32_t)fp == 0 || ((uint32_t)fp & 0x3) != 0) {
 				/* frame pointer is invalid - stop backtracing */
 				pc = 0ULL;
 				break;
@@ -917,8 +921,8 @@ chudxnu_thread_get_callstack64_internal(
 					kr = KERN_FAILURE;
 				} else {
 					kr = chudxnu_kern_read(&frame,
-							(vm_offset_t)fp,
-							(vm_size_t)sizeof(frame));
+					    (vm_offset_t)fp,
+					    (vm_size_t)sizeof(frame));
 					if (kr == KERN_SUCCESS) {
 						pc = (uint64_t)frame[1];
 						nextFramePointer = (uint32_t *) (frame[0]);
@@ -930,9 +934,9 @@ chudxnu_thread_get_callstack64_internal(
 				}
 			} else {
 				kr = chudxnu_task_read(task,
-							&frame32,
-							(((uint64_t)(uint32_t)fp) & 0x00000000FFFFFFFFULL),
-							sizeof(frame32));
+				    &frame32,
+				    (((uint64_t)(uint32_t)fp) & 0x00000000FFFFFFFFULL),
+				    sizeof(frame32));
 				if (kr == KERN_SUCCESS) {
 					pc = (uint64_t)frame32[1];
 					nextFramePointer = (uint32_t *)(uintptr_t)(frame32[0]);
@@ -953,10 +957,11 @@ chudxnu_thread_get_callstack64_internal(
 				prevPC = pc;
 			}
 
-			if (nextFramePointer < fp)
+			if (nextFramePointer < fp) {
 				break;
-			else
+			} else {
 				fp = nextFramePointer;
+			}
 		}
 
 		BUF_VERB(PERF_CS_BACKTRACE | DBG_FUNC_END, bufferIndex);
@@ -972,8 +977,9 @@ chudxnu_thread_get_callstack64_internal(
 
 		// Save link register and R13 (sp) at bottom of stack (used for later fixup).
 		buffer[bufferIndex++] = chudxnu_vm_unslide(currLR, kernel);
-		if( flags & CS_FLAG_EXTRASP )
+		if (flags & CS_FLAG_EXTRASP) {
 			buffer[bufferIndex++] = chudxnu_vm_unslide(currSP, kernel);
+		}
 	}
 
 	*count = bufferIndex;
@@ -982,10 +988,10 @@ chudxnu_thread_get_callstack64_internal(
 
 kern_return_t
 chudxnu_thread_get_callstack64_kperf(
-	thread_t		thread,
-	uint64_t		*callStack,
-	mach_msg_type_number_t	*count,
-	boolean_t		user_only)
+	thread_t                thread,
+	uint64_t                *callStack,
+	mach_msg_type_number_t  *count,
+	boolean_t               user_only)
 {
 	return chudxnu_thread_get_callstack64_internal( thread, callStack, count, user_only, 0 );
 }
@@ -998,30 +1004,31 @@ chudxnu_thread_get_callstack64_kperf(
 ((uint64_t)addr != 0ULL && ((uint64_t)addr <= 0x00007FFFFFFFFFFFULL || (uint64_t)addr >= 0xFFFF800000000000ULL)))
 
 typedef struct _cframe64_t {
-	uint64_t	prevFP;		// can't use a real pointer here until we're a 64 bit kernel
-	uint64_t	caller;
-	uint64_t	args[0];
+	uint64_t        prevFP;         // can't use a real pointer here until we're a 64 bit kernel
+	uint64_t        caller;
+	uint64_t        args[0];
 }cframe64_t;
 
 
 typedef struct _cframe_t {
-	uint32_t		prev;	// this is really a user32-space pointer to the previous frame
-	uint32_t		caller;
-	uint32_t		args[0];
+	uint32_t                prev;   // this is really a user32-space pointer to the previous frame
+	uint32_t                caller;
+	uint32_t                args[0];
 } cframe_t;
 
 extern void * find_user_regs(thread_t);
 extern x86_saved_state32_t *find_kern_regs(thread_t);
 
-static kern_return_t do_kernel_backtrace(
+static kern_return_t
+do_kernel_backtrace(
 	thread_t thread,
-	struct x86_kernel_state *regs, 
+	struct x86_kernel_state *regs,
 	uint64_t *frames,
 	mach_msg_type_number_t *start_idx,
 	mach_msg_type_number_t max_idx)
 {
 	uint64_t kernStackMin = (uint64_t)thread->kernel_stack;
-    uint64_t kernStackMax = (uint64_t)kernStackMin + kernel_stack_size;
+	uint64_t kernStackMax = (uint64_t)kernStackMin + kernel_stack_size;
 	mach_msg_type_number_t ct = *start_idx;
 	kern_return_t kr = KERN_FAILURE;
 
@@ -1030,10 +1037,10 @@ static kern_return_t do_kernel_backtrace(
 	uint64_t currFP = 0ULL;
 	uint64_t prevPC = 0ULL;
 	uint64_t prevFP = 0ULL;
-	if(KERN_SUCCESS != chudxnu_kern_read(&currPC, (vm_offset_t)&(regs->k_rip), sizeof(uint64_t))) {
+	if (KERN_SUCCESS != chudxnu_kern_read(&currPC, (vm_offset_t)&(regs->k_rip), sizeof(uint64_t))) {
 		return KERN_FAILURE;
 	}
-	if(KERN_SUCCESS != chudxnu_kern_read(&currFP, (vm_offset_t)&(regs->k_rbp), sizeof(uint64_t))) {
+	if (KERN_SUCCESS != chudxnu_kern_read(&currFP, (vm_offset_t)&(regs->k_rbp), sizeof(uint64_t))) {
 		return KERN_FAILURE;
 	}
 #else
@@ -1041,18 +1048,18 @@ static kern_return_t do_kernel_backtrace(
 	uint32_t currFP = 0U;
 	uint32_t prevPC = 0U;
 	uint32_t prevFP = 0U;
-	if(KERN_SUCCESS != chudxnu_kern_read(&currPC, (vm_offset_t)&(regs->k_eip), sizeof(uint32_t))) {
+	if (KERN_SUCCESS != chudxnu_kern_read(&currPC, (vm_offset_t)&(regs->k_eip), sizeof(uint32_t))) {
 		return KERN_FAILURE;
 	}
-	if(KERN_SUCCESS != chudxnu_kern_read(&currFP, (vm_offset_t)&(regs->k_ebp), sizeof(uint32_t))) {
+	if (KERN_SUCCESS != chudxnu_kern_read(&currFP, (vm_offset_t)&(regs->k_ebp), sizeof(uint32_t))) {
 		return KERN_FAILURE;
 	}
 #endif
 
-	if(*start_idx >= max_idx)
-		return KERN_RESOURCE_SHORTAGE;	// no frames traced
-	
-	if(!currPC) {
+	if (*start_idx >= max_idx) {
+		return KERN_RESOURCE_SHORTAGE;  // no frames traced
+	}
+	if (!currPC) {
 		return KERN_FAILURE;
 	}
 
@@ -1060,52 +1067,52 @@ static kern_return_t do_kernel_backtrace(
 
 	// build a backtrace of this kernel state
 #if __LP64__
-	while(VALID_STACK_ADDRESS64(TRUE, currFP, kernStackMin, kernStackMax)) {
+	while (VALID_STACK_ADDRESS64(TRUE, currFP, kernStackMin, kernStackMax)) {
 		// this is the address where caller lives in the user thread
 		uint64_t caller = currFP + sizeof(uint64_t);
 #else
-	while(VALID_STACK_ADDRESS(TRUE, currFP, kernStackMin, kernStackMax)) {
+	while (VALID_STACK_ADDRESS(TRUE, currFP, kernStackMin, kernStackMax)) {
 		uint32_t caller = (uint32_t)currFP + sizeof(uint32_t);
 #endif
 
-        if(!currFP || !currPC) {
-            currPC = 0;
-            break;
-        }
+		if (!currFP || !currPC) {
+			currPC = 0;
+			break;
+		}
 
-        if(ct >= max_idx) {
+		if (ct >= max_idx) {
 			*start_idx = ct;
-            return KERN_RESOURCE_SHORTAGE;
-        }
+			return KERN_RESOURCE_SHORTAGE;
+		}
 
 		/* read our caller */
 		kr = chudxnu_kern_read(&currPC, (vm_offset_t)caller, sizeof(currPC));
 
-		if(kr != KERN_SUCCESS || !currPC) {
+		if (kr != KERN_SUCCESS || !currPC) {
 			currPC = 0UL;
 			break;
 		}
 
-        /* 
-         * retrive contents of the frame pointer and advance to the next stack
-         * frame if it's valid 
-         */
-        prevFP = 0;
+		/*
+		 * retrive contents of the frame pointer and advance to the next stack
+		 * frame if it's valid
+		 */
+		prevFP = 0;
 		kr = chudxnu_kern_read(&prevFP, (vm_offset_t)currFP, sizeof(currPC));
 
 #if __LP64__
-        if(VALID_STACK_ADDRESS64(TRUE, prevFP, kernStackMin, kernStackMax)) {
+		if (VALID_STACK_ADDRESS64(TRUE, prevFP, kernStackMin, kernStackMax)) {
 #else
-        if(VALID_STACK_ADDRESS(TRUE, prevFP, kernStackMin, kernStackMax)) {
+		if (VALID_STACK_ADDRESS(TRUE, prevFP, kernStackMin, kernStackMax)) {
 #endif
-            frames[ct++] = chudxnu_vm_unslide((uint64_t)currPC, 1);
-            prevPC = currPC;
-        }
-        if(prevFP <= currFP) {
-            break;
-        } else {
-            currFP = prevFP;
-        }	
+			frames[ct++] = chudxnu_vm_unslide((uint64_t)currPC, 1);
+			prevPC = currPC;
+		}
+		if (prevFP <= currFP) {
+			break;
+		} else {
+			currFP = prevFP;
+		}
 	}
 
 	*start_idx = ct;
@@ -1114,10 +1121,11 @@ static kern_return_t do_kernel_backtrace(
 
 
 
-static kern_return_t do_backtrace32(
+static kern_return_t
+do_backtrace32(
 	task_t task,
 	thread_t thread,
-	x86_saved_state32_t *regs, 
+	x86_saved_state32_t *regs,
 	uint64_t *frames,
 	mach_msg_type_number_t *start_idx,
 	mach_msg_type_number_t max_idx,
@@ -1129,74 +1137,75 @@ static kern_return_t do_backtrace32(
 	uint64_t prevPC = 0ULL;
 	uint64_t prevFP = 0ULL;
 	uint64_t kernStackMin = thread->kernel_stack;
-    uint64_t kernStackMax = kernStackMin + kernel_stack_size;
+	uint64_t kernStackMax = kernStackMin + kernel_stack_size;
 	mach_msg_type_number_t ct = *start_idx;
 	kern_return_t kr = KERN_FAILURE;
 
-	if(ct >= max_idx)
-		return KERN_RESOURCE_SHORTAGE;	// no frames traced
-	
+	if (ct >= max_idx) {
+		return KERN_RESOURCE_SHORTAGE;  // no frames traced
+	}
 	frames[ct++] = chudxnu_vm_unslide(currPC, supervisor);
 
 	// build a backtrace of this 32 bit state.
-	while(VALID_STACK_ADDRESS(supervisor, currFP, kernStackMin, kernStackMax)) {
+	while (VALID_STACK_ADDRESS(supervisor, currFP, kernStackMin, kernStackMax)) {
 		cframe_t *fp = (cframe_t *) (uintptr_t) currFP;
 
-        if(!currFP) {
-            currPC = 0;
-            break;
-        }
+		if (!currFP) {
+			currPC = 0;
+			break;
+		}
 
-        if(ct >= max_idx) {
+		if (ct >= max_idx) {
 			*start_idx = ct;
-            return KERN_RESOURCE_SHORTAGE;
-        }
+			return KERN_RESOURCE_SHORTAGE;
+		}
 
 		/* read our caller */
-		if(supervisor) {
+		if (supervisor) {
 			kr = chudxnu_kern_read(&tmpWord, (vm_offset_t) &fp->caller, sizeof(uint32_t));
 		} else {
 			kr = chudxnu_task_read(task, &tmpWord, (vm_offset_t) &fp->caller, sizeof(uint32_t));
 		}
 
-		if(kr != KERN_SUCCESS) {
+		if (kr != KERN_SUCCESS) {
 			currPC = 0ULL;
 			break;
 		}
 
 		currPC = (uint64_t) tmpWord;    // promote 32 bit address
 
-        /* 
-         * retrive contents of the frame pointer and advance to the next stack
-         * frame if it's valid 
-         */
-        prevFP = 0;
-		if(supervisor) {
+		/*
+		 * retrive contents of the frame pointer and advance to the next stack
+		 * frame if it's valid
+		 */
+		prevFP = 0;
+		if (supervisor) {
 			kr = chudxnu_kern_read(&tmpWord, (vm_offset_t)&fp->prev, sizeof(uint32_t));
 		} else {
 			kr = chudxnu_task_read(task, &tmpWord, (vm_offset_t)&fp->prev, sizeof(uint32_t));
 		}
 		prevFP = (uint64_t) tmpWord;    // promote 32 bit address
 
-        if(prevFP) {
-            frames[ct++] = chudxnu_vm_unslide(currPC, supervisor);
-            prevPC = currPC;
-        }
-        if(prevFP < currFP) {
-            break;
-        } else {
-            currFP = prevFP;
-        }	
+		if (prevFP) {
+			frames[ct++] = chudxnu_vm_unslide(currPC, supervisor);
+			prevPC = currPC;
+		}
+		if (prevFP < currFP) {
+			break;
+		} else {
+			currFP = prevFP;
+		}
 	}
 
 	*start_idx = ct;
 	return KERN_SUCCESS;
 }
 
-static kern_return_t do_backtrace64(
+static kern_return_t
+do_backtrace64(
 	task_t task,
 	thread_t thread,
-	x86_saved_state64_t *regs, 
+	x86_saved_state64_t *regs,
 	uint64_t *frames,
 	mach_msg_type_number_t *start_idx,
 	mach_msg_type_number_t max_idx,
@@ -1207,62 +1216,62 @@ static kern_return_t do_backtrace64(
 	uint64_t prevPC = 0ULL;
 	uint64_t prevFP = 0ULL;
 	uint64_t kernStackMin = (uint64_t)thread->kernel_stack;
-    uint64_t kernStackMax = (uint64_t)kernStackMin + kernel_stack_size;
+	uint64_t kernStackMax = (uint64_t)kernStackMin + kernel_stack_size;
 	mach_msg_type_number_t ct = *start_idx;
 	kern_return_t kr = KERN_FAILURE;
 
-	if(*start_idx >= max_idx)
-		return KERN_RESOURCE_SHORTAGE;	// no frames traced
-	
+	if (*start_idx >= max_idx) {
+		return KERN_RESOURCE_SHORTAGE;  // no frames traced
+	}
 	frames[ct++] = chudxnu_vm_unslide(currPC, supervisor);
 
 	// build a backtrace of this 32 bit state.
-	while(VALID_STACK_ADDRESS64(supervisor, currFP, kernStackMin, kernStackMax)) {
+	while (VALID_STACK_ADDRESS64(supervisor, currFP, kernStackMin, kernStackMax)) {
 		// this is the address where caller lives in the user thread
 		uint64_t caller = currFP + sizeof(uint64_t);
 
-        if(!currFP) {
-            currPC = 0;
-            break;
-        }
+		if (!currFP) {
+			currPC = 0;
+			break;
+		}
 
-        if(ct >= max_idx) {
+		if (ct >= max_idx) {
 			*start_idx = ct;
-            return KERN_RESOURCE_SHORTAGE;
-        }
+			return KERN_RESOURCE_SHORTAGE;
+		}
 
 		/* read our caller */
-		if(supervisor) {
+		if (supervisor) {
 			kr = chudxnu_kern_read(&currPC, (vm_offset_t)caller, sizeof(uint64_t));
 		} else {
 			kr = chudxnu_task_read(task, &currPC, caller, sizeof(uint64_t));
 		}
 
-		if(kr != KERN_SUCCESS) {
+		if (kr != KERN_SUCCESS) {
 			currPC = 0ULL;
 			break;
 		}
 
-        /* 
-         * retrive contents of the frame pointer and advance to the next stack
-         * frame if it's valid 
-         */
-        prevFP = 0;
-		if(supervisor) {
+		/*
+		 * retrive contents of the frame pointer and advance to the next stack
+		 * frame if it's valid
+		 */
+		prevFP = 0;
+		if (supervisor) {
 			kr = chudxnu_kern_read(&prevFP, (vm_offset_t)currFP, sizeof(uint64_t));
 		} else {
 			kr = chudxnu_task_read(task, &prevFP, currFP, sizeof(uint64_t));
 		}
 
-        if(VALID_STACK_ADDRESS64(supervisor, prevFP, kernStackMin, kernStackMax)) {
-            frames[ct++] = chudxnu_vm_unslide(currPC, supervisor);
-            prevPC = currPC;
-        }
-        if(prevFP < currFP) {
-            break;
-        } else {
-            currFP = prevFP;
-        }	
+		if (VALID_STACK_ADDRESS64(supervisor, prevFP, kernStackMin, kernStackMax)) {
+			frames[ct++] = chudxnu_vm_unslide(currPC, supervisor);
+			prevPC = currPC;
+		}
+		if (prevFP < currFP) {
+			break;
+		} else {
+			currFP = prevFP;
+		}
 	}
 
 	*start_idx = ct;
@@ -1271,41 +1280,40 @@ static kern_return_t do_backtrace64(
 
 static kern_return_t
 chudxnu_thread_get_callstack64_internal(
-	thread_t		thread,
-	uint64_t		*callstack,
-	mach_msg_type_number_t	*count,
-	boolean_t		user_only,
-	boolean_t		kern_only)
+	thread_t                thread,
+	uint64_t                *callstack,
+	mach_msg_type_number_t  *count,
+	boolean_t               user_only,
+	boolean_t               kern_only)
 {
 	kern_return_t kr = KERN_FAILURE;
-    task_t task = thread->task;
-    uint64_t currPC = 0ULL;
+	task_t task = thread->task;
+	uint64_t currPC = 0ULL;
 	boolean_t supervisor = FALSE;
-    mach_msg_type_number_t bufferIndex = 0;
-    mach_msg_type_number_t bufferMaxIndex = *count;
-	x86_saved_state_t *tagged_regs = NULL;		// kernel register state
+	mach_msg_type_number_t bufferIndex = 0;
+	mach_msg_type_number_t bufferMaxIndex = *count;
+	x86_saved_state_t *tagged_regs = NULL;          // kernel register state
 	x86_saved_state64_t *regs64 = NULL;
 	x86_saved_state32_t *regs32 = NULL;
 	x86_saved_state32_t *u_regs32 = NULL;
 	x86_saved_state64_t *u_regs64 = NULL;
 	struct x86_kernel_state *kregs = NULL;
 
-	if(ml_at_interrupt_context()) {
-		
-		if(user_only) {
+	if (ml_at_interrupt_context()) {
+		if (user_only) {
 			/* can't backtrace user state on interrupt stack. */
 			return KERN_FAILURE;
 		}
 
 		/* backtracing at interrupt context? */
-		 if(thread == current_thread() && current_cpu_datap()->cpu_int_state) {
-			/* 
+		if (thread == current_thread() && current_cpu_datap()->cpu_int_state) {
+			/*
 			 * Locate the registers for the interrupted thread, assuming it is
-			 * current_thread(). 
+			 * current_thread().
 			 */
 			tagged_regs = current_cpu_datap()->cpu_int_state;
-			
-			if(is_saved_state64(tagged_regs)) {
+
+			if (is_saved_state64(tagged_regs)) {
 				/* 64 bit registers */
 				regs64 = saved_state64(tagged_regs);
 				supervisor = ((regs64->isf.cs & SEL_PL) != SEL_PL_U);
@@ -1314,12 +1322,11 @@ chudxnu_thread_get_callstack64_internal(
 				regs32 = saved_state32(tagged_regs);
 				supervisor = ((regs32->cs & SEL_PL) != SEL_PL_U);
 			}
-		} 
+		}
 	}
 
-	if(!ml_at_interrupt_context() && kernel_task == task) {
-
-		if(!thread->kernel_stack) {
+	if (!ml_at_interrupt_context() && kernel_task == task) {
+		if (!thread->kernel_stack) {
 			return KERN_FAILURE;
 		}
 
@@ -1327,7 +1334,7 @@ chudxnu_thread_get_callstack64_internal(
 		kregs = (struct x86_kernel_state *)NULL;
 
 		// nofault read of the thread->kernel_stack pointer
-		if(KERN_SUCCESS != chudxnu_kern_read(&kregs, (vm_offset_t)&(thread->kernel_stack), sizeof(void *))) {
+		if (KERN_SUCCESS != chudxnu_kern_read(&kregs, (vm_offset_t)&(thread->kernel_stack), sizeof(void *))) {
 			return KERN_FAILURE;
 		}
 
@@ -1335,16 +1342,16 @@ chudxnu_thread_get_callstack64_internal(
 		kregs = STACK_IKS((vm_offset_t)(uintptr_t)kregs);
 
 		supervisor = TRUE;
-	} else if(!tagged_regs) {
-		/* 
+	} else if (!tagged_regs) {
+		/*
 		 * not at interrupt context, or tracing a different thread than
-		 * current_thread() at interrupt context 
+		 * current_thread() at interrupt context
 		 */
 		tagged_regs = USER_STATE(thread);
-		if(is_saved_state64(tagged_regs)) {
+		if (is_saved_state64(tagged_regs)) {
 			/* 64 bit registers */
 			regs64 = saved_state64(tagged_regs);
-			supervisor = ((regs64->isf.cs & SEL_PL) != SEL_PL_U); 
+			supervisor = ((regs64->isf.cs & SEL_PL) != SEL_PL_U);
 		} else {
 			/* 32 bit registers */
 			regs32 = saved_state32(tagged_regs);
@@ -1352,11 +1359,11 @@ chudxnu_thread_get_callstack64_internal(
 		}
 	}
 
-	*count = 0; 
+	*count = 0;
 
-	if(supervisor) {
+	if (supervisor) {
 		// the caller only wants a user callstack.
-		if(user_only) {
+		if (user_only) {
 			// bail - we've only got kernel state
 			return KERN_FAILURE;
 		}
@@ -1370,13 +1377,13 @@ chudxnu_thread_get_callstack64_internal(
 
 	if (user_only) {
 		/* we only want to backtrace the user mode */
-		if(!(u_regs32 || u_regs64)) {
+		if (!(u_regs32 || u_regs64)) {
 			/* no user state to look at */
 			return KERN_FAILURE;
 		}
 	}
 
-	/* 
+	/*
 	 * Order of preference for top of stack:
 	 * 64 bit kernel state (not likely)
 	 * 32 bit kernel state
@@ -1384,39 +1391,39 @@ chudxnu_thread_get_callstack64_internal(
 	 * 32 bit user land state
 	 */
 
-	if(kregs) {
+	if (kregs) {
 		/*
 		 * nofault read of the registers from the kernel stack (as they can
 		 * disappear on the fly).
 		 */
 
-		if(KERN_SUCCESS != chudxnu_kern_read(&currPC, (vm_offset_t)&(kregs->k_rip), sizeof(uint64_t))) {
+		if (KERN_SUCCESS != chudxnu_kern_read(&currPC, (vm_offset_t)&(kregs->k_rip), sizeof(uint64_t))) {
 			return KERN_FAILURE;
 		}
-	} else if(regs64) {
+	} else if (regs64) {
 		currPC = regs64->isf.rip;
-	} else if(regs32) {
+	} else if (regs32) {
 		currPC = (uint64_t) regs32->eip;
-	} else if(u_regs64) {
+	} else if (u_regs64) {
 		currPC = u_regs64->isf.rip;
-	} else if(u_regs32) {
+	} else if (u_regs32) {
 		currPC = (uint64_t) u_regs32->eip;
 	}
-	
-	if(!currPC) {
+
+	if (!currPC) {
 		/* no top of the stack, bail out */
 		return KERN_FAILURE;
 	}
 
 	bufferIndex = 0;
-		
-	if(bufferMaxIndex < 1) {
+
+	if (bufferMaxIndex < 1) {
 		*count = 0;
 		return KERN_RESOURCE_SHORTAGE;
 	}
 
 	/* backtrace kernel */
-	if(kregs) {
+	if (kregs) {
 		addr64_t address = 0ULL;
 		size_t size = 0UL;
 
@@ -1426,71 +1433,70 @@ chudxnu_thread_get_callstack64_internal(
 		// and do a nofault read of (r|e)sp
 		uint64_t rsp = 0ULL;
 		size = sizeof(uint64_t);
-		
-		if(KERN_SUCCESS != chudxnu_kern_read(&address, (vm_offset_t)&(kregs->k_rsp), size)) {
+
+		if (KERN_SUCCESS != chudxnu_kern_read(&address, (vm_offset_t)&(kregs->k_rsp), size)) {
 			address = 0ULL;
 		}
 
-		if(address && KERN_SUCCESS == chudxnu_kern_read(&rsp, (vm_offset_t)address, size) && bufferIndex < bufferMaxIndex) {
+		if (address && KERN_SUCCESS == chudxnu_kern_read(&rsp, (vm_offset_t)address, size) && bufferIndex < bufferMaxIndex) {
 			callstack[bufferIndex++] = (uint64_t)rsp;
 		}
-	} else if(regs64) {
+	} else if (regs64) {
 		uint64_t rsp = 0ULL;
 
 		// backtrace the 64bit side.
 		kr = do_backtrace64(task, thread, regs64, callstack, &bufferIndex,
-		                    bufferMaxIndex - 1, TRUE);
+		    bufferMaxIndex - 1, TRUE);
 
-		if(KERN_SUCCESS == chudxnu_kern_read(&rsp, (vm_offset_t) regs64->isf.rsp, sizeof(uint64_t)) && 
-			bufferIndex < bufferMaxIndex) {
+		if (KERN_SUCCESS == chudxnu_kern_read(&rsp, (vm_offset_t) regs64->isf.rsp, sizeof(uint64_t)) &&
+		    bufferIndex < bufferMaxIndex) {
 			callstack[bufferIndex++] = rsp;
 		}
-
-	} else if(regs32) {
+	} else if (regs32) {
 		uint32_t esp = 0UL;
 
 		// backtrace the 32bit side.
 		kr = do_backtrace32(task, thread, regs32, callstack, &bufferIndex,
-		                    bufferMaxIndex - 1, TRUE);
-		
-		if(KERN_SUCCESS == chudxnu_kern_read(&esp, (vm_offset_t) regs32->uesp, sizeof(uint32_t)) && 
-			bufferIndex < bufferMaxIndex) {
+		    bufferMaxIndex - 1, TRUE);
+
+		if (KERN_SUCCESS == chudxnu_kern_read(&esp, (vm_offset_t) regs32->uesp, sizeof(uint32_t)) &&
+		    bufferIndex < bufferMaxIndex) {
 			callstack[bufferIndex++] = (uint64_t) esp;
 		}
-	} else if(u_regs64 && !kern_only) {
+	} else if (u_regs64 && !kern_only) {
 		/* backtrace user land */
 		uint64_t rsp = 0ULL;
-		
-		kr = do_backtrace64(task, thread, u_regs64, callstack, &bufferIndex,
-		                    bufferMaxIndex - 1, FALSE);
 
-		if(KERN_SUCCESS == chudxnu_task_read(task, &rsp, (addr64_t) u_regs64->isf.rsp, sizeof(uint64_t)) && 
-			bufferIndex < bufferMaxIndex) {
+		kr = do_backtrace64(task, thread, u_regs64, callstack, &bufferIndex,
+		    bufferMaxIndex - 1, FALSE);
+
+		if (KERN_SUCCESS == chudxnu_task_read(task, &rsp, (addr64_t) u_regs64->isf.rsp, sizeof(uint64_t)) &&
+		    bufferIndex < bufferMaxIndex) {
 			callstack[bufferIndex++] = rsp;
 		}
-
-	} else if(u_regs32 && !kern_only) {
+	} else if (u_regs32 && !kern_only) {
 		uint32_t esp = 0UL;
-		
-		kr = do_backtrace32(task, thread, u_regs32, callstack, &bufferIndex,
-		                    bufferMaxIndex - 1, FALSE);
 
-		if(KERN_SUCCESS == chudxnu_task_read(task, &esp, (addr64_t) u_regs32->uesp, sizeof(uint32_t)) && 
-			bufferIndex < bufferMaxIndex) {
+		kr = do_backtrace32(task, thread, u_regs32, callstack, &bufferIndex,
+		    bufferMaxIndex - 1, FALSE);
+
+		if (KERN_SUCCESS == chudxnu_task_read(task, &esp, (addr64_t) u_regs32->uesp, sizeof(uint32_t)) &&
+		    bufferIndex < bufferMaxIndex) {
 			callstack[bufferIndex++] = (uint64_t) esp;
 		}
 	}
 
-    *count = bufferIndex;
-    return kr;
+	*count = bufferIndex;
+	return kr;
 }
 
 __private_extern__
-kern_return_t chudxnu_thread_get_callstack64_kperf(
-	thread_t		thread,
-	uint64_t		*callstack,
-	mach_msg_type_number_t	*count,
-	boolean_t		is_user)
+kern_return_t
+chudxnu_thread_get_callstack64_kperf(
+	thread_t                thread,
+	uint64_t                *callstack,
+	mach_msg_type_number_t  *count,
+	boolean_t               is_user)
 {
 	return chudxnu_thread_get_callstack64_internal(thread, callstack, count, is_user, !is_user);
 }

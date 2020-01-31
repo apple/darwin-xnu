@@ -44,7 +44,7 @@
 #ifndef _COMM_PAGE_CPU_QUIESCENT_COUNTER
 
 T_DECL(test_quiescent_counter, "Validate that _COMM_PAGE_CPU_QUIESCENT_COUNTER increments",
-       T_META_CHECK_LEAKS(false))
+    T_META_CHECK_LEAKS(false))
 {
 	T_SKIP("_COMM_PAGE_CPU_QUIESCENT_COUNTER doesn't exist on this system");
 }
@@ -52,7 +52,7 @@ T_DECL(test_quiescent_counter, "Validate that _COMM_PAGE_CPU_QUIESCENT_COUNTER i
 #else /* _COMM_PAGE_CPU_QUIESCENT_COUNTER */
 
 T_DECL(test_quiescent_counter, "Validate that _COMM_PAGE_CPU_QUIESCENT_COUNTER increments",
-       T_META_CHECK_LEAKS(false))
+    T_META_CHECK_LEAKS(false))
 {
 	int rv;
 
@@ -74,8 +74,7 @@ T_DECL(test_quiescent_counter, "Validate that _COMM_PAGE_CPU_QUIESCENT_COUNTER i
 	uint64_t last_counter = counter;
 	T_LOG("first value of _COMM_PAGE_CPU_QUIESCENT_COUNTER is %llu", counter);
 
-	for (int i = 0 ; i < 10 ; i++)
-	{
+	for (int i = 0; i < 10; i++) {
 		sleep(1);
 
 		last_counter = counter;
@@ -88,4 +87,3 @@ T_DECL(test_quiescent_counter, "Validate that _COMM_PAGE_CPU_QUIESCENT_COUNTER i
 }
 
 #endif /* _COMM_PAGE_CPU_QUIESCENT_COUNTER */
-

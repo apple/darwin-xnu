@@ -304,6 +304,11 @@ _ml_io_read16
 _ml_io_read32
 _ml_io_read64
 _ml_io_read8
+_ml_io_write
+_ml_io_write16
+_ml_io_write32
+_ml_io_write64
+_ml_io_write8
 _mnl_instantiate
 _mnl_register
 _mnl_msg_alloc
@@ -611,6 +616,7 @@ _zone_change
 _fs_buffer_cache_gc_register
 _fs_buffer_cache_gc_unregister
 _cp_key_store_action_for_volume
+_mach_bridge_remote_time
 
 _Block_size
 __Block_extended_layout

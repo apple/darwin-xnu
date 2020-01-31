@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#ifdef	MACH_BSD
+#ifdef  MACH_BSD
 #include <mach_debug.h>
 #include <mach_ldebug.h>
 
@@ -71,7 +71,7 @@ struct mach_call_args {
 };
 
 static void
-arm_set_mach_syscall_ret(struct arm_saved_state *state, int retval) 
+arm_set_mach_syscall_ret(struct arm_saved_state *state, int retval)
 {
 	if (is_saved_state32(state)) {
 		saved_state32(state)->r[0] = retval;
@@ -88,17 +88,17 @@ arm_get_mach_syscall_args(struct arm_saved_state *state, struct mach_call_args *
 	if (is_saved_state32(state)) {
 		/* The trap table entry defines the number of 32-bit words to be copied in from userspace. */
 		reg_count = trapp->mach_trap_u32_words;
-		
-		/* 
-		 * We get 7 contiguous words; r0-r6, hop over r7 
-		 * (frame pointer), optionally r8 
+
+		/*
+		 * We get 7 contiguous words; r0-r6, hop over r7
+		 * (frame pointer), optionally r8
 		 */
 		if (reg_count <= 7) {
 			bcopy((char*)saved_state32(state), (char*)dest, sizeof(uint32_t) * reg_count);
 		} else if (reg_count <= 9) {
 			bcopy((char*)saved_state32(state), (char*)dest, sizeof(uint32_t) * 7);
-			bcopy((char*)&saved_state32(state)->r[8], ((char*)dest) + sizeof(uint32_t) * 7, 
-					reg_count - 7);
+			bcopy((char*)&saved_state32(state)->r[8], ((char*)dest) + sizeof(uint32_t) * 7,
+			    reg_count - 7);
 		} else {
 			panic("Trap with %d words of args? We only support 9.", reg_count);
 		}
@@ -108,7 +108,7 @@ arm_get_mach_syscall_args(struct arm_saved_state *state, struct mach_call_args *
 #else
 #error U32 mach traps on ARM64 kernel requires munging
 #endif
-	} else { 
+	} else {
 		assert(is_saved_state64(state));
 		bcopy((char*)saved_state64(state), (char*)dest, trapp->mach_trap_arg_count * sizeof(uint64_t));
 	}
@@ -119,7 +119,7 @@ arm_get_mach_syscall_args(struct arm_saved_state *state, struct mach_call_args *
 kern_return_t
 thread_setsinglestep(__unused thread_t thread, __unused int on)
 {
-	return (KERN_FAILURE); /* XXX TODO */
+	return KERN_FAILURE; /* XXX TODO */
 }
 
 #if CONFIG_DTRACE
@@ -160,7 +160,7 @@ mach_syscall(struct arm_saved_state *state)
 
 	DEBUG_KPRINT_SYSCALL_MACH(
 		"mach_syscall: code=%d(%s) (pid %d, tid %lld)\n",
-		call_number, mach_syscall_name_table[call_number], 
+		call_number, mach_syscall_name_table[call_number],
 		proc_pid(current_proc()), thread_tid(current_thread()));
 
 #if DEBUG_TRACE
@@ -188,17 +188,17 @@ mach_syscall(struct arm_saved_state *state)
 	}
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_START,
-		args.arg1, args.arg2, args.arg3, args.arg4, 0);
+	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_START,
+	    args.arg1, args.arg2, args.arg3, args.arg4, 0);
 
 	retval = mach_call(&args);
 
 	DEBUG_KPRINT_SYSCALL_MACH("mach_syscall: retval=0x%x (pid %d, tid %lld)\n", retval,
-		proc_pid(current_proc()), thread_tid(current_thread()));
+	    proc_pid(current_proc()), thread_tid(current_thread()));
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		MACHDBG_CODE(DBG_MACH_EXCP_SC,(call_number)) | DBG_FUNC_END,
-		retval, 0, 0, 0, 0);
+	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_END,
+	    retval, 0, 0, 0, 0);
 
 	arm_set_mach_syscall_ret(state, retval);
 

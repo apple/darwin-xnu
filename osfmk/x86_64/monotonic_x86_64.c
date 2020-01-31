@@ -33,9 +33,10 @@
 #include <i386/proc_reg.h>
 #include <kern/assert.h> /* static_assert, assert */
 #include <kern/monotonic.h>
-#include <x86_64/monotonic.h>
+#include <os/overflow.h>
 #include <sys/errno.h>
 #include <sys/monotonic.h>
+#include <x86_64/monotonic.h>
 
 /*
  * Sanity check the compiler.
@@ -230,11 +231,11 @@ mt_pmi_x86_64(x86_saved_state_t *state)
 				x86_saved_state64_t *state64 = saved_state64(state);
 				bool user_mode = (state64->isf.cs & 0x3) ? true : false;
 				KDBG_RELEASE(KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_DEBUG, 1),
-						mt_microstackshot_ctr, user_mode);
+				    mt_microstackshot_ctr, user_mode);
 				mt_microstackshot_pmi_handler(user_mode, mt_microstackshot_ctx);
 			} else if (mt_debug) {
 				KDBG(KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_DEBUG, 2),
-						mt_microstackshot_ctr, i);
+				    mt_microstackshot_ctr, i);
 			}
 
 			mtc->mtc_snaps[i] = mt_core_reset_values[i];
@@ -274,9 +275,15 @@ mt_microstackshot_start_arch(uint64_t period)
 		return ENOTSUP;
 	}
 
+	uint64_t reset_value = 0;
+	int ovf = os_sub_overflow(CTR_MAX, period, &reset_value);
+	if (ovf) {
+		return ERANGE;
+	}
+
 	mt_core_reset_values[mt_microstackshot_ctr] = CTR_MAX - period;
 	mp_cpus_call(CPUMASK_ALL, ASYNC, mt_microstackshot_start_remote,
-			NULL);
+	    NULL);
 	return 0;
 }
 
@@ -306,5 +313,5 @@ struct mt_device mt_devices[] = {
 };
 
 static_assert(
-		(sizeof(mt_devices) / sizeof(mt_devices[0])) == MT_NDEVS,
-		"MT_NDEVS macro should be same as the length of mt_devices");
+	(sizeof(mt_devices) / sizeof(mt_devices[0])) == MT_NDEVS,
+	"MT_NDEVS macro should be same as the length of mt_devices");

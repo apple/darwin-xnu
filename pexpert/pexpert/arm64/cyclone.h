@@ -8,17 +8,17 @@
 #ifdef APPLECYCLONE
 #include "arm64_common.h"
 
-#define MONITOR			1 /* Use EL3 monitor */
-#define NO_ECORE		1
-#define HAS_32BIT_DBGWRAP	1
+#define MONITOR                 1 /* Use EL3 monitor */
+#define NO_ECORE                1
+#define HAS_32BIT_DBGWRAP       1
 
 /*
  * Determined by experiment (not described in manual):
- * A0 is variant 0, B0 is variant 1.  See arm64/proc_reg.h 
+ * A0 is variant 0, B0 is variant 1.  See arm64/proc_reg.h
  * for how these values are constructed from the MIDR.
  */
-#define CYCLONE_CPU_VERSION_A0			0x00
-#define CYCLONE_CPU_VERSION_B0			0x10
+#define CYCLONE_CPU_VERSION_A0                  0x00
+#define CYCLONE_CPU_VERSION_B0                  0x10
 
 #endif
 

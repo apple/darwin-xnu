@@ -16,6 +16,7 @@ KERNELFILES = \
 	overflow.h
 
 PRIVATE_KERNELFILES = \
+	hash.h \
 	object_private.h \
 	reason_private.h \
 	refcnt.h

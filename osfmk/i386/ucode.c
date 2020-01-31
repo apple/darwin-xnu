@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,7 +37,8 @@
 #include <i386/proc_reg.h>
 #include <i386/cpuid.h>
 #include <vm/vm_kern.h>
-#include <i386/mp.h>			// mp_broadcast
+#include <i386/mp.h>                    // mp_cpus_call
+#include <i386/commpage/commpage.h>
 #include <i386/fpu.h>
 #include <machine/cpu_number.h> // cpu_number
 #include <pexpert/pexpert.h>  // boot-args
@@ -67,41 +68,48 @@ static kern_return_t
 register_locks(void)
 {
 	/* already allocated? */
-	if (ucode_slock_grp_attr && ucode_slock_grp && ucode_slock_attr && ucode_slock)
+	if (ucode_slock_grp_attr && ucode_slock_grp && ucode_slock_attr && ucode_slock) {
 		return KERN_SUCCESS;
+	}
 
 	/* allocate lock group attribute and group */
-	if (!(ucode_slock_grp_attr = lck_grp_attr_alloc_init()))
+	if (!(ucode_slock_grp_attr = lck_grp_attr_alloc_init())) {
 		goto nomem_out;
+	}
 
-	lck_grp_attr_setstat(ucode_slock_grp_attr);
-
-	if (!(ucode_slock_grp = lck_grp_alloc_init("uccode_lock", ucode_slock_grp_attr)))
+	if (!(ucode_slock_grp = lck_grp_alloc_init("uccode_lock", ucode_slock_grp_attr))) {
 		goto nomem_out;
+	}
 
 	/* Allocate lock attribute */
-	if (!(ucode_slock_attr = lck_attr_alloc_init()))
+	if (!(ucode_slock_attr = lck_attr_alloc_init())) {
 		goto nomem_out;
+	}
 
 	/* Allocate the spin lock */
 	/* We keep one global spin-lock. We could have one per update
 	 * request... but srsly, why would you update microcode like that?
 	 */
-	if (!(ucode_slock = lck_spin_alloc_init(ucode_slock_grp, ucode_slock_attr)))
+	if (!(ucode_slock = lck_spin_alloc_init(ucode_slock_grp, ucode_slock_attr))) {
 		goto nomem_out;
+	}
 
 	return KERN_SUCCESS;
 
 nomem_out:
 	/* clean up */
-	if (ucode_slock)
+	if (ucode_slock) {
 		lck_spin_free(ucode_slock, ucode_slock_grp);
-	if (ucode_slock_attr)
+	}
+	if (ucode_slock_attr) {
 		lck_attr_free(ucode_slock_attr);
-	if (ucode_slock_grp)
+	}
+	if (ucode_slock_grp) {
 		lck_grp_free(ucode_slock_grp);
-	if (ucode_slock_grp_attr)
+	}
+	if (ucode_slock_grp_attr) {
 		lck_grp_attr_free(ucode_slock_grp_attr);
+	}
 
 	return KERN_NO_SPACE;
 }
@@ -118,28 +126,31 @@ copyin_update(uint64_t inaddr)
 
 	/* Copy in enough header to peek at the size */
 	error = copyin((user_addr_t)inaddr, (void *)&update_header, sizeof(update_header));
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	/* Get the actual, alleged size */
 	size = update_header.total_size;
 
 	/* huge bogus piece of data that somehow made it through? */
-	if (size >= 1024 * 1024)
+	if (size >= 1024 * 1024) {
 		return ENOMEM;
+	}
 
 	/* Old microcodes? */
-	if (size == 0)
+	if (size == 0) {
 		size = 2048; /* default update size; see SDM */
-
+	}
 	/*
 	 * create the buffer for the update
 	 * It need only be aligned to 16-bytes, according to the SDM.
 	 * This also wires it down
 	 */
 	ret = kmem_alloc_kobject(kernel_map, (vm_offset_t *)&update, size, VM_KERN_MEMORY_OSFMK);
-	if (ret != KERN_SUCCESS)
+	if (ret != KERN_SUCCESS) {
 		return ENOMEM;
+	}
 
 	/* Copy it in */
 	error = copyin((user_addr_t)inaddr, (void*)update, size);
@@ -152,6 +163,27 @@ copyin_update(uint64_t inaddr)
 	return 0;
 }
 
+static void
+cpu_apply_microcode(void)
+{
+	/* grab the lock */
+	lck_spin_lock(ucode_slock);
+
+	/* execute the update */
+	update_microcode();
+
+	/* release the lock */
+	lck_spin_unlock(ucode_slock);
+}
+
+static void
+cpu_update(__unused void *arg)
+{
+	cpu_apply_microcode();
+
+	cpuid_do_was();
+}
+
 /*
  * This is called once by every CPU on a wake from sleep/hibernate
  * and is meant to re-apply a microcode update that got lost
@@ -162,25 +194,12 @@ ucode_update_wake()
 {
 	if (global_update) {
 		kprintf("ucode: Re-applying update after wake (CPU #%d)\n", cpu_number());
-		update_microcode();
+		cpu_update(NULL);
 #if DEBUG
 	} else {
 		kprintf("ucode: No update to apply (CPU #%d)\n", cpu_number());
 #endif
 	}
-}
-
-static void
-cpu_update(__unused void *arg)
-{
-	/* grab the lock */
-	lck_spin_lock(ucode_slock);
-
-	/* execute the update */
-	update_microcode();
-
-	/* release the lock */
-	lck_spin_unlock(ucode_slock);
 }
 
 static void
@@ -222,14 +241,32 @@ ucode_cpuid_set_info(void)
 static void
 xcpu_update(void)
 {
-	if (register_locks() != KERN_SUCCESS)
+	cpumask_t dest_cpumask;
+
+	if (register_locks() != KERN_SUCCESS) {
 		return;
+	}
 
-	/* Get all CPUs to perform the update */
-	mp_broadcast(cpu_update, NULL);
-
+	mp_disable_preemption();
+	dest_cpumask = CPUMASK_OTHERS;
+	cpu_apply_microcode();
 	/* Update the cpuid info */
 	ucode_cpuid_set_info();
+	/* Now apply workarounds */
+	cpuid_do_was();
+	mp_enable_preemption();
+
+	/* Get all other CPUs to perform the update */
+	/*
+	 * Calling mp_cpus_call with the ASYNC flag ensures that the
+	 * IPI dispatch occurs in parallel, but that we will not
+	 * proceed until all targeted CPUs complete the microcode
+	 * update.
+	 */
+	mp_cpus_call(dest_cpumask, ASYNC, cpu_update, NULL);
+
+	/* Update the commpage only after we update all CPUs' microcode */
+	commpage_post_ucode_update();
 }
 
 /*
@@ -240,9 +277,9 @@ int
 ucode_interface(uint64_t addr)
 {
 	int error;
-	char arg[16]; 
+	char arg[16];
 
-	if (PE_parse_boot_argn("-x", arg, sizeof (arg))) {
+	if (PE_parse_boot_argn("-x", arg, sizeof(arg))) {
 		printf("ucode: no updates in safe mode\n");
 		return EPERM;
 	}
@@ -253,15 +290,17 @@ ucode_interface(uint64_t addr)
 	 * would not make sense (all updates are cumulative), and also
 	 * leak memory, because we don't free previous updates.
 	 */
-	if (global_update)
+	if (global_update) {
 		return EPERM;
+	}
 #endif
 
 	/* Get the whole microcode */
 	error = copyin_update(addr);
 
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	/* Farm out the updates */
 	xcpu_update();

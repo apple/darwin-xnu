@@ -64,7 +64,7 @@
  * Pseudo-teletype Driver
  * (Actually two drivers, requiring two entries in 'cdevsw')
  */
-#include "pty.h"		/* XXX */
+#include "pty.h"                /* XXX */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -81,7 +81,7 @@
 #include <sys/signalvar.h>
 #include <sys/sysctl.h>
 #include <miscfs/devfs/devfs.h>
-#include <miscfs/devfs/devfsdefs.h>	/* DEVFS_LOCK()/DEVFS_UNLOCK() */
+#include <miscfs/devfs/devfsdefs.h>     /* DEVFS_LOCK()/DEVFS_UNLOCK() */
 #include <libkern/section_keywords.h>
 
 #if CONFIG_MACF
@@ -99,76 +99,77 @@ static int ptmx_free_ioctl(int minor, int open_flag);
 static int ptmx_get_name(int minor, char *buffer, size_t size);
 static void ptsd_revoke_knotes(int minor, struct tty *tp);
 
-extern	d_open_t	ptsopen;
-extern	d_close_t	ptsclose;
-extern	d_read_t	ptsread;
-extern	d_write_t	ptswrite;
-extern	d_ioctl_t	ptyioctl;
-extern	d_stop_t	ptsstop;
-extern	d_reset_t	ptsreset;
-extern	d_select_t	ptsselect;
+extern  d_open_t        ptsopen;
+extern  d_close_t       ptsclose;
+extern  d_read_t        ptsread;
+extern  d_write_t       ptswrite;
+extern  d_ioctl_t       ptyioctl;
+extern  d_stop_t        ptsstop;
+extern  d_reset_t       ptsreset;
+extern  d_select_t      ptsselect;
 
-extern	d_open_t	ptcopen;
-extern	d_close_t	ptcclose;
-extern	d_read_t	ptcread;
-extern	d_write_t	ptcwrite;
-extern	d_stop_t	ptcstop;
-extern	d_reset_t	ptcreset;
-extern	d_select_t	ptcselect;
+extern  d_open_t        ptcopen;
+extern  d_close_t       ptcclose;
+extern  d_read_t        ptcread;
+extern  d_write_t       ptcwrite;
+extern  d_stop_t        ptcstop;
+extern  d_reset_t       ptcreset;
+extern  d_select_t      ptcselect;
 
-static int ptmx_major;		/* dynamically assigned major number */
+static int ptmx_major;          /* dynamically assigned major number */
 static struct cdevsw ptmx_cdev = {
-	ptcopen,	ptcclose,	ptcread,	ptcwrite,
-	ptyioctl,	ptcstop,	ptcreset,	0,
-	ptcselect,	eno_mmap,	eno_strat,	eno_getc,
-	eno_putc,	D_TTY
+	ptcopen, ptcclose, ptcread, ptcwrite,
+	ptyioctl, ptcstop, ptcreset, 0,
+	ptcselect, eno_mmap, eno_strat, eno_getc,
+	eno_putc, D_TTY
 };
 
-static int ptsd_major;		/* dynamically assigned major number */
+static int ptsd_major;          /* dynamically assigned major number */
 static struct cdevsw ptsd_cdev = {
-	ptsopen,	ptsclose,	ptsread,	ptswrite,
-	ptyioctl,	ptsstop,	ptsreset,	0,
-	ptsselect,	eno_mmap,	eno_strat,	eno_getc,
-	eno_putc,	D_TTY
+	ptsopen, ptsclose, ptsread, ptswrite,
+	ptyioctl, ptsstop, ptsreset, 0,
+	ptsselect, eno_mmap, eno_strat, eno_getc,
+	eno_putc, D_TTY
 };
 
 /*
  * ptmx == /dev/ptmx
  * ptsd == /dev/pts[0123456789]{3}
  */
-#define	PTMX_TEMPLATE	"ptmx"
-#define PTSD_TEMPLATE	"ttys%03d"
+#define PTMX_TEMPLATE   "ptmx"
+#define PTSD_TEMPLATE   "ttys%03d"
 
 /*
  * System-wide limit on the max number of cloned ptys
  */
-#define	PTMX_MAX_DEFAULT	511	/* 512 entries */
-#define	PTMX_MAX_HARD		999	/* 1000 entries, due to PTSD_TEMPLATE */
+#define PTMX_MAX_DEFAULT        511     /* 512 entries */
+#define PTMX_MAX_HARD           999     /* 1000 entries, due to PTSD_TEMPLATE */
 
-static int ptmx_max = PTMX_MAX_DEFAULT;	/* default # of clones we allow */
+static int ptmx_max = PTMX_MAX_DEFAULT; /* default # of clones we allow */
 
 /* Range enforcement for the sysctl */
 static int
 sysctl_ptmx_max(__unused struct sysctl_oid *oidp, __unused void *arg1,
-		__unused int arg2, struct sysctl_req *req)
+    __unused int arg2, struct sysctl_req *req)
 {
 	int new_value, changed;
 	int error = sysctl_io_number(req, ptmx_max, sizeof(int), &new_value, &changed);
 	if (changed) {
-		if (new_value > 0 && new_value <= PTMX_MAX_HARD)
+		if (new_value > 0 && new_value <= PTMX_MAX_HARD) {
 			ptmx_max = new_value;
-		else
+		} else {
 			error = EINVAL;
+		}
 	}
-	return(error);
+	return error;
 }
 
-SYSCTL_NODE(_kern, KERN_TTY, tty, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "TTY");
+SYSCTL_NODE(_kern, KERN_TTY, tty, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "TTY");
 SYSCTL_PROC(_kern_tty, OID_AUTO, ptmx_max,
-		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
-		&ptmx_max, 0, &sysctl_ptmx_max, "I", "ptmx_max");
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &ptmx_max, 0, &sysctl_ptmx_max, "I", "ptmx_max");
 
-static int	ptmx_clone(dev_t dev, int minor);
+static int      ptmx_clone(dev_t dev, int minor);
 
 static struct tty_dev_t _ptmx_driver;
 
@@ -183,7 +184,7 @@ ptmx_init( __unused int config_count)
 	/* Get a major number for /dev/ptmx */
 	if ((ptmx_major = cdevsw_add(-15, &ptmx_cdev)) == -1) {
 		printf("ptmx_init: failed to obtain /dev/ptmx major number\n");
-		return (ENOENT);
+		return ENOENT;
 	}
 
 	if (cdevsw_setkqueueok(ptmx_major, &ptmx_cdev, CDEVSW_IS_PTC) == -1) {
@@ -194,7 +195,7 @@ ptmx_init( __unused int config_count)
 	if ((ptsd_major = cdevsw_add(-15, &ptsd_cdev)) == -1) {
 		(void)cdevsw_remove(ptmx_major, &ptmx_cdev);
 		printf("ptmx_init: failed to obtain /dev/ptmx major number\n");
-		return (ENOENT);
+		return ENOENT;
 	}
 
 	if (cdevsw_setkqueueok(ptsd_major, &ptsd_cdev, CDEVSW_IS_PTS) == -1) {
@@ -203,8 +204,8 @@ ptmx_init( __unused int config_count)
 
 	/* Create the /dev/ptmx device {<major>,0} */
 	(void)devfs_make_node_clone(makedev(ptmx_major, 0),
-				DEVFS_CHAR, UID_ROOT, GID_TTY, 0666,
-				ptmx_clone, PTMX_TEMPLATE);
+	    DEVFS_CHAR, UID_ROOT, GID_TTY, 0666,
+	    ptmx_clone, PTMX_TEMPLATE);
 
 	_ptmx_driver.master = ptmx_major;
 	_ptmx_driver.slave = ptsd_major;
@@ -219,16 +220,16 @@ ptmx_init( __unused int config_count)
 	_ptmx_driver.revoke = &ptsd_revoke_knotes;
 	tty_dev_register(&_ptmx_driver);
 
-	return (0);
+	return 0;
 }
 
 
 static struct _ptmx_ioctl_state {
-	struct ptmx_ioctl	**pis_ioctl_list;	/* pointer vector */
-	int			pis_total;		/* total slots */
-	int			pis_free;		/* free slots */
+	struct ptmx_ioctl       **pis_ioctl_list;       /* pointer vector */
+	int                     pis_total;              /* total slots */
+	int                     pis_free;               /* free slots */
 } _state;
-#define	PTMX_GROW_VECTOR	16	/* Grow by this many slots at a time */
+#define PTMX_GROW_VECTOR        16      /* Grow by this many slots at a time */
 
 /*
  * Given a minor number, return the corresponding structure for that minor
@@ -251,7 +252,6 @@ ptmx_get_ioctl(int minor, int open_flag)
 	struct ptmx_ioctl *new_ptmx_ioctl;
 
 	if (open_flag & PF_OPEN_M) {
-
 		/*
 		 * If we are about to allocate more memory, but we have
 		 * already hit the administrative limit, then fail the
@@ -262,19 +262,19 @@ ptmx_get_ioctl(int minor, int open_flag)
 		 *		snapping to the nearest PTMX_GROW_VECTOR...
 		 */
 		if ((_state.pis_total - _state.pis_free) >= ptmx_max) {
-			return (NULL);
+			return NULL;
 		}
 
-		MALLOC(new_ptmx_ioctl, struct ptmx_ioctl *, sizeof(struct ptmx_ioctl), M_TTYS, M_WAITOK|M_ZERO);
+		MALLOC(new_ptmx_ioctl, struct ptmx_ioctl *, sizeof(struct ptmx_ioctl), M_TTYS, M_WAITOK | M_ZERO);
 		if (new_ptmx_ioctl == NULL) {
-			return (NULL);
+			return NULL;
 		}
 
 		if ((new_ptmx_ioctl->pt_tty = ttymalloc()) == NULL) {
 			FREE(new_ptmx_ioctl, M_TTYS);
-			return (NULL);
+			return NULL;
 		}
-	
+
 		/*
 		 * Hold the DEVFS_LOCK() over this whole operation; devfs
 		 * itself does this over malloc/free as well, so this should
@@ -288,12 +288,12 @@ ptmx_get_ioctl(int minor, int open_flag)
 			struct ptmx_ioctl **old_pis_ioctl_list = NULL;
 
 			/* Yes. */
-			MALLOC(new_pis_ioctl_list, struct ptmx_ioctl **, sizeof(struct ptmx_ioctl *) * (_state.pis_total + PTMX_GROW_VECTOR), M_TTYS, M_WAITOK|M_ZERO);
+			MALLOC(new_pis_ioctl_list, struct ptmx_ioctl **, sizeof(struct ptmx_ioctl *) * (_state.pis_total + PTMX_GROW_VECTOR), M_TTYS, M_WAITOK | M_ZERO);
 			if (new_pis_ioctl_list == NULL) {
 				ttyfree(new_ptmx_ioctl->pt_tty);
 				DEVFS_UNLOCK();
 				FREE(new_ptmx_ioctl, M_TTYS);
-				return (NULL);
+				return NULL;
 			}
 
 			/* If this is not the first time, copy the old over */
@@ -302,8 +302,9 @@ ptmx_get_ioctl(int minor, int open_flag)
 			_state.pis_ioctl_list = new_pis_ioctl_list;
 			_state.pis_free += PTMX_GROW_VECTOR;
 			_state.pis_total += PTMX_GROW_VECTOR;
-			if (old_pis_ioctl_list)
+			if (old_pis_ioctl_list) {
 				FREE(old_pis_ioctl_list, M_TTYS);
+			}
 		}
 
 		/* is minor in range now? */
@@ -311,7 +312,7 @@ ptmx_get_ioctl(int minor, int open_flag)
 			ttyfree(new_ptmx_ioctl->pt_tty);
 			DEVFS_UNLOCK();
 			FREE(new_ptmx_ioctl, M_TTYS);
-			return (NULL);
+			return NULL;
 		}
 
 		if (_state.pis_ioctl_list[minor] != NULL) {
@@ -321,7 +322,6 @@ ptmx_get_ioctl(int minor, int open_flag)
 
 			/* Special error value so we know to redrive the open, we've been raced */
 			return (struct ptmx_ioctl*)-1;
-
 		}
 
 		/* Vector is large enough; grab a new ptmx_ioctl */
@@ -337,19 +337,19 @@ ptmx_get_ioctl(int minor, int open_flag)
 
 		/* Create the /dev/ttysXXX device {<major>,XXX} */
 		_state.pis_ioctl_list[minor]->pt_devhandle = devfs_make_node(
-				makedev(ptsd_major, minor),
-				DEVFS_CHAR, UID_ROOT, GID_TTY, 0620,
-				PTSD_TEMPLATE, minor);
+			makedev(ptsd_major, minor),
+			DEVFS_CHAR, UID_ROOT, GID_TTY, 0620,
+			PTSD_TEMPLATE, minor);
 		if (_state.pis_ioctl_list[minor]->pt_devhandle == NULL) {
 			printf("devfs_make_node() call failed for ptmx_get_ioctl()!!!!\n");
 		}
 	}
 
 	if (minor < 0 || minor >= _state.pis_total) {
-		return (NULL);
+		return NULL;
 	}
 
-	return (_state.pis_ioctl_list[minor]);
+	return _state.pis_ioctl_list[minor];
 }
 
 /*
@@ -364,7 +364,7 @@ ptmx_free_ioctl(int minor, int open_flag)
 
 	if (minor < 0 || minor >= _state.pis_total) {
 		DEVFS_UNLOCK();
-		return (-1);
+		return -1;
 	}
 
 	_state.pis_ioctl_list[minor]->pt_flags &= ~(open_flag);
@@ -374,9 +374,9 @@ ptmx_free_ioctl(int minor, int open_flag)
 	 * a notification on the last close of a device, and we will have
 	 * cleared both the master and the slave open bits in the flags.
 	 */
-	if (!(_state.pis_ioctl_list[minor]->pt_flags & (PF_OPEN_M|PF_OPEN_S))) {
+	if (!(_state.pis_ioctl_list[minor]->pt_flags & (PF_OPEN_M | PF_OPEN_S))) {
 		/* Mark as free so it can be reallocated later */
-		old_ptmx_ioctl = _state.pis_ioctl_list[ minor];
+		old_ptmx_ioctl = _state.pis_ioctl_list[minor];
 		_state.pis_ioctl_list[minor] = NULL;
 		_state.pis_free++;
 	}
@@ -390,13 +390,14 @@ ptmx_free_ioctl(int minor, int open_flag)
 		 * XXX Conditional to be removed when/if tty/pty reference
 		 * XXX counting and mutex implemented.
 		 */
-		if (old_ptmx_ioctl->pt_devhandle != NULL)
+		if (old_ptmx_ioctl->pt_devhandle != NULL) {
 			devfs_remove(old_ptmx_ioctl->pt_devhandle);
+		}
 		ttyfree(old_ptmx_ioctl->pt_tty);
 		FREE(old_ptmx_ioctl, M_TTYS);
 	}
 
-	return (0);	/* Success */
+	return 0;     /* Success */
 }
 
 static int
@@ -428,16 +429,18 @@ ptmx_clone(__unused dev_t dev, int action)
 
 	if (action == DEVFS_CLONE_ALLOC) {
 		/* First one */
-		if (_state.pis_total == 0)
-			return (0);
+		if (_state.pis_total == 0) {
+			return 0;
+		}
 
 		/*
 		 * Note: We can add hinting on free slots, if this linear search
 		 * ends up being a performance bottleneck...
 		 */
-		for(i = 0; i < _state.pis_total; i++) {
-			if (_state.pis_ioctl_list[ i] == NULL)
+		for (i = 0; i < _state.pis_total; i++) {
+			if (_state.pis_ioctl_list[i] == NULL) {
 				break;
+			}
 		}
 
 		/*
@@ -452,9 +455,9 @@ ptmx_clone(__unused dev_t dev, int action)
 		 * XXX explicit return.
 		 */
 
-		return (i);	/* empty slot or next slot */
+		return i;     /* empty slot or next slot */
 	}
-	return(-1);
+	return -1;
 }
 
 
@@ -538,7 +541,7 @@ ptsd_kqops_common(struct knote *kn, struct tty *tp)
 
 	case EVFILT_WRITE:
 		if ((tp->t_outq.c_cc <= tp->t_lowat) &&
-			(tp->t_state & TS_CONNECTED)) {
+		    (tp->t_state & TS_CONNECTED)) {
 			kn->kn_data = tp->t_outq.c_cn - tp->t_outq.c_cc;
 			retval = 1;
 		}
@@ -546,7 +549,7 @@ ptsd_kqops_common(struct knote *kn, struct tty *tp)
 
 	default:
 		panic("ptsd kevent: unexpected filter: %d, kn = %p, tty = %p",
-				kn->kn_filter, kn, tp);
+		    kn->kn_filter, kn, tp);
 		break;
 	}
 
@@ -608,7 +611,7 @@ ptsd_kqops_touch(struct knote *kn, struct kevent_internal_s *kev)
 
 static int
 ptsd_kqops_process(struct knote *kn, __unused struct filt_process_s *data,
-		struct kevent_internal_s *kev)
+    struct kevent_internal_s *kev)
 {
 	struct tty *tp = kn->kn_hook;
 	int ret;
@@ -664,7 +667,7 @@ ptsd_kqfilter(dev_t dev, struct knote *kn)
 		break;
 	default:
 		panic("ptsd kevent: unexpected filter: %d, kn = %p, tty = %p",
-				kn->kn_filter, kn, tp);
+		    kn->kn_filter, kn, tp);
 		break;
 	}
 
@@ -767,7 +770,7 @@ ptmx_kqfilter(dev_t dev, struct knote *kn)
 		break;
 	default:
 		panic("ptmx kevent: unexpected filter: %d, kn = %p, tty = %p",
-				kn->kn_filter, kn, tp);
+		    kn->kn_filter, kn, tp);
 		break;
 	}
 
@@ -831,7 +834,7 @@ ptmx_kqops_common(struct knote *kn, struct ptmx_ioctl *pti, struct tty *tp)
 			retval = tp->t_outq.c_cc;
 			kn->kn_data = retval;
 		} else if (((pti->pt_flags & PF_PKT) && pti->pt_send) ||
-				((pti->pt_flags & PF_UCNTL) && pti->pt_ucntl)) {
+		    ((pti->pt_flags & PF_UCNTL) && pti->pt_ucntl)) {
 			retval = 1;
 		}
 		break;
@@ -854,7 +857,7 @@ ptmx_kqops_common(struct knote *kn, struct ptmx_ioctl *pti, struct tty *tp)
 
 	default:
 		panic("ptmx kevent: unexpected filter: %d, kn = %p, tty = %p",
-				kn->kn_filter, kn, tp);
+		    kn->kn_filter, kn, tp);
 		break;
 	}
 
@@ -916,7 +919,7 @@ ptmx_kqops_touch(struct knote *kn, struct kevent_internal_s *kev)
 
 static int
 ptmx_kqops_process(struct knote *kn, __unused struct filt_process_s *data,
-		struct kevent_internal_s *kev)
+    struct kevent_internal_s *kev)
 {
 	struct ptmx_ioctl *pti = ptmx_knote_ioctl(kn);
 	struct tty *tp = ptmx_knote_tty(kn);

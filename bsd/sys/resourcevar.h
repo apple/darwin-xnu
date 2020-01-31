@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
@@ -61,8 +61,8 @@
  *	@(#)resourcevar.h	8.4 (Berkeley) 1/9/95
  */
 
-#ifndef	_SYS_RESOURCEVAR_H_
-#define	_SYS_RESOURCEVAR_H_
+#ifndef _SYS_RESOURCEVAR_H_
+#define _SYS_RESOURCEVAR_H_
 
 #include <sys/appleapiopts.h>
 #include <sys/resource.h>
@@ -72,30 +72,30 @@
  * (not necessarily resident except when running).
  */
 struct pstats {
-	struct	rusage            p_ru;		/* stats for this proc */
-	struct	rusage            p_cru;	/* (PL) sum of stats for reaped children */
+	struct  rusage            p_ru;         /* stats for this proc */
+	struct  rusage            p_cru;        /* (PL) sum of stats for reaped children */
 
-	struct uprof {			/* profile arguments */
+	struct uprof {                  /* profile arguments */
 		struct uprof *pr_next;  /* multiple prof buffers allowed */
-		caddr_t	pr_base;	/* buffer base */
-		u_int32_t	pr_size;	/* buffer size */
-		u_int32_t	pr_off;		/* pc offset */
-		u_int32_t	pr_scale;	/* pc scaling */
-		u_int32_t	pr_addr;	/* temp storage for addr until AST */
-		u_int32_t	pr_ticks;	/* temp storage for ticks until AST */
+		caddr_t pr_base;        /* buffer base */
+		u_int32_t       pr_size;        /* buffer size */
+		u_int32_t       pr_off;         /* pc offset */
+		u_int32_t       pr_scale;       /* pc scaling */
+		u_int32_t       pr_addr;        /* temp storage for addr until AST */
+		u_int32_t       pr_ticks;       /* temp storage for ticks until AST */
 	} p_prof;
-	
-	uint64_t ps_start;       	/* starting time ; compat only */
+
+	uint64_t ps_start;              /* starting time ; compat only */
 #ifdef KERNEL
-	struct  rusage_info_child ri_child; 	/* (PL) sum of additional stats for reaped children (proc_pid_rusage) */
-	struct user_uprof {			    /* profile arguments */
+	struct  rusage_info_child ri_child;     /* (PL) sum of additional stats for reaped children (proc_pid_rusage) */
+	struct user_uprof {                         /* profile arguments */
 		struct user_uprof *pr_next;  /* multiple prof buffers allowed */
-		user_addr_t	    pr_base;	/* buffer base */
-		user_size_t	    pr_size;	/* buffer size */
-		user_ulong_t	pr_off;		/* pc offset */
-		user_ulong_t	pr_scale;	/* pc scaling */
-		user_ulong_t	pr_addr;	/* temp storage for addr until AST */
-		user_ulong_t	pr_ticks;	/* temp storage for ticks until AST */
+		user_addr_t         pr_base;    /* buffer base */
+		user_size_t         pr_size;    /* buffer size */
+		user_ulong_t    pr_off;         /* pc offset */
+		user_ulong_t    pr_scale;       /* pc scaling */
+		user_ulong_t    pr_addr;        /* temp storage for addr until AST */
+		user_ulong_t    pr_ticks;       /* temp storage for ticks until AST */
 	} user_p_prof;
 #endif // KERNEL
 };
@@ -108,31 +108,31 @@ struct pstats {
  * and a copy must be made for the child of a new fork that isn't
  * sharing modifications to the limits.
  */
-/* 
- * Modifications are done with the list lock held (p_limit as well)and access indv 
- * limits can be done without limit as we keep the old copy in p_olimit. Which is 
+/*
+ * Modifications are done with the list lock held (p_limit as well)and access indv
+ * limits can be done without limit as we keep the old copy in p_olimit. Which is
  * dropped in proc_exit. This way all access will have a valid kernel address
  */
 struct plimit {
-	struct	rlimit pl_rlimit[RLIM_NLIMITS];
-	int	pl_refcnt;		/* number of references */
+	struct  rlimit pl_rlimit[RLIM_NLIMITS];
+	int     pl_refcnt;              /* number of references */
 };
 
 #ifdef KERNEL
 /* add user profiling from AST */
-#define	ADDUPROF(p)							\
-    addupc_task(p,							\
-                (proc_is64bit((p)) ? (p)->p_stats->user_p_prof.pr_addr \
-                                   : CAST_USER_ADDR_T((p)->p_stats->p_prof.pr_addr)), \
-                (proc_is64bit((p)) ? (p)->p_stats->user_p_prof.pr_ticks \
-                                   : (p)->p_stats->p_prof.pr_ticks))
+#define ADDUPROF(p)                                                     \
+    addupc_task(p,                                                      \
+	        (proc_is64bit((p)) ? (p)->p_stats->user_p_prof.pr_addr \
+	                           : CAST_USER_ADDR_T((p)->p_stats->p_prof.pr_addr)), \
+	        (proc_is64bit((p)) ? (p)->p_stats->user_p_prof.pr_ticks \
+	                           : (p)->p_stats->p_prof.pr_ticks))
 
-void	 addupc_intr(struct proc *p, uint32_t pc, u_int ticks);
-void	 addupc_task(struct proc *p, user_addr_t pc, u_int ticks);
-void	 calcru(struct proc *p, struct timeval *up, struct timeval *sp,
-	    struct timeval *ip);
-void	 ruadd(struct rusage *ru, struct rusage *ru2);
-void	 update_rusage_info_child(struct rusage_info_child *ru, rusage_info_current *ru_current);
+void     addupc_intr(struct proc *p, uint32_t pc, u_int ticks);
+void     addupc_task(struct proc *p, user_addr_t pc, u_int ticks);
+void     calcru(struct proc *p, struct timeval *up, struct timeval *sp,
+    struct timeval *ip);
+void     ruadd(struct rusage *ru, struct rusage *ru2);
+void     update_rusage_info_child(struct rusage_info_child *ru, rusage_info_current *ru_current);
 void proc_limitget(proc_t p, int whichi, struct rlimit * limp);
 void proc_limitdrop(proc_t p, int exiting);
 void proc_limitfork(proc_t parent, proc_t child);
@@ -142,4 +142,4 @@ void proc_limitunblock(proc_t);
 #endif /* KERNEL */
 
 
-#endif	/* !_SYS_RESOURCEVAR_H_ */
+#endif  /* !_SYS_RESOURCEVAR_H_ */

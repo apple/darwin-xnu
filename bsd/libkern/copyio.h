@@ -32,8 +32,8 @@
 
 __BEGIN_DECLS
 
-int	copyin(const user_addr_t uaddr, void *kaddr, size_t len);
-int	copyout(const void *kaddr, user_addr_t udaddr, size_t len);
+int     copyin(const user_addr_t uaddr, void *kaddr, size_t len);
+int     copyout(const void *kaddr, user_addr_t udaddr, size_t len);
 
 #if defined (_FORTIFY_SOURCE) && _FORTIFY_SOURCE == 0
 /* FORTIFY_SOURCE disabled */
@@ -50,7 +50,7 @@ __copyin_chk(const user_addr_t uaddr, void *kaddr, size_t len, size_t chk_size)
 __attribute__((always_inline)) static inline int
 __copyout_chk(const void *kaddr, user_addr_t uaddr, size_t len, size_t chk_size)
 {
-	if  (chk_size < len) {
+	if (chk_size < len) {
 		panic("__copyout_chk object size check failed: uaddr %p, kaddr %p, (%zu < %zu)", (void*)uaddr, kaddr, len, chk_size);
 	}
 	return copyout(kaddr, uaddr, len);

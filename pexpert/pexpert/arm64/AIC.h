@@ -5,16 +5,18 @@
 #ifndef _PEXPERT_ARM_AIC_H
 #define _PEXPERT_ARM_AIC_H
 
-#ifndef	ASSEMBLER
+#ifndef ASSEMBLER
 
 #include <stdint.h>
 
-static inline uint32_t _aic_read32(uintptr_t addr)
+static inline uint32_t
+_aic_read32(uintptr_t addr)
 {
-	return (*(volatile uint32_t *)addr);
+	return *(volatile uint32_t *)addr;
 }
 
-static inline void _aic_write32(uintptr_t addr, uint32_t data)
+static inline void
+_aic_write32(uintptr_t addr, uint32_t data)
 {
 	*(volatile uint32_t *)(addr) = data;
 }
@@ -25,8 +27,7 @@ static inline void _aic_write32(uintptr_t addr, uint32_t data)
 #endif
 
 // AIC timebase registers (timer base address in DT node is setup as AIC_BASE + 0x1000)
-#define kAICMainTimLo				(0x20)
-#define kAICMainTimHi				(0x28)
+#define kAICMainTimLo                           (0x20)
+#define kAICMainTimHi                           (0x28)
 
 #endif /* ! _PEXPERT_ARM_AIC_H */
-

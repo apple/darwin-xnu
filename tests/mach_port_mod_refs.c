@@ -84,9 +84,9 @@ T_DECL(mach_port_mod_refs, "mach_port_mod_refs"){
 	/*
 	 * deallocate the ports/sets
 	 */
-	ret= mach_port_mod_refs(mach_task_self(), port_set, MACH_PORT_RIGHT_PORT_SET, -1);
+	ret = mach_port_mod_refs(mach_task_self(), port_set, MACH_PORT_RIGHT_PORT_SET, -1);
 	T_ASSERT_MACH_SUCCESS(ret, "mach_port_mod_refs(PORT_SET, -1)");
 
-	ret= mach_port_mod_refs(mach_task_self(), port, MACH_PORT_RIGHT_RECEIVE, -1);
+	ret = mach_port_mod_refs(mach_task_self(), port, MACH_PORT_RIGHT_RECEIVE, -1);
 	T_ASSERT_MACH_SUCCESS(ret, "mach_port_mod_refs(RECV_RIGHT, -1)");
 }

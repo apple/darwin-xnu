@@ -2,7 +2,7 @@
  * Copyright (c) 2009-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <mach_assert.h>
@@ -87,26 +87,26 @@ extern boolean_t copyio_zalloc_check;
 /*
  * Types of copies:
  */
-#define COPYIN		0	/* from user virtual to kernel virtual */
-#define COPYOUT		1	/* from kernel virtual to user virtual */
-#define COPYINSTR	2	/* string variant of copyout */
-#define COPYINPHYS	3	/* from user virtual to kernel physical */
-#define COPYOUTPHYS	4	/* from kernel physical to user virtual */
-#define COPYINWORD	5	/* from user virtual to kernel virtual */
+#define COPYIN          0       /* from user virtual to kernel virtual */
+#define COPYOUT         1       /* from kernel virtual to user virtual */
+#define COPYINSTR       2       /* string variant of copyout */
+#define COPYINPHYS      3       /* from user virtual to kernel physical */
+#define COPYOUTPHYS     4       /* from kernel physical to user virtual */
+#define COPYINWORD      5       /* from user virtual to kernel virtual */
 
 #if ENABLE_SMAPLOG
 typedef struct {
-	uint64_t 	timestamp;
-	thread_t	thread;
-	uintptr_t	cr4;
-	uint8_t		cpuid;
-	uint8_t		smap_state;
-	uint8_t		copyio_active;
+	uint64_t        timestamp;
+	thread_t        thread;
+	uintptr_t       cr4;
+	uint8_t         cpuid;
+	uint8_t         smap_state;
+	uint8_t         copyio_active;
 } smaplog_entry_t;
 
 #define SMAPLOG_BUFFER_SIZE (50)
-static smaplog_entry_t	smaplog_cbuf[SMAPLOG_BUFFER_SIZE];
-static uint32_t		smaplog_head = 0;
+static smaplog_entry_t  smaplog_cbuf[SMAPLOG_BUFFER_SIZE];
+static uint32_t         smaplog_head = 0;
 
 static void
 smaplog_add_entry(boolean_t enabling)
@@ -132,7 +132,9 @@ smaplog_add_entry(boolean_t enabling)
 #endif /* ENABLE_SMAPLOG */
 
 extern boolean_t pmap_smap_enabled;
-static inline void user_access_enable(void) {
+static inline void
+user_access_enable(void)
+{
 	if (pmap_smap_enabled) {
 		stac();
 #if ENABLE_SMAPLOG
@@ -140,7 +142,9 @@ static inline void user_access_enable(void) {
 #endif
 	}
 }
-static inline void user_access_disable(void) {
+static inline void
+user_access_disable(void)
+{
 	if (pmap_smap_enabled) {
 		clac();
 #if ENABLE_SMAPLOG
@@ -157,47 +161,51 @@ static inline void user_access_disable(void) {
 
 static int
 copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
-       vm_size_t nbytes, vm_size_t *lencopied, int use_kernel_map)
+    vm_size_t nbytes, vm_size_t *lencopied, int use_kernel_map)
 {
-        thread_t	thread = current_thread();
-	pmap_t		pmap;
-	vm_size_t	bytes_copied;
-	int		error = 0;
-	boolean_t	istate = FALSE;
-	boolean_t	recursive_CopyIOActive;
-#if	COPYIO_TRACE_ENABLED
-	int		debug_type = 0xeff70010;
+	thread_t        thread = current_thread();
+	pmap_t          pmap;
+	vm_size_t       bytes_copied;
+	int             error = 0;
+	boolean_t       istate = FALSE;
+	boolean_t       recursive_CopyIOActive;
+#if     COPYIO_TRACE_ENABLED
+	int             debug_type = 0xeff70010;
 	debug_type += (copy_type << 2);
 #endif
 	vm_size_t kernel_buf_size = 0;
 
-	if (__improbable(nbytes > copysize_limit_panic))
+	if (__improbable(nbytes > copysize_limit_panic)) {
 		panic("%s(%p, %p, %lu) - transfer too large", __func__,
-		       (void *)user_addr, (void *)kernel_addr, nbytes);
+		    (void *)user_addr, (void *)kernel_addr, nbytes);
+	}
 
 	COPYIO_TRACE(debug_type | DBG_FUNC_START,
 	    user_addr, kernel_addr, nbytes, use_kernel_map, 0);
 
-	if (__improbable(nbytes == 0))
+	if (__improbable(nbytes == 0)) {
 		goto out;
+	}
 
 	pmap = thread->map->pmap;
 	boolean_t nopagezero = thread->map->pmap->pagezero_accessible;
 
 	if ((copy_type != COPYINPHYS) && (copy_type != COPYOUTPHYS)) {
-		if (__improbable((vm_offset_t)kernel_addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS))
+		if (__improbable((vm_offset_t)kernel_addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS)) {
 			panic("Invalid copy parameter, copy type: %d, kernel address: %p", copy_type, kernel_addr);
+		}
 		if (__probable(copyio_zalloc_check)) {
 			kernel_buf_size = zone_element_size(kernel_addr, NULL);
-			if (__improbable(kernel_buf_size && kernel_buf_size < nbytes))
+			if (__improbable(kernel_buf_size && kernel_buf_size < nbytes)) {
 				panic("copyio: kernel buffer %p has size %lu < nbytes %lu", kernel_addr, kernel_buf_size, nbytes);
+			}
 		}
 	}
-	
+
 	/* Sanity and security check for addresses to/from a user */
 
 	if (__improbable(((pmap != kernel_pmap) && (use_kernel_map == 0)) &&
-		((nbytes && (user_addr+nbytes <= user_addr)) || ((user_addr + nbytes) > vm_map_max(thread->map))))) {
+	    ((nbytes && (user_addr + nbytes <= user_addr)) || ((user_addr + nbytes) > vm_map_max(thread->map))))) {
 		error = EFAULT;
 		goto out;
 	}
@@ -211,7 +219,7 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 #endif
 
 	/*
-	 * If the no_shared_cr3 boot-arg is set (true), the kernel runs on 
+	 * If the no_shared_cr3 boot-arg is set (true), the kernel runs on
 	 * its own pmap and cr3 rather than the user's -- so that wild accesses
 	 * from kernel or kexts can be trapped. So, during copyin and copyout,
 	 * we need to switch back to the user's map/cr3. The thread is flagged
@@ -236,15 +244,15 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 
 	user_access_enable();
 
-#if DEVELOPMENT || DEBUG	
+#if DEVELOPMENT || DEBUG
 	/*
 	 * Ensure that we're running on the target thread's cr3.
 	 */
 	if ((pmap != kernel_pmap) && !use_kernel_map &&
 	    (get_cr3_base() != pmap->pm_cr3)) {
 		panic("copyio(%d,%p,%p,%ld,%p,%d) cr3 is %p expects %p",
-			copy_type, (void *)user_addr, kernel_addr, nbytes, lencopied, use_kernel_map,
-			(void *) get_cr3_raw(), (void *) pmap->pm_cr3);
+		    copy_type, (void *)user_addr, kernel_addr, nbytes, lencopied, use_kernel_map,
+		    (void *) get_cr3_raw(), (void *) pmap->pm_cr3);
 	}
 #endif
 
@@ -253,76 +261,76 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 	}
 
 	COPYIO_TRACE(0xeff70044 | DBG_FUNC_NONE, user_addr,
-		     kernel_addr, nbytes, 0, 0);
+	    kernel_addr, nbytes, 0, 0);
 
-        switch (copy_type) {
-
+	switch (copy_type) {
 	case COPYIN:
-	        error = _bcopy((const void *) user_addr,
-				kernel_addr,
-				nbytes);
+		error = _bcopy((const void *) user_addr,
+		    kernel_addr,
+		    nbytes);
 		break;
-			
+
 	case COPYOUT:
-	        error = _bcopy(kernel_addr,
-				(void *) user_addr,
-				nbytes);
+		error = _bcopy(kernel_addr,
+		    (void *) user_addr,
+		    nbytes);
 		break;
 
 	case COPYINPHYS:
-	        error = _bcopy((const void *) user_addr,
-				PHYSMAP_PTOV(kernel_addr),
-				nbytes);
+		error = _bcopy((const void *) user_addr,
+		    PHYSMAP_PTOV(kernel_addr),
+		    nbytes);
 		break;
 
 	case COPYOUTPHYS:
-	        error = _bcopy((const void *) PHYSMAP_PTOV(kernel_addr),
-				(void *) user_addr,
-				nbytes);
+		error = _bcopy((const void *) PHYSMAP_PTOV(kernel_addr),
+		    (void *) user_addr,
+		    nbytes);
 		break;
 
 	case COPYINWORD:
 		error = _copyin_word((const void *) user_addr,
-				(void *) kernel_addr,
-				nbytes);
+		    (void *) kernel_addr,
+		    nbytes);
 		break;
 
 	case COPYINSTR:
-	        error = _bcopystr((const void *) user_addr,
-				kernel_addr,
-				(int) nbytes,
-				&bytes_copied);
+		error = _bcopystr((const void *) user_addr,
+		    kernel_addr,
+		    (int) nbytes,
+		    &bytes_copied);
 
 		/*
 		 * lencopied should be updated on success
 		 * or ENAMETOOLONG...  but not EFAULT
 		 */
-		if (error != EFAULT)
-		        *lencopied = bytes_copied;
+		if (error != EFAULT) {
+			*lencopied = bytes_copied;
+		}
 
 		if (error) {
 #if KDEBUG
-		        nbytes = *lencopied;
+			nbytes = *lencopied;
 #endif
-		        break;
+			break;
 		}
 		if (*(kernel_addr + bytes_copied - 1) == 0) {
-		        /*
+			/*
 			 * we found a NULL terminator... we're done
 			 */
 #if KDEBUG
-		        nbytes = *lencopied;
+			nbytes = *lencopied;
 #endif
 			break;
 		} else {
-		        /*
+			/*
 			 * no more room in the buffer and we haven't
 			 * yet come across a NULL terminator
 			 */
 #if KDEBUG
-		        nbytes = *lencopied;
+			nbytes = *lencopied;
 #endif
-		        error = ENAMETOOLONG;
+			error = ENAMETOOLONG;
 			break;
 		}
 	}
@@ -331,7 +339,7 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 
 	if (__improbable(pdswitch)) {
 		istate = ml_set_interrupts_enabled(FALSE);
-		if  (!recursive_CopyIOActive && (get_cr3_raw() != kernel_pmap->pm_cr3)) {
+		if (!recursive_CopyIOActive && (get_cr3_raw() != kernel_pmap->pm_cr3)) {
 			if (nopagezero && pmap_pcid_ncpus) {
 				pmap_pcid_activate(pmap, cpu_number(), TRUE, FALSE);
 			} else {
@@ -350,26 +358,26 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 out:
 	COPYIO_TRACE(debug_type | DBG_FUNC_END, user_addr, kernel_addr, nbytes, error, 0);
 
-	return (error);
+	return error;
 }
 
 
 static int
 copyio_phys(addr64_t source, addr64_t sink, vm_size_t csize, int which)
 {
-        char	    *paddr;
+	char        *paddr;
 	user_addr_t vaddr;
 	int         ctype;
 
 	if (which & cppvPsnk) {
 		paddr  = (char *)sink;
-	        vaddr  = (user_addr_t)source;
+		vaddr  = (user_addr_t)source;
 		ctype  = COPYINPHYS;
 	} else {
-	        paddr  = (char *)source;
+		paddr  = (char *)source;
 		vaddr  = (user_addr_t)sink;
 		ctype  = COPYOUTPHYS;
-        CALL_COPYOUT_SHIM_PHYS((void *)PHYSMAP_PTOV(source),sink,csize)
+		CALL_COPYOUT_SHIM_PHYS((void *)PHYSMAP_PTOV(source), sink, csize)
 	}
 	return copyio(ctype, vaddr, paddr, csize, NULL, which & cppvKmap);
 }
@@ -377,13 +385,13 @@ copyio_phys(addr64_t source, addr64_t sink, vm_size_t csize, int which)
 int
 copyinmsg(const user_addr_t user_addr, char *kernel_addr, mach_msg_size_t nbytes)
 {
-    return copyio(COPYIN, user_addr, kernel_addr, nbytes, NULL, 0);
-}    
+	return copyio(COPYIN, user_addr, kernel_addr, nbytes, NULL, 0);
+}
 
 int
 copyin(const user_addr_t user_addr, void *kernel_addr, vm_size_t nbytes)
 {
-    return copyio(COPYIN, user_addr, kernel_addr, nbytes, NULL, 0);
+	return copyio(COPYIN, user_addr, kernel_addr, nbytes, NULL, 0);
 }
 
 /*
@@ -395,35 +403,37 @@ int
 copyin_word(const user_addr_t user_addr, uint64_t *kernel_addr, vm_size_t nbytes)
 {
 	/* Verify sizes */
-	if ((nbytes != 4) && (nbytes != 8))
+	if ((nbytes != 4) && (nbytes != 8)) {
 		return EINVAL;
+	}
 
 	/* Test alignment */
-	if (user_addr & (nbytes - 1))
+	if (user_addr & (nbytes - 1)) {
 		return EINVAL;
+	}
 	return copyio(COPYINWORD, user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL, 0);
 }
 
 int
-copyinstr(const user_addr_t user_addr,  char *kernel_addr, vm_size_t nbytes, vm_size_t *lencopied)
+copyinstr(const user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes, vm_size_t *lencopied)
 {
-    *lencopied = 0;
+	*lencopied = 0;
 
-    return copyio(COPYINSTR, user_addr, kernel_addr, nbytes, lencopied, 0);
+	return copyio(COPYINSTR, user_addr, kernel_addr, nbytes, lencopied, 0);
 }
 
 int
 copyoutmsg(const char *kernel_addr, user_addr_t user_addr, mach_msg_size_t nbytes)
 {
-    CALL_COPYOUT_SHIM_MSG(kernel_addr,user_addr,(vm_size_t)nbytes)
-    return copyio(COPYOUT, user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL, 0);
+	CALL_COPYOUT_SHIM_MSG(kernel_addr, user_addr, (vm_size_t)nbytes)
+	return copyio(COPYOUT, user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL, 0);
 }
 
 int
 copyout(const void *kernel_addr, user_addr_t user_addr, vm_size_t nbytes)
 {
-    CALL_COPYOUT_SHIM_NRML(kernel_addr,user_addr,nbytes)
-    return copyio(COPYOUT, user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL, 0);
+	CALL_COPYOUT_SHIM_NRML(kernel_addr, user_addr, nbytes)
+	return copyio(COPYOUT, user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL, 0);
 }
 
 
@@ -432,68 +442,75 @@ copypv(addr64_t src64, addr64_t snk64, unsigned int size, int which)
 {
 	unsigned int lop, csize;
 	int bothphys = 0;
-	
+
 	KERNEL_DEBUG(0xeff7004c | DBG_FUNC_START, (unsigned)src64,
-		     (unsigned)snk64, size, which, 0);
+	    (unsigned)snk64, size, which, 0);
 
-	if ((which & (cppvPsrc | cppvPsnk)) == 0 )				/* Make sure that only one is virtual */
-		panic("copypv: no more than 1 parameter may be virtual\n");	/* Not allowed */
-
-	if ((which & (cppvPsrc | cppvPsnk)) == (cppvPsrc | cppvPsnk))
-	        bothphys = 1;							/* both are physical */
-
+	if ((which & (cppvPsrc | cppvPsnk)) == 0) {                             /* Make sure that only one is virtual */
+		panic("copypv: no more than 1 parameter may be virtual\n");     /* Not allowed */
+	}
+	if ((which & (cppvPsrc | cppvPsnk)) == (cppvPsrc | cppvPsnk)) {
+		bothphys = 1;                                                   /* both are physical */
+	}
 	while (size) {
-	  
-	        if (bothphys) {
-		        lop = (unsigned int)(PAGE_SIZE - (snk64 & (PAGE_SIZE - 1)));		/* Assume sink smallest */
+		if (bothphys) {
+			lop = (unsigned int)(PAGE_SIZE - (snk64 & (PAGE_SIZE - 1)));            /* Assume sink smallest */
 
-			if (lop > (unsigned int)(PAGE_SIZE - (src64 & (PAGE_SIZE - 1))))
-			        lop = (unsigned int)(PAGE_SIZE - (src64 & (PAGE_SIZE - 1)));	/* No, source is smaller */
+			if (lop > (unsigned int)(PAGE_SIZE - (src64 & (PAGE_SIZE - 1)))) {
+				lop = (unsigned int)(PAGE_SIZE - (src64 & (PAGE_SIZE - 1)));    /* No, source is smaller */
+			}
 		} else {
-		        /*
+			/*
 			 * only need to compute the resid for the physical page
 			 * address... we don't care about where we start/finish in
 			 * the virtual since we just call the normal copyin/copyout
 			 */
-		        if (which & cppvPsrc)
-			        lop = (unsigned int)(PAGE_SIZE - (src64 & (PAGE_SIZE - 1)));
-			else
-			        lop = (unsigned int)(PAGE_SIZE - (snk64 & (PAGE_SIZE - 1)));
+			if (which & cppvPsrc) {
+				lop = (unsigned int)(PAGE_SIZE - (src64 & (PAGE_SIZE - 1)));
+			} else {
+				lop = (unsigned int)(PAGE_SIZE - (snk64 & (PAGE_SIZE - 1)));
+			}
 		}
-		csize = size;						/* Assume we can copy it all */
-		if (lop < size)
-		        csize = lop;					/* Nope, we can't do it all */
-#if 0		
+		csize = size;                                           /* Assume we can copy it all */
+		if (lop < size) {
+			csize = lop;                                    /* Nope, we can't do it all */
+		}
+#if 0
 		/*
-		 * flush_dcache64 is currently a nop on the i386... 
+		 * flush_dcache64 is currently a nop on the i386...
 		 * it's used when copying to non-system memory such
 		 * as video capture cards... on PPC there was a need
 		 * to flush due to how we mapped this memory... not
 		 * sure if it's needed on i386.
 		 */
-		if (which & cppvFsrc)
-		        flush_dcache64(src64, csize, 1);		/* If requested, flush source before move */
-		if (which & cppvFsnk)
-		        flush_dcache64(snk64, csize, 1);		/* If requested, flush sink before move */
+		if (which & cppvFsrc) {
+			flush_dcache64(src64, csize, 1);                /* If requested, flush source before move */
+		}
+		if (which & cppvFsnk) {
+			flush_dcache64(snk64, csize, 1);                /* If requested, flush sink before move */
+		}
 #endif
-		if (bothphys)
-		        bcopy_phys(src64, snk64, csize);		/* Do a physical copy, virtually */
-		else {
-		        if (copyio_phys(src64, snk64, csize, which))
-			        return (KERN_FAILURE);
+		if (bothphys) {
+			bcopy_phys(src64, snk64, csize);                /* Do a physical copy, virtually */
+		} else {
+			if (copyio_phys(src64, snk64, csize, which)) {
+				return KERN_FAILURE;
+			}
 		}
 #if 0
-		if (which & cppvFsrc)
-		        flush_dcache64(src64, csize, 1);	/* If requested, flush source after move */
-		if (which & cppvFsnk)
-		        flush_dcache64(snk64, csize, 1);	/* If requested, flush sink after move */
+		if (which & cppvFsrc) {
+			flush_dcache64(src64, csize, 1);        /* If requested, flush source after move */
+		}
+		if (which & cppvFsnk) {
+			flush_dcache64(snk64, csize, 1);        /* If requested, flush sink after move */
+		}
 #endif
-		size   -= csize;					/* Calculate what is left */
-		snk64 += csize;					/* Bump sink to next physical address */
-		src64 += csize;					/* Bump source to next physical address */
+		size   -= csize;                                        /* Calculate what is left */
+		snk64 += csize;                                 /* Bump sink to next physical address */
+		src64 += csize;                                 /* Bump source to next physical address */
 	}
 	KERNEL_DEBUG(0xeff7004c | DBG_FUNC_END, (unsigned)src64,
-		     (unsigned)snk64, size, which, 0);
+	    (unsigned)snk64, size, which, 0);
 
 	return KERN_SUCCESS;
 }

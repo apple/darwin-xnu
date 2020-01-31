@@ -34,21 +34,21 @@
 #include <sys/appleapiopts.h>
 
 /* sysctl */
-#define KEYCTL_DEBUG_LEVEL		1
-#define KEYCTL_SPI_TRY			2
-#define KEYCTL_SPI_MIN_VALUE		3
-#define KEYCTL_SPI_MAX_VALUE		4
-#define KEYCTL_RANDOM_INT		5
-#define KEYCTL_LARVAL_LIFETIME		6
-#define KEYCTL_BLOCKACQ_COUNT		7
-#define KEYCTL_BLOCKACQ_LIFETIME	8
-#define KEYCTL_ESP_KEYMIN		9
-#define KEYCTL_ESP_AUTH			10
-#define KEYCTL_AH_KEYMIN		11
-#define KEYCTL_PREFERED_OLDSA		12
-#define KEYCTL_NATT_KEEPALIVE_INTERVAL	13
-#define KEYCTL_PFKEYSTAT		14
-#define KEYCTL_MAXID			15
+#define KEYCTL_DEBUG_LEVEL              1
+#define KEYCTL_SPI_TRY                  2
+#define KEYCTL_SPI_MIN_VALUE            3
+#define KEYCTL_SPI_MAX_VALUE            4
+#define KEYCTL_RANDOM_INT               5
+#define KEYCTL_LARVAL_LIFETIME          6
+#define KEYCTL_BLOCKACQ_COUNT           7
+#define KEYCTL_BLOCKACQ_LIFETIME        8
+#define KEYCTL_ESP_KEYMIN               9
+#define KEYCTL_ESP_AUTH                 10
+#define KEYCTL_AH_KEYMIN                11
+#define KEYCTL_PREFERED_OLDSA           12
+#define KEYCTL_NATT_KEEPALIVE_INTERVAL  13
+#define KEYCTL_PFKEYSTAT                14
+#define KEYCTL_MAXID                    15
 
 #ifdef BSD_KERNEL_PRIVATE
 #define KEYCTL_NAMES { \
@@ -92,4 +92,3 @@
 
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETKEY_KEY_VAR_H_ */
-

@@ -37,8 +37,8 @@
 
 #ifdef CONFIG_KDP_INTERACTIVE_DEBUGGING
 
-#define	roundup(x, y)	((((x) % (y)) == 0) ? \
-			(x) : ((x) + ((y) - ((x) % (y)))))
+#define roundup(x, y)   ((((x) % (y)) == 0) ? \
+	                (x) : ((x) + ((y) - ((x) % (y)))))
 
 /*
  * The processor_core_context structure describes the current
@@ -95,30 +95,36 @@ struct kern_coredump_core *kernel_helper = NULL;
 
 static struct kern_coredump_core *
 kern_register_coredump_helper_internal(int kern_coredump_config_vers, kern_coredump_callback_config *kc_callbacks,
-				void *refcon, const char *core_description, boolean_t xnu_callback, boolean_t is64bit,
-				uint32_t mh_magic, cpu_type_t cpu_type, cpu_subtype_t cpu_subtype)
+    void *refcon, const char *core_description, boolean_t xnu_callback, boolean_t is64bit,
+    uint32_t mh_magic, cpu_type_t cpu_type, cpu_subtype_t cpu_subtype)
 {
 	struct kern_coredump_core *core_helper = NULL;
 	kern_coredump_callback_config *core_callbacks = NULL;
 
-	if (kern_coredump_config_vers < KERN_COREDUMP_MIN_CONFIG_VERSION)
+	if (kern_coredump_config_vers < KERN_COREDUMP_MIN_CONFIG_VERSION) {
 		return NULL;
-	if (kc_callbacks == NULL)
-		return NULL;;
-	if (core_description == NULL)
+	}
+	if (kc_callbacks == NULL) {
 		return NULL;
+	}
+	;
+	if (core_description == NULL) {
+		return NULL;
+	}
 
 	if (kc_callbacks->kcc_coredump_get_summary == NULL ||
-			kc_callbacks->kcc_coredump_save_segment_descriptions == NULL ||
-			kc_callbacks->kcc_coredump_save_segment_data == NULL ||
-			kc_callbacks->kcc_coredump_save_thread_state == NULL ||
-			kc_callbacks->kcc_coredump_save_sw_vers == NULL)
+	    kc_callbacks->kcc_coredump_save_segment_descriptions == NULL ||
+	    kc_callbacks->kcc_coredump_save_segment_data == NULL ||
+	    kc_callbacks->kcc_coredump_save_thread_state == NULL ||
+	    kc_callbacks->kcc_coredump_save_sw_vers == NULL) {
 		return NULL;
+	}
 
 #if !defined(__LP64__)
 	/* We don't support generating 64-bit cores on 32-bit platforms */
-	if (is64bit)
+	if (is64bit) {
 		return NULL;
+	}
 #endif
 
 	core_helper = kalloc(sizeof(*core_helper));
@@ -161,15 +167,17 @@ kern_register_coredump_helper_internal(int kern_coredump_config_vers, kern_cored
 
 kern_return_t
 kern_register_coredump_helper(int kern_coredump_config_vers, kern_coredump_callback_config *kc_callbacks,
-				void *refcon, const char *core_description, boolean_t is64bit, uint32_t mh_magic,
-				cpu_type_t cpu_type, cpu_subtype_t cpu_subtype)
+    void *refcon, const char *core_description, boolean_t is64bit, uint32_t mh_magic,
+    cpu_type_t cpu_type, cpu_subtype_t cpu_subtype)
 {
-	if (coredump_registered_count >= KERN_COREDUMP_MAX_CORES)
+	if (coredump_registered_count >= KERN_COREDUMP_MAX_CORES) {
 		return KERN_RESOURCE_SHORTAGE;
+	}
 
 	if (kern_register_coredump_helper_internal(kern_coredump_config_vers, kc_callbacks, refcon, core_description, FALSE,
-				is64bit, mh_magic, cpu_type, cpu_subtype) == NULL)
+	    is64bit, mh_magic, cpu_type, cpu_subtype) == NULL) {
 		return KERN_INVALID_ARGUMENT;
+	}
 
 	return KERN_SUCCESS;
 }
@@ -184,8 +192,9 @@ kern_register_xnu_coredump_helper(kern_coredump_callback_config *kc_callbacks)
 #endif
 
 	if (kern_register_coredump_helper_internal(KERN_COREDUMP_CONFIG_VERSION, kc_callbacks, NULL, "kernel", TRUE, is64bit,
-		_mh_execute_header.magic, _mh_execute_header.cputype, _mh_execute_header.cpusubtype) == NULL)
+	    _mh_execute_header.magic, _mh_execute_header.cputype, _mh_execute_header.cpusubtype) == NULL) {
 		return KERN_FAILURE;
+	}
 
 	return KERN_SUCCESS;
 }
@@ -195,16 +204,17 @@ kern_register_xnu_coredump_helper(kern_coredump_callback_config *kc_callbacks)
  */
 static int
 coredump_save_summary(uint64_t core_segment_count, uint64_t core_byte_count,
-                                    uint64_t thread_count, uint64_t thread_state_size,
-                                    uint64_t misc_bytes_count, void *context)
+    uint64_t thread_count, uint64_t thread_state_size,
+    uint64_t misc_bytes_count, void *context)
 {
 	processor_core_context *core_context = (processor_core_context *)context;
 	uint32_t sizeofcmds = 0, numcmds = 0;
 	int ret = 0;
 
 	if (!core_segment_count || !core_byte_count || !thread_count || !thread_state_size
-			|| (thread_state_size > KERN_COREDUMP_THREADSIZE_MAX))
+	    || (thread_state_size > KERN_COREDUMP_THREADSIZE_MAX)) {
 		return KERN_INVALID_ARGUMENT;
+	}
 
 	/* Initialize core_context */
 	core_context->core_segments_remaining = core_context->core_segment_count = core_segment_count;
@@ -217,15 +227,15 @@ coredump_save_summary(uint64_t core_segment_count, uint64_t core_byte_count,
 #if defined(__LP64__)
 	if (core_context->core_is64bit) {
 		sizeofcmds = (uint32_t)(core_context->core_segment_count * sizeof(struct segment_command_64) +
-			(core_context->core_threads_remaining * core_context->core_thread_state_size) +
-			/* TODO: LC_NOTE */ 0 + sizeof(struct ident_command) + KERN_COREDUMP_VERSIONSTRINGMAXSIZE);
+		    (core_context->core_threads_remaining * core_context->core_thread_state_size) +
+		    /* TODO: LC_NOTE */ 0 + sizeof(struct ident_command) + KERN_COREDUMP_VERSIONSTRINGMAXSIZE);
 		core_context->core_header_size = sizeofcmds + sizeof(struct mach_header_64);
 	} else
 #endif /* defined(__LP64__) */
 	{
 		sizeofcmds = (uint32_t)(core_context->core_segment_count * sizeof(struct segment_command) +
-			(core_context->core_threads_remaining * core_context->core_thread_state_size) +
-			/* TODO: LC_NOTE */ 0 + sizeof(struct ident_command) + KERN_COREDUMP_VERSIONSTRINGMAXSIZE);
+		    (core_context->core_threads_remaining * core_context->core_thread_state_size) +
+		    /* TODO: LC_NOTE */ 0 + sizeof(struct ident_command) + KERN_COREDUMP_VERSIONSTRINGMAXSIZE);
 		core_context->core_header_size = sizeofcmds + sizeof(struct mach_header);
 	}
 
@@ -234,7 +244,7 @@ coredump_save_summary(uint64_t core_segment_count, uint64_t core_byte_count,
 	core_context->core_cur_foffset = round_page(core_context->core_header_size);
 
 	numcmds = (uint32_t)(core_context->core_segment_count + core_context->core_thread_count + /* TODO: LC_NOTE */ 0 +
-			1 /* ident command */);
+	    1 /* ident command */);
 
 	/*
 	 * Reset the zstream and other output context before writing any data out. We do this here
@@ -259,7 +269,7 @@ coredump_save_summary(uint64_t core_segment_count, uint64_t core_byte_count,
 		ret =  kdp_core_output(core_context->core_outvars, sizeof(core_header), (caddr_t)&core_header);
 		if (ret != KERN_SUCCESS) {
 			kern_coredump_log(context, "coredump_save_summary() : failed to write mach header : kdp_core_output(%p, %lu, %p) returned error 0x%x\n",
-					core_context->core_outvars, sizeof(core_header), &core_header, ret);
+			    core_context->core_outvars, sizeof(core_header), &core_header, ret);
 			return ret;
 		}
 
@@ -281,7 +291,7 @@ coredump_save_summary(uint64_t core_segment_count, uint64_t core_byte_count,
 		ret =  kdp_core_output(core_context->core_outvars, sizeof(core_header), (caddr_t)&core_header);
 		if (ret != KERN_SUCCESS) {
 			kern_coredump_log(context, "coredump_save_summary() : failed to write mach header : kdp_core_output(%p, %lu, %p) returned error 0x%x\n",
-					core_context->core_outvars, sizeof(core_header), &core_header, ret);
+			    core_context->core_outvars, sizeof(core_header), &core_header, ret);
 			return ret;
 		}
 
@@ -296,7 +306,7 @@ coredump_save_summary(uint64_t core_segment_count, uint64_t core_byte_count,
  */
 static int
 coredump_save_segment_descriptions(uint64_t seg_start, uint64_t seg_end,
-                                                 void *context)
+    void *context)
 {
 	processor_core_context *core_context = (processor_core_context *)context;
 	int ret;
@@ -304,13 +314,13 @@ coredump_save_segment_descriptions(uint64_t seg_start, uint64_t seg_end,
 
 	if (seg_end <= seg_start) {
 		kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : called with invalid addresses : start 0x%llx >= end 0x%llx\n",
-				seg_start, seg_end, context, seg_start, seg_end);
+		    seg_start, seg_end, context, seg_start, seg_end);
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	if (core_context->core_segments_remaining == 0) {
 		kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : coredump_save_segment_descriptions() called too many times, %llu segment descriptions already recorded\n",
-				seg_start, seg_end, context, core_context->core_segment_count);
+		    seg_start, seg_end, context, core_context->core_segment_count);
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -321,7 +331,7 @@ coredump_save_segment_descriptions(uint64_t seg_start, uint64_t seg_end,
 
 		if (core_context->core_cur_hoffset + sizeof(seg_command) > core_context->core_header_size) {
 			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : ran out of space to save commands with %llu of %llu remaining\n",
-				seg_start, seg_end, context, core_context->core_segments_remaining, core_context->core_segment_count);
+			    seg_start, seg_end, context, core_context->core_segments_remaining, core_context->core_segment_count);
 			return KERN_NO_SPACE;
 		}
 
@@ -339,8 +349,8 @@ coredump_save_segment_descriptions(uint64_t seg_start, uint64_t seg_end,
 		ret = kdp_core_output(core_context->core_outvars, sizeof(seg_command), (caddr_t)&seg_command);
 		if (ret != KERN_SUCCESS) {
 			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : failed to write segment %llu of %llu. kdp_core_output(%p, %lu, %p) returned error %d\n",
-					seg_start, seg_end, context, core_context->core_segment_count - core_context->core_segments_remaining,
-					core_context->core_segment_count, core_context->core_outvars, sizeof(seg_command), &seg_command, ret);
+			    seg_start, seg_end, context, core_context->core_segment_count - core_context->core_segments_remaining,
+			    core_context->core_segment_count, core_context->core_outvars, sizeof(seg_command), &seg_command, ret);
 			return ret;
 		}
 
@@ -352,13 +362,13 @@ coredump_save_segment_descriptions(uint64_t seg_start, uint64_t seg_end,
 
 		if (seg_start > UINT32_MAX || seg_end > UINT32_MAX) {
 			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : called with invalid addresses for 32-bit : start 0x%llx, end 0x%llx\n",
-				seg_start, seg_end, context, seg_start, seg_end);
+			    seg_start, seg_end, context, seg_start, seg_end);
 			return KERN_INVALID_ARGUMENT;
 		}
 
 		if (core_context->core_cur_hoffset + sizeof(seg_command) > core_context->core_header_size) {
 			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : ran out of space to save commands with %llu of %llu remaining\n",
-				seg_start, seg_end, context, core_context->core_segments_remaining, core_context->core_segment_count);
+			    seg_start, seg_end, context, core_context->core_segments_remaining, core_context->core_segment_count);
 			return KERN_NO_SPACE;
 		}
 
@@ -376,8 +386,8 @@ coredump_save_segment_descriptions(uint64_t seg_start, uint64_t seg_end,
 		ret = kdp_core_output(core_context->core_outvars, sizeof(seg_command), (caddr_t)&seg_command);
 		if (ret != KERN_SUCCESS) {
 			kern_coredump_log(context, "coredump_save_segment_descriptions(0x%llx, 0x%llx, %p) : failed to write segment %llu of %llu : kdp_core_output(%p, %lu, %p) returned  error 0x%x\n",
-					seg_start, seg_end, context, core_context->core_segment_count - core_context->core_segments_remaining,
-					core_context->core_segment_count, core_context->core_outvars, sizeof(seg_command), &seg_command, ret);
+			    seg_start, seg_end, context, core_context->core_segment_count - core_context->core_segments_remaining,
+			    core_context->core_segment_count, core_context->core_outvars, sizeof(seg_command), &seg_command, ret);
 			return ret;
 		}
 
@@ -405,20 +415,20 @@ coredump_save_thread_state(void *thread_state, void *context)
 
 	if (tc->cmd != LC_THREAD) {
 		kern_coredump_log(context, "coredump_save_thread_state(%p, %p) : found %d expected LC_THREAD (%d)\n",
-				thread_state, context, tc->cmd, LC_THREAD);
+		    thread_state, context, tc->cmd, LC_THREAD);
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	if (core_context->core_cur_hoffset + core_context->core_thread_state_size > core_context->core_header_size) {
 		kern_coredump_log(context, "coredump_save_thread_state(%p, %p) : ran out of space to save threads with %llu of %llu remaining\n",
-				thread_state, context, core_context->core_threads_remaining, core_context->core_thread_count);
+		    thread_state, context, core_context->core_threads_remaining, core_context->core_thread_count);
 		return KERN_NO_SPACE;
 	}
 
 	ret = kdp_core_output(core_context->core_outvars, core_context->core_thread_state_size, (caddr_t)thread_state);
 	if (ret != KERN_SUCCESS) {
 		kern_coredump_log(context, "coredump_save_thread_state(%p, %p) : failed to write thread data : kdp_core_output(%p, %llu, %p) returned 0x%x\n",
-				thread_state, context, core_context->core_outvars, core_context->core_thread_state_size, thread_state, ret);
+		    thread_state, context, core_context->core_outvars, core_context->core_thread_state_size, thread_state, ret);
 		return ret;
 	}
 
@@ -437,13 +447,13 @@ coredump_save_sw_vers(void *sw_vers, uint64_t length, void *context)
 
 	if (length > KERN_COREDUMP_VERSIONSTRINGMAXSIZE || !length) {
 		kern_coredump_log(context, "coredump_save_sw_vers(%p, %llu, %p) : called with invalid length %llu\n",
-				sw_vers, length, context, length);
+		    sw_vers, length, context, length);
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	if (core_context->core_cur_hoffset + sizeof(struct ident_command) + length > core_context->core_header_size) {
 		kern_coredump_log(context, "coredump_save_sw_vers(%p, %llu, %p) : ran out of space to save data\n",
-				sw_vers, length, context);
+		    sw_vers, length, context);
 		return KERN_NO_SPACE;
 	}
 
@@ -452,14 +462,14 @@ coredump_save_sw_vers(void *sw_vers, uint64_t length, void *context)
 	ret = kdp_core_output(core_context->core_outvars, sizeof(struct ident_command), (caddr_t)&ident);
 	if (ret != KERN_SUCCESS) {
 		kern_coredump_log(context, "coredump_save_sw_vers(%p, %llu, %p) : failed to write ident command : kdp_core_output(%p, %lu, %p) returned 0x%x\n",
-				sw_vers, length, context, core_context->core_outvars, sizeof(struct ident_command), &ident, ret);
+		    sw_vers, length, context, core_context->core_outvars, sizeof(struct ident_command), &ident, ret);
 		return ret;
 	}
 
 	ret = kdp_core_output(core_context->core_outvars, length, (caddr_t)sw_vers);
 	if (ret != KERN_SUCCESS) {
 		kern_coredump_log(context, "coredump_save_sw_vers(%p, %llu, %p) : failed to write version string : kdp_core_output(%p, %llu, %p) returned 0x%x\n",
-				sw_vers, length, context, core_context->core_outvars, length, sw_vers, ret);
+		    sw_vers, length, context, core_context->core_outvars, length, sw_vers, ret);
 		return ret;
 	}
 
@@ -468,7 +478,7 @@ coredump_save_sw_vers(void *sw_vers, uint64_t length, void *context)
 		ret = kdp_core_output(core_context->core_outvars, (KERN_COREDUMP_VERSIONSTRINGMAXSIZE - length), NULL);
 		if (ret != KERN_SUCCESS) {
 			kern_coredump_log(context, "coredump_save_sw_vers(%p, %llu, %p) : failed to write zero fill padding : kdp_core_output(%p, %llu, NULL) returned 0x%x\n",
-					sw_vers, length, context, core_context->core_outvars, (KERN_COREDUMP_VERSIONSTRINGMAXSIZE - length), ret);
+			    sw_vers, length, context, core_context->core_outvars, (KERN_COREDUMP_VERSIONSTRINGMAXSIZE - length), ret);
 			return ret;
 		}
 	}
@@ -486,15 +496,15 @@ coredump_save_segment_data(void *seg_data, uint64_t length, void *context)
 
 	if (length > core_context->core_segment_bytes_remaining) {
 		kern_coredump_log(context, "coredump_save_segment_data(%p, %llu, %p) : called with too much data, %llu written, %llu left\n",
-				seg_data, length, context, core_context->core_segment_byte_total - core_context->core_segment_bytes_remaining,
-				core_context->core_segment_bytes_remaining);
+		    seg_data, length, context, core_context->core_segment_byte_total - core_context->core_segment_bytes_remaining,
+		    core_context->core_segment_bytes_remaining);
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	ret = kdp_core_output(core_context->core_outvars, length, (caddr_t)seg_data);
 	if (ret != KERN_SUCCESS) {
 		kern_coredump_log(context, "coredump_save_segment_data(%p, %llu, %p) : failed to write data (%llu bytes remaining) :%d\n",
-				seg_data, length, context, core_context->core_segment_bytes_remaining, ret);
+		    seg_data, length, context, core_context->core_segment_bytes_remaining, ret);
 		return ret;
 	}
 
@@ -528,7 +538,7 @@ kern_coredump_routine(void *core_outvars, struct kern_coredump_core *current_cor
 		if (ret == KERN_NODE_DOWN) {
 			kern_coredump_log(&context, "coredump_init returned KERN_NODE_DOWN, skipping this core\n");
 			return KERN_SUCCESS;
-		} else  if (ret != KERN_SUCCESS) {
+		} else if (ret != KERN_SUCCESS) {
 			kern_coredump_log(&context, "(kern_coredump_routine) : coredump_init failed with %d\n", ret);
 			return ret;
 		}
@@ -548,7 +558,7 @@ kern_coredump_routine(void *core_outvars, struct kern_coredump_core *current_cor
 
 	/* Save the segment descriptions for the segments to be included */
 	ret = current_core->kcc_cb.kcc_coredump_save_segment_descriptions(context.core_refcon, coredump_save_segment_descriptions,
-			&context);
+	    &context);
 	if (ret != KERN_SUCCESS) {
 		kern_coredump_log(&context, "(kern_coredump_routine) : save_segment_descriptions failed with %d\n", ret);
 		return ret;
@@ -556,7 +566,7 @@ kern_coredump_routine(void *core_outvars, struct kern_coredump_core *current_cor
 
 	if (context.core_segments_remaining != 0) {
 		kern_coredump_log(&context, "(kern_coredump_routine) : save_segment_descriptions returned without all segment descriptions written, %llu of %llu remaining\n",
-				context.core_segments_remaining, context.core_segment_count);
+		    context.core_segments_remaining, context.core_segment_count);
 		return KERN_FAILURE;
 	}
 
@@ -570,7 +580,7 @@ kern_coredump_routine(void *core_outvars, struct kern_coredump_core *current_cor
 	if (context.core_thread_state_size) {
 		char threadstatebuf[context.core_thread_state_size];
 		ret = current_core->kcc_cb.kcc_coredump_save_thread_state(context.core_refcon, &threadstatebuf, coredump_save_thread_state,
-				&context);
+		    &context);
 		if (ret != KERN_SUCCESS) {
 			kern_coredump_log(&context, "(kern_coredump_routine) : save_thread_state failed with %d\n", ret);
 			return ret;
@@ -579,7 +589,7 @@ kern_coredump_routine(void *core_outvars, struct kern_coredump_core *current_cor
 
 	if (context.core_threads_remaining != 0) {
 		kern_coredump_log(&context, "(kern_coredump_routine) : save_thread_state returned without all thread descriptions written, %llu of %llu remaining\n",
-				context.core_threads_remaining, context.core_thread_count);
+		    context.core_threads_remaining, context.core_thread_count);
 		return KERN_FAILURE;
 	}
 
@@ -596,7 +606,7 @@ kern_coredump_routine(void *core_outvars, struct kern_coredump_core *current_cor
 	ret = kdp_core_output(context.core_outvars, (round_page(context.core_header_size) - context.core_header_size), NULL);
 	if (ret != KERN_SUCCESS) {
 		kern_coredump_log(&context, "(kern_coredump_routine) : failed to write zero fill padding (%llu bytes remaining) : kdp_core_output(%p, %llu, NULL) returned 0x%x\n",
-				context.core_segment_bytes_remaining, context.core_outvars, (round_page(context.core_header_size) - context.core_header_size), ret);
+		    context.core_segment_bytes_remaining, context.core_outvars, (round_page(context.core_header_size) - context.core_header_size), ret);
 		return ret;
 	}
 
@@ -609,7 +619,7 @@ kern_coredump_routine(void *core_outvars, struct kern_coredump_core *current_cor
 
 	if (context.core_segment_bytes_remaining != 0) {
 		kern_coredump_log(&context, "(kern_coredump_routine) : save_segment_data returned without all segment data written, %llu of %llu remaining\n",
-				context.core_segment_bytes_remaining, context.core_segment_byte_total);
+		    context.core_segment_bytes_remaining, context.core_segment_byte_total);
 		return KERN_FAILURE;
 	}
 
@@ -619,13 +629,13 @@ kern_coredump_routine(void *core_outvars, struct kern_coredump_core *current_cor
 	ret = kdp_core_output(context.core_outvars, 0, NULL);
 	if (ret != KERN_SUCCESS) {
 		kern_coredump_log(&context, "(kern_coredump_routine) : failed to flush final core data : kdp_core_output(%p, 0, NULL) returned 0x%x\n",
-				context.core_outvars, ret);
+		    context.core_outvars, ret);
 		return ret;
 	}
 
 	kern_coredump_log(&context, "Done\nCoredump complete of %s, dumped %llu segments (%llu bytes), %llu threads (%llu bytes) overall uncompressed file length %llu bytes.",
-			current_core->kcc_corename, context.core_segment_count, context.core_segment_byte_total, context.core_thread_count,
-			(context.core_thread_count * context.core_thread_state_size), context.core_file_length);
+	    current_core->kcc_corename, context.core_segment_count, context.core_segment_byte_total, context.core_thread_count,
+	    (context.core_thread_count * context.core_thread_state_size), context.core_file_length);
 
 	if (core_begin_offset) {
 		/* If we're writing to disk (we have a begin offset, we need to update the header */
@@ -684,7 +694,7 @@ kern_do_coredump(void *core_outvars, boolean_t kernel_only, uint64_t first_file_
 			return KERN_FAILURE;
 		}
 
-		cur_ret = kern_coredump_routine(core_outvars, current_core, *last_file_offset , &prev_core_length, &header_update_failed);
+		cur_ret = kern_coredump_routine(core_outvars, current_core, *last_file_offset, &prev_core_length, &header_update_failed);
 		if (cur_ret != KERN_SUCCESS) {
 			// As long as we didn't fail while updating the header for the raw file, we should be able to try
 			// to capture other corefiles.
@@ -711,8 +721,8 @@ kern_do_coredump(void *core_outvars, boolean_t kernel_only, uint64_t first_file_
 
 kern_return_t
 kern_register_coredump_helper(int kern_coredump_config_vers, kern_coredump_callback_config *kc_callbacks, void* refcon,
-				const char *core_description, boolean_t is64bit, uint32_t mh_magic,
-				cpu_type_t cpu_type, cpu_subtype_t cpu_subtype)
+    const char *core_description, boolean_t is64bit, uint32_t mh_magic,
+    cpu_type_t cpu_type, cpu_subtype_t cpu_subtype)
 {
 #pragma unused(kern_coredump_config_vers, kc_callbacks, refcon, core_description, is64bit, mh_magic, cpu_type, cpu_subtype)
 	return KERN_NOT_SUPPORTED;

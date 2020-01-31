@@ -5,10 +5,10 @@
 #include <stdio.h>
 
 DECL_TEST {
-  long long i;
-  uint32_t digest[4];
-  for(i=0; i<length; i++) {
-    md5_hash((uint8_t *)&i, sizeof(i), digest);
-  }
-  return PERFINDEX_SUCCESS;
+	long long i;
+	uint32_t digest[4];
+	for (i = 0; i < length; i++) {
+		md5_hash((uint8_t *)&i, sizeof(i), digest);
+	}
+	return PERFINDEX_SUCCESS;
 }

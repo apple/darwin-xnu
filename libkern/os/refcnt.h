@@ -98,25 +98,25 @@ __BEGIN_DECLS
  */
 #define os_ref_init(rc, grp) os_ref_init_count((rc), (grp), 1)
 void os_ref_init_count(struct os_refcnt *, struct os_refgrp *, os_ref_count_t count)
-	os_error_if(count == 0, "Reference count must be non-zero initialized");
+os_error_if(count == 0, "Reference count must be non-zero initialized");
 
 #if OS_REFCNT_DEBUG
 # define os_refgrp_decl(qual, var, name, parent) \
 	qual struct os_refgrp __attribute__((section("__DATA,__refgrps"))) var = { \
-		.grp_name =          (name), \
-		.grp_children =      ATOMIC_VAR_INIT(0), \
-		.grp_count =         ATOMIC_VAR_INIT(0), \
-		.grp_retain_total =  ATOMIC_VAR_INIT(0), \
-		.grp_release_total = ATOMIC_VAR_INIT(0), \
-		.grp_parent =        (parent), \
-		.grp_log =           NULL, \
+	        .grp_name =          (name), \
+	        .grp_children =      ATOMIC_VAR_INIT(0), \
+	        .grp_count =         ATOMIC_VAR_INIT(0), \
+	        .grp_retain_total =  ATOMIC_VAR_INIT(0), \
+	        .grp_release_total = ATOMIC_VAR_INIT(0), \
+	        .grp_parent =        (parent), \
+	        .grp_log =           NULL, \
 	}
 
 /* Create a default group based on the init() callsite if no explicit group
  * is provided. */
 # define os_ref_init_count(rc, grp, count) ({ \
-		os_refgrp_decl(static, __grp, __func__, NULL); \
-		(os_ref_init_count)((rc), (grp) ? (grp) : &__grp, (count)); \
+	        os_refgrp_decl(static, __grp, __func__, NULL); \
+	        (os_ref_init_count)((rc), (grp) ? (grp) : &__grp, (count)); \
 	})
 #else
 # define os_refgrp_decl(...)
@@ -141,7 +141,7 @@ void os_ref_init_count(struct os_refcnt *, struct os_refgrp *, os_ref_count_t co
 void os_ref_retain(struct os_refcnt *);
 
 os_ref_count_t os_ref_release_explicit(struct os_refcnt *rc,
-		memory_order release_order, memory_order dealloc_order) OS_WARN_RESULT;
+    memory_order release_order, memory_order dealloc_order) OS_WARN_RESULT;
 
 static inline os_ref_count_t OS_WARN_RESULT
 os_ref_release(struct os_refcnt *rc)
@@ -159,7 +159,7 @@ static inline void
 os_ref_release_live(struct os_refcnt *rc)
 {
 	if (__improbable(os_ref_release_explicit(rc,
-			memory_order_release, memory_order_relaxed) == 0)) {
+	    memory_order_release, memory_order_relaxed) == 0)) {
 		panic("os_refcnt: unexpected release of final reference (rc=%p)\n", rc);
 		__builtin_unreachable();
 	}

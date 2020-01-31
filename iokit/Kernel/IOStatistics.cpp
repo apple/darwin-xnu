@@ -2,7 +2,7 @@
  * Copyright (c) 2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -64,7 +64,7 @@ IOWorkLoopDependency *IOStatistics::nextWorkLoopDependency = NULL;
 #define LOG(level, format, ...) \
 do { \
 	if (level <= LOG_LEVEL) \
-		printf(format, ##__VA_ARGS__); \
+	        printf(format, ##__VA_ARGS__); \
 } while (0)
 
 /* Locks */
@@ -77,14 +77,16 @@ KextNode *IOStatistics::kextHint = NULL;
 
 IOStatistics::KextTreeHead IOStatistics::kextHead = RB_INITIALIZER(&IOStatistics::kextHead);
 
-int IOStatistics::kextNodeCompare(KextNode *e1, KextNode *e2) 
+int
+IOStatistics::kextNodeCompare(KextNode *e1, KextNode *e2)
 {
-    if (e1->kext < e2->kext)
-        return -1;
-    else if (e1->kext > e2->kext)
-        return 1;
-    else
-        return 0;
+	if (e1->kext < e2->kext) {
+		return -1;
+	} else if (e1->kext > e2->kext) {
+		return 1;
+	} else {
+		return 0;
+	}
 }
 
 RB_GENERATE(IOStatistics::KextTree, KextNode, link, kextNodeCompare);
@@ -93,14 +95,16 @@ RB_GENERATE(IOStatistics::KextTree, KextNode, link, kextNodeCompare);
 
 IOStatistics::KextAddressTreeHead IOStatistics::kextAddressHead = RB_INITIALIZER(&IOStatistics::kextAddressHead);
 
-int IOStatistics::kextAddressNodeCompare(KextNode *e1, KextNode *e2) 
+int
+IOStatistics::kextAddressNodeCompare(KextNode *e1, KextNode *e2)
 {
-    if (e1->address < e2->address)
-        return -1;
-    else if (e1->address > e2->address)
-        return 1; 
-    else
-        return 0;
+	if (e1->address < e2->address) {
+		return -1;
+	} else if (e1->address > e2->address) {
+		return 1;
+	} else {
+		return 0;
+	}
 }
 
 RB_GENERATE(IOStatistics::KextAddressTree, KextNode, addressLink, kextAddressNodeCompare);
@@ -109,71 +113,77 @@ RB_GENERATE(IOStatistics::KextAddressTree, KextNode, addressLink, kextAddressNod
 
 IOStatistics::ClassTreeHead IOStatistics::classHead = RB_INITIALIZER(&IOStatistics::classHead);
 
-int IOStatistics::classNodeCompare(ClassNode *e1, ClassNode *e2) {
-    if (e1->metaClass < e2->metaClass)
-        return -1;
-    else if (e1->metaClass > e2->metaClass)
-        return 1;
-    else
-        return 0;
+int
+IOStatistics::classNodeCompare(ClassNode *e1, ClassNode *e2)
+{
+	if (e1->metaClass < e2->metaClass) {
+		return -1;
+	} else if (e1->metaClass > e2->metaClass) {
+		return 1;
+	} else {
+		return 0;
+	}
 }
 
 RB_GENERATE(IOStatistics::ClassTree, ClassNode, tLink, classNodeCompare);
 
 /* Workloop dependencies */
 
-int IOWorkLoopCounter::loadTagCompare(IOWorkLoopDependency *e1, IOWorkLoopDependency *e2) {
-    if (e1->loadTag < e2->loadTag)
-        return -1;
-    else if (e1->loadTag > e2->loadTag)
-        return 1;
-    else
-        return 0;
+int
+IOWorkLoopCounter::loadTagCompare(IOWorkLoopDependency *e1, IOWorkLoopDependency *e2)
+{
+	if (e1->loadTag < e2->loadTag) {
+		return -1;
+	} else if (e1->loadTag > e2->loadTag) {
+		return 1;
+	} else {
+		return 0;
+	}
 }
 
 RB_GENERATE(IOWorkLoopCounter::DependencyTree, IOWorkLoopDependency, link, IOWorkLoopCounter::loadTagCompare);
 
 /* sysctl stuff */
 
-static int 
+static int
 oid_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1, int arg2, struct sysctl_req *req)
 {
 	int error = EINVAL;
 	uint32_t request = arg2;
 
-	switch (request)
-	{
-		case kIOStatisticsGeneral:
-			error = IOStatistics::getStatistics(req);
-			break;
-		case kIOStatisticsWorkLoop:
-			error = IOStatistics::getWorkLoopStatistics(req);
-			break;
-		case kIOStatisticsUserClient:
-			error = IOStatistics::getUserClientStatistics(req);
-			break;		
-		default:
-			break;
+	switch (request) {
+	case kIOStatisticsGeneral:
+		error = IOStatistics::getStatistics(req);
+		break;
+	case kIOStatisticsWorkLoop:
+		error = IOStatistics::getWorkLoopStatistics(req);
+		break;
+	case kIOStatisticsUserClient:
+		error = IOStatistics::getUserClientStatistics(req);
+		break;
+	default:
+		break;
 	}
 
 	return error;
 }
- 
+
 SYSCTL_NODE(_debug, OID_AUTO, iokit_statistics, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "IOStatistics");
 
 static SYSCTL_PROC(_debug_iokit_statistics, OID_AUTO, general,
-	    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
-	    0, kIOStatisticsGeneral, oid_sysctl, "S", "");
+    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
+    0, kIOStatisticsGeneral, oid_sysctl, "S", "");
 
 static SYSCTL_PROC(_debug_iokit_statistics, OID_AUTO, workloop,
-	    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
-	    0, kIOStatisticsWorkLoop, oid_sysctl, "S", "");
+    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
+    0, kIOStatisticsWorkLoop, oid_sysctl, "S", "");
 
 static SYSCTL_PROC(_debug_iokit_statistics, OID_AUTO, userclient,
-	    CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
-	    0, kIOStatisticsUserClient, oid_sysctl, "S", "");
+    CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
+    0, kIOStatisticsUserClient, oid_sysctl, "S", "");
 
-void IOStatistics::initialize()
+void
+IOStatistics::initialize()
 {
 	if (enabled) {
 		return;
@@ -183,25 +193,26 @@ void IOStatistics::initialize()
 	if (!(kIOStatistics & gIOKitDebug)) {
 		return;
 	}
-	
+
 	sysctl_register_oid(&sysctl__debug_iokit_statistics_general);
 	sysctl_register_oid(&sysctl__debug_iokit_statistics_workloop);
 	sysctl_register_oid(&sysctl__debug_iokit_statistics_userclient);
-	
+
 	lock = IORWLockAlloc();
 	if (!lock) {
 		return;
 	}
-	
+
 	nextWorkLoopDependency = (IOWorkLoopDependency*)kalloc(sizeof(IOWorkLoopDependency));
 	if (!nextWorkLoopDependency) {
 		return;
 	}
-	
+
 	enabled = true;
 }
 
-void IOStatistics::onKextLoad(OSKext *kext, kmod_info_t *kmod_info) 
+void
+IOStatistics::onKextLoad(OSKext *kext, kmod_info_t *kmod_info)
 {
 	KextNode *ke;
 
@@ -212,7 +223,7 @@ void IOStatistics::onKextLoad(OSKext *kext, kmod_info_t *kmod_info)
 	}
 
 	LOG(1, "IOStatistics::onKextLoad: %s, tag %d, address 0x%llx, address end 0x%llx\n",
-		kext->getIdentifierCString(), kmod_info->id, (uint64_t)kmod_info->address, (uint64_t)(kmod_info->address + kmod_info->size));
+	    kext->getIdentifierCString(), kmod_info->id, (uint64_t)kmod_info->address, (uint64_t)(kmod_info->address + kmod_info->size));
 
 	ke = (KextNode *)kalloc(sizeof(KextNode));
 	if (!ke) {
@@ -220,7 +231,7 @@ void IOStatistics::onKextLoad(OSKext *kext, kmod_info_t *kmod_info)
 	}
 
 	memset(ke, 0, sizeof(KextNode));
-	
+
 	ke->kext = kext;
 	ke->loadTag = kmod_info->id;
 	ke->address = kmod_info->address;
@@ -233,26 +244,27 @@ void IOStatistics::onKextLoad(OSKext *kext, kmod_info_t *kmod_info)
 
 	RB_INSERT(KextTree, &kextHead, ke);
 	RB_INSERT(KextAddressTree, &kextAddressHead, ke);
-	
+
 	sequenceID++;
 	loadedKexts++;
 	lastKextIndex++;
-	
+
 	IORWLockUnlock(lock);
 }
 
-void IOStatistics::onKextUnload(OSKext *kext) 
+void
+IOStatistics::onKextUnload(OSKext *kext)
 {
 	KextNode sought, *found;
-	
+
 	assert(kext);
-	
+
 	if (!enabled) {
 		return;
 	}
 
 	LOG(1, "IOStatistics::onKextUnload: %s\n", kext->getIdentifierCString());
-	
+
 	IORWLockWrite(lock);
 
 	sought.kext = kext;
@@ -284,21 +296,21 @@ void IOStatistics::onKextUnload(OSKext *kext)
 		if (found == kextHint) {
 			kextHint = NULL;
 		}
-		
+
 		/* Finally, free the class node */
 		kfree(found, sizeof(KextNode));
-		
+
 		sequenceID++;
 		loadedKexts--;
-	}
-	else {
+	} else {
 		panic("IOStatistics::onKextUnload: cannot find kext: %s", kext->getIdentifierCString());
 	}
 
 	IORWLockUnlock(lock);
 }
 
-void IOStatistics::onClassAdded(OSKext *parentKext, OSMetaClass *metaClass) 
+void
+IOStatistics::onClassAdded(OSKext *parentKext, OSMetaClass *metaClass)
 {
 	ClassNode *ce;
 	KextNode soughtKext, *foundKext = NULL;
@@ -313,7 +325,7 @@ void IOStatistics::onClassAdded(OSKext *parentKext, OSMetaClass *metaClass)
 
 	ce = (ClassNode *)kalloc(sizeof(ClassNode));
 	if (!ce) {
-		return;	
+		return;
 	}
 
 	memset(ce, 0, sizeof(ClassNode));
@@ -323,8 +335,7 @@ void IOStatistics::onClassAdded(OSKext *parentKext, OSMetaClass *metaClass)
 	/* Hinted? */
 	if (kextHint && kextHint->kext == parentKext) {
 		foundKext = kextHint;
-	}
-	else {
+	} else {
 		soughtKext.kext = parentKext;
 		foundKext = RB_FIND(KextTree, &kextHead, &soughtKext);
 	}
@@ -336,9 +347,9 @@ void IOStatistics::onClassAdded(OSKext *parentKext, OSMetaClass *metaClass)
 		ce->metaClass = metaClass;
 		ce->classID = lastClassIndex++;
 		ce->parentKext = foundKext;
-		
+
 		/* Has superclass? */
-	 	superClass = ce->metaClass->getSuperClass();
+		superClass = ce->metaClass->getSuperClass();
 		if (superClass) {
 			soughtClass.metaClass = superClass;
 			foundClass = RB_FIND(ClassTree, &classHead, &soughtClass);
@@ -347,25 +358,25 @@ void IOStatistics::onClassAdded(OSKext *parentKext, OSMetaClass *metaClass)
 
 		SLIST_INIT(&ce->counterList);
 		SLIST_INIT(&ce->userClientList);
-		
+
 		RB_INSERT(ClassTree, &classHead, ce);
 		SLIST_INSERT_HEAD(&foundKext->classList, ce, lLink);
-		
+
 		foundKext->classes++;
-		
+
 		kextHint = foundKext;
-		
-		sequenceID++;	
+
+		sequenceID++;
 		registeredClasses++;
-	}
-	else {
+	} else {
 		panic("IOStatistics::onClassAdded: cannot find parent kext: %s", parentKext->getIdentifierCString());
 	}
-	
+
 	IORWLockUnlock(lock);
 }
 
-void IOStatistics::onClassRemoved(OSKext *parentKext, OSMetaClass *metaClass) 
+void
+IOStatistics::onClassRemoved(OSKext *parentKext, OSMetaClass *metaClass)
 {
 	ClassNode sought, *found;
 
@@ -384,7 +395,7 @@ void IOStatistics::onClassRemoved(OSKext *parentKext, OSMetaClass *metaClass)
 	if (found) {
 		IOEventSourceCounter *esc;
 		IOUserClientCounter *ucc;
-		
+
 		/* Free up the list of counters */
 		while ((esc = SLIST_FIRST(&found->counterList))) {
 			SLIST_REMOVE_HEAD(&found->counterList, link);
@@ -399,29 +410,29 @@ void IOStatistics::onClassRemoved(OSKext *parentKext, OSMetaClass *metaClass)
 
 		/* Remove from class tree */
 		RB_REMOVE(ClassTree, &classHead, found);
-		
+
 		/* Remove from parent */
 		SLIST_REMOVE(&found->parentKext->classList, found, ClassNode, lLink);
-		
+
 		/* Finally, free the class node */
 		kfree(found, sizeof(ClassNode));
-		
+
 		sequenceID++;
 		registeredClasses--;
-	}
-	else {
+	} else {
 		panic("IOStatistics::onClassRemoved: cannot find class: %s", metaClass->getClassName());
 	}
 
 	IORWLockUnlock(lock);
 }
 
-IOEventSourceCounter *IOStatistics::registerEventSource(OSObject *inOwner)
+IOEventSourceCounter *
+IOStatistics::registerEventSource(OSObject *inOwner)
 {
 	IOEventSourceCounter *counter = NULL;
 	ClassNode sought, *found = NULL;
 	boolean_t createDummyCounter = FALSE;
-	
+
 	assert(inOwner);
 
 	if (!enabled) {
@@ -432,7 +443,7 @@ IOEventSourceCounter *IOStatistics::registerEventSource(OSObject *inOwner)
 	if (!counter) {
 		return NULL;
 	}
-	
+
 	memset(counter, 0, sizeof(IOEventSourceCounter));
 
 	IORWLockWrite(lock);
@@ -443,8 +454,7 @@ IOEventSourceCounter *IOStatistics::registerEventSource(OSObject *inOwner)
 	if (inOwner->retainCount > 0xFFFFFF) {
 		kprintf("IOStatistics::registerEventSource - bad metaclass %p\n", inOwner);
 		createDummyCounter = TRUE;
-	}
-	else {
+	} else {
 		sought.metaClass = inOwner->getMetaClass();
 		found = RB_FIND(ClassTree, &classHead, &sought);
 	}
@@ -458,13 +468,14 @@ IOEventSourceCounter *IOStatistics::registerEventSource(OSObject *inOwner)
 	if (!(createDummyCounter || found)) {
 		panic("IOStatistics::registerEventSource: cannot find parent class: %s", inOwner->getMetaClass()->getClassName());
 	}
-	
+
 	IORWLockUnlock(lock);
-	
+
 	return counter;
 }
 
-void IOStatistics::unregisterEventSource(IOEventSourceCounter *counter)
+void
+IOStatistics::unregisterEventSource(IOEventSourceCounter *counter)
 {
 	if (!counter) {
 		return;
@@ -477,11 +488,12 @@ void IOStatistics::unregisterEventSource(IOEventSourceCounter *counter)
 		registeredCounters--;
 	}
 	kfree(counter, sizeof(IOEventSourceCounter));
-	
+
 	IORWLockUnlock(lock);
 }
 
-IOWorkLoopCounter* IOStatistics::registerWorkLoop(IOWorkLoop *workLoop)
+IOWorkLoopCounter*
+IOStatistics::registerWorkLoop(IOWorkLoop *workLoop)
 {
 	IOWorkLoopCounter *counter = NULL;
 	KextNode *found;
@@ -496,7 +508,7 @@ IOWorkLoopCounter* IOStatistics::registerWorkLoop(IOWorkLoop *workLoop)
 	if (!counter) {
 		return NULL;
 	}
-    
+
 	memset(counter, 0, sizeof(IOWorkLoopCounter));
 
 	found = getKextNodeFromBacktrace(TRUE);
@@ -515,23 +527,25 @@ IOWorkLoopCounter* IOStatistics::registerWorkLoop(IOWorkLoop *workLoop)
 	return counter;
 }
 
-void IOStatistics::unregisterWorkLoop(IOWorkLoopCounter *counter)
+void
+IOStatistics::unregisterWorkLoop(IOWorkLoopCounter *counter)
 {
 	if (!counter) {
 		return;
 	}
-	
+
 	IORWLockWrite(lock);
 	if (counter->parentKext) {
 		SLIST_REMOVE(&counter->parentKext->workLoopList, counter, IOWorkLoopCounter, link);
 	}
 	kfree(counter, sizeof(IOWorkLoopCounter));
 	registeredWorkloops--;
-	
+
 	IORWLockUnlock(lock);
 }
 
-IOUserClientCounter *IOStatistics::registerUserClient(IOUserClient *userClient)
+IOUserClientCounter *
+IOStatistics::registerUserClient(IOUserClient *userClient)
 {
 	ClassNode sought, *found;
 	IOUserClientCounter *counter = NULL;
@@ -546,7 +560,7 @@ IOUserClientCounter *IOStatistics::registerUserClient(IOUserClient *userClient)
 	if (!counter) {
 		return NULL;
 	}
-	
+
 	memset(counter, 0, sizeof(IOUserClientCounter));
 
 	IORWLockWrite(lock);
@@ -557,8 +571,7 @@ IOUserClientCounter *IOStatistics::registerUserClient(IOUserClient *userClient)
 	if (found) {
 		counter->parentClass = found;
 		SLIST_INSERT_HEAD(&found->userClientList, counter, link);
-	}
-	else {
+	} else {
 		panic("IOStatistics::registerUserClient: cannot find parent class: %s", sought.metaClass->getClassName());
 	}
 
@@ -567,57 +580,60 @@ IOUserClientCounter *IOStatistics::registerUserClient(IOUserClient *userClient)
 	return counter;
 }
 
-void IOStatistics::unregisterUserClient(IOUserClientCounter *counter)
+void
+IOStatistics::unregisterUserClient(IOUserClientCounter *counter)
 {
 	if (!counter) {
 		return;
 	}
-	
+
 	IORWLockWrite(lock);
-	
+
 	SLIST_REMOVE(&counter->parentClass->userClientList, counter, IOUserClientCounter, link);
 	kfree(counter, sizeof(IOUserClientCounter));
 
 	IORWLockUnlock(lock);
 }
 
-void IOStatistics::attachWorkLoopEventSource(IOWorkLoopCounter *wlc, IOEventSourceCounter *esc) 
+void
+IOStatistics::attachWorkLoopEventSource(IOWorkLoopCounter *wlc, IOEventSourceCounter *esc)
 {
 	if (!wlc) {
-        return;
+		return;
 	}
-    
+
 	IORWLockWrite(lock);
-	
+
 	if (!nextWorkLoopDependency) {
 		return;
 	}
-	
+
 	attachedEventSources++;
 	wlc->attachedEventSources++;
-	
+
 	/* Track the kext dependency */
 	nextWorkLoopDependency->loadTag = esc->parentClass->parentKext->loadTag;
 	if (NULL == RB_INSERT(IOWorkLoopCounter::DependencyTree, &wlc->dependencyHead, nextWorkLoopDependency)) {
 		nextWorkLoopDependency = (IOWorkLoopDependency*)kalloc(sizeof(IOWorkLoopDependency));
 	}
-    
+
 	IORWLockUnlock(lock);
 }
 
-void IOStatistics::detachWorkLoopEventSource(IOWorkLoopCounter *wlc, IOEventSourceCounter *esc) 
+void
+IOStatistics::detachWorkLoopEventSource(IOWorkLoopCounter *wlc, IOEventSourceCounter *esc)
 {
 	IOWorkLoopDependency sought, *found;
-    
+
 	if (!wlc) {
 		return;
 	}
-    
+
 	IORWLockWrite(lock);
 
 	attachedEventSources--;
 	wlc->attachedEventSources--;
-	
+
 	sought.loadTag = esc->parentClass->parentKext->loadTag;
 
 	found = RB_FIND(IOWorkLoopCounter::DependencyTree, &wlc->dependencyHead, &sought);
@@ -629,7 +645,8 @@ void IOStatistics::detachWorkLoopEventSource(IOWorkLoopCounter *wlc, IOEventSour
 	IORWLockUnlock(lock);
 }
 
-int IOStatistics::getStatistics(sysctl_req *req)
+int
+IOStatistics::getStatistics(sysctl_req *req)
 {
 	int error;
 	uint32_t calculatedSize, size;
@@ -637,25 +654,25 @@ int IOStatistics::getStatistics(sysctl_req *req)
 	IOStatisticsHeader *header;
 
 	assert(IOStatistics::enabled && req);
-    
+
 	IORWLockRead(IOStatistics::lock);
 
 	/* Work out how much we need to allocate. IOStatisticsKext is of variable size. */
-	calculatedSize = sizeof(IOStatisticsHeader) + 
-					 sizeof(IOStatisticsGlobal) +
-					(sizeof(IOStatisticsKext) * loadedKexts) + (sizeof(uint32_t) * registeredClasses) + 
-					(sizeof(IOStatisticsMemory) * loadedKexts) +
-					(sizeof(IOStatisticsClass) * registeredClasses) +
-					(sizeof(IOStatisticsCounter) * registeredClasses) +
-					(sizeof(IOStatisticsKextIdentifier) * loadedKexts) +
-					(sizeof(IOStatisticsClassName) * registeredClasses);
+	calculatedSize = sizeof(IOStatisticsHeader) +
+	    sizeof(IOStatisticsGlobal) +
+	    (sizeof(IOStatisticsKext) * loadedKexts) + (sizeof(uint32_t) * registeredClasses) +
+	    (sizeof(IOStatisticsMemory) * loadedKexts) +
+	    (sizeof(IOStatisticsClass) * registeredClasses) +
+	    (sizeof(IOStatisticsCounter) * registeredClasses) +
+	    (sizeof(IOStatisticsKextIdentifier) * loadedKexts) +
+	    (sizeof(IOStatisticsClassName) * registeredClasses);
 
 	/* Size request? */
 	if (req->oldptr == USER_ADDR_NULL) {
 		error = SYSCTL_OUT(req, NULL, calculatedSize);
 		goto exit;
 	}
-	
+
 	/* Read only */
 	if (req->newptr != USER_ADDR_NULL) {
 		error = EPERM;
@@ -669,9 +686,9 @@ int IOStatistics::getStatistics(sysctl_req *req)
 	}
 
 	memset(buffer, 0, calculatedSize);
-	
+
 	ptr = buffer;
-	
+
 	header = (IOStatisticsHeader*)((void*)ptr);
 
 	header->sig = IOSTATISTICS_SIG;
@@ -695,17 +712,17 @@ int IOStatistics::getStatistics(sysctl_req *req)
 	header->memoryStatsOffset = header->kextStatsOffset + size;
 	size = copyMemoryStatistics((IOStatisticsMemory*)((void*)ptr));
 	ptr += size;
-	
+
 	/* Class statistics */
 	header->classStatsOffset = header->memoryStatsOffset + size;
 	size = copyClassStatistics((IOStatisticsClass*)((void*)ptr));
 	ptr += size;
-	
+
 	/* Dynamic class counter data */
 	header->counterStatsOffset = header->classStatsOffset + size;
 	size = copyCounterStatistics((IOStatisticsCounter*)((void*)ptr));
 	ptr += size;
-	
+
 	/* Kext identifiers */
 	header->kextIdentifiersOffset = header->counterStatsOffset + size;
 	size = copyKextIdentifiers((IOStatisticsKextIdentifier*)((void*)ptr));
@@ -715,11 +732,11 @@ int IOStatistics::getStatistics(sysctl_req *req)
 	header->classNamesOffset = header->kextIdentifiersOffset + size;
 	size = copyClassNames((IOStatisticsClassName*)ptr);
 	ptr += size;
-	
-	LOG(2, "IOStatistics::getStatistics - calculatedSize 0x%x, kexts 0x%x, classes 0x%x.\n",
-	 	calculatedSize, loadedKexts, registeredClasses);
 
-	assert( (uint32_t)(ptr - buffer) == calculatedSize );
+	LOG(2, "IOStatistics::getStatistics - calculatedSize 0x%x, kexts 0x%x, classes 0x%x.\n",
+	    calculatedSize, loadedKexts, registeredClasses);
+
+	assert((uint32_t)(ptr - buffer) == calculatedSize );
 
 	error = SYSCTL_OUT(req, buffer, calculatedSize);
 
@@ -730,7 +747,8 @@ exit:
 	return error;
 }
 
-int IOStatistics::getWorkLoopStatistics(sysctl_req *req)
+int
+IOStatistics::getWorkLoopStatistics(sysctl_req *req)
 {
 	int error;
 	uint32_t calculatedSize, size;
@@ -743,14 +761,14 @@ int IOStatistics::getWorkLoopStatistics(sysctl_req *req)
 
 	/* Approximate how much we need to allocate (worse case estimate) */
 	calculatedSize = sizeof(IOStatisticsWorkLoop) * registeredWorkloops +
-					 sizeof(uint32_t) * attachedEventSources;
+	    sizeof(uint32_t) * attachedEventSources;
 
 	/* Size request? */
 	if (req->oldptr == USER_ADDR_NULL) {
 		error = SYSCTL_OUT(req, NULL, calculatedSize);
 		goto exit;
 	}
-	
+
 	/* Read only */
 	if (req->newptr != USER_ADDR_NULL) {
 		error = EPERM;
@@ -764,12 +782,12 @@ int IOStatistics::getWorkLoopStatistics(sysctl_req *req)
 	}
 	memset(buffer, 0, calculatedSize);
 	header = (IOStatisticsWorkLoopHeader*)((void*)buffer);
-	
+
 	header->sig = IOSTATISTICS_SIG_WORKLOOP;
 	header->ver = IOSTATISTICS_VER;
 
 	header->seq = sequenceID;
-	
+
 	header->workloopCount = registeredWorkloops;
 
 	size = copyWorkLoopStatistics(&header->workLoopStats);
@@ -787,8 +805,9 @@ exit:
 	return error;
 }
 
-int IOStatistics::getUserClientStatistics(sysctl_req *req)
-{	
+int
+IOStatistics::getUserClientStatistics(sysctl_req *req)
+{
 	int error;
 	uint32_t calculatedSize, size;
 	char *buffer;
@@ -800,9 +819,9 @@ int IOStatistics::getUserClientStatistics(sysctl_req *req)
 	IORWLockRead(IOStatistics::lock);
 
 	/* Work out how much we need to allocate */
-	calculatedSize = sizeof(IOStatisticsUserClientHeader) + 
-					 sizeof(IOStatisticsUserClientCall) * IOKIT_STATISTICS_RECORDED_USERCLIENT_PROCS * loadedKexts;
-	
+	calculatedSize = sizeof(IOStatisticsUserClientHeader) +
+	    sizeof(IOStatisticsUserClientCall) * IOKIT_STATISTICS_RECORDED_USERCLIENT_PROCS * loadedKexts;
+
 	/* Size request? */
 	if (req->oldptr == USER_ADDR_NULL) {
 		error = SYSCTL_OUT(req, NULL, calculatedSize);
@@ -832,19 +851,18 @@ int IOStatistics::getUserClientStatistics(sysctl_req *req)
 
 	header->sig = IOSTATISTICS_SIG_USERCLIENT;
 	header->ver = IOSTATISTICS_VER;
-	
+
 	header->seq = sequenceID;
 
 	header->processes = 0;
 
 	size = copyUserClientStatistics(header, requestedLoadTag);
-	
+
 	assert((sizeof(IOStatisticsUserClientHeader) + size) <= calculatedSize);
-	
+
 	if (size) {
 		error = SYSCTL_OUT(req, buffer, sizeof(IOStatisticsUserClientHeader) + size);
-	}
-	else {
+	} else {
 		error = EINVAL;
 	}
 
@@ -855,16 +873,18 @@ exit:
 	return error;
 }
 
-uint32_t IOStatistics::copyGlobalStatistics(IOStatisticsGlobal *stats)
+uint32_t
+IOStatistics::copyGlobalStatistics(IOStatisticsGlobal *stats)
 {
 	stats->kextCount = loadedKexts;
 	stats->classCount = registeredClasses;
 	stats->workloops = registeredWorkloops;
-	
+
 	return sizeof(IOStatisticsGlobal);
 }
 
-uint32_t IOStatistics::copyKextStatistics(IOStatisticsKext *stats)
+uint32_t
+IOStatistics::copyKextStatistics(IOStatisticsKext *stats)
 {
 	KextNode *ke;
 	ClassNode *ce;
@@ -880,20 +900,21 @@ uint32_t IOStatistics::copyKextStatistics(IOStatisticsKext *stats)
 		SLIST_FOREACH(ce, &ke->classList, lLink) {
 			stats->classIndexes[index++] = ce->classID;
 		}
-		
+
 		stats = (IOStatisticsKext *)((void*)((char*)stats + sizeof(IOStatisticsKext) + (ke->classes * sizeof(uint32_t))));
 	}
 
-	return (sizeof(IOStatisticsKext) * loadedKexts + sizeof(uint32_t) * registeredClasses);
+	return sizeof(IOStatisticsKext) * loadedKexts + sizeof(uint32_t) * registeredClasses;
 }
 
-uint32_t IOStatistics::copyMemoryStatistics(IOStatisticsMemory *stats)
+uint32_t
+IOStatistics::copyMemoryStatistics(IOStatisticsMemory *stats)
 {
 	KextNode *ke;
 
 	RB_FOREACH(ke, KextTree, &kextHead) {
 		stats->allocatedSize = ke->memoryCounters[kIOStatisticsMalloc];
-		stats->freedSize = ke->memoryCounters[kIOStatisticsFree]; 
+		stats->freedSize = ke->memoryCounters[kIOStatisticsFree];
 		stats->allocatedAlignedSize = ke->memoryCounters[kIOStatisticsMallocAligned];
 		stats->freedAlignedSize = ke->memoryCounters[kIOStatisticsFreeAligned];
 		stats->allocatedContiguousSize = ke->memoryCounters[kIOStatisticsMallocContiguous];
@@ -902,11 +923,12 @@ uint32_t IOStatistics::copyMemoryStatistics(IOStatisticsMemory *stats)
 		stats->freedPageableSize = ke->memoryCounters[kIOStatisticsFreePageable];
 		stats++;
 	}
-	
-	return (sizeof(IOStatisticsMemory) * loadedKexts);
+
+	return sizeof(IOStatisticsMemory) * loadedKexts;
 }
 
-uint32_t IOStatistics::copyClassStatistics(IOStatisticsClass *stats)
+uint32_t
+IOStatistics::copyClassStatistics(IOStatisticsClass *stats)
 {
 	KextNode *ke;
 	ClassNode *ce;
@@ -914,7 +936,7 @@ uint32_t IOStatistics::copyClassStatistics(IOStatisticsClass *stats)
 	RB_FOREACH(ke, KextTree, &kextHead) {
 		SLIST_FOREACH(ce, &ke->classList, lLink) {
 			stats->classID = ce->classID;
-			stats->superClassID = ce->superClassID;		
+			stats->superClassID = ce->superClassID;
 			stats->classSize = ce->metaClass->getClassSize();
 
 			stats++;
@@ -924,7 +946,8 @@ uint32_t IOStatistics::copyClassStatistics(IOStatisticsClass *stats)
 	return sizeof(IOStatisticsClass) * registeredClasses;
 }
 
-uint32_t IOStatistics::copyCounterStatistics(IOStatisticsCounter *stats)
+uint32_t
+IOStatistics::copyCounterStatistics(IOStatisticsCounter *stats)
 {
 	KextNode *ke;
 	ClassNode *ce;
@@ -954,45 +977,45 @@ uint32_t IOStatistics::copyCounterStatistics(IOStatisticsCounter *stats)
 
 			/* Event source counters */
 			SLIST_FOREACH(counter, &ce->counterList, link) {
-				switch (counter->type) {	
-					case kIOStatisticsInterruptEventSourceCounter:
-						iec->created++;
-						iec->produced += counter->u.interrupt.produced;
-						iec->checksForWork += counter->u.interrupt.checksForWork;
-						break;
-					case kIOStatisticsFilterInterruptEventSourceCounter:
-						fiec->created++;
-						fiec->produced += counter->u.filter.produced;
-						fiec->checksForWork += counter->u.filter.checksForWork;
-						break;
-					case kIOStatisticsTimerEventSourceCounter:
-						tec->created++;
-						tec->timeouts += counter->u.timer.timeouts;
-						tec->checksForWork += counter->u.timer.checksForWork;
-						tec->timeOnGate += counter->timeOnGate;
-						tec->closeGateCalls += counter->closeGateCalls;
-						tec->openGateCalls += counter->openGateCalls;
-						break;
-					case kIOStatisticsCommandGateCounter:
-						cgc->created++;
-						cgc->timeOnGate += counter->timeOnGate;
-						cgc->actionCalls += counter->u.commandGate.actionCalls;
-						break;
-					case kIOStatisticsCommandQueueCounter:
-						cqc->created++;
-						cqc->actionCalls += counter->u.commandQueue.actionCalls;
-						break;
-					case kIOStatisticsDerivedEventSourceCounter:
-						dec->created++;
-						dec->timeOnGate += counter->timeOnGate;
-						dec->closeGateCalls += counter->closeGateCalls;
-						dec->openGateCalls += counter->openGateCalls;
-						break;
-					default:
-						break;
+				switch (counter->type) {
+				case kIOStatisticsInterruptEventSourceCounter:
+					iec->created++;
+					iec->produced += counter->u.interrupt.produced;
+					iec->checksForWork += counter->u.interrupt.checksForWork;
+					break;
+				case kIOStatisticsFilterInterruptEventSourceCounter:
+					fiec->created++;
+					fiec->produced += counter->u.filter.produced;
+					fiec->checksForWork += counter->u.filter.checksForWork;
+					break;
+				case kIOStatisticsTimerEventSourceCounter:
+					tec->created++;
+					tec->timeouts += counter->u.timer.timeouts;
+					tec->checksForWork += counter->u.timer.checksForWork;
+					tec->timeOnGate += counter->timeOnGate;
+					tec->closeGateCalls += counter->closeGateCalls;
+					tec->openGateCalls += counter->openGateCalls;
+					break;
+				case kIOStatisticsCommandGateCounter:
+					cgc->created++;
+					cgc->timeOnGate += counter->timeOnGate;
+					cgc->actionCalls += counter->u.commandGate.actionCalls;
+					break;
+				case kIOStatisticsCommandQueueCounter:
+					cqc->created++;
+					cqc->actionCalls += counter->u.commandQueue.actionCalls;
+					break;
+				case kIOStatisticsDerivedEventSourceCounter:
+					dec->created++;
+					dec->timeOnGate += counter->timeOnGate;
+					dec->closeGateCalls += counter->closeGateCalls;
+					dec->openGateCalls += counter->openGateCalls;
+					break;
+				default:
+					break;
 				}
 			}
-		
+
 			stats++;
 		}
 	}
@@ -1000,7 +1023,8 @@ uint32_t IOStatistics::copyCounterStatistics(IOStatisticsCounter *stats)
 	return sizeof(IOStatisticsCounter) * registeredClasses;
 }
 
-uint32_t IOStatistics::copyKextIdentifiers(IOStatisticsKextIdentifier *kextIDs)
+uint32_t
+IOStatistics::copyKextIdentifiers(IOStatisticsKextIdentifier *kextIDs)
 {
 	KextNode *ke;
 
@@ -1009,10 +1033,11 @@ uint32_t IOStatistics::copyKextIdentifiers(IOStatisticsKextIdentifier *kextIDs)
 		kextIDs++;
 	}
 
-	return (sizeof(IOStatisticsKextIdentifier) * loadedKexts);
+	return sizeof(IOStatisticsKextIdentifier) * loadedKexts;
 }
 
-uint32_t IOStatistics::copyClassNames(IOStatisticsClassName *classNames)
+uint32_t
+IOStatistics::copyClassNames(IOStatisticsClassName *classNames)
 {
 	KextNode *ke;
 	ClassNode *ce;
@@ -1023,11 +1048,12 @@ uint32_t IOStatistics::copyClassNames(IOStatisticsClassName *classNames)
 			classNames++;
 		}
 	}
-		
-	return (sizeof(IOStatisticsClassName) * registeredClasses);
+
+	return sizeof(IOStatisticsClassName) * registeredClasses;
 }
 
-uint32_t IOStatistics::copyWorkLoopStatistics(IOStatisticsWorkLoop *stats) 
+uint32_t
+IOStatistics::copyWorkLoopStatistics(IOStatisticsWorkLoop *stats)
 {
 	KextNode *ke;
 	IOWorkLoopCounter *wlc;
@@ -1044,9 +1070,9 @@ uint32_t IOStatistics::copyWorkLoopStatistics(IOStatisticsWorkLoop *stats)
 				stats->dependentKextLoadTags[stats->dependentKexts] = dependentNode->loadTag;
 				stats->dependentKexts++;
 			}
-			
+
 			size = sizeof(IOStatisticsWorkLoop) + (sizeof(uint32_t) * stats->dependentKexts);
-			
+
 			accumulatedSize += size;
 			stats = (IOStatisticsWorkLoop*)((void*)((char*)stats + size));
 		}
@@ -1055,7 +1081,8 @@ uint32_t IOStatistics::copyWorkLoopStatistics(IOStatisticsWorkLoop *stats)
 	return accumulatedSize;
 }
 
-uint32_t IOStatistics::copyUserClientStatistics(IOStatisticsUserClientHeader *stats, uint32_t loadTag) 
+uint32_t
+IOStatistics::copyUserClientStatistics(IOStatisticsUserClientHeader *stats, uint32_t loadTag)
 {
 	KextNode *sought, *found = NULL;
 	uint32_t procs = 0;
@@ -1067,7 +1094,7 @@ uint32_t IOStatistics::copyUserClientStatistics(IOStatisticsUserClientHeader *st
 			break;
 		}
 	}
-	
+
 	if (!found) {
 		return 0;
 	}
@@ -1083,8 +1110,9 @@ uint32_t IOStatistics::copyUserClientStatistics(IOStatisticsUserClientHeader *st
 	return sizeof(IOStatisticsUserClientCall) * stats->processes;
 }
 
-void IOStatistics::storeUserClientCallInfo(IOUserClient *userClient, IOUserClientCounter *counter)
-{	
+void
+IOStatistics::storeUserClientCallInfo(IOUserClient *userClient, IOUserClientCounter *counter)
+{
 	OSString *ossUserClientCreator = NULL;
 	int32_t pid = -1;
 	KextNode *parentKext;
@@ -1092,49 +1120,51 @@ void IOStatistics::storeUserClientCallInfo(IOUserClient *userClient, IOUserClien
 	uint32_t count = 0;
 	const char *ptr = NULL;
 	OSObject *obj;
-	
+
 	/* TODO: see if this can be more efficient */
 	obj = userClient->copyProperty("IOUserClientCreator",
-					gIOServicePlane,
-					kIORegistryIterateRecursively | kIORegistryIterateParents);
+	    gIOServicePlane,
+	    kIORegistryIterateRecursively | kIORegistryIterateParents);
 
-	if (!obj)
+	if (!obj) {
 		goto err_nounlock;
+	}
 
 	ossUserClientCreator = OSDynamicCast(OSString, obj);
 
 	if (ossUserClientCreator) {
-		uint32_t len, lenIter = 0; 
-		
+		uint32_t len, lenIter = 0;
+
 		ptr = ossUserClientCreator->getCStringNoCopy();
 		len = ossUserClientCreator->getLength();
-		
+
 		while ((*ptr != ' ') && (lenIter < len)) {
 			ptr++;
 			lenIter++;
 		}
-		
+
 		if (lenIter < len) {
 			ptr++; // Skip the space
 			lenIter++;
 			pid = 0;
-			while ( (*ptr != ',') && (lenIter < len)) {
-				pid = pid*10 + (*ptr - '0');
+			while ((*ptr != ',') && (lenIter < len)) {
+				pid = pid * 10 + (*ptr - '0');
 				ptr++;
 				lenIter++;
 			}
-			
-			if(lenIter == len) {
+
+			if (lenIter == len) {
 				pid = -1;
 			} else {
 				ptr += 2;
 			}
 		}
 	}
-	
-	if (-1 == pid)
+
+	if (-1 == pid) {
 		goto err_nounlock;
-	
+	}
+
 	IORWLockWrite(lock);
 
 	parentKext = counter->parentClass->parentKext;
@@ -1146,13 +1176,12 @@ void IOStatistics::storeUserClientCallInfo(IOUserClient *userClient, IOUserClien
 			if (count) {
 				TAILQ_REMOVE(&parentKext->userClientCallList, entry, link);
 				break;
-			}
-			else {
+			} else {
 				/* At the head already, so increment and return */
 				goto err_unlock;
 			}
 		}
-		
+
 		count++;
 	}
 
@@ -1161,12 +1190,11 @@ void IOStatistics::storeUserClientCallInfo(IOUserClient *userClient, IOUserClien
 			/* Max elements hit, so reuse the last */
 			entry = TAILQ_LAST(&parentKext->userClientCallList, ProcessEntryList);
 			TAILQ_REMOVE(&parentKext->userClientCallList, entry, link);
-		}
-		else {
+		} else {
 			/* Otherwise, allocate a new entry */
 			entry = (IOUserClientProcessEntry*)kalloc(sizeof(IOUserClientProcessEntry));
 			if (!entry) {
-			    IORWLockUnlock(lock);
+				IORWLockUnlock(lock);
 				return;
 			}
 		}
@@ -1175,43 +1203,50 @@ void IOStatistics::storeUserClientCallInfo(IOUserClient *userClient, IOUserClien
 		entry->pid = pid;
 		entry->calls = 1;
 	}
-	
+
 	TAILQ_FOREACH(nextEntry, &parentKext->userClientCallList, link) {
-		if (nextEntry->calls <= entry->calls)
+		if (nextEntry->calls <= entry->calls) {
 			break;
-			
+		}
+
 		prevEntry = nextEntry;
 	}
-	
-	if (!prevEntry)
+
+	if (!prevEntry) {
 		TAILQ_INSERT_HEAD(&parentKext->userClientCallList, entry, link);
-	else
+	} else {
 		TAILQ_INSERT_AFTER(&parentKext->userClientCallList, prevEntry, entry, link);
-	
+	}
+
 err_unlock:
 	IORWLockUnlock(lock);
-        
+
 err_nounlock:
-	if (obj)
+	if (obj) {
 		obj->release();
+	}
 }
 
-void IOStatistics::countUserClientCall(IOUserClient *client) {
+void
+IOStatistics::countUserClientCall(IOUserClient *client)
+{
 	IOUserClient::ExpansionData *data;
 	IOUserClientCounter *counter;
-    
+
 	/* Guard against an uninitialized client object - <rdar://problem/8577946> */
 	if (!(data = client->reserved)) {
 		return;
 	}
-    
+
 	if ((counter = data->counter)) {
 		storeUserClientCallInfo(client, counter);
 		OSIncrementAtomic(&counter->clientCalls);
 	}
 }
 
-KextNode *IOStatistics::getKextNodeFromBacktrace(boolean_t write) {
+KextNode *
+IOStatistics::getKextNodeFromBacktrace(boolean_t write)
+{
 	const uint32_t btMin = 3;
 
 	void *bt[16];
@@ -1241,11 +1276,10 @@ KextNode *IOStatistics::getKextNodeFromBacktrace(boolean_t write) {
 		while (ke) {
 			if (*scanAddr < ke->address) {
 				ke = RB_LEFT(ke, addressLink);
-			}
-			else {
+			} else {
 				if ((*scanAddr < ke->address_end) && (*scanAddr >= ke->address)) {
- 					if (!ke->kext->isKernelComponent()) {
- 						return ke;
+					if (!ke->kext->isKernelComponent()) {
+						return ke;
 					} else {
 						found = ke;
 					}
@@ -1258,19 +1292,23 @@ KextNode *IOStatistics::getKextNodeFromBacktrace(boolean_t write) {
 	if (!found) {
 		IORWLockUnlock(lock);
 	}
-  
+
 	return found;
 }
-  
-void IOStatistics::releaseKextNode(KextNode *node) {
+
+void
+IOStatistics::releaseKextNode(KextNode *node)
+{
 #pragma unused(node)
 	IORWLockUnlock(lock);
 }
 
 /* IOLib allocations */
-void IOStatistics::countAlloc(uint32_t index, vm_size_t size) {
+void
+IOStatistics::countAlloc(uint32_t index, vm_size_t size)
+{
 	KextNode *ke;
-  
+
 	if (!enabled) {
 		return;
 	}

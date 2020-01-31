@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,12 +22,12 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
- * 
+ *
  */
 
 /* The routines in this module are all obsolete */
@@ -64,39 +64,40 @@
 /*
  *	thread_set_policy
  *
- *	Set scheduling policy and parameters, both base and limit, for 
+ *	Set scheduling policy and parameters, both base and limit, for
  *	the given thread. Policy can be any policy implemented by the
- *	processor set, whether enabled or not. 
+ *	processor set, whether enabled or not.
  */
 kern_return_t
 thread_set_policy(
-	thread_t				thread,
-	processor_set_t			pset,
-	policy_t				policy,
-	policy_base_t			base,
-	mach_msg_type_number_t	base_count,
-	policy_limit_t			limit,
-	mach_msg_type_number_t	limit_count)
+	thread_t                                thread,
+	processor_set_t                 pset,
+	policy_t                                policy,
+	policy_base_t                   base,
+	mach_msg_type_number_t  base_count,
+	policy_limit_t                  limit,
+	mach_msg_type_number_t  limit_count)
 {
-	int 					max, bas;
-	kern_return_t			result = KERN_SUCCESS;
+	int                                     max, bas;
+	kern_return_t                   result = KERN_SUCCESS;
 
-	if (	thread == THREAD_NULL			||
-			pset == PROCESSOR_SET_NULL || pset != &pset0)
-		return (KERN_INVALID_ARGUMENT);
+	if (thread == THREAD_NULL ||
+	    pset == PROCESSOR_SET_NULL || pset != &pset0) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
-	if (invalid_policy(policy))
-		return(KERN_INVALID_ARGUMENT);	
+	if (invalid_policy(policy)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	switch (policy) {
-
 	case POLICY_RR:
 	{
-		policy_rr_base_t		rr_base = (policy_rr_base_t) base;
-		policy_rr_limit_t		rr_limit = (policy_rr_limit_t) limit;
+		policy_rr_base_t                rr_base = (policy_rr_base_t) base;
+		policy_rr_limit_t               rr_limit = (policy_rr_limit_t) limit;
 
-		if (	base_count != POLICY_RR_BASE_COUNT		||
-				limit_count != POLICY_RR_LIMIT_COUNT		) {
+		if (base_count != POLICY_RR_BASE_COUNT ||
+		    limit_count != POLICY_RR_LIMIT_COUNT) {
 			result = KERN_INVALID_ARGUMENT;
 			break;
 		}
@@ -113,11 +114,11 @@ thread_set_policy(
 
 	case POLICY_FIFO:
 	{
-		policy_fifo_base_t		fifo_base = (policy_fifo_base_t) base;
-		policy_fifo_limit_t		fifo_limit = (policy_fifo_limit_t) limit;
+		policy_fifo_base_t              fifo_base = (policy_fifo_base_t) base;
+		policy_fifo_limit_t             fifo_limit = (policy_fifo_limit_t) limit;
 
-		if (	base_count != POLICY_FIFO_BASE_COUNT	||
-				limit_count != POLICY_FIFO_LIMIT_COUNT)		{
+		if (base_count != POLICY_FIFO_BASE_COUNT ||
+		    limit_count != POLICY_FIFO_LIMIT_COUNT) {
 			result = KERN_INVALID_ARGUMENT;
 			break;
 		}
@@ -134,12 +135,12 @@ thread_set_policy(
 
 	case POLICY_TIMESHARE:
 	{
-		policy_timeshare_base_t		ts_base = (policy_timeshare_base_t) base;
-		policy_timeshare_limit_t	ts_limit =
-						(policy_timeshare_limit_t) limit;
+		policy_timeshare_base_t         ts_base = (policy_timeshare_base_t) base;
+		policy_timeshare_limit_t        ts_limit =
+		    (policy_timeshare_limit_t) limit;
 
-		if (	base_count != POLICY_TIMESHARE_BASE_COUNT		||
-				limit_count != POLICY_TIMESHARE_LIMIT_COUNT			) {
+		if (base_count != POLICY_TIMESHARE_BASE_COUNT ||
+		    limit_count != POLICY_TIMESHARE_LIMIT_COUNT) {
 			result = KERN_INVALID_ARGUMENT;
 			break;
 		}
@@ -159,59 +160,59 @@ thread_set_policy(
 	}
 
 	if (result != KERN_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	/* Note that we do not pass on max priority. */
 	if (result == KERN_SUCCESS) {
-	    result = thread_set_mode_and_absolute_pri(thread, policy, bas);
+		result = thread_set_mode_and_absolute_pri(thread, policy, bas);
 	}
 
-	return (result);
+	return result;
 }
 
 
 /*
- * 	thread_policy
+ *      thread_policy
  *
  *	Set scheduling policy and parameters, both base and limit, for
  *	the given thread. Policy must be a policy which is enabled for the
- *	processor set. Change contained threads if requested. 
+ *	processor set. Change contained threads if requested.
  */
 kern_return_t
 thread_policy(
-	thread_t				thread,
-	policy_t				policy,
-	policy_base_t			base,
-	mach_msg_type_number_t	count,
-	boolean_t				set_limit)
+	thread_t                                thread,
+	policy_t                                policy,
+	policy_base_t                   base,
+	mach_msg_type_number_t  count,
+	boolean_t                               set_limit)
 {
-	kern_return_t			result = KERN_SUCCESS;
-	processor_set_t			pset = &pset0;
-	policy_limit_t			limit = NULL;
-	int						limcount = 0;
-	policy_rr_limit_data_t			rr_limit;
-	policy_fifo_limit_data_t		fifo_limit;
-	policy_timeshare_limit_data_t	ts_limit;
-	
-	if (thread == THREAD_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	kern_return_t                   result = KERN_SUCCESS;
+	processor_set_t                 pset = &pset0;
+	policy_limit_t                  limit = NULL;
+	int                                             limcount = 0;
+	policy_rr_limit_data_t                  rr_limit;
+	policy_fifo_limit_data_t                fifo_limit;
+	policy_timeshare_limit_data_t   ts_limit;
+
+	if (thread == THREAD_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	thread_mtx_lock(thread);
 
-	if (	invalid_policy(policy)											||
-			((POLICY_TIMESHARE | POLICY_RR | POLICY_FIFO) & policy) == 0	) {
+	if (invalid_policy(policy) ||
+	    ((POLICY_TIMESHARE | POLICY_RR | POLICY_FIFO) & policy) == 0) {
 		thread_mtx_unlock(thread);
 
-		return (KERN_INVALID_POLICY);
+		return KERN_INVALID_POLICY;
 	}
 
 	if (set_limit) {
 		/*
-	 	 * 	Set scheduling limits to base priority.
+		 *      Set scheduling limits to base priority.
 		 */
 		switch (policy) {
-
 		case POLICY_RR:
 		{
 			policy_rr_base_t rr_base;
@@ -267,15 +268,12 @@ thread_policy(
 			result = KERN_INVALID_POLICY;
 			break;
 		}
-
-	}
-	else {
+	} else {
 		/*
 		 *	Use current scheduling limits. Ensure that the
 		 *	new base priority will not exceed current limits.
 		 */
 		switch (policy) {
-
 		case POLICY_RR:
 		{
 			policy_rr_base_t rr_base;
@@ -346,14 +344,14 @@ thread_policy(
 			result = KERN_INVALID_POLICY;
 			break;
 		}
-
 	}
 
 	thread_mtx_unlock(thread);
 
-	if (result == KERN_SUCCESS)
-	    result = thread_set_policy(thread, pset,
-					 policy, base, count, limit, limcount);
+	if (result == KERN_SUCCESS) {
+		result = thread_set_policy(thread, pset,
+		    policy, base, count, limit, limcount);
+	}
 
-	return(result);
+	return result;
 }

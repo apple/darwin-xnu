@@ -89,28 +89,27 @@ extern kern_return_t test_thread_call(void);
 struct xnupost_panic_widget xt_panic_widgets = {NULL, NULL, NULL, NULL};
 
 struct xnupost_test kernel_post_tests[] = {XNUPOST_TEST_CONFIG_BASIC(zalloc_test),
-                                           XNUPOST_TEST_CONFIG_BASIC(RandomULong_test),
-                                           XNUPOST_TEST_CONFIG_BASIC(test_os_log),
-                                           XNUPOST_TEST_CONFIG_BASIC(test_os_log_parallel),
+	                                   XNUPOST_TEST_CONFIG_BASIC(RandomULong_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(test_os_log),
+	                                   XNUPOST_TEST_CONFIG_BASIC(test_os_log_parallel),
 #ifdef __arm64__
-                                           XNUPOST_TEST_CONFIG_BASIC(arm64_munger_test),
-                                           XNUPOST_TEST_CONFIG_BASIC(ex_cb_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(arm64_munger_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(ex_cb_test),
 #if __ARM_PAN_AVAILABLE__
-                                           XNUPOST_TEST_CONFIG_BASIC(arm64_pan_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(arm64_pan_test),
 #endif
 #endif /* __arm64__ */
-                                           XNUPOST_TEST_CONFIG_BASIC(kcdata_api_test),
-                                           XNUPOST_TEST_CONFIG_BASIC(console_serial_test),
-                                           XNUPOST_TEST_CONFIG_BASIC(console_serial_alloc_rel_tests),
-                                           XNUPOST_TEST_CONFIG_BASIC(console_serial_parallel_log_tests),
+	                                   XNUPOST_TEST_CONFIG_BASIC(kcdata_api_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(console_serial_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(console_serial_alloc_rel_tests),
+	                                   XNUPOST_TEST_CONFIG_BASIC(console_serial_parallel_log_tests),
 #if defined(__arm__) || defined(__arm64__)
-                                           XNUPOST_TEST_CONFIG_BASIC(pmap_coredump_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(pmap_coredump_test),
 #endif
-                                           XNUPOST_TEST_CONFIG_BASIC(bitmap_post_test),
-                                         //XNUPOST_TEST_CONFIG_TEST_PANIC(kcdata_api_assert_tests)
-                                           XNUPOST_TEST_CONFIG_BASIC(test_thread_call),
-                                           XNUPOST_TEST_CONFIG_BASIC(priority_queue_test),
-};
+	                                   XNUPOST_TEST_CONFIG_BASIC(bitmap_post_test),
+	                                   //XNUPOST_TEST_CONFIG_TEST_PANIC(kcdata_api_assert_tests)
+	                                   XNUPOST_TEST_CONFIG_BASIC(test_thread_call),
+	                                   XNUPOST_TEST_CONFIG_BASIC(priority_queue_test), };
 
 uint32_t kernel_post_tests_count = sizeof(kernel_post_tests) / sizeof(xnupost_test_data_t);
 
@@ -127,8 +126,9 @@ boolean_t xnupost_should_run_test(uint32_t test_num);
 kern_return_t
 xnupost_parse_config()
 {
-	if (parse_config_retval != KERN_INVALID_CAPABILITY)
+	if (parse_config_retval != KERN_INVALID_CAPABILITY) {
 		return parse_config_retval;
+	}
 	PE_parse_boot_argn("kernPOST", &kernel_post_args, sizeof(kernel_post_args));
 
 	if (PE_parse_boot_argn("kernPOST_config", &kernel_post_test_configs[0], sizeof(kernel_post_test_configs)) == TRUE) {
@@ -158,8 +158,9 @@ xnupost_should_run_test(uint32_t test_num)
 
 			/* skip to the next "," */
 			while (*b != ',') {
-				if (*b == '\0')
+				if (*b == '\0') {
 					return FALSE;
+				}
 				b++;
 			}
 			/* skip past the ',' */
@@ -173,8 +174,9 @@ xnupost_should_run_test(uint32_t test_num)
 kern_return_t
 xnupost_list_tests(xnupost_test_t test_list, uint32_t test_count)
 {
-	if (KERN_SUCCESS != xnupost_parse_config())
+	if (KERN_SUCCESS != xnupost_parse_config()) {
 		return KERN_FAILURE;
+	}
 
 	xnupost_test_t testp;
 	for (uint32_t i = 0; i < test_count; i++) {
@@ -192,7 +194,7 @@ xnupost_list_tests(xnupost_test_t test_list, uint32_t test_count)
 			}
 		}
 		printf("\n[TEST] TOC#%u name: %s expected: %d config: %x\n", testp->xt_test_num, testp->xt_name, testp->xt_expected_retval,
-		       testp->xt_config);
+		    testp->xt_config);
 	}
 
 	return KERN_SUCCESS;
@@ -224,8 +226,8 @@ xnupost_run_tests(xnupost_test_t test_list, uint32_t test_count)
 		 */
 		if ((testp->xt_config & XT_CONFIG_EXPECT_PANIC) && !(kernel_post_args & POSTARGS_CONTROLLER_AVAILABLE)) {
 			T_SKIP(
-			    "Test expects panic but "
-			    "no controller is present");
+				"Test expects panic but "
+				"no controller is present");
 			testp->xt_test_actions = XT_ACTION_SKIPPED;
 			continue;
 		}
@@ -265,8 +267,9 @@ kernel_do_post()
 kern_return_t
 xnupost_register_panic_widget(xt_panic_widget_func funcp, const char * funcname, void * context, void ** outval)
 {
-	if (xt_panic_widgets.xtp_context_p != NULL || xt_panic_widgets.xtp_func != NULL)
+	if (xt_panic_widgets.xtp_context_p != NULL || xt_panic_widgets.xtp_func != NULL) {
 		return KERN_RESOURCE_SHORTAGE;
+	}
 
 	xt_panic_widgets.xtp_context_p = context;
 	xt_panic_widgets.xtp_func      = funcp;
@@ -339,8 +342,9 @@ _xt_generic_assert_check(const char * s, void * str_to_match, void ** outval)
 		ret = XT_RET_W_SUCCESS;
 	}
 
-	if (outval)
+	if (outval) {
 		*outval = (void *)(uintptr_t)ret;
+	}
 	return ret;
 }
 
@@ -419,16 +423,16 @@ compare_numbers_descending(const void * a, const void * b)
 
 /* Node structure for the priority queue tests */
 struct priority_queue_test_node {
-	struct priority_queue_entry	link;
-	priority_queue_key_t		node_key;
+	struct priority_queue_entry     link;
+	priority_queue_key_t            node_key;
 };
 
 static void
 priority_queue_test_queue(struct priority_queue *pq, int type,
-		priority_queue_compare_fn_t cmp_fn)
+    priority_queue_compare_fn_t cmp_fn)
 {
 	/* Configuration for the test */
-#define PRIORITY_QUEUE_NODES	7
+#define PRIORITY_QUEUE_NODES    7
 	static uint32_t priority_list[] = { 20, 3, 7, 6, 50, 2, 8};
 	uint32_t increase_pri = 100;
 	uint32_t decrease_pri = 90;
@@ -479,14 +483,14 @@ priority_queue_test_queue(struct priority_queue *pq, int type,
 
 	/* Test the maximum operation by comparing max node with local list */
 	result = priority_queue_max(pq, struct priority_queue_test_node, link);
-	T_ASSERT((result->node_key == priority_list[0]), "(heap (%u) == qsort (%u)) priority queue max node lookup", 
-		(uint32_t)result->node_key, priority_list[0]);
+	T_ASSERT((result->node_key == priority_list[0]), "(heap (%u) == qsort (%u)) priority queue max node lookup",
+	    (uint32_t)result->node_key, priority_list[0]);
 
 	/* Remove all remaining elements and verify they match local list */
 	for (int i = 0; i < PRIORITY_QUEUE_NODES; i++) {
 		result = priority_queue_remove_max(pq, struct priority_queue_test_node, link, cmp_fn);
-		T_ASSERT((result->node_key == priority_list[i]), "(heap (%u) == qsort (%u)) priority queue max node removal", 
-			(uint32_t)result->node_key, priority_list[i]);
+		T_ASSERT((result->node_key == priority_list[i]), "(heap (%u) == qsort (%u)) priority queue max node removal",
+		    (uint32_t)result->node_key, priority_list[i]);
 	}
 
 	priority_queue_destroy(pq, struct priority_queue_test_node, link, ^(void *n) {
@@ -513,12 +517,12 @@ priority_queue_test(void)
 	T_SETUPEND;
 
 	priority_queue_test_queue(&pq, PRIORITY_QUEUE_BUILTIN_KEY,
-			PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
+	    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
 
 	priority_queue_test_queue(&pq_nodes, PRIORITY_QUEUE_GENERIC_KEY,
-			priority_heap_make_comparator(a, b, struct priority_queue_test_node, link, {
-				return (a->node_key > b->node_key) ? 1 : ((a->node_key == b->node_key) ? 0 : -1);
-			}));
+	    priority_heap_make_comparator(a, b, struct priority_queue_test_node, link, {
+		return (a->node_key > b->node_key) ? 1 : ((a->node_key == b->node_key) ? 0 : -1);
+	}));
 
 	return KERN_SUCCESS;
 }
@@ -588,14 +592,16 @@ RandomULong_test()
 	 */
 	for (i = 1; i < CONF_ITERATIONS; i++) {
 		bit_entropy = count_bits(numbers[i - 1] ^ numbers[i]);
-		if (bit_entropy < min_bit_entropy)
+		if (bit_entropy < min_bit_entropy) {
 			min_bit_entropy = bit_entropy;
-		if (bit_entropy > max_bit_entropy)
+		}
+		if (bit_entropy > max_bit_entropy) {
 			max_bit_entropy = bit_entropy;
+		}
 
 		if (bit_entropy < CONF_MIN_ENTROPY) {
 			T_EXPECT_GE_UINT(bit_entropy, CONF_MIN_ENTROPY,
-			                 "Number of differing bits in consecutive numbers does not satisfy the min criteria.");
+			    "Number of differing bits in consecutive numbers does not satisfy the min criteria.");
 		}
 
 		aggregate_bit_entropy += bit_entropy;
@@ -606,7 +612,7 @@ RandomULong_test()
 	T_EXPECT_GE_UINT(mean_bit_entropy, CONF_MEAN_ENTROPY, "Test criteria for mean number of differing bits.");
 	T_PASS("Mean bit entropy criteria satisfied (Required %d, Actual: %d).", CONF_MEAN_ENTROPY, mean_bit_entropy);
 	T_LOG("{PERFORMANCE} iterations: %d, min_bit_entropy: %d, mean_bit_entropy: %d, max_bit_entropy: %d", CONF_ITERATIONS,
-	      min_bit_entropy, mean_bit_entropy, max_bit_entropy);
+	    min_bit_entropy, mean_bit_entropy, max_bit_entropy);
 	T_PERF("min_bit_entropy_" T_TOSTRING(CONF_ITERATIONS), min_bit_entropy, "bits", "minimum bit entropy in RNG. High is better");
 	T_PERF("mean_bit_entropy_" T_TOSTRING(CONF_ITERATIONS), mean_bit_entropy, "bits", "mean bit entropy in RNG. High is better");
 	T_PERF("max_bit_entropy_" T_TOSTRING(CONF_ITERATIONS), max_bit_entropy, "bits", "max bit entropy in RNG. High is better");
@@ -623,15 +629,17 @@ RandomULong_test()
 		 * Set the window
 		 */
 		window_end = window_start + CONF_WINDOW_SIZE - 1;
-		if (window_end >= CONF_ITERATIONS)
+		if (window_end >= CONF_ITERATIONS) {
 			window_end = CONF_ITERATIONS - 1;
+		}
 
 		trend = 0;
 		for (i = window_start; i < window_end; i++) {
-			if (numbers[i] < numbers[i + 1])
+			if (numbers[i] < numbers[i + 1]) {
 				trend++;
-			else if (numbers[i] > numbers[i + 1])
+			} else if (numbers[i] > numbers[i + 1]) {
 				trend--;
+			}
 		}
 		/*
 		 * Check that there is no increasing or decreasing trend
@@ -648,7 +656,6 @@ RandomULong_test()
 		 * Move to the next window
 		 */
 		window_start++;
-
 	} while (window_start < (CONF_ITERATIONS - 1));
 	T_PASS("Did not find increasing/decreasing trends in a window of %d numbers.", CONF_WINDOW_SIZE);
 
@@ -678,10 +685,10 @@ struct sample_disk_io_stats {
 } __attribute__((packed));
 
 struct kcdata_subtype_descriptor test_disk_io_stats_def[] = {
-    {KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT64, 0 * sizeof(uint64_t), sizeof(uint64_t), "disk_reads_count"},
-    {KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT64, 1 * sizeof(uint64_t), sizeof(uint64_t), "disk_reads_size"},
-    {KCS_SUBTYPE_FLAGS_ARRAY, KC_ST_UINT64, 2 * sizeof(uint64_t), KCS_SUBTYPE_PACK_SIZE(4, sizeof(uint64_t)), "io_priority_count"},
-    {KCS_SUBTYPE_FLAGS_ARRAY, KC_ST_UINT64, (2 + 4) * sizeof(uint64_t), sizeof(uint64_t), "io_priority_size"},
+	{KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT64, 0 * sizeof(uint64_t), sizeof(uint64_t), "disk_reads_count"},
+	{KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT64, 1 * sizeof(uint64_t), sizeof(uint64_t), "disk_reads_size"},
+	{KCS_SUBTYPE_FLAGS_ARRAY, KC_ST_UINT64, 2 * sizeof(uint64_t), KCS_SUBTYPE_PACK_SIZE(4, sizeof(uint64_t)), "io_priority_count"},
+	{KCS_SUBTYPE_FLAGS_ARRAY, KC_ST_UINT64, (2 + 4) * sizeof(uint64_t), sizeof(uint64_t), "io_priority_size"},
 };
 
 kern_return_t
@@ -696,12 +703,12 @@ kcdata_api_test()
 	/* another negative test with buffer size < 32 bytes */
 	char data[30] = "sample_disk_io_stats";
 	retval = kcdata_memory_static_init(&test_kc_data, (mach_vm_address_t)&data, KCDATA_BUFFER_BEGIN_CRASHINFO, sizeof(data),
-	                                   KCFLAG_USE_MEMCOPY);
+	    KCFLAG_USE_MEMCOPY);
 	T_ASSERT(retval == KERN_RESOURCE_SHORTAGE, "init with 30 bytes failed as expected with KERN_RESOURCE_SHORTAGE");
 
 	/* test with COPYOUT for 0x0 address. Should return KERN_NO_ACCESS */
 	retval = kcdata_memory_static_init(&test_kc_data, (mach_vm_address_t)0, KCDATA_BUFFER_BEGIN_CRASHINFO, PAGE_SIZE,
-	                                   KCFLAG_USE_COPYOUT);
+	    KCFLAG_USE_COPYOUT);
 	T_ASSERT(retval == KERN_NO_ACCESS, "writing to 0x0 returned KERN_NO_ACCESS");
 
 	/* test with successful kcdata_memory_static_init */
@@ -710,7 +717,7 @@ kcdata_api_test()
 	T_EXPECT_NOTNULL(address, "kalloc of PAGE_SIZE data.");
 
 	retval = kcdata_memory_static_init(&test_kc_data, (mach_vm_address_t)address, KCDATA_BUFFER_BEGIN_STACKSHOT, PAGE_SIZE,
-	                                   KCFLAG_USE_MEMCOPY);
+	    KCFLAG_USE_MEMCOPY);
 
 	T_ASSERT(retval == KERN_SUCCESS, "successful kcdata_memory_static_init call");
 
@@ -786,38 +793,38 @@ kcdata_api_test()
 	/* test adding of custom type */
 
 	retval = kcdata_add_type_definition(&test_kc_data, 0x999, data, &test_disk_io_stats_def[0],
-	                                    sizeof(test_disk_io_stats_def) / sizeof(struct kcdata_subtype_descriptor));
+	    sizeof(test_disk_io_stats_def) / sizeof(struct kcdata_subtype_descriptor));
 	T_ASSERT(retval == KERN_SUCCESS, "adding custom type succeeded.");
 
 	return KERN_SUCCESS;
 }
 
 /*
-kern_return_t
-kcdata_api_assert_tests()
-{
-	kern_return_t retval       = 0;
-	void * assert_check_retval = NULL;
-	test_kc_data2.kcd_length   = 0xdeadbeef;
-	mach_vm_address_t address = (mach_vm_address_t)kalloc(PAGE_SIZE);
-	T_EXPECT_NOTNULL(address, "kalloc of PAGE_SIZE data.");
-
-	retval = kcdata_memory_static_init(&test_kc_data2, (mach_vm_address_t)address, KCDATA_BUFFER_BEGIN_STACKSHOT, PAGE_SIZE,
-	                                   KCFLAG_USE_MEMCOPY);
-
-	T_ASSERT(retval == KERN_SUCCESS, "successful kcdata_memory_static_init call");
-
-	retval = T_REGISTER_ASSERT_CHECK("KCDATA_DESC_MAXLEN", &assert_check_retval);
-	T_ASSERT(retval == KERN_SUCCESS, "registered assert widget");
-
-	// this will assert
-	retval = kcdata_add_uint32_with_description(&test_kc_data2, 0xc0ffee, "really long description string for kcdata");
-	T_ASSERT(retval == KERN_INVALID_ARGUMENT, "API param check returned KERN_INVALID_ARGUMENT correctly");
-	T_ASSERT(assert_check_retval == (void *)XT_RET_W_SUCCESS, "assertion handler verified that it was hit");
-
-	return KERN_SUCCESS;
-}
-*/
+ *  kern_return_t
+ *  kcdata_api_assert_tests()
+ *  {
+ *       kern_return_t retval       = 0;
+ *       void * assert_check_retval = NULL;
+ *       test_kc_data2.kcd_length   = 0xdeadbeef;
+ *       mach_vm_address_t address = (mach_vm_address_t)kalloc(PAGE_SIZE);
+ *       T_EXPECT_NOTNULL(address, "kalloc of PAGE_SIZE data.");
+ *
+ *       retval = kcdata_memory_static_init(&test_kc_data2, (mach_vm_address_t)address, KCDATA_BUFFER_BEGIN_STACKSHOT, PAGE_SIZE,
+ *                                          KCFLAG_USE_MEMCOPY);
+ *
+ *       T_ASSERT(retval == KERN_SUCCESS, "successful kcdata_memory_static_init call");
+ *
+ *       retval = T_REGISTER_ASSERT_CHECK("KCDATA_DESC_MAXLEN", &assert_check_retval);
+ *       T_ASSERT(retval == KERN_SUCCESS, "registered assert widget");
+ *
+ *       // this will assert
+ *       retval = kcdata_add_uint32_with_description(&test_kc_data2, 0xc0ffee, "really long description string for kcdata");
+ *       T_ASSERT(retval == KERN_INVALID_ARGUMENT, "API param check returned KERN_INVALID_ARGUMENT correctly");
+ *       T_ASSERT(assert_check_retval == (void *)XT_RET_W_SUCCESS, "assertion handler verified that it was hit");
+ *
+ *       return KERN_SUCCESS;
+ *  }
+ */
 
 #if defined(__arm__) || defined(__arm64__)
 
@@ -838,12 +845,13 @@ extern unsigned long gPhysBase, gPhysSize, first_avail;
 static inline uintptr_t
 astris_vm_page_unpack_ptr(uintptr_t p)
 {
-	if (!p)
-		return ((uintptr_t)0);
+	if (!p) {
+		return (uintptr_t)0;
+	}
 
 	return (p & lowGlo.lgPmapMemFromArrayMask)
-	           ? lowGlo.lgPmapMemStartAddr + (p & ~(lowGlo.lgPmapMemFromArrayMask)) * lowGlo.lgPmapMemPagesize
-	           : lowGlo.lgPmapMemPackedBaseAddr + (p << lowGlo.lgPmapMemPackedShift);
+	       ? lowGlo.lgPmapMemStartAddr + (p & ~(lowGlo.lgPmapMemFromArrayMask)) * lowGlo.lgPmapMemPagesize
+	       : lowGlo.lgPmapMemPackedBaseAddr + (p << lowGlo.lgPmapMemPackedShift);
 }
 
 // assume next pointer is the first element
@@ -872,8 +880,8 @@ static inline ppnum_t
 astris_vm_page_get_phys_page(uintptr_t m)
 {
 	return (m >= lowGlo.lgPmapMemStartAddr && m < lowGlo.lgPmapMemEndAddr)
-	           ? (ppnum_t)((m - lowGlo.lgPmapMemStartAddr) / lowGlo.lgPmapMemPagesize + lowGlo.lgPmapMemFirstppnum)
-	           : *((ppnum_t *)(m + lowGlo.lgPmapMemPageOffset));
+	       ? (ppnum_t)((m - lowGlo.lgPmapMemStartAddr) / lowGlo.lgPmapMemPagesize + lowGlo.lgPmapMemFirstppnum)
+	       : *((ppnum_t *)(m + lowGlo.lgPmapMemPageOffset));
 }
 
 kern_return_t
@@ -891,7 +899,7 @@ pmap_coredump_test(void)
 	T_ASSERT_EQ_ULONG(lowGlo.lgLayoutMagic, LOWGLO_LAYOUT_MAGIC, NULL);
 
 	// check the constant values in lowGlo
-	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemQ, ((uint64_t) & (pmap_object_store.memq)), NULL);
+	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemQ, ((uint64_t) &(pmap_object_store.memq)), NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPageOffset, offsetof(struct vm_page_with_ppnum, vmp_phys_page), NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemChainOffset, offsetof(struct vm_page, vmp_listq), NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPagesize, sizeof(struct vm_page), NULL);

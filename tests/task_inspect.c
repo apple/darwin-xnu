@@ -27,7 +27,7 @@ check_secure_kernel(void)
 	size_t secure_kern_size = sizeof(secure_kern);
 
 	T_ASSERT_POSIX_SUCCESS(sysctlbyname("kern.secure_kernel", &secure_kern,
-			&secure_kern_size, NULL, 0), NULL);
+	    &secure_kern_size, NULL, 0), NULL);
 
 	if (secure_kern) {
 		T_SKIP("secure kernel: processor_set_tasks will not return kernel_task");
@@ -54,7 +54,7 @@ attempt_kernel_inspection(task_t task)
 
 	count = TASK_BASIC_INFO_64_COUNT;
 	T_EXPECT_MACH_SUCCESS(task_info(task, TASK_BASIC_INFO_64, (task_info_t)&ti,
-	                                &count), "task_info(... TASK_BASIC_INFO_64 ...)");
+	    &count), "task_info(... TASK_BASIC_INFO_64 ...)");
 
 	T_EXPECT_MACH_SUCCESS(task_threads(task, &threads, &thcnt), "task_threads");
 	T_LOG("Found %d kernel threads.", thcnt);
@@ -64,7 +64,7 @@ attempt_kernel_inspection(task_t task)
 		mach_msg_type_number_t bi_count = THREAD_BASIC_INFO_COUNT;
 
 		kr = thread_info(threads[i], THREAD_BASIC_INFO,
-				(thread_info_t)&basic_info, &bi_count);
+		    (thread_info_t)&basic_info, &bi_count);
 		/*
 		 * Ignore threads that have gone away.
 		 */
@@ -76,8 +76,8 @@ attempt_kernel_inspection(task_t task)
 		(void)mach_port_deallocate(mach_task_self(), threads[i]);
 	}
 	mach_vm_deallocate(mach_task_self(),
-	                   (mach_vm_address_t)(uintptr_t)threads,
-	                   thcnt * sizeof(*threads));
+	    (mach_vm_address_t)(uintptr_t)threads,
+	    thcnt * sizeof(*threads));
 
 	ipc_info_space_basic_t basic_info;
 	T_EXPECT_MACH_SUCCESS(mach_port_space_basic_info(task, &basic_info), "mach_port_space_basic_info");
@@ -87,28 +87,28 @@ attempt_kernel_inspection(task_t task)
 	ipc_info_tree_name_array_t tree;
 	mach_msg_type_number_t tblcnt = 0, treecnt = 0;
 	T_EXPECT_MACH_SUCCESS(mach_port_space_info(task, &info_space, &table,
-	                                           &tblcnt, &tree, &treecnt), "mach_port_space_info");
+	    &tblcnt, &tree, &treecnt), "mach_port_space_info");
 	if (tblcnt > 0) {
 		mach_vm_deallocate(mach_task_self(),
-		                   (mach_vm_address_t)(uintptr_t)table,
-		                   tblcnt * sizeof(*table));
+		    (mach_vm_address_t)(uintptr_t)table,
+		    tblcnt * sizeof(*table));
 	}
 	if (treecnt > 0) {
 		mach_vm_deallocate(mach_task_self(),
-		                   (mach_vm_address_t)(uintptr_t)tree,
-		                   treecnt * sizeof(*tree));
+		    (mach_vm_address_t)(uintptr_t)tree,
+		    treecnt * sizeof(*tree));
 	}
 
 	T_END;
 }
 
 T_DECL(inspect_kernel_task,
-		"ensure that kernel task can be inspected",
-		T_META_CHECK_LEAKS(false),
-		T_META_ASROOT(true))
+    "ensure that kernel task can be inspected",
+    T_META_CHECK_LEAKS(false),
+    T_META_ASROOT(true))
 {
 	processor_set_name_array_t psets;
-	processor_set_t	pset;
+	processor_set_t pset;
 	task_array_t tasks;
 	mach_msg_type_number_t i, j, tcnt, pcnt = 0;
 	mach_port_t self = mach_host_self();
@@ -116,7 +116,7 @@ T_DECL(inspect_kernel_task,
 	check_secure_kernel();
 
 	T_ASSERT_MACH_SUCCESS(host_processor_sets(self, &psets, &pcnt),
-			NULL);
+	    NULL);
 
 	for (i = 0; i < pcnt; i++) {
 		T_ASSERT_MACH_SUCCESS(host_processor_set_priv(self, psets[i], &pset), NULL);
@@ -132,14 +132,14 @@ T_DECL(inspect_kernel_task,
 
 		/* free tasks array */
 		mach_vm_deallocate(mach_task_self(),
-		                   (mach_vm_address_t)(uintptr_t)tasks,
-		                   tcnt * sizeof(*tasks));
+		    (mach_vm_address_t)(uintptr_t)tasks,
+		    tcnt * sizeof(*tasks));
 		mach_port_deallocate(mach_task_self(), pset);
 		mach_port_deallocate(mach_task_self(), psets[i]);
 	}
 	mach_vm_deallocate(mach_task_self(),
-	                   (mach_vm_address_t)(uintptr_t)psets,
-	                   pcnt * sizeof(*psets));
+	    (mach_vm_address_t)(uintptr_t)psets,
+	    pcnt * sizeof(*psets));
 
 	T_FAIL("could not find kernel_task in list of tasks returned");
 }

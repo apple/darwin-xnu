@@ -79,7 +79,7 @@ static atm_value_t get_atm_value_from_aid(aid_t aid) __unused;
 static void atm_value_get_ref(atm_value_t atm_value);
 static kern_return_t atm_listener_insert(atm_value_t atm_value, atm_task_descriptor_t task_descriptor, atm_guard_t guard);
 static void atm_listener_delete_all(atm_value_t atm_value);
-static atm_task_descriptor_t atm_task_descriptor_alloc_init(mach_port_t trace_buffer,uint64_t buffer_size, __assert_only task_t task);
+static atm_task_descriptor_t atm_task_descriptor_alloc_init(mach_port_t trace_buffer, uint64_t buffer_size, __assert_only task_t task);
 static void atm_descriptor_get_reference(atm_task_descriptor_t task_descriptor);
 static void atm_task_descriptor_dealloc(atm_task_descriptor_t task_descriptor);
 static kern_return_t atm_value_unregister(atm_value_t atm_value, atm_task_descriptor_t task_descriptor, atm_guard_t guard);
@@ -140,7 +140,7 @@ struct ipc_voucher_attr_manager atm_manager = {
 	.ivam_release_value    = atm_release_value,
 	.ivam_get_value        = atm_get_value,
 	.ivam_extract_content  = atm_extract_content,
-	.ivam_command	       = atm_command,
+	.ivam_command          = atm_command,
 	.ivam_release          = atm_release,
 	.ivam_flags            = IVAM_FLAGS_NONE,
 };
@@ -149,9 +149,9 @@ struct ipc_voucher_attr_manager atm_manager = {
 decl_lck_mtx_data(, atm_descriptors_list_lock);
 decl_lck_mtx_data(, atm_values_list_lock);
 
-lck_grp_t		atm_dev_lock_grp;
-lck_attr_t		atm_dev_lock_attr;
-lck_grp_attr_t		atm_dev_lock_grp_attr;
+lck_grp_t               atm_dev_lock_grp;
+lck_attr_t              atm_dev_lock_attr;
+lck_grp_attr_t          atm_dev_lock_grp_attr;
 #endif
 
 extern vm_map_t kernel_map;
@@ -168,9 +168,9 @@ mach_atm_subaid_t global_subaid;
 /*
  * Lock group attributes for atm sub system.
  */
-lck_grp_t		atm_lock_grp;
-lck_attr_t		atm_lock_attr;
-lck_grp_attr_t		atm_lock_grp_attr;
+lck_grp_t               atm_lock_grp;
+lck_attr_t              atm_lock_attr;
+lck_grp_attr_t          atm_lock_grp_attr;
 
 /*
  * Global that is set by diagnosticd and readable by userspace
@@ -190,32 +190,32 @@ atm_init()
 	char temp_buf[20];
 
 	/* Disable atm if disable_atm present in device-tree properties or in boot-args */
-	if ((PE_get_default("kern.disable_atm", temp_buf, sizeof(temp_buf))) || 
+	if ((PE_get_default("kern.disable_atm", temp_buf, sizeof(temp_buf))) ||
 	    (PE_parse_boot_argn("-disable_atm", temp_buf, sizeof(temp_buf)))) {
 		disable_atm = TRUE;
 	}
 
 	if (!PE_parse_boot_argn("atm_diagnostic_config", &atm_diagnostic_config, sizeof(atm_diagnostic_config))) {
-		if (!PE_get_default("kern.atm_diagnostic_config",  &atm_diagnostic_config, sizeof(atm_diagnostic_config))) {
+		if (!PE_get_default("kern.atm_diagnostic_config", &atm_diagnostic_config, sizeof(atm_diagnostic_config))) {
 			atm_diagnostic_config = 0;
 		}
 	}
 
 	/* setup zones for descriptors, values and link objects */
 	atm_value_zone       = zinit(sizeof(struct atm_value),
-	                       MAX_ATM_VALUES * sizeof(struct atm_value),
-	                       sizeof(struct atm_value),
-	                       "atm_values");
+	    MAX_ATM_VALUES * sizeof(struct atm_value),
+	    sizeof(struct atm_value),
+	    "atm_values");
 
 	atm_descriptors_zone = zinit(sizeof(struct atm_task_descriptor),
-	                       MAX_ATM_VALUES * sizeof(struct atm_task_descriptor),
-	                       sizeof(struct atm_task_descriptor),
-	                       "atm_task_descriptors");
+	    MAX_ATM_VALUES * sizeof(struct atm_task_descriptor),
+	    sizeof(struct atm_task_descriptor),
+	    "atm_task_descriptors");
 
 	atm_link_objects_zone = zinit(sizeof(struct atm_link_object),
-	                        MAX_ATM_VALUES * sizeof(struct atm_link_object),
-	                        sizeof(struct atm_link_object),
-	                        "atm_link_objects");
+	    MAX_ATM_VALUES * sizeof(struct atm_link_object),
+	    sizeof(struct atm_link_object),
+	    "atm_link_objects");
 
 	/* Initialize atm lock group and lock attributes. */
 	lck_grp_attr_setdefault(&atm_lock_grp_attr);
@@ -241,15 +241,16 @@ atm_init()
 
 	/* Register the atm manager with the Vouchers sub system. */
 	kr = ipc_register_well_known_mach_voucher_attr_manager(
-	                &atm_manager,
-	                0,
-	                MACH_VOUCHER_ATTR_KEY_ATM,
-	                &voucher_attr_control);
-	if (kr != KERN_SUCCESS )
+		&atm_manager,
+		0,
+		MACH_VOUCHER_ATTR_KEY_ATM,
+		&voucher_attr_control);
+	if (kr != KERN_SUCCESS) {
 		panic("ATM subsystem initialization failed");
+	}
 
 	kprintf("ATM subsystem is initialized\n");
-	return ;
+	return;
 }
 
 
@@ -266,10 +267,10 @@ atm_init()
  */
 kern_return_t
 atm_release_value(
-	ipc_voucher_attr_manager_t		__assert_only manager,
-	mach_voucher_attr_key_t			__assert_only key,
-	mach_voucher_attr_value_handle_t		      value,
-	mach_voucher_attr_value_reference_t	          sync)
+	ipc_voucher_attr_manager_t              __assert_only manager,
+	mach_voucher_attr_key_t                 __assert_only key,
+	mach_voucher_attr_value_handle_t                      value,
+	mach_voucher_attr_value_reference_t               sync)
 {
 	atm_value_t atm_value = ATM_VALUE_NULL;
 
@@ -298,16 +299,16 @@ atm_release_value(
  */
 kern_return_t
 atm_get_value(
-	ipc_voucher_attr_manager_t 		__assert_only manager,
-	mach_voucher_attr_key_t 		__assert_only key,
-	mach_voucher_attr_recipe_command_t 	          command,
-	mach_voucher_attr_value_handle_array_t 	      prev_values,
-	mach_msg_type_number_t 			__assert_only prev_value_count,
+	ipc_voucher_attr_manager_t              __assert_only manager,
+	mach_voucher_attr_key_t                 __assert_only key,
+	mach_voucher_attr_recipe_command_t                command,
+	mach_voucher_attr_value_handle_array_t        prev_values,
+	mach_msg_type_number_t                  __assert_only prev_value_count,
 	mach_voucher_attr_content_t          __unused recipe,
 	mach_voucher_attr_content_size_t     __unused recipe_size,
 	mach_voucher_attr_value_handle_t             *out_value,
 	mach_voucher_attr_value_flags_t              *out_flags,
-	ipc_voucher_t 				                 *out_value_voucher)
+	ipc_voucher_t                                            *out_value_voucher)
 {
 	atm_value_t atm_value = ATM_VALUE_NULL;
 	mach_voucher_attr_value_handle_t atm_handle;
@@ -325,19 +326,20 @@ atm_get_value(
 	*out_value_voucher = IPC_VOUCHER_NULL;
 	*out_flags = MACH_VOUCHER_ATTR_VALUE_FLAGS_NONE;
 
-	if (disable_atm || (atm_get_diagnostic_config() & ATM_TRACE_DISABLE))
+	if (disable_atm || (atm_get_diagnostic_config() & ATM_TRACE_DISABLE)) {
 		return KERN_NOT_SUPPORTED;
+	}
 
 	switch (command) {
-
 	case MACH_VOUCHER_ATTR_ATM_REGISTER:
 
 		for (i = 0; i < prev_value_count; i++) {
 			atm_handle = prev_values[i];
 			atm_value = HANDLE_TO_ATM_VALUE(atm_handle);
 
-			if (atm_value == VAM_DEFAULT_VALUE)
+			if (atm_value == VAM_DEFAULT_VALUE) {
 				continue;
+			}
 
 			if (recipe_size != sizeof(atm_guard_t)) {
 				kr = KERN_INVALID_ARGUMENT;
@@ -347,7 +349,7 @@ atm_get_value(
 
 			task = current_task();
 			task_descriptor = task->atm_context;
-				
+
 			kr = atm_value_register(atm_value, task_descriptor, guard);
 			if (kr != KERN_SUCCESS) {
 				break;
@@ -374,14 +376,14 @@ atm_get_value(
 			kr = KERN_INVALID_ARGUMENT;
 			break;
 		}
-		
+
 		/* Allocate a new atm value. */
 		atm_value = atm_value_alloc_init(aid);
 		if (atm_value == ATM_VALUE_NULL) {
 			kr = KERN_RESOURCE_SHORTAGE;
 			break;
 		}
-redrive:	
+redrive:
 		kr = atm_value_hash_table_insert(atm_value);
 		if (kr != KERN_SUCCESS) {
 			if (recipe_size == 0) {
@@ -417,7 +419,7 @@ atm_extract_content(
 	ipc_voucher_attr_manager_t      __assert_only manager,
 	mach_voucher_attr_key_t         __assert_only key,
 	mach_voucher_attr_value_handle_array_t        values,
-	mach_msg_type_number_t 			              value_count,
+	mach_msg_type_number_t                                value_count,
 	mach_voucher_attr_recipe_command_t           *out_command,
 	mach_voucher_attr_content_t                   out_recipe,
 	mach_voucher_attr_content_size_t             *in_out_recipe_size)
@@ -429,13 +431,14 @@ atm_extract_content(
 	assert(MACH_VOUCHER_ATTR_KEY_ATM == key);
 	assert(manager == &atm_manager);
 
-	for (i = 0; i < value_count; i++) {
+	for (i = 0; i < value_count && *in_out_recipe_size > 0; i++) {
 		atm_handle = values[i];
 		atm_value = HANDLE_TO_ATM_VALUE(atm_handle);
-		if (atm_value == VAM_DEFAULT_VALUE)
+		if (atm_value == VAM_DEFAULT_VALUE) {
 			continue;
+		}
 
-		if (( sizeof(aid_t)) > *in_out_recipe_size) {
+		if ((sizeof(aid_t)) > *in_out_recipe_size) {
 			*in_out_recipe_size = 0;
 			return KERN_NO_SPACE;
 		}
@@ -454,18 +457,18 @@ atm_extract_content(
  * Routine: atm_command
  * Purpose: Execute a command against a set of ATM values.
  * Returns: KERN_SUCCESS: On successful execution of command.
- 	    KERN_FAILURE: On failure.
+ *           KERN_FAILURE: On failure.
  */
 kern_return_t
 atm_command(
-	ipc_voucher_attr_manager_t 		   __assert_only manager,
-	mach_voucher_attr_key_t 		   __assert_only key,
-	mach_voucher_attr_value_handle_array_t 	values,
-	mach_msg_type_number_t 			   value_count,
-	mach_voucher_attr_command_t		   command,
-	mach_voucher_attr_content_t 	   in_content,
+	ipc_voucher_attr_manager_t                 __assert_only manager,
+	mach_voucher_attr_key_t                    __assert_only key,
+	mach_voucher_attr_value_handle_array_t  values,
+	mach_msg_type_number_t                     value_count,
+	mach_voucher_attr_command_t                command,
+	mach_voucher_attr_content_t        in_content,
 	mach_voucher_attr_content_size_t   in_content_size,
-	mach_voucher_attr_content_t 	   out_content,
+	mach_voucher_attr_content_t        out_content,
 	mach_voucher_attr_content_size_t   *out_content_size)
 {
 	assert(MACH_VOUCHER_ATTR_KEY_ATM == key);
@@ -479,21 +482,23 @@ atm_command(
 	task_t task;
 	kern_return_t kr = KERN_SUCCESS;
 	atm_guard_t guard;
-	
+
 	switch (command) {
 	case ATM_ACTION_COLLECT:
-		/* Fall through */
+	/* Fall through */
 
 	case ATM_ACTION_LOGFAIL:
 		return KERN_NOT_SUPPORTED;
 
 	case ATM_FIND_MIN_SUB_AID:
-		if ((in_content_size/sizeof(aid_t)) > (*out_content_size/sizeof(mach_atm_subaid_t)))
+		if ((in_content_size / sizeof(aid_t)) > (*out_content_size / sizeof(mach_atm_subaid_t))) {
 			return KERN_FAILURE;
+		}
 
 		aid_array_count = in_content_size / sizeof(aid_t);
-		if (aid_array_count > AID_ARRAY_COUNT_MAX)
+		if (aid_array_count > AID_ARRAY_COUNT_MAX) {
 			return KERN_FAILURE;
+		}
 
 		subaid_array = (mach_atm_subaid_t *) (void *) out_content;
 		for (i = 0; i < aid_array_count; i++) {
@@ -510,8 +515,9 @@ atm_command(
 		/* find the first non-default atm_value */
 		for (i = 0; i < value_count; i++) {
 			atm_value = HANDLE_TO_ATM_VALUE(values[i]);
-			if (atm_value != VAM_DEFAULT_VALUE)
+			if (atm_value != VAM_DEFAULT_VALUE) {
 				break;
+			}
 		}
 
 		/* if we are not able to find any atm values
@@ -520,7 +526,7 @@ atm_command(
 		if (atm_value == NULL) {
 			return KERN_FAILURE;
 		}
-		if (in_content == NULL || in_content_size != sizeof(atm_guard_t)){
+		if (in_content == NULL || in_content_size != sizeof(atm_guard_t)) {
 			return KERN_INVALID_ARGUMENT;
 		}
 
@@ -535,8 +541,9 @@ atm_command(
 	case ATM_ACTION_REGISTER:
 		for (i = 0; i < value_count; i++) {
 			atm_value = HANDLE_TO_ATM_VALUE(values[i]);
-			if (atm_value != VAM_DEFAULT_VALUE)
+			if (atm_value != VAM_DEFAULT_VALUE) {
 				break;
+			}
 		}
 		/* if we are not able to find any atm values
 		 * in stack then this call was made in error
@@ -544,7 +551,7 @@ atm_command(
 		if (atm_value == NULL) {
 			return KERN_FAILURE;
 		}
-		if (in_content == NULL || in_content_size != sizeof(atm_guard_t)){
+		if (in_content == NULL || in_content_size != sizeof(atm_guard_t)) {
 			return KERN_INVALID_ARGUMENT;
 		}
 
@@ -557,8 +564,9 @@ atm_command(
 		break;
 
 	case ATM_ACTION_GETSUBAID:
-		if (out_content == NULL || *out_content_size != sizeof(mach_atm_subaid_t))
+		if (out_content == NULL || *out_content_size != sizeof(mach_atm_subaid_t)) {
 			return KERN_FAILURE;
+		}
 
 		next_subaid = get_subaid();
 		memcpy(out_content, &next_subaid, sizeof(mach_atm_subaid_t));
@@ -575,7 +583,7 @@ atm_command(
 
 void
 atm_release(
-	ipc_voucher_attr_manager_t 		__assert_only manager)
+	ipc_voucher_attr_manager_t              __assert_only manager)
 {
 	assert(manager == &atm_manager);
 }
@@ -593,8 +601,9 @@ atm_value_alloc_init(aid_t aid)
 	atm_value_t new_atm_value = ATM_VALUE_NULL;
 
 	new_atm_value = (atm_value_t) zalloc(atm_value_zone);
-	if (new_atm_value == ATM_VALUE_NULL)
+	if (new_atm_value == ATM_VALUE_NULL) {
 		panic("Ran out of ATM values structure.\n\n");
+	}
 
 	new_atm_value->aid = aid;
 	queue_init(&new_atm_value->listeners);
@@ -713,7 +722,7 @@ atm_value_hash_table_insert(atm_value_t new_atm_value)
 			 * aid found. return error.
 			 */
 			lck_mtx_unlock(&hash_list_head->hash_list_lock);
-			return (KERN_NAME_EXISTS);
+			return KERN_NAME_EXISTS;
 		}
 	}
 
@@ -773,7 +782,7 @@ get_atm_value_from_aid(aid_t aid)
 			 */
 			atm_value_get_ref(next);
 			lck_mtx_unlock(&hash_list_head->hash_list_lock);
-			return (next);
+			return next;
 		}
 	}
 	lck_mtx_unlock(&hash_list_head->hash_list_lock);
@@ -801,9 +810,9 @@ atm_value_get_ref(atm_value_t atm_value)
  */
 static kern_return_t
 atm_listener_insert(
-	atm_value_t 		atm_value,
-	atm_task_descriptor_t 	task_descriptor,
-	atm_guard_t     	guard)
+	atm_value_t             atm_value,
+	atm_task_descriptor_t   task_descriptor,
+	atm_guard_t             guard)
 {
 	atm_link_object_t new_link_object;
 	atm_link_object_t next, elem;
@@ -842,8 +851,9 @@ atm_listener_insert(
 			continue;
 		}
 
-		if (element_found)
+		if (element_found) {
 			continue;
+		}
 
 		if (elem->descriptor == task_descriptor) {
 			/* Increment reference count on Link object. */
@@ -853,8 +863,7 @@ atm_listener_insert(
 			elem->guard = guard;
 			element_found = TRUE;
 			KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_GETVALUE_INFO, (ATM_VALUE_REPLACED))) | DBG_FUNC_NONE,
-				VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, guard, 0, 0);
-
+			    VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, guard, 0, 0);
 		}
 	}
 
@@ -865,7 +874,7 @@ atm_listener_insert(
 		zfree(atm_link_objects_zone, new_link_object);
 	} else {
 		KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_GETVALUE_INFO, (ATM_VALUE_ADDED))) | DBG_FUNC_NONE,
-				VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, guard, 0, 0);
+		    VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, guard, 0, 0);
 
 		queue_enter(&atm_value->listeners, new_link_object, atm_link_object_t, listeners_element);
 		atm_listener_count_incr_internal(atm_value);
@@ -873,7 +882,7 @@ atm_listener_insert(
 	}
 
 	/* Free the link objects */
-	while(!queue_empty(&free_listeners)) {
+	while (!queue_empty(&free_listeners)) {
 		queue_remove_first(&free_listeners, next, atm_link_object_t, listeners_element);
 
 		/* Deallocate the link object */
@@ -881,7 +890,7 @@ atm_listener_insert(
 	}
 
 	KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_SUBAID_INFO, (ATM_LINK_LIST_TRIM))) | DBG_FUNC_NONE,
-		listener_count, freed_count, dead_but_not_freed, VM_KERNEL_ADDRPERM(atm_value), 1);
+	    listener_count, freed_count, dead_but_not_freed, VM_KERNEL_ADDRPERM(atm_value), 1);
 
 	return KERN_SUCCESS;
 }
@@ -897,7 +906,7 @@ atm_listener_delete_all(atm_value_t atm_value)
 {
 	atm_link_object_t next;
 
-	while(!queue_empty(&atm_value->listeners)) {
+	while (!queue_empty(&atm_value->listeners)) {
 		queue_remove_first(&atm_value->listeners, next, atm_link_object_t, listeners_element);
 
 		/* Deallocate the link object */
@@ -935,14 +944,14 @@ atm_listener_delete(
 		if (elem->descriptor == task_descriptor) {
 			if (elem->guard == guard) {
 				KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_UNREGISTER_INFO,
-					(ATM_VALUE_UNREGISTERED))) | DBG_FUNC_NONE,
-					VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, guard, elem->reference_count, 0);
+				    (ATM_VALUE_UNREGISTERED))) | DBG_FUNC_NONE,
+				    VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, guard, elem->reference_count, 0);
 				elem->guard = 0;
 				kr = KERN_SUCCESS;
 			} else {
 				KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_UNREGISTER_INFO,
-					(ATM_VALUE_DIFF_MAILBOX))) | DBG_FUNC_NONE,
-					VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, elem->guard, elem->reference_count, 0);
+				    (ATM_VALUE_DIFF_MAILBOX))) | DBG_FUNC_NONE,
+				    VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, elem->guard, elem->reference_count, 0);
 				kr = KERN_INVALID_VALUE;
 			}
 			if (0 == atm_link_object_release_internal(elem)) {
@@ -955,9 +964,9 @@ atm_listener_delete(
 	}
 	lck_mtx_unlock(&atm_value->listener_lock);
 
-	while(!queue_empty(&free_listeners)) {
+	while (!queue_empty(&free_listeners)) {
 		queue_remove_first(&free_listeners, next, atm_link_object_t, listeners_element);
-	
+
 		/* Deallocate the link object */
 		atm_link_dealloc(next);
 	}
@@ -973,9 +982,9 @@ atm_listener_delete(
  */
 static atm_task_descriptor_t
 atm_task_descriptor_alloc_init(
-	mach_port_t		trace_buffer,
-	uint64_t		buffer_size,
-	task_t 			__assert_only task)
+	mach_port_t             trace_buffer,
+	uint64_t                buffer_size,
+	task_t                  __assert_only task)
 {
 	atm_task_descriptor_t new_task_descriptor;
 
@@ -1071,19 +1080,21 @@ atm_link_dealloc(atm_link_object_t link_object)
  */
 kern_return_t
 atm_register_trace_memory(
-	task_t 			task,
-	uint64_t 		trace_buffer_address,
-	uint64_t 		buffer_size)
+	task_t                  task,
+	uint64_t                trace_buffer_address,
+	uint64_t                buffer_size)
 {
 	atm_task_descriptor_t task_descriptor;
 	mach_port_t trace_buffer = MACH_PORT_NULL;
 	kern_return_t kr = KERN_SUCCESS;
 
-	if (disable_atm || (atm_get_diagnostic_config() & ATM_TRACE_DISABLE))
+	if (disable_atm || (atm_get_diagnostic_config() & ATM_TRACE_DISABLE)) {
 		return KERN_NOT_SUPPORTED;
+	}
 
-	if (task != current_task())
+	if (task != current_task()) {
 		return KERN_INVALID_ARGUMENT;
+	}
 
 	if (task->atm_context != NULL
 	    || (void *)trace_buffer_address == NULL
@@ -1096,13 +1107,14 @@ atm_register_trace_memory(
 	vm_map_t map = current_map();
 	memory_object_size_t mo_size = (memory_object_size_t) buffer_size;
 	kr = mach_make_memory_entry_64(map,
-		                          &mo_size,
-		                          (mach_vm_offset_t)trace_buffer_address,
-		                          VM_PROT_READ,
-		                          &trace_buffer,
-		                          NULL);
-	if (kr != KERN_SUCCESS)
+	    &mo_size,
+	    (mach_vm_offset_t)trace_buffer_address,
+	    VM_PROT_READ,
+	    &trace_buffer,
+	    NULL);
+	if (kr != KERN_SUCCESS) {
 		return kr;
+	}
 
 	task_descriptor = atm_task_descriptor_alloc_init(trace_buffer, buffer_size, task);
 	if (task_descriptor == ATM_TASK_DESCRIPTOR_NULL) {
@@ -1136,8 +1148,9 @@ extern uint32_t atm_diagnostic_config; /* Proxied to commpage for fast user acce
 kern_return_t
 atm_set_diagnostic_config(uint32_t diagnostic_config)
 {
-	if (disable_atm)
+	if (disable_atm) {
 		return KERN_NOT_SUPPORTED;
+	}
 
 	atm_diagnostic_config = diagnostic_config;
 	commpage_update_atm_diagnostic_config(atm_diagnostic_config);
@@ -1173,9 +1186,10 @@ atm_value_unregister(
 {
 	kern_return_t kr;
 
-	if (task_descriptor == ATM_TASK_DESCRIPTOR_NULL)
+	if (task_descriptor == ATM_TASK_DESCRIPTOR_NULL) {
 		return KERN_INVALID_TASK;
-	
+	}
+
 	kr = atm_listener_delete(atm_value, task_descriptor, guard);
 	return kr;
 }
@@ -1196,8 +1210,9 @@ atm_value_register(
 {
 	kern_return_t kr;
 
-	if (task_descriptor == ATM_TASK_DESCRIPTOR_NULL)
+	if (task_descriptor == ATM_TASK_DESCRIPTOR_NULL) {
 		return KERN_INVALID_TASK;
+	}
 
 	kr = atm_listener_insert(atm_value, task_descriptor, guard);
 	return kr;

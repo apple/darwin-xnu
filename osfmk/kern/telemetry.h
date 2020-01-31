@@ -2,7 +2,7 @@
  * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -60,7 +60,7 @@ extern void telemetry_ast(thread_t thread, uint32_t reasons);
 extern int telemetry_gather(user_addr_t buffer, uint32_t *length, boolean_t mark);
 
 extern void telemetry_mark_curthread(boolean_t interrupted_userspace,
-		boolean_t pmi);
+    boolean_t pmi);
 
 extern void telemetry_task_ctl(task_t task, uint32_t reason, int enable_disable);
 extern void telemetry_task_ctl_locked(task_t task, uint32_t reason, int enable_disable);

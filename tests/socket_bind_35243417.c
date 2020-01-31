@@ -11,31 +11,31 @@
 static int
 sockv6_open(void)
 {
-	int	s;
+	int     s;
 
 	s = socket(AF_INET6, SOCK_DGRAM, 0);
 	T_QUIET;
 	T_ASSERT_POSIX_SUCCESS(s, "socket(AF_INET6, SOCK_DGRAM, 0)");
-	return (s);
+	return s;
 }
 
 static int
 sockv6_bind(int s, in_port_t port)
 {
-	struct sockaddr_in6	sin6;
+	struct sockaddr_in6     sin6;
 
 	bzero(&sin6, sizeof(sin6));
 	sin6.sin6_len = sizeof(sin6);
 	sin6.sin6_family = AF_INET6;
 	sin6.sin6_port = port;
-	return (bind(s, (const struct sockaddr *)&sin6, sizeof(sin6)));
+	return bind(s, (const struct sockaddr *)&sin6, sizeof(sin6));
 }
 
 static void
 sockv6_set_v6only(int s)
 {
-	int		on = 1;
-	int		ret;
+	int             on = 1;
+	int             ret;
 
 	ret = setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on));
 	T_QUIET;
@@ -44,15 +44,15 @@ sockv6_set_v6only(int s)
 
 static bool
 alloc_and_bind_ports(in_port_t port_start, in_port_t port_end,
-		     int bind_attempts)
+    int bind_attempts)
 {
-	int	bound_count = 0;
-	bool	success = true;
+	int     bound_count = 0;
+	bool    success = true;
 
 	for (in_port_t i = port_start; success && i <= port_end; i++) {
-		int	s6 = -1;
-		int	s6_other = -1;
-		int	ret;
+		int     s6 = -1;
+		int     s6_other = -1;
+		int     ret;
 
 		s6 = sockv6_open();
 		sockv6_set_v6only(s6);
@@ -76,7 +76,7 @@ alloc_and_bind_ports(in_port_t port_start, in_port_t port_end,
 				break;
 			}
 		}
-	loop_done:
+loop_done:
 		if (s6 >= 0) {
 			close(s6);
 		}
@@ -85,23 +85,23 @@ alloc_and_bind_ports(in_port_t port_start, in_port_t port_end,
 		}
 	}
 	T_ASSERT_TRUE(bound_count == bind_attempts,
-		      "number of successful binds %d (out of %d)",
-		      bound_count, bind_attempts);
-	return (success);
+	    "number of successful binds %d (out of %d)",
+	    bound_count, bind_attempts);
+	return success;
 }
 
 
 T_DECL(socket_bind_35243417,
-       "bind IPv6 only UDP socket, then bind IPv6 socket.",
-       T_META_ASROOT(false),
-       T_META_CHECK_LEAKS(false))
+    "bind IPv6 only UDP socket, then bind IPv6 socket.",
+    T_META_ASROOT(false),
+    T_META_CHECK_LEAKS(false))
 {
 	alloc_and_bind_ports(1, 65534, 10);
 }
 
 T_DECL(socket_bind_35243417_root,
-       "bind IPv6 only UDP socket, then bind IPv6 socket.",
-       T_META_ASROOT(true))
+    "bind IPv6 only UDP socket, then bind IPv6 socket.",
+    T_META_ASROOT(true))
 {
 	alloc_and_bind_ports(1, 65534, 10);
 }

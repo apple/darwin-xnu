@@ -305,7 +305,7 @@ kcs_get_elem_size(kcdata_subtype_descriptor_t d)
 {
 	if (d->kcs_flags & KCS_SUBTYPE_FLAGS_ARRAY) {
 		/* size is composed as ((count &0xffff)<<16 | (elem_size & 0xffff)) */
-		return (uint32_t)((d->kcs_elem_size & 0xffff) * ((d->kcs_elem_size & 0xffff0000)>>16));
+		return (uint32_t)((d->kcs_elem_size & 0xffff) * ((d->kcs_elem_size & 0xffff0000) >> 16));
 	}
 	return d->kcs_elem_size;
 }
@@ -313,8 +313,9 @@ kcs_get_elem_size(kcdata_subtype_descriptor_t d)
 static inline uint32_t
 kcs_get_elem_count(kcdata_subtype_descriptor_t d)
 {
-	if (d->kcs_flags & KCS_SUBTYPE_FLAGS_ARRAY)
+	if (d->kcs_flags & KCS_SUBTYPE_FLAGS_ARRAY) {
 		return (d->kcs_elem_size >> 16) & 0xffff;
+	}
 	return 1;
 }
 
@@ -323,12 +324,11 @@ kcs_set_elem_size(kcdata_subtype_descriptor_t d, uint32_t size, uint32_t count)
 {
 	if (count > 1) {
 		/* means we are setting up an array */
-		if (size > 0xffff || count > 0xffff)
+		if (size > 0xffff || count > 0xffff) {
 			return -1; //invalid argument
+		}
 		d->kcs_elem_size = ((count & 0xffff) << 16 | (size & 0xffff));
-	}
-	else
-	{
+	} else {
 		d->kcs_elem_size = size;
 	}
 	return 0;
@@ -367,9 +367,9 @@ struct kcdata_type_definition {
 #define KCDATA_TYPE_TYPEDEFINTION 0x12u /* Meta type that describes a type on the fly. */
 #define KCDATA_TYPE_CONTAINER_BEGIN                                       \
 	0x13u /* Container type which has corresponding CONTAINER_END header. \
-	      * KCDATA_TYPE_CONTAINER_BEGIN has type in the data segment.     \
-	      * Both headers have (uint64_t) ID for matching up nested data.  \
-	      */
+	       * KCDATA_TYPE_CONTAINER_BEGIN has type in the data segment. \
+	       * Both headers have (uint64_t) ID for matching up nested data. \
+	       */
 #define KCDATA_TYPE_CONTAINER_END 0x14u
 
 #define KCDATA_TYPE_ARRAY_PAD0 0x20u /* Array of data with 0 byte of padding*/
@@ -423,14 +423,14 @@ struct kcdata_type_definition {
 
 /* next type range number available 0x1060 */
 /**************** definitions for XNUPOST *********************/
-#define XNUPOST_KCTYPE_TESTCONFIG		0x1040
+#define XNUPOST_KCTYPE_TESTCONFIG               0x1040
 
 /**************** definitions for stackshot *********************/
 
 /* This value must always match IO_NUM_PRIORITIES defined in thread_info.h */
-#define STACKSHOT_IO_NUM_PRIORITIES 	4
+#define STACKSHOT_IO_NUM_PRIORITIES     4
 /* This value must always match MAXTHREADNAMESIZE used in bsd */
-#define STACKSHOT_MAX_THREAD_NAME_SIZE	64
+#define STACKSHOT_MAX_THREAD_NAME_SIZE  64
 
 /*
  * NOTE: Please update kcdata/libkdd/kcdtypes.c if you make any changes
@@ -485,35 +485,35 @@ struct stack_snapshot_frame32 {
 };
 
 struct stack_snapshot_frame64 {
-    uint64_t lr;
-    uint64_t sp;
+	uint64_t lr;
+	uint64_t sp;
 };
 
 struct dyld_uuid_info_32 {
-    uint32_t imageLoadAddress; /* base address image is mapped at */
-    uuid_t   imageUUID;
+	uint32_t imageLoadAddress; /* base address image is mapped at */
+	uuid_t   imageUUID;
 };
 
 struct dyld_uuid_info_64 {
-    uint64_t imageLoadAddress; /* XXX image slide */
-    uuid_t   imageUUID;
+	uint64_t imageLoadAddress; /* XXX image slide */
+	uuid_t   imageUUID;
 };
 
 struct dyld_uuid_info_64_v2 {
-    uint64_t imageLoadAddress; /* XXX image slide */
-    uuid_t   imageUUID;
-    /* end of version 1 of dyld_uuid_info_64. sizeof v1 was 24 */
-    uint64_t imageSlidBaseAddress; /* slid base address of image */
+	uint64_t imageLoadAddress; /* XXX image slide */
+	uuid_t   imageUUID;
+	/* end of version 1 of dyld_uuid_info_64. sizeof v1 was 24 */
+	uint64_t imageSlidBaseAddress; /* slid base address of image */
 };
 
 struct user32_dyld_uuid_info {
-	uint32_t	imageLoadAddress;	/* base address image is mapped into */
-	uuid_t			imageUUID;			/* UUID of image */
+	uint32_t        imageLoadAddress;       /* base address image is mapped into */
+	uuid_t                  imageUUID;                      /* UUID of image */
 };
 
 struct user64_dyld_uuid_info {
-	uint64_t	imageLoadAddress;	/* base address image is mapped into */
-	uuid_t			imageUUID;			/* UUID of image */
+	uint64_t        imageLoadAddress;       /* base address image is mapped into */
+	uuid_t                  imageUUID;                      /* UUID of image */
 };
 
 enum task_snapshot_flags {
@@ -561,22 +561,22 @@ enum thread_snapshot_flags {
 };
 
 struct mem_and_io_snapshot {
-	uint32_t	snapshot_magic;
-	uint32_t	free_pages;
-	uint32_t	active_pages;
-	uint32_t	inactive_pages;
-	uint32_t	purgeable_pages;
-	uint32_t	wired_pages;
-	uint32_t	speculative_pages;
-	uint32_t	throttled_pages;
-	uint32_t	filebacked_pages;
-	uint32_t 	compressions;
-	uint32_t	decompressions;
-	uint32_t	compressor_size;
-	int32_t 	busy_buffer_count;
-	uint32_t	pages_wanted;
-	uint32_t	pages_reclaimed;
-	uint8_t		pages_wanted_reclaimed_valid; // did mach_vm_pressure_monitor succeed?
+	uint32_t        snapshot_magic;
+	uint32_t        free_pages;
+	uint32_t        active_pages;
+	uint32_t        inactive_pages;
+	uint32_t        purgeable_pages;
+	uint32_t        wired_pages;
+	uint32_t        speculative_pages;
+	uint32_t        throttled_pages;
+	uint32_t        filebacked_pages;
+	uint32_t        compressions;
+	uint32_t        decompressions;
+	uint32_t        compressor_size;
+	int32_t         busy_buffer_count;
+	uint32_t        pages_wanted;
+	uint32_t        pages_reclaimed;
+	uint8_t         pages_wanted_reclaimed_valid; // did mach_vm_pressure_monitor succeed?
 } __attribute__((packed));
 
 /* SS_TH_* macros are for ths_state */
@@ -727,8 +727,7 @@ struct thread_delta_snapshot_v3 {
 	uint64_t  tds_effective_policy;
 } __attribute__ ((packed));
 
-struct io_stats_snapshot
-{
+struct io_stats_snapshot {
 	/*
 	 * I/O Statistics
 	 * XXX: These fields must be together.
@@ -748,7 +747,6 @@ struct io_stats_snapshot
 	uint64_t         ss_metadata_count;
 	uint64_t         ss_metadata_size;
 	/* XXX: I/O Statistics end */
-
 } __attribute__ ((packed));
 
 struct task_snapshot_v2 {
@@ -810,10 +808,10 @@ struct stackshot_fault_stats {
 } __attribute__((packed));
 
 typedef struct stackshot_thread_waitinfo {
-	uint64_t owner;		/* The thread that owns the object */
-	uint64_t waiter;	/* The thread that's waiting on the object */
-	uint64_t context;	/* A context uniquely identifying the object */
-	uint8_t wait_type;	/* The type of object that the thread is waiting on */
+	uint64_t owner;         /* The thread that owns the object */
+	uint64_t waiter;        /* The thread that's waiting on the object */
+	uint64_t context;       /* A context uniquely identifying the object */
+	uint8_t wait_type;      /* The type of object that the thread is waiting on */
 } __attribute__((packed)) thread_waitinfo_t;
 
 #define STACKSHOT_WAITOWNER_KERNEL         (UINT64_MAX - 1)
@@ -841,12 +839,12 @@ struct stack_snapshot_stacktop {
 /* FIXME some of these types aren't clean (fixed width,  packed, and defined *here*) */
 
 struct crashinfo_proc_uniqidentifierinfo {
-	uint8_t                 p_uuid[16];		/* UUID of the main executable */
-	uint64_t                p_uniqueid;		/* 64 bit unique identifier for process */
-	uint64_t                p_puniqueid;		/* unique identifier for process's parent */
-	uint64_t                p_reserve2;		/* reserved for future use */
-	uint64_t                p_reserve3;		/* reserved for future use */
-	uint64_t                p_reserve4;		/* reserved for future use */
+	uint8_t                 p_uuid[16];             /* UUID of the main executable */
+	uint64_t                p_uniqueid;             /* 64 bit unique identifier for process */
+	uint64_t                p_puniqueid;            /* unique identifier for process's parent */
+	uint64_t                p_reserve2;             /* reserved for future use */
+	uint64_t                p_reserve3;             /* reserved for future use */
+	uint64_t                p_reserve4;             /* reserved for future use */
 } __attribute__((packed));
 
 #define TASK_CRASHINFO_BEGIN                KCDATA_BUFFER_BEGIN_CRASHINFO
@@ -861,7 +859,7 @@ struct crashinfo_proc_uniqidentifierinfo {
 #define TASK_CRASHINFO_PID                  0x805
 #define TASK_CRASHINFO_PPID                 0x806
 #define TASK_CRASHINFO_RUSAGE               0x807  /* struct rusage DEPRECATED do not use.
-													  This struct has longs in it */
+	                                            *                                                      This struct has longs in it */
 #define TASK_CRASHINFO_RUSAGE_INFO          0x808  /* struct rusage_info_v3 from resource.h */
 #define TASK_CRASHINFO_PROC_NAME            0x809  /* char * */
 #define TASK_CRASHINFO_PROC_STARTTIME       0x80B  /* struct timeval64 */
@@ -912,10 +910,10 @@ struct crashinfo_proc_uniqidentifierinfo {
 #define EXIT_REASON_DISPATCH_QUEUE_NO   0x1006
 
 struct exit_reason_snapshot {
-        uint32_t ers_namespace;
-        uint64_t ers_code;
-        /* end of version 1 of exit_reason_snapshot. sizeof v1 was 12 */
-        uint64_t ers_flags;
+	uint32_t ers_namespace;
+	uint64_t ers_code;
+	/* end of version 1 of exit_reason_snapshot. sizeof v1 was 12 */
+	uint64_t ers_flags;
 } __attribute__((packed));
 
 #define EXIT_REASON_CODESIG_PATH_MAX    1024
@@ -951,7 +949,9 @@ typedef struct kcdata_iter {
 
 
 static inline
-kcdata_iter_t kcdata_iter(void *buffer, unsigned long size) {
+kcdata_iter_t
+kcdata_iter(void *buffer, unsigned long size)
+{
 	kcdata_iter_t iter;
 	iter.item = (kcdata_item_t) buffer;
 	iter.end = (void*) (((uintptr_t)buffer) + size);
@@ -962,7 +962,9 @@ static inline
 kcdata_iter_t kcdata_iter_unsafe(void *buffer) __attribute__((deprecated));
 
 static inline
-kcdata_iter_t kcdata_iter_unsafe(void *buffer) {
+kcdata_iter_t
+kcdata_iter_unsafe(void *buffer)
+{
 	kcdata_iter_t iter;
 	iter.item = (kcdata_item_t) buffer;
 	iter.end = (void*) (uintptr_t) ~0;
@@ -972,15 +974,19 @@ kcdata_iter_t kcdata_iter_unsafe(void *buffer) {
 static const kcdata_iter_t kcdata_invalid_iter = { .item = 0, .end = 0 };
 
 static inline
-int kcdata_iter_valid(kcdata_iter_t iter) {
+int
+kcdata_iter_valid(kcdata_iter_t iter)
+{
 	return
-		( (uintptr_t)iter.item + sizeof(struct kcdata_item) <= (uintptr_t)iter.end ) &&
-		( (uintptr_t)iter.item + sizeof(struct kcdata_item) + iter.item->size  <= (uintptr_t)iter.end);
+	        ((uintptr_t)iter.item + sizeof(struct kcdata_item) <= (uintptr_t)iter.end) &&
+	        ((uintptr_t)iter.item + sizeof(struct kcdata_item) + iter.item->size <= (uintptr_t)iter.end);
 }
 
 
 static inline
-kcdata_iter_t kcdata_iter_next(kcdata_iter_t iter) {
+kcdata_iter_t
+kcdata_iter_next(kcdata_iter_t iter)
+{
 	iter.item = (kcdata_item_t) (((uintptr_t)iter.item) + sizeof(struct kcdata_item) + (iter.item->size));
 	return iter;
 }
@@ -988,10 +994,11 @@ kcdata_iter_t kcdata_iter_next(kcdata_iter_t iter) {
 static inline uint32_t
 kcdata_iter_type(kcdata_iter_t iter)
 {
-	if ((iter.item->type & ~0xfu) == KCDATA_TYPE_ARRAY_PAD0)
+	if ((iter.item->type & ~0xfu) == KCDATA_TYPE_ARRAY_PAD0) {
 		return KCDATA_TYPE_ARRAY;
-	else
+	} else {
 		return iter.item->type;
+	}
 }
 
 static inline uint32_t
@@ -1012,9 +1019,8 @@ static inline int
 kcdata_iter_is_legacy_item(kcdata_iter_t iter, uint32_t legacy_size)
 {
 	uint32_t legacy_size_padded = legacy_size + kcdata_calc_padding(legacy_size);
-	return (iter.item->size == legacy_size_padded &&
-		(iter.item->flags & (KCDATA_FLAGS_STRUCT_PADDING_MASK | KCDATA_FLAGS_STRUCT_HAS_PADDING)) == 0);
-
+	return iter.item->size == legacy_size_padded &&
+	       (iter.item->flags & (KCDATA_FLAGS_STRUCT_PADDING_MASK | KCDATA_FLAGS_STRUCT_HAS_PADDING)) == 0;
 }
 
 static inline uint32_t
@@ -1044,10 +1050,11 @@ kcdata_iter_size(kcdata_iter_t iter)
 	}
 not_legacy:
 	default:
-		if (iter.item->size < kcdata_flags_get_padding(iter.item->flags))
+		if (iter.item->size < kcdata_flags_get_padding(iter.item->flags)) {
 			return 0;
-		else
+		} else {
 			return iter.item->size - kcdata_flags_get_padding(iter.item->flags);
+		}
 	}
 }
 
@@ -1058,18 +1065,24 @@ kcdata_iter_flags(kcdata_iter_t iter)
 }
 
 static inline
-void * kcdata_iter_payload(kcdata_iter_t iter) {
+void *
+kcdata_iter_payload(kcdata_iter_t iter)
+{
 	return &iter.item->data;
 }
 
 
 static inline
-uint32_t kcdata_iter_array_elem_type(kcdata_iter_t iter) {
+uint32_t
+kcdata_iter_array_elem_type(kcdata_iter_t iter)
+{
 	return (iter.item->flags >> 32) & UINT32_MAX;
 }
 
 static inline
-uint32_t kcdata_iter_array_elem_count(kcdata_iter_t iter) {
+uint32_t
+kcdata_iter_array_elem_count(kcdata_iter_t iter)
+{
 	return (iter.item->flags) & UINT32_MAX;
 }
 
@@ -1083,8 +1096,9 @@ uint32_t kcdata_iter_array_elem_count(kcdata_iter_t iter) {
 
 static inline
 uint32_t
-kcdata_iter_array_size_switch(kcdata_iter_t iter) {
-	switch(kcdata_iter_array_elem_type(iter)) {
+kcdata_iter_array_size_switch(kcdata_iter_t iter)
+{
+	switch (kcdata_iter_array_elem_type(iter)) {
 	case KCDATA_TYPE_LIBRARY_LOADINFO:
 		return sizeof(struct dyld_uuid_info_32);
 	case KCDATA_TYPE_LIBRARY_LOADINFO64:
@@ -1099,8 +1113,8 @@ kcdata_iter_array_size_switch(kcdata_iter_t iter) {
 		return sizeof(int32_t);
 	case STACKSHOT_KCTYPE_THREAD_DELTA_SNAPSHOT:
 		return sizeof(struct thread_delta_snapshot_v2);
-    // This one is only here to make some unit tests work. It should be OK to
-    // remove.
+	// This one is only here to make some unit tests work. It should be OK to
+	// remove.
 	case TASK_CRASHINFO_CRASHED_THREADID:
 		return sizeof(uint64_t);
 	default:
@@ -1109,54 +1123,70 @@ kcdata_iter_array_size_switch(kcdata_iter_t iter) {
 }
 
 static inline
-int kcdata_iter_array_valid(kcdata_iter_t iter) {
-	if (!kcdata_iter_valid(iter))
+int
+kcdata_iter_array_valid(kcdata_iter_t iter)
+{
+	if (!kcdata_iter_valid(iter)) {
 		return 0;
-	if (kcdata_iter_type(iter) != KCDATA_TYPE_ARRAY)
+	}
+	if (kcdata_iter_type(iter) != KCDATA_TYPE_ARRAY) {
 		return 0;
-    if (kcdata_iter_array_elem_count(iter) == 0)
+	}
+	if (kcdata_iter_array_elem_count(iter) == 0) {
 		return iter.item->size == 0;
+	}
 	if (iter.item->type == KCDATA_TYPE_ARRAY) {
 		uint32_t elem_size = kcdata_iter_array_size_switch(iter);
-		if (elem_size == 0)
+		if (elem_size == 0) {
 			return 0;
+		}
 		/* sizes get aligned to the nearest 16. */
 		return
-			kcdata_iter_array_elem_count(iter) <= iter.item->size / elem_size &&
-			iter.item->size % kcdata_iter_array_elem_count(iter) < 16;
+		        kcdata_iter_array_elem_count(iter) <= iter.item->size / elem_size &&
+		        iter.item->size % kcdata_iter_array_elem_count(iter) < 16;
 	} else {
 		return
-			(iter.item->type & 0xf) <= iter.item->size &&
-			kcdata_iter_array_elem_count(iter) <= iter.item->size - (iter.item->type & 0xf) &&
-			(iter.item->size - (iter.item->type & 0xf)) % kcdata_iter_array_elem_count(iter) == 0;
+		        (iter.item->type & 0xf) <= iter.item->size &&
+		        kcdata_iter_array_elem_count(iter) <= iter.item->size - (iter.item->type & 0xf) &&
+		        (iter.item->size - (iter.item->type & 0xf)) % kcdata_iter_array_elem_count(iter) == 0;
 	}
 }
 
 
 static inline
-uint32_t kcdata_iter_array_elem_size(kcdata_iter_t iter) {
-	if (iter.item->type == KCDATA_TYPE_ARRAY)
+uint32_t
+kcdata_iter_array_elem_size(kcdata_iter_t iter)
+{
+	if (iter.item->type == KCDATA_TYPE_ARRAY) {
 		return kcdata_iter_array_size_switch(iter);
-	if (kcdata_iter_array_elem_count(iter) == 0)
+	}
+	if (kcdata_iter_array_elem_count(iter) == 0) {
 		return 0;
+	}
 	return (iter.item->size - (iter.item->type & 0xf)) / kcdata_iter_array_elem_count(iter);
 }
 
 static inline
-int kcdata_iter_container_valid(kcdata_iter_t iter) {
+int
+kcdata_iter_container_valid(kcdata_iter_t iter)
+{
 	return
-		kcdata_iter_valid(iter) &&
-		kcdata_iter_type(iter) == KCDATA_TYPE_CONTAINER_BEGIN &&
-		iter.item->size >= sizeof(uint32_t);
+	        kcdata_iter_valid(iter) &&
+	        kcdata_iter_type(iter) == KCDATA_TYPE_CONTAINER_BEGIN &&
+	        iter.item->size >= sizeof(uint32_t);
 }
 
 static inline
-uint32_t kcdata_iter_container_type(kcdata_iter_t iter) {
-	return * (uint32_t *) kcdata_iter_payload(iter);
+uint32_t
+kcdata_iter_container_type(kcdata_iter_t iter)
+{
+	return *(uint32_t *) kcdata_iter_payload(iter);
 }
 
 static inline
-uint64_t kcdata_iter_container_id(kcdata_iter_t iter) {
+uint64_t
+kcdata_iter_container_id(kcdata_iter_t iter)
+{
 	return iter.item->flags;
 }
 
@@ -1170,22 +1200,27 @@ kcdata_iter_find_type(kcdata_iter_t iter, uint32_t type)
 {
 	KCDATA_ITER_FOREACH(iter)
 	{
-		if (kcdata_iter_type(iter) == type)
+		if (kcdata_iter_type(iter) == type) {
 			return iter;
+		}
 	}
 	return kcdata_invalid_iter;
 }
 
 static inline
-int kcdata_iter_data_with_desc_valid(kcdata_iter_t iter, uint32_t minsize) {
+int
+kcdata_iter_data_with_desc_valid(kcdata_iter_t iter, uint32_t minsize)
+{
 	return
-		kcdata_iter_valid(iter) &&
-		kcdata_iter_size(iter) >= KCDATA_DESC_MAXLEN + minsize &&
-		((char*)kcdata_iter_payload(iter))[KCDATA_DESC_MAXLEN-1] == 0;
+	        kcdata_iter_valid(iter) &&
+	        kcdata_iter_size(iter) >= KCDATA_DESC_MAXLEN + minsize &&
+	        ((char*)kcdata_iter_payload(iter))[KCDATA_DESC_MAXLEN - 1] == 0;
 }
 
 static inline
-char *kcdata_iter_string(kcdata_iter_t iter, uint32_t offset) {
+char *
+kcdata_iter_string(kcdata_iter_t iter, uint32_t offset)
+{
 	if (offset > kcdata_iter_size(iter)) {
 		return NULL;
 	}
@@ -1198,13 +1233,18 @@ char *kcdata_iter_string(kcdata_iter_t iter, uint32_t offset) {
 	}
 }
 
-static inline void kcdata_iter_get_data_with_desc(kcdata_iter_t iter, char **desc_ptr, void **data_ptr, uint32_t *size_ptr) {
-	if (desc_ptr)
+static inline void
+kcdata_iter_get_data_with_desc(kcdata_iter_t iter, char **desc_ptr, void **data_ptr, uint32_t *size_ptr)
+{
+	if (desc_ptr) {
 		*desc_ptr = (char *)kcdata_iter_payload(iter);
-	if (data_ptr)
+	}
+	if (data_ptr) {
 		*data_ptr = (void *)((uintptr_t)kcdata_iter_payload(iter) + KCDATA_DESC_MAXLEN);
-	if (size_ptr)
+	}
+	if (size_ptr) {
 		*size_ptr = kcdata_iter_size(iter) - KCDATA_DESC_MAXLEN;
+	}
 }
 
 #endif

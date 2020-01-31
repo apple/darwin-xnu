@@ -114,8 +114,8 @@ void __kasan_runtests(struct kasan_test *, int numtests);
 
 
 typedef int (*pmap_traverse_callback)(vm_map_offset_t start,
-                                      vm_map_offset_t end,
-                                      void *context);
+    vm_map_offset_t end,
+    void *context);
 int kasan_traverse_mappings(pmap_traverse_callback, void *context);
 
 #if XNU_KERNEL_PRIVATE
@@ -176,7 +176,7 @@ extern const uintptr_t __asan_shadow_memory_dynamic_address;
 
 __BEGIN_DECLS
 
-KASAN_DECLARE_FOREACH_WIDTH(void, __asan_report_load, uptr);
+    KASAN_DECLARE_FOREACH_WIDTH(void, __asan_report_load, uptr);
 KASAN_DECLARE_FOREACH_WIDTH(void, __asan_report_store, uptr);
 KASAN_DECLARE_FOREACH_WIDTH(void, __asan_store, uptr);
 KASAN_DECLARE_FOREACH_WIDTH(void, __asan_report_exp_load, uptr, int32_t);

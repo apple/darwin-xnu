@@ -2,7 +2,7 @@
  * Copyright (c) 2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -69,14 +69,14 @@ uint64_t coalition_id(coalition_t coal);
  * This interface is primarily to support libproc.
  *
  * Parameters:
- * 	type      : The COALITION_TYPE of the coalitions to investigate.
- * 	            Valid types can be found in <mach/coalition.h>
- * 	coal_list : Pointer to an array of procinfo_coalinfo structures
- * 	            that will be filled with information about each
- * 	            coalition whose type matches 'type'
- * 	            NOTE: This can be NULL to perform a simple query of
- * 	            the total number of coalitions.
- * 	list_sz   : The size (in number of structures) of 'coal_list'
+ *      type      : The COALITION_TYPE of the coalitions to investigate.
+ *                  Valid types can be found in <mach/coalition.h>
+ *      coal_list : Pointer to an array of procinfo_coalinfo structures
+ *                  that will be filled with information about each
+ *                  coalition whose type matches 'type'
+ *                  NOTE: This can be NULL to perform a simple query of
+ *                  the total number of coalitions.
+ *      list_sz   : The size (in number of structures) of 'coal_list'
  *
  * Returns: 0 if no coalitions matching 'type' are found
  *          Otherwise: the number of coalitions whose type matches
@@ -90,17 +90,17 @@ extern int coalitions_get_list(int type, struct procinfo_coalinfo *coal_list, in
  * Determine if a task is a coalition leader.
  *
  * Parameters:
- * 	task      : The task to investigate
- * 	coal_type : The COALITION_TYPE of the coalition to investigate.
- * 	            Valid types can be found in <mach/coalition.h>
- * 	coal      : If 'task' is a valid task, and is a member of a coalition
- * 	            of type 'coal_type', then 'coal' will be filled in with
- * 	            the corresponding coalition_t object.
- * 	            NOTE: This will be filled in whether or not the 'task' is
- * 	                  a leader in the coalition. However, if 'task' is
- * 	                  not a member of a coalition of type 'coal_type' then
- * 	                  'coal' will be filled in with COALITION_NULL.
- * 	            NOTE: This can be NULL
+ *      task      : The task to investigate
+ *      coal_type : The COALITION_TYPE of the coalition to investigate.
+ *                  Valid types can be found in <mach/coalition.h>
+ *      coal      : If 'task' is a valid task, and is a member of a coalition
+ *                  of type 'coal_type', then 'coal' will be filled in with
+ *                  the corresponding coalition_t object.
+ *                  NOTE: This will be filled in whether or not the 'task' is
+ *                        a leader in the coalition. However, if 'task' is
+ *                        not a member of a coalition of type 'coal_type' then
+ *                        'coal' will be filled in with COALITION_NULL.
+ *                  NOTE: This can be NULL
  *
  * Returns: TRUE if 'task' is a coalition leader, FALSE otherwise.
  */
@@ -126,7 +126,7 @@ extern task_t coalition_get_leader(coalition_t coal);
  * Sum up the number of tasks in the given coalition
  *
  * Parameters:
- * 	coal     : The coalition to investigate
+ *      coal     : The coalition to investigate
  *
  * Returns: The number of tasks in the coalition
  */
@@ -137,9 +137,9 @@ extern int coalition_get_task_count(coalition_t coal);
  * Sum up the page count for each task in the coalition specified by 'coal'
  *
  * Parameters:
- * 	coal     : The coalition to investigate
- * 	ntasks   : If non-NULL, this will be filled in with the number of
- * 	           tasks in the coalition.
+ *      coal     : The coalition to investigate
+ *      ntasks   : If non-NULL, this will be filled in with the number of
+ *                 tasks in the coalition.
  *
  * Returns: The sum of all pages used by all members of the coalition
  */
@@ -151,18 +151,18 @@ extern uint64_t coalition_get_page_count(coalition_t coal, int *ntasks);
  * given role.
  *
  * Parameters:
- * 	coal       : The coalition to investigate
- * 	rolemask   : The set of coalition task roles used to filter the list
- * 	             of PIDs returned in 'pid_list'. Roles can be combined
- * 	             using the COALITION_ROLEMASK_* tokens found in
- * 	             <mach/coalition.h>. Each PID returned is guaranteed to
- * 	             be tagged with one of the task roles specified by this
- * 	             mask.
- * 	sort_order : The order in which the returned PIDs should be sorted
- * 	             by default this is in descending page count.
- * 	pid_list   : Pointer to an array of PIDs that will be filled with
- * 	             members of the coalition tagged with the given 'taskrole'
- * 	list_sz    : The size (in number of PIDs) of 'pid_list'
+ *      coal       : The coalition to investigate
+ *      rolemask   : The set of coalition task roles used to filter the list
+ *                   of PIDs returned in 'pid_list'. Roles can be combined
+ *                   using the COALITION_ROLEMASK_* tokens found in
+ *                   <mach/coalition.h>. Each PID returned is guaranteed to
+ *                   be tagged with one of the task roles specified by this
+ *                   mask.
+ *      sort_order : The order in which the returned PIDs should be sorted
+ *                   by default this is in descending page count.
+ *      pid_list   : Pointer to an array of PIDs that will be filled with
+ *                   members of the coalition tagged with the given 'taskrole'
+ *      list_sz    : The size (in number of PIDs) of 'pid_list'
  *
  * Note:
  * This function will return the list of PIDs in a sorted order. By default
@@ -186,45 +186,51 @@ extern uint64_t coalition_get_page_count(coalition_t coal, int *ntasks);
  *
  */
 extern int coalition_get_pid_list(coalition_t coal, uint32_t rolemask,
-				  int sort_order, int *pid_list, int list_sz);
+    int sort_order, int *pid_list, int list_sz);
 
 #else /* !CONFIG_COALITIONS */
-static inline uint64_t coalition_id(__unused coalition_t coal)
+static inline uint64_t
+coalition_id(__unused coalition_t coal)
 {
 	return 0;
 }
 
-static inline int coalitions_get_list(__unused int type,
-				      __unused struct procinfo_coalinfo *coal_list,
-				      __unused int list_sz)
+static inline int
+coalitions_get_list(__unused int type,
+    __unused struct procinfo_coalinfo *coal_list,
+    __unused int list_sz)
 {
 	return 0;
 }
 
-static inline boolean_t coalition_is_leader(__unused task_t task,
-					    __unused int coal_type,
-					    coalition_t *coal)
+static inline boolean_t
+coalition_is_leader(__unused task_t task,
+    __unused int coal_type,
+    coalition_t *coal)
 {
 	*coal = COALITION_NULL;
 	return FALSE;
 }
 
-static inline int coalition_get_task_count(__unused coalition_t coal)
+static inline int
+coalition_get_task_count(__unused coalition_t coal)
 {
 	return 0;
 }
 
-static inline uint64_t coalition_get_page_count(__unused coalition_t coal,
-						__unused int *ntasks)
+static inline uint64_t
+coalition_get_page_count(__unused coalition_t coal,
+    __unused int *ntasks)
 {
 	return 0;
 }
 
-static inline int coalition_get_pid_list(__unused coalition_t coal,
-					 __unused uint32_t rolemask,
-					 __unused int sort_order,
-					 __unused int *pid_list,
-					 __unused int list_sz)
+static inline int
+coalition_get_pid_list(__unused coalition_t coal,
+    __unused uint32_t rolemask,
+    __unused int sort_order,
+    __unused int *pid_list,
+    __unused int list_sz)
 {
 	return 0;
 }

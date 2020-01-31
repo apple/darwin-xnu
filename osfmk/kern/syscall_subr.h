@@ -68,4 +68,3 @@ extern void thread_depress_expire(void *thread, void *p1);
 extern void thread_poll_yield(thread_t self);
 
 #endif /* _KERN_SYSCALL_SUBR_H_ */
-

@@ -41,14 +41,14 @@ __BEGIN_DECLS
 #include <kern/locks.h>
 
 typedef struct os_reason {
-	decl_lck_mtx_data(,       	osr_lock)
-	unsigned int			osr_refcount;
-	uint32_t			osr_namespace;
-	uint64_t			osr_code;
-	uint64_t			osr_flags;
-	uint32_t			osr_bufsize;
-	struct kcdata_descriptor	osr_kcd_descriptor;
-	char 				*osr_kcd_buf;
+	decl_lck_mtx_data(, osr_lock)
+	unsigned int                    osr_refcount;
+	uint32_t                        osr_namespace;
+	uint64_t                        osr_code;
+	uint64_t                        osr_flags;
+	uint32_t                        osr_bufsize;
+	struct kcdata_descriptor        osr_kcd_descriptor;
+	char                            *osr_kcd_buf;
 } *os_reason_t;
 
 #define OS_REASON_NULL ((os_reason_t) 0)
@@ -59,7 +59,7 @@ typedef struct os_reason {
 void os_reason_init(void);
 
 os_reason_t build_userspace_exit_reason(uint32_t reason_namespace, uint64_t reason_code, user_addr_t payload, uint32_t payload_size,
-					user_addr_t reason_string, uint64_t reason_flags);
+    user_addr_t reason_string, uint64_t reason_flags);
 char *launchd_exit_reason_get_string_desc(os_reason_t exit_reason);
 
 /* The blocking allocation is currently not exported to KEXTs */
@@ -171,7 +171,7 @@ void abort_with_reason(uint32_t reason_namespace, uint64_t reason_code, const ch
  * Outputs:             Does not return.
  */
 void abort_with_payload(uint32_t reason_namespace, uint64_t reason_code, void *payload, uint32_t payload_size, const char *reason_string,
-                                uint64_t reason_flags) __attribute__((noreturn));
+    uint64_t reason_flags) __attribute__((noreturn));
 
 /*
  * terminate_with_reason: Used to terminate a specific process and pass along
@@ -210,7 +210,7 @@ int terminate_with_reason(int pid, uint32_t reason_namespace, uint64_t reason_co
  *                      returns 0 otherwise
  */
 int terminate_with_payload(int pid, uint32_t reason_namespace, uint64_t reason_code, void *payload, uint32_t payload_size,
-                                const char *reason_string, uint64_t reason_flags);
+    const char *reason_string, uint64_t reason_flags);
 #endif /* KERNEL */
 
 /*

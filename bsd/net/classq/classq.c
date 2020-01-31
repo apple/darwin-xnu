@@ -74,12 +74,12 @@
 #include <libkern/libkern.h>
 
 
-u_int32_t classq_verbose = 0;	/* more noise if greater than 1 */
+u_int32_t classq_verbose = 0;   /* more noise if greater than 1 */
 
-SYSCTL_NODE(_net, OID_AUTO, classq, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "classq");
+SYSCTL_NODE(_net, OID_AUTO, classq, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "classq");
 
-SYSCTL_UINT(_net_classq, OID_AUTO, verbose, CTLFLAG_RW|CTLFLAG_LOCKED,
-	&classq_verbose, 0, "Class queue verbosity level");
+SYSCTL_UINT(_net_classq, OID_AUTO, verbose, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &classq_verbose, 0, "Class queue verbosity level");
 
 void
 _qinit(class_queue_t *q, int type, int lim, classq_pkt_type_t ptype)
@@ -177,20 +177,22 @@ _getq(class_queue_t *q)
 
 	if (pkt == NULL) {
 		VERIFY(qlen(q) == 0);
-		if (qsize(q) > 0)
+		if (qsize(q) > 0) {
 			qsize(q) = 0;
-		return (NULL);
+		}
+		return NULL;
 	}
 	VERIFY(qlen(q) > 0);
 	qlen(q)--;
 
 	/* qsize is an approximation, so adjust if necessary */
-	if (((int)qsize(q) - pkt_len) > 0)
+	if (((int)qsize(q) - pkt_len) > 0) {
 		qsize(q) -= pkt_len;
-	else if (qsize(q) != 0)
+	} else if (qsize(q) != 0) {
 		qsize(q) = 0;
+	}
 
-	return (pkt);
+	return pkt;
 }
 
 static void *
@@ -233,27 +235,28 @@ _getq_flow_or_scidx(class_queue_t *q, u_int32_t val, boolean_t isflowid)
 		qlen(q)--;
 
 		/* qsize is an approximation, so adjust if necessary */
-		if (((int)qsize(q) - pkt_len) > 0)
+		if (((int)qsize(q) - pkt_len) > 0) {
 			qsize(q) -= pkt_len;
-		else if (qsize(q) != 0)
+		} else if (qsize(q) != 0) {
 			qsize(q) = 0;
+		}
 	}
 
-	return (pkt);
+	return pkt;
 }
 
 /* get a packet of a specific flow beginning from the head of the queue */
 void *
 _getq_flow(class_queue_t *q, u_int32_t flow)
 {
-	return (_getq_flow_or_scidx(q, flow, TRUE));
+	return _getq_flow_or_scidx(q, flow, TRUE);
 }
 
 /* Get a packet whose MBUF_SCIDX() < scidx from head of queue */
 void *
 _getq_scidx_lt(class_queue_t *q, u_int32_t scidx)
 {
-	return (_getq_flow_or_scidx(q, scidx, FALSE));
+	return _getq_flow_or_scidx(q, scidx, FALSE);
 }
 
 /* get all packets (chained) starting from the head of the queue */
@@ -266,8 +269,9 @@ _getq_all(class_queue_t *q, void **last, u_int32_t *qlenp,
 	switch (qptype(q)) {
 	case QP_MBUF:
 		pkt = MBUFQ_FIRST(&qmbufq(q));
-		if (last != NULL)
+		if (last != NULL) {
 			*last = MBUFQ_LAST(&qmbufq(q));
+		}
 		MBUFQ_INIT(&qmbufq(q));
 		break;
 
@@ -277,15 +281,17 @@ _getq_all(class_queue_t *q, void **last, u_int32_t *qlenp,
 		/* NOTREACHED */
 	}
 
-	if (qlenp != NULL)
+	if (qlenp != NULL) {
 		*qlenp = qlen(q);
-	if (qsizep != NULL)
+	}
+	if (qsizep != NULL) {
 		*qsizep = qsize(q);
+	}
 
 	qlen(q) = 0;
 	qsize(q) = 0;
 
-	return (pkt);
+	return pkt;
 }
 
 static inline struct mbuf *
@@ -311,10 +317,11 @@ _getq_tail_mbuf(class_queue_t *q)
 		--qlen(q);
 
 		/* qsize is an approximation, so adjust if necessary */
-		if (((int)qsize(q) - m_length(m)) > 0)
+		if (((int)qsize(q) - m_length(m)) > 0) {
 			qsize(q) -= m_length(m);
-		else if (qsize(q) != 0)
+		} else if (qsize(q) != 0) {
 			qsize(q) = 0;
+		}
 
 		if (qempty(q)) {
 			VERIFY(m == MBUFQ_FIRST(head));
@@ -324,7 +331,7 @@ _getq_tail_mbuf(class_queue_t *q)
 			head->mq_last = &MBUFQ_NEXT(n);
 		}
 	}
-	return (m);
+	return m;
 }
 
 /* drop a packet at the tail of the queue */
@@ -343,7 +350,7 @@ _getq_tail(class_queue_t *q)
 		/* NOTREACHED */
 	}
 
-	return (t);
+	return t;
 }
 
 static inline struct mbuf *
@@ -360,46 +367,51 @@ _getq_random_mbuf(class_queue_t *q)
 	n = qlen(q);
 	if (n == 0) {
 		VERIFY(MBUFQ_EMPTY(head));
-		if (qsize(q) > 0)
+		if (qsize(q) > 0) {
 			qsize(q) = 0;
-		return (NULL);
+		}
+		return NULL;
 	}
 
 	m = MBUFQ_FIRST(head);
-	read_frandom(&rnd, sizeof (rnd));
+	read_frandom(&rnd, sizeof(rnd));
 	n = (rnd % n) + 1;
 
 	if (n == 1) {
-		if ((MBUFQ_FIRST(head) = MBUFQ_NEXT(m)) == NULL)
+		if ((MBUFQ_FIRST(head) = MBUFQ_NEXT(m)) == NULL) {
 			(head)->mq_last = &MBUFQ_FIRST(head);
+		}
 	} else {
 		struct mbuf *p = NULL;
 
 		VERIFY(n > 1);
 		while (n--) {
-			if (MBUFQ_NEXT(m) == NULL)
+			if (MBUFQ_NEXT(m) == NULL) {
 				break;
+			}
 			p = m;
 			m = MBUFQ_NEXT(m);
 		}
 		VERIFY(p != NULL && MBUFQ_NEXT(p) == m);
 
-		if ((MBUFQ_NEXT(p) = MBUFQ_NEXT(m)) == NULL)
+		if ((MBUFQ_NEXT(p) = MBUFQ_NEXT(m)) == NULL) {
 			(head)->mq_last = &MBUFQ_NEXT(p);
+		}
 	}
 
 	VERIFY(qlen(q) > 0);
 	--qlen(q);
 
 	/* qsize is an approximation, so adjust if necessary */
-	if (((int)qsize(q) - m_length(m)) > 0)
+	if (((int)qsize(q) - m_length(m)) > 0) {
 		qsize(q) -= m_length(m);
-	else if (qsize(q) != 0)
+	} else if (qsize(q) != 0) {
 		qsize(q) = 0;
+	}
 
 	MBUFQ_NEXT(m) = NULL;
 
-	return (m);
+	return m;
 }
 
 /* randomly select a packet in the queue */
@@ -418,7 +430,7 @@ _getq_random(class_queue_t *q)
 		/* NOTREACHED */
 	}
 
-	return (r);
+	return r;
 }
 
 static inline void
@@ -428,13 +440,15 @@ _removeq_mbuf(class_queue_t *q, struct mbuf *m)
 	struct mbuf *m0, **mtail;
 
 	m0 = MBUFQ_FIRST(head);
-	if (m0 == NULL)
+	if (m0 == NULL) {
 		return;
+	}
 
 	if (m0 != m) {
 		while (MBUFQ_NEXT(m0) != m) {
-			if (m0 == NULL)
+			if (m0 == NULL) {
 				return;
+			}
 			m0 = MBUFQ_NEXT(m0);
 		}
 		mtail = &MBUFQ_NEXT(m0);
@@ -443,17 +457,19 @@ _removeq_mbuf(class_queue_t *q, struct mbuf *m)
 	}
 
 	*mtail = MBUFQ_NEXT(m);
-	if (*mtail == NULL)
+	if (*mtail == NULL) {
 		head->mq_last = mtail;
+	}
 
 	VERIFY(qlen(q) > 0);
 	--qlen(q);
 
 	/* qsize is an approximation, so adjust if necessary */
-	if (((int)qsize(q) - m_length(m)) > 0)
+	if (((int)qsize(q) - m_length(m)) > 0) {
 		qsize(q) -= m_length(m);
-	else if (qsize(q) != 0)
+	} else if (qsize(q) != 0) {
 		qsize(q) = 0;
+	}
 
 	MBUFQ_NEXT(m) = NULL;
 }
@@ -510,19 +526,23 @@ _flushq_flow_mbuf(class_queue_t *q, u_int32_t flow, u_int32_t *cnt,
 		qlen(q) -= c;
 
 		/* qsize is an approximation, so adjust if necessary */
-		if (((int)qsize(q) - l) > 0)
+		if (((int)qsize(q) - l) > 0) {
 			qsize(q) -= l;
-		else if (qsize(q) != 0)
+		} else if (qsize(q) != 0) {
 			qsize(q) = 0;
+		}
 	}
 
-	if (!MBUFQ_EMPTY(&freeq))
+	if (!MBUFQ_EMPTY(&freeq)) {
 		m_freem_list(MBUFQ_FIRST(&freeq));
+	}
 
-	if (cnt != NULL)
+	if (cnt != NULL) {
 		*cnt = c;
-	if (len != NULL)
+	}
+	if (len != NULL) {
 		*len = l;
+	}
 }
 
 void

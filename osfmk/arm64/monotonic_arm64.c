@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,15 +32,38 @@
 #include <kern/assert.h>
 #include <kern/debug.h> /* panic */
 #include <kern/monotonic.h>
+#include <machine/atomic.h>
 #include <machine/limits.h> /* CHAR_BIT */
+#include <os/overflow.h>
+#include <pexpert/arm64/board_config.h>
+#include <pexpert/device_tree.h> /* DTFindEntry */
+#include <pexpert/pexpert.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/errno.h>
 #include <sys/monotonic.h>
-#include <pexpert/arm64/board_config.h>
-#include <pexpert/device_tree.h> /* DTFindEntry */
-#include <pexpert/pexpert.h>
+
+/*
+ * Ensure that control registers read back what was written under MACH_ASSERT
+ * kernels.
+ *
+ * A static inline function cannot be used due to passing the register through
+ * the builtin -- it requires a constant string as its first argument, since
+ * MSRs registers are encoded as an immediate in the instruction.
+ */
+#if MACH_ASSERT
+#define CTRL_REG_SET(reg, val) do { \
+	__builtin_arm_wsr64((reg), (val)); \
+	uint64_t __check_reg = __builtin_arm_rsr64((reg)); \
+	if (__check_reg != (val)) { \
+	        panic("value written to %s was not read back (wrote %llx, read %llx)", \
+	            #reg, (val), __check_reg); \
+	} \
+} while (0)
+#else /* MACH_ASSERT */
+#define CTRL_REG_SET(reg, val) __builtin_arm_wsr64((reg), (val))
+#endif /* MACH_ASSERT */
 
 #pragma mark core counters
 
@@ -92,8 +115,6 @@ bool mt_core_supported = true;
  * other features.
  */
 
-#define PMCR0 "s3_1_c15_c0_0"
-
 #define PMCR0_CTR_EN(CTR) (UINT64_C(1) << CTR_POS(CTR))
 #define PMCR0_FIXED_EN (PMCR0_CTR_EN(CYCLES) | PMCR0_CTR_EN(INSTRS))
 /* how interrupts are delivered on a PMI */
@@ -105,9 +126,13 @@ enum {
 	PMCR0_INTGEN_FIQ = 4,
 };
 #define PMCR0_INTGEN_SET(INT) ((uint64_t)(INT) << 8)
+
+#if CPMU_AIC_PMI
+#define PMCR0_INTGEN_INIT PMCR0_INTGEN_SET(PMCR0_INTGEN_AIC)
+#else /* CPMU_AIC_PMI */
 #define PMCR0_INTGEN_INIT PMCR0_INTGEN_SET(PMCR0_INTGEN_FIQ)
-/* set by hardware if a PMI was delivered */
-#define PMCR0_PMAI        (UINT64_C(1) << 11)
+#endif /* !CPMU_AIC_PMI */
+
 #define PMCR0_PMI_EN(CTR) (UINT64_C(1) << (12 + CTR_POS(CTR)))
 /* fixed counters are always counting */
 #define PMCR0_PMI_INIT (PMCR0_PMI_EN(CYCLES) | PMCR0_PMI_EN(INSTRS))
@@ -138,7 +163,7 @@ enum {
 #define PMCR1_EL3A64_EN(CTR) (UINT64_C(1) << (24 + CTR_POS(CTR)))
 #endif
 #define PMCR1_ALL_EN(CTR) (PMCR1_EL0A32_EN(CTR) | PMCR1_EL0A64_EN(CTR) | \
-                           PMCR1_EL1A64_EN(CTR) | PMCR1_EL3A64_EN(CTR))
+	                   PMCR1_EL1A64_EN(CTR) | PMCR1_EL3A64_EN(CTR))
 
 /* fixed counters always count in all modes */
 #define PMCR1_INIT (PMCR1_ALL_EN(CYCLES) | PMCR1_ALL_EN(INSTRS))
@@ -165,12 +190,9 @@ core_init_execution_modes(void)
 #define PMCR3 "s3_1_c15_c3_0"
 #define PMCR4 "s3_1_c15_c4_0"
 
-#define PMSR_OVF(CTR) (1ULL << (CTR))
+#define PMSR "s3_1_c15_c13_0"
 
-void
-mt_early_init(void)
-{
-}
+#define PMSR_OVF(CTR) (1ULL << (CTR))
 
 static int
 core_init(__unused mt_device_t dev)
@@ -218,11 +240,20 @@ mt_core_set_snap(unsigned int ctr, uint64_t count)
 static void
 core_set_enabled(void)
 {
-	uint64_t pmcr0;
-
-	pmcr0 = __builtin_arm_rsr64(PMCR0);
+	uint64_t pmcr0 = __builtin_arm_rsr64(PMCR0);
 	pmcr0 |= PMCR0_INIT | PMCR0_FIXED_EN;
+	pmcr0 &= ~PMCR0_PMAI;
 	__builtin_arm_wsr64(PMCR0, pmcr0);
+#if MACH_ASSERT
+	/*
+	 * Only check for the values that were ORed in.
+	 */
+	uint64_t pmcr0_check = __builtin_arm_rsr64(PMCR0);
+	if (!(pmcr0_check & (PMCR0_INIT | PMCR0_FIXED_EN))) {
+		panic("monotonic: hardware ignored enable (read %llx)",
+		    pmcr0_check);
+	}
+#endif /* MACH_ASSERT */
 }
 
 static void
@@ -234,11 +265,11 @@ core_idle(__unused cpu_data_t *cpu)
 #if DEBUG
 	uint64_t pmcr0 = __builtin_arm_rsr64(PMCR0);
 	if ((pmcr0 & PMCR0_FIXED_EN) == 0) {
-		panic("monotonic: counters disabled while idling, pmcr0 = 0x%llx\n", pmcr0);
+		panic("monotonic: counters disabled before idling, pmcr0 = 0x%llx\n", pmcr0);
 	}
 	uint64_t pmcr1 = __builtin_arm_rsr64(PMCR1);
 	if ((pmcr1 & PMCR1_INIT) == 0) {
-		panic("monotonic: counter modes disabled while idling, pmcr1 = 0x%llx\n", pmcr1);
+		panic("monotonic: counter modes disabled before idling, pmcr1 = 0x%llx\n", pmcr1);
 	}
 #endif /* DEBUG */
 
@@ -262,7 +293,6 @@ mt_cpu_idle(cpu_data_t *cpu)
 void
 mt_cpu_run(cpu_data_t *cpu)
 {
-	uint64_t pmcr0;
 	struct mt_cpu *mtc;
 
 	assert(cpu != NULL);
@@ -277,9 +307,7 @@ mt_cpu_run(cpu_data_t *cpu)
 	/* re-enable the counters */
 	core_init_execution_modes();
 
-	pmcr0 = __builtin_arm_rsr64(PMCR0);
-	pmcr0 |= PMCR0_INIT | PMCR0_FIXED_EN;
-	__builtin_arm_wsr64(PMCR0, pmcr0);
+	core_set_enabled();
 }
 
 void
@@ -305,12 +333,30 @@ mt_wake_per_core(void)
 }
 
 static void
-mt_cpu_pmi(cpu_data_t *cpu, uint64_t pmsr)
+mt_cpu_pmi(cpu_data_t *cpu, uint64_t pmcr0)
 {
 	assert(cpu != NULL);
 	assert(ml_get_interrupts_enabled() == FALSE);
 
-	(void)atomic_fetch_add_explicit(&mt_pmis, 1, memory_order_relaxed);
+	os_atomic_inc(&mt_pmis, relaxed);
+	cpu->cpu_stat.pmi_cnt++;
+	cpu->cpu_stat.pmi_cnt_wake++;
+
+#if MONOTONIC_DEBUG
+	if (!PMCR0_PMI(pmcr0)) {
+		kprintf("monotonic: mt_cpu_pmi but no PMI (PMCR0 = %#llx)\n",
+		    pmcr0);
+	}
+#else /* MONOTONIC_DEBUG */
+#pragma unused(pmcr0)
+#endif /* !MONOTONIC_DEBUG */
+
+	uint64_t pmsr = __builtin_arm_rsr64(PMSR);
+
+#if MONOTONIC_DEBUG
+	kprintf("monotonic: cpu = %d, PMSR = 0x%llx, PMCR0 = 0x%llx",
+	    cpu_number(), pmsr, pmcr0);
+#endif /* MONOTONIC_DEBUG */
 
 	/*
 	 * monotonic handles any fixed counter PMIs.
@@ -332,7 +378,7 @@ mt_cpu_pmi(cpu_data_t *cpu, uint64_t pmsr)
 				user_mode = PSR64_IS_USER(get_saved_state_cpsr(state));
 			}
 			KDBG_RELEASE(KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_DEBUG, 1),
-					mt_microstackshot_ctr, user_mode);
+			    mt_microstackshot_ctr, user_mode);
 			mt_microstackshot_pmi_handler(user_mode, mt_microstackshot_ctx);
 		}
 	}
@@ -347,13 +393,35 @@ mt_cpu_pmi(cpu_data_t *cpu, uint64_t pmsr)
 		}
 	}
 
+#if MACH_ASSERT
+	pmsr = __builtin_arm_rsr64(PMSR);
+	assert(pmsr == 0);
+#endif /* MACH_ASSERT */
+
 	core_set_enabled();
 }
 
+#if CPMU_AIC_PMI
 void
-mt_fiq(void *cpu, uint64_t pmsr, uint64_t upmsr)
+mt_cpmu_aic_pmi(cpu_id_t source)
 {
-	mt_cpu_pmi(cpu, pmsr);
+	struct cpu_data *curcpu = getCpuDatap();
+	if (source != curcpu->interrupt_nub) {
+		panic("monotonic: PMI from IOCPU %p delivered to %p", source,
+		    curcpu->interrupt_nub);
+	}
+	mt_cpu_pmi(curcpu, __builtin_arm_rsr64(PMCR0));
+}
+#endif /* CPMU_AIC_PMI */
+
+void
+mt_fiq(void *cpu, uint64_t pmcr0, uint64_t upmsr)
+{
+#if CPMU_AIC_PMI
+#pragma unused(cpu, pmcr0)
+#else /* CPMU_AIC_PMI */
+	mt_cpu_pmi(cpu, pmcr0);
+#endif /* !CPMU_AIC_PMI */
 
 #pragma unused(upmsr)
 }
@@ -384,9 +452,15 @@ mt_microstackshot_start_remote(__unused void *arg)
 int
 mt_microstackshot_start_arch(uint64_t period)
 {
-	mt_core_reset_values[mt_microstackshot_ctr] = CTR_MAX - period;
+	uint64_t reset_value = 0;
+	int ovf = os_sub_overflow(CTR_MAX, period, &reset_value);
+	if (ovf) {
+		return ERANGE;
+	}
+
+	mt_core_reset_values[mt_microstackshot_ctr] = reset_value;
 	cpu_broadcast_xcall(&mt_xc_sync, TRUE, mt_microstackshot_start_remote,
-			mt_microstackshot_start_remote /* cannot pass NULL */);
+	    mt_microstackshot_start_remote /* cannot pass NULL */);
 	return 0;
 }
 
@@ -400,5 +474,5 @@ struct mt_device mt_devices[] = {
 };
 
 static_assert(
-		(sizeof(mt_devices) / sizeof(mt_devices[0])) == MT_NDEVS,
-		"MT_NDEVS macro should be same as the length of mt_devices");
+	(sizeof(mt_devices) / sizeof(mt_devices[0])) == MT_NDEVS,
+	"MT_NDEVS macro should be same as the length of mt_devices");

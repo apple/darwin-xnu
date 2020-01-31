@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -70,8 +70,8 @@
 /* load symbolic names */
 #define PRUREQUESTS
 #define TCPSTATES
-#define	TCPTIMERS
-#define	TANAMES
+#define TCPTIMERS
+#define TANAMES
 #endif
 
 #include <sys/param.h>
@@ -95,24 +95,24 @@
 #include <netinet/tcp_debug.h>
 
 #if TCPDEBUG
-__private_extern__ int	tcpconsdebug = 0;
+__private_extern__ int  tcpconsdebug = 0;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, tcpconsdebug, CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcpconsdebug, 0, "Turn tcp debugging on or off");
 #endif
 
 static struct tcp_debug tcp_debug[TCP_NDEBUG];
-static int	tcp_debx;
+static int      tcp_debx;
 
 /*
  * Tcp debug routines
  */
 void
 tcp_trace(act, ostate, tp, ipgen, th, req)
-	short act, ostate;
-	struct tcpcb *tp;
-	void *ipgen;
-	struct tcphdr *th;
-	int req;
+short act, ostate;
+struct tcpcb *tp;
+void *ipgen;
+struct tcphdr *th;
+int req;
 {
 #if INET6
 	int isipv6;
@@ -126,38 +126,40 @@ tcp_trace(act, ostate, tp, ipgen, th, req)
 #endif /* INET6 */
 	td->td_family =
 #if INET6
-		(isipv6 != 0) ? AF_INET6 :
+	    (isipv6 != 0) ? AF_INET6 :
 #endif
-		AF_INET;
-	if (tcp_debx == TCP_NDEBUG)
+	    AF_INET;
+	if (tcp_debx == TCP_NDEBUG) {
 		tcp_debx = 0;
+	}
 	td->td_time = iptime();
 	td->td_act = act;
 	td->td_ostate = ostate;
 	td->td_tcb = (caddr_t)tp;
-	if (tp)
+	if (tp) {
 		td->td_cb = *tp;
-	else
-		bzero((caddr_t)&td->td_cb, sizeof (*tp));
+	} else {
+		bzero((caddr_t)&td->td_cb, sizeof(*tp));
+	}
 	if (ipgen) {
 		switch (td->td_family) {
 		case AF_INET:
 			bcopy((caddr_t)ipgen, (caddr_t)&td->td_ti.ti_i,
-			      sizeof(td->td_ti.ti_i));
+			    sizeof(td->td_ti.ti_i));
 			bzero((caddr_t)td->td_ip6buf, sizeof(td->td_ip6buf));
 			break;
 #if INET6
 		case AF_INET6:
 			bcopy((caddr_t)ipgen, (caddr_t)td->td_ip6buf,
-			      sizeof(td->td_ip6buf));
+			    sizeof(td->td_ip6buf));
 			bzero((caddr_t)&td->td_ti.ti_i,
-			      sizeof(td->td_ti.ti_i));
+			    sizeof(td->td_ti.ti_i));
 			break;
 #endif
 		default:
 			bzero((caddr_t)td->td_ip6buf, sizeof(td->td_ip6buf));
 			bzero((caddr_t)&td->td_ti.ti_i,
-			      sizeof(td->td_ti.ti_i));
+			    sizeof(td->td_ti.ti_i));
 			break;
 		}
 	} else {
@@ -174,12 +176,12 @@ tcp_trace(act, ostate, tp, ipgen, th, req)
 		case AF_INET6:
 			td->td_ti6.th = *th;
 			bzero((caddr_t)&td->td_ti.ti_t,
-			      sizeof(td->td_ti.ti_t));
+			    sizeof(td->td_ti.ti_t));
 			break;
 #endif
 		default:
 			bzero((caddr_t)&td->td_ti.ti_t,
-			      sizeof(td->td_ti.ti_t));
+			    sizeof(td->td_ti.ti_t));
 			bzero((caddr_t)&td->td_ti6.th, sizeof(td->td_ti6.th));
 			break;
 		}
@@ -189,47 +191,51 @@ tcp_trace(act, ostate, tp, ipgen, th, req)
 	}
 	td->td_req = req;
 #if TCPDEBUG
-	if (tcpconsdebug == 0)
+	if (tcpconsdebug == 0) {
 		return;
-	if (tp)
+	}
+	if (tp) {
 		printf("%x %s:", tp, tcpstates[ostate]);
-	else
+	} else {
 		printf("???????? ");
+	}
 	printf("%s ", tanames[act]);
 	switch (act) {
-
 	case TA_INPUT:
 	case TA_OUTPUT:
 	case TA_DROP:
-		if (ipgen == NULL || th == NULL)
+		if (ipgen == NULL || th == NULL) {
 			break;
+		}
 		seq = th->th_seq;
 		ack = th->th_ack;
 		len =
 #if INET6
-			isipv6 ? ((struct ip6_hdr *)ipgen)->ip6_plen :
+		    isipv6 ? ((struct ip6_hdr *)ipgen)->ip6_plen :
 #endif
-			((struct ip *)ipgen)->ip_len;
+		    ((struct ip *)ipgen)->ip_len;
 		if (act == TA_OUTPUT) {
 			seq = ntohl(seq);
 			ack = ntohl(ack);
 			len = ntohs((u_short)len);
 		}
-		if (act == TA_OUTPUT)
-			len -= sizeof (struct tcphdr);
-		if (len)
-			printf("[%x..%x)", seq, seq+len);
-		else
+		if (act == TA_OUTPUT) {
+			len -= sizeof(struct tcphdr);
+		}
+		if (len) {
+			printf("[%x..%x)", seq, seq + len);
+		} else {
 			printf("%x", seq);
+		}
 		printf("@%x, urp=%x", ack, th->th_urp);
 		flags = th->th_flags;
 		if (flags) {
 			char *cp = "<";
-#define pf(f) {					\
-	if (th->th_flags & TH_##f) {		\
-		printf("%s%s", cp, #f);		\
-		cp = ",";			\
-	}					\
+#define pf(f) {                                 \
+	if (th->th_flags & TH_##f) {            \
+	        printf("%s%s", cp, #f);         \
+	        cp = ",";                       \
+	}                                       \
 }
 			pf(SYN); pf(ACK); pf(FIN); pf(RST); pf(PUSH); pf(URG);
 			printf(">");
@@ -237,21 +243,24 @@ tcp_trace(act, ostate, tp, ipgen, th, req)
 		break;
 
 	case TA_USER:
-		printf("%s", prurequests[req&0xff]);
-		if ((req & 0xff) == PRU_SLOWTIMO)
-			printf("<%s>", tcptimers[req>>8]);
+		printf("%s", prurequests[req & 0xff]);
+		if ((req & 0xff) == PRU_SLOWTIMO) {
+			printf("<%s>", tcptimers[req >> 8]);
+		}
 		break;
 	}
-	if (tp)
+	if (tp) {
 		printf(" -> %s", tcpstates[tp->t_state]);
+	}
 	/* print out internal state of tp !?! */
 	printf("\n");
-	if (tp == 0)
+	if (tp == 0) {
 		return;
+	}
 	printf(
-	"\trcv_(nxt,wnd,up) (%lx,%lx,%lx) snd_(una,nxt,max) (%lx,%lx,%lx)\n",
-	    (uint32_t)tp->rcv_nxt, tp->rcv_wnd, (uint32_t)tp->rcv_up,
-	    (uint32_t)tp->snd_una, (uint32_t)tp->snd_nxt, (uint32_t)tp->snd_max);
+		"\trcv_(nxt,wnd,up) (%lx,%lx,%lx) snd_(una,nxt,max) (%lx,%lx,%lx)\n",
+		(uint32_t)tp->rcv_nxt, tp->rcv_wnd, (uint32_t)tp->rcv_up,
+		(uint32_t)tp->snd_una, (uint32_t)tp->snd_nxt, (uint32_t)tp->snd_max);
 	printf("\tsnd_(wl1,wl2,wnd) (%lx,%lx,%lx)\n",
 	    (uint32_t)tp->snd_wl1, (uint32_t)tp->snd_wl2, tp->snd_wnd);
 #endif /* TCPDEBUG */

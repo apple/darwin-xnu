@@ -95,14 +95,14 @@ static void detach_domain(struct domain *);
 static struct protosw *pffindprotonotype_locked(int, int, int);
 static struct domain *pffinddomain_locked(int);
 
-static boolean_t domain_timeout_run;	/* domain timer is scheduled to run */
+static boolean_t domain_timeout_run;    /* domain timer is scheduled to run */
 static boolean_t domain_draining;
 static void domain_sched_timeout(void);
 static void domain_timeout(void *);
 
-lck_grp_t	*domain_proto_mtx_grp;
-lck_attr_t	*domain_proto_mtx_attr;
-static lck_grp_attr_t	*domain_proto_mtx_grp_attr;
+lck_grp_t       *domain_proto_mtx_grp;
+lck_attr_t      *domain_proto_mtx_attr;
+static lck_grp_attr_t   *domain_proto_mtx_grp_attr;
 decl_lck_mtx_data(static, domain_proto_mtx);
 decl_lck_mtx_data(static, domain_timeout_mtx);
 
@@ -115,9 +115,9 @@ SYSCTL_DECL(_kern_ipc);
 static int sysctl_do_drain_domains SYSCTL_HANDLER_ARGS;
 
 SYSCTL_PROC(_kern_ipc, OID_AUTO, do_drain_domains,
-	CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_LOCKED,
-	0, 0,
-	sysctl_do_drain_domains, "I", "force manual drain domains");
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0,
+    sysctl_do_drain_domains, "I", "force manual drain domains");
 
 #endif /* DEVELOPMENT || DEBUG */
 
@@ -128,8 +128,9 @@ pr_init_old(struct protosw *pp, struct domain *dp)
 	VERIFY(pp->pr_flags & PR_OLD);
 	VERIFY(pp->pr_old != NULL);
 
-	if (pp->pr_old->pr_init != NULL)
+	if (pp->pr_old->pr_init != NULL) {
 		pp->pr_old->pr_init();
+	}
 }
 
 static void
@@ -139,8 +140,9 @@ init_proto(struct protosw *pp, struct domain *dp)
 
 	if (!(pp->pr_flags & PR_INITIALIZED)) {
 		TAILQ_INIT(&pp->pr_filter_head);
-		if (pp->pr_init != NULL)
+		if (pp->pr_init != NULL) {
 			pp->pr_init(pp, dp);
+		}
 		pp->pr_flags |= PR_INITIALIZED;
 	}
 }
@@ -182,8 +184,9 @@ dom_init_old(struct domain *dp)
 	VERIFY(dp->dom_flags & DOM_OLD);
 	VERIFY(dp->dom_old != NULL);
 
-	if (dp->dom_old->dom_init != NULL)
+	if (dp->dom_old->dom_init != NULL) {
 		dp->dom_old->dom_init();
+	}
 }
 
 static void
@@ -196,19 +199,22 @@ init_domain(struct domain *dp)
 		    domain_proto_mtx_attr);
 		dp->dom_mtx = &dp->dom_mtx_s;
 		TAILQ_INIT(&dp->dom_protosw);
-		if (dp->dom_init != NULL)
+		if (dp->dom_init != NULL) {
 			dp->dom_init(dp);
+		}
 		dp->dom_flags |= DOM_INITIALIZED;
 	}
 
 	/* Recompute for new protocol */
-	if (_max_linkhdr < 16)		/* XXX - Sheesh; everything's ether? */
+	if (_max_linkhdr < 16) {        /* XXX - Sheesh; everything's ether? */
 		_max_linkhdr = 16;
-	_max_linkhdr = max_linkhdr;	/* round it up */
+	}
+	_max_linkhdr = max_linkhdr;     /* round it up */
 
-	if (dp->dom_protohdrlen > _max_protohdr)
+	if (dp->dom_protohdrlen > _max_protohdr) {
 		_max_protohdr = dp->dom_protohdrlen;
-	_max_protohdr = max_protohdr;	/* round it up */
+	}
+	_max_protohdr = max_protohdr;   /* round it up */
 
 	max_hdr = max_linkhdr + max_protohdr;
 	max_datalen = MHLEN - max_hdr;
@@ -283,7 +289,7 @@ net_add_domain_old(struct domain_old *odp)
 		/* NOTREACHED */
 	}
 
-	dp = _MALLOC(sizeof (*dp), M_TEMP, M_WAITOK | M_ZERO);
+	dp = _MALLOC(sizeof(*dp), M_TEMP, M_WAITOK | M_ZERO);
 	if (dp == NULL) {
 		/*
 		 * There is really nothing better than to panic here,
@@ -296,23 +302,23 @@ net_add_domain_old(struct domain_old *odp)
 	}
 
 	/* Copy everything but dom_init, dom_mtx, dom_next and dom_refs */
-	dp->dom_family		= odp->dom_family;
-	dp->dom_flags		= (odp->dom_flags & DOMF_USERFLAGS) | DOM_OLD;
-	dp->dom_name		= odp->dom_name;
-	dp->dom_init		= dom_init_old;
-	dp->dom_externalize	= odp->dom_externalize;
-	dp->dom_dispose		= odp->dom_dispose;
-	dp->dom_rtattach	= odp->dom_rtattach;
-	dp->dom_rtoffset	= odp->dom_rtoffset;
-	dp->dom_maxrtkey	= odp->dom_maxrtkey;
-	dp->dom_protohdrlen	= odp->dom_protohdrlen;
-	dp->dom_old		= odp;
+	dp->dom_family          = odp->dom_family;
+	dp->dom_flags           = (odp->dom_flags & DOMF_USERFLAGS) | DOM_OLD;
+	dp->dom_name            = odp->dom_name;
+	dp->dom_init            = dom_init_old;
+	dp->dom_externalize     = odp->dom_externalize;
+	dp->dom_dispose         = odp->dom_dispose;
+	dp->dom_rtattach        = odp->dom_rtattach;
+	dp->dom_rtoffset        = odp->dom_rtoffset;
+	dp->dom_maxrtkey        = odp->dom_maxrtkey;
+	dp->dom_protohdrlen     = odp->dom_protohdrlen;
+	dp->dom_old             = odp;
 
 	attach_domain(dp);
 	init_domain(dp);
 
 	/* Point the mutex back to the internal structure's */
-	odp->dom_mtx		= dp->dom_mtx;
+	odp->dom_mtx            = dp->dom_mtx;
 	domain_guard_release(guard);
 }
 
@@ -335,11 +341,13 @@ net_del_domain_old(struct domain_old *odp)
 	}
 
 	TAILQ_FOREACH_SAFE(dp1, &domains, dom_entry, dp2) {
-		if (!(dp1->dom_flags & DOM_OLD))
+		if (!(dp1->dom_flags & DOM_OLD)) {
 			continue;
+		}
 		VERIFY(dp1->dom_old != NULL);
-		if (odp == dp1->dom_old)
+		if (odp == dp1->dom_old) {
 			break;
+		}
 	}
 	if (dp1 != NULL) {
 		struct protosw *pp1, *pp2;
@@ -350,10 +358,12 @@ net_del_domain_old(struct domain_old *odp)
 		/* Remove all protocols attached to this domain */
 		TAILQ_FOREACH_SAFE(pp1, &dp1->dom_protosw, pr_entry, pp2) {
 			detach_proto(pp1, dp1);
-			if (pp1->pr_usrreqs->pru_flags & PRUF_OLD)
+			if (pp1->pr_usrreqs->pru_flags & PRUF_OLD) {
 				FREE(pp1->pr_usrreqs, M_TEMP);
-			if (pp1->pr_flags & PR_OLD)
+			}
+			if (pp1->pr_flags & PR_OLD) {
 				FREE(pp1, M_TEMP);
+			}
 		}
 
 		detach_domain(dp1);
@@ -363,7 +373,7 @@ net_del_domain_old(struct domain_old *odp)
 	}
 done:
 	domain_guard_release(guard);
-	return (error);
+	return error;
 }
 
 /*
@@ -400,15 +410,17 @@ net_add_proto(struct protosw *pp, struct domain *dp, int doinit)
 
 	TAILQ_FOREACH(pp1, &dp->dom_protosw, pr_entry) {
 		if (pp1->pr_type == pp->pr_type &&
-		    pp1->pr_protocol == pp->pr_protocol)
-			return (EEXIST);
+		    pp1->pr_protocol == pp->pr_protocol) {
+			return EEXIST;
+		}
 	}
 
 	attach_proto(pp, dp);
-	if (doinit)
+	if (doinit) {
 		net_init_proto(pp, dp);
+	}
 
-	return (0);
+	return 0;
 }
 
 void
@@ -446,10 +458,12 @@ net_add_proto_old(struct protosw_old *opp, struct domain_old *odp)
 
 	/* Make sure the domain has been added via net_add_domain */
 	TAILQ_FOREACH(dp, &domains, dom_entry) {
-		if (!(dp->dom_flags & DOM_OLD))
+		if (!(dp->dom_flags & DOM_OLD)) {
 			continue;
-		if (dp->dom_old == odp)
+		}
+		if (dp->dom_old == odp) {
 			break;
+		}
 	}
 	if (dp == NULL) {
 		error = EINVAL;
@@ -470,35 +484,35 @@ net_add_proto_old(struct protosw_old *opp, struct domain_old *odp)
 		/* NOTREACHED */
 	}
 
-	pru = _MALLOC(sizeof (*pru), M_TEMP, M_WAITOK | M_ZERO);
+	pru = _MALLOC(sizeof(*pru), M_TEMP, M_WAITOK | M_ZERO);
 	if (pru == NULL) {
 		error = ENOMEM;
 		goto done;
 	}
 
-	pru->pru_flags		= PRUF_OLD;
-	pru->pru_abort		= opru->pru_abort;
-	pru->pru_accept		= opru->pru_accept;
-	pru->pru_attach		= opru->pru_attach;
-	pru->pru_bind		= opru->pru_bind;
-	pru->pru_connect	= opru->pru_connect;
-	pru->pru_connect2	= opru->pru_connect2;
-	pru->pru_control	= opru->pru_control;
-	pru->pru_detach		= opru->pru_detach;
-	pru->pru_disconnect	= opru->pru_disconnect;
-	pru->pru_listen		= opru->pru_listen;
-	pru->pru_peeraddr	= opru->pru_peeraddr;
-	pru->pru_rcvd		= opru->pru_rcvd;
-	pru->pru_rcvoob		= opru->pru_rcvoob;
-	pru->pru_send		= opru->pru_send;
-	pru->pru_sense		= opru->pru_sense;
-	pru->pru_shutdown	= opru->pru_shutdown;
-	pru->pru_sockaddr	= opru->pru_sockaddr;
-	pru->pru_sosend		= opru->pru_sosend;
-	pru->pru_soreceive	= opru->pru_soreceive;
-	pru->pru_sopoll		= opru->pru_sopoll;
+	pru->pru_flags          = PRUF_OLD;
+	pru->pru_abort          = opru->pru_abort;
+	pru->pru_accept         = opru->pru_accept;
+	pru->pru_attach         = opru->pru_attach;
+	pru->pru_bind           = opru->pru_bind;
+	pru->pru_connect        = opru->pru_connect;
+	pru->pru_connect2       = opru->pru_connect2;
+	pru->pru_control        = opru->pru_control;
+	pru->pru_detach         = opru->pru_detach;
+	pru->pru_disconnect     = opru->pru_disconnect;
+	pru->pru_listen         = opru->pru_listen;
+	pru->pru_peeraddr       = opru->pru_peeraddr;
+	pru->pru_rcvd           = opru->pru_rcvd;
+	pru->pru_rcvoob         = opru->pru_rcvoob;
+	pru->pru_send           = opru->pru_send;
+	pru->pru_sense          = opru->pru_sense;
+	pru->pru_shutdown       = opru->pru_shutdown;
+	pru->pru_sockaddr       = opru->pru_sockaddr;
+	pru->pru_sosend         = opru->pru_sosend;
+	pru->pru_soreceive      = opru->pru_soreceive;
+	pru->pru_sopoll         = opru->pru_sopoll;
 
-	pp = _MALLOC(sizeof (*pp), M_TEMP, M_WAITOK | M_ZERO);
+	pp = _MALLOC(sizeof(*pp), M_TEMP, M_WAITOK | M_ZERO);
 	if (pp == NULL) {
 		error = ENOMEM;
 		goto done;
@@ -519,21 +533,21 @@ net_add_proto_old(struct protosw_old *opp, struct domain_old *odp)
 	}
 
 	/* Copy everything but pr_init, pr_next, pr_domain, pr_protosw */
-	pp->pr_type		= opp->pr_type;
-	pp->pr_protocol		= opp->pr_protocol;
-	pp->pr_flags		= (opp->pr_flags & PRF_USERFLAGS) | PR_OLD;
-	pp->pr_input		= opp->pr_input;
-	pp->pr_output		= opp->pr_output;
-	pp->pr_ctlinput		= opp->pr_ctlinput;
-	pp->pr_ctloutput	= opp->pr_ctloutput;
-	pp->pr_usrreqs		= pru;
-	pp->pr_init		= pr_init_old;
-	pp->pr_drain		= opp->pr_drain;
-	pp->pr_sysctl		= opp->pr_sysctl;
-	pp->pr_lock		= opp->pr_lock;
-	pp->pr_unlock		= opp->pr_unlock;
-	pp->pr_getlock		= opp->pr_getlock;
-	pp->pr_old		= opp;
+	pp->pr_type             = opp->pr_type;
+	pp->pr_protocol         = opp->pr_protocol;
+	pp->pr_flags            = (opp->pr_flags & PRF_USERFLAGS) | PR_OLD;
+	pp->pr_input            = opp->pr_input;
+	pp->pr_output           = opp->pr_output;
+	pp->pr_ctlinput         = opp->pr_ctlinput;
+	pp->pr_ctloutput        = opp->pr_ctloutput;
+	pp->pr_usrreqs          = pru;
+	pp->pr_init             = pr_init_old;
+	pp->pr_drain            = opp->pr_drain;
+	pp->pr_sysctl           = opp->pr_sysctl;
+	pp->pr_lock             = opp->pr_lock;
+	pp->pr_unlock           = opp->pr_unlock;
+	pp->pr_getlock          = opp->pr_getlock;
+	pp->pr_old              = opp;
 
 	/* attach as well as initialize */
 	attach_proto(pp, dp);
@@ -544,14 +558,16 @@ done:
 		    "error %d\n", __func__, odp->dom_family,
 		    odp->dom_name, opp->pr_protocol, error);
 
-		if (pru != NULL)
+		if (pru != NULL) {
 			FREE(pru, M_TEMP);
-		if (pp != NULL)
+		}
+		if (pp != NULL) {
 			FREE(pp, M_TEMP);
+		}
 	}
 
 	domain_guard_release(guard);
-	return (error);
+	return error;
 }
 
 /*
@@ -575,19 +591,23 @@ net_del_proto(int type, int protocol, struct domain *dp)
 	domain_proto_mtx_lock_assert_held();
 
 	TAILQ_FOREACH(pp, &dp->dom_protosw, pr_entry) {
-		if (pp->pr_type == type && pp->pr_protocol == protocol)
+		if (pp->pr_type == type && pp->pr_protocol == protocol) {
 			break;
+		}
 	}
-	if (pp == NULL)
-		return (ENXIO);
+	if (pp == NULL) {
+		return ENXIO;
+	}
 
 	detach_proto(pp, dp);
-	if (pp->pr_usrreqs->pru_flags & PRUF_OLD)
+	if (pp->pr_usrreqs->pru_flags & PRUF_OLD) {
 		FREE(pp->pr_usrreqs, M_TEMP);
-	if (pp->pr_flags & PR_OLD)
+	}
+	if (pp->pr_flags & PR_OLD) {
 		FREE(pp, M_TEMP);
+	}
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -609,10 +629,12 @@ net_del_proto_old(int type, int protocol, struct domain_old *odp)
 
 	/* Make sure the domain has been added via net_add_domain */
 	TAILQ_FOREACH(dp, &domains, dom_entry) {
-		if (!(dp->dom_flags & DOM_OLD))
+		if (!(dp->dom_flags & DOM_OLD)) {
 			continue;
-		if (dp->dom_old == odp)
+		}
+		if (dp->dom_old == odp) {
 			break;
+		}
 	}
 	if (dp == NULL) {
 		error = ENXIO;
@@ -620,22 +642,25 @@ net_del_proto_old(int type, int protocol, struct domain_old *odp)
 	}
 
 	TAILQ_FOREACH(pp, &dp->dom_protosw, pr_entry) {
-		if (pp->pr_type == type && pp->pr_protocol == protocol)
+		if (pp->pr_type == type && pp->pr_protocol == protocol) {
 			break;
+		}
 	}
 	if (pp == NULL) {
 		error = ENXIO;
 		goto done;
 	}
 	detach_proto(pp, dp);
-	if (pp->pr_usrreqs->pru_flags & PRUF_OLD)
+	if (pp->pr_usrreqs->pru_flags & PRUF_OLD) {
 		FREE(pp->pr_usrreqs, M_TEMP);
-	if (pp->pr_flags & PR_OLD)
+	}
+	if (pp->pr_flags & PR_OLD) {
 		FREE(pp, M_TEMP);
+	}
 
 done:
 	domain_guard_release(guard);
-	return (error);
+	return error;
 }
 
 static void
@@ -688,8 +713,9 @@ domain_timeout(void *arg)
 		guard = domain_guard_deploy();
 		TAILQ_FOREACH(dp, &domains, dom_entry) {
 			TAILQ_FOREACH(pp, &dp->dom_protosw, pr_entry) {
-				if (pp->pr_drain != NULL)
+				if (pp->pr_drain != NULL) {
 					(*pp->pr_drain)();
+				}
 			}
 		}
 		domain_guard_release(guard);
@@ -749,14 +775,14 @@ domaininit(void)
 	attach_domain(&keydomain_s);
 #endif /* IPSEC */
 	attach_domain(&ndrvdomain_s);
-	attach_domain(&routedomain_s);	/* must be last domain */
+	attach_domain(&routedomain_s);  /* must be last domain */
 
 	/*
 	 * Now ask them all to init (XXX including the routing domain,
 	 * see above)
 	 */
 	TAILQ_FOREACH(dp, &domains, dom_entry)
-		init_domain(dp);
+	init_domain(dp);
 
 	domain_guard_release(guard);
 }
@@ -769,10 +795,11 @@ pffinddomain_locked(int pf)
 	domain_proto_mtx_lock_assert_held();
 
 	TAILQ_FOREACH(dp, &domains, dom_entry) {
-		if (dp->dom_family == pf)
+		if (dp->dom_family == pf) {
 			break;
+		}
 	}
-	return (dp);
+	return dp;
 }
 
 struct protosw *
@@ -783,16 +810,18 @@ pffindtype(int family, int type)
 	domain_guard_t guard;
 
 	guard = domain_guard_deploy();
-	if ((dp = pffinddomain_locked(family)) == NULL)
+	if ((dp = pffinddomain_locked(family)) == NULL) {
 		goto done;
+	}
 
 	TAILQ_FOREACH(pp, &dp->dom_protosw, pr_entry) {
-		if (pp->pr_type != 0 && pp->pr_type == type)
+		if (pp->pr_type != 0 && pp->pr_type == type) {
 			goto done;
+		}
 	}
 done:
 	domain_guard_release(guard);
-	return (pp);
+	return pp;
 }
 
 /*
@@ -807,7 +836,7 @@ pffinddomain(int pf)
 	guard = domain_guard_deploy();
 	dp = pffinddomain_locked(pf);
 	domain_guard_release(guard);
-	return (dp);
+	return dp;
 }
 
 /*
@@ -821,10 +850,11 @@ pffinddomain_old(int pf)
 	domain_guard_t guard;
 
 	guard = domain_guard_deploy();
-	if ((dp = pffinddomain_locked(pf)) != NULL && (dp->dom_flags & DOM_OLD))
+	if ((dp = pffinddomain_locked(pf)) != NULL && (dp->dom_flags & DOM_OLD)) {
 		odp = dp->dom_old;
+	}
 	domain_guard_release(guard);
-	return (odp);
+	return odp;
 }
 
 /*
@@ -839,7 +869,7 @@ pffindproto(int family, int protocol, int type)
 	guard = domain_guard_deploy();
 	pp = pffindproto_locked(family, protocol, type);
 	domain_guard_release(guard);
-	return (pp);
+	return pp;
 }
 
 struct protosw *
@@ -851,22 +881,26 @@ pffindproto_locked(int family, int protocol, int type)
 
 	domain_proto_mtx_lock_assert_held();
 
-	if (family == 0)
-		return (0);
+	if (family == 0) {
+		return 0;
+	}
 
 	dp = pffinddomain_locked(family);
-	if (dp == NULL)
-		return (NULL);
+	if (dp == NULL) {
+		return NULL;
+	}
 
 	TAILQ_FOREACH(pp, &dp->dom_protosw, pr_entry) {
-		if ((pp->pr_protocol == protocol) && (pp->pr_type == type))
-			return (pp);
+		if ((pp->pr_protocol == protocol) && (pp->pr_type == type)) {
+			return pp;
+		}
 
 		if (type == SOCK_RAW && pp->pr_type == SOCK_RAW &&
-		    pp->pr_protocol == 0 && maybe == NULL)
+		    pp->pr_protocol == 0 && maybe == NULL) {
 			maybe = pp;
+		}
 	}
-	return (maybe);
+	return maybe;
 }
 
 /*
@@ -881,10 +915,11 @@ pffindproto_old(int family, int protocol, int type)
 
 	guard = domain_guard_deploy();
 	if ((pp = pffindproto_locked(family, protocol, type)) != NULL &&
-	    (pp->pr_flags & PR_OLD))
+	    (pp->pr_flags & PR_OLD)) {
 		opr = pp->pr_old;
+	}
 	domain_guard_release(guard);
-	return (opr);
+	return opr;
 }
 
 static struct protosw *
@@ -896,18 +931,21 @@ pffindprotonotype_locked(int family, int protocol, int type)
 
 	domain_proto_mtx_lock_assert_held();
 
-	if (family == 0)
-		return (0);
+	if (family == 0) {
+		return 0;
+	}
 
 	dp = pffinddomain_locked(family);
-	if (dp == NULL)
-		return (NULL);
+	if (dp == NULL) {
+		return NULL;
+	}
 
 	TAILQ_FOREACH(pp, &dp->dom_protosw, pr_entry) {
-		if (pp->pr_protocol == protocol)
-			return (pp);
+		if (pp->pr_protocol == protocol) {
+			return pp;
+		}
 	}
-	return (NULL);
+	return NULL;
 }
 
 struct protosw *
@@ -916,13 +954,14 @@ pffindprotonotype(int family, int protocol)
 	struct protosw *pp;
 	domain_guard_t guard;
 
-	if (protocol == 0)
-		return (NULL);
+	if (protocol == 0) {
+		return NULL;
+	}
 
 	guard = domain_guard_deploy();
 	pp = pffindprotonotype_locked(family, protocol, 0);
 	domain_guard_release(guard);
-	return (pp);
+	return pp;
 }
 
 void
@@ -938,14 +977,16 @@ pfctlinput2(int cmd, struct sockaddr *sa, void *ctlparam)
 	struct protosw *pp;
 	domain_guard_t guard;
 
-	if (sa == NULL)
+	if (sa == NULL) {
 		return;
+	}
 
 	guard = domain_guard_deploy();
 	TAILQ_FOREACH(dp, &domains, dom_entry) {
 		TAILQ_FOREACH(pp, &dp->dom_protosw, pr_entry) {
-			if (pp->pr_ctlinput != NULL)
+			if (pp->pr_ctlinput != NULL) {
 				(*pp->pr_ctlinput)(cmd, sa, ctlparam, NULL);
+			}
 		}
 	}
 	domain_guard_release(guard);
@@ -959,8 +1000,9 @@ net_update_uptime_with_time(const struct timeval *tvp)
 	 * Round up the timer to the nearest integer value because otherwise
 	 * we might setup networking timers that are off by almost 1 second.
 	 */
-	if (tvp->tv_usec > 500000)
+	if (tvp->tv_usec > 500000) {
 		_net_uptime++;
+	}
 }
 
 void
@@ -979,8 +1021,9 @@ net_update_uptime(void)
 void
 net_uptime2timeval(struct timeval *tv)
 {
-	if (tv == NULL)
+	if (tv == NULL) {
 		return;
+	}
 
 	tv->tv_usec = 0;
 	tv->tv_sec = net_uptime();
@@ -994,10 +1037,11 @@ net_uptime2timeval(struct timeval *tv)
 u_int64_t
 net_uptime(void)
 {
-	if (_net_uptime == 0)
+	if (_net_uptime == 0) {
 		net_update_uptime();
+	}
 
-	return (_net_uptime);
+	return _net_uptime;
 }
 
 void
@@ -1021,11 +1065,11 @@ domain_guard_deploy(void)
 	if (marks != net_thread_marks_none) {
 		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
 		lck_mtx_lock(&domain_proto_mtx);
-	}
-	else
+	} else {
 		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
+	}
 
-	return ((domain_guard_t)(const void*)marks);
+	return (domain_guard_t)(const void*)marks;
 }
 
 void
@@ -1037,9 +1081,9 @@ domain_guard_release(domain_guard_t guard)
 		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
 		lck_mtx_unlock(&domain_proto_mtx);
 		net_thread_marks_pop(marks);
-	}
-	else
+	} else {
 		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
+	}
 }
 
 domain_unguard_t
@@ -1051,11 +1095,11 @@ domain_unguard_deploy(void)
 	if (marks != net_thread_marks_none) {
 		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
 		lck_mtx_unlock(&domain_proto_mtx);
-	}
-	else
+	} else {
 		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
+	}
 
-	return ((domain_unguard_t)(const void*)marks);
+	return (domain_unguard_t)(const void*)marks;
 }
 
 void
@@ -1067,14 +1111,14 @@ domain_unguard_release(domain_unguard_t unguard)
 		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
 		lck_mtx_lock(&domain_proto_mtx);
 		net_thread_unmarks_pop(marks);
-	}
-	else
+	} else {
 		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
+	}
 }
 
 
 #if (DEVELOPMENT || DEBUG)
- 
+
 static int
 sysctl_do_drain_domains SYSCTL_HANDLER_ARGS
 {
@@ -1082,13 +1126,14 @@ sysctl_do_drain_domains SYSCTL_HANDLER_ARGS
 	int error;
 	int dummy = 0;
 
-	error = sysctl_handle_int(oidp, &dummy, 0, req);	
-	if (error || req->newptr == USER_ADDR_NULL)
-		return (error);
+	error = sysctl_handle_int(oidp, &dummy, 0, req);
+	if (error || req->newptr == USER_ADDR_NULL) {
+		return error;
+	}
 
 	net_drain_domains();
 
-	return (0);
+	return 0;
 }
 
 #endif /* DEVELOPMENT || DEBUG */

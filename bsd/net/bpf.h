@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -88,7 +88,7 @@
 #include <uuid/uuid.h>
 
 struct bpf_setup_args {
-	uuid_t	bsa_uuid;
+	uuid_t  bsa_uuid;
 	char    bsa_ifname[IFNAMSIZ];
 };
 #endif /* PRIVATE */
@@ -106,24 +106,24 @@ struct bpf_setup_args {
 #define EXTRACT_SHORT(p)        ((u_int16_t)ntohs(*(u_int16_t *)(void *)p))
 #define EXTRACT_LONG(p)         (ntohl(*(u_int32_t *)(void *)p))
 #else
-#define EXTRACT_SHORT(p)\
-        ((u_int16_t)\
-                ((u_int16_t)*((u_char *)p+0)<<8|\
-                 (u_int16_t)*((u_char *)p+1)<<0))
-#define EXTRACT_LONG(p)\
-                ((u_int32_t)*((u_char *)p+0)<<24|\
-                 (u_int32_t)*((u_char *)p+1)<<16|\
-                 (u_int32_t)*((u_char *)p+2)<<8|\
-                 (u_int32_t)*((u_char *)p+3)<<0)
+#define EXTRACT_SHORT(p) \
+	((u_int16_t)\
+	        ((u_int16_t)*((u_char *)p+0)<<8|\
+	         (u_int16_t)*((u_char *)p+1)<<0))
+#define EXTRACT_LONG(p) \
+	        ((u_int32_t)*((u_char *)p+0)<<24|\
+	         (u_int32_t)*((u_char *)p+1)<<16|\
+	         (u_int32_t)*((u_char *)p+2)<<8|\
+	         (u_int32_t)*((u_char *)p+3)<<0)
 #endif
 
 #endif /* KERNEL */
 
 /* BSD style release date */
-#define	BPF_RELEASE 199606
+#define BPF_RELEASE 199606
 
-typedef	int32_t	  bpf_int32;
-typedef	u_int32_t bpf_u_int32;
+typedef int32_t   bpf_int32;
+typedef u_int32_t bpf_u_int32;
 
 /*
  * Alignment macros.  BPF_WORDALIGN rounds up to the next
@@ -151,13 +151,13 @@ struct bpf_program {
  * WARNING - keep in sync with bpf_program
  */
 struct bpf_program64 {
-	u_int		bf_len;
-	user64_addr_t	bf_insns __attribute__((aligned(8)));
+	u_int           bf_len;
+	user64_addr_t   bf_insns __attribute__((aligned(8)));
 };
 
 struct bpf_program32 {
-	u_int		bf_len;
-	user32_addr_t	bf_insns;
+	u_int           bf_len;
+	user32_addr_t   bf_insns;
 };
 #endif /* KERNEL_PRIVATE */
 
@@ -165,8 +165,8 @@ struct bpf_program32 {
  * Struct returned by BIOCGSTATS.
  */
 struct bpf_stat {
-	u_int bs_recv;		/* number of packets received */
-	u_int bs_drop;		/* number of packets dropped */
+	u_int bs_recv;          /* number of packets received */
+	u_int bs_drop;          /* number of packets dropped */
 };
 
 /*
@@ -195,70 +195,70 @@ struct bpf_version {
 #define BPF_MAJOR_VERSION 1
 #define BPF_MINOR_VERSION 1
 
-#define	BIOCGBLEN	_IOR('B',102, u_int)
-#define	BIOCSBLEN	_IOWR('B',102, u_int)
-#define	BIOCSETF	_IOW('B',103, struct bpf_program)
+#define BIOCGBLEN       _IOR('B',102, u_int)
+#define BIOCSBLEN       _IOWR('B',102, u_int)
+#define BIOCSETF        _IOW('B',103, struct bpf_program)
 #ifdef KERNEL_PRIVATE
-#define	BIOCSETF64	_IOW('B',103, struct bpf_program64)
-#define	BIOCSETF32	_IOW('B',103, struct bpf_program32)
+#define BIOCSETF64      _IOW('B',103, struct bpf_program64)
+#define BIOCSETF32      _IOW('B',103, struct bpf_program32)
 #endif /* KERNEL_PRIVATE */
-#define	BIOCFLUSH	_IO('B',104)
-#define BIOCPROMISC	_IO('B',105)
-#define	BIOCGDLT	_IOR('B',106, u_int)
-#define BIOCGETIF	_IOR('B',107, struct ifreq)
-#define BIOCSETIF	_IOW('B',108, struct ifreq)
-#define BIOCSRTIMEOUT	_IOW('B',109, struct timeval)
+#define BIOCFLUSH       _IO('B',104)
+#define BIOCPROMISC     _IO('B',105)
+#define BIOCGDLT        _IOR('B',106, u_int)
+#define BIOCGETIF       _IOR('B',107, struct ifreq)
+#define BIOCSETIF       _IOW('B',108, struct ifreq)
+#define BIOCSRTIMEOUT   _IOW('B',109, struct timeval)
 #ifdef KERNEL_PRIVATE
-#define BIOCSRTIMEOUT64	_IOW('B',109, struct user64_timeval)
-#define BIOCSRTIMEOUT32	_IOW('B',109, struct user32_timeval)
+#define BIOCSRTIMEOUT64 _IOW('B',109, struct user64_timeval)
+#define BIOCSRTIMEOUT32 _IOW('B',109, struct user32_timeval)
 #endif /* KERNEL_PRIVATE */
-#define BIOCGRTIMEOUT	_IOR('B',110, struct timeval)
+#define BIOCGRTIMEOUT   _IOR('B',110, struct timeval)
 #ifdef KERNEL_PRIVATE
-#define BIOCGRTIMEOUT64	_IOR('B',110, struct user64_timeval)
-#define BIOCGRTIMEOUT32	_IOR('B',110, struct user32_timeval)
+#define BIOCGRTIMEOUT64 _IOR('B',110, struct user64_timeval)
+#define BIOCGRTIMEOUT32 _IOR('B',110, struct user32_timeval)
 #endif /* KERNEL_PRIVATE */
-#define BIOCGSTATS	_IOR('B',111, struct bpf_stat)
-#define BIOCIMMEDIATE	_IOW('B',112, u_int)
-#define BIOCVERSION	_IOR('B',113, struct bpf_version)
-#define BIOCGRSIG	_IOR('B',114, u_int)
-#define BIOCSRSIG	_IOW('B',115, u_int)
-#define BIOCGHDRCMPLT	_IOR('B',116, u_int)
-#define BIOCSHDRCMPLT	_IOW('B',117, u_int)
-#define BIOCGSEESENT	_IOR('B',118, u_int)
-#define BIOCSSEESENT	_IOW('B',119, u_int)
+#define BIOCGSTATS      _IOR('B',111, struct bpf_stat)
+#define BIOCIMMEDIATE   _IOW('B',112, u_int)
+#define BIOCVERSION     _IOR('B',113, struct bpf_version)
+#define BIOCGRSIG       _IOR('B',114, u_int)
+#define BIOCSRSIG       _IOW('B',115, u_int)
+#define BIOCGHDRCMPLT   _IOR('B',116, u_int)
+#define BIOCSHDRCMPLT   _IOW('B',117, u_int)
+#define BIOCGSEESENT    _IOR('B',118, u_int)
+#define BIOCSSEESENT    _IOW('B',119, u_int)
 #define BIOCSDLT        _IOW('B',120, u_int)
 #define BIOCGDLTLIST    _IOWR('B',121, struct bpf_dltlist)
 #ifdef PRIVATE
-#define	BIOCGETTC	_IOR('B', 122, int)
-#define	BIOCSETTC	_IOW('B', 123, int)
-#define	BIOCSEXTHDR	_IOW('B', 124, u_int)
-#define	BIOCGIFATTACHCOUNT	_IOWR('B', 125, struct ifreq)
+#define BIOCGETTC       _IOR('B', 122, int)
+#define BIOCSETTC       _IOW('B', 123, int)
+#define BIOCSEXTHDR     _IOW('B', 124, u_int)
+#define BIOCGIFATTACHCOUNT      _IOWR('B', 125, struct ifreq)
 #endif /* PRIVATE */
 #define BIOCSETFNR      _IOW('B', 126, struct bpf_program)
 #ifdef KERNEL_PRIVATE
-#define	BIOCSETFNR64	_IOW('B',126, struct bpf_program64)
-#define	BIOCSETFNR32	_IOW('B',126, struct bpf_program32)
+#define BIOCSETFNR64    _IOW('B',126, struct bpf_program64)
+#define BIOCSETFNR32    _IOW('B',126, struct bpf_program32)
 #endif /* KERNEL_PRIVATE */
 #ifdef PRIVATE
-#define	BIOCGWANTPKTAP	_IOR('B', 127, u_int)
-#define	BIOCSWANTPKTAP	_IOWR('B', 127, u_int)
+#define BIOCGWANTPKTAP  _IOR('B', 127, u_int)
+#define BIOCSWANTPKTAP  _IOWR('B', 127, u_int)
 #define BIOCSHEADDROP   _IOW('B', 128, int)
 #define BIOCGHEADDROP   _IOR('B', 128, int)
-#define BIOCSTRUNCATE	_IOW('B', 129, u_int)
-#define	BIOCGETUUID	_IOR('B', 130, uuid_t)
-#define	BIOCSETUP	_IOW('B', 131, struct bpf_setup_args)
-#define	BIOCSPKTHDRV2	_IOW('B', 132, int)
-#define	BIOCGPKTHDRV2	_IOW('B', 133, int)
+#define BIOCSTRUNCATE   _IOW('B', 129, u_int)
+#define BIOCGETUUID     _IOR('B', 130, uuid_t)
+#define BIOCSETUP       _IOW('B', 131, struct bpf_setup_args)
+#define BIOCSPKTHDRV2   _IOW('B', 132, int)
+#define BIOCGPKTHDRV2   _IOW('B', 133, int)
 #endif /* PRIVATE */
 /*
  * Structure prepended to each packet.
  */
 struct bpf_hdr {
-	struct BPF_TIMEVAL bh_tstamp;	/* time stamp */
-	bpf_u_int32	bh_caplen;	/* length of captured portion */
-	bpf_u_int32	bh_datalen;	/* original length of packet */
-	u_short		bh_hdrlen;	/* length of bpf header (this struct
-					   plus alignment padding) */
+	struct BPF_TIMEVAL bh_tstamp;   /* time stamp */
+	bpf_u_int32     bh_caplen;      /* length of captured portion */
+	bpf_u_int32     bh_datalen;     /* original length of packet */
+	u_short         bh_hdrlen;      /* length of bpf header (this struct
+	                                 *  plus alignment padding) */
 };
 #ifdef KERNEL
 /*
@@ -266,7 +266,7 @@ struct bpf_hdr {
  * will insist on inserting padding; hence, sizeof(struct bpf_hdr) won't work.
  * Only the kernel needs to know about it; applications use bh_hdrlen.
  */
-#define	SIZEOF_BPF_HDR	(sizeof(struct bpf_hdr) <= 20 ? 18 : \
+#define SIZEOF_BPF_HDR  (sizeof(struct bpf_hdr) <= 20 ? 18 : \
     sizeof(struct bpf_hdr))
 #endif
 #ifdef PRIVATE
@@ -275,36 +275,36 @@ struct bpf_hdr {
  * It includes padding and spare fields that we can use later if desired.
  */
 struct bpf_hdr_ext {
-	struct BPF_TIMEVAL bh_tstamp;	/* time stamp */
-	bpf_u_int32	bh_caplen;	/* length of captured portion */
-	bpf_u_int32	bh_datalen;	/* original length of packet */
-	u_short		bh_hdrlen;	/* length of bpf header */
-	u_short		bh_flags;
-#define BPF_HDR_EXT_FLAGS_DIR_IN	0x0000
-#define BPF_HDR_EXT_FLAGS_DIR_OUT	0x0001
-	pid_t		bh_pid;		/* process PID */
-	char		bh_comm[MAXCOMLEN+1]; /* process command */
-	u_char		_bh_pad2[1];
-	u_char		bh_pktflags;
-#define	BPF_PKTFLAGS_TCP_REXMT	0x0001
-#define	BPF_PKTFLAGS_START_SEQ	0x0002
-#define	BPF_PKTFLAGS_LAST_PKT	0x0004
-	u_char		bh_proto;	/* kernel reserved; 0 in userland */
-	bpf_u_int32	bh_svc;		/* service class */
-	bpf_u_int32	bh_flowid;	/* kernel reserved; 0 in userland */
-	bpf_u_int32	bh_unsent_bytes; /* unsent bytes at interface */
-	bpf_u_int32	bh_unsent_snd; /* unsent bytes at socket buffer */
+	struct BPF_TIMEVAL bh_tstamp;   /* time stamp */
+	bpf_u_int32     bh_caplen;      /* length of captured portion */
+	bpf_u_int32     bh_datalen;     /* original length of packet */
+	u_short         bh_hdrlen;      /* length of bpf header */
+	u_short         bh_flags;
+#define BPF_HDR_EXT_FLAGS_DIR_IN        0x0000
+#define BPF_HDR_EXT_FLAGS_DIR_OUT       0x0001
+	pid_t           bh_pid;         /* process PID */
+	char            bh_comm[MAXCOMLEN + 1]; /* process command */
+	u_char          _bh_pad2[1];
+	u_char          bh_pktflags;
+#define BPF_PKTFLAGS_TCP_REXMT  0x0001
+#define BPF_PKTFLAGS_START_SEQ  0x0002
+#define BPF_PKTFLAGS_LAST_PKT   0x0004
+	u_char          bh_proto;       /* kernel reserved; 0 in userland */
+	bpf_u_int32     bh_svc;         /* service class */
+	bpf_u_int32     bh_flowid;      /* kernel reserved; 0 in userland */
+	bpf_u_int32     bh_unsent_bytes; /* unsent bytes at interface */
+	bpf_u_int32     bh_unsent_snd; /* unsent bytes at socket buffer */
 };
 
-#define BPF_CONTROL_NAME	"com.apple.net.bpf"
+#define BPF_CONTROL_NAME        "com.apple.net.bpf"
 
 struct bpf_mtag {
-	char		bt_comm[MAXCOMLEN];
-	pid_t		bt_pid;
-	bpf_u_int32	bt_svc;
-	unsigned char	bt_direction;
-#define	BPF_MTAG_DIR_IN		0
-#define	BPF_MTAG_DIR_OUT	1
+	char            bt_comm[MAXCOMLEN];
+	pid_t           bt_pid;
+	bpf_u_int32     bt_svc;
+	unsigned char   bt_direction;
+#define BPF_MTAG_DIR_IN         0
+#define BPF_MTAG_DIR_OUT        1
 };
 
 #endif /* PRIVATE */
@@ -312,19 +312,19 @@ struct bpf_mtag {
 /*
  * Data-link level type codes.
  */
-#define DLT_NULL	0	/* no link-layer encapsulation */
-#define DLT_EN10MB	1	/* Ethernet (10Mb) */
-#define DLT_EN3MB	2	/* Experimental Ethernet (3Mb) */
-#define DLT_AX25	3	/* Amateur Radio AX.25 */
-#define DLT_PRONET	4	/* Proteon ProNET Token Ring */
-#define DLT_CHAOS	5	/* Chaos */
-#define DLT_IEEE802	6	/* IEEE 802 Networks */
-#define DLT_ARCNET	7	/* ARCNET */
-#define DLT_SLIP	8	/* Serial Line IP */
-#define DLT_PPP		9	/* Point-to-point Protocol */
-#define DLT_FDDI	10	/* FDDI */
-#define DLT_ATM_RFC1483	11	/* LLC/SNAP encapsulated atm */
-#define DLT_RAW		12	/* raw IP */
+#define DLT_NULL        0       /* no link-layer encapsulation */
+#define DLT_EN10MB      1       /* Ethernet (10Mb) */
+#define DLT_EN3MB       2       /* Experimental Ethernet (3Mb) */
+#define DLT_AX25        3       /* Amateur Radio AX.25 */
+#define DLT_PRONET      4       /* Proteon ProNET Token Ring */
+#define DLT_CHAOS       5       /* Chaos */
+#define DLT_IEEE802     6       /* IEEE 802 Networks */
+#define DLT_ARCNET      7       /* ARCNET */
+#define DLT_SLIP        8       /* Serial Line IP */
+#define DLT_PPP         9       /* Point-to-point Protocol */
+#define DLT_FDDI        10      /* FDDI */
+#define DLT_ATM_RFC1483 11      /* LLC/SNAP encapsulated atm */
+#define DLT_RAW         12      /* raw IP */
 
 /*
  * These are values from BSD/OS's "bpf.h".
@@ -339,8 +339,8 @@ struct bpf_mtag {
  * continue to compile - even though they won't correctly read
  * files of these types.
  */
-#define DLT_SLIP_BSDOS	15	/* BSD/OS Serial Line IP */
-#define DLT_PPP_BSDOS	16	/* BSD/OS Point-to-point Protocol */
+#define DLT_SLIP_BSDOS  15      /* BSD/OS Serial Line IP */
+#define DLT_PPP_BSDOS   16      /* BSD/OS Point-to-point Protocol */
 
 /*
  * 17 was used for DLT_PFLOG in OpenBSD; it no longer is.
@@ -370,17 +370,17 @@ struct bpf_mtag {
  * have the relevant header files, so it's not that useful on
  * other platforms.
  */
-#define	DLT_PFSYNC	18	/* Packet filter state syncing */
+#define DLT_PFSYNC      18      /* Packet filter state syncing */
 
-#define DLT_ATM_CLIP	19	/* Linux Classical-IP over ATM */
+#define DLT_ATM_CLIP    19      /* Linux Classical-IP over ATM */
 
 /*
  * These values are defined by NetBSD; other platforms should refrain from
  * using them for other purposes, so that NetBSD savefiles with link
  * types of 50 or 51 can be read as this type on all platforms.
  */
-#define DLT_PPP_SERIAL	50	/* PPP over serial with HDLC encapsulation */
-#define DLT_PPP_ETHER	51	/* PPP over Ethernet */
+#define DLT_PPP_SERIAL  50      /* PPP over serial with HDLC encapsulation */
+#define DLT_PPP_ETHER   51      /* PPP over Ethernet */
 
 /*
  * The Axent Raptor firewall - now the Symantec Enterprise Firewall - uses
@@ -389,7 +389,7 @@ struct bpf_mtag {
  * Ethernet type, and 36 bytes that appear to be 0 in at least one capture
  * I've seen.
  */
-#define DLT_SYMANTEC_FIREWALL	99
+#define DLT_SYMANTEC_FIREWALL   99
 
 /*
  * Values between 100 and 103 are used in capture file headers as
@@ -408,7 +408,7 @@ struct bpf_mtag {
  * DLT_MATCHING_MIN is the lowest such value; DLT_MATCHING_MAX is
  * the highest such value.
  */
-#define DLT_MATCHING_MIN	104
+#define DLT_MATCHING_MIN        104
 
 /*
  * This value was defined by libpcap 0.5; platforms that have defined
@@ -424,10 +424,10 @@ struct bpf_mtag {
  * libpcap 0.5 defined it as DLT_CHDLC; we define DLT_CHDLC as well,
  * for source compatibility with programs written for libpcap 0.5.
  */
-#define DLT_C_HDLC	104	/* Cisco HDLC */
-#define DLT_CHDLC	DLT_C_HDLC
+#define DLT_C_HDLC      104     /* Cisco HDLC */
+#define DLT_CHDLC       DLT_C_HDLC
 
-#define DLT_IEEE802_11	105	/* IEEE 802.11 wireless */
+#define DLT_IEEE802_11  105     /* IEEE 802.11 wireless */
 
 /*
  * Values between 106 and 107 are used in capture file headers as
@@ -441,7 +441,7 @@ struct bpf_mtag {
  * DLT_FR and DLT_FRELAY packets start with the Q.922 Frame Relay header
  * (DLCI, etc.).
  */
-#define DLT_FRELAY	107
+#define DLT_FRELAY      107
 
 /*
  * OpenBSD DLT_LOOP, for loopback devices; it's like DLT_NULL, except
@@ -452,7 +452,7 @@ struct bpf_mtag {
  * define DLT_LOOP as 12 in its version, as per the comment above -
  * and should not use 108 for any purpose.
  */
-#define DLT_LOOP	108
+#define DLT_LOOP        108
 
 /*
  * Values between 109 and 112 are used in capture file headers as
@@ -465,104 +465,104 @@ struct bpf_mtag {
  * DLT_SLIP_BSDOS in NetBSD, so we don't use 13 for it in OSes other
  * than OpenBSD.
  */
-#define DLT_ENC	109
+#define DLT_ENC 109
 
 /*
  * This is for Linux cooked sockets.
  */
-#define DLT_LINUX_SLL	113
+#define DLT_LINUX_SLL   113
 
 /*
  * Apple LocalTalk hardware.
  */
-#define DLT_LTALK	114
+#define DLT_LTALK       114
 
 /*
  * Acorn Econet.
  */
-#define DLT_ECONET	115
+#define DLT_ECONET      115
 
 /*
  * Reserved for use with OpenBSD ipfilter.
  */
-#define DLT_IPFILTER	116
+#define DLT_IPFILTER    116
 
 /*
  * For use in capture-file headers as a link-layer type corresponding
  * to OpenBSD PF (Packet Filter) log.
  */
-#define	DLT_PFLOG	117
+#define DLT_PFLOG       117
 
 /*
  * Registered for Cisco-internal use.
  */
-#define DLT_CISCO_IOS	118
+#define DLT_CISCO_IOS   118
 
 /*
  * Reserved for 802.11 cards using the Prism II chips, with a link-layer
  * header including Prism monitor mode information plus an 802.11
  * header.
  */
-#define DLT_PRISM_HEADER	119
+#define DLT_PRISM_HEADER        119
 
 /*
  * Reserved for Aironet 802.11 cards, with an Aironet link-layer header
  * (see Doug Ambrisko's FreeBSD patches).
  */
-#define DLT_AIRONET_HEADER	120
+#define DLT_AIRONET_HEADER      120
 
 /*
  * Reserved for Siemens HiPath HDLC. XXX
  */
-#define DLT_HHDLC	121
+#define DLT_HHDLC       121
 
 /*
  * Reserved for RFC 2625 IP-over-Fibre Channel.
  */
-#define DLT_IP_OVER_FC	122
+#define DLT_IP_OVER_FC  122
 
 /*
  * Reserved for Full Frontal ATM on Solaris.
  */
-#define DLT_SUNATM	123
+#define DLT_SUNATM      123
 
 /*
  * Reserved as per request from Kent Dahlgren <kent@praesum.com>
  * for private use.
  */
-#define DLT_RIO		124	/* RapidIO */
-#define DLT_PCI_EXP	125	/* PCI Express */
-#define DLT_AURORA	126	/* Xilinx Aurora link layer */
+#define DLT_RIO         124     /* RapidIO */
+#define DLT_PCI_EXP     125     /* PCI Express */
+#define DLT_AURORA      126     /* Xilinx Aurora link layer */
 
 /*
  * BSD header for 802.11 plus a number of bits of link-layer information
  * including radio information.
  */
 #ifndef DLT_IEEE802_11_RADIO
-#define DLT_IEEE802_11_RADIO	127
+#define DLT_IEEE802_11_RADIO    127
 #endif
 
 /*
  * Reserved for TZSP encapsulation.
  */
-#define DLT_TZSP		128	/* Tazmen Sniffer Protocol */
+#define DLT_TZSP                128     /* Tazmen Sniffer Protocol */
 
 /*
  * Reserved for Linux ARCNET.
  */
-#define DLT_ARCNET_LINUX	129
+#define DLT_ARCNET_LINUX        129
 
 /*
  * Juniper-private data link types.
  */
-#define DLT_JUNIPER_MLPPP	130
-#define DLT_JUNIPER_MLFR	131
-#define DLT_JUNIPER_ES		132
-#define DLT_JUNIPER_GGSN	133
-#define DLT_JUNIPER_MFR		134
-#define DLT_JUNIPER_ATM2	135
-#define DLT_JUNIPER_SERVICES	136
-#define DLT_JUNIPER_ATM1	137
+#define DLT_JUNIPER_MLPPP       130
+#define DLT_JUNIPER_MLFR        131
+#define DLT_JUNIPER_ES          132
+#define DLT_JUNIPER_GGSN        133
+#define DLT_JUNIPER_MFR         134
+#define DLT_JUNIPER_ATM2        135
+#define DLT_JUNIPER_SERVICES    136
+#define DLT_JUNIPER_ATM1        137
 
 /*
  * Apple IP-over-IEEE 1394, as per a request from Dieter Siegmund
@@ -579,32 +579,32 @@ struct bpf_mtag {
  * with "firewire_type" being an Ethernet type value, rather than,
  * for example, raw GASP frames being handed up.
  */
-#define DLT_APPLE_IP_OVER_IEEE1394	138
+#define DLT_APPLE_IP_OVER_IEEE1394      138
 
 /*
  * Various SS7 encapsulations, as per a request from Jeff Morriss
  * <jeff.morriss[AT]ulticom.com> and subsequent discussions.
  */
-#define DLT_MTP2_WITH_PHDR	139	/* pseudo-header with various info, followed by MTP2 */
-#define DLT_MTP2		140	/* MTP2, without pseudo-header */
-#define DLT_MTP3		141	/* MTP3, without pseudo-header or MTP2 */
-#define DLT_SCCP		142	/* SCCP, without pseudo-header or MTP2 or MTP3 */
+#define DLT_MTP2_WITH_PHDR      139     /* pseudo-header with various info, followed by MTP2 */
+#define DLT_MTP2                140     /* MTP2, without pseudo-header */
+#define DLT_MTP3                141     /* MTP3, without pseudo-header or MTP2 */
+#define DLT_SCCP                142     /* SCCP, without pseudo-header or MTP2 or MTP3 */
 
 /*
  * Reserved for DOCSIS.
  */
-#define DLT_DOCSIS	143
+#define DLT_DOCSIS      143
 
 /*
  * Reserved for Linux IrDA.
  */
-#define DLT_LINUX_IRDA	144
+#define DLT_LINUX_IRDA  144
 
 /*
  * Reserved for IBM SP switch and IBM Next Federation switch.
  */
-#define DLT_IBM_SP	145
-#define DLT_IBM_SN	146
+#define DLT_IBM_SP      145
+#define DLT_IBM_SN      146
 
 /*
  * Reserved for private use.  If you have some link-layer header type
@@ -631,22 +631,22 @@ struct bpf_mtag {
  * Instead, ask "tcpdump-workers@tcpdump.org" for a new DLT_ value,
  * as per the comment above, and use the type you're given.
  */
-#define DLT_USER0		147
-#define DLT_USER1		148
-#define DLT_USER2		149
-#define DLT_USER3		150
-#define DLT_USER4		151
-#define DLT_USER5		152
-#define DLT_USER6		153
-#define DLT_USER7		154
-#define DLT_USER8		155
-#define DLT_USER9		156
-#define DLT_USER10		157
-#define DLT_USER11		158
-#define DLT_USER12		159
-#define DLT_USER13		160
-#define DLT_USER14		161
-#define DLT_USER15		162
+#define DLT_USER0               147
+#define DLT_USER1               148
+#define DLT_USER2               149
+#define DLT_USER3               150
+#define DLT_USER4               151
+#define DLT_USER5               152
+#define DLT_USER6               153
+#define DLT_USER7               154
+#define DLT_USER8               155
+#define DLT_USER9               156
+#define DLT_USER10              157
+#define DLT_USER11              158
+#define DLT_USER12              159
+#define DLT_USER13              160
+#define DLT_USER14              161
+#define DLT_USER15              162
 
 #ifdef PRIVATE
 /*
@@ -654,9 +654,9 @@ struct bpf_mtag {
  */
 #define DLT_USER0_APPLE_INTERNAL        DLT_USER0       /* rdar://12019509 */
 #define DLT_USER1_APPLE_INTERNAL        DLT_USER1       /* rdar://12019509 */
-#define DLT_PKTAP			DLT_USER2	/* rdar://11779467 */
+#define DLT_PKTAP                       DLT_USER2       /* rdar://11779467 */
 #define DLT_USER3_APPLE_INTERNAL        DLT_USER3       /* rdar://19614531 */
-#define DLT_USER4_APPLE_INTERNAL	DLT_USER4	/* rdar://19614531 */
+#define DLT_USER4_APPLE_INTERNAL        DLT_USER4       /* rdar://19614531 */
 #endif /* PRIVATE */
 
 /*
@@ -669,7 +669,7 @@ struct bpf_mtag {
  * but it might be used by some non-AVS drivers now or in the
  * future.
  */
-#define DLT_IEEE802_11_RADIO_AVS 163	/* 802.11 plus AVS radio header */
+#define DLT_IEEE802_11_RADIO_AVS 163    /* 802.11 plus AVS radio header */
 
 /*
  * Juniper-private data link type, as per request from
@@ -682,7 +682,7 @@ struct bpf_mtag {
 /*
  * Reserved for BACnet MS/TP.
  */
-#define DLT_BACNET_MS_TP	165
+#define DLT_BACNET_MS_TP        165
 
 /*
  * Another PPP variant as per request from Karsten Keil <kkeil@suse.de>.
@@ -698,14 +698,14 @@ struct bpf_mtag {
  * The first byte of the PPP header (0xff03) is modified to accomodate
  * the direction - 0x00 = IN, 0x01 = OUT.
  */
-#define DLT_PPP_PPPD		166
+#define DLT_PPP_PPPD            166
 
 /*
  * Names for backwards compatibility with older versions of some PPP
  * software; new software should use DLT_PPP_PPPD.
  */
-#define DLT_PPP_WITH_DIRECTION	DLT_PPP_PPPD
-#define DLT_LINUX_PPP_WITHDIRECTION	DLT_PPP_PPPD
+#define DLT_PPP_WITH_DIRECTION  DLT_PPP_PPPD
+#define DLT_LINUX_PPP_WITHDIRECTION     DLT_PPP_PPPD
 
 /*
  * Juniper-private data link type, as per request from
@@ -716,16 +716,16 @@ struct bpf_mtag {
 #define DLT_JUNIPER_PPPOE       167
 #define DLT_JUNIPER_PPPOE_ATM   168
 
-#define DLT_GPRS_LLC		169	/* GPRS LLC */
-#define DLT_GPF_T		170	/* GPF-T (ITU-T G.7041/Y.1303) */
-#define DLT_GPF_F		171	/* GPF-F (ITU-T G.7041/Y.1303) */
+#define DLT_GPRS_LLC            169     /* GPRS LLC */
+#define DLT_GPF_T               170     /* GPF-T (ITU-T G.7041/Y.1303) */
+#define DLT_GPF_F               171     /* GPF-F (ITU-T G.7041/Y.1303) */
 
 /*
  * Requested by Oolan Zimmer <oz@gcom.com> for use in Gcom's T1/E1 line
  * monitoring equipment.
  */
-#define DLT_GCOM_T1E1		172
-#define DLT_GCOM_SERIAL		173
+#define DLT_GCOM_T1E1           172
+#define DLT_GCOM_SERIAL         173
 
 /*
  * Juniper-private data link type, as per request from
@@ -740,8 +740,8 @@ struct bpf_mtag {
  * http://www.endace.com/support/EndaceRecordFormat.pdf) in front of
  * the link-layer header.
  */
-#define DLT_ERF_ETH		175	/* Ethernet */
-#define DLT_ERF_POS		176	/* Packet-over-SONET */
+#define DLT_ERF_ETH             175     /* Ethernet */
+#define DLT_ERF_POS             176     /* Packet-over-SONET */
 
 /*
  * Requested by Daniele Orlandi <daniele@orlandi.com> for raw LAPD
@@ -749,7 +749,7 @@ struct bpf_mtag {
  * includes additional information before the LAPD header, so it's
  * not necessarily a generic LAPD header.
  */
-#define DLT_LINUX_LAPD		177
+#define DLT_LINUX_LAPD          177
 
 /*
  * Juniper-private data link type, as per request from
@@ -796,25 +796,25 @@ struct bpf_mtag {
  * USB packets, beginning with a USB setup header; requested by
  * Paolo Abeni <paolo.abeni@email.it>.
  */
-#define DLT_USB			186
+#define DLT_USB                 186
 
 /*
  * Bluetooth HCI UART transport layer (part H:4); requested by
  * Paolo Abeni.
  */
-#define DLT_BLUETOOTH_HCI_H4	187
+#define DLT_BLUETOOTH_HCI_H4    187
 
 /*
  * IEEE 802.16 MAC Common Part Sublayer; requested by Maria Cruz
  * <cruz_petagay@bah.com>.
  */
-#define DLT_IEEE802_16_MAC_CPS	188
+#define DLT_IEEE802_16_MAC_CPS  188
 
 /*
  * USB packets, beginning with a Linux USB header; requested by
  * Paolo Abeni <paolo.abeni@email.it>.
  */
-#define DLT_USB_LINUX		189
+#define DLT_USB_LINUX           189
 
 /*
  * Controller Area Network (CAN) v. 2.0B packets.
@@ -829,19 +829,19 @@ struct bpf_mtag {
  * IEEE 802.15.4, with address fields padded, as is done by Linux
  * drivers; requested by Juergen Schimmer.
  */
-#define DLT_IEEE802_15_4_LINUX	191
+#define DLT_IEEE802_15_4_LINUX  191
 
 /*
  * Per Packet Information encapsulated packets.
  * DLT_ requested by Gianluca Varenni <gianluca.varenni@cacetech.com>.
  */
-#define DLT_PPI			192
+#define DLT_PPI                 192
 
 /*
  * Header for 802.16 MAC Common Part Sublayer plus a radiotap radio header;
  * requested by Charles Clancy.
  */
-#define DLT_IEEE802_16_MAC_CPS_RADIO	193
+#define DLT_IEEE802_16_MAC_CPS_RADIO    193
 
 /*
  * Juniper-private data link type, as per request from
@@ -855,34 +855,34 @@ struct bpf_mtag {
  * IEEE 802.15.4, exactly as it appears in the spec (no padding, no
  * nothing); requested by Mikko Saarnivala <mikko.saarnivala@sensinode.com>.
  */
-#define DLT_IEEE802_15_4	195
+#define DLT_IEEE802_15_4        195
 
 /*
  * Various link-layer types, with a pseudo-header, for SITA
  * (http://www.sita.aero/); requested by Fulko Hew (fulko.hew@gmail.com).
  */
-#define DLT_SITA		196
+#define DLT_SITA                196
 
 /*
  * Various link-layer types, with a pseudo-header, for Endace DAG cards;
  * encapsulates Endace ERF records.  Requested by Stephen Donnelly
  * <stephen@endace.com>.
  */
-#define DLT_ERF			197
+#define DLT_ERF                 197
 
 /*
  * Special header prepended to Ethernet packets when capturing from a
  * u10 Networks board.  Requested by Phil Mulholland
  * <phil@u10networks.com>.
  */
-#define DLT_RAIF1		198
+#define DLT_RAIF1               198
 
 /*
  * IPMB packet for IPMI, beginning with the I2C slave address, followed
  * by the netFn and LUN, etc..  Requested by Chanthy Toeung
  * <chanthy.toeung@ca.kontron.com>.
  */
-#define DLT_IPMB		199
+#define DLT_IPMB                199
 
 /*
  * Juniper-private data link type, as per request from
@@ -895,7 +895,7 @@ struct bpf_mtag {
  * Bluetooth HCI UART transport layer (part H:4), with pseudo-header
  * that includes direction information; requested by Paolo Abeni.
  */
-#define DLT_BLUETOOTH_HCI_H4_WITH_PHDR	201
+#define DLT_BLUETOOTH_HCI_H4_WITH_PHDR  201
 
 /*
  * AX.25 packet with a 1-byte KISS header; see
@@ -978,40 +978,40 @@ struct bpf_mtag {
  */
 #define DLT_IEEE802_15_4_NONASK_PHY     215
 
-/* 
+/*
  * David Gibson <david@gibson.dropbear.id.au> requested this for
  * captures from the Linux kernel /dev/input/eventN devices. This
  * is used to communicate keystrokes and mouse movements from the
- * Linux kernel to display systems, such as Xorg. 
+ * Linux kernel to display systems, such as Xorg.
  */
-#define DLT_LINUX_EVDEV		216
+#define DLT_LINUX_EVDEV         216
 
 /*
  * GSM Um and Abis interfaces, preceded by a "gsmtap" header.
  *
  * Requested by Harald Welte <laforge@gnumonks.org>.
  */
-#define DLT_GSMTAP_UM		217
-#define DLT_GSMTAP_ABIS		218
+#define DLT_GSMTAP_UM           217
+#define DLT_GSMTAP_ABIS         218
 
 /*
  * MPLS, with an MPLS label as the link-layer header.
  * Requested by Michele Marchetto <michele@openbsd.org> on behalf
  * of OpenBSD.
  */
-#define DLT_MPLS		219
+#define DLT_MPLS                219
 
 /*
  * USB packets, beginning with a Linux USB header, with the USB header
  * padded to 64 bytes; required for memory-mapped access.
  */
-#define DLT_USB_LINUX_MMAPPED	220
+#define DLT_USB_LINUX_MMAPPED   220
 
 /*
  * DECT packets, with a pseudo-header; requested by
  * Matthias Wenzel <tcpdump@mazzoo.de>.
  */
-#define DLT_DECT		221
+#define DLT_DECT                221
 
 /*
  * From: "Lidwa, Eric (GSFC-582.0)[SGT INC]" <eric.lidwa-1@nasa.gov>
@@ -1031,13 +1031,13 @@ struct bpf_mtag {
  *
  * Requested by Sam Roberts <vieuxtech@gmail.com>.
  */
-#define DLT_WIHART		223
+#define DLT_WIHART              223
 
 /*
  * Fibre Channel FC-2 frames, beginning with a Frame_Header.
  * Requested by Kahou Lei <kahou82@gmail.com>.
  */
-#define DLT_FC_2		224
+#define DLT_FC_2                224
 
 /*
  * Fibre Channel FC-2 frames, beginning with an encoding of the
@@ -1051,7 +1051,7 @@ struct bpf_mtag {
  *
  * Requested by Kahou Lei <kahou82@gmail.com>.
  */
-#define DLT_FC_2_WITH_FRAME_DELIMS	225
+#define DLT_FC_2_WITH_FRAME_DELIMS      225
 
 /*
  * Solaris ipnet pseudo-header; requested by Darren Reed <Darren.Reed@Sun.COM>.
@@ -1099,7 +1099,7 @@ struct bpf_mtag {
  * An IPv4 or IPv6 datagram follows the pseudo-header; dli_family indicates
  * which of those it is.
  */
-#define DLT_IPNET		226
+#define DLT_IPNET               226
 
 /*
  * CAN (Controller Area Network) frames, with a pseudo-header as supplied
@@ -1108,21 +1108,21 @@ struct bpf_mtag {
  *
  * Requested by Felix Obenhuber <felix@obenhuber.de>.
  */
-#define DLT_CAN_SOCKETCAN	227
+#define DLT_CAN_SOCKETCAN       227
 
 /*
  * Raw IPv4/IPv6; different from DLT_RAW in that the DLT_ value specifies
  * whether it's v4 or v6.  Requested by Darren Reed <Darren.Reed@Sun.COM>.
  */
-#define DLT_IPV4		228
-#define DLT_IPV6		229
+#define DLT_IPV4                228
+#define DLT_IPV6                229
 
 /*
  * IEEE 802.15.4, exactly as it appears in the spec (no padding, no
  * nothing), and with no FCS at the end of the frame; requested by
  * Jon Smirl <jonsmirl@gmail.com>.
  */
-#define DLT_IEEE802_15_4_NOFCS	230
+#define DLT_IEEE802_15_4_NOFCS  230
 
 /*
  * Raw D-Bus:
@@ -1140,15 +1140,15 @@ struct bpf_mtag {
  *
  * Requested by Martin Vidner <martin@vidner.net>.
  */
-#define DLT_DBUS		231
+#define DLT_DBUS                231
 
 /*
  * Juniper-private data link type, as per request from
  * Hannes Gredler <hannes@juniper.net>.
  */
-#define DLT_JUNIPER_VS			232
-#define DLT_JUNIPER_SRX_E2E		233
-#define DLT_JUNIPER_FIBRECHANNEL	234
+#define DLT_JUNIPER_VS                  232
+#define DLT_JUNIPER_SRX_E2E             233
+#define DLT_JUNIPER_FIBRECHANNEL        234
 
 /*
  * DVB-CI (DVB Common Interface for communication between a PC Card
@@ -1160,34 +1160,34 @@ struct bpf_mtag {
  *
  * Requested by Martin Kaiser <martin@kaiser.cx>.
  */
-#define DLT_DVB_CI		235
+#define DLT_DVB_CI              235
 
 /*
  * Variant of 3GPP TS 27.010 multiplexing protocol (similar to, but
  * *not* the same as, 27.010).  Requested by Hans-Christoph Schemmel
  * <hans-christoph.schemmel@cinterion.com>.
  */
-#define DLT_MUX27010		236
+#define DLT_MUX27010            236
 
 /*
  * STANAG 5066 D_PDUs.  Requested by M. Baris Demiray
  * <barisdemiray@gmail.com>.
  */
-#define DLT_STANAG_5066_D_PDU	237
+#define DLT_STANAG_5066_D_PDU   237
 
 /*
  * Juniper-private data link type, as per request from
  * Hannes Gredler <hannes@juniper.net>.
  */
-#define DLT_JUNIPER_ATM_CEMIC	238
+#define DLT_JUNIPER_ATM_CEMIC   238
 
 /*
- * NetFilter LOG messages 
+ * NetFilter LOG messages
  * (payload of netlink NFNL_SUBSYS_ULOG/NFULNL_MSG_PACKET packets)
  *
  * Requested by Jakub Zawadzki <darkjames-ws@darkjames.pl>
  */
-#define DLT_NFLOG		239
+#define DLT_NFLOG               239
 
 /*
  * Hilscher Gesellschaft fuer Systemautomation mbH link-layer type
@@ -1197,7 +1197,7 @@ struct bpf_mtag {
  *
  * Requested by Holger P. Frommer <HPfrommer@hilscher.com>
  */
-#define DLT_NETANALYZER		240
+#define DLT_NETANALYZER         240
 
 /*
  * Hilscher Gesellschaft fuer Systemautomation mbH link-layer type
@@ -1208,21 +1208,21 @@ struct bpf_mtag {
  *
  * Requested by Holger P. Frommer <HPfrommer@hilscher.com>
  */
-#define DLT_NETANALYZER_TRANSPARENT	241
+#define DLT_NETANALYZER_TRANSPARENT     241
 
 /*
  * IP-over-Infiniband, as specified by RFC 4391.
  *
  * Requested by Petr Sumbera <petr.sumbera@oracle.com>.
  */
-#define DLT_IPOIB		242
+#define DLT_IPOIB               242
 
 /*
  * MPEG-2 transport stream (ISO 13818-1/ITU-T H.222.0).
  *
  * Requested by Guy Martin <gmsoft@tuxicoman.be>.
  */
-#define DLT_MPEG_2_TS		243
+#define DLT_MPEG_2_TS           243
 
 /*
  * ng4T GmbH's UMTS Iub/Iur-over-ATM and Iub/Iur-over-IP format as
@@ -1230,7 +1230,7 @@ struct bpf_mtag {
  *
  * Requested by Jens Grimmer <jens.grimmer@ng4t.com>.
  */
-#define DLT_NG40		244
+#define DLT_NG40                244
 
 /*
  * Pseudo-header giving adapter number and flags, followed by an NFC
@@ -1240,79 +1240,79 @@ struct bpf_mtag {
  *
  * Requested by Mike Wakerly <mikey@google.com>.
  */
-#define DLT_NFC_LLCP		245
+#define DLT_NFC_LLCP            245
 
 /*
  * USB packets, beginning with a Darwin (macOS, etc.) USB header.
  */
-#define DLT_USB_DARWIN		266
+#define DLT_USB_DARWIN          266
 
-#define DLT_MATCHING_MAX	266	/* highest value in the "matching" range */
+#define DLT_MATCHING_MAX        266     /* highest value in the "matching" range */
 
 /*
  * The instruction encodings.
  */
 /* instruction classes */
 #define BPF_CLASS(code) ((code) & 0x07)
-#define		BPF_LD		0x00
-#define		BPF_LDX		0x01
-#define		BPF_ST		0x02
-#define		BPF_STX		0x03
-#define		BPF_ALU		0x04
-#define		BPF_JMP		0x05
-#define		BPF_RET		0x06
-#define		BPF_MISC	0x07
+#define         BPF_LD          0x00
+#define         BPF_LDX         0x01
+#define         BPF_ST          0x02
+#define         BPF_STX         0x03
+#define         BPF_ALU         0x04
+#define         BPF_JMP         0x05
+#define         BPF_RET         0x06
+#define         BPF_MISC        0x07
 
 /* ld/ldx fields */
-#define BPF_SIZE(code)	((code) & 0x18)
-#define		BPF_W		0x00
-#define		BPF_H		0x08
-#define		BPF_B		0x10
-#define BPF_MODE(code)	((code) & 0xe0)
-#define		BPF_IMM 	0x00
-#define		BPF_ABS		0x20
-#define		BPF_IND		0x40
-#define		BPF_MEM		0x60
-#define		BPF_LEN		0x80
-#define		BPF_MSH		0xa0
+#define BPF_SIZE(code)  ((code) & 0x18)
+#define         BPF_W           0x00
+#define         BPF_H           0x08
+#define         BPF_B           0x10
+#define BPF_MODE(code)  ((code) & 0xe0)
+#define         BPF_IMM         0x00
+#define         BPF_ABS         0x20
+#define         BPF_IND         0x40
+#define         BPF_MEM         0x60
+#define         BPF_LEN         0x80
+#define         BPF_MSH         0xa0
 
 /* alu/jmp fields */
-#define BPF_OP(code)	((code) & 0xf0)
-#define		BPF_ADD		0x00
-#define		BPF_SUB		0x10
-#define		BPF_MUL		0x20
-#define		BPF_DIV		0x30
-#define		BPF_OR		0x40
-#define		BPF_AND		0x50
-#define		BPF_LSH		0x60
-#define		BPF_RSH		0x70
-#define		BPF_NEG		0x80
-#define		BPF_JA		0x00
-#define		BPF_JEQ		0x10
-#define		BPF_JGT		0x20
-#define		BPF_JGE		0x30
-#define		BPF_JSET	0x40
-#define BPF_SRC(code)	((code) & 0x08)
-#define		BPF_K		0x00
-#define		BPF_X		0x08
+#define BPF_OP(code)    ((code) & 0xf0)
+#define         BPF_ADD         0x00
+#define         BPF_SUB         0x10
+#define         BPF_MUL         0x20
+#define         BPF_DIV         0x30
+#define         BPF_OR          0x40
+#define         BPF_AND         0x50
+#define         BPF_LSH         0x60
+#define         BPF_RSH         0x70
+#define         BPF_NEG         0x80
+#define         BPF_JA          0x00
+#define         BPF_JEQ         0x10
+#define         BPF_JGT         0x20
+#define         BPF_JGE         0x30
+#define         BPF_JSET        0x40
+#define BPF_SRC(code)   ((code) & 0x08)
+#define         BPF_K           0x00
+#define         BPF_X           0x08
 
 /* ret - BPF_K and BPF_X also apply */
-#define BPF_RVAL(code)	((code) & 0x18)
-#define		BPF_A		0x10
+#define BPF_RVAL(code)  ((code) & 0x18)
+#define         BPF_A           0x10
 
 /* misc */
 #define BPF_MISCOP(code) ((code) & 0xf8)
-#define		BPF_TAX		0x00
-#define		BPF_TXA		0x80
+#define         BPF_TAX         0x00
+#define         BPF_TXA         0x80
 
 /*
  * The instruction data structure.
  */
 struct bpf_insn {
-	u_short		code;
-	u_char		jt;
-	u_char		jf;
-	bpf_u_int32	k;
+	u_short         code;
+	u_char          jt;
+	u_char          jf;
+	bpf_u_int32     k;
 };
 
 /*
@@ -1327,10 +1327,10 @@ struct bpf_insn {
  * Structure to retrieve available DLTs for the interface.
  */
 struct bpf_dltlist {
-	u_int32_t		bfl_len;	/* number of bfd_list array */
+	u_int32_t               bfl_len;        /* number of bfd_list array */
 	union {
-		u_int32_t	*bflu_list;	/* array of DLTs */
-		u_int64_t	bflu_pad;
+		u_int32_t       *bflu_list;     /* array of DLTs */
+		u_int64_t       bflu_pad;
 	} bfl_u;
 };
 #define bfl_list bfl_u.bflu_list
@@ -1343,148 +1343,148 @@ struct bpf_dltlist {
 #define PORT_BOOTPS 67
 #define PORT_BOOTPC 68
 #define PORT_ISAKMP 500
-#define PORT_ISAKMP_NATT 4500	/* rfc3948 */
+#define PORT_ISAKMP_NATT 4500   /* rfc3948 */
 
 /* Forward declerations */
 struct ifnet;
 struct mbuf;
 
-#define BPF_PACKET_TYPE_MBUF	0
+#define BPF_PACKET_TYPE_MBUF    0
 
 struct bpf_packet {
-	int	bpfp_type;
-	void *	bpfp_header;		/* optional */
-	size_t	bpfp_header_length;
+	int     bpfp_type;
+	void *  bpfp_header;            /* optional */
+	size_t  bpfp_header_length;
 	union {
-		struct mbuf	*bpfpu_mbuf;
-		void *		bpfpu_ptr;
+		struct mbuf     *bpfpu_mbuf;
+		void *          bpfpu_ptr;
 	} bpfp_u;
-#define bpfp_mbuf	bpfp_u.bpfpu_mbuf
-#define bpfp_ptr	bpfp_u.bpfpu_ptr
-	size_t	bpfp_total_length;	/* length including optional header */
+#define bpfp_mbuf       bpfp_u.bpfpu_mbuf
+#define bpfp_ptr        bpfp_u.bpfpu_ptr
+	size_t  bpfp_total_length;      /* length including optional header */
 };
 
-extern int	bpf_validate(const struct bpf_insn *, int);
-extern void	bpfdetach(struct ifnet *);
-extern void	bpfilterattach(int);
-extern u_int	bpf_filter(const struct bpf_insn *, u_char *, u_int, u_int);
+extern int      bpf_validate(const struct bpf_insn *, int);
+extern void     bpfdetach(struct ifnet *);
+extern void     bpfilterattach(int);
+extern u_int    bpf_filter(const struct bpf_insn *, u_char *, u_int, u_int);
 #endif /* KERNEL_PRIVATE */
 
 #ifdef KERNEL
 #ifndef BPF_TAP_MODE_T
 #define BPF_TAP_MODE_T
 /*!
-	@enum BPF tap mode
-	@abstract Constants defining interface families.
-	@constant BPF_MODE_DISABLED Disable bpf.
-	@constant BPF_MODE_INPUT Enable input only.
-	@constant BPF_MODE_OUTPUT Enable output only.
-	@constant BPF_MODE_INPUT_OUTPUT Enable input and output.
-*/
+ *       @enum BPF tap mode
+ *       @abstract Constants defining interface families.
+ *       @constant BPF_MODE_DISABLED Disable bpf.
+ *       @constant BPF_MODE_INPUT Enable input only.
+ *       @constant BPF_MODE_OUTPUT Enable output only.
+ *       @constant BPF_MODE_INPUT_OUTPUT Enable input and output.
+ */
 
 enum {
-	BPF_MODE_DISABLED	= 0,
-	BPF_MODE_INPUT		= 1,
-	BPF_MODE_OUTPUT		= 2,
-	BPF_MODE_INPUT_OUTPUT	= 3
+	BPF_MODE_DISABLED       = 0,
+	BPF_MODE_INPUT          = 1,
+	BPF_MODE_OUTPUT         = 2,
+	BPF_MODE_INPUT_OUTPUT   = 3
 };
 /*!
-	@typedef bpf_tap_mode
-	@abstract Mode for tapping. BPF_MODE_DISABLED/BPF_MODE_INPUT_OUTPUT etc.
-*/
+ *       @typedef bpf_tap_mode
+ *       @abstract Mode for tapping. BPF_MODE_DISABLED/BPF_MODE_INPUT_OUTPUT etc.
+ */
 typedef u_int32_t bpf_tap_mode;
 #endif /* !BPF_TAP_MODE_T */
 
 /*!
-	@typedef bpf_send_func
-	@discussion bpf_send_func is called when a bpf file descriptor is
-		used to send a raw packet on the interface. The mbuf and data
-		link type are specified. The callback is responsible for
-		releasing the mbuf whether or not it returns an error.
-	@param interface The interface the packet is being sent on.
-	@param data_link_type The data link type the bpf device is attached to.
-	@param packet The packet to be sent.
+ *       @typedef bpf_send_func
+ *       @discussion bpf_send_func is called when a bpf file descriptor is
+ *               used to send a raw packet on the interface. The mbuf and data
+ *               link type are specified. The callback is responsible for
+ *               releasing the mbuf whether or not it returns an error.
+ *       @param interface The interface the packet is being sent on.
+ *       @param data_link_type The data link type the bpf device is attached to.
+ *       @param packet The packet to be sent.
  */
 typedef errno_t (*bpf_send_func)(ifnet_t interface, u_int32_t data_link_type,
     mbuf_t packet);
 
 /*!
-	@typedef bpf_tap_func
-	@discussion bpf_tap_func is called when the tap state of the
-		interface changes. This happens when a bpf device attaches to an
-		interface or detaches from an interface. The tap mode will join
-		together (bit or) the modes of all bpf devices using that
-		interface for that dlt. If you return an error from this
-		function, the bpf device attach attempt that triggered the tap
-		will fail. If this function was called bacuse the tap state was
-		decreasing (tap in or out is stopping), the error will be
-		ignored.
-	@param interface The interface being tapped.
-	@param data_link_type The data link type being tapped.
-	@param direction The direction of the tap.
+ *       @typedef bpf_tap_func
+ *       @discussion bpf_tap_func is called when the tap state of the
+ *               interface changes. This happens when a bpf device attaches to an
+ *               interface or detaches from an interface. The tap mode will join
+ *               together (bit or) the modes of all bpf devices using that
+ *               interface for that dlt. If you return an error from this
+ *               function, the bpf device attach attempt that triggered the tap
+ *               will fail. If this function was called bacuse the tap state was
+ *               decreasing (tap in or out is stopping), the error will be
+ *               ignored.
+ *       @param interface The interface being tapped.
+ *       @param data_link_type The data link type being tapped.
+ *       @param direction The direction of the tap.
  */
 typedef errno_t (*bpf_tap_func)(ifnet_t interface, u_int32_t data_link_type,
     bpf_tap_mode direction);
 
 /*!
-	@function bpfattach
-	@discussion Registers an interface with BPF. This allows bpf devices
-		to attach to your interface to capture packets. Your interface
-		will be unregistered automatically when your interface is
-		detached.
-	@param interface The interface to register with BPF.
-	@param data_link_type The data link type of the interface. See the
-		DLT_* defines in bpf.h.
-	@param header_length The length, in bytes, of the data link header.
+ *       @function bpfattach
+ *       @discussion Registers an interface with BPF. This allows bpf devices
+ *               to attach to your interface to capture packets. Your interface
+ *               will be unregistered automatically when your interface is
+ *               detached.
+ *       @param interface The interface to register with BPF.
+ *       @param data_link_type The data link type of the interface. See the
+ *               DLT_* defines in bpf.h.
+ *       @param header_length The length, in bytes, of the data link header.
  */
 extern void  bpfattach(ifnet_t interface, u_int data_link_type,
     u_int header_length);
 
 /*!
-	@function bpf_attach
-	@discussion Registers an interface with BPF. This allows bpf devices
-		to attach to your interface to capture and transmit packets.
-		Your interface will be unregistered automatically when your
-		interface is detached. You may register multiple times with
-		different data link types. An 802.11 interface would use this to
-		allow clients to pick whether they want just an ethernet style
-		frame or the 802.11 wireless headers as well. The first dlt you
-		register will be considered the default. Any bpf device attaches
-		that do not specify a data link type will use the default.
-	@param interface The interface to register with BPF.
-	@param data_link_type The data link type of the interface. See the
-		DLT_* defines in bpf.h.
-	@param header_length The length, in bytes, of the data link header.
-	@param send See the bpf_send_func described above.
-	@param tap See the bpf_tap_func described above.
+ *       @function bpf_attach
+ *       @discussion Registers an interface with BPF. This allows bpf devices
+ *               to attach to your interface to capture and transmit packets.
+ *               Your interface will be unregistered automatically when your
+ *               interface is detached. You may register multiple times with
+ *               different data link types. An 802.11 interface would use this to
+ *               allow clients to pick whether they want just an ethernet style
+ *               frame or the 802.11 wireless headers as well. The first dlt you
+ *               register will be considered the default. Any bpf device attaches
+ *               that do not specify a data link type will use the default.
+ *       @param interface The interface to register with BPF.
+ *       @param data_link_type The data link type of the interface. See the
+ *               DLT_* defines in bpf.h.
+ *       @param header_length The length, in bytes, of the data link header.
+ *       @param send See the bpf_send_func described above.
+ *       @param tap See the bpf_tap_func described above.
  */
 extern errno_t  bpf_attach(ifnet_t interface, u_int32_t data_link_type,
     u_int32_t header_length, bpf_send_func send, bpf_tap_func tap);
 
 /*!
-	@function bpf_tap_in
-	@discussion Call this function when your interface receives a
-		packet. This function will check if any bpf devices need a
-		a copy of the packet.
-	@param interface The interface the packet was received on.
-	@param dlt The data link type of the packet.
-	@param packet The packet received.
-	@param header An optional pointer to a header that will be prepended.
-	@param header_len If the header was specified, the length of the header.
+ *       @function bpf_tap_in
+ *       @discussion Call this function when your interface receives a
+ *               packet. This function will check if any bpf devices need a
+ *               a copy of the packet.
+ *       @param interface The interface the packet was received on.
+ *       @param dlt The data link type of the packet.
+ *       @param packet The packet received.
+ *       @param header An optional pointer to a header that will be prepended.
+ *       @param header_len If the header was specified, the length of the header.
  */
 extern void bpf_tap_in(ifnet_t interface, u_int32_t dlt, mbuf_t packet,
     void *header, size_t header_len);
 
 /*!
-	@function bpf_tap_out
-	@discussion Call this function when your interface transmits a
-		packet. This function will check if any bpf devices need a
-		a copy of the packet.
-	@param interface The interface the packet was or will be transmitted on.
-	@param dlt The data link type of the packet.
-	@param packet The packet received.
-	@param header An optional pointer to a header that will be prepended.
-	@param header_len If the header was specified, the length of the header.
+ *       @function bpf_tap_out
+ *       @discussion Call this function when your interface transmits a
+ *               packet. This function will check if any bpf devices need a
+ *               a copy of the packet.
+ *       @param interface The interface the packet was or will be transmitted on.
+ *       @param dlt The data link type of the packet.
+ *       @param packet The packet received.
+ *       @param header An optional pointer to a header that will be prepended.
+ *       @param header_len If the header was specified, the length of the header.
  */
 extern void bpf_tap_out(ifnet_t interface, u_int32_t dlt, mbuf_t packet,
     void *header, size_t header_len);

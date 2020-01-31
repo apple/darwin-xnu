@@ -62,17 +62,11 @@
 /*			rdi,	 	     rsi,	      rdx   */
 /*
  * Note: memcpy does not support overlapping copies
-	*/
-
+ */
 ENTRY(memcpy)
 	movq	%rdi, %rax			/* return destination */
 	movq	%rdx,%rcx
-	shrq	$3,%rcx				/* copy by 64-bit words */
 	cld					/* copy forwards */
-	rep
-	movsq
-	movq	%rdx,%rcx
-	andq	$7,%rcx				/* any bytes left? */
 	rep
 	movsb
 	ret
@@ -98,12 +92,7 @@ ENTRY(bcopy)
 	cmpq	%rcx,%rax			/* overlapping && src < dst? */
 	jb	1f
 
-	shrq	$3,%rcx				/* copy by 64-bit words */
 	cld					/* nope, copy forwards */
-	rep
-	movsq
-	movq	%rdx,%rcx
-	andq	$7,%rcx				/* any bytes left? */
 	rep
 	movsb
 	ret

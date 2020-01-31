@@ -182,6 +182,7 @@ unix_syscall(
 	arm_prepare_syscall_return(callp, state, uthread, error);
 
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
+	uthread->syscall_code = 0;
 
 	if (uthread->uu_lowpri_window) {
 		/*
@@ -251,6 +252,7 @@ unix_syscall_return(int error)
 	arm_prepare_syscall_return(callp, regs, uthread, error);
 
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
+	uthread->syscall_code = 0;
 
 	if (uthread->uu_lowpri_window) {
 		/*
@@ -463,20 +465,18 @@ arm_get_syscall_args(uthread_t uthread, struct arm_saved_state *state, struct sy
 static int
 arm_get_u64_syscall_args(uthread_t uthread, arm_saved_state64_t *regs, struct sysent *callp)
 {
-	int indirect_offset, regparams;
+	int indirect_offset;
 	
 #if CONFIG_REQUIRES_U32_MUNGING
 	sy_munge_t *mungerp;
 #endif
 
 	indirect_offset = (regs->x[ARM64_SYSCALL_CODE_REG_NUM] == 0) ? 1 : 0;
-	regparams = 9 - indirect_offset;
 
 	/* 
 	 * Everything should fit in registers for now.
 	 */
-	assert(callp->sy_narg <= 8);
-	if (callp->sy_narg > regparams) {
+	if (callp->sy_narg > (int)(sizeof(uthread->uu_arg) / sizeof(uthread->uu_arg[0]))) {
 		return -1;
 	}
 

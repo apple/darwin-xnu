@@ -95,13 +95,13 @@ union monotonic_ctl_info {
 
 #define MT_KDBG_TMPCPU_(CODE, FUNC) \
 	do { \
-		if (kdebug_enable && \
-				kdebug_debugid_enabled(MT_KDBG_TMPCPU_EVT(CODE))) { \
-			uint64_t __counts[MT_CORE_NFIXED]; \
-			mt_fixed_counts(__counts); \
-			KDBG(MT_KDBG_TMPCPU_EVT(CODE) | (FUNC), COUNTS_INSTRS, \
-					__counts[MT_CORE_CYCLES]); \
-		} \
+	        if (kdebug_enable && \
+	                        kdebug_debugid_enabled(MT_KDBG_TMPCPU_EVT(CODE))) { \
+	                uint64_t __counts[MT_CORE_NFIXED]; \
+	                mt_fixed_counts(__counts); \
+	                KDBG(MT_KDBG_TMPCPU_EVT(CODE) | (FUNC), COUNTS_INSTRS, \
+	                                __counts[MT_CORE_CYCLES]); \
+	        } \
 	} while (0)
 
 #define MT_KDBG_TMPCPU(CODE) MT_KDBG_TMPCPU_(CODE, DBG_FUNC_NONE)
@@ -118,13 +118,13 @@ union monotonic_ctl_info {
 
 #define MT_KDBG_TMPTH_(CODE, FUNC) \
 	do { \
-		if (kdebug_enable && \
-				kdebug_debugid_enabled(MT_KDBG_TMPTH_EVT(CODE))) { \
-			uint64_t __counts[MT_CORE_NFIXED]; \
-			mt_cur_thread_fixed_counts(__counts); \
-			KDBG(MT_KDBG_TMPTH_EVT(CODE) | (FUNC), COUNTS_INSTRS, \
-					__counts[MT_CORE_CYCLES]); \
-		} \
+	        if (kdebug_enable && \
+	                        kdebug_debugid_enabled(MT_KDBG_TMPTH_EVT(CODE))) { \
+	                uint64_t __counts[MT_CORE_NFIXED]; \
+	                mt_cur_thread_fixed_counts(__counts); \
+	                KDBG(MT_KDBG_TMPTH_EVT(CODE) | (FUNC), COUNTS_INSTRS, \
+	                                __counts[MT_CORE_CYCLES]); \
+	        } \
 	} while (0)
 
 #define MT_KDBG_TMPTH(CODE) MT_KDBG_TMPTH_(CODE, DBG_FUNC_NONE)
@@ -133,11 +133,11 @@ union monotonic_ctl_info {
 
 struct mt_device {
 	const char *mtd_name;
-	int (* const mtd_init)(struct mt_device *dev);
-	int (* const mtd_add)(struct monotonic_config *config, uint32_t *ctr_out);
-	void (* const mtd_reset)(void);
-	void (* const mtd_enable)(bool enable);
-	int (* const mtd_read)(uint64_t ctr_mask, uint64_t *counts_out);
+	int(*const mtd_init)(struct mt_device *dev);
+	int(*const mtd_add)(struct monotonic_config *config, uint32_t *ctr_out);
+	void(*const mtd_reset)(void);
+	void(*const mtd_enable)(bool enable);
+	int(*const mtd_read)(uint64_t ctr_mask, uint64_t *counts_out);
 	decl_lck_mtx_data(, mtd_lock);
 
 	uint8_t mtd_nmonitors;

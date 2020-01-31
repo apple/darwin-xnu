@@ -558,7 +558,7 @@ else ifeq ($(RC_ProjectName),xnu_headers_Sim)
 install: installhdrs
 else
 
-install: installhdrs install_textfiles install_config install_kernels install_aliases
+install: installhdrs install_textfiles install_config install_kernels install_aliases checkstyle
 endif
 
 .PHONY: install_embedded install_release_embedded install_development_embedded install_desktop
@@ -676,12 +676,19 @@ TAGS: cscope.files
 	@rm -f cscope.files 2> /dev/null
 
 #
-# Re-indent source code using xnu clang-format style
+# Check or reformat source code for official xnu code style
 #
-.PHONY: reindent
+.PHONY: checkstyle restyle check_uncrustify uncrustify
 
-reindent:
-	$(_v)$(SRCROOT)/tools/reindent.sh
+# User-friendly aliases for those who prefer to remember the name of the tool.
+check_uncrustify: checkstyle
+uncrustify: restyle
+
+checkstyle:
+	${_V}$(SRCROOT)/tools/uncrustify.sh
+
+restyle:
+	${_V}$(SRCROOT)/tools/uncrustify.sh -f
 
 .PHONY: help
 

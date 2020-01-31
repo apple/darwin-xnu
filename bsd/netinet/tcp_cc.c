@@ -77,26 +77,26 @@ struct tcp_cc_debug_state {
 };
 
 SYSCTL_SKMEM_TCP_INT(OID_AUTO, cc_debug, CTLFLAG_RW | CTLFLAG_LOCKED,
-	int, tcp_cc_debug, 0, "Enable debug data collection");
+    int, tcp_cc_debug, 0, "Enable debug data collection");
 
 extern struct tcp_cc_algo tcp_cc_newreno;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, newreno_sockets,
-	CTLFLAG_RD | CTLFLAG_LOCKED, &tcp_cc_newreno.num_sockets,
-	0, "Number of sockets using newreno");
+    CTLFLAG_RD | CTLFLAG_LOCKED, &tcp_cc_newreno.num_sockets,
+    0, "Number of sockets using newreno");
 
 extern struct tcp_cc_algo tcp_cc_ledbat;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, background_sockets,
-	CTLFLAG_RD | CTLFLAG_LOCKED, &tcp_cc_ledbat.num_sockets,
-	0, "Number of sockets using background transport");
+    CTLFLAG_RD | CTLFLAG_LOCKED, &tcp_cc_ledbat.num_sockets,
+    0, "Number of sockets using background transport");
 
 extern struct tcp_cc_algo tcp_cc_cubic;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, cubic_sockets,
-	CTLFLAG_RD | CTLFLAG_LOCKED,&tcp_cc_cubic.num_sockets, 
-	0, "Number of sockets using cubic");
+    CTLFLAG_RD | CTLFLAG_LOCKED, &tcp_cc_cubic.num_sockets,
+    0, "Number of sockets using cubic");
 
 SYSCTL_SKMEM_TCP_INT(OID_AUTO, use_newreno,
-	CTLFLAG_RW | CTLFLAG_LOCKED, int, tcp_use_newreno, 0,
-	"Use TCP NewReno by default");
+    CTLFLAG_RW | CTLFLAG_LOCKED, int, tcp_use_newreno, 0,
+    "Use TCP NewReno by default");
 
 static int tcp_check_cwnd_nonvalidated = 1;
 #if (DEBUG || DEVELOPMENT)
@@ -122,14 +122,14 @@ volatile UInt32 tcp_ccdbg_unit = TCP_CCDBG_NOUNIT;
 void tcp_cc_init(void);
 static void tcp_cc_control_register(void);
 static errno_t tcp_ccdbg_control_connect(kern_ctl_ref kctl,
-	struct sockaddr_ctl *sac, void **uinfo);
+    struct sockaddr_ctl *sac, void **uinfo);
 static errno_t tcp_ccdbg_control_disconnect(kern_ctl_ref kctl,
-	u_int32_t unit, void *uinfo);
+    u_int32_t unit, void *uinfo);
 static struct tcp_cc_algo tcp_cc_algo_none;
 /*
  * Initialize TCP congestion control algorithms.
  */
- 
+
 void
 tcp_cc_init(void)
 {
@@ -167,7 +167,7 @@ tcp_cc_control_register(void)
 /* Allow only one socket to connect at any time for debugging */
 static errno_t
 tcp_ccdbg_control_connect(kern_ctl_ref kctl, struct sockaddr_ctl *sac,
-	void **uinfo)
+    void **uinfo)
 {
 #pragma unused(kctl)
 #pragma unused(uinfo)
@@ -175,13 +175,15 @@ tcp_ccdbg_control_connect(kern_ctl_ref kctl, struct sockaddr_ctl *sac,
 	UInt32 old_value = TCP_CCDBG_NOUNIT;
 	UInt32 new_value = sac->sc_unit;
 
-	if (tcp_ccdbg_unit != old_value)
-		return (EALREADY);
+	if (tcp_ccdbg_unit != old_value) {
+		return EALREADY;
+	}
 
-	if (OSCompareAndSwap(old_value, new_value, &tcp_ccdbg_unit))
-		return (0);
-	else
-		return (EALREADY);
+	if (OSCompareAndSwap(old_value, new_value, &tcp_ccdbg_unit)) {
+		return 0;
+	} else {
+		return EALREADY;
+	}
 }
 
 static errno_t
@@ -192,15 +194,17 @@ tcp_ccdbg_control_disconnect(kern_ctl_ref kctl, u_int32_t unit, void *uinfo)
 	if (unit == tcp_ccdbg_unit) {
 		UInt32 old_value = tcp_ccdbg_unit;
 		UInt32 new_value = TCP_CCDBG_NOUNIT;
-		if (tcp_ccdbg_unit == new_value)
-			return (0);
+		if (tcp_ccdbg_unit == new_value) {
+			return 0;
+		}
 
 		if (!OSCompareAndSwap(old_value, new_value,
-			&tcp_ccdbg_unit))
-			log(LOG_DEBUG, 
+		    &tcp_ccdbg_unit)) {
+			log(LOG_DEBUG,
 			    "failed to disconnect tcp_cc debug control");
+		}
 	}
-	return (0);
+	return 0;
 }
 
 inline void
@@ -216,11 +220,11 @@ tcp_ccdbg_trace(struct tcpcb *tp, struct tcphdr *th, int32_t event)
 		struct timespec tv;
 
 		bzero(&dbg_state, sizeof(dbg_state));
-		
+
 		nanotime(&tv);
 		/* Take time in seconds */
 		dbg_state.ccd_tsns = (tv.tv_sec * 1000000000) + tv.tv_nsec;
-		inet_ntop(SOCK_DOM(inp->inp_socket), 
+		inet_ntop(SOCK_DOM(inp->inp_socket),
 		    ((SOCK_DOM(inp->inp_socket) == PF_INET) ?
 		    (void *)&inp->inp_laddr.s_addr :
 		    (void *)&inp->in6p_laddr), dbg_state.ccd_srcaddr,
@@ -246,7 +250,7 @@ tcp_ccdbg_trace(struct tcpcb *tp, struct tcphdr *th, int32_t event)
 		dbg_state.ccd_bytes_acked = tp->t_bytes_acked;
 		dbg_state.ccd_cc_index = tp->tcp_cc_index;
 		switch (tp->tcp_cc_index) {
-		    case TCP_CC_ALGO_CUBIC_INDEX:
+		case TCP_CC_ALGO_CUBIC_INDEX:
 			dbg_state.u.cubic_state.ccd_last_max =
 			    tp->t_ccstate->cub_last_max;
 			dbg_state.u.cubic_state.ccd_tcp_win =
@@ -258,22 +262,23 @@ tcp_ccdbg_trace(struct tcpcb *tp, struct tcphdr *th, int32_t event)
 			dbg_state.u.cubic_state.ccd_mean_deviation =
 			    tp->t_ccstate->cub_mean_dev;
 			break;
-		    case TCP_CC_ALGO_BACKGROUND_INDEX:
+		case TCP_CC_ALGO_BACKGROUND_INDEX:
 			dbg_state.u.ledbat_state.led_base_rtt =
 			    get_base_rtt(tp);
 			break;
-		    default:
+		default:
 			break;
 		}
 
 		ctl_enqueuedata(tcp_ccdbg_ctlref, tcp_ccdbg_unit,
-			&dbg_state, sizeof(dbg_state), 0);
+		    &dbg_state, sizeof(dbg_state), 0);
 	}
 	DTRACE_TCP5(cc, void, NULL, struct inpcb *, inp,
-		struct tcpcb *, tp, struct tcphdr *, th, int32_t, event);
+	    struct tcpcb *, tp, struct tcphdr *, th, int32_t, event);
 }
 
-void tcp_cc_resize_sndbuf(struct tcpcb *tp)
+void
+tcp_cc_resize_sndbuf(struct tcpcb *tp)
 {
 	struct sockbuf *sb;
 	/*
@@ -283,7 +288,7 @@ void tcp_cc_resize_sndbuf(struct tcpcb *tp)
 	 */
 	sb = &tp->t_inpcb->inp_socket->so_snd;
 	if (sb->sb_hiwat > tp->snd_ssthresh &&
-		(sb->sb_flags & SB_AUTOSIZE)) {
+	    (sb->sb_flags & SB_AUTOSIZE)) {
 		if (sb->sb_idealsize > tp->snd_ssthresh) {
 			SET_SNDSB_IDEAL_SIZE(sb, tp->snd_ssthresh);
 		}
@@ -291,11 +296,12 @@ void tcp_cc_resize_sndbuf(struct tcpcb *tp)
 	}
 }
 
-void tcp_bad_rexmt_fix_sndbuf(struct tcpcb *tp)
+void
+tcp_bad_rexmt_fix_sndbuf(struct tcpcb *tp)
 {
 	struct sockbuf *sb;
 	sb = &tp->t_inpcb->inp_socket->so_snd;
-	if ((sb->sb_flags & (SB_TRIM|SB_AUTOSIZE)) == (SB_TRIM|SB_AUTOSIZE)) {
+	if ((sb->sb_flags & (SB_TRIM | SB_AUTOSIZE)) == (SB_TRIM | SB_AUTOSIZE)) {
 		/*
 		 * If there was a retransmission that was not necessary
 		 * then the size of socket buffer can be restored to
@@ -322,30 +328,31 @@ tcp_cc_cwnd_init_or_reset(struct tcpcb *tp)
 		tp->snd_cwnd = tp->t_maxseg * ss_fltsz_local;
 	} else {
 		/* initial congestion window according to RFC 3390 */
-		if (tcp_do_rfc3390)
+		if (tcp_do_rfc3390) {
 			tp->snd_cwnd = min(4 * tp->t_maxseg,
-				max(2 * tp->t_maxseg, TCP_CC_CWND_INIT_BYTES));
-		else
+			    max(2 * tp->t_maxseg, TCP_CC_CWND_INIT_BYTES));
+		} else {
 			tp->snd_cwnd = tp->t_maxseg * ss_fltsz;
+		}
 	}
 }
 
 /*
  * Indicate whether this ack should be delayed.
  * Here is the explanation for different settings of tcp_delack_enabled:
- *  - when set to 1, the bhavior is same as when set to 2. We kept this 
+ *  - when set to 1, the bhavior is same as when set to 2. We kept this
  *    for binary compatibility.
  *  - when set to 2, will "ack every other packet"
  *      - if our last ack wasn't a 0-sized window.
- *      - if the peer hasn't sent us a TH_PUSH data packet (radar 3649245). 
- *              If TH_PUSH is set, take this as a clue that we need to ACK 
- *              with no delay. This helps higher level protocols who 
- *              won't send us more data even if the window is open 
+ *      - if the peer hasn't sent us a TH_PUSH data packet (radar 3649245).
+ *              If TH_PUSH is set, take this as a clue that we need to ACK
+ *              with no delay. This helps higher level protocols who
+ *              won't send us more data even if the window is open
  *              because their last "segment" hasn't been ACKed
- *  - when set to 3,  will do "streaming detection" 
- *      - if we receive more than "maxseg_unacked" full packets 
+ *  - when set to 3,  will do "streaming detection"
+ *      - if we receive more than "maxseg_unacked" full packets
  *        in the last 100ms
- *      - if the connection is not in slow-start or idle or 
+ *      - if the connection is not in slow-start or idle or
  *        loss/recovery states
  *      - if those criteria aren't met, it will ack every other packet.
  */
@@ -353,30 +360,32 @@ int
 tcp_cc_delay_ack(struct tcpcb *tp, struct tcphdr *th)
 {
 	switch (tcp_delack_enabled) {
-	    case 1:
-	    case 2:
+	case 1:
+	case 2:
 		if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
 		    (th->th_flags & TH_PUSH) == 0 &&
-		    (tp->t_unacksegs == 1))
-			return(1);
-		break;  
-	    case 3:
+		    (tp->t_unacksegs == 1)) {
+			return 1;
+		}
+		break;
+	case 3:
 		if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
 		    (th->th_flags & TH_PUSH) == 0 &&
 		    ((tp->t_unacksegs == 1) ||
 		    ((tp->t_flags & TF_STRETCHACK) != 0 &&
-			tp->t_unacksegs < (maxseg_unacked))))
-			return(1);
+		    tp->t_unacksegs < (maxseg_unacked)))) {
+			return 1;
+		}
 		break;
 	}
-	return(0);
+	return 0;
 }
 
 void
 tcp_cc_allocate_state(struct tcpcb *tp)
 {
 	if (tp->tcp_cc_index == TCP_CC_ALGO_CUBIC_INDEX &&
-		tp->t_ccstate == NULL) {
+	    tp->t_ccstate == NULL) {
 		tp->t_ccstate = (struct tcp_ccstate *)zalloc(tcp_cc_zone);
 
 		/*
@@ -384,29 +393,32 @@ tcp_cc_allocate_state(struct tcpcb *tp)
 		 * state, revert to using TCP NewReno as it does not
 		 * require any state
 		 */
-		if (tp->t_ccstate == NULL)
+		if (tp->t_ccstate == NULL) {
 			tp->tcp_cc_index = TCP_CC_ALGO_NEWRENO_INDEX;
-		else
+		} else {
 			bzero(tp->t_ccstate, sizeof(*tp->t_ccstate));
+		}
 	}
 }
 
 /*
- * If stretch ack was disabled automatically on long standing connections, 
+ * If stretch ack was disabled automatically on long standing connections,
  * re-evaluate the situation after 15 minutes to enable it.
  */
-#define	TCP_STRETCHACK_DISABLE_WIN	(15 * 60 * TCP_RETRANSHZ)
+#define TCP_STRETCHACK_DISABLE_WIN      (15 * 60 * TCP_RETRANSHZ)
 void
 tcp_cc_after_idle_stretchack(struct tcpcb *tp)
 {
 	int32_t tdiff;
 
-	if (!(tp->t_flagsext & TF_DISABLE_STRETCHACK))
+	if (!(tp->t_flagsext & TF_DISABLE_STRETCHACK)) {
 		return;
+	}
 
 	tdiff = timer_diff(tcp_now, 0, tp->rcv_nostrack_ts, 0);
-	if (tdiff < 0)
+	if (tdiff < 0) {
 		tdiff = -tdiff;
+	}
 
 	if (tdiff > TCP_STRETCHACK_DISABLE_WIN) {
 		tp->t_flagsext &= ~TF_DISABLE_STRETCHACK;
@@ -427,7 +439,7 @@ tcp_cc_is_cwnd_nonvalidated(struct tcpcb *tp)
 	struct socket *so = tp->t_inpcb->inp_socket;
 	if (tp->t_pipeack == 0 || tcp_check_cwnd_nonvalidated == 0) {
 		tp->t_flagsext &= ~TF_CWND_NONVALIDATED;
-		return (0);
+		return 0;
 	}
 
 	/*
@@ -436,11 +448,12 @@ tcp_cc_is_cwnd_nonvalidated(struct tcpcb *tp)
 	 * data to send in the send socket buffer
 	 */
 	if (tp->t_pipeack >= (tp->snd_cwnd >> 1) ||
-	    (so != NULL && so->so_snd.sb_cc > tp->snd_cwnd))
+	    (so != NULL && so->so_snd.sb_cc > tp->snd_cwnd)) {
 		tp->t_flagsext &= ~TF_CWND_NONVALIDATED;
-	else
+	} else {
 		tp->t_flagsext |= TF_CWND_NONVALIDATED;
-	return (tp->t_flagsext & TF_CWND_NONVALIDATED);
+	}
+	return tp->t_flagsext & TF_CWND_NONVALIDATED;
 }
 
 /*
@@ -472,7 +485,7 @@ tcp_get_max_pipeack(struct tcpcb *tp)
 	max_pipeack = (tp->t_pipeack_sample[2] > max_pipeack) ?
 	    tp->t_pipeack_sample[2] : max_pipeack;
 
-	return (max_pipeack);
+	return max_pipeack;
 }
 
 inline void

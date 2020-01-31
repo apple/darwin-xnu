@@ -3293,7 +3293,10 @@ def _vm_page_unpack_ptr(page):
     #ARM64 - min_addr = 0xffffff8000000000
     if unsigned(page) & unsigned(ptr_mask) :
         masked_page = (unsigned(page) & ~ptr_mask)
-        return (unsigned(addressof(kern.globals.vm_pages[masked_page])))
+        # can't use addressof(kern.globals.vm_pages[masked_page]) due to 32 bit limitation in SB bridge
+        vm_pages_addr = unsigned(addressof(kern.globals.vm_pages[0]))
+        element_size = unsigned(addressof(kern.globals.vm_pages[1])) - vm_pages_addr
+        return (vm_pages_addr + masked_page * element_size)
     return ((unsigned(page) << unsigned(ptr_shift)) + unsigned(min_addr))
 
 @lldb_command('calcvmpagehash')
@@ -3398,7 +3401,7 @@ def VMObjectWalkPages(cmd_args=None, cmd_options={}):
              if (page_count % 1000) == 0:
                 print "traversed %d pages ...\n" % (page_count)
         else:
-                out_string += format_string.format(page_count, res_page_count, vmp, vmp.vmp_offset, _vm_page_unpack_ptr(vmp.listq.next), _vm_page_get_phys_page(vmp), vmp.vmp_wire_count)
+                out_string += format_string.format(page_count, res_page_count, vmp, vmp.vmp_offset, _vm_page_unpack_ptr(vmp.vmp_listq.next), _vm_page_get_phys_page(vmp), vmp.vmp_wire_count)
                 out_string += first_bitfield_format_string.format(vmp.vmp_q_state, vmp.vmp_in_background, vmp.vmp_on_backgroundq, vmp.vmp_gobbled, vmp.vmp_laundry, vmp.vmp_no_cache,
                                                                    vmp.vmp_private, vmp.vmp_reference)
 

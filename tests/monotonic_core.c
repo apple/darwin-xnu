@@ -29,9 +29,9 @@
 #include <unistd.h>
 
 T_GLOBAL_META(
-		T_META_NAMESPACE("xnu.monotonic"),
-		T_META_CHECK_LEAKS(false)
-);
+	T_META_NAMESPACE("xnu.monotonic"),
+	T_META_CHECK_LEAKS(false)
+	);
 
 static void
 skip_if_unsupported(void)
@@ -41,7 +41,7 @@ skip_if_unsupported(void)
 	size_t supported_size = sizeof(supported);
 
 	r = sysctlbyname("kern.monotonic.supported", &supported, &supported_size,
-			NULL, 0);
+	    NULL, 0);
 	if (r < 0) {
 		T_WITH_ERRNO;
 		T_SKIP("could not find \"kern.monotonic.supported\" sysctl");
@@ -65,7 +65,7 @@ check_fixed_counts(uint64_t counts[2][2])
 }
 
 T_DECL(core_fixed_thread_self, "check the current thread's fixed counters",
-		T_META_ASROOT(true))
+    T_META_ASROOT(true))
 {
 	int err;
 	extern int thread_selfcounts(int type, void *buf, size_t nbytes);
@@ -84,7 +84,7 @@ T_DECL(core_fixed_thread_self, "check the current thread's fixed counters",
 }
 
 T_DECL(core_fixed_task, "check that task counting is working",
-		T_META_ASROOT(true))
+    T_META_ASROOT(true))
 {
 	task_t task = mach_task_self();
 	kern_return_t kr;
@@ -94,21 +94,21 @@ T_DECL(core_fixed_task, "check that task counting is working",
 	skip_if_unsupported();
 
 	kr = task_inspect(task, TASK_INSPECT_BASIC_COUNTS,
-			(task_inspect_info_t)&counts[0], &size);
+	    (task_inspect_info_t)&counts[0], &size);
 	T_ASSERT_MACH_SUCCESS(kr,
-			"task_inspect(... TASK_INSPECT_BASIC_COUNTS ...)");
+	    "task_inspect(... TASK_INSPECT_BASIC_COUNTS ...)");
 
 	size = TASK_INSPECT_BASIC_COUNTS_COUNT;
 	kr = task_inspect(task, TASK_INSPECT_BASIC_COUNTS,
-			(task_inspect_info_t)&counts[1], &size);
+	    (task_inspect_info_t)&counts[1], &size);
 	T_ASSERT_MACH_SUCCESS(kr,
-			"task_inspect(... TASK_INSPECT_BASIC_COUNTS ...)");
+	    "task_inspect(... TASK_INSPECT_BASIC_COUNTS ...)");
 
 	check_fixed_counts(counts);
 }
 
 T_DECL(core_fixed_kdebug, "check that the kdebug macros for monotonic work",
-		T_META_ASROOT(true))
+    T_META_ASROOT(true))
 {
 	__block bool saw_events = false;
 	ktrace_session_t s;
@@ -122,8 +122,8 @@ T_DECL(core_fixed_kdebug, "check that the kdebug macros for monotonic work",
 	T_QUIET; T_ASSERT_NOTNULL(s, "ktrace_session_create");
 
 	ktrace_events_single_paired(s,
-			KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_TMPCPU, 0x3fff),
-			^(struct trace_point *start, struct trace_point *end)
+	    KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_TMPCPU, 0x3fff),
+	    ^(struct trace_point *start, struct trace_point *end)
 	{
 		uint64_t counts[2][2];
 
@@ -144,12 +144,12 @@ T_DECL(core_fixed_kdebug, "check that the kdebug macros for monotonic work",
 	T_SETUPEND;
 
 	T_ASSERT_POSIX_ZERO(ktrace_start(s,
-			dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0)), NULL);
+	    dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0)), NULL);
 
 	r = sysctlbyname("kern.monotonic.kdebug_test", NULL, NULL, &set,
-			sizeof(set));
+	    sizeof(set));
 	T_ASSERT_POSIX_SUCCESS(r,
-			"sysctlbyname(\"kern.monotonic.kdebug_test\", ...)");
+	    "sysctlbyname(\"kern.monotonic.kdebug_test\", ...)");
 
 	ktrace_end(s, 0);
 	dispatch_main();
@@ -174,26 +174,26 @@ spin_task_inspect(__unused void *arg)
 	while (true) {
 		size = (unsigned int)sizeof(counts);
 		(void)task_inspect(task, TASK_INSPECT_BASIC_COUNTS,
-				(task_inspect_info_t)&counts[0], &size);
+		    (task_inspect_info_t)&counts[0], &size);
 		/*
 		 * Not realistic for a process to see count values with the high bit
 		 * set, but kernel pointers will be that high.
 		 */
 		T_QUIET; T_ASSERT_LT(counts[0], 1ULL << 63,
-				"check for valid count entry 1");
+		        "check for valid count entry 1");
 		T_QUIET; T_ASSERT_LT(counts[1], 1ULL << 63,
-				"check for valid count entry 2");
+		        "check for valid count entry 2");
 	}
 }
 
 T_DECL(core_fixed_stack_leak_race,
-		"ensure no stack data is leaked by TASK_INSPECT_BASIC_COUNTS")
+    "ensure no stack data is leaked by TASK_INSPECT_BASIC_COUNTS")
 {
 	T_SETUPBEGIN;
 
 	int ncpus = 0;
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("hw.logicalcpu_max", &ncpus,
-			&(size_t){ sizeof(ncpus) }, NULL, 0), "get number of CPUs");
+	    &(size_t){ sizeof(ncpus) }, NULL, 0), "get number of CPUs");
 	T_QUIET; T_ASSERT_GT(ncpus, 0, "got non-zero number of CPUs");
 	pthread_t *threads = calloc((unsigned long)ncpus, sizeof(*threads));
 
@@ -207,8 +207,8 @@ T_DECL(core_fixed_stack_leak_race,
 	 */
 	for (int i = 0; i < ncpus; i++) {
 		T_QUIET; T_ASSERT_POSIX_ZERO(pthread_create(&threads[i], NULL,
-				i & 1 ? spin_task_inspect : spin_thread_self_counts, NULL),
-				NULL);
+		    i & 1 ? spin_task_inspect : spin_thread_self_counts, NULL),
+		    NULL);
 	}
 
 	T_SETUPEND;
@@ -228,7 +228,7 @@ perf_sysctl_deltas(const char *sysctl_name, const char *stat_name)
 	skip_if_unsupported();
 
 	dt_stat_t instrs = dt_stat_create("instructions", "%s_instrs",
-			stat_name);
+	    stat_name);
 	dt_stat_t cycles = dt_stat_create("cycles", "%s_cycles", stat_name);
 	T_SETUPEND;
 
@@ -246,26 +246,26 @@ perf_sysctl_deltas(const char *sysctl_name, const char *stat_name)
 }
 
 T_DECL(perf_core_fixed_cpu, "test the performance of fixed CPU counter access",
-		T_META_ASROOT(true), T_META_TAG_PERF)
+    T_META_ASROOT(true), T_META_TAG_PERF)
 {
 	perf_sysctl_deltas("kern.monotonic.fixed_cpu_perf", "fixed_cpu_counters");
 }
 
 T_DECL(perf_core_fixed_thread, "test the performance of fixed thread counter access",
-		T_META_ASROOT(true), T_META_TAG_PERF)
+    T_META_ASROOT(true), T_META_TAG_PERF)
 {
 	perf_sysctl_deltas("kern.monotonic.fixed_thread_perf",
-			"fixed_thread_counters");
+	    "fixed_thread_counters");
 }
 
 T_DECL(perf_core_fixed_task, "test the performance of fixed task counter access",
-		T_META_ASROOT(true), T_META_TAG_PERF)
+    T_META_ASROOT(true), T_META_TAG_PERF)
 {
 	perf_sysctl_deltas("kern.monotonic.fixed_task_perf", "fixed_task_counters");
 }
 
 T_DECL(perf_core_fixed_thread_self, "test the performance of thread self counts",
-		T_META_TAG_PERF)
+    T_META_TAG_PERF)
 {
 	extern int thread_selfcounts(int type, void *buf, size_t nbytes);
 	uint64_t counts[2][2];
@@ -286,11 +286,11 @@ T_DECL(perf_core_fixed_thread_self, "test the performance of thread self counts"
 		T_QUIET; T_ASSERT_POSIX_ZERO(r2, "__thread_selfcounts");
 
 		T_QUIET; T_ASSERT_GT(counts[1][0], counts[0][0],
-				"instructions increase monotonically");
+		    "instructions increase monotonically");
 		dt_stat_add(instrs, counts[1][0] - counts[0][0]);
 
 		T_QUIET; T_ASSERT_GT(counts[1][1], counts[0][1],
-				"cycles increase monotonically");
+		    "cycles increase monotonically");
 		dt_stat_add(cycles, counts[1][1] - counts[0][1]);
 	}
 

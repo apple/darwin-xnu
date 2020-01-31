@@ -70,8 +70,9 @@ ux_handler_init(void)
 {
 	ux_handler_port = ipc_port_alloc_kernel();
 
-	if (ux_handler_port == IP_NULL)
+	if (ux_handler_port == IP_NULL) {
 		panic("can't allocate unix exception port");
+	}
 
 	ipc_kobject_set(ux_handler_port, (ipc_kobject_t)&ux_handler_kobject, IKOT_UX_HANDLER);
 }
@@ -86,8 +87,9 @@ ux_handler_setup(void)
 {
 	ipc_port_t ux_handler_send_right = ipc_port_make_send(ux_handler_port);
 
-	if (!IP_VALID(ux_handler_send_right))
+	if (!IP_VALID(ux_handler_send_right)) {
 		panic("Couldn't allocate send right for ux_handler_port!\n");
+	}
 
 	kern_return_t kr = KERN_SUCCESS;
 
@@ -97,13 +99,14 @@ ux_handler_setup(void)
 	 * Instruments uses the RPC_ALERT port, so don't register for that.
 	 */
 	kr = host_set_exception_ports(host_priv_self(),
-	                              EXC_MASK_ALL & ~(EXC_MASK_RPC_ALERT),
-	                              ux_handler_send_right,
-	                              EXCEPTION_DEFAULT | MACH_EXCEPTION_CODES,
-	                              0);
+	    EXC_MASK_ALL & ~(EXC_MASK_RPC_ALERT),
+	    ux_handler_send_right,
+	    EXCEPTION_DEFAULT | MACH_EXCEPTION_CODES,
+	    0);
 
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		panic("host_set_exception_ports failed to set ux_handler! %d", kr);
+	}
 }
 
 /*
@@ -113,23 +116,25 @@ ux_handler_setup(void)
 boolean_t
 is_ux_handler_port(mach_port_t port)
 {
-	if (ux_handler_port == port)
+	if (ux_handler_port == port) {
 		return TRUE;
-	else
+	} else {
 		return FALSE;
+	}
 }
 
 kern_return_t
 catch_mach_exception_raise(
-                           mach_port_t                  exception_port,
-                           mach_port_t                  thread_port,
-                           mach_port_t                  task_port,
-                           exception_type_t             exception,
-                           mach_exception_data_t        code,
-                  __unused mach_msg_type_number_t       codeCnt)
+	mach_port_t                  exception_port,
+	mach_port_t                  thread_port,
+	mach_port_t                  task_port,
+	exception_type_t             exception,
+	mach_exception_data_t        code,
+	__unused mach_msg_type_number_t       codeCnt)
 {
-	if (exception_port != ux_handler_port)
+	if (exception_port != ux_handler_port) {
 		return KERN_FAILURE;
+	}
 
 	kern_return_t kr = KERN_SUCCESS;
 
@@ -171,15 +176,16 @@ out:
 
 kern_return_t
 catch_exception_raise(
-                      mach_port_t               exception_port,
-                      mach_port_t               thread,
-                      mach_port_t               task,
-                      exception_type_t          exception,
-                      exception_data_t          code,
-                      mach_msg_type_number_t    codeCnt)
+	mach_port_t               exception_port,
+	mach_port_t               thread,
+	mach_port_t               task,
+	exception_type_t          exception,
+	exception_data_t          code,
+	mach_msg_type_number_t    codeCnt)
 {
-	if (exception_port != ux_handler_port)
+	if (exception_port != ux_handler_port) {
 		return KERN_FAILURE;
+	}
 
 	mach_exception_data_type_t big_code[EXCEPTION_CODE_MAX] = {
 		[0] = code[0],
@@ -187,74 +193,73 @@ catch_exception_raise(
 	};
 
 	return catch_mach_exception_raise(exception_port,
-	                                  thread,
-	                                  task,
-	                                  exception,
-	                                  big_code,
-	                                  codeCnt);
+	           thread,
+	           task,
+	           exception,
+	           big_code,
+	           codeCnt);
 }
 
 kern_return_t
 catch_exception_raise_state(
-                   __unused mach_port_t                 exception_port,
-                   __unused exception_type_t            exception,
-                   __unused const exception_data_t      code,
-                   __unused mach_msg_type_number_t      codeCnt,
-                   __unused int                        *flavor,
-                   __unused const thread_state_t        old_state,
-                   __unused mach_msg_type_number_t      old_stateCnt,
-                   __unused thread_state_t              new_state,
-                   __unused mach_msg_type_number_t     *new_stateCnt)
+	__unused mach_port_t                 exception_port,
+	__unused exception_type_t            exception,
+	__unused const exception_data_t      code,
+	__unused mach_msg_type_number_t      codeCnt,
+	__unused int                        *flavor,
+	__unused const thread_state_t        old_state,
+	__unused mach_msg_type_number_t      old_stateCnt,
+	__unused thread_state_t              new_state,
+	__unused mach_msg_type_number_t     *new_stateCnt)
 {
-	return(KERN_INVALID_ARGUMENT);
+	return KERN_INVALID_ARGUMENT;
 }
 
 kern_return_t
 catch_mach_exception_raise_state(
-                        __unused mach_port_t                    exception_port,
-                        __unused exception_type_t               exception,
-                        __unused const mach_exception_data_t    code,
-                        __unused mach_msg_type_number_t         codeCnt,
-                        __unused int                           *flavor,
-                        __unused const thread_state_t           old_state,
-                        __unused mach_msg_type_number_t         old_stateCnt,
-                        __unused thread_state_t                 new_state,
-                        __unused mach_msg_type_number_t        *new_stateCnt)
+	__unused mach_port_t                    exception_port,
+	__unused exception_type_t               exception,
+	__unused const mach_exception_data_t    code,
+	__unused mach_msg_type_number_t         codeCnt,
+	__unused int                           *flavor,
+	__unused const thread_state_t           old_state,
+	__unused mach_msg_type_number_t         old_stateCnt,
+	__unused thread_state_t                 new_state,
+	__unused mach_msg_type_number_t        *new_stateCnt)
 {
-	return(KERN_INVALID_ARGUMENT);
+	return KERN_INVALID_ARGUMENT;
 }
 
 kern_return_t
 catch_exception_raise_state_identity(
-                            __unused mach_port_t                exception_port,
-                            __unused mach_port_t                thread,
-                            __unused mach_port_t                task,
-                            __unused exception_type_t           exception,
-                            __unused exception_data_t           code,
-                            __unused mach_msg_type_number_t     codeCnt,
-                            __unused int                       *flavor,
-                            __unused thread_state_t             old_state,
-                            __unused mach_msg_type_number_t     old_stateCnt,
-                            __unused thread_state_t             new_state,
-                            __unused mach_msg_type_number_t    *new_stateCnt)
+	__unused mach_port_t                exception_port,
+	__unused mach_port_t                thread,
+	__unused mach_port_t                task,
+	__unused exception_type_t           exception,
+	__unused exception_data_t           code,
+	__unused mach_msg_type_number_t     codeCnt,
+	__unused int                       *flavor,
+	__unused thread_state_t             old_state,
+	__unused mach_msg_type_number_t     old_stateCnt,
+	__unused thread_state_t             new_state,
+	__unused mach_msg_type_number_t    *new_stateCnt)
 {
-	return(KERN_INVALID_ARGUMENT);
+	return KERN_INVALID_ARGUMENT;
 }
 
 kern_return_t
 catch_mach_exception_raise_state_identity(
-                                 __unused mach_port_t                   exception_port,
-                                 __unused mach_port_t                   thread,
-                                 __unused mach_port_t                   task,
-                                 __unused exception_type_t              exception,
-                                 __unused mach_exception_data_t         code,
-                                 __unused mach_msg_type_number_t        codeCnt,
-                                 __unused int                          *flavor,
-                                 __unused thread_state_t                old_state,
-                                 __unused mach_msg_type_number_t        old_stateCnt,
-                                 __unused thread_state_t                new_state,
-                                 __unused mach_msg_type_number_t       *new_stateCnt)
+	__unused mach_port_t                   exception_port,
+	__unused mach_port_t                   thread,
+	__unused mach_port_t                   task,
+	__unused exception_type_t              exception,
+	__unused mach_exception_data_t         code,
+	__unused mach_msg_type_number_t        codeCnt,
+	__unused int                          *flavor,
+	__unused thread_state_t                old_state,
+	__unused mach_msg_type_number_t        old_stateCnt,
+	__unused thread_state_t                new_state,
+	__unused mach_msg_type_number_t       *new_stateCnt)
 {
-	return(KERN_INVALID_ARGUMENT);
+	return KERN_INVALID_ARGUMENT;
 }
-

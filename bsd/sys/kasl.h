@@ -27,12 +27,12 @@
  */
 
 #ifndef _SYS_KASL_H_
-#define	_SYS_KASL_H_
+#define _SYS_KASL_H_
 
 #ifdef BSD_KERNEL_PRIVATE
 
-#define	KASL_KEY_FACILITY	"Facility"	/* Facility generating messages */
-#define	KASL_KEY_LEVEL		"Level"		/* Priority level */
+#define KASL_KEY_FACILITY       "Facility"      /* Facility generating messages */
+#define KASL_KEY_LEVEL          "Level"         /* Priority level */
 
 #endif /* BSD_KERNEL_PRIVATE */
 

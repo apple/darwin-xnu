@@ -50,7 +50,7 @@ kperf_meminfo_sample(task_t task, struct meminfo *mi)
 	mi->phys_footprint = get_task_phys_footprint(task);
 
 	kr = ledger_get_entries(task->ledger, task_ledgers.purgeable_volatile,
-	                        &credit, &debit);
+	    &credit, &debit);
 	if (kr == KERN_SUCCESS) {
 		mi->purgeable_volatile = credit - debit;
 	} else {
@@ -58,8 +58,8 @@ kperf_meminfo_sample(task_t task, struct meminfo *mi)
 	}
 
 	kr = ledger_get_entries(task->ledger,
-	                        task_ledgers.purgeable_volatile_compressed,
-	                        &credit, &debit);
+	    task_ledgers.purgeable_volatile_compressed,
+	    &credit, &debit);
 	if (kr == KERN_SUCCESS) {
 		mi->purgeable_volatile_compressed = credit - debit;
 	} else {
@@ -74,5 +74,5 @@ void
 kperf_meminfo_log(struct meminfo *mi)
 {
 	BUF_DATA(PERF_MI_DATA, mi->phys_footprint, mi->purgeable_volatile,
-	         mi->purgeable_volatile_compressed);
+	    mi->purgeable_volatile_compressed);
 }

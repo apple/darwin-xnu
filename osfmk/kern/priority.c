@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -97,15 +97,13 @@ static void sched_update_thread_bucket(thread_t thread);
 
 void
 thread_quantum_expire(
-	timer_call_param_t	p0,
-	timer_call_param_t	p1)
+	timer_call_param_t      p0,
+	timer_call_param_t      p1)
 {
-	processor_t			processor = p0;
-	thread_t			thread = p1;
-	ast_t				preempt;
-	uint64_t			ctime;
-	int					urgency;
-	uint64_t			ignore1, ignore2;
+	processor_t                     processor = p0;
+	thread_t                        thread = p1;
+	ast_t                           preempt;
+	uint64_t                        ctime;
 
 	assert(processor == current_processor());
 	assert(thread == current_thread());
@@ -130,7 +128,7 @@ thread_quantum_expire(
 	ledger_credit(thread->t_threadledger, thread_ledgers.cpu_time, thread->quantum_remaining);
 	if (thread->t_bankledger) {
 		ledger_credit(thread->t_bankledger, bank_ledgers.cpu_time,
-				(thread->quantum_remaining - thread->t_deduct_bank_ledger_time));
+		    (thread->quantum_remaining - thread->t_deduct_bank_ledger_time));
 	}
 	thread->t_deduct_bank_ledger_time = 0;
 
@@ -165,8 +163,8 @@ thread_quantum_expire(
 		new_computation = ctime - thread->computation_epoch;
 		new_computation += thread->computation_metered;
 		if (new_computation > max_unsafe_computation) {
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_FAILSAFE)|DBG_FUNC_NONE,
-					(uintptr_t)thread->sched_pri, (uintptr_t)thread->sched_mode, 0, 0, 0);
+			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_FAILSAFE) | DBG_FUNC_NONE,
+			    (uintptr_t)thread->sched_pri, (uintptr_t)thread->sched_mode, 0, 0, 0);
 
 			thread->safe_release = ctime + sched_safe_duration;
 
@@ -177,15 +175,15 @@ thread_quantum_expire(
 	/*
 	 *	Recompute scheduled priority if appropriate.
 	 */
-	if (SCHED(can_update_priority)(thread))
+	if (SCHED(can_update_priority)(thread)) {
 		SCHED(update_priority)(thread);
-	else
+	} else {
 		SCHED(lightweight_update_priority)(thread);
+	}
 
-	if (thread->sched_mode != TH_MODE_REALTIME)
+	if (thread->sched_mode != TH_MODE_REALTIME) {
 		SCHED(quantum_expire)(thread);
-
-	processor_state_update_from_thread(processor, thread);
+	}
 
 	/*
 	 *	This quantum is up, give this thread another.
@@ -218,11 +216,13 @@ thread_quantum_expire(
 	 */
 
 	ast_t check_reason = AST_QUANTUM;
-	if (thread->task == kernel_task)
+	if (thread->task == kernel_task) {
 		check_reason |= AST_URGENT;
+	}
 
-	if ((preempt = csw_check(processor, check_reason)) != AST_NONE)
+	if ((preempt = csw_check(thread, processor, check_reason)) != AST_NONE) {
 		ast_on(preempt);
+	}
 
 	/*
 	 * AST_KEVENT does not send an IPI when setting the AST,
@@ -234,21 +234,22 @@ thread_quantum_expire(
 	thread_unlock(thread);
 
 	timer_call_quantum_timer_enter(&processor->quantum_timer, thread,
-		processor->quantum_end, ctime);
+	    processor->quantum_end, ctime);
 
 	/* Tell platform layer that we are still running this thread */
-	urgency = thread_get_urgency(thread, &ignore1, &ignore2);
+	thread_urgency_t urgency = thread_get_urgency(thread, NULL, NULL);
 	machine_thread_going_on_core(thread, urgency, 0, 0, ctime);
 	machine_switch_perfcontrol_state_update(QUANTUM_EXPIRY, ctime,
-		0, thread);
+	    0, thread);
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 	sched_timeshare_consider_maintenance(ctime);
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
 #if __arm__ || __arm64__
-	if (thread->sched_mode == TH_MODE_REALTIME)
+	if (thread->sched_mode == TH_MODE_REALTIME) {
 		sched_consider_recommended_cores(ctime, thread);
+	}
 #endif /* __arm__ || __arm64__ */
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_QUANTUM_EXPIRED) | DBG_FUNC_END, preempt, 0, 0, 0, 0);
@@ -270,10 +271,11 @@ sched_set_thread_base_priority(thread_t thread, int priority)
 	assert(priority >= MINPRI);
 	uint64_t ctime = 0;
 
-	if (thread->sched_mode == TH_MODE_REALTIME)
+	if (thread->sched_mode == TH_MODE_REALTIME) {
 		assert(priority <= BASEPRI_RTQUEUES);
-	else
+	} else {
 		assert(priority < BASEPRI_RTQUEUES);
+	}
 
 	int old_base_pri = thread->base_pri;
 	thread->base_pri = priority;
@@ -287,17 +289,17 @@ sched_set_thread_base_priority(thread_t thread, int priority)
 		assert(thread->last_made_runnable_time == THREAD_NOT_RUNNABLE);
 	}
 
-	/* 
-	 * Currently the perfcontrol_attr depends on the base pri of the 
-	 * thread. Therefore, we use this function as the hook for the 
-	 * perfcontrol callout. 
+	/*
+	 * Currently the perfcontrol_attr depends on the base pri of the
+	 * thread. Therefore, we use this function as the hook for the
+	 * perfcontrol callout.
 	 */
 	if (thread == current_thread() && old_base_pri != priority) {
 		if (!ctime) {
-		    ctime = mach_approximate_time();
+			ctime = mach_approximate_time();
 		}
 		machine_switch_perfcontrol_state_update(PERFCONTROL_ATTR_UPDATE,
-			ctime, PERFCONTROL_CALLOUT_WAKE_UNSAFE, thread);
+		    ctime, PERFCONTROL_CALLOUT_WAKE_UNSAFE, thread);
 	}
 	sched_update_thread_bucket(thread);
 
@@ -327,8 +329,9 @@ thread_recompute_sched_pri(thread_t thread, set_sched_pri_options_t options)
 
 	int priority = thread->base_pri;
 
-	if (sched_mode == TH_MODE_TIMESHARE)
+	if (sched_mode == TH_MODE_TIMESHARE) {
 		priority = SCHED(compute_timeshare_priority)(thread);
+	}
 
 	if (sched_flags & TH_SFLAG_DEPRESS) {
 		/* thread_yield_internal overrides kernel mutex promotion */
@@ -342,19 +345,23 @@ thread_recompute_sched_pri(thread_t thread, set_sched_pri_options_t options)
 		if (sched_flags & TH_SFLAG_PROMOTED) {
 			priority = MAX(priority, thread->promotion_priority);
 
-			if (sched_mode != TH_MODE_REALTIME)
+			if (sched_mode != TH_MODE_REALTIME) {
 				priority = MIN(priority, MAXPRI_PROMOTE);
+			}
 		}
 
 		if (sched_flags & TH_SFLAG_PROMOTE_REASON_MASK) {
-			if (sched_flags & TH_SFLAG_RW_PROMOTED)
+			if (sched_flags & TH_SFLAG_RW_PROMOTED) {
 				priority = MAX(priority, MINPRI_RWLOCK);
+			}
 
-			if (sched_flags & TH_SFLAG_WAITQ_PROMOTED)
+			if (sched_flags & TH_SFLAG_WAITQ_PROMOTED) {
 				priority = MAX(priority, MINPRI_WAITQ);
+			}
 
-			if (sched_flags & TH_SFLAG_EXEC_PROMOTED)
+			if (sched_flags & TH_SFLAG_EXEC_PROMOTED) {
 				priority = MAX(priority, MINPRI_EXEC);
+			}
 		}
 	}
 
@@ -364,10 +371,10 @@ thread_recompute_sched_pri(thread_t thread, set_sched_pri_options_t options)
 void
 sched_default_quantum_expire(thread_t thread __unused)
 {
-      /*
-       * No special behavior when a timeshare, fixed, or realtime thread
-       * uses up its entire quantum
-       */
+	/*
+	 * No special behavior when a timeshare, fixed, or realtime thread
+	 * uses up its entire quantum
+	 */
 }
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
@@ -399,15 +406,17 @@ lightweight_update_priority(thread_t thread)
 		 *	during contention for processor
 		 *	resources.
 		 */
-		if (thread->pri_shift < INT8_MAX)
+		if (thread->pri_shift < INT8_MAX) {
 			thread->sched_usage += delta;
+		}
 
 		thread->cpu_delta += delta;
 
 		priority = sched_compute_timeshare_priority(thread);
 
-		if (priority != thread->sched_pri)
+		if (priority != thread->sched_pri) {
 			thread_recompute_sched_pri(thread, SETPRI_LAZY);
+		}
 	}
 }
 
@@ -419,16 +428,16 @@ lightweight_update_priority(thread_t thread)
  *	+/- is determined by the sign of shift 2.
  */
 struct shift_data {
-	int	shift1;
-	int	shift2;
+	int     shift1;
+	int     shift2;
 };
 
-#define SCHED_DECAY_TICKS	32
-static struct shift_data	sched_decay_shifts[SCHED_DECAY_TICKS] = {
-	{1,1},{1,3},{1,-3},{2,-7},{3,5},{3,-5},{4,-8},{5,7},
-	{5,-7},{6,-10},{7,10},{7,-9},{8,-11},{9,12},{9,-11},{10,-13},
-	{11,14},{11,-13},{12,-15},{13,17},{13,-15},{14,-17},{15,19},{16,18},
-	{16,-19},{17,22},{18,20},{18,-20},{19,26},{20,22},{20,-22},{21,-27}
+#define SCHED_DECAY_TICKS       32
+static struct shift_data        sched_decay_shifts[SCHED_DECAY_TICKS] = {
+	{1, 1}, {1, 3}, {1, -3}, {2, -7}, {3, 5}, {3, -5}, {4, -8}, {5, 7},
+	{5, -7}, {6, -10}, {7, 10}, {7, -9}, {8, -11}, {9, 12}, {9, -11}, {10, -13},
+	{11, 14}, {11, -13}, {12, -15}, {13, 17}, {13, -15}, {14, -17}, {15, 19}, {16, 18},
+	{16, -19}, {17, 22}, {18, 20}, {18, -20}, {19, 26}, {20, 22}, {20, -22}, {21, -27}
 };
 
 /*
@@ -478,10 +487,11 @@ sched_compute_timeshare_priority(thread_t thread)
 	/* start with base priority */
 	int priority = thread->base_pri - (thread->sched_usage >> thread->pri_shift);
 
-	if (priority < MINPRI_USER)
+	if (priority < MINPRI_USER) {
 		priority = MINPRI_USER;
-	else if (priority > MAXPRI_KERNEL)
+	} else if (priority > MAXPRI_KERNEL) {
 		priority = MAXPRI_KERNEL;
+	}
 
 	return priority;
 }
@@ -497,12 +507,13 @@ sched_compute_timeshare_priority(thread_t thread)
  */
 boolean_t
 can_update_priority(
-					thread_t	thread)
+	thread_t        thread)
 {
-	if (sched_tick == thread->sched_stamp)
-		return (FALSE);
-	else
-		return (TRUE);
+	if (sched_tick == thread->sched_stamp) {
+		return FALSE;
+	} else {
+		return TRUE;
+	}
 }
 
 /*
@@ -514,7 +525,7 @@ can_update_priority(
  */
 void
 update_priority(
-	thread_t	thread)
+	thread_t        thread)
 {
 	uint32_t ticks, delta;
 
@@ -524,8 +535,9 @@ update_priority(
 	thread->sched_stamp += ticks;
 
 	/* If requested, accelerate aging of sched_usage */
-	if (sched_decay_usage_age_factor > 1)
+	if (sched_decay_usage_age_factor > 1) {
 		ticks *= sched_decay_usage_age_factor;
+	}
 
 	/*
 	 *	Gather cpu usage data.
@@ -534,11 +546,12 @@ update_priority(
 	if (ticks < SCHED_DECAY_TICKS) {
 		/*
 		 *	Accumulate timesharing usage only during contention for processor
-		 *	resources. Use the pri_shift from the previous tick window to 
+		 *	resources. Use the pri_shift from the previous tick window to
 		 *	determine if the system was in a contended state.
 		 */
-		if (thread->pri_shift < INT8_MAX)
+		if (thread->pri_shift < INT8_MAX) {
 			thread->sched_usage += delta;
+		}
 
 		thread->cpu_usage += delta + thread->cpu_delta;
 		thread->cpu_delta = 0;
@@ -547,14 +560,14 @@ update_priority(
 
 		if (shiftp->shift2 > 0) {
 			thread->cpu_usage =   (thread->cpu_usage >> shiftp->shift1) +
-			                      (thread->cpu_usage >> shiftp->shift2);
+			    (thread->cpu_usage >> shiftp->shift2);
 			thread->sched_usage = (thread->sched_usage >> shiftp->shift1) +
-			                      (thread->sched_usage >> shiftp->shift2);
+			    (thread->sched_usage >> shiftp->shift2);
 		} else {
 			thread->cpu_usage =   (thread->cpu_usage >>   shiftp->shift1) -
-			                      (thread->cpu_usage >> -(shiftp->shift2));
+			    (thread->cpu_usage >> -(shiftp->shift2));
 			thread->sched_usage = (thread->sched_usage >>   shiftp->shift1) -
-			                      (thread->sched_usage >> -(shiftp->shift2));
+			    (thread->sched_usage >> -(shiftp->shift2));
 		}
 	} else {
 		thread->cpu_usage = thread->cpu_delta = 0;
@@ -579,8 +592,9 @@ update_priority(
 	thread->pri_shift = sched_pri_shifts[thread->th_sched_bucket];
 
 	/* Recompute scheduled priority if appropriate. */
-	if (thread->sched_mode == TH_MODE_TIMESHARE)
+	if (thread->sched_mode == TH_MODE_TIMESHARE) {
 		thread_recompute_sched_pri(thread, SETPRI_LAZY);
+	}
 }
 
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
@@ -597,7 +611,7 @@ static void
 sched_incr_bucket(sched_bucket_t bucket)
 {
 	assert(bucket >= TH_BUCKET_FIXPRI &&
-	       bucket <= TH_BUCKET_SHARE_BG);
+	    bucket <= TH_BUCKET_SHARE_BG);
 
 	hw_atomic_add(&sched_run_buckets[bucket], 1);
 }
@@ -606,7 +620,7 @@ static void
 sched_decr_bucket(sched_bucket_t bucket)
 {
 	assert(bucket >= TH_BUCKET_FIXPRI &&
-	       bucket <= TH_BUCKET_SHARE_BG);
+	    bucket <= TH_BUCKET_SHARE_BG);
 
 	assert(sched_run_buckets[bucket] > 0);
 
@@ -618,7 +632,7 @@ sched_decr_bucket(sched_bucket_t bucket)
 uint32_t
 sched_run_incr(thread_t thread)
 {
-	assert((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN);
+	assert((thread->state & (TH_RUN | TH_IDLE)) == TH_RUN);
 
 	uint32_t new_count = hw_atomic_add(&sched_run_buckets[TH_BUCKET_RUN], 1);
 
@@ -630,7 +644,7 @@ sched_run_incr(thread_t thread)
 uint32_t
 sched_run_decr(thread_t thread)
 {
-	assert((thread->state & (TH_RUN|TH_IDLE)) != TH_RUN);
+	assert((thread->state & (TH_RUN | TH_IDLE)) != TH_RUN);
 
 	sched_decr_bucket(thread->th_sched_bucket);
 
@@ -652,14 +666,15 @@ sched_update_thread_bucket(thread_t thread)
 		break;
 
 	case TH_MODE_TIMESHARE:
-		if (thread->base_pri > BASEPRI_DEFAULT)
+		if (thread->base_pri > BASEPRI_DEFAULT) {
 			new_bucket = TH_BUCKET_SHARE_FG;
-		else if (thread->base_pri > BASEPRI_UTILITY)
+		} else if (thread->base_pri > BASEPRI_UTILITY) {
 			new_bucket = TH_BUCKET_SHARE_DF;
-		else if (thread->base_pri > MAXPRI_THROTTLE)
+		} else if (thread->base_pri > MAXPRI_THROTTLE) {
 			new_bucket = TH_BUCKET_SHARE_UT;
-		else
+		} else {
 			new_bucket = TH_BUCKET_SHARE_BG;
+		}
 		break;
 
 	default:
@@ -671,7 +686,7 @@ sched_update_thread_bucket(thread_t thread)
 		thread->th_sched_bucket = new_bucket;
 		thread->pri_shift = sched_pri_shifts[new_bucket];
 
-		if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
+		if ((thread->state & (TH_RUN | TH_IDLE)) == TH_RUN) {
 			sched_decr_bucket(old_bucket);
 			sched_incr_bucket(new_bucket);
 		}
@@ -715,8 +730,9 @@ sched_thread_mode_demote(thread_t thread, uint32_t reason)
 	assert(reason & TH_SFLAG_DEMOTED_MASK);
 	assert((thread->sched_flags & reason) != reason);
 
-	if (thread->policy_reset)
+	if (thread->policy_reset) {
 		return;
+	}
 
 	if (thread->sched_flags & TH_SFLAG_DEMOTED_MASK) {
 		/* Another demotion reason is already active */
@@ -736,8 +752,9 @@ sched_thread_mode_demote(thread_t thread, uint32_t reason)
 
 	thread_recompute_priority(thread);
 
-	if (removed)
+	if (removed) {
 		thread_run_queue_reinsert(thread, SCHED_TAILQ);
+	}
 }
 
 /*
@@ -767,8 +784,9 @@ sched_thread_mode_undemote(thread_t thread, uint32_t reason)
 
 	thread_recompute_priority(thread);
 
-	if (removed)
+	if (removed) {
 		thread_run_queue_reinsert(thread, SCHED_TAILQ);
+	}
 }
 
 /*
@@ -781,8 +799,8 @@ sched_thread_mode_undemote(thread_t thread, uint32_t reason)
  */
 void
 sched_thread_promote_to_pri(thread_t    thread,
-                            int         priority,
-              __kdebug_only uintptr_t   trace_obj /* already unslid */)
+    int         priority,
+    __kdebug_only uintptr_t   trace_obj /* already unslid */)
 {
 	assert((thread->sched_flags & TH_SFLAG_PROMOTED) != TH_SFLAG_PROMOTED);
 	assert(thread->promotion_priority == 0);
@@ -790,7 +808,7 @@ sched_thread_promote_to_pri(thread_t    thread,
 	assert(priority > 0);
 
 	KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_PROMOTED),
-	     thread_tid(thread), trace_obj, priority);
+	    thread_tid(thread), trace_obj, priority);
 
 	thread->sched_flags |= TH_SFLAG_PROMOTED;
 	thread->promotion_priority = priority;
@@ -808,8 +826,8 @@ sched_thread_promote_to_pri(thread_t    thread,
  */
 void
 sched_thread_update_promotion_to_pri(thread_t   thread,
-                                     int        priority,
-                       __kdebug_only uintptr_t  trace_obj /* already unslid */)
+    int        priority,
+    __kdebug_only uintptr_t  trace_obj /* already unslid */)
 {
 	assert(thread->promotions > 0);
 	assert((thread->sched_flags & TH_SFLAG_PROMOTED) == TH_SFLAG_PROMOTED);
@@ -818,7 +836,7 @@ sched_thread_update_promotion_to_pri(thread_t   thread,
 
 	if (thread->promotion_priority < priority) {
 		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_PROMOTED_UPDATE),
-		     thread_tid(thread), trace_obj, priority);
+		    thread_tid(thread), trace_obj, priority);
 
 		thread->promotion_priority = priority;
 		thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
@@ -833,13 +851,13 @@ sched_thread_update_promotion_to_pri(thread_t   thread,
  */
 void
 sched_thread_unpromote(thread_t     thread,
-         __kdebug_only uintptr_t    trace_obj /* already unslid */)
+    __kdebug_only uintptr_t    trace_obj /* already unslid */)
 {
 	assert((thread->sched_flags & TH_SFLAG_PROMOTED) == TH_SFLAG_PROMOTED);
 	assert(thread->promotion_priority > 0);
 
 	KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_UNPROMOTED),
-	     thread_tid(thread), trace_obj, 0);
+	    thread_tid(thread), trace_obj, 0);
 
 	thread->sched_flags &= ~TH_SFLAG_PROMOTED;
 	thread->promotion_priority = 0;
@@ -851,11 +869,13 @@ sched_thread_unpromote(thread_t     thread,
 void
 assert_promotions_invariant(thread_t thread)
 {
-	if (thread->promotions > 0)
+	if (thread->promotions > 0) {
 		assert((thread->sched_flags & TH_SFLAG_PROMOTED) == TH_SFLAG_PROMOTED);
+	}
 
-	if (thread->promotions == 0)
+	if (thread->promotions == 0) {
 		assert((thread->sched_flags & TH_SFLAG_PROMOTED) != TH_SFLAG_PROMOTED);
+	}
 }
 
 /*
@@ -869,8 +889,8 @@ assert_promotions_invariant(thread_t thread)
  */
 void
 sched_thread_promote_reason(thread_t    thread,
-                            uint32_t    reason,
-              __kdebug_only uintptr_t   trace_obj /* already unslid */)
+    uint32_t    reason,
+    __kdebug_only uintptr_t   trace_obj /* already unslid */)
 {
 	assert(reason & TH_SFLAG_PROMOTE_REASON_MASK);
 	assert((thread->sched_flags & reason) != reason);
@@ -878,18 +898,18 @@ sched_thread_promote_reason(thread_t    thread,
 	switch (reason) {
 	case TH_SFLAG_RW_PROMOTED:
 		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_RW_PROMOTE),
-		     thread_tid(thread), thread->sched_pri,
-		     thread->base_pri, trace_obj);
+		    thread_tid(thread), thread->sched_pri,
+		    thread->base_pri, trace_obj);
 		break;
 	case TH_SFLAG_WAITQ_PROMOTED:
 		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_WAITQ_PROMOTE),
-		     thread_tid(thread), thread->sched_pri,
-		     thread->base_pri, trace_obj);
+		    thread_tid(thread), thread->sched_pri,
+		    thread->base_pri, trace_obj);
 		break;
 	case TH_SFLAG_EXEC_PROMOTED:
 		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_EXEC_PROMOTE),
-		     thread_tid(thread), thread->sched_pri,
-		     thread->base_pri, trace_obj);
+		    thread_tid(thread), thread->sched_pri,
+		    thread->base_pri, trace_obj);
 		break;
 	}
 
@@ -906,8 +926,8 @@ sched_thread_promote_reason(thread_t    thread,
  */
 void
 sched_thread_unpromote_reason(thread_t  thread,
-                              uint32_t  reason,
-                __kdebug_only uintptr_t trace_obj /* already unslid */)
+    uint32_t  reason,
+    __kdebug_only uintptr_t trace_obj /* already unslid */)
 {
 	assert(reason & TH_SFLAG_PROMOTE_REASON_MASK);
 	assert((thread->sched_flags & reason) == reason);
@@ -915,18 +935,18 @@ sched_thread_unpromote_reason(thread_t  thread,
 	switch (reason) {
 	case TH_SFLAG_RW_PROMOTED:
 		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_RW_DEMOTE),
-		     thread_tid(thread), thread->sched_pri,
-		     thread->base_pri, trace_obj);
+		    thread_tid(thread), thread->sched_pri,
+		    thread->base_pri, trace_obj);
 		break;
 	case TH_SFLAG_WAITQ_PROMOTED:
 		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_WAITQ_DEMOTE),
-		     thread_tid(thread), thread->sched_pri,
-		     thread->base_pri, trace_obj);
+		    thread_tid(thread), thread->sched_pri,
+		    thread->base_pri, trace_obj);
 		break;
 	case TH_SFLAG_EXEC_PROMOTED:
 		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_EXEC_DEMOTE),
-		     thread_tid(thread), thread->sched_pri,
-		     thread->base_pri, trace_obj);
+		    thread_tid(thread), thread->sched_pri,
+		    thread->base_pri, trace_obj);
 		break;
 	}
 
@@ -934,5 +954,3 @@ sched_thread_unpromote_reason(thread_t  thread,
 
 	thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
 }
-
-

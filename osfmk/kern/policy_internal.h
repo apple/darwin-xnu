@@ -89,7 +89,7 @@ extern kern_return_t task_importance(task_t task, integer_t importance);
 /* unused                               0x2B */
 #define TASK_POLICY_TERMINATED          0x2C
 #define TASK_POLICY_NEW_SOCKETS_BG      0x2D
-/* unused                               0x2E */
+#define TASK_POLICY_SUP_ACTIVE          0x2E
 #define TASK_POLICY_LATENCY_QOS         0x2F
 #define TASK_POLICY_THROUGH_QOS         0x30
 #define TASK_POLICY_WATCHERS_BG         0x31
@@ -134,12 +134,12 @@ extern int  proc_task_role_to_darwin_role(int task_role);
 /* Functions used by kern_exec.c */
 extern void task_set_main_thread_qos(task_t task, thread_t main_thread);
 extern void proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp, int role,
-                                      ipc_port_t * portwatch_ports, int portwatch_count);
+    ipc_port_t * portwatch_ports, int portwatch_count);
 extern void proc_inherit_task_role(task_t new_task, task_t old_task);
 
 /* IO Throttle tiers */
 #define THROTTLE_LEVEL_NONE     -1
-#define	THROTTLE_LEVEL_TIER0     0      /* IOPOL_NORMAL, IOPOL_DEFAULT, IOPOL_PASSIVE */
+#define THROTTLE_LEVEL_TIER0     0      /* IOPOL_NORMAL, IOPOL_DEFAULT, IOPOL_PASSIVE */
 
 #define THROTTLE_LEVEL_THROTTLED 1
 #define THROTTLE_LEVEL_TIER1     1      /* IOPOL_STANDARD */
@@ -169,10 +169,10 @@ extern void proc_apply_task_networkbg(void * bsd_info, thread_t thread);
 
 /* Functions used by pthread_shims.c */
 extern int proc_thread_qos_add_override(task_t task, thread_t thread, uint64_t tid,
-                                              int override_qos, boolean_t first_override_for_resource,
-                                              user_addr_t resource, int resource_type);
+    int override_qos, boolean_t first_override_for_resource,
+    user_addr_t resource, int resource_type);
 extern int proc_thread_qos_remove_override(task_t task, thread_t thread, uint64_t tid,
-                                                 user_addr_t resource, int resource_type);
+    user_addr_t resource, int resource_type);
 
 extern void thread_reset_workq_qos(thread_t thread, uint32_t qos);
 extern void thread_set_workq_override(thread_t thread, uint32_t qos);
@@ -221,9 +221,9 @@ extern boolean_t proc_task_is_tal(task_t task);
 #define TASK_POLICY_RESOURCE_ATTRIBUTE_DEFAULT          TASK_POLICY_RESOURCE_ATTRIBUTE_NONE
 
 extern int proc_get_task_ruse_cpu(task_t task, uint32_t *policyp, uint8_t *percentagep,
-                                  uint64_t *intervalp, uint64_t *deadlinep);
+    uint64_t *intervalp, uint64_t *deadlinep);
 extern int proc_set_task_ruse_cpu(task_t task, uint32_t policy, uint8_t percentage,
-                                  uint64_t interval, uint64_t deadline, int cpumon_entitled);
+    uint64_t interval, uint64_t deadline, int cpumon_entitled);
 extern int task_suspend_cpumon(task_t task);
 extern int task_resume_cpumon(task_t task);
 extern int proc_clear_task_ruse_cpu(task_t task, int cpumon_entitled);
@@ -242,7 +242,7 @@ extern void task_clear_used_for_purging(task_t task);
 extern int task_importance_estimate(task_t task);
 
 extern kern_return_t thread_policy_set_internal(thread_t thread, thread_policy_flavor_t flavor,
-                                                thread_policy_t policy_info, mach_msg_type_number_t count);
+    thread_policy_t policy_info, mach_msg_type_number_t count);
 
 extern boolean_t thread_recompute_user_promotion_locked(thread_t thread);
 extern thread_qos_t thread_user_promotion_qos_for_pri(int priority);
@@ -273,14 +273,14 @@ extern thread_qos_t thread_get_requested_qos(thread_t thread, int *relpri);
 
 typedef struct task_pend_token {
 	uint32_t        tpt_update_sockets      :1,
-	                tpt_update_timers       :1,
-	                tpt_update_watchers     :1,
-	                tpt_update_live_donor   :1,
-	                tpt_update_coal_sfi     :1,
-	                tpt_update_throttle     :1,
-	                tpt_update_thread_sfi   :1,
-	                tpt_force_recompute_pri :1,
-	                tpt_update_tg_ui_flag   :1;
+	    tpt_update_timers       :1,
+	    tpt_update_watchers     :1,
+	    tpt_update_live_donor   :1,
+	    tpt_update_coal_sfi     :1,
+	    tpt_update_throttle     :1,
+	    tpt_update_thread_sfi   :1,
+	    tpt_force_recompute_pri :1,
+	    tpt_update_tg_ui_flag   :1;
 } *task_pend_token_t;
 
 extern void task_policy_update_complete_unlocked(task_t task, task_pend_token_t pend_token);
@@ -355,41 +355,41 @@ extern void thread_policy_update_tasklocked(thread_t thread, integer_t priority,
 #include "mach/resource_notify.h"       /* from MIG */
 
 /*! @function   send_resource_violation
-    @abstract   send usage monitor violation notification
-
-    @param  violator  the task (process) violating its CPU budget
-    @param  ledger_info   the entry tracking the resource limit
-    @param  flags   see constants for type in sys/reason.h
-
-    @result KERN_SUCCESS if the message was sent
-
-    @discussion
-        send_resource_violation() calls the corresponding MIG routine
-        over the host special RESOURCE_NOTIFY port.
-*/
+ *   @abstract   send usage monitor violation notification
+ *
+ *   @param  violator  the task (process) violating its CPU budget
+ *   @param  ledger_info   the entry tracking the resource limit
+ *   @param  flags   see constants for type in sys/reason.h
+ *
+ *   @result KERN_SUCCESS if the message was sent
+ *
+ *   @discussion
+ *       send_resource_violation() calls the corresponding MIG routine
+ *       over the host special RESOURCE_NOTIFY port.
+ */
 kern_return_t send_resource_violation(typeof(send_cpu_usage_violation),
-                                      task_t violator,
-                                      struct ledger_entry_info *ledger_info,
-                                      resource_notify_flags_t flags);
+    task_t violator,
+    struct ledger_entry_info *ledger_info,
+    resource_notify_flags_t flags);
 
 /*! @function	trace_resource_violation
-    @abstract	trace violations on K32/64
-
-    @param  code   the (K64) DBG_MACH_RESOURCE trace code
-    @param  ledger_info   the entry tracking the resource limit
-
-    @discussion
-        Trace observed usage and corresponding limit on K32 or K64.  On
-        K32, a pair of trace points are used.  The low nibble of the K32
-        trace points must start at double the low nibble of the provided
-        K64 trace point.  For example:
-		#define LOGWRITES_VIOLATED              0x022
-		...
-		#define LOGWRITES_VIOLATED_K32A         0x024
-		#define LOGWRITES_VIOLATED_K32B         0x025
-*/
+ *   @abstract	trace violations on K32/64
+ *
+ *   @param  code   the (K64) DBG_MACH_RESOURCE trace code
+ *   @param  ledger_info   the entry tracking the resource limit
+ *
+ *   @discussion
+ *       Trace observed usage and corresponding limit on K32 or K64.  On
+ *       K32, a pair of trace points are used.  The low nibble of the K32
+ *       trace points must start at double the low nibble of the provided
+ *       K64 trace point.  For example:
+ #define LOGWRITES_VIOLATED              0x022
+ *               ...
+ #define LOGWRITES_VIOLATED_K32A         0x024
+ #define LOGWRITES_VIOLATED_K32B         0x025
+ */
 void trace_resource_violation(uint16_t code,
-                              struct ledger_entry_info *ledger_info);
+    struct ledger_entry_info *ledger_info);
 
 #endif /* MACH_KERNEL_PRIVATE */
 

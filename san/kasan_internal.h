@@ -55,7 +55,7 @@ typedef uintptr_t uptr;
 #ifdef __arm64__
 /* Works out at about 25% of 512 MiB and 15% of 3GiB system */
 # define STOLEN_MEM_PERCENT  13UL
-# define STOLEN_MEM_BYTES    MiB(62)
+# define STOLEN_MEM_BYTES    MiB(40)
 # define HW_PAGE_SIZE        (ARM_PGBYTES)
 # define HW_PAGE_MASK        (ARM_PGMASK)
 #else
@@ -112,15 +112,15 @@ enum __attribute__((flag_enum)) kasan_access_types {
 	TYPE_TEST          = BIT(15),
 
 	/* masks */
-	TYPE_MEM     = TYPE_MEMR|TYPE_MEMW,            /* memory intrinsics */
-	TYPE_STR     = TYPE_STRR|TYPE_STRW,            /* string intrinsics */
-	TYPE_READ    = TYPE_LOAD|TYPE_MEMR|TYPE_STRR,  /* all reads */
-	TYPE_WRITE   = TYPE_STORE|TYPE_MEMW|TYPE_STRW, /* all writes */
-	TYPE_RW      = TYPE_READ|TYPE_WRITE,           /* reads and writes */
-	TYPE_FREE    = TYPE_KFREE|TYPE_ZFREE|TYPE_FSFREE,
-	TYPE_NORMAL  = TYPE_RW|TYPE_FREE,
-	TYPE_DYNAMIC = TYPE_NORMAL|TYPE_UAF,
-	TYPE_POISON  = TYPE_POISON_GLOBAL|TYPE_POISON_HEAP,
+	TYPE_MEM     = TYPE_MEMR | TYPE_MEMW,            /* memory intrinsics */
+	TYPE_STR     = TYPE_STRR | TYPE_STRW,            /* string intrinsics */
+	TYPE_READ    = TYPE_LOAD | TYPE_MEMR | TYPE_STRR,  /* all reads */
+	TYPE_WRITE   = TYPE_STORE | TYPE_MEMW | TYPE_STRW, /* all writes */
+	TYPE_RW      = TYPE_READ | TYPE_WRITE,           /* reads and writes */
+	TYPE_FREE    = TYPE_KFREE | TYPE_ZFREE | TYPE_FSFREE,
+	TYPE_NORMAL  = TYPE_RW | TYPE_FREE,
+	TYPE_DYNAMIC = TYPE_NORMAL | TYPE_UAF,
+	TYPE_POISON  = TYPE_POISON_GLOBAL | TYPE_POISON_HEAP,
 	TYPE_ALL     = ~0U,
 };
 

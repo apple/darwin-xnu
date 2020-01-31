@@ -65,7 +65,7 @@
 
 #include <sys/time.h>
 
-#define NTP_API		4		/* NTP API version */
+#define NTP_API         4               /* NTP API version */
 
 /*
  * The following defines establish the performance envelope of the
@@ -100,8 +100,8 @@
 #define MOD_TIMECONST   0x0020          /* set PLL time constant */
 #define MOD_PPSMAX      0x0040          /* set PPS maximum averaging time */
 #define MOD_TAI         0x0080          /* set TAI offset */
-#define	MOD_MICRO       0x1000          /* select microsecond resolution */
-#define	MOD_NANO        0x2000          /* select nanosecond resolution */
+#define MOD_MICRO       0x1000          /* select microsecond resolution */
+#define MOD_NANO        0x2000          /* select nanosecond resolution */
 #define MOD_CLKB        0x4000          /* select clock B */
 #define MOD_CLKA        0x8000          /* select clock A */
 
@@ -145,11 +145,11 @@
  * NTP user interface -- ntp_gettime - used to read kernel clock values
  */
 struct ntptimeval {
-	struct timespec time;		/* current time (ns) (ro) */
-	long maxerror;			/* maximum error (us) (ro) */
-	long esterror;			/* estimated error (us) (ro) */
-	long tai;			/* TAI offset */
-	int time_state;			/* time status */
+	struct timespec time;           /* current time (ns) (ro) */
+	long maxerror;                  /* maximum error (us) (ro) */
+	long esterror;                  /* estimated error (us) (ro) */
+	long tai;                       /* TAI offset */
+	int time_state;                 /* time status */
 };
 
 /*
@@ -160,29 +160,29 @@ struct ntptimeval {
  * STA_NANO is zero and nanoseconds if not.
  */
 struct timex {
-	unsigned int modes;		/* clock mode bits (wo) */
-	long	offset;			/* time offset (ns/us) (rw) */
-	long	freq;			/* frequency offset (scaled PPM) (rw) */
-	long	maxerror;		/* maximum error (us) (rw) */
-	long	esterror;		/* estimated error (us) (rw) */
-	int	status;			/* clock status bits (rw) */
-	long	constant;		/* poll interval (log2 s) (rw) */
-	long	precision;		/* clock precision (ns/us) (ro) */
-	long	tolerance;		/* clock frequency tolerance (scaled
-					 * PPM) (ro) */
+	unsigned int modes;             /* clock mode bits (wo) */
+	long    offset;                 /* time offset (ns/us) (rw) */
+	long    freq;                   /* frequency offset (scaled PPM) (rw) */
+	long    maxerror;               /* maximum error (us) (rw) */
+	long    esterror;               /* estimated error (us) (rw) */
+	int     status;                 /* clock status bits (rw) */
+	long    constant;               /* poll interval (log2 s) (rw) */
+	long    precision;              /* clock precision (ns/us) (ro) */
+	long    tolerance;              /* clock frequency tolerance (scaled
+	                                 * PPM) (ro) */
 	/*
 	 * The following read-only structure members are used by
 	 * the PPS signal discipline that is currently not supported.
 	 * They are included for compatibility.
 	 */
-	long	ppsfreq;		/* PPS frequency (scaled PPM) (ro) */
-	long	jitter;			/* PPS jitter (ns/us) (ro) */
-	int	shift;			/* interval duration (s) (shift) (ro) */
-	long	stabil;			/* PPS stability (scaled PPM) (ro) */
-	long	jitcnt;			/* jitter limit exceeded (ro) */
-	long	calcnt;			/* calibration intervals (ro) */
-	long	errcnt;			/* calibration errors (ro) */
-	long	stbcnt;			/* stability limit exceeded (ro) */
+	long    ppsfreq;                /* PPS frequency (scaled PPM) (ro) */
+	long    jitter;                 /* PPS jitter (ns/us) (ro) */
+	int     shift;                  /* interval duration (s) (shift) (ro) */
+	long    stabil;                 /* PPS stability (scaled PPM) (ro) */
+	long    jitcnt;                 /* jitter limit exceeded (ro) */
+	long    calcnt;                 /* calibration intervals (ro) */
+	long    errcnt;                 /* calibration errors (ro) */
+	long    stbcnt;                 /* stability limit exceeded (ro) */
 };
 
 #ifdef KERNEL
@@ -194,16 +194,16 @@ struct timex {
 #include <kern/clock.h>
 
 int64_t ntp_get_freq(void);
-void	ntp_update_second(int64_t *adjustment, clock_sec_t secs);
-void 	ntp_init(void);
+void    ntp_update_second(int64_t *adjustment, clock_sec_t secs);
+void    ntp_init(void);
 #endif
 #else /* !_KERNEL */
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-int	ntp_adjtime(struct timex *);
-int	ntp_gettime(struct ntptimeval *);
+int     ntp_adjtime(struct timex *);
+int     ntp_gettime(struct ntptimeval *);
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 __END_DECLS
 #endif /* KERNEL */

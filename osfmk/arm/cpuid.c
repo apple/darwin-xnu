@@ -43,13 +43,13 @@
 typedef struct {
 	uint32_t
 
-	Ctype1:3,	/* 2:0 */
-	Ctype2:3,	/* 5:3 */
-	Ctype3:3,	/* 8:6 */
-	Ctypes:15,	/* 6:23 - Don't Care */
-	LoC:3,		/* 26-24 - Level of Coherency */
-	LoU:3,		/* 29:27 - Level of Unification */
-	RAZ:2;		/* 31:30 - Read-As-Zero */
+	    Ctype1:3,   /* 2:0 */
+	    Ctype2:3,   /* 5:3 */
+	    Ctype3:3,   /* 8:6 */
+	    Ctypes:15,  /* 6:23 - Don't Care */
+	    LoC:3,      /* 26-24 - Level of Coherency */
+	    LoU:3,      /* 29:27 - Level of Unification */
+	    RAZ:2;      /* 31:30 - Read-As-Zero */
 }               arm_cache_clidr_t;
 
 typedef union {
@@ -61,10 +61,10 @@ typedef union {
 typedef struct {
 	uint32_t
 
-	LineSize:3,	/* 2:0 - Number of words in cache line */
-	Assoc:10,	/* 12:3 - Associativity of cache */
-	NumSets:15,	/* 27:13 - Number of sets in cache */
-	c_type:4;	/* 31:28 - Cache type */
+	    LineSize:3, /* 2:0 - Number of words in cache line */
+	    Assoc:10,   /* 12:3 - Associativity of cache */
+	    NumSets:15, /* 27:13 - Number of sets in cache */
+	    c_type:4;   /* 31:28 - Cache type */
 }               arm_cache_ccsidr_t;
 
 
@@ -85,11 +85,11 @@ void
 do_cpuid(void)
 {
 	cpuid_cpu_info.value = machine_read_midr();
-#if		(__ARM_ARCH__ == 8)
+#if             (__ARM_ARCH__ == 8)
 
 	cpuid_cpu_info.arm_info.arm_arch = CPU_ARCH_ARMv8;
 
-#elif	(__ARM_ARCH__ == 7)
+#elif   (__ARM_ARCH__ == 7)
   #ifdef __ARM_SUB_ARCH__
 	cpuid_cpu_info.arm_info.arm_arch = __ARM_SUB_ARCH__;
   #else
@@ -209,7 +209,8 @@ do_mvfpid(void)
 }
 
 arm_mvfp_info_t
-*arm_mvfp_info(void)
+*
+arm_mvfp_info(void)
 {
 	return machine_arm_mvfp_info();
 }
@@ -247,7 +248,7 @@ do_cacheid(void)
 		cpuid_cache_info.c_type = CACHE_UNKNOWN;
 	}
 
-	cpuid_cache_info.c_linesz = 4 * (1<<(arm_cache_ccsidr_info.bits.LineSize + 2));
+	cpuid_cache_info.c_linesz = 4 * (1 << (arm_cache_ccsidr_info.bits.LineSize + 2));
 	cpuid_cache_info.c_assoc = (arm_cache_ccsidr_info.bits.Assoc + 1);
 
 	/* I cache size */
@@ -259,7 +260,6 @@ do_cacheid(void)
 
 	if ((arm_cache_clidr_info.bits.Ctype3 == 0x4) ||
 	    (arm_cache_clidr_info.bits.Ctype2 == 0x4) || (arm_cache_clidr_info.bits.Ctype2 == 0x2)) {
-
 		if (arm_cache_clidr_info.bits.Ctype3 == 0x4) {
 			/* Select L3 (LLC) if the SoC is new enough to have that.
 			 * This will be the second-level cache for the highest-performing ACC. */
@@ -270,7 +270,7 @@ do_cacheid(void)
 		}
 		arm_cache_ccsidr_info.value = machine_read_ccsidr();
 
-		cpuid_cache_info.c_linesz = 4 * (1<<(arm_cache_ccsidr_info.bits.LineSize + 2));
+		cpuid_cache_info.c_linesz = 4 * (1 << (arm_cache_ccsidr_info.bits.LineSize + 2));
 		cpuid_cache_info.c_assoc = (arm_cache_ccsidr_info.bits.Assoc + 1);
 		cpuid_cache_info.c_l2size = (arm_cache_ccsidr_info.bits.NumSets + 1) * cpuid_cache_info.c_linesz * cpuid_cache_info.c_assoc;
 		cpuid_cache_info.c_inner_cache_size = cpuid_cache_info.c_dsize;
@@ -300,15 +300,15 @@ do_cacheid(void)
 	}
 
 	kprintf("%s() - %u bytes %s cache (I:%u D:%u (%s)), %u-way assoc, %u bytes/line\n",
-		__FUNCTION__,
-		cpuid_cache_info.c_dsize + cpuid_cache_info.c_isize,
-		((cpuid_cache_info.c_type == CACHE_WRITE_BACK) ? "WB" :
-	(cpuid_cache_info.c_type == CACHE_WRITE_THROUGH ? "WT" : "Unknown")),
-		cpuid_cache_info.c_isize,
-		cpuid_cache_info.c_dsize,
-		(cpuid_cache_info.c_unified) ? "unified" : "separate",
-		cpuid_cache_info.c_assoc,
-		cpuid_cache_info.c_linesz);
+	    __FUNCTION__,
+	    cpuid_cache_info.c_dsize + cpuid_cache_info.c_isize,
+	    ((cpuid_cache_info.c_type == CACHE_WRITE_BACK) ? "WB" :
+	    (cpuid_cache_info.c_type == CACHE_WRITE_THROUGH ? "WT" : "Unknown")),
+	    cpuid_cache_info.c_isize,
+	    cpuid_cache_info.c_dsize,
+	    (cpuid_cache_info.c_unified) ? "unified" : "separate",
+	    cpuid_cache_info.c_assoc,
+	    cpuid_cache_info.c_linesz);
 }
 
 cache_info_t   *

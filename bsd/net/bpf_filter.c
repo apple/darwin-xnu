@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -85,37 +85,37 @@ extern unsigned int bpf_maxbufsize;
 static inline u_int32_t
 get_word_from_buffers(u_char * cp, u_char * np, int num_from_cp)
 {
-	u_int32_t	val;
+	u_int32_t       val;
 
 	switch (num_from_cp) {
 	case 1:
 		val = ((u_int32_t)cp[0] << 24) |
-			((u_int32_t)np[0] << 16) |
-			((u_int32_t)np[1] << 8)  |
-			(u_int32_t)np[2];
+		    ((u_int32_t)np[0] << 16) |
+		    ((u_int32_t)np[1] << 8)  |
+		    (u_int32_t)np[2];
 		break;
 
 	case 2:
 		val = ((u_int32_t)cp[0] << 24) |
-			((u_int32_t)cp[1] << 16) |
-			((u_int32_t)np[0] << 8) |
-			(u_int32_t)np[1];
+		    ((u_int32_t)cp[1] << 16) |
+		    ((u_int32_t)np[0] << 8) |
+		    (u_int32_t)np[1];
 		break;
 	default:
 		val = ((u_int32_t)cp[0] << 24) |
-			((u_int32_t)cp[1] << 16) |
-			((u_int32_t)cp[2] << 8) |
-			(u_int32_t)np[0];
+		    ((u_int32_t)cp[1] << 16) |
+		    ((u_int32_t)cp[2] << 8) |
+		    (u_int32_t)np[0];
 		break;
 	}
-	return (val);
+	return val;
 }
 
 static u_char *
 m_hdr_offset(struct mbuf **m_p, void * hdr, size_t hdrlen, bpf_u_int32 * k_p,
     size_t * len_p)
 {
-	u_char	*cp;
+	u_char  *cp;
 	bpf_u_int32 k = *k_p;
 	size_t len;
 
@@ -128,8 +128,9 @@ m_hdr_offset(struct mbuf **m_p, void * hdr, size_t hdrlen, bpf_u_int32 * k_p,
 		while (k >= len) {
 			k -= len;
 			m = m->m_next;
-			if (m == NULL)
-				return (NULL);
+			if (m == NULL) {
+				return NULL;
+			}
 			len = m->m_len;
 		}
 		cp = mtod(m, u_char *) + k;
@@ -144,7 +145,7 @@ m_hdr_offset(struct mbuf **m_p, void * hdr, size_t hdrlen, bpf_u_int32 * k_p,
 		cp = (u_char *)hdr + k;
 	}
 	*len_p = len;
-	return (cp);
+	return cp;
 }
 
 static u_int32_t
@@ -154,19 +155,21 @@ m_xword(struct mbuf *m, void * hdr, size_t hdrlen, bpf_u_int32 k, int *err)
 	u_char *cp, *np;
 
 	cp = m_hdr_offset(&m, hdr, hdrlen, &k, &len);
-	if (cp == NULL)
+	if (cp == NULL) {
 		goto bad;
+	}
 	if (len - k >= 4) {
 		*err = 0;
 		return EXTRACT_LONG(cp);
 	}
-	if (m == 0 || m->m_len + len - k < 4)
+	if (m == 0 || m->m_len + len - k < 4) {
 		goto bad;
+	}
 	*err = 0;
 	np = mtod(m, u_char *);
 	return get_word_from_buffers(cp, np, len - k);
 
-    bad:
+bad:
 	*err = 1;
 	return 0;
 }
@@ -178,17 +181,19 @@ m_xhalf(struct mbuf *m, void * hdr, size_t hdrlen, bpf_u_int32 k, int *err)
 	u_char *cp;
 
 	cp = m_hdr_offset(&m, hdr, hdrlen, &k, &len);
-	if (cp == NULL)
+	if (cp == NULL) {
 		goto bad;
+	}
 	if (len - k >= 2) {
 		*err = 0;
 		return EXTRACT_SHORT(cp);
 	}
-	if (m == 0)
+	if (m == 0) {
 		goto bad;
+	}
 	*err = 0;
 	return (cp[0] << 8) | mtod(m, u_char *)[0];
- bad:
+bad:
 	*err = 1;
 	return 0;
 }
@@ -200,22 +205,22 @@ m_xbyte(struct mbuf *m, void * hdr, size_t hdrlen, bpf_u_int32 k, int *err)
 	u_char *cp;
 
 	cp = m_hdr_offset(&m, hdr, hdrlen, &k, &len);
-	if (cp == NULL)
+	if (cp == NULL) {
 		goto bad;
+	}
 	*err = 0;
-	return (*cp);
- bad:
+	return *cp;
+bad:
 	*err = 1;
 	return 0;
-
 }
 
 
 static u_int32_t
 bp_xword(struct bpf_packet *bp, bpf_u_int32 k, int *err)
 {
-	void * 	hdr = bp->bpfp_header;
-	size_t	hdrlen = bp->bpfp_header_length;
+	void *  hdr = bp->bpfp_header;
+	size_t  hdrlen = bp->bpfp_header_length;
 
 	switch (bp->bpfp_type) {
 	case BPF_PACKET_TYPE_MBUF:
@@ -225,14 +230,13 @@ bp_xword(struct bpf_packet *bp, bpf_u_int32 k, int *err)
 	}
 	*err = 1;
 	return 0;
-
 }
 
 static u_int16_t
 bp_xhalf(struct bpf_packet *bp, bpf_u_int32 k, int *err)
 {
-	void * 	hdr = bp->bpfp_header;
-	size_t	hdrlen = bp->bpfp_header_length;
+	void *  hdr = bp->bpfp_header;
+	size_t  hdrlen = bp->bpfp_header_length;
 
 	switch (bp->bpfp_type) {
 	case BPF_PACKET_TYPE_MBUF:
@@ -242,14 +246,13 @@ bp_xhalf(struct bpf_packet *bp, bpf_u_int32 k, int *err)
 	}
 	*err = 1;
 	return 0;
-
 }
 
 static u_int8_t
 bp_xbyte(struct bpf_packet *bp, bpf_u_int32 k, int *err)
 {
-	void * 	hdr = bp->bpfp_header;
-	size_t	hdrlen = bp->bpfp_header_length;
+	void *  hdr = bp->bpfp_header;
+	size_t  hdrlen = bp->bpfp_header_length;
 
 	switch (bp->bpfp_type) {
 	case BPF_PACKET_TYPE_MBUF:
@@ -259,7 +262,6 @@ bp_xbyte(struct bpf_packet *bp, bpf_u_int32 k, int *err)
 	}
 	*err = 1;
 	return 0;
-
 }
 
 #endif
@@ -282,60 +284,64 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 
 	bzero(mem, sizeof(mem));
 
-	if (pc == 0)
+	if (pc == 0) {
 		/*
 		 * No filter means accept all.
 		 */
-		return (u_int)-1;
+		return (u_int) - 1;
+	}
 
 	--pc;
 	while (1) {
 		++pc;
 		switch (pc->code) {
-
 		default:
 #ifdef KERNEL
 			return 0;
 #else /* KERNEL */
 			abort();
 #endif /* KERNEL */
-		case BPF_RET|BPF_K:
+		case BPF_RET | BPF_K:
 			return (u_int)pc->k;
 
-		case BPF_RET|BPF_A:
+		case BPF_RET | BPF_A:
 			return (u_int)A;
 
-		case BPF_LD|BPF_W|BPF_ABS:
+		case BPF_LD | BPF_W | BPF_ABS:
 			k = pc->k;
 			if (k > buflen || sizeof(int32_t) > buflen - k) {
 #ifdef KERNEL
-				if (buflen != 0)
+				if (buflen != 0) {
 					return 0;
+				}
 				A = bp_xword(bp, k, &merr);
-				if (merr != 0)
+				if (merr != 0) {
 					return 0;
+				}
 				continue;
 #else /* KERNEL */
 				return 0;
 #endif /* KERNEL */
 			}
 #if BPF_ALIGN
-			if (((intptr_t)(p + k) & 3) != 0)
+			if (((intptr_t)(p + k) & 3) != 0) {
 				A = EXTRACT_LONG(&p[k]);
-			else
+			} else
 #endif /* BPF_ALIGN */
-				A = ntohl(*(int32_t *)(void *)(p + k));
+			A = ntohl(*(int32_t *)(void *)(p + k));
 			continue;
 
-		case BPF_LD|BPF_H|BPF_ABS:
+		case BPF_LD | BPF_H | BPF_ABS:
 			k = pc->k;
 			if (k > buflen || sizeof(int16_t) > buflen - k) {
 #ifdef KERNEL
-				if (buflen != 0)
+				if (buflen != 0) {
 					return 0;
+				}
 				A = bp_xhalf(bp, k, &merr);
-				if (merr != 0)
+				if (merr != 0) {
 					return 0;
+				}
 				continue;
 #else /* KERNEL */
 				return 0;
@@ -344,15 +350,17 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			A = EXTRACT_SHORT(&p[k]);
 			continue;
 
-		case BPF_LD|BPF_B|BPF_ABS:
+		case BPF_LD | BPF_B | BPF_ABS:
 			k = pc->k;
 			if (k >= buflen) {
 #ifdef KERNEL
-				if (buflen != 0)
+				if (buflen != 0) {
 					return 0;
+				}
 				A = bp_xbyte(bp, k, &merr);
-				if (merr != 0)
+				if (merr != 0) {
 					return 0;
+				}
 				continue;
 #else /* KERNEL */
 				return 0;
@@ -361,47 +369,51 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			A = p[k];
 			continue;
 
-		case BPF_LD|BPF_W|BPF_LEN:
+		case BPF_LD | BPF_W | BPF_LEN:
 			A = wirelen;
 			continue;
 
-		case BPF_LDX|BPF_W|BPF_LEN:
+		case BPF_LDX | BPF_W | BPF_LEN:
 			X = wirelen;
 			continue;
 
-		case BPF_LD|BPF_W|BPF_IND:
+		case BPF_LD | BPF_W | BPF_IND:
 			k = X + pc->k;
 			if (pc->k > buflen || X > buflen - pc->k ||
 			    sizeof(int32_t) > buflen - k) {
 #ifdef KERNEL
-				if (buflen != 0)
+				if (buflen != 0) {
 					return 0;
+				}
 				A = bp_xword(bp, k, &merr);
-				if (merr != 0)
+				if (merr != 0) {
 					return 0;
+				}
 				continue;
 #else /* KERNEL */
 				return 0;
 #endif /* KERNEL */
 			}
 #if BPF_ALIGN
-			if (((intptr_t)(p + k) & 3) != 0)
+			if (((intptr_t)(p + k) & 3) != 0) {
 				A = EXTRACT_LONG(&p[k]);
-			else
+			} else
 #endif /* BPF_ALIGN */
-				A = ntohl(*(int32_t *)(void *)(p + k));
+			A = ntohl(*(int32_t *)(void *)(p + k));
 			continue;
 
-		case BPF_LD|BPF_H|BPF_IND:
+		case BPF_LD | BPF_H | BPF_IND:
 			k = X + pc->k;
 			if (X > buflen || pc->k > buflen - X ||
 			    sizeof(int16_t) > buflen - k) {
 #ifdef KERNEL
-				if (buflen != 0)
+				if (buflen != 0) {
 					return 0;
+				}
 				A = bp_xhalf(bp, k, &merr);
-				if (merr != 0)
+				if (merr != 0) {
 					return 0;
+				}
 				continue;
 #else /* KERNEL */
 				return 0;
@@ -410,15 +422,17 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			A = EXTRACT_SHORT(&p[k]);
 			continue;
 
-		case BPF_LD|BPF_B|BPF_IND:
+		case BPF_LD | BPF_B | BPF_IND:
 			k = X + pc->k;
 			if (pc->k >= buflen || X >= buflen - pc->k) {
 #ifdef KERNEL
-				if (buflen != 0)
+				if (buflen != 0) {
 					return 0;
+				}
 				A = bp_xbyte(bp, k, &merr);
-				if (merr != 0)
+				if (merr != 0) {
 					return 0;
+				}
 				continue;
 #else /* KERNEL */
 				return 0;
@@ -427,15 +441,17 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			A = p[k];
 			continue;
 
-		case BPF_LDX|BPF_MSH|BPF_B:
+		case BPF_LDX | BPF_MSH | BPF_B:
 			k = pc->k;
 			if (k >= buflen) {
 #ifdef KERNEL
-				if (buflen != 0)
+				if (buflen != 0) {
 					return 0;
+				}
 				X = bp_xbyte(bp, k, &merr);
-				if (merr != 0)
+				if (merr != 0) {
 					return 0;
+				}
 				X = (X & 0xf) << 2;
 				continue;
 #else
@@ -445,145 +461,148 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			X = (p[pc->k] & 0xf) << 2;
 			continue;
 
-		case BPF_LD|BPF_IMM:
+		case BPF_LD | BPF_IMM:
 			A = pc->k;
 			continue;
 
-		case BPF_LDX|BPF_IMM:
+		case BPF_LDX | BPF_IMM:
 			X = pc->k;
 			continue;
 
-		case BPF_LD|BPF_MEM:
+		case BPF_LD | BPF_MEM:
 			A = mem[pc->k];
 			continue;
 
-		case BPF_LDX|BPF_MEM:
+		case BPF_LDX | BPF_MEM:
 			X = mem[pc->k];
 			continue;
 
 		case BPF_ST:
-			if (pc->k >= BPF_MEMWORDS)
+			if (pc->k >= BPF_MEMWORDS) {
 				return 0;
+			}
 			mem[pc->k] = A;
 			continue;
 
 		case BPF_STX:
-			if (pc->k >= BPF_MEMWORDS)
+			if (pc->k >= BPF_MEMWORDS) {
 				return 0;
+			}
 			mem[pc->k] = X;
 			continue;
 
-		case BPF_JMP|BPF_JA:
+		case BPF_JMP | BPF_JA:
 			pc += pc->k;
 			continue;
 
-		case BPF_JMP|BPF_JGT|BPF_K:
+		case BPF_JMP | BPF_JGT | BPF_K:
 			pc += (A > pc->k) ? pc->jt : pc->jf;
 			continue;
 
-		case BPF_JMP|BPF_JGE|BPF_K:
+		case BPF_JMP | BPF_JGE | BPF_K:
 			pc += (A >= pc->k) ? pc->jt : pc->jf;
 			continue;
 
-		case BPF_JMP|BPF_JEQ|BPF_K:
+		case BPF_JMP | BPF_JEQ | BPF_K:
 			pc += (A == pc->k) ? pc->jt : pc->jf;
 			continue;
 
-		case BPF_JMP|BPF_JSET|BPF_K:
+		case BPF_JMP | BPF_JSET | BPF_K:
 			pc += (A & pc->k) ? pc->jt : pc->jf;
 			continue;
 
-		case BPF_JMP|BPF_JGT|BPF_X:
+		case BPF_JMP | BPF_JGT | BPF_X:
 			pc += (A > X) ? pc->jt : pc->jf;
 			continue;
 
-		case BPF_JMP|BPF_JGE|BPF_X:
+		case BPF_JMP | BPF_JGE | BPF_X:
 			pc += (A >= X) ? pc->jt : pc->jf;
 			continue;
 
-		case BPF_JMP|BPF_JEQ|BPF_X:
+		case BPF_JMP | BPF_JEQ | BPF_X:
 			pc += (A == X) ? pc->jt : pc->jf;
 			continue;
 
-		case BPF_JMP|BPF_JSET|BPF_X:
+		case BPF_JMP | BPF_JSET | BPF_X:
 			pc += (A & X) ? pc->jt : pc->jf;
 			continue;
 
-		case BPF_ALU|BPF_ADD|BPF_X:
+		case BPF_ALU | BPF_ADD | BPF_X:
 			A += X;
 			continue;
 
-		case BPF_ALU|BPF_SUB|BPF_X:
+		case BPF_ALU | BPF_SUB | BPF_X:
 			A -= X;
 			continue;
 
-		case BPF_ALU|BPF_MUL|BPF_X:
+		case BPF_ALU | BPF_MUL | BPF_X:
 			A *= X;
 			continue;
 
-		case BPF_ALU|BPF_DIV|BPF_X:
-			if (X == 0)
+		case BPF_ALU | BPF_DIV | BPF_X:
+			if (X == 0) {
 				return 0;
+			}
 			A /= X;
 			continue;
 
-		case BPF_ALU|BPF_AND|BPF_X:
+		case BPF_ALU | BPF_AND | BPF_X:
 			A &= X;
 			continue;
 
-		case BPF_ALU|BPF_OR|BPF_X:
+		case BPF_ALU | BPF_OR | BPF_X:
 			A |= X;
 			continue;
 
-		case BPF_ALU|BPF_LSH|BPF_X:
+		case BPF_ALU | BPF_LSH | BPF_X:
 			A <<= X;
 			continue;
 
-		case BPF_ALU|BPF_RSH|BPF_X:
+		case BPF_ALU | BPF_RSH | BPF_X:
 			A >>= X;
 			continue;
 
-		case BPF_ALU|BPF_ADD|BPF_K:
+		case BPF_ALU | BPF_ADD | BPF_K:
 			A += pc->k;
 			continue;
 
-		case BPF_ALU|BPF_SUB|BPF_K:
+		case BPF_ALU | BPF_SUB | BPF_K:
 			A -= pc->k;
 			continue;
 
-		case BPF_ALU|BPF_MUL|BPF_K:
+		case BPF_ALU | BPF_MUL | BPF_K:
 			A *= pc->k;
 			continue;
 
-		case BPF_ALU|BPF_DIV|BPF_K:
+		case BPF_ALU | BPF_DIV | BPF_K:
 			A /= pc->k;
 			continue;
 
-		case BPF_ALU|BPF_AND|BPF_K:
+		case BPF_ALU | BPF_AND | BPF_K:
 			A &= pc->k;
 			continue;
 
-		case BPF_ALU|BPF_OR|BPF_K:
+		case BPF_ALU | BPF_OR | BPF_K:
 			A |= pc->k;
 			continue;
 
-		case BPF_ALU|BPF_LSH|BPF_K:
+		case BPF_ALU | BPF_LSH | BPF_K:
 			A <<= pc->k;
 			continue;
 
-		case BPF_ALU|BPF_RSH|BPF_K:
+		case BPF_ALU | BPF_RSH | BPF_K:
 			A >>= pc->k;
 			continue;
 
-		case BPF_ALU|BPF_NEG:
+		case BPF_ALU | BPF_NEG:
 			A = -A;
 			continue;
 
-		case BPF_MISC|BPF_TAX:
+		case BPF_MISC | BPF_TAX:
 			X = A;
 			continue;
 
-		case BPF_MISC|BPF_TXA:
+		case BPF_MISC | BPF_TXA:
 			A = X;
 			continue;
 		}
@@ -594,7 +613,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 /*
  * Return true if the 'fcode' is a valid filter program.
  * The constraints are that each jump be forward and to a valid
- * code, that memory accesses are within valid ranges (to the 
+ * code, that memory accesses are within valid ranges (to the
  * extent that this can be checked statically; loads of packet data
  * have to be, and are, also checked at run time), and that
  * the code terminates with either an accept or reject.
@@ -608,109 +627,116 @@ bpf_validate(const struct bpf_insn *f, int len)
 	u_int i, from;
 	const struct bpf_insn *p;
 
-	if (len < 1 || len > BPF_MAXINSNS)
+	if (len < 1 || len > BPF_MAXINSNS) {
 		return 0;
-	
+	}
+
 	for (i = 0; i < ((u_int)len); ++i) {
 		p = &f[i];
 		switch (BPF_CLASS(p->code)) {
-			/*
-			 * Check that memory operations use valid addresses
-			 */
-			case BPF_LD:
-			case BPF_LDX:
-				switch (BPF_MODE(p->code)) {
-					case BPF_IMM:
-						break;
-					case BPF_ABS:
-					case BPF_IND:
-					case BPF_MSH:
-						/*
-						 * More strict check with actual packet length
-						 * is done runtime.
-						 */
-						if (p->k >= bpf_maxbufsize)
-							return 0;
-						break;
-					case BPF_MEM:
-						if (p->k >= BPF_MEMWORDS)
-							return 0;
-						break;
-					case BPF_LEN:
-						break;
-					default:
-						return 0;
-				}
+		/*
+		 * Check that memory operations use valid addresses
+		 */
+		case BPF_LD:
+		case BPF_LDX:
+			switch (BPF_MODE(p->code)) {
+			case BPF_IMM:
 				break;
-			case BPF_ST:
-			case BPF_STX:
-				if (p->k >= BPF_MEMWORDS)
-					return 0;
-				break;
-			case BPF_ALU:
-				switch (BPF_OP(p->code)) {
-					case BPF_ADD:
-					case BPF_SUB:
-					case BPF_MUL:
-					case BPF_OR:
-					case BPF_AND:
-					case BPF_LSH:
-					case BPF_RSH:
-					case BPF_NEG:
-						break;
-					case BPF_DIV:
-						/* 
-						 * Check for constant division by 0
-						 */
-						if(BPF_SRC(p->code) == BPF_K && p->k == 0)
-							return 0;
-						break;
-					default:
-						return 0;
-				}
-				break;
-			case BPF_JMP:
+			case BPF_ABS:
+			case BPF_IND:
+			case BPF_MSH:
 				/*
-				 * Check that jumps are within the code block,
-				 * and that unconditional branches don't go 
-				 * backwards as a result of an overflow.
-				 * Unconditional branches have a 32-bit offset,
-				 * so they could overflow; we check to make 
-				 * sure they don't. Conditional branches have 
-				 * an 8-bit offset, and the from address is 
-				 * less than equal to BPF_MAXINSNS, and we assume that
-				 * BPF_MAXINSNS is sufficiently small that adding 255 
-				 * to it won't overlflow
-				 *
-				 * We know that len is <= BPF_MAXINSNS, and we 
-				 * assume that BPF_MAXINSNS is less than the maximum 
-				 * size of a u_int, so that i+1 doesn't overflow
+				 * More strict check with actual packet length
+				 * is done runtime.
 				 */
-				from = i+1;
-				switch (BPF_OP(p->code)) {
-					case BPF_JA:
-						if (from + p->k < from || from + p->k >= ((u_int)len))
-							return 0;
-						break;
-					case BPF_JEQ:
-					case BPF_JGT:
-					case BPF_JGE:
-					case BPF_JSET:
-						if (from + p->jt >= ((u_int)len) || from + p->jf >= ((u_int)len))
-							return 0;
-						break;
-					default:
-						return 0;
+				if (p->k >= bpf_maxbufsize) {
+					return 0;
 				}
 				break;
-			case BPF_RET:
+			case BPF_MEM:
+				if (p->k >= BPF_MEMWORDS) {
+					return 0;
+				}
 				break;
-			case BPF_MISC:
+			case BPF_LEN:
 				break;
 			default:
 				return 0;
+			}
+			break;
+		case BPF_ST:
+		case BPF_STX:
+			if (p->k >= BPF_MEMWORDS) {
+				return 0;
+			}
+			break;
+		case BPF_ALU:
+			switch (BPF_OP(p->code)) {
+			case BPF_ADD:
+			case BPF_SUB:
+			case BPF_MUL:
+			case BPF_OR:
+			case BPF_AND:
+			case BPF_LSH:
+			case BPF_RSH:
+			case BPF_NEG:
+				break;
+			case BPF_DIV:
+				/*
+				 * Check for constant division by 0
+				 */
+				if (BPF_SRC(p->code) == BPF_K && p->k == 0) {
+					return 0;
+				}
+				break;
+			default:
+				return 0;
+			}
+			break;
+		case BPF_JMP:
+			/*
+			 * Check that jumps are within the code block,
+			 * and that unconditional branches don't go
+			 * backwards as a result of an overflow.
+			 * Unconditional branches have a 32-bit offset,
+			 * so they could overflow; we check to make
+			 * sure they don't. Conditional branches have
+			 * an 8-bit offset, and the from address is
+			 * less than equal to BPF_MAXINSNS, and we assume that
+			 * BPF_MAXINSNS is sufficiently small that adding 255
+			 * to it won't overlflow
+			 *
+			 * We know that len is <= BPF_MAXINSNS, and we
+			 * assume that BPF_MAXINSNS is less than the maximum
+			 * size of a u_int, so that i+1 doesn't overflow
+			 */
+			from = i + 1;
+			switch (BPF_OP(p->code)) {
+			case BPF_JA:
+				if (from + p->k < from || from + p->k >= ((u_int)len)) {
+					return 0;
+				}
+				break;
+			case BPF_JEQ:
+			case BPF_JGT:
+			case BPF_JGE:
+			case BPF_JSET:
+				if (from + p->jt >= ((u_int)len) || from + p->jf >= ((u_int)len)) {
+					return 0;
+				}
+				break;
+			default:
+				return 0;
+			}
+			break;
+		case BPF_RET:
+			break;
+		case BPF_MISC:
+			break;
+		default:
+			return 0;
 		}
 	}
-		return BPF_CLASS(f[len - 1].code) == BPF_RET;
+	return BPF_CLASS(f[len - 1].code) == BPF_RET;
 }
 #endif

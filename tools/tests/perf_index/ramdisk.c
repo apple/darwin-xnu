@@ -5,34 +5,38 @@
 #include <stdio.h>
 #include <sys/param.h>
 
-int setup_ram_volume(const char* name, char* path) {
-  char *cmd;
-  int retval;
-  
-  retval = asprintf(&cmd, "diskutil erasevolume HFS+ '%s' `hdiutil attach -nomount ram://1500000` >/dev/null", name);
-  VERIFY(retval > 0, "asprintf failed");
+int
+setup_ram_volume(const char* name, char* path)
+{
+	char *cmd;
+	int retval;
 
-  retval = system(cmd);
-  VERIFY(retval == 0, "diskutil command failed");
+	retval = asprintf(&cmd, "diskutil erasevolume HFS+ '%s' `hdiutil attach -nomount ram://1500000` >/dev/null", name);
+	VERIFY(retval > 0, "asprintf failed");
 
-  snprintf(path, MAXPATHLEN, "/Volumes/%s", name);
+	retval = system(cmd);
+	VERIFY(retval == 0, "diskutil command failed");
 
-  free(cmd);
+	snprintf(path, MAXPATHLEN, "/Volumes/%s", name);
 
-  return PERFINDEX_SUCCESS;
+	free(cmd);
+
+	return PERFINDEX_SUCCESS;
 }
 
-int cleanup_ram_volume(char* path) {
-  char *cmd;
-  int retval;
+int
+cleanup_ram_volume(char* path)
+{
+	char *cmd;
+	int retval;
 
-  retval = asprintf(&cmd, "umount -f '%s' >/dev/null", path);
-  VERIFY(retval > 0, "asprintf failed");
+	retval = asprintf(&cmd, "umount -f '%s' >/dev/null", path);
+	VERIFY(retval > 0, "asprintf failed");
 
-  retval = system(cmd);
-  VERIFY(retval == 0, "diskutil command failed");
+	retval = system(cmd);
+	VERIFY(retval == 0, "diskutil command failed");
 
-  free(cmd);
+	free(cmd);
 
-  return PERFINDEX_SUCCESS;
+	return PERFINDEX_SUCCESS;
 }

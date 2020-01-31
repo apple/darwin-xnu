@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -109,35 +109,35 @@
  * Structures associated with name cacheing.
  */
 
-LIST_HEAD(nchashhead, namecache) *nchashtbl;	/* Hash Table */
-u_long	nchashmask;
-u_long	nchash;				/* size of hash table - 1 */
-long	numcache;			/* number of cache entries allocated */
-int 	desiredNodes;
-int 	desiredNegNodes;
-int	ncs_negtotal;
-int	nc_disabled = 0;
-TAILQ_HEAD(, namecache) nchead;		/* chain of all name cache entries */
-TAILQ_HEAD(, namecache) neghead;	/* chain of only negative cache entries */
+LIST_HEAD(nchashhead, namecache) * nchashtbl;    /* Hash Table */
+u_long  nchashmask;
+u_long  nchash;                         /* size of hash table - 1 */
+long    numcache;                       /* number of cache entries allocated */
+int     desiredNodes;
+int     desiredNegNodes;
+int     ncs_negtotal;
+int     nc_disabled = 0;
+TAILQ_HEAD(, namecache) nchead;         /* chain of all name cache entries */
+TAILQ_HEAD(, namecache) neghead;        /* chain of only negative cache entries */
 
 
 #if COLLECT_STATS
 
-struct	nchstats nchstats;		/* cache effectiveness statistics */
+struct  nchstats nchstats;              /* cache effectiveness statistics */
 
-#define	NCHSTAT(v) {		\
-        nchstats.v++;		\
+#define NCHSTAT(v) {            \
+	nchstats.v++;           \
 }
-#define NAME_CACHE_LOCK()		name_cache_lock()
-#define NAME_CACHE_UNLOCK()		name_cache_unlock()
-#define	NAME_CACHE_LOCK_SHARED()	name_cache_lock()
+#define NAME_CACHE_LOCK()               name_cache_lock()
+#define NAME_CACHE_UNLOCK()             name_cache_unlock()
+#define NAME_CACHE_LOCK_SHARED()        name_cache_lock()
 
 #else
 
 #define NCHSTAT(v)
-#define NAME_CACHE_LOCK()		name_cache_lock()
-#define NAME_CACHE_UNLOCK()		name_cache_unlock()
-#define	NAME_CACHE_LOCK_SHARED()	name_cache_lock_shared()
+#define NAME_CACHE_LOCK()               name_cache_lock()
+#define NAME_CACHE_UNLOCK()             name_cache_unlock()
+#define NAME_CACHE_LOCK_SHARED()        name_cache_lock_shared()
 
 #endif
 
@@ -170,7 +170,7 @@ static void cache_enter_locked(vnode_t dvp, vnode_t vp, struct componentname *cn
  * Internal dump function used for debugging
  */
 void dump_string_table(void);
-#endif	/* DUMP_STRING_TABLE */
+#endif  /* DUMP_STRING_TABLE */
 
 static void init_crc32(void);
 static unsigned int crc32tab[256];
@@ -202,15 +202,15 @@ static unsigned int crc32tab[256];
  *
  * defer = cache_check_vnode_issubdir(vp, dvp, is_subdir, next_vp);
  * if (!defer) {
- * 	if (*is_subdir)
- * 		vp is subdirectory;
- * 	else
- * 		vp is not a subdirectory;
+ *      if (*is_subdir)
+ *              vp is subdirectory;
+ *      else
+ *              vp is not a subdirectory;
  * } else {
- * 	if (*next_vp)
- * 		check this vnode's parent from the filesystem
- * 	else
- * 		error (likely because of forced unmount).
+ *      if (*next_vp)
+ *              check this vnode's parent from the filesystem
+ *      else
+ *              error (likely because of forced unmount).
  * }
  *
  */
@@ -265,7 +265,7 @@ cache_check_vnode_issubdir(vnode_t vp, vnode_t dvp, boolean_t *is_subdir,
 		tvp = tvp->v_parent;
 	}
 
-	return (defer);
+	return defer;
 }
 
 /* maximum times retry from potentially transient errors in vnode_issubdir */
@@ -290,7 +290,7 @@ vnode_issubdir(vnode_t vp, vnode_t dvp, int *is_subdir, vfs_context_t ctx)
 	int error = 0;
 	char dotdotbuf[] = "..";
 	int error_retry_count = 0; /* retry count for potentially transient
-	                              errors */
+	                            *  errors */
 
 	*is_subdir = FALSE;
 	tvp = start_vp = vp;
@@ -320,8 +320,9 @@ vnode_issubdir(vnode_t vp, vnode_t dvp, int *is_subdir, vfs_context_t ctx)
 		defer = cache_check_vnode_issubdir(tvp, dvp, &is_subdir_locked,
 		    &tvp);
 
-		if (defer && tvp)
+		if (defer && tvp) {
 			vid = vnode_vid(tvp);
+		}
 
 		NAME_CACHE_UNLOCK();
 
@@ -368,24 +369,27 @@ vnode_issubdir(vnode_t vp, vnode_t dvp, int *is_subdir, vfs_context_t ctx)
 		cn.cn_namelen = 2;
 
 		pvp = NULLVP;
-		if ((error = VNOP_LOOKUP(tvp, &pvp, &cn, ctx)))
+		if ((error = VNOP_LOOKUP(tvp, &pvp, &cn, ctx))) {
 			break;
+		}
 
 		if (!(tvp->v_flag & VISHARDLINK) && tvp->v_parent != pvp) {
 			(void)vnode_update_identity(tvp, pvp, NULL, 0, 0,
 			    VNODE_UPDATE_PARENT);
 		}
 
-		if (vp_with_iocount)
+		if (vp_with_iocount) {
 			vnode_put(vp_with_iocount);
+		}
 
 		vp_with_iocount = tvp = pvp;
 	}
 
-	if (vp_with_iocount)
+	if (vp_with_iocount) {
 		vnode_put(vp_with_iocount);
+	}
 
-	return (error);
+	return error;
 }
 
 /*
@@ -395,20 +399,20 @@ vnode_issubdir(vnode_t vp, vnode_t dvp, int *is_subdir, vfs_context_t ctx)
  * byte and thus the length is one greater than what strlen would
  * return.  This is important and lots of code elsewhere in the kernel
  * assumes this behavior.
- * 
- * This function can call vnop in file system if the parent vnode 
- * does not exist or when called for hardlinks via volfs path.  
+ *
+ * This function can call vnop in file system if the parent vnode
+ * does not exist or when called for hardlinks via volfs path.
  * If BUILDPATH_NO_FS_ENTER is set in flags, it only uses values present
  * in the name cache and does not enter the file system.
  *
- * If BUILDPATH_CHECK_MOVED is set in flags, we return EAGAIN when 
- * we encounter ENOENT during path reconstruction.  ENOENT means that 
- * one of the parents moved while we were building the path.  The 
+ * If BUILDPATH_CHECK_MOVED is set in flags, we return EAGAIN when
+ * we encounter ENOENT during path reconstruction.  ENOENT means that
+ * one of the parents moved while we were building the path.  The
  * caller can special handle this case by calling build_path again.
  *
- * If BUILDPATH_VOLUME_RELATIVE is set in flags, we return path 
- * that is relative to the nearest mount point, i.e. do not 
- * cross over mount points during building the path. 
+ * If BUILDPATH_VOLUME_RELATIVE is set in flags, we return path
+ * that is relative to the nearest mount point, i.e. do not
+ * cross over mount points during building the path.
  *
  * passed in vp must have a valid io_count reference
  *
@@ -425,34 +429,37 @@ vnode_issubdir(vnode_t vp, vnode_t dvp, int *is_subdir, vfs_context_t ctx)
 int
 build_path_with_parent(vnode_t first_vp, vnode_t parent_vp, char *buff, int buflen, int *outlen, int flags, vfs_context_t ctx)
 {
-        vnode_t vp, tvp;
+	vnode_t vp, tvp;
 	vnode_t vp_with_iocount;
-        vnode_t proc_root_dir_vp;
+	vnode_t proc_root_dir_vp;
 	char *end;
 	const char *str;
 	int  len;
 	int  ret = 0;
 	int  fixhardlink;
 
-	if (first_vp == NULLVP)
-		return (EINVAL);
-		
-	if (buflen <= 1)
-		return (ENOSPC);
+	if (first_vp == NULLVP) {
+		return EINVAL;
+	}
+
+	if (buflen <= 1) {
+		return ENOSPC;
+	}
 
 	/*
 	 * Grab the process fd so we can evaluate fd_rdir.
 	 */
-	if (vfs_context_proc(ctx)->p_fd)
+	if (vfs_context_proc(ctx)->p_fd) {
 		proc_root_dir_vp = vfs_context_proc(ctx)->p_fd->fd_rdir;
-	else
+	} else {
 		proc_root_dir_vp = NULL;
+	}
 
 	vp_with_iocount = NULLVP;
 again:
 	vp = first_vp;
 
-	end = &buff[buflen-1];
+	end = &buff[buflen - 1];
 	*end = '\0';
 
 	/*
@@ -467,7 +474,7 @@ again:
 	 * after we drop the NAME_CACHE_LOCK via vnode_getwithvid...
 	 * deadlocks may result if you call vnode_get while holding
 	 * the NAME_CACHE_LOCK... we lazily release the reference
-	 * we pick up the next time we encounter a need to drop 
+	 * we pick up the next time we encounter a need to drop
 	 * the NAME_CACHE_LOCK or before we return from this routine
 	 */
 	NAME_CACHE_LOCK_SHARED();
@@ -480,19 +487,19 @@ again:
 			ret = EINVAL;
 			goto out_unlock;
 		}
-	        if ((vp->v_mount->mnt_flag & MNT_ROOTFS) || (vp == proc_root_dir_vp)) {
+		if ((vp->v_mount->mnt_flag & MNT_ROOTFS) || (vp == proc_root_dir_vp)) {
 			/*
 			 * It's the root of the root file system, so it's
 			 * just "/".
 			 */
-		        *--end = '/';
+			*--end = '/';
 
 			goto out_unlock;
 		} else {
-			/* 
-			 * This the root of the volume and the caller does not 
-			 * want to cross mount points.  Therefore just return 
-			 * '/' as the relative path. 
+			/*
+			 * This the root of the volume and the caller does not
+			 * want to cross mount points.  Therefore just return
+			 * '/' as the relative path.
 			 */
 			if (flags & BUILDPATH_VOLUME_RELATIVE) {
 				*--end = '/';
@@ -512,17 +519,18 @@ again:
 		 * name and parent (below).
 		 */
 		fixhardlink = (vp->v_flag & VISHARDLINK) &&
-		              (vp->v_mount->mnt_kern_flag & MNTK_PATH_FROM_ID) &&
-		              !(flags & BUILDPATH_NO_FS_ENTER);
+		    (vp->v_mount->mnt_kern_flag & MNTK_PATH_FROM_ID) &&
+		    !(flags & BUILDPATH_NO_FS_ENTER);
 
 		if (!fixhardlink) {
 			str = vp->v_name;
 
 			if (str == NULL || *str == '\0') {
-				if (vp->v_parent != NULL)
+				if (vp->v_parent != NULL) {
 					ret = EINVAL;
-				else
+				} else {
 					ret = ENOENT;
+				}
 				goto out_unlock;
 			}
 			len = strlen(str);
@@ -537,9 +545,10 @@ again:
 			 * Copy the name backwards.
 			 */
 			str += len;
-	
-			for (; len > 0; len--)
-			       *--end = *--str;
+
+			for (; len > 0; len--) {
+				*--end = *--str;
+			}
 			/*
 			 * Add a path separator.
 			 */
@@ -550,8 +559,7 @@ again:
 		 * Walk up the parent chain.
 		 */
 		if (((vp->v_parent != NULLVP) && !fixhardlink) ||
-				(flags & BUILDPATH_NO_FS_ENTER)) {
-
+		    (flags & BUILDPATH_NO_FS_ENTER)) {
 			/*
 			 * In this if () block we are not allowed to enter the filesystem
 			 * to conclusively get the most accurate parent identifier.
@@ -603,8 +611,9 @@ again:
 					vnode_put(vp_with_iocount);
 					vp_with_iocount = NULLVP;
 				}
-				if (vnode_getwithvid(vp, vid))
+				if (vnode_getwithvid(vp, vid)) {
 					goto again;
+				}
 				vp_with_iocount = vp;
 			}
 			VATTR_INIT(&va);
@@ -661,14 +670,17 @@ bad_news:
 			/*
 			 * Ask the file system for the parent vnode.
 			 */
-			if ((ret = VFS_VGET(vp->v_mount, (ino64_t)va.va_parentid, &dvp, ctx)))
+			if ((ret = VFS_VGET(vp->v_mount, (ino64_t)va.va_parentid, &dvp, ctx))) {
 				goto out;
+			}
 
-			if (!fixhardlink && (vp->v_parent != dvp))
+			if (!fixhardlink && (vp->v_parent != dvp)) {
 				vnode_update_identity(vp, dvp, NULL, 0, 0, VNODE_UPDATE_PARENT);
+			}
 
-			if (vp_with_iocount)
+			if (vp_with_iocount) {
 				vnode_put(vp_with_iocount);
+			}
 			vp = dvp;
 			vp_with_iocount = vp;
 
@@ -680,8 +692,9 @@ bad_news:
 			 * so skip up to avoid getting a duplicate copy of the
 			 * file name in the path.
 			 */
-			if (vp && !vnode_isdir(vp) && vp->v_parent)
+			if (vp && !vnode_isdir(vp) && vp->v_parent) {
 				vp = vp->v_parent;
+			}
 		}
 
 		if (vp && (flags & BUILDPATH_CHECKACCESS)) {
@@ -694,13 +707,14 @@ bad_news:
 					vnode_put(vp_with_iocount);
 					vp_with_iocount = NULLVP;
 				}
-				if (vnode_getwithvid(vp, vid))
+				if (vnode_getwithvid(vp, vid)) {
 					goto again;
+				}
 				vp_with_iocount = vp;
 			}
-			if ((ret = vnode_authorize(vp, NULL, KAUTH_VNODE_SEARCH, ctx)))
-				goto out;  	/* no peeking */
-
+			if ((ret = vnode_authorize(vp, NULL, KAUTH_VNODE_SEARCH, ctx))) {
+				goto out;       /* no peeking */
+			}
 			NAME_CACHE_LOCK_SHARED();
 		}
 
@@ -713,12 +727,12 @@ bad_news:
 		tvp = vp;
 
 		while (tvp) {
-			if (tvp == proc_root_dir_vp)
-				goto out_unlock;	/* encountered the root */
-
-			if (!(tvp->v_flag & VROOT) || !tvp->v_mount)
-				break;			/* not the root of a mounted FS */
-
+			if (tvp == proc_root_dir_vp) {
+				goto out_unlock;        /* encountered the root */
+			}
+			if (!(tvp->v_flag & VROOT) || !tvp->v_mount) {
+				break;                  /* not the root of a mounted FS */
+			}
 			if (flags & BUILDPATH_VOLUME_RELATIVE) {
 				/* Do not cross over mount points */
 				tvp = NULL;
@@ -726,15 +740,17 @@ bad_news:
 				tvp = tvp->v_mount->mnt_vnodecovered;
 			}
 		}
-		if (tvp == NULLVP)
+		if (tvp == NULLVP) {
 			goto out_unlock;
+		}
 		vp = tvp;
 	}
 out_unlock:
 	NAME_CACHE_UNLOCK();
 out:
-	if (vp_with_iocount)
+	if (vp_with_iocount) {
 		vnode_put(vp_with_iocount);
+	}
 	/*
 	 * Slide the name down to the beginning of the buffer.
 	 */
@@ -744,22 +760,22 @@ out:
 	 * length includes the trailing zero byte
 	 */
 	*outlen = &buff[buflen] - end;
- 
-	/* One of the parents was moved during path reconstruction. 
-	 * The caller is interested in knowing whether any of the 
+
+	/* One of the parents was moved during path reconstruction.
+	 * The caller is interested in knowing whether any of the
 	 * parents moved via BUILDPATH_CHECK_MOVED, so return EAGAIN.
 	 */
 	if ((ret == ENOENT) && (flags & BUILDPATH_CHECK_MOVED)) {
 		ret = EAGAIN;
 	}
 
-	return (ret);
+	return ret;
 }
 
 int
 build_path(vnode_t first_vp, char *buff, int buflen, int *outlen, int flags, vfs_context_t ctx)
 {
-	return (build_path_with_parent(first_vp, NULL, buff, buflen, outlen, flags, ctx));
+	return build_path_with_parent(first_vp, NULL, buff, buflen, outlen, flags, ctx);
 }
 
 /*
@@ -770,8 +786,8 @@ build_path(vnode_t first_vp, char *buff, int buflen, int *outlen, int flags, vfs
 vnode_t
 vnode_getparent(vnode_t vp)
 {
-        vnode_t pvp = NULLVP;
-	int	pvid;
+	vnode_t pvp = NULLVP;
+	int     pvid;
 
 	NAME_CACHE_LOCK_SHARED();
 	/*
@@ -781,30 +797,33 @@ vnode_getparent(vnode_t vp)
 	 * parent of 'vp' at the time we took the name_cache lock...
 	 * once we drop the lock, vp could get re-parented
 	 */
-	if ( (pvp = vp->v_parent) != NULLVP ) {
-	        pvid = pvp->v_id;
+	if ((pvp = vp->v_parent) != NULLVP) {
+		pvid = pvp->v_id;
 
 		NAME_CACHE_UNLOCK();
 
-		if (vnode_getwithvid(pvp, pvid) != 0)
-		        pvp = NULL;
-	} else
-	        NAME_CACHE_UNLOCK();
-	return (pvp);
+		if (vnode_getwithvid(pvp, pvid) != 0) {
+			pvp = NULL;
+		}
+	} else {
+		NAME_CACHE_UNLOCK();
+	}
+	return pvp;
 }
 
 const char *
 vnode_getname(vnode_t vp)
 {
-        const char *name = NULL;
-	
+	const char *name = NULL;
+
 	NAME_CACHE_LOCK_SHARED();
-	
-	if (vp->v_name)
-	        name = vfs_addname(vp->v_name, strlen(vp->v_name), 0, 0);
+
+	if (vp->v_name) {
+		name = vfs_addname(vp->v_name, strlen(vp->v_name), 0, 0);
+	}
 	NAME_CACHE_UNLOCK();
 
-	return (name);
+	return name;
 }
 
 void
@@ -819,45 +838,47 @@ const char *
 vnode_getname_printable(vnode_t vp)
 {
 	const char *name = vnode_getname(vp);
-	if (name != NULL)
+	if (name != NULL) {
 		return name;
-	
+	}
+
 	switch (vp->v_type) {
-		case VCHR:
-		case VBLK:
-			{
-			/*
-			 * Create an artificial dev name from
-			 * major and minor device number
-			 */
-			char dev_name[64];
-			(void) snprintf(dev_name, sizeof(dev_name),
-					"%c(%u, %u)", VCHR == vp->v_type ? 'c':'b',
-					major(vp->v_rdev), minor(vp->v_rdev));
-			/*
-			 * Add the newly created dev name to the name
-			 * cache to allow easier cleanup. Also,
-			 * vfs_addname allocates memory for the new name
-			 * and returns it.
-			 */
-			NAME_CACHE_LOCK_SHARED();
-			name = vfs_addname(dev_name, strlen(dev_name), 0, 0);
-			NAME_CACHE_UNLOCK();
-			return name;
-			}
-		default:
-			return unknown_vnodename;
+	case VCHR:
+	case VBLK:
+	{
+		/*
+		 * Create an artificial dev name from
+		 * major and minor device number
+		 */
+		char dev_name[64];
+		(void) snprintf(dev_name, sizeof(dev_name),
+		    "%c(%u, %u)", VCHR == vp->v_type ? 'c':'b',
+		    major(vp->v_rdev), minor(vp->v_rdev));
+		/*
+		 * Add the newly created dev name to the name
+		 * cache to allow easier cleanup. Also,
+		 * vfs_addname allocates memory for the new name
+		 * and returns it.
+		 */
+		NAME_CACHE_LOCK_SHARED();
+		name = vfs_addname(dev_name, strlen(dev_name), 0, 0);
+		NAME_CACHE_UNLOCK();
+		return name;
+	}
+	default:
+		return unknown_vnodename;
 	}
 }
 
-void 
+void
 vnode_putname_printable(const char *name)
 {
-	if (name == unknown_vnodename)
+	if (name == unknown_vnodename) {
 		return;
+	}
 	vnode_putname(name);
 }
-		
+
 
 /*
  * if VNODE_UPDATE_PARENT, and we can take
@@ -875,8 +896,8 @@ vnode_putname_printable(const char *name)
 void
 vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, uint32_t name_hashval, int flags)
 {
-	struct	namecache *ncp;
-        vnode_t	old_parentvp = NULLVP;
+	struct  namecache *ncp;
+	vnode_t old_parentvp = NULLVP;
 	int isstream = (vp->v_flag & VISNAMEDSTREAM);
 	int kusecountbumped = 0;
 	kauth_cred_t tcred = NULL;
@@ -884,7 +905,7 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 	const char *tname = NULL;
 
 	if (flags & VNODE_UPDATE_PARENT) {
-	        if (dvp && vnode_ref(dvp) != 0) {
+		if (dvp && vnode_ref(dvp) != 0) {
 			dvp = NULLVP;
 		}
 		/* Don't count a stream's parent ref during unmounts */
@@ -895,32 +916,35 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 			vnode_unlock(dvp);
 		}
 	} else {
-	        dvp = NULLVP;
+		dvp = NULLVP;
 	}
-	if ( (flags & VNODE_UPDATE_NAME) ) {
+	if ((flags & VNODE_UPDATE_NAME)) {
 		if (name != vp->v_name) {
 			if (name && *name) {
-				if (name_len == 0)
+				if (name_len == 0) {
 					name_len = strlen(name);
-			        tname = vfs_addname(name, name_len, name_hashval, 0);
+				}
+				tname = vfs_addname(name, name_len, name_hashval, 0);
 			}
-		} else
+		} else {
 			flags &= ~VNODE_UPDATE_NAME;
+		}
 	}
-	if ( (flags & (VNODE_UPDATE_PURGE | VNODE_UPDATE_PARENT | VNODE_UPDATE_CACHE | VNODE_UPDATE_NAME)) ) {
-
+	if ((flags & (VNODE_UPDATE_PURGE | VNODE_UPDATE_PARENT | VNODE_UPDATE_CACHE | VNODE_UPDATE_NAME))) {
 		NAME_CACHE_LOCK();
 
-		if ( (flags & VNODE_UPDATE_PURGE) ) {
-
-			if (vp->v_parent)
+		if ((flags & VNODE_UPDATE_PURGE)) {
+			if (vp->v_parent) {
 				vp->v_parent->v_nc_generation++;
+			}
 
-			while ( (ncp = LIST_FIRST(&vp->v_nclinks)) )
+			while ((ncp = LIST_FIRST(&vp->v_nclinks))) {
 				cache_delete(ncp, 1);
+			}
 
-			while ( (ncp = TAILQ_FIRST(&vp->v_ncchildren)) )
+			while ((ncp = TAILQ_FIRST(&vp->v_ncchildren))) {
 				cache_delete(ncp, 1);
+			}
 
 			/*
 			 * Use a temp variable to avoid kauth_cred_unref() while NAME_CACHE_LOCK is held
@@ -930,7 +954,7 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 			vp->v_authorized_actions = 0;
 			vp->v_cred_timestamp = 0;
 		}
-		if ( (flags & VNODE_UPDATE_NAME) ) {
+		if ((flags & VNODE_UPDATE_NAME)) {
 			vname = vp->v_name;
 			vp->v_name = tname;
 		}
@@ -940,42 +964,48 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 				vp->v_parent = dvp;
 				dvp = NULLVP;
 
-				if (old_parentvp)
+				if (old_parentvp) {
 					flags |= VNODE_UPDATE_CACHE;
+				}
 			}
 		}
 		if (flags & VNODE_UPDATE_CACHE) {
-			while ( (ncp = LIST_FIRST(&vp->v_nclinks)) )
+			while ((ncp = LIST_FIRST(&vp->v_nclinks))) {
 				cache_delete(ncp, 1);
+			}
 		}
 		NAME_CACHE_UNLOCK();
-	
-		if (vname != NULL)
-			vfs_removename(vname);
 
-		if (IS_VALID_CRED(tcred))
+		if (vname != NULL) {
+			vfs_removename(vname);
+		}
+
+		if (IS_VALID_CRED(tcred)) {
 			kauth_cred_unref(&tcred);
+		}
 	}
 	if (dvp != NULLVP) {
 		/* Back-out the ref we took if we lost a race for vp->v_parent. */
 		if (kusecountbumped) {
 			vnode_lock_spin(dvp);
-			if (dvp->v_kusecount > 0)
-				--dvp->v_kusecount;  
+			if (dvp->v_kusecount > 0) {
+				--dvp->v_kusecount;
+			}
 			vnode_unlock(dvp);
 		}
-	        vnode_rele(dvp);
+		vnode_rele(dvp);
 	}
 	if (old_parentvp) {
-	        struct  uthread *ut;
+		struct  uthread *ut;
 
 		if (isstream) {
-		        vnode_lock_spin(old_parentvp);
-			if ((old_parentvp->v_type != VDIR) && (old_parentvp->v_kusecount > 0))
+			vnode_lock_spin(old_parentvp);
+			if ((old_parentvp->v_type != VDIR) && (old_parentvp->v_kusecount > 0)) {
 				--old_parentvp->v_kusecount;
+			}
 			vnode_unlock(old_parentvp);
 		}
-	        ut = get_bsdthread_info(current_thread());
+		ut = get_bsdthread_info(current_thread());
 
 		/*
 		 * indicated to vnode_rele that it shouldn't do a
@@ -987,9 +1017,8 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 		ut->uu_defer_reclaims = 1;
 		ut->uu_vreclaims = NULLVP;
 
-	        while ( (vp = old_parentvp) != NULLVP ) {
-	  
-		        vnode_lock_spin(vp);
+		while ((vp = old_parentvp) != NULLVP) {
+			vnode_lock_spin(vp);
 			vnode_rele_internal(vp, 0, 0, 1);
 
 			/*
@@ -999,7 +1028,7 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 			 * out the v_parent field... we'll drop the reference
 			 * that was held on the next iteration of this loop...
 			 * this short circuits a potential deep recursion if we
-			 * have a long chain of parents in this state... 
+			 * have a long chain of parents in this state...
 			 * we'll sit in this loop until we run into
 			 * a parent in this chain that is not in this state
 			 *
@@ -1010,9 +1039,9 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 			 * this vnode on the list to be reaped by us, than
 			 * it has left this vnode with an iocount == 1
 			 */
-			if ( (vp->v_iocount == 1) && (vp->v_usecount == 0) &&
-			     ((vp->v_lflag & (VL_MARKTERM | VL_TERMINATE | VL_DEAD)) == VL_MARKTERM)) {
-			        /*
+			if ((vp->v_iocount == 1) && (vp->v_usecount == 0) &&
+			    ((vp->v_lflag & (VL_MARKTERM | VL_TERMINATE | VL_DEAD)) == VL_MARKTERM)) {
+				/*
 				 * vnode_rele wanted to do a vnode_reclaim on this vnode
 				 * it should be sitting on the head of the uu_vreclaims chain
 				 * pull the parent pointer now so that when we do the
@@ -1020,29 +1049,29 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 				 * list, we won't recurse back through here
 				 *
 				 * need to do a convert here in case vnode_rele_internal
-				 * returns with the lock held in the spin mode... it 
+				 * returns with the lock held in the spin mode... it
 				 * can drop and retake the lock under certain circumstances
 				 */
-			        vnode_lock_convert(vp);
+				vnode_lock_convert(vp);
 
-			        NAME_CACHE_LOCK();
+				NAME_CACHE_LOCK();
 				old_parentvp = vp->v_parent;
 				vp->v_parent = NULLVP;
 				NAME_CACHE_UNLOCK();
 			} else {
-			        /*
+				/*
 				 * we're done... we ran into a vnode that isn't
 				 * being terminated
 				 */
-			        old_parentvp = NULLVP;
+				old_parentvp = NULLVP;
 			}
 			vnode_unlock(vp);
 		}
 		ut->uu_defer_reclaims = 0;
 
-		while ( (vp = ut->uu_vreclaims) != NULLVP) {
-		        ut->uu_vreclaims = vp->v_defer_reclaimlist;
-			
+		while ((vp = ut->uu_vreclaims) != NULLVP) {
+			ut->uu_vreclaims = vp->v_defer_reclaimlist;
+
 			/*
 			 * vnode_put will drive the vnode_reclaim if
 			 * we are still the only reference on this vnode
@@ -1062,7 +1091,8 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
  * so that HFS can post-process the lookup.  Also, volfs will call
  * VNOP_GETATTR2 to determine the parent, instead of using v_parent.
  */
-void vnode_setmultipath(vnode_t vp)
+void
+vnode_setmultipath(vnode_t vp)
 {
 	vnode_lock_spin(vp);
 
@@ -1087,9 +1117,10 @@ void vnode_setmultipath(vnode_t vp)
 /*
  * backwards compatibility
  */
-void vnode_uncache_credentials(vnode_t vp)
+void
+vnode_uncache_credentials(vnode_t vp)
 {
-        vnode_uncache_authorized_action(vp, KAUTH_INVALIDATE_CACHED_RIGHTS);
+	vnode_uncache_authorized_action(vp, KAUTH_INVALIDATE_CACHED_RIGHTS);
 }
 
 
@@ -1104,9 +1135,10 @@ void vnode_uncache_credentials(vnode_t vp)
  * to hold it for the minimum amount of time possible
  */
 
-void vnode_uncache_authorized_action(vnode_t vp, kauth_action_t action)
+void
+vnode_uncache_authorized_action(vnode_t vp, kauth_action_t action)
 {
-        kauth_cred_t tcred = NOCRED;
+	kauth_cred_t tcred = NOCRED;
 
 	NAME_CACHE_LOCK();
 
@@ -1114,68 +1146,74 @@ void vnode_uncache_authorized_action(vnode_t vp, kauth_action_t action)
 
 	if (action == KAUTH_INVALIDATE_CACHED_RIGHTS &&
 	    IS_VALID_CRED(vp->v_cred)) {
-	        /*
+		/*
 		 * Use a temp variable to avoid kauth_cred_unref() while NAME_CACHE_LOCK is held
 		 */
-	        tcred = vp->v_cred;
+		tcred = vp->v_cred;
 		vp->v_cred = NOCRED;
 	}
 	NAME_CACHE_UNLOCK();
 
-	if (tcred != NOCRED)
+	if (tcred != NOCRED) {
 		kauth_cred_unref(&tcred);
+	}
 }
 
 
-extern int bootarg_vnode_cache_defeat;	/* default = 0, from bsd_init.c */
+extern int bootarg_vnode_cache_defeat;  /* default = 0, from bsd_init.c */
 
 boolean_t
 vnode_cache_is_authorized(vnode_t vp, vfs_context_t ctx, kauth_action_t action)
 {
-	kauth_cred_t	ucred;
-	boolean_t	retval = FALSE;
+	kauth_cred_t    ucred;
+	boolean_t       retval = FALSE;
 
 	/* Boot argument to defeat rights caching */
-	if (bootarg_vnode_cache_defeat)
+	if (bootarg_vnode_cache_defeat) {
 		return FALSE;
+	}
 
-	if ( (vp->v_mount->mnt_kern_flag & (MNTK_AUTH_OPAQUE | MNTK_AUTH_CACHE_TTL)) ) {
-	        /*
+	if ((vp->v_mount->mnt_kern_flag & (MNTK_AUTH_OPAQUE | MNTK_AUTH_CACHE_TTL))) {
+		/*
 		 * a TTL is enabled on the rights cache... handle it here
 		 * a TTL of 0 indicates that no rights should be cached
 		 */
-	        if (vp->v_mount->mnt_authcache_ttl) {
-		        if ( !(vp->v_mount->mnt_kern_flag & MNTK_AUTH_CACHE_TTL) ) {
-			        /*
+		if (vp->v_mount->mnt_authcache_ttl) {
+			if (!(vp->v_mount->mnt_kern_flag & MNTK_AUTH_CACHE_TTL)) {
+				/*
 				 * For filesystems marked only MNTK_AUTH_OPAQUE (generally network ones),
 				 * we will only allow a SEARCH right on a directory to be cached...
 				 * that cached right always has a default TTL associated with it
 				 */
-			        if (action != KAUTH_VNODE_SEARCH || vp->v_type != VDIR)
-				        vp = NULLVP;
+				if (action != KAUTH_VNODE_SEARCH || vp->v_type != VDIR) {
+					vp = NULLVP;
+				}
 			}
 			if (vp != NULLVP && vnode_cache_is_stale(vp) == TRUE) {
-			        vnode_uncache_authorized_action(vp, vp->v_authorized_actions);
+				vnode_uncache_authorized_action(vp, vp->v_authorized_actions);
 				vp = NULLVP;
 			}
-		} else
-		        vp = NULLVP;
+		} else {
+			vp = NULLVP;
+		}
 	}
 	if (vp != NULLVP) {
-	        ucred = vfs_context_ucred(ctx);
+		ucred = vfs_context_ucred(ctx);
 
 		NAME_CACHE_LOCK_SHARED();
 
-		if (vp->v_cred == ucred && (vp->v_authorized_actions & action) == action)
-		        retval = TRUE;
-		
+		if (vp->v_cred == ucred && (vp->v_authorized_actions & action) == action) {
+			retval = TRUE;
+		}
+
 		NAME_CACHE_UNLOCK();
 	}
 	return retval;
 }
 
 
-void vnode_cache_authorized_action(vnode_t vp, vfs_context_t ctx, kauth_action_t action)
+void
+vnode_cache_authorized_action(vnode_t vp, vfs_context_t ctx, kauth_action_t action)
 {
 	kauth_cred_t tcred = NOCRED;
 	kauth_cred_t ucred;
@@ -1184,25 +1222,28 @@ void vnode_cache_authorized_action(vnode_t vp, vfs_context_t ctx, kauth_action_t
 
 	ucred = vfs_context_ucred(ctx);
 
-	if (!IS_VALID_CRED(ucred) || action == 0)
-	        return;
+	if (!IS_VALID_CRED(ucred) || action == 0) {
+		return;
+	}
 
-	if ( (vp->v_mount->mnt_kern_flag & (MNTK_AUTH_OPAQUE | MNTK_AUTH_CACHE_TTL)) ) {
-	        /*
+	if ((vp->v_mount->mnt_kern_flag & (MNTK_AUTH_OPAQUE | MNTK_AUTH_CACHE_TTL))) {
+		/*
 		 * a TTL is enabled on the rights cache... handle it here
 		 * a TTL of 0 indicates that no rights should be cached
 		 */
-	        if (vp->v_mount->mnt_authcache_ttl == 0) 
-		        return;
+		if (vp->v_mount->mnt_authcache_ttl == 0) {
+			return;
+		}
 
-		if ( !(vp->v_mount->mnt_kern_flag & MNTK_AUTH_CACHE_TTL) ) {
-		        /*
+		if (!(vp->v_mount->mnt_kern_flag & MNTK_AUTH_CACHE_TTL)) {
+			/*
 			 * only cache SEARCH action for filesystems marked
 			 * MNTK_AUTH_OPAQUE on VDIRs...
 			 * the lookup_path code will time these out
 			 */
-		        if ( (action & ~KAUTH_VNODE_SEARCH) || vp->v_type != VDIR )
-			        return;
+			if ((action & ~KAUTH_VNODE_SEARCH) || vp->v_type != VDIR) {
+				return;
+			}
 		}
 		ttl_active = TRUE;
 
@@ -1211,8 +1252,8 @@ void vnode_cache_authorized_action(vnode_t vp, vfs_context_t ctx, kauth_action_t
 	NAME_CACHE_LOCK();
 
 	if (vp->v_cred != ucred) {
-	        kauth_cred_ref(ucred);
-	        /*
+		kauth_cred_ref(ucred);
+		/*
 		 * Use a temp variable to avoid kauth_cred_unref() while NAME_CACHE_LOCK is held
 		 */
 		tcred = vp->v_cred;
@@ -1220,36 +1261,39 @@ void vnode_cache_authorized_action(vnode_t vp, vfs_context_t ctx, kauth_action_t
 		vp->v_authorized_actions = 0;
 	}
 	if (ttl_active == TRUE && vp->v_authorized_actions == 0) {
-	        /*
+		/*
 		 * only reset the timestamnp on the
 		 * first authorization cached after the previous
 		 * timer has expired or we're switching creds...
-		 * 'vnode_cache_is_authorized' will clear the 
+		 * 'vnode_cache_is_authorized' will clear the
 		 * authorized actions if the TTL is active and
 		 * it has expired
 		 */
-	        vp->v_cred_timestamp = tv.tv_sec;
+		vp->v_cred_timestamp = tv.tv_sec;
 	}
 	vp->v_authorized_actions |= action;
 
 	NAME_CACHE_UNLOCK();
 
-	if (IS_VALID_CRED(tcred))
+	if (IS_VALID_CRED(tcred)) {
 		kauth_cred_unref(&tcred);
+	}
 }
 
 
-boolean_t vnode_cache_is_stale(vnode_t vp)
+boolean_t
+vnode_cache_is_stale(vnode_t vp)
 {
-	struct timeval	tv;
-	boolean_t	retval;
+	struct timeval  tv;
+	boolean_t       retval;
 
 	microuptime(&tv);
 
-	if ((tv.tv_sec - vp->v_cred_timestamp) > vp->v_mount->mnt_authcache_ttl)
-	        retval = TRUE;
-	else
-	        retval = FALSE;
+	if ((tv.tv_sec - vp->v_cred_timestamp) > vp->v_mount->mnt_authcache_ttl) {
+		retval = TRUE;
+	} else {
+		retval = FALSE;
+	}
 
 	return retval;
 }
@@ -1259,27 +1303,27 @@ boolean_t vnode_cache_is_stale(vnode_t vp)
 /*
  * Returns:	0			Success
  *		ERECYCLE		vnode was recycled from underneath us.  Force lookup to be re-driven from namei.
- * 						This errno value should not be seen by anyone outside of the kernel.
+ *                                              This errno value should not be seen by anyone outside of the kernel.
  */
-int 
-cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp, 
-		vfs_context_t ctx, int *dp_authorized, vnode_t last_dp)
+int
+cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
+    vfs_context_t ctx, int *dp_authorized, vnode_t last_dp)
 {
-	char		*cp;		/* pointer into pathname argument */
-	int		vid;
-	int		vvid = 0;	/* protected by vp != NULLVP */
-	vnode_t		vp = NULLVP;
-	vnode_t		tdp = NULLVP;
-	kauth_cred_t	ucred;
-	boolean_t	ttl_enabled = FALSE;
-	struct timeval	tv;
-        mount_t		mp;
-	unsigned int	hash;
-	int		error = 0;
-	boolean_t	dotdotchecked = FALSE;
+	char            *cp;            /* pointer into pathname argument */
+	int             vid;
+	int             vvid = 0;       /* protected by vp != NULLVP */
+	vnode_t         vp = NULLVP;
+	vnode_t         tdp = NULLVP;
+	kauth_cred_t    ucred;
+	boolean_t       ttl_enabled = FALSE;
+	struct timeval  tv;
+	mount_t         mp;
+	unsigned int    hash;
+	int             error = 0;
+	boolean_t       dotdotchecked = FALSE;
 
 #if CONFIG_TRIGGERS
-	vnode_t 	trigger_vp;
+	vnode_t         trigger_vp;
 #endif /* CONFIG_TRIGGERS */
 
 	ucred = vfs_context_ucred(ctx);
@@ -1287,7 +1331,7 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
 
 	NAME_CACHE_LOCK_SHARED();
 
-	if ( dp->v_mount && (dp->v_mount->mnt_kern_flag & (MNTK_AUTH_OPAQUE | MNTK_AUTH_CACHE_TTL)) ) {
+	if (dp->v_mount && (dp->v_mount->mnt_kern_flag & (MNTK_AUTH_OPAQUE | MNTK_AUTH_CACHE_TTL))) {
 		ttl_enabled = TRUE;
 		microuptime(&tv);
 	}
@@ -1299,7 +1343,7 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
 		 * The last component of the filename is left accessible via
 		 * cnp->cn_nameptr for callers that need the name.
 		 */
-	        hash = 0;
+		hash = 0;
 		cp = cnp->cn_nameptr;
 
 		while (*cp && (*cp != '/')) {
@@ -1310,8 +1354,9 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
 		 * a 0... however, 0 for us means that we
 		 * haven't computed a hash, so use 1 instead
 		 */
-		if (hash == 0)
-		        hash = 1;
+		if (hash == 0) {
+			hash = 1;
+		}
 		cnp->cn_hash = hash;
 		cnp->cn_namelen = cp - cnp->cn_nameptr;
 
@@ -1326,11 +1371,11 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
 		 * and non-existing files that won't be directories specially later.
 		 */
 		while (*cp == '/' && (cp[1] == '/' || cp[1] == '\0')) {
-		        cp++;
+			cp++;
 			ndp->ni_pathlen--;
 
 			if (*cp == '\0') {
-			        ndp->ni_flag |= NAMEI_TRAILINGSLASH;
+				ndp->ni_flag |= NAMEI_TRAILINGSLASH;
 				*ndp->ni_next = '\0';
 			}
 		}
@@ -1338,11 +1383,13 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
 
 		cnp->cn_flags &= ~(MAKEENTRY | ISLASTCN | ISDOTDOT);
 
-		if (*cp == '\0')
-		        cnp->cn_flags |= ISLASTCN;
+		if (*cp == '\0') {
+			cnp->cn_flags |= ISLASTCN;
+		}
 
-		if (cnp->cn_namelen == 2 && cnp->cn_nameptr[1] == '.' && cnp->cn_nameptr[0] == '.')
-		        cnp->cn_flags |= ISDOTDOT;
+		if (cnp->cn_namelen == 2 && cnp->cn_nameptr[1] == '.' && cnp->cn_nameptr[0] == '.') {
+			cnp->cn_flags |= ISDOTDOT;
+		}
 
 		*dp_authorized = 0;
 #if NAMEDRSRCFORK
@@ -1354,7 +1401,7 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
 		if ((ndp->ni_pathlen == sizeof(_PATH_RSRCFORKSPEC)) &&
 		    (cp[1] == '.' && cp[2] == '.') &&
 		    bcmp(cp, _PATH_RSRCFORKSPEC, sizeof(_PATH_RSRCFORKSPEC)) == 0) {
-		    	/* Skip volfs file systems that don't support native streams. */
+			/* Skip volfs file systems that don't support native streams. */
 			if ((dp->v_mount != NULL) &&
 			    (dp->v_mount->mnt_flag & MNT_DOVOLFS) &&
 			    (dp->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0) {
@@ -1388,7 +1435,7 @@ skiprsrcfork:
 		if (ttl_enabled &&
 		    (dp->v_mount->mnt_authcache_ttl == 0 ||
 		    ((tv.tv_sec - dp->v_cred_timestamp) > dp->v_mount->mnt_authcache_ttl))) {
-		        break;
+			break;
 		}
 
 		/*
@@ -1406,8 +1453,8 @@ skiprsrcfork:
 		 */
 		if ((dp->v_cred != ucred || !(dp->v_authorized_actions & KAUTH_VNODE_SEARCH)) &&
 		    !(dp->v_authorized_actions & KAUTH_VNODE_SEARCHBYANYONE) &&
-		    (ttl_enabled || !vfs_context_issuser(ctx)))  {
-		        break;
+		    (ttl_enabled || !vfs_context_issuser(ctx))) {
+			break;
 		}
 
 		/*
@@ -1418,13 +1465,16 @@ skiprsrcfork:
 		 */
 		*dp_authorized = 1;
 
-		if ( (cnp->cn_flags & (ISLASTCN | ISDOTDOT)) ) {
-			if (cnp->cn_nameiop != LOOKUP)
+		if ((cnp->cn_flags & (ISLASTCN | ISDOTDOT))) {
+			if (cnp->cn_nameiop != LOOKUP) {
 				break;
-			if (cnp->cn_flags & LOCKPARENT) 
+			}
+			if (cnp->cn_flags & LOCKPARENT) {
 				break;
-			if (cnp->cn_flags & NOCACHE)
+			}
+			if (cnp->cn_flags & NOCACHE) {
 				break;
+			}
 			if (cnp->cn_flags & ISDOTDOT) {
 				/*
 				 * Force directory hardlinks to go to
@@ -1439,10 +1489,11 @@ skiprsrcfork:
 				 * don't have one.  Otherwise, we'll
 				 * use it below.
 				 */
-				if ((dp->v_flag & VROOT)  ||
+				if ((dp->v_flag & VROOT) ||
 				    dp == ndp->ni_rootdir ||
-				    dp->v_parent == NULLVP)
+				    dp->v_parent == NULLVP) {
 					break;
+				}
 			}
 		}
 
@@ -1458,9 +1509,9 @@ skiprsrcfork:
 		 * "." and ".." aren't supposed to be cached, so check
 		 * for them before checking the cache.
 		 */
-		if (cnp->cn_namelen == 1 && cnp->cn_nameptr[0] == '.')
+		if (cnp->cn_namelen == 1 && cnp->cn_nameptr[0] == '.') {
 			vp = dp;
-		else if ( (cnp->cn_flags & ISDOTDOT) ) {
+		} else if ((cnp->cn_flags & ISDOTDOT)) {
 			/*
 			 * If this is a chrooted process, we need to check if
 			 * the process is trying to break out of its chrooted
@@ -1507,10 +1558,11 @@ skiprsrcfork:
 				vp = dp->v_parent;
 			}
 		} else {
-			if ( (vp = cache_lookup_locked(dp, cnp)) == NULLVP)
+			if ((vp = cache_lookup_locked(dp, cnp)) == NULLVP) {
 				break;
+			}
 
-			if ( (vp->v_flag & VISHARDLINK) ) {
+			if ((vp->v_flag & VISHARDLINK)) {
 				/*
 				 * The file system wants a VNOP_LOOKUP on this vnode
 				 */
@@ -1518,31 +1570,35 @@ skiprsrcfork:
 				break;
 			}
 		}
-		if ( (cnp->cn_flags & ISLASTCN) )
-		        break;
-
-		if (vp->v_type != VDIR) {
-		        if (vp->v_type != VLNK)
-			        vp = NULL;
-		        break;
+		if ((cnp->cn_flags & ISLASTCN)) {
+			break;
 		}
 
-		if ( (mp = vp->v_mountedhere) && ((cnp->cn_flags & NOCROSSMOUNT) == 0)) {
+		if (vp->v_type != VDIR) {
+			if (vp->v_type != VLNK) {
+				vp = NULL;
+			}
+			break;
+		}
+
+		if ((mp = vp->v_mountedhere) && ((cnp->cn_flags & NOCROSSMOUNT) == 0)) {
 			vnode_t tmp_vp = mp->mnt_realrootvp;
 			if (tmp_vp == NULLVP || mp->mnt_generation != mount_generation ||
-				mp->mnt_realrootvp_vid != tmp_vp->v_id)
+			    mp->mnt_realrootvp_vid != tmp_vp->v_id) {
 				break;
+			}
 			vp = tmp_vp;
 		}
 
 #if CONFIG_TRIGGERS
 		/*
 		 * After traversing all mountpoints stacked here, if we have a
-		 * trigger in hand, resolve it.  Note that we don't need to 
+		 * trigger in hand, resolve it.  Note that we don't need to
 		 * leave the fast path if the mount has already happened.
 		 */
-		if (vp->v_resolve)
+		if (vp->v_resolve) {
 			break;
+		}
 #endif /* CONFIG_TRIGGERS */
 
 
@@ -1552,20 +1608,21 @@ skiprsrcfork:
 		cnp->cn_nameptr = ndp->ni_next + 1;
 		ndp->ni_pathlen--;
 		while (*cnp->cn_nameptr == '/') {
-		        cnp->cn_nameptr++;
+			cnp->cn_nameptr++;
 			ndp->ni_pathlen--;
 		}
 	}
-	if (vp != NULLVP)
-	        vvid = vp->v_id;
+	if (vp != NULLVP) {
+		vvid = vp->v_id;
+	}
 	vid = dp->v_id;
-	
+
 	NAME_CACHE_UNLOCK();
 
 	if ((vp != NULLVP) && (vp->v_type != VLNK) &&
 	    ((cnp->cn_flags & (ISLASTCN | LOCKPARENT | WANTPARENT | SAVESTART)) == ISLASTCN)) {
-	        /*
-		 * if we've got a child and it's the last component, and 
+		/*
+		 * if we've got a child and it's the last component, and
 		 * the lookup doesn't need to return the parent then we
 		 * can skip grabbing an iocount on the parent, since all
 		 * we're going to do with it is a vnode_put just before
@@ -1573,8 +1630,8 @@ skiprsrcfork:
 		 * we need the parent in case the link happens to be
 		 * a relative pathname.
 		 */
-	        tdp = dp;
-	        dp = NULLVP;
+		tdp = dp;
+		dp = NULLVP;
 	} else {
 need_dp:
 		/*
@@ -1583,8 +1640,7 @@ need_dp:
 		 * in as a result of the last iteration of VNOP_LOOKUP,
 		 * it should already hold an io ref. No need to increase ref.
 		 */
-		if (last_dp != dp){
-			
+		if (last_dp != dp) {
 			if (dp == ndp->ni_usedvp) {
 				/*
 				 * if this vnode matches the one passed in via USEDVP
@@ -1603,7 +1659,7 @@ need_dp:
 				 * changed identity or is being
 				 * TERMINATED... in either case
 				 * punt this lookup.
-				 * 
+				 *
 				 * don't necessarily return ENOENT, though, because
 				 * we really want to go back to disk and make sure it's
 				 * there or not if someone else is changing this
@@ -1624,19 +1680,19 @@ need_dp:
 		}
 	}
 	if (vp != NULLVP) {
-	        if ( (vnode_getwithvid_drainok(vp, vvid)) ) {
-		        vp = NULLVP;
+		if ((vnode_getwithvid_drainok(vp, vvid))) {
+			vp = NULLVP;
 
-		        /*
+			/*
 			 * can't get reference on the vp we'd like
 			 * to return... if we didn't grab a reference
 			 * on the directory (due to fast path bypass),
 			 * then we need to do it now... we can't return
-			 * with both ni_dvp and ni_vp NULL, and no 
+			 * with both ni_dvp and ni_vp NULL, and no
 			 * error condition
 			 */
 			if (dp == NULLVP) {
-			        dp = tdp;
+				dp = tdp;
 				goto need_dp;
 			}
 		}
@@ -1650,29 +1706,31 @@ need_dp:
 	if ((error == 0) && (trigger_vp != NULLVP) && vnode_isdir(trigger_vp)) {
 		error = vnode_trigger_resolve(trigger_vp, ndp, ctx);
 		if (error) {
-			if (vp)
+			if (vp) {
 				vnode_put(vp);
-			if (dp) 
+			}
+			if (dp) {
 				vnode_put(dp);
+			}
 			goto errorout;
 		}
-	} 
+	}
 #endif /* CONFIG_TRIGGERS */
 
 errorout:
-	/* 
+	/*
 	 * If we came into cache_lookup_path after an iteration of the lookup loop that
 	 * resulted in a call to VNOP_LOOKUP, then VNOP_LOOKUP returned a vnode with a io ref
-	 * on it.  It is now the job of cache_lookup_path to drop the ref on this vnode 
+	 * on it.  It is now the job of cache_lookup_path to drop the ref on this vnode
 	 * when it is no longer needed.  If we get to this point, and last_dp is not NULL
 	 * and it is ALSO not the dvp we want to return to caller of this function, it MUST be
-	 * the case that we got to a subsequent path component and this previous vnode is 
+	 * the case that we got to a subsequent path component and this previous vnode is
 	 * no longer needed.  We can then drop the io ref on it.
 	 */
-	if ((last_dp != NULLVP) && (last_dp != ndp->ni_dvp)){
+	if ((last_dp != NULLVP) && (last_dp != ndp->ni_dvp)) {
 		vnode_put(last_dp);
 	}
-	
+
 	//initialized to 0, should be the same if no error cases occurred.
 	return error;
 }
@@ -1685,16 +1743,17 @@ cache_lookup_locked(vnode_t dvp, struct componentname *cnp)
 	struct nchashhead *ncpp;
 	long namelen = cnp->cn_namelen;
 	unsigned int hashval = cnp->cn_hash;
-	
+
 	if (nc_disabled) {
 		return NULL;
 	}
 
 	ncpp = NCHHASH(dvp, cnp->cn_hash);
 	LIST_FOREACH(ncp, ncpp, nc_hash) {
-	        if ((ncp->nc_dvp == dvp) && (ncp->nc_hashval == hashval)) {
-			if (strncmp(ncp->nc_name, cnp->cn_nameptr, namelen) == 0 && ncp->nc_name[namelen] == 0)
-			        break;
+		if ((ncp->nc_dvp == dvp) && (ncp->nc_hashval == hashval)) {
+			if (strncmp(ncp->nc_name, cnp->cn_nameptr, namelen) == 0 && ncp->nc_name[namelen] == 0) {
+				break;
+			}
 		}
 	}
 	if (ncp == 0) {
@@ -1702,11 +1761,11 @@ cache_lookup_locked(vnode_t dvp, struct componentname *cnp)
 		 * We failed to find an entry
 		 */
 		NCHSTAT(ncs_miss);
-		return (NULL);
+		return NULL;
 	}
 	NCHSTAT(ncs_goodhits);
 
-	return (ncp->nc_vp);
+	return ncp->nc_vp;
 }
 
 
@@ -1718,32 +1777,33 @@ unsigned int hash_string(const char *cp, int len);
 unsigned int
 hash_string(const char *cp, int len)
 {
-    unsigned hash = 0;
+	unsigned hash = 0;
 
-    if (len) {
-            while (len--) {
-		    hash = crc32tab[((hash >> 24) ^ (unsigned char)*cp++)] ^ hash << 8;
-	    }
-    } else {
-            while (*cp != '\0') {
-		    hash = crc32tab[((hash >> 24) ^ (unsigned char)*cp++)] ^ hash << 8;
-	    }
-    }
-    /*
-     * the crc generator can legitimately generate
-     * a 0... however, 0 for us means that we
-     * haven't computed a hash, so use 1 instead
-     */
-    if (hash == 0)
-            hash = 1;
-    return hash;
+	if (len) {
+		while (len--) {
+			hash = crc32tab[((hash >> 24) ^ (unsigned char)*cp++)] ^ hash << 8;
+		}
+	} else {
+		while (*cp != '\0') {
+			hash = crc32tab[((hash >> 24) ^ (unsigned char)*cp++)] ^ hash << 8;
+		}
+	}
+	/*
+	 * the crc generator can legitimately generate
+	 * a 0... however, 0 for us means that we
+	 * haven't computed a hash, so use 1 instead
+	 */
+	if (hash == 0) {
+		hash = 1;
+	}
+	return hash;
 }
 
 
 /*
- * Lookup an entry in the cache 
+ * Lookup an entry in the cache
  *
- * We don't do this if the segment name is long, simply so the cache 
+ * We don't do this if the segment name is long, simply so the cache
  * can avoid holding long names (which would either waste space, or
  * add greatly to the complexity).
  *
@@ -1762,12 +1822,13 @@ cache_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
 	struct nchashhead *ncpp;
 	long namelen = cnp->cn_namelen;
 	unsigned int hashval;
-	boolean_t	have_exclusive = FALSE;
+	boolean_t       have_exclusive = FALSE;
 	uint32_t vid;
-	vnode_t	 vp;
+	vnode_t  vp;
 
-	if (cnp->cn_hash == 0)
+	if (cnp->cn_hash == 0) {
 		cnp->cn_hash = hash_string(cnp->cn_nameptr, cnp->cn_namelen);
+	}
 	hashval = cnp->cn_hash;
 
 	if (nc_disabled) {
@@ -1779,35 +1840,36 @@ cache_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
 relook:
 	ncpp = NCHHASH(dvp, cnp->cn_hash);
 	LIST_FOREACH(ncp, ncpp, nc_hash) {
-	        if ((ncp->nc_dvp == dvp) && (ncp->nc_hashval == hashval)) {
-			if (strncmp(ncp->nc_name, cnp->cn_nameptr, namelen) == 0 && ncp->nc_name[namelen] == 0)
-			        break;
+		if ((ncp->nc_dvp == dvp) && (ncp->nc_hashval == hashval)) {
+			if (strncmp(ncp->nc_name, cnp->cn_nameptr, namelen) == 0 && ncp->nc_name[namelen] == 0) {
+				break;
+			}
 		}
 	}
 	/* We failed to find an entry */
 	if (ncp == 0) {
 		NCHSTAT(ncs_miss);
 		NAME_CACHE_UNLOCK();
-		return (0);
+		return 0;
 	}
 
 	/* We don't want to have an entry, so dump it */
 	if ((cnp->cn_flags & MAKEENTRY) == 0) {
-	        if (have_exclusive == TRUE) {
-		        NCHSTAT(ncs_badhits);
+		if (have_exclusive == TRUE) {
+			NCHSTAT(ncs_badhits);
 			cache_delete(ncp, 1);
 			NAME_CACHE_UNLOCK();
-			return (0);
+			return 0;
 		}
 		NAME_CACHE_UNLOCK();
 		NAME_CACHE_LOCK();
 		have_exclusive = TRUE;
 		goto relook;
-	} 
+	}
 	vp = ncp->nc_vp;
 
 	/* We found a "positive" match, return the vnode */
-        if (vp) {
+	if (vp) {
 		NCHSTAT(ncs_goodhits);
 
 		vid = vp->v_id;
@@ -1815,23 +1877,23 @@ relook:
 
 		if (vnode_getwithvid(vp, vid)) {
 #if COLLECT_STATS
-		        NAME_CACHE_LOCK();
+			NAME_CACHE_LOCK();
 			NCHSTAT(ncs_badvid);
 			NAME_CACHE_UNLOCK();
 #endif
-			return (0);
+			return 0;
 		}
 		*vpp = vp;
-		return (-1);
+		return -1;
 	}
 
 	/* We found a negative match, and want to create it, so purge */
 	if (cnp->cn_nameiop == CREATE || cnp->cn_nameiop == RENAME) {
-	        if (have_exclusive == TRUE) {
-		        NCHSTAT(ncs_badhits);
+		if (have_exclusive == TRUE) {
+			NCHSTAT(ncs_badhits);
 			cache_delete(ncp, 1);
 			NAME_CACHE_UNLOCK();
-			return (0);
+			return 0;
 		}
 		NAME_CACHE_UNLOCK();
 		NAME_CACHE_LOCK();
@@ -1845,7 +1907,7 @@ relook:
 	NCHSTAT(ncs_neghits);
 
 	NAME_CACHE_UNLOCK();
-	return (ENOENT);
+	return ENOENT;
 }
 
 const char *
@@ -1853,8 +1915,9 @@ cache_enter_create(vnode_t dvp, vnode_t vp, struct componentname *cnp)
 {
 	const char *strname;
 
-        if (cnp->cn_hash == 0)
-	        cnp->cn_hash = hash_string(cnp->cn_nameptr, cnp->cn_namelen);
+	if (cnp->cn_hash == 0) {
+		cnp->cn_hash = hash_string(cnp->cn_nameptr, cnp->cn_namelen);
+	}
 
 	/*
 	 * grab 2 references on the string entered
@@ -1869,7 +1932,7 @@ cache_enter_create(vnode_t dvp, vnode_t vp, struct componentname *cnp)
 
 	NAME_CACHE_UNLOCK();
 
-	return (strname);
+	return strname;
 }
 
 
@@ -1884,14 +1947,15 @@ cache_enter_create(vnode_t dvp, vnode_t vp, struct componentname *cnp)
 void
 cache_enter_with_gen(struct vnode *dvp, struct vnode *vp, struct componentname *cnp, int gen)
 {
-
-        if (cnp->cn_hash == 0)
-	        cnp->cn_hash = hash_string(cnp->cn_nameptr, cnp->cn_namelen);
+	if (cnp->cn_hash == 0) {
+		cnp->cn_hash = hash_string(cnp->cn_nameptr, cnp->cn_namelen);
+	}
 
 	NAME_CACHE_LOCK();
 
-	if (dvp->v_nc_generation == gen)
-	        (void)cache_enter_locked(dvp, vp, cnp, NULL);
+	if (dvp->v_nc_generation == gen) {
+		(void)cache_enter_locked(dvp, vp, cnp, NULL);
+	}
 
 	NAME_CACHE_UNLOCK();
 }
@@ -1905,8 +1969,9 @@ cache_enter(struct vnode *dvp, struct vnode *vp, struct componentname *cnp)
 {
 	const char *strname;
 
-        if (cnp->cn_hash == 0)
-	        cnp->cn_hash = hash_string(cnp->cn_nameptr, cnp->cn_namelen);
+	if (cnp->cn_hash == 0) {
+		cnp->cn_hash = hash_string(cnp->cn_nameptr, cnp->cn_namelen);
+	}
 
 	/*
 	 * grab 1 reference on the string entered
@@ -1925,22 +1990,24 @@ cache_enter(struct vnode *dvp, struct vnode *vp, struct componentname *cnp)
 static void
 cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cnp, const char *strname)
 {
-        struct namecache *ncp, *negp;
+	struct namecache *ncp, *negp;
 	struct nchashhead *ncpp;
 
-	if (nc_disabled) 
+	if (nc_disabled) {
 		return;
+	}
 
 	/*
 	 * if the entry is for -ve caching vp is null
 	 */
 	if ((vp != NULLVP) && (LIST_FIRST(&vp->v_nclinks))) {
-	        /*
+		/*
 		 * someone beat us to the punch..
 		 * this vnode is already in the cache
 		 */
-		if (strname != NULL)
+		if (strname != NULL) {
 			vfs_removename(strname);
+		}
 		return;
 	}
 	/*
@@ -1950,7 +2017,7 @@ cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cn
 	 */
 	if (numcache < desiredNodes &&
 	    ((ncp = nchead.tqh_first) == NULL ||
-	      ncp->nc_hash.le_prev != 0)) {
+	    ncp->nc_hash.le_prev != 0)) {
 		/*
 		 * Allocate one more entry
 		 */
@@ -1960,14 +2027,14 @@ cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cn
 		/*
 		 * reuse an old entry
 		 */
-	        ncp = TAILQ_FIRST(&nchead);
+		ncp = TAILQ_FIRST(&nchead);
 		TAILQ_REMOVE(&nchead, ncp, nc_entry);
 
 		if (ncp->nc_hash.le_prev != 0) {
-		       /*
-			* still in use... we need to
-			* delete it before re-using it
-			*/
+			/*
+			 * still in use... we need to
+			 * delete it before re-using it
+			 */
 			NCHSTAT(ncs_stolen);
 			cache_delete(ncp, 0);
 		}
@@ -1981,10 +2048,11 @@ cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cn
 	ncp->nc_dvp = dvp;
 	ncp->nc_hashval = cnp->cn_hash;
 
-	if (strname == NULL)
+	if (strname == NULL) {
 		ncp->nc_name = add_name_internal(cnp->cn_nameptr, cnp->cn_namelen, cnp->cn_hash, FALSE, 0);
-	else
+	} else {
 		ncp->nc_name = strname;
+	}
 
 	//
 	// If the bytes of the name associated with the vnode differ,
@@ -1993,12 +2061,12 @@ cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cn
 	// case-insensitive file system where the case of the looked up
 	// name differs from what is on disk.  For more details, see:
 	//   <rdar://problem/8044697> FSEvents doesn't always decompose diacritical unicode chars in the paths of the changed directories
-	// 
+	//
 	const char *vn_name = vp ? vp->v_name : NULL;
 	unsigned int len = vn_name ? strlen(vn_name) : 0;
 	if (vn_name && ncp && ncp->nc_name && strncmp(ncp->nc_name, vn_name, len) != 0) {
 		unsigned int hash = hash_string(vn_name, len);
-		
+
 		vfs_removename(ncp->nc_name);
 		ncp->nc_name = add_name_internal(vn_name, len, hash, FALSE, 0);
 		ncp->nc_hashval = hash;
@@ -2015,9 +2083,11 @@ cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cn
 	{
 		struct namecache *p;
 
-		for (p = ncpp->lh_first; p != 0; p = p->nc_hash.le_next)
-			if (p == ncp)
+		for (p = ncpp->lh_first; p != 0; p = p->nc_hash.le_next) {
+			if (p == ncp) {
 				panic("cache_enter: duplicate");
+			}
+		}
 	}
 #endif
 	/*
@@ -2026,27 +2096,27 @@ cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cn
 	LIST_INSERT_HEAD(ncpp, ncp, nc_hash);
 
 	if (vp) {
-	       /*
-		* add to the list of name cache entries
-		* that point at vp
-		*/
+		/*
+		 * add to the list of name cache entries
+		 * that point at vp
+		 */
 		LIST_INSERT_HEAD(&vp->v_nclinks, ncp, nc_un.nc_link);
 	} else {
-	        /*
+		/*
 		 * this is a negative cache entry (vp == NULL)
 		 * stick it on the negative cache list.
 		 */
-	        TAILQ_INSERT_TAIL(&neghead, ncp, nc_un.nc_negentry);
-	  
+		TAILQ_INSERT_TAIL(&neghead, ncp, nc_un.nc_negentry);
+
 		ncs_negtotal++;
 
 		if (ncs_negtotal > desiredNegNodes) {
-		       /*
-			* if we've reached our desired limit
-			* of negative cache entries, delete
-			* the oldest
-			*/
-		        negp = TAILQ_FIRST(&neghead);
+			/*
+			 * if we've reached our desired limit
+			 * of negative cache entries, delete
+			 * the oldest
+			 */
+			negp = TAILQ_FIRST(&neghead);
 			cache_delete(negp, 1);
 		}
 	}
@@ -2054,37 +2124,40 @@ cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cn
 	 * add us to the list of name cache entries that
 	 * are children of dvp
 	 */
-	if (vp)
+	if (vp) {
 		TAILQ_INSERT_TAIL(&dvp->v_ncchildren, ncp, nc_child);
-	else
+	} else {
 		TAILQ_INSERT_HEAD(&dvp->v_ncchildren, ncp, nc_child);
+	}
 }
 
 
 /*
  * Initialize CRC-32 remainder table.
  */
-static void init_crc32(void)
+static void
+init_crc32(void)
 {
-        /*
+	/*
 	 * the CRC-32 generator polynomial is:
 	 *   x^32 + x^26 + x^23 + x^22 + x^16 + x^12 + x^10
 	 *        + x^8  + x^7  + x^5  + x^4  + x^2  + x + 1
 	 */
-        unsigned int crc32_polynomial = 0x04c11db7;
-	unsigned int i,j;
+	unsigned int crc32_polynomial = 0x04c11db7;
+	unsigned int i, j;
 
 	/*
 	 * pre-calculate the CRC-32 remainder for each possible octet encoding
 	 */
-	for (i = 0;  i < 256;  i++) {
-	        unsigned int crc_rem = i << 24;
+	for (i = 0; i < 256; i++) {
+		unsigned int crc_rem = i << 24;
 
-		for (j = 0;  j < 8;  j++) {
-		        if (crc_rem & 0x80000000)
-			        crc_rem = (crc_rem << 1) ^ crc32_polynomial;
-			else
-			        crc_rem = (crc_rem << 1);
+		for (j = 0; j < 8; j++) {
+			if (crc_rem & 0x80000000) {
+				crc_rem = (crc_rem << 1) ^ crc32_polynomial;
+			} else {
+				crc_rem = (crc_rem << 1);
+			}
 		}
 		crc32tab[i] = crc_rem;
 	}
@@ -2097,7 +2170,7 @@ static void init_crc32(void)
 void
 nchinit(void)
 {
-	int	i;
+	int     i;
 
 	desiredNegNodes = (desiredvnodes / 10);
 	desiredNodes = desiredvnodes + desiredNegNodes;
@@ -2107,17 +2180,17 @@ nchinit(void)
 
 	init_crc32();
 
-	nchashtbl = hashinit(MAX(CONFIG_NC_HASH, (2 *desiredNodes)), M_CACHE, &nchash);
+	nchashtbl = hashinit(MAX(CONFIG_NC_HASH, (2 * desiredNodes)), M_CACHE, &nchash);
 	nchashmask = nchash;
 	nchash++;
 
 	init_string_table();
-	
-	/* Allocate name cache lock group attribute and group */
-	namecache_lck_grp_attr= lck_grp_attr_alloc_init();
 
-	namecache_lck_grp = lck_grp_alloc_init("Name Cache",  namecache_lck_grp_attr);
-	
+	/* Allocate name cache lock group attribute and group */
+	namecache_lck_grp_attr = lck_grp_attr_alloc_init();
+
+	namecache_lck_grp = lck_grp_alloc_init("Name Cache", namecache_lck_grp_attr);
+
 	/* Allocate name cache lock attribute */
 	namecache_lck_attr = lck_attr_alloc_init();
 
@@ -2126,18 +2199,19 @@ nchinit(void)
 
 
 	/* Allocate string cache lock group attribute and group */
-	strcache_lck_grp_attr= lck_grp_attr_alloc_init();
+	strcache_lck_grp_attr = lck_grp_attr_alloc_init();
 
-	strcache_lck_grp = lck_grp_alloc_init("String Cache",  strcache_lck_grp_attr);
-	
+	strcache_lck_grp = lck_grp_alloc_init("String Cache", strcache_lck_grp_attr);
+
 	/* Allocate string cache lock attribute */
 	strcache_lck_attr = lck_attr_alloc_init();
 
 	/* Allocate string cache lock */
 	strtable_rw_lock = lck_rw_alloc_init(strcache_lck_grp, strcache_lck_attr);
 
-	for (i = 0; i < NUM_STRCACHE_LOCKS; i++)
+	for (i = 0; i < NUM_STRCACHE_LOCKS; i++) {
 		lck_mtx_init(&strcache_mtx_locks[i], strcache_lck_grp, strcache_lck_attr);
+	}
 }
 
 void
@@ -2162,87 +2236,88 @@ name_cache_unlock(void)
 int
 resize_namecache(int newsize)
 {
-    struct nchashhead	*new_table;
-    struct nchashhead	*old_table;
-    struct nchashhead	*old_head, *head;
-    struct namecache 	*entry, *next;
-    uint32_t		i, hashval;
-    int			dNodes, dNegNodes, nelements;
-    u_long		new_size, old_size;
+	struct nchashhead   *new_table;
+	struct nchashhead   *old_table;
+	struct nchashhead   *old_head, *head;
+	struct namecache    *entry, *next;
+	uint32_t            i, hashval;
+	int                 dNodes, dNegNodes, nelements;
+	u_long              new_size, old_size;
 
-    if (newsize < 0)
-        return EINVAL;
-
-    dNegNodes = (newsize / 10);
-    dNodes = newsize + dNegNodes;
-    // we don't support shrinking yet
-    if (dNodes <= desiredNodes) {
-        return 0;
-    }
-
-    if (os_mul_overflow(dNodes, 2, &nelements)) {
-        return EINVAL;
-    }
-
-    new_table = hashinit(nelements, M_CACHE, &nchashmask);
-    new_size  = nchashmask + 1;
-
-    if (new_table == NULL) {
-        return ENOMEM;
-    }
-
-    NAME_CACHE_LOCK();
-    // do the switch!
-    old_table = nchashtbl;
-    nchashtbl = new_table;
-    old_size  = nchash;
-    nchash    = new_size;
-
-    // walk the old table and insert all the entries into
-    // the new table
-    //
-    for(i=0; i < old_size; i++) {
-	old_head = &old_table[i];
-	for (entry=old_head->lh_first; entry != NULL; entry=next) {
-	    //
-	    // XXXdbg - Beware: this assumes that hash_string() does
-	    //                  the same thing as what happens in
-	    //                  lookup() over in vfs_lookup.c
-	    hashval = hash_string(entry->nc_name, 0);
-	    entry->nc_hashval = hashval;
-	    head = NCHHASH(entry->nc_dvp, hashval);
-	    
-	    next = entry->nc_hash.le_next;
-	    LIST_INSERT_HEAD(head, entry, nc_hash);
+	if (newsize < 0) {
+		return EINVAL;
 	}
-    }
-    desiredNodes = dNodes;
-    desiredNegNodes = dNegNodes;
-    
-    NAME_CACHE_UNLOCK();
-    FREE(old_table, M_CACHE);
 
-    return 0;
+	dNegNodes = (newsize / 10);
+	dNodes = newsize + dNegNodes;
+	// we don't support shrinking yet
+	if (dNodes <= desiredNodes) {
+		return 0;
+	}
+
+	if (os_mul_overflow(dNodes, 2, &nelements)) {
+		return EINVAL;
+	}
+
+	new_table = hashinit(nelements, M_CACHE, &nchashmask);
+	new_size  = nchashmask + 1;
+
+	if (new_table == NULL) {
+		return ENOMEM;
+	}
+
+	NAME_CACHE_LOCK();
+	// do the switch!
+	old_table = nchashtbl;
+	nchashtbl = new_table;
+	old_size  = nchash;
+	nchash    = new_size;
+
+	// walk the old table and insert all the entries into
+	// the new table
+	//
+	for (i = 0; i < old_size; i++) {
+		old_head = &old_table[i];
+		for (entry = old_head->lh_first; entry != NULL; entry = next) {
+			//
+			// XXXdbg - Beware: this assumes that hash_string() does
+			//                  the same thing as what happens in
+			//                  lookup() over in vfs_lookup.c
+			hashval = hash_string(entry->nc_name, 0);
+			entry->nc_hashval = hashval;
+			head = NCHHASH(entry->nc_dvp, hashval);
+
+			next = entry->nc_hash.le_next;
+			LIST_INSERT_HEAD(head, entry, nc_hash);
+		}
+	}
+	desiredNodes = dNodes;
+	desiredNegNodes = dNegNodes;
+
+	NAME_CACHE_UNLOCK();
+	FREE(old_table, M_CACHE);
+
+	return 0;
 }
 
 static void
 cache_delete(struct namecache *ncp, int free_entry)
 {
-        NCHSTAT(ncs_deletes);
+	NCHSTAT(ncs_deletes);
 
-        if (ncp->nc_vp) {
-	        LIST_REMOVE(ncp, nc_un.nc_link);
+	if (ncp->nc_vp) {
+		LIST_REMOVE(ncp, nc_un.nc_link);
 	} else {
-	        TAILQ_REMOVE(&neghead, ncp, nc_un.nc_negentry);
-	        ncs_negtotal--;
+		TAILQ_REMOVE(&neghead, ncp, nc_un.nc_negentry);
+		ncs_negtotal--;
 	}
-        TAILQ_REMOVE(&(ncp->nc_dvp->v_ncchildren), ncp, nc_child);
+	TAILQ_REMOVE(&(ncp->nc_dvp->v_ncchildren), ncp, nc_child);
 
 	LIST_REMOVE(ncp, nc_hash);
 	/*
 	 * this field is used to indicate
 	 * that the entry is in use and
-	 * must be deleted before it can 
+	 * must be deleted before it can
 	 * be reused...
 	 */
 	ncp->nc_hash.le_prev = NULL;
@@ -2250,7 +2325,7 @@ cache_delete(struct namecache *ncp, int free_entry)
 	vfs_removename(ncp->nc_name);
 	ncp->nc_name = NULL;
 	if (free_entry) {
-	        TAILQ_REMOVE(&nchead, ncp, nc_entry);
+		TAILQ_REMOVE(&nchead, ncp, nc_entry);
 		FREE_ZONE(ncp, sizeof(*ncp), M_CACHE);
 		numcache--;
 	}
@@ -2258,31 +2333,35 @@ cache_delete(struct namecache *ncp, int free_entry)
 
 
 /*
- * purge the entry associated with the 
+ * purge the entry associated with the
  * specified vnode from the name cache
  */
 void
 cache_purge(vnode_t vp)
 {
-        struct namecache *ncp;
+	struct namecache *ncp;
 	kauth_cred_t tcred = NULL;
 
-	if ((LIST_FIRST(&vp->v_nclinks) == NULL) && 
-			(TAILQ_FIRST(&vp->v_ncchildren) == NULL) &&
-			(vp->v_cred == NOCRED) &&
-			(vp->v_parent == NULLVP))
-	        return;
+	if ((LIST_FIRST(&vp->v_nclinks) == NULL) &&
+	    (TAILQ_FIRST(&vp->v_ncchildren) == NULL) &&
+	    (vp->v_cred == NOCRED) &&
+	    (vp->v_parent == NULLVP)) {
+		return;
+	}
 
 	NAME_CACHE_LOCK();
 
-	if (vp->v_parent)
-	        vp->v_parent->v_nc_generation++;
+	if (vp->v_parent) {
+		vp->v_parent->v_nc_generation++;
+	}
 
-	while ( (ncp = LIST_FIRST(&vp->v_nclinks)) )
-	        cache_delete(ncp, 1);
+	while ((ncp = LIST_FIRST(&vp->v_nclinks))) {
+		cache_delete(ncp, 1);
+	}
 
-	while ( (ncp = TAILQ_FIRST(&vp->v_ncchildren)) )
-	        cache_delete(ncp, 1);
+	while ((ncp = TAILQ_FIRST(&vp->v_ncchildren))) {
+		cache_delete(ncp, 1);
+	}
 
 	/*
 	 * Use a temp variable to avoid kauth_cred_unref() while NAME_CACHE_LOCK is held
@@ -2293,8 +2372,9 @@ cache_purge(vnode_t vp)
 
 	NAME_CACHE_UNLOCK();
 
-	if (IS_VALID_CRED(tcred))
-	        kauth_cred_unref(&tcred);
+	if (IS_VALID_CRED(tcred)) {
+		kauth_cred_unref(&tcred);
+	}
 }
 
 /*
@@ -2312,8 +2392,9 @@ cache_purge_negatives(vnode_t vp)
 	NAME_CACHE_LOCK();
 
 	TAILQ_FOREACH_SAFE(ncp, &vp->v_ncchildren, nc_child, next_ncp) {
-		if (ncp->nc_vp)
+		if (ncp->nc_vp) {
 			break;
+		}
 
 		cache_delete(ncp, 1);
 	}
@@ -2336,7 +2417,7 @@ cache_purgevfs(struct mount *mp)
 	NAME_CACHE_LOCK();
 	/* Scan hash tables for applicable entries */
 	for (ncpp = &nchashtbl[nchash - 1]; ncpp >= nchashtbl; ncpp--) {
-restart:	  
+restart:
 		for (ncp = ncpp->lh_first; ncp != 0; ncp = ncp->nc_hash.le_next) {
 			if (ncp->nc_dvp->v_mount == mp) {
 				cache_delete(ncp, 0);
@@ -2352,15 +2433,15 @@ restart:
 //
 // String ref routines
 //
-static LIST_HEAD(stringhead, string_t) *string_ref_table;
+static LIST_HEAD(stringhead, string_t) * string_ref_table;
 static u_long   string_table_mask;
-static uint32_t filled_buckets=0;
+static uint32_t filled_buckets = 0;
 
 
 typedef struct string_t {
-    LIST_ENTRY(string_t)  hash_chain;
-    const char *str;
-    uint32_t              refcount;
+	LIST_ENTRY(string_t)  hash_chain;
+	const char *str;
+	uint32_t              refcount;
 } string_t;
 
 
@@ -2400,7 +2481,7 @@ resize_string_ref_table(void)
 	string_ref_table  = new_table;
 	old_mask          = string_table_mask;
 	string_table_mask = new_mask;
-	filled_buckets	  = 0;
+	filled_buckets    = 0;
 
 	// walk the old table and insert all the entries into
 	// the new table
@@ -2433,7 +2514,7 @@ init_string_table(void)
 const char *
 vfs_addname(const char *name, uint32_t len, u_int hashval, u_int flags)
 {
-	return (add_name_internal(name, len, hashval, FALSE, flags));
+	return add_name_internal(name, len, hashval, FALSE, flags);
 }
 
 
@@ -2443,19 +2524,20 @@ add_name_internal(const char *name, uint32_t len, u_int hashval, boolean_t need_
 	struct stringhead *head;
 	string_t          *entry;
 	uint32_t          chain_len = 0;
-	uint32_t	  hash_index;
-        uint32_t	  lock_index;
+	uint32_t          hash_index;
+	uint32_t          lock_index;
 	char              *ptr;
-    
-	if (len > MAXPATHLEN)
+
+	if (len > MAXPATHLEN) {
 		len = MAXPATHLEN;
+	}
 
 	/*
 	 * if the length already accounts for the null-byte, then
 	 * subtract one so later on we don't index past the end
 	 * of the string.
 	 */
-	if (len > 0 && name[len-1] == '\0') {
+	if (len > 0 && name[len - 1] == '\0') {
 		len--;
 	}
 	if (hashval == 0) {
@@ -2509,9 +2591,10 @@ add_name_internal(const char *name, uint32_t len, u_int hashval, boolean_t need_
 		entry->refcount = 1;
 		LIST_INSERT_HEAD(head, entry, hash_chain);
 	}
-	if (need_extra_ref == TRUE)
+	if (need_extra_ref == TRUE) {
 		entry->refcount++;
-    
+	}
+
 	lck_mtx_unlock(&strcache_mtx_locks[lock_index]);
 	lck_rw_done(strtable_rw_lock);
 
@@ -2525,9 +2608,9 @@ vfs_removename(const char *nameref)
 	struct stringhead *head;
 	string_t          *entry;
 	uint32_t           hashval;
-	uint32_t	   hash_index;
-        uint32_t	   lock_index;
-	int		   retval = ENOENT;
+	uint32_t           hash_index;
+	uint32_t           lock_index;
+	int                retval = ENOENT;
 
 	hashval = hash_string(nameref, 0);
 
@@ -2569,8 +2652,9 @@ vfs_removename(const char *nameref)
 	lck_mtx_unlock(&strcache_mtx_locks[lock_index]);
 	lck_rw_done(strtable_rw_lock);
 
-	if (entry != NULL)
+	if (entry != NULL) {
 		FREE(entry, M_TEMP);
+	}
 
 	return retval;
 }
@@ -2580,18 +2664,18 @@ vfs_removename(const char *nameref)
 void
 dump_string_table(void)
 {
-    struct stringhead *head;
-    string_t          *entry;
-    u_long            i;
-    
-    lck_rw_lock_shared(strtable_rw_lock);
+	struct stringhead *head;
+	string_t          *entry;
+	u_long            i;
 
-    for (i = 0; i <= string_table_mask; i++) {
-	head = &string_ref_table[i];
-	for (entry=head->lh_first; entry != NULL; entry=entry->hash_chain.le_next) {
-	    printf("%6d - %s\n", entry->refcount, entry->str);
+	lck_rw_lock_shared(strtable_rw_lock);
+
+	for (i = 0; i <= string_table_mask; i++) {
+		head = &string_ref_table[i];
+		for (entry = head->lh_first; entry != NULL; entry = entry->hash_chain.le_next) {
+			printf("%6d - %s\n", entry->refcount, entry->str);
+		}
 	}
-    }
-    lck_rw_done(strtable_rw_lock);
+	lck_rw_done(strtable_rw_lock);
 }
-#endif	/* DUMP_STRING_TABLE */
+#endif  /* DUMP_STRING_TABLE */

@@ -78,7 +78,7 @@ void flush_mmu_tlb(void);
 _Static_assert(KASAN_SHIFT == KASAN_SHIFT_ARM64, "KASan inconsistent shadow shift");
 _Static_assert(VM_MAX_KERNEL_ADDRESS < KASAN_SHADOW_MIN, "KASan shadow overlaps with kernel VM");
 _Static_assert((VM_MIN_KERNEL_ADDRESS >> 3) + KASAN_SHIFT_ARM64 >= KASAN_SHADOW_MIN, "KASan shadow does not cover kernel VM");
-_Static_assert((VM_MAX_KERNEL_ADDRESS >> 3) + KASAN_SHIFT_ARM64 < KASAN_SHADOW_MAX,  "KASan shadow does not cover kernel VM");
+_Static_assert((VM_MAX_KERNEL_ADDRESS >> 3) + KASAN_SHIFT_ARM64 < KASAN_SHADOW_MAX, "KASan shadow does not cover kernel VM");
 
 static uintptr_t
 alloc_page(void)
@@ -167,11 +167,11 @@ kasan_map_shadow_internal(vm_offset_t address, vm_size_t size, bool is_zero, boo
 				newpte = (uint64_t)alloc_zero_page() | ARM_PTE_AP(AP_RWNA);
 			}
 			newpte |= ARM_PTE_TYPE_VALID
-				| ARM_PTE_AF
-				| ARM_PTE_SH(SH_OUTER_MEMORY)
-				| ARM_PTE_ATTRINDX(CACHE_ATTRINDX_DEFAULT)
-				| ARM_PTE_NX
-				| ARM_PTE_PNX;
+			    | ARM_PTE_AF
+			    | ARM_PTE_SH(SH_OUTER_MEMORY)
+			    | ARM_PTE_ATTRINDX(CACHE_ATTRINDX_DEFAULT)
+			    | ARM_PTE_NX
+			    | ARM_PTE_PNX;
 			*pte = newpte;
 		}
 	}
@@ -233,7 +233,7 @@ kasan_map_shadow_early(vm_offset_t address, vm_size_t size, bool is_zero)
 		/* lookup L3 entry */
 		pte = base + ((virt_shadow_target & ARM_TT_L3_INDEX_MASK) >> ARM_TT_L3_SHIFT);
 
-		if ((*pte & (ARM_PTE_TYPE|ARM_PTE_APMASK)) == (ARM_PTE_TYPE_VALID|ARM_PTE_AP(AP_RWNA))) {
+		if ((*pte & (ARM_PTE_TYPE | ARM_PTE_APMASK)) == (ARM_PTE_TYPE_VALID | ARM_PTE_AP(AP_RWNA))) {
 			/* L3 entry valid and mapped RW - do nothing */
 		} else {
 			/* Not mapped, or mapped RO - create new L3 entry or upgrade to RW */
@@ -251,11 +251,11 @@ kasan_map_shadow_early(vm_offset_t address, vm_size_t size, bool is_zero)
 
 			/* add the default attributes */
 			newpte |= ARM_PTE_TYPE_VALID
-				| ARM_PTE_AF
-				| ARM_PTE_SH(SH_OUTER_MEMORY)
-				| ARM_PTE_ATTRINDX(CACHE_ATTRINDX_DEFAULT)
-				| ARM_PTE_NX
-				| ARM_PTE_PNX;
+			    | ARM_PTE_AF
+			    | ARM_PTE_SH(SH_OUTER_MEMORY)
+			    | ARM_PTE_ATTRINDX(CACHE_ATTRINDX_DEFAULT)
+			    | ARM_PTE_NX
+			    | ARM_PTE_PNX;
 
 			*pte = newpte;
 		}

@@ -22,7 +22,7 @@
  */
 
 #ifndef __CONTENT_FILTER_H__
-#define	__CONTENT_FILTER_H__
+#define __CONTENT_FILTER_H__
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -47,14 +47,14 @@ __BEGIN_DECLS
  * to be set in the sc_id field of sockaddr_ctl for connect(2)
  * Note: the sc_unit is ephemeral
  */
-#define	CONTENT_FILTER_CONTROL_NAME "com.apple.content-filter"
+#define CONTENT_FILTER_CONTROL_NAME "com.apple.content-filter"
 
 /*
  * Opaque socket identifier
  */
 typedef uint64_t cfil_sock_id_t;
 
-#define	CFIL_SOCK_ID_NONE UINT64_MAX
+#define CFIL_SOCK_ID_NONE UINT64_MAX
 
 
 /*
@@ -62,36 +62,36 @@ typedef uint64_t cfil_sock_id_t;
  * To set or get the NECP filter control unit for the kernel control socket
  * The option level is SYSPROTO_CONTROL
  */
-#define	CFIL_OPT_NECP_CONTROL_UNIT	1	/* uint32_t */
+#define CFIL_OPT_NECP_CONTROL_UNIT      1       /* uint32_t */
 
 /*
  * CFIL_OPT_GET_SOCKET_INFO
- * To get information about a given socket that is being filtered. 
+ * To get information about a given socket that is being filtered.
  */
-#define	CFIL_OPT_GET_SOCKET_INFO	2	/* uint32_t */
+#define CFIL_OPT_GET_SOCKET_INFO        2       /* uint32_t */
 
 /*
  * struct cfil_opt_sock_info
  *
- * Contains information about a socket that is being filtered. 
+ * Contains information about a socket that is being filtered.
  */
 struct cfil_opt_sock_info {
-	cfil_sock_id_t	cfs_sock_id;
-	int				cfs_sock_family;	/* e.g. PF_INET */
-	int				cfs_sock_type;		/* e.g. SOCK_STREAM */
-	int				cfs_sock_protocol;	/* e.g. IPPROTO_TCP */
-	union sockaddr_in_4_6	cfs_local;
-	union sockaddr_in_4_6	cfs_remote;
-	pid_t			cfs_pid;
-	pid_t			cfs_e_pid;
-	uuid_t			cfs_uuid;
-	uuid_t			cfs_e_uuid;
+	cfil_sock_id_t  cfs_sock_id;
+	int                             cfs_sock_family;        /* e.g. PF_INET */
+	int                             cfs_sock_type;          /* e.g. SOCK_STREAM */
+	int                             cfs_sock_protocol;      /* e.g. IPPROTO_TCP */
+	union sockaddr_in_4_6   cfs_local;
+	union sockaddr_in_4_6   cfs_remote;
+	pid_t                   cfs_pid;
+	pid_t                   cfs_e_pid;
+	uuid_t                  cfs_uuid;
+	uuid_t                  cfs_e_uuid;
 };
 
 /*
  * How many filter may be active simultaneously
  */
-#define	CFIL_MAX_FILTER_COUNT	2
+#define CFIL_MAX_FILTER_COUNT   2
 
 /*
  * Types of messages
@@ -101,25 +101,25 @@ struct cfil_opt_sock_info {
  * A message in entirely represented by a packet sent or received
  * on a Content Filter kernel control socket.
  */
-#define	CFM_TYPE_EVENT 1	/* message from kernel */
-#define	CFM_TYPE_ACTION 2	/* message to kernel */
+#define CFM_TYPE_EVENT 1        /* message from kernel */
+#define CFM_TYPE_ACTION 2       /* message to kernel */
 
 /*
  * Operations associated with events from kernel
  */
-#define	CFM_OP_SOCKET_ATTACHED 1	/* a socket has been attached */
-#define	CFM_OP_SOCKET_CLOSED 2		/* a socket is being closed */
-#define	CFM_OP_DATA_OUT 3		/* data being sent */
-#define	CFM_OP_DATA_IN 4		/* data being received */
-#define	CFM_OP_DISCONNECT_OUT 5		/* no more outgoing data */
-#define	CFM_OP_DISCONNECT_IN 6		/* no more incoming data */
+#define CFM_OP_SOCKET_ATTACHED 1        /* a socket has been attached */
+#define CFM_OP_SOCKET_CLOSED 2          /* a socket is being closed */
+#define CFM_OP_DATA_OUT 3               /* data being sent */
+#define CFM_OP_DATA_IN 4                /* data being received */
+#define CFM_OP_DISCONNECT_OUT 5         /* no more outgoing data */
+#define CFM_OP_DISCONNECT_IN 6          /* no more incoming data */
 
 /*
  * Operations associated with action from filter to kernel
  */
-#define	CFM_OP_DATA_UPDATE 16		/* update pass or peek offsets */
-#define	CFM_OP_DROP 17			/* shutdown socket, no more data */
-#define	CFM_OP_BLESS_CLIENT 18		/* mark a client flow as already filtered, passes a uuid */
+#define CFM_OP_DATA_UPDATE 16           /* update pass or peek offsets */
+#define CFM_OP_DROP 17                  /* shutdown socket, no more data */
+#define CFM_OP_BLESS_CLIENT 18          /* mark a client flow as already filtered, passes a uuid */
 
 /*
  * struct cfil_msg_hdr
@@ -127,14 +127,14 @@ struct cfil_opt_sock_info {
  * Header common to all messages
  */
 struct cfil_msg_hdr {
-	uint32_t	cfm_len;	/* total length */
-	uint32_t	cfm_version;
-	uint32_t	cfm_type;
-	uint32_t	cfm_op;
-	cfil_sock_id_t	cfm_sock_id;
+	uint32_t        cfm_len;        /* total length */
+	uint32_t        cfm_version;
+	uint32_t        cfm_type;
+	uint32_t        cfm_op;
+	cfil_sock_id_t  cfm_sock_id;
 };
 
-#define	CFM_VERSION_CURRENT 1
+#define CFM_VERSION_CURRENT 1
 
 /*
  * struct cfil_msg_sock_attached
@@ -149,15 +149,15 @@ struct cfil_msg_hdr {
  * Valid Op: CFM_OP_SOCKET_ATTACHED
  */
 struct cfil_msg_sock_attached {
-	struct cfil_msg_hdr	cfs_msghdr;
-	int			cfs_sock_family;	/* e.g. PF_INET */
-	int			cfs_sock_type;		/* e.g. SOCK_STREAM */
-	int			cfs_sock_protocol;	/* e.g. IPPROTO_TCP */
-	int			cfs_unused;		/* padding */
-	pid_t			cfs_pid;
-	pid_t			cfs_e_pid;
-	uuid_t			cfs_uuid;
-	uuid_t			cfs_e_uuid;
+	struct cfil_msg_hdr     cfs_msghdr;
+	int                     cfs_sock_family;        /* e.g. PF_INET */
+	int                     cfs_sock_type;          /* e.g. SOCK_STREAM */
+	int                     cfs_sock_protocol;      /* e.g. IPPROTO_TCP */
+	int                     cfs_unused;             /* padding */
+	pid_t                   cfs_pid;
+	pid_t                   cfs_e_pid;
+	uuid_t                  cfs_uuid;
+	uuid_t                  cfs_e_uuid;
 };
 
 /*
@@ -176,11 +176,11 @@ struct cfil_msg_sock_attached {
  * Valid Ops: CFM_OP_DATA_OUT, CFM_OP_DATA_IN
  */
 struct cfil_msg_data_event {
-	struct cfil_msg_hdr	cfd_msghdr;
-	union sockaddr_in_4_6	cfc_src;
-	union sockaddr_in_4_6	cfc_dst;
-	uint64_t		cfd_start_offset;
-	uint64_t		cfd_end_offset;
+	struct cfil_msg_hdr     cfd_msghdr;
+	union sockaddr_in_4_6   cfc_src;
+	union sockaddr_in_4_6   cfc_dst;
+	uint64_t                cfd_start_offset;
+	uint64_t                cfd_end_offset;
 	/* Actual content data immediatly follows */
 };
 
@@ -198,11 +198,11 @@ struct cfil_msg_data_event {
  * Valid Op: CFM_OP_SOCKET_CLOSED
  */
 struct cfil_msg_sock_closed {
-	struct cfil_msg_hdr	cfc_msghdr;
-	struct timeval64	cfc_first_event;
-	uint32_t		cfc_op_list_ctr;
-	uint32_t		cfc_op_time[CFI_MAX_TIME_LOG_ENTRY];	/* time interval in microseconds since first event */
-	unsigned char		cfc_op_list[CFI_MAX_TIME_LOG_ENTRY];
+	struct cfil_msg_hdr     cfc_msghdr;
+	struct timeval64        cfc_first_event;
+	uint32_t                cfc_op_list_ctr;
+	uint32_t                cfc_op_time[CFI_MAX_TIME_LOG_ENTRY];    /* time interval in microseconds since first event */
+	unsigned char           cfc_op_list[CFI_MAX_TIME_LOG_ENTRY];
 } __attribute__((aligned(8)));
 
 /*
@@ -223,11 +223,11 @@ struct cfil_msg_sock_closed {
  * if you don't value the corresponding peek offset to be updated.
  */
 struct cfil_msg_action {
-	struct cfil_msg_hdr	cfa_msghdr;
-	uint64_t		cfa_in_pass_offset;
-	uint64_t		cfa_in_peek_offset;
-	uint64_t		cfa_out_pass_offset;
-	uint64_t		cfa_out_peek_offset;
+	struct cfil_msg_hdr     cfa_msghdr;
+	uint64_t                cfa_in_pass_offset;
+	uint64_t                cfa_in_peek_offset;
+	uint64_t                cfa_out_pass_offset;
+	uint64_t                cfa_out_peek_offset;
 };
 
 /*
@@ -240,110 +240,110 @@ struct cfil_msg_action {
  * Valid Ops: CFM_OP_BLESS_CLIENT
  */
 struct cfil_msg_bless_client {
-	struct cfil_msg_hdr	cfb_msghdr;
+	struct cfil_msg_hdr     cfb_msghdr;
 	uuid_t cfb_client_uuid;
 };
 
-#define	CFM_MAX_OFFSET	UINT64_MAX
+#define CFM_MAX_OFFSET  UINT64_MAX
 
 /*
  * Statistics retrieved via sysctl(3)
  */
 struct cfil_filter_stat {
-	uint32_t	cfs_len;
-	uint32_t	cfs_filter_id;
-	uint32_t	cfs_flags;
-	uint32_t	cfs_sock_count;
-	uint32_t	cfs_necp_control_unit;
+	uint32_t        cfs_len;
+	uint32_t        cfs_filter_id;
+	uint32_t        cfs_flags;
+	uint32_t        cfs_sock_count;
+	uint32_t        cfs_necp_control_unit;
 };
 
 struct cfil_entry_stat {
-	uint32_t		ces_len;
-	uint32_t		ces_filter_id;
-	uint32_t		ces_flags;
-	uint32_t		ces_necp_control_unit;
-	struct timeval64	ces_last_event;
-	struct timeval64	ces_last_action;
+	uint32_t                ces_len;
+	uint32_t                ces_filter_id;
+	uint32_t                ces_flags;
+	uint32_t                ces_necp_control_unit;
+	struct timeval64        ces_last_event;
+	struct timeval64        ces_last_action;
 	struct cfe_buf_stat {
-		uint64_t	cbs_pending_first;
-		uint64_t	cbs_pending_last;
-		uint64_t	cbs_ctl_first;
-		uint64_t	cbs_ctl_last;
-		uint64_t	cbs_pass_offset;
-		uint64_t	cbs_peek_offset;
-		uint64_t	cbs_peeked;
+		uint64_t        cbs_pending_first;
+		uint64_t        cbs_pending_last;
+		uint64_t        cbs_ctl_first;
+		uint64_t        cbs_ctl_last;
+		uint64_t        cbs_pass_offset;
+		uint64_t        cbs_peek_offset;
+		uint64_t        cbs_peeked;
 	} ces_snd, ces_rcv;
 };
 
 struct cfil_sock_stat {
-	uint32_t	cfs_len;
-	int		cfs_sock_family;
-	int		cfs_sock_type;
-	int		cfs_sock_protocol;
-	cfil_sock_id_t	cfs_sock_id;
-	uint64_t	cfs_flags;
-	pid_t		cfs_pid;
-	pid_t		cfs_e_pid;
-	uuid_t		cfs_uuid;
-	uuid_t		cfs_e_uuid;
+	uint32_t        cfs_len;
+	int             cfs_sock_family;
+	int             cfs_sock_type;
+	int             cfs_sock_protocol;
+	cfil_sock_id_t  cfs_sock_id;
+	uint64_t        cfs_flags;
+	pid_t           cfs_pid;
+	pid_t           cfs_e_pid;
+	uuid_t          cfs_uuid;
+	uuid_t          cfs_e_uuid;
 	struct cfi_buf_stat {
-		uint64_t	cbs_pending_first;
-		uint64_t	cbs_pending_last;
-		uint64_t	cbs_pass_offset;
-		uint64_t	cbs_inject_q_len;
+		uint64_t        cbs_pending_first;
+		uint64_t        cbs_pending_last;
+		uint64_t        cbs_pass_offset;
+		uint64_t        cbs_inject_q_len;
 	} cfs_snd, cfs_rcv;
-	struct cfil_entry_stat	ces_entries[CFIL_MAX_FILTER_COUNT];
+	struct cfil_entry_stat  ces_entries[CFIL_MAX_FILTER_COUNT];
 };
 
 /*
  * Global statistics
  */
 struct cfil_stats {
-	int32_t	cfs_ctl_connect_ok;
-	int32_t	cfs_ctl_connect_fail;
-	int32_t	cfs_ctl_disconnect_ok;
-	int32_t	cfs_ctl_disconnect_fail;
-	int32_t	cfs_ctl_send_ok;
-	int32_t	cfs_ctl_send_bad;
-	int32_t	cfs_ctl_rcvd_ok;
-	int32_t	cfs_ctl_rcvd_bad;
-	int32_t	cfs_ctl_rcvd_flow_lift;
-	int32_t	cfs_ctl_action_data_update;
-	int32_t	cfs_ctl_action_drop;
-	int32_t	cfs_ctl_action_bad_op;
-	int32_t	cfs_ctl_action_bad_len;
+	int32_t cfs_ctl_connect_ok;
+	int32_t cfs_ctl_connect_fail;
+	int32_t cfs_ctl_disconnect_ok;
+	int32_t cfs_ctl_disconnect_fail;
+	int32_t cfs_ctl_send_ok;
+	int32_t cfs_ctl_send_bad;
+	int32_t cfs_ctl_rcvd_ok;
+	int32_t cfs_ctl_rcvd_bad;
+	int32_t cfs_ctl_rcvd_flow_lift;
+	int32_t cfs_ctl_action_data_update;
+	int32_t cfs_ctl_action_drop;
+	int32_t cfs_ctl_action_bad_op;
+	int32_t cfs_ctl_action_bad_len;
 
-	int32_t	cfs_sock_id_not_found;
+	int32_t cfs_sock_id_not_found;
 
-	int32_t	cfs_cfi_alloc_ok;
-	int32_t	cfs_cfi_alloc_fail;
+	int32_t cfs_cfi_alloc_ok;
+	int32_t cfs_cfi_alloc_fail;
 
-	int32_t	cfs_sock_userspace_only;
-	int32_t	cfs_sock_attach_in_vain;
-	int32_t	cfs_sock_attach_already;
-	int32_t	cfs_sock_attach_no_mem;
-	int32_t	cfs_sock_attach_failed;
-	int32_t	cfs_sock_attached;
-	int32_t	cfs_sock_detached;
+	int32_t cfs_sock_userspace_only;
+	int32_t cfs_sock_attach_in_vain;
+	int32_t cfs_sock_attach_already;
+	int32_t cfs_sock_attach_no_mem;
+	int32_t cfs_sock_attach_failed;
+	int32_t cfs_sock_attached;
+	int32_t cfs_sock_detached;
 
-	int32_t	cfs_attach_event_ok;
-	int32_t	cfs_attach_event_flow_control;
-	int32_t	cfs_attach_event_fail;
+	int32_t cfs_attach_event_ok;
+	int32_t cfs_attach_event_flow_control;
+	int32_t cfs_attach_event_fail;
 
-	int32_t	cfs_closed_event_ok;
-	int32_t	cfs_closed_event_flow_control;
-	int32_t	cfs_closed_event_fail;
+	int32_t cfs_closed_event_ok;
+	int32_t cfs_closed_event_flow_control;
+	int32_t cfs_closed_event_fail;
 
-	int32_t	cfs_data_event_ok;
-	int32_t	cfs_data_event_flow_control;
-	int32_t	cfs_data_event_fail;
+	int32_t cfs_data_event_ok;
+	int32_t cfs_data_event_flow_control;
+	int32_t cfs_data_event_fail;
 
-	int32_t	cfs_disconnect_in_event_ok;
-	int32_t	cfs_disconnect_out_event_ok;
-	int32_t	cfs_disconnect_event_flow_control;
-	int32_t	cfs_disconnect_event_fail;
+	int32_t cfs_disconnect_in_event_ok;
+	int32_t cfs_disconnect_out_event_ok;
+	int32_t cfs_disconnect_event_flow_control;
+	int32_t cfs_disconnect_event_fail;
 
-	int32_t	cfs_ctl_q_not_started;
+	int32_t cfs_ctl_q_not_started;
 
 	int32_t cfs_close_wait;
 	int32_t cfs_close_wait_timeout;
@@ -355,47 +355,46 @@ struct cfil_stats {
 	int32_t cfs_flush_in_free;
 	int32_t cfs_flush_out_free;
 
-	int32_t	cfs_inject_q_nomem;
-	int32_t	cfs_inject_q_nobufs;
-	int32_t	cfs_inject_q_detached;
-	int32_t	cfs_inject_q_in_fail;
-	int32_t	cfs_inject_q_out_fail;
+	int32_t cfs_inject_q_nomem;
+	int32_t cfs_inject_q_nobufs;
+	int32_t cfs_inject_q_detached;
+	int32_t cfs_inject_q_in_fail;
+	int32_t cfs_inject_q_out_fail;
 
-	int32_t	cfs_inject_q_in_retry;
-	int32_t	cfs_inject_q_out_retry;
+	int32_t cfs_inject_q_in_retry;
+	int32_t cfs_inject_q_out_retry;
 
 	int32_t cfs_data_in_control;
 	int32_t cfs_data_in_oob;
 	int32_t cfs_data_out_control;
 	int32_t cfs_data_out_oob;
 
-	int64_t	cfs_ctl_q_in_enqueued __attribute__((aligned(8)));
-	int64_t	cfs_ctl_q_out_enqueued __attribute__((aligned(8)));
-	int64_t	cfs_ctl_q_in_peeked __attribute__((aligned(8)));
-	int64_t	cfs_ctl_q_out_peeked __attribute__((aligned(8)));
+	int64_t cfs_ctl_q_in_enqueued __attribute__((aligned(8)));
+	int64_t cfs_ctl_q_out_enqueued __attribute__((aligned(8)));
+	int64_t cfs_ctl_q_in_peeked __attribute__((aligned(8)));
+	int64_t cfs_ctl_q_out_peeked __attribute__((aligned(8)));
 
-	int64_t	cfs_pending_q_in_enqueued __attribute__((aligned(8)));
-	int64_t	cfs_pending_q_out_enqueued __attribute__((aligned(8)));
+	int64_t cfs_pending_q_in_enqueued __attribute__((aligned(8)));
+	int64_t cfs_pending_q_out_enqueued __attribute__((aligned(8)));
 
-	int64_t	cfs_inject_q_in_enqueued __attribute__((aligned(8)));
-	int64_t	cfs_inject_q_out_enqueued __attribute__((aligned(8)));
-	int64_t	cfs_inject_q_in_passed __attribute__((aligned(8)));
-	int64_t	cfs_inject_q_out_passed __attribute__((aligned(8)));
-
+	int64_t cfs_inject_q_in_enqueued __attribute__((aligned(8)));
+	int64_t cfs_inject_q_out_enqueued __attribute__((aligned(8)));
+	int64_t cfs_inject_q_in_passed __attribute__((aligned(8)));
+	int64_t cfs_inject_q_out_passed __attribute__((aligned(8)));
 };
 #endif /* PRIVATE */
 
 #ifdef BSD_KERNEL_PRIVATE
 
-#define	M_SKIPCFIL	M_PROTO5
+#define M_SKIPCFIL      M_PROTO5
 
 extern int cfil_log_level;
 
-#define	CFIL_LOG(level, fmt, ...) \
+#define CFIL_LOG(level, fmt, ...) \
 do { \
 	if (cfil_log_level >= level) \
-		printf("%s:%d " fmt "\n",\
-			__FUNCTION__, __LINE__, ##__VA_ARGS__); \
+	        printf("%s:%d " fmt "\n",\
+	                __FUNCTION__, __LINE__, ##__VA_ARGS__); \
 } while (0)
 
 
@@ -405,11 +404,11 @@ extern errno_t cfil_sock_attach(struct socket *so);
 extern errno_t cfil_sock_detach(struct socket *so);
 
 extern int cfil_sock_data_out(struct socket *so, struct sockaddr  *to,
-			struct mbuf *data, struct mbuf *control,
-			uint32_t flags);
+    struct mbuf *data, struct mbuf *control,
+    uint32_t flags);
 extern int cfil_sock_data_in(struct socket *so, struct sockaddr *from,
-			struct mbuf *data, struct mbuf *control,
-			uint32_t flags);
+    struct mbuf *data, struct mbuf *control,
+    uint32_t flags);
 
 extern int cfil_sock_shutdown(struct socket *so, int *how);
 extern void cfil_sock_is_closed(struct socket *so);
@@ -423,7 +422,7 @@ extern void cfil_sock_buf_update(struct sockbuf *sb);
 extern cfil_sock_id_t cfil_sock_id_from_socket(struct socket *so);
 
 extern struct m_tag *cfil_udp_get_socket_state(struct mbuf *m, uint32_t *state_change_cnt,
-											   short *options, struct sockaddr **faddr);
+    short *options, struct sockaddr **faddr);
 #endif /* BSD_KERNEL_PRIVATE */
 
 __END_DECLS

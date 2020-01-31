@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,10 +22,10 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#ifdef	MACH_BSD
+#ifdef  MACH_BSD
 #include <mach_debug.h>
 #include <mach_ldebug.h>
 
@@ -69,7 +69,7 @@
 #include <../bsd/sys/sysent.h>
 
 #ifdef MACH_BSD
-extern void	mach_kauth_cred_uthread_update(void);
+extern void     mach_kauth_cred_uthread_update(void);
 extern void throttle_lowpri_io(int);
 #endif
 
@@ -89,60 +89,67 @@ unsigned int get_msr_rbits(void);
  */
 kern_return_t
 thread_userstack(
-    __unused thread_t   thread,
-    int                 flavor,
-    thread_state_t      tstate,
-    __unused unsigned int        count,
-    mach_vm_offset_t    *user_stack,
-    int                 *customstack,
-    __unused boolean_t  is64bit
-)
+	__unused thread_t   thread,
+	int                 flavor,
+	thread_state_t      tstate,
+	__unused unsigned int        count,
+	mach_vm_offset_t    *user_stack,
+	int                 *customstack,
+	__unused boolean_t  is64bit
+	)
 {
-	if (customstack)
+	if (customstack) {
 		*customstack = 0;
+	}
 
 	switch (flavor) {
 	case x86_THREAD_STATE32:
-		{
-			x86_thread_state32_t *state25;
+	{
+		x86_thread_state32_t *state25;
 
-			state25 = (x86_thread_state32_t *) tstate;
+		state25 = (x86_thread_state32_t *) tstate;
 
-			if (state25->esp) {
-				*user_stack = state25->esp;
-				if (customstack)
-					*customstack = 1;
-			} else {
-				*user_stack = VM_USRSTACK32;
-				if (customstack)
-					*customstack = 0;
+		if (state25->esp) {
+			*user_stack = state25->esp;
+			if (customstack) {
+				*customstack = 1;
 			}
-			break;
-		}
-
-	case x86_THREAD_STATE64:
-		{
-			x86_thread_state64_t *state25;
-
-			state25 = (x86_thread_state64_t *) tstate;
-
-			if (state25->rsp) {
-				*user_stack = state25->rsp;
-				if (customstack)
-					*customstack = 1;
-			} else {
-				*user_stack = VM_USRSTACK64;
-				if (customstack)
-					*customstack = 0;
+		} else {
+			*user_stack = VM_USRSTACK32;
+			if (customstack) {
+				*customstack = 0;
 			}
-			break;
 		}
-
-	default:
-		return (KERN_INVALID_ARGUMENT);
+		break;
 	}
 
-	return (KERN_SUCCESS);
+	case x86_THREAD_FULL_STATE64:
+	/* FALL THROUGH */
+	case x86_THREAD_STATE64:
+	{
+		x86_thread_state64_t *state25;
+
+		state25 = (x86_thread_state64_t *) tstate;
+
+		if (state25->rsp) {
+			*user_stack = state25->rsp;
+			if (customstack) {
+				*customstack = 1;
+			}
+		} else {
+			*user_stack = VM_USRSTACK64;
+			if (customstack) {
+				*customstack = 0;
+			}
+		}
+		break;
+	}
+
+	default:
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	return KERN_SUCCESS;
 }
 
 /*
@@ -161,47 +168,48 @@ thread_userstackdefault(
 	} else {
 		*default_user_stack = VM_USRSTACK32;
 	}
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
 thread_entrypoint(
-    __unused thread_t   thread,
-    int                 flavor,
-    thread_state_t      tstate,
-    __unused unsigned int        count,
-    mach_vm_offset_t    *entry_point
-)
-{ 
+	__unused thread_t   thread,
+	int                 flavor,
+	thread_state_t      tstate,
+	__unused unsigned int        count,
+	mach_vm_offset_t    *entry_point
+	)
+{
 	/*
 	 * Set a default.
 	 */
-	if (*entry_point == 0)
+	if (*entry_point == 0) {
 		*entry_point = VM_MIN_ADDRESS;
+	}
 
 	switch (flavor) {
 	case x86_THREAD_STATE32:
-		{
-			x86_thread_state32_t *state25;
+	{
+		x86_thread_state32_t *state25;
 
-			state25 = (i386_thread_state_t *) tstate;
-			*entry_point = state25->eip ? state25->eip: VM_MIN_ADDRESS;
-			break;
-		}
+		state25 = (i386_thread_state_t *) tstate;
+		*entry_point = state25->eip ? state25->eip : VM_MIN_ADDRESS;
+		break;
+	}
 
 	case x86_THREAD_STATE64:
-		{
-			x86_thread_state64_t *state25;
+	{
+		x86_thread_state64_t *state25;
 
-			state25 = (x86_thread_state64_t *) tstate;
-			*entry_point = state25->rip ? state25->rip: VM_MIN_ADDRESS64;
-			break;
-		}
+		state25 = (x86_thread_state64_t *) tstate;
+		*entry_point = state25->rip ? state25->rip : VM_MIN_ADDRESS64;
+		break;
 	}
-	return (KERN_SUCCESS);
+	}
+	return KERN_SUCCESS;
 }
 
-/* 
+/*
  * FIXME - thread_set_child
  */
 
@@ -212,7 +220,7 @@ thread_set_child(thread_t child, int pid)
 	pal_register_cache_state(child, DIRTY);
 
 	if (thread_is_64bit_addr(child)) {
-		x86_saved_state64_t	*iss64;
+		x86_saved_state64_t     *iss64;
 
 		iss64 = USER_REGS64(child);
 
@@ -220,7 +228,7 @@ thread_set_child(thread_t child, int pid)
 		iss64->rdx = 1;
 		iss64->isf.rflags &= ~EFL_CF;
 	} else {
-		x86_saved_state32_t	*iss32;
+		x86_saved_state32_t     *iss32;
 
 		iss32 = USER_REGS32(child);
 
@@ -242,15 +250,15 @@ __attribute__((noreturn))
 void
 machdep_syscall(x86_saved_state_t *state)
 {
-	int			args[machdep_call_count];
-	int			trapno;
-	int			nargs;
-	const machdep_call_t	*entry;
-	x86_saved_state32_t	*regs;
+	int                     args[machdep_call_count];
+	int                     trapno;
+	int                     nargs;
+	const machdep_call_t    *entry;
+	x86_saved_state32_t     *regs;
 
 	assert(is_saved_state32(state));
 	regs = saved_state32(state);
-    
+
 	trapno = regs->eax;
 #if DEBUG_TRACE
 	kprintf("machdep_syscall(0x%08x) code=%d\n", regs, trapno);
@@ -269,8 +277,8 @@ machdep_syscall(x86_saved_state_t *state)
 	nargs = entry->nargs;
 
 	if (nargs != 0) {
-		if (copyin((user_addr_t) regs->uesp + sizeof (int),
-				(char *) args, (nargs * sizeof (int)))) {
+		if (copyin((user_addr_t) regs->uesp + sizeof(int),
+		    (char *) args, (nargs * sizeof(int)))) {
 			regs->eax = KERN_INVALID_ADDRESS;
 
 			thread_exception_return();
@@ -285,19 +293,19 @@ machdep_syscall(x86_saved_state_t *state)
 		regs->eax = (*entry->routine.args_1)(args[0]);
 		break;
 	case 2:
-		regs->eax = (*entry->routine.args_2)(args[0],args[1]);
+		regs->eax = (*entry->routine.args_2)(args[0], args[1]);
 		break;
 	case 3:
-		if (!entry->bsd_style)
-			regs->eax = (*entry->routine.args_3)(args[0],args[1],args[2]);
-		else {
-			int	error;
-			uint32_t	rval;
+		if (!entry->bsd_style) {
+			regs->eax = (*entry->routine.args_3)(args[0], args[1], args[2]);
+		} else {
+			int     error;
+			uint32_t        rval;
 
 			error = (*entry->routine.args_bsd_3)(&rval, args[0], args[1], args[2]);
 			if (error) {
 				regs->eax = error;
-				regs->efl |= EFL_CF;	/* carry bit */
+				regs->efl |= EFL_CF;    /* carry bit */
 			} else {
 				regs->eax = rval;
 				regs->efl &= ~EFL_CF;
@@ -330,13 +338,13 @@ __attribute__((noreturn))
 void
 machdep_syscall64(x86_saved_state_t *state)
 {
-	int			trapno;
-	const machdep_call_t	*entry;
-	x86_saved_state64_t	*regs;
+	int                     trapno;
+	const machdep_call_t    *entry;
+	x86_saved_state64_t     *regs;
 
 	assert(is_saved_state64(state));
 	regs = saved_state64(state);
-    
+
 	trapno = (int)(regs->rax & SYSCALL_NUMBER_MASK);
 
 	DEBUG_KPRINT_SYSCALL_MDEP(
@@ -360,6 +368,23 @@ machdep_syscall64(x86_saved_state_t *state)
 	case 2:
 		regs->rax = (*entry->routine.args64_2)(regs->rdi, regs->rsi);
 		break;
+	case 3:
+		if (!entry->bsd_style) {
+			regs->rax = (*entry->routine.args64_3)(regs->rdi, regs->rsi, regs->rdx);
+		} else {
+			int             error;
+			uint32_t        rval;
+
+			error = (*entry->routine.args64_bsd_3)(&rval, regs->rdi, regs->rsi, regs->rdx);
+			if (error) {
+				regs->rax = (uint64_t)error;
+				regs->isf.rflags |= EFL_CF;    /* carry bit */
+			} else {
+				regs->rax = rval;
+				regs->isf.rflags &= ~(uint64_t)EFL_CF;
+			}
+		}
+		break;
 	default:
 		panic("machdep_syscall64: too many args");
 	}
@@ -378,7 +403,7 @@ machdep_syscall64(x86_saved_state_t *state)
 	/* NOTREACHED */
 }
 
-#endif	/* MACH_BSD */
+#endif  /* MACH_BSD */
 
 
 typedef kern_return_t (*mach_call_t)(void *);
@@ -402,8 +427,9 @@ mach_call_arg_munger32(uint32_t sp, struct mach_call_args *args, const mach_trap
 static kern_return_t
 mach_call_arg_munger32(uint32_t sp, struct mach_call_args *args, const mach_trap_t *trapp)
 {
-	if (copyin((user_addr_t)(sp + sizeof(int)), (char *)args, trapp->mach_trap_u32_words * sizeof (int)))
+	if (copyin((user_addr_t)(sp + sizeof(int)), (char *)args, trapp->mach_trap_u32_words * sizeof(int))) {
 		return KERN_INVALID_ARGUMENT;
+	}
 #if CONFIG_REQUIRES_U32_MUNGING
 	trapp->mach_trap_arg_munge32(args);
 #else
@@ -426,7 +452,7 @@ mach_call_munger(x86_saved_state_t *state)
 	mach_call_t mach_call;
 	kern_return_t retval;
 	struct mach_call_args args = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-	x86_saved_state32_t	*regs;
+	x86_saved_state32_t     *regs;
 
 	struct uthread *ut = get_bsdthread_info(current_thread());
 	uthread_reset_proc_refcount(ut);
@@ -458,7 +484,7 @@ mach_call_munger(x86_saved_state_t *state)
 
 	argc = mach_trap_table[call_number].mach_trap_arg_count;
 	if (argc) {
-		retval = mach_call_arg_munger32(regs->uesp, &args,  &mach_trap_table[call_number]);
+		retval = mach_call_arg_munger32(regs->uesp, &args, &mach_trap_table[call_number]);
 		if (retval != KERN_SUCCESS) {
 			regs->eax = retval;
 
@@ -475,16 +501,16 @@ mach_call_munger(x86_saved_state_t *state)
 #endif
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_START,
-		args.arg1, args.arg2, args.arg3, args.arg4, 0);
+	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_START,
+	    args.arg1, args.arg2, args.arg3, args.arg4, 0);
 
 	retval = mach_call(&args);
 
 	DEBUG_KPRINT_SYSCALL_MACH("mach_call_munger: retval=0x%x\n", retval);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		MACHDBG_CODE(DBG_MACH_EXCP_SC,(call_number)) | DBG_FUNC_END,
-		retval, 0, 0, 0, 0);
+	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_END,
+	    retval, 0, 0, 0, 0);
 
 	regs->eax = retval;
 
@@ -517,7 +543,7 @@ mach_call_munger64(x86_saved_state_t *state)
 	int argc;
 	mach_call_t mach_call;
 	struct mach_call_args args = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-	x86_saved_state64_t	*regs;
+	x86_saved_state64_t     *regs;
 
 	struct uthread *ut = get_bsdthread_info(current_thread());
 	uthread_reset_proc_refcount(ut);
@@ -531,18 +557,18 @@ mach_call_munger64(x86_saved_state_t *state)
 		"mach_call_munger64: code=%d(%s)\n",
 		call_number, mach_syscall_name_table[call_number]);
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-		MACHDBG_CODE(DBG_MACH_EXCP_SC,(call_number)) | DBG_FUNC_START,
-		regs->rdi, regs->rsi, regs->rdx, regs->r10, 0);
-	
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_START,
+	    regs->rdi, regs->rsi, regs->rdx, regs->r10, 0);
+
 	if (call_number < 0 || call_number >= mach_trap_count) {
-	        i386_exception(EXC_SYSCALL, regs->rax, 1);
+		i386_exception(EXC_SYSCALL, regs->rax, 1);
 		/* NOTREACHED */
 	}
 	mach_call = (mach_call_t)mach_trap_table[call_number].mach_trap_function;
 
 	if (mach_call == (mach_call_t)kern_invalid) {
-	        i386_exception(EXC_SYSCALL, regs->rax, 1);
+		i386_exception(EXC_SYSCALL, regs->rax, 1);
 		/* NOTREACHED */
 	}
 	argc = mach_trap_table[call_number].mach_trap_arg_count;
@@ -552,14 +578,14 @@ mach_call_munger64(x86_saved_state_t *state)
 		memcpy(&args.arg1, &regs->rdi, args_in_regs * sizeof(syscall_arg_t));
 
 		if (argc > 6) {
-	        int copyin_count;
+			int copyin_count;
 
 			assert(argc <= 9);
 			copyin_count = (argc - 6) * (int)sizeof(syscall_arg_t);
 
-	        if (copyin((user_addr_t)(regs->isf.rsp + sizeof(user_addr_t)), (char *)&args.arg7, copyin_count)) {
-		        regs->rax = KERN_INVALID_ARGUMENT;
-			
+			if (copyin((user_addr_t)(regs->isf.rsp + sizeof(user_addr_t)), (char *)&args.arg7, copyin_count)) {
+				regs->rax = KERN_INVALID_ARGUMENT;
+
 				thread_exception_return();
 				/* NOTREACHED */
 			}
@@ -571,12 +597,12 @@ mach_call_munger64(x86_saved_state_t *state)
 #endif
 
 	regs->rax = (uint64_t)mach_call((void *)&args);
-	
+
 	DEBUG_KPRINT_SYSCALL_MACH( "mach_call_munger64: retval=0x%llx\n", regs->rax);
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-		MACHDBG_CODE(DBG_MACH_EXCP_SC,(call_number)) | DBG_FUNC_END, 
-		regs->rax, 0, 0, 0, 0);
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_END,
+	    regs->rax, 0, 0, 0, 0);
 
 #if DEBUG || DEVELOPMENT
 	kern_allocation_name_t
@@ -605,18 +631,18 @@ mach_call_munger64(x86_saved_state_t *state)
  */
 void
 thread_setuserstack(
-	thread_t	thread,
-	mach_vm_address_t	user_stack)
+	thread_t        thread,
+	mach_vm_address_t       user_stack)
 {
 	pal_register_cache_state(thread, DIRTY);
 	if (thread_is_64bit_addr(thread)) {
-		x86_saved_state64_t	*iss64;
+		x86_saved_state64_t     *iss64;
 
 		iss64 = USER_REGS64(thread);
 
 		iss64->isf.rsp = (uint64_t)user_stack;
 	} else {
-		x86_saved_state32_t	*iss32;
+		x86_saved_state32_t     *iss32;
 
 		iss32 = USER_REGS32(thread);
 
@@ -632,12 +658,12 @@ thread_setuserstack(
  */
 uint64_t
 thread_adjuserstack(
-	thread_t	thread,
-	int		adjust)
+	thread_t        thread,
+	int             adjust)
 {
 	pal_register_cache_state(thread, DIRTY);
 	if (thread_is_64bit_addr(thread)) {
-		x86_saved_state64_t	*iss64;
+		x86_saved_state64_t     *iss64;
 
 		iss64 = USER_REGS64(thread);
 
@@ -645,7 +671,7 @@ thread_adjuserstack(
 
 		return iss64->isf.rsp;
 	} else {
-		x86_saved_state32_t	*iss32;
+		x86_saved_state32_t     *iss32;
 
 		iss32 = USER_REGS32(thread);
 
@@ -666,13 +692,13 @@ thread_setentrypoint(thread_t thread, mach_vm_address_t entry)
 {
 	pal_register_cache_state(thread, DIRTY);
 	if (thread_is_64bit_addr(thread)) {
-		x86_saved_state64_t	*iss64;
+		x86_saved_state64_t     *iss64;
 
 		iss64 = USER_REGS64(thread);
 
 		iss64->isf.rip = (uint64_t)entry;
 	} else {
-		x86_saved_state32_t	*iss32;
+		x86_saved_state32_t     *iss32;
 
 		iss32 = USER_REGS32(thread);
 
@@ -686,37 +712,39 @@ thread_setsinglestep(thread_t thread, int on)
 {
 	pal_register_cache_state(thread, DIRTY);
 	if (thread_is_64bit_addr(thread)) {
-		x86_saved_state64_t	*iss64;
+		x86_saved_state64_t     *iss64;
 
 		iss64 = USER_REGS64(thread);
 
-		if (on)
+		if (on) {
 			iss64->isf.rflags |= EFL_TF;
-		else
+		} else {
 			iss64->isf.rflags &= ~EFL_TF;
+		}
 	} else {
-		x86_saved_state32_t	*iss32;
+		x86_saved_state32_t     *iss32;
 
 		iss32 = USER_REGS32(thread);
 
 		if (on) {
 			iss32->efl |= EFL_TF;
 			/* Ensure IRET */
-			if (iss32->cs == SYSENTER_CS)
+			if (iss32->cs == SYSENTER_CS) {
 				iss32->cs = SYSENTER_TF_CS;
-		}
-		else
+			}
+		} else {
 			iss32->efl &= ~EFL_TF;
+		}
 	}
-	
-	return (KERN_SUCCESS);
+
+	return KERN_SUCCESS;
 }
 
 void *
 get_user_regs(thread_t th)
 {
 	pal_register_cache_state(th, DIRTY);
-	return(USER_STATE(th));
+	return USER_STATE(th);
 }
 
 void *
@@ -734,11 +762,10 @@ x86_saved_state_t *find_kern_regs(thread_t);
 x86_saved_state_t *
 find_kern_regs(thread_t thread)
 {
-	if (thread == current_thread() && 
-		NULL != current_cpu_datap()->cpu_int_state &&
-		!(USER_STATE(thread) == current_cpu_datap()->cpu_int_state &&
-		  current_cpu_datap()->cpu_interrupt_level == 1)) {
-
+	if (thread == current_thread() &&
+	    NULL != current_cpu_datap()->cpu_int_state &&
+	    !(USER_STATE(thread) == current_cpu_datap()->cpu_int_state &&
+	    current_cpu_datap()->cpu_interrupt_level == 1)) {
 		return current_cpu_datap()->cpu_int_state;
 	} else {
 		return NULL;

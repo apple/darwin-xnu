@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -106,29 +106,31 @@
 #if !MACH_IPC_DEBUG
 kern_return_t
 mach_port_get_srights(
-	__unused ipc_space_t		space,
-	__unused mach_port_name_t	name,
-	__unused mach_port_rights_t	*srightsp)
+	__unused ipc_space_t            space,
+	__unused mach_port_name_t       name,
+	__unused mach_port_rights_t     *srightsp)
 {
-        return KERN_FAILURE;
+	return KERN_FAILURE;
 }
 #else
 kern_return_t
 mach_port_get_srights(
-	ipc_space_t		space,
-	mach_port_name_t	name,
-	mach_port_rights_t	*srightsp)
+	ipc_space_t             space,
+	mach_port_name_t        name,
+	mach_port_rights_t      *srightsp)
 {
 	ipc_port_t port;
 	kern_return_t kr;
 	mach_port_rights_t srights;
 
-	if (space == IS_NULL)
+	if (space == IS_NULL) {
 		return KERN_INVALID_TASK;
+	}
 
 	kr = ipc_port_translate_receive(space, name, &port);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		return kr;
+	}
 	/* port is locked and active */
 
 	srights = port->ip_srights;
@@ -156,23 +158,23 @@ mach_port_get_srights(
 #if !MACH_IPC_DEBUG
 kern_return_t
 mach_port_space_info(
-	__unused ipc_space_t			space,
-	__unused ipc_info_space_t		*infop,
-	__unused ipc_info_name_array_t	*tablep,
-	__unused mach_msg_type_number_t 	*tableCntp,
+	__unused ipc_space_t                    space,
+	__unused ipc_info_space_t               *infop,
+	__unused ipc_info_name_array_t  *tablep,
+	__unused mach_msg_type_number_t         *tableCntp,
 	__unused ipc_info_tree_name_array_t *treep,
-	__unused mach_msg_type_number_t 	*treeCntp)
+	__unused mach_msg_type_number_t         *treeCntp)
 {
-        return KERN_FAILURE;
+	return KERN_FAILURE;
 }
 #else
 kern_return_t
 mach_port_space_info(
-	ipc_space_t			space,
-	ipc_info_space_t		*infop,
-	ipc_info_name_array_t		*tablep,
-	mach_msg_type_number_t 		*tableCntp,
-	__unused ipc_info_tree_name_array_t	*treep,
+	ipc_space_t                     space,
+	ipc_info_space_t                *infop,
+	ipc_info_name_array_t           *tablep,
+	mach_msg_type_number_t          *tableCntp,
+	__unused ipc_info_tree_name_array_t     *treep,
 	__unused mach_msg_type_number_t         *treeCntp)
 {
 	ipc_info_name_t *table_info;
@@ -185,8 +187,9 @@ mach_port_space_info(
 	vm_map_copy_t copy;
 
 
-	if (space == IS_NULL)
+	if (space == IS_NULL) {
 		return KERN_INVALID_TASK;
+	}
 
 #if !(DEVELOPMENT || DEBUG) && CONFIG_MACF
 	const boolean_t dbg_ok = (mac_task_check_expose_task(kernel_task) == 0);
@@ -202,32 +205,34 @@ mach_port_space_info(
 		is_read_lock(space);
 		if (!is_active(space)) {
 			is_read_unlock(space);
-			if (table_size != 0)
+			if (table_size != 0) {
 				kmem_free(ipc_kernel_map,
-					  table_addr, table_size);
+				    table_addr, table_size);
+			}
 			return KERN_INVALID_TASK;
 		}
 
 		table_size_needed =
-			vm_map_round_page((space->is_table_size
-					   * sizeof(ipc_info_name_t)),
-					  VM_MAP_PAGE_MASK(ipc_kernel_map));
+		    vm_map_round_page((space->is_table_size
+		    * sizeof(ipc_info_name_t)),
+		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
-		if (table_size_needed == table_size)
+		if (table_size_needed == table_size) {
 			break;
+		}
 
 		is_read_unlock(space);
 
 		if (table_size != table_size_needed) {
-			if (table_size != 0)
+			if (table_size != 0) {
 				kmem_free(ipc_kernel_map, table_addr, table_size);
-			kr = kmem_alloc(ipc_kernel_map,	&table_addr, table_size_needed, VM_KERN_MEMORY_IPC);
+			}
+			kr = kmem_alloc(ipc_kernel_map, &table_addr, table_size_needed, VM_KERN_MEMORY_IPC);
 			if (kr != KERN_SUCCESS) {
 				return KERN_RESOURCE_SHORTAGE;
 			}
 			table_size = table_size_needed;
 		}
-
 	}
 	/* space is read-locked and active; we have enough wired memory */
 
@@ -272,20 +277,21 @@ mach_port_space_info(
 		vm_size_t used_table_size;
 
 		used_table_size = infop->iis_table_size * sizeof(ipc_info_name_t);
-		if (table_size > used_table_size)
+		if (table_size > used_table_size) {
 			bzero((char *)&table_info[infop->iis_table_size],
-			      table_size - used_table_size);
+			    table_size - used_table_size);
+		}
 
 		kr = vm_map_unwire(
 			ipc_kernel_map,
 			vm_map_trunc_page(table_addr,
-					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			vm_map_round_page(table_addr + table_size,
-					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			FALSE);
 		assert(kr == KERN_SUCCESS);
-		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)table_addr, 
-				   (vm_map_size_t)used_table_size, TRUE, &copy);
+		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)table_addr,
+		    (vm_map_size_t)used_table_size, TRUE, &copy);
 		assert(kr == KERN_SUCCESS);
 		*tablep = (ipc_info_name_t *)copy;
 		*tableCntp = infop->iis_table_size;
@@ -316,19 +322,20 @@ mach_port_space_info(
 #if !MACH_IPC_DEBUG
 kern_return_t
 mach_port_space_basic_info(
-	__unused ipc_space_t			space,
-	__unused ipc_info_space_basic_t		*infop)
+	__unused ipc_space_t                    space,
+	__unused ipc_info_space_basic_t         *infop)
 {
-        return KERN_FAILURE;
+	return KERN_FAILURE;
 }
 #else
 kern_return_t
 mach_port_space_basic_info(
-	ipc_space_t			space,
-	ipc_info_space_basic_t		*infop)
+	ipc_space_t                     space,
+	ipc_info_space_basic_t          *infop)
 {
-	if (space == IS_NULL)
+	if (space == IS_NULL) {
 		return KERN_INVALID_TASK;
+	}
 
 
 	is_read_lock(space);
@@ -369,31 +376,33 @@ mach_port_space_basic_info(
 #if !MACH_IPC_DEBUG
 kern_return_t
 mach_port_dnrequest_info(
-	__unused ipc_space_t		space,
-	__unused mach_port_name_t	name,
-	__unused unsigned int	*totalp,
-	__unused unsigned int	*usedp)
+	__unused ipc_space_t            space,
+	__unused mach_port_name_t       name,
+	__unused unsigned int   *totalp,
+	__unused unsigned int   *usedp)
 {
-        return KERN_FAILURE;
+	return KERN_FAILURE;
 }
 #else
 kern_return_t
 mach_port_dnrequest_info(
-	ipc_space_t			space,
-	mach_port_name_t		name,
-	unsigned int			*totalp,
-	unsigned int			*usedp)
+	ipc_space_t                     space,
+	mach_port_name_t                name,
+	unsigned int                    *totalp,
+	unsigned int                    *usedp)
 {
 	unsigned int total, used;
 	ipc_port_t port;
 	kern_return_t kr;
 
-	if (space == IS_NULL)
+	if (space == IS_NULL) {
 		return KERN_INVALID_TASK;
+	}
 
 	kr = ipc_port_translate_receive(space, name, &port);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		return kr;
+	}
 	/* port is locked and active */
 
 	if (port->ip_requests == IPR_NULL) {
@@ -406,11 +415,12 @@ mach_port_dnrequest_info(
 		total = requests->ipr_size->its_size;
 
 		for (index = 1, used = 0;
-		     index < total; index++) {
+		    index < total; index++) {
 			ipc_port_request_t ipr = &requests[index];
 
-			if (ipr->ipr_name != MACH_PORT_NULL)
+			if (ipr->ipr_name != MACH_PORT_NULL) {
 				used++;
+			}
 		}
 	}
 	ip_unlock(port);
@@ -443,32 +453,34 @@ mach_port_dnrequest_info(
 #if !MACH_IPC_DEBUG
 kern_return_t
 mach_port_kobject(
-	__unused ipc_space_t		space,
-	__unused mach_port_name_t	name,
-	__unused natural_t		*typep,
-	__unused mach_vm_address_t	*addrp)
+	__unused ipc_space_t            space,
+	__unused mach_port_name_t       name,
+	__unused natural_t              *typep,
+	__unused mach_vm_address_t      *addrp)
 {
-        return KERN_FAILURE;
+	return KERN_FAILURE;
 }
 #else
 kern_return_t
 mach_port_kobject(
-	ipc_space_t			space,
-	mach_port_name_t		name,
-	natural_t			*typep,
-	mach_vm_address_t		*addrp)
+	ipc_space_t                     space,
+	mach_port_name_t                name,
+	natural_t                       *typep,
+	mach_vm_address_t               *addrp)
 {
 	ipc_entry_t entry;
 	ipc_port_t port;
 	kern_return_t kr;
 	mach_vm_address_t kaddr;
 
-	if (space == IS_NULL)
+	if (space == IS_NULL) {
 		return KERN_INVALID_TASK;
+	}
 
 	kr = ipc_right_lookup_read(space, name, &entry);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		return kr;
+	}
 	/* space is read-locked and active */
 
 	if ((entry->ie_bits & MACH_PORT_TYPE_SEND_RECEIVE) == 0) {
@@ -492,11 +504,11 @@ mach_port_kobject(
 	ip_unlock(port);
 
 #if (DEVELOPMENT || DEBUG)
-	if (0 != kaddr && is_ipc_kobject(*typep))
+	if (0 != kaddr && is_ipc_kobject(*typep)) {
 		*addrp = VM_KERNEL_UNSLIDE_OR_PERM(kaddr);
-	else
+	} else
 #endif
-		*addrp = 0;
+	*addrp = 0;
 
 	return KERN_SUCCESS;
 }
@@ -522,20 +534,20 @@ mach_port_kobject(
 #if !MACH_IPC_DEBUG
 kern_return_t
 mach_port_kernel_object(
-	__unused ipc_space_t		space,
-	__unused mach_port_name_t	name,
-	__unused unsigned int		*typep,
-	__unused unsigned int		*addrp)
+	__unused ipc_space_t            space,
+	__unused mach_port_name_t       name,
+	__unused unsigned int           *typep,
+	__unused unsigned int           *addrp)
 {
-        return KERN_FAILURE;
+	return KERN_FAILURE;
 }
 #else
 kern_return_t
 mach_port_kernel_object(
-	ipc_space_t			space,
-	mach_port_name_t		name,
-	unsigned int			*typep,
-	unsigned int			*addrp)
+	ipc_space_t                     space,
+	mach_port_name_t                name,
+	unsigned int                    *typep,
+	unsigned int                    *addrp)
 {
 	mach_vm_address_t addr = 0;
 	kern_return_t kr;
@@ -551,24 +563,28 @@ kern_return_t
 mach_port_special_reply_port_reset_link(
 	ipc_space_t             space,
 	mach_port_name_t        name,
-	boolean_t 		*srp_lost_link)
+	boolean_t               *srp_lost_link)
 {
 	ipc_port_t port;
 	kern_return_t kr;
 	thread_t thread = current_thread();
 
-	if (space != current_space())
+	if (space != current_space()) {
 		return KERN_INVALID_TASK;
+	}
 
-	if (!MACH_PORT_VALID(name))
+	if (!MACH_PORT_VALID(name)) {
 		return KERN_INVALID_NAME;
+	}
 
-	if (!IP_VALID(thread->ith_special_reply_port))
+	if (!IP_VALID(thread->ith_special_reply_port)) {
 		return KERN_INVALID_VALUE;
+	}
 
 	kr = ipc_port_translate_receive(space, name, &port);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		return kr;
+	}
 
 	if (thread->ith_special_reply_port != port) {
 		ip_unlock(port);
@@ -586,9 +602,9 @@ mach_port_special_reply_port_reset_link(
 #else
 kern_return_t
 mach_port_special_reply_port_reset_link(
-	__unused ipc_space_t		space,
-	__unused mach_port_name_t	name,
-	__unused boolean_t		*srp_lost_link)
+	__unused ipc_space_t            space,
+	__unused mach_port_name_t       name,
+	__unused boolean_t              *srp_lost_link)
 {
 	return KERN_NOT_SUPPORTED;
 }

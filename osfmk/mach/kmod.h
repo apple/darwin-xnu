@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -71,8 +71,8 @@ typedef kern_return_t kmod_stop_func_t(struct kmod_info * ki, void * data);
 
 /* Run-time struct only; never saved to a file */
 typedef struct kmod_reference {
-    struct kmod_reference * next;
-    struct kmod_info      * info;
+	struct kmod_reference * next;
+	struct kmod_info      * info;
 } kmod_reference_t;
 
 /***********************************************************************
@@ -85,52 +85,52 @@ typedef struct kmod_reference {
  * the kernel, please use the compatibility definitions below.
  */
 typedef struct kmod_info {
-    struct kmod_info  * next;
-    int32_t             info_version;           // version of this structure
-    uint32_t            id;
-    char                name[KMOD_MAX_NAME];
-    char                version[KMOD_MAX_NAME];
-    int32_t             reference_count;        // # linkage refs to this 
-    kmod_reference_t  * reference_list;         // who this refs (links on)
-    vm_address_t        address;                // starting address
-    vm_size_t           size;                   // total size
-    vm_size_t           hdr_size;               // unwired hdr size
-    kmod_start_func_t * start;
-    kmod_stop_func_t  * stop;
+	struct kmod_info  * next;
+	int32_t             info_version;       // version of this structure
+	uint32_t            id;
+	char                name[KMOD_MAX_NAME];
+	char                version[KMOD_MAX_NAME];
+	int32_t             reference_count;    // # linkage refs to this
+	kmod_reference_t  * reference_list;     // who this refs (links on)
+	vm_address_t        address;            // starting address
+	vm_size_t           size;               // total size
+	vm_size_t           hdr_size;           // unwired hdr size
+	kmod_start_func_t * start;
+	kmod_stop_func_t  * stop;
 } kmod_info_t;
 
 /* A compatibility definition of kmod_info_t for 32-bit kexts.
  */
 typedef struct kmod_info_32_v1 {
-    uint32_t            next_addr;
-    int32_t             info_version;
-    uint32_t            id;
-    uint8_t             name[KMOD_MAX_NAME];
-    uint8_t             version[KMOD_MAX_NAME];
-    int32_t             reference_count;
-    uint32_t            reference_list_addr;
-    uint32_t            address;
-    uint32_t            size;
-    uint32_t            hdr_size;
-    uint32_t            start_addr;
-    uint32_t            stop_addr;
+	uint32_t            next_addr;
+	int32_t             info_version;
+	uint32_t            id;
+	uint8_t             name[KMOD_MAX_NAME];
+	uint8_t             version[KMOD_MAX_NAME];
+	int32_t             reference_count;
+	uint32_t            reference_list_addr;
+	uint32_t            address;
+	uint32_t            size;
+	uint32_t            hdr_size;
+	uint32_t            start_addr;
+	uint32_t            stop_addr;
 } kmod_info_32_v1_t;
 
 /* A compatibility definition of kmod_info_t for 64-bit kexts.
  */
 typedef struct kmod_info_64_v1 {
-    uint64_t            next_addr;
-    int32_t             info_version;
-    uint32_t            id;
-    uint8_t             name[KMOD_MAX_NAME];
-    uint8_t             version[KMOD_MAX_NAME];
-    int32_t             reference_count;
-    uint64_t            reference_list_addr;
-    uint64_t            address;
-    uint64_t            size;
-    uint64_t            hdr_size;
-    uint64_t            start_addr;
-    uint64_t            stop_addr;
+	uint64_t            next_addr;
+	int32_t             info_version;
+	uint32_t            id;
+	uint8_t             name[KMOD_MAX_NAME];
+	uint8_t             version[KMOD_MAX_NAME];
+	int32_t             reference_count;
+	uint64_t            reference_list_addr;
+	uint64_t            address;
+	uint64_t            size;
+	uint64_t            hdr_size;
+	uint64_t            start_addr;
+	uint64_t            stop_addr;
 } kmod_info_64_v1_t;
 
 #pragma pack()
@@ -148,14 +148,14 @@ typedef struct kmod_info_64_v1 {
     static kmod_start_func_t name ## _module_start;               \
     static kmod_stop_func_t  name ## _module_stop;                \
     kmod_info_t KMOD_INFO_NAME = { 0, KMOD_INFO_VERSION, -1U,      \
-                       { #name }, { version }, -1, 0, 0, 0, 0,    \
-                           name ## _module_start,                 \
-                           name ## _module_stop };
+	               { #name }, { version }, -1, 0, 0, 0, 0,    \
+	                   name ## _module_start,                 \
+	                   name ## _module_stop };
 
 #define KMOD_EXPLICIT_DECL(name, version, start, stop)            \
     kmod_info_t KMOD_INFO_NAME = { 0, KMOD_INFO_VERSION, -1U,      \
-                       { #name }, { version }, -1, 0, 0, 0, 0,    \
-                           start, stop };
+	               { #name }, { version }, -1, 0, 0, 0, 0,    \
+	                   start, stop };
 
 #if PRAGMA_MARK
 #pragma mark Kernel private declarations
@@ -174,8 +174,8 @@ extern void kmod_panic_dump(vm_offset_t * addr, unsigned int dump_cnt);
  * probes immediately based on kernel symbols.  This per kext
  * flag overrides system mode in dtrace_modload().
  */
-#define KMOD_DTRACE_FORCE_INIT	0x01
-#define KMOD_DTRACE_STATIC_KEXT	0x02
+#define KMOD_DTRACE_FORCE_INIT  0x01
+#define KMOD_DTRACE_STATIC_KEXT 0x02
 #endif /* CONFIG_DTRACE */
 
 #endif    /* KERNEL_PRIVATE */

@@ -93,34 +93,34 @@
  */
 typedef unsigned long pthread_priority_t;
 
-#define _PTHREAD_PRIORITY_FLAGS_MASK			0xff000000
-#define _PTHREAD_PRIORITY_FLAGS_SHIFT			(24ull)
+#define _PTHREAD_PRIORITY_FLAGS_MASK                    0xff000000
+#define _PTHREAD_PRIORITY_FLAGS_SHIFT                   (24ull)
 
-#define _PTHREAD_PRIORITY_OVERCOMMIT_FLAG		0x80000000
-#define _PTHREAD_PRIORITY_INHERIT_FLAG			0x40000000 /* dispatch only */
-#define _PTHREAD_PRIORITY_ROOTQUEUE_FLAG		0x20000000 /* dispatch only */
-#define _PTHREAD_PRIORITY_SCHED_PRI_FLAG		0x20000000
-#define _PTHREAD_PRIORITY_SCHED_PRI_MASK		0x0000ffff
-#define _PTHREAD_PRIORITY_ENFORCE_FLAG			0x10000000 /* dispatch only */
-#define _PTHREAD_PRIORITY_OVERRIDE_FLAG			0x08000000 /* unused */
-#define _PTHREAD_PRIORITY_FALLBACK_FLAG			0x04000000
-#define _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG	0x02000000
-#define _PTHREAD_PRIORITY_NEEDS_UNBIND_FLAG		0x01000000
-#define _PTHREAD_PRIORITY_DEFAULTQUEUE_FLAG		_PTHREAD_PRIORITY_FALLBACK_FLAG // compat
+#define _PTHREAD_PRIORITY_OVERCOMMIT_FLAG               0x80000000
+#define _PTHREAD_PRIORITY_INHERIT_FLAG                  0x40000000 /* dispatch only */
+#define _PTHREAD_PRIORITY_ROOTQUEUE_FLAG                0x20000000 /* dispatch only */
+#define _PTHREAD_PRIORITY_SCHED_PRI_FLAG                0x20000000
+#define _PTHREAD_PRIORITY_SCHED_PRI_MASK                0x0000ffff
+#define _PTHREAD_PRIORITY_ENFORCE_FLAG                  0x10000000 /* dispatch only */
+#define _PTHREAD_PRIORITY_OVERRIDE_FLAG                 0x08000000 /* unused */
+#define _PTHREAD_PRIORITY_FALLBACK_FLAG                 0x04000000
+#define _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG    0x02000000
+#define _PTHREAD_PRIORITY_NEEDS_UNBIND_FLAG             0x01000000
+#define _PTHREAD_PRIORITY_DEFAULTQUEUE_FLAG             _PTHREAD_PRIORITY_FALLBACK_FLAG // compat
 
-#define _PTHREAD_PRIORITY_ENCODING_MASK			0x00a00000
-#define _PTHREAD_PRIORITY_ENCODING_SHIFT		(22ull)
-#define _PTHREAD_PRIORITY_ENCODING_V0			0x00000000
-#define _PTHREAD_PRIORITY_ENCODING_V1			0x00400000 /* unused */
-#define _PTHREAD_PRIORITY_ENCODING_V2			0x00800000 /* unused */
-#define _PTHREAD_PRIORITY_ENCODING_V3			0x00a00000 /* unused */
+#define _PTHREAD_PRIORITY_ENCODING_MASK                 0x00a00000
+#define _PTHREAD_PRIORITY_ENCODING_SHIFT                (22ull)
+#define _PTHREAD_PRIORITY_ENCODING_V0                   0x00000000
+#define _PTHREAD_PRIORITY_ENCODING_V1                   0x00400000 /* unused */
+#define _PTHREAD_PRIORITY_ENCODING_V2                   0x00800000 /* unused */
+#define _PTHREAD_PRIORITY_ENCODING_V3                   0x00a00000 /* unused */
 
-#define _PTHREAD_PRIORITY_QOS_CLASS_MASK		0x003fff00
-#define _PTHREAD_PRIORITY_VALID_QOS_CLASS_MASK	0x00003f00
-#define _PTHREAD_PRIORITY_QOS_CLASS_SHIFT		(8ull)
+#define _PTHREAD_PRIORITY_QOS_CLASS_MASK                0x003fff00
+#define _PTHREAD_PRIORITY_VALID_QOS_CLASS_MASK  0x00003f00
+#define _PTHREAD_PRIORITY_QOS_CLASS_SHIFT               (8ull)
 
-#define _PTHREAD_PRIORITY_PRIORITY_MASK			0x000000ff
-#define _PTHREAD_PRIORITY_PRIORITY_SHIFT		(0)
+#define _PTHREAD_PRIORITY_PRIORITY_MASK                 0x000000ff
+#define _PTHREAD_PRIORITY_PRIORITY_SHIFT                (0)
 
 #if PRIVATE
 #if XNU_KERNEL_PRIVATE && !defined(__PTHREAD_EXPOSE_INTERNALS__)
@@ -139,16 +139,16 @@ static inline bool
 _pthread_priority_has_qos(pthread_priority_t pp)
 {
 	return (pp & (_PTHREAD_PRIORITY_SCHED_PRI_FLAG |
-					_PTHREAD_PRIORITY_EVENT_MANAGER_FLAG)) == 0 &&
-			(pp & (_PTHREAD_PRIORITY_QOS_CLASS_MASK &
-					~_PTHREAD_PRIORITY_VALID_QOS_CLASS_MASK)) == 0 &&
-			(pp & _PTHREAD_PRIORITY_VALID_QOS_CLASS_MASK) != 0;
+	       _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG)) == 0 &&
+	       (pp & (_PTHREAD_PRIORITY_QOS_CLASS_MASK &
+	       ~_PTHREAD_PRIORITY_VALID_QOS_CLASS_MASK)) == 0 &&
+	       (pp & _PTHREAD_PRIORITY_VALID_QOS_CLASS_MASK) != 0;
 }
 
 __attribute__((always_inline, const))
 static inline pthread_priority_t
 _pthread_priority_make_from_thread_qos(thread_qos_t qos, int relpri,
-		unsigned long flags)
+    unsigned long flags)
 {
 	pthread_priority_t pp = (flags & _PTHREAD_PRIORITY_FLAGS_MASK);
 	if (qos && qos < THREAD_QOS_LAST) {

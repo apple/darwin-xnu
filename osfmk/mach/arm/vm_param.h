@@ -33,7 +33,7 @@
  *	ARM machine dependent virtual memory parameters.
  */
 
-#ifndef	_MACH_ARM_VM_PARAM_H_
+#ifndef _MACH_ARM_VM_PARAM_H_
 #define _MACH_ARM_VM_PARAM_H_
 
 #if defined(KERNEL_PRIVATE) && __ARM_16K_PG__
@@ -44,69 +44,69 @@
 #include <mach/vm_page_size.h>
 #endif
 
-#define BYTE_SIZE	8	/* byte size in bits */
+#define BYTE_SIZE       8       /* byte size in bits */
 
 #if defined (KERNEL)
 
 #ifndef __ASSEMBLER__
 
-#ifdef	__arm__
-#define	PAGE_SHIFT_CONST	12
+#ifdef  __arm__
+#define PAGE_SHIFT_CONST        12
 #elif defined(__arm64__)
-extern unsigned		PAGE_SHIFT_CONST;
+extern unsigned         PAGE_SHIFT_CONST;
 #else
 #error Unsupported arch
 #endif
 
 #if defined(KERNEL_PRIVATE) && __ARM_16K_PG__
-#define PAGE_SHIFT		ARM_PGSHIFT
+#define PAGE_SHIFT              ARM_PGSHIFT
 #else
-#define PAGE_SHIFT		PAGE_SHIFT_CONST
+#define PAGE_SHIFT              PAGE_SHIFT_CONST
 #endif
-#define PAGE_SIZE		(1 << PAGE_SHIFT)
-#define PAGE_MASK		(PAGE_SIZE-1)
+#define PAGE_SIZE               (1 << PAGE_SHIFT)
+#define PAGE_MASK               (PAGE_SIZE-1)
 
-#define VM_PAGE_SIZE		PAGE_SIZE
+#define VM_PAGE_SIZE            PAGE_SIZE
 
-#define	machine_ptob(x)		((x) << PAGE_SHIFT)
+#define machine_ptob(x)         ((x) << PAGE_SHIFT)
 
 /*
  * Defined for the purpose of testing the pmap advertised page
  * size; this does not necessarily match the hardware page size.
  */
-#define	TEST_PAGE_SIZE_16K	((PAGE_SHIFT_CONST == 14))
-#define	TEST_PAGE_SIZE_4K	((PAGE_SHIFT_CONST == 12))
+#define TEST_PAGE_SIZE_16K      ((PAGE_SHIFT_CONST == 14))
+#define TEST_PAGE_SIZE_4K       ((PAGE_SHIFT_CONST == 12))
 
-#endif	/* !__ASSEMBLER__ */
+#endif  /* !__ASSEMBLER__ */
 
 #else
 
-#define PAGE_SHIFT			vm_page_shift
-#define PAGE_SIZE			vm_page_size
-#define PAGE_MASK			vm_page_mask
+#define PAGE_SHIFT                      vm_page_shift
+#define PAGE_SIZE                       vm_page_size
+#define PAGE_MASK                       vm_page_mask
 
-#define VM_PAGE_SIZE		vm_page_size
+#define VM_PAGE_SIZE            vm_page_size
 
-#define	machine_ptob(x)		((x) << PAGE_SHIFT)
+#define machine_ptob(x)         ((x) << PAGE_SHIFT)
 
 #endif
 
-#define PAGE_MAX_SHIFT		14
-#define PAGE_MAX_SIZE		(1 << PAGE_MAX_SHIFT)
-#define PAGE_MAX_MASK		(PAGE_MAX_SIZE-1)
+#define PAGE_MAX_SHIFT          14
+#define PAGE_MAX_SIZE           (1 << PAGE_MAX_SHIFT)
+#define PAGE_MAX_MASK           (PAGE_MAX_SIZE-1)
 
-#define PAGE_MIN_SHIFT		12
-#define PAGE_MIN_SIZE		(1 << PAGE_MIN_SHIFT)
-#define PAGE_MIN_MASK		(PAGE_MIN_SIZE-1)
+#define PAGE_MIN_SHIFT          12
+#define PAGE_MIN_SIZE           (1 << PAGE_MIN_SHIFT)
+#define PAGE_MIN_MASK           (PAGE_MIN_SIZE-1)
 
 #ifndef __ASSEMBLER__
 
 #ifdef  MACH_KERNEL_PRIVATE
 
-#define VM32_SUPPORT		1
-#define VM32_MIN_ADDRESS	((vm32_offset_t) 0)
-#define VM32_MAX_ADDRESS	((vm32_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
-#define VM_MAX_PAGE_ADDRESS	VM_MAX_ADDRESS	/* ARM64_TODO: ?? */
+#define VM32_SUPPORT            1
+#define VM32_MIN_ADDRESS        ((vm32_offset_t) 0)
+#define VM32_MAX_ADDRESS        ((vm32_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
+#define VM_MAX_PAGE_ADDRESS     VM_MAX_ADDRESS  /* ARM64_TODO: ?? */
 
 /*
  * kalloc() parameters:
@@ -124,13 +124,13 @@ extern unsigned		PAGE_SHIFT_CONST;
 
 #if defined (__arm__)
 
-#define	KALLOC_MINSIZE		8	/* minimum allocation size */
-#define	KALLOC_LOG2_MINALIGN	3	/* log2 minimum alignment */
+#define KALLOC_MINSIZE          8       /* minimum allocation size */
+#define KALLOC_LOG2_MINALIGN    3       /* log2 minimum alignment */
 
 #elif defined(__arm64__)
 
-#define	KALLOC_MINSIZE		16	/* minimum allocation size */
-#define	KALLOC_LOG2_MINALIGN	4	/* log2 minimum alignment */
+#define KALLOC_MINSIZE          16      /* minimum allocation size */
+#define KALLOC_LOG2_MINALIGN    4       /* log2 minimum alignment */
 
 #else
 #error Unsupported arch
@@ -140,21 +140,21 @@ extern unsigned		PAGE_SHIFT_CONST;
 
 #if defined (__arm__)
 
-#define VM_MIN_ADDRESS		((vm_address_t) 0x00000000)
-#define VM_MAX_ADDRESS		((vm_address_t) 0x80000000)
+#define VM_MIN_ADDRESS          ((vm_address_t) 0x00000000)
+#define VM_MAX_ADDRESS          ((vm_address_t) 0x80000000)
 
 /* system-wide values */
-#define MACH_VM_MIN_ADDRESS	((mach_vm_offset_t) 0)
-#define MACH_VM_MAX_ADDRESS	((mach_vm_offset_t) VM_MAX_ADDRESS)
+#define MACH_VM_MIN_ADDRESS     ((mach_vm_offset_t) 0)
+#define MACH_VM_MAX_ADDRESS     ((mach_vm_offset_t) VM_MAX_ADDRESS)
 
 #elif defined (__arm64__)
 
-#define VM_MIN_ADDRESS		((vm_address_t) 0x0000000000000000ULL)
-#define VM_MAX_ADDRESS		((vm_address_t) 0x0000000080000000ULL)
+#define VM_MIN_ADDRESS          ((vm_address_t) 0x0000000000000000ULL)
+#define VM_MAX_ADDRESS          ((vm_address_t) 0x0000000080000000ULL)
 
 /* system-wide values */
-#define MACH_VM_MIN_ADDRESS	((mach_vm_offset_t) 0x0ULL)
-#define MACH_VM_MAX_ADDRESS	((mach_vm_offset_t) 0x0000000FC0000000ULL)
+#define MACH_VM_MIN_ADDRESS     ((mach_vm_offset_t) 0x0ULL)
+#define MACH_VM_MAX_ADDRESS     ((mach_vm_offset_t) 0x0000000FC0000000ULL)
 
 #else
 #error architecture not supported
@@ -163,31 +163,31 @@ extern unsigned		PAGE_SHIFT_CONST;
 #define VM_MAP_MIN_ADDRESS      VM_MIN_ADDRESS
 #define VM_MAP_MAX_ADDRESS      VM_MAX_ADDRESS
 
-#ifdef	KERNEL
+#ifdef  KERNEL
 
 #if defined (__arm__)
 #define VM_KERNEL_POINTER_SIGNIFICANT_BITS  32
-#define VM_MIN_KERNEL_ADDRESS	((vm_address_t) 0x80000000)
-#define VM_MAX_KERNEL_ADDRESS	((vm_address_t) 0xFFFEFFFF)
-#define VM_HIGH_KERNEL_WINDOW	((vm_address_t) 0xFFFE0000)
+#define VM_MIN_KERNEL_ADDRESS   ((vm_address_t) 0x80000000)
+#define VM_MAX_KERNEL_ADDRESS   ((vm_address_t) 0xFFFEFFFF)
+#define VM_HIGH_KERNEL_WINDOW   ((vm_address_t) 0xFFFE0000)
 #elif defined (__arm64__)
 /*
  * The minimum and maximum kernel address; some configurations may
  * constrain the address space further.
  */
 #define VM_KERNEL_POINTER_SIGNIFICANT_BITS  37
-#define VM_MIN_KERNEL_ADDRESS	((vm_address_t) 0xffffffe000000000ULL)
-#define VM_MAX_KERNEL_ADDRESS	((vm_address_t) 0xfffffff3ffffffffULL)
+#define VM_MIN_KERNEL_ADDRESS   ((vm_address_t) 0xffffffe000000000ULL)
+#define VM_MAX_KERNEL_ADDRESS   ((vm_address_t) 0xfffffff3ffffffffULL)
 #else
 #error architecture not supported
 #endif
 
-#define VM_MIN_KERNEL_AND_KEXT_ADDRESS	\
-				VM_MIN_KERNEL_ADDRESS
+#define VM_MIN_KERNEL_AND_KEXT_ADDRESS  \
+	                        VM_MIN_KERNEL_ADDRESS
 
 #define VM_KERNEL_STRIP_PTR(_v) (_v)
 
-#define VM_KERNEL_ADDRESS(_va)	\
+#define VM_KERNEL_ADDRESS(_va)  \
 	((((vm_address_t)VM_KERNEL_STRIP_PTR(_va)) >= VM_MIN_KERNEL_ADDRESS) && \
 	 (((vm_address_t)VM_KERNEL_STRIP_PTR(_va)) <= VM_MAX_KERNEL_ADDRESS))
 
@@ -195,28 +195,28 @@ extern unsigned		PAGE_SHIFT_CONST;
 /*
  *	Physical memory is mapped linearly at an offset virtual memory.
  */
-extern unsigned long		gVirtBase, gPhysBase, gPhysSize;
+extern unsigned long            gVirtBase, gPhysBase, gPhysSize;
 
-#define isphysmem(a)		(((vm_address_t)(a) - gPhysBase) < gPhysSize)
+#define isphysmem(a)            (((vm_address_t)(a) - gPhysBase) < gPhysSize)
 
 #if KASAN
 /* Increase the stack sizes to account for the redzones that get added to every
  * stack object. */
-# define KERNEL_STACK_SIZE	(4*4*4096)
+# define KERNEL_STACK_SIZE      (4*4*4096)
 #else
-# define KERNEL_STACK_SIZE	(4*4096)
+# define KERNEL_STACK_SIZE      (4*4096)
 #endif
 
-#define INTSTACK_SIZE		(4*4096)
+#define INTSTACK_SIZE           (4*4096)
 
 #ifdef __arm64__
-#define EXCEPSTACK_SIZE		(4*4096)
+#define EXCEPSTACK_SIZE         (4*4096)
 #else
-#define FIQSTACK_SIZE		(4096)
+#define FIQSTACK_SIZE           (4096)
 #endif
 
 #if defined (__arm__)
-#define HIGH_EXC_VECTORS	((vm_address_t) 0xFFFF0000)
+#define HIGH_EXC_VECTORS        ((vm_address_t) 0xFFFF0000)
 #endif
 
 /*
@@ -233,11 +233,11 @@ extern unsigned long		gVirtBase, gPhysBase, gPhysSize;
 #error architecture not supported
 #endif
 
-#endif	/* MACH_KERNEL_PRIVATE */
-#endif	/* KERNEL */
+#endif  /* MACH_KERNEL_PRIVATE */
+#endif  /* KERNEL */
 
-#endif	/* !__ASSEMBLER__ */
+#endif  /* !__ASSEMBLER__ */
 
-#define SWI_SYSCALL	0x80
+#define SWI_SYSCALL     0x80
 
-#endif	/* _MACH_ARM_VM_PARAM_H_ */
+#endif  /* _MACH_ARM_VM_PARAM_H_ */

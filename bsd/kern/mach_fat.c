@@ -2,7 +2,7 @@
  * Copyright (c) 1991-2015 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <sys/param.h>
@@ -40,42 +40,42 @@
 #include <machine/exec.h>
 
 /**********************************************************************
- * Routine:	fatfile_getarch()
- *
- * Function:	Locate the architecture-dependant contents of a fat
- *		file that match this CPU.
- *
- * Args: header:		A pointer to the fat file header.
- *		size:			How large the fat file header is (including fat_arch array)
- *		req_cpu_type:	The required cpu type.
- *		mask_bits:	Bits to mask from the sub-image type when
- *				grading it vs. the req_cpu_type
- *		archret (out):	Pointer to fat_arch structure to hold
- *				the results.
- *
- * Returns:	KERN_SUCCESS:	Valid architecture found.
- *		KERN_FAILURE:	No valid architecture found.
- **********************************************************************/
+* Routine:	fatfile_getarch()
+*
+* Function:	Locate the architecture-dependant contents of a fat
+*		file that match this CPU.
+*
+* Args: header:		A pointer to the fat file header.
+*		size:			How large the fat file header is (including fat_arch array)
+*		req_cpu_type:	The required cpu type.
+*		mask_bits:	Bits to mask from the sub-image type when
+*				grading it vs. the req_cpu_type
+*		archret (out):	Pointer to fat_arch structure to hold
+*				the results.
+*
+* Returns:	KERN_SUCCESS:	Valid architecture found.
+*		KERN_FAILURE:	No valid architecture found.
+**********************************************************************/
 static load_return_t
 fatfile_getarch(
-	vm_offset_t	data_ptr,
-	vm_size_t	data_size,
-	cpu_type_t	req_cpu_type,
-	cpu_type_t	mask_bits,
-	struct fat_arch	*archret)
+	vm_offset_t     data_ptr,
+	vm_size_t       data_size,
+	cpu_type_t      req_cpu_type,
+	cpu_type_t      mask_bits,
+	struct fat_arch *archret)
 {
-	load_return_t		lret;
-	struct fat_arch		*arch;
-	struct fat_arch		*best_arch;
-	int			grade;
-	int			best_grade;
-	uint32_t		nfat_arch, max_nfat_arch;
-	cpu_type_t		testtype;
-	cpu_type_t		testsubtype;
-	struct fat_header	*header;
+	load_return_t           lret;
+	struct fat_arch         *arch;
+	struct fat_arch         *best_arch;
+	int                     grade;
+	int                     best_grade;
+	uint32_t                nfat_arch, max_nfat_arch;
+	cpu_type_t              testtype;
+	cpu_type_t              testsubtype;
+	struct fat_header       *header;
 
 	if (sizeof(struct fat_header) > data_size) {
-		return (LOAD_FAILURE);
+		return LOAD_FAILURE;
 	}
 
 	header = (struct fat_header *)data_ptr;
@@ -84,7 +84,7 @@ fatfile_getarch(
 	max_nfat_arch = (data_size - sizeof(struct fat_header)) / sizeof(struct fat_arch);
 	if (nfat_arch > max_nfat_arch) {
 		/* nfat_arch would cause us to read off end of buffer */
-		return (LOAD_BADMACHO);
+		return LOAD_BADMACHO;
 	}
 
 	/*
@@ -93,20 +93,20 @@ fatfile_getarch(
 	best_grade = 0;
 	arch = (struct fat_arch *) (data_ptr + sizeof(struct fat_header));
 	for (; nfat_arch-- > 0; arch++) {
- 		testtype = OSSwapBigToHostInt32(arch->cputype);
- 		testsubtype = OSSwapBigToHostInt32(arch->cpusubtype) & ~CPU_SUBTYPE_MASK;
+		testtype = OSSwapBigToHostInt32(arch->cputype);
+		testsubtype = OSSwapBigToHostInt32(arch->cpusubtype) & ~CPU_SUBTYPE_MASK;
 
 		/*
 		 *	Check to see if right cpu type.
 		 */
- 		if((testtype & ~mask_bits) != (req_cpu_type & ~mask_bits)) {
+		if ((testtype & ~mask_bits) != (req_cpu_type & ~mask_bits)) {
 			continue;
 		}
 
 		/*
-		 * 	Get the grade of the cpu subtype (without feature flags)
+		 *      Get the grade of the cpu subtype (without feature flags)
 		 */
- 		grade = grade_binary(testtype, testsubtype);
+		grade = grade_binary(testtype, testsubtype);
 
 		/*
 		 *	Remember it if it's the best we've seen.
@@ -123,16 +123,16 @@ fatfile_getarch(
 	if (best_arch == NULL) {
 		lret = LOAD_BADARCH;
 	} else {
-		archret->cputype	=
-			    OSSwapBigToHostInt32(best_arch->cputype);
-		archret->cpusubtype	=
-			    OSSwapBigToHostInt32(best_arch->cpusubtype);
-		archret->offset		=
-			    OSSwapBigToHostInt32(best_arch->offset);
-		archret->size		=
-			    OSSwapBigToHostInt32(best_arch->size);
-		archret->align		=
-			    OSSwapBigToHostInt32(best_arch->align);
+		archret->cputype        =
+		    OSSwapBigToHostInt32(best_arch->cputype);
+		archret->cpusubtype     =
+		    OSSwapBigToHostInt32(best_arch->cpusubtype);
+		archret->offset         =
+		    OSSwapBigToHostInt32(best_arch->offset);
+		archret->size           =
+		    OSSwapBigToHostInt32(best_arch->size);
+		archret->align          =
+		    OSSwapBigToHostInt32(best_arch->align);
 
 		lret = LOAD_SUCCESS;
 	}
@@ -140,14 +140,14 @@ fatfile_getarch(
 	/*
 	 * Free the memory we allocated and return.
 	 */
-	return(lret);
+	return lret;
 }
 
 load_return_t
 fatfile_getbestarch(
-		vm_offset_t		data_ptr,
-		vm_size_t		data_size,
-		struct fat_arch	*archret)
+	vm_offset_t             data_ptr,
+	vm_size_t               data_size,
+	struct fat_arch *archret)
 {
 	/*
 	 * Ignore all architectural bits when determining if an image
@@ -170,26 +170,26 @@ fatfile_getbestarch_for_cputype(
 }
 
 /**********************************************************************
- * Routine:	fatfile_getarch_with_bits()
- *
- * Function:	Locate the architecture-dependant contents of a fat
- *		file that match this CPU.
- *
- * Args:	vp:		The vnode for the fat file.
- *		archbits:	Architecture specific feature bits
- *		header:		A pointer to the fat file header.
- *		archret (out):	Pointer to fat_arch structure to hold
- *				the results.
- *
- * Returns:	KERN_SUCCESS:	Valid architecture found.
- *		KERN_FAILURE:	No valid architecture found.
- **********************************************************************/
+* Routine:	fatfile_getarch_with_bits()
+*
+* Function:	Locate the architecture-dependant contents of a fat
+*		file that match this CPU.
+*
+* Args:	vp:		The vnode for the fat file.
+*		archbits:	Architecture specific feature bits
+*		header:		A pointer to the fat file header.
+*		archret (out):	Pointer to fat_arch structure to hold
+*				the results.
+*
+* Returns:	KERN_SUCCESS:	Valid architecture found.
+*		KERN_FAILURE:	No valid architecture found.
+**********************************************************************/
 load_return_t
 fatfile_getarch_with_bits(
-	integer_t		archbits,
-	vm_offset_t 	data_ptr,
-	vm_size_t		data_size,
-	struct fat_arch		*archret)
+	integer_t               archbits,
+	vm_offset_t     data_ptr,
+	vm_size_t               data_size,
+	struct fat_arch         *archret)
 {
 	/*
 	 * Scan the fat_arch array for matches with the requested
@@ -214,11 +214,11 @@ fatfile_validate_fatarches(vm_offset_t data_ptr, vm_size_t data_size)
 	uint32_t max_nfat_arch, i, j;
 	uint32_t fat_header_size;
 
-	struct fat_arch		*arches;
-	struct fat_header	*header;
+	struct fat_arch         *arches;
+	struct fat_header       *header;
 
 	if (sizeof(struct fat_header) > data_size) {
-		return (LOAD_FAILURE);
+		return LOAD_FAILURE;
 	}
 
 	header = (struct fat_header *)data_ptr;
@@ -227,20 +227,20 @@ fatfile_validate_fatarches(vm_offset_t data_ptr, vm_size_t data_size)
 
 	if (magic != FAT_MAGIC) {
 		/* must be FAT_MAGIC big endian */
-		return (LOAD_FAILURE);
+		return LOAD_FAILURE;
 	}
 
 	max_nfat_arch = (data_size - sizeof(struct fat_header)) / sizeof(struct fat_arch);
 	if (nfat_arch > max_nfat_arch) {
 		/* nfat_arch would cause us to read off end of buffer */
-		return (LOAD_BADMACHO);
+		return LOAD_BADMACHO;
 	}
 
 	/* now that we know the fat_arch list fits in the buffer, how much does it use? */
 	fat_header_size = sizeof(struct fat_header) + nfat_arch * sizeof(struct fat_arch);
 	arches = (struct fat_arch *)(data_ptr + sizeof(struct fat_header));
 
-	for (i=0; i < nfat_arch; i++) {
+	for (i = 0; i < nfat_arch; i++) {
 		uint32_t i_begin = OSSwapBigToHostInt32(arches[i].offset);
 		uint32_t i_size = OSSwapBigToHostInt32(arches[i].size);
 		uint32_t i_cputype = OSSwapBigToHostInt32(arches[i].cputype);
@@ -248,16 +248,16 @@ fatfile_validate_fatarches(vm_offset_t data_ptr, vm_size_t data_size)
 
 		if (i_begin < fat_header_size) {
 			/* slice is trying to claim part of the file used by fat headers themselves */
-			return (LOAD_BADMACHO);
+			return LOAD_BADMACHO;
 		}
 
 		if ((UINT32_MAX - i_size) < i_begin) {
 			/* start + size would overflow */
-			return (LOAD_BADMACHO);
+			return LOAD_BADMACHO;
 		}
 		uint32_t i_end = i_begin + i_size;
 
-		for (j=i+1; j < nfat_arch; j++) {
+		for (j = i + 1; j < nfat_arch; j++) {
 			uint32_t j_begin = OSSwapBigToHostInt32(arches[j].offset);
 			uint32_t j_size = OSSwapBigToHostInt32(arches[j].size);
 			uint32_t j_cputype = OSSwapBigToHostInt32(arches[j].cputype);
@@ -265,12 +265,12 @@ fatfile_validate_fatarches(vm_offset_t data_ptr, vm_size_t data_size)
 
 			if ((i_cputype == j_cputype) && (i_cpusubtype == j_cpusubtype)) {
 				/* duplicate cputype/cpusubtype, results in ambiguous references */
-				return (LOAD_BADMACHO);
+				return LOAD_BADMACHO;
 			}
 
 			if ((UINT32_MAX - j_size) < j_begin) {
 				/* start + size would overflow */
-				return (LOAD_BADMACHO);
+				return LOAD_BADMACHO;
 			}
 			uint32_t j_end = j_begin + j_size;
 
@@ -279,18 +279,18 @@ fatfile_validate_fatarches(vm_offset_t data_ptr, vm_size_t data_size)
 					/* I completely precedes J */
 				} else {
 					/* I started before J, but ends somewhere in or after J */
-					return (LOAD_BADMACHO);
+					return LOAD_BADMACHO;
 				}
 			} else {
 				if (i_begin >= j_end) {
 					/* I started after J started but also after J ended */
 				} else {
 					/* I started after J started but before it ended, so there is overlap */
-					return (LOAD_BADMACHO);
+					return LOAD_BADMACHO;
 				}
 			}
 		}
 	}
 
-	return (LOAD_SUCCESS);
+	return LOAD_SUCCESS;
 }

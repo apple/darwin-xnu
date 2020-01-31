@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -67,7 +67,9 @@
 #include <sys/stat.h>
 #include <sys/sysproto.h>
 #include <sys/proc_info.h>
+#include <sys/posix_shm.h>
 #include <security/audit/audit.h>
+#include <stdbool.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -91,111 +93,113 @@
 #define f_ops f_fglob->fg_ops
 #define f_offset f_fglob->fg_offset
 #define f_data f_fglob->fg_data
-#define	PSHMNAMLEN	31	/* maximum name segment length we bother with */
 
-struct pshmobj {
-	void *			pshmo_memobject;
-	memory_object_size_t	pshmo_size;
-	struct pshmobj *	pshmo_next;
-};
+/*
+ * Used to construct the list of memory objects
+ * assigned to a populated shared memory segment.
+ */
+typedef struct pshm_mobj {
+	void                  *pshmo_memobject;
+	memory_object_size_t  pshmo_size;
+	SLIST_ENTRY(pshm_mobj) pshmo_next;
+} pshm_mobj_t;
 
-struct pshminfo {
-	unsigned int	pshm_flags;
-	unsigned int	pshm_usecount;
-	off_t		pshm_length;
-	mode_t		pshm_mode;
-	uid_t		pshm_uid;
-	gid_t		pshm_gid;
-	char		pshm_name[PSHMNAMLEN + 1];	/* segment name */
-	struct pshmobj *pshm_memobjects;
-#if DIAGNOSTIC
-	unsigned int 	pshm_readcount;
-	unsigned int 	pshm_writecount;
-	proc_t		pshm_proc;
-#endif /* DIAGNOSTIC */
-	struct label*	pshm_label;
-};
-#define PSHMINFO_NULL (struct pshminfo *)0
+/*
+ * This represents an existing Posix shared memory object.
+ *
+ * It comes into existence with a shm_open(...O_CREAT...)
+ * call and goes away only after it has been shm_unlink()ed
+ * and the last remaining shm_open() file reference is closed.
+ *
+ * To keep track of that lifetime, pshm_usecount is used as a reference
+ * counter. It's incremented for every successful shm_open() and
+ * one extra time for the shm_unlink() to release. Internally
+ * you can temporarily use an additional reference whenever the
+ * subsystem lock has to be dropped for other reasons.
+ */
+typedef struct internal_pshminfo {
+	struct pshminfo pshm_hdr;
+	SLIST_HEAD(pshm_mobjhead, pshm_mobj) pshm_mobjs;
+	RB_ENTRY(internal_pshminfo) pshm_links;        /* links for red/black tree */
+} pshm_info_t;
+#define pshm_flags    pshm_hdr.pshm_flags
+#define pshm_usecount pshm_hdr.pshm_usecount
+#define pshm_length   pshm_hdr.pshm_length
+#define pshm_mode     pshm_hdr.pshm_mode
+#define pshm_uid      pshm_hdr.pshm_uid
+#define pshm_gid      pshm_hdr.pshm_gid
+#define pshm_label    pshm_hdr.pshm_label
 
-#define	PSHM_NONE	0x001
-#define	PSHM_DEFINED	0x002
-#define	PSHM_ALLOCATED	0x004
-#define	PSHM_MAPPED	0x008
-#define	PSHM_INUSE	0x010
-#define	PSHM_REMOVED	0x020
-#define	PSHM_INCREATE	0x040
-#define	PSHM_INDELETE	0x080
-#define PSHM_ALLOCATING	0x100
+/* Values for pshm_flags that are still used */
+#define PSHM_ALLOCATED  0x004   /* backing storage is allocated */
+#define PSHM_MAPPED     0x008   /* mapped at least once */
+#define PSHM_INUSE      0x010   /* mapped at least once */
+#define PSHM_REMOVED    0x020   /* no longer in the name cache due to shm_unlink() */
+#define PSHM_ALLOCATING 0x100   /* storage is being allocated */
 
-struct	pshmcache {
-	LIST_ENTRY(pshmcache) pshm_hash;	/* hash chain */
-	struct	pshminfo *pshminfo;		/* vnode the name refers to */
-	int	pshm_nlen;		/* length of name */
-	char	pshm_name[PSHMNAMLEN + 1];	/* segment name */
-};
-#define PSHMCACHE_NULL (struct pshmcache *)0
+/*
+ * These handle reference counting pshm_info_t structs using pshm_usecount.
+ */
+static int pshm_ref(pshm_info_t *pinfo);
+static void pshm_deref(pshm_info_t *pinfo);
+#define PSHM_MAXCOUNT UINT_MAX
 
-#define PSHMCACHE_NOTFOUND (0)
-#define PSHMCACHE_FOUND    (-1)
-#define PSHMCACHE_NEGATIVE (ENOENT)
-
-struct	pshmstats {
-	long	goodhits;		/* hits that we can really use */
-	long	neghits;		/* negative hits that we can use */
-	long	badhits;		/* hits we must drop */
-	long	falsehits;		/* hits with id mismatch */
-	long	miss;		/* misses */
-	long	longnames;		/* long names that ignore cache */
-};
-
-struct pshmname {
-	char	*pshm_nameptr;	/* pointer to looked up name */
-	long	pshm_namelen;	/* length of looked up component */
-	u_long	pshm_hash;	/* hash value of looked up name */
-};
-
-struct pshmnode {
-	off_t  		mapp_addr;
-	user_size_t	map_size;	/* XXX unused ? */
-	struct pshminfo *pinfo;
-	unsigned int	pshm_usecount;
-#if DIAGNOSTIC
-	unsigned int readcnt;
-	unsigned int writecnt;
-#endif
-};
-#define PSHMNODE_NULL (struct pshmnode *)0
+/*
+ * For every shm_open, we get a new one of these.
+ * The only reason we don't just use pshm_info directly is that
+ * you can query the mapped memory objects via proc_pidinfo to
+ * query the mapped address. Note that even this is a hack. If
+ * you mmap() the same fd multiple times, we only save/report
+ * one address.
+ */
+typedef struct pshmnode {
+	off_t       mapp_addr;
+	pshm_info_t *pinfo;
+} pshmnode_t;
 
 
-#define PSHMHASH(pnp) \
-	(&pshmhashtbl[(pnp)->pshm_hash & pshmhash])
+/* compare function for the red black tree */
+static int
+pshm_compare(pshm_info_t *a, pshm_info_t *b)
+{
+	int cmp = strncmp(a->pshm_hdr.pshm_name, b->pshm_hdr.pshm_name, PSHMNAMLEN + 1);
 
-LIST_HEAD(pshmhashhead, pshmcache) *pshmhashtbl;	/* Hash Table */
-u_long	pshmhash;				/* size of hash table - 1 */
-long	pshmnument;			/* number of cache entries allocated */
-struct pshmstats pshmstats;		/* cache effectiveness statistics */
+	if (cmp < 0) {
+		return -1;
+	}
+	if (cmp > 0) {
+		return 1;
+	}
+	return 0;
+}
 
-static int pshm_read (struct fileproc *fp, struct uio *uio,
-		int flags, vfs_context_t ctx);
-static int pshm_write (struct fileproc *fp, struct uio *uio,
-		int flags, vfs_context_t ctx);
-static int pshm_ioctl (struct fileproc *fp, u_long com,
-		caddr_t data, vfs_context_t ctx);
-static int pshm_select (struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
-static int pshm_close(struct pshminfo *pinfo, int dropref);
-static int pshm_closefile (struct fileglob *fg, vfs_context_t ctx);
+
+/*
+ * shared memory "paths" are stored in a red black tree for lookup
+ */
+u_long pshmnument;    /* count of entries allocated in the red black tree */
+RB_HEAD(pshmhead, internal_pshminfo) pshm_head;
+RB_PROTOTYPE(pshmhead, internal_pshminfo, pshm_links, pshm_compare)
+RB_GENERATE(pshmhead, internal_pshminfo, pshm_links, pshm_compare)
+
+/* lookup, add, remove functions */
+static pshm_info_t *pshm_cache_search(pshm_info_t * look);
+static void pshm_cache_add(pshm_info_t *entry);
+static void pshm_cache_delete(pshm_info_t *entry);
+
+static int pshm_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx);
+static int pshm_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx);
+static int pshm_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx);
+static int pshm_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
+static int pshm_closefile(struct fileglob *fg, vfs_context_t ctx);
 
 static int pshm_kqfilter(struct fileproc *fp, struct knote *kn,
-		struct kevent_internal_s *kev, vfs_context_t ctx);
+    struct kevent_internal_s *kev, vfs_context_t ctx);
 
-int pshm_access(struct pshminfo *pinfo, int mode, kauth_cred_t cred, proc_t p);
+static int pshm_access(pshm_info_t *pinfo, int mode, kauth_cred_t cred, proc_t p);
 int pshm_cache_purge_all(proc_t p);
 
-static int pshm_cache_add(struct pshminfo *pshmp, struct pshmname *pnp, struct pshmcache *pcp);
-static void pshm_cache_delete(struct pshmcache *pcp);
-static int pshm_cache_search(struct pshminfo **pshmp, struct pshmname *pnp,
-	struct pshmcache **pcache, int addref);
-static int pshm_unlink_internal(struct pshminfo *pinfo, struct pshmcache *pcache);
+static int pshm_unlink_internal(pshm_info_t *pinfo);
 
 static const struct fileops pshmops = {
 	.fo_type = DTYPE_PSXSHM,
@@ -208,6 +212,9 @@ static const struct fileops pshmops = {
 	.fo_drain = NULL,
 };
 
+/*
+ * Everything here is protected by a single mutex.
+ */
 static lck_grp_t       *psx_shm_subsys_lck_grp;
 static lck_grp_attr_t  *psx_shm_subsys_lck_grp_attr;
 static lck_attr_t      *psx_shm_subsys_lck_attr;
@@ -218,150 +225,87 @@ static lck_mtx_t        psx_shm_subsys_mutex;
 #define PSHM_SUBSYS_ASSERT_HELD()  LCK_MTX_ASSERT(&psx_shm_subsys_mutex, LCK_MTX_ASSERT_OWNED)
 
 
-/* Initialize the mutex governing access to the posix shm subsystem */
 __private_extern__ void
 pshm_lock_init( void )
 {
+	psx_shm_subsys_lck_grp_attr = lck_grp_attr_alloc_init();
 
-    psx_shm_subsys_lck_grp_attr = lck_grp_attr_alloc_init();
+	psx_shm_subsys_lck_grp =
+	    lck_grp_alloc_init("posix shared memory", psx_shm_subsys_lck_grp_attr);
 
-    psx_shm_subsys_lck_grp = lck_grp_alloc_init("posix shared memory", psx_shm_subsys_lck_grp_attr);
-
-    psx_shm_subsys_lck_attr = lck_attr_alloc_init();
-    lck_mtx_init(& psx_shm_subsys_mutex, psx_shm_subsys_lck_grp, psx_shm_subsys_lck_attr);
+	psx_shm_subsys_lck_attr = lck_attr_alloc_init();
+	lck_mtx_init(&psx_shm_subsys_mutex, psx_shm_subsys_lck_grp, psx_shm_subsys_lck_attr);
 }
 
 /*
- * Lookup an entry in the cache 
- * 
- * 
- * status of -1 is returned if matches
- * If the lookup determines that the name does not exist
- * (negative cacheing), a status of ENOENT is returned. If the lookup
- * fails, a status of zero is returned.
+ * Lookup an entry in the cache. Only the name is used from "look".
  */
-
-static int
-pshm_cache_search(struct pshminfo **pshmp, struct pshmname *pnp,
-	struct pshmcache **pcache, int addref)
+static pshm_info_t *
+pshm_cache_search(pshm_info_t *look)
 {
-	struct pshmcache *pcp, *nnp;
-	struct pshmhashhead *pcpp;
-
-	if (pnp->pshm_namelen > PSHMNAMLEN) {
-		pshmstats.longnames++;
-		return PSHMCACHE_NOTFOUND;
-	}
-
-	pcpp = PSHMHASH(pnp);
-	for (pcp = pcpp->lh_first; pcp != 0; pcp = nnp) {
-		nnp = pcp->pshm_hash.le_next;
-		if (pcp->pshm_nlen == pnp->pshm_namelen &&
-		    !bcmp(pcp->pshm_name, pnp->pshm_nameptr, 						(u_int)pcp-> pshm_nlen))
-			break;
-	}
-
-	if (pcp == 0) {
-		pshmstats.miss++;
-		return PSHMCACHE_NOTFOUND;
-	}
-
-	/* We found a "positive" match, return the vnode */
-        if (pcp->pshminfo) {
-		pshmstats.goodhits++;
-		/* TOUCH(ncp); */
-		*pshmp = pcp->pshminfo;
-		*pcache = pcp;
-		if (addref)
-			pcp->pshminfo->pshm_usecount++;
-		return PSHMCACHE_FOUND;
-	}
-
-	/*
-	 * We found a "negative" match, ENOENT notifies client of this match.
-	 */
-	pshmstats.neghits++;
-	return PSHMCACHE_NEGATIVE;
+	PSHM_SUBSYS_ASSERT_HELD();
+	return RB_FIND(pshmhead, &pshm_head, look);
 }
 
 /*
- * Add an entry to the cache.
- * XXX should be static?
+ * Add a new entry to the cache.
  */
-static int
-pshm_cache_add(struct pshminfo *pshmp, struct pshmname *pnp, struct pshmcache *pcp)
+static void
+pshm_cache_add(pshm_info_t *entry)
 {
-	struct pshmhashhead *pcpp;
-	struct pshminfo *dpinfo;
-	struct pshmcache *dpcp;
+	pshm_info_t *conflict;
 
-#if DIAGNOSTIC
-	if (pnp->pshm_namelen > PSHMNAMLEN)
-		panic("cache_enter: name too long");
-#endif
-
-
-	/*  if the entry has already been added by some one else return */
-	if (pshm_cache_search(&dpinfo, pnp, &dpcp, 0) == PSHMCACHE_FOUND) {
-		return EEXIST;
+	PSHM_SUBSYS_ASSERT_HELD();
+	conflict = RB_INSERT(pshmhead, &pshm_head, entry);
+	if (conflict != NULL) {
+		panic("pshm_cache_add() found %p", conflict);
 	}
 	pshmnument++;
-
-	/*
-	 * Fill in cache info, if vp is NULL this is a "negative" cache entry.
-	 */
-	pcp->pshminfo = pshmp;
-	pcp->pshm_nlen = pnp->pshm_namelen;
-	bcopy(pnp->pshm_nameptr, pcp->pshm_name, (unsigned)pcp->pshm_nlen);
-	pcpp = PSHMHASH(pnp);
-#if DIAGNOSTIC
-	{
-		struct pshmcache *p;
-
-		for (p = pcpp->lh_first; p != 0; p = p->pshm_hash.le_next)
-			if (p == pcp)
-				panic("cache_enter: duplicate");
-	}
-#endif
-	LIST_INSERT_HEAD(pcpp, pcp, pshm_hash);
-	return 0;
 }
 
 /*
- * Name cache initialization, from vfs_init() when we are booting
+ * Remove the given entry from the red black tree.
+ */
+static void
+pshm_cache_delete(pshm_info_t *entry)
+{
+	PSHM_SUBSYS_ASSERT_HELD();
+	assert(!(entry->pshm_flags & PSHM_REMOVED));
+	RB_REMOVE(pshmhead, &pshm_head, entry);
+	pshmnument--;
+}
+
+/*
+ * Initialize the red black tree.
  */
 void
 pshm_cache_init(void)
 {
-	pshmhashtbl = hashinit(desiredvnodes / 8, M_SHM, &pshmhash);
+	RB_INIT(&pshm_head);
 }
 
 /*
- * Invalidate all entries and delete all objects associated with it. Entire
- * non Kernel entries are going away. Just dump'em all
- *
- * We actually just increment the v_id, that will do it. The entries will
- * be purged by lookup as they get found. If the v_id wraps around, we
- * need to ditch the entire cache, to avoid confusion. No valid vnode will
- * ever have (v_id == 0).
+ * Invalidate all entries and delete all objects associated with them
+ * XXX - due to the reference counting, this only works if all userland
+ * references to it via file descriptors are also closed already. Is this
+ * known to be called after all user processes are killed?
  */
 int
-pshm_cache_purge_all(__unused proc_t p)
+pshm_cache_purge_all(__unused proc_t proc)
 {
-	struct pshmcache *pcp, *tmppcp;
-	struct pshmhashhead *pcpp;
+	pshm_info_t *p;
+	pshm_info_t *tmp;
 	int error = 0;
 
-	if (kauth_cred_issuser(kauth_cred_get()) == 0)
+	if (kauth_cred_issuser(kauth_cred_get()) == 0) {
 		return EPERM;
+	}
 
 	PSHM_SUBSYS_LOCK();
-	for (pcpp = &pshmhashtbl[pshmhash]; pcpp >= pshmhashtbl; pcpp--) {
-		LIST_FOREACH_SAFE(pcp, pcpp, pshm_hash, tmppcp) {
-			assert(pcp->pshm_nlen);
-			error = pshm_unlink_internal(pcp->pshminfo, pcp);
-			if (error)
-				goto out;
+	RB_FOREACH_SAFE(p, pshmhead, &pshm_head, tmp) {
+		error = pshm_unlink_internal(p);
+		if (error) {  /* XXX: why give up on failure, should keep going */
+			goto out;
 		}
 	}
 	assert(pshmnument == 0);
@@ -369,105 +313,86 @@ pshm_cache_purge_all(__unused proc_t p)
 out:
 	PSHM_SUBSYS_UNLOCK();
 
-	if (error)
-		printf("%s: Error %d removing shm cache: %ld remain!\n",
-		       __func__, error, pshmnument);
+	if (error) {
+		printf("%s: Error %d removing posix shm cache: %ld remain!\n",
+		    __func__, error, pshmnument);
+	}
 	return error;
 }
 
-static void
-pshm_cache_delete(struct pshmcache *pcp)
+/*
+ * Utility to get the shared memory name from userspace and
+ * populate a pshm_info_t with it. If there's a problem
+ * reading the name or it's malformed, will return an error code.
+ */
+static int
+pshm_get_name(pshm_info_t *pinfo, const user_addr_t user_addr)
 {
-#if DIAGNOSTIC
-	if (pcp->pshm_hash.le_prev == 0)
-		panic("namecache purge le_prev");
-	if (pcp->pshm_hash.le_next == pcp)
-		panic("namecache purge le_next");
-#endif /* DIAGNOSTIC */
-	LIST_REMOVE(pcp, pshm_hash);
-	pcp->pshm_hash.le_prev = 0;	
-	pshmnument--;
+	size_t bytes_copied = 0;
+	int error;
+
+
+	error = copyinstr(user_addr, &pinfo->pshm_hdr.pshm_name[0], PSHMNAMLEN + 1, &bytes_copied);
+	if (error != 0) {
+		return error;
+	}
+	assert(bytes_copied <= PSHMNAMLEN + 1);
+	assert(pinfo->pshm_hdr.pshm_name[bytes_copied - 1] == 0);
+	if (bytes_copied < 2) { /* 2: expect at least one character and terminating zero */
+		return EINVAL;
+	}
+	AUDIT_ARG(text, &pinfo->pshm_hdr.pshm_name[0]);
+	return 0;
 }
 
-
+/*
+ * Process a shm_open() system call.
+ */
 int
 shm_open(proc_t p, struct shm_open_args *uap, int32_t *retval)
 {
-	size_t  i;
-	int indx, error;
-	struct pshmname nd;
-	struct pshminfo *pinfo;
+	int             indx;
+	int             error = 0;
+	pshm_info_t     *pinfo = NULL;
+	pshm_info_t     *new_pinfo = NULL;
+	pshmnode_t      *new_pnode = NULL;
 	struct fileproc *fp = NULL;
-	char *pnbuf = NULL;
-	struct pshminfo *new_pinfo = PSHMINFO_NULL;
-	struct pshmnode *new_pnode = PSHMNODE_NULL;
-	struct pshmcache *pcache = PSHMCACHE_NULL;	/* ignored on return */
-	char * nameptr;
-	char * cp;
-	size_t pathlen, plen;
-	int fmode ;
-	int cmode = uap->mode;
-	int incache = 0;
-	struct pshmcache *pcp = NULL;
+	int             fmode;
+	int             cmode = uap->mode;
+	bool            incache = false;
+	bool            have_label = false;
 
 	AUDIT_ARG(fflags, uap->oflag);
 	AUDIT_ARG(mode, uap->mode);
 
-	pinfo = PSHMINFO_NULL;
-
 	/*
-	 * Preallocate everything we might need up front to avoid taking
-	 * and dropping the lock, opening us up to race conditions.
+	 * Allocate data structures we need. We parse the userspace name into
+	 * a pshm_info_t, even when we don't need to O_CREAT.
 	 */
-	MALLOC_ZONE(pnbuf, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	if (pnbuf == NULL) {
+	MALLOC(new_pinfo, pshm_info_t *, sizeof(pshm_info_t), M_SHM, M_WAITOK | M_ZERO);
+	if (new_pinfo == NULL) {
 		error = ENOSPC;
 		goto bad;
 	}
 
-	pathlen = MAXPATHLEN;
-	error = copyinstr(uap->name, (void *)pnbuf, MAXPATHLEN, &pathlen);
-	if (error) {
+	/*
+	 * Get and check the name.
+	 */
+	error = pshm_get_name(new_pinfo, uap->name);
+	if (error != 0) {
 		goto bad;
-	}
-	AUDIT_ARG(text, pnbuf);
-	if (pathlen > PSHMNAMLEN) {
-		error = ENAMETOOLONG;
-		goto bad;
-	}
-#ifdef PSXSHM_NAME_RESTRICT
-	nameptr = pnbuf;
-	if (*nameptr == '/') {
-		while (*(nameptr++) == '/') {
-			plen--;
-			error = EINVAL;
-			goto bad;
-		}
-	} else {
-		error = EINVAL;
-		goto bad;
-	}
-#endif /* PSXSHM_NAME_RESTRICT */
-
-	plen = pathlen;
-	nameptr = pnbuf;
-	nd.pshm_nameptr = nameptr;
-	nd.pshm_namelen = plen;
-	nd. pshm_hash =0;
-
-	for (cp = nameptr, i=1; *cp != 0 && i <= plen; i++, cp++) {
-		nd.pshm_hash += (unsigned char)*cp * i;
 	}
 
 	/*
-	 * attempt to allocate a new fp; if unsuccessful, the fp will be
+	 * Attempt to allocate a new fp. If unsuccessful, the fp will be
 	 * left unmodified (NULL).
 	 */
 	error = falloc(p, &fp, &indx, vfs_context_current());
-	if (error) 
+	if (error) {
 		goto bad;
+	}
 
-	cmode &=  ALLPERMS;
+	cmode &= ALLPERMS;
 
 	fmode = FFLAGS(uap->oflag);
 	if ((fmode & (FREAD | FWRITE)) == 0) {
@@ -476,164 +401,107 @@ shm_open(proc_t p, struct shm_open_args *uap, int32_t *retval)
 	}
 
 	/*
-	 * We allocate a new entry if we are less than the maximum
-	 * allowed and the one at the front of the LRU list is in use.
-	 * Otherwise we use the one at the front of the LRU list.
+	 * Will need a new pnode for the file pointer
 	 */
-	MALLOC(pcp, struct pshmcache *, sizeof(struct pshmcache), M_SHM, M_WAITOK|M_ZERO);
-	if (pcp == NULL) {
+	MALLOC(new_pnode, pshmnode_t *, sizeof(pshmnode_t), M_SHM, M_WAITOK | M_ZERO);
+	if (new_pnode == NULL) {
 		error = ENOSPC;
 		goto bad;
 	}
-
-	MALLOC(new_pinfo, struct pshminfo *, sizeof(struct pshminfo), M_SHM, M_WAITOK|M_ZERO);
-	if (new_pinfo == PSHMINFO_NULL) {
-		error = ENOSPC;
-		goto bad;
-	}
-#if CONFIG_MACF
-	mac_posixshm_label_init(new_pinfo);
-#endif
-
-	MALLOC(new_pnode, struct pshmnode *, sizeof(struct pshmnode), M_SHM, M_WAITOK|M_ZERO);
-	if (new_pnode == PSHMNODE_NULL) {
-		error = ENOSPC;
-		goto bad;
-	}
-
-	PSHM_SUBSYS_LOCK();
 
 	/*
-	 * If we find the entry in the cache, this will take a reference,
-	 * allowing us to unlock it for the permissions check.
+	 * If creating a new segment, fill in its information.
+	 * If we find a pre-exisitng one in cache lookup we'll just toss this one later.
 	 */
-	error = pshm_cache_search(&pinfo, &nd, &pcache, 1);
+	if (fmode & O_CREAT) {
+		new_pinfo->pshm_usecount = 2; /* one each for: file pointer, shm_unlink */
+		new_pinfo->pshm_length = 0;
+		new_pinfo->pshm_mode = cmode;
+		new_pinfo->pshm_uid = kauth_getuid();
+		new_pinfo->pshm_gid = kauth_getgid();
+		SLIST_INIT(&new_pinfo->pshm_mobjs);
+#if CONFIG_MACF
+		mac_posixshm_label_init(&new_pinfo->pshm_hdr);
+		have_label = true;
+		error = mac_posixshm_check_create(kauth_cred_get(), new_pinfo->pshm_hdr.pshm_name);
+		if (error) {
+			goto bad;
+		}
+#endif
+	}
+
+	/*
+	 * Look up the named shared memory segment in the cache, possibly adding
+	 * it for O_CREAT.
+	 */
+	PSHM_SUBSYS_LOCK();
+
+	pinfo = pshm_cache_search(new_pinfo);
+	if (pinfo != NULL) {
+		incache = true;
+
+		/* Get a new reference to go with the file pointer.*/
+		error = pshm_ref(pinfo);
+		if (error) {
+			pinfo = NULL;      /* so cleanup code doesn't deref */
+			goto bad_locked;
+		}
+
+		/* can't have pre-existing if O_EXCL */
+		if ((fmode & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) {
+			error = EEXIST;
+			goto bad_locked;
+		}
+
+		/* O_TRUNC is only valid while length is not yet set */
+		if ((fmode & O_TRUNC) &&
+		    (pinfo->pshm_flags & (PSHM_ALLOCATING | PSHM_ALLOCATED))) {
+			error = EINVAL;
+			goto bad_locked;
+		}
+	} else {
+		incache = false;
+
+		/* if it wasn't found, must have O_CREAT */
+		if (!(fmode & O_CREAT)) {
+			error = ENOENT;
+			goto bad_locked;
+		}
+
+		/* Add the new region to the cache. */
+		pinfo = new_pinfo;
+		pshm_cache_add(pinfo);
+		new_pinfo = NULL;       /* so that it doesn't get free'd */
+	}
 
 	PSHM_SUBSYS_UNLOCK();
 
-	if (error == PSHMCACHE_NEGATIVE) {
-		error = EINVAL;
-		goto bad;
-	}
-
-	if (error == PSHMCACHE_NOTFOUND) {
-		incache = 0;
+	/*
+	 * Check we have permission to access any pre-existing segment
+	 */
+	if (incache) {
 		if (fmode & O_CREAT) {
-			/*  create a new one (commit the allocation) */
-			pinfo = new_pinfo;
-			pinfo->pshm_flags = PSHM_DEFINED | PSHM_INCREATE;
-			pinfo->pshm_usecount = 1; /* existence reference */
-			pinfo->pshm_mode = cmode;
-			pinfo->pshm_uid = kauth_getuid();
-			pinfo->pshm_gid = kauth_getgid();
-			bcopy(pnbuf, &pinfo->pshm_name[0], pathlen);
-			pinfo->pshm_name[pathlen]=0;
-#if CONFIG_MACF
-			error = mac_posixshm_check_create(kauth_cred_get(), nameptr);
-			if (error) {
-				goto bad;
-			}
-			mac_posixshm_label_associate(kauth_cred_get(), pinfo, nameptr);
-#endif
-		}
-	} else {
-		incache = 1;
-		if (fmode & O_CREAT) {
-			/*  already exists */
-			if ((fmode & O_EXCL)) {
-				AUDIT_ARG(posix_ipc_perm, pinfo->pshm_uid,
-						pinfo->pshm_gid,
-						pinfo->pshm_mode);
-
-				/* shm obj exists and opened O_EXCL */
-				error = EEXIST;
-				goto bad;
-			} 
-
-			if( pinfo->pshm_flags & PSHM_INDELETE) {
-				error = ENOENT;
-				goto bad;
-			}	
 			AUDIT_ARG(posix_ipc_perm, pinfo->pshm_uid,
-					pinfo->pshm_gid, pinfo->pshm_mode);
-#if CONFIG_MACF	
-			if ((error = mac_posixshm_check_open(kauth_cred_get(), pinfo, fmode))) {
-				goto bad;
-			}
-#endif
-			if ( (error = pshm_access(pinfo, fmode, kauth_cred_get(), p)) ) {
-				goto bad;
-			}
+			    pinfo->pshm_gid, pinfo->pshm_mode);
 		}
-	}
-	if (!(fmode & O_CREAT)) {
-		if (!incache) {
-			/* O_CREAT is not set and the object does not exist */
-			error = ENOENT;
-			goto bad;
-		}
-		if( pinfo->pshm_flags & PSHM_INDELETE) {
-			error = ENOENT;
-			goto bad;
-		}	
-#if CONFIG_MACF	
-		if ((error = mac_posixshm_check_open(kauth_cred_get(), pinfo, fmode))) {
+#if CONFIG_MACF
+		if ((error = mac_posixshm_check_open(kauth_cred_get(), &pinfo->pshm_hdr, fmode))) {
 			goto bad;
 		}
 #endif
-
 		if ((error = pshm_access(pinfo, fmode, kauth_cred_get(), p))) {
 			goto bad;
 		}
-	}
-	if (fmode & O_TRUNC) {
-		error = EINVAL;
-		goto bad;
-	}
-
-
-	PSHM_SUBSYS_LOCK();
-
-#if DIAGNOSTIC 
-	if (fmode & FWRITE)
-		pinfo->pshm_writecount++;
-	if (fmode & FREAD)
-		pinfo->pshm_readcount++;
-#endif
-	if (!incache) {
-		/* if successful, this will consume the pcp */
-		if ( (error = pshm_cache_add(pinfo, &nd, pcp)) ) {
-			goto bad_locked;
-		}
-		/*
-		 * add reference for the new entry; otherwise, we obtained
-		 * one from the cache hit earlier.
-		 */
-		pinfo->pshm_usecount++;
-	}
-	pinfo->pshm_flags &= ~PSHM_INCREATE;
-	new_pnode->pinfo = pinfo;
-
-	PSHM_SUBSYS_UNLOCK();
-
-	/*
-	 * if incache, we did not use the new pcp or new_pinfo and must
-	 * free them
-	 */
-	if (incache) {
-		FREE(pcp, M_SHM);
-
-		if (new_pinfo != PSHMINFO_NULL) {
+	} else {
 #if CONFIG_MACF
-			mac_posixshm_label_destroy(new_pinfo);
+		mac_posixshm_label_associate(kauth_cred_get(), &pinfo->pshm_hdr, pinfo->pshm_hdr.pshm_name);
 #endif
-			FREE(new_pinfo, M_SHM);
-		}
 	}
 
 	proc_fdlock(p);
 	fp->f_flag = fmode & FMASK;
 	fp->f_ops = &pshmops;
+	new_pnode->pinfo = pinfo;
 	fp->f_data = (caddr_t)new_pnode;
 	*fdflags(p, indx) |= UF_EXCLOSE;
 	procfdtbl_releasefd(p, indx, NULL);
@@ -641,113 +509,137 @@ shm_open(proc_t p, struct shm_open_args *uap, int32_t *retval)
 	proc_fdunlock(p);
 
 	*retval = indx;
-	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
-	return (0);
+	error = 0;
+	goto done;
 
 bad_locked:
 	PSHM_SUBSYS_UNLOCK();
 bad:
 	/*
-	 * If we obtained the entry from the cache, we need to drop the
-	 * reference; holding the reference may have prevented unlinking,
-	 * so we need to call pshm_close() to get the full effect.
+	 * Drop any new reference to a pre-existing shared memory region.
 	 */
-	if (incache) {
+	if (incache && pinfo != NULL) {
 		PSHM_SUBSYS_LOCK();
-		pshm_close(pinfo, 1);
+		pshm_deref(pinfo);
 		PSHM_SUBSYS_UNLOCK();
 	}
 
-	if (pcp != NULL)
-		FREE(pcp, M_SHM);
-
-	if (new_pnode != PSHMNODE_NULL)
+	/*
+	 * Delete any allocated unused data structures.
+	 */
+	if (new_pnode != NULL) {
 		FREE(new_pnode, M_SHM);
+	}
 
-	if (fp != NULL)
+	if (fp != NULL) {
 		fp_free(p, indx, fp);
+	}
 
-	if (new_pinfo != PSHMINFO_NULL) {
+done:
+	if (new_pinfo != NULL) {
 #if CONFIG_MACF
-		mac_posixshm_label_destroy(new_pinfo);
+		if (have_label) {
+			mac_posixshm_label_destroy(&new_pinfo->pshm_hdr);
+		}
 #endif
 		FREE(new_pinfo, M_SHM);
 	}
-	if (pnbuf != NULL)
-		FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
-	return (error);
+	return error;
 }
 
 
+/*
+ * The truncate call associates memory with shared memory region. It can
+ * only be succesfully done with a non-zero length once per shared memory region.
+ */
 int
-pshm_truncate(__unused proc_t p, struct fileproc *fp, __unused int fd, 
-				off_t length, __unused int32_t *retval)
+pshm_truncate(
+	__unused proc_t       p,
+	struct fileproc       *fp,
+	__unused int          fd,
+	off_t                 length,
+	__unused int32_t      *retval)
 {
-	struct pshminfo * pinfo;
-	struct pshmnode * pnode ;
-	kern_return_t kret;
+	pshm_info_t           *pinfo;
+	pshmnode_t            *pnode;
+	kern_return_t         kret;
 	mem_entry_name_port_t mem_object;
-	mach_vm_size_t total_size, alloc_size;
-	memory_object_size_t mosize;
-	struct pshmobj *pshmobj, *pshmobj_next, **pshmobj_next_p;
-	vm_map_t	user_map;
-#if CONFIG_MACF
-	int error;
-#endif
+	mach_vm_size_t        total_size, alloc_size;
+	memory_object_size_t  mosize;
+	pshm_mobj_t           *pshmobj, *pshmobj_last;
+	vm_map_t              user_map;
+	int                   error;
 
 	user_map = current_map();
 
 	if (fp->f_type != DTYPE_PSXSHM) {
-		return(EINVAL);
+		return EINVAL;
 	}
-	
 
-	if (((pnode = (struct pshmnode *)fp->f_data)) == PSHMNODE_NULL )
-		return(EINVAL);
-
-	PSHM_SUBSYS_LOCK();
-	if ((pinfo = pnode->pinfo) == PSHMINFO_NULL) {
-		PSHM_SUBSYS_UNLOCK();
-		return(EINVAL);
-	}
-	if ((pinfo->pshm_flags & (PSHM_DEFINED|PSHM_ALLOCATING|PSHM_ALLOCATED)) 
-			!= PSHM_DEFINED) {
-		PSHM_SUBSYS_UNLOCK();
-		return(EINVAL);
-	}
-#if CONFIG_MACF
-	error = mac_posixshm_check_truncate(kauth_cred_get(), pinfo, length);
-	if (error) {
-		PSHM_SUBSYS_UNLOCK();
-		return(error);
+#if 0
+	/*
+	 * Can't enforce this yet, some third party tools don't
+	 * specify O_RDWR like they ought to. See radar 48692182
+	 */
+	/* ftruncate() requires write permission */
+	if (!(fp->f_flag & FWRITE)) {
+		return EINVAL;
 	}
 #endif
 
+	PSHM_SUBSYS_LOCK();
+	if (((pnode = (pshmnode_t *)fp->f_data)) == NULL) {
+		PSHM_SUBSYS_UNLOCK();
+		return EINVAL;
+	}
+
+	if ((pinfo = pnode->pinfo) == NULL) {
+		PSHM_SUBSYS_UNLOCK();
+		return EINVAL;
+	}
+
+	/* We only allow one ftruncate() per lifetime of the shm object. */
+	if (pinfo->pshm_flags & (PSHM_ALLOCATING | PSHM_ALLOCATED)) {
+		PSHM_SUBSYS_UNLOCK();
+		return EINVAL;
+	}
+
+#if CONFIG_MACF
+	error = mac_posixshm_check_truncate(kauth_cred_get(), &pinfo->pshm_hdr, length);
+	if (error) {
+		PSHM_SUBSYS_UNLOCK();
+		return error;
+	}
+#endif
+	/*
+	 * Grab an extra reference, so we can drop the lock while allocating and
+	 * ensure the objects don't disappear.
+	 */
+	error = pshm_ref(pinfo);
+	if (error) {
+		PSHM_SUBSYS_UNLOCK();
+		return error;
+	}
+
+	/* set ALLOCATING, so another truncate can't start */
 	pinfo->pshm_flags |= PSHM_ALLOCATING;
-	total_size = vm_map_round_page(length,
-				       vm_map_page_mask(user_map));
-	pshmobj_next_p = &pinfo->pshm_memobjects;
+	total_size = vm_map_round_page(length, vm_map_page_mask(user_map));
 
-	for (alloc_size = 0;
-	     alloc_size < total_size;
-	     alloc_size += mosize) {
-
+	pshmobj_last = NULL;
+	for (alloc_size = 0; alloc_size < total_size; alloc_size += mosize) {
 		PSHM_SUBSYS_UNLOCK();
 
+		/* get a memory object back some of the shared memory */
 		mosize = MIN(total_size - alloc_size, ANON_MAX_SIZE);
-		kret = mach_make_memory_entry_64(
-			VM_MAP_NULL,
-			&mosize,
-			0,
-			MAP_MEM_NAMED_CREATE | VM_PROT_DEFAULT,
-			&mem_object,
-			0);
+		kret = mach_make_memory_entry_64(VM_MAP_NULL, &mosize, 0,
+		    MAP_MEM_NAMED_CREATE | VM_PROT_DEFAULT, &mem_object, 0);
 
-		if (kret != KERN_SUCCESS) 
+		if (kret != KERN_SUCCESS) {
 			goto out;
+		}
 
-		MALLOC(pshmobj, struct pshmobj *, sizeof (struct pshmobj),
-		       M_SHM, M_WAITOK);
+		/* get a list entry to track the memory object */
+		MALLOC(pshmobj, pshm_mobj_t *, sizeof(pshm_mobj_t), M_SHM, M_WAITOK);
 		if (pshmobj == NULL) {
 			kret = KERN_NO_SPACE;
 			mach_memory_entry_port_release(mem_object);
@@ -757,79 +649,86 @@ pshm_truncate(__unused proc_t p, struct fileproc *fp, __unused int fd,
 
 		PSHM_SUBSYS_LOCK();
 
-		pshmobj->pshmo_memobject = (void *) mem_object;
+		/* link in the new entry */
+		pshmobj->pshmo_memobject = (void *)mem_object;
 		pshmobj->pshmo_size = mosize;
-		pshmobj->pshmo_next = NULL;
-		
-		*pshmobj_next_p = pshmobj;
-		pshmobj_next_p = &pshmobj->pshmo_next;
+		SLIST_NEXT(pshmobj, pshmo_next) = NULL;
+
+		if (pshmobj_last == NULL) {
+			SLIST_FIRST(&pinfo->pshm_mobjs) = pshmobj;
+		} else {
+			SLIST_INSERT_AFTER(pshmobj_last, pshmobj, pshmo_next);
+		}
+		pshmobj_last = pshmobj;
 	}
-	
+
+	/* all done, change flags to ALLOCATED and return success */
 	pinfo->pshm_flags |= PSHM_ALLOCATED;
 	pinfo->pshm_flags &= ~(PSHM_ALLOCATING);
 	pinfo->pshm_length = total_size;
+	pshm_deref(pinfo);              /* drop the "allocating" reference */
 	PSHM_SUBSYS_UNLOCK();
-	return(0);
+	return 0;
 
 out:
+	/* clean up any partially allocated objects */
 	PSHM_SUBSYS_LOCK();
-	for (pshmobj = pinfo->pshm_memobjects;
-	     pshmobj != NULL;
-	     pshmobj = pshmobj_next) {
-		pshmobj_next = pshmobj->pshmo_next;
+	while ((pshmobj = SLIST_FIRST(&pinfo->pshm_mobjs)) != NULL) {
+		SLIST_REMOVE_HEAD(&pinfo->pshm_mobjs, pshmo_next);
+		PSHM_SUBSYS_UNLOCK();
 		mach_memory_entry_port_release(pshmobj->pshmo_memobject);
 		FREE(pshmobj, M_SHM);
+		PSHM_SUBSYS_LOCK();
 	}
-	pinfo->pshm_memobjects = NULL;
 	pinfo->pshm_flags &= ~PSHM_ALLOCATING;
+	pshm_deref(pinfo);              /* drop the "allocating" reference */
 	PSHM_SUBSYS_UNLOCK();
 
 	switch (kret) {
 	case KERN_INVALID_ADDRESS:
 	case KERN_NO_SPACE:
-		return (ENOMEM);
+		return ENOMEM;
 	case KERN_PROTECTION_FAILURE:
-		return (EACCES);
+		return EACCES;
 	default:
-		return (EINVAL);
-	
+		return EINVAL;
 	}
 }
 
 int
-pshm_stat(struct pshmnode *pnode, void *ub, int isstat64)
+pshm_stat(pshmnode_t *pnode, void *ub, int isstat64)
 {
-	struct stat *sb = (struct stat *)0;	/* warning avoidance ; protected by isstat64 */
+	struct stat *sb = (struct stat *)0;     /* warning avoidance ; protected by isstat64 */
 	struct stat64 * sb64 = (struct stat64 *)0;  /* warning avoidance ; protected by isstat64 */
-	struct pshminfo *pinfo;
+	pshm_info_t *pinfo;
 #if CONFIG_MACF
 	int error;
 #endif
-	
+
 	PSHM_SUBSYS_LOCK();
-	if ((pinfo = pnode->pinfo) == PSHMINFO_NULL){
+	if ((pinfo = pnode->pinfo) == NULL) {
 		PSHM_SUBSYS_UNLOCK();
-		return(EINVAL);
+		return EINVAL;
 	}
 
 #if CONFIG_MACF
-	error = mac_posixshm_check_stat(kauth_cred_get(), pinfo);
+	error = mac_posixshm_check_stat(kauth_cred_get(), &pinfo->pshm_hdr);
 	if (error) {
 		PSHM_SUBSYS_UNLOCK();
-		return(error);
+		return error;
 	}
 #endif
 
 	if (isstat64 != 0) {
 		sb64 = (struct stat64 *)ub;
-		bzero(sb64, sizeof(struct stat64)); 
+		bzero(sb64, sizeof(struct stat64));
 		sb64->st_mode = pinfo->pshm_mode;
 		sb64->st_uid = pinfo->pshm_uid;
 		sb64->st_gid = pinfo->pshm_gid;
 		sb64->st_size = pinfo->pshm_length;
 	} else {
 		sb = (struct stat *)ub;
-		bzero(sb, sizeof(struct stat)); 
+		bzero(sb, sizeof(struct stat));
 		sb->st_mode = pinfo->pshm_mode;
 		sb->st_uid = pinfo->pshm_uid;
 		sb->st_gid = pinfo->pshm_gid;
@@ -837,58 +736,62 @@ pshm_stat(struct pshmnode *pnode, void *ub, int isstat64)
 	}
 	PSHM_SUBSYS_UNLOCK();
 
-	return(0);
+	return 0;
 }
 
 /*
- * This is called only from shm_open which holds pshm_lock();
- * XXX This code is repeated many times
+ * Verify access to a shared memory region.
  */
-int
-pshm_access(struct pshminfo *pinfo, int mode, kauth_cred_t cred, __unused proc_t p)
+static int
+pshm_access(pshm_info_t *pinfo, int mode, kauth_cred_t cred, __unused proc_t p)
 {
 	int mode_req = ((mode & FREAD) ? S_IRUSR : 0) |
-		       ((mode & FWRITE) ? S_IWUSR : 0);
+	    ((mode & FWRITE) ? S_IWUSR : 0);
 
 	/* Otherwise, user id 0 always gets access. */
-	if (!suser(cred, NULL))
-		return (0);
+	if (!suser(cred, NULL)) {
+		return 0;
+	}
 
-	return(posix_cred_access(cred, pinfo->pshm_uid, pinfo->pshm_gid, pinfo->pshm_mode, mode_req));
+	return posix_cred_access(cred, pinfo->pshm_uid, pinfo->pshm_gid, pinfo->pshm_mode, mode_req);
 }
 
 int
-pshm_mmap(__unused proc_t p, struct mmap_args *uap, user_addr_t *retval, struct fileproc *fp, off_t pageoff) 
+pshm_mmap(
+	__unused proc_t    p,
+	struct mmap_args   *uap,
+	user_addr_t        *retval,
+	struct fileproc    *fp,
+	off_t              pageoff)
 {
-	vm_map_offset_t	user_addr = (vm_map_offset_t)uap->addr;
-	vm_map_size_t	user_size = (vm_map_size_t)uap->len ;
-	vm_map_offset_t	user_start_addr;
-	vm_map_size_t	map_size, mapped_size;
-	int prot = uap->prot;
-	int max_prot = VM_PROT_DEFAULT;
-	int flags = uap->flags;
+	vm_map_offset_t    user_addr = (vm_map_offset_t)uap->addr;
+	vm_map_size_t      user_size = (vm_map_size_t)uap->len;
+	vm_map_offset_t    user_start_addr;
+	vm_map_size_t      map_size, mapped_size;
+	int                prot = uap->prot;
+	int                max_prot = VM_PROT_DEFAULT;
+	int                flags = uap->flags;
 	vm_object_offset_t file_pos = (vm_object_offset_t)uap->pos;
 	vm_object_offset_t map_pos;
-	vm_map_t	user_map;
-	int		alloc_flags;
+	vm_map_t           user_map;
+	int                alloc_flags;
 	vm_map_kernel_flags_t vmk_flags;
-	boolean_t 	docow;
-	kern_return_t	kret;
-	struct pshminfo * pinfo;
-	struct pshmnode * pnode;
-	struct pshmobj * pshmobj;
-#if CONFIG_MACF
-	int error;
-#endif
+	bool               docow;
+	kern_return_t      kret = KERN_SUCCESS;
+	pshm_info_t        *pinfo;
+	pshmnode_t         *pnode;
+	pshm_mobj_t        *pshmobj;
+	int                error;
 
-	if (user_size == 0) 
-		return(0);
+	if (user_size == 0) {
+		return 0;
+	}
 
-	if ((flags & MAP_SHARED) == 0)
-		return(EINVAL);
+	if (!(flags & MAP_SHARED)) {
+		return EINVAL;
+	}
 
-
-	/* Can't allow write permission if the shm_open() didn't */
+	/* Can't allow write permission if the shm_open() didn't allow them. */
 	if (!(fp->f_flag & FWRITE)) {
 		if (prot & VM_PROT_WRITE) {
 			return EPERM;
@@ -896,56 +799,73 @@ pshm_mmap(__unused proc_t p, struct mmap_args *uap, user_addr_t *retval, struct 
 		max_prot &= ~VM_PROT_WRITE;
 	}
 
-	if (((pnode = (struct pshmnode *)fp->f_data)) == PSHMNODE_NULL )
-		return(EINVAL);
-
 	PSHM_SUBSYS_LOCK();
-	if ((pinfo = pnode->pinfo) == PSHMINFO_NULL) {
+	pnode = (pshmnode_t *)fp->f_data;
+	if (pnode == NULL) {
 		PSHM_SUBSYS_UNLOCK();
-		return(EINVAL);
+		return EINVAL;
 	}
 
-	if ((pinfo->pshm_flags & PSHM_ALLOCATED) != PSHM_ALLOCATED) {
+	pinfo = pnode->pinfo;
+	if (pinfo == NULL) {
 		PSHM_SUBSYS_UNLOCK();
-		return(EINVAL);
+		return EINVAL;
 	}
+
+	if (!(pinfo->pshm_flags & PSHM_ALLOCATED)) {
+		PSHM_SUBSYS_UNLOCK();
+		return EINVAL;
+	}
+
 	if (user_size > (vm_map_size_t)pinfo->pshm_length) {
 		PSHM_SUBSYS_UNLOCK();
-		return(EINVAL);
+		return EINVAL;
 	}
+
 	vm_map_size_t end_pos = 0;
 	if (os_add_overflow(user_size, file_pos, &end_pos)) {
 		PSHM_SUBSYS_UNLOCK();
-		return(EINVAL);
+		return EINVAL;
 	}
 	if (end_pos > (vm_map_size_t)pinfo->pshm_length) {
 		PSHM_SUBSYS_UNLOCK();
-		return(EINVAL);
+		return EINVAL;
 	}
-	if ((pshmobj = pinfo->pshm_memobjects) == NULL) {
+
+	pshmobj = SLIST_FIRST(&pinfo->pshm_mobjs);
+	if (pshmobj == NULL) {
 		PSHM_SUBSYS_UNLOCK();
-		return(EINVAL);
+		return EINVAL;
 	}
 
 #if CONFIG_MACF
-	error = mac_posixshm_check_mmap(kauth_cred_get(), pinfo, prot, flags);
+	error = mac_posixshm_check_mmap(kauth_cred_get(), &pinfo->pshm_hdr, prot, flags);
 	if (error) {
 		PSHM_SUBSYS_UNLOCK();
-		return(error);
+		return error;
 	}
 #endif
+	/* Grab an extra reference, so we can drop the lock while mapping. */
+	error = pshm_ref(pinfo);
+	if (error) {
+		PSHM_SUBSYS_UNLOCK();
+		return error;
+	}
 
 	PSHM_SUBSYS_UNLOCK();
 	user_map = current_map();
 
-	if ((flags & MAP_FIXED) == 0) {
+	if (!(flags & MAP_FIXED)) {
 		alloc_flags = VM_FLAGS_ANYWHERE;
 		user_addr = vm_map_round_page(user_addr,
-					      vm_map_page_mask(user_map)); 
+		    vm_map_page_mask(user_map));
 	} else {
 		if (user_addr != vm_map_round_page(user_addr,
-						   vm_map_page_mask(user_map)))
-			return (EINVAL);
+		    vm_map_page_mask(user_map))) {
+			error = EINVAL;
+			goto out_deref;
+		}
+
 		/*
 		 * We do not get rid of the existing mappings here because
 		 * it wouldn't be atomic (see comment in mmap()).  We let
@@ -954,36 +874,36 @@ pshm_mmap(__unused proc_t p, struct mmap_args *uap, user_addr_t *retval, struct 
 		 */
 		alloc_flags = VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE;
 	}
-	docow = FALSE;	
+	docow = false;
 
 	mapped_size = 0;
 	vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
 	/* reserve the entire space first... */
 	kret = vm_map_enter_mem_object(user_map,
-				       &user_addr,
-				       user_size,
-				       0,
-				       alloc_flags,
-				       vmk_flags,
-				       VM_KERN_MEMORY_NONE,
-				       IPC_PORT_NULL,
-				       0,
-				       FALSE,
-				       VM_PROT_NONE,
-				       VM_PROT_NONE,
-				       VM_INHERIT_NONE);
+	    &user_addr,
+	    user_size,
+	    0,
+	    alloc_flags,
+	    vmk_flags,
+	    VM_KERN_MEMORY_NONE,
+	    IPC_PORT_NULL,
+	    0,
+	    false,
+	    VM_PROT_NONE,
+	    VM_PROT_NONE,
+	    VM_INHERIT_NONE);
 	user_start_addr = user_addr;
 	if (kret != KERN_SUCCESS) {
-		goto out;
+		goto out_deref;
 	}
 
-	/* ... and overwrite with the real mappings */
-	for (map_pos = 0, pshmobj = pinfo->pshm_memobjects;
-	     user_size != 0;
-	     map_pos += pshmobj->pshmo_size, pshmobj = pshmobj->pshmo_next) {
+	/* Now overwrite with the real mappings. */
+	for (map_pos = 0, pshmobj = SLIST_FIRST(&pinfo->pshm_mobjs);
+	    user_size != 0;
+	    map_pos += pshmobj->pshmo_size, pshmobj = SLIST_NEXT(pshmobj, pshmo_next)) {
 		if (pshmobj == NULL) {
 			/* nothing there to map !? */
-			goto out;
+			goto out_deref;
 		}
 		if (file_pos >= map_pos + pshmobj->pshmo_size) {
 			continue;
@@ -1007,8 +927,9 @@ pshm_mmap(__unused proc_t p, struct mmap_args *uap, user_addr_t *retval, struct 
 			prot,
 			max_prot,
 			VM_INHERIT_SHARE);
-		if (kret != KERN_SUCCESS) 
-			goto out;
+		if (kret != KERN_SUCCESS) {
+			goto out_deref;
+		}
 
 		user_addr += map_size;
 		user_size -= map_size;
@@ -1018,78 +939,51 @@ pshm_mmap(__unused proc_t p, struct mmap_args *uap, user_addr_t *retval, struct 
 
 	PSHM_SUBSYS_LOCK();
 	pnode->mapp_addr = user_start_addr;
-	pnode->map_size = mapped_size;
 	pinfo->pshm_flags |= (PSHM_MAPPED | PSHM_INUSE);
 	PSHM_SUBSYS_UNLOCK();
-out:
+out_deref:
+	PSHM_SUBSYS_LOCK();
+	pshm_deref(pinfo);      /* drop the extra reference we had while mapping. */
+	PSHM_SUBSYS_UNLOCK();
 	if (kret != KERN_SUCCESS) {
 		if (mapped_size != 0) {
 			(void) mach_vm_deallocate(current_map(),
-						  user_start_addr,
-						  mapped_size);
+			    user_start_addr,
+			    mapped_size);
 		}
 	}
 
 	switch (kret) {
 	case KERN_SUCCESS:
 		*retval = (user_start_addr + pageoff);
-		return (0);
+		return 0;
 	case KERN_INVALID_ADDRESS:
 	case KERN_NO_SPACE:
-		return (ENOMEM);
+		return ENOMEM;
 	case KERN_PROTECTION_FAILURE:
-		return (EACCES);
+		return EACCES;
 	default:
-		return (EINVAL);
+		return EINVAL;
 	}
-
 }
 
+/*
+ * Remove a shared memory region name from the name lookup cache.
+ */
 static int
-pshm_unlink_internal(struct pshminfo *pinfo, struct pshmcache *pcache)
+pshm_unlink_internal(pshm_info_t *pinfo)
 {
-	struct pshmobj *pshmobj, *pshmobj_next;
-
 	PSHM_SUBSYS_ASSERT_HELD();
 
-	if (!pinfo || !pcache)
+	if (pinfo == NULL) {
 		return EINVAL;
-
-	if ((pinfo->pshm_flags & (PSHM_DEFINED | PSHM_ALLOCATED)) == 0)
-		return EINVAL;
-
-	if (pinfo->pshm_flags & PSHM_INDELETE)
-		return 0;
-
-	pinfo->pshm_flags |= PSHM_INDELETE;
-	pinfo->pshm_usecount--;
-
-	pshm_cache_delete(pcache);
-	pinfo->pshm_flags |= PSHM_REMOVED;
-
-	/* release the existence reference */
-	if (!pinfo->pshm_usecount) {
-#if CONFIG_MACF
-		mac_posixshm_label_destroy(pinfo);
-#endif
-		/*
-		 * If this is the last reference going away on the object,
-		 * then we need to destroy the backing object.  The name
-		 * has an implied but uncounted reference on the object,
-		 * once it's created, since it's used as a rendezvous, and
-		 * therefore may be subsequently reopened.
-		 */
-		for (pshmobj = pinfo->pshm_memobjects;
-		     pshmobj != NULL;
-		     pshmobj = pshmobj_next) {
-			mach_memory_entry_port_release(pshmobj->pshmo_memobject);
-			pshmobj_next = pshmobj->pshmo_next;
-			FREE(pshmobj, M_SHM);
-		}
-		FREE(pinfo,M_SHM);
 	}
 
-	FREE(pcache, M_SHM);
+	pshm_cache_delete(pinfo);
+	pinfo->pshm_flags |= PSHM_REMOVED;
+
+	/* release the "unlink" reference */
+	pshm_deref(pinfo);
 
 	return 0;
 }
@@ -1097,211 +991,174 @@ pshm_unlink_internal(struct pshminfo *pinfo, struct pshmcache *pcache)
 int
 shm_unlink(proc_t p, struct shm_unlink_args *uap, __unused int32_t *retval)
 {
-	size_t i;
-	char * pnbuf;
-	size_t pathlen;
-	int error = 0;
+	int         error = 0;
+	pshm_info_t *pinfo = NULL;
+	pshm_info_t *name_pinfo = NULL;
 
-	struct pshmname nd;
-	struct pshminfo *pinfo;
-	char * nameptr;
-	char * cp;
-	struct pshmcache *pcache = PSHMCACHE_NULL;
-
-	pinfo = PSHMINFO_NULL;
-
-
-	MALLOC_ZONE(pnbuf, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	if (pnbuf == NULL) {
-		return(ENOSPC);		/* XXX non-standard */
-	}
-	pathlen = MAXPATHLEN;
-	error = copyinstr(uap->name, (void *)pnbuf, MAXPATHLEN, &pathlen);
-	if (error) {
+	/*
+	 * Get the name from user args.
+	 */
+	MALLOC(name_pinfo, pshm_info_t *, sizeof(pshm_info_t), M_SHM, M_WAITOK | M_ZERO);
+	if (name_pinfo == NULL) {
+		error = ENOSPC;
 		goto bad;
 	}
-	AUDIT_ARG(text, pnbuf);
-	if (pathlen > PSHMNAMLEN) {
-		error = ENAMETOOLONG;
-		goto bad;
-	}
-
-	nameptr = pnbuf;
-
-#ifdef PSXSHM_NAME_RESTRICT
-	if (*nameptr == '/') {
-		while (*(nameptr++) == '/') {
-			pathlen--;
-			error = EINVAL;
-			goto bad;
-		}
-        } else {
+	error = pshm_get_name(name_pinfo, uap->name);
+	if (error != 0) {
 		error = EINVAL;
 		goto bad;
-	}
-#endif /* PSXSHM_NAME_RESTRICT */
-
-	nd.pshm_nameptr = nameptr;
-	nd.pshm_namelen = pathlen;
-	nd.pshm_hash = 0;
-
-        for (cp = nameptr, i=1; *cp != 0 && i <= pathlen; i++, cp++) {
-               nd.pshm_hash += (unsigned char)*cp * i;
 	}
 
 	PSHM_SUBSYS_LOCK();
-	error = pshm_cache_search(&pinfo, &nd, &pcache, 0);
+	pinfo = pshm_cache_search(name_pinfo);
 
-	/* During unlink lookup failure also implies ENOENT */ 
-	if (error != PSHMCACHE_FOUND) {
-		PSHM_SUBSYS_UNLOCK();
+	if (pinfo == NULL) {
 		error = ENOENT;
-		goto bad;
-
-	}
-
-	if ((pinfo->pshm_flags & (PSHM_DEFINED | PSHM_ALLOCATED))==0) {
-		PSHM_SUBSYS_UNLOCK();
-		error = EINVAL;
-		goto bad;
-	}
-
-	if (pinfo->pshm_flags & PSHM_ALLOCATING) {
-		/* XXX should we wait for flag to clear and then proceed ? */
-		PSHM_SUBSYS_UNLOCK();
-		error = EAGAIN;
-		goto bad;
-	}
-
-	if (pinfo->pshm_flags & PSHM_INDELETE) {
-		PSHM_SUBSYS_UNLOCK();
-		error = 0;
-		goto bad;
+		goto bad_unlock;
 	}
 
 #if CONFIG_MACF
-	error = mac_posixshm_check_unlink(kauth_cred_get(), pinfo, nameptr);
+	error = mac_posixshm_check_unlink(kauth_cred_get(), &pinfo->pshm_hdr, name_pinfo->pshm_hdr.pshm_name);
 	if (error) {
-		PSHM_SUBSYS_UNLOCK();
-		goto bad;
+		goto bad_unlock;
 	}
 #endif
 
-	AUDIT_ARG(posix_ipc_perm, pinfo->pshm_uid, pinfo->pshm_gid,
-		  pinfo->pshm_mode);
+	AUDIT_ARG(posix_ipc_perm, pinfo->pshm_uid, pinfo->pshm_gid, pinfo->pshm_mode);
 
-	/* 
-	 * following file semantics, unlink should be allowed
-	 * for users with write permission only.
+	/*
+	 * Following file semantics, unlink should normally be allowed
+	 * for users with write permission only. We also allow the creator
+	 * of a segment to be able to delete, even w/o write permission.
+	 * That's because there's no equivalent of write permission for the
+	 * directory containing a file.
 	 */
-	if ( (error = pshm_access(pinfo, FWRITE, kauth_cred_get(), p)) ) {
-		PSHM_SUBSYS_UNLOCK();
-		goto bad;
+	error = pshm_access(pinfo, FWRITE, kauth_cred_get(), p);
+	if (error != 0 && pinfo->pshm_uid != kauth_getuid()) {
+		goto bad_unlock;
 	}
 
-	error = pshm_unlink_internal(pinfo, pcache);
+	error = pshm_unlink_internal(pinfo);
+bad_unlock:
 	PSHM_SUBSYS_UNLOCK();
-
 bad:
-	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
+	if (name_pinfo != NULL) {
+		FREE(name_pinfo, M_SHM);
+	}
 	return error;
 }
 
-/* already called locked */
+/*
+ * Add a new reference to a shared memory region.
+ * Fails if we will overflow the reference counter.
+ */
 static int
-pshm_close(struct pshminfo *pinfo, int dropref)
+pshm_ref(pshm_info_t *pinfo)
 {
-	int error = 0;
-	struct pshmobj *pshmobj, *pshmobj_next;
+	PSHM_SUBSYS_ASSERT_HELD();
 
-	/*
-	 * If we are dropping the reference we took on the cache object, don't
-	 * enforce the allocation requirement.
-	 */
-	if ( !dropref && ((pinfo->pshm_flags & PSHM_ALLOCATED) != PSHM_ALLOCATED)) {
-		return(EINVAL);
+	if (pinfo->pshm_usecount == PSHM_MAXCOUNT) {
+		return EMFILE;
 	}
-#if DIAGNOSTIC
-	if(!pinfo->pshm_usecount) {
-		kprintf("negative usecount in pshm_close\n");
+	pinfo->pshm_usecount++;
+	return 0;
+}
+
+/*
+ * Dereference a pshm_info_t. Delete the region if
+ * this was the final reference count.
+ */
+static void
+pshm_deref(pshm_info_t *pinfo)
+{
+	pshm_mobj_t *pshmobj;
+
+	PSHM_SUBSYS_ASSERT_HELD();
+	if (pinfo->pshm_usecount == 0) {
+		panic("negative usecount in pshm_close\n");
 	}
-#endif /* DIAGNOSTIC */
 	pinfo->pshm_usecount--; /* release this fd's reference */
 
- 	if ((pinfo->pshm_flags & PSHM_REMOVED) && !pinfo->pshm_usecount) {
+	if (pinfo->pshm_usecount == 0) {
 #if CONFIG_MACF
-		mac_posixshm_label_destroy(pinfo);
+		mac_posixshm_label_destroy(&pinfo->pshm_hdr);
 #endif
 		PSHM_SUBSYS_UNLOCK();
+
 		/*
-		 * If this is the last reference going away on the object,
-		 * then we need to destroy the backing object.
+		 * Release references to any backing objects.
 		 */
-		for (pshmobj = pinfo->pshm_memobjects;
-		     pshmobj != NULL;
-		     pshmobj = pshmobj_next) {
+		while ((pshmobj = SLIST_FIRST(&pinfo->pshm_mobjs)) != NULL) {
+			SLIST_REMOVE_HEAD(&pinfo->pshm_mobjs, pshmo_next);
 			mach_memory_entry_port_release(pshmobj->pshmo_memobject);
-			pshmobj_next = pshmobj->pshmo_next;
 			FREE(pshmobj, M_SHM);
 		}
+
+		/* free the pinfo itself */
+		FREE(pinfo, M_SHM);
+
 		PSHM_SUBSYS_LOCK();
-		FREE(pinfo,M_SHM);
 	}
-	return (error);
 }
 
 /* vfs_context_t passed to match prototype for struct fileops */
 static int
 pshm_closefile(struct fileglob *fg, __unused vfs_context_t ctx)
 {
-	int error = EINVAL;
-	struct pshmnode *pnode;
+	int        error = EINVAL;
+	pshmnode_t *pnode;
 
 	PSHM_SUBSYS_LOCK();
 
-	if ((pnode = (struct pshmnode *)fg->fg_data) != NULL) {
-		if (pnode->pinfo != PSHMINFO_NULL) {
-			error =  pshm_close(pnode->pinfo, 0);
+	pnode = (pshmnode_t *)fg->fg_data;
+	if (pnode != NULL) {
+		error = 0;
+		fg->fg_data = NULL; /* set fg_data to NULL to avoid racing close()es */
+		if (pnode->pinfo != NULL) {
+			pshm_deref(pnode->pinfo);
+			pnode->pinfo = NULL;
 		}
-		FREE(pnode, M_SHM);
 	}
 
 	PSHM_SUBSYS_UNLOCK();
+	if (pnode != NULL) {
+		FREE(pnode, M_SHM);
+	}
 
-	return(error);
+	return error;
 }
 
 static int
 pshm_read(__unused struct fileproc *fp, __unused struct uio *uio,
-		__unused int flags, __unused vfs_context_t ctx)
+    __unused int flags, __unused vfs_context_t ctx)
 {
-	return(ENOTSUP);
+	return ENOTSUP;
 }
 
 static int
 pshm_write(__unused struct fileproc *fp, __unused struct uio *uio,
-		__unused int flags, __unused vfs_context_t ctx)
+    __unused int flags, __unused vfs_context_t ctx)
 {
-	return(ENOTSUP);
+	return ENOTSUP;
 }
 
 static int
 pshm_ioctl(__unused struct fileproc *fp, __unused u_long com,
-		__unused caddr_t data, __unused vfs_context_t ctx)
+    __unused caddr_t data, __unused vfs_context_t ctx)
 {
-	return(ENOTSUP);
+	return ENOTSUP;
 }
 
 static int
 pshm_select(__unused struct fileproc *fp, __unused int which, __unused void *wql,
-		__unused vfs_context_t ctx)
+    __unused vfs_context_t ctx)
 {
-	return(ENOTSUP);
+	return ENOTSUP;
 }
 
 static int
-pshm_kqfilter(__unused struct fileproc *fp, struct knote *kn, 
-		__unused struct kevent_internal_s *kev, __unused vfs_context_t ctx)
+pshm_kqfilter(__unused struct fileproc *fp, struct knote *kn,
+    __unused struct kevent_internal_s *kev, __unused vfs_context_t ctx)
 {
 	kn->kn_flags = EV_ERROR;
 	kn->kn_data = ENOTSUP;
@@ -1309,47 +1166,48 @@ pshm_kqfilter(__unused struct fileproc *fp, struct knote *kn,
 }
 
 int
-fill_pshminfo(struct pshmnode * pshm, struct pshm_info * info)
+fill_pshminfo(pshmnode_t * pshm, struct pshm_info * info)
 {
-	struct pshminfo *pinfo;
+	pshm_info_t *pinfo;
 	struct vinfo_stat *sb;
-	
+
 	PSHM_SUBSYS_LOCK();
-	if ((pinfo = pshm->pinfo) == PSHMINFO_NULL){
+	if ((pinfo = pshm->pinfo) == NULL) {
 		PSHM_SUBSYS_UNLOCK();
-		return(EINVAL);
+		return EINVAL;
 	}
 
 	sb = &info->pshm_stat;
 
-	bzero(sb, sizeof(struct vinfo_stat)); 
+	bzero(sb, sizeof(struct vinfo_stat));
 	sb->vst_mode = pinfo->pshm_mode;
 	sb->vst_uid = pinfo->pshm_uid;
 	sb->vst_gid = pinfo->pshm_gid;
 	sb->vst_size = pinfo->pshm_length;
 
 	info->pshm_mappaddr = pshm->mapp_addr;
-	bcopy(&pinfo->pshm_name[0], &info->pshm_name[0], PSHMNAMLEN+1); 
+	bcopy(&pinfo->pshm_hdr.pshm_name[0], &info->pshm_name[0], PSHMNAMLEN + 1);
 
 	PSHM_SUBSYS_UNLOCK();
-	return(0);
+	return 0;
 }
 
 #if CONFIG_MACF
 void
 pshm_label_associate(struct fileproc *fp, struct vnode *vp, vfs_context_t ctx)
 {
-	struct pshmnode *pnode;
-	struct pshminfo *pshm;
+	pshmnode_t *pnode;
+	pshm_info_t *pshm;
 
 	PSHM_SUBSYS_LOCK();
-	pnode = (struct pshmnode *)fp->f_fglob->fg_data;
+	pnode = (pshmnode_t *)fp->f_data;
 	if (pnode != NULL) {
 		pshm = pnode->pinfo;
-		if (pshm != NULL)
+		if (pshm != NULL) {
 			mac_posixshm_vnode_label_associate(
-				vfs_context_ucred(ctx), pshm, pshm->pshm_label,
+				vfs_context_ucred(ctx), &pshm->pshm_hdr, pshm->pshm_label,
 				vp, vp->v_label);
+		}
 	}
 	PSHM_SUBSYS_UNLOCK();
 }

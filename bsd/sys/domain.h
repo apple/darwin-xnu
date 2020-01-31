@@ -78,7 +78,7 @@
 /*
  * Forward structure declarations for function prototypes [sic].
  */
-struct	mbuf;
+struct  mbuf;
 
 #pragma pack(4)
 
@@ -96,27 +96,27 @@ struct domain_old {
 #else
 struct domain {
 #endif /* !XNU_KERNEL_PRIVATE */
-	int	dom_family;		/* AF_xxx */
+	int     dom_family;             /* AF_xxx */
 	const char *dom_name;
-	void	(*dom_init)(void);	/* initialize domain data structures */
-	int	(*dom_externalize)	/* externalize access rights */
-		    (struct mbuf *);
-	void	(*dom_dispose)		/* dispose of internalized rights */
-		    (struct mbuf *);
+	void    (*dom_init)(void);      /* initialize domain data structures */
+	int     (*dom_externalize)      /* externalize access rights */
+	(struct mbuf *);
+	void    (*dom_dispose)          /* dispose of internalized rights */
+	(struct mbuf *);
 #ifdef XNU_KERNEL_PRIVATE
-	struct	protosw_old *dom_protosw; /* Chain of protosw's for AF */
-	struct	domain_old *dom_next;
+	struct  protosw_old *dom_protosw; /* Chain of protosw's for AF */
+	struct  domain_old *dom_next;
 #else
-	struct	protosw *dom_protosw;	/* Chain of protosw's for AF */
-	struct	domain *dom_next;
+	struct  protosw *dom_protosw;   /* Chain of protosw's for AF */
+	struct  domain *dom_next;
 #endif /* !XNU_KERNEL_PRIVATE */
-	int	(*dom_rtattach)		/* initialize routing table */
-		    (void **, int);
-	int	dom_rtoffset;		/* an arg to rtattach, in bits */
-	int	dom_maxrtkey;		/* for routing layer */
-	int	dom_protohdrlen;	/* len of protocol header */
-	int	dom_refs;		/* # socreates outstanding */
-	lck_mtx_t *dom_mtx;		/* domain global mutex */
+	int     (*dom_rtattach)         /* initialize routing table */
+	(void **, int);
+	int     dom_rtoffset;           /* an arg to rtattach, in bits */
+	int     dom_maxrtkey;           /* for routing layer */
+	int     dom_protohdrlen;        /* len of protocol header */
+	int     dom_refs;               /* # socreates outstanding */
+	lck_mtx_t *dom_mtx;             /* domain global mutex */
 	uint32_t dom_flags;
 	uint32_t reserved[2];
 };
@@ -131,26 +131,26 @@ struct domain {
  * Internal, private and extendable representation of domain.
  */
 struct domain {
-	int	dom_family;		/* AF_xxx */
-	uint32_t dom_flags;		/* domain flags (see below ) */
-	uint32_t dom_refs;		/* # socreates outstanding */
-	lck_mtx_t *dom_mtx;		/* domain global mutex */
+	int     dom_family;             /* AF_xxx */
+	uint32_t dom_flags;             /* domain flags (see below ) */
+	uint32_t dom_refs;              /* # socreates outstanding */
+	lck_mtx_t *dom_mtx;             /* domain global mutex */
 	decl_lck_mtx_data(, dom_mtx_s);
-	TAILQ_ENTRY(domain) dom_entry;	/* next domain in list */
+	TAILQ_ENTRY(domain) dom_entry;  /* next domain in list */
 	TAILQ_HEAD(, protosw) dom_protosw; /* protosw chain */
-	void	(*dom_init)		/* initialize domain data structures */
-		    (struct domain *);
-	int	(*dom_externalize)	/* externalize access rights */
-		    (struct mbuf *);
-	void	(*dom_dispose)		/* dispose of internalized rights */
-		    (struct mbuf *);
-	int	(*dom_rtattach)		/* initialize routing table */
-		    (void **, int);
-	int	dom_rtoffset;		/* an arg to rtattach, in bits */
-	int	dom_maxrtkey;		/* for routing layer */
-	int	dom_protohdrlen;	/* len of protocol header */
+	void    (*dom_init)             /* initialize domain data structures */
+	(struct domain *);
+	int     (*dom_externalize)      /* externalize access rights */
+	(struct mbuf *);
+	void    (*dom_dispose)          /* dispose of internalized rights */
+	(struct mbuf *);
+	int     (*dom_rtattach)         /* initialize routing table */
+	(void **, int);
+	int     dom_rtoffset;           /* an arg to rtattach, in bits */
+	int     dom_maxrtkey;           /* for routing layer */
+	int     dom_protohdrlen;        /* len of protocol header */
 	const char *dom_name;
-	struct domain_old *dom_old;	/* domain pointer per net_add_domain */
+	struct domain_old *dom_old;     /* domain pointer per net_add_domain */
 };
 
 extern TAILQ_HEAD(domains_head, domain) domains;
@@ -160,14 +160,14 @@ extern struct domain *localdomain;
 /*
  * Values for dom_flags
  */
-#define DOM_REENTRANT	0x1
+#define DOM_REENTRANT   0x1
 #ifdef BSD_KERNEL_PRIVATE
-#define	DOM_INITIALIZED	0x2		/* domain has been initialized */
-#define	DOM_ATTACHED	0x4		/* domain is in the global list */
-#define	DOM_OLD		0x10000000	/* domain added via net_add_domain */
+#define DOM_INITIALIZED 0x2             /* domain has been initialized */
+#define DOM_ATTACHED    0x4             /* domain is in the global list */
+#define DOM_OLD         0x10000000      /* domain added via net_add_domain */
 
 /* pseudo-public domain flags */
-#define	DOMF_USERFLAGS	(DOM_REENTRANT)
+#define DOMF_USERFLAGS  (DOM_REENTRANT)
 #endif /* BSD_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
@@ -194,4 +194,4 @@ extern struct domain *pffinddomain(int);
 __END_DECLS
 #endif /* KERNEL_PRIVATE */
 #endif /* PRIVATE */
-#endif	/* _SYS_DOMAIN_H_ */
+#endif  /* _SYS_DOMAIN_H_ */

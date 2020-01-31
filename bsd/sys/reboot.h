@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -61,7 +61,7 @@
  *	@(#)reboot.h	8.3 (Berkeley) 12/13/94
  */
 
-#ifndef	_SYS_REBOOT_H_
+#ifndef _SYS_REBOOT_H_
 #define _SYS_REBOOT_H_
 
 #include <sys/appleapiopts.h>
@@ -73,21 +73,21 @@
  */
 
 #ifdef __APPLE_API_PRIVATE
-#define RB_AUTOBOOT	0	/* flags for system auto-booting itself */
+#define RB_AUTOBOOT     0       /* flags for system auto-booting itself */
 
-#define RB_ASKNAME	0x01	/* ask for file name to reboot from */
-#define RB_SINGLE	0x02	/* reboot to single user only */
-#define RB_NOSYNC	0x04	/* dont sync before reboot */
-#define RB_HALT		0x08	/* don't reboot, just halt */
-#define RB_INITNAME	0x10	/* name given for /etc/init */
-#define RB_DFLTROOT	0x20	/* use compiled-in rootdev */
-#define RB_ALTBOOT	0x40	/* use /boot.old vs /boot */
-#define RB_UNIPROC	0x80	/* don't start slaves */
-#define RB_SAFEBOOT	0x100	/* booting safe */
+#define RB_ASKNAME      0x01    /* ask for file name to reboot from */
+#define RB_SINGLE       0x02    /* reboot to single user only */
+#define RB_NOSYNC       0x04    /* dont sync before reboot */
+#define RB_HALT         0x08    /* don't reboot, just halt */
+#define RB_INITNAME     0x10    /* name given for /etc/init */
+#define RB_DFLTROOT     0x20    /* use compiled-in rootdev */
+#define RB_ALTBOOT      0x40    /* use /boot.old vs /boot */
+#define RB_UNIPROC      0x80    /* don't start slaves */
+#define RB_SAFEBOOT     0x100   /* booting safe */
 #define RB_UPSDELAY 0x200   /* Delays restart by 5 minutes */
-#define RB_QUICK	0x400	/* quick and ungraceful reboot with file system caches flushed*/
-#define RB_PANIC	0x800   /* panic the kernel */
-#define RB_PANIC_ZPRINT	0x1000   /* add zprint info to panic string */
+#define RB_QUICK        0x400   /* quick and ungraceful reboot with file system caches flushed*/
+#define RB_PANIC        0x800   /* panic the kernel */
+#define RB_PANIC_ZPRINT 0x1000   /* add zprint info to panic string */
 
 #ifndef KERNEL
 __BEGIN_DECLS
@@ -116,23 +116,23 @@ __END_DECLS
  *	|MA | AD| CT| UN| PART  | TYPE |
  *	--------------------------------
  */
-#define B_ADAPTORSHIFT	24
-#define B_ADAPTORMASK	0x0f
-#define	B_ADAPTOR(val)		(((val) >> B_ADAPTORSHIFT) & B_ADAPTORMASK)
-#define B_CONTROLLERSHIFT	20
-#define B_CONTROLLERMASK	0xf
-#define	B_CONTROLLER(val)	(((val)>>B_CONTROLLERSHIFT) & B_CONTROLLERMASK)
-#define B_UNITSHIFT	16
-#define B_UNITMASK	0xff
-#define	B_UNIT(val)		(((val) >> B_UNITSHIFT) & B_UNITMASK)
+#define B_ADAPTORSHIFT  24
+#define B_ADAPTORMASK   0x0f
+#define B_ADAPTOR(val)          (((val) >> B_ADAPTORSHIFT) & B_ADAPTORMASK)
+#define B_CONTROLLERSHIFT       20
+#define B_CONTROLLERMASK        0xf
+#define B_CONTROLLER(val)       (((val)>>B_CONTROLLERSHIFT) & B_CONTROLLERMASK)
+#define B_UNITSHIFT     16
+#define B_UNITMASK      0xff
+#define B_UNIT(val)             (((val) >> B_UNITSHIFT) & B_UNITMASK)
 #define B_PARTITIONSHIFT 8
-#define B_PARTITIONMASK	0xff
-#define	B_PARTITION(val)	(((val) >> B_PARTITIONSHIFT) & B_PARTITIONMASK)
-#define B_TYPESHIFT	0
-#define B_TYPEMASK	0xff
-#define	B_TYPE(val)		(((val) >> B_TYPESHIFT) & B_TYPEMASK)
-#define B_MAGICMASK	0xf0000000
-#define B_DEVMAGIC	0xa0000000
+#define B_PARTITIONMASK 0xff
+#define B_PARTITION(val)        (((val) >> B_PARTITIONSHIFT) & B_PARTITIONMASK)
+#define B_TYPESHIFT     0
+#define B_TYPEMASK      0xff
+#define B_TYPE(val)             (((val) >> B_TYPESHIFT) & B_TYPEMASK)
+#define B_MAGICMASK     0xf0000000
+#define B_DEVMAGIC      0xa0000000
 
 #define MAKEBOOTDEV(type, adaptor, controller, unit, partition) \
 	(((type) << B_TYPESHIFT) | ((adaptor) << B_ADAPTORSHIFT) | \
@@ -145,7 +145,7 @@ __END_DECLS
 #include <machine/reboot.h>
 
 __BEGIN_DECLS
-int	reboot_kernel(int, char *);
+int     reboot_kernel(int, char *);
 __END_DECLS
 
 #define PROC_SHUTDOWN_LOG "/var/log/kernel-shutdown.log"
@@ -158,4 +158,4 @@ int get_system_inshutdown(void);
 __END_DECLS
 #endif /* KERNEL_PRIVATE */
 
-#endif	/* _SYS_REBOOT_H_ */
+#endif  /* _SYS_REBOOT_H_ */

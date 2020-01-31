@@ -43,22 +43,21 @@
  *
  * Operating the kern.darkboot sysctl is done via using the commands below:
  *
- * 	- MEMORY_MAINTENANCE_DARK_BOOT_UNSET
- * 		Unset the kern.darkboot sysctl (kern.sysctl=0).
- * 	- MEMORY_MAINTENANCE_DARK_BOOT_SET
- * 		Set the kern.darkboot sysctl (kern.sysctl=1).
- * 	- MEMORY_MAINTENANCE_DARK_BOOT_SET_PERSISTENT
- * 		Set the kern.darkboot sysctl (kern.sysctl=1) and save its
- * 		value into the 'darkboot' NVRAM variable.
+ *      - MEMORY_MAINTENANCE_DARK_BOOT_UNSET
+ *              Unset the kern.darkboot sysctl (kern.sysctl=0).
+ *      - MEMORY_MAINTENANCE_DARK_BOOT_SET
+ *              Set the kern.darkboot sysctl (kern.sysctl=1).
+ *      - MEMORY_MAINTENANCE_DARK_BOOT_SET_PERSISTENT
+ *              Set the kern.darkboot sysctl (kern.sysctl=1) and save its
+ *              value into the 'darkboot' NVRAM variable.
  *
  * Example:
- * 	sysctl kern.darkboot=2
+ *      sysctl kern.darkboot=2
  */
-#define	MEMORY_MAINTENANCE_DARK_BOOT_UNSET		(0)
-#define	MEMORY_MAINTENANCE_DARK_BOOT_SET		(1)
-#define	MEMORY_MAINTENANCE_DARK_BOOT_SET_PERSISTENT	(2)
+#define MEMORY_MAINTENANCE_DARK_BOOT_UNSET              (0)
+#define MEMORY_MAINTENANCE_DARK_BOOT_SET                (1)
+#define MEMORY_MAINTENANCE_DARK_BOOT_SET_PERSISTENT     (2)
 
-#define MEMORY_MAINTENANCE_DARK_BOOT_NVRAM_NAME		"darkboot"
+#define MEMORY_MAINTENANCE_DARK_BOOT_NVRAM_NAME         "darkboot"
 
 #endif /* _SYS_MEMORY_MAINTENANCE_H_ */
-

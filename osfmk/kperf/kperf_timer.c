@@ -56,6 +56,10 @@ unsigned int kperf_timerc = 0;
 
 static unsigned int pet_timer_id = 999;
 
+#define KPERF_TMR_ACTION_MASK (0xff)
+#define KPERF_TMR_ACTION(action_state) ((action_state) & KPERF_TMR_ACTION_MASK)
+#define KPERF_TMR_ACTIVE (0x100)
+
 /* maximum number of timers we can construct */
 #define TIMER_MAX (16)
 
@@ -103,7 +107,7 @@ kperf_timer_schedule(struct kperf_timer *timer, uint64_t now)
 
 static void
 kperf_sample_cpu(struct kperf_timer *timer, bool system_sample,
-		bool only_system)
+    bool only_system)
 {
 	assert(timer != NULL);
 
@@ -144,14 +148,14 @@ kperf_sample_cpu(struct kperf_timer *timer, bool system_sample,
 
 	/* call the action -- kernel-only from interrupt, pend user */
 	int r = kperf_sample(intbuf, &ctx, timer->actionid,
-			SAMPLE_FLAG_PEND_USER | (system_sample ? SAMPLE_FLAG_SYSTEM : 0) |
-			(only_system ? SAMPLE_FLAG_ONLY_SYSTEM : 0));
+	    SAMPLE_FLAG_PEND_USER | (system_sample ? SAMPLE_FLAG_SYSTEM : 0) |
+	    (only_system ? SAMPLE_FLAG_ONLY_SYSTEM : 0));
 
 	/* end tracepoint is informational */
 	BUF_INFO(PERF_TM_HNDLR | DBG_FUNC_END, r);
 
 	(void)atomic_fetch_and_explicit(&timer->pending_cpus,
-			~(UINT64_C(1) << ncpu), memory_order_relaxed);
+	    ~(UINT64_C(1) << ncpu), memory_order_relaxed);
 }
 
 void
@@ -168,11 +172,14 @@ kperf_timer_handler(void *param0, __unused void *param1)
 	unsigned int ncpus  = machine_info.logical_cpu_max;
 	bool system_only_self = true;
 
-	if (timer->actionid == 0) {
+	uint32_t action_state = atomic_fetch_or(&timer->action_state,
+	    KPERF_TMR_ACTIVE);
+
+	uint32_t actionid = KPERF_TMR_ACTION(action_state);
+	if (actionid == 0) {
 		return;
 	}
 
-	timer->active = 1;
 #if DEVELOPMENT || DEBUG
 	timer->fire_time = mach_absolute_time();
 #endif /* DEVELOPMENT || DEBUG */
@@ -183,7 +190,7 @@ kperf_timer_handler(void *param0, __unused void *param1)
 	}
 
 	BUF_DATA(PERF_TM_FIRE, ntimer, ntimer == pet_timer_id, timer->period,
-	                       timer->actionid);
+	    actionid);
 
 	if (ntimer == pet_timer_id) {
 		kperf_pet_fire_before();
@@ -195,7 +202,7 @@ kperf_timer_handler(void *param0, __unused void *param1)
 	/*
 	 * IPI other cores only if the action has non-system samplers.
 	 */
-	if (kperf_action_has_non_system(timer->actionid)) {
+	if (kperf_action_has_non_system(actionid)) {
 		/*
 		 * If the core that's handling the timer is not scheduling
 		 * threads, only run system samplers.
@@ -210,16 +217,16 @@ kperf_timer_handler(void *param0, __unused void *param1)
 		kperf_pet_fire_after();
 	} else {
 		/*
-		  * FIXME: Get the current time from elsewhere.  The next
-		  * timer's period now includes the time taken to reach this
-		  * point.  This causes a bias towards longer sampling periods
-		  * than requested.
-		  */
+		 * FIXME: Get the current time from elsewhere.  The next
+		 * timer's period now includes the time taken to reach this
+		 * point.  This causes a bias towards longer sampling periods
+		 * than requested.
+		 */
 		kperf_timer_schedule(timer, mach_absolute_time());
 	}
 
 deactivate:
-	timer->active = 0;
+	atomic_fetch_and(&timer->action_state, ~KPERF_TMR_ACTIVE);
 }
 
 /* program the timer from the PET thread */
@@ -290,30 +297,54 @@ kperf_timer_go(void)
 	uint64_t now = mach_absolute_time();
 
 	for (unsigned int i = 0; i < kperf_timerc; i++) {
-		if (kperf_timerv[i].period == 0) {
+		struct kperf_timer *timer = &kperf_timerv[i];
+		if (timer->period == 0) {
 			continue;
 		}
 
-		kperf_timer_schedule(&(kperf_timerv[i]), now);
+		atomic_store(&timer->action_state,
+		    timer->actionid & KPERF_TMR_ACTION_MASK);
+		kperf_timer_schedule(timer, now);
 	}
 }
 
 void
 kperf_timer_stop(void)
 {
+	/*
+	 * Determine which timers are running and store them in a bitset, while
+	 * cancelling their timer call.
+	 */
+	uint64_t running_timers = 0;
 	for (unsigned int i = 0; i < kperf_timerc; i++) {
-		if (kperf_timerv[i].period == 0) {
+		struct kperf_timer *timer = &kperf_timerv[i];
+		if (timer->period == 0) {
 			continue;
 		}
 
-		/* wait for the timer to stop */
-		while (kperf_timerv[i].active);
+		uint32_t action_state = atomic_fetch_and(&timer->action_state,
+		    ~KPERF_TMR_ACTION_MASK);
+		if (action_state & KPERF_TMR_ACTIVE) {
+			bit_set(running_timers, i);
+		}
 
-		timer_call_cancel(&kperf_timerv[i].tcall);
+		timer_call_cancel(&timer->tcall);
 	}
 
-	/* wait for PET to stop, too */
-	kperf_pet_config(0);
+	/*
+	 * Wait for any running timers to finish their critical sections.
+	 */
+	for (unsigned int i = lsb_first(running_timers); i < kperf_timerc;
+	    i = lsb_next(running_timers, i)) {
+		while (atomic_load(&kperf_timerv[i].action_state) != 0) {
+			delay(10);
+		}
+	}
+
+	if (pet_timer_id < kperf_timerc) {
+		/* wait for PET to stop, too */
+		kperf_pet_config(0);
+	}
 }
 
 unsigned int
@@ -417,7 +448,7 @@ kperf_timer_reset(void)
 	for (unsigned int i = 0; i < kperf_timerc; i++) {
 		kperf_timerv[i].period = 0;
 		kperf_timerv[i].actionid = 0;
-		kperf_timerv[i].pending_cpus = 0;
+		atomic_store_explicit(&kperf_timerv[i].pending_cpus, 0, memory_order_relaxed);
 	}
 }
 
@@ -432,7 +463,7 @@ kperf_timer_set_count(unsigned int count)
 		nanoseconds_to_absolutetime(KP_MIN_PERIOD_BG_NS, &min_period_bg_abstime);
 		nanoseconds_to_absolutetime(KP_MIN_PERIOD_PET_NS, &min_period_pet_abstime);
 		nanoseconds_to_absolutetime(KP_MIN_PERIOD_PET_BG_NS,
-			&min_period_pet_bg_abstime);
+		    &min_period_pet_bg_abstime);
 		assert(min_period_abstime > 0);
 	}
 
@@ -469,7 +500,7 @@ kperf_timer_set_count(unsigned int count)
 
 	/* create a new array */
 	new_timerv = kalloc_tag(count * sizeof(struct kperf_timer),
-		VM_KERN_MEMORY_DIAG);
+	    VM_KERN_MEMORY_DIAG);
 	if (new_timerv == NULL) {
 		return ENOMEM;
 	}
@@ -478,12 +509,12 @@ kperf_timer_set_count(unsigned int count)
 
 	if (old_timerv != NULL) {
 		bcopy(kperf_timerv, new_timerv,
-			kperf_timerc * sizeof(struct kperf_timer));
+		    kperf_timerc * sizeof(struct kperf_timer));
 	}
 
 	/* zero the new entries */
 	bzero(&(new_timerv[kperf_timerc]),
-		(count - old_count) * sizeof(struct kperf_timer));
+	    (count - old_count) * sizeof(struct kperf_timer));
 
 	/* (re-)setup the timer call info for all entries */
 	for (unsigned int i = 0; i < count; i++) {

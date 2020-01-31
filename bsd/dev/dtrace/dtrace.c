@@ -323,26 +323,60 @@ static dtrace_pattr_t	dtrace_provider_attr = {
 };
 
 static void
-dtrace_nullop(void)
-{}
+dtrace_provide_nullop(void *arg, const dtrace_probedesc_t *desc)
+{
+#pragma unused(arg, desc)
+}
+
+static void
+dtrace_provide_module_nullop(void *arg, struct modctl *ctl)
+{
+#pragma unused(arg, ctl)
+}
 
 static int
-dtrace_enable_nullop(void)
+dtrace_enable_nullop(void *arg, dtrace_id_t id, void *parg)
 {
+#pragma unused(arg, id, parg)
     return (0);
 }
 
+static void
+dtrace_disable_nullop(void *arg, dtrace_id_t id, void *parg)
+{
+#pragma unused(arg, id, parg)
+}
+
+static void
+dtrace_suspend_nullop(void *arg, dtrace_id_t id, void *parg)
+{
+#pragma unused(arg, id, parg)
+}
+
+static void
+dtrace_resume_nullop(void *arg, dtrace_id_t id, void *parg)
+{
+#pragma unused(arg, id, parg)
+}
+
+static void
+dtrace_destroy_nullop(void *arg, dtrace_id_t id, void *parg)
+{
+#pragma unused(arg, id, parg)
+}
+
+
 static dtrace_pops_t dtrace_provider_ops = {
-	.dtps_provide =	(void (*)(void *, const dtrace_probedesc_t *))dtrace_nullop,
-	.dtps_provide_module =	(void (*)(void *, struct modctl *))dtrace_nullop,
-	.dtps_enable =	(int (*)(void *, dtrace_id_t, void *))dtrace_nullop,
-	.dtps_disable =	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
-	.dtps_suspend =	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
-	.dtps_resume =	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
+	.dtps_provide = dtrace_provide_nullop,
+	.dtps_provide_module =	dtrace_provide_module_nullop,
+	.dtps_enable =	dtrace_enable_nullop,
+	.dtps_disable =	dtrace_disable_nullop,
+	.dtps_suspend =	dtrace_suspend_nullop,
+	.dtps_resume =	dtrace_resume_nullop,
 	.dtps_getargdesc =	NULL,
 	.dtps_getargval =	NULL,
 	.dtps_usermode =	NULL,
-	.dtps_destroy =	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
+	.dtps_destroy =	dtrace_destroy_nullop,
 };
 
 static dtrace_id_t	dtrace_probeid_begin;	/* special BEGIN probe */
@@ -550,7 +584,7 @@ dtrace_load##bits(uintptr_t addr)					\
 	{								\
 	volatile vm_offset_t recover = (vm_offset_t)&&dtraceLoadRecover##bits;		\
 	*flags |= CPU_DTRACE_NOFAULT;					\
-	recover = dtrace_set_thread_recover(current_thread(), recover);	\
+	recover = dtrace_sign_and_set_thread_recover(current_thread(), recover);	\
 	/*CSTYLED*/							\
 	/*                                                              \
 	* PR6394061 - avoid device memory that is unpredictably		\
@@ -7939,22 +7973,19 @@ dtrace_register(const char *name, const dtrace_pattr_t *pap, uint32_t priv,
 
 	if (pops->dtps_provide == NULL) {
 		ASSERT(pops->dtps_provide_module != NULL);
-		provider->dtpv_pops.dtps_provide =
-		    (void (*)(void *, const dtrace_probedesc_t *))dtrace_nullop;
+		provider->dtpv_pops.dtps_provide = dtrace_provide_nullop;
 	}
 
 	if (pops->dtps_provide_module == NULL) {
 		ASSERT(pops->dtps_provide != NULL);
 		provider->dtpv_pops.dtps_provide_module =
-		    (void (*)(void *, struct modctl *))dtrace_nullop;
+		    dtrace_provide_module_nullop;
 	}
 
 	if (pops->dtps_suspend == NULL) {
 		ASSERT(pops->dtps_resume == NULL);
-		provider->dtpv_pops.dtps_suspend =
-		    (void (*)(void *, dtrace_id_t, void *))dtrace_nullop;
-		provider->dtpv_pops.dtps_resume =
-		    (void (*)(void *, dtrace_id_t, void *))dtrace_nullop;
+		provider->dtpv_pops.dtps_suspend = dtrace_suspend_nullop;
+		provider->dtpv_pops.dtps_resume = dtrace_resume_nullop;
 	}
 
 	provider->dtpv_arg = arg;

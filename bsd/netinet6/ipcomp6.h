@@ -42,7 +42,7 @@
 #ifdef BSD_KERNEL_PRIVATE
 extern int ipcomp6_input(struct mbuf **, int *, int);
 extern int ipcomp6_output(struct mbuf *, u_char *, struct mbuf *,
-	struct secasvar *);
+    struct secasvar *);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #endif /*_NETINET6_IPCOMP6_H_*/

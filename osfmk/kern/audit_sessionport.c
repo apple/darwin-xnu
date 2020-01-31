@@ -39,14 +39,14 @@
  * Description: Obtain a send right for given audit session.
  *
  * Parameters:	*aia_p		Audit session information to assosiate with
- * 				the new port.
- * 		*sessionport	Pointer to the current session port.  This may
- * 				actually be set to IPC_PORT_NULL.
+ *                              the new port.
+ *              *sessionport	Pointer to the current session port.  This may
+ *                              actually be set to IPC_PORT_NULL.
  *
- * Returns:	!NULL		Resulting send right.	
- * 		NULL		Failed to allocate port (due to lack of memory
- * 				resources).
-
+ * Returns:	!NULL		Resulting send right.
+ *              NULL		Failed to allocate port (due to lack of memory
+ *                              resources).
+ *
  * Assumptions: Caller holds a reference on the session during the call.
  *		If there were no outstanding send rights against the port,
  *		hold a reference on the session and arm a new no-senders
@@ -66,11 +66,13 @@ audit_session_mksend(struct auditinfo_addr *aia_p, ipc_port_t *sessionport)
 	port = *sessionport;
 	if (!IP_VALID(port)) {
 		ipc_port_t new_port = ipc_port_alloc_kernel();
-		if (!IP_VALID(new_port))
+		if (!IP_VALID(new_port)) {
 			return new_port;
+		}
 		ipc_kobject_set(new_port, (ipc_kobject_t)aia_p, IKOT_AU_SESSIONPORT);
-		if (!OSCompareAndSwapPtr(port, new_port, sessionport))
+		if (!OSCompareAndSwapPtr(port, new_port, sessionport)) {
 			ipc_port_dealloc_kernel(new_port);
+		}
 		port = *sessionport;
 	}
 
@@ -101,7 +103,7 @@ audit_session_mksend(struct auditinfo_addr *aia_p, ipc_port_t *sessionport)
 		}
 	}
 
-	return (sendport);
+	return sendport;
 }
 
 
@@ -109,11 +111,11 @@ audit_session_mksend(struct auditinfo_addr *aia_p, ipc_port_t *sessionport)
  * audit_session_porttoaia
  *
  * Description: Obtain the audit session info associated with the given port.
- 
+ *
  * Parameters: port		A Mach port.
  *
  * Returns:    NULL		The given Mach port did not reference audit
- * 				session info.
+ *                              session info.
  *	       !NULL		The audit session info that is associated with
  *				the Mach port.
  *
@@ -133,7 +135,7 @@ audit_session_porttoaia(ipc_port_t port)
 		ip_unlock(port);
 	}
 
-	return (aia_p);
+	return aia_p;
 }
 
 
@@ -201,7 +203,7 @@ audit_session_portdestroy(ipc_port_t *sessionport)
 	ipc_port_t port = *sessionport;
 
 	if (IP_VALID(port)) {
-		assert (ip_active(port));
+		assert(ip_active(port));
 		assert(IKOT_AU_SESSIONPORT == ip_kotype(port));
 		ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
 		ipc_port_dealloc_kernel(port);

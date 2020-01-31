@@ -2,7 +2,7 @@
  * Copyright (c) 2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,42 +22,42 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-TRAP(0x00,idt64_zero_div)
-TRAP_IST1(0x01,idt64_debug)
-TRAP_IST2(0x02,idt64_nmi)
-USER_TRAP(0x03,idt64_int3)
-USER_TRAP(0x04,idt64_into)
-USER_TRAP(0x05,idt64_bounds)
-TRAP(0x06,idt64_invop)
-TRAP(0x07,idt64_nofpu)
-TRAP_IST1(0x08,idt64_double_fault)
-TRAP(0x09,idt64_fpu_over)
-TRAP_ERR(0x0a,idt64_inv_tss)
-TRAP_IST1(0x0b,idt64_segnp)
-TRAP_IST1(0x0c,idt64_stack_fault)
-TRAP_IST1(0x0d,idt64_gen_prot)
-TRAP_SPC(0x0e,idt64_page_fault)
-TRAP(0x0f,idt64_trap_0f)
-TRAP(0x10,idt64_fpu_err)
-TRAP_ERR(0x11,idt64_alignment_check)
-TRAP_IST1(0x12,idt64_mc)
-TRAP(0x13,idt64_sse_err)
-TRAP(0x14,idt64_trap_14)
-TRAP(0x15,idt64_trap_15)
-TRAP(0x16,idt64_trap_16)
-TRAP(0x17,idt64_trap_17)
-TRAP(0x18,idt64_trap_18)
-TRAP(0x19,idt64_trap_19)
-TRAP(0x1a,idt64_trap_1a)
-TRAP(0x1b,idt64_trap_1b)
-TRAP(0x1c,idt64_trap_1c)
-TRAP(0x1d,idt64_trap_1d)
-TRAP(0x1e,idt64_trap_1e)
-TRAP(0x1f,idt64_trap_1f)
+TRAP(0x00, idt64_zero_div)
+TRAP_IST1(0x01, idt64_debug)
+TRAP_IST2(0x02, idt64_nmi)
+USER_TRAP(0x03, idt64_int3)
+USER_TRAP(0x04, idt64_into)
+USER_TRAP(0x05, idt64_bounds)
+TRAP(0x06, idt64_invop)
+TRAP(0x07, idt64_nofpu)
+TRAP_IST1(0x08, idt64_double_fault)
+TRAP(0x09, idt64_fpu_over)
+TRAP_ERR(0x0a, idt64_inv_tss)
+TRAP_IST1(0x0b, idt64_segnp)
+TRAP_IST1(0x0c, idt64_stack_fault)
+TRAP_IST1(0x0d, idt64_gen_prot)
+TRAP_SPC(0x0e, idt64_page_fault)
+TRAP(0x0f, idt64_trap_0f)
+TRAP(0x10, idt64_fpu_err)
+TRAP_ERR(0x11, idt64_alignment_check)
+TRAP_IST1(0x12, idt64_mc)
+TRAP(0x13, idt64_sse_err)
+TRAP(0x14, idt64_trap_14)
+TRAP(0x15, idt64_trap_15)
+TRAP(0x16, idt64_trap_16)
+TRAP(0x17, idt64_trap_17)
+TRAP(0x18, idt64_trap_18)
+TRAP(0x19, idt64_trap_19)
+TRAP(0x1a, idt64_trap_1a)
+TRAP(0x1b, idt64_trap_1b)
+TRAP(0x1c, idt64_trap_1c)
+TRAP(0x1d, idt64_trap_1d)
+TRAP(0x1e, idt64_trap_1e)
+TRAP(0x1f, idt64_trap_1f)
 
 INTERRUPT(0x20)
 INTERRUPT(0x21)
@@ -161,9 +161,9 @@ INTERRUPT(0x7d)
 INTERRUPT(0x7e)
 USER_TRAP(0x7f, idt64_dtrace_ret) /* Required by dtrace "fasttrap" */
 
-USER_TRAP_SPC(0x80,idt64_unix_scall)
-USER_TRAP_SPC(0x81,idt64_mach_scall)
-USER_TRAP_SPC(0x82,idt64_mdep_scall)
+USER_TRAP_SPC(0x80, idt64_unix_scall)
+USER_TRAP_SPC(0x81, idt64_mach_scall)
+USER_TRAP_SPC(0x82, idt64_mdep_scall)
 
 INTERRUPT(0x83)
 INTERRUPT(0x84)
@@ -297,4 +297,4 @@ INTERRUPT(0xfb)
 INTERRUPT(0xfc)
 INTERRUPT(0xfd)
 INTERRUPT(0xfe)
-TRAP(0xff,idt64_preempt)
+TRAP(0xff, idt64_preempt)

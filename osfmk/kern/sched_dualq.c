@@ -105,7 +105,7 @@ const struct sched_dispatch_table sched_dualq_dispatch = {
 	.pset_init                                      = sched_dualq_pset_init,
 	.maintenance_continuation                       = sched_timeshare_maintenance_continue,
 	.choose_thread                                  = sched_dualq_choose_thread,
-	.steal_thread_enabled                           = TRUE,
+	.steal_thread_enabled                           = sched_steal_thread_enabled,
 	.steal_thread                                   = sched_dualq_steal_thread,
 	.compute_timeshare_priority                     = sched_compute_timeshare_priority,
 	.choose_processor                               = choose_processor,
@@ -146,19 +146,22 @@ const struct sched_dispatch_table sched_dualq_dispatch = {
 };
 
 __attribute__((always_inline))
-static inline run_queue_t dualq_main_runq(processor_t processor)
+static inline run_queue_t
+dualq_main_runq(processor_t processor)
 {
 	return &processor->processor_set->pset_runq;
 }
 
 __attribute__((always_inline))
-static inline run_queue_t dualq_bound_runq(processor_t processor)
+static inline run_queue_t
+dualq_bound_runq(processor_t processor)
 {
 	return &processor->runq;
 }
 
 __attribute__((always_inline))
-static inline run_queue_t dualq_runq_for_thread(processor_t processor, thread_t thread)
+static inline run_queue_t
+dualq_runq_for_thread(processor_t processor, thread_t thread)
 {
 	if (thread->bound_processor == PROCESSOR_NULL) {
 		return dualq_main_runq(processor);
@@ -171,10 +174,11 @@ static inline run_queue_t dualq_runq_for_thread(processor_t processor, thread_t 
 static sched_mode_t
 sched_dualq_initial_thread_sched_mode(task_t parent_task)
 {
-	if (parent_task == kernel_task)
+	if (parent_task == kernel_task) {
 		return TH_MODE_FIXED;
-	else
+	} else {
 		return TH_MODE_TIMESHARE;
+	}
 }
 
 static void
@@ -189,25 +193,31 @@ sched_dualq_pset_init(processor_set_t pset)
 	run_queue_init(&pset->pset_runq);
 }
 
+extern int sched_allow_NO_SMT_threads;
 static void
 sched_dualq_init(void)
 {
 	sched_timeshare_init();
+
+	if (PE_parse_boot_argn("disable_NO_SMT_threads", NULL, 0)) {
+		sched_allow_NO_SMT_threads = 0;
+	}
 }
 
 static thread_t
 sched_dualq_choose_thread(
-                          processor_t      processor,
-                          int              priority,
-                 __unused ast_t            reason)
+	processor_t      processor,
+	int              priority,
+	__unused ast_t            reason)
 {
 	run_queue_t main_runq  = dualq_main_runq(processor);
 	run_queue_t bound_runq = dualq_bound_runq(processor);
 	run_queue_t chosen_runq;
 
 	if (bound_runq->highq < priority &&
-	     main_runq->highq < priority)
+	    main_runq->highq < priority) {
 		return THREAD_NULL;
+	}
 
 	if (bound_runq->count && main_runq->count) {
 		if (bound_runq->highq >= main_runq->highq) {
@@ -220,7 +230,47 @@ sched_dualq_choose_thread(
 	} else if (main_runq->count) {
 		chosen_runq = main_runq;
 	} else {
-		return (THREAD_NULL);
+		return THREAD_NULL;
+	}
+
+	if (chosen_runq == bound_runq) {
+		return run_queue_dequeue(chosen_runq, SCHED_HEADQ);
+	}
+
+	if (processor->is_SMT) {
+		thread_t potential_thread = run_queue_dequeue(chosen_runq, SCHED_PEEK | SCHED_HEADQ);
+		if (potential_thread == THREAD_NULL) {
+			return THREAD_NULL;
+		}
+		if (processor->processor_primary != processor) {
+			/*
+			 * Secondary processor may not run a NO_SMT thread,
+			 * nor any thread if the primary is running a NO_SMT thread.
+			 */
+			if (thread_no_smt(potential_thread)) {
+				processor->must_idle = true;
+				return THREAD_NULL;
+			}
+			processor_t primary = processor->processor_primary;
+			if (primary->state == PROCESSOR_RUNNING) {
+				if (processor_active_thread_no_smt(primary)) {
+					processor->must_idle = true;
+					return THREAD_NULL;
+				}
+			}
+		} else if (processor->processor_secondary != PROCESSOR_NULL) {
+			processor_t secondary = processor->processor_secondary;
+			/*
+			 * Primary processor may not run a NO_SMT thread if
+			 * its secondary is running a bound thread.
+			 */
+			if (secondary->state == PROCESSOR_RUNNING) {
+				if (thread_no_smt(potential_thread) && secondary->current_is_bound) {
+					processor->must_idle = true;
+					return THREAD_NULL;
+				}
+			}
+		}
 	}
 
 	return run_queue_dequeue(chosen_runq, SCHED_HEADQ);
@@ -228,9 +278,9 @@ sched_dualq_choose_thread(
 
 static boolean_t
 sched_dualq_processor_enqueue(
-                              processor_t       processor,
-                              thread_t          thread,
-                              integer_t         options)
+	processor_t       processor,
+	thread_t          thread,
+	integer_t         options)
 {
 	run_queue_t     rq = dualq_runq_for_thread(processor, thread);
 	boolean_t       result;
@@ -238,13 +288,13 @@ sched_dualq_processor_enqueue(
 	result = run_queue_enqueue(rq, thread, options);
 	thread->runq = processor;
 
-	return (result);
+	return result;
 }
 
 static boolean_t
 sched_dualq_processor_queue_empty(processor_t processor)
 {
-	return dualq_main_runq(processor)->count  == 0 &&
+	return dualq_main_runq(processor)->count == 0 &&
 	       dualq_bound_runq(processor)->count == 0;
 }
 
@@ -255,7 +305,7 @@ sched_dualq_processor_csw_check(processor_t processor)
 	int             pri;
 
 	if (sched_dualq_thread_avoid_processor(processor, current_thread())) {
-		return (AST_PREEMPT | AST_URGENT);
+		return AST_PREEMPT | AST_URGENT;
 	}
 
 	run_queue_t main_runq  = dualq_main_runq(processor);
@@ -272,12 +322,14 @@ sched_dualq_processor_csw_check(processor_t processor)
 	}
 
 	if (has_higher) {
-		if (main_runq->urgency > 0)
-			return (AST_PREEMPT | AST_URGENT);
+		if (main_runq->urgency > 0) {
+			return AST_PREEMPT | AST_URGENT;
+		}
 
-		if (bound_runq->urgency > 0)
-			return (AST_PREEMPT | AST_URGENT);
-		
+		if (bound_runq->urgency > 0) {
+			return AST_PREEMPT | AST_URGENT;
+		}
+
 		return AST_PREEMPT;
 	}
 
@@ -286,18 +338,19 @@ sched_dualq_processor_csw_check(processor_t processor)
 
 static boolean_t
 sched_dualq_processor_queue_has_priority(processor_t    processor,
-                                         int            priority,
-                                         boolean_t      gte)
+    int            priority,
+    boolean_t      gte)
 {
 	run_queue_t main_runq  = dualq_main_runq(processor);
 	run_queue_t bound_runq = dualq_bound_runq(processor);
 
 	int qpri = MAX(main_runq->highq, bound_runq->highq);
 
-	if (gte)
+	if (gte) {
 		return qpri >= priority;
-	else
+	} else {
 		return qpri > priority;
+	}
 }
 
 static int
@@ -311,10 +364,11 @@ sched_dualq_runq_stats_count_sum(processor_t processor)
 {
 	uint64_t bound_sum = dualq_bound_runq(processor)->runq_stats.count_sum;
 
-	if (processor->cpu_id == processor->processor_set->cpu_set_low)
+	if (processor->cpu_id == processor->processor_set->cpu_set_low) {
 		return bound_sum + dualq_main_runq(processor)->runq_stats.count_sum;
-	else
+	} else {
 		return bound_sum;
+	}
 }
 static int
 sched_dualq_processor_bound_count(processor_t processor)
@@ -346,7 +400,6 @@ sched_dualq_processor_queue_shutdown(processor_t processor)
 	pset_unlock(pset);
 
 	qe_foreach_element_safe(thread, &tqueue, runq_links) {
-
 		remqueue(&thread->runq_links);
 
 		thread_lock(thread);
@@ -359,8 +412,8 @@ sched_dualq_processor_queue_shutdown(processor_t processor)
 
 static boolean_t
 sched_dualq_processor_queue_remove(
-                                   processor_t processor,
-                                   thread_t    thread)
+	processor_t processor,
+	thread_t    thread)
 {
 	run_queue_t             rq;
 	processor_set_t         pset = processor->processor_set;
@@ -375,8 +428,7 @@ sched_dualq_processor_queue_remove(
 		 * that run queue.
 		 */
 		run_queue_remove(rq, thread);
-	}
-	else {
+	} else {
 		/*
 		 * The thread left the run queue before we could
 		 * lock the run queue.
@@ -387,35 +439,34 @@ sched_dualq_processor_queue_remove(
 
 	pset_unlock(pset);
 
-	return (processor != PROCESSOR_NULL);
+	return processor != PROCESSOR_NULL;
 }
 
 static thread_t
 sched_dualq_steal_thread(processor_set_t pset)
 {
-	processor_set_t nset, cset = pset;
+	processor_set_t cset = pset;
+	processor_set_t nset = next_pset(cset);
 	thread_t        thread;
 
-	do {
+	while (nset != pset) {
+		pset_unlock(cset);
+		cset = nset;
+		pset_lock(cset);
+
 		if (cset->pset_runq.count > 0) {
+			/* Need task_restrict logic here */
 			thread = run_queue_dequeue(&cset->pset_runq, SCHED_HEADQ);
 			pset_unlock(cset);
-			return (thread);
+			return thread;
 		}
 
 		nset = next_pset(cset);
-
-		if (nset != pset) {
-			pset_unlock(cset);
-
-			cset = nset;
-			pset_lock(cset);
-		}
-	} while (nset != pset);
+	}
 
 	pset_unlock(cset);
 
-	return (THREAD_NULL);
+	return THREAD_NULL;
 }
 
 static void
@@ -444,8 +495,9 @@ sched_dualq_thread_update_scan(sched_update_scan_context_t scan_context)
 			pset_unlock(pset);
 			splx(s);
 
-			if (restart_needed)
+			if (restart_needed) {
 				break;
+			}
 
 			thread = processor->idle_thread;
 			if (thread != THREAD_NULL && thread->sched_stamp != sched_tick) {
@@ -458,7 +510,6 @@ sched_dualq_thread_update_scan(sched_update_scan_context_t scan_context)
 
 		/* Ok, we now have a collection of candidates -- fix them. */
 		thread_update_process_threads();
-
 	} while (restart_needed);
 
 	pset = &pset0;
@@ -473,13 +524,13 @@ sched_dualq_thread_update_scan(sched_update_scan_context_t scan_context)
 			pset_unlock(pset);
 			splx(s);
 
-			if (restart_needed)
+			if (restart_needed) {
 				break;
+			}
 		} while ((pset = pset->pset_list) != NULL);
 
 		/* Ok, we now have a collection of candidates -- fix them. */
 		thread_update_process_threads();
-
 	} while (restart_needed);
 }
 
@@ -489,13 +540,45 @@ extern int sched_allow_rt_smt;
 static bool
 sched_dualq_thread_avoid_processor(processor_t processor, thread_t thread)
 {
+	if (thread->bound_processor == processor) {
+		/* Thread is bound here */
+		return false;
+	}
+
 	if (processor->processor_primary != processor) {
 		/*
 		 * This is a secondary SMT processor.  If the primary is running
 		 * a realtime thread, only allow realtime threads on the secondary.
 		 */
-		if ((processor->processor_primary->current_pri >= BASEPRI_RTQUEUES) && ((thread->sched_pri < BASEPRI_RTQUEUES) || !sched_allow_rt_smt)) {
+		processor_t primary = processor->processor_primary;
+		if ((primary->current_pri >= BASEPRI_RTQUEUES) && ((thread->sched_pri < BASEPRI_RTQUEUES) || !sched_allow_rt_smt)) {
 			return true;
+		}
+
+		/* NO_SMT threads are not allowed on secondary processors */
+		if (thread_no_smt(thread)) {
+			return true;
+		}
+
+		if (primary->state == PROCESSOR_RUNNING) {
+			if (processor_active_thread_no_smt(primary)) {
+				/* No threads allowed on secondary if primary has NO_SMT */
+				return true;
+			}
+		}
+	}
+
+	if (processor->processor_secondary != PROCESSOR_NULL) {
+		/*
+		 * This is a primary SMT processor.  If the secondary is running
+		 * a bound thread, the primary may not run a NO_SMT thread.
+		 */
+		processor_t secondary = processor->processor_secondary;
+
+		if (secondary->state == PROCESSOR_RUNNING) {
+			if (secondary->current_is_bound && thread_no_smt(thread)) {
+				return true;
+			}
 		}
 	}
 

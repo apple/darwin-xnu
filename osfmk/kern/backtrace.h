@@ -40,7 +40,7 @@ __BEGIN_DECLS
  * bt.  Returns the number of return addresses stored.
  */
 uint32_t backtrace(uintptr_t *bt, uint32_t max_frames)
-	__attribute__((noinline));
+__attribute__((noinline));
 
 /*
  * Backtrace the current thread starting at the frame pointer start_fp, storing
@@ -48,7 +48,7 @@ uint32_t backtrace(uintptr_t *bt, uint32_t max_frames)
  * addresses stored.
  */
 uint32_t backtrace_frame(uintptr_t *bt, uint32_t max_frames, void *start_frame)
-	__attribute__((noinline,not_tail_called));
+__attribute__((noinline, not_tail_called));
 
 /*
  * Backtrace the kernel stack of the context that was interrupted, storing up
@@ -70,7 +70,7 @@ uint32_t backtrace_interrupted(uintptr_t *bt, uint32_t max_frames);
  * Must not be called from interrupt context or with interrupts disabled.
  */
 int backtrace_user(uintptr_t *bt, uint32_t max_frames, uint32_t *frames_out,
-	bool *user_64_out);
+    bool *user_64_out);
 
 /*
  * Backtrace the user stack of the given thread, storing up to max_frames return
@@ -82,7 +82,7 @@ int backtrace_user(uintptr_t *bt, uint32_t max_frames, uint32_t *frames_out,
  * Must not be called from interrupt context or with interrupts disabled.
  */
 int backtrace_thread_user(void *thread, uintptr_t *bt, uint32_t max_frames,
-	uint32_t *frames_out, bool *user_64_out);
+    uint32_t *frames_out, bool *user_64_out);
 
 __END_DECLS
 

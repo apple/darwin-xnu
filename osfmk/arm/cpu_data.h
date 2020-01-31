@@ -27,10 +27,10 @@
  */
 /*
  * @OSF_COPYRIGHT@
- * 
+ *
  */
 
-#ifndef	ARM_CPU_DATA
+#ifndef ARM_CPU_DATA
 #define ARM_CPU_DATA
 
 #ifdef  MACH_KERNEL_PRIVATE
@@ -46,14 +46,15 @@
 #include <mach/mach_types.h>
 #include <machine/thread.h>
 
-#define current_thread()	current_thread_fast()
+#define current_thread()        current_thread_fast()
 
-static inline __pure2 thread_t current_thread_fast(void) 
+static inline __pure2 thread_t
+current_thread_fast(void)
 {
 #if defined(__arm64__)
 	return (thread_t)(__builtin_arm_rsr64("TPIDR_EL1"));
 #else
-	return (thread_t)(__builtin_arm_mrc(15, 0, 13, 0, 4));	// TPIDRPRW
+	return (thread_t)(__builtin_arm_mrc(15, 0, 13, 0, 4));  // TPIDRPRW
 #endif
 }
 
@@ -72,31 +73,33 @@ static inline __pure2 thread_t current_thread_fast(void)
  * the window between the thread pointer update and the branch to
  * the new pc.
  */
-static inline thread_t current_thread_volatile(void)
+static inline thread_t
+current_thread_volatile(void)
 {
 	/* The compiler treats rsr64 as const, which can allow
-	   it to eliminate redundant calls, which we don't want here.
-	   Thus we use volatile asm.  The mrc used for arm32 should be
-	   treated as volatile however. */
+	 *  it to eliminate redundant calls, which we don't want here.
+	 *  Thus we use volatile asm.  The mrc used for arm32 should be
+	 *  treated as volatile however. */
 #if defined(__arm64__)
 	thread_t result;
-	__asm__ volatile("mrs %0, TPIDR_EL1" : "=r" (result));
+	__asm__ volatile ("mrs %0, TPIDR_EL1" : "=r" (result));
 	return result;
 #else
-	return (thread_t)(__builtin_arm_mrc(15, 0, 13, 0, 4));	// TPIDRPRW
+	return (thread_t)(__builtin_arm_mrc(15, 0, 13, 0, 4));  // TPIDRPRW
 #endif
 }
 
 #if defined(__arm64__)
 
-static inline vm_offset_t exception_stack_pointer(void)
+static inline vm_offset_t
+exception_stack_pointer(void)
 {
 	vm_offset_t result = 0;
-	__asm__ volatile(
-		"msr		SPSel, #1  \n"
-		"mov		%0, sp     \n"
-		"msr		SPSel, #0  \n"
-		: "=r" (result));
+	__asm__ volatile (
+                 "msr		SPSel, #1  \n"
+                 "mov		%0, sp     \n"
+                 "msr		SPSel, #0  \n"
+                 : "=r" (result));
 
 	return result;
 }
@@ -104,16 +107,16 @@ static inline vm_offset_t exception_stack_pointer(void)
 #endif /* defined(__arm64__) */
 
 #define getCpuDatap()            current_thread()->machine.CpuDatap
-#define current_cpu_datap()	 getCpuDatap()
+#define current_cpu_datap()      getCpuDatap()
 
-extern int 									get_preemption_level(void);
-extern void 								_enable_preemption_no_check(void);
+extern int                                                                      get_preemption_level(void);
+extern void                                                             _enable_preemption_no_check(void);
 
-#define enable_preemption_no_check()		_enable_preemption_no_check()
-#define mp_disable_preemption()				_disable_preemption()
-#define mp_enable_preemption()				_enable_preemption()
-#define mp_enable_preemption_no_check()		_enable_preemption_no_check()
+#define enable_preemption_no_check()            _enable_preemption_no_check()
+#define mp_disable_preemption()                         _disable_preemption()
+#define mp_enable_preemption()                          _enable_preemption()
+#define mp_enable_preemption_no_check()         _enable_preemption_no_check()
 
 #endif  /* MACH_KERNEL_PRIVATE */
 
-#endif	/* ARM_CPU_DATA */
+#endif  /* ARM_CPU_DATA */

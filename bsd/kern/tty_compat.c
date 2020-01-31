@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1997 Apple Computer, Inc. All Rights Reserved */
@@ -86,7 +86,7 @@
 #include <sys/syslog.h>
 
 static int ttcompatgetflags(struct tty *tp);
-static void ttcompatsetflags(struct tty	*tp, struct termios *t);
+static void ttcompatsetflags(struct tty *tp, struct termios *t);
 static void ttcompatsetlflags(struct tty *tp, struct termios *t);
 static int ttcompatspeedtab(int speed, struct speedtab *table);
 
@@ -98,26 +98,26 @@ static int ttcompatspeedtab(int speed, struct speedtab *table);
  * name space.
  */
 static struct speedtab compatspeeds[] = {
-#define MAX_SPEED	17
+#define MAX_SPEED       17
 	{ 115200, 17 },
 	{ 57600, 16 },
 	{ 38400, 15 },
 	{ 19200, 14 },
-	{ 9600,	13 },
-	{ 4800,	12 },
-	{ 2400,	11 },
-	{ 1800,	10 },
-	{ 1200,	9 },
-	{ 600,	8 },
-	{ 300,	7 },
-	{ 200,	6 },
-	{ 150,	5 },
-	{ 134,	4 },
-	{ 110,	3 },
-	{ 75,	2 },
-	{ 50,	1 },
-	{ 0,	0 },
-	{ -1,	-1 },
+	{ 9600, 13 },
+	{ 4800, 12 },
+	{ 2400, 11 },
+	{ 1800, 10 },
+	{ 1200, 9 },
+	{ 600, 8 },
+	{ 300, 7 },
+	{ 200, 6 },
+	{ 150, 5 },
+	{ 134, 4 },
+	{ 110, 3 },
+	{ 75, 2 },
+	{ 50, 1 },
+	{ 0, 0 },
+	{ -1, -1 },
 };
 static int compatspcodes[] = {
 	0, 50, 75, 110, 134, 150, 200, 300, 600, 1200,
@@ -149,12 +149,15 @@ static int compatspcodes[] = {
 static int
 ttcompatspeedtab(int speed, struct speedtab *table)
 {
-	if (speed == 0)
-		return (0); /* hangup */
-	for ( ; table->sp_speed > 0; table++)
-		if (table->sp_speed <= speed) /* nearest one, rounded down */
-			return (table->sp_code);
-	return (1); /* 50, min and not hangup */
+	if (speed == 0) {
+		return 0; /* hangup */
+	}
+	for (; table->sp_speed > 0; table++) {
+		if (table->sp_speed <= speed) { /* nearest one, rounded down */
+			return table->sp_code;
+		}
+	}
+	return 1; /* 50, min and not hangup */
 }
 
 
@@ -212,36 +215,38 @@ ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term)
 {
 	switch (*com) {
 	case TIOCSETP:
-		/*
-		 * Wait for all characters queued for output to drain, then
-		 * Discard all characters queued for input, and then set
-		 * the input and output speeds and device flags, per the
-		 * contents of the struct sgttyb that 'data' points to.
-		 */
+	/*
+	 * Wait for all characters queued for output to drain, then
+	 * Discard all characters queued for input, and then set
+	 * the input and output speeds and device flags, per the
+	 * contents of the struct sgttyb that 'data' points to.
+	 */
 	case TIOCSETN:
 		/*
 		 * Same as TIOCSETP, but the output is not drained, and any
 		 * pending input is not discarded.
 		 */
-	    {
+	{
 		struct sgttyb *sg = (struct sgttyb *)data;
 		int speed;
 
-		if ((speed = sg->sg_ispeed) > MAX_SPEED || speed < 0)
-			return(EINVAL);
-		else if (speed != ttcompatspeedtab(tp->t_ispeed, compatspeeds))
+		if ((speed = sg->sg_ispeed) > MAX_SPEED || speed < 0) {
+			return EINVAL;
+		} else if (speed != ttcompatspeedtab(tp->t_ispeed, compatspeeds)) {
 			term->c_ispeed = compatspcodes[speed];
-		else
+		} else {
 			term->c_ispeed = tp->t_ispeed;
-		if ((speed = sg->sg_ospeed) > MAX_SPEED || speed < 0)
-			return(EINVAL);
-		else if (speed != ttcompatspeedtab(tp->t_ospeed, compatspeeds))
+		}
+		if ((speed = sg->sg_ospeed) > MAX_SPEED || speed < 0) {
+			return EINVAL;
+		} else if (speed != ttcompatspeedtab(tp->t_ospeed, compatspeeds)) {
 			term->c_ospeed = compatspcodes[speed];
-		else
+		} else {
 			term->c_ospeed = tp->t_ospeed;
+		}
 		term->c_cc[VERASE] = sg->sg_erase;
 		term->c_cc[VKILL] = sg->sg_kill;
-		tp->t_flags = (tp->t_flags&0xffff0000) | (sg->sg_flags&0xffff);
+		tp->t_flags = (tp->t_flags & 0xffff0000) | (sg->sg_flags & 0xffff);
 		ttcompatsetflags(tp, term);
 		*com = (*com == TIOCSETP) ? TIOCSETAF : TIOCSETA;
 		break;
@@ -251,7 +256,7 @@ ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term)
 		 * Set the terminal control characters per the contents of
 		 * the struct tchars that 'data' points to.
 		 */
-	    {
+	{
 		struct tchars *tc = (struct tchars *)data;
 		cc_t *cc;
 
@@ -262,8 +267,9 @@ ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term)
 		cc[VSTOP] = tc->t_stopc;
 		cc[VEOF] = tc->t_eofc;
 		cc[VEOL] = tc->t_brkc;
-		if (tc->t_brkc == -1)
+		if (tc->t_brkc == -1) {
 			cc[VEOL2] = _POSIX_VDISABLE;
+		}
 		*com = TIOCSETA;
 		break;
 	}
@@ -287,32 +293,33 @@ ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term)
 		break;
 	}
 	case TIOCLBIS:
-		/*
-		 * Set the bits in the terminal state local flags word
-		 * (16 bits) for the terminal to the current bits OR
-		 * those in the 16 bit value pointed to by 'data'.
-		 */
+	/*
+	 * Set the bits in the terminal state local flags word
+	 * (16 bits) for the terminal to the current bits OR
+	 * those in the 16 bit value pointed to by 'data'.
+	 */
 	case TIOCLBIC:
-		/*
-		 * Clear the bits in the terminal state local flags word
-		 * for the terminal to the current bits AND those bits NOT
-		 * in the 16 bit value pointed to by 'data'.
-		 */
+	/*
+	 * Clear the bits in the terminal state local flags word
+	 * for the terminal to the current bits AND those bits NOT
+	 * in the 16 bit value pointed to by 'data'.
+	 */
 	case TIOCLSET:
 		/*
 		 * Set the terminal state local flags word to exactly those
 		 * bits that correspond to the 16 bit value pointed to by
 		 * 'data'.
 		 */
-		if (*com == TIOCLSET)
-			tp->t_flags = (tp->t_flags&0xffff) | *(int *)data<<16;
-		else {
+		if (*com == TIOCLSET) {
+			tp->t_flags = (tp->t_flags & 0xffff) | *(int *)data << 16;
+		} else {
 			tp->t_flags =
-			 (ttcompatgetflags(tp)&0xffff0000)|(tp->t_flags&0xffff);
-			if (*com == TIOCLBIS)
-				tp->t_flags |= *(int *)data<<16;
-			else
-				tp->t_flags &= ~(*(int *)data<<16);
+			    (ttcompatgetflags(tp) & 0xffff0000) | (tp->t_flags & 0xffff);
+			if (*com == TIOCLBIS) {
+				tp->t_flags |= *(int *)data << 16;
+			} else {
+				tp->t_flags &= ~(*(int *)data << 16);
+			}
 		}
 		ttcompatsetlflags(tp, term);
 		*com = TIOCSETA;
@@ -377,8 +384,9 @@ ttcompat(struct tty *tp, u_long com, caddr_t data, int flag, struct proc *p)
 		int error;
 
 		term = tp->t_termios;
-		if ((error = ttsetcompat(tp, &com, data, &term)) != 0)
+		if ((error = ttsetcompat(tp, &com, data, &term)) != 0) {
 			return error;
+		}
 		return ttioctl_locked(tp, com, (caddr_t) &term, flag, p);
 	}
 	case TIOCGETP:
@@ -386,15 +394,16 @@ ttcompat(struct tty *tp, u_long com, caddr_t data, int flag, struct proc *p)
 		 * Get the current input and output speeds, and device
 		 * flags, into the structure pointed to by 'data'.
 		 */
-	    {
+	{
 		struct sgttyb *sg = (struct sgttyb *)data;
 		cc_t *cc = tp->t_cc;
 
 		sg->sg_ospeed = ttcompatspeedtab(tp->t_ospeed, compatspeeds);
-		if (tp->t_ispeed == 0)
+		if (tp->t_ispeed == 0) {
 			sg->sg_ispeed = sg->sg_ospeed;
-		else
+		} else {
 			sg->sg_ispeed = ttcompatspeedtab(tp->t_ispeed, compatspeeds);
+		}
 		sg->sg_erase = cc[VERASE];
 		sg->sg_kill = cc[VKILL];
 		sg->sg_flags = tp->t_flags = ttcompatgetflags(tp);
@@ -405,7 +414,7 @@ ttcompat(struct tty *tp, u_long com, caddr_t data, int flag, struct proc *p)
 		 * Get the terminal control characters into the struct
 		 * tchars that 'data' points to.
 		 */
-	    {
+	{
 		struct tchars *tc = (struct tchars *)data;
 		cc_t *cc = tp->t_cc;
 
@@ -440,9 +449,9 @@ ttcompat(struct tty *tp, u_long com, caddr_t data, int flag, struct proc *p)
 		 * value pointed to by 'data'.
 		 */
 		tp->t_flags =
-		 (ttcompatgetflags(tp) & 0xffff0000UL)
-		   | (tp->t_flags & 0xffff);
-		*(int *)data = tp->t_flags>>16;
+		    (ttcompatgetflags(tp) & 0xffff0000UL)
+		    | (tp->t_flags & 0xffff);
+		*(int *)data = tp->t_flags >> 16;
 		break;
 
 	case OTIOCGETD:
@@ -458,29 +467,31 @@ ttcompat(struct tty *tp, u_long com, caddr_t data, int flag, struct proc *p)
 		 * Set the current line discipline based on the value of the
 		 * int pointed to by 'data'.
 		 */
-	    {
+	{
 		int ldisczero = 0;
 
-		return (ttioctl_locked(tp, TIOCSETD, 
-		    *(int *)data == 2 ? (caddr_t)&ldisczero : data, flag, p));
-	    }
+		return ttioctl_locked(tp, TIOCSETD,
+		           *(int *)data == 2 ? (caddr_t)&ldisczero : data, flag, p);
+	}
 
 	case OTIOCCONS:
 		/*
 		 * Become the console device.
 		 */
 		*(int *)data = 1;
-		return (ttioctl_locked(tp, TIOCCONS, data, flag, p));
+		return ttioctl_locked(tp, TIOCCONS, data, flag, p);
 
 	case TIOCGSID:
 		/*
 		 * Get the current session ID (controlling process' PID).
 		 */
-		if (tp->t_session == NULL)
+		if (tp->t_session == NULL) {
 			return ENOTTY;
+		}
 
-		if (tp->t_session->s_leader == NULL)
+		if (tp->t_session->s_leader == NULL) {
 			return ENOTTY;
+		}
 
 		*(int *) data =  tp->t_session->s_leader->p_pid;
 		break;
@@ -489,13 +500,13 @@ ttcompat(struct tty *tp, u_long com, caddr_t data, int flag, struct proc *p)
 		/*
 		 * This ioctl is not handled at this layer.
 		 */
-		return (ENOTTY);
+		return ENOTTY;
 	}
 
 	/*
 	 * Successful 'get' operation.
 	 */
-	return (0);
+	return 0;
 }
 
 /*
@@ -517,59 +528,73 @@ ttcompat(struct tty *tp, u_long com, caddr_t data, int flag, struct proc *p)
 static int
 ttcompatgetflags(struct tty *tp)
 {
-	tcflag_t iflag	= tp->t_iflag;
-	tcflag_t lflag	= tp->t_lflag;
-	tcflag_t oflag	= tp->t_oflag;
-	tcflag_t cflag	= tp->t_cflag;
+	tcflag_t iflag  = tp->t_iflag;
+	tcflag_t lflag  = tp->t_lflag;
+	tcflag_t oflag  = tp->t_oflag;
+	tcflag_t cflag  = tp->t_cflag;
 	int flags = 0;
 
-	if (iflag&IXOFF)
+	if (iflag & IXOFF) {
 		flags |= TANDEM;
-	if (iflag&ICRNL || oflag&ONLCR)
-		flags |= CRMOD;
-	if ((cflag&CSIZE) == CS8) {
-		flags |= PASS8;
-		if (iflag&ISTRIP)
-			flags |= ANYP;
 	}
-	else if (cflag&PARENB) {
-		if (iflag&INPCK) {
-			if (cflag&PARODD)
+	if (iflag & ICRNL || oflag & ONLCR) {
+		flags |= CRMOD;
+	}
+	if ((cflag & CSIZE) == CS8) {
+		flags |= PASS8;
+		if (iflag & ISTRIP) {
+			flags |= ANYP;
+		}
+	} else if (cflag & PARENB) {
+		if (iflag & INPCK) {
+			if (cflag & PARODD) {
 				flags |= ODDP;
-			else
+			} else {
 				flags |= EVENP;
-		} else
+			}
+		} else {
 			flags |= EVENP | ODDP;
+		}
 	}
 
-	if ((lflag&ICANON) == 0) {
+	if ((lflag & ICANON) == 0) {
 		/* fudge */
-		if (iflag&(INPCK|ISTRIP|IXON) || lflag&(IEXTEN|ISIG)
-		    || (cflag&(CSIZE|PARENB)) != CS8)
+		if (iflag & (INPCK | ISTRIP | IXON) || lflag & (IEXTEN | ISIG)
+		    || (cflag & (CSIZE | PARENB)) != CS8) {
 			flags |= CBREAK;
-		else
+		} else {
 			flags |= RAW;
+		}
 	}
-	if (!(flags&RAW) && !(oflag&OPOST) && (cflag&(CSIZE|PARENB)) == CS8)
+	if (!(flags & RAW) && !(oflag & OPOST) && (cflag & (CSIZE | PARENB)) == CS8) {
 		flags |= LITOUT;
-	if (cflag&MDMBUF)
+	}
+	if (cflag & MDMBUF) {
 		flags |= MDMBUF;
-	if ((cflag&HUPCL) == 0)
+	}
+	if ((cflag & HUPCL) == 0) {
 		flags |= NOHANG;
-	if (oflag&OXTABS)
+	}
+	if (oflag & OXTABS) {
 		flags |= XTABS;
-	if (lflag&ECHOE)
-		flags |= CRTERA|CRTBS;
-	if (lflag&ECHOKE)
-		flags |= CRTKIL|CRTBS;
-	if (lflag&ECHOPRT)
+	}
+	if (lflag & ECHOE) {
+		flags |= CRTERA | CRTBS;
+	}
+	if (lflag & ECHOKE) {
+		flags |= CRTKIL | CRTBS;
+	}
+	if (lflag & ECHOPRT) {
 		flags |= PRTERA;
-	if (lflag&ECHOCTL)
+	}
+	if (lflag & ECHOCTL) {
 		flags |= CTLECH;
-	if ((iflag&IXANY) == 0)
+	}
+	if ((iflag & IXANY) == 0) {
 		flags |= DECCTQ;
-	flags |= lflag&(ECHO|TOSTOP|FLUSHO|PENDIN|NOFLSH);
-	return (flags);
+	}
+	flags |= lflag & (ECHO | TOSTOP | FLUSHO | PENDIN | NOFLSH);
+	return flags;
 }
 
 /*
@@ -590,27 +615,29 @@ static void
 ttcompatsetflags(struct tty *tp, struct termios *t)
 {
 	int flags = tp->t_flags;
-	tcflag_t iflag	= t->c_iflag;
-	tcflag_t oflag	= t->c_oflag;
-	tcflag_t lflag	= t->c_lflag;
-	tcflag_t cflag	= t->c_cflag;
+	tcflag_t iflag  = t->c_iflag;
+	tcflag_t oflag  = t->c_oflag;
+	tcflag_t lflag  = t->c_lflag;
+	tcflag_t cflag  = t->c_cflag;
 
 	if (flags & RAW) {
 		iflag = IGNBRK;
-		lflag &= ~(ECHOCTL|ISIG|ICANON|IEXTEN);
+		lflag &= ~(ECHOCTL | ISIG | ICANON | IEXTEN);
 	} else {
-		iflag &= ~(PARMRK|IGNPAR|IGNCR|INLCR);
-		iflag |= BRKINT|IXON|IMAXBEL;
-		lflag |= ISIG|IEXTEN|ECHOCTL;	/* XXX was echoctl on ? */
-		if (flags & XTABS)
+		iflag &= ~(PARMRK | IGNPAR | IGNCR | INLCR);
+		iflag |= BRKINT | IXON | IMAXBEL;
+		lflag |= ISIG | IEXTEN | ECHOCTL;   /* XXX was echoctl on ? */
+		if (flags & XTABS) {
 			oflag |= OXTABS;
-		else
+		} else {
 			oflag &= ~OXTABS;
-		if (flags & CBREAK)
+		}
+		if (flags & CBREAK) {
 			lflag &= ~ICANON;
-		else
+		} else {
 			lflag |= ICANON;
-		if (flags&CRMOD) {
+		}
+		if (flags & CRMOD) {
 			iflag |= ICRNL;
 			oflag |= ONLCR;
 		} else {
@@ -618,45 +645,51 @@ ttcompatsetflags(struct tty *tp, struct termios *t)
 			oflag &= ~ONLCR;
 		}
 	}
-	if (flags&ECHO)
+	if (flags & ECHO) {
 		lflag |= ECHO;
-	else
-		lflag &= ~ECHO;
-
-	cflag &= ~(CSIZE|PARENB);
-	if (flags&(RAW|LITOUT|PASS8)) {
-		cflag |= CS8;
-		if (!(flags&(RAW|PASS8))
-		    || (flags&(RAW|PASS8|ANYP)) == (PASS8|ANYP))
-			iflag |= ISTRIP;
-		else
-			iflag &= ~ISTRIP;
-		if (flags&(RAW|LITOUT))
-			oflag &= ~OPOST;
-		else
-			oflag |= OPOST;
 	} else {
-		cflag |= CS7|PARENB;
+		lflag &= ~ECHO;
+	}
+
+	cflag &= ~(CSIZE | PARENB);
+	if (flags & (RAW | LITOUT | PASS8)) {
+		cflag |= CS8;
+		if (!(flags & (RAW | PASS8))
+		    || (flags & (RAW | PASS8 | ANYP)) == (PASS8 | ANYP)) {
+			iflag |= ISTRIP;
+		} else {
+			iflag &= ~ISTRIP;
+		}
+		if (flags & (RAW | LITOUT)) {
+			oflag &= ~OPOST;
+		} else {
+			oflag |= OPOST;
+		}
+	} else {
+		cflag |= CS7 | PARENB;
 		iflag |= ISTRIP;
 		oflag |= OPOST;
 	}
 	/* XXX don't set INPCK if RAW or PASS8? */
-	if ((flags&(EVENP|ODDP)) == EVENP) {
+	if ((flags & (EVENP | ODDP)) == EVENP) {
 		iflag |= INPCK;
 		cflag &= ~PARODD;
-	} else if ((flags&(EVENP|ODDP)) == ODDP) {
+	} else if ((flags & (EVENP | ODDP)) == ODDP) {
 		iflag |= INPCK;
 		cflag |= PARODD;
-	} else
+	} else {
 		iflag &= ~INPCK;
-	if (flags&TANDEM)
+	}
+	if (flags & TANDEM) {
 		iflag |= IXOFF;
-	else
+	} else {
 		iflag &= ~IXOFF;
-	if ((flags&DECCTQ) == 0)
+	}
+	if ((flags & DECCTQ) == 0) {
 		iflag |= IXANY;
-	else
+	} else {
 		iflag &= ~IXANY;
+	}
 	t->c_iflag = iflag;
 	t->c_oflag = oflag;
 	t->c_lflag = lflag;
@@ -681,46 +714,54 @@ static void
 ttcompatsetlflags(struct tty *tp, struct termios *t)
 {
 	int flags = tp->t_flags;
-	tcflag_t iflag	= t->c_iflag;
-	tcflag_t oflag	= t->c_oflag;
-	tcflag_t lflag	= t->c_lflag;
-	tcflag_t cflag	= t->c_cflag;
+	tcflag_t iflag  = t->c_iflag;
+	tcflag_t oflag  = t->c_oflag;
+	tcflag_t lflag  = t->c_lflag;
+	tcflag_t cflag  = t->c_cflag;
 
-	iflag &= ~(PARMRK|IGNPAR|IGNCR|INLCR);
-	if (flags&CRTERA)
+	iflag &= ~(PARMRK | IGNPAR | IGNCR | INLCR);
+	if (flags & CRTERA) {
 		lflag |= ECHOE;
-	else
+	} else {
 		lflag &= ~ECHOE;
-	if (flags&CRTKIL)
+	}
+	if (flags & CRTKIL) {
 		lflag |= ECHOKE;
-	else
+	} else {
 		lflag &= ~ECHOKE;
-	if (flags&PRTERA)
+	}
+	if (flags & PRTERA) {
 		lflag |= ECHOPRT;
-	else
+	} else {
 		lflag &= ~ECHOPRT;
-	if (flags&CTLECH)
+	}
+	if (flags & CTLECH) {
 		lflag |= ECHOCTL;
-	else
+	} else {
 		lflag &= ~ECHOCTL;
-	if (flags&TANDEM)
+	}
+	if (flags & TANDEM) {
 		iflag |= IXOFF;
-	else
+	} else {
 		iflag &= ~IXOFF;
-	if ((flags&DECCTQ) == 0)
+	}
+	if ((flags & DECCTQ) == 0) {
 		iflag |= IXANY;
-	else
+	} else {
 		iflag &= ~IXANY;
-	if (flags & MDMBUF)
+	}
+	if (flags & MDMBUF) {
 		cflag |= MDMBUF;
-	else
+	} else {
 		cflag &= ~MDMBUF;
-	if (flags&NOHANG)
+	}
+	if (flags & NOHANG) {
 		cflag &= ~HUPCL;
-	else
+	} else {
 		cflag |= HUPCL;
-	lflag &= ~(TOSTOP|FLUSHO|PENDIN|NOFLSH);
-	lflag |= flags&(TOSTOP|FLUSHO|PENDIN|NOFLSH);
+	}
+	lflag &= ~(TOSTOP | FLUSHO | PENDIN | NOFLSH);
+	lflag |= flags & (TOSTOP | FLUSHO | PENDIN | NOFLSH);
 
 	/*
 	 * The next if-else statement is copied from above so don't bother
@@ -730,20 +771,22 @@ ttcompatsetlflags(struct tty *tp, struct termios *t)
 	 * the change is not available here and skipping the RAW case would
 	 * make the code different from above.
 	 */
-	cflag &= ~(CSIZE|PARENB);
-	if (flags&(RAW|LITOUT|PASS8)) {
+	cflag &= ~(CSIZE | PARENB);
+	if (flags & (RAW | LITOUT | PASS8)) {
 		cflag |= CS8;
-		if (!(flags&(RAW|PASS8))
-		    || (flags&(RAW|PASS8|ANYP)) == (PASS8|ANYP))
+		if (!(flags & (RAW | PASS8))
+		    || (flags & (RAW | PASS8 | ANYP)) == (PASS8 | ANYP)) {
 			iflag |= ISTRIP;
-		else
+		} else {
 			iflag &= ~ISTRIP;
-		if (flags&(RAW|LITOUT))
+		}
+		if (flags & (RAW | LITOUT)) {
 			oflag &= ~OPOST;
-		else
+		} else {
 			oflag |= OPOST;
+		}
 	} else {
-		cflag |= CS7|PARENB;
+		cflag |= CS7 | PARENB;
 		iflag |= ISTRIP;
 		oflag |= OPOST;
 	}

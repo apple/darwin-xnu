@@ -36,8 +36,9 @@
 #include <corecrypto/cc_priv.h>
 
 #if !CCN_SET_ASM
-void ccn_set(cc_size n, cc_unit *r, const cc_unit *s)
+void
+ccn_set(cc_size n, cc_unit *r, const cc_unit *s)
 {
-    CC_MEMMOVE(r, s, ccn_sizeof_n(n));
+	CC_MEMMOVE(r, s, ccn_sizeof_n(n));
 }
 #endif

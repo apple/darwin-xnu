@@ -40,51 +40,51 @@
 #include <arm/cpu_data_internal.h>
 #endif
 
-#define DEFAULT_MAGAZINE_SIZE	8		/* Default number of elements for all magazines allocated from the magazine_zone */
-#define DEFAULT_DEPOT_SIZE	8		/* Default number of elements for the array zcc_depot_list */
-#define ZCC_MAX_CPU_CACHE_LINE_SIZE	64	/* We should use a platform specific macro for this in the future, right now this is the max cache line size for all platforms*/
+#define DEFAULT_MAGAZINE_SIZE   8               /* Default number of elements for all magazines allocated from the magazine_zone */
+#define DEFAULT_DEPOT_SIZE      8               /* Default number of elements for the array zcc_depot_list */
+#define ZCC_MAX_CPU_CACHE_LINE_SIZE     64      /* We should use a platform specific macro for this in the future, right now this is the max cache line size for all platforms*/
 
-lck_grp_t	zcache_locks_grp;			/* lock group for depot_lock */
-zone_t 		magazine_zone;				/* zone to allocate zcc_magazine structs from */
-uint16_t 	magazine_element_count = 0;		/* Size of array in magazine determined by boot-arg or default */
-uint16_t 	depot_element_count = 0;		/* Size of depot lists determined by boot-arg or default */
-bool 		zone_cache_ready = FALSE;		/* Flag to check if zone caching has been set up by zcache_bootstrap */
-uintptr_t	zcache_canary = 0; 			/* Canary used for the caching layer to prevent UaF attacks */
+lck_grp_t       zcache_locks_grp;                       /* lock group for depot_lock */
+zone_t          magazine_zone;                          /* zone to allocate zcc_magazine structs from */
+uint16_t        magazine_element_count = 0;             /* Size of array in magazine determined by boot-arg or default */
+uint16_t        depot_element_count = 0;                /* Size of depot lists determined by boot-arg or default */
+bool            zone_cache_ready = FALSE;               /* Flag to check if zone caching has been set up by zcache_bootstrap */
+uintptr_t       zcache_canary = 0;                      /* Canary used for the caching layer to prevent UaF attacks */
 
 /*	The zcc_magazine is used as a stack to store cached zone elements. These
  *	sets of elements can be moved around to perform bulk operations.
-*/
+ */
 struct zcc_magazine {
-	uint32_t zcc_magazine_index;		/* Used as a stack pointer to acess elements in the array */
-	uint32_t zcc_magazine_capacity;		/* Number of pointers able to be stored in the zcc_elements array */
-	void *zcc_elements[0];			/* Array of pointers to objects */
+	uint32_t zcc_magazine_index;            /* Used as a stack pointer to acess elements in the array */
+	uint32_t zcc_magazine_capacity;         /* Number of pointers able to be stored in the zcc_elements array */
+	void *zcc_elements[0];                  /* Array of pointers to objects */
 };
 
 
-/* 	Each CPU will use one of these to store its elements
-*/
+/*      Each CPU will use one of these to store its elements
+ */
 struct zcc_per_cpu_cache {
-	struct zcc_magazine *current; 		/* Magazine from which we will always try to allocate from and free to first */
-	struct zcc_magazine *previous;		/* Dedicated magazine for a quick reload and to prevent thrashing wen we swap with the depot */
-} __attribute__(( aligned(ZCC_MAX_CPU_CACHE_LINE_SIZE) ));	/* we want to align this to a cache line size so it does not thrash when multiple cpus want to access their caches in paralell */
+	struct zcc_magazine *current;           /* Magazine from which we will always try to allocate from and free to first */
+	struct zcc_magazine *previous;          /* Dedicated magazine for a quick reload and to prevent thrashing wen we swap with the depot */
+} __attribute__((aligned(ZCC_MAX_CPU_CACHE_LINE_SIZE)));        /* we want to align this to a cache line size so it does not thrash when multiple cpus want to access their caches in paralell */
 
 
 /*
  * The depot layer can be invalid while zone_gc() is draining it out.
- * During that time, the CPU caches are active. For CPU magazine allocs and 
+ * During that time, the CPU caches are active. For CPU magazine allocs and
  * frees, the caching layer reaches directly into the zone allocator.
  */
-#define ZCACHE_DEPOT_INVALID			-1
-#define zcache_depot_available(zcache)		(zcache->zcc_depot_index != ZCACHE_DEPOT_INVALID)
+#define ZCACHE_DEPOT_INVALID                    -1
+#define zcache_depot_available(zcache)          (zcache->zcc_depot_index != ZCACHE_DEPOT_INVALID)
 
 /*	This is the basic struct to take care of cahing and is included within
- * 	the zone.
-*/
+ *      the zone.
+ */
 struct zone_cache {
-	lck_mtx_t zcc_depot_lock; 				/* Lock for the depot layer of caching */
-	struct zcc_per_cpu_cache zcc_per_cpu_caches[MAX_CPUS]; 	/* An array of caches, one for each CPU */
-	int zcc_depot_index;					/* marks the point in the array where empty magazines begin */
-	struct zcc_magazine *zcc_depot_list[0]; 		/* Stores full and empty magazines in the depot layer */
+	lck_mtx_t zcc_depot_lock;                               /* Lock for the depot layer of caching */
+	struct zcc_per_cpu_cache zcc_per_cpu_caches[MAX_CPUS];  /* An array of caches, one for each CPU */
+	int zcc_depot_index;                                    /* marks the point in the array where empty magazines begin */
+	struct zcc_magazine *zcc_depot_list[0];                 /* Stores full and empty magazines in the depot layer */
 };
 
 
@@ -109,7 +109,9 @@ void zcache_canary_validate(zone_t zone, void *addr);
  * Description: returns whether or not the zone caches are ready to use
  *
  */
-bool zcache_ready(void){
+bool
+zcache_ready(void)
+{
 	return zone_cache_ready;
 }
 
@@ -122,10 +124,12 @@ bool zcache_ready(void){
  *		system is single threaded so we don't have to take the lock.
  *
  */
-void zcache_init_marked_zones(void){
+void
+zcache_init_marked_zones(void)
+{
 	unsigned int i;
-	for(i = 0; i < num_zones; i ++){
-		if(zone_array[i].cpu_cache_enable_when_ready){
+	for (i = 0; i < num_zones; i++) {
+		if (zone_array[i].cpu_cache_enable_when_ready) {
 			zcache_init(&zone_array[i]);
 			zone_array[i].cpu_cache_enable_when_ready = FALSE;
 		}
@@ -140,21 +144,24 @@ void zcache_init_marked_zones(void){
  *		boot-args or default values
  *
  */
-void zcache_bootstrap(void)
+void
+zcache_bootstrap(void)
 {
 	/* use boot-arg for custom magazine size*/
-	if (! PE_parse_boot_argn("zcc_magazine_element_count", &magazine_element_count, sizeof (uint16_t)))
+	if (!PE_parse_boot_argn("zcc_magazine_element_count", &magazine_element_count, sizeof(uint16_t))) {
 		magazine_element_count = DEFAULT_MAGAZINE_SIZE;
+	}
 
 	int magazine_size = sizeof(struct zcc_magazine) + magazine_element_count * sizeof(void *);
 
-	magazine_zone = zinit(magazine_size, 100000 * magazine_size , magazine_size, "zcc_magazine_zone");
+	magazine_zone = zinit(magazine_size, 100000 * magazine_size, magazine_size, "zcc_magazine_zone");
 
 	assert(magazine_zone != NULL);
 
 	/* use boot-arg for custom depot size*/
-	if (! PE_parse_boot_argn("zcc_depot_element_count", &depot_element_count, sizeof (uint16_t)))
+	if (!PE_parse_boot_argn("zcc_depot_element_count", &depot_element_count, sizeof(uint16_t))) {
 		depot_element_count = DEFAULT_DEPOT_SIZE;
+	}
 
 	lck_grp_init(&zcache_locks_grp, "zcc_depot_lock", LCK_GRP_ATTR_NULL);
 
@@ -175,31 +182,32 @@ void zcache_bootstrap(void)
  * Parameters:	zone	pointer to zone on which to iniitalize caching
  *
  */
- void zcache_init(zone_t zone)
- {
- 	int 	i;			/* used as index in for loops */
-	vm_size_t	total_size;		/* Used for allocating the zone_cache struct with the proper size of depot list */
-	struct zone_cache *temp_cache;	/* Temporary variable to initialize a zone_cache before assigning to the specified zone */
+void
+zcache_init(zone_t zone)
+{
+	int     i;                      /* used as index in for loops */
+	vm_size_t       total_size;             /* Used for allocating the zone_cache struct with the proper size of depot list */
+	struct zone_cache *temp_cache;  /* Temporary variable to initialize a zone_cache before assigning to the specified zone */
 
 	/* Allocate chunk of memory for all structs */
 	total_size = sizeof(struct zone_cache) + (depot_element_count * sizeof(void *));
-	
+
 	temp_cache = (struct zone_cache *) kalloc(total_size);
 
 
- 	/* Initialize a cache for every CPU */
- 	for (i = 0; i < MAX_CPUS; i++) {
- 		temp_cache->zcc_per_cpu_caches[i].current = (struct zcc_magazine *)zalloc(magazine_zone);
- 		temp_cache->zcc_per_cpu_caches[i].previous = (struct zcc_magazine *)zalloc(magazine_zone);
+	/* Initialize a cache for every CPU */
+	for (i = 0; i < MAX_CPUS; i++) {
+		temp_cache->zcc_per_cpu_caches[i].current = (struct zcc_magazine *)zalloc(magazine_zone);
+		temp_cache->zcc_per_cpu_caches[i].previous = (struct zcc_magazine *)zalloc(magazine_zone);
 
- 		assert(temp_cache->zcc_per_cpu_caches[i].current != NULL && temp_cache->zcc_per_cpu_caches[i].previous != NULL);
+		assert(temp_cache->zcc_per_cpu_caches[i].current != NULL && temp_cache->zcc_per_cpu_caches[i].previous != NULL);
 
- 		zcache_mag_init(temp_cache->zcc_per_cpu_caches[i].current, magazine_element_count);
- 		zcache_mag_init(temp_cache->zcc_per_cpu_caches[i].previous, magazine_element_count);
- 	}
+		zcache_mag_init(temp_cache->zcc_per_cpu_caches[i].current, magazine_element_count);
+		zcache_mag_init(temp_cache->zcc_per_cpu_caches[i].previous, magazine_element_count);
+	}
 
- 	/* Initialize the lock on the depot layer */
- 	lck_mtx_init(&(temp_cache->zcc_depot_lock), &zcache_locks_grp, LCK_ATTR_NULL);
+	/* Initialize the lock on the depot layer */
+	lck_mtx_init(&(temp_cache->zcc_depot_lock), &zcache_locks_grp, LCK_ATTR_NULL);
 
 	/* Initialize empty magazines in the depot list */
 	for (i = 0; i < depot_element_count; i++) {
@@ -212,13 +220,13 @@ void zcache_bootstrap(void)
 
 	temp_cache->zcc_depot_index = 0;
 
- 	lock_zone(zone);
+	lock_zone(zone);
 	zone->zcache = temp_cache;
- 	/* Set flag to know caching is enabled */
- 	zone->cpu_cache_enabled = TRUE;
- 	unlock_zone(zone);
- 	return;
- }
+	/* Set flag to know caching is enabled */
+	zone->cpu_cache_enabled = TRUE;
+	unlock_zone(zone);
+	return;
+}
 
 /*
  * zcache_drain_depot
@@ -232,13 +240,14 @@ void zcache_bootstrap(void)
  * Returns: None
  *
  */
-void zcache_drain_depot(zone_t zone)
+void
+zcache_drain_depot(zone_t zone)
 {
 	struct zone_cache *zcache = zone->zcache;
 	int drain_depot_index = 0;
 
 	/*
-	 * Grab the current depot list from the zone cache. If it has full magazines, 
+	 * Grab the current depot list from the zone cache. If it has full magazines,
 	 * mark the depot as invalid and drain it.
 	 */
 	lck_mtx_lock_spin_always(&(zcache->zcc_depot_lock));
@@ -253,8 +262,9 @@ void zcache_drain_depot(zone_t zone)
 	lck_mtx_unlock(&(zcache->zcc_depot_lock));
 
 	/* Now drain the full magazines in the depot */
-	for (int i = 0; i < drain_depot_index; i++)
+	for (int i = 0; i < drain_depot_index; i++) {
 		zcache_mag_drain(zone, zcache->zcc_depot_list[i]);
+	}
 
 	lck_mtx_lock_spin_always(&(zcache->zcc_depot_lock));
 	/* Mark the depot as available again */
@@ -275,11 +285,12 @@ void zcache_drain_depot(zone_t zone)
  *
  * Precondition: check that caching is enabled for zone
  */
-bool zcache_free_to_cpu_cache(zone_t zone, void *addr)
+bool
+zcache_free_to_cpu_cache(zone_t zone, void *addr)
 {
-	int	curcpu;					/* Current cpu is used to index into array of zcc_per_cpu_cache structs */
-	struct	zone_cache *zcache;			/* local storage of the zone's cache */
-	struct zcc_per_cpu_cache *per_cpu_cache;	/* locally store the current per_cpu_cache */
+	int     curcpu;                                 /* Current cpu is used to index into array of zcc_per_cpu_cache structs */
+	struct  zone_cache *zcache;                     /* local storage of the zone's cache */
+	struct zcc_per_cpu_cache *per_cpu_cache;        /* locally store the current per_cpu_cache */
 
 	disable_preemption();
 	curcpu = current_processor()->cpu_id;
@@ -293,7 +304,7 @@ bool zcache_free_to_cpu_cache(zone_t zone, void *addr)
 		/* If able, swap current and previous magazine and retry */
 		zcache_swap_magazines(&per_cpu_cache->previous, &per_cpu_cache->current);
 		goto free_to_current;
-	} else{
+	} else {
 		lck_mtx_lock_spin_always(&(zcache->zcc_depot_lock));
 		if (zcache_depot_available(zcache) && (zcache->zcc_depot_index < depot_element_count)) {
 			/* If able, rotate in a new empty magazine from the depot and retry */
@@ -304,7 +315,7 @@ bool zcache_free_to_cpu_cache(zone_t zone, void *addr)
 		lck_mtx_unlock(&(zcache->zcc_depot_lock));
 		/* Attempt to free an entire magazine of elements */
 		zcache_mag_drain(zone, per_cpu_cache->current);
-		if(zcache_mag_has_space(per_cpu_cache->current)){
+		if (zcache_mag_has_space(per_cpu_cache->current)) {
 			goto free_to_current;
 		}
 	}
@@ -338,12 +349,13 @@ free_to_current:
  *
  * Precondition: check that caching is enabled for zone
  */
-vm_offset_t zcache_alloc_from_cpu_cache(zone_t zone)
+vm_offset_t
+zcache_alloc_from_cpu_cache(zone_t zone)
 {
-	int curcpu;					/* Current cpu is used to index into array of zcc_per_cpu_cache structs */
-	void *ret = NULL;				/* Points to the element which will be returned */
-	struct	zone_cache *zcache;			/* local storage of the zone's cache */
-	struct zcc_per_cpu_cache *per_cpu_cache; 	/* locally store the current per_cpu_cache */
+	int curcpu;                                     /* Current cpu is used to index into array of zcc_per_cpu_cache structs */
+	void *ret = NULL;                               /* Points to the element which will be returned */
+	struct  zone_cache *zcache;                     /* local storage of the zone's cache */
+	struct zcc_per_cpu_cache *per_cpu_cache;        /* locally store the current per_cpu_cache */
 
 	disable_preemption();
 	curcpu = current_processor()->cpu_id;
@@ -367,7 +379,7 @@ vm_offset_t zcache_alloc_from_cpu_cache(zone_t zone)
 		}
 		lck_mtx_unlock(&(zcache->zcc_depot_lock));
 		/* Attempt to allocate an entire magazine of elements */
-		if(zcache_mag_fill(zone, per_cpu_cache->current)){
+		if (zcache_mag_fill(zone, per_cpu_cache->current)) {
 			goto allocate_from_current;
 		}
 	}
@@ -398,7 +410,8 @@ allocate_from_current:
  * Parameters:	mag	pointer to magazine to initialize
  *
  */
-void zcache_mag_init(struct zcc_magazine *mag, int count)
+void
+zcache_mag_init(struct zcc_magazine *mag, int count)
 {
 	mag->zcc_magazine_index = 0;
 	mag->zcc_magazine_capacity = count;
@@ -409,22 +422,23 @@ void zcache_mag_init(struct zcc_magazine *mag, int count)
  * zcache_mag_fill
  *
  * Description: fills a magazine with as many elements as the zone can give
- * 		without blocking to carve out more memory
+ *              without blocking to carve out more memory
  *
  * Parameters:	zone	zone from which to allocate
  *		mag	pointer to magazine to fill
  *
  * Return:	True if able to allocate elements, false is mag is still empty
  */
-bool zcache_mag_fill(zone_t zone, struct zcc_magazine *mag)
+bool
+zcache_mag_fill(zone_t zone, struct zcc_magazine *mag)
 {
 	assert(mag->zcc_magazine_index == 0);
 	void* elem = NULL;
 	uint32_t i;
 	lock_zone(zone);
-	for(i = mag->zcc_magazine_index; i < mag->zcc_magazine_capacity; i ++){
+	for (i = mag->zcc_magazine_index; i < mag->zcc_magazine_capacity; i++) {
 		elem = zalloc_attempt(zone);
-		if(elem) {
+		if (elem) {
 			zcache_canary_add(zone, elem);
 			zcache_mag_push(mag, elem);
 #if KASAN_ZALLOC
@@ -435,7 +449,7 @@ bool zcache_mag_fill(zone_t zone, struct zcc_magazine *mag)
 		}
 	}
 	unlock_zone(zone);
-	if (i == 0){
+	if (i == 0) {
 		return FALSE;
 	}
 	return TRUE;
@@ -450,14 +464,15 @@ bool zcache_mag_fill(zone_t zone, struct zcc_magazine *mag)
  *		mag	pointer to magazine to empty
  *
  */
-void zcache_mag_drain(zone_t zone, struct zcc_magazine *mag)
+void
+zcache_mag_drain(zone_t zone, struct zcc_magazine *mag)
 {
 	assert(mag->zcc_magazine_index == mag->zcc_magazine_capacity);
 	lock_zone(zone);
-	while(mag->zcc_magazine_index > 0){
+	while (mag->zcc_magazine_index > 0) {
 		uint32_t index = --mag->zcc_magazine_index;
 		zcache_canary_validate(zone, mag->zcc_elements[index]);
-		zfree_direct(zone,(vm_offset_t)mag->zcc_elements[index]);
+		zfree_direct(zone, (vm_offset_t)mag->zcc_elements[index]);
 		mag->zcc_elements[mag->zcc_magazine_index] = 0;
 	}
 	unlock_zone(zone);
@@ -477,9 +492,10 @@ void zcache_mag_drain(zone_t zone, struct zcc_magazine *mag)
  *
  * Precondition: must check that magazine is not empty before calling
  */
-void *zcache_mag_pop(struct zcc_magazine *mag)
+void *
+zcache_mag_pop(struct zcc_magazine *mag)
 {
-	void	*elem;
+	void    *elem;
 	assert(zcache_mag_has_elements(mag));
 	elem =  mag->zcc_elements[--mag->zcc_magazine_index];
 	/* Ensure pointer to element cannot be accessed after we pop it */
@@ -502,10 +518,11 @@ void *zcache_mag_pop(struct zcc_magazine *mag)
  *
  * Precondition: must check that magazine is not full before calling
  */
-void zcache_mag_push(struct zcc_magazine *mag, void *elem)
+void
+zcache_mag_push(struct zcc_magazine *mag, void *elem)
 {
 	assert(zcache_mag_has_space(mag));
-	mag->zcc_elements[mag->zcc_magazine_index ++] = elem;
+	mag->zcc_elements[mag->zcc_magazine_index++] = elem;
 }
 
 
@@ -519,9 +536,10 @@ void zcache_mag_push(struct zcc_magazine *mag, void *elem)
  * Returns: true if magazine is full
  *
  */
-bool zcache_mag_has_space(struct zcc_magazine *mag)
+bool
+zcache_mag_has_space(struct zcc_magazine *mag)
 {
-	return (mag->zcc_magazine_index < mag->zcc_magazine_capacity);
+	return mag->zcc_magazine_index < mag->zcc_magazine_capacity;
 }
 
 
@@ -535,9 +553,10 @@ bool zcache_mag_has_space(struct zcc_magazine *mag)
  * Returns: true if magazine has no elements
  *
  */
-bool zcache_mag_has_elements(struct zcc_magazine *mag)
+bool
+zcache_mag_has_elements(struct zcc_magazine *mag)
 {
-	return (mag->zcc_magazine_index > 0);
+	return mag->zcc_magazine_index > 0;
 }
 
 
@@ -549,7 +568,8 @@ bool zcache_mag_has_elements(struct zcc_magazine *mag)
  * Parameters:	a		pointer to first pointer
  *		b		pointer to second pointer
  */
-void zcache_swap_magazines(struct zcc_magazine **a, struct zcc_magazine **b)
+void
+zcache_swap_magazines(struct zcc_magazine **a, struct zcc_magazine **b)
 {
 	struct zcc_magazine *temp = *a;
 	*a = *b;
@@ -567,12 +587,13 @@ void zcache_swap_magazines(struct zcc_magazine **a, struct zcc_magazine **b)
  *
  * Precondition: Check that the depot list has full elements
  */
-void zcache_mag_depot_swap_for_alloc(struct zone_cache *zcache, struct zcc_per_cpu_cache *cache)
+void
+zcache_mag_depot_swap_for_alloc(struct zone_cache *zcache, struct zcc_per_cpu_cache *cache)
 {
 	/* Loads a full magazine from which we can allocate */
 	assert(zcache_depot_available(zcache));
 	assert(zcache->zcc_depot_index > 0);
-	zcache->zcc_depot_index --;
+	zcache->zcc_depot_index--;
 	zcache_swap_magazines(&cache->current, &zcache->zcc_depot_list[zcache->zcc_depot_index]);
 }
 
@@ -587,26 +608,28 @@ void zcache_mag_depot_swap_for_alloc(struct zone_cache *zcache, struct zcc_per_c
  *
  * Precondition: Check that the depot list has empty elements
  */
-void zcache_mag_depot_swap_for_free(struct zone_cache *zcache, struct zcc_per_cpu_cache *cache)
+void
+zcache_mag_depot_swap_for_free(struct zone_cache *zcache, struct zcc_per_cpu_cache *cache)
 {
 	/* Loads an empty magazine into which we can free */
 	assert(zcache_depot_available(zcache));
 	assert(zcache->zcc_depot_index < depot_element_count);
 	zcache_swap_magazines(&cache->current, &zcache->zcc_depot_list[zcache->zcc_depot_index]);
-	zcache->zcc_depot_index ++;
+	zcache->zcc_depot_index++;
 }
 
 /*
  * zcache_canary_add
  *
- * Description: Adds a canary to an element by putting zcache_canary at the first 
- * 		and last location of the element
+ * Description: Adds a canary to an element by putting zcache_canary at the first
+ *              and last location of the element
  *
  * Parameters:	zone	zone for the element
- * 		addr	element address to add canary to
+ *              addr	element address to add canary to
  *
  */
-void zcache_canary_add(zone_t zone, void *element)
+void
+zcache_canary_add(zone_t zone, void *element)
 {
 	vm_offset_t *primary = (vm_offset_t *)element;
 	vm_offset_t *backup = (vm_offset_t *)((vm_offset_t)primary + zone->elem_size - sizeof(vm_offset_t));
@@ -616,14 +639,15 @@ void zcache_canary_add(zone_t zone, void *element)
 /*
  * zcache_canary_validate
  *
- * Description: Validates an element of the zone cache to make sure it still contains the zone 
- * 		caching canary.
+ * Description: Validates an element of the zone cache to make sure it still contains the zone
+ *              caching canary.
  *
  * Parameters:	zone	zone for the element
- * 		addr	element address to validate
+ *              addr	element address to validate
  *
  */
-void zcache_canary_validate(zone_t zone, void *element)
+void
+zcache_canary_validate(zone_t zone, void *element)
 {
 	vm_offset_t *primary = (vm_offset_t *)element;
 	vm_offset_t *backup = (vm_offset_t *)((vm_offset_t)primary + zone->elem_size - sizeof(vm_offset_t));
@@ -631,12 +655,12 @@ void zcache_canary_validate(zone_t zone, void *element)
 	vm_offset_t primary_value = (*primary ^ (uintptr_t)element);
 	if (primary_value != zcache_canary) {
 		panic("Zone cache element was used after free! Element %p was corrupted at beginning; Expected %p but found %p; canary %p",
-			element, (void *)(zcache_canary ^ (uintptr_t)element) , (void *)(*primary), (void *)zcache_canary);
+		    element, (void *)(zcache_canary ^ (uintptr_t)element), (void *)(*primary), (void *)zcache_canary);
 	}
-	
+
 	vm_offset_t backup_value = (*backup ^ (uintptr_t)element);
 	if (backup_value != zcache_canary) {
 		panic("Zone cache element was used after free! Element %p was corrupted at end; Expected %p but found %p; canary %p",
-			element, (void *)(zcache_canary ^ (uintptr_t)element), (void *)(*backup), (void *)zcache_canary);
+		    element, (void *)(zcache_canary ^ (uintptr_t)element), (void *)(*backup), (void *)zcache_canary);
 	}
 }

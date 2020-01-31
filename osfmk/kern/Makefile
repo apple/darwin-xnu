@@ -19,9 +19,11 @@ PRIVATE_DATAFILES = \
 	debug.h \
 	ecc.h \
 	block_hint.h \
+	lock_stat.h \
 	monotonic.h \
 	arithmetic_128.h  \
-	turnstile.h
+	turnstile.h \
+	remote_time.h
 
 EXPORT_FILES = \
 	affinity.h \
@@ -47,9 +49,11 @@ EXPORT_FILES = \
 	ledger.h \
 	lock.h \
 	locks.h \
+	lock_group.h \
 	host.h \
 	mach_param.h \
 	macro_help.h \
+	mpqueue.h \
 	page_decrypt.h \
 	pms.h \
 	policy_internal.h \
@@ -74,7 +78,6 @@ PRIVATE_EXPORT_FILES = \
 	build_config.h \
 	mach_node_link.h \
 	copyout_shim.h
-
 
 XNU_ONLY_EXPORTS = \
 	cpu_quiesce.h \

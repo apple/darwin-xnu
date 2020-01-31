@@ -25,7 +25,7 @@
  */
 
 #ifndef _SYS_SDT_H
-#define	_SYS_SDT_H
+#define _SYS_SDT_H
 
 /*
  * This is a wrapper header that wraps the mach visible sdt.h header so that
@@ -44,4 +44,4 @@ __BEGIN_DECLS
 #include <mach/sdt.h>
 __END_DECLS
 
-#endif	/* _SYS_SDT_H */
+#endif  /* _SYS_SDT_H */

@@ -93,8 +93,9 @@ if_low_power_evhdlr_callback(__unused struct eventhandler_entry_arg arg,
 {
 	struct kev_dl_low_power_mode kev;
 
-	if (!IF_FULLY_ATTACHED(ifp))
+	if (!IF_FULLY_ATTACHED(ifp)) {
 		return;
+	}
 
 	if (if_low_power_verbose > 0) {
 		os_log_info(OS_LOG_DEFAULT,
@@ -136,7 +137,7 @@ if_low_power_evhdlr_init(void)
 
 	(void) EVENTHANDLER_REGISTER(&if_low_power_evhdlr_ctx,
 	    if_low_power_event,
-	    if_low_power_evhdlr_callback, 
+	    if_low_power_evhdlr_callback,
 	    eventhandler_entry_dummy_arg,
 	    EVENTHANDLER_PRI_ANY);
 }
@@ -147,7 +148,7 @@ if_low_power_nwk_ev_callback(void *arg)
 {
 	struct if_low_power_ev_args *if_low_power_ev_args =
 	    (struct if_low_power_ev_args *)arg;
-	
+
 	EVENTHANDLER_INVOKE(&if_low_power_evhdlr_ctx,
 	    if_low_power_event,
 	    if_low_power_ev_args->ifp,
@@ -180,8 +181,9 @@ if_set_low_power(ifnet_t ifp, bool on)
 {
 	int error = 0;
 
-	if (ifp == NULL)
-		return (EINVAL);
+	if (ifp == NULL) {
+		return EINVAL;
+	}
 
 	os_log(OS_LOG_DEFAULT,
 	    "%s: ifp %s low_power mode %d", __func__, if_name(ifp), on);
@@ -191,6 +193,5 @@ if_set_low_power(ifnet_t ifp, bool on)
 	    (ifp->if_xflags & ~IFXF_LOW_POWER);
 	ifnet_lock_done(ifp);
 
-	return (error);
+	return error;
 }
-

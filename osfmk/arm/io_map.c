@@ -31,23 +31,23 @@
 /*
  * Mach Operating System Copyright (c) 1991,1990 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright notice
  * and this permission notice appear in all copies of the software,
  * derivative works or modified versions, and any portions thereof, and that
  * both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS" CONDITION.
  * CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR ANY DAMAGES
  * WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  * Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  * School of Computer Science Carnegie Mellon University Pittsburgh PA
  * 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon the
  * rights to redistribute these changes.
  */
@@ -61,7 +61,7 @@
 #include <arm/io_map_entries.h>
 #include <san/kasan.h>
 
-extern vm_offset_t	virtual_space_start;     /* Next available kernel VA */
+extern vm_offset_t      virtual_space_start;     /* Next available kernel VA */
 
 /*
  * Allocate and map memory for devices that may need to be mapped before
@@ -78,35 +78,35 @@ io_map(vm_map_offset_t phys_addr, vm_size_t size, unsigned int flags)
 
 	if (kernel_map == VM_MAP_NULL) {
 		/*
-	         * VM is not initialized.  Grab memory.
-	         */
+		 * VM is not initialized.  Grab memory.
+		 */
 		start = virtual_space_start;
 		virtual_space_start += round_page(size);
 
 		assert(flags == VM_WIMG_WCOMB || flags == VM_WIMG_IO);
 
-		if (flags == VM_WIMG_WCOMB) {		
+		if (flags == VM_WIMG_WCOMB) {
 			(void) pmap_map_bd_with_options(start, phys_addr, phys_addr + round_page(size),
-				   VM_PROT_READ | VM_PROT_WRITE, PMAP_MAP_BD_WCOMB);
+			    VM_PROT_READ | VM_PROT_WRITE, PMAP_MAP_BD_WCOMB);
 		} else {
 			(void) pmap_map_bd(start, phys_addr, phys_addr + round_page(size),
-				   VM_PROT_READ | VM_PROT_WRITE);
+			    VM_PROT_READ | VM_PROT_WRITE);
 		}
 	} else {
 		(void) kmem_alloc_pageable(kernel_map, &start, round_page(size), VM_KERN_MEMORY_IOKIT);
 		(void) pmap_map(start, phys_addr, phys_addr + round_page(size),
-				VM_PROT_READ | VM_PROT_WRITE, flags);
+		    VM_PROT_READ | VM_PROT_WRITE, flags);
 	}
 #if KASAN
 	kasan_notify_address(start + start_offset, size);
 #endif
-	return (start + start_offset);
+	return start + start_offset;
 }
 
 /* just wrap this since io_map handles it */
 
-vm_offset_t 
+vm_offset_t
 io_map_spec(vm_map_offset_t phys_addr, vm_size_t size, unsigned int flags)
 {
-	return (io_map(phys_addr, size, flags));
+	return io_map(phys_addr, size, flags);
 }

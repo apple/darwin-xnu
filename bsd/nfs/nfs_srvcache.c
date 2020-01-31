@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -92,9 +92,9 @@ extern int nfsv2_procid[NFS_NPROCS];
 static int nfsrv_reqcache_count;
 int nfsrv_reqcache_size = NFSRVCACHESIZ;
 
-#define	NFSRCHASH(xid) \
+#define NFSRCHASH(xid) \
 	(&nfsrv_reqcache_hashtbl[((xid) + ((xid) >> 24)) & nfsrv_reqcache_hash])
-LIST_HEAD(nfsrv_reqcache_hash, nfsrvcache) *nfsrv_reqcache_hashtbl;
+LIST_HEAD(nfsrv_reqcache_hash, nfsrvcache) * nfsrv_reqcache_hashtbl;
 TAILQ_HEAD(nfsrv_reqcache_lru, nfsrvcache) nfsrv_reqcache_lruhead;
 u_long nfsrv_reqcache_hash;
 
@@ -158,8 +158,9 @@ static int nfsv2_repstat[NFS_NPROCS] = {
 void
 nfsrv_initcache(void)
 {
-	if (nfsrv_reqcache_size <= 0)
+	if (nfsrv_reqcache_size <= 0) {
 		return;
+	}
 
 	lck_mtx_lock(nfsrv_reqcache_mutex);
 	/* init nfs server request cache hash table */
@@ -189,17 +190,19 @@ netaddr_match(
 	case AF_INET:
 		inetaddr = mbuf_data(nam);
 		if ((inetaddr->sin_family == AF_INET) &&
-		    (inetaddr->sin_addr.s_addr == haddr->had_inetaddr))
-			return (1);
+		    (inetaddr->sin_addr.s_addr == haddr->had_inetaddr)) {
+			return 1;
+		}
 		break;
 	case AF_INET6:
 		inet6addr = mbuf_data(nam);
 		if ((inet6addr->sin6_family == AF_INET6) &&
-		    !bcmp(&inet6addr->sin6_addr, &haddr->had_inet6addr, sizeof(inet6addr->sin6_addr)))
-			return (1);
+		    !bcmp(&inet6addr->sin6_addr, &haddr->had_inet6addr, sizeof(inet6addr->sin6_addr))) {
+			return 1;
+		}
 		break;
 	}
-	return (0);
+	return 0;
 }
 
 /*
@@ -231,17 +234,18 @@ nfsrv_getcache(
 	 * Don't cache recent requests for reliable transport protocols.
 	 * (Maybe we should for the case of a reconnect, but..)
 	 */
-	if (!nd->nd_nam2)
-		return (RC_DOIT);
+	if (!nd->nd_nam2) {
+		return RC_DOIT;
+	}
 	lck_mtx_lock(nfsrv_reqcache_mutex);
 loop:
 	for (rp = NFSRCHASH(nd->nd_retxid)->lh_first; rp != 0;
 	    rp = rp->rc_hash.le_next) {
-	    if (nd->nd_retxid == rp->rc_xid && nd->nd_procnum == rp->rc_proc &&
-		netaddr_match(rp->rc_family, &rp->rc_haddr, nd->nd_nam)) {
+		if (nd->nd_retxid == rp->rc_xid && nd->nd_procnum == rp->rc_proc &&
+		    netaddr_match(rp->rc_family, &rp->rc_haddr, nd->nd_nam)) {
 			if ((rp->rc_flag & RC_LOCKED) != 0) {
 				rp->rc_flag |= RC_WANTED;
-				msleep(rp, nfsrv_reqcache_mutex, PZERO-1, "nfsrc", NULL);
+				msleep(rp, nfsrv_reqcache_mutex, PZERO - 1, "nfsrc", NULL);
 				goto loop;
 			}
 			rp->rc_flag |= RC_LOCKED;
@@ -250,8 +254,9 @@ loop:
 				TAILQ_REMOVE(&nfsrv_reqcache_lruhead, rp, rc_lru);
 				TAILQ_INSERT_TAIL(&nfsrv_reqcache_lruhead, rp, rc_lru);
 			}
-			if (rp->rc_state == RC_UNUSED)
+			if (rp->rc_state == RC_UNUSED) {
 				panic("nfsrv cache");
+			}
 			if (rp->rc_state == RC_INPROG) {
 				OSAddAtomic64(1, &nfsstats.srvcache_inproghits);
 				ret = RC_DROPIT;
@@ -287,7 +292,7 @@ loop:
 				wakeup(rp);
 			}
 			lck_mtx_unlock(nfsrv_reqcache_mutex);
-			return (ret);
+			return ret;
 		}
 	}
 	OSAddAtomic64(1, &nfsstats.srvcache_misses);
@@ -309,20 +314,22 @@ loop:
 			/* no entry to reuse? */
 			/* OK, we just won't be able to cache this request */
 			lck_mtx_unlock(nfsrv_reqcache_mutex);
-			return (RC_DOIT);
+			return RC_DOIT;
 		}
 		while ((rp->rc_flag & RC_LOCKED) != 0) {
 			rp->rc_flag |= RC_WANTED;
-			msleep(rp, nfsrv_reqcache_mutex, PZERO-1, "nfsrc", NULL);
+			msleep(rp, nfsrv_reqcache_mutex, PZERO - 1, "nfsrc", NULL);
 			rp = nfsrv_reqcache_lruhead.tqh_first;
 		}
 		rp->rc_flag |= RC_LOCKED;
 		LIST_REMOVE(rp, rc_hash);
 		TAILQ_REMOVE(&nfsrv_reqcache_lruhead, rp, rc_lru);
-		if (rp->rc_flag & RC_REPMBUF)
+		if (rp->rc_flag & RC_REPMBUF) {
 			mbuf_freem(rp->rc_reply);
-		if (rp->rc_flag & RC_NAM)
+		}
+		if (rp->rc_flag & RC_NAM) {
 			mbuf_freem(rp->rc_nam);
+		}
 		rp->rc_flag &= (RC_LOCKED | RC_WANTED);
 	}
 	TAILQ_INSERT_TAIL(&nfsrv_reqcache_lruhead, rp, rc_lru);
@@ -341,12 +348,14 @@ loop:
 		break;
 	default:
 		error = mbuf_copym(nd->nd_nam, 0, MBUF_COPYALL, MBUF_WAITOK, &rp->rc_nam);
-		if (error)
+		if (error) {
 			printf("nfsrv cache: nam copym failed\n");
-		else
+		} else {
 			rp->rc_flag |= RC_NAM;
+		}
 		break;
-	};
+	}
+	;
 	rp->rc_proc = nd->nd_procnum;
 	LIST_INSERT_HEAD(NFSRCHASH(nd->nd_retxid), rp, rc_hash);
 	rp->rc_flag &= ~RC_LOCKED;
@@ -355,7 +364,7 @@ loop:
 		wakeup(rp);
 	}
 	lck_mtx_unlock(nfsrv_reqcache_mutex);
-	return (RC_DOIT);
+	return RC_DOIT;
 }
 
 /*
@@ -370,31 +379,32 @@ nfsrv_updatecache(
 	struct nfsrvcache *rp;
 	int error;
 
-	if (!nd->nd_nam2)
+	if (!nd->nd_nam2) {
 		return;
+	}
 	lck_mtx_lock(nfsrv_reqcache_mutex);
 loop:
 	for (rp = NFSRCHASH(nd->nd_retxid)->lh_first; rp != 0;
 	    rp = rp->rc_hash.le_next) {
-	    if (nd->nd_retxid == rp->rc_xid && nd->nd_procnum == rp->rc_proc &&
-		netaddr_match(rp->rc_family, &rp->rc_haddr, nd->nd_nam)) {
+		if (nd->nd_retxid == rp->rc_xid && nd->nd_procnum == rp->rc_proc &&
+		    netaddr_match(rp->rc_family, &rp->rc_haddr, nd->nd_nam)) {
 			if ((rp->rc_flag & RC_LOCKED) != 0) {
 				rp->rc_flag |= RC_WANTED;
-				msleep(rp, nfsrv_reqcache_mutex, PZERO-1, "nfsrc", NULL);
+				msleep(rp, nfsrv_reqcache_mutex, PZERO - 1, "nfsrc", NULL);
 				goto loop;
 			}
 			rp->rc_flag |= RC_LOCKED;
-                        if (rp->rc_state == RC_DONE) {
-                                /*
-                                 * This can occur if the cache is too small.
-                                 * Retransmits of the same request aren't
-                                 * dropped so we may see the operation
-                                 * complete more then once.
-                                 */
-                                if (rp->rc_flag & RC_REPMBUF) {
-                                        mbuf_freem(rp->rc_reply);
-                                        rp->rc_flag &= ~RC_REPMBUF;
-                                }
+			if (rp->rc_state == RC_DONE) {
+				/*
+				 * This can occur if the cache is too small.
+				 * Retransmits of the same request aren't
+				 * dropped so we may see the operation
+				 * complete more then once.
+				 */
+				if (rp->rc_flag & RC_REPMBUF) {
+					mbuf_freem(rp->rc_reply);
+					rp->rc_flag &= ~RC_REPMBUF;
+				}
 			}
 			rp->rc_state = RC_DONE;
 			/*
@@ -403,13 +413,14 @@ loop:
 			 */
 			if (repvalid && nonidempotent[nd->nd_procnum]) {
 				if ((nd->nd_vers == NFS_VER2) &&
-				  nfsv2_repstat[nfsv2_procid[nd->nd_procnum]]) {
+				    nfsv2_repstat[nfsv2_procid[nd->nd_procnum]]) {
 					rp->rc_status = nd->nd_repstat;
 					rp->rc_flag |= RC_REPSTATUS;
 				} else {
 					error = mbuf_copym(repmbuf, 0, MBUF_COPYALL, MBUF_WAITOK, &rp->rc_reply);
-					if (!error)
+					if (!error) {
 						rp->rc_flag |= RC_REPMBUF;
+					}
 				}
 			}
 			rp->rc_flag &= ~RC_LOCKED;

@@ -11,7 +11,7 @@
  * 2 April 1992 ? at NeXT
  *	Created.
  */
- 
+
 #include <architecture/i386/table.h>
 
 #include <machdep/i386/gdt.h>
@@ -20,17 +20,17 @@
 static inline gdt_entry_t *
 sel_to_gdt_entry(sel_t sel)
 {
-	return (&gdt[sel.index]);
+	return &gdt[sel.index];
 }
 
 static inline idt_entry_t *
 sel_to_idt_entry(sel_t sel)
 {
-	return (&idt[sel.index]);
+	return &idt[sel.index];
 }
 
 static inline ldt_entry_t *
 sel_to_ldt_entry(ldt_t *tbl, sel_t sel)
 {
-	return (&tbl[sel.index]);
+	return &tbl[sel.index];
 }

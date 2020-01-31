@@ -53,20 +53,20 @@ __BEGIN_DECLS
 /*
  * When <type> is NONE, use kdebug_signpost.
  */
-int kdebug_signpost(uint32_t code, uintptr_t arg1, uintptr_t arg2,  uintptr_t arg3,  uintptr_t arg4)
-	__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0);
+int kdebug_signpost(uint32_t code, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3, uintptr_t arg4)
+__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0);
 
 /*
  * When <type> is START, use kdebug_signpost_start.
  */
 int kdebug_signpost_start(uint32_t code, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3, uintptr_t arg4)
-	__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0);
+__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0);
 
 /*
  * When <type> is END, use kdebug_signpost_end.
  */
 int kdebug_signpost_end(uint32_t code, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3, uintptr_t arg4)
-	__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0);
+__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0);
 
 #endif /* !KERNEL */
 

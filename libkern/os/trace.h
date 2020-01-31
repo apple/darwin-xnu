@@ -2,14 +2,14 @@
  * Copyright (c) 2013-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
  * compliance with the License. Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this
  * file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -17,7 +17,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
 
@@ -46,7 +46,8 @@ extern void *__dso_handle;
 
 OS_ALWAYS_INLINE
 static inline void
-_os_trace_verify_printf(const char *msg, ...) __attribute__((format(printf, 1, 2)))
+_os_trace_verify_printf(const char *msg, ...)
+__attribute__((format(printf, 1, 2)))
 {
 #pragma unused(msg)
 }
@@ -57,10 +58,10 @@ _os_trace_verify_printf(const char *msg, ...) __attribute__((format(printf, 1, 2
 #endif
 
 /* use old macros for anything less than iOS 10 and MacOS 10.12 */
-#if (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) &&  __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_10_0) \
-     || (defined(__WATCH_OS_VERSION_MIN_REQUIRED) &&  __WATCH_OS_VERSION_MIN_REQUIRED < __WATCHOS_3_0) \
-     || (defined(__TV_OS_VERSION_MIN_REQUIRED) && __TV_OS_VERSION_MIN_REQUIRED < __TVOS_10_0) \
-     || (defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_10_12)
+#if (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_10_0) \
+        || (defined(__WATCH_OS_VERSION_MIN_REQUIRED) && __WATCH_OS_VERSION_MIN_REQUIRED < __WATCHOS_3_0) \
+        || (defined(__TV_OS_VERSION_MIN_REQUIRED) && __TV_OS_VERSION_MIN_REQUIRED < __TVOS_10_0) \
+        || (defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_10_12)
 
 #define _os_trace_0(_l, _m, _t) __extension__({ \
 	_os_trace_verify_printf(_l); \
@@ -69,98 +70,98 @@ _os_trace_verify_printf(const char *msg, ...) __attribute__((format(printf, 1, 2
 })
 
 #define _os_trace_1(_l, _m, _t, _1) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	_os_trace_verify_printf(_l, _c1); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		uint8_t _s[1]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        uint8_t _s[1]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._cnt = 1, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._cnt = 1, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), NULL); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_2(_l, _m, _t, _1, _2) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	const __typeof__(_2) _c2 = _2; \
 	_os_trace_verify_printf(_l, _c1, _c2); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		__typeof__(_c2) _f2; \
-		uint8_t _s[2]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        __typeof__(_c2) _f2; \
+	        uint8_t _s[2]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._f2 = _c2, ._s[1] = sizeof(_c2), \
-		._cnt = 2, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._f2 = _c2, ._s[1] = sizeof(_c2), \
+	        ._cnt = 2, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), NULL); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_3(_l, _m, _t, _1, _2, _3) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	const __typeof__(_2) _c2 = _2; \
 	const __typeof__(_3) _c3 = _3; \
 	_os_trace_verify_printf(_l, _c1, _c2, _c3); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		__typeof__(_c2) _f2; \
-		__typeof__(_c3) _f3; \
-		uint8_t _s[3]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        __typeof__(_c2) _f2; \
+	        __typeof__(_c3) _f3; \
+	        uint8_t _s[3]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._f2 = _c2, ._s[1] = sizeof(_c2), \
-		._f3 = _c3, ._s[2] = sizeof(_c3), \
-		._cnt = 3, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._f2 = _c2, ._s[1] = sizeof(_c2), \
+	        ._f3 = _c3, ._s[2] = sizeof(_c3), \
+	        ._cnt = 3, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), NULL); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_4(_l, _m, _t, _1, _2, _3, _4) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	const __typeof__(_2) _c2 = _2; \
 	const __typeof__(_3) _c3 = _3; \
 	const __typeof__(_4) _c4 = _4; \
 	_os_trace_verify_printf(_l, _c1, _c2, _c3, _c4); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		__typeof__(_c2) _f2; \
-		__typeof__(_c3) _f3; \
-		__typeof__(_c4) _f4; \
-		uint8_t _s[4]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        __typeof__(_c2) _f2; \
+	        __typeof__(_c3) _f3; \
+	        __typeof__(_c4) _f4; \
+	        uint8_t _s[4]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._f2 = _c2, ._s[1] = sizeof(_c2), \
-		._f3 = _c3, ._s[2] = sizeof(_c3), \
-		._f4 = _c4, ._s[3] = sizeof(_c4), \
-		._cnt = 4, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._f2 = _c2, ._s[1] = sizeof(_c2), \
+	        ._f3 = _c3, ._s[2] = sizeof(_c3), \
+	        ._f4 = _c4, ._s[3] = sizeof(_c4), \
+	        ._cnt = 4, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), NULL); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_5(_l, _m, _t, _1, _2, _3, _4, _5) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	const __typeof__(_2) _c2 = _2; \
 	const __typeof__(_3) _c3 = _3; \
@@ -168,29 +169,29 @@ _os_trace_verify_printf(const char *msg, ...) __attribute__((format(printf, 1, 2
 	const __typeof__(_5) _c5 = _5; \
 	_os_trace_verify_printf(_l, _c1, _c2, _c3, _c4, _c5); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		__typeof__(_c2) _f2; \
-		__typeof__(_c3) _f3; \
-		__typeof__(_c4) _f4; \
-		__typeof__(_c5) _f5; \
-		uint8_t _s[5]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        __typeof__(_c2) _f2; \
+	        __typeof__(_c3) _f3; \
+	        __typeof__(_c4) _f4; \
+	        __typeof__(_c5) _f5; \
+	        uint8_t _s[5]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._f2 = _c2, ._s[1] = sizeof(_c2), \
-		._f3 = _c3, ._s[2] = sizeof(_c3), \
-		._f4 = _c4, ._s[3] = sizeof(_c4), \
-		._f5 = _c5, ._s[4] = sizeof(_c5), \
-		._cnt = 5, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._f2 = _c2, ._s[1] = sizeof(_c2), \
+	        ._f3 = _c3, ._s[2] = sizeof(_c3), \
+	        ._f4 = _c4, ._s[3] = sizeof(_c4), \
+	        ._f5 = _c5, ._s[4] = sizeof(_c5), \
+	        ._cnt = 5, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), NULL); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_6(_l, _m, _t, _1, _2, _3, _4, _5, _6) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	const __typeof__(_2) _c2 = _2; \
 	const __typeof__(_3) _c3 = _3; \
@@ -199,31 +200,31 @@ _os_trace_verify_printf(const char *msg, ...) __attribute__((format(printf, 1, 2
 	const __typeof__(_6) _c6 = _6; \
 	_os_trace_verify_printf(_l, _c1, _c2, _c3, _c4, _c5, _c6); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		__typeof__(_c2) _f2; \
-		__typeof__(_c3) _f3; \
-		__typeof__(_c4) _f4; \
-		__typeof__(_c5) _f5; \
-		__typeof__(_c6) _f6; \
-		uint8_t _s[6]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        __typeof__(_c2) _f2; \
+	        __typeof__(_c3) _f3; \
+	        __typeof__(_c4) _f4; \
+	        __typeof__(_c5) _f5; \
+	        __typeof__(_c6) _f6; \
+	        uint8_t _s[6]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._f2 = _c2, ._s[1] = sizeof(_c2), \
-		._f3 = _c3, ._s[2] = sizeof(_c3), \
-		._f4 = _c4, ._s[3] = sizeof(_c4), \
-		._f5 = _c5, ._s[4] = sizeof(_c5), \
-		._f6 = _c6, ._s[5] = sizeof(_c6), \
-		._cnt = 6, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._f2 = _c2, ._s[1] = sizeof(_c2), \
+	        ._f3 = _c3, ._s[2] = sizeof(_c3), \
+	        ._f4 = _c4, ._s[3] = sizeof(_c4), \
+	        ._f5 = _c5, ._s[4] = sizeof(_c5), \
+	        ._f6 = _c6, ._s[5] = sizeof(_c6), \
+	        ._cnt = 6, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), NULL); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_7(_l, _m, _t, _1, _2, _3, _4, _5, _6, _7) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	const __typeof__(_2) _c2 = _2; \
 	const __typeof__(_3) _c3 = _3; \
@@ -233,28 +234,28 @@ _os_trace_verify_printf(const char *msg, ...) __attribute__((format(printf, 1, 2
 	const __typeof__(_7) _c7 = _7; \
 	_os_trace_verify_printf(_l, _c1, _c2, _c3, _c4, _c5, _c6, _c7); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		__typeof__(_c2) _f2; \
-		__typeof__(_c3) _f3; \
-		__typeof__(_c4) _f4; \
-		__typeof__(_c5) _f5; \
-		__typeof__(_c6) _f6; \
-		__typeof__(_c7) _f7; \
-		uint8_t _s[7]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        __typeof__(_c2) _f2; \
+	        __typeof__(_c3) _f3; \
+	        __typeof__(_c4) _f4; \
+	        __typeof__(_c5) _f5; \
+	        __typeof__(_c6) _f6; \
+	        __typeof__(_c7) _f7; \
+	        uint8_t _s[7]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._f2 = _c2, ._s[1] = sizeof(_c2), \
-		._f3 = _c3, ._s[2] = sizeof(_c3), \
-		._f4 = _c4, ._s[3] = sizeof(_c4), \
-		._f5 = _c5, ._s[4] = sizeof(_c5), \
-		._f6 = _c6, ._s[5] = sizeof(_c6), \
-		._f7 = _c7, ._s[6] = sizeof(_c7), \
-		._cnt = 7, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._f2 = _c2, ._s[1] = sizeof(_c2), \
+	        ._f3 = _c3, ._s[2] = sizeof(_c3), \
+	        ._f4 = _c4, ._s[3] = sizeof(_c4), \
+	        ._f5 = _c5, ._s[4] = sizeof(_c5), \
+	        ._f6 = _c6, ._s[5] = sizeof(_c6), \
+	        ._f7 = _c7, ._s[6] = sizeof(_c7), \
+	        ._cnt = 7, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), NULL); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_with_payload_1(_l, _m, _t, _payload) __extension__({ \
@@ -264,98 +265,98 @@ _os_trace_verify_printf(const char *msg, ...) __attribute__((format(printf, 1, 2
 })
 
 #define _os_trace_with_payload_2(_l, _m, _t, _1, _payload) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	_os_trace_verify_printf(_l, _c1); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		uint8_t _s[1]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        uint8_t _s[1]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._cnt = 1, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._cnt = 1, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), _payload); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_with_payload_3(_l, _m, _t, _1, _2, _payload) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	const __typeof__(_2) _c2 = _2; \
 	_os_trace_verify_printf(_l, _c1, _c2); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		__typeof__(_c2) _f2; \
-		uint8_t _s[2]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        __typeof__(_c2) _f2; \
+	        uint8_t _s[2]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._f2 = _c2, ._s[1] = sizeof(_c2), \
-                ._cnt = 2, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._f2 = _c2, ._s[1] = sizeof(_c2), \
+	        ._cnt = 2, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), _payload); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_with_payload_4(_l, _m, _t, _1, _2, _3, _payload) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	const __typeof__(_2) _c2 = _2; \
 	const __typeof__(_3) _c3 = _3; \
 	_os_trace_verify_printf(_l, _c1, _c2, _c3); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		__typeof__(_c2) _f2; \
-		__typeof__(_c3) _f3; \
-		uint8_t _s[3]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        __typeof__(_c2) _f2; \
+	        __typeof__(_c3) _f3; \
+	        uint8_t _s[3]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._f2 = _c2, ._s[1] = sizeof(_c2), \
-		._f3 = _c3, ._s[2] = sizeof(_c3), \
-                ._cnt = 3, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._f2 = _c2, ._s[1] = sizeof(_c2), \
+	        ._f3 = _c3, ._s[2] = sizeof(_c3), \
+	        ._cnt = 3, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), _payload); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_with_payload_5(_l, _m, _t, _1, _2, _3, _4, _payload) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	const __typeof__(_2) _c2 = _2; \
 	const __typeof__(_3) _c3 = _3; \
 	const __typeof__(_4) _c4 = _4; \
 	_os_trace_verify_printf(_l, _c1, _c2, _c3, _c4); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		__typeof__(_c2) _f2; \
-		__typeof__(_c3) _f3; \
-		__typeof__(_c4) _f4; \
-		uint8_t _s[4]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        __typeof__(_c2) _f2; \
+	        __typeof__(_c3) _f3; \
+	        __typeof__(_c4) _f4; \
+	        uint8_t _s[4]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._f2 = _c2, ._s[1] = sizeof(_c2), \
-		._f3 = _c3, ._s[2] = sizeof(_c3), \
-		._f4 = _c4, ._s[3] = sizeof(_c4), \
-		._cnt = 4, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._f2 = _c2, ._s[1] = sizeof(_c2), \
+	        ._f3 = _c3, ._s[2] = sizeof(_c3), \
+	        ._f4 = _c4, ._s[3] = sizeof(_c4), \
+	        ._cnt = 4, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), _payload); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_with_payload_6(_l, _m, _t, _1, _2, _3, _4, _5, _payload) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	const __typeof__(_2) _c2 = _2; \
 	const __typeof__(_3) _c3 = _3; \
@@ -363,29 +364,29 @@ _os_trace_verify_printf(const char *msg, ...) __attribute__((format(printf, 1, 2
 	const __typeof__(_4) _c5 = _5; \
 	_os_trace_verify_printf(_l, _c1, _c2, _c3, _c4, _c5); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		__typeof__(_c2) _f2; \
-		__typeof__(_c3) _f3; \
-		__typeof__(_c4) _f4; \
-		__typeof__(_c5) _f5; \
-		uint8_t _s[5]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        __typeof__(_c2) _f2; \
+	        __typeof__(_c3) _f3; \
+	        __typeof__(_c4) _f4; \
+	        __typeof__(_c5) _f5; \
+	        uint8_t _s[5]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._f2 = _c2, ._s[1] = sizeof(_c2), \
-		._f3 = _c3, ._s[2] = sizeof(_c3), \
-		._f4 = _c4, ._s[3] = sizeof(_c4), \
-		._f5 = _c5, ._s[4] = sizeof(_c5), \
-		._cnt = 5, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._f2 = _c2, ._s[1] = sizeof(_c2), \
+	        ._f3 = _c3, ._s[2] = sizeof(_c3), \
+	        ._f4 = _c4, ._s[3] = sizeof(_c4), \
+	        ._f5 = _c5, ._s[4] = sizeof(_c5), \
+	        ._cnt = 5, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), _payload); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_with_payload_7(_l, _m, _t, _1, _2, _3, _4, _5, _6, _payload) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	const __typeof__(_2) _c2 = _2; \
 	const __typeof__(_3) _c3 = _3; \
@@ -394,31 +395,31 @@ _os_trace_verify_printf(const char *msg, ...) __attribute__((format(printf, 1, 2
 	const __typeof__(_6) _c6 = _6; \
 	_os_trace_verify_printf(_l, _c1, _c2, _c3, _c4, _c5, _c6); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		__typeof__(_c2) _f2; \
-		__typeof__(_c3) _f3; \
-		__typeof__(_c4) _f4; \
-		__typeof__(_c5) _f5; \
-		__typeof__(_c6) _f6; \
-		uint8_t _s[6]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        __typeof__(_c2) _f2; \
+	        __typeof__(_c3) _f3; \
+	        __typeof__(_c4) _f4; \
+	        __typeof__(_c5) _f5; \
+	        __typeof__(_c6) _f6; \
+	        uint8_t _s[6]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._f2 = _c2, ._s[1] = sizeof(_c2), \
-		._f3 = _c3, ._s[2] = sizeof(_c3), \
-		._f4 = _c4, ._s[3] = sizeof(_c4), \
-		._f5 = _c5, ._s[4] = sizeof(_c5), \
-		._f6 = _c6, ._s[5] = sizeof(_c6), \
-		._cnt = 6, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._f2 = _c2, ._s[1] = sizeof(_c2), \
+	        ._f3 = _c3, ._s[2] = sizeof(_c3), \
+	        ._f4 = _c4, ._s[3] = sizeof(_c4), \
+	        ._f5 = _c5, ._s[4] = sizeof(_c5), \
+	        ._f6 = _c6, ._s[5] = sizeof(_c6), \
+	        ._cnt = 6, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), _payload); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define _os_trace_with_payload_8(_l, _m, _t, _1, _2, _3, _4, _5, _6, _7, _payload) __extension__({ \
-        _Pragma("clang diagnostic push") \
-        _Pragma("clang diagnostic ignored \"-Wpacked\"") \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wpacked\"") \
 	const __typeof__(_1) _c1 = _1; \
 	const __typeof__(_2) _c2 = _2; \
 	const __typeof__(_3) _c3 = _3; \
@@ -428,28 +429,28 @@ _os_trace_verify_printf(const char *msg, ...) __attribute__((format(printf, 1, 2
 	const __typeof__(_7) _c7 = _7; \
 	_os_trace_verify_printf(_l, _c1, _c2, _c3, _c4, _c5, _c6, _c7); \
 	const struct __attribute__((packed)) { \
-		__typeof__(_c1) _f1; \
-		__typeof__(_c2) _f2; \
-		__typeof__(_c3) _f3; \
-		__typeof__(_c4) _f4; \
-		__typeof__(_c5) _f5; \
-		__typeof__(_c6) _f6; \
-		__typeof__(_c7) _f7; \
-		uint8_t _s[7]; \
-                uint8_t _cnt; \
+	        __typeof__(_c1) _f1; \
+	        __typeof__(_c2) _f2; \
+	        __typeof__(_c3) _f3; \
+	        __typeof__(_c4) _f4; \
+	        __typeof__(_c5) _f5; \
+	        __typeof__(_c6) _f6; \
+	        __typeof__(_c7) _f7; \
+	        uint8_t _s[7]; \
+	        uint8_t _cnt; \
 	} _buf = { \
-		._f1 = _c1, ._s[0] = sizeof(_c1), \
-		._f2 = _c2, ._s[1] = sizeof(_c2), \
-		._f3 = _c3, ._s[2] = sizeof(_c3), \
-		._f4 = _c4, ._s[3] = sizeof(_c4), \
-		._f5 = _c5, ._s[4] = sizeof(_c5), \
-		._f6 = _c6, ._s[5] = sizeof(_c6), \
-		._f7 = _c7, ._s[6] = sizeof(_c7), \
-                ._cnt = 7, \
+	        ._f1 = _c1, ._s[0] = sizeof(_c1), \
+	        ._f2 = _c2, ._s[1] = sizeof(_c2), \
+	        ._f3 = _c3, ._s[2] = sizeof(_c3), \
+	        ._f4 = _c4, ._s[3] = sizeof(_c4), \
+	        ._f5 = _c5, ._s[4] = sizeof(_c5), \
+	        ._f6 = _c6, ._s[5] = sizeof(_c6), \
+	        ._f7 = _c7, ._s[6] = sizeof(_c7), \
+	        ._cnt = 7, \
 	}; \
 	_os_trace_with_buffer(&__dso_handle, _m, _t, &_buf, sizeof(_buf), _payload); \
 	__asm__(""); /* avoid tailcall */ \
-        _Pragma("clang diagnostic pop") \
+	_Pragma("clang diagnostic pop") \
 })
 
 #define OS_TRACE_CALL(format, _m, _t, ...) __extension__({                              \
@@ -608,9 +609,9 @@ _os_trace_verify_printf(const char *msg, ...) __attribute__((format(printf, 1, 2
  * @typedef os_trace_payload_t
  * A block that populates an xpc_object_t of type XPC_TYPE_DICTIONARY to represent
  * complex data. This block will only be invoked under conditions where tools
- * have attached to the process. The payload can be used to send arbitrary data 
- * via the trace call. Tools may use the data to validate state for integration 
- * tests or provide other introspection services. No assumptions are made about 
+ * have attached to the process. The payload can be used to send arbitrary data
+ * via the trace call. Tools may use the data to validate state for integration
+ * tests or provide other introspection services. No assumptions are made about
  * the format or structure of the data.
  */
 typedef void (^os_trace_payload_t)(xpc_object_t xdict);
@@ -643,10 +644,10 @@ typedef void (^os_trace_payload_t)(xpc_object_t xdict);
 })
 
 
-#if (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) &&  __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_10_0) \
-     || (defined(__WATCH_OS_VERSION_MIN_REQUIRED) &&  __WATCH_OS_VERSION_MIN_REQUIRED >= __WATCHOS_3_0) \
-     || (defined(__TV_OS_VERSION_MIN_REQUIRED) && __TV_OS_VERSION_MIN_REQUIRED >= __TVOS_10_0) \
-     || (defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_12)
+#if (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_10_0) \
+        || (defined(__WATCH_OS_VERSION_MIN_REQUIRED) && __WATCH_OS_VERSION_MIN_REQUIRED >= __WATCHOS_3_0) \
+        || (defined(__TV_OS_VERSION_MIN_REQUIRED) && __TV_OS_VERSION_MIN_REQUIRED >= __TVOS_10_0) \
+        || (defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_12)
 
 /*!
  * @function os_trace_info

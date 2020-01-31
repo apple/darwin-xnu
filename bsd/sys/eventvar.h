@@ -98,7 +98,7 @@ typedef void (*kqueue_continue_t)(struct kqueue *, void *, int);
  *     XXX -> kq-waitq-set lock -> kq-request lock -> pthread kext locks -> thread lock
  */
 
-#define KQEXTENT	256		/* linear growth by this amount */
+#define KQEXTENT        256             /* linear growth by this amount */
 
 struct knote_lock_ctx {
 	struct knote                       *knlc_knote;
@@ -124,14 +124,14 @@ LIST_HEAD(knote_locks, knote_lock_ctx);
  * the stack named `name`. In development kernels, it uses tricks to make sure
  * not locks was still held when exiting the C-scope that contains this context.
  */
-__attribute__((noinline,not_tail_called))
+__attribute__((noinline, not_tail_called))
 void knote_lock_ctx_chk(struct knote_lock_ctx *ctx);
 #define KNOTE_LOCK_CTX(n) \
-		struct knote_lock_ctx n __attribute__((cleanup(knote_lock_ctx_chk))); \
-		n.knlc_state = KNOTE_LOCK_CTX_UNLOCKED
+	        struct knote_lock_ctx n __attribute__((cleanup(knote_lock_ctx_chk))); \
+	        n.knlc_state = KNOTE_LOCK_CTX_UNLOCKED
 #else
 #define KNOTE_LOCK_CTX(n) \
-		struct knote_lock_ctx n
+	        struct knote_lock_ctx n
 #endif
 
 /*
@@ -208,8 +208,8 @@ struct kqrequest {
 
 
 #define KQR_WORKLOOP                 0x01   /* owner is a workloop */
-#define KQR_THREQUESTED              0x02	/* thread has been requested from workq */
-#define KQR_WAKEUP                   0x04	/* wakeup called during processing */
+#define KQR_THREQUESTED              0x02       /* thread has been requested from workq */
+#define KQR_WAKEUP                   0x04       /* wakeup called during processing */
 #define KQR_THOVERCOMMIT             0x08   /* overcommit needed for thread requests */
 #define KQR_R2K_NOTIF_ARMED          0x10   /* ast notifications armed */
 #define KQR_ALLOCATED_TURNSTILE      0x20   /* kqwl_turnstile is allocated */
@@ -305,10 +305,10 @@ struct kqworkloop {
 #if CONFIG_WORKLOOP_DEBUG
 #define KQWL_HISTORY_COUNT 32
 #define KQWL_HISTORY_WRITE_ENTRY(kqwl, ...) ({ \
-		struct kqworkloop *__kqwl = (kqwl); \
-		unsigned int __index = os_atomic_inc_orig(&__kqwl->kqwl_index, relaxed); \
-		__kqwl->kqwl_history[__index % KQWL_HISTORY_COUNT] = \
-				(struct kqwl_history)__VA_ARGS__; \
+	        struct kqworkloop *__kqwl = (kqwl); \
+	        unsigned int __index = os_atomic_inc_orig(&__kqwl->kqwl_index, relaxed); \
+	        __kqwl->kqwl_history[__index % KQWL_HISTORY_COUNT] = \
+	                        (struct kqwl_history)__VA_ARGS__; \
 	})
 	struct kqwl_history {
 		thread_t updater;  /* Note: updates can be reordered */
@@ -330,7 +330,7 @@ struct kqworkloop {
 };
 
 typedef union {
-	struct kqueue	    *kq;
+	struct kqueue       *kq;
 	struct kqworkq      *kqwq;
 	struct kqfile       *kqf;
 	struct kqworkloop   *kqwl;
@@ -352,7 +352,7 @@ extern void kqueue_threadreq_unbind(struct proc *p, struct kqrequest *kqr);
 // called with the kq req held
 #define KQUEUE_THREADERQ_BIND_NO_INHERITOR_UPDATE 0x1
 extern void kqueue_threadreq_bind(struct proc *p, workq_threadreq_t req,
-		thread_t thread, unsigned int flags);
+    thread_t thread, unsigned int flags);
 
 // called with the wq lock held
 extern void kqueue_threadreq_bind_prepost(struct proc *p, workq_threadreq_t req, thread_t thread);
@@ -372,9 +372,9 @@ extern void knotes_dealloc(struct proc *);
 extern void kqworkloops_dealloc(struct proc *);
 
 extern int kevent_register(struct kqueue *, struct kevent_internal_s *,
-		struct knote_lock_ctx *);
+    struct knote_lock_ctx *);
 extern int kqueue_scan(struct kqueue *, kevent_callback_t, kqueue_continue_t,
-		void *, struct filt_process_s *, struct timeval *, struct proc *);
+    void *, struct filt_process_s *, struct timeval *, struct proc *);
 extern int kqueue_stat(struct kqueue *, void *, int, proc_t);
 
 #endif /* XNU_KERNEL_PRIVATE */

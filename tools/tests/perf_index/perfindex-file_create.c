@@ -8,26 +8,26 @@
 char tempdir[MAXPATHLEN];
 
 DECL_SETUP {
-    char* retval;
+	char* retval;
 
-    retval = setup_tempdir(tempdir);
+	retval = setup_tempdir(tempdir);
 
-    VERIFY(retval, "tempdir setup failed");
+	VERIFY(retval, "tempdir setup failed");
 
-    printf("tempdir: %s\n", tempdir);
+	printf("tempdir: %s\n", tempdir);
 
-    return PERFINDEX_SUCCESS;
+	return PERFINDEX_SUCCESS;
 }
 
 DECL_TEST {
-    return test_file_create(tempdir, thread_id, num_threads, length);
+	return test_file_create(tempdir, thread_id, num_threads, length);
 }
 
 DECL_CLEANUP {
-    int retval;
+	int retval;
 
-    retval = cleanup_tempdir(tempdir);
-    VERIFY(retval == 0, "cleanup_tempdir failed");
+	retval = cleanup_tempdir(tempdir);
+	VERIFY(retval == 0, "cleanup_tempdir failed");
 
-    return PERFINDEX_SUCCESS;
+	return PERFINDEX_SUCCESS;
 }

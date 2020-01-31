@@ -39,19 +39,19 @@
 #include <sys/appleapiopts.h>
 
 struct ah {
-	u_int8_t	ah_nxt;		/* Next Header */
-	u_int8_t	ah_len;		/* Length of data, in 32bit */
-	u_int16_t	ah_reserve;	/* Reserved for future use */
-	u_int32_t	ah_spi;		/* Security parameter index */
+	u_int8_t        ah_nxt;         /* Next Header */
+	u_int8_t        ah_len;         /* Length of data, in 32bit */
+	u_int16_t       ah_reserve;     /* Reserved for future use */
+	u_int32_t       ah_spi;         /* Security parameter index */
 	/* variable size, 32bit bound*/	/* Authentication data */
 };
 
 struct newah {
-	u_int8_t	ah_nxt;		/* Next Header */
-	u_int8_t	ah_len;		/* Length of data + 1, in 32bit */
-	u_int16_t	ah_reserve;	/* Reserved for future use */
-	u_int32_t	ah_spi;		/* Security parameter index */
-	u_int32_t	ah_seq;		/* Sequence number field */
+	u_int8_t        ah_nxt;         /* Next Header */
+	u_int8_t        ah_len;         /* Length of data + 1, in 32bit */
+	u_int16_t       ah_reserve;     /* Reserved for future use */
+	u_int32_t       ah_spi;         /* Security parameter index */
+	u_int32_t       ah_seq;         /* Sequence number field */
 	/* variable size, 32bit bound*/	/* Authentication data */
 };
 
@@ -60,21 +60,21 @@ struct secasvar;
 
 struct ah_algorithm_state {
 	struct secasvar *sav;
-	void* foo;	/*per algorithm data - maybe*/
+	void* foo;      /*per algorithm data - maybe*/
 };
 
 struct ah_algorithm {
 	int (*sumsiz)(struct secasvar *);
 	int (*mature)(struct secasvar *);
-	int keymin;	/* in bits */
-	int keymax;	/* in bits */
+	int keymin;     /* in bits */
+	int keymax;     /* in bits */
 	const char *name;
 	int (*init)(struct ah_algorithm_state *, struct secasvar *);
 	void (*update)(struct ah_algorithm_state *, caddr_t, size_t);
 	void (*result)(struct ah_algorithm_state *, caddr_t, size_t);
 };
 
-#define	AH_MAXSUMSIZE	64 // sha2-512's output size
+#define AH_MAXSUMSIZE   64 // sha2-512's output size
 
 extern const struct ah_algorithm *ah_algorithm_lookup(int);
 
@@ -85,7 +85,7 @@ extern size_t ah_hdrsiz(struct ipsecrequest *);
 extern void ah4_input(struct mbuf *, int);
 extern int ah4_output(struct mbuf *, struct secasvar *);
 extern int ah4_calccksum(struct mbuf *, caddr_t, size_t,
-	const struct ah_algorithm *, struct secasvar *);
+    const struct ah_algorithm *, struct secasvar *);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _NETINET6_AH_H_ */

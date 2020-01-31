@@ -121,7 +121,7 @@ static kern_return_t pet_threads_prepare(task_t task);
 static void pet_sample_all_tasks(uint32_t idle_rate);
 static void pet_sample_task(task_t task, uint32_t idle_rate);
 static void pet_sample_thread(int pid, task_t task, thread_t thread,
-		uint32_t idle_rate);
+    uint32_t idle_rate);
 
 /* functions called by other areas of kperf */
 
@@ -154,10 +154,15 @@ kperf_pet_fire_after(void)
 
 void
 kperf_pet_on_cpu(thread_t thread, thread_continue_t continuation,
-                 uintptr_t *starting_fp)
+    uintptr_t *starting_fp)
 {
 	assert(thread != NULL);
 	assert(ml_get_interrupts_enabled() == FALSE);
+
+	uint32_t actionid = pet_action_id;
+	if (actionid == 0) {
+		return;
+	}
 
 	if (thread->kperf_pet_gen != kperf_pet_gen) {
 		BUF_VERB(PERF_PET_SAMPLE_THREAD | DBG_FUNC_START, kperf_pet_gen, thread->kperf_pet_gen);
@@ -183,7 +188,7 @@ kperf_pet_on_cpu(thread_t thread, thread_continue_t continuation,
 		if (continuation != NULL) {
 			flags |= SAMPLE_FLAG_CONTINUATION;
 		}
-		kperf_sample(sample, &ctx, pet_action_id, flags);
+		kperf_sample(sample, &ctx, actionid, flags);
 
 		BUF_VERB(PERF_PET_SAMPLE_THREAD | DBG_FUNC_END);
 	} else {
@@ -194,6 +199,10 @@ kperf_pet_on_cpu(thread_t thread, thread_continue_t continuation,
 void
 kperf_pet_config(unsigned int action_id)
 {
+	if (action_id == 0 && !pet_initted) {
+		return;
+	}
+
 	kern_return_t kr = pet_init();
 	if (kr != KERN_SUCCESS) {
 		return;
@@ -281,7 +290,7 @@ pet_init(void)
 
 	/* make the sync point */
 	pet_lock = lck_mtx_alloc_init(&kperf_lck_grp, NULL);
-	assert(pet_lock);
+	assert(pet_lock != NULL);
 
 	/* create the thread */
 
@@ -315,8 +324,10 @@ pet_thread_idle(void)
 {
 	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
 
-	(void)lck_mtx_sleep(pet_lock, LCK_SLEEP_DEFAULT, &pet_action_id,
-	                    THREAD_UNINT);
+	do {
+		(void)lck_mtx_sleep(pet_lock, LCK_SLEEP_DEFAULT, &pet_action_id,
+		    THREAD_UNINT);
+	} while (pet_action_id == 0);
 }
 
 __attribute__((noreturn))
@@ -582,6 +593,7 @@ static void
 pet_sample_all_tasks(uint32_t idle_rate)
 {
 	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
+	assert(pet_action_id > 0);
 
 	BUF_INFO(PERF_PET_SAMPLE | DBG_FUNC_START);
 
@@ -598,7 +610,7 @@ pet_sample_all_tasks(uint32_t idle_rate)
 		pet_sample_task(task, idle_rate);
 	}
 
-	for(unsigned int i = 0; i < pet_tasks_count; i++) {
+	for (unsigned int i = 0; i < pet_tasks_count; i++) {
 		task_deallocate(pet_tasks[i]);
 	}
 

@@ -1378,7 +1378,7 @@ def formatWaitInfo(info):
     return s
         
 
-def SaveStackshotReport(j, outfile_name, dsc_uuid, dsc_libs_arr, incomplete):
+def SaveStackshotReport(j, outfile_name, incomplete):
     import time
     from operator import itemgetter, attrgetter
     ss = j.get('kcdata_stackshot')
@@ -1395,41 +1395,18 @@ def SaveStackshotReport(j, outfile_name, dsc_uuid, dsc_libs_arr, incomplete):
 
     os_version = ss.get('osversion', 'Unknown')
     timebase = ss.get('mach_timebase_info', {"denom": 1, "numer": 1})
-    if not dsc_uuid and 'imageSlidBaseAddress' not in ss.get('shared_cache_dyld_load_info'):
-        print "Stackshot format does not include slid shared cache base address and no UUID provided. Skipping writing report."
-        return
 
-    # If a shared cache UUID is provided, treat the slide as the base address
-    # for compatibility with existing tools that operate based on this logic
-    if dsc_uuid:
-        shared_cache_base_addr = ss.get('shared_cache_dyld_load_info')['imageLoadAddress']
-    elif 'imageSlidBaseAddress' in ss.get('shared_cache_dyld_load_info'):
-        shared_cache_base_addr = ss.get('shared_cache_dyld_load_info')['imageSlidBaseAddress']
-    else:
-        print "No shared cache UUID provided and data doesn't include imageSlidBaseAddress. Skipping writing report."
-        return
-
-    dsc_common = [format_uuid(ss.get('shared_cache_dyld_load_info')['imageUUID']),
-                  shared_cache_base_addr, "S" ]
+    dsc_common = None
+    shared_cache_info = ss.get('shared_cache_dyld_load_info')
+    if shared_cache_info:
+        shared_cache_base_addr = shared_cache_info['imageSlidBaseAddress']
+        dsc_common = [format_uuid(shared_cache_info['imageUUID']), shared_cache_info['imageSlidBaseAddress'], "S" ]
+        print "Shared cache UUID found from the binary data is <%s> " % str(dsc_common[0])
 
     dsc_layout = ss.get('system_shared_cache_layout')
 
     dsc_libs = []
-    print "Shared cache UUID found from the binary data is <%s> " % str(dsc_common[0])
-    if dsc_common[0].replace('-', '').lower() == dsc_uuid:
-        print "SUCCESS: Found Matching dyld shared cache uuid. Loading library load addresses from layout provided."
-        _load_addr = dsc_common[1]
-        #print _load_addr
-        #print dsc_libs_arr
-        for i in dsc_libs_arr:
-            _uuid = i[2].lower().replace('-','').strip()
-            _addr = int(i[0], 16) + _load_addr
-            dsc_libs.append([_uuid, _addr, "C"])
-            #print "adding ", [_uuid, _addr, "C"]
-    elif dsc_uuid:
-        print "Provided shared cache UUID does not match. Skipping writing report."
-        return
-    elif dsc_layout:
+    if dsc_layout:
         print "Found in memory system shared cache layout with {} images".format(len(dsc_layout))
         slide = ss.get('shared_cache_dyld_load_info')['imageLoadAddress']
 
@@ -1478,11 +1455,10 @@ def SaveStackshotReport(j, outfile_name, dsc_uuid, dsc_libs_arr, incomplete):
 
             pr_lib_dsc = [format_uuid(tsnap.get('shared_cache_dyld_load_info')['imageUUID']),
                           tsnap.get('shared_cache_dyld_load_info')['imageSlidBaseAddress'],
-                          "S"
-                         ]
+                          "S"]
 
         pr_libs = []
-        if len(dsc_libs) == 0:
+        if len(dsc_libs) == 0 and pr_lib_dsc:
             pr_libs.append(pr_lib_dsc)
         _lib_type = "P"
         if int(pid) == 0:
@@ -1598,38 +1574,6 @@ def RunCommand(bash_cmd_string, get_stderr = True):
     finally:
         return (exit_code, output_str)
 
-def ProcessDyldSharedCacheFile(shared_cache_file_path, sdk_str=""):
-    """ returns (uuid, text_info) output from shared_cache_util.
-                In case of error None is returned and err message is printed to stdout.
-    """
-    if not os.path.exists(shared_cache_file_path):
-        print "File path: %s does not exists" % shared_cache_file_path
-        return None
-    if sdk_str:
-        sdk_str = ' -sdk "%s" ' % sdk_str
-    (c, so) = RunCommand("xcrun {} -find dyld_shared_cache_util".format(sdk_str))
-    if c:
-        print "Failed to find path to dyld_shared_cache_util. Exit code: %d , message: %s" % (c,so)
-        return None
-    dyld_shared_cache_util = so.strip()
-    (c, so) = RunCommand("{} -info {}".format(dyld_shared_cache_util, shared_cache_file_path))
-    if c:
-        print "Failed to get uuid info from %s" % shared_cache_file_path
-        print so
-        return None
-
-    uuid = so.splitlines()[0].split(": ")[-1].strip().replace("-","").lower()
-
-    (c, so) = RunCommand("{} -text_info {}".format(dyld_shared_cache_util, shared_cache_file_path))
-    if c:
-        print "Failed to get text_info from %s" % shared_cache_file_path
-        print so
-        return None
-
-    print "Found %s uuid: %s" % (shared_cache_file_path, uuid)
-    text_info = so
-
-    return (uuid, so)
 
 parser = argparse.ArgumentParser(description="Decode a kcdata binary file.")
 parser.add_argument("-l", "--listtypes", action="store_true", required=False, default=False,
@@ -1645,10 +1589,7 @@ parser.add_argument("--multiple", help="look for multiple stackshots in a single
 parser.add_argument("-p", "--plist", required=False, default=False,
                     help="output as plist", action="store_true")
 
-parser.add_argument("-U", "--uuid", required=False, default="", help="UUID of dyld shared cache to be analysed and filled in libs of stackshot report", dest="uuid")
-parser.add_argument("-L", "--layout", required=False, type=argparse.FileType("r"), help="Path to layout file for DyldSharedCache. You can generate one by doing \n\tbash$xcrun -sdk <sdk> dyld_shared_cache_util -text_info </path/to/dyld_shared_cache> ", dest="layout")
 parser.add_argument("-S", "--sdk", required=False, default="", help="sdk property passed to xcrun command to find the required tools. Default is empty string.", dest="sdk")
-parser.add_argument("-D", "--dyld_shared_cache", required=False, default="", help="Path to dyld_shared_cache built by B&I", dest="dsc")
 parser.add_argument("--pretty", default=False, action='store_true', help="make the output a little more human readable")
 parser.add_argument("--incomplete", action='store_true', help="accept incomplete data")
 parser.add_argument("kcdata_file", type=argparse.FileType('r'), help="Path to a kcdata binary file.")
@@ -1767,21 +1708,8 @@ if __name__ == '__main__':
         if args.pretty:
             json_obj = prettify(json_obj)
 
-        dsc_uuid = None
-        dsc_libs_arr = []
-        libs_re = re.compile("^\s*(0x[a-fA-F0-9]+)\s->\s(0x[a-fA-F0-9]+)\s+<([a-fA-F0-9\-]+)>\s+.*$", re.MULTILINE)
-        if args.uuid and args.layout:
-            dsc_uuid = args.uuid.strip().replace("-",'').lower()
-            dsc_libs_arr = libs_re.findall(args.layout.read())
-
-        if args.dsc:
-            _ret = ProcessDyldSharedCacheFile(args.dsc, args.sdk)
-            if _ret:
-                dsc_uuid = _ret[0]
-                dsc_libs_arr = libs_re.findall(_ret[1])
-
         if args.stackshot_file:
-            SaveStackshotReport(json_obj, args.stackshot_file, dsc_uuid, dsc_libs_arr, G.data_was_incomplete)
+            SaveStackshotReport(json_obj, args.stackshot_file, G.data_was_incomplete)
         elif args.plist:
             import Foundation
             plist = Foundation.NSPropertyListSerialization.dataWithPropertyList_format_options_error_(

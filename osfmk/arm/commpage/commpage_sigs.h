@@ -32,7 +32,7 @@
 	(((x) >> 24) & 0x000000ff)
 
 #define BSWAP_32_OFFSET(x) \
-	BSWAP_32(x + _COMM_PAGE_SIGS_OFFSET) 
+	BSWAP_32(x + _COMM_PAGE_SIGS_OFFSET)
 
 #define COMMPAGE_SIGS_BEGIN \
 .const_data				; \
@@ -45,13 +45,13 @@ _commpage_sigs_begin:
 _commpage_sigs_end:			; \
 
 #define COMMPAGE_SIG_START(x) \
-.private_extern _commpage_sig ## x 	; \
+.private_extern _commpage_sig ## x      ; \
 _commpage_sig ## x ## :			; \
 	.long BSWAP_32(0x14400000)	; \
 	.long BSWAP_32(0x00000001)	; \
-	.asciz # x 			; \
+	.asciz # x                      ; \
 	.align 2			; \
-	.long BSWAP_32(0x14400000) 
+	.long BSWAP_32(0x14400000)
 
 #define COMMPAGE_SIG_END(x) \
 	.long BSWAP_32(0x4e800020)	; \
@@ -64,20 +64,20 @@ _commpage_sig ## x ## :			; \
 #define OBJCRTP_SIG_START(x) COMMPAGE_SIG_START(x)
 
 #define OBJCRTP_SIG_END(x) \
-        .long BSWAP_32(0x14400000)      ; \
-        .long BSWAP_32(0x00000000)      ; \
-        .asciz # x                      ; \
-        .align 2                        ; \
-        .long BSWAP_32(0x14400000)
+	.long BSWAP_32(0x14400000)      ; \
+	.long BSWAP_32(0x00000000)      ; \
+	.asciz # x                      ; \
+	.align 2                        ; \
+	.long BSWAP_32(0x14400000)
 
 #define OBJCRTP_SIG_CALL_SUBJECT(x) \
-        .long BSWAP_32(0x14400002)      ; \
-        .long BSWAP_32(0x00000000)      ; \
-        .long BSWAP_32(0x00040000)      ; \
-        .long BSWAP_32(0x00000000)      ; \
-        .asciz # x                      ; \
-        .align 2                        ; \
-        .long BSWAP_32(0x14400002)
+	.long BSWAP_32(0x14400002)      ; \
+	.long BSWAP_32(0x00000000)      ; \
+	.long BSWAP_32(0x00040000)      ; \
+	.long BSWAP_32(0x00000000)      ; \
+	.asciz # x                      ; \
+	.align 2                        ; \
+	.long BSWAP_32(0x14400002)
 
 #define ARG(n) \
 	((((n * 2) + 6) << 20) + 4)

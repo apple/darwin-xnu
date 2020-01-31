@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -199,7 +199,8 @@ Entry(idt64_debug)
 
 	leaq	EXT(idt64_hndl_table0)(%rip), %rax
 	mov	16(%rax), %rax /* Offset of per-CPU shadow */
-	mov	%gs:CPU_TASK_CR3(%rax), %rax
+
+	mov	%gs:CPU_SHADOWTASK_CR3(%rax), %rax
 	mov	%rax, %cr3
 
 	pop	%rcx
@@ -249,12 +250,81 @@ Entry(idt64_mdep_scall)
 Entry(idt64_gen_prot)
 	pushq	$(HNDL_ALLTRAPS)
 	pushq	$(T_GENERAL_PROTECTION)
-	jmp	L_dispatch
+	jmp	L_check_for_kern_flt
 
 Entry(idt64_stack_fault)
 	pushq	$(HNDL_ALLTRAPS)
 	pushq	$(T_STACK_FAULT)
-	jmp	L_dispatch
+	jmp	L_check_for_kern_flt
+
+L_check_for_kern_flt:
+	/*
+	 * If we took a #GP or #SS from the kernel, check if we took them
+	 * from either ret32_iret or ret64_iret.  If we did, we need to
+	 * jump into L_dispatch at the swapgs so that the code in L_dispatch
+	 * can proceed with the correct GSbase.
+	 */
+	pushq	%rax
+	testb	$3, 8+ISF64_CS(%rsp)
+	jnz	L_dispatch_from_user_no_push_rax		/* Fault from user, go straight to dispatch */
+	leaq	EXT(ret32_iret)(%rip), %rax
+	cmpq	%rax, 8+ISF64_RIP(%rsp)
+	je	1f
+	leaq	EXT(ret64_iret)(%rip), %rax
+	cmpq	%rax, 8+ISF64_RIP(%rsp)
+	je	1f
+	jmp	L_dispatch_from_kernel_no_push_rax
+	/*
+	 * We hit the fault on iretq, so check the original return %cs.  If
+	 * it's a user %cs, fixup the stack and then jump to dispatch..
+	 *
+	 * With this type of fault, the stack is layed-out as follows:
+	 *
+	 * 
+	 * orig %ss      saved_rsp+32
+	 * orig %rsp     saved_rsp+24
+	 * orig %rflags  saved_rsp+16
+	 * orig %cs      saved_rsp+8
+	 * orig %rip     saved_rsp
+         * ^^^^^^^^^ (maybe on another stack, since we switched to IST1)
+	 * %ss           +64            -8
+	 * saved_rsp     +56           -16
+	 * %rflags       +48           -24
+	 * %cs           +40           -32
+	 * %rip          +32           -40
+	 * error code    +24           -48
+	 * hander        +16           -56
+	 * trap number   +8            -64
+	 * <saved %rax>  <== %rsp      -72
+	 */
+1:
+	pushq	%rbx
+	movq	16+ISF64_RSP(%rsp), %rbx
+	movq	ISF64_CS-24(%rbx), %rax
+	testb	$3, %al					/* If the original return destination was to user */
+	jnz	2f
+	popq	%rbx
+	jmp	L_dispatch_from_kernel_no_push_rax	/* Fault occurred when trying to return to kernel */
+2:
+	/*
+	 * Fix the stack so the original trap frame is current, then jump to dispatch
+	 */
+	movq	%rax, 16+ISF64_CS(%rsp)
+
+	movq	ISF64_RSP-24(%rbx), %rax
+	movq	%rax, 16+ISF64_RSP(%rsp)
+
+	movq	ISF64_RIP-24(%rbx), %rax
+	movq	%rax, 16+ISF64_RIP(%rsp)
+
+	movq	ISF64_SS-24(%rbx), %rax
+	movq	%rax, 16+ISF64_SS(%rsp)
+
+	movq	ISF64_RFLAGS-24(%rbx), %rax
+	movq	%rax, 16+ISF64_RFLAGS(%rsp)
+
+	popq	%rbx
+	jmp	L_dispatch_from_user_no_push_rax
 
 Entry(idt64_segnp)
 	pushq	$(HNDL_ALLTRAPS)
@@ -300,7 +370,7 @@ Entry(idt64_nmi)
 
 	leaq    EXT(idt64_hndl_table0)(%rip), %rax
 	mov     16(%rax), %rax /* Offset of per-CPU shadow */
-	mov     %gs:CPU_TASK_CR3(%rax), %rax
+	mov     %gs:CPU_SHADOWTASK_CR3(%rax), %rax
 	mov     %rax, %cr3			/* note that SMAP is enabled in L_common_dispatch (on Broadwell+) */
 
 	mov	%gs:CPU_UBER_ISF, %rcx		/* PCB stack addr */
@@ -326,7 +396,7 @@ Entry(idt64_nmi)
 	leaq    EXT(idt64_hndl_table0)(%rip), %rax
 	mov     16(%rax), %rax /* Offset of per-CPU shadow */
 	mov	%cr3, %rdx
-	mov     %gs:CPU_TASK_CR3(%rax), %rax
+	mov     %gs:CPU_SHADOWTASK_CR3(%rax), %rax
 	mov     %rax, %cr3 /* Unconditionally switch to primary kernel pagetables */
 
 	/*
@@ -463,15 +533,17 @@ L_dispatch:
 	pushq	%rax
 	testb	$3, 8+ISF64_CS(%rsp)
 	jz	1f
+L_dispatch_from_user_no_push_rax:
      	swapgs
 	leaq	EXT(idt64_hndl_table0)(%rip), %rax
      	mov	16(%rax), %rax
 L_dispatch_kgsb:
-	mov	%gs:CPU_TASK_CR3(%rax), %rax 
+	mov	%gs:CPU_SHADOWTASK_CR3(%rax), %rax
 	mov	%rax, %cr3
 #if	DEBUG
 	mov	%rax, %gs:CPU_ENTRY_CR3
 #endif
+L_dispatch_from_kernel_no_push_rax:
 1:
 	leaq	EXT(idt64_hndl_table0)(%rip), %rax
 	/* The text/data relationship here must be preserved in the doublemap, and the contents must be remapped */
@@ -503,25 +575,77 @@ Entry(ks_64bit_return)
 	push	R64_CS(%r15)
 	push	R64_RIP(%r15)
 
-	mov	R64_R15(%r15), %r15
 	cmpq	$(KERNEL64_CS), 8(%rsp)
-	jz	1f
+	jne	1f			/* Returning to user (%r15 will be restored after the segment checks) */
+	mov	R64_R15(%r15), %r15
+	jmp	L_64b_kernel_return	/* Returning to kernel */
+
+1:
+	push	%rax				/* [A] */
+	movl	%gs:CPU_NEED_SEGCHK, %eax
+	push	%rax				/* [B] */
+
+	/* Returning to user */
+	cmpl	$0, %gs:CPU_CURTASK_HAS_LDT	/* If the current task has an LDT, check and restore segment regs */
+	jne	L_64b_segops_island
+
+	/*
+	 * Restore %r15, since we're now done accessing saved state
+	 * and (%r15) won't be accessible after the %cr3 load anyway.
+	 * Note that %r15 is restored below for the segment-restore
+	 * case, just after we no longer need to access register state
+	 * relative to %r15.
+	 */
+	mov	R64_R15(%r15), %r15
+
+	/*
+	 * Note that this %cr3 sequence is duplicated here to save
+	 * [at least] a load and comparison that would be required if
+	 * this block were shared.
+	 */
 	/* Discover user cr3/ASID */
-	push	%rax
 	mov	%gs:CPU_UCR3, %rax
 #if	DEBUG
 	mov	%rax, %gs:CPU_EXIT_CR3
 #endif
 	mov	%rax, %cr3
 	/* Continue execution on the shared/doublemapped trampoline */
-	pop	%rax
 	swapgs
-1:
-	cmpl	$(SYSCALL_CS), 8(%rsp) /* test for exit via SYSRET */
+
+L_chk_sysret:
+	pop	%rax	/* Matched to [B], above (segchk required) */
+
+	/*
+	 * At this point, the stack contains:
+	 *
+	 * +--------------+
+	 * |  Return SS   | +40
+	 * |  Return RSP  | +32
+	 * |  Return RFL  | +24
+	 * |  Return CS   | +16
+	 * |  Return RIP  | +8
+	 * |  Saved RAX   |  <-- rsp
+	 * +--------------+
+	 */
+	cmpl	$(SYSCALL_CS), 16(%rsp) /* test for exit via SYSRET */
 	je      L_sysret
+
+	cmpl	$1, %eax
+	je	L_verw_island_2
+
+	pop	%rax		/* Matched to [A], above */
+
+L_64b_kernel_return:
+.globl EXT(ret64_iret)
 EXT(ret64_iret):
-        iretq				/* return from interrupt */
+        iretq			/* return from interrupt */
+
+
 L_sysret:
+	cmpl	$1, %eax
+	je	L_verw_island_3
+
+	pop	%rax		/* Matched to [A], above */
 	/*
 	 * Here to restore rcx/r11/rsp and perform the sysret back to user-space.
 	 * 	rcx	user rip
@@ -532,7 +656,138 @@ L_sysret:
 	add	$8, %rsp
 	pop	%r11
 	pop	%rsp
-	sysretq				/* return from system call */
+	sysretq			/* return from system call */
+
+
+L_verw_island_2:
+
+	pop	%rax		/* Matched to [A], above */
+	verw	40(%rsp)	/* verw operates on the %ss value already on the stack */
+	jmp	EXT(ret64_iret)
+
+
+L_verw_island_3:
+
+	pop	%rax		/* Matched to [A], above */
+
+	/*
+	 * Here to restore rcx/r11/rsp and perform the sysret back to user-space.
+	 * 	rcx	user rip
+	 *	r11	user rflags
+	 *	rsp	user stack pointer
+	 */
+	pop	%rcx
+	add	$8, %rsp
+	pop	%r11
+	verw	8(%rsp)		/* verw operates on the %ss value already on the stack */
+	pop	%rsp
+	sysretq			/* return from system call */
+
+
+L_64b_segops_island:
+
+	/* Validate CS/DS/ES/FS/GS segment selectors with the Load Access Rights instruction prior to restoration */
+	/* Exempt "known good" statically configured selectors, e.g. USER64_CS and 0 */
+	cmpl	$(USER64_CS), R64_CS(%r15)
+	jz 	11f
+	larw	R64_CS(%r15), %ax
+	jnz	L_64_reset_cs
+	/* Ensure that the segment referenced by CS in the saved state is a code segment (bit 11 == 1) */
+	testw	$0x800, %ax
+	jz	L_64_reset_cs		/* Update stored %cs with known-good selector if ZF == 1 */
+	jmp	11f
+L_64_reset_cs:
+	movl	$(USER64_CS), R64_CS(%r15)
+11:
+	cmpl	$0, R64_DS(%r15)
+	jz 	22f
+	larw	R64_DS(%r15), %ax
+	jz	22f
+	movl	$0, R64_DS(%r15)
+22:
+	cmpl	$0, R64_ES(%r15)
+	jz 	33f
+	larw	R64_ES(%r15), %ax
+	jz	33f
+	movl	$0, R64_ES(%r15)
+33:
+	cmpl	$0, R64_FS(%r15)
+	jz 	44f
+	larw	R64_FS(%r15), %ax
+	jz	44f
+	movl	$0, R64_FS(%r15)
+44:
+	cmpl	$0, R64_GS(%r15)
+	jz	55f
+	larw	R64_GS(%r15), %ax
+	jz	55f
+	movl	$0, R64_GS(%r15)
+55:
+	/*
+	 * Pack the segment registers in %rax since (%r15) will not
+	 * be accessible after the %cr3 switch.
+	 * Only restore %gs if cthread_self is zero, (indicate
+	 * this to the code below with a value of 0xffff)
+	 */
+	mov	%gs:CPU_ACTIVE_THREAD, %rax	/* Get the active thread */
+	cmpq	$0, TH_CTH_SELF(%rax)
+	je	L_restore_gs
+	movw	$0xFFFF, %ax
+	jmp	1f
+L_restore_gs:
+	movw	R64_GS(%r15), %ax
+1:
+	shlq	$16, %rax
+	movw	R64_FS(%r15), %ax
+	shlq	$16, %rax
+	movw	R64_ES(%r15), %ax
+	shlq	$16, %rax
+	movw	R64_DS(%r15), %ax
+
+	/*
+	 * Restore %r15, since we're done accessing saved state
+	 * and (%r15) won't be accessible after the %cr3 switch.
+	 */
+	mov	R64_R15(%r15), %r15
+
+	/* Discover user cr3/ASID */
+	push	%rax
+	mov	%gs:CPU_UCR3, %rax
+#if	DEBUG
+	mov	%rax, %gs:CPU_EXIT_CR3
+#endif
+	mov	%rax, %cr3
+	/* Continue execution on the shared/doublemapped trampoline */
+	pop	%rax
+	swapgs
+
+	/*
+	 * Returning to user; restore segment registers that might be used
+	 * by compatibility-mode code in a 64-bit user process.
+	 *
+	 * Note that if we take a fault here, it's OK that we haven't yet
+	 * popped %rax from the stack, because %rsp will be reset to
+	 * the value pushed onto the exception stack (above).
+	 */
+	movw	%ax, %ds
+	shrq	$16, %rax
+
+	movw	%ax, %es
+	shrq	$16, %rax
+
+	movw	%ax, %fs
+	shrq	$16, %rax
+
+	/*
+	 * 0xFFFF is the sentinel set above that indicates we should
+	 * not restore %gs (because GS.base was already set elsewhere
+	 * (e.g.: in act_machine_set_pcb or machine_thread_set_tsd_base))
+	 */
+	cmpw	$0xFFFF, %ax
+	je	L_chk_sysret
+	movw	%ax, %gs		/* Restore %gs to user-set value */
+	jmp	L_chk_sysret
+
 
 L_u64bit_entry_check:
 	/*
@@ -617,10 +872,19 @@ L_dispatch_64bit:
 	movl	$(SS_64), SS_FLAVOR(%r15)
 
 	/*
-	 * Save segment regs - for completeness since theyre not used.
+	 * Save segment regs if a 64-bit task has
+	 * installed customized segments in the LDT
 	 */
+	cmpl	$0, %gs:CPU_CURTASK_HAS_LDT
+	je	L_skip_save_extra_segregs
+
+	mov	%ds, R64_DS(%r15)
+	mov	%es, R64_ES(%r15)
+
+L_skip_save_extra_segregs:
 	mov	%fs, R64_FS(%r15)
 	mov	%gs, R64_GS(%r15)
+
 
 	/* Save general-purpose registers */
 	mov	%rax, R64_RAX(%r15)
@@ -653,6 +917,7 @@ L_dispatch_64bit:
 	mov	%cr2, %rax
 	mov	%rax, R64_CR2(%r15)
 
+L_dispatch_U64_after_fault:
 	mov	R64_TRAPNO(%r15), %ebx	/* %ebx := trapno for later */
 	mov	R64_TRAPFN(%r15), %rdx	/* %rdx := trapfn for later */
 	mov	R64_CS(%r15), %esi	/* %esi := cs for later */
@@ -726,12 +991,7 @@ L_common_dispatch:
 	clac		/* Clear EFLAGS.AC if SMAP is present/enabled */
 1:
 	/*
-	 * On entering the kernel, we typically don't switch CR3
-	 * because the kernel shares the user's address space.
-	 * But we mark the kernel's cr3 as "active" for TLB coherency evaluation
-	 * If, however, the CPU's invalid TLB flag is set, we have to invalidate the TLB
-	 * since the kernel pagetables were changed while we were in userspace.
-	 *
+	 * We mark the kernel's cr3 as "active" for TLB coherency evaluation
 	 * For threads with a mapped pagezero (some WINE games) on non-SMAP platforms,
 	 * we switch to the kernel's address space on entry. Also, 
 	 * if the global no_shared_cr3 is TRUE we do switch to the kernel's cr3
@@ -739,9 +999,9 @@ L_common_dispatch:
 	 */
 	mov	%gs:CPU_KERNEL_CR3, %rcx
 	mov	%rcx, %gs:CPU_ACTIVE_CR3
-	test	$3, %esi			/* user/kernel? */
-	jz	2f				/* skip cr3 reload from kernel */
-	xor	%rbp, %rbp
+	test	$3, %esi			/* CS: user/kernel? */
+	jz	2f				/* skip CR3 reload if from kernel */
+	xor	%ebp, %ebp
 	cmpl	$0, %gs:CPU_PAGEZERO_MAPPED
 	jnz	11f
 	cmpl	$0, EXT(no_shared_cr3)(%rip)
@@ -751,28 +1011,27 @@ L_common_dispatch:
 	movw	%gs:CPU_KERNEL_PCID, %ax
 	or	%rax, %rcx
 	mov	%rcx, %cr3			/* load kernel cr3 */
-	jmp	4f				/* and skip tlb flush test */
+	jmp	4f
 2:
-	mov	%gs:CPU_ACTIVE_CR3+4, %rcx
-	shr	$32, %rcx
-	testl	%ecx, %ecx
-	jz	4f
-	movl	$0, %gs:CPU_TLB_INVALID
-	mov	%cr4, %rcx	/* RMWW CR4, for lack of an alternative*/
-	and	$(~CR4_PGE), %rcx
-	mov	%rcx, %cr4
-	or	$(CR4_PGE), %rcx
-	mov	%rcx, %cr4
+	/* Deferred processing of pending kernel address space TLB invalidations */
+	mov     %gs:CPU_ACTIVE_CR3+4, %rcx
+	shr     $32, %rcx
+	testl   %ecx, %ecx
+	jz      4f
+	movl    $0, %gs:CPU_TLB_INVALID
+	cmpb	$0, EXT(invpcid_enabled)(%rip)
+	jz	L_cr4_island
+	movl	$2, %ecx
+	invpcid %gs:CPU_IP_DESC, %rcx
 4:
+L_set_act:
 	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Get the active thread */
 	testq	%rcx, %rcx
-	je	5f
+	je	L_intcnt
 	movl	$-1, TH_IOTIER_OVERRIDE(%rcx)	/* Reset IO tier override to -1 before handling trap */
 	cmpq	$0, TH_PCB_IDS(%rcx)	/* Is there a debug register state? */
-	je	5f
-	xor	%ecx, %ecx		/* If so, reset DR7 (the control) */
-	mov	%rcx, %dr7
-5:
+	jnz	L_dr7_island
+L_intcnt:
 	incl	%gs:hwIntCnt(,%ebx,4)		// Bump the trap/intr count
 	/* Dispatch the designated handler */
 	cmp	EXT(dblmap_base)(%rip), %rsp
@@ -785,6 +1044,17 @@ L_common_dispatch:
 	leaq	EXT(idt64_hndl_table1)(%rip), %rax
 	jmp	*(%rax, %rdx, 8)
 
+L_cr4_island:
+	mov	%cr4, %rcx      /* RMWW CR4, for lack of an alternative*/
+	and	$(~CR4_PGE), %rcx
+	mov	%rcx, %cr4
+	or	$(CR4_PGE), %rcx
+	mov	%rcx, %cr4
+	jmp	L_set_act
+L_dr7_island:
+	xor	%ecx, %ecx		/* If so, reset DR7 (the control) */
+	mov	%rcx, %dr7
+	jmp	L_intcnt
 /*
  * Control is passed here to return to user.
  */ 
@@ -792,43 +1062,13 @@ Entry(return_to_user)
 	TIME_TRAP_UEXIT
 
 Entry(ret_to_user)
-// XXX 'Be nice to tidy up this debug register restore sequence...
 	mov	%gs:CPU_ACTIVE_THREAD, %rdx
-	movq	TH_PCB_IDS(%rdx),%rax	/* Obtain this thread's debug state */
-	
-	test	%rax, %rax		/* Is there a debug register context? */
-	je	2f 			/* branch if not */
-	cmpl	$(TASK_MAP_32BIT), %gs:CPU_TASK_MAP /* Are we a 32-bit task? */
-	jne	1f
-	movl	DS_DR0(%rax), %ecx	/* If so, load the 32 bit DRs */
-	movq	%rcx, %dr0
-	movl	DS_DR1(%rax), %ecx
-	movq	%rcx, %dr1
-	movl	DS_DR2(%rax), %ecx
-	movq	%rcx, %dr2
-	movl	DS_DR3(%rax), %ecx
-	movq	%rcx, %dr3
-	movl	DS_DR7(%rax), %ecx
-	movq 	%rcx, %gs:CPU_DR7
-	jmp 	2f
-1:
-	mov	DS64_DR0(%rax), %rcx	/* Load the full width DRs*/
-	mov	%rcx, %dr0
-	mov	DS64_DR1(%rax), %rcx
-	mov	%rcx, %dr1
-	mov	DS64_DR2(%rax), %rcx
-	mov	%rcx, %dr2
-	mov	DS64_DR3(%rax), %rcx
-	mov	%rcx, %dr3
-	mov	DS64_DR7(%rax), %rcx
-	mov 	%rcx, %gs:CPU_DR7
-2:
+	cmpq	$0, TH_PCB_IDS(%rdx)	/* Is there a debug register context? */
+	jnz	L_dr_restore_island
+L_post_dr_restore:
 	/*
-	 * On exiting the kernel there's typically no need to switch cr3 since we're
-	 * already running in the user's address space which includes the
-	 * kernel. We now mark the task's cr3 as active, for TLB coherency.
-	 * If the target address space has a pagezero mapping present, or
-	 * if no_shared_cr3 is set, we do need to switch cr3 at this point.
+	 * We now mark the task's address space as active for TLB coherency.
+	 * Handle special cases such as pagezero-less tasks here.
 	 */
 	mov	%gs:CPU_TASK_CR3, %rcx
 	mov	%rcx, %gs:CPU_ACTIVE_CR3
@@ -873,8 +1113,19 @@ L_32bit_return:
 	movl	R32_SS(%r15), %eax
 	movl	%eax, R64_SS(%r15)
 
-	/* Validate DS/ES/FS/GS segment selectors with the Load Access Rights instruction prior to restoration */
-	/* Exempt "known good" statically configured selectors, e.g. USER_DS and 0 */
+	/* Validate CS/DS/ES/FS/GS segment selectors with the Load Access Rights instruction prior to restoration */
+	/* Exempt "known good" statically configured selectors, e.g. USER_CS, USER_DS and 0 */
+	cmpl	$(USER_CS), R32_CS(%r15)
+	jz 	11f
+	larw	R32_CS(%r15), %ax
+	jnz	L_32_reset_cs
+	/* Ensure that the segment referenced by CS in the saved state is a code segment (bit 11 == 1) */
+	testw	$0x800, %ax
+	jz	L_32_reset_cs		/* Update stored %cs with known-good selector if ZF == 1 */
+	jmp	11f
+L_32_reset_cs:
+	movl	$(USER_CS), R32_CS(%r15)
+11:
 	cmpl	$(USER_DS), R32_DS(%r15)
 	jz	22f
 	cmpl	$0, R32_DS(%r15)
@@ -923,6 +1174,7 @@ L_32bit_return:
 	 * push state on the IST1 stack and will not affect the "PCB stack".
 	 */
 	mov	%r15, %rsp		/* Set the PCB as the stack */
+	movl	%gs:CPU_NEED_SEGCHK, %r14d	/* %r14 will be restored below */
 	swapgs
 
 	/* Zero 64-bit-exclusive GPRs to prevent data leaks */
@@ -932,35 +1184,98 @@ L_32bit_return:
 	xor	%r11, %r11
 	xor	%r12, %r12
 	xor	%r13, %r13
-	xor	%r14, %r14
 	xor	%r15, %r15
 
-EXT(ret32_set_ds):	
 	movw	R32_DS(%rsp), %ds
-EXT(ret32_set_es):
 	movw	R32_ES(%rsp), %es
-EXT(ret32_set_fs):
 	movw	R32_FS(%rsp), %fs
-EXT(ret32_set_gs):
 	movw	R32_GS(%rsp), %gs
 
 	/* pop compat frame + trapno, trapfn and error */	
 	add	$(ISS64_OFFSET)+8+8+8, %rsp
-	cmpl	$(SYSENTER_CS),ISF64_CS-8-8-8(%rsp)
-					/* test for fast entry/exit */
-	je      L_fast_exit
+
+	/*
+	 * At this point, the stack contains:
+	 *
+	 * +--------------+
+	 * |  Return SS   | +32
+	 * |  Return RSP  | +24
+	 * |  Return RFL  | +16
+	 * |  Return CS   | +8
+	 * |  Return RIP  | <-- rsp
+	 * +--------------+
+	 */
+
+	cmpl	$(SYSENTER_CS), 8(%rsp)
+					/* test for sysexit */
+	je      L_rtu_via_sysexit
+
+	cmpl	$1, %r14d
+	je	L_verw_island
+
+L_after_verw:
+	xor	%r14, %r14
+
+.globl EXT(ret32_iret)
 EXT(ret32_iret):
 	iretq				/* return from interrupt */
 
-L_fast_exit:
+L_verw_island:
+	verw	32(%rsp)
+	jmp	L_after_verw
+
+L_verw_island_1:
+	verw	16(%rsp)
+	jmp	L_after_verw_1
+
+L_rtu_via_sysexit:
 	pop	%rdx			/* user return eip */
 	pop	%rcx			/* pop and toss cs */
 	andl	$(~EFL_IF), (%rsp)	/* clear interrupts enable, sti below */
+
+	/*
+	 * %ss is now at 16(%rsp)
+	 */
+	cmpl	$1, %r14d
+	je	L_verw_island_1
+L_after_verw_1:
+	xor	%r14, %r14
+
 	popf				/* flags - carry denotes failure */
 	pop	%rcx			/* user return esp */
+
+
 	sti				/* interrupts enabled after sysexit */
 	sysexitl			/* 32-bit sysexit */
 
+L_dr_restore_island:
+	movq    TH_PCB_IDS(%rdx),%rax   /* Obtain this thread's debug state */
+	cmpl	$(TASK_MAP_32BIT), %gs:CPU_TASK_MAP /* Are we a 32-bit task? */
+	jne	1f
+	movl	DS_DR0(%rax), %ecx	/* If so, load the 32 bit DRs */
+	movq	%rcx, %dr0
+	movl	DS_DR1(%rax), %ecx
+	movq	%rcx, %dr1
+	movl	DS_DR2(%rax), %ecx
+	movq	%rcx, %dr2
+	movl	DS_DR3(%rax), %ecx
+	movq	%rcx, %dr3
+	movl	DS_DR7(%rax), %ecx
+	movq 	%rcx, %gs:CPU_DR7
+	jmp 	2f
+1:
+	mov	DS64_DR0(%rax), %rcx	/* Load the full width DRs*/
+	mov	%rcx, %dr0
+	mov	DS64_DR1(%rax), %rcx
+	mov	%rcx, %dr1
+	mov	DS64_DR2(%rax), %rcx
+	mov	%rcx, %dr2
+	mov	DS64_DR3(%rax), %rcx
+	mov	%rcx, %dr3
+	mov	DS64_DR7(%rax), %rcx
+	mov 	%rcx, %gs:CPU_DR7
+2:
+	jmp	L_post_dr_restore
 L_cr3_switch_island:
 	xor	%eax, %eax
 	movw	%gs:CPU_ACTIVE_PCID, %ax
@@ -991,213 +1306,6 @@ L_64bit_return:
 	 */
 	leaq	EXT(idt64_hndl_table0)(%rip), %rax
 	jmp *8(%rax)
-
-Entry(ks_idt64_debug_kernel)
-	/*
-	 * trap came from kernel mode
-	 */
-
-	push	%rax			/* save %rax temporarily */
-	lea	EXT(idt64_sysenter)(%rip), %rax
-	cmp	%rax, ISF64_RIP+8(%rsp)
-	pop	%rax
-	jne	EXT(ks_dispatch_kernel)
-	/*
-	 * Interrupt stack frame has been pushed on the temporary stack.
-	 * We have to switch to pcb stack and patch up the saved state.
-	 */ 
-	mov	%rcx, ISF64_ERR(%rsp)	/* save %rcx in error slot */
-	mov	ISF64_SS+8(%rsp), %rcx	/* top of temp stack -> pcb stack */
-	xchg	%rcx,%rsp		/* switch to pcb stack */
-	push	$(USER_DS)		/* ss */
-	push	ISF64_ERR(%rcx)		/* saved %rcx into rsp slot */
-	push	ISF64_RFLAGS(%rcx)	/* rflags */
-	push	$(SYSENTER_TF_CS)	/* cs - not SYSENTER_CS for iret path */
-	mov	ISF64_ERR(%rcx),%rcx	/* restore %rcx */
-	jmp	L_sysenter_continue	/* continue sysenter entry */
-	
-Entry(ks_trap_check_kernel_exit)
-	testb   $3,ISF64_CS(%rsp)
-	jz	L_kernel_gpf
-
-	/* Here for fault from user-space. Copy interrupt state to PCB. */
-	swapgs
-	push	%rax
-	mov	%rcx, %gs:CPU_UBER_TMP		/* save user RCX  */
-	mov	%gs:CPU_UBER_ISF, %rcx		/* PCB stack addr */
-	mov	ISF64_SS+8(%rsp), %rax
-	mov	%rax, ISF64_SS(%rcx)
-	mov	ISF64_RSP+8(%rsp), %rax
-	mov	%rax, ISF64_RSP(%rcx)
-	mov	ISF64_RFLAGS+8(%rsp), %rax
-	mov	%rax, ISF64_RFLAGS(%rcx)
-	mov	ISF64_CS+8(%rsp), %rax
-	mov	%rax, ISF64_CS(%rcx)
-	mov	ISF64_RIP+8(%rsp), %rax
-	mov	%rax, ISF64_RIP(%rcx)
-	mov	ISF64_ERR+8(%rsp), %rax
-	mov	%rax, ISF64_ERR(%rcx)
-	mov	ISF64_TRAPFN+8(%rsp), %rax
-	mov	%rax, ISF64_TRAPFN(%rcx)
-	mov	ISF64_TRAPNO+8(%rsp), %rax
-	mov	%rax, ISF64_TRAPNO(%rcx)
-	pop	%rax
-	mov	%gs:CPU_UBER_TMP, %rsp		/* user RCX into RSP */
-	xchg	%rcx, %rsp			/* to PCB stack with user RCX */
-	jmp	EXT(ks_dispatch_user)
-
-L_kernel_gpf:
-	/* Here for GPF from kernel_space. Check for recoverable cases. */
-	push	%rax
-	leaq	EXT(ret32_iret)(%rip), %rax
-	cmp	%rax, 8+ISF64_RIP(%rsp)
-	je	L_fault_iret
-	leaq	EXT(ret64_iret)(%rip), %rax
-	cmp	%rax, 8+ISF64_RIP(%rsp)
-	je	L_fault_iret
-	leaq	EXT(ret32_set_ds)(%rip), %rax
-	cmp	%rax, 8+ISF64_RIP(%rsp)
-	je	L_32bit_fault_set_seg
-	leaq	EXT(ret32_set_es)(%rip), %rax
-	cmp	%rax, 8+ISF64_RIP(%rsp)
-	je	L_32bit_fault_set_seg
-	leaq	EXT(ret32_set_fs)(%rip), %rax
-	cmp	%rax, 8+ISF64_RIP(%rsp)
-	je	L_32bit_fault_set_seg
-	leaq	EXT(ret32_set_gs)(%rip), %rax
-	cmp	%rax, 8+ISF64_RIP(%rsp)
-	je	L_32bit_fault_set_seg
-	jmp	EXT(ks_kernel_trap)
-	/* Fall through */
-
-Entry(ks_kernel_trap)
-	/*
-	 * Here after taking an unexpected trap from kernel mode - perhaps
-	 * while running in the trampolines hereabouts.
-	 * Note: %rax has been pushed on stack.
-	 * Make sure we're not on the PCB stack, if so move to the kernel stack.
-	 * This is likely a fatal condition.
-	 * But first, ensure we have the kernel gs base active...
-	 */
-	push	%rcx
-	push	%rdx
-	mov	$(MSR_IA32_GS_BASE), %ecx
-	rdmsr					/* read kernel gsbase */
-	test	$0x80000000, %edx		/* test MSB of address */
-	jne	1f
-	swapgs					/* so swap */
-1:
-	pop	%rdx
-	pop	%rcx
-
-	movq	%gs:CPU_UBER_ISF, %rax		/* PCB stack addr */
-	subq	%rsp, %rax
-	cmpq	$(PAGE_SIZE), %rax		/* current stack in PCB? */
-	jb	2f				/*  - yes, deal with it */
-	pop	%rax				/*  - no, restore %rax */
-	jmp	EXT(ks_dispatch_kernel)
-2:
-	/*
-	 *  Here if %rsp is in the PCB
-	 *  Copy the interrupt stack frame from PCB stack to kernel stack
-	 */
-	movq	%gs:CPU_KERNEL_STACK, %rax
-	xchgq	%rax, %rsp
-	pushq	8+ISF64_SS(%rax)
-	pushq	8+ISF64_RSP(%rax)
-	pushq	8+ISF64_RFLAGS(%rax)
-	pushq	8+ISF64_CS(%rax)
-	pushq	8+ISF64_RIP(%rax)
-	pushq	8+ISF64_ERR(%rax)
-	pushq	8+ISF64_TRAPFN(%rax)
-	pushq	8+ISF64_TRAPNO(%rax)
-	movq	(%rax), %rax
-	jmp	EXT(ks_dispatch_kernel)
-
-
-/*
- * GP/NP fault on IRET: CS or SS is in error.
- * User GSBASE is active.
- * On IST1 stack containing:
- *  (rax saved above, which is immediately popped)
- *  0  ISF64_TRAPNO:	trap code (NP or GP)
- *  8  ISF64_TRAPFN:	trap function
- *  16 ISF64_ERR:	segment number in error (error code)
- *  24 ISF64_RIP:	kernel RIP
- *  32 ISF64_CS:	kernel CS
- *  40 ISF64_RFLAGS:	kernel RFLAGS 
- *  48 ISF64_RSP:	kernel RSP
- *  56 ISF64_SS:	kernel SS
- * On the PCB stack, pointed to by the kernel's RSP is:
- *   0			user RIP
- *   8			user CS
- *  16			user RFLAGS
- *  24			user RSP
- *  32 			user SS
- *
- * We need to move the kernel's TRAPNO, TRAPFN and ERR to the PCB and handle
- * as a user fault with:
- *  0  ISF64_TRAPNO:	trap code (NP or GP)
- *  8  ISF64_TRAPFN:	trap function
- *  16 ISF64_ERR:	segment number in error (error code)
- *  24			user RIP
- *  32			user CS
- *  40			user RFLAGS
- *  48			user RSP
- *  56 			user SS
- */
-L_fault_iret:
-	pop	%rax			/* recover saved %rax */
-	mov	%rax, ISF64_RIP(%rsp)	/* save rax (we don`t need saved rip) */
-	mov	ISF64_RSP(%rsp), %rax
-	xchg	%rax, %rsp		/* switch to PCB stack */
-	push	ISF64_ERR(%rax)
-	push	ISF64_TRAPFN(%rax)
-	push	ISF64_TRAPNO(%rax)
-	mov	ISF64_RIP(%rax), %rax	/* restore rax */
-					/* now treat as fault from user */
-	jmp	L_dispatch
-
-/*
- * Fault restoring a segment register.  All of the saved state is still
- * on the stack untouched since we haven't yet moved the stack pointer.
- * On IST1 stack containing:
- *  (rax saved above, which is immediately popped)
- *  0  ISF64_TRAPNO:	trap code (NP or GP)
- *  8  ISF64_TRAPFN:	trap function
- *  16 ISF64_ERR:	segment number in error (error code)
- *  24 ISF64_RIP:	kernel RIP
- *  32 ISF64_CS:	kernel CS
- *  40 ISF64_RFLAGS:	kernel RFLAGS 
- *  48 ISF64_RSP:	kernel RSP
- *  56 ISF64_SS:	kernel SS
- * On the PCB stack, pointed to by the kernel's RSP is:
- *  0  			user trap code
- *  8  			user trap function
- *  16			user err 
- *  24			user RIP
- *  32			user CS
- *  40			user RFLAGS
- *  48			user RSP
- *  56 			user SS
- */
-L_32bit_fault_set_seg:
-	swapgs
-	pop	%rax			/* toss saved %rax from stack */
-	mov	ISF64_TRAPNO(%rsp), %rax
-	mov	ISF64_TRAPFN(%rsp), %rcx
-	mov	ISF64_ERR(%rsp), %rdx
-	mov	ISF64_RSP(%rsp), %rsp	/* reset stack to saved state */
-	mov	%rax,R64_TRAPNO(%rsp)
-	mov	%rcx,R64_TRAPFN(%rsp)
-	mov	%rdx,R64_ERR(%rsp)
-					/* now treat as fault from user */
-					/* except that all the state is */
-					/* already saved - we just have to */
-					/* move the trapno and error into */
-					/* the compatibility frame */
-	jmp	L_dispatch_U32_after_fault
-
 
 /* All 'exceptions' enter hndl_alltraps, with:
  *	r15	x86_saved_state_t address

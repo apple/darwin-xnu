@@ -40,7 +40,7 @@ struct kperf_thread_info {
 };
 
 void kperf_thread_info_sample(struct kperf_thread_info *,
-                              struct kperf_context *);
+    struct kperf_context *);
 void kperf_thread_info_log(struct kperf_thread_info *);
 
 /* scheduling information */
@@ -52,16 +52,16 @@ struct kperf_thread_scheduling {
 	uint16_t kpthsc_base_priority;
 	uint16_t kpthsc_sched_priority;
 	unsigned int kpthsc_effective_qos :3,
-			kpthsc_requested_qos :3,
-			kpthsc_requested_qos_override :3,
-			kpthsc_requested_qos_promote :3,
-			kpthsc_requested_qos_ipc_override :3,
-			kpthsc_requested_qos_sync_ipc_override :3,
-			kpthsc_effective_latency_qos :3;
+	    kpthsc_requested_qos :3,
+	    kpthsc_requested_qos_override :3,
+	    kpthsc_requested_qos_promote :3,
+	    kpthsc_requested_qos_ipc_override :3,
+	    kpthsc_requested_qos_sync_ipc_override :3,
+	    kpthsc_effective_latency_qos :3;
 };
 
 void kperf_thread_scheduling_sample(struct kperf_thread_scheduling *,
-                                    struct kperf_context *);
+    struct kperf_context *);
 void kperf_thread_scheduling_log(struct kperf_thread_scheduling *);
 
 /* thread snapshot information */
@@ -73,7 +73,7 @@ struct kperf_thread_snapshot {
 };
 
 void kperf_thread_snapshot_sample(struct kperf_thread_snapshot *,
-                                  struct kperf_context *);
+    struct kperf_context *);
 void kperf_thread_snapshot_log(struct kperf_thread_snapshot *);
 
 /* libdispatch information */
@@ -82,7 +82,7 @@ struct kperf_thread_dispatch {
 };
 
 void kperf_thread_dispatch_sample(struct kperf_thread_dispatch *,
-                                  struct kperf_context *);
+    struct kperf_context *);
 int kperf_thread_dispatch_pend(struct kperf_context *);
 void kperf_thread_dispatch_log(struct kperf_thread_dispatch *);
 

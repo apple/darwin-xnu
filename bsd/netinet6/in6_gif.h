@@ -31,11 +31,11 @@
  */
 
 #ifndef _NETINET6_IN6_GIF_H_
-#define	_NETINET6_IN6_GIF_H_
+#define _NETINET6_IN6_GIF_H_
 #include <sys/appleapiopts.h>
 
 #ifdef BSD_KERNEL_PRIVATE
-#define	GIF_HLIM	30
+#define GIF_HLIM        30
 
 int in6_gif_input(struct mbuf **, int *, int);
 int in6_gif_output(struct ifnet *, int, struct mbuf *, struct rtentry *);

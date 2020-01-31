@@ -1,9 +1,8 @@
-
 /*
  * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -12,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -23,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -90,7 +89,7 @@ struct vnodeop_desc vnop_default_desc = {
 
 
 int vnop_lookup_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_lookup_args,a_dvp),
+	VOPARG_OFFSETOF(struct vnop_lookup_args, a_dvp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_lookup_desc = {
@@ -115,7 +114,7 @@ struct vnodeop_desc vnop_compound_open_desc = {
 	0,
 	"vnop_compound_open",
 	0 | VDESC_VP0_WILLRELE,
-	vnop_compound_open_vp_offsets, 
+	vnop_compound_open_vp_offsets,
 	VOPARG_OFFSETOF(struct vnop_compound_open_args, a_vpp),
 	VDESC_NO_OFFSET,
 	VDESC_NO_OFFSET,
@@ -125,7 +124,7 @@ struct vnodeop_desc vnop_compound_open_desc = {
 };
 
 int vnop_create_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_create_args,a_dvp),
+	VOPARG_OFFSETOF(struct vnop_create_args, a_dvp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_create_desc = {
@@ -142,7 +141,7 @@ struct vnodeop_desc vnop_create_desc = {
 };
 
 int vnop_whiteout_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_whiteout_args,a_dvp),
+	VOPARG_OFFSETOF(struct vnop_whiteout_args, a_dvp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_whiteout_desc = {
@@ -159,24 +158,24 @@ struct vnodeop_desc vnop_whiteout_desc = {
 };
 
 int vnop_mknod_vp_offsets[] = {
-       VOPARG_OFFSETOF(struct vnop_mknod_args,a_dvp),
-       VDESC_NO_OFFSET
+	VOPARG_OFFSETOF(struct vnop_mknod_args, a_dvp),
+	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_mknod_desc = {
-       0,
-       "vnop_mknod",
-       0 | VDESC_VP0_WILLRELE | VDESC_VPP_WILLRELE,
-       vnop_mknod_vp_offsets,
-       VOPARG_OFFSETOF(struct vnop_mknod_args, a_vpp),
-       VDESC_NO_OFFSET,
-       VDESC_NO_OFFSET,
-       VOPARG_OFFSETOF(struct vnop_mknod_args, a_cnp),
-       VOPARG_OFFSETOF(struct vnop_mknod_args, a_context),
-       NULL
+	0,
+	"vnop_mknod",
+	0 | VDESC_VP0_WILLRELE | VDESC_VPP_WILLRELE,
+	vnop_mknod_vp_offsets,
+	VOPARG_OFFSETOF(struct vnop_mknod_args, a_vpp),
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vnop_mknod_args, a_cnp),
+	VOPARG_OFFSETOF(struct vnop_mknod_args, a_context),
+	NULL
 };
 
 int vnop_open_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_open_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_open_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_open_desc = {
@@ -193,7 +192,7 @@ struct vnodeop_desc vnop_open_desc = {
 };
 
 int vnop_close_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_close_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_close_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_close_desc = {
@@ -210,7 +209,7 @@ struct vnodeop_desc vnop_close_desc = {
 };
 
 int vnop_access_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_access_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_access_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_access_desc = {
@@ -227,7 +226,7 @@ struct vnodeop_desc vnop_access_desc = {
 };
 
 int vnop_getattr_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_getattr_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_getattr_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_getattr_desc = {
@@ -244,7 +243,7 @@ struct vnodeop_desc vnop_getattr_desc = {
 };
 
 int vnop_setattr_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_setattr_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_setattr_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_setattr_desc = {
@@ -261,7 +260,7 @@ struct vnodeop_desc vnop_setattr_desc = {
 };
 
 int vnop_read_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_read_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_read_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_read_desc = {
@@ -278,7 +277,7 @@ struct vnodeop_desc vnop_read_desc = {
 };
 
 int vnop_write_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_write_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_write_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_write_desc = {
@@ -295,7 +294,7 @@ struct vnodeop_desc vnop_write_desc = {
 };
 
 int vnop_ioctl_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_ioctl_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_ioctl_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_ioctl_desc = {
@@ -312,7 +311,7 @@ struct vnodeop_desc vnop_ioctl_desc = {
 };
 
 int vnop_select_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_select_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_select_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_select_desc = {
@@ -329,8 +328,8 @@ struct vnodeop_desc vnop_select_desc = {
 };
 
 int vnop_exchange_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_exchange_args,a_fvp),
-	VOPARG_OFFSETOF(struct vnop_exchange_args,a_tvp),
+	VOPARG_OFFSETOF(struct vnop_exchange_args, a_fvp),
+	VOPARG_OFFSETOF(struct vnop_exchange_args, a_tvp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_exchange_desc = {
@@ -347,7 +346,7 @@ struct vnodeop_desc vnop_exchange_desc = {
 };
 
 int vnop_kqfilt_add_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_kqfilt_add_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_kqfilt_add_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_kqfilt_add_desc = {
@@ -364,7 +363,7 @@ struct vnodeop_desc vnop_kqfilt_add_desc = {
 };
 
 int vnop_kqfilt_remove_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_kqfilt_remove_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_kqfilt_remove_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_kqfilt_remove_desc = {
@@ -381,7 +380,7 @@ struct vnodeop_desc vnop_kqfilt_remove_desc = {
 };
 
 int vnop_monitor_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_monitor_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_monitor_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_monitor_desc = {
@@ -398,7 +397,7 @@ struct vnodeop_desc vnop_monitor_desc = {
 };
 
 int vnop_setlabel_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_setlabel_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_setlabel_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_setlabel_desc = {
@@ -415,7 +414,7 @@ struct vnodeop_desc vnop_setlabel_desc = {
 };
 
 int vnop_revoke_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_revoke_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_revoke_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_revoke_desc = {
@@ -433,7 +432,7 @@ struct vnodeop_desc vnop_revoke_desc = {
 
 
 int vnop_mmap_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_mmap_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_mmap_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_mmap_desc = {
@@ -451,7 +450,7 @@ struct vnodeop_desc vnop_mmap_desc = {
 
 
 int vnop_mnomap_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_mnomap_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_mnomap_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_mnomap_desc = {
@@ -469,7 +468,7 @@ struct vnodeop_desc vnop_mnomap_desc = {
 
 
 int vnop_fsync_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_fsync_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_fsync_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_fsync_desc = {
@@ -486,8 +485,8 @@ struct vnodeop_desc vnop_fsync_desc = {
 };
 
 int vnop_remove_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_remove_args,a_dvp),
-	VOPARG_OFFSETOF(struct vnop_remove_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_remove_args, a_dvp),
+	VOPARG_OFFSETOF(struct vnop_remove_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_remove_desc = {
@@ -504,7 +503,7 @@ struct vnodeop_desc vnop_remove_desc = {
 };
 
 int vnop_remove_extended_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_remove_args,a_dvp),
+	VOPARG_OFFSETOF(struct vnop_remove_args, a_dvp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_compound_remove_desc = {
@@ -521,8 +520,8 @@ struct vnodeop_desc vnop_compound_remove_desc = {
 };
 
 int vnop_link_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_link_args,a_vp),
-	VOPARG_OFFSETOF(struct vnop_link_args,a_tdvp),
+	VOPARG_OFFSETOF(struct vnop_link_args, a_vp),
+	VOPARG_OFFSETOF(struct vnop_link_args, a_tdvp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_link_desc = {
@@ -539,10 +538,10 @@ struct vnodeop_desc vnop_link_desc = {
 };
 
 int vnop_rename_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_rename_args,a_fdvp),
-	VOPARG_OFFSETOF(struct vnop_rename_args,a_fvp),
-	VOPARG_OFFSETOF(struct vnop_rename_args,a_tdvp),
-	VOPARG_OFFSETOF(struct vnop_rename_args,a_tvp),
+	VOPARG_OFFSETOF(struct vnop_rename_args, a_fdvp),
+	VOPARG_OFFSETOF(struct vnop_rename_args, a_fvp),
+	VOPARG_OFFSETOF(struct vnop_rename_args, a_tdvp),
+	VOPARG_OFFSETOF(struct vnop_rename_args, a_tvp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_rename_desc = {
@@ -559,10 +558,10 @@ struct vnodeop_desc vnop_rename_desc = {
 };
 
 int vnop_renamex_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_renamex_args,a_fdvp),
-	VOPARG_OFFSETOF(struct vnop_renamex_args,a_fvp),
-	VOPARG_OFFSETOF(struct vnop_renamex_args,a_tdvp),
-	VOPARG_OFFSETOF(struct vnop_renamex_args,a_tvp),
+	VOPARG_OFFSETOF(struct vnop_renamex_args, a_fdvp),
+	VOPARG_OFFSETOF(struct vnop_renamex_args, a_fvp),
+	VOPARG_OFFSETOF(struct vnop_renamex_args, a_tdvp),
+	VOPARG_OFFSETOF(struct vnop_renamex_args, a_tvp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_renamex_desc = {
@@ -579,10 +578,10 @@ struct vnodeop_desc vnop_renamex_desc = {
 };
 
 int vnop_compound_rename_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_compound_rename_args,a_fdvp),
-	VOPARG_OFFSETOF(struct vnop_compound_rename_args,a_fvpp),
-	VOPARG_OFFSETOF(struct vnop_compound_rename_args,a_tdvp),
-	VOPARG_OFFSETOF(struct vnop_compound_rename_args,a_tvpp),
+	VOPARG_OFFSETOF(struct vnop_compound_rename_args, a_fdvp),
+	VOPARG_OFFSETOF(struct vnop_compound_rename_args, a_fvpp),
+	VOPARG_OFFSETOF(struct vnop_compound_rename_args, a_tdvp),
+	VOPARG_OFFSETOF(struct vnop_compound_rename_args, a_tvpp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_compound_rename_desc = {
@@ -599,43 +598,43 @@ struct vnodeop_desc vnop_compound_rename_desc = {
 };
 
 int vnop_mkdir_vp_offsets[] = {
-       VOPARG_OFFSETOF(struct vnop_mkdir_args,a_dvp),
-       VDESC_NO_OFFSET
+	VOPARG_OFFSETOF(struct vnop_mkdir_args, a_dvp),
+	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_mkdir_desc = {
-       0,
-       "vnop_mkdir",
-       0 | VDESC_VP0_WILLRELE,
-       vnop_mkdir_vp_offsets,
-       VOPARG_OFFSETOF(struct vnop_mkdir_args, a_vpp),
-       VDESC_NO_OFFSET,
-       VDESC_NO_OFFSET,
-       VOPARG_OFFSETOF(struct vnop_mkdir_args, a_cnp),
-       VOPARG_OFFSETOF(struct vnop_mkdir_args, a_context),
-       NULL
+	0,
+	"vnop_mkdir",
+	0 | VDESC_VP0_WILLRELE,
+	vnop_mkdir_vp_offsets,
+	VOPARG_OFFSETOF(struct vnop_mkdir_args, a_vpp),
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vnop_mkdir_args, a_cnp),
+	VOPARG_OFFSETOF(struct vnop_mkdir_args, a_context),
+	NULL
 };
 
 int vnop_compound_mkdir_vp_offsets[] = {
-       VOPARG_OFFSETOF(struct vnop_compound_mkdir_args,a_dvp),
-       VDESC_NO_OFFSET
+	VOPARG_OFFSETOF(struct vnop_compound_mkdir_args, a_dvp),
+	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_compound_mkdir_desc = {
-       0,
-       "vnop_compound_mkdir",
-       0 | VDESC_VP0_WILLRELE,
-       vnop_compound_mkdir_vp_offsets,
-       VOPARG_OFFSETOF(struct vnop_compound_mkdir_args, a_vpp),
-       VDESC_NO_OFFSET,
-       VDESC_NO_OFFSET,
-       VOPARG_OFFSETOF(struct vnop_compound_mkdir_args, a_cnp),
-       VOPARG_OFFSETOF(struct vnop_compound_mkdir_args, a_context),
-       NULL
+	0,
+	"vnop_compound_mkdir",
+	0 | VDESC_VP0_WILLRELE,
+	vnop_compound_mkdir_vp_offsets,
+	VOPARG_OFFSETOF(struct vnop_compound_mkdir_args, a_vpp),
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vnop_compound_mkdir_args, a_cnp),
+	VOPARG_OFFSETOF(struct vnop_compound_mkdir_args, a_context),
+	NULL
 };
 
 
 int vnop_rmdir_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_rmdir_args,a_dvp),
-	VOPARG_OFFSETOF(struct vnop_rmdir_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_rmdir_args, a_dvp),
+	VOPARG_OFFSETOF(struct vnop_rmdir_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_rmdir_desc = {
@@ -652,7 +651,7 @@ struct vnodeop_desc vnop_rmdir_desc = {
 };
 
 int vnop_compound_rmdir_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_compound_rmdir_args,a_dvp),
+	VOPARG_OFFSETOF(struct vnop_compound_rmdir_args, a_dvp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_compound_rmdir_desc = {
@@ -669,24 +668,24 @@ struct vnodeop_desc vnop_compound_rmdir_desc = {
 };
 
 int vnop_symlink_vp_offsets[] = {
-       VOPARG_OFFSETOF(struct vnop_symlink_args,a_dvp),
-       VDESC_NO_OFFSET
+	VOPARG_OFFSETOF(struct vnop_symlink_args, a_dvp),
+	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_symlink_desc = {
-       0,
-       "vnop_symlink",
-       0 | VDESC_VP0_WILLRELE | VDESC_VPP_WILLRELE,
-       vnop_symlink_vp_offsets,
-       VOPARG_OFFSETOF(struct vnop_symlink_args, a_vpp),
-       VDESC_NO_OFFSET,
-       VDESC_NO_OFFSET,
-       VOPARG_OFFSETOF(struct vnop_symlink_args, a_cnp),
-       VOPARG_OFFSETOF(struct vnop_symlink_args, a_context),
-       NULL
+	0,
+	"vnop_symlink",
+	0 | VDESC_VP0_WILLRELE | VDESC_VPP_WILLRELE,
+	vnop_symlink_vp_offsets,
+	VOPARG_OFFSETOF(struct vnop_symlink_args, a_vpp),
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vnop_symlink_args, a_cnp),
+	VOPARG_OFFSETOF(struct vnop_symlink_args, a_context),
+	NULL
 };
 
 int vnop_readdir_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_readdir_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_readdir_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_readdir_desc = {
@@ -703,7 +702,7 @@ struct vnodeop_desc vnop_readdir_desc = {
 };
 
 int vnop_readdirattr_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_readdirattr_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_readdirattr_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_readdirattr_desc = {
@@ -720,7 +719,7 @@ struct vnodeop_desc vnop_readdirattr_desc = {
 };
 
 int vnop_getattrlistbulk_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_getattrlistbulk_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_getattrlistbulk_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_getattrlistbulk_desc = {
@@ -737,7 +736,7 @@ struct vnodeop_desc vnop_getattrlistbulk_desc = {
 };
 
 int vnop_readlink_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_readlink_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_readlink_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_readlink_desc = {
@@ -754,7 +753,7 @@ struct vnodeop_desc vnop_readlink_desc = {
 };
 
 int vnop_inactive_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_inactive_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_inactive_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_inactive_desc = {
@@ -771,7 +770,7 @@ struct vnodeop_desc vnop_inactive_desc = {
 };
 
 int vnop_reclaim_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_reclaim_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_reclaim_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_reclaim_desc = {
@@ -788,7 +787,7 @@ struct vnodeop_desc vnop_reclaim_desc = {
 };
 
 int vnop_pathconf_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_pathconf_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_pathconf_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_pathconf_desc = {
@@ -805,7 +804,7 @@ struct vnodeop_desc vnop_pathconf_desc = {
 };
 
 int vnop_advlock_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_advlock_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_advlock_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_advlock_desc = {
@@ -822,7 +821,7 @@ struct vnodeop_desc vnop_advlock_desc = {
 };
 
 int vnop_allocate_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_allocate_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_allocate_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_allocate_desc = {
@@ -839,7 +838,7 @@ struct vnodeop_desc vnop_allocate_desc = {
 };
 
 int vnop_pagein_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_pagein_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_pagein_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_pagein_desc = {
@@ -856,7 +855,7 @@ struct vnodeop_desc vnop_pagein_desc = {
 };
 
 int vnop_pageout_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_pageout_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_pageout_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_pageout_desc = {
@@ -873,7 +872,7 @@ struct vnodeop_desc vnop_pageout_desc = {
 };
 
 int vnop_searchfs_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_searchfs_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_searchfs_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_searchfs_desc = {
@@ -890,9 +889,9 @@ struct vnodeop_desc vnop_searchfs_desc = {
 };
 
 int vnop_copyfile_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_copyfile_args,a_fvp),
-	VOPARG_OFFSETOF(struct vnop_copyfile_args,a_tdvp),
-	VOPARG_OFFSETOF(struct vnop_copyfile_args,a_tvp),
+	VOPARG_OFFSETOF(struct vnop_copyfile_args, a_fvp),
+	VOPARG_OFFSETOF(struct vnop_copyfile_args, a_tdvp),
+	VOPARG_OFFSETOF(struct vnop_copyfile_args, a_tvp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_copyfile_desc = {
@@ -909,8 +908,8 @@ struct vnodeop_desc vnop_copyfile_desc = {
 };
 
 int vnop_clonefile_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_clonefile_args,a_fvp),
-	VOPARG_OFFSETOF(struct vnop_clonefile_args,a_dvp),
+	VOPARG_OFFSETOF(struct vnop_clonefile_args, a_fvp),
+	VOPARG_OFFSETOF(struct vnop_clonefile_args, a_dvp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_clonefile_desc = {
@@ -927,7 +926,7 @@ struct vnodeop_desc vnop_clonefile_desc = {
 };
 
 int vop_getxattr_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_getxattr_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_getxattr_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_getxattr_desc = {
@@ -944,7 +943,7 @@ struct vnodeop_desc vnop_getxattr_desc = {
 };
 
 int vop_setxattr_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_setxattr_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_setxattr_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_setxattr_desc = {
@@ -961,7 +960,7 @@ struct vnodeop_desc vnop_setxattr_desc = {
 };
 
 int vop_removexattr_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_removexattr_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_removexattr_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_removexattr_desc = {
@@ -978,7 +977,7 @@ struct vnodeop_desc vnop_removexattr_desc = {
 };
 
 int vop_listxattr_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_listxattr_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_listxattr_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_listxattr_desc = {
@@ -995,7 +994,7 @@ struct vnodeop_desc vnop_listxattr_desc = {
 };
 
 int vnop_blktooff_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_blktooff_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_blktooff_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_blktooff_desc = {
@@ -1012,7 +1011,7 @@ struct vnodeop_desc vnop_blktooff_desc = {
 };
 
 int vnop_offtoblk_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_offtoblk_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_offtoblk_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_offtoblk_desc = {
@@ -1029,7 +1028,7 @@ struct vnodeop_desc vnop_offtoblk_desc = {
 };
 
 int vnop_blockmap_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_blockmap_args,a_vp),
+	VOPARG_OFFSETOF(struct vnop_blockmap_args, a_vp),
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_blockmap_desc = {
@@ -1183,9 +1182,9 @@ struct vnodeop_desc vnop_bwrite_desc = {
 /* End of special cases. */
 
 struct vnodeop_desc *vfs_op_descs[] = {
-	&vnop_default_desc,	/* MUST BE FIRST */
-	&vnop_strategy_desc,	/* XXX: SPECIAL CASE */
-	&vnop_bwrite_desc,	/* XXX: SPECIAL CASE */
+	&vnop_default_desc,     /* MUST BE FIRST */
+	&vnop_strategy_desc,    /* XXX: SPECIAL CASE */
+	&vnop_bwrite_desc,      /* XXX: SPECIAL CASE */
 
 	&vnop_lookup_desc,
 	&vnop_create_desc,
@@ -1256,4 +1255,3 @@ struct vnodeop_desc *vfs_op_descs[] = {
 	&vnop_removenamedstream_desc,
 	NULL
 };
-

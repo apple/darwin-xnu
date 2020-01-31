@@ -161,9 +161,9 @@ int     work_interval_create(work_interval_t *interval_handle, uint32_t flags);
  * Only the process which created the work interval may notify
  */
 int     work_interval_notify(work_interval_t    interval_handle,
-                             uint64_t start,    uint64_t finish,
-                             uint64_t deadline, uint64_t next_start,
-                             uint32_t flags);
+    uint64_t start, uint64_t finish,
+    uint64_t deadline, uint64_t next_start,
+    uint32_t flags);
 
 /*
  * Notify, with "finish" implicitly set to the current time
@@ -171,8 +171,8 @@ int     work_interval_notify(work_interval_t    interval_handle,
  * Only the process which created the work interval may notify
  */
 int     work_interval_notify_simple(work_interval_t interval_handle,
-                                    uint64_t start, uint64_t deadline,
-                                    uint64_t next_start);
+    uint64_t start, uint64_t deadline,
+    uint64_t next_start);
 
 /*
  * Deallocate work interval handle
@@ -230,12 +230,12 @@ int     work_interval_leave(void);
 #define WORK_INTERVAL_OPERATION_JOIN    0x00000005      /* arg is a port_name */
 
 struct work_interval_notification {
-	uint64_t	start;
-	uint64_t	finish;
-	uint64_t	deadline;
-	uint64_t	next_start;
-	uint32_t	notify_flags;
-	uint32_t	create_flags;
+	uint64_t        start;
+	uint64_t        finish;
+	uint64_t        deadline;
+	uint64_t        next_start;
+	uint32_t        notify_flags;
+	uint32_t        create_flags;
 };
 typedef struct work_interval_notification *work_interval_notification_t;
 
@@ -253,4 +253,3 @@ int     __work_interval_ctl(uint32_t operation, uint64_t work_interval_id, void 
 __END_DECLS
 
 #endif /* _SYS_WORK_INTERVAL_H */
-

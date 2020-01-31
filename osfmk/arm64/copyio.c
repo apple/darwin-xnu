@@ -72,7 +72,7 @@ user_access_disable(void)
 
 static int
 copyio(copyio_type_t copytype, const char *src, char *dst,
-	   vm_size_t nbytes, vm_size_t *lencopied)
+    vm_size_t nbytes, vm_size_t *lencopied)
 {
 	int result = 0;
 	vm_size_t bytes_copied = 0;
@@ -81,11 +81,13 @@ copyio(copyio_type_t copytype, const char *src, char *dst,
 
 	/* Reject TBI addresses */
 	if (copytype == COPYIO_OUT) {
-		if ((uintptr_t)dst & TBI_MASK)
+		if ((uintptr_t)dst & TBI_MASK) {
 			return EINVAL;
+		}
 	} else {
-		if ((uintptr_t)src & TBI_MASK)
+		if ((uintptr_t)src & TBI_MASK) {
 			return EINVAL;
+		}
 	}
 
 	if (__probable(copyio_zalloc_check)) {
@@ -94,10 +96,12 @@ copyio(copyio_type_t copytype, const char *src, char *dst,
 		} else if (copytype == COPYIO_OUT) {
 			kernel_addr = (void*)(uintptr_t)src;
 		}
-		if (kernel_addr)
+		if (kernel_addr) {
 			kernel_buf_size = zone_element_size(kernel_addr, NULL);
-		if (__improbable(kernel_buf_size && kernel_buf_size < nbytes))
+		}
+		if (__improbable(kernel_buf_size && kernel_buf_size < nbytes)) {
 			panic("copyio: kernel buffer %p has size %lu < nbytes %lu", kernel_addr, kernel_buf_size, nbytes);
+		}
 	}
 
 #if KASAN
@@ -161,16 +165,20 @@ copyin(const user_addr_t user_addr, void *kernel_addr, vm_size_t nbytes)
 {
 	int result;
 
-	if (nbytes == 0)
+	if (nbytes == 0) {
 		return 0;
+	}
 
 	result = copyin_validate(user_addr, (uintptr_t)kernel_addr, nbytes);
-	if (result) return result;
+	if (result) {
+		return result;
+	}
 
-	if (current_thread()->map->pmap == kernel_pmap)
+	if (current_thread()->map->pmap == kernel_pmap) {
 		return copyin_kern(user_addr, kernel_addr, nbytes);
-	else
+	} else {
 		return copyio(COPYIO_IN, (const char *)(uintptr_t)user_addr, kernel_addr, nbytes, NULL);
+	}
 }
 
 /*
@@ -181,19 +189,22 @@ copyin(const user_addr_t user_addr, void *kernel_addr, vm_size_t nbytes)
 int
 copyin_word(const user_addr_t user_addr, uint64_t *kernel_addr, vm_size_t nbytes)
 {
-	int			result;
+	int                     result;
 
 	/* Verify sizes */
-	if ((nbytes != 4) && (nbytes != 8))
+	if ((nbytes != 4) && (nbytes != 8)) {
 		return EINVAL;
+	}
 
 	/* Test alignment */
-	if (user_addr & (nbytes - 1))
+	if (user_addr & (nbytes - 1)) {
 		return EINVAL;
+	}
 
 	result = copyin_validate(user_addr, (uintptr_t)kernel_addr, nbytes);
-	if (result)
+	if (result) {
 		return result;
+	}
 
 	return copyio(COPYIO_IN_WORD, (const char *)user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL);
 }
@@ -204,12 +215,15 @@ copyinstr(const user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes, vm_s
 	int result;
 
 	*lencopied = 0;
-	if (nbytes == 0)
+	if (nbytes == 0) {
 		return ENAMETOOLONG;
+	}
 
 	result = copyin_validate(user_addr, (uintptr_t)kernel_addr, nbytes);
 
-	if (result) return result;
+	if (result) {
+		return result;
+	}
 
 	return copyio(COPYIO_INSTR, (const char *)(uintptr_t)user_addr, kernel_addr, nbytes, lencopied);
 }
@@ -219,16 +233,20 @@ copyout(const void *kernel_addr, user_addr_t user_addr, vm_size_t nbytes)
 {
 	int result;
 
-	if (nbytes == 0)
+	if (nbytes == 0) {
 		return 0;
+	}
 
 	result = copyout_validate((uintptr_t)kernel_addr, user_addr, nbytes);
-	if (result) return result;
+	if (result) {
+		return result;
+	}
 
-	if (current_thread()->map->pmap == kernel_pmap)
+	if (current_thread()->map->pmap == kernel_pmap) {
 		return copyout_kern(kernel_addr, user_addr, nbytes);
-	else
+	} else {
 		return copyio(COPYIO_OUT, kernel_addr, (char *)(uintptr_t)user_addr, nbytes, NULL);
+	}
 }
 
 
@@ -247,39 +265,41 @@ const int copysize_limit_panic = (64 * 1024 * 1024);
  */
 static int
 copy_validate(const user_addr_t user_addr,
-	uintptr_t kernel_addr, vm_size_t nbytes)
+    uintptr_t kernel_addr, vm_size_t nbytes)
 {
 	uintptr_t kernel_addr_last = kernel_addr + nbytes;
 
 	if (__improbable(kernel_addr < VM_MIN_KERNEL_ADDRESS ||
 	    kernel_addr > VM_MAX_KERNEL_ADDRESS ||
 	    kernel_addr_last < kernel_addr ||
-	    kernel_addr_last > VM_MAX_KERNEL_ADDRESS))
+	    kernel_addr_last > VM_MAX_KERNEL_ADDRESS)) {
 		panic("%s(%p, %p, %lu) - kaddr not in kernel", __func__,
-		       (void *)user_addr, (void *)kernel_addr, nbytes);
+		    (void *)user_addr, (void *)kernel_addr, nbytes);
+	}
 
 	user_addr_t user_addr_last = user_addr + nbytes;
 
 	if (__improbable((user_addr_last < user_addr) || ((user_addr + nbytes) > vm_map_max(current_thread()->map)) ||
-	    (user_addr < vm_map_min(current_thread()->map))))
-		return (EFAULT);
+	    (user_addr < vm_map_min(current_thread()->map)))) {
+		return EFAULT;
+	}
 
-	if (__improbable(nbytes > copysize_limit_panic))
+	if (__improbable(nbytes > copysize_limit_panic)) {
 		panic("%s(%p, %p, %lu) - transfer too large", __func__,
-		       (void *)user_addr, (void *)kernel_addr, nbytes);
+		    (void *)user_addr, (void *)kernel_addr, nbytes);
+	}
 
-	return (0);
+	return 0;
 }
 
 int
 copyin_validate(const user_addr_t ua, uintptr_t ka, vm_size_t nbytes)
 {
-	return (copy_validate(ua, ka, nbytes));
+	return copy_validate(ua, ka, nbytes);
 }
 
 int
 copyout_validate(uintptr_t ka, const user_addr_t ua, vm_size_t nbytes)
 {
-	return (copy_validate(ua, ka, nbytes));
+	return copy_validate(ua, ka, nbytes);
 }
-

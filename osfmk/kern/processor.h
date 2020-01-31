@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -60,8 +60,8 @@
  *	processor.h:	Processor and processor-related definitions.
  */
 
-#ifndef	_KERN_PROCESSOR_H_
-#define	_KERN_PROCESSOR_H_
+#ifndef _KERN_PROCESSOR_H_
+#define _KERN_PROCESSOR_H_
 
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
@@ -69,7 +69,7 @@
 
 #include <sys/cdefs.h>
 
-#ifdef	MACH_KERNEL_PRIVATE
+#ifdef  MACH_KERNEL_PRIVATE
 
 #include <mach/mach_types.h>
 #include <kern/ast.h>
@@ -79,6 +79,7 @@
 #include <kern/locks.h>
 #include <kern/queue.h>
 #include <kern/sched.h>
+#include <kern/sched_urgency.h>
 #include <mach/sfi_class.h>
 #include <kern/processor_data.h>
 #include <kern/cpu_quiesce.h>
@@ -130,13 +131,13 @@
  */
 #endif
 
-#define PROCESSOR_OFF_LINE		0	/* Not available */
-#define PROCESSOR_SHUTDOWN		1	/* Going off-line */
-#define PROCESSOR_START			2	/* Being started */
-/*                     			3	   Formerly Inactive (unavailable) */
-#define	PROCESSOR_IDLE			4	/* Idle (available) */
-#define PROCESSOR_DISPATCHING	5	/* Dispatching (idle -> active) */
-#define	PROCESSOR_RUNNING		6	/* Normal execution */
+#define PROCESSOR_OFF_LINE              0       /* Not available */
+#define PROCESSOR_SHUTDOWN              1       /* Going off-line */
+#define PROCESSOR_START                 2       /* Being started */
+/*                                      3	   Formerly Inactive (unavailable) */
+#define PROCESSOR_IDLE                  4       /* Idle (available) */
+#define PROCESSOR_DISPATCHING   5       /* Dispatching (idle -> active) */
+#define PROCESSOR_RUNNING               6       /* Normal execution */
 #define PROCESSOR_STATE_LEN             (PROCESSOR_RUNNING+1)
 
 typedef enum {
@@ -156,23 +157,29 @@ struct processor_set {
 	cpumap_t                recommended_bitmask;
 	cpumap_t                cpu_state_map[PROCESSOR_STATE_LEN];
 	cpumap_t                primary_map;
-
+#define SCHED_PSET_TLOCK (1)
 #if __SMP__
-	decl_simple_lock_data(,sched_lock)	/* lock for above */
+#if     defined(SCHED_PSET_TLOCK)
+	/* TODO: reorder struct for temporal cache locality */
+	__attribute__((aligned(128))) lck_ticket_t      sched_lock;
+#else /* SCHED_PSET_TLOCK*/
+	__attribute__((aligned(128))) simple_lock_data_t        sched_lock;
+#endif /* SCHED_PSET_TLOCK*/
 #endif
 
 #if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_MULTIQ)
-	struct run_queue	pset_runq;      /* runq for this processor set */
+	struct run_queue        pset_runq;      /* runq for this processor set */
 #endif
-	struct rt_queue		rt_runq;	/* realtime runq for this processor set */
+	struct rt_queue         rt_runq;        /* realtime runq for this processor set */
 
 #if defined(CONFIG_SCHED_TRADITIONAL)
-	int					pset_runq_bound_count;
-		/* # of threads in runq bound to any processor in pset */
+	int                                     pset_runq_bound_count;
+	/* # of threads in runq bound to any processor in pset */
 #endif
 
 	/* CPUs that have been sent an unacknowledged remote AST for scheduling purposes */
-	cpumap_t			pending_AST_cpu_mask;
+	cpumap_t                        pending_AST_URGENT_cpu_mask;
+	cpumap_t                        pending_AST_PREEMPT_cpu_mask;
 #if defined(CONFIG_SCHED_DEFERRED_AST)
 	/*
 	 * A separate mask, for ASTs that we may be able to cancel.  This is dependent on
@@ -185,36 +192,37 @@ struct processor_set {
 	 * of spurious ASTs in the system, and let processors spend longer periods in
 	 * IDLE.
 	 */
-	cpumap_t			pending_deferred_AST_cpu_mask;
+	cpumap_t                        pending_deferred_AST_cpu_mask;
 #endif
-	cpumap_t			pending_spill_cpu_mask;
+	cpumap_t                        pending_spill_cpu_mask;
 
-	struct ipc_port	*	pset_self;		/* port for operations */
-	struct ipc_port *	pset_name_self;	/* port for information */
+	struct ipc_port *       pset_self;              /* port for operations */
+	struct ipc_port *       pset_name_self; /* port for information */
 
-	processor_set_t		pset_list;		/* chain of associated psets */
-	pset_node_t		node;
-	uint32_t		pset_cluster_id;
-	pset_cluster_type_t	pset_cluster_type;
+	processor_set_t         pset_list;              /* chain of associated psets */
+	pset_node_t             node;
+	uint32_t                pset_cluster_id;
+	pset_cluster_type_t     pset_cluster_type;
 };
 
-extern struct processor_set	pset0;
+extern struct processor_set     pset0;
 
 struct pset_node {
-	processor_set_t		psets;			/* list of associated psets */
+	processor_set_t         psets;                  /* list of associated psets */
+	uint32_t                pset_count;             /* count of associated psets */
 
-	pset_node_t			nodes;			/* list of associated subnodes */
-	pset_node_t			node_list;		/* chain of associated nodes */
+	pset_node_t                     nodes;                  /* list of associated subnodes */
+	pset_node_t                     node_list;              /* chain of associated nodes */
 
-	pset_node_t			parent;
+	pset_node_t                     parent;
 };
 
-extern struct pset_node	pset_node0;
+extern struct pset_node pset_node0;
 
-extern queue_head_t		tasks, terminated_tasks, threads, corpse_tasks; /* Terminated tasks are ONLY for stackshot */
-extern int				tasks_count, terminated_tasks_count, threads_count;
-decl_lck_mtx_data(extern,tasks_threads_lock)
-decl_lck_mtx_data(extern,tasks_corpse_lock)
+extern queue_head_t             tasks, terminated_tasks, threads, corpse_tasks; /* Terminated tasks are ONLY for stackshot */
+extern int                              tasks_count, terminated_tasks_count, threads_count;
+decl_lck_mtx_data(extern, tasks_threads_lock)
+decl_lck_mtx_data(extern, tasks_corpse_lock)
 
 struct processor {
 	int                     state;                  /* See above */
@@ -224,159 +232,184 @@ struct processor {
 	struct thread           *next_thread;           /* next thread when dispatched */
 	struct thread           *idle_thread;           /* this processor's idle thread. */
 
-	processor_set_t		processor_set;	/* assigned set */
+	processor_set_t         processor_set;  /* assigned set */
 
-	int			current_pri;	/* priority of current thread */
-	sfi_class_id_t		current_sfi_class;	/* SFI class of current thread */
-	perfcontrol_class_t	current_perfctl_class;	/* Perfcontrol class for current thread */
-	int                     starting_pri;       /* priority of current thread as it was when scheduled */
-	pset_cluster_type_t	current_recommended_pset_type;	/* Cluster type recommended for current thread */
-	int			cpu_id;			/* platform numeric id */
+	int                     current_pri;            /* priority of current thread */
+	sfi_class_id_t          current_sfi_class;      /* SFI class of current thread */
+	perfcontrol_class_t     current_perfctl_class;  /* Perfcontrol class for current thread */
+	pset_cluster_type_t     current_recommended_pset_type;  /* Cluster type recommended for current thread */
+	thread_urgency_t        current_urgency;        /* cached urgency of current thread */
+	bool                    current_is_NO_SMT;         /* cached TH_SFLAG_NO_SMT of current thread */
+	bool                    current_is_bound;       /* current thread is bound to this processor */
+
+	int                     starting_pri;           /* priority of current thread as it was when scheduled */
+	int                     cpu_id;                 /* platform numeric id */
 	cpu_quiescent_state_t   cpu_quiesce_state;
 	uint64_t                cpu_quiesce_last_checkin;
 
-	timer_call_data_t	quantum_timer;	/* timer for quantum expiration */
-	uint64_t			quantum_end;	/* time when current quantum ends */
-	uint64_t			last_dispatch;	/* time of last dispatch */
+	timer_call_data_t       quantum_timer;  /* timer for quantum expiration */
+	uint64_t                        quantum_end;    /* time when current quantum ends */
+	uint64_t                        last_dispatch;  /* time of last dispatch */
 
-	uint64_t			kperf_last_sample_time;	/* time of last kperf sample */
+	uint64_t                        kperf_last_sample_time; /* time of last kperf sample */
 
-	uint64_t			deadline;		/* current deadline */
+	uint64_t                        deadline;               /* current deadline */
 	bool                    first_timeslice;        /* has the quantum expired since context switch */
+	bool                    must_idle;              /* Needs to be forced idle as next selected thread is allowed on this processor */
+
+	processor_t             processor_primary;      /* pointer to primary processor for
+	                                                 * secondary SMT processors, or a pointer
+	                                                 * to ourselves for primaries or non-SMT */
+	processor_t             processor_secondary;
 
 #if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_MULTIQ)
-	struct run_queue	runq;			/* runq for this processor */
+	struct run_queue        runq;                   /* runq for this processor */
 #endif
 
 #if defined(CONFIG_SCHED_TRADITIONAL)
-	int					runq_bound_count; /* # of threads bound to this processor */
+	int                                     runq_bound_count; /* # of threads bound to this processor */
 #endif
 #if defined(CONFIG_SCHED_GRRR)
-	struct grrr_run_queue	grrr_runq;      /* Group Ratio Round-Robin runq */
+	struct grrr_run_queue   grrr_runq;      /* Group Ratio Round-Robin runq */
 #endif
+	struct ipc_port *       processor_self; /* port for operations */
 
-	processor_t			processor_primary;	/* pointer to primary processor for
-											 * secondary SMT processors, or a pointer
-											 * to ourselves for primaries or non-SMT */
-	processor_t		processor_secondary;
-	struct ipc_port *	processor_self;	/* port for operations */
-
-	processor_t			processor_list;	/* all existing processors */
-	processor_data_t	processor_data;	/* per-processor data */
+	processor_t                     processor_list; /* all existing processors */
+	processor_data_t        processor_data; /* per-processor data */
 };
 
-extern processor_t		processor_list;
-decl_simple_lock_data(extern,processor_list_lock)
+extern processor_t              processor_list;
+decl_simple_lock_data(extern, processor_list_lock)
 
 #define MAX_SCHED_CPUS          64 /* Maximum number of CPUs supported by the scheduler.  bits.h:bitmap_*() macros need to be used to support greater than 64 */
 extern processor_t              processor_array[MAX_SCHED_CPUS]; /* array indexed by cpuid */
 
-extern uint32_t			processor_avail_count;
+extern uint32_t                 processor_avail_count;
+extern uint32_t                 processor_avail_count_user;
 
-extern processor_t		master_processor;
+extern processor_t              master_processor;
 
-extern boolean_t		sched_stats_active;
+extern boolean_t                sched_stats_active;
 
-extern processor_t	current_processor(void);
+extern processor_t      current_processor(void);
 
 /* Lock macros, always acquired and released with interrupts disabled (splsched()) */
 
+extern lck_grp_t pset_lck_grp;
+
 #if __SMP__
-#define pset_lock(p)			simple_lock(&(p)->sched_lock)
-#define pset_unlock(p)			simple_unlock(&(p)->sched_lock)
-#define pset_lock_init(p)		simple_lock_init(&(p)->sched_lock, 0)
+#if defined(SCHED_PSET_TLOCK)
+#define pset_lock_init(p)               lck_ticket_init(&(p)->sched_lock)
+#define pset_lock(p)                    lck_ticket_lock(&(p)->sched_lock)
+#define pset_unlock(p)                  lck_ticket_unlock(&(p)->sched_lock)
+#define pset_assert_locked(p)           lck_ticket_assert_owned(&(p)->sched_lock)
+#else /* SCHED_PSET_TLOCK*/
+#define pset_lock(p)                    simple_lock(&(p)->sched_lock, &pset_lck_grp)
+#define pset_unlock(p)                  simple_unlock(&(p)->sched_lock)
+#define pset_lock_init(p)               simple_lock_init(&(p)->sched_lock, 0)
 #if defined(__arm__) || defined(__arm64__)
 #define pset_assert_locked(p)           LCK_SPIN_ASSERT(&(p)->sched_lock, LCK_ASSERT_OWNED)
-#else
+#else /* arm || arm64 */
 /* See <rdar://problem/39630910> pset_lock() should be converted to use lck_spin_lock() instead of simple_lock() */
 #define pset_assert_locked(p)           do { (void)p; } while(0)
-#endif
-
-#define rt_lock_lock(p)			simple_lock(&SCHED(rt_runq)(p)->rt_lock)
-#define rt_lock_unlock(p)		simple_unlock(&SCHED(rt_runq)(p)->rt_lock)
-#define rt_lock_init(p)			simple_lock_init(&SCHED(rt_runq)(p)->rt_lock, 0)
-#else
-#define pset_lock(p)			do { (void)p; } while(0)
-#define pset_unlock(p)			do { (void)p; } while(0)
-#define pset_lock_init(p)		do { (void)p; } while(0)
+#endif /* !arm && !arm64 */
+#endif /* !SCHED_PSET_TLOCK */
+#define rt_lock_lock(p)                 simple_lock(&SCHED(rt_runq)(p)->rt_lock, &pset_lck_grp)
+#define rt_lock_unlock(p)               simple_unlock(&SCHED(rt_runq)(p)->rt_lock)
+#define rt_lock_init(p)                 simple_lock_init(&SCHED(rt_runq)(p)->rt_lock, 0)
+#else /* !SMP */
+#define pset_lock(p)                    do { (void)p; } while(0)
+#define pset_unlock(p)                  do { (void)p; } while(0)
+#define pset_lock_init(p)               do { (void)p; } while(0)
 #define pset_assert_locked(p)           do { (void)p; } while(0)
 
-#define rt_lock_lock(p)			do { (void)p; } while(0)
-#define rt_lock_unlock(p)		do { (void)p; } while(0)
-#define rt_lock_init(p)			do { (void)p; } while(0)
-#endif
+#define rt_lock_lock(p)                 do { (void)p; } while(0)
+#define rt_lock_unlock(p)               do { (void)p; } while(0)
+#define rt_lock_init(p)                 do { (void)p; } while(0)
+#endif /* SMP */
 
-extern void		processor_bootstrap(void);
+extern void             processor_bootstrap(void);
 
-extern void		processor_init(
-					processor_t		processor,
-					int				cpu_id,
-					processor_set_t	processor_set);
+extern void             processor_init(
+	processor_t             processor,
+	int                             cpu_id,
+	processor_set_t processor_set);
 
-extern void		processor_set_primary(
-					processor_t		processor,
-					processor_t		primary);
+extern void             processor_set_primary(
+	processor_t             processor,
+	processor_t             primary);
 
-extern kern_return_t	processor_shutdown(
-							processor_t		processor);
+extern kern_return_t    processor_shutdown(
+	processor_t             processor);
 
-extern void		processor_queue_shutdown(
-					processor_t		processor);
+extern kern_return_t    processor_start_from_user(
+	processor_t     processor);
+extern kern_return_t    processor_exit_from_user(
+	processor_t     processor);
 
-extern processor_set_t	processor_pset(
-							processor_t		processor);
+kern_return_t
+sched_processor_enable(processor_t processor, boolean_t enable);
 
-extern pset_node_t		pset_node_root(void);
+extern void             processor_queue_shutdown(
+	processor_t             processor);
 
-extern processor_set_t	pset_create(
-							pset_node_t		node);
+extern void             processor_queue_shutdown(
+	processor_t             processor);
 
-extern void		pset_init(
-					processor_set_t		pset,
-					pset_node_t			node);
+extern processor_set_t  processor_pset(
+	processor_t             processor);
+
+extern pset_node_t              pset_node_root(void);
+
+extern processor_set_t  pset_create(
+	pset_node_t             node);
+
+extern void             pset_init(
+	processor_set_t         pset,
+	pset_node_t                     node);
 
 extern processor_set_t pset_find(
-					uint32_t cluster_id,
-					processor_set_t default_pset);
+	uint32_t cluster_id,
+	processor_set_t default_pset);
 
-extern kern_return_t	processor_info_count(
-							processor_flavor_t		flavor,
-							mach_msg_type_number_t	*count);
+extern kern_return_t    processor_info_count(
+	processor_flavor_t              flavor,
+	mach_msg_type_number_t  *count);
 
 #define pset_deallocate(x)
 #define pset_reference(x)
 
-extern void				machine_run_count(
-							uint32_t	count);
+extern void                             machine_run_count(
+	uint32_t        count);
 
-extern processor_t		machine_choose_processor(
-							processor_set_t		pset,
-							processor_t			processor);
+extern processor_t              machine_choose_processor(
+	processor_set_t         pset,
+	processor_t                     processor);
 
-#define next_pset(p)	(((p)->pset_list != PROCESSOR_SET_NULL)? (p)->pset_list: (p)->node->psets)
+#define next_pset(p)    (((p)->pset_list != PROCESSOR_SET_NULL)? (p)->pset_list: (p)->node->psets)
 
-#define PSET_THING_TASK		0
-#define PSET_THING_THREAD	1
+#define PSET_THING_TASK         0
+#define PSET_THING_THREAD       1
 
-extern kern_return_t	processor_set_things(
-                    	processor_set_t pset,
-			void **thing_list,
-			mach_msg_type_number_t *count,
-			int type);
+extern kern_return_t    processor_set_things(
+	processor_set_t pset,
+	void **thing_list,
+	mach_msg_type_number_t *count,
+	int type);
 
 extern pset_cluster_type_t recommended_pset_type(thread_t thread);
 
 inline static bool
 pset_is_recommended(processor_set_t pset)
 {
-	return ((pset->recommended_bitmask & pset->cpu_bitmask) != 0);
+	return (pset->recommended_bitmask & pset->cpu_bitmask) != 0;
 }
 
 extern void processor_state_update_idle(processor_t processor);
 extern void processor_state_update_from_thread(processor_t processor, thread_t thread);
 extern void processor_state_update_explicit(processor_t processor, int pri,
-	sfi_class_id_t sfi_class, pset_cluster_type_t pset_type, 
-	perfcontrol_class_t perfctl_class);
+    sfi_class_id_t sfi_class, pset_cluster_type_t pset_type,
+    perfcontrol_class_t perfctl_class, thread_urgency_t urgency);
 
 #define PSET_LOAD_NUMERATOR_SHIFT   16
 #define PSET_LOAD_FRACTIONAL_SHIFT   4
@@ -409,29 +442,34 @@ pset_update_processor_state(processor_set_t pset, processor_t processor, uint ne
 
 	if ((old_state == PROCESSOR_RUNNING) || (new_state == PROCESSOR_RUNNING)) {
 		sched_update_pset_load_average(pset);
+		if (new_state == PROCESSOR_RUNNING) {
+			assert(processor == current_processor());
+		}
 	}
 }
 
-#else	/* MACH_KERNEL_PRIVATE */
+#else   /* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
 
-extern void		pset_deallocate(
-					processor_set_t	pset);
+extern void             pset_deallocate(
+	processor_set_t pset);
 
-extern void		pset_reference(
-					processor_set_t	pset);
+extern void             pset_reference(
+	processor_set_t pset);
 
 __END_DECLS
 
-#endif	/* MACH_KERNEL_PRIVATE */
+#endif  /* MACH_KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE
 __BEGIN_DECLS
-extern unsigned int		processor_count;
-extern processor_t	cpu_to_processor(int cpu);
+extern unsigned int             processor_count;
+extern processor_t      cpu_to_processor(int cpu);
+
+extern kern_return_t    enable_smt_processors(bool enable);
 __END_DECLS
 
 #endif /* KERNEL_PRIVATE */
 
-#endif	/* _KERN_PROCESSOR_H_ */
+#endif  /* _KERN_PROCESSOR_H_ */

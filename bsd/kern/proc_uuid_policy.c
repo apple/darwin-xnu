@@ -2,7 +2,7 @@
  * Copyright (c) 2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -62,7 +62,7 @@ u_long proc_uuid_policy_hash_mask;
 
 /* Assume first byte of UUIDs are evenly distributed */
 #define UUIDHASH(uuid) (&proc_uuid_policy_hashtbl[uuid[0] & proc_uuid_policy_hash_mask])
-static LIST_HEAD(proc_uuid_policy_hashhead, proc_uuid_policy_entry) *proc_uuid_policy_hashtbl;
+static LIST_HEAD(proc_uuid_policy_hashhead, proc_uuid_policy_entry) * proc_uuid_policy_hashtbl;
 
 /*
  * On modification, invalidate cached lookups by bumping the generation count.
@@ -70,10 +70,10 @@ static LIST_HEAD(proc_uuid_policy_hashhead, proc_uuid_policy_entry) *proc_uuid_p
  * the subsystem lock.
  */
 static volatile int32_t proc_uuid_policy_table_gencount;
-#define BUMP_PROC_UUID_POLICY_GENERATION_COUNT() do {									\
-		if (OSIncrementAtomic(&proc_uuid_policy_table_gencount) == (INT32_MAX - 1)) {	\
-			proc_uuid_policy_table_gencount = 1;										\
-		}																				\
+#define BUMP_PROC_UUID_POLICY_GENERATION_COUNT() do {                                                                   \
+	        if (OSIncrementAtomic(&proc_uuid_policy_table_gencount) == (INT32_MAX - 1)) {   \
+	                proc_uuid_policy_table_gencount = 1;                                                                            \
+	        }                                                                                                                                                               \
 	} while (0)
 
 #define MAX_PROC_UUID_POLICY_COUNT 10240
@@ -81,8 +81,8 @@ static volatile int32_t proc_uuid_policy_count;
 
 struct proc_uuid_policy_entry {
 	LIST_ENTRY(proc_uuid_policy_entry) entries;
-	uuid_t		uuid;	/* Mach-O executable UUID */
-	uint32_t	flags;	/* policy flag for that UUID */
+	uuid_t          uuid;   /* Mach-O executable UUID */
+	uint32_t        flags;  /* policy flag for that UUID */
 };
 
 static int
@@ -124,10 +124,11 @@ proc_uuid_policy_insert(uuid_t uuid, uint32_t flags)
 	uuid_unparse(uuid, uuidstr);
 #endif
 
-	if (uuid_is_null(uuid))
+	if (uuid_is_null(uuid)) {
 		return EINVAL;
+	}
 
-	MALLOC(entry, struct proc_uuid_policy_entry *, sizeof(*entry), M_PROC_UUID_POLICY, M_WAITOK|M_ZERO);
+	MALLOC(entry, struct proc_uuid_policy_entry *, sizeof(*entry), M_PROC_UUID_POLICY, M_WAITOK | M_ZERO);
 
 	memcpy(entry->uuid, uuid, sizeof(uuid_t));
 	entry->flags = flags;
@@ -173,7 +174,7 @@ proc_uuid_policy_remove_locked(uuid_t uuid, uint32_t flags, int *should_delete)
 	if (should_delete) {
 		*should_delete = 0;
 	}
-	
+
 	foundentry = proc_uuid_policy_lookup_locked(uuid);
 	if (foundentry) {
 		if (foundentry->flags == flags) {
@@ -186,7 +187,7 @@ proc_uuid_policy_remove_locked(uuid_t uuid, uint32_t flags, int *should_delete)
 			foundentry->flags &= ~flags;
 		}
 	}
-	
+
 	return foundentry;
 }
 
@@ -202,8 +203,9 @@ proc_uuid_policy_remove(uuid_t uuid, uint32_t flags)
 	uuid_unparse(uuid, uuidstr);
 #endif
 
-	if (uuid_is_null(uuid))
+	if (uuid_is_null(uuid)) {
 		return EINVAL;
+	}
 
 	PROC_UUID_POLICY_SUBSYS_LOCK();
 
@@ -236,14 +238,14 @@ static struct proc_uuid_policy_entry *
 proc_uuid_policy_lookup_locked(uuid_t uuid)
 {
 	struct proc_uuid_policy_entry *tmpentry, *searchentry, *foundentry = NULL;
-	
+
 	LIST_FOREACH_SAFE(searchentry, UUIDHASH(uuid), entries, tmpentry) {
 		if (0 == memcmp(searchentry->uuid, uuid, sizeof(uuid_t))) {
 			foundentry = searchentry;
 			break;
 		}
 	}
-	
+
 	return foundentry;
 }
 
@@ -258,8 +260,9 @@ proc_uuid_policy_lookup(uuid_t uuid, uint32_t *flags, int32_t *gencount)
 	uuid_unparse(uuid, uuidstr);
 #endif
 
-	if (uuid_is_null(uuid) || !flags || !gencount)
+	if (uuid_is_null(uuid) || !flags || !gencount) {
 		return EINVAL;
+	}
 
 	if (*gencount == proc_uuid_policy_table_gencount) {
 		/*
@@ -297,7 +300,7 @@ proc_uuid_policy_clear(uint32_t flags)
 	struct proc_uuid_policy_entry *tmpentry, *searchentry;
 	struct proc_uuid_policy_hashhead deletehead = LIST_HEAD_INITIALIZER(deletehead);
 	unsigned long hashslot;
-	
+
 	/* If clear call includes no flags, infer 'No Cellular' flag */
 	if (flags == PROC_UUID_POLICY_FLAGS_NONE) {
 		flags = PROC_UUID_NO_CELLULAR;
@@ -306,10 +309,9 @@ proc_uuid_policy_clear(uint32_t flags)
 	PROC_UUID_POLICY_SUBSYS_LOCK();
 
 	if (proc_uuid_policy_count > 0) {
-
-		for (hashslot=0; hashslot <= proc_uuid_policy_hash_mask; hashslot++) {
+		for (hashslot = 0; hashslot <= proc_uuid_policy_hash_mask; hashslot++) {
 			struct proc_uuid_policy_hashhead *headp = &proc_uuid_policy_hashtbl[hashslot];
-			
+
 			LIST_FOREACH_SAFE(searchentry, headp, entries, tmpentry) {
 				if ((searchentry->flags & flags) == searchentry->flags) {
 					/* We are clearing all flags for this entry, move entry to our delete list */
@@ -334,36 +336,38 @@ proc_uuid_policy_clear(uint32_t flags)
 	}
 
 	dprintf("Clearing proc uuid policy table\n");
-	
+
 	return 0;
 }
 
-int proc_uuid_policy_kernel(uint32_t operation, uuid_t uuid, uint32_t flags)
+int
+proc_uuid_policy_kernel(uint32_t operation, uuid_t uuid, uint32_t flags)
 {
 	int error = 0;
-	
+
 	switch (operation) {
-		case PROC_UUID_POLICY_OPERATION_CLEAR:
-			error = proc_uuid_policy_clear(flags);
-			break;
-			
-		case PROC_UUID_POLICY_OPERATION_ADD:
-			error = proc_uuid_policy_insert(uuid, flags);
-			break;
-			
-		case PROC_UUID_POLICY_OPERATION_REMOVE:
-			error = proc_uuid_policy_remove(uuid, flags);
-			break;
-			
-		default:
-			error = EINVAL;
-			break;
+	case PROC_UUID_POLICY_OPERATION_CLEAR:
+		error = proc_uuid_policy_clear(flags);
+		break;
+
+	case PROC_UUID_POLICY_OPERATION_ADD:
+		error = proc_uuid_policy_insert(uuid, flags);
+		break;
+
+	case PROC_UUID_POLICY_OPERATION_REMOVE:
+		error = proc_uuid_policy_remove(uuid, flags);
+		break;
+
+	default:
+		error = EINVAL;
+		break;
 	}
-	
+
 	return error;
 }
 
-int proc_uuid_policy(struct proc *p __unused, struct proc_uuid_policy_args *uap, int32_t *retval __unused)
+int
+proc_uuid_policy(struct proc *p __unused, struct proc_uuid_policy_args *uap, int32_t *retval __unused)
 {
 	int error = 0;
 	uuid_t uuid;
@@ -373,19 +377,21 @@ int proc_uuid_policy(struct proc *p __unused, struct proc_uuid_policy_args *uap,
 	error = priv_check_cred(kauth_cred_get(), PRIV_PROC_UUID_POLICY, 0);
 	if (error) {
 		dprintf("%s failed privilege check for proc_uuid_policy: %d\n", p->p_comm, error);
-		return (error);
+		return error;
 	} else {
 		dprintf("%s succeeded privilege check for proc_uuid_policy\n", p->p_comm);
 	}
-	
+
 	if (uap->uuid) {
-		if (uap->uuidlen != sizeof(uuid_t))
+		if (uap->uuidlen != sizeof(uuid_t)) {
 			return ERANGE;
-		
+		}
+
 		error = copyin(uap->uuid, uuid, sizeof(uuid_t));
-		if (error)
+		if (error) {
 			return error;
+		}
 	}
-	
+
 	return proc_uuid_policy_kernel(uap->operation, uuid, uap->flags);
 }

@@ -164,8 +164,7 @@ WARNFLAGS_STD := \
 
 WARNFLAGS_STD := $(WARNFLAGS_STD) \
 	-Wno-unknown-warning-option \
-	-Wno-error=shadow-field \
-	-Wno-error=cast-qual
+	-Wno-error=atomic-implicit-seq-cst
 
 CWARNFLAGS_STD = \
 	$(WARNFLAGS_STD)
@@ -310,7 +309,16 @@ ifeq ($(KASAN),1)
 SAN=1
 BUILD_LTO = 0
 KASAN_SHIFT_ARM64=0xdffffff800000000
-KASAN_SHIFT_X86_64=0xdffffe1000000000
+#
+# To calculate the kasan shift, subtract the lowest KVA to sanitize, shifted right by 3 bits,
+# from the base address of the kasan shadow area, (e.g. solve the following equation:
+# SHIFT = {VA mapped by the first KASAN PML4 [Currently #494]} - (LOWEST_KVA >> 3)
+# SHIFT = (0ULL - (512GiB * (512 - 494))) - (LOWEST_SAN_KVA >> 3)
+# SHIFT = FFFFF70000000000 - ((0ULL - (512GiB * (512 - 496))) >> 3) [PML4 #496 is the first possible KVA]
+# SHIFT = FFFFF70000000000 - (FFFFF80000000000 >> 3)
+# SHIFT = DFFFF80000000000
+# ).
+KASAN_SHIFT_X86_64=0xdffff80000000000
 KASAN_SHIFT_X86_64H=$(KASAN_SHIFT_X86_64)
 KASAN_SHIFT=$($(addsuffix $(CURRENT_ARCH_CONFIG),KASAN_SHIFT_))
 CFLAGS_GEN += -DKASAN=1 -DKASAN_SHIFT=$(KASAN_SHIFT) -fsanitize=address \
@@ -554,6 +562,8 @@ LDFLAGS_KERNEL_GENARM64 = \
 	-Wl,-sectalign,__DATA,__const,0x4000 \
 	-Wl,-rename_section,__DATA,__mod_init_func,__DATA_CONST,__mod_init_func \
 	-Wl,-rename_section,__DATA,__mod_term_func,__DATA_CONST,__mod_term_func \
+	-Wl,-rename_section,__DATA,__auth_ptr,__DATA_CONST,__auth_ptr \
+	-Wl,-rename_section,__DATA,__auth_got,__DATA_CONST,__auth_got \
 	-Wl,-rename_section,__DATA,__const,__DATA_CONST,__const \
 	-Wl,-rename_section,__TEXT,__text,__TEXT_EXEC,__text \
 	-Wl,-rename_section,__TEXT,__stubs,__TEXT_EXEC,__stubs \

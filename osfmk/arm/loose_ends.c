@@ -70,8 +70,8 @@ bcopy_phys(addr64_t src, addr64_t dst, vm_size_t bytes)
 	wimg_bits_dst = pmap_cache_attributes(pn_dst);
 
 	if (mmu_kvtop_wpreflight(phystokv((pmap_paddr_t) dst)) &&
-			((wimg_bits_src & VM_WIMG_MASK) == VM_WIMG_DEFAULT) &&
-			((wimg_bits_dst & VM_WIMG_MASK) == VM_WIMG_DEFAULT)) {
+	    ((wimg_bits_src & VM_WIMG_MASK) == VM_WIMG_DEFAULT) &&
+	    ((wimg_bits_dst & VM_WIMG_MASK) == VM_WIMG_DEFAULT)) {
 		/* Fast path - dst is writable and both source and destination have default attributes */
 		bcopy((char *)phystokv((pmap_paddr_t) src), (char *)phystokv((pmap_paddr_t) dst), bytes);
 		return;
@@ -80,17 +80,18 @@ bcopy_phys(addr64_t src, addr64_t dst, vm_size_t bytes)
 	src_offset = src & PAGE_MASK;
 	dst_offset = dst & PAGE_MASK;
 
-	if ((src_offset + bytes) > PAGE_SIZE || (dst_offset + bytes) > PAGE_SIZE)
+	if ((src_offset + bytes) > PAGE_SIZE || (dst_offset + bytes) > PAGE_SIZE) {
 		panic("bcopy extends beyond copy windows");
+	}
 
 	mp_disable_preemption();
 	cpu_num = cpu_number();
 	src_index = pmap_map_cpu_windows_copy(pn_src, VM_PROT_READ, wimg_bits_src);
-	dst_index = pmap_map_cpu_windows_copy(pn_dst, VM_PROT_READ|VM_PROT_WRITE, wimg_bits_dst);
+	dst_index = pmap_map_cpu_windows_copy(pn_dst, VM_PROT_READ | VM_PROT_WRITE, wimg_bits_dst);
 
-	bcopy((char *)(pmap_cpu_windows_copy_addr(cpu_num, src_index)+src_offset),
-	      (char *)(pmap_cpu_windows_copy_addr(cpu_num, dst_index)+dst_offset),
-	      bytes);
+	bcopy((char *)(pmap_cpu_windows_copy_addr(cpu_num, src_index) + src_offset),
+	    (char *)(pmap_cpu_windows_copy_addr(cpu_num, dst_index) + dst_offset),
+	    bytes);
 
 	pmap_unmap_cpu_windows_copy(src_index);
 	pmap_unmap_cpu_windows_copy(dst_index);
@@ -123,8 +124,9 @@ bzero_phys(addr64_t src, vm_size_t bytes)
 			vm_offset_t offset = src & PAGE_MASK;
 			uint32_t count = PAGE_SIZE - offset;
 
-			if (count > bytes)
+			if (count > bytes) {
 				count = bytes;
+			}
 
 			unsigned int index = pmap_map_cpu_windows_copy(src >> PAGE_SHIFT, VM_PROT_READ | VM_PROT_WRITE, wimg_bits);
 
@@ -162,18 +164,18 @@ ml_phys_read_data(pmap_paddr_t paddr, int size)
 	copywindow_vaddr = pmap_cpu_windows_copy_addr(cpu_number(), index) | ((uint32_t)paddr & PAGE_MASK);;
 
 	switch (size) {
-		case 1:
-			s1 = *(volatile unsigned char *)(copywindow_vaddr);
-			result = s1;
-			break;
-		case 2:
-			s2 = *(volatile unsigned short *)(copywindow_vaddr);
-			result = s2;
-			break;
-		case 4:
-		default:
-			result = *(volatile unsigned int *)(copywindow_vaddr);
-			break;
+	case 1:
+		s1 = *(volatile unsigned char *)(copywindow_vaddr);
+		result = s1;
+		break;
+	case 2:
+		s2 = *(volatile unsigned short *)(copywindow_vaddr);
+		result = s2;
+		break;
+	case 4:
+	default:
+		result = *(volatile unsigned int *)(copywindow_vaddr);
+		break;
 	}
 
 	pmap_unmap_cpu_windows_copy(index);
@@ -195,7 +197,7 @@ ml_phys_read_long_long(pmap_paddr_t paddr)
 	index = pmap_map_cpu_windows_copy(pn, VM_PROT_READ, wimg_bits);
 
 	result = *(volatile unsigned long long *)(pmap_cpu_windows_copy_addr(cpu_number(), index)
-		                         | ((uint32_t)paddr & PAGE_MASK));
+	    | ((uint32_t)paddr & PAGE_MASK));
 
 	pmap_unmap_cpu_windows_copy(index);
 	mp_enable_preemption();
@@ -203,54 +205,64 @@ ml_phys_read_long_long(pmap_paddr_t paddr)
 	return result;
 }
 
-unsigned int ml_phys_read( vm_offset_t paddr)
+unsigned int
+ml_phys_read( vm_offset_t paddr)
 {
-        return ml_phys_read_data((pmap_paddr_t)paddr, 4);
+	return ml_phys_read_data((pmap_paddr_t)paddr, 4);
 }
 
-unsigned int ml_phys_read_word(vm_offset_t paddr) {
-
-        return ml_phys_read_data((pmap_paddr_t)paddr, 4);
+unsigned int
+ml_phys_read_word(vm_offset_t paddr)
+{
+	return ml_phys_read_data((pmap_paddr_t)paddr, 4);
 }
 
-unsigned int ml_phys_read_64(addr64_t paddr64)
+unsigned int
+ml_phys_read_64(addr64_t paddr64)
 {
-        return ml_phys_read_data((pmap_paddr_t)paddr64, 4);
+	return ml_phys_read_data((pmap_paddr_t)paddr64, 4);
 }
 
-unsigned int ml_phys_read_word_64(addr64_t paddr64)
+unsigned int
+ml_phys_read_word_64(addr64_t paddr64)
 {
-        return ml_phys_read_data((pmap_paddr_t)paddr64, 4);
+	return ml_phys_read_data((pmap_paddr_t)paddr64, 4);
 }
 
-unsigned int ml_phys_read_half(vm_offset_t paddr)
+unsigned int
+ml_phys_read_half(vm_offset_t paddr)
 {
-        return ml_phys_read_data((pmap_paddr_t)paddr, 2);
+	return ml_phys_read_data((pmap_paddr_t)paddr, 2);
 }
 
-unsigned int ml_phys_read_half_64(addr64_t paddr64)
+unsigned int
+ml_phys_read_half_64(addr64_t paddr64)
 {
-        return ml_phys_read_data((pmap_paddr_t)paddr64, 2);
+	return ml_phys_read_data((pmap_paddr_t)paddr64, 2);
 }
 
-unsigned int ml_phys_read_byte(vm_offset_t paddr)
+unsigned int
+ml_phys_read_byte(vm_offset_t paddr)
 {
-        return ml_phys_read_data((pmap_paddr_t)paddr, 1);
+	return ml_phys_read_data((pmap_paddr_t)paddr, 1);
 }
 
-unsigned int ml_phys_read_byte_64(addr64_t paddr64)
+unsigned int
+ml_phys_read_byte_64(addr64_t paddr64)
 {
-        return ml_phys_read_data((pmap_paddr_t)paddr64, 1);
+	return ml_phys_read_data((pmap_paddr_t)paddr64, 1);
 }
 
-unsigned long long ml_phys_read_double(vm_offset_t paddr)
+unsigned long long
+ml_phys_read_double(vm_offset_t paddr)
 {
-        return ml_phys_read_long_long((pmap_paddr_t)paddr);
+	return ml_phys_read_long_long((pmap_paddr_t)paddr);
 }
 
-unsigned long long ml_phys_read_double_64(addr64_t paddr64)
+unsigned long long
+ml_phys_read_double_64(addr64_t paddr64)
 {
-        return ml_phys_read_long_long((pmap_paddr_t)paddr64);
+	return ml_phys_read_long_long((pmap_paddr_t)paddr64);
 }
 
 
@@ -269,20 +281,20 @@ ml_phys_write_data(pmap_paddr_t paddr, unsigned long data, int size)
 
 	mp_disable_preemption();
 	wimg_bits = pmap_cache_attributes(pn);
-	index = pmap_map_cpu_windows_copy(pn, VM_PROT_READ|VM_PROT_WRITE, wimg_bits);
+	index = pmap_map_cpu_windows_copy(pn, VM_PROT_READ | VM_PROT_WRITE, wimg_bits);
 	copywindow_vaddr = pmap_cpu_windows_copy_addr(cpu_number(), index) | ((uint32_t) paddr & PAGE_MASK);
 
 	switch (size) {
-		case 1:
-			*(volatile unsigned char *)(copywindow_vaddr) = (unsigned char)data;
-			break;
-		case 2:
-			*(volatile unsigned short *)(copywindow_vaddr) = (unsigned short)data;
-			break;
-		case 4:
-		default:
-			 *(volatile unsigned int *)(copywindow_vaddr) = (uint32_t)data;
-			break;
+	case 1:
+		*(volatile unsigned char *)(copywindow_vaddr) = (unsigned char)data;
+		break;
+	case 2:
+		*(volatile unsigned short *)(copywindow_vaddr) = (unsigned short)data;
+		break;
+	case 4:
+	default:
+		*(volatile unsigned int *)(copywindow_vaddr) = (uint32_t)data;
+		break;
 	}
 
 	pmap_unmap_cpu_windows_copy(index);
@@ -298,10 +310,10 @@ ml_phys_write_long_long(pmap_paddr_t paddr, unsigned long long data)
 
 	mp_disable_preemption();
 	wimg_bits = pmap_cache_attributes(pn);
-	index = pmap_map_cpu_windows_copy(pn, VM_PROT_READ|VM_PROT_WRITE, wimg_bits);
+	index = pmap_map_cpu_windows_copy(pn, VM_PROT_READ | VM_PROT_WRITE, wimg_bits);
 
 	*(volatile unsigned long long *)(pmap_cpu_windows_copy_addr(cpu_number(), index)
-	                        | ((uint32_t)paddr & PAGE_MASK)) = data;
+	| ((uint32_t)paddr & PAGE_MASK)) = data;
 
 	pmap_unmap_cpu_windows_copy(index);
 	mp_enable_preemption();
@@ -309,54 +321,64 @@ ml_phys_write_long_long(pmap_paddr_t paddr, unsigned long long data)
 
 
 
-void ml_phys_write_byte(vm_offset_t paddr, unsigned int data)
+void
+ml_phys_write_byte(vm_offset_t paddr, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr, data, 1);
+	ml_phys_write_data((pmap_paddr_t)paddr, data, 1);
 }
 
-void ml_phys_write_byte_64(addr64_t paddr64, unsigned int data)
+void
+ml_phys_write_byte_64(addr64_t paddr64, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr64, data, 1);
+	ml_phys_write_data((pmap_paddr_t)paddr64, data, 1);
 }
 
-void ml_phys_write_half(vm_offset_t paddr, unsigned int data)
+void
+ml_phys_write_half(vm_offset_t paddr, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr, data, 2);
+	ml_phys_write_data((pmap_paddr_t)paddr, data, 2);
 }
 
-void ml_phys_write_half_64(addr64_t paddr64, unsigned int data)
+void
+ml_phys_write_half_64(addr64_t paddr64, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr64, data, 2);
+	ml_phys_write_data((pmap_paddr_t)paddr64, data, 2);
 }
 
-void ml_phys_write(vm_offset_t paddr, unsigned int data)
+void
+ml_phys_write(vm_offset_t paddr, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr, data, 4);
+	ml_phys_write_data((pmap_paddr_t)paddr, data, 4);
 }
 
-void ml_phys_write_64(addr64_t paddr64, unsigned int data)
+void
+ml_phys_write_64(addr64_t paddr64, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr64, data, 4);
+	ml_phys_write_data((pmap_paddr_t)paddr64, data, 4);
 }
 
-void ml_phys_write_word(vm_offset_t paddr, unsigned int data)
+void
+ml_phys_write_word(vm_offset_t paddr, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr, data, 4);
+	ml_phys_write_data((pmap_paddr_t)paddr, data, 4);
 }
 
-void ml_phys_write_word_64(addr64_t paddr64, unsigned int data)
+void
+ml_phys_write_word_64(addr64_t paddr64, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr64, data, 4);
+	ml_phys_write_data((pmap_paddr_t)paddr64, data, 4);
 }
 
-void ml_phys_write_double(vm_offset_t paddr, unsigned long long data)
+void
+ml_phys_write_double(vm_offset_t paddr, unsigned long long data)
 {
-        ml_phys_write_long_long((pmap_paddr_t)paddr, data);
+	ml_phys_write_long_long((pmap_paddr_t)paddr, data);
 }
 
-void ml_phys_write_double_64(addr64_t paddr64, unsigned long long data)
+void
+ml_phys_write_double_64(addr64_t paddr64, unsigned long long data)
 {
-        ml_phys_write_long_long((pmap_paddr_t)paddr64, data);
+	ml_phys_write_long_long((pmap_paddr_t)paddr64, data);
 }
 
 
@@ -395,15 +417,18 @@ ffsbit(int *s)
 {
 	int             offset;
 
-	for (offset = 0; !*s; offset += INT_SIZE, ++s);
+	for (offset = 0; !*s; offset += INT_SIZE, ++s) {
+		;
+	}
 	return offset + __builtin_ctz(*s);
 }
 
 int
 ffs(unsigned int mask)
 {
-	if (mask == 0)
+	if (mask == 0) {
 		return 0;
+	}
 
 	/*
 	 * NOTE: cannot use __builtin_ffs because it generates a call to
@@ -415,8 +440,9 @@ ffs(unsigned int mask)
 int
 ffsll(unsigned long long mask)
 {
-	if (mask == 0)
+	if (mask == 0) {
 		return 0;
+	}
 
 	/*
 	 * NOTE: cannot use __builtin_ffsll because it generates a call to
@@ -431,37 +457,41 @@ ffsll(unsigned long long mask)
 int
 fls(unsigned int mask)
 {
-	if (mask == 0)
+	if (mask == 0) {
 		return 0;
+	}
 
-	return (sizeof (mask) << 3) - __builtin_clz(mask);
+	return (sizeof(mask) << 3) - __builtin_clz(mask);
 }
 
 int
 flsll(unsigned long long mask)
 {
-	if (mask == 0)
+	if (mask == 0) {
 		return 0;
+	}
 
-	return (sizeof (mask) << 3) - __builtin_clzll(mask);
+	return (sizeof(mask) << 3) - __builtin_clzll(mask);
 }
 
-int 
+int
 bcmp(
-     const void *pa,
-     const void *pb,
-     size_t len)
+	const void *pa,
+	const void *pb,
+	size_t len)
 {
 	const char     *a = (const char *) pa;
 	const char     *b = (const char *) pb;
 
-	if (len == 0)
+	if (len == 0) {
 		return 0;
+	}
 
-	do
-		if (*a++ != *b++)
+	do{
+		if (*a++ != *b++) {
 			break;
-	while (--len);
+		}
+	} while (--len);
 
 	return len;
 }
@@ -473,55 +503,61 @@ memcmp(const void *s1, const void *s2, size_t n)
 		const unsigned char *p1 = s1, *p2 = s2;
 
 		do {
-			if (*p1++ != *p2++)
-				return (*--p1 - *--p2);
+			if (*p1++ != *p2++) {
+				return *--p1 - *--p2;
+			}
 		} while (--n != 0);
 	}
-	return (0);
+	return 0;
 }
 
 kern_return_t
 copypv(addr64_t source, addr64_t sink, unsigned int size, int which)
 {
 	kern_return_t   retval = KERN_SUCCESS;
-	void          	*from, *to;
-	unsigned int	from_wimg_bits, to_wimg_bits;
+	void            *from, *to;
+	unsigned int    from_wimg_bits, to_wimg_bits;
 
 	from = CAST_DOWN(void *, source);
 	to = CAST_DOWN(void *, sink);
 
-	if ((which & (cppvPsrc | cppvPsnk)) == 0)	/* Make sure that only
-							 * one is virtual */
-		panic("copypv: no more than 1 parameter may be virtual\n");	/* Not allowed */
-
-	if (which & cppvPsrc)
+	if ((which & (cppvPsrc | cppvPsnk)) == 0) {     /* Make sure that only
+		                                         * one is virtual */
+		panic("copypv: no more than 1 parameter may be virtual\n");     /* Not allowed */
+	}
+	if (which & cppvPsrc) {
 		from = (void *)phystokv((pmap_paddr_t)from);
-	if (which & cppvPsnk)
+	}
+	if (which & cppvPsnk) {
 		to = (void *)phystokv((pmap_paddr_t)to);
+	}
 
-	if ((which & (cppvPsrc | cppvKmap)) == 0)	/* Source is virtual in
-							 * current map */
+	if ((which & (cppvPsrc | cppvKmap)) == 0) {     /* Source is virtual in
+		                                         * current map */
 		retval = copyin((user_addr_t) from, to, size);
-	else if ((which & (cppvPsnk | cppvKmap)) == 0)	/* Sink is virtual in
-							 * current map */
+	} else if ((which & (cppvPsnk | cppvKmap)) == 0) { /* Sink is virtual in
+		                                            * current map */
 		retval = copyout(from, (user_addr_t) to, size);
-	else			/* both addresses are physical or kernel map */
+	} else {                /* both addresses are physical or kernel map */
 		bcopy(from, to, size);
+	}
 
 	if (which & cppvFsrc) {
 		flush_dcache64(source, size, ((which & cppvPsrc) == cppvPsrc));
 	} else if (which & cppvPsrc) {
 		from_wimg_bits = pmap_cache_attributes(source >> PAGE_SHIFT);
-		if ((from_wimg_bits != VM_WIMG_COPYBACK) && (from_wimg_bits != VM_WIMG_WTHRU))
+		if ((from_wimg_bits != VM_WIMG_COPYBACK) && (from_wimg_bits != VM_WIMG_WTHRU)) {
 			flush_dcache64(source, size, TRUE);
+		}
 	}
 
 	if (which & cppvFsnk) {
 		flush_dcache64(sink, size, ((which & cppvPsnk) == cppvPsnk));
-	} else if (which & cppvPsnk) { 
+	} else if (which & cppvPsnk) {
 		to_wimg_bits = pmap_cache_attributes(sink >> PAGE_SHIFT);
-		if (to_wimg_bits != VM_WIMG_COPYBACK)
+		if (to_wimg_bits != VM_WIMG_COPYBACK) {
 			flush_dcache64(sink, size, TRUE);
+		}
 	}
 	return retval;
 }
@@ -552,38 +588,41 @@ copy_validate(const user_addr_t user_addr,
 	if (__improbable(kernel_addr < VM_MIN_KERNEL_ADDRESS ||
 	    kernel_addr > VM_MAX_KERNEL_ADDRESS ||
 	    kernel_addr_last < kernel_addr ||
-	    kernel_addr_last > VM_MAX_KERNEL_ADDRESS))
+	    kernel_addr_last > VM_MAX_KERNEL_ADDRESS)) {
 		panic("%s(%p, %p, %u) - kaddr not in kernel", __func__,
 		    (void *)user_addr, (void *)kernel_addr, nbytes);
+	}
 
 	user_addr_t user_addr_last = user_addr + nbytes;
 
 	if (__improbable((user_addr_last < user_addr) || ((user_addr + nbytes) > vm_map_max(current_thread()->map)) ||
-	    (user_addr < vm_map_min(current_thread()->map))))
-		return (EFAULT);
+	    (user_addr < vm_map_min(current_thread()->map)))) {
+		return EFAULT;
+	}
 
-	if (__improbable(nbytes > copysize_limit_panic))
+	if (__improbable(nbytes > copysize_limit_panic)) {
 		panic("%s(%p, %p, %u) - transfer too large", __func__,
 		    (void *)user_addr, (void *)kernel_addr, nbytes);
+	}
 
-	return (0);
+	return 0;
 }
 
 int
 copyin_validate(const user_addr_t ua, uintptr_t ka, vm_size_t nbytes)
 {
-	return (copy_validate(ua, ka, nbytes));
+	return copy_validate(ua, ka, nbytes);
 }
 
 int
 copyout_validate(uintptr_t ka, const user_addr_t ua, vm_size_t nbytes)
 {
-	return (copy_validate(ua, ka, nbytes));
+	return copy_validate(ua, ka, nbytes);
 }
 
 #if     MACH_ASSERT
 
-extern int copyinframe(vm_address_t fp, char *frame);	
+extern int copyinframe(vm_address_t fp, char *frame);
 
 /*
  * Machine-dependent routine to fill in an array with up to callstack_max
@@ -591,34 +630,37 @@ extern int copyinframe(vm_address_t fp, char *frame);
  */
 void
 machine_callstack(
-		  uintptr_t * buf,
-		  vm_size_t callstack_max)
+	uintptr_t * buf,
+	vm_size_t callstack_max)
 {
 	/* Captures the USER call stack */
-	uint32_t i=0;
+	uint32_t i = 0;
 	uint32_t frame[2];
 
 	struct arm_saved_state* state = find_user_regs(current_thread());
 
 	if (!state) {
-		while (i<callstack_max)
+		while (i < callstack_max) {
 			buf[i++] = 0;
+		}
 	} else {
 		buf[i++] = (uintptr_t)state->pc;
 		frame[0] = state->r[7];
 
-		while (i<callstack_max && frame[0] != 0) {
-			if (copyinframe(frame[0], (void*) frame))
+		while (i < callstack_max && frame[0] != 0) {
+			if (copyinframe(frame[0], (void*) frame)) {
 				break;
+			}
 			buf[i++] = (uintptr_t)frame[1];
 		}
 
-		while (i<callstack_max)
+		while (i < callstack_max) {
 			buf[i++] = 0;
+		}
 	}
 }
 
-#endif				/* MACH_ASSERT */
+#endif                          /* MACH_ASSERT */
 
 int
 clr_be_bit(void)
@@ -629,8 +671,8 @@ clr_be_bit(void)
 
 boolean_t
 ml_probe_read(
-	      __unused vm_offset_t paddr,
-	      __unused unsigned int *val)
+	__unused vm_offset_t paddr,
+	__unused unsigned int *val)
 {
 	panic("ml_probe_read() unimplemented");
 	return 1;
@@ -638,8 +680,8 @@ ml_probe_read(
 
 boolean_t
 ml_probe_read_64(
-		 __unused addr64_t paddr,
-		 __unused unsigned int *val)
+	__unused addr64_t paddr,
+	__unused unsigned int *val)
 {
 	panic("ml_probe_read_64() unimplemented");
 	return 1;
@@ -648,12 +690,12 @@ ml_probe_read_64(
 
 void
 ml_thread_policy(
-		 __unused thread_t thread,
-		 __unused unsigned policy_id,
-		 __unused unsigned policy_info)
+	__unused thread_t thread,
+	__unused unsigned policy_id,
+	__unused unsigned policy_info)
 {
-  //    <rdar://problem/7141284>: Reduce print noise
-  //	kprintf("ml_thread_policy() unimplemented\n");
+	//    <rdar://problem/7141284>: Reduce print noise
+	//	kprintf("ml_thread_policy() unimplemented\n");
 }
 
 #if !MACH_KDP

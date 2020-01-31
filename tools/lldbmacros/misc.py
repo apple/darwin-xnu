@@ -7,6 +7,37 @@ import xnudefines
 
 from scheduler import *
 
+@lldb_command('showlogstream')
+def showLogStream(cmd_args=None):
+    """
+    Dump the state of the kernel log stream
+    """
+    mbp = kern.globals.oslog_streambufp
+    print "streaming buffer space avail: {0:>#x} of {1:>#x} bytes\n".format(kern.globals.oslog_stream_buf_bytesavail, kern.globals.oslog_stream_buf_size)
+    print " read head: offset {0:>#x}\nwrite head: offset {1:>#x}\n".format(mbp.msg_bufr, mbp.msg_bufx)
+    count = 0
+    print "  id  timestamp   offset size off+size type metadata"
+    for entry in IterateSTAILQ_HEAD(kern.globals.oslog_stream_buf_head, "buf_entries"):
+        next_start = entry.offset + entry.size
+        if (next_start > 0x1000):
+            next_start = next_start - 0x1000
+        print "{0:>4d}: {1:<d}  {2:>5x} {3:>4d} {4:>5x} {5:<d}    {6:<d}".format(count, entry.timestamp, entry.offset, entry.size, next_start, entry.type, entry.metadata)
+        count = count + 1
+    print "found {} entries".format(count)
+
+    count = 0
+    for entry in IterateSTAILQ_HEAD(kern.globals.oslog_stream_free_head, "buf_entries"):
+        count = count + 1
+    print "free list: {} entries".format(count)
+
+    count = 0
+    for outer in IterateSTAILQ_HEAD(kern.globals.oslog_stream_buf_head, "buf_entries"):
+        for inner in IterateSTAILQ_HEAD(kern.globals.oslog_stream_buf_head, "buf_entries"):
+            if ((outer.offset > inner.offset) and
+                (outer.offset < inner.offset + inner.size)):
+                print "error: overlapping entries: {:>3x} <--> {:>3x}".format(outer.offset, inner.offset)
+        count = count + 1
+
 @lldb_command('showmcastate')
 def showMCAstate(cmd_args=None):
     """

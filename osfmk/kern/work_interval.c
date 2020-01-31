@@ -88,7 +88,7 @@ wi_retain(struct work_interval *work_interval)
 {
 	uint32_t old_count;
 	old_count = atomic_fetch_add_explicit(&work_interval->wi_ref_count,
-	                                      1, memory_order_relaxed);
+	    1, memory_order_relaxed);
 	assert(old_count > 0);
 }
 
@@ -97,11 +97,10 @@ wi_release(struct work_interval *work_interval)
 {
 	uint32_t old_count;
 	old_count = atomic_fetch_sub_explicit(&work_interval->wi_ref_count,
-	                                      1, memory_order_relaxed);
+	    1, memory_order_relaxed);
 	assert(old_count > 0);
 
 	if (old_count == 1) {
-
 
 		kfree(work_interval, sizeof(struct work_interval));
 	}
@@ -124,14 +123,15 @@ work_interval_port_alloc(struct work_interval *work_interval)
 {
 	ipc_port_t work_interval_port = ipc_port_alloc_kernel();
 
-	if (work_interval_port == IP_NULL)
+	if (work_interval_port == IP_NULL) {
 		panic("failed to allocate work interval port");
+	}
 
 	assert(work_interval->wi_port == IP_NULL);
 
 	ip_lock(work_interval_port);
 	ipc_kobject_set_atomically(work_interval_port, (ipc_kobject_t)work_interval,
-	                           IKOT_WORK_INTERVAL);
+	    IKOT_WORK_INTERVAL);
 
 	ipc_port_t notify_port = ipc_port_make_sonce_locked(work_interval_port);
 	ipc_port_t old_notify_port = IP_NULL;
@@ -160,14 +160,17 @@ work_interval_port_convert_locked(ipc_port_t port)
 {
 	struct work_interval *work_interval = NULL;
 
-	if (!IP_VALID(port))
+	if (!IP_VALID(port)) {
 		return NULL;
+	}
 
-	if (!ip_active(port))
+	if (!ip_active(port)) {
 		return NULL;
+	}
 
-	if (IKOT_WORK_INTERVAL != ip_kotype(port))
+	if (IKOT_WORK_INTERVAL != ip_kotype(port)) {
 		return NULL;
+	}
 
 	work_interval = (struct work_interval *)port->ip_kobject;
 
@@ -188,17 +191,19 @@ work_interval_port_convert_locked(ipc_port_t port)
  */
 static kern_return_t
 port_name_to_work_interval(mach_port_name_t     name,
-                           struct work_interval **work_interval)
+    struct work_interval **work_interval)
 {
-	if (!MACH_PORT_VALID(name))
+	if (!MACH_PORT_VALID(name)) {
 		return KERN_INVALID_NAME;
+	}
 
 	ipc_port_t port = IPC_PORT_NULL;
 	kern_return_t kr = KERN_SUCCESS;
 
 	kr = ipc_port_translate_send(current_space(), name, &port);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		return kr;
+	}
 	/* port is locked */
 
 	assert(IP_VALID(port));
@@ -208,16 +213,17 @@ port_name_to_work_interval(mach_port_name_t     name,
 	converted_work_interval = work_interval_port_convert_locked(port);
 
 	/* the port is valid, but doesn't denote a work_interval */
-	if (converted_work_interval == NULL)
+	if (converted_work_interval == NULL) {
 		kr = KERN_INVALID_CAPABILITY;
+	}
 
 	ip_unlock(port);
 
-	if (kr == KERN_SUCCESS)
+	if (kr == KERN_SUCCESS) {
 		*work_interval = converted_work_interval;
+	}
 
 	return kr;
-
 }
 
 
@@ -240,30 +246,36 @@ work_interval_port_notify(mach_msg_header_t *msg)
 	ipc_port_t port = notification->not_header.msgh_remote_port;
 	struct work_interval *work_interval = NULL;
 
-	if (!IP_VALID(port))
+	if (!IP_VALID(port)) {
 		panic("work_interval_port_notify(): invalid port");
+	}
 
 	ip_lock(port);
 
-	if (!ip_active(port))
+	if (!ip_active(port)) {
 		panic("work_interval_port_notify(): inactive port %p", port);
+	}
 
-	if (ip_kotype(port) != IKOT_WORK_INTERVAL)
+	if (ip_kotype(port) != IKOT_WORK_INTERVAL) {
 		panic("work_interval_port_notify(): not the right kobject: %p, %d\n",
-		      port, ip_kotype(port));
+		    port, ip_kotype(port));
+	}
 
-	if (port->ip_mscount != notification->not_count)
+	if (port->ip_mscount != notification->not_count) {
 		panic("work_interval_port_notify(): unexpected make-send count: %p, %d, %d",
-		      port, port->ip_mscount, notification->not_count);
+		    port, port->ip_mscount, notification->not_count);
+	}
 
-	if (port->ip_srights != 0)
+	if (port->ip_srights != 0) {
 		panic("work_interval_port_notify(): unexpected send right count: %p, %d",
-		      port, port->ip_srights);
+		    port, port->ip_srights);
+	}
 
 	work_interval = (struct work_interval *)port->ip_kobject;
 
-	if (work_interval == NULL)
+	if (work_interval == NULL) {
 		panic("work_interval_port_notify(): missing kobject: %p", port);
+	}
 
 	ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
 
@@ -285,7 +297,7 @@ work_interval_port_notify(mach_msg_header_t *msg)
  */
 static void
 thread_set_work_interval(thread_t thread,
-                         struct work_interval *work_interval)
+    struct work_interval *work_interval)
 {
 	assert(thread == current_thread());
 
@@ -295,15 +307,17 @@ thread_set_work_interval(thread_t thread,
 	thread->th_work_interval = work_interval;
 
 
-	if (old_th_wi != NULL)
+	if (old_th_wi != NULL) {
 		wi_release(old_th_wi);
+	}
 }
 
 void
 work_interval_thread_terminate(thread_t thread)
 {
-	if (thread->th_work_interval != NULL)
+	if (thread->th_work_interval != NULL) {
 		thread_set_work_interval(thread, NULL);
+	}
 }
 
 
@@ -319,15 +333,15 @@ kern_work_interval_notify(thread_t thread, struct kern_work_interval_args* kwi_a
 	if (work_interval == NULL ||
 	    work_interval->wi_id != kwi_args->work_interval_id) {
 		/* This thread must have adopted the work interval to be able to notify */
-		return (KERN_INVALID_ARGUMENT);
+		return KERN_INVALID_ARGUMENT;
 	}
 
 	task_t notifying_task = current_task();
 
-	if (work_interval->wi_creator_uniqueid   != get_task_uniqueid(notifying_task) ||
+	if (work_interval->wi_creator_uniqueid != get_task_uniqueid(notifying_task) ||
 	    work_interval->wi_creator_pidversion != get_task_version(notifying_task)) {
 		/* Only the creating task can do a notify */
-		return (KERN_INVALID_ARGUMENT);
+		return KERN_INVALID_ARGUMENT;
 	}
 
 	spl_t s = splsched();
@@ -341,7 +355,7 @@ kern_work_interval_notify(thread_t thread, struct kern_work_interval_args* kwi_a
 	/* called without interrupts disabled */
 	machine_work_interval_notify(thread, kwi_args);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /* Start at 1, 0 is not a valid work interval ID */
@@ -349,24 +363,25 @@ static _Atomic uint64_t unique_work_interval_id = 1;
 
 kern_return_t
 kern_work_interval_create(thread_t thread,
-                          struct kern_work_interval_create_args *create_params)
+    struct kern_work_interval_create_args *create_params)
 {
 	assert(thread == current_thread());
 
 	if (thread->th_work_interval != NULL) {
 		/* already assigned a work interval */
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	struct work_interval *work_interval = kalloc(sizeof(*work_interval));
 
-	if (work_interval == NULL)
+	if (work_interval == NULL) {
 		panic("failed to allocate work_interval");
+	}
 
 	bzero(work_interval, sizeof(*work_interval));
 
 	uint64_t old_value = atomic_fetch_add_explicit(&unique_work_interval_id, 1,
-	                                               memory_order_relaxed);
+	    memory_order_relaxed);
 
 	uint64_t work_interval_id = old_value + 1;
 
@@ -380,12 +395,15 @@ kern_work_interval_create(thread_t thread,
 		 * There can only be one CA_CLIENT work interval (created by UIKit)
 		 * per each application task
 		 */
-		if (create_flags & (WORK_INTERVAL_FLAG_JOINABLE | WORK_INTERVAL_FLAG_GROUP))
-			return (KERN_FAILURE);
-		if (!task_is_app(creating_task))
-			return (KERN_NOT_SUPPORTED);
-		if (task_set_ca_client_wi(creating_task, true) == false)
-			return (KERN_FAILURE);
+		if (create_flags & (WORK_INTERVAL_FLAG_JOINABLE | WORK_INTERVAL_FLAG_GROUP)) {
+			return KERN_FAILURE;
+		}
+		if (!task_is_app(creating_task)) {
+			return KERN_NOT_SUPPORTED;
+		}
+		if (task_set_ca_client_wi(creating_task, true) == false) {
+			return KERN_FAILURE;
+		}
 	}
 
 	*work_interval = (struct work_interval) {
@@ -429,13 +447,14 @@ kern_work_interval_create(thread_t thread,
 kern_return_t
 kern_work_interval_destroy(thread_t thread, uint64_t work_interval_id)
 {
-	if (work_interval_id == 0)
+	if (work_interval_id == 0) {
 		return KERN_INVALID_ARGUMENT;
+	}
 
 	if (thread->th_work_interval == NULL ||
 	    thread->th_work_interval->wi_id != work_interval_id) {
 		/* work ID isn't valid or doesn't match joined work interval ID */
-		return (KERN_INVALID_ARGUMENT);
+		return KERN_INVALID_ARGUMENT;
 	}
 
 	thread_set_work_interval(thread, NULL);
@@ -445,7 +464,7 @@ kern_work_interval_destroy(thread_t thread, uint64_t work_interval_id)
 
 kern_return_t
 kern_work_interval_join(thread_t            thread,
-                        mach_port_name_t    port_name)
+    mach_port_name_t    port_name)
 {
 	struct work_interval *work_interval = NULL;
 	kern_return_t kr;
@@ -457,8 +476,9 @@ kern_work_interval_join(thread_t            thread,
 	}
 
 	kr = port_name_to_work_interval(port_name, &work_interval);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		return kr;
+	}
 	/* work_interval has a +1 ref */
 
 	assert(work_interval != NULL);

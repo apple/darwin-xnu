@@ -27,7 +27,7 @@
  */
 
 #ifndef _NETINET_MPTCP_OPT_H_
-#define	_NETINET_MPTCP_OPT_H_
+#define _NETINET_MPTCP_OPT_H_
 
 #ifdef BSD_KERNEL_PRIVATE
 
@@ -38,7 +38,7 @@
  * are not the reason for retries. Generally, on weak wifi and cold start
  * cellular, more than 2 retries are necessary.
  */
-#define	MPTCP_CAPABLE_RETRIES	(2)
+#define MPTCP_CAPABLE_RETRIES   (2)
 
 __BEGIN_DECLS
 extern void mptcp_data_ack_rcvd(struct mptcb *mp_tp, struct tcpcb *tp, u_int64_t full_dack);
@@ -48,8 +48,8 @@ extern void tcp_do_mptcp_options(struct tcpcb *, u_char *, struct tcphdr *,
 extern unsigned mptcp_setup_syn_opts(struct socket *, u_char*, unsigned);
 extern unsigned mptcp_setup_join_ack_opts(struct tcpcb *, u_char*, unsigned);
 extern unsigned int mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
-				     unsigned int optlen, int flags, int len,
-				     boolean_t *p_mptcp_acknow);
+    unsigned int optlen, int flags, int len,
+    boolean_t *p_mptcp_acknow);
 extern void mptcp_update_dss_rcv_state(struct mptcp_dsn_opt *, struct tcpcb *,
     uint16_t);
 extern void mptcp_update_rcv_state_meat(struct mptcb *, struct tcpcb *,

@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -60,9 +60,9 @@
  *
  *	@(#)wait.h	8.2 (Berkeley) 7/10/94
  */
- 
+
 #ifndef _SYS_WAIT_H_
-#define	_SYS_WAIT_H_
+#define _SYS_WAIT_H_
 
 #include <sys/cdefs.h>
 #include <sys/_types.h>
@@ -106,8 +106,8 @@ typedef enum {
  *		well, or in future releases your stware may not compile
  *		without modification.
  */
-#include <sys/signal.h>		/* [XSI] for siginfo_t */
-#include <sys/resource.h>	/* [XSI] for struct rusage */
+#include <sys/signal.h>         /* [XSI] for siginfo_t */
+#include <sys/resource.h>       /* [XSI] for struct rusage */
 
 /*
  * Option bits for the third argument of wait4.  WNOHANG causes the
@@ -118,45 +118,45 @@ typedef enum {
  * this option is done, it is as though they were still running... nothing
  * about them is returned.
  */
-#define WNOHANG		0x00000001  /* [XSI] no hang in wait/no child to reap */
-#define WUNTRACED	0x00000002  /* [XSI] notify on stop, untraced child */
+#define WNOHANG         0x00000001  /* [XSI] no hang in wait/no child to reap */
+#define WUNTRACED       0x00000002  /* [XSI] notify on stop, untraced child */
 
 /*
  * Macros to test the exit status returned by wait
  * and extract the relevant values.
  */
 #if defined(_POSIX_C_SOURCE) && !defined(_DARWIN_C_SOURCE)
-#define	_W_INT(i)	(i)
+#define _W_INT(i)       (i)
 #else
-#define	_W_INT(w)	(*(int *)&(w))	/* convert union wait to int */
-#define	WCOREFLAG	0200
+#define _W_INT(w)       (*(int *)&(w))  /* convert union wait to int */
+#define WCOREFLAG       0200
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 /* These macros are permited, as they are in the implementation namespace */
-#define	_WSTATUS(x)	(_W_INT(x) & 0177)
-#define	_WSTOPPED	0177		/* _WSTATUS if process is stopped */
+#define _WSTATUS(x)     (_W_INT(x) & 0177)
+#define _WSTOPPED       0177            /* _WSTATUS if process is stopped */
 
 /*
  * [XSI] The <sys/wait.h> header shall define the following macros for
  * analysis of process status values
  */
 #if __DARWIN_UNIX03
-#define WEXITSTATUS(x)	((_W_INT(x) >> 8) & 0x000000ff)
+#define WEXITSTATUS(x)  ((_W_INT(x) >> 8) & 0x000000ff)
 #else /* !__DARWIN_UNIX03 */
-#define WEXITSTATUS(x)	(_W_INT(x) >> 8)
+#define WEXITSTATUS(x)  (_W_INT(x) >> 8)
 #endif /* !__DARWIN_UNIX03 */
 /* 0x13 == SIGCONT */
-#define WSTOPSIG(x)	(_W_INT(x) >> 8)
+#define WSTOPSIG(x)     (_W_INT(x) >> 8)
 #define WIFCONTINUED(x) (_WSTATUS(x) == _WSTOPPED && WSTOPSIG(x) == 0x13)
-#define WIFSTOPPED(x)	(_WSTATUS(x) == _WSTOPPED && WSTOPSIG(x) != 0x13)
-#define WIFEXITED(x)	(_WSTATUS(x) == 0)
-#define WIFSIGNALED(x)	(_WSTATUS(x) != _WSTOPPED && _WSTATUS(x) != 0)
-#define WTERMSIG(x)	(_WSTATUS(x))
+#define WIFSTOPPED(x)   (_WSTATUS(x) == _WSTOPPED && WSTOPSIG(x) != 0x13)
+#define WIFEXITED(x)    (_WSTATUS(x) == 0)
+#define WIFSIGNALED(x)  (_WSTATUS(x) != _WSTOPPED && _WSTATUS(x) != 0)
+#define WTERMSIG(x)     (_WSTATUS(x))
 #if (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
-#define WCOREDUMP(x)	(_W_INT(x) & WCOREFLAG)
+#define WCOREDUMP(x)    (_W_INT(x) & WCOREFLAG)
 
-#define	W_EXITCODE(ret, sig)	((ret) << 8 | (sig))
-#define	W_STOPCODE(sig)		((sig) << 8 | _WSTOPPED)
+#define W_EXITCODE(ret, sig)    ((ret) << 8 | (sig))
+#define W_STOPCODE(sig)         ((sig) << 8 | _WSTOPPED)
 #endif /* (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)) */
 
 /*
@@ -165,13 +165,13 @@ typedef enum {
  */
 /* WNOHANG already defined for wait4() */
 /* WUNTRACED defined for wait4() but not for waitid() */
-#define	WEXITED		0x00000004  /* [XSI] Processes which have exitted */
+#define WEXITED         0x00000004  /* [XSI] Processes which have exitted */
 #if __DARWIN_UNIX03
 /* waitid() parameter */
-#define	WSTOPPED	0x00000008  /* [XSI] Any child stopped by signal */
+#define WSTOPPED        0x00000008  /* [XSI] Any child stopped by signal */
 #endif
-#define	WCONTINUED	0x00000010  /* [XSI] Any child stopped then continued */
-#define	WNOWAIT		0x00000020  /* [XSI] Leave process returned waitable */
+#define WCONTINUED      0x00000010  /* [XSI] Any child stopped then continued */
+#define WNOWAIT         0x00000020  /* [XSI] Leave process returned waitable */
 
 
 #if (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
@@ -180,8 +180,8 @@ typedef enum {
 /*
  * Tokens for special values of the "pid" parameter to wait4.
  */
-#define	WAIT_ANY	(-1)	/* any process */
-#define	WAIT_MYPGRP	0	/* any process in my process group */
+#define WAIT_ANY        (-1)    /* any process */
+#define WAIT_MYPGRP     0       /* any process in my process group */
 
 #include <machine/endian.h>
 
@@ -192,22 +192,22 @@ typedef enum {
  * the information returned, else the first.
  */
 union wait {
-	int	w_status;		/* used in syscall */
+	int     w_status;               /* used in syscall */
 	/*
 	 * Terminated process status.
 	 */
 	struct {
-#if __DARWIN_BYTE_ORDER == __DARWIN_LITTLE_ENDIAN 
-		unsigned int	w_Termsig:7,	/* termination signal */
-				w_Coredump:1,	/* core dump indicator */
-				w_Retcode:8,	/* exit code if w_termsig==0 */
-				w_Filler:16;	/* upper bits filler */
+#if __DARWIN_BYTE_ORDER == __DARWIN_LITTLE_ENDIAN
+		unsigned int    w_Termsig:7,    /* termination signal */
+		    w_Coredump:1,               /* core dump indicator */
+		    w_Retcode:8,                /* exit code if w_termsig==0 */
+		    w_Filler:16;                /* upper bits filler */
 #endif
-#if __DARWIN_BYTE_ORDER == __DARWIN_BIG_ENDIAN 
-		unsigned int	w_Filler:16,	/* upper bits filler */
-				w_Retcode:8,	/* exit code if w_termsig==0 */
-				w_Coredump:1,	/* core dump indicator */
-				w_Termsig:7;	/* termination signal */
+#if __DARWIN_BYTE_ORDER == __DARWIN_BIG_ENDIAN
+		unsigned int    w_Filler:16,    /* upper bits filler */
+		    w_Retcode:8,                /* exit code if w_termsig==0 */
+		    w_Coredump:1,               /* core dump indicator */
+		    w_Termsig:7;                /* termination signal */
 #endif
 	} w_T;
 	/*
@@ -216,23 +216,23 @@ union wait {
 	 * with the WUNTRACED option bit.
 	 */
 	struct {
-#if __DARWIN_BYTE_ORDER == __DARWIN_LITTLE_ENDIAN 
-		unsigned int	w_Stopval:8,	/* == W_STOPPED if stopped */
-				w_Stopsig:8,	/* signal that stopped us */
-				w_Filler:16;	/* upper bits filler */
+#if __DARWIN_BYTE_ORDER == __DARWIN_LITTLE_ENDIAN
+		unsigned int    w_Stopval:8,    /* == W_STOPPED if stopped */
+		    w_Stopsig:8,                /* signal that stopped us */
+		    w_Filler:16;                /* upper bits filler */
 #endif
-#if __DARWIN_BYTE_ORDER == __DARWIN_BIG_ENDIAN 
-		unsigned int	w_Filler:16,	/* upper bits filler */
-				w_Stopsig:8,	/* signal that stopped us */
-				w_Stopval:8;	/* == W_STOPPED if stopped */
+#if __DARWIN_BYTE_ORDER == __DARWIN_BIG_ENDIAN
+		unsigned int    w_Filler:16,    /* upper bits filler */
+		    w_Stopsig:8,                /* signal that stopped us */
+		    w_Stopval:8;                /* == W_STOPPED if stopped */
 #endif
 	} w_S;
 };
-#define	w_termsig	w_T.w_Termsig
-#define w_coredump	w_T.w_Coredump
-#define w_retcode	w_T.w_Retcode
-#define w_stopval	w_S.w_Stopval
-#define w_stopsig	w_S.w_Stopsig
+#define w_termsig       w_T.w_Termsig
+#define w_coredump      w_T.w_Coredump
+#define w_retcode       w_T.w_Retcode
+#define w_stopval       w_S.w_Stopval
+#define w_stopsig       w_S.w_Stopsig
 
 #endif /* (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)) */
 
@@ -241,19 +241,19 @@ union wait {
  * Stopped state value; cannot use waitid() parameter of the same name
  * in the same scope
  */
-#define	WSTOPPED	_WSTOPPED
+#define WSTOPPED        _WSTOPPED
 #endif /* !__DARWIN_UNIX03 */
 
 #ifndef KERNEL
 __BEGIN_DECLS
-pid_t	wait(int *) __DARWIN_ALIAS_C(wait);
-pid_t	waitpid(pid_t, int *, int) __DARWIN_ALIAS_C(waitpid);
+pid_t   wait(int *) __DARWIN_ALIAS_C(wait);
+pid_t   waitpid(pid_t, int *, int) __DARWIN_ALIAS_C(waitpid);
 #ifndef _ANSI_SOURCE
-int	waitid(idtype_t, id_t, siginfo_t *, int) __DARWIN_ALIAS_C(waitid);
+int     waitid(idtype_t, id_t, siginfo_t *, int) __DARWIN_ALIAS_C(waitid);
 #endif /* !_ANSI_SOURCE */
 #if  (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
-pid_t	wait3(int *, int, struct rusage *);
-pid_t	wait4(pid_t, int *, int, struct rusage *);
+pid_t   wait3(int *, int, struct rusage *);
+pid_t   wait4(pid_t, int *, int, struct rusage *);
 #endif /* (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)) */
 __END_DECLS
 #endif

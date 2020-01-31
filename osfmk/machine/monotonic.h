@@ -61,7 +61,7 @@ struct mt_task {
 
 struct mt_cpu *mt_cur_cpu(void);
 void mt_mtc_update_fixed_counts(struct mt_cpu *mtc, uint64_t *counts,
-		uint64_t *counts_since);
+    uint64_t *counts_since);
 uint64_t mt_mtc_update_count(struct mt_cpu *mtc, unsigned int ctr);
 uint64_t mt_core_snap(unsigned int ctr);
 void mt_core_set_snap(unsigned int ctr, uint64_t snap);

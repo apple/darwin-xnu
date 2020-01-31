@@ -3,9 +3,9 @@
  */
 /*
  * Copyright (c) 1992 NeXT Computer, Inc.  All rights reserved.
- * 
+ *
  * km.m - kernel keyboard/monitor module, procedural interface.
- * 
+ *
  * HISTORY
  */
 #include <sys/param.h>
@@ -15,9 +15,9 @@
 #include <sys/conf.h>
 #include <sys/systm.h>
 #include <sys/uio.h>
-#include <sys/fcntl.h>		/* for kmopen */
+#include <sys/fcntl.h>          /* for kmopen */
 #include <sys/errno.h>
-#include <sys/proc.h>		/* for kmopen */
+#include <sys/proc.h>           /* for kmopen */
 #include <sys/msgbuf.h>
 #include <sys/time.h>
 #include <dev/kmreg_com.h>
@@ -31,8 +31,8 @@ extern void     cnputsusr(char *, int);
 extern int      cngetc(void);
 
 
-void	kminit(void);
-void	cons_cinput(char ch);
+void    kminit(void);
+void    cons_cinput(char ch);
 
 /*
  * 'Global' variables, shared only by this file and conf.c.
@@ -59,7 +59,7 @@ void
 kminit(void)
 {
 	km_tty[0] = ttymalloc();
-   	km_tty[0]->t_dev = makedev(12, 0);
+	km_tty[0]->t_dev = makedev(12, 0);
 	initialized = 1;
 }
 
@@ -75,8 +75,9 @@ kmopen(dev_t dev, int flag, __unused int devtype, proc_t pp)
 	int             ret;
 
 	unit = minor(dev);
-	if (unit >= 1)
-		return (ENXIO);
+	if (unit >= 1) {
+		return ENXIO;
+	}
 
 	tp = km_tty[unit];
 
@@ -99,9 +100,9 @@ kmopen(dev_t dev, int flag, __unused int devtype, proc_t pp)
 		goto out;
 	}
 
-	tp->t_state |= TS_CARR_ON;	/* lie and say carrier exists and is
-					 * on. */
-	ret = ((*linesw[tp->t_line].l_open) (dev, tp));
+	tp->t_state |= TS_CARR_ON;      /* lie and say carrier exists and is
+	                                 * on. */
+	ret = ((*linesw[tp->t_line].l_open)(dev, tp));
 	{
 		PE_Video        video;
 		wp = &tp->t_winsize;
@@ -112,10 +113,11 @@ kmopen(dev_t dev, int flag, __unused int devtype, proc_t pp)
 		wp->ws_xpixel = 8;
 		wp->ws_ypixel = 16;
 
-		tty_unlock(tp);		/* XXX race window */
+		tty_unlock(tp);         /* XXX race window */
 
-		if (flag & O_POPUP)
+		if (flag & O_POPUP) {
 			PE_initialize_console(0, kPETextScreen);
+		}
 
 		bzero(&video, sizeof(video));
 		PE_current_console(&video);
@@ -151,7 +153,7 @@ kmclose(dev_t dev, int flag, __unused int mode, __unused proc_t p)
 	ttyclose(tp);
 	tty_unlock(tp);
 
-	return (ret);
+	return ret;
 }
 
 int
@@ -164,7 +166,7 @@ kmread(dev_t dev, struct uio * uio, int ioflag)
 	ret = (*linesw[tp->t_line].l_read)(tp, uio, ioflag);
 	tty_unlock(tp);
 
-	return (ret);
+	return ret;
 }
 
 int
@@ -177,7 +179,7 @@ kmwrite(dev_t dev, struct uio * uio, int ioflag)
 	ret = (*linesw[tp->t_line].l_write)(tp, uio, ioflag);
 	tty_unlock(tp);
 
-	return (ret);
+	return ret;
 }
 
 int
@@ -203,36 +205,37 @@ kmioctl(dev_t dev, u_long cmd, caddr_t data, int flag, proc_t p)
 		error = EINVAL;
 		break;
 
-		/* Bodge in the CLOCAL flag as the km device is always local */
+	/* Bodge in the CLOCAL flag as the km device is always local */
 	case TIOCSETA_32:
 	case TIOCSETAW_32:
 	case TIOCSETAF_32:
-		{
-			struct termios32 *t = (struct termios32 *)data;
-			t->c_cflag |= CLOCAL;
-			/* No Break */
-		}
+	{
+		struct termios32 *t = (struct termios32 *)data;
+		t->c_cflag |= CLOCAL;
+		/* No Break */
+	}
 		goto fallthrough;
 	case TIOCSETA_64:
 	case TIOCSETAW_64:
 	case TIOCSETAF_64:
-		{
-			struct user_termios *t = (struct user_termios *)data;
-			t->c_cflag |= CLOCAL;
-			/* No Break */
-		}
+	{
+		struct user_termios *t = (struct user_termios *)data;
+		t->c_cflag |= CLOCAL;
+		/* No Break */
+	}
 fallthrough:
 	default:
-		error = (*linesw[tp->t_line].l_ioctl) (tp, cmd, data, flag, p);
-		if (ENOTTY != error)
+		error = (*linesw[tp->t_line].l_ioctl)(tp, cmd, data, flag, p);
+		if (ENOTTY != error) {
 			break;
+		}
 		error = ttioctl_locked(tp, cmd, data, flag, p);
 		break;
 	}
 
 	tty_unlock(tp);
 
-	return (error);
+	return error;
 }
 
 
@@ -249,17 +252,18 @@ fallthrough:
  *		assumptions here, this routine should be static (and
  *		inlined, given there is only one call site).
  */
-int 
+int
 kmputc(__unused dev_t dev, char c)
 {
-	if(!disableConsoleOutput && initialized) {
+	if (!disableConsoleOutput && initialized) {
 		/* OCRNL */
-		if(c == '\n')
+		if (c == '\n') {
 			cnputcusr('\r');
+		}
 		cnputcusr(c);
 	}
 
-	return (0);
+	return 0;
 }
 
 
@@ -267,7 +271,7 @@ kmputc(__unused dev_t dev, char c)
  * Callouts from linesw.
  */
 
-#define KM_LOWAT_DELAY	((ns_time_t)1000)
+#define KM_LOWAT_DELAY  ((ns_time_t)1000)
 
 /*
  * t_oproc for this driver; called from within the line discipline
@@ -277,10 +281,12 @@ kmputc(__unused dev_t dev, char c)
 static void
 kmstart(struct tty *tp)
 {
-	if (tp->t_state & (TS_TIMEOUT | TS_BUSY | TS_TTSTOP))
+	if (tp->t_state & (TS_TIMEOUT | TS_BUSY | TS_TTSTOP)) {
 		goto out;
-	if (tp->t_outq.c_cc == 0)
+	}
+	if (tp->t_outq.c_cc == 0) {
 		goto out;
+	}
 	tp->t_state |= TS_BUSY;
 	if (tp->t_outq.c_cc > tp->t_lowat) {
 		/*
@@ -301,7 +307,7 @@ kmstart(struct tty *tp)
 	return;
 
 out:
-	(*linesw[tp->t_line].l_start) (tp);
+	(*linesw[tp->t_line].l_start)(tp);
 	return;
 }
 
@@ -337,15 +343,16 @@ kmtimeout(void *arg)
 static int
 kmoutput(struct tty * tp)
 {
-	unsigned char	buf[80];	/* buffer; limits output per call */
-	unsigned char	*cp;
-	int	cc = -1;
+	unsigned char   buf[80];        /* buffer; limits output per call */
+	unsigned char   *cp;
+	int     cc = -1;
 
 	/* While there is data available to be output... */
 	while (tp->t_outq.c_cc > 0) {
 		cc = ndqb(&tp->t_outq, 0);
-		if (cc == 0)
+		if (cc == 0) {
 			break;
+		}
 		/*
 		 * attempt to output as many characters as are available,
 		 * up to the available transfer buffer size.
@@ -372,7 +379,7 @@ kmoutput(struct tty * tp)
 	}
 	tp->t_state &= ~TS_BUSY;
 	/* Start the output processing for the line discipline */
-	(*linesw[tp->t_line].l_start) (tp);
+	(*linesw[tp->t_line].l_start)(tp);
 
 	return 0;
 }
@@ -395,9 +402,9 @@ kmoutput(struct tty * tp)
 void
 cons_cinput(char ch)
 {
-	struct tty *tp = km_tty[0];	/* XXX */
+	struct tty *tp = km_tty[0];     /* XXX */
 
 	tty_lock(tp);
-	(*linesw[tp->t_line].l_rint) (ch, tp);
+	(*linesw[tp->t_line].l_rint)(ch, tp);
 	tty_unlock(tp);
 }

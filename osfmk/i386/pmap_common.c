@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <vm/pmap.h>
@@ -36,48 +36,60 @@
  *	address of the page they lock.
  */
 
-char	*pv_lock_table;		/* pointer to array of bits */
+char    *pv_lock_table;         /* pointer to array of bits */
 char    *pv_hash_lock_table;
 
-pv_rooted_entry_t	pv_head_table;		/* array of entries, one per
-						 * page */
-uint32_t			pv_hashed_free_count = 0;
-uint32_t			pv_hashed_kern_free_count = 0;
+pv_rooted_entry_t       pv_head_table;          /* array of entries, one per
+                                                 * page */
+uint32_t                        pv_hashed_free_count = 0;
+uint32_t                        pv_hashed_kern_free_count = 0;
 
 pmap_pagetable_corruption_record_t pmap_pagetable_corruption_records[PMAP_PAGETABLE_CORRUPTION_MAX_LOG];
 uint32_t pmap_pagetable_corruption_incidents;
 uint64_t pmap_pagetable_corruption_last_abstime = (~(0ULL) >> 1);
 uint64_t pmap_pagetable_corruption_interval_abstime;
-thread_call_t 	pmap_pagetable_corruption_log_call;
-static thread_call_data_t 	pmap_pagetable_corruption_log_call_data;
+thread_call_t   pmap_pagetable_corruption_log_call;
+static thread_call_data_t       pmap_pagetable_corruption_log_call_data;
 boolean_t pmap_pagetable_corruption_timeout = FALSE;
 
-volatile uint32_t	mappingrecurse = 0;
+volatile uint32_t       mappingrecurse = 0;
 
 uint32_t  pv_hashed_low_water_mark, pv_hashed_kern_low_water_mark, pv_hashed_alloc_chunk, pv_hashed_kern_alloc_chunk;
 
 thread_t mapping_replenish_thread;
-event_t	mapping_replenish_event, pmap_user_pv_throttle_event;
+event_t mapping_replenish_event, pmap_user_pv_throttle_event;
 
 uint64_t pmap_pv_throttle_stat, pmap_pv_throttled_waiters;
 
 int pmap_asserts_enabled = (DEBUG);
 int pmap_asserts_traced = 0;
 
-unsigned int pmap_cache_attributes(ppnum_t pn) {
-	if (pmap_get_cache_attributes(pn, FALSE) & INTEL_PTE_NCACHE)
-	        return (VM_WIMG_IO);
-	else
-		return (VM_WIMG_COPYBACK);
+unsigned int
+pmap_cache_attributes(ppnum_t pn)
+{
+	int cacheattr = pmap_get_cache_attributes(pn, FALSE);
+
+	if (cacheattr & INTEL_PTE_NCACHE) {
+		if (cacheattr & INTEL_PTE_PAT) {
+			/* WC */
+			return VM_WIMG_WCOMB;
+		}
+		return VM_WIMG_IO;
+	} else {
+		return VM_WIMG_COPYBACK;
+	}
 }
 
-void	pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr) {
+void
+pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr)
+{
 	unsigned int current, template = 0;
 	int pai;
 
 	if (cacheattr & VM_MEM_NOT_CACHEABLE) {
-		if(!(cacheattr & VM_MEM_GUARDED))
-			template |= PHYS_PTA;
+		if (!(cacheattr & VM_MEM_GUARDED)) {
+			template |= PHYS_PAT;
+		}
 		template |= PHYS_NCACHE;
 	}
 
@@ -111,12 +123,16 @@ void	pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr) {
 	}
 }
 
-unsigned	pmap_get_cache_attributes(ppnum_t pn, boolean_t is_ept) {
-	if (last_managed_page == 0)
+unsigned
+pmap_get_cache_attributes(ppnum_t pn, boolean_t is_ept)
+{
+	if (last_managed_page == 0) {
 		return 0;
+	}
 
-	if (!IS_MANAGED_PAGE(ppn_to_pai(pn)))
-	    return PTE_NCACHE(is_ept);
+	if (!IS_MANAGED_PAGE(ppn_to_pai(pn))) {
+		return PTE_NCACHE(is_ept);
+	}
 
 	/*
 	 * The cache attributes are read locklessly for efficiency.
@@ -127,22 +143,24 @@ unsigned	pmap_get_cache_attributes(ppnum_t pn, boolean_t is_ept) {
 	/*
 	 * The PTA bit is currently unsupported for EPT PTEs.
 	 */
-	if ((attr & PHYS_PTA) && !is_ept)
-		template |= INTEL_PTE_PTA;
+	if ((attr & PHYS_PAT) && !is_ept) {
+		template |= INTEL_PTE_PAT;
+	}
 
 	/*
 	 * If the page isn't marked as NCACHE, the default for EPT entries
 	 * is WB.
 	 */
-	if (attr & PHYS_NCACHE)
+	if (attr & PHYS_NCACHE) {
 		template |= PTE_NCACHE(is_ept);
-	else if (is_ept)
+	} else if (is_ept) {
 		template |= INTEL_EPT_WB;
+	}
 
 	return template;
 }
 
-boolean_t 
+boolean_t
 pmap_has_managed_page(ppnum_t first, ppnum_t last)
 {
 	ppnum_t     pn, kdata_start, kdata_end;
@@ -157,43 +175,46 @@ pmap_has_managed_page(ppnum_t first, ppnum_t last)
 	kdata_start = atop_32(args->kaddr);
 	kdata_end   = atop_32(args->kaddr + args->ksize);
 
-    assert(last_managed_page);
-    assert(first <= last);
+	assert(last_managed_page);
+	assert(first <= last);
 
-    for (result = FALSE, pn = first; 
-    	!result 
-    	  && (pn <= last)
-    	  && (pn <= last_managed_page); 
-    	 pn++)
-    {
-		if ((pn >= kdata_start) && (pn < kdata_end)) continue;
-    	result = (0 != (pmap_phys_attributes[pn] & PHYS_MANAGED));
-    }
+	for (result = FALSE, pn = first;
+	    !result
+	    && (pn <= last)
+	    && (pn <= last_managed_page);
+	    pn++) {
+		if ((pn >= kdata_start) && (pn < kdata_end)) {
+			continue;
+		}
+		result = (0 != (pmap_phys_attributes[pn] & PHYS_MANAGED));
+	}
 
-	return (result);
+	return result;
 }
 
 boolean_t
 pmap_is_noencrypt(ppnum_t pn)
 {
-	int		pai;
+	int             pai;
 
 	pai = ppn_to_pai(pn);
 
-	if (!IS_MANAGED_PAGE(pai))
-		return (FALSE);
+	if (!IS_MANAGED_PAGE(pai)) {
+		return FALSE;
+	}
 
-	if (pmap_phys_attributes[pai] & PHYS_NOENCRYPT)
-		return (TRUE);
+	if (pmap_phys_attributes[pai] & PHYS_NOENCRYPT) {
+		return TRUE;
+	}
 
-	return (FALSE);
+	return FALSE;
 }
 
 
 void
 pmap_set_noencrypt(ppnum_t pn)
 {
-	int		pai;
+	int             pai;
 
 	pai = ppn_to_pai(pn);
 
@@ -210,7 +231,7 @@ pmap_set_noencrypt(ppnum_t pn)
 void
 pmap_clear_noencrypt(ppnum_t pn)
 {
-	int		pai;
+	int             pai;
 
 	pai = ppn_to_pai(pn);
 
@@ -232,52 +253,55 @@ pmap_clear_noencrypt(ppnum_t pn)
 void
 compute_pmap_gc_throttle(void *arg __unused)
 {
-	
 }
 
 
 void
 pmap_lock_phys_page(ppnum_t pn)
 {
-	int		pai;
+	int             pai;
 
 	pai = ppn_to_pai(pn);
 
 	if (IS_MANAGED_PAGE(pai)) {
 		LOCK_PVH(pai);
-	} else
-		simple_lock(&phys_backup_lock);
+	} else {
+		simple_lock(&phys_backup_lock, LCK_GRP_NULL);
+	}
 }
 
 
 void
 pmap_unlock_phys_page(ppnum_t pn)
 {
-	int		pai;
+	int             pai;
 
 	pai = ppn_to_pai(pn);
 
 	if (IS_MANAGED_PAGE(pai)) {
 		UNLOCK_PVH(pai);
-	} else
+	} else {
 		simple_unlock(&phys_backup_lock);
+	}
 }
 
 
 
 __private_extern__ void
-pmap_pagetable_corruption_msg_log(int (*log_func)(const char * fmt, ...)__printflike(1,2)) {
+pmap_pagetable_corruption_msg_log(int (*log_func)(const char * fmt, ...)__printflike(1, 2))
+{
 	if (pmap_pagetable_corruption_incidents > 0) {
 		int i, e = MIN(pmap_pagetable_corruption_incidents, PMAP_PAGETABLE_CORRUPTION_MAX_LOG);
 		(*log_func)("%u pagetable corruption incident(s) detected, timeout: %u\n", pmap_pagetable_corruption_incidents, pmap_pagetable_corruption_timeout);
 		for (i = 0; i < e; i++) {
-			(*log_func)("Incident 0x%x, reason: 0x%x, action: 0x%x, time: 0x%llx\n", pmap_pagetable_corruption_records[i].incident,  pmap_pagetable_corruption_records[i].reason, pmap_pagetable_corruption_records[i].action, pmap_pagetable_corruption_records[i].abstime);
+			(*log_func)("Incident 0x%x, reason: 0x%x, action: 0x%x, time: 0x%llx\n", pmap_pagetable_corruption_records[i].incident, pmap_pagetable_corruption_records[i].reason, pmap_pagetable_corruption_records[i].action, pmap_pagetable_corruption_records[i].abstime);
 		}
 	}
 }
 
 static inline void
-pmap_pagetable_corruption_log_setup(void) {
+pmap_pagetable_corruption_log_setup(void)
+{
 	if (pmap_pagetable_corruption_log_call == NULL) {
 		nanotime_to_absolutetime(PMAP_PAGETABLE_CORRUPTION_INTERVAL, 0, &pmap_pagetable_corruption_interval_abstime);
 		thread_call_setup(&pmap_pagetable_corruption_log_call_data,
@@ -290,11 +314,11 @@ pmap_pagetable_corruption_log_setup(void) {
 void
 mapping_free_prime(void)
 {
-	unsigned		i;
-	pv_hashed_entry_t	pvh_e;
-	pv_hashed_entry_t	pvh_eh;
-	pv_hashed_entry_t	pvh_et;
-	int			pv_cnt;
+	unsigned                i;
+	pv_hashed_entry_t       pvh_e;
+	pv_hashed_entry_t       pvh_eh;
+	pv_hashed_entry_t       pvh_et;
+	int                     pv_cnt;
 
 	/* Scale based on DRAM size */
 	pv_hashed_low_water_mark = MAX(PV_HASHED_LOW_WATER_MARK_DEFAULT, ((uint32_t)(sane_size >> 30)) * 2000);
@@ -314,8 +338,9 @@ mapping_free_prime(void)
 		pvh_e->qlink.next = (queue_entry_t)pvh_eh;
 		pvh_eh = pvh_e;
 
-		if (pvh_et == PV_HASHED_ENTRY_NULL)
-		        pvh_et = pvh_e;
+		if (pvh_et == PV_HASHED_ENTRY_NULL) {
+			pvh_et = pvh_e;
+		}
 		pv_cnt++;
 	}
 	PV_HASHED_FREE_LIST(pvh_eh, pvh_et, pv_cnt);
@@ -328,8 +353,9 @@ mapping_free_prime(void)
 		pvh_e->qlink.next = (queue_entry_t)pvh_eh;
 		pvh_eh = pvh_e;
 
-		if (pvh_et == PV_HASHED_ENTRY_NULL)
-		        pvh_et = pvh_e;
+		if (pvh_et == PV_HASHED_ENTRY_NULL) {
+			pvh_et = pvh_e;
+		}
 		pv_cnt++;
 	}
 	PV_HASHED_KERN_FREE_LIST(pvh_eh, pvh_et, pv_cnt);
@@ -337,7 +363,9 @@ mapping_free_prime(void)
 
 void mapping_replenish(void);
 
-void mapping_adjust(void) {
+void
+mapping_adjust(void)
+{
 	kern_return_t mres;
 
 	pmap_pagetable_corruption_log_setup();
@@ -349,7 +377,7 @@ void mapping_adjust(void) {
 	thread_deallocate(mapping_replenish_thread);
 }
 
-unsigned pmap_mapping_thread_wakeups;	
+unsigned pmap_mapping_thread_wakeups;
 unsigned pmap_kernel_reserve_replenish_stat;
 unsigned pmap_user_reserve_replenish_stat;
 unsigned pmap_kern_reserve_alloc_stat;
@@ -358,17 +386,16 @@ __attribute__((noreturn))
 void
 mapping_replenish(void)
 {
-	pv_hashed_entry_t	pvh_e;
-	pv_hashed_entry_t	pvh_eh;
-	pv_hashed_entry_t	pvh_et;
-	int			pv_cnt;
-	unsigned             	i;
+	pv_hashed_entry_t       pvh_e;
+	pv_hashed_entry_t       pvh_eh;
+	pv_hashed_entry_t       pvh_et;
+	int                     pv_cnt;
+	unsigned                i;
 
 	/* We qualify for VM privileges...*/
 	current_thread()->options |= TH_OPT_VMPRIV;
 
 	for (;;) {
-
 		while (pv_hashed_kern_free_count < pv_hashed_kern_low_water_mark) {
 			pv_cnt = 0;
 			pvh_eh = pvh_et = PV_HASHED_ENTRY_NULL;
@@ -378,8 +405,9 @@ mapping_replenish(void)
 				pvh_e->qlink.next = (queue_entry_t)pvh_eh;
 				pvh_eh = pvh_e;
 
-				if (pvh_et == PV_HASHED_ENTRY_NULL)
+				if (pvh_et == PV_HASHED_ENTRY_NULL) {
 					pvh_et = pvh_e;
+				}
 				pv_cnt++;
 			}
 			pmap_kernel_reserve_replenish_stat += pv_cnt;
@@ -396,8 +424,9 @@ mapping_replenish(void)
 				pvh_e->qlink.next = (queue_entry_t)pvh_eh;
 				pvh_eh = pvh_e;
 
-				if (pvh_et == PV_HASHED_ENTRY_NULL)
+				if (pvh_et == PV_HASHED_ENTRY_NULL) {
 					pvh_et = pvh_e;
+				}
 				pv_cnt++;
 			}
 			pmap_user_reserve_replenish_stat += pv_cnt;
@@ -412,8 +441,9 @@ mapping_replenish(void)
 		/* Check if the kernel pool has been depleted since the
 		 * first pass, to reduce refill latency.
 		 */
-		if (pv_hashed_kern_free_count < pv_hashed_kern_low_water_mark)
+		if (pv_hashed_kern_free_count < pv_hashed_kern_low_water_mark) {
 			continue;
+		}
 		/* Block sans continuation to avoid yielding kernel stack */
 		assert_wait(&mapping_replenish_event, THREAD_UNINT);
 		mappingrecurse = 0;
@@ -428,15 +458,16 @@ mapping_replenish(void)
 
 void
 phys_attribute_set(
-	ppnum_t		pn,
-	int		bits)
+	ppnum_t         pn,
+	int             bits)
 {
-	int		pai;
+	int             pai;
 
 	pmap_intr_assert();
 	assert(pn != vm_page_fictitious_addr);
-	if (pn == vm_page_guard_addr)
+	if (pn == vm_page_guard_addr) {
 		return;
+	}
 
 	pai = ppn_to_pai(pn);
 
@@ -480,8 +511,9 @@ pmap_clear_modify(ppnum_t pn)
 boolean_t
 pmap_is_modified(ppnum_t pn)
 {
-	if (phys_attribute_test(pn, PHYS_MODIFIED))
+	if (phys_attribute_test(pn, PHYS_MODIFIED)) {
 		return TRUE;
+	}
 	return FALSE;
 }
 
@@ -514,8 +546,9 @@ pmap_set_reference(ppnum_t pn)
 boolean_t
 pmap_is_referenced(ppnum_t pn)
 {
-        if (phys_attribute_test(pn, PHYS_REFERENCED))
+	if (phys_attribute_test(pn, PHYS_REFERENCED)) {
 		return TRUE;
+	}
 	return FALSE;
 }
 
@@ -528,29 +561,31 @@ pmap_is_referenced(ppnum_t pn)
 unsigned int
 pmap_get_refmod(ppnum_t pn)
 {
-        int		refmod;
-	unsigned int	retval = 0;
+	int             refmod;
+	unsigned int    retval = 0;
 
 	refmod = phys_attribute_test(pn, PHYS_MODIFIED | PHYS_REFERENCED);
 
-	if (refmod & PHYS_MODIFIED)
-	        retval |= VM_MEM_MODIFIED;
-	if (refmod & PHYS_REFERENCED)
-	        retval |= VM_MEM_REFERENCED;
+	if (refmod & PHYS_MODIFIED) {
+		retval |= VM_MEM_MODIFIED;
+	}
+	if (refmod & PHYS_REFERENCED) {
+		retval |= VM_MEM_REFERENCED;
+	}
 
-	return (retval);
+	return retval;
 }
 
 
 void
 pmap_clear_refmod_options(ppnum_t pn, unsigned int mask, unsigned int options, void *arg)
 {
-        unsigned int  x86Mask;
+	unsigned int  x86Mask;
 
-        x86Mask = (   ((mask &   VM_MEM_MODIFIED)?   PHYS_MODIFIED : 0)
-		      | ((mask & VM_MEM_REFERENCED)? PHYS_REFERENCED : 0));
+	x86Mask = (((mask &   VM_MEM_MODIFIED)?   PHYS_MODIFIED : 0)
+	    | ((mask & VM_MEM_REFERENCED)? PHYS_REFERENCED : 0));
 
-        phys_attribute_clear(pn, x86Mask, options, arg);
+	phys_attribute_clear(pn, x86Mask, options, arg);
 }
 
 /*
@@ -563,8 +598,8 @@ pmap_clear_refmod(ppnum_t pn, unsigned int mask)
 {
 	unsigned int  x86Mask;
 
-	x86Mask = (   ((mask &   VM_MEM_MODIFIED)?   PHYS_MODIFIED : 0)
-	            | ((mask & VM_MEM_REFERENCED)? PHYS_REFERENCED : 0));
+	x86Mask = (((mask &   VM_MEM_MODIFIED)?   PHYS_MODIFIED : 0)
+	    | ((mask & VM_MEM_REFERENCED)? PHYS_REFERENCED : 0));
 
 	phys_attribute_clear(pn, x86Mask, 0, NULL);
 }
@@ -572,7 +607,7 @@ pmap_clear_refmod(ppnum_t pn, unsigned int mask)
 unsigned int
 pmap_disconnect(ppnum_t pa)
 {
-	return (pmap_disconnect_options(pa, 0, NULL));
+	return pmap_disconnect_options(pa, 0, NULL);
 }
 
 /*
@@ -589,17 +624,20 @@ pmap_disconnect_options(ppnum_t pa, unsigned int options, void *arg)
 {
 	unsigned refmod, vmrefmod = 0;
 
-	pmap_page_protect_options(pa, 0, options, arg);		/* disconnect the page */
+	pmap_page_protect_options(pa, 0, options, arg);         /* disconnect the page */
 
 	pmap_assert(pa != vm_page_fictitious_addr);
-	if ((pa == vm_page_guard_addr) || !IS_MANAGED_PAGE(pa) || (options & PMAP_OPTIONS_NOREFMOD))
+	if ((pa == vm_page_guard_addr) || !IS_MANAGED_PAGE(pa) || (options & PMAP_OPTIONS_NOREFMOD)) {
 		return 0;
+	}
 	refmod = pmap_phys_attributes[pa] & (PHYS_MODIFIED | PHYS_REFERENCED);
-	
-	if (refmod & PHYS_MODIFIED)
-	        vmrefmod |= VM_MEM_MODIFIED;
-	if (refmod & PHYS_REFERENCED)
-	        vmrefmod |= VM_MEM_REFERENCED;
+
+	if (refmod & PHYS_MODIFIED) {
+		vmrefmod |= VM_MEM_MODIFIED;
+	}
+	if (refmod & PHYS_REFERENCED) {
+		vmrefmod |= VM_MEM_REFERENCED;
+	}
 
 	return vmrefmod;
 }

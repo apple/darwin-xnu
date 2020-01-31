@@ -2,7 +2,7 @@
  * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -37,17 +37,17 @@
  * their code because of structure size changes or data reorganization.
  */
 
-#ifndef	_SYS_SPAWN_INTERNAL_H_
-#define	_SYS_SPAWN_INTERNAL_H_
+#ifndef _SYS_SPAWN_INTERNAL_H_
+#define _SYS_SPAWN_INTERNAL_H_
 
-#include <sys/_types.h>		/* __offsetof(), __darwin_size_t */
+#include <sys/_types.h>         /* __offsetof(), __darwin_size_t */
 #include <sys/param.h>
-#include <sys/syslimits.h>	/* PATH_MAX */
+#include <sys/syslimits.h>      /* PATH_MAX */
 #include <sys/spawn.h>
 #include <mach/machine.h>
 #include <mach/port.h>
 #include <mach/exception_types.h>
-#include <mach/coalition.h>	/* COALITION_NUM_TYPES */
+#include <mach/coalition.h>     /* COALITION_NUM_TYPES */
 #include <os/overflow.h>
 
 /*
@@ -56,7 +56,7 @@
  *
  * If the size calculation overflows a size_t value, this macro returns 0.
  */
-#define PS_ACTION_SIZE(x,_type,_member_type) ({ \
+#define PS_ACTION_SIZE(x, _type, _member_type) ({\
 	size_t _ps_count = (size_t)x; \
 	size_t _ps_size = 0; \
 	/* (count * sizeof(_member_type)) + sizeof(_type) */ \
@@ -64,7 +64,7 @@
 	                            sizeof(_member_type), \
 	                            sizeof(_type), \
 	                            &_ps_size)) { \
-		_ps_size = 0; \
+	        _ps_size = 0; \
 	} \
 	_ps_size; })
 
@@ -84,49 +84,49 @@ typedef enum {
  * but could be extended to other inheritable port types.
  */
 typedef struct _ps_port_action {
-	pspa_t			port_type;
-	exception_mask_t	mask;
-	mach_port_name_t	new_port;
-	exception_behavior_t	behavior;
-	thread_state_flavor_t	flavor;
-	int			which;
+	pspa_t                  port_type;
+	exception_mask_t        mask;
+	mach_port_name_t        new_port;
+	exception_behavior_t    behavior;
+	thread_state_flavor_t   flavor;
+	int                     which;
 } _ps_port_action_t;
 
 /*
  * A collection of port actions to take on the newly spawned process.
  */
 typedef struct _posix_spawn_port_actions {
-	int			pspa_alloc;
-	int			pspa_count;
-	_ps_port_action_t 	pspa_actions[];
+	int                     pspa_alloc;
+	int                     pspa_count;
+	_ps_port_action_t       pspa_actions[];
 } *_posix_spawn_port_actions_t;
 
 /*
  * Returns size in bytes of a _posix_spawn_port_actions holding x elements.
  */
-#define	PS_PORT_ACTIONS_SIZE(x)	\
+#define PS_PORT_ACTIONS_SIZE(x) \
 	PS_ACTION_SIZE(x, struct _posix_spawn_port_actions, _ps_port_action_t)
 
-#define NBINPREFS	4
+#define NBINPREFS       4
 
 /*
  * Mapping of opaque data pointer to a MAC policy (specified by name).
  */
 typedef struct _ps_mac_policy_extension {
-	char			policyname[128];
+	char                    policyname[128];
 	union {
-		uint64_t	data;
-		void 		*datap;		/* pointer in kernel memory */
+		uint64_t        data;
+		void            *datap;         /* pointer in kernel memory */
 	};
-	uint64_t		datalen;
+	uint64_t                datalen;
 } _ps_mac_policy_extension_t;
 
 /*
  * A collection of extra data passed to MAC policies for the newly spawned process.
  */
 typedef struct _posix_spawn_mac_policy_extensions {
-	int			psmx_alloc;
-	int			psmx_count;
+	int                     psmx_alloc;
+	int                     psmx_count;
 	_ps_mac_policy_extension_t psmx_extensions[];
 } *_posix_spawn_mac_policy_extensions_t;
 
@@ -136,7 +136,7 @@ typedef struct _posix_spawn_mac_policy_extensions {
 #define PS_MAC_EXTENSIONS_SIZE(x)     \
 	PS_ACTION_SIZE(x, struct _posix_spawn_mac_policy_extensions, _ps_mac_policy_extension_t)
 
-#define PS_MAC_EXTENSIONS_INIT_COUNT	2
+#define PS_MAC_EXTENSIONS_INIT_COUNT    2
 
 /*
  * Coalition posix spawn attributes
@@ -188,27 +188,27 @@ struct _posix_spawn_persona_info {
  */
 
 typedef struct _posix_spawnattr {
-	short		psa_flags;		/* spawn attribute flags */
-	short 		flags_padding; 	/* get the flags to be int aligned */
-	sigset_t	psa_sigdefault;		/* signal set to default */
-	sigset_t	psa_sigmask;		/* signal set to mask */
-	pid_t		psa_pgroup;		/* pgroup to spawn into */
-	cpu_type_t	psa_binprefs[NBINPREFS];   /* cpu affinity prefs*/
-	int		psa_pcontrol;		/* process control bits on resource starvation */
-	int		psa_apptype;		/* app type and process spec behav */
-	uint64_t 	psa_cpumonitor_percent; /* CPU usage monitor percentage */
-	uint64_t 	psa_cpumonitor_interval; /* CPU usage monitor interval, in seconds */
-	uint64_t	psa_reserved;
+	short           psa_flags;              /* spawn attribute flags */
+	short           flags_padding;  /* get the flags to be int aligned */
+	sigset_t        psa_sigdefault;         /* signal set to default */
+	sigset_t        psa_sigmask;            /* signal set to mask */
+	pid_t           psa_pgroup;             /* pgroup to spawn into */
+	cpu_type_t      psa_binprefs[NBINPREFS];   /* cpu affinity prefs*/
+	int             psa_pcontrol;           /* process control bits on resource starvation */
+	int             psa_apptype;            /* app type and process spec behav */
+	uint64_t        psa_cpumonitor_percent; /* CPU usage monitor percentage */
+	uint64_t        psa_cpumonitor_interval; /* CPU usage monitor interval, in seconds */
+	uint64_t        psa_reserved;
 
-	short       psa_jetsam_flags;		/* jetsam flags */
-	short		short_padding;		/* Padding for alignment issues */
-	int         psa_priority;		/* jetsam relative importance */
-	int         psa_memlimit_active;	/* jetsam memory limit (in MB) when process is active */
-	int         psa_memlimit_inactive;	/* jetsam memory limit (in MB) when process is inactive */
+	short       psa_jetsam_flags;           /* jetsam flags */
+	short           short_padding;          /* Padding for alignment issues */
+	int         psa_priority;               /* jetsam relative importance */
+	int         psa_memlimit_active;        /* jetsam memory limit (in MB) when process is active */
+	int         psa_memlimit_inactive;      /* jetsam memory limit (in MB) when process is inactive */
 
 	uint64_t        psa_qos_clamp;          /* QoS Clamp to set on the new process */
 	uint64_t        psa_darwin_role;           /* PRIO_DARWIN_ROLE to set on the new process */
-	int             psa_thread_limit;	/* thread limit */
+	int             psa_thread_limit;       /* thread limit */
 
 	uint64_t        psa_max_addr;           /* Max valid VM address */
 
@@ -217,7 +217,7 @@ typedef struct _posix_spawnattr {
 	 * everything above this point stays the same size on different bitnesses
 	 * see <rdar://problem/12858307>
 	 */
-	 _posix_spawn_port_actions_t	psa_ports; /* special/exception ports */
+	_posix_spawn_port_actions_t    psa_ports;  /* special/exception ports */
 	_posix_spawn_mac_policy_extensions_t psa_mac_extensions; /* MAC policy-specific extensions. */
 	struct _posix_spawn_coalition_info *psa_coalition_info;  /* coalition info */
 	struct _posix_spawn_persona_info   *psa_persona_info;    /* spawn new process into given persona */
@@ -226,22 +226,22 @@ typedef struct _posix_spawnattr {
 /*
  * Jetsam flags  eg: psa_jetsam_flags
  */
-#define	POSIX_SPAWN_JETSAM_SET                      0x8000
+#define POSIX_SPAWN_JETSAM_SET                      0x8000
 
-#define	POSIX_SPAWN_JETSAM_USE_EFFECTIVE_PRIORITY	0x01
-#define	POSIX_SPAWN_JETSAM_HIWATER_BACKGROUND		0x02  /* to be deprecated */
-#define	POSIX_SPAWN_JETSAM_MEMLIMIT_FATAL		0x04  /* to be deprecated */
+#define POSIX_SPAWN_JETSAM_USE_EFFECTIVE_PRIORITY       0x01
+#define POSIX_SPAWN_JETSAM_HIWATER_BACKGROUND           0x02  /* to be deprecated */
+#define POSIX_SPAWN_JETSAM_MEMLIMIT_FATAL               0x04  /* to be deprecated */
 
 /*
  * Additional flags available for use with
  * the posix_spawnattr_setjetsam_ext() call
  */
-#define	POSIX_SPAWN_JETSAM_MEMLIMIT_ACTIVE_FATAL	0x04  /* if set, limit is fatal when the process is active   */
-#define	POSIX_SPAWN_JETSAM_MEMLIMIT_INACTIVE_FATAL	0x08  /* if set, limit is fatal when the process is inactive */
+#define POSIX_SPAWN_JETSAM_MEMLIMIT_ACTIVE_FATAL        0x04  /* if set, limit is fatal when the process is active   */
+#define POSIX_SPAWN_JETSAM_MEMLIMIT_INACTIVE_FATAL      0x08  /* if set, limit is fatal when the process is inactive */
 
 /*
  * Deprecated posix_spawn psa_flags values
- * 
+ *
  * POSIX_SPAWN_OSX_TALAPP_START         0x0400
  * POSIX_SPAWN_IOS_RESV1_APP_START      0x0400
  * POSIX_SPAWN_IOS_APPLE_DAEMON_START   0x0800
@@ -321,12 +321,12 @@ typedef enum {
  * XXX:		Currently overloading psfao_oflag for PSFA_DUP2
  */
 typedef struct _psfa_action {
-	psfa_t	psfaa_type;			/* file action type */
-	int	psfaa_filedes;			/* fd to operate on */
+	psfa_t  psfaa_type;                     /* file action type */
+	int     psfaa_filedes;                  /* fd to operate on */
 	struct _psfaa_open {
-		int	psfao_oflag;		/* open flags to use */
-		mode_t	psfao_mode;		/* mode for open */
-		char	psfao_path[PATH_MAX];	/* path to open */
+		int     psfao_oflag;            /* open flags to use */
+		mode_t  psfao_mode;             /* mode for open */
+		char    psfao_path[PATH_MAX];   /* path to open */
 	} psfaa_openargs;
 } _psfa_action_t;
 
@@ -349,16 +349,16 @@ typedef struct _psfa_action {
  *		for 32 vs. 64 bt programming SPIs.
  */
 typedef struct _posix_spawn_file_actions {
-	int		psfa_act_alloc;		/* available actions space */
-	int		psfa_act_count;		/* count of defined actions */
-	_psfa_action_t	psfa_act_acts[];	/* actions array (uses c99) */
+	int             psfa_act_alloc;         /* available actions space */
+	int             psfa_act_count;         /* count of defined actions */
+	_psfa_action_t  psfa_act_acts[];        /* actions array (uses c99) */
 } *_posix_spawn_file_actions_t;
 
 /*
  * Calculate the size of a structure, given the number of elements that it is
  * capable of containing.
  */
-#define	PSF_ACTIONS_SIZE(x)	\
+#define PSF_ACTIONS_SIZE(x)     \
 	PS_ACTION_SIZE(x, struct _posix_spawn_file_actions, _psfa_action_t)
 
 /*
@@ -366,7 +366,7 @@ typedef struct _posix_spawn_file_actions {
  * first allocated; this should be non-zero, since we expect that one would not
  * have been allocated unless there was an intent to use it.
  */
-#define	PSF_ACTIONS_INIT_COUNT	2
+#define PSF_ACTIONS_INIT_COUNT  2
 
 /*
  * Structure defining the true third argument to the posix_spawn() system call
@@ -376,20 +376,20 @@ typedef struct _posix_spawn_file_actions {
  * performance optimization.
  */
 struct _posix_spawn_args_desc {
-	__darwin_size_t		attr_size;	/* size of attributes block */
-	_posix_spawnattr_t	attrp;		/* pointer to block */
-	__darwin_size_t	file_actions_size;	/* size of file actions block */
+	__darwin_size_t         attr_size;      /* size of attributes block */
+	_posix_spawnattr_t      attrp;          /* pointer to block */
+	__darwin_size_t file_actions_size;      /* size of file actions block */
 	_posix_spawn_file_actions_t
-				file_actions;	/* pointer to block */
-	__darwin_size_t	port_actions_size; 	/* size of port actions block */
+	    file_actions;                       /* pointer to block */
+	__darwin_size_t port_actions_size;      /* size of port actions block */
 	_posix_spawn_port_actions_t
-				port_actions; 	/* pointer to port block */
+	    port_actions;                       /* pointer to port block */
 	__darwin_size_t mac_extensions_size;
 	_posix_spawn_mac_policy_extensions_t
-				mac_extensions;	/* pointer to policy-specific
-						 * attributes */
+	    mac_extensions;                     /* pointer to policy-specific
+	                                         * attributes */
 	__darwin_size_t coal_info_size;
-	struct _posix_spawn_coalition_info *coal_info;	/* pointer to coalition info */
+	struct _posix_spawn_coalition_info *coal_info;  /* pointer to coalition info */
 
 	__darwin_size_t persona_info_size;
 	struct _posix_spawn_persona_info   *persona_info;
@@ -404,33 +404,33 @@ struct _posix_spawn_args_desc {
 #endif
 
 struct user32__posix_spawn_args_desc {
-	uint32_t		attr_size;	/* size of attributes block */
-	uint32_t		attrp;		/* pointer to block */
-	uint32_t	file_actions_size;	/* size of file actions block */
-	uint32_t		file_actions;	/* pointer to block */
-	uint32_t	port_actions_size;	/* size of port actions block */
-	uint32_t		port_actions;	/* pointer to block */
-	uint32_t	mac_extensions_size;
-	uint32_t	mac_extensions;
-	uint32_t	coal_info_size;
-	uint32_t	coal_info;
-	uint32_t	persona_info_size;
-	uint32_t	persona_info;
+	uint32_t                attr_size;      /* size of attributes block */
+	uint32_t                attrp;          /* pointer to block */
+	uint32_t        file_actions_size;      /* size of file actions block */
+	uint32_t                file_actions;   /* pointer to block */
+	uint32_t        port_actions_size;      /* size of port actions block */
+	uint32_t                port_actions;   /* pointer to block */
+	uint32_t        mac_extensions_size;
+	uint32_t        mac_extensions;
+	uint32_t        coal_info_size;
+	uint32_t        coal_info;
+	uint32_t        persona_info_size;
+	uint32_t        persona_info;
 };
 
 struct user__posix_spawn_args_desc {
-	user_size_t		attr_size;	/* size of attributes block */
-	user_addr_t		attrp;		/* pointer to block */
-	user_size_t	file_actions_size;	/* size of file actions block */
-	user_addr_t		file_actions;	/* pointer to block */
-	user_size_t	port_actions_size;	/* size of port actions block */
-	user_addr_t		port_actions;	/* pointer to block */
-	user_size_t	mac_extensions_size;	/* size of MAC-specific attrs. */
-	user_addr_t	mac_extensions;		/* pointer to block */
-	user_size_t	coal_info_size;
-	user_addr_t	coal_info;
-	user_size_t	persona_info_size;
-	user_addr_t	persona_info;
+	user_size_t             attr_size;      /* size of attributes block */
+	user_addr_t             attrp;          /* pointer to block */
+	user_size_t     file_actions_size;      /* size of file actions block */
+	user_addr_t             file_actions;   /* pointer to block */
+	user_size_t     port_actions_size;      /* size of port actions block */
+	user_addr_t             port_actions;   /* pointer to block */
+	user_size_t     mac_extensions_size;    /* size of MAC-specific attrs. */
+	user_addr_t     mac_extensions;         /* pointer to block */
+	user_size_t     coal_info_size;
+	user_addr_t     coal_info;
+	user_size_t     persona_info_size;
+	user_addr_t     persona_info;
 };
 
 
@@ -438,7 +438,7 @@ struct user__posix_spawn_args_desc {
 #pragma options align=reset
 #endif
 
-#endif	/* __APPLE_API_PRIVATE */
-#endif	/* KERNEL */
-	
-#endif	/* _SYS_SPAWN_INTERNAL_H_ */
+#endif  /* __APPLE_API_PRIVATE */
+#endif  /* KERNEL */
+
+#endif  /* _SYS_SPAWN_INTERNAL_H_ */

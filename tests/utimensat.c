@@ -45,13 +45,13 @@ T_DECL(utimensat, "Try various versions of utimensat")
 	struct stat pre_st, post_st;
 	int fd;
 
-	T_ASSERT_POSIX_SUCCESS((fd = open(FILENAME, O_CREAT|O_RDWR, 0644)), NULL);
+	T_ASSERT_POSIX_SUCCESS((fd = open(FILENAME, O_CREAT | O_RDWR, 0644)), NULL);
 	T_ASSERT_POSIX_ZERO(close(fd), NULL);
 
-	for (size_t i = 0; i < sizeof(tptr)/sizeof(tptr[0]); i++) {
-		T_LOG("=== {%ld, %ld} {%ld, %ld} ===", 
-				tptr[i][0].tv_sec, tptr[i][0].tv_nsec,
-				tptr[i][1].tv_sec, tptr[i][1].tv_nsec);
+	for (size_t i = 0; i < sizeof(tptr) / sizeof(tptr[0]); i++) {
+		T_LOG("=== {%ld, %ld} {%ld, %ld} ===",
+		    tptr[i][0].tv_sec, tptr[i][0].tv_nsec,
+		    tptr[i][1].tv_sec, tptr[i][1].tv_nsec);
 
 		struct timespec now;
 		clock_gettime(CLOCK_REALTIME, &now);

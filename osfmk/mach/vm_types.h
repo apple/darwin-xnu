@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,14 +22,14 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
- * 
+ *
  */
-#ifndef	_MACH_VM_TYPES_H_
+#ifndef _MACH_VM_TYPES_H_
 #define _MACH_VM_TYPES_H_
 
 #include <mach/port.h>
@@ -37,8 +37,8 @@
 
 #include <stdint.h>
 
-typedef vm_offset_t     	pointer_t;
-typedef vm_offset_t     	vm_address_t;
+typedef vm_offset_t             pointer_t;
+typedef vm_offset_t             vm_address_t;
 
 /*
  * We use addr64_t for 64-bit addresses that are used on both
@@ -46,7 +46,7 @@ typedef vm_offset_t     	vm_address_t;
  * two adjacent 32-bit GPRs.  We use addr64_t in places where
  * common code must be useable both on 32 and 64-bit machines.
  */
-typedef uint64_t addr64_t;		/* Basic effective address */
+typedef uint64_t addr64_t;              /* Basic effective address */
 
 /*
  * We use reg64_t for addresses that are 32 bits on a 32-bit
@@ -58,22 +58,22 @@ typedef uint64_t addr64_t;		/* Basic effective address */
  * type in prototypes of functions that are written in and called
  * from assembly language.  This type is basically a comment.
  */
-typedef	uint32_t	reg64_t;
+typedef uint32_t        reg64_t;
 
 /*
  * To minimize the use of 64-bit fields, we keep some physical
- * addresses (that are page aligned) as 32-bit page numbers. 
+ * addresses (that are page aligned) as 32-bit page numbers.
  * This limits the physical address space to 16TB of RAM.
  */
-typedef uint32_t ppnum_t;		/* Physical page number */
+typedef uint32_t ppnum_t;               /* Physical page number */
 #define PPNUM_MAX UINT32_MAX
 
 
-#ifdef	KERNEL_PRIVATE
+#ifdef  KERNEL_PRIVATE
 
 #include <sys/cdefs.h>
 
-#ifndef	MACH_KERNEL_PRIVATE
+#ifndef MACH_KERNEL_PRIVATE
 /*
  * Use specifically typed null structures for these in
  * other parts of the kernel to enable compiler warnings
@@ -82,36 +82,36 @@ typedef uint32_t ppnum_t;		/* Physical page number */
  */
 __BEGIN_DECLS
 
-struct pmap ;
-struct _vm_map ;
-struct vm_object ;
+struct pmap;
+struct _vm_map;
+struct vm_object;
 
 __END_DECLS
 
-#endif	/* MACH_KERNEL_PRIVATE */
+#endif  /* MACH_KERNEL_PRIVATE */
 
-typedef struct pmap		*pmap_t;
-typedef struct _vm_map		*vm_map_t;
-typedef struct vm_object 	*vm_object_t;
-typedef struct vm_object_fault_info 	*vm_object_fault_info_t;
+typedef struct pmap             *pmap_t;
+typedef struct _vm_map          *vm_map_t;
+typedef struct vm_object        *vm_object_t;
+typedef struct vm_object_fault_info     *vm_object_fault_info_t;
 
-#define PMAP_NULL		((pmap_t) 0)
-#define VM_OBJECT_NULL	((vm_object_t) 0)
+#define PMAP_NULL               ((pmap_t) 0)
+#define VM_OBJECT_NULL  ((vm_object_t) 0)
 
 #else   /* KERNEL_PRIVATE */
 
-typedef mach_port_t		vm_map_t;
+typedef mach_port_t             vm_map_t;
 
 #endif  /* KERNEL_PRIVATE */
 
-#define VM_MAP_NULL		((vm_map_t) 0)
+#define VM_MAP_NULL             ((vm_map_t) 0)
 
 /*
  * Evolving definitions, likely to change.
  */
 
-typedef uint64_t		vm_object_offset_t;
-typedef uint64_t		vm_object_size_t;
+typedef uint64_t                vm_object_offset_t;
+typedef uint64_t                vm_object_size_t;
 
 
 #ifdef XNU_KERNEL_PRIVATE
@@ -120,60 +120,57 @@ typedef uint64_t		vm_object_size_t;
 
 typedef uint16_t vm_tag_t;
 
-#define VM_TAG_NAME_LEN_MAX	0x7F
-#define VM_TAG_NAME_LEN_SHIFT	0
-#define VM_TAG_BT		0x0080
-#define VM_TAG_UNLOAD	   	0x0100
-#define VM_TAG_KMOD		0x0200
+#define VM_TAG_NAME_LEN_MAX     0x7F
+#define VM_TAG_NAME_LEN_SHIFT   0
+#define VM_TAG_BT               0x0080
+#define VM_TAG_UNLOAD           0x0100
+#define VM_TAG_KMOD             0x0200
 
 #if DEBUG || DEVELOPMENT
-#define VM_MAX_TAG_ZONES   	28
+#define VM_MAX_TAG_ZONES        28
 #else
-#define VM_MAX_TAG_ZONES   	0
+#define VM_MAX_TAG_ZONES        0
 #endif
 
 #if VM_MAX_TAG_ZONES
 // must be multiple of 64
-#define VM_MAX_TAG_VALUE   	1536
+#define VM_MAX_TAG_VALUE        1536
 #else
-#define VM_MAX_TAG_VALUE   	256
+#define VM_MAX_TAG_VALUE        256
 #endif
 
 
-#define ARRAY_COUNT(a)	(sizeof((a)) / sizeof((a)[0]))
+#define ARRAY_COUNT(a)  (sizeof((a)) / sizeof((a)[0]))
 
-struct vm_allocation_total
-{
-    vm_tag_t tag;
-    uint64_t total;
+struct vm_allocation_total {
+	vm_tag_t tag;
+	uint64_t total;
 };
 
-struct vm_allocation_zone_total
-{
-    uint64_t  total;
-    uint64_t  peak;
-    uint32_t  waste;
-    uint32_t  wastediv;
+struct vm_allocation_zone_total {
+	uint64_t  total;
+	uint64_t  peak;
+	uint32_t  waste;
+	uint32_t  wastediv;
 };
 typedef struct vm_allocation_zone_total vm_allocation_zone_total_t;
 
-struct vm_allocation_site
-{
-    uint64_t  total;
+struct vm_allocation_site {
+	uint64_t  total;
 #if DEBUG || DEVELOPMENT
-    uint64_t  peak;
+	uint64_t  peak;
 #endif /* DEBUG || DEVELOPMENT */
-    uint64_t  mapped;
-    int16_t   refcount;
-    vm_tag_t  tag;
-    uint16_t  flags;
-    uint16_t  subtotalscount;
-    struct vm_allocation_total subtotals[0];
-    char      name[0];
+	uint64_t  mapped;
+	int16_t   refcount;
+	vm_tag_t  tag;
+	uint16_t  flags;
+	uint16_t  subtotalscount;
+	struct vm_allocation_total subtotals[0];
+	char      name[0];
 };
 typedef struct vm_allocation_site vm_allocation_site_t;
 
-#define VM_ALLOC_SITE_STATIC(iflags, itag)                               	    \
+#define VM_ALLOC_SITE_STATIC(iflags, itag)                                          \
 	static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
 	 = { .refcount = 2, .tag = (itag), .flags = (iflags) };
 
@@ -184,33 +181,33 @@ extern unsigned int vmrtfaultinfo_bufsz(void);
 
 #ifdef  KERNEL_PRIVATE
 
-#ifndef	MACH_KERNEL_PRIVATE
+#ifndef MACH_KERNEL_PRIVATE
 
 __BEGIN_DECLS
 
-struct upl ;
-struct vm_map_copy ;
-struct vm_named_entry ;
+struct upl;
+struct vm_map_copy;
+struct vm_named_entry;
 
 __END_DECLS
 
-#endif	/* MACH_KERNEL_PRIVATE */
+#endif  /* MACH_KERNEL_PRIVATE */
 
-typedef struct upl		*upl_t;
-typedef struct vm_map_copy	*vm_map_copy_t;
-typedef struct vm_named_entry	*vm_named_entry_t;
+typedef struct upl              *upl_t;
+typedef struct vm_map_copy      *vm_map_copy_t;
+typedef struct vm_named_entry   *vm_named_entry_t;
 
-#define VM_MAP_COPY_NULL	((vm_map_copy_t) 0)
+#define VM_MAP_COPY_NULL        ((vm_map_copy_t) 0)
 
-#else	/* KERNEL_PRIVATE */
+#else   /* KERNEL_PRIVATE */
 
-typedef mach_port_t		upl_t;
-typedef mach_port_t		vm_named_entry_t;
+typedef mach_port_t             upl_t;
+typedef mach_port_t             vm_named_entry_t;
 
-#endif	/* KERNEL_PRIVATE */
+#endif  /* KERNEL_PRIVATE */
 
-#define UPL_NULL		((upl_t) 0)
-#define VM_NAMED_ENTRY_NULL	((vm_named_entry_t) 0)
+#define UPL_NULL                ((upl_t) 0)
+#define VM_NAMED_ENTRY_NULL     ((vm_named_entry_t) 0)
 #ifdef PRIVATE
 typedef struct {
 	uint64_t rtfabstime; // mach_continuous_time at start of fault
@@ -222,4 +219,4 @@ typedef struct {
 	uint64_t rtftype; // fault type
 } vm_rtfault_record_t;
 #endif
-#endif	/* _MACH_VM_TYPES_H_ */
+#endif  /* _MACH_VM_TYPES_H_ */

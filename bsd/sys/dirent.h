@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -72,8 +72,8 @@
  * ino_t is in effect; (MAXPATHLEN - 1) when 64-bit ino_t is in effect.
  */
 
-#ifndef _SYS_DIRENT_H 
-#define _SYS_DIRENT_H 
+#ifndef _SYS_DIRENT_H
+#define _SYS_DIRENT_H
 
 #include <sys/_types.h>
 #include <sys/cdefs.h>
@@ -81,23 +81,23 @@
 #include <sys/_types/_ino_t.h>
 
 
-#define __DARWIN_MAXNAMLEN	255
+#define __DARWIN_MAXNAMLEN      255
 
 #pragma pack(4)
 
 #if !__DARWIN_64_BIT_INO_T
 struct dirent {
-	ino_t d_ino;			/* file number of entry */
-	__uint16_t d_reclen;		/* length of this record */
-	__uint8_t  d_type; 		/* file type, see below */
-	__uint8_t  d_namlen;		/* length of string in d_name */
-	char d_name[__DARWIN_MAXNAMLEN + 1];	/* name must be no longer than this */
+	ino_t d_ino;                    /* file number of entry */
+	__uint16_t d_reclen;            /* length of this record */
+	__uint8_t  d_type;              /* file type, see below */
+	__uint8_t  d_namlen;            /* length of string in d_name */
+	char d_name[__DARWIN_MAXNAMLEN + 1];    /* name must be no longer than this */
 };
 #endif /* !__DARWIN_64_BIT_INO_T */
 
 #pragma pack()
 
-#define __DARWIN_MAXPATHLEN	1024
+#define __DARWIN_MAXPATHLEN     1024
 
 #define __DARWIN_STRUCT_DIRENTRY { \
 	__uint64_t  d_ino;      /* file number of entry */ \
@@ -119,26 +119,26 @@ struct direntry __DARWIN_STRUCT_DIRENTRY;
 
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define	d_fileno	d_ino		/* backward compatibility */
-#define	MAXNAMLEN	__DARWIN_MAXNAMLEN
+#define d_fileno        d_ino           /* backward compatibility */
+#define MAXNAMLEN       __DARWIN_MAXNAMLEN
 /*
  * File types
  */
-#define	DT_UNKNOWN	 0
-#define	DT_FIFO		 1
-#define	DT_CHR		 2
-#define	DT_DIR		 4
-#define	DT_BLK		 6
-#define	DT_REG		 8
-#define	DT_LNK		10
-#define	DT_SOCK		12
-#define	DT_WHT		14
+#define DT_UNKNOWN       0
+#define DT_FIFO          1
+#define DT_CHR           2
+#define DT_DIR           4
+#define DT_BLK           6
+#define DT_REG           8
+#define DT_LNK          10
+#define DT_SOCK         12
+#define DT_WHT          14
 
 /*
  * Convert between stat structure types and directory types.
  */
-#define	IFTODT(mode)	(((mode) & 0170000) >> 12)
-#define	DTTOIF(dirtype)	((dirtype) << 12)
+#define IFTODT(mode)    (((mode) & 0170000) >> 12)
+#define DTTOIF(dirtype) ((dirtype) << 12)
 #endif
 
 #endif /* _SYS_DIRENT_H  */

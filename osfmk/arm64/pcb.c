@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -117,6 +117,10 @@ machine_switch_context(
 		pmap_switch(new_pmap);
 
 	new->machine.CpuDatap = cpu_data_ptr;
+
+	/* TODO: Should this be ordered? */
+	old->machine.machine_thread_flags &= ~MACHINE_THREAD_FLAGS_ON_CPU;
+	new->machine.machine_thread_flags |= MACHINE_THREAD_FLAGS_ON_CPU;
 
 	machine_switch_context_kprintf("old= %x contination = %x new = %x\n", old, continuation, new);
 
@@ -345,6 +349,11 @@ machine_stack_handoff(
 		pmap_switch(new_pmap);
 
 	new->machine.CpuDatap = cpu_data_ptr;
+
+	/* TODO: Should this be ordered? */
+	old->machine.machine_thread_flags &= ~MACHINE_THREAD_FLAGS_ON_CPU;
+	new->machine.machine_thread_flags |= MACHINE_THREAD_FLAGS_ON_CPU;
+
 	machine_set_current_thread(new);
 	thread_initialize_kernel_state(new);
 
@@ -886,4 +895,15 @@ machine_thread_set_tsd_base(
 	}
 
 	return KERN_SUCCESS;
+}
+
+void
+machine_tecs(__unused thread_t thr)
+{
+}
+
+int
+machine_csv(__unused cpuvn_e cve)
+{
+	return 0;
 }

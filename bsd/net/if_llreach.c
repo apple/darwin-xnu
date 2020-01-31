@@ -136,11 +136,11 @@
 #include <netinet6/nd6.h>
 #endif /* INET6 */
 
-static unsigned int iflr_size;		/* size of if_llreach */
-static struct zone *iflr_zone;		/* zone for if_llreach */
+static unsigned int iflr_size;          /* size of if_llreach */
+static struct zone *iflr_zone;          /* zone for if_llreach */
 
-#define	IFLR_ZONE_MAX		128		/* maximum elements in zone */
-#define	IFLR_ZONE_NAME		"if_llreach"	/* zone name */
+#define IFLR_ZONE_MAX           128             /* maximum elements in zone */
+#define IFLR_ZONE_NAME          "if_llreach"    /* zone name */
 
 static struct if_llreach *iflr_alloc(int);
 static void iflr_free(struct if_llreach *);
@@ -162,19 +162,19 @@ SYSCTL_NODE(_net_link_generic_system, OID_AUTO, llreach_info,
  * Link-layer reachability is based off node constants in RFC4861.
  */
 #if INET6
-#define	LL_COMPUTE_RTIME(x)	ND_COMPUTE_RTIME(x)
+#define LL_COMPUTE_RTIME(x)     ND_COMPUTE_RTIME(x)
 #else
-#define LL_MIN_RANDOM_FACTOR	512	/* 1024 * 0.5 */
-#define LL_MAX_RANDOM_FACTOR	1536	/* 1024 * 1.5 */
-#define LL_COMPUTE_RTIME(x)						\
-	(((LL_MIN_RANDOM_FACTOR * (x >> 10)) + (RandomULong() &		\
+#define LL_MIN_RANDOM_FACTOR    512     /* 1024 * 0.5 */
+#define LL_MAX_RANDOM_FACTOR    1536    /* 1024 * 1.5 */
+#define LL_COMPUTE_RTIME(x)                                             \
+	(((LL_MIN_RANDOM_FACTOR * (x >> 10)) + (RandomULong() &         \
 	((LL_MAX_RANDOM_FACTOR - LL_MIN_RANDOM_FACTOR) * (x >> 10)))) / 1000)
 #endif /* !INET6 */
 
 void
 ifnet_llreach_init(void)
 {
-	iflr_size = sizeof (struct if_llreach);
+	iflr_size = sizeof(struct if_llreach);
 	iflr_zone = zinit(iflr_size,
 	    IFLR_ZONE_MAX * iflr_size, 0, IFLR_ZONE_NAME);
 	if (iflr_zone == NULL) {
@@ -190,8 +190,9 @@ ifnet_llreach_ifattach(struct ifnet *ifp, boolean_t reuse)
 {
 	lck_rw_lock_exclusive(&ifp->if_llreach_lock);
 	/* Initialize link-layer source tree (if not already) */
-	if (!reuse)
+	if (!reuse) {
 		RB_INIT(&ifp->if_ll_srcs);
+	}
 	lck_rw_done(&ifp->if_llreach_lock);
 }
 
@@ -215,7 +216,7 @@ ifnet_llreach_ifdetach(struct ifnet *ifp)
 static __inline int
 iflr_cmp(const struct if_llreach *a, const struct if_llreach *b)
 {
-	return (memcmp(&a->lr_key, &b->lr_key, sizeof (a->lr_key)));
+	return memcmp(&a->lr_key, &b->lr_key, sizeof(a->lr_key));
 }
 
 static __inline int
@@ -224,7 +225,7 @@ iflr_reachable(struct if_llreach *lr, int cmp_delta, u_int64_t tval)
 	u_int64_t now;
 	u_int64_t expire;
 
-	now = net_uptime();		/* current approx. uptime */
+	now = net_uptime();             /* current approx. uptime */
 	/*
 	 * No need for lr_lock; atomically read the last rcvd uptime.
 	 */
@@ -234,15 +235,16 @@ iflr_reachable(struct if_llreach *lr, int cmp_delta, u_int64_t tval)
 	 * lr_reachable seconds, consider that the host is no
 	 * longer reachable.
 	 */
-	if (!cmp_delta)
-		return (expire >= now);
+	if (!cmp_delta) {
+		return expire >= now;
+	}
 	/*
 	 * If the caller supplied a reference time, consider the
 	 * host is reachable if the record hasn't expired (see above)
 	 * and if the reference time is within the past lr_reachable
 	 * seconds.
 	 */
-	return ((expire >= now) && (now - tval) < lr->lr_reachable);
+	return (expire >= now) && (now - tval) < lr->lr_reachable;
 }
 
 int
@@ -251,7 +253,7 @@ ifnet_llreach_reachable(struct if_llreach *lr)
 	/*
 	 * Check whether the cache is too old to be trusted.
 	 */
-	return (iflr_reachable(lr, 0, 0));
+	return iflr_reachable(lr, 0, 0);
 }
 
 int
@@ -260,7 +262,7 @@ ifnet_llreach_reachable_delta(struct if_llreach *lr, u_int64_t tval)
 	/*
 	 * Check whether the cache is too old to be trusted.
 	 */
-	return (iflr_reachable(lr, 1, tval));
+	return iflr_reachable(lr, 1, tval);
 }
 
 void
@@ -269,7 +271,7 @@ ifnet_llreach_set_reachable(struct ifnet *ifp, u_int16_t llproto, void *addr,
 {
 	struct if_llreach find, *lr;
 
-	VERIFY(alen == IF_LLREACH_MAXLEN);	/* for now */
+	VERIFY(alen == IF_LLREACH_MAXLEN);      /* for now */
 
 	find.lr_key.proto = llproto;
 	bcopy(addr, &find.lr_key.addr, IF_LLREACH_MAXLEN);
@@ -294,10 +296,11 @@ ifnet_llreach_alloc(struct ifnet *ifp, u_int16_t llproto, void *addr,
 	struct if_llreach find, *lr;
 	struct timeval cnow;
 
-	if (llreach_base == 0)
-		return (NULL);
+	if (llreach_base == 0) {
+		return NULL;
+	}
 
-	VERIFY(alen == IF_LLREACH_MAXLEN);	/* for now */
+	VERIFY(alen == IF_LLREACH_MAXLEN);      /* for now */
 
 	find.lr_key.proto = llproto;
 	bcopy(addr, &find.lr_key.addr, IF_LLREACH_MAXLEN);
@@ -310,37 +313,39 @@ found:
 		VERIFY(lr->lr_reqcnt >= 1);
 		lr->lr_reqcnt++;
 		VERIFY(lr->lr_reqcnt != 0);
-		IFLR_ADDREF_LOCKED(lr);		/* for caller */
-		lr->lr_lastrcvd = net_uptime();	/* current approx. uptime */
+		IFLR_ADDREF_LOCKED(lr);         /* for caller */
+		lr->lr_lastrcvd = net_uptime(); /* current approx. uptime */
 		IFLR_UNLOCK(lr);
 		lck_rw_done(&ifp->if_llreach_lock);
-		return (lr);
+		return lr;
 	}
 
-	if (!lck_rw_lock_shared_to_exclusive(&ifp->if_llreach_lock))
+	if (!lck_rw_lock_shared_to_exclusive(&ifp->if_llreach_lock)) {
 		lck_rw_lock_exclusive(&ifp->if_llreach_lock);
+	}
 
 	LCK_RW_ASSERT(&ifp->if_llreach_lock, LCK_RW_ASSERT_EXCLUSIVE);
 
 	/* in case things have changed while becoming writer */
 	lr = RB_FIND(ll_reach_tree, &ifp->if_ll_srcs, &find);
-	if (lr != NULL)
+	if (lr != NULL) {
 		goto found;
+	}
 
 	lr = iflr_alloc(M_WAITOK);
 	if (lr == NULL) {
 		lck_rw_done(&ifp->if_llreach_lock);
-		return (NULL);
+		return NULL;
 	}
 	IFLR_LOCK(lr);
 	lr->lr_reqcnt++;
 	VERIFY(lr->lr_reqcnt == 1);
-	IFLR_ADDREF_LOCKED(lr);			/* for RB tree */
-	IFLR_ADDREF_LOCKED(lr);			/* for caller */
-	lr->lr_lastrcvd = net_uptime();		/* current approx. uptime */
-	lr->lr_baseup = lr->lr_lastrcvd;	/* base uptime */
+	IFLR_ADDREF_LOCKED(lr);                 /* for RB tree */
+	IFLR_ADDREF_LOCKED(lr);                 /* for caller */
+	lr->lr_lastrcvd = net_uptime();         /* current approx. uptime */
+	lr->lr_baseup = lr->lr_lastrcvd;        /* base uptime */
 	getmicrotime(&cnow);
-	lr->lr_basecal = cnow.tv_sec;		/* base calendar time */
+	lr->lr_basecal = cnow.tv_sec;           /* base calendar time */
 	lr->lr_basereachable = llreach_base;
 	lr->lr_reachable = LL_COMPUTE_RTIME(lr->lr_basereachable * 1000);
 	lr->lr_debug |= IFD_ATTACHED;
@@ -354,7 +359,7 @@ found:
 	IFLR_UNLOCK(lr);
 	lck_rw_done(&ifp->if_llreach_lock);
 
-	return (lr);
+	return lr;
 }
 
 void
@@ -375,7 +380,7 @@ ifnet_llreach_free(struct if_llreach *lr)
 	if (lr->lr_reqcnt > 0) {
 		IFLR_UNLOCK(lr);
 		lck_rw_done(&ifp->if_llreach_lock);
-		IFLR_REMREF(lr);		/* for caller */
+		IFLR_REMREF(lr);                /* for caller */
 		return;
 	}
 	if (!(lr->lr_debug & IFD_ATTACHED)) {
@@ -388,8 +393,8 @@ ifnet_llreach_free(struct if_llreach *lr)
 	IFLR_UNLOCK(lr);
 	lck_rw_done(&ifp->if_llreach_lock);
 
-	IFLR_REMREF(lr);			/* for RB tree */
-	IFLR_REMREF(lr);			/* for caller */
+	IFLR_REMREF(lr);                        /* for RB tree */
+	IFLR_REMREF(lr);                        /* for caller */
 }
 
 u_int64_t
@@ -401,8 +406,8 @@ ifnet_llreach_up2calexp(struct if_llreach *lr, u_int64_t uptime)
 		struct timeval cnow;
 		u_int64_t unow;
 
-		getmicrotime(&cnow);	/* current calendar time */
-		unow = net_uptime();	/* current approx. uptime */
+		getmicrotime(&cnow);    /* current calendar time */
+		unow = net_uptime();    /* current approx. uptime */
 		/*
 		 * Take into account possible calendar time changes;
 		 * adjust base calendar value if necessary, i.e.
@@ -415,13 +420,13 @@ ifnet_llreach_up2calexp(struct if_llreach *lr, u_int64_t uptime)
 		    (uptime - lr->lr_baseup);
 	}
 
-	return (calendar);
+	return calendar;
 }
 
 u_int64_t
 ifnet_llreach_up2upexp(struct if_llreach *lr, u_int64_t uptime)
 {
-	return (lr->lr_reachable + uptime);
+	return lr->lr_reachable + uptime;
 }
 
 int
@@ -436,16 +441,17 @@ ifnet_llreach_get_defrouter(struct ifnet *ifp, int af,
 	VERIFY(ifp != NULL && iflri != NULL &&
 	    (af == AF_INET || af == AF_INET6));
 
-	bzero(iflri, sizeof (*iflri));
+	bzero(iflri, sizeof(*iflri));
 
-	if ((rnh = rt_tables[af]) == NULL)
-		return (error);
+	if ((rnh = rt_tables[af]) == NULL) {
+		return error;
+	}
 
-	bzero(&dst_ss, sizeof (dst_ss));
-	bzero(&mask_ss, sizeof (mask_ss));
+	bzero(&dst_ss, sizeof(dst_ss));
+	bzero(&mask_ss, sizeof(mask_ss));
 	dst_ss.ss_family = af;
-	dst_ss.ss_len = (af == AF_INET) ? sizeof (struct sockaddr_in) :
-	    sizeof (struct sockaddr_in6);
+	dst_ss.ss_len = (af == AF_INET) ? sizeof(struct sockaddr_in) :
+	    sizeof(struct sockaddr_in6);
 
 	lck_mtx_lock(rnh_lock);
 	rt = rt_lookup(TRUE, SA(&dst_ss), SA(&mask_ss), rnh, ifp->if_index);
@@ -471,7 +477,7 @@ ifnet_llreach_get_defrouter(struct ifnet *ifp, int af,
 	}
 	lck_mtx_unlock(rnh_lock);
 
-	return (error);
+	return error;
 }
 
 static struct if_llreach *
@@ -485,7 +491,7 @@ iflr_alloc(int how)
 		lck_mtx_init(&lr->lr_lock, ifnet_lock_group, ifnet_lock_attr);
 		lr->lr_debug |= IFD_ALLOC;
 	}
-	return (lr);
+	return lr;
 }
 
 static void
@@ -515,17 +521,19 @@ iflr_free(struct if_llreach *lr)
 void
 iflr_addref(struct if_llreach *lr, int locked)
 {
-	if (!locked)
+	if (!locked) {
 		IFLR_LOCK(lr);
-	else
+	} else {
 		IFLR_LOCK_ASSERT_HELD(lr);
+	}
 
 	if (++lr->lr_refcnt == 0) {
 		panic("%s: lr=%p wraparound refcnt", __func__, lr);
 		/* NOTREACHED */
 	}
-	if (!locked)
+	if (!locked) {
 		IFLR_UNLOCK(lr);
+	}
 }
 
 void
@@ -543,7 +551,7 @@ iflr_remref(struct if_llreach *lr)
 	}
 	IFLR_UNLOCK(lr);
 
-	iflr_free(lr);	/* deallocate it */
+	iflr_free(lr);  /* deallocate it */
 }
 
 void
@@ -553,7 +561,7 @@ ifnet_lr2ri(struct if_llreach *lr, struct rt_reach_info *ri)
 
 	IFLR_LOCK_ASSERT_HELD(lr);
 
-	bzero(ri, sizeof (*ri));
+	bzero(ri, sizeof(*ri));
 	ifnet_lr2lri(lr, &lri);
 	ri->ri_refcnt = lri.lri_refcnt;
 	ri->ri_probes = lri.lri_probes;
@@ -568,7 +576,7 @@ ifnet_lr2iflri(struct if_llreach *lr, struct ifnet_llreach_info *iflri)
 {
 	IFLR_LOCK_ASSERT_HELD(lr);
 
-	bzero(iflri, sizeof (*iflri));
+	bzero(iflri, sizeof(*iflri));
 	/*
 	 * Note here we return request count, not actual memory refcnt.
 	 */
@@ -603,13 +611,13 @@ ifnet_lr2lri(struct if_llreach *lr, struct if_llreach_info *lri)
 {
 	IFLR_LOCK_ASSERT_HELD(lr);
 
-	bzero(lri, sizeof (*lri));
+	bzero(lri, sizeof(*lri));
 	/*
 	 * Note here we return request count, not actual memory refcnt.
 	 */
-	lri->lri_refcnt	= lr->lr_reqcnt;
+	lri->lri_refcnt = lr->lr_reqcnt;
 	lri->lri_ifindex = lr->lr_ifp->if_index;
-	lri->lri_probes	= lr->lr_probes;
+	lri->lri_probes = lr->lr_probes;
 	lri->lri_expire = ifnet_llreach_up2calexp(lr, lr->lr_lastrcvd);
 	lri->lri_proto = lr->lr_key.proto;
 	bcopy(&lr->lr_key.addr, &lri->lri_addr, IF_LLREACH_MAXLEN);
@@ -622,35 +630,37 @@ static int
 sysctl_llreach_ifinfo SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp)
-	int		*name, retval = 0;
-	unsigned int	namelen;
-	uint32_t	ifindex;
+	int             *name, retval = 0;
+	unsigned int    namelen;
+	uint32_t        ifindex;
 	struct if_llreach *lr;
 	struct if_llreach_info lri = {};
-	struct ifnet	*ifp;
+	struct ifnet    *ifp;
 
 	name = (int *)arg1;
 	namelen = (unsigned int)arg2;
 
-	if (req->newptr != USER_ADDR_NULL)
-		return (EPERM);
+	if (req->newptr != USER_ADDR_NULL) {
+		return EPERM;
+	}
 
-	if (namelen != 1)
-		return (EINVAL);
+	if (namelen != 1) {
+		return EINVAL;
+	}
 
 	ifindex = name[0];
 	ifnet_head_lock_shared();
 	if (ifindex <= 0 || ifindex > (u_int)if_index) {
 		printf("%s: ifindex %u out of range\n", __func__, ifindex);
 		ifnet_head_done();
-		return (ENOENT);
+		return ENOENT;
 	}
 
 	ifp = ifindex2ifnet[ifindex];
 	ifnet_head_done();
 	if (ifp == NULL) {
 		printf("%s: no ifp for ifindex %u\n", __func__, ifindex);
-		return (ENOENT);
+		return ENOENT;
 	}
 
 	lck_rw_lock_shared(&ifp->if_llreach_lock);
@@ -660,10 +670,11 @@ sysctl_llreach_ifinfo SYSCTL_HANDLER_ARGS
 		ifnet_lr2lri(lr, &lri);
 		IFLR_UNLOCK(lr);
 
-		if ((retval = SYSCTL_OUT(req, &lri, sizeof (lri))) != 0)
+		if ((retval = SYSCTL_OUT(req, &lri, sizeof(lri))) != 0) {
 			break;
+		}
 	}
 	lck_rw_done(&ifp->if_llreach_lock);
 
-	return (retval);
+	return retval;
 }

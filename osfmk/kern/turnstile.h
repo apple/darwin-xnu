@@ -134,46 +134,46 @@ typedef enum __attribute__((flag_enum)) turnstile_promote_policy {
  * The flag updates are done while holding the primitive interlock.
  * */
 
-#define TURNSTILE_STATE_THREAD		0x1
-#define TURNSTILE_STATE_FREELIST	0x2
-#define TURNSTILE_STATE_HASHTABLE	0x4
-#define TURNSTILE_STATE_PROPRIETOR	0x8
+#define TURNSTILE_STATE_THREAD          0x1
+#define TURNSTILE_STATE_FREELIST        0x2
+#define TURNSTILE_STATE_HASHTABLE       0x4
+#define TURNSTILE_STATE_PROPRIETOR      0x8
 
 /* Helper macros to set/unset turnstile state flags */
 #if DEVELOPMENT || DEBUG
 
 #define turnstile_state_init(ts, state)         \
 MACRO_BEGIN                                     \
-		ts->ts_state = state;           \
+	        ts->ts_state = state;           \
 MACRO_END
 
 #define turnstile_state_add(ts, state)          \
 MACRO_BEGIN                                     \
-		assert((ts->ts_state & (state)) == 0);  \
-		ts->ts_state |= state;                  \
+	        assert((ts->ts_state & (state)) == 0);  \
+	        ts->ts_state |= state;                  \
 MACRO_END
 
 #define turnstile_state_remove(ts, state)       \
 MACRO_BEGIN                                     \
-		assert(ts->ts_state & (state));         \
-		ts->ts_state &= ~(state);               \
+	        assert(ts->ts_state & (state));         \
+	        ts->ts_state &= ~(state);               \
 MACRO_END
 
 #else  /* DEVELOPMENT || DEBUG */
 
 #define turnstile_state_init(ts, state)         \
 MACRO_BEGIN                                     \
-		(void)ts;                       \
+	        (void)ts;                       \
 MACRO_END
 
 #define turnstile_state_add(ts, state)          \
 MACRO_BEGIN                                     \
-		(void)ts;                       \
+	        (void)ts;                       \
 MACRO_END
 
 #define turnstile_state_remove(ts, state)       \
 MACRO_BEGIN                                     \
-		(void)ts;                       \
+	        (void)ts;                       \
 MACRO_END
 
 #endif /* DEVELOPMENT || DEBUG */
@@ -306,7 +306,7 @@ struct turnstile {
 	turnstile_inheritor_t         ts_inheritor;          /* thread/turnstile inheriting the priority (IL, WL) */
 	union {
 		struct turnstile_list ts_free_turnstiles;    /* turnstile free list (IL) */
-	        SLIST_ENTRY(turnstile) ts_free_elm;          /* turnstile free list element (IL) */
+		SLIST_ENTRY(turnstile) ts_free_elm;          /* turnstile free list element (IL) */
 	};
 	struct priority_queue         ts_inheritor_queue;    /* Queue of turnstile with us as an inheritor (WL) */
 	union {
@@ -676,10 +676,10 @@ extern void workq_deallocate_safe(struct workqueue *wq);
 extern void workq_destroy(struct workqueue *wq);
 extern bool workq_is_current_thread_updating_turnstile(struct workqueue *wq);
 extern void workq_schedule_creator_turnstile_redrive(struct workqueue *wq,
-		bool locked);
+    bool locked);
 
 /* thread.c */
-extern void	workq_deallocate_enqueue(struct workqueue *wq);
+extern void     workq_deallocate_enqueue(struct workqueue *wq);
 
 #endif /* XNU_KERNEL_PRIVATE */
 

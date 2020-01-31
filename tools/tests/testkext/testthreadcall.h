@@ -8,10 +8,10 @@
 #include <IOKit/IOLib.h>
 
 class testthreadcall : public IOService {
-    OSDeclareDefaultStructors(testthreadcall);
-    
-    virtual bool start( IOService * provider );
-    
+	OSDeclareDefaultStructors(testthreadcall);
+
+	virtual bool start( IOService * provider );
+
 public:
 	thread_call_t tcall;
 	thread_call_t tcall2;

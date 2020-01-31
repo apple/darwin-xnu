@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -84,7 +84,7 @@
 #define ZONE_MAP_MIN CONFIG_ZONE_MAP_MIN
 
 /* Maximum zone size is 1.5G */
-#define ZONE_MAP_MAX (1024 * 1024 * 1536) 
+#define ZONE_MAP_MAX (1024 * 1024 * 1536)
 
 const vm_offset_t vm_min_kernel_address = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
 const vm_offset_t vm_max_kernel_address = VM_MAX_KERNEL_ADDRESS;
@@ -116,7 +116,7 @@ vm_mem_bootstrap_log(const char *message)
 void
 vm_mem_bootstrap(void)
 {
-	vm_offset_t	start, end;
+	vm_offset_t     start, end;
 	vm_size_t zsizearg;
 	mach_vm_size_t zsize;
 
@@ -152,42 +152,62 @@ vm_mem_bootstrap(void)
 	 * eats at most 2M of VA from the map.)
 	 */
 	if (!PE_parse_boot_argn("kmapoff", &kmapoff_pgcnt,
-	    sizeof (kmapoff_pgcnt)))
-		kmapoff_pgcnt = early_random() & 0x1ff;	/* 9 bits */
-
+	    sizeof(kmapoff_pgcnt))) {
+		kmapoff_pgcnt = early_random() & 0x1ff; /* 9 bits */
+	}
 	if (kmapoff_pgcnt > 0 &&
 	    vm_allocate_kernel(kernel_map, &kmapoff_kaddr,
-	    kmapoff_pgcnt * PAGE_SIZE_64, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_OSFMK) != KERN_SUCCESS)
+	    kmapoff_pgcnt * PAGE_SIZE_64, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_OSFMK) != KERN_SUCCESS) {
 		panic("cannot vm_allocate %u kernel_map pages", kmapoff_pgcnt);
+	}
 
 #if CONFIG_EMBEDDED
 	PE_parse_boot_argn("log_executable_mem_entry",
-			   &log_executable_mem_entry,
-			   sizeof (log_executable_mem_entry));
+	    &log_executable_mem_entry,
+	    sizeof(log_executable_mem_entry));
 #endif /* CONFIG_EMBEDDED */
 
 	vm_mem_bootstrap_log("pmap_init");
 	pmap_init();
-	
+
 	kmem_alloc_ready = TRUE;
 
-	if (PE_parse_boot_argn("zsize", &zsizearg, sizeof (zsizearg)))
-		zsize = zsizearg * 1024ULL * 1024ULL;
-	else {
-		zsize = sane_size >> 2;				/* Get target zone size as 1/4 of physical memory */
+	if (PE_parse_boot_argn("zsize", &zsizearg, sizeof(zsizearg))) {
+		zsize = zsizearg * (1024ULL * 1024);
+	} else {
+		zsize = sane_size >> 2;         /* Set target zone size as 1/4 of physical memory */
+#if defined(__LP64__)
+		zsize += zsize >> 1;
+#endif /* __LP64__ */
+
+#if defined(__x86_64__)
+		/*
+		 * The max_zonemap_size was based on physical memory and might make the
+		 * end of the zone go beyond what vm_page_[un]pack_ptr() can handle.
+		 * To fix that we'll limit the size of the zone map to be what a 256Gig
+		 * machine would have, but we'll retain the boot-args-specified size if
+		 * it was provided.
+		 */
+		vm_size_t       orig_zsize = zsize;
+
+		if (zsize > 256 * (1024ULL * 1024 * 1024) / 4) {
+			zsize = 256 * (1024ULL * 1024 * 1024) / 4;
+			printf("NOTE: zonemap size reduced from 0x%lx to 0x%lx\n",
+			    (uintptr_t)orig_zsize, (uintptr_t)zsize);
+		}
+#endif
 	}
 
-	if (zsize < ZONE_MAP_MIN)
-		zsize = ZONE_MAP_MIN;	/* Clamp to min */
-
-#if defined(__LP64__)
-	zsize += zsize >> 1;
-#endif /* __LP64__ */
-	if (zsize > sane_size >> 1)
-		zsize = sane_size >> 1;	/* Clamp to half of RAM max */
+	if (zsize < ZONE_MAP_MIN) {
+		zsize = ZONE_MAP_MIN;   /* Clamp to min */
+	}
+	if (zsize > sane_size >> 1) {
+		zsize = sane_size >> 1; /* Clamp to half of RAM max */
+	}
 #if !__LP64__
-	if (zsize > ZONE_MAP_MAX)
-		zsize = ZONE_MAP_MAX;	/* Clamp to 1.5GB max for K32 */
+	if (zsize > ZONE_MAP_MAX) {
+		zsize = ZONE_MAP_MAX;   /* Clamp to 1.5GB max for K32 */
+	}
 #endif /* !__LP64__ */
 
 	vm_mem_bootstrap_log("kext_alloc_init");
@@ -195,7 +215,7 @@ vm_mem_bootstrap(void)
 
 	vm_mem_bootstrap_log("zone_init");
 	assert((vm_size_t) zsize == zsize);
-	zone_init((vm_size_t) zsize);	/* Allocate address space for zones */
+	zone_init((vm_size_t) zsize);   /* Allocate address space for zones */
 
 	/* The vm_page_zone must be created prior to kalloc_init; that
 	 * routine can trigger zalloc()s (for e.g. mutex statistic structure
@@ -225,7 +245,7 @@ vm_mem_bootstrap(void)
 
 	vm_mem_bootstrap_log("vm_mem_bootstrap done");
 
-#ifdef	CONFIG_ZCACHE
+#ifdef  CONFIG_ZCACHE
 	zcache_bootstrap();
 #endif
 	vm_rtfault_record_init();

@@ -58,12 +58,12 @@ sdt_invop(__unused uintptr_t addr, __unused uintptr_t *stack, __unused uintptr_t
 			uintptr_t stack4 = *((uintptr_t*) regs->sp);
 
 			dtrace_probe(sdt->sdp_id, regs->r[0], regs->r[1], regs->r[2], regs->r[3], stack4);
-                
-			return (DTRACE_INVOP_NOP);
+
+			return DTRACE_INVOP_NOP;
 		}
 	}
 
-	return (0);
+	return 0;
 }
 
 struct frame {
@@ -75,8 +75,8 @@ struct frame {
 uint64_t
 sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 {
-#pragma unused(arg,id,parg)	/* __APPLE__ */
-  	uint64_t val = 0;
+#pragma unused(arg,id,parg)     /* __APPLE__ */
+	uint64_t val = 0;
 	struct frame *fp = (struct frame *)__builtin_frame_address(0);
 	uintptr_t *stack;
 	uintptr_t pc;
@@ -88,17 +88,16 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 	 * e.g. arg==5 refers to the 6th arg passed to the probed function.
 	 */
 	int inreg = 4;
-	
+
 	for (i = 1; i <= aframes; i++) {
 		fp = fp->backchain;
 		pc = fp->retaddr;
 
 		if (dtrace_invop_callsite_pre != NULL
-			&& pc  >  (uintptr_t)dtrace_invop_callsite_pre
-			&& pc  <= (uintptr_t)dtrace_invop_callsite_post) {
-
- 			/*
-                         * When we pass through the invalid op handler,
+		    && pc > (uintptr_t)dtrace_invop_callsite_pre
+		    && pc <= (uintptr_t)dtrace_invop_callsite_post) {
+			/*
+			 * When we pass through the invalid op handler,
 			 * we expect to find the save area structure,
 			 * pushed on the stack where we took the trap.
 			 * If the argument we seek is passed in a register, then
@@ -106,7 +105,7 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 			 * If the argument we seek is passed on the stack, then
 			 * we increment the frame pointer further, to find the
 			 * pushed args
- 			 */
+			 */
 
 			/* fp points to the dtrace_invop activation */
 			fp = fp->backchain; /* to the fbt_perfCallback activation */
@@ -131,7 +130,7 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 				argno -= inreg;
 			}
 			goto load;
- 		}
+		}
 	}
 
 	/*
@@ -143,24 +142,23 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 	 */
 	argno++; /* Advance past probeID */
 
-        if (argno <= inreg) {
+	if (argno <= inreg) {
 		/*
 		 * This shouldn't happen.  If the argument is passed in a
 		 * register then it should have been, well, passed in a
 		 * register...
 		 */
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
-		return (0);
+		return 0;
 	}
-	
+
 	argno -= (inreg + 1);
 	stack = (uintptr_t *)&fp[1]; /* Find marshalled arguments */
 
 load:
 	DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
-        /* dtrace_probe arguments arg0 .. arg4 are 64bits wide */
+	/* dtrace_probe arguments arg0 .. arg4 are 64bits wide */
 	val = (uint64_t)(*(((uintptr_t *)stack) + argno));
 	DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
-	return (val);
-
-}    
+	return val;
+}

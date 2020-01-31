@@ -2,7 +2,7 @@
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -193,142 +193,146 @@ static uint64_t gIOWorkLoopTestDeadline;
 static void
 TESAction(OSObject * owner, IOTimerEventSource * tes)
 {
-    if (mach_absolute_time() < gIOWorkLoopTestDeadline) tes->setTimeout(1, kMicrosecondScale);
+	if (mach_absolute_time() < gIOWorkLoopTestDeadline) {
+		tes->setTimeout(1, kMicrosecondScale);
+	}
 }
 
 static int
 IOWorkLoopTest(int newValue)
 {
-    IOReturn err;
-    uint32_t idx;
-    IOWorkLoop * wl;
-    IOTimerEventSource * tes;
-    IOInterruptEventSource * ies;
+	IOReturn err;
+	uint32_t idx;
+	IOWorkLoop * wl;
+	IOTimerEventSource * tes;
+	IOInterruptEventSource * ies;
 
-    wl = IOWorkLoop::workLoop();
-    assert(wl);
-    tes = IOTimerEventSource::timerEventSource(kIOTimerEventSourceOptionsPriorityWorkLoop, wl, &TESAction);
-    assert(tes);
-    err = wl->addEventSource(tes);
-    assert(kIOReturnSuccess == err);
-    clock_interval_to_deadline(100, kMillisecondScale, &gIOWorkLoopTestDeadline);
-    for (idx = 0; mach_absolute_time() < gIOWorkLoopTestDeadline; idx++)
-    {
-	tes->setTimeout(idx & 1023, kNanosecondScale);
-    }
-    tes->cancelTimeout();
-    wl->removeEventSource(tes);
-    tes->release();
+	wl = IOWorkLoop::workLoop();
+	assert(wl);
+	tes = IOTimerEventSource::timerEventSource(kIOTimerEventSourceOptionsPriorityWorkLoop, wl, &TESAction);
+	assert(tes);
+	err = wl->addEventSource(tes);
+	assert(kIOReturnSuccess == err);
+	clock_interval_to_deadline(100, kMillisecondScale, &gIOWorkLoopTestDeadline);
+	for (idx = 0; mach_absolute_time() < gIOWorkLoopTestDeadline; idx++) {
+		tes->setTimeout(idx & 1023, kNanosecondScale);
+	}
+	tes->cancelTimeout();
+	wl->removeEventSource(tes);
+	tes->release();
 
-    int value = 3;
+	int value = 3;
 
-    tes = IOTimerEventSource::timerEventSource(kIOTimerEventSourceOptionsDefault, wl, ^(IOTimerEventSource * tes){
-	kprintf("wl %p, value %d\n", wl, value);
-    });
-    err = wl->addEventSource(tes);
-    assert(kIOReturnSuccess == err);
+	tes = IOTimerEventSource::timerEventSource(kIOTimerEventSourceOptionsDefault, wl, ^(IOTimerEventSource * tes){
+		kprintf("wl %p, value %d\n", wl, value);
+	});
+	err = wl->addEventSource(tes);
+	assert(kIOReturnSuccess == err);
 
-    value = 2;
-    tes->setTimeout(1, kNanosecondScale);
-    IOSleep(1);
-    wl->removeEventSource(tes);
-    tes->release();
+	value = 2;
+	tes->setTimeout(1, kNanosecondScale);
+	IOSleep(1);
+	wl->removeEventSource(tes);
+	tes->release();
 
-    ies = IOInterruptEventSource::interruptEventSource(wl, NULL, 0, ^void(IOInterruptEventSource *sender, int count){
-	kprintf("ies block %p, %d\n", sender, count);
-    });
+	ies = IOInterruptEventSource::interruptEventSource(wl, NULL, 0, ^void (IOInterruptEventSource *sender, int count){
+		kprintf("ies block %p, %d\n", sender, count);
+	});
 
-    assert(ies);
-    kprintf("ies %p\n", ies);
-    err = wl->addEventSource(ies);
-    assert(kIOReturnSuccess == err);
-    ies->interruptOccurred(NULL, NULL, 0);
-    IOSleep(1);
-    ies->interruptOccurred(NULL, NULL, 0);
-    IOSleep(1);
-    wl->removeEventSource(ies);
-    ies->release();
+	assert(ies);
+	kprintf("ies %p\n", ies);
+	err = wl->addEventSource(ies);
+	assert(kIOReturnSuccess == err);
+	ies->interruptOccurred(NULL, NULL, 0);
+	IOSleep(1);
+	ies->interruptOccurred(NULL, NULL, 0);
+	IOSleep(1);
+	wl->removeEventSource(ies);
+	ies->release();
 
-    wl->release();
+	wl->release();
 
-    return (0);
+	return 0;
 }
 
 static int
 OSCollectionTest(int newValue)
 {
-    OSArray * array = OSArray::withCapacity(8);
-    array->setObject(kOSBooleanTrue);
-    array->setObject(kOSBooleanFalse);
-    array->setObject(kOSBooleanFalse);
-    array->setObject(kOSBooleanTrue);
-    array->setObject(kOSBooleanFalse);
-    array->setObject(kOSBooleanTrue);
+	OSArray * array = OSArray::withCapacity(8);
+	array->setObject(kOSBooleanTrue);
+	array->setObject(kOSBooleanFalse);
+	array->setObject(kOSBooleanFalse);
+	array->setObject(kOSBooleanTrue);
+	array->setObject(kOSBooleanFalse);
+	array->setObject(kOSBooleanTrue);
 
-    __block unsigned int index;
-    index = 0;
-    array->iterateObjects(^bool(OSObject * obj) {
-	kprintf("%d:%d ", index, (obj == kOSBooleanTrue) ? 1 : (obj == kOSBooleanFalse) ? 0 : 2);
-	index++;
-	return (false);
-    });
-    kprintf("\n");
-    array->release();
+	__block unsigned int index;
+	index = 0;
+	array->iterateObjects(^bool (OSObject * obj) {
+		kprintf("%d:%d ", index, (obj == kOSBooleanTrue) ? 1 : (obj == kOSBooleanFalse) ? 0 : 2);
+		index++;
+		return false;
+	});
+	kprintf("\n");
+	array->release();
 
-    OSDictionary * dict = IOService::resourceMatching("hello");
-    assert(dict);
-    index = 0;
-    dict->iterateObjects(^bool(const OSSymbol * sym, OSObject * obj) {
-	OSString * str = OSDynamicCast(OSString, obj);
-	assert(str);
-	kprintf("%d:%s=%s\n", index, sym->getCStringNoCopy(), str->getCStringNoCopy());
-	index++;
-	return (false);
-    });
-    dict->release();
+	OSDictionary * dict = IOService::resourceMatching("hello");
+	assert(dict);
+	index = 0;
+	dict->iterateObjects(^bool (const OSSymbol * sym, OSObject * obj) {
+		OSString * str = OSDynamicCast(OSString, obj);
+		assert(str);
+		kprintf("%d:%s=%s\n", index, sym->getCStringNoCopy(), str->getCStringNoCopy());
+		index++;
+		return false;
+	});
+	dict->release();
 
-    OSSerializer * serializer = OSSerializer::withBlock(^bool(OSSerialize * s){
-	return (gIOBSDUnitKey->serialize(s));
-    });
-    assert(serializer);
-    IOService::getPlatform()->setProperty("OSSerializer_withBlock", serializer);
-    serializer->release();
+	OSSerializer * serializer = OSSerializer::withBlock(^bool (OSSerialize * s){
+		return gIOBSDUnitKey->serialize(s);
+	});
+	assert(serializer);
+	IOService::getPlatform()->setProperty("OSSerializer_withBlock", serializer);
+	serializer->release();
 
-    return (0);
+	return 0;
 }
 
 #if 0
 #include <IOKit/IOUserClient.h>
 class TestUserClient : public IOUserClient
 {
-    OSDeclareDefaultStructors(TestUserClient);
-    virtual void stop( IOService *provider) APPLE_KEXT_OVERRIDE;
-    virtual bool finalize(IOOptionBits options) APPLE_KEXT_OVERRIDE;
-    virtual IOReturn externalMethod( uint32_t selector,
-                    IOExternalMethodArguments * arguments,
-                    IOExternalMethodDispatch * dispatch,
-                    OSObject * target,
-                    void * reference ) APPLE_KEXT_OVERRIDE;
+	OSDeclareDefaultStructors(TestUserClient);
+	virtual void stop( IOService *provider) APPLE_KEXT_OVERRIDE;
+	virtual bool finalize(IOOptionBits options) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn externalMethod( uint32_t selector,
+	    IOExternalMethodArguments * arguments,
+	    IOExternalMethodDispatch * dispatch,
+	    OSObject * target,
+	    void * reference ) APPLE_KEXT_OVERRIDE;
 };
 
-void TestUserClient::stop( IOService *provider)
+void
+TestUserClient::stop( IOService *provider)
 {
-    kprintf("TestUserClient::stop\n");
+	kprintf("TestUserClient::stop\n");
 }
-bool TestUserClient::finalize(IOOptionBits options)
+bool
+TestUserClient::finalize(IOOptionBits options)
 {
-    kprintf("TestUserClient::finalize\n");
-    return(true);
+	kprintf("TestUserClient::finalize\n");
+	return true;
 }
-IOReturn TestUserClient::externalMethod( uint32_t selector,
-                IOExternalMethodArguments * arguments,
-                IOExternalMethodDispatch * dispatch,
-                OSObject * target,
-                void * reference )
+IOReturn
+TestUserClient::externalMethod( uint32_t selector,
+    IOExternalMethodArguments * arguments,
+    IOExternalMethodDispatch * dispatch,
+    OSObject * target,
+    void * reference )
 {
-    getProvider()->terminate();
-    IOSleep(500);
-    return (0);
+	getProvider()->terminate();
+	IOSleep(500);
+	return 0;
 }
 OSDefineMetaClassAndStructors(TestUserClient, IOUserClient);
 #endif
@@ -336,47 +340,47 @@ OSDefineMetaClassAndStructors(TestUserClient, IOUserClient);
 static int
 IOServiceTest(int newValue)
 {
-    OSDictionary      * matching;
-    IONotifier        * note;
-    __block IOService * found;
+	OSDictionary      * matching;
+	IONotifier        * note;
+	__block IOService * found;
 
 #if 0
-    found = new IOService;
-    found->init();
-    found->setName("IOTestUserClientProvider");
-    found->attach(IOService::getPlatform());
-    found->setProperty("IOUserClientClass", "TestUserClient");
-    found->registerService();
+	found = new IOService;
+	found->init();
+	found->setName("IOTestUserClientProvider");
+	found->attach(IOService::getPlatform());
+	found->setProperty("IOUserClientClass", "TestUserClient");
+	found->registerService();
 #endif
 
-    matching = IOService::serviceMatching("IOPlatformExpert");
-    assert(matching);
-    found = nullptr;
-    note = IOService::addMatchingNotification(gIOMatchedNotification, matching, 0,
-	^bool(IOService * newService, IONotifier * notifier) {
-	    kprintf("found %s, %d\n", newService->getName(), newService->getRetainCount());
-	    found = newService;
-	    found->retain();
-	    return (true);
+	matching = IOService::serviceMatching("IOPlatformExpert");
+	assert(matching);
+	found = nullptr;
+	note = IOService::addMatchingNotification(gIOMatchedNotification, matching, 0,
+	    ^bool (IOService * newService, IONotifier * notifier) {
+		kprintf("found %s, %d\n", newService->getName(), newService->getRetainCount());
+		found = newService;
+		found->retain();
+		return true;
 	}
-    );
-    assert(note);
-    assert(found);
-    matching->release();
-    note->remove();
+	    );
+	assert(note);
+	assert(found);
+	matching->release();
+	note->remove();
 
-    note = found->registerInterest(gIOBusyInterest,
-	^IOReturn(uint32_t messageType, IOService * provider,
-		  void   * messageArgument, size_t argSize) {
-	kprintf("%p messageType 0x%08x %p\n", provider, messageType, messageArgument);
-	return (kIOReturnSuccess);
-    });
-    assert(note);
-    IOSleep(1*1000);
-    note->remove();
-    found->release();
+	note = found->registerInterest(gIOBusyInterest,
+	    ^IOReturn (uint32_t messageType, IOService * provider,
+	    void   * messageArgument, size_t argSize) {
+		kprintf("%p messageType 0x%08x %p\n", provider, messageType, messageArgument);
+		return kIOReturnSuccess;
+	});
+	assert(note);
+	IOSleep(1 * 1000);
+	note->remove();
+	found->release();
 
-    return (0);
+	return 0;
 }
 
 #endif  /* DEVELOPMENT || DEBUG */
@@ -384,64 +388,60 @@ IOServiceTest(int newValue)
 static int
 sysctl_iokittest(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
-    int error;
-    int newValue, changed;
+	int error;
+	int newValue, changed;
 
-    error = sysctl_io_number(req, 0, sizeof(int), &newValue, &changed);
-    if (error) return (error);
+	error = sysctl_io_number(req, 0, sizeof(int), &newValue, &changed);
+	if (error) {
+		return error;
+	}
 
 #if DEVELOPMENT || DEBUG
-    if (changed && (66==newValue))
-    {
-	IOReturn ret;
-	IOWorkLoop * wl = IOWorkLoop::workLoop();
-	IOCommandGate * cg = IOCommandGate::commandGate(wl);
-	ret = wl->addEventSource(cg);
+	if (changed && (66 == newValue)) {
+		IOReturn ret;
+		IOWorkLoop * wl = IOWorkLoop::workLoop();
+		IOCommandGate * cg = IOCommandGate::commandGate(wl);
+		ret = wl->addEventSource(cg);
 
-	struct x
-	{
-	    uint64_t h;
-	    uint64_t l;
-	};
-	struct x y;
+		struct x {
+			uint64_t h;
+			uint64_t l;
+		};
+		struct x y;
 
-	y.h = 0x1111111122222222;
-	y.l = 0x3333333344444444;
+		y.h = 0x1111111122222222;
+		y.l = 0x3333333344444444;
 
-	kprintf("ret1 %d\n", ret);
-	ret = cg->runActionBlock(^(){
-	    printf("hello %d 0x%qx\n", wl->inGate(), y.h);
-	    return 99;
-	});
-	kprintf("ret %d\n", ret);
-    }
+		kprintf("ret1 %d\n", ret);
+		ret = cg->runActionBlock(^(){
+			printf("hello %d 0x%qx\n", wl->inGate(), y.h);
+			return 99;
+		});
+		kprintf("ret %d\n", ret);
+	}
 
-    if (changed && (999==newValue))
-    {
-	OSData * data = OSData::withCapacity(16);
-	data->release();
-	data->release();
-    }
+	if (changed && (999 == newValue)) {
+		OSData * data = OSData::withCapacity(16);
+		data->release();
+		data->release();
+	}
 
 
-    if (changed && newValue)
-    {
-	error = IOWorkLoopTest(newValue);
-	assert(KERN_SUCCESS == error);
-	error = IOServiceTest(newValue);
-	assert(KERN_SUCCESS == error);
-	error = OSCollectionTest(newValue);
-	assert(KERN_SUCCESS == error);
-	error = IOMemoryDescriptorTest(newValue);
-	assert(KERN_SUCCESS == error);
-    }
+	if (changed && newValue) {
+		error = IOWorkLoopTest(newValue);
+		assert(KERN_SUCCESS == error);
+		error = IOServiceTest(newValue);
+		assert(KERN_SUCCESS == error);
+		error = OSCollectionTest(newValue);
+		assert(KERN_SUCCESS == error);
+		error = IOMemoryDescriptorTest(newValue);
+		assert(KERN_SUCCESS == error);
+	}
 #endif  /* DEVELOPMENT || DEBUG */
 
-    return (error);
+	return error;
 }
 
 SYSCTL_PROC(_kern, OID_AUTO, iokittest,
-	CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
-	0, 0, sysctl_iokittest, "I", "");
-
-
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
+    0, 0, sysctl_iokittest, "I", "");

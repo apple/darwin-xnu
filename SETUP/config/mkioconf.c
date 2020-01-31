@@ -2,7 +2,7 @@
  * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * "Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
  * Reserved.  This file contains Original Code and/or Modifications of
  * Original Code as defined in and that are subject to the Apple Public
@@ -10,7 +10,7 @@
  * except in compliance with the License.  Please obtain a copy of the
  * License at http://www.apple.com/publicsource and read it before using
  * this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -18,10 +18,10 @@
  * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
  * License for the specific language governing rights and limitations
  * under the License."
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1990 Carnegie-Mellon University
  * Copyright (c) 1989 Carnegie-Mellon University
@@ -30,7 +30,7 @@
  * All rights reserved.  The CMU software License Agreement specifies
  * the terms and conditions for use and redistribution.
  */
- 
+
 /*
  * Copyright (c) 1980 Regents of the University of California.
  * All rights reserved.
@@ -49,14 +49,14 @@
  */
 
 #include <stdio.h>
-#include <unistd.h>	/* for unlink */
+#include <unistd.h>     /* for unlink */
 #include "parser.h"
 #include "config.h"
 
 /*
  * build the ioconf.c file
  */
-void	pseudo_inits(FILE *fp);
+void    pseudo_inits(FILE *fp);
 
 void
 mkioconf(void)
@@ -71,7 +71,7 @@ mkioconf(void)
 	}
 	fprintf(fp, "#include <dev/busvar.h>\n");
 	fprintf(fp, "\n");
-	pseudo_inits (fp);
+	pseudo_inits(fp);
 	(void) fclose(fp);
 }
 
@@ -83,17 +83,20 @@ pseudo_inits(FILE *fp)
 
 	fprintf(fp, "\n");
 	for (dp = dtab; dp != 0; dp = dp->d_next) {
-		if (dp->d_type != PSEUDO_DEVICE || dp->d_init == 0)
+		if (dp->d_type != PSEUDO_DEVICE || dp->d_init == 0) {
 			continue;
+		}
 		fprintf(fp, "extern int %s(int);\n", dp->d_init);
 	}
 	fprintf(fp, "\nstruct pseudo_init pseudo_inits[] = {\n");
 	for (dp = dtab; dp != 0; dp = dp->d_next) {
-		if (dp->d_type != PSEUDO_DEVICE || dp->d_init == 0)
+		if (dp->d_type != PSEUDO_DEVICE || dp->d_init == 0) {
 			continue;
+		}
 		count = dp->d_slave;
-		if (count <= 0)
+		if (count <= 0) {
 			count = 1;
+		}
 		fprintf(fp, "\t{%d,\t%s},\n", count, dp->d_init);
 	}
 	fprintf(fp, "\t{0,\t0},\n};\n");

@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -82,9 +82,9 @@
 
 #include <mach/vm_types.h>
 #include <mach/vm_param.h>
-#include <vm/vm_kern.h>		/* for kernel_map */
+#include <vm/vm_kern.h>         /* for kernel_map */
 
-#include <pexpert/pexpert.h>	/* for PE_parse_boot_argn */
+#include <pexpert/pexpert.h>    /* for PE_parse_boot_argn */
 
 boolean_t iskmemdev(dev_t dev);
 
@@ -95,7 +95,7 @@ boolean_t dev_kmem_mask_top_bit;
 void dev_kmem_init(void);
 
 #if defined(__x86_64__)
-extern addr64_t  kvtophys(vm_offset_t va); 
+extern addr64_t  kvtophys(vm_offset_t va);
 #else
 #error need kvtophys prototype
 #endif
@@ -113,28 +113,29 @@ int mmrw(dev_t dev, struct uio *uio, enum uio_rw rw);
 int
 mmread(dev_t dev, struct uio *uio)
 {
-	return (mmrw(dev, uio, UIO_READ));
+	return mmrw(dev, uio, UIO_READ);
 }
 
 int
 mmwrite(dev_t dev, struct uio *uio)
 {
-	return (mmrw(dev, uio, UIO_WRITE));
+	return mmrw(dev, uio, UIO_WRITE);
 }
 
 int
-mmioctl(dev_t dev, u_long cmd, __unused caddr_t data, 
-		__unused int flag, __unused struct proc *p)
+mmioctl(dev_t dev, u_long cmd, __unused caddr_t data,
+    __unused int flag, __unused struct proc *p)
 {
 	int minnum = minor(dev);
 
 	if (0 == minnum || 1 == minnum) {
 		/* /dev/mem and /dev/kmem */
 #if CONFIG_DEV_KMEM
-		if (!dev_kmem_enabled)
-			return (ENODEV);
+		if (!dev_kmem_enabled) {
+			return ENODEV;
+		}
 #else
-		return (ENODEV);
+		return ENODEV;
 #endif
 	}
 
@@ -147,7 +148,7 @@ mmioctl(dev_t dev, u_long cmd, __unused caddr_t data,
 		return ENODEV;
 	}
 
-	return (0);
+	return 0;
 }
 
 int
@@ -160,18 +161,18 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 		uio_update(uio, 0);
 
 		switch (minor(dev)) {
-
 		/* minor device 0 is physical memory */
 		case 0:
-			return (ENODEV);
+			return ENODEV;
 
 		/* minor device 1 is kernel memory */
 		case 1:
 #if !CONFIG_DEV_KMEM
-			return (ENODEV);
+			return ENODEV;
 #else /* CONFIG_DEV_KMEM */
-			if (!dev_kmem_enabled)
-				return (ENODEV);
+			if (!dev_kmem_enabled) {
+				return ENODEV;
+			}
 
 			vm_address_t kaddr = (vm_address_t)uio->uio_offset;
 			if (dev_kmem_mask_top_bit) {
@@ -184,7 +185,7 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 				const vm_address_t top_bit = (~((vm_address_t)0)) ^ (~((vm_address_t)0) >> 1UL);
 				if (kaddr & top_bit) {
 					/* top bit should not be set already */
-					return (EFAULT);
+					return EFAULT;
 				}
 				kaddr |= top_bit;
 			}
@@ -193,67 +194,74 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 
 			/* Do some sanity checking */
 			if ((kaddr > (VM_MAX_KERNEL_ADDRESS - c)) ||
-				(kaddr <= VM_MIN_KERNEL_AND_KEXT_ADDRESS))
+			    (kaddr <= VM_MIN_KERNEL_AND_KEXT_ADDRESS)) {
 				goto fault;
-			if (!kernacc(kaddr, c))
+			}
+			if (!kernacc(kaddr, c)) {
 				goto fault;
+			}
 			error = uiomove((const char *)(uintptr_t)kaddr,
-					(int)c, uio);
-			if (error)
+			    (int)c, uio);
+			if (error) {
 				break;
+			}
 
 			continue; /* Keep going until UIO is done */
 #endif /* CONFIG_DEV_KMEM */
 
 		/* minor device 2 is EOF/RATHOLE */
 		case 2:
-			if (rw == UIO_READ)
-				return (0);
+			if (rw == UIO_READ) {
+				return 0;
+			}
 			c = uio_curriovlen(uio);
 
 			error = 0; /* Always succeeds, always consumes all input */
 			break;
 		case 3:
-			if(devzerobuf == NULL) {
-				MALLOC(devzerobuf, caddr_t,PAGE_SIZE, M_TEMP, M_WAITOK);
+			if (devzerobuf == NULL) {
+				MALLOC(devzerobuf, caddr_t, PAGE_SIZE, M_TEMP, M_WAITOK);
 				bzero(devzerobuf, PAGE_SIZE);
 			}
-			if(uio->uio_rw == UIO_WRITE) {
+			if (uio->uio_rw == UIO_WRITE) {
 				c = uio_curriovlen(uio);
 
 				error = 0; /* Always succeeds, always consumes all input */
 				break;
 			}
 
- 			c = min(uio_curriovlen(uio), PAGE_SIZE);
+			c = min(uio_curriovlen(uio), PAGE_SIZE);
 			error = uiomove(devzerobuf, (int)c, uio);
-			if (error)
+			if (error) {
 				break;
+			}
 
 			continue; /* Keep going until UIO is done */
 		default:
-			return (ENODEV);
+			return ENODEV;
 		}
-			
-		if (error)
+
+		if (error) {
 			break;
+		}
 
 		uio_update(uio, c);
 	}
-	return (error);
+	return error;
 #if CONFIG_DEV_KMEM
 fault:
-	return (EFAULT);
+	return EFAULT;
 #endif
 }
 
 #if CONFIG_DEV_KMEM
-void dev_kmem_init(void)
+void
+dev_kmem_init(void)
 {
 	uint32_t kmem;
 
 	if (PE_i_can_has_debugger(NULL) &&
-	    PE_parse_boot_argn("kmem", &kmem, sizeof (kmem))) {
+	    PE_parse_boot_argn("kmem", &kmem, sizeof(kmem))) {
 		if (kmem & 0x1) {
 			dev_kmem_enabled = TRUE;
 		}
@@ -265,23 +273,24 @@ void dev_kmem_init(void)
 
 boolean_t
 kernacc(
-    off_t 	start,
-    size_t	len
-)
+	off_t       start,
+	size_t      len
+	)
 {
 	off_t base;
 	off_t end;
-    
+
 	base = trunc_page(start);
 	end = start + len;
-	
-	while (base < end) {
-	  if(kvtophys((vm_offset_t)base) == 0ULL)
-			return(FALSE);
-		base += page_size;
-	}   
 
-	return (TRUE);
+	while (base < end) {
+		if (kvtophys((vm_offset_t)base) == 0ULL) {
+			return FALSE;
+		}
+		base += page_size;
+	}
+
+	return TRUE;
 }
 
 #endif /* CONFIG_DEV_KMEM */
@@ -289,7 +298,8 @@ kernacc(
 /*
  * Returns true if dev is /dev/mem or /dev/kmem.
  */
-boolean_t iskmemdev(dev_t dev)
+boolean_t
+iskmemdev(dev_t dev)
 {
-	return (major(dev) == 3 && minor(dev) < 2);
+	return major(dev) == 3 && minor(dev) < 2;
 }

@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1997 Apple Computer, Inc. All Rights Reserved */
@@ -72,7 +72,7 @@
  * defined we allocate an array of bits -- 1/8th as much memory but
  * setbit(), clrbit(), and isset() take more cpu. If QBITS is
  * undefined, we just use an array of bytes.
- * 
+ *
  * If TTY_QUOTE functionality isn't required by a line discipline,
  * it can free c_cq and set it to NULL. This speeds things up,
  * and also does not use any extra memory. This is useful for (say)
@@ -82,9 +82,9 @@
 #define QBITS
 
 #ifdef QBITS
-#define QMEM(n)		((((n)-1)/NBBY)+1)
+#define QMEM(n)         ((((n)-1)/NBBY)+1)
 #else
-#define QMEM(n)		(n)
+#define QMEM(n)         (n)
 #endif
 
 
@@ -104,34 +104,38 @@ int
 clalloc(struct clist *clp, int size, int quot)
 {
 	MALLOC_ZONE(clp->c_cs, u_char *, size, M_TTYS, M_WAITOK);
-	if (!clp->c_cs)
-		return (-1);
+	if (!clp->c_cs) {
+		return -1;
+	}
 	bzero(clp->c_cs, size);
 
-	if(quot) {
+	if (quot) {
 		MALLOC_ZONE(clp->c_cq, u_char *, QMEM(size), M_TTYS, M_WAITOK);
 		if (!clp->c_cq) {
 			FREE_ZONE(clp->c_cs, size, M_TTYS);
-			return (-1);
+			return -1;
 		}
 		bzero(clp->c_cs, QMEM(size));
-	} else
+	} else {
 		clp->c_cq = (u_char *)0;
+	}
 
 	clp->c_cf = clp->c_cl = (u_char *)0;
 	clp->c_ce = clp->c_cs + size;
 	clp->c_cn = size;
 	clp->c_cc = 0;
-	return (0);
+	return 0;
 }
 
 void
 clfree(struct clist *clp)
 {
-	if(clp->c_cs)
+	if (clp->c_cs) {
 		FREE_ZONE(clp->c_cs, clp->c_cn, M_TTYS);
-	if(clp->c_cq)
+	}
+	if (clp->c_cq) {
 		FREE_ZONE(clp->c_cq, QMEM(clp->c_cn), M_TTYS);
+	}
 	clp->c_cs = clp->c_cq = (u_char *)0;
 }
 
@@ -144,23 +148,28 @@ getc(struct clist *clp)
 {
 	int c = -1;
 
-	if (clp->c_cc == 0)
+	if (clp->c_cc == 0) {
 		goto out;
+	}
 
 	c = *clp->c_cf & 0xff;
 	if (clp->c_cq) {
 #ifdef QBITS
-		if (isset(clp->c_cq, clp->c_cf - clp->c_cs) )
+		if (isset(clp->c_cq, clp->c_cf - clp->c_cs)) {
 			c |= TTY_QUOTE;
+		}
 #else
-		if (*(clp->c_cf - clp->c_cs + clp->c_cq))
+		if (*(clp->c_cf - clp->c_cs + clp->c_cq)) {
 			c |= TTY_QUOTE;
+		}
 #endif
 	}
-	if (++clp->c_cf == clp->c_ce)
+	if (++clp->c_cf == clp->c_ce) {
 		clp->c_cf = clp->c_cs;
-	if (--clp->c_cc == 0)
+	}
+	if (--clp->c_cc == 0) {
 		clp->c_cf = clp->c_cl = (u_char *)0;
+	}
 out:
 	return c;
 }
@@ -178,20 +187,24 @@ q_to_b(struct clist *clp, u_char *cp, int count)
 	/* optimize this while loop */
 	while (count > 0 && clp->c_cc > 0) {
 		cc = clp->c_cl - clp->c_cf;
-		if (clp->c_cf >= clp->c_cl)
+		if (clp->c_cf >= clp->c_cl) {
 			cc = clp->c_ce - clp->c_cf;
-		if (cc > count)
+		}
+		if (cc > count) {
 			cc = count;
+		}
 		bcopy(clp->c_cf, p, cc);
 		count -= cc;
 		p += cc;
 		clp->c_cc -= cc;
 		clp->c_cf += cc;
-		if (clp->c_cf == clp->c_ce)
+		if (clp->c_cf == clp->c_ce) {
 			clp->c_cf = clp->c_cs;
+		}
 	}
-	if (clp->c_cc == 0)
+	if (clp->c_cc == 0) {
 		clp->c_cf = clp->c_cl = (u_char *)0;
+	}
 	return p - cp;
 }
 
@@ -206,13 +219,15 @@ ndqb(struct clist *clp, int flag)
 	int i;
 	int cc;
 
-	if ((cc = clp->c_cc) == 0)
+	if ((cc = clp->c_cc) == 0) {
 		goto out;
+	}
 
 	if (flag == 0) {
 		count = clp->c_cl - clp->c_cf;
-		if (count <= 0)
+		if (count <= 0) {
 			count = clp->c_ce - clp->c_cf;
+		}
 		goto out;
 	}
 
@@ -221,14 +236,16 @@ ndqb(struct clist *clp, int flag)
 		while (cc-- > 0 && !(clp->c_cs[i++] & (flag & ~TTY_QUOTE) ||
 		    isset(clp->c_cq, i))) {
 			count++;
-			if (i == clp->c_cn)
+			if (i == clp->c_cn) {
 				break;
+			}
 		}
 	} else {
 		while (cc-- > 0 && !(clp->c_cs[i++] & flag)) {
 			count++;
-			if (i == clp->c_cn)
+			if (i == clp->c_cn) {
 				break;
+			}
 		}
 	}
 out:
@@ -251,18 +268,22 @@ ndflush(struct clist *clp, int count)
 	/* optimize this while loop */
 	while (count > 0 && clp->c_cc > 0) {
 		cc = clp->c_cl - clp->c_cf;
-		if (clp->c_cf >= clp->c_cl)
+		if (clp->c_cf >= clp->c_cl) {
 			cc = clp->c_ce - clp->c_cf;
-		if (cc > count)
+		}
+		if (cc > count) {
 			cc = count;
+		}
 		count -= cc;
 		clp->c_cc -= cc;
 		clp->c_cf += cc;
-		if (clp->c_cf == clp->c_ce)
+		if (clp->c_cf == clp->c_ce) {
 			clp->c_cf = clp->c_cs;
+		}
 	}
-	if (clp->c_cc == 0)
+	if (clp->c_cc == 0) {
 		clp->c_cf = clp->c_cl = (u_char *)0;
+	}
 }
 
 /*
@@ -278,7 +299,7 @@ putc(int c, struct clist *clp)
 #if DIAGNOSTIC
 			//printf("putc: required clalloc\n");
 #endif
-			if(clalloc(clp, 1024, 1)) {
+			if (clalloc(clp, 1024, 1)) {
 out:
 				return -1;
 			}
@@ -286,17 +307,19 @@ out:
 		clp->c_cf = clp->c_cl = clp->c_cs;
 	}
 
-	if (clp->c_cc == clp->c_cn)
+	if (clp->c_cc == clp->c_cn) {
 		goto out;
+	}
 
 	*clp->c_cl = c & 0xff;
 	i = clp->c_cl - clp->c_cs;
 	if (clp->c_cq) {
 #ifdef QBITS
-		if (c & TTY_QUOTE)
-			setbit(clp->c_cq, i); 
-		else
+		if (c & TTY_QUOTE) {
+			setbit(clp->c_cq, i);
+		} else {
 			clrbit(clp->c_cq, i);
+		}
 #else
 		q = clp->c_cq + i;
 		*q = (c & TTY_QUOTE) ? 1 : 0;
@@ -304,8 +327,9 @@ out:
 	}
 	clp->c_cc++;
 	clp->c_cl++;
-	if (clp->c_cl == clp->c_ce)
+	if (clp->c_cl == clp->c_ce) {
 		clp->c_cl = clp->c_cs;
+	}
 	return 0;
 }
 
@@ -323,29 +347,31 @@ clrbits(u_char *cp, int off, int len)
 	int i;
 	u_char mask;
 
-	if(len==1) {
+	if (len == 1) {
 		clrbit(cp, off);
 		return;
 	}
 
 	sby = off / NBBY;
 	sbi = off % NBBY;
-	eby = (off+len) / NBBY;
-	ebi = (off+len) % NBBY;
+	eby = (off + len) / NBBY;
+	ebi = (off + len) % NBBY;
 	if (sby == eby) {
 		mask = ((1 << (ebi - sbi)) - 1) << sbi;
 		cp[sby] &= ~mask;
 	} else {
-		mask = (1<<sbi) - 1;
+		mask = (1 << sbi) - 1;
 		cp[sby++] &= mask;
 
-		mask = (1<<ebi) - 1;
+		mask = (1 << ebi) - 1;
 		/* handle remainder bits, if any, for a non-0 ebi value */
-		if (mask)
+		if (mask) {
 			cp[eby] &= ~mask;
+		}
 
-		for (i = sby; i < eby; i++)
+		for (i = sby; i < eby; i++) {
 			cp[i] = 0x00;
+		}
 	}
 }
 #endif
@@ -360,8 +386,9 @@ b_to_q(const u_char *cp, int count, struct clist *clp)
 	int cc;
 	const u_char *p = cp;
 
-	if (count <= 0)
+	if (count <= 0) {
 		return 0;
+	}
 
 
 	if (clp->c_cc == 0) {
@@ -369,22 +396,26 @@ b_to_q(const u_char *cp, int count, struct clist *clp)
 #if DIAGNOSTIC
 			printf("b_to_q: required clalloc\n");
 #endif
-			if(clalloc(clp, 1024, 1))
+			if (clalloc(clp, 1024, 1)) {
 				goto out;
+			}
 		}
 		clp->c_cf = clp->c_cl = clp->c_cs;
 	}
 
-	if (clp->c_cc == clp->c_cn)
+	if (clp->c_cc == clp->c_cn) {
 		goto out;
+	}
 
 	/* optimize this while loop */
 	while (count > 0 && clp->c_cc < clp->c_cn) {
 		cc = clp->c_ce - clp->c_cl;
-		if (clp->c_cf > clp->c_cl)
+		if (clp->c_cf > clp->c_cl) {
 			cc = clp->c_cf - clp->c_cl;
-		if (cc > count)
+		}
+		if (cc > count) {
 			cc = count;
+		}
 		bcopy(p, clp->c_cl, cc);
 		if (clp->c_cq) {
 #ifdef QBITS
@@ -397,8 +428,9 @@ b_to_q(const u_char *cp, int count, struct clist *clp)
 		count -= cc;
 		clp->c_cc += cc;
 		clp->c_cl += cc;
-		if (clp->c_cl == clp->c_ce)
+		if (clp->c_cl == clp->c_ce) {
 			clp->c_cl = clp->c_cs;
+		}
 	}
 out:
 	return count;
@@ -423,20 +455,25 @@ nextc(struct clist *clp, u_char *cp, int *c)
 		 */
 		cc = clp->c_cc;
 	}
-	if (cc == 0 || cp == NULL)
+	if (cc == 0 || cp == NULL) {
 		return NULL;
-	if (--cc == 0)
+	}
+	if (--cc == 0) {
 		return NULL;
-	if (++cp == clp->c_ce)
+	}
+	if (++cp == clp->c_ce) {
 		cp = clp->c_cs;
+	}
 	*c = *cp & 0xff;
 	if (clp->c_cq) {
 #ifdef QBITS
-		if (isset(clp->c_cq, cp - clp->c_cs))
+		if (isset(clp->c_cq, cp - clp->c_cs)) {
 			*c |= TTY_QUOTE;
+		}
 #else
-		if (*(clp->c_cf - clp->c_cs + clp->c_cq))
+		if (*(clp->c_cf - clp->c_cs + clp->c_cq)) {
 			*c |= TTY_QUOTE;
+		}
 #endif
 	}
 	return cp;
@@ -458,17 +495,20 @@ firstc(struct clist *clp, int *c)
 	u_char *cp;
 
 	cc = clp->c_cc;
-	if (cc == 0)
+	if (cc == 0) {
 		return NULL;
+	}
 	cp = clp->c_cf;
 	*c = *cp & 0xff;
-	if(clp->c_cq) {
+	if (clp->c_cq) {
 #ifdef QBITS
-		if (isset(clp->c_cq, cp - clp->c_cs))
+		if (isset(clp->c_cq, cp - clp->c_cs)) {
 			*c |= TTY_QUOTE;
+		}
 #else
-		if (*(cp - clp->c_cs + clp->c_cq))
+		if (*(cp - clp->c_cs + clp->c_cq)) {
 			*c |= TTY_QUOTE;
+		}
 #endif
 	}
 	return clp->c_cf;
@@ -482,27 +522,32 @@ unputc(struct clist *clp)
 {
 	unsigned int c = -1;
 
-	if (clp->c_cc == 0)
+	if (clp->c_cc == 0) {
 		goto out;
+	}
 
-	if (clp->c_cl == clp->c_cs)
+	if (clp->c_cl == clp->c_cs) {
 		clp->c_cl = clp->c_ce - 1;
-	else
+	} else {
 		--clp->c_cl;
+	}
 	clp->c_cc--;
 
 	c = *clp->c_cl & 0xff;
 	if (clp->c_cq) {
 #ifdef QBITS
-		if (isset(clp->c_cq, clp->c_cl - clp->c_cs))
+		if (isset(clp->c_cq, clp->c_cl - clp->c_cs)) {
 			c |= TTY_QUOTE;
+		}
 #else
-		if (*(clp->c_cf - clp->c_cs + clp->c_cq))
+		if (*(clp->c_cf - clp->c_cs + clp->c_cq)) {
 			c |= TTY_QUOTE;
+		}
 #endif
 	}
-	if (clp->c_cc == 0)
+	if (clp->c_cc == 0) {
 		clp->c_cf = clp->c_cl = (u_char *)0;
+	}
 out:
 	return c;
 }
@@ -515,6 +560,7 @@ catq(struct clist *from, struct clist *to)
 {
 	int c;
 
-	while ((c = getc(from)) != -1)
+	while ((c = getc(from)) != -1) {
 		putc(c, to);
+	}
 }

@@ -56,7 +56,7 @@
 #include <arm/cpu_internal.h>
 
 /*
- * 	Event timer interrupt.
+ *      Event timer interrupt.
  *
  * XXX a drawback of this implementation is that events serviced earlier must not set deadlines
  *     that occur before the entire chain completes.
@@ -71,8 +71,8 @@ timer_intr(__unused int inuser, __unused uint64_t iaddr)
 	cpu_data_t     *cpu_data_ptr;
 
 	cpu_data_ptr = getCpuDatap();
-	mytimer = &cpu_data_ptr->rtclock_timer;	/* Point to the event timer */
-	abstime = mach_absolute_time();	/* Get the time now */
+	mytimer = &cpu_data_ptr->rtclock_timer; /* Point to the event timer */
+	abstime = mach_absolute_time(); /* Get the time now */
 
 	/* is it time for an idle timer event? */
 	if ((cpu_data_ptr->idle_timer_deadline > 0) && (cpu_data_ptr->idle_timer_deadline <= abstime)) {
@@ -88,17 +88,17 @@ timer_intr(__unused int inuser, __unused uint64_t iaddr)
 			clock_absolutetime_interval_to_deadline(new_idle_timeout_ticks, &cpu_data_ptr->idle_timer_deadline);
 		}
 
-		abstime = mach_absolute_time();	/* Get the time again since we ran a bit */
+		abstime = mach_absolute_time(); /* Get the time again since we ran a bit */
 	}
 
 	/* has a pending clock timer expired? */
-	if (mytimer->deadline <= abstime) {	/* Have we expired the
-						 * deadline? */
-		mytimer->has_expired = TRUE;	/* Remember that we popped */
-		mytimer->deadline = EndOfAllTime;	/* Set timer request to
-							 * the end of all time
-							 * in case we have no
-							 * more events */
+	if (mytimer->deadline <= abstime) {     /* Have we expired the
+		                                 * deadline? */
+		mytimer->has_expired = TRUE;    /* Remember that we popped */
+		mytimer->deadline = EndOfAllTime;       /* Set timer request to
+		                                         * the end of all time
+		                                         * in case we have no
+		                                         * more events */
 		mytimer->deadline = timer_queue_expire(&mytimer->queue, abstime);
 		mytimer->has_expired = FALSE;
 		abstime = mach_absolute_time(); /* Get the time again since we ran a bit */
@@ -120,18 +120,18 @@ timer_intr(__unused int inuser, __unused uint64_t iaddr)
 /*
  * Set the clock deadline
  */
-void 
+void
 timer_set_deadline(uint64_t deadline)
 {
 	rtclock_timer_t *mytimer;
 	spl_t           s;
 	cpu_data_t     *cpu_data_ptr;
 
-	s = splclock();		/* no interruptions */
+	s = splclock();         /* no interruptions */
 	cpu_data_ptr = getCpuDatap();
 
-	mytimer = &cpu_data_ptr->rtclock_timer;	/* Point to the timer itself */
-	mytimer->deadline = deadline;	/* Set the new expiration time */
+	mytimer = &cpu_data_ptr->rtclock_timer; /* Point to the timer itself */
+	mytimer->deadline = deadline;   /* Set the new expiration time */
 
 	timer_resync_deadlines();
 
@@ -161,7 +161,7 @@ timer_resync_deadlines(void)
 {
 	uint64_t        deadline;
 	rtclock_timer_t *mytimer;
-	spl_t           s = splclock();	/* No interruptions please */
+	spl_t           s = splclock(); /* No interruptions please */
 	cpu_data_t     *cpu_data_ptr;
 
 	cpu_data_ptr = getCpuDatap();
@@ -169,19 +169,22 @@ timer_resync_deadlines(void)
 	deadline = 0;
 
 	/* if we have a clock timer set sooner, pop on that */
-	mytimer = &cpu_data_ptr->rtclock_timer;	/* Point to the timer itself */
-	if ((!mytimer->has_expired) && (mytimer->deadline > 0))
+	mytimer = &cpu_data_ptr->rtclock_timer; /* Point to the timer itself */
+	if ((!mytimer->has_expired) && (mytimer->deadline > 0)) {
 		deadline = mytimer->deadline;
+	}
 
 	/* if we have a idle timer event coming up, how about that? */
 	if ((cpu_data_ptr->idle_timer_deadline > 0)
-	     && (cpu_data_ptr->idle_timer_deadline < deadline))
+	    && (cpu_data_ptr->idle_timer_deadline < deadline)) {
 		deadline = cpu_data_ptr->idle_timer_deadline;
+	}
 
 	/* If we have the quantum timer setup, check that */
 	if ((cpu_data_ptr->quantum_timer_deadline > 0)
-	    && (cpu_data_ptr->quantum_timer_deadline < deadline))
+	    && (cpu_data_ptr->quantum_timer_deadline < deadline)) {
 		deadline = cpu_data_ptr->quantum_timer_deadline;
+	}
 
 	if ((deadline == EndOfAllTime)
 	    || ((deadline > 0) && (cpu_data_ptr->rtcPop != deadline))) {
@@ -189,8 +192,8 @@ timer_resync_deadlines(void)
 
 		decr = setPop(deadline);
 
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-		    MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1) | DBG_FUNC_NONE, 
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		    MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1) | DBG_FUNC_NONE,
 		    decr, 2, 0, 0, 0);
 	}
 	splx(s);
@@ -198,38 +201,41 @@ timer_resync_deadlines(void)
 
 
 boolean_t
-timer_resort_threshold(__unused uint64_t skew) {
-		return FALSE;
+timer_resort_threshold(__unused uint64_t skew)
+{
+	return FALSE;
 }
 
 mpqueue_head_t *
 timer_queue_assign(
-	uint64_t		deadline)
+	uint64_t                deadline)
 {
-	cpu_data_t				*cpu_data_ptr = getCpuDatap();
-	mpqueue_head_t		*queue;
+	cpu_data_t                              *cpu_data_ptr = getCpuDatap();
+	mpqueue_head_t          *queue;
 
 	if (cpu_data_ptr->cpu_running) {
 		queue = &cpu_data_ptr->rtclock_timer.queue;
 
-		if (deadline < cpu_data_ptr->rtclock_timer.deadline)
+		if (deadline < cpu_data_ptr->rtclock_timer.deadline) {
 			timer_set_deadline(deadline);
-	}
-	else
+		}
+	} else {
 		queue = &cpu_datap(master_cpu)->rtclock_timer.queue;
+	}
 
-	return (queue);
+	return queue;
 }
 
 void
 timer_queue_cancel(
-	mpqueue_head_t		*queue,
-	uint64_t		deadline,
-	uint64_t		new_deadline)
+	mpqueue_head_t          *queue,
+	uint64_t                deadline,
+	uint64_t                new_deadline)
 {
 	if (queue == &getCpuDatap()->rtclock_timer.queue) {
-		if (deadline < new_deadline)
+		if (deadline < new_deadline) {
 			timer_set_deadline(new_deadline);
+		}
 	}
 }
 
@@ -269,11 +275,12 @@ static timer_coalescing_priority_params_ns_t tcoal_prio_params_init =
 	.timer_coalesce_fp_ns_max = 1 * NSEC_PER_MSEC,
 	.timer_coalesce_ts_ns_max = 1 * NSEC_PER_MSEC,
 	.latency_qos_scale = {3, 2, 1, -2, -15, -15},
-	.latency_qos_ns_max ={1 * NSEC_PER_MSEC, 5 * NSEC_PER_MSEC, 20 * NSEC_PER_MSEC,
-			      75 * NSEC_PER_MSEC, 10000 * NSEC_PER_MSEC, 10000 * NSEC_PER_MSEC},
+	.latency_qos_ns_max = {1 * NSEC_PER_MSEC, 5 * NSEC_PER_MSEC, 20 * NSEC_PER_MSEC,
+		               75 * NSEC_PER_MSEC, 10000 * NSEC_PER_MSEC, 10000 * NSEC_PER_MSEC},
 	.latency_tier_rate_limited = {FALSE, FALSE, FALSE, FALSE, TRUE, TRUE},
 };
-timer_coalescing_priority_params_ns_t * timer_call_get_priority_params(void)
+timer_coalescing_priority_params_ns_t *
+timer_call_get_priority_params(void)
 {
 	return &tcoal_prio_params_init;
 }

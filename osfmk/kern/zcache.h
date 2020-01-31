@@ -26,13 +26,13 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
- * 	Below is a diagram of the caching system. This design is based of the
+ *      Below is a diagram of the caching system. This design is based of the
  * paper "Magazines and Vmem: Extending the Slab Allocator to Many CPUs and
  * Arbitrary Resources" by Jeff Bonwick and Jonathan Adams. It is divided into 3
  * layers: the Per-cpu Layer, the Depot Layer, and the Zone Allocator. The
  * Per-CPU and Depot layers store elements using arrays we call magazines.
  *
- * 	Magazines function like a stack (we push and pop elements) and can be
+ *      Magazines function like a stack (we push and pop elements) and can be
  *  moved around for bulk operations.
  *  _________         _________         _________
  * |  CPU 1  |       |  CPU 2  |       |  CPU 3  |
@@ -59,7 +59,7 @@
  * requires no locking, so we can access multiple CPU's caches concurrently.
  * This is the main source of the speedup.
  *
- * 	We have two magazines here to prevent thrashing when swapping magazines
+ *      We have two magazines here to prevent thrashing when swapping magazines
  * with the depot layer. If a certain pattern of alloc and free are called we
  * can waste a lot of time swapping magazines to and from the depot layer. We
  * prevent this by dividing the per-cpu cache into two separate magazines.
@@ -71,7 +71,7 @@
  * point at the first empty magazine. Since this layer is per-zone, it allows us
  *  to balance the cache between cpus, but does require taking a lock.
  *
- * 	When neither the current nor previous magazine for a given CPU can
+ *      When neither the current nor previous magazine for a given CPU can
  * satisfy the free or allocation, we look to the depot layer. If there are
  * magazines in the depot that can satisfy the free or allocation we swap
  * that magazine into the current position. In the example below, to allocate on
@@ -97,7 +97,7 @@
  * try to allocate an entire magazine of elements or free an entire magazine of
  * elements at once.
  *
- * 	Caching must be enabled explicitly, by calling zone_change() with the
+ *      Caching must be enabled explicitly, by calling zone_change() with the
  * Z_CACHING_ENABLED flag, for every zone you want to cache elements for. Zones
  * which are good candidates for this are ones with highly contended zone locks.
  *
@@ -106,7 +106,7 @@
  *
  *
  * Some factors can be tuned by boot-arg:
- *  zcc_enable_for_zone_name 	name of a single zone to enable caching for
+ *  zcc_enable_for_zone_name    name of a single zone to enable caching for
  *				(replace space characters with '.')
  *
  *  zcc_magazine_element_count	integer value for magazine size used for all
@@ -116,7 +116,7 @@
  *				magazines to store in the depot, if N specified
  *				depot will have N full and N empty magazines
  *				(default 16 used if not specified)
-*/
+ */
 #include <kern/kern_types.h>
 #include <vm/vm_kern.h>
 
@@ -127,7 +127,7 @@
  * Description: returns whether or not the zone caches are ready to use
  *
  */
-bool 		zcache_ready(void);
+bool            zcache_ready(void);
 
 
 /*
@@ -136,7 +136,7 @@ bool 		zcache_ready(void);
  * Description: initializes zone to allocate magazines from
  *
  */
-void 		zcache_bootstrap(void);
+void            zcache_bootstrap(void);
 
 
 /*
@@ -147,7 +147,7 @@ void 		zcache_bootstrap(void);
  * Parameters:	zone	pointer to zone on which to iniitalize caching
  *
  */
-void 		zcache_init(zone_t zone);
+void            zcache_init(zone_t zone);
 
 
 /*
@@ -162,7 +162,7 @@ void 		zcache_init(zone_t zone);
  *
  * Precondition: check that caching is enabled for zone
  */
-bool 		zcache_free_to_cpu_cache(zone_t zone, void *addr);
+bool            zcache_free_to_cpu_cache(zone_t zone, void *addr);
 
 
 /*
@@ -176,7 +176,7 @@ bool 		zcache_free_to_cpu_cache(zone_t zone, void *addr);
  *
  * Precondition: check that caching is enabled for zone
  */
-vm_offset_t	zcache_alloc_from_cpu_cache(zone_t zone);
+vm_offset_t     zcache_alloc_from_cpu_cache(zone_t zone);
 
 /*
  * zcache_drain_depot
@@ -189,4 +189,4 @@ vm_offset_t	zcache_alloc_from_cpu_cache(zone_t zone);
  * Returns: None
  *
  */
-void 		zcache_drain_depot(zone_t zone);
+void            zcache_drain_depot(zone_t zone);

@@ -60,10 +60,13 @@
 #include <kern/sched_prim.h>
 
 static boolean_t
-sched_traditional_use_pset_runqueue = FALSE;
+    sched_traditional_use_pset_runqueue = FALSE;
 
 static void
 sched_traditional_init(void);
+
+static bool
+sched_traditional_steal_thread_enabled(processor_set_t pset);
 
 static thread_t
 sched_traditional_steal_thread(processor_set_t pset);
@@ -136,7 +139,7 @@ const struct sched_dispatch_table sched_traditional_dispatch = {
 	.pset_init                                      = sched_traditional_pset_init,
 	.maintenance_continuation                       = sched_timeshare_maintenance_continue,
 	.choose_thread                                  = sched_traditional_choose_thread,
-	.steal_thread_enabled                           = TRUE,
+	.steal_thread_enabled                           = sched_traditional_steal_thread_enabled,
 	.steal_thread                                   = sched_traditional_steal_thread,
 	.compute_timeshare_priority                     = sched_compute_timeshare_priority,
 	.choose_processor                               = choose_processor,
@@ -184,7 +187,7 @@ const struct sched_dispatch_table sched_traditional_with_pset_runqueue_dispatch 
 	.pset_init                                      = sched_traditional_pset_init,
 	.maintenance_continuation                       = sched_timeshare_maintenance_continue,
 	.choose_thread                                  = sched_traditional_choose_thread,
-	.steal_thread_enabled                           = TRUE,
+	.steal_thread_enabled                           = sched_steal_thread_enabled,
 	.steal_thread                                   = sched_traditional_steal_thread,
 	.compute_timeshare_priority                     = sched_compute_timeshare_priority,
 	.choose_processor                               = choose_processor,
@@ -220,7 +223,7 @@ const struct sched_dispatch_table sched_traditional_with_pset_runqueue_dispatch 
 
 	.qos_max_parallelism                            = sched_qos_max_parallelism,
 	.check_spill                                    = sched_check_spill,
-	.ipi_policy					= sched_ipi_policy,
+	.ipi_policy                                     = sched_ipi_policy,
 	.thread_should_yield                            = sched_thread_should_yield,
 };
 
@@ -256,49 +259,57 @@ sched_traditional_pset_init(processor_set_t pset)
 }
 
 __attribute__((always_inline))
-static inline run_queue_t runq_for_processor(processor_t processor)
+static inline run_queue_t
+runq_for_processor(processor_t processor)
 {
-	if (sched_traditional_use_pset_runqueue)
+	if (sched_traditional_use_pset_runqueue) {
 		return &processor->processor_set->pset_runq;
-	else
+	} else {
 		return &processor->runq;
+	}
 }
 
 __attribute__((always_inline))
-static inline void runq_consider_incr_bound_count(processor_t processor,
-						  thread_t thread)
+static inline void
+runq_consider_incr_bound_count(processor_t processor,
+    thread_t thread)
 {
-	if (thread->bound_processor == PROCESSOR_NULL)
+	if (thread->bound_processor == PROCESSOR_NULL) {
 		return;
+	}
 
 	assert(thread->bound_processor == processor);
 
-	if (sched_traditional_use_pset_runqueue)
+	if (sched_traditional_use_pset_runqueue) {
 		processor->processor_set->pset_runq_bound_count++;
+	}
 
 	processor->runq_bound_count++;
 }
 
 __attribute__((always_inline))
-static inline void runq_consider_decr_bound_count(processor_t processor,
-						  thread_t thread)
+static inline void
+runq_consider_decr_bound_count(processor_t processor,
+    thread_t thread)
 {
-	if (thread->bound_processor == PROCESSOR_NULL)
+	if (thread->bound_processor == PROCESSOR_NULL) {
 		return;
+	}
 
 	assert(thread->bound_processor == processor);
 
-	if (sched_traditional_use_pset_runqueue)
+	if (sched_traditional_use_pset_runqueue) {
 		processor->processor_set->pset_runq_bound_count--;
+	}
 
 	processor->runq_bound_count--;
 }
 
 static thread_t
 sched_traditional_choose_thread(
-                                processor_t     processor,
-                                int             priority,
-                       __unused ast_t           reason)
+	processor_t     processor,
+	int             priority,
+	__unused ast_t           reason)
 {
 	thread_t thread;
 
@@ -322,9 +333,9 @@ sched_traditional_choose_thread(
  */
 static thread_t
 sched_traditional_choose_thread_from_runq(
-                                          processor_t     processor,
-                                          run_queue_t     rq,
-                                          int             priority)
+	processor_t     processor,
+	run_queue_t     rq,
+	int             priority)
 {
 	queue_t         queue   = rq->queues + rq->highq;
 	int             pri     = rq->highq;
@@ -349,7 +360,7 @@ sched_traditional_choose_thread_from_runq(
 					rq->highq = bitmap_first(rq->bitmap, NRQS);
 				}
 
-				return (thread);
+				return thread;
 			}
 			count--;
 
@@ -359,16 +370,17 @@ sched_traditional_choose_thread_from_runq(
 		queue--; pri--;
 	}
 
-	return (THREAD_NULL);
+	return THREAD_NULL;
 }
 
 static sched_mode_t
 sched_traditional_initial_thread_sched_mode(task_t parent_task)
 {
-	if (parent_task == kernel_task)
+	if (parent_task == kernel_task) {
 		return TH_MODE_FIXED;
-	else
+	} else {
 		return TH_MODE_TIMESHARE;
+	}
 }
 
 /*
@@ -385,8 +397,8 @@ sched_traditional_initial_thread_sched_mode(task_t parent_task)
  */
 static boolean_t
 sched_traditional_processor_enqueue(processor_t   processor,
-                                    thread_t      thread,
-                                    integer_t     options)
+    thread_t      thread,
+    integer_t     options)
 {
 	run_queue_t     rq = runq_for_processor(processor);
 	boolean_t       result;
@@ -395,7 +407,7 @@ sched_traditional_processor_enqueue(processor_t   processor,
 	thread->runq = processor;
 	runq_consider_incr_bound_count(processor, thread);
 
-	return (result);
+	return result;
 }
 
 static boolean_t
@@ -445,8 +457,9 @@ sched_traditional_processor_csw_check(processor_t processor)
 	}
 
 	if (has_higher) {
-		if (runq->urgency > 0)
-			return (AST_PREEMPT | AST_URGENT);
+		if (runq->urgency > 0) {
+			return AST_PREEMPT | AST_URGENT;
+		}
 
 		return AST_PREEMPT;
 	}
@@ -456,13 +469,14 @@ sched_traditional_processor_csw_check(processor_t processor)
 
 static boolean_t
 sched_traditional_processor_queue_has_priority(processor_t      processor,
-                                               int              priority,
-                                               boolean_t        gte)
+    int              priority,
+    boolean_t        gte)
 {
-	if (gte)
+	if (gte) {
 		return runq_for_processor(processor)->highq >= priority;
-	else
+	} else {
 		return runq_for_processor(processor)->highq > priority;
+	}
 }
 
 static int
@@ -480,10 +494,11 @@ sched_traditional_processor_runq_stats_count_sum(processor_t processor)
 static uint64_t
 sched_traditional_with_pset_runqueue_processor_runq_stats_count_sum(processor_t processor)
 {
-	if (processor->cpu_id == processor->processor_set->cpu_set_low)
+	if (processor->cpu_id == processor->processor_set->cpu_set_low) {
 		return runq_for_processor(processor)->runq_stats.count_sum;
-	else
+	} else {
 		return 0ULL;
+	}
 }
 
 static int
@@ -558,23 +573,26 @@ sched_traditional_processor_queue_shutdown(processor_t processor)
 #if 0
 static void
 run_queue_check(
-                run_queue_t     rq,
-                thread_t        thread)
+	run_queue_t     rq,
+	thread_t        thread)
 {
 	queue_t         q;
 	queue_entry_t   qe;
 
-	if (rq != thread->runq)
+	if (rq != thread->runq) {
 		panic("run_queue_check: thread runq");
+	}
 
-	if (thread->sched_pri > MAXPRI || thread->sched_pri < MINPRI)
+	if (thread->sched_pri > MAXPRI || thread->sched_pri < MINPRI) {
 		panic("run_queue_check: thread sched_pri");
+	}
 
 	q = &rq->queues[thread->sched_pri];
 	qe = queue_first(q);
 	while (!queue_end(q, qe)) {
-		if (qe == (queue_entry_t)thread)
+		if (qe == (queue_entry_t)thread) {
 			return;
+		}
 
 		qe = queue_next(qe);
 	}
@@ -590,7 +608,7 @@ run_queue_check(
  */
 static boolean_t
 sched_traditional_processor_queue_remove(processor_t processor,
-                                         thread_t thread)
+    thread_t thread)
 {
 	processor_set_t pset;
 	run_queue_t     rq;
@@ -607,8 +625,7 @@ sched_traditional_processor_queue_remove(processor_t processor,
 		 */
 		runq_consider_decr_bound_count(processor, thread);
 		run_queue_remove(rq, thread);
-	}
-	else {
+	} else {
 		/*
 		 * The thread left the run queue before we could
 		 * lock the run queue.
@@ -619,7 +636,7 @@ sched_traditional_processor_queue_remove(processor_t processor,
 
 	pset_unlock(pset);
 
-	return (processor != PROCESSOR_NULL);
+	return processor != PROCESSOR_NULL;
 }
 
 /*
@@ -658,7 +675,7 @@ sched_traditional_steal_processor_thread(processor_t processor)
 					rq->highq = bitmap_first(rq->bitmap, NRQS);
 				}
 
-				return (thread);
+				return thread;
 			}
 			count--;
 
@@ -668,7 +685,14 @@ sched_traditional_steal_processor_thread(processor_t processor)
 		queue--; pri--;
 	}
 
-	return (THREAD_NULL);
+	return THREAD_NULL;
+}
+
+static bool
+sched_traditional_steal_thread_enabled(processor_set_t pset)
+{
+	(void)pset;
+	return true;
 }
 
 /*
@@ -690,7 +714,7 @@ sched_traditional_steal_thread(processor_set_t pset)
 
 	do {
 		uint64_t active_map = (pset->cpu_state_map[PROCESSOR_RUNNING] |
-				       pset->cpu_state_map[PROCESSOR_DISPATCHING]);
+		    pset->cpu_state_map[PROCESSOR_DISPATCHING]);
 		for (int cpuid = lsb_first(active_map); cpuid >= 0; cpuid = lsb_next(active_map, cpuid)) {
 			processor = processor_array[cpuid];
 			if (runq_for_processor(processor)->count > 0) {
@@ -698,7 +722,7 @@ sched_traditional_steal_thread(processor_set_t pset)
 				if (thread != THREAD_NULL) {
 					pset_unlock(cset);
 
-					return (thread);
+					return thread;
 				}
 			}
 		}
@@ -715,7 +739,7 @@ sched_traditional_steal_thread(processor_set_t pset)
 
 	pset_unlock(cset);
 
-	return (THREAD_NULL);
+	return THREAD_NULL;
 }
 
 static void
@@ -743,8 +767,9 @@ sched_traditional_thread_update_scan(sched_update_scan_context_t scan_context)
 			pset_unlock(pset);
 			splx(s);
 
-			if (restart_needed)
+			if (restart_needed) {
 				break;
+			}
 
 			thread = processor->idle_thread;
 			if (thread != THREAD_NULL && thread->sched_stamp != sched_tick) {
@@ -759,4 +784,3 @@ sched_traditional_thread_update_scan(sched_update_scan_context_t scan_context)
 		thread_update_process_threads();
 	} while (restart_needed);
 }
-

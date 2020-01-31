@@ -2,7 +2,7 @@
  * Copyright (c) 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <sys/param.h>
@@ -43,7 +43,7 @@
  */
 int
 vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
-	    struct componentname *cnp, int flags, vfs_context_t ctx)
+    struct componentname *cnp, int flags, vfs_context_t ctx)
 {
 	int error = 0;
 
@@ -52,15 +52,17 @@ vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 
 	/* are we labeling vnodes? If not still notify of create */
 	if (mac_label_vnodes == 0) {
-		if (flags & VNODE_LABEL_CREATE)
+		if (flags & VNODE_LABEL_CREATE) {
 			error = mac_vnode_notify_create(ctx,
 			    mp, dvp, vp, cnp);
+		}
 		return 0;
 	}
 
 	/* if already VL_LABELED */
-	if (vp->v_lflag & VL_LABELED)
-		return (0);
+	if (vp->v_lflag & VL_LABELED) {
+		return 0;
+	}
 
 	vnode_lock_spin(vp);
 
@@ -71,7 +73,7 @@ vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 	 */
 	if (vp->v_lflag & VL_LABELED) {
 		vnode_unlock(vp);
-		return (0);
+		return 0;
 	}
 
 	if ((vp->v_lflag & VL_LABEL) == 0) {
@@ -80,19 +82,22 @@ vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 		/* Could sleep on disk I/O, drop lock. */
 		vnode_unlock(vp);
 
-		if (vp->v_label == NULL)
+		if (vp->v_label == NULL) {
 			vp->v_label = mac_vnode_label_alloc();
+		}
 
-		if (flags & VNODE_LABEL_CREATE)
+		if (flags & VNODE_LABEL_CREATE) {
 			error = mac_vnode_notify_create(ctx,
 			    mp, dvp, vp, cnp);
-		else
+		} else {
 			error = mac_vnode_label_associate(mp, vp, ctx);
+		}
 
 		vnode_lock_spin(vp);
 
-		if ((error == 0) && (vp->v_flag & VNCACHEABLE))
+		if ((error == 0) && (vp->v_flag & VNCACHEABLE)) {
 			vp->v_lflag |= VL_LABELED;
+		}
 		vp->v_lflag &= ~VL_LABEL;
 
 		if (vp->v_lflag & VL_LABELWAIT) {
@@ -108,8 +113,8 @@ vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 		while (vp->v_lflag & VL_LABEL) {
 			vp->v_lflag |= VL_LABELWAIT;
 
-			error = msleep(&vp->v_label, &vp->v_lock, PVFS|PDROP,
-				       "vnode_label", &ts);
+			error = msleep(&vp->v_label, &vp->v_lock, PVFS | PDROP,
+			    "vnode_label", &ts);
 			vnode_lock_spin(vp);
 
 			if (error == EWOULDBLOCK) {
@@ -121,7 +126,7 @@ vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 	}
 	vnode_unlock(vp);
 
-	return (error);
+	return error;
 }
 
 
@@ -136,7 +141,6 @@ vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 void
 vnode_relabel(struct vnode *vp)
 {
-
 	/* Wait for any other labeling to complete. */
 	while (vp->v_lflag & VL_LABEL) {
 		vp->v_lflag |= VL_LABELWAIT;
@@ -154,20 +158,21 @@ vnode_relabel(struct vnode *vp)
  */
 
 int
-mac_vnop_setxattr (struct vnode *vp, const char *name, char *buf, size_t len)
+mac_vnop_setxattr(struct vnode *vp, const char *name, char *buf, size_t len)
 {
 	vfs_context_t ctx;
 	int options = XATTR_NOSECURITY;
-	char uio_buf[ UIO_SIZEOF(1) ];
-        uio_t auio;
+	char uio_buf[UIO_SIZEOF(1)];
+	uio_t auio;
 	int error;
 
-	if (vfs_isrdonly(vp->v_mount))
-		return (EROFS);
+	if (vfs_isrdonly(vp->v_mount)) {
+		return EROFS;
+	}
 
 	ctx = vfs_context_current();
 	auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_WRITE,
-				    &uio_buf[0], sizeof(uio_buf));
+	    &uio_buf[0], sizeof(uio_buf));
 	uio_addiov(auio, CAST_USER_ADDR_T(buf), len);
 
 	error = vn_setxattr(vp, name, auio, options, ctx);
@@ -179,38 +184,39 @@ mac_vnop_setxattr (struct vnode *vp, const char *name, char *buf, size_t len)
 	}
 #endif
 
-	return (error);
+	return error;
 }
 
 int
-mac_vnop_getxattr (struct vnode *vp, const char *name, char *buf, size_t len,
-		   size_t *attrlen)
+mac_vnop_getxattr(struct vnode *vp, const char *name, char *buf, size_t len,
+    size_t *attrlen)
 {
 	vfs_context_t ctx = vfs_context_current();
 	int options = XATTR_NOSECURITY;
-	char uio_buf[ UIO_SIZEOF(1) ];
-        uio_t auio;
+	char uio_buf[UIO_SIZEOF(1)];
+	uio_t auio;
 	int error;
 
 	auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ,
-				    &uio_buf[0], sizeof(uio_buf));
+	    &uio_buf[0], sizeof(uio_buf));
 	uio_addiov(auio, CAST_USER_ADDR_T(buf), len);
 
 	error = vn_getxattr(vp, name, auio, attrlen, options, ctx);
 	*attrlen = len - uio_resid(auio);
 
-	return (error);
+	return error;
 }
 
 int
-mac_vnop_removexattr (struct vnode *vp, const char *name)
+mac_vnop_removexattr(struct vnode *vp, const char *name)
 {
 	vfs_context_t ctx = vfs_context_current();
 	int options = XATTR_NOSECURITY;
 	int error;
 
-	if (vfs_isrdonly(vp->v_mount))
-		return (EROFS);
+	if (vfs_isrdonly(vp->v_mount)) {
+		return EROFS;
+	}
 
 	error = vn_removexattr(vp, name, options, ctx);
 #if CONFIG_FSE
@@ -221,5 +227,5 @@ mac_vnop_removexattr (struct vnode *vp, const char *name)
 	}
 #endif
 
-	return (error);
+	return error;
 }

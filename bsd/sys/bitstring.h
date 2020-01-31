@@ -59,121 +59,121 @@
  */
 
 #ifndef _SYS_BITSTRING_H_
-#define	_SYS_BITSTRING_H_
+#define _SYS_BITSTRING_H_
 
 #ifdef XNU_KERNEL_PRIVATE
 #include <sys/mcache.h>
 
-typedef	uint8_t bitstr_t;
+typedef uint8_t bitstr_t;
 
 /* internal macros */
-				/* byte of the bitstring bit is in */
-#define	_bitstr_byte(bit)						\
+/* byte of the bitstring bit is in */
+#define _bitstr_byte(bit)                                               \
 	((bit) >> 3)
 
-				/* mask for the bit within its byte */
-#define	_bitstr_mask(bit)						\
+/* mask for the bit within its byte */
+#define _bitstr_mask(bit)                                               \
 	(1 << ((bit) & 0x7))
 
 /* external macros */
-				/* bytes in a bitstring of nbits bits */
-#define	bitstr_size(nbits)						\
+/* bytes in a bitstring of nbits bits */
+#define bitstr_size(nbits)                                              \
 	(((nbits) + 7) >> 3)
 
-				/* allocate a bitstring on the stack */
-#define	bit_decl(name, nbits)						\
+/* allocate a bitstring on the stack */
+#define bit_decl(name, nbits)                                           \
 	((name)[bitstr_size(nbits)])
 
-				/* is bit N of bitstring name set? */
-#define	bitstr_test(name, bit)						\
+/* is bit N of bitstring name set? */
+#define bitstr_test(name, bit)                                          \
 	((name)[_bitstr_byte(bit)] & _bitstr_mask(bit))
 
-				/* set bit N of bitstring name */
-#define	bitstr_set(name, bit)						\
+/* set bit N of bitstring name */
+#define bitstr_set(name, bit)                                           \
 	((name)[_bitstr_byte(bit)] |= _bitstr_mask(bit))
 
-				/* set bit N of bitstring name (atomic) */
-#define	bitstr_set_atomic(name, bit)					\
+/* set bit N of bitstring name (atomic) */
+#define bitstr_set_atomic(name, bit)                                    \
 	atomic_bitset_8(&((name)[_bitstr_byte(bit)]), _bitstr_mask(bit))
 
-				/* clear bit N of bitstring name */
-#define	bitstr_clear(name, bit)						\
+/* clear bit N of bitstring name */
+#define bitstr_clear(name, bit)                                         \
 	((name)[_bitstr_byte(bit)] &= ~_bitstr_mask(bit))
 
-				/* clear bit N of bitstring name (atomic) */
-#define	bitstr_clear_atomic(name, bit)					\
+/* clear bit N of bitstring name (atomic) */
+#define bitstr_clear_atomic(name, bit)                                  \
 	atomic_bitclear_8(&((name)[_bitstr_byte(bit)]), _bitstr_mask(bit))
 
-				/* clear bits start ... stop in bitstring */
-#define	bitstr_nclear(name, start, stop) do {				\
-	bitstr_t *_name = (name);					\
-	int _start = (start), _stop = (stop);				\
-	int _startbyte = _bitstr_byte(_start);				\
-	int _stopbyte = _bitstr_byte(_stop);				\
-	if (_startbyte == _stopbyte) {					\
-		_name[_startbyte] &= ((0xff >> (8 - (_start & 0x7))) |	\
-		    (0xff << ((_stop & 0x7) + 1)));			\
-	} else {							\
-		_name[_startbyte] &= 0xff >> (8 - (_start & 0x7));	\
-		while (++_startbyte < _stopbyte)			\
-			_name[_startbyte] = 0;				\
-		_name[_stopbyte] &= 0xff << ((_stop & 0x7) + 1);	\
-	}								\
+/* clear bits start ... stop in bitstring */
+#define bitstr_nclear(name, start, stop) do {                           \
+	bitstr_t *_name = (name);                                       \
+	int _start = (start), _stop = (stop);                           \
+	int _startbyte = _bitstr_byte(_start);                          \
+	int _stopbyte = _bitstr_byte(_stop);                            \
+	if (_startbyte == _stopbyte) {                                  \
+	        _name[_startbyte] &= ((0xff >> (8 - (_start & 0x7))) |  \
+	            (0xff << ((_stop & 0x7) + 1)));                     \
+	} else {                                                        \
+	        _name[_startbyte] &= 0xff >> (8 - (_start & 0x7));      \
+	        while (++_startbyte < _stopbyte)                        \
+	                _name[_startbyte] = 0;                          \
+	        _name[_stopbyte] &= 0xff << ((_stop & 0x7) + 1);        \
+	}                                                               \
 } while (0)
 
-				/* set bits start ... stop in bitstring */
-#define	bitstr_nset(name, start, stop) do {				\
-	bitstr_t *_name = (name);					\
-	int _start = (start), _stop = (stop);				\
-	int _startbyte = _bitstr_byte(_start);				\
-	int _stopbyte = _bitstr_byte(_stop);				\
-	if (_startbyte == _stopbyte) {					\
-		_name[_startbyte] |= ((0xff << (_start & 0x7)) &	\
-		    (0xff >> (7 - (_stop & 0x7))));			\
-	} else {							\
-		_name[_startbyte] |= 0xff << ((_start) & 0x7);		\
-		while (++_startbyte < _stopbyte)			\
-			_name[_startbyte] = 0xff;			\
-		_name[_stopbyte] |= 0xff >> (7 - (_stop & 0x7));	\
-	}								\
+/* set bits start ... stop in bitstring */
+#define bitstr_nset(name, start, stop) do {                             \
+	bitstr_t *_name = (name);                                       \
+	int _start = (start), _stop = (stop);                           \
+	int _startbyte = _bitstr_byte(_start);                          \
+	int _stopbyte = _bitstr_byte(_stop);                            \
+	if (_startbyte == _stopbyte) {                                  \
+	        _name[_startbyte] |= ((0xff << (_start & 0x7)) &        \
+	            (0xff >> (7 - (_stop & 0x7))));                     \
+	} else {                                                        \
+	        _name[_startbyte] |= 0xff << ((_start) & 0x7);          \
+	        while (++_startbyte < _stopbyte)                        \
+	                _name[_startbyte] = 0xff;                       \
+	        _name[_stopbyte] |= 0xff >> (7 - (_stop & 0x7));        \
+	}                                                               \
 } while (0)
 
-				/* find first bit clear in name */
-#define	bitstr_ffc(name, nbits, value) do {				\
-	bitstr_t *_name = (name);					\
-	int _byte, _nbits = (nbits);					\
-	int _stopbyte = _bitstr_byte(_nbits - 1), _value = -1;		\
-	if (_nbits > 0)							\
-		for (_byte = 0; _byte <= _stopbyte; ++_byte)		\
-			if (_name[_byte] != 0xff) {			\
-				bitstr_t _lb;				\
-				_value = _byte << 3;			\
-				for (_lb = _name[_byte]; (_lb & 0x1);	\
-				    ++_value, _lb >>= 1);		\
-				break;					\
-			}						\
-	if (_value >= nbits)						\
-		_value = -1;						\
-	*(value) = _value;						\
+/* find first bit clear in name */
+#define bitstr_ffc(name, nbits, value) do {                             \
+	bitstr_t *_name = (name);                                       \
+	int _byte, _nbits = (nbits);                                    \
+	int _stopbyte = _bitstr_byte(_nbits - 1), _value = -1;          \
+	if (_nbits > 0)                                                 \
+	        for (_byte = 0; _byte <= _stopbyte; ++_byte)            \
+	                if (_name[_byte] != 0xff) {                     \
+	                        bitstr_t _lb;                           \
+	                        _value = _byte << 3;                    \
+	                        for (_lb = _name[_byte]; (_lb & 0x1);   \
+	                            ++_value, _lb >>= 1);               \
+	                        break;                                  \
+	                }                                               \
+	if (_value >= nbits)                                            \
+	        _value = -1;                                            \
+	*(value) = _value;                                              \
 } while (0)
 
-				/* find first bit set in name */
-#define	bitstr_ffs(name, nbits, value) do {				\
-	bitstr_t *_name = (name);					\
-	int _byte, _nbits = (nbits);					\
-	int _stopbyte = _bitstr_byte(_nbits - 1), _value = -1;		\
-	if (_nbits > 0)							\
-		for (_byte = 0; _byte <= _stopbyte; ++_byte)		\
-			if (_name[_byte]) {				\
-				bitstr_t _lb;				\
-				_value = _byte << 3;			\
-				for (_lb = _name[_byte]; !(_lb & 0x1);	\
-				    ++_value, _lb >>= 1);		\
-				break;					\
-			}						\
-	if (_value >= nbits)						\
-		_value = -1;						\
-	*(value) = _value;						\
+/* find first bit set in name */
+#define bitstr_ffs(name, nbits, value) do {                             \
+	bitstr_t *_name = (name);                                       \
+	int _byte, _nbits = (nbits);                                    \
+	int _stopbyte = _bitstr_byte(_nbits - 1), _value = -1;          \
+	if (_nbits > 0)                                                 \
+	        for (_byte = 0; _byte <= _stopbyte; ++_byte)            \
+	                if (_name[_byte]) {                             \
+	                        bitstr_t _lb;                           \
+	                        _value = _byte << 3;                    \
+	                        for (_lb = _name[_byte]; !(_lb & 0x1);  \
+	                            ++_value, _lb >>= 1);               \
+	                        break;                                  \
+	                }                                               \
+	if (_value >= nbits)                                            \
+	        _value = -1;                                            \
+	*(value) = _value;                                              \
 } while (0)
 
 #endif /* XNU_KERNEL_PRIVATE */

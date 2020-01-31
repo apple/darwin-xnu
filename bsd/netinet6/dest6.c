@@ -89,20 +89,21 @@ dest6_input(struct mbuf **mp, int *offp, int proto)
 			optlen = *(opt + 1) + 2;
 			break;
 
-		default:		/* unknown option */
+		default:                /* unknown option */
 			optlen = ip6_unknown_opt(opt, m,
 			    opt - mtod(m, u_int8_t *));
-			if (optlen == -1)
-				return (IPPROTO_DONE);
+			if (optlen == -1) {
+				return IPPROTO_DONE;
+			}
 			optlen += 2;
 			break;
 		}
 	}
 
 	*offp = off;
-	return (dstopts->ip6d_nxt);
+	return dstopts->ip6d_nxt;
 
-  bad:
+bad:
 	m_freem(m);
-	return (IPPROTO_DONE);
+	return IPPROTO_DONE;
 }

@@ -40,7 +40,7 @@
 #include <netinet/in.h>
 #include <uuid/uuid.h>
 
-#define	IP_PORTRANGE_SIZE 65536
+#define IP_PORTRANGE_SIZE 65536
 
 /*
  * The sysctl "net.link.generic.system.port_used.list" returns:
@@ -56,39 +56,39 @@
  */
 
 struct xnpigen {
-	uint32_t	xng_len; /* length of this data structure */
-	uint32_t	xng_gen; /* how many times the list was built */
-	uint32_t	xng_npi_count; /* number of net_port_info following */
-	uint32_t	xng_npi_size; /* number of struct net_port_info  */
-	uuid_t		xng_wakeuuid; /* WakeUUID when list was built */
+	uint32_t        xng_len; /* length of this data structure */
+	uint32_t        xng_gen; /* how many times the list was built */
+	uint32_t        xng_npi_count; /* number of net_port_info following */
+	uint32_t        xng_npi_size; /* number of struct net_port_info  */
+	uuid_t          xng_wakeuuid; /* WakeUUID when list was built */
 };
 
 union in_addr_4_6 {
-	struct in_addr	_in_a_4;
-	struct in6_addr	_in_a_6;
+	struct in_addr  _in_a_4;
+	struct in6_addr _in_a_6;
 };
 
-#define	NPIF_IPV4	0x00000001
-#define	NPIF_IPV6	0x00000002
-#define	NPIF_TCP	0x00000004
-#define	NPIF_UDP	0x00000008
-#define	NPIF_DELEGATED	0x00000010
-#define	NPIF_SOCKET	0x00000020
-#define	NPIF_CHANNEL	0x00000040
+#define NPIF_IPV4       0x00000001
+#define NPIF_IPV6       0x00000002
+#define NPIF_TCP        0x00000004
+#define NPIF_UDP        0x00000008
+#define NPIF_DELEGATED  0x00000010
+#define NPIF_SOCKET     0x00000020
+#define NPIF_CHANNEL    0x00000040
 
 struct net_port_info {
-	uint16_t		npi_if_index;
-	uint16_t		npi_flags;
-	struct timeval32	npi_timestamp; /* when passed to driver */
-	uuid_t			npi_flow_uuid;
-	in_port_t		npi_local_port;	/* network byte order */
-	in_port_t		npi_foreign_port; /* network byte order */
-	union in_addr_4_6	npi_local_addr_;
-	union in_addr_4_6	npi_foreign_addr_;
-	pid_t			npi_owner_pid;
-	pid_t			npi_effective_pid;
-	char    		npi_owner_pname[MAXCOMLEN+1];
-	char    		npi_effective_pname[MAXCOMLEN+1];
+	uint16_t                npi_if_index;
+	uint16_t                npi_flags;
+	struct timeval32        npi_timestamp; /* when passed to driver */
+	uuid_t                  npi_flow_uuid;
+	in_port_t               npi_local_port; /* network byte order */
+	in_port_t               npi_foreign_port; /* network byte order */
+	union in_addr_4_6       npi_local_addr_;
+	union in_addr_4_6       npi_foreign_addr_;
+	pid_t                   npi_owner_pid;
+	pid_t                   npi_effective_pid;
+	char                    npi_owner_pname[MAXCOMLEN + 1];
+	char                    npi_effective_pname[MAXCOMLEN + 1];
 };
 
 #define npi_local_addr_in npi_local_addr_._in_a_4
@@ -108,6 +108,6 @@ void if_ports_used_add_inpcb(const uint32_t ifindex, const struct inpcb *inp);
 
 
 #endif /* XNU_KERNEL_PRIVATE */
-#endif /* PRIVATE */ 
+#endif /* PRIVATE */
 
 #endif /* _NET_IF_PORT_USED_H_ */

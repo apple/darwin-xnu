@@ -83,28 +83,28 @@
 #include <os/log.h>
 
 typedef int64_t l_fp;
-#define L_ADD(v, u)	((v) += (u))
-#define L_SUB(v, u)	((v) -= (u))
-#define L_ADDHI(v, a)	((v) += (int64_t)(a) << 32)
-#define L_NEG(v)	((v) = -(v))
+#define L_ADD(v, u)     ((v) += (u))
+#define L_SUB(v, u)     ((v) -= (u))
+#define L_ADDHI(v, a)   ((v) += (int64_t)(a) << 32)
+#define L_NEG(v)        ((v) = -(v))
 #define L_RSHIFT(v, n) \
 	do { \
-		if ((v) < 0) \
-			(v) = -(-(v) >> (n)); \
-		else \
-			(v) = (v) >> (n); \
+	        if ((v) < 0) \
+	                (v) = -(-(v) >> (n)); \
+	        else \
+	                (v) = (v) >> (n); \
 	} while (0)
-#define L_MPY(v, a)	((v) *= (a))
-#define L_CLR(v)	((v) = 0)
-#define L_ISNEG(v)	((v) < 0)
+#define L_MPY(v, a)     ((v) *= (a))
+#define L_CLR(v)        ((v) = 0)
+#define L_ISNEG(v)      ((v) < 0)
 #define L_LINT(v, a) \
 	do { \
-		if ((a) > 0) \
-			((v) = (int64_t)(a) << 32); \
-		else \
-			((v) = -((int64_t)(-(a)) << 32)); \
+	        if ((a) > 0) \
+	                ((v) = (int64_t)(a) << 32); \
+	        else \
+	                ((v) = -((int64_t)(-(a)) << 32)); \
 	} while (0)
-#define L_GINT(v)	((v) < 0 ? -(-(v) >> 32) : (v) >> 32)
+#define L_GINT(v)       ((v) < 0 ? -(-(v) >> 32) : (v) >> 32)
 
 /*
  * Generic NTP kernel interface
@@ -170,8 +170,8 @@ typedef int64_t l_fp;
  * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  */
 
-#define SHIFT_PLL	4
-#define SHIFT_FLL	2
+#define SHIFT_PLL       4
+#define SHIFT_FLL       2
 
 static int time_state = TIME_OK;
 int time_status = STA_UNSYNC;
@@ -190,17 +190,17 @@ static int updated;
 static lck_spin_t * ntp_lock;
 static lck_grp_t * ntp_lock_grp;
 static lck_attr_t * ntp_lock_attr;
-static lck_grp_attr_t	*ntp_lock_grp_attr;
+static lck_grp_attr_t   *ntp_lock_grp_attr;
 
-#define	NTP_LOCK(enable) \
-		enable =  ml_set_interrupts_enabled(FALSE); \
-		lck_spin_lock(ntp_lock);
+#define NTP_LOCK(enable) \
+	        enable =  ml_set_interrupts_enabled(FALSE); \
+	        lck_spin_lock(ntp_lock);
 
-#define	NTP_UNLOCK(enable) \
-		lck_spin_unlock(ntp_lock);\
-		ml_set_interrupts_enabled(enable);
+#define NTP_UNLOCK(enable) \
+	        lck_spin_unlock(ntp_lock);\
+	        ml_set_interrupts_enabled(enable);
 
-#define	NTP_ASSERT_LOCKED()	LCK_SPIN_ASSERT(ntp_lock, LCK_ASSERT_OWNED)
+#define NTP_ASSERT_LOCKED()     LCK_SPIN_ASSERT(ntp_lock, LCK_ASSERT_OWNED)
 
 static timer_call_data_t ntp_loop_update;
 static uint64_t ntp_loop_deadline;
@@ -225,11 +225,11 @@ SYSCTL_INT(_kern, OID_AUTO, log_clock_adjustments, CTLFLAG_RW | CTLFLAG_LOCKED, 
 static bool
 ntp_is_time_error(int tsl)
 {
+	if (tsl & (STA_UNSYNC | STA_CLOCKERR)) {
+		return true;
+	}
 
-	if (tsl & (STA_UNSYNC | STA_CLOCKERR))
-		return (true);
-
-	return (false);
+	return false;
 }
 
 static void
@@ -243,7 +243,7 @@ ntp_gettime1(struct ntptimeval *ntvp)
 	ntvp->time.tv_sec = atv.tv_sec;
 	ntvp->time.tv_nsec = atv.tv_nsec;
 	if ((unsigned long)atv.tv_sec > last_time_maxerror_update) {
-		time_maxerror += (MAXFREQ / 1000)*(atv.tv_sec-last_time_maxerror_update);
+		time_maxerror += (MAXFREQ / 1000) * (atv.tv_sec - last_time_maxerror_update);
 		last_time_maxerror_update = atv.tv_sec;
 	}
 	ntvp->maxerror = time_maxerror;
@@ -251,8 +251,9 @@ ntp_gettime1(struct ntptimeval *ntvp)
 	ntvp->tai = time_tai;
 	ntvp->time_state = time_state;
 
-	if (ntp_is_time_error(time_status))
+	if (ntp_is_time_error(time_status)) {
 		ntvp->time_state = TIME_ERROR;
+	}
 }
 
 int
@@ -286,8 +287,9 @@ ntp_gettime(struct proc *p, struct ntp_gettime_args *uap, __unused int32_t *retv
 		error = copyout(&user_ntv, uap->ntvp, sizeof(user_ntv));
 	}
 
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	return ntv.time_state;
 }
@@ -315,7 +317,6 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, int32_t *retval)
 		ntv.constant = user_ntv.constant;
 		ntv.precision = user_ntv.precision;
 		ntv.tolerance = user_ntv.tolerance;
-
 	} else {
 		struct user32_timex user_ntv;
 		error = copyin(uap->tp, &user_ntv, sizeof(user_ntv));
@@ -329,13 +330,14 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, int32_t *retval)
 		ntv.precision = user_ntv.precision;
 		ntv.tolerance = user_ntv.tolerance;
 	}
-	if (error)
-		return (error);
+	if (error) {
+		return error;
+	}
 
 #if DEVELOPEMNT || DEBUG
 	if (g_should_log_clock_adjustments) {
 		os_log(OS_LOG_DEFAULT, "%s: BEFORE modes %u offset %ld freq %ld status %d constant %ld time_adjtime %lld\n",
-		       __func__, ntv.modes, ntv.offset, ntv.freq, ntv.status, ntv.constant, time_adjtime);
+		    __func__, ntv.modes, ntv.offset, ntv.freq, ntv.status, ntv.constant, time_adjtime);
 	}
 #endif
 	/*
@@ -353,12 +355,13 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, int32_t *retval)
 		if (!IOTaskHasEntitlement(current_task(), SETTIME_ENTITLEMENT)) {
 #if CONFIG_MACF
 			error = mac_system_check_settime(kauth_cred_get());
-			if (error)
-				return (error);
+			if (error) {
+				return error;
+			}
 #endif
-			if ((error = priv_check_cred(kauth_cred_get(), PRIV_ADJTIME, 0)))
-				return (error);
-
+			if ((error = priv_check_cred(kauth_cred_get(), PRIV_ADJTIME, 0))) {
+				return error;
+			}
 		}
 	}
 
@@ -369,8 +372,9 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, int32_t *retval)
 		time_maxerror = ntv.maxerror;
 		last_time_maxerror_update = sec;
 	}
-	if (modes & MOD_ESTERROR)
+	if (modes & MOD_ESTERROR) {
 		time_esterror = ntv.esterror;
+	}
 	if (modes & MOD_STATUS) {
 		if (time_status & STA_PLL && !(ntv.status & STA_PLL)) {
 			time_state = TIME_OK;
@@ -385,32 +389,38 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, int32_t *retval)
 		time_status &= STA_SUPPORTED;
 	}
 	if (modes & MOD_TIMECONST) {
-		if (ntv.constant < 0)
+		if (ntv.constant < 0) {
 			time_constant = 0;
-		else if (ntv.constant > MAXTC)
+		} else if (ntv.constant > MAXTC) {
 			time_constant = MAXTC;
-		else
+		} else {
 			time_constant = ntv.constant;
+		}
 	}
 	if (modes & MOD_TAI) {
-		if (ntv.constant > 0)
+		if (ntv.constant > 0) {
 			time_tai = ntv.constant;
+		}
 	}
-	if (modes & MOD_NANO)
+	if (modes & MOD_NANO) {
 		time_status |= STA_NANO;
-	if (modes & MOD_MICRO)
+	}
+	if (modes & MOD_MICRO) {
 		time_status &= ~STA_NANO;
-	if (modes & MOD_CLKB)
+	}
+	if (modes & MOD_CLKB) {
 		time_status |= STA_CLK;
-	if (modes & MOD_CLKA)
+	}
+	if (modes & MOD_CLKA) {
 		time_status &= ~STA_CLK;
+	}
 	if (modes & MOD_FREQUENCY) {
 		freq = (ntv.freq * 1000LL) >> 16;
-		if (freq > MAXFREQ)
+		if (freq > MAXFREQ) {
 			L_LINT(time_freq, MAXFREQ);
-		else if (freq < -MAXFREQ)
+		} else if (freq < -MAXFREQ) {
 			L_LINT(time_freq, -MAXFREQ);
-		else {
+		} else {
 			/*
 			 * ntv.freq is [PPM * 2^16] = [us/s * 2^16]
 			 * time_freq is [ns/s * 2^32]
@@ -419,10 +429,11 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, int32_t *retval)
 		}
 	}
 	if (modes & MOD_OFFSET) {
-		if (time_status & STA_NANO)
+		if (time_status & STA_NANO) {
 			hardupdate(ntv.offset);
-		else
+		} else {
 			hardupdate(ntv.offset * 1000);
+		}
 	}
 
 	ret = ntp_is_time_error(time_status) ? TIME_ERROR : time_state;
@@ -430,7 +441,7 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, int32_t *retval)
 #if DEVELOPEMNT || DEBUG
 	if (g_should_log_clock_adjustments) {
 		os_log(OS_LOG_DEFAULT, "%s: AFTER modes %u offset %lld freq %lld status %d constant %ld time_adjtime %lld\n",
-		       __func__, modes, time_offset, time_freq, time_status, time_constant, time_adjtime);
+		    __func__, modes, time_offset, time_freq, time_status, time_constant, time_adjtime);
 	}
 #endif
 
@@ -442,44 +453,46 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, int32_t *retval)
 		struct user64_timex user_ntv = {};
 
 		user_ntv.modes = modes;
-		if (time_status & STA_NANO)
+		if (time_status & STA_NANO) {
 			user_ntv.offset = L_GINT(time_offset);
-		else
+		} else {
 			user_ntv.offset = L_GINT(time_offset) / 1000;
+		}
 		user_ntv.freq = L_GINT((time_freq / 1000LL) << 16);
 		user_ntv.maxerror = time_maxerror;
 		user_ntv.esterror = time_esterror;
 		user_ntv.status = time_status;
 		user_ntv.constant = time_constant;
-		if (time_status & STA_NANO)
+		if (time_status & STA_NANO) {
 			user_ntv.precision = time_precision;
-		else
+		} else {
 			user_ntv.precision = time_precision / 1000;
+		}
 		user_ntv.tolerance = MAXFREQ * SCALE_PPM;
 
 		/* unlock before copyout */
 		NTP_UNLOCK(enable);
 
 		error = copyout(&user_ntv, uap->tp, sizeof(user_ntv));
-
-	}
-	else{
+	} else {
 		struct user32_timex user_ntv = {};
 
 		user_ntv.modes = modes;
-		if (time_status & STA_NANO)
+		if (time_status & STA_NANO) {
 			user_ntv.offset = L_GINT(time_offset);
-		else
+		} else {
 			user_ntv.offset = L_GINT(time_offset) / 1000;
+		}
 		user_ntv.freq = L_GINT((time_freq / 1000LL) << 16);
 		user_ntv.maxerror = time_maxerror;
 		user_ntv.esterror = time_esterror;
 		user_ntv.status = time_status;
 		user_ntv.constant = time_constant;
-		if (time_status & STA_NANO)
+		if (time_status & STA_NANO) {
 			user_ntv.precision = time_precision;
-		else
+		} else {
 			user_ntv.precision = time_precision / 1000;
+		}
 		user_ntv.tolerance = MAXFREQ * SCALE_PPM;
 
 		/* unlock before copyout */
@@ -488,17 +501,20 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, int32_t *retval)
 		error = copyout(&user_ntv, uap->tp, sizeof(user_ntv));
 	}
 
-	if (modes)
+	if (modes) {
 		start_ntp_loop();
+	}
 
-	if (error == 0)
+	if (error == 0) {
 		*retval = ret;
+	}
 
-	return (error);
+	return error;
 }
 
 int64_t
-ntp_get_freq(void){
+ntp_get_freq(void)
+{
 	return time_freq;
 }
 
@@ -515,7 +531,7 @@ ntp_update_second(int64_t *adjustment, clock_sec_t secs)
 	NTP_ASSERT_LOCKED();
 
 	if (secs > last_time_maxerror_update) {
-		time_maxerror += (MAXFREQ / 1000)*(secs-last_time_maxerror_update);
+		time_maxerror += (MAXFREQ / 1000) * (secs - last_time_maxerror_update);
 		last_time_maxerror_update = secs;
 	}
 
@@ -534,16 +550,17 @@ ntp_update_second(int64_t *adjustment, clock_sec_t secs)
 	 * until the last second is slewed the final < 500 usecs.
 	 */
 	if (time_adjtime != 0) {
-		if (time_adjtime > 1000000)
+		if (time_adjtime > 1000000) {
 			tickrate = 5000;
-		else if (time_adjtime < -1000000)
+		} else if (time_adjtime < -1000000) {
 			tickrate = -5000;
-		else if (time_adjtime > 500)
+		} else if (time_adjtime > 500) {
 			tickrate = 500;
-		else if (time_adjtime < -500)
+		} else if (time_adjtime < -500) {
 			tickrate = -500;
-		else
+		} else {
 			tickrate = time_adjtime;
+		}
 		time_adjtime -= tickrate;
 		L_LINT(ftemp, tickrate * 1000);
 		L_ADD(time_adj, ftemp);
@@ -551,20 +568,19 @@ ntp_update_second(int64_t *adjustment, clock_sec_t secs)
 
 	if (old_time_adjtime || ((time_offset || old_offset) && (time_offset != old_offset))) {
 		updated = 1;
-	}
-	else{
+	} else {
 		updated = 0;
 	}
 
 #if DEVELOPEMNT || DEBUG
 	if (g_should_log_clock_adjustments) {
-		int64_t nano = (time_adj > 0)? time_adj >> 32 : -((-time_adj) >> 32); 
-		int64_t frac = (time_adj > 0)? ((uint32_t) time_adj) : -((uint32_t) (-time_adj)); 
+		int64_t nano = (time_adj > 0)? time_adj >> 32 : -((-time_adj) >> 32);
+		int64_t frac = (time_adj > 0)? ((uint32_t) time_adj) : -((uint32_t) (-time_adj));
 
 		os_log(OS_LOG_DEFAULT, "%s:AFTER offset %lld (%lld) freq %lld status %d "
-		       "constant %ld time_adjtime %lld nano %lld frac %lld adj %lld\n",
-		       __func__, time_offset, (time_offset > 0)? time_offset >> 32 : -((-time_offset) >> 32),
-		       time_freq, time_status, time_constant, time_adjtime, nano, frac, time_adj);
+		    "constant %ld time_adjtime %lld nano %lld frac %lld adj %lld\n",
+		    __func__, time_offset, (time_offset > 0)? time_offset >> 32 : -((-time_offset) >> 32),
+		    time_freq, time_status, time_constant, time_adjtime, nano, frac, time_adj);
 	}
 #endif
 
@@ -592,7 +608,7 @@ ntp_update_second(int64_t *adjustment, clock_sec_t secs)
  */
 static void
 hardupdate(offset)
-	long offset;
+long offset;
 {
 	long mtemp = 0;
 	long time_monitor;
@@ -601,15 +617,17 @@ hardupdate(offset)
 
 	NTP_ASSERT_LOCKED();
 
-	if (!(time_status & STA_PLL))
+	if (!(time_status & STA_PLL)) {
 		return;
+	}
 
-	if (offset > MAXPHASE)
+	if (offset > MAXPHASE) {
 		time_monitor = MAXPHASE;
-	else if (offset < -MAXPHASE)
+	} else if (offset < -MAXPHASE) {
 		time_monitor = -MAXPHASE;
-	else
+	} else {
 		time_monitor = offset;
+	}
 	L_LINT(time_offset, time_monitor);
 
 	clock_get_calendar_uptime(&time_uptime);
@@ -633,10 +651,11 @@ hardupdate(offset)
 	}
 	time_reftime = time_uptime;
 
-	if (L_GINT(time_freq) > MAXFREQ)
+	if (L_GINT(time_freq) > MAXFREQ) {
 		L_LINT(time_freq, MAXFREQ);
-	else if (L_GINT(time_freq) < -MAXFREQ)
+	} else if (L_GINT(time_freq) < -MAXFREQ) {
 		L_LINT(time_freq, -MAXFREQ);
+	}
 }
 
 
@@ -647,8 +666,9 @@ kern_adjtime(struct timeval *delta)
 	int64_t ltr, ltw;
 	boolean_t enable;
 
-	if (delta == NULL)
-		return (EINVAL);
+	if (delta == NULL) {
+		return EINVAL;
+	}
 
 	ltw = (int64_t)delta->tv_sec * (int64_t)USEC_PER_SEC + delta->tv_usec;
 
@@ -658,7 +678,7 @@ kern_adjtime(struct timeval *delta)
 #if DEVELOPEMNT || DEBUG
 	if (g_should_log_clock_adjustments) {
 		os_log(OS_LOG_DEFAULT, "%s:AFTER offset %lld freq %lld status %d constant %ld time_adjtime %lld\n",
-		       __func__, time_offset, time_freq, time_status, time_constant, time_adjtime);
+		    __func__, time_offset, time_freq, time_status, time_constant, time_adjtime);
 	}
 #endif
 	NTP_UNLOCK(enable);
@@ -674,26 +694,26 @@ kern_adjtime(struct timeval *delta)
 
 	start_ntp_loop();
 
-	return (0);
+	return 0;
 }
 
 int
 adjtime(struct proc *p, struct adjtime_args *uap, __unused int32_t *retval)
 {
-
 	struct timeval atv;
 	int error;
 
 	/* Check that this task is entitled to set the time or it is root */
 	if (!IOTaskHasEntitlement(current_task(), SETTIME_ENTITLEMENT)) {
-
 #if CONFIG_MACF
 		error = mac_system_check_settime(kauth_cred_get());
-		if (error)
-			return (error);
+		if (error) {
+			return error;
+		}
 #endif
-		if ((error = priv_check_cred(kauth_cred_get(), PRIV_ADJTIME, 0)))
-			return (error);
+		if ((error = priv_check_cred(kauth_cred_get(), PRIV_ADJTIME, 0))) {
+			return error;
+		}
 	}
 
 	if (IS_64BIT_PROCESS(p)) {
@@ -707,8 +727,9 @@ adjtime(struct proc *p, struct adjtime_args *uap, __unused int32_t *retval)
 		atv.tv_sec = user_atv.tv_sec;
 		atv.tv_usec = user_atv.tv_usec;
 	}
-	if (error)
-		return (error);
+	if (error) {
+		return error;
+	}
 
 	kern_adjtime(&atv);
 
@@ -726,8 +747,7 @@ adjtime(struct proc *p, struct adjtime_args *uap, __unused int32_t *retval)
 		}
 	}
 
-	return (error);
-
+	return error;
 }
 
 static void
@@ -751,7 +771,6 @@ ntp_loop_update_call(void)
 static void
 refresh_ntp_loop(void)
 {
-
 	NTP_ASSERT_LOCKED();
 	if (--ntp_loop_active == 0) {
 		/*
@@ -761,11 +780,11 @@ refresh_ntp_loop(void)
 		if (updated) {
 			clock_deadline_for_periodic_event(ntp_loop_period, mach_absolute_time(), &ntp_loop_deadline);
 
-			if (!timer_call_enter(&ntp_loop_update, ntp_loop_deadline, TIMER_CALL_SYS_CRITICAL))
-					ntp_loop_active++;
+			if (!timer_call_enter(&ntp_loop_update, ntp_loop_deadline, TIMER_CALL_SYS_CRITICAL)) {
+				ntp_loop_active++;
+			}
 		}
 	}
-
 }
 
 /*
@@ -783,7 +802,7 @@ start_ntp_loop(void)
 	ntp_loop_deadline = mach_absolute_time() + ntp_loop_period;
 
 	if (!timer_call_enter(&ntp_loop_update, ntp_loop_deadline, TIMER_CALL_SYS_CRITICAL)) {
-			ntp_loop_active++;
+		ntp_loop_active++;
 	}
 
 	NTP_UNLOCK(enable);
@@ -793,7 +812,7 @@ start_ntp_loop(void)
 static void
 init_ntp_loop(void)
 {
-	uint64_t	abstime;
+	uint64_t        abstime;
 
 	ntp_loop_active = 0;
 	nanoseconds_to_absolutetime(NTP_LOOP_PERIOD_INTERVAL, &abstime);
@@ -804,7 +823,6 @@ init_ntp_loop(void)
 void
 ntp_init(void)
 {
-
 	L_CLR(time_offset);
 	L_CLR(time_freq);
 

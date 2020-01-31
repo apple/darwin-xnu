@@ -2,7 +2,7 @@
  * Copyright (c) 2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -54,7 +54,8 @@
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_fsnode_create(mount_t mp, uint8_t type, mockfs_fsnode_t * fsnpp)
+int
+mockfs_fsnode_create(mount_t mp, uint8_t type, mockfs_fsnode_t * fsnpp)
 {
 	int rvalue;
 	uint64_t new_size;
@@ -68,20 +69,20 @@ int mockfs_fsnode_create(mount_t mp, uint8_t type, mockfs_fsnode_t * fsnpp)
 	}
 
 	switch (type) {
-		case MOCKFS_ROOT:
-			break;	
-		case MOCKFS_DEV:
-			break;
-		case MOCKFS_FILE:
-			/*
-			 * For a regular file, size is meaningful, but it will always be equal to the
-			 * size of the backing device.
-			 */
-			new_size = mp->mnt_devvp->v_specinfo->si_devsize;
-			break;
-		default:
-			rvalue = EINVAL;
-			goto done;
+	case MOCKFS_ROOT:
+		break;
+	case MOCKFS_DEV:
+		break;
+	case MOCKFS_FILE:
+		/*
+		 * For a regular file, size is meaningful, but it will always be equal to the
+		 * size of the backing device.
+		 */
+		new_size = mp->mnt_devvp->v_specinfo->si_devsize;
+		break;
+	default:
+		rvalue = EINVAL;
+		goto done;
 	}
 
 	MALLOC(*fsnpp, typeof(*fsnpp), sizeof(**fsnpp), M_TEMP, M_WAITOK | M_ZERO);
@@ -106,7 +107,8 @@ done:
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_fsnode_destroy(mockfs_fsnode_t fsnp)
+int
+mockfs_fsnode_destroy(mockfs_fsnode_t fsnp)
 {
 	int rvalue;
 
@@ -125,8 +127,9 @@ int mockfs_fsnode_destroy(mockfs_fsnode_t fsnp)
 	 * For now, panic in this case; I don't expect anyone to ask us to destroy a node with a live
 	 *   vfs reference, but this will tell me if that assumption is untrue.
 	 */
-	if (fsnp->vp)
+	if (fsnp->vp) {
 		panic("mockfs_fsnode_destroy called on node with live vnode; fsnp = %p (in case gdb is screwing with you)", fsnp);
+	}
 
 	/*
 	 * If this node has children, we need to destroy them.
@@ -136,20 +139,26 @@ int mockfs_fsnode_destroy(mockfs_fsnode_t fsnp)
 	 *   we've failed to destroy the subtree, which means someone called destroy when they should
 	 *   not have done so).
 	 */
-	if (fsnp->child_a)
-		if ((rvalue = mockfs_fsnode_destroy(fsnp->child_a)))
+	if (fsnp->child_a) {
+		if ((rvalue = mockfs_fsnode_destroy(fsnp->child_a))) {
 			panic("mockfs_fsnode_destroy failed on child_a; fsnp = %p (in case gdb is screwing with you), rvalue = %d", fsnp, rvalue);
+		}
+	}
 
-	if (fsnp->child_b)
-		if ((rvalue = mockfs_fsnode_destroy(fsnp->child_b)))
+	if (fsnp->child_b) {
+		if ((rvalue = mockfs_fsnode_destroy(fsnp->child_b))) {
 			panic("mockfs_fsnode_destroy failed on child_b; fsnp = %p (in case gdb is screwing with you), rvalue = %d", fsnp, rvalue);
+		}
+	}
 
 	/*
 	 * We need to orphan this node before we destroy it.
 	 */
-	if (fsnp->parent)
-		if ((rvalue = mockfs_fsnode_orphan(fsnp)))
+	if (fsnp->parent) {
+		if ((rvalue = mockfs_fsnode_orphan(fsnp))) {
 			panic("mockfs_fsnode_orphan failed during destroy; fsnp = %p (in case gdb is screwing with you), rvalue = %d", fsnp, rvalue);
+		}
+	}
 
 	FREE(fsnp, M_TEMP);
 done:
@@ -162,7 +171,8 @@ done:
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_fsnode_adopt(mockfs_fsnode_t parent, mockfs_fsnode_t child)
+int
+mockfs_fsnode_adopt(mockfs_fsnode_t parent, mockfs_fsnode_t child)
 {
 	int rvalue;
 
@@ -189,18 +199,16 @@ int mockfs_fsnode_adopt(mockfs_fsnode_t parent, mockfs_fsnode_t child)
 	 * TODO: Enforce that the parent cannot have two children of the same type (for the moment, this is
 	 *   implicit in the structure of the tree constructed by mockfs_mountroot, so we don't need to
 	 *   worry about it).
-	 * 
+	 *
 	 * Can the parent support another child (food, shelter, unused pointers)?
 	 */
 	if (!parent->child_a) {
 		parent->child_a = child;
 		child->parent = parent;
-	}
-	else if (!parent->child_b) {
+	} else if (!parent->child_b) {
 		parent->child_b = child;
 		child->parent = parent;
-	}
-	else {
+	} else {
 		rvalue = ENOMEM;
 	}
 
@@ -213,7 +221,8 @@ done:
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_fsnode_orphan(mockfs_fsnode_t fsnp)
+int
+mockfs_fsnode_orphan(mockfs_fsnode_t fsnp)
 {
 	int rvalue;
 	mockfs_fsnode_t parent;
@@ -228,21 +237,21 @@ int mockfs_fsnode_orphan(mockfs_fsnode_t fsnp)
 	/*
 	 * Disallow orphaning a node with a live vnode for now.
 	 */
-	if (fsnp->vp)
+	if (fsnp->vp) {
 		panic("mockfs_fsnode_orphan called on node with live vnode; fsnp = %p (in case gdb is screwing with you)", fsnp);
+	}
 
 	parent = fsnp->parent;
 
 	if (parent->child_a == fsnp) {
 		parent->child_a = NULL;
 		fsnp->parent = NULL;
-	}
-	else if (parent->child_b == fsnp) {
+	} else if (parent->child_b == fsnp) {
 		parent->child_b = NULL;
 		fsnp->parent = NULL;
-	}
-	else
+	} else {
 		panic("mockfs_fsnode_orphan insanity, fsnp->parent != parent->child; fsnp = %p (in case gdb is screwing with you)", fsnp);
+	}
 
 done:
 	return rvalue;
@@ -254,28 +263,30 @@ done:
  *   requested type.  This method exists to support lookup (which is responsible for mapping names, which
  *   we have no conception of currently, onto vnodes).
  *
- * This should be safe, as we are walking the read-only parts of the filesystem structure (not touching 
+ * This should be safe, as we are walking the read-only parts of the filesystem structure (not touching
  *   the vnode).
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_fsnode_child_by_type(mockfs_fsnode_t parent, uint8_t type, mockfs_fsnode_t * child)
+int
+mockfs_fsnode_child_by_type(mockfs_fsnode_t parent, uint8_t type, mockfs_fsnode_t * child)
 {
 	int rvalue;
-	
+
 	rvalue = 0;
-	
+
 	if (!parent || !child) {
 		rvalue = EINVAL;
 		goto done;
 	}
 
-	if ((parent->child_a) && (parent->child_a->type == type))
+	if ((parent->child_a) && (parent->child_a->type == type)) {
 		*child = parent->child_a;
-	else if ((parent->child_b) && (parent->child_b->type == type))
+	} else if ((parent->child_b) && (parent->child_b->type == type)) {
 		*child = parent->child_b;
-	else
+	} else {
 		rvalue = ENOENT;
+	}
 
 done:
 	return rvalue;
@@ -288,7 +299,8 @@ done:
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_fsnode_vnode(mockfs_fsnode_t fsnp, vnode_t * vpp)
+int
+mockfs_fsnode_vnode(mockfs_fsnode_t fsnp, vnode_t * vpp)
 {
 	int rvalue;
 	memory_object_control_t ubc_mem_object;
@@ -311,8 +323,7 @@ int mockfs_fsnode_vnode(mockfs_fsnode_t fsnp, vnode_t * vpp)
 		if (!rvalue) {
 			*vpp = fsnp->vp;
 		}
-	}
-	else {
+	} else {
 		/*
 		 * We need to create the vnode; this will be unpleasant.
 		 */
@@ -336,17 +347,20 @@ int mockfs_fsnode_vnode(mockfs_fsnode_t fsnp, vnode_t * vpp)
 			 */
 			ubc_mem_object = ubc_getobject(fsnp->vp, 0);
 
-			if (!ubc_mem_object)
+			if (!ubc_mem_object) {
 				panic("mockfs_fsvnode failed to get ubc_mem_object for a new vnode");
+			}
 
 			rvalue = pager_map_to_phys_contiguous(ubc_mem_object, 0, (mockfs_mnt->mockfs_memdev_base << PAGE_SHIFT), fsnp->size);
 
-			if (rvalue)
+			if (rvalue) {
 				panic("mockfs_fsnode_vnode failed to create fictitious pages for a memory-backed device; rvalue = %d", rvalue);
+			}
 		}
 
-		if (!rvalue)
+		if (!rvalue) {
 			*vpp = fsnp->vp;
+		}
 	}
 
 	lck_mtx_unlock(&mockfs_mnt->mockfs_mnt_mtx);
@@ -363,7 +377,8 @@ done:
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_fsnode_drop_vnode(mockfs_fsnode_t fsnp)
+int
+mockfs_fsnode_drop_vnode(mockfs_fsnode_t fsnp)
 {
 	int rvalue;
 	mockfs_mount_t mockfs_mnt;
@@ -391,4 +406,3 @@ int mockfs_fsnode_drop_vnode(mockfs_fsnode_t fsnp)
 done:
 	return rvalue;
 }
-

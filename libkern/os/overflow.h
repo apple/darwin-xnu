@@ -52,8 +52,8 @@ __os_warn_unused(__const bool x)
 }
 
 #if __has_builtin(__builtin_add_overflow) && \
-    __has_builtin(__builtin_sub_overflow) && \
-    __has_builtin(__builtin_mul_overflow)
+        __has_builtin(__builtin_sub_overflow) && \
+        __has_builtin(__builtin_mul_overflow)
 
 #define os_add_overflow(a, b, res) __os_warn_unused(__builtin_add_overflow((a), (b), (res)))
 #define os_sub_overflow(a, b, res) __os_warn_unused(__builtin_sub_overflow((a), (b), (res)))
@@ -71,35 +71,35 @@ __os_warn_unused(__const bool x)
 #else
 #define __OS_TYPE_CHECK(x, y) do { \
 	_Static_assert(__builtin_types_compatible_p(__typeof(x),__typeof(y)), \
-			"overflow arithmetic: incompatible types"); \
+	                "overflow arithmetic: incompatible types"); \
 } while (0)
 #endif
 
-#define __os_add_overflow_func(T,U,V) _Generic((T), \
-		unsigned:           __builtin_uadd_overflow, \
-		unsigned long:      __builtin_uaddl_overflow, \
-		unsigned long long: __builtin_uaddll_overflow, \
-		int:                __builtin_sadd_overflow, \
-		long:               __builtin_saddl_overflow, \
-		long long:          __builtin_saddll_overflow \
+#define __os_add_overflow_func(T, U, V) _Generic((T),\
+	        unsigned:           __builtin_uadd_overflow, \
+	        unsigned long:      __builtin_uaddl_overflow, \
+	        unsigned long long: __builtin_uaddll_overflow, \
+	        int:                __builtin_sadd_overflow, \
+	        long:               __builtin_saddl_overflow, \
+	        long long:          __builtin_saddll_overflow \
 	)(T,U,V)
 
-#define __os_sub_overflow_func(T,U,V) _Generic((T), \
-		unsigned:           __builtin_usub_overflow, \
-		unsigned long:      __builtin_usubl_overflow, \
-		unsigned long long: __builtin_usubll_overflow, \
-		int:                __builtin_ssub_overflow, \
-		long:               __builtin_ssubl_overflow, \
-		long long:          __builtin_ssubll_overflow \
+#define __os_sub_overflow_func(T, U, V) _Generic((T),\
+	        unsigned:           __builtin_usub_overflow, \
+	        unsigned long:      __builtin_usubl_overflow, \
+	        unsigned long long: __builtin_usubll_overflow, \
+	        int:                __builtin_ssub_overflow, \
+	        long:               __builtin_ssubl_overflow, \
+	        long long:          __builtin_ssubll_overflow \
 	)(T,U,V)
 
-#define __os_mul_overflow_func(T,U,V) _Generic((T), \
-		unsigned:           __builtin_umul_overflow, \
-		unsigned long:      __builtin_umull_overflow, \
-		unsigned long long: __builtin_umulll_overflow, \
-		int:                __builtin_smul_overflow, \
-		long:               __builtin_smull_overflow, \
-		long long:          __builtin_smulll_overflow \
+#define __os_mul_overflow_func(T, U, V) _Generic((T),\
+	        unsigned:           __builtin_umul_overflow, \
+	        unsigned long:      __builtin_umull_overflow, \
+	        unsigned long long: __builtin_umulll_overflow, \
+	        int:                __builtin_smul_overflow, \
+	        long:               __builtin_smull_overflow, \
+	        long long:          __builtin_smulll_overflow \
 	)(T,U,V)
 
 #define os_add_overflow(a, b, res) __os_warn_unused(__extension__({ \

@@ -42,15 +42,15 @@
 
 #ifdef BSD_KERNEL_PRIVATE
 /* Size of a page in an object file. */
-#define	__LDPGSZ	4096
+#define __LDPGSZ        4096
 
 /* Valid magic number check. */
-#define	N_BADMAG(ex) \
+#define N_BADMAG(ex) \
 	((ex).a_magic != NMAGIC && (ex).a_magic != OMAGIC && \
 	    (ex).a_magic != ZMAGIC)
 
 /* Address of the bottom of the text segment. */
-#define N_TXTADDR(X)	0
+#define N_TXTADDR(X)    0
 
 /* Address of the bottom of the data segment. */
 #define N_DATADDR(ex) \
@@ -58,11 +58,11 @@
 	: __LDPGSZ + ((ex).a_text - 1 & ~(__LDPGSZ - 1))))
 
 /* Text segment offset. */
-#define	N_TXTOFF(ex) \
+#define N_TXTOFF(ex) \
 	((ex).a_magic == ZMAGIC ? __LDPGSZ : sizeof(struct exec))
 
 /* Data segment offset. */
-#define	N_DATOFF(ex) \
+#define N_DATOFF(ex) \
 	(N_TXTOFF(ex) + ((ex).a_magic != ZMAGIC ? (ex).a_text : \
 	__LDPGSZ + ((ex).a_text - 1 & ~(__LDPGSZ - 1))))
 
@@ -72,23 +72,23 @@
 	    (ex).a_drsize)
 
 /* String table offset. */
-#define	N_STROFF(ex) 	(N_SYMOFF(ex) + (ex).a_syms)
+#define N_STROFF(ex)    (N_SYMOFF(ex) + (ex).a_syms)
 
 /* Description of the object file header (a.out format). */
 struct exec {
-#define	OMAGIC	0407		/* old impure format */
-#define	NMAGIC	0410		/* read-only text */
-#define	ZMAGIC	0413		/* demand load format */
-#define QMAGIC	0314		/* demand load format. Header in text. */
-	unsigned int	a_magic;	/* magic number */
+#define OMAGIC  0407            /* old impure format */
+#define NMAGIC  0410            /* read-only text */
+#define ZMAGIC  0413            /* demand load format */
+#define QMAGIC  0314            /* demand load format. Header in text. */
+	unsigned int    a_magic;        /* magic number */
 
-	unsigned int	a_text;		/* text segment size */
-	unsigned int	a_data;		/* initialized data size */
-	unsigned int	a_bss;		/* uninitialized data size */
-	unsigned int	a_syms;		/* symbol table size */
-	unsigned int	a_entry;	/* entry point */
-	unsigned int	a_trsize;	/* text relocation size */
-	unsigned int	a_drsize;	/* data relocation size */
+	unsigned int    a_text;         /* text segment size */
+	unsigned int    a_data;         /* initialized data size */
+	unsigned int    a_bss;          /* uninitialized data size */
+	unsigned int    a_syms;         /* symbol table size */
+	unsigned int    a_entry;        /* entry point */
+	unsigned int    a_trsize;       /* text relocation size */
+	unsigned int    a_drsize;       /* data relocation size */
 };
 
 #endif /* BSD_KERNEL_PRIVATE */

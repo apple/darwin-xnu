@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -73,29 +73,29 @@
 #ifdef __APPLE_API_PRIVATE
 #ifdef KERNEL
 
-#define FD_ROOT		2
-#define FD_DEVFD	3
-#define FD_STDIN	4
-#define FD_STDOUT	5
-#define FD_STDERR	6
-#define FD_DESC		8
-#define FD_MAX		12
+#define FD_ROOT         2
+#define FD_DEVFD        3
+#define FD_STDIN        4
+#define FD_STDOUT       5
+#define FD_STDERR       6
+#define FD_DESC         8
+#define FD_MAX          12
 
 typedef enum {
 	Fdesc,
 } fdntype;
 
 struct fdescnode {
-	LIST_ENTRY(fdescnode)	fd_hash;	/* Hash list */
-	struct vnode		*fd_vnode;	/* Back ptr to vnode */
-	fdntype			fd_type;	/* Type of this node */
-	long			fd_fd;		/* Fd to be dup'ed */
-	const char		*fd_link;	/* Link to fd/n */
-	int			fd_ix;		/* filesystem index */
+	LIST_ENTRY(fdescnode)   fd_hash;        /* Hash list */
+	struct vnode            *fd_vnode;      /* Back ptr to vnode */
+	fdntype                 fd_type;        /* Type of this node */
+	long                    fd_fd;          /* Fd to be dup'ed */
+	const char              *fd_link;       /* Link to fd/n */
+	int                     fd_ix;          /* filesystem index */
 };
 
-#define VFSTOFDESC(mp)	((struct fdescmount *)((mp)->mnt_data))
-#define	VTOFDESC(vp) ((struct fdescnode *)(vp)->v_data)
+#define VFSTOFDESC(mp)  ((struct fdescmount *)((mp)->mnt_data))
+#define VTOFDESC(vp) ((struct fdescnode *)(vp)->v_data)
 
 __BEGIN_DECLS
 extern int fdesc_allocvp(fdntype, int, struct mount *, struct vnode **, enum vtype, int);
@@ -118,8 +118,8 @@ extern int fdesc_select(struct vnop_select_args *ap);
 extern int fdesc_setattr(struct vnop_setattr_args *ap);
 extern int fdesc_write(struct vnop_write_args *ap);
 
-extern int (**fdesc_vnodeop_p)(void *);
-extern int (**devfs_devfd_vnodeop_p)(void*);
+extern int(**fdesc_vnodeop_p)(void *);
+extern int(**devfs_devfd_vnodeop_p)(void*);
 extern struct vfsops fdesc_vfsops;
 __END_DECLS
 

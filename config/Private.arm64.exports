@@ -30,6 +30,7 @@ _sched_perfcontrol_register_callbacks
 _sched_perfcontrol_update_recommended_cores
 _sched_perfcontrol_thread_group_recommend
 _sched_perfcontrol_update_callback_deadline
+_thread_group_join_io_storage
 _ml_static_ptovirt
 _ml_static_mfree
 _ex_cb_register
@@ -39,4 +40,7 @@ _pgtrace_stop
 _pgtrace_active
 _pgtrace_add_probe
 _pgtrace_clear_probe
+_mach_bridge_recv_timestamps
+_mach_bridge_init_timestamp
 _PE_panic_debugging_enabled
+_register_additional_panic_data_buffer

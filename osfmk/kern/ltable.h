@@ -31,23 +31,23 @@
 #include <machine/locks.h>
 
 #if CONFIG_LTABLE_DEBUG
-#define ltdbg(fmt,...) \
+#define ltdbg(fmt, ...) \
 	printf("LT[%s]:  " fmt "\n", __func__, ## __VA_ARGS__)
 #else
-#define ltdbg(fmt,...) do { } while (0)
+#define ltdbg(fmt, ...) do { } while (0)
 #endif
 
 #ifdef LTABLE_VERBOSE_DEBUG
-#define ltdbg_v(fmt,...) \
+#define ltdbg_v(fmt, ...) \
 	printf("LT[v:%s]:  " fmt "\n", __func__, ## __VA_ARGS__)
 #else
-#define ltdbg_v(fmt,...) do { } while (0)
+#define ltdbg_v(fmt, ...) do { } while (0)
 #endif
 
-#define ltinfo(fmt,...) \
+#define ltinfo(fmt, ...) \
 	printf("LT[%s]: " fmt "\n", __func__,  ## __VA_ARGS__)
 
-#define lterr(fmt,...) \
+#define lterr(fmt, ...) \
 	printf("LT[%s] ERROR: " fmt "\n", __func__, ## __VA_ARGS__)
 
 
@@ -67,7 +67,7 @@ struct ltable_id {
 			 * enforce a particular memory layout
 			 */
 			uint64_t idx:18, /* allows indexing up to 8MB of 32byte objects */
-			         generation:46;
+			    generation:46;
 		};
 	};
 };
@@ -177,8 +177,8 @@ extern void ltable_bootstrap(void);
  *
  */
 extern void ltable_init(struct link_table *table, const char *name,
-			uint32_t max_tbl_elem, uint32_t elem_sz,
-			ltable_poison_func poison);
+    uint32_t max_tbl_elem, uint32_t elem_sz,
+    ltable_poison_func poison);
 
 
 /**
@@ -205,7 +205,7 @@ extern void ltable_grow(struct link_table *table, uint32_t min_free);
  */
 extern __attribute__((noinline))
 struct lt_elem *ltable_alloc_elem(struct link_table *table, int type,
-	                          int nelem, int nattempts);
+    int nelem, int nattempts);
 
 
 #if DEVELOPMENT || DEBUG
@@ -226,7 +226,7 @@ int ltable_nelem(struct link_table *table);
  * 'type'.
  */
 extern void ltable_realloc_elem(struct link_table *table,
-				struct lt_elem *elem, int type);
+    struct lt_elem *elem, int type);
 
 
 /**
@@ -288,7 +288,7 @@ extern void lt_elem_mkvalid(struct lt_elem *elem);
  * however this could also result in: parent->...->child
  */
 extern int lt_elem_list_link(struct link_table *table,
-			     struct lt_elem *parent, struct lt_elem *child);
+    struct lt_elem *parent, struct lt_elem *child);
 
 
 /**
@@ -309,7 +309,7 @@ extern struct lt_elem *lt_elem_list_first(struct link_table *table, uint64_t id)
  * Note that this will return NULL if 'elem' is actually the end of the list.
  */
 extern struct lt_elem *lt_elem_list_next(struct link_table *table,
-					 struct lt_elem *elem);
+    struct lt_elem *elem);
 
 
 /**
@@ -320,7 +320,7 @@ extern struct lt_elem *lt_elem_list_next(struct link_table *table,
  * (which could be NULL)
  */
 extern struct lt_elem *lt_elem_list_break(struct link_table *table,
-					  struct lt_elem *elem);
+    struct lt_elem *elem);
 
 
 /**
@@ -333,7 +333,7 @@ extern struct lt_elem *lt_elem_list_break(struct link_table *table,
  * is still left invalid.
  */
 extern struct lt_elem *lt_elem_list_pop(struct link_table *table,
-					uint64_t *id, int type);
+    uint64_t *id, int type);
 
 
 /**
@@ -344,11 +344,12 @@ extern struct lt_elem *lt_elem_list_pop(struct link_table *table,
  * kernels to assert that all elements on the list are of the given type.
  */
 extern int lt_elem_list_release(struct link_table *table,
-				struct lt_elem *head,
-				int __assert_only type);
+    struct lt_elem *head,
+    int __assert_only type);
 
-static inline int lt_elem_list_release_id(struct link_table *table,
-					  uint64_t id, int type)
+static inline int
+lt_elem_list_release_id(struct link_table *table,
+    uint64_t id, int type)
 {
 	return lt_elem_list_release(table, lt_elem_list_first(table, id), type);
 }

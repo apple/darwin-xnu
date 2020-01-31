@@ -682,6 +682,32 @@ _STRUCT_X86_THREAD_STATE64
 };
 #endif /* !__DARWIN_UNIX03 */
 
+/*
+ * 64 bit versions of the above (complete)
+ */
+
+#if __DARWIN_UNIX03
+#define	_STRUCT_X86_THREAD_FULL_STATE64	struct __darwin_x86_thread_full_state64
+_STRUCT_X86_THREAD_FULL_STATE64
+{
+	_STRUCT_X86_THREAD_STATE64	ss64;
+	__uint64_t			__ds;
+	__uint64_t			__es;
+	__uint64_t			__ss;
+	__uint64_t			__gsbase;
+};
+#else /* !__DARWIN_UNIX03 */
+#define	_STRUCT_X86_THREAD_FULL_STATE64	struct x86_thread_full_state64
+_STRUCT_X86_THREAD_FULL_STATE64
+{
+	_STRUCT_X86_THREAD_STATE64	ss64;
+	__uint64_t			ds;
+	__uint64_t			es;
+	__uint64_t			ss;
+	__uint64_t			gsbase;
+};
+#endif /* !__DARWIN_UNIX03 */
+
 
 #if __DARWIN_UNIX03
 #define	_STRUCT_X86_FLOAT_STATE64	struct __darwin_x86_float_state64

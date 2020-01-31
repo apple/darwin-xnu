@@ -11,7 +11,7 @@ T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.perf"),
 	T_META_CHECK_LEAKS(false),
 	T_META_TAG_PERF
-);
+	);
 
 #define SPAWN_MEASURE_LOOP(s) \
 	char *args[] = {"/usr/bin/true", NULL}; \
@@ -19,16 +19,16 @@ T_GLOBAL_META(
 	pid_t pid; \
 	int status; \
 	while (!dt_stat_stable(s)) { \
-		T_STAT_MEASURE(s) { \
-			err = posix_spawn(&pid, args[0], NULL, NULL, args, NULL); \
-		} \
-		if (err) { \
-			T_FAIL("posix_spawn returned %d", err); \
-		} \
-		waitpid(pid, &status, 0); \
-		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) { \
-			T_FAIL("Child process of posix_spawn failed to run"); \
-		} \
+	        T_STAT_MEASURE(s) { \
+	                err = posix_spawn(&pid, args[0], NULL, NULL, args, NULL); \
+	        } \
+	        if (err) { \
+	                T_FAIL("posix_spawn returned %d", err); \
+	        } \
+	        waitpid(pid, &status, 0); \
+	        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) { \
+	                T_FAIL("Child process of posix_spawn failed to run"); \
+	        } \
 	}
 
 T_DECL(posix_spawn_platform_binary_latency, "posix_spawn platform binary latency") {
@@ -49,17 +49,17 @@ T_DECL(posix_spawn_platform_binary_latency, "posix_spawn platform binary latency
 	pid_t pid; \
 	int status; \
 	while (!dt_stat_stable(s)) { \
-		T_STAT_MEASURE(s) { \
-			pid = fork(); \
-			if (pid == 0) \
-				exit(0); \
-			else if (pid == -1) \
-				T_FAIL("fork returned -1"); \
-		} \
-		waitpid(pid, &status, 0); \
-		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) { \
-			T_FAIL("forked process failed to exit properly"); \
-		} \
+	        T_STAT_MEASURE(s) { \
+	                pid = fork(); \
+	                if (pid == 0) \
+	                        exit(0); \
+	                else if (pid == -1) \
+	                        T_FAIL("fork returned -1"); \
+	        } \
+	        waitpid(pid, &status, 0); \
+	        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) { \
+	                T_FAIL("forked process failed to exit properly"); \
+	        } \
 	}
 
 T_DECL(fork, "fork latency") {

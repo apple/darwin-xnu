@@ -9,25 +9,25 @@ const char ramdisk_name[] = "StressRAMDisk";
 char ramdisk_path[MAXPATHLEN];
 
 DECL_SETUP {
-    int retval;
+	int retval;
 
-    retval = setup_ram_volume(ramdisk_name, ramdisk_path);
-    VERIFY(retval == PERFINDEX_SUCCESS, "setup_ram_volume failed");
+	retval = setup_ram_volume(ramdisk_name, ramdisk_path);
+	VERIFY(retval == PERFINDEX_SUCCESS, "setup_ram_volume failed");
 
-    printf("ramdisk: %s\n", ramdisk_path);
+	printf("ramdisk: %s\n", ramdisk_path);
 
-    return PERFINDEX_SUCCESS;
+	return PERFINDEX_SUCCESS;
 }
 
 DECL_TEST {
-    return test_file_create(ramdisk_path, thread_id, num_threads, length);
+	return test_file_create(ramdisk_path, thread_id, num_threads, length);
 }
 
 DECL_CLEANUP {
-    int retval;
+	int retval;
 
-    retval = cleanup_ram_volume(ramdisk_path);
-    VERIFY(retval == 0, "cleanup_ram_volume failed");
+	retval = cleanup_ram_volume(ramdisk_path);
+	VERIFY(retval == 0, "cleanup_ram_volume failed");
 
-    return PERFINDEX_SUCCESS;
+	return PERFINDEX_SUCCESS;
 }

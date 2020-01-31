@@ -56,7 +56,7 @@
 .\"
 .\"     @(#)fcntl.2	8.2 (Berkeley) 1/12/94
 .\"
-.Dd August 24, 2017
+.Dd August 8, 2018
 .Dt FCNTL 2
 .Os BSD 4.2
 .Sh NAME
@@ -494,6 +494,9 @@ The modes are as follows:
 .Bl -tag -width F_PEOFPOSMODEX -offset indent
 .It Dv F_PEOFPOSMODE
 Allocate from the physical end of file.
+In this case,
+.Fa fst_length
+indicates the number of newly allocated bytes desired.
 .It Dv F_VOLPOSMODE
 Allocate from the volume offset.
 .El

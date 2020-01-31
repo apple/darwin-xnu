@@ -35,17 +35,17 @@
 
 typedef struct stackshot_config {
 	/* Input options */
-	int		sc_pid;			/* PID to trace, or -1 for the entire system */
-	uint32_t	sc_flags;		/* Stackshot flags */
-	uint64_t	sc_delta_timestamp;	/* Retrieve a delta stackshot of system state that has changed since this time */
+	int             sc_pid;                 /* PID to trace, or -1 for the entire system */
+	uint32_t        sc_flags;               /* Stackshot flags */
+	uint64_t        sc_delta_timestamp;     /* Retrieve a delta stackshot of system state that has changed since this time */
 
 	/* Stackshot results */
-	uint64_t	sc_buffer;		/* Pointer to stackshot buffer */
-	uint32_t	sc_size;		/* Length of the stackshot buffer */
+	uint64_t        sc_buffer;              /* Pointer to stackshot buffer */
+	uint32_t        sc_size;                /* Length of the stackshot buffer */
 
 	/* Internals */
-	uint64_t	sc_out_buffer_addr;	/* Location where the kernel should copy the address of the newly mapped buffer in user space */
-	uint64_t	sc_out_size_addr;	/* Location where the kernel should copy the size of the stackshot buffer */
+	uint64_t        sc_out_buffer_addr;     /* Location where the kernel should copy the address of the newly mapped buffer in user space */
+	uint64_t        sc_out_size_addr;       /* Location where the kernel should copy the size of the stackshot buffer */
 } stackshot_config_t;
 
 #ifndef KERNEL

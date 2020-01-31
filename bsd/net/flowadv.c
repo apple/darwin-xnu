@@ -96,8 +96,8 @@
 #include <net/flowadv.h>
 
 /* Lock group and attribute for fadv_lock */
-static lck_grp_t	*fadv_lock_grp;
-static lck_grp_attr_t	*fadv_lock_grp_attr;
+static lck_grp_t        *fadv_lock_grp;
+static lck_grp_attr_t   *fadv_lock_grp_attr;
 decl_lck_mtx_data(static, fadv_lock);
 
 /* protected by fadv_lock */
@@ -105,11 +105,11 @@ static STAILQ_HEAD(fadv_head, flowadv_fcentry) fadv_list;
 static thread_t fadv_thread = THREAD_NULL;
 static uint32_t fadv_active;
 
-static unsigned int fadv_zone_size;		/* size of flowadv_fcentry */
-static struct zone *fadv_zone;			/* zone for flowadv_fcentry */
+static unsigned int fadv_zone_size;             /* size of flowadv_fcentry */
+static struct zone *fadv_zone;                  /* zone for flowadv_fcentry */
 
-#define	FADV_ZONE_MAX	32			/* maximum elements in zone */
-#define	FADV_ZONE_NAME	"fadv_zone"		/* zone name */
+#define FADV_ZONE_MAX   32                      /* maximum elements in zone */
+#define FADV_ZONE_NAME  "fadv_zone"             /* zone name */
 
 static int flowadv_thread_cont(int);
 static void flowadv_thread_func(void *, wait_result_t);
@@ -124,8 +124,8 @@ flowadv_init(void)
 	fadv_lock_grp = lck_grp_alloc_init("fadv_lock", fadv_lock_grp_attr);
 	lck_mtx_init(&fadv_lock, fadv_lock_grp, NULL);
 
-	fadv_zone_size = P2ROUNDUP(sizeof (struct flowadv_fcentry),
-	    sizeof (u_int64_t));
+	fadv_zone_size = P2ROUNDUP(sizeof(struct flowadv_fcentry),
+	    sizeof(u_int64_t));
 	fadv_zone = zinit(fadv_zone_size,
 	    FADV_ZONE_MAX * fadv_zone_size, 0, FADV_ZONE_NAME);
 	if (fadv_zone == NULL) {
@@ -150,10 +150,11 @@ flowadv_alloc_entry(int how)
 	struct flowadv_fcentry *fce;
 
 	fce = (how == M_WAITOK) ? zalloc(fadv_zone) : zalloc_noblock(fadv_zone);
-	if (fce != NULL)
+	if (fce != NULL) {
 		bzero(fce, fadv_zone_size);
+	}
 
-	return (fce);
+	return fce;
 }
 
 void
@@ -165,28 +166,32 @@ flowadv_free_entry(struct flowadv_fcentry *fce)
 void
 flowadv_add(struct flowadv_fclist *fcl)
 {
-	if (STAILQ_EMPTY(fcl))
+	if (STAILQ_EMPTY(fcl)) {
 		return;
+	}
 
 	lck_mtx_lock_spin(&fadv_lock);
 
 	STAILQ_CONCAT(&fadv_list, fcl);
 	VERIFY(!STAILQ_EMPTY(&fadv_list));
 
-	if (!fadv_active && fadv_thread != THREAD_NULL)
+	if (!fadv_active && fadv_thread != THREAD_NULL) {
 		wakeup_one((caddr_t)&fadv_list);
+	}
 
 	lck_mtx_unlock(&fadv_lock);
 }
 
 void
-flowadv_add_entry(struct flowadv_fcentry *fce) {
+flowadv_add_entry(struct flowadv_fcentry *fce)
+{
 	lck_mtx_lock_spin(&fadv_lock);
 	STAILQ_INSERT_HEAD(&fadv_list, fce, fce_link);
 	VERIFY(!STAILQ_EMPTY(&fadv_list));
 
-	if (!fadv_active && fadv_thread != THREAD_NULL)
+	if (!fadv_active && fadv_thread != THREAD_NULL) {
 		wakeup_one((caddr_t)&fadv_list);
+	}
 
 	lck_mtx_unlock(&fadv_lock);
 }
@@ -233,8 +238,9 @@ flowadv_thread_cont(int err)
 			lck_mtx_lock_spin(&fadv_lock);
 
 			/* if there's no pending request, we're done */
-			if (STAILQ_EMPTY(&fadv_list))
+			if (STAILQ_EMPTY(&fadv_list)) {
 				break;
+			}
 		}
 		fadv_active = 0;
 	}

@@ -104,7 +104,7 @@ sysctl_ubsan_log_dump SYSCTL_HANDLER_ARGS
 	buf[0] = '\0';
 
 	for (size_t i = start; i != end; i = next_entry(i)) {
-		n += ubsan_format(&ubsan_log[i], buf+n, sz-n);
+		n += ubsan_format(&ubsan_log[i], buf + n, sz - n);
 	}
 
 	err = SYSCTL_OUT(req, buf, n);
@@ -144,9 +144,9 @@ SYSCTL_NODE(_kern, OID_AUTO, ubsan, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "");
 SYSCTL_COMPAT_UINT(_kern_ubsan, OID_AUTO, logsize, CTLFLAG_RD, NULL, (unsigned)ubsan_log_size, "");
 
 SYSCTL_PROC(_kern_ubsan, OID_AUTO, logentries,
-		CTLTYPE_INT | CTLFLAG_RW,
-		0, 0, sysctl_ubsan_log_entries, "I", "");
+    CTLTYPE_INT | CTLFLAG_RW,
+    0, 0, sysctl_ubsan_log_entries, "I", "");
 
 SYSCTL_PROC(_kern_ubsan, OID_AUTO, log,
-		CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MASKED,
-		0, 0, sysctl_ubsan_log_dump, "A", "");
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MASKED,
+    0, 0, sysctl_ubsan_log_dump, "A", "");

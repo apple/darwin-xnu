@@ -2,8 +2,8 @@
 #define __TEST_FAULT_HELPER_H_
 
 typedef enum {
-  TESTZFOD,
-  TESTFAULT
+	TESTZFOD,
+	TESTFAULT
 } testtype_t;
 
 int test_fault_setup();

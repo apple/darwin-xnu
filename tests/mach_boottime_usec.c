@@ -8,7 +8,7 @@
 #include <darwintest.h>
 
 T_DECL(mach_boottime_usec, "mach_boottime_usec()",
-		T_META_ALL_VALID_ARCHS(true), T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ALL_VALID_ARCHS(true), T_META_LTEPHASE(LTE_POSTINIT))
 {
 	uint64_t bt_usec = mach_boottime_usec();
 

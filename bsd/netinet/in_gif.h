@@ -57,11 +57,11 @@
  */
 
 #ifndef _NETINET_IN_GIF_H_
-#define	_NETINET_IN_GIF_H_
+#define _NETINET_IN_GIF_H_
 #include <sys/appleapiopts.h>
 #ifdef BSD_KERNEL_PRIVATE
 
-#define	GIF_TTL		30
+#define GIF_TTL         30
 
 extern int ip_gif_ttl;
 

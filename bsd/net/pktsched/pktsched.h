@@ -27,7 +27,7 @@
  */
 
 #ifndef _PKTSCHED_PKTSCHED_H_
-#define	_PKTSCHED_PKTSCHED_H_
+#define _PKTSCHED_PKTSCHED_H_
 
 #ifdef PRIVATE
 #ifdef __cplusplus
@@ -35,15 +35,15 @@ extern "C" {
 #endif
 
 /* packet scheduler type */
-#define	PKTSCHEDT_NONE		0	/* reserved */
-#define	PKTSCHEDT_CBQ		1	/* cbq */
-#define	PKTSCHEDT_HFSC		2	/* hfsc */
-#define	PKTSCHEDT_PRIQ		3	/* priority queue */
-#define	PKTSCHEDT_FAIRQ		4	/* fairq */
-#define	PKTSCHEDT_TCQ		5	/* traffic class queue */
-#define	PKTSCHEDT_QFQ		6	/* quick fair queueing */
-#define	PKTSCHEDT_FQ_CODEL	7	/* Flow queues with CoDel */
-#define	PKTSCHEDT_MAX		8	/* should be max sched type + 1 */
+#define PKTSCHEDT_NONE          0       /* reserved */
+#define PKTSCHEDT_CBQ           1       /* cbq */
+#define PKTSCHEDT_HFSC          2       /* hfsc */
+#define PKTSCHEDT_PRIQ          3       /* priority queue */
+#define PKTSCHEDT_FAIRQ         4       /* fairq */
+#define PKTSCHEDT_TCQ           5       /* traffic class queue */
+#define PKTSCHEDT_QFQ           6       /* quick fair queueing */
+#define PKTSCHEDT_FQ_CODEL      7       /* Flow queues with CoDel */
+#define PKTSCHEDT_MAX           8       /* should be max sched type + 1 */
 
 #ifdef BSD_KERNEL_PRIVATE
 #include <mach/mach_time.h>
@@ -51,59 +51,59 @@ extern "C" {
 #include <libkern/libkern.h>
 
 /* flags for pktsched_setup */
-#define	PKTSCHEDF_QALG_SFB	0x01	/* use SFB */
-#define	PKTSCHEDF_QALG_ECN	0x02	/* enable ECN */
-#define	PKTSCHEDF_QALG_FLOWCTL	0x04	/* enable flow control advisories */
-#define	PKTSCHEDF_QALG_DELAYBASED	0x08	/* Delay based queueing */
-#define	PKTSCHEDF_QALG_DRIVER_MANAGED	0x10	/* driver managed */
+#define PKTSCHEDF_QALG_SFB      0x01    /* use SFB */
+#define PKTSCHEDF_QALG_ECN      0x02    /* enable ECN */
+#define PKTSCHEDF_QALG_FLOWCTL  0x04    /* enable flow control advisories */
+#define PKTSCHEDF_QALG_DELAYBASED       0x08    /* Delay based queueing */
+#define PKTSCHEDF_QALG_DRIVER_MANAGED   0x10    /* driver managed */
 
 typedef struct _pktsched_pkt_ {
-	classq_pkt_type_t	__ptype;
-	uint32_t		__plen;
-	void			*__pkt;
-#define	pktsched_ptype	__ptype
-#define	pktsched_plen	__plen
-#define	pktsched_pkt	__pkt
+	classq_pkt_type_t       __ptype;
+	uint32_t                __plen;
+	void                    *__pkt;
+#define pktsched_ptype  __ptype
+#define pktsched_plen   __plen
+#define pktsched_pkt    __pkt
 } pktsched_pkt_t;
 
-#define	_PKTSCHED_PKT_INIT(_p)	do {		\
-	(_p)->pktsched_ptype = QP_INVALID;	\
-	(_p)->pktsched_plen = 0;		\
-	(_p)->pktsched_pkt = NULL;		\
+#define _PKTSCHED_PKT_INIT(_p)  do {            \
+	(_p)->pktsched_ptype = QP_INVALID;      \
+	(_p)->pktsched_plen = 0;                \
+	(_p)->pktsched_pkt = NULL;              \
 } while (0)
 
 /* macro for timeout/untimeout */
 /* use old-style timeout/untimeout */
 /* dummy callout structure */
 struct callout {
-	void		*c_arg;			/* function argument */
-	void		(*c_func)(void *);	/* function to call */
+	void            *c_arg;                 /* function argument */
+	void            (*c_func)(void *);      /* function to call */
 };
 
-#define	CALLOUT_INIT(c) do {					\
-	(void) memset((c), 0, sizeof (*(c)));			\
-} while (/*CONSTCOND*/ 0)
+#define CALLOUT_INIT(c) do {                                    \
+	(void) memset((c), 0, sizeof (*(c)));                   \
+} while ( /*CONSTCOND*/ 0)
 
-#define	CALLOUT_RESET(c, t, f, a) do {				\
-	(c)->c_arg = (a);					\
-	(c)->c_func = (f);					\
-	timeout((f), (a), (t));					\
-} while (/*CONSTCOND*/ 0)
+#define CALLOUT_RESET(c, t, f, a) do {                          \
+	(c)->c_arg = (a);                                       \
+	(c)->c_func = (f);                                      \
+	timeout((f), (a), (t));                                 \
+} while ( /*CONSTCOND*/ 0)
 
-#define	CALLOUT_STOP(c)		untimeout((c)->c_func, (c)->c_arg)
-#define	CALLOUT_INITIALIZER	{ NULL, NULL }
+#define CALLOUT_STOP(c)         untimeout((c)->c_func, (c)->c_arg)
+#define CALLOUT_INITIALIZER     { NULL, NULL }
 
 typedef void (timeout_t)(void *);
 
 /*
  * Bitmap operations
  */
-typedef	u_int32_t pktsched_bitmap_t;
+typedef u_int32_t pktsched_bitmap_t;
 
 static inline boolean_t
 pktsched_bit_tst(u_int32_t ix, pktsched_bitmap_t *pData)
 {
-	return (*pData & (1 << ix));
+	return *pData & (1 << ix);
 }
 
 static inline void
@@ -121,27 +121,27 @@ pktsched_bit_clr(u_int32_t ix, pktsched_bitmap_t *pData)
 static inline pktsched_bitmap_t
 pktsched_ffs(pktsched_bitmap_t pData)
 {
-	return (ffs(pData));
+	return ffs(pData);
 }
 
 static inline pktsched_bitmap_t
 pktsched_fls(pktsched_bitmap_t pData)
 {
-	return ((sizeof (pktsched_bitmap_t) << 3) - clz(pData));
+	return (sizeof(pktsched_bitmap_t) << 3) - clz(pData);
 }
 
 static inline pktsched_bitmap_t
 __fls(pktsched_bitmap_t word)
 {
 	VERIFY(word != 0);
-	return (pktsched_fls(word) - 1);
+	return pktsched_fls(word) - 1;
 }
 
 /*
  * We can use mach_absolute_time which returns a 64-bit value with
  * granularity less than a microsecond even on the slowest processor.
  */
-#define	read_machclk()		mach_absolute_time()
+#define read_machclk()          mach_absolute_time()
 
 /*
  * machine dependent clock

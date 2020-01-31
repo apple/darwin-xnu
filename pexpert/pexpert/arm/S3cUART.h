@@ -4,7 +4,7 @@
 #ifndef _PEXPERT_ARM_S3CUART_H
 #define _PEXPERT_ARM_S3CUART_H
 
-#define	S3CUART
+#define S3CUART
 
 
 // UART

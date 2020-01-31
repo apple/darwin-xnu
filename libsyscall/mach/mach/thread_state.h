@@ -2,7 +2,7 @@
  * Copyright (c) 2015 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,11 +22,11 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#ifndef	_MACH_THREAD_STATE_H_
+#ifndef _MACH_THREAD_STATE_H_
 #define _MACH_THREAD_STATE_H_
 
 #include <Availability.h>
@@ -57,7 +57,7 @@
  */
 __API_AVAILABLE(macosx(10.14), ios(12.0), tvos(9.0), watchos(5.0))
 kern_return_t thread_get_register_pointer_values(thread_t thread,
-		uintptr_t *sp, size_t *length, uintptr_t *values);
+    uintptr_t *sp, size_t *length, uintptr_t *values);
 #endif
 
 #endif /* _MACH_THREAD_STATE_H_ */

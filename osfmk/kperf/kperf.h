@@ -88,11 +88,11 @@ void kperf_on_cpu_update(void);
 /* for scheduler switching threads on */
 static inline void
 kperf_on_cpu(thread_t thread, thread_continue_t continuation,
-             uintptr_t *starting_fp)
+    uintptr_t *starting_fp)
 {
 	extern boolean_t kperf_on_cpu_active;
 	void kperf_on_cpu_internal(thread_t thread, thread_continue_t continuation,
-			uintptr_t *starting_fp);
+	    uintptr_t *starting_fp);
 
 	if (__improbable(kperf_on_cpu_active)) {
 		kperf_on_cpu_internal(thread, continuation, starting_fp);
@@ -129,7 +129,7 @@ kperf_interrupt(void)
 {
 	extern unsigned int kperf_lazy_cpu_action;
 	extern void kperf_lazy_cpu_sample(thread_t thread, unsigned int flags,
-			bool interrupt);
+	    bool interrupt);
 
 	if (__improbable(kperf_lazy_cpu_action != 0)) {
 		kperf_lazy_cpu_sample(current_thread(), 0, true);

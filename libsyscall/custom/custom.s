@@ -96,7 +96,7 @@ __thread_set_tsd_base:
 	.globl _i386_get_ldt
 	ALIGN
 _i386_get_ldt:
-	movl    $6,%eax
+	movl    $SYSCALL_CONSTRUCT_MDEP(6), %eax
 	MACHDEP_SYSCALL_TRAP
 	jnb		2f
 	movq	%rax, %rdi
@@ -107,7 +107,7 @@ _i386_get_ldt:
 	.globl _i386_set_ldt
 	ALIGN
 _i386_set_ldt:
-	movl    $5,%eax
+	movl    $SYSCALL_CONSTRUCT_MDEP(5), %eax
 	MACHDEP_SYSCALL_TRAP
 	jnb		2f
 	movq	%rax, %rdi

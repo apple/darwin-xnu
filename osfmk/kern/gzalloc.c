@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -37,7 +37,7 @@
  *	gzalloc_size=<size>: target all zones with elements of <size> bytes
  *	gzalloc_min=<size>: target zones with elements >= size
  *	gzalloc_max=<size>: target zones with elements <= size
- * 	gzalloc_min/max can be specified in conjunction to target a range of
+ *      gzalloc_min/max can be specified in conjunction to target a range of
  *	sizes
  *	gzalloc_fc_size=<size>: number of zone elements (effectively page
  *	multiple sized) to retain in the free VA cache. This cache is evicted
@@ -100,7 +100,7 @@ extern boolean_t vm_kernel_ready, kmem_ready;
 boolean_t gzalloc_mode = FALSE;
 uint32_t pdzalloc_count, pdzfree_count;
 
-#define	GZALLOC_MIN_DEFAULT (1024)
+#define GZALLOC_MIN_DEFAULT (1024)
 #define GZDEADZONE ((zone_t) 0xDEAD201E)
 #define GZALLOC_SIGNATURE (0xABADCAFE)
 #define GZALLOC_RESERVE_SIZE_DEFAULT (2 * 1024 * 1024)
@@ -136,21 +136,29 @@ extern zone_t vm_page_zone;
 static zone_t gztrackzone = NULL;
 static char gznamedzone[MAX_ZONE_NAME] = "";
 
-void gzalloc_reconfigure(__unused zone_t z) {
+void
+gzalloc_reconfigure(__unused zone_t z)
+{
 	/* Nothing for now */
 }
 
-boolean_t gzalloc_enabled(void) {
+boolean_t
+gzalloc_enabled(void)
+{
 	return gzalloc_mode;
 }
 
-static inline boolean_t gzalloc_tracked(zone_t z) {
-	return (gzalloc_mode &&
-	    (((z->elem_size >= gzalloc_min) && (z->elem_size <= gzalloc_max)) || (z == gztrackzone)) &&
-	    (z->gzalloc_exempt == 0));
+static inline boolean_t
+gzalloc_tracked(zone_t z)
+{
+	return gzalloc_mode &&
+	       (((z->elem_size >= gzalloc_min) && (z->elem_size <= gzalloc_max)) || (z == gztrackzone)) &&
+	       (z->gzalloc_exempt == 0);
 }
 
-void gzalloc_zone_init(zone_t z) {
+void
+gzalloc_zone_init(zone_t z)
+{
 	if (gzalloc_mode) {
 		bzero(&z->gz, sizeof(z->gz));
 
@@ -165,10 +173,11 @@ void gzalloc_zone_init(zone_t z) {
 			/* If the VM/kmem system aren't yet configured, carve
 			 * out the free element cache structure directly from the
 			 * gzalloc_reserve supplied by the pmap layer.
-			*/
+			 */
 			if (!kmem_ready) {
-				if (gzalloc_reserve_size < gzfcsz)
+				if (gzalloc_reserve_size < gzfcsz) {
 					panic("gzalloc reserve exhausted");
+				}
 
 				z->gz.gzfc = (vm_offset_t *)gzalloc_reserve;
 				gzalloc_reserve += gzfcsz;
@@ -186,7 +195,9 @@ void gzalloc_zone_init(zone_t z) {
 }
 
 /* Called by zdestroy() to dump the free cache elements so the zone count can drop to zero. */
-void gzalloc_empty_free_cache(zone_t zone) {
+void
+gzalloc_empty_free_cache(zone_t zone)
+{
 	if (__improbable(gzalloc_tracked(zone))) {
 		kern_return_t kr;
 		int freed_elements = 0;
@@ -212,10 +223,10 @@ void gzalloc_empty_free_cache(zone_t zone) {
 			free_addr = ((vm_offset_t *)gzfc_copy)[index];
 			if (free_addr && free_addr >= gzalloc_map_min && free_addr < gzalloc_map_max) {
 				kr = vm_map_remove(
-						gzalloc_map,
-						free_addr,
-						free_addr + rounded_size + (1 * PAGE_SIZE),
-						VM_MAP_REMOVE_KUNWIRE);
+					gzalloc_map,
+					free_addr,
+					free_addr + rounded_size + (1 * PAGE_SIZE),
+					VM_MAP_REMOVE_KUNWIRE);
 				if (kr != KERN_SUCCESS) {
 					panic("gzalloc_empty_free_cache: vm_map_remove: %p, 0x%x", (void *)free_addr, kr);
 				}
@@ -241,10 +252,12 @@ void gzalloc_empty_free_cache(zone_t zone) {
 	}
 }
 
-void gzalloc_configure(void) {
+void
+gzalloc_configure(void)
+{
 	char temp_buf[16];
 
-	if (PE_parse_boot_argn("-gzalloc_mode", temp_buf, sizeof (temp_buf))) {
+	if (PE_parse_boot_argn("-gzalloc_mode", temp_buf, sizeof(temp_buf))) {
 		gzalloc_mode = TRUE;
 		gzalloc_min = GZALLOC_MIN_DEFAULT;
 		gzalloc_max = ~0U;
@@ -257,8 +270,9 @@ void gzalloc_configure(void) {
 
 	if (PE_parse_boot_argn("gzalloc_max", &gzalloc_max, sizeof(gzalloc_max))) {
 		gzalloc_mode = TRUE;
-		if (gzalloc_min == ~0U)
+		if (gzalloc_min == ~0U) {
 			gzalloc_min = 0;
+		}
 	}
 
 	if (PE_parse_boot_argn("gzalloc_size", &gzalloc_size, sizeof(gzalloc_size))) {
@@ -268,11 +282,11 @@ void gzalloc_configure(void) {
 
 	(void)PE_parse_boot_argn("gzalloc_fc_size", &gzfc_size, sizeof(gzfc_size));
 
-	if (PE_parse_boot_argn("-gzalloc_wp", temp_buf, sizeof (temp_buf))) {
+	if (PE_parse_boot_argn("-gzalloc_wp", temp_buf, sizeof(temp_buf))) {
 		gzalloc_prot = VM_PROT_READ;
 	}
 
-	if (PE_parse_boot_argn("-gzalloc_uf_mode", temp_buf, sizeof (temp_buf))) {
+	if (PE_parse_boot_argn("-gzalloc_uf_mode", temp_buf, sizeof(temp_buf))) {
 		gzalloc_uf_mode = TRUE;
 		gzalloc_guard = KMA_GUARD_FIRST;
 	}
@@ -283,7 +297,7 @@ void gzalloc_configure(void) {
 
 	(void) PE_parse_boot_argn("gzalloc_zscale", &gzalloc_zonemap_scale, sizeof(gzalloc_zonemap_scale));
 
-	if (PE_parse_boot_argn("-gzalloc_noconsistency", temp_buf, sizeof (temp_buf))) {
+	if (PE_parse_boot_argn("-gzalloc_noconsistency", temp_buf, sizeof(temp_buf))) {
 		gzalloc_consistency_checks = FALSE;
 	}
 
@@ -299,8 +313,9 @@ void gzalloc_configure(void) {
 		gzalloc_mode = TRUE;
 	}
 #endif
-	if (PE_parse_boot_argn("-nogzalloc_mode", temp_buf, sizeof (temp_buf)))
+	if (PE_parse_boot_argn("-nogzalloc_mode", temp_buf, sizeof(temp_buf))) {
 		gzalloc_mode = FALSE;
+	}
 
 	if (gzalloc_mode) {
 		gzalloc_reserve_size = GZALLOC_RESERVE_SIZE_DEFAULT;
@@ -308,7 +323,9 @@ void gzalloc_configure(void) {
 	}
 }
 
-void gzalloc_init(vm_size_t max_zonemap_size) {
+void
+gzalloc_init(vm_size_t max_zonemap_size)
+{
 	kern_return_t retval;
 
 	if (gzalloc_mode) {
@@ -317,9 +334,9 @@ void gzalloc_init(vm_size_t max_zonemap_size) {
 		vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
 		vmk_flags.vmkf_permanent = TRUE;
 		retval = kmem_suballoc(kernel_map, &gzalloc_map_min, (max_zonemap_size * gzalloc_zonemap_scale),
-				       FALSE, VM_FLAGS_ANYWHERE, vmk_flags, VM_KERN_MEMORY_ZONE,
-				       &gzalloc_map);
-	
+		    FALSE, VM_FLAGS_ANYWHERE, vmk_flags, VM_KERN_MEMORY_ZONE,
+		    &gzalloc_map);
+
 		if (retval != KERN_SUCCESS) {
 			panic("zone_init: kmem_suballoc(gzalloc_map, 0x%lx, %u) failed", max_zonemap_size, gzalloc_zonemap_scale);
 		}
@@ -328,17 +345,17 @@ void gzalloc_init(vm_size_t max_zonemap_size) {
 }
 
 vm_offset_t
-gzalloc_alloc(zone_t zone, boolean_t canblock) {
+gzalloc_alloc(zone_t zone, boolean_t canblock)
+{
 	vm_offset_t addr = 0;
 
 	if (__improbable(gzalloc_tracked(zone))) {
-
 		if (get_preemption_level() != 0) {
 			if (canblock == TRUE) {
 				pdzalloc_count++;
-			}
-			else
+			} else {
 				return 0;
+			}
 		}
 
 		vm_offset_t rounded_size = round_page(zone->elem_size + GZHEADER_SIZE);
@@ -350,8 +367,9 @@ gzalloc_alloc(zone_t zone, boolean_t canblock) {
 			/* Early allocations are supplied directly from the
 			 * reserve.
 			 */
-			if (gzalloc_reserve_size < (rounded_size + PAGE_SIZE))
+			if (gzalloc_reserve_size < (rounded_size + PAGE_SIZE)) {
 				panic("gzalloc reserve exhausted");
+			}
 			gzaddr = gzalloc_reserve;
 			/* No guard page for these early allocations, just
 			 * waste an additional page.
@@ -359,15 +377,14 @@ gzalloc_alloc(zone_t zone, boolean_t canblock) {
 			gzalloc_reserve += rounded_size + PAGE_SIZE;
 			gzalloc_reserve_size -= rounded_size + PAGE_SIZE;
 			OSAddAtomic64((SInt32) (rounded_size), &gzalloc_early_alloc);
-		}
-		else {
+		} else {
 			kern_return_t kr = kernel_memory_allocate(gzalloc_map,
-			    &gzaddr, rounded_size + (1*PAGE_SIZE),
+			    &gzaddr, rounded_size + (1 * PAGE_SIZE),
 			    0, KMA_KOBJECT | KMA_ATOMIC | gzalloc_guard,
 			    VM_KERN_MEMORY_OSFMK);
-			if (kr != KERN_SUCCESS)
+			if (kr != KERN_SUCCESS) {
 				panic("gzalloc: kernel_memory_allocate for size 0x%llx failed with %d", (uint64_t)rounded_size, kr);
-
+			}
 		}
 
 		if (gzalloc_uf_mode) {
@@ -420,7 +437,9 @@ gzalloc_alloc(zone_t zone, boolean_t canblock) {
 	return addr;
 }
 
-boolean_t gzalloc_free(zone_t zone, void *addr) {
+boolean_t
+gzalloc_free(zone_t zone, void *addr)
+{
 	boolean_t gzfreed = FALSE;
 	kern_return_t kr;
 
@@ -463,8 +482,9 @@ boolean_t gzalloc_free(zone_t zone, void *addr) {
 				panic("GZALLOC signature mismatch for element %p, expected 0x%x, found 0x%x", addr, GZALLOC_SIGNATURE, gzh->gzsig);
 			}
 
-			if (gzh->gzone != zone && (gzh->gzone != GZDEADZONE))
+			if (gzh->gzone != zone && (gzh->gzone != GZDEADZONE)) {
 				panic("%s: Mismatched zone or under/overflow, current zone: %p, recorded zone: %p, address: %p", __FUNCTION__, zone, gzh->gzone, (void *)addr);
+			}
 			/* Partially redundant given the zone check, but may flag header corruption */
 			if (gzh->gzsize != zone->elem_size) {
 				panic("Mismatched zfree or under/overflow for zone %p, recorded size: 0x%x, element size: 0x%x, address: %p\n", zone, gzh->gzsize, (uint32_t) zone->elem_size, (void *)addr);
@@ -497,7 +517,7 @@ boolean_t gzalloc_free(zone_t zone, void *addr) {
 		}
 
 		if (get_preemption_level() != 0) {
-				pdzfree_count++;
+			pdzfree_count++;
 		}
 
 		if (gzfc_size) {
@@ -510,8 +530,9 @@ boolean_t gzalloc_free(zone_t zone, void *addr) {
 				saddr + rounded_size + (1 * PAGE_SIZE),
 				gzalloc_prot,
 				FALSE);
-			if (kr != KERN_SUCCESS)
+			if (kr != KERN_SUCCESS) {
 				panic("%s: vm_map_protect: %p, 0x%x", __FUNCTION__, (void *)saddr, kr);
+			}
 		} else {
 			free_addr = saddr;
 		}
@@ -546,8 +567,9 @@ boolean_t gzalloc_free(zone_t zone, void *addr) {
 				free_addr,
 				free_addr + rounded_size + (1 * PAGE_SIZE),
 				VM_MAP_REMOVE_KUNWIRE);
-			if (kr != KERN_SUCCESS)
+			if (kr != KERN_SUCCESS) {
 				panic("gzfree: vm_map_remove: %p, 0x%x", (void *)free_addr, kr);
+			}
 			// TODO: sysctl-ize for quick reference
 			OSAddAtomic64((SInt32)rounded_size, &gzalloc_freed);
 			OSAddAtomic64(-((SInt32) (rounded_size - zone->elem_size)), &gzalloc_wasted);
@@ -558,7 +580,9 @@ boolean_t gzalloc_free(zone_t zone, void *addr) {
 	return gzfreed;
 }
 
-boolean_t gzalloc_element_size(void *gzaddr, zone_t *z, vm_size_t *gzsz) {
+boolean_t
+gzalloc_element_size(void *gzaddr, zone_t *z, vm_size_t *gzsz)
+{
 	uintptr_t a = (uintptr_t)gzaddr;
 	if (__improbable(gzalloc_mode && (a >= gzalloc_map_min) && (a < gzalloc_map_max))) {
 		gzhdr_t *gzh;
@@ -574,7 +598,6 @@ boolean_t gzalloc_element_size(void *gzaddr, zone_t *z, vm_size_t *gzsz) {
 
 		/* Locate the gzalloc metadata adjoining the element */
 		if (gzalloc_uf_mode == TRUE) {
-
 			/* In underflow detection mode, locate the map entry describing
 			 * the element, and then locate the copy of the gzalloc
 			 * header at the trailing edge of the range.
@@ -587,9 +610,9 @@ boolean_t gzalloc_element_size(void *gzaddr, zone_t *z, vm_size_t *gzsz) {
 			 */
 			uint32_t *p = (uint32_t*) gzvme->vme_start;
 			while (p < (uint32_t *) gzvme->vme_end) {
-				if (*p == GZALLOC_SIGNATURE)
+				if (*p == GZALLOC_SIGNATURE) {
 					break;
-				else {
+				} else {
 					p++;
 				}
 			}

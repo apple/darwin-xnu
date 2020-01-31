@@ -46,7 +46,7 @@
 #define CO_SRC_MSG    (1<<1)    //copyoutmsg() called
 #define CO_SRC_PHYS   (1<<2)    //copyio(COPYOUTPHYS,...) called
 
-typedef void (*copyout_shim_fn_t)(const void *,user_addr_t,vm_size_t,unsigned co_src);
+typedef void (*copyout_shim_fn_t)(const void *, user_addr_t, vm_size_t, unsigned co_src);
 
 #ifdef MACH_KERNEL_PRIVATE
 #if(DEVELOPMENT || DEBUG) && (COPYOUT_SHIM > 0)
@@ -56,26 +56,26 @@ extern unsigned co_src_flags;
 
 // void call_copyout_shim(const void *kernel_addr,user_addr_t user_addr,vm_size_t nbytes,int copy_type,int copyout_flavors);
 
-#define CALL_COPYOUT_SHIM_NRML(ka,ua,nb) \
+#define CALL_COPYOUT_SHIM_NRML(ka, ua, nb) \
     if(copyout_shim_fn && (co_src_flags & CO_SRC_NORMAL)) {copyout_shim_fn(ka,ua,nb,CO_SRC_NORMAL); }
 
-#define CALL_COPYOUT_SHIM_MSG(ka,ua,nb) \
+#define CALL_COPYOUT_SHIM_MSG(ka, ua, nb) \
     if(copyout_shim_fn && (co_src_flags & CO_SRC_MSG)){copyout_shim_fn(ka,ua,nb,CO_SRC_MSG); }
-    
-#define CALL_COPYOUT_SHIM_PHYS(ka,ua,nb) \
+
+#define CALL_COPYOUT_SHIM_PHYS(ka, ua, nb) \
     if(copyout_shim_fn && (co_src_flags & CO_SRC_PHYS)){copyout_shim_fn(ka,ua,nb,CO_SRC_PHYS); }
 
 #else
-    //Make these calls disappear if we're RELEASE or if COPYOUT_SHIM didn't get built
-#define CALL_COPYOUT_SHIM_NRML(ka,ua,nb)
-#define CALL_COPYOUT_SHIM_MSG(ka,ua,nb)
-#define CALL_COPYOUT_SHIM_PHYS(ka,ua,nb)
+//Make these calls disappear if we're RELEASE or if COPYOUT_SHIM didn't get built
+#define CALL_COPYOUT_SHIM_NRML(ka, ua, nb)
+#define CALL_COPYOUT_SHIM_MSG(ka, ua, nb)
+#define CALL_COPYOUT_SHIM_PHYS(ka, ua, nb)
 #endif /* (DEVELOPMENT || DEBUG) && (COPYOUT_SHIM > 0) */
 #endif /* MACH_KERNEL_PRIVATE */
 
 
 kern_return_t
-register_copyout_shim(copyout_shim_fn_t copyout_shim_fn,unsigned co_src_flags);
+register_copyout_shim(copyout_shim_fn_t copyout_shim_fn, unsigned co_src_flags);
 
 
 #define unregister_copyout_shim() register_copyout_shim(NULL,0)

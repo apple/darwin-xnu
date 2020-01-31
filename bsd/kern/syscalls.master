@@ -841,4 +841,4 @@
 #else
 530	AUE_NULL	ALL	{ int enosys(void); }
 #endif // CONFIG_WORKQUEUE
-531	AUE_NULL	ALL	{ int enosys(void); }
+531	AUE_NULL	ALL	{ uint64_t __mach_bridge_remote_time(uint64_t local_timestamp); }

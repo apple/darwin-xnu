@@ -1,5 +1,5 @@
 #include <sys/param.h>
-#include <sys/systm.h>		/* XXX printf() */
+#include <sys/systm.h>          /* XXX printf() */
 
 #include <sys/types.h>
 #include <sys/fcntl.h>
@@ -14,7 +14,7 @@
 #include <security/mac_policy.h>
 
 #include <libkern/section_keywords.h>
-#include <libkern/OSDebug.h>	/* OSBPrintBacktrace */
+#include <libkern/OSDebug.h>    /* OSBPrintBacktrace */
 
 
 /* forward declaration; see bsd_init.c */
@@ -27,16 +27,16 @@ int get_thread_lock_count(thread_t th);         /* forced forward */
  * Note:	CHECK_POLICY_CHECK is probably not very useful unless you
  *		are kernel debugging and set a breakpoint.
  */
-#define	CHECK_POLICY_CHECK	0x00000001	/* Check on calls */
-#define	CHECK_POLICY_FAIL	0x00000002	/* EPERM on fails */
-#define	CHECK_POLICY_BACKTRACE	0x00000004	/* Show call stack on fails */
-#define	CHECK_POLICY_PANIC	0x00000008	/* Panic on fails */
-#define	CHECK_POLICY_PERIODIC	0x00000010	/* Show fails periodically */
+#define CHECK_POLICY_CHECK      0x00000001      /* Check on calls */
+#define CHECK_POLICY_FAIL       0x00000002      /* EPERM on fails */
+#define CHECK_POLICY_BACKTRACE  0x00000004      /* Show call stack on fails */
+#define CHECK_POLICY_PANIC      0x00000008      /* Panic on fails */
+#define CHECK_POLICY_PERIODIC   0x00000010      /* Show fails periodically */
 
 static int policy_flags = 0;
 
 
-#define CHECK_SET_HOOK(x)	.mpo_##x = (mpo_##x##_t *)common_hook,
+#define CHECK_SET_HOOK(x)       .mpo_##x = (mpo_##x##_t *)common_hook,
 
 /*
  * Init; currently, we only print our arrival notice.
@@ -56,8 +56,8 @@ hook_policy_initbsd(struct mac_policy_conf *mpc)
 
 
 /* Implementation */
-#define	CLASS_PERIOD_LIMIT	10000
-#define	CLASS_PERIOD_MULT	20
+#define CLASS_PERIOD_LIMIT      10000
+#define CLASS_PERIOD_MULT       20
 
 static int policy_check_event = 1;
 static int policy_check_period = 1;
@@ -67,16 +67,17 @@ static int policy_check_next = CLASS_PERIOD_MULT;
 static int
 common_hook(void)
 {
-	int	i;
-	int	rv = 0;
+	int     i;
+	int     rv = 0;
 
 	if ((i = get_thread_lock_count(current_thread())) != 0) {
 		/*
 		 * fail the MACF check if we hold a lock; this assumes a
 		 * a non-void (authorization) MACF hook.
 		 */
-		if (policy_flags & CHECK_POLICY_FAIL)
+		if (policy_flags & CHECK_POLICY_FAIL) {
 			rv = EPERM;
+		}
 
 		/*
 		 * display a backtrace if we hold a lock and we are not
@@ -84,24 +85,24 @@ common_hook(void)
 		 */
 		if ((policy_flags & (CHECK_POLICY_BACKTRACE | CHECK_POLICY_PANIC)) == CHECK_POLICY_BACKTRACE) {
 			if (policy_flags & CHECK_POLICY_PERIODIC) {
-			    /* at exponentially increasing intervals */
-			    if (!(policy_check_event % policy_check_period)) {
-				if (policy_check_event <= policy_check_next || policy_check_period == CLASS_PERIOD_LIMIT) {
-					/*
-					 * According to Derek, we could
-					 * technically get a symbolicated name
-					 * here, if we refactered some code
-					 * and set the "keepsyms=1" boot
-					 * argument...
-					 */
-					OSReportWithBacktrace("calling MACF hook with mutex count %d (event %d) ", i, policy_check_event);
+				/* at exponentially increasing intervals */
+				if (!(policy_check_event % policy_check_period)) {
+					if (policy_check_event <= policy_check_next || policy_check_period == CLASS_PERIOD_LIMIT) {
+						/*
+						 * According to Derek, we could
+						 * technically get a symbolicated name
+						 * here, if we refactered some code
+						 * and set the "keepsyms=1" boot
+						 * argument...
+						 */
+						OSReportWithBacktrace("calling MACF hook with mutex count %d (event %d) ", i, policy_check_event);
+					}
+				} else {
+					if (policy_check_period < CLASS_PERIOD_LIMIT) {
+						policy_check_next *= CLASS_PERIOD_MULT;
+						policy_check_period *= CLASS_PERIOD_MULT;
+					}
 				}
-			    } else {
-				if (policy_check_period < CLASS_PERIOD_LIMIT) {
-					policy_check_next *= CLASS_PERIOD_MULT;
-					policy_check_period *= CLASS_PERIOD_MULT;
-				}
-			    }
 			} else {
 				/* always */
 				OSReportWithBacktrace("calling MACF hook with mutex count %d (event %d) ", i, policy_check_event);
@@ -109,8 +110,9 @@ common_hook(void)
 		}
 
 		/* Panic */
-		if (policy_flags & CHECK_POLICY_PANIC)
+		if (policy_flags & CHECK_POLICY_PANIC) {
 			panic("calling MACF hook with mutex count %d\n", i);
+		}
 
 		/* count for non-fatal tracing */
 		policy_check_event++;
@@ -521,10 +523,10 @@ const static struct mac_policy_ops policy_ops = {
 static SECURITY_READ_ONLY_LATE(struct mac_policy_conf) policy_conf = {
 	.mpc_name               = "CHECK",
 	.mpc_fullname           = "Check Assumptions Policy",
-	.mpc_field_off          = NULL,		/* no label slot */
-	.mpc_labelnames         = NULL,		/* no policy label names */
-	.mpc_labelname_count    = 0,		/* count of label names is 0 */
-	.mpc_ops                = &policy_ops,	/* policy operations */
+	.mpc_field_off          = NULL,         /* no label slot */
+	.mpc_labelnames         = NULL,         /* no policy label names */
+	.mpc_labelname_count    = 0,            /* count of label names is 0 */
+	.mpc_ops                = &policy_ops,  /* policy operations */
 	.mpc_loadtime_flags     = 0,
 	.mpc_runtime_flags      = 0,
 };
@@ -540,8 +542,9 @@ errno_t
 check_policy_init(int flags)
 {
 	/* Only instantiate the module if we have been asked to do checking */
-	if (!flags)
+	if (!flags) {
 		return 0;
+	}
 
 	policy_flags = flags;
 

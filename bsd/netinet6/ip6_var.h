@@ -91,7 +91,7 @@
  */
 
 #ifndef _NETINET6_IP6_VAR_H_
-#define	_NETINET6_IP6_VAR_H_
+#define _NETINET6_IP6_VAR_H_
 #include <sys/appleapiopts.h>
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -101,79 +101,79 @@
  * IP6 reassembly queue structure.  Each fragment
  * being reassembled is attached to one of these structures.
  */
-struct	ip6q {
+struct  ip6q {
 	struct ip6asfrag *ip6q_down;
 	struct ip6asfrag *ip6q_up;
-	u_int32_t	ip6q_ident;
-	u_int8_t	ip6q_nxt;
-	u_int8_t	ip6q_ecn;
-	u_int8_t	ip6q_ttl;
+	u_int32_t       ip6q_ident;
+	u_int8_t        ip6q_nxt;
+	u_int8_t        ip6q_ecn;
+	u_int8_t        ip6q_ttl;
 	struct in6_addr ip6q_src, ip6q_dst;
-	struct ip6q	*ip6q_next;
-	struct ip6q	*ip6q_prev;
-	int		ip6q_unfrglen;	/* len of unfragmentable part */
+	struct ip6q     *ip6q_next;
+	struct ip6q     *ip6q_prev;
+	int             ip6q_unfrglen;  /* len of unfragmentable part */
 #ifdef notyet
-	u_char	*ip6q_nxtp;
+	u_char  *ip6q_nxtp;
 #endif
-	int		ip6q_nfrag;	/* # of fragments */
-	uint32_t	ip6q_csum_flags; /* checksum flags */
-	uint32_t	ip6q_csum;	/* partial checksum value */
+	int             ip6q_nfrag;     /* # of fragments */
+	uint32_t        ip6q_csum_flags; /* checksum flags */
+	uint32_t        ip6q_csum;      /* partial checksum value */
 };
 
-struct	ip6asfrag {
+struct  ip6asfrag {
 	struct ip6asfrag *ip6af_down;
 	struct ip6asfrag *ip6af_up;
-	struct mbuf	*ip6af_m;
-	int		ip6af_offset;	/* offset in ip6af_m to next header */
-	int		ip6af_frglen;	/* fragmentable part length */
-	int		ip6af_off;	/* fragment offset */
-	u_int16_t	ip6af_mff;	/* more fragment bit in frag off */
+	struct mbuf     *ip6af_m;
+	int             ip6af_offset;   /* offset in ip6af_m to next header */
+	int             ip6af_frglen;   /* fragmentable part length */
+	int             ip6af_off;      /* fragment offset */
+	u_int16_t       ip6af_mff;      /* more fragment bit in frag off */
 };
 
-#define	IP6_REASS_MBUF(ip6af) (*(struct mbuf **)&((ip6af)->ip6af_m))
+#define IP6_REASS_MBUF(ip6af) (*(struct mbuf **)&((ip6af)->ip6af_m))
 
-struct	ip6_moptions {
+struct  ip6_moptions {
 	decl_lck_mtx_data(, im6o_lock);
-	uint32_t im6o_refcnt;		/* ref count */
-	uint32_t im6o_debug;		/* see ifa_debug flags */
-	struct	ifnet *im6o_multicast_ifp; /* ifp for outgoing multicasts */
-	u_char	im6o_multicast_hlim;	/* hoplimit for outgoing multicasts */
-	u_char	im6o_multicast_loop;	/* 1 >= hear sends if a member */
-	u_short	im6o_num_memberships;	/* no. memberships this socket */
-	u_short	im6o_max_memberships;	/* max memberships this socket */
-	struct	in6_multi **im6o_membership;	/* group memberships */
-	struct	in6_mfilter *im6o_mfilters;	/* source filters */
-	void (*im6o_trace)		/* callback fn for tracing refs */
-	    (struct ip6_moptions *, int);
+	uint32_t im6o_refcnt;           /* ref count */
+	uint32_t im6o_debug;            /* see ifa_debug flags */
+	struct  ifnet *im6o_multicast_ifp; /* ifp for outgoing multicasts */
+	u_char  im6o_multicast_hlim;    /* hoplimit for outgoing multicasts */
+	u_char  im6o_multicast_loop;    /* 1 >= hear sends if a member */
+	u_short im6o_num_memberships;   /* no. memberships this socket */
+	u_short im6o_max_memberships;   /* max memberships this socket */
+	struct  in6_multi **im6o_membership;    /* group memberships */
+	struct  in6_mfilter *im6o_mfilters;     /* source filters */
+	void (*im6o_trace)              /* callback fn for tracing refs */
+	(struct ip6_moptions *, int);
 };
 
-#define	IM6O_LOCK_ASSERT_HELD(_im6o)					\
+#define IM6O_LOCK_ASSERT_HELD(_im6o)                                    \
 	LCK_MTX_ASSERT(&(_im6o)->im6o_lock, LCK_MTX_ASSERT_OWNED)
 
-#define	IM6O_LOCK_ASSERT_NOTHELD(_im6o)					\
+#define IM6O_LOCK_ASSERT_NOTHELD(_im6o)                                 \
 	LCK_MTX_ASSERT(&(_im6o)->im6o_lock, LCK_MTX_ASSERT_NOTOWNED)
 
-#define	IM6O_LOCK(_im6o)						\
+#define IM6O_LOCK(_im6o)                                                \
 	lck_mtx_lock(&(_im6o)->im6o_lock)
 
-#define	IM6O_LOCK_SPIN(_im6o)						\
+#define IM6O_LOCK_SPIN(_im6o)                                           \
 	lck_mtx_lock_spin(&(_im6o)->im6o_lock)
 
-#define	IM6O_CONVERT_LOCK(_im6o) do {					\
-	IM6O_LOCK_ASSERT_HELD(_im6o);					\
-	lck_mtx_convert_spin(&(_im6o)->im6o_lock);			\
+#define IM6O_CONVERT_LOCK(_im6o) do {                                   \
+	IM6O_LOCK_ASSERT_HELD(_im6o);                                   \
+	lck_mtx_convert_spin(&(_im6o)->im6o_lock);                      \
 } while (0)
 
-#define	IM6O_UNLOCK(_im6o)						\
+#define IM6O_UNLOCK(_im6o)                                              \
 	lck_mtx_unlock(&(_im6o)->im6o_lock)
 
-#define	IM6O_ADDREF(_im6o)						\
+#define IM6O_ADDREF(_im6o)                                              \
 	im6o_addref(_im6o, 0)
 
-#define	IM6O_ADDREF_LOCKED(_im6o)					\
+#define IM6O_ADDREF_LOCKED(_im6o)                                       \
 	im6o_addref(_im6o, 1)
 
-#define	IM6O_REMREF(_im6o)						\
+#define IM6O_REMREF(_im6o)                                              \
 	im6o_remref(_im6o)
 
 struct ip6_exthdrs {
@@ -190,63 +190,63 @@ struct ip6_exthdrs {
  */
 
 /* Routing header related info */
-struct	ip6po_rhinfo {
-	struct	ip6_rthdr *ip6po_rhi_rthdr; /* Routing header */
-	struct	route_in6 ip6po_rhi_route; /* Route to the 1st hop */
+struct  ip6po_rhinfo {
+	struct  ip6_rthdr *ip6po_rhi_rthdr; /* Routing header */
+	struct  route_in6 ip6po_rhi_route; /* Route to the 1st hop */
 };
-#define	ip6po_rthdr	ip6po_rhinfo.ip6po_rhi_rthdr
-#define	ip6po_route	ip6po_rhinfo.ip6po_rhi_route
+#define ip6po_rthdr     ip6po_rhinfo.ip6po_rhi_rthdr
+#define ip6po_route     ip6po_rhinfo.ip6po_rhi_route
 
 /* Nexthop related info */
-struct	ip6po_nhinfo {
-	struct	sockaddr *ip6po_nhi_nexthop;
-	struct	route_in6 ip6po_nhi_route; /* Route to the nexthop */
+struct  ip6po_nhinfo {
+	struct  sockaddr *ip6po_nhi_nexthop;
+	struct  route_in6 ip6po_nhi_route; /* Route to the nexthop */
 };
-#define	ip6po_nexthop	ip6po_nhinfo.ip6po_nhi_nexthop
-#define	ip6po_nextroute	ip6po_nhinfo.ip6po_nhi_route
+#define ip6po_nexthop   ip6po_nhinfo.ip6po_nhi_nexthop
+#define ip6po_nextroute ip6po_nhinfo.ip6po_nhi_route
 
-struct	ip6_pktopts {
-	struct	mbuf *ip6po_m;	/* Pointer to mbuf storing the data */
-	int	ip6po_hlim;	/* Hoplimit for outgoing packets */
+struct  ip6_pktopts {
+	struct  mbuf *ip6po_m;  /* Pointer to mbuf storing the data */
+	int     ip6po_hlim;     /* Hoplimit for outgoing packets */
 
 	/* Outgoing IF/address information */
-	struct	in6_pktinfo *ip6po_pktinfo;
+	struct  in6_pktinfo *ip6po_pktinfo;
 
 	/* Next-hop address information */
-	struct	ip6po_nhinfo ip6po_nhinfo;
+	struct  ip6po_nhinfo ip6po_nhinfo;
 
-	struct	ip6_hbh *ip6po_hbh; /* Hop-by-Hop options header */
+	struct  ip6_hbh *ip6po_hbh; /* Hop-by-Hop options header */
 
 	/* Destination options header (before a routing header) */
-	struct	ip6_dest *ip6po_dest1;
+	struct  ip6_dest *ip6po_dest1;
 
 	/* Routing header related info. */
-	struct	ip6po_rhinfo ip6po_rhinfo;
+	struct  ip6po_rhinfo ip6po_rhinfo;
 
 	/* Destination options header (after a routing header) */
-	struct	ip6_dest *ip6po_dest2;
+	struct  ip6_dest *ip6po_dest2;
 
-	int	ip6po_tclass;	/* traffic class */
+	int     ip6po_tclass;   /* traffic class */
 
-	int	ip6po_minmtu;  /* fragment vs PMTU discovery policy */
-#define	IP6PO_MINMTU_MCASTONLY	-1 /* default; send at min MTU for multicast */
-#define	IP6PO_MINMTU_DISABLE	 0 /* always perform pmtu disc */
-#define	IP6PO_MINMTU_ALL	 1 /* always send at min MTU */
+	int     ip6po_minmtu;  /* fragment vs PMTU discovery policy */
+#define IP6PO_MINMTU_MCASTONLY  -1 /* default; send at min MTU for multicast */
+#define IP6PO_MINMTU_DISABLE     0 /* always perform pmtu disc */
+#define IP6PO_MINMTU_ALL         1 /* always send at min MTU */
 
 	/* whether temporary addresses are preferred as source address */
-	int	ip6po_prefer_tempaddr;
+	int     ip6po_prefer_tempaddr;
 
-#define	IP6PO_TEMPADDR_SYSTEM	-1 /* follow the system default */
-#define	IP6PO_TEMPADDR_NOTPREFER 0 /* not prefer temporary address */
-#define	IP6PO_TEMPADDR_PREFER	 1 /* prefer temporary address */
+#define IP6PO_TEMPADDR_SYSTEM   -1 /* follow the system default */
+#define IP6PO_TEMPADDR_NOTPREFER 0 /* not prefer temporary address */
+#define IP6PO_TEMPADDR_PREFER    1 /* prefer temporary address */
 
 	int ip6po_flags;
-#if 0	/* parameters in this block is obsolete. do not reuse the values. */
-#define	IP6PO_REACHCONF	0x01	/* upper-layer reachability confirmation. */
-#define	IP6PO_MINMTU	0x02	/* use minimum MTU (IPV6_USE_MIN_MTU) */
+#if 0   /* parameters in this block is obsolete. do not reuse the values. */
+#define IP6PO_REACHCONF 0x01    /* upper-layer reachability confirmation. */
+#define IP6PO_MINMTU    0x02    /* use minimum MTU (IPV6_USE_MIN_MTU) */
 #endif
-#define	IP6PO_DONTFRAG		0x04	/* no fragmentation (IPV6_DONTFRAG) */
-#define	IP6PO_USECOA		0x08	/* use care of address */
+#define IP6PO_DONTFRAG          0x04    /* no fragmentation (IPV6_DONTFRAG) */
+#define IP6PO_USECOA            0x08    /* use care of address */
 };
 
 /*
@@ -254,42 +254,42 @@ struct	ip6_pktopts {
  */
 #endif /* BSD_KERNEL_PRIVATE */
 
-#define	IP6S_SRCRULE_COUNT 16
+#define IP6S_SRCRULE_COUNT 16
 #include <netinet6/scope6_var.h>
 
-struct	ip6stat {
-	u_quad_t ip6s_total;		/* total packets received */
-	u_quad_t ip6s_tooshort;		/* packet too short */
-	u_quad_t ip6s_toosmall;		/* not enough data */
-	u_quad_t ip6s_fragments;	/* fragments received */
-	u_quad_t ip6s_fragdropped;	/* frags dropped(dups, out of space) */
-	u_quad_t ip6s_fragtimeout;	/* fragments timed out */
-	u_quad_t ip6s_fragoverflow;	/* fragments that exceeded limit */
-	u_quad_t ip6s_forward;		/* packets forwarded */
-	u_quad_t ip6s_cantforward;	/* packets rcvd for unreachable dest */
-	u_quad_t ip6s_redirectsent;	/* packets forwarded on same net */
-	u_quad_t ip6s_delivered;	/* datagrams delivered to upper level */
-	u_quad_t ip6s_localout;		/* total ip packets generated here */
-	u_quad_t ip6s_odropped;		/* lost packets due to nobufs, etc. */
-	u_quad_t ip6s_reassembled;	/* total packets reassembled ok */
-	u_quad_t ip6s_atmfrag_rcvd;	/* atomic fragments received */
-	u_quad_t ip6s_fragmented;	/* datagrams successfully fragmented */
-	u_quad_t ip6s_ofragments;	/* output fragments created */
-	u_quad_t ip6s_cantfrag;		/* don't fragment flag was set, etc. */
-	u_quad_t ip6s_badoptions;	/* error in option processing */
-	u_quad_t ip6s_noroute;		/* packets discarded due to no route */
-	u_quad_t ip6s_badvers;		/* ip6 version != 6 */
-	u_quad_t ip6s_rawout;		/* total raw ip packets generated */
-	u_quad_t ip6s_badscope;		/* scope error */
-	u_quad_t ip6s_notmember;	/* don't join this multicast group */
-	u_quad_t ip6s_nxthist[256];	/* next header history */
-	u_quad_t ip6s_m1;		/* one mbuf */
-	u_quad_t ip6s_m2m[32];		/* two or more mbuf */
-	u_quad_t ip6s_mext1;		/* one ext mbuf */
-	u_quad_t ip6s_mext2m;		/* two or more ext mbuf */
-	u_quad_t ip6s_exthdrtoolong;	/* ext hdr are not continuous */
-	u_quad_t ip6s_nogif;		/* no match gif found */
-	u_quad_t ip6s_toomanyhdr;	/* discarded due to too many headers */
+struct  ip6stat {
+	u_quad_t ip6s_total;            /* total packets received */
+	u_quad_t ip6s_tooshort;         /* packet too short */
+	u_quad_t ip6s_toosmall;         /* not enough data */
+	u_quad_t ip6s_fragments;        /* fragments received */
+	u_quad_t ip6s_fragdropped;      /* frags dropped(dups, out of space) */
+	u_quad_t ip6s_fragtimeout;      /* fragments timed out */
+	u_quad_t ip6s_fragoverflow;     /* fragments that exceeded limit */
+	u_quad_t ip6s_forward;          /* packets forwarded */
+	u_quad_t ip6s_cantforward;      /* packets rcvd for unreachable dest */
+	u_quad_t ip6s_redirectsent;     /* packets forwarded on same net */
+	u_quad_t ip6s_delivered;        /* datagrams delivered to upper level */
+	u_quad_t ip6s_localout;         /* total ip packets generated here */
+	u_quad_t ip6s_odropped;         /* lost packets due to nobufs, etc. */
+	u_quad_t ip6s_reassembled;      /* total packets reassembled ok */
+	u_quad_t ip6s_atmfrag_rcvd;     /* atomic fragments received */
+	u_quad_t ip6s_fragmented;       /* datagrams successfully fragmented */
+	u_quad_t ip6s_ofragments;       /* output fragments created */
+	u_quad_t ip6s_cantfrag;         /* don't fragment flag was set, etc. */
+	u_quad_t ip6s_badoptions;       /* error in option processing */
+	u_quad_t ip6s_noroute;          /* packets discarded due to no route */
+	u_quad_t ip6s_badvers;          /* ip6 version != 6 */
+	u_quad_t ip6s_rawout;           /* total raw ip packets generated */
+	u_quad_t ip6s_badscope;         /* scope error */
+	u_quad_t ip6s_notmember;        /* don't join this multicast group */
+	u_quad_t ip6s_nxthist[256];     /* next header history */
+	u_quad_t ip6s_m1;               /* one mbuf */
+	u_quad_t ip6s_m2m[32];          /* two or more mbuf */
+	u_quad_t ip6s_mext1;            /* one ext mbuf */
+	u_quad_t ip6s_mext2m;           /* two or more ext mbuf */
+	u_quad_t ip6s_exthdrtoolong;    /* ext hdr are not continuous */
+	u_quad_t ip6s_nogif;            /* no match gif found */
+	u_quad_t ip6s_toomanyhdr;       /* discarded due to too many headers */
 
 	/*
 	 * statistics for improvement of the source address selection
@@ -383,20 +383,20 @@ enum ip6s_sources_rule_index {
  */
 struct ip6aux {
 	u_int32_t ip6a_flags;
-#define	IP6A_HASEEN	0x01		/* HA was present */
+#define IP6A_HASEEN     0x01            /* HA was present */
 
 #ifdef notyet
-#define	IP6A_SWAP	0x02		/* swapped home/care-of on packet */
-#define	IP6A_BRUID	0x04		/* BR Unique Identifier was present */
-#define	IP6A_RTALERTSEEN 0x08		/* rtalert present */
+#define IP6A_SWAP       0x02            /* swapped home/care-of on packet */
+#define IP6A_BRUID      0x04            /* BR Unique Identifier was present */
+#define IP6A_RTALERTSEEN 0x08           /* rtalert present */
 
 	/* ip6.ip6_src */
-	struct in6_addr ip6a_careof;	/* care-of address of the peer */
-	struct in6_addr ip6a_home;	/* home address of the peer */
-	u_int16_t	ip6a_bruid;	/* BR unique identifier */
+	struct in6_addr ip6a_careof;    /* care-of address of the peer */
+	struct in6_addr ip6a_home;      /* home address of the peer */
+	u_int16_t       ip6a_bruid;     /* BR unique identifier */
 
 	/* rtalert */
-	u_int16_t ip6a_rtalert;		/* rtalert option value */
+	u_int16_t ip6a_rtalert;         /* rtalert option value */
 #endif /* notyet */
 
 	/* ether source address if all-nodes multicast destination */
@@ -404,14 +404,14 @@ struct ip6aux {
 };
 
 /* flags passed to ip6_output as last parameter */
-#define	IPV6_UNSPECSRC		0x01	/* allow :: as the source address */
-#define	IPV6_FORWARDING		0x02	/* most of IPv6 header exists */
-#define	IPV6_MINMTU		0x04	/* use minimum MTU (IPV6_USE_MIN_MTU) */
-#define	IPV6_FLAG_NOSRCIFSEL	0x80	/* bypas source address selection */
-#define	IPV6_OUTARGS		0x100	/* has ancillary output info */
+#define IPV6_UNSPECSRC          0x01    /* allow :: as the source address */
+#define IPV6_FORWARDING         0x02    /* most of IPv6 header exists */
+#define IPV6_MINMTU             0x04    /* use minimum MTU (IPV6_USE_MIN_MTU) */
+#define IPV6_FLAG_NOSRCIFSEL    0x80    /* bypas source address selection */
+#define IPV6_OUTARGS            0x100   /* has ancillary output info */
 
 #ifdef BSD_KERNEL_PRIVATE
-#define	IP6_HDR_ALIGNED_P(_ip6)	((((uintptr_t)(_ip6)) & ((uintptr_t)3)) == 0)
+#define IP6_HDR_ALIGNED_P(_ip6) ((((uintptr_t)(_ip6)) & ((uintptr_t)3)) == 0)
 
 /*
  * On platforms which require strict alignment (currently for anything but
@@ -419,13 +419,13 @@ struct ip6aux {
  * is 32-bit aligned, and assert otherwise.
  */
 #if defined(__i386__) || defined(__x86_64__)
-#define	IP6_HDR_STRICT_ALIGNMENT_CHECK(_ip6) do { } while (0)
+#define IP6_HDR_STRICT_ALIGNMENT_CHECK(_ip6) do { } while (0)
 #else /* !__i386__ && !__x86_64__ */
-#define	IP6_HDR_STRICT_ALIGNMENT_CHECK(_ip6) do {			\
-	if (!IP_HDR_ALIGNED_P(_ip6)) {					\
-		panic_plain("\n%s: Unaligned IPv6 header %p\n",		\
-		    __func__, _ip6);					\
-	}								\
+#define IP6_HDR_STRICT_ALIGNMENT_CHECK(_ip6) do {                       \
+	if (!IP_HDR_ALIGNED_P(_ip6)) {                                  \
+	        panic_plain("\n%s: Unaligned IPv6 header %p\n",         \
+	            __func__, _ip6);                                    \
+	}                                                               \
 } while (0)
 #endif /* !__i386__ && !__x86_64__ */
 #endif /* BSD_KERNEL_PRIVATE */
@@ -436,46 +436,46 @@ struct ip6aux {
  * Extra information passed to ip6_output when IPV6_OUTARGS is set.
  */
 struct ip6_out_args {
-	unsigned int	ip6oa_boundif;	/* bound outgoing interface */
-	struct flowadv	ip6oa_flowadv;	/* flow advisory code */
-	u_int32_t	ip6oa_flags;	/* IP6OAF flags (see below) */
-#define	IP6OAF_SELECT_SRCIF	0x00000001	/* src interface selection */
-#define	IP6OAF_BOUND_IF		0x00000002	/* boundif value is valid */
-#define	IP6OAF_BOUND_SRCADDR	0x00000004	/* bound to src address */
-#define	IP6OAF_NO_CELLULAR	0x00000010	/* skip IFT_CELLULAR */
-#define	IP6OAF_NO_EXPENSIVE	0x00000020	/* skip IFEF_EXPENSIVE */
-#define	IP6OAF_AWDL_UNRESTRICTED 0x00000040	/* privileged AWDL */
-#define	IP6OAF_QOSMARKING_ALLOWED 0x00000080	/* policy allows Fastlane DSCP marking */
-#define IP6OAF_INTCOPROC_ALLOWED 0x00000100	/* access to internal coproc interfaces */
-#define	IP6OAF_NO_LOW_POWER	0x00000200	/* skip low power */
-	u_int32_t	ip6oa_retflags;	/* IP6OARF return flags (see below) */
-#define	IP6OARF_IFDENIED	0x00000001	/* denied access to interface */
-	int		ip6oa_sotc;		/* traffic class for Fastlane DSCP mapping */
-	int		ip6oa_netsvctype;
+	unsigned int    ip6oa_boundif;  /* bound outgoing interface */
+	struct flowadv  ip6oa_flowadv;  /* flow advisory code */
+	u_int32_t       ip6oa_flags;    /* IP6OAF flags (see below) */
+#define IP6OAF_SELECT_SRCIF     0x00000001      /* src interface selection */
+#define IP6OAF_BOUND_IF         0x00000002      /* boundif value is valid */
+#define IP6OAF_BOUND_SRCADDR    0x00000004      /* bound to src address */
+#define IP6OAF_NO_CELLULAR      0x00000010      /* skip IFT_CELLULAR */
+#define IP6OAF_NO_EXPENSIVE     0x00000020      /* skip IFEF_EXPENSIVE */
+#define IP6OAF_AWDL_UNRESTRICTED 0x00000040     /* privileged AWDL */
+#define IP6OAF_QOSMARKING_ALLOWED 0x00000080    /* policy allows Fastlane DSCP marking */
+#define IP6OAF_INTCOPROC_ALLOWED 0x00000100     /* access to internal coproc interfaces */
+#define IP6OAF_NO_LOW_POWER     0x00000200      /* skip low power */
+	u_int32_t       ip6oa_retflags; /* IP6OARF return flags (see below) */
+#define IP6OARF_IFDENIED        0x00000001      /* denied access to interface */
+	int             ip6oa_sotc;             /* traffic class for Fastlane DSCP mapping */
+	int             ip6oa_netsvctype;
 };
 
-extern struct ip6stat ip6stat;	/* statistics */
-extern int ip6_defhlim;		/* default hop limit */
-extern int ip6_defmcasthlim;	/* default multicast hop limit */
-extern int ip6_forwarding;	/* act as router? */
-extern int ip6_gif_hlim;	/* Hop limit for gif encap packet */
-extern int ip6_use_deprecated;	/* allow deprecated addr as source */
-extern int ip6_rr_prune;	/* router renumbering prefix */
-				/*   walk list every 5 sec. */
-extern int ip6_mcast_pmtu;	/* enable pMTU discovery for multicast? */
-#define	ip6_mapped_addr_on	(!ip6_v6only)
+extern struct ip6stat ip6stat;  /* statistics */
+extern int ip6_defhlim;         /* default hop limit */
+extern int ip6_defmcasthlim;    /* default multicast hop limit */
+extern int ip6_forwarding;      /* act as router? */
+extern int ip6_gif_hlim;        /* Hop limit for gif encap packet */
+extern int ip6_use_deprecated;  /* allow deprecated addr as source */
+extern int ip6_rr_prune;        /* router renumbering prefix */
+                                /*   walk list every 5 sec. */
+extern int ip6_mcast_pmtu;      /* enable pMTU discovery for multicast? */
+#define ip6_mapped_addr_on      (!ip6_v6only)
 extern int ip6_v6only;
 
 extern int ip6_neighborgcthresh; /* Threshold # of NDP entries for GC */
-extern int ip6_maxifprefixes;	/* Max acceptable prefixes via RA per IF */
-extern int ip6_maxifdefrouters;	/* Max acceptable def routers via RA */
-extern int ip6_maxdynroutes;	/* Max # of routes created via redirect */
-extern int ip6_sendredirects;	/* send IP redirects when forwarding? */
-extern int ip6_accept_rtadv;	/* deprecated */
+extern int ip6_maxifprefixes;   /* Max acceptable prefixes via RA per IF */
+extern int ip6_maxifdefrouters; /* Max acceptable def routers via RA */
+extern int ip6_maxdynroutes;    /* Max # of routes created via redirect */
+extern int ip6_sendredirects;   /* send IP redirects when forwarding? */
+extern int ip6_accept_rtadv;    /* deprecated */
 extern int ip6_log_interval;
 extern uint64_t ip6_log_time;
-extern int ip6_hdrnestlimit;	/* upper limit of # of extension headers */
-extern int ip6_dad_count;	/* DupAddrDetectionTransmits */
+extern int ip6_hdrnestlimit;    /* upper limit of # of extension headers */
+extern int ip6_dad_count;       /* DupAddrDetectionTransmits */
 
 /* RFC4193 Unique Local Unicast Prefixes only */
 extern int ip6_only_allow_rfc4193_prefix;
@@ -483,10 +483,10 @@ extern int ip6_only_allow_rfc4193_prefix;
 extern int ip6_auto_flowlabel;
 extern int ip6_auto_linklocal;
 
-extern int ip6_anonportmin;		/* minimum ephemeral port */
-extern int ip6_anonportmax;		/* maximum ephemeral port */
-extern int ip6_lowportmin;		/* minimum reserved port */
-extern int ip6_lowportmax;		/* maximum reserved port */
+extern int ip6_anonportmin;             /* minimum ephemeral port */
+extern int ip6_anonportmax;             /* maximum ephemeral port */
+extern int ip6_lowportmin;              /* minimum reserved port */
+extern int ip6_lowportmax;              /* maximum reserved port */
 
 extern int ip6_use_tempaddr; /* whether to use temporary addresses. */
 
@@ -556,7 +556,7 @@ extern struct ip6_pktopts *ip6_copypktopts(struct ip6_pktopts *, int);
 extern int ip6_optlen(struct inpcb *);
 extern void ip6_drain(void);
 extern int ip6_do_fragmentation(struct mbuf **, uint32_t, struct ifnet *, uint32_t,
-								struct ip6_hdr *, struct ip6_exthdrs *, uint32_t, int);
+    struct ip6_hdr *, struct ip6_exthdrs *, uint32_t, int);
 
 extern int route6_input(struct mbuf **, int *, int);
 

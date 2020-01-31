@@ -108,7 +108,7 @@
 
 
 static int ipcomp_output(struct mbuf *, u_char *, struct mbuf *,
-	int, struct secasvar *sav);
+    int, struct secasvar *sav);
 
 /*
  * Modify the packet so that the payload is compressed.
@@ -137,8 +137,8 @@ ipcomp_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md, int af, struct 
 	struct mbuf *mprev;
 	struct ipcomp *ipcomp;
 	const struct ipcomp_algorithm *algo;
-	u_int16_t cpi;		/* host order */
-	size_t plen0, plen;	/*payload length to be compressed*/
+	u_int16_t cpi;          /* host order */
+	size_t plen0, plen;     /*payload length to be compressed*/
 	size_t compoff;
 	int afnumber;
 	int error = 0;
@@ -159,7 +159,7 @@ ipcomp_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md, int af, struct 
 #endif
 	default:
 		ipseclog((LOG_ERR, "ipcomp_output: unsupported af %d\n", af));
-		return 0;	/* no change at all */
+		return 0;       /* no change at all */
 	}
 
 	/* grab parameters */
@@ -169,19 +169,22 @@ ipcomp_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md, int af, struct 
 		m_freem(m);
 		return EINVAL;
 	}
-	if ((sav->flags & SADB_X_EXT_RAWCPI) == 0)
+	if ((sav->flags & SADB_X_EXT_RAWCPI) == 0) {
 		cpi = sav->alg_enc;
-	else
+	} else {
 		cpi = ntohl(sav->spi) & 0xffff;
+	}
 
 	/* compute original payload length */
 	plen = 0;
-	for (n = md; n; n = n->m_next)
+	for (n = md; n; n = n->m_next) {
 		plen += n->m_len;
+	}
 
 	/* if the payload is short enough, we don't need to compress */
-	if (plen < algo->minplen)
+	if (plen < algo->minplen) {
 		return 0;
+	}
 
 	/*
 	 * retain the original packet for two purposes:
@@ -205,8 +208,9 @@ ipcomp_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md, int af, struct 
 	plen0 = plen;
 
 	/* make the packet over-writable */
-	for (mprev = m; mprev && mprev->m_next != md; mprev = mprev->m_next)
+	for (mprev = m; mprev && mprev->m_next != md; mprev = mprev->m_next) {
 		;
+	}
 	if (mprev == NULL || mprev->m_next != md) {
 		ipseclog((LOG_DEBUG, "ipcomp%d_output: md is not in chain\n",
 		    afnumber));
@@ -259,90 +263,90 @@ ipcomp_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md, int af, struct 
 	m->m_pkthdr.len -= plen0;
 	m->m_pkthdr.len += plen;
 
-    {
-	/*
-	 * insert IPComp header.
-	 */
+	{
+		/*
+		 * insert IPComp header.
+		 */
 #if INET
-	struct ip *ip = NULL;
+		struct ip *ip = NULL;
 #endif
 #if INET6
-	struct ip6_hdr *ip6 = NULL;
+		struct ip6_hdr *ip6 = NULL;
 #endif
-	size_t hlen = 0;	/*ip header len*/
-	size_t complen = sizeof(struct ipcomp);
+		size_t hlen = 0; /*ip header len*/
+		size_t complen = sizeof(struct ipcomp);
 
-	switch (af) {
+		switch (af) {
 #if INET
-	case AF_INET:
-		ip = mtod(m, struct ip *);
+		case AF_INET:
+			ip = mtod(m, struct ip *);
 #ifdef _IP_VHL
-		hlen = IP_VHL_HL(ip->ip_vhl) << 2;
+			hlen = IP_VHL_HL(ip->ip_vhl) << 2;
 #else
-		hlen = ip->ip_hl << 2;
+			hlen = ip->ip_hl << 2;
 #endif
-		break;
+			break;
 #endif
 #if INET6
-	case AF_INET6:
-		ip6 = mtod(m, struct ip6_hdr *);
-		hlen = sizeof(*ip6);
-		break;
+		case AF_INET6:
+			ip6 = mtod(m, struct ip6_hdr *);
+			hlen = sizeof(*ip6);
+			break;
 #endif
-	}
-
-	compoff = m->m_pkthdr.len - plen;
-
-	/*
-	 * grow the mbuf to accomodate ipcomp header.
-	 * before: IP ... payload
-	 * after:  IP ... ipcomp payload
-	 */
-	if (M_LEADINGSPACE(md) < complen) {
-		MGET(n, M_DONTWAIT, MT_DATA);
-		if (!n) {
-			m_freem(m);
-			error = ENOBUFS;
-			goto fail;
 		}
-		n->m_len = complen;
-		mprev->m_next = n;
-		n->m_next = md;
-		m->m_pkthdr.len += complen;
-		ipcomp = mtod(n, struct ipcomp *);
-	} else {
-		md->m_len += complen;
-		md->m_data -= complen;
-		m->m_pkthdr.len += complen;
-		ipcomp = mtod(md, struct ipcomp *);
-	}
-	
-	bzero(ipcomp, sizeof(*ipcomp));
-	ipcomp->comp_nxt = *nexthdrp;
-	*nexthdrp = IPPROTO_IPCOMP;
-	ipcomp->comp_cpi = htons(cpi);
-	switch (af) {
+
+		compoff = m->m_pkthdr.len - plen;
+
+		/*
+		 * grow the mbuf to accomodate ipcomp header.
+		 * before: IP ... payload
+		 * after:  IP ... ipcomp payload
+		 */
+		if (M_LEADINGSPACE(md) < complen) {
+			MGET(n, M_DONTWAIT, MT_DATA);
+			if (!n) {
+				m_freem(m);
+				error = ENOBUFS;
+				goto fail;
+			}
+			n->m_len = complen;
+			mprev->m_next = n;
+			n->m_next = md;
+			m->m_pkthdr.len += complen;
+			ipcomp = mtod(n, struct ipcomp *);
+		} else {
+			md->m_len += complen;
+			md->m_data -= complen;
+			m->m_pkthdr.len += complen;
+			ipcomp = mtod(md, struct ipcomp *);
+		}
+
+		bzero(ipcomp, sizeof(*ipcomp));
+		ipcomp->comp_nxt = *nexthdrp;
+		*nexthdrp = IPPROTO_IPCOMP;
+		ipcomp->comp_cpi = htons(cpi);
+		switch (af) {
 #if INET
-	case AF_INET:
-		if (compoff + complen + plen < IP_MAXPACKET)
-			ip->ip_len = htons(compoff + complen + plen);
-		else {
-			ipseclog((LOG_ERR,
-			    "IPv4 ESP output: size exceeds limit\n"));
-			IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
-			m_freem(m);
-			error = EMSGSIZE;
-			goto fail;
-		}
-		break;
+		case AF_INET:
+			if (compoff + complen + plen < IP_MAXPACKET) {
+				ip->ip_len = htons(compoff + complen + plen);
+			} else {
+				ipseclog((LOG_ERR,
+				    "IPv4 ESP output: size exceeds limit\n"));
+				IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
+				m_freem(m);
+				error = EMSGSIZE;
+				goto fail;
+			}
+			break;
 #endif
 #if INET6
-	case AF_INET6:
-		/* total packet length will be computed in ip6_output() */
-		break;
+		case AF_INET6:
+			/* total packet length will be computed in ip6_output() */
+			break;
 #endif
+		}
 	}
-    }
 
 	if (!m) {
 		ipseclog((LOG_DEBUG,
@@ -350,7 +354,7 @@ ipcomp_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md, int af, struct 
 		    afnumber));
 		IPSEC_STAT_INCREMENT(stat->out_inval);
 	}
-		IPSEC_STAT_INCREMENT(stat->out_success);
+	IPSEC_STAT_INCREMENT(stat->out_success);
 
 	/* compute byte lifetime against original packet */
 	key_sa_recordxfer(sav, mcopy);

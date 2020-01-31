@@ -381,12 +381,11 @@ def _PmapL4Walk(pmap_addr_val,vaddr, ept_pmap, verbose_level = vSCRIPT):
         params: pmap_addr_val - core.value representing kernel data of type pmap_addr_t
         vaddr : int - virtual address to walk
     """
-    is_cpu64_bit = int(kern.globals.cpu_64bit)
     pt_paddr = unsigned(pmap_addr_val)
     pt_valid = (unsigned(pmap_addr_val) != 0)
     pt_large = 0
     pframe_offset = 0
-    if pt_valid and is_cpu64_bit:
+    if pt_valid:
         # Lookup bits 47:39 of linear address in PML4T
         pt_index = (vaddr >> 39) & 0x1ff
         pframe_offset = vaddr & 0x7fffffffff

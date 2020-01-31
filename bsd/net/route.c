@@ -1385,11 +1385,12 @@ rtredirect(struct ifnet *ifp, struct sockaddr *dst, struct sockaddr *gateway,
 	 * comparison against rt_gateway below.
 	 */
 #if INET6
-	if ((af == AF_INET) || (af == AF_INET6))
+	if ((af == AF_INET) || (af == AF_INET6)) {
 #else
-	if (af == AF_INET)
+	if (af == AF_INET) {
 #endif /* !INET6 */
 		src = sa_copy(src, &ss, &ifscope);
+	}
 
 	/*
 	 * Verify the gateway is directly reachable; if scoped routing

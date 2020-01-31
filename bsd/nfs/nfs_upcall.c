@@ -54,7 +54,7 @@ struct nfsrv_uc_arg {
 	uint32_t nua_flags;
 	uint32_t nua_qi;
 };
-#define NFS_UC_QUEUED	0x0001
+#define NFS_UC_QUEUED   0x0001
 
 #define NFS_UC_HASH_SZ 7
 #define NFS_UC_HASH(x) ((((uint32_t)(uintptr_t)(x)) >> 3) % nfsrv_uc_thread_count)
@@ -62,12 +62,12 @@ struct nfsrv_uc_arg {
 TAILQ_HEAD(nfsrv_uc_q, nfsrv_uc_arg);
 
 static struct nfsrv_uc_queue {
-	lck_mtx_t		*ucq_lock;
-	struct nfsrv_uc_q	ucq_queue[1];
-	thread_t		ucq_thd;
-	uint32_t		ucq_flags;
+	lck_mtx_t               *ucq_lock;
+	struct nfsrv_uc_q       ucq_queue[1];
+	thread_t                ucq_thd;
+	uint32_t                ucq_flags;
 } nfsrv_uc_queue_tbl[NFS_UC_HASH_SZ];
-#define NFS_UC_QUEUE_SLEEPING	0x0001
+#define NFS_UC_QUEUE_SLEEPING   0x0001
 
 static lck_grp_t *nfsrv_uc_group;
 static lck_mtx_t *nfsrv_uc_shutdown_lock;
@@ -152,8 +152,9 @@ nfsrv_uc_dequeue(struct nfsrv_sock *slp)
 	 * is shutting down so no need for acquiring the lock to check that
 	 * the flag is cleared.
 	 */
-	if (ap == NULL || (ap->nua_flags & NFS_UC_QUEUED) == 0)
+	if (ap == NULL || (ap->nua_flags & NFS_UC_QUEUED) == 0) {
 		return;
+	}
 	/* If we're queued we might race with nfsrv_uc_thread */
 	lck_mtx_lock(myqueue->ucq_lock);
 	if (ap->nua_flags & NFS_UC_QUEUED) {
@@ -162,7 +163,7 @@ nfsrv_uc_dequeue(struct nfsrv_sock *slp)
 		ap->nua_flags &= ~NFS_UC_QUEUED;
 #ifdef NFS_UC_Q_DEBUG
 		OSDecrementAtomic(&nfsrv_uc_queue_count);
-#endif		
+#endif
 	}
 	FREE(slp->ns_ua, M_TEMP);
 	slp->ns_ua = NULL;
@@ -198,15 +199,17 @@ nfsrv_uc_start(void)
 	int error;
 
 #ifdef NFS_UC_Q_DEBUG
-	if (!nfsrv_uc_use_proxy)
+	if (!nfsrv_uc_use_proxy) {
 		return;
+	}
 #endif
 	DPRINT("nfsrv_uc_start\n");
 
 	/* Wait until previous shutdown finishes */
 	lck_mtx_lock(nfsrv_uc_shutdown_lock);
-	while (nfsrv_uc_shutdown || nfsrv_uc_thread_count > 0)
+	while (nfsrv_uc_shutdown || nfsrv_uc_thread_count > 0) {
 		msleep(&nfsrv_uc_thread_count, nfsrv_uc_shutdown_lock, PSOCK, "nfsd_upcall_shutdown_wait", NULL);
+	}
 
 	/* Start up-call threads */
 	for (i = 0; i < NFS_UC_HASH_SZ; i++) {
@@ -252,13 +255,15 @@ nfsrv_uc_stop(void)
 
 	/* Wait until they are done shutting down */
 	lck_mtx_lock(nfsrv_uc_shutdown_lock);
-	while (nfsrv_uc_thread_count > 0)
+	while (nfsrv_uc_thread_count > 0) {
 		msleep(&nfsrv_uc_thread_count, nfsrv_uc_shutdown_lock, PSOCK, "nfsd_upcall_shutdown_stop", NULL);
+	}
 
 	/* Deallocate old threads */
 	for (i = 0; i < nfsrv_uc_thread_count; i++) {
-		if (nfsrv_uc_queue_tbl[i].ucq_thd != THREAD_NULL)
+		if (nfsrv_uc_queue_tbl[i].ucq_thd != THREAD_NULL) {
 			thread_deallocate(nfsrv_uc_queue_tbl[i].ucq_thd);
+		}
 		nfsrv_uc_queue_tbl[i].ucq_thd = THREAD_NULL;
 	}
 
@@ -328,16 +333,18 @@ nfsrv_uc_proxy(socket_t so, void *arg, int waitflag)
 	TAILQ_INSERT_TAIL(myqueue->ucq_queue, uap, nua_svcq);
 
 	uap->nua_flags |= NFS_UC_QUEUED;
-	if (myqueue->ucq_flags | NFS_UC_QUEUE_SLEEPING)
+	if (myqueue->ucq_flags | NFS_UC_QUEUE_SLEEPING) {
 		wakeup(myqueue);
+	}
 
 #ifdef NFS_UC_Q_DEBUG
 	{
 		uint32_t count = OSIncrementAtomic(&nfsrv_uc_queue_count);
-	
+
 		/* This is a bit racey but just for debug */
-		if (count > nfsrv_uc_queue_max_seen)
+		if (count > nfsrv_uc_queue_max_seen) {
 			nfsrv_uc_queue_max_seen = count;
+		}
 
 		if (nfsrv_uc_queue_limit && count > nfsrv_uc_queue_limit) {
 			panic("nfsd up-call queue limit exceeded\n");
@@ -359,8 +366,9 @@ nfsrv_uc_addsock(struct nfsrv_sock *slp, int start)
 	int on = 1;
 	struct nfsrv_uc_arg *arg;
 
-	if (start && nfsrv_uc_thread_count == 0)
+	if (start && nfsrv_uc_thread_count == 0) {
 		nfsrv_uc_start();
+	}
 
 	/*
 	 * We don't take a lock since once we're up nfsrv_uc_thread_count does
@@ -368,9 +376,10 @@ nfsrv_uc_addsock(struct nfsrv_sock *slp, int start)
 	 * generate up-calls.
 	 */
 	if (nfsrv_uc_thread_count) {
-		MALLOC(arg, struct nfsrv_uc_arg *, sizeof (struct nfsrv_uc_arg), M_TEMP, M_WAITOK | M_ZERO);
-		if (arg == NULL)
+		MALLOC(arg, struct nfsrv_uc_arg *, sizeof(struct nfsrv_uc_arg), M_TEMP, M_WAITOK | M_ZERO);
+		if (arg == NULL) {
 			goto direct;
+		}
 
 		slp->ns_ua = arg;
 		arg->nua_slp = slp;
@@ -389,4 +398,3 @@ direct:
 
 	return;
 }
-

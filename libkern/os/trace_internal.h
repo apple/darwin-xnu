@@ -35,8 +35,8 @@ OS_ALWAYS_INLINE
 inline uint32_t
 _os_trace_offset(const void *dso, const void *addr, _firehose_tracepoint_flags_activity_t flags __unused)
 {
-    assert((uintptr_t)addr >= (uintptr_t)dso);
-    return (uint32_t) ((uintptr_t)addr - (uintptr_t)dso);
+	assert((uintptr_t)addr >= (uintptr_t)dso);
+	return (uint32_t) ((uintptr_t)addr - (uintptr_t)dso);
 }
 
 bool

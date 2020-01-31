@@ -47,10 +47,10 @@
 #include <security/mac_framework.h>
 #endif
 
-SYSCTL_DECL(_net_inet6);	/* Note: Not in any common header. */
+SYSCTL_DECL(_net_inet6);        /* Note: Not in any common header. */
 
 SYSCTL_NODE(_net_inet6, OID_AUTO, send, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
-	"IPv6 Secure Neighbor Discovery");
+    "IPv6 Secure Neighbor Discovery");
 
 static int nd6_send_opmode = ND6_SEND_OPMODE_CGA_QUIET;
 SYSCTL_INT(_net_inet6_send, OID_AUTO, opmode, CTLFLAG_RW | CTLFLAG_LOCKED,
@@ -63,8 +63,8 @@ SYSCTL_INT(_net_inet6_send, OID_AUTO, opstate, CTLFLAG_RD | CTLFLAG_LOCKED,
 static int sysctl_cga_parameters SYSCTL_HANDLER_ARGS;
 
 SYSCTL_PROC(_net_inet6_send, OID_AUTO, cga_parameters,
-	CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0,
-	sysctl_cga_parameters, "S,nd6_send_nodecfg", "");
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0,
+    sysctl_cga_parameters, "S,nd6_send_nodecfg", "");
 
 /*
  * The size of the buffer is sufficient to contain a public key, its size in
@@ -72,7 +72,7 @@ SYSCTL_PROC(_net_inet6_send, OID_AUTO, cga_parameters,
  * scope. This interface is not a public API, so we don't anticipate that the
  * userland and the kernel will be mismatched between ILP32 and LP64.
  */
-#define	SYSCTL_CGA_PARAMETERS_BUFFER_SIZE \
+#define SYSCTL_CGA_PARAMETERS_BUFFER_SIZE \
 	(2 * (sizeof (u_int16_t) + IN6_CGA_KEY_MAXSIZE) + \
 	sizeof (struct in6_cga_prepare))
 
@@ -96,13 +96,13 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 	if (namelen != 0) {
 		log(LOG_ERR, "%s: name length err [len=%u]\n", __func__,
 		    namelen);
-		return (EINVAL);
+		return EINVAL;
 	}
 
 	if (req->newlen > SYSCTL_CGA_PARAMETERS_BUFFER_SIZE) {
 		log(LOG_ERR, "%s: input buffer size error [len=%u]\n", __func__,
 		    req->newlen);
-		return (EINVAL);
+		return EINVAL;
 	}
 
 #if CONFIG_MACF
@@ -111,7 +111,7 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 	kauth_cred_unref(&cred);
 	if (error != 0) {
 		log(LOG_ERR, "%s: mac_system_check_info denied.\n", __func__);
-		return (EPERM);
+		return EPERM;
 	}
 #endif
 
@@ -120,7 +120,7 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 	if (buffer == NULL) {
 		log(LOG_ERR, "%s: could not allocate marshaling buffer.\n",
 		    __func__);
-		return (ENOMEM);
+		return ENOMEM;
 	}
 
 	in6_cga_node_lock();
@@ -128,27 +128,30 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 	if (req->oldptr != USER_ADDR_NULL && req->oldlen > 0) {
 		oldp = buffer;
 		fin = &buffer[SYSCTL_CGA_PARAMETERS_BUFFER_SIZE];
-		if (req->oldlen < SYSCTL_CGA_PARAMETERS_BUFFER_SIZE)
+		if (req->oldlen < SYSCTL_CGA_PARAMETERS_BUFFER_SIZE) {
 			fin = &buffer[req->oldlen];
+		}
 
 		in6_cga_query(&cfg);
 		iov = &cfg.cga_pubkey;
 		if (iov->iov_len > 0) {
 			VERIFY(iov->iov_len < UINT16_MAX);
 
-			if (&oldp[sizeof (cfg.cga_prepare)] <= fin)
+			if (&oldp[sizeof(cfg.cga_prepare)] <= fin) {
 				bcopy(&cfg.cga_prepare, oldp,
-				    sizeof (cfg.cga_prepare));
-			oldp += sizeof (cfg.cga_prepare);
-
-			if (&oldp[sizeof (u16)] < fin) {
-				u16 = (u_int16_t) iov->iov_len;
-				bcopy(&u16, oldp, sizeof (u16));
+				    sizeof(cfg.cga_prepare));
 			}
-			oldp += sizeof (u16);
+			oldp += sizeof(cfg.cga_prepare);
 
-			if (&oldp[iov->iov_len] < fin)
+			if (&oldp[sizeof(u16)] < fin) {
+				u16 = (u_int16_t) iov->iov_len;
+				bcopy(&u16, oldp, sizeof(u16));
+			}
+			oldp += sizeof(u16);
+
+			if (&oldp[iov->iov_len] < fin) {
 				bcopy(iov->iov_base, oldp, iov->iov_len);
+			}
 			oldp += iov->iov_len;
 
 			if (oldp > fin) {
@@ -161,16 +164,19 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 		}
 
 		error = SYSCTL_OUT(req, buffer, oldp - buffer);
-		if (error)
+		if (error) {
 			goto done;
+		}
 	}
 
-	if (req->newptr == USER_ADDR_NULL)
+	if (req->newptr == USER_ADDR_NULL) {
 		goto done;
+	}
 
 	error = proc_suser(current_proc());
-	if (error)
+	if (error) {
 		goto done;
+	}
 
 	if (req->newlen == 0) {
 		in6_cga_stop();
@@ -179,21 +185,23 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 	}
 
 	error = SYSCTL_IN(req, buffer, req->newlen);
-	if (error)
+	if (error) {
 		goto done;
+	}
 
 	newp = buffer;
 	fin = &buffer[req->newlen];
 
 	bzero(&cfg, sizeof cfg);
 
-	if (&newp[sizeof (cfg.cga_prepare)] <= fin)
-		bcopy(newp, &cfg.cga_prepare, sizeof (cfg.cga_prepare));
-	newp += sizeof (cfg.cga_prepare);
+	if (&newp[sizeof(cfg.cga_prepare)] <= fin) {
+		bcopy(newp, &cfg.cga_prepare, sizeof(cfg.cga_prepare));
+	}
+	newp += sizeof(cfg.cga_prepare);
 
 	iov = &cfg.cga_privkey;
-	if (&newp[sizeof (u16)] < fin) {
-		bcopy(newp, &u16, sizeof (u16));
+	if (&newp[sizeof(u16)] < fin) {
+		bcopy(newp, &u16, sizeof(u16));
 		iov->iov_len = u16;
 
 		if (iov->iov_len > IN6_CGA_KEY_MAXSIZE) {
@@ -201,14 +209,14 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 			goto done;
 		}
 	}
-	newp += sizeof (u16);
+	newp += sizeof(u16);
 
 	iov->iov_base = newp;
 	newp += iov->iov_len;
 
 	iov = &cfg.cga_pubkey;
-	if (&newp[sizeof (u16)] < fin) {
-		bcopy(newp, &u16, sizeof (u16));
+	if (&newp[sizeof(u16)] < fin) {
+		bcopy(newp, &u16, sizeof(u16));
 		iov->iov_len = u16;
 
 		if (iov->iov_len > IN6_CGA_KEY_MAXSIZE) {
@@ -216,7 +224,7 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 			goto done;
 		}
 	}
-	newp += sizeof (u16);
+	newp += sizeof(u16);
 
 	iov->iov_base = newp;
 	newp += iov->iov_len;
@@ -229,16 +237,17 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 	}
 
 	error = in6_cga_start(&cfg);
-	if (!error)
+	if (!error) {
 		nd6_send_opstate = nd6_send_opmode;
-	else
+	} else {
 		log(LOG_ERR, "%s: in6_cga_start error=%d.\n", __func__,
 		    error);
+	}
 
 done:
 	in6_cga_node_unlock();
 	FREE(buffer, M_IP6CGA);
-	return (error);
+	return error;
 }
 
 /* End of file */

@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -69,32 +69,32 @@
  * on with modular arithmetic.  These macros can be
  * used to compare such integers.
  */
-#define	SEQ_LT(a,b)	((int)((a)-(b)) < 0)
-#define	SEQ_LEQ(a,b)	((int)((a)-(b)) <= 0)
-#define	SEQ_GT(a,b)	((int)((a)-(b)) > 0)
-#define	SEQ_GEQ(a,b)	((int)((a)-(b)) >= 0)
+#define SEQ_LT(a, b)     ((int)((a)-(b)) < 0)
+#define SEQ_LEQ(a, b)    ((int)((a)-(b)) <= 0)
+#define SEQ_GT(a, b)     ((int)((a)-(b)) > 0)
+#define SEQ_GEQ(a, b)    ((int)((a)-(b)) >= 0)
 
-#define	SEQ_MIN(a, b)	((SEQ_LT(a, b)) ? (a) : (b))
-#define	SEQ_MAX(a, b)	((SEQ_GT(a, b)) ? (a) : (b))
+#define SEQ_MIN(a, b)   ((SEQ_LT(a, b)) ? (a) : (b))
+#define SEQ_MAX(a, b)   ((SEQ_GT(a, b)) ? (a) : (b))
 
 /* for modulo comparisons of timestamps */
-#define TSTMP_LT(a,b)	((int)((a)-(b)) < 0)
-#define TSTMP_GT(a,b)	((int)((a)-(b)) > 0)
-#define TSTMP_LEQ(a,b)	((int)((a)-(b)) <= 0)
-#define TSTMP_GEQ(a,b)	((int)((a)-(b)) >= 0)
+#define TSTMP_LT(a, b)   ((int)((a)-(b)) < 0)
+#define TSTMP_GT(a, b)   ((int)((a)-(b)) > 0)
+#define TSTMP_LEQ(a, b)  ((int)((a)-(b)) <= 0)
+#define TSTMP_GEQ(a, b)  ((int)((a)-(b)) >= 0)
 
 /*
  * TCP connection counts are 32 bit integers operated
  * on with modular arithmetic.  These macros can be
  * used to compare such integers.
  */
-#define	CC_LT(a,b)	((int)((a)-(b)) < 0)
-#define	CC_LEQ(a,b)	((int)((a)-(b)) <= 0)
-#define	CC_GT(a,b)	((int)((a)-(b)) > 0)
-#define	CC_GEQ(a,b)	((int)((a)-(b)) >= 0)
+#define CC_LT(a, b)      ((int)((a)-(b)) < 0)
+#define CC_LEQ(a, b)     ((int)((a)-(b)) <= 0)
+#define CC_GT(a, b)      ((int)((a)-(b)) > 0)
+#define CC_GEQ(a, b)     ((int)((a)-(b)) >= 0)
 
 /* Macro to increment a CC: skip 0 which has a special meaning */
-#define CC_INC(c)	(++(c) == 0 ? ++(c) : (c))
+#define CC_INC(c)       (++(c) == 0 ? ++(c) : (c))
 
 #ifdef KERNEL_PRIVATE
 /*
@@ -102,14 +102,14 @@
  * send and receive from initial send and receive
  * sequence numbers.
  */
-#define	tcp_rcvseqinit(tp) \
+#define tcp_rcvseqinit(tp) \
 	(tp)->rcv_adv = (tp)->rcv_nxt = (tp)->irs + 1
 
-#define	tcp_sendseqinit(tp) \
+#define tcp_sendseqinit(tp) \
 	(tp)->snd_una = (tp)->snd_nxt = (tp)->snd_max = (tp)->snd_up = \
 	(tp)->snd_recover = (tp)->iss
 
-#define TCP_PAWS_IDLE	(24 * 24 * 60 * 60 * TCP_RETRANSHZ)
+#define TCP_PAWS_IDLE   (24 * 24 * 60 * 60 * TCP_RETRANSHZ)
 /* timestamp wrap-around time */
 #endif /* KERNEL_PRIVATE */
 #endif /* _NETINET_TCP_SEQ_H_ */

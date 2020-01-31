@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -62,9 +62,9 @@
  *
  */
 
-#ifdef	KERNEL_PRIVATE
+#ifdef  KERNEL_PRIVATE
 
-#ifndef	_KERN_ZALLOC_H_
+#ifndef _KERN_ZALLOC_H_
 #define _KERN_ZALLOC_H_
 
 #include <mach/machine/vm_types.h>
@@ -72,7 +72,7 @@
 #include <kern/kern_types.h>
 #include <sys/cdefs.h>
 
-#ifdef	MACH_KERNEL_PRIVATE
+#ifdef  MACH_KERNEL_PRIVATE
 
 #include <zone_debug.h>
 #include <kern/locks.h>
@@ -89,10 +89,10 @@
 #include <kern/zcache.h>
 #endif
 
-#if	CONFIG_GZALLOC
+#if     CONFIG_GZALLOC
 typedef struct gzalloc_data {
-	uint32_t	gzfc_index;
-	vm_offset_t 	*gzfc;
+	uint32_t        gzfc_index;
+	vm_offset_t     *gzfc;
 } gzalloc_data_t;
 #endif
 
@@ -108,45 +108,45 @@ struct zone_free_element;
 struct zone_page_metadata;
 
 struct zone {
-#ifdef	 CONFIG_ZCACHE
+#ifdef   CONFIG_ZCACHE
 	struct zone_cache *zcache;
-#endif	/* CONFIG_ZCACHE */
-	struct zone_free_element *free_elements;	/* free elements directly linked */
+#endif  /* CONFIG_ZCACHE */
+	struct zone_free_element *free_elements;        /* free elements directly linked */
 	struct {
-		queue_head_t			any_free_foreign;	/* foreign pages crammed into zone */
-		queue_head_t			all_free;
-		queue_head_t			intermediate;
-		queue_head_t			all_used;
-	} pages;		/* list of zone_page_metadata structs, which maintain per-page free element lists */
-	int		count;		/* Number of elements used now */
-	int		countfree;	/* Number of free elements */
-	int 	count_all_free_pages;  /* Number of pages collectable by GC */
-	lck_attr_t      lock_attr;	/* zone lock attribute */
-	decl_lck_mtx_data(,lock)	/* zone lock */
-	lck_mtx_ext_t   lock_ext;	/* placeholder for indirect mutex */
-	vm_size_t	cur_size;	/* current memory utilization */
-	vm_size_t	max_size;	/* how large can this zone grow */
-	vm_size_t	elem_size;	/* size of an element */
-	vm_size_t	alloc_size;	/* size used for more memory */
-	uint64_t	page_count __attribute__((aligned(8)));   /* number of pages used by this zone */
-	uint64_t	sum_count;	/* count of allocs (life of zone) */
+		queue_head_t                    any_free_foreign;       /* foreign pages crammed into zone */
+		queue_head_t                    all_free;
+		queue_head_t                    intermediate;
+		queue_head_t                    all_used;
+	} pages;                /* list of zone_page_metadata structs, which maintain per-page free element lists */
+	int             count;          /* Number of elements used now */
+	int             countfree;      /* Number of free elements */
+	int     count_all_free_pages;  /* Number of pages collectable by GC */
+	lck_attr_t      lock_attr;      /* zone lock attribute */
+	decl_lck_mtx_data(, lock)        /* zone lock */
+	lck_mtx_ext_t   lock_ext;       /* placeholder for indirect mutex */
+	vm_size_t       cur_size;       /* current memory utilization */
+	vm_size_t       max_size;       /* how large can this zone grow */
+	vm_size_t       elem_size;      /* size of an element */
+	vm_size_t       alloc_size;     /* size used for more memory */
+	uint64_t        page_count __attribute__((aligned(8)));   /* number of pages used by this zone */
+	uint64_t        sum_count;      /* count of allocs (life of zone) */
 	uint32_t
-	/* boolean_t */ exhaustible        :1,	/* (F) merely return if empty? */
-	/* boolean_t */	collectable        :1,	/* (F) garbage collect empty pages */
-	/* boolean_t */	expandable         :1,	/* (T) expand zone (with message)? */
+	/* boolean_t */ exhaustible        :1,  /* (F) merely return if empty? */
+	/* boolean_t */ collectable        :1,  /* (F) garbage collect empty pages */
+	/* boolean_t */ expandable         :1,  /* (T) expand zone (with message)? */
 	/* boolean_t */ allows_foreign     :1,  /* (F) allow non-zalloc space */
-	/* boolean_t */	doing_alloc_without_vm_priv:1,	/* is zone expanding now via a non-vm_privileged thread? */
+	/* boolean_t */ doing_alloc_without_vm_priv:1,  /* is zone expanding now via a non-vm_privileged thread? */
 	/* boolean_t */ doing_alloc_with_vm_priv:1, /* is zone expanding now via a vm_privileged thread? */
-	/* boolean_t */	waiting            :1,	/* is thread waiting for expansion? */
-	/* boolean_t */	async_pending      :1,	/* asynchronous allocation pending? */
-	/* boolean_t */ zleak_on           :1,	/* Are we collecting allocation information? */
-	/* boolean_t */	caller_acct        :1,  /* do we account allocation/free to the caller? */  
+	/* boolean_t */ waiting            :1,  /* is thread waiting for expansion? */
+	/* boolean_t */ async_pending      :1,  /* asynchronous allocation pending? */
+	/* boolean_t */ zleak_on           :1,  /* Are we collecting allocation information? */
+	/* boolean_t */ caller_acct        :1,  /* do we account allocation/free to the caller? */
 	/* boolean_t */ noencrypt          :1,
-	/* boolean_t */	no_callout         :1,
-	/* boolean_t */	async_prio_refill  :1,
-	/* boolean_t */	gzalloc_exempt     :1,
-	/* boolean_t */	alignment_required :1,
-	/* boolean_t */ zone_logging	   :1,	/* Enable zone logging for this zone. */
+	/* boolean_t */ no_callout         :1,
+	/* boolean_t */ async_prio_refill  :1,
+	/* boolean_t */ gzalloc_exempt     :1,
+	/* boolean_t */ alignment_required :1,
+	/* boolean_t */ zone_logging       :1,  /* Enable zone logging for this zone. */
 	/* boolean_t */ zone_replenishing  :1,
 	/* boolean_t */ kasan_quarantine   :1,
 	/* boolean_t */ tags               :1,
@@ -157,24 +157,24 @@ struct zone {
 	/* boolean_t */ cpu_cache_enabled  :1,
 	/* future    */ _reserved          :3;
 
-	int		index;		/* index into zone_info arrays for this zone */
-	const char	*zone_name;	/* a name for the zone */
+	int             index;          /* index into zone_info arrays for this zone */
+	const char      *zone_name;     /* a name for the zone */
 
 #if CONFIG_ZLEAKS
-	uint32_t zleak_capture;		/* per-zone counter for capturing every N allocations */
+	uint32_t zleak_capture;         /* per-zone counter for capturing every N allocations */
 #endif /* CONFIG_ZLEAKS */
 	uint32_t zp_count;              /* counter for poisoning every N frees */
-	vm_size_t	prio_refill_watermark;
-	thread_t	zone_replenish_thread;
-#if	CONFIG_GZALLOC
-	gzalloc_data_t	gz;
+	vm_size_t       prio_refill_watermark;
+	thread_t        zone_replenish_thread;
+#if     CONFIG_GZALLOC
+	gzalloc_data_t  gz;
 #endif /* CONFIG_GZALLOC */
 
 #if KASAN_ZALLOC
 	vm_size_t kasan_redzone;
 #endif
 
-	btlog_t		*zlog_btlog;		/* zone logging structure to hold stacks and element references to those stacks. */
+	btlog_t         *zlog_btlog;            /* zone logging structure to hold stacks and element references to those stacks. */
 };
 
 /*
@@ -183,8 +183,8 @@ struct zone {
  */
 typedef struct zinfo_usage_store_t {
 	/* These fields may be updated atomically, and so must be 8 byte aligned */
-	uint64_t	alloc __attribute__((aligned(8)));		/* allocation counter */
-	uint64_t	free __attribute__((aligned(8)));		/* free counter */
+	uint64_t        alloc __attribute__((aligned(8)));              /* allocation counter */
+	uint64_t        free __attribute__((aligned(8)));               /* free counter */
 } zinfo_usage_store_t;
 
 /*
@@ -199,46 +199,46 @@ extern uint64_t get_zones_collectable_bytes(void);
  * consider_jetsams is set to TRUE. To avoid deadlocks, we only pass a value of TRUE from within the
  * vm_pageout_garbage_collect thread.
  */
-extern void		zone_gc(boolean_t consider_jetsams);
-extern void		consider_zone_gc(boolean_t consider_jetsams);
-extern void		drop_free_elements(zone_t z);
+extern void             zone_gc(boolean_t consider_jetsams);
+extern void             consider_zone_gc(boolean_t consider_jetsams);
+extern void             drop_free_elements(zone_t z);
 
 /* Debug logging for zone-map-exhaustion jetsams. */
-extern void		get_zone_map_size(uint64_t *current_size, uint64_t *capacity);
-extern void		get_largest_zone_info(char *zone_name, size_t zone_name_len, uint64_t *zone_size);
+extern void             get_zone_map_size(uint64_t *current_size, uint64_t *capacity);
+extern void             get_largest_zone_info(char *zone_name, size_t zone_name_len, uint64_t *zone_size);
 
 /* Bootstrap zone module (create zone zone) */
-extern void		zone_bootstrap(void);
+extern void             zone_bootstrap(void);
 
 /* Init zone module */
-extern void		zone_init(
-					vm_size_t	map_size);
+extern void             zone_init(
+	vm_size_t       map_size);
 
 /* Stack use statistics */
-extern void		stack_fake_zone_init(int zone_index);
-extern void		stack_fake_zone_info(
-					int			*count, 
-					vm_size_t	*cur_size, 
-					vm_size_t	*max_size,
-					vm_size_t	*elem_size,
-					vm_size_t	*alloc_size, 
-					uint64_t	*sum_size,
-					int			*collectable, 
-					int			*exhaustable,
-					int		*caller_acct);
+extern void             stack_fake_zone_init(int zone_index);
+extern void             stack_fake_zone_info(
+	int                     *count,
+	vm_size_t       *cur_size,
+	vm_size_t       *max_size,
+	vm_size_t       *elem_size,
+	vm_size_t       *alloc_size,
+	uint64_t        *sum_size,
+	int                     *collectable,
+	int                     *exhaustable,
+	int             *caller_acct);
 
-#if		ZONE_DEBUG
+#if             ZONE_DEBUG
 
-extern void		zone_debug_enable(
-				zone_t		z);
+extern void             zone_debug_enable(
+	zone_t          z);
 
-extern void		zone_debug_disable(
-				zone_t		z);
+extern void             zone_debug_disable(
+	zone_t          z);
 
 #define zone_debug_enabled(z) z->active_zones.next
-#define	ROUNDUP(x,y)		((((x)+(y)-1)/(y))*(y))
-#define ZONE_DEBUG_OFFSET	ROUNDUP(sizeof(queue_chain_t),16)
-#endif	/* ZONE_DEBUG */
+#define ROUNDUP(x, y)            ((((x)+(y)-1)/(y))*(y))
+#define ZONE_DEBUG_OFFSET       ROUNDUP(sizeof(queue_chain_t),16)
+#endif  /* ZONE_DEBUG */
 
 extern unsigned int            num_zones;
 extern struct zone             zone_array[];
@@ -258,97 +258,97 @@ extern struct zone             zone_array[];
  */
 #define ZONE_CHUNK_MAXELEMENTS   (UINT16_MAX)
 
-#endif	/* MACH_KERNEL_PRIVATE */
+#endif  /* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
 
 
 /* Item definitions for zalloc/zinit/zone_change */
-#define Z_EXHAUST	1	/* Make zone exhaustible	*/
-#define Z_COLLECT	2	/* Make zone collectable	*/
-#define Z_EXPAND	3	/* Make zone expandable		*/
-#define	Z_FOREIGN	4	/* Allow collectable zone to contain foreign elements */
-#define Z_CALLERACCT	5	/* Account alloc/free against the caller */
-#define Z_NOENCRYPT	6	/* Don't encrypt zone during hibernation */
-#define Z_NOCALLOUT 	7	/* Don't asynchronously replenish the zone via callouts */
+#define Z_EXHAUST       1       /* Make zone exhaustible	*/
+#define Z_COLLECT       2       /* Make zone collectable	*/
+#define Z_EXPAND        3       /* Make zone expandable		*/
+#define Z_FOREIGN       4       /* Allow collectable zone to contain foreign elements */
+#define Z_CALLERACCT    5       /* Account alloc/free against the caller */
+#define Z_NOENCRYPT     6       /* Don't encrypt zone during hibernation */
+#define Z_NOCALLOUT     7       /* Don't asynchronously replenish the zone via callouts */
 #define Z_ALIGNMENT_REQUIRED 8
-#define Z_GZALLOC_EXEMPT 9	/* Not tracked in guard allocation mode */
-#define Z_KASAN_QUARANTINE	10 /* Allow zone elements to be quarantined on free */
-#ifdef	XNU_KERNEL_PRIVATE
-#define Z_TAGS_ENABLED	11      /* Store tags */
+#define Z_GZALLOC_EXEMPT 9      /* Not tracked in guard allocation mode */
+#define Z_KASAN_QUARANTINE      10 /* Allow zone elements to be quarantined on free */
+#ifdef  XNU_KERNEL_PRIVATE
+#define Z_TAGS_ENABLED  11      /* Store tags */
 #endif  /* XNU_KERNEL_PRIVATE */
-#define Z_CACHING_ENABLED 12	/*enable and initialize per-cpu caches for the zone*/
+#define Z_CACHING_ENABLED 12    /*enable and initialize per-cpu caches for the zone*/
 
-#ifdef	XNU_KERNEL_PRIVATE
+#ifdef  XNU_KERNEL_PRIVATE
 
 extern vm_offset_t     zone_map_min_address;
 extern vm_offset_t     zone_map_max_address;
 
 /* free an element with no regard for gzalloc, zleaks, or kasan*/
-extern void 	zfree_direct(		zone_t 		zone,
-					vm_offset_t 	elem);
+extern void     zfree_direct(           zone_t          zone,
+    vm_offset_t     elem);
 
 /* attempts to allocate an element with no regard for gzalloc, zleaks, or kasan*/
-extern void *	zalloc_attempt(		zone_t		zone);
+extern void *   zalloc_attempt(         zone_t          zone);
 
 /* Non-waiting for memory version of zalloc */
-extern void *	zalloc_nopagewait(
-					zone_t		zone);
+extern void *   zalloc_nopagewait(
+	zone_t          zone);
 
 /* selective version of zalloc */
-extern void *	zalloc_canblock(
-					zone_t		zone,
-					boolean_t	canblock);
+extern void *   zalloc_canblock(
+	zone_t          zone,
+	boolean_t       canblock);
 
 /* selective version of zalloc */
-extern void *	zalloc_canblock_tag(
-					zone_t		zone,
-					boolean_t	canblock,
-					vm_size_t	reqsize,
-					vm_tag_t    tag);
+extern void *   zalloc_canblock_tag(
+	zone_t          zone,
+	boolean_t       canblock,
+	vm_size_t       reqsize,
+	vm_tag_t    tag);
 
 /* Get from zone free list */
-extern void *	zget(
-					zone_t		zone);
+extern void *   zget(
+	zone_t          zone);
 
 /* Fill zone with memory */
-extern void		zcram(
-					zone_t		zone,
-					vm_offset_t	newmem,
-					vm_size_t	size);
+extern void             zcram(
+	zone_t          zone,
+	vm_offset_t     newmem,
+	vm_size_t       size);
 
 /* Initially fill zone with specified number of elements */
-extern int		zfill(
-					zone_t		zone,
-					int			nelem);
+extern int              zfill(
+	zone_t          zone,
+	int                     nelem);
 
-extern void		zone_prio_refill_configure(zone_t, vm_size_t);
+extern void             zone_prio_refill_configure(zone_t, vm_size_t);
 
 /* See above/top of file. Z_* definitions moved so they would be usable by kexts */
 
 /* Preallocate space for zone from zone map */
-extern void		zprealloc(
-					zone_t		zone,
-					vm_size_t	size);
+extern void             zprealloc(
+	zone_t          zone,
+	vm_size_t       size);
 
-extern integer_t	zone_free_count(
-						zone_t		zone);
+extern integer_t        zone_free_count(
+	zone_t          zone);
 
-extern vm_size_t 	zone_element_size(
-						void 		*addr,
-						zone_t 		*z);
+extern vm_size_t        zone_element_size(
+	void            *addr,
+	zone_t          *z);
 
-/* 
+/*
  *  Structure for keeping track of a backtrace, used for leak detection.
  *  This is in the .h file because it is used during panic, see kern/debug.c
  *  A non-zero size indicates that the trace is in use.
  */
 struct ztrace {
-	vm_size_t		zt_size;			/* How much memory are all the allocations referring to this trace taking up? */
-	uint32_t		zt_depth;			/* depth of stack (0 to MAX_ZTRACE_DEPTH) */
-	void*			zt_stack[MAX_ZTRACE_DEPTH];	/* series of return addresses from OSBacktrace */
-	uint32_t		zt_collisions;			/* How many times did a different stack land here while it was occupied? */
-	uint32_t		zt_hit_count;			/* for determining effectiveness of hash function */
+	vm_size_t               zt_size;                        /* How much memory are all the allocations referring to this trace taking up? */
+	uint32_t                zt_depth;                       /* depth of stack (0 to MAX_ZTRACE_DEPTH) */
+	void*                   zt_stack[MAX_ZTRACE_DEPTH];     /* series of return addresses from OSBacktrace */
+	uint32_t                zt_collisions;                  /* How many times did a different stack land here while it was occupied? */
+	uint32_t                zt_hit_count;                   /* for determining effectiveness of hash function */
 };
 
 #if CONFIG_ZLEAKS
@@ -362,7 +362,7 @@ extern vm_size_t zleak_per_zone_tracking_threshold;
 
 extern int get_zleak_state(void);
 
-#endif	/* CONFIG_ZLEAKS */
+#endif  /* CONFIG_ZLEAKS */
 
 #ifndef VM_MAX_TAG_ZONES
 #error MAX_TAG_ZONES
@@ -380,17 +380,17 @@ extern uintptr_t hash_mix(uintptr_t);
 extern uint32_t hashbacktrace(uintptr_t *, uint32_t, uint32_t);
 extern uint32_t hashaddr(uintptr_t, uint32_t);
 
-#define lock_zone(zone)					\
-MACRO_BEGIN						\
-	lck_mtx_lock_spin_always(&(zone)->lock);	\
+#define lock_zone(zone)                                 \
+MACRO_BEGIN                                             \
+	lck_mtx_lock_spin_always(&(zone)->lock);        \
 MACRO_END
 
-#define unlock_zone(zone)				\
-MACRO_BEGIN						\
-	lck_mtx_unlock(&(zone)->lock);			\
+#define unlock_zone(zone)                               \
+MACRO_BEGIN                                             \
+	lck_mtx_unlock(&(zone)->lock);                  \
 MACRO_END
 
-#if	CONFIG_GZALLOC
+#if     CONFIG_GZALLOC
 void gzalloc_init(vm_size_t);
 void gzalloc_zone_init(zone_t);
 void gzalloc_configure(void);
@@ -408,7 +408,7 @@ void zlog_btlog_lock(__unused void *);
 void zlog_btlog_unlock(__unused void *);
 
 #ifdef MACH_KERNEL_PRIVATE
-#define MAX_ZONE_NAME	32	/* max length of a zone name we can take from the boot-args */
+#define MAX_ZONE_NAME   32      /* max length of a zone name we can take from the boot-args */
 int track_this_zone(const char *zonename, const char *logname);
 #endif
 
@@ -417,40 +417,54 @@ extern boolean_t run_zone_test(void);
 extern vm_size_t zone_element_info(void *addr, vm_tag_t * ptag);
 #endif /* DEBUG || DEVELOPMENT */
 
-#endif	/* XNU_KERNEL_PRIVATE */
+#endif  /* XNU_KERNEL_PRIVATE */
 
 /* Allocate from zone */
-extern void *	zalloc(
-					zone_t		zone);
+extern void *   zalloc(
+	zone_t          zone);
 
 /* Non-blocking version of zalloc */
-extern void *	zalloc_noblock(
-					zone_t		zone);
+extern void *   zalloc_noblock(
+	zone_t          zone);
 
 /* Free zone element */
-extern void		zfree(
-					zone_t		zone,
-					void 		*elem);
+extern void             zfree(
+	zone_t          zone,
+	void            *elem);
+
+#ifdef XNU_KERNEL_PRIVATE
+#define zfree(zone, elem) \
+_Pragma("clang diagnostic push") \
+_Pragma("clang diagnostic ignored \"-Wshadow\"") \
+	do { \
+	        _Static_assert(sizeof (elem) == sizeof (void *) || sizeof (elem) == sizeof (mach_vm_address_t), "elem is not a pointer"); \
+	        void *__tmp_addr = (void *) elem; \
+	        zone_t __tmp_zone = zone; \
+	        elem = (__typeof__(elem)) NULL; \
+	        (zfree)(__tmp_zone, __tmp_addr); \
+	} while (0) \
+_Pragma("clang diagnostic pop")
+#endif /* XNU_KERNEL_PRIVATE */
 
 /* Create zone */
-extern zone_t	zinit(
-					vm_size_t	size,		/* the size of an element */
-					vm_size_t	maxmem,		/* maximum memory to use */
-					vm_size_t	alloc,		/* allocation size */
-					const char	*name);		/* a name for the zone */
+extern zone_t   zinit(
+	vm_size_t       size,                                           /* the size of an element */
+	vm_size_t       maxmem,                                         /* maximum memory to use */
+	vm_size_t       alloc,                                          /* allocation size */
+	const char      *name);                                         /* a name for the zone */
 
 /* Change zone parameters */
-extern void		zone_change(
-					zone_t			zone,
-					unsigned int	item,
-					boolean_t		value);
+extern void             zone_change(
+	zone_t                  zone,
+	unsigned int    item,
+	boolean_t               value);
 
 /* Destroy the zone */
-extern void		zdestroy(
-					zone_t		zone);
+extern void             zdestroy(
+	zone_t          zone);
 
 __END_DECLS
 
-#endif	/* _KERN_ZALLOC_H_ */
+#endif  /* _KERN_ZALLOC_H_ */
 
-#endif	/* KERNEL_PRIVATE */
+#endif  /* KERNEL_PRIVATE */

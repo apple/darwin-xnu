@@ -34,10 +34,10 @@
  */
 
 #ifndef _AUDIT_INTERNAL_H
-#define	_AUDIT_INTERNAL_H
+#define _AUDIT_INTERNAL_H
 
 #if defined(__linux__) && !defined(__unused)
-#define	__unused
+#define __unused
 #endif
 
 /*
@@ -48,20 +48,20 @@
  * otherwise break these interfaces or the assumptions they rely on.
  */
 struct au_token {
-	u_char			*t_data;
-	size_t			 len;
-	TAILQ_ENTRY(au_token)	 tokens;
+	u_char                  *t_data;
+	size_t                   len;
+	TAILQ_ENTRY(au_token)    tokens;
 };
 
 struct au_record {
-	char			 used;		/* Record currently in use? */
-	int			 desc;		/* Descriptor for record. */
-	TAILQ_HEAD(, au_token)	 token_q;	/* Queue of BSM tokens. */
-	u_char			*data;
-	size_t			 len;
-	LIST_ENTRY(au_record)	 au_rec_q;
+	char                     used;          /* Record currently in use? */
+	int                      desc;          /* Descriptor for record. */
+	TAILQ_HEAD(, au_token)   token_q;       /* Queue of BSM tokens. */
+	u_char                  *data;
+	size_t                   len;
+	LIST_ENTRY(au_record)    au_rec_q;
 };
-typedef	struct au_record	au_record_t;
+typedef struct au_record        au_record_t;
 
 
 /*
@@ -71,48 +71,48 @@ typedef	struct au_record	au_record_t;
  * token structures may contain pointers of whose contents we do not know the
  * size (e.g text tokens).
  */
-#define	AUDIT_HEADER_EX_SIZE(a)	((a)->ai_termid.at_type+18+sizeof(u_int32_t))
-#define	AUDIT_HEADER_SIZE	18
-#define	MAX_AUDIT_HEADER_SIZE	(5*sizeof(u_int32_t)+18)
-#define	AUDIT_TRAILER_SIZE	7
-#define	MAX_AUDIT_IDENTITY_SIZE	179
+#define AUDIT_HEADER_EX_SIZE(a) ((a)->ai_termid.at_type+18+sizeof(u_int32_t))
+#define AUDIT_HEADER_SIZE       18
+#define MAX_AUDIT_HEADER_SIZE   (5*sizeof(u_int32_t)+18)
+#define AUDIT_TRAILER_SIZE      7
+#define MAX_AUDIT_IDENTITY_SIZE 179
 
 /*
  * BSM token streams store fields in big endian byte order, so as to be
  * portable; when encoding and decoding, we must convert byte orders for
  * typed values.
  */
-#define	ADD_U_CHAR(loc, val)						\
-	do {								\
-		*(loc) = (val);						\
-		(loc) += sizeof(u_char);				\
+#define ADD_U_CHAR(loc, val)                                            \
+	do {                                                            \
+	        *(loc) = (val);                                         \
+	        (loc) += sizeof(u_char);                                \
 	} while(0)
 
 
-#define	ADD_U_INT16(loc, val)						\
-	do {								\
-		be16enc((loc), (val));					\
-		(loc) += sizeof(u_int16_t);				\
+#define ADD_U_INT16(loc, val)                                           \
+	do {                                                            \
+	        be16enc((loc), (val));                                  \
+	        (loc) += sizeof(u_int16_t);                             \
 	} while(0)
 
-#define	ADD_U_INT32(loc, val)						\
-	do {								\
-		be32enc((loc), (val));					\
-		(loc) += sizeof(u_int32_t);				\
+#define ADD_U_INT32(loc, val)                                           \
+	do {                                                            \
+	        be32enc((loc), (val));                                  \
+	        (loc) += sizeof(u_int32_t);                             \
 	} while(0)
 
-#define	ADD_U_INT64(loc, val)						\
-	do {								\
-		be64enc((loc), (val));					\
-		(loc) += sizeof(u_int64_t); 				\
+#define ADD_U_INT64(loc, val)                                           \
+	do {                                                            \
+	        be64enc((loc), (val));                                  \
+	        (loc) += sizeof(u_int64_t);                             \
 	} while(0)
 
-#define	ADD_MEM(loc, data, size)					\
-	do {								\
-		memcpy((loc), (data), (size));				\
-		(loc) += size;						\
+#define ADD_MEM(loc, data, size)                                        \
+	do {                                                            \
+	        memcpy((loc), (data), (size));                          \
+	        (loc) += size;                                          \
 	} while(0)
 
-#define	ADD_STRING(loc, data, size)	ADD_MEM(loc, data, size)
+#define ADD_STRING(loc, data, size)     ADD_MEM(loc, data, size)
 
 #endif /* !_AUDIT_INTERNAL_H_ */

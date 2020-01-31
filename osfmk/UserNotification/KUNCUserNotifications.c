@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2006 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -54,26 +54,26 @@
  */
 
 struct UNDReply {
-	decl_lck_mtx_data(,lock)				/* UNDReply lock */
-	int				userLandNotificationKey;
-	KUNCUserNotificationCallBack 	callback;
-	boolean_t			inprogress;
-	ipc_port_t			self_port;	/* Our port */
+	decl_lck_mtx_data(, lock)                                /* UNDReply lock */
+	int                             userLandNotificationKey;
+	KUNCUserNotificationCallBack    callback;
+	boolean_t                       inprogress;
+	ipc_port_t                      self_port;      /* Our port */
 };
 
-#define UNDReply_lock(reply)		lck_mtx_lock(&reply->lock)
-#define UNDReply_unlock(reply)		lck_mtx_unlock(&reply->lock)
+#define UNDReply_lock(reply)            lck_mtx_lock(&reply->lock)
+#define UNDReply_unlock(reply)          lck_mtx_unlock(&reply->lock)
 
 extern lck_grp_t LockCompatGroup;
 
 /* forward declarations */
 void UNDReply_deallocate(
-	UNDReplyRef		reply);
+	UNDReplyRef             reply);
 
 
 void
 UNDReply_deallocate(
-	UNDReplyRef		reply)
+	UNDReplyRef             reply)
 {
 	ipc_port_t port;
 
@@ -103,43 +103,45 @@ UNDServer_reference(void)
 
 static void
 UNDServer_deallocate(
-	UNDServerRef	UNDServer)
+	UNDServerRef    UNDServer)
 {
-	if (IP_VALID(UNDServer))
+	if (IP_VALID(UNDServer)) {
 		ipc_port_release_send(UNDServer);
+	}
 }
 
-/* 
+/*
  * UND Mig Callbacks
-*/
+ */
 
 kern_return_t
-UNDAlertCompletedWithResult_rpc (
-        UNDReplyRef 		reply,
-        int 			result,
-        xmlData_t		keyRef,		/* raw XML bytes */
+UNDAlertCompletedWithResult_rpc(
+	UNDReplyRef             reply,
+	int                     result,
+	xmlData_t               keyRef,         /* raw XML bytes */
 #ifdef KERNEL_CF
-        mach_msg_type_number_t	keyLen)
+	mach_msg_type_number_t  keyLen)
 #else
-        __unused mach_msg_type_number_t	keyLen)
+	__unused mach_msg_type_number_t keyLen)
 #endif
 {
 #ifdef KERNEL_CF
-	CFStringRef		xmlError = NULL;
-	CFDictionaryRef 	dict = NULL;
+	CFStringRef             xmlError = NULL;
+	CFDictionaryRef         dict = NULL;
 #else
 	const void *dict = (const void *)keyRef;
 #endif
 
-	if (reply == UND_REPLY_NULL || !reply->inprogress)
+	if (reply == UND_REPLY_NULL || !reply->inprogress) {
 		return KERN_INVALID_ARGUMENT;
+	}
 
 	/*
 	 * JMM - No C vesion of the Unserialize code in-kernel
 	 * and no C type for a CFDictionary either.  For now,
 	 * just pass the raw keyRef through.
 	 */
-#ifdef KERNEL_CF 
+#ifdef KERNEL_CF
 	if (keyRef && keyLen) {
 		dict = IOCFUnserialize(keyRef, NULL, NULL, &xmlError);
 	}
@@ -171,12 +173,13 @@ UNDAlertCompletedWithResult_rpc (
  *		to identify that request.
  */
 kern_return_t
-UNDNotificationCreated_rpc (
-        UNDReplyRef	reply,
-        int		userLandNotificationKey)
+UNDNotificationCreated_rpc(
+	UNDReplyRef     reply,
+	int             userLandNotificationKey)
 {
-	if (reply == UND_REPLY_NULL)
+	if (reply == UND_REPLY_NULL) {
 		return KERN_INVALID_ARGUMENT;
+	}
 
 	UNDReply_lock(reply);
 	if (reply->inprogress || reply->userLandNotificationKey != -1) {
@@ -190,7 +193,7 @@ UNDNotificationCreated_rpc (
 
 /*
  * KUNC Functions
-*/
+ */
 
 
 KUNCUserNotificationID
@@ -209,17 +212,17 @@ KUNCGetNotificationID(void)
 			reply->userLandNotificationKey = -1;
 			reply->inprogress = FALSE;
 			ipc_kobject_set(reply->self_port,
-					(ipc_kobject_t)reply,
-					IKOT_UND_REPLY);
+			    (ipc_kobject_t)reply,
+			    IKOT_UND_REPLY);
 		}
 	}
 	return (KUNCUserNotificationID) reply;
 }
 
 
-kern_return_t KUNCExecute(char executionPath[1024], int uid, int gid)
+kern_return_t
+KUNCExecute(char executionPath[1024], int uid, int gid)
 {
-
 	UNDServerRef UNDServer;
 
 	UNDServer = UNDServer_reference();
@@ -232,15 +235,17 @@ kern_return_t KUNCExecute(char executionPath[1024], int uid, int gid)
 	return MACH_SEND_INVALID_DEST;
 }
 
-kern_return_t KUNCUserNotificationCancel(
+kern_return_t
+KUNCUserNotificationCancel(
 	KUNCUserNotificationID id)
 {
 	UNDReplyRef reply = (UNDReplyRef)id;
 	kern_return_t kr;
 	int ulkey;
 
-	if (reply == UND_REPLY_NULL)
+	if (reply == UND_REPLY_NULL) {
 		return KERN_INVALID_ARGUMENT;
+	}
 
 	UNDReply_lock(reply);
 	if (!reply->inprogress) {
@@ -257,10 +262,11 @@ kern_return_t KUNCUserNotificationCancel(
 
 		UNDServer = UNDServer_reference();
 		if (IP_VALID(UNDServer)) {
-			kr = UNDCancelNotification_rpc(UNDServer,ulkey);
+			kr = UNDCancelNotification_rpc(UNDServer, ulkey);
 			UNDServer_deallocate(UNDServer);
-		} else
+		} else {
 			kr = MACH_SEND_INVALID_DEST;
+		}
 	} else {
 		UNDReply_unlock(reply);
 		kr = KERN_SUCCESS;
@@ -271,14 +277,14 @@ kern_return_t KUNCUserNotificationCancel(
 
 kern_return_t
 KUNCUserNotificationDisplayNotice(
-	int		noticeTimeout,
-	unsigned	flags,
-	char		*iconPath,
-	char		*soundPath,
-	char		*localizationPath,
-	char		*alertHeader,
-	char		*alertMessage,
-	char		*defaultButtonTitle)
+	int             noticeTimeout,
+	unsigned        flags,
+	char            *iconPath,
+	char            *soundPath,
+	char            *localizationPath,
+	char            *alertHeader,
+	char            *alertMessage,
+	char            *defaultButtonTitle)
 {
 	UNDServerRef UNDServer;
 
@@ -286,14 +292,14 @@ KUNCUserNotificationDisplayNotice(
 	if (IP_VALID(UNDServer)) {
 		kern_return_t kr;
 		kr = UNDDisplayNoticeSimple_rpc(UNDServer,
-					noticeTimeout,
-					flags,
-					iconPath,
-					soundPath,
-					localizationPath,
-					alertHeader,
-					alertMessage,
-					defaultButtonTitle);
+		    noticeTimeout,
+		    flags,
+		    iconPath,
+		    soundPath,
+		    localizationPath,
+		    alertHeader,
+		    alertMessage,
+		    defaultButtonTitle);
 		UNDServer_deallocate(UNDServer);
 		return kr;
 	}
@@ -302,35 +308,35 @@ KUNCUserNotificationDisplayNotice(
 
 kern_return_t
 KUNCUserNotificationDisplayAlert(
-	int		alertTimeout,
-	unsigned	flags,
-	char		*iconPath,
-	char		*soundPath,
-	char		*localizationPath,
-	char		*alertHeader,
-	char		*alertMessage,
-	char		*defaultButtonTitle,
-	char		*alternateButtonTitle,
-	char		*otherButtonTitle,
-	unsigned	*responseFlags)
+	int             alertTimeout,
+	unsigned        flags,
+	char            *iconPath,
+	char            *soundPath,
+	char            *localizationPath,
+	char            *alertHeader,
+	char            *alertMessage,
+	char            *defaultButtonTitle,
+	char            *alternateButtonTitle,
+	char            *otherButtonTitle,
+	unsigned        *responseFlags)
 {
-	UNDServerRef	UNDServer;
-	
+	UNDServerRef    UNDServer;
+
 	UNDServer = UNDServer_reference();
 	if (IP_VALID(UNDServer)) {
-		kern_return_t	kr;
+		kern_return_t   kr;
 		kr = UNDDisplayAlertSimple_rpc(UNDServer,
-				       alertTimeout,
-				       flags,
-				       iconPath,
-				       soundPath,
-				       localizationPath,
-				       alertHeader,
-				       alertMessage,
-				       defaultButtonTitle,
-				       alternateButtonTitle,
-				       otherButtonTitle,
-				       responseFlags);
+		    alertTimeout,
+		    flags,
+		    iconPath,
+		    soundPath,
+		    localizationPath,
+		    alertHeader,
+		    alertMessage,
+		    defaultButtonTitle,
+		    alternateButtonTitle,
+		    otherButtonTitle,
+		    responseFlags);
 		UNDServer_deallocate(UNDServer);
 		return kr;
 	}
@@ -339,21 +345,22 @@ KUNCUserNotificationDisplayAlert(
 
 kern_return_t
 KUNCUserNotificationDisplayFromBundle(
-	KUNCUserNotificationID	     id,
-	char 			     *bundlePath,
-	char			     *fileName,
-	char			     *fileExtension,
-	char			     *messageKey,
-	char			     *tokenString,
+	KUNCUserNotificationID       id,
+	char                         *bundlePath,
+	char                         *fileName,
+	char                         *fileExtension,
+	char                         *messageKey,
+	char                         *tokenString,
 	KUNCUserNotificationCallBack callback,
-	__unused int			contextKey)
+	__unused int                    contextKey)
 {
 	UNDReplyRef reply = (UNDReplyRef)id;
 	UNDServerRef UNDServer;
 	ipc_port_t reply_port;
 
-	if (reply == UND_REPLY_NULL)
+	if (reply == UND_REPLY_NULL) {
 		return KERN_INVALID_ARGUMENT;
+	}
 	UNDReply_lock(reply);
 	if (reply->inprogress == TRUE || reply->userLandNotificationKey != -1) {
 		UNDReply_unlock(reply);
@@ -369,12 +376,12 @@ KUNCUserNotificationDisplayFromBundle(
 		kern_return_t kr;
 
 		kr = UNDDisplayCustomFromBundle_rpc(UNDServer,
-					    reply_port,
-					    bundlePath,
-					    fileName,
-					    fileExtension,
-					    messageKey,
-					    tokenString);
+		    reply_port,
+		    bundlePath,
+		    fileName,
+		    fileExtension,
+		    messageKey,
+		    tokenString);
 		UNDServer_deallocate(UNDServer);
 		return kr;
 	}
@@ -416,10 +423,10 @@ convert_port_to_UNDReply(
 
 kern_return_t
 host_set_UNDServer(
-        host_priv_t     host_priv,
-        UNDServerRef    server)
+	host_priv_t     host_priv,
+	UNDServerRef    server)
 {
-	return (host_set_user_notification_port(host_priv, server));
+	return host_set_user_notification_port(host_priv, server);
 }
 
 /*
@@ -429,7 +436,7 @@ host_set_UNDServer(
 kern_return_t
 host_get_UNDServer(
 	host_priv_t     host_priv,
-	UNDServerRef	*serverp)
+	UNDServerRef    *serverp)
 {
-	return (host_get_user_notification_port(host_priv, serverp));
+	return host_get_user_notification_port(host_priv, serverp);
 }

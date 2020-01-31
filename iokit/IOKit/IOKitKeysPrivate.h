@@ -57,7 +57,7 @@
 #define kIOBridgeBootSessionUUIDKey             "bridge-boot-session-uuid"       /* value is OSData   */
 
 // interest type
-#define kIOConsoleSecurityInterest		"IOConsoleSecurityInterest"
+#define kIOConsoleSecurityInterest              "IOConsoleSecurityInterest"
 
 
 // private keys for clientHasPrivilege
@@ -69,13 +69,13 @@
 // Embedded still throttles NVRAM commits via kIONVRAMSyncNowPropertyKey, but
 // some clients still need a stricter NVRAM commit contract. Please use this with
 // care.
-#define kIONVRAMForceSyncNowPropertyKey		"IONVRAM-FORCESYNCNOW-PROPERTY"
+#define kIONVRAMForceSyncNowPropertyKey         "IONVRAM-FORCESYNCNOW-PROPERTY"
 
 
 // clientHasPrivilege security token for kIOClientPrivilegeSecureConsoleProcess
 typedef struct _IOUCProcessToken {
-    void *  token;
-    UInt32  pid;
+	void *  token;
+	UInt32  pid;
 } IOUCProcessToken;
 
 #define kIOKernelHasSafeSleep        1
@@ -98,18 +98,18 @@ typedef struct _IOUCProcessToken {
 #endif /* defined(__i386__) || defined(__x86_64__) */
 
 enum {
-    // these flags are valid for the prepare() method only
-    kIODirectionPrepareNoZeroFill = 0x00000010,
+	// these flags are valid for the prepare() method only
+	kIODirectionPrepareNoZeroFill = 0x00000010,
 };
 
 enum {
-    kIOServiceTerminateNeedWillTerminate = 0x00000100,
+	kIOServiceTerminateNeedWillTerminate = 0x00000100,
 };
 
 #define kIOClassNameOverrideKey "IOClassNameOverride"
 
 enum {
-    kIOClassNameOverrideNone = 0x00000001,
+	kIOClassNameOverrideNone = 0x00000001,
 };
 
 #define kIOServiceLegacyMatchingRegistryIDKey "IOServiceLegacyMatchingRegistryID"

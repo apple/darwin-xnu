@@ -53,31 +53,31 @@ void            halt_all_cpus(boolean_t);
 void kdp_call(void);
 int kdp_getc(void);
 int machine_trace_thread(thread_t thread,
-                         char * tracepos,
-                         char * tracebound,
-                         int nframes,
-                         boolean_t user_p,
-                         boolean_t trace_fp,
-                         uint32_t * thread_trace_flags);
+    char * tracepos,
+    char * tracebound,
+    int nframes,
+    boolean_t user_p,
+    boolean_t trace_fp,
+    uint32_t * thread_trace_flags);
 int machine_trace_thread64(thread_t thread,
-                           char * tracepos,
-                           char * tracebound,
-                           int nframes,
-                           boolean_t user_p,
-                           boolean_t trace_fp,
-                           uint32_t * thread_trace_flags,
-						   uint64_t *sp);
+    char * tracepos,
+    char * tracebound,
+    int nframes,
+    boolean_t user_p,
+    boolean_t trace_fp,
+    uint32_t * thread_trace_flags,
+    uint64_t *sp);
 
 void kdp_trap(unsigned int, struct arm_saved_state * saved_state);
 
 extern vm_offset_t machine_trace_thread_get_kva(vm_offset_t cur_target_addr, vm_map_t map, uint32_t *thread_trace_flags);
 extern void machine_trace_thread_clear_validation_cache(void);
-extern vm_map_t	kernel_map;
+extern vm_map_t kernel_map;
 
 #if CONFIG_KDP_INTERACTIVE_DEBUGGING
 void
 kdp_exception(
-    unsigned char * pkt, int * len, unsigned short * remote_port, unsigned int exception, unsigned int code, unsigned int subcode)
+	unsigned char * pkt, int * len, unsigned short * remote_port, unsigned int exception, unsigned int code, unsigned int subcode)
 {
 	struct {
 		kdp_exception_t pkt;
@@ -115,13 +115,15 @@ kdp_exception_ack(unsigned char * pkt, int len)
 	kdp_exception_ack_t aligned_pkt;
 	kdp_exception_ack_t * rq = (kdp_exception_ack_t *)&aligned_pkt;
 
-	if ((unsigned)len < sizeof(*rq))
-		return (FALSE);
+	if ((unsigned)len < sizeof(*rq)) {
+		return FALSE;
+	}
 
 	bcopy((char *)pkt, (char *)rq, sizeof(*rq));
 
-	if (!rq->hdr.is_reply || rq->hdr.request != KDP_EXCEPTION)
-		return (FALSE);
+	if (!rq->hdr.is_reply || rq->hdr.request != KDP_EXCEPTION) {
+		return FALSE;
+	}
 
 	dprintf(("kdp_exception_ack seq %x %x\n", rq->hdr.seq, kdp.exception_seq));
 
@@ -129,7 +131,7 @@ kdp_exception_ack(unsigned char * pkt, int len)
 		kdp.exception_ack_needed = FALSE;
 		kdp.exception_seq++;
 	}
-	return (TRUE);
+	return TRUE;
 }
 
 static void
@@ -258,13 +260,14 @@ kdp_panic(const char * msg)
 {
 	printf("kdp panic: %s\n", msg);
 	while (1) {
-	};
+	}
+	;
 }
 
 int
 kdp_intr_disbl(void)
 {
-	return (splhigh());
+	return splhigh();
 }
 
 void
@@ -288,7 +291,7 @@ kdp_call(void)
 int
 kdp_getc(void)
 {
-	return (cnmaygetc());
+	return cnmaygetc();
 }
 
 void
@@ -321,14 +324,14 @@ int
 kdp_machine_msr64_read(kdp_readmsr64_req_t *rq, caddr_t data, uint16_t lcpu)
 {
 #pragma unused(rq, data, lcpu)
-    return 0;
+	return 0;
 }
 
 int
 kdp_machine_msr64_write(kdp_writemsr64_req_t *rq, caddr_t data, uint16_t lcpu)
 {
 #pragma unused(rq, data, lcpu)
-    return 0;
+	return 0;
 }
 #endif /* CONFIG_KDP_INTERACTIVE_DEBUGGING */
 
@@ -340,12 +343,14 @@ kdp_trap(unsigned int exception, struct arm_saved_state * saved_state)
 #if defined(__arm__)
 	if (saved_state->cpsr & PSR_TF) {
 		unsigned short instr = *((unsigned short *)(saved_state->pc));
-		if ((instr == (GDB_TRAP_INSTR1 & 0xFFFF)) || (instr == (GDB_TRAP_INSTR2 & 0xFFFF)))
+		if ((instr == (GDB_TRAP_INSTR1 & 0xFFFF)) || (instr == (GDB_TRAP_INSTR2 & 0xFFFF))) {
 			saved_state->pc += 2;
+		}
 	} else {
 		unsigned int instr = *((unsigned int *)(saved_state->pc));
-		if ((instr == GDB_TRAP_INSTR1) || (instr == GDB_TRAP_INSTR2))
+		if ((instr == GDB_TRAP_INSTR1) || (instr == GDB_TRAP_INSTR2)) {
 			saved_state->pc += 4;
+		}
 	}
 
 #elif defined(__arm64__)
@@ -358,8 +363,9 @@ kdp_trap(unsigned int exception, struct arm_saved_state * saved_state)
 	 * traps to the debugger, we should identify both variants and
 	 * increment for both of them.
 	 */
-	if ((instr == GDB_TRAP_INSTR1) || (instr == GDB_TRAP_INSTR2))
+	if ((instr == GDB_TRAP_INSTR1) || (instr == GDB_TRAP_INSTR2)) {
 		set_saved_state_pc(saved_state, get_saved_state_pc(saved_state) + 4);
+	}
 #else
 #error Unknown architecture.
 #endif
@@ -378,12 +384,12 @@ typedef uint32_t uint32_align2_t __attribute__((aligned(2)));
 
 int
 machine_trace_thread(thread_t thread,
-                     char * tracepos,
-                     char * tracebound,
-                     int nframes,
-                     boolean_t user_p,
-                     boolean_t trace_fp,
-                     uint32_t * thread_trace_flags)
+    char * tracepos,
+    char * tracebound,
+    int nframes,
+    boolean_t user_p,
+    boolean_t trace_fp,
+    uint32_t * thread_trace_flags)
 {
 	uint32_align2_t * tracebuf = (uint32_align2_t *)tracepos;
 
@@ -403,7 +409,7 @@ machine_trace_thread(thread_t thread,
 
 	nframes = (tracebound > tracepos) ? MIN(nframes, (int)((tracebound - tracepos) / framesize)) : 0;
 	if (!nframes) {
-		return (0);
+		return 0;
 	}
 	framecount = 0;
 
@@ -454,7 +460,6 @@ machine_trace_thread(thread_t thread,
 	}
 
 	for (; framecount < nframes; framecount++) {
-
 		*tracebuf++ = prevlr;
 		if (trace_fp) {
 			*tracebuf++ = (uint32_t)fp;
@@ -475,9 +480,8 @@ machine_trace_thread(thread_t thread,
 		if (fp < stacklimit_bottom) {
 			break;
 		}
-		/* Stack grows downward */		
+		/* Stack grows downward */
 		if (fp < prevfp) {
-
 			boolean_t prev_in_interrupt_stack = FALSE;
 
 			if (!user_p) {
@@ -488,26 +492,27 @@ machine_trace_thread(thread_t thread,
 				 */
 				int cpu;
 				int max_cpu = ml_get_max_cpu_number();
-				
-				for (cpu=0; cpu <= max_cpu; cpu++) {
+
+				for (cpu = 0; cpu <= max_cpu; cpu++) {
 					cpu_data_t      *target_cpu_datap;
-					
+
 					target_cpu_datap = (cpu_data_t *)CpuDataEntries[cpu].cpu_data_vaddr;
-					if(target_cpu_datap == (cpu_data_t *)NULL)
+					if (target_cpu_datap == (cpu_data_t *)NULL) {
 						continue;
-					
-					if (prevfp >= (target_cpu_datap->intstack_top-INTSTACK_SIZE) && prevfp < target_cpu_datap->intstack_top) {
+					}
+
+					if (prevfp >= (target_cpu_datap->intstack_top - INTSTACK_SIZE) && prevfp < target_cpu_datap->intstack_top) {
 						prev_in_interrupt_stack = TRUE;
 						break;
 					}
 
 #if defined(__arm__)
-					if (prevfp >= (target_cpu_datap->fiqstack_top-FIQSTACK_SIZE) && prevfp < target_cpu_datap->fiqstack_top) {
+					if (prevfp >= (target_cpu_datap->fiqstack_top - FIQSTACK_SIZE) && prevfp < target_cpu_datap->fiqstack_top) {
 						prev_in_interrupt_stack = TRUE;
 						break;
 					}
 #elif defined(__arm64__)
-					if (prevfp >= (target_cpu_datap->excepstack_top-EXCEPSTACK_SIZE) && prevfp < target_cpu_datap->excepstack_top) {
+					if (prevfp >= (target_cpu_datap->excepstack_top - EXCEPSTACK_SIZE) && prevfp < target_cpu_datap->excepstack_top) {
 						prev_in_interrupt_stack = TRUE;
 						break;
 					}
@@ -553,22 +558,21 @@ machine_trace_thread(thread_t thread,
 				*thread_trace_flags |= kThreadTruncatedBT;
 			}
 		}
-
 	}
 	/* Reset the target pmap */
 	machine_trace_thread_clear_validation_cache();
-	return ((int)(((char *)tracebuf) - tracepos));
+	return (int)(((char *)tracebuf) - tracepos);
 }
 
 int
 machine_trace_thread64(thread_t thread,
-                       char * tracepos,
-                       char * tracebound,
-                       int nframes,
-                       boolean_t user_p,
-                       boolean_t trace_fp,
-                       uint32_t * thread_trace_flags,
-					   uint64_t *sp_out)
+    char * tracepos,
+    char * tracebound,
+    int nframes,
+    boolean_t user_p,
+    boolean_t trace_fp,
+    uint32_t * thread_trace_flags,
+    uint64_t *sp_out)
 {
 #pragma unused(sp_out)
 #if defined(__arm__)
@@ -595,7 +599,7 @@ machine_trace_thread64(thread_t thread,
 
 	nframes = (tracebound > tracepos) ? MIN(nframes, (int)((tracebound - tracepos) / framesize)) : 0;
 	if (!nframes) {
-		return (0);
+		return 0;
 	}
 	framecount = 0;
 
@@ -637,7 +641,6 @@ machine_trace_thread64(thread_t thread,
 	}
 
 	for (; framecount < nframes; framecount++) {
-
 		*tracebuf++ = prevlr;
 		if (trace_fp) {
 			*tracebuf++ = fp;
@@ -675,24 +678,25 @@ machine_trace_thread64(thread_t thread,
 				int cpu;
 				int max_cpu = ml_get_max_cpu_number();
 
-				for (cpu=0; cpu <= max_cpu; cpu++) {
+				for (cpu = 0; cpu <= max_cpu; cpu++) {
 					cpu_data_t      *target_cpu_datap;
 
 					target_cpu_datap = (cpu_data_t *)CpuDataEntries[cpu].cpu_data_vaddr;
-					if(target_cpu_datap == (cpu_data_t *)NULL)
+					if (target_cpu_datap == (cpu_data_t *)NULL) {
 						continue;
+					}
 
-					if (prevfp >= (target_cpu_datap->intstack_top-INTSTACK_SIZE) && prevfp < target_cpu_datap->intstack_top) {
+					if (prevfp >= (target_cpu_datap->intstack_top - INTSTACK_SIZE) && prevfp < target_cpu_datap->intstack_top) {
 						switched_stacks = TRUE;
 						break;
 					}
 #if defined(__arm__)
-					if (prevfp >= (target_cpu_datap->fiqstack_top-FIQSTACK_SIZE) && prevfp < target_cpu_datap->fiqstack_top) {
+					if (prevfp >= (target_cpu_datap->fiqstack_top - FIQSTACK_SIZE) && prevfp < target_cpu_datap->fiqstack_top) {
 						switched_stacks = TRUE;
 						break;
 					}
 #elif defined(__arm64__)
-					if (prevfp >= (target_cpu_datap->excepstack_top-EXCEPSTACK_SIZE) && prevfp < target_cpu_datap->excepstack_top) {
+					if (prevfp >= (target_cpu_datap->excepstack_top - EXCEPSTACK_SIZE) && prevfp < target_cpu_datap->excepstack_top) {
 						switched_stacks = TRUE;
 						break;
 					}
@@ -734,11 +738,10 @@ machine_trace_thread64(thread_t thread,
 				*thread_trace_flags |= kThreadTruncatedBT;
 			}
 		}
-
 	}
 	/* Reset the target pmap */
 	machine_trace_thread_clear_validation_cache();
-	return ((int)(((char *)tracebuf) - tracepos));
+	return (int)(((char *)tracebuf) - tracepos);
 #else
 #error Unknown architecture.
 #endif
@@ -747,6 +750,5 @@ machine_trace_thread64(thread_t thread,
 void
 kdp_ml_enter_debugger(void)
 {
-	__asm__ volatile(".long 0xe7ffdefe");
+	__asm__ volatile (".long 0xe7ffdefe");
 }
-

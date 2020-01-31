@@ -307,11 +307,6 @@ options   CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
 options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
 
 #
-# use finer-grained lock groups for the proc subsystem
-#
-options   CONFIG_FINE_LOCK_GROUPS               # <medium,large,xlarge>
-
-#
 # configurable kernel - general switch to say we are building for an
 # embedded device
 #
@@ -471,6 +466,7 @@ pseudo-device	random		1	init	random_init
 pseudo-device	dtrace		1	init	dtrace_init	# <config_dtrace>
 pseudo-device	helper		1	init	helper_init	# <config_dtrace>
 pseudo-device	lockstat	1	init	lockstat_init	# <config_dtrace>
+pseudo-device	lockprof	1	init	lockprof_init	# <config_dtrace>
 pseudo-device	sdt		1	init	sdt_init	# <config_dtrace>
 pseudo-device	systrace	1	init	systrace_init	# <config_dtrace>
 pseudo-device	fbt		1	init	fbt_init	# <config_dtrace>
@@ -615,6 +611,8 @@ options		NO_KDEBUG       	# no kernel tracing 	# <no_kdebug>
 #
 options		CONFIG_DTRACE		#		    # <config_dtrace>
 
+options		LOCK_STATS		#		    # <lock_stats>
+
 # kernel performance tracing
 options     KPERF                  # <kperf>
 options     KPC                    # <kpc>
@@ -666,9 +664,10 @@ options   CONFIG_TASK_MAX=1024			# <medium,large,xlarge>
 options   CONFIG_TASK_MAX=768			# <small,>
 options   CONFIG_TASK_MAX=512			# <xsmall,bsmall>
 
-options   CONFIG_ZONE_MAP_MIN=12582912	# <medium,large,xlarge>
-options   CONFIG_ZONE_MAP_MIN=6291456	# <small>
-options   CONFIG_ZONE_MAP_MIN=1048576	# <xsmall,bsmall>
+#
+# Minimum zone map size: 115 MB
+#
+options   CONFIG_ZONE_MAP_MIN=120586240	# <xsmall,bsmall,small,medium,large,xlarge>
 
 # Sizes must be a power of two for the zhash to 
 # be able to just mask off bits instead of mod 
@@ -754,6 +753,11 @@ options		CONFIG_REQUIRES_U32_MUNGING	# incoming U32 argument structures must be 
 #
 options		COPYOUT_SHIM			# Shim for copyout memory analysis via kext #<copyout_shim>
 
+#
+# Enable hardware correlation of mach absolute time 
+# across intel/arm boundary
+options		CONFIG_MACH_BRIDGE_SEND_TIME #  # <config_mach_bridge_send_time>
+options		CONFIG_MACH_BRIDGE_RECV_TIME #  # <config_mach_bridge_recv_time>
 
 #
 # Telemetry for 32-bit process launch

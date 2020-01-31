@@ -35,7 +35,7 @@
 
 kern_return_t
 host_get_atm_diagnostic_flag(host_t host __unused,
-							 uint32_t *diagnostic_flag)
+    uint32_t *diagnostic_flag)
 {
 	volatile uint32_t *diagnostic_flag_address = (volatile uint32_t *)(uintptr_t)(_COMM_PAGE_ATM_DIAGNOSTIC_CONFIG);
 	*diagnostic_flag = *diagnostic_flag_address;
@@ -44,7 +44,7 @@ host_get_atm_diagnostic_flag(host_t host __unused,
 
 kern_return_t
 host_get_multiuser_config_flags(host_t host __unused,
-								uint32_t *multiuser_flags)
+    uint32_t *multiuser_flags)
 {
 #if TARGET_OS_EMBEDDED
 	volatile uint32_t *multiuser_flag_address = (volatile uint32_t *)(uintptr_t)(_COMM_PAGE_MULTIUSER_CONFIG);
@@ -58,15 +58,16 @@ host_get_multiuser_config_flags(host_t host __unused,
 
 kern_return_t
 host_check_multiuser_mode(host_t host __unused,
-						  uint32_t *multiuser_mode)
+    uint32_t *multiuser_mode)
 {
 #if TARGET_OS_EMBEDDED
 	uint32_t multiuser_flags;
 	kern_return_t kr;
 
 	kr = host_get_multiuser_config_flags(host, &multiuser_flags);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		return kr;
+	}
 	*multiuser_mode = (multiuser_flags & kIsMultiUserDevice) == kIsMultiUserDevice;
 	return KERN_SUCCESS;
 #else
@@ -77,15 +78,15 @@ host_check_multiuser_mode(host_t host __unused,
 
 extern kern_return_t
 _kernelrpc_host_create_mach_voucher(mach_port_name_t host,
-                                    mach_voucher_attr_raw_recipe_array_t recipes,
-                                    mach_voucher_attr_recipe_size_t recipesCnt,
-                                    mach_port_name_t *voucher);
+    mach_voucher_attr_raw_recipe_array_t recipes,
+    mach_voucher_attr_recipe_size_t recipesCnt,
+    mach_port_name_t *voucher);
 
 kern_return_t
 host_create_mach_voucher(mach_port_name_t host,
-                         mach_voucher_attr_raw_recipe_array_t recipes,
-                         mach_voucher_attr_recipe_size_t recipesCnt,
-                         mach_port_name_t *voucher)
+    mach_voucher_attr_raw_recipe_array_t recipes,
+    mach_voucher_attr_recipe_size_t recipesCnt,
+    mach_port_name_t *voucher)
 {
 	kern_return_t rv;
 
@@ -93,16 +94,19 @@ host_create_mach_voucher(mach_port_name_t host,
 
 #ifdef __x86_64__
 	/* REMOVE once XBS kernel has new trap */
-	if (rv == ((1 << 24) | 70)) /* see mach/i386/syscall_sw.h */
+	if (rv == ((1 << 24) | 70)) { /* see mach/i386/syscall_sw.h */
 		rv = MACH_SEND_INVALID_DEST;
+	}
 #elif defined(__i386__)
 	/* REMOVE once XBS kernel has new trap */
-	if (rv == (kern_return_t)(-70))
+	if (rv == (kern_return_t)(-70)) {
 		rv = MACH_SEND_INVALID_DEST;
+	}
 #endif
 
-	if (rv == MACH_SEND_INVALID_DEST)
+	if (rv == MACH_SEND_INVALID_DEST) {
 		rv = _kernelrpc_host_create_mach_voucher(host, recipes, recipesCnt, voucher);
+	}
 
 	return rv;
 }

@@ -59,34 +59,34 @@ static char sccsid[] __attribute__((used)) = "@(#)mkmakefile.c	5.21 (Berkeley) 6
  */
 
 #include <stdio.h>
-#include <unistd.h>	/* for unlink */
+#include <unistd.h>     /* for unlink */
 #include <ctype.h>
 #include "parser.h"
 #include "config.h"
 
-void	read_files(void);
-void	do_objs(FILE *fp, const char *msg, int ext);
-void	do_files(FILE *fp, const char *msg, char ext);
-void	do_machdep(FILE *ofp);
-void	do_rules(FILE *f);
-void	copy_dependencies(FILE *makin, FILE *makout);
+void    read_files(void);
+void    do_objs(FILE *fp, const char *msg, int ext);
+void    do_files(FILE *fp, const char *msg, char ext);
+void    do_machdep(FILE *ofp);
+void    do_rules(FILE *f);
+void    copy_dependencies(FILE *makin, FILE *makout);
 
 struct file_list *fl_lookup(char *file);
 struct file_list *fltail_lookup(char *file);
 struct file_list *new_fent(void);
 
-void	put_source_file_name(FILE *fp, struct file_list *tp);
+void    put_source_file_name(FILE *fp, struct file_list *tp);
 
 
 #define next_word(fp, wd) \
 	{ const char *word = get_word(fp); \
 	  if (word == (char *)EOF) \
-		return; \
+	        return; \
 	  else \
-		wd = word; \
+	        wd = word; \
 	}
 
-static	struct file_list *fcur;
+static  struct file_list *fcur;
 const char *tail(const char *fn);
 char *allCaps(char *str);
 
@@ -98,11 +98,12 @@ fl_lookup(char *file)
 {
 	struct file_list *fp;
 
-	for (fp = ftab ; fp != 0; fp = fp->f_next) {
-		if (eq(fp->f_fn, file))
-			return (fp);
+	for (fp = ftab; fp != 0; fp = fp->f_next) {
+		if (eq(fp->f_fn, file)) {
+			return fp;
+		}
 	}
-	return (0);
+	return 0;
 }
 
 /*
@@ -113,11 +114,12 @@ fltail_lookup(char *file)
 {
 	struct file_list *fp;
 
-	for (fp = ftab ; fp != 0; fp = fp->f_next) {
-		if (eq(tail(fp->f_fn), tail(file)))
-			return (fp);
+	for (fp = ftab; fp != 0; fp = fp->f_next) {
+		if (eq(tail(fp->f_fn), tail(file))) {
+			return fp;
+		}
 	}
-	return (0);
+	return 0;
 }
 
 /*
@@ -134,30 +136,31 @@ new_fent(void)
 	fp->f_flags = 0;
 	fp->f_type = 0;
 	fp->f_extra = (char *) 0;
-	if (fcur == 0)
+	if (fcur == 0) {
 		fcur = ftab = fp;
-	else
+	} else {
 		fcur->f_next = fp;
+	}
 	fcur = fp;
-	return (fp);
+	return fp;
 }
 
-char	*COPTS;
+char    *COPTS;
 
 const char *
 get_VPATH(void)
 {
-    static char *vpath = NULL;
+	static char *vpath = NULL;
 
-    if ((vpath == NULL) &&
-	((vpath = getenv("VPATH")) != NULL) &&
-	(*vpath != ':')) {
-	char *buf = malloc((unsigned)(strlen(vpath) + 2));
+	if ((vpath == NULL) &&
+	    ((vpath = getenv("VPATH")) != NULL) &&
+	    (*vpath != ':')) {
+		char *buf = malloc((unsigned)(strlen(vpath) + 2));
 
-	vpath = strcat(strcpy(buf, ":"), vpath);
-    }
+		vpath = strcat(strcpy(buf, ":"), vpath);
+	}
 
-    return vpath ? vpath : "";
+	return vpath ? vpath : "";
 }
 
 
@@ -191,34 +194,42 @@ makefile(void)
 	fprintf(ofp, "SOURCE_DIR=%s\n", source_directory);
 
 	fprintf(ofp, "export CONFIG_DEFINES =");
-	if (profiling)
+	if (profiling) {
 		fprintf(ofp, " -DGPROF");
+	}
 
-	for (op = opt; op; op = op->op_next)
-		if (op->op_value)
+	for (op = opt; op; op = op->op_next) {
+		if (op->op_value) {
 			fprintf(ofp, " -D%s=\"%s\"", op->op_name, op->op_value);
-		else
+		} else {
 			fprintf(ofp, " -D%s", op->op_name);
+		}
+	}
 	fprintf(ofp, "\n");
-	for (op = mkopt; op; op = op->op_next)
-		if (op->op_value)
+	for (op = mkopt; op; op = op->op_next) {
+		if (op->op_value) {
 			fprintf(ofp, "%s=%s\n", op->op_name, op->op_value);
-		else
+		} else {
 			fprintf(ofp, "%s\n", op->op_name);
+		}
+	}
 
 	while (fgets(line, BUFSIZ, ifp) != 0) {
-		if (*line == '%')
+		if (*line == '%') {
 			goto percent;
+		}
 		if (profiling && strncmp(line, "COPTS=", 6) == 0) {
 			char *cp;
 			fprintf(ofp,
-				"GPROF.EX=$(SOURCE_DIR)/machdep/%s/gmon.ex\n", machinename);
+			    "GPROF.EX=$(SOURCE_DIR)/machdep/%s/gmon.ex\n", machinename);
 			cp = index(line, '\n');
-			if (cp)
+			if (cp) {
 				*cp = 0;
+			}
 			cp = line + 6;
-			while (*cp && (*cp == ' ' || *cp == '\t'))
+			while (*cp && (*cp == ' ' || *cp == '\t')) {
 				cp++;
+			}
 			COPTS = malloc((unsigned)(strlen(cp) + 1));
 			if (COPTS == 0) {
 				printf("config: out of memory\n");
@@ -230,7 +241,7 @@ makefile(void)
 		}
 		fprintf(ofp, "%s", line);
 		continue;
-	percent:
+percent:
 		if (eq(line, "%OBJS\n")) {
 			do_objs(ofp, "OBJS=", -1);
 		} else if (eq(line, "%CFILES\n")) {
@@ -244,15 +255,15 @@ makefile(void)
 			do_objs(ofp, "SOBJS=", 's');
 		} else if (eq(line, "%MACHDEP\n")) {
 			do_machdep(ofp);
-		} else if (eq(line, "%RULES\n"))
+		} else if (eq(line, "%RULES\n")) {
 			do_rules(ofp);
-		else
+		} else {
 			fprintf(stderr,
 			    "Unknown %% construct in generic makefile: %s",
 			    line);
+		}
 	}
-	if (dfp != NULL)
-	{
+	if (dfp != NULL) {
 		copy_dependencies(dfp, ofp);
 		(void) fclose(dfp);
 	}
@@ -306,15 +317,16 @@ next:
 		}
 		return;
 	}
-	if (wd == 0)
+	if (wd == 0) {
 		goto next;
+	}
 	/*
 	 *  Allow comment lines beginning witha '#' character.
 	 */
-	if (*wd == '#')
-	{
-		while ((wd=get_word(fp)) && wd != (char *)EOF)
+	if (*wd == '#') {
+		while ((wd = get_word(fp)) && wd != (char *)EOF) {
 			;
+		}
 		goto next;
 	}
 
@@ -325,27 +337,31 @@ next:
 		    fname, this);
 		exit(1);
 	}
-	if ((pf = fl_lookup(this)) && (pf->f_type != INVISIBLE || pf->f_flags))
+	if ((pf = fl_lookup(this)) && (pf->f_type != INVISIBLE || pf->f_flags)) {
 		isdup = 1;
-	else
+	} else {
 		isdup = 0;
+	}
 	tp = 0;
 	nreqs = 0;
 	devorprof = "";
 	needs = 0;
-	if (eq(wd, "standard"))
+	if (eq(wd, "standard")) {
 		goto checkdev;
+	}
 	if (!eq(wd, "optional")) {
 		printf("%s: %s must be optional or standard\n", fname, this);
 		exit(1);
 	}
-	if (strncmp(this, "OPTIONS/", 8) == 0)
+	if (strncmp(this, "OPTIONS/", 8) == 0) {
 		options++;
+	}
 	not_option = 0;
 nextopt:
 	next_word(fp, wd);
-	if (wd == 0)
+	if (wd == 0) {
 		goto doneopt;
+	}
 	if (eq(wd, "not")) {
 		not_option = !not_option;
 		goto nextopt;
@@ -356,12 +372,13 @@ nextopt:
 		goto save;
 	}
 	nreqs++;
-	if (needs == 0 && nreqs == 1)
+	if (needs == 0 && nreqs == 1) {
 		needs = ns(wd);
-	if (isdup)
+	}
+	if (isdup) {
 		goto invis;
-	if (options)
-	{
+	}
+	if (options) {
 		struct opt *lop = 0;
 		struct device tdev;
 
@@ -379,8 +396,7 @@ nextopt:
 		tdev.d_flags++;
 		tdev.d_slave = 0;
 
-		for (op=opt; op; lop=op, op=op->op_next)
-		{
+		for (op = opt; op; lop = op, op = op->op_next) {
 			char *od = allCaps(ns(wd));
 
 			/*
@@ -388,34 +404,36 @@ nextopt:
 			 *  dependency identifier.  Set the slave field to
 			 *  define the option in the header file.
 			 */
-			if (strcmp(op->op_name, od) == 0)
-			{
+			if (strcmp(op->op_name, od) == 0) {
 				tdev.d_slave = 1;
-				if (lop == 0)
+				if (lop == 0) {
 					opt = op->op_next;
-				else
+				} else {
 					lop->op_next = op->op_next;
+				}
 				free(op);
 				op = 0;
-			 }
+			}
 			free(od);
-			if (op == 0)
+			if (op == 0) {
 				break;
+			}
 		}
 		newdev(&tdev);
 	}
- 	for (dp = dtab; dp != 0; dp = dp->d_next) {
+	for (dp = dtab; dp != 0; dp = dp->d_next) {
 		if (eq(dp->d_name, wd) && (dp->d_type != PSEUDO_DEVICE || dp->d_slave)) {
-			if (not_option)
-				goto invis;	/* dont want file if option present */
-			else
+			if (not_option) {
+				goto invis;     /* dont want file if option present */
+			} else {
 				goto nextopt;
+			}
 		}
 	}
-	if (not_option)
-		goto nextopt;		/* want file if option missing */
-
-	for (op = opt; op != 0; op = op->op_next)
+	if (not_option) {
+		goto nextopt;           /* want file if option missing */
+	}
+	for (op = opt; op != 0; op = op->op_next) {
 		if (op->op_value == 0 && opteq(op->op_name, wd)) {
 			if (nreqs == 1) {
 				free(needs);
@@ -423,12 +441,15 @@ nextopt:
 			}
 			goto nextopt;
 		}
+	}
 
 invis:
-	while ((wd = get_word(fp)) != 0)
+	while ((wd = get_word(fp)) != 0) {
 		;
-	if (tp == 0)
+	}
+	if (tp == 0) {
 		tp = new_fent();
+	}
 	tp->f_fn = this;
 	tp->f_type = INVISIBLE;
 	tp->f_needs = needs;
@@ -444,8 +465,9 @@ doneopt:
 
 checkdev:
 	if (wd) {
-		if (*wd == '|')
+		if (*wd == '|') {
 			goto getrest;
+		}
 		next_word(fp, wd);
 		if (wd) {
 			devorprof = wd;
@@ -460,29 +482,32 @@ getrest:
 			rest = ns(get_rest(fp));
 		} else {
 			printf("%s: syntax error describing %s\n",
-			       fname, this);
+			    fname, this);
 			exit(1);
 		}
 	}
-	if (eq(devorprof, "profiling-routine") && profiling == 0)
+	if (eq(devorprof, "profiling-routine") && profiling == 0) {
 		goto next;
-	if (tp == 0)
+	}
+	if (tp == 0) {
 		tp = new_fent();
+	}
 	tp->f_fn = this;
 	tp->f_extra = rest;
-	if (options)
+	if (options) {
 		tp->f_type = INVISIBLE;
-	else
-	if (eq(devorprof, "device-driver"))
+	} else if (eq(devorprof, "device-driver")) {
 		tp->f_type = DRIVER;
-	else if (eq(devorprof, "profiling-routine"))
+	} else if (eq(devorprof, "profiling-routine")) {
 		tp->f_type = PROFILING;
-	else
+	} else {
 		tp->f_type = NORMAL;
+	}
 	tp->f_flags = 0;
 	tp->f_needs = needs;
-	if (pf && pf->f_type == INVISIBLE)
-		pf->f_flags = 1;		/* mark as duplicate */
+	if (pf && pf->f_type == INVISIBLE) {
+		pf->f_flags = 1;                /* mark as duplicate */
+	}
 	goto next;
 }
 
@@ -491,25 +516,28 @@ opteq(const char *cp, const char *dp)
 {
 	char c, d;
 
-	for (; ; cp++, dp++) {
+	for (;; cp++, dp++) {
 		if (*cp != *dp) {
 			c = isupper(*cp) ? tolower(*cp) : *cp;
 			d = isupper(*dp) ? tolower(*dp) : *dp;
-			if (c != d)
-				return (0);
+			if (c != d) {
+				return 0;
+			}
 		}
-		if (*cp == 0)
-			return (1);
+		if (*cp == 0) {
+			return 1;
+		}
 	}
 }
 
 void
 put_source_file_name(FILE *fp, struct file_list *tp)
 {
-	if ((tp->f_fn[0] == '.') && (tp->f_fn[1] == '/'))
+	if ((tp->f_fn[0] == '.') && (tp->f_fn[1] == '/')) {
 		fprintf(fp, "%s ", tp->f_fn);
-	 else
+	} else {
 		fprintf(fp, "$(SOURCE_DIR)/%s ", tp->f_fn);
+	}
 }
 
 void
@@ -524,16 +552,17 @@ do_objs(FILE *fp, const char *msg, int ext)
 	fprintf(fp, "%s", msg);
 	lpos = strlen(msg);
 	for (tp = ftab; tp != 0; tp = tp->f_next) {
-		if (tp->f_type == INVISIBLE)
+		if (tp->f_type == INVISIBLE) {
 			continue;
+		}
 
 		/*
 		 *	Check for '.o' file in list
 		 */
 		cp = tp->f_fn + (len = strlen(tp->f_fn)) - 1;
-		if (ext != -1 && *cp != ext)
+		if (ext != -1 && *cp != ext) {
 			continue;
-		else if (*cp == 'o') {
+		} else if (*cp == 'o') {
 			if (len + lpos > 72) {
 				lpos = 8;
 				fprintf(fp, "\\\n\t");
@@ -562,15 +591,17 @@ void
 do_files(FILE *fp, const char *msg, char ext)
 {
 	struct file_list *tp;
-	int lpos, len=0; /* dvw: init to 0 */
+	int lpos, len = 0; /* dvw: init to 0 */
 
 	fprintf(fp, "%s", msg);
 	lpos = 8;
 	for (tp = ftab; tp != 0; tp = tp->f_next) {
-		if (tp->f_type == INVISIBLE)
+		if (tp->f_type == INVISIBLE) {
 			continue;
-		if (tp->f_fn[strlen(tp->f_fn)-1] != ext)
+		}
+		if (tp->f_fn[strlen(tp->f_fn) - 1] != ext) {
 			continue;
+		}
 		/*
 		 * Always generate a newline.
 		 * Our Makefile's aren't readable anyway.
@@ -602,10 +633,11 @@ do_machdep(FILE *ofp)
 		exit(1);
 	}
 	while (fgets(line, BUFSIZ, ifp) != 0) {
-		if (profiling && (strncmp(line, "LIBS=", 5) == 0)) 
-			fprintf(ofp,"LIBS=${LIBS_P}\n");
-		else
+		if (profiling && (strncmp(line, "LIBS=", 5) == 0)) {
+			fprintf(ofp, "LIBS=${LIBS_P}\n");
+		} else {
 			fputs(line, ofp);
+		}
 	}
 	fclose(ifp);
 }
@@ -616,9 +648,10 @@ tail(const char *fn)
 	const char *cp;
 
 	cp = rindex(fn, '/');
-	if (cp == 0)
-		return (fn);
-	return (cp+1);
+	if (cp == 0) {
+		return fn;
+	}
+	return cp + 1;
 }
 
 /*
@@ -641,86 +674,92 @@ do_rules(FILE *f)
 	const char *nl = "";
 
 	for (ftp = ftab; ftp != 0; ftp = ftp->f_next) {
-		if (ftp->f_type == INVISIBLE)
+		if (ftp->f_type == INVISIBLE) {
 			continue;
+		}
 		cp = (np = ftp->f_fn) + strlen(ftp->f_fn) - 1;
 		och = *cp;
 		/*
-			*	Don't compile '.o' files
-			*/
-		if (och == 'o')
+		 *	Don't compile '.o' files
+		 */
+		if (och == 'o') {
 			continue;
+		}
 		/*
-			*	Determine where sources should come from
-			*/
+		 *	Determine where sources should come from
+		 */
 		if ((np[0] == '.') && (np[1] == '/')) {
 			source_dir = "";
 			np += 2;
-		} else
+		} else {
 			source_dir = "$(SOURCE_DIR)/";
+		}
 		*cp = '\0';
-		tp = tail(np);	/* dvw: init tp before 'if' */
+		tp = tail(np);  /* dvw: init tp before 'if' */
 		fprintf(f, "-include %sd\n", tp);
 		fprintf(f, "%so: %s%s%c\n", tp, source_dir, np, och);
 		if (och == 's') {
 			fprintf(f, "\t${S_RULE_0}\n");
 			fprintf(f, "\t${S_RULE_1A}%s%.*s${S_RULE_1B}%s\n",
-					source_dir, (int)(tp-np), np, nl);
+			    source_dir, (int)(tp - np), np, nl);
 			fprintf(f, "\t${S_RULE_2}%s\n", nl);
 			continue;
 		}
 		extras = "";
 		switch (ftp->f_type) {
-	
 		case NORMAL:
 			goto common;
 			break;
-	
+
 		case DRIVER:
 			extras = "_D";
 			goto common;
 			break;
-	
+
 		case PROFILING:
-			if (!profiling)
+			if (!profiling) {
 				continue;
+			}
 			if (COPTS == 0) {
 				fprintf(stderr,
-					"config: COPTS undefined in generic makefile");
+				    "config: COPTS undefined in generic makefile");
 				COPTS = "";
 			}
 			extras = "_P";
 			goto common;
-	
-		common:
+
+common:
 			och_upper = och + 'A' - 'a';
 			fprintf(f, "\t${%c_RULE_0%s}\n", och_upper, extras);
 			fprintf(f, "\t${%c_RULE_1A%s}", och_upper, extras);
-			if (ftp->f_extra)
+			if (ftp->f_extra) {
 				fprintf(f, "%s", ftp->f_extra);
+			}
 			fprintf(f, "%s%.*s${%c_RULE_1B%s}%s\n",
-					source_dir, (int)(tp-np), np, och_upper, extras, nl);
+			    source_dir, (int)(tp - np), np, och_upper, extras, nl);
 
 			/* While we are still using CTF, any build that normally does not support CTF will
 			 * a "standard" compile done as well that we can harvest CTF information from; do
 			 * that here.
 			 */
 			fprintf(f, "\t${%c_CTFRULE_1A%s}", och_upper, extras);
-			if (ftp->f_extra)
+			if (ftp->f_extra) {
 				fprintf(f, "%s", ftp->f_extra);
+			}
 			fprintf(f, "%s%.*s${%c_CTFRULE_1B%s}%s\n",
-					source_dir, (int)(tp-np), np, och_upper, extras, nl);
+			    source_dir, (int)(tp - np), np, och_upper, extras, nl);
 
 			fprintf(f, "\t${%c_RULE_2%s}%s\n", och_upper, extras, nl);
 			fprintf(f, "\t${%c_CTFRULE_2%s}%s\n", och_upper, extras, nl);
 			fprintf(f, "\t${%c_RULE_3%s}%s\n", och_upper, extras, nl);
 			fprintf(f, "\t${%c_RULE_4A%s}", och_upper, extras);
-			if (ftp->f_extra)
+			if (ftp->f_extra) {
 				fprintf(f, "%s", ftp->f_extra);
+			}
 			fprintf(f, "%s%.*s${%c_RULE_4B%s}%s\n",
-					source_dir, (int)(tp-np), np, och_upper, extras, nl);
+			    source_dir, (int)(tp - np), np, och_upper, extras, nl);
 			break;
-	
+
 		default:
 			printf("Don't know rules for %s\n", np);
 			break;
@@ -735,17 +774,18 @@ allCaps(char *str)
 	char *cp = str;
 
 	while (*str) {
-		if (islower(*str))
+		if (islower(*str)) {
 			*str = toupper(*str);
+		}
 		str++;
 	}
-	return (cp);
+	return cp;
 }
 
 #define OLDSALUTATION "# DO NOT DELETE THIS LINE"
 
 #define LINESIZE 1024
-static char makbuf[LINESIZE];		/* one line buffer for makefile */
+static char makbuf[LINESIZE];           /* one line buffer for makefile */
 
 void
 copy_dependencies(FILE *makin, FILE *makout)
@@ -753,16 +793,17 @@ copy_dependencies(FILE *makin, FILE *makout)
 	int oldlen = (sizeof OLDSALUTATION - 1);
 
 	while (fgets(makbuf, LINESIZE, makin) != NULL) {
-		if (! strncmp(makbuf, OLDSALUTATION, oldlen))
+		if (!strncmp(makbuf, OLDSALUTATION, oldlen)) {
 			break;
+		}
 	}
 	while (fgets(makbuf, LINESIZE, makin) != NULL) {
-		if (oldlen != 0)
-		{
-			if (makbuf[0] == '\n')
+		if (oldlen != 0) {
+			if (makbuf[0] == '\n') {
 				continue;
-			else
+			} else {
 				oldlen = 0;
+			}
 		}
 		fputs(makbuf, makout);
 	}

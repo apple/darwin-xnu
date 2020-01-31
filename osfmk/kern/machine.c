@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -99,15 +99,20 @@
 extern void (*dtrace_cpu_state_changed_hook)(int, boolean_t);
 #endif
 
+#if defined(__x86_64__)
+#include <i386/misc_protos.h>
+#include <libkern/OSDebug.h>
+#endif
+
 /*
  *	Exported variables:
  */
 
-struct machine_info	machine_info;
+struct machine_info     machine_info;
 
 /* Forwards */
-void			processor_doshutdown(
-					processor_t			processor);
+void                    processor_doshutdown(
+	processor_t                     processor);
 
 /*
  *	processor_up:
@@ -117,10 +122,10 @@ void			processor_doshutdown(
  */
 void
 processor_up(
-	processor_t			processor)
+	processor_t                     processor)
 {
-	processor_set_t		pset;
-	spl_t				s;
+	processor_set_t         pset;
+	spl_t                           s;
 
 	s = splsched();
 	init_ast_check(processor);
@@ -129,60 +134,65 @@ processor_up(
 	++pset->online_processor_count;
 	pset_update_processor_state(pset, processor, PROCESSOR_RUNNING);
 	(void)hw_atomic_add(&processor_avail_count, 1);
+	if (processor->is_recommended) {
+		(void)hw_atomic_add(&processor_avail_count_user, 1);
+	}
 	commpage_update_active_cpus();
 	pset_unlock(pset);
 	ml_cpu_up();
 	splx(s);
 
 #if CONFIG_DTRACE
-	if (dtrace_cpu_state_changed_hook)
+	if (dtrace_cpu_state_changed_hook) {
 		(*dtrace_cpu_state_changed_hook)(processor->cpu_id, TRUE);
+	}
 #endif
 }
 #include <atm/atm_internal.h>
 
 kern_return_t
 host_reboot(
-	host_priv_t		host_priv,
-	int				options)
+	host_priv_t             host_priv,
+	int                             options)
 {
-	if (host_priv == HOST_PRIV_NULL)
-		return (KERN_INVALID_HOST);
+	if (host_priv == HOST_PRIV_NULL) {
+		return KERN_INVALID_HOST;
+	}
 
 	assert(host_priv == &realhost);
 
 #if DEVELOPMENT || DEBUG
 	if (options & HOST_REBOOT_DEBUGGER) {
 		Debugger("Debugger");
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 #endif
 
-    if (options & HOST_REBOOT_UPSDELAY) {
-        // UPS power cutoff path
-        PEHaltRestart( kPEUPSDelayHaltCPU );
-    } else {
-       halt_all_cpus(!(options & HOST_REBOOT_HALT));
-    }
+	if (options & HOST_REBOOT_UPSDELAY) {
+		// UPS power cutoff path
+		PEHaltRestart( kPEUPSDelayHaltCPU );
+	} else {
+		halt_all_cpus(!(options & HOST_REBOOT_HALT));
+	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
 processor_assign(
-	__unused processor_t		processor,
-	__unused processor_set_t	new_pset,
-	__unused boolean_t		wait)
+	__unused processor_t            processor,
+	__unused processor_set_t        new_pset,
+	__unused boolean_t              wait)
 {
-	return (KERN_FAILURE);
+	return KERN_FAILURE;
 }
 
 kern_return_t
 processor_shutdown(
-	processor_t			processor)
+	processor_t                     processor)
 {
-	processor_set_t		pset;
-	spl_t				s;
+	processor_set_t         pset;
+	spl_t                           s;
 
 	s = splsched();
 	pset = processor->processor_set;
@@ -194,7 +204,7 @@ processor_shutdown(
 		pset_unlock(pset);
 		splx(s);
 
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	if (processor->state == PROCESSOR_START) {
@@ -204,7 +214,7 @@ processor_shutdown(
 		pset_unlock(pset);
 		splx(s);
 
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	/*
@@ -225,11 +235,10 @@ processor_shutdown(
 		pset_unlock(pset);
 		splx(s);
 
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	pset_update_processor_state(pset, processor, PROCESSOR_SHUTDOWN);
-
 	pset_unlock(pset);
 
 	processor_doshutdown(processor);
@@ -237,7 +246,7 @@ processor_shutdown(
 
 	cpu_exit_wait(processor->cpu_id);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -245,11 +254,11 @@ processor_shutdown(
  */
 void
 processor_doshutdown(
-	processor_t			processor)
+	processor_t                     processor)
 {
-	thread_t			old_thread, self = current_thread();
-	processor_t			prev;
-	processor_set_t			pset;
+	thread_t                        old_thread, self = current_thread();
+	processor_t                     prev;
+	processor_set_t                 pset;
 
 	/*
 	 *	Get onto the processor to shutdown
@@ -260,8 +269,9 @@ processor_doshutdown(
 	assert(processor->state == PROCESSOR_SHUTDOWN);
 
 #if CONFIG_DTRACE
-	if (dtrace_cpu_state_changed_hook)
+	if (dtrace_cpu_state_changed_hook) {
 		(*dtrace_cpu_state_changed_hook)(processor->cpu_id, FALSE);
+	}
 #endif
 
 	ml_cpu_down();
@@ -278,6 +288,9 @@ processor_doshutdown(
 	pset_update_processor_state(pset, processor, PROCESSOR_OFF_LINE);
 	--pset->online_processor_count;
 	(void)hw_atomic_sub(&processor_avail_count, 1);
+	if (processor->is_recommended) {
+		(void)hw_atomic_sub(&processor_avail_count_user, 1);
+	}
 	commpage_update_active_cpus();
 	SCHED(processor_queue_shutdown)(processor);
 	/* pset lock dropped */
@@ -313,7 +326,7 @@ processor_doshutdown(
  */
 void
 processor_offline(
-	processor_t			processor)
+	processor_t                     processor)
 {
 	assert(processor == current_processor());
 	assert(processor->active_thread == current_thread());
@@ -323,8 +336,9 @@ processor_offline(
 
 	if (!new_thread->kernel_stack) {
 		/* the idle thread has a reserved stack, so this will never fail */
-		if (!stack_alloc_try(new_thread))
+		if (!stack_alloc_try(new_thread)) {
 			panic("processor_offline");
+		}
 	}
 
 	processor->active_thread = new_thread;
@@ -344,9 +358,9 @@ processor_offline(
 	timer_stop(PROCESSOR_DATA(processor, current_state), ctime);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	                          MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED) | DBG_FUNC_NONE,
-	                          old_thread->reason, (uintptr_t)thread_tid(new_thread),
-	                          old_thread->sched_pri, new_thread->sched_pri, 0);
+	    MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED) | DBG_FUNC_NONE,
+	    old_thread->reason, (uintptr_t)thread_tid(new_thread),
+	    old_thread->sched_pri, new_thread->sched_pri, 0);
 
 	machine_set_current_thread(new_thread);
 
@@ -363,12 +377,13 @@ processor_offline(
 
 kern_return_t
 host_get_boot_info(
-        host_priv_t         host_priv,
-        kernel_boot_info_t  boot_info)
+	host_priv_t         host_priv,
+	kernel_boot_info_t  boot_info)
 {
 	const char *src = "";
-	if (host_priv == HOST_PRIV_NULL)
-		return (KERN_INVALID_HOST);
+	if (host_priv == HOST_PRIV_NULL) {
+		return KERN_INVALID_HOST;
+	}
 
 	assert(host_priv == &realhost);
 
@@ -377,17 +392,20 @@ host_get_boot_info(
 	 *	standardized strings generated from boot string.
 	 */
 	src = machine_boot_info(boot_info, KERNEL_BOOT_INFO_MAX);
-	if (src != boot_info)
+	if (src != boot_info) {
 		(void) strncpy(boot_info, src, KERNEL_BOOT_INFO_MAX);
+	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 #if CONFIG_DTRACE
 #include <mach/sdt.h>
 #endif
 
-unsigned long long ml_io_read(uintptr_t vaddr, int size) {
+unsigned long long
+ml_io_read(uintptr_t vaddr, int size)
+{
 	unsigned long long result = 0;
 	unsigned char s1;
 	unsigned short s2;
@@ -396,66 +414,228 @@ unsigned long long ml_io_read(uintptr_t vaddr, int size) {
 	uint64_t sabs, eabs;
 	boolean_t istate, timeread = FALSE;
 #if DEVELOPMENT || DEBUG
-	pmap_verify_noncacheable(vaddr);
+	extern uint64_t simulate_stretched_io;
+	uintptr_t paddr = pmap_verify_noncacheable(vaddr);
 #endif /* x86_64 DEVELOPMENT || DEBUG */
 	if (__improbable(reportphyreaddelayabs != 0)) {
 		istate = ml_set_interrupts_enabled(FALSE);
 		sabs = mach_absolute_time();
 		timeread = TRUE;
 	}
+
+#if DEVELOPMENT || DEBUG
+	if (__improbable(timeread && simulate_stretched_io)) {
+		sabs -= simulate_stretched_io;
+	}
+#endif /* x86_64 DEVELOPMENT || DEBUG */
+
 #endif /* x86_64 */
 
 	switch (size) {
-        case 1:
+	case 1:
 		s1 = *(volatile unsigned char *)vaddr;
 		result = s1;
 		break;
-        case 2:
+	case 2:
 		s2 = *(volatile unsigned short *)vaddr;
 		result = s2;
 		break;
-        case 4:
+	case 4:
 		result = *(volatile unsigned int *)vaddr;
 		break;
 	case 8:
 		result = *(volatile unsigned long long *)vaddr;
 		break;
 	default:
-		panic("Invalid size %d for ml_io_read(%p)\n", size, (void *)vaddr);
+		panic("Invalid size %d for ml_io_read(%p)", size, (void *)vaddr);
 		break;
-        }
+	}
 
 #if defined(__x86_64__)
 	if (__improbable(timeread == TRUE)) {
 		eabs = mach_absolute_time();
-		(void)ml_set_interrupts_enabled(istate);
+
+#if DEVELOPMENT || DEBUG
+		iotrace(IOTRACE_IO_READ, vaddr, paddr, size, result, sabs, eabs - sabs);
+#endif
 
 		if (__improbable((eabs - sabs) > reportphyreaddelayabs)) {
+#if !(DEVELOPMENT || DEBUG)
+			uintptr_t paddr = kvtophys(vaddr);
+#endif
+
+			(void)ml_set_interrupts_enabled(istate);
+
 			if (phyreadpanic && (machine_timeout_suspended() == FALSE)) {
-				panic("Read from IO virtual addr 0x%lx took %llu ns, result: 0x%llx (start: %llu, end: %llu), ceiling: %llu", vaddr, (eabs - sabs), result, sabs, eabs, reportphyreaddelayabs);
+				panic_io_port_read();
+				panic("Read from IO vaddr 0x%lx paddr 0x%lx took %llu ns, "
+				    "result: 0x%llx (start: %llu, end: %llu), ceiling: %llu",
+				    vaddr, paddr, (eabs - sabs), result, sabs, eabs,
+				    reportphyreaddelayabs);
+			}
+
+			if (reportphyreadosbt) {
+				OSReportWithBacktrace("ml_io_read(v=%p, p=%p) size %d result 0x%llx "
+				    "took %lluus",
+				    (void *)vaddr, (void *)paddr, size, result,
+				    (eabs - sabs) / NSEC_PER_USEC);
 			}
 #if CONFIG_DTRACE
-			DTRACE_PHYSLAT3(physread, uint64_t, (eabs - sabs),
-			    uint64_t, vaddr, uint32_t, size);
+			DTRACE_PHYSLAT5(physioread, uint64_t, (eabs - sabs),
+			    uint64_t, vaddr, uint32_t, size, uint64_t, paddr, uint64_t, result);
 #endif /* CONFIG_DTRACE */
+		} else if (__improbable(tracephyreaddelayabs > 0 && (eabs - sabs) > tracephyreaddelayabs)) {
+#if !(DEVELOPMENT || DEBUG)
+			uintptr_t paddr = kvtophys(vaddr);
+#endif
+
+			KDBG(MACHDBG_CODE(DBG_MACH_IO, DBC_MACH_IO_MMIO_READ),
+			    (eabs - sabs), VM_KERNEL_UNSLIDE_OR_PERM(vaddr), paddr, result);
+
+			(void)ml_set_interrupts_enabled(istate);
+		} else {
+			(void)ml_set_interrupts_enabled(istate);
 		}
 	}
 #endif /* x86_64 */
 	return result;
 }
 
-unsigned int ml_io_read8(uintptr_t vaddr) {
+unsigned int
+ml_io_read8(uintptr_t vaddr)
+{
 	return (unsigned) ml_io_read(vaddr, 1);
 }
 
-unsigned int ml_io_read16(uintptr_t vaddr) {
+unsigned int
+ml_io_read16(uintptr_t vaddr)
+{
 	return (unsigned) ml_io_read(vaddr, 2);
 }
 
-unsigned int ml_io_read32(uintptr_t vaddr) {
+unsigned int
+ml_io_read32(uintptr_t vaddr)
+{
 	return (unsigned) ml_io_read(vaddr, 4);
 }
 
-unsigned long long ml_io_read64(uintptr_t vaddr) {
+unsigned long long
+ml_io_read64(uintptr_t vaddr)
+{
 	return ml_io_read(vaddr, 8);
+}
+
+/* ml_io_write* */
+
+void
+ml_io_write(uintptr_t vaddr, uint64_t val, int size)
+{
+#if defined(__x86_64__)
+	uint64_t sabs, eabs;
+	boolean_t istate, timewrite = FALSE;
+#if DEVELOPMENT || DEBUG
+	extern uint64_t simulate_stretched_io;
+	uintptr_t paddr = pmap_verify_noncacheable(vaddr);
+#endif /* x86_64 DEVELOPMENT || DEBUG */
+	if (__improbable(reportphywritedelayabs != 0)) {
+		istate = ml_set_interrupts_enabled(FALSE);
+		sabs = mach_absolute_time();
+		timewrite = TRUE;
+	}
+
+#if DEVELOPMENT || DEBUG
+	if (__improbable(timewrite && simulate_stretched_io)) {
+		sabs -= simulate_stretched_io;
+	}
+#endif /* x86_64 DEVELOPMENT || DEBUG */
+#endif /* x86_64 */
+
+	switch (size) {
+	case 1:
+		*(volatile uint8_t *)vaddr = (uint8_t)val;
+		break;
+	case 2:
+		*(volatile uint16_t *)vaddr = (uint16_t)val;
+		break;
+	case 4:
+		*(volatile uint32_t *)vaddr = (uint32_t)val;
+		break;
+	case 8:
+		*(volatile uint64_t *)vaddr = (uint64_t)val;
+		break;
+	default:
+		panic("Invalid size %d for ml_io_write(%p, 0x%llx)", size, (void *)vaddr, val);
+		break;
+	}
+
+#if defined(__x86_64__)
+	if (__improbable(timewrite == TRUE)) {
+		eabs = mach_absolute_time();
+
+#if DEVELOPMENT || DEBUG
+		iotrace(IOTRACE_IO_WRITE, vaddr, paddr, size, val, sabs, eabs - sabs);
+#endif
+
+		if (__improbable((eabs - sabs) > reportphywritedelayabs)) {
+#if !(DEVELOPMENT || DEBUG)
+			uintptr_t paddr = kvtophys(vaddr);
+#endif
+
+			(void)ml_set_interrupts_enabled(istate);
+
+			if (phywritepanic && (machine_timeout_suspended() == FALSE)) {
+				panic_io_port_read();
+				panic("Write to IO vaddr %p paddr %p val 0x%llx took %llu ns,"
+				    " (start: %llu, end: %llu), ceiling: %llu",
+				    (void *)vaddr, (void *)paddr, val, (eabs - sabs), sabs, eabs,
+				    reportphywritedelayabs);
+			}
+
+			if (reportphywriteosbt) {
+				OSReportWithBacktrace("ml_io_write size %d (v=%p, p=%p, 0x%llx) "
+				    "took %lluus",
+				    size, (void *)vaddr, (void *)paddr, val, (eabs - sabs) / NSEC_PER_USEC);
+			}
+#if CONFIG_DTRACE
+			DTRACE_PHYSLAT5(physiowrite, uint64_t, (eabs - sabs),
+			    uint64_t, vaddr, uint32_t, size, uint64_t, paddr, uint64_t, val);
+#endif /* CONFIG_DTRACE */
+		} else if (__improbable(tracephywritedelayabs > 0 && (eabs - sabs) > tracephywritedelayabs)) {
+#if !(DEVELOPMENT || DEBUG)
+			uintptr_t paddr = kvtophys(vaddr);
+#endif
+
+			KDBG(MACHDBG_CODE(DBG_MACH_IO, DBC_MACH_IO_MMIO_WRITE),
+			    (eabs - sabs), VM_KERNEL_UNSLIDE_OR_PERM(vaddr), paddr, val);
+
+			(void)ml_set_interrupts_enabled(istate);
+		} else {
+			(void)ml_set_interrupts_enabled(istate);
+		}
+	}
+#endif /* x86_64 */
+}
+
+void
+ml_io_write8(uintptr_t vaddr, uint8_t val)
+{
+	ml_io_write(vaddr, val, 1);
+}
+
+void
+ml_io_write16(uintptr_t vaddr, uint16_t val)
+{
+	ml_io_write(vaddr, val, 2);
+}
+
+void
+ml_io_write32(uintptr_t vaddr, uint32_t val)
+{
+	ml_io_write(vaddr, val, 4);
+}
+
+void
+ml_io_write64(uintptr_t vaddr, uint64_t val)
+{
+	ml_io_write(vaddr, val, 8);
 }

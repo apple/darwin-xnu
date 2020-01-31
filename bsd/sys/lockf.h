@@ -2,7 +2,7 @@
  * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -61,7 +61,7 @@
  */
 
 #ifndef _SYS_LOCKF_H_
-#define	_SYS_LOCKF_H_
+#define _SYS_LOCKF_H_
 
 #include <sys/queue.h>
 #include <sys/cdefs.h>
@@ -90,20 +90,20 @@ TAILQ_HEAD(locklist, lockf);
 #pragma pack(4)
 
 struct lockf {
-	short	lf_flags;	    /* Semantics: F_POSIX, F_FLOCK, F_WAIT */
-	short	lf_type;	 /* Lock type: F_RDLCK, F_WRLCK */
-	off_t	lf_start;	    /* Byte # of the start of the lock */
-	off_t	lf_end;		    /* Byte # of the end of the lock (-1=EOF) */
-	caddr_t	lf_id;		    /* Id of the resource holding the lock */
-	struct	lockf **lf_head;    /* Back pointer to the head of the locf list */
-	struct vnode *lf_vnode;	    /* Back pointer to the inode */
-	struct	lockf *lf_next;	    /* Pointer to the next lock on this inode */
-	struct	locklist lf_blkhd;  /* List of requests blocked on this lock */
+	short   lf_flags;           /* Semantics: F_POSIX, F_FLOCK, F_WAIT */
+	short   lf_type;         /* Lock type: F_RDLCK, F_WRLCK */
+	off_t   lf_start;           /* Byte # of the start of the lock */
+	off_t   lf_end;             /* Byte # of the end of the lock (-1=EOF) */
+	caddr_t lf_id;              /* Id of the resource holding the lock */
+	struct  lockf **lf_head;    /* Back pointer to the head of the locf list */
+	struct vnode *lf_vnode;     /* Back pointer to the inode */
+	struct  lockf *lf_next;     /* Pointer to the next lock on this inode */
+	struct  locklist lf_blkhd;  /* List of requests blocked on this lock */
 	TAILQ_ENTRY(lockf) lf_block;/* A request waiting for a lock */
 #if IMPORTANCE_INHERITANCE
 	int     lf_boosted;         /* Is the owner of the lock boosted */
 #endif
-	struct proc *lf_owner;	    /* The proc that did the SETLK, if known */
+	struct proc *lf_owner;      /* The proc that did the SETLK, if known */
 };
 
 #pragma pack()
@@ -114,14 +114,14 @@ struct lockf {
 __BEGIN_DECLS
 
 #ifdef KERNEL_PRIVATE
-int	lf_advlock(struct vnop_advlock_args *);
-int	lf_assert(struct vnop_advlock_args *, void **);
-void	lf_commit(void *, int);
-void	lf_abort_advlocks(vnode_t);
+int     lf_advlock(struct vnop_advlock_args *);
+int     lf_assert(struct vnop_advlock_args *, void **);
+void    lf_commit(void *, int);
+void    lf_abort_advlocks(vnode_t);
 
 #ifdef LOCKF_DEBUG
-void	lf_print(char *, struct lockf *);
-void	lf_printlist(char *, struct lockf *);
+void    lf_print(char *, struct lockf *);
+void    lf_printlist(char *, struct lockf *);
 #endif
 #endif /* KERNEL_PRIVATE */
 

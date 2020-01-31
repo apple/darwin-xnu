@@ -149,7 +149,7 @@ void mt_stackshot_task(task_t task, uint64_t *instrs, uint64_t *cycles);
  */
 typedef void (*mt_pmi_fn)(bool user_mode, void *ctx);
 int mt_microstackshot_start(unsigned int ctr, uint64_t period, mt_pmi_fn fn,
-		void *ctx);
+    void *ctx);
 int mt_microstackshot_stop(void);
 
 __END_DECLS

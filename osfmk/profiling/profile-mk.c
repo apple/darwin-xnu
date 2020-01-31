@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -48,7 +48,7 @@
 extern char etext[], pstart[];
 
 void *
-_profile_alloc_pages (size_t size)
+_profile_alloc_pages(size_t size)
 {
 	vm_offset_t addr;
 
@@ -71,7 +71,7 @@ _profile_alloc_pages (size_t size)
 		printf("Allocated %d bytes for profiling, address 0x%x\n", (int)size, (int)addr);
 	}
 
-	return((caddr_t)addr);
+	return (caddr_t)addr;
 }
 
 void
@@ -85,7 +85,8 @@ _profile_free_pages(void *addr, size_t size)
 	return;
 }
 
-void _profile_error(struct profile_vars *pv)
+void
+_profile_error(struct profile_vars *pv)
 {
 	panic("Fatal error in profiling");
 }
@@ -104,8 +105,8 @@ kmstartup(void)
 	 * so the rest of the scaling (here and in gprof) stays in ints.
 	 */
 
-	lowpc = ROUNDDOWN((prof_uptrint_t)&pstart[0], HISTFRACTION*sizeof(LHISTCOUNTER));
-	highpc = ROUNDUP((prof_uptrint_t)&etext[0], HISTFRACTION*sizeof(LHISTCOUNTER));
+	lowpc = ROUNDDOWN((prof_uptrint_t)&pstart[0], HISTFRACTION * sizeof(LHISTCOUNTER));
+	highpc = ROUNDUP((prof_uptrint_t)&etext[0], HISTFRACTION * sizeof(LHISTCOUNTER));
 	textsize = highpc - lowpc;
 	monsize = (textsize / HISTFRACTION) * sizeof(LHISTCOUNTER);
 
@@ -118,7 +119,7 @@ kmstartup(void)
 	_profile_md_init(pv, PROFILE_GPROF, PROFILE_ALLOC_MEM_YES);
 
 	/* Profil related variables */
-	pv->profil_buf = _profile_alloc (pv, monsize, ACONTEXT_PROFIL);
+	pv->profil_buf = _profile_alloc(pv, monsize, ACONTEXT_PROFIL);
 	pv->profil_info.highpc = highpc;
 	pv->profil_info.lowpc = lowpc;
 	pv->profil_info.text_len = textsize;
@@ -134,15 +135,15 @@ kmstartup(void)
 	pv->active = 1;
 	pv->use_dci = 0;
 	pv->use_profil = 1;
-	pv->check_funcs = 1;		/* for now */
+	pv->check_funcs = 1;            /* for now */
 
 	if (pv->debug) {
 		printf("Profiling kernel, s_textsize=%ld, monsize=%ld [0x%lx..0x%lx], cpu = %d\n",
-			 (long)textsize,
-			(long)monsize,
-			(long)lowpc,
-			(long)highpc,
-			0);
+		    (long)textsize,
+		    (long)monsize,
+		    (long)lowpc,
+		    (long)highpc,
+		    0);
 	}
 
 	_profile_md_start();
@@ -153,7 +154,7 @@ kmstartup(void)
 int
 gprofprobe(caddr_t port, void *ctlr)
 {
-	return(1);
+	return 1;
 }
 
 void
@@ -166,17 +167,18 @@ gprofattach(void)
 /* struct bus_device *gprofinfo[NGPROF]; */
 struct bus_device *gprofinfo[1];
 
-struct	bus_driver	gprof_driver = {
-	gprofprobe, 0, gprofattach, 0, 0, "gprof", gprofinfo, "gprofc", 0, 0};
+struct  bus_driver      gprof_driver = {
+	gprofprobe, 0, gprofattach, 0, 0, "gprof", gprofinfo, "gprofc", 0, 0
+};
 
 
 io_return_t
 gprofopen(dev_t dev,
-	  int flags,
-	  io_req_t ior)
+    int flags,
+    io_req_t ior)
 {
 	ior->io_error = D_SUCCESS;
-	return(0);
+	return 0;
 }
 
 void
@@ -191,15 +193,14 @@ gprofstrategy(io_req_t ior)
 	void *sys_ptr = (void *)0;
 
 	long count = _profile_kgmon(!(ior->io_op & IO_READ),
-				    ior->io_count,
-				    ior->io_recnum,
-				    1,
-				    &sys_ptr,
-				    (void (*)(kgmon_control_t))0);
+	    ior->io_count,
+	    ior->io_recnum,
+	    1,
+	    &sys_ptr,
+	    (void (*)(kgmon_control_t))0);
 
 	if (count < 0) {
 		ior->io_error = D_INVALID_RECNUM;
-
 	} else {
 		if (count > 0 && sys_ptr != (void *)0) {
 			if (ior->io_op & IO_READ) {
@@ -218,14 +219,14 @@ gprofstrategy(io_req_t ior)
 
 io_return_t
 gprofread(dev_t dev,
-	  io_req_t ior)
+    io_req_t ior)
 {
-	return(block_io(gprofstrategy, minphys, ior));
+	return block_io(gprofstrategy, minphys, ior);
 }
 
 io_return_t
 gprofwrite(dev_t dev,
-	   io_req_t ior)
+    io_req_t ior)
 {
-	return (block_io(gprofstrategy, minphys, ior));
+	return block_io(gprofstrategy, minphys, ior);
 }

@@ -21,10 +21,9 @@ INSTALL_MD_LIST =
 
 INSTALL_KF_MD_LIST = $(ARM_HEADER_FILES)
 
-INSTALL_KF_MD_LCL_LIST = machine_kpc.h monotonic.h pgtrace.h $(ARM_HEADER_FILES)
+INSTALL_KF_MD_LCL_LIST = machine_kpc.h machine_remote_time.h monotonic.h pgtrace.h $(ARM_HEADER_FILES)
 
-EXPORT_MD_LIST = machine_cpuid.h machine_kpc.h monotonic.h proc_reg.h pgtrace.h asm.h
-
+EXPORT_MD_LIST = machine_cpuid.h machine_kpc.h machine_remote_time.h monotonic.h proc_reg.h pgtrace.h asm.h
 
 EXPORT_MD_DIR = arm64
 

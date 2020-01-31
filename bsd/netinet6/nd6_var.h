@@ -55,7 +55,7 @@
  */
 
 #ifndef _NETINET6_ND6_VAR_H_
-#define	_NETINET6_ND6_VAR_H_
+#define _NETINET6_ND6_VAR_H_
 
 #ifdef BSD_KERNEL_PRIVATE
 struct nd_ifinfo {

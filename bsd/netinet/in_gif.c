@@ -91,13 +91,13 @@
 
 int ip_gif_ttl = GIF_TTL;
 SYSCTL_INT(_net_inet_ip, IPCTL_GIF_TTL, gifttl, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&ip_gif_ttl,	0, "");
+    &ip_gif_ttl, 0, "");
 
 int
 in_gif_output(
-	struct ifnet	*ifp,
-	int		family,
-	struct mbuf	*m,
+	struct ifnet    *ifp,
+	int             family,
+	struct mbuf     *m,
 	__unused struct rtentry *rt)
 {
 	struct gif_softc *sc = ifnet_softc(ifp);
@@ -107,7 +107,7 @@ in_gif_output(
 	    (void *)sc->gif_psrc;
 	struct sockaddr_in *sin_dst = (struct sockaddr_in *)
 	    (void *)sc->gif_pdst;
-	struct ip iphdr;	/* capsule IP header, host byte ordered */
+	struct ip iphdr;        /* capsule IP header, host byte ordered */
 	int proto, error;
 	u_int8_t tos;
 	struct ip_out_args ipoa;
@@ -124,77 +124,81 @@ in_gif_output(
 	    sin_src->sin_family != AF_INET ||
 	    sin_dst->sin_family != AF_INET) {
 		m_freem(m);
-		return (EAFNOSUPPORT);
+		return EAFNOSUPPORT;
 	}
 
 	switch (family) {
 #if INET
 	case AF_INET:
-	    {
+	{
 		struct ip *ip;
 
 		proto = IPPROTO_IPV4;
-		if (mbuf_len(m) < sizeof (*ip)) {
-			m = m_pullup(m, sizeof (*ip));
-			if (!m)
-				return (ENOBUFS);
+		if (mbuf_len(m) < sizeof(*ip)) {
+			m = m_pullup(m, sizeof(*ip));
+			if (!m) {
+				return ENOBUFS;
+			}
 		}
 		ip = mtod(m, struct ip *);
 		tos = ip->ip_tos;
 		break;
-	    }
+	}
 #endif /* INET */
 #if INET6
 	case AF_INET6:
-	    {
+	{
 		struct ip6_hdr *ip6;
 		proto = IPPROTO_IPV6;
-		if (mbuf_len(m) < sizeof (*ip6)) {
-			m = m_pullup(m, sizeof (*ip6));
-			if (!m)
-				return (ENOBUFS);
+		if (mbuf_len(m) < sizeof(*ip6)) {
+			m = m_pullup(m, sizeof(*ip6));
+			if (!m) {
+				return ENOBUFS;
+			}
 		}
 		ip6 = mtod(m, struct ip6_hdr *);
 		tos = (ntohl(ip6->ip6_flow) >> 20) & 0xff;
 		break;
-	    }
+	}
 #endif /* INET6 */
 	default:
 #if DEBUG
 		printf("in_gif_output: warning: unknown family %d passed\n",
-			family);
+		    family);
 #endif
 		m_freem(m);
-		return (EAFNOSUPPORT);
+		return EAFNOSUPPORT;
 	}
 
-	bzero(&iphdr, sizeof (iphdr));
+	bzero(&iphdr, sizeof(iphdr));
 	iphdr.ip_src = sin_src->sin_addr;
 	/* bidirectional configured tunnel mode */
-	if (sin_dst->sin_addr.s_addr != INADDR_ANY)
+	if (sin_dst->sin_addr.s_addr != INADDR_ANY) {
 		iphdr.ip_dst = sin_dst->sin_addr;
-	else {
+	} else {
 		m_freem(m);
-		return (ENETUNREACH);
+		return ENETUNREACH;
 	}
 	iphdr.ip_p = proto;
 	/* version will be set in ip_output() */
 	iphdr.ip_ttl = ip_gif_ttl;
-	iphdr.ip_len = m->m_pkthdr.len + sizeof (struct ip);
-	if (ifp->if_flags & IFF_LINK1)
+	iphdr.ip_len = m->m_pkthdr.len + sizeof(struct ip);
+	if (ifp->if_flags & IFF_LINK1) {
 		ip_ecn_ingress(ECN_NORMAL, &iphdr.ip_tos, &tos);
-	else
+	} else {
 		ip_ecn_ingress(ECN_NOCARE, &iphdr.ip_tos, &tos);
+	}
 
 	/* prepend new IP header */
-	M_PREPEND(m, sizeof (struct ip), M_DONTWAIT, 0);
-	if (m && mbuf_len(m) < sizeof (struct ip))
-		m = m_pullup(m, sizeof (struct ip));
+	M_PREPEND(m, sizeof(struct ip), M_DONTWAIT, 0);
+	if (m && mbuf_len(m) < sizeof(struct ip)) {
+		m = m_pullup(m, sizeof(struct ip));
+	}
 	if (m == NULL) {
 		printf("ENOBUFS in in_gif_output %d\n", __LINE__);
-		return (ENOBUFS);
+		return ENOBUFS;
 	}
-	bcopy(&iphdr, mtod(m, struct ip *), sizeof (struct ip));
+	bcopy(&iphdr, mtod(m, struct ip *), sizeof(struct ip));
 
 	if (ROUTE_UNUSABLE(&sc->gif_ro) ||
 	    dst->sin_family != sin_dst->sin_family ||
@@ -202,7 +206,7 @@ in_gif_output(
 	    (sc->gif_ro.ro_rt != NULL && sc->gif_ro.ro_rt->rt_ifp == ifp)) {
 		/* cache route doesn't match or recursive route */
 		dst->sin_family = sin_dst->sin_family;
-		dst->sin_len = sizeof (struct sockaddr_in);
+		dst->sin_len = sizeof(struct sockaddr_in);
 		dst->sin_addr = sin_dst->sin_addr;
 		ROUTE_RELEASE(&sc->gif_ro);
 #if 0
@@ -214,7 +218,7 @@ in_gif_output(
 		rtalloc(&sc->gif_ro);
 		if (sc->gif_ro.ro_rt == NULL) {
 			m_freem(m);
-			return (ENETUNREACH);
+			return ENETUNREACH;
 		}
 
 		/* if it constitutes infinite encapsulation, punt. */
@@ -222,18 +226,18 @@ in_gif_output(
 		if (sc->gif_ro.ro_rt->rt_ifp == ifp) {
 			RT_UNLOCK(sc->gif_ro.ro_rt);
 			m_freem(m);
-			return (ENETUNREACH); /* XXX */
+			return ENETUNREACH; /* XXX */
 		}
 #if 0
 		ifp->if_mtu = sc->gif_ro.ro_rt->rt_ifp->if_mtu
-		    - sizeof (struct ip);
+		    - sizeof(struct ip);
 #endif
 		RT_UNLOCK(sc->gif_ro.ro_rt);
 	}
 
 	error = ip_output(m, NULL, &sc->gif_ro, IP_OUTARGS, NULL, &ipoa);
 
-	return (error);
+	return error;
 }
 
 void
@@ -264,50 +268,54 @@ in_gif_input(struct mbuf *m, int off)
 	switch (proto) {
 #if INET
 	case IPPROTO_IPV4:
-	    {
+	{
 		af = AF_INET;
-		if (mbuf_len(m) < sizeof (*ip)) {
-			m = m_pullup(m, sizeof (*ip));
-			if (!m)
+		if (mbuf_len(m) < sizeof(*ip)) {
+			m = m_pullup(m, sizeof(*ip));
+			if (!m) {
 				return;
+			}
 		}
 		ip = mtod(m, struct ip *);
 		if (gifp->if_flags & IFF_LINK1) {
 			old_tos = ip->ip_tos;
 			egress_success = ip_ecn_egress(ECN_NORMAL, &otos, &ip->ip_tos);
 			if (old_tos != ip->ip_tos) {
-			    sum = ~ntohs(ip->ip_sum) & 0xffff;
-			    sum += (~otos & 0xffff) + ip->ip_tos;
-			    sum = (sum >> 16) + (sum & 0xffff);
-			    sum += (sum >> 16);  /* add carry */
-			    ip->ip_sum = htons(~sum & 0xffff);
+				sum = ~ntohs(ip->ip_sum) & 0xffff;
+				sum += (~otos & 0xffff) + ip->ip_tos;
+				sum = (sum >> 16) + (sum & 0xffff);
+				sum += (sum >> 16); /* add carry */
+				ip->ip_sum = htons(~sum & 0xffff);
 			}
-		} else
+		} else {
 			egress_success = ip_ecn_egress(ECN_NOCARE, &otos, &ip->ip_tos);
+		}
 		break;
-	    }
+	}
 #endif
 #if INET6
 	case IPPROTO_IPV6:
-	    {
+	{
 		struct ip6_hdr *ip6;
 		u_int8_t itos;
 		af = AF_INET6;
-		if (mbuf_len(m) < sizeof (*ip6)) {
-			m = m_pullup(m, sizeof (*ip6));
-			if (!m)
+		if (mbuf_len(m) < sizeof(*ip6)) {
+			m = m_pullup(m, sizeof(*ip6));
+			if (!m) {
 				return;
+			}
 		}
 		ip6 = mtod(m, struct ip6_hdr *);
 		itos = (ntohl(ip6->ip6_flow) >> 20) & 0xff;
-		if (gifp->if_flags & IFF_LINK1)
+		if (gifp->if_flags & IFF_LINK1) {
 			egress_success = ip_ecn_egress(ECN_NORMAL, &otos, &itos);
-		else
+		} else {
 			egress_success = ip_ecn_egress(ECN_NOCARE, &otos, &itos);
+		}
 		ip6->ip6_flow &= ~htonl(0xff << 20);
 		ip6->ip6_flow |= htonl((u_int32_t)itos << 20);
 		break;
-	    }
+	}
 #endif /* INET6 */
 	default:
 		OSAddAtomic(1, &ipstat.ips_nogif);
@@ -323,8 +331,9 @@ in_gif_input(struct mbuf *m, int off)
 
 #ifdef __APPLE__
 	/* Replace the rcvif by gifp for dlil to route it correctly */
-	if (m->m_pkthdr.rcvif)
+	if (m->m_pkthdr.rcvif) {
 		m->m_pkthdr.rcvif = gifp;
+	}
 	ifnet_input(gifp, m, NULL);
 #else
 	gif_input(m, af, gifp);
@@ -355,35 +364,40 @@ gif_encapcheck4(
 
 	GIF_LOCK_ASSERT(sc);
 
-	mbuf_copydata((struct mbuf *)(size_t)m, 0, sizeof (ip), &ip);
+	mbuf_copydata((struct mbuf *)(size_t)m, 0, sizeof(ip), &ip);
 
 	/* check for address match */
 	addrmatch = 0;
-	if (src->sin_addr.s_addr == ip.ip_dst.s_addr)
+	if (src->sin_addr.s_addr == ip.ip_dst.s_addr) {
 		addrmatch |= 1;
-	if (dst->sin_addr.s_addr == ip.ip_src.s_addr)
+	}
+	if (dst->sin_addr.s_addr == ip.ip_src.s_addr) {
 		addrmatch |= 2;
-	if (addrmatch != 3)
-		return (0);
+	}
+	if (addrmatch != 3) {
+		return 0;
+	}
 
 	/* martian filters on outer source - NOT done in ip_input! */
-	if (IN_MULTICAST(ntohl(ip.ip_src.s_addr)))
-		return (0);
+	if (IN_MULTICAST(ntohl(ip.ip_src.s_addr))) {
+		return 0;
+	}
 	switch ((ntohl(ip.ip_src.s_addr) & 0xff000000) >> 24) {
 	case 0: case 127: case 255:
-		return (0);
+		return 0;
 	}
 	/* reject packets with broadcast on source */
 	lck_rw_lock_shared(in_ifaddr_rwlock);
 	for (ia4 = TAILQ_FIRST(&in_ifaddrhead); ia4;
 	    ia4 = TAILQ_NEXT(ia4, ia_link)) {
-		if ((ifnet_flags(ia4->ia_ifa.ifa_ifp) & IFF_BROADCAST) == 0)
+		if ((ifnet_flags(ia4->ia_ifa.ifa_ifp) & IFF_BROADCAST) == 0) {
 			continue;
+		}
 		IFA_LOCK(&ia4->ia_ifa);
 		if (ip.ip_src.s_addr == ia4->ia_broadaddr.sin_addr.s_addr) {
 			IFA_UNLOCK(&ia4->ia_ifa);
 			lck_rw_done(in_ifaddr_rwlock);
-			return (0);
+			return 0;
 		}
 		IFA_UNLOCK(&ia4->ia_ifa);
 	}
@@ -395,24 +409,25 @@ gif_encapcheck4(
 		struct sockaddr_in sin;
 		struct rtentry *rt;
 
-		bzero(&sin, sizeof (sin));
+		bzero(&sin, sizeof(sin));
 		sin.sin_family = AF_INET;
-		sin.sin_len = sizeof (struct sockaddr_in);
+		sin.sin_len = sizeof(struct sockaddr_in);
 		sin.sin_addr = ip.ip_src;
 		rt = rtalloc1_scoped((struct sockaddr *)&sin, 0, 0,
 		    m->m_pkthdr.rcvif->if_index);
-		if (rt != NULL)
+		if (rt != NULL) {
 			RT_LOCK(rt);
+		}
 		if (rt == NULL || rt->rt_ifp != m->m_pkthdr.rcvif) {
 			if (rt != NULL) {
 				RT_UNLOCK(rt);
 				rtfree(rt);
 			}
-			return (0);
+			return 0;
 		}
 		RT_UNLOCK(rt);
 		rtfree(rt);
 	}
 
-	return (32 * 2);
+	return 32 * 2;
 }

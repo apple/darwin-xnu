@@ -14,7 +14,7 @@ extern uint32_t pe_arm_init_interrupts(void *args);
 extern void pe_arm_init_debug(void *args);
 
 
-#ifdef	PEXPERT_KERNEL_PRIVATE
+#ifdef  PEXPERT_KERNEL_PRIVATE
 extern void cnputc(char);
 #endif
 int serial_init(void);

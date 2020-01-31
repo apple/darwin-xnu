@@ -101,7 +101,7 @@ struct ipc_voucher_attr_manager ipc_pthread_priority_manager = {
 	.ivam_release_value    = ipc_pthread_priority_release_value,
 	.ivam_get_value        = ipc_pthread_priority_get_value,
 	.ivam_extract_content  = ipc_pthread_priority_extract_content,
-	.ivam_command	       = ipc_pthread_priority_command,
+	.ivam_command          = ipc_pthread_priority_command,
 	.ivam_release          = ipc_pthread_priority_release,
 	.ivam_flags            = IVAM_FLAGS_NONE,
 };
@@ -118,15 +118,16 @@ ipc_pthread_priority_init()
 
 	/* Register the ipc_pthread_priority manager with the Vouchers sub system. */
 	kr = ipc_register_well_known_mach_voucher_attr_manager(
-	                &ipc_pthread_priority_manager,
-	                0,
-	                MACH_VOUCHER_ATTR_KEY_PTHPRIORITY,
-	                &ipc_pthread_priority_voucher_attr_control);
-	if (kr != KERN_SUCCESS )
+		&ipc_pthread_priority_manager,
+		0,
+		MACH_VOUCHER_ATTR_KEY_PTHPRIORITY,
+		&ipc_pthread_priority_voucher_attr_control);
+	if (kr != KERN_SUCCESS) {
 		panic("IPC_PTHREAD_PRIORITY subsystem initialization failed");
+	}
 
 	kprintf("IPC_PTHREAD_PRIORITY subsystem is initialized\n");
-	return ;
+	return;
 }
 
 /*
@@ -142,10 +143,10 @@ ipc_pthread_priority_init()
  */
 kern_return_t
 ipc_pthread_priority_release_value(
-	ipc_voucher_attr_manager_t		__assert_only manager,
-	mach_voucher_attr_key_t			__assert_only key,
-	mach_voucher_attr_value_handle_t		      value,
-	mach_voucher_attr_value_reference_t		      sync)
+	ipc_voucher_attr_manager_t              __assert_only manager,
+	mach_voucher_attr_key_t                 __assert_only key,
+	mach_voucher_attr_value_handle_t                      value,
+	mach_voucher_attr_value_reference_t                   sync)
 {
 	assert(MACH_VOUCHER_ATTR_KEY_PTHPRIORITY == key);
 	assert(manager == &ipc_pthread_priority_manager);
@@ -161,16 +162,16 @@ ipc_pthread_priority_release_value(
  */
 kern_return_t
 ipc_pthread_priority_get_value(
-	ipc_voucher_attr_manager_t 		__assert_only manager,
-	mach_voucher_attr_key_t 		__assert_only key,
-	mach_voucher_attr_recipe_command_t 	          command,
-	mach_voucher_attr_value_handle_array_t __unused	  prev_values,
-	mach_msg_type_number_t 		       __unused   prev_value_count,
-	mach_voucher_attr_content_t          		  recipe,
-	mach_voucher_attr_content_size_t     		  recipe_size,
+	ipc_voucher_attr_manager_t              __assert_only manager,
+	mach_voucher_attr_key_t                 __assert_only key,
+	mach_voucher_attr_recipe_command_t                command,
+	mach_voucher_attr_value_handle_array_t __unused   prev_values,
+	mach_msg_type_number_t                 __unused   prev_value_count,
+	mach_voucher_attr_content_t                       recipe,
+	mach_voucher_attr_content_size_t                  recipe_size,
 	mach_voucher_attr_value_handle_t             *out_value,
 	mach_voucher_attr_value_flags_t              *out_flags,
-	ipc_voucher_t 				                 *out_value_voucher)
+	ipc_voucher_t                                            *out_value_voucher)
 {
 	kern_return_t kr = KERN_SUCCESS;
 	ipc_pthread_priority_value_t ipc_pthread_priority_value;
@@ -184,7 +185,6 @@ ipc_pthread_priority_get_value(
 	*out_flags = MACH_VOUCHER_ATTR_VALUE_FLAGS_NONE;
 
 	switch (command) {
-
 	case MACH_VOUCHER_ATTR_PTHPRIORITY_CREATE:
 
 		if (recipe_size != sizeof(ipc_pthread_priority_value_t)) {
@@ -200,7 +200,7 @@ ipc_pthread_priority_get_value(
 
 		/* Callout to pthread kext to get the canonicalized value */
 		canonicalize_priority_value = (ipc_pthread_priority_value_t)
-				_pthread_priority_normalize_for_ipc((unsigned long)ipc_pthread_priority_value);
+		    _pthread_priority_normalize_for_ipc((unsigned long)ipc_pthread_priority_value);
 
 		*out_value = IPC_PTHREAD_PRIORITY_VALUE_TO_HANDLE(canonicalize_priority_value);
 		*out_flags = MACH_VOUCHER_ATTR_VALUE_FLAGS_PERSIST;
@@ -225,7 +225,7 @@ ipc_pthread_priority_extract_content(
 	ipc_voucher_attr_manager_t      __assert_only manager,
 	mach_voucher_attr_key_t         __assert_only key,
 	mach_voucher_attr_value_handle_array_t        values,
-	mach_msg_type_number_t 			              value_count,
+	mach_msg_type_number_t                                value_count,
 	mach_voucher_attr_recipe_command_t           *out_command,
 	mach_voucher_attr_content_t                   out_recipe,
 	mach_voucher_attr_content_size_t             *in_out_recipe_size)
@@ -237,7 +237,7 @@ ipc_pthread_priority_extract_content(
 	assert(MACH_VOUCHER_ATTR_KEY_PTHPRIORITY == key);
 	assert(manager == &ipc_pthread_priority_manager);
 
-	for (i = 0; i < value_count; i++) {
+	for (i = 0; i < value_count && *in_out_recipe_size > 0; i++) {
 		ipc_pthread_priority_value = HANDLE_TO_IPC_PTHREAD_PRIORITY_VALUE(values[i]);
 
 		if (ipc_pthread_priority_value == PTHPRIORITY_ATTR_DEFAULT_VALUE) {
@@ -267,14 +267,14 @@ ipc_pthread_priority_extract_content(
  */
 kern_return_t
 ipc_pthread_priority_command(
-	ipc_voucher_attr_manager_t 		   __assert_only manager,
-	mach_voucher_attr_key_t 		   __assert_only key,
-	mach_voucher_attr_value_handle_array_t 	__unused values,
-	mach_msg_type_number_t 			__unused value_count,
-	mach_voucher_attr_command_t		 __unused command,
-	mach_voucher_attr_content_t 	   __unused in_content,
+	ipc_voucher_attr_manager_t                 __assert_only manager,
+	mach_voucher_attr_key_t                    __assert_only key,
+	mach_voucher_attr_value_handle_array_t  __unused values,
+	mach_msg_type_number_t                  __unused value_count,
+	mach_voucher_attr_command_t              __unused command,
+	mach_voucher_attr_content_t        __unused in_content,
 	mach_voucher_attr_content_size_t   __unused in_content_size,
-	mach_voucher_attr_content_t 	   __unused out_content,
+	mach_voucher_attr_content_t        __unused out_content,
 	mach_voucher_attr_content_size_t   __unused *out_content_size)
 {
 	assert(MACH_VOUCHER_ATTR_KEY_PTHPRIORITY == key);
@@ -285,7 +285,7 @@ ipc_pthread_priority_command(
 
 void
 ipc_pthread_priority_release(
-	ipc_voucher_attr_manager_t 		__assert_only manager)
+	ipc_voucher_attr_manager_t              __assert_only manager)
 {
 	assert(manager == &ipc_pthread_priority_manager);
 }

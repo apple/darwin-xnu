@@ -51,20 +51,20 @@
  */
 static u_int32_t mptcp_rto = 3;
 SYSCTL_INT(_net_inet_mptcp, OID_AUTO, rto, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&mptcp_rto, 0, "MPTCP Retransmission Timeout");
+    &mptcp_rto, 0, "MPTCP Retransmission Timeout");
 
 static int mptcp_nrtos = 3;
 SYSCTL_INT(_net_inet_mptcp, OID_AUTO, nrto, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&mptcp_rto, 0, "MPTCP Retransmissions");
+    &mptcp_rto, 0, "MPTCP Retransmissions");
 
 /*
  * MPTCP connections timewait interval in seconds.
  */
 static u_int32_t mptcp_tw = 60;
 SYSCTL_INT(_net_inet_mptcp, OID_AUTO, tw, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&mptcp_tw, 0, "MPTCP Timewait Period");
+    &mptcp_tw, 0, "MPTCP Timewait Period");
 
-#define	TIMEVAL_TO_HZ(_tv_)	((_tv_).tv_sec * hz + (_tv_).tv_usec / hz)
+#define TIMEVAL_TO_HZ(_tv_)     ((_tv_).tv_sec * hz + (_tv_).tv_usec / hz)
 
 static int
 mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
@@ -78,10 +78,11 @@ mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
 	mpte_lock_assert_held(mpte);
 	switch (mp_tp->mpt_timer_vals) {
 	case MPTT_REXMT:
-		if (mp_tp->mpt_rxtstart == 0)
+		if (mp_tp->mpt_rxtstart == 0) {
 			break;
+		}
 		if ((now_msecs - mp_tp->mpt_rxtstart) >
-		    (mptcp_rto*hz)) {
+		    (mptcp_rto * hz)) {
 			if (MPTCP_SEQ_GT(mp_tp->mpt_snduna, mp_tp->mpt_rtseq)) {
 				mp_tp->mpt_timer_vals = 0;
 				mp_tp->mpt_rtseq = 0;
@@ -94,9 +95,9 @@ mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
 			} else {
 				mp_tp->mpt_sndnxt = mp_tp->mpt_rtseq;
 				os_log_info(mptcp_log_handle,
-					    "%s: REXMT %d sndnxt %u\n",
-					    __func__, mp_tp->mpt_rxtshift,
-					    (uint32_t)mp_tp->mpt_sndnxt);
+				    "%s: REXMT %d sndnxt %u\n",
+				    __func__, mp_tp->mpt_rxtshift,
+				    (uint32_t)mp_tp->mpt_sndnxt);
 				mptcp_output(mpte);
 			}
 		} else {
@@ -105,8 +106,9 @@ mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
 		break;
 	case MPTT_TW:
 		/* Allows for break before make XXX */
-		if (mp_tp->mpt_timewait == 0)
+		if (mp_tp->mpt_timewait == 0) {
 			VERIFY(0);
+		}
 		if ((now_msecs - mp_tp->mpt_timewait) >
 		    (mptcp_tw * hz)) {
 			mp_tp->mpt_softerror = ETIMEDOUT;
@@ -122,7 +124,7 @@ mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
 		break;
 	}
 
-	return (resched_timer);
+	return resched_timer;
 }
 
 uint32_t
@@ -148,12 +150,13 @@ mptcp_timer(struct mppcbinfo *mppi)
 		mpte_lock(mpte);
 		VERIFY(mpp->mpp_flags & MPP_ATTACHED);
 
-		if (mptcp_timer_demux(mpte, now_msecs))
+		if (mptcp_timer_demux(mpte, now_msecs)) {
 			resched_timer = 1;
+		}
 		mpte_unlock(mpte);
 	}
 
-	return (resched_timer);
+	return resched_timer;
 }
 
 void

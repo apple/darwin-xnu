@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <kern/task.h>
@@ -69,8 +69,8 @@ extern void *find_user_regs(thread_t);
 extern const char *syscallnames[];
 
 #define code_is_kdebug_trace(code) (((code) == SYS_kdebug_trace) ||   \
-                                    ((code) == SYS_kdebug_trace64) || \
-                                    ((code) == SYS_kdebug_trace_string))
+	                            ((code) == SYS_kdebug_trace64) || \
+	                            ((code) == SYS_kdebug_trace_string))
 
 /*
  * Function:	unix_syscall
@@ -83,24 +83,25 @@ __attribute__((noreturn))
 void
 unix_syscall(x86_saved_state_t *state)
 {
-	thread_t		thread;
-	void			*vt;
-	unsigned int		code;
-	struct sysent		*callp;
+	thread_t                thread;
+	void                    *vt;
+	unsigned int            code;
+	struct sysent           *callp;
 
-	int			error;
-	vm_offset_t		params;
-	struct proc		*p;
-	struct uthread		*uthread;
-	x86_saved_state32_t	*regs;
-	boolean_t		is_vfork;
-	pid_t			pid;
+	int                     error;
+	vm_offset_t             params;
+	struct proc             *p;
+	struct uthread          *uthread;
+	x86_saved_state32_t     *regs;
+	boolean_t               is_vfork;
+	pid_t                   pid;
 
 	assert(is_saved_state32(state));
 	regs = saved_state32(state);
 #if DEBUG
-	if (regs->eax == 0x800)
+	if (regs->eax == 0x800) {
 		thread_exception_return();
+	}
 #endif
 	thread = current_thread();
 	uthread = get_bsdthread_info(thread);
@@ -109,15 +110,16 @@ unix_syscall(x86_saved_state_t *state)
 
 	/* Get the approriate proc; may be different from task's for vfork() */
 	is_vfork = uthread->uu_flag & UT_VFORK;
-	if (__improbable(is_vfork != 0))
+	if (__improbable(is_vfork != 0)) {
 		p = current_proc();
-	else 
+	} else {
 		p = (struct proc *)get_bsdtask_info(current_task());
+	}
 
 	code = regs->eax & I386_SYSCALL_NUMBER_MASK;
 	DEBUG_KPRINT_SYSCALL_UNIX("unix_syscall: code=%d(%s) eip=%u\n",
-							  code, syscallnames[code >= nsysent ? SYS_invalid : code], (uint32_t)regs->eip);
-	params = (vm_offset_t) (regs->uesp + sizeof (int));
+	    code, syscallnames[code >= nsysent ? SYS_invalid : code], (uint32_t)regs->eip);
+	params = (vm_offset_t) (regs->uesp + sizeof(int));
 
 	regs->efl &= ~(EFL_CF);
 
@@ -133,13 +135,13 @@ unix_syscall(x86_saved_state_t *state)
 
 	if (callp->sy_arg_bytes != 0) {
 #if CONFIG_REQUIRES_U32_MUNGING
-		sy_munge_t	*mungerp;
+		sy_munge_t      *mungerp;
 #else
 #error U32 syscalls on x86_64 kernel requires munging
 #endif
-		uint32_t	 nargs;
+		uint32_t         nargs;
 
-		assert((unsigned) callp->sy_arg_bytes <= sizeof (uthread->uu_arg));
+		assert((unsigned) callp->sy_arg_bytes <= sizeof(uthread->uu_arg));
 		nargs = callp->sy_arg_bytes;
 		error = copyin((user_addr_t) params, (char *) vt, nargs);
 		if (error) {
@@ -153,20 +155,22 @@ unix_syscall(x86_saved_state_t *state)
 			int *ip = (int *)vt;
 
 			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-				BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-				*ip, *(ip+1), *(ip+2), *(ip+3), 0);
+			    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+			    *ip, *(ip + 1), *(ip + 2), *(ip + 3), 0);
 		}
 
 #if CONFIG_REQUIRES_U32_MUNGING
 		mungerp = callp->sy_arg_munge32;
 
-		if (mungerp != NULL)
+		if (mungerp != NULL) {
 			(*mungerp)(vt);
+		}
 #endif
-	} else
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-			0, 0, 0, 0, 0);
+	} else {
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+		    0, 0, 0, 0, 0);
+	}
 
 	/*
 	 * Delayed binding of thread credential to process credential, if we
@@ -181,8 +185,8 @@ unix_syscall(x86_saved_state_t *state)
 	pid = proc_pid(p);
 
 #ifdef JOE_DEBUG
-        uthread->uu_iocount = 0;
-        uthread->uu_vpindex = 0;
+	uthread->uu_iocount = 0;
+	uthread->uu_vpindex = 0;
 #endif
 
 	AUDIT_SYSCALL_ENTER(code, p, uthread);
@@ -190,8 +194,9 @@ unix_syscall(x86_saved_state_t *state)
 	AUDIT_SYSCALL_EXIT(code, p, uthread, error);
 
 #ifdef JOE_DEBUG
-        if (uthread->uu_iocount)
-                printf("system call returned with uu_iocount != 0\n");
+	if (uthread->uu_iocount) {
+		printf("system call returned with uu_iocount != 0\n");
+	}
 #endif
 #if CONFIG_DTRACE
 	uthread->t_dtrace_errno = error;
@@ -206,20 +211,19 @@ unix_syscall(x86_saved_state_t *state)
 		 */
 
 		pal_syscall_restart(thread, state);
-	}
-	else if (error != EJUSTRETURN) {
+	} else if (error != EJUSTRETURN) {
 		if (__improbable(error)) {
-		    regs->eax = error;
-		    regs->efl |= EFL_CF;	/* carry bit */
+			regs->eax = error;
+			regs->efl |= EFL_CF;    /* carry bit */
 		} else { /* (not error) */
-			/*
-			 * We split retval across two registers, in case the
-			 * syscall had a 64-bit return value, in which case
-			 * eax/edx matches the function call ABI.
-			 */
-		    regs->eax = uthread->uu_rval[0];
-		    regs->edx = uthread->uu_rval[1];
-		} 
+			 /*
+			  * We split retval across two registers, in case the
+			  * syscall had a 64-bit return value, in which case
+			  * eax/edx matches the function call ABI.
+			  */
+			regs->eax = uthread->uu_rval[0];
+			regs->edx = uthread->uu_rval[1];
+		}
 	}
 
 	DEBUG_KPRINT_SYSCALL_UNIX(
@@ -227,6 +231,7 @@ unix_syscall(x86_saved_state_t *state)
 		error, regs->eax, regs->edx);
 
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
+	uthread->syscall_code = 0;
 
 #if DEBUG || DEVELOPMENT
 	kern_allocation_name_t
@@ -235,7 +240,7 @@ unix_syscall(x86_saved_state_t *state)
 #endif /* DEBUG || DEVELOPMENT */
 
 	if (__improbable(uthread->uu_lowpri_window)) {
-	        /*
+		/*
 		 * task is marked as a low priority I/O type
 		 * and the I/O we issued while in this system call
 		 * collided with normal I/O operations... we'll
@@ -244,10 +249,11 @@ unix_syscall(x86_saved_state_t *state)
 		 */
 		throttle_lowpri_io(1);
 	}
-	if (__probable(!code_is_kdebug_trace(code)))
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-			error, uthread->uu_rval[0], uthread->uu_rval[1], pid, 0);
+	if (__probable(!code_is_kdebug_trace(code))) {
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+		    error, uthread->uu_rval[0], uthread->uu_rval[1], pid, 0);
+	}
 
 	if (__improbable(!is_vfork && callp->sy_call == (sy_call_t *)execve && !error)) {
 		pal_execve_return(thread);
@@ -267,23 +273,24 @@ __attribute__((noreturn))
 void
 unix_syscall64(x86_saved_state_t *state)
 {
-	thread_t	thread;
-	void			*vt;
-	unsigned int	code;
-	struct sysent	*callp;
-	int		args_in_regs;
-	boolean_t	args_start_at_rdi;
-	int		error;
-	struct proc	*p;
-	struct uthread	*uthread;
+	thread_t        thread;
+	void                    *vt;
+	unsigned int    code;
+	struct sysent   *callp;
+	int             args_in_regs;
+	boolean_t       args_start_at_rdi;
+	int             error;
+	struct proc     *p;
+	struct uthread  *uthread;
 	x86_saved_state64_t *regs;
-	pid_t		pid;
+	pid_t           pid;
 
 	assert(is_saved_state64(state));
 	regs = saved_state64(state);
-#if	DEBUG
-	if (regs->rax == 0x2000800)
+#if     DEBUG
+	if (regs->rax == 0x2000800) {
 		thread_exception_return();
+	}
 #endif
 	thread = current_thread();
 	uthread = get_bsdthread_info(thread);
@@ -291,10 +298,11 @@ unix_syscall64(x86_saved_state_t *state)
 	uthread_reset_proc_refcount(uthread);
 
 	/* Get the approriate proc; may be different from task's for vfork() */
-	if (__probable(!(uthread->uu_flag & UT_VFORK)))
+	if (__probable(!(uthread->uu_flag & UT_VFORK))) {
 		p = (struct proc *)get_bsdtask_info(current_task());
-	else 
+	} else {
 		p = current_proc();
+	}
 
 	/* Verify that we are not being called from a task without a proc */
 	if (__improbable(p == NULL)) {
@@ -314,7 +322,7 @@ unix_syscall64(x86_saved_state_t *state)
 	vt = (void *)uthread->uu_arg;
 
 	if (__improbable(callp == sysent)) {
-	        /*
+		/*
 		 * indirect system call... system call number
 		 * passed as 'arg0'
 		 */
@@ -337,9 +345,9 @@ unix_syscall64(x86_saved_state_t *state)
 		if (!code_is_kdebug_trace(code)) {
 			uint64_t *ip = (uint64_t *)vt;
 
-			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-				BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-				(int)(*ip), (int)(*(ip+1)), (int)(*(ip+2)), (int)(*(ip+3)), 0);
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+			    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+			    (int)(*ip), (int)(*(ip + 1)), (int)(*(ip + 2)), (int)(*(ip + 3)), 0);
 		}
 
 		if (__improbable(callp->sy_narg > args_in_regs)) {
@@ -355,10 +363,11 @@ unix_syscall64(x86_saved_state_t *state)
 				/* NOTREACHED */
 			}
 		}
-	} else
+	} else {
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-			0, 0, 0, 0, 0);
+		    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+		    0, 0, 0, 0, 0);
+	}
 
 	/*
 	 * Delayed binding of thread credential to process credential, if we
@@ -373,8 +382,8 @@ unix_syscall64(x86_saved_state_t *state)
 	pid = proc_pid(p);
 
 #ifdef JOE_DEBUG
-        uthread->uu_iocount = 0;
-        uthread->uu_vpindex = 0;
+	uthread->uu_iocount = 0;
+	uthread->uu_vpindex = 0;
 #endif
 
 	AUDIT_SYSCALL_ENTER(code, p, uthread);
@@ -382,14 +391,15 @@ unix_syscall64(x86_saved_state_t *state)
 	AUDIT_SYSCALL_EXIT(code, p, uthread, error);
 
 #ifdef JOE_DEBUG
-        if (uthread->uu_iocount)
-               printf("system call returned with uu_iocount != 0\n");
+	if (uthread->uu_iocount) {
+		printf("system call returned with uu_iocount != 0\n");
+	}
 #endif
 
 #if CONFIG_DTRACE
 	uthread->t_dtrace_errno = error;
 #endif /* CONFIG_DTRACE */
-	
+
 	if (__improbable(error == ERESTART)) {
 		/*
 		 * all system calls come through via the syscall instruction
@@ -397,13 +407,11 @@ unix_syscall64(x86_saved_state_t *state)
 		 * move the user's pc back to repeat the syscall:
 		 */
 		pal_syscall_restart( thread, state );
-	}
-	else if (error != EJUSTRETURN) {
+	} else if (error != EJUSTRETURN) {
 		if (__improbable(error)) {
 			regs->rax = error;
-			regs->isf.rflags |= EFL_CF;	/* carry bit */
+			regs->isf.rflags |= EFL_CF;     /* carry bit */
 		} else { /* (not error) */
-
 			switch (callp->sy_return_type) {
 			case _SYSCALL_RET_INT_T:
 				regs->rax = uthread->uu_rval[0];
@@ -418,7 +426,7 @@ unix_syscall64(x86_saved_state_t *state)
 			case _SYSCALL_RET_SIZE_T:
 			case _SYSCALL_RET_SSIZE_T:
 			case _SYSCALL_RET_UINT64_T:
-			        regs->rax = *((uint64_t *)(&uthread->uu_rval[0]));
+				regs->rax = *((uint64_t *)(&uthread->uu_rval[0]));
 				regs->rdx = 0;
 				break;
 			case _SYSCALL_RET_NONE:
@@ -428,14 +436,15 @@ unix_syscall64(x86_saved_state_t *state)
 				break;
 			}
 			regs->isf.rflags &= ~EFL_CF;
-		} 
+		}
 	}
 
 	DEBUG_KPRINT_SYSCALL_UNIX(
 		"unix_syscall64: error=%d retval=(%llu,%llu)\n",
 		error, regs->rax, regs->rdx);
-	
+
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
+	uthread->syscall_code = 0;
 
 #if DEBUG || DEVELOPMENT
 	kern_allocation_name_t
@@ -444,7 +453,7 @@ unix_syscall64(x86_saved_state_t *state)
 #endif /* DEBUG || DEVELOPMENT */
 
 	if (__improbable(uthread->uu_lowpri_window)) {
-	        /*
+		/*
 		 * task is marked as a low priority I/O type
 		 * and the I/O we issued while in this system call
 		 * collided with normal I/O operations... we'll
@@ -453,10 +462,11 @@ unix_syscall64(x86_saved_state_t *state)
 		 */
 		throttle_lowpri_io(1);
 	}
-	if (__probable(!code_is_kdebug_trace(code)))
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-			error, uthread->uu_rval[0], uthread->uu_rval[1], pid, 0);
+	if (__probable(!code_is_kdebug_trace(code))) {
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+		    error, uthread->uu_rval[0], uthread->uu_rval[1], pid, 0);
+	}
 
 #if PROC_REF_DEBUG
 	if (__improbable(uthread_get_proc_refcount(uthread))) {
@@ -472,8 +482,8 @@ unix_syscall64(x86_saved_state_t *state)
 void
 unix_syscall_return(int error)
 {
-	thread_t		thread;
-	struct uthread		*uthread;
+	thread_t                thread;
+	struct uthread          *uthread;
 	struct proc *p;
 	unsigned int code;
 	struct sysent *callp;
@@ -494,8 +504,9 @@ unix_syscall_return(int error)
 		callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
 
 #if CONFIG_DTRACE
-		if (callp->sy_call == dtrace_systrace_syscall)
+		if (callp->sy_call == dtrace_systrace_syscall) {
 			dtrace_systrace_syscall_return( code, error, uthread->uu_rval );
+		}
 #endif /* CONFIG_DTRACE */
 		AUDIT_SYSCALL_EXIT(code, p, uthread, error);
 
@@ -503,14 +514,12 @@ unix_syscall_return(int error)
 			/*
 			 * repeat the syscall
 			 */
-			pal_syscall_restart( thread, find_user_regs(thread) );
-		}
-		else if (error != EJUSTRETURN) {
+			pal_syscall_restart( thread, find_user_regs(thread));
+		} else if (error != EJUSTRETURN) {
 			if (error) {
 				regs->rax = error;
-				regs->isf.rflags |= EFL_CF;	/* carry bit */
+				regs->isf.rflags |= EFL_CF;     /* carry bit */
 			} else { /* (not error) */
-
 				switch (callp->sy_return_type) {
 				case _SYSCALL_RET_INT_T:
 					regs->rax = uthread->uu_rval[0];
@@ -535,13 +544,13 @@ unix_syscall_return(int error)
 					break;
 				}
 				regs->isf.rflags &= ~EFL_CF;
-			} 
+			}
 		}
 		DEBUG_KPRINT_SYSCALL_UNIX(
 			"unix_syscall_return: error=%d retval=(%llu,%llu)\n",
 			error, regs->rax, regs->rdx);
 	} else {
-		x86_saved_state32_t	*regs;
+		x86_saved_state32_t     *regs;
 
 		regs = saved_state32(find_user_regs(thread));
 
@@ -551,22 +560,22 @@ unix_syscall_return(int error)
 		callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
 
 #if CONFIG_DTRACE
-		if (callp->sy_call == dtrace_systrace_syscall)
+		if (callp->sy_call == dtrace_systrace_syscall) {
 			dtrace_systrace_syscall_return( code, error, uthread->uu_rval );
+		}
 #endif /* CONFIG_DTRACE */
 		AUDIT_SYSCALL_EXIT(code, p, uthread, error);
 
 		if (error == ERESTART) {
-			pal_syscall_restart( thread, find_user_regs(thread) );
-		}
-		else if (error != EJUSTRETURN) {
+			pal_syscall_restart( thread, find_user_regs(thread));
+		} else if (error != EJUSTRETURN) {
 			if (error) {
 				regs->eax = error;
-				regs->efl |= EFL_CF;	/* carry bit */
+				regs->efl |= EFL_CF;    /* carry bit */
 			} else { /* (not error) */
 				regs->eax = uthread->uu_rval[0];
 				regs->edx = uthread->uu_rval[1];
-			} 
+			}
 		}
 		DEBUG_KPRINT_SYSCALL_UNIX(
 			"unix_syscall_return: error=%d retval=(%u,%u)\n",
@@ -583,7 +592,7 @@ unix_syscall_return(int error)
 #endif /* DEBUG || DEVELOPMENT */
 
 	if (uthread->uu_lowpri_window) {
-	        /*
+		/*
 		 * task is marked as a low priority I/O type
 		 * and the I/O we issued while in this system call
 		 * collided with normal I/O operations... we'll
@@ -592,10 +601,11 @@ unix_syscall_return(int error)
 		 */
 		throttle_lowpri_io(1);
 	}
-	if (!code_is_kdebug_trace(code))
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-			error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
+	if (!code_is_kdebug_trace(code)) {
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+		    error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
+	}
 
 	thread_exception_return();
 	/* NOTREACHED */

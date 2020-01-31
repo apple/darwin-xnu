@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -92,8 +92,8 @@ int
 reboot(struct proc *p, struct reboot_args *uap, __unused int32_t *retval)
 {
 	char message[256];
-	int error=0;
-	size_t dummy=0;
+	int error = 0;
+	size_t dummy = 0;
 #if CONFIG_MACF
 	kauth_cred_t my_cred;
 #endif
@@ -105,31 +105,34 @@ reboot(struct proc *p, struct reboot_args *uap, __unused int32_t *retval)
 	if ((error = suser(kauth_cred_get(), &p->p_acflag))) {
 #if (DEVELOPMENT || DEBUG)
 		/* allow non-root user to call panic on dev/debug kernels */
-		if (!(uap->opt & RB_PANIC))
+		if (!(uap->opt & RB_PANIC)) {
 			return error;
+		}
 #else
 		return error;
 #endif
 	}
 
-	if (uap->opt & RB_COMMAND)
-                return ENOSYS;
+	if (uap->opt & RB_COMMAND) {
+		return ENOSYS;
+	}
 
-        if (uap->opt & RB_PANIC && uap->msg != USER_ADDR_NULL) {
+	if (uap->opt & RB_PANIC && uap->msg != USER_ADDR_NULL) {
 		if (copyinstr(uap->msg, (void *)message, sizeof(message), (size_t *)&dummy)) {
-			strncpy(message, "user space RB_PANIC message copyin failed", sizeof(message)-1);
+			strncpy(message, "user space RB_PANIC message copyin failed", sizeof(message) - 1);
 		}
-        }
+	}
 
 #if CONFIG_MACF
 #if (DEVELOPMENT || DEBUG)
-        if (uap->opt & RB_PANIC) {
+	if (uap->opt & RB_PANIC) {
 		/* on dev/debug kernels: allow anyone to call panic */
 		goto skip_cred_check;
 	}
 #endif
-	if (error)
-		return (error);
+	if (error) {
+		return error;
+	}
 	my_cred = kauth_cred_proc_ref(p);
 	error = mac_system_check_reboot(my_cred, uap->opt);
 	kauth_cred_unref(&my_cred);
@@ -153,8 +156,9 @@ usrctl(struct proc *p, __unused struct usrctl_args *uap, __unused int32_t *retva
 
 	int error = 0;
 	error = pshm_cache_purge_all(p);
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	error = psem_cache_purge_all(p);
 	return error;

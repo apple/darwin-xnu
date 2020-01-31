@@ -317,12 +317,12 @@ function spawn_child() {
 
 	validate_child_info "${TMPDIR}/$file" "$pna_id" "$uid" "$gid" "$groups" $line
 
-	# TODO: validate that the first child spawned into a persona *cannot* spawn
-	# into a different persona...
-	#if [ $uid -eq 0 ]; then
-	#	${PERSONA_SPAWN} -v $spawn_args ${PERSONA_SPAWN} child -v -E -R -v -I 99 /bin/echo "This is running in the system persona"
-	#	expect_failure "Spawned child that re-execs into non-default persona" $line
-	#fi
+	## TODO: validate that the first child spawned into a persona *cannot* spawn
+	## into a different persona...
+	##if [ $uid -eq 0 ]; then
+	##	${PERSONA_SPAWN} -v $spawn_args ${PERSONA_SPAWN} child -v -E -R -v -I 99 /bin/echo "This is running in the system persona"
+	##	expect_failure "Spawned child that re-execs into non-default persona" $line
+	##fi
 	return 0
 }
 

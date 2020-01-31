@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -53,18 +53,20 @@
  */
 void
 ipc_clock_init(
-	clock_t		clock)
+	clock_t         clock)
 {
-	ipc_port_t	port;
+	ipc_port_t      port;
 
 	port = ipc_port_alloc_kernel();
-	if (port == IP_NULL)
+	if (port == IP_NULL) {
 		panic("ipc_clock_init");
+	}
 	clock->cl_service = port;
 
 	port = ipc_port_alloc_kernel();
-	if (port == IP_NULL)
+	if (port == IP_NULL) {
 		panic("ipc_clock_init");
+	}
 	clock->cl_control = port;
 }
 
@@ -75,12 +77,12 @@ ipc_clock_init(
  */
 void
 ipc_clock_enable(
-	clock_t		clock)
+	clock_t         clock)
 {
 	ipc_kobject_set(clock->cl_service,
-			(ipc_kobject_t) clock, IKOT_CLOCK);
+	    (ipc_kobject_t) clock, IKOT_CLOCK);
 	ipc_kobject_set(clock->cl_control,
-			(ipc_kobject_t) clock, IKOT_CLOCK_CTRL);
+	    (ipc_kobject_t) clock, IKOT_CLOCK_CTRL);
 }
 
 /*
@@ -94,20 +96,20 @@ ipc_clock_enable(
  */
 clock_t
 convert_port_to_clock(
-	ipc_port_t	port)
+	ipc_port_t      port)
 {
-	clock_t		clock = CLOCK_NULL;
+	clock_t         clock = CLOCK_NULL;
 
 	if (IP_VALID(port)) {
 		ip_lock(port);
 		if (ip_active(port) &&
 		    ((ip_kotype(port) == IKOT_CLOCK) ||
-		     (ip_kotype(port) == IKOT_CLOCK_CTRL))) {
+		    (ip_kotype(port) == IKOT_CLOCK_CTRL))) {
 			clock = (clock_t) port->ip_kobject;
 		}
 		ip_unlock(port);
 	}
-	return (clock);
+	return clock;
 }
 
 /*
@@ -121,9 +123,9 @@ convert_port_to_clock(
  */
 clock_t
 convert_port_to_clock_ctrl(
-	ipc_port_t	port)
+	ipc_port_t      port)
 {
-	clock_t		clock = CLOCK_NULL;
+	clock_t         clock = CLOCK_NULL;
 
 	if (IP_VALID(port)) {
 		ip_lock(port);
@@ -133,7 +135,7 @@ convert_port_to_clock_ctrl(
 		}
 		ip_unlock(port);
 	}
-	return (clock);
+	return clock;
 }
 
 /*
@@ -146,12 +148,12 @@ convert_port_to_clock_ctrl(
  */
 ipc_port_t
 convert_clock_to_port(
-	clock_t		clock)
+	clock_t         clock)
 {
-	ipc_port_t	port;
+	ipc_port_t      port;
 
 	port = ipc_port_make_send(clock->cl_service);
-	return (port);
+	return port;
 }
 
 /*
@@ -164,12 +166,12 @@ convert_clock_to_port(
  */
 ipc_port_t
 convert_clock_ctrl_to_port(
-	clock_t		clock)
+	clock_t         clock)
 {
-	ipc_port_t	port;
+	ipc_port_t      port;
 
 	port = ipc_port_make_send(clock->cl_control);
-	return (port);
+	return port;
 }
 
 /*
@@ -181,17 +183,20 @@ clock_t
 port_name_to_clock(
 	mach_port_name_t clock_name)
 {
-	clock_t		clock = CLOCK_NULL;
-	ipc_space_t	space;
-	ipc_port_t	port;
+	clock_t         clock = CLOCK_NULL;
+	ipc_space_t     space;
+	ipc_port_t      port;
 
-	if (clock_name == 0)
-		return (clock);
+	if (clock_name == 0) {
+		return clock;
+	}
 	space = current_space();
-	if (ipc_port_translate_send(space, clock_name, &port) != KERN_SUCCESS)
-		return (clock);
-	if (ip_active(port) && (ip_kotype(port) == IKOT_CLOCK))
+	if (ipc_port_translate_send(space, clock_name, &port) != KERN_SUCCESS) {
+		return clock;
+	}
+	if (ip_active(port) && (ip_kotype(port) == IKOT_CLOCK)) {
 		clock = (clock_t) port->ip_kobject;
+	}
 	ip_unlock(port);
-	return (clock);
+	return clock;
 }

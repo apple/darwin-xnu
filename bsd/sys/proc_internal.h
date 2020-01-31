@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
@@ -73,7 +73,7 @@
  */
 
 #ifndef _SYS_PROC_INTERNAL_H_
-#define	_SYS_PROC_INTERNAL_H_
+#define _SYS_PROC_INTERNAL_H_
 
 #include <libkern/OSAtomic.h>
 #include <sys/proc.h>
@@ -88,10 +88,10 @@ __BEGIN_DECLS
 __END_DECLS
 
 #if DEBUG
-#define	__PROC_INTERNAL_DEBUG 1
+#define __PROC_INTERNAL_DEBUG 1
 #endif
 
-/* 
+/*
  * The short form for various locks that protect fields in the data structures.
  * PL = Process Lock
  * PGL = Process Group Lock
@@ -100,25 +100,25 @@ __END_DECLS
  * PSL = Process Spin Lock
  * LL = List Lock
  * SL = Session Lock
-*/
+ */
 struct label;
 
 /*
  * One structure allocated per session.
  */
-struct	session {
-	int			s_count;		/* Ref cnt; pgrps in session. (LL) */
-	struct	proc *		s_leader;		/* Session leader.(static) */
-	struct	vnode *		s_ttyvp;		/* Vnode of controlling terminal.(SL) */
-	int			s_ttyvid;		/* Vnode id of the controlling terminal (SL) */
-	struct	tty *		s_ttyp;			/* Controlling terminal. (SL + ttyvp != NULL) */
-	pid_t			s_ttypgrpid;		/* tty's pgrp id */
-	pid_t			s_sid;			/* Session ID (static) */
-	char			s_login[MAXLOGNAME];	/* Setlogin() name.(SL) */
-	int			s_flags;		/* Session flags (s_mlock)  */
-	LIST_ENTRY(session)	s_hash;			/* Hash chain.(LL) */
-	lck_mtx_t		s_mlock;		/* mutex lock to protect session */
-	int			s_listflags;
+struct  session {
+	int                     s_count;                /* Ref cnt; pgrps in session. (LL) */
+	struct  proc *          s_leader;               /* Session leader.(static) */
+	struct  vnode *         s_ttyvp;                /* Vnode of controlling terminal.(SL) */
+	int                     s_ttyvid;               /* Vnode id of the controlling terminal (SL) */
+	struct  tty *           s_ttyp;                 /* Controlling terminal. (SL + ttyvp != NULL) */
+	pid_t                   s_ttypgrpid;            /* tty's pgrp id */
+	pid_t                   s_sid;                  /* Session ID (static) */
+	char                    s_login[MAXLOGNAME];    /* Setlogin() name.(SL) */
+	int                     s_flags;                /* Session flags (s_mlock)  */
+	LIST_ENTRY(session)     s_hash;                 /* Hash chain.(LL) */
+	lck_mtx_t               s_mlock;                /* mutex lock to protect session */
+	int                     s_listflags;
 };
 
 #define SESSION_NULL (struct session *)0
@@ -133,39 +133,39 @@ struct	session {
  * NB:	<sys/tty.h> is not in scope and there is not typedef type enforcement,
  *	or '0' below would be 'TTY_NULL'.
  */
-#define SESSION_TP(sp)	(((sp)->s_ttyvp != 0) ? (sp)->s_ttyp : 0)
+#define SESSION_TP(sp)  (((sp)->s_ttyvp != 0) ? (sp)->s_ttyp : 0)
 
 /*
  * Session flags; used to tunnel information to lower layers and line
  * disciplines, etc.
  */
-#define	S_DEFAULT	0x00000000	/* No flags set */
-#define	S_NOCTTY	0x00000001	/* Do not associate controlling tty */
-#define S_CTTYREF	0x00000010	/* vnode ref taken by cttyopen */
+#define S_DEFAULT       0x00000000      /* No flags set */
+#define S_NOCTTY        0x00000001      /* Do not associate controlling tty */
+#define S_CTTYREF       0x00000010      /* vnode ref taken by cttyopen */
 
 
-#define S_LIST_TERM	1		/* marked for termination */
-#define	S_LIST_DEAD	2		/* already dead */
+#define S_LIST_TERM     1               /* marked for termination */
+#define S_LIST_DEAD     2               /* already dead */
 /*
  * One structure allocated per process group.
  */
-struct	pgrp {
-	LIST_ENTRY(pgrp)	pg_hash;	/* Hash chain. (LL) */
-	LIST_HEAD(, proc) 	pg_members;	/* Pointer to pgrp members. (PGL) */
-	struct	session *	pg_session;	/* Pointer to session. (LL ) */
-	pid_t			pg_id;		/* Pgrp id. (static) */
-	int			pg_jobc;	/* # procs qualifying pgrp for job control (PGL) */
-	int			pg_membercnt;	/* Number of processes in the pgrocess group (PGL) */
-	int			pg_refcount;	/* number of current iterators (LL) */
-	unsigned int		pg_listflags;	/* (LL) */
-	lck_mtx_t		pg_mlock;	/* mutex lock to protect pgrp */
+struct  pgrp {
+	LIST_ENTRY(pgrp)        pg_hash;        /* Hash chain. (LL) */
+	LIST_HEAD(, proc)       pg_members;     /* Pointer to pgrp members. (PGL) */
+	struct  session *       pg_session;     /* Pointer to session. (LL ) */
+	pid_t                   pg_id;          /* Pgrp id. (static) */
+	int                     pg_jobc;        /* # procs qualifying pgrp for job control (PGL) */
+	int                     pg_membercnt;   /* Number of processes in the pgrocess group (PGL) */
+	int                     pg_refcount;    /* number of current iterators (LL) */
+	unsigned int            pg_listflags;   /* (LL) */
+	lck_mtx_t               pg_mlock;       /* mutex lock to protect pgrp */
 };
 
-#define PGRP_FLAG_TERMINATE 	1
+#define PGRP_FLAG_TERMINATE     1
 #define PGRP_FLAG_WAITTERMINATE 2
-#define PGRP_FLAG_DEAD 		4
-#define PGRP_FLAG_ITERABEGIN 	8
-#define PGRP_FLAG_ITERWAIT 	0x10
+#define PGRP_FLAG_DEAD          4
+#define PGRP_FLAG_ITERABEGIN    8
+#define PGRP_FLAG_ITERWAIT      0x10
 
 #define PGRP_NULL (struct pgrp *)0
 struct proc;
@@ -191,176 +191,176 @@ struct proc;
  * which might be addressible only on a processor on which the process
  * is running.
  */
-struct	proc {
-	LIST_ENTRY(proc) p_list;		/* List of all processes. */
+struct  proc {
+	LIST_ENTRY(proc) p_list;                /* List of all processes. */
 
-	void * 		task;			/* corresponding task (static)*/
-	struct	proc *	p_pptr;		 	/* Pointer to parent process.(LL) */
-	pid_t		p_ppid;			/* process's parent pid number */
-	pid_t		p_pgrpid;		/* process group id of the process (LL)*/
-	uid_t		p_uid;
-	gid_t		p_gid;
-	uid_t		p_ruid;
-	gid_t		p_rgid;
-	uid_t		p_svuid;
-	gid_t		p_svgid;
-	uint64_t	p_uniqueid;		/* process unique ID - incremented on fork/spawn/vfork, remains same across exec. */
-	uint64_t	p_puniqueid;		/* parent's unique ID - set on fork/spawn/vfork, doesn't change if reparented. */
+	void *          task;                   /* corresponding task (static)*/
+	struct  proc *  p_pptr;                 /* Pointer to parent process.(LL) */
+	pid_t           p_ppid;                 /* process's parent pid number */
+	pid_t           p_pgrpid;               /* process group id of the process (LL)*/
+	uid_t           p_uid;
+	gid_t           p_gid;
+	uid_t           p_ruid;
+	gid_t           p_rgid;
+	uid_t           p_svuid;
+	gid_t           p_svgid;
+	uint64_t        p_uniqueid;             /* process unique ID - incremented on fork/spawn/vfork, remains same across exec. */
+	uint64_t        p_puniqueid;            /* parent's unique ID - set on fork/spawn/vfork, doesn't change if reparented. */
 
-	lck_mtx_t 	p_mlock;		/* mutex lock for proc */
-	pid_t		p_pid;			/* Process identifier. (static)*/
-	char		p_stat;			/* S* process status. (PL)*/
-	char		p_shutdownstate;
-	char		p_kdebug;		/* P_KDEBUG eq (CC)*/ 
-	char		p_btrace;		/* P_BTRACE eq (CC)*/
+	lck_mtx_t       p_mlock;                /* mutex lock for proc */
+	pid_t           p_pid;                  /* Process identifier. (static)*/
+	char            p_stat;                 /* S* process status. (PL)*/
+	char            p_shutdownstate;
+	char            p_kdebug;               /* P_KDEBUG eq (CC)*/
+	char            p_btrace;               /* P_BTRACE eq (CC)*/
 
-	LIST_ENTRY(proc) p_pglist;		/* List of processes in pgrp.(PGL) */
-	LIST_ENTRY(proc) p_sibling;		/* List of sibling processes. (LL)*/
-	LIST_HEAD(, proc) p_children;		/* Pointer to list of children. (LL)*/
-	TAILQ_HEAD( , uthread) p_uthlist; 	/* List of uthreads  (PL) */
+	LIST_ENTRY(proc) p_pglist;              /* List of processes in pgrp.(PGL) */
+	LIST_ENTRY(proc) p_sibling;             /* List of sibling processes. (LL)*/
+	LIST_HEAD(, proc) p_children;           /* Pointer to list of children. (LL)*/
+	TAILQ_HEAD(, uthread) p_uthlist;        /* List of uthreads  (PL) */
 
-	LIST_ENTRY(proc) p_hash;		/* Hash chain. (LL)*/
-	TAILQ_HEAD( ,eventqelt) p_evlist;	/* (PL) */
+	LIST_ENTRY(proc) p_hash;                /* Hash chain. (LL)*/
+	TAILQ_HEAD(, eventqelt) p_evlist;       /* (PL) */
 
 #if CONFIG_PERSONAS
 	struct persona  *p_persona;
 	LIST_ENTRY(proc) p_persona_list;
 #endif
 
-	lck_mtx_t	p_fdmlock;		/* proc lock to protect fdesc */
-	lck_mtx_t 	p_ucred_mlock;		/* mutex lock to protect p_ucred */
+	lck_mtx_t       p_fdmlock;              /* proc lock to protect fdesc */
+	lck_mtx_t       p_ucred_mlock;          /* mutex lock to protect p_ucred */
 
 	/* substructures: */
-	kauth_cred_t	p_ucred;		/* Process owner's identity. (PUCL) */
-	struct	filedesc *p_fd;			/* Ptr to open files structure. (PFDL) */
-	struct	pstats *p_stats;		/* Accounting/statistics (PL). */
-	struct	plimit *p_limit;		/* Process limits.(PL) */
+	kauth_cred_t    p_ucred;                /* Process owner's identity. (PUCL) */
+	struct  filedesc *p_fd;                 /* Ptr to open files structure. (PFDL) */
+	struct  pstats *p_stats;                /* Accounting/statistics (PL). */
+	struct  plimit *p_limit;                /* Process limits.(PL) */
 
-	struct	sigacts *p_sigacts;		/* Signal actions, state (PL) */
-	lck_spin_t	p_slock;		/* spin lock for itimer/profil protection */
+	struct  sigacts *p_sigacts;             /* Signal actions, state (PL) */
+	lck_spin_t      p_slock;                /* spin lock for itimer/profil protection */
 
-#define	p_rlimit	p_limit->pl_rlimit
+#define p_rlimit        p_limit->pl_rlimit
 
-	struct	plimit *p_olimit;		/* old process limits  - not inherited by child  (PL) */
-	int		p_siglist;		/* signals captured back from threads */
-	unsigned int	p_flag;			/* P_* flags. (atomic bit ops) */
-	unsigned int	p_lflag;		/* local flags  (PL) */
-	unsigned int	p_listflag;		/* list flags (LL) */
-	unsigned int	p_ladvflag;		/* local adv flags (atomic) */
-	int		p_refcount;		/* number of outstanding users(LL) */
-	int		p_childrencnt;		/* children holding ref on parent (LL) */
-	int		p_parentref;		/* children lookup ref on parent (LL) */
-	pid_t		p_oppid;	 	/* Save parent pid during ptrace. XXX */
-	u_int		p_xstat;		/* Exit status for wait; also stop signal. */
+	struct  plimit *p_olimit;               /* old process limits  - not inherited by child  (PL) */
+	int             p_siglist;              /* signals captured back from threads */
+	unsigned int    p_flag;                 /* P_* flags. (atomic bit ops) */
+	unsigned int    p_lflag;                /* local flags  (PL) */
+	unsigned int    p_listflag;             /* list flags (LL) */
+	unsigned int    p_ladvflag;             /* local adv flags (atomic) */
+	int             p_refcount;             /* number of outstanding users(LL) */
+	int             p_childrencnt;          /* children holding ref on parent (LL) */
+	int             p_parentref;            /* children lookup ref on parent (LL) */
+	pid_t           p_oppid;                /* Save parent pid during ptrace. XXX */
+	u_int           p_xstat;                /* Exit status for wait; also stop signal. */
 
 #ifdef _PROC_HAS_SCHEDINFO_
 	/* may need cleanup, not used */
-	u_int		p_estcpu;	 	/* Time averaged value of p_cpticks.(used by aio and proc_comapre) */
-	fixpt_t		p_pctcpu;	 	/* %cpu for this process during p_swtime (used by aio)*/
-	u_int		p_slptime;		/* used by proc_compare */
+	u_int           p_estcpu;               /* Time averaged value of p_cpticks.(used by aio and proc_comapre) */
+	fixpt_t         p_pctcpu;               /* %cpu for this process during p_swtime (used by aio)*/
+	u_int           p_slptime;              /* used by proc_compare */
 #endif /* _PROC_HAS_SCHEDINFO_ */
 
-	struct	itimerval p_realtimer;		/* Alarm timer. (PSL) */
-	struct	timeval p_rtime;		/* Real time.(PSL)  */
-	struct	itimerval p_vtimer_user;	/* Virtual timers.(PSL)  */
-	struct	itimerval p_vtimer_prof;	/* (PSL) */
+	struct  itimerval p_realtimer;          /* Alarm timer. (PSL) */
+	struct  timeval p_rtime;                /* Real time.(PSL)  */
+	struct  itimerval p_vtimer_user;        /* Virtual timers.(PSL)  */
+	struct  itimerval p_vtimer_prof;        /* (PSL) */
 
-	struct	timeval	p_rlim_cpu;		/* Remaining rlim cpu value.(PSL) */
-	int		p_debugger;		/*  NU 1: can exec set-bit programs if suser */
-	boolean_t	sigwait;	/* indication to suspend (PL) */
-	void	*sigwait_thread;	/* 'thread' holding sigwait(PL)  */
-	void	*exit_thread;		/* Which thread is exiting(PL)  */
-	void *  p_vforkact;     	/* activation running this vfork proc)(static)  */
-	int	p_vforkcnt;		/* number of outstanding vforks(PL)  */
-	int	p_fpdrainwait;		/* (PFDL) */
+	struct  timeval p_rlim_cpu;             /* Remaining rlim cpu value.(PSL) */
+	int             p_debugger;             /*  NU 1: can exec set-bit programs if suser */
+	boolean_t       sigwait;        /* indication to suspend (PL) */
+	void    *sigwait_thread;        /* 'thread' holding sigwait(PL)  */
+	void    *exit_thread;           /* Which thread is exiting(PL)  */
+	void *  p_vforkact;             /* activation running this vfork proc)(static)  */
+	int     p_vforkcnt;             /* number of outstanding vforks(PL)  */
+	int     p_fpdrainwait;          /* (PFDL) */
 	/* Following fields are info from SIGCHLD (PL) */
-	pid_t	si_pid;			/* (PL) */
-	u_int   si_status;		/* (PL) */
-	u_int	si_code;		/* (PL) */
-	uid_t	si_uid;			/* (PL) */
+	pid_t   si_pid;                 /* (PL) */
+	u_int   si_status;              /* (PL) */
+	u_int   si_code;                /* (PL) */
+	uid_t   si_uid;                 /* (PL) */
 
-	void * vm_shm;			/* (SYSV SHM Lock) for sysV shared memory */
+	void * vm_shm;                  /* (SYSV SHM Lock) for sysV shared memory */
 
 #if CONFIG_DTRACE
-	user_addr_t			p_dtrace_argv;			/* (write once, read only after that) */
-	user_addr_t			p_dtrace_envp;			/* (write once, read only after that) */
-	lck_mtx_t			p_dtrace_sprlock;		/* sun proc lock emulation */
+	user_addr_t                     p_dtrace_argv;                  /* (write once, read only after that) */
+	user_addr_t                     p_dtrace_envp;                  /* (write once, read only after that) */
+	lck_mtx_t                       p_dtrace_sprlock;               /* sun proc lock emulation */
 	uint8_t                         p_dtrace_stop;                  /* indicates a DTrace-desired stop */
-	int				p_dtrace_probes;		/* (PL) are there probes for this proc? */
-	u_int				p_dtrace_count;			/* (sprlock) number of DTrace tracepoints */
-	struct dtrace_ptss_page*	p_dtrace_ptss_pages;		/* (sprlock) list of user ptss pages */
-	struct dtrace_ptss_page_entry*	p_dtrace_ptss_free_list;	/* (atomic) list of individual ptss entries */
-	struct dtrace_helpers*		p_dtrace_helpers;		/* (dtrace_lock) DTrace per-proc private */
-	struct dof_ioctl_data*		p_dtrace_lazy_dofs;		/* (sprlock) unloaded dof_helper_t's */
+	int                             p_dtrace_probes;                /* (PL) are there probes for this proc? */
+	u_int                           p_dtrace_count;                 /* (sprlock) number of DTrace tracepoints */
+	struct dtrace_ptss_page*        p_dtrace_ptss_pages;            /* (sprlock) list of user ptss pages */
+	struct dtrace_ptss_page_entry*  p_dtrace_ptss_free_list;        /* (atomic) list of individual ptss entries */
+	struct dtrace_helpers*          p_dtrace_helpers;               /* (dtrace_lock) DTrace per-proc private */
+	struct dof_ioctl_data*          p_dtrace_lazy_dofs;             /* (sprlock) unloaded dof_helper_t's */
 #endif /* CONFIG_DTRACE */
 
 /* XXXXXXXXXXXXX BCOPY'ed on fork XXXXXXXXXXXXXXXX */
 /* The following fields are all copied upon creation in fork. */
-#define	p_startcopy	p_argslen
+#define p_startcopy     p_argslen
 
-	u_int	p_argslen;	 /* Length of process arguments. */
-	int  	p_argc;			/* saved argc for sysctl_procargs() */
-	user_addr_t user_stack;		/* where user stack was allocated */
-	struct	vnode *p_textvp;	/* Vnode of executable. */
-	off_t	p_textoff;		/* offset in executable vnode */
+	u_int   p_argslen;       /* Length of process arguments. */
+	int     p_argc;                 /* saved argc for sysctl_procargs() */
+	user_addr_t user_stack;         /* where user stack was allocated */
+	struct  vnode *p_textvp;        /* Vnode of executable. */
+	off_t   p_textoff;              /* offset in executable vnode */
 
-	sigset_t p_sigmask;		/* DEPRECATED */
-	sigset_t p_sigignore;	/* Signals being ignored. (PL) */
-	sigset_t p_sigcatch;	/* Signals being caught by user.(PL)  */
+	sigset_t p_sigmask;             /* DEPRECATED */
+	sigset_t p_sigignore;   /* Signals being ignored. (PL) */
+	sigset_t p_sigcatch;    /* Signals being caught by user.(PL)  */
 
-	u_char	p_priority;	/* (NU) Process priority. */
-	u_char	p_resv0;	/* (NU) User-priority based on p_cpu and p_nice. */
-	char	p_nice;		/* Process "nice" value.(PL) */
-	u_char	p_resv1;	/* (NU) User-priority based on p_cpu and p_nice. */
+	u_char  p_priority;     /* (NU) Process priority. */
+	u_char  p_resv0;        /* (NU) User-priority based on p_cpu and p_nice. */
+	char    p_nice;         /* Process "nice" value.(PL) */
+	u_char  p_resv1;        /* (NU) User-priority based on p_cpu and p_nice. */
 
 	// types currently in sys/param.h
 	command_t   p_comm;
-	proc_name_t p_name;	/* can be changed by the process */
-	uint8_t p_xhighbits;	/* Stores the top byte of exit status to avoid truncation*/
-	pid_t	p_contproc;	/* last PID to send us a SIGCONT (PL) */
+	proc_name_t p_name;     /* can be changed by the process */
+	uint8_t p_xhighbits;    /* Stores the top byte of exit status to avoid truncation*/
+	pid_t   p_contproc;     /* last PID to send us a SIGCONT (PL) */
 
-	struct 	pgrp *p_pgrp;		/* Pointer to process group. (LL) */
-	uint32_t	p_csflags;	/* flags for codesign (PL) */
-	uint32_t	p_pcaction;	/* action  for process control on starvation */
-	uint8_t p_uuid[16];		/* from LC_UUID load command */
+	struct  pgrp *p_pgrp;           /* Pointer to process group. (LL) */
+	uint32_t        p_csflags;      /* flags for codesign (PL) */
+	uint32_t        p_pcaction;     /* action  for process control on starvation */
+	uint8_t p_uuid[16];             /* from LC_UUID load command */
 
-	/* 
+	/*
 	 * CPU type and subtype of binary slice executed in
 	 * this process.  Protected by proc lock.
 	 */
-	cpu_type_t	p_cputype;
-	cpu_subtype_t	p_cpusubtype;
+	cpu_type_t      p_cputype;
+	cpu_subtype_t   p_cpusubtype;
 
 /* End area that is copied on creation. */
 /* XXXXXXXXXXXXX End of BCOPY'ed on fork (AIOLOCK)XXXXXXXXXXXXXXXX */
-#define	p_endcopy	p_aio_total_count
-	int		p_aio_total_count;		/* all allocated AIO requests for this proc */
-	int		p_aio_active_count;		/* all unfinished AIO requests for this proc */
-	TAILQ_HEAD( , aio_workq_entry ) p_aio_activeq; 	/* active async IO requests */
-	TAILQ_HEAD( , aio_workq_entry ) p_aio_doneq;	/* completed async IO requests */
+#define p_endcopy       p_aio_total_count
+	int             p_aio_total_count;              /* all allocated AIO requests for this proc */
+	int             p_aio_active_count;             /* all unfinished AIO requests for this proc */
+	TAILQ_HEAD(, aio_workq_entry ) p_aio_activeq;   /* active async IO requests */
+	TAILQ_HEAD(, aio_workq_entry ) p_aio_doneq;     /* completed async IO requests */
 
 	struct klist p_klist;  /* knote list (PL ?)*/
 
-	struct	rusage_superset *p_ru;	/* Exit information. (PL) */
-	thread_t 	p_signalholder;
-	thread_t 	p_transholder;
-	int		p_sigwaitcnt;
+	struct  rusage_superset *p_ru;  /* Exit information. (PL) */
+	thread_t        p_signalholder;
+	thread_t        p_transholder;
+	int             p_sigwaitcnt;
 	/* DEPRECATE following field  */
-	u_short	p_acflag;	/* Accounting flags. */
-	volatile u_short p_vfs_iopolicy;	/* VFS iopolicy flags. (atomic bit ops) */
+	u_short p_acflag;       /* Accounting flags. */
+	volatile u_short p_vfs_iopolicy;        /* VFS iopolicy flags. (atomic bit ops) */
 
-	user_addr_t 	p_threadstart;		/* pthread start fn */
-	user_addr_t 	p_wqthread;		/* pthread workqueue fn */
-	int 	p_pthsize;			/* pthread size */
-	uint32_t	p_pth_tsd_offset;	/* offset from pthread_t to TSD for new threads */
-	user_addr_t	p_stack_addr_hint;	/* stack allocation hint for wq threads */
-	struct workqueue *_Atomic p_wqptr;			/* workq ptr */
+	user_addr_t     p_threadstart;          /* pthread start fn */
+	user_addr_t     p_wqthread;             /* pthread workqueue fn */
+	int     p_pthsize;                      /* pthread size */
+	uint32_t        p_pth_tsd_offset;       /* offset from pthread_t to TSD for new threads */
+	user_addr_t     p_stack_addr_hint;      /* stack allocation hint for wq threads */
+	struct workqueue *_Atomic p_wqptr;                      /* workq ptr */
 
-	struct  timeval p_start;        	/* starting time */
-	void *	p_rcall;
-	int		p_ractive;
-	int	p_idversion;		/* version of process identity */
-	void *	p_pthhash;			/* pthread waitqueue hash */
+	struct  timeval p_start;                /* starting time */
+	void *  p_rcall;
+	int             p_ractive;
+	int     p_idversion;            /* version of process identity */
+	void *  p_pthhash;                      /* pthread waitqueue hash */
 	volatile uint64_t was_throttled __attribute__((aligned(8))); /* Counter for number of throttled I/Os */
 	volatile uint64_t did_throttle __attribute__((aligned(8)));  /* Counter for number of I/Os this proc throttled */
 
@@ -372,12 +372,12 @@ struct	proc {
 	unsigned int unlockpc[8];
 #endif /* SIGNAL_DEBUG */
 #endif /* DIAGNOSTIC */
-	uint64_t	p_dispatchqueue_offset;
-	uint64_t	p_dispatchqueue_serialno_offset;
-	uint64_t	p_return_to_kernel_offset;
-	uint64_t	p_mach_thread_self_offset;
+	uint64_t        p_dispatchqueue_offset;
+	uint64_t        p_dispatchqueue_serialno_offset;
+	uint64_t        p_return_to_kernel_offset;
+	uint64_t        p_mach_thread_self_offset;
 #if VM_PRESSURE_EVENTS
-	struct timeval	vm_pressure_last_notify_tstamp;
+	struct timeval  vm_pressure_last_notify_tstamp;
 #endif
 
 #if CONFIG_MEMORYSTATUS
@@ -390,94 +390,95 @@ struct	proc {
 	uint64_t          p_memstat_userdata;           /* user state */
 	uint64_t          p_memstat_idledeadline;       /* time at which process became clean */
 	uint64_t          p_memstat_idle_start;         /* abstime process transitions into the idle band */
-	uint64_t	  p_memstat_idle_delta;         /* abstime delta spent in idle band */
+	uint64_t          p_memstat_idle_delta;         /* abstime delta spent in idle band */
 	int32_t           p_memstat_memlimit;           /* cached memory limit, toggles between active and inactive limits */
-	int32_t           p_memstat_memlimit_active;	/* memory limit enforced when process is in active jetsam state */
-	int32_t           p_memstat_memlimit_inactive;	/* memory limit enforced when process is in inactive jetsam state */
+	int32_t           p_memstat_memlimit_active;    /* memory limit enforced when process is in active jetsam state */
+	int32_t           p_memstat_memlimit_inactive;  /* memory limit enforced when process is in inactive jetsam state */
 #if CONFIG_FREEZE
 	uint32_t          p_memstat_freeze_sharedanon_pages; /* shared pages left behind after freeze */
-	uint32_t	  p_memstat_frozen_count;
-	uint32_t	  p_memstat_thaw_count;
+	uint32_t          p_memstat_frozen_count;
+	uint32_t          p_memstat_thaw_count;
 #endif /* CONFIG_FREEZE */
 #endif /* CONFIG_MEMORYSTATUS */
 
 	/* cached proc-specific data required for corpse inspection */
-	pid_t             p_responsible_pid;	/* pid resonsible for this process */
+	pid_t             p_responsible_pid;    /* pid resonsible for this process */
 	_Atomic uint32_t  p_user_faults; /* count the number of user faults generated */
 
 	struct os_reason     *p_exit_reason;
 
 #if !CONFIG_EMBEDDED
-	uint64_t	p_user_data;			/* general-purpose storage for userland-provided data */
+	uint64_t        p_user_data;                    /* general-purpose storage for userland-provided data */
 #endif /* !CONFIG_EMBEDDED */
 };
 
 #define PGRPID_DEAD 0xdeaddead
 
-/* p_listflag */ 
-#define P_LIST_DRAIN   			0x00000001
-#define P_LIST_DRAINWAIT 		0x00000002
-#define P_LIST_DRAINED   		0x00000004
-#define P_LIST_DEAD				0x00000008
-#define P_LIST_WAITING   		0x00000010
-#define P_LIST_EXITED    		0x00000040 
-#define P_LIST_CHILDDRSTART    	0x00000080 
-#define P_LIST_CHILDDRAINED    	0x00000100 
-#define P_LIST_CHILDDRWAIT    	0x00000200 
-#define P_LIST_CHILDLKWAIT    	0x00000400 
-#define P_LIST_DEADPARENT    	0x00000800 
-#define P_LIST_PARENTREFWAIT   	0x00001000 
-#define P_LIST_INCREATE   		0x00002000 
+/* p_listflag */
+#define P_LIST_DRAIN                    0x00000001
+#define P_LIST_DRAINWAIT                0x00000002
+#define P_LIST_DRAINED                  0x00000004
+#define P_LIST_DEAD                             0x00000008
+#define P_LIST_WAITING                  0x00000010
+#define P_LIST_EXITED                   0x00000040
+#define P_LIST_CHILDDRSTART     0x00000080
+#define P_LIST_CHILDDRAINED     0x00000100
+#define P_LIST_CHILDDRWAIT      0x00000200
+#define P_LIST_CHILDLKWAIT      0x00000400
+#define P_LIST_DEADPARENT       0x00000800
+#define P_LIST_PARENTREFWAIT    0x00001000
+#define P_LIST_INCREATE                 0x00002000
 /* 0x4000 &  0x8000 Not used */
-#define P_LIST_INHASH	 		0x00010000	/* process is in hash */
-#define P_LIST_INPGRP	 		0x00020000	/* process is in pgrp */
-#define P_LIST_PGRPTRANS 		0x00040000	/* pgrp is getting replaced */
-#define P_LIST_PGRPTRWAIT 		0x00080000	/* wait for pgrp replacement */
-#define P_LIST_EXITCOUNT 		0x00100000	/* counted for process exit */
-#define P_LIST_REFWAIT   		0x00200000	/* wait to take a ref */
- 
+#define P_LIST_INHASH                   0x00010000      /* process is in hash */
+#define P_LIST_INPGRP                   0x00020000      /* process is in pgrp */
+#define P_LIST_PGRPTRANS                0x00040000      /* pgrp is getting replaced */
+#define P_LIST_PGRPTRWAIT               0x00080000      /* wait for pgrp replacement */
+#define P_LIST_EXITCOUNT                0x00100000      /* counted for process exit */
+#define P_LIST_REFWAIT                  0x00200000      /* wait to take a ref */
+
 
 /* local flags */
-#define	P_LDELAYTERM	0x00000001	/* */
-#define	P_LNOZOMB	0x00000002 	/* */
-#define P_LTERM		0x00000004      /* */ 
-#define P_LEXIT		0x00000008      /* */
-#define P_LPEXIT	0x00000010
-#define	P_LTRANSCOMMIT	0x00000020	/* process is committed to trans */
-#define	P_LINTRANSIT	0x00000040	/* process in exec or in creation */
-#define	P_LTRANSWAIT	0x00000080	/* waiting for trans to complete */
+#define P_LDELAYTERM    0x00000001      /* */
+#define P_LNOZOMB       0x00000002      /* */
+#define P_LTERM         0x00000004      /* */
+#define P_LEXIT         0x00000008      /* */
+#define P_LPEXIT        0x00000010
+#define P_LTRANSCOMMIT  0x00000020      /* process is committed to trans */
+#define P_LINTRANSIT    0x00000040      /* process in exec or in creation */
+#define P_LTRANSWAIT    0x00000080      /* waiting for trans to complete */
 #define P_LVFORK        0x00000100      /* parent proc of a vfork */
 #define P_LINVFORK      0x00000200      /* child proc of a vfork */
 #define P_LTRACED       0x00000400      /* */
 #define P_LSIGEXC       0x00000800      /* */
 #define P_LNOATTACH     0x00001000      /* */
 #define P_LPPWAIT       0x00002000      /* */
-#define	P_LKQWDRAIN	0x00004000
-#define	P_LKQWDRAINWAIT	0x00008000
-#define	P_LKQWDEAD	0x00010000
-#define	P_LLIMCHANGE	0x00020000
-#define	P_LLIMWAIT	0x00040000
-#define P_LWAITED   	0x00080000 
-#define P_LINSIGNAL    	0x00100000 
-#define P_LRAGE_VNODES	0x00400000
-#define P_LREGISTER	0x00800000	/* thread start fns registered  */
-#define P_LVMRSRCOWNER	0x01000000	/* can handle the resource ownership of  */
-#define P_LTERM_DECRYPTFAIL	0x04000000	/* process terminating due to key failure to decrypt */
-#define	P_LTERM_JETSAM		0x08000000	/* process is being jetsam'd */
-#define P_JETSAM_VMPAGESHORTAGE	0x00000000	/* jetsam: lowest jetsam priority proc, killed due to vm page shortage */
-#define P_JETSAM_VMTHRASHING	0x10000000	/* jetsam: lowest jetsam priority proc, killed due to vm thrashing */
-#define P_JETSAM_HIWAT		0x20000000	/* jetsam: high water mark */
-#define P_JETSAM_PID		0x30000000	/* jetsam: pid */
-#define P_JETSAM_IDLEEXIT	0x40000000	/* jetsam: idle exit */
-#define P_JETSAM_VNODE		0x50000000	/* jetsam: vnode kill */
-#define P_JETSAM_FCTHRASHING	0x60000000	/* jetsam: lowest jetsam priority proc, killed due to filecache thrashing */
-#define P_JETSAM_MASK		0x70000000	/* jetsam type mask */
+#define P_LKQWDRAIN     0x00004000
+#define P_LKQWDRAINWAIT 0x00008000
+#define P_LKQWDEAD      0x00010000
+#define P_LLIMCHANGE    0x00020000
+#define P_LLIMWAIT      0x00040000
+#define P_LWAITED       0x00080000
+#define P_LINSIGNAL     0x00100000
+#define P_LCUSTOM_STACK 0x00200000      /* process is using custom stack size */
+#define P_LRAGE_VNODES  0x00400000
+#define P_LREGISTER     0x00800000      /* thread start fns registered  */
+#define P_LVMRSRCOWNER  0x01000000      /* can handle the resource ownership of  */
+#define P_LTERM_DECRYPTFAIL     0x04000000      /* process terminating due to key failure to decrypt */
+#define P_LTERM_JETSAM          0x08000000      /* process is being jetsam'd */
+#define P_JETSAM_VMPAGESHORTAGE 0x00000000      /* jetsam: lowest jetsam priority proc, killed due to vm page shortage */
+#define P_JETSAM_VMTHRASHING    0x10000000      /* jetsam: lowest jetsam priority proc, killed due to vm thrashing */
+#define P_JETSAM_HIWAT          0x20000000      /* jetsam: high water mark */
+#define P_JETSAM_PID            0x30000000      /* jetsam: pid */
+#define P_JETSAM_IDLEEXIT       0x40000000      /* jetsam: idle exit */
+#define P_JETSAM_VNODE          0x50000000      /* jetsam: vnode kill */
+#define P_JETSAM_FCTHRASHING    0x60000000      /* jetsam: lowest jetsam priority proc, killed due to filecache thrashing */
+#define P_JETSAM_MASK           0x70000000      /* jetsam type mask */
 
 /* Process control state for resource starvation */
-#define P_PCTHROTTLE	1
-#define P_PCSUSP	2
-#define P_PCKILL	3
-#define P_PCMAX		3
+#define P_PCTHROTTLE    1
+#define P_PCSUSP        2
+#define P_PCKILL        3
+#define P_PCMAX         3
 
 /* Process control action state on resrouce starvation */
 #define PROC_ACTION_MASK 0xffff0000;
@@ -491,27 +492,27 @@ struct	proc {
 #define PROC_EXITREASON_FLAGS(p) p->p_exit_reason->osr_flags
 
 /* additional process flags */
-#define P_LADVLOCK		0x01
-#define P_LXBKIDLEINPROG	0x02
+#define P_LADVLOCK              0x01
+#define P_LXBKIDLEINPROG        0x02
 
 /* p_vfs_iopolicy flags */
-#define P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY	0x0001
-#define P_VFS_IOPOLICY_ATIME_UPDATES			0x0002
-#define P_VFS_IOPOLICY_VALID_MASK			(P_VFS_IOPOLICY_ATIME_UPDATES | P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY)
+#define P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY       0x0001
+#define P_VFS_IOPOLICY_ATIME_UPDATES                    0x0002
+#define P_VFS_IOPOLICY_VALID_MASK                       (P_VFS_IOPOLICY_ATIME_UPDATES | P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY)
 
 /* process creation arguments */
-#define	PROC_CREATE_FORK	0	/* independent child (running) */
-#define	PROC_CREATE_SPAWN	1	/* independent child (suspended) */
-#define	PROC_CREATE_VFORK	2	/* child borrows context */
+#define PROC_CREATE_FORK        0       /* independent child (running) */
+#define PROC_CREATE_SPAWN       1       /* independent child (suspended) */
+#define PROC_CREATE_VFORK       2       /* child borrows context */
 
-/* LP64 version of extern_proc.  all pointers 
+/* LP64 version of extern_proc.  all pointers
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with extern_proc
  * but use native alignment of 64-bit process.
  */
 
 #ifdef KERNEL
-#include <sys/time.h>	/* user_timeval, user_itimerval */
+#include <sys/time.h>   /* user_timeval, user_itimerval */
 
 /*
  * This packing is required to ensure symmetry between userspace and kernelspace
@@ -525,159 +526,157 @@ struct	proc {
 struct user32_extern_proc {
 	union {
 		struct {
-			uint32_t __p_forw;	/* Doubly-linked run/sleep queue. */
+			uint32_t __p_forw;      /* Doubly-linked run/sleep queue. */
 			uint32_t __p_back;
 		} p_st1;
-		struct user32_timeval __p_starttime; 	/* process start time */
+		struct user32_timeval __p_starttime;    /* process start time */
 	} p_un;
-	uint32_t 	p_vmspace;	/* Address space. */
-	uint32_t	p_sigacts;	/* Signal actions, state (PROC ONLY). */
-	int		p_flag;			/* P_* flags. */
-	char	p_stat;			/* S* process status. */
-	pid_t	p_pid;			/* Process identifier. */
-	pid_t	p_oppid;		/* Save parent pid during ptrace. XXX */
-	int		p_dupfd;		/* Sideways return value from fdopen. XXX */
+	uint32_t        p_vmspace;      /* Address space. */
+	uint32_t        p_sigacts;      /* Signal actions, state (PROC ONLY). */
+	int             p_flag;                 /* P_* flags. */
+	char    p_stat;                 /* S* process status. */
+	pid_t   p_pid;                  /* Process identifier. */
+	pid_t   p_oppid;                /* Save parent pid during ptrace. XXX */
+	int             p_dupfd;                /* Sideways return value from fdopen. XXX */
 	/* Mach related  */
-	uint32_t user_stack;	/* where user stack was allocated */
+	uint32_t user_stack;    /* where user stack was allocated */
 	uint32_t exit_thread;  /* XXX Which thread is exiting? */
-	int		p_debugger;		/* allow to debug */
-	boolean_t	sigwait;	/* indication to suspend */
+	int             p_debugger;             /* allow to debug */
+	boolean_t       sigwait;        /* indication to suspend */
 	/* scheduling */
-	u_int	p_estcpu;	 /* Time averaged value of p_cpticks. */
-	int		p_cpticks;	 /* Ticks of cpu time. */
-	fixpt_t	p_pctcpu;	 /* %cpu for this process during p_swtime */
-	uint32_t	p_wchan;	 /* Sleep address. */
-	uint32_t	p_wmesg;	 /* Reason for sleep. */
-	u_int	p_swtime;	 /* Time swapped in or out. */
-	u_int	p_slptime;	 /* Time since last blocked. */
-	struct	user32_itimerval p_realtimer;	/* Alarm timer. */
-	struct	user32_timeval p_rtime;	/* Real time. */
-	u_quad_t p_uticks;		/* Statclock hits in user mode. */
-	u_quad_t p_sticks;		/* Statclock hits in system mode. */
-	u_quad_t p_iticks;		/* Statclock hits processing intr. */
-	int		p_traceflag;		/* Kernel trace points. */
-	uint32_t	p_tracep;	/* Trace to vnode. */
-	int		p_siglist;		/* DEPRECATED */
-	uint32_t	p_textvp;	/* Vnode of executable. */
-	int		p_holdcnt;		/* If non-zero, don't swap. */
-	sigset_t p_sigmask;	/* DEPRECATED. */
-	sigset_t p_sigignore;	/* Signals being ignored. */
-	sigset_t p_sigcatch;	/* Signals being caught by user. */
-	u_char	p_priority;	/* Process priority. */
-	u_char	p_usrpri;	/* User-priority based on p_cpu and p_nice. */
-	char	p_nice;		/* Process "nice" value. */
-	char	p_comm[MAXCOMLEN+1];
-	uint32_t	p_pgrp;	/* Pointer to process group. */
-	uint32_t	p_addr;	/* Kernel virtual addr of u-area (PROC ONLY). */
-	u_short	p_xstat;	/* Exit status for wait; also stop signal. */
-	u_short	p_acflag;	/* Accounting flags. */
-	uint32_t	p_ru;	/* Exit information. XXX */
+	u_int   p_estcpu;        /* Time averaged value of p_cpticks. */
+	int             p_cpticks;       /* Ticks of cpu time. */
+	fixpt_t p_pctcpu;        /* %cpu for this process during p_swtime */
+	uint32_t        p_wchan;         /* Sleep address. */
+	uint32_t        p_wmesg;         /* Reason for sleep. */
+	u_int   p_swtime;        /* Time swapped in or out. */
+	u_int   p_slptime;       /* Time since last blocked. */
+	struct  user32_itimerval p_realtimer;   /* Alarm timer. */
+	struct  user32_timeval p_rtime; /* Real time. */
+	u_quad_t p_uticks;              /* Statclock hits in user mode. */
+	u_quad_t p_sticks;              /* Statclock hits in system mode. */
+	u_quad_t p_iticks;              /* Statclock hits processing intr. */
+	int             p_traceflag;            /* Kernel trace points. */
+	uint32_t        p_tracep;       /* Trace to vnode. */
+	int             p_siglist;              /* DEPRECATED */
+	uint32_t        p_textvp;       /* Vnode of executable. */
+	int             p_holdcnt;              /* If non-zero, don't swap. */
+	sigset_t p_sigmask;     /* DEPRECATED. */
+	sigset_t p_sigignore;   /* Signals being ignored. */
+	sigset_t p_sigcatch;    /* Signals being caught by user. */
+	u_char  p_priority;     /* Process priority. */
+	u_char  p_usrpri;       /* User-priority based on p_cpu and p_nice. */
+	char    p_nice;         /* Process "nice" value. */
+	char    p_comm[MAXCOMLEN + 1];
+	uint32_t        p_pgrp; /* Pointer to process group. */
+	uint32_t        p_addr; /* Kernel virtual addr of u-area (PROC ONLY). */
+	u_short p_xstat;        /* Exit status for wait; also stop signal. */
+	u_short p_acflag;       /* Accounting flags. */
+	uint32_t        p_ru;   /* Exit information. XXX */
 };
 #pragma pack()
 struct user64_extern_proc {
 	union {
 		struct {
-			user_addr_t __p_forw;	/* Doubly-linked run/sleep queue. */
+			user_addr_t __p_forw;   /* Doubly-linked run/sleep queue. */
 			user_addr_t __p_back;
 		} p_st1;
-		struct user64_timeval __p_starttime; 	/* process start time */
+		struct user64_timeval __p_starttime;    /* process start time */
 	} p_un;
-	user_addr_t 	p_vmspace;	/* Address space. */
-	user_addr_t		p_sigacts;	/* Signal actions, state (PROC ONLY). */
-	int		p_flag;			/* P_* flags. */
-	char	p_stat;			/* S* process status. */
-	pid_t	p_pid;			/* Process identifier. */
-	pid_t	p_oppid;		/* Save parent pid during ptrace. XXX */
-	int		p_dupfd;		/* Sideways return value from fdopen. XXX */
+	user_addr_t     p_vmspace;      /* Address space. */
+	user_addr_t             p_sigacts;      /* Signal actions, state (PROC ONLY). */
+	int             p_flag;                 /* P_* flags. */
+	char    p_stat;                 /* S* process status. */
+	pid_t   p_pid;                  /* Process identifier. */
+	pid_t   p_oppid;                /* Save parent pid during ptrace. XXX */
+	int             p_dupfd;                /* Sideways return value from fdopen. XXX */
 	/* Mach related  */
-	user_addr_t user_stack __attribute((aligned(8)));	/* where user stack was allocated */
+	user_addr_t user_stack __attribute((aligned(8)));       /* where user stack was allocated */
 	user_addr_t exit_thread;  /* XXX Which thread is exiting? */
-	int		p_debugger;		/* allow to debug */
-	boolean_t	sigwait;	/* indication to suspend */
+	int             p_debugger;             /* allow to debug */
+	boolean_t       sigwait;        /* indication to suspend */
 	/* scheduling */
-	u_int	p_estcpu;	 /* Time averaged value of p_cpticks. */
-	int		p_cpticks;	 /* Ticks of cpu time. */
-	fixpt_t	p_pctcpu;	 /* %cpu for this process during p_swtime */
-	user_addr_t	p_wchan __attribute((aligned(8)));	 /* Sleep address. */
-	user_addr_t	p_wmesg;	 /* Reason for sleep. */
-	u_int	p_swtime;	 /* Time swapped in or out. */
-	u_int	p_slptime;	 /* Time since last blocked. */
-	struct	user64_itimerval p_realtimer;	/* Alarm timer. */
-	struct	user64_timeval p_rtime;	/* Real time. */
-	u_quad_t p_uticks;		/* Statclock hits in user mode. */
-	u_quad_t p_sticks;		/* Statclock hits in system mode. */
-	u_quad_t p_iticks;		/* Statclock hits processing intr. */
-	int		p_traceflag;		/* Kernel trace points. */
-	user_addr_t	p_tracep __attribute((aligned(8)));	/* Trace to vnode. */
-	int		p_siglist;		/* DEPRECATED */
-	user_addr_t	p_textvp __attribute((aligned(8)));	/* Vnode of executable. */
-	int		p_holdcnt;		/* If non-zero, don't swap. */
-	sigset_t p_sigmask;	/* DEPRECATED. */
-	sigset_t p_sigignore;	/* Signals being ignored. */
-	sigset_t p_sigcatch;	/* Signals being caught by user. */
-	u_char	p_priority;	/* Process priority. */
-	u_char	p_usrpri;	/* User-priority based on p_cpu and p_nice. */
-	char	p_nice;		/* Process "nice" value. */
-	char	p_comm[MAXCOMLEN+1];
-	user_addr_t	p_pgrp __attribute((aligned(8)));	/* Pointer to process group. */
-	user_addr_t	p_addr;	/* Kernel virtual addr of u-area (PROC ONLY). */
-	u_short	p_xstat;	/* Exit status for wait; also stop signal. */
-	u_short	p_acflag;	/* Accounting flags. */
-	user_addr_t	p_ru __attribute((aligned(8)));	/* Exit information. XXX */
+	u_int   p_estcpu;        /* Time averaged value of p_cpticks. */
+	int             p_cpticks;       /* Ticks of cpu time. */
+	fixpt_t p_pctcpu;        /* %cpu for this process during p_swtime */
+	user_addr_t     p_wchan __attribute((aligned(8)));       /* Sleep address. */
+	user_addr_t     p_wmesg;         /* Reason for sleep. */
+	u_int   p_swtime;        /* Time swapped in or out. */
+	u_int   p_slptime;       /* Time since last blocked. */
+	struct  user64_itimerval p_realtimer;   /* Alarm timer. */
+	struct  user64_timeval p_rtime; /* Real time. */
+	u_quad_t p_uticks;              /* Statclock hits in user mode. */
+	u_quad_t p_sticks;              /* Statclock hits in system mode. */
+	u_quad_t p_iticks;              /* Statclock hits processing intr. */
+	int             p_traceflag;            /* Kernel trace points. */
+	user_addr_t     p_tracep __attribute((aligned(8)));     /* Trace to vnode. */
+	int             p_siglist;              /* DEPRECATED */
+	user_addr_t     p_textvp __attribute((aligned(8)));     /* Vnode of executable. */
+	int             p_holdcnt;              /* If non-zero, don't swap. */
+	sigset_t p_sigmask;     /* DEPRECATED. */
+	sigset_t p_sigignore;   /* Signals being ignored. */
+	sigset_t p_sigcatch;    /* Signals being caught by user. */
+	u_char  p_priority;     /* Process priority. */
+	u_char  p_usrpri;       /* User-priority based on p_cpu and p_nice. */
+	char    p_nice;         /* Process "nice" value. */
+	char    p_comm[MAXCOMLEN + 1];
+	user_addr_t     p_pgrp __attribute((aligned(8)));       /* Pointer to process group. */
+	user_addr_t     p_addr; /* Kernel virtual addr of u-area (PROC ONLY). */
+	u_short p_xstat;        /* Exit status for wait; also stop signal. */
+	u_short p_acflag;       /* Accounting flags. */
+	user_addr_t     p_ru __attribute((aligned(8))); /* Exit information. XXX */
 };
-#endif	/* KERNEL */
+#endif  /* KERNEL */
 
 /*
  * We use process IDs <= PID_MAX; PID_MAX + 1 must also fit in a pid_t,
  * as it is used to represent "no process group".
  */
-extern int nprocs, maxproc;		/* Current and max number of procs. */
-extern int maxprocperuid;		/* Current number of procs per uid */
-extern int hard_maxproc;	/* hard limit */
+extern int nprocs, maxproc;             /* Current and max number of procs. */
+extern int maxprocperuid;               /* Current number of procs per uid */
+extern int hard_maxproc;        /* hard limit */
 extern unsigned int proc_shutdown_exitcount;
 
-#define	PID_MAX		99999
-#define	NO_PID		100000
+#define PID_MAX         99999
+#define NO_PID          100000
 extern lck_mtx_t * proc_list_mlock;
 extern lck_mtx_t * proc_klist_mlock;
 
-#define BSD_SIMUL_EXECS		33 /* 32 , allow for rounding */
-#define	BSD_PAGEABLE_SIZE_PER_EXEC	(NCARGS + PAGE_SIZE + PAGE_SIZE) /* page for apple vars, page for executable header */
+#define BSD_SIMUL_EXECS         33 /* 32 , allow for rounding */
+#define BSD_PAGEABLE_SIZE_PER_EXEC      (NCARGS + PAGE_SIZE + PAGE_SIZE) /* page for apple vars, page for executable header */
 extern int execargs_cache_size;
 extern int execargs_free_count;
 extern vm_offset_t * execargs_cache;
 
-#define SESS_LEADER(p, sessp)	((sessp)->s_leader == (p))
+#define SESS_LEADER(p, sessp)   ((sessp)->s_leader == (p))
 
-#define	PIDHASH(pid)	(&pidhashtbl[(pid) & pidhash])
-extern LIST_HEAD(pidhashhead, proc) *pidhashtbl;
+#define PIDHASH(pid)    (&pidhashtbl[(pid) & pidhash])
+extern LIST_HEAD(pidhashhead, proc) * pidhashtbl;
 extern u_long pidhash;
 
-#define	PGRPHASH(pgid)	(&pgrphashtbl[(pgid) & pgrphash])
-extern LIST_HEAD(pgrphashhead, pgrp) *pgrphashtbl;
+#define PGRPHASH(pgid)  (&pgrphashtbl[(pgid) & pgrphash])
+extern LIST_HEAD(pgrphashhead, pgrp) * pgrphashtbl;
 extern u_long pgrphash;
-#define	SESSHASH(sessid) (&sesshashtbl[(sessid) & sesshash])
-extern LIST_HEAD(sesshashhead, session) *sesshashtbl;
+#define SESSHASH(sessid) (&sesshashtbl[(sessid) & sesshash])
+extern LIST_HEAD(sesshashhead, session) * sesshashtbl;
 extern u_long sesshash;
 
 extern lck_grp_t * proc_lck_grp;
 extern lck_grp_t * proc_fdmlock_grp;
 extern lck_grp_t * proc_kqhashlock_grp;
 extern lck_grp_t * proc_knhashlock_grp;
-#if CONFIG_FINE_LOCK_GROUPS
 extern lck_grp_t * proc_mlock_grp;
 extern lck_grp_t * proc_ucred_mlock_grp;
 extern lck_grp_t * proc_slock_grp;
-#endif
 extern lck_grp_attr_t * proc_lck_grp_attr;
 extern lck_attr_t * proc_lck_attr;
 
 LIST_HEAD(proclist, proc);
-extern struct proclist allproc;		/* List of all processes. */
-extern struct proclist zombproc;	/* List of zombie processes. */
+extern struct proclist allproc;         /* List of all processes. */
+extern struct proclist zombproc;        /* List of zombie processes. */
 
 extern struct proc *initproc;
-extern void	procinit(void);
+extern void     procinit(void);
 extern void proc_lock(struct proc *);
 extern void proc_unlock(struct proc *);
 extern void proc_spinlock(struct proc *);
@@ -693,31 +692,31 @@ extern void proc_fdlock_assert(proc_t p, int assertflags);
 extern void proc_ucred_lock(struct proc *);
 extern void proc_ucred_unlock(struct proc *);
 __private_extern__ int proc_core_name(const char *name, uid_t uid, pid_t pid,
-		char *cr_name, size_t cr_name_len);
+    char *cr_name, size_t cr_name_len);
 extern int isinferior(struct proc *, struct proc *);
-__private_extern__ struct proc *pzfind(pid_t);	/* Find zombie by id. */
-__private_extern__ struct proc *proc_find_zombref(pid_t);	/* Find zombie by id. */
-__private_extern__ void proc_drop_zombref(struct proc * p);	/* Find zombie by id. */
+__private_extern__ struct proc *pzfind(pid_t);  /* Find zombie by id. */
+__private_extern__ struct proc *proc_find_zombref(pid_t);       /* Find zombie by id. */
+__private_extern__ void proc_drop_zombref(struct proc * p);     /* Find zombie by id. */
 
 
-extern int	chgproccnt(uid_t uid, int diff);
-extern void	pinsertchild(struct proc *parent, struct proc *child);
-extern int	enterpgrp(struct proc *p, pid_t pgid, int mksess);
-extern void	fixjobc(struct proc *p, struct pgrp *pgrp, int entering);
-extern int	inferior(struct proc *p);
-extern int	leavepgrp(struct proc *p);
-extern void	resetpriority(struct proc *);
-extern void	setrunnable(struct proc *);
-extern void	setrunqueue(struct proc *);
-extern int	sleep(void *chan, int pri);
-extern int	tsleep0(void *chan, int pri, const char *wmesg, int timo, int (*continuation)(int));
-extern int	tsleep1(void *chan, int pri, const char *wmesg, u_int64_t abstime, int (*continuation)(int));
-extern int	msleep0(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, int timo, int (*continuation)(int));
-extern void	vfork_return(struct proc *child, int32_t *retval, int rval);
-extern int	exit1(struct proc *, int, int *);
-extern int	exit1_internal(struct proc *, int, int *, boolean_t, boolean_t, int);
-extern int	exit_with_reason(struct proc *, int, int *, boolean_t, boolean_t, int, struct os_reason *);
-extern int	fork1(proc_t, thread_t *, int, coalition_t *);
+extern int      chgproccnt(uid_t uid, int diff);
+extern void     pinsertchild(struct proc *parent, struct proc *child);
+extern int      enterpgrp(struct proc *p, pid_t pgid, int mksess);
+extern void     fixjobc(struct proc *p, struct pgrp *pgrp, int entering);
+extern int      inferior(struct proc *p);
+extern int      leavepgrp(struct proc *p);
+extern void     resetpriority(struct proc *);
+extern void     setrunnable(struct proc *);
+extern void     setrunqueue(struct proc *);
+extern int      sleep(void *chan, int pri);
+extern int      tsleep0(void *chan, int pri, const char *wmesg, int timo, int (*continuation)(int));
+extern int      tsleep1(void *chan, int pri, const char *wmesg, u_int64_t abstime, int (*continuation)(int));
+extern int      msleep0(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, int timo, int (*continuation)(int));
+extern void     vfork_return(struct proc *child, int32_t *retval, int rval);
+extern int      exit1(struct proc *, int, int *);
+extern int      exit1_internal(struct proc *, int, int *, boolean_t, boolean_t, int);
+extern int      exit_with_reason(struct proc *, int, int *, boolean_t, boolean_t, int, struct os_reason *);
+extern int      fork1(proc_t, thread_t *, int, coalition_t *);
 extern void vfork_exit_internal(struct proc *p, int rv, int forced);
 extern void proc_reparentlocked(struct proc *child, struct proc * newparent, int cansignal, int locked);
 
@@ -743,7 +742,7 @@ extern void pgrp_unlock(struct pgrp * pgrp);
 extern void session_lock(struct session * sess);
 extern void session_unlock(struct session * sess);
 extern struct session * pgrp_session(struct pgrp * pgrp);
-extern void	session_rele(struct session *sess);
+extern void     session_rele(struct session *sess);
 extern int isbackground(proc_t p, struct tty  *tp);
 extern proc_t proc_parent(proc_t);
 extern proc_t proc_parentholdref(proc_t);
@@ -855,4 +854,4 @@ pid_t dtrace_proc_selfpid(void);
 pid_t dtrace_proc_selfppid(void);
 uid_t dtrace_proc_selfruid(void);
 
-#endif	/* !_SYS_PROC_INTERNAL_H_ */
+#endif  /* !_SYS_PROC_INTERNAL_H_ */

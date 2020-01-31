@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -50,7 +50,8 @@ typedef struct code_desc {
 			dpl	:2,
 			present	:1;
     unsigned char	limit16	:4,
-				:2,
+				:1,
+                        Lflag   :1,
 			opsz	:1,
 #define DESC_CODE_16B	0
 #define DESC_CODE_32B	1

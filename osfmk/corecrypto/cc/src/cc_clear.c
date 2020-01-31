@@ -37,31 +37,35 @@
 
 //rdar://problem/26986552
 
-#if ( CC_HAS_MEMSET_S == 1 ) && (defined( __STDC_WANT_LIB_EXT1__ ) && ( __STDC_WANT_LIB_EXT1__ == 1 ) )
-void cc_clear(size_t len, void *dst)
+#if (CC_HAS_MEMSET_S == 1) && (defined(__STDC_WANT_LIB_EXT1__) && (__STDC_WANT_LIB_EXT1__ == 1))
+void
+cc_clear(size_t len, void *dst)
 {
-    FIPSPOST_TRACE_EVENT;
-    memset_s(dst,len,0,len);
+	FIPSPOST_TRACE_EVENT;
+	memset_s(dst, len, 0, len);
 }
 #elif defined(_WIN32) && !defined(__clang__) //Clang with Microsoft CodeGen, doesn't support SecureZeroMemory
 #include <windows.h>
-static void cc_clear(size_t len, void *dst)
+static void
+cc_clear(size_t len, void *dst)
 {
-    SecureZeroMemory(dst, len);
+	SecureZeroMemory(dst, len);
 }
 #else
-void cc_clear(size_t len, void *dst)
+void
+cc_clear(size_t len, void *dst)
 {
-    FIPSPOST_TRACE_EVENT;
-    volatile char *vptr = (volatile char *)dst;
-    while (len--)
-        *vptr++ = '\0';
+	FIPSPOST_TRACE_EVENT;
+	volatile char *vptr = (volatile char *)dst;
+	while (len--) {
+		*vptr++ = '\0';
+	}
 }
 #endif
 
 /* This is an altarnative for clang that should work
- void cc_clear(size_t len, void *dst) __attribute__ ((optnone))
- {
- cc_zero(len,dst);
- }
-*/
+ *  void cc_clear(size_t len, void *dst) __attribute__ ((optnone))
+ *  {
+ *  cc_zero(len,dst);
+ *  }
+ */

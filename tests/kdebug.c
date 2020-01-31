@@ -18,8 +18,8 @@
 #include <sys/sysctl.h>
 
 T_GLOBAL_META(
-		T_META_NAMESPACE("xnu.ktrace"),
-		T_META_ASROOT(true));
+	T_META_NAMESPACE("xnu.ktrace"),
+	T_META_ASROOT(true));
 
 #define KDBG_TEST_MACROS    1
 #define KDBG_TEST_OLD_TIMES 2
@@ -30,7 +30,7 @@ assert_kdebug_test(unsigned int flavor)
 	size_t size = flavor;
 	int mib[] = { CTL_KERN, KERN_KDEBUG, KERN_KDTEST };
 	T_ASSERT_POSIX_SUCCESS(sysctl(mib, sizeof(mib) / sizeof(mib[0]), NULL,
-			&size, NULL, 0), "KERN_KDTEST sysctl");
+	    &size, NULL, 0), "KERN_KDTEST sysctl");
 }
 
 #pragma mark kdebug syscalls
@@ -45,7 +45,7 @@ T_DECL(kdebug_trace_syscall, "test that kdebug_trace(2) emits correct events")
 	ktrace_events_class(s, DBG_MACH, ^(__unused struct trace_point *tp){});
 
 	__block int events_seen = 0;
-	ktrace_events_single(s, TRACE_DEBUGID, ^void(struct trace_point *tp) {
+	ktrace_events_single(s, TRACE_DEBUGID, ^void (struct trace_point *tp) {
 		events_seen++;
 		T_PASS("saw traced event");
 
@@ -76,7 +76,7 @@ T_DECL(kdebug_trace_syscall, "test that kdebug_trace(2) emits correct events")
 #define SIGNPOST_PAIRED_CODE (0x20U)
 
 T_DECL(kdebug_signpost_syscall,
-		"test that kdebug_signpost(2) emits correct events")
+    "test that kdebug_signpost(2) emits correct events")
 {
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
@@ -87,8 +87,8 @@ T_DECL(kdebug_signpost_syscall,
 	/* make sure to get enough events for the KDBUFWAIT to trigger */
 	// ktrace_events_class(s, DBG_MACH, ^(__unused struct trace_point *tp){});
 	ktrace_events_single(s,
-			APPSDBG_CODE(DBG_APP_SIGNPOST, SIGNPOST_SINGLE_CODE),
-			^(struct trace_point *tp) {
+	    APPSDBG_CODE(DBG_APP_SIGNPOST, SIGNPOST_SINGLE_CODE),
+	    ^(struct trace_point *tp) {
 		single_seen++;
 		T_PASS("single signpost is traced");
 
@@ -99,8 +99,8 @@ T_DECL(kdebug_signpost_syscall,
 	});
 
 	ktrace_events_single_paired(s,
-			APPSDBG_CODE(DBG_APP_SIGNPOST, SIGNPOST_PAIRED_CODE),
-			^(struct trace_point *start, struct trace_point *end) {
+	    APPSDBG_CODE(DBG_APP_SIGNPOST, SIGNPOST_PAIRED_CODE),
+	    ^(struct trace_point *start, struct trace_point *end) {
 		paired_seen++;
 		T_PASS("paired signposts are traced");
 
@@ -115,16 +115,16 @@ T_DECL(kdebug_signpost_syscall,
 		T_EXPECT_EQ(end->arg4, 12UL, "argument 4 of end signpost is correct");
 
 		T_EXPECT_EQ(single_seen, 1,
-				"signposts are traced in the correct order");
+		"signposts are traced in the correct order");
 
 		ktrace_end(s, 1);
 	});
 
 	ktrace_set_completion_handler(s, ^(void) {
 		T_QUIET; T_EXPECT_NE(single_seen, 0,
-				"did not see single tracepoint before timeout");
+		"did not see single tracepoint before timeout");
 		T_QUIET; T_EXPECT_NE(paired_seen, 0,
-				"did not see single tracepoint before timeout");
+		"did not see single tracepoint before timeout");
 		ktrace_session_destroy(s);
 		T_END;
 	});
@@ -132,16 +132,16 @@ T_DECL(kdebug_signpost_syscall,
 	ktrace_filter_pid(s, getpid());
 
 	T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()),
-			"started tracing");
+	    "started tracing");
 
 	T_EXPECT_POSIX_SUCCESS(kdebug_signpost(SIGNPOST_SINGLE_CODE, 1, 2, 3, 4),
-			"emitted single signpost");
+	    "emitted single signpost");
 	T_EXPECT_POSIX_SUCCESS(
-			kdebug_signpost_start(SIGNPOST_PAIRED_CODE, 5, 6, 7, 8),
-			"emitted start signpost");
+		kdebug_signpost_start(SIGNPOST_PAIRED_CODE, 5, 6, 7, 8),
+		"emitted start signpost");
 	T_EXPECT_POSIX_SUCCESS(
-			kdebug_signpost_end(SIGNPOST_PAIRED_CODE, 9, 10, 11, 12),
-			"emitted end signpost");
+		kdebug_signpost_end(SIGNPOST_PAIRED_CODE, 9, 10, 11, 12),
+		"emitted end signpost");
 	ktrace_end(s, 0);
 
 	dispatch_main();
@@ -154,23 +154,23 @@ T_DECL(kdebug_signpost_syscall,
 #define WRAPPING_EVENTS_THRESHOLD (100)
 
 T_DECL(wrapping,
-		"ensure that wrapping traces lost events and no events prior to the wrap",
-		T_META_CHECK_LEAKS(false))
+    "ensure that wrapping traces lost events and no events prior to the wrap",
+    T_META_CHECK_LEAKS(false))
 {
-	int mib[4];
 	kbufinfo_t buf_info;
 	int wait_wrapping_secs = (WRAPPING_EVENTS_COUNT / TRACE_ITERATIONS) + 5;
 	int current_secs = wait_wrapping_secs;
 
 	/* use sysctls manually to bypass libktrace assumptions */
 
-	mib[0] = CTL_KERN; mib[1] = KERN_KDEBUG; mib[2] = KERN_KDSETUP; mib[3] = 0;
-	size_t needed = 0;
-	T_ASSERT_POSIX_SUCCESS(sysctl(mib, 3, NULL, &needed, NULL, 0),
-			"KERN_KDSETUP");
-
+	int mib[4] = { CTL_KERN, KERN_KDEBUG };
 	mib[2] = KERN_KDSETBUF; mib[3] = WRAPPING_EVENTS_COUNT;
 	T_ASSERT_POSIX_SUCCESS(sysctl(mib, 4, NULL, 0, NULL, 0), "KERN_KDSETBUF");
+
+	mib[2] = KERN_KDSETUP; mib[3] = 0;
+	size_t needed = 0;
+	T_ASSERT_POSIX_SUCCESS(sysctl(mib, 3, NULL, &needed, NULL, 0),
+	    "KERN_KDSETUP");
 
 	mib[2] = KERN_KDENABLE; mib[3] = 1;
 	T_ASSERT_POSIX_SUCCESS(sysctl(mib, 4, NULL, 0, NULL, 0), "KERN_KDENABLE");
@@ -189,12 +189,12 @@ T_DECL(wrapping,
 		}
 		T_QUIET;
 		T_ASSERT_POSIX_SUCCESS(sysctl(mib, 3, &buf_info, &needed, NULL, 0),
-				NULL);
+		    NULL);
 	} while (!(buf_info.flags & KDBG_WRAPPED) && --current_secs > 0);
 
 	T_ASSERT_TRUE(buf_info.flags & KDBG_WRAPPED,
-			"trace wrapped (after %d seconds within %d second timeout)",
-			wait_wrapping_secs - current_secs, wait_wrapping_secs);
+	    "trace wrapped (after %d seconds within %d second timeout)",
+	    wait_wrapping_secs - current_secs, wait_wrapping_secs);
 
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_ASSERT_NOTNULL(s, NULL);
@@ -204,21 +204,21 @@ T_DECL(wrapping,
 
 	ktrace_events_all(s, ^(struct trace_point *tp) {
 		if (events == 0) {
-			T_EXPECT_EQ(tp->debugid, (unsigned int)TRACE_LOST_EVENTS,
-					"first event's debugid 0x%08x (%s) should be TRACE_LOST_EVENTS",
-					tp->debugid,
-					ktrace_name_for_eventid(s, tp->debugid & KDBG_EVENTID_MASK));
+		        T_EXPECT_EQ(tp->debugid, (unsigned int)TRACE_LOST_EVENTS,
+		        "first event's debugid 0x%08x (%s) should be TRACE_LOST_EVENTS",
+		        tp->debugid,
+		        ktrace_name_for_eventid(s, tp->debugid & KDBG_EVENTID_MASK));
 		} else {
-			T_QUIET;
-			T_EXPECT_NE(tp->debugid, (unsigned int)TRACE_LOST_EVENTS,
-					"event debugid 0x%08x (%s) should not be TRACE_LOST_EVENTS",
-					tp->debugid,
-					ktrace_name_for_eventid(s, tp->debugid & KDBG_EVENTID_MASK));
+		        T_QUIET;
+		        T_EXPECT_NE(tp->debugid, (unsigned int)TRACE_LOST_EVENTS,
+		        "event debugid 0x%08x (%s) should not be TRACE_LOST_EVENTS",
+		        tp->debugid,
+		        ktrace_name_for_eventid(s, tp->debugid & KDBG_EVENTID_MASK));
 		}
 
 		events++;
 		if (events > WRAPPING_EVENTS_THRESHOLD) {
-			ktrace_end(s, 1);
+		        ktrace_end(s, 1);
 		}
 	});
 
@@ -228,14 +228,14 @@ T_DECL(wrapping,
 	});
 
 	T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()),
-			"started tracing");
+	    "started tracing");
 
 	dispatch_main();
 }
 
 T_DECL(reject_old_events,
-		"ensure that kdebug rejects events from before tracing began",
-		T_META_CHECK_LEAKS(false))
+    "ensure that kdebug rejects events from before tracing began",
+    T_META_CHECK_LEAKS(false))
 {
 	__block uint64_t event_horizon_ts;
 
@@ -244,10 +244,10 @@ T_DECL(reject_old_events,
 
 	__block int events = 0;
 	ktrace_events_range(s, KDBG_EVENTID(DBG_BSD, DBG_BSD_KDEBUG_TEST, 0),
-			KDBG_EVENTID(DBG_BSD + 1, 0, 0), ^(struct trace_point *tp) {
+	    KDBG_EVENTID(DBG_BSD + 1, 0, 0), ^(struct trace_point *tp) {
 		events++;
 		T_EXPECT_GT(tp->timestamp, event_horizon_ts,
-				"events in trace should be from after tracing began");
+		"events in trace should be from after tracing began");
 	});
 
 	ktrace_set_completion_handler(s, ^{
@@ -271,8 +271,8 @@ T_DECL(reject_old_events,
 #define ORDERING_TIMEOUT_SEC 5
 
 T_DECL(ascending_time_order,
-		"ensure that kdebug events are in ascending order based on time",
-		T_META_CHECK_LEAKS(false))
+    "ensure that kdebug events are in ascending order based on time",
+    T_META_CHECK_LEAKS(false))
 {
 	__block uint64_t prev_ts = 0;
 	__block uint32_t prev_debugid = 0;
@@ -284,12 +284,12 @@ T_DECL(ascending_time_order,
 
 	ktrace_events_all(s, ^(struct trace_point *tp) {
 		if (tp->timestamp < prev_ts) {
-			in_order = false;
-			T_LOG("%" PRIu64 ": %#" PRIx32 " (cpu %d)",
-					prev_ts, prev_debugid, prev_cpu);
-			T_LOG("%" PRIu64 ": %#" PRIx32 " (cpu %d)",
-					tp->timestamp, tp->debugid, tp->cpuid);
-			ktrace_end(s, 1);
+		        in_order = false;
+		        T_LOG("%" PRIu64 ": %#" PRIx32 " (cpu %d)",
+		        prev_ts, prev_debugid, prev_cpu);
+		        T_LOG("%" PRIu64 ": %#" PRIx32 " (cpu %d)",
+		        tp->timestamp, tp->debugid, tp->cpuid);
+		        ktrace_end(s, 1);
 		}
 	});
 
@@ -300,13 +300,13 @@ T_DECL(ascending_time_order,
 	});
 
 	T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()),
-			"started tracing");
+	    "started tracing");
 
 	/* try to inject old timestamps into trace */
 	assert_kdebug_test(KDBG_TEST_OLD_TIMES);
 
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, ORDERING_TIMEOUT_SEC * NSEC_PER_SEC),
-			dispatch_get_main_queue(), ^{
+	    dispatch_get_main_queue(), ^{
 		T_LOG("ending test after timeout");
 		ktrace_end(s, 1);
 	});
@@ -317,15 +317,15 @@ T_DECL(ascending_time_order,
 #pragma mark dyld tracing
 
 __attribute__((aligned(8)))
-	static const char map_uuid[16] = "map UUID";
+static const char map_uuid[16] = "map UUID";
 
 __attribute__((aligned(8)))
-	static const char unmap_uuid[16] = "unmap UUID";
+static const char unmap_uuid[16] = "unmap UUID";
 
 __attribute__((aligned(8)))
-	static const char sc_uuid[16] = "shared UUID";
+static const char sc_uuid[16] = "shared UUID";
 
-	static fsid_t map_fsid = { .val = { 42, 43 } };
+static fsid_t map_fsid = { .val = { 42, 43 } };
 static fsid_t unmap_fsid = { .val = { 44, 45 } };
 static fsid_t sc_fsid = { .val = { 46, 47 } };
 
@@ -340,8 +340,8 @@ static fsobj_id_t sc_fsobjid = { .fid_objno = 46, .fid_generation = 47 };
 __unused
 static void
 expect_dyld_image_info(struct trace_point *tp, const uint64_t *exp_uuid,
-		uint64_t exp_load_addr, fsid_t *exp_fsid, fsobj_id_t *exp_fsobjid,
-		int order)
+    uint64_t exp_load_addr, fsid_t *exp_fsid, fsobj_id_t *exp_fsobjid,
+    int order)
 {
 #if defined(__LP64__) || defined(__arm64__)
 	if (order == 0) {
@@ -368,7 +368,7 @@ expect_dyld_image_info(struct trace_point *tp, const uint64_t *exp_uuid,
 
 		T_QUIET; T_EXPECT_EQ(fsobjid.fid_objno, exp_fsobjid->fid_objno, NULL);
 		T_QUIET; T_EXPECT_EQ(fsobjid.fid_generation,
-				exp_fsobjid->fid_generation, NULL);
+		    exp_fsobjid->fid_generation, NULL);
 	} else {
 		T_ASSERT_FAIL("unrecognized order of events %d", order);
 	}
@@ -405,7 +405,7 @@ expect_dyld_image_info(struct trace_point *tp, const uint64_t *exp_uuid,
 		fsobjid.fid_generation = tp->arg1;
 
 		T_QUIET; T_EXPECT_EQ(fsobjid.fid_generation,
-				exp_fsobjid->fid_generation, NULL);
+		    exp_fsobjid->fid_generation, NULL);
 	} else {
 		T_ASSERT_FAIL("unrecognized order of events %d", order);
 	}
@@ -422,16 +422,16 @@ expect_dyld_image_info(struct trace_point *tp, const uint64_t *exp_uuid,
 
 static void
 expect_dyld_events(ktrace_session_t s, const char *name, uint32_t base_code,
-		const char *exp_uuid, uint64_t exp_load_addr, fsid_t *exp_fsid,
-		fsobj_id_t *exp_fsobjid, uint8_t *saw_events)
+    const char *exp_uuid, uint64_t exp_load_addr, fsid_t *exp_fsid,
+    fsobj_id_t *exp_fsobjid, uint8_t *saw_events)
 {
 	for (int i = 0; i < DYLD_EVENTS; i++) {
 		ktrace_events_single(s, KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID,
-				base_code + DYLD_CODE_OFFSET + (unsigned int)i),
-				^(struct trace_point *tp) {
+		    base_code + DYLD_CODE_OFFSET + (unsigned int)i),
+		    ^(struct trace_point *tp) {
 			T_LOG("checking %s event %c", name, 'A' + i);
 			expect_dyld_image_info(tp, (const void *)exp_uuid, exp_load_addr,
-					exp_fsid, exp_fsobjid, i);
+			exp_fsid, exp_fsobjid, i);
 			*saw_events |= (1U << i);
 		});
 	}
@@ -456,14 +456,14 @@ T_DECL(dyld_events, "test that dyld registering libraries emits events")
 
 	T_QUIET;
 	T_ASSERT_POSIX_ZERO(ktrace_filter_pid(s, getpid()),
-			"filtered to current process");
+	    "filtered to current process");
 
 	expect_dyld_events(s, "mapping", DBG_DYLD_UUID_MAP_A, map_uuid,
-			MAP_LOAD_ADDR, &map_fsid, &map_fsobjid, saw_mapping);
+	    MAP_LOAD_ADDR, &map_fsid, &map_fsobjid, saw_mapping);
 	expect_dyld_events(s, "unmapping", DBG_DYLD_UUID_UNMAP_A, unmap_uuid,
-			UNMAP_LOAD_ADDR, &unmap_fsid, &unmap_fsobjid, saw_unmapping);
+	    UNMAP_LOAD_ADDR, &unmap_fsid, &unmap_fsobjid, saw_unmapping);
 	expect_dyld_events(s, "shared cache", DBG_DYLD_UUID_SHARED_CACHE_A,
-			sc_uuid, SC_LOAD_ADDR, &sc_fsid, &sc_fsobjid, saw_shared_cache);
+	    sc_uuid, SC_LOAD_ADDR, &sc_fsid, &sc_fsobjid, saw_shared_cache);
 
 	ktrace_set_completion_handler(s, ^{
 		ktrace_session_destroy(s);
@@ -481,22 +481,22 @@ T_DECL(dyld_events, "test that dyld registering libraries emits events")
 	info.fsid = map_fsid;
 	info.fsobjid = map_fsobjid;
 	T_EXPECT_MACH_SUCCESS(task_register_dyld_image_infos(mach_task_self(),
-			&info, 1), "registered dyld image info");
+	    &info, 1), "registered dyld image info");
 
 	info.load_addr = UNMAP_LOAD_ADDR;
 	memcpy(info.uuid, unmap_uuid, sizeof(info.uuid));
 	info.fsid = unmap_fsid;
 	info.fsobjid = unmap_fsobjid;
 	T_EXPECT_MACH_SUCCESS(task_unregister_dyld_image_infos(mach_task_self(),
-			&info, 1), "unregistered dyld image info");
+	    &info, 1), "unregistered dyld image info");
 
 	info.load_addr = SC_LOAD_ADDR;
 	memcpy(info.uuid, sc_uuid, sizeof(info.uuid));
 	info.fsid = sc_fsid;
 	info.fsobjid = sc_fsobjid;
 	T_EXPECT_MACH_SUCCESS(task_register_dyld_shared_cache_image_info(
-			mach_task_self(), info, FALSE, FALSE),
-			"registered dyld shared cache image info");
+		    mach_task_self(), info, FALSE, FALSE),
+	    "registered dyld shared cache image info");
 
 	ktrace_end(s, 0);
 
@@ -551,7 +551,7 @@ is_development_kernel(void)
 
 		T_QUIET;
 		T_ASSERT_POSIX_SUCCESS(sysctlbyname("kern.development", &dev,
-					&dev_size, NULL, 0), NULL);
+		&dev_size, NULL, 0), NULL);
 		is_development = (dev != 0);
 	});
 
@@ -560,7 +560,7 @@ is_development_kernel(void)
 
 static void
 expect_event(struct trace_point *tp, const char *name, unsigned int *events,
-		const uint32_t *event_ids, size_t event_ids_len)
+    const uint32_t *event_ids, size_t event_ids_len)
 {
 	unsigned int event_idx = *events;
 	bool event_found = false;
@@ -579,7 +579,7 @@ expect_event(struct trace_point *tp, const char *name, unsigned int *events,
 	*events += 1;
 	for (i = 0; i < event_idx; i++) {
 		T_QUIET; T_EXPECT_EQ(((uint64_t *)&tp->arg1)[i], (uint64_t)i + 1,
-				NULL);
+		    NULL);
 	}
 	for (; i < 4; i++) {
 		T_QUIET; T_EXPECT_EQ(((uint64_t *)&tp->arg1)[i], (uint64_t)0, NULL);
@@ -590,7 +590,7 @@ static void
 expect_release_event(struct trace_point *tp, unsigned int *events)
 {
 	expect_event(tp, "release", events, rel_evts,
-			sizeof(rel_evts) / sizeof(rel_evts[0]));
+	    sizeof(rel_evts) / sizeof(rel_evts[0]));
 }
 
 static void
@@ -603,20 +603,20 @@ static void
 expect_filtered_event(struct trace_point *tp, unsigned int *events)
 {
 	expect_event(tp, "filtered", events, filt_evts,
-			sizeof(filt_evts) / sizeof(filt_evts[0]));
+	    sizeof(filt_evts) / sizeof(filt_evts[0]));
 }
 
 static void
 expect_noprocfilt_event(struct trace_point *tp, unsigned int *events)
 {
 	expect_event(tp, "noprocfilt", events, noprocfilt_evts,
-			sizeof(noprocfilt_evts) / sizeof(noprocfilt_evts[0]));
+	    sizeof(noprocfilt_evts) / sizeof(noprocfilt_evts[0]));
 }
 
 static void
 expect_kdbg_test_events(ktrace_session_t s, bool use_all_callback,
-		void (^cb)(unsigned int dev_seen, unsigned int rel_seen,
-		unsigned int filt_seen, unsigned int noprocfilt_seen))
+    void (^cb)(unsigned int dev_seen, unsigned int rel_seen,
+    unsigned int filt_seen, unsigned int noprocfilt_seen))
 {
 	__block unsigned int dev_seen = 0;
 	__block unsigned int rel_seen = 0;
@@ -634,7 +634,7 @@ expect_kdbg_test_events(ktrace_session_t s, bool use_all_callback,
 		ktrace_events_all(s, evtcb);
 	} else {
 		ktrace_events_range(s, KDBG_EVENTID(DBG_BSD, DBG_BSD_KDEBUG_TEST, 0),
-				KDBG_EVENTID(DBG_BSD + 1, 0, 0), evtcb);
+		    KDBG_EVENTID(DBG_BSD + 1, 0, 0), evtcb);
 	}
 
 	ktrace_set_completion_handler(s, ^{
@@ -655,11 +655,11 @@ T_DECL(kernel_events, "ensure kernel macros work")
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
 
 	T_QUIET; T_ASSERT_POSIX_ZERO(ktrace_filter_pid(s, getpid()),
-			"filtered events to current process");
+	    "filtered events to current process");
 
 	expect_kdbg_test_events(s, false,
-			^(unsigned int dev_seen, unsigned int rel_seen,
-			unsigned int filt_seen, unsigned int noprocfilt_seen) {
+	    ^(unsigned int dev_seen, unsigned int rel_seen,
+	    unsigned int filt_seen, unsigned int noprocfilt_seen) {
 		/*
 		 * Development-only events are only filtered if running on an embedded
 		 * OS.
@@ -672,12 +672,12 @@ T_DECL(kernel_events, "ensure kernel macros work")
 #endif
 
 		T_EXPECT_EQ(rel_seen, EXP_KERNEL_EVENTS,
-				"release and development events seen");
+		"release and development events seen");
 		T_EXPECT_EQ(dev_seen, dev_exp, "development-only events %sseen",
-				dev_exp ? "" : "not ");
+		dev_exp ? "" : "not ");
 		T_EXPECT_EQ(filt_seen, dev_exp, "filter-only events seen");
 		T_EXPECT_EQ(noprocfilt_seen, EXP_KERNEL_EVENTS,
-				"process filter-agnostic events seen");
+		"process filter-agnostic events seen");
 	});
 
 	dispatch_main();
@@ -689,29 +689,29 @@ T_DECL(kernel_events_filtered, "ensure that the filtered kernel macros work")
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
 
 	T_QUIET; T_ASSERT_POSIX_ZERO(ktrace_filter_pid(s, getpid()),
-			"filtered events to current process");
+	    "filtered events to current process");
 
 	expect_kdbg_test_events(s, true,
-			^(unsigned int dev_seen, unsigned int rel_seen,
-			unsigned int filt_seen, unsigned int noprocfilt_seen) {
+	    ^(unsigned int dev_seen, unsigned int rel_seen,
+	    unsigned int filt_seen, unsigned int noprocfilt_seen) {
 		T_EXPECT_EQ(rel_seen, EXP_KERNEL_EVENTS, NULL);
 #if defined(__arm__) || defined(__arm64__)
 		T_EXPECT_EQ(dev_seen, is_development_kernel() ? EXP_KERNEL_EVENTS : 0U,
-				NULL);
+		NULL);
 #else
 		T_EXPECT_EQ(dev_seen, EXP_KERNEL_EVENTS,
-				"development-only events seen");
+		"development-only events seen");
 #endif /* defined(__arm__) || defined(__arm64__) */
 		T_EXPECT_EQ(filt_seen, 0U, "no filter-only events seen");
 		T_EXPECT_EQ(noprocfilt_seen, EXP_KERNEL_EVENTS,
-				"process filter-agnostic events seen");
+		"process filter-agnostic events seen");
 	});
 
 	dispatch_main();
 }
 
 T_DECL(kernel_events_noprocfilt,
-		"ensure that the no process filter kernel macros work")
+    "ensure that the no process filter kernel macros work")
 {
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
@@ -723,19 +723,19 @@ T_DECL(kernel_events_noprocfilt,
 	for (size_t i = 0; i < sizeof(noprocfilt_evts) / sizeof(noprocfilt_evts[0]); i++) {
 		T_QUIET;
 		T_ASSERT_POSIX_ZERO(ktrace_ignore_process_filter_for_event(s,
-				noprocfilt_evts[i]),
-				"ignored process filter for noprocfilt event");
+		    noprocfilt_evts[i]),
+		    "ignored process filter for noprocfilt event");
 	}
 
 	expect_kdbg_test_events(s, false,
-			^(unsigned int dev_seen, unsigned int rel_seen,
-			unsigned int filt_seen, unsigned int noprocfilt_seen) {
+	    ^(unsigned int dev_seen, unsigned int rel_seen,
+	    unsigned int filt_seen, unsigned int noprocfilt_seen) {
 		T_EXPECT_EQ(rel_seen, 0U, "release and development events not seen");
 		T_EXPECT_EQ(dev_seen, 0U, "development-only events not seen");
 		T_EXPECT_EQ(filt_seen, 0U, "filter-only events not seen");
 
 		T_EXPECT_EQ(noprocfilt_seen, EXP_KERNEL_EVENTS,
-				"process filter-agnostic events seen");
+		"process filter-agnostic events seen");
 	});
 
 	dispatch_main();
@@ -765,7 +765,7 @@ kdebug_abuser_thread(void *ctx)
 }
 
 T_DECL(stress, "emit events on all but one CPU with a small buffer",
-		T_META_CHECK_LEAKS(false))
+    T_META_CHECK_LEAKS(false))
 {
 	T_SETUPBEGIN;
 	ktrace_session_t s = ktrace_session_create();
@@ -782,15 +782,15 @@ T_DECL(stress, "emit events on all but one CPU with a small buffer",
 	(void)kperf_timer_count_set(1);
 	int kperror = kperf_timer_period_set(0, kperf_ns_to_ticks(TIMER_NS));
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(kperror, "kperf_timer_period_set %llu ns",
-			TIMER_NS);
+	    TIMER_NS);
 	kperror = kperf_timer_action_set(0, 1);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(kperror, "kperf_timer_action_set");
 	kperror = kperf_action_samplers_set(1, KPERF_SAMPLER_TINFO |
-			KPERF_SAMPLER_TH_SNAPSHOT | KPERF_SAMPLER_KSTACK |
-			KPERF_SAMPLER_USTACK | KPERF_SAMPLER_MEMINFO |
-			KPERF_SAMPLER_TINFO_SCHED | KPERF_SAMPLER_TH_DISPATCH |
-			KPERF_SAMPLER_TK_SNAPSHOT | KPERF_SAMPLER_SYS_MEM |
-			KPERF_SAMPLER_TH_INSTRS_CYCLES);
+	    KPERF_SAMPLER_TH_SNAPSHOT | KPERF_SAMPLER_KSTACK |
+	    KPERF_SAMPLER_USTACK | KPERF_SAMPLER_MEMINFO |
+	    KPERF_SAMPLER_TINFO_SCHED | KPERF_SAMPLER_TH_DISPATCH |
+	    KPERF_SAMPLER_TK_SNAPSHOT | KPERF_SAMPLER_SYS_MEM |
+	    KPERF_SAMPLER_TH_INSTRS_CYCLES);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(kperror, "kperf_action_samplers_set");
 	/* You monster... */
 
@@ -810,7 +810,7 @@ T_DECL(stress, "emit events on all but one CPU with a small buffer",
 
 	pthread_t *threads = calloc((unsigned int)ncpus - 1, sizeof(pthread_t));
 	T_WITH_ERRNO; T_QUIET; T_ASSERT_NOTNULL(threads, "calloc(%d threads)",
-			ncpus - 1);
+	    ncpus - 1);
 
 	ktrace_set_completion_handler(s, ^{
 		T_SETUPBEGIN;
@@ -826,7 +826,7 @@ T_DECL(stress, "emit events on all but one CPU with a small buffer",
 
 		ktrace_file_t f = ktrace_file_open(filepath, false);
 		T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(f, "ktrace_file_open %s",
-				filepath);
+		filepath);
 		uint64_t first_timestamp = 0;
 		error = ktrace_file_earliest_timestamp(f, &first_timestamp);
 		T_QUIET; T_ASSERT_POSIX_ZERO(error, "ktrace_file_earliest_timestamp");
@@ -840,35 +840,35 @@ T_DECL(stress, "emit events on all but one CPU with a small buffer",
 			nevents++;
 			uint64_t delta_ns = 0;
 			T_QUIET; T_EXPECT_GE(tp->timestamp, prev_timestamp,
-					"timestamps are monotonically increasing");
+			"timestamps are monotonically increasing");
 			int converror = ktrace_convert_timestamp_to_nanoseconds(sread,
-					tp->timestamp - prev_timestamp, &delta_ns);
+			tp->timestamp - prev_timestamp, &delta_ns);
 			T_QUIET; T_ASSERT_POSIX_ZERO(converror, "convert timestamp to ns");
 			if (prev_timestamp && delta_ns > GAP_THRESHOLD_NS) {
-				if (tp->debugname) {
-					T_LOG("gap: %gs at %llu - %llu on %d: %s (%#08x)",
-							(double)delta_ns / 1e9, prev_timestamp,
-							tp->timestamp, tp->cpuid, tp->debugname, tp->debugid);
+			        if (tp->debugname) {
+			                T_LOG("gap: %gs at %llu - %llu on %d: %s (%#08x)",
+			                (double)delta_ns / 1e9, prev_timestamp,
+			                tp->timestamp, tp->cpuid, tp->debugname, tp->debugid);
 				} else {
-					T_LOG("gap: %gs at %llu - %llu on %d: %#x",
-							(double)delta_ns / 1e9, prev_timestamp,
-							tp->timestamp, tp->cpuid, tp->debugid);
+			                T_LOG("gap: %gs at %llu - %llu on %d: %#x",
+			                (double)delta_ns / 1e9, prev_timestamp,
+			                tp->timestamp, tp->cpuid, tp->debugid);
 				}
 
-				/*
-				 * These gaps are ok -- they appear after CPUs are brought back
-				 * up.
-				 */
+			        /*
+			         * These gaps are ok -- they appear after CPUs are brought back
+			         * up.
+			         */
 #define INTERRUPT (0x1050000)
 #define PERF_CPU_IDLE (0x27001000)
 #define INTC_HANDLER (0x5000004)
 #define DECR_TRAP (0x1090000)
-				uint32_t eventid = tp->debugid & KDBG_EVENTID_MASK;
-				if (eventid != INTERRUPT && eventid != PERF_CPU_IDLE &&
-						eventid != INTC_HANDLER && eventid != DECR_TRAP) {
-					unsigned int lost_events = TRACE_LOST_EVENTS;
-					T_QUIET; T_EXPECT_EQ(tp->debugid, lost_events,
-							"gaps should end with lost events");
+			        uint32_t eventid = tp->debugid & KDBG_EVENTID_MASK;
+			        if (eventid != INTERRUPT && eventid != PERF_CPU_IDLE &&
+			        eventid != INTC_HANDLER && eventid != DECR_TRAP) {
+			                unsigned int lost_events = TRACE_LOST_EVENTS;
+			                T_QUIET; T_EXPECT_EQ(tp->debugid, lost_events,
+			                "gaps should end with lost events");
 				}
 			}
 
@@ -880,31 +880,31 @@ T_DECL(stress, "emit events on all but one CPU with a small buffer",
 
 		__block uint64_t last_write = 0;
 		ktrace_events_single_paired(sread, TRACE_WRITING_EVENTS,
-				^(struct trace_point *start, struct trace_point *end) {
+		^(struct trace_point *start, struct trace_point *end) {
 			uint64_t delta_ns;
 			int converror = ktrace_convert_timestamp_to_nanoseconds(sread,
-					start->timestamp - last_write, &delta_ns);
+			start->timestamp - last_write, &delta_ns);
 			T_QUIET; T_ASSERT_POSIX_ZERO(converror, "convert timestamp to ns");
 
 			uint64_t dur_ns;
 			converror = ktrace_convert_timestamp_to_nanoseconds(sread,
-					end->timestamp - start->timestamp, &dur_ns);
+			end->timestamp - start->timestamp, &dur_ns);
 			T_QUIET; T_ASSERT_POSIX_ZERO(converror, "convert timestamp to ns");
 
 			T_LOG("write: %llu (+%gs): %gus on %d: %lu events", start->timestamp,
-					(double)delta_ns / 1e9, (double)dur_ns / 1e3, end->cpuid, end->arg1);
+			(double)delta_ns / 1e9, (double)dur_ns / 1e3, end->cpuid, end->arg1);
 			last_write = end->timestamp;
 		});
 		ktrace_set_completion_handler(sread, ^{
 			uint64_t duration_ns = 0;
 			if (last_timestamp) {
-			int converror = ktrace_convert_timestamp_to_nanoseconds(sread,
-					last_timestamp - first_timestamp, &duration_ns);
-			T_QUIET; T_ASSERT_POSIX_ZERO(converror,
-					"convert timestamp to ns");
-			T_LOG("file was %gs long, %llu events: %g events/msec/cpu",
-					(double)duration_ns / 1e9, nevents,
-					(double)nevents / ((double)duration_ns / 1e6) / ncpus);
+			        int converror = ktrace_convert_timestamp_to_nanoseconds(sread,
+			        last_timestamp - first_timestamp, &duration_ns);
+			        T_QUIET; T_ASSERT_POSIX_ZERO(converror,
+			        "convert timestamp to ns");
+			        T_LOG("file was %gs long, %llu events: %g events/msec/cpu",
+			        (double)duration_ns / 1e9, nevents,
+			        (double)nevents / ((double)duration_ns / 1e6) / ncpus);
 			}
 			(void)unlink(filepath);
 			ktrace_session_destroy(sread);
@@ -921,32 +921,32 @@ T_DECL(stress, "emit events on all but one CPU with a small buffer",
 #if 0
 	kperror = kperf_sample_set(1);
 	T_ASSERT_POSIX_SUCCESS(kperror,
-			"started kperf timer sampling every %llu ns", TIMER_NS);
+	    "started kperf timer sampling every %llu ns", TIMER_NS);
 #endif
 
 	for (int i = 0; i < (ncpus - 1); i++) {
 		int error = pthread_create(&threads[i], NULL, kdebug_abuser_thread,
-				(void *)(uintptr_t)i);
+		    (void *)(uintptr_t)i);
 		T_QUIET; T_ASSERT_POSIX_ZERO(error,
-				"pthread_create abuser thread %d", i);
+		    "pthread_create abuser thread %d", i);
 	}
 
 	int error = ktrace_start_writing_file(s, filepath,
-			ktrace_compression_none, NULL, NULL);
+	    ktrace_compression_none, NULL, NULL);
 	T_ASSERT_POSIX_ZERO(error, "started writing ktrace to %s", filepath);
 
 	T_SETUPEND;
 
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, ABUSE_SECS * NSEC_PER_SEC),
-			dispatch_get_main_queue(), ^{
+	    dispatch_get_main_queue(), ^{
 		T_LOG("ending trace");
 		ktrace_end(s, 1);
 
 		continue_abuse = false;
 		for (int i = 0; i < (ncpus - 1); i++) {
-		int joinerror = pthread_join(threads[i], NULL);
-		T_QUIET; T_EXPECT_POSIX_ZERO(joinerror, "pthread_join thread %d",
-				i);
+		        int joinerror = pthread_join(threads[i], NULL);
+		        T_QUIET; T_EXPECT_POSIX_ZERO(joinerror, "pthread_join thread %d",
+		        i);
 		}
 	});
 
@@ -972,7 +972,7 @@ T_DECL(stress, "emit events on all but one CPU with a small buffer",
  * never see.
  */
 T_DECL(round_trips,
-		"test sustained tracing with multiple round-trips through the kernel")
+    "test sustained tracing with multiple round-trips through the kernel")
 {
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
@@ -990,9 +990,9 @@ T_DECL(round_trips,
 	ktrace_events_all(s, ^(__unused struct trace_point *tp) {
 		events++;
 		if (events % ROUND_TRIP_PERIOD == 0) {
-			T_LOG("emitting round-trip event %" PRIu64, emitted);
-			kdebug_trace(TRACE_DEBUGID, events, 0, 0, 0);
-			emitted++;
+		        T_LOG("emitting round-trip event %" PRIu64, emitted);
+		        kdebug_trace(TRACE_DEBUGID, events, 0, 0, 0);
+		        emitted++;
 		}
 	});
 
@@ -1000,17 +1000,17 @@ T_DECL(round_trips,
 		T_LOG("saw round-trip event after %" PRIu64 " events", events);
 		seen++;
 		if (seen >= ROUND_TRIPS_THRESHOLD) {
-			T_LOG("ending trace after seeing %" PRIu64 " events, "
-					"emitting %" PRIu64, seen, emitted);
-			ktrace_end(s, 1);
+		        T_LOG("ending trace after seeing %" PRIu64 " events, "
+		        "emitting %" PRIu64, seen, emitted);
+		        ktrace_end(s, 1);
 		}
 	});
 
 	ktrace_set_completion_handler(s, ^{
 		T_EXPECT_GE(emitted, ROUND_TRIPS_THRESHOLD,
-				"emitted %" PRIu64 " round-trip events", emitted);
+		"emitted %" PRIu64 " round-trip events", emitted);
 		T_EXPECT_GE(seen, ROUND_TRIPS_THRESHOLD,
-				"saw %" PRIu64 " round-trip events", seen);
+		"saw %" PRIu64 " round-trip events", seen);
 		ktrace_session_destroy(s);
 		T_END;
 	});
@@ -1019,8 +1019,8 @@ T_DECL(round_trips,
 	T_ASSERT_POSIX_ZERO(error, "started tracing");
 
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-			ROUND_TRIPS_TIMEOUT_SECS * NSEC_PER_SEC), dispatch_get_main_queue(),
-			^{
+	    ROUND_TRIPS_TIMEOUT_SECS * NSEC_PER_SEC), dispatch_get_main_queue(),
+	    ^{
 		T_LOG("ending trace after %d seconds", ROUND_TRIPS_TIMEOUT_SECS);
 		ktrace_end(s, 0);
 	});
@@ -1061,10 +1061,10 @@ T_DECL(event_coverage, "ensure events appear up to the end of tracing")
 	});
 
 	dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,
-			0, 0, dispatch_get_main_queue());
+	    0, 0, dispatch_get_main_queue());
 	dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW,
-			HEARTBEAT_INTERVAL_SECS * NSEC_PER_SEC),
-			HEARTBEAT_INTERVAL_SECS * NSEC_PER_SEC, 0);
+	    HEARTBEAT_INTERVAL_SECS * NSEC_PER_SEC),
+	    HEARTBEAT_INTERVAL_SECS * NSEC_PER_SEC, 0);
 	dispatch_source_set_cancel_handler(timer, ^{
 		dispatch_release(timer);
 	});
@@ -1073,22 +1073,22 @@ T_DECL(event_coverage, "ensure events appear up to the end of tracing")
 		heartbeats++;
 
 		T_LOG("heartbeat %u at time %lld, seen %" PRIu64 " events, "
-				"current event time %lld", heartbeats, mach_absolute_time(),
-				events, current_timestamp);
+		"current event time %lld", heartbeats, mach_absolute_time(),
+		events, current_timestamp);
 
 		if (current_timestamp > 0) {
-			T_EXPECT_GT(current_timestamp, last_timestamp,
-					"event timestamps should be increasing");
-			T_QUIET; T_EXPECT_GT(events, last_events,
-					"number of events should be increasing");
+		        T_EXPECT_GT(current_timestamp, last_timestamp,
+		        "event timestamps should be increasing");
+		        T_QUIET; T_EXPECT_GT(events, last_events,
+		        "number of events should be increasing");
 		}
 
 		last_timestamp = current_timestamp;
 		last_events = events;
 
 		if (heartbeats >= HEARTBEAT_COUNT) {
-			T_LOG("ending trace after %u heartbeats", HEARTBEAT_COUNT);
-			ktrace_end(s, 0);
+		        T_LOG("ending trace after %u heartbeats", HEARTBEAT_COUNT);
+		        ktrace_end(s, 0);
 		}
 	});
 
@@ -1098,4 +1098,63 @@ T_DECL(event_coverage, "ensure events appear up to the end of tracing")
 	dispatch_activate(timer);
 
 	dispatch_main();
+}
+
+static unsigned int
+set_nevents(unsigned int nevents)
+{
+	T_QUIET;
+	T_ASSERT_POSIX_SUCCESS(sysctl(
+		    (int[]){ CTL_KERN, KERN_KDEBUG, KERN_KDSETBUF, (int)nevents }, 4,
+		    NULL, 0, NULL, 0), "set kdebug buffer size");
+
+	T_QUIET;
+	T_ASSERT_POSIX_SUCCESS(sysctl(
+		    (int[]){ CTL_KERN, KERN_KDEBUG, KERN_KDSETUP, (int)nevents }, 4,
+		    NULL, 0, NULL, 0), "setup kdebug buffers");
+
+	kbufinfo_t bufinfo = { 0 };
+	T_QUIET;
+	T_ASSERT_POSIX_SUCCESS(sysctl(
+		    (int[]){ CTL_KERN, KERN_KDEBUG, KERN_KDGETBUF }, 3,
+		    &bufinfo, &(size_t){ sizeof(bufinfo) }, NULL, 0),
+	    "get kdebug buffer size");
+
+	T_QUIET;
+	T_ASSERT_POSIX_SUCCESS(sysctl(
+		    (int[]){ CTL_KERN, KERN_KDEBUG, KERN_KDREMOVE }, 3,
+		    NULL, 0, NULL, 0),
+	    "remove kdebug buffers");
+
+	return (unsigned int)bufinfo.nkdbufs;
+}
+
+T_DECL(set_buffer_size, "ensure large buffer sizes can be set")
+{
+	uint64_t memsize = 0;
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("hw.memsize", &memsize,
+	    &(size_t){ sizeof(memsize) }, NULL, 0), "get memory size");
+
+	/*
+	 * Try to allocate up to one-eighth of available memory towards
+	 * tracing.
+	 */
+	uint64_t maxevents_u64 = memsize / 8 / sizeof(kd_buf);
+	if (maxevents_u64 > UINT32_MAX) {
+		maxevents_u64 = UINT32_MAX;
+	}
+	unsigned int maxevents = (unsigned int)maxevents_u64;
+
+	unsigned int minevents = set_nevents(0);
+	T_ASSERT_GT(minevents, 0, "saw non-zero minimum event count of %u",
+	    minevents);
+
+	unsigned int step = ((maxevents - minevents - 1) / 4);
+	T_ASSERT_GT(step, 0, "stepping by %u events", step);
+
+	for (unsigned int i = minevents + step; i < maxevents; i += step) {
+		unsigned int actualevents = set_nevents(i);
+		T_ASSERT_GE(actualevents, i - minevents,
+		    "%u events in kernel when %u requested", actualevents, i);
+	}
 }

@@ -38,8 +38,7 @@ struct nwk_wq_entry {
 	TAILQ_ENTRY(nwk_wq_entry) nwk_wq_link;
 };
 
-void nwk_wq_init (void);
+void nwk_wq_init(void);
 void nwk_wq_enqueue(struct nwk_wq_entry *nwk_item);
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* NWK_WQ_H */
-

@@ -68,14 +68,14 @@
 
 #include <sys/mcache.h>
 
-#define	MCACHE_SIZE(n) \
+#define MCACHE_SIZE(n) \
 	__builtin_offsetof(mcache_t, mc_cpu[n])
 
 /* Allocate extra in case we need to manually align the pointer */
-#define	MCACHE_ALLOC_SIZE \
+#define MCACHE_ALLOC_SIZE \
 	(sizeof (void *) + MCACHE_SIZE(ncpu) + CPU_CACHE_LINE_SIZE)
 
-#define	MCACHE_CPU(c) \
+#define MCACHE_CPU(c) \
 	(mcache_cpu_t *)((void *)((char *)(c) + MCACHE_SIZE(cpu_number())))
 
 /*
@@ -85,19 +85,19 @@
  * section, so that we can avoid recursive requests to reap the
  * caches when memory runs low.
  */
-#define	MCACHE_LIST_LOCK() {				\
-	lck_mtx_lock(mcache_llock);			\
-	mcache_llock_owner = current_thread();		\
+#define MCACHE_LIST_LOCK() {                            \
+	lck_mtx_lock(mcache_llock);                     \
+	mcache_llock_owner = current_thread();          \
 }
 
-#define	MCACHE_LIST_UNLOCK() {				\
-	mcache_llock_owner = NULL;			\
-	lck_mtx_unlock(mcache_llock);			\
+#define MCACHE_LIST_UNLOCK() {                          \
+	mcache_llock_owner = NULL;                      \
+	lck_mtx_unlock(mcache_llock);                   \
 }
 
-#define	MCACHE_LOCK(l)		lck_mtx_lock(l)
-#define	MCACHE_UNLOCK(l)	lck_mtx_unlock(l)
-#define	MCACHE_LOCK_TRY(l)	lck_mtx_try_lock(l)
+#define MCACHE_LOCK(l)          lck_mtx_lock(l)
+#define MCACHE_UNLOCK(l)        lck_mtx_unlock(l)
+#define MCACHE_LOCK_TRY(l)      lck_mtx_try_lock(l)
 
 static int ncpu;
 static unsigned int cache_line_size;
@@ -122,20 +122,20 @@ static unsigned int mcache_flags = 0;
 
 int mca_trn_max = MCA_TRN_MAX;
 
-#define	DUMP_MCA_BUF_SIZE	512
+#define DUMP_MCA_BUF_SIZE       512
 static char *mca_dump_buf;
 
 static mcache_bkttype_t mcache_bkttype[] = {
-	{ 1,	4096,	32768,	NULL },
-	{ 3,	2048,	16384,	NULL },
-	{ 7,	1024,	12288,	NULL },
-	{ 15,	256,	8192,	NULL },
-	{ 31,	64,	4096,	NULL },
-	{ 47,	0,	2048,	NULL },
-	{ 63,	0,	1024,	NULL },
-	{ 95,	0,	512,	NULL },
-	{ 143,	0,	256,	NULL },
-	{ 165,	0,	0,	NULL },
+	{ 1, 4096, 32768, NULL },
+	{ 3, 2048, 16384, NULL },
+	{ 7, 1024, 12288, NULL },
+	{ 15, 256, 8192, NULL },
+	{ 31, 64, 4096, NULL },
+	{ 47, 0, 2048, NULL },
+	{ 63, 0, 1024, NULL },
+	{ 95, 0, 512, NULL },
+	{ 143, 0, 256, NULL },
+	{ 165, 0, 0, NULL },
 };
 
 static mcache_t *mcache_create_common(const char *, size_t, size_t,
@@ -189,7 +189,7 @@ mcache_init(void)
 	VERIFY(mca_trn_max >= 2);
 
 	ncpu = ml_get_max_cpus();
-	(void) mcache_cache_line_size();	/* prime it */
+	(void) mcache_cache_line_size();        /* prime it */
 
 	mcache_llock_grp_attr = lck_grp_attr_alloc_init();
 	mcache_llock_grp = lck_grp_alloc_init("mcache.list",
@@ -199,29 +199,31 @@ mcache_init(void)
 
 	mcache_reap_tcall = thread_call_allocate(mcache_reap_timeout, NULL);
 	mcache_update_tcall = thread_call_allocate(mcache_update, NULL);
-	if (mcache_reap_tcall == NULL || mcache_update_tcall == NULL)
+	if (mcache_reap_tcall == NULL || mcache_update_tcall == NULL) {
 		panic("mcache_init: thread_call_allocate failed");
+	}
 
 	mcache_zone = zinit(MCACHE_ALLOC_SIZE, 256 * MCACHE_ALLOC_SIZE,
 	    PAGE_SIZE, "mcache");
-	if (mcache_zone == NULL)
+	if (mcache_zone == NULL) {
 		panic("mcache_init: failed to allocate mcache zone\n");
+	}
 	zone_change(mcache_zone, Z_CALLERACCT, FALSE);
 
 	LIST_INIT(&mcache_head);
 
-	for (i = 0; i < sizeof (mcache_bkttype) / sizeof (*btp); i++) {
+	for (i = 0; i < sizeof(mcache_bkttype) / sizeof(*btp); i++) {
 		btp = &mcache_bkttype[i];
-		(void) snprintf(name, sizeof (name), "bkt_%d",
+		(void) snprintf(name, sizeof(name), "bkt_%d",
 		    btp->bt_bktsize);
 		btp->bt_cache = mcache_create(name,
-		    (btp->bt_bktsize + 1) * sizeof (void *), 0, 0, MCR_SLEEP);
+		    (btp->bt_bktsize + 1) * sizeof(void *), 0, 0, MCR_SLEEP);
 	}
 
 	PE_parse_boot_argn("mcache_flags", &mcache_flags, sizeof(mcache_flags));
 	mcache_flags &= MCF_FLAGS_MASK;
 
-	mcache_audit_cache = mcache_create("audit", sizeof (mcache_audit_t),
+	mcache_audit_cache = mcache_create("audit", sizeof(mcache_audit_t),
 	    0, 0, MCR_SLEEP);
 
 	mcache_applyall(mcache_cache_bkt_enable);
@@ -237,7 +239,7 @@ mcache_init(void)
 __private_extern__ unsigned int
 mcache_getflags(void)
 {
-	return (mcache_flags);
+	return mcache_flags;
 }
 
 /*
@@ -251,7 +253,7 @@ mcache_cache_line_size(void)
 		ml_cpu_get_info(&cpu_info);
 		cache_line_size = cpu_info.cache_line_size;
 	}
-	return (cache_line_size);
+	return cache_line_size;
 }
 
 /*
@@ -263,9 +265,9 @@ __private_extern__ mcache_t *
 mcache_create(const char *name, size_t bufsize, size_t align,
     u_int32_t flags, int wait)
 {
-	return (mcache_create_common(name, bufsize, align, mcache_slab_alloc,
-	    mcache_slab_free, mcache_slab_audit, NULL, NULL, NULL, flags, 1,
-	    wait));
+	return mcache_create_common(name, bufsize, align, mcache_slab_alloc,
+	           mcache_slab_free, mcache_slab_audit, NULL, NULL, NULL, flags, 1,
+	           wait);
 }
 
 /*
@@ -279,8 +281,8 @@ mcache_create_ext(const char *name, size_t bufsize,
     mcache_logfn_t logfn, mcache_notifyfn_t notifyfn, void *arg,
     u_int32_t flags, int wait)
 {
-	return (mcache_create_common(name, bufsize, 0, allocfn,
-	    freefn, auditfn, logfn, notifyfn, arg, flags, 0, wait));
+	return mcache_create_common(name, bufsize, 0, allocfn,
+	           freefn, auditfn, logfn, notifyfn, arg, flags, 0, wait);
 }
 
 /*
@@ -304,13 +306,15 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 		int malloc_wait = (wait & MCR_NOSLEEP) ? M_NOWAIT : M_WAITOK;
 		MALLOC(mca_dump_buf, char *, DUMP_MCA_BUF_SIZE, M_TEMP,
 		    malloc_wait | M_ZERO);
-		if (mca_dump_buf == NULL)
-			return (NULL);
+		if (mca_dump_buf == NULL) {
+			return NULL;
+		}
 	}
 
 	buf = zalloc(mcache_zone);
-	if (buf == NULL)
+	if (buf == NULL) {
 		goto fail;
+	}
 
 	bzero(buf, MCACHE_ALLOC_SIZE);
 
@@ -322,8 +326,8 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	 * is okay since we've allocated extra space for this.
 	 */
 	cp = (mcache_t *)
-	    P2ROUNDUP((intptr_t)buf + sizeof (void *), CPU_CACHE_LINE_SIZE);
-	pbuf = (void **)((intptr_t)cp - sizeof (void *));
+	    P2ROUNDUP((intptr_t)buf + sizeof(void *), CPU_CACHE_LINE_SIZE);
+	pbuf = (void **)((intptr_t)cp - sizeof(void *));
 	*pbuf = buf;
 
 	/*
@@ -334,13 +338,15 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 		align = 1;
 	} else {
 		/* Enforce 64-bit minimum alignment for zone-based buffers */
-		if (align == 0)
+		if (align == 0) {
 			align = MCACHE_ALIGN;
+		}
 		align = P2ROUNDUP(align, MCACHE_ALIGN);
 	}
 
-	if ((align & (align - 1)) != 0)
+	if ((align & (align - 1)) != 0) {
 		panic("mcache_create: bad alignment %lu", align);
+	}
 
 	cp->mc_align = align;
 	cp->mc_slab_alloc = allocfn;
@@ -352,9 +358,9 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	cp->mc_bufsize = bufsize;
 	cp->mc_flags = (flags & MCF_FLAGS_MASK) | mcache_flags;
 
-	(void) snprintf(cp->mc_name, sizeof (cp->mc_name), "mcache.%s", name);
+	(void) snprintf(cp->mc_name, sizeof(cp->mc_name), "mcache.%s", name);
 
-	(void) snprintf(lck_name, sizeof (lck_name), "%s.cpu", cp->mc_name);
+	(void) snprintf(lck_name, sizeof(lck_name), "%s.cpu", cp->mc_name);
 	cp->mc_cpu_lock_grp_attr = lck_grp_attr_alloc_init();
 	cp->mc_cpu_lock_grp = lck_grp_alloc_init(lck_name,
 	    cp->mc_cpu_lock_grp_attr);
@@ -367,14 +373,15 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	 * handle multiple-element allocation requests, where the elements
 	 * returned are linked together in a list.
 	 */
-	chunksize = MAX(bufsize, sizeof (u_int64_t));
+	chunksize = MAX(bufsize, sizeof(u_int64_t));
 	if (need_zone) {
 		VERIFY(align != 0 && (align % MCACHE_ALIGN) == 0);
-		chunksize += sizeof (uint64_t) + align;
+		chunksize += sizeof(uint64_t) + align;
 		chunksize = P2ROUNDUP(chunksize, align);
 		if ((cp->mc_slab_zone = zinit(chunksize, 64 * 1024 * ncpu,
-		    PAGE_SIZE, cp->mc_name)) == NULL)
+		    PAGE_SIZE, cp->mc_name)) == NULL) {
 			goto fail;
+		}
 		zone_change(cp->mc_slab_zone, Z_EXPAND, TRUE);
 	}
 	cp->mc_chunksize = chunksize;
@@ -382,7 +389,7 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	/*
 	 * Initialize the bucket layer.
 	 */
-	(void) snprintf(lck_name, sizeof (lck_name), "%s.bkt", cp->mc_name);
+	(void) snprintf(lck_name, sizeof(lck_name), "%s.bkt", cp->mc_name);
 	cp->mc_bkt_lock_grp_attr = lck_grp_attr_alloc_init();
 	cp->mc_bkt_lock_grp = lck_grp_alloc_init(lck_name,
 	    cp->mc_bkt_lock_grp_attr);
@@ -390,7 +397,7 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	lck_mtx_init(&cp->mc_bkt_lock, cp->mc_bkt_lock_grp,
 	    cp->mc_bkt_lock_attr);
 
-	(void) snprintf(lck_name, sizeof (lck_name), "%s.sync", cp->mc_name);
+	(void) snprintf(lck_name, sizeof(lck_name), "%s.sync", cp->mc_name);
 	cp->mc_sync_lock_grp_attr = lck_grp_attr_alloc_init();
 	cp->mc_sync_lock_grp = lck_grp_alloc_init(lck_name,
 	    cp->mc_sync_lock_grp_attr);
@@ -398,8 +405,9 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	lck_mtx_init(&cp->mc_sync_lock, cp->mc_sync_lock_grp,
 	    cp->mc_sync_lock_attr);
 
-	for (btp = mcache_bkttype; chunksize <= btp->bt_minbuf; btp++)
+	for (btp = mcache_bkttype; chunksize <= btp->bt_minbuf; btp++) {
 		continue;
+	}
 
 	cp->cache_bkttype = btp;
 
@@ -417,8 +425,9 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 		ccp->cc_pobjs = -1;
 	}
 
-	if (mcache_ready)
+	if (mcache_ready) {
 		mcache_cache_bkt_enable(cp);
+	}
 
 	/* TODO: dynamically create sysctl for stats */
 
@@ -439,12 +448,13 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 		    "chunksize %lu bktsize %d\n", name, need_zone ? "i" : "e",
 		    arg, bufsize, cp->mc_align, chunksize, btp->bt_bktsize);
 	}
-	return (cp);
+	return cp;
 
 fail:
-	if (buf != NULL)
+	if (buf != NULL) {
 		zfree(mcache_zone, buf);
-	return (NULL);
+	}
+	return NULL;
 }
 
 /*
@@ -460,13 +470,14 @@ mcache_alloc_ext(mcache_t *cp, mcache_obj_t **list, unsigned int num, int wait)
 	boolean_t nwretry = FALSE;
 
 	/* MCR_NOSLEEP and MCR_FAILOK are mutually exclusive */
-	VERIFY((wait & (MCR_NOSLEEP|MCR_FAILOK)) != (MCR_NOSLEEP|MCR_FAILOK));
+	VERIFY((wait & (MCR_NOSLEEP | MCR_FAILOK)) != (MCR_NOSLEEP | MCR_FAILOK));
 
 	ASSERT(list != NULL);
 	*list = NULL;
 
-	if (num == 0)
-		return (0);
+	if (num == 0) {
+		return 0;
+	}
 
 retry_alloc:
 	/* We may not always be running in the same CPU in case of retries */
@@ -502,13 +513,15 @@ retry_alloc:
 				MCACHE_UNLOCK(&ccp->cc_lock);
 
 				if (!(cp->mc_flags & MCF_NOLEAKLOG) &&
-				    cp->mc_slab_log != NULL)
+				    cp->mc_slab_log != NULL) {
 					(*cp->mc_slab_log)(num, *top, TRUE);
+				}
 
-				if (cp->mc_flags & MCF_DEBUG)
+				if (cp->mc_flags & MCF_DEBUG) {
 					goto debug_alloc;
+				}
 
-				return (num);
+				return num;
 			}
 		}
 
@@ -526,8 +539,9 @@ retry_alloc:
 		 * can happen either because MCF_NOCPUCACHE is set, or because
 		 * the bucket layer is currently being resized.
 		 */
-		if (ccp->cc_bktsize == 0)
+		if (ccp->cc_bktsize == 0) {
 			break;
+		}
 
 		/*
 		 * Both of the CPU's buckets are empty; try to get a full
@@ -536,9 +550,10 @@ retry_alloc:
 		 */
 		bkt = mcache_bkt_alloc(cp, &cp->mc_full, NULL);
 		if (bkt != NULL) {
-			if (ccp->cc_pfilled != NULL)
+			if (ccp->cc_pfilled != NULL) {
 				mcache_bkt_free(cp, &cp->mc_empty,
 				    ccp->cc_pfilled);
+			}
 			mcache_cpu_refill(ccp, bkt, ccp->cc_bktsize);
 			continue;
 		}
@@ -563,8 +578,9 @@ retry_alloc:
 			goto retry_alloc;
 		} else if ((wait & (MCR_NOSLEEP | MCR_TRYHARD)) &&
 		    !mcache_bkt_isempty(cp)) {
-			if (!nwretry)
+			if (!nwretry) {
 				nwretry = TRUE;
+			}
 			atomic_add_32(&cp->mc_nwretry_cnt, 1);
 			goto retry_alloc;
 		} else if (nwretry) {
@@ -572,11 +588,13 @@ retry_alloc:
 		}
 	}
 
-	if (!(cp->mc_flags & MCF_NOLEAKLOG) && cp->mc_slab_log != NULL)
+	if (!(cp->mc_flags & MCF_NOLEAKLOG) && cp->mc_slab_log != NULL) {
 		(*cp->mc_slab_log)((num - need), *top, TRUE);
+	}
 
-	if (!(cp->mc_flags & MCF_DEBUG))
-		return (num - need);
+	if (!(cp->mc_flags & MCF_DEBUG)) {
+		return num - need;
+	}
 
 debug_alloc:
 	if (cp->mc_flags & MCF_DEBUG) {
@@ -602,10 +620,11 @@ debug_alloc:
 	}
 
 	/* Invoke the slab layer audit callback if auditing is enabled */
-	if ((cp->mc_flags & MCF_DEBUG) && cp->mc_slab_audit != NULL)
+	if ((cp->mc_flags & MCF_DEBUG) && cp->mc_slab_audit != NULL) {
 		(*cp->mc_slab_audit)(cp->mc_private, *top, TRUE);
+	}
 
-	return (num - need);
+	return num - need;
 }
 
 /*
@@ -617,7 +636,7 @@ mcache_alloc(mcache_t *cp, int wait)
 	mcache_obj_t *buf;
 
 	(void) mcache_alloc_ext(cp, &buf, 1, wait);
-	return (buf);
+	return buf;
 }
 
 __private_extern__ void
@@ -640,7 +659,7 @@ mcache_bkt_isempty(mcache_t *cp)
 	 * any full buckets in the cache; it is simply a way to
 	 * obtain "hints" about the state of the cache.
 	 */
-	return (cp->mc_full.bl_total == 0);
+	return cp->mc_full.bl_total == 0;
 }
 
 /*
@@ -649,8 +668,9 @@ mcache_bkt_isempty(mcache_t *cp)
 static void
 mcache_notify(mcache_t *cp, u_int32_t event)
 {
-	if (cp->mc_slab_notify != NULL)
+	if (cp->mc_slab_notify != NULL) {
 		(*cp->mc_slab_notify)(cp->mc_private, event);
+	}
 }
 
 /*
@@ -681,23 +701,25 @@ mcache_purge_cache(mcache_t *cp, boolean_t async)
 	 * Purging a cache that has no per-CPU caches or is already
 	 * in the process of being purged is rather pointless.
 	 */
-	if (cp->mc_flags & MCF_NOCPUCACHE)
-		return (FALSE);
+	if (cp->mc_flags & MCF_NOCPUCACHE) {
+		return FALSE;
+	}
 
 	lck_mtx_lock_spin(&cp->mc_sync_lock);
 	if (cp->mc_purge_cnt > 0) {
 		lck_mtx_unlock(&cp->mc_sync_lock);
-		return (FALSE);
+		return FALSE;
 	}
 	cp->mc_purge_cnt++;
 	lck_mtx_unlock(&cp->mc_sync_lock);
 
-	if (async)
+	if (async) {
 		mcache_dispatch(mcache_purge, cp);
-	else
+	} else {
 		mcache_purge(cp);
+	}
 
-	return (TRUE);
+	return TRUE;
 }
 
 /*
@@ -721,12 +743,14 @@ mcache_free_ext(mcache_t *cp, mcache_obj_t *list)
 	mcache_obj_t *nlist;
 	mcache_bkt_t *bkt;
 
-	if (!(cp->mc_flags & MCF_NOLEAKLOG) && cp->mc_slab_log != NULL)
+	if (!(cp->mc_flags & MCF_NOLEAKLOG) && cp->mc_slab_log != NULL) {
 		(*cp->mc_slab_log)(0, list, FALSE);
+	}
 
 	/* Invoke the slab layer audit callback if auditing is enabled */
-	if ((cp->mc_flags & MCF_DEBUG) && cp->mc_slab_audit != NULL)
+	if ((cp->mc_flags & MCF_DEBUG) && cp->mc_slab_audit != NULL) {
 		(*cp->mc_slab_audit)(cp->mc_private, list, FALSE);
+	}
 
 	MCACHE_LOCK(&ccp->cc_lock);
 	for (;;) {
@@ -749,15 +773,17 @@ mcache_free_ext(mcache_t *cp, mcache_obj_t *list)
 			ccp->cc_filled->bkt_obj[ccp->cc_objs++] = list;
 			ccp->cc_free++;
 
-			if ((list = nlist) != NULL)
+			if ((list = nlist) != NULL) {
 				continue;
+			}
 
 			/* We are done; return to caller */
 			MCACHE_UNLOCK(&ccp->cc_lock);
 
 			/* If there is a waiter below, notify it */
-			if (cp->mc_waiter_cnt > 0)
+			if (cp->mc_waiter_cnt > 0) {
 				mcache_notify(cp, MCN_RETRYALLOC);
+			}
 			return;
 		}
 
@@ -775,8 +801,9 @@ mcache_free_ext(mcache_t *cp, mcache_obj_t *list)
 		 * happen either because MCF_NOCPUCACHE is set, or because
 		 * the bucket layer is currently being resized.
 		 */
-		if (ccp->cc_bktsize == 0)
+		if (ccp->cc_bktsize == 0) {
 			break;
+		}
 
 		/*
 		 * Both of the CPU's buckets are full; try to get an empty
@@ -785,9 +812,10 @@ mcache_free_ext(mcache_t *cp, mcache_obj_t *list)
 		 */
 		bkt = mcache_bkt_alloc(cp, &cp->mc_empty, &btp);
 		if (bkt != NULL) {
-			if (ccp->cc_pfilled != NULL)
+			if (ccp->cc_pfilled != NULL) {
 				mcache_bkt_free(cp, &cp->mc_full,
 				    ccp->cc_pfilled);
+			}
 			mcache_cpu_refill(ccp, bkt, 0);
 			continue;
 		}
@@ -833,8 +861,9 @@ mcache_free_ext(mcache_t *cp, mcache_obj_t *list)
 	MCACHE_UNLOCK(&ccp->cc_lock);
 
 	/* If there is a waiter below, notify it */
-	if (cp->mc_waiter_cnt > 0)
+	if (cp->mc_waiter_cnt > 0) {
 		mcache_notify(cp, MCN_RETRYALLOC);
+	}
 
 	/* Advise the slab layer to purge the object(s) */
 	(*cp->mc_slab_free)(cp->mc_private, list,
@@ -888,7 +917,7 @@ mcache_destroy(mcache_t *cp)
 	 */
 
 	/* Get the original address since we're about to free it */
-	pbuf = (void **)((intptr_t)cp - sizeof (void *));
+	pbuf = (void **)((intptr_t)cp - sizeof(void *));
 
 	zfree(mcache_zone, *pbuf);
 }
@@ -904,7 +933,7 @@ mcache_slab_alloc(void *arg, mcache_obj_t ***plist, unsigned int num,
 #pragma unused(wait)
 	mcache_t *cp = arg;
 	unsigned int need = num;
-	size_t rsize = P2ROUNDUP(cp->mc_bufsize, sizeof (u_int64_t));
+	size_t rsize = P2ROUNDUP(cp->mc_bufsize, sizeof(u_int64_t));
 	u_int32_t flags = cp->mc_flags;
 	void *buf, *base, **pbuf;
 	mcache_obj_t **list = *plist;
@@ -913,21 +942,22 @@ mcache_slab_alloc(void *arg, mcache_obj_t ***plist, unsigned int num,
 
 	for (;;) {
 		buf = zalloc(cp->mc_slab_zone);
-		if (buf == NULL)
+		if (buf == NULL) {
 			break;
+		}
 
 		/* Get the aligned base address for this object */
-		base = (void *)P2ROUNDUP((intptr_t)buf + sizeof (u_int64_t),
+		base = (void *)P2ROUNDUP((intptr_t)buf + sizeof(u_int64_t),
 		    cp->mc_align);
 
 		/*
 		 * Wind back a pointer size from the aligned base and
 		 * save the original address so we can free it later.
 		 */
-		pbuf = (void **)((intptr_t)base - sizeof (void *));
+		pbuf = (void **)((intptr_t)base - sizeof(void *));
 		*pbuf = buf;
 
-		VERIFY (((intptr_t)base + cp->mc_bufsize) <=
+		VERIFY(((intptr_t)base + cp->mc_bufsize) <=
 		    ((intptr_t)buf + cp->mc_chunksize));
 
 		/*
@@ -950,11 +980,12 @@ mcache_slab_alloc(void *arg, mcache_obj_t ***plist, unsigned int num,
 		list = *plist = &(*list)->obj_next;
 
 		/* If we got them all, return to mcache */
-		if (--need == 0)
+		if (--need == 0) {
 			break;
+		}
 	}
 
-	return (num - need);
+	return num - need;
 }
 
 /*
@@ -965,7 +996,7 @@ mcache_slab_free(void *arg, mcache_obj_t *list, __unused boolean_t purged)
 {
 	mcache_t *cp = arg;
 	mcache_obj_t *nlist;
-	size_t rsize = P2ROUNDUP(cp->mc_bufsize, sizeof (u_int64_t));
+	size_t rsize = P2ROUNDUP(cp->mc_bufsize, sizeof(u_int64_t));
 	u_int32_t flags = cp->mc_flags;
 	void *base;
 	void **pbuf;
@@ -978,7 +1009,7 @@ mcache_slab_free(void *arg, mcache_obj_t *list, __unused boolean_t purged)
 		VERIFY(IS_P2ALIGNED(base, cp->mc_align));
 
 		/* Get the original address since we're about to free it */
-		pbuf = (void **)((intptr_t)base - sizeof (void *));
+		pbuf = (void **)((intptr_t)base - sizeof(void *));
 
 		VERIFY(((intptr_t)base + cp->mc_bufsize) <=
 		    ((intptr_t)*pbuf + cp->mc_chunksize));
@@ -993,8 +1024,9 @@ mcache_slab_free(void *arg, mcache_obj_t *list, __unused boolean_t purged)
 		zfree(cp->mc_slab_zone, *pbuf);
 
 		/* No more objects to free; return to mcache */
-		if ((list = nlist) == NULL)
+		if ((list = nlist) == NULL) {
 			break;
+		}
 	}
 }
 
@@ -1005,7 +1037,7 @@ static void
 mcache_slab_audit(void *arg, mcache_obj_t *list, boolean_t alloc)
 {
 	mcache_t *cp = arg;
-	size_t rsize = P2ROUNDUP(cp->mc_bufsize, sizeof (u_int64_t));
+	size_t rsize = P2ROUNDUP(cp->mc_bufsize, sizeof(u_int64_t));
 	void *base, **pbuf;
 
 	while (list != NULL) {
@@ -1015,15 +1047,16 @@ mcache_slab_audit(void *arg, mcache_obj_t *list, boolean_t alloc)
 		VERIFY(IS_P2ALIGNED(base, cp->mc_align));
 
 		/* Get the original address */
-		pbuf = (void **)((intptr_t)base - sizeof (void *));
+		pbuf = (void **)((intptr_t)base - sizeof(void *));
 
 		VERIFY(((intptr_t)base + rsize) <=
 		    ((intptr_t)*pbuf + cp->mc_chunksize));
 
-		if (!alloc)
+		if (!alloc) {
 			mcache_set_pattern(MCACHE_FREE_PATTERN, base, rsize);
-		else
+		} else {
 			mcache_audit_free_verify_set(NULL, base, 0, rsize);
+		}
 
 		list = list->obj_next = next;
 	}
@@ -1065,17 +1098,19 @@ mcache_bkt_alloc(mcache_t *cp, mcache_bktlist_t *blp, mcache_bkttype_t **btp)
 
 	if ((bkt = blp->bl_list) != NULL) {
 		blp->bl_list = bkt->bkt_next;
-		if (--blp->bl_total < blp->bl_min)
+		if (--blp->bl_total < blp->bl_min) {
 			blp->bl_min = blp->bl_total;
+		}
 		blp->bl_alloc++;
 	}
 
-	if (btp != NULL)
+	if (btp != NULL) {
 		*btp = cp->cache_bkttype;
+	}
 
 	MCACHE_UNLOCK(&cp->mc_bkt_lock);
 
-	return (bkt);
+	return bkt;
 }
 
 /*
@@ -1102,8 +1137,9 @@ mcache_cache_bkt_enable(mcache_t *cp)
 	mcache_cpu_t *ccp;
 	int cpu;
 
-	if (cp->mc_flags & MCF_NOCPUCACHE)
+	if (cp->mc_flags & MCF_NOCPUCACHE) {
 		return;
+	}
 
 	for (cpu = 0; cpu < ncpu; cpu++) {
 		ccp = &cp->mc_cpu[cpu];
@@ -1142,10 +1178,12 @@ mcache_bkt_purge(mcache_t *cp)
 
 		MCACHE_UNLOCK(&ccp->cc_lock);
 
-		if (bp != NULL)
+		if (bp != NULL) {
 			mcache_bkt_destroy(cp, btp, bp, objs);
-		if (pbp != NULL)
+		}
+		if (pbp != NULL) {
 			mcache_bkt_destroy(cp, btp, pbp, pobjs);
+		}
 	}
 
 	mcache_bkt_ws_zero(cp);
@@ -1235,13 +1273,15 @@ mcache_bkt_ws_reap(mcache_t *cp)
 
 	reap = MIN(cp->mc_full.bl_reaplimit, cp->mc_full.bl_min);
 	while (reap-- &&
-	    (bkt = mcache_bkt_alloc(cp, &cp->mc_full, &btp)) != NULL)
+	    (bkt = mcache_bkt_alloc(cp, &cp->mc_full, &btp)) != NULL) {
 		mcache_bkt_destroy(cp, btp, bkt, btp->bt_bktsize);
+	}
 
 	reap = MIN(cp->mc_empty.bl_reaplimit, cp->mc_empty.bl_min);
 	while (reap-- &&
-	    (bkt = mcache_bkt_alloc(cp, &cp->mc_empty, &btp)) != NULL)
+	    (bkt = mcache_bkt_alloc(cp, &cp->mc_empty, &btp)) != NULL) {
 		mcache_bkt_destroy(cp, btp, bkt, 0);
+	}
 }
 
 static void
@@ -1285,8 +1325,9 @@ mcache_reap(void)
 	UInt32 *flag = &mcache_reaping;
 
 	if (mcache_llock_owner == current_thread() ||
-	    !OSCompareAndSwap(0, 1, flag))
+	    !OSCompareAndSwap(0, 1, flag)) {
 		return;
+	}
 
 	mcache_dispatch(mcache_reap_start, flag);
 }
@@ -1329,8 +1370,9 @@ mcache_cache_update(mcache_t *cp)
 	 * memory pressure on the system.
 	 */
 	lck_mtx_lock_spin(&cp->mc_sync_lock);
-	if (!(cp->mc_flags & MCF_NOCPUCACHE) && cp->mc_enable_cnt)
+	if (!(cp->mc_flags & MCF_NOCPUCACHE) && cp->mc_enable_cnt) {
 		need_bkt_reenable = 1;
+	}
 	lck_mtx_unlock(&cp->mc_sync_lock);
 
 	MCACHE_LOCK(&cp->mc_bkt_lock);
@@ -1342,16 +1384,18 @@ mcache_cache_update(mcache_t *cp)
 	 */
 	if ((unsigned int)cp->mc_chunksize < cp->cache_bkttype->bt_maxbuf &&
 	    (int)(cp->mc_bkt_contention - cp->mc_bkt_contention_prev) >
-	    mcache_bkt_contention && !need_bkt_reenable)
+	    mcache_bkt_contention && !need_bkt_reenable) {
 		need_bkt_resize = 1;
+	}
 
-	cp ->mc_bkt_contention_prev = cp->mc_bkt_contention;
+	cp->mc_bkt_contention_prev = cp->mc_bkt_contention;
 	MCACHE_UNLOCK(&cp->mc_bkt_lock);
 
-	if (need_bkt_resize)
+	if (need_bkt_resize) {
 		mcache_dispatch(mcache_cache_bkt_resize, cp);
-	else if (need_bkt_reenable)
+	} else if (need_bkt_reenable) {
 		mcache_dispatch(mcache_cache_enable, cp);
+	}
 }
 
 /*
@@ -1376,7 +1420,7 @@ mcache_cache_bkt_resize(void *arg)
 		 */
 		MCACHE_LOCK(&cp->mc_bkt_lock);
 		cp->cache_bkttype = ++btp;
-		cp ->mc_bkt_contention_prev = cp->mc_bkt_contention + INT_MAX;
+		cp->mc_bkt_contention_prev = cp->mc_bkt_contention + INT_MAX;
 		MCACHE_UNLOCK(&cp->mc_bkt_lock);
 
 		mcache_cache_enable(cp);
@@ -1436,7 +1480,7 @@ static void
 mcache_dispatch(void (*func)(void *), void *arg)
 {
 	ASSERT(func != NULL);
-	timeout(func, arg, hz/1000);
+	timeout(func, arg, hz / 1000);
 }
 
 __private_extern__ void
@@ -1454,21 +1498,23 @@ mcache_buffer_log(mcache_audit_t *mca, void *addr, mcache_t *cp,
 
 	transaction->mca_thread = current_thread();
 
-	bzero(stack, sizeof (stack));
+	bzero(stack, sizeof(stack));
 	transaction->mca_depth = OSBacktrace(stack, MCACHE_STACK_DEPTH + 1) - 1;
 	bcopy(&stack[1], transaction->mca_stack,
-		sizeof (transaction->mca_stack));
+	    sizeof(transaction->mca_stack));
 
 	microuptime(&now);
-	if (base_ts != NULL)
+	if (base_ts != NULL) {
 		base = *base_ts;
+	}
 	/* tstamp is in ms relative to base_ts */
 	transaction->mca_tstamp = ((now.tv_usec - base.tv_usec) / 1000);
-	if ((now.tv_sec - base.tv_sec) > 0)
+	if ((now.tv_sec - base.tv_sec) > 0) {
 		transaction->mca_tstamp += ((now.tv_sec - base.tv_sec) * 1000);
+	}
 
 	mca->mca_next_trn =
-		(mca->mca_next_trn + 1) % mca_trn_max;
+	    (mca->mca_next_trn + 1) % mca_trn_max;
 }
 
 __private_extern__ void
@@ -1477,11 +1523,12 @@ mcache_set_pattern(u_int64_t pattern, void *buf_arg, size_t size)
 	u_int64_t *buf_end = (u_int64_t *)((void *)((char *)buf_arg + size));
 	u_int64_t *buf = (u_int64_t *)buf_arg;
 
-	VERIFY(IS_P2ALIGNED(buf_arg, sizeof (u_int64_t)));
-	VERIFY(IS_P2ALIGNED(size, sizeof (u_int64_t)));
+	VERIFY(IS_P2ALIGNED(buf_arg, sizeof(u_int64_t)));
+	VERIFY(IS_P2ALIGNED(size, sizeof(u_int64_t)));
 
-	while (buf < buf_end)
+	while (buf < buf_end) {
 		*buf++ = pattern;
+	}
 }
 
 __private_extern__ void *
@@ -1490,14 +1537,15 @@ mcache_verify_pattern(u_int64_t pattern, void *buf_arg, size_t size)
 	u_int64_t *buf_end = (u_int64_t *)((void *)((char *)buf_arg + size));
 	u_int64_t *buf;
 
-	VERIFY(IS_P2ALIGNED(buf_arg, sizeof (u_int64_t)));
-	VERIFY(IS_P2ALIGNED(size, sizeof (u_int64_t)));
+	VERIFY(IS_P2ALIGNED(buf_arg, sizeof(u_int64_t)));
+	VERIFY(IS_P2ALIGNED(size, sizeof(u_int64_t)));
 
 	for (buf = buf_arg; buf < buf_end; buf++) {
-		if (*buf != pattern)
-			return (buf);
+		if (*buf != pattern) {
+			return buf;
+		}
 	}
-	return (NULL);
+	return NULL;
 }
 
 __private_extern__ void *
@@ -1507,18 +1555,18 @@ mcache_verify_set_pattern(u_int64_t old, u_int64_t new, void *buf_arg,
 	u_int64_t *buf_end = (u_int64_t *)((void *)((char *)buf_arg + size));
 	u_int64_t *buf;
 
-	VERIFY(IS_P2ALIGNED(buf_arg, sizeof (u_int64_t)));
-	VERIFY(IS_P2ALIGNED(size, sizeof (u_int64_t)));
+	VERIFY(IS_P2ALIGNED(buf_arg, sizeof(u_int64_t)));
+	VERIFY(IS_P2ALIGNED(size, sizeof(u_int64_t)));
 
 	for (buf = buf_arg; buf < buf_end; buf++) {
 		if (*buf != old) {
 			mcache_set_pattern(old, buf_arg,
 			    (uintptr_t)buf - (uintptr_t)buf_arg);
-			return (buf);
+			return buf;
 		}
 		*buf = new;
 	}
-	return (NULL);
+	return NULL;
 }
 
 __private_extern__ void
@@ -1533,7 +1581,7 @@ mcache_audit_free_verify(mcache_audit_t *mca, void *base, size_t offset,
 	next = ((mcache_obj_t *)addr)->obj_next;
 
 	/* For the "obj_next" pointer in the buffer */
-	oaddr64 = (u_int64_t *)P2ROUNDDOWN(addr, sizeof (u_int64_t));
+	oaddr64 = (u_int64_t *)P2ROUNDDOWN(addr, sizeof(u_int64_t));
 	*oaddr64 = MCACHE_FREE_PATTERN;
 
 	if ((oaddr64 = mcache_verify_pattern(MCACHE_FREE_PATTERN,
@@ -1557,7 +1605,7 @@ mcache_audit_free_verify_set(mcache_audit_t *mca, void *base, size_t offset,
 	next = ((mcache_obj_t *)addr)->obj_next;
 
 	/* For the "obj_next" pointer in the buffer */
-	oaddr64 = (u_int64_t *)P2ROUNDDOWN(addr, sizeof (u_int64_t));
+	oaddr64 = (u_int64_t *)P2ROUNDDOWN(addr, sizeof(u_int64_t));
 	*oaddr64 = MCACHE_FREE_PATTERN;
 
 	if ((oaddr64 = mcache_verify_set_pattern(MCACHE_FREE_PATTERN,
@@ -1571,12 +1619,12 @@ mcache_audit_free_verify_set(mcache_audit_t *mca, void *base, size_t offset,
 
 #undef panic
 
-#define	DUMP_TRN_FMT() \
+#define DUMP_TRN_FMT() \
 	    "%s transaction thread %p saved PC stack (%d deep):\n" \
 	    "\t%p, %p, %p, %p, %p, %p, %p, %p\n" \
 	    "\t%p, %p, %p, %p, %p, %p, %p, %p\n"
 
-#define	DUMP_TRN_FIELDS(s, x) \
+#define DUMP_TRN_FIELDS(s, x) \
 	    s, \
 	    mca->mca_trns[x].mca_thread, mca->mca_trns[x].mca_depth, \
 	    mca->mca_trns[x].mca_stack[0], mca->mca_trns[x].mca_stack[1], \
@@ -1588,14 +1636,15 @@ mcache_audit_free_verify_set(mcache_audit_t *mca, void *base, size_t offset,
 	    mca->mca_trns[x].mca_stack[12], mca->mca_trns[x].mca_stack[13], \
 	    mca->mca_trns[x].mca_stack[14], mca->mca_trns[x].mca_stack[15]
 
-#define	MCA_TRN_LAST ((mca->mca_next_trn + mca_trn_max) % mca_trn_max)
-#define	MCA_TRN_PREV ((mca->mca_next_trn + mca_trn_max - 1) % mca_trn_max)
+#define MCA_TRN_LAST ((mca->mca_next_trn + mca_trn_max) % mca_trn_max)
+#define MCA_TRN_PREV ((mca->mca_next_trn + mca_trn_max - 1) % mca_trn_max)
 
 __private_extern__ char *
 mcache_dump_mca(mcache_audit_t *mca)
 {
-	if (mca_dump_buf == NULL)
-		return (NULL);
+	if (mca_dump_buf == NULL) {
+		return NULL;
+	}
 
 	snprintf(mca_dump_buf, DUMP_MCA_BUF_SIZE,
 	    "mca %p: addr %p, cache %p (%s) nxttrn %d\n"
@@ -1609,7 +1658,7 @@ mcache_dump_mca(mcache_audit_t *mca)
 	    DUMP_TRN_FIELDS("last", MCA_TRN_LAST),
 	    DUMP_TRN_FIELDS("previous", MCA_TRN_PREV));
 
-	return (mca_dump_buf);
+	return mca_dump_buf;
 }
 
 __private_extern__ void
@@ -1633,5 +1682,5 @@ __private_extern__ int
 assfail(const char *a, const char *f, int l)
 {
 	panic("assertion failed: %s, file: %s, line: %d", a, f, l);
-	return (0);
+	return 0;
 }

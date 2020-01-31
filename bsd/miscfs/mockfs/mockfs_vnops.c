@@ -2,7 +2,7 @@
  * Copyright (c) 2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -81,7 +81,8 @@ int mockfs_blockmap(struct vnop_blockmap_args * ap);
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_lookup(struct vnop_lookup_args * ap)
+int
+mockfs_lookup(struct vnop_lookup_args * ap)
 {
 	char held_char;
 	int rvalue;
@@ -116,21 +117,22 @@ int mockfs_lookup(struct vnop_lookup_args * ap)
 		 *   accidentally commit a change to the init_process pathname.  We map from name to node type
 		 *   here, as mockfs doesn't current use names; just unique types.
 		 */
-		if (!strncmp(cnp->cn_nameptr, "sbin", 5))
+		if (!strncmp(cnp->cn_nameptr, "sbin", 5)) {
 			target_fsnode = fsnode;
-		else if (!strncmp(cnp->cn_nameptr, "dev", 4))
+		} else if (!strncmp(cnp->cn_nameptr, "dev", 4)) {
 			mockfs_fsnode_child_by_type(fsnode, MOCKFS_DEV, &target_fsnode);
-		else if (!strncmp(cnp->cn_nameptr, "launchd", 8))
+		} else if (!strncmp(cnp->cn_nameptr, "launchd", 8)) {
 			mockfs_fsnode_child_by_type(fsnode, MOCKFS_FILE, &target_fsnode);
-		else
+		} else {
 			rvalue = ENOENT;
+		}
 
 		cnp->cn_nameptr[cnp->cn_namelen] = held_char;
 
-		if (target_fsnode)
+		if (target_fsnode) {
 			rvalue = mockfs_fsnode_vnode(target_fsnode, vpp);
-	}
-	else {
+		}
+	} else {
 		/*
 		 * We aren't looking in root; the query may actually be reasonable, but we're not
 		 *   going to support it.
@@ -138,7 +140,7 @@ int mockfs_lookup(struct vnop_lookup_args * ap)
 		rvalue = ENOENT;
 	}
 
-	return rvalue;	
+	return rvalue;
 }
 
 /*
@@ -157,7 +159,8 @@ int mockfs_lookup(struct vnop_lookup_args * ap)
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_getattr(struct vnop_getattr_args * ap)
+int
+mockfs_getattr(struct vnop_getattr_args * ap)
 {
 	/*
 	 * For the moment, we don't actually care about most attributes.  We'll
@@ -179,7 +182,7 @@ int mockfs_getattr(struct vnop_getattr_args * ap)
 	VATTR_RETURN(vap, va_data_size, fsnode->size);
 	VATTR_RETURN(vap, va_data_alloc, fsnode->size);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -201,7 +204,8 @@ int mockfs_getattr(struct vnop_getattr_args * ap)
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_read(struct vnop_read_args * ap)
+int
+mockfs_read(struct vnop_read_args * ap)
 {
 	int rvalue;
 	vnode_t vp;
@@ -216,8 +220,7 @@ int mockfs_read(struct vnop_read_args * ap)
 	 */
 	if (vp->v_type == VREG) {
 		rvalue = cluster_read(vp, ap->a_uio, fsnode->size, ap->a_ioflag);
-	}
-	else {
+	} else {
 		/*
 		 * You've tried to read from a nonregular file; I hate you.
 		 */
@@ -239,7 +242,8 @@ int mockfs_read(struct vnop_read_args * ap)
  *   is always in memory, we have very little to do as part of reclaim, so we'll just zero a few pointers and let
  *   VFS reclaim the vnode.
  */
-int mockfs_reclaim(struct vnop_reclaim_args * ap)
+int
+mockfs_reclaim(struct vnop_reclaim_args * ap)
 {
 	int rvalue;
 	vnode_t vp;
@@ -265,7 +269,8 @@ int mockfs_reclaim(struct vnop_reclaim_args * ap)
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_strategy(struct vnop_strategy_args * ap)
+int
+mockfs_strategy(struct vnop_strategy_args * ap)
 {
 	int rvalue;
 	vnode_t dvp;
@@ -280,8 +285,7 @@ int mockfs_strategy(struct vnop_strategy_args * ap)
 	if (dvp) {
 		rvalue = buf_strategy(dvp, ap);
 		vnode_put(dvp);
-	}
-	else {
+	} else {
 		/*
 		 * I'm not certain this is the BEST error to return for this case.
 		 */
@@ -310,7 +314,8 @@ int mockfs_strategy(struct vnop_strategy_args * ap)
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_pagein(struct vnop_pagein_args * ap)
+int
+mockfs_pagein(struct vnop_pagein_args * ap)
 {
 	mockfs_fsnode_t fsnode;
 	mockfs_mount_t mockfs_mnt;
@@ -319,16 +324,17 @@ int mockfs_pagein(struct vnop_pagein_args * ap)
 	 * Nothing special needed from us; just nab the filesize and kick the work over to cluster_pagein.
 	 */
 	fsnode = (mockfs_fsnode_t) ap->a_vp->v_data;
-	mockfs_mnt = ((mockfs_mount_t) fsnode->mnt->mnt_data);	
+	mockfs_mnt = ((mockfs_mount_t) fsnode->mnt->mnt_data);
 
 	/*
 	 * If we represent a memory backed device, we should be pointing directly to the backing store; we should never
 	 *   see a pagein in this case.
 	 */
-	if (mockfs_mnt->mockfs_memory_backed)
+	if (mockfs_mnt->mockfs_memory_backed) {
 		panic("mockfs_pagein called for a memory-backed device");
+	}
 
-	return cluster_pagein(ap->a_vp, ap->a_pl, ap->a_pl_offset, ap->a_f_offset, ap->a_size, fsnode->size, ap->a_flags);	
+	return cluster_pagein(ap->a_vp, ap->a_pl, ap->a_pl_offset, ap->a_f_offset, ap->a_size, fsnode->size, ap->a_flags);
 }
 
 /*
@@ -338,7 +344,7 @@ int mockfs_pagein(struct vnop_pagein_args * ap)
  *   off_t a_foffset;             // File offset we are interested in
  *   size_t a_size;               // Size of the region we are interested in
  *   daddr64_t *a_bpn;            // Return parameter: physical block number the region we are interest in starts at
- *   size_t *a_run;               // Return parameter: number of contiguous bytes of data 
+ *   size_t *a_run;               // Return parameter: number of contiguous bytes of data
  *   void *a_poff;                // Unused, as far as I know
  *   int a_flags;                 // Used to distinguish reads and writes; we don't care
  *   vfs_context_t a_context;     // We don't care about this (for now)
@@ -353,7 +359,8 @@ int mockfs_pagein(struct vnop_pagein_args * ap)
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_blockmap(struct vnop_blockmap_args * ap)
+int
+mockfs_blockmap(struct vnop_blockmap_args * ap)
 {
 	int rvalue;
 	off_t foffset;
@@ -376,8 +383,9 @@ int mockfs_blockmap(struct vnop_blockmap_args * ap)
 	 *   be satisfied from the UBC, and any called to blockmap (inidicating an attempted IO to the backing store)
 	 *   is therefore disallowed.
 	 */
-	if (((mockfs_mount_t) fsnode->mnt->mnt_data)->mockfs_memory_backed)
+	if (((mockfs_mount_t) fsnode->mnt->mnt_data)->mockfs_memory_backed) {
 		printf("mockfs_blockmap called for a memory-backed device\n");
+	}
 
 	/*
 	 * This will ultimately be simple; the vnode must be VREG (init), and the mapping will be 1 to 1.
@@ -391,15 +399,14 @@ int mockfs_blockmap(struct vnop_blockmap_args * ap)
 			/* We've been asked for more data than the backing device can provide; we're done. */
 			panic("mockfs_blockmap was asked for a region that extended past the end of the backing device");
 		}
-	}
-	else {
+	} else {
 		rvalue = ENOTSUP;
 	}
 
 	return rvalue;
 }
 
-int (**mockfs_vnodeop_p)(void *);
+int(**mockfs_vnodeop_p)(void *);
 struct vnodeopv_entry_desc mockfs_vnodeop_entries[] = {
 	{ &vnop_default_desc, (VOPFUNC) vn_default_error }, /* default */
 	{ &vnop_lookup_desc, (VOPFUNC) mockfs_lookup }, /* lookup */
@@ -443,4 +450,3 @@ struct vnodeopv_desc mockfs_vnodeop_opv_desc = {
 	&mockfs_vnodeop_p,
 	mockfs_vnodeop_entries
 };
-

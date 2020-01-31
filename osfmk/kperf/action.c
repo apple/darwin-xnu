@@ -94,7 +94,7 @@ kperf_action_has_task(unsigned int actionid)
 		return false;
 	}
 
-	return (actionv[actionid - 1].sample & SAMPLER_TASK_MASK);
+	return actionv[actionid - 1].sample & SAMPLER_TASK_MASK;
 }
 
 bool
@@ -104,27 +104,27 @@ kperf_action_has_thread(unsigned int actionid)
 		return false;
 	}
 
-	return (actionv[actionid - 1].sample & SAMPLER_THREAD_MASK);
+	return actionv[actionid - 1].sample & SAMPLER_THREAD_MASK;
 }
 
 static void
 kperf_system_memory_log(void)
 {
 	BUF_DATA(PERF_MI_SYS_DATA, (uintptr_t)vm_page_free_count,
-			(uintptr_t)vm_page_wire_count, (uintptr_t)vm_page_external_count,
-			(uintptr_t)(vm_page_active_count + vm_page_inactive_count +
-			vm_page_speculative_count));
+	    (uintptr_t)vm_page_wire_count, (uintptr_t)vm_page_external_count,
+	    (uintptr_t)(vm_page_active_count + vm_page_inactive_count +
+	    vm_page_speculative_count));
 	BUF_DATA(PERF_MI_SYS_DATA_2, (uintptr_t)vm_page_anonymous_count,
-			(uintptr_t)vm_page_internal_count,
-			(uintptr_t)vm_pageout_vminfo.vm_pageout_compressions,
-			(uintptr_t)VM_PAGE_COMPRESSOR_COUNT);
+	    (uintptr_t)vm_page_internal_count,
+	    (uintptr_t)vm_pageout_vminfo.vm_pageout_compressions,
+	    (uintptr_t)VM_PAGE_COMPRESSOR_COUNT);
 }
 
 static kern_return_t
 kperf_sample_internal(struct kperf_sample *sbuf,
-                      struct kperf_context *context,
-                      unsigned sample_what, unsigned sample_flags,
-                      unsigned actionid, uint32_t ucallstack_depth)
+    struct kperf_context *context,
+    unsigned sample_what, unsigned sample_flags,
+    unsigned actionid, uint32_t ucallstack_depth)
 {
 	int pended_ucallstack = 0;
 	int pended_th_dispatch = 0;
@@ -149,7 +149,7 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 	}
 
 	assert((sample_flags & (SAMPLE_FLAG_THREAD_ONLY | SAMPLE_FLAG_TASK_ONLY))
-			!= (SAMPLE_FLAG_THREAD_ONLY | SAMPLE_FLAG_TASK_ONLY));
+	    != (SAMPLE_FLAG_THREAD_ONLY | SAMPLE_FLAG_TASK_ONLY));
 	if (sample_flags & SAMPLE_FLAG_THREAD_ONLY) {
 		sample_what &= SAMPLER_THREAD_MASK;
 	}
@@ -204,7 +204,7 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 	if (sample_what & SAMPLER_KSTACK) {
 		if (sample_flags & SAMPLE_FLAG_CONTINUATION) {
 			kperf_continuation_sample(&(sbuf->kcallstack), context);
-		/* outside of interrupt context, backtrace the current thread */
+			/* outside of interrupt context, backtrace the current thread */
 		} else if (sample_flags & SAMPLE_FLAG_NON_INTERRUPT) {
 			kperf_backtrace_sample(&(sbuf->kcallstack), context);
 		} else {
@@ -254,8 +254,7 @@ log_sample:
 
 	/* avoid logging if this sample only pended samples */
 	if (sample_flags & SAMPLE_FLAG_PEND_USER &&
-	    !(sample_what & ~(SAMPLER_USTACK | SAMPLER_TH_DISPATCH)))
-	{
+	    !(sample_what & ~(SAMPLER_USTACK | SAMPLER_TH_DISPATCH))) {
 		return SAMPLE_CONTINUE;
 	}
 
@@ -265,7 +264,7 @@ log_sample:
 	boolean_t enabled = ml_set_interrupts_enabled(FALSE);
 
 	BUF_DATA(PERF_GEN_EVENT | DBG_FUNC_START, sample_what,
-	         actionid, userdata, sample_flags);
+	    actionid, userdata, sample_flags);
 
 	if (sample_flags & SAMPLE_FLAG_SYSTEM) {
 		if (sample_what & SAMPLER_SYS_MEM) {
@@ -342,8 +341,8 @@ log_sample_end:
 /* Translate actionid into sample bits and take a sample */
 kern_return_t
 kperf_sample(struct kperf_sample *sbuf,
-             struct kperf_context *context,
-             unsigned actionid, unsigned sample_flags)
+    struct kperf_context *context,
+    unsigned actionid, unsigned sample_flags)
 {
 	/* work out what to sample, if anything */
 	if ((actionid > actionc) || (actionid == 0)) {
@@ -363,8 +362,8 @@ kperf_sample(struct kperf_sample *sbuf,
 
 	/* do the actual sample operation */
 	return kperf_sample_internal(sbuf, context, sample_what,
-	                             sample_flags, actionid,
-	                             actionv[actionid - 1].ucallstack_depth);
+	           sample_flags, actionid,
+	           actionv[actionid - 1].ucallstack_depth);
 }
 
 void

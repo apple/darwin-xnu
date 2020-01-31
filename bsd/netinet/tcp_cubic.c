@@ -90,37 +90,40 @@ const float tcp_cubic_coeff = 0.4;
 const float tcp_cubic_fast_convergence_factor = 0.875;
 
 SYSCTL_SKMEM_TCP_INT(OID_AUTO, cubic_tcp_friendliness, CTLFLAG_RW | CTLFLAG_LOCKED,
-	static int, tcp_cubic_tcp_friendliness, 0, "Enable TCP friendliness");
+    static int, tcp_cubic_tcp_friendliness, 0, "Enable TCP friendliness");
 
 SYSCTL_SKMEM_TCP_INT(OID_AUTO, cubic_fast_convergence, CTLFLAG_RW | CTLFLAG_LOCKED,
-	static int, tcp_cubic_fast_convergence, 0, "Enable fast convergence");
+    static int, tcp_cubic_fast_convergence, 0, "Enable fast convergence");
 
 SYSCTL_SKMEM_TCP_INT(OID_AUTO, cubic_use_minrtt, CTLFLAG_RW | CTLFLAG_LOCKED,
-	static int, tcp_cubic_use_minrtt, 0, "use a min of 5 sec rtt");
+    static int, tcp_cubic_use_minrtt, 0, "use a min of 5 sec rtt");
 
-static int tcp_cubic_init(struct tcpcb *tp)
+static int
+tcp_cubic_init(struct tcpcb *tp)
 {
 	OSIncrementAtomic((volatile SInt32 *)&tcp_cc_cubic.num_sockets);
 
 	VERIFY(tp->t_ccstate != NULL);
 	tcp_cubic_clear_state(tp);
-	return (0);
+	return 0;
 }
 
-static int tcp_cubic_cleanup(struct tcpcb *tp)
+static int
+tcp_cubic_cleanup(struct tcpcb *tp)
 {
 #pragma unused(tp)
 	OSDecrementAtomic((volatile SInt32 *)&tcp_cc_cubic.num_sockets);
-	return (0);
+	return 0;
 }
 
 /*
- * Initialize the congestion window at the beginning of a connection or 
+ * Initialize the congestion window at the beginning of a connection or
  * after idle time
  */
-static void tcp_cubic_cwnd_init_or_reset(struct tcpcb *tp)
+static void
+tcp_cubic_cwnd_init_or_reset(struct tcpcb *tp)
 {
-	VERIFY(tp->t_ccstate != NULL);	
+	VERIFY(tp->t_ccstate != NULL);
 
 	tcp_cubic_clear_state(tp);
 	tcp_cc_cwnd_init_or_reset(tp);
@@ -138,15 +141,16 @@ static void tcp_cubic_cwnd_init_or_reset(struct tcpcb *tp)
 	 * to always probe to find the initial slow-start threshold.
 	 */
 	if (tp->t_inpcb->inp_stat->txbytes <= TCP_CC_CWND_INIT_BYTES
-	    && tp->snd_ssthresh < (TCP_MAXWIN << TCP_MAX_WINSHIFT))
+	    && tp->snd_ssthresh < (TCP_MAXWIN << TCP_MAX_WINSHIFT)) {
 		tp->snd_ssthresh = TCP_MAXWIN << TCP_MAX_WINSHIFT;
+	}
 
 	/* Initialize cubic last max to be same as ssthresh */
 	tp->t_ccstate->cub_last_max = tp->snd_ssthresh;
 }
 
 /*
- * Compute the target congestion window for the next RTT according to 
+ * Compute the target congestion window for the next RTT according to
  * cubic equation when an ack is received.
  *
  * W(t) = C(t-K)^3 + W(last_max)
@@ -158,20 +162,21 @@ tcp_cubic_update(struct tcpcb *tp, u_int32_t rtt)
 	u_int32_t elapsed_time, win;
 
 	win = min(tp->snd_cwnd, tp->snd_wnd);
-	if (tp->t_ccstate->cub_last_max == 0)
+	if (tp->t_ccstate->cub_last_max == 0) {
 		tp->t_ccstate->cub_last_max = tp->snd_ssthresh;
+	}
 
 	if (tp->t_ccstate->cub_epoch_start == 0) {
 		/*
 		 * This is the beginning of a new epoch, initialize some of
-		 * the variables that we need to use for computing the 
+		 * the variables that we need to use for computing the
 		 * congestion window later.
 		 */
 		tp->t_ccstate->cub_epoch_start = tcp_now;
-		if (tp->t_ccstate->cub_epoch_start == 0)
+		if (tp->t_ccstate->cub_epoch_start == 0) {
 			tp->t_ccstate->cub_epoch_start = 1;
+		}
 		if (win < tp->t_ccstate->cub_last_max) {
-
 			VERIFY(current_task() == kernel_task);
 
 			/*
@@ -184,32 +189,33 @@ tcp_cubic_update(struct tcpcb *tp, u_int32_t rtt)
 			K = cbrtf(K);
 			tp->t_ccstate->cub_epoch_period = K * TCP_RETRANSHZ;
 			/* Origin point */
-			tp->t_ccstate->cub_origin_point = 
-				tp->t_ccstate->cub_last_max;
+			tp->t_ccstate->cub_origin_point =
+			    tp->t_ccstate->cub_last_max;
 		} else {
 			tp->t_ccstate->cub_epoch_period = 0;
 			tp->t_ccstate->cub_origin_point = win;
 		}
 		tp->t_ccstate->cub_target_win = 0;
 	}
-	
-	VERIFY(tp->t_ccstate->cub_origin_point > 0);	
+
+	VERIFY(tp->t_ccstate->cub_origin_point > 0);
 	/*
 	 * Compute the target window for the next RTT using smoothed RTT
 	 * as an estimate for next RTT.
 	 */
-	elapsed_time = timer_diff(tcp_now, 0, 
-		tp->t_ccstate->cub_epoch_start, 0);
+	elapsed_time = timer_diff(tcp_now, 0,
+	    tp->t_ccstate->cub_epoch_start, 0);
 
-	if (tcp_cubic_use_minrtt)
+	if (tcp_cubic_use_minrtt) {
 		elapsed_time += max(tcp_cubic_use_minrtt, rtt);
-	else
+	} else {
 		elapsed_time += rtt;
+	}
 	var = (elapsed_time  - tp->t_ccstate->cub_epoch_period) / TCP_RETRANSHZ;
 	var = var * var * var * (tcp_cubic_coeff * tp->t_maxseg);
 
 	tp->t_ccstate->cub_target_win = (u_int32_t)(tp->t_ccstate->cub_origin_point + var);
-	return (tp->t_ccstate->cub_target_win);
+	return tp->t_ccstate->cub_target_win;
 }
 
 /*
@@ -222,7 +228,7 @@ tcp_cubic_update(struct tcpcb *tp, u_int32_t rtt)
  * link because of the steady-state behavior. Using average and mean
  * absolute deviation of W(lastmax), we try to detect if the congestion
  * window is close to the bottleneck bandwidth. In that case, disabling
- * TCP mode will help to minimize packet loss at this link. 
+ * TCP mode will help to minimize packet loss at this link.
  *
  * Disable TCP mode if the W(lastmax) (the window where previous packet
  * loss happened) is within a small range from the average last max
@@ -233,11 +239,11 @@ tcp_cubic_update(struct tcpcb *tp, u_int32_t rtt)
 	(_tp_)->t_ccstate->cub_mean_dev > (tp->t_maxseg << 1)) ? 1 : 0)
 
 /*
- * Compute the window growth if standard TCP (AIMD) was used with 
+ * Compute the window growth if standard TCP (AIMD) was used with
  * a backoff of 0.5 and additive increase of 1 packet per RTT.
- * 
+ *
  * TCP window at time t can be calculated using the following equation
- * with beta as 0.8 
+ * with beta as 0.8
  *
  * W(t) <- Wmax * beta + 3 * ((1 - beta)/(1 + beta)) * t/RTT
  *
@@ -257,8 +263,8 @@ tcp_cubic_tcpwin(struct tcpcb *tp, struct tcphdr *th)
 			    tp->t_ccstate->cub_tcp_win;
 			tp->t_ccstate->cub_tcp_win += tp->t_maxseg;
 		}
-	}	
-	return (tp->t_ccstate->cub_tcp_win);
+	}
+	return tp->t_ccstate->cub_tcp_win;
 }
 
 /*
@@ -270,8 +276,9 @@ tcp_cubic_congestion_avd(struct tcpcb *tp, struct tcphdr *th)
 	u_int32_t cubic_target_win, tcp_win, rtt;
 
 	/* Do not increase congestion window in non-validated phase */
-	if (tcp_cc_is_cwnd_nonvalidated(tp) != 0)
+	if (tcp_cc_is_cwnd_nonvalidated(tp) != 0) {
 		return;
+	}
 
 	tp->t_bytes_acked += BYTES_ACKED(th, tp);
 
@@ -299,8 +306,8 @@ tcp_cubic_congestion_avd(struct tcpcb *tp, struct tcphdr *th)
 			/*
 			 * The target win is computed for the next RTT.
 			 * To reach this value, cwnd will have to be updated
-			 * one segment at a time. Compute how many bytes 
-			 * need to be acknowledged before we can increase 
+			 * one segment at a time. Compute how many bytes
+			 * need to be acknowledged before we can increase
 			 * the cwnd by one segment.
 			 */
 			u_int64_t incr_win;
@@ -309,7 +316,7 @@ tcp_cubic_congestion_avd(struct tcpcb *tp, struct tcphdr *th)
 			if (incr_win > 0 &&
 			    tp->t_bytes_acked >= incr_win) {
 				tp->t_bytes_acked -= incr_win;
-				tp->snd_cwnd = 
+				tp->snd_cwnd =
 				    min((tp->snd_cwnd + tp->t_maxseg),
 				    TCP_MAXWIN << tp->snd_scale);
 			}
@@ -321,8 +328,9 @@ static void
 tcp_cubic_ack_rcvd(struct tcpcb *tp, struct tcphdr *th)
 {
 	/* Do not increase the congestion window in non-validated phase */
-	if (tcp_cc_is_cwnd_nonvalidated(tp) != 0)
+	if (tcp_cc_is_cwnd_nonvalidated(tp) != 0) {
 		return;
+	}
 
 	if (tp->snd_cwnd >= tp->snd_ssthresh) {
 		/* Congestion avoidance phase */
@@ -335,14 +343,14 @@ tcp_cubic_ack_rcvd(struct tcpcb *tp, struct tcphdr *th)
 		uint32_t acked, abc_lim, incr;
 
 		acked = BYTES_ACKED(th, tp);
-		abc_lim = (tcp_do_rfc3465_lim2 && 
-			tp->snd_nxt == tp->snd_max) ?
-			2 * tp->t_maxseg : tp->t_maxseg;
+		abc_lim = (tcp_do_rfc3465_lim2 &&
+		    tp->snd_nxt == tp->snd_max) ?
+		    2 * tp->t_maxseg : tp->t_maxseg;
 		incr = min(acked, abc_lim);
 
 		tp->snd_cwnd += incr;
-		tp->snd_cwnd = min(tp->snd_cwnd, 
-			TCP_MAXWIN << tp->snd_scale);
+		tp->snd_cwnd = min(tp->snd_cwnd,
+		    TCP_MAXWIN << tp->snd_scale);
 	}
 }
 
@@ -368,18 +376,19 @@ tcp_cubic_pre_fr(struct tcpcb *tp)
 	 * cub_last_max.
 	 *
 	 * If the congestion window is less than the last max window when
-	 * loss occurred, it indicates that capacity available in the 
+	 * loss occurred, it indicates that capacity available in the
 	 * network has gone down. This can happen if a new flow has started
 	 * and it is capturing some of the bandwidth. To reach convergence
-	 * quickly, backoff a little more. Disable fast convergence to 
+	 * quickly, backoff a little more. Disable fast convergence to
 	 * disable this behavior.
 	 */
 	if (win < tp->t_ccstate->cub_last_max &&
-		tcp_cubic_fast_convergence == 1)
+	    tcp_cubic_fast_convergence == 1) {
 		tp->t_ccstate->cub_last_max = (u_int32_t)(win *
-			tcp_cubic_fast_convergence_factor);
-	else
+		    tcp_cubic_fast_convergence_factor);
+	} else {
 		tp->t_ccstate->cub_last_max = win;
+	}
 
 	if (tp->t_ccstate->cub_last_max == 0) {
 		/*
@@ -404,15 +413,16 @@ tcp_cubic_pre_fr(struct tcpcb *tp)
 		avg = tp->t_ccstate->cub_avg_lastmax;
 		avg = (avg << 6) - avg;
 		tp->t_ccstate->cub_avg_lastmax =
-		    (avg + tp->t_ccstate->cub_last_max) >> 6; 
+		    (avg + tp->t_ccstate->cub_last_max) >> 6;
 	}
 
 	/* caluclate deviation from average */
 	dev = tp->t_ccstate->cub_avg_lastmax - tp->t_ccstate->cub_last_max;
 
 	/* Take the absolute value */
-	if (dev < 0)
+	if (dev < 0) {
 		dev = -dev;
+	}
 
 	if (tp->t_ccstate->cub_mean_dev == 0) {
 		tp->t_ccstate->cub_mean_dev = dev;
@@ -425,8 +435,9 @@ tcp_cubic_pre_fr(struct tcpcb *tp)
 	/* Backoff congestion window by tcp_cubic_backoff factor */
 	win = (u_int32_t)(win - (win * tcp_cubic_backoff));
 	win = (win / tp->t_maxseg);
-	if (win < 2)
+	if (win < 2) {
 		win = 2;
+	}
 	tp->snd_ssthresh = win * tp->t_maxseg;
 	tcp_cc_resize_sndbuf(tp);
 }
@@ -436,8 +447,9 @@ tcp_cubic_post_fr(struct tcpcb *tp, struct tcphdr *th)
 {
 	uint32_t flight_size = 0;
 
-	if (SEQ_LEQ(th->th_ack, tp->snd_max))
+	if (SEQ_LEQ(th->th_ack, tp->snd_max)) {
 		flight_size = tp->snd_max - th->th_ack;
+	}
 
 	if (SACK_ENABLED(tp) && tp->t_lossflightsize > 0) {
 		u_int32_t total_rxt_size = 0, ncwnd;
@@ -463,22 +475,23 @@ tcp_cubic_post_fr(struct tcpcb *tp, struct tcphdr *th)
 	 * Complete ack. The current window was inflated for fast recovery.
 	 * It has to be deflated post recovery.
 	 *
-	 * Window inflation should have left us with approx snd_ssthresh 
+	 * Window inflation should have left us with approx snd_ssthresh
 	 * outstanding data. If the flight size is zero or one segment,
 	 * make congestion window to be at least as big as 2 segments to
 	 * avoid delayed acknowledgements. This is according to RFC 6582.
 	 */
-	if (flight_size < tp->snd_ssthresh)
-		tp->snd_cwnd = max(flight_size, tp->t_maxseg) 
-				+ tp->t_maxseg;
-	else
+	if (flight_size < tp->snd_ssthresh) {
+		tp->snd_cwnd = max(flight_size, tp->t_maxseg)
+		    + tp->t_maxseg;
+	} else {
 		tp->snd_cwnd = tp->snd_ssthresh;
+	}
 	tp->t_ccstate->cub_tcp_win = 0;
 	tp->t_ccstate->cub_target_win = 0;
 	tp->t_ccstate->cub_tcp_bytes_acked = 0;
 }
 
-static void 
+static void
 tcp_cubic_after_timeout(struct tcpcb *tp)
 {
 	VERIFY(tp->t_ccstate != NULL);
@@ -489,8 +502,9 @@ tcp_cubic_after_timeout(struct tcpcb *tp)
 	 * needed to adjust the window.
 	 */
 	if (tp->t_state < TCPS_ESTABLISHED &&
-	    ((int)(tp->snd_max - tp->snd_una) <= 1))
+	    ((int)(tp->snd_max - tp->snd_una) <= 1)) {
 		return;
+	}
 
 	if (!IN_FASTRECOVERY(tp)) {
 		tcp_cubic_clear_state(tp);
@@ -507,11 +521,11 @@ tcp_cubic_after_timeout(struct tcpcb *tp)
 static int
 tcp_cubic_delay_ack(struct tcpcb *tp, struct tcphdr *th)
 {
-	return (tcp_cc_delay_ack(tp, th));
+	return tcp_cc_delay_ack(tp, th);
 }
 
 /*
- * When switching from a different CC it is better for Cubic to start 
+ * When switching from a different CC it is better for Cubic to start
  * fresh. The state required for Cubic calculation might be stale and it
  * might not represent the current state of the network. If it starts as
  * a new connection it will probe and learn the existing network conditions.
@@ -525,7 +539,8 @@ tcp_cubic_switch_cc(struct tcpcb *tp, uint16_t old_cc_index)
 	OSIncrementAtomic((volatile SInt32 *)&tcp_cc_cubic.num_sockets);
 }
 
-static inline void tcp_cubic_clear_state(struct tcpcb *tp)
+static inline void
+tcp_cubic_clear_state(struct tcpcb *tp)
 {
 	tp->t_ccstate->cub_last_max = 0;
 	tp->t_ccstate->cub_epoch_start = 0;

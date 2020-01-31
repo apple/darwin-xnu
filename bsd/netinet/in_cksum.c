@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -66,7 +66,7 @@
 #include <kern/debug.h>
 #include <net/dlil.h>
 #include <netinet/in.h>
-#define	_IP_VHL
+#define _IP_VHL
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
 
@@ -76,22 +76,22 @@
  * This routine is very heavily used in the network
  * code and should be modified for each CPU to be as fast as possible.
  */
-#define REDUCE16 {							  \
-	q_util.q = sum;							  \
+#define REDUCE16 {                                                        \
+	q_util.q = sum;                                                   \
 	l_util.l = q_util.s[0] + q_util.s[1] + q_util.s[2] + q_util.s[3]; \
-	sum = l_util.s[0] + l_util.s[1];				  \
-	ADDCARRY(sum);							  \
+	sum = l_util.s[0] + l_util.s[1];                                  \
+	ADDCARRY(sum);                                                    \
 }
 
 union l_util {
-        uint16_t s[2];
-        uint32_t l;
+	uint16_t s[2];
+	uint32_t l;
 };
 
 union q_util {
-        uint16_t s[4];
-        uint32_t l[2];
-        uint64_t q;
+	uint16_t s[4];
+	uint32_t l[2];
+	uint64_t q;
 };
 
 extern uint32_t os_cpu_in_cksum(const void *, uint32_t, uint32_t);
@@ -102,7 +102,7 @@ extern uint32_t os_cpu_in_cksum(const void *, uint32_t, uint32_t);
 uint16_t
 b_sum16(const void *buf, int len)
 {
-	return (os_cpu_in_cksum(buf, len, 0));
+	return os_cpu_in_cksum(buf, len, 0);
 }
 
 uint16_t inet_cksum_simple(struct mbuf *, int);
@@ -112,7 +112,7 @@ uint16_t inet_cksum_simple(struct mbuf *, int);
 uint16_t
 inet_cksum_simple(struct mbuf *m, int len)
 {
-	return (inet_cksum(m, 0, 0, len));
+	return inet_cksum(m, 0, 0, len);
 }
 
 uint16_t
@@ -121,19 +121,19 @@ in_addword(uint16_t a, uint16_t b)
 	uint64_t sum = a + b;
 
 	ADDCARRY(sum);
-	return (sum);
+	return sum;
 }
 
 uint16_t
 in_pseudo(uint32_t a, uint32_t b, uint32_t c)
 {
-        uint64_t sum;
-        union q_util q_util;
-        union l_util l_util;
+	uint64_t sum;
+	union q_util q_util;
+	union l_util l_util;
 
-        sum = (uint64_t)a + b + c;
-        REDUCE16;
-        return (sum);
+	sum = (uint64_t)a + b + c;
+	REDUCE16;
+	return sum;
 }
 
 uint16_t
@@ -145,7 +145,7 @@ in_pseudo64(uint64_t a, uint64_t b, uint64_t c)
 
 	sum = a + b + c;
 	REDUCE16;
-	return (sum);
+	return sum;
 }
 
 /*
@@ -154,7 +154,7 @@ in_pseudo64(uint64_t a, uint64_t b, uint64_t c)
 uint16_t
 in_cksum_hdr_opt(const struct ip *ip)
 {
-	return (~b_sum16(ip, (IP_VHL_HL(ip->ip_vhl) << 2)) & 0xffff);
+	return ~b_sum16(ip, (IP_VHL_HL(ip->ip_vhl) << 2)) & 0xffff;
 }
 
 /*
@@ -175,11 +175,12 @@ ip_cksum_hdr_dir(struct mbuf *m, uint32_t hlen, int out)
 		ipstat.ips_rcv_swcsum_bytes += hlen;
 	}
 
-	if (hlen == sizeof (*ip) &&
-	    m->m_len >= sizeof (*ip) && IP_HDR_ALIGNED_P(ip))
-		return (in_cksum_hdr(ip));
+	if (hlen == sizeof(*ip) &&
+	    m->m_len >= sizeof(*ip) && IP_HDR_ALIGNED_P(ip)) {
+		return in_cksum_hdr(ip);
+	}
 
-	return (inet_cksum(m, 0, 0, hlen));
+	return inet_cksum(m, 0, 0, hlen);
 }
 
 uint16_t
@@ -196,11 +197,12 @@ ip_cksum_hdr_dir_buffer(const void *buffer, uint32_t hlen, uint32_t len,
 		ipstat.ips_rcv_swcsum_bytes += hlen;
 	}
 
-	if (hlen == sizeof (*ip) &&
-	    len >= sizeof (*ip) && IP_HDR_ALIGNED_P(ip))
-		return (in_cksum_hdr(ip));
+	if (hlen == sizeof(*ip) &&
+	    len >= sizeof(*ip) && IP_HDR_ALIGNED_P(ip)) {
+		return in_cksum_hdr(ip);
+	}
 
-	return (inet_cksum_buffer(buffer, 0, 0, hlen));
+	return inet_cksum_buffer(buffer, 0, 0, hlen);
 }
 
 /*
@@ -219,7 +221,7 @@ inet_cksum(struct mbuf *m, uint32_t nxt, uint32_t off, uint32_t len)
 	/* include pseudo header checksum? */
 	if (nxt != 0) {
 		struct ip *ip;
-		unsigned char buf[sizeof ((*ip))] __attribute__((aligned(8)));
+		unsigned char buf[sizeof((*ip))] __attribute__((aligned(8)));
 		uint32_t mlen;
 
 		/*
@@ -229,7 +231,7 @@ inet_cksum(struct mbuf *m, uint32_t nxt, uint32_t off, uint32_t len)
 		 * the caller setting m_pkthdr.len correctly, if the mbuf is
 		 * a M_PKTHDR one.
 		 */
-		if ((mlen = m_length2(m, NULL)) < sizeof (*ip)) {
+		if ((mlen = m_length2(m, NULL)) < sizeof(*ip)) {
 			panic("%s: mbuf %p too short (%d) for IPv4 header",
 			    __func__, m, mlen);
 			/* NOTREACHED */
@@ -240,9 +242,9 @@ inet_cksum(struct mbuf *m, uint32_t nxt, uint32_t off, uint32_t len)
 		 * aligned, copy it to a local buffer.  Note here that we
 		 * expect the data pointer to point to the IP header.
 		 */
-		if ((sizeof (*ip) > m->m_len) ||
+		if ((sizeof(*ip) > m->m_len) ||
 		    !IP_HDR_ALIGNED_P(mtod(m, caddr_t))) {
-			m_copydata(m, 0, sizeof (*ip), (caddr_t)buf);
+			m_copydata(m, 0, sizeof(*ip), (caddr_t)buf);
 			ip = (struct ip *)(void *)buf;
 		} else {
 			ip = (struct ip *)(void *)(m->m_data);
@@ -256,7 +258,7 @@ inet_cksum(struct mbuf *m, uint32_t nxt, uint32_t off, uint32_t len)
 		ADDCARRY(sum);
 	}
 
-	return (~sum & 0xffff);
+	return ~sum & 0xffff;
 }
 
 /*
@@ -271,15 +273,16 @@ inet_cksum_buffer(const void *buffer, uint32_t nxt, uint32_t off,
 {
 	uint32_t sum;
 
-	if (off >= len)
+	if (off >= len) {
 		panic("%s: off (%d) >= len (%d)", __func__, off, len);
+	}
 
 	sum = b_sum16(&((const uint8_t *)buffer)[off], len);
 
 	/* include pseudo header checksum? */
 	if (nxt != 0) {
 		const struct ip *ip;
-		unsigned char buf[sizeof ((*ip))] __attribute__((aligned(8)));
+		unsigned char buf[sizeof((*ip))] __attribute__((aligned(8)));
 
 		/*
 		 * In case the IP header is not contiguous, or not 32-bit
@@ -287,7 +290,7 @@ inet_cksum_buffer(const void *buffer, uint32_t nxt, uint32_t off,
 		 * expect the data pointer to point to the IP header.
 		 */
 		if (!IP_HDR_ALIGNED_P(buffer)) {
-			memcpy(buf, buffer, sizeof (*ip));
+			memcpy(buf, buffer, sizeof(*ip));
 			ip = (const struct ip *)(const void *)buf;
 		} else {
 			ip = (const struct ip *)buffer;
@@ -301,13 +304,13 @@ inet_cksum_buffer(const void *buffer, uint32_t nxt, uint32_t off,
 		ADDCARRY(sum);
 	}
 
-	return (~sum & 0xffff);
+	return ~sum & 0xffff;
 }
 
 #if DEBUG || DEVELOPMENT
 #include <pexpert/pexpert.h>
 
-#define	CKSUM_ERR kprintf
+#define CKSUM_ERR kprintf
 
 /*
  * The following routines implement the portable, reference implementation
@@ -337,7 +340,7 @@ in_cksum_mbuf_ref(struct mbuf *m, int len, int off, uint32_t initial_sum)
 	for (;;) {
 		if (__improbable(m == NULL)) {
 			CKSUM_ERR("%s: out of data\n", __func__);
-			return ((uint32_t)-1);
+			return (uint32_t)-1;
 		}
 		mlen = m->m_len;
 		if (mlen > off) {
@@ -346,23 +349,26 @@ in_cksum_mbuf_ref(struct mbuf *m, int len, int off, uint32_t initial_sum)
 			goto post_initial_offset;
 		}
 		off -= mlen;
-		if (len == 0)
+		if (len == 0) {
 			break;
+		}
 		m = m->m_next;
 	}
 
 	for (; len > 0; m = m->m_next) {
 		if (__improbable(m == NULL)) {
 			CKSUM_ERR("%s: out of data\n", __func__);
-			return ((uint32_t)-1);
+			return (uint32_t)-1;
 		}
 		mlen = m->m_len;
 		data = mtod(m, uint8_t *);
 post_initial_offset:
-		if (mlen == 0)
+		if (mlen == 0) {
 			continue;
-		if (mlen > len)
+		}
+		if (mlen > len) {
 			mlen = len;
+		}
 		len -= mlen;
 
 		partial = 0;
@@ -399,9 +405,10 @@ post_initial_offset:
 			data += 32;
 			mlen -= 32;
 			if (__improbable(partial & 0xc0000000)) {
-				if (needs_swap)
+				if (needs_swap) {
 					partial = (partial << 8) +
 					    (partial >> 24);
+				}
 				sum += (partial >> 16);
 				sum += (partial & 0xffff);
 				partial = 0;
@@ -448,8 +455,9 @@ post_initial_offset:
 			started_on_odd = !started_on_odd;
 		}
 
-		if (needs_swap)
+		if (needs_swap) {
 			partial = (partial << 8) + (partial >> 24);
+		}
 		sum += (partial >> 16) + (partial & 0xffff);
 		/*
 		 * Reduce sum to allow potential byte swap
@@ -459,7 +467,7 @@ post_initial_offset:
 	}
 	final_acc = ((sum >> 16) & 0xffff) + (sum & 0xffff);
 	final_acc = (final_acc >> 16) + (final_acc & 0xffff);
-	return (final_acc & 0xffff);
+	return final_acc & 0xffff;
 }
 
 #else /* __LP64__ */
@@ -483,7 +491,7 @@ in_cksum_mbuf_ref(struct mbuf *m, int len, int off, uint32_t initial_sum)
 	for (;;) {
 		if (__improbable(m == NULL)) {
 			CKSUM_ERR("%s: out of data\n", __func__);
-			return ((uint32_t)-1);
+			return (uint32_t)-1;
 		}
 		mlen = m->m_len;
 		if (mlen > off) {
@@ -492,23 +500,26 @@ in_cksum_mbuf_ref(struct mbuf *m, int len, int off, uint32_t initial_sum)
 			goto post_initial_offset;
 		}
 		off -= mlen;
-		if (len == 0)
+		if (len == 0) {
 			break;
+		}
 		m = m->m_next;
 	}
 
 	for (; len > 0; m = m->m_next) {
 		if (__improbable(m == NULL)) {
 			CKSUM_ERR("%s: out of data\n", __func__);
-			return ((uint32_t)-1);
+			return (uint32_t)-1;
 		}
 		mlen = m->m_len;
 		data = mtod(m, uint8_t *);
 post_initial_offset:
-		if (mlen == 0)
+		if (mlen == 0) {
 			continue;
-		if (mlen > len)
+		}
+		if (mlen > len) {
 			mlen = len;
+		}
 		len -= mlen;
 
 		partial = 0;
@@ -525,8 +536,9 @@ post_initial_offset:
 		}
 		needs_swap = started_on_odd;
 		if ((uintptr_t)data & 2) {
-			if (mlen < 2)
+			if (mlen < 2) {
 				goto trailing_bytes;
+			}
 			partial += *(uint16_t *)(void *)data;
 			data += 2;
 			mlen -= 2;
@@ -553,9 +565,10 @@ post_initial_offset:
 			data += 64;
 			mlen -= 64;
 			if (__improbable(partial & (3ULL << 62))) {
-				if (needs_swap)
+				if (needs_swap) {
 					partial = (partial << 8) +
 					    (partial >> 56);
+				}
 				sum += (partial >> 32);
 				sum += (partial & 0xffffffff);
 				partial = 0;
@@ -606,8 +619,9 @@ trailing_bytes:
 			started_on_odd = !started_on_odd;
 		}
 
-		if (needs_swap)
+		if (needs_swap) {
 			partial = (partial << 8) + (partial >> 56);
+		}
 		sum += (partial >> 32) + (partial & 0xffffffff);
 		/*
 		 * Reduce sum to allow potential byte swap
@@ -619,7 +633,7 @@ trailing_bytes:
 	    ((sum >> 16) & 0xffff) + (sum & 0xffff);
 	final_acc = (final_acc >> 16) + (final_acc & 0xffff);
 	final_acc = (final_acc >> 16) + (final_acc & 0xffff);
-	return (final_acc & 0xffff);
+	return final_acc & 0xffff;
 }
 #endif /* __LP64 */
 #endif /* DEBUG || DEVELOPMENT */

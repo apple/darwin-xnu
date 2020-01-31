@@ -59,43 +59,43 @@ sdt_invop(uintptr_t addr, uintptr_t *stack, uintptr_t eax)
 
 			dtrace_probe(sdt->sdp_id, regs->rdi, regs->rsi, regs->rdx, regs->rcx, regs->r8);
 
-			return (DTRACE_INVOP_NOP);
+			return DTRACE_INVOP_NOP;
 		}
 	}
 
-	return (0);
+	return 0;
 }
 
 
 struct frame {
-    struct frame *backchain;
-    uintptr_t retaddr;
+	struct frame *backchain;
+	uintptr_t retaddr;
 };
 
 /*ARGSUSED*/
 uint64_t
 sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 {
-#pragma unused(arg, id, parg)    
+#pragma unused(arg, id, parg)
 	uint64_t val;
 	struct frame *fp = (struct frame *)__builtin_frame_address(0);
 	uintptr_t *stack;
 	uintptr_t pc;
 	int i;
 
-    /*
-     * A total of 6 arguments are passed via registers; any argument with
-     * index of 5 or lower is therefore in a register.
-     */
-    int inreg = 5;
+	/*
+	 * A total of 6 arguments are passed via registers; any argument with
+	 * index of 5 or lower is therefore in a register.
+	 */
+	int inreg = 5;
 
 	for (i = 1; i <= aframes; i++) {
 		fp = fp->backchain;
 		pc = fp->retaddr;
 
 		if (dtrace_invop_callsite_pre != NULL
-			&& pc  >  (uintptr_t)dtrace_invop_callsite_pre
-			&& pc  <= (uintptr_t)dtrace_invop_callsite_post) {
+		    && pc > (uintptr_t)dtrace_invop_callsite_pre
+		    && pc <= (uintptr_t)dtrace_invop_callsite_post) {
 			/*
 			 * In the case of x86_64, we will use the pointer to the
 			 * save area structure that was pushed when we took the
@@ -113,7 +113,7 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 			fp = fp->backchain; /* to fbt_perfcallback() activation. */
 			fp = fp->backchain; /* to kernel_trap() activation. */
 			fp = fp->backchain; /* to trap_from_kernel() activation. */
-			
+
 			x86_saved_state_t   *tagged_regs = (x86_saved_state_t *)&fp[1];
 			x86_saved_state64_t *saved_state = saved_state64(tagged_regs);
 
@@ -122,8 +122,8 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 			} else {
 				fp = (struct frame *)(saved_state->isf.rsp);
 				stack = (uintptr_t *)&fp[0]; /* Find marshalled
-								arguments */
-				argno -= (inreg +1);
+				                              *  arguments */
+				argno -= (inreg + 1);
 			}
 			goto load;
 		}
@@ -145,7 +145,7 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 		 * register...
 		 */
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
-		return (0);
+		return 0;
 	}
 
 	argno -= (inreg + 1);
@@ -157,6 +157,5 @@ load:
 	val = (uint64_t)(*(((uintptr_t *)stack) + argno));
 	DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 
-	return (val);
+	return val;
 }
-    

@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -66,8 +66,8 @@
  *	@(#)fsctl.h	8.6 (Berkeley) 3/28/94
  */
 
-#ifndef	_SYS_FSCTL_H_
-#define	_SYS_FSCTL_H_
+#ifndef _SYS_FSCTL_H_
+#define _SYS_FSCTL_H_
 
 #include <sys/ioccom.h>
 #include <sys/mount.h>
@@ -225,123 +225,126 @@ typedef char fstypename_t[MFSTYPENAMELEN];
 #ifdef KERNEL
 
 typedef struct user64_package_ext_info {
-    user64_addr_t strings;
-    uint32_t      num_entries;
-    uint32_t      max_width;
+	user64_addr_t strings;
+	uint32_t      num_entries;
+	uint32_t      max_width;
 } user64_package_ext_info;
 
 typedef struct user32_package_ext_info {
-    user32_addr_t strings;
-    uint32_t      num_entries;
-    uint32_t      max_width;
+	user32_addr_t strings;
+	uint32_t      num_entries;
+	uint32_t      max_width;
 } user32_package_ext_info;
 
 #endif  // KERNEL
 
 typedef struct package_ext_info {
-    const char *strings;
-    uint32_t    num_entries;
-    uint32_t    max_width;
+	const char *strings;
+	uint32_t    num_entries;
+	uint32_t    max_width;
 } package_ext_info;
 
 /* Disk conditioner configuration */
 typedef struct disk_conditioner_info {
-  int enabled;
-  uint64_t access_time_usec; // maximum latency until transfer begins
-  uint64_t read_throughput_mbps; // maximum throughput for reads
-  uint64_t write_throughput_mbps; // maximum throughput for writes
-  int is_ssd; // behave like an SSD
+	int enabled;
+	uint64_t access_time_usec; // maximum latency until transfer begins
+	uint64_t read_throughput_mbps; // maximum throughput for reads
+	uint64_t write_throughput_mbps; // maximum throughput for writes
+	int is_ssd; // behave like an SSD
 
-  /* revision 2 */
-  uint32_t ioqueue_depth;
-  uint32_t maxreadcnt;
-  uint32_t maxwritecnt;
-  uint32_t segreadcnt;
-  uint32_t segwritecnt;
+	/* revision 2 */
+	uint32_t ioqueue_depth;
+	uint32_t maxreadcnt;
+	uint32_t maxwritecnt;
+	uint32_t segreadcnt;
+	uint32_t segwritecnt;
 } disk_conditioner_info;
 
-#define	FSCTL_SYNC_FULLSYNC	(1<<0)	/* Flush the data fully to disk, if supported by the filesystem */
-#define	FSCTL_SYNC_WAIT		(1<<1)	/* Wait for the sync to complete */
+#define FSCTL_SYNC_FULLSYNC     (1<<0)  /* Flush the data fully to disk, if supported by the filesystem */
+#define FSCTL_SYNC_WAIT         (1<<1)  /* Wait for the sync to complete */
 
 
-#define FSIOC_SYNC_VOLUME			  _IOW('A', 1, uint32_t)
-#define	FSCTL_SYNC_VOLUME			  IOCBASECMD(FSIOC_SYNC_VOLUME)
+#define FSIOC_SYNC_VOLUME                         _IOW('A', 1, uint32_t)
+#define FSCTL_SYNC_VOLUME                         IOCBASECMD(FSIOC_SYNC_VOLUME)
 
-#define FSIOC_SET_PACKAGE_EXTS			  _IOW('A', 2, struct package_ext_info)
-#define	FSCTL_SET_PACKAGE_EXTS			  IOCBASECMD(FSIOC_SET_PACKAGE_EXTS)
+#define FSIOC_SET_PACKAGE_EXTS                    _IOW('A', 2, struct package_ext_info)
+#define FSCTL_SET_PACKAGE_EXTS                    IOCBASECMD(FSIOC_SET_PACKAGE_EXTS)
 
 /* Unsupported - previously FSIOC_WAIT_FOR_SYNC */
-#define FSIOC_UNSUPPORTED 			  _IOR('A', 3, int32_t)
+#define FSIOC_UNSUPPORTED                         _IOR('A', 3, int32_t)
 
-#define FSIOC_NAMESPACE_HANDLER_GET		  _IOW('A', 4, struct namespace_handler_info)
-#define	FSCTL_NAMESPACE_HANDLER_GET		  IOCBASECMD(FSIOC_NAMESPACE_HANDLER_GET)
+#define FSIOC_NAMESPACE_HANDLER_GET               _IOW('A', 4, struct namespace_handler_info)
+#define FSCTL_NAMESPACE_HANDLER_GET               IOCBASECMD(FSIOC_NAMESPACE_HANDLER_GET)
 
-#define FSIOC_NAMESPACE_HANDLER_UPDATE		  _IOW('A', 5, nspace_handler_info)
-#define	FSCTL_NAMESPACE_HANDLER_UPDATE		  IOCBASECMD(FSIOC_NAMESPACE_HANDLER_UPDATE)
+#define FSIOC_NAMESPACE_HANDLER_UPDATE            _IOW('A', 5, nspace_handler_info)
+#define FSCTL_NAMESPACE_HANDLER_UPDATE            IOCBASECMD(FSIOC_NAMESPACE_HANDLER_UPDATE)
 
-#define FSIOC_NAMESPACE_HANDLER_UNBLOCK		  _IOW('A', 6, nspace_handler_info)
-#define	FSCTL_NAMESPACE_HANDLER_UNBLOCK		  IOCBASECMD(FSIOC_NAMESPACE_HANDLER_UNBLOCK)
+#define FSIOC_NAMESPACE_HANDLER_UNBLOCK           _IOW('A', 6, nspace_handler_info)
+#define FSCTL_NAMESPACE_HANDLER_UNBLOCK           IOCBASECMD(FSIOC_NAMESPACE_HANDLER_UNBLOCK)
 
-#define FSIOC_NAMESPACE_HANDLER_CANCEL		  _IOW('A', 7, nspace_handler_info)
-#define	FSCTL_NAMESPACE_HANDLER_CANCEL		  IOCBASECMD(FSIOC_NAMESPACE_HANDLER_CANCEL)
+#define FSIOC_NAMESPACE_HANDLER_CANCEL            _IOW('A', 7, nspace_handler_info)
+#define FSCTL_NAMESPACE_HANDLER_CANCEL            IOCBASECMD(FSIOC_NAMESPACE_HANDLER_CANCEL)
 
 #define FSIOC_NAMESPACE_HANDLER_SET_SNAPSHOT_TIME _IOW('A', 8, int32_t)
-#define	FSCTL_NAMESPACE_HANDLER_SET_SNAPSHOT_TIME IOCBASECMD(FSIOC_NAMESPACE_HANDLER_SET_SNAPSHOT_TIME)
+#define FSCTL_NAMESPACE_HANDLER_SET_SNAPSHOT_TIME IOCBASECMD(FSIOC_NAMESPACE_HANDLER_SET_SNAPSHOT_TIME)
 
-#define FSIOC_OLD_SNAPSHOT_HANDLER_GET		  _IOW('A', 9, struct namespace_handler_info)
-#define FSCTL_OLD_SNAPSHOT_HANDLER_GET		  IOCBASECMD(FSIOC_OLD_SNAPSHOT_HANDLER_GET)
+#define FSIOC_OLD_SNAPSHOT_HANDLER_GET            _IOW('A', 9, struct namespace_handler_info)
+#define FSCTL_OLD_SNAPSHOT_HANDLER_GET            IOCBASECMD(FSIOC_OLD_SNAPSHOT_HANDLER_GET)
 
-#define FSIOC_SET_FSTYPENAME_OVERRIDE		  _IOW('A', 10, fstypename_t)
-#define	FSCTL_SET_FSTYPENAME_OVERRIDE	          IOCBASECMD(FSIOC_SET_FSTYPENAME_OVERRIDE)
+#define FSIOC_SET_FSTYPENAME_OVERRIDE             _IOW('A', 10, fstypename_t)
+#define FSCTL_SET_FSTYPENAME_OVERRIDE             IOCBASECMD(FSIOC_SET_FSTYPENAME_OVERRIDE)
 
 #define FSIOC_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS _IOW('A', 11, int32_t)
-#define	FSCTL_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS IOCBASECMD(FSIOC_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS)
+#define FSCTL_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS IOCBASECMD(FSIOC_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS)
 
 /* 12 was used for TRACKED_HANDLER_GET which has now been removed
-   as it is no longer used. */
+ *  as it is no longer used. */
 
-#define FSIOC_SNAPSHOT_HANDLER_GET_EXT		  _IOW('A', 13, struct namespace_handler_info_ext)
-#define FSCTL_SNAPSHOT_HANDLER_GET_EXT		  IOCBASECMD(FSIOC_SNAPSHOT_HANDLER_GET_EXT)
+#define FSIOC_SNAPSHOT_HANDLER_GET_EXT            _IOW('A', 13, struct namespace_handler_info_ext)
+#define FSCTL_SNAPSHOT_HANDLER_GET_EXT            IOCBASECMD(FSIOC_SNAPSHOT_HANDLER_GET_EXT)
 
 /* 14 was used for NAMESPACE_HANDLER_GETDATA which has now been
-   removed as it is no longer used. */
+ *  removed as it is no longer used. */
 
-#define FSIOC_ROUTEFS_SETROUTEID			  _IO('A', 15)
-#define	FSCTL_ROUTEFS_SETROUTEID			  IOCBASECMD(FSIOC_ROUTEFS_SETROUTEID)
+#define FSIOC_ROUTEFS_SETROUTEID                          _IO('A', 15)
+#define FSCTL_ROUTEFS_SETROUTEID                          IOCBASECMD(FSIOC_ROUTEFS_SETROUTEID)
 
 /* ioctls to support SEEK_HOLE SEEK_DATA */
-#define FSIOC_FIOSEEKHOLE					  _IOWR('A', 16, off_t)
-#define	FSCTL_FIOSEEKHOLE					  IOCBASECMD(FSIOC_FIOSEEKHOLE)
-#define FSIOC_FIOSEEKDATA					  _IOWR('A', 17, off_t)
-#define	FSCTL_FIOSEEKDATA					  IOCBASECMD(FSIOC_FIOSEEKDATA)
+#define FSIOC_FIOSEEKHOLE                                         _IOWR('A', 16, off_t)
+#define FSCTL_FIOSEEKHOLE                                         IOCBASECMD(FSIOC_FIOSEEKHOLE)
+#define FSIOC_FIOSEEKDATA                                         _IOWR('A', 17, off_t)
+#define FSCTL_FIOSEEKDATA                                         IOCBASECMD(FSIOC_FIOSEEKDATA)
 
 /* Disk conditioner */
-#define DISK_CONDITIONER_IOC_GET		  _IOR('A', 18, disk_conditioner_info)
-#define DISK_CONDITIONER_FSCTL_GET		  IOCBASECMD(DISK_CONDITIONER_IOC_GET)
-#define DISK_CONDITIONER_IOC_SET		  _IOW('A', 19, disk_conditioner_info)
-#define DISK_CONDITIONER_FSCTL_SET		  IOCBASECMD(DISK_CONDITIONER_IOC_SET)
+#define DISK_CONDITIONER_IOC_GET                  _IOR('A', 18, disk_conditioner_info)
+#define DISK_CONDITIONER_FSCTL_GET                IOCBASECMD(DISK_CONDITIONER_IOC_GET)
+#define DISK_CONDITIONER_IOC_SET                  _IOW('A', 19, disk_conditioner_info)
+#define DISK_CONDITIONER_FSCTL_SET                IOCBASECMD(DISK_CONDITIONER_IOC_SET)
+
+/* Check if a file is only open once (pass zero for the extra arg) */
+#define FSIOC_FD_ONLY_OPEN_ONCE _IOWR('A', 21, uint32_t)
 
 //
-// Spotlight and fseventsd use these fsctl()'s to find out 
-// the mount time of a volume and the last time it was 
+// Spotlight and fseventsd use these fsctl()'s to find out
+// the mount time of a volume and the last time it was
 // unmounted.  Both HFS and APFS support these calls.
 //
 // NOTE: the values for these defines should _not_ be changed
 //       or else it will break binary compatibility with mds
 //       and fseventsd.
 //
-#define SPOTLIGHT_IOC_GET_MOUNT_TIME		  _IOR('h', 18, u_int32_t)
-#define SPOTLIGHT_FSCTL_GET_MOUNT_TIME		  IOCBASECMD(SPOTLIGHT_IOC_GET_MOUNT_TIME)
-#define SPOTLIGHT_IOC_GET_LAST_MTIME		  _IOR('h', 19, u_int32_t)
-#define SPOTLIGHT_FSCTL_GET_LAST_MTIME		  IOCBASECMD(SPOTLIGHT_IOC_GET_LAST_MTIME)
+#define SPOTLIGHT_IOC_GET_MOUNT_TIME              _IOR('h', 18, u_int32_t)
+#define SPOTLIGHT_FSCTL_GET_MOUNT_TIME            IOCBASECMD(SPOTLIGHT_IOC_GET_MOUNT_TIME)
+#define SPOTLIGHT_IOC_GET_LAST_MTIME              _IOR('h', 19, u_int32_t)
+#define SPOTLIGHT_FSCTL_GET_LAST_MTIME            IOCBASECMD(SPOTLIGHT_IOC_GET_LAST_MTIME)
 
 /* Mark file's extents as "frozen" because someone has references to physical address */
-#define FSIOC_FREEZE_EXTENTS				_IO('h', 20)
-#define FSCTL_FREEZE_EXTENTS				IOCBASECMD(FSIOC_FREEZE_EXTENTS)
+#define FSIOC_FREEZE_EXTENTS                            _IO('h', 20)
+#define FSCTL_FREEZE_EXTENTS                            IOCBASECMD(FSIOC_FREEZE_EXTENTS)
 
 /* Clear the "frozen" status of file's extents */
-#define FSIOC_THAW_EXTENTS				_IO('h', 21)
-#define FSCTL_THAW_EXTENTS				IOCBASECMD(FSIOC_THAW_EXTENTS)
+#define FSIOC_THAW_EXTENTS                              _IO('h', 21)
+#define FSCTL_THAW_EXTENTS                              IOCBASECMD(FSIOC_THAW_EXTENTS)
 
 #ifndef KERNEL
 
@@ -349,8 +352,8 @@ typedef struct disk_conditioner_info {
 
 __BEGIN_DECLS
 
-int	fsctl(const char *,unsigned long,void*,unsigned int);
-int	ffsctl(int,unsigned long,void*,unsigned int);
+int     fsctl(const char *, unsigned long, void*, unsigned int);
+int     ffsctl(int, unsigned long, void*, unsigned int);
 
 __END_DECLS
 

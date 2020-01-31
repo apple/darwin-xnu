@@ -10,7 +10,7 @@
  * HISTORY
  *
  * 30 July 1997 Umesh Vaishampayan (umeshv@apple.com)
- * 	enabled file descriptor pseudo-device.
+ *      enabled file descriptor pseudo-device.
  * 18 June 1993 ? at NeXT
  *	Cleaned up a lot of stuff in this file.
  */
@@ -38,34 +38,34 @@ struct bdevsw   bdevsw[] =
 
 	/* 0 - 7 are reserved to NeXT */
 
-	NO_BDEVICE,		/* 0 */
-	NO_BDEVICE,		/* 1 */
-	NO_BDEVICE,		/* 2 */
-	NO_BDEVICE,		/* 3 */
-	NO_BDEVICE,		/* 4 */
-	NO_BDEVICE,		/* 5 */
-	NO_BDEVICE,		/* 6 */
-	NO_BDEVICE,		/* 7 */
+	NO_BDEVICE,             /* 0 */
+	NO_BDEVICE,             /* 1 */
+	NO_BDEVICE,             /* 2 */
+	NO_BDEVICE,             /* 3 */
+	NO_BDEVICE,             /* 4 */
+	NO_BDEVICE,             /* 5 */
+	NO_BDEVICE,             /* 6 */
+	NO_BDEVICE,             /* 7 */
 
 	/* 8 - 15 are reserved to the user */
-	NO_BDEVICE,		/* 8 */
-	NO_BDEVICE,		/* 9 */
-	NO_BDEVICE,		/* 10 */
-	NO_BDEVICE,		/* 11 */
-	NO_BDEVICE,		/* 12 */
-	NO_BDEVICE,		/* 13 */
-	NO_BDEVICE,		/* 14 */
-	NO_BDEVICE,		/* 15 */
+	NO_BDEVICE,             /* 8 */
+	NO_BDEVICE,             /* 9 */
+	NO_BDEVICE,             /* 10 */
+	NO_BDEVICE,             /* 11 */
+	NO_BDEVICE,             /* 12 */
+	NO_BDEVICE,             /* 13 */
+	NO_BDEVICE,             /* 14 */
+	NO_BDEVICE,             /* 15 */
 
 	/* 16 - 23 are reserved to NeXT */
-	NO_BDEVICE,		/* 16 */
-	NO_BDEVICE,		/* 17 */
-	NO_BDEVICE,		/* 18 */
-	NO_BDEVICE,		/* 18 */
-	NO_BDEVICE,		/* 20 */
-	NO_BDEVICE,		/* 21 */
-	NO_BDEVICE,		/* 22 */
-	NO_BDEVICE,		/* 23 */
+	NO_BDEVICE,             /* 16 */
+	NO_BDEVICE,             /* 17 */
+	NO_BDEVICE,             /* 18 */
+	NO_BDEVICE,             /* 18 */
+	NO_BDEVICE,             /* 20 */
+	NO_BDEVICE,             /* 21 */
+	NO_BDEVICE,             /* 22 */
+	NO_BDEVICE,             /* 23 */
 };
 
 const int nblkdev = sizeof(bdevsw) / sizeof(bdevsw[0]);
@@ -91,9 +91,9 @@ extern d_open_t volopen;
 extern d_close_t volclose;
 extern d_ioctl_t volioctl;
 #else
-#define	volopen		eno_opcl
-#define	volclose	eno_opcl
-#define	volioctl	eno_ioctl
+#define volopen         eno_opcl
+#define volclose        eno_opcl
+#define volioctl        eno_ioctl
 #endif
 
 extern d_open_t cttyopen;
@@ -105,8 +105,8 @@ extern d_select_t cttyselect;
 extern d_read_t mmread;
 extern d_write_t mmwrite;
 extern d_ioctl_t mmioctl;
-#define	mmselect	(select_fcn_t *)seltrue
-#define mmmmap		eno_mmap
+#define mmselect        (select_fcn_t *)seltrue
+#define mmmmap          eno_mmap
 
 #include <pty.h>
 #if NPTY > 0
@@ -123,18 +123,18 @@ extern d_write_t ptcwrite;
 extern d_select_t ptcselect;
 extern d_ioctl_t ptyioctl;
 #else
-#define ptsopen		eno_opcl
-#define ptsclose	eno_opcl
-#define ptsread		eno_rdwrt
-#define ptswrite	eno_rdwrt
-#define	ptsstop		nulldev
+#define ptsopen         eno_opcl
+#define ptsclose        eno_opcl
+#define ptsread         eno_rdwrt
+#define ptswrite        eno_rdwrt
+#define ptsstop         nulldev
 
-#define ptcopen		eno_opcl
-#define ptcclose	eno_opcl
-#define ptcread		eno_rdwrt
-#define ptcwrite	eno_rdwrt
-#define	ptcselect	eno_select
-#define ptyioctl	eno_ioctl
+#define ptcopen         eno_opcl
+#define ptcclose        eno_opcl
+#define ptcread         eno_rdwrt
+#define ptcwrite        eno_rdwrt
+#define ptcselect       eno_select
+#define ptyioctl        eno_ioctl
 #endif
 
 extern d_open_t logopen;
@@ -149,19 +149,19 @@ extern d_read_t oslog_streamread;
 extern d_ioctl_t oslog_streamioctl;
 extern d_select_t oslog_streamselect;
 
-extern d_open_t 	oslogopen;
-extern d_close_t	oslogclose;
-extern d_select_t	oslogselect;
-extern d_ioctl_t	oslogioctl;
+extern d_open_t         oslogopen;
+extern d_close_t        oslogclose;
+extern d_select_t       oslogselect;
+extern d_ioctl_t        oslogioctl;
 
-#define nullopen	(d_open_t *)&nulldev
-#define nullclose	(d_close_t *)&nulldev
-#define nullread	(d_read_t *)&nulldev
-#define nullwrite	(d_write_t *)&nulldev
-#define nullioctl	(d_ioctl_t *)&nulldev
-#define nullselect	(d_select_t *)&nulldev
-#define nullstop	(d_stop_t *)&nulldev
-#define nullreset	(d_reset_t *)&nulldev
+#define nullopen        (d_open_t *)&nulldev
+#define nullclose       (d_close_t *)&nulldev
+#define nullread        (d_read_t *)&nulldev
+#define nullwrite       (d_write_t *)&nulldev
+#define nullioctl       (d_ioctl_t *)&nulldev
+#define nullselect      (d_select_t *)&nulldev
+#define nullstop        (d_stop_t *)&nulldev
+#define nullreset       (d_reset_t *)&nulldev
 
 struct cdevsw cdevsw[] = {
 	/*
@@ -226,7 +226,7 @@ const int nchrdev = sizeof(cdevsw) / sizeof(cdevsw[0]);
 
 uint64_t cdevsw_flags[sizeof(cdevsw) / sizeof(cdevsw[0])];
 
-#include	<sys/vnode.h>	/* for VCHR and VBLK */
+#include        <sys/vnode.h>   /* for VCHR and VBLK */
 /*
  * return true if a disk
  */
@@ -241,41 +241,41 @@ isdisk(dev_t dev, int type)
 		if (maj == NODEV) {
 			break;
 		}
-		/* FALL THROUGH */
+	/* FALL THROUGH */
 	case VBLK:
 		if (bdevsw[maj].d_type == D_DISK) {
-			return (1);
+			return 1;
 		}
 		break;
 	}
-	return (0);
+	return 0;
 }
 
 static int      chrtoblktab[] = {
 	/* CHR *//* BLK *//* CHR *//* BLK */
-	 /* 0 */ NODEV, /* 1 */ NODEV,
-	 /* 2 */ NODEV, /* 3 */ NODEV,
-	 /* 4 */ NODEV, /* 5 */ NODEV,
-	 /* 6 */ NODEV, /* 7 */ NODEV,
-	 /* 8 */ NODEV, /* 9 */ NODEV,
-	 /* 10 */ NODEV, /* 11 */ NODEV,
-	 /* 12 */ NODEV, /* 13 */ NODEV,
-	 /* 14 */ NODEV, /* 15 */ NODEV,
-	 /* 16 */ NODEV, /* 17 */ NODEV,
-	 /* 18 */ NODEV, /* 19 */ NODEV,
-	 /* 20 */ NODEV, /* 21 */ NODEV,
-	 /* 22 */ NODEV, /* 23 */ NODEV,
-	 /* 24 */ NODEV, /* 25 */ NODEV,
-	 /* 26 */ NODEV, /* 27 */ NODEV,
-	 /* 28 */ NODEV, /* 29 */ NODEV,
-	 /* 30 */ NODEV, /* 31 */ NODEV,
-	 /* 32 */ NODEV, /* 33 */ NODEV,
-	 /* 34 */ NODEV, /* 35 */ NODEV,
-	 /* 36 */ NODEV, /* 37 */ NODEV,
-	 /* 38 */ NODEV, /* 39 */ NODEV,
-	 /* 40 */ NODEV, /* 41 */ NODEV,
-	 /* 42 */ NODEV, /* 43 */ NODEV,
-	 /* 44 */ NODEV,
+	/* 0 */ NODEV, /* 1 */ NODEV,
+	/* 2 */ NODEV, /* 3 */ NODEV,
+	/* 4 */ NODEV, /* 5 */ NODEV,
+	/* 6 */ NODEV, /* 7 */ NODEV,
+	/* 8 */ NODEV, /* 9 */ NODEV,
+	/* 10 */ NODEV, /* 11 */ NODEV,
+	/* 12 */ NODEV, /* 13 */ NODEV,
+	/* 14 */ NODEV, /* 15 */ NODEV,
+	/* 16 */ NODEV, /* 17 */ NODEV,
+	/* 18 */ NODEV, /* 19 */ NODEV,
+	/* 20 */ NODEV, /* 21 */ NODEV,
+	/* 22 */ NODEV, /* 23 */ NODEV,
+	/* 24 */ NODEV, /* 25 */ NODEV,
+	/* 26 */ NODEV, /* 27 */ NODEV,
+	/* 28 */ NODEV, /* 29 */ NODEV,
+	/* 30 */ NODEV, /* 31 */ NODEV,
+	/* 32 */ NODEV, /* 33 */ NODEV,
+	/* 34 */ NODEV, /* 35 */ NODEV,
+	/* 36 */ NODEV, /* 37 */ NODEV,
+	/* 38 */ NODEV, /* 39 */ NODEV,
+	/* 40 */ NODEV, /* 41 */ NODEV,
+	/* 42 */ NODEV, /* 43 */ NODEV,
+	/* 44 */ NODEV,
 };
 
 /*
@@ -286,21 +286,25 @@ chrtoblk(dev_t dev)
 {
 	int             blkmaj;
 
-	if (major(dev) >= nchrdev)
-		return (NODEV);
+	if (major(dev) >= nchrdev) {
+		return NODEV;
+	}
 	blkmaj = chrtoblktab[major(dev)];
-	if (blkmaj == NODEV)
-		return (NODEV);
-	return (makedev(blkmaj, minor(dev)));
+	if (blkmaj == NODEV) {
+		return NODEV;
+	}
+	return makedev(blkmaj, minor(dev));
 }
 
 int
 chrtoblk_set(int cdev, int bdev)
 {
-	if (cdev >= nchrdev)
-		return (-1);
-	if (bdev != NODEV && bdev >= nblkdev)
-		return (-1);
+	if (cdev >= nchrdev) {
+		return -1;
+	}
+	if (bdev != NODEV && bdev >= nblkdev) {
+		return -1;
+	}
 	chrtoblktab[cdev] = bdev;
 	return 0;
 }

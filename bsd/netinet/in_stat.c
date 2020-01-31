@@ -28,20 +28,21 @@
 
 #include <netinet/in_stat.h>
 
-#define	IN_STAT_ACTIVITY_GRANULARITY		8	/* 8 sec granularity */
-#define	IN_STAT_ACTIVITY_TIME_SEC_SHIFT		3	/* 8 sec per bit */
-#define	IN_STAT_ACTIVITY_BITMAP_TOTAL_SIZE	((uint64_t) 128)
-#define	IN_STAT_ACTIVITY_BITMAP_FIELD_SIZE	((uint64_t) 64)
-#define	IN_STAT_ACTIVITY_TOTAL_TIME		((uint64_t) (8 * 128))
-#define	IN_STAT_SET_MOST_SIGNIFICANT_BIT	((u_int64_t )0x8000000000000000)
+#define IN_STAT_ACTIVITY_GRANULARITY            8       /* 8 sec granularity */
+#define IN_STAT_ACTIVITY_TIME_SEC_SHIFT         3       /* 8 sec per bit */
+#define IN_STAT_ACTIVITY_BITMAP_TOTAL_SIZE      ((uint64_t) 128)
+#define IN_STAT_ACTIVITY_BITMAP_FIELD_SIZE      ((uint64_t) 64)
+#define IN_STAT_ACTIVITY_TOTAL_TIME             ((uint64_t) (8 * 128))
+#define IN_STAT_SET_MOST_SIGNIFICANT_BIT        ((u_int64_t )0x8000000000000000)
 
 void
 in_stat_set_activity_bitmap(activity_bitmap_t *activity, uint64_t now)
 {
 	uint64_t elapsed_time, slot;
 	uint64_t *bitmap;
-	if (activity->start == 0)
+	if (activity->start == 0) {
 		activity->start = now;
+	}
 	elapsed_time = now - activity->start;
 
 	slot = elapsed_time >> IN_STAT_ACTIVITY_TIME_SEC_SHIFT;
@@ -70,10 +71,11 @@ in_stat_set_activity_bitmap(activity_bitmap_t *activity, uint64_t now)
 				activity->bitmap[0] = activity->bitmap[1];
 				activity->bitmap[1] = 0;
 				shift -= IN_STAT_ACTIVITY_BITMAP_FIELD_SIZE;
-				if (shift == IN_STAT_ACTIVITY_BITMAP_FIELD_SIZE)
+				if (shift == IN_STAT_ACTIVITY_BITMAP_FIELD_SIZE) {
 					activity->bitmap[0] = 0;
-				else
+				} else {
 					activity->bitmap[0] >>= shift;
+				}
 			} else {
 				uint64_t mask_lower, tmp;
 				uint64_t b1_low, b0_high;
@@ -89,7 +91,7 @@ in_stat_set_activity_bitmap(activity_bitmap_t *activity, uint64_t now)
 
 				b0_high = (b1_low <<
 				    (IN_STAT_ACTIVITY_BITMAP_FIELD_SIZE -
-				     shift));
+				    shift));
 				activity->bitmap[0] |= b0_high;
 				activity->bitmap[1] >>= shift;
 			}

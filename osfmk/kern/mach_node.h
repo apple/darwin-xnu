@@ -49,10 +49,10 @@
  */
 #pragma pack(4)
 typedef struct mach_node_server_msg {
-    mach_msg_header_t   header;
-    uint32_t    identifier;     // See FLIPC_SM_* defines
-    uint32_t    options;        // Currently unused
-    uint32_t    node_id;        // Node number
+	mach_msg_header_t   header;
+	uint32_t    identifier; // See FLIPC_SM_* defines
+	uint32_t    options;    // Currently unused
+	uint32_t    node_id;    // Node number
 } *mach_node_server_msg_t;
 #pragma pack()
 
@@ -60,9 +60,9 @@ typedef struct mach_node_server_msg {
  * layer to the node bootstrap server.
  */
 typedef struct mach_node_server_register_msg {
-    struct mach_node_server_msg node_header;
-    uint8_t     datamodel;      // 1==ILP32, 2==LP64; matches dtrace
-    uint8_t     byteorder;      // Uses defines from libkern/OSByteOrder.h
+	struct mach_node_server_msg node_header;
+	uint8_t     datamodel;  // 1==ILP32, 2==LP64; matches dtrace
+	uint8_t     byteorder;  // Uses defines from libkern/OSByteOrder.h
 } *mach_node_server_register_msg_t;
 #pragma pack()
 
@@ -103,28 +103,28 @@ typedef struct  flipc_node  *flipc_node_t;  // Defined in ipc/flipc.h
 typedef struct mach_node *mach_node_t;
 
 struct mach_node {
-    /* Static node details, provided by the link driver at registration */
-    struct mnl_node_info info;
+	/* Static node details, provided by the link driver at registration */
+	struct mnl_node_info info;
 
-    lck_spin_t      node_lock_data;
+	lck_spin_t      node_lock_data;
 
-    /* Flags and status word */
-    uint32_t        link:2;         // See MNL_LINK* defines
-    uint32_t        published:1;    // True if node server has send-right
-    uint32_t        active:1;       // True if node is up and ready
-    uint32_t        suspended:1;    // True if node is active but sleeping
-    uint32_t        dead:1;         // True if node is dead
-    uint32_t        _reserved:26;   // Fill out the 32b flags field
+	/* Flags and status word */
+	uint32_t        link:2;     // See MNL_LINK* defines
+	uint32_t        published:1;// True if node server has send-right
+	uint32_t        active:1;   // True if node is up and ready
+	uint32_t        suspended:1;// True if node is active but sleeping
+	uint32_t        dead:1;     // True if node is dead
+	uint32_t        _reserved:26;// Fill out the 32b flags field
 
-    /* port/space/set */
-    ipc_space_t     proxy_space;    // Kernel special space for proxy rights
-    ipc_pset_t      proxy_port_set; // All proxy ports are in this set
-    ipc_port_t      bootstrap_port; // Port for which "noded" holds rcv right
-    ipc_port_t      control_port;   // For control & ack/nak messages
+	/* port/space/set */
+	ipc_space_t     proxy_space;// Kernel special space for proxy rights
+	ipc_pset_t      proxy_port_set;// All proxy ports are in this set
+	ipc_port_t      bootstrap_port;// Port for which "noded" holds rcv right
+	ipc_port_t      control_port;// For control & ack/nak messages
 
-    /* Misc */
-    int             proto_vers;     // Protocol version in use for this node
-    mach_node_t     antecedent;     // Pointer to prior encarnation of this node id
+	/* Misc */
+	int             proto_vers; // Protocol version in use for this node
+	mach_node_t     antecedent; // Pointer to prior encarnation of this node id
 };
 
 extern mach_node_t  localnode;      // This node's mach_node_t struct
@@ -136,9 +136,9 @@ extern mach_node_t  localnode;      // This node's mach_node_t struct
 #define MACH_NODE_FREE(node)        kfree(node, MACH_NODE_SIZE)
 
 #define MACH_NODE_LOCK_INIT(np)     lck_spin_init(&(np)->node_lock_data, \
-                                                  &ipc_lck_grp, &ipc_lck_attr)
+	                                          &ipc_lck_grp, &ipc_lck_attr)
 #define MACH_NODE_LOCK_DESTROY(np)  lck_spin_destroy(&(np)->node_lock_data, \
-                                                     &ipc_lck_grp)
+	                                             &ipc_lck_grp)
 #define MACH_NODE_LOCK(np)          lck_spin_lock(&(np)->node_lock_data)
 #define MACH_NODE_UNLOCK(np)        lck_spin_unlock(&(np)->node_lock_data)
 
@@ -152,8 +152,8 @@ extern mach_node_t  localnode;      // This node's mach_node_t struct
  */
 mach_node_t
 mach_node_for_id_locked(mach_node_id_t  node_id,
-                        boolean_t       alloc_if_dead,
-                        boolean_t       alloc_if_absent);
+    boolean_t       alloc_if_dead,
+    boolean_t       alloc_if_absent);
 
 
 /*** Mach Node Link Name Section
@@ -190,8 +190,8 @@ extern void mnl_name_free(mnl_name_t name);
  *  allocate and free the actual objects being stored.
  */
 typedef struct mnl_obj {
-    queue_chain_t   links;  // List of mnk_name_obj (See kern/queue.h "Method 1")
-    mnl_name_t      name;   // Unique mnl_name
+	queue_chain_t   links;// List of mnk_name_obj (See kern/queue.h "Method 1")
+	mnl_name_t      name;// Unique mnl_name
 } *mnl_obj_t;
 
 #define MNL_OBJ_NULL        ((mnl_obj_t) 0UL)
@@ -256,4 +256,3 @@ __END_DECLS
 
 #endif  // MACH_FLIPC && MACH_KERNEL_PRIVATE
 #endif  // _KERN_MACH_NODE_H_
-

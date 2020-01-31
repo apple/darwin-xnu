@@ -1,8 +1,8 @@
 /*
  * Copyright (c) 2007 Apple Inc. All Rights Reserved.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -144,33 +144,33 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	 *	Map in special device (must be SHARED) or file
 	 */
 	struct fileproc *fp;
-	struct			vnode *vp;
-	int			flags;
-	int			prot;
-	int			err=0;
-	vm_map_t		user_map;
-	kern_return_t		result;
-	vm_map_offset_t		user_addr;
-	vm_map_size_t		user_size;
-	vm_object_offset_t	pageoff;
-	vm_object_offset_t	file_pos;
-	int			alloc_flags = 0;
-	vm_tag_t		tag = VM_KERN_MEMORY_NONE;
-	vm_map_kernel_flags_t	vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
-	boolean_t		docow;
-	vm_prot_t		maxprot;
-	void 			*handle;
-	memory_object_t		pager = MEMORY_OBJECT_NULL;
-	memory_object_control_t	 control;
-	int 			mapanon=0;
-	int 			fpref=0;
-	int error =0;
+	struct                  vnode *vp;
+	int                     flags;
+	int                     prot;
+	int                     err = 0;
+	vm_map_t                user_map;
+	kern_return_t           result;
+	vm_map_offset_t         user_addr;
+	vm_map_size_t           user_size;
+	vm_object_offset_t      pageoff;
+	vm_object_offset_t      file_pos;
+	int                     alloc_flags = 0;
+	vm_tag_t                tag = VM_KERN_MEMORY_NONE;
+	vm_map_kernel_flags_t   vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
+	boolean_t               docow;
+	vm_prot_t               maxprot;
+	void                    *handle;
+	memory_object_t         pager = MEMORY_OBJECT_NULL;
+	memory_object_control_t  control;
+	int                     mapanon = 0;
+	int                     fpref = 0;
+	int error = 0;
 	int fd = uap->fd;
 	int num_retries = 0;
 
 	/*
 	 * Note that for UNIX03 conformance, there is additional parameter checking for
-	 * mmap() system call in libsyscall prior to entering the kernel.  The sanity 
+	 * mmap() system call in libsyscall prior to entering the kernel.  The sanity
 	 * checks and argument validation done in this function are not the only places
 	 * one can get returned errnos.
 	 */
@@ -191,24 +191,26 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	 * for write or execute access, we must imply read access as well;
 	 * otherwise programs expecting this to work will fail to operate.
 	 */
-	if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
+	if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE)) {
 		prot |= VM_PROT_READ;
-#endif	/* radar 3777787 */
+	}
+#endif  /* radar 3777787 */
 
 	flags = uap->flags;
 	vp = NULLVP;
 
 	/*
 	 * The vm code does not have prototypes & compiler doesn't do the'
-	 * the right thing when you cast 64bit value and pass it in function 
+	 * the right thing when you cast 64bit value and pass it in function
 	 * call. So here it is.
 	 */
 	file_pos = (vm_object_offset_t)uap->pos;
 
 
 	/* make sure mapping fits into numeric range etc */
-	if (file_pos + user_size > (vm_object_offset_t)-PAGE_SIZE_64)
-		return (EINVAL);
+	if (file_pos + user_size > (vm_object_offset_t)-PAGE_SIZE_64) {
+		return EINVAL;
+	}
 
 	/*
 	 * Align the file position to a page boundary,
@@ -219,9 +221,9 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 
 
 	/* Adjust size for rounding (on both ends). */
-	user_size += pageoff;	/* low end... */
-	user_size = vm_map_round_page(user_size,	
-				      vm_map_page_mask(user_map)); /* hi end */
+	user_size += pageoff;   /* low end... */
+	user_size = vm_map_round_page(user_size,
+	    vm_map_page_mask(user_map));                           /* hi end */
 
 	if (flags & MAP_JIT) {
 		if ((flags & MAP_FIXED) ||
@@ -255,8 +257,9 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		 * should be aligned after adjustment by pageoff.
 		 */
 		user_addr -= pageoff;
-		if (user_addr & vm_map_page_mask(user_map))
-			return (EINVAL);
+		if (user_addr & vm_map_page_mask(user_map)) {
+			return EINVAL;
+		}
 	}
 #ifdef notyet
 	/* DO not have apis to get this info, need to wait till then*/
@@ -269,16 +272,16 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	 * location.
 	 */
 	else if (addr < vm_map_round_page(p->p_vmspace->vm_daddr + MAXDSIZ,
-					  vm_map_page_mask(user_map)))
+	    vm_map_page_mask(user_map))) {
 		addr = vm_map_round_page(p->p_vmspace->vm_daddr + MAXDSIZ,
-					 vm_map_page_mask(user_map));
+		    vm_map_page_mask(user_map));
+	}
 
 #endif
 
 	alloc_flags = 0;
 
 	if (flags & MAP_ANON) {
-
 		maxprot = VM_PROT_ALL;
 #if CONFIG_MACF
 		/*
@@ -287,12 +290,12 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		error = mac_proc_check_map_anon(p, user_addr, user_size, prot, flags, &maxprot);
 		if (error) {
 			return EINVAL;
-		}		
+		}
 #endif /* MAC */
 
 		/*
 		 * Mapping blank space is trivial.  Use positive fds as the alias
-		 * value for memory tracking. 
+		 * value for memory tracking.
 		 */
 		if (fd != -1) {
 			/*
@@ -300,9 +303,9 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			 * (see the VM_FLAGS_* definitions).
 			 */
 			alloc_flags = fd & (VM_FLAGS_ALIAS_MASK |
-					    VM_FLAGS_SUPERPAGE_MASK |
-					    VM_FLAGS_PURGABLE |
-					    VM_FLAGS_4GB_CHUNK);
+			    VM_FLAGS_SUPERPAGE_MASK |
+			    VM_FLAGS_PURGABLE |
+			    VM_FLAGS_4GB_CHUNK);
 			if (alloc_flags != fd) {
 				/* reject if there are any extra flags */
 				return EINVAL;
@@ -310,7 +313,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			VM_GET_FLAGS_ALIAS(alloc_flags, tag);
 			alloc_flags &= ~VM_FLAGS_ALIAS_MASK;
 		}
-			
+
 		handle = NULL;
 		file_pos = 0;
 		mapanon = 1;
@@ -318,16 +321,18 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		struct vnode_attr va;
 		vfs_context_t ctx = vfs_context_current();
 
-		if (flags & MAP_JIT)
+		if (flags & MAP_JIT) {
 			return EINVAL;
+		}
 
 		/*
 		 * Mapping file, get fp for validation. Obtain vnode and make
 		 * sure it is of appropriate type.
 		 */
 		err = fp_lookup(p, fd, &fp, 0);
-		if (err)
-			return(err);
+		if (err) {
+			return err;
+		}
 		fpref = 1;
 		switch (FILEGLOB_DTYPE(fp->f_fglob)) {
 		case DTYPE_PSXSHM:
@@ -346,8 +351,9 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		}
 		vp = (struct vnode *)fp->f_fglob->fg_data;
 		error = vnode_getwithref(vp);
-		if(error != 0)
+		if (error != 0) {
 			goto bad;
+		}
 
 		if (vp->v_type != VREG && vp->v_type != VCHR) {
 			(void)vnode_put(vp);
@@ -356,7 +362,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		}
 
 		AUDIT_ARG(vnpath, vp, ARG_VNODE1);
-		
+
 		/*
 		 * POSIX: mmap needs to update access time for mapped files
 		 */
@@ -385,10 +391,10 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			 * credentials do we use for determination? What if
 			 * proc does a setuid?
 			 */
-			maxprot = VM_PROT_EXECUTE;	/* ??? */
-			if (fp->f_fglob->fg_flag & FREAD)
+			maxprot = VM_PROT_EXECUTE;      /* ??? */
+			if (fp->f_fglob->fg_flag & FREAD) {
 				maxprot |= VM_PROT_READ;
-			else if (prot & PROT_READ) {
+			} else if (prot & PROT_READ) {
 				(void)vnode_put(vp);
 				error = EACCES;
 				goto bad;
@@ -398,41 +404,42 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			 * MAP_SHARED or via the implicit sharing of character
 			 * device mappings), and we are trying to get write
 			 * permission although we opened it without asking
-			 * for it, bail out. 
+			 * for it, bail out.
 			 */
 
 			if ((flags & MAP_SHARED) != 0) {
 				if ((fp->f_fglob->fg_flag & FWRITE) != 0 &&
 				    /*
-				     * Do not allow writable mappings of 
+				     * Do not allow writable mappings of
 				     * swap files (see vm_swapfile_pager.c).
 				     */
 				    !vnode_isswap(vp)) {
- 					/*
- 					 * check for write access
- 					 *
- 					 * Note that we already made this check when granting FWRITE
- 					 * against the file, so it seems redundant here.
- 					 */
- 					error = vnode_authorize(vp, NULL, KAUTH_VNODE_CHECKIMMUTABLE, ctx);
- 
- 					/* if not granted for any reason, but we wanted it, bad */
- 					if ((prot & PROT_WRITE) && (error != 0)) {
- 						vnode_put(vp);
-  						goto bad;
-  					}
- 
- 					/* if writable, remember */
- 					if (error == 0)
-  						maxprot |= VM_PROT_WRITE;
+					/*
+					 * check for write access
+					 *
+					 * Note that we already made this check when granting FWRITE
+					 * against the file, so it seems redundant here.
+					 */
+					error = vnode_authorize(vp, NULL, KAUTH_VNODE_CHECKIMMUTABLE, ctx);
 
+					/* if not granted for any reason, but we wanted it, bad */
+					if ((prot & PROT_WRITE) && (error != 0)) {
+						vnode_put(vp);
+						goto bad;
+					}
+
+					/* if writable, remember */
+					if (error == 0) {
+						maxprot |= VM_PROT_WRITE;
+					}
 				} else if ((prot & PROT_WRITE) != 0) {
 					(void)vnode_put(vp);
 					error = EACCES;
 					goto bad;
 				}
-			} else
+			} else {
 				maxprot |= VM_PROT_WRITE;
+			}
 
 			handle = (void *)vp;
 #if CONFIG_MACF
@@ -446,9 +453,10 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		}
 	}
 
-	if (user_size == 0)  {
-		if (!mapanon)
+	if (user_size == 0) {
+		if (!mapanon) {
 			(void)vnode_put(vp);
+		}
 		error = 0;
 		goto bad;
 	}
@@ -458,11 +466,12 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	 *	to the nearest page boundary.
 	 */
 	user_size = vm_map_round_page(user_size,
-				      vm_map_page_mask(user_map));
+	    vm_map_page_mask(user_map));
 
 	if (file_pos & vm_map_page_mask(user_map)) {
-		if (!mapanon)
+		if (!mapanon) {
 			(void)vnode_put(vp);
+		}
 		error = EINVAL;
 		goto bad;
 	}
@@ -470,12 +479,13 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	if ((flags & MAP_FIXED) == 0) {
 		alloc_flags |= VM_FLAGS_ANYWHERE;
 		user_addr = vm_map_round_page(user_addr,
-					      vm_map_page_mask(user_map));
+		    vm_map_page_mask(user_map));
 	} else {
 		if (user_addr != vm_map_trunc_page(user_addr,
-						   vm_map_page_mask(user_map))) {
-		        if (!mapanon)
-			        (void)vnode_put(vp);
+		    vm_map_page_mask(user_map))) {
+			if (!mapanon) {
+				(void)vnode_put(vp);
+			}
 			error = EINVAL;
 			goto bad;
 		}
@@ -493,8 +503,9 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		alloc_flags |= VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE;
 	}
 
-	if (flags & MAP_NOCACHE)
+	if (flags & MAP_NOCACHE) {
 		alloc_flags |= VM_FLAGS_NO_CACHE;
+	}
 
 	if (flags & MAP_JIT) {
 		vmk_flags.vmkf_map_jit = TRUE;
@@ -512,29 +523,33 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 #ifdef notyet
 /* Hmm .. */
 #if defined(VM_PROT_READ_IS_EXEC)
-		if (prot & VM_PROT_READ)
+		if (prot & VM_PROT_READ) {
 			prot |= VM_PROT_EXECUTE;
-		if (maxprot & VM_PROT_READ)
+		}
+		if (maxprot & VM_PROT_READ) {
 			maxprot |= VM_PROT_EXECUTE;
+		}
 #endif
 #endif
 
 #if 3777787
-		if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
+		if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE)) {
 			prot |= VM_PROT_READ;
-		if (maxprot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
+		}
+		if (maxprot & (VM_PROT_EXECUTE | VM_PROT_WRITE)) {
 			maxprot |= VM_PROT_READ;
-#endif	/* radar 3777787 */
+		}
+#endif  /* radar 3777787 */
 map_anon_retry:
 		result = vm_map_enter_mem_object(user_map,
-						 &user_addr, user_size,
-						 0, alloc_flags, vmk_flags,
-						 tag,
-						 IPC_PORT_NULL, 0, FALSE,
-						 prot, maxprot,
-						 (flags & MAP_SHARED) ?
-						 VM_INHERIT_SHARE : 
-						 VM_INHERIT_DEFAULT);
+		    &user_addr, user_size,
+		    0, alloc_flags, vmk_flags,
+		    tag,
+		    IPC_PORT_NULL, 0, FALSE,
+		    prot, maxprot,
+		    (flags & MAP_SHARED) ?
+		    VM_INHERIT_SHARE :
+		    VM_INHERIT_DEFAULT);
 
 		/* If a non-binding address was specified for this anonymous
 		 * mapping, retry the mapping with a zero base
@@ -559,7 +574,7 @@ map_anon_retry:
 		} else {
 			control = ubc_getobject(vp, UBC_FLAGS_NONE);
 		}
-		
+
 		if (control == NULL) {
 			(void)vnode_put(vp);
 			error = ENOMEM;
@@ -570,31 +585,35 @@ map_anon_retry:
 		 *  Set credentials:
 		 *	FIXME: if we're writing the file we need a way to
 		 *      ensure that someone doesn't replace our R/W creds
-		 * 	with ones that only work for read.
+		 *      with ones that only work for read.
 		 */
 
 		ubc_setthreadcred(vp, p, current_thread());
 		docow = FALSE;
-		if ((flags & (MAP_ANON|MAP_SHARED)) == 0) {
+		if ((flags & (MAP_ANON | MAP_SHARED)) == 0) {
 			docow = TRUE;
 		}
 
 #ifdef notyet
 /* Hmm .. */
 #if defined(VM_PROT_READ_IS_EXEC)
-		if (prot & VM_PROT_READ)
+		if (prot & VM_PROT_READ) {
 			prot |= VM_PROT_EXECUTE;
-		if (maxprot & VM_PROT_READ)
+		}
+		if (maxprot & VM_PROT_READ) {
 			maxprot |= VM_PROT_EXECUTE;
+		}
 #endif
 #endif /* notyet */
 
 #if 3777787
-		if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
+		if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE)) {
 			prot |= VM_PROT_READ;
-		if (maxprot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
+		}
+		if (maxprot & (VM_PROT_EXECUTE | VM_PROT_WRITE)) {
 			maxprot |= VM_PROT_READ;
-#endif	/* radar 3777787 */
+		}
+#endif  /* radar 3777787 */
 
 map_file_retry:
 		if ((flags & MAP_RESILIENT_CODESIGN) ||
@@ -617,14 +636,14 @@ map_file_retry:
 		}
 
 		result = vm_map_enter_mem_object_control(user_map,
-						 &user_addr, user_size,
-						 0, alloc_flags, vmk_flags,
-						 tag,
-						 control, file_pos,
-						 docow, prot, maxprot, 
-						 (flags & MAP_SHARED) ?
-						 VM_INHERIT_SHARE : 
-						 VM_INHERIT_DEFAULT);
+		    &user_addr, user_size,
+		    0, alloc_flags, vmk_flags,
+		    tag,
+		    control, file_pos,
+		    docow, prot, maxprot,
+		    (flags & MAP_SHARED) ?
+		    VM_INHERIT_SHARE :
+		    VM_INHERIT_DEFAULT);
 
 		/* If a non-binding address was specified for this file backed
 		 * mapping, retry the mapping with a zero base
@@ -666,22 +685,23 @@ bad:
 		 */
 		memory_object_deallocate(pager);
 	}
-	if (fpref)
+	if (fpref) {
 		fp_drop(p, fd, fp, 0);
+	}
 
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_mmap) | DBG_FUNC_NONE), fd, (uint32_t)(*retval), (uint32_t)user_size, error, 0);
-#ifndef	CONFIG_EMBEDDED
+#ifndef CONFIG_EMBEDDED
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO2, SYS_mmap) | DBG_FUNC_NONE), (uint32_t)(*retval >> 32), (uint32_t)(user_size >> 32),
-			      (uint32_t)(file_pos >> 32), (uint32_t)file_pos, 0);
+	    (uint32_t)(file_pos >> 32), (uint32_t)file_pos, 0);
 #endif
-	return(error);
+	return error;
 }
 
 int
 msync(__unused proc_t p, struct msync_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
-	return(msync_nocancel(p, (struct msync_nocancel_args *)uap, retval));
+	return msync_nocancel(p, (struct msync_nocancel_args *)uap, retval);
 }
 
 int
@@ -692,12 +712,12 @@ msync_nocancel(__unused proc_t p, struct msync_nocancel_args *uap, __unused int3
 	int flags;
 	vm_map_t user_map;
 	int rv;
-	vm_sync_t sync_flags=0;
+	vm_sync_t sync_flags = 0;
 
 	user_map = current_map();
 	addr = (mach_vm_offset_t) uap->addr;
 	size = (mach_vm_size_t)uap->len;
-#ifndef	CONFIG_EMBEDDED
+#ifndef CONFIG_EMBEDDED
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_msync) | DBG_FUNC_NONE), (uint32_t)(addr >> 32), (uint32_t)(size >> 32), 0, 0, 0);
 #endif
 	if (addr & vm_map_page_mask(user_map)) {
@@ -708,57 +728,62 @@ msync_nocancel(__unused proc_t p, struct msync_nocancel_args *uap, __unused int3
 		/*
 		 * We cannot support this properly without maintaining
 		 * list all mmaps done. Cannot use vm_map_entry as they could be
-		 * split or coalesced by indepenedant actions. So instead of 
+		 * split or coalesced by indepenedant actions. So instead of
 		 * inaccurate results, lets just return error as invalid size
 		 * specified
 		 */
-		return (EINVAL); /* XXX breaks posix apps */
+		return EINVAL; /* XXX breaks posix apps */
 	}
 
 	flags = uap->flags;
 	/* disallow contradictory flags */
-	if ((flags & (MS_SYNC|MS_ASYNC)) == (MS_SYNC|MS_ASYNC))
-		return (EINVAL);
-
-	if (flags & MS_KILLPAGES)
-	        sync_flags |= VM_SYNC_KILLPAGES;
-	if (flags & MS_DEACTIVATE)
-	        sync_flags |= VM_SYNC_DEACTIVATE;
-	if (flags & MS_INVALIDATE)
-	        sync_flags |= VM_SYNC_INVALIDATE;
-
-	if ( !(flags & (MS_KILLPAGES | MS_DEACTIVATE))) {
-	        if (flags & MS_ASYNC) 
-		        sync_flags |= VM_SYNC_ASYNCHRONOUS;
-		else 
-		        sync_flags |= VM_SYNC_SYNCHRONOUS;
+	if ((flags & (MS_SYNC | MS_ASYNC)) == (MS_SYNC | MS_ASYNC)) {
+		return EINVAL;
 	}
 
-	sync_flags |= VM_SYNC_CONTIGUOUS;	/* complain if holes */
+	if (flags & MS_KILLPAGES) {
+		sync_flags |= VM_SYNC_KILLPAGES;
+	}
+	if (flags & MS_DEACTIVATE) {
+		sync_flags |= VM_SYNC_DEACTIVATE;
+	}
+	if (flags & MS_INVALIDATE) {
+		sync_flags |= VM_SYNC_INVALIDATE;
+	}
+
+	if (!(flags & (MS_KILLPAGES | MS_DEACTIVATE))) {
+		if (flags & MS_ASYNC) {
+			sync_flags |= VM_SYNC_ASYNCHRONOUS;
+		} else {
+			sync_flags |= VM_SYNC_SYNCHRONOUS;
+		}
+	}
+
+	sync_flags |= VM_SYNC_CONTIGUOUS;       /* complain if holes */
 
 	rv = mach_vm_msync(user_map, addr, size, sync_flags);
 
 	switch (rv) {
 	case KERN_SUCCESS:
 		break;
-	case KERN_INVALID_ADDRESS:	/* hole in region being sync'ed */
-		return (ENOMEM);
+	case KERN_INVALID_ADDRESS:      /* hole in region being sync'ed */
+		return ENOMEM;
 	case KERN_FAILURE:
-		return (EIO);
+		return EIO;
 	default:
-		return (EINVAL);
+		return EINVAL;
 	}
-	return (0);
+	return 0;
 }
 
 
 int
 munmap(__unused proc_t p, struct munmap_args *uap, __unused int32_t *retval)
 {
-	mach_vm_offset_t	user_addr;
-	mach_vm_size_t		user_size;
-	kern_return_t		result;
-	vm_map_t		user_map;
+	mach_vm_offset_t        user_addr;
+	mach_vm_size_t          user_size;
+	kern_return_t           result;
+	vm_map_t                user_map;
 
 	user_map = current_map();
 	user_addr = (mach_vm_offset_t) uap->addr;
@@ -772,8 +797,9 @@ munmap(__unused proc_t p, struct munmap_args *uap, __unused int32_t *retval)
 		return EINVAL;
 	}
 
-	if (user_addr + user_size < user_addr)
-		return(EINVAL);
+	if (user_addr + user_size < user_addr) {
+		return EINVAL;
+	}
 
 	if (user_size == 0) {
 		/* UNIX SPEC: size is 0, return EINVAL */
@@ -782,19 +808,19 @@ munmap(__unused proc_t p, struct munmap_args *uap, __unused int32_t *retval)
 
 	result = mach_vm_deallocate(user_map, user_addr, user_size);
 	if (result != KERN_SUCCESS) {
-		return(EINVAL);
+		return EINVAL;
 	}
-	return(0);
+	return 0;
 }
 
 int
 mprotect(__unused proc_t p, struct mprotect_args *uap, __unused int32_t *retval)
 {
 	vm_prot_t prot;
-	mach_vm_offset_t	user_addr;
-	mach_vm_size_t	user_size;
-	kern_return_t	result;
-	vm_map_t	user_map;
+	mach_vm_offset_t        user_addr;
+	mach_vm_size_t  user_size;
+	kern_return_t   result;
+	vm_map_t        user_map;
 #if CONFIG_MACF
 	int error;
 #endif
@@ -812,23 +838,26 @@ mprotect(__unused proc_t p, struct mprotect_args *uap, __unused int32_t *retval)
 		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
 		return EINVAL;
 	}
-		
+
 #ifdef notyet
 /* Hmm .. */
 #if defined(VM_PROT_READ_IS_EXEC)
-	if (prot & VM_PROT_READ)
+	if (prot & VM_PROT_READ) {
 		prot |= VM_PROT_EXECUTE;
+	}
 #endif
 #endif /* notyet */
 
 #if 3936456
-	if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
+	if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE)) {
 		prot |= VM_PROT_READ;
-#endif	/* 3936456 */
+	}
+#endif  /* 3936456 */
 
 #if defined(__arm64__)
-	if (prot & VM_PROT_STRIP_READ)
+	if (prot & VM_PROT_STRIP_READ) {
 		prot &= ~(VM_PROT_READ | VM_PROT_STRIP_READ);
+	}
 #endif
 
 #if CONFIG_MACF
@@ -843,53 +872,54 @@ mprotect(__unused proc_t p, struct mprotect_args *uap, __unused int32_t *retval)
 	 * e.g., making the stack executable.
 	 */
 	error = mac_proc_check_mprotect(p, user_addr,
-	    		user_size, prot);
-	if (error)
-		return (error);
+	    user_size, prot);
+	if (error) {
+		return error;
+	}
 #endif
 
-	if(prot & VM_PROT_TRUSTED) {
+	if (prot & VM_PROT_TRUSTED) {
 #if CONFIG_DYNAMIC_CODE_SIGNING
 		/* CODE SIGNING ENFORCEMENT - JIT support */
 		/* The special protection value VM_PROT_TRUSTED requests that we treat
 		 * this page as if it had a valid code signature.
-		 * If this is enabled, there MUST be a MAC policy implementing the 
+		 * If this is enabled, there MUST be a MAC policy implementing the
 		 * mac_proc_check_mprotect() hook above. Otherwise, Codesigning will be
 		 * compromised because the check would always succeed and thusly any
 		 * process could sign dynamically. */
 		result = vm_map_sign(
-			user_map, 
+			user_map,
 			vm_map_trunc_page(user_addr,
-					  vm_map_page_mask(user_map)),
-			vm_map_round_page(user_addr+user_size,
-					  vm_map_page_mask(user_map)));
+			vm_map_page_mask(user_map)),
+			vm_map_round_page(user_addr + user_size,
+			vm_map_page_mask(user_map)));
 		switch (result) {
-			case KERN_SUCCESS:
-				break;
-			case KERN_INVALID_ADDRESS:
-				/* UNIX SPEC: for an invalid address range, return ENOMEM */
-				return ENOMEM;
-			default:
-				return EINVAL;
+		case KERN_SUCCESS:
+			break;
+		case KERN_INVALID_ADDRESS:
+			/* UNIX SPEC: for an invalid address range, return ENOMEM */
+			return ENOMEM;
+		default:
+			return EINVAL;
 		}
 #else
 		return ENOTSUP;
 #endif
 	}
 	prot &= ~VM_PROT_TRUSTED;
-	
+
 	result = mach_vm_protect(user_map, user_addr, user_size,
-				 FALSE, prot);
+	    FALSE, prot);
 	switch (result) {
 	case KERN_SUCCESS:
-		return (0);
+		return 0;
 	case KERN_PROTECTION_FAILURE:
-		return (EACCES);
+		return EACCES;
 	case KERN_INVALID_ADDRESS:
 		/* UNIX SPEC: for an invalid address range, return ENOMEM */
 		return ENOMEM;
 	}
-	return (EINVAL);
+	return EINVAL;
 }
 
 
@@ -899,8 +929,8 @@ minherit(__unused proc_t p, struct minherit_args *uap, __unused int32_t *retval)
 	mach_vm_offset_t addr;
 	mach_vm_size_t size;
 	vm_inherit_t inherit;
-	vm_map_t	user_map;
-	kern_return_t	result;
+	vm_map_t        user_map;
+	kern_return_t   result;
 
 	AUDIT_ARG(addr, uap->addr);
 	AUDIT_ARG(len, uap->len);
@@ -912,14 +942,14 @@ minherit(__unused proc_t p, struct minherit_args *uap, __unused int32_t *retval)
 
 	user_map = current_map();
 	result = mach_vm_inherit(user_map, addr, size,
-				inherit);
+	    inherit);
 	switch (result) {
 	case KERN_SUCCESS:
-		return (0);
+		return 0;
 	case KERN_PROTECTION_FAILURE:
-		return (EACCES);
+		return EACCES;
 	}
-	return (EINVAL);
+	return EINVAL;
 }
 
 int
@@ -929,72 +959,72 @@ madvise(__unused proc_t p, struct madvise_args *uap, __unused int32_t *retval)
 	mach_vm_offset_t start;
 	mach_vm_size_t size;
 	vm_behavior_t new_behavior;
-	kern_return_t	result;
+	kern_return_t   result;
 
 	/*
 	 * Since this routine is only advisory, we default to conservative
 	 * behavior.
 	 */
 	switch (uap->behav) {
-		case MADV_RANDOM:
-			new_behavior = VM_BEHAVIOR_RANDOM;
-			break;
-		case MADV_SEQUENTIAL: 
-			new_behavior = VM_BEHAVIOR_SEQUENTIAL;
-			break;
-		case MADV_NORMAL:
-			new_behavior = VM_BEHAVIOR_DEFAULT;
-			break;
-		case MADV_WILLNEED:
-			new_behavior = VM_BEHAVIOR_WILLNEED;
-			break;
-		case MADV_DONTNEED:
-			new_behavior = VM_BEHAVIOR_DONTNEED;
-			break;
-		case MADV_FREE:
-			new_behavior = VM_BEHAVIOR_FREE;
-			break;
-		case MADV_ZERO_WIRED_PAGES:
-			new_behavior = VM_BEHAVIOR_ZERO_WIRED_PAGES;
-			break;
-		case MADV_FREE_REUSABLE:
-			new_behavior = VM_BEHAVIOR_REUSABLE;
-			break;
-		case MADV_FREE_REUSE:
-			new_behavior = VM_BEHAVIOR_REUSE;
-			break;
-		case MADV_CAN_REUSE:
-			new_behavior = VM_BEHAVIOR_CAN_REUSE;
-			break;
-		case MADV_PAGEOUT:
+	case MADV_RANDOM:
+		new_behavior = VM_BEHAVIOR_RANDOM;
+		break;
+	case MADV_SEQUENTIAL:
+		new_behavior = VM_BEHAVIOR_SEQUENTIAL;
+		break;
+	case MADV_NORMAL:
+		new_behavior = VM_BEHAVIOR_DEFAULT;
+		break;
+	case MADV_WILLNEED:
+		new_behavior = VM_BEHAVIOR_WILLNEED;
+		break;
+	case MADV_DONTNEED:
+		new_behavior = VM_BEHAVIOR_DONTNEED;
+		break;
+	case MADV_FREE:
+		new_behavior = VM_BEHAVIOR_FREE;
+		break;
+	case MADV_ZERO_WIRED_PAGES:
+		new_behavior = VM_BEHAVIOR_ZERO_WIRED_PAGES;
+		break;
+	case MADV_FREE_REUSABLE:
+		new_behavior = VM_BEHAVIOR_REUSABLE;
+		break;
+	case MADV_FREE_REUSE:
+		new_behavior = VM_BEHAVIOR_REUSE;
+		break;
+	case MADV_CAN_REUSE:
+		new_behavior = VM_BEHAVIOR_CAN_REUSE;
+		break;
+	case MADV_PAGEOUT:
 #if MACH_ASSERT
-			new_behavior = VM_BEHAVIOR_PAGEOUT;
-			break;
+		new_behavior = VM_BEHAVIOR_PAGEOUT;
+		break;
 #else /* MACH_ASSERT */
-			return ENOTSUP;
+		return ENOTSUP;
 #endif /* MACH_ASSERT */
-		default:
-			return(EINVAL);
+	default:
+		return EINVAL;
 	}
 
 	start = (mach_vm_offset_t) uap->addr;
 	size = (mach_vm_size_t) uap->len;
-	
+
 #if __arm64__
 	if (start == 0 &&
 	    size != 0 &&
 	    (uap->behav == MADV_FREE ||
-	     uap->behav == MADV_FREE_REUSABLE)) {
+	    uap->behav == MADV_FREE_REUSABLE)) {
 		printf("** FOURK_COMPAT: %d[%s] "
-		       "failing madvise(0x%llx,0x%llx,%s)\n",
-		       p->p_pid, p->p_comm, start, size,
-		       ((uap->behav == MADV_FREE_REUSABLE)
-			? "MADV_FREE_REUSABLE"
-			: "MADV_FREE"));
+		    "failing madvise(0x%llx,0x%llx,%s)\n",
+		    p->p_pid, p->p_comm, start, size,
+		    ((uap->behav == MADV_FREE_REUSABLE)
+		    ? "MADV_FREE_REUSABLE"
+		    : "MADV_FREE"));
 		DTRACE_VM3(fourk_compat_madvise,
-			   uint64_t, start,
-			   uint64_t, size,
-			   int, uap->behav);
+		    uint64_t, start,
+		    uint64_t, size,
+		    int, uap->behav);
 		return EINVAL;
 	}
 #endif /* __arm64__ */
@@ -1007,7 +1037,7 @@ madvise(__unused proc_t p, struct madvise_args *uap, __unused int32_t *retval)
 		return 0;
 	case KERN_INVALID_ADDRESS:
 		return EINVAL;
-	case KERN_NO_SPACE:	
+	case KERN_NO_SPACE:
 		return ENOMEM;
 	}
 
@@ -1022,13 +1052,13 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 	user_addr_t vec = 0;
 	int error = 0;
 	int lastvecindex = 0;
-	int mincoreinfo=0;
+	int mincoreinfo = 0;
 	int pqueryinfo = 0;
 	unsigned int pqueryinfo_vec_size = 0;
 	vm_page_info_basic_t info = NULL;
 	mach_msg_type_number_t count = 0;
 	char *kernel_vec = NULL;
-	unsigned int req_vec_size_pages = 0, cur_vec_size_pages = 0, vecindex = 0;
+	uint64_t req_vec_size_pages = 0, cur_vec_size_pages = 0, vecindex = 0;
 	kern_return_t kr = KERN_SUCCESS;
 
 	map = current_map();
@@ -1038,15 +1068,17 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 	 * mode.
 	 */
 	first_addr = addr = vm_map_trunc_page(uap->addr,
-					      vm_map_page_mask(map));
+	    vm_map_page_mask(map));
 	end = vm_map_round_page(uap->addr + uap->len,
-				       vm_map_page_mask(map));
+	    vm_map_page_mask(map));
 
-	if (end < addr)
-		return (EINVAL);
+	if (end < addr) {
+		return EINVAL;
+	}
 
-	if (end == addr)
-		return (0);
+	if (end == addr) {
+		return 0;
+	}
 
 	/*
 	 * We are going to loop through the whole 'req_vec_size' pages
@@ -1059,7 +1091,7 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 	kernel_vec = (void*) _MALLOC(cur_vec_size_pages * sizeof(char), M_TEMP, M_WAITOK | M_ZERO);
 
 	if (kernel_vec == NULL) {
-		return (ENOMEM);
+		return ENOMEM;
 	}
 
 	/*
@@ -1072,20 +1104,19 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 
 	if (info == NULL) {
 		FREE(kernel_vec, M_TEMP);
-		return (ENOMEM);
+		return ENOMEM;
 	}
 
 	while (addr < end) {
-
 		cur_end = addr + (cur_vec_size_pages * PAGE_SIZE_64);
 
 		count =  VM_PAGE_INFO_BASIC_COUNT;
 		kr = vm_map_page_range_info_internal(map,
-				      addr,
-				      cur_end,
-				      VM_PAGE_INFO_BASIC,
-				      (vm_page_info_t) info,
-				      &count);
+		    addr,
+		    cur_end,
+		    VM_PAGE_INFO_BASIC,
+		    (vm_page_info_t) info,
+		    &count);
 
 		assert(kr == KERN_SUCCESS);
 
@@ -1095,28 +1126,33 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 		 * up the pages elsewhere.
 		 */
 		lastvecindex = -1;
-		for( ; addr < cur_end; addr += PAGE_SIZE ) {
-
+		for (; addr < cur_end; addr += PAGE_SIZE) {
 			pqueryinfo = info[lastvecindex + 1].disposition;
 
 			mincoreinfo = 0;
 
-			if (pqueryinfo & VM_PAGE_QUERY_PAGE_PRESENT)
+			if (pqueryinfo & VM_PAGE_QUERY_PAGE_PRESENT) {
 				mincoreinfo |= MINCORE_INCORE;
-			if (pqueryinfo & VM_PAGE_QUERY_PAGE_REF)
+			}
+			if (pqueryinfo & VM_PAGE_QUERY_PAGE_REF) {
 				mincoreinfo |= MINCORE_REFERENCED;
-			if (pqueryinfo & VM_PAGE_QUERY_PAGE_DIRTY)
+			}
+			if (pqueryinfo & VM_PAGE_QUERY_PAGE_DIRTY) {
 				mincoreinfo |= MINCORE_MODIFIED;
-			if (pqueryinfo & VM_PAGE_QUERY_PAGE_PAGED_OUT)
+			}
+			if (pqueryinfo & VM_PAGE_QUERY_PAGE_PAGED_OUT) {
 				mincoreinfo |= MINCORE_PAGED_OUT;
-			if (pqueryinfo & VM_PAGE_QUERY_PAGE_COPIED)
+			}
+			if (pqueryinfo & VM_PAGE_QUERY_PAGE_COPIED) {
 				mincoreinfo |= MINCORE_COPIED;
-			if ((pqueryinfo & VM_PAGE_QUERY_PAGE_EXTERNAL) == 0)
+			}
+			if ((pqueryinfo & VM_PAGE_QUERY_PAGE_EXTERNAL) == 0) {
 				mincoreinfo |= MINCORE_ANONYMOUS;
+			}
 			/*
 			 * calculate index into user supplied byte vector
 			 */
-			vecindex = (addr - first_addr)>> PAGE_SHIFT;
+			vecindex = (addr - first_addr) >> PAGE_SHIFT;
 			kernel_vec[vecindex] = (char)mincoreinfo;
 			lastvecindex = vecindex;
 		}
@@ -1147,10 +1183,10 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 	FREE(info, M_TEMP);
 
 	if (error) {
-		return (EFAULT);
+		return EFAULT;
 	}
 
-	return (0);
+	return 0;
 }
 
 int
@@ -1159,7 +1195,7 @@ mlock(__unused proc_t p, struct mlock_args *uap, __unused int32_t *retvalval)
 	vm_map_t user_map;
 	vm_map_offset_t addr;
 	vm_map_size_t size, pageoff;
-	kern_return_t	result;
+	kern_return_t   result;
 
 	AUDIT_ARG(addr, uap->addr);
 	AUDIT_ARG(len, uap->len);
@@ -1168,28 +1204,31 @@ mlock(__unused proc_t p, struct mlock_args *uap, __unused int32_t *retvalval)
 	size = (vm_map_size_t)uap->len;
 
 	/* disable wrap around */
-	if (addr + size < addr)
-		return (EINVAL);
+	if (addr + size < addr) {
+		return EINVAL;
+	}
 
-	if (size == 0)
-		return (0);
+	if (size == 0) {
+		return 0;
+	}
 
 	user_map = current_map();
 	pageoff = (addr & vm_map_page_mask(user_map));
 	addr -= pageoff;
-	size = vm_map_round_page(size+pageoff, vm_map_page_mask(user_map));
+	size = vm_map_round_page(size + pageoff, vm_map_page_mask(user_map));
 
 	/* have to call vm_map_wire directly to pass "I don't know" protections */
-	result = vm_map_wire_kernel(user_map, addr, addr+size, VM_PROT_NONE, VM_KERN_MEMORY_MLOCK, TRUE);
+	result = vm_map_wire_kernel(user_map, addr, addr + size, VM_PROT_NONE, VM_KERN_MEMORY_MLOCK, TRUE);
 
-	if (result == KERN_RESOURCE_SHORTAGE)
+	if (result == KERN_RESOURCE_SHORTAGE) {
 		return EAGAIN;
-	else if (result == KERN_PROTECTION_FAILURE)
+	} else if (result == KERN_PROTECTION_FAILURE) {
 		return EACCES;
-	else if (result != KERN_SUCCESS)
+	} else if (result != KERN_SUCCESS) {
 		return ENOMEM;
+	}
 
-	return 0;	/* KERN_SUCCESS */
+	return 0;       /* KERN_SUCCESS */
 }
 
 int
@@ -1198,7 +1237,7 @@ munlock(__unused proc_t p, struct munlock_args *uap, __unused int32_t *retval)
 	mach_vm_offset_t addr;
 	mach_vm_size_t size;
 	vm_map_t user_map;
-	kern_return_t	result;
+	kern_return_t   result;
 
 	AUDIT_ARG(addr, uap->addr);
 	AUDIT_ARG(addr, uap->len);
@@ -1209,152 +1248,155 @@ munlock(__unused proc_t p, struct munlock_args *uap, __unused int32_t *retval)
 
 	/* JMM - need to remove all wirings by spec - this just removes one */
 	result = mach_vm_wire_kernel(host_priv_self(), user_map, addr, size, VM_PROT_NONE, VM_KERN_MEMORY_MLOCK);
-	return (result == KERN_SUCCESS ? 0 : ENOMEM);
+	return result == KERN_SUCCESS ? 0 : ENOMEM;
 }
 
 
 int
 mlockall(__unused proc_t p, __unused struct mlockall_args *uap, __unused int32_t *retval)
 {
-	return (ENOSYS);
+	return ENOSYS;
 }
 
 int
 munlockall(__unused proc_t p, __unused struct munlockall_args *uap, __unused int32_t *retval)
 {
-	return(ENOSYS);
+	return ENOSYS;
 }
 
 #if CONFIG_CODE_DECRYPTION
 int
 mremap_encrypted(__unused struct proc *p, struct mremap_encrypted_args *uap, __unused int32_t *retval)
 {
-    mach_vm_offset_t	user_addr;
-    mach_vm_size_t	user_size;
-    kern_return_t	result;
-    vm_map_t	user_map;
-    uint32_t	cryptid;
-    cpu_type_t	cputype;
-    cpu_subtype_t	cpusubtype;
-    pager_crypt_info_t	crypt_info;
-    const char * cryptname = 0;
-    char *vpath;
-    int len, ret;
-    struct proc_regioninfo_internal pinfo;
-    vnode_t vp;
-    uintptr_t vnodeaddr;
-    uint32_t vid;
-    
-    AUDIT_ARG(addr, uap->addr);
-    AUDIT_ARG(len, uap->len);
-    
-    user_map = current_map();
-    user_addr = (mach_vm_offset_t) uap->addr;
-    user_size = (mach_vm_size_t) uap->len;
-    
-    cryptid = uap->cryptid;
-    cputype = uap->cputype;
-    cpusubtype = uap->cpusubtype;
-    
-    if (user_addr & vm_map_page_mask(user_map)) {
-        /* UNIX SPEC: user address is not page-aligned, return EINVAL */
-        return EINVAL;
-    }
-    
-    switch(cryptid) {
-        case 0:
-            /* not encrypted, just an empty load command */
-            return 0;
-        case 1:
-            cryptname="com.apple.unfree";
-            break;
-        case 0x10:
-            /* some random cryptid that you could manually put into
-             * your binary if you want NULL */
-            cryptname="com.apple.null";
-            break;
-        default:
-            return EINVAL;
-    }
-    
-    if (NULL == text_crypter_create) return ENOTSUP;
-    
-    ret = fill_procregioninfo_onlymappedvnodes( proc_task(p), user_addr, &pinfo, &vnodeaddr, &vid);
-    if (ret == 0 || !vnodeaddr) {
-        /* No really, this returns 0 if the memory address is not backed by a file */
-        return (EINVAL);
-    }
-    
-    vp = (vnode_t)vnodeaddr;
-    if ((vnode_getwithvid(vp, vid)) == 0) {
-        MALLOC_ZONE(vpath, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
-        if(vpath == NULL) {
-            vnode_put(vp);
-            return (ENOMEM);
-        }
-        
-        len = MAXPATHLEN;
-        ret = vn_getpath(vp, vpath, &len);
-        if(ret) {
-            FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
-            vnode_put(vp);
-            return (ret);
-        }
-        
-        vnode_put(vp);
-    } else {
-        return (EINVAL);
-    }
+	mach_vm_offset_t    user_addr;
+	mach_vm_size_t      user_size;
+	kern_return_t       result;
+	vm_map_t    user_map;
+	uint32_t    cryptid;
+	cpu_type_t  cputype;
+	cpu_subtype_t       cpusubtype;
+	pager_crypt_info_t  crypt_info;
+	const char * cryptname = 0;
+	char *vpath;
+	int len, ret;
+	struct proc_regioninfo_internal pinfo;
+	vnode_t vp;
+	uintptr_t vnodeaddr;
+	uint32_t vid;
+
+	AUDIT_ARG(addr, uap->addr);
+	AUDIT_ARG(len, uap->len);
+
+	user_map = current_map();
+	user_addr = (mach_vm_offset_t) uap->addr;
+	user_size = (mach_vm_size_t) uap->len;
+
+	cryptid = uap->cryptid;
+	cputype = uap->cputype;
+	cpusubtype = uap->cpusubtype;
+
+	if (user_addr & vm_map_page_mask(user_map)) {
+		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
+		return EINVAL;
+	}
+
+	switch (cryptid) {
+	case 0:
+		/* not encrypted, just an empty load command */
+		return 0;
+	case 1:
+		cryptname = "com.apple.unfree";
+		break;
+	case 0x10:
+		/* some random cryptid that you could manually put into
+		 * your binary if you want NULL */
+		cryptname = "com.apple.null";
+		break;
+	default:
+		return EINVAL;
+	}
+
+	if (NULL == text_crypter_create) {
+		return ENOTSUP;
+	}
+
+	ret = fill_procregioninfo_onlymappedvnodes( proc_task(p), user_addr, &pinfo, &vnodeaddr, &vid);
+	if (ret == 0 || !vnodeaddr) {
+		/* No really, this returns 0 if the memory address is not backed by a file */
+		return EINVAL;
+	}
+
+	vp = (vnode_t)vnodeaddr;
+	if ((vnode_getwithvid(vp, vid)) == 0) {
+		MALLOC_ZONE(vpath, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+		if (vpath == NULL) {
+			vnode_put(vp);
+			return ENOMEM;
+		}
+
+		len = MAXPATHLEN;
+		ret = vn_getpath(vp, vpath, &len);
+		if (ret) {
+			FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
+			vnode_put(vp);
+			return ret;
+		}
+
+		vnode_put(vp);
+	} else {
+		return EINVAL;
+	}
 
 #if 0
-    kprintf("%s vpath %s cryptid 0x%08x cputype 0x%08x cpusubtype 0x%08x range 0x%016llx size 0x%016llx\n",
-            __FUNCTION__, vpath, cryptid, cputype, cpusubtype, (uint64_t)user_addr, (uint64_t)user_size);
+	kprintf("%s vpath %s cryptid 0x%08x cputype 0x%08x cpusubtype 0x%08x range 0x%016llx size 0x%016llx\n",
+	    __FUNCTION__, vpath, cryptid, cputype, cpusubtype, (uint64_t)user_addr, (uint64_t)user_size);
 #endif
 
-    /* set up decrypter first */
-    crypt_file_data_t crypt_data = {
-        .filename = vpath,
-        .cputype = cputype,
-        .cpusubtype = cpusubtype };
-    result = text_crypter_create(&crypt_info, cryptname, (void*)&crypt_data);
+	/* set up decrypter first */
+	crypt_file_data_t crypt_data = {
+		.filename = vpath,
+		.cputype = cputype,
+		.cpusubtype = cpusubtype
+	};
+	result = text_crypter_create(&crypt_info, cryptname, (void*)&crypt_data);
 #if VM_MAP_DEBUG_APPLE_PROTECT
-    if (vm_map_debug_apple_protect) {
-	    printf("APPLE_PROTECT: %d[%s] map %p [0x%llx:0x%llx] %s(%s) -> 0x%x\n",
-		   p->p_pid, p->p_comm,
-		   user_map,
-		   (uint64_t) user_addr,
-		   (uint64_t) (user_addr + user_size),
-		   __FUNCTION__, vpath, result);
-    }
+	if (vm_map_debug_apple_protect) {
+		printf("APPLE_PROTECT: %d[%s] map %p [0x%llx:0x%llx] %s(%s) -> 0x%x\n",
+		    p->p_pid, p->p_comm,
+		    user_map,
+		    (uint64_t) user_addr,
+		    (uint64_t) (user_addr + user_size),
+		    __FUNCTION__, vpath, result);
+	}
 #endif /* VM_MAP_DEBUG_APPLE_PROTECT */
-    FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
-    
-    if(result) {
-        printf("%s: unable to create decrypter %s, kr=%d\n",
-               __FUNCTION__, cryptname, result);
-        if (result == kIOReturnNotPrivileged) {
-            /* text encryption returned decryption failure */
-            return (EPERM);
-        } else {
-            return (ENOMEM);
-        }
-    }
-    
-    /* now remap using the decrypter */
-    vm_object_offset_t crypto_backing_offset;
-    crypto_backing_offset = -1;	/* i.e. use map entry's offset */
-    result = vm_map_apple_protected(user_map,
-				    user_addr,
-				    user_addr+user_size,
-				    crypto_backing_offset,
-				    &crypt_info);
-    if (result) {
-        printf("%s: mapping failed with %d\n", __FUNCTION__, result);
-    }
-   
-    if (result) {
-        return (EPERM);
-    }
-    return 0;
+	FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
+
+	if (result) {
+		printf("%s: unable to create decrypter %s, kr=%d\n",
+		    __FUNCTION__, cryptname, result);
+		if (result == kIOReturnNotPrivileged) {
+			/* text encryption returned decryption failure */
+			return EPERM;
+		} else {
+			return ENOMEM;
+		}
+	}
+
+	/* now remap using the decrypter */
+	vm_object_offset_t crypto_backing_offset;
+	crypto_backing_offset = -1; /* i.e. use map entry's offset */
+	result = vm_map_apple_protected(user_map,
+	    user_addr,
+	    user_addr + user_size,
+	    crypto_backing_offset,
+	    &crypt_info);
+	if (result) {
+		printf("%s: mapping failed with %d\n", __FUNCTION__, result);
+	}
+
+	if (result) {
+		return EPERM;
+	}
+	return 0;
 }
 #endif /* CONFIG_CODE_DECRYPTION */

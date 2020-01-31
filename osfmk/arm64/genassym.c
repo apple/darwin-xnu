@@ -28,28 +28,28 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -86,11 +86,6 @@
 #include <arm64/proc_reg.h>
 #include <prng/random.h>
 
-#if	CONFIG_DTRACE
-#define NEED_DTRACE_DEFS
-#include <../bsd/sys/lockstat.h>
-#endif	/* CONFIG_DTRACE */
-
 /*
  * genassym.c is used to produce an
  * assembly file which, intermingled with unuseful assembly code,
@@ -104,52 +99,51 @@
  * the values, but we cannot run anything on the target machine.
  */
 
-#define DECLARE(SYM,VAL) \
+#define DECLARE(SYM, VAL) \
 	__asm("DEFINITION__define__" SYM ":\t .ascii \"%0\"" : : "n"  ((u_long)(VAL)))
 
 
-int	main(
-		int		argc,
-		char		** argv);
+int     main(
+	int             argc,
+	char            ** argv);
 
 int
 main(
-	int	argc,
-	char	**argv)
+	int     argc,
+	char    **argv)
 {
+	DECLARE("T_PREFETCH_ABT", T_PREFETCH_ABT);
+	DECLARE("T_DATA_ABT", T_DATA_ABT);
 
-	DECLARE("T_PREFETCH_ABT",	T_PREFETCH_ABT);
-	DECLARE("T_DATA_ABT",		T_DATA_ABT);
+	DECLARE("AST_URGENT", AST_URGENT);
+	DECLARE("AST_PREEMPTION", AST_PREEMPTION);
 
-	DECLARE("AST_URGENT",		AST_URGENT);
-	DECLARE("AST_PREEMPTION",	AST_PREEMPTION);
-
-	DECLARE("TH_RECOVER",		offsetof(struct thread, recover));
-	DECLARE("TH_CONTINUATION",	offsetof(struct thread, continuation));
-	DECLARE("TH_KERNEL_STACK",	offsetof(struct thread, kernel_stack));
+	DECLARE("TH_RECOVER", offsetof(struct thread, recover));
+	DECLARE("TH_CONTINUATION", offsetof(struct thread, continuation));
+	DECLARE("TH_KERNEL_STACK", offsetof(struct thread, kernel_stack));
 	DECLARE("TH_KSTACKPTR", offsetof(struct thread, machine.kstackptr));
-	DECLARE("THREAD_UTHREAD",	offsetof(struct thread, uthread));
+	DECLARE("THREAD_UTHREAD", offsetof(struct thread, uthread));
 
 	DECLARE("TASK_MACH_EXC_PORT",
-		offsetof(struct task, exc_actions[EXC_MACH_SYSCALL].port));
+	    offsetof(struct task, exc_actions[EXC_MACH_SYSCALL].port));
 
 	/* These fields are being added on demand */
-	DECLARE("ACT_TASK",	offsetof(struct thread, task));
+	DECLARE("ACT_TASK", offsetof(struct thread, task));
 	DECLARE("ACT_CONTEXT", offsetof(struct thread, machine.contextData));
-	DECLARE("ACT_UPCB",	offsetof(struct thread, machine.upcb));
+	DECLARE("ACT_UPCB", offsetof(struct thread, machine.upcb));
 //	DECLARE("ACT_PCBDATA",	offsetof(struct thread, machine.contextData.ss));
 	DECLARE("ACT_UNEON", offsetof(struct thread, machine.uNeon));
 //	DECLARE("ACT_NEONDATA", offsetof(struct thread, machine.contextData.ns));
-	DECLARE("TH_CTH_SELF",	offsetof(struct thread, machine.cthread_self));
-	DECLARE("TH_CTH_DATA",	offsetof(struct thread, machine.cthread_data));
-	DECLARE("ACT_PREEMPT_CNT",	offsetof(struct thread, machine.preemption_count));
-	DECLARE("ACT_CPUDATAP",	offsetof(struct thread, machine.CpuDatap));
-	DECLARE("ACT_MAP",	offsetof(struct thread, map));
-	DECLARE("ACT_DEBUGDATA",	offsetof(struct thread, machine.DebugData));
-	DECLARE("TH_IOTIER_OVERRIDE",	offsetof(struct thread, iotier_override));
-	DECLARE("TH_RWLOCK_CNT",	offsetof(struct thread, rwlock_count));
-	DECLARE("TH_SCHED_FLAGS",	offsetof(struct thread, sched_flags));
-	DECLARE("TH_SFLAG_RW_PROMOTED_BIT",		TH_SFLAG_RW_PROMOTED_BIT);
+	DECLARE("TH_CTH_SELF", offsetof(struct thread, machine.cthread_self));
+	DECLARE("TH_CTH_DATA", offsetof(struct thread, machine.cthread_data));
+	DECLARE("ACT_PREEMPT_CNT", offsetof(struct thread, machine.preemption_count));
+	DECLARE("ACT_CPUDATAP", offsetof(struct thread, machine.CpuDatap));
+	DECLARE("ACT_MAP", offsetof(struct thread, map));
+	DECLARE("ACT_DEBUGDATA", offsetof(struct thread, machine.DebugData));
+	DECLARE("TH_IOTIER_OVERRIDE", offsetof(struct thread, iotier_override));
+	DECLARE("TH_RWLOCK_CNT", offsetof(struct thread, rwlock_count));
+	DECLARE("TH_SCHED_FLAGS", offsetof(struct thread, sched_flags));
+	DECLARE("TH_SFLAG_RW_PROMOTED_BIT", TH_SFLAG_RW_PROMOTED_BIT);
 
 	DECLARE("TH_MACH_SYSCALLS", offsetof(struct thread, syscalls_mach));
 	DECLARE("TH_UNIX_SYSCALLS", offsetof(struct thread, syscalls_unix));
@@ -158,7 +152,7 @@ main(
 	DECLARE("MACH_TRAP_TABLE_COUNT", MACH_TRAP_TABLE_COUNT);
 	DECLARE("MACH_TRAP_TABLE_ENTRY_SIZE", sizeof(mach_trap_t));
 
-	DECLARE("MAP_PMAP",	offsetof(struct _vm_map, pmap));
+	DECLARE("MAP_PMAP", offsetof(struct _vm_map, pmap));
 
 	DECLARE("ARM_CONTEXT_SIZE", sizeof(arm_context_t));
 
@@ -260,177 +254,177 @@ main(
 	DECLARE("PGSHIFT", ARM_PGSHIFT);
 	DECLARE("PGMASK", ARM_PGMASK);
 
-	DECLARE("VM_MIN_ADDRESS",	VM_MIN_ADDRESS);
-	DECLARE("VM_MAX_ADDRESS",	VM_MAX_ADDRESS);
-	DECLARE("VM_MIN_KERNEL_ADDRESS",	VM_MIN_KERNEL_ADDRESS);
-	DECLARE("VM_MAX_KERNEL_ADDRESS",	VM_MAX_KERNEL_ADDRESS);
-	DECLARE("KERNELBASE",		VM_MIN_KERNEL_ADDRESS);
-	DECLARE("KERNEL_STACK_SIZE",	KERNEL_STACK_SIZE);
-	DECLARE("TBI_MASK",		TBI_MASK);
+	DECLARE("VM_MIN_ADDRESS", VM_MIN_ADDRESS);
+	DECLARE("VM_MAX_ADDRESS", VM_MAX_ADDRESS);
+	DECLARE("VM_MIN_KERNEL_ADDRESS", VM_MIN_KERNEL_ADDRESS);
+	DECLARE("VM_MAX_KERNEL_ADDRESS", VM_MAX_KERNEL_ADDRESS);
+	DECLARE("KERNELBASE", VM_MIN_KERNEL_ADDRESS);
+	DECLARE("KERNEL_STACK_SIZE", KERNEL_STACK_SIZE);
+	DECLARE("TBI_MASK", TBI_MASK);
 
-	DECLARE("KERN_INVALID_ADDRESS",	KERN_INVALID_ADDRESS);
+	DECLARE("KERN_INVALID_ADDRESS", KERN_INVALID_ADDRESS);
 
 
-	DECLARE("MAX_CPUS",	MAX_CPUS);
+	DECLARE("MAX_CPUS", MAX_CPUS);
 
 	DECLARE("cdeSize",
-		sizeof(struct cpu_data_entry));
+	    sizeof(struct cpu_data_entry));
 
 	DECLARE("cdSize",
-		sizeof(struct cpu_data));
+	    sizeof(struct cpu_data));
 
-        DECLARE("CPU_ACTIVE_THREAD",
-		offsetof(cpu_data_t, cpu_active_thread));
-        DECLARE("CPU_ACTIVE_STACK",
-		offsetof(cpu_data_t, cpu_active_stack));
-        DECLARE("CPU_ISTACKPTR",
-		offsetof(cpu_data_t, istackptr));
-        DECLARE("CPU_INTSTACK_TOP",
-		offsetof(cpu_data_t, intstack_top));
-        DECLARE("CPU_EXCEPSTACKPTR",
-		offsetof(cpu_data_t, excepstackptr));
-        DECLARE("CPU_EXCEPSTACK_TOP",
-		offsetof(cpu_data_t, excepstack_top));
+	DECLARE("CPU_ACTIVE_THREAD",
+	    offsetof(cpu_data_t, cpu_active_thread));
+	DECLARE("CPU_ACTIVE_STACK",
+	    offsetof(cpu_data_t, cpu_active_stack));
+	DECLARE("CPU_ISTACKPTR",
+	    offsetof(cpu_data_t, istackptr));
+	DECLARE("CPU_INTSTACK_TOP",
+	    offsetof(cpu_data_t, intstack_top));
+	DECLARE("CPU_EXCEPSTACKPTR",
+	    offsetof(cpu_data_t, excepstackptr));
+	DECLARE("CPU_EXCEPSTACK_TOP",
+	    offsetof(cpu_data_t, excepstack_top));
 #if __ARM_KERNEL_PROTECT__
 	DECLARE("CPU_EXC_VECTORS",
-		offsetof(cpu_data_t, cpu_exc_vectors));
+	    offsetof(cpu_data_t, cpu_exc_vectors));
 #endif /* __ARM_KERNEL_PROTECT__ */
-        DECLARE("CPU_NUMBER_GS",
-		offsetof(cpu_data_t,cpu_number));
-        DECLARE("CPU_IDENT",
-		offsetof(cpu_data_t,cpu_ident));
-        DECLARE("CPU_RUNNING",
-		offsetof(cpu_data_t,cpu_running));
-        DECLARE("CPU_MCOUNT_OFF",
-		offsetof(cpu_data_t,cpu_mcount_off));
+	DECLARE("CPU_NUMBER_GS",
+	    offsetof(cpu_data_t, cpu_number));
+	DECLARE("CPU_IDENT",
+	    offsetof(cpu_data_t, cpu_ident));
+	DECLARE("CPU_RUNNING",
+	    offsetof(cpu_data_t, cpu_running));
+	DECLARE("CPU_MCOUNT_OFF",
+	    offsetof(cpu_data_t, cpu_mcount_off));
 	DECLARE("CPU_PENDING_AST",
-		offsetof(cpu_data_t,cpu_pending_ast));
+	    offsetof(cpu_data_t, cpu_pending_ast));
 	DECLARE("CPU_PROCESSOR",
-		offsetof(cpu_data_t,cpu_processor));
+	    offsetof(cpu_data_t, cpu_processor));
 	DECLARE("CPU_CACHE_DISPATCH",
-		offsetof(cpu_data_t,cpu_cache_dispatch));
-        DECLARE("CPU_BASE_TIMEBASE",
-		offsetof(cpu_data_t,cpu_base_timebase));
+	    offsetof(cpu_data_t, cpu_cache_dispatch));
+	DECLARE("CPU_BASE_TIMEBASE",
+	    offsetof(cpu_data_t, cpu_base_timebase));
 	DECLARE("CPU_DECREMENTER",
-		offsetof(cpu_data_t,cpu_decrementer));
+	    offsetof(cpu_data_t, cpu_decrementer));
 	DECLARE("CPU_GET_DECREMENTER_FUNC",
-		offsetof(cpu_data_t,cpu_get_decrementer_func));
+	    offsetof(cpu_data_t, cpu_get_decrementer_func));
 	DECLARE("CPU_SET_DECREMENTER_FUNC",
-		offsetof(cpu_data_t,cpu_set_decrementer_func));
+	    offsetof(cpu_data_t, cpu_set_decrementer_func));
 	DECLARE("CPU_GET_FIQ_HANDLER",
-		offsetof(cpu_data_t,cpu_get_fiq_handler));
+	    offsetof(cpu_data_t, cpu_get_fiq_handler));
 	DECLARE("CPU_TBD_HARDWARE_ADDR",
-		offsetof(cpu_data_t,cpu_tbd_hardware_addr));
+	    offsetof(cpu_data_t, cpu_tbd_hardware_addr));
 	DECLARE("CPU_TBD_HARDWARE_VAL",
-		offsetof(cpu_data_t,cpu_tbd_hardware_val));
+	    offsetof(cpu_data_t, cpu_tbd_hardware_val));
 	DECLARE("CPU_INT_STATE",
-		offsetof(cpu_data_t,cpu_int_state));
+	    offsetof(cpu_data_t, cpu_int_state));
 	DECLARE("INTERRUPT_HANDLER",
-		offsetof(cpu_data_t,interrupt_handler));
+	    offsetof(cpu_data_t, interrupt_handler));
 	DECLARE("INTERRUPT_TARGET",
-		offsetof(cpu_data_t,interrupt_target));
+	    offsetof(cpu_data_t, interrupt_target));
 	DECLARE("INTERRUPT_REFCON",
-		offsetof(cpu_data_t,interrupt_refCon));
+	    offsetof(cpu_data_t, interrupt_refCon));
 	DECLARE("INTERRUPT_NUB",
-		offsetof(cpu_data_t,interrupt_nub));
+	    offsetof(cpu_data_t, interrupt_nub));
 	DECLARE("INTERRUPT_SOURCE",
-		offsetof(cpu_data_t,interrupt_source));
+	    offsetof(cpu_data_t, interrupt_source));
 	DECLARE("CPU_USER_DEBUG",
-		offsetof(cpu_data_t, cpu_user_debug));
+	    offsetof(cpu_data_t, cpu_user_debug));
 	DECLARE("CPU_STAT_IRQ",
-		offsetof(cpu_data_t, cpu_stat.irq_ex_cnt));
+	    offsetof(cpu_data_t, cpu_stat.irq_ex_cnt));
 	DECLARE("CPU_STAT_IRQ_WAKE",
-		offsetof(cpu_data_t, cpu_stat.irq_ex_cnt_wake));
+	    offsetof(cpu_data_t, cpu_stat.irq_ex_cnt_wake));
 	DECLARE("CPU_RESET_HANDLER",
-		offsetof(cpu_data_t, cpu_reset_handler));
+	    offsetof(cpu_data_t, cpu_reset_handler));
 	DECLARE("CPU_RESET_ASSIST",
-		offsetof(cpu_data_t, cpu_reset_assist));
+	    offsetof(cpu_data_t, cpu_reset_assist));
 	DECLARE("CPU_REGMAP_PADDR",
-		offsetof(cpu_data_t, cpu_regmap_paddr));
+	    offsetof(cpu_data_t, cpu_regmap_paddr));
 	DECLARE("CPU_PHYS_ID",
-		offsetof(cpu_data_t, cpu_phys_id));
+	    offsetof(cpu_data_t, cpu_phys_id));
 	DECLARE("RTCLOCK_DATAP",
-		offsetof(cpu_data_t, rtclock_datap));
+	    offsetof(cpu_data_t, rtclock_datap));
 	DECLARE("CLUSTER_MASTER",
-		offsetof(cpu_data_t, cluster_master));
+	    offsetof(cpu_data_t, cluster_master));
 
 	DECLARE("RTCLOCKDataSize",
-		sizeof(rtclock_data_t));
+	    sizeof(rtclock_data_t));
 	DECLARE("RTCLOCK_ADJ_ABSTIME_LOW",
-		offsetof(rtclock_data_t, rtc_adj.abstime_val.low));
+	    offsetof(rtclock_data_t, rtc_adj.abstime_val.low));
 	DECLARE("RTCLOCK_ADJ_ABSTIME_HIGH",
-		offsetof(rtclock_data_t, rtc_adj.abstime_val.high));
+	    offsetof(rtclock_data_t, rtc_adj.abstime_val.high));
 	DECLARE("RTCLOCK_BASE_ABSTIME_LOW",
-		offsetof(rtclock_data_t, rtc_base.abstime_val.low));
+	    offsetof(rtclock_data_t, rtc_base.abstime_val.low));
 	DECLARE("RTCLOCK_BASE_ABSTIME_HIGH",
-		offsetof(rtclock_data_t, rtc_base.abstime_val.high));
+	    offsetof(rtclock_data_t, rtc_base.abstime_val.high));
 
-	DECLARE("SIGPdec",	SIGPdec);
+	DECLARE("SIGPdec", SIGPdec);
 
 	DECLARE("rhdSize",
-		sizeof(struct reset_handler_data));
+	    sizeof(struct reset_handler_data));
 #if WITH_CLASSIC_S2R || !__arm64__
 	DECLARE("stSize",
-		sizeof(SleepToken));
+	    sizeof(SleepToken));
 #endif
 
-	DECLARE("CPU_DATA_ENTRIES",	offsetof(struct reset_handler_data, cpu_data_entries));
-	DECLARE("ASSIST_RESET_HANDLER",	offsetof(struct reset_handler_data, assist_reset_handler));
+	DECLARE("CPU_DATA_ENTRIES", offsetof(struct reset_handler_data, cpu_data_entries));
+	DECLARE("ASSIST_RESET_HANDLER", offsetof(struct reset_handler_data, assist_reset_handler));
 
-	DECLARE("CPU_DATA_PADDR",	offsetof(struct cpu_data_entry, cpu_data_paddr));
+	DECLARE("CPU_DATA_PADDR", offsetof(struct cpu_data_entry, cpu_data_paddr));
 
-	DECLARE("INTSTACK_SIZE",	INTSTACK_SIZE);
-	DECLARE("EXCEPSTACK_SIZE",	EXCEPSTACK_SIZE);
+	DECLARE("INTSTACK_SIZE", INTSTACK_SIZE);
+	DECLARE("EXCEPSTACK_SIZE", EXCEPSTACK_SIZE);
 
-	DECLARE("PAGE_MAX_SIZE",	PAGE_MAX_SIZE);
+	DECLARE("PAGE_MAX_SIZE", PAGE_MAX_SIZE);
 
 	DECLARE("TIMER_TSTAMP",
-		offsetof(struct timer, tstamp));
+	    offsetof(struct timer, tstamp));
 	DECLARE("THREAD_TIMER",
-		offsetof(struct processor, processor_data.thread_timer));
+	    offsetof(struct processor, processor_data.thread_timer));
 	DECLARE("KERNEL_TIMER",
-		offsetof(struct processor, processor_data.kernel_timer));
+	    offsetof(struct processor, processor_data.kernel_timer));
 	DECLARE("SYSTEM_STATE",
-		offsetof(struct processor, processor_data.system_state));
+	    offsetof(struct processor, processor_data.system_state));
 	DECLARE("USER_STATE",
-		offsetof(struct processor, processor_data.user_state));
+	    offsetof(struct processor, processor_data.user_state));
 	DECLARE("CURRENT_STATE",
-		offsetof(struct processor, processor_data.current_state));
+	    offsetof(struct processor, processor_data.current_state));
 
 	DECLARE("SYSTEM_TIMER",
-		offsetof(struct thread, system_timer));
+	    offsetof(struct thread, system_timer));
 	DECLARE("USER_TIMER",
-		offsetof(struct thread, user_timer));
+	    offsetof(struct thread, user_timer));
 
 #if !CONFIG_SKIP_PRECISE_USER_KERNEL_TIME
 	DECLARE("PRECISE_USER_KERNEL_TIME",
-		offsetof(struct thread, precise_user_kernel_time));
+	    offsetof(struct thread, precise_user_kernel_time));
 #endif
 
 	DECLARE("BA_VIRT_BASE",
-		offsetof(struct boot_args, virtBase));
+	    offsetof(struct boot_args, virtBase));
 	DECLARE("BA_PHYS_BASE",
-		offsetof(struct boot_args, physBase));
+	    offsetof(struct boot_args, physBase));
 	DECLARE("BA_MEM_SIZE",
-		offsetof(struct boot_args, memSize));
+	    offsetof(struct boot_args, memSize));
 	DECLARE("BA_TOP_OF_KERNEL_DATA",
-		offsetof(struct boot_args, topOfKernelData));
+	    offsetof(struct boot_args, topOfKernelData));
 	DECLARE("BA_DEVICE_TREE",
-		offsetof(struct boot_args, deviceTreeP));
+	    offsetof(struct boot_args, deviceTreeP));
 	DECLARE("BA_DEVICE_TREE_LENGTH",
-		offsetof(struct boot_args, deviceTreeLength));
+	    offsetof(struct boot_args, deviceTreeLength));
 	DECLARE("BA_BOOT_FLAGS",
-		offsetof(struct boot_args, bootFlags));
+	    offsetof(struct boot_args, bootFlags));
 
 	DECLARE("ENTROPY_INDEX_PTR",
-		offsetof(entropy_data_t, index_ptr));
+	    offsetof(entropy_data_t, index_ptr));
 	DECLARE("ENTROPY_BUFFER",
-		offsetof(entropy_data_t, buffer));
+	    offsetof(entropy_data_t, buffer));
 	DECLARE("ENTROPY_DATA_SIZE", sizeof(struct entropy_data));
 
 	DECLARE("SR_RESTORE_TCR_EL1", offsetof(struct sysreg_restore, tcr_el1));
 
 
 
-	return (0);
+	return 0;
 }

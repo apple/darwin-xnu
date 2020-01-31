@@ -47,7 +47,7 @@ int apple_key_store(
 	size_t input_struct_count,
 	uint64_t * outputs,
 	uint32_t * output_count
-);
+	);
 int spawn_proc(char * const command[]);
 int supports_content_prot(void);
 char* dp_class_num_to_string(int num);
@@ -60,7 +60,7 @@ void setup(void);
 void cleanup(void);
 
 T_DECL(data_protection,
-	"Verify behavior of the various data protection classes") {
+    "Verify behavior of the various data protection classes") {
 	int local_result = -1;
 	int new_prot_class = -1;
 	int old_prot_class = -1;
@@ -74,16 +74,16 @@ T_DECL(data_protection,
 	 * Ensure we can freely read and change
 	 * protection classes when unlocked.
 	 */
-	for(
+	for (
 		new_prot_class = PROTECTION_CLASS_A;
 		new_prot_class <= PROTECTION_CLASS_F;
 		new_prot_class++
-	) {
+		) {
 		T_ASSERT_NE(
 			old_prot_class = GET_PROT_CLASS(g_fd),
 			-1,
 			"Get protection class when locked"
-		);
+			);
 		T_WITH_ERRNO;
 		T_ASSERT_NE(
 			SET_PROT_CLASS(g_fd, new_prot_class),
@@ -92,7 +92,7 @@ T_DECL(data_protection,
 			"from %s to %s while unlocked",
 			dp_class_num_to_string(old_prot_class),
 			dp_class_num_to_string(new_prot_class)
-		);
+			);
 	}
 
 	/* Query the filesystem for the default CP level (Is it C?) */
@@ -105,7 +105,7 @@ T_DECL(data_protection,
 		old_prot_class = fcntl(g_fd, F_GETDEFAULTPROTLEVEL),
 		-1,
 		"Get default protection level for filesystem"
-	);
+		);
 
 	/* XXX: Do we want to do anything with the level? What should it be? */
 
@@ -119,10 +119,10 @@ T_DECL(data_protection,
 	/* re-create the file */
 	T_WITH_ERRNO;
 	T_ASSERT_GE(
-		g_fd = open(g_filepath, O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC),
+		g_fd = open(g_filepath, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC),
 		0,
 		"Recreate test file"
-	);
+		);
 
 	/* Try making a class A file while locked. */
 	T_ASSERT_EQ(lock_device(), 0, "*** Lock device ***");
@@ -133,7 +133,7 @@ T_DECL(data_protection,
 		-1,
 		"Should not be able to change protection "
 		"from class D to class A when locked"
-	);
+		);
 	T_ASSERT_EQ(unlock_device(TEST_PASSCODE), 0, "*** Unlock device ***");
 
 	/* Attempt opening/IO to a class A file while unlocked. */
@@ -143,13 +143,13 @@ T_DECL(data_protection,
 		0,
 		"Should be able to change protection "
 		"from class D to class A when unlocked"
-	);
+		);
 
 	close(g_fd);
 
 	T_WITH_ERRNO;
 	T_ASSERT_GE(
-		g_fd = open(g_filepath, O_RDWR|O_CLOEXEC),
+		g_fd = open(g_filepath, O_RDWR | O_CLOEXEC),
 		0,
 		"Should be able to open a class A file when unlocked");
 
@@ -159,13 +159,13 @@ T_DECL(data_protection,
 	 */
 	current_byte = 0;
 
-	while(current_byte < CPT_IO_SIZE) {
+	while (current_byte < CPT_IO_SIZE) {
 		local_result = pwrite(
 			g_fd,
 			&wr_buffer[current_byte],
 			CPT_IO_SIZE - current_byte,
 			current_byte
-		);
+			);
 
 		T_WITH_ERRNO;
 		T_ASSERT_NE(
@@ -173,20 +173,20 @@ T_DECL(data_protection,
 			-1,
 			"Should be able to write to "
 			"a class A file when unlocked"
-		);
+			);
 
 		current_byte += local_result;
 	}
 
 	current_byte = 0;
 
-	while(current_byte < CPT_IO_SIZE) {
+	while (current_byte < CPT_IO_SIZE) {
 		local_result = pread(
 			g_fd,
 			&rd_buffer[current_byte],
 			CPT_IO_SIZE - current_byte,
 			current_byte
-		);
+			);
 
 		T_WITH_ERRNO;
 		T_ASSERT_NE(
@@ -194,7 +194,7 @@ T_DECL(data_protection,
 			-1,
 			"Should be able to read from "
 			"a class A file when unlocked"
-		);
+			);
 
 		current_byte += local_result;
 	}
@@ -209,46 +209,46 @@ T_DECL(data_protection,
 		pread(g_fd, rd_buffer, CPT_IO_SIZE, 0),
 		0,
 		"Should not be able to read from a class A file when locked"
-	);
+		);
 
 	T_ASSERT_LE(
 		pwrite(g_fd, wr_buffer, CPT_IO_SIZE, 0),
 		0,
 		"Should not be able to write to a class A file when locked"
-	);
+		);
 
 	T_ASSERT_EQ(
 		SET_PROT_CLASS(g_fd, PROTECTION_CLASS_D),
 		-1,
 		"Should not be able to change protection "
 		"from class A to class D when locked"
-	);
+		);
 
 	/* Try to open and truncate the file. */
 	close(g_fd);
 
 	T_ASSERT_EQ(
-		g_fd = open(g_filepath, O_RDWR|O_TRUNC|O_CLOEXEC),
+		g_fd = open(g_filepath, O_RDWR | O_TRUNC | O_CLOEXEC),
 		-1,
 		"Should not be able to open and truncate "
 		"a class A file when locked"
-	);
+		);
 
 	/* Try to open the file */
 	T_ASSERT_EQ(
-		g_fd = open(g_filepath, O_RDWR|O_CLOEXEC),
+		g_fd = open(g_filepath, O_RDWR | O_CLOEXEC),
 		-1,
 		"Should not be able to open a class A file when locked"
-	);
+		);
 
 	/* What about class B files? */
 	T_ASSERT_EQ(unlock_device(TEST_PASSCODE), 0, "*** Unlock device ***");
 
 	T_ASSERT_GE(
-		g_fd = open(g_filepath, O_RDWR|O_CLOEXEC),
+		g_fd = open(g_filepath, O_RDWR | O_CLOEXEC),
 		0,
 		"Should be able to open a class A file when unlocked"
-	);
+		);
 
 	T_WITH_ERRNO;
 	T_ASSERT_EQ(
@@ -256,7 +256,7 @@ T_DECL(data_protection,
 		0,
 		"Should be able to change protection "
 		"class from A to D when unlocked"
-	);
+		);
 
 	T_ASSERT_EQ(lock_device(), 0, "*** Lock device ***");
 
@@ -266,13 +266,13 @@ T_DECL(data_protection,
 		0,
 		"Should be able to change protection "
 		"class from D to B when locked"
-	);
+		);
 
 	T_ASSERT_EQ(
 		GET_PROT_CLASS(g_fd),
 		PROTECTION_CLASS_B,
 		"File should now have class B protection"
-	);
+		);
 
 	/*
 	 * We should also be able to read/write to the
@@ -280,13 +280,13 @@ T_DECL(data_protection,
 	 */
 	current_byte = 0;
 
-	while(current_byte < CPT_IO_SIZE) {
+	while (current_byte < CPT_IO_SIZE) {
 		local_result = pwrite(
 			g_fd,
 			&wr_buffer[current_byte],
 			CPT_IO_SIZE - current_byte,
 			current_byte
-		);
+			);
 
 		T_WITH_ERRNO;
 		T_ASSERT_NE(
@@ -294,27 +294,27 @@ T_DECL(data_protection,
 			-1,
 			"Should be able to write to a "
 			"new class B file when locked"
-		);
+			);
 
 		current_byte += local_result;
 	}
 
 	current_byte = 0;
 
-	while(current_byte < CPT_IO_SIZE) {
+	while (current_byte < CPT_IO_SIZE) {
 		local_result = pread(
 			g_fd,
 			&rd_buffer[current_byte],
 			CPT_IO_SIZE - current_byte,
 			current_byte
-		);
+			);
 
 		T_ASSERT_NE(
 			local_result,
 			-1,
 			"Should be able to read from a "
 			"new class B file when locked"
-		);
+			);
 
 		current_byte += local_result;
 	}
@@ -323,10 +323,10 @@ T_DECL(data_protection,
 	close(g_fd);
 	T_WITH_ERRNO;
 	T_ASSERT_EQ(
-		g_fd = open(g_filepath, O_RDWR|O_CLOEXEC),
+		g_fd = open(g_filepath, O_RDWR | O_CLOEXEC),
 		-1,
 		"Should not be able to open a class B file when locked"
-	);
+		);
 
 	unlink(g_filepath);
 
@@ -336,34 +336,34 @@ T_DECL(data_protection,
 		mkdir(g_dirpath, 0x0777),
 		-1,
 		"Should be able to create a new directory when locked"
-	);
+		);
 
 	/* The newly created directory should not have a protection class. */
 	T_ASSERT_NE(
-		g_dir_fd = open(g_dirpath, O_RDONLY|O_CLOEXEC),
+		g_dir_fd = open(g_dirpath, O_RDONLY | O_CLOEXEC),
 		-1,
 		"Should be able to open an unclassed directory when locked"
-	);
+		);
 
 	T_ASSERT_TRUE(
 		GET_PROT_CLASS(g_dir_fd) == PROTECTION_CLASS_D ||
 		GET_PROT_CLASS(g_dir_fd) == PROTECTION_CLASS_DIR_NONE,
 		"Directory protection class sholud be D or NONE"
-	);
+		);
 
 	T_ASSERT_EQ(
 		SET_PROT_CLASS(g_dir_fd, PROTECTION_CLASS_A),
 		0,
 		"Should be able to change a directory from "
 		"class D to class A while locked"
-	);
+		);
 
 	T_ASSERT_EQ(
 		SET_PROT_CLASS(g_dir_fd, PROTECTION_CLASS_D),
 		0,
 		"Should be able to change a directory from "
 		"class A to class D while locked"
-	);
+		);
 
 	/*
 	 * Do all files created in the directory properly inherit the
@@ -374,21 +374,21 @@ T_DECL(data_protection,
 		strlcpy(g_filepath, g_dirpath, PATH_MAX),
 		PATH_MAX,
 		"Construct path for file in the directory"
-	);
+		);
 	T_ASSERT_LT(
 		strlcat(g_filepath, "test_file", PATH_MAX),
 		PATH_MAX,
 		"Construct path for file in the directory"
-	);
+		);
 	T_SETUPEND;
 
 	T_ASSERT_EQ(unlock_device(TEST_PASSCODE), 0, "*** Unlock device ***");
 
-	for(
+	for (
 		new_prot_class = PROTECTION_CLASS_A;
 		new_prot_class <= PROTECTION_CLASS_D;
 		new_prot_class++
-	) {
+		) {
 		int getclass_dir;
 
 		T_WITH_ERRNO;
@@ -396,7 +396,7 @@ T_DECL(data_protection,
 			old_prot_class = GET_PROT_CLASS(g_dir_fd),
 			-1,
 			"Get protection class for the directory"
-		);
+			);
 
 		T_WITH_ERRNO;
 		T_ASSERT_EQ(
@@ -406,36 +406,36 @@ T_DECL(data_protection,
 			"protection from %s to %s",
 			dp_class_num_to_string(old_prot_class),
 			dp_class_num_to_string(new_prot_class)
-		);
+			);
 
 		T_EXPECT_EQ(
 			getclass_dir = GET_PROT_CLASS(g_dir_fd),
 			new_prot_class,
 			"Get protection class for the directory"
-		);
+			);
 
 		T_WITH_ERRNO;
 		T_ASSERT_GE(
-			g_fd = open(g_filepath, O_CREAT|O_EXCL|O_CLOEXEC, 0777),
+			g_fd = open(g_filepath, O_CREAT | O_EXCL | O_CLOEXEC, 0777),
 			0,
 			"Should be able to create file in "
 			"%s directory when unlocked",
 			dp_class_num_to_string(new_prot_class)
-		);
+			);
 
 		T_WITH_ERRNO;
 		T_ASSERT_NE(
 			local_result = GET_PROT_CLASS(g_fd),
 			-1,
 			"Get the new file's protection class"
-		);
+			);
 
 		T_ASSERT_EQ(
 			local_result,
 			new_prot_class,
 			"File should have %s protection",
 			dp_class_num_to_string(new_prot_class)
-		);
+			);
 
 		close(g_fd);
 		unlink(g_filepath);
@@ -446,7 +446,7 @@ T_DECL(data_protection,
 		SET_PROT_CLASS(g_dir_fd, PROTECTION_CLASS_F),
 		0,
 		"Should not be able to create class F directory"
-	);
+		);
 
 	/*
 	 * Are class A and class B semantics followed for when
@@ -458,16 +458,16 @@ T_DECL(data_protection,
 		0,
 		"Should be able to change protection "
 		"from class F to class A when unlocked"
-	);
+		);
 
 	T_ASSERT_EQ(lock_device(), 0, "*** Lock device ***");
 
 	T_ASSERT_EQ(
-		g_fd = open(g_filepath, O_CREAT|O_EXCL|O_CLOEXEC, 0777),
+		g_fd = open(g_filepath, O_CREAT | O_EXCL | O_CLOEXEC, 0777),
 		-1,
 		"Should not be able to create a new file "
 		"in a class A directory when locked"
-	);
+		);
 
 	T_ASSERT_EQ(unlock_device(TEST_PASSCODE), 0, "*** Unlock device ***");
 
@@ -477,44 +477,44 @@ T_DECL(data_protection,
 		0,
 		"Should be able to change directory "
 		"from class A to class B when unlocked"
-	);
+		);
 
 	T_ASSERT_EQ(lock_device(), 0, "*** Lock device ***");
 
 	T_ASSERT_GE(
-		g_fd = open(g_filepath, O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC, 0777),
+		g_fd = open(g_filepath, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0777),
 		0,
 		"Should be able to create a new file "
 		"in class B directory when locked"
-	);
+		);
 
 	T_ASSERT_NE(
 		local_result = GET_PROT_CLASS(g_fd),
 		-1,
 		"Get the new file's protection class"
-	);
+		);
 
 	T_ASSERT_EQ(
 		local_result,
 		PROTECTION_CLASS_B,
 		"File should inherit protection class of class B directory"
-	);
+		);
 
 	/* What happens when we try to create new subdirectories? */
 	T_ASSERT_EQ(unlock_device(TEST_PASSCODE), 0, "*** Unlock device ***");
 
-	for(
+	for (
 		new_prot_class = PROTECTION_CLASS_A;
 		new_prot_class <= PROTECTION_CLASS_D;
 		new_prot_class++
-	) {
+		) {
 		T_WITH_ERRNO;
 		T_ASSERT_EQ(
 			SET_PROT_CLASS(g_dir_fd, new_prot_class),
 			0,
 			"Change directory to %s",
 			dp_class_num_to_string(new_prot_class)
-		);
+			);
 
 		T_WITH_ERRNO;
 		T_ASSERT_NE(
@@ -522,15 +522,15 @@ T_DECL(data_protection,
 			-1,
 			"Create subdirectory in %s directory",
 			dp_class_num_to_string(new_prot_class)
-		);
+			);
 
 		T_WITH_ERRNO;
 		T_ASSERT_NE(
-			g_subdir_fd = open(g_subdirpath, O_RDONLY|O_CLOEXEC),
+			g_subdir_fd = open(g_subdirpath, O_RDONLY | O_CLOEXEC),
 			-1,
 			"Should be able to open subdirectory in %s directory",
 			dp_class_num_to_string(new_prot_class)
-		);
+			);
 
 		T_ASSERT_NE(
 			local_result = GET_PROT_CLASS(g_subdir_fd),
@@ -538,14 +538,14 @@ T_DECL(data_protection,
 			"Get protection class of new subdirectory "
 			"of %s directory",
 			dp_class_num_to_string(new_prot_class)
-		);
+			);
 
 		T_ASSERT_EQ(
 			local_result,
 			new_prot_class,
 			"New subdirectory should have same class as %s parent",
 			dp_class_num_to_string(new_prot_class)
-		);
+			);
 
 		close(g_subdir_fd);
 		rmdir(g_subdirpath);
@@ -553,7 +553,8 @@ T_DECL(data_protection,
 }
 
 void
-setup(void) {
+setup(void)
+{
 	int ret = 0;
 	int local_result = -1;
 
@@ -565,16 +566,16 @@ setup(void) {
 	T_ASSERT_NOTNULL(
 		mkdtemp(g_test_tempdir),
 		"Create temporary directory for test"
-	);
+		);
 	T_LOG("Test temp dir: %s", g_test_tempdir);
 
 	T_ASSERT_NE(
 		local_result = supports_content_prot(),
 		-1,
 		"Get content protection support status"
-	);
+		);
 
-	if(local_result == 0) {
+	if (local_result == 0) {
 		T_SKIP("Data protection not supported on this system");
 	}
 
@@ -582,13 +583,13 @@ setup(void) {
 		has_passcode(),
 		0,
 		"Device should not have existing passcode"
-	);
+		);
 
 	T_ASSERT_EQ(
 		set_passcode(TEST_PASSCODE, NULL),
 		0,
 		"Set test passcode"
-	);
+		);
 
 	bzero(g_filepath, PATH_MAX);
 	bzero(g_dirpath, PATH_MAX);
@@ -607,68 +608,70 @@ setup(void) {
 
 	T_WITH_ERRNO;
 	T_ASSERT_GE(
-		g_fd = open(g_filepath, O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC, 0777),
+		g_fd = open(g_filepath, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0777),
 		0,
 		"Create test file"
-	);
+		);
 
 	T_SETUPEND;
 }
 
 void
-cleanup(void) {
+cleanup(void)
+{
 	T_LOG("Cleaning up…");
 
-	if(g_subdir_fd >= 0) {
+	if (g_subdir_fd >= 0) {
 		T_LOG("Cleanup: closing fd %d", g_subdir_fd);
 		close(g_subdir_fd);
 	}
 
-	if(g_subdirpath[0]) {
+	if (g_subdirpath[0]) {
 		T_LOG("Cleanup: removing %s", g_subdirpath);
 		rmdir(g_subdirpath);
 	}
 
-	if(g_fd >= 0) {
+	if (g_fd >= 0) {
 		T_LOG("Cleanup: closing fd %d", g_fd);
 		close(g_fd);
 	}
 
-	if(g_filepath[0]) {
+	if (g_filepath[0]) {
 		T_LOG("Cleanup: removing %s", g_filepath);
 		unlink(g_filepath);
 	}
 
-	if(g_dir_fd >= 0) {
+	if (g_dir_fd >= 0) {
 		T_LOG("Cleanup: closing fd %d", g_dir_fd);
 		close(g_dir_fd);
 	}
 
-	if(g_dirpath[0]) {
+	if (g_dirpath[0]) {
 		T_LOG("Cleanup: removing %s", g_dirpath);
 		rmdir(g_dirpath);
 	}
 
-	if(strcmp(g_test_tempdir, TEMP_DIR_TEMPLATE)) {
+	if (strcmp(g_test_tempdir, TEMP_DIR_TEMPLATE)) {
 		T_LOG("Cleanup: removing %s", g_test_tempdir);
 		rmdir(g_test_tempdir);
 	}
 
-	if(g_passcode_set) {
+	if (g_passcode_set) {
 		T_LOG("Cleanup: unlocking device");
-		if(unlock_device(TEST_PASSCODE)) {
+		if (unlock_device(TEST_PASSCODE)) {
 			T_LOG("Warning: failed to unlock device in cleanup");
 		}
 
 		T_LOG("Cleanup: clearing passcode");
-		if(clear_passcode(TEST_PASSCODE)) {
+		if (clear_passcode(TEST_PASSCODE)) {
 			T_LOG("Warning: failed to clear passcode in cleanup");
 		}
 	}
 }
 
 int
-set_passcode(char * new_passcode, char * old_passcode) {
+set_passcode(char * new_passcode, char * old_passcode)
+{
 	int result = -1;
 
 #ifdef KEYBAG_ENTITLEMENTS
@@ -687,11 +690,11 @@ set_passcode(char * new_passcode, char * old_passcode) {
 	old_passcode_len = strnlen(old_passcode, CPT_MAX_PASS_LEN);
 	new_passcode_len = strnlen(new_passcode, CPT_MAX_PASS_LEN);
 
-	if((old_passcode == NULL) || (old_passcode_len == CPT_MAX_PASS_LEN)) {
+	if ((old_passcode == NULL) || (old_passcode_len == CPT_MAX_PASS_LEN)) {
 		old_passcode = "";
 		old_passcode_len = 0;
 	}
-	if((new_passcode == NULL) || (new_passcode_len == CPT_MAX_PASS_LEN)) {
+	if ((new_passcode == NULL) || (new_passcode_len == CPT_MAX_PASS_LEN)) {
 		new_passcode = "";
 		new_passcode_len = 0;
 	}
@@ -704,14 +707,14 @@ set_passcode(char * new_passcode, char * old_passcode) {
 
 	memcpy(buffer_ptr, old_passcode, old_passcode_len);
 	buffer_ptr += ((old_passcode_len + sizeof(uint32_t) - 1) &
-		~(sizeof(uint32_t) - 1));
+	    ~(sizeof(uint32_t) - 1));
 
 	*((uint32_t *) buffer_ptr) = new_passcode_len;
 	buffer_ptr += sizeof(uint32_t);
 
 	memcpy(buffer_ptr, new_passcode, new_passcode_len);
 	buffer_ptr += ((new_passcode_len + sizeof(uint32_t) - 1) &
-		~(sizeof(uint32_t) - 1));
+	    ~(sizeof(uint32_t) - 1));
 
 	input_structs = buffer;
 	input_struct_count = (buffer_ptr - buffer);
@@ -724,7 +727,7 @@ set_passcode(char * new_passcode, char * old_passcode) {
 		input_struct_count,
 		NULL,
 		NULL
-	);
+		);
 #else
 	/*
 	 * If we aren't entitled, we'll need to use
@@ -732,17 +735,17 @@ set_passcode(char * new_passcode, char * old_passcode) {
 	 */
 	T_LOG("%s(): using keystorectl", __func__);
 
-	if(
+	if (
 		(old_passcode == NULL) ||
 		(strnlen(old_passcode, CPT_MAX_PASS_LEN) == CPT_MAX_PASS_LEN)
-	) {
+		) {
 		old_passcode = "";
 	}
 
-	if(
+	if (
 		(new_passcode == NULL) ||
 		(strnlen(new_passcode, CPT_MAX_PASS_LEN) == CPT_MAX_PASS_LEN)
-	) {
+		) {
 		new_passcode = "";
 	}
 
@@ -755,17 +758,18 @@ set_passcode(char * new_passcode, char * old_passcode) {
 	};
 	result = spawn_proc(keystorectl_args);
 #endif /* KEYBAG_ENTITLEMENTS */
-	if(result == 0 && new_passcode != NULL) {
+	if (result == 0 && new_passcode != NULL) {
 		g_passcode_set = 1;
-	} else if(result == 0 && new_passcode == NULL) {
+	} else if (result == 0 && new_passcode == NULL) {
 		g_passcode_set = 0;
 	}
 
-	return(result);
+	return result;
 }
 
 int
-clear_passcode(char * passcode) {
+clear_passcode(char * passcode)
+{
 	/*
 	 * For the moment, this will set the passcode to the empty string
 	 * (a known value); this will most likely need to change, or running
@@ -775,12 +779,14 @@ clear_passcode(char * passcode) {
 }
 
 int
-has_passcode(void) {
+has_passcode(void)
+{
 	return set_passcode(NULL, NULL);
 }
 
 int
-lock_device(void) {
+lock_device(void)
+{
 	int result = -1;
 
 	/*
@@ -796,7 +802,7 @@ lock_device(void) {
 	 */
 	char * const kbd_args[] = {KEYBAGDTEST_PATH, "lock", NULL};
 	result = spawn_proc(kbd_args);
-	if(result) {
+	if (result) {
 		return result;
 	}
 
@@ -807,22 +813,22 @@ lock_device(void) {
 	 */
 	(void) unlink("/private/var/foo_test_file");
 
-	while(1) {
+	while (1) {
 		int dp_fd;
 
 		dp_fd = open_dprotected_np(
 			"/private/var/foo_test_file",
-			O_RDWR|O_CREAT,
+			O_RDWR | O_CREAT,
 			PROTECTION_CLASS_A,
 			0
-		);
+			);
 
-		if(dp_fd >= 0) {
+		if (dp_fd >= 0) {
 			/* delete it and sleep */
 			close(dp_fd);
 			result = unlink("/private/var/foo_test_file");
 
-			if(result) {
+			if (result) {
 				return result;
 			}
 
@@ -845,7 +851,8 @@ lock_device(void) {
 }
 
 int
-unlock_device(char * passcode) {
+unlock_device(char * passcode)
+{
 	int result = -1;
 
 #ifdef  KEYBAG_ENTITLEMENTS
@@ -857,7 +864,7 @@ unlock_device(char * passcode) {
 	T_LOG("%s(): using keybag entitlements", __func__);
 
 	input_struct_count = strnlen(passcode, CPT_MAX_PASS_LEN);
-	if((passcode == NULL) || (input_struct_count == CPT_MAX_PASS_LEN)) {
+	if ((passcode == NULL) || (input_struct_count == CPT_MAX_PASS_LEN)) {
 		passcode = "";
 		input_struct_count = 0;
 	}
@@ -870,7 +877,7 @@ unlock_device(char * passcode) {
 		input_struct_count,
 		NULL,
 		NULL
-	);
+		);
 #else
 	/*
 	 * If we aren't entitled, we'll need to use
@@ -878,10 +885,10 @@ unlock_device(char * passcode) {
 	 */
 	T_LOG("%s(): using keystorectl", __func__);
 
-	if(
+	if (
 		(passcode == NULL) ||
 		(strnlen(passcode, CPT_MAX_PASS_LEN) == CPT_MAX_PASS_LEN)
-	) {
+		) {
 		passcode = "";
 	}
 
@@ -892,7 +899,7 @@ unlock_device(char * passcode) {
 	result = spawn_proc(keystorectl_args);
 #endif /* KEYBAG_ENTITLEMENTS */
 
-	return(result);
+	return result;
 }
 
 /*
@@ -904,7 +911,8 @@ unlock_device(char * passcode) {
  * we are formatted for it.
  */
 int
-supports_content_prot(void) {
+supports_content_prot(void)
+{
 	int local_result = -1;
 	int result = -1;
 	uint32_t buffer_size = 1;
@@ -916,14 +924,14 @@ supports_content_prot(void) {
 	defaults = IORegistryEntryFromPath(
 		kIOMasterPortDefault,
 		kIODeviceTreePlane ":/defaults"
-	);
+		);
 
-	if(defaults == IO_OBJECT_NULL) {
+	if (defaults == IO_OBJECT_NULL) {
 		/* Assume data protection is unsupported */
 		T_LOG(
 			"%s(): no defaults entry in IORegistry",
 			__func__
-		);
+			);
 		return 0;
 	}
 
@@ -932,14 +940,14 @@ supports_content_prot(void) {
 		"content-protect",
 		buffer,
 		&buffer_size
-	);
+		);
 
-	if(k_result != KERN_SUCCESS) {
+	if (k_result != KERN_SUCCESS) {
 		/* Assume data protection is unsupported */
 		T_LOG(
 			"%s(): no content-protect property in IORegistry",
 			__func__
-		);
+			);
 		return 0;
 	}
 
@@ -950,19 +958,19 @@ supports_content_prot(void) {
 	 */
 	local_result = statfs(g_test_tempdir, &statfs_results);
 
-	if(local_result == -1) {
+	if (local_result == -1) {
 		T_LOG(
 			"%s(): failed to statfs the test directory, errno = %s",
 			__func__, strerror(errno)
-		);
+			);
 		return -1;
-	} else if(statfs_results.f_flags & MNT_CPROTECT) {
+	} else if (statfs_results.f_flags & MNT_CPROTECT) {
 		return 1;
 	} else {
 		T_LOG(
 			"%s(): filesystem not formatted for data protection",
 			__func__
-		);
+			);
 		return 0;
 	}
 }
@@ -973,12 +981,13 @@ supports_content_prot(void) {
  */
 int
 apple_key_store(uint32_t command,
-                uint64_t * inputs,
-                uint32_t input_count,
-                void * input_structs,
-                size_t input_struct_count,
-                uint64_t * outputs,
-                uint32_t * output_count) {
+    uint64_t * inputs,
+    uint32_t input_count,
+    void * input_structs,
+    size_t input_struct_count,
+    uint64_t * outputs,
+    uint32_t * output_count)
+{
 	int result = -1;
 	io_connect_t connection = IO_OBJECT_NULL;
 	io_registry_entry_t apple_key_bag_service = IO_OBJECT_NULL;
@@ -988,12 +997,12 @@ apple_key_store(uint32_t command,
 	apple_key_bag_service = IOServiceGetMatchingService(
 		kIOMasterPortDefault,
 		IOServiceMatching(kAppleKeyStoreServiceName)
-	);
-	if(apple_key_bag_service == IO_OBJECT_NULL) {
+		);
+	if (apple_key_bag_service == IO_OBJECT_NULL) {
 		T_LOG(
 			"%s: failed to match kAppleKeyStoreServiceName",
 			__func__
-		);
+			);
 		goto end;
 	}
 
@@ -1002,13 +1011,13 @@ apple_key_store(uint32_t command,
 		mach_task_self(),
 		0,
 		&connection
-	);
-	if(k_result != KERN_SUCCESS) {
+		);
+	if (k_result != KERN_SUCCESS) {
 		T_LOG(
 			"%s: failed to open AppleKeyStore: "
 			"IOServiceOpen() returned %d",
 			__func__, k_result
-		);
+			);
 		goto end;
 	}
 
@@ -1016,21 +1025,21 @@ apple_key_store(uint32_t command,
 		connection,
 		kAppleKeyStoreUserClientOpen,
 		NULL, 0, NULL, 0, NULL, NULL, NULL, NULL
-	);
-	if(k_result != KERN_SUCCESS) {
+		);
+	if (k_result != KERN_SUCCESS) {
 		T_LOG(
 			"%s: call to AppleKeyStore method "
 			"kAppleKeyStoreUserClientOpen failed",
 			__func__
-		);
+			);
 		goto close;
 	}
 
 	io_result = IOConnectCallMethod(
 		connection, command, inputs, input_count, input_structs,
 		input_struct_count, outputs, output_count, NULL, NULL
-	);
-	if(io_result != kIOReturnSuccess) {
+		);
+	if (io_result != kIOReturnSuccess) {
 		T_LOG("%s: call to AppleKeyStore method %d failed", __func__);
 		goto close;
 	}
@@ -1040,14 +1049,15 @@ apple_key_store(uint32_t command,
 close:
 	IOServiceClose(apple_key_bag_service);
 end:
-	return(result);
+	return result;
 }
 
 /*
  * Helper function for launching tools
  */
 int
-spawn_proc(char * const command[]) {
+spawn_proc(char * const command[])
+{
 	pid_t pid           = 0;
 	int launch_tool_ret = 0;
 	bool waitpid_ret    = true;
@@ -1057,17 +1067,17 @@ spawn_proc(char * const command[]) {
 
 	launch_tool_ret = dt_launch_tool(&pid, command, false, NULL, NULL);
 	T_EXPECT_EQ(launch_tool_ret, 0, "launch tool: %s", command[0]);
-	if(launch_tool_ret != 0) {
+	if (launch_tool_ret != 0) {
 		return 1;
 	}
 
 	waitpid_ret = dt_waitpid(pid, &status, &signal, timeout);
 	T_EXPECT_TRUE(waitpid_ret, "%s should succeed", command[0]);
-	if(waitpid_ret == false) {
-		if(status != 0) {
+	if (waitpid_ret == false) {
+		if (status != 0) {
 			T_LOG("%s exited %d", command[0], status);
 		}
-		if(signal != 0) {
+		if (signal != 0) {
 			T_LOG("%s received signal %d", command[0], signal);
 		}
 		return 1;
@@ -1077,29 +1087,32 @@ spawn_proc(char * const command[]) {
 }
 
 char*
-dp_class_num_to_string(int num) {
-	switch(num) {
-		case 0:
-			return "unclassed";
-		case PROTECTION_CLASS_A:
-			return "class A";
-		case PROTECTION_CLASS_B:
-			return "class B";
-		case PROTECTION_CLASS_C:
-			return "class C";
-		case PROTECTION_CLASS_D:
-			return "class D";
-		case PROTECTION_CLASS_E:
-			return "class E";
-		case PROTECTION_CLASS_F:
-			return "class F";
-		default:
-			return "<unknown class>";
+dp_class_num_to_string(int num)
+{
+	switch (num) {
+	case 0:
+		return "unclassed";
+	case PROTECTION_CLASS_A:
+		return "class A";
+	case PROTECTION_CLASS_B:
+		return "class B";
+	case PROTECTION_CLASS_C:
+		return "class C";
+	case PROTECTION_CLASS_D:
+		return "class D";
+	case PROTECTION_CLASS_E:
+		return "class E";
+	case PROTECTION_CLASS_F:
+		return "class F";
+	default:
+		return "<unknown class>";
 	}
 }
 
 #if 0
-int device_lock_state(void) {
+int
+device_lock_state(void)
+{
 	/*
 	 * TODO: Actually implement this.
 	 *
@@ -1109,11 +1122,13 @@ int device_lock_state(void) {
 	 */
 	int result = -1;
 
-	return(result);
+	return result;
 }
 
 /* Determines if we will try to test class C semanatics. */
-int unlocked_since_boot() {
+int
+unlocked_since_boot()
+{
 	/*
 	 * TODO: Actually implement this.
 	 *
@@ -1124,7 +1139,6 @@ int unlocked_since_boot() {
 	 */
 	int result = 1;
 
-	return(result);
+	return result;
 }
 #endif
-

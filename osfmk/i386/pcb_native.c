@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -85,6 +85,7 @@
 #include <i386/commpage/commpage.h>
 #include <i386/cpu_data.h>
 #include <i386/cpu_number.h>
+#include <i386/cpuid.h>
 #include <i386/eflags.h>
 #include <i386/proc_reg.h>
 #include <i386/tss.h>
@@ -100,9 +101,9 @@
 #include <kern/hv_support.h>
 #endif
 
-#define ASSERT_IS_16BYTE_MULTIPLE_SIZEOF(_type_)	\
-extern char assert_is_16byte_multiple_sizeof_ ## _type_	\
-		[(sizeof(_type_) % 16) == 0 ? 1 : -1]
+#define ASSERT_IS_16BYTE_MULTIPLE_SIZEOF(_type_)        \
+extern char assert_is_16byte_multiple_sizeof_ ## _type_ \
+	        [(sizeof(_type_) % 16) == 0 ? 1 : -1]
 
 /* Compile-time checks for vital save area sizing: */
 ASSERT_IS_16BYTE_MULTIPLE_SIZEOF(x86_64_intr_stack_frame_t);
@@ -110,20 +111,23 @@ ASSERT_IS_16BYTE_MULTIPLE_SIZEOF(x86_saved_state_t);
 
 #define DIRECTION_FLAG_DEBUG (DEBUG | DEVELOPMENT)
 
-extern zone_t		iss_zone;		/* zone for saved_state area */
-extern zone_t		ids_zone;		/* zone for debug_state area */
+extern zone_t           iss_zone;               /* zone for saved_state area */
+extern zone_t           ids_zone;               /* zone for debug_state area */
+extern int              tecs_mode_supported;
+
+int force_thread_policy_tecs;
 
 void
 act_machine_switch_pcb(__unused thread_t old, thread_t new)
 {
-        pcb_t			pcb = THREAD_TO_PCB(new);
-	cpu_data_t      	*cdp = current_cpu_datap();
-	struct real_descriptor	*ldtp;
-	mach_vm_offset_t	pcb_stack_top;
+	pcb_t                   pcb = THREAD_TO_PCB(new);
+	cpu_data_t              *cdp = current_cpu_datap();
+	struct real_descriptor  *ldtp;
+	mach_vm_offset_t        pcb_stack_top;
 
 	assert(new->kernel_stack != 0);
 	assert(ml_get_interrupts_enabled() == FALSE);
-#ifdef	DIRECTION_FLAG_DEBUG
+#ifdef  DIRECTION_FLAG_DEBUG
 	if (x86_get_flags() & EFL_DF) {
 		panic("Direction flag detected: 0x%lx", x86_get_flags());
 	}
@@ -139,15 +143,15 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 	set_fs(NULL_SEG);
 
 	if (get_gs() != NULL_SEG) {
-		swapgs();		/* switch to user's GS context */
+		swapgs();               /* switch to user's GS context */
 		set_gs(NULL_SEG);
-		swapgs();		/* and back to kernel */
+		swapgs();               /* and back to kernel */
 
 		/* record the active machine state lost */
 		cdp->cpu_uber.cu_user_gs_base = 0;
-	} 
+	}
 
-	vm_offset_t			isf;
+	vm_offset_t                     isf;
 
 	/*
 	 * Set pointer to PCB's interrupt stack frame in cpu data.
@@ -170,8 +174,7 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 	cdp->cd_estack = cpu_shadowp(cdp->cpu_number)->cd_estack = cdp->cpu_desc_index.cdi_sstku;
 
 	if (is_saved_state64(pcb->iss)) {
-
-		cdp->cpu_task_map = new->map->pmap->pm_task_map; 
+		cdp->cpu_task_map = new->map->pmap->pm_task_map;
 
 		/*
 		 * Enable the 64-bit user code segment, USER64_CS.
@@ -197,7 +200,6 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 			}
 		}
 	} else {
-
 		cdp->cpu_task_map = TASK_MAP_32BIT;
 
 		/*
@@ -218,27 +220,32 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 		 * For 32-bit user this involves setting the USER_CTHREAD
 		 * descriptor in the LDT to point to the cthread data.
 		 * The involves copying in the pre-initialized descriptor.
-		 */ 
-		ldtp = (struct real_descriptor *)current_ldt();
-		ldtp[sel_idx(USER_CTHREAD)] = pcb->cthread_desc;
-		if (pcb->uldt_selector != 0)
-			ldtp[sel_idx(pcb->uldt_selector)] = pcb->uldt_desc;
-		cdp->cpu_uber.cu_user_gs_base = pcb->cthread_self;
-
-		/*
-		 * Set the thread`s LDT or LDT entry.
 		 */
-		if (new->task == TASK_NULL || new->task->i386_ldt == 0) {
-			/*
-			 * Use system LDT.
-			 */
-		       	ml_cpu_set_ldt(KERNEL_LDT);
-		} else {
-			/*
-			 * Task has its own LDT.
-			 */
-			user_ldt_set(new);
+		ldtp = current_ldt();
+		ldtp[sel_idx(USER_CTHREAD)] = pcb->cthread_desc;
+		if (pcb->uldt_selector != 0) {
+			ldtp[sel_idx(pcb->uldt_selector)] = pcb->uldt_desc;
 		}
+		cdp->cpu_uber.cu_user_gs_base = pcb->cthread_self;
+	}
+
+	cdp->cpu_curthread_do_segchk = new->machine.mthr_do_segchk;
+
+	/*
+	 * Set the thread`s LDT or LDT entry.
+	 */
+	if (__probable(new->task == TASK_NULL || new->task->i386_ldt == 0)) {
+		/*
+		 * Use system LDT.
+		 */
+		ml_cpu_set_ldt(KERNEL_LDT);
+		cdp->cpu_curtask_has_ldt = 0;
+	} else {
+		/*
+		 * Task has its own LDT.
+		 */
+		user_ldt_set(new);
+		cdp->cpu_curtask_has_ldt = 1;
 	}
 
 	/*
@@ -251,20 +258,20 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 kern_return_t
 thread_set_wq_state32(thread_t thread, thread_state_t tstate)
 {
-        x86_thread_state32_t	*state;
-        x86_saved_state32_t	*saved_state;
+	x86_thread_state32_t    *state;
+	x86_saved_state32_t     *saved_state;
 	thread_t curth = current_thread();
-	spl_t			s=0;
+	spl_t                   s = 0;
 
 	pal_register_cache_state(thread, DIRTY);
 
 	saved_state = USER_REGS32(thread);
 
 	state = (x86_thread_state32_t *)tstate;
-	
+
 	if (curth != thread) {
 		s = splsched();
-	        thread_lock(thread);
+		thread_lock(thread);
 	}
 
 	saved_state->ebp = 0;
@@ -284,7 +291,7 @@ thread_set_wq_state32(thread_t thread, thread_state_t tstate)
 	saved_state->es = USER_DS;
 
 	if (curth != thread) {
-	        thread_unlock(thread);
+		thread_unlock(thread);
 		splx(s);
 	}
 
@@ -295,14 +302,14 @@ thread_set_wq_state32(thread_t thread, thread_state_t tstate)
 kern_return_t
 thread_set_wq_state64(thread_t thread, thread_state_t tstate)
 {
-        x86_thread_state64_t	*state;
-        x86_saved_state64_t	*saved_state;
+	x86_thread_state64_t    *state;
+	x86_saved_state64_t     *saved_state;
 	thread_t curth = current_thread();
-	spl_t			s=0;
+	spl_t                   s = 0;
 
 	saved_state = USER_REGS64(thread);
 	state = (x86_thread_state64_t *)tstate;
-	
+
 	/* Disallow setting non-canonical PC or stack */
 	if (!IS_USERADDR64_CANONICAL(state->rsp) ||
 	    !IS_USERADDR64_CANONICAL(state->rip)) {
@@ -313,7 +320,7 @@ thread_set_wq_state64(thread_t thread, thread_state_t tstate)
 
 	if (curth != thread) {
 		s = splsched();
-	        thread_lock(thread);
+		thread_lock(thread);
 	}
 
 	saved_state->rbp = 0;
@@ -330,7 +337,7 @@ thread_set_wq_state64(thread_t thread, thread_state_t tstate)
 	saved_state->isf.rflags = EFL_USER_SET;
 
 	if (curth != thread) {
-	        thread_unlock(thread);
+		thread_unlock(thread);
 		splx(s);
 	}
 
@@ -342,10 +349,10 @@ thread_set_wq_state64(thread_t thread, thread_state_t tstate)
  */
 kern_return_t
 machine_thread_create(
-	thread_t		thread,
-	task_t			task)
+	thread_t                thread,
+	task_t                  task)
 {
-        pcb_t			pcb = THREAD_TO_PCB(thread);
+	pcb_t                   pcb = THREAD_TO_PCB(thread);
 
 #if NCOPY_WINDOWS > 0
 	inval_copy_windows(thread);
@@ -354,27 +361,34 @@ machine_thread_create(
 	thread->machine.physwindow_busy = 0;
 #endif
 
+	if (__improbable(force_thread_policy_tecs)) {
+		thread->machine.mthr_do_segchk = 1;
+	} else {
+		thread->machine.mthr_do_segchk = 0;
+	}
+
 	/*
 	 * Allocate save frame only if required.
 	 */
 	if (pcb->iss == NULL) {
 		assert((get_preemption_level() == 0));
 		pcb->iss = (x86_saved_state_t *) zalloc(iss_zone);
-		if (pcb->iss == NULL)
+		if (pcb->iss == NULL) {
 			panic("iss_zone");
+		}
 	}
 
 	/*
 	 * Ensure that the synthesized 32-bit state including
-	 * the 64-bit interrupt state can be acommodated in the 
+	 * the 64-bit interrupt state can be acommodated in the
 	 * 64-bit state we allocate for both 32-bit and 64-bit threads.
 	 */
 	assert(sizeof(pcb->iss->ss_32) + sizeof(pcb->iss->ss_64.isf) <=
-	       sizeof(pcb->iss->ss_64));
+	    sizeof(pcb->iss->ss_64));
 
 	bzero((char *)pcb->iss, sizeof(x86_saved_state_t));
 
-        if (task_has_64Bit_addr(task)) {
+	if (task_has_64Bit_addr(task)) {
 		pcb->iss->flavor = x86_SAVED_STATE64;
 
 		pcb->iss->ss_64.isf.cs = USER64_CS;
@@ -406,7 +420,8 @@ machine_thread_create(
 		pcb->cthread_desc = *gdt_desc_p(USER_DS);
 	}
 
-	return(KERN_SUCCESS);
+
+	return KERN_SUCCESS;
 }
 
 /*
@@ -414,9 +429,9 @@ machine_thread_create(
  */
 void
 machine_thread_destroy(
-	thread_t		thread)
+	thread_t                thread)
 {
-	pcb_t	pcb = THREAD_TO_PCB(thread);
+	pcb_t   pcb = THREAD_TO_PCB(thread);
 
 #if HYPERVISOR
 	if (thread->hv_thread_target) {
@@ -425,8 +440,9 @@ machine_thread_destroy(
 	}
 #endif
 
-	if (pcb->ifps != 0)
+	if (pcb->ifps != 0) {
 		fpu_free(thread, pcb->ifps);
+	}
 	if (pcb->iss != 0) {
 		zfree(iss_zone, pcb->iss);
 		pcb->iss = 0;
@@ -439,21 +455,22 @@ machine_thread_destroy(
 
 kern_return_t
 machine_thread_set_tsd_base(
-	thread_t			thread,
-	mach_vm_offset_t	tsd_base)
+	thread_t                        thread,
+	mach_vm_offset_t        tsd_base)
 {
-
 	if (thread->task == kernel_task) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	if (thread_is_64bit_addr(thread)) {
 		/* check for canonical address, set 0 otherwise  */
-		if (!IS_USERADDR64_CANONICAL(tsd_base))
+		if (!IS_USERADDR64_CANONICAL(tsd_base)) {
 			tsd_base = 0ULL;
+		}
 	} else {
-		if (tsd_base > UINT32_MAX)
+		if (tsd_base > UINT32_MAX) {
 			tsd_base = 0ULL;
+		}
 	}
 
 	pcb_t pcb = THREAD_TO_PCB(thread);
@@ -467,8 +484,8 @@ machine_thread_set_tsd_base(
 			.base_low = tsd_base & 0xffff,
 			.base_med = (tsd_base >> 16) & 0xff,
 			.base_high = (tsd_base >> 24) & 0xff,
-			.access = ACC_P|ACC_PL_U|ACC_DATA_W,
-			.granularity = SZ_32|SZ_G,
+			.access = ACC_P | ACC_PL_U | ACC_DATA_W,
+			.granularity = SZ_32 | SZ_G,
 		};
 
 		pcb->cthread_desc = desc;
@@ -477,19 +494,18 @@ machine_thread_set_tsd_base(
 
 	/* For current thread, make the TSD base active immediately */
 	if (thread == current_thread()) {
-
 		if (thread_is_64bit_addr(thread)) {
 			cpu_data_t              *cdp;
 
 			mp_disable_preemption();
 			cdp = current_cpu_datap();
 			if ((cdp->cpu_uber.cu_user_gs_base != pcb->cthread_self) ||
-				(pcb->cthread_self != rdmsr64(MSR_IA32_KERNEL_GS_BASE)))
+			    (pcb->cthread_self != rdmsr64(MSR_IA32_KERNEL_GS_BASE))) {
 				wrmsr64(MSR_IA32_KERNEL_GS_BASE, tsd_base);
+			}
 			cdp->cpu_uber.cu_user_gs_base = tsd_base;
 			mp_enable_preemption();
 		} else {
-
 			/* assign descriptor */
 			mp_disable_preemption();
 			*ldt_desc_p(USER_CTHREAD) = pcb->cthread_desc;
@@ -498,4 +514,26 @@ machine_thread_set_tsd_base(
 	}
 
 	return KERN_SUCCESS;
+}
+
+void
+machine_tecs(thread_t thr)
+{
+	if (tecs_mode_supported) {
+		thr->machine.mthr_do_segchk = 1;
+	}
+}
+
+int
+machine_csv(cpuvn_e cve)
+{
+	switch (cve) {
+	case CPUVN_CI:
+		return (cpuid_wa_required(CPU_INTEL_SEGCHK) & CWA_ON) != 0;
+
+	default:
+		break;
+	}
+
+	return 0;
 }

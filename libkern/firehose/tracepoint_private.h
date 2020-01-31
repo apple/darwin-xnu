@@ -83,10 +83,10 @@ typedef struct firehose_tracepoint_s {
 
 #define FIREHOSE_TRACE_ID_MAKE(ns, type, flags, code) \
 	(((firehose_tracepoint_id_u){ .ftid = { \
-		._namespace = ns, \
-		._type = type, \
-		._flags = flags, \
-		._code = code, \
+	        ._namespace = ns, \
+	        ._type = type, \
+	        ._flags = flags, \
+	        ._code = code, \
 	} }).ftid_value)
 
 #define FIREHOSE_TRACE_ID_SET_NS(tid, ns) \
@@ -96,12 +96,12 @@ typedef struct firehose_tracepoint_s {
 	((tid).ftid._type = _firehose_tracepoint_type_##ns##_##type)
 
 #define FIREHOSE_TRACE_ID_PC_STYLE(tid) \
-		((tid).ftid._flags & _firehose_tracepoint_flags_pc_style_mask)
+	        ((tid).ftid._flags & _firehose_tracepoint_flags_pc_style_mask)
 
 #define FIREHOSE_TRACE_ID_SET_PC_STYLE(tid, flag) ({ \
-		firehose_tracepoint_id_u _tmp_tid = (tid); \
-		_tmp_tid.ftid._flags &= ~_firehose_tracepoint_flags_pc_style_mask; \
-		_tmp_tid.ftid._flags |= _firehose_tracepoint_flags_pc_style_##flag; \
+	        firehose_tracepoint_id_u _tmp_tid = (tid); \
+	        _tmp_tid.ftid._flags &= ~_firehose_tracepoint_flags_pc_style_mask; \
+	        _tmp_tid.ftid._flags |= _firehose_tracepoint_flags_pc_style_##flag; \
 })
 
 #define FIREHOSE_TRACE_ID_HAS_FLAG(tid, ns, flag) \
@@ -157,7 +157,7 @@ static inline uint64_t
 firehose_tracepoint_time(firehose_activity_flags_t flags)
 {
 	if (firehose_precise_timestamps_enabled() ||
-			(flags & firehose_activity_flags_precise_timestamp)) {
+	    (flags & firehose_activity_flags_precise_timestamp)) {
 		return mach_continuous_time();
 	} else {
 		return mach_continuous_approximate_time();
@@ -169,10 +169,10 @@ __OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0)
 __TVOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0)
 void
 firehose_trace_metadata(firehose_stream_t stream, firehose_tracepoint_id_u ftid,
-			uint64_t stamp, const void* pubdata, size_t publen);
+    uint64_t stamp, const void* pubdata, size_t publen);
 #endif
 __END_DECLS
 
-OS_ASSUME_NONNULL_END
+    OS_ASSUME_NONNULL_END
 
 #endif // __FIREHOSE_FIREHOSE__

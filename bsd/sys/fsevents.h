@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef FSEVENT_H
@@ -97,35 +97,35 @@
 // field that /dev/fsevents provides.
 //
 #define FSE_MODE_HLINK         (1 << 31)    // notification is for a hard-link
-#define FSE_MODE_LAST_HLINK    (1 << 30)    // link count == 0 on a hard-link delete 
+#define FSE_MODE_LAST_HLINK    (1 << 30)    // link count == 0 on a hard-link delete
 #define FSE_REMOTE_DIR_EVENT   (1 << 29)    // this is a remotely generated directory-level granularity event
 #define FSE_TRUNCATED_PATH     (1 << 28)    // the path for this item had to be truncated
 #define FSE_MODE_CLONE         (1 << 27)    // notification is for a clone
 
 // ioctl's on /dev/fsevents
 typedef struct fsevent_clone_args {
-    int8_t  *event_list;
-    int32_t  num_events;
-    int32_t  event_queue_depth;
-    int32_t *fd;
+	int8_t  *event_list;
+	int32_t  num_events;
+	int32_t  event_queue_depth;
+	int32_t *fd;
 } fsevent_clone_args;
 
-#define	FSEVENTS_CLONE		_IOW('s', 1, fsevent_clone_args)
+#define FSEVENTS_CLONE          _IOW('s', 1, fsevent_clone_args)
 
 
 // ioctl's on the cloned fd
 #pragma pack(push, 4)
 typedef struct fsevent_dev_filter_args {
-    uint32_t  num_devices;
-    dev_t    *devices;
+	uint32_t  num_devices;
+	dev_t    *devices;
 } fsevent_dev_filter_args;
 #pragma pack(pop)
 
-#define	FSEVENTS_DEVICE_FILTER		_IOW('s', 100, fsevent_dev_filter_args)
-#define	FSEVENTS_WANT_COMPACT_EVENTS	_IO('s', 101)
-#define	FSEVENTS_WANT_EXTENDED_INFO	_IO('s', 102)
-#define	FSEVENTS_GET_CURRENT_ID		_IOR('s', 103, uint64_t)
-#define	FSEVENTS_UNMOUNT_PENDING_ACK	_IOW('s', 104, dev_t)
+#define FSEVENTS_DEVICE_FILTER          _IOW('s', 100, fsevent_dev_filter_args)
+#define FSEVENTS_WANT_COMPACT_EVENTS    _IO('s', 101)
+#define FSEVENTS_WANT_EXTENDED_INFO     _IO('s', 102)
+#define FSEVENTS_GET_CURRENT_ID         _IOR('s', 103, uint64_t)
+#define FSEVENTS_UNMOUNT_PENDING_ACK    _IOW('s', 104, dev_t)
 
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -137,12 +137,12 @@ void create_fsevent_from_kevent(vnode_t vp, uint32_t kevents, struct vnode_attr 
 
 // misc utility functions for fsevent info and pathbuffers...
 typedef struct fse_info {
-    ino64_t    ino;
-    dev_t      dev;
-    int32_t    mode;   // note: this is not a mode_t (it's 32-bits, not 16)
-    uid_t      uid;
-    gid_t      gid;
-    uint64_t   nlink;  // only filled in if the vnode is marked as a hardlink
+	ino64_t    ino;
+	dev_t      dev;
+	int32_t    mode;// note: this is not a mode_t (it's 32-bits, not 16)
+	uid_t      uid;
+	gid_t      gid;
+	uint64_t   nlink;// only filled in if the vnode is marked as a hardlink
 } fse_info;
 
 int   get_fse_info(struct vnode *vp, fse_info *fse, vfs_context_t ctx);

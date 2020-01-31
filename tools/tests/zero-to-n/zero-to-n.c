@@ -2,7 +2,7 @@
  * Copyright (c) 2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <unistd.h>
@@ -55,6 +55,8 @@
 
 #include <stdatomic.h>
 
+#include <os/tsd.h>
+
 typedef enum wake_type { WAKE_BROADCAST_ONESEM, WAKE_BROADCAST_PERTHREAD, WAKE_CHAIN, WAKE_HOP } wake_type_t;
 typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY_FIXEDPRI } my_policy_type_t;
 
@@ -62,16 +64,14 @@ typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY
 #define mach_assert_zero_t(tid, error) do { if ((error) != 0) { fprintf(stderr, "[FAIL] Thread %d error %d (%s) ", (tid), (error), mach_error_string(error)); assert(error == 0); } } while (0)
 #define assert_zero_t(tid, error)      do { if ((error) != 0) { fprintf(stderr, "[FAIL] Thread %d error %d ", (tid), (error)); assert(error == 0); } } while (0)
 
-#define CONSTRAINT_NANOS	(20000000ll)	/* 20 ms */
-#define COMPUTATION_NANOS	(10000000ll)	/* 10 ms */
-#define TRACEWORTHY_NANOS	(10000000ll)	/* 10 ms */
-
-#define DEBUG 0
+#define CONSTRAINT_NANOS        (20000000ll)    /* 20 ms */
+#define COMPUTATION_NANOS       (10000000ll)    /* 10 ms */
+#define TRACEWORTHY_NANOS       (10000000ll)    /* 10 ms */
 
 #if DEBUG
-#define debug_log(args...) printf(args)
+#define debug_log(args ...) printf(args)
 #else
-#define debug_log(args...) do { } while(0)
+#define debug_log(args ...) do { } while(0)
 #endif
 
 /* Declarations */
@@ -88,6 +88,8 @@ static __attribute__((aligned(128))) _Atomic uint64_t   g_churn_stopped_at = 0;
 
 /* Global variables (general) */
 static uint32_t                 g_numcpus;
+static uint32_t                 g_nphysicalcpu;
+static uint32_t                 g_nlogicalcpu;
 static uint32_t                 g_numthreads;
 static wake_type_t              g_waketype;
 static policy_t                 g_policy;
@@ -120,6 +122,15 @@ static boolean_t                g_do_all_spin = FALSE;
 /* Every thread backgrounds temporarily before parking */
 static boolean_t                g_drop_priority = FALSE;
 
+/* Test whether realtime threads are scheduled on the separate CPUs */
+static boolean_t                g_test_rt = FALSE;
+
+/* On SMT machines, test whether realtime threads are scheduled on the correct CPUs */
+static boolean_t                g_test_rt_smt = FALSE;
+
+/* Test whether realtime threads are successfully avoiding CPU 0 on Intel */
+static boolean_t                g_test_rt_avoid0 = FALSE;
+
 /* One randomly chosen thread holds up the train for a certain duration. */
 static boolean_t                g_do_one_long_spin = FALSE;
 static uint32_t                 g_one_long_spin_id = 0;
@@ -140,6 +151,14 @@ static semaphore_t              g_donesem;
 /* Global variables (chain) */
 static semaphore_t             *g_semarr;
 
+typedef struct {
+	__attribute__((aligned(128))) uint32_t current;
+	uint32_t accum;
+} histogram_t;
+
+static histogram_t             *g_cpu_histogram;
+static _Atomic uint64_t        *g_cpu_map;
+
 static uint64_t
 abs_to_nanos(uint64_t abstime)
 {
@@ -156,9 +175,9 @@ inline static void
 yield(void)
 {
 #if defined(__arm__) || defined(__arm64__)
-	asm volatile("yield");
+	asm volatile ("yield");
 #elif defined(__x86_64__) || defined(__i386__)
-	asm volatile("pause");
+	asm volatile ("pause");
 #else
 #error Unrecognized architecture
 #endif
@@ -175,7 +194,7 @@ churn_thread(__unused void *arg)
 	 */
 
 	while (g_churn_stop == FALSE &&
-	       mach_absolute_time() < (g_starttime_abs + NSEC_PER_SEC)) {
+	    mach_absolute_time() < (g_starttime_abs + NSEC_PER_SEC)) {
 		spin_count++;
 		yield();
 	}
@@ -189,8 +208,9 @@ churn_thread(__unused void *arg)
 static void
 create_churn_threads()
 {
-	if (g_churn_count == 0)
+	if (g_churn_count == 0) {
 		g_churn_count = g_numcpus - 1;
+	}
 
 	errno_t err;
 
@@ -201,45 +221,53 @@ create_churn_threads()
 	g_churn_threads = (pthread_t*) valloc(sizeof(pthread_t) * g_churn_count);
 	assert(g_churn_threads);
 
-	if ((err = pthread_attr_init(&attr)))
+	if ((err = pthread_attr_init(&attr))) {
 		errc(EX_OSERR, err, "pthread_attr_init");
+	}
 
-	if ((err = pthread_attr_setschedparam(&attr, &param)))
+	if ((err = pthread_attr_setschedparam(&attr, &param))) {
 		errc(EX_OSERR, err, "pthread_attr_setschedparam");
+	}
 
-	if ((err = pthread_attr_setschedpolicy(&attr, SCHED_RR)))
+	if ((err = pthread_attr_setschedpolicy(&attr, SCHED_RR))) {
 		errc(EX_OSERR, err, "pthread_attr_setschedpolicy");
+	}
 
-	for (uint32_t i = 0 ; i < g_churn_count ; i++) {
+	for (uint32_t i = 0; i < g_churn_count; i++) {
 		pthread_t new_thread;
 
-		if ((err = pthread_create(&new_thread, &attr, churn_thread, NULL)))
+		if ((err = pthread_create(&new_thread, &attr, churn_thread, NULL))) {
 			errc(EX_OSERR, err, "pthread_create");
+		}
 		g_churn_threads[i] = new_thread;
 	}
 
-	if ((err = pthread_attr_destroy(&attr)))
+	if ((err = pthread_attr_destroy(&attr))) {
 		errc(EX_OSERR, err, "pthread_attr_destroy");
+	}
 }
 
 static void
 join_churn_threads(void)
 {
-	if (atomic_load_explicit(&g_churn_stopped_at, memory_order_seq_cst) != 0)
+	if (atomic_load_explicit(&g_churn_stopped_at, memory_order_seq_cst) != 0) {
 		printf("Warning: Some of the churn threads may have stopped early: %lld\n",
-		       g_churn_stopped_at);
+		    g_churn_stopped_at);
+	}
 
 	atomic_store_explicit(&g_churn_stop, TRUE, memory_order_seq_cst);
 
 	/* Rejoin churn threads */
 	for (uint32_t i = 0; i < g_churn_count; i++) {
 		errno_t err = pthread_join(g_churn_threads[i], NULL);
-		if (err) errc(EX_OSERR, err, "pthread_join %d", i);
+		if (err) {
+			errc(EX_OSERR, err, "pthread_join %d", i);
+		}
 	}
 }
 
 /*
- * Figure out what thread policy to use 
+ * Figure out what thread policy to use
  */
 static my_policy_type_t
 parse_thread_policy(const char *str)
@@ -259,7 +287,7 @@ parse_thread_policy(const char *str)
  * Figure out what wakeup pattern to use
  */
 static wake_type_t
-parse_wakeup_pattern(const char *str) 
+parse_wakeup_pattern(const char *str)
 {
 	if (strcmp(str, "chain") == 0) {
 		return WAKE_CHAIN;
@@ -286,34 +314,38 @@ thread_setup(uint32_t my_id)
 
 	if (g_priority) {
 		int policy = SCHED_OTHER;
-		if (g_policy == MY_POLICY_FIXEDPRI)
+		if (g_policy == MY_POLICY_FIXEDPRI) {
 			policy = SCHED_RR;
+		}
 
 		struct sched_param param = {.sched_priority = (int)g_priority};
-		if ((ret = pthread_setschedparam(pthread_self(), policy, &param)))
+		if ((ret = pthread_setschedparam(pthread_self(), policy, &param))) {
 			errc(EX_OSERR, ret, "pthread_setschedparam: %d", my_id);
+		}
 	}
 
 	switch (g_policy) {
-		case MY_POLICY_TIMESHARE:
-			break;
-		case MY_POLICY_REALTIME:
-			/* Hard-coded realtime parameters (similar to what Digi uses) */
-			pol.period      = 100000;
-			pol.constraint  = (uint32_t) nanos_to_abs(CONSTRAINT_NANOS);
-			pol.computation = (uint32_t) nanos_to_abs(COMPUTATION_NANOS);
-			pol.preemptible = 0; /* Ignored by OS */
+	case MY_POLICY_TIMESHARE:
+		break;
+	case MY_POLICY_REALTIME:
+		/* Hard-coded realtime parameters (similar to what Digi uses) */
+		pol.period      = 100000;
+		pol.constraint  = (uint32_t) nanos_to_abs(CONSTRAINT_NANOS);
+		pol.computation = (uint32_t) nanos_to_abs(COMPUTATION_NANOS);
+		pol.preemptible = 0;         /* Ignored by OS */
 
-			kr = thread_policy_set(mach_thread_self(), THREAD_TIME_CONSTRAINT_POLICY,
-			                       (thread_policy_t) &pol, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
-			mach_assert_zero_t(my_id, kr);
-			break;
-		case MY_POLICY_FIXEDPRI:
-			ret = pthread_set_fixedpriority_self();
-			if (ret) errc(EX_OSERR, ret, "pthread_set_fixedpriority_self");
-			break;
-		default:
-			errx(EX_USAGE, "invalid policy type %d", g_policy);
+		kr = thread_policy_set(mach_thread_self(), THREAD_TIME_CONSTRAINT_POLICY,
+		    (thread_policy_t) &pol, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+		mach_assert_zero_t(my_id, kr);
+		break;
+	case MY_POLICY_FIXEDPRI:
+		ret = pthread_set_fixedpriority_self();
+		if (ret) {
+			errc(EX_OSERR, ret, "pthread_set_fixedpriority_self");
+		}
+		break;
+	default:
+		errx(EX_USAGE, "invalid policy type %d", g_policy);
 	}
 
 	if (g_do_affinity) {
@@ -322,7 +354,7 @@ thread_setup(uint32_t my_id)
 		affinity.affinity_tag = my_id % 2;
 
 		kr = thread_policy_set(mach_thread_self(), THREAD_AFFINITY_POLICY,
-		                       (thread_policy_t)&affinity, THREAD_AFFINITY_POLICY_COUNT);
+		    (thread_policy_t)&affinity, THREAD_AFFINITY_POLICY_COUNT);
 		mach_assert_zero_t(my_id, kr);
 	}
 
@@ -352,8 +384,9 @@ worker_thread(void *arg)
 			 */
 
 			/* Give the worker threads undisturbed time to finish before waiting on them */
-			if (g_do_sleep)
+			if (g_do_sleep) {
 				usleep(g_iteration_sleeptime_us);
+			}
 
 			debug_log("%d Leader thread wait for ready\n", i);
 
@@ -363,12 +396,21 @@ worker_thread(void *arg)
 			 * TODO: Invent 'semaphore wait for N signals'
 			 */
 
-			for (uint32_t j = 0 ; j < g_numthreads - 1; j++) {
+			for (uint32_t j = 0; j < g_numthreads - 1; j++) {
 				kr = semaphore_wait(g_readysem);
 				mach_assert_zero_t(my_id, kr);
 			}
 
 			debug_log("%d Leader thread wait\n", i);
+
+			if (i > 0) {
+				for (int cpuid = 0; cpuid < g_numcpus; cpuid++) {
+					if (g_cpu_histogram[cpuid].current == 1) {
+						atomic_fetch_or_explicit(&g_cpu_map[i - 1], (1UL << cpuid), memory_order_relaxed);
+						g_cpu_histogram[cpuid].current = 0;
+					}
+				}
+			}
 
 			/* Signal main thread and wait for start of iteration */
 
@@ -407,7 +449,7 @@ worker_thread(void *arg)
 			 * records when she wakes up, and possibly
 			 * wakes up a friend.
 			 */
-			switch(g_waketype)  {
+			switch (g_waketype) {
 			case WAKE_BROADCAST_ONESEM:
 				kr = semaphore_wait_signal(g_broadcastsem, g_readysem);
 				mach_assert_zero_t(my_id, kr);
@@ -457,7 +499,11 @@ worker_thread(void *arg)
 			}
 		}
 
-		debug_log("Thread %p woke up for iteration %d.\n", pthread_self(), i);
+		unsigned int cpuid =  _os_cpu_number();
+		assert(cpuid < g_numcpus);
+		debug_log("Thread %p woke up on CPU %d for iteration %d.\n", pthread_self(), cpuid, i);
+		g_cpu_histogram[cpuid].current = 1;
+		g_cpu_histogram[cpuid].accum++;
 
 		if (g_do_one_long_spin && g_one_long_spin_id == my_id) {
 			/* One randomly chosen thread holds up the train for a while. */
@@ -487,7 +533,9 @@ worker_thread(void *arg)
 		if (g_drop_priority) {
 			/* Drop priority to BG momentarily */
 			errno_t ret = setpriority(PRIO_DARWIN_THREAD, 0, PRIO_DARWIN_BG);
-			if (ret) errc(EX_OSERR, ret, "setpriority PRIO_DARWIN_BG");
+			if (ret) {
+				errc(EX_OSERR, ret, "setpriority PRIO_DARWIN_BG");
+			}
 		}
 
 		if (g_do_all_spin) {
@@ -502,7 +550,9 @@ worker_thread(void *arg)
 		if (g_drop_priority) {
 			/* Restore normal priority */
 			errno_t ret = setpriority(PRIO_DARWIN_THREAD, 0, 0);
-			if (ret) errc(EX_OSERR, ret, "setpriority 0");
+			if (ret) {
+				errc(EX_OSERR, ret, "setpriority 0");
+			}
 		}
 
 		debug_log("Thread %p done spinning, iteration %d\n", pthread_self(), i);
@@ -510,17 +560,25 @@ worker_thread(void *arg)
 
 	if (my_id == 0) {
 		/* Give the worker threads undisturbed time to finish before waiting on them */
-		if (g_do_sleep)
+		if (g_do_sleep) {
 			usleep(g_iteration_sleeptime_us);
+		}
 
 		/* Wait for the worker threads to finish */
-		for (uint32_t i = 0 ; i < g_numthreads - 1; i++) {
+		for (uint32_t i = 0; i < g_numthreads - 1; i++) {
 			kr = semaphore_wait(g_readysem);
 			mach_assert_zero_t(my_id, kr);
 		}
 
 		/* Tell everyone and the main thread that the last iteration is done */
-		debug_log("%d Leader thread done\n", i);
+		debug_log("%d Leader thread done\n", g_iterations - 1);
+
+		for (int cpuid = 0; cpuid < g_numcpus; cpuid++) {
+			if (g_cpu_histogram[cpuid].current == 1) {
+				atomic_fetch_or_explicit(&g_cpu_map[g_iterations - 1], (1UL << cpuid), memory_order_relaxed);
+				g_cpu_histogram[cpuid].current = 0;
+			}
+		}
 
 		kr = semaphore_signal_all(g_main_sem);
 		mach_assert_zero_t(my_id, kr);
@@ -543,8 +601,8 @@ compute_stats(uint64_t *values, uint64_t count, float *averagep, uint64_t *maxp,
 	uint64_t _sum = 0;
 	uint64_t _max = 0;
 	uint64_t _min = UINT64_MAX;
-	float	 _avg = 0;
-	float 	 _dev = 0;
+	float    _avg = 0;
+	float    _dev = 0;
 
 	for (i = 0; i < count; i++) {
 		_sum += values[i];
@@ -553,12 +611,12 @@ compute_stats(uint64_t *values, uint64_t count, float *averagep, uint64_t *maxp,
 	}
 
 	_avg = ((float)_sum) / ((float)count);
-	
+
 	_dev = 0;
 	for (i = 0; i < count; i++) {
 		_dev += powf((((float)values[i]) - _avg), 2);
 	}
-	
+
 	_dev /= count;
 	_dev = sqrtf(_dev);
 
@@ -574,18 +632,23 @@ main(int argc, char **argv)
 	errno_t ret;
 	kern_return_t kr;
 
-	pthread_t	*threads;
-	uint64_t	*worst_latencies_ns;
-	uint64_t	*worst_latencies_from_first_ns;
-	uint64_t	max, min;
-	float		avg, stddev;
+	pthread_t       *threads;
+	uint64_t        *worst_latencies_ns;
+	uint64_t        *worst_latencies_from_first_ns;
+	uint64_t        max, min;
+	float           avg, stddev;
 
-	for (int i = 0; i < argc; i++)
-		if (strcmp(argv[i], "--switched_apptype") == 0)
+	bool test_fail = false;
+
+	for (int i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--switched_apptype") == 0) {
 			g_seen_apptype = TRUE;
+		}
+	}
 
-	if (!g_seen_apptype)
+	if (!g_seen_apptype) {
 		selfexec_with_apptype(argc, argv);
+	}
 
 	parse_args(argc, argv);
 
@@ -595,10 +658,63 @@ main(int argc, char **argv)
 
 	size_t ncpu_size = sizeof(g_numcpus);
 	ret = sysctlbyname("hw.ncpu", &g_numcpus, &ncpu_size, NULL, 0);
-	if (ret) err(EX_OSERR, "Failed sysctlbyname(hw.ncpu)");
+	if (ret) {
+		err(EX_OSERR, "Failed sysctlbyname(hw.ncpu)");
+	}
+	assert(g_numcpus <= 64); /* g_cpu_map needs to be extended for > 64 cpus */
 
-	if (g_do_each_spin)
+	size_t physicalcpu_size = sizeof(g_nphysicalcpu);
+	ret = sysctlbyname("hw.physicalcpu", &g_nphysicalcpu, &physicalcpu_size, NULL, 0);
+	if (ret) {
+		err(EX_OSERR, "Failed sysctlbyname(hw.physicalcpu)");
+	}
+
+	size_t logicalcpu_size = sizeof(g_nlogicalcpu);
+	ret = sysctlbyname("hw.logicalcpu", &g_nlogicalcpu, &logicalcpu_size, NULL, 0);
+	if (ret) {
+		err(EX_OSERR, "Failed sysctlbyname(hw.logicalcpu)");
+	}
+
+	if (g_test_rt) {
+		if (g_numthreads == 0) {
+			g_numthreads = g_numcpus;
+		}
+		g_policy = MY_POLICY_REALTIME;
+		g_do_all_spin = TRUE;
+	} else if (g_test_rt_smt) {
+		if (g_nlogicalcpu != 2 * g_nphysicalcpu) {
+			/* Not SMT */
+			printf("Attempt to run --test-rt-smt on a non-SMT device\n");
+			exit(0);
+		}
+
+		if (g_numthreads == 0) {
+			g_numthreads = g_nphysicalcpu;
+		}
+		g_policy = MY_POLICY_REALTIME;
+		g_do_all_spin = TRUE;
+	} else if (g_test_rt_avoid0) {
+#if defined(__x86_64__) || defined(__i386__)
+		if (g_numthreads == 0) {
+			g_numthreads = g_nphysicalcpu - 1;
+		}
+		if (g_numthreads == 0) {
+			printf("Attempt to run --test-rt-avoid0 on a uniprocessor\n");
+			exit(0);
+		}
+		g_policy = MY_POLICY_REALTIME;
+		g_do_all_spin = TRUE;
+#else
+		printf("Attempt to run --test-rt-avoid0 on a non-Intel device\n");
+		exit(0);
+#endif
+	} else if (g_numthreads == 0) {
+		g_numthreads = g_numcpus;
+	}
+
+	if (g_do_each_spin) {
 		g_each_spin_duration_abs = nanos_to_abs(g_each_spin_duration_ns);
+	}
 
 	/* Configure the long-spin thread to take up half of its computation */
 	if (g_do_one_long_spin) {
@@ -610,10 +726,12 @@ main(int argc, char **argv)
 	g_iteration_sleeptime_us = g_numthreads * 20;
 
 	uint32_t threads_per_core = (g_numthreads / g_numcpus) + 1;
-	if (g_do_each_spin)
+	if (g_do_each_spin) {
 		g_iteration_sleeptime_us += threads_per_core * (g_each_spin_duration_ns / NSEC_PER_USEC);
-	if (g_do_one_long_spin)
+	}
+	if (g_do_one_long_spin) {
 		g_iteration_sleeptime_us += g_one_long_spin_length_ns / NSEC_PER_USEC;
+	}
 
 	/* Arrays for threads and their wakeup times */
 	threads = (pthread_t*) valloc(sizeof(pthread_t) * g_numthreads);
@@ -626,7 +744,9 @@ main(int argc, char **argv)
 
 	/* Ensure the allocation is pre-faulted */
 	ret = memset_s(g_thread_endtimes_abs, endtimes_size, 0, endtimes_size);
-	if (ret) errc(EX_OSERR, ret, "memset_s endtimes");
+	if (ret) {
+		errc(EX_OSERR, ret, "memset_s endtimes");
+	}
 
 	size_t latencies_size = sizeof(uint64_t) * g_iterations;
 
@@ -635,14 +755,36 @@ main(int argc, char **argv)
 
 	/* Ensure the allocation is pre-faulted */
 	ret = memset_s(worst_latencies_ns, latencies_size, 0, latencies_size);
-	if (ret) errc(EX_OSERR, ret, "memset_s latencies");
+	if (ret) {
+		errc(EX_OSERR, ret, "memset_s latencies");
+	}
 
 	worst_latencies_from_first_ns = (uint64_t*) valloc(latencies_size);
 	assert(worst_latencies_from_first_ns);
 
 	/* Ensure the allocation is pre-faulted */
 	ret = memset_s(worst_latencies_from_first_ns, latencies_size, 0, latencies_size);
-	if (ret) errc(EX_OSERR, ret, "memset_s latencies_from_first");
+	if (ret) {
+		errc(EX_OSERR, ret, "memset_s latencies_from_first");
+	}
+
+	size_t histogram_size = sizeof(histogram_t) * g_numcpus;
+	g_cpu_histogram = (histogram_t *)valloc(histogram_size);
+	assert(g_cpu_histogram);
+	/* Ensure the allocation is pre-faulted */
+	ret = memset_s(g_cpu_histogram, histogram_size, 0, histogram_size);
+	if (ret) {
+		errc(EX_OSERR, ret, "memset_s g_cpu_histogram");
+	}
+
+	size_t map_size = sizeof(uint64_t) * g_iterations;
+	g_cpu_map = (_Atomic uint64_t *)valloc(map_size);
+	assert(g_cpu_map);
+	/* Ensure the allocation is pre-faulted */
+	ret = memset_s(g_cpu_map, map_size, 0, map_size);
+	if (ret) {
+		errc(EX_OSERR, ret, "memset_s g_cpu_map");
+	}
 
 	kr = semaphore_create(mach_task_self(), &g_main_sem, SYNC_POLICY_FIFO, 0);
 	mach_assert_zero(kr);
@@ -651,7 +793,6 @@ main(int argc, char **argv)
 	if (g_waketype == WAKE_CHAIN ||
 	    g_waketype == WAKE_BROADCAST_PERTHREAD ||
 	    g_waketype == WAKE_HOP) {
-
 		g_semarr = valloc(sizeof(semaphore_t) * g_numthreads);
 		assert(g_semarr);
 
@@ -681,34 +822,41 @@ main(int argc, char **argv)
 	/* Create the threads */
 	for (uint32_t i = 0; i < g_numthreads; i++) {
 		ret = pthread_create(&threads[i], NULL, worker_thread, (void*)(uintptr_t)i);
-		if (ret) errc(EX_OSERR, ret, "pthread_create %d", i);
+		if (ret) {
+			errc(EX_OSERR, ret, "pthread_create %d", i);
+		}
 	}
 
 	ret = setpriority(PRIO_DARWIN_ROLE, 0, PRIO_DARWIN_ROLE_UI_FOCAL);
-	if (ret) errc(EX_OSERR, ret, "setpriority");
+	if (ret) {
+		errc(EX_OSERR, ret, "setpriority");
+	}
 
 	thread_setup(0);
 
 	g_starttime_abs = mach_absolute_time();
 
-	if (g_churn_pri)
+	if (g_churn_pri) {
 		create_churn_threads();
+	}
 
 	/* Let everyone get settled */
 	kr = semaphore_wait(g_main_sem);
 	mach_assert_zero(kr);
 
 	/* Give the system a bit more time to settle */
-	if (g_do_sleep)
+	if (g_do_sleep) {
 		usleep(g_iteration_sleeptime_us);
+	}
 
 	/* Go! */
 	for (uint32_t i = 0; i < g_iterations; i++) {
 		uint32_t j;
 		uint64_t worst_abs = 0, best_abs = UINT64_MAX;
 
-		if (g_do_one_long_spin)
+		if (g_do_one_long_spin) {
 			g_one_long_spin_id = (uint32_t)rand() % g_numthreads;
+		}
 
 		debug_log("%d Main thread reset\n", i);
 
@@ -734,13 +882,13 @@ main(int argc, char **argv)
 			latency_abs = g_thread_endtimes_abs[j] - g_starttime_abs;
 			worst_abs = worst_abs < latency_abs ? latency_abs : worst_abs;
 		}
-	
+
 		worst_latencies_ns[i] = abs_to_nanos(worst_abs);
 
 		worst_abs = 0;
 		for (j = 1; j < g_numthreads; j++) {
 			uint64_t latency_abs;
-		
+
 			latency_abs = g_thread_endtimes_abs[j] - g_thread_endtimes_abs[0];
 			worst_abs = worst_abs < latency_abs ? latency_abs : worst_abs;
 			best_abs = best_abs > latency_abs ? latency_abs : best_abs;
@@ -755,23 +903,28 @@ main(int argc, char **argv)
 			/* Ariadne's ad-hoc test signpost */
 			kdebug_trace(ARIADNEDBG_CODE(0, 0), worst_latencies_from_first_ns[i], g_traceworthy_latency_ns, 0, 0);
 
-			if (g_verbose)
+			if (g_verbose) {
 				printf("Worst on this round was %.2f us.\n", ((float)worst_latencies_from_first_ns[i]) / 1000.0);
+			}
 		}
 
 		/* Give the system a bit more time to settle */
-		if (g_do_sleep)
+		if (g_do_sleep) {
 			usleep(g_iteration_sleeptime_us);
+		}
 	}
 
 	/* Rejoin threads */
 	for (uint32_t i = 0; i < g_numthreads; i++) {
 		ret = pthread_join(threads[i], NULL);
-		if (ret) errc(EX_OSERR, ret, "pthread_join %d", i);
+		if (ret) {
+			errc(EX_OSERR, ret, "pthread_join %d", i);
+		}
 	}
 
-	if (g_churn_pri)
+	if (g_churn_pri) {
 		join_churn_threads();
+	}
 
 	compute_stats(worst_latencies_ns, g_iterations, &avg, &max, &min, &stddev);
 	printf("Results (from a stop):\n");
@@ -795,12 +948,55 @@ main(int argc, char **argv)
 	}
 #endif
 
+	if (g_test_rt || g_test_rt_smt || g_test_rt_avoid0) {
+		putchar('\n');
+
+		for (uint32_t i = 0; i < g_numcpus; i++) {
+			printf("%d\t%d\n", i, g_cpu_histogram[i].accum);
+		}
+
+#define PRIMARY   0x5555555555555555ULL
+#define SECONDARY 0xaaaaaaaaaaaaaaaaULL
+
+		int fail_count = 0;
+
+		for (uint32_t i = 0; i < g_iterations; i++) {
+			bool secondary = false;
+			bool fail = false;
+			uint64_t map = g_cpu_map[i];
+			if (g_test_rt_smt) {
+				/* Test for one or more threads running on secondary cores unexpectedly (WARNING) */
+				secondary = (map & SECONDARY);
+				/* Test for threads running on both primary and secondary cpus of the same core (FAIL) */
+				fail = ((map & PRIMARY) & ((map & SECONDARY) >> 1));
+			} else if (g_test_rt) {
+				fail = __builtin_popcountll(map) != g_numthreads;
+			} else if (g_test_rt_avoid0) {
+				fail = ((map & 0x1) == 0x1);
+			}
+			if (secondary || fail) {
+				printf("Iteration %d: 0x%llx%s%s\n", i, map,
+				    secondary ? " SECONDARY" : "",
+				    fail ? " FAIL" : "");
+			}
+			test_fail |= fail;
+			fail_count += fail;
+		}
+
+		if (test_fail && (g_iterations >= 100) && (fail_count <= g_iterations / 100)) {
+			printf("99%% or better success rate\n");
+			test_fail = 0;
+		}
+	}
+
 	free(threads);
 	free(g_thread_endtimes_abs);
 	free(worst_latencies_ns);
 	free(worst_latencies_from_first_ns);
+	free(g_cpu_histogram);
+	free(g_cpu_map);
 
-	return 0;
+	return test_fail;
 }
 
 /*
@@ -820,26 +1016,36 @@ selfexec_with_apptype(int argc, char *argv[])
 	uint32_t prog_size = PATH_MAX;
 
 	ret = _NSGetExecutablePath(prog, &prog_size);
-	if (ret) err(EX_OSERR, "_NSGetExecutablePath");
+	if (ret) {
+		err(EX_OSERR, "_NSGetExecutablePath");
+	}
 
-	for (i=0; i < argc; i++) {
+	for (i = 0; i < argc; i++) {
 		new_argv[i] = argv[i];
 	}
 
 	new_argv[i]   = "--switched_apptype";
-	new_argv[i+1] = NULL;
+	new_argv[i + 1] = NULL;
 
 	ret = posix_spawnattr_init(&attr);
-	if (ret) errc(EX_OSERR, ret, "posix_spawnattr_init");
+	if (ret) {
+		errc(EX_OSERR, ret, "posix_spawnattr_init");
+	}
 
 	ret = posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETEXEC);
-	if (ret) errc(EX_OSERR, ret, "posix_spawnattr_setflags");
+	if (ret) {
+		errc(EX_OSERR, ret, "posix_spawnattr_setflags");
+	}
 
 	ret = posix_spawnattr_setprocesstype_np(&attr, POSIX_SPAWN_PROC_TYPE_APP_DEFAULT);
-	if (ret) errc(EX_OSERR, ret, "posix_spawnattr_setprocesstype_np");
+	if (ret) {
+		errc(EX_OSERR, ret, "posix_spawnattr_setprocesstype_np");
+	}
 
 	ret = posix_spawn(NULL, prog, NULL, &attr, new_argv, environ);
-	if (ret) errc(EX_OSERR, ret, "posix_spawn");
+	if (ret) {
+		errc(EX_OSERR, ret, "posix_spawn");
+	}
 }
 
 /*
@@ -849,11 +1055,11 @@ static void __attribute__((noreturn))
 usage()
 {
 	errx(EX_USAGE, "Usage: %s <threads> <chain | hop | broadcast-single-sem | broadcast-per-thread> "
-	     "<realtime | timeshare | fixed> <iterations>\n\t\t"
-	     "[--trace <traceworthy latency in ns>] "
-	     "[--verbose] [--spin-one] [--spin-all] [--spin-time <nanos>] [--affinity]\n\t\t"
-	     "[--no-sleep] [--drop-priority] [--churn-pri <pri>] [--churn-count <n>]",
-	     getprogname());
+	    "<realtime | timeshare | fixed> <iterations>\n\t\t"
+	    "[--trace <traceworthy latency in ns>] "
+	    "[--verbose] [--spin-one] [--spin-all] [--spin-time <nanos>] [--affinity]\n\t\t"
+	    "[--no-sleep] [--drop-priority] [--churn-pri <pri>] [--churn-count <n>]",
+	    getprogname());
 }
 
 static struct option* g_longopts;
@@ -867,9 +1073,10 @@ read_dec_arg()
 
 	uint32_t arg_val = (uint32_t)strtoull(optarg, &cp, 10);
 
-	if (cp == optarg || *cp)
+	if (cp == optarg || *cp) {
 		errx(EX_USAGE, "arg --%s requires a decimal number, found \"%s\"",
-		     g_longopts[option_index].name, optarg);
+		    g_longopts[option_index].name, optarg);
+	}
 
 	return arg_val;
 }
@@ -887,6 +1094,7 @@ parse_args(int argc, char *argv[])
 	};
 
 	static struct option longopts[] = {
+		/* BEGIN IGNORE CODESTYLE */
 		{ "spin-time",          required_argument,      NULL,                           OPT_SPIN_TIME },
 		{ "trace",              required_argument,      NULL,                           OPT_TRACE     },
 		{ "priority",           required_argument,      NULL,                           OPT_PRIORITY  },
@@ -898,9 +1106,13 @@ parse_args(int argc, char *argv[])
 		{ "affinity",           no_argument,            (int*)&g_do_affinity,           TRUE },
 		{ "no-sleep",           no_argument,            (int*)&g_do_sleep,              FALSE },
 		{ "drop-priority",      no_argument,            (int*)&g_drop_priority,         TRUE },
+		{ "test-rt",            no_argument,            (int*)&g_test_rt,               TRUE },
+		{ "test-rt-smt",        no_argument,            (int*)&g_test_rt_smt,           TRUE },
+		{ "test-rt-avoid0",     no_argument,            (int*)&g_test_rt_avoid0,        TRUE },
 		{ "verbose",            no_argument,            (int*)&g_verbose,               TRUE },
 		{ "help",               no_argument,            NULL,                           'h' },
 		{ NULL,                 0,                      NULL,                           0 }
+		/* END IGNORE CODESTYLE */
 	};
 
 	g_longopts = longopts;
@@ -958,11 +1170,9 @@ parse_args(int argc, char *argv[])
 	/* How many threads? */
 	g_numthreads = (uint32_t)strtoull(argv[0], &cp, 10);
 
-	if (cp == argv[0] || *cp)
+	if (cp == argv[0] || *cp) {
 		errx(EX_USAGE, "numthreads requires a decimal number, found \"%s\"", argv[0]);
-
-	if (g_numthreads < 1)
-		errx(EX_USAGE, "Must use at least one thread");
+	}
 
 	/* What wakeup pattern? */
 	g_waketype = parse_wakeup_pattern(argv[1]);
@@ -973,17 +1183,19 @@ parse_args(int argc, char *argv[])
 	/* Iterations */
 	g_iterations = (uint32_t)strtoull(argv[3], &cp, 10);
 
-	if (cp == argv[3] || *cp)
+	if (cp == argv[3] || *cp) {
 		errx(EX_USAGE, "numthreads requires a decimal number, found \"%s\"", argv[3]);
+	}
 
-	if (g_iterations < 1)
+	if (g_iterations < 1) {
 		errx(EX_USAGE, "Must have at least one iteration");
+	}
 
-	if (g_numthreads == 1 && g_waketype == WAKE_CHAIN)
+	if (g_numthreads == 1 && g_waketype == WAKE_CHAIN) {
 		errx(EX_USAGE, "chain mode requires more than one thread");
+	}
 
-	if (g_numthreads == 1 && g_waketype == WAKE_HOP)
+	if (g_numthreads == 1 && g_waketype == WAKE_HOP) {
 		errx(EX_USAGE, "hop mode requires more than one thread");
+	}
 }
-
-

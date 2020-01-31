@@ -94,7 +94,7 @@ keydb_newsecpolicy(void)
 	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	return (struct secpolicy *)_MALLOC(sizeof(*p), M_SECA,
-	    M_WAITOK | M_ZERO);
+	           M_WAITOK | M_ZERO);
 }
 
 void
@@ -121,25 +121,26 @@ keydb_newsecashead(void)
 		    M_WAITOK | M_ZERO);
 		lck_mtx_lock(sadb_mutex);
 	}
-	if (!p) 
+	if (!p) {
 		return p;
-	for (i = 0; i < sizeof(p->savtree)/sizeof(p->savtree[0]); i++)
+	}
+	for (i = 0; i < sizeof(p->savtree) / sizeof(p->savtree[0]); i++) {
 		LIST_INIT(&p->savtree[i]);
+	}
 	return p;
 }
 
 #if 0
 void
 keydb_delsecashead(p)
-	struct secashead *p;
+struct secashead *p;
 {
-
 	_FREE(p, M_SECA);
 }
 
 
 
-/* 
+/*
  * secasvar management (reference counted)
  */
 struct secasvar *
@@ -150,8 +151,9 @@ keydb_newsecasvar()
 	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	p = (struct secasvar *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
-	if (!p)
+	if (!p) {
 		return p;
+	}
 	bzero(p, sizeof(*p));
 	p->refcnt = 1;
 	return p;
@@ -159,9 +161,8 @@ keydb_newsecasvar()
 
 void
 keydb_refsecasvar(p)
-	struct secasvar *p;
+struct secasvar *p;
 {
-
 	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	p->refcnt++;
@@ -169,24 +170,24 @@ keydb_refsecasvar(p)
 
 void
 keydb_freesecasvar(p)
-	struct secasvar *p;
+struct secasvar *p;
 {
-
 	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	p->refcnt--;
 	/* negative refcnt will cause panic intentionally */
-	if (p->refcnt <= 0)
+	if (p->refcnt <= 0) {
 		keydb_delsecasvar(p);
+	}
 }
 
 static void
 keydb_delsecasvar(p)
-	struct secasvar *p;
+struct secasvar *p;
 {
-
-	if (p->refcnt)
+	if (p->refcnt) {
 		panic("keydb_delsecasvar called with refcnt != 0");
+	}
 
 	_FREE(p, M_SECA);
 }
@@ -199,7 +200,7 @@ struct secreplay *
 keydb_newsecreplay(size_t wsize)
 {
 	struct secreplay *p;
-	
+
 	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	p = (struct secreplay *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT | M_ZERO);
@@ -209,8 +210,9 @@ keydb_newsecreplay(size_t wsize)
 		    M_WAITOK | M_ZERO);
 		lck_mtx_lock(sadb_mutex);
 	}
-	if (!p)
+	if (!p) {
 		return p;
+	}
 
 	if (wsize != 0) {
 		p->bitmap = (caddr_t)_MALLOC(wsize, M_SECA, M_NOWAIT | M_ZERO);
@@ -232,8 +234,9 @@ keydb_newsecreplay(size_t wsize)
 void
 keydb_delsecreplay(struct secreplay *p)
 {
-	if (p->bitmap)
+	if (p->bitmap) {
 		_FREE(p->bitmap, M_SECA);
+	}
 	_FREE(p, M_SECA);
 }
 
@@ -247,16 +250,16 @@ keydb_newsecreg()
 	struct secreg *p;
 
 	p = (struct secreg *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
-	if (p)
+	if (p) {
 		bzero(p, sizeof(*p));
+	}
 	return p;
 }
 
 void
 keydb_delsecreg(p)
-	struct secreg *p;
+struct secreg *p;
 {
-
 	_FREE(p, M_SECA);
 }
 #endif

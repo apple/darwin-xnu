@@ -35,7 +35,7 @@
 
 #include <net/pktap.h>
 
-#define	IPTAP_IFNAME			"iptap"
+#define IPTAP_IFNAME                    "iptap"
 
 #ifdef KERNEL_PRIVATE
 

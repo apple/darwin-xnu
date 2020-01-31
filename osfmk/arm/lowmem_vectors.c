@@ -33,16 +33,16 @@
 #include <vm/vm_page.h>
 
 extern vm_offset_t vm_kernel_stext;
-extern void	*version;
-extern void	*kmod;
-extern void	*kdp_trans_off;
-extern void	*osversion;
-extern void	*flag_kdp_trigger_reboot;
-extern void	*manual_pkt;
-extern struct vm_object pmap_object_store;	/* store pt pages */
+extern void     *version;
+extern void     *kmod;
+extern void     *kdp_trans_off;
+extern void     *osversion;
+extern void     *flag_kdp_trigger_reboot;
+extern void     *manual_pkt;
+extern struct vm_object pmap_object_store;      /* store pt pages */
 
 lowglo lowGlo __attribute__ ((aligned(PAGE_MAX_SIZE))) = {
-	.lgVerCode = { 'O','c','t','o','p','u','s',' ' },
+	.lgVerCode = { 'O', 'c', 't', 'o', 'p', 'u', 's', ' ' },
 	// Increment the major version for changes that break the current Astris
 	// usage of lowGlo values
 	// Increment the minor version for changes that provide additonal info/function
@@ -58,7 +58,7 @@ lowglo lowGlo __attribute__ ((aligned(PAGE_MAX_SIZE))) = {
 #endif
 	.lgOSVersion = (uint32_t)&osversion,
 #if MACH_KDP && CONFIG_KDP_INTERACTIVE_DEBUGGING
-	.lgRebootFlag	= (uint32_t)&flag_kdp_trigger_reboot,
+	.lgRebootFlag   = (uint32_t)&flag_kdp_trigger_reboot,
 	.lgManualPktAddr = (uint32_t)&manual_pkt,
 #endif
 	.lgPmapMemQ = (uint32_t)&(pmap_object_store.memq),
@@ -71,19 +71,22 @@ lowglo lowGlo __attribute__ ((aligned(PAGE_MAX_SIZE))) = {
 	.lgPmapMemFirstppnum = -1
 };
 
-void patch_low_glo(void)
+void
+patch_low_glo(void)
 {
 	lowGlo.lgStext = (uint32_t)vm_kernel_stext;
 }
 
-void patch_low_glo_static_region(uint32_t address, uint32_t size)
+void
+patch_low_glo_static_region(uint32_t address, uint32_t size)
 {
 	lowGlo.lgStaticAddr = address;
 	lowGlo.lgStaticSize = size;
 }
 
 
-void patch_low_glo_vm_page_info(void * start_addr, void * end_addr, uint32_t first_ppnum)
+void
+patch_low_glo_vm_page_info(void * start_addr, void * end_addr, uint32_t first_ppnum)
 {
 	lowGlo.lgPmapMemStartAddr = (uint32_t)start_addr;
 	lowGlo.lgPmapMemEndAddr = (uint32_t)end_addr;

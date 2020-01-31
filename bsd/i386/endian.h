@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -64,7 +64,7 @@
  */
 
 #ifndef _I386__ENDIAN_H_
-#define	_I386__ENDIAN_H_
+#define _I386__ENDIAN_H_
 
 #include <sys/cdefs.h>
 /*
@@ -82,19 +82,19 @@
  * Definitions for byte order, according to byte significance from low
  * address to high.
  */
-#define	__DARWIN_LITTLE_ENDIAN	1234	/* LSB first: i386, vax */
-#define	__DARWIN_BIG_ENDIAN	4321	/* MSB first: 68000, ibm, net */
-#define	__DARWIN_PDP_ENDIAN	3412	/* LSB first in word, MSW first in long */
+#define __DARWIN_LITTLE_ENDIAN  1234    /* LSB first: i386, vax */
+#define __DARWIN_BIG_ENDIAN     4321    /* MSB first: 68000, ibm, net */
+#define __DARWIN_PDP_ENDIAN     3412    /* LSB first in word, MSW first in long */
 
-#define	__DARWIN_BYTE_ORDER	__DARWIN_LITTLE_ENDIAN
+#define __DARWIN_BYTE_ORDER     __DARWIN_LITTLE_ENDIAN
 
-#if	defined(KERNEL) || (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
+#if     defined(KERNEL) || (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
 
-#define	LITTLE_ENDIAN	__DARWIN_LITTLE_ENDIAN
-#define	BIG_ENDIAN	__DARWIN_BIG_ENDIAN
-#define	PDP_ENDIAN	__DARWIN_PDP_ENDIAN
+#define LITTLE_ENDIAN   __DARWIN_LITTLE_ENDIAN
+#define BIG_ENDIAN      __DARWIN_BIG_ENDIAN
+#define PDP_ENDIAN      __DARWIN_PDP_ENDIAN
 
-#define	BYTE_ORDER	__DARWIN_BYTE_ORDER
+#define BYTE_ORDER      __DARWIN_BYTE_ORDER
 
 #include <sys/_endian.h>
 

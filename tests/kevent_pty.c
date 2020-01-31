@@ -16,8 +16,8 @@
 #include <util.h>
 
 T_GLOBAL_META(
-		T_META_NAMESPACE("xnu.kevent"),
-		T_META_CHECK_LEAKS(false));
+	T_META_NAMESPACE("xnu.kevent"),
+	T_META_CHECK_LEAKS(false));
 
 #define TIMEOUT_SECS 10
 
@@ -31,7 +31,7 @@ child_tty_client(void)
 	ssize_t bytes_wr;
 
 	src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,
-			(uintptr_t)STDIN_FILENO, 0, NULL);
+	    (uintptr_t)STDIN_FILENO, 0, NULL);
 	if (!src) {
 		exit(1);
 	}
@@ -73,8 +73,8 @@ pty_master(void)
 }
 
 T_DECL(pty_master_teardown,
-		"try removing a TTY master out from under a PTY slave holding a kevent",
-		T_META_ASROOT(true))
+    "try removing a TTY master out from under a PTY slave holding a kevent",
+    T_META_ASROOT(true))
 {
 	__block pid_t master_pid;
 	char buf[16] = "";
@@ -95,8 +95,8 @@ T_DECL(pty_master_teardown,
 		__builtin_unreachable();
 	}
 	T_ASSERT_POSIX_SUCCESS(master_pid,
-			"forked child master PTY with pid %d, at pty %s", master_pid,
-			pty_filename);
+	    "forked child master PTY with pid %d, at pty %s", master_pid,
+	    pty_filename);
 
 	close(child_ready[1]);
 
@@ -209,16 +209,16 @@ redispatch(dispatch_group_t grp, dispatch_source_type_t type, int fd)
 
 	__block void (^redispatch_blk)(void) = Block_copy(^{
 		if (iters++ > ATTACH_ITERATIONS) {
-			return;
+		        return;
 		} else if (iters == ATTACH_ITERATIONS) {
-			dispatch_group_leave(grp);
-			T_PASS("created %d %s sources on busy PTY", iters,
-					type == DISPATCH_SOURCE_TYPE_READ ? "read" : "write");
+		        dispatch_group_leave(grp);
+		        T_PASS("created %d %s sources on busy PTY", iters,
+		        type == DISPATCH_SOURCE_TYPE_READ ? "read" : "write");
 		}
 
 		dispatch_source_t src = dispatch_source_create(
-				type, (uintptr_t)fd, 0,
-				dispatch_get_main_queue());
+			type, (uintptr_t)fd, 0,
+			dispatch_get_main_queue());
 
 		dispatch_source_set_event_handler(src, ^{
 			dispatch_cancel(src);
@@ -234,18 +234,18 @@ redispatch(dispatch_group_t grp, dispatch_source_type_t type, int fd)
 }
 
 T_DECL(attach_while_tty_wakeups,
-		"try to attach knotes while a TTY is getting wakeups")
+    "try to attach knotes while a TTY is getting wakeups")
 {
 	dispatch_group_t grp = dispatch_group_create();
 
 	T_SETUPBEGIN;
 	T_ASSERT_POSIX_SUCCESS(openpty(&attach_master, &attach_slave, NULL, NULL,
-			NULL), NULL);
+	    NULL), NULL);
 
 	T_ASSERT_POSIX_ZERO(pthread_create(&reader, NULL, reader_thread,
-				(void *)(uintptr_t)attach_master), NULL);
+	    (void *)(uintptr_t)attach_master), NULL);
 	T_ASSERT_POSIX_ZERO(pthread_create(&writer, NULL, writer_thread,
-				(void *)(uintptr_t)attach_slave), NULL);
+	    (void *)(uintptr_t)attach_slave), NULL);
 	T_ATEND(join_threads);
 	T_SETUPEND;
 
@@ -261,7 +261,7 @@ T_DECL(attach_while_tty_wakeups,
 }
 
 T_DECL(master_read_data_set,
-		"check that the data is set on read sources of master fds")
+    "check that the data is set on read sources of master fds")
 {
 	int master = -1, slave = -1;
 
@@ -271,12 +271,12 @@ T_DECL(master_read_data_set,
 	T_QUIET; T_ASSERT_GE(slave, 0, "slave fd is valid");
 
 	dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,
-			(uintptr_t)master, 0, dispatch_get_main_queue());
+	    (uintptr_t)master, 0, dispatch_get_main_queue());
 
 	dispatch_source_set_event_handler(src, ^{
 		unsigned long len = dispatch_source_get_data(src);
 		T_EXPECT_GT(len, (unsigned long)0,
-				"the amount of data to read was set for the master source");
+		"the amount of data to read was set for the master source");
 		dispatch_cancel(src);
 	});
 
@@ -292,7 +292,9 @@ T_DECL(master_read_data_set,
 	char buf[512] = "";
 
 	int ret = 0;
-	while ((ret = write(slave, buf, sizeof(buf)) == -1 && errno == EAGAIN));
+	while ((ret = write(slave, buf, sizeof(buf)) == -1 && errno == EAGAIN)) {
+		;
+	}
 	T_ASSERT_POSIX_SUCCESS(ret, "slave wrote data");
 
 	dispatch_main();

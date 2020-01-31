@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright 1995 NeXT Computer, Inc. All rights reserved. */
@@ -64,15 +64,15 @@
  *	@(#)cdefs.h	8.8 (Berkeley) 1/9/95
  */
 
-#ifndef	_CDEFS_H_
-#define	_CDEFS_H_
+#ifndef _CDEFS_H_
+#define _CDEFS_H_
 
 #if defined(__cplusplus)
-#define	__BEGIN_DECLS	extern "C" {
-#define	__END_DECLS	}
+#define __BEGIN_DECLS   extern "C" {
+#define __END_DECLS     }
 #else
-#define	__BEGIN_DECLS
-#define	__END_DECLS
+#define __BEGIN_DECLS
+#define __END_DECLS
 #endif
 
 /* This SDK is designed to work with clang and specific versions of
@@ -109,32 +109,32 @@
  * strings produced by the __STRING macro, but this only works with ANSI C.
  */
 #if defined(__STDC__) || defined(__cplusplus)
-#define	__P(protos)	protos		/* full-blown ANSI C */
-#define	__CONCAT(x,y)	x ## y
-#define	__STRING(x)	#x
+#define __P(protos)     protos          /* full-blown ANSI C */
+#define __CONCAT(x, y)   x ## y
+#define __STRING(x)     #x
 
-#define	__const		const		/* define reserved names to standard */
-#define	__signed	signed
-#define	__volatile	volatile
+#define __const         const           /* define reserved names to standard */
+#define __signed        signed
+#define __volatile      volatile
 #if defined(__cplusplus)
-#define	__inline	inline		/* convert to C++ keyword */
+#define __inline        inline          /* convert to C++ keyword */
 #else
 #ifndef __GNUC__
-#define	__inline			/* delete GCC keyword */
+#define __inline                        /* delete GCC keyword */
 #endif /* !__GNUC__ */
 #endif /* !__cplusplus */
 
-#else	/* !(__STDC__ || __cplusplus) */
-#define	__P(protos)	()		/* traditional C preprocessor */
-#define	__CONCAT(x,y)	x/**/y
-#define	__STRING(x)	"x"
+#else   /* !(__STDC__ || __cplusplus) */
+#define __P(protos)     ()              /* traditional C preprocessor */
+#define __CONCAT(x, y)   x /**/ y
+#define __STRING(x)     "x"
 
 #ifndef __GNUC__
-#define	__const				/* delete pseudo-ANSI C keywords */
-#define	__inline
-#define	__signed
-#define	__volatile
-#endif	/* !__GNUC__ */
+#define __const                         /* delete pseudo-ANSI C keywords */
+#define __inline
+#define __signed
+#define __volatile
+#endif  /* !__GNUC__ */
 
 /*
  * In non-ANSI C environments, new programs will want ANSI-only C keywords
@@ -144,26 +144,26 @@
  * When using "gcc -traditional", we assume that this is the intent; if
  * __GNUC__ is defined but __STDC__ is not, we leave the new keywords alone.
  */
-#ifndef	NO_ANSI_KEYWORDS
-#define	const		__const			/* convert ANSI C keywords */
-#define	inline		__inline
-#define	signed		__signed
-#define	volatile	__volatile
+#ifndef NO_ANSI_KEYWORDS
+#define const           __const                 /* convert ANSI C keywords */
+#define inline          __inline
+#define signed          __signed
+#define volatile        __volatile
 #endif /* !NO_ANSI_KEYWORDS */
 #endif /* !(__STDC__ || __cplusplus) */
 
-#define __dead2		__attribute__((noreturn))
-#define __pure2		__attribute__((const))
+#define __dead2         __attribute__((noreturn))
+#define __pure2         __attribute__((const))
 
 /* __unused denotes variables and functions that may not be used, preventing
  * the compiler from warning about it if not used.
  */
-#define __unused	__attribute__((unused))
+#define __unused        __attribute__((unused))
 
 /* __used forces variables and functions to be included even if it appears
  * to the compiler that they are not used (and would thust be discarded).
  */
-#define __used		__attribute__((used))
+#define __used          __attribute__((used))
 
 /* __deprecated causes the compiler to produce a warning when encountering
  * code using the deprecated functionality.
@@ -173,10 +173,10 @@
  * __deprecated_enum_msg() should be used on enums, and compilers that support
  * it will print the deprecation warning.
  */
-#define __deprecated	__attribute__((deprecated))
+#define __deprecated    __attribute__((deprecated))
 
 #if __has_extension(attribute_deprecated_with_message) || \
-		(defined(__GNUC__) && ((__GNUC__ >= 5) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 5))))
+        (defined(__GNUC__) && ((__GNUC__ >= 5) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 5))))
 	#define __deprecated_msg(_msg) __attribute__((deprecated(_msg)))
 #else
 	#define __deprecated_msg(_msg) __attribute__((deprecated))
@@ -191,12 +191,12 @@
 /* __unavailable causes the compiler to error out when encountering
  * code using the tagged function of variable.
  */
-#define __unavailable	__attribute__((unavailable))
+#define __unavailable   __attribute__((unavailable))
 
 /* Delete pseudo-keywords wherever they are not available or needed. */
 #ifndef __dead
-#define	__dead
-#define	__pure
+#define __dead
+#define __pure
 #endif
 
 /*
@@ -206,7 +206,7 @@
 #if __STDC_VERSION__ < 199901
 #define __restrict
 #else
-#define __restrict	restrict
+#define __restrict      restrict
 #endif
 
 /* Compatibility with compilers and environments that don't support the
@@ -239,7 +239,7 @@
  * optimization inside the marked function.
  */
 #if __has_attribute(disable_tail_calls)
-#define __disable_tail_calls	__attribute__((__disable_tail_calls__))
+#define __disable_tail_calls    __attribute__((__disable_tail_calls__))
 #else
 #define __disable_tail_calls
 #endif
@@ -251,7 +251,7 @@
  * "always_inline" cannot be marked as __not_tail_called.
  */
 #if __has_attribute(not_tail_called)
-#define __not_tail_called	__attribute__((__not_tail_called__))
+#define __not_tail_called       __attribute__((__not_tail_called__))
 #else
 #define __not_tail_called
 #endif
@@ -272,7 +272,7 @@
  * unavailable in Swift, regardless of any other availability in C.
  */
 #if __has_feature(attribute_availability_swift)
-#define __swift_unavailable(_msg)	__attribute__((__availability__(swift, unavailable, message=_msg)))
+#define __swift_unavailable(_msg)       __attribute__((__availability__(swift, unavailable, message=_msg)))
 #else
 #define __swift_unavailable(_msg)
 #endif
@@ -294,27 +294,27 @@
  */
 
 #if defined(__cplusplus) || \
-    (__STDC_VERSION__ >= 199901L && \
-     !defined(__GNUC_GNU_INLINE__) && \
-     (!defined(__GNUC__) || defined(__clang__)))
+        (__STDC_VERSION__ >= 199901L && \
+        !defined(__GNUC_GNU_INLINE__) && \
+        (!defined(__GNUC__) || defined(__clang__)))
 # define __header_inline           inline
 #elif defined(__GNUC__) && defined(__GNUC_STDC_INLINE__)
 # define __header_inline           extern __inline __attribute__((__gnu_inline__))
 #elif defined(__GNUC__)
 # define __header_inline           extern __inline
 #else
-  /* If we land here, we've encountered an unsupported compiler,
-   * so hopefully it understands static __inline as a fallback.
-   */
+/* If we land here, we've encountered an unsupported compiler,
+ * so hopefully it understands static __inline as a fallback.
+ */
 # define __header_inline           static __inline
 #endif
 
 #ifdef __GNUC__
 # define __header_always_inline    __header_inline __attribute__ ((__always_inline__))
 #else
-  /* Unfortunately, we're using a compiler that we don't know how to force to
-   * inline.  Oh well.
-   */
+/* Unfortunately, we're using a compiler that we don't know how to force to
+ * inline.  Oh well.
+ */
 # define __header_always_inline    __header_inline
 #endif
 
@@ -324,16 +324,16 @@
  */
 #if defined(__clang__)
 # define __unreachable_ok_push \
-         _Pragma("clang diagnostic push") \
-         _Pragma("clang diagnostic ignored \"-Wunreachable-code\"")
+	 _Pragma("clang diagnostic push") \
+	 _Pragma("clang diagnostic ignored \"-Wunreachable-code\"")
 # define __unreachable_ok_pop \
-         _Pragma("clang diagnostic pop")
+	 _Pragma("clang diagnostic pop")
 #elif defined(__GNUC__) && ((__GNUC__ > 4) || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6))
 # define __unreachable_ok_push \
-         _Pragma("GCC diagnostic push") \
-         _Pragma("GCC diagnostic ignored \"-Wunreachable-code\"")
+	 _Pragma("GCC diagnostic push") \
+	 _Pragma("GCC diagnostic ignored \"-Wunreachable-code\"")
 # define __unreachable_ok_pop \
-         _Pragma("GCC diagnostic pop")
+	 _Pragma("GCC diagnostic pop")
 #else
 # define __unreachable_ok_push
 # define __unreachable_ok_pop
@@ -348,13 +348,13 @@
  * types.
  */
 #define __printflike(fmtarg, firstvararg) \
-		__attribute__((__format__ (__printf__, fmtarg, firstvararg)))
+	        __attribute__((__format__ (__printf__, fmtarg, firstvararg)))
 #define __printf0like(fmtarg, firstvararg) \
-		__attribute__((__format__ (__printf0__, fmtarg, firstvararg)))
+	        __attribute__((__format__ (__printf0__, fmtarg, firstvararg)))
 #define __scanflike(fmtarg, firstvararg) \
-		__attribute__((__format__ (__scanf__, fmtarg, firstvararg)))
+	        __attribute__((__format__ (__scanf__, fmtarg, firstvararg)))
 
-#define __IDSTRING(name,string) static const char name[] __used = string
+#define __IDSTRING(name, string) static const char name[] __used = string
 
 #ifndef __COPYRIGHT
 #define __COPYRIGHT(s) __IDSTRING(copyright,s)
@@ -374,19 +374,19 @@
 
 /* Source compatibility only, ID string not emitted in object file */
 #ifndef __FBSDID
-#define __FBSDID(s) 
+#define __FBSDID(s)
 #endif
 
-#ifndef	__DECONST
-#define	__DECONST(type, var)	__CAST_AWAY_QUALIFIER(var, const, type)
+#ifndef __DECONST
+#define __DECONST(type, var)    __CAST_AWAY_QUALIFIER(var, const, type)
 #endif
 
-#ifndef	__DEVOLATILE
-#define	__DEVOLATILE(type, var)	__CAST_AWAY_QUALIFIER(var, volatile, type)
+#ifndef __DEVOLATILE
+#define __DEVOLATILE(type, var) __CAST_AWAY_QUALIFIER(var, volatile, type)
 #endif
 
-#ifndef	__DEQUALIFY
-#define	__DEQUALIFY(type, var)	__CAST_AWAY_QUALIFIER(var, const volatile, type)
+#ifndef __DEQUALIFY
+#define __DEQUALIFY(type, var)  __CAST_AWAY_QUALIFIER(var, const volatile, type)
 #endif
 
 /*
@@ -449,87 +449,87 @@
 
 /* These settings are particular to each product. */
 #ifdef KERNEL
-#define __DARWIN_ONLY_64_BIT_INO_T	0
-#define __DARWIN_ONLY_UNIX_CONFORMANCE	0
-#define __DARWIN_ONLY_VERS_1050		0
+#define __DARWIN_ONLY_64_BIT_INO_T      0
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  0
+#define __DARWIN_ONLY_VERS_1050         0
 #if defined(__x86_64__)
-#define	__DARWIN_SUF_DARWIN14	"_darwin14"
-#define	__DARWIN14_ALIAS(sym)	__asm("_" __STRING(sym) __DARWIN_SUF_DARWIN14)
+#define __DARWIN_SUF_DARWIN14   "_darwin14"
+#define __DARWIN14_ALIAS(sym)   __asm("_" __STRING(sym) __DARWIN_SUF_DARWIN14)
 #else
-#define	__DARWIN14_ALIAS(sym)
+#define __DARWIN14_ALIAS(sym)
 #endif
 #else /* !KERNEL */
 #ifdef PLATFORM_iPhoneOS
 /* Platform: iPhoneOS */
-#define __DARWIN_ONLY_64_BIT_INO_T	1
-#define __DARWIN_ONLY_UNIX_CONFORMANCE	1
-#define __DARWIN_ONLY_VERS_1050		1
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
 #endif /* PLATFORM_iPhoneOS */
 #ifdef PLATFORM_iPhoneSimulator
 /* Platform: iPhoneSimulator */
-#define __DARWIN_ONLY_64_BIT_INO_T	1
-#define __DARWIN_ONLY_UNIX_CONFORMANCE	1
-#define __DARWIN_ONLY_VERS_1050		1
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
 #endif /* PLATFORM_iPhoneSimulator */
 #ifdef PLATFORM_tvOS
 /* Platform: tvOS */
-#define __DARWIN_ONLY_64_BIT_INO_T	1
-#define __DARWIN_ONLY_UNIX_CONFORMANCE	1
-#define __DARWIN_ONLY_VERS_1050		1
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
 #endif /* PLATFORM_tvOS */
 #ifdef PLATFORM_AppleTVOS
 /* Platform: AppleTVOS */
-#define __DARWIN_ONLY_64_BIT_INO_T	1
-#define __DARWIN_ONLY_UNIX_CONFORMANCE	1
-#define __DARWIN_ONLY_VERS_1050		1
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
 #endif /* PLATFORM_AppleTVOS */
 #ifdef PLATFORM_tvSimulator
 /* Platform: tvSimulator */
-#define __DARWIN_ONLY_64_BIT_INO_T	1
-#define __DARWIN_ONLY_UNIX_CONFORMANCE	1
-#define __DARWIN_ONLY_VERS_1050		1
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
 #endif /* PLATFORM_tvSimulator */
 #ifdef PLATFORM_AppleTVSimulator
 /* Platform: AppleTVSimulator */
-#define __DARWIN_ONLY_64_BIT_INO_T	1
-#define __DARWIN_ONLY_UNIX_CONFORMANCE	1
-#define __DARWIN_ONLY_VERS_1050		1
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
 #endif /* PLATFORM_AppleTVSimulator */
 #ifdef PLATFORM_iPhoneOSNano
 /* Platform: iPhoneOSNano */
-#define __DARWIN_ONLY_64_BIT_INO_T	1
-#define __DARWIN_ONLY_UNIX_CONFORMANCE	1
-#define __DARWIN_ONLY_VERS_1050		1
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
 #endif /* PLATFORM_iPhoneOSNano */
 #ifdef PLATFORM_iPhoneNanoSimulator
 /* Platform: iPhoneNanoSimulator */
-#define __DARWIN_ONLY_64_BIT_INO_T	1
-#define __DARWIN_ONLY_UNIX_CONFORMANCE	1
-#define __DARWIN_ONLY_VERS_1050		1
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
 #endif /* PLATFORM_iPhoneNanoSimulator */
 #ifdef PLATFORM_WatchOS
 /* Platform: WatchOS */
-#define __DARWIN_ONLY_64_BIT_INO_T	1
-#define __DARWIN_ONLY_UNIX_CONFORMANCE	1
-#define __DARWIN_ONLY_VERS_1050		1
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
 #endif /* PLATFORM_WatchOS */
 #ifdef PLATFORM_WatchSimulator
 /* Platform: WatchSimulator */
-#define __DARWIN_ONLY_64_BIT_INO_T	1
-#define __DARWIN_ONLY_UNIX_CONFORMANCE	1
-#define __DARWIN_ONLY_VERS_1050		1
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
 #endif /* PLATFORM_WatchSimulator */
 #ifdef PLATFORM_BridgeOS
 /* Platform: BridgeOS */
-#define __DARWIN_ONLY_64_BIT_INO_T	1
-#define __DARWIN_ONLY_UNIX_CONFORMANCE	1
-#define __DARWIN_ONLY_VERS_1050		1
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
 #endif /* PLATFORM_BridgeOS */
 #ifdef PLATFORM_MacOSX
 /* Platform: MacOSX */
-#define __DARWIN_ONLY_64_BIT_INO_T	0
+#define __DARWIN_ONLY_64_BIT_INO_T      0
 /* #undef __DARWIN_ONLY_UNIX_CONFORMANCE (automatically set for 64-bit) */
-#define __DARWIN_ONLY_VERS_1050		0
+#define __DARWIN_ONLY_VERS_1050         0
 #endif /* PLATFORM_MacOSX */
 #endif /* KERNEL */
 
@@ -561,26 +561,26 @@
 
 #if !defined(__DARWIN_UNIX03)
 #  if defined(KERNEL)
-#    define __DARWIN_UNIX03	0
+#    define __DARWIN_UNIX03     0
 #  elif __DARWIN_ONLY_UNIX_CONFORMANCE
 #    if defined(_NONSTD_SOURCE)
 #      error "Can't define _NONSTD_SOURCE when only UNIX conformance is available."
 #    endif /* _NONSTD_SOURCE */
-#    define __DARWIN_UNIX03	1
-#  elif defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0) < 1040)
-#    define __DARWIN_UNIX03	0
+#    define __DARWIN_UNIX03     1
+#  elif defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ - 0) < 1040)
+#    define __DARWIN_UNIX03     0
 #  elif defined(_DARWIN_C_SOURCE) || defined(_XOPEN_SOURCE) || defined(_POSIX_C_SOURCE)
 #    if defined(_NONSTD_SOURCE)
 #      error "Can't define both _NONSTD_SOURCE and any of _DARWIN_C_SOURCE, _XOPEN_SOURCE or _POSIX_C_SOURCE."
 #    endif /* _NONSTD_SOURCE */
-#    define __DARWIN_UNIX03	1
+#    define __DARWIN_UNIX03     1
 #  elif defined(_NONSTD_SOURCE)
-#    define __DARWIN_UNIX03	0
+#    define __DARWIN_UNIX03     0
 #  else /* default */
-#    if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0) < 1050)
-#      define __DARWIN_UNIX03	0
+#    if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ - 0) < 1050)
+#      define __DARWIN_UNIX03   0
 #    else /* __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1050 */
-#      define __DARWIN_UNIX03	1
+#      define __DARWIN_UNIX03   1
 #    endif /* __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1050 */
 #  endif /* _DARWIN_C_SOURCE || _XOPEN_SOURCE || _POSIX_C_SOURCE || __LP64__ */
 #endif /* !__DARWIN_UNIX03 */
@@ -601,7 +601,7 @@
 #  else /* default */
 #    if __DARWIN_ONLY_64_BIT_INO_T
 #      define __DARWIN_64_BIT_INO_T 1
-#    elif defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0) < 1060) || __DARWIN_UNIX03 == 0
+#    elif defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ - 0) < 1060) || __DARWIN_UNIX03 == 0
 #      define __DARWIN_64_BIT_INO_T 0
 #    else /* default */
 #      define __DARWIN_64_BIT_INO_T 1
@@ -614,7 +614,7 @@
 #    define __DARWIN_VERS_1050 0
 #  elif __DARWIN_ONLY_VERS_1050
 #    define __DARWIN_VERS_1050 1
-#  elif defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0) < 1050) || __DARWIN_UNIX03 == 0
+#  elif defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ - 0) < 1050) || __DARWIN_UNIX03 == 0
 #    define __DARWIN_VERS_1050 0
 #  else /* default */
 #    define __DARWIN_VERS_1050 1
@@ -634,63 +634,63 @@
  */
 #if __DARWIN_UNIX03
 #  if __DARWIN_ONLY_UNIX_CONFORMANCE
-#    define __DARWIN_SUF_UNIX03		/* nothing */
+#    define __DARWIN_SUF_UNIX03         /* nothing */
 #  else /* !__DARWIN_ONLY_UNIX_CONFORMANCE */
-#    define __DARWIN_SUF_UNIX03		"$UNIX2003"
+#    define __DARWIN_SUF_UNIX03         "$UNIX2003"
 #  endif /* __DARWIN_ONLY_UNIX_CONFORMANCE */
 
 #  if __DARWIN_64_BIT_INO_T
 #    if __DARWIN_ONLY_64_BIT_INO_T
-#      define __DARWIN_SUF_64_BIT_INO_T	/* nothing */
+#      define __DARWIN_SUF_64_BIT_INO_T /* nothing */
 #    else /* !__DARWIN_ONLY_64_BIT_INO_T */
-#      define __DARWIN_SUF_64_BIT_INO_T	"$INODE64"
+#      define __DARWIN_SUF_64_BIT_INO_T "$INODE64"
 #    endif /* __DARWIN_ONLY_64_BIT_INO_T */
 #  else /* !__DARWIN_64_BIT_INO_T */
-#    define __DARWIN_SUF_64_BIT_INO_T	/* nothing */
+#    define __DARWIN_SUF_64_BIT_INO_T   /* nothing */
 #  endif /* __DARWIN_64_BIT_INO_T */
 
 #  if __DARWIN_VERS_1050
 #    if __DARWIN_ONLY_VERS_1050
-#      define __DARWIN_SUF_1050		/* nothing */
+#      define __DARWIN_SUF_1050         /* nothing */
 #    else /* !__DARWIN_ONLY_VERS_1050 */
-#      define __DARWIN_SUF_1050		"$1050"
+#      define __DARWIN_SUF_1050         "$1050"
 #    endif /* __DARWIN_ONLY_VERS_1050 */
 #  else /* !__DARWIN_VERS_1050 */
-#    define __DARWIN_SUF_1050		/* nothing */
+#    define __DARWIN_SUF_1050           /* nothing */
 #  endif /* __DARWIN_VERS_1050 */
 
 #  if __DARWIN_NON_CANCELABLE
-#    define __DARWIN_SUF_NON_CANCELABLE	"$NOCANCEL"
+#    define __DARWIN_SUF_NON_CANCELABLE "$NOCANCEL"
 #  else /* !__DARWIN_NON_CANCELABLE */
-#    define __DARWIN_SUF_NON_CANCELABLE	/* nothing */
+#    define __DARWIN_SUF_NON_CANCELABLE /* nothing */
 #  endif /* __DARWIN_NON_CANCELABLE */
 
 #else /* !__DARWIN_UNIX03 */
-#  define __DARWIN_SUF_UNIX03		/* nothing */
-#  define __DARWIN_SUF_64_BIT_INO_T	/* nothing */
-#  define __DARWIN_SUF_NON_CANCELABLE	/* nothing */
-#  define __DARWIN_SUF_1050		/* nothing */
+#  define __DARWIN_SUF_UNIX03           /* nothing */
+#  define __DARWIN_SUF_64_BIT_INO_T     /* nothing */
+#  define __DARWIN_SUF_NON_CANCELABLE   /* nothing */
+#  define __DARWIN_SUF_1050             /* nothing */
 #endif /* __DARWIN_UNIX03 */
 
-#define __DARWIN_SUF_EXTSN		"$DARWIN_EXTSN"
+#define __DARWIN_SUF_EXTSN              "$DARWIN_EXTSN"
 
 /*
  * symbol versioning macros
  */
-#define __DARWIN_ALIAS(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_UNIX03)
-#define __DARWIN_ALIAS_C(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_NON_CANCELABLE __DARWIN_SUF_UNIX03)
-#define __DARWIN_ALIAS_I(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_64_BIT_INO_T __DARWIN_SUF_UNIX03)
-#define __DARWIN_NOCANCEL(sym)  	__asm("_" __STRING(sym) __DARWIN_SUF_NON_CANCELABLE)
-#define __DARWIN_INODE64(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_64_BIT_INO_T)
+#define __DARWIN_ALIAS(sym)             __asm("_" __STRING(sym) __DARWIN_SUF_UNIX03)
+#define __DARWIN_ALIAS_C(sym)           __asm("_" __STRING(sym) __DARWIN_SUF_NON_CANCELABLE __DARWIN_SUF_UNIX03)
+#define __DARWIN_ALIAS_I(sym)           __asm("_" __STRING(sym) __DARWIN_SUF_64_BIT_INO_T __DARWIN_SUF_UNIX03)
+#define __DARWIN_NOCANCEL(sym)          __asm("_" __STRING(sym) __DARWIN_SUF_NON_CANCELABLE)
+#define __DARWIN_INODE64(sym)           __asm("_" __STRING(sym) __DARWIN_SUF_64_BIT_INO_T)
 
-#define __DARWIN_1050(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_1050)
-#define __DARWIN_1050ALIAS(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_1050 __DARWIN_SUF_UNIX03)
-#define __DARWIN_1050ALIAS_C(sym)	__asm("_" __STRING(sym) __DARWIN_SUF_1050 __DARWIN_SUF_NON_CANCELABLE __DARWIN_SUF_UNIX03)
-#define __DARWIN_1050ALIAS_I(sym)	__asm("_" __STRING(sym) __DARWIN_SUF_1050 __DARWIN_SUF_64_BIT_INO_T __DARWIN_SUF_UNIX03)
-#define __DARWIN_1050INODE64(sym)	__asm("_" __STRING(sym) __DARWIN_SUF_1050 __DARWIN_SUF_64_BIT_INO_T)
+#define __DARWIN_1050(sym)              __asm("_" __STRING(sym) __DARWIN_SUF_1050)
+#define __DARWIN_1050ALIAS(sym)         __asm("_" __STRING(sym) __DARWIN_SUF_1050 __DARWIN_SUF_UNIX03)
+#define __DARWIN_1050ALIAS_C(sym)       __asm("_" __STRING(sym) __DARWIN_SUF_1050 __DARWIN_SUF_NON_CANCELABLE __DARWIN_SUF_UNIX03)
+#define __DARWIN_1050ALIAS_I(sym)       __asm("_" __STRING(sym) __DARWIN_SUF_1050 __DARWIN_SUF_64_BIT_INO_T __DARWIN_SUF_UNIX03)
+#define __DARWIN_1050INODE64(sym)       __asm("_" __STRING(sym) __DARWIN_SUF_1050 __DARWIN_SUF_64_BIT_INO_T)
 
-#define __DARWIN_EXTSN(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_EXTSN)
-#define __DARWIN_EXTSN_C(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_EXTSN __DARWIN_SUF_NON_CANCELABLE)
+#define __DARWIN_EXTSN(sym)             __asm("_" __STRING(sym) __DARWIN_SUF_EXTSN)
+#define __DARWIN_EXTSN_C(sym)           __asm("_" __STRING(sym) __DARWIN_SUF_EXTSN __DARWIN_SUF_NON_CANCELABLE)
 
 /*
  * symbol release macros
@@ -733,13 +733,13 @@
 /* Deal with IEEE Std. 1003.1-1990, in which _POSIX_C_SOURCE == 1L. */
 #if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE == 1L
 #undef _POSIX_C_SOURCE
-#define	_POSIX_C_SOURCE		199009L
+#define _POSIX_C_SOURCE         199009L
 #endif
 
 /* Deal with IEEE Std. 1003.2-1992, in which _POSIX_C_SOURCE == 2L. */
 #if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE == 2L
 #undef _POSIX_C_SOURCE
-#define	_POSIX_C_SOURCE		199209L
+#define _POSIX_C_SOURCE         199209L
 #endif
 
 /* Deal with various X/Open Portability Guides and Single UNIX Spec. */
@@ -749,10 +749,10 @@
 #define _POSIX_C_SOURCE         200809L
 #elif _XOPEN_SOURCE - 0L >= 600L && (!defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE - 0L < 200112L)
 #undef _POSIX_C_SOURCE
-#define	_POSIX_C_SOURCE		200112L
+#define _POSIX_C_SOURCE         200112L
 #elif _XOPEN_SOURCE - 0L >= 500L && (!defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE - 0L < 199506L)
 #undef _POSIX_C_SOURCE
-#define	_POSIX_C_SOURCE		199506L
+#define _POSIX_C_SOURCE         199506L
 #endif
 #endif
 
@@ -803,22 +803,22 @@
  * c99 still want long longs.  While not perfect, we allow long longs for
  * g++.
  */
-#if (defined(__STRICT_ANSI__) && (__STDC_VERSION__-0 < 199901L)  && !defined(__GNUG__))
+#if (defined(__STRICT_ANSI__) && (__STDC_VERSION__ - 0 < 199901L) && !defined(__GNUG__))
 #define __DARWIN_NO_LONG_LONG 1
 #else
 #define __DARWIN_NO_LONG_LONG 0
 #endif
 
 /*****************************************
- *  Public darwin-specific feature macros
- *****************************************/
+*  Public darwin-specific feature macros
+*****************************************/
 
 /*
  * _DARWIN_FEATURE_64_BIT_INODE indicates that the ino_t type is 64-bit, and
  * structures modified for 64-bit inodes (like struct stat) will be used.
  */
 #if __DARWIN_64_BIT_INO_T
-#define _DARWIN_FEATURE_64_BIT_INODE		1
+#define _DARWIN_FEATURE_64_BIT_INODE            1
 #endif
 
 /*
@@ -828,7 +828,7 @@
  * struct stat will already be the 64-bit version.
  */
 #if __DARWIN_ONLY_64_BIT_INO_T
-#define _DARWIN_FEATURE_ONLY_64_BIT_INODE	1
+#define _DARWIN_FEATURE_ONLY_64_BIT_INODE       1
 #endif
 
 /*
@@ -836,7 +836,7 @@
  * in 10.5 exists; no pre-10.5 variants are available.
  */
 #if __DARWIN_ONLY_VERS_1050
-#define _DARWIN_FEATURE_ONLY_VERS_1050		1
+#define _DARWIN_FEATURE_ONLY_VERS_1050          1
 #endif
 
 /*
@@ -844,7 +844,7 @@
  * are available (the legacy BSD APIs are not available)
  */
 #if __DARWIN_ONLY_UNIX_CONFORMANCE
-#define _DARWIN_FEATURE_ONLY_UNIX_CONFORMANCE	1
+#define _DARWIN_FEATURE_ONLY_UNIX_CONFORMANCE   1
 #endif
 
 /*
@@ -852,10 +852,10 @@
  * and specifies the conformance level (3 is SUSv3)
  */
 #if __DARWIN_UNIX03
-#define _DARWIN_FEATURE_UNIX_CONFORMANCE	3
+#define _DARWIN_FEATURE_UNIX_CONFORMANCE        3
 #endif
 
-/* 
+/*
  * This macro casts away the qualifier from the variable
  *
  * Note: use at your own risk, removing qualifiers can result in
@@ -889,9 +889,9 @@
  * Selectively ignore cast alignment warnings
  */
 #define __IGNORE_WCASTALIGN(x) _Pragma("clang diagnostic push")                     \
-                               _Pragma("clang diagnostic ignored \"-Wcast-align\"") \
-                               x;                                                   \
-                               _Pragma("clang diagnostic pop")
+	                       _Pragma("clang diagnostic ignored \"-Wcast-align\"") \
+	                       x;                                                   \
+	                       _Pragma("clang diagnostic pop")
 #endif
 
 #if defined(PRIVATE) || defined(KERNEL)
@@ -901,13 +901,13 @@
  * to be taken.
  */
 #if !defined(__probable) && !defined(__improbable)
-#define	__probable(x)	__builtin_expect(!!(x), 1)
-#define	__improbable(x)	__builtin_expect(!!(x), 0)
+#define __probable(x)   __builtin_expect(!!(x), 1)
+#define __improbable(x) __builtin_expect(!!(x), 0)
 #endif /* !defined(__probable) && !defined(__improbable) */
 
 #define __container_of(ptr, type, field) ({ \
-		const typeof(((type *)0)->field) *__ptr = (ptr); \
-		(type *)((uintptr_t)__ptr - offsetof(type, field)); \
+	        const typeof(((type *)0)->field) *__ptr = (ptr); \
+	        (type *)((uintptr_t)__ptr - offsetof(type, field)); \
 	})
 
 #endif /* KERNEL || PRIVATE */

@@ -102,7 +102,7 @@ void
 kasan_lock(boolean_t *b)
 {
 	*b = ml_set_interrupts_enabled(false);
-	simple_lock(&kasan_vm_lock);
+	simple_lock(&kasan_vm_lock, LCK_GRP_NULL);
 	kasan_lock_holder = current_thread();
 }
 
@@ -1313,6 +1313,7 @@ UNUSED_ABI(__asan_version_mismatch_check_apple_802, void);
 UNUSED_ABI(__asan_version_mismatch_check_apple_900, void);
 UNUSED_ABI(__asan_version_mismatch_check_apple_902, void);
 UNUSED_ABI(__asan_version_mismatch_check_apple_1000, void);
+UNUSED_ABI(__asan_version_mismatch_check_apple_1001, void);
 
 void UNSUPPORTED_API(__asan_init_v5, void);
 void UNSUPPORTED_API(__asan_register_globals, uptr a, uptr b);

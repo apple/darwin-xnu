@@ -60,7 +60,7 @@
  * Kernel privilege checking interface.
  */
 #ifndef _SYS_PRIV_H_
-#define	_SYS_PRIV_H_
+#define _SYS_PRIV_H_
 
 /*
  * Privilege list, sorted loosely by kernel subsystem.
@@ -77,62 +77,62 @@
  * privileges, such as the ability to reboot, and then loosely by
  * subsystem, indicated by a subsystem name.
  */
-#define	PRIV_ADJTIME			1000	/* Set time adjustment. */
-#define PRIV_PROC_UUID_POLICY		1001	/* Change process uuid policy table. */
-#define PRIV_GLOBAL_PROC_INFO		1002	/* Query information for processes owned by other users */
-#define PRIV_SYSTEM_OVERRIDE		1003	/* Override global system settings for various subsystems for a limited duration/system-mode */
-#define PRIV_HW_DEBUG_DATA		1004	/* Extract hw-specific debug data (e.g. ECC data) */
-#define PRIV_SELECTIVE_FORCED_IDLE	1005	/* Configure and control Selective Forced Idle (SFI) subsystem */
-#define PRIV_PROC_TRACE_INSPECT		1006	/* Request trace memory of arbitrary process to be inspected */
-#define PRIV_DARKBOOT			1007	/* Manipulate the darkboot flag */
-#define PRIV_WORK_INTERVAL		1008	/* Express details about a work interval */
-#define PRIV_SMB_TIMEMACHINE_CONTROL	1009	/* Control Time Machine properties of an SMB share */
-#define PRIV_AUDIO_LATENCY		1010	/* set audio latency requirements for background tracing */
-#define PRIV_KTRACE_BACKGROUND		1011	/* Operate ktrace in the background */
-#define PRIV_SETPRIORITY_DARWIN_ROLE	1012	/* Allow setpriority(PRIO_DARWIN_ROLE) */
-#define PRIV_PACKAGE_EXTENSIONS		1013	/* Push package extension list used by vn_path_package_check() */
-#define PRIV_TRIM_ACTIVE_FILE		1014	/* Allow freeing space out from under an active file  */
-#define PRIV_PROC_CPUMON_OVERRIDE	1015	/* Allow CPU usage monitor parameters less restrictive than default */
+#define PRIV_ADJTIME                    1000    /* Set time adjustment. */
+#define PRIV_PROC_UUID_POLICY           1001    /* Change process uuid policy table. */
+#define PRIV_GLOBAL_PROC_INFO           1002    /* Query information for processes owned by other users */
+#define PRIV_SYSTEM_OVERRIDE            1003    /* Override global system settings for various subsystems for a limited duration/system-mode */
+#define PRIV_HW_DEBUG_DATA              1004    /* Extract hw-specific debug data (e.g. ECC data) */
+#define PRIV_SELECTIVE_FORCED_IDLE      1005    /* Configure and control Selective Forced Idle (SFI) subsystem */
+#define PRIV_PROC_TRACE_INSPECT         1006    /* Request trace memory of arbitrary process to be inspected */
+#define PRIV_DARKBOOT                   1007    /* Manipulate the darkboot flag */
+#define PRIV_WORK_INTERVAL              1008    /* Express details about a work interval */
+#define PRIV_SMB_TIMEMACHINE_CONTROL    1009    /* Control Time Machine properties of an SMB share */
+#define PRIV_AUDIO_LATENCY              1010    /* set audio latency requirements for background tracing */
+#define PRIV_KTRACE_BACKGROUND          1011    /* Operate ktrace in the background */
+#define PRIV_SETPRIORITY_DARWIN_ROLE    1012    /* Allow setpriority(PRIO_DARWIN_ROLE) */
+#define PRIV_PACKAGE_EXTENSIONS         1013    /* Push package extension list used by vn_path_package_check() */
+#define PRIV_TRIM_ACTIVE_FILE           1014    /* Allow freeing space out from under an active file  */
+#define PRIV_PROC_CPUMON_OVERRIDE       1015    /* Allow CPU usage monitor parameters less restrictive than default */
 
 /*
  * Virtual memory privileges.
  */
-#define	PRIV_VM_PRESSURE	6000	/* Check VM pressure. */
-#define	PRIV_VM_JETSAM		6001	/* Adjust jetsam configuration. */
-#define	PRIV_VM_FOOTPRINT_LIMIT 6002    /* Adjust physical footprint limit. */
+#define PRIV_VM_PRESSURE        6000    /* Check VM pressure. */
+#define PRIV_VM_JETSAM          6001    /* Adjust jetsam configuration. */
+#define PRIV_VM_FOOTPRINT_LIMIT 6002    /* Adjust physical footprint limit. */
 
 /*
  * Network stack privileges.
  */
-#define	PRIV_NET_PRIVILEGED_TRAFFIC_CLASS	10000	/* Set SO_PRIVILEGED_TRAFFIC_CLASS. */
-#define	PRIV_NET_PRIVILEGED_SOCKET_DELEGATE	10001	/* Set delegate on a socket */
-#define	PRIV_NET_INTERFACE_CONTROL		10002	/* Enable interface debug logging. */
-#define	PRIV_NET_PRIVILEGED_NETWORK_STATISTICS	10003	/* Access to all sockets */
-#define	PRIV_NET_PRIVILEGED_NECP_POLICIES	10004	/* Access to privileged Network Extension policies */
-#define	PRIV_NET_RESTRICTED_AWDL		10005	/* Access to restricted AWDL mode */
-#define	PRIV_NET_PRIVILEGED_NECP_MATCH		10006	/* Privilege verified by Network Extension policies */
-#define	PRIV_NET_QOSMARKING_POLICY_OVERRIDE	10007	/* Privilege verified by Network Extension policies */
-#define	PRIV_NET_RESTRICTED_INTCOPROC		10008	/* Access to internal co-processor network interfaces */
+#define PRIV_NET_PRIVILEGED_TRAFFIC_CLASS       10000   /* Set SO_PRIVILEGED_TRAFFIC_CLASS. */
+#define PRIV_NET_PRIVILEGED_SOCKET_DELEGATE     10001   /* Set delegate on a socket */
+#define PRIV_NET_INTERFACE_CONTROL              10002   /* Enable interface debug logging. */
+#define PRIV_NET_PRIVILEGED_NETWORK_STATISTICS  10003   /* Access to all sockets */
+#define PRIV_NET_PRIVILEGED_NECP_POLICIES       10004   /* Access to privileged Network Extension policies */
+#define PRIV_NET_RESTRICTED_AWDL                10005   /* Access to restricted AWDL mode */
+#define PRIV_NET_PRIVILEGED_NECP_MATCH          10006   /* Privilege verified by Network Extension policies */
+#define PRIV_NET_QOSMARKING_POLICY_OVERRIDE     10007   /* Privilege verified by Network Extension policies */
+#define PRIV_NET_RESTRICTED_INTCOPROC           10008   /* Access to internal co-processor network interfaces */
 
-#define	PRIV_NET_PRIVILEGED_MULTIPATH		10009	/* Multipath usage */
-#define	PRIV_NET_RESTRICTED_MULTIPATH_EXTENDED	10010	/* Extended multipath (more aggressive on cell) */
-#define	PRIV_NET_RESTRICTED_ROUTE_NC_READ	10011	/* Enable route neighbhor cache read operations */
+#define PRIV_NET_PRIVILEGED_MULTIPATH           10009   /* Multipath usage */
+#define PRIV_NET_RESTRICTED_MULTIPATH_EXTENDED  10010   /* Extended multipath (more aggressive on cell) */
+#define PRIV_NET_RESTRICTED_ROUTE_NC_READ       10011   /* Enable route neighbhor cache read operations */
 
 /*
  * IPv4 and IPv6 privileges.
  */
-#define	PRIV_NETINET_RESERVEDPORT	11000	/* Bind low port number. */
+#define PRIV_NETINET_RESERVEDPORT       11000   /* Bind low port number. */
 
 
 /*
  * VFS privileges
  */
-#define PRIV_VFS_OPEN_BY_ID		14000	/* Allow calling openbyid_np() */
-#define PRIV_VFS_MOVE_DATA_EXTENTS	14001   /* Allow F_MOVEDATAEXTENTS fcntl */
-#define PRIV_VFS_SNAPSHOT		14002	/* Allow create/rename/delete of snapshots */
-#define PRIV_VFS_SNAPSHOT_REVERT	14003	/* Allow reverting filesystem to a previous snapshot */
+#define PRIV_VFS_OPEN_BY_ID             14000   /* Allow calling openbyid_np() */
+#define PRIV_VFS_MOVE_DATA_EXTENTS      14001   /* Allow F_MOVEDATAEXTENTS fcntl */
+#define PRIV_VFS_SNAPSHOT               14002   /* Allow create/rename/delete of snapshots */
+#define PRIV_VFS_SNAPSHOT_REVERT        14003   /* Allow reverting filesystem to a previous snapshot */
 
-#define PRIV_APFS_EMBED_DRIVER		14100	/* Allow embedding an EFI driver into the APFS container */
+#define PRIV_APFS_EMBED_DRIVER          14100   /* Allow embedding an EFI driver into the APFS container */
 #define PRIV_APFS_FUSION_DEBUG      14101   /* Allow getting internal statistics and controlling the APFS Fusion container */
 #define PRIV_APFS_FUSION_ALLOW_PIN_FASTPROMOTE  14102   /* Allow changing pinned/fastPromote inode flags in APFS Fusion container */
 
@@ -149,7 +149,7 @@
 #define PRIVCHECK_DEFAULT_UNPRIVILEGED_FLAG (1) /* Don't grant root privilege by default */
 
 __BEGIN_DECLS
-int	priv_check_cred(kauth_cred_t cred, int priv, int flags);
+int     priv_check_cred(kauth_cred_t cred, int priv, int flags);
 __END_DECLS
 #endif
 

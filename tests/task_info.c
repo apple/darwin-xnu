@@ -86,19 +86,19 @@ T_DECL(task_vm_info, "tests task vm info", T_META_ASROOT(true), T_META_LTEPHASE(
 	T_EXPECT_NE(vm_info.virtual_size, 0ULL, "task_info --rev0 call does not return 0 for virtual_size");
 
 	T_EXPECT_EQ(vm_info.phys_footprint, (unsigned long long)TESTPHYSFOOTPRINTVAL,
-	            "task_info --rev0 call returned value %llu for vm_info.phys_footprint.  Expected %u since this value should not be "
-	            "modified by rev0",
-	            vm_info.phys_footprint, TESTPHYSFOOTPRINTVAL);
+	    "task_info --rev0 call returned value %llu for vm_info.phys_footprint.  Expected %u since this value should not be "
+	    "modified by rev0",
+	    vm_info.phys_footprint, TESTPHYSFOOTPRINTVAL);
 
 	T_EXPECT_EQ(vm_info.min_address, CANARY,
-	            "task_info --rev0 call returned value 0x%llx for vm_info.min_address. Expected 0x%llx since this value should not "
-	            "be modified by rev0",
-	            vm_info.min_address, CANARY);
+	    "task_info --rev0 call returned value 0x%llx for vm_info.min_address. Expected 0x%llx since this value should not "
+	    "be modified by rev0",
+	    vm_info.min_address, CANARY);
 
 	T_EXPECT_EQ(vm_info.max_address, CANARY,
-	            "task_info --rev0 call returned value 0x%llx for vm_info.max_address. Expected 0x%llx since this value should not "
-	            "be modified by rev0",
-	            vm_info.max_address, CANARY);
+	    "task_info --rev0 call returned value 0x%llx for vm_info.max_address. Expected 0x%llx since this value should not "
+	    "be modified by rev0",
+	    vm_info.max_address, CANARY);
 
 	/*
 	 * Test the REV1 version of TASK_VM_INFO.
@@ -118,19 +118,19 @@ T_DECL(task_vm_info, "tests task vm info", T_META_ASROOT(true), T_META_LTEPHASE(
 	T_EXPECT_NE(vm_info.virtual_size, 0ULL, "task_info --rev1 call does not return 0 for virtual_size");
 
 	T_EXPECT_NE(vm_info.phys_footprint, (unsigned long long)TESTPHYSFOOTPRINTVAL,
-	            "task_info --rev1 call returned value %llu for vm_info.phys_footprint.  Expected value is anything other than %u "
-	            "since this value should not be modified by rev1",
-	            vm_info.phys_footprint, TESTPHYSFOOTPRINTVAL);
+	    "task_info --rev1 call returned value %llu for vm_info.phys_footprint.  Expected value is anything other than %u "
+	    "since this value should not be modified by rev1",
+	    vm_info.phys_footprint, TESTPHYSFOOTPRINTVAL);
 
 	T_EXPECT_EQ(vm_info.min_address, CANARY,
-	            "task_info --rev1 call returned value 0x%llx for vm_info.min_address. Expected 0x%llx since this value should not "
-	            "be modified by rev1",
-	            vm_info.min_address, CANARY);
+	    "task_info --rev1 call returned value 0x%llx for vm_info.min_address. Expected 0x%llx since this value should not "
+	    "be modified by rev1",
+	    vm_info.min_address, CANARY);
 
 	T_EXPECT_EQ(vm_info.max_address, CANARY,
-	            "task_info --rev1 call returned value 0x%llx for vm_info.max_address. Expected 0x%llx since this value should not "
-	            "be modified by rev1",
-	            vm_info.max_address, CANARY);
+	    "task_info --rev1 call returned value 0x%llx for vm_info.max_address. Expected 0x%llx since this value should not "
+	    "be modified by rev1",
+	    vm_info.max_address, CANARY);
 
 	/*
 	 * Test the REV2 version of TASK_VM_INFO.
@@ -150,19 +150,19 @@ T_DECL(task_vm_info, "tests task vm info", T_META_ASROOT(true), T_META_LTEPHASE(
 	T_EXPECT_NE(vm_info.virtual_size, 0ULL, "task_info --rev2 call does not return 0 for virtual_size\n");
 
 	T_EXPECT_NE(vm_info.phys_footprint, (unsigned long long)TESTPHYSFOOTPRINTVAL,
-	            "task_info --rev2 call returned value %llu for vm_info.phys_footprint.  Expected anything other than %u since this "
-	            "value should be modified by rev2",
-	            vm_info.phys_footprint, TESTPHYSFOOTPRINTVAL);
+	    "task_info --rev2 call returned value %llu for vm_info.phys_footprint.  Expected anything other than %u since this "
+	    "value should be modified by rev2",
+	    vm_info.phys_footprint, TESTPHYSFOOTPRINTVAL);
 
 	T_EXPECT_NE(vm_info.min_address, CANARY,
-	            "task_info --rev2 call returned value 0x%llx for vm_info.min_address. Expected anything other than 0x%llx since "
-	            "this value should be modified by rev2",
-	            vm_info.min_address, CANARY);
+	    "task_info --rev2 call returned value 0x%llx for vm_info.min_address. Expected anything other than 0x%llx since "
+	    "this value should be modified by rev2",
+	    vm_info.min_address, CANARY);
 
 	T_EXPECT_NE(vm_info.max_address, CANARY,
-	            "task_info --rev2 call returned value 0x%llx for vm_info.max_address. Expected anything other than 0x%llx since "
-	            "this value should be modified by rev2",
-	            vm_info.max_address, CANARY);
+	    "task_info --rev2 call returned value 0x%llx for vm_info.max_address. Expected anything other than 0x%llx since "
+	    "this value should be modified by rev2",
+	    vm_info.max_address, CANARY);
 }
 
 T_DECL(host_debug_info, "tests host debug info", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT))
@@ -262,8 +262,8 @@ T_DECL(task_thread_times_info, "tests task thread times info", T_META_ASROOT(tru
 	 */
 
 	T_EXPECT_FALSE((thread_times_info_data_new.user_time.seconds - thread_times_info_data.user_time.seconds) != 0 ||
-	                   (thread_times_info_data_new.system_time.seconds - thread_times_info_data.system_time.seconds) != 0,
-	               "Tests whether the difference between thread times is greater than the allowed limit");
+	    (thread_times_info_data_new.system_time.seconds - thread_times_info_data.system_time.seconds) != 0,
+	    "Tests whether the difference between thread times is greater than the allowed limit");
 
 	/*
 	 * This is a negative case.
@@ -272,7 +272,7 @@ T_DECL(task_thread_times_info, "tests task thread times info", T_META_ASROOT(tru
 	count--;
 	err = task_info(mach_task_self(), TASK_THREAD_TIMES_INFO, (task_info_t)&thread_times_info_data, &count);
 	T_ASSERT_MACH_ERROR(err, KERN_INVALID_ARGUMENT,
-	                    "Negative test case: task_info should verify that count is at least equal to what is defined in API.");
+	    "Negative test case: task_info should verify that count is at least equal to what is defined in API.");
 }
 
 T_DECL(task_absolutetime_info, "tests task absolute time info", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT))
@@ -309,7 +309,7 @@ T_DECL(task_absolutetime_info, "tests task absolute time info", T_META_ASROOT(tr
 	 */
 
 	T_EXPECT_FALSE(user_time_diff < ABSOLUTE_MIN_USER_TIME_DIFF || system_time_diff < ABSOLUTE_MIN_SYSTEM_TIME_DIFF,
-	               "Tests whether the difference between thread times is greater than the expected range");
+	    "Tests whether the difference between thread times is greater than the expected range");
 #endif
 
 	if (absolute_time_info_data.threads_user <= 0) {
@@ -335,7 +335,7 @@ T_DECL(task_absolutetime_info, "tests task absolute time info", T_META_ASROOT(tr
 	 * There is no real way to estimate the exact amount.
 	 */
 	T_EXPECT_NE(absolute_time_info_data.threads_system, 0ULL,
-	            "task_info should return non-zero value for system threads time = %llu", absolute_time_info_data.threads_system);
+	    "task_info should return non-zero value for system threads time = %llu", absolute_time_info_data.threads_system);
 #endif
 
 	/*
@@ -344,7 +344,7 @@ T_DECL(task_absolutetime_info, "tests task absolute time info", T_META_ASROOT(tr
 	count--;
 	err = task_info(mach_task_self(), TASK_ABSOLUTETIME_INFO, (task_info_t)&absolute_time_info_data_new, &count);
 	T_ASSERT_MACH_ERROR(err, KERN_INVALID_ARGUMENT,
-	                    "Negative test case: task_info should verify that count is at least equal to what is defined in API.");
+	    "Negative test case: task_info should verify that count is at least equal to what is defined in API.");
 }
 
 T_DECL(task_affinity_tag_info, "tests task_affinity_tag_info", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT))
@@ -367,15 +367,15 @@ T_DECL(task_affinity_tag_info, "tests task_affinity_tag_info", T_META_ASROOT(tru
 	 * The affinity is not set by default, hence expecting a zero value.
 	 */
 	T_ASSERT_FALSE(affinity_tag_info_data.min != 0 || affinity_tag_info_data.max != 0,
-	               "task_info call returns non-zero min or max value");
+	    "task_info call returns non-zero min or max value");
 
 	/*
-	* This is a negative case.
-	*/
+	 * This is a negative case.
+	 */
 	count--;
 	err = task_info(mach_task_self(), TASK_AFFINITY_TAG_INFO, (task_info_t)&affinity_tag_info_data, &count);
 	T_ASSERT_MACH_ERROR(err, KERN_INVALID_ARGUMENT,
-	                    "Negative test case: task_info should verify that count is at least equal to what is defined in API.");
+	    "Negative test case: task_info should verify that count is at least equal to what is defined in API.");
 }
 
 T_DECL(task_flags_info, "tests task_flags_info", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT))
@@ -396,7 +396,7 @@ T_DECL(task_flags_info, "tests task_flags_info", T_META_ASROOT(true), T_META_LTE
 
 	/* Change for 32-bit arch possibility?*/
 	T_ASSERT_EQ((flags_info_data.flags & (unsigned int)(~(TF_LP64 | TF_64B_DATA))), 0U,
-	            "task_info should only give out 64-bit addr/data flags");
+	    "task_info should only give out 64-bit addr/data flags");
 
 	/*
 	 * This is a negative case.
@@ -405,7 +405,7 @@ T_DECL(task_flags_info, "tests task_flags_info", T_META_ASROOT(true), T_META_LTE
 	count--;
 	err = task_info(mach_task_self(), TASK_FLAGS_INFO, (task_info_t)&flags_info_data, &count);
 	T_ASSERT_MACH_ERROR(err, KERN_INVALID_ARGUMENT,
-	                    "Negative test case: task_info should verify that count is at least equal to what is defined in API.");
+	    "Negative test case: task_info should verify that count is at least equal to what is defined in API.");
 }
 
 T_DECL(task_power_info_v2, "tests task_power_info_v2", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT))
@@ -428,7 +428,7 @@ T_DECL(task_power_info_v2, "tests task_power_info_v2", T_META_ASROOT(true), T_ME
 	T_ASSERT_MACH_SUCCESS(err, "verify task_info call succeeded");
 
 	T_ASSERT_LE(power_info_data_v2.gpu_energy.task_gpu_utilisation, 0ULL,
-	            "verified task_info call shows zero GPU utilization for non-GPU task");
+	    "verified task_info call shows zero GPU utilization for non-GPU task");
 
 	do_factorial_task();
 
@@ -443,14 +443,14 @@ T_DECL(task_power_info_v2, "tests task_power_info_v2", T_META_ASROOT(true), T_ME
 	 * iOS does not have system_time.
 	 */
 	T_ASSERT_GT(power_info_data_v2_new.cpu_energy.total_user, power_info_data_v2.cpu_energy.total_user,
-	            "task_info call returns valid user time");
+	    "task_info call returns valid user time");
 	T_ASSERT_GT(power_info_data_v2_new.cpu_energy.total_system, power_info_data_v2.cpu_energy.total_system,
-	            "task_info call returns valid system time");
+	    "task_info call returns valid system time");
 #endif
 
 	T_ASSERT_GE(power_info_data_v2.cpu_energy.task_interrupt_wakeups, 1ULL,
-	            "verify task_info call returns non-zero value for interrupt_wakeup (ret value = %llu)",
-	            power_info_data_v2.cpu_energy.task_interrupt_wakeups);
+	    "verify task_info call returns non-zero value for interrupt_wakeup (ret value = %llu)",
+	    power_info_data_v2.cpu_energy.task_interrupt_wakeups);
 
 #if !(defined(__arm__) || defined(__arm64__))
 	if (power_info_data_v2.cpu_energy.task_platform_idle_wakeups != 0) {
@@ -470,9 +470,9 @@ T_DECL(task_power_info_v2, "tests task_power_info_v2", T_META_ASROOT(true), T_ME
 	err = task_info(mach_task_self(), TASK_POWER_INFO_V2, (task_info_t)&power_info_data_v2, &count);
 
 	T_ASSERT_MACH_ERROR(err, KERN_INVALID_ARGUMENT,
-	                    "Negative test case: task_info should verify that count is at least equal to what is defined in API. Call "
-	                    "returns errno %d:%s",
-	                    err, mach_error_string(err));
+	    "Negative test case: task_info should verify that count is at least equal to what is defined in API. Call "
+	    "returns errno %d:%s",
+	    err, mach_error_string(err));
 }
 
 T_DECL(test_task_basic_info_32, "tests TASK_BASIC_INFO_32", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT))
@@ -670,7 +670,7 @@ test_task_basic_info(enum info_kind kind)
 		T_EXPECT_EQ(resident_size_diff % 4096, 0ULL, "verify task_info returns valid max resident_size");
 		T_EXPECT_GE(resident_size_diff, 0ULL, "verify task_info returns non-negative max resident_size");
 		T_EXPECT_GE(info_get(kind, GET_MAX_RES, info_data[AFTER]), info_get(kind, GET_RESIDENT_SIZE, info_data[AFTER]),
-		            "verify max resident size is greater than or equal to curr resident size");
+		    "verify max resident size is greater than or equal to curr resident size");
 	}
 
 	do_factorial_task();
@@ -701,7 +701,7 @@ test_task_basic_info(enum info_kind kind)
 	kr = task_info(mach_task_self(), flavor, info_data[AFTER], &count);
 
 	T_ASSERT_MACH_ERROR(kr, KERN_INVALID_ARGUMENT,
-	                    "Negative test case: task_info should verify that count is at least equal to what is defined in API");
+	    "Negative test case: task_info should verify that count is at least equal to what is defined in API");
 
 	/*
 	 * deallocate memory
@@ -715,9 +715,9 @@ test_task_basic_info(enum info_kind kind)
 }
 
 T_DECL(test_sigcont_task_suspend_resume,
-       "test to verify that SIGCONT on task_suspend()-ed process works",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "test to verify that SIGCONT on task_suspend()-ed process works",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	T_SETUPBEGIN;
 	int is_dev = is_development_kernel();
@@ -795,13 +795,12 @@ T_DECL(test_sigcont_task_suspend_resume,
 
 	T_ASSERT_EQ(signal_no, 0, "child should be resumed and exit without signal");
 	T_ASSERT_EQ(exit_status, 0, "child should exit with 0");
-
 }
 
 T_DECL(test_sigcont_task_suspend2_resume,
-       "test to verify that SIGCONT on task_suspend2()-ed process doesn't work",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "test to verify that SIGCONT on task_suspend2()-ed process doesn't work",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	T_SETUPBEGIN;
 	int is_dev = is_development_kernel();
@@ -925,7 +924,6 @@ T_DECL(test_sigcont_task_suspend2_resume,
 
 	T_ASSERT_EQ(signal_no, 0, "child should be resumed and no signal should be returned");
 	T_ASSERT_EQ(exit_status, 0, "child should exit with 0");
-
 }
 
 uint64_t
@@ -1015,24 +1013,24 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		switch (kind) {
 		case INFO_32:
 		case INFO_32_2:
-			return (uint64_t) & (((task_basic_info_32_t)data)->user_time);
+			return (uint64_t) &(((task_basic_info_32_t)data)->user_time);
 #if defined(__arm__) || defined(__arm64__)
 		case INFO_64:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
 
 		case INFO_64_2:
-			return (uint64_t) & (((task_basic_info_64_2_t)data)->user_time);
+			return (uint64_t) &(((task_basic_info_64_2_t)data)->user_time);
 #else
 		case INFO_64:
-			return (uint64_t) & (((task_basic_info_64_t)data)->user_time);
+			return (uint64_t) &(((task_basic_info_64_t)data)->user_time);
 
 		case INFO_64_2:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
 #endif /* defined(__arm__) || defined(__arm64__) */
 		case INFO_MACH:
-			return (uint64_t) & (((mach_task_basic_info_t)data)->user_time);
+			return (uint64_t) &(((mach_task_basic_info_t)data)->user_time);
 
 		case INFO_MAX:
 		default:
@@ -1042,24 +1040,24 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		switch (kind) {
 		case INFO_32:
 		case INFO_32_2:
-			return (uint64_t) & (((task_basic_info_32_t)data)->system_time);
+			return (uint64_t) &(((task_basic_info_32_t)data)->system_time);
 #if defined(__arm__) || defined(__arm64__)
 		case INFO_64:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
 
 		case INFO_64_2:
-			return (uint64_t) & (((task_basic_info_64_2_t)data)->system_time);
+			return (uint64_t) &(((task_basic_info_64_2_t)data)->system_time);
 #else
 		case INFO_64:
-			return (uint64_t) & (((task_basic_info_64_t)data)->system_time);
+			return (uint64_t) &(((task_basic_info_64_t)data)->system_time);
 
 		case INFO_64_2:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
 #endif /* defined(__arm__) || defined(__arm64__) */
 		case INFO_MACH:
-			return (uint64_t) & (((mach_task_basic_info_t)data)->user_time);
+			return (uint64_t) &(((mach_task_basic_info_t)data)->user_time);
 		case INFO_MAX:
 		default:
 			T_ASSERT_FAIL("unhandled info_get %d %d", kind, get);

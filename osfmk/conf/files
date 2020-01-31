@@ -140,6 +140,7 @@ osfmk/kern/ecc_logging.c			optional config_ecc_logging
 osfmk/kern/ktrace_background_notify.c	standard
 osfmk/kern/ledger.c			standard
 osfmk/kern/locks.c			standard
+osfmk/kern/tlock.c			standard
 osfmk/kern/ltable.c			standard
 osfmk/kern/machine.c			standard
 osfmk/kern/mach_node.c			standard
@@ -189,6 +190,7 @@ osfmk/kern/zcache.c		optional config_zcache
 osfmk/kern/gzalloc.c		optional config_gzalloc
 osfmk/kern/bsd_kern.c		optional mach_bsd
 osfmk/kern/hibernate.c		optional hibernation
+osfmk/kern/remote_time.c        standard
 osfmk/kern/memset_s.c		standard
 osfmk/kern/copyout_shim.c	optional copyout_shim
 

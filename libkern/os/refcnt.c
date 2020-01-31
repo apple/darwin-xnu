@@ -33,30 +33,51 @@ ref_grp_name(struct os_refcnt __debug_only *rc)
 	return "<null>";
 }
 
+__attribute__((cold, noinline, not_tail_called, noreturn))
 static void
+os_ref_panic_underflow(struct os_refcnt *rc)
+{
+	panic("os_refcnt: underflow (rc=%p, grp=%s)\n", rc, ref_grp_name(rc));
+	__builtin_unreachable();
+}
+
+static inline void
 os_ref_check_underflow(struct os_refcnt *rc, os_ref_count_t count)
 {
 	if (__improbable(count == 0)) {
-		panic("os_refcnt: underflow (rc=%p, grp=%s)\n", rc, ref_grp_name(rc));
-		__builtin_unreachable();
+		os_ref_panic_underflow(rc);
 	}
 }
 
+__attribute__((cold, noinline, not_tail_called, noreturn))
 static void
+os_ref_panic_resurrection(struct os_refcnt *rc)
+{
+	panic("os_refcnt: used unsafely when zero (rc=%p, grp=%s)\n", rc, ref_grp_name(rc));
+	__builtin_unreachable();
+}
+
+static inline void
 os_ref_assert_referenced(struct os_refcnt *rc, os_ref_count_t count)
 {
 	if (__improbable(count == 0)) {
-		panic("os_refcnt: used unsafely when zero (rc=%p, grp=%s)\n", rc, ref_grp_name(rc));
-		__builtin_unreachable();
+		os_ref_panic_resurrection(rc);
 	}
 }
 
+__attribute__((cold, noinline, not_tail_called, noreturn))
 static void
+os_ref_panic_overflow(struct os_refcnt *rc)
+{
+	panic("os_refcnt: overflow (rc=%p, grp=%s)\n", rc, ref_grp_name(rc));
+	__builtin_unreachable();
+}
+
+static inline void
 os_ref_check_overflow(struct os_refcnt *rc, os_ref_count_t count)
 {
 	if (__improbable(count >= OS_REFCNT_MAX_COUNT)) {
-		panic("os_refcnt: overflow (rc=%p, grp=%s)\n", rc, ref_grp_name(rc));
-		__builtin_unreachable();
+		os_ref_panic_overflow(rc);
 	}
 }
 
@@ -113,17 +134,21 @@ ref_log_init(struct os_refgrp *grp)
 		return;
 	}
 
+	/*
+	 * Enable refcount statistics if the rlog boot-arg is present,
+	 * even when no specific group is logged.
+	 */
+	ref_debug_enable = true;
+
 	const char *g;
 	while ((g = strsep(&refgrp, ",")) != NULL) {
 		if (strcmp(g, grp->grp_name) == 0) {
 			/* enable logging on this refgrp */
 			grp->grp_log = btlog_create(ref_log_nrecords, REFLOG_BTDEPTH, true);
 			assert(grp->grp_log);
-			ref_debug_enable = true;
 			return;
 		}
 	}
-
 }
 
 /*
@@ -210,8 +235,10 @@ os_ref_retain(struct os_refcnt *rc)
 	os_ref_check_retain(rc, old);
 
 #if OS_REFCNT_DEBUG
-	ref_retain_group(rc->ref_group);
-	ref_log_op(rc->ref_group, (void *)rc, REFLOG_RETAIN);
+	if (__improbable(ref_debug_enable)) {
+		ref_retain_group(rc->ref_group);
+		ref_log_op(rc->ref_group, (void *)rc, REFLOG_RETAIN);
+	}
 #endif
 }
 
@@ -227,11 +254,13 @@ os_ref_retain_try(struct os_refcnt *rc)
 
 		os_ref_check_retain(rc, cur);
 
-		if (atomic_compare_exchange_weak_explicit(&rc->ref_count, &cur, cur+1,
-					memory_order_relaxed, memory_order_relaxed)) {
+		if (atomic_compare_exchange_weak_explicit(&rc->ref_count, &cur, cur + 1,
+		    memory_order_relaxed, memory_order_relaxed)) {
 #if OS_REFCNT_DEBUG
-			ref_retain_group(rc->ref_group);
-			ref_log_op(rc->ref_group, (void *)rc, REFLOG_RETAIN);
+			if (__improbable(ref_debug_enable)) {
+				ref_retain_group(rc->ref_group);
+				ref_log_op(rc->ref_group, (void *)rc, REFLOG_RETAIN);
+			}
 #endif
 			return true;
 		}
@@ -247,7 +276,9 @@ os_ref_release_explicit(struct os_refcnt *rc, memory_order release_order, memory
 	 * under us.
 	 */
 	struct os_refgrp *grp = rc->ref_group;
-	ref_log_op(grp, (void *)rc, REFLOG_RELEASE);
+	if (__improbable(ref_debug_enable)) {
+		ref_log_op(grp, (void *)rc, REFLOG_RELEASE);
+	}
 #endif
 
 	os_ref_count_t val = atomic_fetch_sub_explicit(&rc->ref_count, 1, release_order);
@@ -255,12 +286,16 @@ os_ref_release_explicit(struct os_refcnt *rc, memory_order release_order, memory
 	if (__improbable(--val == 0)) {
 		atomic_load_explicit(&rc->ref_count, dealloc_order);
 #if OS_REFCNT_DEBUG
-		ref_log_drop(grp, (void *)rc); /* rc is only used as an identifier */
+		if (__improbable(ref_debug_enable)) {
+			ref_log_drop(grp, (void *)rc); /* rc is only used as an identifier */
+		}
 #endif
 	}
 
 #if OS_REFCNT_DEBUG
-	ref_release_group(grp, !val);
+	if (__improbable(ref_debug_enable)) {
+		ref_release_group(grp, !val);
+	}
 #endif
 
 	return val;
@@ -269,30 +304,33 @@ os_ref_release_explicit(struct os_refcnt *rc, memory_order release_order, memory
 void
 os_ref_retain_locked(struct os_refcnt *rc)
 {
-	os_ref_count_t val = rc->ref_count;
+	os_ref_count_t val = atomic_load_explicit(&rc->ref_count, memory_order_relaxed);
 	os_ref_check_retain(rc, val);
-	rc->ref_count = ++val;
+	atomic_store_explicit(&rc->ref_count, ++val, memory_order_relaxed);
 
 #if OS_REFCNT_DEBUG
-	ref_retain_group(rc->ref_group);
-	ref_log_op(rc->ref_group, (void *)rc, REFLOG_RETAIN);
+	if (__improbable(ref_debug_enable)) {
+		ref_retain_group(rc->ref_group);
+		ref_log_op(rc->ref_group, (void *)rc, REFLOG_RETAIN);
+	}
 #endif
 }
 
 os_ref_count_t
 os_ref_release_locked(struct os_refcnt *rc)
 {
-	os_ref_count_t val = rc->ref_count;
+	os_ref_count_t val = atomic_load_explicit(&rc->ref_count, memory_order_relaxed);
 	os_ref_check_underflow(rc, val);
-	rc->ref_count = --val;
+	atomic_store_explicit(&rc->ref_count, --val, memory_order_relaxed);
 
 #if OS_REFCNT_DEBUG
-	ref_release_group(rc->ref_group, !val);
-	ref_log_op(rc->ref_group, (void *)rc, REFLOG_RELEASE);
-	if (val == 0) {
-		ref_log_drop(rc->ref_group, (void *)rc);
+	if (__improbable(ref_debug_enable)) {
+		ref_release_group(rc->ref_group, !val);
+		ref_log_op(rc->ref_group, (void *)rc, REFLOG_RELEASE);
+		if (val == 0) {
+			ref_log_drop(rc->ref_group, (void *)rc);
+		}
 	}
 #endif
 	return val;
 }
-

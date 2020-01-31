@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright 1993,1995 NeXT Computer Inc. All Rights Reserved */
@@ -63,24 +63,24 @@
  *
  *	@(#)utsname.h	8.1 (Berkeley) 1/4/94
  */
- 
-#ifndef	_SYS_UTSNAME_H
-#define	_SYS_UTSNAME_H
+
+#ifndef _SYS_UTSNAME_H
+#define _SYS_UTSNAME_H
 
 #include <sys/cdefs.h>
 
-#define	_SYS_NAMELEN	256
+#define _SYS_NAMELEN    256
 
-struct	utsname {
-	char	sysname[_SYS_NAMELEN];	/* [XSI] Name of OS */
-	char	nodename[_SYS_NAMELEN];	/* [XSI] Name of this network node */
-	char	release[_SYS_NAMELEN];	/* [XSI] Release level */
-	char	version[_SYS_NAMELEN];	/* [XSI] Version level */
-	char	machine[_SYS_NAMELEN];	/* [XSI] Hardware type */
+struct  utsname {
+	char    sysname[_SYS_NAMELEN];  /* [XSI] Name of OS */
+	char    nodename[_SYS_NAMELEN]; /* [XSI] Name of this network node */
+	char    release[_SYS_NAMELEN];  /* [XSI] Release level */
+	char    version[_SYS_NAMELEN];  /* [XSI] Version level */
+	char    machine[_SYS_NAMELEN];  /* [XSI] Hardware type */
 };
 
 __BEGIN_DECLS
 int uname(struct utsname *);
 __END_DECLS
 
-#endif	/* !_SYS_UTSNAME_H */
+#endif  /* !_SYS_UTSNAME_H */

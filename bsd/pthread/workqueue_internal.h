@@ -90,15 +90,15 @@ typedef union workq_threadreq_param_s {
 		uint8_t trp_pri;
 		uint8_t trp_pol;
 		uint32_t trp_cpupercent: 8,
-				trp_refillms: 24;
+		    trp_refillms: 24;
 	};
 	uint64_t trp_value;
 } workq_threadreq_param_t;
 
-#define TRP_PRIORITY		0x1
-#define TRP_POLICY			0x2
-#define TRP_CPUPERCENT		0x4
-#define TRP_RELEASED		0x8000
+#define TRP_PRIORITY            0x1
+#define TRP_POLICY                      0x2
+#define TRP_CPUPERCENT          0x4
+#define TRP_RELEASED            0x8000
 
 typedef struct workq_threadreq_s {
 	union {
@@ -113,16 +113,16 @@ typedef struct workq_threadreq_s {
 
 TAILQ_HEAD(threadreq_head, workq_threadreq_s);
 
-#define TR_STATE_IDLE		0  /* request isn't in flight       */
-#define TR_STATE_NEW		1  /* request is being initiated    */
-#define TR_STATE_QUEUED		2  /* request is being queued       */
-#define TR_STATE_BINDING	4  /* request is preposted for bind */
+#define TR_STATE_IDLE           0  /* request isn't in flight       */
+#define TR_STATE_NEW            1  /* request is being initiated    */
+#define TR_STATE_QUEUED         2  /* request is being queued       */
+#define TR_STATE_BINDING        4  /* request is preposted for bind */
 
-#define TR_FLAG_KEVENT			0x01
-#define TR_FLAG_WORKLOOP		0x02
-#define TR_FLAG_OVERCOMMIT		0x04
-#define TR_FLAG_WL_PARAMS		0x08
-#define TR_FLAG_WL_OUTSIDE_QOS	0x10
+#define TR_FLAG_KEVENT                  0x01
+#define TR_FLAG_WORKLOOP                0x02
+#define TR_FLAG_OVERCOMMIT              0x04
+#define TR_FLAG_WL_PARAMS               0x08
+#define TR_FLAG_WL_OUTSIDE_QOS  0x10
 
 #if defined(__LP64__)
 typedef unsigned __int128 wq_thactive_t;
@@ -144,27 +144,27 @@ typedef enum {
 TAILQ_HEAD(workq_uthread_head, uthread);
 
 struct workqueue {
-	thread_call_t	wq_delayed_call;
-	thread_call_t	wq_immediate_call;
+	thread_call_t   wq_delayed_call;
+	thread_call_t   wq_immediate_call;
 	thread_call_t   wq_death_call;
 	struct turnstile *wq_turnstile;
 
-	lck_spin_t	wq_lock;
+	lck_spin_t      wq_lock;
 
-	uint64_t	wq_thread_call_last_run;
+	uint64_t        wq_thread_call_last_run;
 	struct os_refcnt wq_refcnt;
 	workq_state_flags_t _Atomic wq_flags;
-	uint32_t	wq_fulfilled;
-	uint32_t	wq_creations;
-	uint32_t	wq_timer_interval;
-	uint32_t	wq_event_manager_priority;
-	uint32_t	wq_reqcount;  /* number of elements on the wq_*_reqlists */
-	uint16_t	wq_thdying_count;
-	uint16_t	wq_threads_scheduled;
-	uint16_t	wq_constrained_threads_scheduled;
-	uint16_t	wq_nthreads;
-	uint16_t	wq_thidlecount;
-	uint16_t	wq_thscheduled_count[WORKQ_NUM_BUCKETS]; // incl. manager
+	uint32_t        wq_fulfilled;
+	uint32_t        wq_creations;
+	uint32_t        wq_timer_interval;
+	uint32_t        wq_event_manager_priority;
+	uint32_t        wq_reqcount;  /* number of elements on the wq_*_reqlists */
+	uint16_t        wq_thdying_count;
+	uint16_t        wq_threads_scheduled;
+	uint16_t        wq_constrained_threads_scheduled;
+	uint16_t        wq_nthreads;
+	uint16_t        wq_thidlecount;
+	uint16_t        wq_thscheduled_count[WORKQ_NUM_BUCKETS]; // incl. manager
 
 	_Atomic wq_thactive_t wq_thactive;
 	_Atomic uint64_t wq_lastblocked_ts[WORKQ_NUM_QOS_BUCKETS];
@@ -183,12 +183,12 @@ struct workqueue {
 };
 
 static_assert(offsetof(struct workqueue, wq_lock) >= sizeof(struct queue_entry),
-		"Make sure workq_deallocate_enqueue can cast the workqueue");
+    "Make sure workq_deallocate_enqueue can cast the workqueue");
 
-#define WORKQUEUE_MAXTHREADS		512
-#define WQ_STALLED_WINDOW_USECS		200
-#define WQ_REDUCE_POOL_WINDOW_USECS	5000000
-#define	WQ_MAX_TIMER_INTERVAL_USECS	50000
+#define WORKQUEUE_MAXTHREADS            512
+#define WQ_STALLED_WINDOW_USECS         200
+#define WQ_REDUCE_POOL_WINDOW_USECS     5000000
+#define WQ_MAX_TIMER_INTERVAL_USECS     50000
 
 #pragma mark definitions
 
@@ -214,15 +214,15 @@ void workq_thread_terminate(struct proc *p, struct uthread *uth);
 
 // called with the kq req lock held
 bool workq_kern_threadreq_initiate(struct proc *p, struct kqrequest *kqr,
-		struct turnstile *ts, thread_qos_t qos, int flags);
+    struct turnstile *ts, thread_qos_t qos, int flags);
 
 // called with the kq req lock held
 void workq_kern_threadreq_modify(struct proc *p, struct kqrequest *kqr,
-		thread_qos_t qos, int flags);
+    thread_qos_t qos, int flags);
 
 // called with the kq req lock held
 void workq_kern_threadreq_update_inheritor(struct proc *p, struct kqrequest *kqr,
-		thread_t owner, struct turnstile *ts, turnstile_update_flags_t flags);
+    thread_t owner, struct turnstile *ts, turnstile_update_flags_t flags);
 
 void workq_kern_threadreq_lock(struct proc *p);
 void workq_kern_threadreq_unlock(struct proc *p);

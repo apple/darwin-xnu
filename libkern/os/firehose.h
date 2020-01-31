@@ -32,7 +32,7 @@ __BEGIN_DECLS
  * @abstract
  * Called by the dispatch firehose apis to notify logd that a chunk is available
  */
-__WATCHOS_AVAILABLE(3.0) __OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __TVOS_AVAILABLE(10.0)
+    __WATCHOS_AVAILABLE(3.0) __OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __TVOS_AVAILABLE(10.0)
 void __firehose_buffer_push_to_logd(firehose_buffer_t fb, bool for_io);
 
 /*!

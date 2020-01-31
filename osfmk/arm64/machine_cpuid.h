@@ -29,19 +29,19 @@
 #define _ARM64_MACHINE_CPUID_H_
 
 typedef struct {
-uint64_t	el0_not_implemented		: 1,
-			el0_aarch64_only		: 1,
-			el0_aarch32_and_64		: 1,
-			el1_not_implemented		: 1,
-			el1_aarch64_only		: 1,
-			el1_aarch32_and_64		: 1,
-			el2_not_implemented		: 1,
-			el2_aarch64_only		: 1,
-			el2_aarch32_and_64		: 1,
-			el3_not_implemented		: 1,
-			el3_aarch64_only		: 1,
-			el3_aarch32_and_64		: 1,
-			reserved				: 52;
+	uint64_t        el0_not_implemented             : 1,
+	    el0_aarch64_only                : 1,
+	    el0_aarch32_and_64              : 1,
+	    el1_not_implemented             : 1,
+	    el1_aarch64_only                : 1,
+	    el1_aarch32_and_64              : 1,
+	    el2_not_implemented             : 1,
+	    el2_aarch64_only                : 1,
+	    el2_aarch32_and_64              : 1,
+	    el3_not_implemented             : 1,
+	    el3_aarch64_only                : 1,
+	    el3_aarch32_and_64              : 1,
+	    reserved                                : 52;
 } arm_feature_bits_t;
 
 /* Debug identification */
@@ -49,15 +49,15 @@ uint64_t	el0_not_implemented		: 1,
 /* ID_AA64DFR0_EL1 */
 typedef union {
 	struct {
-		uint64_t debug_arch_version		: 4,
-				 trace_extn_version		: 4,
-				 perf_extn_version		: 4,
-				 brps					: 4,
-				 reserved0				: 4,
-				 wrps					: 4,
-				 reserved1				: 4,
-				 ctx_cmps				: 4,
-				 reserved32				: 32;
+		uint64_t debug_arch_version             : 4,
+		    trace_extn_version             : 4,
+		    perf_extn_version              : 4,
+		    brps                                   : 4,
+		    reserved0                              : 4,
+		    wrps                                   : 4,
+		    reserved1                              : 4,
+		    ctx_cmps                               : 4,
+		    reserved32                             : 32;
 	} debug_feature;
 	uint64_t value;
 } arm_cpuid_id_aa64dfr0_el1;

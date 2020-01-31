@@ -61,21 +61,38 @@ extern void cpu_quiescent_counter_set_min_interval_us(uint32_t new_value);
 
 /* stub routines for platforms without the counter */
 
-static inline void cpu_quiescent_counter_join(__unused uint64_t ctime) { }
-static inline void cpu_quiescent_counter_leave(__unused uint64_t ctime) { }
-static inline void cpu_quiescent_counter_checkin(__unused uint64_t ctime) { }
-static inline void cpu_quiescent_counter_ast(void) { }
-static inline void cpu_quiescent_counter_init(void) { }
+static inline void
+cpu_quiescent_counter_join(__unused uint64_t ctime)
+{
+}
+static inline void
+cpu_quiescent_counter_leave(__unused uint64_t ctime)
+{
+}
+static inline void
+cpu_quiescent_counter_checkin(__unused uint64_t ctime)
+{
+}
+static inline void
+cpu_quiescent_counter_ast(void)
+{
+}
+static inline void
+cpu_quiescent_counter_init(void)
+{
+}
 
 #endif /* CONFIG_QUIESCE_COUNTER */
 
 #if MACH_ASSERT && CONFIG_QUIESCE_COUNTER
 extern void cpu_quiescent_counter_assert_ast(void);
 #else
-static inline void cpu_quiescent_counter_assert_ast(void) { }
+static inline void
+cpu_quiescent_counter_assert_ast(void)
+{
+}
 #endif
 
 #endif /* XNU_KERNEL_PRIVATE */
 
 #endif /* _KERN_CPU_QUIESCE_H_ */
-

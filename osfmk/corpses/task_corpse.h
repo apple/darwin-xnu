@@ -34,16 +34,16 @@
 #include <kern/kern_cdata.h>
 #include <kern/kcdata.h>
 
-typedef struct kcdata_item	*task_crashinfo_item_t;
+typedef struct kcdata_item      *task_crashinfo_item_t;
 
 /* Deprecated: use the KCDATA_* macros for all future use */
-#define CRASHINFO_ITEM_TYPE(item)		  KCDATA_ITEM_TYPE(item)
-#define CRASHINFO_ITEM_SIZE(item)		  KCDATA_ITEM_SIZE(item)
-#define CRASHINFO_ITEM_DATA_PTR(item)	  KCDATA_ITEM_DATA_PTR(item)
+#define CRASHINFO_ITEM_TYPE(item)                 KCDATA_ITEM_TYPE(item)
+#define CRASHINFO_ITEM_SIZE(item)                 KCDATA_ITEM_SIZE(item)
+#define CRASHINFO_ITEM_DATA_PTR(item)     KCDATA_ITEM_DATA_PTR(item)
 
 #define CRASHINFO_ITEM_NEXT_HEADER(item)  KCDATA_ITEM_NEXT_HEADER(item)
 
-#define CRASHINFO_ITEM_FOREACH(head)	  KCDATA_ITEM_FOREACH(head)
+#define CRASHINFO_ITEM_FOREACH(head)      KCDATA_ITEM_FOREACH(head)
 
 
 #ifndef KERNEL
@@ -69,8 +69,8 @@ extern kern_return_t task_deliver_crash_notification(task_t, thread_t, exception
 extern kcdata_descriptor_t task_get_corpseinfo(task_t task);
 
 extern kcdata_descriptor_t  task_crashinfo_alloc_init(
-					mach_vm_address_t crash_data_p,
-					unsigned size, uint32_t kc_u_flags, unsigned kc_flags);
+	mach_vm_address_t crash_data_p,
+	unsigned size, uint32_t kc_u_flags, unsigned kc_flags);
 extern kern_return_t task_crashinfo_destroy(kcdata_descriptor_t data);
 
 extern void corpses_init(void);
@@ -79,24 +79,24 @@ extern unsigned long total_corpses_count(void);
 extern boolean_t corpses_enabled(void);
 
 extern kern_return_t task_generate_corpse_internal(
-			task_t task,
-			task_t *corpse_task,
-			thread_t *thread,
-			exception_type_t etype,
-			mach_exception_data_type_t code,
-			mach_exception_data_type_t subcode,
-			void *reason);
+	task_t task,
+	task_t *corpse_task,
+	thread_t *thread,
+	exception_type_t etype,
+	mach_exception_data_type_t code,
+	mach_exception_data_type_t subcode,
+	void *reason);
 
 extern void task_clear_corpse(task_t task);
 
 extern kern_return_t task_duplicate_map_and_threads(
-			task_t task,
-			void *p,
-			task_t new_task,
-			thread_t *thread,
-			uint64_t **udata_buffer,
-			int *size,
-			int *num_udata);
+	task_t task,
+	void *p,
+	task_t new_task,
+	thread_t *thread,
+	uint64_t **udata_buffer,
+	int *size,
+	int *num_udata);
 
 extern kern_return_t task_enqueue_exception_with_corpse(
 	task_t task,

@@ -151,7 +151,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
     struct mbuf *control, struct proc *p)
 {
 	u_int32_t ulen = m->m_pkthdr.len;
-	u_int32_t plen = sizeof (struct udphdr) + ulen;
+	u_int32_t plen = sizeof(struct udphdr) + ulen;
 	struct ip6_hdr *ip6;
 	struct udphdr *udp6;
 	struct in6_addr *laddr, *faddr;
@@ -159,10 +159,10 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	int error = 0;
 	struct ip6_pktopts opt, *optp = NULL;
 	struct ip6_moptions *im6o;
-	int af = AF_INET6, hlen = sizeof (struct ip6_hdr);
+	int af = AF_INET6, hlen = sizeof(struct ip6_hdr);
 	int flags;
 	struct sockaddr_in6 tmp;
-	struct	in6_addr storage;
+	struct  in6_addr storage;
 	int sotc = SO_TC_UNSPEC;
 	int netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 	struct ip6_out_args ip6oa;
@@ -194,14 +194,18 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		ip6oa.ip6oa_boundif = in6p->inp_boundifp->if_index;
 		ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
 	}
-	if (INP_NO_CELLULAR(in6p))
+	if (INP_NO_CELLULAR(in6p)) {
 		ip6oa.ip6oa_flags |= IP6OAF_NO_CELLULAR;
-	if (INP_NO_EXPENSIVE(in6p))
+	}
+	if (INP_NO_EXPENSIVE(in6p)) {
 		ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
-	if (INP_AWDL_UNRESTRICTED(in6p))
+	}
+	if (INP_AWDL_UNRESTRICTED(in6p)) {
 		ip6oa.ip6oa_flags |= IP6OAF_AWDL_UNRESTRICTED;
-	if (INP_INTCOPROC_ALLOWED(in6p))
+	}
+	if (INP_INTCOPROC_ALLOWED(in6p)) {
 		ip6oa.ip6oa_flags |= IP6OAF_INTCOPROC_ALLOWED;
+	}
 
 #if CONTENT_FILTER
 	/*
@@ -213,8 +217,8 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		if (cfil_tag) {
 			cfil_sin6 = (struct sockaddr_in6 *)(void *)cfil_faddr;
 			if ((so->so_state_change_cnt != cfil_so_state_change_cnt) &&
-				(in6p->in6p_fport != cfil_sin6->sin6_port ||
-				 !IN6_ARE_ADDR_EQUAL(&in6p->in6p_faddr, &cfil_sin6->sin6_addr))) {
+			    (in6p->in6p_fport != cfil_sin6->sin6_port ||
+			    !IN6_ARE_ADDR_EQUAL(&in6p->in6p_faddr, &cfil_sin6->sin6_addr))) {
 				/*
 				 * Socket is connected but socket state and dest addr/port changed.
 				 * We need to use the saved faddr info.
@@ -228,11 +232,13 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	if (control) {
 		sotc = so_tc_from_control(control, &netsvctype);
 		if ((error = ip6_setpktopts(control, &opt,
-		    NULL, IPPROTO_UDP)) != 0)
+		    NULL, IPPROTO_UDP)) != 0) {
 			goto release;
+		}
 		optp = &opt;
-	} else
+	} else {
 		optp = in6p->in6p_outputopts;
+	}
 
 	if (sotc == SO_TC_UNSPEC) {
 		sotc = so->so_traffic_class;
@@ -302,16 +308,19 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			laddr = in6_selectsrc(sin6, optp,
 			    in6p, &in6p->in6p_route, NULL, &storage,
 			    ip6oa.ip6oa_boundif, &error);
-		} else
-			laddr = &in6p->in6p_laddr;	/* XXX */
+		} else {
+			laddr = &in6p->in6p_laddr;      /* XXX */
+		}
 		if (laddr == NULL) {
-			if (error == 0)
+			if (error == 0) {
 				error = EADDRNOTAVAIL;
+			}
 			goto release;
 		}
 		if (in6p->in6p_lport == 0 &&
-		    (error = in6_pcbsetport(laddr, in6p, p, 0)) != 0)
+		    (error = in6_pcbsetport(laddr, in6p, p, 0)) != 0) {
 			goto release;
+		}
 	} else {
 		if (IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_faddr)) {
 			error = ENOTCONN;
@@ -321,8 +330,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		faddr = &in6p->in6p_faddr;
 		fport = in6p->in6p_fport;
 #if CONTENT_FILTER
-		if (cfil_faddr_use)
-		{
+		if (cfil_faddr_use) {
 			faddr = &((struct sockaddr_in6 *)(void *)cfil_faddr)->sin6_addr;
 			fport = ((struct sockaddr_in6 *)(void *)cfil_faddr)->sin6_port;
 
@@ -343,14 +351,15 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 				    "option was set for a connected socket\n");
 				error = EINVAL;
 				goto release;
-			} else
+			} else {
 				af = AF_INET;
+			}
 		}
-
 	}
 
-	if (in6p->inp_flowhash == 0)
+	if (in6p->inp_flowhash == 0) {
 		in6p->inp_flowhash = inp_calc_flowhash(in6p);
+	}
 	/* update flowinfo - RFC 6437 */
 	if (in6p->inp_flow == 0 && in6p->in6p_flags & IN6P_AUTOFLOWLABEL) {
 		in6p->inp_flow &= ~IPV6_FLOWLABEL_MASK;
@@ -358,11 +367,12 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		    (htonl(in6p->inp_flowhash) & IPV6_FLOWLABEL_MASK);
 	}
 
-	if (af == AF_INET)
-		hlen = sizeof (struct ip);
+	if (af == AF_INET) {
+		hlen = sizeof(struct ip);
+	}
 
 	if (fport == htons(53) && !(so->so_flags1 & SOF1_DNS_COUNTED)) {
-	    	so->so_flags1 |= SOF1_DNS_COUNTED;
+		so->so_flags1 |= SOF1_DNS_COUNTED;
 		INC_ATOMIC_INT64_LIM(net_api_stats.nas_socket_inet_dgram_dns);
 	}
 
@@ -370,7 +380,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	 * Calculate data length and get a mbuf
 	 * for UDP and IP6 headers.
 	 */
-	M_PREPEND(m, hlen + sizeof (struct udphdr), M_DONTWAIT, 1);
+	M_PREPEND(m, hlen + sizeof(struct udphdr), M_DONTWAIT, 1);
 	if (m == 0) {
 		error = ENOBUFS;
 		goto release;
@@ -382,34 +392,36 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	udp6 = (struct udphdr *)(void *)(mtod(m, caddr_t) + hlen);
 	udp6->uh_sport = in6p->in6p_lport; /* lport is always set in the PCB */
 	udp6->uh_dport = fport;
-	if (plen <= 0xffff)
+	if (plen <= 0xffff) {
 		udp6->uh_ulen = htons((u_short)plen);
-	else
+	} else {
 		udp6->uh_ulen = 0;
+	}
 	udp6->uh_sum = 0;
 
 	switch (af) {
 	case AF_INET6:
 		ip6 = mtod(m, struct ip6_hdr *);
-		ip6->ip6_flow	= in6p->inp_flow & IPV6_FLOWINFO_MASK;
-		ip6->ip6_vfc	&= ~IPV6_VERSION_MASK;
-		ip6->ip6_vfc	|= IPV6_VERSION;
-#if 0		/* ip6_plen will be filled in ip6_output. */
-		ip6->ip6_plen	= htons((u_short)plen);
+		ip6->ip6_flow   = in6p->inp_flow & IPV6_FLOWINFO_MASK;
+		ip6->ip6_vfc    &= ~IPV6_VERSION_MASK;
+		ip6->ip6_vfc    |= IPV6_VERSION;
+#if 0           /* ip6_plen will be filled in ip6_output. */
+		ip6->ip6_plen   = htons((u_short)plen);
 #endif
-		ip6->ip6_nxt	= IPPROTO_UDP;
-		ip6->ip6_hlim	= in6_selecthlim(in6p, in6p->in6p_route.ro_rt ?
+		ip6->ip6_nxt    = IPPROTO_UDP;
+		ip6->ip6_hlim   = in6_selecthlim(in6p, in6p->in6p_route.ro_rt ?
 		    in6p->in6p_route.ro_rt->rt_ifp : NULL);
-		ip6->ip6_src	= *laddr;
-		ip6->ip6_dst	= *faddr;
+		ip6->ip6_src    = *laddr;
+		ip6->ip6_dst    = *faddr;
 
 		udp6->uh_sum = in6_pseudo(laddr, faddr,
 		    htonl(plen + IPPROTO_UDP));
-		m->m_pkthdr.csum_flags = (CSUM_UDPIPV6|CSUM_ZERO_INVERT);
+		m->m_pkthdr.csum_flags = (CSUM_UDPIPV6 | CSUM_ZERO_INVERT);
 		m->m_pkthdr.csum_data = offsetof(struct udphdr, uh_sum);
 
-		if (!IN6_IS_ADDR_UNSPECIFIED(laddr))
+		if (!IN6_IS_ADDR_UNSPECIFIED(laddr)) {
 			ip6oa.ip6oa_flags |= IP6OAF_BOUND_SRCADDR;
+		}
 
 		flags = IPV6_OUTARGS;
 
@@ -444,8 +456,8 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 				in6p->inp_route.ro_dst.sa_family = AF_INET6;
 				in6p->inp_route.ro_dst.sa_len = sizeof(struct sockaddr_in6);
 				((struct sockaddr_in6 *)(void *)&in6p->inp_route.ro_dst)->sin6_addr =
-					*faddr;
-	
+				    *faddr;
+
 				rtalloc_scoped(&in6p->inp_route, ip6oa.ip6oa_boundif);
 
 				inp_update_necp_policy(in6p, (struct sockaddr *)&from,
@@ -466,8 +478,9 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			}
 		}
 #endif /* NECP */
-		if ((so->so_flags1 & SOF1_QOSMARKING_ALLOWED))
+		if ((so->so_flags1 & SOF1_QOSMARKING_ALLOWED)) {
 			ip6oa.ip6oa_flags |= IP6OAF_QOSMARKING_ALLOWED;
+		}
 
 #if IPSEC
 		if (in6p->in6p_sp != NULL && ipsec_setsocket(m, so) != 0) {
@@ -478,8 +491,9 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 
 		/* In case of IPv4-mapped address used in previous send */
 		if (ROUTE_UNUSABLE(&in6p->in6p_route) ||
-		    rt_key(in6p->in6p_route.ro_rt)->sa_family != AF_INET6)
+		    rt_key(in6p->in6p_route.ro_rt)->sa_family != AF_INET6) {
 			ROUTE_RELEASE(&in6p->in6p_route);
+		}
 
 		/* Copy the cached route and take an extra reference */
 		in6p_route_copyout(in6p, &ro);
@@ -490,13 +504,15 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		m->m_pkthdr.pkt_flowid = in6p->inp_flowhash;
 		m->m_pkthdr.pkt_proto = IPPROTO_UDP;
 		m->m_pkthdr.pkt_flags |= (PKTF_FLOW_ID | PKTF_FLOW_LOCALSRC);
-		if (flowadv)
+		if (flowadv) {
 			m->m_pkthdr.pkt_flags |= PKTF_FLOW_ADV;
+		}
 		m->m_pkthdr.tx_udp_pid = so->last_pid;
-		if (so->so_flags & SOF_DELEGATED)
+		if (so->so_flags & SOF_DELEGATED) {
 			m->m_pkthdr.tx_udp_e_pid = so->e_pid;
-		else
+		} else {
 			m->m_pkthdr.tx_udp_e_pid = 0;
+		}
 
 		im6o = in6p->in6p_moptions;
 		if (im6o != NULL) {
@@ -517,8 +533,9 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		m = NULL;
 		socket_lock(so, 0);
 
-		if (im6o != NULL)
+		if (im6o != NULL) {
 			IM6O_REMREF(im6o);
+		}
 
 		if (error == 0 && nstat_collect) {
 			boolean_t cell, wifi, wired;
@@ -549,18 +566,19 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		}
 
 		VERIFY(in6p->inp_sndinprog_cnt > 0);
-		if ( --in6p->inp_sndinprog_cnt == 0)
+		if (--in6p->inp_sndinprog_cnt == 0) {
 			in6p->inp_flags &= ~(INP_FC_FEEDBACK);
+		}
 
 		if (ro.ro_rt != NULL) {
 			struct ifnet *outif = ro.ro_rt->rt_ifp;
 
 			so->so_pktheadroom = P2ROUNDUP(
-			    sizeof(struct udphdr) +
-			    hlen +
-			    ifnet_hdrlen(outif) +
-			    ifnet_mbuf_packetpreamblelen(outif),
-			    sizeof(u_int32_t));
+				sizeof(struct udphdr) +
+				hlen +
+				ifnet_hdrlen(outif) +
+				ifnet_mbuf_packetpreamblelen(outif),
+				sizeof(u_int32_t));
 		}
 
 		/* Synchronize PCB cached route */
@@ -570,23 +588,25 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			struct rtentry *rt = in6p->in6p_route.ro_rt;
 			struct ifnet *outif;
 
-			if (rt->rt_flags & RTF_MULTICAST)
-				rt = NULL;	/* unusable */
-
+			if (rt->rt_flags & RTF_MULTICAST) {
+				rt = NULL;      /* unusable */
+			}
 #if CONTENT_FILTER
 			/*
 			 * Discard temporary route for cfil case
 			 */
-			if (cfil_faddr_use)
-				rt = NULL;	/* unusable */
+			if (cfil_faddr_use) {
+				rt = NULL;      /* unusable */
+			}
 #endif
-			
+
 			/*
 			 * Always discard the cached route for unconnected
 			 * socket or if it is a multicast route.
 			 */
-			if (rt == NULL)
+			if (rt == NULL) {
 				ROUTE_RELEASE(&in6p->in6p_route);
+			}
 
 			/*
 			 * If the destination route is unicast, update outif
@@ -597,11 +617,11 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 				in6p->in6p_last_outifp = outif;
 
 				so->so_pktheadroom = P2ROUNDUP(
-				    sizeof(struct udphdr) +
-				    hlen +
-				    ifnet_hdrlen(outif) +
-				    ifnet_mbuf_packetpreamblelen(outif),
-				    sizeof(u_int32_t));
+					sizeof(struct udphdr) +
+					hlen +
+					ifnet_hdrlen(outif) +
+					ifnet_mbuf_packetpreamblelen(outif),
+					sizeof(u_int32_t));
 			}
 		} else {
 			ROUTE_RELEASE(&in6p->in6p_route);
@@ -612,9 +632,10 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		 * socket is denied access to it, generate an event.
 		 */
 		if (error != 0 && (ip6oa.ip6oa_retflags & IP6OARF_IFDENIED) &&
-		    (INP_NO_CELLULAR(in6p) || INP_NO_EXPENSIVE(in6p)))
-			soevent(in6p->inp_socket, (SO_FILT_HINT_LOCKED|
+		    (INP_NO_CELLULAR(in6p) || INP_NO_EXPENSIVE(in6p))) {
+			soevent(in6p->inp_socket, (SO_FILT_HINT_LOCKED |
 			    SO_FILT_HINT_IFDENIED));
+		}
 		break;
 	case AF_INET:
 		error = EAFNOSUPPORT;
@@ -623,18 +644,21 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	goto releaseopt;
 
 release:
-	if (m != NULL)
+	if (m != NULL) {
 		m_freem(m);
+	}
 
 releaseopt:
 	if (control != NULL) {
-		if (optp == &opt)
+		if (optp == &opt) {
 			ip6_clearpktopts(optp, -1);
+		}
 		m_freem(control);
 	}
 #if CONTENT_FILTER
-	if (cfil_tag)
+	if (cfil_tag) {
 		m_tag_free(cfil_tag);
+	}
 #endif
-	return (error);
+	return error;
 }

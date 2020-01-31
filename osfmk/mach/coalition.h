@@ -42,9 +42,9 @@
 
 #define COALITION_CREATE_FLAGS_SET_TYPE(flags, type) \
 	do { \
-		flags &= ~COALITION_CREATE_FLAGS_TYPE_MASK; \
-		flags |= (((type) << COALITION_CREATE_FLAGS_TYPE_SHIFT) \
-			   & COALITION_CREATE_FLAGS_TYPE_MASK); \
+	        flags &= ~COALITION_CREATE_FLAGS_TYPE_MASK; \
+	        flags |= (((type) << COALITION_CREATE_FLAGS_TYPE_SHIFT) \
+	                   & COALITION_CREATE_FLAGS_TYPE_MASK); \
 	} while (0)
 
 #define COALITION_CREATE_FLAGS_ROLE_MASK  ((uint32_t)0xF00)
@@ -55,9 +55,9 @@
 
 #define COALITION_CREATE_FLAGS_SET_ROLE(flags, role) \
     do { \
-        flags &= ~COALITION_CREATE_FLAGS_ROLE_MASK; \
-        flags |= (((role) << COALITION_CREATE_FLAGS_ROLE_SHIFT) \
-               & COALITION_CREATE_FLAGS_ROLE_MASK); \
+	flags &= ~COALITION_CREATE_FLAGS_ROLE_MASK; \
+	flags |= (((role) << COALITION_CREATE_FLAGS_ROLE_SHIFT) \
+	       & COALITION_CREATE_FLAGS_ROLE_MASK); \
     } while (0)
 
 /*
@@ -115,10 +115,10 @@
  * { "Efficient" : COALITION_FLAGS_EFFICIENT, }
  */
 static const char *coalition_efficiency_names[] = {
-    "Efficient",
+	"Efficient",
 };
 static const uint64_t coalition_efficiency_flags[] = {
-    COALITION_FLAGS_EFFICIENT,
+	COALITION_FLAGS_EFFICIENT,
 };
 
 struct coalition_resource_usage {
@@ -141,7 +141,7 @@ struct coalition_resource_usage {
 	uint64_t energy_billed_to_me;
 	uint64_t energy_billed_to_others;
 	uint64_t cpu_ptime;
-	uint64_t cpu_time_eqos_len;	/* Stores the number of thread QoS types */
+	uint64_t cpu_time_eqos_len;     /* Stores the number of thread QoS types */
 	uint64_t cpu_time_eqos[COALITION_NUM_THREAD_QOS_TYPES];
 };
 

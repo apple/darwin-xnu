@@ -6,18 +6,21 @@
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 
-static void* loop(__attribute__ ((unused)) void *arg) {
+static void*
+loop(__attribute__ ((unused)) void *arg)
+{
 	while (1) {
-
 	}
 }
 
 
-static int run_additional_threads(int nthreads) {
+static int
+run_additional_threads(int nthreads)
+{
 	for (int i = 0; i < nthreads; i++) {
 		pthread_t pthread;
 		int err;
-		
+
 		err = pthread_create(&pthread, NULL, loop, NULL);
 		if (err) {
 			return err;
@@ -27,13 +30,16 @@ static int run_additional_threads(int nthreads) {
 	return 0;
 }
 
-static int allocate_and_wire_memory(mach_vm_size_t size) {
+static int
+allocate_and_wire_memory(mach_vm_size_t size)
+{
 	int err;
 	task_t task = mach_task_self();
 	mach_vm_address_t addr;
 
-	if (size <= 0)
+	if (size <= 0) {
 		return 0;
+	}
 
 	err = mach_vm_allocate(task, &addr, size, VM_FLAGS_ANYWHERE);
 	if (err != KERN_SUCCESS) {
@@ -60,7 +66,9 @@ static int allocate_and_wire_memory(mach_vm_size_t size) {
 	return 0;
 }
 
-int main(int argc, char *argv[]) {
+int
+main(int argc, char *argv[])
+{
 	int nthreads = 0;
 	int err;
 	mach_vm_size_t wired_mem = 0;
@@ -71,7 +79,7 @@ int main(int argc, char *argv[]) {
 	if (argc > 2) {
 		wired_mem = (mach_vm_size_t)strtoul(argv[2], NULL, 10);
 	}
-	
+
 	err = allocate_and_wire_memory(wired_mem);
 	if (err) {
 		return err;

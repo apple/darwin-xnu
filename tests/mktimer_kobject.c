@@ -35,7 +35,7 @@ T_DECL(mktimer_kobject, "mktimer_kobject()", T_META_ALL_VALID_ARCHS(true))
 
 	// request a port-destroyed notification on the timer port
 	kr = mach_port_request_notification(mach_task_self(), timer_port, MACH_NOTIFY_PORT_DESTROYED,
-	                                    0, notify_port, MACH_MSG_TYPE_MAKE_SEND_ONCE, &previous);
+	    0, notify_port, MACH_MSG_TYPE_MAKE_SEND_ONCE, &previous);
 	// this should fail!
 	T_ASSERT_NE(kr, KERN_SUCCESS, "notifications should NOT work on mk_timer ports!");
 
@@ -47,4 +47,3 @@ T_DECL(mktimer_kobject, "mktimer_kobject()", T_META_ALL_VALID_ARCHS(true))
 
 	T_LOG("done");
 }
-

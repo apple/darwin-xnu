@@ -156,21 +156,17 @@ Set up your build environment and from the top directory, run:
     $ make cscope   # this will build cscope database
 
 
-Coding styles (Reindenting files)
-=================================
+Code Style
+==========
 
-Source files can be reindented using clang-format setup in .clang-format.
-XNU follows a variant of WebKit style for source code formatting.
-Please refer to format styles at [WebKit website](http://www.webkit.org/coding/coding-style.html). 
-Further options about style options is available at [clang docs](http://clang.llvm.org/docs/ClangFormatStyleOptions.html)
+Source files can be reformatted to comply with the xnu code style using the "restyle" make target invoked from the
+top-level project directory.
 
-  Note: clang-format binary may not be part of base installation. It can be compiled from llvm clang sources and is reachable in $PATH.
+   $ make restyle      # re-format all source files to be xnu code style conformant.
 
-  From the top directory, run:
+Compliance can be checked using the "checkstyle" make target.
 
-   $ make reindent      # reindent all source files using clang format.
-
-
+   $ make checkstyle   # Check all relevant source files for xnu code style conformance.
 
 How to install a new header file from XNU
 =========================================

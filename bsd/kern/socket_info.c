@@ -62,8 +62,9 @@ fill_sockbuf_info(struct sockbuf *sb, struct sockbuf_info *sbi)
 	sbi->sbi_flags = sb->sb_flags;
 	sbi->sbi_timeo = (u_int32_t)(sb->sb_timeo.tv_sec * hz) +
 	    sb->sb_timeo.tv_usec / tick;
-	if (sbi->sbi_timeo == 0 && sb->sb_timeo.tv_usec != 0)
+	if (sbi->sbi_timeo == 0 && sb->sb_timeo.tv_usec != 0) {
 		sbi->sbi_timeo = 1;
+	}
 }
 
 static void
@@ -77,10 +78,11 @@ fill_common_sockinfo(struct socket *so, struct socket_info *si)
 	si->soi_pcb = (u_int64_t)VM_KERNEL_ADDRPERM(so->so_pcb);
 	if (so->so_proto) {
 		si->soi_protocol = SOCK_PROTO(so);
-		if (so->so_proto->pr_domain)
+		if (so->so_proto->pr_domain) {
 			si->soi_family = SOCK_DOM(so);
-		else
+		} else {
 			si->soi_family = 0;
+		}
 	} else {
 		si->soi_protocol = si->soi_family = 0;
 	}
@@ -109,8 +111,9 @@ fill_socketinfo(struct socket *so, struct socket_info *si)
 	fill_common_sockinfo(so, si);
 
 	if (so->so_pcb == NULL || so->so_proto == 0 ||
-	    so->so_proto->pr_domain == NULL)
+	    so->so_proto->pr_domain == NULL) {
 		goto out;
+	}
 
 	/*
 	 * The kind of socket is determined by the triplet
@@ -172,22 +175,25 @@ fill_socketinfo(struct socket *so, struct socket_info *si)
 
 		unsi->unsi_conn_pcb =
 		    (uint64_t)VM_KERNEL_ADDRPERM(unp->unp_conn);
-		if (unp->unp_conn)
+		if (unp->unp_conn) {
 			unsi->unsi_conn_so = (uint64_t)
 			    VM_KERNEL_ADDRPERM(unp->unp_conn->unp_socket);
+		}
 
 		if (unp->unp_addr) {
-			size_t	addrlen = unp->unp_addr->sun_len;
+			size_t  addrlen = unp->unp_addr->sun_len;
 
-			if (addrlen > SOCK_MAXADDRLEN)
+			if (addrlen > SOCK_MAXADDRLEN) {
 				addrlen = SOCK_MAXADDRLEN;
+			}
 			bcopy(unp->unp_addr, &unsi->unsi_addr, addrlen);
 		}
 		if (unp->unp_conn && unp->unp_conn->unp_addr) {
-			size_t	addrlen = unp->unp_conn->unp_addr->sun_len;
+			size_t  addrlen = unp->unp_conn->unp_addr->sun_len;
 
-			if (addrlen > SOCK_MAXADDRLEN)
+			if (addrlen > SOCK_MAXADDRLEN) {
 				addrlen = SOCK_MAXADDRLEN;
+			}
 			bcopy(unp->unp_conn->unp_addr, &unsi->unsi_caddr,
 			    addrlen);
 		}
@@ -235,5 +241,5 @@ fill_socketinfo(struct socket *so, struct socket_info *si)
 out:
 	socket_unlock(so, 0);
 
-	return (error);
+	return error;
 }

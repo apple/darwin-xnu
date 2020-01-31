@@ -71,7 +71,7 @@ mach_host_special_port_description(int port)
 		[HOST_SYSPOLICYD_PORT] = "syspolicyd",
 	};
 	_Static_assert(HOST_SYSPOLICYD_PORT == HOST_MAX_SPECIAL_PORT,
-			"all host special ports must have descriptions");
+	    "all host special ports must have descriptions");
 
 	return hsp_descs[port_index];
 }
@@ -96,7 +96,7 @@ mach_task_special_port_description(int port)
 		[TASK_RESOURCE_NOTIFY_PORT] = "resource notify",
 	};
 	_Static_assert(TASK_RESOURCE_NOTIFY_PORT == TASK_MAX_SPECIAL_PORT,
-			"all task special ports must have descriptions");
+	    "all task special ports must have descriptions");
 
 	return tsp_descs[port_index];
 }
@@ -152,7 +152,7 @@ mach_host_special_port_for_id(const char *id)
 	};
 
 	return port_for_id_internal(id, hsp_ids,
-			sizeof(hsp_ids) / sizeof(hsp_ids[0]));
+	           sizeof(hsp_ids) / sizeof(hsp_ids[0]));
 }
 
 int
@@ -171,5 +171,5 @@ mach_task_special_port_for_id(const char *id)
 	};
 
 	return port_for_id_internal(id, tsp_ids,
-			sizeof(tsp_ids) / sizeof(tsp_ids[0]));
+	           sizeof(tsp_ids) / sizeof(tsp_ids[0]));
 }

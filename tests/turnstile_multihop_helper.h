@@ -18,9 +18,9 @@ __inline static void
 yield(void)
 {
 #if !defined(__x86_64__) && !defined(__i386__)
-	__asm volatile("yield");
+	__asm volatile ("yield");
 #else
-	__asm volatile("pause");
+	__asm volatile ("pause");
 #endif
 }
 
@@ -28,9 +28,9 @@ __inline static void
 wfe(void)
 {
 #if !defined(__x86_64__) && !defined(__i386__)
-	__asm volatile("wfe");
+	__asm volatile ("wfe");
 #else
-	__asm volatile("pause");
+	__asm volatile ("pause");
 #endif
 }
 
@@ -38,9 +38,9 @@ __inline static void
 wfi(void)
 {
 #if !defined(__x86_64__) && !defined(__i386__)
-	__asm volatile("wfi");
+	__asm volatile ("wfi");
 #else
-	__asm volatile("pause");
+	__asm volatile ("pause");
 #endif
 }
 
@@ -48,7 +48,7 @@ __inline static void
 sev(void)
 {
 #if !defined(__x86_64__) && !defined(__i386__)
-	__asm volatile("sev");
+	__asm volatile ("sev");
 #endif
 }
 
@@ -65,7 +65,7 @@ _os_get_self(void)
 	return self;
 }
 
-#define ULL_WAITERS	1U
+#define ULL_WAITERS     1U
 
 static uint32_t lock_no_wait[4] = { 0, 0, 0, 0};
 static uint32_t lock_wait[4] = { 0, 0, 0, 0};
@@ -89,7 +89,7 @@ ull_lock(lock_t *lock, int id, uint opcode, uint flags)
 		if ((count % 100000) == 0) {
 			printf("[%d,%d]%s>top of loop count=%d\n", id, mach_id, __FUNCTION__, count);
 		}
-		u32 new = waiters ? (ULL_WAITERS|ull_locked) : ull_locked;
+		u32 new = waiters ? (ULL_WAITERS | ull_locked) : ull_locked;
 		prev = 0;
 		__c11_atomic_compare_exchange_strong(lock, &prev, new, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
 		if (prev == 0) {
@@ -166,7 +166,7 @@ ull_unlock(lock_t *lock, int id, uint opcode, uint flags)
 		exit(1);
 	}
 
-	if (prev == (ULL_WAITERS|ull_locked)) {
+	if (prev == (ULL_WAITERS | ull_locked)) {
 		/* locked with waiters */
 		*lock = 0;
 		__c11_atomic_thread_fence(__ATOMIC_ACQ_REL);

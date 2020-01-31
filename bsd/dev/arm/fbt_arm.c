@@ -31,12 +31,12 @@
 
 #ifdef KERNEL
 #ifndef _KERNEL
-#define _KERNEL			/* Solaris vs. Darwin */
+#define _KERNEL                 /* Solaris vs. Darwin */
 #endif
 #endif
 
-#define MACH__POSIX_C_SOURCE_PRIVATE 1	/* pulls in suitable savearea from
-					 * mach/ppc/thread_status.h */
+#define MACH__POSIX_C_SOURCE_PRIVATE 1  /* pulls in suitable savearea from
+	                                 * mach/ppc/thread_status.h */
 #include <kern/thread.h>
 #include <mach/thread_status.h>
 #include <arm/proc_reg.h>
@@ -71,31 +71,31 @@
 #define DTRACE_INVOP_THUMB_SET_R7_SKIP 2
 #define DTRACE_INVOP_THUMB_MOV_SP_TO_R7_SKIP 2
 
-#define FBT_IS_THUMB_PUSH_LR(x)		(((x) & 0x0000ff00) == 0x0000b500)
-#define FBT_IS_THUMB_POP_R7(x)		(((x) & 0x0000ff80) == 0x0000bc80)
-#define FBT_IS_THUMB32_POP_R7LR(x,y)	(((x) == 0x0000e8bd) && (((y) & 0x00004080) == 0x00004080))
-#define FBT_IS_THUMB_POP_PC(x)		(((x) & 0x0000ff00) == 0x0000bd00)
-#define FBT_IS_THUMB_SET_R7(x)		(((x) & 0x0000ff00) == 0x0000af00)
-#define FBT_IS_THUMB_MOV_SP_TO_R7(x)		(((x) & 0x0000ffff) == 0x0000466f)
-#define FBT_THUMB_SET_R7_OFFSET(x)	(((x) & 0x000000ff) << 2)
-#define FBT_IS_THUMB_LDR_PC(x)		(((x) & 0x0000f800) == 0x00004800)
-#define FBT_IS_THUMB32_LDR_PC(x,y)	((x) == 0x0000f8df)			/* Only for positive offset PC relative loads */
-#define FBT_THUMB_STACK_REGS(x)		((x) & 0x00FF)
-#define FBT_IS_THUMB_BX_REG(x)		(((x) & 0x0000ff87) == 0x00004700)
+#define FBT_IS_THUMB_PUSH_LR(x)         (((x) & 0x0000ff00) == 0x0000b500)
+#define FBT_IS_THUMB_POP_R7(x)          (((x) & 0x0000ff80) == 0x0000bc80)
+#define FBT_IS_THUMB32_POP_R7LR(x, y)    (((x) == 0x0000e8bd) && (((y) & 0x00004080) == 0x00004080))
+#define FBT_IS_THUMB_POP_PC(x)          (((x) & 0x0000ff00) == 0x0000bd00)
+#define FBT_IS_THUMB_SET_R7(x)          (((x) & 0x0000ff00) == 0x0000af00)
+#define FBT_IS_THUMB_MOV_SP_TO_R7(x)            (((x) & 0x0000ffff) == 0x0000466f)
+#define FBT_THUMB_SET_R7_OFFSET(x)      (((x) & 0x000000ff) << 2)
+#define FBT_IS_THUMB_LDR_PC(x)          (((x) & 0x0000f800) == 0x00004800)
+#define FBT_IS_THUMB32_LDR_PC(x, y)      ((x) == 0x0000f8df)                    /* Only for positive offset PC relative loads */
+#define FBT_THUMB_STACK_REGS(x)         ((x) & 0x00FF)
+#define FBT_IS_THUMB_BX_REG(x)          (((x) & 0x0000ff87) == 0x00004700)
 
-#define	FBT_PATCHVAL			0xdefc
-#define FBT_AFRAMES_ENTRY		8
-#define FBT_AFRAMES_RETURN		6
+#define FBT_PATCHVAL                    0xdefc
+#define FBT_AFRAMES_ENTRY               8
+#define FBT_AFRAMES_RETURN              6
 
-#define	FBT_ENTRY	"entry"
-#define	FBT_RETURN	"return"
-#define	FBT_ADDR2NDX(addr)	((((uintptr_t)(addr)) >> 4) & fbt_probetab_mask)
+#define FBT_ENTRY       "entry"
+#define FBT_RETURN      "return"
+#define FBT_ADDR2NDX(addr)      ((((uintptr_t)(addr)) >> 4) & fbt_probetab_mask)
 
-#define VFPSAVE_ALIGN_DTRACE	16	/* This value should come from VFPSAVE_ALIGN */
+#define VFPSAVE_ALIGN_DTRACE    16      /* This value should come from VFPSAVE_ALIGN */
 
-extern dtrace_provider_id_t	fbt_id;
-extern fbt_probe_t		 **fbt_probetab;
-extern int      		fbt_probetab_mask;
+extern dtrace_provider_id_t     fbt_id;
+extern fbt_probe_t               **fbt_probetab;
+extern int                      fbt_probetab_mask;
 
 kern_return_t fbt_perfCallback(int, struct arm_saved_state *, __unused int, __unused int);
 
@@ -105,25 +105,29 @@ extern int dtrace_arm_condition_true(int cond, int cpsr);
 /* Calculate the address of the ldr. (From the ARM Architecture reference) */
 /* Does not check to see if it's really a load instruction, caller must do that */
 
-static uint32_t thumb_ldr_pc_address(uint32_t address)
+static uint32_t
+thumb_ldr_pc_address(uint32_t address)
 {
 	return (address & 0xFFFFFFFC) + (*(uint16_t*) address & 0xFF) * 4 + 4;
 }
 
-static uint32_t thumb32_ldr_pc_address(uint32_t address)
+static uint32_t
+thumb32_ldr_pc_address(uint32_t address)
 {
-	return (address & 0xFFFFFFFC) + (*(uint16_t*) (address+2) & 0xFFF) + 4;
+	return (address & 0xFFFFFFFC) + (*(uint16_t*) (address + 2) & 0xFFF) + 4;
 }
 
 /* Extract the current ITSTATE from the CPSR */
-static uint32_t get_itstate(uint32_t cpsr)
+static uint32_t
+get_itstate(uint32_t cpsr)
 {
 	return
-		((cpsr & 0x06000000) >> 25) |
-		((cpsr & 0x0000FC00) >> 8);
+	        ((cpsr & 0x06000000) >> 25) |
+	        ((cpsr & 0x0000FC00) >> 8);
 }
 
-static void clear_itstate(uint32_t* cpsr)
+static void
+clear_itstate(uint32_t* cpsr)
 {
 	*cpsr &= ~0x0600FC00;
 }
@@ -136,8 +140,8 @@ fbt_invop(uintptr_t addr, uintptr_t * stack, uintptr_t rval)
 	for (; fbt != NULL; fbt = fbt->fbtp_hashnext) {
 		if ((uintptr_t) fbt->fbtp_patchpoint == addr) {
 			if (0 == CPU->cpu_dtrace_invop_underway) {
-				CPU->cpu_dtrace_invop_underway = 1;	/* Race not possible on
-									 * this per-cpu state */
+				CPU->cpu_dtrace_invop_underway = 1;     /* Race not possible on
+				                                        * this per-cpu state */
 
 				struct arm_saved_state* regs = (struct arm_saved_state*) stack;
 				uintptr_t stack4 = *((uintptr_t*) regs->sp);
@@ -149,7 +153,7 @@ fbt_invop(uintptr_t addr, uintptr_t * stack, uintptr_t rval)
 					 * most of the time we can't do that successfully anyway.
 					 * Instead, we just panic now so we fail fast.
 					 */
-					panic("dtrace: fbt: The probe at %08x was called from FIQ_MODE",(unsigned) addr);
+					panic("dtrace: fbt: The probe at %08x was called from FIQ_MODE", (unsigned) addr);
 				}
 
 				/*
@@ -158,28 +162,29 @@ fbt_invop(uintptr_t addr, uintptr_t * stack, uintptr_t rval)
 				 */
 				uint32_t itstate = get_itstate(regs->cpsr);
 				if ((itstate & 0x7) != 0) {
-					panic("dtrace: fbt: Instruction stream error: Middle of IT block at %08x",(unsigned) addr);
+					panic("dtrace: fbt: Instruction stream error: Middle of IT block at %08x", (unsigned) addr);
 				}
 
 				if (fbt->fbtp_roffset == 0) {
 					/*
-						We need the frames to set up the backtrace, but we won't have the frame pointers
-						until after the instruction is emulated. So here we calculate the address of the
-						frame pointer from the saved instruction and put it in the stack. Yes, we end up
-						repeating this work again when we emulate the instruction.
-
-						This assumes that the frame area is immediately after the saved reg storage!
-					*/
+					 *       We need the frames to set up the backtrace, but we won't have the frame pointers
+					 *       until after the instruction is emulated. So here we calculate the address of the
+					 *       frame pointer from the saved instruction and put it in the stack. Yes, we end up
+					 *       repeating this work again when we emulate the instruction.
+					 *
+					 *       This assumes that the frame area is immediately after the saved reg storage!
+					 */
 					uint32_t offset = ((uint32_t) regs) + sizeof(struct arm_saved_state);
 #if __ARM_VFP__
 					/* Match the stack alignment required for arm_vfpsaved_state */
 					offset &= ~(VFPSAVE_ALIGN_DTRACE - 1);
 					offset += VFPSAVE_ALIGN_DTRACE + sizeof(struct arm_vfpsaved_state);
 #endif /* __ARM_VFP__ */
-					if (FBT_IS_THUMB_SET_R7(fbt->fbtp_savedval))
+					if (FBT_IS_THUMB_SET_R7(fbt->fbtp_savedval)) {
 						*((uint32_t*) offset) = regs->sp + FBT_THUMB_SET_R7_OFFSET(fbt->fbtp_savedval);
-					else
+					} else {
 						*((uint32_t*) offset) = regs->sp;
+					}
 
 					CPU->cpu_dtrace_caller = regs->lr;
 					dtrace_probe(fbt->fbtp_id, regs->r[0], regs->r[1], regs->r[2], regs->r[3], stack4);
@@ -211,15 +216,15 @@ fbt_invop(uintptr_t addr, uintptr_t * stack, uintptr_t rval)
 			}
 
 			/*
-				On other architectures, we return a DTRACE constant to let the callback function
-				know what was replaced. On the ARM, since the function prologue/epilogue machine code
-				can vary, we need the actual bytes of the instruction, so return the savedval instead.
-			*/
-			return (fbt->fbtp_savedval);
+			 *       On other architectures, we return a DTRACE constant to let the callback function
+			 *       know what was replaced. On the ARM, since the function prologue/epilogue machine code
+			 *       can vary, we need the actual bytes of the instruction, so return the savedval instead.
+			 */
+			return fbt->fbtp_savedval;
 		}
 	}
 
-	return (0);
+	return 0;
 }
 
 #define IS_USER_TRAP(regs)  (((regs)->cpsr & PSR_MODE_MASK) == PSR_USER_MODE)
@@ -228,10 +233,10 @@ fbt_invop(uintptr_t addr, uintptr_t * stack, uintptr_t rval)
 
 kern_return_t
 fbt_perfCallback(
-		 int trapno,
-		 struct arm_saved_state * regs,
-		 __unused int unused1,
-		 __unused int unused2)
+	int trapno,
+	struct arm_saved_state * regs,
+	__unused int unused1,
+	__unused int unused2)
 {
 #pragma unused (unused1)
 #pragma unused (unused2)
@@ -243,25 +248,25 @@ fbt_perfCallback(
 
 		oldlevel = ml_set_interrupts_enabled(FALSE);
 
-		__asm__ volatile(
-			"Ldtrace_invop_callsite_pre_label:\n"
-			".data\n"
-			".private_extern _dtrace_invop_callsite_pre\n"
-			"_dtrace_invop_callsite_pre:\n"
-			"  .long Ldtrace_invop_callsite_pre_label\n"
-			".text\n"
-				 );
+		__asm__ volatile (
+                         "Ldtrace_invop_callsite_pre_label:\n"
+                         ".data\n"
+                         ".private_extern _dtrace_invop_callsite_pre\n"
+                         "_dtrace_invop_callsite_pre:\n"
+                         "  .long Ldtrace_invop_callsite_pre_label\n"
+                         ".text\n"
+                );
 
 		emul = dtrace_invop(regs->pc, (uintptr_t*) regs, regs->r[0]);
 
-		__asm__ volatile(
-			"Ldtrace_invop_callsite_post_label:\n"
-			".data\n"
-			".private_extern _dtrace_invop_callsite_post\n"
-			"_dtrace_invop_callsite_post:\n"
-			"  .long Ldtrace_invop_callsite_post_label\n"
-			".text\n"
-				 );
+		__asm__ volatile (
+                         "Ldtrace_invop_callsite_post_label:\n"
+                         ".data\n"
+                         ".private_extern _dtrace_invop_callsite_post\n"
+                         "_dtrace_invop_callsite_post:\n"
+                         "  .long Ldtrace_invop_callsite_post_label\n"
+                         ".text\n"
+                );
 
 		/*
 		 * The following emulation code does not execute properly if we are in the middle of
@@ -271,7 +276,7 @@ fbt_perfCallback(
 		 */
 		uint32_t itstate = get_itstate(regs->cpsr);
 		if (itstate != 0) {
-			panic("dtrace: fbt: Not emulated: Middle of IT block at %08x",(unsigned) regs->pc);
+			panic("dtrace: fbt: Not emulated: Middle of IT block at %08x", (unsigned) regs->pc);
 		}
 
 		if (emul == DTRACE_INVOP_NOP) {
@@ -334,11 +339,11 @@ fbt_perfCallback(
 void
 fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolName, machine_inst_t* symbolStart, machine_inst_t *instrHigh)
 {
-	unsigned int	j;
-        int		doenable = 0;
-	dtrace_id_t	thisid;
+	unsigned int    j;
+	int             doenable = 0;
+	dtrace_id_t     thisid;
 
-	fbt_probe_t	*newfbt, *retfbt, *entryfbt;
+	fbt_probe_t     *newfbt, *retfbt, *entryfbt;
 	machine_inst_t *instr, *pushinstr = NULL, *limit, theInstr;
 	int             foundPushLR, savedRegs;
 
@@ -357,8 +362,7 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 	savedRegs = -1;
 	limit = (machine_inst_t *)instrHigh;
 	for (j = 0, instr = symbolStart, theInstr = 0;
-	     (j < 8) && instr < instrHigh; j++, instr++)
-	{
+	    (j < 8) && instr < instrHigh; j++, instr++) {
 		theInstr = *instr;
 		if (FBT_IS_THUMB_PUSH_LR(theInstr)) {
 			foundPushLR = 1;
@@ -366,17 +370,21 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 			savedRegs = FBT_THUMB_STACK_REGS(theInstr);
 			pushinstr = instr;
 		}
-		if (foundPushLR && (FBT_IS_THUMB_SET_R7(theInstr) || FBT_IS_THUMB_MOV_SP_TO_R7(theInstr)))
+		if (foundPushLR && (FBT_IS_THUMB_SET_R7(theInstr) || FBT_IS_THUMB_MOV_SP_TO_R7(theInstr))) {
 			/* Guard against a random setting of r7 from sp, we make sure we found the push first */
 			break;
-		if (FBT_IS_THUMB_BX_REG(theInstr)) /* We've gone too far, bail. */
+		}
+		if (FBT_IS_THUMB_BX_REG(theInstr)) { /* We've gone too far, bail. */
 			break;
-		if (FBT_IS_THUMB_POP_PC(theInstr)) /* We've gone too far, bail. */
+		}
+		if (FBT_IS_THUMB_POP_PC(theInstr)) { /* We've gone too far, bail. */
 			break;
+		}
 
 		/* Check for 4 byte thumb instruction */
-		if (dtrace_instr_size(theInstr,1) == 4)
+		if (dtrace_instr_size(theInstr, 1) == 4) {
 			instr++;
+		}
 	}
 
 	if (!(foundPushLR && (FBT_IS_THUMB_SET_R7(theInstr) || FBT_IS_THUMB_MOV_SP_TO_R7(theInstr)))) {
@@ -386,7 +394,7 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 	thisid = dtrace_probe_lookup(fbt_id, modname, symbolName, FBT_ENTRY);
 	newfbt = kmem_zalloc(sizeof(fbt_probe_t), KM_SLEEP);
 	newfbt->fbtp_next = NULL;
-	strlcpy( (char *)&(newfbt->fbtp_name), symbolName, MAX_FBTP_NAME_CHARS );
+	strlcpy((char *)&(newfbt->fbtp_name), symbolName, MAX_FBTP_NAME_CHARS );
 
 	if (thisid != 0) {
 		/*
@@ -397,11 +405,12 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 		 * fire, (as indicated by the current patched value), then
 		 * we want to enable this newfbt on the spot.
 		 */
-		entryfbt = dtrace_probe_arg (fbt_id, thisid);
-		ASSERT (entryfbt != NULL);
-		for(; entryfbt != NULL; entryfbt = entryfbt->fbtp_next) {
-			if (entryfbt->fbtp_currentval == entryfbt->fbtp_patchval)
+		entryfbt = dtrace_probe_arg(fbt_id, thisid);
+		ASSERT(entryfbt != NULL);
+		for (; entryfbt != NULL; entryfbt = entryfbt->fbtp_next) {
+			if (entryfbt->fbtp_currentval == entryfbt->fbtp_patchval) {
 				doenable++;
+			}
 
 			if (entryfbt->fbtp_next == NULL) {
 				entryfbt->fbtp_next = newfbt;
@@ -409,8 +418,7 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 				break;
 			}
 		}
-	}
-	else {
+	} else {
 		/*
 		 * The dtrace_probe did not previously exist, so we
 		 * create it and hook in the newfbt.  Since the probe is
@@ -430,8 +438,9 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 	newfbt->fbtp_hashnext = fbt_probetab[FBT_ADDR2NDX(instr)];
 	fbt_probetab[FBT_ADDR2NDX(instr)] = newfbt;
 
-	if (doenable)
+	if (doenable) {
 		fbt_enable(NULL, newfbt->fbtp_id, newfbt);
+	}
 
 	/*
 	 * The fbt entry chain is in place, one entry point per symbol.
@@ -440,7 +449,7 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 	 * Here we find the end of the fbt return chain.
 	 */
 
-	doenable=0;
+	doenable = 0;
 
 	thisid = dtrace_probe_lookup(fbt_id, modname, symbolName, FBT_RETURN);
 
@@ -451,16 +460,17 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 		 * (as indicated by the currrent patched value), then
 		 * we want to enable any new fbts on the spot.
 		 */
-		retfbt = dtrace_probe_arg (fbt_id, thisid);
+		retfbt = dtrace_probe_arg(fbt_id, thisid);
 		ASSERT(retfbt != NULL);
-		for (;  retfbt != NULL; retfbt =  retfbt->fbtp_next) {
-			if (retfbt->fbtp_currentval == retfbt->fbtp_patchval)
+		for (; retfbt != NULL; retfbt =  retfbt->fbtp_next) {
+			if (retfbt->fbtp_currentval == retfbt->fbtp_patchval) {
 				doenable++;
-			if(retfbt->fbtp_next == NULL)
+			}
+			if (retfbt->fbtp_next == NULL) {
 				break;
+			}
 		}
-	}
-	else {
+	} else {
 		doenable = 0;
 		retfbt = NULL;
 	}
@@ -472,8 +482,9 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 	 */
 	instr = pushinstr + 1;
 again:
-	if (instr >= limit)
+	if (instr >= limit) {
 		return;
+	}
 
 	/*
 	 * We (desperately) want to avoid erroneously instrumenting a
@@ -501,8 +512,9 @@ again:
 
 	/* Walked onto the start of the next routine? If so, bail out from this function */
 	if (FBT_IS_THUMB_PUSH_LR(theInstr)) {
-		if (!retfbt)
-			kprintf("dtrace: fbt: No return probe for %s, walked to next routine at %08x\n",symbolName,(unsigned)instr);
+		if (!retfbt) {
+			kprintf("dtrace: fbt: No return probe for %s, walked to next routine at %08x\n", symbolName, (unsigned)instr);
+		}
 		return;
 	}
 
@@ -511,22 +523,25 @@ again:
 	 * of the function. */
 	if (FBT_IS_THUMB_LDR_PC(theInstr)) {
 		uint32_t newlimit = thumb_ldr_pc_address((uint32_t) instr);
-		if (newlimit < (uint32_t) limit)
+		if (newlimit < (uint32_t) limit) {
 			limit = (machine_inst_t*) newlimit;
+		}
 	}
-	if ((instr+1) < limit && FBT_IS_THUMB32_LDR_PC(*instr,*(instr+1))) {
+	if ((instr + 1) < limit && FBT_IS_THUMB32_LDR_PC(*instr, *(instr + 1))) {
 		uint32_t newlimit = thumb32_ldr_pc_address((uint32_t) instr);
-		if (newlimit < (uint32_t) limit)
+		if (newlimit < (uint32_t) limit) {
 			limit = (machine_inst_t*) newlimit;
+		}
 	}
 
 	/* Look for the 1. pop { ..., pc } or 2. pop { ..., r7 } ... bx reg or 3. ldmia.w sp!, { ..., r7, lr } ... bx reg */
 	if (!FBT_IS_THUMB_POP_PC(theInstr) &&
 	    !FBT_IS_THUMB_POP_R7(theInstr) &&
-	    !FBT_IS_THUMB32_POP_R7LR(theInstr,*(instr+1))) {
+	    !FBT_IS_THUMB32_POP_R7LR(theInstr, *(instr + 1))) {
 		instr++;
-		if (dtrace_instr_size(theInstr,1) == 4)
+		if (dtrace_instr_size(theInstr, 1) == 4) {
 			instr++;
+		}
 		goto again;
 	}
 
@@ -535,21 +550,24 @@ again:
 			/* What we're popping doesn't match what we're pushing, assume that we've
 			 * gone too far in the function. Bail.
 			 */
-			kprintf("dtrace: fbt: No return probe for %s, popped regs don't match at %08x\n",symbolName,(unsigned)instr);
+			kprintf("dtrace: fbt: No return probe for %s, popped regs don't match at %08x\n", symbolName, (unsigned)instr);
 			return;
 		}
 	} else {
 		/* Scan ahead for the bx */
 		for (j = 0; (j < 4) && (instr < limit); j++, instr++) {
 			theInstr = *instr;
-			if (FBT_IS_THUMB_BX_REG(theInstr))
+			if (FBT_IS_THUMB_BX_REG(theInstr)) {
 				break;
-			if (dtrace_instr_size(theInstr,1) == 4)
+			}
+			if (dtrace_instr_size(theInstr, 1) == 4) {
 				instr++;
+			}
 		}
 
-		if (!FBT_IS_THUMB_BX_REG(theInstr))
+		if (!FBT_IS_THUMB_BX_REG(theInstr)) {
 			return;
+		}
 	}
 
 	/*
@@ -558,7 +576,7 @@ again:
 
 	newfbt = kmem_zalloc(sizeof(fbt_probe_t), KM_SLEEP);
 	newfbt->fbtp_next = NULL;
-	strlcpy( (char *)&(newfbt->fbtp_name), symbolName, MAX_FBTP_NAME_CHARS );
+	strlcpy((char *)&(newfbt->fbtp_name), symbolName, MAX_FBTP_NAME_CHARS );
 
 	if (retfbt == NULL) {
 		newfbt->fbtp_id = dtrace_probe_create(fbt_id, modname,
@@ -583,10 +601,10 @@ again:
 	newfbt->fbtp_hashnext = fbt_probetab[FBT_ADDR2NDX(instr)];
 	fbt_probetab[FBT_ADDR2NDX(instr)] = newfbt;
 
-	if (doenable)
+	if (doenable) {
 		fbt_enable(NULL, newfbt->fbtp_id, newfbt);
+	}
 
 	instr++;
 	goto again;
 }
-

@@ -14,7 +14,7 @@
  * 3. The name of the author may not be used to endorse or promote
  *    products derived from this software without specific prior
  *    written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESS OR IMPLIED
  * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
  * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, ALL OF
@@ -46,8 +46,9 @@ static void
 read_node(uint8_t *node)
 {
 #if NETWORKING
-	if (uuid_get_ethernet(node) == 0)
+	if (uuid_get_ethernet(node) == 0) {
 		return;
+	}
 #endif /* NETWORKING */
 
 	read_random(node, 6);
@@ -120,7 +121,7 @@ uuid_generate_time(uuid_t out)
 	out[5] = (uint8_t)(time >> 32);
 	out[6] = (uint8_t)(time >> 56);
 	out[7] = (uint8_t)(time >> 48);
- 
+
 	out[6] = (out[6] & 0x0F) | 0x10;
 	out[8] = (out[8] & 0x3F) | 0x80;
 }
@@ -143,52 +144,52 @@ uuid_parse(const uuid_string_t in, uuid_t uu)
 	int n = 0;
 
 	sscanf(in,
-		"%2hhx%2hhx%2hhx%2hhx-"
-		"%2hhx%2hhx-"
-		"%2hhx%2hhx-"
-		"%2hhx%2hhx-"
-		"%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%n",
-		&uu[0], &uu[1], &uu[2], &uu[3],
-		&uu[4], &uu[5],
-		&uu[6], &uu[7],
-		&uu[8], &uu[9],
-		&uu[10], &uu[11], &uu[12], &uu[13], &uu[14], &uu[15], &n);
+	    "%2hhx%2hhx%2hhx%2hhx-"
+	    "%2hhx%2hhx-"
+	    "%2hhx%2hhx-"
+	    "%2hhx%2hhx-"
+	    "%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%n",
+	    &uu[0], &uu[1], &uu[2], &uu[3],
+	    &uu[4], &uu[5],
+	    &uu[6], &uu[7],
+	    &uu[8], &uu[9],
+	    &uu[10], &uu[11], &uu[12], &uu[13], &uu[14], &uu[15], &n);
 
-	return (n != 36 || in[n] != '\0' ? -1 : 0);
+	return n != 36 || in[n] != '\0' ? -1 : 0;
 }
 
 void
 uuid_unparse_lower(const uuid_t uu, uuid_string_t out)
 {
 	snprintf(out,
-		sizeof(uuid_string_t),
-		"%02x%02x%02x%02x-"
-		"%02x%02x-"
-		"%02x%02x-"
-		"%02x%02x-"
-		"%02x%02x%02x%02x%02x%02x",
-		uu[0], uu[1], uu[2], uu[3],
-		uu[4], uu[5],
-		uu[6], uu[7],
-		uu[8], uu[9],
-		uu[10], uu[11], uu[12], uu[13], uu[14], uu[15]);
+	    sizeof(uuid_string_t),
+	    "%02x%02x%02x%02x-"
+	    "%02x%02x-"
+	    "%02x%02x-"
+	    "%02x%02x-"
+	    "%02x%02x%02x%02x%02x%02x",
+	    uu[0], uu[1], uu[2], uu[3],
+	    uu[4], uu[5],
+	    uu[6], uu[7],
+	    uu[8], uu[9],
+	    uu[10], uu[11], uu[12], uu[13], uu[14], uu[15]);
 }
 
 void
 uuid_unparse_upper(const uuid_t uu, uuid_string_t out)
 {
 	snprintf(out,
-		sizeof(uuid_string_t),
-		"%02X%02X%02X%02X-"
-		"%02X%02X-"
-		"%02X%02X-"
-		"%02X%02X-"
-		"%02X%02X%02X%02X%02X%02X",
-		uu[0], uu[1], uu[2], uu[3],
-		uu[4], uu[5],
-		uu[6], uu[7],
-		uu[8], uu[9],
-		uu[10], uu[11], uu[12], uu[13], uu[14], uu[15]);
+	    sizeof(uuid_string_t),
+	    "%02X%02X%02X%02X-"
+	    "%02X%02X-"
+	    "%02X%02X-"
+	    "%02X%02X-"
+	    "%02X%02X%02X%02X%02X%02X",
+	    uu[0], uu[1], uu[2], uu[3],
+	    uu[4], uu[5],
+	    uu[6], uu[7],
+	    uu[8], uu[9],
+	    uu[10], uu[11], uu[12], uu[13], uu[14], uu[15]);
 }
 
 void

@@ -2,7 +2,7 @@
  * Copyright (c) 2006-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -77,11 +77,11 @@
  * limit. This should be changed if kauth routines change.
  *
  * We also want some reasonable maximum, as 32 bits worth of string length
- * is liable to cause problems. At the very least this limit must guarantee 
+ * is liable to cause problems. At the very least this limit must guarantee
  * that any express that contains the 32 bit length from off the wire used in
  * allocations does not overflow.
  */
-#define	NFS_MAX_WHO	MAXPATHLEN
+#define NFS_MAX_WHO     MAXPATHLEN
 
 /*
  * Create the unique client ID to use for this mount.
@@ -121,87 +121,103 @@ nfs4_init_clientid(struct nfsmount *nmp)
 	if (!en0addr_set) {
 		ifnet_t interface = NULL;
 		error = ifnet_find_by_name("en0", &interface);
-		if (!error)
+		if (!error) {
 			error = ifnet_lladdr_copy_bytes(interface, en0addr, sizeof(en0addr));
-		if (error)
+		}
+		if (error) {
 			printf("nfs4_init_clientid: error getting en0 address, %d\n", error);
-		if (!error)
+		}
+		if (!error) {
 			en0addr_set = 1;
-		if (interface)
+		}
+		if (interface) {
 			ifnet_release(interface);
+		}
 	}
 	lck_mtx_unlock(nfs_global_mutex);
 
 	MALLOC(ncip, struct nfs_client_id *, sizeof(struct nfs_client_id), M_TEMP, M_WAITOK);
-	if (!ncip)
-		return (ENOMEM);
+	if (!ncip) {
+		return ENOMEM;
+	}
 
 	vsfs = vfs_statfs(nmp->nm_mountp);
 	saddr = nmp->nm_saddr;
 	ncip->nci_idlen = sizeof(uint32_t) + sizeof(en0addr) + saddr->sa_len +
-		strlen(vsfs->f_mntfromname) + 1 + strlen(vsfs->f_mntonname) + 1;
-	if (ncip->nci_idlen > NFS4_OPAQUE_LIMIT)
+	    strlen(vsfs->f_mntfromname) + 1 + strlen(vsfs->f_mntonname) + 1;
+	if (ncip->nci_idlen > NFS4_OPAQUE_LIMIT) {
 		ncip->nci_idlen = NFS4_OPAQUE_LIMIT;
+	}
 	MALLOC(ncip->nci_id, char *, ncip->nci_idlen, M_TEMP, M_WAITOK);
 	if (!ncip->nci_id) {
 		FREE(ncip, M_TEMP);
-		return (ENOMEM);
+		return ENOMEM;
 	}
 
 	*(uint32_t*)ncip->nci_id = 0;
 	len = sizeof(uint32_t);
-	len2 = min(sizeof(en0addr), ncip->nci_idlen-len);
+	len2 = min(sizeof(en0addr), ncip->nci_idlen - len);
 	bcopy(en0addr, &ncip->nci_id[len], len2);
 	len += sizeof(en0addr);
-	len2 = min(saddr->sa_len, ncip->nci_idlen-len);
+	len2 = min(saddr->sa_len, ncip->nci_idlen - len);
 	bcopy(saddr, &ncip->nci_id[len], len2);
 	len += len2;
 	if (len < ncip->nci_idlen) {
-		len2 = strlcpy(&ncip->nci_id[len], vsfs->f_mntfromname, ncip->nci_idlen-len);
-		if (len2 < (ncip->nci_idlen - len))
+		len2 = strlcpy(&ncip->nci_id[len], vsfs->f_mntfromname, ncip->nci_idlen - len);
+		if (len2 < (ncip->nci_idlen - len)) {
 			len += len2 + 1;
-		else
+		} else {
 			len = ncip->nci_idlen;
+		}
 	}
 	if (len < ncip->nci_idlen) {
-		len2 = strlcpy(&ncip->nci_id[len], vsfs->f_mntonname, ncip->nci_idlen-len);
-		if (len2 < (ncip->nci_idlen - len))
+		len2 = strlcpy(&ncip->nci_id[len], vsfs->f_mntonname, ncip->nci_idlen - len);
+		if (len2 < (ncip->nci_idlen - len)) {
 			len += len2 + 1;
-		else
+		} else {
 			len = ncip->nci_idlen;
+		}
 	}
 
 	/* make sure the ID is unique, and add it to the sorted list */
 	lck_mtx_lock(nfs_global_mutex);
 	TAILQ_FOREACH(ncip2, &nfsclientids, nci_link) {
-		if (ncip->nci_idlen > ncip2->nci_idlen)
+		if (ncip->nci_idlen > ncip2->nci_idlen) {
 			continue;
-		if (ncip->nci_idlen < ncip2->nci_idlen)
+		}
+		if (ncip->nci_idlen < ncip2->nci_idlen) {
 			break;
+		}
 		cmp = bcmp(ncip->nci_id + sizeof(uint32_t),
-			ncip2->nci_id + sizeof(uint32_t),
-			ncip->nci_idlen - sizeof(uint32_t));
-		if (cmp > 0)
+		    ncip2->nci_id + sizeof(uint32_t),
+		    ncip->nci_idlen - sizeof(uint32_t));
+		if (cmp > 0) {
 			continue;
-		if (cmp < 0)
+		}
+		if (cmp < 0) {
 			break;
-		if (*(uint32_t*)ncip->nci_id > *(uint32_t*)ncip2->nci_id)
+		}
+		if (*(uint32_t*)ncip->nci_id > *(uint32_t*)ncip2->nci_id) {
 			continue;
-		if (*(uint32_t*)ncip->nci_id < *(uint32_t*)ncip2->nci_id)
+		}
+		if (*(uint32_t*)ncip->nci_id < *(uint32_t*)ncip2->nci_id) {
 			break;
+		}
 		*(uint32_t*)ncip->nci_id += 1;
 	}
-	if (*(uint32_t*)ncip->nci_id)
+	if (*(uint32_t*)ncip->nci_id) {
 		printf("nfs client ID collision (%d) for %s on %s\n", *(uint32_t*)ncip->nci_id,
-			vsfs->f_mntfromname, vsfs->f_mntonname);
-	if (ncip2)
+		    vsfs->f_mntfromname, vsfs->f_mntonname);
+	}
+	if (ncip2) {
 		TAILQ_INSERT_BEFORE(ncip2, ncip, nci_link);
-	else
+	} else {
 		TAILQ_INSERT_TAIL(&nfsclientids, ncip, nci_link);
+	}
 	nmp->nm_longid = ncip;
 	lck_mtx_unlock(nfs_global_mutex);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -219,7 +235,7 @@ nfs4_setclientid(struct nfsmount *nmp)
 	struct sockaddr_storage ss;
 	void *sinaddr = NULL;
 	char raddr[MAX_IPv6_STR_LEN];
-	char uaddr[MAX_IPv6_STR_LEN+16];
+	char uaddr[MAX_IPv6_STR_LEN + 16];
 	int ualen = 0;
 	in_port_t port;
 
@@ -230,8 +246,9 @@ nfs4_setclientid(struct nfsmount *nmp)
 	nfsm_chain_null(&nmreq);
 	nfsm_chain_null(&nmrep);
 
-	if (!nmp->nm_longid)
+	if (!nmp->nm_longid) {
 		error = nfs4_init_clientid(nmp);
+	}
 
 	// SETCLIENTID
 	numops = 1;
@@ -257,20 +274,22 @@ nfs4_setclientid(struct nfsmount *nmp)
 		if (sinaddr && port && (inet_ntop(ss.ss_family, sinaddr, raddr, sizeof(raddr)) == raddr)) {
 			/* assemble r_addr = universal address (nmp->nm_nso->nso_so source IP addr + port) */
 			ualen = snprintf(uaddr, sizeof(uaddr), "%s.%d.%d", raddr,
-					((port >> 8) & 0xff),
-					(port & 0xff));
+			    ((port >> 8) & 0xff),
+			    (port & 0xff));
 			/* make sure it fit, give up if it didn't */
-			if (ualen >= (int)sizeof(uaddr))
+			if (ualen >= (int)sizeof(uaddr)) {
 				ualen = 0;
+			}
 		}
 	}
 	if (ualen > 0) {
 		/* add callback info */
 		nfsm_chain_add_32(error, &nmreq, NFS4_CALLBACK_PROG); /* callback program */
-		if (ss.ss_family == AF_INET)
+		if (ss.ss_family == AF_INET) {
 			nfsm_chain_add_string(error, &nmreq, "tcp", 3); /* callback r_netid */
-		else if (ss.ss_family == AF_INET6)
+		} else if (ss.ss_family == AF_INET6) {
 			nfsm_chain_add_string(error, &nmreq, "tcp6", 4); /* callback r_netid */
+		}
 		nfsm_chain_add_string(error, &nmreq, uaddr, ualen); /* callback r_addr */
 		nfsm_chain_add_32(error, &nmreq, nmp->nm_cbid); /* callback_ident */
 	} else {
@@ -286,11 +305,13 @@ nfs4_setclientid(struct nfsmount *nmp)
 	error = nfs_request2(NULL, nmp->nm_mountp, &nmreq, NFSPROC4_COMPOUND, thd, cred, NULL, R_SETUP, &nmrep, &xid, &status);
 	nfsm_chain_skip_tag(error, &nmrep);
 	nfsm_chain_get_32(error, &nmrep, numops);
-	if (!error && (numops != 1) && status)
+	if (!error && (numops != 1) && status) {
 		error = status;
+	}
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_SETCLIENTID);
-	if (error == NFSERR_CLID_INUSE)
+	if (error == NFSERR_CLID_INUSE) {
 		printf("nfs4_setclientid: client ID in use?\n");
+	}
 	nfsmout_if(error);
 	nfsm_chain_get_64(error, &nmrep, nmp->nm_clientid);
 	nfsm_chain_get_64(error, &nmrep, verifier);
@@ -312,11 +333,13 @@ nfs4_setclientid(struct nfsmount *nmp)
 	nfsm_chain_skip_tag(error, &nmrep);
 	nfsm_chain_get_32(error, &nmrep, numops);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_SETCLIENTID_CONFIRM);
-	if (error)
+	if (error) {
 		printf("nfs4_setclientid: confirm error %d\n", error);
+	}
 	lck_mtx_lock(&nmp->nm_lock);
-	if (!error)
+	if (!error) {
 		nmp->nm_state |= NFSSTA_CLIENTID;
+	}
 	lck_mtx_unlock(&nmp->nm_lock);
 
 	nfsmout_if(error || !nmp->nm_dnp);
@@ -343,18 +366,21 @@ nfs4_setclientid(struct nfsmount *nmp)
 	lck_mtx_lock(&nmp->nm_lock);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_PUTFH);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
-	if (!error)
+	if (!error) {
 		error = nfs4_parsefattr(&nmrep, &nmp->nm_fsattr, NULL, NULL, NULL, NULL);
+	}
 	lck_mtx_unlock(&nmp->nm_lock);
-	if (error)  /* ignore any error from the getattr */
+	if (error) { /* ignore any error from the getattr */
 		error = 0;
+	}
 nfsmout:
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
 	kauth_cred_unref(&cred);
-	if (error)
+	if (error) {
 		printf("nfs4_setclientid failed, %d\n", error);
-	return (error);
+	}
+	return error;
 }
 
 /*
@@ -385,7 +411,7 @@ nfs4_renew(struct nfsmount *nmp, int rpcflag)
 	nfsm_assert(error, (numops == 0), EPROTO);
 	nfsmout_if(error);
 	error = nfs_request2(NULL, nmp->nm_mountp, &nmreq, NFSPROC4_COMPOUND,
-			current_thread(), cred, NULL, rpcflag, &nmrep, &xid, &status);
+	    current_thread(), cred, NULL, rpcflag, &nmrep, &xid, &status);
 	nfsm_chain_skip_tag(error, &nmrep);
 	nfsm_chain_get_32(error, &nmrep, numops);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_RENEW);
@@ -393,7 +419,7 @@ nfsmout:
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
 	kauth_cred_unref(&cred);
-	return (error);
+	return error;
 }
 
 
@@ -417,10 +443,11 @@ nfs4_renew_timer(void *param0, __unused void *param1)
 
 	error = nfs4_renew(nmp, R_RECOVER);
 out:
-	if (error == ETIMEDOUT)
+	if (error == ETIMEDOUT) {
 		nfs_need_reconnect(nmp);
-	else if (error)
+	} else if (error) {
 		printf("nfs4_renew_timer: error %d\n", error);
+	}
 	lck_mtx_lock(&nmp->nm_lock);
 	if (error && (error != ETIMEDOUT) &&
 	    (nmp->nm_clientid == clientid) && !(nmp->nm_state & NFSSTA_RECOVER)) {
@@ -429,8 +456,9 @@ out:
 	}
 
 	interval = nmp->nm_fsattr.nfsa_lease / (error ? 4 : 2);
-	if ((interval < 1) || (nmp->nm_state & NFSSTA_RECOVER))
+	if ((interval < 1) || (nmp->nm_state & NFSSTA_RECOVER)) {
 		interval = 1;
+	}
 	lck_mtx_unlock(&nmp->nm_lock);
 	nfs_interval_timer_start(nmp->nm_renew_timer, interval * 1000);
 }
@@ -459,8 +487,9 @@ nfs4_secinfo_rpc(struct nfsmount *nmp, struct nfsreq_secinfo_args *siap, kauth_c
 	struct nfsm_chain nmreq, nmrep;
 
 	*seccountp = 0;
-	if (nfs_mount_gone(nmp))
-		return (ENXIO);
+	if (nfs_mount_gone(nmp)) {
+		return ENXIO;
+	}
 	nfsvers = nmp->nm_vers;
 	np = siap->rsia_np;
 
@@ -471,19 +500,23 @@ nfs4_secinfo_rpc(struct nfsmount *nmp, struct nfsreq_secinfo_args *siap, kauth_c
 	fhsize = fhp ? siap->rsia_fhsize : 0;
 	name = siap->rsia_name;
 	namelen = name ? siap->rsia_namelen : 0;
-	if (name && !namelen)
+	if (name && !namelen) {
 		namelen = strlen(name);
+	}
 	if (!fhp && name) {
-		if (!np)  /* use PUTROOTFH */
+		if (!np) { /* use PUTROOTFH */
 			goto gotargs;
+		}
 		fhp = np->n_fhp;
 		fhsize = np->n_fhsize;
 	}
-	if (fhp && name)
+	if (fhp && name) {
 		goto gotargs;
+	}
 
-	if (!np)
-		return (EIO);
+	if (!np) {
+		return EIO;
+	}
 	nfs_node_lock_force(np);
 	if ((vnode_vtype(NFSTOV(np)) != VDIR) && np->n_sillyrename) {
 		/*
@@ -509,14 +542,17 @@ nfs4_secinfo_rpc(struct nfsmount *nmp, struct nfsreq_secinfo_args *siap, kauth_c
 		 * from the n_parent we have stashed away.
 		 */
 		if ((np->n_vattr.nva_flags & NFS_FFLAG_IS_ATTR) &&
-		    (((dvp = np->n_parent)) && (error = vnode_get(dvp))))
+		    (((dvp = np->n_parent)) && (error = vnode_get(dvp)))) {
 			dvp = NULL;
-		if (!dvp)
+		}
+		if (!dvp) {
 			dvp = vnode_getparent(NFSTOV(np));
+		}
 		vname = vnode_getname(NFSTOV(np));
 		if (!dvp || !vname) {
-			if (!error)
+			if (!error) {
 				error = EIO;
+			}
 			nfs_node_unlock(np);
 			goto nfsmout;
 		}
@@ -532,7 +568,7 @@ gotargs:
 	// PUT(ROOT)FH + SECINFO
 	numops = 2;
 	nfsm_chain_build_alloc_init(error, &nmreq,
-		4 * NFSX_UNSIGNED + NFSX_FH(nfsvers) + nfsm_rndup(namelen));
+	    4 * NFSX_UNSIGNED + NFSX_FH(nfsvers) + nfsm_rndup(namelen));
 	nfsm_chain_add_compound_header(error, &nmreq, "secinfo", nmp->nm_minor_vers, numops);
 	numops--;
 	if (fhp) {
@@ -548,7 +584,7 @@ gotargs:
 	nfsm_assert(error, (numops == 0), EPROTO);
 	nfsmout_if(error);
 	error = nfs_request2(np, nmp->nm_mountp, &nmreq, NFSPROC4_COMPOUND,
-			current_thread(), cred, NULL, 0, &nmrep, &xid, &status);
+	    current_thread(), cred, NULL, 0, &nmrep, &xid, &status);
 	nfsm_chain_skip_tag(error, &nmrep);
 	nfsm_chain_get_32(error, &nmrep, numops);
 	nfsm_chain_op_check(error, &nmrep, fhp ? NFS_OP_PUTFH : NFS_OP_PUTROOTFH);
@@ -558,11 +594,13 @@ gotargs:
 nfsmout:
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
-	if (vname)
+	if (vname) {
 		vnode_putname(vname);
-	if (dvp != NULLVP)
+	}
+	if (dvp != NULLVP) {
 		vnode_put(dvp);
-	return (error);
+	}
+	return error;
 }
 
 /*
@@ -598,13 +636,13 @@ nfsm_chain_get_secinfo(struct nfsm_chain *nmc, uint32_t *sec, int *seccountp)
 			nfsmout_if(error);
 			if (val != sizeof(krb5_mech_oid)) {
 				nfsm_chain_adv(error, nmc, val);
-				nfsm_chain_adv(error, nmc, 2*NFSX_UNSIGNED);
+				nfsm_chain_adv(error, nmc, 2 * NFSX_UNSIGNED);
 				break;
 			}
 			nfsm_chain_get_opaque(error, nmc, val, oid); /* OID bytes */
 			nfsmout_if(error);
 			if (bcmp(oid, krb5_mech_oid, sizeof(krb5_mech_oid))) {
-				nfsm_chain_adv(error, nmc, 2*NFSX_UNSIGNED);
+				nfsm_chain_adv(error, nmc, 2 * NFSX_UNSIGNED);
 				break;
 			}
 			nfsm_chain_get_32(error, nmc, val); /* QOP */
@@ -626,9 +664,10 @@ nfsm_chain_get_secinfo(struct nfsm_chain *nmc, uint32_t *sec, int *seccountp)
 		srvcount--;
 	}
 nfsmout:
-	if (!error)
+	if (!error) {
 		*seccountp = seccount;
-	return (error);
+	}
+	return error;
 }
 
 
@@ -656,8 +695,9 @@ nfs4_get_fs_locations(
 		fhp = dnp->n_fhp;
 		fhsize = dnp->n_fhsize;
 	}
-	if (!fhp)
-		return (EINVAL);
+	if (!fhp) {
+		return EINVAL;
+	}
 
 	nfsm_chain_null(&nmreq);
 	nfsm_chain_null(&nmrep);
@@ -681,9 +721,10 @@ nfs4_get_fs_locations(
 	nfsm_assert(error, (numops == 0), EPROTO);
 	nfsmout_if(error);
 	error = nfs_request_async(dnp, nmp->nm_mountp, &nmreq, NFSPROC4_COMPOUND,
-			vfs_context_thread(ctx), vfs_context_ucred(ctx), &si, 0, NULL, &req);
-	if (!error)
+	    vfs_context_thread(ctx), vfs_context_ucred(ctx), &si, 0, NULL, &req);
+	if (!error) {
 		error = nfs_request_async_finish(req, &nmrep, &xid, &status);
+	}
 	nfsm_chain_skip_tag(error, &nmrep);
 	nfsm_chain_get_32(error, &nmrep, numops);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_PUTFH);
@@ -694,7 +735,7 @@ nfs4_get_fs_locations(
 nfsmout:
 	nfsm_chain_cleanup(&nmrep);
 	nfsm_chain_cleanup(&nmreq);
-	return (error);
+	return error;
 }
 
 /*
@@ -775,8 +816,9 @@ nfs4_default_attrs_for_referral_trigger(
 		len = sizeof(fhp->fh_data) - sizeof(dnp);
 		bcopy(name, &fhp->fh_data[0] + sizeof(dnp), MIN(len, namelen));
 		fhp->fh_len = sizeof(dnp) + namelen;
-		if (fhp->fh_len > (int)sizeof(fhp->fh_data))
+		if (fhp->fh_len > (int)sizeof(fhp->fh_data)) {
 			fhp->fh_len = sizeof(fhp->fh_data);
+		}
 	}
 }
 
@@ -789,38 +831,48 @@ nfs_vattr_set_bitmap(struct nfsmount *nmp, uint32_t *bitmap, struct vnode_attr *
 	int i;
 
 	NFS_CLEAR_ATTRIBUTES(bitmap);
-	if (VATTR_IS_ACTIVE(vap, va_data_size))
+	if (VATTR_IS_ACTIVE(vap, va_data_size)) {
 		NFS_BITMAP_SET(bitmap, NFS_FATTR_SIZE);
-	if (VATTR_IS_ACTIVE(vap, va_acl) && (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_ACL))
+	}
+	if (VATTR_IS_ACTIVE(vap, va_acl) && (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_ACL)) {
 		NFS_BITMAP_SET(bitmap, NFS_FATTR_ACL);
+	}
 	if (VATTR_IS_ACTIVE(vap, va_flags)) {
 		NFS_BITMAP_SET(bitmap, NFS_FATTR_ARCHIVE);
 		NFS_BITMAP_SET(bitmap, NFS_FATTR_HIDDEN);
 	}
 	// NFS_BITMAP_SET(bitmap, NFS_FATTR_MIMETYPE)
-	if (VATTR_IS_ACTIVE(vap, va_mode) && !NMFLAG(nmp, ACLONLY))
+	if (VATTR_IS_ACTIVE(vap, va_mode) && !NMFLAG(nmp, ACLONLY)) {
 		NFS_BITMAP_SET(bitmap, NFS_FATTR_MODE);
-	if (VATTR_IS_ACTIVE(vap, va_uid) || VATTR_IS_ACTIVE(vap, va_uuuid))
+	}
+	if (VATTR_IS_ACTIVE(vap, va_uid) || VATTR_IS_ACTIVE(vap, va_uuuid)) {
 		NFS_BITMAP_SET(bitmap, NFS_FATTR_OWNER);
-	if (VATTR_IS_ACTIVE(vap, va_gid) || VATTR_IS_ACTIVE(vap, va_guuid))
+	}
+	if (VATTR_IS_ACTIVE(vap, va_gid) || VATTR_IS_ACTIVE(vap, va_guuid)) {
 		NFS_BITMAP_SET(bitmap, NFS_FATTR_OWNER_GROUP);
+	}
 	// NFS_BITMAP_SET(bitmap, NFS_FATTR_SYSTEM)
 	if (vap->va_vaflags & VA_UTIMES_NULL) {
 		NFS_BITMAP_SET(bitmap, NFS_FATTR_TIME_ACCESS_SET);
 		NFS_BITMAP_SET(bitmap, NFS_FATTR_TIME_MODIFY_SET);
 	} else {
-		if (VATTR_IS_ACTIVE(vap, va_access_time))
+		if (VATTR_IS_ACTIVE(vap, va_access_time)) {
 			NFS_BITMAP_SET(bitmap, NFS_FATTR_TIME_ACCESS_SET);
-		if (VATTR_IS_ACTIVE(vap, va_modify_time))
+		}
+		if (VATTR_IS_ACTIVE(vap, va_modify_time)) {
 			NFS_BITMAP_SET(bitmap, NFS_FATTR_TIME_MODIFY_SET);
+		}
 	}
-	if (VATTR_IS_ACTIVE(vap, va_backup_time))
+	if (VATTR_IS_ACTIVE(vap, va_backup_time)) {
 		NFS_BITMAP_SET(bitmap, NFS_FATTR_TIME_BACKUP);
-	if (VATTR_IS_ACTIVE(vap, va_create_time))
+	}
+	if (VATTR_IS_ACTIVE(vap, va_create_time)) {
 		NFS_BITMAP_SET(bitmap, NFS_FATTR_TIME_CREATE);
+	}
 	/* and limit to what is supported by server */
-	for (i=0; i < NFS_ATTR_BITMAP_LEN; i++)
+	for (i = 0; i < NFS_ATTR_BITMAP_LEN; i++) {
 		bitmap[i] &= nmp->nm_fsattr.nfsa_supp_attr[i];
+	}
 }
 
 /*
@@ -868,22 +920,29 @@ nfs4_ace_nfsflags_to_vfsflags(uint32_t nfsflags)
 {
 	uint32_t vfsflags = 0;
 
-	if (nfsflags & NFS_ACE_FILE_INHERIT_ACE)
+	if (nfsflags & NFS_ACE_FILE_INHERIT_ACE) {
 		vfsflags |= KAUTH_ACE_FILE_INHERIT;
-	if (nfsflags & NFS_ACE_DIRECTORY_INHERIT_ACE)
+	}
+	if (nfsflags & NFS_ACE_DIRECTORY_INHERIT_ACE) {
 		vfsflags |= KAUTH_ACE_DIRECTORY_INHERIT;
-	if (nfsflags & NFS_ACE_NO_PROPAGATE_INHERIT_ACE)
+	}
+	if (nfsflags & NFS_ACE_NO_PROPAGATE_INHERIT_ACE) {
 		vfsflags |= KAUTH_ACE_LIMIT_INHERIT;
-	if (nfsflags & NFS_ACE_INHERIT_ONLY_ACE)
+	}
+	if (nfsflags & NFS_ACE_INHERIT_ONLY_ACE) {
 		vfsflags |= KAUTH_ACE_ONLY_INHERIT;
-	if (nfsflags & NFS_ACE_SUCCESSFUL_ACCESS_ACE_FLAG)
+	}
+	if (nfsflags & NFS_ACE_SUCCESSFUL_ACCESS_ACE_FLAG) {
 		vfsflags |= KAUTH_ACE_SUCCESS;
-	if (nfsflags & NFS_ACE_FAILED_ACCESS_ACE_FLAG)
+	}
+	if (nfsflags & NFS_ACE_FAILED_ACCESS_ACE_FLAG) {
 		vfsflags |= KAUTH_ACE_FAILURE;
-	if (nfsflags & NFS_ACE_INHERITED_ACE)
+	}
+	if (nfsflags & NFS_ACE_INHERITED_ACE) {
 		vfsflags |= KAUTH_ACE_INHERITED;
+	}
 
-	return (vfsflags);
+	return vfsflags;
 }
 
 uint32_t
@@ -891,22 +950,29 @@ nfs4_ace_vfsflags_to_nfsflags(uint32_t vfsflags)
 {
 	uint32_t nfsflags = 0;
 
-	if (vfsflags & KAUTH_ACE_FILE_INHERIT)
+	if (vfsflags & KAUTH_ACE_FILE_INHERIT) {
 		nfsflags |= NFS_ACE_FILE_INHERIT_ACE;
-	if (vfsflags & KAUTH_ACE_DIRECTORY_INHERIT)
+	}
+	if (vfsflags & KAUTH_ACE_DIRECTORY_INHERIT) {
 		nfsflags |= NFS_ACE_DIRECTORY_INHERIT_ACE;
-	if (vfsflags & KAUTH_ACE_LIMIT_INHERIT)
+	}
+	if (vfsflags & KAUTH_ACE_LIMIT_INHERIT) {
 		nfsflags |= NFS_ACE_NO_PROPAGATE_INHERIT_ACE;
-	if (vfsflags & KAUTH_ACE_ONLY_INHERIT)
+	}
+	if (vfsflags & KAUTH_ACE_ONLY_INHERIT) {
 		nfsflags |= NFS_ACE_INHERIT_ONLY_ACE;
-	if (vfsflags & KAUTH_ACE_SUCCESS)
+	}
+	if (vfsflags & KAUTH_ACE_SUCCESS) {
 		nfsflags |= NFS_ACE_SUCCESSFUL_ACCESS_ACE_FLAG;
-	if (vfsflags & KAUTH_ACE_FAILURE)
+	}
+	if (vfsflags & KAUTH_ACE_FAILURE) {
 		nfsflags |= NFS_ACE_FAILED_ACCESS_ACE_FLAG;
-	if (vfsflags & KAUTH_ACE_INHERITED)
+	}
+	if (vfsflags & KAUTH_ACE_INHERITED) {
 		nfsflags |= NFS_ACE_INHERITED_ACE;
+	}
 
-	return (nfsflags);
+	return nfsflags;
 }
 
 /*
@@ -917,48 +983,68 @@ nfs4_ace_nfsmask_to_vfsrights(uint32_t nfsmask)
 {
 	uint32_t vfsrights = 0;
 
-	if (nfsmask & NFS_ACE_READ_DATA)
+	if (nfsmask & NFS_ACE_READ_DATA) {
 		vfsrights |= KAUTH_VNODE_READ_DATA;
-	if (nfsmask & NFS_ACE_LIST_DIRECTORY)
+	}
+	if (nfsmask & NFS_ACE_LIST_DIRECTORY) {
 		vfsrights |= KAUTH_VNODE_LIST_DIRECTORY;
-	if (nfsmask & NFS_ACE_WRITE_DATA)
+	}
+	if (nfsmask & NFS_ACE_WRITE_DATA) {
 		vfsrights |= KAUTH_VNODE_WRITE_DATA;
-	if (nfsmask & NFS_ACE_ADD_FILE)
+	}
+	if (nfsmask & NFS_ACE_ADD_FILE) {
 		vfsrights |= KAUTH_VNODE_ADD_FILE;
-	if (nfsmask & NFS_ACE_APPEND_DATA)
+	}
+	if (nfsmask & NFS_ACE_APPEND_DATA) {
 		vfsrights |= KAUTH_VNODE_APPEND_DATA;
-	if (nfsmask & NFS_ACE_ADD_SUBDIRECTORY)
+	}
+	if (nfsmask & NFS_ACE_ADD_SUBDIRECTORY) {
 		vfsrights |= KAUTH_VNODE_ADD_SUBDIRECTORY;
-	if (nfsmask & NFS_ACE_READ_NAMED_ATTRS)
+	}
+	if (nfsmask & NFS_ACE_READ_NAMED_ATTRS) {
 		vfsrights |= KAUTH_VNODE_READ_EXTATTRIBUTES;
-	if (nfsmask & NFS_ACE_WRITE_NAMED_ATTRS)
+	}
+	if (nfsmask & NFS_ACE_WRITE_NAMED_ATTRS) {
 		vfsrights |= KAUTH_VNODE_WRITE_EXTATTRIBUTES;
-	if (nfsmask & NFS_ACE_EXECUTE)
+	}
+	if (nfsmask & NFS_ACE_EXECUTE) {
 		vfsrights |= KAUTH_VNODE_EXECUTE;
-	if (nfsmask & NFS_ACE_DELETE_CHILD)
+	}
+	if (nfsmask & NFS_ACE_DELETE_CHILD) {
 		vfsrights |= KAUTH_VNODE_DELETE_CHILD;
-	if (nfsmask & NFS_ACE_READ_ATTRIBUTES)
+	}
+	if (nfsmask & NFS_ACE_READ_ATTRIBUTES) {
 		vfsrights |= KAUTH_VNODE_READ_ATTRIBUTES;
-	if (nfsmask & NFS_ACE_WRITE_ATTRIBUTES)
+	}
+	if (nfsmask & NFS_ACE_WRITE_ATTRIBUTES) {
 		vfsrights |= KAUTH_VNODE_WRITE_ATTRIBUTES;
-	if (nfsmask & NFS_ACE_DELETE)
+	}
+	if (nfsmask & NFS_ACE_DELETE) {
 		vfsrights |= KAUTH_VNODE_DELETE;
-	if (nfsmask & NFS_ACE_READ_ACL)
+	}
+	if (nfsmask & NFS_ACE_READ_ACL) {
 		vfsrights |= KAUTH_VNODE_READ_SECURITY;
-	if (nfsmask & NFS_ACE_WRITE_ACL)
+	}
+	if (nfsmask & NFS_ACE_WRITE_ACL) {
 		vfsrights |= KAUTH_VNODE_WRITE_SECURITY;
-	if (nfsmask & NFS_ACE_WRITE_OWNER)
+	}
+	if (nfsmask & NFS_ACE_WRITE_OWNER) {
 		vfsrights |= KAUTH_VNODE_CHANGE_OWNER;
-	if (nfsmask & NFS_ACE_SYNCHRONIZE)
+	}
+	if (nfsmask & NFS_ACE_SYNCHRONIZE) {
 		vfsrights |= KAUTH_VNODE_SYNCHRONIZE;
-	if ((nfsmask & NFS_ACE_GENERIC_READ) == NFS_ACE_GENERIC_READ)
+	}
+	if ((nfsmask & NFS_ACE_GENERIC_READ) == NFS_ACE_GENERIC_READ) {
 		vfsrights |= KAUTH_ACE_GENERIC_READ;
-	if ((nfsmask & NFS_ACE_GENERIC_WRITE) == NFS_ACE_GENERIC_WRITE)
+	}
+	if ((nfsmask & NFS_ACE_GENERIC_WRITE) == NFS_ACE_GENERIC_WRITE) {
 		vfsrights |= KAUTH_ACE_GENERIC_WRITE;
-	if ((nfsmask & NFS_ACE_GENERIC_EXECUTE) == NFS_ACE_GENERIC_EXECUTE)
+	}
+	if ((nfsmask & NFS_ACE_GENERIC_EXECUTE) == NFS_ACE_GENERIC_EXECUTE) {
 		vfsrights |= KAUTH_ACE_GENERIC_EXECUTE;
+	}
 
-	return (vfsrights);
+	return vfsrights;
 }
 
 uint32_t
@@ -966,50 +1052,71 @@ nfs4_ace_vfsrights_to_nfsmask(uint32_t vfsrights)
 {
 	uint32_t nfsmask = 0;
 
-	if (vfsrights & KAUTH_VNODE_READ_DATA)
+	if (vfsrights & KAUTH_VNODE_READ_DATA) {
 		nfsmask |= NFS_ACE_READ_DATA;
-	if (vfsrights & KAUTH_VNODE_LIST_DIRECTORY)
+	}
+	if (vfsrights & KAUTH_VNODE_LIST_DIRECTORY) {
 		nfsmask |= NFS_ACE_LIST_DIRECTORY;
-	if (vfsrights & KAUTH_VNODE_WRITE_DATA)
+	}
+	if (vfsrights & KAUTH_VNODE_WRITE_DATA) {
 		nfsmask |= NFS_ACE_WRITE_DATA;
-	if (vfsrights & KAUTH_VNODE_ADD_FILE)
+	}
+	if (vfsrights & KAUTH_VNODE_ADD_FILE) {
 		nfsmask |= NFS_ACE_ADD_FILE;
-	if (vfsrights & KAUTH_VNODE_APPEND_DATA)
+	}
+	if (vfsrights & KAUTH_VNODE_APPEND_DATA) {
 		nfsmask |= NFS_ACE_APPEND_DATA;
-	if (vfsrights & KAUTH_VNODE_ADD_SUBDIRECTORY)
+	}
+	if (vfsrights & KAUTH_VNODE_ADD_SUBDIRECTORY) {
 		nfsmask |= NFS_ACE_ADD_SUBDIRECTORY;
-	if (vfsrights & KAUTH_VNODE_READ_EXTATTRIBUTES)
+	}
+	if (vfsrights & KAUTH_VNODE_READ_EXTATTRIBUTES) {
 		nfsmask |= NFS_ACE_READ_NAMED_ATTRS;
-	if (vfsrights & KAUTH_VNODE_WRITE_EXTATTRIBUTES)
+	}
+	if (vfsrights & KAUTH_VNODE_WRITE_EXTATTRIBUTES) {
 		nfsmask |= NFS_ACE_WRITE_NAMED_ATTRS;
-	if (vfsrights & KAUTH_VNODE_EXECUTE)
+	}
+	if (vfsrights & KAUTH_VNODE_EXECUTE) {
 		nfsmask |= NFS_ACE_EXECUTE;
-	if (vfsrights & KAUTH_VNODE_DELETE_CHILD)
+	}
+	if (vfsrights & KAUTH_VNODE_DELETE_CHILD) {
 		nfsmask |= NFS_ACE_DELETE_CHILD;
-	if (vfsrights & KAUTH_VNODE_READ_ATTRIBUTES)
+	}
+	if (vfsrights & KAUTH_VNODE_READ_ATTRIBUTES) {
 		nfsmask |= NFS_ACE_READ_ATTRIBUTES;
-	if (vfsrights & KAUTH_VNODE_WRITE_ATTRIBUTES)
+	}
+	if (vfsrights & KAUTH_VNODE_WRITE_ATTRIBUTES) {
 		nfsmask |= NFS_ACE_WRITE_ATTRIBUTES;
-	if (vfsrights & KAUTH_VNODE_DELETE)
+	}
+	if (vfsrights & KAUTH_VNODE_DELETE) {
 		nfsmask |= NFS_ACE_DELETE;
-	if (vfsrights & KAUTH_VNODE_READ_SECURITY)
+	}
+	if (vfsrights & KAUTH_VNODE_READ_SECURITY) {
 		nfsmask |= NFS_ACE_READ_ACL;
-	if (vfsrights & KAUTH_VNODE_WRITE_SECURITY)
+	}
+	if (vfsrights & KAUTH_VNODE_WRITE_SECURITY) {
 		nfsmask |= NFS_ACE_WRITE_ACL;
-	if (vfsrights & KAUTH_VNODE_CHANGE_OWNER)
+	}
+	if (vfsrights & KAUTH_VNODE_CHANGE_OWNER) {
 		nfsmask |= NFS_ACE_WRITE_OWNER;
-	if (vfsrights & KAUTH_VNODE_SYNCHRONIZE)
+	}
+	if (vfsrights & KAUTH_VNODE_SYNCHRONIZE) {
 		nfsmask |= NFS_ACE_SYNCHRONIZE;
-	if (vfsrights & KAUTH_ACE_GENERIC_READ)
+	}
+	if (vfsrights & KAUTH_ACE_GENERIC_READ) {
 		nfsmask |= NFS_ACE_GENERIC_READ;
-	if (vfsrights & KAUTH_ACE_GENERIC_WRITE)
+	}
+	if (vfsrights & KAUTH_ACE_GENERIC_WRITE) {
 		nfsmask |= NFS_ACE_GENERIC_WRITE;
-	if (vfsrights & KAUTH_ACE_GENERIC_EXECUTE)
+	}
+	if (vfsrights & KAUTH_ACE_GENERIC_EXECUTE) {
 		nfsmask |= NFS_ACE_GENERIC_EXECUTE;
-	if (vfsrights & KAUTH_ACE_GENERIC_ALL)
-		nfsmask |= (KAUTH_ACE_GENERIC_READ|KAUTH_ACE_GENERIC_WRITE|NFS_ACE_GENERIC_EXECUTE);
+	}
+	if (vfsrights & KAUTH_ACE_GENERIC_ALL) {
+		nfsmask |= (KAUTH_ACE_GENERIC_READ | KAUTH_ACE_GENERIC_WRITE | NFS_ACE_GENERIC_EXECUTE);
+	}
 
-	return (nfsmask);
+	return nfsmask;
 }
 
 /*
@@ -1022,8 +1129,9 @@ nfs4_wkid2sid(const char *id, ntsid_t *sp)
 {
 	size_t len = strnlen(id, MAXIDNAMELEN);
 
-	if (len == MAXIDNAMELEN || id[len-1] != '@')
-		return (EINVAL);
+	if (len == MAXIDNAMELEN || id[len - 1] != '@') {
+		return EINVAL;
+	}
 
 	bzero(sp, sizeof(ntsid_t));
 	sp->sid_kind = 1;
@@ -1073,7 +1181,7 @@ nfs4_wkid2sid(const char *id, ntsid_t *sp)
 		sp->sid_authority[5] = 0;
 		sp->sid_authorities[0] = 0;
 	}
-	return (0);
+	return 0;
 }
 
 static int
@@ -1082,31 +1190,34 @@ nfs4_fallback_name(const char *id, int have_at)
 	if (have_at) {
 		/* must be user@domain */
 		/* try to identify some well-known IDs */
-		if (!strncmp(id, "root@", 5))
-			return (0);
-		else if (!strncmp(id, "wheel@", 6))
-			return (0);
-		else if (!strncmp(id, "nobody@", 7))
-			return (-2);
-		else if (!strncmp(id, "nfsnobody@", 10))
-			return (-2);
+		if (!strncmp(id, "root@", 5)) {
+			return 0;
+		} else if (!strncmp(id, "wheel@", 6)) {
+			return 0;
+		} else if (!strncmp(id, "nobody@", 7)) {
+			return -2;
+		} else if (!strncmp(id, "nfsnobody@", 10)) {
+			return -2;
+		}
 	}
-	return (-2);
+	return -2;
 }
 
 static void
 nfs4_mapid_log(int error, const char *idstr, int isgroup, guid_t *gp)
 {
-	if (error && (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_FAILED_MAPPINGS))
-		printf("nfs4_id2guid: idmap failed for %s %s error %d\n",  idstr, isgroup ? "G" : " ", error);
-	if (!error && (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS))
+	if (error && (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_FAILED_MAPPINGS)) {
+		printf("nfs4_id2guid: idmap failed for %s %s error %d\n", idstr, isgroup ? "G" : " ", error);
+	}
+	if (!error && (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS)) {
 		printf("nfs4_id2guid: idmap for %s %s got guid "
-		       "%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x\n",
-		       idstr, isgroup ? "G" : " ",
-		       gp->g_guid[0], gp->g_guid[1], gp->g_guid[2], gp->g_guid[3],
-		       gp->g_guid[4], gp->g_guid[5], gp->g_guid[6], gp->g_guid[7],
-		       gp->g_guid[8], gp->g_guid[9], gp->g_guid[10], gp->g_guid[11],
-		       gp->g_guid[12], gp->g_guid[13], gp->g_guid[14], gp->g_guid[15]);
+		    "%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x\n",
+		    idstr, isgroup ? "G" : " ",
+		    gp->g_guid[0], gp->g_guid[1], gp->g_guid[2], gp->g_guid[3],
+		    gp->g_guid[4], gp->g_guid[5], gp->g_guid[6], gp->g_guid[7],
+		    gp->g_guid[8], gp->g_guid[9], gp->g_guid[10], gp->g_guid[11],
+		    gp->g_guid[12], gp->g_guid[13], gp->g_guid[14], gp->g_guid[15]);
+	}
 }
 
 static char *
@@ -1119,10 +1230,12 @@ nfs4_map_domain(char *id, char **atp)
 	size_t otw_id_2_at_len;
 	int error;
 
-	if (at == NULL)
+	if (at == NULL) {
 		at = strchr(id, '@');
-	if (at == NULL || *at != '@')
-		return (NULL);
+	}
+	if (at == NULL || *at != '@') {
+		return NULL;
+	}
 
 	otw_nfs4domain = at + 1;
 	otw_domain_len = strnlen(otw_nfs4domain, MAXPATHLEN);
@@ -1154,14 +1267,14 @@ nfs4_map_domain(char *id, char **atp)
 			*at = '\0';
 		}
 	}
-	FREE_ZONE(dsnode, MAXPATHLEN,  M_NAMEI);
+	FREE_ZONE(dsnode, MAXPATHLEN, M_NAMEI);
 
 	if (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS) {
 		printf("nfs4_id2guid: after domain mapping id is %s\n", id);
 	}
 
 	*atp = at;
-	return (new_id);
+	return new_id;
 }
 
 /*
@@ -1188,22 +1301,25 @@ nfs4_id2guid(/*const*/ char *id, guid_t *guidp, int isgroup)
 	at = NULL;
 	p = id;
 	while (*p) {
-		if ((*p < '0') || (*p > '9'))
+		if ((*p < '0') || (*p > '9')) {
 			num = 0;
-		if (*p == '@')
+		}
+		if (*p == '@') {
 			at = p;
+		}
 		p++;
 	}
 
 	if (num) {
 		/* must be numeric ID (or empty) */
 		num = *id ? strtol(id, NULL, 10) : -2;
-		if (isgroup)
+		if (isgroup) {
 			error = kauth_cred_gid2guid((gid_t)num, guidp);
-		else
+		} else {
 			error = kauth_cred_uid2guid((uid_t)num, guidp);
+		}
 		nfs4_mapid_log(error, id, isgroup, guidp);
-		return (error);
+		return error;
 	}
 
 	/* See if this is a well known NFSv4 name */
@@ -1211,14 +1327,15 @@ nfs4_id2guid(/*const*/ char *id, guid_t *guidp, int isgroup)
 	if (!error) {
 		error = kauth_cred_ntsid2guid(&sid, guidp);
 		nfs4_mapid_log(error, id, 1, guidp);
-		return (error);
+		return error;
 	}
 
 	/* Handle nfs4 domain first */
 	if (at && at[1]) {
 		new_id = nfs4_map_domain(id, &at);
-		if (new_id)
+		if (new_id) {
 			id = new_id;
+		}
 	}
 
 	/* Now try to do actual id mapping */
@@ -1228,10 +1345,11 @@ nfs4_id2guid(/*const*/ char *id, guid_t *guidp, int isgroup)
 		 *
 		 * [sigh] this isn't a "pwnam/grnam" it's an NFS ID string!
 		 */
-		if (isgroup)
+		if (isgroup) {
 			error = kauth_cred_grnam2guid(id, guidp);
-		else
+		} else {
 			error = kauth_cred_pwnam2guid(id, guidp);
+		}
 		nfs4_mapid_log(error, id, isgroup, guidp);
 	} else {
 		error = ENOTSUP;
@@ -1242,23 +1360,26 @@ nfs4_id2guid(/*const*/ char *id, guid_t *guidp, int isgroup)
 		 * fallback path... see if we can come up with an answer ourselves.
 		 */
 		num = nfs4_fallback_name(id, at != NULL);
-		if (isgroup)
+		if (isgroup) {
 			error = kauth_cred_gid2guid((gid_t)num, guidp);
-		else
+		} else {
 			error = kauth_cred_uid2guid((uid_t)num, guidp);
-		nfs4_mapid_log(error, id,  isgroup, guidp);
+		}
+		nfs4_mapid_log(error, id, isgroup, guidp);
 	}
 
 
 	/* restore @ symbol in case we clobered for unscoped lookup */
-	if (at && *at == '\0')
+	if (at && *at == '\0') {
 		*at = '@';
+	}
 
 	/* free mapped domain id string */
-	if (new_id)
+	if (new_id) {
 		FREE(new_id, M_TEMP);
+	}
 
-	return (error);
+	return error;
 }
 
 /*
@@ -1274,57 +1395,63 @@ nfs4_sid2wkid(ntsid_t *sp)
 	if ((sp->sid_kind == 1) && (sp->sid_authcount == 1)) {
 		/* check if it's one of our well-known ACE WHO names */
 		if (sp->sid_authority[5] == 0) {
-			if (sp->sid_authorities[0] == 0) // S-1-0-0
-				return ("nobody@localdomain");
+			if (sp->sid_authorities[0] == 0) { // S-1-0-0
+				return "nobody@localdomain";
+			}
 		} else if (sp->sid_authority[5] == 1) {
-			if (sp->sid_authorities[0] == 0) // S-1-1-0
-				return ("EVERYONE@");
+			if (sp->sid_authorities[0] == 0) { // S-1-1-0
+				return "EVERYONE@";
+			}
 		} else if (sp->sid_authority[5] == 3) {
-			if (sp->sid_authorities[0] == 0) // S-1-3-0
-				return ("OWNER@");
-			else if (sp->sid_authorities[0] == 1) // S-1-3-1
-				return ("GROUP@");
+			if (sp->sid_authorities[0] == 0) { // S-1-3-0
+				return "OWNER@";
+			} else if (sp->sid_authorities[0] == 1) { // S-1-3-1
+				return "GROUP@";
+			}
 		} else if (sp->sid_authority[5] == 5) {
-			if (sp->sid_authorities[0] == 1) // S-1-5-1
-				return ("DIALUP@");
-			else if (sp->sid_authorities[0] == 2) // S-1-5-2
-				return ("NETWORK@");
-			else if (sp->sid_authorities[0] == 3) // S-1-5-3
-				return ("BATCH@");
-			else if (sp->sid_authorities[0] == 4) // S-1-5-4
-				return ("INTERACTIVE@");
-			else if (sp->sid_authorities[0] == 6) // S-1-5-6
-				return ("SERVICE@");
-			else if (sp->sid_authorities[0] == 7) // S-1-5-7
-				return ("ANONYMOUS@");
-			else if (sp->sid_authorities[0] == 11) // S-1-5-11
-				return ("AUTHENTICATED@");
+			if (sp->sid_authorities[0] == 1) { // S-1-5-1
+				return "DIALUP@";
+			} else if (sp->sid_authorities[0] == 2) { // S-1-5-2
+				return "NETWORK@";
+			} else if (sp->sid_authorities[0] == 3) { // S-1-5-3
+				return "BATCH@";
+			} else if (sp->sid_authorities[0] == 4) { // S-1-5-4
+				return "INTERACTIVE@";
+			} else if (sp->sid_authorities[0] == 6) { // S-1-5-6
+				return "SERVICE@";
+			} else if (sp->sid_authorities[0] == 7) { // S-1-5-7
+				return "ANONYMOUS@";
+			} else if (sp->sid_authorities[0] == 11) { // S-1-5-11
+				return "AUTHENTICATED@";
+			}
 		}
 	}
-	return (NULL);
+	return NULL;
 }
 
 static void
 nfs4_mapguid_log(int error, const char *where, guid_t *gp, int isgroup, const char *idstr)
 {
-	if (error && (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_FAILED_MAPPINGS))
+	if (error && (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_FAILED_MAPPINGS)) {
 		printf("nfs4_guid2id: %s idmap failed for "
-		       "%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x %s "
-		       "error %d\n", where,
-		       gp->g_guid[0], gp->g_guid[1], gp->g_guid[2], gp->g_guid[3],
-		       gp->g_guid[4], gp->g_guid[5], gp->g_guid[6], gp->g_guid[7],
-		       gp->g_guid[8], gp->g_guid[9], gp->g_guid[10], gp->g_guid[11],
-		       gp->g_guid[12], gp->g_guid[13], gp->g_guid[14], gp->g_guid[15],
-		       isgroup ? "G" : " ", error);
-	if (!error && (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS))
+		    "%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x %s "
+		    "error %d\n", where,
+		    gp->g_guid[0], gp->g_guid[1], gp->g_guid[2], gp->g_guid[3],
+		    gp->g_guid[4], gp->g_guid[5], gp->g_guid[6], gp->g_guid[7],
+		    gp->g_guid[8], gp->g_guid[9], gp->g_guid[10], gp->g_guid[11],
+		    gp->g_guid[12], gp->g_guid[13], gp->g_guid[14], gp->g_guid[15],
+		    isgroup ? "G" : " ", error);
+	}
+	if (!error && (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS)) {
 		printf("nfs4_guid2id: %s idmap for "
-		       "%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x %s "
-		       "got ID %s\n", where,
-		       gp->g_guid[0], gp->g_guid[1], gp->g_guid[2], gp->g_guid[3],
-		       gp->g_guid[4], gp->g_guid[5], gp->g_guid[6], gp->g_guid[7],
-		       gp->g_guid[8], gp->g_guid[9], gp->g_guid[10], gp->g_guid[11],
-		       gp->g_guid[12], gp->g_guid[13], gp->g_guid[14], gp->g_guid[15],
-		       isgroup ? "G" : " ", idstr);
+		    "%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x %s "
+		    "got ID %s\n", where,
+		    gp->g_guid[0], gp->g_guid[1], gp->g_guid[2], gp->g_guid[3],
+		    gp->g_guid[4], gp->g_guid[5], gp->g_guid[6], gp->g_guid[7],
+		    gp->g_guid[8], gp->g_guid[9], gp->g_guid[10], gp->g_guid[11],
+		    gp->g_guid[12], gp->g_guid[13], gp->g_guid[14], gp->g_guid[15],
+		    isgroup ? "G" : " ", idstr);
+	}
 }
 
 static int
@@ -1336,8 +1463,9 @@ nfs4_addv4domain(char *id, size_t *idlen)
 	size_t idsize;
 
 
-	if (id == NULL || *id == '\0')
-		return (EINVAL);
+	if (id == NULL || *id == '\0') {
+		return EINVAL;
+	}
 
 	for (cp = id; *cp != '\0'; cp++) {
 		if (*cp == '@') {
@@ -1346,7 +1474,7 @@ nfs4_addv4domain(char *id, size_t *idlen)
 		}
 	}
 
-	have_domain = (at  && at[1] != '\0');
+	have_domain = (at && at[1] != '\0');
 
 	if (have_domain) {
 		char *dsnode = at + 1;
@@ -1369,10 +1497,11 @@ nfs4_addv4domain(char *id, size_t *idlen)
 			at[1] = '\0';
 			/* Add our mapped_domain */
 			idsize = strlcat(id, mapped_domain, *idlen);
-			if (*idlen > idsize)
+			if (*idlen > idsize) {
 				*idlen = idsize;
-			else
+			} else {
 				error = ENOSPC;
+			}
 		}
 		FREE_ZONE(nfs4domain, MAXPATHLEN, M_NAMEI);
 	} else if (at == NULL) {
@@ -1386,19 +1515,21 @@ nfs4_addv4domain(char *id, size_t *idlen)
 		if (default_domain_len) {
 			strlcat(id, "@", *idlen);
 			idsize = strlcat(id, nfs4_default_domain, *idlen);
-			if (*idlen > idsize)
+			if (*idlen > idsize) {
 				*idlen = idsize;
-			else
+			} else {
 				error = ENOSPC;
+			}
 		} else {
 			; /* Unscoped name otw */
 		}
 	}
 
-	if (!error && nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS)
+	if (!error && nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS) {
 		printf("nfs4_guid2id: id after nfs4 domain map: %s[%zd].\n", id, *idlen);
+	}
 
-	return (error);
+	return error;
 }
 
 static char *
@@ -1408,22 +1539,24 @@ nfs4_fallback_id(int numid, int isgrp, char *buf, size_t size)
 
 	if (!(nfs_idmap_ctrl & NFS_IDMAP_CTRL_FALLBACK_NO_COMMON_IDS)) {
 		/* map well known uid's to strings */
-		if (numid == 0)
+		if (numid == 0) {
 			idp = isgrp ? "wheel" : "root";
-		else if (numid == -2)
+		} else if (numid == -2) {
 			idp = "nobody";
+		}
 	}
 	if (!idp) {
 		/* or just use a decimal number string. */
-		snprintf(buf, size-1, "%d", numid);
-		buf[size-1] = '\0';
+		snprintf(buf, size - 1, "%d", numid);
+		buf[size - 1] = '\0';
 	} else {
 		size_t idplen = strlcpy(buf, idp, size);
-		if (idplen >= size)
-			return (NULL);
+		if (idplen >= size) {
+			return NULL;
+		}
 	}
 
-	return (buf);
+	return buf;
 }
 
 /*
@@ -1435,7 +1568,7 @@ int
 nfs4_guid2id(guid_t *guidp, char *id, size_t *idlen, int isgroup)
 {
 	int  error = 0;
-	size_t id1len,  len;
+	size_t id1len, len;
 	char *id1buf, *id1;
 	char numbuf[32];
 	ntsid_t sid;
@@ -1455,7 +1588,7 @@ nfs4_guid2id(guid_t *guidp, char *id, size_t *idlen, int isgroup)
 			error = (len < *idlen) ? 0 : ENOSPC;
 			*idlen = len;
 			nfs4_mapguid_log(error, "kauth_cred_guid2ntsid", guidp, 1, id);
-			return (error);
+			return error;
 		}
 	} else {
 		nfs4_mapguid_log(error, "kauth_cred_guid2ntsid", guidp, isgroup, NULL);
@@ -1483,12 +1616,14 @@ nfs4_guid2id(guid_t *guidp, char *id, size_t *idlen, int isgroup)
 			id1len = *idlen;
 		}
 
-		if (isgroup)
+		if (isgroup) {
 			error = kauth_cred_guid2grnam(guidp, id1);
-		else
+		} else {
 			error = kauth_cred_guid2pwnam(guidp, id1);
-		if (error)
+		}
+		if (error) {
 			nfs4_mapguid_log(error, "kauth_cred2[pw|gr]nam", guidp, isgroup, id1);
+		}
 	} else {
 		error = ENOTSUP;
 	}
@@ -1500,38 +1635,41 @@ nfs4_guid2id(guid_t *guidp, char *id, size_t *idlen, int isgroup)
 		uid_t uid;
 
 		/* OK, let's just try mapping it to a UID/GID */
-		if (isgroup)
+		if (isgroup) {
 			error = kauth_cred_guid2gid(guidp, (gid_t*)&uid);
-		else
+		} else {
 			error = kauth_cred_guid2uid(guidp, &uid);
+		}
 		if (!error) {
 			char *fbidp = nfs4_fallback_id(uid, isgroup, numbuf, sizeof(numbuf));
-			if (fbidp == NULL)
+			if (fbidp == NULL) {
 				error = ENOSPC;
-			else
+			} else {
 				id1 = fbidp;
+			}
 		}
 	} else {
-		error =	nfs4_addv4domain(id1, &id1len);
+		error = nfs4_addv4domain(id1, &id1len);
 	}
 
 	if (!error) {
-
 		if (id1 != id) {
 			/* copy idmap result to output buffer */
 			len = strlcpy(id, id1, *idlen);
-			if (len >= *idlen)
+			if (len >= *idlen) {
 				error = ENOSPC;
-			else
+			} else {
 				*idlen = len;
+			}
 		}
 	}
-	nfs4_mapguid_log(error, "End of routine",  guidp, isgroup, id1);
+	nfs4_mapguid_log(error, "End of routine", guidp, isgroup, id1);
 
-	if (id1buf)
+	if (id1buf) {
 		FREE_ZONE(id1buf, MAXPATHLEN, M_NAMEI);
+	}
 
-	return (error);
+	return error;
 }
 
 /*
@@ -1540,26 +1678,35 @@ nfs4_guid2id(guid_t *guidp, char *id, size_t *idlen, int isgroup)
 void
 nfs_vattr_set_supported(uint32_t *bitmap, struct vnode_attr *vap)
 {
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TYPE))
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TYPE)) {
 		VATTR_SET_SUPPORTED(vap, va_type);
+	}
 	// if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_CHANGE))
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_SIZE))
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_SIZE)) {
 		VATTR_SET_SUPPORTED(vap, va_data_size);
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_FSID))
+	}
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_FSID)) {
 		VATTR_SET_SUPPORTED(vap, va_fsid);
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_ACL))
+	}
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_ACL)) {
 		VATTR_SET_SUPPORTED(vap, va_acl);
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_ARCHIVE))
+	}
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_ARCHIVE)) {
 		VATTR_SET_SUPPORTED(vap, va_flags);
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_FILEID))
+	}
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_FILEID)) {
 		VATTR_SET_SUPPORTED(vap, va_fileid);
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_HIDDEN))
+	}
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_HIDDEN)) {
 		VATTR_SET_SUPPORTED(vap, va_flags);
+	}
 	// if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_MIMETYPE))
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_MODE))
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_MODE)) {
 		VATTR_SET_SUPPORTED(vap, va_mode);
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_NUMLINKS))
+	}
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_NUMLINKS)) {
 		VATTR_SET_SUPPORTED(vap, va_nlink);
+	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_OWNER)) {
 		VATTR_SET_SUPPORTED(vap, va_uid);
 		VATTR_SET_SUPPORTED(vap, va_uuuid);
@@ -1568,21 +1715,28 @@ nfs_vattr_set_supported(uint32_t *bitmap, struct vnode_attr *vap)
 		VATTR_SET_SUPPORTED(vap, va_gid);
 		VATTR_SET_SUPPORTED(vap, va_guuid);
 	}
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_RAWDEV))
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_RAWDEV)) {
 		VATTR_SET_SUPPORTED(vap, va_rdev);
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_SPACE_USED))
+	}
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_SPACE_USED)) {
 		VATTR_SET_SUPPORTED(vap, va_total_alloc);
+	}
 	// if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_SYSTEM))
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_ACCESS))
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_ACCESS)) {
 		VATTR_SET_SUPPORTED(vap, va_access_time);
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_BACKUP))
+	}
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_BACKUP)) {
 		VATTR_SET_SUPPORTED(vap, va_backup_time);
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_CREATE))
+	}
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_CREATE)) {
 		VATTR_SET_SUPPORTED(vap, va_create_time);
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_METADATA))
+	}
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_METADATA)) {
 		VATTR_SET_SUPPORTED(vap, va_change_time);
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_MODIFY))
+	}
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_MODIFY)) {
 		VATTR_SET_SUPPORTED(vap, va_modify_time);
+	}
 }
 
 /*
@@ -1612,14 +1766,18 @@ nfs4_parsefattr(
 	struct sockaddr_storage ss;
 
 	/* if not interested in some values... throw 'em into a local dummy variable */
-	if (!nfsap)
+	if (!nfsap) {
 		nfsap = &nfsa_dummy;
-	if (!nvap)
+	}
+	if (!nvap) {
 		nvap = &nva_dummy;
-	if (!dqbp)
+	}
+	if (!dqbp) {
 		dqbp = &dqb_dummy;
-	if (!nfslsp)
+	}
+	if (!nfslsp) {
 		nfslsp = &nfsls_dummy;
+	}
 	bzero(nfslsp, sizeof(*nfslsp));
 
 	attrbytes = val = val2 = val3 = 0;
@@ -1630,7 +1788,7 @@ nfs4_parsefattr(
 	len = NFS_ATTR_BITMAP_LEN;
 	nfsm_chain_get_bitmap(error, nmc, bitmap, len);
 	/* add bits to object/fs attr bitmaps */
-	for (i=0; i < NFS_ATTR_BITMAP_LEN; i++) {
+	for (i = 0; i < NFS_ATTR_BITMAP_LEN; i++) {
 		nvap->nva_bitmap[i] |= bitmap[i] & nfs_object_attr_bitmap[i];
 		nfsap->nfsa_bitmap[i] |= bitmap[i] & nfs_fs_attr_bitmap[i];
 	}
@@ -1646,10 +1804,11 @@ nfs4_parsefattr(
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TYPE)) {
 		nfsm_chain_get_32(error, nmc, val);
 		nvap->nva_type = nfstov_type(val, NFS_VER4);
-		if ((val == NFATTRDIR) || (val == NFNAMEDATTR))
+		if ((val == NFATTRDIR) || (val == NFNAMEDATTR)) {
 			nvap->nva_flags |= NFS_FFLAG_IS_ATTR;
-		else
+		} else {
 			nvap->nva_flags &= ~NFS_FFLAG_IS_ATTR;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_FH_EXPIRE_TYPE)) {
@@ -1657,8 +1816,9 @@ nfs4_parsefattr(
 		nfsmout_if(error);
 		nfsap->nfsa_flags &= ~NFS_FSFLAG_FHTYPE_MASK;
 		nfsap->nfsa_flags |= val << NFS_FSFLAG_FHTYPE_SHIFT;
-		if (val & ~0xff)
+		if (val & ~0xff) {
 			printf("nfs: warning unknown fh type: 0x%x\n", val);
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_CHANGE)) {
@@ -1671,26 +1831,29 @@ nfs4_parsefattr(
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_LINK_SUPPORT)) {
 		nfsm_chain_get_32(error, nmc, val);
-		if (val)
+		if (val) {
 			nfsap->nfsa_flags |= NFS_FSFLAG_LINK;
-		else
+		} else {
 			nfsap->nfsa_flags &= ~NFS_FSFLAG_LINK;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_SYMLINK_SUPPORT)) {
 		nfsm_chain_get_32(error, nmc, val);
-		if (val)
+		if (val) {
 			nfsap->nfsa_flags |= NFS_FSFLAG_SYMLINK;
-		else
+		} else {
 			nfsap->nfsa_flags &= ~NFS_FSFLAG_SYMLINK;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_NAMED_ATTR)) {
 		nfsm_chain_get_32(error, nmc, val);
-		if (val)
+		if (val) {
 			nvap->nva_flags |= NFS_FFLAG_HAS_NAMED_ATTRS;
-		else
+		} else {
 			nvap->nva_flags &= ~NFS_FFLAG_HAS_NAMED_ATTRS;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_FSID)) {
@@ -1700,10 +1863,11 @@ nfs4_parsefattr(
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_UNIQUE_HANDLES)) {
 		nfsm_chain_get_32(error, nmc, val);
-		if (val)
+		if (val) {
 			nfsap->nfsa_flags |= NFS_FSFLAG_UNIQUE_FH;
-		else
+		} else {
 			nfsap->nfsa_flags &= ~NFS_FSFLAG_UNIQUE_FH;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_LEASE_TIME)) {
@@ -1722,23 +1886,26 @@ nfs4_parsefattr(
 		error2 = 0;
 		ace_type = ace_flags = ace_mask = 0;
 		nfsm_chain_get_32(error, nmc, val); /* ACE count */
-		if (!error && (val > KAUTH_ACL_MAX_ENTRIES))
+		if (!error && (val > KAUTH_ACL_MAX_ENTRIES)) {
 			error = EOVERFLOW;
-		if (!error && !((acl = kauth_acl_alloc(val))))
+		}
+		if (!error && !((acl = kauth_acl_alloc(val)))) {
 			error = ENOMEM;
+		}
 		if (!error && acl) {
 			acl->acl_entrycount = val;
 			acl->acl_flags = 0;
 		}
 		attrbytes -= NFSX_UNSIGNED;
 		nfsm_assert(error, (attrbytes >= 0), EBADRPC);
-		for (i=0; !error && (i < val); i++) {
+		for (i = 0; !error && (i < val); i++) {
 			nfsm_chain_get_32(error, nmc, ace_type);
 			nfsm_chain_get_32(error, nmc, ace_flags);
 			nfsm_chain_get_32(error, nmc, ace_mask);
 			nfsm_chain_get_32(error, nmc, len);
-			if (!error && len >= NFS_MAX_WHO)
+			if (!error && len >= NFS_MAX_WHO) {
 				error = EBADRPC;
+			}
 			acl->acl_ace[i].ace_flags = nfs4_ace_nfstype_to_vfstype(ace_type, &error);
 			acl->acl_ace[i].ace_flags |= nfs4_ace_nfsflags_to_vfsflags(ace_flags);
 			acl->acl_ace[i].ace_rights = nfs4_ace_nfsmask_to_vfsrights(ace_mask);
@@ -1749,24 +1916,27 @@ nfs4_parsefattr(
 					slen = sizeof(sbuf);
 				}
 				/* Let's add a bit more if we can to the allocation as to try and avoid future allocations */
-				MALLOC(s, char*, (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO, M_TEMP, M_WAITOK);
-				if (s)
-					slen = (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO;
-				else
+				MALLOC(s, char*, (len + 16 < NFS_MAX_WHO) ? len + 16 : NFS_MAX_WHO, M_TEMP, M_WAITOK);
+				if (s) {
+					slen = (len + 16 < NFS_MAX_WHO) ? len + 16 : NFS_MAX_WHO;
+				} else {
 					error = ENOMEM;
+				}
 			}
-			if (error2)
+			if (error2) {
 				nfsm_chain_adv(error, nmc, nfsm_rndup(len));
-			else
+			} else {
 				nfsm_chain_get_opaque(error, nmc, len, s);
+			}
 			if (!error && !error2) {
 				s[len] = '\0';
 				error2 = nfs4_id2guid(s, &acl->acl_ace[i].ace_applicable,
-						(ace_flags & NFS_ACE_IDENTIFIER_GROUP));
-				if (error2 && (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_FAILED_MAPPINGS))
+				    (ace_flags & NFS_ACE_IDENTIFIER_GROUP));
+				if (error2 && (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_FAILED_MAPPINGS)) {
 					printf("nfs4_parsefattr: ACE WHO %s is no one, no guid?, error %d\n", s, error2);
+				}
 			}
-			attrbytes -= 4*NFSX_UNSIGNED + nfsm_rndup(len);
+			attrbytes -= 4 * NFSX_UNSIGNED + nfsm_rndup(len);
 			nfsm_assert(error, (attrbytes >= 0), EBADRPC);
 		}
 		nfsmout_if(error);
@@ -1781,7 +1951,7 @@ nfs4_parsefattr(
 		 * (just to be safe) FATTR_ACL is in the supported list too.
 		 */
 		nfsm_chain_get_32(error, nmc, val);
-		if ((val & (NFS_ACL_SUPPORT_ALLOW_ACL|NFS_ACL_SUPPORT_DENY_ACL)) &&
+		if ((val & (NFS_ACL_SUPPORT_ALLOW_ACL | NFS_ACL_SUPPORT_DENY_ACL)) &&
 		    NFS_BITMAP_ISSET(nfsap->nfsa_supp_attr, NFS_FATTR_ACL)) {
 			nfsap->nfsa_flags |= NFS_FSFLAG_ACL;
 		} else {
@@ -1791,48 +1961,54 @@ nfs4_parsefattr(
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_ARCHIVE)) { /* SF_ARCHIVED */
 		nfsm_chain_get_32(error, nmc, val);
-		if (val)
+		if (val) {
 			nvap->nva_flags |= NFS_FFLAG_ARCHIVED;
-		else
+		} else {
 			nvap->nva_flags &= ~NFS_FFLAG_ARCHIVED;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_CANSETTIME)) {
 		nfsm_chain_get_32(error, nmc, val);
-		if (val)
+		if (val) {
 			nfsap->nfsa_flags |= NFS_FSFLAG_SET_TIME;
-		else
+		} else {
 			nfsap->nfsa_flags &= ~NFS_FSFLAG_SET_TIME;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_CASE_INSENSITIVE)) {
 		nfsm_chain_get_32(error, nmc, val);
-		if (val)
+		if (val) {
 			nfsap->nfsa_flags |= NFS_FSFLAG_CASE_INSENSITIVE;
-		else
+		} else {
 			nfsap->nfsa_flags &= ~NFS_FSFLAG_CASE_INSENSITIVE;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_CASE_PRESERVING)) {
 		nfsm_chain_get_32(error, nmc, val);
-		if (val)
+		if (val) {
 			nfsap->nfsa_flags |= NFS_FSFLAG_CASE_PRESERVING;
-		else
+		} else {
 			nfsap->nfsa_flags &= ~NFS_FSFLAG_CASE_PRESERVING;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_CHOWN_RESTRICTED)) {
 		nfsm_chain_get_32(error, nmc, val);
-		if (val)
+		if (val) {
 			nfsap->nfsa_flags |= NFS_FSFLAG_CHOWN_RESTRICTED;
-		else
+		} else {
 			nfsap->nfsa_flags &= ~NFS_FSFLAG_CHOWN_RESTRICTED;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_FILEHANDLE)) {
 		nfsm_chain_get_32(error, nmc, val);
-		if (error == 0 && val > NFS_MAX_FH_SIZE)
+		if (error == 0 && val > NFS_MAX_FH_SIZE) {
 			error = EBADRPC;
+		}
 		nfsmout_if(error);
 		if (fhp) {
 			fhp->fh_len = val;
@@ -1869,13 +2045,15 @@ nfs4_parsefattr(
 		nfsm_chain_get_32(error, nmc, fsp->np_compcount); /* component count */
 		attrbytes -= NFSX_UNSIGNED;
 		/* sanity check component count */
-		if (!error && (fsp->np_compcount > MAXPATHLEN))
+		if (!error && (fsp->np_compcount > MAXPATHLEN)) {
 			error = EBADRPC;
+		}
 		nfsmout_if(error);
 		if (fsp->np_compcount) {
-			MALLOC(fsp->np_components, char **, fsp->np_compcount * sizeof(char*), M_TEMP, M_WAITOK|M_ZERO);
-			if (!fsp->np_components)
+			MALLOC(fsp->np_components, char **, fsp->np_compcount * sizeof(char*), M_TEMP, M_WAITOK | M_ZERO);
+			if (!fsp->np_components) {
 				error = ENOMEM;
+			}
 		}
 		for (comp = 0; comp < fsp->np_compcount; comp++) {
 			nfsm_chain_get_32(error, nmc, val); /* component length */
@@ -1895,12 +2073,14 @@ nfs4_parsefattr(
 				attrbytes -= NFSX_UNSIGNED;
 				continue;
 			}
-			if (!error && ((val < 1) || (val > MAXPATHLEN)))
+			if (!error && ((val < 1) || (val > MAXPATHLEN))) {
 				error = EBADRPC;
+			}
 			nfsmout_if(error);
-			MALLOC(fsp->np_components[comp], char *, val+1, M_TEMP, M_WAITOK|M_ZERO);
-			if (!fsp->np_components[comp])
+			MALLOC(fsp->np_components[comp], char *, val + 1, M_TEMP, M_WAITOK | M_ZERO);
+			if (!fsp->np_components[comp]) {
 				error = ENOMEM;
+			}
 			nfsmout_if(error);
 			nfsm_chain_get_opaque(error, nmc, val, fsp->np_components[comp]); /* component */
 			attrbytes -= NFSX_UNSIGNED + nfsm_rndup(val);
@@ -1908,59 +2088,69 @@ nfs4_parsefattr(
 		nfsm_chain_get_32(error, nmc, nfslsp->nl_numlocs); /* fs location count */
 		attrbytes -= NFSX_UNSIGNED;
 		/* sanity check location count */
-		if (!error && (nfslsp->nl_numlocs > 256))
+		if (!error && (nfslsp->nl_numlocs > 256)) {
 			error = EBADRPC;
+		}
 		nfsmout_if(error);
 		if (nfslsp->nl_numlocs > 0) {
-			MALLOC(nfslsp->nl_locations, struct nfs_fs_location **, nfslsp->nl_numlocs * sizeof(struct nfs_fs_location*), M_TEMP, M_WAITOK|M_ZERO);
-			if (!nfslsp->nl_locations)
+			MALLOC(nfslsp->nl_locations, struct nfs_fs_location **, nfslsp->nl_numlocs * sizeof(struct nfs_fs_location*), M_TEMP, M_WAITOK | M_ZERO);
+			if (!nfslsp->nl_locations) {
 				error = ENOMEM;
+			}
 		}
 		nfsmout_if(error);
 		for (loc = 0; loc < nfslsp->nl_numlocs; loc++) {
 			nfsmout_if(error);
-			MALLOC(fsl, struct nfs_fs_location *, sizeof(struct nfs_fs_location), M_TEMP, M_WAITOK|M_ZERO);
-			if (!fsl)
+			MALLOC(fsl, struct nfs_fs_location *, sizeof(struct nfs_fs_location), M_TEMP, M_WAITOK | M_ZERO);
+			if (!fsl) {
 				error = ENOMEM;
+			}
 			nfslsp->nl_locations[loc] = fsl;
 			nfsm_chain_get_32(error, nmc, fsl->nl_servcount); /* server count */
 			attrbytes -= NFSX_UNSIGNED;
 			/* sanity check server count */
-			if (!error && ((fsl->nl_servcount < 1) || (fsl->nl_servcount > 256)))
+			if (!error && ((fsl->nl_servcount < 1) || (fsl->nl_servcount > 256))) {
 				error = EBADRPC;
+			}
 			nfsmout_if(error);
-			MALLOC(fsl->nl_servers, struct nfs_fs_server **, fsl->nl_servcount * sizeof(struct nfs_fs_server*), M_TEMP, M_WAITOK|M_ZERO);
-			if (!fsl->nl_servers)
+			MALLOC(fsl->nl_servers, struct nfs_fs_server **, fsl->nl_servcount * sizeof(struct nfs_fs_server*), M_TEMP, M_WAITOK | M_ZERO);
+			if (!fsl->nl_servers) {
 				error = ENOMEM;
+			}
 			for (serv = 0; serv < fsl->nl_servcount; serv++) {
 				nfsmout_if(error);
-				MALLOC(fss, struct nfs_fs_server *, sizeof(struct nfs_fs_server), M_TEMP, M_WAITOK|M_ZERO);
-				if (!fss)
+				MALLOC(fss, struct nfs_fs_server *, sizeof(struct nfs_fs_server), M_TEMP, M_WAITOK | M_ZERO);
+				if (!fss) {
 					error = ENOMEM;
+				}
 				fsl->nl_servers[serv] = fss;
 				nfsm_chain_get_32(error, nmc, val); /* server name length */
 				/* sanity check server name length */
-				if (!error && ((val < 1) || (val > MAXPATHLEN)))
+				if (!error && ((val < 1) || (val > MAXPATHLEN))) {
 					error = EINVAL;
+				}
 				nfsmout_if(error);
-				MALLOC(fss->ns_name, char *, val+1, M_TEMP, M_WAITOK|M_ZERO);
-				if (!fss->ns_name)
+				MALLOC(fss->ns_name, char *, val + 1, M_TEMP, M_WAITOK | M_ZERO);
+				if (!fss->ns_name) {
 					error = ENOMEM;
+				}
 				nfsm_chain_get_opaque(error, nmc, val, fss->ns_name); /* server name */
 				attrbytes -= NFSX_UNSIGNED + nfsm_rndup(val);
 				nfsmout_if(error);
 				/* copy name to address if it converts to a sockaddr */
 				if (nfs_uaddr2sockaddr(fss->ns_name, (struct sockaddr*)&ss)) {
 					fss->ns_addrcount = 1;
-					MALLOC(fss->ns_addresses, char **, sizeof(char *), M_TEMP, M_WAITOK|M_ZERO);
-					if (!fss->ns_addresses)
+					MALLOC(fss->ns_addresses, char **, sizeof(char *), M_TEMP, M_WAITOK | M_ZERO);
+					if (!fss->ns_addresses) {
 						error = ENOMEM;
+					}
 					nfsmout_if(error);
-					MALLOC(fss->ns_addresses[0], char *, val+1, M_TEMP, M_WAITOK|M_ZERO);
-					if (!fss->ns_addresses[0])
+					MALLOC(fss->ns_addresses[0], char *, val + 1, M_TEMP, M_WAITOK | M_ZERO);
+					if (!fss->ns_addresses[0]) {
 						error = ENOMEM;
+					}
 					nfsmout_if(error);
-					strlcpy(fss->ns_addresses[0], fss->ns_name, val+1);
+					strlcpy(fss->ns_addresses[0], fss->ns_name, val + 1);
 				}
 			}
 			/* get pathname */
@@ -1968,13 +2158,15 @@ nfs4_parsefattr(
 			nfsm_chain_get_32(error, nmc, fsp->np_compcount); /* component count */
 			attrbytes -= NFSX_UNSIGNED;
 			/* sanity check component count */
-			if (!error && (fsp->np_compcount > MAXPATHLEN))
+			if (!error && (fsp->np_compcount > MAXPATHLEN)) {
 				error = EINVAL;
+			}
 			nfsmout_if(error);
 			if (fsp->np_compcount) {
-				MALLOC(fsp->np_components, char **, fsp->np_compcount * sizeof(char*), M_TEMP, M_WAITOK|M_ZERO);
-				if (!fsp->np_components)
+				MALLOC(fsp->np_components, char **, fsp->np_compcount * sizeof(char*), M_TEMP, M_WAITOK | M_ZERO);
+				if (!fsp->np_components) {
 					error = ENOMEM;
+				}
 			}
 			for (comp = 0; comp < fsp->np_compcount; comp++) {
 				nfsm_chain_get_32(error, nmc, val); /* component length */
@@ -1994,12 +2186,14 @@ nfs4_parsefattr(
 					attrbytes -= NFSX_UNSIGNED;
 					continue;
 				}
-				if (!error && ((val < 1) || (val > MAXPATHLEN)))
+				if (!error && ((val < 1) || (val > MAXPATHLEN))) {
 					error = EINVAL;
+				}
 				nfsmout_if(error);
-				MALLOC(fsp->np_components[comp], char *, val+1, M_TEMP, M_WAITOK|M_ZERO);
-				if (!fsp->np_components[comp])
+				MALLOC(fsp->np_components[comp], char *, val + 1, M_TEMP, M_WAITOK | M_ZERO);
+				if (!fsp->np_components[comp]) {
 					error = ENOMEM;
+				}
 				nfsm_chain_get_opaque(error, nmc, val, fsp->np_components[comp]); /* component */
 				attrbytes -= NFSX_UNSIGNED + nfsm_rndup(val);
 			}
@@ -2008,19 +2202,21 @@ nfs4_parsefattr(
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_HIDDEN)) { /* UF_HIDDEN */
 		nfsm_chain_get_32(error, nmc, val);
-		if (val)
+		if (val) {
 			nvap->nva_flags |= NFS_FFLAG_HIDDEN;
-		else
+		} else {
 			nvap->nva_flags &= ~NFS_FFLAG_HIDDEN;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_HOMOGENEOUS)) {
 		/* XXX If NOT homogeneous, we may need to clear flags on the mount */
 		nfsm_chain_get_32(error, nmc, val);
-		if (val)
+		if (val) {
 			nfsap->nfsa_flags |= NFS_FSFLAG_HOMOGENEOUS;
-		else
+		} else {
 			nfsap->nfsa_flags &= ~NFS_FSFLAG_HOMOGENEOUS;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_MAXFILESIZE)) {
@@ -2029,14 +2225,16 @@ nfs4_parsefattr(
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_MAXLINK)) {
 		nfsm_chain_get_32(error, nmc, nvap->nva_maxlink);
-		if (!error && (nfsap->nfsa_maxlink > INT32_MAX))
+		if (!error && (nfsap->nfsa_maxlink > INT32_MAX)) {
 			nfsap->nfsa_maxlink = INT32_MAX;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_MAXNAME)) {
 		nfsm_chain_get_32(error, nmc, nfsap->nfsa_maxname);
-		if (!error && (nfsap->nfsa_maxname > INT32_MAX))
+		if (!error && (nfsap->nfsa_maxname > INT32_MAX)) {
 			nfsap->nfsa_maxname = INT32_MAX;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_MAXREAD)) {
@@ -2058,10 +2256,11 @@ nfs4_parsefattr(
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_NO_TRUNC)) {
 		nfsm_chain_get_32(error, nmc, val);
-		if (val)
+		if (val) {
 			nfsap->nfsa_flags |= NFS_FSFLAG_NO_TRUNC;
-		else
+		} else {
 			nfsap->nfsa_flags &= ~NFS_FSFLAG_NO_TRUNC;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_NUMLINKS)) {
@@ -2071,8 +2270,9 @@ nfs4_parsefattr(
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_OWNER)) {
 		nfsm_chain_get_32(error, nmc, len);
-		if (!error && len >= NFS_MAX_WHO)
+		if (!error && len >= NFS_MAX_WHO) {
 			error = EBADRPC;
+		}
 		if (!error && (len >= slen)) {
 			if (s != sbuf) {
 				FREE(s, M_TEMP);
@@ -2080,25 +2280,28 @@ nfs4_parsefattr(
 				slen = sizeof(sbuf);
 			}
 			/* Let's add a bit more if we can to the allocation as to try and avoid future allocations */
-			MALLOC(s, char*, (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO, M_TEMP, M_WAITOK);
-			if (s)
-				slen = (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO;
-			else
+			MALLOC(s, char*, (len + 16 < NFS_MAX_WHO) ? len + 16 : NFS_MAX_WHO, M_TEMP, M_WAITOK);
+			if (s) {
+				slen = (len + 16 < NFS_MAX_WHO) ? len + 16 : NFS_MAX_WHO;
+			} else {
 				error = ENOMEM;
+			}
 		}
 		nfsm_chain_get_opaque(error, nmc, len, s);
 		if (!error) {
 			s[len] = '\0';
 			error = nfs4_id2guid(s, &nvap->nva_uuuid, 0);
-			if (!error)
+			if (!error) {
 				error = kauth_cred_guid2uid(&nvap->nva_uuuid, &nvap->nva_uid);
+			}
 			if (error) {
 				/* unable to get either GUID or UID, set to default */
 				nvap->nva_uid = (uid_t)(-2);
-				if (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_FAILED_MAPPINGS)
+				if (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_FAILED_MAPPINGS) {
 					printf("nfs4_parsefattr: owner %s is no one, no %s?, error %d\n", s,
-						kauth_guid_equal(&nvap->nva_uuuid, &kauth_null_guid) ? "guid" : "uid",
-						error);
+					    kauth_guid_equal(&nvap->nva_uuuid, &kauth_null_guid) ? "guid" : "uid",
+					    error);
+				}
 				error = 0;
 			}
 		}
@@ -2106,8 +2309,9 @@ nfs4_parsefattr(
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_OWNER_GROUP)) {
 		nfsm_chain_get_32(error, nmc, len);
-		if (!error && len >= NFS_MAX_WHO)
+		if (!error && len >= NFS_MAX_WHO) {
 			error = EBADRPC;
+		}
 		if (!error && (len >= slen)) {
 			if (s != sbuf) {
 				FREE(s, M_TEMP);
@@ -2115,25 +2319,28 @@ nfs4_parsefattr(
 				slen = sizeof(sbuf);
 			}
 			/* Let's add a bit more if we can to the allocation as to try and avoid future allocations */
-			MALLOC(s, char*, (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO, M_TEMP, M_WAITOK);
-			if (s)
-				slen = (len + 16 < NFS_MAX_WHO) ? len+16 : NFS_MAX_WHO;
-			else
+			MALLOC(s, char*, (len + 16 < NFS_MAX_WHO) ? len + 16 : NFS_MAX_WHO, M_TEMP, M_WAITOK);
+			if (s) {
+				slen = (len + 16 < NFS_MAX_WHO) ? len + 16 : NFS_MAX_WHO;
+			} else {
 				error = ENOMEM;
+			}
 		}
 		nfsm_chain_get_opaque(error, nmc, len, s);
 		if (!error) {
 			s[len] = '\0';
 			error = nfs4_id2guid(s, &nvap->nva_guuid, 1);
-			if (!error)
+			if (!error) {
 				error = kauth_cred_guid2gid(&nvap->nva_guuid, &nvap->nva_gid);
+			}
 			if (error) {
 				/* unable to get either GUID or GID, set to default */
 				nvap->nva_gid = (gid_t)(-2);
-				if (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_FAILED_MAPPINGS)
+				if (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_FAILED_MAPPINGS) {
 					printf("nfs4_parsefattr: group %s is no one, no %s?, error %d\n", s,
-						kauth_guid_equal(&nvap->nva_guuid, &kauth_null_guid) ? "guid" : "gid",
-						error);
+					    kauth_guid_equal(&nvap->nva_guuid, &kauth_null_guid) ? "guid" : "gid",
+					    error);
+				}
 				error = 0;
 			}
 		}
@@ -2183,7 +2390,7 @@ nfs4_parsefattr(
 		attrbytes -= 3 * NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_ACCESS_SET)) {
-		nfsm_chain_adv(error, nmc, 4*NFSX_UNSIGNED); /* just skip it */
+		nfsm_chain_adv(error, nmc, 4 * NFSX_UNSIGNED); /* just skip it */
 		attrbytes -= 4 * NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_BACKUP)) {
@@ -2197,7 +2404,7 @@ nfs4_parsefattr(
 		attrbytes -= 3 * NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_DELTA)) { /* skip for now */
-		nfsm_chain_adv(error, nmc, 3*NFSX_UNSIGNED);
+		nfsm_chain_adv(error, nmc, 3 * NFSX_UNSIGNED);
 		attrbytes -= 3 * NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_METADATA)) {
@@ -2211,7 +2418,7 @@ nfs4_parsefattr(
 		attrbytes -= 3 * NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_MODIFY_SET)) {
-		nfsm_chain_adv(error, nmc, 4*NFSX_UNSIGNED); /* just skip it */
+		nfsm_chain_adv(error, nmc, 4 * NFSX_UNSIGNED); /* just skip it */
 		attrbytes -= 4 * NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_MOUNTED_ON_FILEID)) {
@@ -2219,7 +2426,7 @@ nfs4_parsefattr(
 		/* we prefer the mounted on file ID, so just replace the fileid */
 		nfsm_chain_get_64(error, nmc, nvap->nva_fileid);
 #else
-		nfsm_chain_adv(error, nmc, 2*NFSX_UNSIGNED);
+		nfsm_chain_adv(error, nmc, 2 * NFSX_UNSIGNED);
 #endif
 		attrbytes -= 2 * NFSX_UNSIGNED;
 	}
@@ -2227,20 +2434,24 @@ nfs4_parsefattr(
 	nfsm_assert(error, (attrbytes >= 0), EBADRPC);
 	nfsm_chain_adv(error, nmc, nfsm_rndup(attrbytes));
 nfsmout:
-	if (error)
+	if (error) {
 		nfs_fs_locations_cleanup(nfslsp);
-	if (!error && rderror)
+	}
+	if (!error && rderror) {
 		error = rderror;
+	}
 	/* free up temporary resources */
-	if (s && (s != sbuf))
+	if (s && (s != sbuf)) {
 		FREE(s, M_TEMP);
-	if (acl)
+	}
+	if (acl) {
 		kauth_acl_free(acl);
+	}
 	if (error && nvap->nva_acl) {
 		kauth_acl_free(nvap->nva_acl);
 		nvap->nva_acl = NULL;
 	}
-	return (error);
+	return error;
 }
 
 /*
@@ -2275,17 +2486,18 @@ nfsm_chain_add_fattr4_f(struct nfsm_chain *nmc, struct vnode_attr *vap, struct n
 
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_SIZE)) {
 		nfsm_chain_add_64(error, nmc, vap->va_data_size);
-		attrbytes += 2*NFSX_UNSIGNED;
+		attrbytes += 2 * NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_ACL)) {
 		acl = vap->va_acl;
-		if (!acl || (acl->acl_entrycount == KAUTH_FILESEC_NOACL))
+		if (!acl || (acl->acl_entrycount == KAUTH_FILESEC_NOACL)) {
 			acecount = 0;
-		else
+		} else {
 			acecount = acl->acl_entrycount;
+		}
 		nfsm_chain_add_32(error, nmc, acecount);
 		attrbytes += NFSX_UNSIGNED;
-		for (i=0; !error && (i < (int)acecount); i++) {
+		for (i = 0; !error && (i < (int)acecount); i++) {
 			val = (acl->acl_ace[i].ace_flags & KAUTH_ACE_KINDMASK);
 			val = nfs4_ace_vfstype_to_nfstype(val, &error);
 			nfsm_chain_add_32(error, nmc, val);
@@ -2312,7 +2524,7 @@ nfsm_chain_add_fattr4_f(struct nfsm_chain *nmc, struct vnode_attr *vap, struct n
 				}
 			}
 			nfsm_chain_add_name(error, nmc, s, len, nmp);
-			attrbytes += 4*NFSX_UNSIGNED + nfsm_rndup(len);
+			attrbytes += 4 * NFSX_UNSIGNED + nfsm_rndup(len);
 		}
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_ARCHIVE)) {
@@ -2389,18 +2601,18 @@ nfsm_chain_add_fattr4_f(struct nfsm_chain *nmc, struct vnode_attr *vap, struct n
 			nfsm_chain_add_32(error, nmc, NFS4_TIME_SET_TO_CLIENT);
 			nfsm_chain_add_64(error, nmc, vap->va_access_time.tv_sec);
 			nfsm_chain_add_32(error, nmc, vap->va_access_time.tv_nsec);
-			attrbytes += 4*NFSX_UNSIGNED;
+			attrbytes += 4 * NFSX_UNSIGNED;
 		}
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_BACKUP)) {
 		nfsm_chain_add_64(error, nmc, vap->va_backup_time.tv_sec);
 		nfsm_chain_add_32(error, nmc, vap->va_backup_time.tv_nsec);
-		attrbytes += 3*NFSX_UNSIGNED;
+		attrbytes += 3 * NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_CREATE)) {
 		nfsm_chain_add_64(error, nmc, vap->va_create_time.tv_sec);
 		nfsm_chain_add_32(error, nmc, vap->va_create_time.tv_nsec);
-		attrbytes += 3*NFSX_UNSIGNED;
+		attrbytes += 3 * NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_MODIFY_SET)) {
 		if (vap->va_vaflags & VA_UTIMES_NULL) {
@@ -2410,16 +2622,17 @@ nfsm_chain_add_fattr4_f(struct nfsm_chain *nmc, struct vnode_attr *vap, struct n
 			nfsm_chain_add_32(error, nmc, NFS4_TIME_SET_TO_CLIENT);
 			nfsm_chain_add_64(error, nmc, vap->va_modify_time.tv_sec);
 			nfsm_chain_add_32(error, nmc, vap->va_modify_time.tv_nsec);
-			attrbytes += 4*NFSX_UNSIGNED;
+			attrbytes += 4 * NFSX_UNSIGNED;
 		}
 	}
 	nfsmout_if(error);
 	/* Now, set the attribute data length */
 	*pattrbytes = txdr_unsigned(attrbytes);
 nfsmout:
-	if (s && (s != sbuf))
+	if (s && (s != sbuf)) {
 		FREE(s, M_TEMP);
-	return (error);
+	}
+	return error;
 }
 
 /*
@@ -2434,10 +2647,12 @@ nfs_need_recover(struct nfsmount *nmp, int error)
 	nmp->nm_state |= NFSSTA_RECOVER;
 	if ((error == NFSERR_ADMIN_REVOKED) ||
 	    (error == NFSERR_EXPIRED) ||
-	    (error == NFSERR_STALE_CLIENTID))
+	    (error == NFSERR_STALE_CLIENTID)) {
 		nmp->nm_state |= NFSSTA_RECOVER_EXPIRED;
-	if (wake)
+	}
+	if (wake) {
 		nfs_mount_sock_thread_wake(nmp);
+	}
 }
 
 /*
@@ -2455,24 +2670,28 @@ nfs4_expired_check_delegation(nfsnode_t np, vfs_context_t ctx)
 	struct nfs_open_file *nofp;
 	int drop = 1;
 
-	if ((np->n_flag & NREVOKE) || !(np->n_openflags & N_DELEG_MASK))
+	if ((np->n_flag & NREVOKE) || !(np->n_openflags & N_DELEG_MASK)) {
 		return;
+	}
 
 	lck_mtx_lock(&np->n_openlock);
 
 	TAILQ_FOREACH(nofp, &np->n_opens, nof_link) {
-		if (!nofp->nof_opencnt)
+		if (!nofp->nof_opencnt) {
 			continue;
-		if (nofp->nof_flags & NFS_OPEN_FILE_LOST)
+		}
+		if (nofp->nof_flags & NFS_OPEN_FILE_LOST) {
 			continue;
-		if (nofp->nof_flags & NFS_OPEN_FILE_REOPEN)
+		}
+		if (nofp->nof_flags & NFS_OPEN_FILE_REOPEN) {
 			continue;
+		}
 		/* we have an open that is not lost and not marked for reopen */
 		// XXX print out what's keeping this node from dropping the delegation.
 		NP(nofp->nof_np, "nfs4_expired_check_delegation: !drop: opencnt %d flags 0x%x access %d %d mmap %d %d",
-			nofp->nof_opencnt, nofp->nof_flags,
-			nofp->nof_access, nofp->nof_deny,
-			nofp->nof_mmap_access, nofp->nof_mmap_deny);
+		    nofp->nof_opencnt, nofp->nof_flags,
+		    nofp->nof_access, nofp->nof_deny,
+		    nofp->nof_mmap_access, nofp->nof_mmap_deny);
 		drop = 0;
 		break;
 	}
@@ -2497,7 +2716,7 @@ nfs4_expired_check_delegation(nfsnode_t np, vfs_context_t ctx)
 			}
 			lck_mtx_unlock(&nmp->nm_lock);
 			nfs4_delegreturn_rpc(nmp, np->n_fhp, np->n_fhsize, &np->n_dstateid,
-				0, vfs_context_thread(ctx), vfs_context_ucred(ctx));
+			    0, vfs_context_thread(ctx), vfs_context_ucred(ctx));
 		}
 	}
 
@@ -2530,24 +2749,31 @@ restart:
 	 * we know there are no state operations in progress.
 	 */
 	do {
-		if ((error = nfs_sigintr(nmp, NULL, NULL, 1)))
+		if ((error = nfs_sigintr(nmp, NULL, NULL, 1))) {
 			break;
-		if (!(nmp->nm_sockflags & NMSOCK_READY))
+		}
+		if (!(nmp->nm_sockflags & NMSOCK_READY)) {
 			error = EPIPE;
-		if (nmp->nm_state & (NFSSTA_FORCE|NFSSTA_DEAD))
+		}
+		if (nmp->nm_state & (NFSSTA_FORCE | NFSSTA_DEAD)) {
 			error = ENXIO;
-		if (nmp->nm_sockflags & NMSOCK_UNMOUNT)
+		}
+		if (nmp->nm_sockflags & NMSOCK_UNMOUNT) {
 			error = ENXIO;
-		if (error)
+		}
+		if (error) {
 			break;
-		if (nmp->nm_stateinuse)
-			msleep(&nmp->nm_stateinuse, &nmp->nm_lock, (PZERO-1), "nfsrecoverstartwait", &ts);
+		}
+		if (nmp->nm_stateinuse) {
+			msleep(&nmp->nm_stateinuse, &nmp->nm_lock, (PZERO - 1), "nfsrecoverstartwait", &ts);
+		}
 	} while (nmp->nm_stateinuse);
 	if (error) {
-		if (error == EPIPE)
+		if (error == EPIPE) {
 			printf("nfs recovery reconnecting for %s, 0x%x\n", vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid);
-		else
+		} else {
 			printf("nfs recovery aborted for %s, 0x%x\n", vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid);
+		}
 		lck_mtx_unlock(&nmp->nm_lock);
 		return;
 	}
@@ -2556,12 +2782,13 @@ restart:
 	if (now.tv_sec == nmp->nm_recover_start) {
 		printf("nfs recovery throttled for %s, 0x%x\n", vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid);
 		lck_mtx_unlock(&nmp->nm_lock);
-		tsleep(nfs_recover, (PZERO-1), "nfsrecoverrestart", hz);
+		tsleep(nfs_recover, (PZERO - 1), "nfsrecoverrestart", hz);
 		goto restart;
 	}
 	nmp->nm_recover_start = now.tv_sec;
-	if (++nmp->nm_stategenid == 0)
+	if (++nmp->nm_stategenid == 0) {
 		++nmp->nm_stategenid;
+	}
 	printf("nfs recovery started for %s, 0x%x\n", vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid);
 	lck_mtx_unlock(&nmp->nm_lock);
 
@@ -2569,24 +2796,32 @@ restart:
 	TAILQ_FOREACH(noop, &nmp->nm_open_owners, noo_link) {
 		/* for each of its opens... */
 		TAILQ_FOREACH(nofp, &noop->noo_opens, nof_oolink) {
-			if (!nofp->nof_access || (nofp->nof_flags & NFS_OPEN_FILE_LOST) || (nofp->nof_np->n_flag & NREVOKE))
+			if (!nofp->nof_access || (nofp->nof_flags & NFS_OPEN_FILE_LOST) || (nofp->nof_np->n_flag & NREVOKE)) {
 				continue;
+			}
 			lost = reopen = 0;
 			/* for NFSv2/v3, just skip straight to lock reclaim */
-			if (nmp->nm_vers < NFS_VER4)
+			if (nmp->nm_vers < NFS_VER4) {
 				goto reclaim_locks;
-			if (nofp->nof_rw_drw)
+			}
+			if (nofp->nof_rw_drw) {
 				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_BOTH, NFS_OPEN_SHARE_DENY_BOTH);
-			if (!error && nofp->nof_w_drw)
+			}
+			if (!error && nofp->nof_w_drw) {
 				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_WRITE, NFS_OPEN_SHARE_DENY_BOTH);
-			if (!error && nofp->nof_r_drw)
+			}
+			if (!error && nofp->nof_r_drw) {
 				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_BOTH);
-			if (!error && nofp->nof_rw_dw)
+			}
+			if (!error && nofp->nof_rw_dw) {
 				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_BOTH, NFS_OPEN_SHARE_DENY_WRITE);
-			if (!error && nofp->nof_w_dw)
+			}
+			if (!error && nofp->nof_w_dw) {
 				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_WRITE, NFS_OPEN_SHARE_DENY_WRITE);
-			if (!error && nofp->nof_r_dw)
+			}
+			if (!error && nofp->nof_r_dw) {
 				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_WRITE);
+			}
 			/*
 			 * deny-none opens with no locks can just be reopened (later) if reclaim fails.
 			 */
@@ -2618,21 +2853,23 @@ restart:
 			 * delegation unless asked to).
 			 */
 			if ((nofp->nof_d_rw_drw || nofp->nof_d_w_drw || nofp->nof_d_r_drw ||
-				    nofp->nof_d_rw_dw || nofp->nof_d_w_dw || nofp->nof_d_r_dw ||
-				    nofp->nof_d_rw || nofp->nof_d_w || nofp->nof_d_r) &&
-				    (!nofp->nof_rw_drw && !nofp->nof_w_drw && !nofp->nof_r_drw &&
-				     !nofp->nof_rw_dw && !nofp->nof_w_dw && !nofp->nof_r_dw &&
-				     !nofp->nof_rw && !nofp->nof_w && !nofp->nof_r)) {
+			    nofp->nof_d_rw_dw || nofp->nof_d_w_dw || nofp->nof_d_r_dw ||
+			    nofp->nof_d_rw || nofp->nof_d_w || nofp->nof_d_r) &&
+			    (!nofp->nof_rw_drw && !nofp->nof_w_drw && !nofp->nof_r_drw &&
+			    !nofp->nof_rw_dw && !nofp->nof_w_dw && !nofp->nof_r_dw &&
+			    !nofp->nof_rw && !nofp->nof_w && !nofp->nof_r)) {
 				if (!error && !nfs_open_state_set_busy(nofp->nof_np, NULL)) {
 					error = nfs4_claim_delegated_state_for_node(nofp->nof_np, R_RECOVER);
-					if (!error && (nofp->nof_flags & NFS_OPEN_FILE_REOPEN))
+					if (!error && (nofp->nof_flags & NFS_OPEN_FILE_REOPEN)) {
 						reopen = EAGAIN;
+					}
 					nfs_open_state_clear_busy(nofp->nof_np);
 					/* if claim didn't go well, we may need to return delegation now */
 					if (nofp->nof_np->n_openflags & N_DELEG_RETURN) {
 						nfs4_delegation_return(nofp->nof_np, R_RECOVER, thd, noop->noo_cred);
-						if (!(nmp->nm_sockflags & NMSOCK_READY))
+						if (!(nmp->nm_sockflags & NMSOCK_READY)) {
 							error = ETIMEDOUT;  /* looks like we need a reconnect */
+						}
 					}
 				}
 			}
@@ -2644,25 +2881,27 @@ restart:
 			if (error || reopen) {
 				/* restart recovery? */
 				if ((error == ETIMEDOUT) || nfs_mount_state_error_should_restart(error)) {
-					if (error == ETIMEDOUT)
+					if (error == ETIMEDOUT) {
 						nfs_need_reconnect(nmp);
-					tsleep(nfs_recover, (PZERO-1), "nfsrecoverrestart", hz);
+					}
+					tsleep(nfs_recover, (PZERO - 1), "nfsrecoverrestart", hz);
 					printf("nfs recovery restarting for %s, 0x%x, error %d\n",
-						vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid, error);
+					    vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid, error);
 					goto restart;
 				}
 				if (reopen && (nfs_check_for_locks(noop, nofp) == 0)) {
 					/* just reopen the file on next access */
 					NP(nofp->nof_np, "nfs_recover: %d, need reopen for %d %p 0x%x", reopen,
-						kauth_cred_getuid(noop->noo_cred), nofp->nof_np, nofp->nof_np->n_flag);
+					    kauth_cred_getuid(noop->noo_cred), nofp->nof_np, nofp->nof_np->n_flag);
 					lck_mtx_lock(&nofp->nof_lock);
 					nofp->nof_flags |= NFS_OPEN_FILE_REOPEN;
 					lck_mtx_unlock(&nofp->nof_lock);
 				} else {
 					/* open file state lost */
-					if (reopen)
+					if (reopen) {
 						NP(nofp->nof_np, "nfs_recover: %d, can't reopen because of locks %d %p", reopen,
-							kauth_cred_getuid(noop->noo_cred), nofp->nof_np);
+						    kauth_cred_getuid(noop->noo_cred), nofp->nof_np);
+					}
 					lost = 1;
 					error = 0;
 					reopen = 0;
@@ -2680,34 +2919,41 @@ restart:
 			 */
 reclaim_locks:
 			TAILQ_FOREACH(nlop, &nofp->nof_np->n_lock_owners, nlo_link) {
-				if (lost || reopen)
+				if (lost || reopen) {
 					break;
-				if (nlop->nlo_open_owner != noop)
+				}
+				if (nlop->nlo_open_owner != noop) {
 					continue;
+				}
 				TAILQ_FOREACH_SAFE(nflp, &nlop->nlo_locks, nfl_lolink, nextnflp) {
 					/* skip dead & blocked lock requests (shouldn't be any in the held lock list) */
-					if (nflp->nfl_flags & (NFS_FILE_LOCK_DEAD|NFS_FILE_LOCK_BLOCKED))
+					if (nflp->nfl_flags & (NFS_FILE_LOCK_DEAD | NFS_FILE_LOCK_BLOCKED)) {
 						continue;
+					}
 					/* skip delegated locks */
-					if (nflp->nfl_flags & NFS_FILE_LOCK_DELEGATED)
+					if (nflp->nfl_flags & NFS_FILE_LOCK_DELEGATED) {
 						continue;
+					}
 					error = nmp->nm_funcs->nf_setlock_rpc(nofp->nof_np, nofp, nflp, 1, R_RECOVER, thd, noop->noo_cred);
-					if (error)
+					if (error) {
 						NP(nofp->nof_np, "nfs: lock reclaim (0x%llx, 0x%llx) %s %d",
-							nflp->nfl_start, nflp->nfl_end,
-							error ? "failed" : "succeeded", error);
-					if (!error)
+						    nflp->nfl_start, nflp->nfl_end,
+						    error ? "failed" : "succeeded", error);
+					}
+					if (!error) {
 						continue;
+					}
 					/* restart recovery? */
 					if ((error == ETIMEDOUT) || nfs_mount_state_error_should_restart(error)) {
-						if (error == ETIMEDOUT)
+						if (error == ETIMEDOUT) {
 							nfs_need_reconnect(nmp);
-						tsleep(nfs_recover, (PZERO-1), "nfsrecoverrestart", hz);
+						}
+						tsleep(nfs_recover, (PZERO - 1), "nfsrecoverrestart", hz);
 						printf("nfs recovery restarting for %s, 0x%x, error %d\n",
-							vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid, error);
+						    vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid, error);
 						goto restart;
 					}
-					/* lock state lost - attempt to close file */ 
+					/* lock state lost - attempt to close file */
 					lost = 1;
 					error = 0;
 					break;
@@ -2727,9 +2973,9 @@ reclaim_locks:
 				nfs4_delegation_return(nofp->nof_np, R_RECOVER, thd, noop->noo_cred);
 				if (!(nmp->nm_sockflags & NMSOCK_READY)) {
 					/* looks like we need a reconnect */
-					tsleep(nfs_recover, (PZERO-1), "nfsrecoverrestart", hz);
+					tsleep(nfs_recover, (PZERO - 1), "nfsrecoverrestart", hz);
 					printf("nfs recovery restarting for %s, 0x%x, error %d\n",
-						vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid, error);
+					    vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid, error);
 					goto restart;
 				}
 			}
@@ -2737,7 +2983,7 @@ reclaim_locks:
 			if (lost) {
 				/* revoke open file state */
 				NP(nofp->nof_np, "nfs_recover: state lost for %d %p 0x%x",
-					kauth_cred_getuid(noop->noo_cred), nofp->nof_np, nofp->nof_np->n_flag);
+				    kauth_cred_getuid(noop->noo_cred), nofp->nof_np, nofp->nof_np->n_flag);
 				nfs_revoke_open_state_for_node(nofp->nof_np);
 			}
 		}
@@ -2752,17 +2998,18 @@ recheckdeleg:
 				lck_mtx_unlock(&nmp->nm_lock);
 				nfs4_expired_check_delegation(np, vfs_context_kernel());
 				lck_mtx_lock(&nmp->nm_lock);
-				if (nextnp == NFSNOLIST)
+				if (nextnp == NFSNOLIST) {
 					goto recheckdeleg;
+				}
 			}
 		}
-		nmp->nm_state &= ~(NFSSTA_RECOVER|NFSSTA_RECOVER_EXPIRED);
+		nmp->nm_state &= ~(NFSSTA_RECOVER | NFSSTA_RECOVER_EXPIRED);
 		wakeup(&nmp->nm_state);
 		printf("nfs recovery completed for %s, 0x%x\n",
-			vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid);
+		    vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid);
 		lck_mtx_unlock(&nmp->nm_lock);
 	} else {
 		printf("nfs recovery failed for %s, 0x%x, error %d\n",
-			vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid, error);
+		    vfs_statfs(nmp->nm_mountp)->f_mntfromname, nmp->nm_stategenid, error);
 	}
 }

@@ -27,7 +27,7 @@
  */
 #ifdef KERNEL
 #ifndef _STRUCT_USER64_NTPTIMEVAL
-#define _STRUCT_USER64_NTPTIMEVAL	struct user64_ntptimeval
+#define _STRUCT_USER64_NTPTIMEVAL       struct user64_ntptimeval
 _STRUCT_USER64_NTPTIMEVAL
 {
 	struct user64_timespec time;
@@ -35,7 +35,6 @@ _STRUCT_USER64_NTPTIMEVAL
 	user64_long_t esterror;
 	user64_long_t tai;
 	__int64_t time_state;
-
 };
 #endif /* _STRUCT_USER64_NTPTIMEVAL */
 #endif /* KERNEL */

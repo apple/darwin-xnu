@@ -402,59 +402,59 @@ __BEGIN_DECLS
  */
 
 /*!
-* @define   kOSKextKernelIdentifier
-* @abstract
-* This is the CFBundleIdentifier user for the kernel itself.
-*/
+ * @define   kOSKextKernelIdentifier
+ * @abstract
+ * This is the CFBundleIdentifier user for the kernel itself.
+ */
 #define kOSKextKernelIdentifier                 "__kernel__"
 
 /*!
-* @define   kOSBundleRequiredRoot
-* @abstract
-* This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
-* value indicates that the kext may be needed to mount the root filesystem
-* whether starting from a local or a network volume.
-*/
+ * @define   kOSBundleRequiredRoot
+ * @abstract
+ * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
+ * value indicates that the kext may be needed to mount the root filesystem
+ * whether starting from a local or a network volume.
+ */
 #define kOSBundleRequiredRoot                   "Root"
 
 /*!
-* @define   kOSBundleRequiredLocalRoot
-* @abstract
-* This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
-* value indicates that the kext may be needed to mount the root filesystem
-* when starting from a local disk.
-*/
+ * @define   kOSBundleRequiredLocalRoot
+ * @abstract
+ * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
+ * value indicates that the kext may be needed to mount the root filesystem
+ * when starting from a local disk.
+ */
 #define kOSBundleRequiredLocalRoot              "Local-Root"
 
 /*!
-* @define   kOSBundleRequiredNetworkRoot
-* @abstract
-* This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
-* value indicates that the kext may be needed to mount the root filesystem
-* when starting over a network connection.
-*/
+ * @define   kOSBundleRequiredNetworkRoot
+ * @abstract
+ * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
+ * value indicates that the kext may be needed to mount the root filesystem
+ * when starting over a network connection.
+ */
 #define kOSBundleRequiredNetworkRoot            "Network-Root"
 
 /*!
-* @define   kOSBundleRequiredSafeBoot
-* @abstract
-* This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
-* value indicates that the kext can be loaded during a safe startup.
-* This value does not normally cause the kext to be read by the booter
-* or included in startup kext caches.
-*/
+ * @define   kOSBundleRequiredSafeBoot
+ * @abstract
+ * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
+ * value indicates that the kext can be loaded during a safe startup.
+ * This value does not normally cause the kext to be read by the booter
+ * or included in startup kext caches.
+ */
 #define kOSBundleRequiredSafeBoot               "Safe Boot"
 
 /*!
-* @define   kOSBundleRequiredConsole
-* @abstract
-* This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
-* value indicates that the kext may be needed for console access
-* (specifically in a single-user startup when
-* <code>@link //apple_ref/doc/man/8/kextd kextd(8)@/link</code>.
-* does not run)
-* and should be loaded during early startup.
-*/
+ * @define   kOSBundleRequiredConsole
+ * @abstract
+ * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
+ * value indicates that the kext may be needed for console access
+ * (specifically in a single-user startup when
+ * <code>@link //apple_ref/doc/man/8/kextd kextd(8)@/link</code>.
+ * does not run)
+ * and should be loaded during early startup.
+ */
 #define kOSBundleRequiredConsole                "Console"
 
 
@@ -574,7 +574,7 @@ const char * OSKextGetCurrentVersionString(void);
  * @group Kext Loading C Functions
  * Functions for loading and tracking kexts in the kernel.
  */
- 
+
 /*!
  * @function OSKextLoadKextWithIdentifier
  *
@@ -753,11 +753,11 @@ typedef uint32_t OSKextRequestTag;
  *                             OSKextRequestResource@/link</code>.
  */
 typedef void (* OSKextRequestResourceCallback)(
-    OSKextRequestTag                requestTag,
-    OSReturn                        result,
-    const void                    * resourceData,
-    uint32_t                        resourceDataLength,
-    void                          * context);
+	OSKextRequestTag                requestTag,
+	OSReturn                        result,
+	const void                    * resourceData,
+	uint32_t                        resourceDataLength,
+	void                          * context);
 
 /*!
  * @function OSKextRequestResource
@@ -843,11 +843,11 @@ typedef void (* OSKextRequestResourceCallback)(
  * outside of the stop function.
  */
 OSReturn OSKextRequestResource(
-    const char                    * kextIdentifier,
-    const char                    * resourceName,
-    OSKextRequestResourceCallback   callback,
-    void                          * context,
-    OSKextRequestTag              * requestTagOut);
+	const char                    * kextIdentifier,
+	const char                    * resourceName,
+	OSKextRequestResourceCallback   callback,
+	void                          * context,
+	OSKextRequestTag              * requestTagOut);
 
 /*!
  * @function OSKextCancelRequest
@@ -881,8 +881,8 @@ OSReturn OSKextRequestResource(
  * before the stop function is called.
  */
 OSReturn OSKextCancelRequest(
-    OSKextRequestTag    requestTag,
-    void             ** contextOut);
+	OSKextRequestTag    requestTag,
+	void             ** contextOut);
 
 
 /*!
@@ -907,11 +907,11 @@ OSReturn OSKextCancelRequest(
  */
 int
 OSKextGrabPgoData(uuid_t uuid,
-                  uint64_t *pSize,
-                  char *pBuffer,
-                  uint64_t bufferSize,
-                  int wait_for_unload,
-                  int metadata);
+    uint64_t *pSize,
+    char *pBuffer,
+    uint64_t bufferSize,
+    int wait_for_unload,
+    int metadata);
 
 /*!
  * @function OSKextResetPgoCountersLock
@@ -955,11 +955,11 @@ OSKextResetPgoCounters(void);
 /*!
  * @var gOSKextUnresolved
  *
- * @abstract 
+ * @abstract
  * The value to which a kext's unresolved, weakly-referenced symbols are bound.
  *
  * @discussion
- * A kext must test a weak symbol before using it.  A weak symbol 
+ * A kext must test a weak symbol before using it.  A weak symbol
  * is only safe to use if it is not equal to <code>gOSKextUnresolved</code>.
  *
  * Example for a weak symbol named <code>foo</code>:
@@ -978,18 +978,18 @@ extern const void * gOSKextUnresolved;
 /*!
  * @define OSKextSymbolIsResolved
  *
- * @abstract 
+ * @abstract
  * Checks whether a weakly-referenced symbol has been resolved.
  *
  * @param weak_sym   The weak symbol to be tested for resolution.
  *
- * @result 
- * <code>TRUE</code> if weak_sym is resolved, or <code>FALSE</code> 
+ * @result
+ * <code>TRUE</code> if weak_sym is resolved, or <code>FALSE</code>
  * if weak_sym is unresolved.
  *
  * @discussion
  * This is a convenience macro for testing if weak symbols are resolved.
- * 
+ *
  * Example for a weak symbol named <code>foo</code>:
  * <pre>
  * @textblock
@@ -1017,9 +1017,9 @@ extern const void * gOSKextUnresolved;
 // Kernel External Components for FIPS compliance (KEC_FIPS)
 // WARNING - ath_hash is owned by the kernel, do not free
 typedef struct AppleTEXTHash {
-    int       		ath_version;    // version of this structure (value is 1 or 2)
-    int             ath_length;     // length of hash data
-    void *          ath_hash;       // hash extracted from AppleTextHashes dict 
+	int                 ath_version;// version of this structure (value is 1 or 2)
+	int             ath_length; // length of hash data
+	void *          ath_hash;   // hash extracted from AppleTextHashes dict
 } AppleTEXTHash_t;
 #endif // CONFIG_KEC_FIPS
 

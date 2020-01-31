@@ -38,7 +38,8 @@
 
 void usage(void);
 
-int main(int argc, char * argv[])
+int
+main(int argc, char * argv[])
 {
 	struct stat sb;
 	void *mset;
@@ -52,23 +53,24 @@ int main(int argc, char * argv[])
 	char dsttmpname[MAXPATHLEN];
 
 	while ((ch = getopt(argc, argv, "cSm:")) != -1) {
-		switch(ch) {
-			case 'c':
-			case 'S':
-				/* ignored for compatibility */
-				break;
-			case 'm':
-				gotmode = true;
-				mset = setmode(optarg);
-				if (!mset)
-					errx(EX_USAGE, "Unrecognized mode %s", optarg);
+		switch (ch) {
+		case 'c':
+		case 'S':
+			/* ignored for compatibility */
+			break;
+		case 'm':
+			gotmode = true;
+			mset = setmode(optarg);
+			if (!mset) {
+				errx(EX_USAGE, "Unrecognized mode %s", optarg);
+			}
 
-				mode = getmode(mset, 0);
-				free(mset);
-				break;
-			case '?':
-			default:
-				usage();
+			mode = getmode(mset, 0);
+			free(mset);
+			break;
+		case '?':
+		default:
+			usage();
 		}
 	}
 
@@ -83,55 +85,66 @@ int main(int argc, char * argv[])
 	dst = argv[1];
 
 	srcfd = open(src, O_RDONLY | O_SYMLINK, 0);
-	if (srcfd < 0)
+	if (srcfd < 0) {
 		err(EX_NOINPUT, "open(%s)", src);
+	}
 
 	ret = fstat(srcfd, &sb);
-	if (ret < 0)
+	if (ret < 0) {
 		err(EX_NOINPUT, "fstat(%s)", src);
+	}
 
-	if (!S_ISREG(sb.st_mode))
+	if (!S_ISREG(sb.st_mode)) {
 		err(EX_USAGE, "%s is not a regular file", src);
+	}
 
 	snprintf(dsttmpname, sizeof(dsttmpname), "%s.XXXXXX", dst);
 
 	dstfd = mkstemp(dsttmpname);
-	if (dstfd < 0)
+	if (dstfd < 0) {
 		err(EX_UNAVAILABLE, "mkstemp(%s)", dsttmpname);
+	}
 
 	ret = fcopyfile(srcfd, dstfd, NULL,
-					COPYFILE_DATA);
-	if (ret < 0)
+	    COPYFILE_DATA);
+	if (ret < 0) {
 		err(EX_UNAVAILABLE, "fcopyfile(%s, %s)", src, dsttmpname);
+	}
 
 	ret = futimes(dstfd, NULL);
-	if (ret < 0)
+	if (ret < 0) {
 		err(EX_UNAVAILABLE, "futimes(%s)", dsttmpname);
+	}
 
 	if (gotmode) {
 		ret = fchmod(dstfd, mode);
-		if (ret < 0)
+		if (ret < 0) {
 			err(EX_NOINPUT, "fchmod(%s, %ho)", dsttmpname, mode);
+		}
 	}
 
 	ret = rename(dsttmpname, dst);
-	if (ret < 0)
+	if (ret < 0) {
 		err(EX_NOINPUT, "rename(%s, %s)", dsttmpname, dst);
+	}
 
 	ret = close(dstfd);
-	if (ret < 0)
+	if (ret < 0) {
 		err(EX_NOINPUT, "close(dst)");
+	}
 
 	ret = close(srcfd);
-	if (ret < 0)
+	if (ret < 0) {
 		err(EX_NOINPUT, "close(src)");
+	}
 
 	return 0;
 }
 
-void usage(void)
+void
+usage(void)
 {
 	fprintf(stderr, "Usage: %s [-c] [-S] [-m <mode>] <src> <dst>\n",
-			getprogname());
+	    getprogname());
 	exit(EX_USAGE);
 }

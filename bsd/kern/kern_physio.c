@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -79,13 +79,13 @@
 #include <kern/assert.h>
 
 int
-physio( void (*f_strategy)(buf_t), 
-	buf_t bp,
-	dev_t dev,
-	int flags,
-	u_int (*f_minphys)(buf_t),
-	struct uio *uio,
-	int blocksize)
+physio( void (*f_strategy)(buf_t),
+    buf_t bp,
+    dev_t dev,
+    int flags,
+    u_int (*f_minphys)(buf_t),
+    struct uio *uio,
+    int blocksize)
 {
 	struct proc *p = current_proc();
 	int error, i, buf_allocated, todo, iosize;
@@ -107,12 +107,13 @@ physio( void (*f_strategy)(buf_t),
 		if (UIO_SEG_IS_USER_SPACE(uio->uio_segflg)) {
 			user_addr_t base;
 			user_size_t len;
-			
+
 			if (uio_getiov(uio, i, &base, &len) ||
-				!useracc(base,
-					len,
-		    		(flags == B_READ) ? B_WRITE : B_READ))
-			return (EFAULT);
+			    !useracc(base,
+			    len,
+			    (flags == B_READ) ? B_WRITE : B_READ)) {
+				return EFAULT;
+			}
 		}
 	}
 	/*
@@ -121,11 +122,12 @@ physio( void (*f_strategy)(buf_t),
 	if (bp == NULL) {
 		bp = buf_alloc((vnode_t)0);
 		buf_allocated = 1;
-	} else
-	        orig_bflags = buf_flags(bp);
+	} else {
+		orig_bflags = buf_flags(bp);
+	}
 	/*
 	 * at this point we should have a buffer
-	 * that is marked BL_BUSY... we either 
+	 * that is marked BL_BUSY... we either
 	 * acquired it via buf_alloc, or it was
 	 * passed into us... if it was passed
 	 * in, it needs to already be owned by
@@ -146,7 +148,7 @@ physio( void (*f_strategy)(buf_t),
 	 * "Set by physio for raw transfers.", in addition
 	 * to the read/write flag.)
 	 */
-        buf_setflags(bp, B_PHYS | B_RAW);
+	buf_setflags(bp, B_PHYS | B_RAW);
 
 	/*
 	 * [while there is data to transfer and no I/O error]
@@ -154,85 +156,89 @@ physio( void (*f_strategy)(buf_t),
 	 * of the 'while' loop.
 	 */
 	while (uio_resid(uio) > 0) {
-			
-			if ( (iosize = uio_curriovlen(uio)) > MAXPHYSIO_WIRED)
-			        iosize = MAXPHYSIO_WIRED;
-			/*
-			 * make sure we're set to issue a fresh I/O
-			 * in the right direction
-			 */
-			buf_reset(bp, flags);
+		if ((iosize = uio_curriovlen(uio)) > MAXPHYSIO_WIRED) {
+			iosize = MAXPHYSIO_WIRED;
+		}
+		/*
+		 * make sure we're set to issue a fresh I/O
+		 * in the right direction
+		 */
+		buf_reset(bp, flags);
 
-			/* [set up the buffer for a maximum-sized transfer] */
- 			buf_setblkno(bp, uio_offset(uio) / blocksize);
-			buf_setcount(bp, iosize);
-			buf_setdataptr(bp, (uintptr_t)CAST_DOWN(caddr_t, uio_curriovbase(uio)));
-			
-			/*
-			 * [call f_minphys to bound the tranfer size]
-			 * and remember the amount of data to transfer,
-			 * for later comparison.
-			 */
-			(*f_minphys)(bp);
-			todo = buf_count(bp);
+		/* [set up the buffer for a maximum-sized transfer] */
+		buf_setblkno(bp, uio_offset(uio) / blocksize);
+		buf_setcount(bp, iosize);
+		buf_setdataptr(bp, (uintptr_t)CAST_DOWN(caddr_t, uio_curriovbase(uio)));
 
-			/*
-			 * [lock the part of the user address space involved
-			 *    in the transfer]
-			 */
+		/*
+		 * [call f_minphys to bound the tranfer size]
+		 * and remember the amount of data to transfer,
+		 * for later comparison.
+		 */
+		(*f_minphys)(bp);
+		todo = buf_count(bp);
 
-			if(UIO_SEG_IS_USER_SPACE(uio->uio_segflg)) {
-				error = vslock(CAST_USER_ADDR_T(buf_dataptr(bp)),
-					       (user_size_t)todo);
-				if (error)
-					goto done;
-			}
-			
-			/* [call f_strategy to start the transfer] */
-			(*f_strategy)(bp);
+		/*
+		 * [lock the part of the user address space involved
+		 *    in the transfer]
+		 */
 
-
-			/* [wait for the transfer to complete] */
-			error = (int)buf_biowait(bp);
-
-			/*
-			 * [unlock the part of the address space previously
-			 *    locked]
-			 */
-			if(UIO_SEG_IS_USER_SPACE(uio->uio_segflg))
-				vsunlock(CAST_USER_ADDR_T(buf_dataptr(bp)),
-					 (user_size_t)todo,
-					 (flags & B_READ));
-
-			/*
-			 * [deduct the transfer size from the total number
-			 *    of data to transfer]
-			 */
-			done = buf_count(bp) - buf_resid(bp);
-			uio_update(uio, done);
-
-			/*
-			 * Now, check for an error.
-			 * Also, handle weird end-of-disk semantics.
-			 */
-			if (error || done < todo)
+		if (UIO_SEG_IS_USER_SPACE(uio->uio_segflg)) {
+			error = vslock(CAST_USER_ADDR_T(buf_dataptr(bp)),
+			    (user_size_t)todo);
+			if (error) {
 				goto done;
+			}
+		}
+
+		/* [call f_strategy to start the transfer] */
+		(*f_strategy)(bp);
+
+
+		/* [wait for the transfer to complete] */
+		error = (int)buf_biowait(bp);
+
+		/*
+		 * [unlock the part of the address space previously
+		 *    locked]
+		 */
+		if (UIO_SEG_IS_USER_SPACE(uio->uio_segflg)) {
+			vsunlock(CAST_USER_ADDR_T(buf_dataptr(bp)),
+			    (user_size_t)todo,
+			    (flags & B_READ));
+		}
+
+		/*
+		 * [deduct the transfer size from the total number
+		 *    of data to transfer]
+		 */
+		done = buf_count(bp) - buf_resid(bp);
+		uio_update(uio, done);
+
+		/*
+		 * Now, check for an error.
+		 * Also, handle weird end-of-disk semantics.
+		 */
+		if (error || done < todo) {
+			goto done;
+		}
 	}
 
 done:
-	if (buf_allocated)
-	        buf_free(bp);
-	else
+	if (buf_allocated) {
+		buf_free(bp);
+	} else {
 		buf_setflags(bp, orig_bflags);
+	}
 
-	return (error);
+	return error;
 }
 
 /*
  * Leffler, et al., says on p. 231:
  * "The minphys() routine is called by physio() to adjust the
  * size of each I/O transfer before the latter is passed to
- * the strategy routine..." 
+ * the strategy routine..."
  *
  * so, just adjust the buffer's count accounting to MAXPHYS here,
  * and return the new count;
@@ -240,7 +246,6 @@ done:
 u_int
 minphys(struct buf *bp)
 {
-
 	buf_setcount(bp, min(MAXPHYS, buf_count(bp)));
-        return buf_count(bp);
+	return buf_count(bp);
 }

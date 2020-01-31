@@ -33,20 +33,20 @@
 extern "C"
 {
 #endif
-    
+
 #include <corecrypto/ccchacha20poly1305.h>
-    
+
 typedef ccchacha20poly1305_ctx chacha20poly1305_ctx;
-    
-int	chacha20poly1305_init(chacha20poly1305_ctx *ctx, const uint8_t *key);
+
+int     chacha20poly1305_init(chacha20poly1305_ctx *ctx, const uint8_t *key);
 int chacha20poly1305_reset(chacha20poly1305_ctx *ctx);
 int chacha20poly1305_setnonce(chacha20poly1305_ctx *ctx, const uint8_t *nonce);
 int chacha20poly1305_incnonce(chacha20poly1305_ctx *ctx, uint8_t *nonce);
-int	chacha20poly1305_aad(chacha20poly1305_ctx *ctx, size_t nbytes, const void *aad);
-int	chacha20poly1305_encrypt(chacha20poly1305_ctx *ctx, size_t nbytes, const void *ptext, void *ctext);
-int	chacha20poly1305_finalize(chacha20poly1305_ctx *ctx, uint8_t *tag);
-int	chacha20poly1305_decrypt(chacha20poly1305_ctx *ctx, size_t nbytes, const void *ctext, void *ptext);
-int	chacha20poly1305_verify(chacha20poly1305_ctx *ctx, const uint8_t *tag);
+int     chacha20poly1305_aad(chacha20poly1305_ctx *ctx, size_t nbytes, const void *aad);
+int     chacha20poly1305_encrypt(chacha20poly1305_ctx *ctx, size_t nbytes, const void *ptext, void *ctext);
+int     chacha20poly1305_finalize(chacha20poly1305_ctx *ctx, uint8_t *tag);
+int     chacha20poly1305_decrypt(chacha20poly1305_ctx *ctx, size_t nbytes, const void *ctext, void *ptext);
+int     chacha20poly1305_verify(chacha20poly1305_ctx *ctx, const uint8_t *tag);
 
 #if defined(__cplusplus)
 }

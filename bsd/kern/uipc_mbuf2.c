@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: uipc_mbuf.c,v 1.40 1999/04/01 00:23:25 thorpej Exp $	*/
@@ -30,7 +30,7 @@
 /*
  * Copyright (C) 1999 WIDE Project.
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -42,7 +42,7 @@
  * 3. Neither the name of the project nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -139,11 +139,12 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 #endif
 
 	/* check invalid arguments. */
-	if (m == NULL)
+	if (m == NULL) {
 		panic("m == NULL in m_pulldown()");
+	}
 	if (len > MCLBYTES) {
 		m_freem(m);
-		return NULL;	/* impossible */
+		return NULL;    /* impossible */
 	}
 
 #if defined(PULLDOWN_STAT) && INET6
@@ -153,23 +154,23 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 #if defined(PULLDOWN_STAT) && INET6
 	/* statistics for m_pullup */
 	ip6stat.ip6s_pullup++;
-	if (off + len > MHLEN)
+	if (off + len > MHLEN) {
 		ip6stat.ip6s_pullup_fail++;
-	else {
+	} else {
 		int dlen, mlen;
 
 		dlen = (prev == m) ? prevlen : m->m_len;
 		mlen = (prev == m) ? prevmlen : m->m_len + M_TRAILINGSPACE(m);
 
-		if (dlen >= off + len)
+		if (dlen >= off + len) {
 			ip6stat.ip6s_pullup--; /* call will not be made! */
-		else if ((m->m_flags & M_EXT) != 0) {
+		} else if ((m->m_flags & M_EXT) != 0) {
 			ip6stat.ip6s_pullup_alloc++;
 			ip6stat.ip6s_pullup_copy++;
 		} else {
-			if (mlen >= off + len)
+			if (mlen >= off + len) {
 				ip6stat.ip6s_pullup_copy++;
-			else {
+			} else {
 				ip6stat.ip6s_pullup_alloc++;
 				ip6stat.ip6s_pullup_copy++;
 			}
@@ -181,9 +182,9 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 
 	/* statistics for m_pullup2 */
 	ip6stat.ip6s_pullup2++;
-	if (off + len > MCLBYTES)
+	if (off + len > MCLBYTES) {
 		ip6stat.ip6s_pullup2_fail++;
-	else {
+	} else {
 		int dlen, mlen;
 
 		dlen = (prev == m) ? prevlen : m->m_len;
@@ -191,20 +192,20 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 		prevlen = off + len;
 		prevmlen = mlen;
 
-		if (dlen >= off + len)
+		if (dlen >= off + len) {
 			ip6stat.ip6s_pullup2--; /* call will not be made! */
-		else if ((m->m_flags & M_EXT) != 0) {
+		} else if ((m->m_flags & M_EXT) != 0) {
 			ip6stat.ip6s_pullup2_alloc++;
 			ip6stat.ip6s_pullup2_copy++;
 			prevmlen = (off + len > MHLEN) ? MCLBYTES : MHLEN;
 		} else {
-			if (mlen >= off + len)
+			if (mlen >= off + len) {
 				ip6stat.ip6s_pullup2_copy++;
-			else {
+			} else {
 				ip6stat.ip6s_pullup2_alloc++;
 				ip6stat.ip6s_pullup2_copy++;
 				prevmlen = (off + len > MHLEN) ? MCLBYTES
-							       : MHLEN;
+				    : MHLEN;
 			}
 		}
 	}
@@ -213,13 +214,14 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 #endif
 
 #ifdef PULLDOWN_DEBUG
-    {
-	struct mbuf *t;
-	printf("before:");
-	for (t = m; t; t = t->m_next)
-		printf(" %d", t->m_len);
-	printf("\n");
-    }
+	{
+		struct mbuf *t;
+		printf("before:");
+		for (t = m; t; t = t->m_next) {
+			printf(" %d", t->m_len);
+		}
+		printf("\n");
+	}
 #endif
 	n = m;
 
@@ -230,19 +232,21 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	 * mbuf chain.
 	 */
 	while (n != NULL && off > 0) {
-		if (n->m_len > off)
+		if (n->m_len > off) {
 			break;
+		}
 		off -= n->m_len;
 		n = n->m_next;
 	}
 
 	/* be sure to point non-empty mbuf */
-	while (n != NULL && n->m_len == 0)
+	while (n != NULL && n->m_len == 0) {
 		n = n->m_next;
+	}
 
 	if (!n) {
 		m_freem(m);
-		return NULL;	/* mbuf chain too short */
+		return NULL;    /* mbuf chain too short */
 	}
 
 	/*
@@ -259,8 +263,9 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	 * to get offset, we should split the mbuf even when the length
 	 * is contained in current mbuf.
 	 */
-	if ((off == 0 || offp) && len <= n->m_len - off)
+	if ((off == 0 || offp) && len <= n->m_len - off) {
 		goto ok;
+	}
 
 #if defined(PULLDOWN_STAT) && INET6
 	ip6stat.ip6s_pulldown_copy++;
@@ -276,7 +281,7 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 		o = m_copym(n, off, n->m_len - off, M_DONTWAIT);
 		if (o == NULL) {
 			m_freem(m);
-			return NULL;	/* ENOBUFS */
+			return NULL;    /* ENOBUFS */
 		}
 		n->m_len = off;
 		o->m_next = n->m_next;
@@ -301,26 +306,28 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	 * if not, we can do nothing about the chain.
 	 */
 	olen = 0;
-	for (o = n->m_next; o != NULL; o = o->m_next)
+	for (o = n->m_next; o != NULL; o = o->m_next) {
 		olen += o->m_len;
+	}
 	if (hlen + olen < len) {
 		m_freem(m);
-		return NULL;	/* mbuf chain too short */
+		return NULL;    /* mbuf chain too short */
 	}
 
 	/*
 	 * easy cases first.
 	 * we need to use m_copydata() to get data from <n->m_next, 0>.
 	 */
-	if ((n->m_flags & M_EXT) == 0)
+	if ((n->m_flags & M_EXT) == 0) {
 		sharedcluster = 0;
-	else {
-		if (m_get_ext_free(n) != NULL)
+	} else {
+		if (m_get_ext_free(n) != NULL) {
 			sharedcluster = 1;
-		else if (m_mclhasreference(n))
+		} else if (m_mclhasreference(n)) {
 			sharedcluster = 1;
-		else
+		} else {
 			sharedcluster = 0;
+		}
 	}
 
 	/*
@@ -329,7 +336,7 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	 * and adjust the length of next one accordingly.
 	 */
 	if ((off == 0 || offp) && M_TRAILINGSPACE(n) >= tlen
-	 && !sharedcluster) {
+	    && !sharedcluster) {
 		m_copydata(n->m_next, 0, tlen, mtod(n, caddr_t) + n->m_len);
 		n->m_len += tlen;
 		m_adj(n->m_next, tlen);
@@ -363,14 +370,14 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	MGET(o, M_DONTWAIT, m->m_type);
 	if (o == NULL) {
 		m_freem(m);
-		return NULL;	/* ENOBUFS */
+		return NULL;    /* ENOBUFS */
 	}
-	if (len > MHLEN) {	/* use MHLEN just for safety */
+	if (len > MHLEN) {      /* use MHLEN just for safety */
 		MCLGET(o, M_DONTWAIT);
 		if ((o->m_flags & M_EXT) == 0) {
 			m_freem(m);
 			m_free(o);
-			return NULL;	/* ENOBUFS */
+			return NULL;    /* ENOBUFS */
 		}
 	}
 	/* get hlen from <n, off> into <o, 0> */
@@ -388,16 +395,18 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 
 ok:
 #ifdef PULLDOWN_DEBUG
-    {
-	struct mbuf *t;
-	printf("after:");
-	for (t = m; t; t = t->m_next)
-		printf("%c%d", t == n ? '*' : ' ', t->m_len);
-	printf(" (off=%d)\n", off);
-    }
+	{
+		struct mbuf *t;
+		printf("after:");
+		for (t = m; t; t = t->m_next) {
+			printf("%c%d", t == n ? '*' : ' ', t->m_len);
+		}
+		printf(" (off=%d)\n", off);
+	}
 #endif
-	if (offp)
+	if (offp) {
 		*offp = off;
+	}
 	return n;
 }
 
@@ -411,11 +420,13 @@ m_tag_create(u_int32_t id, u_int16_t type, int len, int wait, struct mbuf *buf)
 	struct m_tag *t = NULL;
 	struct m_tag *p;
 
-	if (len < 0)
-		return (NULL);
+	if (len < 0) {
+		return NULL;
+	}
 
-	if (len + sizeof (struct m_tag) + sizeof (struct m_taghdr) > MLEN)
-		return (m_tag_alloc(id, type, len, wait));
+	if (len + sizeof(struct m_tag) + sizeof(struct m_taghdr) > MLEN) {
+		return m_tag_alloc(id, type, len, wait);
+	}
 
 	/*
 	 * We've exhausted all external cases. Now, go through the m_tag
@@ -423,10 +434,10 @@ m_tag_create(u_int32_t id, u_int16_t type, int len, int wait, struct mbuf *buf)
 	 * If not (t == NULL), call m_tag_alloc to store it in a new mbuf.
 	 */
 	p = SLIST_FIRST(&buf->m_pkthdr.tags);
-	while(p != NULL) {
+	while (p != NULL) {
 		/* 2KCL m_tag */
 		if (M_TAG_ALIGN(p->m_tag_len) +
-		    sizeof (struct m_taghdr) > MLEN) {
+		    sizeof(struct m_taghdr) > MLEN) {
 			p = SLIST_NEXT(p, m_tag_link);
 			continue;
 		}
@@ -436,13 +447,13 @@ m_tag_create(u_int32_t id, u_int16_t type, int len, int wait, struct mbuf *buf)
 		struct mbuf *m = m_dtom(p);
 		struct m_taghdr *hdr = (struct m_taghdr *)(void *)m->m_data;
 
-		VERIFY(IS_P2ALIGNED(hdr + 1, sizeof (u_int64_t)));
+		VERIFY(IS_P2ALIGNED(hdr + 1, sizeof(u_int64_t)));
 		VERIFY(m->m_flags & M_TAGHDR && !(m->m_flags & M_EXT));
 
 		/* The mbuf can store this m_tag */
 		if (M_TAG_ALIGN(len) <= MLEN - m->m_len) {
 			t = (struct m_tag *)(void *)(m->m_data + m->m_len);
-			VERIFY(IS_P2ALIGNED(t, sizeof (u_int64_t)));
+			VERIFY(IS_P2ALIGNED(t, sizeof(u_int64_t)));
 			hdr->refcnt++;
 			m->m_len += M_TAG_ALIGN(len);
 			VERIFY(m->m_len <= MLEN);
@@ -452,16 +463,18 @@ m_tag_create(u_int32_t id, u_int16_t type, int len, int wait, struct mbuf *buf)
 		p = SLIST_NEXT(p, m_tag_link);
 	}
 
-	if (t == NULL)
-		return (m_tag_alloc(id, type, len, wait));
+	if (t == NULL) {
+		return m_tag_alloc(id, type, len, wait);
+	}
 
 	t->m_tag_cookie = M_TAG_VALID_PATTERN;
 	t->m_tag_type = type;
 	t->m_tag_len = len;
 	t->m_tag_id = id;
-	if (len > 0)
+	if (len > 0) {
 		bzero(t + 1, len);
-	return (t);
+	}
+	return t;
 }
 
 /* Get a packet tag structure along with specified data following. */
@@ -470,43 +483,47 @@ m_tag_alloc(u_int32_t id, u_int16_t type, int len, int wait)
 {
 	struct m_tag *t;
 
-	if (len < 0)
-		return (NULL);
+	if (len < 0) {
+		return NULL;
+	}
 
-        if (M_TAG_ALIGN(len) + sizeof (struct m_taghdr) <= MLEN) {
+	if (M_TAG_ALIGN(len) + sizeof(struct m_taghdr) <= MLEN) {
 		struct mbuf *m = m_get(wait, MT_TAG);
 		struct m_taghdr *hdr;
 
-		if (m == NULL)
-			return (NULL);
+		if (m == NULL) {
+			return NULL;
+		}
 
 		m->m_flags |= M_TAGHDR;
 
 		hdr = (struct m_taghdr *)(void *)m->m_data;
-		VERIFY(IS_P2ALIGNED(hdr + 1, sizeof (u_int64_t)));
+		VERIFY(IS_P2ALIGNED(hdr + 1, sizeof(u_int64_t)));
 		hdr->refcnt = 1;
-		m->m_len += sizeof (struct m_taghdr);
+		m->m_len += sizeof(struct m_taghdr);
 		t = (struct m_tag *)(void *)(m->m_data + m->m_len);
-		VERIFY(IS_P2ALIGNED(t, sizeof (u_int64_t)));
+		VERIFY(IS_P2ALIGNED(t, sizeof(u_int64_t)));
 		m->m_len += M_TAG_ALIGN(len);
 		VERIFY(m->m_len <= MLEN);
-        } else if (len + sizeof (struct m_tag) <= MCLBYTES) {
+	} else if (len + sizeof(struct m_tag) <= MCLBYTES) {
 		t = (struct m_tag *)(void *)m_mclalloc(wait);
-        } else {
-                t = NULL;
+	} else {
+		t = NULL;
 	}
 
-	if (t == NULL)
-		return (NULL);
+	if (t == NULL) {
+		return NULL;
+	}
 
-	VERIFY(IS_P2ALIGNED(t, sizeof (u_int64_t)));
+	VERIFY(IS_P2ALIGNED(t, sizeof(u_int64_t)));
 	t->m_tag_cookie = M_TAG_VALID_PATTERN;
 	t->m_tag_type = type;
 	t->m_tag_len = len;
 	t->m_tag_id = id;
-	if (len > 0)
+	if (len > 0) {
 		bzero(t + 1, len);
-	return (t);
+	}
+	return t;
 }
 
 
@@ -515,25 +532,27 @@ void
 m_tag_free(struct m_tag *t)
 {
 #if CONFIG_MACF_NET
-	if (t != NULL && 
-	    t->m_tag_id   == KERNEL_MODULE_TAG_ID &&
-	    t->m_tag_type == KERNEL_TAG_TYPE_MACLABEL)
+	if (t != NULL &&
+	    t->m_tag_id == KERNEL_MODULE_TAG_ID &&
+	    t->m_tag_type == KERNEL_TAG_TYPE_MACLABEL) {
 		mac_mbuf_tag_destroy(t);
+	}
 #endif
-	if (t == NULL)
+	if (t == NULL) {
 		return;
+	}
 
 	VERIFY(t->m_tag_cookie == M_TAG_VALID_PATTERN);
 
-	if (M_TAG_ALIGN(t->m_tag_len) + sizeof (struct m_taghdr) <= MLEN) {
+	if (M_TAG_ALIGN(t->m_tag_len) + sizeof(struct m_taghdr) <= MLEN) {
 		struct mbuf * m = m_dtom(t);
 		VERIFY(m->m_flags & M_TAGHDR);
 		struct m_taghdr *hdr = (struct m_taghdr *)(void *)m->m_data;
 
-		VERIFY(IS_P2ALIGNED(hdr + 1, sizeof (u_int64_t)));
+		VERIFY(IS_P2ALIGNED(hdr + 1, sizeof(u_int64_t)));
 
 		/* No other tags in this mbuf */
-		if(--hdr->refcnt == 0) {
+		if (--hdr->refcnt == 0) {
 			m_free(m);
 			return;
 		}
@@ -590,8 +609,9 @@ m_tag_delete_chain(struct mbuf *m, struct m_tag *t)
 	} else {
 		p = SLIST_FIRST(&m->m_pkthdr.tags);
 	}
-	if (p == NULL)
+	if (p == NULL) {
 		return;
+	}
 
 	VERIFY(p->m_tag_cookie == M_TAG_VALID_PATTERN);
 	while ((q = SLIST_NEXT(p, m_tag_link)) != NULL) {
@@ -617,11 +637,12 @@ m_tag_locate(struct mbuf *m, u_int32_t id, u_int16_t type, struct m_tag *t)
 	}
 	while (p != NULL) {
 		VERIFY(p->m_tag_cookie == M_TAG_VALID_PATTERN);
-		if (p->m_tag_id == id && p->m_tag_type == type)
-			return (p);
+		if (p->m_tag_id == id && p->m_tag_type == type) {
+			return p;
+		}
 		p = SLIST_NEXT(p, m_tag_link);
 	}
-	return (NULL);
+	return NULL;
 }
 
 /* Copy a single tag. */
@@ -633,8 +654,9 @@ m_tag_copy(struct m_tag *t, int how)
 	VERIFY(t != NULL);
 
 	p = m_tag_alloc(t->m_tag_id, t->m_tag_type, t->m_tag_len, how);
-	if (p == NULL)
-		return (NULL);
+	if (p == NULL) {
+		return NULL;
+	}
 #if CONFIG_MACF_NET
 	/*
 	 * XXXMAC: we should probably pass off the initialization, and
@@ -642,17 +664,17 @@ m_tag_copy(struct m_tag *t, int how)
 	 * special from the mbuf code?
 	 */
 	if (t != NULL &&
-	    t->m_tag_id   == KERNEL_MODULE_TAG_ID &&
+	    t->m_tag_id == KERNEL_MODULE_TAG_ID &&
 	    t->m_tag_type == KERNEL_TAG_TYPE_MACLABEL) {
 		if (mac_mbuf_tag_init(p, how) != 0) {
 			m_tag_free(p);
-			return (NULL);
+			return NULL;
 		}
 		mac_mbuf_tag_copy(t, p);
 	} else
 #endif
 	bcopy(t + 1, p + 1, t->m_tag_len); /* Copy the data */
-	return (p);
+	return p;
 }
 
 /*
@@ -674,7 +696,7 @@ m_tag_copy_chain(struct mbuf *to, struct mbuf *from, int how)
 		t = m_tag_copy(p, how);
 		if (t == NULL) {
 			m_tag_delete_chain(to, NULL);
-			return (0);
+			return 0;
 		}
 		if (tprev == NULL) {
 			SLIST_INSERT_HEAD(&to->m_pkthdr.tags, t, m_tag_link);
@@ -683,7 +705,7 @@ m_tag_copy_chain(struct mbuf *to, struct mbuf *from, int how)
 			tprev = t;
 		}
 	}
-	return (1);
+	return 1;
 }
 
 /* Initialize dynamic and static tags on an mbuf. */
@@ -699,7 +721,7 @@ m_tag_init(struct mbuf *m, int all)
 	 */
 	if (all) {
 		bzero(&m->m_pkthdr.builtin_mtag._net_mtag,
-		    sizeof (m->m_pkthdr.builtin_mtag._net_mtag));
+		    sizeof(m->m_pkthdr.builtin_mtag._net_mtag));
 	}
 }
 
@@ -709,7 +731,7 @@ m_tag_first(struct mbuf *m)
 {
 	VERIFY(m->m_flags & M_PKTHDR);
 
-	return (SLIST_FIRST(&m->m_pkthdr.tags));
+	return SLIST_FIRST(&m->m_pkthdr.tags);
 }
 
 /* Get next tag in chain. */
@@ -720,21 +742,21 @@ m_tag_next(struct mbuf *m, struct m_tag *t)
 	VERIFY(t != NULL);
 	VERIFY(t->m_tag_cookie == M_TAG_VALID_PATTERN);
 
-	return (SLIST_NEXT(t, m_tag_link));
+	return SLIST_NEXT(t, m_tag_link);
 }
 
 int
 m_set_traffic_class(struct mbuf *m, mbuf_traffic_class_t tc)
 {
-	u_int32_t val = MBUF_TC2SCVAL(tc);	/* just the val portion */
+	u_int32_t val = MBUF_TC2SCVAL(tc);      /* just the val portion */
 
-	return (m_set_service_class(m, m_service_class_from_val(val)));
+	return m_set_service_class(m, m_service_class_from_val(val));
 }
 
 mbuf_traffic_class_t
 m_get_traffic_class(struct mbuf *m)
 {
-	return (MBUF_SC2TC(m_get_service_class(m)));
+	return MBUF_SC2TC(m_get_service_class(m));
 }
 
 int
@@ -744,12 +766,13 @@ m_set_service_class(struct mbuf *m, mbuf_svc_class_t sc)
 
 	VERIFY(m->m_flags & M_PKTHDR);
 
-	if (MBUF_VALID_SC(sc))
+	if (MBUF_VALID_SC(sc)) {
 		m->m_pkthdr.pkt_svc = sc;
-	else
+	} else {
 		error = EINVAL;
+	}
 
-	return (error);
+	return error;
 }
 
 mbuf_svc_class_t
@@ -759,12 +782,13 @@ m_get_service_class(struct mbuf *m)
 
 	VERIFY(m->m_flags & M_PKTHDR);
 
-	if (MBUF_VALID_SC(m->m_pkthdr.pkt_svc))
+	if (MBUF_VALID_SC(m->m_pkthdr.pkt_svc)) {
 		sc = m->m_pkthdr.pkt_svc;
-	else
+	} else {
 		sc = MBUF_SC_BE;
+	}
 
-	return (sc);
+	return sc;
 }
 
 mbuf_svc_class_t
@@ -774,34 +798,34 @@ m_service_class_from_idx(u_int32_t i)
 
 	switch (i) {
 	case SCIDX_BK_SYS:
-		return (MBUF_SC_BK_SYS);
+		return MBUF_SC_BK_SYS;
 
 	case SCIDX_BK:
-		return (MBUF_SC_BK);
+		return MBUF_SC_BK;
 
 	case SCIDX_BE:
-		return (MBUF_SC_BE);
+		return MBUF_SC_BE;
 
 	case SCIDX_RD:
-		return (MBUF_SC_RD);
+		return MBUF_SC_RD;
 
 	case SCIDX_OAM:
-		return (MBUF_SC_OAM);
+		return MBUF_SC_OAM;
 
 	case SCIDX_AV:
-		return (MBUF_SC_AV);
+		return MBUF_SC_AV;
 
 	case SCIDX_RV:
-		return (MBUF_SC_RV);
+		return MBUF_SC_RV;
 
 	case SCIDX_VI:
-		return (MBUF_SC_VI);
+		return MBUF_SC_VI;
 
 	case SCIDX_VO:
-		return (MBUF_SC_VO);
+		return MBUF_SC_VO;
 
 	case SCIDX_CTL:
-		return (MBUF_SC_CTL);
+		return MBUF_SC_CTL;
 
 	default:
 		break;
@@ -809,7 +833,7 @@ m_service_class_from_idx(u_int32_t i)
 
 	VERIFY(0);
 	/* NOTREACHED */
-	return (sc);
+	return sc;
 }
 
 mbuf_svc_class_t
@@ -819,34 +843,34 @@ m_service_class_from_val(u_int32_t v)
 
 	switch (v) {
 	case SCVAL_BK_SYS:
-		return (MBUF_SC_BK_SYS);
+		return MBUF_SC_BK_SYS;
 
 	case SCVAL_BK:
-		return (MBUF_SC_BK);
+		return MBUF_SC_BK;
 
 	case SCVAL_BE:
-		return (MBUF_SC_BE);
+		return MBUF_SC_BE;
 
 	case SCVAL_RD:
-		return (MBUF_SC_RD);
+		return MBUF_SC_RD;
 
 	case SCVAL_OAM:
-		return (MBUF_SC_OAM);
+		return MBUF_SC_OAM;
 
 	case SCVAL_AV:
-		return (MBUF_SC_AV);
+		return MBUF_SC_AV;
 
 	case SCVAL_RV:
-		return (MBUF_SC_RV);
+		return MBUF_SC_RV;
 
 	case SCVAL_VI:
-		return (MBUF_SC_VI);
+		return MBUF_SC_VI;
 
 	case SCVAL_VO:
-		return (MBUF_SC_VO);
+		return MBUF_SC_VO;
 
 	case SCVAL_CTL:
-		return (MBUF_SC_CTL);
+		return MBUF_SC_CTL;
 
 	default:
 		break;
@@ -854,16 +878,16 @@ m_service_class_from_val(u_int32_t v)
 
 	VERIFY(0);
 	/* NOTREACHED */
-	return (sc);
+	return sc;
 }
 
 uint16_t
 m_adj_sum16(struct mbuf *m, uint32_t start, uint32_t dataoff,
     uint32_t datalen, uint32_t sum)
 {
-	uint32_t total_sub = 0;			/* total to subtract */
-	uint32_t mlen = m_pktlen(m);		/* frame length */
-	uint32_t bytes = (dataoff + datalen);	/* bytes covered by sum */
+	uint32_t total_sub = 0;                 /* total to subtract */
+	uint32_t mlen = m_pktlen(m);            /* frame length */
+	uint32_t bytes = (dataoff + datalen);   /* bytes covered by sum */
 	int len;
 
 	ASSERT(bytes <= mlen);
@@ -874,10 +898,11 @@ m_adj_sum16(struct mbuf *m, uint32_t start, uint32_t dataoff,
 	 * into account the start offset.
 	 */
 	len = (dataoff - start);
-	if (len > 0)
+	if (len > 0) {
 		total_sub = m_sum16(m, start, len);
-	else if (len < 0)
+	} else if (len < 0) {
 		sum += m_sum16(m, dataoff, -len);
+	}
 
 	/*
 	 * Take care of excluding any postpended extraneous octets.
@@ -894,17 +919,19 @@ m_adj_sum16(struct mbuf *m, uint32_t start, uint32_t dataoff,
 				    "len %u]", __func__, m0, off0, len);
 				/* NOTREACHED */
 			}
-			if (off < m->m_len)
+			if (off < m->m_len) {
 				break;
+			}
 			off -= m->m_len;
 			m = m->m_next;
 		}
 
 		/* if we started on odd-alignment, swap the value */
-		if ((uintptr_t)(mtod(m, uint8_t *) + off) & 1)
+		if ((uintptr_t)(mtod(m, uint8_t *) + off) & 1) {
 			total_sub += ((extra << 8) & 0xffff) | (extra >> 8);
-		else
+		} else {
 			total_sub += extra;
+		}
 
 		total_sub = (total_sub >> 16) + (total_sub & 0xffff);
 	}
@@ -913,18 +940,19 @@ m_adj_sum16(struct mbuf *m, uint32_t start, uint32_t dataoff,
 	 * 1's complement subtract any extraneous octets.
 	 */
 	if (total_sub != 0) {
-		if (total_sub >= sum)
+		if (total_sub >= sum) {
 			sum = ~(total_sub - sum) & 0xffff;
-		else
+		} else {
 			sum -= total_sub;
+		}
 	}
 
 	/* fold 32-bit to 16-bit */
-	sum = (sum >> 16) + (sum & 0xffff);	/* 17-bit */
-	sum = (sum >> 16) + (sum & 0xffff);	/* 16-bit + carry */
-	sum = (sum >> 16) + (sum & 0xffff);	/* final carry */
+	sum = (sum >> 16) + (sum & 0xffff);     /* 17-bit */
+	sum = (sum >> 16) + (sum & 0xffff);     /* 16-bit + carry */
+	sum = (sum >> 16) + (sum & 0xffff);     /* final carry */
 
-	return (sum & 0xffff);
+	return sum & 0xffff;
 }
 
 uint16_t
@@ -945,5 +973,5 @@ m_sum16(struct mbuf *m, uint32_t off, uint32_t len)
 		/* NOTREACHED */
 	}
 
-	return (os_cpu_in_cksum_mbuf(m, len, off, 0));
+	return os_cpu_in_cksum_mbuf(m, len, off, 0);
 }

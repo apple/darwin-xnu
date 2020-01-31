@@ -96,8 +96,8 @@ struct ip_fw_args {
 	struct ip_fw            *fwa_ipfw_rule; /* matching IPFW rule           */
 	struct pf_rule          *fwa_pf_rule;   /* matching PF rule             */
 	struct ether_header     *fwa_eh;        /* for bridged packets          */
-	int			fwa_flags;      /* for dummynet                 */
-	int                     fwa_oflags;	/* for dummynet         */
+	int                     fwa_flags;      /* for dummynet                 */
+	int                     fwa_oflags;     /* for dummynet         */
 	union {
 		struct ip_out_args  *_fwa_ipoa;     /* for dummynet                */
 		struct ip6_out_args *_fwa_ip6oa;    /* for dummynet               */
@@ -111,11 +111,11 @@ struct ip_fw_args {
 		struct sockaddr_in6 *_fwa_dst6;     /* for IPv6 dummynet         */
 	} fwa_dst_;
 	struct route_in6        *fwa_ro6_pmtu;  /* for IPv6 output */
-	struct ifnet		*fwa_origifp;	/* for IPv6 output */
-	u_int32_t		fwa_mtu;	/* for IPv6 output */
-	int			fwa_alwaysfrag;	/* for IPv6 output */
-	u_int32_t		fwa_unfragpartlen;  /* for IPv6 output */
-	struct ip6_exthdrs 	*fwa_exthdrs;	/* for IPv6 output */
+	struct ifnet            *fwa_origifp;   /* for IPv6 output */
+	u_int32_t               fwa_mtu;        /* for IPv6 output */
+	int                     fwa_alwaysfrag; /* for IPv6 output */
+	u_int32_t               fwa_unfragpartlen;  /* for IPv6 output */
+	struct ip6_exthdrs      *fwa_exthdrs;   /* for IPv6 output */
 	struct ip_flow_id       fwa_id;         /* grabbed from IP header       */
 	u_int16_t               fwa_divert_rule;/* divert cookie                */
 	u_int32_t               fwa_cookie;
@@ -129,10 +129,10 @@ struct ip_fw_args {
 
 /* Allocate a separate structure for inputs args to save space and bzero time */
 struct ip_fw_in_args {
-	struct sockaddr_in	*fwai_next_hop;	/* forward address            */
-	struct ip_fw		*fwai_ipfw_rule;/* matching IPFW rule         */
-	struct pf_rule		*fwai_pf_rule;	/* matching PF rule           */
-	u_int16_t		fwai_divert_rule;/* divert cookie             */
+	struct sockaddr_in      *fwai_next_hop; /* forward address            */
+	struct ip_fw            *fwai_ipfw_rule;/* matching IPFW rule         */
+	struct pf_rule          *fwai_pf_rule;  /* matching PF rule           */
+	u_int16_t               fwai_divert_rule;/* divert cookie             */
 };
 
 #endif /* BSD_KERNEL_PRIVATE */

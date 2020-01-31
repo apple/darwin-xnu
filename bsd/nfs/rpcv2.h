@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -78,84 +78,84 @@
  */
 
 /* Version # */
-#define	RPC_VER2	2
+#define RPC_VER2        2
 
 /* Authentication */
-#define	RPCAUTH_NULL	0
-#define	RPCAUTH_NONE	RPCAUTH_NULL
-#define	RPCAUTH_UNIX	1
-#define RPCAUTH_SYS	RPCAUTH_UNIX
-#define	RPCAUTH_SHORT	2
-#define RPCAUTH_KERB4	4
-#define RPCAUTH_KRB5	390003
-#define RPCAUTH_KRB5I	390004
-#define RPCAUTH_KRB5P	390005
-#define RPCAUTH_INVALID	~0U
-#define RPCAUTH_UNKNOWN	RPCAUTH_INVALID
+#define RPCAUTH_NULL    0
+#define RPCAUTH_NONE    RPCAUTH_NULL
+#define RPCAUTH_UNIX    1
+#define RPCAUTH_SYS     RPCAUTH_UNIX
+#define RPCAUTH_SHORT   2
+#define RPCAUTH_KERB4   4
+#define RPCAUTH_KRB5    390003
+#define RPCAUTH_KRB5I   390004
+#define RPCAUTH_KRB5P   390005
+#define RPCAUTH_INVALID ~0U
+#define RPCAUTH_UNKNOWN RPCAUTH_INVALID
 
-#define	RPCAUTH_MAXSIZ	400
-#define	RPCAUTH_UNIXGIDS 16
+#define RPCAUTH_MAXSIZ  400
+#define RPCAUTH_UNIXGIDS 16
 
 /*
  * Constants associated with authentication flavours.
  */
-#define RPCAKN_FULLNAME	0
-#define RPCAKN_NICKNAME	1
+#define RPCAKN_FULLNAME 0
+#define RPCAKN_NICKNAME 1
 
 /* Rpc Constants */
-#define	RPC_CALL	0
-#define	RPC_REPLY	1
-#define	RPC_MSGACCEPTED	0
-#define	RPC_MSGDENIED	1
-#define	RPC_SUCCESS	0
-#define	RPC_PROGUNAVAIL	1
-#define	RPC_PROGMISMATCH	2
-#define	RPC_PROCUNAVAIL	3
-#define	RPC_GARBAGE	4		/* I like this one */
-#define	RPC_SYSTEM_ERR	5
-#define	RPC_MISMATCH	0
-#define	RPC_AUTHERR	1
+#define RPC_CALL        0
+#define RPC_REPLY       1
+#define RPC_MSGACCEPTED 0
+#define RPC_MSGDENIED   1
+#define RPC_SUCCESS     0
+#define RPC_PROGUNAVAIL 1
+#define RPC_PROGMISMATCH        2
+#define RPC_PROCUNAVAIL 3
+#define RPC_GARBAGE     4               /* I like this one */
+#define RPC_SYSTEM_ERR  5
+#define RPC_MISMATCH    0
+#define RPC_AUTHERR     1
 
 /* Authentication failures */
-#define	AUTH_BADCRED		1
-#define	AUTH_REJECTCRED		2
-#define	AUTH_BADVERF		3
-#define	AUTH_REJECTVERF		4
-#define	AUTH_TOOWEAK		5	/* Give em wheaties */
-#define AUTH_INVALIDRESP	6
-#define AUTH_FAILED		7
-#define AUTH_KERB_GENERIC	8
-#define AUTH_TIMEEXPIRE		9
-#define AUTH_TKT_FILE		10
-#define AUTH_DECODE		11
-#define AUTH_NET_ADDR		12
-#define RPCSEC_GSS_CREDPROBLEM	13
-#define RPCSEC_GSS_CTXPROBLEM	14
+#define AUTH_BADCRED            1
+#define AUTH_REJECTCRED         2
+#define AUTH_BADVERF            3
+#define AUTH_REJECTVERF         4
+#define AUTH_TOOWEAK            5       /* Give em wheaties */
+#define AUTH_INVALIDRESP        6
+#define AUTH_FAILED             7
+#define AUTH_KERB_GENERIC       8
+#define AUTH_TIMEEXPIRE         9
+#define AUTH_TKT_FILE           10
+#define AUTH_DECODE             11
+#define AUTH_NET_ADDR           12
+#define RPCSEC_GSS_CREDPROBLEM  13
+#define RPCSEC_GSS_CTXPROBLEM   14
 
 /* Sizes of rpc header parts */
-#define	RPC_SIZ		24
-#define	RPC_REPLYSIZ	28
+#define RPC_SIZ         24
+#define RPC_REPLYSIZ    28
 
 /* RPC Prog definitions */
-#define	RPCPROG_MNT	100005
-#define	RPCMNT_VER1	1
-#define RPCMNT_VER3	3
-#define	RPCMNT_MOUNT	1
-#define	RPCMNT_DUMP	2
-#define	RPCMNT_UMOUNT	3
-#define	RPCMNT_UMNTALL	4
-#define	RPCMNT_EXPORT	5
-#define	RPCMNT_NAMELEN	255
-#define	RPCMNT_PATHLEN	1024
-#define	RPCPROG_NFS	100003
+#define RPCPROG_MNT     100005
+#define RPCMNT_VER1     1
+#define RPCMNT_VER3     3
+#define RPCMNT_MOUNT    1
+#define RPCMNT_DUMP     2
+#define RPCMNT_UMOUNT   3
+#define RPCMNT_UMNTALL  4
+#define RPCMNT_EXPORT   5
+#define RPCMNT_NAMELEN  255
+#define RPCMNT_PATHLEN  1024
+#define RPCPROG_NFS     100003
 
-#define	RPCPROG_RQUOTA	100011
-#define	RPCRQUOTA_VER		1
-#define	RPCRQUOTA_EXT_VER	2
-#define	RPCRQUOTA_GET		1
-#define	RQUOTA_STAT_OK		1
-#define	RQUOTA_STAT_NOQUOTA	2
-#define	RQUOTA_STAT_EPERM	3
+#define RPCPROG_RQUOTA  100011
+#define RPCRQUOTA_VER           1
+#define RPCRQUOTA_EXT_VER       2
+#define RPCRQUOTA_GET           1
+#define RQUOTA_STAT_OK          1
+#define RQUOTA_STAT_NOQUOTA     2
+#define RQUOTA_STAT_EPERM       3
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* _NFS_RPCV2_H_ */

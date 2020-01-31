@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -64,16 +64,16 @@
  *
  */
 
-#ifndef	_MACH_VM_PARAM_H_
+#ifndef _MACH_VM_PARAM_H_
 #define _MACH_VM_PARAM_H_
 
 #include <mach/machine/vm_param.h>
 
-#ifdef	KERNEL
+#ifdef  KERNEL
 
-#ifndef	ASSEMBLER
+#ifndef ASSEMBLER
 #include <mach/vm_types.h>
-#endif	/* ASSEMBLER */
+#endif  /* ASSEMBLER */
 
 #include <os/base.h>
 #include <os/overflow.h>
@@ -83,10 +83,10 @@
  *	is some number of hardware pages, depending on the target machine.
  */
 
-#ifndef	ASSEMBLER
+#ifndef ASSEMBLER
 
-#define PAGE_SIZE_64 (unsigned long long)PAGE_SIZE		/* pagesize in addr units */
-#define PAGE_MASK_64 (unsigned long long)PAGE_MASK		/* mask for off in page */
+#define PAGE_SIZE_64 (unsigned long long)PAGE_SIZE              /* pagesize in addr units */
+#define PAGE_MASK_64 (unsigned long long)PAGE_MASK              /* mask for off in page */
 
 /*
  *	Convert addresses to pages and vice versa.  No rounding is used.
@@ -109,8 +109,8 @@
  */
 
 #if 1
-#define atop(x)	((vm_address_t)(x) >> PAGE_SHIFT)
-#define ptoa(x)	((vm_address_t)(x) << PAGE_SHIFT)
+#define atop(x) ((vm_address_t)(x) >> PAGE_SHIFT)
+#define ptoa(x) ((vm_address_t)(x) << PAGE_SHIFT)
 #else
 #define atop(x) (0UL = 0)
 #define ptoa(x) (0UL = 0)
@@ -123,9 +123,9 @@
 #define mach_vm_trunc_page(x) ((mach_vm_offset_t)(x) & ~((signed)PAGE_MASK))
 
 #define round_page_overflow(in, out) __os_warn_unused(({ \
-		bool __ovr = os_add_overflow(in, (__typeof__(*out))PAGE_MASK, out); \
-		*out &= ~((__typeof__(*out))PAGE_MASK); \
-		__ovr; \
+	        bool __ovr = os_add_overflow(in, (__typeof__(*out))PAGE_MASK, out); \
+	        *out &= ~((__typeof__(*out))PAGE_MASK); \
+	        __ovr; \
 	}))
 
 static inline int OS_WARN_RESULT
@@ -188,23 +188,23 @@ mach_vm_round_page_overflow(mach_vm_offset_t in, mach_vm_offset_t *out)
 
 #define atop_32(x) \
     (__builtin_choose_expr (sizeof(x) != sizeof(uint64_t), \
-        (*(long *)0), \
-        (0UL)) = 0)
+	(*(long *)0), \
+	(0UL)) = 0)
 
 #define ptoa_32(x) \
     (__builtin_choose_expr (sizeof(x) != sizeof(uint64_t), \
-        (*(long *)0), \
-        (0UL)) = 0)
+	(*(long *)0), \
+	(0UL)) = 0)
 
 #define round_page_32(x) \
     (__builtin_choose_expr (sizeof(x) != sizeof(uint64_t), \
-        (*(long *)0), \
-        (0UL)) = 0)
+	(*(long *)0), \
+	(0UL)) = 0)
 
 #define trunc_page_32(x) \
     (__builtin_choose_expr (sizeof(x) != sizeof(uint64_t), \
-        (*(long *)0), \
-        (0UL)) = 0)
+	(*(long *)0), \
+	(0UL)) = 0)
 #else
 
 #define atop_32(x) (0)
@@ -226,10 +226,10 @@ mach_vm_round_page_overflow(mach_vm_offset_t in, mach_vm_offset_t *out)
  *	an exact page multiple.
  */
 
-#define	page_aligned(x)	(((x) & PAGE_MASK) == 0)
+#define page_aligned(x) (((x) & PAGE_MASK) == 0)
 
-extern vm_size_t	mem_size;		/* 32-bit size of memory - limited by maxmem - deprecated */
-extern uint64_t		max_mem;		/* 64-bit size of memory - limited by maxmem */
+extern vm_size_t        mem_size;               /* 32-bit size of memory - limited by maxmem - deprecated */
+extern uint64_t         max_mem;                /* 64-bit size of memory - limited by maxmem */
 
 /*
  * The default pager does not handle 64-bit offsets inside its objects,
@@ -237,42 +237,51 @@ extern uint64_t		max_mem;		/* 64-bit size of memory - limited by maxmem */
  * When we need to allocate a chunk of anonymous memory over that size,
  * we have to allocate more than one chunk.
  */
-#define ANON_MAX_SIZE	0xFFFFF000ULL
+#define ANON_MAX_SIZE   0xFFFFF000ULL
 /*
  * Work-around for <rdar://problem/6626493>
  * Break large anonymous memory areas into 128MB chunks to alleviate
  * the cost of copying when copy-on-write is not possible because a small
  * portion of it being wired.
  */
-#define ANON_CHUNK_SIZE	(128ULL * 1024 * 1024) /* 128MB */
+#define ANON_CHUNK_SIZE (128ULL * 1024 * 1024) /* 128MB */
 
-#ifdef	XNU_KERNEL_PRIVATE
+/*
+ * The 'medium' malloc allocator would like its regions
+ * to be chunked up into MALLOC_MEDIUM_CHUNK_SIZE chunks
+ * and backed by different objects. This avoids contention
+ * on a single large object and showed solid improvements on high
+ * core machines with workloads involving video and graphics processing.
+ */
+#define MALLOC_MEDIUM_CHUNK_SIZE (8ULL * 1024 * 1024) /* 8 MB */
+
+#ifdef  XNU_KERNEL_PRIVATE
 
 #include <kern/debug.h>
 
-extern uint64_t		mem_actual;		/* 64-bit size of memory - not limited by maxmem */
-extern uint64_t		sane_size;		/* Memory size to use for defaults calculations */
-extern addr64_t 	vm_last_addr;	/* Highest kernel virtual address known to the VM system */
+extern uint64_t         mem_actual;             /* 64-bit size of memory - not limited by maxmem */
+extern uint64_t         sane_size;              /* Memory size to use for defaults calculations */
+extern addr64_t         vm_last_addr;   /* Highest kernel virtual address known to the VM system */
 
-extern const vm_offset_t	vm_min_kernel_address;
-extern const vm_offset_t	vm_max_kernel_address;
+extern const vm_offset_t        vm_min_kernel_address;
+extern const vm_offset_t        vm_max_kernel_address;
 
 extern vm_offset_t              vm_kernel_stext;
 extern vm_offset_t              vm_kernel_etext;
-extern vm_offset_t		vm_kernel_slid_base;
-extern vm_offset_t		vm_kernel_slid_top;
-extern vm_offset_t		vm_kernel_slide;
-extern vm_offset_t		vm_kernel_addrperm;
-extern vm_offset_t		vm_kext_base;
-extern vm_offset_t		vm_kext_top;
-extern vm_offset_t		vm_kernel_base;
-extern vm_offset_t		vm_kernel_top;
-extern vm_offset_t		vm_hib_base;
+extern vm_offset_t              vm_kernel_slid_base;
+extern vm_offset_t              vm_kernel_slid_top;
+extern vm_offset_t              vm_kernel_slide;
+extern vm_offset_t              vm_kernel_addrperm;
+extern vm_offset_t              vm_kext_base;
+extern vm_offset_t              vm_kext_top;
+extern vm_offset_t              vm_kernel_base;
+extern vm_offset_t              vm_kernel_top;
+extern vm_offset_t              vm_hib_base;
 
-extern vm_offset_t		vm_kernel_builtinkmod_text;
-extern vm_offset_t		vm_kernel_builtinkmod_text_end;
+extern vm_offset_t              vm_kernel_builtinkmod_text;
+extern vm_offset_t              vm_kernel_builtinkmod_text_end;
 
-#define VM_KERNEL_IS_SLID(_o)						  \
+#define VM_KERNEL_IS_SLID(_o)                                             \
 	(((vm_offset_t)VM_KERNEL_STRIP_PTR(_o) >= vm_kernel_slid_base) && \
 	 ((vm_offset_t)VM_KERNEL_STRIP_PTR(_o) <  vm_kernel_slid_top))
 
@@ -332,13 +341,13 @@ __END_DECLS
 #define VM_KERNEL_ADDRHASH(_v) vm_kernel_addrhash((vm_offset_t)(_v))
 
 #define VM_KERNEL_UNSLIDE_OR_PERM(_v) ({ \
-		VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : \
-		VM_KERNEL_ADDRESS(_v) ? ((vm_offset_t)VM_KERNEL_STRIP_PTR(_v) + vm_kernel_addrperm) : \
-		(vm_offset_t)VM_KERNEL_STRIP_PTR(_v); \
+	        VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : \
+	        VM_KERNEL_ADDRESS(_v) ? ((vm_offset_t)VM_KERNEL_STRIP_PTR(_v) + vm_kernel_addrperm) : \
+	        (vm_offset_t)VM_KERNEL_STRIP_PTR(_v); \
 	})
 
 #define VM_KERNEL_UNSLIDE(_v) ({ \
-		VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : (vm_offset_t)0; \
+	        VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : (vm_offset_t)0; \
 	})
 
 #define VM_KERNEL_ADDRPERM(_v) VM_KERNEL_UNSLIDE_OR_PERM(_v)
@@ -384,11 +393,11 @@ round_page_32(uint32_t x)
 	return x;
 }
 
-#endif	/* XNU_KERNEL_PRIVATE */
+#endif  /* XNU_KERNEL_PRIVATE */
 
-extern vm_size_t	page_size;
-extern vm_size_t	page_mask;
-extern int		page_shift;
+extern vm_size_t        page_size;
+extern vm_size_t        page_mask;
+extern int              page_shift;
 
 /* We need a way to get rid of compiler warnings when we cast from   */
 /* a 64 bit value to an address (which may be 32 bits or 64-bits).   */
@@ -402,12 +411,12 @@ extern int		page_shift;
 #define CAST_DOWN( type, addr ) \
     ( ((type)((uintptr_t) (addr)/(sizeof(type) < sizeof(uintptr_t) ? 0 : 1))) )
 
-#define CAST_DOWN_EXPLICIT( type, addr )  ( ((type)((uintptr_t) (addr))) ) 
+#define CAST_DOWN_EXPLICIT( type, addr )  ( ((type)((uintptr_t) (addr))) )
 
 #endif /* __CAST_DOWN_CHECK */
 
-#endif	/* ASSEMBLER */
+#endif  /* ASSEMBLER */
 
-#endif	/* KERNEL */
+#endif  /* KERNEL */
 
-#endif	/* _MACH_VM_PARAM_H_ */
+#endif  /* _MACH_VM_PARAM_H_ */

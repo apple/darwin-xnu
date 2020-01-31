@@ -26,11 +26,11 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#ifndef	_KERN_BLOCK_HINT_H_
+#ifndef _KERN_BLOCK_HINT_H_
 #define _KERN_BLOCK_HINT_H_
 
 typedef enum thread_snapshot_wait_flags {
-	kThreadWaitNone			= 0x00,
+	kThreadWaitNone                 = 0x00,
 	kThreadWaitKernelMutex          = 0x01,
 	kThreadWaitPortReceive          = 0x02,
 	kThreadWaitPortSetReceive       = 0x03,
@@ -51,7 +51,7 @@ typedef enum thread_snapshot_wait_flags {
 } __attribute__((packed)) block_hint_t;
 
 _Static_assert(sizeof(block_hint_t) <= sizeof(short),
-		"block_hint_t must fit within a short");
+    "block_hint_t must fit within a short");
 
 #ifdef XNU_KERNEL_PRIVATE
 

@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* OSBoolean.cpp created by rsulack on Tue Oct 12 1999 */
@@ -50,67 +50,96 @@ static OSBoolean * gOSBooleanFalse = 0;
 OSBoolean * const & kOSBooleanTrue  = gOSBooleanTrue;
 OSBoolean * const & kOSBooleanFalse = gOSBooleanFalse;
 
-void OSBoolean::initialize()
+void
+OSBoolean::initialize()
 {
-    gOSBooleanTrue = new OSBoolean;
-    assert(gOSBooleanTrue);
+	gOSBooleanTrue = new OSBoolean;
+	assert(gOSBooleanTrue);
 
-    if (!gOSBooleanTrue->init()) {
-        gOSBooleanTrue->OSObject::free();
-        assert(false);
-    };
-    gOSBooleanTrue->value = true;
+	if (!gOSBooleanTrue->init()) {
+		gOSBooleanTrue->OSObject::free();
+		assert(false);
+	}
+	;
+	gOSBooleanTrue->value = true;
 
-    gOSBooleanFalse = new OSBoolean;
-    assert(gOSBooleanFalse);
+	gOSBooleanFalse = new OSBoolean;
+	assert(gOSBooleanFalse);
 
-    if (!gOSBooleanFalse->init()) {
-        gOSBooleanFalse->OSObject::free();
-        assert(false);
-    };
-    gOSBooleanFalse->value = false;
+	if (!gOSBooleanFalse->init()) {
+		gOSBooleanFalse->OSObject::free();
+		assert(false);
+	}
+	;
+	gOSBooleanFalse->value = false;
 }
 
-void OSBoolean::free()
+void
+OSBoolean::free()
 {
-    /*
-     * An OSBoolean should never have free() called on it, since it is a shared
-     * object, with two non-mutable instances: kOSBooleanTrue, kOSBooleanFalse.
-     * There will be cases where an incorrect number of releases will cause the
-     * free() method to be called, however, which we must catch and ignore here.
-     */
-    assert(false);
+	/*
+	 * An OSBoolean should never have free() called on it, since it is a shared
+	 * object, with two non-mutable instances: kOSBooleanTrue, kOSBooleanFalse.
+	 * There will be cases where an incorrect number of releases will cause the
+	 * free() method to be called, however, which we must catch and ignore here.
+	 */
+	assert(false);
 }
 
-void OSBoolean::taggedRetain(__unused const void *tag) const { }
-void OSBoolean::taggedRelease(__unused const void *tag, __unused const int when) const { }
-
-OSBoolean *OSBoolean::withBoolean(bool inValue)
+void
+OSBoolean::taggedRetain(__unused const void *tag) const
 {
-    return (inValue) ? kOSBooleanTrue : kOSBooleanFalse;
+}
+void
+OSBoolean::taggedRelease(__unused const void *tag, __unused const int when) const
+{
 }
 
-bool OSBoolean::isTrue() const { return value; }
-bool OSBoolean::isFalse() const { return !value; }
-bool OSBoolean::getValue() const { return value; }
-
-bool OSBoolean::isEqualTo(const OSBoolean *boolean) const
+OSBoolean *
+OSBoolean::withBoolean(bool inValue)
 {
-    return (boolean == this);
+	return (inValue) ? kOSBooleanTrue : kOSBooleanFalse;
 }
 
-bool OSBoolean::isEqualTo(const OSMetaClassBase *obj) const
+bool
+OSBoolean::isTrue() const
 {
-    OSBoolean *	boolean;
-    if ((boolean = OSDynamicCast(OSBoolean, obj)))
-	return isEqualTo(boolean);
-    else
-	return false;
+	return value;
+}
+bool
+OSBoolean::isFalse() const
+{
+	return !value;
+}
+bool
+OSBoolean::getValue() const
+{
+	return value;
 }
 
-bool OSBoolean::serialize(OSSerialize *s) const
+bool
+OSBoolean::isEqualTo(const OSBoolean *boolean) const
 {
-    if (s->binary) return s->binarySerialize(this);
+	return boolean == this;
+}
 
-    return s->addString(value ? "<true/>" : "<false/>");
+bool
+OSBoolean::isEqualTo(const OSMetaClassBase *obj) const
+{
+	OSBoolean * boolean;
+	if ((boolean = OSDynamicCast(OSBoolean, obj))) {
+		return isEqualTo(boolean);
+	} else {
+		return false;
+	}
+}
+
+bool
+OSBoolean::serialize(OSSerialize *s) const
+{
+	if (s->binary) {
+		return s->binarySerialize(this);
+	}
+
+	return s->addString(value ? "<true/>" : "<false/>");
 }

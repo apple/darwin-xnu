@@ -55,7 +55,7 @@ typedef struct _mach_right_recv {
 #define MACH_RIGHT_RECV_NULL (mach_right_recv_t{MACH_PORT_NULL})
 #elif defined(__cplusplus)
 #define MACH_RIGHT_RECV_NULL \
-		(mach_right_recv_t((mach_right_recv_t){MACH_PORT_NULL}))
+	        (mach_right_recv_t((mach_right_recv_t){MACH_PORT_NULL}))
 #else
 #define MACH_RIGHT_RECV_NULL {MACH_PORT_NULL}
 #endif
@@ -78,7 +78,7 @@ typedef struct _mach_right_send {
 #define MACH_RIGHT_SEND_NULL (mach_right_send_t{MACH_PORT_NULL})
 #elif defined(__cplusplus)
 #define MACH_RIGHT_SEND_NULL \
-		(mach_right_send_t((mach_right_send_t){MACH_PORT_NULL}))
+	        (mach_right_send_t((mach_right_send_t){MACH_PORT_NULL}))
 #else
 #define MACH_RIGHT_SEND_NULL {MACH_PORT_NULL}
 #endif
@@ -101,7 +101,7 @@ typedef struct _mach_right_send_once {
 #define MACH_RIGHT_SEND_ONCE_NULL (mach_right_send_once_t{MACH_PORT_NULL})
 #elif defined(__cplusplus)
 #define MACH_RIGHT_SEND_ONCE_NULL \
-		(mach_right_send_once_t((mach_right_send_once_t){MACH_PORT_NULL}))
+	        (mach_right_send_once_t((mach_right_send_once_t){MACH_PORT_NULL}))
 #else
 #define MACH_RIGHT_SEND_ONCE_NULL {MACH_PORT_NULL}
 #endif
@@ -209,9 +209,9 @@ mach_right_send_once_valid(mach_right_send_once_t mrso)
  * destruction.
  */
 OS_ENUM(mach_right_flags, uint64_t,
-	MACH_RIGHT_RECV_FLAG_INIT = 0,
-	MACH_RIGHT_RECV_FLAG_UNGUARDED = (1 << 0),
-);
+    MACH_RIGHT_RECV_FLAG_INIT = 0,
+    MACH_RIGHT_RECV_FLAG_UNGUARDED = (1 << 0),
+    );
 
 /*!
  * @function mach_right_recv_construct
@@ -244,7 +244,7 @@ OS_ENUM(mach_right_flags, uint64_t,
 OS_EXPORT OS_WARN_RESULT
 mach_right_recv_t
 mach_right_recv_construct(mach_right_flags_t flags,
-		mach_right_send_t *_Nullable sr, uintptr_t ctx);
+    mach_right_send_t *_Nullable sr, uintptr_t ctx);
 
 /*!
  * @function mach_right_recv_destruct
@@ -280,7 +280,7 @@ mach_right_recv_construct(mach_right_flags_t flags,
 OS_EXPORT
 void
 mach_right_recv_destruct(mach_right_recv_t r, mach_right_send_t *_Nullable s,
-		uintptr_t ctx);
+    uintptr_t ctx);
 
 /*!
  * @function mach_right_send_create

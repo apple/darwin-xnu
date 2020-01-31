@@ -1,4 +1,3 @@
-
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -38,16 +37,19 @@ static void
 log_hexdump(const void *inp, size_t len)
 {
 	unsigned i, off = 0;
-	char buf[9+16*3+1];
+	char buf[9 + 16 * 3 + 1];
 	for (i = 0; i < len; i++) {
-		if (i % 16 == 0)
+		if (i % 16 == 0) {
 			off = (unsigned)snprintf(buf, sizeof(buf), "%08x:", i);
-		off += (unsigned)snprintf(buf+off, sizeof(buf)-off, " %02x", (((const uint8_t *)inp)[i]) & 0xff);
-		if (i % 16 == 15)
+		}
+		off += (unsigned)snprintf(buf + off, sizeof(buf) - off, " %02x", (((const uint8_t *)inp)[i]) & 0xff);
+		if (i % 16 == 15) {
 			T_LOG("%s", buf);
 		}
-		if (len % 16)
-			T_LOG("%s", buf);
+	}
+	if (len % 16) {
+		T_LOG("%s", buf);
+	}
 }
 #endif
 
@@ -111,14 +113,14 @@ check_enables(int tunsock, int enable_netif, int enable_flowswitch, int enable_c
 
 	scratchlen = sizeof(scratch);
 	T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(getsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_NETIF,
-			&scratch, &scratchlen), NULL);
-	T_QUIET; T_EXPECT_EQ_ULONG((unsigned long )scratchlen, sizeof(scratch), NULL);
+	    &scratch, &scratchlen), NULL);
+	T_QUIET; T_EXPECT_EQ_ULONG((unsigned long)scratchlen, sizeof(scratch), NULL);
 	T_QUIET; T_EXPECT_EQ(scratch, enable_netif, NULL);
 
 	scratchlen = sizeof(scratch);
 	T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(getsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_FLOWSWITCH,
-			&scratch, &scratchlen), NULL);
-	T_QUIET; T_EXPECT_EQ_ULONG((unsigned long )scratchlen, sizeof(scratch), NULL);
+	    &scratch, &scratchlen), NULL);
+	T_QUIET; T_EXPECT_EQ_ULONG((unsigned long)scratchlen, sizeof(scratch), NULL);
 	if (get_skywalk_features() & SK_FEATURE_NETNS) {
 		if (enable_netif) {
 			T_QUIET; T_EXPECT_EQ(scratch, enable_flowswitch, NULL);
@@ -131,8 +133,8 @@ check_enables(int tunsock, int enable_netif, int enable_flowswitch, int enable_c
 
 	scratchlen = sizeof(scratch);
 	T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(getsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_CHANNEL,
-			&scratch, &scratchlen), NULL);
-	T_QUIET; T_EXPECT_EQ_ULONG((unsigned long )scratchlen, sizeof(scratch), NULL);
+	    &scratch, &scratchlen), NULL);
+	T_QUIET; T_EXPECT_EQ_ULONG((unsigned long)scratchlen, sizeof(scratch), NULL);
 	if (g_is_ipsec_test && !enable_netif) {
 		T_QUIET; T_EXPECT_EQ(scratch, 0, NULL);
 	} else {
@@ -143,15 +145,15 @@ check_enables(int tunsock, int enable_netif, int enable_flowswitch, int enable_c
 		uuid_clear(uuid);
 		uuidlen = sizeof(uuid_t);
 		T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(getsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_GET_CHANNEL_UUID,
-				uuid, &uuidlen), NULL);
-		T_QUIET; T_EXPECT_EQ_ULONG((unsigned long )uuidlen, sizeof(uuid_t), NULL);
+		    uuid, &uuidlen), NULL);
+		T_QUIET; T_EXPECT_EQ_ULONG((unsigned long)uuidlen, sizeof(uuid_t), NULL);
 		T_QUIET; T_EXPECT_FALSE(uuid_is_null(uuid), NULL);
 	} else {
 		uuid_clear(uuid);
 		uuidlen = sizeof(uuid_t);
 		T_QUIET; T_EXPECT_POSIX_FAILURE(getsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_GET_CHANNEL_UUID,
-				uuid, &uuidlen), ENXIO, NULL);
-		T_QUIET; T_EXPECT_EQ_ULONG((unsigned long )uuidlen, sizeof(uuid_t), NULL);
+		    uuid, &uuidlen), ENXIO, NULL);
+		T_QUIET; T_EXPECT_EQ_ULONG((unsigned long)uuidlen, sizeof(uuid_t), NULL);
 		T_QUIET; T_EXPECT_TRUE(uuid_is_null(uuid), NULL);
 	}
 }
@@ -162,14 +164,14 @@ tunsock_get_ifname(int s, char ifname[IFXNAMSIZ])
 	socklen_t optlen = IFXNAMSIZ;
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_POSIX_ZERO(getsockopt(s, SYSPROTO_CONTROL, g_OPT_IFNAME, ifname, &optlen), NULL);
 	T_QUIET; T_ASSERT_TRUE(optlen > 0, NULL);
-	T_QUIET; T_ASSERT_TRUE(ifname[optlen-1] == '\0', NULL);
-	T_QUIET; T_ASSERT_TRUE(strlen(ifname)+1 == optlen, "got ifname \"%s\" len %zd expected %u", ifname, strlen(ifname), optlen);
+	T_QUIET; T_ASSERT_TRUE(ifname[optlen - 1] == '\0', NULL);
+	T_QUIET; T_ASSERT_TRUE(strlen(ifname) + 1 == optlen, "got ifname \"%s\" len %zd expected %u", ifname, strlen(ifname), optlen);
 }
 
 static short
 ifnet_get_flags(int s, const char ifname[IFNAMSIZ])
 {
-	struct ifreq	ifr;
+	struct ifreq    ifr;
 	memset(&ifr, 0, sizeof(ifr));
 	strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
 	T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(ioctl(s, SIOCGIFFLAGS, (caddr_t)&ifr), NULL);
@@ -203,7 +205,7 @@ ifnet_add_addr4(const char ifname[IFNAMSIZ], struct in_addr *addr, struct in_add
 	}
 
 	if (broadaddr != NULL || (addr != NULL &&
-		  (ifnet_get_flags(s, ifname) & IFF_POINTOPOINT) != 0)) {
+	    (ifnet_get_flags(s, ifname) & IFF_POINTOPOINT) != 0)) {
 		sin = &ifra.ifra_broadaddr;
 		sin->sin_len = sizeof(*sin);
 		sin->sin_family = AF_INET;
@@ -226,23 +228,23 @@ create_sa(const char ifname[IFXNAMSIZ], uint8_t type, uint32_t spi, struct in_ad
 	}
 
 	/*
-		<base, SA, (lifetime(HS),) address(SD), (address(P),)
-		key(AE), (identity(SD),) (sensitivity)>
-	*/
+	 *       <base, SA, (lifetime(HS),) address(SD), (address(P),)
+	 *       key(AE), (identity(SD),) (sensitivity)>
+	 */
 
 	struct {
-		struct sadb_msg msg __attribute((aligned(sizeof (uint64_t))));
-		struct sadb_key key  __attribute((aligned(sizeof (uint64_t))));
-		struct sadb_sa sa  __attribute((aligned(sizeof (uint64_t))));
-		struct sadb_x_sa2 sa2  __attribute((aligned(sizeof (uint64_t))));
-		struct sadb_x_ipsecif ipsecif __attribute((aligned(sizeof (uint64_t))));
+		struct sadb_msg msg __attribute((aligned(sizeof(uint64_t))));
+		struct sadb_key key  __attribute((aligned(sizeof(uint64_t))));
+		struct sadb_sa sa  __attribute((aligned(sizeof(uint64_t))));
+		struct sadb_x_sa2 sa2  __attribute((aligned(sizeof(uint64_t))));
+		struct sadb_x_ipsecif ipsecif __attribute((aligned(sizeof(uint64_t))));
 		struct {
-			struct sadb_address addr __attribute((aligned(sizeof (uint64_t))));
-			struct sockaddr_in saddr __attribute((aligned(sizeof (uint64_t))));
+			struct sadb_address addr __attribute((aligned(sizeof(uint64_t))));
+			struct sockaddr_in saddr __attribute((aligned(sizeof(uint64_t))));
 		} src;
 		struct {
-			struct sadb_address addr __attribute((aligned(sizeof (uint64_t))));
-			struct sockaddr_in saddr __attribute((aligned(sizeof (uint64_t))));
+			struct sadb_address addr __attribute((aligned(sizeof(uint64_t))));
+			struct sockaddr_in saddr __attribute((aligned(sizeof(uint64_t))));
 		} dst;
 	} addcmd;
 
@@ -259,17 +261,17 @@ create_sa(const char ifname[IFXNAMSIZ], uint8_t type, uint32_t spi, struct in_ad
 
 	addcmd.key.sadb_key_len = PFKEY_UNIT64(sizeof(addcmd.key));
 	addcmd.key.sadb_key_exttype = SADB_EXT_KEY_ENCRYPT;
-  addcmd.key.sadb_key_bits = 0;
-  addcmd.key.sadb_key_reserved = 0;
+	addcmd.key.sadb_key_bits = 0;
+	addcmd.key.sadb_key_reserved = 0;
 
-  addcmd.sa.sadb_sa_len = PFKEY_UNIT64(sizeof(addcmd.sa));
-  addcmd.sa.sadb_sa_exttype = SADB_EXT_SA;
-  addcmd.sa.sadb_sa_spi = htonl(spi);
-  addcmd.sa.sadb_sa_replay = 0;
-  addcmd.sa.sadb_sa_state = 0;
-  addcmd.sa.sadb_sa_auth = SADB_AALG_NONE;
-  addcmd.sa.sadb_sa_encrypt = SADB_EALG_NULL;
-  addcmd.sa.sadb_sa_flags = SADB_X_EXT_CYCSEQ;
+	addcmd.sa.sadb_sa_len = PFKEY_UNIT64(sizeof(addcmd.sa));
+	addcmd.sa.sadb_sa_exttype = SADB_EXT_SA;
+	addcmd.sa.sadb_sa_spi = htonl(spi);
+	addcmd.sa.sadb_sa_replay = 0;
+	addcmd.sa.sadb_sa_state = 0;
+	addcmd.sa.sadb_sa_auth = SADB_AALG_NONE;
+	addcmd.sa.sadb_sa_encrypt = SADB_EALG_NULL;
+	addcmd.sa.sadb_sa_flags = SADB_X_EXT_CYCSEQ;
 
 	addcmd.sa2.sadb_x_sa2_len = PFKEY_UNIT64(sizeof(addcmd.sa2));
 	addcmd.sa2.sadb_x_sa2_exttype = SADB_X_EXT_SA2;
@@ -287,19 +289,19 @@ create_sa(const char ifname[IFXNAMSIZ], uint8_t type, uint32_t spi, struct in_ad
 	addcmd.ipsecif.sadb_x_ipsecif_init_disabled = 0;
 	addcmd.ipsecif.reserved = 0;
 
-  addcmd.src.addr.sadb_address_len = PFKEY_UNIT64(sizeof(addcmd.src));
-  addcmd.src.addr.sadb_address_exttype = SADB_EXT_ADDRESS_SRC;
-  addcmd.src.addr.sadb_address_proto = IPSEC_ULPROTO_ANY;
-  addcmd.src.addr.sadb_address_prefixlen = sizeof(struct in_addr) << 3; //XXX Why?
+	addcmd.src.addr.sadb_address_len = PFKEY_UNIT64(sizeof(addcmd.src));
+	addcmd.src.addr.sadb_address_exttype = SADB_EXT_ADDRESS_SRC;
+	addcmd.src.addr.sadb_address_proto = IPSEC_ULPROTO_ANY;
+	addcmd.src.addr.sadb_address_prefixlen = sizeof(struct in_addr) << 3; //XXX Why?
 	addcmd.src.addr.sadb_address_reserved = 0;
 	addcmd.src.saddr.sin_len = sizeof(addcmd.src.saddr);
 	addcmd.src.saddr.sin_family = AF_INET;
 	addcmd.src.saddr.sin_port = htons(0);
 	addcmd.src.saddr.sin_addr = *src;
 
-  addcmd.dst.addr.sadb_address_len = PFKEY_UNIT64(sizeof(addcmd.dst));
-  addcmd.dst.addr.sadb_address_exttype = SADB_EXT_ADDRESS_DST;
-  addcmd.dst.addr.sadb_address_proto = IPSEC_ULPROTO_ANY;
+	addcmd.dst.addr.sadb_address_len = PFKEY_UNIT64(sizeof(addcmd.dst));
+	addcmd.dst.addr.sadb_address_exttype = SADB_EXT_ADDRESS_DST;
+	addcmd.dst.addr.sadb_address_proto = IPSEC_ULPROTO_ANY;
 	addcmd.dst.addr.sadb_address_prefixlen = sizeof(struct in_addr) << 3; //XXX Why?
 	addcmd.dst.addr.sadb_address_reserved = 0;
 	addcmd.dst.saddr.sin_len = sizeof(addcmd.dst.saddr);
@@ -342,31 +344,31 @@ startover:
 	//enable_netif, enable_channel, enable_flowswitch);
 
 	T_QUIET; T_EXPECT_POSIX_FAILURE(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_NETIF,
-			&enable_netif, sizeof(enable_netif)), EINVAL, NULL);
+	    &enable_netif, sizeof(enable_netif)), EINVAL, NULL);
 	T_QUIET; T_EXPECT_POSIX_FAILURE(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_FLOWSWITCH,
-			&enable_flowswitch, sizeof(enable_flowswitch)), EINVAL, NULL);
+	    &enable_flowswitch, sizeof(enable_flowswitch)), EINVAL, NULL);
 	T_QUIET; T_EXPECT_POSIX_FAILURE(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_CHANNEL,
-			&enable_channel, sizeof(enable_channel)), EINVAL, NULL);
+	    &enable_channel, sizeof(enable_channel)), EINVAL, NULL);
 	uuid_clear(uuid);
 	uuidlen = sizeof(uuid_t);
 	T_QUIET; T_EXPECT_POSIX_FAILURE(getsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_GET_CHANNEL_UUID,
-			uuid, &uuidlen), EINVAL, NULL);
-	T_QUIET; T_EXPECT_EQ_ULONG((unsigned long )uuidlen, sizeof(uuid_t), NULL);
+	    uuid, &uuidlen), EINVAL, NULL);
+	T_QUIET; T_EXPECT_EQ_ULONG((unsigned long)uuidlen, sizeof(uuid_t), NULL);
 	T_QUIET; T_EXPECT_TRUE(uuid_is_null(uuid), NULL);
 
 	T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(bind(tunsock, (struct sockaddr *)&kernctl_addr, sizeof(kernctl_addr)), NULL);
 
 	T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_NETIF,
-				&enable_netif, sizeof(enable_netif)), NULL);
+	    &enable_netif, sizeof(enable_netif)), NULL);
 	T_QUIET; T_EXPECT_POSIX_FAILURE(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_FLOWSWITCH,
-			&enable_flowswitch, sizeof(enable_flowswitch)), EINVAL, NULL);
+	    &enable_flowswitch, sizeof(enable_flowswitch)), EINVAL, NULL);
 	T_QUIET; T_EXPECT_POSIX_FAILURE(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_CHANNEL,
-			&enable_channel, sizeof(enable_channel)), EINVAL, NULL);
+	    &enable_channel, sizeof(enable_channel)), EINVAL, NULL);
 	uuid_clear(uuid);
 	uuidlen = sizeof(uuid_t);
 	T_QUIET; T_EXPECT_POSIX_FAILURE(getsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_GET_CHANNEL_UUID,
-			uuid, &uuidlen), ENXIO, NULL);
-	T_QUIET; T_EXPECT_EQ_ULONG((unsigned long )uuidlen, sizeof(uuid_t), NULL);
+	    uuid, &uuidlen), ENXIO, NULL);
+	T_QUIET; T_EXPECT_EQ_ULONG((unsigned long)uuidlen, sizeof(uuid_t), NULL);
 	T_QUIET; T_EXPECT_TRUE(uuid_is_null(uuid), NULL);
 
 	int error = connect(tunsock, (struct sockaddr *)&kernctl_addr, sizeof(kernctl_addr));
@@ -382,50 +384,50 @@ startover:
 	T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(error, "connect()");
 
 	T_QUIET; T_EXPECT_POSIX_FAILURE(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_NETIF,
-			&enable_netif, sizeof(enable_netif)), EINVAL, NULL);
+	    &enable_netif, sizeof(enable_netif)), EINVAL, NULL);
 
 	if (get_skywalk_features() & SK_FEATURE_NETNS) {
 		if (enable_netif) {
 			T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_FLOWSWITCH,
-					&enable_flowswitch, sizeof(enable_flowswitch)), NULL);
+			    &enable_flowswitch, sizeof(enable_flowswitch)), NULL);
 		} else {
 			T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_FAILURE(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_FLOWSWITCH,
-					&enable_flowswitch, sizeof(enable_flowswitch)), ENOENT, NULL);
+			    &enable_flowswitch, sizeof(enable_flowswitch)), ENOENT, NULL);
 		}
 	} else {
 		T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_FAILURE(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_FLOWSWITCH,
-				&enable_flowswitch, sizeof(enable_flowswitch)), ENOTSUP, NULL);
+		    &enable_flowswitch, sizeof(enable_flowswitch)), ENOTSUP, NULL);
 	}
 
 	if (enable_channel) {
 		if (g_is_ipsec_test && !enable_netif) {
 			/* ipsec doesn't support channels without a netif */
 			T_QUIET; T_EXPECT_POSIX_FAILURE(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_CHANNEL,
-					&enable_channel, sizeof(enable_channel)), EOPNOTSUPP, NULL);
+			    &enable_channel, sizeof(enable_channel)), EOPNOTSUPP, NULL);
 			uuid_clear(uuid);
 			uuidlen = sizeof(uuid_t);
 			T_QUIET; T_EXPECT_POSIX_FAILURE(getsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_GET_CHANNEL_UUID,
-					uuid, &uuidlen), ENXIO, NULL);
-			T_QUIET; T_EXPECT_EQ_ULONG((unsigned long )uuidlen, sizeof(uuid_t), NULL);
+			    uuid, &uuidlen), ENXIO, NULL);
+			T_QUIET; T_EXPECT_EQ_ULONG((unsigned long)uuidlen, sizeof(uuid_t), NULL);
 			T_QUIET; T_EXPECT_TRUE(uuid_is_null(uuid), NULL);
 		} else {
 			T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_CHANNEL,
-					&enable_channel, sizeof(enable_channel)), NULL);
+			    &enable_channel, sizeof(enable_channel)), NULL);
 			uuid_clear(uuid);
 			uuidlen = sizeof(uuid_t);
 			T_QUIET; T_WITH_ERRNO; T_EXPECT_POSIX_ZERO(getsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_GET_CHANNEL_UUID,
-					uuid, &uuidlen), NULL);
-			T_QUIET; T_EXPECT_EQ_ULONG((unsigned long )uuidlen, sizeof(uuid_t), NULL);
+			    uuid, &uuidlen), NULL);
+			T_QUIET; T_EXPECT_EQ_ULONG((unsigned long)uuidlen, sizeof(uuid_t), NULL);
 			T_QUIET; T_EXPECT_FALSE(uuid_is_null(uuid), NULL);
 		}
 	} else {
 		T_QUIET; T_EXPECT_POSIX_FAILURE(setsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_ENABLE_CHANNEL,
-				&enable_channel, sizeof(enable_channel)), ENXIO, NULL);
+		    &enable_channel, sizeof(enable_channel)), ENXIO, NULL);
 		uuid_clear(uuid);
 		uuidlen = sizeof(uuid_t);
 		T_QUIET; T_EXPECT_POSIX_FAILURE(getsockopt(tunsock, SYSPROTO_CONTROL, g_OPT_GET_CHANNEL_UUID,
-				uuid, &uuidlen), ENXIO, NULL);
-		T_QUIET; T_EXPECT_EQ_ULONG((unsigned long )uuidlen, sizeof(uuid_t), NULL);
+		    uuid, &uuidlen), ENXIO, NULL);
+		T_QUIET; T_EXPECT_EQ_ULONG((unsigned long)uuidlen, sizeof(uuid_t), NULL);
 		T_QUIET; T_EXPECT_TRUE(uuid_is_null(uuid), NULL);
 	}
 
@@ -442,12 +444,13 @@ ipsec_stats(void)
 {
 	struct ifmibdata ifmd;
 
-		len = sizeof(struct ifmibdata);
-		name[3] = IFMIB_IFDATA;
-		name[4] = interesting_row;
-		name[5] = IpFDATA_GENERAL;
-		if (sysctl(name, 6, &ifmd, &len, (void *)0, 0) == -1)
-			err(1, "sysctl IFDATA_GENERAL %d", interesting_row);
+	len = sizeof(struct ifmibdata);
+	name[3] = IFMIB_IFDATA;
+	name[4] = interesting_row;
+	name[5] = IpFDATA_GENERAL;
+	if (sysctl(name, 6, &ifmd, &len, (void *)0, 0) == -1) {
+		err(1, "sysctl IFDATA_GENERAL %d", interesting_row);
+	}
 }
 #endif
 
@@ -509,10 +512,10 @@ setup_tunsock(void)
 
 	T_LOG("Created interface %s", ifname);
 
-	uint32_t ifaddr = (10 << 24) | ((unsigned)getpid()&0xffff) << 8 | 160;
+	uint32_t ifaddr = (10 << 24) | ((unsigned)getpid() & 0xffff) << 8 | 160;
 	struct in_addr mask;
 	g_addr1.s_addr = htonl(ifaddr);
-	g_addr2.s_addr = htonl(ifaddr+1);
+	g_addr2.s_addr = htonl(ifaddr + 1);
 	mask.s_addr = htonl(0xffffffff);
 
 	ifnet_add_addr4(ifname, &g_addr1, &mask, &g_addr2);

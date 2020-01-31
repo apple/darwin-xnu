@@ -1,6 +1,7 @@
 _IOGetBootKeyStoreData
 _IOGetAPFSKeyStoreData
 _IOSetAPFSKeyStoreData
+__Z33IOSKCopyKextIdentifierWithAddressm
 __ZN14IOPMrootDomain20claimSystemWakeEventEP9IOServicejPKcP8OSObject
 __ZN14IOPMrootDomain20restartWithStackshotEv
 __ZN22IOInterruptEventSource7warmCPUEy
@@ -23,6 +24,14 @@ _hv_set*
 _lapic_end_of_interrupt
 _lapic_get_cmci_vector
 _lapic_unmask_perfcnt_interrupt
+_ml_port_io_read
+_ml_port_io_read16
+_ml_port_io_read32
+_ml_port_io_read8
+_ml_port_io_write
+_ml_port_io_write16
+_ml_port_io_write32
+_ml_port_io_write8
 _mp_broadcast
 _mp_cpus_call
 _mp_cpus_call1

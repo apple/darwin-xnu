@@ -850,7 +850,7 @@ pmap_traverse_present_mappings(pmap_t __unused pmap,
 
 #if defined(__x86_64__)
 	    /* Try to skip by 2MB if possible */
-	    if (((vcur & PDMASK) == 0) && cpu_64bit) {
+	    if ((vcur & PDMASK) == 0) {
 		pd_entry_t *pde;
 		pde = pmap_pde(pmap, vcur);
 		if (0 == pde || ((*pde & INTEL_PTE_VALID) == 0)) {

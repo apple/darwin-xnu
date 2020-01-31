@@ -91,12 +91,12 @@ extern uint32_t total_post_tests_count;
 
 #define XNUPOST_TEST_CONFIG_BASIC(func)                   \
 	{                                                     \
-		XT_CONFIG_RUN, 0, -1, T_STATE_PASS, 0, 0, 0, (func), "xnu."#func \
+	        XT_CONFIG_RUN, 0, -1, T_STATE_PASS, 0, 0, 0, (func), "xnu."#func \
 	}
 
 #define XNUPOST_TEST_CONFIG_TEST_PANIC(func)                       \
 	{                                                              \
-		XT_CONFIG_EXPECT_PANIC, 0, -1, T_STATE_PASS, 0, 0, 0, (func), "xnu."#func \
+	        XT_CONFIG_EXPECT_PANIC, 0, -1, T_STATE_PASS, 0, 0, 0, (func), "xnu."#func \
 	}
 
 void xnupost_init(void);

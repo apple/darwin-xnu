@@ -108,14 +108,14 @@ route6_input(struct mbuf **mp, int *offp, int proto)
 		/* unknown routing type */
 		if (rh->ip6r_segleft == 0) {
 			rhlen = (rh->ip6r_len + 1) << 3;
-			break;	/* Final dst. Just ignore the header. */
+			break;  /* Final dst. Just ignore the header. */
 		}
 		ip6stat.ip6s_badoptions++;
 		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER,
 		    (caddr_t)&rh->ip6r_type - (caddr_t)ip6);
-		return (IPPROTO_DONE);
+		return IPPROTO_DONE;
 	}
 
 	*offp += rhlen;
-	return (rh->ip6r_nxt);
+	return rh->ip6r_nxt;
 }

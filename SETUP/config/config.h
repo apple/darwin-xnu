@@ -2,7 +2,7 @@
  * Copyright (c) 1999-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * "Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
  * Reserved.  This file contains Original Code and/or Modifications of
  * Original Code as defined in and that are subject to the Apple Public
@@ -10,7 +10,7 @@
  * except in compliance with the License.  Please obtain a copy of the
  * License at http://www.apple.com/publicsource and read it before using
  * this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -18,10 +18,10 @@
  * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
  * License for the specific language governing rights and limitations
  * under the License."
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1990 Carnegie-Mellon University
  * Copyright (c) 1989 Carnegie-Mellon University
@@ -61,38 +61,38 @@
 #include <string.h>
 
 struct file_list {
-	struct	file_list *f_next;	
-	char	*f_fn;			/* the name */
-	u_char	f_type;			/* see below */
-	u_char	f_flags;		/* see below */
-	short	f_special;		/* requires special make rule */
-	char	*f_needs;
-	char	*f_extra;		/* stuff to add to make line */
+	struct  file_list *f_next;
+	char    *f_fn;                  /* the name */
+	u_char  f_type;                 /* see below */
+	u_char  f_flags;                /* see below */
+	short   f_special;              /* requires special make rule */
+	char    *f_needs;
+	char    *f_extra;               /* stuff to add to make line */
 };
 
 /*
  * Types.
  */
-#define DRIVER		1
-#define NORMAL		2
-#define	INVISIBLE	3
-#define	PROFILING	4
+#define DRIVER          1
+#define NORMAL          2
+#define INVISIBLE       3
+#define PROFILING       4
 
 /*
  * Attributes (flags).
  */
-#define	CONFIGDEP	0x01	/* obsolete? */
-#define	OPTIONSDEF	0x02	/* options definition entry */
+#define CONFIGDEP       0x01    /* obsolete? */
+#define OPTIONSDEF      0x02    /* options definition entry */
 
 struct device {
-	int	d_type;			/* CONTROLLER, DEVICE, bus adaptor */
-	const char	*d_name;	/* name of device (e.g. rk11) */
-	int	d_slave;		/* slave number */
-#define QUES	-1	/* -1 means '?' */
-#define	UNKNOWN -2	/* -2 means not set yet */
-	int	d_flags;		/* nlags for device init */
-	struct	device *d_next;		/* Next one in list */
-	char	*d_init;		/* pseudo device init routine name */
+	int     d_type;                 /* CONTROLLER, DEVICE, bus adaptor */
+	const char      *d_name;        /* name of device (e.g. rk11) */
+	int     d_slave;                /* slave number */
+#define QUES    -1      /* -1 means '?' */
+#define UNKNOWN -2      /* -2 means not set yet */
+	int     d_flags;                /* nlags for device init */
+	struct  device *d_next;         /* Next one in list */
+	char    *d_init;                /* pseudo device init routine name */
 };
 
 /*
@@ -102,7 +102,7 @@ struct device {
  * it will build from ``Makefile.vax'' and use ``../vax/inline''
  * in the makerules, etc.
  */
-extern const char	*machinename;
+extern const char       *machinename;
 
 /*
  * In order to configure and build outside the kernel source tree,
@@ -114,7 +114,7 @@ extern char *config_directory;
 
 FILE *fopenp(const char *fpath, char *file, char *complete, const char *ftype);
 const char *get_VPATH(void);
-#define VPATH	get_VPATH()
+#define VPATH   get_VPATH()
 
 /*
  * A set of options may also be specified which are like CPU types,
@@ -122,36 +122,36 @@ const char *get_VPATH(void);
  * A separate set of options may be defined for make-style options.
  */
 struct opt {
-	char	*op_name;
-	char	*op_value;
-	struct	opt *op_next;
+	char    *op_name;
+	char    *op_value;
+	struct  opt *op_next;
 };
 
 extern struct opt *opt, *mkopt, *opt_tail, *mkopt_tail;
 
-const char	*get_word(FILE *fp);
-char	*ns(const char *str);
-char	*qu(int num);
-char	*path(const char *file);
+const char      *get_word(FILE *fp);
+char    *ns(const char *str);
+char    *qu(int num);
+char    *path(const char *file);
 
-extern int	do_trace;
+extern int      do_trace;
 
-extern struct	device *dtab;
-dev_t	nametodev(char *name, int defunit, char defpartition);
-char	*devtoname(dev_t dev);
+extern struct   device *dtab;
+dev_t   nametodev(char *name, int defunit, char defpartition);
+char    *devtoname(dev_t dev);
 
-extern char	errbuf[80];
-extern int	yyline;
+extern char     errbuf[80];
+extern int      yyline;
 
-extern struct	file_list *ftab, *conf_list, **confp;
-extern char	*build_directory;
+extern struct   file_list *ftab, *conf_list, **confp;
+extern char     *build_directory;
 
-extern int	profiling;
+extern int      profiling;
 
-#define eq(a,b)	(!strcmp(a,b))
+#define eq(a, b) (!strcmp(a,b))
 
 #define DEV_MASK 0x7
-#define	DEV_SHIFT  3
+#define DEV_SHIFT  3
 
 /* External function references */
 char *get_rest(FILE *fp);

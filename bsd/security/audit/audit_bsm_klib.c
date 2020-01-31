@@ -60,7 +60,7 @@
  * Hash table functions for the audit event number to event class mask
  * mapping.
  */
-#define	EVCLASSMAP_HASH_TABLE_SIZE	251
+#define EVCLASSMAP_HASH_TABLE_SIZE      251
 struct evclass_elem {
 	au_event_t event;
 	au_class_t class;
@@ -71,14 +71,14 @@ struct evclass_list {
 };
 
 static MALLOC_DEFINE(M_AUDITEVCLASS, "audit_evclass", "Audit event class");
-static struct rwlock   		evclass_lock;
-static struct evclass_list 	evclass_hash[EVCLASSMAP_HASH_TABLE_SIZE];
+static struct rwlock            evclass_lock;
+static struct evclass_list      evclass_hash[EVCLASSMAP_HASH_TABLE_SIZE];
 
-#define	EVCLASS_LOCK_INIT()	rw_init(&evclass_lock, "evclass_lock")
-#define	EVCLASS_RLOCK()		rw_rlock(&evclass_lock)
-#define	EVCLASS_RUNLOCK()	rw_runlock(&evclass_lock)
-#define	EVCLASS_WLOCK()		rw_wlock(&evclass_lock)
-#define	EVCLASS_WUNLOCK()	rw_wunlock(&evclass_lock)
+#define EVCLASS_LOCK_INIT()     rw_init(&evclass_lock, "evclass_lock")
+#define EVCLASS_RLOCK()         rw_rlock(&evclass_lock)
+#define EVCLASS_RUNLOCK()       rw_runlock(&evclass_lock)
+#define EVCLASS_WLOCK()         rw_wlock(&evclass_lock)
+#define EVCLASS_WUNLOCK()       rw_wunlock(&evclass_lock)
 
 /*
  * Look up the class for an audit event in the class mapping table.
@@ -101,7 +101,7 @@ au_event_class(au_event_t event)
 	}
 out:
 	EVCLASS_RUNLOCK();
-	return (class);
+	return class;
 }
 
 /*
@@ -118,11 +118,10 @@ au_class_protect(au_class_t old_class, au_class_t new_class)
 
 	/* Check if the reserved class bit has been flipped */
 	if ((old_class & AU_CLASS_MASK_RESERVED) !=
-		(new_class & AU_CLASS_MASK_RESERVED)) {
-
+	    (new_class & AU_CLASS_MASK_RESERVED)) {
 		task_t task = current_task();
 		if (task != kernel_task &&
-			!IOTaskHasEntitlement(task, AU_CLASS_RESERVED_ENTITLEMENT)) {
+		    !IOTaskHasEntitlement(task, AU_CLASS_RESERVED_ENTITLEMENT)) {
 			/*
 			 * If the caller isn't entitled, revert the class bit:
 			 * - First remove the reserved bit from the new_class mask
@@ -130,7 +129,7 @@ au_class_protect(au_class_t old_class, au_class_t new_class)
 			 * - Finally, OR the result from the first two operations
 			 */
 			result = (new_class & ~AU_CLASS_MASK_RESERVED) |
-				(old_class & AU_CLASS_MASK_RESERVED);
+			    (old_class & AU_CLASS_MASK_RESERVED);
 		}
 	}
 
@@ -161,15 +160,16 @@ au_evclassmap_insert(au_event_t event, au_class_t class)
 	 * if the audit syscalls flag needs to be set when preselection masks
 	 * are set.
 	 */
-	if (AUE_IS_A_KEVENT(event))
-		audit_kevent_mask |= class; 
+	if (AUE_IS_A_KEVENT(event)) {
+		audit_kevent_mask |= class;
+	}
 
 	/*
 	 * Pessimistically, always allocate storage before acquiring mutex.
 	 * Free if there is already a mapping for this event.
 	 */
 	evc_new = malloc(sizeof(*evc), M_AUDITEVCLASS, M_WAITOK);
-	
+
 	EVCLASS_WLOCK();
 	evcl = &evclass_hash[event % EVCLASSMAP_HASH_TABLE_SIZE];
 	LIST_FOREACH(evc, &evcl->head, entry) {
@@ -197,16 +197,17 @@ au_evclassmap_init(void)
 	unsigned int i;
 
 	EVCLASS_LOCK_INIT();
-	for (i = 0; i < EVCLASSMAP_HASH_TABLE_SIZE; i++)
+	for (i = 0; i < EVCLASSMAP_HASH_TABLE_SIZE; i++) {
 		LIST_INIT(&evclass_hash[i].head);
+	}
 
 	/*
 	 * Set up the initial event to class mapping for system calls.
 	 */
 	for (i = 0; i < nsysent; i++) {
-		if (sys_au_event[i] != AUE_NULL)
+		if (sys_au_event[i] != AUE_NULL) {
 			au_evclassmap_insert(sys_au_event[i], 0);
-
+		}
 	}
 
 	/*
@@ -230,22 +231,26 @@ au_preselect(__unused au_event_t event, au_class_t class, au_mask_t *mask_p,
 {
 	au_class_t effmask = 0;
 
-	if (mask_p == NULL)
-		return (-1);
+	if (mask_p == NULL) {
+		return -1;
+	}
 
 	/*
 	 * Perform the actual check of the masks against the event.
 	 */
-	if (sorf & AU_PRS_SUCCESS)
+	if (sorf & AU_PRS_SUCCESS) {
 		effmask |= (mask_p->am_success & class);
+	}
 
-	if (sorf & AU_PRS_FAILURE)
+	if (sorf & AU_PRS_FAILURE) {
 		effmask |= (mask_p->am_failure & class);
+	}
 
-	if (effmask)
-		return (1);
-	else
-		return (0);
+	if (effmask) {
+		return 1;
+	} else {
+		return 0;
+	}
 }
 
 /*
@@ -254,10 +259,10 @@ au_preselect(__unused au_event_t event, au_class_t class, au_mask_t *mask_p,
 au_event_t
 audit_ctlname_to_sysctlevent(int name[], uint64_t valid_arg)
 {
-
 	/* can't parse it - so return the worst case */
-	if ((valid_arg & (ARG_CTLNAME | ARG_LEN)) != (ARG_CTLNAME | ARG_LEN))
-		return (AUE_SYSCTL);
+	if ((valid_arg & (ARG_CTLNAME | ARG_LEN)) != (ARG_CTLNAME | ARG_LEN)) {
+		return AUE_SYSCTL;
+	}
 
 	switch (name[0]) {
 	/* non-admin "lookups" treat them special */
@@ -277,7 +282,7 @@ audit_ctlname_to_sysctlevent(int name[], uint64_t valid_arg)
 	case KERN_SYMFILE:
 	case KERN_SHREG_PRIVATIZABLE:
 	case KERN_OSVERSION:
-		return (AUE_SYSCTL_NONADMIN);
+		return AUE_SYSCTL_NONADMIN;
 
 	/* only treat the changeable controls as admin */
 	case KERN_MAXVNODES:
@@ -292,11 +297,11 @@ audit_ctlname_to_sysctlevent(int name[], uint64_t valid_arg)
 	case KERN_COREDUMP:
 	case KERN_SUGID_COREDUMP:
 	case KERN_NX_PROTECTION:
-		return ((valid_arg & ARG_VALUE32) ?
-		    AUE_SYSCTL : AUE_SYSCTL_NONADMIN);
+		return (valid_arg & ARG_VALUE32) ?
+		       AUE_SYSCTL : AUE_SYSCTL_NONADMIN;
 
 	default:
-		return (AUE_SYSCTL);
+		return AUE_SYSCTL;
 	}
 	/* NOTREACHED */
 }
@@ -392,10 +397,11 @@ audit_flags_and_error_to_openevent(int oflags, int error)
 	case AUE_OPEN_RWT:
 	case AUE_OPEN_W:
 	case AUE_OPEN_WT:
-		if (error == ENOENT)
+		if (error == ENOENT) {
 			aevent = AUE_OPEN;
+		}
 	}
-	return (aevent);
+	return aevent;
 }
 
 /*
@@ -489,10 +495,11 @@ audit_flags_and_error_to_openextendedevent(int oflags, int error)
 	case AUE_OPEN_EXTENDED_RWT:
 	case AUE_OPEN_EXTENDED_W:
 	case AUE_OPEN_EXTENDED_WT:
-		if (error == ENOENT)
+		if (error == ENOENT) {
 			aevent = AUE_OPEN_EXTENDED;
+		}
 	}
-	return (aevent);
+	return aevent;
 }
 
 /*
@@ -586,10 +593,11 @@ audit_flags_and_error_to_openatevent(int oflags, int error)
 	case AUE_OPENAT_RWT:
 	case AUE_OPENAT_W:
 	case AUE_OPENAT_WT:
-		if (error == ENOENT)
+		if (error == ENOENT) {
 			aevent = AUE_OPENAT;
+		}
 	}
-	return (aevent);
+	return aevent;
 }
 
 /*
@@ -652,10 +660,11 @@ audit_flags_and_error_to_openbyidevent(int oflags, int error)
 	case AUE_OPENBYID_RWT:
 	case AUE_OPENBYID_W:
 	case AUE_OPENBYID_WT:
-		if (error == ENOENT)
+		if (error == ENOENT) {
 			aevent = AUE_OPENBYID;
+		}
 	}
-	return (aevent);
+	return aevent;
 }
 
 /*
@@ -664,20 +673,19 @@ audit_flags_and_error_to_openbyidevent(int oflags, int error)
 au_event_t
 audit_msgctl_to_event(int cmd)
 {
-
 	switch (cmd) {
 	case IPC_RMID:
-		return (AUE_MSGCTL_RMID);
+		return AUE_MSGCTL_RMID;
 
 	case IPC_SET:
-		return (AUE_MSGCTL_SET);
+		return AUE_MSGCTL_SET;
 
 	case IPC_STAT:
-		return (AUE_MSGCTL_STAT);
+		return AUE_MSGCTL_STAT;
 
 	default:
 		/* We will audit a bad command. */
-		return (AUE_MSGCTL);
+		return AUE_MSGCTL;
 	}
 }
 
@@ -687,41 +695,40 @@ audit_msgctl_to_event(int cmd)
 au_event_t
 audit_semctl_to_event(int cmd)
 {
-
 	switch (cmd) {
 	case GETALL:
-		return (AUE_SEMCTL_GETALL);
+		return AUE_SEMCTL_GETALL;
 
 	case GETNCNT:
-		return (AUE_SEMCTL_GETNCNT);
+		return AUE_SEMCTL_GETNCNT;
 
 	case GETPID:
-		return (AUE_SEMCTL_GETPID);
+		return AUE_SEMCTL_GETPID;
 
 	case GETVAL:
-		return (AUE_SEMCTL_GETVAL);
+		return AUE_SEMCTL_GETVAL;
 
 	case GETZCNT:
-		return (AUE_SEMCTL_GETZCNT);
+		return AUE_SEMCTL_GETZCNT;
 
 	case IPC_RMID:
-		return (AUE_SEMCTL_RMID);
+		return AUE_SEMCTL_RMID;
 
 	case IPC_SET:
-		return (AUE_SEMCTL_SET);
+		return AUE_SEMCTL_SET;
 
 	case SETALL:
-		return (AUE_SEMCTL_SETALL);
+		return AUE_SEMCTL_SETALL;
 
 	case SETVAL:
-		return (AUE_SEMCTL_SETVAL);
+		return AUE_SEMCTL_SETVAL;
 
 	case IPC_STAT:
-		return (AUE_SEMCTL_STAT);
+		return AUE_SEMCTL_STAT;
 
 	default:
 		/* We will audit a bad command. */
-		return (AUE_SEMCTL);
+		return AUE_SEMCTL;
 	}
 }
 
@@ -731,55 +738,54 @@ audit_semctl_to_event(int cmd)
 au_event_t
 auditon_command_event(int cmd)
 {
-
-	switch(cmd) {
+	switch (cmd) {
 	case A_GETPOLICY:
-		return (AUE_AUDITON_GPOLICY);
+		return AUE_AUDITON_GPOLICY;
 
 	case A_SETPOLICY:
-		return (AUE_AUDITON_SPOLICY);
+		return AUE_AUDITON_SPOLICY;
 
 	case A_GETKMASK:
-		return (AUE_AUDITON_GETKMASK);
+		return AUE_AUDITON_GETKMASK;
 
 	case A_SETKMASK:
-		return (AUE_AUDITON_SETKMASK);
+		return AUE_AUDITON_SETKMASK;
 
 	case A_GETQCTRL:
-		return (AUE_AUDITON_GQCTRL);
+		return AUE_AUDITON_GQCTRL;
 
 	case A_SETQCTRL:
-		return (AUE_AUDITON_SQCTRL);
+		return AUE_AUDITON_SQCTRL;
 
 	case A_GETCWD:
-		return (AUE_AUDITON_GETCWD);
+		return AUE_AUDITON_GETCWD;
 
 	case A_GETCAR:
-		return (AUE_AUDITON_GETCAR);
+		return AUE_AUDITON_GETCAR;
 
 	case A_GETSTAT:
-		return (AUE_AUDITON_GETSTAT);
+		return AUE_AUDITON_GETSTAT;
 
 	case A_SETSTAT:
-		return (AUE_AUDITON_SETSTAT);
+		return AUE_AUDITON_SETSTAT;
 
 	case A_SETUMASK:
-		return (AUE_AUDITON_SETUMASK);
+		return AUE_AUDITON_SETUMASK;
 
 	case A_SETSMASK:
-		return (AUE_AUDITON_SETSMASK);
+		return AUE_AUDITON_SETSMASK;
 
 	case A_GETCOND:
-		return (AUE_AUDITON_GETCOND);
+		return AUE_AUDITON_GETCOND;
 
 	case A_SETCOND:
-		return (AUE_AUDITON_SETCOND);
+		return AUE_AUDITON_SETCOND;
 
 	case A_GETCLASS:
-		return (AUE_AUDITON_GETCLASS);
+		return AUE_AUDITON_GETCLASS;
 
 	case A_SETCLASS:
-		return (AUE_AUDITON_SETCLASS);
+		return AUE_AUDITON_SETCLASS;
 
 	case A_GETPINFO:
 	case A_SETPMASK:
@@ -790,33 +796,33 @@ auditon_command_event(int cmd)
 	case A_SETKAUDIT:
 	case A_GETSINFO_ADDR:
 	default:
-		return (AUE_AUDITON);	/* No special record */
+		return AUE_AUDITON;   /* No special record */
 	}
 }
 
 /*
  * For darwin we rewrite events generated by fcntl(F_OPENFROM,...) and
  * fcntl(F_UNLINKFROM,...) system calls to AUE_OPENAT_* and AUE_UNLINKAT audit
- * events. 
+ * events.
  */
 au_event_t
 audit_fcntl_command_event(int cmd, int oflags, int error)
 {
-	switch(cmd) {
+	switch (cmd) {
 	case F_OPENFROM:
-		return (audit_flags_and_error_to_openatevent(oflags, error));
-		
+		return audit_flags_and_error_to_openatevent(oflags, error);
+
 	case F_UNLINKFROM:
-		return (AUE_UNLINKAT);
+		return AUE_UNLINKAT;
 
 	default:
-		return (AUE_FCNTL);   /* Don't change from AUE_FCNTL. */
+		return AUE_FCNTL;   /* Don't change from AUE_FCNTL. */
 	}
 }
 
 /*
  * Create a canonical path from given path by prefixing either the root
- * directory, or the current working directory. 
+ * directory, or the current working directory.
  */
 int
 audit_canon_path(struct vnode *cwd_vp, char *path, char *cpath)
@@ -835,24 +841,27 @@ audit_canon_path(struct vnode *cwd_vp, char *path, char *cpath)
 	 * than implicit.
 	 */
 	if (*(path) == '/') {
-		while (*(bufp) == '/')
-			bufp++;		/* skip leading '/'s */
-		if (cwd_vp == NULL)
-			bufp--;		/* restore one '/' */
+		while (*(bufp) == '/') {
+			bufp++;         /* skip leading '/'s */
+		}
+		if (cwd_vp == NULL) {
+			bufp--;         /* restore one '/' */
+		}
 	}
 	if (cwd_vp != NULL) {
 		len = MAXPATHLEN;
 		ret = vn_getpath(cwd_vp, cpath, &len);
 		if (ret != 0) {
 			cpath[0] = '\0';
-			return (ret);
+			return ret;
 		}
-		if (len < MAXPATHLEN)
-			cpath[len-1] = '/';
+		if (len < MAXPATHLEN) {
+			cpath[len - 1] = '/';
+		}
 		strlcpy(cpath + len, bufp, MAXPATHLEN - len);
 	} else {
 		strlcpy(cpath, bufp, MAXPATHLEN);
 	}
-	return (0);
+	return 0;
 }
 #endif /* CONFIG_AUDIT */

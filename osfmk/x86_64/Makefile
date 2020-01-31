@@ -6,7 +6,8 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-EXPORT_FILES =
+EXPORT_FILES = \
+	machine_remote_time.h
 
 
 EXPORT_ONLY_FILES = \

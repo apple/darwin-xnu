@@ -133,10 +133,10 @@
  * Raw interface to IP6 protocol.
  */
 
-extern struct	inpcbhead ripcb;
-extern struct	inpcbinfo ripcbinfo;
-extern u_int32_t	rip_sendspace;
-extern u_int32_t	rip_recvspace;
+extern struct   inpcbhead ripcb;
+extern struct   inpcbinfo ripcbinfo;
+extern u_int32_t        rip_sendspace;
+extern u_int32_t        rip_recvspace;
 
 struct rip6stat rip6stat;
 
@@ -147,9 +147,9 @@ struct rip6stat rip6stat;
  */
 int
 rip6_input(
-	struct	mbuf **mp,
-	int	*offp,
-	int	proto)
+	struct  mbuf **mp,
+	int     *offp,
+	int     proto)
 {
 	struct mbuf *m = *mp;
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
@@ -169,20 +169,25 @@ rip6_input(
 
 	lck_rw_lock_shared(ripcbinfo.ipi_lock);
 	LIST_FOREACH(in6p, &ripcb, inp_list) {
-		if ((in6p->in6p_vflag & INP_IPV6) == 0)
+		if ((in6p->in6p_vflag & INP_IPV6) == 0) {
 			continue;
+		}
 		if (in6p->in6p_ip6_nxt &&
-		    in6p->in6p_ip6_nxt != proto)
+		    in6p->in6p_ip6_nxt != proto) {
 			continue;
+		}
 		if (!IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_laddr) &&
-		    !IN6_ARE_ADDR_EQUAL(&in6p->in6p_laddr, &ip6->ip6_dst))
+		    !IN6_ARE_ADDR_EQUAL(&in6p->in6p_laddr, &ip6->ip6_dst)) {
 			continue;
+		}
 		if (!IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_faddr) &&
-		    !IN6_ARE_ADDR_EQUAL(&in6p->in6p_faddr, &ip6->ip6_src))
+		    !IN6_ARE_ADDR_EQUAL(&in6p->in6p_faddr, &ip6->ip6_src)) {
 			continue;
+		}
 
-		if (inp_restricted_recv(in6p, ifp))
+		if (inp_restricted_recv(in6p, ifp)) {
 			continue;
+		}
 
 		if (proto == IPPROTO_ICMPV6 || in6p->in6p_cksum != -1) {
 			rip6stat.rip6s_isum++;
@@ -197,7 +202,7 @@ rip6_input(
 
 #if NECP
 			if (n && !necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
-				&ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL, NULL)) {
+			    &ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL, NULL)) {
 				m_freem(n);
 				/* do not inject data into pcb */
 			} else
@@ -206,7 +211,7 @@ rip6_input(
 				if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
 				    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
 				    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
-					(last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
+				    (last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 					ret = ip6_savecontrol(last, n, &opts);
 					if (ret != 0) {
 						m_freem(n);
@@ -219,11 +224,12 @@ rip6_input(
 				m_adj(n, *offp);
 				so_recv_data_stat(last->in6p_socket, m, 0);
 				if (sbappendaddr(&last->in6p_socket->so_rcv,
-						(struct sockaddr *)&rip6src,
-						 n, opts, NULL) == 0) {
+				    (struct sockaddr *)&rip6src,
+				    n, opts, NULL) == 0) {
 					rip6stat.rip6s_fullsock++;
-				} else
+				} else {
 					sorwakeup(last->in6p_socket);
+				}
 				opts = NULL;
 			}
 		}
@@ -232,7 +238,7 @@ rip6_input(
 
 #if NECP
 	if (last && !necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
-		&ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL, NULL)) {
+	    &ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL, NULL)) {
 		m_freem(m);
 		ip6stat.ip6s_delivered--;
 		/* do not inject data into pcb */
@@ -242,7 +248,7 @@ rip6_input(
 		if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
 		    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
 		    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
-			(last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
+		    (last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
 			ret = ip6_savecontrol(last, m, &opts);
 			if (ret != 0) {
 				m_freem(m);
@@ -250,27 +256,28 @@ rip6_input(
 				ip6stat.ip6s_delivered--;
 				goto unlock;
 			}
-
 		}
 		/* strip intermediate headers */
 		m_adj(m, *offp);
 		so_recv_data_stat(last->in6p_socket, m, 0);
 		if (sbappendaddr(&last->in6p_socket->so_rcv,
-				(struct sockaddr *)&rip6src, m, opts, NULL) == 0) {
+		    (struct sockaddr *)&rip6src, m, opts, NULL) == 0) {
 			rip6stat.rip6s_fullsock++;
-		} else
+		} else {
 			sorwakeup(last->in6p_socket);
+		}
 	} else {
 		rip6stat.rip6s_nosock++;
-		if (m->m_flags & M_MCAST)
+		if (m->m_flags & M_MCAST) {
 			rip6stat.rip6s_nosockmcast++;
-		if (proto == IPPROTO_NONE)
+		}
+		if (proto == IPPROTO_NONE) {
 			m_freem(m);
-		else {
+		} else {
 			char *prvnxtp = ip6_get_prevhdr(m, *offp); /* XXX */
 			icmp6_error(m, ICMP6_PARAM_PROB,
-				    ICMP6_PARAMPROB_NEXTHEADER,
-				    prvnxtp - mtod(m, char *));
+			    ICMP6_PARAMPROB_NEXTHEADER,
+			    prvnxtp - mtod(m, char *));
 		}
 		ip6stat.ip6s_delivered--;
 	}
@@ -297,18 +304,21 @@ rip6_ctlinput(
 	void (*notify)(struct inpcb *, int) = in6_rtchange;
 
 	if (sa->sa_family != AF_INET6 ||
-	    sa->sa_len != sizeof(struct sockaddr_in6))
+	    sa->sa_len != sizeof(struct sockaddr_in6)) {
 		return;
+	}
 
-	if ((unsigned)cmd >= PRC_NCMDS)
+	if ((unsigned)cmd >= PRC_NCMDS) {
 		return;
+	}
 	if (PRC_IS_REDIRECT(cmd)) {
 		notify = in6_rtchange;
 		d = NULL;
-	} else if (cmd == PRC_HOSTDEAD)
+	} else if (cmd == PRC_HOSTDEAD) {
 		d = NULL;
-	else if (inet6ctlerrmap[cmd] == 0)
+	} else if (inet6ctlerrmap[cmd] == 0) {
 		return;
+	}
 
 	/* if the parameter is from icmp6, decode it. */
 	if (d != NULL) {
@@ -325,7 +335,7 @@ rip6_ctlinput(
 	}
 
 	(void) in6_pcbnotify(&ripcbinfo, sa, 0, (const struct sockaddr *)sa6_src,
-			     0, cmd, cmdarg, notify);
+	    0, cmd, cmdarg, notify);
 }
 
 /*
@@ -343,12 +353,12 @@ rip6_output(
 	struct in6_addr *dst;
 	struct ip6_hdr *ip6;
 	struct inpcb *in6p;
-	u_int	plen = m->m_pkthdr.len;
+	u_int   plen = m->m_pkthdr.len;
 	int error = 0;
 	struct ip6_pktopts opt, *optp = NULL;
 	struct ip6_moptions *im6o = NULL;
 	struct ifnet *oifp = NULL;
-	int type = 0, code = 0;		/* for ICMPv6 output statistics only */
+	int type = 0, code = 0;         /* for ICMPv6 output statistics only */
 	int sotc = SO_TC_UNSPEC;
 	int netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 	struct ip6_out_args ip6oa;
@@ -362,13 +372,14 @@ rip6_output(
 
 	if (in6p == NULL
 #if NECP
-		|| (necp_socket_should_use_flow_divert(in6p))
+	    || (necp_socket_should_use_flow_divert(in6p))
 #endif /* NECP */
-		) {
-		if (in6p == NULL)
+	    ) {
+		if (in6p == NULL) {
 			error = EINVAL;
-		else
+		} else {
 			error = EPROTOTYPE;
+		}
 		goto bad;
 	}
 	if (dstsock != NULL && IN6_IS_ADDR_V4MAPPED(&dstsock->sin6_addr)) {
@@ -380,25 +391,31 @@ rip6_output(
 		ip6oa.ip6oa_boundif = in6p->inp_boundifp->if_index;
 		ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
 	}
-	if (INP_NO_CELLULAR(in6p))
+	if (INP_NO_CELLULAR(in6p)) {
 		ip6oa.ip6oa_flags |= IP6OAF_NO_CELLULAR;
-	if (INP_NO_EXPENSIVE(in6p))
+	}
+	if (INP_NO_EXPENSIVE(in6p)) {
 		ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
-	if (INP_AWDL_UNRESTRICTED(in6p))
+	}
+	if (INP_AWDL_UNRESTRICTED(in6p)) {
 		ip6oa.ip6oa_flags |= IP6OAF_AWDL_UNRESTRICTED;
-	if (INP_INTCOPROC_ALLOWED(in6p))
+	}
+	if (INP_INTCOPROC_ALLOWED(in6p)) {
 		ip6oa.ip6oa_flags |= IP6OAF_INTCOPROC_ALLOWED;
+	}
 
 	dst = &dstsock->sin6_addr;
 	if (control) {
 		sotc = so_tc_from_control(control, &netsvctype);
 
 		if ((error = ip6_setpktopts(control, &opt, NULL,
-		    SOCK_PROTO(so))) != 0)
+		    SOCK_PROTO(so))) != 0) {
 			goto bad;
+		}
 		optp = &opt;
-	} else
+	} else {
 		optp = in6p->in6p_outputopts;
+	}
 	if (sotc == SO_TC_UNSPEC) {
 		sotc = so->so_traffic_class;
 		netsvctype = so->so_netsvctype;
@@ -422,8 +439,9 @@ rip6_output(
 		code = icmp6->icmp6_code;
 	}
 
-	if (in6p->inp_flowhash == 0)
+	if (in6p->inp_flowhash == 0) {
 		in6p->inp_flowhash = inp_calc_flowhash(in6p);
+	}
 	/* update flowinfo - RFC 6437 */
 	if (in6p->inp_flow == 0 && in6p->in6p_flags & IN6P_AUTOFLOWLABEL) {
 		in6p->inp_flow &= ~IPV6_FLOWLABEL_MASK;
@@ -468,8 +486,9 @@ rip6_output(
 		if (optp && (pi = optp->ip6po_pktinfo) && pi->ipi6_ifindex) {
 			ip6->ip6_dst.s6_addr16[1] = htons(pi->ipi6_ifindex);
 			oifp = ifindex2ifnet[pi->ipi6_ifindex];
-			if (oifp != NULL)
+			if (oifp != NULL) {
 				ifnet_reference(oifp);
+			}
 		} else if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst) &&
 		    im6o != NULL && im6o_multicast_ifp != NULL) {
 			oifp = im6o_multicast_ifp;
@@ -488,7 +507,7 @@ rip6_output(
 				goto bad;
 			}
 			ip6->ip6_dst.s6_addr16[1]
-				= htons(dstsock->sin6_scope_id & 0xffff);/*XXX*/
+			        = htons(dstsock->sin6_scope_id & 0xffff);/*XXX*/
 		}
 		ifnet_head_done();
 	}
@@ -498,7 +517,7 @@ rip6_output(
 	 */
 	{
 		struct in6_addr *in6a;
-		struct in6_addr	storage;
+		struct in6_addr storage;
 		u_short index = 0;
 
 		if (israw != 0 && optp && optp->ip6po_pktinfo && !IN6_IS_ADDR_UNSPECIFIED(&optp->ip6po_pktinfo->ipi6_addr)) {
@@ -507,8 +526,9 @@ rip6_output(
 		} else if ((in6a = in6_selectsrc(dstsock, optp, in6p,
 		    &in6p->in6p_route, NULL, &storage, ip6oa.ip6oa_boundif,
 		    &error)) == 0) {
-			if (error == 0)
+			if (error == 0) {
 				error = EADDRNOTAVAIL;
+			}
 			goto bad;
 		} else {
 			ip6oa.ip6oa_flags |= IP6OAF_BOUND_SRCADDR;
@@ -516,25 +536,28 @@ rip6_output(
 		ip6->ip6_src = *in6a;
 		if (in6p->in6p_route.ro_rt != NULL) {
 			RT_LOCK(in6p->in6p_route.ro_rt);
-			if (in6p->in6p_route.ro_rt->rt_ifp != NULL)
+			if (in6p->in6p_route.ro_rt->rt_ifp != NULL) {
 				index = in6p->in6p_route.ro_rt->rt_ifp->if_index;
+			}
 			RT_UNLOCK(in6p->in6p_route.ro_rt);
-			if (oifp != NULL)
+			if (oifp != NULL) {
 				ifnet_release(oifp);
+			}
 			ifnet_head_lock_shared();
 			if (index == 0 || if_index < index) {
 				panic("bad if_index on interface from route");
 			}
 			oifp = ifindex2ifnet[index];
-			if (oifp != NULL)
+			if (oifp != NULL) {
 				ifnet_reference(oifp);
+			}
 			ifnet_head_done();
 		}
 	}
 	ip6->ip6_flow = (ip6->ip6_flow & ~IPV6_FLOWINFO_MASK) |
-		(in6p->inp_flow & IPV6_FLOWINFO_MASK);
+	    (in6p->inp_flow & IPV6_FLOWINFO_MASK);
 	ip6->ip6_vfc = (ip6->ip6_vfc & ~IPV6_VERSION_MASK) |
-		(IPV6_VERSION & IPV6_VERSION_MASK);
+	    (IPV6_VERSION & IPV6_VERSION_MASK);
 	/* ip6_plen will be filled in ip6_output, so not fill it here. */
 	ip6->ip6_nxt = in6p->in6p_ip6_nxt;
 	ip6->ip6_hlim = in6_selecthlim(in6p, oifp);
@@ -545,10 +568,11 @@ rip6_output(
 		u_int16_t *p;
 
 		/* compute checksum */
-		if (SOCK_PROTO(so) == IPPROTO_ICMPV6)
+		if (SOCK_PROTO(so) == IPPROTO_ICMPV6) {
 			off = offsetof(struct icmp6_hdr, icmp6_cksum);
-		else
+		} else {
 			off = in6p->in6p_cksum;
+		}
 		if (plen < (unsigned int)(off + 1)) {
 			error = EINVAL;
 			goto bad;
@@ -560,8 +584,9 @@ rip6_output(
 			off -= n->m_len;
 			n = n->m_next;
 		}
-		if (!n)
+		if (!n) {
 			goto bad;
+		}
 		p = (u_int16_t *)(void *)(mtod(n, caddr_t) + off);
 		*p = 0;
 		*p = in6_cksum(m, ip6->ip6_nxt, sizeof(*ip6), plen);
@@ -596,7 +621,7 @@ rip6_output(
 			in6p->in6p_route.ro_dst.sin6_family = AF_INET6;
 			in6p->in6p_route.ro_dst.sin6_len = sizeof(struct sockaddr_in6);
 			((struct sockaddr_in6 *)(void *)&in6p->in6p_route.ro_dst)->sin6_addr =
-				ip6->ip6_dst;
+			    ip6->ip6_dst;
 
 			rtalloc_scoped((struct route *)&in6p->in6p_route, ip6oa.ip6oa_boundif);
 
@@ -606,7 +631,7 @@ rip6_output(
 		}
 
 		if (!necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
-			&ip6->ip6_src, &ip6->ip6_dst, NULL, &policy_id, &route_rule_id, &skip_policy_id)) {
+		    &ip6->ip6_src, &ip6->ip6_dst, NULL, &policy_id, &route_rule_id, &skip_policy_id)) {
 			error = EHOSTUNREACH;
 			goto bad;
 		}
@@ -619,8 +644,9 @@ rip6_output(
 		}
 	}
 #endif /* NECP */
-	if ((so->so_flags1 & SOF1_QOSMARKING_ALLOWED))
+	if ((so->so_flags1 & SOF1_QOSMARKING_ALLOWED)) {
 		ip6oa.ip6oa_flags |= IP6OAF_QOSMARKING_ALLOWED;
+	}
 
 #if IPSEC
 	if (in6p->in6p_sp != NULL && ipsec_setsocket(m, so) != 0) {
@@ -629,8 +655,9 @@ rip6_output(
 	}
 #endif /*IPSEC*/
 
-	if (ROUTE_UNUSABLE(&in6p->in6p_route))
+	if (ROUTE_UNUSABLE(&in6p->in6p_route)) {
 		ROUTE_RELEASE(&in6p->in6p_route);
+	}
 
 	if (oifp != NULL) {
 		ifnet_release(oifp);
@@ -644,19 +671,22 @@ rip6_output(
 	    PKTF_FLOW_RAWSOCK);
 	m->m_pkthdr.pkt_proto = in6p->in6p_ip6_nxt;
 	m->m_pkthdr.tx_rawip_pid = so->last_pid;
-	if (so->so_flags & SOF_DELEGATED)
+	if (so->so_flags & SOF_DELEGATED) {
 		m->m_pkthdr.tx_rawip_e_pid = so->e_pid;
-	else
+	} else {
 		m->m_pkthdr.tx_rawip_e_pid = 0;
+	}
 
-	if (im6o != NULL)
+	if (im6o != NULL) {
 		IM6O_ADDREF(im6o);
+	}
 
 	error = ip6_output(m, optp, &in6p->in6p_route, flags, im6o,
 	    &oifp, &ip6oa);
 
-	if (im6o != NULL)
+	if (im6o != NULL) {
 		IM6O_REMREF(im6o);
+	}
 
 	if (in6p->in6p_route.ro_rt != NULL) {
 		struct rtentry *rt = in6p->in6p_route.ro_rt;
@@ -665,14 +695,15 @@ rip6_output(
 		if ((rt->rt_flags & RTF_MULTICAST) ||
 		    in6p->in6p_socket == NULL ||
 		    !(in6p->in6p_socket->so_state & SS_ISCONNECTED)) {
-			rt = NULL;	/* unusable */
+			rt = NULL;      /* unusable */
 		}
 		/*
 		 * Always discard the cached route for unconnected
 		 * socket or if it is a multicast route.
 		 */
-		if (rt == NULL)
+		if (rt == NULL) {
 			ROUTE_RELEASE(&in6p->in6p_route);
+		}
 
 		/*
 		 * If this is a connected socket and the destination
@@ -692,35 +723,42 @@ rip6_output(
 	 * denied access to it, generate an event.
 	 */
 	if (error != 0 && (ip6oa.ip6oa_retflags & IP6OARF_IFDENIED) &&
-	    (INP_NO_CELLULAR(in6p) || INP_NO_EXPENSIVE(in6p)))
-		soevent(in6p->inp_socket, (SO_FILT_HINT_LOCKED|
+	    (INP_NO_CELLULAR(in6p) || INP_NO_EXPENSIVE(in6p))) {
+		soevent(in6p->inp_socket, (SO_FILT_HINT_LOCKED |
 		    SO_FILT_HINT_IFDENIED));
+	}
 
 	if (SOCK_PROTO(so) == IPPROTO_ICMPV6) {
-		if (oifp)
+		if (oifp) {
 			icmp6_ifoutstat_inc(oifp, type, code);
+		}
 		icmp6stat.icp6s_outhist[type]++;
-	} else
+	} else {
 		rip6stat.rip6s_opackets++;
+	}
 
 	goto freectl;
 
 bad:
-	if (m != NULL)
+	if (m != NULL) {
 		m_freem(m);
+	}
 
 freectl:
-	if (optp == &opt && optp->ip6po_rthdr)
+	if (optp == &opt && optp->ip6po_rthdr) {
 		ROUTE_RELEASE(&optp->ip6po_route);
+	}
 
 	if (control != NULL) {
-		if (optp == &opt)
+		if (optp == &opt) {
 			ip6_clearpktopts(optp, -1);
+		}
 		m_freem(control);
 	}
-	if (oifp != NULL)
+	if (oifp != NULL) {
 		ifnet_release(oifp);
-	return(error);
+	}
+	return error;
 }
 
 /*
@@ -734,15 +772,16 @@ rip6_ctloutput(
 	int error, optval;
 
 	/* Allow <SOL_SOCKET,SO_FLUSH> at this level */
-	if (sopt->sopt_level == IPPROTO_ICMPV6)
+	if (sopt->sopt_level == IPPROTO_ICMPV6) {
 		/*
 		 * XXX: is it better to call icmp6_ctloutput() directly
 		 * from protosw?
 		 */
-		return(icmp6_ctloutput(so, sopt));
-	else if (sopt->sopt_level != IPPROTO_IPV6 &&
-	    !(sopt->sopt_level == SOL_SOCKET && sopt->sopt_name == SO_FLUSH))
-		return (EINVAL);
+		return icmp6_ctloutput(so, sopt);
+	} else if (sopt->sopt_level != IPPROTO_IPV6 &&
+	    !(sopt->sopt_level == SOL_SOCKET && sopt->sopt_name == SO_FLUSH)) {
+		return EINVAL;
+	}
 
 	error = 0;
 
@@ -765,9 +804,10 @@ rip6_ctloutput(
 			break;
 
 		case SO_FLUSH:
-			if ((error = sooptcopyin(sopt, &optval, sizeof (optval),
-			    sizeof (optval))) != 0)
+			if ((error = sooptcopyin(sopt, &optval, sizeof(optval),
+			    sizeof(optval))) != 0) {
 				break;
+			}
 
 			error = inp_flush(sotoinpcb(so), optval);
 			break;
@@ -779,7 +819,7 @@ rip6_ctloutput(
 		break;
 	}
 
-	return (error);
+	return error;
 }
 
 static int
@@ -789,26 +829,31 @@ rip6_attach(struct socket *so, int proto, struct proc *p)
 	int error;
 
 	inp = sotoinpcb(so);
-	if (inp)
+	if (inp) {
 		panic("rip6_attach");
-	if ((error = proc_suser(p)) != 0)
+	}
+	if ((error = proc_suser(p)) != 0) {
 		return error;
+	}
 
 	error = soreserve(so, rip_sendspace, rip_recvspace);
-	if (error)
+	if (error) {
 		return error;
+	}
 	error = in_pcballoc(so, &ripcbinfo, p);
-	if (error)
+	if (error) {
 		return error;
+	}
 	inp = (struct inpcb *)so->so_pcb;
 	inp->inp_vflag |= INP_IPV6;
 	inp->in6p_ip6_nxt = (char)proto;
-	inp->in6p_hops = -1;	/* use kernel default */
+	inp->in6p_hops = -1;    /* use kernel default */
 	inp->in6p_cksum = -1;
 	MALLOC(inp->in6p_icmp6filt, struct icmp6_filter *,
-	       sizeof(struct icmp6_filter), M_PCB, M_WAITOK);
-	if (inp->in6p_icmp6filt == NULL)
-		return (ENOMEM);
+	    sizeof(struct icmp6_filter), M_PCB, M_WAITOK);
+	if (inp->in6p_icmp6filt == NULL) {
+		return ENOMEM;
+	}
 	ICMP6_FILTER_SETPASSALL(inp->in6p_icmp6filt);
 	return 0;
 }
@@ -819,8 +864,9 @@ rip6_detach(struct socket *so)
 	struct inpcb *inp;
 
 	inp = sotoinpcb(so);
-	if (inp == 0)
+	if (inp == 0) {
 		panic("rip6_detach");
+	}
 	/* xxx: RSVP */
 	if (inp->in6p_icmp6filt) {
 		FREE(inp->in6p_icmp6filt, M_PCB);
@@ -842,8 +888,9 @@ rip6_disconnect(struct socket *so)
 {
 	struct inpcb *inp = sotoinpcb(so);
 
-	if ((so->so_state & SS_ISCONNECTED) == 0)
+	if ((so->so_state & SS_ISCONNECTED) == 0) {
 		return ENOTCONN;
+	}
 	inp->in6p_faddr = in6addr_any;
 	return rip6_abort(so);
 }
@@ -860,22 +907,26 @@ rip6_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 
 	if (inp == NULL
 #if NECP
-		|| (necp_socket_should_use_flow_divert(inp))
+	    || (necp_socket_should_use_flow_divert(inp))
 #endif /* NECP */
-		)
-		return (inp == NULL ? EINVAL : EPROTOTYPE);
+	    ) {
+		return inp == NULL ? EINVAL : EPROTOTYPE;
+	}
 
-	if (nam->sa_len != sizeof (struct sockaddr_in6))
-		return (EINVAL);
+	if (nam->sa_len != sizeof(struct sockaddr_in6)) {
+		return EINVAL;
+	}
 
-	if (TAILQ_EMPTY(&ifnet_head) || SIN6(nam)->sin6_family != AF_INET6)
-		return (EADDRNOTAVAIL);
+	if (TAILQ_EMPTY(&ifnet_head) || SIN6(nam)->sin6_family != AF_INET6) {
+		return EADDRNOTAVAIL;
+	}
 
-	bzero(&sin6, sizeof (sin6));
+	bzero(&sin6, sizeof(sin6));
 	*(&sin6) = *SIN6(nam);
 
-	if ((error = sa6_embedscope(&sin6, ip6_use_defzone)) != 0)
-		return (error);
+	if ((error = sa6_embedscope(&sin6, ip6_use_defzone)) != 0) {
+		return error;
+	}
 
 	/* Sanitize local copy for address searches */
 	sin6.sin6_flowinfo = 0;
@@ -883,16 +934,17 @@ rip6_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	sin6.sin6_port = 0;
 
 	if (!IN6_IS_ADDR_UNSPECIFIED(&sin6.sin6_addr) &&
-	    (ifa = ifa_ifwithaddr(SA(&sin6))) == 0)
-		return (EADDRNOTAVAIL);
+	    (ifa = ifa_ifwithaddr(SA(&sin6))) == 0) {
+		return EADDRNOTAVAIL;
+	}
 	if (ifa != NULL) {
 		IFA_LOCK(ifa);
 		if (((struct in6_ifaddr *)ifa)->ia6_flags &
 		    (IN6_IFF_ANYCAST | IN6_IFF_NOTREADY | IN6_IFF_CLAT46 |
-		     IN6_IFF_DETACHED | IN6_IFF_DEPRECATED)) {
+		    IN6_IFF_DETACHED | IN6_IFF_DEPRECATED)) {
 			IFA_UNLOCK(ifa);
 			IFA_REMREF(ifa);
-			return (EADDRNOTAVAIL);
+			return EADDRNOTAVAIL;
 		}
 		outif = ifa->ifa_ifp;
 		IFA_UNLOCK(ifa);
@@ -901,7 +953,7 @@ rip6_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	inp->in6p_laddr = sin6.sin6_addr;
 	inp->in6p_last_outifp = outif;
 
-	return (0);
+	return 0;
 }
 
 static int
@@ -920,16 +972,20 @@ rip6_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 
 	if (inp == NULL
 #if NECP
-		|| (necp_socket_should_use_flow_divert(inp))
+	    || (necp_socket_should_use_flow_divert(inp))
 #endif /* NECP */
-		)
-		return (inp == NULL ? EINVAL : EPROTOTYPE);
-	if (nam->sa_len != sizeof(*addr))
+	    ) {
+		return inp == NULL ? EINVAL : EPROTOTYPE;
+	}
+	if (nam->sa_len != sizeof(*addr)) {
 		return EINVAL;
-	if (TAILQ_EMPTY(&ifnet_head))
+	}
+	if (TAILQ_EMPTY(&ifnet_head)) {
 		return EADDRNOTAVAIL;
-	if (addr->sin6_family != AF_INET6)
+	}
+	if (addr->sin6_family != AF_INET6) {
 		return EAFNOSUPPORT;
+	}
 
 	if (!(so->so_flags1 & SOF1_CONNECT_COUNTED)) {
 		so->so_flags1 |= SOF1_CONNECT_COUNTED;
@@ -937,7 +993,7 @@ rip6_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 	}
 
 #if ENABLE_DEFAULT_SCOPE
-	if (addr->sin6_scope_id == 0) {	/* not change if specified  */
+	if (addr->sin6_scope_id == 0) { /* not change if specified  */
 		/* avoid overwrites */
 		tmp = *addr;
 		addr = &tmp;
@@ -946,8 +1002,9 @@ rip6_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 #endif
 
 	/* KAME hack: embed scopeid */
-	if (in6_embedscope(&SIN6(nam)->sin6_addr, SIN6(nam), inp, NULL, NULL) != 0)
-		return (EINVAL);
+	if (in6_embedscope(&SIN6(nam)->sin6_addr, SIN6(nam), inp, NULL, NULL) != 0) {
+		return EINVAL;
+	}
 
 	ifscope = (inp->inp_flags & INP_BOUND_IF) ?
 	    inp->inp_boundifp->if_index : IFSCOPE_NONE;
@@ -955,12 +1012,14 @@ rip6_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 	/* Source address selection. XXX: need pcblookup? */
 	in6a = in6_selectsrc(addr, inp->in6p_outputopts, inp, &inp->in6p_route,
 	    NULL, &storage, ifscope, &error);
-	if (in6a == NULL)
-		return (error ? error : EADDRNOTAVAIL);
+	if (in6a == NULL) {
+		return error ? error : EADDRNOTAVAIL;
+	}
 	inp->in6p_laddr = *in6a;
 	inp->in6p_faddr = addr->sin6_addr;
-	if (inp->in6p_route.ro_rt != NULL)
+	if (inp->in6p_route.ro_rt != NULL) {
 		outif = inp->in6p_route.ro_rt->rt_ifp;
+	}
 	inp->in6p_last_outifp = outif;
 
 	soisconnected(so);
@@ -986,13 +1045,14 @@ rip6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 
 	if (inp == NULL
 #if NECP
-		|| (necp_socket_should_use_flow_divert(inp))
+	    || (necp_socket_should_use_flow_divert(inp))
 #endif /* NECP */
-		) {
-		if (inp == NULL)
+	    ) {
+		if (inp == NULL) {
 			error = EINVAL;
-		else
+		} else {
 			error = EPROTOTYPE;
+		}
 		goto bad;
 	}
 
@@ -1007,7 +1067,7 @@ rip6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 		tmp.sin6_family = AF_INET6;
 		tmp.sin6_len = sizeof(struct sockaddr_in6);
 		bcopy(&inp->in6p_faddr, &tmp.sin6_addr,
-		      sizeof(struct in6_addr));
+		    sizeof(struct in6_addr));
 		dst = &tmp;
 	} else {
 		if (nam == NULL) {
@@ -1018,51 +1078,53 @@ rip6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 		dst = &tmp;
 	}
 #if ENABLE_DEFAULT_SCOPE
-	if (dst->sin6_scope_id == 0) {	/* not change if specified  */
+	if (dst->sin6_scope_id == 0) {  /* not change if specified  */
 		dst->sin6_scope_id = scope6_addr2default(&dst->sin6_addr);
 	}
 #endif
-	return (rip6_output(m, so, dst, control, 1));
+	return rip6_output(m, so, dst, control, 1);
 
 bad:
 	VERIFY(error != 0);
 
-	if (m != NULL)
+	if (m != NULL) {
 		m_freem(m);
-	if (control != NULL)
+	}
+	if (control != NULL) {
 		m_freem(control);
+	}
 
-	return (error);
+	return error;
 }
 
 struct pr_usrreqs rip6_usrreqs = {
-	.pru_abort =		rip6_abort,
-	.pru_attach =		rip6_attach,
-	.pru_bind =		rip6_bind,
-	.pru_connect =		rip6_connect,
-	.pru_control =		in6_control,
-	.pru_detach =		rip6_detach,
-	.pru_disconnect =	rip6_disconnect,
-	.pru_peeraddr =		in6_getpeeraddr,
-	.pru_send =		rip6_send,
-	.pru_shutdown =		rip6_shutdown,
-	.pru_sockaddr =		in6_getsockaddr,
-	.pru_sosend =		sosend,
-	.pru_soreceive =	soreceive,
+	.pru_abort =            rip6_abort,
+	.pru_attach =           rip6_attach,
+	.pru_bind =             rip6_bind,
+	.pru_connect =          rip6_connect,
+	.pru_control =          in6_control,
+	.pru_detach =           rip6_detach,
+	.pru_disconnect =       rip6_disconnect,
+	.pru_peeraddr =         in6_getpeeraddr,
+	.pru_send =             rip6_send,
+	.pru_shutdown =         rip6_shutdown,
+	.pru_sockaddr =         in6_getsockaddr,
+	.pru_sosend =           sosend,
+	.pru_soreceive =        soreceive,
 };
 
 __private_extern__ struct pr_usrreqs icmp6_dgram_usrreqs = {
-	.pru_abort =		rip6_abort,
-	.pru_attach =		icmp6_dgram_attach,
-	.pru_bind =		rip6_bind,
-	.pru_connect =		rip6_connect,
-	.pru_control =		in6_control,
-	.pru_detach =		rip6_detach,
-	.pru_disconnect =	rip6_disconnect,
-	.pru_peeraddr =		in6_getpeeraddr,
-	.pru_send =		icmp6_dgram_send,
-	.pru_shutdown =		rip6_shutdown,
-	.pru_sockaddr =		in6_getsockaddr,
-	.pru_sosend =		sosend,
-	.pru_soreceive =	soreceive,
+	.pru_abort =            rip6_abort,
+	.pru_attach =           icmp6_dgram_attach,
+	.pru_bind =             rip6_bind,
+	.pru_connect =          rip6_connect,
+	.pru_control =          in6_control,
+	.pru_detach =           rip6_detach,
+	.pru_disconnect =       rip6_disconnect,
+	.pru_peeraddr =         in6_getpeeraddr,
+	.pru_send =             icmp6_dgram_send,
+	.pru_shutdown =         rip6_shutdown,
+	.pru_sockaddr =         in6_getsockaddr,
+	.pru_sosend =           sosend,
+	.pru_soreceive =        soreceive,
 };

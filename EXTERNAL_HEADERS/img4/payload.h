@@ -18,13 +18,37 @@
 #endif // __IMG4_INDIRECT
 
 /*!
+ * @typedef img4_payload_flags_t
+ * Flags modifying the behavior of an Image4 payload object.
+ *
+ * @const I4PLF_INIT
+ * No flags set. This value is suitable for initialization purposes.
+ *
+ * @const I4PLF_UNWRAPPED
+ * Indicates that the payload bytes are not wrapped in an Image4 payload object
+ * (.im4p file). If this flag is given, the payload tag is ignored.
+ *
+ * This should be used in scenarios such as x86 SecureBoot, which use Image4 to
+ * describe portable executable files which must be fed directly to the firmware
+ * and cannot tolerate being wrapped in an intermediary format.
+ */
+OS_ENUM(img4_payload_flags, uint64_t,
+	I4PLF_INIT = 0,
+	I4PLF_UNWRAPPED = (1 << 0),
+);
+
+/*!
  * @function img4_payload_init
+ * Initializes an Image4 payload object.
  *
  * @param i4p
  * A pointer to the payload object to initialize.
  *
  * @param tag
  * The expected tag for the payload.
+ *
+ * @param flags
+ * Flags modifying the behavior of the payload object.
  *
  * @param bytes
  * The buffer containing the Image4 payload.
@@ -43,11 +67,16 @@
  *     [EFTYPE]     The data does not contain an Image4 payload
  *     [ENOENT]     The bytes do not contain a payload for the specified tag
  */
+#if !MACH_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
-OS_EXPORT OS_WARN_RESULT OS_NONNULL1 OS_NONNULL3 OS_NONNULL5
+OS_EXPORT OS_WARN_RESULT OS_NONNULL1 OS_NONNULL4
 errno_t
 img4_payload_init(img4_payload_t *i4p, img4_tag_t tag,
-		const uint8_t *bytes, size_t len, img4_destructor_t destructor);
+		img4_payload_flags_t flags, const uint8_t *bytes, size_t len,
+		img4_destructor_t destructor);
+#else
+#define img4_payload_init(...) img4if->i4if_payload_init(__VA_ARGS__)
+#endif
 
 /*!
  * @function img4_payload_destroy
@@ -61,10 +90,13 @@ img4_payload_init(img4_payload_t *i4p, img4_tag_t tag,
  * only the associated resources. This routine will cause the destructor given
  * in {@link img4_payload_init} to be called, if any.
  */
+#if !MACH_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
 OS_EXPORT OS_NONNULL1
 void
 img4_payload_destroy(img4_payload_t *i4p);
+#else
+#define img4_payload_destroy(...) img4if->i4if_payload_destroy(__VA_ARGS__)
+#endif
 
 #endif // __IMG4_PAYLOAD_H
-

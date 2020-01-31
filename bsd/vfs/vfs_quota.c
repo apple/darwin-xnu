@@ -2,7 +2,7 @@
  * Copyright (c) 2002-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -79,15 +79,15 @@
 
 
 /* vars for quota file lock */
-lck_grp_t	* qf_lck_grp;
-lck_grp_attr_t	* qf_lck_grp_attr;
-lck_attr_t	* qf_lck_attr;
+lck_grp_t       * qf_lck_grp;
+lck_grp_attr_t  * qf_lck_grp_attr;
+lck_attr_t      * qf_lck_attr;
 
 /* vars for quota list lock */
-lck_grp_t	* quota_list_lck_grp;
-lck_grp_attr_t	* quota_list_lck_grp_attr;
-lck_attr_t	* quota_list_lck_attr;
-lck_mtx_t	* quota_list_mtx_lock;
+lck_grp_t       * quota_list_lck_grp;
+lck_grp_attr_t  * quota_list_lck_grp_attr;
+lck_attr_t      * quota_list_lck_attr;
+lck_mtx_t       * quota_list_mtx_lock;
 
 /* Routines to lock and unlock the quota global data */
 static int dq_list_lock(void);
@@ -104,10 +104,10 @@ static u_int32_t quotamagic[MAXQUOTAS] = INITQMAGICS;
  */
 #define DQHASH(dqvp, id) \
 	(&dqhashtbl[((((intptr_t)(dqvp)) >> 8) + id) & dqhash])
-LIST_HEAD(dqhash, dquot) *dqhashtbl;
+LIST_HEAD(dqhash, dquot) * dqhashtbl;
 u_long dqhash;
 
-#define	DQUOTINC	5	/* minimum free dquots desired */
+#define DQUOTINC        5       /* minimum free dquots desired */
 long numdquot, desireddquot = DQUOTINC;
 
 /*
@@ -120,7 +120,7 @@ TAILQ_HEAD(dqfreelist, dquot) dqfreelist;
 TAILQ_HEAD(dqdirtylist, dquot) dqdirtylist;
 
 
-static int  dqlookup(struct quotafile *, u_int32_t, struct	dqblk *, u_int32_t *);
+static int  dqlookup(struct quotafile *, u_int32_t, struct      dqblk *, u_int32_t *);
 static int  dqsync_locked(struct dquot *dq);
 
 static void qf_lock(struct quotafile *);
@@ -138,9 +138,9 @@ dqinit(void)
 	/*
 	 * Allocate quota list lock group attribute and group
 	 */
-	quota_list_lck_grp_attr= lck_grp_attr_alloc_init();
-	quota_list_lck_grp = lck_grp_alloc_init("quota list",  quota_list_lck_grp_attr);
-	
+	quota_list_lck_grp_attr = lck_grp_attr_alloc_init();
+	quota_list_lck_grp = lck_grp_alloc_init("quota list", quota_list_lck_grp_attr);
+
 	/*
 	 * Allocate qouta list lock attribute
 	 */
@@ -155,7 +155,7 @@ dqinit(void)
 	/*
 	 * allocate quota file lock group attribute and group
 	 */
-	qf_lck_grp_attr= lck_grp_attr_alloc_init();
+	qf_lck_grp_attr = lck_grp_attr_alloc_init();
 	qf_lck_grp = lck_grp_alloc_init("quota file", qf_lck_grp_attr);
 
 	/*
@@ -170,7 +170,7 @@ dqinit(void)
 int
 dqisinitialized(void)
 {
-	return (dqhashtbl != NULL);
+	return dqhashtbl != NULL;
 }
 
 /*
@@ -180,8 +180,9 @@ void
 dqhashinit(void)
 {
 	dq_list_lock();
-	if (dqisinitialized())
+	if (dqisinitialized()) {
 		goto out;
+	}
 
 	TAILQ_INIT(&dqfreelist);
 	TAILQ_INIT(&dqdirtylist);
@@ -201,12 +202,14 @@ dq_list_lock(void)
 }
 
 static int
-dq_list_lock_changed(int oldval) {
-	return (dq_list_lock_cnt != oldval);
+dq_list_lock_changed(int oldval)
+{
+	return dq_list_lock_cnt != oldval;
 }
 
 static int
-dq_list_lock_val(void) {
+dq_list_lock_val(void)
+{
 	return dq_list_lock_cnt;
 }
 
@@ -223,9 +226,9 @@ dq_list_unlock(void)
 void
 dq_lock_internal(struct dquot *dq)
 {
-        while (dq->dq_lflags & DQ_LLOCK) {
-	        dq->dq_lflags |= DQ_LWANT;
-	        msleep(&dq->dq_lflags, quota_list_mtx_lock, PVFS, "dq_lock_internal", NULL);
+	while (dq->dq_lflags & DQ_LLOCK) {
+		dq->dq_lflags |= DQ_LWANT;
+		msleep(&dq->dq_lflags, quota_list_mtx_lock, PVFS, "dq_lock_internal", NULL);
 	}
 	dq->dq_lflags |= DQ_LLOCK;
 }
@@ -236,17 +239,18 @@ dq_lock_internal(struct dquot *dq)
 void
 dq_unlock_internal(struct dquot *dq)
 {
-        int wanted = dq->dq_lflags & DQ_LWANT;
+	int wanted = dq->dq_lflags & DQ_LWANT;
 
 	dq->dq_lflags &= ~(DQ_LLOCK | DQ_LWANT);
 
-	if (wanted)
-	        wakeup(&dq->dq_lflags);
+	if (wanted) {
+		wakeup(&dq->dq_lflags);
+	}
 }
 
 void
-dqlock(struct dquot *dq) {
-
+dqlock(struct dquot *dq)
+{
 	lck_mtx_lock(quota_list_mtx_lock);
 
 	dq_lock_internal(dq);
@@ -255,8 +259,8 @@ dqlock(struct dquot *dq) {
 }
 
 void
-dqunlock(struct dquot *dq) {
-
+dqunlock(struct dquot *dq)
+{
 	lck_mtx_lock(quota_list_mtx_lock);
 
 	dq_unlock_internal(dq);
@@ -269,66 +273,65 @@ dqunlock(struct dquot *dq) {
 int
 qf_get(struct quotafile *qfp, int type)
 {
-        int error = 0;
+	int error = 0;
 
-        dq_list_lock();
-  
-        switch (type) {
+	dq_list_lock();
 
+	switch (type) {
 	case QTF_OPENING:
-	        while ( (qfp->qf_qflags & (QTF_OPENING | QTF_CLOSING)) ) {
-	                if ( (qfp->qf_qflags & QTF_OPENING) ) {
-		                error = EBUSY;
+		while ((qfp->qf_qflags & (QTF_OPENING | QTF_CLOSING))) {
+			if ((qfp->qf_qflags & QTF_OPENING)) {
+				error = EBUSY;
 				break;
 			}
-			if ( (qfp->qf_qflags & QTF_CLOSING) ) {
-		                qfp->qf_qflags |= QTF_WANTED;
+			if ((qfp->qf_qflags & QTF_CLOSING)) {
+				qfp->qf_qflags |= QTF_WANTED;
 				msleep(&qfp->qf_qflags, quota_list_mtx_lock, PVFS, "qf_get", NULL);
 			}
 		}
-		if (qfp->qf_vp != NULLVP)
-		        error = EBUSY;
-		if (error == 0)
-		        qfp->qf_qflags |= QTF_OPENING;
+		if (qfp->qf_vp != NULLVP) {
+			error = EBUSY;
+		}
+		if (error == 0) {
+			qfp->qf_qflags |= QTF_OPENING;
+		}
 		break;
 
 	case QTF_CLOSING:
-	        if ( (qfp->qf_qflags & QTF_CLOSING) ) {
-		        error = EBUSY;
+		if ((qfp->qf_qflags & QTF_CLOSING)) {
+			error = EBUSY;
 			break;
 		}
 		qfp->qf_qflags |= QTF_CLOSING;
 
-		while ( (qfp->qf_qflags & QTF_OPENING) || qfp->qf_refcnt ) {
-		        qfp->qf_qflags |= QTF_WANTED;
+		while ((qfp->qf_qflags & QTF_OPENING) || qfp->qf_refcnt) {
+			qfp->qf_qflags |= QTF_WANTED;
 			msleep(&qfp->qf_qflags, quota_list_mtx_lock, PVFS, "qf_get", NULL);
 		}
 		if (qfp->qf_vp == NULLVP) {
-		        qfp->qf_qflags &= ~QTF_CLOSING;
+			qfp->qf_qflags &= ~QTF_CLOSING;
 			error = EBUSY;
 		}
 		break;
 	}
 	dq_list_unlock();
 
-	return (error);
+	return error;
 }
 
 void
 qf_put(struct quotafile *qfp, int type)
 {
+	dq_list_lock();
 
-        dq_list_lock();
-
-        switch (type) {
-
+	switch (type) {
 	case QTF_OPENING:
 	case QTF_CLOSING:
-	        qfp->qf_qflags &= ~type;
+		qfp->qf_qflags &= ~type;
 		break;
 	}
-	if ( (qfp->qf_qflags & QTF_WANTED) ) {
-	        qfp->qf_qflags &= ~QTF_WANTED;
+	if ((qfp->qf_qflags & QTF_WANTED)) {
+		qfp->qf_qflags &= ~QTF_WANTED;
 		wakeup(&qfp->qf_qflags);
 	}
 	dq_list_unlock();
@@ -365,18 +368,19 @@ qf_unlock(struct quotafile *qfp)
 static int
 qf_ref(struct quotafile *qfp)
 {
-        int error = 0;
+	int error = 0;
 
-	if ( (qfp->qf_qflags & (QTF_OPENING | QTF_CLOSING)) || (qfp->qf_vp == NULLVP) )
-	        error = EINVAL;
-	else
-	        qfp->qf_refcnt++;
+	if ((qfp->qf_qflags & (QTF_OPENING | QTF_CLOSING)) || (qfp->qf_vp == NULLVP)) {
+		error = EINVAL;
+	} else {
+		qfp->qf_refcnt++;
+	}
 
-	return (error);
+	return error;
 }
 
 /*
- * drop our reference and wakeup any waiters if 
+ * drop our reference and wakeup any waiters if
  * we were the last one holding a ref
  *
  * quota list lock must be held on entry
@@ -386,9 +390,9 @@ qf_rele(struct quotafile *qfp)
 {
 	qfp->qf_refcnt--;
 
-	if ( (qfp->qf_qflags & QTF_WANTED) && qfp->qf_refcnt == 0) {
-	        qfp->qf_qflags &= ~QTF_WANTED;
-	        wakeup(&qfp->qf_qflags);
+	if ((qfp->qf_qflags & QTF_WANTED) && qfp->qf_refcnt == 0) {
+		qfp->qf_qflags &= ~QTF_WANTED;
+		wakeup(&qfp->qf_qflags);
 	}
 }
 
@@ -396,7 +400,7 @@ qf_rele(struct quotafile *qfp)
 void
 dqfileinit(struct quotafile *qfp)
 {
-        qfp->qf_vp = NULLVP;
+	qfp->qf_vp = NULLVP;
 	qfp->qf_qflags = 0;
 
 	lck_mtx_init(&qfp->qf_lock, qf_lck_grp, qf_lck_attr);
@@ -416,23 +420,24 @@ dqfileopen(struct quotafile *qfp, int type)
 	off_t file_size;
 	uio_t auio;
 	int error = 0;
-	char uio_buf[ UIO_SIZEOF(1) ];
+	char uio_buf[UIO_SIZEOF(1)];
 
 	context.vc_thread = current_thread();
 	context.vc_ucred = qfp->qf_cred;
-	
+
 	/* Obtain the file size */
-	if ((error = vnode_size(qfp->qf_vp, &file_size, &context)) != 0)
-	        goto out;
+	if ((error = vnode_size(qfp->qf_vp, &file_size, &context)) != 0) {
+		goto out;
+	}
 
 	/* Read the file header */
-	auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ, 
-				    &uio_buf[0], sizeof(uio_buf));
-	uio_addiov(auio, CAST_USER_ADDR_T(&header), sizeof (header));
+	auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ,
+	    &uio_buf[0], sizeof(uio_buf));
+	uio_addiov(auio, CAST_USER_ADDR_T(&header), sizeof(header));
 	error = VNOP_READ(qfp->qf_vp, auio, 0, &context);
-	if (error)
-	        goto out;
-	else if (uio_resid(auio)) {
+	if (error) {
+		goto out;
+	} else if (uio_resid(auio)) {
 		error = EINVAL;
 		goto out;
 	}
@@ -445,21 +450,23 @@ dqfileopen(struct quotafile *qfp, int type)
 		goto out;
 	}
 	/* Set up the time limits for this quota. */
-	if (header.dqh_btime != 0)
+	if (header.dqh_btime != 0) {
 		qfp->qf_btime = OSSwapBigToHostInt32(header.dqh_btime);
-	else
+	} else {
 		qfp->qf_btime = MAX_DQ_TIME;
-	if (header.dqh_itime != 0)
+	}
+	if (header.dqh_itime != 0) {
 		qfp->qf_itime = OSSwapBigToHostInt32(header.dqh_itime);
-	else
+	} else {
 		qfp->qf_itime = MAX_IQ_TIME;
+	}
 
 	/* Calculate the hash table constants. */
 	qfp->qf_maxentries = OSSwapBigToHostInt32(header.dqh_maxentries);
 	qfp->qf_entrycnt = OSSwapBigToHostInt32(header.dqh_entrycnt);
 	qfp->qf_shift = dqhashshift(qfp->qf_maxentries);
 out:
-	return (error);
+	return error;
 }
 
 /*
@@ -471,19 +478,19 @@ dqfileclose(struct quotafile *qfp, __unused int type)
 	struct dqfilehdr header;
 	struct vfs_context context;
 	uio_t auio;
-	char uio_buf[ UIO_SIZEOF(1) ];
+	char uio_buf[UIO_SIZEOF(1)];
 
-	auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ, 
-								  &uio_buf[0], sizeof(uio_buf));
-	uio_addiov(auio, CAST_USER_ADDR_T(&header), sizeof (header));
+	auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ,
+	    &uio_buf[0], sizeof(uio_buf));
+	uio_addiov(auio, CAST_USER_ADDR_T(&header), sizeof(header));
 
 	context.vc_thread = current_thread();
 	context.vc_ucred = qfp->qf_cred;
-	
+
 	if (VNOP_READ(qfp->qf_vp, auio, 0, &context) == 0) {
 		header.dqh_entrycnt = OSSwapHostToBigInt32(qfp->qf_entrycnt);
 		uio_reset(auio, 0, UIO_SYSSPACE, UIO_WRITE);
-		uio_addiov(auio, CAST_USER_ADDR_T(&header), sizeof (header));
+		uio_addiov(auio, CAST_USER_ADDR_T(&header), sizeof(header));
 		(void) VNOP_WRITE(qfp->qf_vp, auio, 0, &context);
 	}
 }
@@ -506,27 +513,27 @@ dqget(u_int32_t id, struct quotafile *qfp, int type, struct dquot **dqp)
 
 	if (!dqisinitialized()) {
 		*dqp = NODQUOT;
-		return (EINVAL);
+		return EINVAL;
 	}
 
-	if ( id == 0 || qfp->qf_vp == NULLVP ) {
+	if (id == 0 || qfp->qf_vp == NULLVP) {
 		*dqp = NODQUOT;
-		return (EINVAL);
+		return EINVAL;
 	}
 	dq_list_lock();
 
-	if ( (qf_ref(qfp)) ) {
-	        dq_list_unlock();
-
-		*dqp = NODQUOT;
-		return (EINVAL);
-	}
-	if ( (dqvp = qfp->qf_vp) == NULLVP ) {
-	        qf_rele(qfp);
+	if ((qf_ref(qfp))) {
 		dq_list_unlock();
 
 		*dqp = NODQUOT;
-		return (EINVAL);
+		return EINVAL;
+	}
+	if ((dqvp = qfp->qf_vp) == NULLVP) {
+		qf_rele(qfp);
+		dq_list_unlock();
+
+		*dqp = NODQUOT;
+		return EINVAL;
 	}
 	dqh = DQHASH(dqvp, id);
 
@@ -538,8 +545,9 @@ relookup:
 	 */
 	for (dq = dqh->lh_first; dq; dq = dq->dq_hash.le_next) {
 		if (dq->dq_id != id ||
-		    dq->dq_qfile->qf_vp != dqvp)
+		    dq->dq_qfile->qf_vp != dqvp) {
 			continue;
+		}
 
 		dq_lock_internal(dq);
 		if (dq_list_lock_changed(listlockval)) {
@@ -553,7 +561,7 @@ relookup:
 		 */
 		if (dq->dq_id != id || dq->dq_qfile == NULL ||
 		    dq->dq_qfile->qf_vp != dqvp) {
-		        dq_unlock_internal(dq);
+			dq_unlock_internal(dq);
 			goto relookup;
 		}
 		/*
@@ -561,63 +569,65 @@ relookup:
 		 * the structure off the free list.
 		 */
 		if (dq->dq_cnt++ == 0) {
-			if (dq->dq_flags & DQ_MOD)
+			if (dq->dq_flags & DQ_MOD) {
 				TAILQ_REMOVE(&dqdirtylist, dq, dq_freelist);
-			else
+			} else {
 				TAILQ_REMOVE(&dqfreelist, dq, dq_freelist);
+			}
 		}
 		dq_unlock_internal(dq);
 
 		if (fdq != NULL) {
-		        /*
+			/*
 			 * we grabbed this from the free list in the first pass
 			 * but we found the dq we were looking for in
 			 * the cache the 2nd time through
 			 * so stick it back on the free list and return the cached entry
 			 */
-		        TAILQ_INSERT_HEAD(&dqfreelist, fdq, dq_freelist);
+			TAILQ_INSERT_HEAD(&dqfreelist, fdq, dq_freelist);
 		}
 		qf_rele(qfp);
-	        dq_list_unlock();
-		
+		dq_list_unlock();
+
 		if (ndq != NULL) {
-		        /*
+			/*
 			 * we allocated this in the first pass
 			 * but we found the dq we were looking for in
 			 * the cache the 2nd time through so free it
 			 */
-		        _FREE(ndq, M_DQUOT);
+			_FREE(ndq, M_DQUOT);
 		}
 		*dqp = dq;
 
-		return (0);
+		return 0;
 	}
 	/*
 	 * Not in cache, allocate a new one.
 	 */
 	if (TAILQ_EMPTY(&dqfreelist) &&
-	    numdquot < MAXQUOTAS * desiredvnodes)
+	    numdquot < MAXQUOTAS * desiredvnodes) {
 		desireddquot += DQUOTINC;
+	}
 
 	if (fdq != NULL) {
-	        /*
+		/*
 		 * we captured this from the free list
 		 * in the first pass through, so go
 		 * ahead and use it
 		 */
-	        dq = fdq;
+		dq = fdq;
 		fdq = NULL;
 	} else if (numdquot < desireddquot) {
-	        if (ndq == NULL) {
-		        /*
+		if (ndq == NULL) {
+			/*
 			 * drop the quota list lock since MALLOC may block
 			 */
-		        dq_list_unlock();
+			dq_list_unlock();
 
 			ndq = (struct dquot *)_MALLOC(sizeof *dq, M_DQUOT, M_WAITOK);
 			bzero((char *)ndq, sizeof *dq);
 
-		        listlockval = dq_list_lock();
+			listlockval = dq_list_lock();
 			/*
 			 * need to look for the entry again in the cache
 			 * since we dropped the quota list lock and
@@ -625,44 +635,44 @@ relookup:
 			 */
 			goto relookup;
 		} else {
-		        /*
+			/*
 			 * we allocated this in the first pass through
 			 * and we're still under out target, so go
 			 * ahead and use it
 			 */
-		        dq = ndq;
+			dq = ndq;
 			ndq = NULL;
 			numdquot++;
 		}
 	} else {
-	        if (TAILQ_EMPTY(&dqfreelist)) {
-		        qf_rele(qfp);
-		        dq_list_unlock();
+		if (TAILQ_EMPTY(&dqfreelist)) {
+			qf_rele(qfp);
+			dq_list_unlock();
 
 			if (ndq) {
-			        /*
+				/*
 				 * we allocated this in the first pass through
 				 * but we're now at the limit of our cache size
 				 * so free it
 				 */
-			        _FREE(ndq, M_DQUOT);
+				_FREE(ndq, M_DQUOT);
 			}
 			tablefull("dquot");
 			*dqp = NODQUOT;
-			return (EUSERS);
+			return EUSERS;
 		}
 		dq = TAILQ_FIRST(&dqfreelist);
 
 		dq_lock_internal(dq);
 
 		if (dq_list_lock_changed(listlockval) || dq->dq_cnt || (dq->dq_flags & DQ_MOD)) {
-		        /*
+			/*
 			 * we lost the race while we weren't holding
 			 * the quota list lock... dq_lock_internal
 			 * will drop it to msleep... this dq has been
 			 * reclaimed... go find another
 			 */
-		        dq_unlock_internal(dq);
+			dq_unlock_internal(dq);
 
 			/*
 			 * need to look for the entry again in the cache
@@ -674,7 +684,7 @@ relookup:
 		TAILQ_REMOVE(&dqfreelist, dq, dq_freelist);
 
 		if (dq->dq_qfile != NULL) {
-		        LIST_REMOVE(dq, dq_hash);
+			LIST_REMOVE(dq, dq_hash);
 			dq->dq_qfile = NULL;
 			dq->dq_id = 0;
 		}
@@ -682,7 +692,7 @@ relookup:
 
 		/*
 		 * because we may have dropped the quota list lock
-		 * in the call to dq_lock_internal, we need to 
+		 * in the call to dq_lock_internal, we need to
 		 * relookup in the hash in case someone else
 		 * caused a dq with this identity to be created...
 		 * if we don't find it, we'll use this one
@@ -723,12 +733,12 @@ relookup:
 	dq_list_unlock();
 
 	if (ndq) {
-	        /*
+		/*
 		 * we allocated this in the first pass through
 		 * but we didn't need it, so free it after
 		 * we've droped the quota list lock
 		 */
-	        _FREE(ndq, M_DQUOT);
+		_FREE(ndq, M_DQUOT);
 	}
 
 	error = dqlookup(qfp, id, &dq->dq_dqb, &dq->dq_index);
@@ -738,7 +748,7 @@ relookup:
 	 * quota structure and reflect problem to caller.
 	 */
 	if (error) {
-	        dq_list_lock();
+		dq_list_lock();
 
 		dq->dq_id = 0;
 		dq->dq_qfile = NULL;
@@ -746,28 +756,31 @@ relookup:
 
 		dq_unlock_internal(dq);
 		qf_rele(qfp);
-	        dq_list_unlock();
+		dq_list_unlock();
 
 		dqrele(dq);
 
 		*dqp = NODQUOT;
-		return (error);
+		return error;
 	}
 	/*
 	 * Check for no limit to enforce.
 	 * Initialize time values if necessary.
 	 */
 	if (dq->dq_isoftlimit == 0 && dq->dq_bsoftlimit == 0 &&
-	    dq->dq_ihardlimit == 0 && dq->dq_bhardlimit == 0)
+	    dq->dq_ihardlimit == 0 && dq->dq_bhardlimit == 0) {
 		dq->dq_flags |= DQ_FAKE;
+	}
 	if (dq->dq_id != 0) {
 		struct timeval tv;
 
 		microtime(&tv);
-		if (dq->dq_btime == 0)
+		if (dq->dq_btime == 0) {
 			dq->dq_btime = tv.tv_sec + qfp->qf_btime;
-		if (dq->dq_itime == 0)
+		}
+		if (dq->dq_itime == 0) {
 			dq->dq_itime = tv.tv_sec + qfp->qf_itime;
+		}
 	}
 	dq_list_lock();
 	dq_unlock_internal(dq);
@@ -775,7 +788,7 @@ relookup:
 	dq_list_unlock();
 
 	*dqp = dq;
-	return (0);
+	return 0;
 }
 
 /*
@@ -792,7 +805,7 @@ dqlookup(struct quotafile *qfp, u_int32_t id, struct dqblk *dqb, uint32_t *index
 	int i, skip, last;
 	u_int32_t mask;
 	int error = 0;
-	char uio_buf[ UIO_SIZEOF(1) ];
+	char uio_buf[UIO_SIZEOF(1)];
 
 
 	qf_lock(qfp);
@@ -806,12 +819,12 @@ dqlookup(struct quotafile *qfp, u_int32_t id, struct dqblk *dqb, uint32_t *index
 	i = dqhash1(id, qfp->qf_shift, mask);
 	skip = dqhash2(id, mask);
 
-	for (last = (i + (qfp->qf_maxentries-1) * skip) & mask;
-	     i != last;
-	     i = (i + skip) & mask) {
-		auio = uio_createwithbuffer(1, dqoffset(i), UIO_SYSSPACE, UIO_READ, 
-									  &uio_buf[0], sizeof(uio_buf));
-		uio_addiov(auio, CAST_USER_ADDR_T(dqb), sizeof (struct dqblk));
+	for (last = (i + (qfp->qf_maxentries - 1) * skip) & mask;
+	    i != last;
+	    i = (i + skip) & mask) {
+		auio = uio_createwithbuffer(1, dqoffset(i), UIO_SYSSPACE, UIO_READ,
+		    &uio_buf[0], sizeof(uio_buf));
+		uio_addiov(auio, CAST_USER_ADDR_T(dqb), sizeof(struct dqblk));
 		error = VNOP_READ(dqvp, auio, 0, &context);
 		if (error) {
 			printf("dqlookup: error %d looking up id %u at index %d\n", error, id, i);
@@ -833,12 +846,14 @@ dqlookup(struct quotafile *qfp, u_int32_t id, struct dqblk *dqb, uint32_t *index
 			 * Write back to reserve entry for this id
 			 */
 			uio_reset(auio, dqoffset(i), UIO_SYSSPACE, UIO_WRITE);
-			uio_addiov(auio, CAST_USER_ADDR_T(dqb), sizeof (struct dqblk));
+			uio_addiov(auio, CAST_USER_ADDR_T(dqb), sizeof(struct dqblk));
 			error = VNOP_WRITE(dqvp, auio, 0, &context);
-			if (uio_resid(auio) && error == 0)
+			if (uio_resid(auio) && error == 0) {
 				error = EIO;
-			if (error == 0)
+			}
+			if (error == 0) {
 				++qfp->qf_entrycnt;
+			}
 			dqb->dqb_id = id;
 			break;
 		}
@@ -860,7 +875,7 @@ dqlookup(struct quotafile *qfp, u_int32_t id, struct dqblk *dqb, uint32_t *index
 
 	*index = i;  /* remember index so we don't have to recompute it later */
 
-	return (error);
+	return error;
 }
 
 
@@ -870,9 +885,9 @@ dqlookup(struct quotafile *qfp, u_int32_t id, struct dqblk *dqb, uint32_t *index
 void
 dqrele(struct dquot *dq)
 {
-
-	if (dq == NODQUOT)
+	if (dq == NODQUOT) {
 		return;
+	}
 	dqlock(dq);
 
 	if (dq->dq_cnt > 1) {
@@ -881,13 +896,14 @@ dqrele(struct dquot *dq)
 		dqunlock(dq);
 		return;
 	}
-	if (dq->dq_flags & DQ_MOD)
+	if (dq->dq_flags & DQ_MOD) {
 		(void) dqsync_locked(dq);
+	}
 	dq->dq_cnt--;
 
 	dq_list_lock();
 	TAILQ_INSERT_TAIL(&dqfreelist, dq, dq_freelist);
-        dq_unlock_internal(dq);
+	dq_unlock_internal(dq);
 	dq_list_unlock();
 }
 
@@ -897,22 +913,23 @@ dqrele(struct dquot *dq)
 void
 dqreclaim(struct dquot *dq)
 {
-
-	if (dq == NODQUOT)
+	if (dq == NODQUOT) {
 		return;
+	}
 
 	dq_list_lock();
 	dq_lock_internal(dq);
 
 	if (--dq->dq_cnt > 0) {
-	        dq_unlock_internal(dq);
+		dq_unlock_internal(dq);
 		dq_list_unlock();
 		return;
 	}
-	if (dq->dq_flags & DQ_MOD)
+	if (dq->dq_flags & DQ_MOD) {
 		TAILQ_INSERT_TAIL(&dqdirtylist, dq, dq_freelist);
-	else
+	} else {
 		TAILQ_INSERT_TAIL(&dqfreelist, dq, dq_freelist);
+	}
 
 	dq_unlock_internal(dq);
 	dq_list_unlock();
@@ -925,35 +942,37 @@ void
 dqsync_orphans(struct quotafile *qfp)
 {
 	struct dquot *dq;
-	
+
 	dq_list_lock();
-  loop:
+loop:
 	TAILQ_FOREACH(dq, &dqdirtylist, dq_freelist) {
-		if (dq->dq_qfile != qfp)
-		        continue;
+		if (dq->dq_qfile != qfp) {
+			continue;
+		}
 
 		dq_lock_internal(dq);
 
 		if (dq->dq_qfile != qfp) {
-		        /*
+			/*
 			 * the identity of this dq changed while
 			 * the quota_list_lock was dropped
 			 * dq_lock_internal can drop it to msleep
 			 */
-		        dq_unlock_internal(dq);
+			dq_unlock_internal(dq);
 			goto loop;
 		}
 		if ((dq->dq_flags & DQ_MOD) == 0) {
-		        /*
+			/*
 			 * someone cleaned and removed this from
 			 * the dq from the dirty list while the
 			 * quota_list_lock was dropped
 			 */
-		        dq_unlock_internal(dq);
+			dq_unlock_internal(dq);
 			goto loop;
 		}
-		if (dq->dq_cnt != 0)
+		if (dq->dq_cnt != 0) {
 			panic("dqsync_orphans: dquot in use");
+		}
 
 		TAILQ_REMOVE(&dqdirtylist, dq, dq_freelist);
 
@@ -965,7 +984,7 @@ dqsync_orphans(struct quotafile *qfp)
 		 * to pick up another one since we hold dqlock
 		 */
 		(void) dqsync_locked(dq);
-			
+
 		dq_list_lock();
 
 		TAILQ_INSERT_TAIL(&dqfreelist, dq, dq_freelist);
@@ -979,17 +998,18 @@ dqsync_orphans(struct quotafile *qfp)
 int
 dqsync(struct dquot *dq)
 {
-        int error = 0;
+	int error = 0;
 
 	if (dq != NODQUOT) {
-	        dqlock(dq);
+		dqlock(dq);
 
-		if ( (dq->dq_flags & DQ_MOD) )
-	        error = dqsync_locked(dq);
+		if ((dq->dq_flags & DQ_MOD)) {
+			error = dqsync_locked(dq);
+		}
 
 		dqunlock(dq);
 	}
-	return (error);
+	return error;
 }
 
 
@@ -1004,22 +1024,24 @@ dqsync_locked(struct dquot *dq)
 	struct dqblk dqb, *dqblkp;
 	uio_t auio;
 	int error;
-	char uio_buf[ UIO_SIZEOF(1) ];
+	char uio_buf[UIO_SIZEOF(1)];
 
 	if (dq->dq_id == 0) {
-	        dq->dq_flags &= ~DQ_MOD;
-		return (0);
+		dq->dq_flags &= ~DQ_MOD;
+		return 0;
 	}
-	if (dq->dq_qfile == NULL)
+	if (dq->dq_qfile == NULL) {
 		panic("dqsync: NULL dq_qfile");
-	if ((dqvp = dq->dq_qfile->qf_vp) == NULLVP)
+	}
+	if ((dqvp = dq->dq_qfile->qf_vp) == NULLVP) {
 		panic("dqsync: NULL qf_vp");
+	}
 
-	auio = uio_createwithbuffer(1, dqoffset(dq->dq_index), UIO_SYSSPACE, 
-								  UIO_WRITE, &uio_buf[0], sizeof(uio_buf));
-	uio_addiov(auio, CAST_USER_ADDR_T(&dqb), sizeof (struct dqblk));
+	auio = uio_createwithbuffer(1, dqoffset(dq->dq_index), UIO_SYSSPACE,
+	    UIO_WRITE, &uio_buf[0], sizeof(uio_buf));
+	uio_addiov(auio, CAST_USER_ADDR_T(&dqb), sizeof(struct dqblk));
 
-	context.vc_thread = current_thread();	/* XXX */
+	context.vc_thread = current_thread();   /* XXX */
 	context.vc_ucred = dq->dq_qfile->qf_cred;
 
 	dqblkp = &dq->dq_dqb;
@@ -1038,11 +1060,12 @@ dqsync_locked(struct dquot *dq)
 	dqb.dqb_spare[3]   = 0;
 
 	error = VNOP_WRITE(dqvp, auio, 0, &context);
-	if (uio_resid(auio) && error == 0)
+	if (uio_resid(auio) && error == 0) {
 		error = EIO;
+	}
 	dq->dq_flags &= ~DQ_MOD;
 
-	return (error);
+	return error;
 }
 
 /*
@@ -1054,8 +1077,9 @@ dqflush(struct vnode *vp)
 	struct dquot *dq, *nextdq;
 	struct dqhash *dqh;
 
-	if (!dqisinitialized())
+	if (!dqisinitialized()) {
 		return;
+	}
 
 	/*
 	 * Move all dquot's that used to refer to this quota
@@ -1067,10 +1091,12 @@ dqflush(struct vnode *vp)
 	for (dqh = &dqhashtbl[dqhash]; dqh >= dqhashtbl; dqh--) {
 		for (dq = dqh->lh_first; dq; dq = nextdq) {
 			nextdq = dq->dq_hash.le_next;
-			if (dq->dq_qfile->qf_vp != vp)
+			if (dq->dq_qfile->qf_vp != vp) {
 				continue;
-			if (dq->dq_cnt)
+			}
+			if (dq->dq_cnt) {
 				panic("dqflush: stray dquot");
+			}
 			LIST_REMOVE(dq, dq_hash);
 			dq->dq_qfile = NULL;
 		}
@@ -1080,10 +1106,10 @@ dqflush(struct vnode *vp)
 
 /*
  * LP64 support for munging dqblk structure.
- * XXX conversion of user_time_t to time_t loses precision; not an issue for 
+ * XXX conversion of user_time_t to time_t loses precision; not an issue for
  * XXX us now, since we are only ever setting 32 bits worth of time into it.
  */
-__private_extern__ void 
+__private_extern__ void
 munge_dqblk(struct dqblk *dqblkp, struct user_dqblk *user_dqblkp, boolean_t to64)
 {
 	if (to64) {
@@ -1092,13 +1118,11 @@ munge_dqblk(struct dqblk *dqblkp, struct user_dqblk *user_dqblkp, boolean_t to64
 		user_dqblkp->dqb_id = dqblkp->dqb_id;
 		user_dqblkp->dqb_itime = dqblkp->dqb_itime;
 		user_dqblkp->dqb_btime = dqblkp->dqb_btime;
-	}
-	else {
-		
+	} else {
 		/* munge user (64 bit) dqblk into kernel (32 bit) dqblk */
 		bcopy((caddr_t)user_dqblkp, (caddr_t)dqblkp, offsetof(struct dqblk, dqb_btime));
 		dqblkp->dqb_id = user_dqblkp->dqb_id;
-		dqblkp->dqb_itime = user_dqblkp->dqb_itime;	/* XXX - lose precision */
-		dqblkp->dqb_btime = user_dqblkp->dqb_btime;	/* XXX - lose precision */
+		dqblkp->dqb_itime = user_dqblkp->dqb_itime;     /* XXX - lose precision */
+		dqblkp->dqb_btime = user_dqblkp->dqb_btime;     /* XXX - lose precision */
 	}
 }

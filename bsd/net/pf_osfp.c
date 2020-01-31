@@ -66,17 +66,17 @@
 #include <netinet6/in6_var.h>
 #endif /* INET6 */
 
-#define DPFPRINTF(format, x...)			\
-	if (pf_status.debug >= PF_DEBUG_NOISY)	\
-		printf(format, ##x)
+#define DPFPRINTF(format, x...)                 \
+	if (pf_status.debug >= PF_DEBUG_NOISY)  \
+	        printf(format, ##x)
 
 static SLIST_HEAD(pf_osfp_list, pf_os_fingerprint) pf_osfp_list;
 static struct pool pf_osfp_entry_pl;
 static struct pool pf_osfp_pl;
 
-static struct pf_os_fingerprint	*pf_osfp_find(struct pf_osfp_list *,
+static struct pf_os_fingerprint *pf_osfp_find(struct pf_osfp_list *,
     struct pf_os_fingerprint *, u_int8_t);
-static struct pf_os_fingerprint	*pf_osfp_find_exact(struct pf_osfp_list *,
+static struct pf_os_fingerprint *pf_osfp_find_exact(struct pf_osfp_list *,
     struct pf_os_fingerprint *);
 static void pf_osfp_insert(struct pf_osfp_list *, struct pf_os_fingerprint *);
 
@@ -95,8 +95,9 @@ pf_osfp_fingerprint(struct pf_pdesc *pd, pbuf_t *pbuf, int off,
 
 	if ((pd->af != PF_INET && pd->af != PF_INET6) ||
 	    pd->proto != IPPROTO_TCP ||
-	    (tcp->th_off << 2) < (int)sizeof (*tcp))
-		return (NULL);
+	    (tcp->th_off << 2) < (int)sizeof(*tcp)) {
+		return NULL;
+	}
 
 	if (pd->af == PF_INET) {
 		ip = pbuf->pb_data;
@@ -106,10 +107,11 @@ pf_osfp_fingerprint(struct pf_pdesc *pd, pbuf_t *pbuf, int off,
 		ip6 = pbuf->pb_data;
 	}
 	if (!pf_pull_hdr(pbuf, off, hdr, tcp->th_off << 2, NULL, NULL,
-	    pd->af))
-		return (NULL);
+	        pd->af)) {
+		return NULL;
+	}
 
-	return (pf_osfp_fingerprint_hdr(ip, ip6, (struct tcphdr *)(void *)hdr));
+	return pf_osfp_fingerprint_hdr(ip, ip6, (struct tcphdr *)(void *)hdr);
 }
 
 struct pf_osfp_enlist *
@@ -124,44 +126,49 @@ pf_osfp_fingerprint_hdr(const struct ip *ip, const struct ip6_hdr *ip6,
 	const u_int8_t *optp;
 	char srcname[128];
 
-	if ((tcp->th_flags & (TH_SYN|TH_ACK)) != TH_SYN)
-		return (NULL);
+	if ((tcp->th_flags & (TH_SYN | TH_ACK)) != TH_SYN) {
+		return NULL;
+	}
 	if (ip) {
-		if ((ip->ip_off & htons(IP_OFFMASK)) != 0)
-			return (NULL);
+		if ((ip->ip_off & htons(IP_OFFMASK)) != 0) {
+			return NULL;
+		}
 	}
 
-	memset(&fp, 0, sizeof (fp));
+	memset(&fp, 0, sizeof(fp));
 
 	if (ip) {
 		fp.fp_psize = ntohs(ip->ip_len);
 		fp.fp_ttl = ip->ip_ttl;
-		if (ip->ip_off & htons(IP_DF))
+		if (ip->ip_off & htons(IP_DF)) {
 			fp.fp_flags |= PF_OSFP_DF;
+		}
 		(void) inet_ntop(AF_INET, &ip->ip_src, srcname,
-		    (socklen_t)sizeof (srcname));
+		    (socklen_t)sizeof(srcname));
 	}
 #if INET6
 	else if (ip6) {
 		/* jumbo payload? */
-		fp.fp_psize = sizeof (struct ip6_hdr) + ntohs(ip6->ip6_plen);
+		fp.fp_psize = sizeof(struct ip6_hdr) + ntohs(ip6->ip6_plen);
 		fp.fp_ttl = ip6->ip6_hlim;
 		fp.fp_flags |= PF_OSFP_DF;
 		fp.fp_flags |= PF_OSFP_INET6;
 		(void) inet_ntop(AF_INET6, &ip6->ip6_src, srcname,
-		    (socklen_t)sizeof (srcname));
+		    (socklen_t)sizeof(srcname));
 	}
 #endif
-	else
-		return (NULL);
+	else {
+		return NULL;
+	}
 	fp.fp_wsize = ntohs(tcp->th_win);
 
 
-	cnt = (tcp->th_off << 2) - sizeof (*tcp);
-	optp = (const u_int8_t *)((const char *)tcp + sizeof (*tcp));
+	cnt = (tcp->th_off << 2) - sizeof(*tcp);
+	optp = (const u_int8_t *)((const char *)tcp + sizeof(*tcp));
 	for (; cnt > 0; cnt -= optlen, optp += optlen) {
-		if (*optp == TCPOPT_EOL)
+		if (*optp == TCPOPT_EOL) {
 			break;
+		}
 
 		fp.fp_optcnt++;
 		if (*optp == TCPOPT_NOP) {
@@ -169,53 +176,57 @@ pf_osfp_fingerprint_hdr(const struct ip *ip, const struct ip6_hdr *ip6,
 			    PF_OSFP_TCPOPT_NOP;
 			optlen = 1;
 		} else {
-			if (cnt < 2)
-				return (NULL);
+			if (cnt < 2) {
+				return NULL;
+			}
 			optlen = optp[1];
-			if (optlen > cnt || optlen < 2)
-				return (NULL);
+			if (optlen > cnt || optlen < 2) {
+				return NULL;
+			}
 			switch (*optp) {
 			case TCPOPT_MAXSEG:
-				if (optlen >= TCPOLEN_MAXSEG)
+				if (optlen >= TCPOLEN_MAXSEG) {
 					memcpy(&fp.fp_mss, &optp[2],
-					    sizeof (fp.fp_mss));
+					    sizeof(fp.fp_mss));
+				}
 				fp.fp_tcpopts = (fp.fp_tcpopts <<
-				    PF_OSFP_TCPOPT_BITS) | PF_OSFP_TCPOPT_MSS;
+				        PF_OSFP_TCPOPT_BITS) | PF_OSFP_TCPOPT_MSS;
 #if BYTE_ORDER != BIG_ENDIAN
 				NTOHS(fp.fp_mss);
 #endif
 				break;
 			case TCPOPT_WINDOW:
-				if (optlen >= TCPOLEN_WINDOW)
+				if (optlen >= TCPOLEN_WINDOW) {
 					memcpy(&fp.fp_wscale, &optp[2],
-					    sizeof (fp.fp_wscale));
+					    sizeof(fp.fp_wscale));
+				}
 #if BYTE_ORDER != BIG_ENDIAN
 				NTOHS(fp.fp_wscale);
 #endif
 				fp.fp_tcpopts = (fp.fp_tcpopts <<
-				    PF_OSFP_TCPOPT_BITS) |
+				        PF_OSFP_TCPOPT_BITS) |
 				    PF_OSFP_TCPOPT_WSCALE;
 				break;
 			case TCPOPT_SACK_PERMITTED:
 				fp.fp_tcpopts = (fp.fp_tcpopts <<
-				    PF_OSFP_TCPOPT_BITS) | PF_OSFP_TCPOPT_SACK;
+				        PF_OSFP_TCPOPT_BITS) | PF_OSFP_TCPOPT_SACK;
 				break;
 			case TCPOPT_TIMESTAMP:
 				if (optlen >= TCPOLEN_TIMESTAMP) {
 					u_int32_t ts;
-					memcpy(&ts, &optp[2], sizeof (ts));
-					if (ts == 0)
+					memcpy(&ts, &optp[2], sizeof(ts));
+					if (ts == 0) {
 						fp.fp_flags |= PF_OSFP_TS0;
-
+					}
 				}
 				fp.fp_tcpopts = (fp.fp_tcpopts <<
-				    PF_OSFP_TCPOPT_BITS) | PF_OSFP_TCPOPT_TS;
+				        PF_OSFP_TCPOPT_BITS) | PF_OSFP_TCPOPT_TS;
 				break;
 			default:
-				return (NULL);
+				return NULL;
 			}
 		}
-		optlen = MAX(optlen, 1);	/* paranoia */
+		optlen = MAX(optlen, 1);        /* paranoia */
 	}
 
 	DPFPRINTF("fingerprinted %s:%d  %d:%d:%d:%d:%llx (%d) "
@@ -232,9 +243,10 @@ pf_osfp_fingerprint_hdr(const struct ip *ip, const struct ip6_hdr *ip6,
 	    fp.fp_wscale);
 
 	if ((fpresult = pf_osfp_find(&pf_osfp_list, &fp,
-	    PF_OSFP_MAXTTL_OFFSET)))
-		return (&fpresult->fp_oses);
-	return (NULL);
+	    PF_OSFP_MAXTTL_OFFSET))) {
+		return &fpresult->fp_oses;
+	}
+	return NULL;
 }
 
 /* Match a fingerprint ID against a list of OSes */
@@ -245,11 +257,12 @@ pf_osfp_match(struct pf_osfp_enlist *list, pf_osfp_t os)
 	int os_class, os_version, os_subtype;
 	int en_class, en_version, en_subtype;
 
-	if (os == PF_OSFP_ANY)
-		return (1);
+	if (os == PF_OSFP_ANY) {
+		return 1;
+	}
 	if (list == NULL) {
 		DPFPRINTF("osfp no match against %x\n", os);
-		return (os == PF_OSFP_UNKNOWN);
+		return os == PF_OSFP_UNKNOWN;
 	}
 	PF_OSFP_UNPACK(os, os_class, os_version, os_subtype);
 	SLIST_FOREACH(entry, list, fp_entry) {
@@ -260,20 +273,20 @@ pf_osfp_match(struct pf_osfp_enlist *list, pf_osfp_t os)
 			DPFPRINTF("osfp matched %s %s %s  %x==%x\n",
 			    entry->fp_class_nm, entry->fp_version_nm,
 			    entry->fp_subtype_nm, os, entry->fp_os);
-			return (1);
+			return 1;
 		}
 	}
 	DPFPRINTF("fingerprint 0x%x didn't match\n", os);
-	return (0);
+	return 0;
 }
 
 /* Initialize the OS fingerprint system */
 void
 pf_osfp_initialize(void)
 {
-	pool_init(&pf_osfp_entry_pl, sizeof (struct pf_osfp_entry), 0, 0, 0,
+	pool_init(&pf_osfp_entry_pl, sizeof(struct pf_osfp_entry), 0, 0, 0,
 	    "pfosfpen", NULL);
-	pool_init(&pf_osfp_pl, sizeof (struct pf_os_fingerprint), 0, 0, 0,
+	pool_init(&pf_osfp_pl, sizeof(struct pf_os_fingerprint), 0, 0, 0,
 	    "pfosfp", NULL);
 	SLIST_INIT(&pf_osfp_list);
 }
@@ -314,7 +327,7 @@ pf_osfp_add(struct pf_osfp_ioctl *fpioc)
 	struct pf_os_fingerprint *fp, fpadd;
 	struct pf_osfp_entry *entry, *uentry;
 
-	memset(&fpadd, 0, sizeof (fpadd));
+	memset(&fpadd, 0, sizeof(fpadd));
 	fpadd.fp_tcpopts = fpioc->fp_tcpopts;
 	fpadd.fp_wsize = fpioc->fp_wsize;
 	fpadd.fp_psize = fpioc->fp_psize;
@@ -326,9 +339,9 @@ pf_osfp_add(struct pf_osfp_ioctl *fpioc)
 
 	uentry = &fpioc->fp_os;
 	uentry->fp_entry.sle_next = NULL;
-	uentry->fp_class_nm[sizeof (uentry->fp_class_nm) - 1] = '\0';
-	uentry->fp_version_nm[sizeof (uentry->fp_version_nm) - 1] = '\0';
-	uentry->fp_subtype_nm[sizeof (uentry->fp_subtype_nm) - 1] = '\0';
+	uentry->fp_class_nm[sizeof(uentry->fp_class_nm) - 1] = '\0';
+	uentry->fp_version_nm[sizeof(uentry->fp_version_nm) - 1] = '\0';
+	uentry->fp_subtype_nm[sizeof(uentry->fp_subtype_nm) - 1] = '\0';
 
 	DPFPRINTF("adding osfp %s %s %s = %s%d:%d:%d:%s%d:0x%llx %d "
 	    "(TS=%s,M=%s%d,W=%s%d) %x\n",
@@ -357,15 +370,18 @@ pf_osfp_add(struct pf_osfp_ioctl *fpioc)
 
 	if ((fp = pf_osfp_find_exact(&pf_osfp_list, &fpadd))) {
 		SLIST_FOREACH(entry, &fp->fp_oses, fp_entry) {
-			if (PF_OSFP_ENTRY_EQ(entry, &fpioc->fp_os))
-				return (EEXIST);
+			if (PF_OSFP_ENTRY_EQ(entry, &fpioc->fp_os)) {
+				return EEXIST;
+			}
 		}
-		if ((entry = pool_get(&pf_osfp_entry_pl, PR_WAITOK)) == NULL)
-			return (ENOMEM);
+		if ((entry = pool_get(&pf_osfp_entry_pl, PR_WAITOK)) == NULL) {
+			return ENOMEM;
+		}
 	} else {
-		if ((fp = pool_get(&pf_osfp_pl, PR_WAITOK)) == NULL)
-			return (ENOMEM);
-		memset(fp, 0, sizeof (*fp));
+		if ((fp = pool_get(&pf_osfp_pl, PR_WAITOK)) == NULL) {
+			return ENOMEM;
+		}
+		memset(fp, 0, sizeof(*fp));
 		fp->fp_tcpopts = fpioc->fp_tcpopts;
 		fp->fp_wsize = fpioc->fp_wsize;
 		fp->fp_psize = fpioc->fp_psize;
@@ -377,24 +393,25 @@ pf_osfp_add(struct pf_osfp_ioctl *fpioc)
 		SLIST_INIT(&fp->fp_oses);
 		if ((entry = pool_get(&pf_osfp_entry_pl, PR_WAITOK)) == NULL) {
 			pool_put(&pf_osfp_pl, fp);
-			return (ENOMEM);
+			return ENOMEM;
 		}
 		pf_osfp_insert(&pf_osfp_list, fp);
 	}
-	memcpy(entry, &fpioc->fp_os, sizeof (*entry));
+	memcpy(entry, &fpioc->fp_os, sizeof(*entry));
 
 	/* Make sure the strings are NUL terminated */
-	entry->fp_class_nm[sizeof (entry->fp_class_nm)-1] = '\0';
-	entry->fp_version_nm[sizeof (entry->fp_version_nm)-1] = '\0';
-	entry->fp_subtype_nm[sizeof (entry->fp_subtype_nm)-1] = '\0';
+	entry->fp_class_nm[sizeof(entry->fp_class_nm) - 1] = '\0';
+	entry->fp_version_nm[sizeof(entry->fp_version_nm) - 1] = '\0';
+	entry->fp_subtype_nm[sizeof(entry->fp_subtype_nm) - 1] = '\0';
 
 	SLIST_INSERT_HEAD(&fp->fp_oses, entry, fp_entry);
 
 #ifdef PFDEBUG
-	if ((fp = pf_osfp_validate()))
+	if ((fp = pf_osfp_validate())) {
 		printf("Invalid fingerprint list\n");
+	}
 #endif /* PFDEBUG */
-	return (0);
+	return 0;
 }
 
 
@@ -405,15 +422,15 @@ pf_osfp_find(struct pf_osfp_list *list, struct pf_os_fingerprint *find,
 {
 	struct pf_os_fingerprint *f;
 
-#define MATCH_INT(_MOD, _DC, _field)					\
-	if ((f->fp_flags & _DC) == 0) {					\
-		if ((f->fp_flags & _MOD) == 0) {			\
-			if (f->_field != find->_field)			\
-				continue;				\
-		} else {						\
-			if (f->_field == 0 || find->_field % f->_field)	\
-				continue;				\
-		}							\
+#define MATCH_INT(_MOD, _DC, _field)                                    \
+	if ((f->fp_flags & _DC) == 0) {                                 \
+	        if ((f->fp_flags & _MOD) == 0) {                        \
+	                if (f->_field != find->_field)                  \
+	                        continue;                               \
+	        } else {                                                \
+	                if (f->_field == 0 || find->_field % f->_field) \
+	                        continue;                               \
+	        }                                                       \
 	}
 
 	SLIST_FOREACH(f, list, fp_next) {
@@ -421,56 +438,63 @@ pf_osfp_find(struct pf_osfp_list *list, struct pf_os_fingerprint *find,
 		    f->fp_optcnt != find->fp_optcnt ||
 		    f->fp_ttl < find->fp_ttl ||
 		    f->fp_ttl - find->fp_ttl > ttldiff ||
-		    (f->fp_flags & (PF_OSFP_DF|PF_OSFP_TS0)) !=
-		    (find->fp_flags & (PF_OSFP_DF|PF_OSFP_TS0)))
+		    (f->fp_flags & (PF_OSFP_DF | PF_OSFP_TS0)) !=
+		    (find->fp_flags & (PF_OSFP_DF | PF_OSFP_TS0))) {
 			continue;
+		}
 
 		MATCH_INT(PF_OSFP_PSIZE_MOD, PF_OSFP_PSIZE_DC, fp_psize)
 		MATCH_INT(PF_OSFP_MSS_MOD, PF_OSFP_MSS_DC, fp_mss)
 		MATCH_INT(PF_OSFP_WSCALE_MOD, PF_OSFP_WSCALE_DC, fp_wscale)
 		if ((f->fp_flags & PF_OSFP_WSIZE_DC) == 0) {
 			if (f->fp_flags & PF_OSFP_WSIZE_MSS) {
-				if (find->fp_mss == 0)
+				if (find->fp_mss == 0) {
 					continue;
+				}
 
 /*
  * Some "smart" NAT devices and DSL routers will tweak the MSS size and
  * will set it to whatever is suitable for the link type.
  */
-#define SMART_MSS	1460
+#define SMART_MSS       1460
 				if ((find->fp_wsize % find->fp_mss ||
 				    find->fp_wsize / find->fp_mss !=
 				    f->fp_wsize) &&
 				    (find->fp_wsize % SMART_MSS ||
 				    find->fp_wsize / SMART_MSS !=
-				    f->fp_wsize))
+				    f->fp_wsize)) {
 					continue;
+				}
 			} else if (f->fp_flags & PF_OSFP_WSIZE_MTU) {
-				if (find->fp_mss == 0)
+				if (find->fp_mss == 0) {
 					continue;
+				}
 
-#define MTUOFF	(sizeof (struct ip) + sizeof (struct tcphdr))
-#define SMART_MTU	(SMART_MSS + MTUOFF)
+#define MTUOFF  (sizeof (struct ip) + sizeof (struct tcphdr))
+#define SMART_MTU       (SMART_MSS + MTUOFF)
 				if ((find->fp_wsize % (find->fp_mss + MTUOFF) ||
 				    find->fp_wsize / (find->fp_mss + MTUOFF) !=
 				    f->fp_wsize) &&
 				    (find->fp_wsize % SMART_MTU ||
 				    find->fp_wsize / SMART_MTU !=
-				    f->fp_wsize))
+				    f->fp_wsize)) {
 					continue;
+				}
 			} else if (f->fp_flags & PF_OSFP_WSIZE_MOD) {
 				if (f->fp_wsize == 0 || find->fp_wsize %
-				    f->fp_wsize)
+				    f->fp_wsize) {
 					continue;
+				}
 			} else {
-				if (f->fp_wsize != find->fp_wsize)
+				if (f->fp_wsize != find->fp_wsize) {
 					continue;
+				}
 			}
 		}
-		return (f);
+		return f;
 	}
 
-	return (NULL);
+	return NULL;
 }
 
 /* Find an exact fingerprint in the list */
@@ -487,11 +511,12 @@ pf_osfp_find_exact(struct pf_osfp_list *list, struct pf_os_fingerprint *find)
 		    f->fp_flags == find->fp_flags &&
 		    f->fp_optcnt == find->fp_optcnt &&
 		    f->fp_wscale == find->fp_wscale &&
-		    f->fp_ttl == find->fp_ttl)
-			return (f);
+		    f->fp_ttl == find->fp_ttl) {
+			return f;
+		}
 	}
 
-	return (NULL);
+	return NULL;
 }
 
 /* Insert a fingerprint into the list */
@@ -503,11 +528,12 @@ pf_osfp_insert(struct pf_osfp_list *list, struct pf_os_fingerprint *ins)
 	/* XXX need to go semi tree based.  can key on tcp options */
 
 	SLIST_FOREACH(f, list, fp_next)
-		prev = f;
-	if (prev)
+	prev = f;
+	if (prev) {
 		SLIST_INSERT_AFTER(prev, ins, fp_next);
-	else
+	} else {
 		SLIST_INSERT_HEAD(list, ins, fp_next);
+	}
 }
 
 /* Fill a fingerprint by its number (from an ioctl) */
@@ -520,7 +546,7 @@ pf_osfp_get(struct pf_osfp_ioctl *fpioc)
 	int i = 0;
 
 
-	memset(fpioc, 0, sizeof (*fpioc));
+	memset(fpioc, 0, sizeof(*fpioc));
 	SLIST_FOREACH(fp, &pf_osfp_list, fp_next) {
 		SLIST_FOREACH(entry, &fp->fp_oses, fp_entry) {
 			if (i++ == num) {
@@ -532,14 +558,14 @@ pf_osfp_get(struct pf_osfp_ioctl *fpioc)
 				fpioc->fp_wscale = fp->fp_wscale;
 				fpioc->fp_getnum = num;
 				memcpy(&fpioc->fp_os, entry,
-				    sizeof (fpioc->fp_os));
+				    sizeof(fpioc->fp_os));
 				fpioc->fp_os.fp_entry.sle_next = NULL;
-				return (0);
+				return 0;
 			}
 		}
 	}
 
-	return (EBUSY);
+	return EBUSY;
 }
 
 
@@ -550,19 +576,21 @@ pf_osfp_validate(void)
 	struct pf_os_fingerprint *f, *f2, find;
 
 	SLIST_FOREACH(f, &pf_osfp_list, fp_next) {
-		memcpy(&find, f, sizeof (find));
+		memcpy(&find, f, sizeof(find));
 
 		/* We do a few MSS/th_win percolations to make things unique */
-		if (find.fp_mss == 0)
+		if (find.fp_mss == 0) {
 			find.fp_mss = 128;
-		if (f->fp_flags & PF_OSFP_WSIZE_MSS)
+		}
+		if (f->fp_flags & PF_OSFP_WSIZE_MSS) {
 			find.fp_wsize *= find.fp_mss;
-		else if (f->fp_flags & PF_OSFP_WSIZE_MTU)
+		} else if (f->fp_flags & PF_OSFP_WSIZE_MTU) {
 			find.fp_wsize *= (find.fp_mss + 40);
-		else if (f->fp_flags & PF_OSFP_WSIZE_MOD)
+		} else if (f->fp_flags & PF_OSFP_WSIZE_MOD) {
 			find.fp_wsize *= 2;
+		}
 		if (f != (f2 = pf_osfp_find(&pf_osfp_list, &find, 0))) {
-			if (f2)
+			if (f2) {
 				printf("Found \"%s %s %s\" instead of "
 				    "\"%s %s %s\"\n",
 				    SLIST_FIRST(&f2->fp_oses)->fp_class_nm,
@@ -571,13 +599,14 @@ pf_osfp_validate(void)
 				    SLIST_FIRST(&f->fp_oses)->fp_class_nm,
 				    SLIST_FIRST(&f->fp_oses)->fp_version_nm,
 				    SLIST_FIRST(&f->fp_oses)->fp_subtype_nm);
-			else
+			} else {
 				printf("Couldn't find \"%s %s %s\"\n",
 				    SLIST_FIRST(&f->fp_oses)->fp_class_nm,
 				    SLIST_FIRST(&f->fp_oses)->fp_version_nm,
 				    SLIST_FIRST(&f->fp_oses)->fp_subtype_nm);
-			return (f);
+			}
+			return f;
 		}
 	}
-	return (NULL);
+	return NULL;
 }

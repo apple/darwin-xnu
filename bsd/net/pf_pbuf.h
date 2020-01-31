@@ -22,7 +22,7 @@
  */
 
 #ifndef __PBUF_H__
-#define	__PBUF_H__
+#define __PBUF_H__
 
 #include <sys/mbuf.h>
 
@@ -36,14 +36,14 @@ enum pbuf_action {
 	PBUF_ACTION_DESTROY
 };
 
-#define	PBUF_ACTION_RV_SUCCESS	0
-#define	PBUF_ACTION_RV_FAILURE	(-1)
+#define PBUF_ACTION_RV_SUCCESS  0
+#define PBUF_ACTION_RV_FAILURE  (-1)
 
 struct pbuf_memory {
-	uint8_t *pm_buffer;	// Pointer to start of buffer
-	u_int pm_buffer_len;	// Total length of buffer
-	u_int pm_offset;	// Offset to start of payload
-	u_int pm_len;		// Length of payload
+	uint8_t *pm_buffer;     // Pointer to start of buffer
+	u_int pm_buffer_len;    // Total length of buffer
+	u_int pm_offset;        // Offset to start of payload
+	u_int pm_len;           // Length of payload
 	uint32_t pm_csum_flags;
 	uint32_t pm_csum_data;
 	uint8_t pm_proto;
@@ -56,51 +56,50 @@ struct pbuf_memory {
 };
 
 typedef struct pbuf {
-	enum pbuf_type	pb_type;
+	enum pbuf_type  pb_type;
 	union {
 		struct mbuf *pbu_mbuf;
 		struct pbuf_memory pbu_memory;
 	} pb_u;
-#define	pb_mbuf		pb_u.pbu_mbuf
-#define	pb_memory	pb_u.pbu_memory
+#define pb_mbuf         pb_u.pbu_mbuf
+#define pb_memory       pb_u.pbu_memory
 
-	void		*pb_data;
-	uint32_t	pb_packet_len;
-	uint32_t	pb_contig_len;
-	uint32_t	*pb_csum_flags;
-	uint32_t	*pb_csum_data;    /* data field used by csum routines */
-	uint8_t		*pb_proto;
-	uint8_t		*pb_flowsrc;
-	uint32_t	*pb_flowid;
-	uint32_t	*pb_flags;
-	struct pf_mtag	*pb_pftag;
-	struct ifnet	*pb_ifp;
-	struct pbuf	*pb_next;
-
+	void            *pb_data;
+	uint32_t        pb_packet_len;
+	uint32_t        pb_contig_len;
+	uint32_t        *pb_csum_flags;
+	uint32_t        *pb_csum_data;    /* data field used by csum routines */
+	uint8_t         *pb_proto;
+	uint8_t         *pb_flowsrc;
+	uint32_t        *pb_flowid;
+	uint32_t        *pb_flags;
+	struct pf_mtag  *pb_pftag;
+	struct ifnet    *pb_ifp;
+	struct pbuf     *pb_next;
 } pbuf_t;
 
 #define pbuf_is_valid(pb) (!((pb) == NULL || (pb)->pb_type == PBUF_TYPE_ZOMBIE))
 
-void		pbuf_init_mbuf(pbuf_t *, struct mbuf *, struct ifnet *);
-void		pbuf_init_memory(pbuf_t *, const struct pbuf_memory *,
-				struct ifnet *);
-void		pbuf_destroy(pbuf_t *);
-void		pbuf_sync(pbuf_t *);
+void            pbuf_init_mbuf(pbuf_t *, struct mbuf *, struct ifnet *);
+void            pbuf_init_memory(pbuf_t *, const struct pbuf_memory *,
+    struct ifnet *);
+void            pbuf_destroy(pbuf_t *);
+void            pbuf_sync(pbuf_t *);
 
-struct mbuf	*pbuf_to_mbuf(pbuf_t *, boolean_t);
-struct mbuf	*pbuf_clone_to_mbuf(pbuf_t *);
+struct mbuf     *pbuf_to_mbuf(pbuf_t *, boolean_t);
+struct mbuf     *pbuf_clone_to_mbuf(pbuf_t *);
 
-void *		pbuf_ensure_contig(pbuf_t *, size_t);
-void *		pbuf_ensure_writable(pbuf_t *, size_t);
+void *          pbuf_ensure_contig(pbuf_t *, size_t);
+void *          pbuf_ensure_writable(pbuf_t *, size_t);
 
-void *		pbuf_resize_segment(pbuf_t *, int off, int olen, int nlen);
-void *		pbuf_contig_segment(pbuf_t *, int off, int len);
+void *          pbuf_resize_segment(pbuf_t *, int off, int olen, int nlen);
+void *          pbuf_contig_segment(pbuf_t *, int off, int len);
 
-void		pbuf_copy_data(pbuf_t *, int, int, void *);
-void		pbuf_copy_back(pbuf_t *, int, int, void *);
+void            pbuf_copy_data(pbuf_t *, int, int, void *);
+void            pbuf_copy_back(pbuf_t *, int, int, void *);
 
-uint16_t	pbuf_inet_cksum(const pbuf_t *, uint32_t, uint32_t, uint32_t);
-uint16_t	pbuf_inet6_cksum(const pbuf_t *, uint32_t, uint32_t, uint32_t);
+uint16_t        pbuf_inet_cksum(const pbuf_t *, uint32_t, uint32_t, uint32_t);
+uint16_t        pbuf_inet6_cksum(const pbuf_t *, uint32_t, uint32_t, uint32_t);
 
 mbuf_svc_class_t pbuf_get_service_class(const pbuf_t *);
 

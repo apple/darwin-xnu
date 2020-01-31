@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
@@ -62,7 +62,7 @@
  */
 
 #ifndef _SYS_FILE_H_
-#define	_SYS_FILE_H_
+#define _SYS_FILE_H_
 
 #include <sys/appleapiopts.h>
 #include <sys/types.h>
@@ -78,12 +78,12 @@
 #endif
 
 #ifndef _KAUTH_CRED_T
-#define	_KAUTH_CRED_T
+#define _KAUTH_CRED_T
 struct ucred;
 typedef struct ucred *kauth_cred_t;
 struct posix_cred;
 typedef struct posix_cred *posix_cred_t;
-#endif	/* !_KAUTH_CRED_T */
+#endif  /* !_KAUTH_CRED_T */
 
 __BEGIN_DECLS
 #ifdef KERNEL
@@ -96,10 +96,10 @@ int file_drop(int);
 
 #ifdef KERNEL_PRIVATE
 int fd_rdwr(int fd, enum uio_rw, uint64_t base, int64_t len, enum uio_seg,
-	    off_t offset, int io_flg, int64_t *aresid);
+    off_t offset, int io_flg, int64_t *aresid);
 struct fileproc;
 struct vnode;
 int fp_getfvp(struct proc *p, int fd, struct fileproc **resultfp, struct vnode  **resultvp);
-#endif	/* KERNEL_PRIVATE */
+#endif  /* KERNEL_PRIVATE */
 __END_DECLS
 #endif /* !_SYS_FILE_H_ */

@@ -37,7 +37,7 @@ int
 gethostuuid(uuid_t uuid, const struct timespec *timeout)
 {
 	int result;
-	
+
 	result = __gethostuuid(uuid, timeout, 0);
 	if ((result == -1) && (errno == EPERM)) {
 		if (_gethostuuid_callback) {
@@ -47,7 +47,7 @@ gethostuuid(uuid_t uuid, const struct timespec *timeout)
 			memset(uuid, 0x00, sizeof(*uuid));
 		}
 	}
-	
+
 	return result;
 }
 
@@ -61,7 +61,6 @@ _getprivatesystemidentifier(uuid_t uuid, const struct timespec *timeout)
 int
 _register_gethostuuid_callback(int (*new_callback)(uuid_t))
 {
-
 	if (__sync_bool_compare_and_swap((void **)&_gethostuuid_callback, (void *)0, (void *)new_callback)) {
 		return 0;
 	} else {

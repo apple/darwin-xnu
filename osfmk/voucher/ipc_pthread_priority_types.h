@@ -32,8 +32,8 @@
 #include <stdint.h>
 #include <mach/mach_types.h>
 
-#define MACH_VOUCHER_ATTR_PTHPRIORITY_NULL 		((mach_voucher_attr_recipe_command_t)701)
-#define MACH_VOUCHER_ATTR_PTHPRIORITY_CREATE 		((mach_voucher_attr_recipe_command_t)710)
+#define MACH_VOUCHER_ATTR_PTHPRIORITY_NULL              ((mach_voucher_attr_recipe_command_t)701)
+#define MACH_VOUCHER_ATTR_PTHPRIORITY_CREATE            ((mach_voucher_attr_recipe_command_t)710)
 
 typedef uint32_t ipc_pthread_priority_value_t;
 

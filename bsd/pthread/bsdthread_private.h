@@ -37,25 +37,25 @@
 
 /* pthread bsdthread_ctl sysctl commands */
 /* bsdthread_ctl(BSDTHREAD_CTL_SET_QOS, thread_port, tsd_entry_addr, 0) */
-#define BSDTHREAD_CTL_SET_QOS				0x10
+#define BSDTHREAD_CTL_SET_QOS                           0x10
 /* bsdthread_ctl(BSDTHREAD_CTL_GET_QOS, thread_port, 0, 0) */
-#define BSDTHREAD_CTL_GET_QOS				0x20
+#define BSDTHREAD_CTL_GET_QOS                           0x20
 /* bsdthread_ctl(BSDTHREAD_CTL_QOS_OVERRIDE_START, thread_port, priority, 0) */
-#define BSDTHREAD_CTL_QOS_OVERRIDE_START	0x40
+#define BSDTHREAD_CTL_QOS_OVERRIDE_START        0x40
 /* bsdthread_ctl(BSDTHREAD_CTL_QOS_OVERRIDE_END, thread_port, 0, 0) */
-#define BSDTHREAD_CTL_QOS_OVERRIDE_END		0x80
+#define BSDTHREAD_CTL_QOS_OVERRIDE_END          0x80
 /* bsdthread_ctl(BSDTHREAD_CTL_SET_SELF, priority, voucher, flags) */
-#define BSDTHREAD_CTL_SET_SELF				0x100
+#define BSDTHREAD_CTL_SET_SELF                          0x100
 /* bsdthread_ctl(BSDTHREAD_CTL_QOS_OVERRIDE_RESET, 0, 0, 0) */
-#define BSDTHREAD_CTL_QOS_OVERRIDE_RESET	0x200
+#define BSDTHREAD_CTL_QOS_OVERRIDE_RESET        0x200
 /* bsdthread_ctl(BSDTHREAD_CTL_QOS_OVERRIDE_DISPATCH, thread_port, priority, 0) */
-#define BSDTHREAD_CTL_QOS_OVERRIDE_DISPATCH	0x400
+#define BSDTHREAD_CTL_QOS_OVERRIDE_DISPATCH     0x400
 /* bsdthread_ctl(BSDTHREAD_CTL_QOS_DISPATCH_ASYNCHRONOUS_OVERRIDE_ADD, thread_port, priority, resource) */
-#define BSDTHREAD_CTL_QOS_DISPATCH_ASYNCHRONOUS_OVERRIDE_ADD		0x401
+#define BSDTHREAD_CTL_QOS_DISPATCH_ASYNCHRONOUS_OVERRIDE_ADD            0x401
 /* bsdthread_ctl(BSDTHREAD_CTL_QOS_DISPATCH_ASYNCHRONOUS_OVERRIDE_RESET, 0|1 (?reset_all), resource, 0) */
-#define BSDTHREAD_CTL_QOS_DISPATCH_ASYNCHRONOUS_OVERRIDE_RESET		0x402
+#define BSDTHREAD_CTL_QOS_DISPATCH_ASYNCHRONOUS_OVERRIDE_RESET          0x402
 /* bsdthread_ctl(BSDTHREAD_CTL_QOS_MAX_PARALLELISM, priority, flags, 0) */
-#define BSDTHREAD_CTL_QOS_MAX_PARALLELISM	0x800
+#define BSDTHREAD_CTL_QOS_MAX_PARALLELISM       0x800
 
 #define _PTHREAD_QOS_PARALLELISM_COUNT_LOGICAL 0x1
 #define _PTHREAD_QOS_PARALLELISM_REALTIME 0x2

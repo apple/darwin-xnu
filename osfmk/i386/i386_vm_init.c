@@ -2,7 +2,7 @@
  * Copyright (c) 2003-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989, 1988 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -84,27 +84,27 @@
 #include <libkern/kernel_mach_header.h>
 
 
-vm_size_t	mem_size = 0; 
-pmap_paddr_t	first_avail = 0;/* first after page tables */
+vm_size_t       mem_size = 0;
+pmap_paddr_t    first_avail = 0;/* first after page tables */
 
-uint64_t	max_mem;        /* Size of physical memory (bytes), adjusted by maxmem */
+uint64_t        max_mem;        /* Size of physical memory (bytes), adjusted by maxmem */
 uint64_t        mem_actual;
-uint64_t	sane_size = 0;  /* Memory size for defaults calculations */
+uint64_t        sane_size = 0;  /* Memory size for defaults calculations */
 
 /*
  * KASLR parameters
  */
-ppnum_t		vm_kernel_base_page;
-vm_offset_t	vm_kernel_base;
-vm_offset_t	vm_kernel_top;
-vm_offset_t	vm_kernel_stext;
-vm_offset_t	vm_kernel_etext;
-vm_offset_t	vm_kernel_slide;
-vm_offset_t	vm_kernel_slid_base;
-vm_offset_t	vm_kernel_slid_top;
+ppnum_t         vm_kernel_base_page;
+vm_offset_t     vm_kernel_base;
+vm_offset_t     vm_kernel_top;
+vm_offset_t     vm_kernel_stext;
+vm_offset_t     vm_kernel_etext;
+vm_offset_t     vm_kernel_slide;
+vm_offset_t     vm_kernel_slid_base;
+vm_offset_t     vm_kernel_slid_top;
 vm_offset_t vm_hib_base;
-vm_offset_t	vm_kext_base = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
-vm_offset_t	vm_kext_top = VM_MIN_KERNEL_ADDRESS;
+vm_offset_t     vm_kext_base = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
+vm_offset_t     vm_kext_top = VM_MIN_KERNEL_ADDRESS;
 
 vm_offset_t vm_prelink_stext;
 vm_offset_t vm_prelink_etext;
@@ -116,12 +116,12 @@ vm_offset_t vm_elinkedit;
 vm_offset_t vm_kernel_builtinkmod_text;
 vm_offset_t vm_kernel_builtinkmod_text_end;
 
-#define MAXLORESERVE	(32 * 1024 * 1024)
+#define MAXLORESERVE    (32 * 1024 * 1024)
 
-ppnum_t		max_ppnum = 0;
-ppnum_t		lowest_lo = 0;
-ppnum_t		lowest_hi = 0;
-ppnum_t		highest_hi = 0;
+ppnum_t         max_ppnum = 0;
+ppnum_t         lowest_lo = 0;
+ppnum_t         lowest_hi = 0;
+ppnum_t         highest_hi = 0;
 
 enum {PMAP_MAX_RESERVED_RANGES = 32};
 uint32_t pmap_reserved_pages_allocated = 0;
@@ -132,11 +132,11 @@ uint32_t pmap_reserved_ranges = 0;
 extern unsigned int bsd_mbuf_cluster_reserve(boolean_t *);
 
 pmap_paddr_t     avail_start, avail_end;
-vm_offset_t	virtual_avail, virtual_end;
-static pmap_paddr_t	avail_remaining;
+vm_offset_t     virtual_avail, virtual_end;
+static pmap_paddr_t     avail_remaining;
 vm_offset_t     static_memory_end = 0;
 
-vm_offset_t	sHIB, eHIB, stext, etext, sdata, edata, end, sconst, econst;
+vm_offset_t     sHIB, eHIB, stext, etext, sdata, edata, end, sconst, econst;
 
 /*
  * _mh_execute_header is the mach_header for the currently executing kernel
@@ -166,53 +166,55 @@ uint64_t firmware_MMIO_bytes;
 /*
  * Linker magic to establish the highest address in the kernel.
  */
-extern void 	*last_kernel_symbol;
+extern void     *last_kernel_symbol;
 
-boolean_t	memmap = FALSE;
-#if	DEBUG || DEVELOPMENT
+boolean_t       memmap = FALSE;
+#if     DEBUG || DEVELOPMENT
 static void
-kprint_memmap(vm_offset_t maddr, unsigned int msize, unsigned int mcount) {
-    unsigned int         i;
-    unsigned int         j;
-    pmap_memory_region_t *p = pmap_memory_regions;
-    EfiMemoryRange       *mptr; 
-    addr64_t             region_start, region_end;
-    addr64_t             efi_start, efi_end;
+kprint_memmap(vm_offset_t maddr, unsigned int msize, unsigned int mcount)
+{
+	unsigned int         i;
+	unsigned int         j;
+	pmap_memory_region_t *p = pmap_memory_regions;
+	EfiMemoryRange       *mptr;
+	addr64_t             region_start, region_end;
+	addr64_t             efi_start, efi_end;
 
-    for (j = 0; j < pmap_memory_region_count; j++, p++) {
-        kprintf("pmap region %d type %d base 0x%llx alloc_up 0x%llx alloc_down 0x%llx top 0x%llx\n",
-            j, p->type,
-            (addr64_t) p->base  << I386_PGSHIFT,
-            (addr64_t) p->alloc_up << I386_PGSHIFT,
-            (addr64_t) p->alloc_down << I386_PGSHIFT,
-            (addr64_t) p->end   << I386_PGSHIFT);
-        region_start = (addr64_t) p->base << I386_PGSHIFT;
-        region_end = ((addr64_t) p->end << I386_PGSHIFT) - 1;
-        mptr = (EfiMemoryRange *) maddr; 
-        for (i = 0; 
-             i < mcount;
-             i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize)) {
-            if (mptr->Type != kEfiLoaderCode &&
-                mptr->Type != kEfiLoaderData &&
-                mptr->Type != kEfiBootServicesCode &&
-                mptr->Type != kEfiBootServicesData &&
-                mptr->Type != kEfiConventionalMemory) {
-                efi_start = (addr64_t)mptr->PhysicalStart;
-                efi_end = efi_start + ((vm_offset_t)mptr->NumberOfPages << I386_PGSHIFT) - 1;
-                if ((efi_start >= region_start && efi_start <= region_end) ||
-                    (efi_end >= region_start && efi_end <= region_end)) {
-                    kprintf(" *** Overlapping region with EFI runtime region %d\n", i);
-                }
-            }
-        }
-    }
+	for (j = 0; j < pmap_memory_region_count; j++, p++) {
+		kprintf("pmap region %d type %d base 0x%llx alloc_up 0x%llx alloc_down 0x%llx top 0x%llx\n",
+		    j, p->type,
+		    (addr64_t) p->base << I386_PGSHIFT,
+		    (addr64_t) p->alloc_up << I386_PGSHIFT,
+		    (addr64_t) p->alloc_down << I386_PGSHIFT,
+		    (addr64_t) p->end   << I386_PGSHIFT);
+		region_start = (addr64_t) p->base << I386_PGSHIFT;
+		region_end = ((addr64_t) p->end << I386_PGSHIFT) - 1;
+		mptr = (EfiMemoryRange *) maddr;
+		for (i = 0;
+		    i < mcount;
+		    i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize)) {
+			if (mptr->Type != kEfiLoaderCode &&
+			    mptr->Type != kEfiLoaderData &&
+			    mptr->Type != kEfiBootServicesCode &&
+			    mptr->Type != kEfiBootServicesData &&
+			    mptr->Type != kEfiConventionalMemory) {
+				efi_start = (addr64_t)mptr->PhysicalStart;
+				efi_end = efi_start + ((vm_offset_t)mptr->NumberOfPages << I386_PGSHIFT) - 1;
+				if ((efi_start >= region_start && efi_start <= region_end) ||
+				    (efi_end >= region_start && efi_end <= region_end)) {
+					kprintf(" *** Overlapping region with EFI runtime region %d\n", i);
+				}
+			}
+		}
+	}
 }
-#define DPRINTF(x...)	do { if (memmap) kprintf(x); } while (0)
+#define DPRINTF(x...)   do { if (memmap) kprintf(x); } while (0)
 
 #else
 
 static void
-kprint_memmap(vm_offset_t maddr, unsigned int msize, unsigned int mcount) {
+kprint_memmap(vm_offset_t maddr, unsigned int msize, unsigned int mcount)
+{
 #pragma unused(maddr, msize, mcount)
 }
 
@@ -223,20 +225,20 @@ kprint_memmap(vm_offset_t maddr, unsigned int msize, unsigned int mcount) {
  * Basic VM initialization.
  */
 void
-i386_vm_init(uint64_t	maxmem,
-	     boolean_t	IA32e,
-	     boot_args	*args)
+i386_vm_init(uint64_t   maxmem,
+    boolean_t  IA32e,
+    boot_args  *args)
 {
 	pmap_memory_region_t *pmptr;
-        pmap_memory_region_t *prev_pmptr;
+	pmap_memory_region_t *prev_pmptr;
 	EfiMemoryRange *mptr;
-        unsigned int mcount;
-        unsigned int msize;
+	unsigned int mcount;
+	unsigned int msize;
 	vm_offset_t maddr;
 	ppnum_t fap;
 	unsigned int i;
 	ppnum_t maxpg = 0;
-        uint32_t pmap_type;
+	uint32_t pmap_type;
 	uint32_t maxloreserve;
 	uint32_t maxdmaaddr;
 	uint32_t  mbuf_reserve = 0;
@@ -245,7 +247,7 @@ i386_vm_init(uint64_t	maxmem,
 	vm_kernel_base_page = i386_btop(args->kaddr);
 	vm_offset_t base_address;
 	vm_offset_t static_base_address;
-    
+
 	PE_parse_boot_argn("memmap", &memmap, sizeof(memmap));
 
 	/*
@@ -256,12 +258,13 @@ i386_vm_init(uint64_t	maxmem,
 	vm_kernel_slide     = base_address - static_base_address;
 	if (args->kslide) {
 		kprintf("KASLR slide: 0x%016lx dynamic\n", vm_kernel_slide);
-		if (vm_kernel_slide != ((vm_offset_t)args->kslide))
+		if (vm_kernel_slide != ((vm_offset_t)args->kslide)) {
 			panic("Kernel base inconsistent with slide - rebased?");
+		}
 	} else {
 		/* No slide relative to on-disk symbols */
 		kprintf("KASLR slide: 0x%016lx static and ignored\n",
-			vm_kernel_slide);
+		    vm_kernel_slide);
 		vm_kernel_slide = 0;
 	}
 
@@ -274,7 +277,7 @@ i386_vm_init(uint64_t	maxmem,
 		uint32_t cmd;
 
 		loadcmd = (struct load_command *)((uintptr_t)&_mh_execute_header +
-						  sizeof (_mh_execute_header));
+		    sizeof(_mh_execute_header));
 
 		for (cmd = 0; cmd < _mh_execute_header.ncmds; cmd++) {
 			if (loadcmd->cmd == LC_DYSYMTAB) {
@@ -291,27 +294,27 @@ i386_vm_init(uint64_t	maxmem,
 	}
 
 	/*
-	 * Now retrieve addresses for end, edata, and etext 
+	 * Now retrieve addresses for end, edata, and etext
 	 * from MACH-O headers.
 	 */
 	segTEXTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
-					"__TEXT", &segSizeTEXT);
+	    "__TEXT", &segSizeTEXT);
 	segDATAB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
-					"__DATA", &segSizeDATA);
+	    "__DATA", &segSizeDATA);
 	segLINKB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
-					"__LINKEDIT", &segSizeLINK);
+	    "__LINKEDIT", &segSizeLINK);
 	segHIBB  = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
-					"__HIB", &segSizeHIB);
+	    "__HIB", &segSizeHIB);
 	segPRELINKTEXTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
-						"__PRELINK_TEXT", &segSizePRELINKTEXT);
+	    "__PRELINK_TEXT", &segSizePRELINKTEXT);
 	segPRELINKINFOB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
-						"__PRELINK_INFO", &segSizePRELINKINFO);
+	    "__PRELINK_INFO", &segSizePRELINKINFO);
 	segTEXT = getsegbynamefromheader(&_mh_execute_header,
-					"__TEXT");
+	    "__TEXT");
 	segDATA = getsegbynamefromheader(&_mh_execute_header,
-					"__DATA");
+	    "__DATA");
 	segCONST = getsegbynamefromheader(&_mh_execute_header,
-					"__CONST");
+	    "__CONST");
 	cursectTEXT = lastsectTEXT = firstsect(segTEXT);
 	/* Discover the last TEXT section within the TEXT segment */
 	while ((cursectTEXT = nextsect(segTEXT, cursectTEXT)) != NULL) {
@@ -333,8 +336,8 @@ i386_vm_init(uint64_t	maxmem,
 	segSizeConst = segCONST->vmsize;
 	econst = sconst + segSizeConst;
 
-	assert(((sconst|econst) & PAGE_MASK) == 0);
-	
+	assert(((sconst | econst) & PAGE_MASK) == 0);
+
 	DPRINTF("segTEXTB    = %p\n", (void *) segTEXTB);
 	DPRINTF("segDATAB    = %p\n", (void *) segDATAB);
 	DPRINTF("segLINKB    = %p\n", (void *) segLINKB);
@@ -373,26 +376,27 @@ i386_vm_init(uint64_t	maxmem,
 	avail_remaining = 0;
 	avail_end = 0;
 	pmptr = pmap_memory_regions;
-        prev_pmptr = 0;
+	prev_pmptr = 0;
 	pmap_memory_region_count = pmap_memory_region_current = 0;
 	fap = (ppnum_t) i386_btop(first_avail);
 
 	maddr = ml_static_ptovirt((vm_offset_t)args->MemoryMap);
 	mptr = (EfiMemoryRange *)maddr;
-        if (args->MemoryMapDescriptorSize == 0)
-	        panic("Invalid memory map descriptor size");
-        msize = args->MemoryMapDescriptorSize;
-        mcount = args->MemoryMapSize / msize;
+	if (args->MemoryMapDescriptorSize == 0) {
+		panic("Invalid memory map descriptor size");
+	}
+	msize = args->MemoryMapDescriptorSize;
+	mcount = args->MemoryMapSize / msize;
 
 #define FOURGIG 0x0000000100000000ULL
 #define ONEGIG  0x0000000040000000ULL
 
 	for (i = 0; i < mcount; i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize)) {
-	        ppnum_t base, top;
+		ppnum_t base, top;
 		uint64_t region_bytes = 0;
 
 		if (pmap_memory_region_count >= PMAP_MEMORY_REGIONS_SIZE) {
-		        kprintf("WARNING: truncating memory region count at %d\n", pmap_memory_region_count);
+			kprintf("WARNING: truncating memory region count at %d\n", pmap_memory_region_count);
 			break;
 		}
 		base = (ppnum_t) (mptr->PhysicalStart >> I386_PGSHIFT);
@@ -400,7 +404,7 @@ i386_vm_init(uint64_t	maxmem,
 
 		if (base == 0) {
 			/*
-			 * Avoid having to deal with the edge case of the 
+			 * Avoid having to deal with the edge case of the
 			 * very first possible physical page and the roll-over
 			 * to -1; just ignore that page.
 			 */
@@ -409,7 +413,7 @@ i386_vm_init(uint64_t	maxmem,
 		}
 		if (top + 1 == 0) {
 			/*
-			 * Avoid having to deal with the edge case of the 
+			 * Avoid having to deal with the edge case of the
 			 * very last possible physical page and the roll-over
 			 * to 0; just ignore that page.
 			 */
@@ -424,10 +428,11 @@ i386_vm_init(uint64_t	maxmem,
 			continue;
 		}
 
-#if	MR_RSV_TEST
+#if     MR_RSV_TEST
 		static uint32_t nmr = 0;
-		if ((base > 0x20000) && (nmr++ < 4))
+		if ((base > 0x20000) && (nmr++ < 4)) {
 			mptr->Attribute |= EFI_MEMORY_KERN_RESERVED;
+		}
 #endif
 		region_bytes = (uint64_t)(mptr->NumberOfPages << I386_PGSHIFT);
 		pmap_type = mptr->Type;
@@ -438,22 +443,22 @@ i386_vm_init(uint64_t	maxmem,
 		case kEfiBootServicesCode:
 		case kEfiBootServicesData:
 		case kEfiConventionalMemory:
-		        /*
+			/*
 			 * Consolidate usable memory types into one.
 			 */
-		        pmap_type = kEfiConventionalMemory;
-		        sane_size += region_bytes;
+			pmap_type = kEfiConventionalMemory;
+			sane_size += region_bytes;
 			firmware_Conventional_bytes += region_bytes;
 			break;
-			/*
-			 * sane_size should reflect the total amount of physical
-			 * RAM in the system, not just the amount that is
-			 * available for the OS to use.
-			 * We now get this value from SMBIOS tables
-			 * rather than reverse engineering the memory map.
-			 * But the legacy computation of "sane_size" is kept
-			 * for diagnostic information.
-			 */
+		/*
+		 * sane_size should reflect the total amount of physical
+		 * RAM in the system, not just the amount that is
+		 * available for the OS to use.
+		 * We now get this value from SMBIOS tables
+		 * rather than reverse engineering the memory map.
+		 * But the legacy computation of "sane_size" is kept
+		 * for diagnostic information.
+		 */
 
 		case kEfiRuntimeServicesCode:
 		case kEfiRuntimeServicesData:
@@ -470,7 +475,7 @@ i386_vm_init(uint64_t	maxmem,
 			break;
 		case kEfiPalCode:
 			firmware_PalCode_bytes += region_bytes;
-		        sane_size += region_bytes;
+			sane_size += region_bytes;
 			break;
 
 		case kEfiReservedMemoryType:
@@ -490,13 +495,14 @@ i386_vm_init(uint64_t	maxmem,
 
 		DPRINTF("EFI region %d: type %u/%d, base 0x%x, top 0x%x %s\n",
 		    i, mptr->Type, pmap_type, base, top,
-		    (mptr->Attribute&EFI_MEMORY_KERN_RESERVED)? "RESERVED" :
-		    (mptr->Attribute&EFI_MEMORY_RUNTIME)? "RUNTIME" : "");
+		    (mptr->Attribute & EFI_MEMORY_KERN_RESERVED)? "RESERVED" :
+		    (mptr->Attribute & EFI_MEMORY_RUNTIME)? "RUNTIME" : "");
 
 		if (maxpg) {
-		        if (base >= maxpg)
+			if (base >= maxpg) {
 				break;
-		        top = (top > maxpg) ? maxpg : top;
+			}
+			top = (top > maxpg) ? maxpg : top;
 		}
 
 		/*
@@ -504,15 +510,15 @@ i386_vm_init(uint64_t	maxmem,
 		 */
 		if ((mptr->Attribute & EFI_MEMORY_RUNTIME) == EFI_MEMORY_RUNTIME ||
 		    pmap_type != kEfiConventionalMemory) {
-		        prev_pmptr = 0;
+			prev_pmptr = 0;
 			continue;
 		} else {
-		        /*
+			/*
 			 * Usable memory region
 			 */
-		        if (top < I386_LOWMEM_RESERVED ||
+			if (top < I386_LOWMEM_RESERVED ||
 			    !pal_is_usable_memory(base, top)) {
-			        prev_pmptr = 0;
+				prev_pmptr = 0;
 				continue;
 			}
 			/*
@@ -529,16 +535,17 @@ i386_vm_init(uint64_t	maxmem,
 			}
 
 			if (top < fap) {
-			        /*
+				/*
 				 * entire range below first_avail
-			         * salvage some low memory pages
+				 * salvage some low memory pages
 				 * we use some very low memory at startup
 				 * mark as already allocated here
 				 */
-			        if (base >= I386_LOWMEM_RESERVED)
-				        pmptr->base = base;
-				else
-				        pmptr->base = I386_LOWMEM_RESERVED;
+				if (base >= I386_LOWMEM_RESERVED) {
+					pmptr->base = base;
+				} else {
+					pmptr->base = I386_LOWMEM_RESERVED;
+				}
 
 				pmptr->end = top;
 
@@ -548,8 +555,7 @@ i386_vm_init(uint64_t	maxmem,
 					pmptr->alloc_up = pmptr->base;
 					pmptr->alloc_down = pmptr->end;
 					pmap_reserved_range_indices[pmap_last_reserved_range_index++] = pmap_memory_region_count;
-				}
-				else {
+				} else {
 					/*
 					 * mark as already mapped
 					 */
@@ -558,14 +564,13 @@ i386_vm_init(uint64_t	maxmem,
 				}
 				pmptr->type = pmap_type;
 				pmptr->attribute = mptr->Attribute;
-			}
-			else if ( (base < fap) && (top > fap) ) {
-			        /*
+			} else if ((base < fap) && (top > fap)) {
+				/*
 				 * spans first_avail
 				 * put mem below first avail in table but
 				 * mark already allocated
 				 */
-			        pmptr->base = base;
+				pmptr->base = base;
 				pmptr->end = (fap - 1);
 				pmptr->alloc_up = pmptr->end + 1;
 				pmptr->alloc_down = pmptr->end;
@@ -583,22 +588,25 @@ i386_vm_init(uint64_t	maxmem,
 				pmptr->attribute = mptr->Attribute;
 				pmptr->alloc_down = pmptr->end = top;
 
-				if (mptr->Attribute & EFI_MEMORY_KERN_RESERVED)
+				if (mptr->Attribute & EFI_MEMORY_KERN_RESERVED) {
 					pmap_reserved_range_indices[pmap_last_reserved_range_index++] = pmap_memory_region_count;
+				}
 			} else {
-			        /*
+				/*
 				 * entire range useable
 				 */
-			        pmptr->alloc_up = pmptr->base = base;
+				pmptr->alloc_up = pmptr->base = base;
 				pmptr->type = pmap_type;
 				pmptr->attribute = mptr->Attribute;
 				pmptr->alloc_down = pmptr->end = top;
-				if (mptr->Attribute & EFI_MEMORY_KERN_RESERVED)
+				if (mptr->Attribute & EFI_MEMORY_KERN_RESERVED) {
 					pmap_reserved_range_indices[pmap_last_reserved_range_index++] = pmap_memory_region_count;
+				}
 			}
 
-			if (i386_ptob(pmptr->end) > avail_end )
-			        avail_end = i386_ptob(pmptr->end);
+			if (i386_ptob(pmptr->end) > avail_end) {
+				avail_end = i386_ptob(pmptr->end);
+			}
 
 			avail_remaining += (pmptr->end - pmptr->base);
 			coalescing_permitted = (prev_pmptr && (pmptr->attribute == prev_pmptr->attribute) && ((pmptr->attribute & EFI_MEMORY_KERN_RESERVED) == 0));
@@ -610,12 +618,11 @@ i386_vm_init(uint64_t	maxmem,
 			    (coalescing_permitted) &&
 			    (pmptr->base == pmptr->alloc_up) &&
 			    (prev_pmptr->end == prev_pmptr->alloc_down) &&
-			    (pmptr->base == (prev_pmptr->end + 1)))
-			{
+			    (pmptr->base == (prev_pmptr->end + 1))) {
 				prev_pmptr->end = pmptr->end;
 				prev_pmptr->alloc_down = pmptr->alloc_down;
 			} else {
-			        pmap_memory_region_count++;
+				pmap_memory_region_count++;
 				prev_pmptr = pmptr;
 				pmptr++;
 			}
@@ -636,9 +643,10 @@ i386_vm_init(uint64_t	maxmem,
 	 * we now use the memory size reported by EFI/Booter.
 	 */
 	sane_size = (sane_size + 128 * MB - 1) & ~((uint64_t)(128 * MB - 1));
-	if (sane_size != mem_actual)
+	if (sane_size != mem_actual) {
 		printf("mem_actual: 0x%llx\n legacy sane_size: 0x%llx\n",
-			mem_actual, sane_size);
+		    mem_actual, sane_size);
+	}
 	sane_size = mem_actual;
 
 	/*
@@ -649,39 +657,41 @@ i386_vm_init(uint64_t	maxmem,
 	if (maxmem == 0 && sane_size > KERNEL_MAXMEM) {
 		maxmem = KERNEL_MAXMEM;
 		printf("Physical memory %lld bytes capped at %dGB\n",
-			sane_size, (uint32_t) (KERNEL_MAXMEM/GB));
+		    sane_size, (uint32_t) (KERNEL_MAXMEM / GB));
 	}
 
 	/*
 	 * if user set maxmem, reduce memory sizes
 	 */
-	if ( (maxmem > (uint64_t)first_avail) && (maxmem < sane_size)) {
+	if ((maxmem > (uint64_t)first_avail) && (maxmem < sane_size)) {
 		ppnum_t discarded_pages  = (ppnum_t)((sane_size - maxmem) >> I386_PGSHIFT);
-		ppnum_t	highest_pn = 0;
-		ppnum_t	cur_end  = 0;
-		uint64_t	pages_to_use;
-		unsigned	cur_region = 0;
+		ppnum_t highest_pn = 0;
+		ppnum_t cur_end  = 0;
+		uint64_t        pages_to_use;
+		unsigned        cur_region = 0;
 
 		sane_size = maxmem;
 
-		if (avail_remaining > discarded_pages)
+		if (avail_remaining > discarded_pages) {
 			avail_remaining -= discarded_pages;
-		else
+		} else {
 			avail_remaining = 0;
-		
+		}
+
 		pages_to_use = avail_remaining;
 
 		while (cur_region < pmap_memory_region_count && pages_to_use) {
-		        for (cur_end = pmap_memory_regions[cur_region].base;
-			     cur_end < pmap_memory_regions[cur_region].end && pages_to_use;
-			     cur_end++) {
-			        if (cur_end > highest_pn)
-				        highest_pn = cur_end;
+			for (cur_end = pmap_memory_regions[cur_region].base;
+			    cur_end < pmap_memory_regions[cur_region].end && pages_to_use;
+			    cur_end++) {
+				if (cur_end > highest_pn) {
+					highest_pn = cur_end;
+				}
 				pages_to_use--;
 			}
 			if (pages_to_use == 0) {
-			        pmap_memory_regions[cur_region].end = cur_end;
-			        pmap_memory_regions[cur_region].alloc_down = cur_end;
+				pmap_memory_regions[cur_region].end = cur_end;
+				pmap_memory_regions[cur_region].alloc_down = cur_end;
 			}
 
 			cur_region++;
@@ -695,55 +705,58 @@ i386_vm_init(uint64_t	maxmem,
 	 * mem_size is only a 32 bit container... follow the PPC route
 	 * and pin it to a 2 Gbyte maximum
 	 */
-	if (sane_size > (FOURGIG >> 1))
-	        mem_size = (vm_size_t)(FOURGIG >> 1);
-	else
-	        mem_size = (vm_size_t)sane_size;
+	if (sane_size > (FOURGIG >> 1)) {
+		mem_size = (vm_size_t)(FOURGIG >> 1);
+	} else {
+		mem_size = (vm_size_t)sane_size;
+	}
 	max_mem = sane_size;
 
-	kprintf("Physical memory %llu MB\n", sane_size/MB);
+	kprintf("Physical memory %llu MB\n", sane_size / MB);
 
 	max_valid_low_ppnum = (2 * GB) / PAGE_SIZE;
 
-	if (!PE_parse_boot_argn("max_valid_dma_addr", &maxdmaaddr, sizeof (maxdmaaddr))) {
-	        max_valid_dma_address = (uint64_t)4 * (uint64_t)GB;
+	if (!PE_parse_boot_argn("max_valid_dma_addr", &maxdmaaddr, sizeof(maxdmaaddr))) {
+		max_valid_dma_address = (uint64_t)4 * (uint64_t)GB;
 	} else {
-	        max_valid_dma_address = ((uint64_t) maxdmaaddr) * MB;
+		max_valid_dma_address = ((uint64_t) maxdmaaddr) * MB;
 
-		if ((max_valid_dma_address / PAGE_SIZE) < max_valid_low_ppnum)
+		if ((max_valid_dma_address / PAGE_SIZE) < max_valid_low_ppnum) {
 			max_valid_low_ppnum = (ppnum_t)(max_valid_dma_address / PAGE_SIZE);
+		}
 	}
 	if (avail_end >= max_valid_dma_address) {
-
-		if (!PE_parse_boot_argn("maxloreserve", &maxloreserve, sizeof (maxloreserve))) {
-
-			if (sane_size >= (ONEGIG * 15))
+		if (!PE_parse_boot_argn("maxloreserve", &maxloreserve, sizeof(maxloreserve))) {
+			if (sane_size >= (ONEGIG * 15)) {
 				maxloreserve = (MAXLORESERVE / PAGE_SIZE) * 4;
-			else if (sane_size >= (ONEGIG * 7))
+			} else if (sane_size >= (ONEGIG * 7)) {
 				maxloreserve = (MAXLORESERVE / PAGE_SIZE) * 2;
-			else
+			} else {
 				maxloreserve = MAXLORESERVE / PAGE_SIZE;
+			}
 
 #if SOCKETS
 			mbuf_reserve = bsd_mbuf_cluster_reserve(&mbuf_override) / PAGE_SIZE;
 #endif
-		} else
+		} else {
 			maxloreserve = (maxloreserve * (1024 * 1024)) / PAGE_SIZE;
+		}
 
 		if (maxloreserve) {
-		        vm_lopage_free_limit = maxloreserve;
-			
+			vm_lopage_free_limit = maxloreserve;
+
 			if (mbuf_override == TRUE) {
 				vm_lopage_free_limit += mbuf_reserve;
 				vm_lopage_lowater = 0;
-			} else
+			} else {
 				vm_lopage_lowater = vm_lopage_free_limit / 16;
+			}
 
 			vm_lopage_refill = TRUE;
 			vm_lopage_needed = TRUE;
 		}
 	}
-	
+
 	/*
 	 *	Initialize kernel physical map.
 	 *	Kernel virtual address starts at VM_KERNEL_MIN_ADDRESS.
@@ -767,7 +780,8 @@ boolean_t pmap_next_page_reserved(ppnum_t *);
  * errata on some hardware.
  */
 boolean_t
-pmap_next_page_reserved(ppnum_t *pn) {
+pmap_next_page_reserved(ppnum_t *pn)
+{
 	if (pmap_reserved_ranges) {
 		uint32_t n;
 		pmap_memory_region_t *region;
@@ -778,11 +792,13 @@ pmap_next_page_reserved(ppnum_t *pn) {
 				*pn = region->alloc_up++;
 				avail_remaining--;
 
-				if (*pn > max_ppnum)
+				if (*pn > max_ppnum) {
 					max_ppnum = *pn;
+				}
 
-				if (lowest_lo == 0 || *pn < lowest_lo)
+				if (lowest_lo == 0 || *pn < lowest_lo) {
 					lowest_lo = *pn;
+				}
 
 				pmap_reserved_pages_allocated++;
 #if DEBUG
@@ -800,13 +816,14 @@ pmap_next_page_reserved(ppnum_t *pn) {
 
 boolean_t
 pmap_next_page_hi(
-	          ppnum_t *pn)
+	ppnum_t *pn)
 {
 	pmap_memory_region_t *region;
-	int	n;
+	int     n;
 
-	if (pmap_next_page_reserved(pn))
+	if (pmap_next_page_reserved(pn)) {
 		return TRUE;
+	}
 
 	if (avail_remaining) {
 		for (n = pmap_memory_region_count - 1; n >= 0; n--) {
@@ -816,17 +833,21 @@ pmap_next_page_hi(
 				*pn = region->alloc_down--;
 				avail_remaining--;
 
-				if (*pn > max_ppnum)
+				if (*pn > max_ppnum) {
 					max_ppnum = *pn;
+				}
 
-                                if (lowest_lo == 0 || *pn < lowest_lo)
-                                        lowest_lo = *pn;
+				if (lowest_lo == 0 || *pn < lowest_lo) {
+					lowest_lo = *pn;
+				}
 
-                                if (lowest_hi == 0 || *pn < lowest_hi)
-                                        lowest_hi = *pn;
+				if (lowest_hi == 0 || *pn < lowest_hi) {
+					lowest_hi = *pn;
+				}
 
-                                if (*pn > highest_hi)
-                                        highest_hi = *pn;
+				if (*pn > highest_hi) {
+					highest_hi = *pn;
+				}
 
 				return TRUE;
 			}
@@ -838,24 +859,28 @@ pmap_next_page_hi(
 
 boolean_t
 pmap_next_page(
-	       ppnum_t *pn)
+	ppnum_t *pn)
 {
-	if (avail_remaining) while (pmap_memory_region_current < pmap_memory_region_count) {
-		if (pmap_memory_regions[pmap_memory_region_current].alloc_up >
-		    pmap_memory_regions[pmap_memory_region_current].alloc_down) {
-			pmap_memory_region_current++;
-			continue;
+	if (avail_remaining) {
+		while (pmap_memory_region_current < pmap_memory_region_count) {
+			if (pmap_memory_regions[pmap_memory_region_current].alloc_up >
+			    pmap_memory_regions[pmap_memory_region_current].alloc_down) {
+				pmap_memory_region_current++;
+				continue;
+			}
+			*pn = pmap_memory_regions[pmap_memory_region_current].alloc_up++;
+			avail_remaining--;
+
+			if (*pn > max_ppnum) {
+				max_ppnum = *pn;
+			}
+
+			if (lowest_lo == 0 || *pn < lowest_lo) {
+				lowest_lo = *pn;
+			}
+
+			return TRUE;
 		}
-		*pn = pmap_memory_regions[pmap_memory_region_current].alloc_up++;
-		avail_remaining--;
-
-		if (*pn > max_ppnum)
-			max_ppnum = *pn;
-
-		if (lowest_lo == 0 || *pn < lowest_lo)
-			lowest_lo = *pn;
-
-		return TRUE;
 	}
 	return FALSE;
 }
@@ -865,13 +890,13 @@ boolean_t
 pmap_valid_page(
 	ppnum_t pn)
 {
-        unsigned int i;
+	unsigned int i;
 	pmap_memory_region_t *pmptr = pmap_memory_regions;
 
 	for (i = 0; i < pmap_memory_region_count; i++, pmptr++) {
-	        if ( (pn >= pmptr->base) && (pn <= pmptr->end) )
-	                return TRUE;
+		if ((pn >= pmptr->base) && (pn <= pmptr->end)) {
+			return TRUE;
+		}
 	}
 	return FALSE;
 }
-

@@ -56,7 +56,7 @@
  */
 
 #ifndef _NET_CLASSQ_CLASSQ_RIO_H_
-#define	_NET_CLASSQ_CLASSQ_RIO_H_
+#define _NET_CLASSQ_CLASSQ_RIO_H_
 
 #ifdef PRIVATE
 #ifdef BSD_KERNEL_PRIVATE
@@ -71,7 +71,7 @@ extern "C" {
  * RIO: RED with IN/OUT bit
  * (extended to support more than 2 drop precedence values)
  */
-#define	RIO_NDROPPREC	3	/* number of drop precedence values */
+#define RIO_NDROPPREC   3       /* number of drop precedence values */
 
 #ifdef __cplusplus
 }

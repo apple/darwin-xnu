@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -65,7 +65,7 @@
  *
  *	@(#)systm.h	8.7 (Berkeley) 3/29/95
  */
- 
+
 /*
  * The `securelevel' variable controls the security level of the system.
  * It can only be decreased by process 1 (/sbin/init).
@@ -78,7 +78,7 @@
  *	raw disks of mounted filesystems, /dev/mem, and /dev/kmem are
  *	read-only.
  *    2	highly secure mode - same as (1) plus raw disks are always
- *	read-only whether mounted or not. This level precludes tampering 
+ *	read-only whether mounted or not. This level precludes tampering
  *	with filesystems by unmounting them, but also inhibits running
  *	newfs while the system is secured.
  *
@@ -95,7 +95,7 @@
  */
 
 #ifndef _SYS_SYSTM_H_
-#define	_SYS_SYSTM_H_
+#define _SYS_SYSTM_H_
 
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
@@ -117,15 +117,15 @@ __BEGIN_DECLS
 __END_DECLS
 
 #ifdef BSD_KERNEL_PRIVATE
-extern char version[];			/* system version */
-extern const char copyright[];		/* system copyright */
+extern char version[];                  /* system version */
+extern const char copyright[];          /* system copyright */
 
 
-extern int	boothowto;	/* reboot flags, from console subsystem */
-extern int	show_space;
-extern int	minimalboot;
+extern int      boothowto;      /* reboot flags, from console subsystem */
+extern int      show_space;
+extern int      minimalboot;
 #if CONFIG_EMBEDDED
-extern int	darkboot;
+extern int      darkboot;
 #endif
 
 extern const int nblkdev; /* number of entries in bdevsw */
@@ -134,52 +134,52 @@ extern const int nchrdev; /* number of entries in cdevsw */
 
 #ifdef KERNEL_PRIVATE
 
-extern int securelevel;		/* system security level */
-extern dev_t rootdev;		/* root device */
-extern struct vnode *rootvp;	/* vnode equivalent to above */
+extern int securelevel;         /* system security level */
+extern dev_t rootdev;           /* root device */
+extern struct vnode *rootvp;    /* vnode equivalent to above */
 
 #endif /* KERNEL_PRIVATE */
 
-#define SYSINIT(a,b,c,d,e)
-#define MALLOC_DEFINE(a,b,c)
+#define SYSINIT(a, b, c, d, e)
+#define MALLOC_DEFINE(a, b, c)
 
-#define getenv_int(a,b) (*b = 0)
-#define	KASSERT(exp,msg)
+#define getenv_int(a, b) (*b = 0)
+#define KASSERT(exp, msg)
 /*
  * General function declarations.
  */
 __BEGIN_DECLS
 
 #ifdef BSD_KERNEL_PRIVATE
-int	einval(void);
-void	nullsys(void);
-int	errsys(void);
-int	seltrue(dev_t dev, int which, struct proc *p);
-void	ttyprintf(struct tty *, const char *, ...) __printflike(2, 3);
-void	realitexpire(struct proc *);
-int	hzto(struct timeval *tv);
-void	tablefull(const char *);
-int	kvprintf(char const *, void (*)(int, void*), void *, int,
-		      __darwin_va_list) __printflike(1,0);
-void	uprintf(const char *, ...) __printflike(1,2);
-int	copywithin(void *saddr, void *daddr, size_t len);
-int64_t	fulong(user_addr_t addr);
-int	sulong(user_addr_t addr, int64_t longword);
+int     einval(void);
+void    nullsys(void);
+int     errsys(void);
+int     seltrue(dev_t dev, int which, struct proc *p);
+void    ttyprintf(struct tty *, const char *, ...) __printflike(2, 3);
+void    realitexpire(struct proc *);
+int     hzto(struct timeval *tv);
+void    tablefull(const char *);
+int     kvprintf(char const *, void (*)(int, void*), void *, int,
+    __darwin_va_list) __printflike(1, 0);
+void    uprintf(const char *, ...) __printflike(1, 2);
+int     copywithin(void *saddr, void *daddr, size_t len);
+int64_t fulong(user_addr_t addr);
+int     sulong(user_addr_t addr, int64_t longword);
 uint64_t fuulong(user_addr_t addr);
-int	suulong(user_addr_t addr, uint64_t ulongword);
-int	clone_system_shared_regions(int shared_regions_active,
-				    int chain_regions,
-				    int base_vnode);
+int     suulong(user_addr_t addr, uint64_t ulongword);
+int     clone_system_shared_regions(int shared_regions_active,
+    int chain_regions,
+    int base_vnode);
 extern kern_return_t bsd_exception(int, mach_exception_data_t codes, int);
-extern void	bsdinit_task(void);
+extern void     bsdinit_task(void);
 extern void unix_syscall_return(int) __dead2;
-void	initclocks(void);
-void	startprofclock(struct proc *);
-void	stopprofclock(struct proc *);
-void	setstatclockrate(int hzrate);
+void    initclocks(void);
+void    startprofclock(struct proc *);
+void    stopprofclock(struct proc *);
+void    setstatclockrate(int hzrate);
 struct time_value;
-void	get_procrustime(struct time_value *tv);
-void	load_init_program(struct proc *p);
+void    get_procrustime(struct time_value *tv);
+void    load_init_program(struct proc *p);
 void __pthread_testcancel(int presyscall);
 void throttle_info_get_last_io_time(mount_t mp, struct timeval *tv);
 void update_last_io_time(mount_t mp);
@@ -187,68 +187,68 @@ void throttle_info_end_io(buf_t bp);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE
-void	timeout(void (*)(void *), void *arg, int ticks);
-void	timeout_with_leeway(void (*)(void *), void *arg, int ticks, int leeway_ticks);
-void	untimeout(void (*)(void *), void *arg);
-int  	bsd_hostname(char *, int, int*);
-int	vslock(user_addr_t addr, user_size_t len);
-int	vsunlock(user_addr_t addr, user_size_t len, int dirtied);
+void    timeout(void (*)(void *), void *arg, int ticks);
+void    timeout_with_leeway(void (*)(void *), void *arg, int ticks, int leeway_ticks);
+void    untimeout(void (*)(void *), void *arg);
+int     bsd_hostname(char *, int, int*);
+int     vslock(user_addr_t addr, user_size_t len);
+int     vsunlock(user_addr_t addr, user_size_t len, int dirtied);
 #endif /* KERNEL_PRIVATE */
 
-int	nullop(void);
-int	nulldev(void);
-int	enoioctl(void);
-int	enosys(void);
-int	enxio(void);
-int	eopnotsupp(void);
-void	*hashinit(int count, int type, u_long *hashmask);
-void	ovbcopy(const void *from, void *to, size_t len);
-int	fubyte(user_addr_t addr);
-int	fuibyte(user_addr_t addr);
-int	subyte(user_addr_t addr, int byte);
-int	suibyte(user_addr_t addr, int byte);
+int     nullop(void);
+int     nulldev(void);
+int     enoioctl(void);
+int     enosys(void);
+int     enxio(void);
+int     eopnotsupp(void);
+void    *hashinit(int count, int type, u_long *hashmask);
+void    ovbcopy(const void *from, void *to, size_t len);
+int     fubyte(user_addr_t addr);
+int     fuibyte(user_addr_t addr);
+int     subyte(user_addr_t addr, int byte);
+int     suibyte(user_addr_t addr, int byte);
 long   fuword(user_addr_t addr);
 long   fuiword(user_addr_t addr);
 int    suword(user_addr_t addr, long word);
 int    suiword(user_addr_t addr, long word);
-#define fusize(_a)	((user_size_t)fulong(_a))
-#define susize(_a, _s)	sulong((_a), (_s))
-#define fuptr(a)	((user_addr_t)fulong(_a)
-#define suptr(_a, _p)	sulong((_a), (_p))
-int	useracc(user_addr_t addr, user_size_t len,int prot);
+#define fusize(_a)      ((user_size_t)fulong(_a))
+#define susize(_a, _s)  sulong((_a), (_s))
+#define fuptr(a)        ((user_addr_t)fulong(_a)
+#define suptr(_a, _p)   sulong((_a), (_p))
+int     useracc(user_addr_t addr, user_size_t len, int prot);
 typedef void (*timeout_fcn_t)(void *);
-void	bsd_timeout(void (*)(void *), void *arg, struct timespec * ts);
-void	bsd_untimeout(void (*)(void *), void *arg);
-void	set_fsblocksize(struct vnode *);
+void    bsd_timeout(void (*)(void *), void *arg, struct timespec * ts);
+void    bsd_untimeout(void (*)(void *), void *arg);
+void    set_fsblocksize(struct vnode *);
 uint64_t tvtoabstime(struct timeval *);
 uint64_t tstoabstime(struct timespec *);
-void	*throttle_info_create(void);
-void	throttle_info_mount_ref(mount_t mp, void * throttle_info);
-void	throttle_info_mount_rel(mount_t mp);
-void	throttle_info_release(void *throttle_info);
-void	throttle_info_update(void *throttle_info, int flags);
+void    *throttle_info_create(void);
+void    throttle_info_mount_ref(mount_t mp, void * throttle_info);
+void    throttle_info_mount_rel(mount_t mp);
+void    throttle_info_release(void *throttle_info);
+void    throttle_info_update(void *throttle_info, int flags);
 uint32_t throttle_lowpri_io(int sleep_amount);
-void	throttle_set_thread_io_policy(int policy);
-int		throttle_get_thread_effective_io_policy(void);
+void    throttle_set_thread_io_policy(int policy);
+int             throttle_get_thread_effective_io_policy(void);
 
 typedef struct __throttle_info_handle *throttle_info_handle_t;
-int	throttle_info_ref_by_mask(uint64_t throttle_mask, throttle_info_handle_t *throttle_info_handle);
-void	throttle_info_rel_by_mask(throttle_info_handle_t throttle_info_handle);
-void	throttle_info_update_by_mask(void *throttle_info_handle, int flags);
-void 	throttle_info_disable_throttle(int devno, boolean_t isfusion);
+int     throttle_info_ref_by_mask(uint64_t throttle_mask, throttle_info_handle_t *throttle_info_handle);
+void    throttle_info_rel_by_mask(throttle_info_handle_t throttle_info_handle);
+void    throttle_info_update_by_mask(void *throttle_info_handle, int flags);
+void    throttle_info_disable_throttle(int devno, boolean_t isfusion);
 /*
  * 'throttle_info_handle' acquired via 'throttle_info_ref_by_mask'
  * 'policy' should be specified as either IOPOL_UTILITY or IPOL_THROTTLE,
  * all other values will be treated as IOPOL_NORMAL (i.e. no throttling)
  */
-int	throttle_info_io_will_be_throttled(void *throttle_info_handle, int policy);
+int     throttle_info_io_will_be_throttled(void *throttle_info_handle, int policy);
 
 #ifdef KERNEL_PRIVATE
 
 /* returned by throttle_io_will_be_throttled */
-#define THROTTLE_DISENGAGED	0
-#define THROTTLE_ENGAGED	1
-#define THROTTLE_NOW		2
+#define THROTTLE_DISENGAGED     0
+#define THROTTLE_ENGAGED        1
+#define THROTTLE_NOW            2
 
 int  throttle_io_will_be_throttled(int lowpri_window_msecs, mount_t mp);
 int throttle_lowpri_window(void) __attribute__((pure));

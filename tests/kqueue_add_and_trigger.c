@@ -16,7 +16,7 @@ T_DECL(kqueue_add_and_trigger_evfilt_user, "Add and trigger EVFILT_USER events w
 	const struct kevent kev = {
 		.ident = 1,
 		.filter = EVFILT_USER,
-		.flags = EV_ADD|EV_CLEAR,
+		.flags = EV_ADD | EV_CLEAR,
 		.fflags = NOTE_TRIGGER,
 	};
 	const struct timespec timeout = {
@@ -32,6 +32,4 @@ T_DECL(kqueue_add_and_trigger_evfilt_user, "Add and trigger EVFILT_USER events w
 	T_ASSERT_EQ(ret, 1, "kevent with add and trigger, ret");
 	T_ASSERT_EQ(ret_kev.ident, 1, "kevent with add and trigger, ident");
 	T_ASSERT_EQ(ret_kev.filter, EVFILT_USER, "kevent with add and trigger, filter");
-
 }
-

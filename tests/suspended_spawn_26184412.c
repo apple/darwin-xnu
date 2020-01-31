@@ -1,5 +1,3 @@
-
-
 #include <darwintest.h>
 
 #include <stdio.h>
@@ -57,7 +55,7 @@ spawn_and_signal(int signal)
 	T_ASSERT_POSIX_SUCCESS(ret, "posix_spawnattr_destroy");
 
 	int status = 0;
-	int waitpid_result = waitpid(child_pid, &status, WUNTRACED|WNOHANG);
+	int waitpid_result = waitpid(child_pid, &status, WUNTRACED | WNOHANG);
 	T_ASSERT_POSIX_SUCCESS(waitpid_result, "waitpid");
 
 	T_ASSERT_EQ(waitpid_result, child_pid, "waitpid should return child we spawned");
@@ -98,4 +96,3 @@ T_DECL(suspended_spawn_kill, "Tests spawning a suspended process and killing it"
 {
 	spawn_and_signal(SIGKILL);
 }
-

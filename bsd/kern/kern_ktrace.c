@@ -245,7 +245,7 @@ ktrace_promote_background(void)
 bool
 ktrace_background_active(void)
 {
-	return (ktrace_state == KTRACE_STATE_BG);
+	return ktrace_state == KTRACE_STATE_BG;
 }
 
 int
@@ -253,8 +253,7 @@ ktrace_read_check(void)
 {
 	ktrace_assert_lock_held();
 
-	if (proc_uniqueid(current_proc()) == ktrace_owning_unique_id)
-	{
+	if (proc_uniqueid(current_proc()) == ktrace_owning_unique_id) {
 		return 0;
 	}
 
@@ -304,8 +303,7 @@ ktrace_configure(uint32_t config_mask)
 
 	/* background configure while foreground is active is not allowed */
 	if (proc_uniqueid(p) == ktrace_bg_unique_id &&
-	    ktrace_state == KTRACE_STATE_FG)
-	{
+	    ktrace_state == KTRACE_STATE_FG) {
 		return EBUSY;
 	}
 
@@ -370,7 +368,7 @@ ktrace_kernel_configure(uint32_t config_mask)
 
 	ktrace_release_ownership();
 	strlcpy(ktrace_last_owner_execname, "kernel_task",
-		sizeof(ktrace_last_owner_execname));
+	    sizeof(ktrace_last_owner_execname));
 }
 
 static errno_t
@@ -483,7 +481,7 @@ ktrace_set_owning_proc(proc_t p)
 	ktrace_owning_unique_id = proc_uniqueid(p);
 	ktrace_owning_pid = proc_pid(p);
 	strlcpy(ktrace_last_owner_execname, proc_name_address(p),
-		sizeof(ktrace_last_owner_execname));
+	    sizeof(ktrace_last_owner_execname));
 }
 
 static void
@@ -500,24 +498,24 @@ static int ktrace_sysctl SYSCTL_HANDLER_ARGS;
 SYSCTL_NODE(, OID_AUTO, ktrace, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "ktrace");
 
 SYSCTL_UINT(_ktrace, OID_AUTO, state, CTLFLAG_RD | CTLFLAG_LOCKED,
-            &ktrace_state, 0,
-            "");
+    &ktrace_state, 0,
+    "");
 
 SYSCTL_INT(_ktrace, OID_AUTO, owning_pid, CTLFLAG_RD | CTLFLAG_LOCKED,
-           &ktrace_owning_pid, 0,
-           "pid of the process that owns ktrace");
+    &ktrace_owning_pid, 0,
+    "pid of the process that owns ktrace");
 
 SYSCTL_INT(_ktrace, OID_AUTO, background_pid, CTLFLAG_RD | CTLFLAG_LOCKED,
-           &ktrace_bg_pid, 0,
-           "pid of the background ktrace tool");
+    &ktrace_bg_pid, 0,
+    "pid of the background ktrace tool");
 
 SYSCTL_STRING(_ktrace, OID_AUTO, configured_by, CTLFLAG_RD | CTLFLAG_LOCKED,
-              ktrace_last_owner_execname, 0,
-              "execname of process that last configured ktrace");
+    ktrace_last_owner_execname, 0,
+    "execname of process that last configured ktrace");
 
 SYSCTL_PROC(_ktrace, OID_AUTO, init_background, CTLFLAG_RW | CTLFLAG_LOCKED,
-            (void *)SYSCTL_INIT_BACKGROUND, sizeof(int),
-            ktrace_sysctl, "I", "initialize calling process as background");
+    (void *)SYSCTL_INIT_BACKGROUND, sizeof(int),
+    ktrace_sysctl, "I", "initialize calling process as background");
 
 static int
 ktrace_sysctl SYSCTL_HANDLER_ARGS

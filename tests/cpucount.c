@@ -3,8 +3,8 @@
  *
  * <rdar://problem/29545645>
  *
-xcrun -sdk macosx.internal clang -o cpucount cpucount.c -ldarwintest -g -Weverything
-xcrun -sdk iphoneos.internal clang -arch arm64 -o cpucount-ios cpucount.c -ldarwintest -g -Weverything
+ *  xcrun -sdk macosx.internal clang -o cpucount cpucount.c -ldarwintest -g -Weverything
+ *  xcrun -sdk iphoneos.internal clang -arch arm64 -o cpucount-ios cpucount.c -ldarwintest -g -Weverything
  */
 
 #include <darwintest.h>
@@ -59,9 +59,15 @@ static semaphore_t g_readysem, g_go_sem;
 
 static mach_timebase_info_data_t timebase_info;
 
-static uint64_t nanos_to_abs(uint64_t nanos) { return nanos * timebase_info.denom / timebase_info.numer; }
+static uint64_t
+nanos_to_abs(uint64_t nanos)
+{
+	return nanos * timebase_info.denom / timebase_info.numer;
+}
 
-static void set_realtime(pthread_t thread) {
+static void
+set_realtime(pthread_t thread)
+{
 	kern_return_t kr;
 	thread_time_constraint_policy_data_t pol;
 
@@ -75,7 +81,7 @@ static void set_realtime(pthread_t thread) {
 
 	pol.preemptible = 0; /* Ignored by OS */
 	kr = thread_policy_set(target_thread, THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t) &pol,
-	                       THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+	    THREAD_TIME_CONSTRAINT_POLICY_COUNT);
 	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "thread_policy_set(THREAD_TIME_CONSTRAINT_POLICY)");
 }
 
@@ -100,8 +106,9 @@ create_thread(void *(*start_routine)(void *), uint32_t priority)
 	rv = pthread_create(&new_thread, &attr, start_routine, NULL);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_create");
 
-	if (priority == 97)
+	if (priority == 97) {
 		set_realtime(new_thread);
+	}
 
 	rv = pthread_attr_destroy(&attr);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_attr_destroy");
@@ -128,7 +135,9 @@ thread_fn(__unused void *arg)
 	 * spin to force the other threads to spread out across the cores
 	 * may take some time if cores are masked and CLPC needs to warm up to unmask them
 	 */
-	while (g_ready_threads < g_threads && mach_absolute_time() < timeout);
+	while (g_ready_threads < g_threads && mach_absolute_time() < timeout) {
+		;
+	}
 
 	T_QUIET; T_ASSERT_GE(timeout, mach_absolute_time(), "waiting for all threads took too long");
 
@@ -148,14 +157,16 @@ thread_fn(__unused void *arg)
 		if (iteration++ % 10000) {
 			uint32_t cpus_seen = 0;
 
-			for (uint32_t i = 0 ; i < g_threads; i++) {
-				if (g_cpu_seen[i])
+			for (uint32_t i = 0; i < g_threads; i++) {
+				if (g_cpu_seen[i]) {
 					cpus_seen++;
+				}
 			}
 
 			/* bail out early if we saw all CPUs */
-			if (cpus_seen == g_threads)
+			if (cpus_seen == g_threads) {
 				break;
+			}
 		}
 	}
 
@@ -190,7 +201,9 @@ spin_fn(__unused void *arg)
 
 		uint64_t inner_timeout = nanos_to_abs(1 * NSEC_PER_MSEC) + mach_absolute_time();
 
-		while (mach_absolute_time() < inner_timeout && g_bail == false);
+		while (mach_absolute_time() < inner_timeout && g_bail == false) {
+			;
+		}
 	}
 
 	kr = semaphore_wait_signal(g_go_sem, g_readysem);
@@ -203,7 +216,7 @@ spin_fn(__unused void *arg)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wgnu-flexible-array-initializer"
 T_DECL(count_cpus, "Tests we can schedule threads on all hw.ncpus cores according to _os_cpu_number",
-       T_META_CHECK_LEAKS(false), T_META_ENABLED(false))
+    T_META_CHECK_LEAKS(false), T_META_ENABLED(false))
 #pragma clang diagnostic pop
 {
 	setvbuf(stdout, NULL, _IONBF, 0);
@@ -228,13 +241,15 @@ T_DECL(count_cpus, "Tests we can schedule threads on all hw.ncpus cores accordin
 
 	assert(g_threads < max_threads);
 
-	for (uint32_t i = 0; i < g_threads; i++)
+	for (uint32_t i = 0; i < g_threads; i++) {
 		create_thread(&thread_fn, g_thread_pri);
+	}
 
-	for (uint32_t i = 0; i < g_spin_threads; i++)
+	for (uint32_t i = 0; i < g_spin_threads; i++) {
 		create_thread(&spin_fn, g_spin_threads_pri);
+	}
 
-	for (uint32_t i = 0 ; i < g_threads + g_spin_threads; i++) {
+	for (uint32_t i = 0; i < g_threads + g_spin_threads; i++) {
 		kr = semaphore_wait(g_readysem);
 		T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait");
 	}
@@ -242,25 +257,27 @@ T_DECL(count_cpus, "Tests we can schedule threads on all hw.ncpus cores accordin
 	uint64_t timeout = nanos_to_abs(g_spin_ms * NSEC_PER_MSEC) + mach_absolute_time();
 
 	/* spin to warm up CLPC :) */
-	while (mach_absolute_time() < timeout);
+	while (mach_absolute_time() < timeout) {
+		;
+	}
 
 	kr = semaphore_signal_all(g_go_sem);
 	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_signal_all");
 
-	for (uint32_t i = 0 ; i < g_threads + g_spin_threads; i++) {
+	for (uint32_t i = 0; i < g_threads + g_spin_threads; i++) {
 		kr = semaphore_wait(g_readysem);
 		T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait");
 	}
 
 	uint32_t cpus_seen = 0;
 
-	for (uint32_t i = 0 ; i < g_threads; i++) {
-		if (g_cpu_seen[i])
+	for (uint32_t i = 0; i < g_threads; i++) {
+		if (g_cpu_seen[i]) {
 			cpus_seen++;
+		}
 
 		printf("cpu %2d: %d\n", i, g_cpu_seen[i]);
 	}
 
 	T_ASSERT_EQ(cpus_seen, g_threads, "test should have run threads on all CPUS");
 }
-

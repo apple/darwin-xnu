@@ -31,18 +31,18 @@
 
 #include <stdint.h>
 
-#define DEBUG_RECORD_ID_LONG(a, b,c ,d, e, f, g, h) \
+#define DEBUG_RECORD_ID_LONG(a, b, c, d, e, f, g, h) \
 	( ((uint64_t)(	(((h) << 24) & 0xFF000000) | \
-			(((g) << 16) & 0x00FF0000) | \
-			(((f) <<  8) & 0x0000FF00) | \
-			((e)         & 0x000000FF) ) << 32) | \
+	                (((g) << 16) & 0x00FF0000) | \
+	                (((f) <<  8) & 0x0000FF00) | \
+	                ((e)         & 0x000000FF) ) << 32) | \
 	  (uint64_t)(	(((d) << 24) & 0xFF000000) | \
-			(((c) << 16) & 0x00FF0000) | \
-			(((b) <<  8) & 0x0000FF00) | \
-			((a)         & 0x000000FF) ) )
-#define DEBUG_RECORD_ID_SHORT(a,b,c,d) DEBUG_RECORD_ID_LONG(a,b,c,d,0,0,0,0)
+	                (((c) << 16) & 0x00FF0000) | \
+	                (((b) <<  8) & 0x0000FF00) | \
+	                ((a)         & 0x000000FF) ) )
+#define DEBUG_RECORD_ID_SHORT(a, b, c, d) DEBUG_RECORD_ID_LONG(a,b,c,d,0,0,0,0)
 
-/* 
+/*
  *      Shared Memory Console Descriptors:
  *      Record ID: One per SHMConsole
  */
@@ -59,22 +59,22 @@ typedef enum {
 
 #define DbgIdConsoleHeaderForIOP(which_dbg_processor, which_num) (DEBUG_RECORD_ID_LONG('C','O','N',0,0,0,which_dbg_processor,which_num))
 
-#define kDbgIdConsoleHeaderAP		DbgIdConsoleHeaderForIOP(DBG_PROCESSOR_AP, 0)
-#define kDbgIdConsoleHeaderANS		DbgIdConsoleHeaderForIOP(DBG_COPROCESSOR_ANS, 0)
-#define kDbgIdConsoleHeaderSIO		DbgIdConsoleHeaderForIOP(DBG_COPROCESSOR_SIO, 0)
-#define kDbgIdConsoleHeaderSEP		DbgIdConsoleHeaderForIOP(DBG_COPROCESSOR_SEP, 0)
-#define kDbgIdConsoleHeaderISP		DbgIdConsoleHeaderForIOP(DBG_COPROCESSOR_ISP, 0)
-#define kDbgIdConsoleHeaderOscar	DbgIdConsoleHeaderForIOP(DBG_COPROCESSOR_OSCAR, 0)
+#define kDbgIdConsoleHeaderAP           DbgIdConsoleHeaderForIOP(DBG_PROCESSOR_AP, 0)
+#define kDbgIdConsoleHeaderANS          DbgIdConsoleHeaderForIOP(DBG_COPROCESSOR_ANS, 0)
+#define kDbgIdConsoleHeaderSIO          DbgIdConsoleHeaderForIOP(DBG_COPROCESSOR_SIO, 0)
+#define kDbgIdConsoleHeaderSEP          DbgIdConsoleHeaderForIOP(DBG_COPROCESSOR_SEP, 0)
+#define kDbgIdConsoleHeaderISP          DbgIdConsoleHeaderForIOP(DBG_COPROCESSOR_ISP, 0)
+#define kDbgIdConsoleHeaderOscar        DbgIdConsoleHeaderForIOP(DBG_COPROCESSOR_OSCAR, 0)
 
-#define kDbgIdAstrisConnection		DEBUG_RECORD_ID_LONG('A','S','T','R','C','N','X','N')
-#define kDbgIdAstrisConnectionVers	DEBUG_RECORD_ID_LONG('A','S','T','R','C','V','E','R')
+#define kDbgIdAstrisConnection          DEBUG_RECORD_ID_LONG('A','S','T','R','C','N','X','N')
+#define kDbgIdAstrisConnectionVers      DEBUG_RECORD_ID_LONG('A','S','T','R','C','V','E','R')
 
-#define kDbgIdUnusedEntry	0x0ULL
-#define kDbgIdReservedEntry	DEBUG_RECORD_ID_LONG('R','E','S','E','R','V','E', 'D')
-#define kDbgIdFreeReqEntry	DEBUG_RECORD_ID_LONG('F','R','E','E','-','R','E','Q')
-#define kDbgIdFreeAckEntry	DEBUG_RECORD_ID_LONG('F','R','E','E','-','A','C','K')
+#define kDbgIdUnusedEntry       0x0ULL
+#define kDbgIdReservedEntry     DEBUG_RECORD_ID_LONG('R','E','S','E','R','V','E', 'D')
+#define kDbgIdFreeReqEntry      DEBUG_RECORD_ID_LONG('F','R','E','E','-','R','E','Q')
+#define kDbgIdFreeAckEntry      DEBUG_RECORD_ID_LONG('F','R','E','E','-','A','C','K')
 
-#define DEBUG_REGISTRY_MAX_RECORDS	512
+#define DEBUG_REGISTRY_MAX_RECORDS      512
 
 typedef struct {
 	uint64_t record_id;             // = kDbgIdTopLevelHeader
@@ -106,14 +106,14 @@ typedef struct {
 } dbg_cpr_t;
 
 typedef struct {
-	dbg_top_level_header_t	top_level_header;
-	dbg_record_header_t	records[DEBUG_REGISTRY_MAX_RECORDS];
+	dbg_top_level_header_t  top_level_header;
+	dbg_record_header_t     records[DEBUG_REGISTRY_MAX_RECORDS];
 
 	// Stuff the AP's Progress Report buffer at the end of this
 	// structure. It's currently the only processor that doesn't
 	// have some easier form of persistent memory that survives the
 	// iBoot->iOS handoff (e.g. ANS has its private heap)
-	dbg_cpr_t		ap_cpr_region;
+	dbg_cpr_t               ap_cpr_region;
 } dbg_registry_t;
 
 /*
@@ -132,4 +132,3 @@ int PE_consistent_debug_register(uint64_t record_id, uint64_t physaddr, uint64_t
 int PE_consistent_debug_enabled(void);
 
 #endif  // PE_CONSISTENT_DEBUG_H
-

@@ -54,7 +54,9 @@ uint32_t report = 1000;
 uint64_t on, lastfire = 0, totaljitter = 0, max_jitter = 0, min_jitter = ~0ULL, jiterations = 0, leeway_ns = 0, leeway_abs = 0;
 uint64_t deadline;
 
-void cfmcb(CFMachPortRef port, void *msg, CFIndex size, void *msginfo) {
+void
+cfmcb(CFMachPortRef port, void *msg, CFIndex size, void *msginfo)
+{
 	uint64_t ctime = mach_absolute_time();
 	uint64_t jitter = 0;
 
@@ -70,7 +72,7 @@ void cfmcb(CFMachPortRef port, void *msg, CFIndex size, void *msginfo) {
 
 		totaljitter += jitter;
 		if ((++jiterations % report) == 0) {
-			printf("max_jitter: %g (ns), min_jitter: %g (ns), average_jitter: %g (ns)\n", max_jitter * conversion, min_jitter * conversion, ((double)totaljitter/(double)jiterations) * conversion);
+			printf("max_jitter: %g (ns), min_jitter: %g (ns), average_jitter: %g (ns)\n", max_jitter * conversion, min_jitter * conversion, ((double)totaljitter / (double)jiterations) * conversion);
 			max_jitter = 0; min_jitter = ~0ULL; jiterations = 0; totaljitter = 0;
 		}
 	}
@@ -84,7 +86,9 @@ void cfmcb(CFMachPortRef port, void *msg, CFIndex size, void *msginfo) {
 	}
 }
 
-int main(int argc, char **argv) {
+int
+main(int argc, char **argv)
+{
 	if (argc != 4) {
 		printf("Usage: mktimer_test <interval_ns> <use leeway trap> <leeway_ns>\n");
 		return 0;
@@ -120,7 +124,7 @@ int main(int argc, char **argv) {
 
 	if (use_leeway) {
 		mk_timer_arm_leeway(timerPort, MK_TIMER_CRITICAL, mach_absolute_time() + interval_abs, leeway_abs);
-	} else  {
+	} else {
 		mk_timer_arm(timerPort, mach_absolute_time() + interval_abs);
 	}
 

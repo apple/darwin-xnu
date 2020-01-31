@@ -2,7 +2,7 @@
  * Copyright (c) 2000, 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -69,41 +69,41 @@
  * Structure prepended to gmon.out profiling data file.
  */
 struct gmonhdr {
-	uint32_t lpc;		/* base pc address of sample buffer */
-	uint32_t hpc;		/* max pc address of sampled buffer */
-	uint32_t ncnt;		/* size of sample buffer (plus this header) */
-	int32_t version;	/* version number */
-	int32_t profrate;	/* profiling clock rate */
-	int32_t spare[3];	/* reserved */
+	uint32_t lpc;           /* base pc address of sample buffer */
+	uint32_t hpc;           /* max pc address of sampled buffer */
+	uint32_t ncnt;          /* size of sample buffer (plus this header) */
+	int32_t version;        /* version number */
+	int32_t profrate;       /* profiling clock rate */
+	int32_t spare[3];       /* reserved */
 };
-#define GMONVERSION	0x00051879
+#define GMONVERSION     0x00051879
 
 struct gmonhdr_64 {
-	uint64_t lpc;		/* base pc address of sample buffer */
-	uint64_t hpc;		/* max pc address of sampled buffer */
-	uint32_t ncnt;		/* size of sample buffer (plus this header) */
-	int32_t version;	/* version number */
-	int32_t profrate;	/* profiling clock rate */
-	int32_t spare[3];	/* reserved */
+	uint64_t lpc;           /* base pc address of sample buffer */
+	uint64_t hpc;           /* max pc address of sampled buffer */
+	uint32_t ncnt;          /* size of sample buffer (plus this header) */
+	int32_t version;        /* version number */
+	int32_t profrate;       /* profiling clock rate */
+	int32_t spare[3];       /* reserved */
 };
 
 typedef struct
 #ifndef __LP64__
-        gmonhdr
+    gmonhdr
 #else
-        gmonhdr_64
+    gmonhdr_64
 #endif
-gmonhdr_t;
+    gmonhdr_t;
 
 /*
  * histogram counters are unsigned shorts (according to the kernel).
  */
-#define	HISTCOUNTER	unsigned short
+#define HISTCOUNTER     unsigned short
 
 /*
  * fraction of text space to allocate for histogram counters here, 1/2
  */
-#define	HISTFRACTION	2
+#define HISTFRACTION    2
 
 /*
  * Fraction of text space to allocate for from hash buckets.
@@ -119,7 +119,7 @@ gmonhdr_t;
  *	calls	$0,(r0)
  *	calls	$0,(r0)
  *
- * which is separated by only three bytes, thus HASHFRACTION is 
+ * which is separated by only three bytes, thus HASHFRACTION is
  * calculated as:
  *
  *	HASHFRACTION = 3 / (2 * 2 - 1) = 1
@@ -127,108 +127,108 @@ gmonhdr_t;
  * Note that the division above rounds down, thus if MIN_SUBR_FRACTION
  * is less than three, this algorithm will not work!
  *
- * In practice, however, call instructions are rarely at a minimal 
+ * In practice, however, call instructions are rarely at a minimal
  * distance.  Hence, we will define HASHFRACTION to be 2 across all
- * architectures.  This saves a reasonable amount of space for 
+ * architectures.  This saves a reasonable amount of space for
  * profiling data structures without (in practice) sacrificing
  * any granularity.
  */
-#define	HASHFRACTION	2
+#define HASHFRACTION    2
 
 /*
  * percent of text space to allocate for tostructs with a minimum.
  */
-#define ARCDENSITY	2
-#define MINARCS		50
-#define MAXARCS		((1 << (8 * sizeof(HISTCOUNTER))) - 2)
+#define ARCDENSITY      2
+#define MINARCS         50
+#define MAXARCS         ((1 << (8 * sizeof(HISTCOUNTER))) - 2)
 
 struct tostruct {
-	uint32_t	selfpc;
-	int32_t		count;
-	uint16_t	link;
-	uint16_t	order;
+	uint32_t        selfpc;
+	int32_t         count;
+	uint16_t        link;
+	uint16_t        order;
 };
 
 struct tostruct_64 {
-	uint64_t	selfpc;
-	int32_t		count;
-	uint16_t	link;
-	uint16_t	order;
+	uint64_t        selfpc;
+	int32_t         count;
+	uint16_t        link;
+	uint16_t        order;
 };
 
 typedef struct
 #ifndef __LP64__
-        tostruct
+    tostruct
 #else
-        tostruct_64
+    tostruct_64
 #endif
-tostruct_t;
+    tostruct_t;
 
 /*
- * a raw arc, with pointers to the calling site and 
+ * a raw arc, with pointers to the calling site and
  * the called site and a count.
  */
 struct rawarc {
-	uint32_t	raw_frompc;
-	uint32_t	raw_selfpc;
-	int32_t		raw_count;
+	uint32_t        raw_frompc;
+	uint32_t        raw_selfpc;
+	int32_t         raw_count;
 };
 
 struct rawarc_64 {
-	uint64_t	raw_frompc;
-	uint64_t	raw_selfpc;
-	int32_t		raw_count;
+	uint64_t        raw_frompc;
+	uint64_t        raw_selfpc;
+	int32_t         raw_count;
 };
 
 typedef struct
 #ifndef __LP64__
-        rawarc
+    rawarc
 #else
-        rawarc_64
+    rawarc_64
 #endif
-rawarc_t;
+    rawarc_t;
 
 /*
  * general rounding functions.
  */
-#define ROUNDDOWN(x,y)	(((x)/(y))*(y))
-#define ROUNDUP(x,y)	((((x)+(y)-1)/(y))*(y))
+#define ROUNDDOWN(x, y)  (((x)/(y))*(y))
+#define ROUNDUP(x, y)    ((((x)+(y)-1)/(y))*(y))
 
 /*
  * The profiling data structures are housed in this structure.
  */
 struct gmonparam {
-	int		state;
-	u_short		*kcount;
-	u_long		kcountsize;
-	u_short		*froms;
-	u_long		fromssize;
-	tostruct_t	*tos;
-	u_long		tossize;
-	long		tolimit;
-	u_long		lowpc;
-	u_long		highpc;
-	u_long		textsize;
-	u_long		hashfraction;
+	int             state;
+	u_short         *kcount;
+	u_long          kcountsize;
+	u_short         *froms;
+	u_long          fromssize;
+	tostruct_t      *tos;
+	u_long          tossize;
+	long            tolimit;
+	u_long          lowpc;
+	u_long          highpc;
+	u_long          textsize;
+	u_long          hashfraction;
 };
 extern struct gmonparam _gmonparam;
 
 /*
  * Possible states of profiling.
  */
-#define	GMON_PROF_ON	0
-#define	GMON_PROF_BUSY	1
-#define	GMON_PROF_ERROR	2
-#define	GMON_PROF_OFF	3
+#define GMON_PROF_ON    0
+#define GMON_PROF_BUSY  1
+#define GMON_PROF_ERROR 2
+#define GMON_PROF_OFF   3
 
 /*
  * Sysctl definitions for extracting profiling information from the kernel.
  */
-#define	GPROF_STATE	0	/* int: profiling enabling variable */
-#define	GPROF_COUNT	1	/* struct: profile tick count buffer */
-#define	GPROF_FROMS	2	/* struct: from location hash bucket */
-#define	GPROF_TOS	3	/* struct: destination/count structure */
-#define	GPROF_GMONPARAM	4	/* struct: profiling parameters (see above) */
+#define GPROF_STATE     0       /* int: profiling enabling variable */
+#define GPROF_COUNT     1       /* struct: profile tick count buffer */
+#define GPROF_FROMS     2       /* struct: from location hash bucket */
+#define GPROF_TOS       3       /* struct: destination/count structure */
+#define GPROF_GMONPARAM 4       /* struct: profiling parameters (see above) */
 
 
 /*
@@ -255,53 +255,52 @@ void mcount(uintptr_t, uintptr_t);
 #define GMON_MAGIC 0xbeefbabe
 #define GMON_MAGIC_64 0xbeefbabf
 typedef struct gmon_data {
-    uint32_t type; /* constant for type of data following this struct */
-    uint32_t size; /* size in bytes of the data following this struct */
+	uint32_t type; /* constant for type of data following this struct */
+	uint32_t size; /* size in bytes of the data following this struct */
 } gmon_data_t;
 
 /*
  * The GMONTYPE_SAMPLES gmon_data.type is for the histogram counters described
  * above and has a gmonhdr_t followed by the counters.
  */
-#define GMONTYPE_SAMPLES	1
+#define GMONTYPE_SAMPLES        1
 /*
  * The GMONTYPE_RAWARCS gmon_data.type is for the raw arcs described above.
  */
-#define GMONTYPE_RAWARCS	2
+#define GMONTYPE_RAWARCS        2
 /*
  * The GMONTYPE_ARCS_ORDERS gmon_data.type is for the raw arcs with a call
  * order field.  The order is the order is a sequence number for the order each
  * call site was executed.  Raw_order values start at 1 not zero.  Other than
  * the raw_order field this is the same information as in the rawarc_t.
  */
-#define GMONTYPE_ARCS_ORDERS	3
+#define GMONTYPE_ARCS_ORDERS    3
 struct rawarc_order {
-    uint32_t	raw_frompc;
-    uint32_t	raw_selfpc;
-    uint32_t	raw_count;
-    uint32_t	raw_order;
-
+	uint32_t    raw_frompc;
+	uint32_t    raw_selfpc;
+	uint32_t    raw_count;
+	uint32_t    raw_order;
 }; struct rawarc_order_64 {
-    uint64_t	raw_frompc;
-    uint64_t	raw_selfpc;
-    uint32_t	raw_count;
-    uint32_t	raw_order;
+	uint64_t    raw_frompc;
+	uint64_t    raw_selfpc;
+	uint32_t    raw_count;
+	uint32_t    raw_order;
 };
 
 typedef struct
 #ifndef __LP64__
-        rawarc_order
+    rawarc_order
 #else
-        rawarc_order_64
+    rawarc_order_64
 #endif
-rawarc_order_t;
+    rawarc_order_t;
 
 /*
  * The GMONTYPE_DYLD_STATE gmon_data.type is for the dynamic link editor state
  * of the program.
  * The informations starts with an uint32_t with the count of states:
  *      image_count
- * Then each state follows in the file.  The state is made up of 
+ * Then each state follows in the file.  The state is made up of
  *      vmaddr_slide (the amount dyld slid this image from it's vmaddress)
  *      name (the file name dyld loaded this image from)
  * The vmaddr_slide is a 32-bit value for 32-bit programs and 64-bit value for
@@ -314,7 +313,7 @@ rawarc_order_t;
  * of the program.
  * The informations starts with an uint32_t with the count of states:
  *      image_count
- * Then each state follows in the file.  The state is made up of 
+ * Then each state follows in the file.  The state is made up of
  *      image_header (the address where dyld loaded this image)
  *      name (the file name dyld loaded this image from)
  * The image_header is a 32-bit value for 32-bit programs and 64-bit value for

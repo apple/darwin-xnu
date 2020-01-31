@@ -2,7 +2,7 @@
  * Copyright (c) 2010-2018 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -52,20 +52,20 @@
  * Ledger entry flags. Bits in second nibble (masked by 0xF0) are used for
  * ledger actions (LEDGER_ACTION_BLOCK, etc).
  */
-#define	LF_ENTRY_ACTIVE         0x0001	/* entry is active if set */
-#define	LF_WAKE_NEEDED          0x0100	/* one or more threads are asleep */
-#define	LF_WAKE_INPROGRESS      0x0200	/* the wait queue is being processed */
-#define	LF_REFILL_SCHEDULED     0x0400	/* a refill timer has been set */
-#define	LF_REFILL_INPROGRESS    0x0800	/* the ledger is being refilled */
-#define	LF_CALLED_BACK          0x1000	/* callback was called for balance in deficit */
-#define	LF_WARNED               0x2000	/* callback was called for balance warning */ 
-#define	LF_TRACKING_MAX		0x4000	/* track max balance. Exclusive w.r.t refill */
-#define LF_PANIC_ON_NEGATIVE	0x8000	/* panic if it goes negative */
-#define LF_TRACK_CREDIT_ONLY	0x10000	/* only update "credit" */
+#define LF_ENTRY_ACTIVE         0x0001  /* entry is active if set */
+#define LF_WAKE_NEEDED          0x0100  /* one or more threads are asleep */
+#define LF_WAKE_INPROGRESS      0x0200  /* the wait queue is being processed */
+#define LF_REFILL_SCHEDULED     0x0400  /* a refill timer has been set */
+#define LF_REFILL_INPROGRESS    0x0800  /* the ledger is being refilled */
+#define LF_CALLED_BACK          0x1000  /* callback was called for balance in deficit */
+#define LF_WARNED               0x2000  /* callback was called for balance warning */
+#define LF_TRACKING_MAX         0x4000  /* track max balance. Exclusive w.r.t refill */
+#define LF_PANIC_ON_NEGATIVE    0x8000  /* panic if it goes negative */
+#define LF_TRACK_CREDIT_ONLY    0x10000 /* only update "credit" */
 
 /* Determine whether a ledger entry exists and has been initialized and active */
-#define	ENTRY_VALID(l, e)					\
-	(((l) != NULL) && ((e) >= 0) && ((e) < (l)->l_size) &&	\
+#define ENTRY_VALID(l, e)                                       \
+	(((l) != NULL) && ((e) >= 0) && ((e) < (l)->l_size) &&  \
 	(((l)->l_entries[e].le_flags & LF_ENTRY_ACTIVE) == LF_ENTRY_ACTIVE))
 
 #define ASSERT(a) assert(a)
@@ -73,26 +73,26 @@
 #ifdef LEDGER_DEBUG
 int ledger_debug = 0;
 
-#define	lprintf(a) if (ledger_debug) {					\
+#define lprintf(a) if (ledger_debug) {                                  \
 	printf("%lld  ", abstime_to_nsecs(mach_absolute_time() / 1000000)); \
-	printf a ;							\
+	printf a ;                                                      \
 }
 #else
-#define	lprintf(a)
+#define lprintf(a)
 #endif
 
 struct ledger_callback {
-	ledger_callback_t	lc_func;
-	const void		*lc_param0;
-	const void		*lc_param1;
+	ledger_callback_t       lc_func;
+	const void              *lc_param0;
+	const void              *lc_param1;
 };
 
 struct entry_template {
-	char			et_key[LEDGER_NAME_MAX];
-	char			et_group[LEDGER_NAME_MAX];
-	char			et_units[LEDGER_NAME_MAX];
-	uint32_t		et_flags;
-	struct ledger_callback	*et_callback;
+	char                    et_key[LEDGER_NAME_MAX];
+	char                    et_group[LEDGER_NAME_MAX];
+	char                    et_units[LEDGER_NAME_MAX];
+	uint32_t                et_flags;
+	struct ledger_callback  *et_callback;
 };
 
 lck_grp_t ledger_lck_grp;
@@ -108,29 +108,29 @@ lck_grp_t ledger_lck_grp;
  * to extract a value from the table - i.e., 2 or 3 memory references.
  */
 struct ledger_template {
-	const char		*lt_name;
-	int			lt_refs;
-	int			lt_cnt;
-	int			lt_table_size;
-	volatile uint32_t	lt_inuse;
-	lck_mtx_t		lt_lock;
-	zone_t			lt_zone;
-	bool			lt_initialized;
-	struct entry_template	*lt_entries;
+	const char              *lt_name;
+	int                     lt_refs;
+	int                     lt_cnt;
+	int                     lt_table_size;
+	volatile uint32_t       lt_inuse;
+	lck_mtx_t               lt_lock;
+	zone_t                  lt_zone;
+	bool                    lt_initialized;
+	struct entry_template   *lt_entries;
 };
 
-#define template_lock(template)		lck_mtx_lock(&(template)->lt_lock)
-#define template_unlock(template)	lck_mtx_unlock(&(template)->lt_lock)
+#define template_lock(template)         lck_mtx_lock(&(template)->lt_lock)
+#define template_unlock(template)       lck_mtx_unlock(&(template)->lt_lock)
 
-#define TEMPLATE_INUSE(s, t) { 					\
-	s = splsched();						\
-	while (OSCompareAndSwap(0, 1, &((t)->lt_inuse)))	\
-		;						\
+#define TEMPLATE_INUSE(s, t) {                                  \
+	s = splsched();                                         \
+	while (OSCompareAndSwap(0, 1, &((t)->lt_inuse)))        \
+	        ;                                               \
 }
 
-#define TEMPLATE_IDLE(s, t) { 					\
-	(t)->lt_inuse = 0;					\
-	splx(s);						\
+#define TEMPLATE_IDLE(s, t) {                                   \
+	(t)->lt_inuse = 0;                                      \
+	splx(s);                                                \
 }
 
 static int ledger_cnt = 0;
@@ -141,7 +141,7 @@ static uint32_t flag_set(volatile uint32_t *flags, uint32_t bit);
 static uint32_t flag_clear(volatile uint32_t *flags, uint32_t bit);
 
 static void ledger_entry_check_new_balance(thread_t thread, ledger_t ledger,
-                                           int entry, struct ledger_entry *le);
+    int entry, struct ledger_entry *le);
 
 #if 0
 static void
@@ -160,7 +160,7 @@ abstime_to_nsecs(uint64_t abstime)
 	uint64_t nsecs;
 
 	absolutetime_to_nanoseconds(abstime, &nsecs);
-	return (nsecs);
+	return nsecs;
 }
 
 static uint64_t
@@ -169,13 +169,13 @@ nsecs_to_abstime(uint64_t nsecs)
 	uint64_t abstime;
 
 	nanoseconds_to_absolutetime(nsecs, &abstime);
-	return (abstime);
+	return abstime;
 }
 
 void
 ledger_init(void)
 {
-        lck_grp_init(&ledger_lck_grp, "ledger", LCK_GRP_ATTR_NULL);
+	lck_grp_init(&ledger_lck_grp, "ledger", LCK_GRP_ATTR_NULL);
 }
 
 ledger_template_t
@@ -183,9 +183,10 @@ ledger_template_create(const char *name)
 {
 	ledger_template_t template;
 
-	template = (ledger_template_t)kalloc(sizeof (*template));
-	if (template == NULL)
-		return (NULL);
+	template = (ledger_template_t)kalloc(sizeof(*template));
+	if (template == NULL) {
+		return NULL;
+	}
 
 	template->lt_name = name;
 	template->lt_refs = 1;
@@ -196,13 +197,13 @@ ledger_template_create(const char *name)
 	lck_mtx_init(&template->lt_lock, &ledger_lck_grp, LCK_ATTR_NULL);
 
 	template->lt_entries = (struct entry_template *)
-	    kalloc(sizeof (struct entry_template) * template->lt_table_size);
+	    kalloc(sizeof(struct entry_template) * template->lt_table_size);
 	if (template->lt_entries == NULL) {
-		kfree(template, sizeof (*template));
+		kfree(template, sizeof(*template));
 		template = NULL;
 	}
 
-	return (template);
+	return template;
 }
 
 void
@@ -212,8 +213,9 @@ ledger_template_dereference(ledger_template_t template)
 	template->lt_refs--;
 	template_unlock(template);
 
-	if (template->lt_refs == 0)
-		kfree(template, sizeof (*template));
+	if (template->lt_refs == 0) {
+		kfree(template, sizeof(*template));
+	}
 }
 
 /*
@@ -229,8 +231,9 @@ ledger_entry_add(ledger_template_t template, const char *key,
 	int idx;
 	struct entry_template *et;
 
-	if ((key == NULL) || (strlen(key) >= LEDGER_NAME_MAX) || (template->lt_zone != NULL))
-		return (-1);
+	if ((key == NULL) || (strlen(key) >= LEDGER_NAME_MAX) || (template->lt_zone != NULL)) {
+		return -1;
+	}
 
 	template_lock(template);
 
@@ -276,7 +279,7 @@ ledger_entry_add(ledger_template_t template, const char *key,
 	idx = template->lt_cnt++;
 	template_unlock(template);
 
-	return (idx);
+	return idx;
 }
 
 
@@ -285,14 +288,15 @@ ledger_entry_setactive(ledger_t ledger, int entry)
 {
 	struct ledger_entry *le;
 
-	if ((ledger == NULL)  || (entry < 0) || (entry >= ledger->l_size))
-		return (KERN_INVALID_ARGUMENT);
+	if ((ledger == NULL) || (entry < 0) || (entry >= ledger->l_size)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	le = &ledger->l_entries[entry];
 	if ((le->le_flags & LF_ENTRY_ACTIVE) == 0) {
 		flag_set(&le->le_flags, LF_ENTRY_ACTIVE);
 	}
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 
@@ -302,16 +306,19 @@ ledger_key_lookup(ledger_template_t template, const char *key)
 	int idx;
 
 	template_lock(template);
-	for (idx = 0; idx < template->lt_cnt; idx++)
+	for (idx = 0; idx < template->lt_cnt; idx++) {
 		if (template->lt_entries != NULL &&
-		    (strcmp(key, template->lt_entries[idx].et_key) == 0))
+		    (strcmp(key, template->lt_entries[idx].et_key) == 0)) {
 			break;
+		}
+	}
 
-	if (idx >= template->lt_cnt)
+	if (idx >= template->lt_cnt) {
 		idx = -1;
+	}
 	template_unlock(template);
 
-	return (idx);
+	return idx;
 }
 
 /*
@@ -326,8 +333,8 @@ ledger_template_complete(ledger_template_t template)
 	size_t ledger_size;
 	ledger_size = sizeof(struct ledger) + (template->lt_cnt * sizeof(struct ledger_entry));
 	template->lt_zone = zinit(ledger_size, CONFIG_TASK_MAX * ledger_size,
-	                       ledger_size,
-	                       template->lt_name);
+	    ledger_size,
+	    template->lt_name);
 	template->lt_initialized = true;
 }
 
@@ -389,36 +396,38 @@ ledger_instantiate(ledger_template_t template, int entry_type)
 
 		le->le_flags = et->et_flags;
 		/* make entry inactive by removing  active bit */
-		if (entry_type == LEDGER_CREATE_INACTIVE_ENTRIES)
+		if (entry_type == LEDGER_CREATE_INACTIVE_ENTRIES) {
 			flag_clear(&le->le_flags, LF_ENTRY_ACTIVE);
+		}
 		/*
 		 * If template has a callback, this entry is opted-in,
 		 * by default.
 		 */
-		if (et->et_callback != NULL)
+		if (et->et_callback != NULL) {
 			flag_set(&le->le_flags, LEDGER_ACTION_CALLBACK);
+		}
 		le->le_credit        = 0;
 		le->le_debit         = 0;
 		le->le_limit         = LEDGER_LIMIT_INFINITY;
-		le->le_warn_level    = LEDGER_LIMIT_INFINITY;		
+		le->le_warn_level    = LEDGER_LIMIT_INFINITY;
 		le->_le.le_refill.le_refill_period = 0;
 		le->_le.le_refill.le_last_refill   = 0;
 	}
 	template_unlock(template);
 
-	return (ledger);
+	return ledger;
 }
 
 static uint32_t
 flag_set(volatile uint32_t *flags, uint32_t bit)
 {
-	return (OSBitOrAtomic(bit, flags));
+	return OSBitOrAtomic(bit, flags);
 }
 
 static uint32_t
 flag_clear(volatile uint32_t *flags, uint32_t bit)
 {
-	return (OSBitAndAtomic(~bit, flags));
+	return OSBitAndAtomic(~bit, flags);
 }
 
 /*
@@ -427,17 +436,19 @@ flag_clear(volatile uint32_t *flags, uint32_t bit)
 kern_return_t
 ledger_reference(ledger_t ledger)
 {
-	if (!LEDGER_VALID(ledger))
-		return (KERN_INVALID_ARGUMENT);
+	if (!LEDGER_VALID(ledger)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 	os_ref_retain(&ledger->l_refs);
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 int
 ledger_reference_count(ledger_t ledger)
 {
-	if (!LEDGER_VALID(ledger))
-		return (-1);
+	if (!LEDGER_VALID(ledger)) {
+		return -1;
+	}
 
 	return os_ref_get_count(&ledger->l_refs);
 }
@@ -449,8 +460,9 @@ ledger_reference_count(ledger_t ledger)
 kern_return_t
 ledger_dereference(ledger_t ledger)
 {
-	if (!LEDGER_VALID(ledger))
-		return (KERN_INVALID_ARGUMENT);
+	if (!LEDGER_VALID(ledger)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	if (os_ref_release(&ledger->l_refs) == 0) {
 		if (ledger->l_template->lt_zone) {
@@ -460,7 +472,7 @@ ledger_dereference(ledger_t ledger)
 		}
 	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -482,9 +494,10 @@ warn_level_exceeded(struct ledger_entry *le)
 	 * use positive limits.
 	 */
 	balance = le->le_credit - le->le_debit;
-	if ((le->le_warn_level != LEDGER_LIMIT_INFINITY) && (balance > le->le_warn_level))
-		return (1);
-	return (0);
+	if ((le->le_warn_level != LEDGER_LIMIT_INFINITY) && (balance > le->le_warn_level)) {
+		return 1;
+	}
+	return 0;
 }
 
 /*
@@ -502,12 +515,14 @@ limit_exceeded(struct ledger_entry *le)
 	}
 
 	balance = le->le_credit - le->le_debit;
-	if ((le->le_limit <= 0) && (balance < le->le_limit))
-		return (1);
+	if ((le->le_limit <= 0) && (balance < le->le_limit)) {
+		return 1;
+	}
 
-	if ((le->le_limit > 0) && (balance > le->le_limit))
-		return (1);
-	return (0);
+	if ((le->le_limit > 0) && (balance > le->le_limit)) {
+		return 1;
+	}
+	return 0;
 }
 
 static inline struct ledger_callback *
@@ -520,7 +535,7 @@ entry_get_callback(ledger_t ledger, int entry)
 	callback = ledger->l_template->lt_entries[entry].et_callback;
 	TEMPLATE_IDLE(s, ledger->l_template);
 
-	return (callback);
+	return callback;
 }
 
 /*
@@ -605,16 +620,18 @@ ledger_refill(uint64_t now, ledger_t ledger, int entry)
 	 * OK, it's been a long time.  Do a divide to figure out
 	 * how long.
 	 */
-	if (elapsed > 0)
+	if (elapsed > 0) {
 		periods = (now - le->_le.le_refill.le_last_refill) / period;
+	}
 
 	balance = le->le_credit - le->le_debit;
 	due = periods * le->le_limit;
 
-	if (balance - due < 0)
+	if (balance - due < 0) {
 		due = balance;
+	}
 
-	assertf(due >= 0,"now=%llu, ledger=%p, entry=%d, balance=%lld, due=%lld", now, ledger, entry, balance, due);
+	assertf(due >= 0, "now=%llu, ledger=%p, entry=%d, balance=%lld, due=%lld", now, ledger, entry, balance, due);
 
 	OSAddAtomic64(due, &le->le_debit);
 
@@ -625,26 +642,28 @@ ledger_refill(uint64_t now, ledger_t ledger, int entry)
 	 * Otherwise set it to the time at which it last should have been
 	 * fully refilled.
 	 */
-	if (balance == due)
+	if (balance == due) {
 		le->_le.le_refill.le_last_refill = now;
-	else
+	} else {
 		le->_le.le_refill.le_last_refill += (le->_le.le_refill.le_refill_period * periods);
+	}
 
 	flag_clear(&le->le_flags, LF_REFILL_INPROGRESS);
 
 	lprintf(("Refill %lld %lld->%lld\n", periods, balance, balance - due));
-	if (!limit_exceeded(le))
+	if (!limit_exceeded(le)) {
 		ledger_limit_entry_wakeup(le);
+	}
 }
 
 void
 ledger_entry_check_new_balance(thread_t thread, ledger_t ledger,
-                               int entry, struct ledger_entry *le)
+    int entry, struct ledger_entry *le)
 {
 	if (le->le_flags & LF_TRACKING_MAX) {
 		ledger_amount_t balance = le->le_credit - le->le_debit;
 
-		if (balance > le->_le._le_max.le_lifetime_max){
+		if (balance > le->_le._le_max.le_lifetime_max) {
 			le->_le._le_max.le_lifetime_max = balance;
 		}
 
@@ -660,8 +679,9 @@ ledger_entry_check_new_balance(thread_t thread, ledger_t ledger,
 		assert(!(le->le_flags & LF_TRACKING_MAX));
 
 		uint64_t now = mach_absolute_time();
-		if ((now - le->_le.le_refill.le_last_refill) > le->_le.le_refill.le_refill_period)
+		if ((now - le->_le.le_refill.le_last_refill) > le->_le.le_refill.le_refill_period) {
 			ledger_refill(now, ledger, entry);
+		}
 	}
 
 	if (limit_exceeded(le)) {
@@ -687,8 +707,9 @@ ledger_entry_check_new_balance(thread_t thread, ledger_t ledger,
 		 * If there are any threads blocked on this entry, now would
 		 * be a good time to wake them up.
 		 */
-		if (le->le_flags & LF_WAKE_NEEDED)
+		if (le->le_flags & LF_WAKE_NEEDED) {
 			ledger_limit_entry_wakeup(le);
+		}
 
 		if (le->le_flags & LEDGER_ACTION_CALLBACK) {
 			/*
@@ -696,24 +717,24 @@ ledger_entry_check_new_balance(thread_t thread, ledger_t ledger,
 			 * the ledger's balance crosses into or out of the warning
 			 * level.
 			 */
-		 	if (warn_level_exceeded(le)) {
-		 		/*
-		 		 * This ledger's balance is above the warning level.
-		 		 */ 
-		 		if ((le->le_flags & LF_WARNED) == 0) {
-		 			/*
-		 			 * If we are above the warning level and
-		 			 * have not yet invoked the callback,
-		 			 * set the AST so it can be done before returning
-		 			 * to userland.
-		 			 */
+			if (warn_level_exceeded(le)) {
+				/*
+				 * This ledger's balance is above the warning level.
+				 */
+				if ((le->le_flags & LF_WARNED) == 0) {
+					/*
+					 * If we are above the warning level and
+					 * have not yet invoked the callback,
+					 * set the AST so it can be done before returning
+					 * to userland.
+					 */
 					act_set_astledger_async(thread);
 				}
 			} else {
 				/*
 				 * This ledger's balance is below the warning level.
 				 */
-		 		if (le->le_flags & LF_WARNED) {
+				if (le->le_flags & LF_WARNED) {
 					/*
 					 * If we are below the warning level and
 					 * the LF_WARNED flag is still set, we need
@@ -730,10 +751,10 @@ ledger_entry_check_new_balance(thread_t thread, ledger_t ledger,
 	if ((le->le_flags & LF_PANIC_ON_NEGATIVE) &&
 	    (le->le_credit < le->le_debit)) {
 		panic("ledger_entry_check_new_balance(%p,%d): negative ledger %p credit:%lld debit:%lld balance:%lld\n",
-		      ledger, entry, le,
-		      le->le_credit,
-		      le->le_debit,
-		      le->le_credit - le->le_debit);
+		    ledger, entry, le,
+		    le->le_credit,
+		    le->le_debit,
+		    le->le_credit - le->le_debit);
 	}
 }
 
@@ -755,11 +776,13 @@ ledger_credit_thread(thread_t thread, ledger_t ledger, int entry, ledger_amount_
 	ledger_amount_t old, new;
 	struct ledger_entry *le;
 
-	if (!ENTRY_VALID(ledger, entry) || (amount < 0))
-		return (KERN_INVALID_VALUE);
+	if (!ENTRY_VALID(ledger, entry) || (amount < 0)) {
+		return KERN_INVALID_VALUE;
+	}
 
-	if (amount == 0)
-		return (KERN_SUCCESS);
+	if (amount == 0) {
+		return KERN_SUCCESS;
+	}
 
 	le = &ledger->l_entries[entry];
 
@@ -771,7 +794,7 @@ ledger_credit_thread(thread_t thread, ledger_t ledger, int entry, ledger_amount_
 		ledger_entry_check_new_balance(thread, ledger, entry, le);
 	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -811,7 +834,7 @@ ledger_rollup(ledger_t to_ledger, ledger_t from_ledger)
 		ledger_rollup_entry(to_ledger, from_ledger, i);
 	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /* Add one ledger entry value to another.
@@ -829,15 +852,15 @@ ledger_rollup_entry(ledger_t to_ledger, ledger_t from_ledger, int entry)
 		from_le = &from_ledger->l_entries[entry];
 		to_le   =   &to_ledger->l_entries[entry];
 		OSAddAtomic64(from_le->le_credit, &to_le->le_credit);
-		OSAddAtomic64(from_le->le_debit,  &to_le->le_debit);
+		OSAddAtomic64(from_le->le_debit, &to_le->le_debit);
 	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
  * Zero the balance of a ledger by adding to its credit or debit, whichever is smaller.
- * Note that some clients of ledgers (notably, task wakeup statistics) require that 
+ * Note that some clients of ledgers (notably, task wakeup statistics) require that
  * le_credit only ever increase as a function of ledger_credit().
  */
 kern_return_t
@@ -846,8 +869,9 @@ ledger_zero_balance(ledger_t ledger, int entry)
 	struct ledger_entry *le;
 	ledger_amount_t debit, credit;
 
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_VALUE);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_VALUE;
+	}
 
 	le = &ledger->l_entries[entry];
 
@@ -862,16 +886,18 @@ top:
 		}
 		lprintf(("%p zeroed %lld->%lld\n", current_thread(), le->le_credit, 0));
 	} else if (credit > debit) {
-		if (!OSCompareAndSwap64(debit, credit, &le->le_debit))
+		if (!OSCompareAndSwap64(debit, credit, &le->le_debit)) {
 			goto top;
+		}
 		lprintf(("%p zeroed %lld->%lld\n", current_thread(), le->le_debit, le->le_credit));
 	} else if (credit < debit) {
-		if (!OSCompareAndSwap64(credit, debit, &le->le_credit))
+		if (!OSCompareAndSwap64(credit, debit, &le->le_credit)) {
 			goto top;
+		}
 		lprintf(("%p zeroed %lld->%lld\n", current_thread(), le->le_credit, le->le_debit));
 	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
@@ -879,15 +905,16 @@ ledger_get_limit(ledger_t ledger, int entry, ledger_amount_t *limit)
 {
 	struct ledger_entry *le;
 
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_VALUE);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_VALUE;
+	}
 
 	le = &ledger->l_entries[entry];
 	*limit = le->le_limit;
 
 	lprintf(("ledger_get_limit: %lld\n", *limit));
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -895,17 +922,18 @@ ledger_get_limit(ledger_t ledger, int entry, ledger_amount_t *limit)
  * current balance, so the change doesn't affect the thread until the
  * next refill.
  *
- * warn_level: If non-zero, causes the callback to be invoked when 
+ * warn_level: If non-zero, causes the callback to be invoked when
  * the balance exceeds this level. Specified as a percentage [of the limit].
  */
 kern_return_t
 ledger_set_limit(ledger_t ledger, int entry, ledger_amount_t limit,
- 		 uint8_t warn_level_percentage)
+    uint8_t warn_level_percentage)
 {
 	struct ledger_entry *le;
 
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_VALUE);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_VALUE;
+	}
 
 	lprintf(("ledger_set_limit: %lld\n", limit));
 	le = &ledger->l_entries[entry];
@@ -925,7 +953,7 @@ ledger_set_limit(ledger_t ledger, int entry, ledger_amount_t limit,
 		le->_le.le_refill.le_last_refill = 0;
 	}
 	flag_clear(&le->le_flags, LF_CALLED_BACK);
-	flag_clear(&le->le_flags, LF_WARNED);        
+	flag_clear(&le->le_flags, LF_WARNED);
 	ledger_limit_entry_wakeup(le);
 
 	if (warn_level_percentage != 0) {
@@ -937,48 +965,48 @@ ledger_set_limit(ledger_t ledger, int entry, ledger_amount_t limit,
 		le->le_warn_level = LEDGER_LIMIT_INFINITY;
 	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 #if CONFIG_LEDGER_INTERVAL_MAX
 kern_return_t
 ledger_get_interval_max(ledger_t ledger, int entry,
-        ledger_amount_t *max_interval_balance, int reset)
+    ledger_amount_t *max_interval_balance, int reset)
 {
 	struct ledger_entry *le;
 	le = &ledger->l_entries[entry];
 
 	if (!ENTRY_VALID(ledger, entry) || !(le->le_flags & LF_TRACKING_MAX)) {
-		return (KERN_INVALID_VALUE);
+		return KERN_INVALID_VALUE;
 	}
 
 	*max_interval_balance = le->_le._le_max.le_interval_max;
 	lprintf(("ledger_get_interval_max: %lld%s\n", *max_interval_balance,
-	        (reset) ? " --> 0" : ""));
+	    (reset) ? " --> 0" : ""));
 
 	if (reset) {
 		le->_le._le_max.le_interval_max = 0;
 	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 #endif /* CONFIG_LEDGER_INTERVAL_MAX */
 
 kern_return_t
 ledger_get_lifetime_max(ledger_t ledger, int entry,
-        ledger_amount_t *max_lifetime_balance)
+    ledger_amount_t *max_lifetime_balance)
 {
 	struct ledger_entry *le;
 	le = &ledger->l_entries[entry];
 
 	if (!ENTRY_VALID(ledger, entry) || !(le->le_flags & LF_TRACKING_MAX)) {
-		return (KERN_INVALID_VALUE);
+		return KERN_INVALID_VALUE;
 	}
 
 	*max_lifetime_balance = le->_le._le_max.le_lifetime_max;
 	lprintf(("ledger_get_lifetime_max: %lld\n", *max_lifetime_balance));
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -986,24 +1014,24 @@ ledger_get_lifetime_max(ledger_t ledger, int entry,
  */
 kern_return_t
 ledger_track_maximum(ledger_template_t template, int entry,
-	__unused int period_in_secs)
+    __unused int period_in_secs)
 {
 	template_lock(template);
 
 	if ((entry < 0) || (entry >= template->lt_cnt)) {
-		template_unlock(template);	
-		return (KERN_INVALID_VALUE);
+		template_unlock(template);
+		return KERN_INVALID_VALUE;
 	}
 
 	/* Refill is incompatible with max tracking. */
 	if (template->lt_entries[entry].et_flags & LF_REFILL_SCHEDULED) {
-		return (KERN_INVALID_VALUE);
+		return KERN_INVALID_VALUE;
 	}
 
 	template->lt_entries[entry].et_flags |= LF_TRACKING_MAX;
 	template_unlock(template);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
@@ -1013,14 +1041,14 @@ ledger_panic_on_negative(ledger_template_t template, int entry)
 
 	if ((entry < 0) || (entry >= template->lt_cnt)) {
 		template_unlock(template);
-		return (KERN_INVALID_VALUE);
+		return KERN_INVALID_VALUE;
 	}
 
 	template->lt_entries[entry].et_flags |= LF_PANIC_ON_NEGATIVE;
 
 	template_unlock(template);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
@@ -1030,14 +1058,14 @@ ledger_track_credit_only(ledger_template_t template, int entry)
 
 	if ((entry < 0) || (entry >= template->lt_cnt)) {
 		template_unlock(template);
-		return (KERN_INVALID_VALUE);
+		return KERN_INVALID_VALUE;
 	}
 
 	template->lt_entries[entry].et_flags |= LF_TRACK_CREDIT_ONLY;
 
 	template_unlock(template);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1045,16 +1073,17 @@ ledger_track_credit_only(ledger_template_t template, int entry)
  */
 kern_return_t
 ledger_set_callback(ledger_template_t template, int entry,
-   ledger_callback_t func, const void *param0, const void *param1)
+    ledger_callback_t func, const void *param0, const void *param1)
 {
 	struct entry_template *et;
 	struct ledger_callback *old_cb, *new_cb;
 
-	if ((entry < 0) || (entry >= template->lt_cnt))
-		return (KERN_INVALID_VALUE);
+	if ((entry < 0) || (entry >= template->lt_cnt)) {
+		return KERN_INVALID_VALUE;
+	}
 
 	if (func) {
-		new_cb = (struct ledger_callback *)kalloc(sizeof (*new_cb));
+		new_cb = (struct ledger_callback *)kalloc(sizeof(*new_cb));
 		new_cb->lc_func = func;
 		new_cb->lc_param0 = param0;
 		new_cb->lc_param1 = param1;
@@ -1067,10 +1096,11 @@ ledger_set_callback(ledger_template_t template, int entry,
 	old_cb = et->et_callback;
 	et->et_callback = new_cb;
 	template_unlock(template);
-	if (old_cb)
-		kfree(old_cb, sizeof (*old_cb));
+	if (old_cb) {
+		kfree(old_cb, sizeof(*old_cb));
+	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1083,8 +1113,9 @@ ledger_set_callback(ledger_template_t template, int entry,
 kern_return_t
 ledger_disable_callback(ledger_t ledger, int entry)
 {
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_VALUE);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_VALUE;
+	}
 
 	/*
 	 * le_warn_level is used to indicate *if* this ledger has a warning configured,
@@ -1094,7 +1125,7 @@ ledger_disable_callback(ledger_t ledger, int entry)
 	 */
 	ledger->l_entries[entry].le_warn_level = LEDGER_LIMIT_INFINITY;
 	flag_clear(&ledger->l_entries[entry].le_flags, LEDGER_ACTION_CALLBACK);
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1107,13 +1138,14 @@ ledger_disable_callback(ledger_t ledger, int entry)
 kern_return_t
 ledger_enable_callback(ledger_t ledger, int entry)
 {
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_VALUE);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_VALUE;
+	}
 
 	assert(entry_get_callback(ledger, entry) != NULL);
 
 	flag_set(&ledger->l_entries[entry].le_flags, LEDGER_ACTION_CALLBACK);
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1126,13 +1158,14 @@ ledger_get_period(ledger_t ledger, int entry, uint64_t *period)
 {
 	struct ledger_entry *le;
 
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_VALUE);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_VALUE;
+	}
 
 	le = &ledger->l_entries[entry];
 	*period = abstime_to_nsecs(le->_le.le_refill.le_refill_period);
 	lprintf(("ledger_get_period: %llx\n", *period));
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1144,8 +1177,9 @@ ledger_set_period(ledger_t ledger, int entry, uint64_t period)
 	struct ledger_entry *le;
 
 	lprintf(("ledger_set_period: %llx\n", period));
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_VALUE);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_VALUE;
+	}
 
 	le = &ledger->l_entries[entry];
 
@@ -1159,7 +1193,7 @@ ledger_set_period(ledger_t ledger, int entry, uint64_t period)
 		/*
 		 * Refill is incompatible with rolling max tracking.
 		 */
-		return (KERN_INVALID_VALUE);
+		return KERN_INVALID_VALUE;
 	}
 
 	le->_le.le_refill.le_refill_period = nsecs_to_abstime(period);
@@ -1175,7 +1209,7 @@ ledger_set_period(ledger_t ledger, int entry, uint64_t period)
 
 	flag_set(&le->le_flags, LF_REFILL_SCHEDULED);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1186,36 +1220,39 @@ ledger_disable_refill(ledger_t ledger, int entry)
 {
 	struct ledger_entry *le;
 
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_VALUE);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_VALUE;
+	}
 
 	le = &ledger->l_entries[entry];
 
 	flag_clear(&le->le_flags, LF_REFILL_SCHEDULED);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
 ledger_get_actions(ledger_t ledger, int entry, int *actions)
 {
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_VALUE);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_VALUE;
+	}
 
 	*actions = ledger->l_entries[entry].le_flags & LEDGER_ACTION_MASK;
-	lprintf(("ledger_get_actions: %#x\n", *actions));	
-	return (KERN_SUCCESS);
+	lprintf(("ledger_get_actions: %#x\n", *actions));
+	return KERN_SUCCESS;
 }
 
 kern_return_t
 ledger_set_action(ledger_t ledger, int entry, int action)
 {
 	lprintf(("ledger_set_action: %#x\n", action));
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_VALUE);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_VALUE;
+	}
 
 	flag_set(&ledger->l_entries[entry].le_flags, action);
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
@@ -1224,11 +1261,13 @@ ledger_debit_thread(thread_t thread, ledger_t ledger, int entry, ledger_amount_t
 	struct ledger_entry *le;
 	ledger_amount_t old, new;
 
-	if (!ENTRY_VALID(ledger, entry) || (amount < 0))
-		return (KERN_INVALID_ARGUMENT);
+	if (!ENTRY_VALID(ledger, entry) || (amount < 0)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
-	if (amount == 0)
-		return (KERN_SUCCESS);
+	if (amount == 0) {
+		return KERN_SUCCESS;
+	}
 
 	le = &ledger->l_entries[entry];
 
@@ -1246,7 +1285,7 @@ ledger_debit_thread(thread_t thread, ledger_t ledger, int entry, ledger_amount_t
 		ledger_entry_check_new_balance(thread, ledger, entry, le);
 	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
@@ -1264,13 +1303,13 @@ ledger_debit_nocheck(ledger_t ledger, int entry, ledger_amount_t amount)
 void
 ledger_ast(thread_t thread)
 {
-	struct ledger	*l = thread->t_ledger;
-	struct ledger 	*thl;
-	uint32_t	block;
-	uint64_t	now;
-	uint8_t		task_flags;
-	uint8_t		task_percentage;
-	uint64_t	task_interval;
+	struct ledger   *l = thread->t_ledger;
+	struct ledger   *thl;
+	uint32_t        block;
+	uint64_t        now;
+	uint8_t         task_flags;
+	uint8_t         task_percentage;
+	uint64_t        task_interval;
 
 	kern_return_t ret;
 	task_t task = thread->task;
@@ -1297,9 +1336,9 @@ top:
 	 */
 	if (((task_flags & TASK_RUSECPU_FLAGS_PERTHR_LIMIT) != 0) &&
 	    ((thread->options & TH_OPT_PRVT_CPULIMIT) == 0)) {
-		uint8_t	 percentage;
+		uint8_t  percentage;
 		uint64_t interval;
-		int	 action;
+		int      action;
 
 		thread_get_cpulimit(&action, &percentage, &interval);
 
@@ -1313,7 +1352,7 @@ top:
 			assert((thread->options & TH_OPT_PROC_CPULIMIT) != 0);
 		}
 	} else if (((task_flags & TASK_RUSECPU_FLAGS_PERTHR_LIMIT) == 0) &&
-		   (thread->options & TH_OPT_PROC_CPULIMIT)) {
+	    (thread->options & TH_OPT_PROC_CPULIMIT)) {
 		assert((thread->options & TH_OPT_PRVT_CPULIMIT) == 0);
 
 		/*
@@ -1327,9 +1366,10 @@ top:
 	/*
 	 * If the task or thread is being terminated, let's just get on with it
 	 */
-	if ((l == NULL) || !task->active || task->halting || !thread->active)
+	if ((l == NULL) || !task->active || task->halting || !thread->active) {
 		return;
-	
+	}
+
 	/*
 	 * Examine all entries in deficit to see which might be eligble for
 	 * an automatic refill, which require callbacks to be issued, and
@@ -1357,12 +1397,14 @@ top:
 	if (block) {
 		if (LEDGER_VALID(thl)) {
 			ret = ledger_perform_blocking(thl);
-			if (ret != KERN_SUCCESS)
+			if (ret != KERN_SUCCESS) {
 				goto top;
+			}
 		}
 		ret = ledger_perform_blocking(l);
-		if (ret != KERN_SUCCESS)
+		if (ret != KERN_SUCCESS) {
 			goto top;
+		}
 	} /* block */
 }
 
@@ -1413,28 +1455,32 @@ ledger_check_needblock(ledger_t l, uint64_t now)
 
 			if ((le->_le.le_refill.le_last_refill + le->_le.le_refill.le_refill_period) > now) {
 				ledger_refill(now, l, i);
-				if (limit_exceeded(le) == FALSE)
+				if (limit_exceeded(le) == FALSE) {
 					continue;
+				}
 			}
 		}
 
-		if (le->le_flags & LEDGER_ACTION_BLOCK)
+		if (le->le_flags & LEDGER_ACTION_BLOCK) {
 			block = 1;
-		if ((le->le_flags & LEDGER_ACTION_CALLBACK) == 0)
+		}
+		if ((le->le_flags & LEDGER_ACTION_CALLBACK) == 0) {
 			continue;
+		}
 
-                /*
-                 * If the LEDGER_ACTION_CALLBACK flag is on, we expect there to
-                 * be a registered callback.
-                 */
+		/*
+		 * If the LEDGER_ACTION_CALLBACK flag is on, we expect there to
+		 * be a registered callback.
+		 */
 		assert(lc != NULL);
 		flags = flag_set(&le->le_flags, LF_CALLED_BACK);
 		/* Callback has already been called */
-		if (flags & LF_CALLED_BACK)
+		if (flags & LF_CALLED_BACK) {
 			continue;
+		}
 		lc->lc_func(FALSE, lc->lc_param0, lc->lc_param1);
 	}
-	return(block);
+	return block;
 }
 
 
@@ -1449,24 +1495,27 @@ ledger_perform_blocking(ledger_t l)
 	for (i = 0; i < l->l_size; i++) {
 		le = &l->l_entries[i];
 		if ((!limit_exceeded(le)) ||
-		    ((le->le_flags & LEDGER_ACTION_BLOCK) == 0))
+		    ((le->le_flags & LEDGER_ACTION_BLOCK) == 0)) {
 			continue;
+		}
 
 		assert(!(le->le_flags & LF_TRACKING_MAX));
 
 		/* Prepare to sleep until the resource is refilled */
 		ret = assert_wait_deadline(le, THREAD_INTERRUPTIBLE,
 		    le->_le.le_refill.le_last_refill + le->_le.le_refill.le_refill_period);
-		if (ret != THREAD_WAITING)
-			return(KERN_SUCCESS);
+		if (ret != THREAD_WAITING) {
+			return KERN_SUCCESS;
+		}
 
 		/* Mark that somebody is waiting on this entry  */
 		flag_set(&le->le_flags, LF_WAKE_NEEDED);
 
 		ret = thread_block_reason(THREAD_CONTINUE_NULL, NULL,
 		    AST_LEDGER);
-		if (ret != THREAD_AWAKENED)
-			return(KERN_SUCCESS);
+		if (ret != THREAD_AWAKENED) {
+			return KERN_SUCCESS;
+		}
 
 		/*
 		 * The world may have changed while we were asleep.
@@ -1474,9 +1523,9 @@ ledger_perform_blocking(ledger_t l)
 		 * deficit.  Or maybe we're supposed to die now.
 		 * Go back to the top and reevaluate.
 		 */
-		return(KERN_FAILURE);
+		return KERN_FAILURE;
 	}
-	return(KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 
@@ -1486,15 +1535,16 @@ ledger_get_entries(ledger_t ledger, int entry, ledger_amount_t *credit,
 {
 	struct ledger_entry *le;
 
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_ARGUMENT);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	le = &ledger->l_entries[entry];
 
 	*credit = le->le_credit;
 	*debit = le->le_debit;
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
@@ -1502,14 +1552,15 @@ ledger_reset_callback_state(ledger_t ledger, int entry)
 {
 	struct ledger_entry *le;
 
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_ARGUMENT);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	le = &ledger->l_entries[entry];
 
 	flag_clear(&le->le_flags, LF_CALLED_BACK);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
@@ -1517,14 +1568,15 @@ ledger_disable_panic_on_negative(ledger_t ledger, int entry)
 {
 	struct ledger_entry *le;
 
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_ARGUMENT);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	le = &ledger->l_entries[entry];
 
 	flag_clear(&le->le_flags, LF_PANIC_ON_NEGATIVE);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
@@ -1532,8 +1584,9 @@ ledger_get_panic_on_negative(ledger_t ledger, int entry, int *panic_on_negative)
 {
 	struct ledger_entry *le;
 
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_ARGUMENT);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	le = &ledger->l_entries[entry];
 
@@ -1543,7 +1596,7 @@ ledger_get_panic_on_negative(ledger_t ledger, int entry, int *panic_on_negative)
 		*panic_on_negative = FALSE;
 	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
@@ -1551,8 +1604,9 @@ ledger_get_balance(ledger_t ledger, int entry, ledger_amount_t *balance)
 {
 	struct ledger_entry *le;
 
-	if (!ENTRY_VALID(ledger, entry))
-		return (KERN_INVALID_ARGUMENT);
+	if (!ENTRY_VALID(ledger, entry)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	le = &ledger->l_entries[entry];
 
@@ -1564,7 +1618,7 @@ ledger_get_balance(ledger_t ledger, int entry, ledger_amount_t *balance)
 
 	*balance = le->le_credit - le->le_debit;
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 int
@@ -1580,21 +1634,24 @@ ledger_template_info(void **buf, int *len)
 	 * caller's as the source.
 	 */
 	l = current_task()->ledger;
-	if ((*len < 0) || (l == NULL))
-		return (EINVAL);
+	if ((*len < 0) || (l == NULL)) {
+		return EINVAL;
+	}
 
-	if (*len > l->l_size)
-		 *len = l->l_size;
-	lti = kalloc((*len) * sizeof (struct ledger_template_info));
-	if (lti == NULL)
-		return (ENOMEM);
+	if (*len > l->l_size) {
+		*len = l->l_size;
+	}
+	lti = kalloc((*len) * sizeof(struct ledger_template_info));
+	if (lti == NULL) {
+		return ENOMEM;
+	}
 	*buf = lti;
 
 	template_lock(l->l_template);
 	et = l->l_template->lt_entries;
 
 	for (i = 0; i < *len; i++) {
-		memset(lti, 0, sizeof (*lti));
+		memset(lti, 0, sizeof(*lti));
 		strlcpy(lti->lti_name, et->et_key, LEDGER_NAME_MAX);
 		strlcpy(lti->lti_group, et->et_group, LEDGER_NAME_MAX);
 		strlcpy(lti->lti_units, et->et_units, LEDGER_NAME_MAX);
@@ -1603,25 +1660,25 @@ ledger_template_info(void **buf, int *len)
 	}
 	template_unlock(l->l_template);
 
-	return (0);
+	return 0;
 }
 
 static void
 ledger_fill_entry_info(struct ledger_entry      *le,
-                       struct ledger_entry_info *lei,
-                       uint64_t                  now)
+    struct ledger_entry_info *lei,
+    uint64_t                  now)
 {
-	assert(le  != NULL);
+	assert(le != NULL);
 	assert(lei != NULL);
 
-	memset(lei, 0, sizeof (*lei));
+	memset(lei, 0, sizeof(*lei));
 
 	lei->lei_limit         = le->le_limit;
 	lei->lei_credit        = le->le_credit;
 	lei->lei_debit         = le->le_debit;
 	lei->lei_balance       = lei->lei_credit - lei->lei_debit;
-	lei->lei_refill_period = (le->le_flags & LF_REFILL_SCHEDULED) ? 
-							     abstime_to_nsecs(le->_le.le_refill.le_refill_period) : 0;
+	lei->lei_refill_period = (le->le_flags & LF_REFILL_SCHEDULED) ?
+	    abstime_to_nsecs(le->_le.le_refill.le_refill_period) : 0;
 	lei->lei_last_refill   = abstime_to_nsecs(now - le->_le.le_refill.le_last_refill);
 }
 
@@ -1634,14 +1691,17 @@ ledger_get_task_entry_info_multiple(task_t task, void **buf, int *len)
 	int i;
 	ledger_t l;
 
-	if ((*len < 0) || ((l = task->ledger) == NULL))
-		return (EINVAL);
+	if ((*len < 0) || ((l = task->ledger) == NULL)) {
+		return EINVAL;
+	}
 
-	if (*len > l->l_size)
-		 *len = l->l_size;
-	lei = kalloc((*len) * sizeof (struct ledger_entry_info));
-	if (lei == NULL)
-		return (ENOMEM);
+	if (*len > l->l_size) {
+		*len = l->l_size;
+	}
+	lei = kalloc((*len) * sizeof(struct ledger_entry_info));
+	if (lei == NULL) {
+		return ENOMEM;
+	}
 	*buf = lei;
 
 	le = l->l_entries;
@@ -1652,13 +1712,13 @@ ledger_get_task_entry_info_multiple(task_t task, void **buf, int *len)
 		lei++;
 	}
 
-	return (0);
+	return 0;
 }
 
 void
 ledger_get_entry_info(ledger_t                  ledger,
-                      int                       entry,
-                      struct ledger_entry_info *lei)
+    int                       entry,
+    struct ledger_entry_info *lei)
 {
 	uint64_t now = mach_absolute_time();
 
@@ -1676,15 +1736,16 @@ ledger_info(task_t task, struct ledger_info *info)
 {
 	ledger_t l;
 
-	if ((l = task->ledger) == NULL)
-		return (ENOENT);
+	if ((l = task->ledger) == NULL) {
+		return ENOENT;
+	}
 
-	memset(info, 0, sizeof (*info));
+	memset(info, 0, sizeof(*info));
 
 	strlcpy(info->li_name, l->l_template->lt_name, LEDGER_NAME_MAX);
 	info->li_id = l->l_id;
 	info->li_entries = l->l_size;
-	return (0);
+	return 0;
 }
 
 #ifdef LEDGER_DEBUG
@@ -1695,12 +1756,14 @@ ledger_limit(task_t task, struct ledger_limit_args *args)
 	int64_t limit;
 	int idx;
 
-	if ((l = task->ledger) == NULL)
-		return (EINVAL);
+	if ((l = task->ledger) == NULL) {
+		return EINVAL;
+	}
 
 	idx = ledger_key_lookup(l->l_template, args->lla_name);
-	if ((idx < 0) || (idx >= l->l_size))
-		return (EINVAL);
+	if ((idx < 0) || (idx >= l->l_size)) {
+		return EINVAL;
+	}
 
 	/*
 	 * XXX - this doesn't really seem like the right place to have
@@ -1714,7 +1777,7 @@ ledger_limit(task_t task, struct ledger_limit_args *args)
 
 		if (args->lla_refill_period) {
 			/*
-			 * If a refill is scheduled, then the limit is 
+			 * If a refill is scheduled, then the limit is
 			 * specified as a percentage of one CPU.  The
 			 * syscall specifies the refill period in terms of
 			 * milliseconds, so we need to convert to nsecs.
@@ -1739,11 +1802,12 @@ ledger_limit(task_t task, struct ledger_limit_args *args)
 		lprintf(("%s limited to %lld\n", args->lla_name, limit));
 	}
 
-	if (args->lla_refill_period > 0)
+	if (args->lla_refill_period > 0) {
 		ledger_set_period(l, idx, args->lla_refill_period);
+	}
 
 	ledger_set_limit(l, idx, limit);
 	flag_set(&l->l_entries[idx].le_flags, LEDGER_ACTION_BLOCK);
-	return (0);
+	return 0;
 }
 #endif

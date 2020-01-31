@@ -178,7 +178,7 @@ typedef struct priority_queue_entry {
  * comparision result to indicate relative ordering of elements according to the heap type
  */
 typedef int (^priority_queue_compare_fn_t)(struct priority_queue_entry *e1,
-		struct priority_queue_entry *e2);
+    struct priority_queue_entry *e2);
 
 /*
  * Standard comparision routines for max and min heap.
@@ -191,21 +191,21 @@ priority_queue_element_builtin_key_compare(priority_queue_entry_t e1, priority_q
 }
 
 #define priority_heap_make_comparator(name1, name2, type, field, ...) \
-        (^int(priority_queue_entry_t __e1, priority_queue_entry_t __e2){                                        \
-            type *name1 = pqe_element_fast(__e1, type, field);                                                  \
-            type *name2 = pqe_element_fast(__e2, type, field);                                                  \
-            __VA_ARGS__;                                                                                        \
-        })
+	(^int(priority_queue_entry_t __e1, priority_queue_entry_t __e2){                                        \
+	    type *name1 = pqe_element_fast(__e1, type, field);                                                  \
+	    type *name2 = pqe_element_fast(__e2, type, field);                                                  \
+	    __VA_ARGS__;                                                                                        \
+	})
 
 #define PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE                                                               \
-        (^int(priority_queue_entry_t e1, priority_queue_entry_t e2){                                            \
-            return -priority_queue_element_builtin_key_compare(e1, e2);                                         \
-        })
+	(^int(priority_queue_entry_t e1, priority_queue_entry_t e2){                                            \
+	    return -priority_queue_element_builtin_key_compare(e1, e2);                                         \
+	})
 
 #define PRIORITY_QUEUE_SCHED_PRI_MIN_HEAP_COMPARE                                                               \
-        (^int(priority_queue_entry_t e1, priority_queue_entry_t e2){                                            \
-            return priority_queue_element_builtin_key_compare(e1, e2);                                          \
-        })
+	(^int(priority_queue_entry_t e1, priority_queue_entry_t e2){                                            \
+	    return priority_queue_element_builtin_key_compare(e1, e2);                                          \
+	})
 
 /*
  * Helper routines for packing/unpacking the child pointer in heap nodes.
@@ -266,21 +266,21 @@ struct priority_queue {
  *              <type *> containing qe
  */
 #define pqe_element(qe, type, field)  ({                                                                        \
-        priority_queue_entry_t _tmp_entry = (qe);                                                               \
-        _tmp_entry ? pqe_element_fast(_tmp_entry, type, field) : ((type *)NULL);                                \
+	priority_queue_entry_t _tmp_entry = (qe);                                                               \
+	_tmp_entry ? pqe_element_fast(_tmp_entry, type, field) : ((type *)NULL);                                \
 })
 
 #define pqueue_has_generic_keys(p) \
-        (((p)->pq_root_packed & PRIORITY_QUEUE_GENERIC_KEY) != 0)
+	(((p)->pq_root_packed & PRIORITY_QUEUE_GENERIC_KEY) != 0)
 
 #define pqueue_has_builtin_keys(p) \
-        (((p)->pq_root_packed & PRIORITY_QUEUE_GENERIC_KEY) == 0)
+	(((p)->pq_root_packed & PRIORITY_QUEUE_GENERIC_KEY) == 0)
 
 #define pqueue_is_min_heap(p) \
-        (((p)->pq_root_packed & PRIORITY_QUEUE_MIN_HEAP) != 0)
+	(((p)->pq_root_packed & PRIORITY_QUEUE_MIN_HEAP) != 0)
 
 #define pqueue_is_max_heap(p) \
-        (((p)->pq_root_packed & PRIORITY_QUEUE_MIN_HEAP) == 0)
+	(((p)->pq_root_packed & PRIORITY_QUEUE_MIN_HEAP) == 0)
 
 /*
  *      Macro:          pqueue_pack_root
@@ -293,8 +293,8 @@ struct priority_queue {
  */
 #define pqueue_pack_root(q, root_ptr)                                                                           \
 MACRO_BEGIN                                                                                                     \
-        uintptr_t __flags = (q)->pq_root_packed & PRIORITY_QUEUE_ROOT_FLAGS_MASK;                               \
-        (q)->pq_root_packed = (uintptr_t)(root_ptr) | __flags;                                                  \
+	uintptr_t __flags = (q)->pq_root_packed & PRIORITY_QUEUE_ROOT_FLAGS_MASK;                               \
+	(q)->pq_root_packed = (uintptr_t)(root_ptr) | __flags;                                                  \
 MACRO_END
 
 /*
@@ -308,7 +308,7 @@ MACRO_END
  *              <priority_queue_entry_t>
  */
 #define pqueue_unpack_root(q) \
-        ((priority_queue_entry_t)((q)->pq_root_packed & PRIORITY_QUEUE_ROOT_POINTER_MASK))
+	((priority_queue_entry_t)((q)->pq_root_packed & PRIORITY_QUEUE_ROOT_POINTER_MASK))
 
 /*
  *      Macro:          pqueue_list_remove
@@ -333,8 +333,9 @@ pqueue_list_remove(priority_queue_entry_t elt)
 		elt->prev->next = elt->next;
 	}
 	/* Update prev for next element in list */
-	if (elt->next != NULL)
+	if (elt->next != NULL) {
 		elt->next->prev = elt->prev;
+	}
 }
 
 /*
@@ -353,7 +354,7 @@ pqueue_list_remove(priority_queue_entry_t elt)
  */
 static inline priority_queue_entry_t
 pqueue_merge(priority_queue_entry_t subtree_a, priority_queue_entry_t subtree_b,
-		priority_queue_compare_fn_t cmp_fn)
+    priority_queue_compare_fn_t cmp_fn)
 {
 	priority_queue_entry_t merge_result = NULL;
 	if (subtree_a == NULL) {
@@ -370,8 +371,9 @@ pqueue_merge(priority_queue_entry_t subtree_a, priority_queue_entry_t subtree_b,
 		/* Insert the child as the first element in the parent's child list */
 		child->next = pqueue_entry_unpack_child(parent);
 		child->prev = parent;
-		if (pqueue_entry_unpack_child(parent) != NULL)
+		if (pqueue_entry_unpack_child(parent) != NULL) {
 			pqueue_entry_unpack_child(parent)->prev = child;
+		}
 		/* Create the parent child relationship */
 		pqueue_entry_pack_child(parent, child);
 		parent->next = NULL;
@@ -415,7 +417,7 @@ pqueue_pair_meld(priority_queue_entry_t e, priority_queue_compare_fn_t cmp_fn);
  */
 static inline void
 pqueue_update_key(struct priority_queue *que, priority_queue_entry_t elt,
-		priority_queue_key_t new_key)
+    priority_queue_key_t new_key)
 {
 	if (pqueue_has_builtin_keys(que)) {
 		assert(new_key <= UINT8_MAX);
@@ -439,10 +441,12 @@ pqueue_update_key(struct priority_queue *que, priority_queue_entry_t elt,
  */
 static inline priority_queue_entry_t
 pqueue_remove_root(struct priority_queue *que, priority_queue_entry_t old_root,
-		priority_queue_compare_fn_t cmp_fn)
+    priority_queue_compare_fn_t cmp_fn)
 {
 	priority_queue_entry_t new_root = pqueue_entry_unpack_child(old_root);
-	if (new_root) new_root = pqueue_pair_meld(new_root, cmp_fn);
+	if (new_root) {
+		new_root = pqueue_pair_meld(new_root, cmp_fn);
+	}
 	pqueue_pack_root(que, new_root);
 	return old_root;
 }
@@ -461,7 +465,7 @@ pqueue_remove_root(struct priority_queue *que, priority_queue_entry_t old_root,
  */
 static inline priority_queue_entry_t
 pqueue_remove_non_root(struct priority_queue *que, priority_queue_entry_t elt,
-		priority_queue_compare_fn_t cmp_fn)
+    priority_queue_compare_fn_t cmp_fn)
 {
 	priority_queue_entry_t child, new_root;
 
@@ -503,8 +507,8 @@ pqueue_remove_non_root(struct priority_queue *que, priority_queue_entry_t elt,
  *              None
  */
 void
-pqueue_destroy(struct priority_queue *q, size_t offset,
-		void (^callback)(void *e));
+    pqueue_destroy(struct priority_queue *q, size_t offset,
+    void (^callback)(void *e));
 
 /*
  * Priority Queue functionality routines
@@ -531,8 +535,8 @@ pqueue_destroy(struct priority_queue *q, size_t offset,
  *                      <struct priority_queue_entry *> elt
  */
 #define priority_queue_entry_key(q, elt) ({                                                                     \
-        assert(pqueue_has_builtin_keys(q));                                                                     \
-        (priority_queue_key_t)((elt)->key);                                                                     \
+	assert(pqueue_has_builtin_keys(q));                                                                     \
+	(priority_queue_key_t)((elt)->key);                                                                     \
 })
 
 /*
@@ -551,8 +555,8 @@ pqueue_destroy(struct priority_queue *q, size_t offset,
  */
 #define priority_queue_init(q, flags)                                                                           \
 MACRO_BEGIN                                                                                                     \
-        pqueue_pack_root((q), NULL);                                                                            \
-        (q)->pq_root_packed = (flags);                                                                          \
+	pqueue_pack_root((q), NULL);                                                                            \
+	(q)->pq_root_packed = (flags);                                                                          \
 MACRO_END
 
 /*
@@ -567,10 +571,10 @@ MACRO_END
  */
 #define priority_queue_entry_init(qe)                                                                           \
 MACRO_BEGIN                                                                                                     \
-        (qe)->next = NULL;                                                                                      \
-        (qe)->prev = NULL;                                                                                      \
-        pqueue_entry_pack_child((qe), NULL);                                                                    \
-        (qe)->key = PRIORITY_QUEUE_KEY_NONE;                                                                    \
+	(qe)->next = NULL;                                                                                      \
+	(qe)->prev = NULL;                                                                                      \
+	pqueue_entry_pack_child((qe), NULL);                                                                    \
+	(qe)->key = PRIORITY_QUEUE_KEY_NONE;                                                                    \
 MACRO_END
 
 /*
@@ -588,7 +592,7 @@ MACRO_END
  */
 static inline boolean_t
 priority_queue_insert(struct priority_queue *que, priority_queue_entry_t elt,
-		priority_queue_key_t new_key, priority_queue_compare_fn_t cmp_fn)
+    priority_queue_key_t new_key, priority_queue_compare_fn_t cmp_fn)
 {
 	priority_queue_entry_t new_root;
 
@@ -612,7 +616,7 @@ priority_queue_insert(struct priority_queue *que, priority_queue_entry_t elt,
  */
 static inline boolean_t
 priority_queue_remove(struct priority_queue *que, priority_queue_entry_t elt,
-		priority_queue_compare_fn_t cmp_fn)
+    priority_queue_compare_fn_t cmp_fn)
 {
 	if (elt == pqueue_unpack_root(que)) {
 		pqueue_remove_root(que, elt, cmp_fn);
@@ -651,7 +655,7 @@ priority_queue_remove(struct priority_queue *que, priority_queue_entry_t elt,
  */
 static inline boolean_t
 priority_queue_entry_decrease(struct priority_queue *que, priority_queue_entry_t elt,
-		priority_queue_key_t new_key, priority_queue_compare_fn_t cmp_fn)
+    priority_queue_key_t new_key, priority_queue_compare_fn_t cmp_fn)
 {
 	boolean_t was_root = priority_queue_remove(que, elt, cmp_fn);
 	/* Insert it back in the heap; insertion also causes the priority update in the element */
@@ -685,7 +689,7 @@ priority_queue_entry_decrease(struct priority_queue *que, priority_queue_entry_t
  */
 static inline boolean_t
 priority_queue_entry_increase(struct priority_queue *que, priority_queue_entry_t elt,
-		priority_queue_key_t new_key, priority_queue_compare_fn_t cmp_fn)
+    priority_queue_key_t new_key, priority_queue_compare_fn_t cmp_fn)
 {
 	if (elt == pqueue_unpack_root(que)) {
 		pqueue_update_key(que, elt, new_key);
@@ -719,8 +723,8 @@ priority_queue_entry_increase(struct priority_queue *que, priority_queue_entry_t
  *              <type *> max element
  */
 #define priority_queue_max(q, type, field) ({                                                                   \
-        assert(pqueue_is_max_heap(q));                                                                          \
-        pqe_element(pqueue_unpack_root(q), type, field);                                                        \
+	assert(pqueue_is_max_heap(q));                                                                          \
+	pqe_element(pqueue_unpack_root(q), type, field);                                                        \
 })
 
 /*
@@ -737,8 +741,8 @@ priority_queue_entry_increase(struct priority_queue *que, priority_queue_entry_t
  *              <type *> min element
  */
 #define priority_queue_min(q, type, field) ({                                                                   \
-        assert(pqueue_is_min_heap(que));                                                                         \
-        priority_queue_entry_key(pqueue_unpack_root(q), type, field);                                           \
+	assert(pqueue_is_min_heap(que));                                                                         \
+	priority_queue_entry_key(pqueue_unpack_root(q), type, field);                                           \
 })
 
 /*
@@ -752,8 +756,8 @@ priority_queue_entry_increase(struct priority_queue *que, priority_queue_entry_t
  *              <type *> max key
  */
 #define priority_queue_max_key(q) ({                                                                            \
-        assert(pqueue_is_max_heap(q));                                                                          \
-        priority_queue_entry_key(q, pqueue_unpack_root(q));                                                     \
+	assert(pqueue_is_max_heap(q));                                                                          \
+	priority_queue_entry_key(q, pqueue_unpack_root(q));                                                     \
 })
 
 /*
@@ -767,8 +771,8 @@ priority_queue_entry_increase(struct priority_queue *que, priority_queue_entry_t
  *              <type *> min key
  */
 #define priority_queue_min_key(q) ({                                                                            \
-        assert(pqueue_is_min_heap(q));                                                                          \
-        priority_queue_entry_key(pqueue_unpack_root(q));                                                        \
+	assert(pqueue_is_min_heap(q));                                                                          \
+	priority_queue_entry_key(pqueue_unpack_root(q));                                                        \
 })
 
 /*
@@ -785,8 +789,8 @@ priority_queue_entry_increase(struct priority_queue *que, priority_queue_entry_t
  *              <type *> max element
  */
 #define priority_queue_remove_max(q, type, field, cmp_fn) ({                                                    \
-        assert(pqueue_is_max_heap(q));                                                                          \
-        pqe_element(pqueue_remove_root(q, pqueue_unpack_root(q), cmp_fn), type, field);                         \
+	assert(pqueue_is_max_heap(q));                                                                          \
+	pqe_element(pqueue_remove_root(q, pqueue_unpack_root(q), cmp_fn), type, field);                         \
 })
 
 /*
@@ -803,8 +807,8 @@ priority_queue_entry_increase(struct priority_queue *que, priority_queue_entry_t
  *              <type *> min element
  */
 #define priority_queue_remove_min(q, type, field, cmp_fn) ({                                                    \
-        assert(pqueue_is_min_heap(que));                                                                         \
-        pqe_element(pqueue_remove_root(q, pqueue_unpack_root(q), cmp_fn), type, field);                         \
+	assert(pqueue_is_min_heap(que));                                                                         \
+	pqe_element(pqueue_remove_root(q, pqueue_unpack_root(q), cmp_fn), type, field);                         \
 })
 
 /*
@@ -825,7 +829,7 @@ priority_queue_entry_increase(struct priority_queue *que, priority_queue_entry_t
  *              None
  */
 #define priority_queue_destroy(q, type, field, callback, ...) \
-        pqueue_destroy(q, offsetof(type, field), callback, ##__VA_ARGS__)
+	pqueue_destroy(q, offsetof(type, field), callback, ##__VA_ARGS__)
 
 __END_DECLS
 

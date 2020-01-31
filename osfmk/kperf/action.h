@@ -54,10 +54,10 @@ struct kperf_context;
 #define SAMPLER_TK_INFO       (1U << 13)
 
 #define SAMPLER_TASK_MASK (SAMPLER_MEMINFO | SAMPLER_TK_SNAPSHOT | \
-		SAMPLER_TK_INFO)
+	        SAMPLER_TK_INFO)
 #define SAMPLER_THREAD_MASK (SAMPLER_TH_INFO | SAMPLER_TH_SNAPSHOT | \
-		SAMPLER_KSTACK | SAMPLER_USTACK | SAMPLER_PMC_THREAD | \
-		SAMPLER_TH_SCHEDULING | SAMPLER_TH_DISPATCH | SAMPLER_TH_INSCYC)
+	        SAMPLER_KSTACK | SAMPLER_USTACK | SAMPLER_PMC_THREAD | \
+	        SAMPLER_TH_SCHEDULING | SAMPLER_TH_DISPATCH | SAMPLER_TH_INSCYC)
 
 /* flags for sample calls */
 
@@ -82,9 +82,9 @@ struct kperf_context;
 
 /*  Take a sample into "sbuf" using current thread "cur_thread" */
 kern_return_t kperf_sample(struct kperf_sample *sbuf,
-                           struct kperf_context *ctx,
-                           unsigned actionid,
-                           unsigned sample_flags);
+    struct kperf_context *ctx,
+    unsigned actionid,
+    unsigned sample_flags);
 
 /* Whether the action provided samples non-system values. */
 bool kperf_action_has_non_system(unsigned actionid);

@@ -9,6 +9,10 @@
 #error "Please #include <img4/img4.h> instead of this file directly"
 #endif // __IMG4_INDIRECT
 
+#if IMG4_TAPI
+#include <stdint.h>
+#endif
+
 #ifndef KERNEL
 #include <os/availability.h>
 #endif
@@ -36,14 +40,23 @@
  * individual preprocessor macros in this header that declare new behavior as
  * required.
  */
-#define IMG4_API_VERSION (20180112u)
+#define IMG4_API_VERSION (20181106u)
 
 #if !defined(KERNEL) && !IMG4_PROJECT_BUILD
 #define IMG4_API_AVAILABLE_20180112 \
 		__API_UNAVAILABLE(macos) \
 		API_AVAILABLE(ios(12.0), tvos(12.0), watchos(5.0))
+#define IMG4_API_AVAILABLE_20181004 \
+		__API_UNAVAILABLE(macos) \
+		API_AVAILABLE(ios(12.2), tvos(12.2), watchos(5.2))
+#define IMG4_API_AVAILABLE_20181106 \
+		__API_UNAVAILABLE(macos) \
+		API_AVAILABLE(ios(12.2), tvos(12.2), watchos(5.2))
+#define IMG4_API_AVAILABLE_20181106
 #else
 #define IMG4_API_AVAILABLE_20180112
+#define IMG4_API_AVAILABLE_20181004
+#define IMG4_API_AVAILABLE_20181106
 #endif
 
 /*!

@@ -52,14 +52,14 @@
 
 u_int32_t machclk_freq = 0;
 u_int64_t machclk_per_sec = 0;
-u_int32_t pktsched_verbose;	/* more noise if greater than 1 */
+u_int32_t pktsched_verbose;     /* more noise if greater than 1 */
 
 static void init_machclk(void);
 
-SYSCTL_NODE(_net, OID_AUTO, pktsched, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "pktsched");
+SYSCTL_NODE(_net, OID_AUTO, pktsched, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "pktsched");
 
-SYSCTL_UINT(_net_pktsched, OID_AUTO, verbose, CTLFLAG_RW|CTLFLAG_LOCKED,
-	&pktsched_verbose, 0, "Packet scheduler verbosity level");
+SYSCTL_UINT(_net_pktsched, OID_AUTO, verbose, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &pktsched_verbose, 0, "Packet scheduler verbosity level");
 
 void
 pktsched_init(void)
@@ -93,7 +93,7 @@ pktsched_abs_to_nsecs(u_int64_t abstime)
 	u_int64_t nsecs;
 
 	absolutetime_to_nanoseconds(abstime, &nsecs);
-	return (nsecs);
+	return nsecs;
 }
 
 u_int64_t
@@ -102,7 +102,7 @@ pktsched_nsecs_to_abstime(u_int64_t nsecs)
 	u_int64_t abstime;
 
 	nanoseconds_to_absolutetime(nsecs, &abstime);
-	return (abstime);
+	return abstime;
 }
 
 int
@@ -117,8 +117,9 @@ pktsched_setup(struct ifclassq *ifq, u_int32_t scheduler, u_int32_t sflags,
 	VERIFY(machclk_freq != 0);
 
 	/* Nothing to do unless the scheduler type changes */
-	if (ifq->ifcq_type == scheduler)
-		return (0);
+	if (ifq->ifcq_type == scheduler) {
+		return 0;
+	}
 
 	/*
 	 * Remember the flags that need to be restored upon success, as
@@ -154,10 +155,11 @@ pktsched_setup(struct ifclassq *ifq, u_int32_t scheduler, u_int32_t sflags,
 		break;
 	}
 
-	if (error == 0)
+	if (error == 0) {
 		ifq->ifcq_flags |= rflags;
+	}
 
-	return (error);
+	return error;
 }
 
 int
@@ -191,7 +193,7 @@ pktsched_teardown(struct ifclassq *ifq)
 		error = ENXIO;
 		break;
 	}
-	return (error);
+	return error;
 }
 
 int
@@ -219,7 +221,7 @@ pktsched_getqstats(struct ifclassq *ifq, u_int32_t qid,
 		break;
 	}
 
-	return (error);
+	return error;
 }
 
 void
@@ -263,7 +265,7 @@ pktsched_free_pkt(pktsched_pkt_t *pkt)
 uint32_t
 pktsched_get_pkt_len(pktsched_pkt_t *pkt)
 {
-	return (pkt->pktsched_plen);
+	return pkt->pktsched_plen;
 }
 
 mbuf_svc_class_t
@@ -282,7 +284,7 @@ pktsched_get_pkt_svc(pktsched_pkt_t *pkt)
 		/* NOTREACHED */
 	}
 
-	return (svc);
+	return svc;
 }
 
 void
@@ -295,22 +297,28 @@ pktsched_get_pkt_vars(pktsched_pkt_t *pkt, uint32_t **flags,
 		struct mbuf *m = (struct mbuf *)pkt->pktsched_pkt;
 		struct pkthdr *pkth = &m->m_pkthdr;
 
-		if (flags != NULL)
+		if (flags != NULL) {
 			*flags = &pkth->pkt_flags;
-		if (timestamp != NULL)
+		}
+		if (timestamp != NULL) {
 			*timestamp = &pkth->pkt_timestamp;
-		if (flowid != NULL)
+		}
+		if (flowid != NULL) {
 			*flowid = pkth->pkt_flowid;
-		if (flowsrc != NULL)
+		}
+		if (flowsrc != NULL) {
 			*flowsrc = pkth->pkt_flowsrc;
-		if (proto != NULL)
+		}
+		if (proto != NULL) {
 			*proto = pkth->pkt_proto;
+		}
 		/*
 		 * caller should use this value only if PKTF_START_SEQ
 		 * is set in the mbuf packet flags
 		 */
-		if (tcp_start_seq != NULL)
+		if (tcp_start_seq != NULL) {
 			*tcp_start_seq = pkth->tx_start_seq;
+		}
 
 		break;
 	}
@@ -333,11 +341,12 @@ pktsched_alloc_fcentry(pktsched_pkt_t *pkt, struct ifnet *ifp, int how)
 		struct mbuf *m = (struct mbuf *)pkt->pktsched_pkt;
 
 		fce = flowadv_alloc_entry(how);
-		if (fce == NULL)
+		if (fce == NULL) {
 			break;
+		}
 
-		_CASSERT(sizeof (m->m_pkthdr.pkt_flowid) ==
-		    sizeof (fce->fce_flowid));
+		_CASSERT(sizeof(m->m_pkthdr.pkt_flowid) ==
+		    sizeof(fce->fce_flowid));
 
 		fce->fce_flowsrc_type = m->m_pkthdr.pkt_flowsrc;
 		fce->fce_flowid = m->m_pkthdr.pkt_flowid;
@@ -350,7 +359,7 @@ pktsched_alloc_fcentry(pktsched_pkt_t *pkt, struct ifnet *ifp, int how)
 		/* NOTREACHED */
 	}
 
-	return (fce);
+	return fce;
 }
 
 uint32_t *
@@ -363,8 +372,8 @@ pktsched_get_pkt_sfb_vars(pktsched_pkt_t *pkt, uint32_t **sfb_flags)
 		struct mbuf *m = (struct mbuf *)pkt->pktsched_pkt;
 		struct pkthdr *pkth = &m->m_pkthdr;
 
-		_CASSERT(sizeof (pkth->pkt_mpriv_hash) == sizeof (uint32_t));
-		_CASSERT(sizeof (pkth->pkt_mpriv_flags) == sizeof (uint32_t));
+		_CASSERT(sizeof(pkth->pkt_mpriv_hash) == sizeof(uint32_t));
+		_CASSERT(sizeof(pkth->pkt_mpriv_flags) == sizeof(uint32_t));
 
 		*sfb_flags = &pkth->pkt_mpriv_flags;
 		hashp = &pkth->pkt_mpriv_hash;
@@ -377,5 +386,5 @@ pktsched_get_pkt_sfb_vars(pktsched_pkt_t *pkt, uint32_t **sfb_flags)
 		/* NOTREACHED */
 	}
 
-	return (hashp);
+	return hashp;
 }

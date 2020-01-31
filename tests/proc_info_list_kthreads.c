@@ -19,14 +19,14 @@
 
 #if TARGET_OS_OSX
 T_DECL(proc_info_list_kthreads,
-       "Test to verify PROC_PIDLISTTHREADIDS returns kernel thread IDs for pid 0",
-       T_META_ASROOT(true),
-       T_META_CHECK_LEAKS(false))
+    "Test to verify PROC_PIDLISTTHREADIDS returns kernel thread IDs for pid 0",
+    T_META_ASROOT(true),
+    T_META_CHECK_LEAKS(false))
 #else
 T_DECL(proc_info_list_kthreads,
-       "Test to verify PROC_PIDLISTTHREADIDS returns kernel thread IDs for pid 0",
-       T_META_ASROOT(false),
-       T_META_CHECK_LEAKS(false))
+    "Test to verify PROC_PIDLISTTHREADIDS returns kernel thread IDs for pid 0",
+    T_META_ASROOT(false),
+    T_META_CHECK_LEAKS(false))
 #endif /* TARGET_OS_OSX */
 {
 	int buf_used = 0;
@@ -57,7 +57,7 @@ T_DECL(proc_info_list_kthreads,
 
 		int expected_size  = ti.pti_threadnum * (int)sizeof(uint64_t);
 		/* tack on five extra to detect newly allocated threads */
-		int allocated_size = expected_size + EXTRA_THREADS*(int)sizeof(uint64_t);
+		int allocated_size = expected_size + EXTRA_THREADS * (int)sizeof(uint64_t);
 		uint64_t *thread_list_tmp = malloc((size_t)allocated_size);
 		T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(thread_list_tmp, "malloc(size = %d) failed", allocated_size);
 
@@ -87,7 +87,7 @@ T_DECL(proc_info_list_kthreads,
 				 * threads than we thought, try again!
 				 */
 				T_LOG("expected %d threads, but saw an extra thread: %d",
-				       expected_size / (int)sizeof(uint64_t), buf_used / (int)sizeof(uint64_t));
+				    expected_size / (int)sizeof(uint64_t), buf_used / (int)sizeof(uint64_t));
 				free(thread_list_tmp);
 			}
 		}
@@ -98,13 +98,12 @@ T_DECL(proc_info_list_kthreads,
 	T_QUIET; T_ASSERT_GT(thread_count, 0, "thread_count > 0");
 
 	struct proc_threadinfo pthinfo_64;
-	for (int i = 0 ; i < thread_count ; i++) {
+	for (int i = 0; i < thread_count; i++) {
 		bzero(&pthinfo_64, sizeof(struct proc_threadinfo));
 		int retval = proc_pidinfo(0, PROC_PIDTHREADID64INFO, thread_list[i],
-					  (void *)&pthinfo_64, (uint32_t)sizeof(pthinfo_64));
+		    (void *)&pthinfo_64, (uint32_t)sizeof(pthinfo_64));
 		T_QUIET; T_WITH_ERRNO; T_EXPECT_GT(retval, 0, "proc_pidinfo(PROC_PIDTASKINFO) returned %d", retval);
 		T_QUIET; T_EXPECT_EQ(retval, (int)sizeof(pthinfo_64), "proc_pidinfo(PROC_PIDTASKINFO) returned size %d == %lu",
-				     retval, sizeof(pthinfo_64));
+		    retval, sizeof(pthinfo_64));
 	}
 }
-

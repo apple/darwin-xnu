@@ -96,7 +96,7 @@
  */
 
 #ifndef _NETINET6_IP6PROTOSW_H_
-#define	_NETINET6_IP6PROTOSW_H_
+#define _NETINET6_IP6PROTOSW_H_
 #include <sys/appleapiopts.h>
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -135,15 +135,15 @@ struct pr_usrreqs;
  * ip6c_dst: ip6c_finaldst + scope info
  */
 struct ip6ctlparam {
-	struct mbuf *ip6c_m;		/* start of mbuf chain */
-	struct icmp6_hdr *ip6c_icmp6;	/* icmp6 header of target packet */
-	struct ip6_hdr *ip6c_ip6;	/* ip6 header of target packet */
-	int ip6c_off;			/* offset of the target proto header */
-	struct sockaddr_in6 *ip6c_src;	/* srcaddr w/ additional info */
-	struct sockaddr_in6 *ip6c_dst;	/* (final) dstaddr w/ additional info */
-	struct in6_addr *ip6c_finaldst;	/* final destination address */
-	void *ip6c_cmdarg;		/* control command dependent data */
-	u_int8_t ip6c_nxt;		/* final next header field */
+	struct mbuf *ip6c_m;            /* start of mbuf chain */
+	struct icmp6_hdr *ip6c_icmp6;   /* icmp6 header of target packet */
+	struct ip6_hdr *ip6c_ip6;       /* ip6 header of target packet */
+	int ip6c_off;                   /* offset of the target proto header */
+	struct sockaddr_in6 *ip6c_src;  /* srcaddr w/ additional info */
+	struct sockaddr_in6 *ip6c_dst;  /* (final) dstaddr w/ additional info */
+	struct in6_addr *ip6c_finaldst; /* final destination address */
+	void *ip6c_cmdarg;              /* control command dependent data */
+	u_int8_t ip6c_nxt;              /* final next header field */
 };
 
 /*
@@ -154,41 +154,41 @@ struct ip6ctlparam {
  */
 struct ip6protosw {
 	TAILQ_ENTRY(ip6protosw) pr_entry; /* chain for domain */
-	struct	domain *pr_domain;	/* domain protocol a member of */
-	struct protosw *pr_protosw;	/* pointer to self */
-	u_int16_t pr_type;		/* socket type used for */
-	u_int16_t pr_protocol;		/* protocol number */
-	u_int32_t pr_flags;		/* see below */
+	struct  domain *pr_domain;      /* domain protocol a member of */
+	struct protosw *pr_protosw;     /* pointer to self */
+	u_int16_t pr_type;              /* socket type used for */
+	u_int16_t pr_protocol;          /* protocol number */
+	u_int32_t pr_flags;             /* see below */
 	/*
 	 * protocol-protocol hooks
 	 */
-	int	(*pr_input)		/* input to protocol (from below) */
-		    (struct mbuf **, int *, int);
-	int	(*pr_output)		/* output to protocol (from above) */
-		    (struct mbuf *m, struct socket *so,
-		    struct sockaddr_in6 *, struct mbuf *);
-	void	(*pr_ctlinput)		/* control input (from below) */
-		    (int, struct sockaddr *, void *, struct ifnet *);
-	int	(*pr_ctloutput)		/* control output (from above) */
-		    (struct socket *, struct sockopt *);
+	int     (*pr_input)             /* input to protocol (from below) */
+	(struct mbuf **, int *, int);
+	int     (*pr_output)            /* output to protocol (from above) */
+	(struct mbuf *m, struct socket *so,
+	struct sockaddr_in6 *, struct mbuf *);
+	void    (*pr_ctlinput)          /* control input (from below) */
+	(int, struct sockaddr *, void *, struct ifnet *);
+	int     (*pr_ctloutput)         /* control output (from above) */
+	(struct socket *, struct sockopt *);
 	/*
 	 * user-protocol hook
 	 */
-	struct	pr_usrreqs *pr_usrreqs;	/* user request; see list below */
+	struct  pr_usrreqs *pr_usrreqs; /* user request; see list below */
 	/*
 	 * utility hooks
 	 */
-	void	(*pr_init)		/* initialization hook */
-		    (struct ip6protosw *, struct domain *);
-	void	(*pr_drain)(void);	/* flush any excess space possible */
+	void    (*pr_init)              /* initialization hook */
+	(struct ip6protosw *, struct domain *);
+	void    (*pr_drain)(void);      /* flush any excess space possible */
 	/* for compat. with IPv4 protosw */
-	int	(*pr_sysctl)(void);	/* sysctl for protocol */
-	int	(*pr_lock)		/* lock function for protocol */
-		    (struct socket *so, int refcnt, void *debug);
-	int	(*pr_unlock)		/* unlock for protocol */
-		    (struct socket *so, int refcnt, void *debug);
-	lck_mtx_t *(*pr_getlock)	/* retrieve protocol lock */
-		    (struct socket *so, int flags);
+	int     (*pr_sysctl)(void);     /* sysctl for protocol */
+	int     (*pr_lock)              /* lock function for protocol */
+	(struct socket *so, int refcnt, void *debug);
+	int     (*pr_unlock)            /* unlock for protocol */
+	(struct socket *so, int refcnt, void *debug);
+	lck_mtx_t *(*pr_getlock)        /* retrieve protocol lock */
+	(struct socket *so, int flags);
 	/*
 	 * misc
 	 */

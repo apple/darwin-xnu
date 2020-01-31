@@ -2,7 +2,7 @@
  * Copyright (c) 2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -83,10 +83,11 @@ kpc_get_thread_counting(void)
 
 	lck_mtx_unlock(&kpc_thread_lock);
 
-	if( kpc_threads_counting_tmp )
+	if (kpc_threads_counting_tmp) {
 		return kpc_thread_classes_tmp;
-	else
+	} else {
 		return 0;
+	}
 }
 
 int
@@ -98,14 +99,11 @@ kpc_set_thread_counting(uint32_t classes)
 
 	count = kpc_get_counter_count(classes);
 
-	if( (classes == 0)
-	    || (count == 0) )
-	{
+	if ((classes == 0)
+	    || (count == 0)) {
 		/* shut down */
 		kpc_threads_counting = FALSE;
-	}
-	else
-	{
+	} else {
 		/* stash the config */
 		kpc_thread_classes = classes;
 
@@ -117,14 +115,13 @@ kpc_set_thread_counting(uint32_t classes)
 		kpc_threads_counting = TRUE;
 
 		/* and schedule an AST for this thread... */
-		if( !current_thread()->kpc_buf )
-		{
+		if (!current_thread()->kpc_buf) {
 			current_thread()->kperf_flags |= T_KPC_ALLOC;
 			act_set_kperf(current_thread());
 		}
 	}
 
-    kpc_off_cpu_update();
+	kpc_off_cpu_update();
 	lck_mtx_unlock(&kpc_thread_lock);
 
 	return 0;
@@ -141,17 +138,18 @@ kpc_update_thread_counters( thread_t thread )
 	cpu = current_cpu_datap();
 
 	/* 1. stash current PMCs into latest CPU block */
-	kpc_get_cpu_counters( FALSE, kpc_thread_classes, 
-	                      NULL, cpu->cpu_kpc_buf[1] );
+	kpc_get_cpu_counters( FALSE, kpc_thread_classes,
+	    NULL, cpu->cpu_kpc_buf[1] );
 
 	/* 2. apply delta to old thread */
-	if( thread->kpc_buf )
-		for( i = 0; i < kpc_thread_classes_count; i++ )
+	if (thread->kpc_buf) {
+		for (i = 0; i < kpc_thread_classes_count; i++) {
 			thread->kpc_buf[i] += cpu->cpu_kpc_buf[1][i] - cpu->cpu_kpc_buf[0][i];
+		}
+	}
 
 	/* schedule any necessary allocations */
-	if( !current_thread()->kpc_buf )
-	{
+	if (!current_thread()->kpc_buf) {
 		current_thread()->kperf_flags |= T_KPC_ALLOC;
 		act_set_kperf(current_thread());
 	}
@@ -170,21 +168,23 @@ kpc_get_curthread_counters(uint32_t *inoutcount, uint64_t *buf)
 	boolean_t enabled;
 
 	/* buffer too small :( */
-	if( *inoutcount < kpc_thread_classes_count )
+	if (*inoutcount < kpc_thread_classes_count) {
 		return EINVAL;
+	}
 
 	/* copy data and actual size */
-	if( !thread->kpc_buf )
+	if (!thread->kpc_buf) {
 		return EINVAL;
+	}
 
 	enabled = ml_set_interrupts_enabled(FALSE);
 
 	/* snap latest version of counters for this thread */
-	kpc_update_thread_counters( current_thread() );
-	
+	kpc_update_thread_counters( current_thread());
+
 	/* copy out */
-	memcpy( buf, thread->kpc_buf, 
-	        kpc_thread_classes_count * sizeof(*buf) );
+	memcpy( buf, thread->kpc_buf,
+	    kpc_thread_classes_count * sizeof(*buf));
 	*inoutcount = kpc_thread_classes_count;
 
 	ml_set_interrupts_enabled(enabled);
@@ -210,8 +210,9 @@ void
 kpc_thread_create(thread_t thread)
 {
 	/* nothing to do if we're not counting */
-	if(!kpc_threads_counting)
+	if (!kpc_threads_counting) {
 		return;
+	}
 
 	/* give the new thread a counterbuf */
 	thread->kpc_buf = kpc_counterbuf_alloc();
@@ -223,8 +224,9 @@ kpc_thread_destroy(thread_t thread)
 	uint64_t *buf = NULL;
 
 	/* usual case: no kpc buf, just return */
-	if( !thread->kpc_buf )
+	if (!thread->kpc_buf) {
 		return;
+	}
 
 	/* otherwise, don't leak */
 	buf = thread->kpc_buf;
@@ -237,6 +239,7 @@ void
 kpc_thread_ast_handler( thread_t thread )
 {
 	/* see if we want an alloc */
-	if( thread->kperf_flags & T_KPC_ALLOC )
+	if (thread->kperf_flags & T_KPC_ALLOC) {
 		thread->kpc_buf = kpc_counterbuf_alloc();
+	}
 }

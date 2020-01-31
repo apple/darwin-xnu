@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -64,6 +64,7 @@
 #include <mach/mach_host_server.h>
 #include <mach_debug/lockgroup_info.h>
 
+#include <kern/lock_stat.h>
 #include <kern/locks.h>
 #include <kern/misc_protos.h>
 #include <kern/kalloc.h>
@@ -78,53 +79,43 @@
 
 #include <sys/kdebug.h>
 
-#if	CONFIG_DTRACE
-/*
- * We need only enough declarations from the BSD-side to be able to
- * test if our probe is active, and to call __dtrace_probe().  Setting
- * NEED_DTRACE_DEFS gets a local copy of those definitions pulled in.
- */
-#define NEED_DTRACE_DEFS
-#include <../bsd/sys/lockstat.h>
-#endif
-
-#define	LCK_MTX_SLEEP_CODE		0
-#define	LCK_MTX_SLEEP_DEADLINE_CODE	1
-#define	LCK_MTX_LCK_WAIT_CODE		2
-#define	LCK_MTX_UNLCK_WAKEUP_CODE	3
+#define LCK_MTX_SLEEP_CODE              0
+#define LCK_MTX_SLEEP_DEADLINE_CODE     1
+#define LCK_MTX_LCK_WAIT_CODE           2
+#define LCK_MTX_UNLCK_WAKEUP_CODE       3
 
 #if MACH_LDEBUG
-#define ALIGN_TEST(p,t) do{if((uintptr_t)p&(sizeof(t)-1)) __builtin_trap();}while(0)
+#define ALIGN_TEST(p, t) do{if((uintptr_t)p&(sizeof(t)-1)) __builtin_trap();}while(0)
 #else
-#define ALIGN_TEST(p,t) do{}while(0)
+#define ALIGN_TEST(p, t) do{}while(0)
 #endif
 
 /* Silence the volatile to _Atomic cast warning */
-#define ATOMIC_CAST(t,p) ((_Atomic t*)(uintptr_t)(p))
+#define ATOMIC_CAST(t, p) ((_Atomic t*)(uintptr_t)(p))
 
 /* Enforce program order of loads and stores. */
 #define ordered_load(target, type) \
-		__c11_atomic_load((_Atomic type *)(target), memory_order_relaxed)
+	        __c11_atomic_load((_Atomic type *)(target), memory_order_relaxed)
 #define ordered_store(target, type, value) \
-		__c11_atomic_store((_Atomic type *)(target), value, memory_order_relaxed)
+	        __c11_atomic_store((_Atomic type *)(target), value, memory_order_relaxed)
 
-#define ordered_load_hw(lock)			ordered_load(&(lock)->lock_data, uintptr_t)
-#define ordered_store_hw(lock, value)	ordered_store(&(lock)->lock_data, uintptr_t, (value))
+#define ordered_load_hw(lock)                   ordered_load(&(lock)->lock_data, uintptr_t)
+#define ordered_store_hw(lock, value)   ordered_store(&(lock)->lock_data, uintptr_t, (value))
 
-#define NOINLINE		__attribute__((noinline))
+#define NOINLINE                __attribute__((noinline))
 
 
-static queue_head_t	lck_grp_queue;
-static unsigned int	lck_grp_cnt;
+queue_head_t     lck_grp_queue;
+unsigned int     lck_grp_cnt;
 
-decl_lck_mtx_data(static,lck_grp_lock)
+decl_lck_mtx_data(, lck_grp_lock)
 static lck_mtx_ext_t lck_grp_lock_ext;
 
 SECURITY_READ_ONLY_LATE(boolean_t) spinlock_timeout_panic = TRUE;
 
-lck_grp_attr_t	LockDefaultGroupAttr;
-lck_grp_t		LockCompatGroup;
-lck_attr_t		LockDefaultLckAttr;
+lck_grp_attr_t  LockDefaultGroupAttr;
+lck_grp_t               LockCompatGroup;
+lck_attr_t              LockDefaultLckAttr;
 
 #if CONFIG_DTRACE && __SMP__
 #if defined (__x86_64__)
@@ -135,11 +126,13 @@ uint64_t dtrace_spin_threshold = LOCK_PANIC_TIMEOUT / 1000000; // 500ns
 #endif
 
 uintptr_t
-unslide_for_kdebug(void* object) {
-	if (__improbable(kdebug_enable))
+unslide_for_kdebug(void* object)
+{
+	if (__improbable(kdebug_enable)) {
 		return VM_KERNEL_UNSLIDE_OR_PERM(object);
-	else
+	} else {
 		return 0;
+	}
 }
 
 /*
@@ -153,38 +146,43 @@ lck_mod_init(
 	/*
 	 * Obtain "lcks" options:this currently controls lock statistics
 	 */
-	if (!PE_parse_boot_argn("lcks", &LcksOpts, sizeof (LcksOpts)))
+	if (!PE_parse_boot_argn("lcks", &LcksOpts, sizeof(LcksOpts))) {
 		LcksOpts = 0;
+	}
 
 
 #if (DEVELOPMENT || DEBUG) && defined(__x86_64__)
-	if (!PE_parse_boot_argn("-disable_mtx_chk", &LckDisablePreemptCheck, sizeof (LckDisablePreemptCheck)))
+	if (!PE_parse_boot_argn("-disable_mtx_chk", &LckDisablePreemptCheck, sizeof(LckDisablePreemptCheck))) {
 		LckDisablePreemptCheck = 0;
+	}
 #endif /* (DEVELOPMENT || DEBUG) && defined(__x86_64__) */
 
 	queue_init(&lck_grp_queue);
-	
-	/* 
+
+	/*
 	 * Need to bootstrap the LockCompatGroup instead of calling lck_grp_init() here. This avoids
 	 * grabbing the lck_grp_lock before it is initialized.
 	 */
-	
+
 	bzero(&LockCompatGroup, sizeof(lck_grp_t));
 	(void) strncpy(LockCompatGroup.lck_grp_name, "Compatibility APIs", LCK_GRP_MAX_NAME);
-	
-	if (LcksOpts & enaLkStat)
-		LockCompatGroup.lck_grp_attr = LCK_GRP_ATTR_STAT;
-    else
-		LockCompatGroup.lck_grp_attr = LCK_ATTR_NONE;
-	
+
+	LockCompatGroup.lck_grp_attr = LCK_ATTR_NONE;
+	if (LcksOpts & enaLkStat) {
+		LockCompatGroup.lck_grp_attr |= LCK_GRP_ATTR_STAT;
+	}
+	if (LcksOpts & enaLkTimeStat) {
+		LockCompatGroup.lck_grp_attr |= LCK_GRP_ATTR_TIME_STAT;
+	}
+
 	LockCompatGroup.lck_grp_refcnt = 1;
-	
+
 	enqueue_tail(&lck_grp_queue, (queue_entry_t)&LockCompatGroup);
 	lck_grp_cnt = 1;
-	
+
 	lck_grp_attr_setdefault(&LockDefaultGroupAttr);
 	lck_attr_setdefault(&LockDefaultLckAttr);
-	
+
 	lck_mtx_init_ext(&lck_grp_lock, &lck_grp_lock_ext, &LockCompatGroup, &LockDefaultLckAttr);
 }
 
@@ -192,16 +190,17 @@ lck_mod_init(
  * Routine:	lck_grp_attr_alloc_init
  */
 
-lck_grp_attr_t	*
+lck_grp_attr_t  *
 lck_grp_attr_alloc_init(
 	void)
 {
-	lck_grp_attr_t	*attr;
+	lck_grp_attr_t  *attr;
 
-	if ((attr = (lck_grp_attr_t *)kalloc(sizeof(lck_grp_attr_t))) != 0)
+	if ((attr = (lck_grp_attr_t *)kalloc(sizeof(lck_grp_attr_t))) != 0) {
 		lck_grp_attr_setdefault(attr);
+	}
 
-	return(attr);
+	return attr;
 }
 
 
@@ -211,34 +210,35 @@ lck_grp_attr_alloc_init(
 
 void
 lck_grp_attr_setdefault(
-	lck_grp_attr_t	*attr)
+	lck_grp_attr_t  *attr)
 {
-	if (LcksOpts & enaLkStat)
+	if (LcksOpts & enaLkStat) {
 		attr->grp_attr_val = LCK_GRP_ATTR_STAT;
-	else
+	} else {
 		attr->grp_attr_val = 0;
+	}
 }
 
 
 /*
- * Routine: 	lck_grp_attr_setstat
+ * Routine:     lck_grp_attr_setstat
  */
 
 void
 lck_grp_attr_setstat(
-	lck_grp_attr_t	*attr)
+	lck_grp_attr_t  *attr)
 {
 	(void)hw_atomic_or(&attr->grp_attr_val, LCK_GRP_ATTR_STAT);
 }
 
 
 /*
- * Routine: 	lck_grp_attr_free
+ * Routine:     lck_grp_attr_free
  */
 
 void
 lck_grp_attr_free(
-	lck_grp_attr_t	*attr)
+	lck_grp_attr_t  *attr)
 {
 	kfree(attr, sizeof(lck_grp_attr_t));
 }
@@ -250,15 +250,16 @@ lck_grp_attr_free(
 
 lck_grp_t *
 lck_grp_alloc_init(
-	const char*	grp_name,
-	lck_grp_attr_t	*attr)
+	const char*     grp_name,
+	lck_grp_attr_t  *attr)
 {
-	lck_grp_t	*grp;
+	lck_grp_t       *grp;
 
-	if ((grp = (lck_grp_t *)kalloc(sizeof(lck_grp_t))) != 0)
+	if ((grp = (lck_grp_t *)kalloc(sizeof(lck_grp_t))) != 0) {
 		lck_grp_init(grp, grp_name, attr);
+	}
 
-	return(grp);
+	return grp;
 }
 
 /*
@@ -275,12 +276,36 @@ lck_grp_init(lck_grp_t * grp, const char * grp_name, lck_grp_attr_t * attr)
 
 	(void)strlcpy(grp->lck_grp_name, grp_name, LCK_GRP_MAX_NAME);
 
-	if (attr != LCK_GRP_ATTR_NULL)
+	if (attr != LCK_GRP_ATTR_NULL) {
 		grp->lck_grp_attr = attr->grp_attr_val;
-	else if (LcksOpts & enaLkStat)
-		grp->lck_grp_attr = LCK_GRP_ATTR_STAT;
-	else
-		grp->lck_grp_attr = LCK_ATTR_NONE;
+	} else {
+		grp->lck_grp_attr = 0;
+		if (LcksOpts & enaLkStat) {
+			grp->lck_grp_attr |= LCK_GRP_ATTR_STAT;
+		}
+		if (LcksOpts & enaLkTimeStat) {
+			grp->lck_grp_attr |= LCK_GRP_ATTR_TIME_STAT;
+		}
+	}
+
+	if (grp->lck_grp_attr & LCK_GRP_ATTR_STAT) {
+		lck_grp_stats_t *stats = &grp->lck_grp_stats;
+
+#if LOCK_STATS
+		lck_grp_stat_enable(&stats->lgss_spin_held);
+		lck_grp_stat_enable(&stats->lgss_spin_miss);
+#endif /* LOCK_STATS */
+
+		lck_grp_stat_enable(&stats->lgss_mtx_held);
+		lck_grp_stat_enable(&stats->lgss_mtx_miss);
+		lck_grp_stat_enable(&stats->lgss_mtx_direct_wait);
+	}
+	if (grp->lck_grp_attr * LCK_GRP_ATTR_TIME_STAT) {
+#if LOCK_STATS
+		lck_grp_stats_t *stats = &grp->lck_grp_stats;
+		lck_grp_stat_enable(&stats->lgss_spin_spin);
+#endif /* LOCK_STATS */
+	}
 
 	grp->lck_grp_refcnt = 1;
 
@@ -291,12 +316,12 @@ lck_grp_init(lck_grp_t * grp, const char * grp_name, lck_grp_attr_t * attr)
 }
 
 /*
- * Routine: 	lck_grp_free
+ * Routine:     lck_grp_free
  */
 
 void
 lck_grp_free(
-	lck_grp_t	*grp)
+	lck_grp_t       *grp)
 {
 	lck_mtx_lock(&lck_grp_lock);
 	lck_grp_cnt--;
@@ -307,27 +332,28 @@ lck_grp_free(
 
 
 /*
- * Routine: 	lck_grp_reference
+ * Routine:     lck_grp_reference
  */
 
 void
 lck_grp_reference(
-	lck_grp_t	*grp)
+	lck_grp_t       *grp)
 {
 	(void)hw_atomic_add(&grp->lck_grp_refcnt, 1);
 }
 
 
 /*
- * Routine: 	lck_grp_deallocate
+ * Routine:     lck_grp_deallocate
  */
 
 void
 lck_grp_deallocate(
-	lck_grp_t	*grp)
+	lck_grp_t       *grp)
 {
-	if (hw_atomic_sub(&grp->lck_grp_refcnt, 1) == 0)
-	 	kfree(grp, sizeof(lck_grp_t));
+	if (hw_atomic_sub(&grp->lck_grp_refcnt, 1) == 0) {
+		kfree(grp, sizeof(lck_grp_t));
+	}
 }
 
 /*
@@ -336,10 +362,10 @@ lck_grp_deallocate(
 
 void
 lck_grp_lckcnt_incr(
-	lck_grp_t	*grp,
-	lck_type_t	lck_type)
+	lck_grp_t       *grp,
+	lck_type_t      lck_type)
 {
-	unsigned int	*lckcnt;
+	unsigned int    *lckcnt;
 
 	switch (lck_type) {
 	case LCK_TYPE_SPIN:
@@ -364,11 +390,11 @@ lck_grp_lckcnt_incr(
 
 void
 lck_grp_lckcnt_decr(
-	lck_grp_t	*grp,
-	lck_type_t	lck_type)
+	lck_grp_t       *grp,
+	lck_type_t      lck_type)
 {
-	unsigned int	*lckcnt;
-	int		updated;
+	unsigned int    *lckcnt;
+	int             updated;
 
 	switch (lck_type) {
 	case LCK_TYPE_SPIN:
@@ -397,12 +423,13 @@ lck_attr_t *
 lck_attr_alloc_init(
 	void)
 {
-	lck_attr_t	*attr;
+	lck_attr_t      *attr;
 
-	if ((attr = (lck_attr_t *)kalloc(sizeof(lck_attr_t))) != 0)
+	if ((attr = (lck_attr_t *)kalloc(sizeof(lck_attr_t))) != 0) {
 		lck_attr_setdefault(attr);
+	}
 
-	return(attr);
+	return attr;
 }
 
 
@@ -412,23 +439,24 @@ lck_attr_alloc_init(
 
 void
 lck_attr_setdefault(
-	lck_attr_t	*attr)
+	lck_attr_t      *attr)
 {
 #if __arm__ || __arm64__
 	/* <rdar://problem/4404579>: Using LCK_ATTR_DEBUG here causes panic at boot time for arm */
 	attr->lck_attr_val =  LCK_ATTR_NONE;
 #elif __i386__ || __x86_64__
 #if     !DEBUG
- 	if (LcksOpts & enaLkDeb)
- 		attr->lck_attr_val =  LCK_ATTR_DEBUG;
- 	else
- 		attr->lck_attr_val =  LCK_ATTR_NONE;
+	if (LcksOpts & enaLkDeb) {
+		attr->lck_attr_val =  LCK_ATTR_DEBUG;
+	} else {
+		attr->lck_attr_val =  LCK_ATTR_NONE;
+	}
 #else
- 	attr->lck_attr_val =  LCK_ATTR_DEBUG;
-#endif	/* !DEBUG */
+	attr->lck_attr_val =  LCK_ATTR_DEBUG;
+#endif  /* !DEBUG */
 #else
 #error Unknown architecture.
-#endif	/* __arm__ */
+#endif  /* __arm__ */
 }
 
 
@@ -437,7 +465,7 @@ lck_attr_setdefault(
  */
 void
 lck_attr_setdebug(
-	lck_attr_t	*attr)
+	lck_attr_t      *attr)
 {
 	(void)hw_atomic_or(&attr->lck_attr_val, LCK_ATTR_DEBUG);
 }
@@ -447,7 +475,7 @@ lck_attr_setdebug(
  */
 void
 lck_attr_cleardebug(
-	lck_attr_t	*attr)
+	lck_attr_t      *attr)
 {
 	(void)hw_atomic_and(&attr->lck_attr_val, ~LCK_ATTR_DEBUG);
 }
@@ -458,7 +486,7 @@ lck_attr_cleardebug(
  */
 void
 lck_attr_rw_shared_priority(
-	lck_attr_t	*attr)
+	lck_attr_t      *attr)
 {
 	(void)hw_atomic_or(&attr->lck_attr_val, LCK_ATTR_RW_SHARED_PRIORITY);
 }
@@ -469,7 +497,7 @@ lck_attr_rw_shared_priority(
  */
 void
 lck_attr_free(
-	lck_attr_t	*attr)
+	lck_attr_t      *attr)
 {
 	kfree(attr, sizeof(lck_attr_t));
 }
@@ -493,87 +521,93 @@ hw_lock_init(hw_lock_t lock)
  *	preemption disabled.
  */
 
-#if	__SMP__
+#if     __SMP__
 static unsigned int NOINLINE
-hw_lock_lock_contended(hw_lock_t lock, uintptr_t data, uint64_t timeout, boolean_t do_panic)
+hw_lock_lock_contended(hw_lock_t lock, uintptr_t data, uint64_t timeout, boolean_t do_panic LCK_GRP_ARG(lck_grp_t *grp))
 {
-	uint64_t	end = 0;
-	uintptr_t	holder = lock->lock_data;
-	int		i;
+	uint64_t        end = 0;
+	uintptr_t       holder = lock->lock_data;
+	int             i;
 
-	if (timeout == 0)
+	if (timeout == 0) {
 		timeout = LOCK_PANIC_TIMEOUT;
-#if CONFIG_DTRACE
-	uint64_t begin;
-	boolean_t dtrace_enabled = lockstat_probemap[LS_LCK_SPIN_LOCK_SPIN] != 0;
-	if (__improbable(dtrace_enabled))
+	}
+#if CONFIG_DTRACE || LOCK_STATS
+	uint64_t begin = 0;
+	boolean_t stat_enabled = lck_grp_spin_spin_enabled(lock LCK_GRP_ARG(grp));
+#endif /* CONFIG_DTRACE || LOCK_STATS */
+
+#if LOCK_STATS || CONFIG_DTRACE
+	if (__improbable(stat_enabled)) {
 		begin = mach_absolute_time();
-#endif
-	for ( ; ; ) {	
+	}
+#endif /* LOCK_STATS || CONFIG_DTRACE */
+	for (;;) {
 		for (i = 0; i < LOCK_SNOOP_SPINS; i++) {
 			cpu_pause();
 #if (!__ARM_ENABLE_WFE_) || (LOCK_PRETEST)
 			holder = ordered_load_hw(lock);
-			if (holder != 0)
+			if (holder != 0) {
 				continue;
+			}
 #endif
 			if (atomic_compare_exchange(&lock->lock_data, 0, data,
 			    memory_order_acquire_smp, TRUE)) {
-#if CONFIG_DTRACE
-				if (__improbable(dtrace_enabled)) {
-					uint64_t spintime = mach_absolute_time() - begin;
-					if (spintime > dtrace_spin_threshold)
-						LOCKSTAT_RECORD2(LS_LCK_SPIN_LOCK_SPIN, lock, spintime, dtrace_spin_threshold);
+#if CONFIG_DTRACE || LOCK_STATS
+				if (__improbable(stat_enabled)) {
+					lck_grp_spin_update_spin(lock LCK_GRP_ARG(grp), mach_absolute_time() - begin);
 				}
-#endif
+				lck_grp_spin_update_miss(lock LCK_GRP_ARG(grp));
+#endif /* CONFIG_DTRACE || LOCK_STATS */
 				return 1;
 			}
 		}
 		if (end == 0) {
 			end = ml_get_timebase() + timeout;
-		}
-		else if (ml_get_timebase() >= end)
+		} else if (ml_get_timebase() >= end) {
 			break;
+		}
 	}
 	if (do_panic) {
 		// Capture the actual time spent blocked, which may be higher than the timeout
 		// if a misbehaving interrupt stole this thread's CPU time.
 		panic("Spinlock timeout after %llu ticks, %p = %lx",
-			(ml_get_timebase() - end + timeout), lock, holder);
+		    (ml_get_timebase() - end + timeout), lock, holder);
 	}
 	return 0;
 }
-#endif	// __SMP__
+#endif  // __SMP__
 
 static inline void
-hw_lock_lock_internal(hw_lock_t lock, thread_t thread)
+hw_lock_lock_internal(hw_lock_t lock, thread_t thread LCK_GRP_ARG(lck_grp_t *grp))
 {
-	uintptr_t	state;
+	uintptr_t       state;
 
 	state = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
-#if	__SMP__
+#if     __SMP__
 
-#if	LOCK_PRETEST
-	if (ordered_load_hw(lock))
+#if     LOCK_PRETEST
+	if (ordered_load_hw(lock)) {
 		goto contended;
-#endif	// LOCK_PRETEST
+	}
+#endif  // LOCK_PRETEST
 	if (atomic_compare_exchange(&lock->lock_data, 0, state,
-					memory_order_acquire_smp, TRUE)) {
+	    memory_order_acquire_smp, TRUE)) {
 		goto end;
 	}
-#if	LOCK_PRETEST
+#if     LOCK_PRETEST
 contended:
-#endif	// LOCK_PRETEST
-	hw_lock_lock_contended(lock, state, 0, spinlock_timeout_panic);
+#endif  // LOCK_PRETEST
+	hw_lock_lock_contended(lock, state, 0, spinlock_timeout_panic LCK_GRP_ARG(grp));
 end:
-#else	// __SMP__
-	if (lock->lock_data)
+#else   // __SMP__
+	if (lock->lock_data) {
 		panic("Spinlock held %p", lock);
+	}
 	lock->lock_data = state;
-#endif	// __SMP__
-#if CONFIG_DTRACE
-	LOCKSTAT_RECORD(LS_LCK_SPIN_LOCK_ACQUIRE, lock, 0);
-#endif
+#endif  // __SMP__
+	lck_grp_spin_update_held(lock LCK_GRP_ARG(grp));
+
 	return;
 }
 
@@ -584,11 +618,11 @@ end:
  *	return with preemption disabled.
  */
 void
-hw_lock_lock(hw_lock_t lock)
+(hw_lock_lock)(hw_lock_t lock LCK_GRP_ARG(lck_grp_t *grp))
 {
 	thread_t thread = current_thread();
 	disable_preemption_for_thread(thread);
-	hw_lock_lock_internal(lock, thread);
+	hw_lock_lock_internal(lock, thread LCK_GRP_ARG(grp));
 }
 
 /*
@@ -597,12 +631,13 @@ hw_lock_lock(hw_lock_t lock)
  *	Acquire lock, spinning until it becomes available.
  */
 void
-hw_lock_lock_nopreempt(hw_lock_t lock)
+(hw_lock_lock_nopreempt)(hw_lock_t lock LCK_GRP_ARG(lck_grp_t *grp))
 {
 	thread_t thread = current_thread();
-	if (__improbable(!preemption_disabled_for_thread(thread)))
+	if (__improbable(!preemption_disabled_for_thread(thread))) {
 		panic("Attempt to take no-preempt spinlock %p in preemptible context", lock);
-	hw_lock_lock_internal(lock, thread);
+	}
+	hw_lock_lock_internal(lock, thread LCK_GRP_ARG(grp));
 }
 
 /*
@@ -612,43 +647,44 @@ hw_lock_lock_nopreempt(hw_lock_t lock)
  *	Timeout is in mach_absolute_time ticks, return with
  *	preemption disabled.
  */
-unsigned int
-hw_lock_to(hw_lock_t lock, uint64_t timeout)
+unsigned
+int
+(hw_lock_to)(hw_lock_t lock, uint64_t timeout LCK_GRP_ARG(lck_grp_t *grp))
 {
-	thread_t	thread;
-	uintptr_t	state;
+	thread_t        thread;
+	uintptr_t       state;
 	unsigned int success = 0;
 
 	thread = current_thread();
 	disable_preemption_for_thread(thread);
 	state = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
-#if	__SMP__
+#if     __SMP__
 
-#if	LOCK_PRETEST
-	if (ordered_load_hw(lock))
+#if     LOCK_PRETEST
+	if (ordered_load_hw(lock)) {
 		goto contended;
-#endif	// LOCK_PRETEST
+	}
+#endif  // LOCK_PRETEST
 	if (atomic_compare_exchange(&lock->lock_data, 0, state,
-					memory_order_acquire_smp, TRUE)) {
+	    memory_order_acquire_smp, TRUE)) {
 		success = 1;
 		goto end;
 	}
-#if	LOCK_PRETEST
+#if     LOCK_PRETEST
 contended:
-#endif	// LOCK_PRETEST
-	success = hw_lock_lock_contended(lock, state, timeout, FALSE);
+#endif  // LOCK_PRETEST
+	success = hw_lock_lock_contended(lock, state, timeout, FALSE LCK_GRP_ARG(grp));
 end:
-#else	// __SMP__
+#else   // __SMP__
 	(void)timeout;
 	if (ordered_load_hw(lock) == 0) {
 		ordered_store_hw(lock, state);
 		success = 1;
 	}
-#endif	// __SMP__
-#if CONFIG_DTRACE
-	if (success)
-		LOCKSTAT_RECORD(LS_LCK_SPIN_LOCK_ACQUIRE, lock, 0);
-#endif
+#endif  // __SMP__
+	if (success) {
+		lck_grp_spin_update_held(lock LCK_GRP_ARG(grp));
+	}
 	return success;
 }
 
@@ -658,52 +694,56 @@ end:
  *	returns with preemption disabled on success.
  */
 static inline unsigned int
-hw_lock_try_internal(hw_lock_t lock, thread_t thread)
+hw_lock_try_internal(hw_lock_t lock, thread_t thread LCK_GRP_ARG(lck_grp_t *grp))
 {
-	int		success = 0;
+	int             success = 0;
 
-#if	__SMP__
-#if	LOCK_PRETEST
-	if (ordered_load_hw(lock))
+#if     __SMP__
+#if     LOCK_PRETEST
+	if (ordered_load_hw(lock)) {
 		goto failed;
-#endif	// LOCK_PRETEST
+	}
+#endif  // LOCK_PRETEST
 	success = atomic_compare_exchange(&lock->lock_data, 0, LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK,
-					memory_order_acquire_smp, FALSE);
+	    memory_order_acquire_smp, FALSE);
 #else
 	if (lock->lock_data == 0) {
 		lock->lock_data = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
 		success = 1;
 	}
-#endif	// __SMP__
+#endif  // __SMP__
 
-#if	LOCK_PRETEST
+#if     LOCK_PRETEST
 failed:
-#endif	// LOCK_PRETEST
-#if CONFIG_DTRACE
-	if (success)
-		LOCKSTAT_RECORD(LS_LCK_SPIN_LOCK_ACQUIRE, lock, 0);
-#endif
+#endif  // LOCK_PRETEST
+	if (success) {
+		lck_grp_spin_update_held(lock LCK_GRP_ARG(grp));
+	}
 	return success;
 }
 
-unsigned int
-hw_lock_try(hw_lock_t lock)
+unsigned
+int
+(hw_lock_try)(hw_lock_t lock LCK_GRP_ARG(lck_grp_t *grp))
 {
 	thread_t thread = current_thread();
 	disable_preemption_for_thread(thread);
-	unsigned int success = hw_lock_try_internal(lock, thread);
-	if (!success)
+	unsigned int success = hw_lock_try_internal(lock, thread LCK_GRP_ARG(grp));
+	if (!success) {
 		enable_preemption();
+	}
 	return success;
 }
 
-unsigned int
-hw_lock_try_nopreempt(hw_lock_t lock)
+unsigned
+int
+(hw_lock_try_nopreempt)(hw_lock_t lock LCK_GRP_ARG(lck_grp_t *grp))
 {
 	thread_t thread = current_thread();
-	if (__improbable(!preemption_disabled_for_thread(thread)))
+	if (__improbable(!preemption_disabled_for_thread(thread))) {
 		panic("Attempt to test no-preempt spinlock %p in preemptible context", lock);
-	return hw_lock_try_internal(lock, thread);
+	}
+	return hw_lock_try_internal(lock, thread LCK_GRP_ARG(grp));
 }
 
 /*
@@ -718,24 +758,25 @@ hw_lock_unlock_internal(hw_lock_t lock)
 #if __arm__ || __arm64__
 	// ARM tests are only for open-source exclusion
 	set_event();
-#endif	// __arm__ || __arm64__
-#if	CONFIG_DTRACE
+#endif  // __arm__ || __arm64__
+#if     CONFIG_DTRACE
 	LOCKSTAT_RECORD(LS_LCK_SPIN_UNLOCK_RELEASE, lock, 0);
 #endif /* CONFIG_DTRACE */
 }
 
 void
-hw_lock_unlock(hw_lock_t lock)
+(hw_lock_unlock)(hw_lock_t lock)
 {
 	hw_lock_unlock_internal(lock);
 	enable_preemption();
 }
 
 void
-hw_lock_unlock_nopreempt(hw_lock_t lock)
+(hw_lock_unlock_nopreempt)(hw_lock_t lock)
 {
-	if (__improbable(!preemption_disabled_for_thread(current_thread())))
+	if (__improbable(!preemption_disabled_for_thread(current_thread()))) {
 		panic("Attempt to release no-preempt spinlock %p in preemptible context", lock);
+	}
 	hw_lock_unlock_internal(lock);
 }
 
@@ -746,65 +787,77 @@ hw_lock_unlock_nopreempt(hw_lock_t lock)
 unsigned int
 hw_lock_held(hw_lock_t lock)
 {
-	return (ordered_load_hw(lock) != 0);
+	return ordered_load_hw(lock) != 0;
 }
 
 /*
  * Routine:	lck_spin_sleep
  */
 wait_result_t
-lck_spin_sleep(
-        lck_spin_t		*lck,
-	lck_sleep_action_t	lck_sleep_action,
-	event_t			event,
-	wait_interrupt_t	interruptible)
+lck_spin_sleep_grp(
+	lck_spin_t              *lck,
+	lck_sleep_action_t      lck_sleep_action,
+	event_t                 event,
+	wait_interrupt_t        interruptible,
+	lck_grp_t               *grp)
 {
-	wait_result_t	res;
- 
-	if ((lck_sleep_action & ~LCK_SLEEP_MASK) != 0)
+	wait_result_t   res;
+
+	if ((lck_sleep_action & ~LCK_SLEEP_MASK) != 0) {
 		panic("Invalid lock sleep action %x\n", lck_sleep_action);
+	}
 
 	res = assert_wait(event, interruptible);
 	if (res == THREAD_WAITING) {
 		lck_spin_unlock(lck);
 		res = thread_block(THREAD_CONTINUE_NULL);
-		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK))
-			lck_spin_lock(lck);
-	}
-	else
-	if (lck_sleep_action & LCK_SLEEP_UNLOCK)
+		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK)) {
+			lck_spin_lock_grp(lck, grp);
+		}
+	} else if (lck_sleep_action & LCK_SLEEP_UNLOCK) {
 		lck_spin_unlock(lck);
+	}
 
 	return res;
 }
 
+wait_result_t
+lck_spin_sleep(
+	lck_spin_t              *lck,
+	lck_sleep_action_t      lck_sleep_action,
+	event_t                 event,
+	wait_interrupt_t        interruptible)
+{
+	return lck_spin_sleep_grp(lck, lck_sleep_action, event, interruptible, LCK_GRP_NULL);
+}
 
 /*
  * Routine:	lck_spin_sleep_deadline
  */
 wait_result_t
 lck_spin_sleep_deadline(
-        lck_spin_t		*lck,
-	lck_sleep_action_t	lck_sleep_action,
-	event_t			event,
-	wait_interrupt_t	interruptible,
-	uint64_t		deadline)
+	lck_spin_t              *lck,
+	lck_sleep_action_t      lck_sleep_action,
+	event_t                 event,
+	wait_interrupt_t        interruptible,
+	uint64_t                deadline)
 {
 	wait_result_t   res;
 
-	if ((lck_sleep_action & ~LCK_SLEEP_MASK) != 0)
+	if ((lck_sleep_action & ~LCK_SLEEP_MASK) != 0) {
 		panic("Invalid lock sleep action %x\n", lck_sleep_action);
+	}
 
 	res = assert_wait_deadline(event, interruptible, deadline);
 	if (res == THREAD_WAITING) {
 		lck_spin_unlock(lck);
 		res = thread_block(THREAD_CONTINUE_NULL);
-		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK))
+		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK)) {
 			lck_spin_lock(lck);
-	}
-	else
-	if (lck_sleep_action & LCK_SLEEP_UNLOCK)
+		}
+	} else if (lck_sleep_action & LCK_SLEEP_UNLOCK) {
 		lck_spin_unlock(lck);
+	}
 
 	return res;
 }
@@ -814,19 +867,20 @@ lck_spin_sleep_deadline(
  */
 wait_result_t
 lck_mtx_sleep(
-        lck_mtx_t		*lck,
-	lck_sleep_action_t	lck_sleep_action,
-	event_t			event,
-	wait_interrupt_t	interruptible)
+	lck_mtx_t               *lck,
+	lck_sleep_action_t      lck_sleep_action,
+	event_t                 event,
+	wait_interrupt_t        interruptible)
 {
-	wait_result_t	res;
-	thread_t		thread = current_thread();
- 
-	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_SLEEP_CODE) | DBG_FUNC_START,
-		     VM_KERNEL_UNSLIDE_OR_PERM(lck), (int)lck_sleep_action, VM_KERNEL_UNSLIDE_OR_PERM(event), (int)interruptible, 0);
+	wait_result_t   res;
+	thread_t                thread = current_thread();
 
-	if ((lck_sleep_action & ~LCK_SLEEP_MASK) != 0)
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_SLEEP_CODE) | DBG_FUNC_START,
+	    VM_KERNEL_UNSLIDE_OR_PERM(lck), (int)lck_sleep_action, VM_KERNEL_UNSLIDE_OR_PERM(event), (int)interruptible, 0);
+
+	if ((lck_sleep_action & ~LCK_SLEEP_MASK) != 0) {
 		panic("Invalid lock sleep action %x\n", lck_sleep_action);
+	}
 
 	if (lck_sleep_action & LCK_SLEEP_PROMOTED_PRI) {
 		/*
@@ -843,17 +897,17 @@ lck_mtx_sleep(
 		lck_mtx_unlock(lck);
 		res = thread_block(THREAD_CONTINUE_NULL);
 		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK)) {
-			if ((lck_sleep_action & LCK_SLEEP_SPIN))
+			if ((lck_sleep_action & LCK_SLEEP_SPIN)) {
 				lck_mtx_lock_spin(lck);
-			else if ((lck_sleep_action & LCK_SLEEP_SPIN_ALWAYS))
+			} else if ((lck_sleep_action & LCK_SLEEP_SPIN_ALWAYS)) {
 				lck_mtx_lock_spin_always(lck);
-			else
+			} else {
 				lck_mtx_lock(lck);
+			}
 		}
-	}
-	else
-	if (lck_sleep_action & LCK_SLEEP_UNLOCK)
+	} else if (lck_sleep_action & LCK_SLEEP_UNLOCK) {
 		lck_mtx_unlock(lck);
+	}
 
 	if (lck_sleep_action & LCK_SLEEP_PROMOTED_PRI) {
 		if ((thread->rwlock_count-- == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
@@ -873,20 +927,21 @@ lck_mtx_sleep(
  */
 wait_result_t
 lck_mtx_sleep_deadline(
-        lck_mtx_t		*lck,
-	lck_sleep_action_t	lck_sleep_action,
-	event_t			event,
-	wait_interrupt_t	interruptible,
-	uint64_t		deadline)
+	lck_mtx_t               *lck,
+	lck_sleep_action_t      lck_sleep_action,
+	event_t                 event,
+	wait_interrupt_t        interruptible,
+	uint64_t                deadline)
 {
 	wait_result_t   res;
-	thread_t		thread = current_thread();
+	thread_t                thread = current_thread();
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_SLEEP_DEADLINE_CODE) | DBG_FUNC_START,
-		     VM_KERNEL_UNSLIDE_OR_PERM(lck), (int)lck_sleep_action, VM_KERNEL_UNSLIDE_OR_PERM(event), (int)interruptible, 0);
+	    VM_KERNEL_UNSLIDE_OR_PERM(lck), (int)lck_sleep_action, VM_KERNEL_UNSLIDE_OR_PERM(event), (int)interruptible, 0);
 
-	if ((lck_sleep_action & ~LCK_SLEEP_MASK) != 0)
+	if ((lck_sleep_action & ~LCK_SLEEP_MASK) != 0) {
 		panic("Invalid lock sleep action %x\n", lck_sleep_action);
+	}
 
 	if (lck_sleep_action & LCK_SLEEP_PROMOTED_PRI) {
 		/*
@@ -900,15 +955,15 @@ lck_mtx_sleep_deadline(
 		lck_mtx_unlock(lck);
 		res = thread_block(THREAD_CONTINUE_NULL);
 		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK)) {
-			if ((lck_sleep_action & LCK_SLEEP_SPIN))
+			if ((lck_sleep_action & LCK_SLEEP_SPIN)) {
 				lck_mtx_lock_spin(lck);
-			else
+			} else {
 				lck_mtx_lock(lck);
+			}
 		}
-	}
-	else
-	if (lck_sleep_action & LCK_SLEEP_UNLOCK)
+	} else if (lck_sleep_action & LCK_SLEEP_UNLOCK) {
 		lck_mtx_unlock(lck);
+	}
 
 	if (lck_sleep_action & LCK_SLEEP_PROMOTED_PRI) {
 		if ((thread->rwlock_count-- == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
@@ -977,37 +1032,39 @@ lck_mtx_sleep_deadline(
  *      <rdar://problem/30737670> ARM mutex contention logic could avoid taking the thread lock
  */
 void
-lck_mtx_lock_wait (
-	lck_mtx_t			*lck,
-	thread_t			holder)
+lck_mtx_lock_wait(
+	lck_mtx_t                       *lck,
+	thread_t                        holder)
 {
-	thread_t		self = current_thread();
-	lck_mtx_t		*mutex;
+	thread_t                self = current_thread();
+	lck_mtx_t               *mutex;
 	__kdebug_only uintptr_t trace_lck = unslide_for_kdebug(lck);
 
-#if	CONFIG_DTRACE
-	uint64_t		sleep_start = 0;
+#if     CONFIG_DTRACE
+	uint64_t                sleep_start = 0;
 
 	if (lockstat_probemap[LS_LCK_MTX_LOCK_BLOCK] || lockstat_probemap[LS_LCK_MTX_EXT_LOCK_BLOCK]) {
 		sleep_start = mach_absolute_time();
 	}
 #endif
 
-	if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT)
+	if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT) {
 		mutex = lck;
-	else
+	} else {
 		mutex = &lck->lck_mtx_ptr->lck_mtx;
+	}
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_START,
-	             trace_lck, (uintptr_t)thread_tid(thread), 0, 0, 0);
+	    trace_lck, (uintptr_t)thread_tid(thread), 0, 0, 0);
 
 	spl_t s = splsched();
 	thread_lock(holder);
 
 	assert_promotions_invariant(holder);
 
-	if ((holder->sched_flags & TH_SFLAG_DEPRESS) == 0)
+	if ((holder->sched_flags & TH_SFLAG_DEPRESS) == 0) {
 		assert(holder->sched_pri >= mutex->lck_mtx_pri);
+	}
 
 	integer_t priority = self->sched_pri;
 	priority = MAX(priority, self->base_pri);
@@ -1031,16 +1088,18 @@ lck_mtx_lock_wait (
 	assert(holder->promotions > 0);
 	assert(holder->promotion_priority >= priority);
 
-	if ((holder->sched_flags & TH_SFLAG_DEPRESS) == 0)
+	if ((holder->sched_flags & TH_SFLAG_DEPRESS) == 0) {
 		assert(holder->sched_pri >= mutex->lck_mtx_pri);
+	}
 
 	assert_promotions_invariant(holder);
 
 	thread_unlock(holder);
 	splx(s);
 
-	if (mutex->lck_mtx_pri < priority)
+	if (mutex->lck_mtx_pri < priority) {
 		mutex->lck_mtx_pri = priority;
+	}
 
 	if (self->waiting_for_mutex == NULL) {
 		self->waiting_for_mutex = mutex;
@@ -1058,7 +1117,7 @@ lck_mtx_lock_wait (
 	assert(mutex->lck_mtx_waiters > 0);
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_END, 0, 0, 0, 0, 0);
-#if	CONFIG_DTRACE
+#if     CONFIG_DTRACE
 	/*
 	 * Record the DTrace lockstat probe for blocking, block time
 	 * measured from when we were entered.
@@ -1076,7 +1135,7 @@ lck_mtx_lock_wait (
 }
 
 /*
- * Routine: 	lck_mtx_lock_acquire
+ * Routine:     lck_mtx_lock_acquire
  *
  * Invoked on acquiring the mutex when there is
  * contention.
@@ -1087,16 +1146,17 @@ lck_mtx_lock_wait (
  */
 int
 lck_mtx_lock_acquire(
-	lck_mtx_t		*lck)
+	lck_mtx_t               *lck)
 {
-	thread_t		thread = current_thread();
-	lck_mtx_t		*mutex;
-	integer_t		priority;
+	thread_t                thread = current_thread();
+	lck_mtx_t               *mutex;
+	integer_t               priority;
 
-	if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT)
+	if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT) {
 		mutex = lck;
-	else
+	} else {
 		mutex = &lck->lck_mtx_ptr->lck_mtx;
+	}
 
 	/*
 	 * If waiting_for_mutex is set, then this thread was previously blocked waiting on this lock
@@ -1138,8 +1198,9 @@ lck_mtx_lock_acquire(
 
 		assert_promotions_invariant(thread);
 
-		if (thread->was_promoted_on_wakeup)
+		if (thread->was_promoted_on_wakeup) {
 			assert(thread->promotions > 0);
+		}
 
 		if (priority) {
 			if (thread->promotions++ == 0) {
@@ -1157,33 +1218,26 @@ lck_mtx_lock_acquire(
 
 		if (thread->was_promoted_on_wakeup) {
 			thread->was_promoted_on_wakeup = 0;
-			if (--thread->promotions == 0)
+			if (--thread->promotions == 0) {
 				sched_thread_unpromote(thread, trace_lck);
+			}
 		}
 
 		assert_promotions_invariant(thread);
 
-		if (priority && (thread->sched_flags & TH_SFLAG_DEPRESS) == 0)
+		if (priority && (thread->sched_flags & TH_SFLAG_DEPRESS) == 0) {
 			assert(thread->sched_pri >= priority);
+		}
 
 		thread_unlock(thread);
 		splx(s);
 	}
 
-#if CONFIG_DTRACE
-	if (lockstat_probemap[LS_LCK_MTX_LOCK_ACQUIRE] || lockstat_probemap[LS_LCK_MTX_EXT_LOCK_ACQUIRE]) {
-		if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT) {
-			LOCKSTAT_RECORD(LS_LCK_MTX_LOCK_ACQUIRE, lck, 0);
-		} else {
-			LOCKSTAT_RECORD(LS_LCK_MTX_EXT_LOCK_ACQUIRE, lck, 0);
-		}
-	}
-#endif	
-	return (mutex->lck_mtx_waiters);
+	return mutex->lck_mtx_waiters;
 }
 
 /*
- * Routine: 	lck_mtx_unlock_wakeup
+ * Routine:     lck_mtx_unlock_wakeup
  *
  * Invoked on unlock when there is contention.
  *
@@ -1194,24 +1248,26 @@ lck_mtx_lock_acquire(
  * This means that here we may do extra unneeded wakeups.
  */
 void
-lck_mtx_unlock_wakeup (
-	lck_mtx_t			*lck,
-	thread_t			holder)
+lck_mtx_unlock_wakeup(
+	lck_mtx_t                       *lck,
+	thread_t                        holder)
 {
-	thread_t		thread = current_thread();
-	lck_mtx_t		*mutex;
+	thread_t                thread = current_thread();
+	lck_mtx_t               *mutex;
 	__kdebug_only uintptr_t trace_lck = unslide_for_kdebug(lck);
 
-	if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT)
+	if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT) {
 		mutex = lck;
-	else
+	} else {
 		mutex = &lck->lck_mtx_ptr->lck_mtx;
+	}
 
-	if (thread != holder)
+	if (thread != holder) {
 		panic("lck_mtx_unlock_wakeup: mutex %p holder %p\n", mutex, holder);
+	}
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_UNLCK_WAKEUP_CODE) | DBG_FUNC_START,
-	             trace_lck, (uintptr_t)thread_tid(thread), 0, 0, 0);
+	    trace_lck, (uintptr_t)thread_tid(thread), 0, 0, 0);
 
 	assert(mutex->lck_mtx_waiters > 0);
 	assert(thread->was_promoted_on_wakeup == 0);
@@ -1221,10 +1277,11 @@ lck_mtx_unlock_wakeup (
 	 * The waiters count does not precisely match the number of threads on the waitqueue,
 	 * therefore we cannot assert that we actually wake up a thread here
 	 */
-	if (mutex->lck_mtx_waiters > 1)
+	if (mutex->lck_mtx_waiters > 1) {
 		thread_wakeup_one_with_pri(LCK_MTX_EVENT(lck), lck->lck_mtx_pri);
-	else
+	} else {
 		thread_wakeup_one(LCK_MTX_EVENT(lck));
+	}
 
 	/* When mutex->lck_mtx_pri is set, it means means I as the owner have a promotion. */
 	if (mutex->lck_mtx_pri) {
@@ -1235,8 +1292,9 @@ lck_mtx_unlock_wakeup (
 
 		assert_promotions_invariant(thread);
 
-		if (--thread->promotions == 0)
+		if (--thread->promotions == 0) {
 			sched_thread_unpromote(thread, trace_lck);
+		}
 
 		assert_promotions_invariant(thread);
 
@@ -1295,17 +1353,17 @@ lck_mtx_wakeup_adjust_pri(thread_t thread, integer_t priority)
 
 
 /*
- * Routine: 	mutex_pause
+ * Routine:     mutex_pause
  *
  * Called by former callers of simple_lock_pause().
  */
-#define MAX_COLLISION_COUNTS	32
-#define MAX_COLLISION 	8
+#define MAX_COLLISION_COUNTS    32
+#define MAX_COLLISION   8
 
 unsigned int max_collision_count[MAX_COLLISION_COUNTS];
 
 uint32_t collision_backoffs[MAX_COLLISION] = {
-        10, 50, 100, 200, 400, 600, 800, 1000
+	10, 50, 100, 200, 400, 600, 800, 1000
 };
 
 
@@ -1313,14 +1371,16 @@ void
 mutex_pause(uint32_t collisions)
 {
 	wait_result_t wait_result;
-	uint32_t	back_off;
+	uint32_t        back_off;
 
-	if (collisions >= MAX_COLLISION_COUNTS)
-	        collisions = MAX_COLLISION_COUNTS - 1;
+	if (collisions >= MAX_COLLISION_COUNTS) {
+		collisions = MAX_COLLISION_COUNTS - 1;
+	}
 	max_collision_count[collisions]++;
 
-	if (collisions >= MAX_COLLISION)
-	        collisions = MAX_COLLISION - 1;
+	if (collisions >= MAX_COLLISION) {
+		collisions = MAX_COLLISION - 1;
+	}
 	back_off = collision_backoffs[collisions];
 
 	wait_result = assert_wait_timeout((event_t)mutex_pause, THREAD_UNINT, back_off, NSEC_PER_USEC);
@@ -1336,23 +1396,24 @@ unsigned int mutex_yield_no_wait = 0;
 
 void
 lck_mtx_yield(
-	    lck_mtx_t	*lck)
+	lck_mtx_t   *lck)
 {
-	int	waiters;
-	
+	int     waiters;
+
 #if DEBUG
 	lck_mtx_assert(lck, LCK_MTX_ASSERT_OWNED);
 #endif /* DEBUG */
-	
-	if (lck->lck_mtx_tag == LCK_MTX_TAG_INDIRECT)
-	        waiters = lck->lck_mtx_ptr->lck_mtx.lck_mtx_waiters;
-	else
-	        waiters = lck->lck_mtx_waiters;
 
-	if ( !waiters) {
-	        mutex_yield_no_wait++;
+	if (lck->lck_mtx_tag == LCK_MTX_TAG_INDIRECT) {
+		waiters = lck->lck_mtx_ptr->lck_mtx.lck_mtx_waiters;
 	} else {
-	        mutex_yield_wait++;
+		waiters = lck->lck_mtx_waiters;
+	}
+
+	if (!waiters) {
+		mutex_yield_no_wait++;
+	} else {
+		mutex_yield_wait++;
 		lck_mtx_unlock(lck);
 		mutex_pause(0);
 		lck_mtx_lock(lck);
@@ -1365,17 +1426,18 @@ lck_mtx_yield(
  */
 wait_result_t
 lck_rw_sleep(
-        lck_rw_t		*lck,
-	lck_sleep_action_t	lck_sleep_action,
-	event_t			event,
-	wait_interrupt_t	interruptible)
+	lck_rw_t                *lck,
+	lck_sleep_action_t      lck_sleep_action,
+	event_t                 event,
+	wait_interrupt_t        interruptible)
 {
-	wait_result_t	res;
-	lck_rw_type_t	lck_rw_type;
-	thread_t		thread = current_thread();
+	wait_result_t   res;
+	lck_rw_type_t   lck_rw_type;
+	thread_t                thread = current_thread();
 
-	if ((lck_sleep_action & ~LCK_SLEEP_MASK) != 0)
+	if ((lck_sleep_action & ~LCK_SLEEP_MASK) != 0) {
 		panic("Invalid lock sleep action %x\n", lck_sleep_action);
+	}
 
 	if (lck_sleep_action & LCK_SLEEP_PROMOTED_PRI) {
 		/*
@@ -1394,17 +1456,17 @@ lck_rw_sleep(
 		lck_rw_type = lck_rw_done(lck);
 		res = thread_block(THREAD_CONTINUE_NULL);
 		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK)) {
-			if (!(lck_sleep_action & (LCK_SLEEP_SHARED|LCK_SLEEP_EXCLUSIVE)))
+			if (!(lck_sleep_action & (LCK_SLEEP_SHARED | LCK_SLEEP_EXCLUSIVE))) {
 				lck_rw_lock(lck, lck_rw_type);
-			else if (lck_sleep_action & LCK_SLEEP_EXCLUSIVE)
+			} else if (lck_sleep_action & LCK_SLEEP_EXCLUSIVE) {
 				lck_rw_lock_exclusive(lck);
-			else
+			} else {
 				lck_rw_lock_shared(lck);
+			}
 		}
-	}
-	else
-	if (lck_sleep_action & LCK_SLEEP_UNLOCK)
+	} else if (lck_sleep_action & LCK_SLEEP_UNLOCK) {
 		(void)lck_rw_done(lck);
+	}
 
 	if (lck_sleep_action & LCK_SLEEP_PROMOTED_PRI) {
 		if ((thread->rwlock_count-- == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
@@ -1426,18 +1488,19 @@ lck_rw_sleep(
  */
 wait_result_t
 lck_rw_sleep_deadline(
-	lck_rw_t		*lck,
-	lck_sleep_action_t	lck_sleep_action,
-	event_t			event,
-	wait_interrupt_t	interruptible,
-	uint64_t		deadline)
+	lck_rw_t                *lck,
+	lck_sleep_action_t      lck_sleep_action,
+	event_t                 event,
+	wait_interrupt_t        interruptible,
+	uint64_t                deadline)
 {
 	wait_result_t   res;
-	lck_rw_type_t	lck_rw_type;
-	thread_t		thread = current_thread();
+	lck_rw_type_t   lck_rw_type;
+	thread_t                thread = current_thread();
 
-	if ((lck_sleep_action & ~LCK_SLEEP_MASK) != 0)
+	if ((lck_sleep_action & ~LCK_SLEEP_MASK) != 0) {
 		panic("Invalid lock sleep action %x\n", lck_sleep_action);
+	}
 
 	if (lck_sleep_action & LCK_SLEEP_PROMOTED_PRI) {
 		thread->rwlock_count++;
@@ -1448,17 +1511,17 @@ lck_rw_sleep_deadline(
 		lck_rw_type = lck_rw_done(lck);
 		res = thread_block(THREAD_CONTINUE_NULL);
 		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK)) {
-			if (!(lck_sleep_action & (LCK_SLEEP_SHARED|LCK_SLEEP_EXCLUSIVE)))
+			if (!(lck_sleep_action & (LCK_SLEEP_SHARED | LCK_SLEEP_EXCLUSIVE))) {
 				lck_rw_lock(lck, lck_rw_type);
-			else if (lck_sleep_action & LCK_SLEEP_EXCLUSIVE)
+			} else if (lck_sleep_action & LCK_SLEEP_EXCLUSIVE) {
 				lck_rw_lock_exclusive(lck);
-			else
+			} else {
 				lck_rw_lock_shared(lck);
+			}
 		}
-	}
-	else
-	if (lck_sleep_action & LCK_SLEEP_UNLOCK)
+	} else if (lck_sleep_action & LCK_SLEEP_UNLOCK) {
 		(void)lck_rw_done(lck);
+	}
 
 	if (lck_sleep_action & LCK_SLEEP_PROMOTED_PRI) {
 		if ((thread->rwlock_count-- == 1 /* field now 0 */) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
@@ -1529,7 +1592,8 @@ lck_rw_sleep_deadline(
  * lck_rw_clear_promotion: Undo priority promotions when the last RW
  * lock is released by a thread (if a promotion was active)
  */
-void lck_rw_clear_promotion(thread_t thread, uintptr_t trace_obj)
+void
+lck_rw_clear_promotion(thread_t thread, uintptr_t trace_obj)
 {
 	assert(thread->rwlock_count == 0);
 
@@ -1537,8 +1601,9 @@ void lck_rw_clear_promotion(thread_t thread, uintptr_t trace_obj)
 	spl_t s = splsched();
 	thread_lock(thread);
 
-	if (thread->sched_flags & TH_SFLAG_RW_PROMOTED)
+	if (thread->sched_flags & TH_SFLAG_RW_PROMOTED) {
 		sched_thread_unpromote_reason(thread, TH_SFLAG_RW_PROMOTED, trace_obj);
+	}
 
 	thread_unlock(thread);
 	splx(s);
@@ -1553,43 +1618,46 @@ void lck_rw_clear_promotion(thread_t thread, uintptr_t trace_obj)
 void
 lck_rw_set_promotion_locked(thread_t thread)
 {
-	if (LcksOpts & disLkRWPrio)
+	if (LcksOpts & disLkRWPrio) {
 		return;
+	}
 
 	assert(thread->rwlock_count > 0);
 
-	if (!(thread->sched_flags & TH_SFLAG_RW_PROMOTED))
+	if (!(thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
 		sched_thread_promote_reason(thread, TH_SFLAG_RW_PROMOTED, 0);
+	}
 }
 
 kern_return_t
 host_lockgroup_info(
-	host_t					host,
-	lockgroup_info_array_t	*lockgroup_infop,
-	mach_msg_type_number_t	*lockgroup_infoCntp)
+	host_t                                  host,
+	lockgroup_info_array_t  *lockgroup_infop,
+	mach_msg_type_number_t  *lockgroup_infoCntp)
 {
-	lockgroup_info_t	*lockgroup_info_base;
-	lockgroup_info_t	*lockgroup_info;
-	vm_offset_t			lockgroup_info_addr;
-	vm_size_t			lockgroup_info_size;
-	vm_size_t			lockgroup_info_vmsize;
-	lck_grp_t			*lck_grp;
-	unsigned int		i;
-	vm_map_copy_t		copy;
-	kern_return_t		kr;
+	lockgroup_info_t        *lockgroup_info_base;
+	lockgroup_info_t        *lockgroup_info;
+	vm_offset_t                     lockgroup_info_addr;
+	vm_size_t                       lockgroup_info_size;
+	vm_size_t                       lockgroup_info_vmsize;
+	lck_grp_t                       *lck_grp;
+	unsigned int            i;
+	vm_map_copy_t           copy;
+	kern_return_t           kr;
 
-	if (host == HOST_NULL)
+	if (host == HOST_NULL) {
 		return KERN_INVALID_HOST;
+	}
 
 	lck_mtx_lock(&lck_grp_lock);
 
 	lockgroup_info_size = lck_grp_cnt * sizeof(*lockgroup_info);
 	lockgroup_info_vmsize = round_page(lockgroup_info_size);
 	kr = kmem_alloc_pageable(ipc_kernel_map,
-						 &lockgroup_info_addr, lockgroup_info_vmsize, VM_KERN_MEMORY_IPC);
+	    &lockgroup_info_addr, lockgroup_info_vmsize, VM_KERN_MEMORY_IPC);
 	if (kr != KERN_SUCCESS) {
 		lck_mtx_unlock(&lck_grp_lock);
-		return(kr);
+		return kr;
 	}
 
 	lockgroup_info_base = (lockgroup_info_t *) lockgroup_info_addr;
@@ -1597,35 +1665,22 @@ host_lockgroup_info(
 	lockgroup_info = lockgroup_info_base;
 
 	for (i = 0; i < lck_grp_cnt; i++) {
-
 		lockgroup_info->lock_spin_cnt = lck_grp->lck_grp_spincnt;
-		lockgroup_info->lock_spin_util_cnt = lck_grp->lck_grp_stat.lck_grp_spin_stat.lck_grp_spin_util_cnt;
-		lockgroup_info->lock_spin_held_cnt = lck_grp->lck_grp_stat.lck_grp_spin_stat.lck_grp_spin_held_cnt;
-		lockgroup_info->lock_spin_miss_cnt = lck_grp->lck_grp_stat.lck_grp_spin_stat.lck_grp_spin_miss_cnt;
-		lockgroup_info->lock_spin_held_max = lck_grp->lck_grp_stat.lck_grp_spin_stat.lck_grp_spin_held_max;
-		lockgroup_info->lock_spin_held_cum = lck_grp->lck_grp_stat.lck_grp_spin_stat.lck_grp_spin_held_cum;
-
-		lockgroup_info->lock_mtx_cnt = lck_grp->lck_grp_mtxcnt;
-		lockgroup_info->lock_mtx_util_cnt = lck_grp->lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_util_cnt;
-		lockgroup_info->lock_mtx_held_cnt = lck_grp->lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_held_cnt;
-		lockgroup_info->lock_mtx_miss_cnt = lck_grp->lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_miss_cnt;
-		lockgroup_info->lock_mtx_wait_cnt = lck_grp->lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_wait_cnt;
-		lockgroup_info->lock_mtx_held_max = lck_grp->lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_held_max;
-		lockgroup_info->lock_mtx_held_cum = lck_grp->lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_held_cum;
-		lockgroup_info->lock_mtx_wait_max = lck_grp->lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_wait_max;
-		lockgroup_info->lock_mtx_wait_cum = lck_grp->lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_wait_cum;
-
 		lockgroup_info->lock_rw_cnt = lck_grp->lck_grp_rwcnt;
-		lockgroup_info->lock_rw_util_cnt = lck_grp->lck_grp_stat.lck_grp_rw_stat.lck_grp_rw_util_cnt;
-		lockgroup_info->lock_rw_held_cnt = lck_grp->lck_grp_stat.lck_grp_rw_stat.lck_grp_rw_held_cnt;
-		lockgroup_info->lock_rw_miss_cnt = lck_grp->lck_grp_stat.lck_grp_rw_stat.lck_grp_rw_miss_cnt;
-		lockgroup_info->lock_rw_wait_cnt = lck_grp->lck_grp_stat.lck_grp_rw_stat.lck_grp_rw_wait_cnt;
-		lockgroup_info->lock_rw_held_max = lck_grp->lck_grp_stat.lck_grp_rw_stat.lck_grp_rw_held_max;
-		lockgroup_info->lock_rw_held_cum = lck_grp->lck_grp_stat.lck_grp_rw_stat.lck_grp_rw_held_cum;
-		lockgroup_info->lock_rw_wait_max = lck_grp->lck_grp_stat.lck_grp_rw_stat.lck_grp_rw_wait_max;
-		lockgroup_info->lock_rw_wait_cum = lck_grp->lck_grp_stat.lck_grp_rw_stat.lck_grp_rw_wait_cum;
+		lockgroup_info->lock_mtx_cnt = lck_grp->lck_grp_mtxcnt;
 
-		(void) strncpy(lockgroup_info->lockgroup_name,lck_grp->lck_grp_name, LOCKGROUP_MAX_NAME);
+#if LOCK_STATS
+		lockgroup_info->lock_spin_held_cnt = lck_grp->lck_grp_stats.lgss_spin_held.lgs_count;
+		lockgroup_info->lock_spin_miss_cnt = lck_grp->lck_grp_stats.lgss_spin_miss.lgs_count;
+#endif /* LOCK_STATS */
+
+		// Historically on x86, held was used for "direct wait" and util for "held"
+		lockgroup_info->lock_mtx_util_cnt = lck_grp->lck_grp_stats.lgss_mtx_held.lgs_count;
+		lockgroup_info->lock_mtx_held_cnt = lck_grp->lck_grp_stats.lgss_mtx_direct_wait.lgs_count;
+		lockgroup_info->lock_mtx_miss_cnt = lck_grp->lck_grp_stats.lgss_mtx_miss.lgs_count;
+		lockgroup_info->lock_mtx_wait_cnt = lck_grp->lck_grp_stats.lgss_mtx_wait.lgs_count;
+
+		(void) strncpy(lockgroup_info->lockgroup_name, lck_grp->lck_grp_name, LOCKGROUP_MAX_NAME);
 
 		lck_grp = (lck_grp_t *)(queue_next((queue_entry_t)(lck_grp)));
 		lockgroup_info++;
@@ -1634,70 +1689,70 @@ host_lockgroup_info(
 	*lockgroup_infoCntp = lck_grp_cnt;
 	lck_mtx_unlock(&lck_grp_lock);
 
-	if (lockgroup_info_size != lockgroup_info_vmsize)
+	if (lockgroup_info_size != lockgroup_info_vmsize) {
 		bzero((char *)lockgroup_info, lockgroup_info_vmsize - lockgroup_info_size);
+	}
 
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)lockgroup_info_addr,
-			   (vm_map_size_t)lockgroup_info_size, TRUE, &copy);
+	    (vm_map_size_t)lockgroup_info_size, TRUE, &copy);
 	assert(kr == KERN_SUCCESS);
 
 	*lockgroup_infop = (lockgroup_info_t *) copy;
 
-	return(KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
  * Atomic primitives, prototyped in kern/simple_lock.h
  * Noret versions are more efficient on some architectures
  */
-	
+
 uint32_t
 hw_atomic_add(volatile uint32_t *dest, uint32_t delt)
 {
-	ALIGN_TEST(dest,uint32_t);
-	return __c11_atomic_fetch_add(ATOMIC_CAST(uint32_t,dest), delt, memory_order_relaxed) + delt;
+	ALIGN_TEST(dest, uint32_t);
+	return __c11_atomic_fetch_add(ATOMIC_CAST(uint32_t, dest), delt, memory_order_relaxed) + delt;
 }
 
 uint32_t
 hw_atomic_sub(volatile uint32_t *dest, uint32_t delt)
 {
-	ALIGN_TEST(dest,uint32_t);
-	return __c11_atomic_fetch_sub(ATOMIC_CAST(uint32_t,dest), delt, memory_order_relaxed) - delt;
+	ALIGN_TEST(dest, uint32_t);
+	return __c11_atomic_fetch_sub(ATOMIC_CAST(uint32_t, dest), delt, memory_order_relaxed) - delt;
 }
 
 uint32_t
 hw_atomic_or(volatile uint32_t *dest, uint32_t mask)
 {
-	ALIGN_TEST(dest,uint32_t);
-	return __c11_atomic_fetch_or(ATOMIC_CAST(uint32_t,dest), mask, memory_order_relaxed) | mask;
+	ALIGN_TEST(dest, uint32_t);
+	return __c11_atomic_fetch_or(ATOMIC_CAST(uint32_t, dest), mask, memory_order_relaxed) | mask;
 }
 
 void
 hw_atomic_or_noret(volatile uint32_t *dest, uint32_t mask)
 {
-	ALIGN_TEST(dest,uint32_t);
-	__c11_atomic_fetch_or(ATOMIC_CAST(uint32_t,dest), mask, memory_order_relaxed);
+	ALIGN_TEST(dest, uint32_t);
+	__c11_atomic_fetch_or(ATOMIC_CAST(uint32_t, dest), mask, memory_order_relaxed);
 }
 
 uint32_t
 hw_atomic_and(volatile uint32_t *dest, uint32_t mask)
 {
-	ALIGN_TEST(dest,uint32_t);
-	return __c11_atomic_fetch_and(ATOMIC_CAST(uint32_t,dest), mask, memory_order_relaxed) & mask;
+	ALIGN_TEST(dest, uint32_t);
+	return __c11_atomic_fetch_and(ATOMIC_CAST(uint32_t, dest), mask, memory_order_relaxed) & mask;
 }
 
 void
 hw_atomic_and_noret(volatile uint32_t *dest, uint32_t mask)
 {
-	ALIGN_TEST(dest,uint32_t);
-	__c11_atomic_fetch_and(ATOMIC_CAST(uint32_t,dest), mask, memory_order_relaxed);
+	ALIGN_TEST(dest, uint32_t);
+	__c11_atomic_fetch_and(ATOMIC_CAST(uint32_t, dest), mask, memory_order_relaxed);
 }
 
 uint32_t
 hw_compare_and_store(uint32_t oldval, uint32_t newval, volatile uint32_t *dest)
 {
-	ALIGN_TEST(dest,uint32_t);
-	return __c11_atomic_compare_exchange_strong(ATOMIC_CAST(uint32_t,dest), &oldval, newval,
-			memory_order_acq_rel_smp, memory_order_relaxed);
+	ALIGN_TEST(dest, uint32_t);
+	return __c11_atomic_compare_exchange_strong(ATOMIC_CAST(uint32_t, dest), &oldval, newval,
+	           memory_order_acq_rel_smp, memory_order_relaxed);
 }
-

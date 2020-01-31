@@ -58,28 +58,28 @@ void T_SYM(set_current_expr)(const char * expr_fmt, ...);
 void T_SYM(set_current_var)(const char * name, const char * value_fmt, ...);
 
 typedef union {
-    char _char;
-    unsigned char _uchar;
+	char _char;
+	unsigned char _uchar;
 
-    short _short;
-    unsigned short _ushort;
+	short _short;
+	unsigned short _ushort;
 
-    int _int;
-    unsigned int _uint;
+	int _int;
+	unsigned int _uint;
 
-    long _long;
-    unsigned long _ulong;
+	long _long;
+	unsigned long _ulong;
 
-    long long _llong;
-    unsigned long long _ullong;
+	long long _llong;
+	unsigned long long _ullong;
 
-    float _float;
+	float _float;
 
-    double _double;
+	double _double;
 
-    long double _ldouble;
+	long double _ldouble;
 
-    void* _ptr;
+	void* _ptr;
 } T_SYM(temp);
 
 extern T_SYM(temp) T_SYM(temp1), T_SYM(temp2), T_SYM(temp3);
@@ -117,7 +117,7 @@ extern T_SYM(temp) T_SYM(temp1), T_SYM(temp2), T_SYM(temp3);
 } while(0)
 
 #define T_SET_AUX_VARS do {\
-	/* Only used in userspace lib for now */\
+	/* Only used in userspace lib for now */ \
 } while(0)
 
 #define T_ASSERTION_CHECK do {\
@@ -129,8 +129,8 @@ extern T_SYM(temp) T_SYM(temp1), T_SYM(temp2), T_SYM(temp3);
 	T_SYM(temp1).type = (lhs);\
 	T_SYM(temp2).type = (rhs);\
 	T_SYM(set_current_expr)(T_TOSTRING(lhs) " "\
-				T_TOSTRING(cmp) " "\
-				T_TOSTRING(rhs));\
+	                        T_TOSTRING(cmp) " "\
+	                        T_TOSTRING(rhs));\
 	T_SYM(set_current_var)(T_TOSTRING(lhs), fmt, T_SYM(temp1).type);\
 	T_SYM(set_current_var)(T_TOSTRING(rhs), fmt, T_SYM(temp2).type);\
 	T_SET_AUX_VARS;\
@@ -259,8 +259,8 @@ extern T_SYM(temp) T_SYM(temp1), T_SYM(temp2), T_SYM(temp3);
 	T_SYM(temp1)._int = (int)(!!(expr));\
 	T_SYM(set_current_expr)(T_TOSTRING(expr) " != NULL");\
 	T_SYM(set_current_var)(T_TOSTRING(expr),\
-			       "%s",\
-			       T_SYM(temp1)._int ? "<NOTNULL>" : "NULL");\
+	                       "%s",\
+	                       T_SYM(temp1)._int ? "<NOTNULL>" : "NULL");\
 	T_SET_AUX_VARS;\
 	T_SYM(set_current_msg)(msg, ## __VA_ARGS__);\
 	T_SYM(testcase)(T_SYM(temp1)._int);\
@@ -271,8 +271,8 @@ extern T_SYM(temp) T_SYM(temp1), T_SYM(temp2), T_SYM(temp3);
 	T_SYM(temp1)._int = (int)(!(expr));\
 	T_SYM(set_current_expr)(T_TOSTRING(expr) " == NULL");\
 	T_SYM(set_current_var)(T_TOSTRING(expr),\
-			       "%s",\
-			       T_SYM(temp1)._int ? "NULL" : "<NOTNULL>");\
+	                       "%s",\
+	                       T_SYM(temp1)._int ? "NULL" : "<NOTNULL>");\
 	T_SET_AUX_VARS;\
 	T_SYM(set_current_msg)(msg, ## __VA_ARGS__);\
 	T_SYM(testcase)(T_SYM(temp1)._int);\
@@ -327,310 +327,310 @@ extern T_SYM(temp) T_SYM(temp1), T_SYM(temp2), T_SYM(temp3);
 
 /* char */
 
-#define T_EXPECT_EQ_CHAR(lhs, rhs, msg, ...)\
+#define T_EXPECT_EQ_CHAR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_char, "%c", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_NE_CHAR(lhs, rhs, msg, ...)\
+#define T_EXPECT_NE_CHAR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_char, "%c", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LT_CHAR(lhs, rhs, msg, ...)\
+#define T_EXPECT_LT_CHAR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_char, "%c", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GT_CHAR(lhs, rhs, msg, ...)\
+#define T_EXPECT_GT_CHAR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_char, "%c", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LE_CHAR(lhs, rhs, msg, ...)\
+#define T_EXPECT_LE_CHAR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_char, "%c", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GE_CHAR(lhs, rhs, msg, ...)\
+#define T_EXPECT_GE_CHAR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_char, "%c", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
-#define T_ASSERT_EQ_CHAR(lhs, rhs, msg, ...)\
+#define T_ASSERT_EQ_CHAR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_char, "%c", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_NE_CHAR(lhs, rhs, msg, ...)\
+#define T_ASSERT_NE_CHAR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_char, "%c", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LT_CHAR(lhs, rhs, msg, ...)\
+#define T_ASSERT_LT_CHAR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_char, "%c", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GT_CHAR(lhs, rhs, msg, ...)\
+#define T_ASSERT_GT_CHAR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_char, "%c", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LE_CHAR(lhs, rhs, msg, ...)\
+#define T_ASSERT_LE_CHAR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_char, "%c", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GE_CHAR(lhs, rhs, msg, ...)\
+#define T_ASSERT_GE_CHAR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_char, "%c", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
 /* unsigned char */
 
-#define T_EXPECT_EQ_UCHAR(lhs, rhs, msg, ...)\
+#define T_EXPECT_EQ_UCHAR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_uchar, "%c", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_NE_UCHAR(lhs, rhs, msg, ...)\
+#define T_EXPECT_NE_UCHAR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_uchar, "%c", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LT_UCHAR(lhs, rhs, msg, ...)\
+#define T_EXPECT_LT_UCHAR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_uchar, "%c", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GT_UCHAR(lhs, rhs, msg, ...)\
+#define T_EXPECT_GT_UCHAR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_uchar, "%c", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LE_UCHAR(lhs, rhs, msg, ...)\
+#define T_EXPECT_LE_UCHAR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_uchar, "%c", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GE_UCHAR(lhs, rhs, msg, ...)\
+#define T_EXPECT_GE_UCHAR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_uchar, "%c", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
-#define T_ASSERT_EQ_UCHAR(lhs, rhs, msg, ...)\
+#define T_ASSERT_EQ_UCHAR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_uchar, "%c", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_NE_UCHAR(lhs, rhs, msg, ...)\
+#define T_ASSERT_NE_UCHAR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_uchar, "%c", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LT_UCHAR(lhs, rhs, msg, ...)\
+#define T_ASSERT_LT_UCHAR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_uchar, "%c", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GT_UCHAR(lhs, rhs, msg, ...)\
+#define T_ASSERT_GT_UCHAR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_uchar, "%c", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LE_UCHAR(lhs, rhs, msg, ...)\
+#define T_ASSERT_LE_UCHAR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_uchar, "%c", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GE_UCHAR(lhs, rhs, msg, ...)\
+#define T_ASSERT_GE_UCHAR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_uchar, "%c", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
 /* short */
 
-#define T_EXPECT_EQ_SHORT(lhs, rhs, msg, ...)\
+#define T_EXPECT_EQ_SHORT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_short, "%hi", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_NE_SHORT(lhs, rhs, msg, ...)\
+#define T_EXPECT_NE_SHORT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_short, "%hi", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LT_SHORT(lhs, rhs, msg, ...)\
+#define T_EXPECT_LT_SHORT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_short, "%hi", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GT_SHORT(lhs, rhs, msg, ...)\
+#define T_EXPECT_GT_SHORT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_short, "%hi", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LE_SHORT(lhs, rhs, msg, ...)\
+#define T_EXPECT_LE_SHORT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_short, "%hi", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GE_SHORT(lhs, rhs, msg, ...)\
+#define T_EXPECT_GE_SHORT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_short, "%hi", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
-#define T_ASSERT_EQ_SHORT(lhs, rhs, msg, ...)\
+#define T_ASSERT_EQ_SHORT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_short, "%hi", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_NE_SHORT(lhs, rhs, msg, ...)\
+#define T_ASSERT_NE_SHORT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_short, "%hi", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LT_SHORT(lhs, rhs, msg, ...)\
+#define T_ASSERT_LT_SHORT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_short, "%hi", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GT_SHORT(lhs, rhs, msg, ...)\
+#define T_ASSERT_GT_SHORT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_short, "%hi", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LE_SHORT(lhs, rhs, msg, ...)\
+#define T_ASSERT_LE_SHORT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_short, "%hi", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GE_SHORT(lhs, rhs, msg, ...)\
+#define T_ASSERT_GE_SHORT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_short, "%hi", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
 /* unsigned short */
 
-#define T_EXPECT_EQ_USHORT(lhs, rhs, msg, ...)\
+#define T_EXPECT_EQ_USHORT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ushort, "%hu", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_NE_USHORT(lhs, rhs, msg, ...)\
+#define T_EXPECT_NE_USHORT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ushort, "%hu", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LT_USHORT(lhs, rhs, msg, ...)\
+#define T_EXPECT_LT_USHORT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ushort, "%hu", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GT_USHORT(lhs, rhs, msg, ...)\
+#define T_EXPECT_GT_USHORT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ushort, "%hu", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LE_USHORT(lhs, rhs, msg, ...)\
+#define T_EXPECT_LE_USHORT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ushort, "%hu", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GE_USHORT(lhs, rhs, msg, ...)\
+#define T_EXPECT_GE_USHORT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ushort, "%hu", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
-#define T_ASSERT_EQ_USHORT(lhs, rhs, msg, ...)\
+#define T_ASSERT_EQ_USHORT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ushort, "%hu", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_NE_USHORT(lhs, rhs, msg, ...)\
+#define T_ASSERT_NE_USHORT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ushort, "%hu", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LT_USHORT(lhs, rhs, msg, ...)\
+#define T_ASSERT_LT_USHORT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ushort, "%hu", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GT_USHORT(lhs, rhs, msg, ...)\
+#define T_ASSERT_GT_USHORT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ushort, "%hu", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LE_USHORT(lhs, rhs, msg, ...)\
+#define T_ASSERT_LE_USHORT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ushort, "%hu", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GE_USHORT(lhs, rhs, msg, ...)\
+#define T_ASSERT_GE_USHORT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ushort, "%hu", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
 /* int */
 
-#define T_EXPECT_EQ_INT(lhs, rhs, msg, ...)\
+#define T_EXPECT_EQ_INT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_int, "%d", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_NE_INT(lhs, rhs, msg, ...)\
+#define T_EXPECT_NE_INT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_int, "%d", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LT_INT(lhs, rhs, msg, ...)\
+#define T_EXPECT_LT_INT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_int, "%d", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GT_INT(lhs, rhs, msg, ...)\
+#define T_EXPECT_GT_INT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_int, "%d", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LE_INT(lhs, rhs, msg, ...)\
+#define T_EXPECT_LE_INT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_int, "%d", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GE_INT(lhs, rhs, msg, ...)\
+#define T_EXPECT_GE_INT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_int, "%d", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
-#define T_ASSERT_EQ_INT(lhs, rhs, msg, ...)\
+#define T_ASSERT_EQ_INT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_int, "%d", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_NE_INT(lhs, rhs, msg, ...)\
+#define T_ASSERT_NE_INT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_int, "%d", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LT_INT(lhs, rhs, msg, ...)\
+#define T_ASSERT_LT_INT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_int, "%d", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GT_INT(lhs, rhs, msg, ...)\
+#define T_ASSERT_GT_INT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_int, "%d", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LE_INT(lhs, rhs, msg, ...)\
+#define T_ASSERT_LE_INT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_int, "%d", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GE_INT(lhs, rhs, msg, ...)\
+#define T_ASSERT_GE_INT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_int, "%d", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
 /* unsigned int */
 
-#define T_EXPECT_EQ_UINT(lhs, rhs, msg, ...)\
+#define T_EXPECT_EQ_UINT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_uint, "%u", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_NE_UINT(lhs, rhs, msg, ...)\
+#define T_EXPECT_NE_UINT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_uint, "%u", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LT_UINT(lhs, rhs, msg, ...)\
+#define T_EXPECT_LT_UINT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_uint, "%u", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GT_UINT(lhs, rhs, msg, ...)\
+#define T_EXPECT_GT_UINT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_uint, "%u", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LE_UINT(lhs, rhs, msg, ...)\
+#define T_EXPECT_LE_UINT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_uint, "%u", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GE_UINT(lhs, rhs, msg, ...)\
+#define T_EXPECT_GE_UINT(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_uint, "%u", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
-#define T_ASSERT_EQ_UINT(lhs, rhs, msg, ...)\
+#define T_ASSERT_EQ_UINT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_uint, "%u", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_NE_UINT(lhs, rhs, msg, ...)\
+#define T_ASSERT_NE_UINT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_uint, "%u", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LT_UINT(lhs, rhs, msg, ...)\
+#define T_ASSERT_LT_UINT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_uint, "%u", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GT_UINT(lhs, rhs, msg, ...)\
+#define T_ASSERT_GT_UINT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_uint, "%u", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LE_UINT(lhs, rhs, msg, ...)\
+#define T_ASSERT_LE_UINT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_uint, "%u", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GE_UINT(lhs, rhs, msg, ...)\
+#define T_ASSERT_GE_UINT(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_uint, "%u", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
 /* long */
 
-#define T_EXPECT_EQ_LONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_EQ_LONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_long, "%li", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_NE_LONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_NE_LONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_long, "%li", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LT_LONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_LT_LONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_long, "%li", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GT_LONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_GT_LONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_long, "%li", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LE_LONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_LE_LONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_long, "%li", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GE_LONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_GE_LONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_long, "%li", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
-#define T_ASSERT_EQ_LONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_EQ_LONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_long, "%li", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_NE_LONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_NE_LONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_long, "%li", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LT_LONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_LT_LONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_long, "%li", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GT_LONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_GT_LONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_long, "%li", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LE_LONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_LE_LONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_long, "%li", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GE_LONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_GE_LONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_long, "%li", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
 /* unsigned long */
 
-#define T_EXPECT_EQ_ULONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_EQ_ULONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ulong, "%lu", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_NE_ULONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_NE_ULONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ulong, "%lu", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LT_ULONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_LT_ULONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ulong, "%lu", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GT_ULONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_GT_ULONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ulong, "%lu", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LE_ULONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_LE_ULONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ulong, "%lu", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GE_ULONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_GE_ULONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ulong, "%lu", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
-#define T_ASSERT_EQ_ULONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_EQ_ULONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ulong, "%lu", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_NE_ULONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_NE_ULONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ulong, "%lu", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LT_ULONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_LT_ULONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ulong, "%lu", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GT_ULONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_GT_ULONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ulong, "%lu", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LE_ULONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_LE_ULONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ulong, "%lu", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GE_ULONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_GE_ULONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ulong, "%lu", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
 /* long long */
 
-#define T_EXPECT_EQ_LLONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_EQ_LLONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_llong, "%lli", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_NE_LLONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_NE_LLONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_llong, "%lli", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LT_LLONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_LT_LLONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_llong, "%lli", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GT_LLONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_GT_LLONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_llong, "%lli", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LE_LLONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_LE_LLONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_llong, "%lli", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GE_LLONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_GE_LLONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_llong, "%lli", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
-#define T_ASSERT_EQ_LLONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_EQ_LLONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_llong, "%lli", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_NE_LLONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_NE_LLONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_llong, "%lli", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LT_LLONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_LT_LLONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_llong, "%lli", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GT_LLONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_GT_LLONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_llong, "%lli", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LE_LLONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_LE_LLONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_llong, "%lli", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GE_LLONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_GE_LLONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_llong, "%lli", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
 /* unsigned long long */
 
-#define T_EXPECT_EQ_ULLONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_EQ_ULLONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ullong, "%llu", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_NE_ULLONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_NE_ULLONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ullong, "%llu", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LT_ULLONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_LT_ULLONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ullong, "%llu", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GT_ULLONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_GT_ULLONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ullong, "%llu", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LE_ULLONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_LE_ULLONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ullong, "%llu", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GE_ULLONG(lhs, rhs, msg, ...)\
+#define T_EXPECT_GE_ULLONG(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ullong, "%llu", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
-#define T_ASSERT_EQ_ULLONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_EQ_ULLONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ullong, "%llu", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_NE_ULLONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_NE_ULLONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ullong, "%llu", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LT_ULLONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_LT_ULLONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ullong, "%llu", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GT_ULLONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_GT_ULLONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ullong, "%llu", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LE_ULLONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_LE_ULLONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ullong, "%llu", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GE_ULLONG(lhs, rhs, msg, ...)\
+#define T_ASSERT_GE_ULLONG(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ullong, "%llu", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
 /* pointer */
 
-#define T_EXPECT_EQ_PTR(lhs, rhs, msg, ...)\
+#define T_EXPECT_EQ_PTR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ptr, "%p", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_NE_PTR(lhs, rhs, msg, ...)\
+#define T_EXPECT_NE_PTR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ptr, "%p", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LT_PTR(lhs, rhs, msg, ...)\
+#define T_EXPECT_LT_PTR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ptr, "%p", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GT_PTR(lhs, rhs, msg, ...)\
+#define T_EXPECT_GT_PTR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ptr, "%p", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_LE_PTR(lhs, rhs, msg, ...)\
+#define T_EXPECT_LE_PTR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ptr, "%p", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_EXPECT_GE_PTR(lhs, rhs, msg, ...)\
+#define T_EXPECT_GE_PTR(lhs, rhs, msg, ...) \
 	T_EXPECT_BLOCK2(_ptr, "%p", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
-#define T_ASSERT_EQ_PTR(lhs, rhs, msg, ...)\
+#define T_ASSERT_EQ_PTR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ptr, "%p", ==, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_NE_PTR(lhs, rhs, msg, ...)\
+#define T_ASSERT_NE_PTR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ptr, "%p", !=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LT_PTR(lhs, rhs, msg, ...)\
+#define T_ASSERT_LT_PTR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ptr, "%p", <, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GT_PTR(lhs, rhs, msg, ...)\
+#define T_ASSERT_GT_PTR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ptr, "%p", >, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_LE_PTR(lhs, rhs, msg, ...)\
+#define T_ASSERT_LE_PTR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ptr, "%p", <=, lhs, rhs, msg, ## __VA_ARGS__)
-#define T_ASSERT_GE_PTR(lhs, rhs, msg, ...)\
+#define T_ASSERT_GE_PTR(lhs, rhs, msg, ...) \
 	T_ASSERT_BLOCK2(_ptr, "%p", >=, lhs, rhs, msg, ## __VA_ARGS__)
 
 /*
@@ -639,8 +639,8 @@ extern T_SYM(temp) T_SYM(temp1), T_SYM(temp2), T_SYM(temp3);
  */
 #define T_PERF(metric, value, unit, desc) \
 	do {                                              \
-		T_SAVEINFO;                               \
-		T_SYM(perf)(metric, unit, value, desc);   \
+	        T_SAVEINFO;                               \
+	        T_SYM(perf)(metric, unit, value, desc);   \
 	} while (0)
 
 #endif /* _TESTS_KTEST_H */

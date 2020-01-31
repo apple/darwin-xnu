@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -94,17 +94,17 @@
 
 kern_return_t
 ipc_pset_alloc(
-	ipc_space_t		space,
-	mach_port_name_t	*namep,
-	ipc_pset_t		*psetp)
+	ipc_space_t             space,
+	mach_port_name_t        *namep,
+	ipc_pset_t              *psetp)
 {
 	ipc_pset_t pset;
 	mach_port_name_t name;
 	kern_return_t kr;
 
 	kr = ipc_object_alloc(space, IOT_PORT_SET,
-			      MACH_PORT_TYPE_PORT_SET, 0,
-			      &name, (ipc_object_t *) &pset);
+	    MACH_PORT_TYPE_PORT_SET, 0,
+	    &name, (ipc_object_t *) &pset);
 	if (kr != KERN_SUCCESS) {
 		return kr;
 	}
@@ -134,16 +134,16 @@ ipc_pset_alloc(
 
 kern_return_t
 ipc_pset_alloc_name(
-	ipc_space_t		space,
-	mach_port_name_t	name,
-	ipc_pset_t		*psetp)
+	ipc_space_t             space,
+	mach_port_name_t        name,
+	ipc_pset_t              *psetp)
 {
 	ipc_pset_t pset;
 	kern_return_t kr;
 
 	kr = ipc_object_alloc_name(space, IOT_PORT_SET,
-				   MACH_PORT_TYPE_PORT_SET, 0,
-				   name, (ipc_object_t *) &pset);
+	    MACH_PORT_TYPE_PORT_SET, 0,
+	    name, (ipc_object_t *) &pset);
 	if (kr != KERN_SUCCESS) {
 		return kr;
 	}
@@ -202,12 +202,12 @@ ipc_pset_alloc_special(
  */
 boolean_t
 ipc_pset_member(
-	ipc_pset_t	pset,
-	ipc_port_t	port)
+	ipc_pset_t      pset,
+	ipc_port_t      port)
 {
 	assert(ip_active(port));
 
-	return (ipc_mqueue_member(&port->ip_messages, &pset->ips_messages));
+	return ipc_mqueue_member(&port->ip_messages, &pset->ips_messages);
 }
 
 
@@ -222,10 +222,10 @@ ipc_pset_member(
 
 kern_return_t
 ipc_pset_add(
-	ipc_pset_t	  pset,
-	ipc_port_t	  port,
-	uint64_t	 *reserved_link,
-	uint64_t	 *reserved_prepost)
+	ipc_pset_t        pset,
+	ipc_port_t        port,
+	uint64_t         *reserved_link,
+	uint64_t         *reserved_prepost)
 {
 	kern_return_t kr;
 
@@ -233,7 +233,7 @@ ipc_pset_add(
 	assert(ip_active(port));
 
 	kr = ipc_mqueue_add(&port->ip_messages, &pset->ips_messages,
-			    reserved_link, reserved_prepost);
+	    reserved_link, reserved_prepost);
 
 	return kr;
 }
@@ -252,15 +252,16 @@ ipc_pset_add(
 
 kern_return_t
 ipc_pset_remove(
-	ipc_pset_t	  pset,
-	ipc_port_t	  port)
+	ipc_pset_t        pset,
+	ipc_port_t        port)
 {
 	kern_return_t kr;
 
 	assert(ip_active(port));
-	
-	if (port->ip_in_pset == 0)
+
+	if (port->ip_in_pset == 0) {
 		return KERN_NOT_IN_SET;
+	}
 
 	kr = ipc_mqueue_remove(&port->ip_messages, &pset->ips_messages);
 
@@ -286,8 +287,9 @@ ipc_pset_lazy_allocate(
 	ipc_pset_t pset;
 
 	kr = ipc_right_lookup_read(space, psname, &entry);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		return kr;
+	}
 
 	/* space is read-locked and active */
 	if ((entry->ie_bits & MACH_PORT_TYPE_PORT_SET) == 0) {
@@ -326,12 +328,13 @@ ipc_pset_lazy_allocate(
 
 kern_return_t
 ipc_pset_remove_from_all(
-	ipc_port_t	port)
+	ipc_port_t      port)
 {
-	if (port->ip_in_pset == 0)
+	if (port->ip_in_pset == 0) {
 		return KERN_NOT_IN_SET;
+	}
 
-	/* 
+	/*
 	 * Remove the port's mqueue from all sets
 	 */
 	ipc_mqueue_remove_from_all(&port->ip_messages);
@@ -351,7 +354,8 @@ ipc_pset_remove_from_all(
 
 void
 ipc_pset_destroy(
-	ipc_pset_t	pset)
+	ipc_space_t     space,
+	ipc_pset_t      pset)
 {
 	assert(ips_active(pset));
 
@@ -368,7 +372,7 @@ ipc_pset_destroy(
 	 * discover the change.
 	 */
 	imq_lock(&pset->ips_messages);
-	ipc_mqueue_changed(&pset->ips_messages);
+	ipc_mqueue_changed(space, &pset->ips_messages);
 	imq_unlock(&pset->ips_messages);
 
 	ipc_mqueue_deinit(&pset->ips_messages);
@@ -443,14 +447,20 @@ filt_machport_stash_port(struct knote *kn, ipc_port_t port, int *link)
 	struct turnstile *ts = filt_machport_kqueue_turnstile(kn);
 
 	if (!ts) {
-		if (link) *link = PORT_SYNC_LINK_NO_LINKAGE;
+		if (link) {
+			*link = PORT_SYNC_LINK_NO_LINKAGE;
+		}
 	} else if (kn->kn_ext[3] == 0) {
 		ip_reference(port);
 		kn->kn_ext[3] = (uintptr_t)port;
-		if (link) *link = PORT_SYNC_LINK_WORKLOOP_KNOTE;
+		if (link) {
+			*link = PORT_SYNC_LINK_WORKLOOP_KNOTE;
+		}
 	} else {
 		ts = (struct turnstile *)kn->kn_hook;
-		if (link) *link = PORT_SYNC_LINK_WORKLOOP_STASH;
+		if (link) {
+			*link = PORT_SYNC_LINK_WORKLOOP_STASH;
+		}
 	}
 
 	return ts;
@@ -483,24 +493,25 @@ filt_machport_stashed_special_reply_port_turnstile(ipc_port_t port)
  */
 void
 filt_machport_turnstile_prepare_lazily(
-		struct knote *kn,
-		mach_msg_type_name_t msgt_name,
-		ipc_port_t port)
+	struct knote *kn,
+	mach_msg_type_name_t msgt_name,
+	ipc_port_t port)
 {
 	/* This is called from within filt_machportprocess */
 	assert((kn->kn_status & KN_SUPPRESSED) && (kn->kn_status & KN_LOCKED));
 
 	struct turnstile *ts = filt_machport_kqueue_turnstile(kn);
-	if (ts == TURNSTILE_NULL || kn->kn_ext[3] == 0 || kn->kn_hook)
+	if (ts == TURNSTILE_NULL || kn->kn_ext[3] == 0 || kn->kn_hook) {
 		return;
+	}
 
 	if ((msgt_name == MACH_MSG_TYPE_PORT_SEND_ONCE && port->ip_specialreply) ||
-			(msgt_name == MACH_MSG_TYPE_PORT_RECEIVE)) {
+	    (msgt_name == MACH_MSG_TYPE_PORT_RECEIVE)) {
 		struct turnstile *kn_ts = turnstile_alloc();
 		kn_ts = turnstile_prepare((uintptr_t)kn,
-				(struct turnstile **)&kn->kn_hook, kn_ts, TURNSTILE_KNOTE);
+		    (struct turnstile **)&kn->kn_hook, kn_ts, TURNSTILE_KNOTE);
 		turnstile_update_inheritor(kn_ts, ts,
-				TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_TURNSTILE);
+		    TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_TURNSTILE);
 		turnstile_cleanup();
 	}
 }
@@ -531,9 +542,9 @@ filt_machport_turnstile_complete(struct knote *kn)
 			 * neuter the linkage.
 			 */
 			if (port->ip_sync_link_state == PORT_SYNC_LINK_WORKLOOP_KNOTE &&
-					port->ip_sync_inheritor_knote == kn) {
+			    port->ip_sync_inheritor_knote == kn) {
 				ipc_port_adjust_special_reply_port_locked(port, NULL,
-						(IPC_PORT_ADJUST_SR_NONE | IPC_PORT_ADJUST_SR_ENABLE_EVENT), FALSE);
+				    (IPC_PORT_ADJUST_SR_NONE | IPC_PORT_ADJUST_SR_ENABLE_EVENT), FALSE);
 			} else {
 				ip_unlock(port);
 			}
@@ -558,7 +569,7 @@ filt_machport_turnstile_complete(struct knote *kn)
 			}
 			if (ts) {
 				turnstile_update_inheritor(ts, TURNSTILE_INHERITOR_NULL,
-						TURNSTILE_IMMEDIATE_UPDATE);
+				    TURNSTILE_IMMEDIATE_UPDATE);
 				turnstile_reference(ts);
 			}
 			imq_unlock(mqueue);
@@ -578,7 +589,7 @@ filt_machport_turnstile_complete(struct knote *kn)
 		ts = kn->kn_hook;
 
 		turnstile_update_inheritor(ts, TURNSTILE_INHERITOR_NULL,
-				TURNSTILE_IMMEDIATE_UPDATE);
+		    TURNSTILE_IMMEDIATE_UPDATE);
 		turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_HELD);
 
 		turnstile_complete((uintptr_t)kn, (struct turnstile **)&kn->kn_hook, &ts);
@@ -591,8 +602,8 @@ filt_machport_turnstile_complete(struct knote *kn)
 
 static int
 filt_machportattach(
-		struct knote *kn,
-		__unused struct kevent_internal_s *kev)
+	struct knote *kn,
+	__unused struct kevent_internal_s *kev)
 {
 	mach_port_name_t name = (mach_port_name_t)kn->kn_kevent.ident;
 	uint64_t wq_link_id = waitq_link_reserve(NULL);
@@ -681,7 +692,6 @@ check_lookup:
 			 * need an indication of their fired state to be returned
 			 * from the attach operation.
 			 */
-
 		} else if (entry->ie_bits & MACH_PORT_TYPE_RECEIVE) {
 			ipc_port_t port;
 
@@ -714,7 +724,7 @@ check_lookup:
 			if (send_turnstile) {
 				turnstile_reference(send_turnstile);
 				turnstile_update_inheritor(send_turnstile, turnstile,
-					(TURNSTILE_INHERITOR_TURNSTILE | TURNSTILE_IMMEDIATE_UPDATE));
+				    (TURNSTILE_INHERITOR_TURNSTILE | TURNSTILE_IMMEDIATE_UPDATE));
 			}
 
 			if ((first = ipc_kmsg_queue_first(&mqueue->imq_messages)) != IKM_NULL) {
@@ -724,7 +734,7 @@ check_lookup:
 			is_read_unlock(space);
 			if (send_turnstile) {
 				turnstile_update_inheritor_complete(send_turnstile,
-						TURNSTILE_INTERLOCK_NOT_HELD);
+				    TURNSTILE_INTERLOCK_NOT_HELD);
 				turnstile_deallocate(send_turnstile);
 			}
 
@@ -733,7 +743,7 @@ check_lookup:
 			is_read_unlock(space);
 			error = ENOTSUP;
 		}
-	} else  {
+	} else {
 		error = ENOENT;
 	}
 
@@ -781,8 +791,8 @@ filt_machportdetach(
 		if (send_turnstile) {
 			turnstile_reference(send_turnstile);
 			turnstile_update_inheritor(send_turnstile,
-				ipc_port_get_inheritor(port),
-				TURNSTILE_INHERITOR_TURNSTILE | TURNSTILE_IMMEDIATE_UPDATE);
+			    ipc_port_get_inheritor(port),
+			    TURNSTILE_INHERITOR_TURNSTILE | TURNSTILE_IMMEDIATE_UPDATE);
 		}
 	}
 
@@ -792,7 +802,7 @@ filt_machportdetach(
 
 	if (send_turnstile) {
 		turnstile_update_inheritor_complete(send_turnstile,
-				TURNSTILE_INTERLOCK_NOT_HELD);
+		    TURNSTILE_INTERLOCK_NOT_HELD);
 		turnstile_deallocate(send_turnstile);
 	}
 
@@ -819,19 +829,9 @@ filt_machportdetach(
  * the message is to be direct-received, we adjust the
  * QoS of the knote according the requested and override
  * QoS of that first message.
- *
- * NOTE_REVOKE events are a legacy way to indicate that the port/portset
- * was deallocated or left the current Mach portspace (modern technique
- * is with an EV_VANISHED protocol).  If we see NOTE_REVOKE, deliver an
- * EV_EOF event for these changes (hopefully it will get delivered before
- * the port name recycles to the same generation count and someone tries
- * to re-register a kevent for it or the events are udata-specific -
- * avoiding a conflict).
  */
 static int
-filt_machportevent(
-	struct knote *kn,
-	long hint)
+filt_machportevent(struct knote *kn, long hint __assert_only)
 {
 	ipc_mqueue_t mqueue = kn->kn_ptr.p_mqueue;
 	ipc_kmsg_t first;
@@ -839,11 +839,8 @@ filt_machportevent(
 
 	/* mqueue locked by caller */
 	assert(imq_held(mqueue));
-
-	if (hint == NOTE_REVOKE) {
-		kn->kn_flags |= EV_EOF | EV_ONESHOT;
-		result = FILTER_ACTIVE | FILTER_RESET_EVENT_QOS;
-	} else if (imq_is_valid(mqueue)) {
+	assert(hint != NOTE_REVOKE);
+	if (imq_is_valid(mqueue)) {
 		assert(!imq_is_set(mqueue));
 		if ((first = ipc_kmsg_queue_first(&mqueue->imq_messages)) != IKM_NULL) {
 			result = FILTER_ACTIVE | filt_machport_adjust_qos(kn, first);
@@ -908,7 +905,7 @@ filt_machportprocess(
 	wait_result_t wresult;
 	mach_msg_option_t option;
 	mach_vm_address_t addr;
-	mach_msg_size_t	size;
+	mach_msg_size_t size;
 
 	/* Capture current state */
 	*kev = kn->kn_kevent;
@@ -924,8 +921,8 @@ filt_machportprocess(
 	 * provided, just force a MACH_RCV_TOO_LARGE to detect the
 	 * name of the port and sizeof the waiting message.
 	 */
-	option = kn->kn_sfflags & (MACH_RCV_MSG|MACH_RCV_LARGE|MACH_RCV_LARGE_IDENTITY|
-	                           MACH_RCV_TRAILER_MASK|MACH_RCV_VOUCHER);
+	option = kn->kn_sfflags & (MACH_RCV_MSG | MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY |
+	    MACH_RCV_TRAILER_MASK | MACH_RCV_VOUCHER);
 
 	if (option & MACH_RCV_MSG) {
 		addr = (mach_vm_address_t) kn->kn_ext[0];
@@ -941,8 +938,9 @@ filt_machportprocess(
 			addr = (mach_vm_address_t)process_data->fp_data_out;
 			size = (mach_msg_size_t)process_data->fp_data_resid;
 			option |= (MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY);
-			if (process_data->fp_flags & KEVENT_FLAG_STACK_DATA)
+			if (process_data->fp_flags & KEVENT_FLAG_STACK_DATA) {
 				option |= MACH_RCV_STACK;
+			}
 		}
 	} else {
 		/* just detect the port name (if a set) and size of the first message */
@@ -975,12 +973,12 @@ filt_machportprocess(
 	self->ith_knote = kn;
 
 	wresult = ipc_mqueue_receive_on_thread(
-			mqueue,
-			option,
-			size, /* max_size */
-			0, /* immediate timeout */
-			THREAD_INTERRUPTIBLE,
-			self);
+		mqueue,
+		option,
+		size,         /* max_size */
+		0,         /* immediate timeout */
+		THREAD_INTERRUPTIBLE,
+		self);
 	/* mqueue unlocked */
 
 	/*
@@ -1024,10 +1022,11 @@ filt_machportprocess(
 	 */
 	if (kev->fflags == MACH_RCV_TOO_LARGE) {
 		kev->ext[1] = self->ith_msize;
-		if (option & MACH_RCV_LARGE_IDENTITY)
+		if (option & MACH_RCV_LARGE_IDENTITY) {
 			kev->data = self->ith_receiver_name;
-		else
+		} else {
 			kev->data = MACH_PORT_NULL;
+		}
 	} else {
 		kev->ext[1] = size;
 		kev->data = MACH_PORT_NULL;
@@ -1047,7 +1046,7 @@ filt_machportprocess(
 		} else {
 			assert(option & MACH_RCV_STACK);
 			kev->ext[0] = process_data->fp_data_out +
-				      process_data->fp_data_resid;
+			    process_data->fp_data_resid;
 		}
 	}
 
@@ -1060,7 +1059,7 @@ filt_machportprocess(
 	 */
 	if (kev->fflags == MACH_MSG_SUCCESS) {
 		kev->ext[2] = ((uint64_t)self->ith_qos << 32) |
-				(uint64_t)self->ith_qos_override;
+		    (uint64_t)self->ith_qos_override;
 	}
 
 	return FILTER_ACTIVE;

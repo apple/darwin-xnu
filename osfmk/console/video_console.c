@@ -161,7 +161,7 @@ MACRO_END
 #define VCPUTC_LOCK_LOCK()				\
 MACRO_BEGIN						\
 	boolean_t istate = ml_get_interrupts_enabled();	\
-	while (!simple_lock_try(&vcputc_lock))		\
+	while (!simple_lock_try(&vcputc_lock, LCK_GRP_NULL))	\
 	{						\
 		if (!istate)				\
 			handle_pending_TLB_flushes();	\
@@ -171,7 +171,7 @@ MACRO_END
 
 #define VCPUTC_LOCK_UNLOCK()				\
 MACRO_BEGIN						\
-	simple_unlock(&vcputc_lock);			\
+	simple_unlock(&vcputc_lock);	\
 MACRO_END
 #else
 static hw_lock_data_t vcputc_lock;
@@ -183,7 +183,7 @@ MACRO_END
 
 #define VCPUTC_LOCK_LOCK()				\
 MACRO_BEGIN						\
-	if (!hw_lock_to(&vcputc_lock, ~0U))\
+	if (!hw_lock_to(&vcputc_lock, ~0U, LCK_GRP_NULL))\
 	{						\
 		panic("VCPUTC_LOCK_LOCK");		\
 	}						\
@@ -191,7 +191,7 @@ MACRO_END
 
 #define VCPUTC_LOCK_UNLOCK()				\
 MACRO_BEGIN						\
-	hw_lock_unlock(&vcputc_lock);			\
+	hw_lock_unlock(&vcputc_lock);	\
 MACRO_END
 #endif
 
@@ -1896,38 +1896,39 @@ enum {
     kDataAlpha     = 0x40,
     kDataBack      = 0x80,
     kDataRotate    = 0x03,
-    kDataRotate0   = 0,
-    kDataRotate90  = 1,
-    kDataRotate180 = 2,
-    kDataRotate270 = 3
 };
 
 static void vc_blit_rect(int x, int y, int bx,
                             int width, int height,
+			    int sourceWidth, int sourceHeight,
 			    int sourceRow, int backRow,
 			    const unsigned char * dataPtr,
 			    void * backBuffer,
 			    unsigned int flags);
 static void vc_blit_rect_8(int x, int y, int bx,
                             int width, int height,
+			    int sourceWidth, int sourceHeight,
 			    int sourceRow, int backRow,
 			    const unsigned char * dataPtr,
 			    unsigned char * backBuffer,
 			    unsigned int flags);
 static void vc_blit_rect_16(int x, int y, int bx,
                             int width, int height,
+			    int sourceWidth, int sourceHeight,
 			    int sourceRow, int backRow,
 			    const unsigned char * dataPtr,
 			    unsigned short * backBuffer,
 			    unsigned int flags);
 static void vc_blit_rect_32(int x, int y, int bx,
                             int width, int height,
+			    int sourceWidth, int sourceHeight,
 			    int sourceRow, int backRow,
 			    const unsigned char * dataPtr,
 			    unsigned int * backBuffer,
 			    unsigned int flags);
 static void vc_blit_rect_30(int x, int y, int bx,
                             int width, int height,
+			    int sourceWidth, int sourceHeight,
 			    int sourceRow, int backRow,
 			    const unsigned char * dataPtr,
 			    unsigned int * backBuffer,
@@ -1939,6 +1940,7 @@ static void vc_progressmeter_task( void * arg0, void * arg );
 
 static void vc_blit_rect(int x, int y, int bx,
 			    int width, int height,
+			    int sourceWidth, int sourceHeight,
 			    int sourceRow, int backRow,
 			    const unsigned char * dataPtr,
 			    void * backBuffer,
@@ -1951,16 +1953,16 @@ static void vc_blit_rect(int x, int y, int bx,
     switch( vinfo.v_depth) {
 	case 8:
             if( vc_clut8 == vc_clut)
-                vc_blit_rect_8( x, y, bx, width, height, sourceRow, backRow, dataPtr, (unsigned char *) backBuffer, flags );
+                vc_blit_rect_8( x, y, bx, width, height, sourceWidth, sourceHeight, sourceRow, backRow, dataPtr, (unsigned char *) backBuffer, flags );
 	    break;
 	case 16:
-	    vc_blit_rect_16( x, y, bx, width, height, sourceRow, backRow, dataPtr, (unsigned short *) backBuffer, flags );
+	    vc_blit_rect_16( x, y, bx, width, height, sourceWidth, sourceHeight, sourceRow, backRow, dataPtr, (unsigned short *) backBuffer, flags );
 	    break;
 	case 32:
-	    vc_blit_rect_32( x, y, bx, width, height, sourceRow, backRow, dataPtr, (unsigned int *) backBuffer, flags );
+	    vc_blit_rect_32( x, y, bx, width, height, sourceWidth, sourceHeight, sourceRow, backRow, dataPtr, (unsigned int *) backBuffer, flags );
 	    break;
 	case 30:
-	    vc_blit_rect_30( x, y, bx, width, height, sourceRow, backRow, dataPtr, (unsigned int *) backBuffer, flags );
+	    vc_blit_rect_30( x, y, bx, width, height, sourceWidth, sourceHeight, sourceRow, backRow, dataPtr, (unsigned int *) backBuffer, flags );
 	    break;
     }
 }
@@ -1968,6 +1970,7 @@ static void vc_blit_rect(int x, int y, int bx,
 static void
 vc_blit_rect_8(int x, int y, __unused int bx,
 	       int width, int height,
+	       int sourceWidth, int sourceHeight,
 	       int sourceRow, __unused int backRow,
 	       const unsigned char * dataPtr,
 	       __unused unsigned char * backBuffer,
@@ -1979,15 +1982,15 @@ vc_blit_rect_8(int x, int y, __unused int bx,
     int sx, sy, a, b, c, d;
     int scale = 0x10000;
 
-    a = vc_rotate_matr[kDataRotate & flags][0][0] * scale;
-    b = vc_rotate_matr[kDataRotate & flags][0][1] * scale;
+    a = (sourceRow == 1) ? 0 : vc_rotate_matr[kDataRotate & flags][0][0] * scale;
+    b = (sourceRow == 1) ? 0 : vc_rotate_matr[kDataRotate & flags][0][1] * scale;
     c = vc_rotate_matr[kDataRotate & flags][1][0] * scale;
     d = vc_rotate_matr[kDataRotate & flags][1][1] * scale;
-    sx = ((a + b) < 0) ? ((width * scale)  - 0x8000) : 0;
-    sy = ((c + d) < 0) ? ((height * scale) - 0x8000) : 0;
+
+    sx = ((a + b) < 0) ? ((sourceWidth * scale)  - 0x8000) : 0;
+    sy = ((c + d) < 0) ? ((sourceHeight * scale) - 0x8000) : 0;
 
     if (!sourceRow) data = (unsigned int)(uintptr_t)dataPtr;
-    else if (1 == sourceRow) a = 0;
 
     dst = (volatile unsigned short *) (vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
@@ -2041,6 +2044,7 @@ vc_blit_rect_8(int x, int y, __unused int bx,
 
 static void vc_blit_rect_16( int x, int y, int bx,
 			     int width, int height,
+			     int sourceWidth, int sourceHeight,
 			     int sourceRow, int backRow,
 			     const unsigned char * dataPtr,
 			     unsigned short * backPtr,
@@ -2052,15 +2056,15 @@ static void vc_blit_rect_16( int x, int y, int bx,
     int sx, sy, a, b, c, d;
     int scale = 0x10000;
 
-    a = vc_rotate_matr[kDataRotate & flags][0][0] * scale;
-    b = vc_rotate_matr[kDataRotate & flags][0][1] * scale;
+    a = (sourceRow == 1) ? 0 : vc_rotate_matr[kDataRotate & flags][0][0] * scale;
+    b = (sourceRow == 1) ? 0 : vc_rotate_matr[kDataRotate & flags][0][1] * scale;
     c = vc_rotate_matr[kDataRotate & flags][1][0] * scale;
     d = vc_rotate_matr[kDataRotate & flags][1][1] * scale;
-    sx = ((a + b) < 0) ? ((width * scale)  - 0x8000) : 0;
-    sy = ((c + d) < 0) ? ((height * scale) - 0x8000) : 0;
+
+    sx = ((a + b) < 0) ? ((sourceWidth * scale)  - 0x8000) : 0;
+    sy = ((c + d) < 0) ? ((sourceHeight * scale) - 0x8000) : 0;
 
     if (!sourceRow) data = (unsigned int)(uintptr_t)dataPtr;
-    else if (1 == sourceRow) a = 0;
 
     if (backPtr)
 	backPtr += bx;
@@ -2107,6 +2111,7 @@ static void vc_blit_rect_16( int x, int y, int bx,
 
 static void vc_blit_rect_32(int x, int y, int bx, 
                             int width, int height,
+			    int sourceWidth, int sourceHeight,
 			    int sourceRow, int backRow,
 			    const unsigned char * dataPtr,
 			    unsigned int * backPtr,
@@ -2118,16 +2123,16 @@ static void vc_blit_rect_32(int x, int y, int bx,
     int sx, sy, a, b, c, d;
     int scale = 0x10000;
 
-    a = vc_rotate_matr[kDataRotate & flags][0][0] * scale;
-    b = vc_rotate_matr[kDataRotate & flags][0][1] * scale;
+    a = (sourceRow == 1) ? 0 : vc_rotate_matr[kDataRotate & flags][0][0] * scale;
+    b = (sourceRow == 1) ? 0 : vc_rotate_matr[kDataRotate & flags][0][1] * scale;
     c = vc_rotate_matr[kDataRotate & flags][1][0] * scale;
     d = vc_rotate_matr[kDataRotate & flags][1][1] * scale;
-    sx = ((a + b) < 0) ? ((width * scale)  - 0x8000) : 0;
-    sy = ((c + d) < 0) ? ((height * scale) - 0x8000) : 0;
 
-    if (!sourceRow) data = (unsigned int)(uintptr_t)dataPtr;
-    else if (1 == sourceRow) a = 0;
+    sx = ((a + b) < 0) ? ((sourceWidth * scale)  - 0x8000) : 0;
+    sy = ((c + d) < 0) ? ((sourceHeight * scale) - 0x8000) : 0;
         
+    if (!sourceRow) data = (unsigned int)(uintptr_t)dataPtr;
+
     if (backPtr)
 	backPtr += bx;
     dst = (volatile unsigned int *) (vinfo.v_baseaddr +
@@ -2171,6 +2176,7 @@ static void vc_blit_rect_32(int x, int y, int bx,
 
 static void vc_blit_rect_30(int x, int y, int bx, 
                             int width, int height,
+			    int sourceWidth, int sourceHeight,
 			    int sourceRow, int backRow,
 			    const unsigned char * dataPtr,
 			    unsigned int * backPtr,
@@ -2183,16 +2189,16 @@ static void vc_blit_rect_30(int x, int y, int bx,
     int sx, sy, a, b, c, d;
     int scale = 0x10000;
 
-    a = vc_rotate_matr[kDataRotate & flags][0][0] * scale;
-    b = vc_rotate_matr[kDataRotate & flags][0][1] * scale;
+    a = (sourceRow == 1) ? 0 : vc_rotate_matr[kDataRotate & flags][0][0] * scale;
+    b = (sourceRow == 1) ? 0 : vc_rotate_matr[kDataRotate & flags][0][1] * scale;
     c = vc_rotate_matr[kDataRotate & flags][1][0] * scale;
     d = vc_rotate_matr[kDataRotate & flags][1][1] * scale;
-    sx = ((a + b) < 0) ? ((width * scale)  - 0x8000) : 0;
-    sy = ((c + d) < 0) ? ((height * scale) - 0x8000) : 0;
 
-    if (!sourceRow) data = (unsigned int)(uintptr_t)dataPtr;
-    else if (1 == sourceRow) a = 0;
+    sx = ((a + b) < 0) ? ((sourceWidth * scale)  - 0x8000) : 0;
+    sy = ((c + d) < 0) ? ((sourceHeight * scale) - 0x8000) : 0;
         
+    if (!sourceRow) data = (unsigned int)(uintptr_t)dataPtr;
+
     if (backPtr)
 	backPtr += bx;
     dst = (volatile unsigned int *) (vinfo.v_baseaddr +
@@ -2243,7 +2249,7 @@ static void vc_clean_boot_graphics(void)
     vc_progress_set(FALSE, 0);
     const unsigned char *
     color = (typeof(color))(uintptr_t)(vc_progress_white ? 0x00000000 : 0xBFBFBFBF);
-    vc_blit_rect(0, 0, 0, vinfo.v_width, vinfo.v_height, 0, 0, color, NULL, 0);
+    vc_blit_rect(0, 0, 0, vinfo.v_width, vinfo.v_height, vinfo.v_width, vinfo.v_height, 0, 0, color, NULL, 0);
 #endif
 }
 
@@ -2409,7 +2415,7 @@ void vc_display_icon( vc_progress_element * desc,
 	    x += ((vinfo.v_width - width) / 2);
 	    y += ((vinfo.v_height - height) / 2);
 	}
-	vc_blit_rect( x, y, 0, width, height, width, 0, data, NULL, kDataIndexed );
+	vc_blit_rect( x, y, 0, width, height, width, height, width, 0, data, NULL, kDataIndexed );
     }
 }
 
@@ -2472,7 +2478,7 @@ vc_progress_set(boolean_t enable, uint32_t vc_delay)
 	if (enable) internal_enable_progressmeter(kProgressMeterKernel);
 
 	s = splhigh();
-	simple_lock(&vc_progress_lock);
+	simple_lock(&vc_progress_lock, LCK_GRP_NULL);
 
 	if( vc_progress_enable != enable) {
 	    vc_progress_enable = enable;
@@ -2540,7 +2546,7 @@ vc_progress_set(boolean_t enable, uint32_t vc_delay)
     }
 
     s = splhigh();
-    simple_lock(&vc_progress_lock);
+    simple_lock(&vc_progress_lock, LCK_GRP_NULL);
 
     if( vc_progress_enable != enable) {
         vc_progress_enable = enable;
@@ -2597,7 +2603,7 @@ vc_progressmeter_task(__unused void *arg0, __unused void *arg)
     uint64_t interval;
 
     s = splhigh();
-    simple_lock(&vc_progress_lock);
+    simple_lock(&vc_progress_lock, LCK_GRP_NULL);
     if (vc_progressmeter_enable)
     {
 	uint32_t pos = (vc_progressmeter_count >> 13);
@@ -2634,7 +2640,7 @@ vc_progress_task(__unused void *arg0, __unused void *arg)
     const unsigned char * data;
 
     s = splhigh();
-    simple_lock(&vc_progress_lock);
+    simple_lock(&vc_progress_lock, LCK_GRP_NULL);
 
     if( vc_progress_enable) do {
     
@@ -2652,19 +2658,19 @@ vc_progress_task(__unused void *arg0, __unused void *arg)
 	if (kVCUsePosition & vc_progress_options.options) {
 	    /* Rotation: 0:normal, 1:right 90, 2:left 180, 3:left 90 */
 	    switch (3 & vinfo.v_rotate) {
-		case 0:
+		case kDataRotate0:
 		    x_pos = vc_progress_options.x_pos;
 		    y_pos = vc_progress_options.y_pos;
 		    break;
-		case 2:
+		case kDataRotate180:
 		    x_pos = 0xFFFFFFFF - vc_progress_options.x_pos;
 		    y_pos = 0xFFFFFFFF - vc_progress_options.y_pos;
 		    break;
-		case 1:
+		case kDataRotate90:
 		    x_pos = 0xFFFFFFFF - vc_progress_options.y_pos;
 		    y_pos = vc_progress_options.x_pos;
 		    break;
-		case 3:
+		case kDataRotate270:
 		    x_pos = vc_progress_options.y_pos;
 		    y_pos = 0xFFFFFFFF - vc_progress_options.x_pos;
 		    break;
@@ -2688,7 +2694,7 @@ vc_progress_task(__unused void *arg0, __unused void *arg)
 	data += vc_progress_count * width * height;
 
 	vc_blit_rect( x, y, 0,
-		      width, height, width, width,
+		      width, height, width, height, width, width,
 		      data, vc_saveunder,
 		      kDataAlpha
 		      | (vc_progress_angle & kDataRotate) 
@@ -2734,7 +2740,7 @@ gc_pause( boolean_t pause, boolean_t graphics_now )
 
     VCPUTC_LOCK_UNLOCK( );
 
-    simple_lock(&vc_progress_lock);
+    simple_lock(&vc_progress_lock, LCK_GRP_NULL);
 
     if (pause) 
     {
@@ -2872,7 +2878,7 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		/* Update the vinfo structure atomically with respect to the vc_progress task if running */
 		if (vc_progress)
 		{
-		    simple_lock(&vc_progress_lock);
+		    simple_lock(&vc_progress_lock, LCK_GRP_NULL);
 		    vinfo = new_vinfo;
 		    simple_unlock(&vc_progress_lock);
 		}
@@ -3015,7 +3021,7 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		    internal_enable_progressmeter(kProgressMeterKernel);
 
 		    s = splhigh();
-		    simple_lock(&vc_progress_lock);
+		    simple_lock(&vc_progress_lock, LCK_GRP_NULL);
 
 		    vc_progressmeter_drawn = 0;
 		    internal_set_progressmeter(vc_progressmeter_range(vc_progressmeter_count >> 13));
@@ -3086,72 +3092,85 @@ vcattach(void)
 
 #if !CONFIG_EMBEDDED
 
-// redraw progress meter between pixels x1, x2, position at x3
+// redraw progress meter between pixels start, end, position at pos,
+// options (including rotation) passed in flags
 static void
-vc_draw_progress_meter(unsigned int flags, int x1, int x2, int x3)
+vc_draw_progress_meter(unsigned int flags, int start, int end, int pos)
 {
-    const unsigned char * data;
-    int x, w;
-    int ox, oy;
-    int endCapPos;
-    int onoff;
+    const unsigned char *data;
+    int i, width, bx, srcRow, backRow;
+    int rectX, rectY, rectW, rectH;
+    int endCapPos, endCapStart;
+    int barWidth  = kProgressBarWidth * vc_uiscale;
+    int barHeight = kProgressBarHeight * vc_uiscale;
+    int capWidth  = kProgressBarCapWidth * vc_uiscale;
     // 1 rounded fill, 0 square end
     int style = (0 == (2 & vc_progress_withmeter));
+    // 1 white, 0 greyed out
+    int onoff;
 
-    ox = ((vinfo.v_width - (kProgressBarWidth * vc_uiscale)) / 2);
-    oy = vinfo.v_height - (vinfo.v_height / 3) - ((kProgressBarHeight * vc_uiscale) / 2);
-
-    if (kDataBack == flags)
+    for (i = start; i < end; i += width)
     {
-	// restore back bits
-	vc_blit_rect(ox + x1, oy, x1,
-		    x2, (kProgressBarHeight * vc_uiscale), 0, (kProgressBarWidth * vc_uiscale),
-		    NULL, vc_progressmeter_backbuffer, flags);
-	return;
-    }
+	onoff       = (i < pos);
+	endCapPos   = ((style && onoff) ? pos : barWidth);
+	endCapStart = endCapPos - capWidth;
+	if (flags & kDataBack) { // restore back bits
+	    width   = end; // loop done after this iteration
+	    data    = NULL;
+	    srcRow  = 0;
+	} else if (i < capWidth) { // drawing the left cap
+	    width   = (end < capWidth) ? (end - i) : (capWidth - i);
+	    data    = progressmeter_leftcap[vc_uiscale >= 2][onoff];
+	    data    += i;
+	    srcRow  = capWidth;
+	} else if (i < endCapStart) { // drawing the middle
+	    width   = (end < endCapStart) ? (end - i) : (endCapStart - i);
+	    data    = progressmeter_middle[vc_uiscale >= 2][onoff];
+	    srcRow  = 1;
+	} else { // drawing the right cap
+	    width   = endCapPos - i;
+	    data    = progressmeter_rightcap[vc_uiscale >= 2][onoff];
+	    data    += i - endCapStart;
+	    srcRow  = capWidth;
+	}
 
-    for (x = x1; x < x2; x += w)
-    {
-	onoff = (x < x3);
-	endCapPos = ((style && onoff) ? x3 : (kProgressBarWidth * vc_uiscale));
-	if (x < (kProgressBarCapWidth * vc_uiscale))
-	{
-	    if (x2 < (kProgressBarCapWidth * vc_uiscale))
-		w = x2 - x;
-	    else
-		w = (kProgressBarCapWidth * vc_uiscale) - x;
-	    data = progressmeter_leftcap[vc_uiscale >= 2][onoff];
-	    data += x;
-	    vc_blit_rect(ox + x, oy, x, w,
-			    (kProgressBarHeight * vc_uiscale), 
-			    (kProgressBarCapWidth * vc_uiscale), 
-			    (kProgressBarWidth * vc_uiscale),
-			    data, vc_progressmeter_backbuffer, flags);
+	switch (flags & kDataRotate) {
+	  case kDataRotate90: // left middle, bar goes down
+	    rectW   = barHeight;
+	    rectH   = width;
+	    rectX   = ((vinfo.v_width / 3) - (barHeight / 2));
+	    rectY   = ((vinfo.v_height - barWidth) / 2) + i;
+	    bx      = i * barHeight;
+	    backRow = barHeight;
+	    break;
+	  case kDataRotate180: // middle upper, bar goes left
+	    rectW   = width;
+	    rectH   = barHeight;
+	    rectX   = ((vinfo.v_width - barWidth) / 2) + barWidth - width - i;
+	    rectY   = (vinfo.v_height / 3) - (barHeight / 2);
+	    bx      = barWidth - width - i;
+	    backRow = barWidth;
+	    break;
+	  case kDataRotate270: // right middle, bar goes up
+	    rectW   = barHeight;
+	    rectH   = width;
+	    rectX   = (vinfo.v_width - (vinfo.v_width / 3) - (barHeight / 2));
+	    rectY   = ((vinfo.v_height - barWidth) / 2) + barWidth - width - i;
+	    bx      = (barWidth - width - i) * barHeight;
+	    backRow = barHeight;
+	    break;
+	  default:
+	  case kDataRotate0: // middle lower, bar goes right
+	    rectW   = width;
+	    rectH   = barHeight;
+	    rectX   = ((vinfo.v_width - barWidth) / 2) + i;
+	    rectY   = vinfo.v_height - (vinfo.v_height / 3) - (barHeight / 2);
+	    bx      = i;
+	    backRow = barWidth;
+	    break;
 	}
-	else if (x < (endCapPos - (kProgressBarCapWidth * vc_uiscale)))
-	{
-	    if (x2 < (endCapPos - (kProgressBarCapWidth * vc_uiscale)))
-		w = x2 - x;
-	    else
-		w = (endCapPos - (kProgressBarCapWidth * vc_uiscale)) - x;
-	    data = progressmeter_middle[vc_uiscale >= 2][onoff];
-	    vc_blit_rect(ox + x, oy, x, w,
-			    (kProgressBarHeight * vc_uiscale),
-			    1,
-			    (kProgressBarWidth * vc_uiscale),
-			    data, vc_progressmeter_backbuffer, flags);
-	}
-	else
-	{
-	    w = endCapPos - x;
-	    data =  progressmeter_rightcap[vc_uiscale >= 2][onoff];
-	    data += x - (endCapPos - (kProgressBarCapWidth * vc_uiscale));
-	    vc_blit_rect(ox + x, oy, x, w,
-			    (kProgressBarHeight * vc_uiscale), 
-			    (kProgressBarCapWidth * vc_uiscale), 
-			    (kProgressBarWidth * vc_uiscale),
-			    data, vc_progressmeter_backbuffer, flags);
-	}
+	vc_blit_rect(rectX, rectY, bx, rectW, rectH, width, barHeight,
+		     srcRow, backRow, data, vc_progressmeter_backbuffer, flags);
     }
 }
 
@@ -3163,6 +3182,7 @@ internal_enable_progressmeter(int new_value)
     spl_t     s;
     void    * new_buffer;
     boolean_t stashBackbuffer;
+    int flags = vinfo.v_rotate;
 
     stashBackbuffer = FALSE;
     new_buffer = NULL;
@@ -3173,7 +3193,7 @@ internal_enable_progressmeter(int new_value)
     }
 
     s = splhigh();
-    simple_lock(&vc_progress_lock);
+    simple_lock(&vc_progress_lock, LCK_GRP_NULL);
 
     if (kProgressMeterUser == new_value)
     {
@@ -3188,7 +3208,7 @@ internal_enable_progressmeter(int new_value)
 	    if (kProgressMeterOff == vc_progressmeter_enable)
 	    {
 		vc_progressmeter_backbuffer = new_buffer;
-		vc_draw_progress_meter(kDataAlpha | kSave, 0, (kProgressBarWidth * vc_uiscale), 0);
+		vc_draw_progress_meter(kDataAlpha | kSave | flags, 0, (kProgressBarWidth * vc_uiscale), 0);
 		new_buffer = NULL;
 		vc_progressmeter_drawn = 0;
 	    }
@@ -3198,7 +3218,7 @@ internal_enable_progressmeter(int new_value)
 	{
 	    if (kProgressMeterUser == vc_progressmeter_enable)
 	    {
-		vc_draw_progress_meter(kDataBack, 0, (kProgressBarWidth * vc_uiscale), vc_progressmeter_drawn);
+		vc_draw_progress_meter(kDataBack | flags, 0, (kProgressBarWidth * vc_uiscale), vc_progressmeter_drawn);
 	    }
 	    else stashBackbuffer = TRUE;
 	    new_buffer = vc_progressmeter_backbuffer;
@@ -3229,6 +3249,7 @@ internal_set_progressmeter(int new_value)
     int capRedraw;
     // 1 rounded fill, 0 square end
     int style = (0 == (2 & vc_progress_withmeter));
+    int flags = kDataAlpha | vinfo.v_rotate;
 
     if ((new_value < 0) || (new_value > kProgressMeterMax)) return;
 
@@ -3244,11 +3265,11 @@ internal_set_progressmeter(int new_value)
 	{
 	    x1 = capRedraw;
 	    if (x1 > vc_progressmeter_drawn) x1 = vc_progressmeter_drawn;
-	    vc_draw_progress_meter(kDataAlpha, vc_progressmeter_drawn - x1, x3, x3);
+	    vc_draw_progress_meter(flags, vc_progressmeter_drawn - x1, x3, x3);
         }
 	else
 	{
-	    vc_draw_progress_meter(kDataAlpha, x3 - capRedraw, vc_progressmeter_drawn, x3);
+	    vc_draw_progress_meter(flags, x3 - capRedraw, vc_progressmeter_drawn, x3);
 	}
 	vc_progressmeter_drawn = x3;
     }
@@ -3273,7 +3294,7 @@ vc_set_progressmeter(int new_value)
     spl_t s;
 
     s = splhigh();
-    simple_lock(&vc_progress_lock);
+    simple_lock(&vc_progress_lock, LCK_GRP_NULL);
 
     if (vc_progressmeter_enable && (kProgressMeterKernel != vc_progressmeter_enable))
     {

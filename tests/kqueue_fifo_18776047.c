@@ -41,10 +41,11 @@ write_some_data(int fd)
 		retval = (int)write(fd, data, (size_t)len);
 		if (retval < 0) {
 			if (errno == EAGAIN) {
-				if (len == 1)
+				if (len == 1) {
 					return count;
-				else
+				} else {
 					len--;
+				}
 			} else {
 				T_ASSERT_FAIL("write to fd %d of %s of len %d failed.", fd, data, len);
 				abort();

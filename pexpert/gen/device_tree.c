@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -52,8 +52,9 @@ static inline DeviceTreeNodeProperty*
 next_prop(DeviceTreeNodeProperty* prop)
 {
 	uintptr_t next_addr;
-	if (os_add3_overflow((uintptr_t)prop, prop->length, sizeof(DeviceTreeNodeProperty) + 3, &next_addr))
+	if (os_add3_overflow((uintptr_t)prop, prop->length, sizeof(DeviceTreeNodeProperty) + 3, &next_addr)) {
 		panic("Device tree property overflow: prop %p, length 0x%x\n", prop, prop->length);
+	}
 	next_addr &= ~(3ULL);
 	return (DeviceTreeNodeProperty*)next_addr;
 }
@@ -72,7 +73,7 @@ skipProperties(RealDTEntry entry)
 			prop = next_prop(prop);
 		}
 	}
-	return ((RealDTEntry) prop);
+	return (RealDTEntry) prop;
 }
 
 static RealDTEntry
@@ -127,10 +128,10 @@ GetNextComponent(const char *cp, char *bp)
 static RealDTEntry
 FindChild(RealDTEntry cur, char *buf)
 {
-	RealDTEntry	child;
-	unsigned long	index;
-	char *			str;
-	unsigned int	dummy;
+	RealDTEntry     child;
+	unsigned long   index;
+	char *                  str;
+	unsigned int    dummy;
 
 	if (cur->nChildren == 0) {
 		return NULL;
@@ -168,60 +169,63 @@ int
 DTEntryIsEqual(const DTEntry ref1, const DTEntry ref2)
 {
 	/* equality of pointers */
-	return (ref1 == ref2);
+	return ref1 == ref2;
 }
 
-static char *startingP;		// needed for find_entry
+static char *startingP;         // needed for find_entry
 int find_entry(const char *propName, const char *propValue, DTEntry *entryH);
 
-int DTFindEntry(const char *propName, const char *propValue, DTEntry *entryH)
+int
+DTFindEntry(const char *propName, const char *propValue, DTEntry *entryH)
 {
 	if (!DTInitialized) {
 		return kError;
 	}
 
 	startingP = (char *)DTRootNode;
-	return(find_entry(propName, propValue, entryH));
+	return find_entry(propName, propValue, entryH);
 }
 
-int find_entry(const char *propName, const char *propValue, DTEntry *entryH)
+int
+find_entry(const char *propName, const char *propValue, DTEntry *entryH)
 {
 	DeviceTreeNode *nodeP = (DeviceTreeNode *) (void *) startingP;
 	unsigned int k;
 
-	if (nodeP->nProperties == 0) return(kError);	// End of the list of nodes
+	if (nodeP->nProperties == 0) {
+		return kError;                        // End of the list of nodes
+	}
 	startingP = (char *) (nodeP + 1);
 
 	// Search current entry
 	for (k = 0; k < nodeP->nProperties; ++k) {
 		DeviceTreeNodeProperty *propP = (DeviceTreeNodeProperty *) (void *) startingP;
 
-		startingP += sizeof (*propP) + ((propP->length + 3) & -4);
+		startingP += sizeof(*propP) + ((propP->length + 3) & -4);
 
-		if (strcmp (propP->name, propName) == 0) {
-			if (propValue == NULL || strcmp( (char *)(propP + 1), propValue) == 0)
-			{
+		if (strcmp(propP->name, propName) == 0) {
+			if (propValue == NULL || strcmp((char *)(propP + 1), propValue) == 0) {
 				*entryH = (DTEntry)nodeP;
-				return(kSuccess);
+				return kSuccess;
 			}
 		}
 	}
 
 	// Search child nodes
-	for (k = 0; k < nodeP->nChildren; ++k)
-	{
-		if (find_entry(propName, propValue, entryH) == kSuccess)
-			return(kSuccess);
+	for (k = 0; k < nodeP->nChildren; ++k) {
+		if (find_entry(propName, propValue, entryH) == kSuccess) {
+			return kSuccess;
+		}
 	}
-	return(kError);
+	return kError;
 }
 
 int
 DTLookupEntry(const DTEntry searchPoint, const char *pathName, DTEntry *foundEntry)
 {
-	DTEntryNameBuf	buf;
-	RealDTEntry	cur;
-	const char *	cp;
+	DTEntryNameBuf  buf;
+	RealDTEntry     cur;
+	const char *    cp;
 
 	if (!DTInitialized) {
 		return kError;
@@ -252,7 +256,6 @@ DTLookupEntry(const DTEntry searchPoint, const char *pathName, DTEntry *foundEnt
 		}
 
 		cur = FindChild(cur, buf);
-
 	} while (cur != NULL);
 
 	return kError;
@@ -291,7 +294,7 @@ DTEnterEntry(DTEntryIterator iter, DTEntry childEntry)
 	newScope->nextScope = iter->savedScope;
 	newScope->scope = iter->currentScope;
 	newScope->entry = iter->currentEntry;
-	newScope->index = iter->currentIndex;		
+	newScope->index = iter->currentIndex;
 
 	iter->currentScope = childEntry;
 	iter->currentEntry = NULL;
@@ -374,7 +377,7 @@ DTGetProperty(const DTEntry entry, const char *propertyName, void **propertyValu
 		for (k = 0; k < entry->nProperties; k++) {
 			if (strcmp(prop->name, propertyName) == 0) {
 				*propertyValue = (void *) (((uintptr_t)prop)
-						+ sizeof(DeviceTreeNodeProperty));
+				    + sizeof(DeviceTreeNodeProperty));
 				*propertySize = prop->length;
 				return kSuccess;
 			}
@@ -387,7 +390,6 @@ DTGetProperty(const DTEntry entry, const char *propertyName, void **propertyValu
 int
 DTInitPropertyIterator(const DTEntry entry, DTPropertyIterator iter)
 {
-
 	iter->entry = entry;
 	iter->currentProperty = NULL;
 	iter->currentIndex = 0;
@@ -419,4 +421,3 @@ DTRestartPropertyIteration(DTPropertyIterator iter)
 	iter->currentIndex = 0;
 	return kSuccess;
 }
-

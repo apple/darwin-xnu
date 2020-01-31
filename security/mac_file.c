@@ -54,23 +54,22 @@ mac_file_label_alloc(void)
 	struct label *label;
 
 	label = mac_labelzone_alloc(MAC_WAITOK);
-	if (label == NULL)
-		return (NULL);
+	if (label == NULL) {
+		return NULL;
+	}
 	MAC_PERFORM(file_label_init, label);
-	return (label);
+	return label;
 }
 
 void
 mac_file_label_init(struct fileglob *fg)
 {
-
 	fg->fg_label = mac_file_label_alloc();
 }
 
 static void
 mac_file_label_free(struct label *label)
 {
-
 	MAC_PERFORM(file_label_destroy, label);
 	mac_labelzone_free(label);
 }
@@ -78,14 +77,12 @@ mac_file_label_free(struct label *label)
 void
 mac_file_label_associate(struct ucred *cred, struct fileglob *fg)
 {
-
 	MAC_PERFORM(file_label_associate, cred, fg, fg->fg_label);
 }
 
 void
 mac_file_label_destroy(struct fileglob *fg)
 {
-
 	mac_file_label_free(fg->fg_label);
 	fg->fg_label = NULL;
 }
@@ -96,7 +93,7 @@ mac_file_check_create(struct ucred *cred)
 	int error;
 
 	MAC_CHECK(file_check_create, cred);
-	return (error);
+	return error;
 }
 
 int
@@ -105,7 +102,7 @@ mac_file_check_dup(struct ucred *cred, struct fileglob *fg, int newfd)
 	int error;
 
 	MAC_CHECK(file_check_dup, cred, fg, fg->fg_label, newfd);
-	return (error);
+	return error;
 }
 
 int
@@ -115,7 +112,7 @@ mac_file_check_fcntl(struct ucred *cred, struct fileglob *fg, int cmd,
 	int error;
 
 	MAC_CHECK(file_check_fcntl, cred, fg, fg->fg_label, cmd, arg);
-	return (error);
+	return error;
 }
 
 int
@@ -124,7 +121,7 @@ mac_file_check_ioctl(struct ucred *cred, struct fileglob *fg, u_int cmd)
 	int error;
 
 	MAC_CHECK(file_check_ioctl, cred, fg, fg->fg_label, cmd);
-	return (error);
+	return error;
 }
 
 int
@@ -133,7 +130,7 @@ mac_file_check_inherit(struct ucred *cred, struct fileglob *fg)
 	int error;
 
 	MAC_CHECK(file_check_inherit, cred, fg, fg->fg_label);
-	return (error);
+	return error;
 }
 
 int
@@ -142,7 +139,7 @@ mac_file_check_receive(struct ucred *cred, struct fileglob *fg)
 	int error;
 
 	MAC_CHECK(file_check_receive, cred, fg, fg->fg_label);
-	return (error);
+	return error;
 }
 
 int
@@ -151,7 +148,7 @@ mac_file_check_get_offset(struct ucred *cred, struct fileglob *fg)
 	int error;
 
 	MAC_CHECK(file_check_get_offset, cred, fg, fg->fg_label);
-	return (error);
+	return error;
 }
 
 int
@@ -160,17 +157,17 @@ mac_file_check_change_offset(struct ucred *cred, struct fileglob *fg)
 	int error;
 
 	MAC_CHECK(file_check_change_offset, cred, fg, fg->fg_label);
-	return (error);
+	return error;
 }
- 
+
 int
 mac_file_check_get(struct ucred *cred, struct fileglob *fg, char *elements,
     int len)
 {
 	int error;
-	
+
 	MAC_CHECK(file_check_get, cred, fg, elements, len);
-	return (error);
+	return error;
 }
 
 int
@@ -178,9 +175,9 @@ mac_file_check_set(struct ucred *cred, struct fileglob *fg, char *buf,
     int buflen)
 {
 	int error;
-	
+
 	MAC_CHECK(file_check_set, cred, fg, buf, buflen);
-	return (error);
+	return error;
 }
 
 int
@@ -188,20 +185,20 @@ mac_file_check_lock(struct ucred *cred, struct fileglob *fg, int op,
     struct flock *fl)
 {
 	int error;
-	
+
 	MAC_CHECK(file_check_lock, cred, fg, fg->fg_label, op, fl);
-	return (error);
+	return error;
 }
 
 int
 mac_file_check_library_validation(struct proc *proc,
-	struct fileglob *fg, off_t slice_offset,
-	user_long_t error_message, size_t error_message_size)
+    struct fileglob *fg, off_t slice_offset,
+    user_long_t error_message, size_t error_message_size)
 {
 	int error;
 
 	MAC_CHECK(file_check_library_validation, proc, fg, slice_offset, error_message, error_message_size);
-	return (error);
+	return error;
 }
 
 /*
@@ -222,10 +219,11 @@ mac_file_check_mmap(struct ucred *cred, struct fileglob *fg, int prot,
 
 	maxp = *maxprot;
 	MAC_CHECK(file_check_mmap, cred, fg, fg->fg_label, prot, flags, offset, &maxp);
-	if ((maxp | *maxprot) != *maxprot)
+	if ((maxp | *maxprot) != *maxprot) {
 		panic("file_check_mmap increased max protections");
+	}
 	*maxprot = maxp;
-	return (error);
+	return error;
 }
 
 void
@@ -246,7 +244,8 @@ mac_file_check_mmap_downgrade(struct ucred *cred, struct fileglob *fg,
  */
 
 int
-mac_file_setxattr(struct fileglob *fg, const char *name, char *buf, size_t len) {
+mac_file_setxattr(struct fileglob *fg, const char *name, char *buf, size_t len)
+{
 	struct vnode *vp = NULL;
 
 	if (!fg || FILEGLOB_DTYPE(fg) != DTYPE_VNODE) {
@@ -259,7 +258,8 @@ mac_file_setxattr(struct fileglob *fg, const char *name, char *buf, size_t len) 
 
 int
 mac_file_getxattr(struct fileglob *fg, const char *name, char *buf, size_t len,
-		size_t *attrlen) {
+    size_t *attrlen)
+{
 	struct vnode *vp = NULL;
 
 	if (!fg || FILEGLOB_DTYPE(fg) != DTYPE_VNODE) {
@@ -271,7 +271,8 @@ mac_file_getxattr(struct fileglob *fg, const char *name, char *buf, size_t len,
 }
 
 int
-mac_file_removexattr(struct fileglob *fg, const char *name) {
+mac_file_removexattr(struct fileglob *fg, const char *name)
+{
 	struct vnode *vp = NULL;
 
 	if (!fg || FILEGLOB_DTYPE(fg) != DTYPE_VNODE) {

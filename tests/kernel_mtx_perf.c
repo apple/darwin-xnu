@@ -20,10 +20,10 @@
 T_GLOBAL_META(T_META_NAMESPACE("xnu.kernel_mtx_perf_test"));
 
 #define ITER 100000
-#define TEST_MTX_MAX_STATS 		8
+#define TEST_MTX_MAX_STATS              8
 
-#define TEST_MTX_LOCK_STATS 		0
-#define TEST_MTX_UNLOCK_MTX_STATS 	6
+#define TEST_MTX_LOCK_STATS             0
+#define TEST_MTX_UNLOCK_MTX_STATS       6
 
 static void
 test_from_kernel_lock_unlock_contended(void)
@@ -39,7 +39,7 @@ test_from_kernel_lock_unlock_contended(void)
 
 	size = 1000;
 	buff = calloc(size, sizeof(char));
-	T_QUIET;T_ASSERT_NOTNULL(buff, "Allocating buffer fo sysctl");
+	T_QUIET; T_ASSERT_NOTNULL(buff, "Allocating buffer fo sysctl");
 
 	snprintf(iter, sizeof(iter), "%d", ITER);
 	ret = sysctlbyname("kern.test_mtx_contended", buff, &size, iter, sizeof(iter));
@@ -49,7 +49,9 @@ test_from_kernel_lock_unlock_contended(void)
 
 	/* first line is "STATS INNER LOOP" */
 	buff_p = buff;
-	while( *buff_p != '\n' ) buff_p++;
+	while (*buff_p != '\n') {
+		buff_p++;
+	}
 	buff_p++;
 
 	/*
@@ -61,8 +63,8 @@ test_from_kernel_lock_unlock_contended(void)
 		avg_p = strstr(buff_p, "avg ");
 
 		/* contended test records statistics only for lock/unlock for now */
-		if (i == TEST_MTX_LOCK_STATS || i == TEST_MTX_UNLOCK_MTX_STATS ) {
-			T_QUIET;T_ASSERT_NOTNULL(avg_p, "contended %i average not found", i);
+		if (i == TEST_MTX_LOCK_STATS || i == TEST_MTX_UNLOCK_MTX_STATS) {
+			T_QUIET; T_ASSERT_NOTNULL(avg_p, "contended %i average not found", i);
 			sscanf(avg_p, "avg %llu", &avg);
 
 			name = strstr(buff_p, "TEST_MTX_");
@@ -79,31 +81,37 @@ test_from_kernel_lock_unlock_contended(void)
 		}
 
 		buff_p = avg_p;
-		while( *buff_p != '\n' ) buff_p++;
+		while (*buff_p != '\n') {
+			buff_p++;
+		}
 		buff_p++;
-
 	}
 
-	while( *buff_p != '\n' ) buff_p++;
+	while (*buff_p != '\n') {
+		buff_p++;
+	}
 	buff_p++;
 
 	/* next line is "STATS OUTER LOOP" */
-	while( *buff_p != '\n' ) buff_p++;
+	while (*buff_p != '\n') {
+		buff_p++;
+	}
 	buff_p++;
 
 	/* contended test records statistics only for lock/unlock for now */
 	avg_p = strstr(buff_p, "run time ");
-	T_QUIET;T_ASSERT_NOTNULL(avg_p, "contended %d loop run time not found", 0);
+	T_QUIET; T_ASSERT_NOTNULL(avg_p, "contended %d loop run time not found", 0);
 	sscanf(avg_p, "run time %llu", &run);
 
 	avg_p = strstr(buff_p, "total time ");
-	T_QUIET;T_ASSERT_NOTNULL(avg_p, "uncontended %d loop total time not found", 0);
+	T_QUIET; T_ASSERT_NOTNULL(avg_p, "uncontended %d loop total time not found", 0);
 	sscanf(avg_p, "total time %llu", &tot);
 
-	if (run < tot)
+	if (run < tot) {
 		avg = run;
-	else
+	} else {
 		avg = tot;
+	}
 
 	name = strstr(buff_p, "TEST_MTX_");
 	end_name = strstr(buff_p, "_STATS");
@@ -115,7 +123,7 @@ test_from_kernel_lock_unlock_contended(void)
 	snprintf(name_string, name_size + strlen(pre_string), "%s%s", pre_string, &name[strlen("TEST_MTX_")]);
 	pre_string = "avg time contended loop ";
 	snprintf(avg_name_string, name_size + strlen(pre_string), "%s%s", pre_string, &name[strlen("TEST_MTX_")]);
-	T_PERF(name_string, avg/ITER, "ns", avg_name_string);
+	T_PERF(name_string, avg / ITER, "ns", avg_name_string);
 
 	free(buff);
 }
@@ -134,7 +142,7 @@ test_from_kernel_lock_unlock_uncontended(void)
 
 	size = 2000;
 	buff = calloc(size, sizeof(char));
-	T_QUIET;T_ASSERT_NOTNULL(buff, "Allocating buffer fo sysctl");
+	T_QUIET; T_ASSERT_NOTNULL(buff, "Allocating buffer fo sysctl");
 
 	snprintf(iter, sizeof(iter), "%d", ITER);
 	ret = sysctlbyname("kern.test_mtx_uncontended", buff, &size, iter, sizeof(iter));
@@ -144,7 +152,9 @@ test_from_kernel_lock_unlock_uncontended(void)
 
 	/* first line is "STATS INNER LOOP" */
 	buff_p = buff;
-	while( *buff_p != '\n' ) buff_p++;
+	while (*buff_p != '\n') {
+		buff_p++;
+	}
 	buff_p++;
 
 	/*
@@ -154,7 +164,7 @@ test_from_kernel_lock_unlock_uncontended(void)
 	 */
 	for (i = 0; i < TEST_MTX_MAX_STATS; i++) {
 		avg_p = strstr(buff_p, "avg ");
-		T_QUIET;T_ASSERT_NOTNULL(avg_p, "uncontended %i average not found", i);
+		T_QUIET; T_ASSERT_NOTNULL(avg_p, "uncontended %i average not found", i);
 		sscanf(avg_p, "avg %llu", &avg);
 
 		name = strstr(buff_p, "TEST_MTX_");
@@ -170,15 +180,21 @@ test_from_kernel_lock_unlock_uncontended(void)
 		T_PERF(name_string, avg, "ns", avg_name_string);
 
 		buff_p = avg_p;
-		while( *buff_p != '\n' ) buff_p++;
+		while (*buff_p != '\n') {
+			buff_p++;
+		}
 		buff_p++;
 	}
 
-	while( *buff_p != '\n' ) buff_p++;
+	while (*buff_p != '\n') {
+		buff_p++;
+	}
 	buff_p++;
 
 	/* next line is "STATS OUTER LOOP" */
-	while( *buff_p != '\n' ) buff_p++;
+	while (*buff_p != '\n') {
+		buff_p++;
+	}
 	buff_p++;
 
 	/*
@@ -188,17 +204,18 @@ test_from_kernel_lock_unlock_uncontended(void)
 	 */
 	for (i = 0; i < TEST_MTX_MAX_STATS - 2; i++) {
 		avg_p = strstr(buff_p, "run time ");
-		T_QUIET;T_ASSERT_NOTNULL(avg_p, "uncontended %d loop run time not found", i);
+		T_QUIET; T_ASSERT_NOTNULL(avg_p, "uncontended %d loop run time not found", i);
 		sscanf(avg_p, "run time %llu", &run);
 
 		avg_p = strstr(buff_p, "total time ");
-		T_QUIET;T_ASSERT_NOTNULL(avg_p, "uncontended %d loop total time not found", i);
+		T_QUIET; T_ASSERT_NOTNULL(avg_p, "uncontended %d loop total time not found", i);
 		sscanf(avg_p, "total time %llu", &tot);
 
-		if (run < tot)
+		if (run < tot) {
 			avg = run;
-		else
+		} else {
 			avg = tot;
+		}
 
 		name = strstr(buff_p, "TEST_MTX_");
 		end_name = strstr(buff_p, "_STATS");
@@ -210,12 +227,13 @@ test_from_kernel_lock_unlock_uncontended(void)
 		snprintf(name_string, name_size + strlen(pre_string), "%s%s", pre_string, &name[strlen("TEST_MTX_")]);
 		pre_string = "avg time uncontended loop ";
 		snprintf(avg_name_string, name_size + strlen(pre_string), "%s%s", pre_string, &name[strlen("TEST_MTX_")]);
-		T_PERF(name_string, avg/ITER, "ns", avg_name_string);
+		T_PERF(name_string, avg / ITER, "ns", avg_name_string);
 
 		buff_p = avg_p;
-		while( *buff_p != '\n' ) buff_p++;
+		while (*buff_p != '\n') {
+			buff_p++;
+		}
 		buff_p++;
-
 	}
 	free(buff);
 }
@@ -244,12 +262,12 @@ fix_cpu_frequency(void)
 	char str_val[10];
 
 	ret = sysctlbyname("machdep.cpu.brand_string", NULL, &len, NULL, 0);
-	T_QUIET;T_ASSERT_POSIX_SUCCESS(ret, "sysctlbyname machdep.cpu.brand_string");
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "sysctlbyname machdep.cpu.brand_string");
 
-	buffer = malloc(len+2);
+	buffer = malloc(len + 2);
 	ret = sysctlbyname("machdep.cpu.brand_string", buffer, &len, NULL, 0);
-	T_QUIET;T_ASSERT_POSIX_SUCCESS(ret, "sysctlbyname machdep.cpu.brand_string");
-	buffer[len+1] = '\0';
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "sysctlbyname machdep.cpu.brand_string");
+	buffer[len + 1] = '\0';
 
 	cpu_freq = strstr(buffer, "CPU @ ");
 	if (cpu_freq == NULL) {
@@ -268,14 +286,14 @@ fix_cpu_frequency(void)
 		}
 	}
 
-	switch(scale){
+	switch (scale) {
 	case 'M':
 	case 'm':
 		nom_freq = (int) val;
 		break;
 	case 'G':
 	case 'g':
-		nom_freq = (int) (val*1000);
+		nom_freq = (int) (val * 1000);
 		break;
 	default:
 		T_LOG("Could not fix frequency, scale field is %c\n", scale);
@@ -295,12 +313,11 @@ out:
 }
 
 T_DECL(kernel_mtx_perf_test,
-	"Kernel mutex performance test",
-	T_META_ASROOT(YES), T_META_CHECK_LEAKS(NO))
+    "Kernel mutex performance test",
+    T_META_ASROOT(YES), T_META_CHECK_LEAKS(NO))
 {
 	fix_cpu_frequency();
 
 	test_from_kernel_lock_unlock_uncontended();
 	test_from_kernel_lock_unlock_contended();
 }
-

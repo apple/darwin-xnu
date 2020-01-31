@@ -2,7 +2,7 @@
  * Copyright (c) 2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -33,23 +33,23 @@
 #include <arm/smp.h>
 
 // Parameter for __builtin_arm_dmb
-#define DMB_NSH		0x7
-#define DMB_ISHLD	0x9
-#define DMB_ISHST	0xa
-#define DMB_ISH		0xb
-#define DMB_SY		0xf
+#define DMB_NSH         0x7
+#define DMB_ISHLD       0x9
+#define DMB_ISHST       0xa
+#define DMB_ISH         0xb
+#define DMB_SY          0xf
 
 // Parameter for __builtin_arm_dsb
-#define DSB_NSH		0x7
-#define DSB_ISHLD	0x9
-#define DSB_ISHST	0xa
-#define DSB_ISH		0xb
-#define DSB_SY		0xf
+#define DSB_NSH         0x7
+#define DSB_ISHLD       0x9
+#define DSB_ISHST       0xa
+#define DSB_ISH         0xb
+#define DSB_SY          0xf
 
 // Parameter for __builtin_arm_isb
-#define ISB_SY		0xf
+#define ISB_SY          0xf
 
-#if	__SMP__
+#if     __SMP__
 
 #define memory_order_consume_smp memory_order_consume
 #define memory_order_acquire_smp memory_order_acquire
@@ -105,12 +105,12 @@ memory_order_has_release(enum memory_order ord)
 
 #ifdef ATOMIC_PRIVATE
 
-#define clear_exclusive()	__builtin_arm_clrex()
+#define clear_exclusive()       __builtin_arm_clrex()
 
 __unused static uint32_t
 load_exclusive32(uint32_t *target, enum memory_order ord)
 {
-	uint32_t	value;
+	uint32_t        value;
 
 #if __arm__
 	if (memory_order_has_release(ord)) {
@@ -119,11 +119,12 @@ load_exclusive32(uint32_t *target, enum memory_order ord)
 	}
 	value = __builtin_arm_ldrex(target);
 #else
-	if (memory_order_has_acquire(ord))
-		value = __builtin_arm_ldaex(target);	// ldaxr
-	else
-		value = __builtin_arm_ldrex(target);	// ldxr
-#endif	// __arm__
+	if (memory_order_has_acquire(ord)) {
+		value = __builtin_arm_ldaex(target);    // ldaxr
+	} else {
+		value = __builtin_arm_ldrex(target);    // ldxr
+	}
+#endif  // __arm__
 	return value;
 }
 
@@ -139,11 +140,12 @@ store_exclusive32(uint32_t *target, uint32_t value, enum memory_order ord)
 		atomic_thread_fence(memory_order_acquire);
 	}
 #else
-	if (memory_order_has_release(ord))
-		err = __builtin_arm_stlex(value, target);	// stlxr
-	else
-		err = __builtin_arm_strex(value, target);	// stxr
-#endif	// __arm__
+	if (memory_order_has_release(ord)) {
+		err = __builtin_arm_stlex(value, target);       // stlxr
+	} else {
+		err = __builtin_arm_strex(value, target);       // stxr
+	}
+#endif  // __arm__
 	return !err;
 }
 
@@ -153,14 +155,30 @@ load_exclusive(uintptr_t *target, enum memory_order ord)
 #if !__LP64__
 	return load_exclusive32((uint32_t *)target, ord);
 #else
-	uintptr_t	value;
+	uintptr_t       value;
 
-	if (memory_order_has_acquire(ord))
-		value = __builtin_arm_ldaex(target);	// ldaxr
-	else
-		value = __builtin_arm_ldrex(target);	// ldxr
+	if (memory_order_has_acquire(ord)) {
+		value = __builtin_arm_ldaex(target);    // ldaxr
+	} else {
+		value = __builtin_arm_ldrex(target);    // ldxr
+	}
 	return value;
-#endif	// __arm__
+#endif  // __arm__
+}
+
+__unused static uint8_t
+load_exclusive_acquire8(uint8_t *target)
+{
+	uint8_t value;
+#if __arm__
+	value = __builtin_arm_ldrex(target);
+	__c11_atomic_thread_fence(__ATOMIC_ACQUIRE);
+#else
+	value = __builtin_arm_ldaex(target);    // ldaxr
+	/* "Compiler barrier", no barrier instructions are emitted */
+	atomic_signal_fence(memory_order_acquire);
+#endif
+	return value;
 }
 
 __unused static boolean_t
@@ -171,20 +189,21 @@ store_exclusive(uintptr_t *target, uintptr_t value, enum memory_order ord)
 #else
 	boolean_t err;
 
-	if (memory_order_has_release(ord))
-		err = __builtin_arm_stlex(value, target);	// stlxr
-	else
-		err = __builtin_arm_strex(value, target);	// stxr
+	if (memory_order_has_release(ord)) {
+		err = __builtin_arm_stlex(value, target);       // stlxr
+	} else {
+		err = __builtin_arm_strex(value, target);       // stxr
+	}
 	return !err;
 #endif
 }
 
 __unused static boolean_t
 atomic_compare_exchange(uintptr_t *target, uintptr_t oldval, uintptr_t newval,
-			enum memory_order orig_ord, boolean_t wait)
+    enum memory_order orig_ord, boolean_t wait)
 {
-	enum memory_order	ord = orig_ord;
-	uintptr_t			value;
+	enum memory_order       ord = orig_ord;
+	uintptr_t                       value;
 
 
 #if __arm__
@@ -196,10 +215,11 @@ atomic_compare_exchange(uintptr_t *target, uintptr_t oldval, uintptr_t newval,
 	do {
 		value = load_exclusive(target, ord);
 		if (value != oldval) {
-			if (wait)
-				wait_for_event();	// Wait with monitor held
-			else
-				clear_exclusive();	// Clear exclusive monitor
+			if (wait) {
+				wait_for_event();       // Wait with monitor held
+			} else {
+				clear_exclusive();      // Clear exclusive monitor
+			}
 			return FALSE;
 		}
 	} while (!store_exclusive(target, newval, ord));
@@ -216,70 +236,70 @@ atomic_compare_exchange(uintptr_t *target, uintptr_t oldval, uintptr_t newval,
 #if __arm__
 #undef os_atomic_rmw_loop
 #define os_atomic_rmw_loop(p, ov, nv, m, ...)  ({ \
-		boolean_t _result = FALSE; uint32_t _err = 0; \
-		typeof(atomic_load(p)) *_p = (typeof(atomic_load(p)) *)(p); \
-		for (;;) { \
-			ov = __builtin_arm_ldrex(_p); \
-			__VA_ARGS__; \
-			if (!_err && memory_order_has_release(memory_order_##m)) { \
-				/* only done for the first loop iteration */ \
-				atomic_thread_fence(memory_order_release); \
-			} \
-			_err = __builtin_arm_strex(nv, _p); \
-			if (__builtin_expect(!_err, 1)) { \
-				if (memory_order_has_acquire(memory_order_##m)) { \
-					atomic_thread_fence(memory_order_acquire); \
-				} \
-				_result = TRUE; \
-				break; \
-			} \
-		} \
-		_result; \
+	        boolean_t _result = FALSE; uint32_t _err = 0; \
+	        typeof(atomic_load(p)) *_p = (typeof(atomic_load(p)) *)(p); \
+	        for (;;) { \
+	                ov = __builtin_arm_ldrex(_p); \
+	                __VA_ARGS__; \
+	                if (!_err && memory_order_has_release(memory_order_##m)) { \
+	/* only done for the first loop iteration */ \
+	                        atomic_thread_fence(memory_order_release); \
+	                } \
+	                _err = __builtin_arm_strex(nv, _p); \
+	                if (__builtin_expect(!_err, 1)) { \
+	                        if (memory_order_has_acquire(memory_order_##m)) { \
+	                                atomic_thread_fence(memory_order_acquire); \
+	                        } \
+	                        _result = TRUE; \
+	                        break; \
+	                } \
+	        } \
+	        _result; \
 	})
 
 #undef os_atomic_rmw_loop_give_up
 #define os_atomic_rmw_loop_give_up(expr) \
-		({ __builtin_arm_clrex(); expr; __builtin_trap(); })
+	        ({ __builtin_arm_clrex(); expr; __builtin_trap(); })
 
 #else
 
 #undef os_atomic_rmw_loop
 #define os_atomic_rmw_loop(p, ov, nv, m, ...)  ({ \
-		boolean_t _result = FALSE; \
-		typeof(atomic_load(p)) *_p = (typeof(atomic_load(p)) *)(p); \
-		do { \
-			if (memory_order_has_acquire(memory_order_##m)) { \
-				ov = __builtin_arm_ldaex(_p); \
-			} else { \
-				ov = __builtin_arm_ldrex(_p); \
-			} \
-			__VA_ARGS__; \
-			if (memory_order_has_release(memory_order_##m)) { \
-				_result = !__builtin_arm_stlex(nv, _p); \
-			} else { \
-				_result = !__builtin_arm_strex(nv, _p); \
-			} \
-		} while (__builtin_expect(!_result, 0)); \
-		_result; \
+	        boolean_t _result = FALSE; \
+	        typeof(atomic_load(p)) *_p = (typeof(atomic_load(p)) *)(p); \
+	        do { \
+	                if (memory_order_has_acquire(memory_order_##m)) { \
+	                        ov = __builtin_arm_ldaex(_p); \
+	                } else { \
+	                        ov = __builtin_arm_ldrex(_p); \
+	                } \
+	                __VA_ARGS__; \
+	                if (memory_order_has_release(memory_order_##m)) { \
+	                        _result = !__builtin_arm_stlex(nv, _p); \
+	                } else { \
+	                        _result = !__builtin_arm_strex(nv, _p); \
+	                } \
+	        } while (__builtin_expect(!_result, 0)); \
+	        _result; \
 	})
 
 #undef os_atomic_rmw_loop_give_up
 #define os_atomic_rmw_loop_give_up(expr) \
-		({ __builtin_arm_clrex(); expr; __builtin_trap(); })
+	        ({ __builtin_arm_clrex(); expr; __builtin_trap(); })
 #endif
 
 #undef os_atomic_force_dependency_on
 #if defined(__arm64__)
 #define os_atomic_force_dependency_on(p, e) ({ \
-		unsigned long _v; \
-		__asm__("and %x[_v], %x[_e], xzr" : [_v] "=r" (_v) : [_e] "r" (e)); \
-		(typeof(*(p)) *)((char *)(p) + _v); \
+	        unsigned long _v; \
+	        __asm__("and %x[_v], %x[_e], xzr" : [_v] "=r" (_v) : [_e] "r" (e)); \
+	        (typeof(*(p)) *)((char *)(p) + _v); \
 	})
 #else
 #define os_atomic_force_dependency_on(p, e) ({ \
-		unsigned long _v; \
-		__asm__("and %[_v], %[_e], #0" : [_v] "=r" (_v) : [_e] "r" (e)); \
-		(typeof(*(p)) *)((char *)(p) + _v); \
+	        unsigned long _v; \
+	        __asm__("and %[_v], %[_e], #0" : [_v] "=r" (_v) : [_e] "r" (e)); \
+	        (typeof(*(p)) *)((char *)(p) + _v); \
 	})
 #endif // defined(__arm64__)
 

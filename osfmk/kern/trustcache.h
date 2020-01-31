@@ -39,10 +39,10 @@
  * Used for loadable trust caches only, until phasing out support. */
 typedef uint8_t trust_cache_hash0[CS_CDHASH_LEN];
 struct trust_cache_module0 {
-    uint32_t version;
-    uuid_t uuid;
-    uint32_t num_hashes;
-    trust_cache_hash0 hashes[];
+	uint32_t version;
+	uuid_t uuid;
+	uint32_t num_hashes;
+	trust_cache_hash0 hashes[];
 } __attribute__((__packed__));
 
 
@@ -56,14 +56,14 @@ struct trust_cache_entry1 {
 } __attribute__((__packed__));
 
 struct trust_cache_module1 {
-    uint32_t version;
-    uuid_t uuid;
-    uint32_t num_entries;
-    struct trust_cache_entry1 entries[];
+	uint32_t version;
+	uuid_t uuid;
+	uint32_t num_entries;
+	struct trust_cache_entry1 entries[];
 } __attribute__((__packed__));
 
 // Trust Cache Entry Flags
-#define CS_TRUST_CACHE_AMFID    0x1			// valid cdhash for amfid
+#define CS_TRUST_CACHE_AMFID    0x1                     // valid cdhash for amfid
 
 #define TC_LOOKUP_HASH_TYPE_SHIFT               16
 #define TC_LOOKUP_HASH_TYPE_MASK                0xff0000L;
@@ -81,8 +81,8 @@ struct trust_cache_module1 {
 
 /* This is how iBoot delivers them to us. */
 struct serialized_trust_caches {
-       uint32_t num_caches;
-       uint32_t offsets[0];
+	uint32_t num_caches;
+	uint32_t offsets[0];
 } __attribute__((__packed__));
 
 
@@ -91,9 +91,9 @@ void trust_cache_init(void);
 uint32_t lookup_in_static_trust_cache(const uint8_t cdhash[CS_CDHASH_LEN]);
 
 bool lookup_in_trust_cache_module(struct trust_cache_module1 const * const module,
-								  uint8_t const	cdhash[CS_CDHASH_LEN],
-								  uint8_t	* const	hash_type,
-								  uint8_t	* const flags);
+    uint8_t const cdhash[CS_CDHASH_LEN],
+    uint8_t       * const hash_type,
+    uint8_t       * const flags);
 
 #endif
 

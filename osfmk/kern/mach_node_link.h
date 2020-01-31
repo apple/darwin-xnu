@@ -61,12 +61,12 @@ extern mach_node_id_t   localnode_id;   // This node's unique id.
  *  links are brought up.
  */
 typedef struct mnl_node_info {
-    mach_node_id_t  node_id;        // The node ID of this node
-    uint8_t         datamodel;      // 1==ILP32, 2==LP64 (matches dtrace)
-    uint8_t         byteorder;      // See libkern/OSByteOrder.h
-    uint32_t        proto_vers_min; // Oldest MNL protocol vers node can accept
-    uint32_t        proto_vers_max; // Newest MNL protocol vers node can accept
-} __attribute__ ((aligned (8))) *mnl_node_info_t;
+	mach_node_id_t  node_id;    // The node ID of this node
+	uint8_t         datamodel;  // 1==ILP32, 2==LP64 (matches dtrace)
+	uint8_t         byteorder;  // See libkern/OSByteOrder.h
+	uint32_t        proto_vers_min;// Oldest MNL protocol vers node can accept
+	uint32_t        proto_vers_max;// Newest MNL protocol vers node can accept
+} __attribute__ ((aligned(8))) * mnl_node_info_t;
 
 #define MNL_NODE_NULL       ((mnl_node_info_t) 0UL)
 #define MNL_NODE_VALID(n)   ((n) != MNL_NODE_NULL)
@@ -95,15 +95,15 @@ typedef uint64_t    mnl_name_t;
  *  to/from the mach_node layer without any introspection or byte reordering.
  */
 typedef struct mnl_msg {
-    uint8_t     sub;        //  8b subsystem code
-    uint8_t     cmd;        //  8b command code
-    uint8_t     qos;        //  8b TODO: Doesn't do anything yet
-    uint8_t     flags;      //  8b Command-specific flag byte
-    uint32_t    node_id;    // 32b id of node that originated message
-    mnl_name_t  object;     // 64b object ref (use is determined by sub & cmd)
-    uint32_t    options;    // 32b Currently unused
-    uint32_t    size;       // 32b Number of bytes that follow mnl_msg header
-}  __attribute__((__packed__)) *mnl_msg_t;
+	uint8_t     sub;    //  8b subsystem code
+	uint8_t     cmd;    //  8b command code
+	uint8_t     qos;    //  8b TODO: Doesn't do anything yet
+	uint8_t     flags;  //  8b Command-specific flag byte
+	uint32_t    node_id;// 32b id of node that originated message
+	mnl_name_t  object; // 64b object ref (use is determined by sub & cmd)
+	uint32_t    options;// 32b Currently unused
+	uint32_t    size;   // 32b Number of bytes that follow mnl_msg header
+}  __attribute__((__packed__)) * mnl_msg_t;
 
 
 /*  Allocate a mnl_msg struct plus additional payload.  Link drivers are not
@@ -152,7 +152,7 @@ void mnl_msg_free(mnl_msg_t msg, uint32_t flags);
  *    *:                Pointer to a new mnl_node struct
  */
 mnl_node_info_t mnl_instantiate(mach_node_id_t  nid,
-                                uint32_t        flags);
+    uint32_t        flags);
 
 
 /*  The link driver calls mnl_register() to complete the node registration
@@ -169,7 +169,7 @@ mnl_node_info_t mnl_instantiate(mach_node_id_t  nid,
  *    KERN_*:                 Values returned from underlying functions
  */
 kern_return_t mnl_register(mnl_node_info_t  node,
-                           uint32_t         flags);
+    uint32_t         flags);
 
 
 /*  The link driver calls this to report that the link has been raised in one
@@ -189,8 +189,8 @@ kern_return_t mnl_register(mnl_node_info_t  node,
  *    KERN_*:                 Values returned from underlying functions.
  */
 kern_return_t mnl_set_link_state(mnl_node_info_t    node,
-                                 int                link,
-                                 uint32_t           flags);
+    int                link,
+    uint32_t           flags);
 
 #define MNL_LINK_DOWN   (0UL)
 #define MNL_LINK_RX     (1UL)
@@ -216,7 +216,7 @@ kern_return_t mnl_set_link_state(mnl_node_info_t    node,
  *    KERN_*:                 Values returned from underlying functions.
  */
 kern_return_t mnl_terminate(mnl_node_info_t node,
-                            uint32_t        flags);
+    uint32_t        flags);
 
 
 /*  The link driver calls this to deliver an incoming message.  Note that the
@@ -229,8 +229,8 @@ kern_return_t mnl_terminate(mnl_node_info_t node,
  *    flags     Currently unused; 0 should be passed
  */
 void mnl_msg_from_node(mnl_node_info_t  node,
-                       mnl_msg_t        msg,
-                       uint32_t         flags);
+    mnl_msg_t        msg,
+    uint32_t         flags);
 
 
 /*  The link driver calls this to fetch the next message to transmit.
@@ -244,7 +244,7 @@ void mnl_msg_from_node(mnl_node_info_t  node,
  *    flags     Currently unused; 0 should be passed
  */
 mnl_msg_t mnl_msg_to_node(mnl_node_info_t   node,
-                          uint32_t          flags);
+    uint32_t          flags);
 
 
 /*  The link driver calls this to indicate that the specified msg buffer has
@@ -256,8 +256,8 @@ mnl_msg_t mnl_msg_to_node(mnl_node_info_t   node,
  *    flags     Currently unused; 0 should be passed
  */
 void mnl_msg_complete(mnl_node_info_t   node,
-                      mnl_msg_t         msg,
-                      uint32_t          flags);
+    mnl_msg_t         msg,
+    uint32_t          flags);
 
 __END_DECLS
 

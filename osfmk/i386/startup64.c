@@ -2,7 +2,7 @@
  * Copyright (c) 2006-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -48,7 +48,7 @@
 #include <mach/machine/vm_param.h>
 #include <machine/thread.h>
 
-#include <kern/misc_protos.h>			/* prototyping */
+#include <kern/misc_protos.h>                   /* prototyping */
 #include <i386/misc_protos.h>
 
 #include <i386/cpuid.h>
@@ -77,26 +77,28 @@ extern void dump_frame(x86_saved_state_t *sp);
 void
 dump_frame(x86_saved_state_t *sp)
 {
-	if (is_saved_state32(sp))
+	if (is_saved_state32(sp)) {
 		dump_frame32(&sp->ss_32);
-	else if (is_saved_state64(sp))
+	} else if (is_saved_state64(sp)) {
 		dump_frame64(&sp->ss_64);
-	else
+	} else {
 		kprintf("dump_frame(%p) unknown type %d\n", sp, sp->flavor);
+	}
 }
 
 void
 dump_frame32(x86_saved_state32_t *sp)
 {
-	unsigned int	i;
-	uint32_t	*ip = (uint32_t *) sp;
+	unsigned int    i;
+	uint32_t        *ip = (uint32_t *) sp;
 
 	kprintf("dump_frame32(%p):\n", sp);
-	
+
 	for (i = 0;
-	     i < sizeof(x86_saved_state32_t)/sizeof(uint32_t);
-	     i++, ip++)
+	    i < sizeof(x86_saved_state32_t) / sizeof(uint32_t);
+	    i++, ip++) {
 		kprintf("%p: 0x%08x\n", ip, *ip);
+	}
 
 	kprintf("sp->gs:     0x%08x\n", sp->gs);
 	kprintf("sp->fs:     0x%08x\n", sp->fs);
@@ -123,15 +125,16 @@ dump_frame32(x86_saved_state32_t *sp)
 void
 dump_frame64(x86_saved_state64_t *sp)
 {
-	unsigned int	i;
-	uint64_t	*ip = (uint64_t *) sp;
+	unsigned int    i;
+	uint64_t        *ip = (uint64_t *) sp;
 
 	kprintf("dump_frame64(%p):\n", sp);
-	
+
 	for (i = 0;
-	     i < sizeof(x86_saved_state64_t)/sizeof(uint64_t);
-	     i++, ip++)
+	    i < sizeof(x86_saved_state64_t) / sizeof(uint64_t);
+	    i++, ip++) {
 		kprintf("%p: 0x%016llx\n", ip, *ip);
+	}
 
 	kprintf("sp->isf.trapno: 0x%08x\n", sp->isf.trapno);
 	kprintf("sp->isf.trapfn: 0x%016llx\n", sp->isf.trapfn);
@@ -167,64 +170,64 @@ dump_frame64(x86_saved_state64_t *sp)
 void
 dump_gdt(void *gdtp)
 {
-	unsigned int	i;
-	uint32_t	*ip = (uint32_t *) gdtp;
+	unsigned int    i;
+	uint32_t        *ip = (uint32_t *) gdtp;
 
 	kprintf("GDT:\n");
 	for (i = 0; i < GDTSZ; i++, ip += 2) {
-		kprintf("%p: 0x%08x\n", ip+0, *(ip+0));
-		kprintf("%p: 0x%08x\n", ip+1, *(ip+1));
+		kprintf("%p: 0x%08x\n", ip + 0, *(ip + 0));
+		kprintf("%p: 0x%08x\n", ip + 1, *(ip + 1));
 	}
 }
 
 void
 dump_ldt(void *ldtp)
 {
-	unsigned int	i;
-	uint32_t	*ip = (uint32_t *) ldtp;
+	unsigned int    i;
+	uint32_t        *ip = (uint32_t *) ldtp;
 
 	kprintf("LDT:\n");
 	for (i = 0; i < LDTSZ_MIN; i++, ip += 2) {
-		kprintf("%p: 0x%08x\n", ip+0, *(ip+0));
-		kprintf("%p: 0x%08x\n", ip+1, *(ip+1));
+		kprintf("%p: 0x%08x\n", ip + 0, *(ip + 0));
+		kprintf("%p: 0x%08x\n", ip + 1, *(ip + 1));
 	}
 }
 
 void
 dump_idt(void *idtp)
 {
-	unsigned int	i;
-	uint32_t	*ip = (uint32_t *) idtp;
+	unsigned int    i;
+	uint32_t        *ip = (uint32_t *) idtp;
 
 	kprintf("IDT64:\n");
 	for (i = 0; i < 16; i++, ip += 4) {
-		kprintf("%p: 0x%08x\n", ip+0, *(ip+0));
-		kprintf("%p: 0x%08x\n", ip+1, *(ip+1));
-		kprintf("%p: 0x%08x\n", ip+2, *(ip+2));
-		kprintf("%p: 0x%08x\n", ip+3, *(ip+3));
+		kprintf("%p: 0x%08x\n", ip + 0, *(ip + 0));
+		kprintf("%p: 0x%08x\n", ip + 1, *(ip + 1));
+		kprintf("%p: 0x%08x\n", ip + 2, *(ip + 2));
+		kprintf("%p: 0x%08x\n", ip + 3, *(ip + 3));
 	}
 }
 
 void
 dump_tss(void *tssp)
 {
-	unsigned int	i;
-	uint32_t	*ip = (uint32_t *) tssp;
+	unsigned int    i;
+	uint32_t        *ip = (uint32_t *) tssp;
 
 	kprintf("TSS64:\n");
-	for (i = 0; i < sizeof(master_ktss64)/sizeof(uint32_t); i++, ip++) {
-		kprintf("%p: 0x%08x\n", ip+0, *(ip+0));
+	for (i = 0; i < sizeof(master_ktss64) / sizeof(uint32_t); i++, ip++) {
+		kprintf("%p: 0x%08x\n", ip + 0, *(ip + 0));
 	}
 }
 
-void dump_regs64(void)
+void
+dump_regs64(void)
 {
-
-#define SNAP_REG(reg)						\
-	uint64_t	reg;					\
+#define SNAP_REG(reg)                                           \
+	uint64_t	reg;                                    \
 	__asm__ volatile("mov %%" #reg ", %0" : "=m" (reg))
 
-#define KPRINT_REG(reg)						\
+#define KPRINT_REG(reg)                                         \
 	kprintf("%3s: %p\n", #reg, (void *) reg)
 
 	SNAP_REG(rsp);

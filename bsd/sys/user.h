@@ -61,8 +61,8 @@
  *	@(#)user.h	8.2 (Berkeley) 9/23/93
  */
 
-#ifndef	_SYS_USER_H_
-#define	_SYS_USER_H_
+#ifndef _SYS_USER_H_
+#define _SYS_USER_H_
 
 #include <sys/appleapiopts.h>
 struct waitq_set;
@@ -80,7 +80,7 @@ struct waitq_set;
 #include <sys/signal.h>
 #include <sys/signalvar.h>
 #endif
-#include <sys/vm.h>		/* XXX */
+#include <sys/vm.h>             /* XXX */
 #include <sys/sysctl.h>
 
 #ifdef KERNEL
@@ -96,17 +96,17 @@ struct waitq_set;
  * VFS context structure (part of uthread)
  */
 struct vfs_context {
-	thread_t	vc_thread;		/* pointer to Mach thread */
-	kauth_cred_t	vc_ucred;		/* per thread credential */
+	thread_t        vc_thread;              /* pointer to Mach thread */
+	kauth_cred_t    vc_ucred;               /* per thread credential */
 };
 
 #endif /* !__LP64 || XNU_KERNEL_PRIVATE */
 
 #ifdef BSD_KERNEL_PRIVATE
 /* XXX Deprecated: xnu source compatability */
-#define uu_ucred	uu_context.vc_ucred
+#define uu_ucred        uu_context.vc_ucred
 
-struct label;		/* MAC label dummy struct */
+struct label;           /* MAC label dummy struct */
 
 #define MAXTHREADNAMESIZE 64
 /*
@@ -117,12 +117,12 @@ struct uthread {
 	/* syscall parameters, results and catches */
 	u_int64_t uu_arg[8]; /* arguments to current system call */
 	int uu_rval[2];
-	char uu_cursig;	/* p_cursig for exc. */
+	char uu_cursig; /* p_cursig for exc. */
 	unsigned int syscall_code; /* current syscall code */
 
 	/* thread exception handling */
-	int	uu_exception;
-	mach_exception_code_t uu_code;	/* ``code'' to trap */
+	int     uu_exception;
+	mach_exception_code_t uu_code;  /* ``code'' to trap */
 	mach_exception_subcode_t uu_subcode;
 
 	/* support for syscalls which use continuations */
@@ -206,53 +206,53 @@ struct uthread {
 
 	/* Persistent memory allocations across system calls */
 	struct _select {
-		u_int32_t	*ibits, *obits; /* bits to select on */
-		uint	nbytes;	/* number of bytes in ibits and obits */
-	} uu_select;			/* saved state for select() */
+		u_int32_t       *ibits, *obits; /* bits to select on */
+		uint    nbytes; /* number of bytes in ibits and obits */
+	} uu_select;                    /* saved state for select() */
 
 	/* internal support for continuation framework */
 	int (*uu_continuation)(int);
 	int uu_pri;
 	int uu_timo;
-	caddr_t uu_wchan;			/* sleeping thread wait channel */
-	const char *uu_wmesg;			/* ... wait message */
+	caddr_t uu_wchan;                       /* sleeping thread wait channel */
+	const char *uu_wmesg;                   /* ... wait message */
 	struct proc *uu_proc;
 	thread_t uu_thread;
 	void * uu_userstate;
-	struct waitq_set *uu_wqset;		/* waitq state cached across select calls */
-	size_t uu_wqstate_sz;			/* ...size of uu_wqset buffer */
+	struct waitq_set *uu_wqset;             /* waitq state cached across select calls */
+	size_t uu_wqstate_sz;                   /* ...size of uu_wqset buffer */
 	int uu_flag;
-	sigset_t uu_siglist;				/* signals pending for the thread */
-	sigset_t uu_sigwait;				/*  sigwait on this thread*/
-	sigset_t uu_sigmask;				/* signal mask for the thread */
-	sigset_t uu_oldmask;				/* signal mask saved before sigpause */
-	sigset_t uu_vforkmask;				/* saved signal mask during vfork */
-	struct vfs_context uu_context;			/* thread + cred */
+	sigset_t uu_siglist;                            /* signals pending for the thread */
+	sigset_t uu_sigwait;                            /*  sigwait on this thread*/
+	sigset_t uu_sigmask;                            /* signal mask for the thread */
+	sigset_t uu_oldmask;                            /* signal mask saved before sigpause */
+	sigset_t uu_vforkmask;                          /* saved signal mask during vfork */
+	struct vfs_context uu_context;                  /* thread + cred */
 
-	TAILQ_ENTRY(uthread) uu_list;		/* List of uthreads in proc */
+	TAILQ_ENTRY(uthread) uu_list;           /* List of uthreads in proc */
 
-	struct kaudit_record	*uu_ar;			/* audit record */
-	struct task*	uu_aio_task;			/* target task for async io */
+	struct kaudit_record    *uu_ar;                 /* audit record */
+	struct task*    uu_aio_task;                    /* target task for async io */
 
-	lck_mtx_t	*uu_mtx;
+	lck_mtx_t       *uu_mtx;
 
-	lck_spin_t	uu_rethrottle_lock;     /* locks was_rethrottled and is_throttled */
-	TAILQ_ENTRY(uthread) uu_throttlelist;	/* List of uthreads currently throttled */
-	void	*	uu_throttle_info;	/* pointer to throttled I/Os info */
-	int		uu_on_throttlelist;
-	int		uu_lowpri_window;
+	lck_spin_t      uu_rethrottle_lock;     /* locks was_rethrottled and is_throttled */
+	TAILQ_ENTRY(uthread) uu_throttlelist;   /* List of uthreads currently throttled */
+	void    *       uu_throttle_info;       /* pointer to throttled I/Os info */
+	int             uu_on_throttlelist;
+	int             uu_lowpri_window;
 	/* These boolean fields are protected by different locks */
-	bool		uu_was_rethrottled;
-	bool		uu_is_throttled;
-	bool		uu_throttle_bc;
+	bool            uu_was_rethrottled;
+	bool            uu_is_throttled;
+	bool            uu_throttle_bc;
 
-	u_int32_t	uu_network_marks;	/* network control flow marks */
+	u_int32_t       uu_network_marks;       /* network control flow marks */
 
 	struct kern_sigaltstack uu_sigstk;
-	vnode_t		uu_vreclaims;
-	vnode_t		uu_cdir;		/* per thread CWD */
-	int		uu_dupfd;		/* fd in fdesc_open/dupfdopen */
-	int		uu_defer_reclaims;
+	vnode_t         uu_vreclaims;
+	vnode_t         uu_cdir;                /* per thread CWD */
+	int             uu_dupfd;               /* fd in fdesc_open/dupfdopen */
+	int             uu_defer_reclaims;
 
 	/*
 	 * Bound kqueue request. This field is only cleared by the current thread,
@@ -272,18 +272,18 @@ struct uthread {
 	kq_index_t uu_kqueue_override;
 
 #ifdef JOE_DEBUG
-	int		uu_iocount;
-	int		uu_vpindex;
-	void	*uu_vps[32];
+	int             uu_iocount;
+	int             uu_vpindex;
+	void    *uu_vps[32];
 	void    *uu_pcs[32][10];
 #endif
 #if CONFIG_WORKLOOP_DEBUG
 #define UU_KEVENT_HISTORY_COUNT 32
 #define UU_KEVENT_HISTORY_WRITE_ENTRY(uth, ...)  ({ \
-		struct uthread *__uth = (uth); \
-		unsigned int __index = __uth->uu_kevent_index++; \
-		__uth->uu_kevent_history[__index % UU_KEVENT_HISTORY_COUNT] = \
-				(struct uu_kevent_history)__VA_ARGS__; \
+	        struct uthread *__uth = (uth); \
+	        unsigned int __index = __uth->uu_kevent_index++; \
+	        __uth->uu_kevent_history[__index % UU_KEVENT_HISTORY_COUNT] = \
+	                        (struct uu_kevent_history)__VA_ARGS__; \
 	})
 	struct uu_kevent_history {
 		uint64_t uu_kqid;
@@ -293,18 +293,18 @@ struct uthread {
 	} uu_kevent_history[UU_KEVENT_HISTORY_COUNT];
 	unsigned int uu_kevent_index;
 #endif
-	int		uu_proc_refcount;
+	int             uu_proc_refcount;
 #if PROC_REF_DEBUG
 #define NUM_PROC_REFS_TO_TRACK 32
 #define PROC_REF_STACK_DEPTH 10
-	int		uu_pindex;
-	void	*	uu_proc_ps[NUM_PROC_REFS_TO_TRACK];
-	uintptr_t	uu_proc_pcs[NUM_PROC_REFS_TO_TRACK][PROC_REF_STACK_DEPTH];
+	int             uu_pindex;
+	void    *       uu_proc_ps[NUM_PROC_REFS_TO_TRACK];
+	uintptr_t       uu_proc_pcs[NUM_PROC_REFS_TO_TRACK][PROC_REF_STACK_DEPTH];
 #endif
 
 #if CONFIG_DTRACE
-	uint32_t	t_dtrace_errno; /* Most recent errno */
-	siginfo_t	t_dtrace_siginfo;
+	uint32_t        t_dtrace_errno; /* Most recent errno */
+	siginfo_t       t_dtrace_siginfo;
 	uint64_t        t_dtrace_resumepid; /* DTrace's pidresume() pid */
 	uint8_t         t_dtrace_stop;  /* indicates a DTrace desired stop */
 	uint8_t         t_dtrace_sig;   /* signal sent via DTrace's raise() */
@@ -330,12 +330,12 @@ struct uthread {
 #define t_dtrace_reg    _tdu._tds._t_dtrace_reg
 #endif
 
-	user_addr_t	t_dtrace_pc;    /* DTrace saved pc from fasttrap */
-	user_addr_t	t_dtrace_npc;   /* DTrace next pc from fasttrap */
-	user_addr_t	t_dtrace_scrpc; /* DTrace per-thread scratch location */
-	user_addr_t	t_dtrace_astpc; /* DTrace return sequence location */
+	user_addr_t     t_dtrace_pc;    /* DTrace saved pc from fasttrap */
+	user_addr_t     t_dtrace_npc;   /* DTrace next pc from fasttrap */
+	user_addr_t     t_dtrace_scrpc; /* DTrace per-thread scratch location */
+	user_addr_t     t_dtrace_astpc; /* DTrace return sequence location */
 
-	struct dtrace_ptss_page_entry*	t_dtrace_scratch; /* scratch space entry */
+	struct dtrace_ptss_page_entry*  t_dtrace_scratch; /* scratch space entry */
 
 #if __sol64 || defined(__APPLE__)
 	uint64_t        t_dtrace_regv;  /* DTrace saved reg from fasttrap */
@@ -353,30 +353,30 @@ struct uthread {
 typedef struct uthread * uthread_t;
 
 /* Definition of uu_flag */
-#define	UT_SAS_OLDMASK	0x00000001	/* need to restore mask before pause */
-#define	UT_NO_SIGMASK	0x00000002	/* exited thread; invalid sigmask */
-#define UT_NOTCANCELPT	0x00000004             /* not a cancelation point */
-#define UT_CANCEL	0x00000008             /* thread marked for cancel */
-#define UT_CANCELED	0x00000010            /* thread cancelled */
+#define UT_SAS_OLDMASK  0x00000001      /* need to restore mask before pause */
+#define UT_NO_SIGMASK   0x00000002      /* exited thread; invalid sigmask */
+#define UT_NOTCANCELPT  0x00000004             /* not a cancelation point */
+#define UT_CANCEL       0x00000008             /* thread marked for cancel */
+#define UT_CANCELED     0x00000010            /* thread cancelled */
 #define UT_CANCELDISABLE 0x00000020            /* thread cancel disabled */
-#define	UT_ALTSTACK	0x00000040	/* this thread has alt stack for signals */
-#define UT_THROTTLE_IO	0x00000080	/* this thread issues throttle I/O */
-#define UT_PASSIVE_IO	0x00000100	/* this thread issues passive I/O */
-#define UT_PROCEXIT	0x00000200	/* this thread completed the  proc exit */
-#define UT_RAGE_VNODES	0x00000400	/* rapid age any vnodes created by this thread */
-#define UT_KERN_RAGE_VNODES	0x00000800	/* rapid age any vnodes created by this thread (kernel set) */
+#define UT_ALTSTACK     0x00000040      /* this thread has alt stack for signals */
+#define UT_THROTTLE_IO  0x00000080      /* this thread issues throttle I/O */
+#define UT_PASSIVE_IO   0x00000100      /* this thread issues passive I/O */
+#define UT_PROCEXIT     0x00000200      /* this thread completed the  proc exit */
+#define UT_RAGE_VNODES  0x00000400      /* rapid age any vnodes created by this thread */
+#define UT_KERN_RAGE_VNODES     0x00000800      /* rapid age any vnodes created by this thread (kernel set) */
 /* 0x00001000 unused, used to be UT_BACKGROUND_TRAFFIC_MGT */
-#define	UT_ATIME_UPDATE	0x00002000	/* don't update atime for files accessed by this thread */
-#define	UT_VFORK	0x02000000	/* thread has vfork children */
-#define	UT_SETUID	0x04000000	/* thread is settugid() */
-#define UT_WASSETUID	0x08000000	/* thread was settugid() (in vfork) */
-#define	UT_VFORKING	0x10000000	/* thread in vfork() syscall */
+#define UT_ATIME_UPDATE 0x00002000      /* don't update atime for files accessed by this thread */
+#define UT_VFORK        0x02000000      /* thread has vfork children */
+#define UT_SETUID       0x04000000      /* thread is settugid() */
+#define UT_WASSETUID    0x08000000      /* thread was settugid() (in vfork) */
+#define UT_VFORKING     0x10000000      /* thread in vfork() syscall */
 
 #endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* __APPLE_API_PRIVATE */
 
-#endif	/* KERNEL */
+#endif  /* KERNEL */
 
 /*
  * Per process structure containing data that isn't needed in core
@@ -385,8 +385,8 @@ typedef struct uthread * uthread_t;
  * in all processes.
  */
 
-struct	user {
+struct  user {
 	/* NOT USED ANYMORE */
 };
 
-#endif	/* !_SYS_USER_H_ */
+#endif  /* !_SYS_USER_H_ */

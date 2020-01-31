@@ -14,7 +14,7 @@
 #include <libkern/section_keywords.h>
 
 /* Globals */
-void            (*PE_kputc) (char c) = 0;
+void            (*PE_kputc)(char c) = 0;
 
 SECURITY_READ_ONLY_LATE(unsigned int)    disable_serial_output = TRUE;
 
@@ -25,26 +25,30 @@ PE_init_kprintf(boolean_t vm_initialized)
 {
 	unsigned int    boot_arg;
 
-	if (PE_state.initialized == FALSE)
+	if (PE_state.initialized == FALSE) {
 		panic("Platform Expert not initialized");
+	}
 
 	if (!vm_initialized) {
 		simple_lock_init(&kprintf_lock, 0);
 
-		if (PE_parse_boot_argn("debug", &boot_arg, sizeof (boot_arg)))
-			if (boot_arg & DB_KPRT)
+		if (PE_parse_boot_argn("debug", &boot_arg, sizeof(boot_arg))) {
+			if (boot_arg & DB_KPRT) {
 				disable_serial_output = FALSE;
+			}
+		}
 
-		if (serial_init())
+		if (serial_init()) {
 			PE_kputc = serial_putc;
-		else
+		} else {
 			PE_kputc = cnputc;
+		}
 	}
 }
 
 #ifdef MP_DEBUG
-static void 
-_kprintf(const char *format,...)
+static void
+_kprintf(const char *format, ...)
 {
 	va_list         listp;
 
@@ -52,10 +56,10 @@ _kprintf(const char *format,...)
 	_doprnt_log(format, &listp, PE_kputc, 16);
 	va_end(listp);
 }
-#define MP_DEBUG_KPRINTF(x...)	_kprintf(x)
-#else				/* MP_DEBUG */
+#define MP_DEBUG_KPRINTF(x...)  _kprintf(x)
+#else                           /* MP_DEBUG */
 #define MP_DEBUG_KPRINTF(x...)
-#endif				/* MP_DEBUG */
+#endif                          /* MP_DEBUG */
 
 #if CONFIG_NO_KPRINTF_STRINGS
 /* Prevent CPP from breaking the definition below */
@@ -64,8 +68,9 @@ _kprintf(const char *format,...)
 
 static int      cpu_last_locked = 0;
 
-__attribute__((noinline,not_tail_called))
-void kprintf(const char *fmt,...)
+__attribute__((noinline, not_tail_called))
+void
+kprintf(const char *fmt, ...)
 {
 	va_list         listp;
 	va_list         listp2;
@@ -73,14 +78,13 @@ void kprintf(const char *fmt,...)
 	void           *caller = __builtin_return_address(0);
 
 	if (!disable_serial_output) {
-
 		/*
 		 * Spin to get kprintf lock but re-enable interrupts while failing.
 		 * This allows interrupts to be handled while waiting but
 		 * interrupts are disabled once we have the lock.
 		 */
 		state = ml_set_interrupts_enabled(FALSE);
-		while (!simple_lock_try(&kprintf_lock)) {
+		while (!simple_lock_try(&kprintf_lock, LCK_GRP_NULL)) {
 			ml_set_interrupts_enabled(state);
 			ml_set_interrupts_enabled(FALSE);
 		}
@@ -106,8 +110,9 @@ void kprintf(const char *fmt,...)
 		 * take the panic when it reenables interrupts.
 		 * Hopefully one day this is fixed so that this workaround is unnecessary.
 		 */
-		if (state == TRUE)
+		if (state == TRUE) {
 			ml_spin_debug_clear_self();
+		}
 #endif
 		ml_set_interrupts_enabled(state);
 
@@ -116,8 +121,7 @@ void kprintf(const char *fmt,...)
 			os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, listp2, caller);
 		}
 		va_end(listp2);
-	}
-	else {
+	} else {
 		// If interrupts are enabled
 		if (ml_get_interrupts_enabled()) {
 			va_start(listp, fmt);
@@ -127,15 +131,14 @@ void kprintf(const char *fmt,...)
 	}
 }
 
-void 
+void
 serial_putc(char c)
 {
 	uart_putc(c);
 }
 
-int 
+int
 serial_getc(void)
 {
 	return uart_getc();
 }
-

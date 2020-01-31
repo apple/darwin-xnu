@@ -27,6 +27,7 @@
  */
 
 #include <arm/monotonic.h>
+#include <sys/errno.h>
 #include <sys/monotonic.h>
 
 bool mt_core_supported = false;
@@ -51,7 +52,7 @@ mt_cur_cpu(void)
 int
 mt_microstackshot_start_arch(__unused uint64_t period)
 {
-	return 1;
+	return ENOTSUP;
 }
 
 struct mt_device mt_devices[0];

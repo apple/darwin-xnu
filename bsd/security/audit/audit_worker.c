@@ -90,29 +90,29 @@ static thread_t audit_thread;
  * cleared when the next rotation takes place.  It is also protected by
  * audit_worker_sl.
  */
-static int			audit_file_rotate_wait;
-static struct slck 		audit_worker_sl;
-static struct vfs_context	audit_ctx;
-static struct vnode		*audit_vp;
+static int                      audit_file_rotate_wait;
+static struct slck              audit_worker_sl;
+static struct vfs_context       audit_ctx;
+static struct vnode             *audit_vp;
 
-#define	AUDIT_WORKER_SX_INIT()		slck_init(&audit_worker_sl, 	\
-    					    "audit_worker_sl")
-#define	AUDIT_WORKER_SX_XLOCK()		slck_lock(&audit_worker_sl)
-#define	AUDIT_WORKER_SX_XUNLOCK()	slck_unlock(&audit_worker_sl)
-#define	AUDIT_WORKER_SX_ASSERT()	slck_assert(&audit_worker_sl, SL_OWNED)
-#define	AUDIT_WORKER_SX_DESTROY()	slck_destroy(&audit_worker_sl)
+#define AUDIT_WORKER_SX_INIT()          slck_init(&audit_worker_sl,     \
+	                                    "audit_worker_sl")
+#define AUDIT_WORKER_SX_XLOCK()         slck_lock(&audit_worker_sl)
+#define AUDIT_WORKER_SX_XUNLOCK()       slck_unlock(&audit_worker_sl)
+#define AUDIT_WORKER_SX_ASSERT()        slck_assert(&audit_worker_sl, SL_OWNED)
+#define AUDIT_WORKER_SX_DESTROY()       slck_destroy(&audit_worker_sl)
 
 /*
  * The audit_q_draining flag is set when audit is disabled and the audit
  * worker queue is being drained.
  */
-static int			audit_q_draining;
+static int                      audit_q_draining;
 
 /*
  * The special kernel audit record, audit_drain_kar, is used to mark the end of
  * the queue when draining it.
  */
-static struct kaudit_record 	audit_drain_kar = {
+static struct kaudit_record     audit_drain_kar = {
 	.k_ar = {
 		.ar_event = AUE_NULL,
 	},
@@ -140,13 +140,15 @@ audit_record_write(struct vnode *vp, struct vfs_context *ctx, void *data,
 	uint64_t temp;
 	off_t file_size;
 
-	AUDIT_WORKER_SX_ASSERT();	/* audit_file_rotate_wait. */
+	AUDIT_WORKER_SX_ASSERT();       /* audit_file_rotate_wait. */
 
-	if (vp == NULL)
+	if (vp == NULL) {
 		return;
+	}
 
-	if (vnode_getwithref(vp))
+	if (vnode_getwithref(vp)) {
 		return /*(ENOENT)*/;
+	}
 
 	mnt_stat = &vp->v_mount->mnt_vfsstat;
 
@@ -156,11 +158,13 @@ audit_record_write(struct vnode *vp, struct vfs_context *ctx, void *data,
 	 * operations to indicate a future inability to write to the file.
 	 */
 	error = vfs_update_vfsstat(vp->v_mount, ctx, VFS_KERNEL_EVENT);
-	if (error)
+	if (error) {
 		goto fail;
+	}
 	error = vnode_size(vp, &file_size, ctx);
-	if (error)
+	if (error) {
 		goto fail;
+	}
 	audit_fstat.af_currsz = (u_quad_t)file_size;
 
 	/*
@@ -203,9 +207,10 @@ audit_record_write(struct vnode *vp, struct vfs_context *ctx, void *data,
 		temp = mnt_stat->f_blocks / (100 / audit_qctrl.aq_minfree);
 		if (mnt_stat->f_bfree < temp &&
 		    ppsratecheck(&last_lowspace_trigger,
-		    &cur_lowspace_trigger, 1))
-				(void)audit_send_trigger(
-				    AUDIT_TRIGGER_LOW_SPACE);
+		    &cur_lowspace_trigger, 1)) {
+			(void)audit_send_trigger(
+				AUDIT_TRIGGER_LOW_SPACE);
+		}
 	}
 
 	/*
@@ -236,10 +241,11 @@ audit_record_write(struct vnode *vp, struct vfs_context *ctx, void *data,
 		if ((unsigned long)((audit_q_len + audit_pre_q_len + 1) *
 		    MAX_AUDIT_RECORD_SIZE) / mnt_stat->f_bsize >=
 		    (unsigned long)(mnt_stat->f_bfree)) {
-			if (ppsratecheck(&last_fail, &cur_fail, 1))
+			if (ppsratecheck(&last_fail, &cur_fail, 1)) {
 				printf("audit_record_write: free space "
 				    "below size of audit queue, failing "
 				    "stop\n");
+			}
 			audit_in_failure = 1;
 		} else if (audit_in_failure) {
 			/*
@@ -251,12 +257,13 @@ audit_record_write(struct vnode *vp, struct vfs_context *ctx, void *data,
 	}
 
 	error = vn_rdwr(UIO_WRITE, vp, data, len, (off_t)0, UIO_SYSSPACE,
-	    IO_APPEND|IO_UNIT, vfs_context_ucred(ctx), NULL,
+	    IO_APPEND | IO_UNIT, vfs_context_ucred(ctx), NULL,
 	    vfs_context_proc(ctx));
-	if (error == ENOSPC)
+	if (error == ENOSPC) {
 		goto fail_enospc;
-	else if (error)
+	} else if (error) {
 		goto fail;
+	}
 
 	/*
 	 * Catch completion of a queue drain here; if we're draining and the
@@ -299,8 +306,9 @@ fail:
 	if (audit_panic_on_write_fail) {
 		(void)VNOP_FSYNC(vp, MNT_WAIT, ctx);
 		panic("audit_worker: write error %d\n", error);
-	} else if (ppsratecheck(&last_fail, &cur_fail, 1))
+	} else if (ppsratecheck(&last_fail, &cur_fail, 1)) {
 		printf("audit_worker: write error %d\n", error);
+	}
 	vnode_put(vp);
 }
 
@@ -331,8 +339,9 @@ audit_worker_process_record(struct kaudit_record *ar)
 	    (ar->k_ar_commit & AR_PRESELECT_TRAIL)) {
 		AUDIT_WORKER_SX_XLOCK();
 		trail_locked = 1;
-	} else
+	} else {
 		trail_locked = 0;
+	}
 
 	/*
 	 * First, handle the user record, if any: commit to the system trail
@@ -346,22 +355,25 @@ audit_worker_process_record(struct kaudit_record *ar)
 	}
 
 	if ((ar->k_ar_commit & AR_COMMIT_USER) &&
-	    (ar->k_ar_commit & AR_PRESELECT_USER_PIPE))
+	    (ar->k_ar_commit & AR_PRESELECT_USER_PIPE)) {
 		audit_pipe_submit_user(ar->k_udata, ar->k_ulen);
+	}
 
 	if (!(ar->k_ar_commit & AR_COMMIT_KERNEL) ||
 	    ((ar->k_ar_commit & AR_PRESELECT_PIPE) == 0 &&
 	    (ar->k_ar_commit & AR_PRESELECT_TRAIL) == 0 &&
-	    (ar->k_ar_commit & AR_PRESELECT_FILTER) == 0))
+	    (ar->k_ar_commit & AR_PRESELECT_FILTER) == 0)) {
 		goto out;
+	}
 
 	auid = ar->k_ar.ar_subj_auid;
 	event = ar->k_ar.ar_event;
 	class = au_event_class(event);
-	if (ar->k_ar.ar_errno == 0)
+	if (ar->k_ar.ar_errno == 0) {
 		sorf = AU_PRS_SUCCESS;
-	else
+	} else {
 		sorf = AU_PRS_FAILURE;
+	}
 
 	error = kaudit_to_bsm(ar, &bsm);
 	switch (error) {
@@ -384,13 +396,13 @@ audit_worker_process_record(struct kaudit_record *ar)
 		audit_record_write(audit_vp, &audit_ctx, bsm->data, bsm->len);
 	}
 
-	if (ar->k_ar_commit & AR_PRESELECT_PIPE)
+	if (ar->k_ar_commit & AR_PRESELECT_PIPE) {
 		audit_pipe_submit(auid, event, class, sorf,
 		    ar->k_ar_commit & AR_PRESELECT_TRAIL, bsm->data,
 		    bsm->len);
+	}
 
 	if (ar->k_ar_commit & AR_PRESELECT_FILTER) {
-
 		/*
 		 *  XXXss - This needs to be generalized so new filters can
 		 *  be easily plugged in.
@@ -401,8 +413,9 @@ audit_worker_process_record(struct kaudit_record *ar)
 
 	kau_free(bsm);
 out:
-	if (trail_locked)
+	if (trail_locked) {
 		AUDIT_WORKER_SX_XUNLOCK();
+	}
 }
 
 /*
@@ -422,8 +435,9 @@ audit_worker(void)
 	struct kaudit_record *ar;
 	int lowater_signal;
 
-	if (audit_ctx.vc_thread == NULL)
+	if (audit_ctx.vc_thread == NULL) {
 		audit_ctx.vc_thread = current_thread();
+	}
 
 	TAILQ_INIT(&ar_worklist);
 	mtx_lock(&audit_mtx);
@@ -433,9 +447,10 @@ audit_worker(void)
 		/*
 		 * Wait for a record.
 		 */
-		while (TAILQ_EMPTY(&audit_q))
+		while (TAILQ_EMPTY(&audit_q)) {
 			cv_wait_continuation(&audit_worker_cv, &audit_mtx,
 			    (thread_continue_t)audit_worker);
+		}
 
 		/*
 		 * If there are records in the global audit record queue,
@@ -448,12 +463,14 @@ audit_worker(void)
 		while ((ar = TAILQ_FIRST(&audit_q))) {
 			TAILQ_REMOVE(&audit_q, ar, k_q);
 			audit_q_len--;
-			if (audit_q_len == audit_qctrl.aq_lowater)
+			if (audit_q_len == audit_qctrl.aq_lowater) {
 				lowater_signal++;
+			}
 			TAILQ_INSERT_TAIL(&ar_worklist, ar, k_q);
 		}
-		if (lowater_signal)
+		if (lowater_signal) {
 			cv_broadcast(&audit_watermark_cv);
+		}
 
 		mtx_unlock(&audit_mtx);
 		while ((ar = TAILQ_FIRST(&ar_worklist))) {
@@ -506,16 +523,18 @@ audit_rotate_vnode(kauth_cred_t cred, struct vnode *vp)
 		 * we close the audit trail.
 		 */
 		audit_q_draining = 1;
-		while (audit_q_len >= audit_qctrl.aq_hiwater)
+		while (audit_q_len >= audit_qctrl.aq_hiwater) {
 			cv_wait(&audit_watermark_cv, &audit_mtx);
+		}
 		TAILQ_INSERT_TAIL(&audit_q, &audit_drain_kar, k_q);
 		audit_q_len++;
 		cv_signal(&audit_worker_cv);
 	}
 
 	/* If the audit queue is draining then wait here until it's done. */
-	while (audit_q_draining)
+	while (audit_q_draining) {
 		cv_wait(&audit_drain_cv, &audit_mtx);
+	}
 	mtx_unlock(&audit_mtx);
 
 
@@ -540,9 +559,10 @@ audit_rotate_vnode(kauth_cred_t cred, struct vnode *vp)
 			vn_close(old_audit_vp, AUDIT_CLOSE_FLAGS,
 			    vfs_context_kernel());
 			vnode_put(old_audit_vp);
-		} else
+		} else {
 			printf("audit_rotate_vnode: Couldn't close "
 			    "audit file.\n");
+		}
 		kauth_cred_unref(&old_audit_cred);
 	}
 }
@@ -550,10 +570,10 @@ audit_rotate_vnode(kauth_cred_t cred, struct vnode *vp)
 void
 audit_worker_init(void)
 {
-
 	AUDIT_WORKER_SX_INIT();
 	kernel_thread_start((thread_continue_t)audit_worker, NULL,
 	    &audit_thread);
-	if (audit_thread == THREAD_NULL)
+	if (audit_thread == THREAD_NULL) {
 		panic("audit_worker_init: Couldn't create audit_worker thread");
+	}
 }

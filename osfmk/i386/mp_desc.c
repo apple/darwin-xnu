@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -89,14 +89,14 @@
 #define U_INTR_GATE (ACC_P|ACC_PL_U|ACC_INTR_GATE)
 
 // Declare macros that will declare the externs
-#define TRAP(n, name)		extern void *name ;
-#define TRAP_ERR(n, name)	extern void *name ;
-#define TRAP_SPC(n, name)	extern void *name ;
-#define TRAP_IST1(n, name)	extern void *name ;
-#define TRAP_IST2(n, name)	extern void *name ;
-#define INTERRUPT(n)		extern void *_intr_ ## n ;
-#define USER_TRAP(n, name)	extern void *name ;
-#define USER_TRAP_SPC(n, name)	extern void *name ;
+#define TRAP(n, name)           extern void *name ;
+#define TRAP_ERR(n, name)       extern void *name ;
+#define TRAP_SPC(n, name)       extern void *name ;
+#define TRAP_IST1(n, name)      extern void *name ;
+#define TRAP_IST2(n, name)      extern void *name ;
+#define INTERRUPT(n)            extern void *_intr_ ## n ;
+#define USER_TRAP(n, name)      extern void *name ;
+#define USER_TRAP_SPC(n, name)  extern void *name ;
 
 // Include the table to declare the externs
 #include "../x86_64/idt_table.h"
@@ -111,68 +111,68 @@
 #undef USER_TRAP
 #undef USER_TRAP_SPC
 
-#define TRAP(n, name)			\
-	[n] = {				\
-		(uintptr_t)&name,	\
-		KERNEL64_CS,		\
-		0,			\
-		K_INTR_GATE,		\
-		0			\
+#define TRAP(n, name)                   \
+	[n] = {                         \
+	        (uintptr_t)&name,       \
+	        KERNEL64_CS,            \
+	        0,                      \
+	        K_INTR_GATE,            \
+	        0                       \
 	},
 
 #define TRAP_ERR TRAP
 #define TRAP_SPC TRAP
 
 #define TRAP_IST1(n, name) \
-	[n] = {				\
-		(uintptr_t)&name,	\
-		KERNEL64_CS,		\
-		1,			\
-		K_INTR_GATE,		\
-		0			\
+	[n] = {                         \
+	        (uintptr_t)&name,       \
+	        KERNEL64_CS,            \
+	        1,                      \
+	        K_INTR_GATE,            \
+	        0                       \
 	},
 
 #define TRAP_IST2(n, name) \
-	[n] = {				\
-		(uintptr_t)&name,	\
-		KERNEL64_CS,		\
-		2,			\
-		K_INTR_GATE,		\
-		0			\
+	[n] = {                         \
+	        (uintptr_t)&name,       \
+	        KERNEL64_CS,            \
+	        2,                      \
+	        K_INTR_GATE,            \
+	        0                       \
 	},
 
 #define INTERRUPT(n) \
-	[n] = {				\
-		(uintptr_t)&_intr_ ## n,\
-		KERNEL64_CS,		\
-		0,			\
-		K_INTR_GATE,		\
-		0			\
+	[n] = {                         \
+	        (uintptr_t)&_intr_ ## n,\
+	        KERNEL64_CS,            \
+	        0,                      \
+	        K_INTR_GATE,            \
+	        0                       \
 	},
 
 #define USER_TRAP(n, name) \
-	[n] = {				\
-		(uintptr_t)&name,	\
-		KERNEL64_CS,		\
-		0,			\
-		U_INTR_GATE,		\
-		0			\
+	[n] = {                         \
+	        (uintptr_t)&name,       \
+	        KERNEL64_CS,            \
+	        0,                      \
+	        U_INTR_GATE,            \
+	        0                       \
 	},
 
 #define USER_TRAP_SPC USER_TRAP
 
 // Declare the table using the macros we just set up
 struct fake_descriptor64 master_idt64[IDTSZ]
-	__attribute__ ((section("__HIB,__desc")))
-	__attribute__ ((aligned(PAGE_SIZE))) = {
+__attribute__ ((section("__HIB,__desc")))
+__attribute__ ((aligned(PAGE_SIZE))) = {
 #include "../x86_64/idt_table.h"
 };
 
 /*
  * First cpu`s interrupt stack.
  */
-extern uint32_t		low_intstack[];		/* bottom */
-extern uint32_t		low_eintstack[];	/* top */
+extern uint32_t         low_intstack[];         /* bottom */
+extern uint32_t         low_eintstack[];        /* top */
 
 /*
  * Per-cpu data area pointers.
@@ -186,11 +186,11 @@ cpu_data_t scdatas[MAX_CPUS] __attribute__((aligned(64))) = {
 };
 cpu_data_t *cpu_data_master = &scdatas[0];
 
-cpu_data_t	*cpu_data_ptr[MAX_CPUS] = { [0] = &scdatas[0] };
+cpu_data_t      *cpu_data_ptr[MAX_CPUS] = {[0] = &scdatas[0] };
 
-decl_simple_lock_data(,ncpus_lock);	/* protects real_ncpus */
-unsigned int	real_ncpus = 1;
-unsigned int	max_ncpus = MAX_CPUS;
+decl_simple_lock_data(, ncpus_lock);     /* protects real_ncpus */
+unsigned int    real_ncpus = 1;
+unsigned int    max_ncpus = MAX_CPUS;
 
 extern void hi64_sysenter(void);
 extern void hi64_syscall(void);
@@ -225,9 +225,9 @@ cldt_t *dyn_ldts;
  */
 struct fake_descriptor64 kernel_ldt_desc64 = {
 	0,
-	LDTSZ_MIN*sizeof(struct fake_descriptor)-1,
+	LDTSZ_MIN*sizeof(struct fake_descriptor) - 1,
 	0,
-	ACC_P|ACC_PL_K|ACC_LDT,
+	ACC_P | ACC_PL_K | ACC_LDT,
 	0
 };
 
@@ -237,9 +237,9 @@ struct fake_descriptor64 kernel_ldt_desc64 = {
  */
 struct fake_descriptor64 kernel_tss_desc64 = {
 	0,
-	sizeof(struct x86_64_tss)-1,
+	sizeof(struct x86_64_tss) - 1,
 	0,
-	ACC_P|ACC_PL_K|ACC_TSS,
+	ACC_P | ACC_PL_K | ACC_TSS,
 	0
 };
 
@@ -274,8 +274,8 @@ struct fake_descriptor64 kernel_tss_desc64 = {
  *	bytes 6..7		offset 31..16
  */
 void
-fix_desc(void *d, int num_desc) {
-	//early_kprintf("fix_desc(%x, %x)\n", d, num_desc);
+fix_desc(void *d, int num_desc)
+{
 	uint8_t *desc = (uint8_t*) d;
 
 	do {
@@ -284,30 +284,29 @@ fix_desc(void *d, int num_desc) {
 			uint16_t selector;
 			uint8_t wordcount;
 			uint8_t acc;
-			
+
 			offset = *((uint32_t*)(desc));
-			selector = *((uint32_t*)(desc+4));
+			selector = *((uint32_t*)(desc + 4));
 			wordcount = desc[6] >> 4;
 			acc = desc[7];
 
 			*((uint16_t*)desc) = offset & 0xFFFF;
-			*((uint16_t*)(desc+2)) = selector;
+			*((uint16_t*)(desc + 2)) = selector;
 			desc[4] = wordcount;
 			desc[5] = acc;
-			*((uint16_t*)(desc+6)) = offset >> 16;
-
+			*((uint16_t*)(desc + 6)) = offset >> 16;
 		} else { /* descriptor */
 			uint32_t base;
 			uint16_t limit;
 			uint8_t acc1, acc2;
 
 			base = *((uint32_t*)(desc));
-			limit = *((uint16_t*)(desc+4));
+			limit = *((uint16_t*)(desc + 4));
 			acc2 = desc[6];
 			acc1 = desc[7];
 
 			*((uint16_t*)(desc)) = limit;
-			*((uint16_t*)(desc+2)) = base & 0xFFFF;
+			*((uint16_t*)(desc + 2)) = base & 0xFFFF;
 			desc[4] = (base >> 16) & 0xFF;
 			desc[5] = acc1;
 			desc[6] = acc2;
@@ -320,15 +319,15 @@ fix_desc(void *d, int num_desc) {
 void
 fix_desc64(void *descp, int count)
 {
-	struct fake_descriptor64	*fakep;
+	struct fake_descriptor64        *fakep;
 	union {
-		struct real_gate64		gate;
-		struct real_descriptor64	desc;
-	}				real;
-	int				i;
+		struct real_gate64              gate;
+		struct real_descriptor64        desc;
+	}                               real;
+	int                             i;
 
 	fakep = (struct fake_descriptor64 *) descp;
-	
+
 	for (i = 0; i < count; i++, fakep++) {
 		/*
 		 * Construct the real decriptor locally.
@@ -346,10 +345,10 @@ fix_desc64(void *descp, int count)
 			real.gate.selector16 = fakep->lim_or_seg & 0xFFFF;
 			real.gate.IST = fakep->size_or_IST & 0x7;
 			real.gate.access8 = fakep->access;
-			real.gate.offset_high16 = (uint16_t)((fakep->offset64>>16) & 0xFFFF);
-			real.gate.offset_top32 = (uint32_t)(fakep->offset64>>32);
+			real.gate.offset_high16 = (uint16_t)((fakep->offset64 >> 16) & 0xFFFF);
+			real.gate.offset_top32 = (uint32_t)(fakep->offset64 >> 32);
 			break;
-		default:	/* Otherwise */
+		default:        /* Otherwise */
 			real.desc.limit_low16 = fakep->lim_or_seg & 0xFFFF;
 			real.desc.base_low16 = (uint16_t)(fakep->offset64 & 0xFFFF);
 			real.desc.base_med8 = (uint8_t)((fakep->offset64 >> 16) & 0xFF);
@@ -357,7 +356,7 @@ fix_desc64(void *descp, int count)
 			real.desc.limit_high4 = (fakep->lim_or_seg >> 16) & 0xFF;
 			real.desc.granularity4 = fakep->size_or_IST;
 			real.desc.base_high8 = (uint8_t)((fakep->offset64 >> 24) & 0xFF);
-			real.desc.base_top32 = (uint32_t)(fakep->offset64>>32);
+			real.desc.base_top32 = (uint32_t)(fakep->offset64 >> 32);
 		}
 
 		/*
@@ -371,7 +370,7 @@ extern unsigned mldtsz;
 void
 cpu_desc_init(cpu_data_t *cdp)
 {
-	cpu_desc_index_t	*cdi = &cdp->cpu_desc_index;
+	cpu_desc_index_t        *cdi = &cdp->cpu_desc_index;
 
 	if (cdp == cpu_data_master) {
 		/*
@@ -387,18 +386,18 @@ cpu_desc_init(cpu_data_t *cdp)
 		cdi->cdi_gdtb.ptr = (void *)&master_gdt;
 		cdi->cdi_idtu.ptr  = (void *)DBLMAP((uintptr_t) &master_idt64);
 		cdi->cdi_idtb.ptr  = (void *)((uintptr_t) &master_idt64);
-		cdi->cdi_ldtu  = (struct fake_descriptor *) (void *) DBLMAP((uintptr_t)&master_ldt[0]);
-		cdi->cdi_ldtb  = (struct fake_descriptor *) (void *) &master_ldt[0];
+		cdi->cdi_ldtu  = (struct real_descriptor *)DBLMAP((uintptr_t)&master_ldt[0]);
+		cdi->cdi_ldtb  = &master_ldt[0];
 
 		/* Replace the expanded LDTs and TSS slots in the GDT */
 		kernel_ldt_desc64.offset64 = (uintptr_t) cdi->cdi_ldtu;
 		*(struct fake_descriptor64 *) &master_gdt[sel_idx(KERNEL_LDT)] =
-			kernel_ldt_desc64;
+		    kernel_ldt_desc64;
 		*(struct fake_descriptor64 *) &master_gdt[sel_idx(USER_LDT)] =
-			kernel_ldt_desc64;
+		    kernel_ldt_desc64;
 		kernel_tss_desc64.offset64 = (uintptr_t) DBLMAP(&master_ktss64);
 		*(struct fake_descriptor64 *) &master_gdt[sel_idx(KERNEL_TSS)] =
-			kernel_tss_desc64;
+		    kernel_tss_desc64;
 
 		/* Fix up the expanded descriptors for 64-bit. */
 		fix_desc64((void *) &master_idt64, IDTSZ);
@@ -411,8 +410,8 @@ cpu_desc_init(cpu_data_t *cdp)
 		 */
 		master_ktss64.ist2 = (uintptr_t) low_eintstack;
 		master_ktss64.ist1 = (uintptr_t) low_eintstack - sizeof(x86_64_intr_stack_frame_t);
-	} else if (cdi->cdi_ktssu == NULL) {	/* Skipping re-init on wake */
-		cpu_desc_table64_t	*cdt = (cpu_desc_table64_t *) cdp->cpu_desc_tablep;
+	} else if (cdi->cdi_ktssu == NULL) {    /* Skipping re-init on wake */
+		cpu_desc_table64_t      *cdt = (cpu_desc_table64_t *) cdp->cpu_desc_tablep;
 
 		cdi->cdi_idtu.ptr  = (void *)DBLMAP((uintptr_t) &master_idt64);
 
@@ -439,17 +438,17 @@ cpu_desc_init(cpu_data_t *cdp)
 		 */
 		kernel_ldt_desc64.offset64 = (uintptr_t) cdi->cdi_ldtu;
 		*(struct fake_descriptor64 *) &cdt->gdt[sel_idx(KERNEL_LDT)] =
-			kernel_ldt_desc64;
+		    kernel_ldt_desc64;
 		fix_desc64(&cdt->gdt[sel_idx(KERNEL_LDT)], 1);
 
 		kernel_ldt_desc64.offset64 = (uintptr_t) cdi->cdi_ldtu;
 		*(struct fake_descriptor64 *) &cdt->gdt[sel_idx(USER_LDT)] =
-			kernel_ldt_desc64;
+		    kernel_ldt_desc64;
 		fix_desc64(&cdt->gdt[sel_idx(USER_LDT)], 1);
 
 		kernel_tss_desc64.offset64 = (uintptr_t) cdi->cdi_ktssu;
 		*(struct fake_descriptor64 *) &cdt->gdt[sel_idx(KERNEL_TSS)] =
-			kernel_tss_desc64;
+		    kernel_tss_desc64;
 		fix_desc64(&cdt->gdt[sel_idx(KERNEL_TSS)], 1);
 
 		/* Set (zeroed) fault stack as IST1, NMI intr stack IST2 */
@@ -461,13 +460,14 @@ cpu_desc_init(cpu_data_t *cdp)
 	}
 
 	/* Require that the top of the sysenter stack is 16-byte aligned */
-	if ((cdi->cdi_sstku % 16) != 0)
+	if ((cdi->cdi_sstku % 16) != 0) {
 		panic("cpu_desc_init() sysenter stack not 16-byte aligned");
+	}
 }
 void
 cpu_desc_load(cpu_data_t *cdp)
 {
-	cpu_desc_index_t	*cdi = &cdp->cpu_desc_index;
+	cpu_desc_index_t        *cdi = &cdp->cpu_desc_index;
 
 	postcode(CPU_DESC_LOAD_ENTRY);
 
@@ -485,7 +485,7 @@ cpu_desc_load(cpu_data_t *cdp)
 	gdt_desc_p(KERNEL_TSS)->access &= ~ACC_TSS_BUSY;
 
 	/* Load the GDT, LDT, IDT and TSS */
-	cdi->cdi_gdtb.size = sizeof(struct real_descriptor)*GDTSZ - 1;
+	cdi->cdi_gdtb.size = sizeof(struct real_descriptor) * GDTSZ - 1;
 	cdi->cdi_gdtu.size = cdi->cdi_gdtb.size;
 	cdi->cdi_idtb.size = 0x1000 + cdp->cpu_number;
 	cdi->cdi_idtu.size = cdi->cdi_idtb.size;
@@ -500,7 +500,7 @@ cpu_desc_load(cpu_data_t *cdp)
 	set_tr(KERNEL_TSS);
 
 #if GPROF // Hack to enable mcount to work on K64
-	__asm__ volatile("mov %0, %%gs" : : "rm" ((unsigned short)(KERNEL_DS)));
+	__asm__ volatile ("mov %0, %%gs" : : "rm" ((unsigned short)(KERNEL_DS)));
 #endif
 	postcode(CPU_DESC_LOAD_EXIT);
 }
@@ -516,7 +516,7 @@ cpu_syscall_init(cpu_data_t *cdp)
 #else /* MONOTONIC */
 #pragma unused(cdp)
 #endif /* !MONOTONIC */
-	wrmsr64(MSR_IA32_SYSENTER_CS, SYSENTER_CS); 
+	wrmsr64(MSR_IA32_SYSENTER_CS, SYSENTER_CS);
 	wrmsr64(MSR_IA32_SYSENTER_EIP, DBLMAP((uintptr_t) hi64_sysenter));
 	wrmsr64(MSR_IA32_SYSENTER_ESP, current_cpu_datap()->cpu_desc_index.cdi_sstku);
 	/* Enable syscall/sysret */
@@ -536,8 +536,7 @@ cpu_syscall_init(cpu_data_t *cdp)
 	 * is also cleared to avoid a spurious "task switch"
 	 * should we choose to return via an IRET.
 	 */
-	wrmsr64(MSR_IA32_FMASK, EFL_DF|EFL_IF|EFL_TF|EFL_NT);
-
+	wrmsr64(MSR_IA32_FMASK, EFL_DF | EFL_IF | EFL_TF | EFL_NT);
 }
 extern vm_offset_t dyn_dblmap(vm_offset_t, vm_offset_t);
 uint64_t ldt_alias_offset;
@@ -545,8 +544,8 @@ uint64_t ldt_alias_offset;
 cpu_data_t *
 cpu_data_alloc(boolean_t is_boot_cpu)
 {
-	int		ret;
-	cpu_data_t	*cdp;
+	int             ret;
+	cpu_data_t      *cdp;
 
 	if (is_boot_cpu) {
 		assert(real_ncpus == 1);
@@ -562,7 +561,7 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	}
 
 	boolean_t do_ldt_alloc = FALSE;
-	simple_lock(&ncpus_lock);
+	simple_lock(&ncpus_lock, LCK_GRP_NULL);
 	int cnum = real_ncpus;
 	real_ncpus++;
 	if (dyn_ldts == NULL) {
@@ -582,9 +581,9 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	/*
 	 * Allocate interrupt stack:
 	 */
-	ret = kmem_alloc(kernel_map, 
-			 (vm_offset_t *) &cdp->cpu_int_stack_top,
-			 INTSTACK_SIZE, VM_KERN_MEMORY_CPU);
+	ret = kmem_alloc(kernel_map,
+	    (vm_offset_t *) &cdp->cpu_int_stack_top,
+	    INTSTACK_SIZE, VM_KERN_MEMORY_CPU);
 	if (ret != KERN_SUCCESS) {
 		panic("cpu_data_alloc() int stack failed, ret=%d\n", ret);
 	}
@@ -611,7 +610,7 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 			panic("cpu_data_alloc() ldt failed, kmem_alloc=%d\n", ret);
 		}
 
-		simple_lock(&ncpus_lock);
+		simple_lock(&ncpus_lock, LCK_GRP_NULL);
 		if (dyn_ldts == NULL) {
 			dyn_ldts = (cldt_t *)ldtalloc;
 		} else {
@@ -650,94 +649,100 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	cdp->cpu_nanotime = &pal_rtc_nanotime_info;
 
 	kprintf("cpu_data_alloc(%d) %p desc_table: %p "
-		"ldt: %p "
-		"int_stack: 0x%lx-0x%lx\n",
-		cdp->cpu_number, cdp, cdp->cpu_desc_tablep, cdp->cpu_ldtp,
-		(long)(cdp->cpu_int_stack_top - INTSTACK_SIZE), (long)(cdp->cpu_int_stack_top));
+	    "ldt: %p "
+	    "int_stack: 0x%lx-0x%lx\n",
+	    cdp->cpu_number, cdp, cdp->cpu_desc_tablep, cdp->cpu_ldtp,
+	    (long)(cdp->cpu_int_stack_top - INTSTACK_SIZE), (long)(cdp->cpu_int_stack_top));
 	cpu_data_ptr[cnum] = cdp;
 
 	return cdp;
-
 }
 
 boolean_t
 valid_user_data_selector(uint16_t selector)
 {
-    sel_t	sel = selector_to_sel(selector);
-    
-    if (selector == 0)
-    	return (TRUE);
+	sel_t       sel = selector_to_sel(selector);
 
-    if (sel.ti == SEL_LDT)
-	return (TRUE);
-    else if (sel.index < GDTSZ) {
-	if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U)
-	    return (TRUE);
-    }
-    return (FALSE);
+	if (selector == 0) {
+		return TRUE;
+	}
+
+	if (sel.ti == SEL_LDT) {
+		return TRUE;
+	} else if (sel.index < GDTSZ) {
+		if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U) {
+			return TRUE;
+		}
+	}
+	return FALSE;
 }
 
 boolean_t
 valid_user_code_selector(uint16_t selector)
 {
-    sel_t	sel = selector_to_sel(selector);
-    
-    if (selector == 0)
-    	return (FALSE);
+	sel_t       sel = selector_to_sel(selector);
 
-    if (sel.ti == SEL_LDT) {
-	if (sel.rpl == USER_PRIV)
-	    return (TRUE);
-    }
-    else if (sel.index < GDTSZ && sel.rpl == USER_PRIV) {
-	if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U)
-	    return (TRUE);
-	/* Explicitly validate the system code selectors
-	 * even if not instantaneously privileged,
-	 * since they are dynamically re-privileged
-	 * at context switch
-	 */
-	if ((selector == USER_CS) || (selector == USER64_CS))
-		return (TRUE);
-    }
+	if (selector == 0) {
+		return FALSE;
+	}
 
-    return (FALSE);
+	if (sel.ti == SEL_LDT) {
+		if (sel.rpl == USER_PRIV) {
+			return TRUE;
+		}
+	} else if (sel.index < GDTSZ && sel.rpl == USER_PRIV) {
+		if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U) {
+			return TRUE;
+		}
+		/* Explicitly validate the system code selectors
+		 * even if not instantaneously privileged,
+		 * since they are dynamically re-privileged
+		 * at context switch
+		 */
+		if ((selector == USER_CS) || (selector == USER64_CS)) {
+			return TRUE;
+		}
+	}
+
+	return FALSE;
 }
 
 boolean_t
 valid_user_stack_selector(uint16_t selector)
 {
-    sel_t	sel = selector_to_sel(selector);
-    
-    if (selector == 0)
-    	return (FALSE);
+	sel_t       sel = selector_to_sel(selector);
 
-    if (sel.ti == SEL_LDT) {
-	if (sel.rpl == USER_PRIV)
-	    return (TRUE);
-    }
-    else if (sel.index < GDTSZ && sel.rpl == USER_PRIV) {
-	if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U)
-	    return (TRUE);
-    }
-		
-    return (FALSE);
+	if (selector == 0) {
+		return FALSE;
+	}
+
+	if (sel.ti == SEL_LDT) {
+		if (sel.rpl == USER_PRIV) {
+			return TRUE;
+		}
+	} else if (sel.index < GDTSZ && sel.rpl == USER_PRIV) {
+		if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U) {
+			return TRUE;
+		}
+	}
+
+	return FALSE;
 }
 
 boolean_t
 valid_user_segment_selectors(uint16_t cs,
-		uint16_t ss,
-		uint16_t ds,
-		uint16_t es,
-		uint16_t fs,
-		uint16_t gs)
-{	
-	return valid_user_code_selector(cs)  &&
-		valid_user_stack_selector(ss) &&
-		valid_user_data_selector(ds)  &&
-		valid_user_data_selector(es)  &&
-		valid_user_data_selector(fs)  &&
-		valid_user_data_selector(gs);
+    uint16_t ss,
+    uint16_t ds,
+    uint16_t es,
+    uint16_t fs,
+    uint16_t gs)
+{
+	return valid_user_code_selector(cs) &&
+	       valid_user_stack_selector(ss) &&
+	       valid_user_data_selector(ds) &&
+	       valid_user_data_selector(es) &&
+	       valid_user_data_selector(fs) &&
+	       valid_user_data_selector(gs);
 }
 
 #if NCOPY_WINDOWS > 0
@@ -747,23 +752,24 @@ static vm_offset_t user_window_base = 0;
 void
 cpu_userwindow_init(int cpu)
 {
-	cpu_data_t		*cdp = cpu_data_ptr[cpu];
-	vm_offset_t 		user_window;
-	vm_offset_t 		vaddr;
-	int			num_cpus;
+	cpu_data_t              *cdp = cpu_data_ptr[cpu];
+	vm_offset_t             user_window;
+	vm_offset_t             vaddr;
+	int                     num_cpus;
 
 	num_cpus = ml_get_max_cpus();
 
-	if (cpu >= num_cpus)
+	if (cpu >= num_cpus) {
 		panic("cpu_userwindow_init: cpu > num_cpus");
+	}
 
 	if (user_window_base == 0) {
-
 		if (vm_allocate(kernel_map, &vaddr,
-					(NBPDE * NCOPY_WINDOWS * num_cpus) + NBPDE,
-					VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_CPU)) != KERN_SUCCESS)
+		    (NBPDE * NCOPY_WINDOWS * num_cpus) + NBPDE,
+		    VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_CPU)) != KERN_SUCCESS) {
 			panic("cpu_userwindow_init: "
-					"couldn't allocate user map window");
+			    "couldn't allocate user map window");
+		}
 
 		/*
 		 * window must start on a page table boundary
@@ -781,37 +787,37 @@ cpu_userwindow_init(int cpu)
 		 * get rid of tail that we don't need
 		 */
 		user_window = user_window_base +
-					(NBPDE * NCOPY_WINDOWS * num_cpus);
+		    (NBPDE * NCOPY_WINDOWS * num_cpus);
 
 		vm_deallocate(kernel_map, user_window,
-				(vaddr +
-				 ((NBPDE * NCOPY_WINDOWS * num_cpus) + NBPDE)) -
-				 user_window);
+		    (vaddr +
+		    ((NBPDE * NCOPY_WINDOWS * num_cpus) + NBPDE)) -
+		    user_window);
 	}
 
- 	user_window = user_window_base + (cpu * NCOPY_WINDOWS * NBPDE);
+	user_window = user_window_base + (cpu * NCOPY_WINDOWS * NBPDE);
 
 	cdp->cpu_copywindow_base = user_window;
 	/*
-	 * Abuse this pdp entry, the pdp now actually points to 
+	 * Abuse this pdp entry, the pdp now actually points to
 	 * an array of copy windows addresses.
 	 */
 	cdp->cpu_copywindow_pdp  = pmap_pde(kernel_pmap, user_window);
-
 }
 
 void
 cpu_physwindow_init(int cpu)
 {
-	cpu_data_t		*cdp = cpu_data_ptr[cpu];
-        vm_offset_t 		phys_window = cdp->cpu_physwindow_base;
+	cpu_data_t              *cdp = cpu_data_ptr[cpu];
+	vm_offset_t             phys_window = cdp->cpu_physwindow_base;
 
 	if (phys_window == 0) {
 		if (vm_allocate(kernel_map, &phys_window,
-				PAGE_SIZE, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_CPU))
-				!= KERN_SUCCESS)
-		        panic("cpu_physwindow_init: "
-				"couldn't allocate phys map window");
+		    PAGE_SIZE, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_CPU))
+		    != KERN_SUCCESS) {
+			panic("cpu_physwindow_init: "
+			    "couldn't allocate phys map window");
+		}
 
 		/*
 		 * make sure the page that encompasses the
@@ -834,10 +840,10 @@ cpu_physwindow_init(int cpu)
 void
 cpu_data_realloc(void)
 {
-	int		ret;
-	vm_offset_t	istk;
-	cpu_data_t	*cdp;
-	boolean_t	istate;
+	int             ret;
+	vm_offset_t     istk;
+	cpu_data_t      *cdp;
+	boolean_t       istate;
 
 	ret = kmem_alloc(kernel_map, &istk, INTSTACK_SIZE, VM_KERN_MEMORY_CPU);
 	if (ret != KERN_SUCCESS) {
@@ -855,7 +861,7 @@ cpu_data_realloc(void)
 	cdp->cpu_int_stack_top = istk;
 	timer_call_queue_init(&cdp->rtclock_timer.queue);
 	cdp->cpu_desc_tablep = (struct cpu_desc_table *) &scdtables[0];
-	cpu_desc_table64_t	*cdt = (cpu_desc_table64_t *) cdp->cpu_desc_tablep;
+	cpu_desc_table64_t      *cdt = (cpu_desc_table64_t *) cdp->cpu_desc_tablep;
 
 	uint8_t *cfstk = &scfstks[cdp->cpu_number].fstk[0];
 	cdt->fstkp = cfstk;
@@ -873,6 +879,6 @@ cpu_data_realloc(void)
 	(void) ml_set_interrupts_enabled(istate);
 
 	kprintf("Reallocated master cpu data: %p,"
-		" interrupt stack: %p, fault stack: %p\n",
-		(void *) cdp, (void *) istk, (void *) cfstk);
+	    " interrupt stack: %p, fault stack: %p\n",
+	    (void *) cdp, (void *) istk, (void *) cfstk);
 }

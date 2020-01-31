@@ -30,8 +30,8 @@ static const char rcsid[] = "$Id: inet_ntop.c,v 1.3.18.2 2005/11/03 23:02:22 mar
  * sizeof(int) < 4.  sizeof(int) > 4 is fine; all the world's not a VAX.
  */
 
-static char	*inet_ntop4(const u_char *src, char *dst, socklen_t size);
-static char	*inet_ntop6(const u_char *src, char *dst, socklen_t size);
+static char     *inet_ntop4(const u_char *src, char *dst, socklen_t size);
+static char     *inet_ntop6(const u_char *src, char *dst, socklen_t size);
 
 /* char *
  * inet_ntop(af, src, dst, size)
@@ -46,11 +46,11 @@ inet_ntop(int af, const void *src, char *dst, socklen_t size)
 {
 	switch (af) {
 	case AF_INET:
-		return (inet_ntop4(src, dst, size));
+		return inet_ntop4(src, dst, size);
 	case AF_INET6:
-		return (inet_ntop6(src, dst, size));
+		return inet_ntop6(src, dst, size);
 	default:
-		return (NULL);
+		return NULL;
 	}
 	/* NOTREACHED */
 }
@@ -75,10 +75,10 @@ inet_ntop4(const u_char *src, char *dst, socklen_t size)
 
 	l = snprintf(tmp, sizeof(tmp), fmt, src[0], src[1], src[2], src[3]);
 	if (l <= 0 || (socklen_t) l >= size) {
-		return (NULL);
+		return NULL;
 	}
 	strlcpy(dst, tmp, size);
-	return (dst);
+	return dst;
 }
 
 /* const char *
@@ -99,8 +99,8 @@ inet_ntop6(const u_char *src, char *dst, socklen_t size)
 	 */
 	char tmp[sizeof "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255"], *tp;
 	struct { int base, len; } best, cur;
-#define NS_IN6ADDRSZ	16
-#define NS_INT16SZ	2
+#define NS_IN6ADDRSZ    16
+#define NS_INT16SZ      2
 	u_int words[NS_IN6ADDRSZ / NS_INT16SZ];
 	int i;
 
@@ -110,8 +110,9 @@ inet_ntop6(const u_char *src, char *dst, socklen_t size)
 	 *	Find the longest run of 0x00's in src[] for :: shorthanding.
 	 */
 	memset(words, '\0', sizeof words);
-	for (i = 0; i < NS_IN6ADDRSZ; i++)
+	for (i = 0; i < NS_IN6ADDRSZ; i++) {
 		words[i / 2] |= (src[i] << ((1 - (i % 2)) << 3));
+	}
 	best.base = -1;
 	best.len = 0;
 	cur.base = -1;
@@ -126,18 +127,21 @@ inet_ntop6(const u_char *src, char *dst, socklen_t size)
 			}
 		} else {
 			if (cur.base != -1) {
-				if (best.base == -1 || cur.len > best.len)
+				if (best.base == -1 || cur.len > best.len) {
 					best = cur;
+				}
 				cur.base = -1;
 			}
 		}
 	}
 	if (cur.base != -1) {
-		if (best.base == -1 || cur.len > best.len)
+		if (best.base == -1 || cur.len > best.len) {
 			best = cur;
+		}
 	}
-	if (best.base != -1 && best.len < 2)
+	if (best.base != -1 && best.len < 2) {
 		best.base = -1;
+	}
 
 	/*
 	 * Format the result.
@@ -147,38 +151,42 @@ inet_ntop6(const u_char *src, char *dst, socklen_t size)
 		/* Are we inside the best run of 0x00's? */
 		if (best.base != -1 && i >= best.base &&
 		    i < (best.base + best.len)) {
-			if (i == best.base)
+			if (i == best.base) {
 				*tp++ = ':';
+			}
 			continue;
 		}
 		/* Are we following an initial run of 0x00s or any real hex? */
-		if (i != 0)
+		if (i != 0) {
 			*tp++ = ':';
+		}
 		/* Is this address an encapsulated IPv4? */
 		if (i == 6 && best.base == 0 && (best.len == 6 ||
 		    (best.len == 7 && words[7] != 0x0001) ||
 		    (best.len == 5 && words[5] == 0xffff))) {
-			if (!inet_ntop4(src+12, tp, sizeof tmp - (tp - tmp)))
-				return (NULL);
+			if (!inet_ntop4(src + 12, tp, sizeof tmp - (tp - tmp))) {
+				return NULL;
+			}
 			tp += strlen(tp);
 			break;
 		}
 		tp += snprintf(tp, sizeof(tmp), "%x", words[i]);
 	}
 	/* Was it a trailing run of 0x00's? */
-	if (best.base != -1 && (best.base + best.len) == 
-	    (NS_IN6ADDRSZ / NS_INT16SZ))
+	if (best.base != -1 && (best.base + best.len) ==
+	    (NS_IN6ADDRSZ / NS_INT16SZ)) {
 		*tp++ = ':';
+	}
 	*tp++ = '\0';
 
 	/*
 	 * Check for overflow, copy, and we're done.
 	 */
 	if ((socklen_t)(tp - tmp) > size) {
-		return (NULL);
+		return NULL;
 	}
 	strlcpy(dst, tmp, size);
-	return (dst);
+	return dst;
 }
 
 /*! \file */

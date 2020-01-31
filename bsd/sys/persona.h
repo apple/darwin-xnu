@@ -52,7 +52,7 @@ struct kpersona_info {
 	uint32_t persona_ngroups;
 	gid_t    persona_groups[NGROUPS];
 	uid_t    persona_gmuid;
-	char     persona_name[MAXLOGNAME+1];
+	char     persona_name[MAXLOGNAME + 1];
 
 	/* TODO: MAC policies?! */
 };
@@ -200,7 +200,7 @@ struct persona {
 
 	uid_t        pna_id;
 	int          pna_type;
-	char         pna_login[MAXLOGNAME+1];
+	char         pna_login[MAXLOGNAME + 1];
 
 	kauth_cred_t pna_cred;
 	uid_t        pna_pgid;
@@ -230,38 +230,46 @@ struct persona {
 	LCK_MTX_ASSERT(&(persona)->pna_lock, LCK_MTX_ASSERT_OWNED)
 
 #ifdef PERSONA_DEBUG
-static inline const char *persona_desc(struct persona *persona, int locked)
+static inline const char *
+persona_desc(struct persona *persona, int locked)
 {
-	if (!persona)
+	if (!persona) {
 		return "<none>";
+	}
 
-	if (persona->pna_desc[0] != 0)
+	if (persona->pna_desc[0] != 0) {
 		return persona->pna_desc;
+	}
 
-	if (!locked)
+	if (!locked) {
 		persona_lock(persona);
-	if (persona->pna_desc[0] != 0)
+	}
+	if (persona->pna_desc[0] != 0) {
 		goto out_unlock;
+	}
 
 	char *p = &persona->pna_desc[0];
 	char *end = p + sizeof(persona->pna_desc) - 1;
 
 	*end = 0;
 	p += snprintf(p, end - p, "%s/%d:%d",
-		      persona->pna_login,
-		      kauth_cred_getuid(persona->pna_cred),
-		      kauth_cred_getgid(persona->pna_cred));
+	    persona->pna_login,
+	    kauth_cred_getuid(persona->pna_cred),
+	    kauth_cred_getgid(persona->pna_cred));
 
-	if (p <= end)
+	if (p <= end) {
 		*p = 0;
+	}
 out_unlock:
-	if (!locked)
+	if (!locked) {
 		persona_unlock(persona);
+	}
 
 	return persona->pna_desc;
 }
 #else /* !PERSONA_DEBUG */
-static inline const char *persona_desc(struct persona *persona, int locked)
+static inline const char *
+persona_desc(struct persona *persona, int locked)
 {
 	(void)persona;
 	(void)locked;
@@ -277,9 +285,9 @@ struct persona;
 __BEGIN_DECLS
 
 #ifndef _KAUTH_CRED_T
-#define	_KAUTH_CRED_T
+#define _KAUTH_CRED_T
 typedef struct ucred *kauth_cred_t;
-#endif	/* !_KAUTH_CRED_T */
+#endif  /* !_KAUTH_CRED_T */
 
 /* returns the persona ID for the given pesona structure */
 uid_t persona_get_id(struct persona *persona);
@@ -298,7 +306,7 @@ struct persona *persona_lookup(uid_t id);
  * total found (could be more than original value of 'plen')
  */
 int persona_find(const char *login, uid_t uid,
-		 struct persona **persona, size_t *plen);
+    struct persona **persona, size_t *plen);
 
 /* returns a reference to the persona tied to the current thread */
 struct persona *current_persona_get(void);
@@ -323,33 +331,37 @@ extern struct persona *g_system_persona;
 void personas_bootstrap(void);
 
 struct persona *persona_alloc(uid_t id, const char *login,
-			      int type, int *error);
+    int type, int *error);
 
 int persona_init_begin(struct persona *persona);
 void persona_init_end(struct persona *persona, int error);
 
 struct persona *persona_lookup_and_invalidate(uid_t id);
 
-static inline int proc_has_persona(proc_t p)
+static inline int
+proc_has_persona(proc_t p)
 {
-	if (p && p->p_persona)
+	if (p && p->p_persona) {
 		return 1;
+	}
 	return 0;
 }
 
-static inline uid_t persona_id_from_proc(proc_t p)
+static inline uid_t
+persona_id_from_proc(proc_t p)
 {
-	if (p && p->p_persona)
+	if (p && p->p_persona) {
 		return p->p_persona->pna_id;
+	}
 	return PERSONA_ID_NONE;
 }
 
 int persona_proc_inherit(proc_t child, proc_t parent);
 
 int persona_proc_adopt_id(proc_t p, uid_t id,
-			  kauth_cred_t auth_override);
+    kauth_cred_t auth_override);
 int persona_proc_adopt(proc_t p, struct persona *persona,
-		       kauth_cred_t auth_override);
+    kauth_cred_t auth_override);
 int persona_proc_drop(proc_t p);
 
 int persona_set_cred(struct persona *persona, kauth_cred_t cred);
@@ -365,19 +377,21 @@ int persona_get_groups(struct persona *persona, unsigned *ngroups, gid_t *groups
 
 uid_t persona_get_gmuid(struct persona *persona);
 
-int persona_get_login(struct persona *persona, char login[MAXLOGNAME+1]);
+int persona_get_login(struct persona *persona, char login[MAXLOGNAME + 1]);
 
 /* returns a reference that must be released with persona_put() */
 struct persona *persona_proc_get(pid_t pid);
 
 #else /* !CONFIG_PERSONAS */
 
-static inline int proc_has_persona(__unused proc_t p)
+static inline int
+proc_has_persona(__unused proc_t p)
 {
 	return 0;
 }
 
-static inline uid_t persona_id_from_proc(__unused proc_t p)
+static inline uid_t
+persona_id_from_proc(__unused proc_t p)
 {
 	return PERSONA_ID_NONE;
 }

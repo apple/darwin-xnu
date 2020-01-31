@@ -39,7 +39,7 @@ __BEGIN_DECLS
 #define FIREHOSE_CHUNK_POS_REFCNT_INC           (1ULL << 32)
 #define FIREHOSE_CHUNK_POS_FULL_BIT             (1ULL << 56)
 #define FIREHOSE_CHUNK_POS_USABLE_FOR_STREAM(pos, stream) \
-		((((pos).fcp_pos >> 48) & 0x1ff) == (uint16_t)stream)
+	        ((((pos).fcp_pos >> 48) & 0x1ff) == (uint16_t)stream)
 
 typedef union {
 	_Atomic(uint64_t) fcp_atomic_pos;
@@ -84,8 +84,8 @@ firehose_chunk_pos_fits(firehose_chunk_pos_u pos, uint16_t size)
 OS_ALWAYS_INLINE
 static inline long
 firehose_chunk_tracepoint_try_reserve(firehose_chunk_t fc, uint64_t stamp,
-		firehose_stream_t stream, uint8_t qos, uint16_t pubsize,
-		uint16_t privsize, uint8_t **privptr)
+    firehose_stream_t stream, uint8_t qos, uint16_t pubsize,
+    uint16_t privsize, uint8_t **privptr)
 {
 	const uint16_t ft_size = offsetof(struct firehose_tracepoint_s, ft_data);
 	firehose_chunk_pos_u orig, pos;
@@ -95,42 +95,44 @@ firehose_chunk_tracepoint_try_reserve(firehose_chunk_t fc, uint64_t stamp,
 
 	// no acquire barrier because the returned space is written to only
 	os_atomic_rmw_loop(&fc->fc_pos.fcp_atomic_pos,
-			orig.fcp_pos, pos.fcp_pos, relaxed, {
+	    orig.fcp_pos, pos.fcp_pos, relaxed, {
 		if (orig.fcp_pos == 0) {
-			// we acquired a really really old reference, and we probably
-			// just faulted in a new page
-			os_atomic_rmw_loop_give_up(return FIREHOSE_CHUNK_TRY_RESERVE_FAIL);
+		        // we acquired a really really old reference, and we probably
+		        // just faulted in a new page
+		        os_atomic_rmw_loop_give_up(return FIREHOSE_CHUNK_TRY_RESERVE_FAIL);
 		}
 		if (!FIREHOSE_CHUNK_POS_USABLE_FOR_STREAM(orig, stream)) {
-			// nothing to do if the chunk is full, or the stream doesn't match,
-			// in which case the thread probably:
-			// - loaded the chunk ref
-			// - been suspended a long while
-			// - read the chunk to find a very old thing
-			os_atomic_rmw_loop_give_up(return FIREHOSE_CHUNK_TRY_RESERVE_FAIL);
+		        // nothing to do if the chunk is full, or the stream doesn't match,
+		        // in which case the thread probably:
+		        // - loaded the chunk ref
+		        // - been suspended a long while
+		        // - read the chunk to find a very old thing
+		        os_atomic_rmw_loop_give_up(return FIREHOSE_CHUNK_TRY_RESERVE_FAIL);
 		}
 		pos = orig;
 		if (!firehose_chunk_pos_fits(orig,
-				ft_size + pubsize + privsize) || !stamp_delta_fits) {
-			pos.fcp_flag_full = true;
-			reservation_failed = true;
+		ft_size + pubsize + privsize) || !stamp_delta_fits) {
+		        pos.fcp_flag_full = true;
+		        reservation_failed = true;
 		} else {
-			if (qos > pos.fcp_qos) pos.fcp_qos = qos;
-			// using these *_INC macros is so that the compiler generates better
-			// assembly: using the struct individual fields forces the compiler
-			// to handle carry propagations, and we know it won't happen
-			pos.fcp_pos += roundup(ft_size + pubsize, 8) *
-					FIREHOSE_CHUNK_POS_ENTRY_OFFS_INC;
-			pos.fcp_pos -= privsize * FIREHOSE_CHUNK_POS_PRIVATE_OFFS_INC;
-			pos.fcp_pos += FIREHOSE_CHUNK_POS_REFCNT_INC;
-			const uint16_t minimum_payload_size = 16;
-			if (!firehose_chunk_pos_fits(pos,
-					roundup(ft_size + minimum_payload_size , 8))) {
-				// if we can't even have minimum_payload_size bytes of payload
-				// for the next tracepoint, just flush right away
-				pos.fcp_flag_full = true;
+		        if (qos > pos.fcp_qos) {
+		                pos.fcp_qos = qos;
 			}
-			reservation_failed = false;
+		        // using these *_INC macros is so that the compiler generates better
+		        // assembly: using the struct individual fields forces the compiler
+		        // to handle carry propagations, and we know it won't happen
+		        pos.fcp_pos += roundup(ft_size + pubsize, 8) *
+		        FIREHOSE_CHUNK_POS_ENTRY_OFFS_INC;
+		        pos.fcp_pos -= privsize * FIREHOSE_CHUNK_POS_PRIVATE_OFFS_INC;
+		        pos.fcp_pos += FIREHOSE_CHUNK_POS_REFCNT_INC;
+		        const uint16_t minimum_payload_size = 16;
+		        if (!firehose_chunk_pos_fits(pos,
+		        roundup(ft_size + minimum_payload_size, 8))) {
+		                // if we can't even have minimum_payload_size bytes of payload
+		                // for the next tracepoint, just flush right away
+		                pos.fcp_flag_full = true;
+			}
+		        reservation_failed = false;
 		}
 	});
 
@@ -152,17 +154,17 @@ firehose_chunk_tracepoint_try_reserve(firehose_chunk_t fc, uint64_t stamp,
 OS_ALWAYS_INLINE
 static inline firehose_tracepoint_t
 firehose_chunk_tracepoint_begin(firehose_chunk_t fc, uint64_t stamp,
-		uint16_t pubsize, uint64_t thread_id, long offset)
+    uint16_t pubsize, uint64_t thread_id, long offset)
 {
 	firehose_tracepoint_t ft = (firehose_tracepoint_t)
-			__builtin_assume_aligned(fc->fc_start + offset, 8);
+	    __builtin_assume_aligned(fc->fc_start + offset, 8);
 	stamp -= fc->fc_timestamp;
 	stamp |= (uint64_t)pubsize << 48;
 	// The compiler barrier is needed for userland process death handling, see
 	// (tracepoint-begin) in libdispatch's firehose_buffer_stream_chunk_install.
 	atomic_store_explicit(&ft->ft_atomic_stamp_and_length, stamp,
-			memory_order_relaxed);
-	__asm__ __volatile__("" ::: "memory");
+	    memory_order_relaxed);
+	__asm__ __volatile__ ("" ::: "memory");
 	ft->ft_thread = thread_id;
 	return ft;
 }
@@ -170,14 +172,14 @@ firehose_chunk_tracepoint_begin(firehose_chunk_t fc, uint64_t stamp,
 OS_ALWAYS_INLINE
 static inline bool
 firehose_chunk_tracepoint_end(firehose_chunk_t fc,
-		firehose_tracepoint_t ft, firehose_tracepoint_id_u ftid)
+    firehose_tracepoint_t ft, firehose_tracepoint_id_u ftid)
 {
 	firehose_chunk_pos_u pos;
 
 	atomic_store_explicit(&ft->ft_id.ftid_atomic_value,
-			ftid.ftid_value, memory_order_release);
+	    ftid.ftid_value, memory_order_release);
 	pos.fcp_pos = atomic_fetch_sub_explicit(&fc->fc_pos.fcp_atomic_pos,
-			FIREHOSE_CHUNK_POS_REFCNT_INC, memory_order_relaxed);
+	    FIREHOSE_CHUNK_POS_REFCNT_INC, memory_order_relaxed);
 	return pos.fcp_refcnt == 1 && pos.fcp_flag_full;
 }
 

@@ -21,7 +21,8 @@
 #include <darwintest.h>
 
 
-static mach_port_t get_atm_voucher(void)
+static mach_port_t
+get_atm_voucher(void)
 {
 	mach_voucher_attr_recipe_data_t r = {
 		.key = MACH_VOUCHER_ATTR_KEY_ATM,
@@ -29,8 +30,8 @@ static mach_port_t get_atm_voucher(void)
 	};
 	mach_port_t port = MACH_PORT_NULL;
 	kern_return_t kr = host_create_mach_voucher(mach_host_self(),
-	                                            (mach_voucher_attr_raw_recipe_array_t)&r,
-	                                            sizeof(r), &port);
+	    (mach_voucher_attr_raw_recipe_array_t)&r,
+	    sizeof(r), &port);
 	T_ASSERT_MACH_SUCCESS(kr, "Create ATM voucher: 0x%x", (unsigned int)port);
 
 	return port;
@@ -54,7 +55,7 @@ T_DECL(voucher_extract_attr_recipe, "voucher_extract_attr_recipe")
 	 */
 	alloc_addr = (mach_vm_address_t)round_page(MACH_VOUCHER_ATTR_MAX_RAW_RECIPE_ARRAY_SIZE + 1);
 	kr = mach_vm_allocate(mach_task_self(), &alloc_addr,
-	                      alloc_sz, VM_FLAGS_ANYWHERE);
+	    alloc_sz, VM_FLAGS_ANYWHERE);
 
 	/*
 	 * Make sure that the address of the allocation is larger than the
@@ -62,19 +63,20 @@ T_DECL(voucher_extract_attr_recipe, "voucher_extract_attr_recipe")
 	 * <rdar://problem/29379175>.
 	 */
 	T_ASSERT_GT_ULLONG((uint64_t)alloc_addr,
-	                   (uint64_t)MACH_VOUCHER_ATTR_MAX_RAW_RECIPE_ARRAY_SIZE,
-	                   "Recipe addr (%llu bytes): 0x%llx > max recipe sz: %llu",
-	                   (uint64_t)alloc_sz, (uint64_t)alloc_addr,
-	                   (uint64_t)MACH_VOUCHER_ATTR_MAX_RAW_RECIPE_ARRAY_SIZE);
+	    (uint64_t)MACH_VOUCHER_ATTR_MAX_RAW_RECIPE_ARRAY_SIZE,
+	    "Recipe addr (%llu bytes): 0x%llx > max recipe sz: %llu",
+	    (uint64_t)alloc_sz, (uint64_t)alloc_addr,
+	    (uint64_t)MACH_VOUCHER_ATTR_MAX_RAW_RECIPE_ARRAY_SIZE);
 
 	/* make the allocation look like a pointer to an int */
 	mach_msg_type_number_t *recipe_size;
 	recipe_size = (mach_msg_type_number_t *)((uintptr_t)alloc_addr);
 	bzero(recipe_size, (unsigned long)alloc_sz);
-	if (alloc_sz > MACH_VOUCHER_ATTR_MAX_RAW_RECIPE_ARRAY_SIZE)
+	if (alloc_sz > MACH_VOUCHER_ATTR_MAX_RAW_RECIPE_ARRAY_SIZE) {
 		*recipe_size = MACH_VOUCHER_ATTR_MAX_RAW_RECIPE_ARRAY_SIZE;
-	else
+	} else {
 		*recipe_size = (mach_msg_type_number_t)alloc_sz;
+	}
 
 	/* recipe buffer on the heap: memset it so panics show up loudly */
 	size_t size = (size_t)(10 * 1024 * 1024);
@@ -88,7 +90,7 @@ T_DECL(voucher_extract_attr_recipe, "voucher_extract_attr_recipe")
 	 * kernel heap (probably zone memory).
 	 */
 	kr = mach_voucher_extract_attr_recipe_trap(port, MACH_VOUCHER_ATTR_KEY_ATM,
-	                                           recipe, recipe_size);
+	    recipe, recipe_size);
 	T_ASSERT_MACH_SUCCESS(kr, "Extract attribute data with recipe: heap");
 
 	/* reset the recipe memory */
@@ -101,7 +103,7 @@ T_DECL(voucher_extract_attr_recipe, "voucher_extract_attr_recipe")
 	 * kernel stack.
 	 */
 	kr = mach_voucher_extract_attr_recipe_trap(port, MACH_VOUCHER_ATTR_KEY_ATM,
-	                                           recipe, recipe_size);
+	    recipe, recipe_size);
 	T_ASSERT_MACH_SUCCESS(kr, "Extract attribute data with recipe: stack");
 
 	/* cleanup */

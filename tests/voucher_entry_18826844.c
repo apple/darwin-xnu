@@ -27,8 +27,8 @@ T_DECL(voucher_entry, "voucher_entry", T_META_CHECK_LEAKS(false), T_META_ALL_VAL
 	};
 
 	kr = host_create_mach_voucher(mach_host_self(),
-	                              (mach_voucher_attr_raw_recipe_array_t)&recipe,
-	                              sizeof(recipe), &voucher);
+	    (mach_voucher_attr_raw_recipe_array_t)&recipe,
+	    sizeof(recipe), &voucher);
 
 	T_ASSERT_MACH_SUCCESS(kr, "host_create_mach_voucher");
 
@@ -75,4 +75,3 @@ T_DECL(voucher_entry, "voucher_entry", T_META_CHECK_LEAKS(false), T_META_ALL_VAL
 
 	T_ASSERT_MACH_ERROR(KERN_INVALID_NAME, kr, "voucher should now be invalid name");
 }
-

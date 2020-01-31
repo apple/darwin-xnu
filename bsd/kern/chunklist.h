@@ -47,7 +47,6 @@ struct chunklist_pubkey {
 };
 
 const struct chunklist_pubkey chunklist_pubkeys[] = {
-
 };
 
 #define CHUNKLIST_NPUBKEYS (sizeof(chunklist_pubkeys)/sizeof(chunklist_pubkeys[0]))

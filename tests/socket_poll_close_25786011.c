@@ -17,7 +17,7 @@ T_DECL(socket_poll_close_25786011, "Tests an invalid poll call to a socket and t
 	 */
 	struct pollfd my_pollfd = {
 		.fd = my_socket,
-	        .events = POLLEXTEND
+		.events = POLLEXTEND
 	};
 
 	/*

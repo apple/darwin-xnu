@@ -135,17 +135,17 @@ static void qfq_dump_groups(struct qfq_if *, u_int32_t);
 static void qfq_dump_sched(struct qfq_if *, const char *);
 #endif /* QFQ_DEBUG */
 
-#define	QFQ_ZONE_MAX	32		/* maximum elements in zone */
-#define	QFQ_ZONE_NAME	"pktsched_qfq"	/* zone name */
+#define QFQ_ZONE_MAX    32              /* maximum elements in zone */
+#define QFQ_ZONE_NAME   "pktsched_qfq"  /* zone name */
 
-static unsigned int qfq_size;		/* size of zone element */
-static struct zone *qfq_zone;		/* zone for qfq */
+static unsigned int qfq_size;           /* size of zone element */
+static struct zone *qfq_zone;           /* zone for qfq */
 
-#define	QFQ_CL_ZONE_MAX	32	/* maximum elements in zone */
-#define	QFQ_CL_ZONE_NAME	"pktsched_qfq_cl" /* zone name */
+#define QFQ_CL_ZONE_MAX 32      /* maximum elements in zone */
+#define QFQ_CL_ZONE_NAME        "pktsched_qfq_cl" /* zone name */
 
-static unsigned int qfq_cl_size;	/* size of zone element */
-static struct zone *qfq_cl_zone;	/* zone for qfq_class */
+static unsigned int qfq_cl_size;        /* size of zone element */
+static struct zone *qfq_cl_zone;        /* zone for qfq_class */
 
 /*
  * Maximum number of consecutive slots occupied by backlogged classes
@@ -154,12 +154,12 @@ static struct zone *qfq_cl_zone;	/* zone for qfq_class */
  *
  * XXX check because it poses constraints on MAX_INDEX
  */
-#define	QFQ_MAX_SLOTS	32	/* default when ALTQ is available */
+#define QFQ_MAX_SLOTS   32      /* default when ALTQ is available */
 
 void
 qfq_init(void)
 {
-	qfq_size = sizeof (struct qfq_if);
+	qfq_size = sizeof(struct qfq_if);
 	qfq_zone = zinit(qfq_size, QFQ_ZONE_MAX * qfq_size,
 	    0, QFQ_ZONE_NAME);
 	if (qfq_zone == NULL) {
@@ -169,7 +169,7 @@ qfq_init(void)
 	zone_change(qfq_zone, Z_EXPAND, TRUE);
 	zone_change(qfq_zone, Z_CALLERACCT, TRUE);
 
-	qfq_cl_size = sizeof (struct qfq_class);
+	qfq_cl_size = sizeof(struct qfq_class);
 	qfq_cl_zone = zinit(qfq_cl_size, QFQ_CL_ZONE_MAX * qfq_cl_size,
 	    0, QFQ_CL_ZONE_NAME);
 	if (qfq_cl_zone == NULL) {
@@ -183,11 +183,12 @@ qfq_init(void)
 struct qfq_if *
 qfq_alloc(struct ifnet *ifp, int how)
 {
-	struct qfq_if	*qif;
+	struct qfq_if   *qif;
 
 	qif = (how == M_WAITOK) ? zalloc(qfq_zone) : zalloc_noblock(qfq_zone);
-	if (qif == NULL)
-		return (NULL);
+	if (qif == NULL) {
+		return NULL;
+	}
 
 	bzero(qif, qfq_size);
 	qif->qif_ifq = &ifp->if_snd;
@@ -203,17 +204,17 @@ qfq_alloc(struct ifnet *ifp, int how)
 	 */
 	qif->qif_maxslots = QFQ_MAX_SLOTS;
 
-	if ((qif->qif_class_tbl = _MALLOC(sizeof (struct qfq_class *) *
-	    qif->qif_maxclasses, M_DEVBUF, M_WAITOK|M_ZERO)) == NULL) {
+	if ((qif->qif_class_tbl = _MALLOC(sizeof(struct qfq_class *) *
+	    qif->qif_maxclasses, M_DEVBUF, M_WAITOK | M_ZERO)) == NULL) {
 		log(LOG_ERR, "%s: %s unable to allocate class table array\n",
 		    if_name(ifp), qfq_style(qif));
 		goto error;
 	}
 
-	if ((qif->qif_groups = _MALLOC(sizeof (struct qfq_group *) *
-	    (QFQ_MAX_INDEX + 1), M_DEVBUF, M_WAITOK|M_ZERO)) == NULL) {
+	if ((qif->qif_groups = _MALLOC(sizeof(struct qfq_group *) *
+	    (QFQ_MAX_INDEX + 1), M_DEVBUF, M_WAITOK | M_ZERO)) == NULL) {
 		log(LOG_ERR, "%s: %s unable to allocate group array\n",
-		    if_name(ifp), qfq_style(qif));
+		if_name(ifp), qfq_style(qif));
 		goto error;
 	}
 
@@ -222,7 +223,7 @@ qfq_alloc(struct ifnet *ifp, int how)
 		    if_name(ifp), qfq_style(qif));
 	}
 
-	return (qif);
+	return qif;
 
 error:
 	if (qif->qif_class_tbl != NULL) {
@@ -235,7 +236,7 @@ error:
 	}
 	zfree(qfq_zone, qif);
 
-	return (NULL);
+	return NULL;
 }
 
 int
@@ -248,7 +249,7 @@ qfq_destroy(struct qfq_if *qif)
 	err = qfq_destroy_locked(qif);
 	IFCQ_UNLOCK(ifq);
 
-	return (err);
+	return err;
 }
 
 static int
@@ -286,7 +287,7 @@ qfq_destroy_locked(struct qfq_if *qif)
 
 	zfree(qfq_zone, qif);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -302,11 +303,13 @@ qfq_clear_interface(struct qfq_if *qif)
 	IFCQ_LOCK_ASSERT_HELD(qif->qif_ifq);
 
 	/* clear out the classes */
-	for (i = 0; i < qif->qif_maxclasses; i++)
-		if ((cl = qif->qif_class_tbl[i]) != NULL)
+	for (i = 0; i < qif->qif_maxclasses; i++) {
+		if ((cl = qif->qif_class_tbl[i]) != NULL) {
 			qfq_class_destroy(qif, cl);
+		}
+	}
 
-	return (0);
+	return 0;
 }
 
 /* discard all the queued packets on the interface */
@@ -319,8 +322,9 @@ qfq_purge(struct qfq_if *qif)
 	IFCQ_LOCK_ASSERT_HELD(qif->qif_ifq);
 
 	for (i = 0; i < qif->qif_maxclasses; i++) {
-		if ((cl = qif->qif_class_tbl[i]) != NULL)
+		if ((cl = qif->qif_class_tbl[i]) != NULL) {
 			qfq_purgeq(qif, cl, 0, NULL, NULL);
+		}
 	}
 	VERIFY(IFCQ_LEN(qif->qif_ifq) == 0);
 }
@@ -365,9 +369,11 @@ qfq_event(struct qfq_if *qif, cqev_t ev)
 
 	IFCQ_LOCK_ASSERT_HELD(qif->qif_ifq);
 
-	for (i = 0; i < qif->qif_maxclasses; i++)
-		if ((cl = qif->qif_class_tbl[i]) != NULL)
+	for (i = 0; i < qif->qif_maxclasses; i++) {
+		if ((cl = qif->qif_class_tbl[i]) != NULL) {
 			qfq_updateq(qif, cl, ev);
+		}
+	}
 }
 
 int
@@ -380,28 +386,34 @@ qfq_add_queue(struct qfq_if *qif, u_int32_t qlimit, u_int32_t weight,
 
 	IFCQ_LOCK_ASSERT_HELD(qif->qif_ifq);
 
-	if (qfq_clh_to_clp(qif, qid) != NULL)
-		return (EBUSY);
+	if (qfq_clh_to_clp(qif, qid) != NULL) {
+		return EBUSY;
+	}
 
 	/* check parameters */
-	if (weight == 0 || weight > QFQ_MAX_WEIGHT)
-		return (EINVAL);
+	if (weight == 0 || weight > QFQ_MAX_WEIGHT) {
+		return EINVAL;
+	}
 
 	w = (QFQ_ONE_FP / (QFQ_ONE_FP / weight));
-	if (qif->qif_wsum + w > QFQ_MAX_WSUM)
-		return (EINVAL);
+	if (qif->qif_wsum + w > QFQ_MAX_WSUM) {
+		return EINVAL;
+	}
 
-	if (maxsz == 0 || maxsz > (1 << QFQ_MTU_SHIFT))
-		return (EINVAL);
+	if (maxsz == 0 || maxsz > (1 << QFQ_MTU_SHIFT)) {
+		return EINVAL;
+	}
 
 	cl = qfq_class_create(qif, weight, qlimit, flags, maxsz, qid, ptype);
-	if (cl == NULL)
-		return (ENOMEM);
+	if (cl == NULL) {
+		return ENOMEM;
+	}
 
-	if (clp != NULL)
+	if (clp != NULL) {
 		*clp = cl;
+	}
 
-	return (0);
+	return 0;
 }
 
 static struct qfq_class *
@@ -412,7 +424,7 @@ qfq_class_create(struct qfq_if *qif, u_int32_t weight, u_int32_t qlimit,
 	struct ifclassq *ifq;
 	struct qfq_group *grp;
 	struct qfq_class *cl;
-	u_int32_t w;			/* approximated weight */
+	u_int32_t w;                    /* approximated weight */
 	int i;
 
 	IFCQ_LOCK_ASSERT_HELD(qif->qif_ifq);
@@ -421,22 +433,24 @@ qfq_class_create(struct qfq_if *qif, u_int32_t weight, u_int32_t qlimit,
 		log(LOG_ERR, "%s: %s out of classes! (max %d)\n",
 		    if_name(QFQIF_IFP(qif)), qfq_style(qif),
 		    qif->qif_maxclasses);
-		return (NULL);
+		return NULL;
 	}
 
 	ifq = qif->qif_ifq;
 	ifp = QFQIF_IFP(qif);
 
 	cl = zalloc(qfq_cl_zone);
-	if (cl == NULL)
-		return (NULL);
+	if (cl == NULL) {
+		return NULL;
+	}
 
 	bzero(cl, qfq_cl_size);
 
 	if (qlimit == 0 || qlimit > IFCQ_MAXLEN(ifq)) {
 		qlimit = IFCQ_MAXLEN(ifq);
-		if (qlimit == 0)
+		if (qlimit == 0) {
 			qlimit = DEFAULT_QLIMIT;  /* use default */
+		}
 	}
 	_qinit(&cl->cl_q, Q_DROPTAIL, qlimit, ptype);
 	cl->cl_qif = qif;
@@ -460,7 +474,7 @@ qfq_class_create(struct qfq_if *qif, u_int32_t weight, u_int32_t qlimit,
 		}
 		if (i == qif->qif_maxclasses) {
 			zfree(qfq_cl_zone, cl);
-			return (NULL);
+			return NULL;
 		}
 	}
 
@@ -475,13 +489,13 @@ qfq_class_create(struct qfq_if *qif, u_int32_t weight, u_int32_t qlimit,
 	VERIFY(i <= QFQ_MAX_INDEX);
 	grp = qif->qif_groups[i];
 	if (grp == NULL) {
-		grp = _MALLOC(sizeof (*grp), M_DEVBUF, M_WAITOK|M_ZERO);
+		grp = _MALLOC(sizeof(*grp), M_DEVBUF, M_WAITOK | M_ZERO);
 		if (grp != NULL) {
 			grp->qfg_index = i;
 			grp->qfg_slot_shift =
 			    QFQ_MTU_SHIFT + QFQ_FRAC_BITS - (QFQ_MAX_INDEX - i);
-			grp->qfg_slots = _MALLOC(sizeof (struct qfq_class *) *
-			    qif->qif_maxslots, M_DEVBUF, M_WAITOK|M_ZERO);
+			grp->qfg_slots = _MALLOC(sizeof(struct qfq_class *) *
+			    qif->qif_maxslots, M_DEVBUF, M_WAITOK | M_ZERO);
 			if (grp->qfg_slots == NULL) {
 				log(LOG_ERR, "%s: %s unable to allocate group "
 				    "slots for index %d\n", if_name(ifp),
@@ -494,10 +508,11 @@ qfq_class_create(struct qfq_if *qif, u_int32_t weight, u_int32_t qlimit,
 		}
 		if (grp == NULL || grp->qfg_slots == NULL) {
 			qif->qif_class_tbl[qid % qif->qif_maxclasses] = NULL;
-			if (grp != NULL)
+			if (grp != NULL) {
 				_FREE(grp, M_DEVBUF);
+			}
 			zfree(qfq_cl_zone, cl);
-			return (NULL);
+			return NULL;
 		} else {
 			qif->qif_groups[i] = grp;
 		}
@@ -509,8 +524,9 @@ qfq_class_create(struct qfq_if *qif, u_int32_t weight, u_int32_t qlimit,
 
 	qif->qif_classes++;
 
-	if (flags & QFCF_DEFAULTCLASS)
+	if (flags & QFCF_DEFAULTCLASS) {
 		qif->qif_default = cl;
+	}
 
 	if (flags & QFCF_SFB) {
 		cl->cl_qflags = 0;
@@ -523,11 +539,13 @@ qfq_class_create(struct qfq_if *qif, u_int32_t weight, u_int32_t qlimit,
 		if (flags & QFCF_DELAYBASED) {
 			cl->cl_qflags |= SFBF_DELAYBASED;
 		}
-		if (!(cl->cl_flags & QFCF_LAZY))
+		if (!(cl->cl_flags & QFCF_LAZY)) {
 			cl->cl_sfb = sfb_alloc(ifp, cl->cl_handle,
 			    qlimit(&cl->cl_q), cl->cl_qflags);
-		if (cl->cl_sfb != NULL || (cl->cl_flags & QFCF_LAZY))
+		}
+		if (cl->cl_sfb != NULL || (cl->cl_flags & QFCF_LAZY)) {
 			qtype(&cl->cl_q) = Q_SFB;
+		}
 	}
 
 	if (pktsched_verbose) {
@@ -537,7 +555,7 @@ qfq_class_create(struct qfq_if *qif, u_int32_t weight, u_int32_t qlimit,
 		    flags, QFCF_BITS);
 	}
 
-	return (cl);
+	return cl;
 }
 
 int
@@ -547,10 +565,11 @@ qfq_remove_queue(struct qfq_if *qif, u_int32_t qid)
 
 	IFCQ_LOCK_ASSERT_HELD(qif->qif_ifq);
 
-	if ((cl = qfq_clh_to_clp(qif, qid)) == NULL)
-		return (EINVAL);
+	if ((cl = qfq_clh_to_clp(qif, qid)) == NULL) {
+		return EINVAL;
+	}
 
-	return (qfq_class_destroy(qif, cl));
+	return qfq_class_destroy(qif, cl);
 }
 
 static int
@@ -568,7 +587,7 @@ qfq_class_destroy(struct qfq_if *qif, struct qfq_class *cl)
 
 	if (cl->cl_inv_w != 0) {
 		qif->qif_wsum -= (QFQ_ONE_FP / cl->cl_inv_w);
-		cl->cl_inv_w = 0;	/* reset weight to avoid run twice */
+		cl->cl_inv_w = 0;       /* reset weight to avoid run twice */
 	}
 
 	for (i = 0; i < qif->qif_maxclasses; i++) {
@@ -580,15 +599,17 @@ qfq_class_destroy(struct qfq_if *qif, struct qfq_class *cl)
 	qif->qif_classes--;
 
 	if (cl->cl_qalg.ptr != NULL) {
-		if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL)
+		if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL) {
 			sfb_destroy(cl->cl_sfb);
+		}
 		cl->cl_qalg.ptr = NULL;
 		qtype(&cl->cl_q) = Q_DROPTAIL;
 		qstate(&cl->cl_q) = QS_RUNNING;
 	}
 
-	if (qif->qif_default == cl)
+	if (qif->qif_default == cl) {
 		qif->qif_default = NULL;
+	}
 
 	if (pktsched_verbose) {
 		log(LOG_DEBUG, "%s: %s destroyed qid=%d\n",
@@ -597,7 +618,7 @@ qfq_class_destroy(struct qfq_if *qif, struct qfq_class *cl)
 
 	zfree(qfq_cl_zone, cl);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -606,7 +627,7 @@ qfq_class_destroy(struct qfq_if *qif, struct qfq_class *cl)
 static inline pktsched_bitmap_t
 mask_from(pktsched_bitmap_t bitmap, int from)
 {
-	return (bitmap & ~((1UL << from) - 1));
+	return bitmap & ~((1UL << from) - 1);
 }
 
 /*
@@ -625,11 +646,12 @@ qfq_calc_state(struct qfq_if *qif, struct qfq_group *grp)
 
 	if (mask) {
 		next = qfq_ffs(qif, mask);
-		if (qfq_gt(grp->qfg_F, next->qfg_F))
+		if (qfq_gt(grp->qfg_F, next->qfg_F)) {
 			state |= EB;
+		}
 	}
 
-	return (state);
+	return state;
 }
 
 /*
@@ -653,8 +675,9 @@ qfq_unblock_groups(struct qfq_if *qif, int index, u_int64_t old_finish)
 
 	if (mask) {
 		next = qfq_ffs(qif, mask);
-		if (!qfq_gt(next->qfg_F, old_finish))
+		if (!qfq_gt(next->qfg_F, old_finish)) {
 			return;
+		}
 	}
 
 	mask = (1UL << index) - 1;
@@ -712,8 +735,9 @@ qfq_front_slot_remove(struct qfq_group *grp)
 	struct qfq_class **h = &grp->qfg_slots[grp->qfg_front];
 
 	*h = (*h)->cl_next;
-	if (!*h)
+	if (!*h) {
 		pktsched_bit_clr(0, &grp->qfg_full_slots);
+	}
 }
 
 /*
@@ -732,8 +756,9 @@ qfq_slot_scan(struct qfq_if *qif, struct qfq_group *grp)
 		    grp->qfg_full_slots);
 	}
 
-	if (grp->qfg_full_slots == 0)
-		return (NULL);
+	if (grp->qfg_full_slots == 0) {
+		return NULL;
+	}
 
 	i = pktsched_ffs(grp->qfg_full_slots) - 1; /* zero-based */
 	if (i > 0) {
@@ -741,7 +766,7 @@ qfq_slot_scan(struct qfq_if *qif, struct qfq_group *grp)
 		grp->qfg_full_slots >>= i;
 	}
 
-	return (grp->qfg_slots[grp->qfg_front]);
+	return grp->qfg_slots[grp->qfg_front];
 }
 
 /*
@@ -773,8 +798,9 @@ qfq_update_eligible(struct qfq_if *qif, u_int64_t old_V)
 		if (!qif->qif_bitmaps[ER]) {
 			struct qfq_group *grp;
 			grp = qfq_ffs(qif, ineligible);
-			if (qfq_gt(grp->qfg_S, qif->qif_V))
+			if (qfq_gt(grp->qfg_S, qif->qif_V)) {
 				qif->qif_V = grp->qfg_S;
+			}
 		}
 		qfq_make_eligible(qif, old_V);
 	}
@@ -789,7 +815,7 @@ qfq_update_class(struct qfq_if *qif, struct qfq_group *grp,
 {
 #pragma unused(qif)
 	cl->cl_S = cl->cl_F;
-	if (qempty(&cl->cl_q))  {
+	if (qempty(&cl->cl_q)) {
 		qfq_front_slot_remove(grp);
 	} else {
 		u_int32_t len;
@@ -798,13 +824,14 @@ qfq_update_class(struct qfq_if *qif, struct qfq_group *grp,
 		len = m_pktlen((struct mbuf *)qhead(&cl->cl_q));
 		cl->cl_F = cl->cl_S + (u_int64_t)len * cl->cl_inv_w;
 		roundedS = qfq_round_down(cl->cl_S, grp->qfg_slot_shift);
-		if (roundedS == grp->qfg_S)
-			return (0);
+		if (roundedS == grp->qfg_S) {
+			return 0;
+		}
 
 		qfq_front_slot_remove(grp);
 		qfq_slot_insert(qif, grp, cl, roundedS);
 	}
-	return (1);
+	return 1;
 }
 
 /*
@@ -830,16 +857,18 @@ qfq_dequeue(struct qfq_if *qif, pktsched_pkt_t *pkt)
 	for (;;) {
 		if (er_bits == 0) {
 #if QFQ_DEBUG
-			if (qif->qif_queued && pktsched_verbose > 1)
+			if (qif->qif_queued && pktsched_verbose > 1) {
 				qfq_dump_sched(qif, "start dequeue");
+			}
 #endif /* QFQ_DEBUG */
 			/* no eligible and ready packet */
 			return;
 		}
 		grp = qfq_ffs(qif, er_bits);
 		/* if group is non-empty, use it */
-		if (grp->qfg_full_slots != 0)
+		if (grp->qfg_full_slots != 0) {
 			break;
+		}
 		pktsched_bit_clr(grp->qfg_index, &er_bits);
 #if QFQ_DEBUG
 		qif->qif_emptygrp++;
@@ -860,8 +889,9 @@ qfq_dequeue(struct qfq_if *qif, pktsched_pkt_t *pkt)
 
 	IFCQ_DEC_LEN(ifq);
 	IFCQ_DEC_BYTES(ifq, len);
-	if (qempty(&cl->cl_q))
+	if (qempty(&cl->cl_q)) {
 		cl->cl_period++;
+	}
 	PKTCNTR_ADD(&cl->cl_xmitcnt, 1, len);
 	IFCQ_XMIT_ADD(ifq, 1, len);
 
@@ -887,8 +917,9 @@ qfq_dequeue(struct qfq_if *qif, pktsched_pkt_t *pkt)
 			u_int64_t roundedS =
 			    qfq_round_down(cl->cl_S, grp->qfg_slot_shift);
 
-			if (grp->qfg_S == roundedS)
+			if (grp->qfg_S == roundedS) {
 				goto skip_unblock;
+			}
 
 			grp->qfg_S = roundedS;
 			grp->qfg_F = roundedS + (2ULL << grp->qfg_slot_shift);
@@ -906,8 +937,9 @@ skip_unblock:
 	qfq_update_eligible(qif, old_V);
 
 #if QFQ_DEBUG
-	if (!qif->qif_bitmaps[ER] && qif->qif_queued && pktsched_verbose > 1)
+	if (!qif->qif_bitmaps[ER] && qif->qif_queued && pktsched_verbose > 1) {
 		qfq_dump_sched(qif, "end dequeue");
+	}
 #endif /* QFQ_DEBUG */
 }
 
@@ -968,7 +1000,7 @@ qfq_enqueue(struct qfq_if *qif, struct qfq_class *cl, pktsched_pkt_t *pkt,
 			cl = qif->qif_default;
 			if (cl == NULL) {
 				IFCQ_CONVERT_LOCK(ifq);
-				return (CLASSQEQ_DROP);
+				return CLASSQEQ_DROP;
 			}
 		}
 	}
@@ -983,7 +1015,7 @@ qfq_enqueue(struct qfq_if *qif, struct qfq_class *cl, pktsched_pkt_t *pkt,
 		    ret == CLASSQEQ_DROP_SP);
 		PKTCNTR_ADD(&cl->cl_dropcnt, 1, len);
 		IFCQ_DROP_ADD(ifq, 1, len);
-		return (ret);
+		return ret;
 	}
 	IFCQ_INC_LEN(ifq);
 	IFCQ_INC_BYTES(ifq, len);
@@ -993,12 +1025,13 @@ qfq_enqueue(struct qfq_if *qif, struct qfq_class *cl, pktsched_pkt_t *pkt,
 #endif /* QFQ_DEBUG */
 
 	/* queue was not idle, we're done */
-	if (qlen(&cl->cl_q) > 1)
+	if (qlen(&cl->cl_q) > 1) {
 		goto done;
+	}
 
 	/* queue was idle */
 	grp = cl->cl_grp;
-	qfq_update_start(qif, cl);	/* adjust start time */
+	qfq_update_start(qif, cl);      /* adjust start time */
 
 	/* compute new finish time and rounded start */
 	cl->cl_F = cl->cl_S + (u_int64_t)len * cl->cl_inv_w;
@@ -1014,8 +1047,9 @@ qfq_enqueue(struct qfq_if *qif, struct qfq_class *cl, pktsched_pkt_t *pkt,
 	 * in this group and nobody was in ER make sure to adjust V.
 	 */
 	if (grp->qfg_full_slots != 0) {
-		if (!qfq_gt(grp->qfg_S, cl->cl_S))
+		if (!qfq_gt(grp->qfg_S, cl->cl_S)) {
 			goto skip_update;
+		}
 
 		/* create a slot for this cl->cl_S */
 		qfq_slot_rotate(qif, grp, roundedS);
@@ -1047,7 +1081,7 @@ skip_update:
 
 done:
 	/* successfully queued. */
-	return (ret);
+	return ret;
 }
 
 static inline void
@@ -1064,12 +1098,14 @@ qfq_slot_remove(struct qfq_if *qif, struct qfq_group *grp,
 	i = (grp->qfg_front + offset) % qif->qif_maxslots;
 
 	pprev = &grp->qfg_slots[i];
-	while (*pprev && *pprev != cl)
+	while (*pprev && *pprev != cl) {
 		pprev = &(*pprev)->cl_next;
+	}
 
 	*pprev = cl->cl_next;
-	if (!grp->qfg_slots[i])
+	if (!grp->qfg_slots[i]) {
 		pktsched_bit_clr(offset, &grp->qfg_full_slots);
+	}
 }
 
 /*
@@ -1097,12 +1133,13 @@ qfq_deactivate_class(struct qfq_if *qif, struct qfq_class *cl)
 		    grp->qfg_front, qif->qif_bitmaps[ER], qif->qif_bitmaps[EB],
 		    qif->qif_bitmaps[IR], qif->qif_bitmaps[IB]);
 #if QFQ_DEBUG
-		if (pktsched_verbose > 1)
+		if (pktsched_verbose > 1) {
 			qfq_dump_sched(qif, "start deactivate");
+		}
 #endif /* QFQ_DEBUG */
 	}
 
-	cl->cl_F = cl->cl_S;	/* not needed if the class goes away */
+	cl->cl_F = cl->cl_S;    /* not needed if the class goes away */
 	qfq_slot_remove(qif, grp, cl);
 
 	if (grp->qfg_full_slots == 0) {
@@ -1119,10 +1156,11 @@ qfq_deactivate_class(struct qfq_if *qif, struct qfq_class *cl)
 		    !(qif->qif_bitmaps[ER] & ~((1UL << grp->qfg_index) - 1))) {
 			mask = qif->qif_bitmaps[ER] &
 			    ((1UL << grp->qfg_index) - 1);
-			if (mask)
+			if (mask) {
 				mask = ~((1UL << __fls(mask)) - 1);
-			else
+			} else {
 				mask = (pktsched_bitmap_t)~0UL;
+			}
 			qfq_move_groups(qif, mask, EB, ER);
 			qfq_move_groups(qif, mask, IB, IR);
 		}
@@ -1144,8 +1182,9 @@ qfq_deactivate_class(struct qfq_if *qif, struct qfq_class *cl)
 	qfq_update_eligible(qif, qif->qif_V);
 
 #if QFQ_DEBUG
-	if (pktsched_verbose > 1)
+	if (pktsched_verbose > 1) {
 		qfq_dump_sched(qif, "end deactivate");
+	}
 #endif /* QFQ_DEBUG */
 }
 
@@ -1171,13 +1210,13 @@ qfq_state2str(int s)
 		c = "?";
 		break;
 	}
-	return (c);
+	return c;
 }
 
 static inline int
 qfq_addq(struct qfq_class *cl, pktsched_pkt_t *pkt, struct pf_mtag *t)
 {
-	struct qfq_if	*qif = cl->cl_qif;
+	struct qfq_if   *qif = cl->cl_qif;
 	struct ifclassq *ifq = qif->qif_ifq;
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
@@ -1208,19 +1247,21 @@ qfq_addq(struct qfq_class *cl, pktsched_pkt_t *pkt, struct pf_mtag *t)
 				cqrq_throttle_t tr = { 1, qif->qif_throttle };
 				int err = qfq_throttle(qif, &tr);
 
-				if (err == EALREADY)
+				if (err == EALREADY) {
 					err = 0;
+				}
 				if (err != 0) {
 					tr.level = IFNET_THROTTLE_OFF;
 					(void) qfq_throttle(qif, &tr);
 				}
 			}
 		}
-		if (cl->cl_sfb != NULL)
-			return (sfb_addq(cl->cl_sfb, &cl->cl_q, pkt, t));
+		if (cl->cl_sfb != NULL) {
+			return sfb_addq(cl->cl_sfb, &cl->cl_q, pkt, t);
+		}
 	} else if (qlen(&cl->cl_q) >= qlimit(&cl->cl_q)) {
 		IFCQ_CONVERT_LOCK(ifq);
-		return (CLASSQEQ_DROP);
+		return CLASSQEQ_DROP;
 	}
 
 #if PF_ECN
@@ -1233,7 +1274,7 @@ qfq_addq(struct qfq_class *cl, pktsched_pkt_t *pkt, struct pf_mtag *t)
 
 	VERIFY(pkt->pktsched_ptype == qptype(&cl->cl_q));
 	_addq(&cl->cl_q, pkt->pktsched_pkt);
-	return (0);
+	return 0;
 }
 
 static inline void
@@ -1241,10 +1282,11 @@ qfq_getq(struct qfq_class *cl, pktsched_pkt_t *pkt)
 {
 	IFCQ_LOCK_ASSERT_HELD(cl->cl_qif->qif_ifq);
 
-	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL)
-		return (sfb_getq(cl->cl_sfb, &cl->cl_q, pkt));
+	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL) {
+		return sfb_getq(cl->cl_sfb, &cl->cl_q, pkt);
+	}
 
-	return (pktsched_pkt_encap(pkt, qptype(&cl->cl_q), _getq(&cl->cl_q)));
+	return pktsched_pkt_encap(pkt, qptype(&cl->cl_q), _getq(&cl->cl_q));
 }
 
 static void
@@ -1256,14 +1298,16 @@ qfq_purgeq(struct qfq_if *qif, struct qfq_class *cl, u_int32_t flow,
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
-	if ((qlen = qlen(&cl->cl_q)) == 0)
+	if ((qlen = qlen(&cl->cl_q)) == 0) {
 		goto done;
+	}
 
 	IFCQ_CONVERT_LOCK(ifq);
-	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL)
+	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL) {
 		sfb_purgeq(cl->cl_sfb, &cl->cl_q, flow, &cnt, &len);
-	else
+	} else {
 		_flushq_flow(&cl->cl_q, flow, &cnt, &len);
+	}
 
 	if (cnt > 0) {
 		VERIFY(qlen(&cl->cl_q) == (qlen - cnt));
@@ -1278,8 +1322,9 @@ qfq_purgeq(struct qfq_if *qif, struct qfq_class *cl, u_int32_t flow,
 		VERIFY(((signed)IFCQ_LEN(ifq) - cnt) >= 0);
 		IFCQ_LEN(ifq) -= cnt;
 
-		if (qempty(&cl->cl_q))
+		if (qempty(&cl->cl_q)) {
 			qfq_deactivate_class(qif, cl);
+		}
 
 		if (pktsched_verbose) {
 			log(LOG_DEBUG, "%s: %s purge qid=%d weight=%d "
@@ -1291,10 +1336,12 @@ qfq_purgeq(struct qfq_if *qif, struct qfq_class *cl, u_int32_t flow,
 		}
 	}
 done:
-	if (packets != NULL)
+	if (packets != NULL) {
 		*packets = cnt;
-	if (bytes != NULL)
+	}
+	if (bytes != NULL) {
 		*bytes = len;
+	}
 }
 
 static void
@@ -1309,8 +1356,9 @@ qfq_updateq(struct qfq_if *qif, struct qfq_class *cl, cqev_t ev)
 		    ifclassq_ev2str(ev));
 	}
 
-	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL)
-		return (sfb_updateq(cl->cl_sfb, ev));
+	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL) {
+		return sfb_updateq(cl->cl_sfb, ev);
+	}
 }
 
 int
@@ -1321,8 +1369,9 @@ qfq_get_class_stats(struct qfq_if *qif, u_int32_t qid,
 
 	IFCQ_LOCK_ASSERT_HELD(qif->qif_ifq);
 
-	if ((cl = qfq_clh_to_clp(qif, qid)) == NULL)
-		return (EINVAL);
+	if ((cl = qfq_clh_to_clp(qif, qid)) == NULL) {
+		return EINVAL;
+	}
 
 	sp->class_handle = cl->cl_handle;
 	sp->index = cl->cl_grp->qfg_index;
@@ -1337,10 +1386,11 @@ qfq_get_class_stats(struct qfq_if *qif, u_int32_t qid,
 	sp->qtype = qtype(&cl->cl_q);
 	sp->qstate = qstate(&cl->cl_q);
 
-	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL)
+	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL) {
 		sfb_getstats(cl->cl_sfb, &sp->sfb);
+	}
 
-	return (0);
+	return 0;
 }
 
 static int
@@ -1361,7 +1411,7 @@ qfq_stat_sc(struct qfq_if *qif, cqrq_stat_sc_t *sr)
 	sr->packets = qlen(&cl->cl_q);
 	sr->bytes = qsize(&cl->cl_q);
 
-	return (0);
+	return 0;
 }
 
 /* convert a class handle to the corresponding class pointer */
@@ -1378,21 +1428,24 @@ qfq_clh_to_clp(struct qfq_if *qif, u_int32_t chandle)
 	 * the handle.  If it fails, do the linear table search.
 	 */
 	i = chandle % qif->qif_maxclasses;
-	if ((cl = qif->qif_class_tbl[i]) != NULL && cl->cl_handle == chandle)
-		return (cl);
-	for (i = 0; i < qif->qif_maxclasses; i++)
+	if ((cl = qif->qif_class_tbl[i]) != NULL && cl->cl_handle == chandle) {
+		return cl;
+	}
+	for (i = 0; i < qif->qif_maxclasses; i++) {
 		if ((cl = qif->qif_class_tbl[i]) != NULL &&
-		    cl->cl_handle == chandle)
-			return (cl);
+		    cl->cl_handle == chandle) {
+			return cl;
+		}
+	}
 
-	return (NULL);
+	return NULL;
 }
 
 static const char *
 qfq_style(struct qfq_if *qif)
 {
 #pragma unused(qif)
-	return ("QFQ");
+	return "QFQ";
 }
 
 /*
@@ -1401,7 +1454,7 @@ qfq_style(struct qfq_if *qif)
 static inline int
 qfq_gt(u_int64_t a, u_int64_t b)
 {
-	return ((int64_t)(a - b) > 0);
+	return (int64_t)(a - b) > 0;
 }
 
 /*
@@ -1410,7 +1463,7 @@ qfq_gt(u_int64_t a, u_int64_t b)
 static inline u_int64_t
 qfq_round_down(u_int64_t ts, u_int32_t shift)
 {
-	return (ts & ~((1ULL << shift) - 1));
+	return ts & ~((1ULL << shift) - 1);
 }
 
 /*
@@ -1419,10 +1472,10 @@ qfq_round_down(u_int64_t ts, u_int32_t shift)
 static inline struct qfq_group *
 qfq_ffs(struct qfq_if *qif, pktsched_bitmap_t bitmap)
 {
-	int index = pktsched_ffs(bitmap) - 1;	/* zero-based */
+	int index = pktsched_ffs(bitmap) - 1;   /* zero-based */
 	VERIFY(index >= 0 && index <= QFQ_MAX_INDEX &&
 	    qif->qif_groups[index] != NULL);
-	return (qif->qif_groups[index]);
+	return qif->qif_groups[index];
 }
 
 /*
@@ -1433,27 +1486,29 @@ qfq_ffs(struct qfq_if *qif, pktsched_bitmap_t bitmap)
 static int
 qfq_calc_index(struct qfq_class *cl, u_int32_t inv_w, u_int32_t maxlen)
 {
-	u_int64_t slot_size = (u_int64_t)maxlen *inv_w;
+	u_int64_t slot_size = (u_int64_t)maxlen * inv_w;
 	pktsched_bitmap_t size_map;
 	int index = 0;
 
 	size_map = (pktsched_bitmap_t)(slot_size >> QFQ_MIN_SLOT_SHIFT);
-	if (!size_map)
+	if (!size_map) {
 		goto out;
+	}
 
-	index = __fls(size_map) + 1;	/* basically a log_2() */
+	index = __fls(size_map) + 1;    /* basically a log_2() */
 	index -= !(slot_size - (1ULL << (index + QFQ_MIN_SLOT_SHIFT - 1)));
 
-	if (index < 0)
+	if (index < 0) {
 		index = 0;
+	}
 out:
 	if (pktsched_verbose) {
 		log(LOG_DEBUG, "%s: %s qid=%d grp=%d W=%u, L=%u, I=%d\n",
 		    if_name(QFQIF_IFP(cl->cl_qif)), qfq_style(cl->cl_qif),
-		    cl->cl_handle, index, (u_int32_t)(QFQ_ONE_FP/inv_w),
+		    cl->cl_handle, index, (u_int32_t)(QFQ_ONE_FP / inv_w),
 		    maxlen, index);
 	}
-	return (index);
+	return index;
 }
 
 #if QFQ_DEBUG
@@ -1465,10 +1520,12 @@ qfq_dump_groups(struct qfq_if *qif, u_int32_t mask)
 	for (i = 0; i < QFQ_MAX_INDEX + 1; i++) {
 		struct qfq_group *g = qif->qif_groups[i];
 
-		if (0 == (mask & (1 << i)))
+		if (0 == (mask & (1 << i))) {
 			continue;
-		if (g == NULL)
+		}
+		if (g == NULL) {
 			continue;
+		}
 
 		log(LOG_DEBUG, "%s: %s [%2d] full_slots 0x%x\n",
 		    if_name(QFQIF_IFP(qif)), qfq_style(qif), i,
@@ -1483,7 +1540,7 @@ qfq_dump_groups(struct qfq_if *qif, u_int32_t mask)
 				    "qid %d\n", if_name(QFQIF_IFP(qif)),
 				    qfq_style(qif), j,
 				    (uint64_t)VM_KERNEL_ADDRPERM(
-				    g->qfg_slots[j]),
+					    g->qfg_slots[j]),
 				    g->qfg_slots[j]->cl_handle);
 			}
 		}
@@ -1535,7 +1592,7 @@ qfq_enqueue_ifclassq(struct ifclassq *ifq, void *p, classq_pkt_type_t ptype,
 			IFCQ_CONVERT_LOCK(ifq);
 			m_freem(m);
 			*pdrop = TRUE;
-			return (ENOBUFS);
+			return ENOBUFS;
 		}
 		i = MBUF_SCIDX(mbuf_get_service_class(m));
 		t =  m_pftag(m);
@@ -1581,7 +1638,7 @@ qfq_enqueue_ifclassq(struct ifclassq *ifq, void *p, classq_pkt_type_t ptype,
 	default:
 		VERIFY(0);
 	}
-	return (ret);
+	return ret;
 }
 
 /*
@@ -1597,10 +1654,10 @@ static void *
 qfq_dequeue_ifclassq(struct ifclassq *ifq, classq_pkt_type_t *ptype)
 {
 	pktsched_pkt_t pkt;
-	bzero(&pkt, sizeof (pkt));
+	bzero(&pkt, sizeof(pkt));
 	qfq_dequeue(ifq->ifcq_disc, &pkt);
 	*ptype = pkt.pktsched_ptype;
-	return (pkt.pktsched_pkt);
+	return pkt.pktsched_pkt;
 }
 
 static int
@@ -1631,7 +1688,7 @@ qfq_request_ifclassq(struct ifclassq *ifq, cqrq_t req, void *arg)
 		err = qfq_stat_sc(qif, (cqrq_stat_sc_t *)arg);
 		break;
 	}
-	return (err);
+	return err;
 }
 
 int
@@ -1649,61 +1706,77 @@ qfq_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags,
 	VERIFY(ifq->ifcq_disc == NULL);
 	VERIFY(ifq->ifcq_type == PKTSCHEDT_NONE);
 
-	if (flags & PKTSCHEDF_QALG_SFB)
+	if (flags & PKTSCHEDF_QALG_SFB) {
 		qflags |= QFCF_SFB;
-	if (flags & PKTSCHEDF_QALG_ECN)
+	}
+	if (flags & PKTSCHEDF_QALG_ECN) {
 		qflags |= QFCF_ECN;
-	if (flags & PKTSCHEDF_QALG_FLOWCTL)
+	}
+	if (flags & PKTSCHEDF_QALG_FLOWCTL) {
 		qflags |= QFCF_FLOWCTL;
-	if (flags & PKTSCHEDF_QALG_DELAYBASED)
+	}
+	if (flags & PKTSCHEDF_QALG_DELAYBASED) {
 		qflags |= QFCF_DELAYBASED;
+	}
 
 	qif = qfq_alloc(ifp, M_WAITOK);
-	if (qif == NULL)
-		return (ENOMEM);
+	if (qif == NULL) {
+		return ENOMEM;
+	}
 
-	if ((maxlen = IFCQ_MAXLEN(ifq)) == 0)
+	if ((maxlen = IFCQ_MAXLEN(ifq)) == 0) {
 		maxlen = if_sndq_maxlen;
+	}
 
 	if ((err = qfq_add_queue(qif, maxlen, 300, 1200,
-	    qflags | QFCF_LAZY, SCIDX_BK_SYS, &cl0, ptype)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_BK_SYS, &cl0, ptype)) != 0) {
 		goto cleanup;
+	}
 
 	if ((err = qfq_add_queue(qif, maxlen, 600, 1400,
-	    qflags | QFCF_LAZY, SCIDX_BK, &cl1, ptype)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_BK, &cl1, ptype)) != 0) {
 		goto cleanup;
+	}
 
 	if ((err = qfq_add_queue(qif, maxlen, 2400, 600,
-	    qflags | QFCF_DEFAULTCLASS, SCIDX_BE, &cl2, ptype)) != 0)
+	    qflags | QFCF_DEFAULTCLASS, SCIDX_BE, &cl2, ptype)) != 0) {
 		goto cleanup;
+	}
 
 	if ((err = qfq_add_queue(qif, maxlen, 2700, 600,
-	    qflags | QFCF_LAZY, SCIDX_RD, &cl3, ptype)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_RD, &cl3, ptype)) != 0) {
 		goto cleanup;
+	}
 
 	if ((err = qfq_add_queue(qif, maxlen, 3000, 400,
-	    qflags | QFCF_LAZY, SCIDX_OAM, &cl4, ptype)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_OAM, &cl4, ptype)) != 0) {
 		goto cleanup;
+	}
 
 	if ((err = qfq_add_queue(qif, maxlen, 8000, 1000,
-	    qflags | QFCF_LAZY, SCIDX_AV, &cl5, ptype)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_AV, &cl5, ptype)) != 0) {
 		goto cleanup;
+	}
 
 	if ((err = qfq_add_queue(qif, maxlen, 15000, 1200,
-	    qflags | QFCF_LAZY, SCIDX_RV, &cl6, ptype)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_RV, &cl6, ptype)) != 0) {
 		goto cleanup;
+	}
 
 	if ((err = qfq_add_queue(qif, maxlen, 20000, 1400,
-	    qflags | QFCF_LAZY, SCIDX_VI, &cl7, ptype)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_VI, &cl7, ptype)) != 0) {
 		goto cleanup;
+	}
 
 	if ((err = qfq_add_queue(qif, maxlen, 23000, 200,
-	    qflags | QFCF_LAZY, SCIDX_VO, &cl8, ptype)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_VO, &cl8, ptype)) != 0) {
 		goto cleanup;
+	}
 
 	if ((err = qfq_add_queue(qif, maxlen, 25000, 200,
-	    qflags, SCIDX_CTL, &cl9, ptype)) != 0)
+	    qflags, SCIDX_CTL, &cl9, ptype)) != 0) {
 		goto cleanup;
+	}
 
 	err = ifclassq_attach(ifq, PKTSCHEDT_QFQ, qif,
 	    qfq_enqueue_ifclassq, qfq_dequeue_ifclassq, NULL,
@@ -1743,10 +1816,11 @@ qfq_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags,
 	}
 
 cleanup:
-	if (err != 0)
+	if (err != 0) {
 		(void) qfq_destroy_locked(qif);
+	}
 
-	return (err);
+	return err;
 }
 
 int
@@ -1766,7 +1840,7 @@ qfq_teardown_ifclassq(struct ifclassq *ifq)
 		ifq->ifcq_disc_slots[i].cl = NULL;
 	}
 
-	return (ifclassq_detach(ifq));
+	return ifclassq_detach(ifq);
 }
 
 int
@@ -1778,11 +1852,12 @@ qfq_getqstats_ifclassq(struct ifclassq *ifq, u_int32_t slot,
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 	VERIFY(ifq->ifcq_type == PKTSCHEDT_QFQ);
 
-	if (slot >= IFCQ_SC_MAX)
-		return (EINVAL);
+	if (slot >= IFCQ_SC_MAX) {
+		return EINVAL;
+	}
 
-	return (qfq_get_class_stats(qif, ifq->ifcq_disc_slots[slot].qid,
-	    &ifqs->ifqs_qfq_stats));
+	return qfq_get_class_stats(qif, ifq->ifcq_disc_slots[slot].qid,
+	           &ifqs->ifqs_qfq_stats);
 }
 
 static int
@@ -1796,11 +1871,12 @@ qfq_throttle(struct qfq_if *qif, cqrq_throttle_t *tr)
 
 	if (!tr->set) {
 		tr->level = qif->qif_throttle;
-		return (0);
+		return 0;
 	}
 
-	if (tr->level == qif->qif_throttle)
-		return (EALREADY);
+	if (tr->level == qif->qif_throttle) {
+		return EALREADY;
+	}
 
 	/* Current throttling levels only involve BK_SYS class */
 	cl = ifq->ifcq_disc_slots[SCIDX_BK_SYS].cl;
@@ -1827,17 +1903,18 @@ qfq_throttle(struct qfq_if *qif, cqrq_throttle_t *tr)
 			    tr->level);
 		}
 		qif->qif_throttle = tr->level;
-		if (err != 0)
+		if (err != 0) {
 			err = 0;
-		else
+		} else {
 			qfq_purgeq(qif, cl, 0, NULL, NULL);
+		}
 	} else {
 		log(LOG_ERR, "%s: %s unable to set throttling level "
 		    "%d->%d [error=%d]\n", if_name(QFQIF_IFP(qif)),
 		    qfq_style(qif), qif->qif_throttle, tr->level, err);
 	}
 
-	return (err);
+	return err;
 }
 
 static int
@@ -1850,13 +1927,15 @@ qfq_resumeq(struct qfq_if *qif, struct qfq_class *cl)
 #endif
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
-	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL)
+	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL) {
 		err = sfb_suspendq(cl->cl_sfb, &cl->cl_q, FALSE);
+	}
 
-	if (err == 0)
+	if (err == 0) {
 		qstate(&cl->cl_q) = QS_RUNNING;
+	}
 
-	return (err);
+	return err;
 }
 
 static int
@@ -1874,12 +1953,13 @@ qfq_suspendq(struct qfq_if *qif, struct qfq_class *cl)
 			err = sfb_suspendq(cl->cl_sfb, &cl->cl_q, TRUE);
 		} else {
 			VERIFY(cl->cl_flags & QFCF_LAZY);
-			err = ENXIO;	/* delayed throttling */
+			err = ENXIO;    /* delayed throttling */
 		}
 	}
 
-	if (err == 0 || err == ENXIO)
+	if (err == 0 || err == ENXIO) {
 		qstate(&cl->cl_q) = QS_SUSPENDED;
+	}
 
-	return (err);
+	return err;
 }

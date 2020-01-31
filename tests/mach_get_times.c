@@ -11,7 +11,7 @@
 #define timespec2nanosec(ts) ((uint64_t)((ts)->tv_sec) * NSEC_PER_SEC + (uint64_t)((ts)->tv_nsec))
 
 T_DECL(mach_get_times, "mach_get_times()",
-	   T_META_CHECK_LEAKS(false), T_META_ALL_VALID_ARCHS(true))
+    T_META_CHECK_LEAKS(false), T_META_ALL_VALID_ARCHS(true))
 {
 	const int ITERATIONS = 500000 * dt_ncpu();
 	struct timespec gtod_ts;
@@ -26,9 +26,9 @@ T_DECL(mach_get_times, "mach_get_times()",
 		gtod = timespec2nanosec(&gtod_ts);
 
 		T_LOG_VERBOSE("[%d] abs: %llu.%09llu(+%llu)\tcont: %llu.%09llu(+%llu)\tgtod:%llu.%09llu(+%llu)", i,
-				absolute / NSEC_PER_SEC, absolute % NSEC_PER_SEC, absolute - last_absolute,
-				continuous / NSEC_PER_SEC, continuous % NSEC_PER_SEC, continuous - last_continuous,
-				gtod / NSEC_PER_SEC, gtod % NSEC_PER_SEC, gtod - last_gtod);
+		    absolute / NSEC_PER_SEC, absolute % NSEC_PER_SEC, absolute - last_absolute,
+		    continuous / NSEC_PER_SEC, continuous % NSEC_PER_SEC, continuous - last_continuous,
+		    gtod / NSEC_PER_SEC, gtod % NSEC_PER_SEC, gtod - last_gtod);
 
 		T_QUIET; T_EXPECT_EQ(absolute - last_absolute, continuous - last_continuous, NULL);
 

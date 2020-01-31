@@ -52,12 +52,13 @@ __RCSID("$NetBSD: t_utimensat.c,v 1.6 2017/01/10 15:13:56 christos Exp $");
 #define BASELINK "symlink"
 #define FILEERR "dir/symlink"
 
-static const struct timespec tptr[] = { 
+static const struct timespec tptr[] = {
 	{ 0x12345678, 987654321 },
 	{ 0x15263748, 123456789 },
 };
 
-static void chtmpdir(void)
+static void
+chtmpdir(void)
 {
 	T_SETUPBEGIN;
 	T_ASSERT_POSIX_ZERO(chdir(dt_tmpdir()), NULL);
@@ -86,7 +87,7 @@ T_DECL(netbsd_utimensat_fd, "See that utimensat works with fd")
 	struct stat st;
 
 	T_ASSERT_POSIX_ZERO(mkdir(DIRPATH, 0755), NULL);
-	T_ASSERT_POSIX_SUCCESS((fd = open(FILEPATH, O_CREAT|O_RDWR, 0644)), NULL);
+	T_ASSERT_POSIX_SUCCESS((fd = open(FILEPATH, O_CREAT | O_RDWR, 0644)), NULL);
 	T_ASSERT_POSIX_ZERO(close(fd), NULL);
 
 	T_ASSERT_POSIX_SUCCESS((dfd = open(DIRPATH, O_RDONLY, 0)), NULL);
@@ -108,7 +109,7 @@ T_DECL(netbsd_utimensat_fdcwd, "See that utimensat works with fd as AT_FDCWD")
 	struct stat st;
 
 	T_ASSERT_POSIX_ZERO(mkdir(DIRPATH, 0755), NULL);
-	T_ASSERT_POSIX_SUCCESS((fd = open(FILEPATH, O_CREAT|O_RDWR, 0644)), NULL);
+	T_ASSERT_POSIX_SUCCESS((fd = open(FILEPATH, O_CREAT | O_RDWR, 0644)), NULL);
 	T_ASSERT_POSIX_ZERO(close(fd), NULL);
 
 	T_ASSERT_POSIX_ZERO(chdir(DIRPATH), NULL);
@@ -150,7 +151,7 @@ T_DECL(netbsd_utimensat_fderr2, "See that utimensat fails with bad fdat")
 	char cwd[MAXPATHLEN];
 
 	T_ASSERT_POSIX_ZERO(mkdir(DIRPATH, 0755), NULL);
-	T_ASSERT_POSIX_SUCCESS((fd = open(FILEPATH, O_CREAT|O_RDWR, 0644)), NULL);
+	T_ASSERT_POSIX_SUCCESS((fd = open(FILEPATH, O_CREAT | O_RDWR, 0644)), NULL);
 	T_ASSERT_POSIX_ZERO(close(fd), NULL);
 
 	T_ASSERT_POSIX_SUCCESS((dfd = open(getcwd(cwd, MAXPATHLEN), O_RDONLY, 0)), NULL);
@@ -165,7 +166,7 @@ T_DECL(netbsd_utimensat_fderr3, "See that utimensat fails with fd as -1")
 	int fd;
 
 	T_ASSERT_POSIX_ZERO(mkdir(DIRPATH, 0755), NULL);
-	T_ASSERT_POSIX_SUCCESS((fd = open(FILEPATH, O_CREAT|O_RDWR, 0644)), NULL);
+	T_ASSERT_POSIX_SUCCESS((fd = open(FILEPATH, O_CREAT | O_RDWR, 0644)), NULL);
 	T_ASSERT_POSIX_ZERO(close(fd), NULL);
 
 	T_ASSERT_EQ(utimensat(-1, FILEPATH, tptr, 0), -1, NULL);

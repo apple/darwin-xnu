@@ -91,17 +91,6 @@ LEXT(kd_early_buffer) // space for kdebug's early event buffer
         .space 16*1024,0
 
 	.section __DATA, __data						// Aligned data
-
-	.globl	EXT(CpuDataEntries)
-	.align  12							// Page aligned
-LEXT(CpuDataEntries)							// Cpu Data Entry Array               
-	.space	(cdeSize_NUM*MAX_CPUS_NUM),0				// (filled with 0s)  
-
-	.globl	EXT(BootCpuData)
-	.align	12							// Page aligned
-LEXT(BootCpuData)							// Per cpu data area
-	.space	cdSize_NUM,0						// (filled with 0s)
-
 	.align	3							// unsigned long long aligned Section
 	.globl	EXT(RTClockData)
 LEXT(RTClockData)							// Real Time clock area

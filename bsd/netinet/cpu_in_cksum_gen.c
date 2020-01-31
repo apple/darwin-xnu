@@ -64,7 +64,7 @@
 #include <libkern/libkern.h>
 #include <mach/boolean.h>
 #include <pexpert/pexpert.h>
-#define	CKSUM_ERR(fmt, args...)	kprintf(fmt, ## args)
+#define CKSUM_ERR(fmt, args...) kprintf(fmt, ## args)
 #else /* !KERNEL */
 #ifndef LIBSYSCALL_INTERFACE
 #error "LIBSYSCALL_INTERFACE not defined"
@@ -79,26 +79,26 @@
 
 /* compile time assert */
 #ifndef _CASSERT
-#define	_CASSERT(x)	_Static_assert(x, "compile-time assertion failed")
+#define _CASSERT(x)     _Static_assert(x, "compile-time assertion failed")
 #endif /* !_CASSERT */
 
 #ifndef VERIFY
-#define	VERIFY(EX) ((void)0)
+#define VERIFY(EX) ((void)0)
 #endif /* !VERIFY */
 
 #ifndef CKSUM_ERR
-#define	CKSUM_ERR(fmt, args...) ((void)0)
+#define CKSUM_ERR(fmt, args...) ((void)0)
 #endif /* !CKSUM_ERR */
 
-#define	PREDICT_TRUE(x)		__builtin_expect(!!((long)(x)), 1L)
-#define	PREDICT_FALSE(x)	__builtin_expect(!!((long)(x)), 0L)
+#define PREDICT_TRUE(x)         __builtin_expect(!!((long)(x)), 1L)
+#define PREDICT_FALSE(x)        __builtin_expect(!!((long)(x)), 0L)
 
 /* fake mbuf struct used only for calling os_cpu_in_cksum_mbuf() */
 struct _mbuf {
-	struct _mbuf	*_m_next;
-	void		*_m_pad;
-	uint8_t		*_m_data;
-	int32_t		_m_len;
+	struct _mbuf    *_m_next;
+	void            *_m_pad;
+	uint8_t         *_m_data;
+	int32_t         _m_len;
 };
 
 extern uint32_t os_cpu_in_cksum(const void *, uint32_t, uint32_t);
@@ -112,12 +112,12 @@ os_cpu_in_cksum(const void *data, uint32_t len, uint32_t initial_sum)
 	 * and the amount to checksum is small, this would be quicker;
 	 * this is suitable for IPv4 header.
 	 */
-	if (IS_P2ALIGNED(data, sizeof (uint32_t)) &&
+	if (IS_P2ALIGNED(data, sizeof(uint32_t)) &&
 	    len <= 64 && (len & 3) == 0) {
 		uint8_t *p = __DECONST(uint8_t *, data);
 		uint64_t sum = initial_sum;
 
-		if (PREDICT_TRUE(len == 20)) {	/* simple IPv4 header */
+		if (PREDICT_TRUE(len == 20)) {  /* simple IPv4 header */
 			sum += *(uint32_t *)(void *)p;
 			sum += *(uint32_t *)(void *)(p + 4);
 			sum += *(uint32_t *)(void *)(p + 8);
@@ -132,12 +132,12 @@ os_cpu_in_cksum(const void *data, uint32_t len, uint32_t initial_sum)
 		}
 
 		/* fold 64-bit to 16-bit (deferred carries) */
-		sum = (sum >> 32) + (sum & 0xffffffff);	/* 33-bit */
-		sum = (sum >> 16) + (sum & 0xffff);	/* 17-bit + carry */
-		sum = (sum >> 16) + (sum & 0xffff);	/* 16-bit + carry */
-		sum = (sum >> 16) + (sum & 0xffff);	/* final carry */
+		sum = (sum >> 32) + (sum & 0xffffffff); /* 33-bit */
+		sum = (sum >> 16) + (sum & 0xffff);     /* 17-bit + carry */
+		sum = (sum >> 16) + (sum & 0xffff);     /* 16-bit + carry */
+		sum = (sum >> 16) + (sum & 0xffff);     /* final carry */
 
-		return (sum & 0xffff);
+		return sum & 0xffff;
 	}
 
 	/*
@@ -169,7 +169,7 @@ os_cpu_in_cksum(const void *data, uint32_t len, uint32_t initial_sum)
 		._m_len = len,
 	};
 
-	return (os_cpu_in_cksum_mbuf(&m, len, 0, initial_sum));
+	return os_cpu_in_cksum_mbuf(&m, len, 0, initial_sum);
 }
 
 #if defined(__i386__) || defined(__x86_64__)
@@ -215,7 +215,7 @@ os_cpu_in_cksum_mbuf(struct _mbuf *m, int len, int off, uint32_t initial_sum)
 	for (;;) {
 		if (PREDICT_FALSE(m == NULL)) {
 			CKSUM_ERR("%s: out of data\n", __func__);
-			return ((uint32_t)-1);
+			return (uint32_t)-1;
 		}
 		mlen = m->_m_len;
 		if (mlen > off) {
@@ -224,23 +224,26 @@ os_cpu_in_cksum_mbuf(struct _mbuf *m, int len, int off, uint32_t initial_sum)
 			goto post_initial_offset;
 		}
 		off -= mlen;
-		if (len == 0)
+		if (len == 0) {
 			break;
+		}
 		m = m->_m_next;
 	}
 
 	for (; len > 0; m = m->_m_next) {
 		if (PREDICT_FALSE(m == NULL)) {
 			CKSUM_ERR("%s: out of data\n", __func__);
-			return ((uint32_t)-1);
+			return (uint32_t)-1;
 		}
 		mlen = m->_m_len;
 		data = m->_m_data;
 post_initial_offset:
-		if (mlen == 0)
+		if (mlen == 0) {
 			continue;
-		if (mlen > len)
+		}
+		if (mlen > len) {
 			mlen = len;
+		}
 		len -= mlen;
 
 		partial = 0;
@@ -277,9 +280,10 @@ post_initial_offset:
 			data += 32;
 			mlen -= 32;
 			if (PREDICT_FALSE(partial & 0xc0000000)) {
-				if (needs_swap)
+				if (needs_swap) {
 					partial = (partial << 8) +
 					    (partial >> 24);
+				}
 				sum += (partial >> 16);
 				sum += (partial & 0xffff);
 				partial = 0;
@@ -326,8 +330,9 @@ post_initial_offset:
 			started_on_odd = !started_on_odd;
 		}
 
-		if (needs_swap)
+		if (needs_swap) {
 			partial = (partial << 8) + (partial >> 24);
+		}
 		sum += (partial >> 16) + (partial & 0xffff);
 		/*
 		 * Reduce sum to allow potential byte swap
@@ -337,7 +342,7 @@ post_initial_offset:
 	}
 	final_acc = ((sum >> 16) & 0xffff) + (sum & 0xffff);
 	final_acc = (final_acc >> 16) + (final_acc & 0xffff);
-	return (final_acc & 0xffff);
+	return final_acc & 0xffff;
 }
 
 #else /* __LP64__ */
@@ -361,7 +366,7 @@ os_cpu_in_cksum_mbuf(struct _mbuf *m, int len, int off, uint32_t initial_sum)
 	for (;;) {
 		if (PREDICT_FALSE(m == NULL)) {
 			CKSUM_ERR("%s: out of data\n", __func__);
-			return ((uint32_t)-1);
+			return (uint32_t)-1;
 		}
 		mlen = m->_m_len;
 		if (mlen > off) {
@@ -370,23 +375,26 @@ os_cpu_in_cksum_mbuf(struct _mbuf *m, int len, int off, uint32_t initial_sum)
 			goto post_initial_offset;
 		}
 		off -= mlen;
-		if (len == 0)
+		if (len == 0) {
 			break;
+		}
 		m = m->_m_next;
 	}
 
 	for (; len > 0; m = m->_m_next) {
 		if (PREDICT_FALSE(m == NULL)) {
 			CKSUM_ERR("%s: out of data\n", __func__);
-			return ((uint32_t)-1);
+			return (uint32_t)-1;
 		}
 		mlen = m->_m_len;
 		data = m->_m_data;
 post_initial_offset:
-		if (mlen == 0)
+		if (mlen == 0) {
 			continue;
-		if (mlen > len)
+		}
+		if (mlen > len) {
 			mlen = len;
+		}
 		len -= mlen;
 
 		partial = 0;
@@ -403,8 +411,9 @@ post_initial_offset:
 		}
 		needs_swap = started_on_odd;
 		if ((uintptr_t)data & 2) {
-			if (mlen < 2)
+			if (mlen < 2) {
 				goto trailing_bytes;
+			}
 			partial += *(uint16_t *)(void *)data;
 			data += 2;
 			mlen -= 2;
@@ -431,9 +440,10 @@ post_initial_offset:
 			data += 64;
 			mlen -= 64;
 			if (PREDICT_FALSE(partial & (3ULL << 62))) {
-				if (needs_swap)
+				if (needs_swap) {
 					partial = (partial << 8) +
 					    (partial >> 56);
+				}
 				sum += (partial >> 32);
 				sum += (partial & 0xffffffff);
 				partial = 0;
@@ -484,8 +494,9 @@ trailing_bytes:
 			started_on_odd = !started_on_odd;
 		}
 
-		if (needs_swap)
+		if (needs_swap) {
 			partial = (partial << 8) + (partial >> 56);
+		}
 		sum += (partial >> 32) + (partial & 0xffffffff);
 		/*
 		 * Reduce sum to allow potential byte swap
@@ -497,7 +508,7 @@ trailing_bytes:
 	    ((sum >> 16) & 0xffff) + (sum & 0xffff);
 	final_acc = (final_acc >> 16) + (final_acc & 0xffff);
 	final_acc = (final_acc >> 16) + (final_acc & 0xffff);
-	return (final_acc & 0xffff);
+	return final_acc & 0xffff;
 }
 #endif /* __LP64 */
 

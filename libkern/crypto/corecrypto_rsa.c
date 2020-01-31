@@ -31,26 +31,28 @@
 #include <corecrypto/ccrsa.h>
 
 
-int rsa_make_pub(rsa_pub_ctx *pub,
-                              size_t exp_nbytes, const uint8_t *exp,
-                              size_t mod_nbytes, const uint8_t *mod) {
-	if ((exp_nbytes>RSA_MAX_KEY_BITSIZE/8) 
-		|| (mod_nbytes>RSA_MAX_KEY_BITSIZE/8)) {
+int
+rsa_make_pub(rsa_pub_ctx *pub,
+    size_t exp_nbytes, const uint8_t *exp,
+    size_t mod_nbytes, const uint8_t *mod)
+{
+	if ((exp_nbytes > RSA_MAX_KEY_BITSIZE / 8)
+	    || (mod_nbytes > RSA_MAX_KEY_BITSIZE / 8)) {
 		return -1; // Too big
 	}
 	ccrsa_ctx_n(pub->key) = ccn_nof(RSA_MAX_KEY_BITSIZE);
 	return g_crypto_funcs->ccrsa_make_pub_fn(pub->key,
-			exp_nbytes, exp,
-			mod_nbytes, mod);
+	           exp_nbytes, exp,
+	           mod_nbytes, mod);
 }
 
-int rsa_verify_pkcs1v15(rsa_pub_ctx *pub, const uint8_t *oid,
-                          size_t digest_len, const uint8_t *digest,
-                          size_t sig_len, const uint8_t *sig,
-                          bool *valid) {
-	return g_crypto_funcs->ccrsa_verify_pkcs1v15_fn(pub->key,oid,
-			digest_len,digest,
-			sig_len,sig,valid);
+int
+rsa_verify_pkcs1v15(rsa_pub_ctx *pub, const uint8_t *oid,
+    size_t digest_len, const uint8_t *digest,
+    size_t sig_len, const uint8_t *sig,
+    bool *valid)
+{
+	return g_crypto_funcs->ccrsa_verify_pkcs1v15_fn(pub->key, oid,
+	           digest_len, digest,
+	           sig_len, sig, valid);
 }
-
-

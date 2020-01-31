@@ -2,7 +2,7 @@
  * Copyright (c) 2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <kern/ipc_tt.h> /* port_name_to_task */
@@ -97,7 +97,7 @@ kperf_init(void)
 
 	/* create buffers to remember which threads don't need to be sampled by PET */
 	kperf_tid_on_cpus = kalloc_tag(ncpus * sizeof(*kperf_tid_on_cpus),
-	                                  VM_KERN_MEMORY_DIAG);
+	    VM_KERN_MEMORY_DIAG);
 	if (kperf_tid_on_cpus == NULL) {
 		err = ENOMEM;
 		goto error;
@@ -107,7 +107,7 @@ kperf_init(void)
 	/* create the interrupt buffers */
 	intr_samplec = ncpus;
 	intr_samplev = kalloc_tag(ncpus * sizeof(*intr_samplev),
-	                          VM_KERN_MEMORY_DIAG);
+	    VM_KERN_MEMORY_DIAG);
 	if (intr_samplev == NULL) {
 		err = ENOMEM;
 		goto error;
@@ -224,10 +224,10 @@ out:
 }
 
 void kperf_on_cpu_internal(thread_t thread, thread_continue_t continuation,
-		uintptr_t *starting_fp);
+    uintptr_t *starting_fp);
 void
 kperf_on_cpu_internal(thread_t thread, thread_continue_t continuation,
-                      uintptr_t *starting_fp)
+    uintptr_t *starting_fp)
 {
 	if (kperf_kdebug_cswitch) {
 		/* trace the new thread's PID for Instruments */
@@ -246,8 +246,8 @@ void
 kperf_on_cpu_update(void)
 {
 	kperf_on_cpu_active = kperf_kdebug_cswitch ||
-	                      kperf_lightweight_pet_active ||
-	                      kperf_lazy_wait_action != 0;
+	    kperf_lightweight_pet_active ||
+	    kperf_lazy_wait_action != 0;
 }
 
 /* random misc-ish functions */
@@ -318,7 +318,7 @@ kperf_sampling_disable(void)
 boolean_t
 kperf_thread_get_dirty(thread_t thread)
 {
-	return (thread->c_switch != thread->kperf_c_switch);
+	return thread->c_switch != thread->kperf_c_switch;
 }
 
 void

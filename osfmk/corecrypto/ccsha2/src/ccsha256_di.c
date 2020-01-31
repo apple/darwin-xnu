@@ -38,26 +38,28 @@
 
 #include "corecrypto/fipspost_trace.h"
 
-const struct ccdigest_info *ccsha256_di(void)
+const struct ccdigest_info *
+ccsha256_di(void)
 {
-    FIPSPOST_TRACE_EVENT;
+	FIPSPOST_TRACE_EVENT;
 
 #if  CCSHA2_VNG_INTEL
 #if defined (__x86_64__)
-    if (CC_HAS_AVX512_AND_IN_KERNEL())
-        return &ccsha256_vng_intel_SupplementalSSE3_di;
-    else
-    return ( (CC_HAS_AVX2() ? &ccsha256_vng_intel_AVX2_di :
-    		( (CC_HAS_AVX1() ? &ccsha256_vng_intel_AVX1_di :
-			&ccsha256_vng_intel_SupplementalSSE3_di ) ) ) ) ;
+	if (CC_HAS_AVX512_AND_IN_KERNEL()) {
+		return &ccsha256_vng_intel_SupplementalSSE3_di;
+	} else {
+		return CC_HAS_AVX2() ? &ccsha256_vng_intel_AVX2_di :
+		       ((CC_HAS_AVX1() ? &ccsha256_vng_intel_AVX1_di :
+		       &ccsha256_vng_intel_SupplementalSSE3_di));
+	}
 #else
-    return &ccsha256_vng_intel_SupplementalSSE3_di;
+	return &ccsha256_vng_intel_SupplementalSSE3_di;
 #endif
 #elif  CCSHA2_VNG_ARMV7NEON
-    return &ccsha256_vng_armv7neon_di;
+	return &ccsha256_vng_armv7neon_di;
 #elif CCSHA256_ARMV6M_ASM
-    return &ccsha256_v6m_di;
+	return &ccsha256_v6m_di;
 #else
-    return &ccsha256_ltc_di;
+	return &ccsha256_ltc_di;
 #endif
 }

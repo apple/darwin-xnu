@@ -2,7 +2,7 @@
  * Copyright (c) 2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <sys/kernel.h>
@@ -87,7 +87,8 @@ kauth_cred_t g_default_persona_cred;
 
 extern void mach_kauth_cred_uthread_update(void);
 
-void personas_bootstrap(void)
+void
+personas_bootstrap(void)
 {
 	struct posix_cred pcred;
 
@@ -98,7 +99,6 @@ void personas_bootstrap(void)
 	g_next_persona_id = FIRST_PERSONA_ID;
 
 	persona_lck_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(persona_lck_grp_attr);
 
 	persona_lck_grp = lck_grp_alloc_init("personas", persona_lck_grp_attr);
 	persona_lck_attr = lck_attr_alloc_init();
@@ -106,8 +106,8 @@ void personas_bootstrap(void)
 	lck_mtx_init(&all_personas_lock, persona_lck_grp, persona_lck_attr);
 
 	persona_zone = zinit(sizeof(struct persona),
-			     MAX_PERSONAS * sizeof(struct persona),
-			     MAX_PERSONAS, "personas");
+	    MAX_PERSONAS * sizeof(struct persona),
+	    MAX_PERSONAS, "personas");
 	assert(persona_zone != NULL);
 
 	/*
@@ -123,12 +123,13 @@ void personas_bootstrap(void)
 	pcred.cr_gmuid = KAUTH_UID_NONE;
 
 	g_default_persona_cred = posix_cred_create(&pcred);
-	if (!g_default_persona_cred)
+	if (!g_default_persona_cred) {
 		panic("couldn't create default persona credentials!");
+	}
 
 	g_system_persona = persona_alloc(PERSONA_SYSTEM_UID,
-					 PERSONA_SYSTEM_LOGIN,
-					 PERSONA_SYSTEM, NULL);
+	    PERSONA_SYSTEM_LOGIN,
+	    PERSONA_SYSTEM, NULL);
 	int err = persona_init_begin(g_system_persona);
 	assert(err == 0);
 
@@ -137,29 +138,33 @@ void personas_bootstrap(void)
 	assert(g_system_persona != NULL);
 }
 
-struct persona *persona_alloc(uid_t id, const char *login, int type, int *error)
+struct persona *
+persona_alloc(uid_t id, const char *login, int type, int *error)
 {
 	struct persona *persona;
 	int err = 0;
 
 	if (!login) {
 		pna_err("Must provide a login name for a new persona!");
-		if (error)
+		if (error) {
 			*error = EINVAL;
+		}
 		return NULL;
 	}
 
 	if (type <= PERSONA_INVALID || type > PERSONA_TYPE_MAX) {
 		pna_err("Invalid type: %d", type);
-		if (error)
+		if (error) {
 			*error = EINVAL;
+		}
 		return NULL;
 	}
 
 	persona = (struct persona *)zalloc(persona_zone);
 	if (!persona) {
-		if (error)
+		if (error) {
 			*error = ENOMEM;
+		}
 		return NULL;
 	}
 
@@ -172,7 +177,7 @@ struct persona *persona_alloc(uid_t id, const char *login, int type, int *error)
 		goto out_error;
 	}
 
-	strncpy(persona->pna_login, login, sizeof(persona->pna_login)-1);
+	strncpy(persona->pna_login, login, sizeof(persona->pna_login) - 1);
 	persona_dbg("Starting persona allocation for: '%s'", persona->pna_login);
 
 	LIST_INIT(&persona->pna_members);
@@ -224,13 +229,14 @@ out_error:
  * structure as valid
  *
  * Conditions:
- * 	persona has been allocated via persona_alloc()
- * 	nothing locked
+ *      persona has been allocated via persona_alloc()
+ *      nothing locked
  *
  * Returns:
- * 	global persona list is locked (even on error)
+ *      global persona list is locked (even on error)
  */
-int persona_init_begin(struct persona *persona)
+int
+persona_init_begin(struct persona *persona)
 {
 	struct persona *tmp;
 	int err = 0;
@@ -246,8 +252,9 @@ int persona_init_begin(struct persona *persona)
 
 	lock_personas();
 try_again:
-	if (id == PERSONA_ID_NONE)
+	if (id == PERSONA_ID_NONE) {
 		persona->pna_id = g_next_persona_id;
+	}
 
 	persona_dbg("Beginning Initialization of %d:%d (%s)...", id, persona->pna_id, persona->pna_login);
 
@@ -275,17 +282,19 @@ try_again:
 		}
 		persona_unlock(tmp);
 	}
-	if (err)
+	if (err) {
 		goto out;
+	}
 
 	/* ensure the cred has proper UID/GID defaults */
 	kauth_cred_ref(persona->pna_cred);
 	tmp_cred = kauth_cred_setuidgid(persona->pna_cred,
-					persona->pna_id,
-					persona->pna_id);
+	    persona->pna_id,
+	    persona->pna_id);
 	kauth_cred_unref(&persona->pna_cred);
-	if (tmp_cred != persona->pna_cred)
+	if (tmp_cred != persona->pna_cred) {
 		persona->pna_cred = tmp_cred;
+	}
 
 	if (!persona->pna_cred) {
 		err = EACCES;
@@ -298,10 +307,11 @@ try_again:
 	kauth_cred_ref(persona->pna_cred);
 	/* opt _out_ of memberd as a default */
 	tmp_cred = kauth_cred_setgroups(persona->pna_cred,
-					&new_group, 1, KAUTH_UID_NONE);
+	    &new_group, 1, KAUTH_UID_NONE);
 	kauth_cred_unref(&persona->pna_cred);
-	if (tmp_cred != persona->pna_cred)
+	if (tmp_cred != persona->pna_cred) {
 		persona->pna_cred = tmp_cred;
+	}
 
 	if (!persona->pna_cred) {
 		err = EACCES;
@@ -309,8 +319,9 @@ try_again:
 	}
 
 	/* if the kernel supplied the persona ID, increment for next time */
-	if (id == PERSONA_ID_NONE)
+	if (id == PERSONA_ID_NONE) {
 		g_next_persona_id += PERSONA_ID_STEP;
+	}
 
 	persona->pna_valid = PERSONA_INIT_TOKEN;
 
@@ -340,13 +351,14 @@ out:
  * only mark the persona valid if the input parameter 'error' is 0.
  *
  * Conditions:
- * 	persona is initialized via persona_init_begin()
- * 	global persona list is locked via lock_personas()
+ *      persona is initialized via persona_init_begin()
+ *      global persona list is locked via lock_personas()
  *
  * Returns:
- * 	global persona list is unlocked
+ *      global persona list is unlocked
  */
-void persona_init_end(struct persona *persona, int error)
+void
+persona_init_end(struct persona *persona, int error)
 {
 	if (persona == NULL) {
 		return;
@@ -365,7 +377,7 @@ void persona_init_end(struct persona *persona, int error)
 		/* remove this persona from the global count */
 		(void)hw_atomic_add(&g_total_personas, -1);
 	} else if (error == 0 &&
-	           persona->pna_valid == PERSONA_INIT_TOKEN) {
+	    persona->pna_valid == PERSONA_INIT_TOKEN) {
 		persona->pna_valid = PERSONA_MAGIC;
 		LIST_INSERT_HEAD(&all_personas, persona, pna_list);
 		persona_dbg("Initialization of %d (%s) Complete.", persona->pna_id, persona->pna_login);
@@ -374,17 +386,20 @@ void persona_init_end(struct persona *persona, int error)
 	unlock_personas();
 }
 
-static struct persona *persona_get_locked(struct persona *persona)
+static struct persona *
+persona_get_locked(struct persona *persona)
 {
 	os_ref_retain_locked(&persona->pna_refcount);
 	return persona;
 }
 
-struct persona *persona_get(struct persona *persona)
+struct persona *
+persona_get(struct persona *persona)
 {
 	struct persona *ret;
-	if (!persona)
+	if (!persona) {
 		return NULL;
+	}
 	persona_lock(persona);
 	ret = persona_get_locked(persona);
 	persona_unlock(persona);
@@ -392,12 +407,14 @@ struct persona *persona_get(struct persona *persona)
 	return ret;
 }
 
-void persona_put(struct persona *persona)
+void
+persona_put(struct persona *persona)
 {
 	int destroy = 0;
 
-	if (!persona)
+	if (!persona) {
 		return;
+	}
 
 	persona_lock(persona);
 	if (os_ref_release_locked(&persona->pna_refcount) == 0) {
@@ -405,22 +422,25 @@ void persona_put(struct persona *persona)
 	}
 	persona_unlock(persona);
 
-	if (!destroy)
+	if (!destroy) {
 		return;
+	}
 
 	persona_dbg("Destroying persona %s", persona_desc(persona, 0));
 
 	/* release our credential reference */
-	if (persona->pna_cred)
+	if (persona->pna_cred) {
 		kauth_cred_unref(&persona->pna_cred);
+	}
 
 	/* remove it from the global list and decrement the count */
 	lock_personas();
 	persona_lock(persona);
 	if (persona_valid(persona)) {
 		LIST_REMOVE(persona, pna_list);
-		if (hw_atomic_add(&g_total_personas, -1) == UINT_MAX)
+		if (hw_atomic_add(&g_total_personas, -1) == UINT_MAX) {
 			panic("persona count underflow!\n");
+		}
 		persona_mkinvalid(persona);
 	}
 	persona_unlock(persona);
@@ -431,14 +451,17 @@ void persona_put(struct persona *persona)
 	zfree(persona_zone, persona);
 }
 
-uid_t persona_get_id(struct persona *persona)
+uid_t
+persona_get_id(struct persona *persona)
 {
-	if (persona)
+	if (persona) {
 		return persona->pna_id;
+	}
 	return PERSONA_ID_NONE;
 }
 
-struct persona *persona_lookup(uid_t id)
+struct persona *
+persona_lookup(uid_t id)
 {
 	struct persona *persona, *tmp;
 
@@ -463,7 +486,8 @@ struct persona *persona_lookup(uid_t id)
 	return persona;
 }
 
-struct persona *persona_lookup_and_invalidate(uid_t id)
+struct persona *
+persona_lookup_and_invalidate(uid_t id)
 {
 	struct persona *persona, *entry, *tmp;
 
@@ -477,8 +501,9 @@ struct persona *persona_lookup_and_invalidate(uid_t id)
 				persona = persona_get_locked(entry);
 				assert(persona != NULL);
 				LIST_REMOVE(persona, pna_list);
-				if (hw_atomic_add(&g_total_personas, -1) == UINT_MAX)
+				if (hw_atomic_add(&g_total_personas, -1) == UINT_MAX) {
 					panic("persona ref count underflow!\n");
+				}
 				persona_mkinvalid(persona);
 			}
 			persona_unlock(entry);
@@ -491,59 +516,70 @@ struct persona *persona_lookup_and_invalidate(uid_t id)
 	return persona;
 }
 
-int persona_find(const char *login, uid_t uid,
-		 struct persona **persona, size_t *plen)
+int
+persona_find(const char *login, uid_t uid,
+    struct persona **persona, size_t *plen)
 {
 	struct persona *tmp;
 	int match = 0;
 	size_t found = 0;
 
-	if (login)
+	if (login) {
 		match++;
-	if (uid != PERSONA_ID_NONE)
+	}
+	if (uid != PERSONA_ID_NONE) {
 		match++;
+	}
 
-	if (match == 0)
+	if (match == 0) {
 		return EINVAL;
+	}
 
 	persona_dbg("Searching with %d parameters (l:\"%s\", u:%d)",
-		    match, login, uid);
+	    match, login, uid);
 
 	lock_personas();
 	LIST_FOREACH(tmp, &all_personas, pna_list) {
 		int m = 0;
 		persona_lock(tmp);
-		if (login && strncmp(tmp->pna_login, login, sizeof(tmp->pna_login)) == 0)
+		if (login && strncmp(tmp->pna_login, login, sizeof(tmp->pna_login)) == 0) {
 			m++;
-		if (uid != PERSONA_ID_NONE && uid == tmp->pna_id)
+		}
+		if (uid != PERSONA_ID_NONE && uid == tmp->pna_id) {
 			m++;
+		}
 		if (m == match) {
-			if (persona && *plen > found)
+			if (persona && *plen > found) {
 				persona[found] = persona_get_locked(tmp);
+			}
 			found++;
 		}
 #ifdef PERSONA_DEBUG
-		if (m > 0)
+		if (m > 0) {
 			persona_dbg("ID:%d Matched %d/%d, found:%d, *plen:%d",
-				    tmp->pna_id, m, match, (int)found, (int)*plen);
+			    tmp->pna_id, m, match, (int)found, (int)*plen);
+		}
 #endif
 		persona_unlock(tmp);
 	}
 	unlock_personas();
 
 	*plen = found;
-	if (!found)
+	if (!found) {
 		return ESRCH;
+	}
 	return 0;
 }
 
-struct persona *persona_proc_get(pid_t pid)
+struct persona *
+persona_proc_get(pid_t pid)
 {
 	struct persona *persona;
 	proc_t p = proc_find(pid);
 
-	if (!p)
+	if (!p) {
 		return NULL;
+	}
 
 	proc_lock(p);
 	persona = persona_get(p->p_persona);
@@ -554,7 +590,8 @@ struct persona *persona_proc_get(pid_t pid)
 	return persona;
 }
 
-struct persona *current_persona_get(void)
+struct persona *
+current_persona_get(void)
 {
 	proc_t p = current_proc();
 	struct persona *persona;
@@ -569,29 +606,33 @@ struct persona *current_persona_get(void)
 /**
  * inherit a persona from parent to child
  */
-int persona_proc_inherit(proc_t child, proc_t parent)
+int
+persona_proc_inherit(proc_t child, proc_t parent)
 {
 	if (child->p_persona != NULL) {
 		persona_dbg("proc_inherit: child already in persona: %s",
-			    persona_desc(child->p_persona, 0));
+		    persona_desc(child->p_persona, 0));
 		return -1;
 	}
 
 	/* no persona to inherit */
-	if (parent->p_persona == NULL)
+	if (parent->p_persona == NULL) {
 		return 0;
+	}
 
 	return persona_proc_adopt(child, parent->p_persona, parent->p_ucred);
 }
 
-int persona_proc_adopt_id(proc_t p, uid_t id, kauth_cred_t auth_override)
+int
+persona_proc_adopt_id(proc_t p, uid_t id, kauth_cred_t auth_override)
 {
 	int ret;
 	struct persona *persona;
 
 	persona = persona_lookup(id);
-	if (!persona)
+	if (!persona) {
 		return ESRCH;
+	}
 
 	ret = persona_proc_adopt(p, persona, auth_override);
 
@@ -611,9 +652,10 @@ typedef enum e_persona_reset_op {
  * internal cleanup routine for proc_set_cred_internal
  *
  */
-static struct persona *proc_reset_persona_internal(proc_t p, persona_reset_op_t op,
-						   struct persona *old_persona,
-						   struct persona *new_persona)
+static struct persona *
+proc_reset_persona_internal(proc_t p, persona_reset_op_t op,
+    struct persona *old_persona,
+    struct persona *new_persona)
 {
 #if (DEVELOPMENT || DEBUG)
 	persona_lock_assert_held(new_persona);
@@ -622,7 +664,7 @@ static struct persona *proc_reset_persona_internal(proc_t p, persona_reset_op_t 
 	switch (op) {
 	case PROC_REMOVE_PERSONA:
 		old_persona = p->p_persona;
-		/* fall through */
+	/* fall through */
 	case PROC_RESET_OLD_PERSONA:
 		break;
 	default:
@@ -661,8 +703,9 @@ static struct persona *proc_reset_persona_internal(proc_t p, persona_reset_op_t 
  * previous persona the process had adopted. The caller is
  * responsible to release the reference.
  */
-static struct persona *proc_set_cred_internal(proc_t p, struct persona *persona,
-					      kauth_cred_t auth_override, int *rlim_error)
+static struct persona *
+proc_set_cred_internal(proc_t p, struct persona *persona,
+    kauth_cred_t auth_override, int *rlim_error)
 {
 	struct persona *old_persona = NULL;
 	kauth_cred_t my_cred, my_new_cred;
@@ -674,12 +717,13 @@ static struct persona *proc_set_cred_internal(proc_t p, struct persona *persona,
 	 * by the thread which took the trans lock!
 	 */
 	assert(((p->p_lflag & P_LINTRANSIT) == P_LINTRANSIT) &&
-	       p->p_transholder == current_thread());
+	    p->p_transholder == current_thread());
 	assert(persona != NULL);
 
 	/* no work to do if we "re-adopt" the same persona */
-	if (p->p_persona == persona)
+	if (p->p_persona == persona) {
 		return NULL;
+	}
 
 	/*
 	 * If p is in a persona, then we need to remove 'p' from the list of
@@ -688,16 +732,18 @@ static struct persona *proc_set_cred_internal(proc_t p, struct persona *persona,
 	 */
 	if (p->p_persona) {
 		old_persona = proc_reset_persona_internal(p, PROC_REMOVE_PERSONA,
-							  NULL, persona);
+		    NULL, persona);
 	}
 
-	if (auth_override)
+	if (auth_override) {
 		my_new_cred = auth_override;
-	else
+	} else {
 		my_new_cred = persona->pna_cred;
+	}
 
-	if (!my_new_cred)
+	if (!my_new_cred) {
 		panic("NULL credentials (persona:%p)", persona);
+	}
 
 	*rlim_error = 0;
 
@@ -713,10 +759,10 @@ static struct persona *proc_set_cred_internal(proc_t p, struct persona *persona,
 	if (new_uid != 0 &&
 	    (rlim_t)chgproccnt(new_uid, 0) > p->p_rlimit[RLIMIT_NPROC].rlim_cur) {
 		pna_err("PID:%d hit proc rlimit in new persona(%d): %s",
-			p->p_pid, new_uid, persona_desc(persona, 1));
+		    p->p_pid, new_uid, persona_desc(persona, 1));
 		*rlim_error = EACCES;
 		(void)proc_reset_persona_internal(p, PROC_RESET_OLD_PERSONA,
-						  old_persona, persona);
+		    old_persona, persona);
 		kauth_cred_unref(&my_new_cred);
 		return NULL;
 	}
@@ -727,9 +773,9 @@ static struct persona *proc_set_cred_internal(proc_t p, struct persona *persona,
 set_proc_cred:
 	my_cred = kauth_cred_proc_ref(p);
 	persona_dbg("proc_adopt PID:%d, %s -> %s",
-		    p->p_pid,
-		    persona_desc(old_persona, 1),
-		    persona_desc(persona, 1));
+	    p->p_pid,
+	    persona_desc(old_persona, 1),
+	    persona_desc(persona, 1));
 
 	old_uid = kauth_cred_getruid(my_cred);
 
@@ -770,13 +816,14 @@ set_proc_cred:
 	 * Update the proc count.
 	 * If the UIDs are the same, then there is no work to do.
 	 */
-	if (old_persona)
+	if (old_persona) {
 		old_uid = old_persona->pna_id;
+	}
 
 	if (new_uid != old_uid) {
 		count = chgproccnt(old_uid, -1);
 		persona_dbg("Decrement %s:%d proc_count to: %d",
-			    old_persona ? "Persona" : "UID", old_uid, count);
+		    old_persona ? "Persona" : "UID", old_uid, count);
 
 		/*
 		 * Increment the proc count on the UID associated with
@@ -785,7 +832,7 @@ set_proc_cred:
 		 */
 		count = chgproccnt(new_uid, 1);
 		persona_dbg("Increment Persona:%d (UID:%d) proc_count to: %d",
-			    new_uid, kauth_cred_getuid(my_new_cred), count);
+		    new_uid, kauth_cred_getuid(my_new_cred), count);
 	}
 
 	OSBitOrAtomic(P_ADOPTPERSONA, &p->p_flag);
@@ -800,17 +847,19 @@ set_proc_cred:
 	return old_persona;
 }
 
-int persona_proc_adopt(proc_t p, struct persona *persona, kauth_cred_t auth_override)
+int
+persona_proc_adopt(proc_t p, struct persona *persona, kauth_cred_t auth_override)
 {
 	int error;
 	struct persona *old_persona;
 	struct session * sessp;
 
-	if (!persona)
+	if (!persona) {
 		return EINVAL;
+	}
 
 	persona_dbg("%d adopting Persona %d (%s)", proc_pid(p),
-		    persona->pna_id, persona_desc(persona, 0));
+	    persona->pna_id, persona_desc(persona, 0));
 
 	persona_lock(persona);
 	if (!persona->pna_cred || !persona_valid(persona)) {
@@ -832,8 +881,8 @@ int persona_proc_adopt(proc_t p, struct persona *persona, kauth_cred_t auth_over
 	if (persona->pna_pgid) {
 		uid_t uid = kauth_cred_getuid(persona->pna_cred);
 		persona_dbg(" PID:%d, pgid:%d%s",
-			    p->p_pid, persona->pna_pgid,
-			    persona->pna_pgid == uid ? ", new_session" : ".");
+		    p->p_pid, persona->pna_pgid,
+		    persona->pna_pgid == uid ? ", new_session" : ".");
 		enterpgrp(p, persona->pna_pgid, persona->pna_pgid == uid);
 	}
 
@@ -853,14 +902,16 @@ int persona_proc_adopt(proc_t p, struct persona *persona, kauth_cred_t auth_over
 	/*
 	 * Drop the reference to the old persona.
 	 */
-	if (old_persona)
+	if (old_persona) {
 		persona_put(old_persona);
+	}
 
 	persona_dbg("%s", error == 0 ? "SUCCESS" : "FAILED");
 	return error;
 }
 
-int persona_proc_drop(proc_t p)
+int
+persona_proc_drop(proc_t p)
 {
 	struct persona *persona = NULL;
 
@@ -911,12 +962,14 @@ try_again:
 	return 0;
 }
 
-int persona_get_type(struct persona *persona)
+int
+persona_get_type(struct persona *persona)
 {
 	int type;
 
-	if (!persona)
+	if (!persona) {
 		return PERSONA_INVALID;
+	}
 
 	persona_lock(persona);
 	if (!persona_valid(persona)) {
@@ -929,12 +982,14 @@ int persona_get_type(struct persona *persona)
 	return type;
 }
 
-int persona_set_cred(struct persona *persona, kauth_cred_t cred)
+int
+persona_set_cred(struct persona *persona, kauth_cred_t cred)
 {
 	int ret = 0;
 	kauth_cred_t my_cred;
-	if (!persona || !cred)
+	if (!persona || !cred) {
 		return EINVAL;
+	}
 
 	persona_lock(persona);
 	if (!persona_initialized(persona)) {
@@ -951,14 +1006,15 @@ int persona_set_cred(struct persona *persona, kauth_cred_t cred)
 
 	/* ensure that the UID matches the persona ID */
 	my_cred = kauth_cred_setresuid(my_cred, persona->pna_id,
-				       persona->pna_id, persona->pna_id,
-				       KAUTH_UID_NONE);
+	    persona->pna_id, persona->pna_id,
+	    KAUTH_UID_NONE);
 
 	/* TODO: clear the saved GID?! */
 
 	/* replace the persona's cred with the new one */
-	if (persona->pna_cred)
+	if (persona->pna_cred) {
 		kauth_cred_unref(&persona->pna_cred);
+	}
 	persona->pna_cred = my_cred;
 
 out_unlock:
@@ -966,12 +1022,14 @@ out_unlock:
 	return ret;
 }
 
-int persona_set_cred_from_proc(struct persona *persona, proc_t proc)
+int
+persona_set_cred_from_proc(struct persona *persona, proc_t proc)
 {
 	int ret = 0;
 	kauth_cred_t parent_cred, my_cred;
-	if (!persona || !proc)
+	if (!persona || !proc) {
 		return EINVAL;
+	}
 
 	persona_lock(persona);
 	if (!persona_initialized(persona)) {
@@ -992,12 +1050,13 @@ int persona_set_cred_from_proc(struct persona *persona, proc_t proc)
 
 	/* ensure that the UID matches the persona ID */
 	my_cred = kauth_cred_setresuid(my_cred, persona->pna_id,
-				       persona->pna_id, persona->pna_id,
-				       KAUTH_UID_NONE);
+	    persona->pna_id, persona->pna_id,
+	    KAUTH_UID_NONE);
 
 	/* replace the persona's cred with the new one */
-	if (persona->pna_cred)
+	if (persona->pna_cred) {
 		kauth_cred_unref(&persona->pna_cred);
+	}
 	persona->pna_cred = my_cred;
 
 	kauth_cred_unref(&parent_cred);
@@ -1007,16 +1066,19 @@ out_unlock:
 	return ret;
 }
 
-kauth_cred_t persona_get_cred(struct persona *persona)
+kauth_cred_t
+persona_get_cred(struct persona *persona)
 {
 	kauth_cred_t cred = NULL;
 
-	if (!persona)
+	if (!persona) {
 		return NULL;
+	}
 
 	persona_lock(persona);
-	if (!persona_valid(persona))
+	if (!persona_valid(persona)) {
 		goto out_unlock;
+	}
 
 	if (persona->pna_cred) {
 		kauth_cred_ref(persona->pna_cred);
@@ -1029,12 +1091,14 @@ out_unlock:
 	return cred;
 }
 
-uid_t persona_get_uid(struct persona *persona)
+uid_t
+persona_get_uid(struct persona *persona)
 {
 	uid_t uid = UID_MAX;
 
-	if (!persona || !persona->pna_cred)
+	if (!persona || !persona->pna_cred) {
 		return UID_MAX;
+	}
 
 	persona_lock(persona);
 	if (persona_valid(persona)) {
@@ -1046,13 +1110,15 @@ uid_t persona_get_uid(struct persona *persona)
 	return uid;
 }
 
-int persona_set_gid(struct persona *persona, gid_t gid)
+int
+persona_set_gid(struct persona *persona, gid_t gid)
 {
 	int ret = 0;
 	kauth_cred_t my_cred, new_cred;
 
-	if (!persona || !persona->pna_cred)
+	if (!persona || !persona->pna_cred) {
 		return EINVAL;
+	}
 
 	persona_lock(persona);
 	if (!persona_initialized(persona)) {
@@ -1067,8 +1133,9 @@ int persona_set_gid(struct persona *persona, gid_t gid)
 	my_cred = persona->pna_cred;
 	kauth_cred_ref(my_cred);
 	new_cred = kauth_cred_setresgid(my_cred, gid, gid, gid);
-	if (new_cred != my_cred)
+	if (new_cred != my_cred) {
 		persona->pna_cred = new_cred;
+	}
 	kauth_cred_unref(&my_cred);
 
 out_unlock:
@@ -1076,30 +1143,36 @@ out_unlock:
 	return ret;
 }
 
-gid_t persona_get_gid(struct persona *persona)
+gid_t
+persona_get_gid(struct persona *persona)
 {
 	gid_t gid = GID_MAX;
 
-	if (!persona || !persona->pna_cred)
+	if (!persona || !persona->pna_cred) {
 		return GID_MAX;
+	}
 
 	persona_lock(persona);
-	if (persona_valid(persona))
+	if (persona_valid(persona)) {
 		gid = kauth_cred_getgid(persona->pna_cred);
+	}
 	persona_unlock(persona);
 
 	return gid;
 }
 
-int persona_set_groups(struct persona *persona, gid_t *groups, unsigned ngroups, uid_t gmuid)
+int
+persona_set_groups(struct persona *persona, gid_t *groups, unsigned ngroups, uid_t gmuid)
 {
 	int ret = 0;
 	kauth_cred_t my_cred, new_cred;
 
-	if (!persona || !persona->pna_cred)
+	if (!persona || !persona->pna_cred) {
 		return EINVAL;
-	if (ngroups > NGROUPS_MAX)
+	}
+	if (ngroups > NGROUPS_MAX) {
 		return EINVAL;
+	}
 
 	persona_lock(persona);
 	if (!persona_initialized(persona)) {
@@ -1114,8 +1187,9 @@ int persona_set_groups(struct persona *persona, gid_t *groups, unsigned ngroups,
 	my_cred = persona->pna_cred;
 	kauth_cred_ref(my_cred);
 	new_cred = kauth_cred_setgroups(my_cred, groups, (int)ngroups, gmuid);
-	if (new_cred != my_cred)
+	if (new_cred != my_cred) {
 		persona->pna_cred = new_cred;
+	}
 	kauth_cred_unref(&my_cred);
 
 out_unlock:
@@ -1123,11 +1197,13 @@ out_unlock:
 	return ret;
 }
 
-int persona_get_groups(struct persona *persona, unsigned *ngroups, gid_t *groups, unsigned groups_sz)
+int
+persona_get_groups(struct persona *persona, unsigned *ngroups, gid_t *groups, unsigned groups_sz)
 {
 	int ret = EINVAL;
-	if (!persona || !persona->pna_cred || !groups || !ngroups || groups_sz > NGROUPS)
+	if (!persona || !persona->pna_cred || !groups || !ngroups || groups_sz > NGROUPS) {
 		return EINVAL;
+	}
 
 	*ngroups = groups_sz;
 
@@ -1143,16 +1219,19 @@ int persona_get_groups(struct persona *persona, unsigned *ngroups, gid_t *groups
 	return ret;
 }
 
-uid_t persona_get_gmuid(struct persona *persona)
+uid_t
+persona_get_gmuid(struct persona *persona)
 {
 	uid_t gmuid = KAUTH_UID_NONE;
 
-	if (!persona || !persona->pna_cred)
+	if (!persona || !persona->pna_cred) {
 		return gmuid;
+	}
 
 	persona_lock(persona);
-	if (!persona_valid(persona))
+	if (!persona_valid(persona)) {
 		goto out_unlock;
+	}
 
 	posix_cred_t pcred = posix_cred_get(persona->pna_cred);
 	gmuid = pcred->cr_gmuid;
@@ -1162,15 +1241,18 @@ out_unlock:
 	return gmuid;
 }
 
-int persona_get_login(struct persona *persona, char login[MAXLOGNAME+1])
+int
+persona_get_login(struct persona *persona, char login[MAXLOGNAME + 1])
 {
 	int ret = EINVAL;
-	if (!persona || !persona->pna_cred)
+	if (!persona || !persona->pna_cred) {
 		return EINVAL;
+	}
 
 	persona_lock(persona);
-	if (!persona_valid(persona))
+	if (!persona_valid(persona)) {
 		goto out_unlock;
+	}
 
 	strlcpy(login, persona->pna_login, MAXLOGNAME);
 	ret = 0;
@@ -1188,45 +1270,53 @@ out_unlock:
  * symbol exports for kext compatibility
  */
 
-uid_t persona_get_id(__unused struct persona *persona)
+uid_t
+persona_get_id(__unused struct persona *persona)
 {
 	return PERSONA_ID_NONE;
 }
 
-int persona_get_type(__unused struct persona *persona)
+int
+persona_get_type(__unused struct persona *persona)
 {
 	return PERSONA_INVALID;
 }
 
-kauth_cred_t persona_get_cred(__unused struct persona *persona)
+kauth_cred_t
+persona_get_cred(__unused struct persona *persona)
 {
 	return NULL;
 }
 
-struct persona *persona_lookup(__unused uid_t id)
+struct persona *
+persona_lookup(__unused uid_t id)
 {
 	return NULL;
 }
 
-int persona_find(__unused const char *login,
-		 __unused uid_t uid,
-		 __unused struct persona **persona,
-		 __unused size_t *plen)
+int
+persona_find(__unused const char *login,
+    __unused uid_t uid,
+    __unused struct persona **persona,
+    __unused size_t *plen)
 {
 	return ENOTSUP;
 }
 
-struct persona *current_persona_get(void)
+struct persona *
+current_persona_get(void)
 {
 	return NULL;
 }
 
-struct persona *persona_get(struct persona *persona)
+struct persona *
+persona_get(struct persona *persona)
 {
 	return persona;
 }
 
-void persona_put(__unused struct persona *persona)
+void
+persona_put(__unused struct persona *persona)
 {
 	return;
 }

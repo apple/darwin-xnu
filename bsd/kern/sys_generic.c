@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -140,6 +140,8 @@
 #include <kern/waitq.h>
 #include <kern/kalloc.h>
 #include <sys/vnode_internal.h>
+/* for remote time api*/
+#include <kern/remote_time.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -155,14 +157,14 @@ extern kern_return_t IOBSDGetPlatformUUID(__darwin_uuid_t uuid, mach_timespec_t 
 int rd_uio(struct proc *p, int fdes, uio_t uio, user_ssize_t *retval);
 int wr_uio(struct proc *p, struct fileproc *fp, uio_t uio, user_ssize_t *retval);
 
-__private_extern__ int	dofileread(vfs_context_t ctx, struct fileproc *fp,
-								   user_addr_t bufp, user_size_t nbyte, 
-								   off_t offset, int flags, user_ssize_t *retval);
-__private_extern__ int	dofilewrite(vfs_context_t ctx, struct fileproc *fp,
-									user_addr_t bufp, user_size_t nbyte, 
-									off_t offset, int flags, user_ssize_t *retval);
-__private_extern__ int	preparefileread(struct proc *p, struct fileproc **fp_ret, int fd, int check_for_vnode);
-__private_extern__ void	donefileread(struct proc *p, struct fileproc *fp_ret, int fd);
+__private_extern__ int  dofileread(vfs_context_t ctx, struct fileproc *fp,
+    user_addr_t bufp, user_size_t nbyte,
+    off_t offset, int flags, user_ssize_t *retval);
+__private_extern__ int  dofilewrite(vfs_context_t ctx, struct fileproc *fp,
+    user_addr_t bufp, user_size_t nbyte,
+    off_t offset, int flags, user_ssize_t *retval);
+__private_extern__ int  preparefileread(struct proc *p, struct fileproc **fp_ret, int fd, int check_for_vnode);
+__private_extern__ void donefileread(struct proc *p, struct fileproc *fp_ret, int fd);
 
 /* Conflict wait queue for when selects collide (opaque type) */
 struct waitq select_conflict_queue;
@@ -199,7 +201,7 @@ int
 read(struct proc *p, struct read_args *uap, user_ssize_t *retval)
 {
 	__pthread_testcancel(1);
-	return(read_nocancel(p, (struct read_nocancel_args *)uap, retval));
+	return read_nocancel(p, (struct read_nocancel_args *)uap, retval);
 }
 
 int
@@ -210,21 +212,22 @@ read_nocancel(struct proc *p, struct read_nocancel_args *uap, user_ssize_t *retv
 	int fd = uap->fd;
 	struct vfs_context context;
 
-	if ( (error = preparefileread(p, &fp, fd, 0)) )
-	        return (error);
+	if ((error = preparefileread(p, &fp, fd, 0))) {
+		return error;
+	}
 
 	context = *(vfs_context_current());
 	context.vc_ucred = fp->f_fglob->fg_cred;
 
 	error = dofileread(&context, fp, uap->cbuf, uap->nbyte,
-			   (off_t)-1, 0, retval);
+	    (off_t)-1, 0, retval);
 
 	donefileread(p, fp, fd);
 
-	return (error);
+	return error;
 }
 
-/* 
+/*
  * Pread system call
  *
  * Returns:	0			Success
@@ -238,33 +241,34 @@ int
 pread(struct proc *p, struct pread_args *uap, user_ssize_t *retval)
 {
 	__pthread_testcancel(1);
-	return(pread_nocancel(p, (struct pread_nocancel_args *)uap, retval));
+	return pread_nocancel(p, (struct pread_nocancel_args *)uap, retval);
 }
 
 int
 pread_nocancel(struct proc *p, struct pread_nocancel_args *uap, user_ssize_t *retval)
 {
-	struct fileproc *fp = NULL;	/* fp set by preparefileread() */
+	struct fileproc *fp = NULL;     /* fp set by preparefileread() */
 	int fd = uap->fd;
 	int error;
 	struct vfs_context context;
 
-	if ( (error = preparefileread(p, &fp, fd, 1)) )
+	if ((error = preparefileread(p, &fp, fd, 1))) {
 		goto out;
+	}
 
 	context = *(vfs_context_current());
 	context.vc_ucred = fp->f_fglob->fg_cred;
 
 	error = dofileread(&context, fp, uap->buf, uap->nbyte,
-			uap->offset, FOF_OFFSET, retval);
-	
+	    uap->offset, FOF_OFFSET, retval);
+
 	donefileread(p, fp, fd);
 
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_pread) | DBG_FUNC_NONE),
-	      uap->fd, uap->nbyte, (unsigned int)((uap->offset >> 32)), (unsigned int)(uap->offset), 0);
+	    uap->fd, uap->nbyte, (unsigned int)((uap->offset >> 32)), (unsigned int)(uap->offset), 0);
 
 out:
-	return (error);
+	return error;
 }
 
 /*
@@ -276,7 +280,7 @@ donefileread(struct proc *p, struct fileproc *fp, int fd)
 {
 	proc_fdlock_spin(p);
 	fp_drop(p, fd, fp, 1);
-        proc_fdunlock(p);
+	proc_fdunlock(p);
 }
 
 /*
@@ -291,7 +295,7 @@ int
 preparefileread(struct proc *p, struct fileproc **fp_ret, int fd, int check_for_pread)
 {
 	vnode_t vp;
-	int 	error;
+	int     error;
 	struct fileproc *fp;
 
 	AUDIT_ARG(fd, fd);
@@ -301,15 +305,15 @@ preparefileread(struct proc *p, struct fileproc **fp_ret, int fd, int check_for_
 	error = fp_lookup(p, fd, &fp, 1);
 
 	if (error) {
-	        proc_fdunlock(p);
-		return (error);
+		proc_fdunlock(p);
+		return error;
 	}
 	if ((fp->f_flag & FREAD) == 0) {
-	        error = EBADF;
+		error = EBADF;
 		goto out;
 	}
 	if (check_for_pread && (fp->f_type != DTYPE_VNODE)) {
-	        error = ESPIPE;
+		error = ESPIPE;
 		goto out;
 	}
 	if (fp->f_type == DTYPE_VNODE) {
@@ -318,7 +322,7 @@ preparefileread(struct proc *p, struct fileproc **fp_ret, int fd, int check_for_
 		if (check_for_pread && (vnode_isfifo(vp))) {
 			error = ESPIPE;
 			goto out;
-		} 
+		}
 		if (check_for_pread && (vp->v_flag & VISTTY)) {
 			error = ENXIO;
 			goto out;
@@ -327,13 +331,13 @@ preparefileread(struct proc *p, struct fileproc **fp_ret, int fd, int check_for_
 
 	*fp_ret = fp;
 
-        proc_fdunlock(p);
-	return (0);
+	proc_fdunlock(p);
+	return 0;
 
 out:
 	fp_drop(p, fd, fp, 1);
 	proc_fdunlock(p);
-	return (error);
+	return error;
 }
 
 
@@ -344,23 +348,24 @@ out:
  */
 __private_extern__ int
 dofileread(vfs_context_t ctx, struct fileproc *fp,
-	   user_addr_t bufp, user_size_t nbyte, off_t offset, int flags,
-	   user_ssize_t *retval)
+    user_addr_t bufp, user_size_t nbyte, off_t offset, int flags,
+    user_ssize_t *retval)
 {
 	uio_t auio;
 	user_ssize_t bytecnt;
 	long error = 0;
-	char uio_buf[ UIO_SIZEOF(1) ];
+	char uio_buf[UIO_SIZEOF(1)];
 
-	if (nbyte > INT_MAX)
-		return (EINVAL);
+	if (nbyte > INT_MAX) {
+		return EINVAL;
+	}
 
 	if (IS_64BIT_PROCESS(vfs_context_proc(ctx))) {
-		auio = uio_createwithbuffer(1, offset, UIO_USERSPACE64, UIO_READ, 
-									  &uio_buf[0], sizeof(uio_buf));
+		auio = uio_createwithbuffer(1, offset, UIO_USERSPACE64, UIO_READ,
+		    &uio_buf[0], sizeof(uio_buf));
 	} else {
-		auio = uio_createwithbuffer(1, offset, UIO_USERSPACE32, UIO_READ, 
-									  &uio_buf[0], sizeof(uio_buf));
+		auio = uio_createwithbuffer(1, offset, UIO_USERSPACE32, UIO_READ,
+		    &uio_buf[0], sizeof(uio_buf));
 	}
 	uio_addiov(auio, bufp, nbyte);
 
@@ -368,17 +373,18 @@ dofileread(vfs_context_t ctx, struct fileproc *fp,
 
 	if ((error = fo_read(fp, auio, flags, ctx))) {
 		if (uio_resid(auio) != bytecnt && (error == ERESTART ||
-			error == EINTR || error == EWOULDBLOCK))
+		    error == EINTR || error == EWOULDBLOCK)) {
 			error = 0;
+		}
 	}
 	bytecnt -= uio_resid(auio);
 
 	*retval = bytecnt;
 
-	return (error);
+	return error;
 }
 
-/*      
+/*
  * Scatter read system call.
  *
  * Returns:	0			Success
@@ -391,7 +397,7 @@ int
 readv(struct proc *p, struct readv_args *uap, user_ssize_t *retval)
 {
 	__pthread_testcancel(1);
-	return(readv_nocancel(p, (struct readv_nocancel_args *)uap, retval));
+	return readv_nocancel(p, (struct readv_nocancel_args *)uap, retval);
 }
 
 int
@@ -402,14 +408,15 @@ readv_nocancel(struct proc *p, struct readv_nocancel_args *uap, user_ssize_t *re
 	struct user_iovec *iovp;
 
 	/* Verify range bedfore calling uio_create() */
-	if (uap->iovcnt <= 0 || uap->iovcnt > UIO_MAXIOV)
-		return (EINVAL);
+	if (uap->iovcnt <= 0 || uap->iovcnt > UIO_MAXIOV) {
+		return EINVAL;
+	}
 
 	/* allocate a uio large enough to hold the number of iovecs passed */
 	auio = uio_create(uap->iovcnt, 0,
-				  (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
-				  UIO_READ);
-				  
+	    (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
+	    UIO_READ);
+
 	/* get location of iovecs within the uio.  then copyin the iovecs from
 	 * user space.
 	 */
@@ -419,13 +426,13 @@ readv_nocancel(struct proc *p, struct readv_nocancel_args *uap, user_ssize_t *re
 		goto ExitThisRoutine;
 	}
 	error = copyin_user_iovec_array(uap->iovp,
-		IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32,
-		uap->iovcnt, iovp);
+	    IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32,
+	    uap->iovcnt, iovp);
 	if (error) {
 		goto ExitThisRoutine;
 	}
-	
-	/* finalize uio_t for use and do the IO 
+
+	/* finalize uio_t for use and do the IO
 	 */
 	error = uio_calculateresid(auio);
 	if (error) {
@@ -437,7 +444,7 @@ ExitThisRoutine:
 	if (auio != NULL) {
 		uio_free(auio);
 	}
-	return (error);
+	return error;
 }
 
 /*
@@ -452,23 +459,23 @@ int
 write(struct proc *p, struct write_args *uap, user_ssize_t *retval)
 {
 	__pthread_testcancel(1);
-	return(write_nocancel(p, (struct write_nocancel_args *)uap, retval));
-
+	return write_nocancel(p, (struct write_nocancel_args *)uap, retval);
 }
 
 int
 write_nocancel(struct proc *p, struct write_nocancel_args *uap, user_ssize_t *retval)
 {
 	struct fileproc *fp;
-	int error;      
+	int error;
 	int fd = uap->fd;
 	bool wrote_some = false;
 
 	AUDIT_ARG(fd, fd);
 
-	error = fp_lookup(p,fd,&fp,0);
-	if (error)
-		return(error);
+	error = fp_lookup(p, fd, &fp, 0);
+	if (error) {
+		return error;
+	}
 	if ((fp->f_flag & FWRITE) == 0) {
 		error = EBADF;
 	} else if (FP_ISGUARDED(fp, GUARD_WRITE)) {
@@ -480,18 +487,19 @@ write_nocancel(struct proc *p, struct write_nocancel_args *uap, user_ssize_t *re
 		context.vc_ucred = fp->f_fglob->fg_cred;
 
 		error = dofilewrite(&context, fp, uap->cbuf, uap->nbyte,
-			(off_t)-1, 0, retval);
+		    (off_t)-1, 0, retval);
 
 		wrote_some = *retval > 0;
 	}
-	if (wrote_some)
-	        fp_drop_written(p, fd, fp);
-	else
-	        fp_drop(p, fd, fp, 0);
-	return(error);  
+	if (wrote_some) {
+		fp_drop_written(p, fd, fp);
+	} else {
+		fp_drop(p, fd, fp, 0);
+	}
+	return error;
 }
 
-/*                          
+/*
  * pwrite system call
  *
  * Returns:	0			Success
@@ -506,23 +514,24 @@ int
 pwrite(struct proc *p, struct pwrite_args *uap, user_ssize_t *retval)
 {
 	__pthread_testcancel(1);
-	return(pwrite_nocancel(p, (struct pwrite_nocancel_args *)uap, retval));
+	return pwrite_nocancel(p, (struct pwrite_nocancel_args *)uap, retval);
 }
 
 int
 pwrite_nocancel(struct proc *p, struct pwrite_nocancel_args *uap, user_ssize_t *retval)
 {
-        struct fileproc *fp;
-        int error; 
+	struct fileproc *fp;
+	int error;
 	int fd = uap->fd;
 	vnode_t vp  = (vnode_t)0;
 	bool wrote_some = false;
 
 	AUDIT_ARG(fd, fd);
 
-	error = fp_lookup(p,fd,&fp,0);
-	if (error)
-		return(error);
+	error = fp_lookup(p, fd, &fp, 0);
+	if (error) {
+		return error;
+	}
 
 	if ((fp->f_flag & FWRITE) == 0) {
 		error = EBADF;
@@ -542,7 +551,7 @@ pwrite_nocancel(struct proc *p, struct pwrite_nocancel_args *uap, user_ssize_t *
 		if (vnode_isfifo(vp)) {
 			error = ESPIPE;
 			goto errout;
-		} 
+		}
 		if ((vp->v_flag & VISTTY)) {
 			error = ENXIO;
 			goto errout;
@@ -552,20 +561,21 @@ pwrite_nocancel(struct proc *p, struct pwrite_nocancel_args *uap, user_ssize_t *
 			goto errout;
 		}
 
-		    error = dofilewrite(&context, fp, uap->buf, uap->nbyte,
-			uap->offset, FOF_OFFSET, retval);
-			wrote_some = *retval > 0;
-        }
+		error = dofilewrite(&context, fp, uap->buf, uap->nbyte,
+		    uap->offset, FOF_OFFSET, retval);
+		wrote_some = *retval > 0;
+	}
 errout:
-	if (wrote_some)
-	        fp_drop_written(p, fd, fp);
-	else
-	        fp_drop(p, fd, fp, 0);
+	if (wrote_some) {
+		fp_drop_written(p, fd, fp);
+	} else {
+		fp_drop(p, fd, fp, 0);
+	}
 
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_pwrite) | DBG_FUNC_NONE),
-	      uap->fd, uap->nbyte, (unsigned int)((uap->offset >> 32)), (unsigned int)(uap->offset), 0);
-	
-        return(error);
+	    uap->fd, uap->nbyte, (unsigned int)((uap->offset >> 32)), (unsigned int)(uap->offset), 0);
+
+	return error;
 }
 
 /*
@@ -574,35 +584,36 @@ errout:
  *	<fo_write>:EPIPE
  *	<fo_write>:???			[indirect through struct fileops]
  */
-__private_extern__ int                  
+__private_extern__ int
 dofilewrite(vfs_context_t ctx, struct fileproc *fp,
-	    user_addr_t bufp, user_size_t nbyte, off_t offset, int flags,
-	    user_ssize_t *retval)
-{       
+    user_addr_t bufp, user_size_t nbyte, off_t offset, int flags,
+    user_ssize_t *retval)
+{
 	uio_t auio;
 	long error = 0;
 	user_ssize_t bytecnt;
-	char uio_buf[ UIO_SIZEOF(1) ];
+	char uio_buf[UIO_SIZEOF(1)];
 
 	if (nbyte > INT_MAX) {
 		*retval = 0;
-		return (EINVAL);
+		return EINVAL;
 	}
 
 	if (IS_64BIT_PROCESS(vfs_context_proc(ctx))) {
-		auio = uio_createwithbuffer(1, offset, UIO_USERSPACE64, UIO_WRITE, 
-									  &uio_buf[0], sizeof(uio_buf));
+		auio = uio_createwithbuffer(1, offset, UIO_USERSPACE64, UIO_WRITE,
+		    &uio_buf[0], sizeof(uio_buf));
 	} else {
-		auio = uio_createwithbuffer(1, offset, UIO_USERSPACE32, UIO_WRITE, 
-									  &uio_buf[0], sizeof(uio_buf));
+		auio = uio_createwithbuffer(1, offset, UIO_USERSPACE32, UIO_WRITE,
+		    &uio_buf[0], sizeof(uio_buf));
 	}
 	uio_addiov(auio, bufp, nbyte);
 
-	bytecnt = nbyte; 
+	bytecnt = nbyte;
 	if ((error = fo_write(fp, auio, flags, ctx))) {
 		if (uio_resid(auio) != bytecnt && (error == ERESTART ||
-			error == EINTR || error == EWOULDBLOCK))
+		    error == EINTR || error == EWOULDBLOCK)) {
 			error = 0;
+		}
 		/* The socket layer handles SIGPIPE */
 		if (error == EPIPE && fp->f_type != DTYPE_SOCKET &&
 		    (fp->f_fglob->fg_lflags & FG_NOSIGPIPE) == 0) {
@@ -613,17 +624,17 @@ dofilewrite(vfs_context_t ctx, struct fileproc *fp,
 	bytecnt -= uio_resid(auio);
 	*retval = bytecnt;
 
-	return (error); 
+	return error;
 }
-        
-/*      
- * Gather write system call  
- */     
+
+/*
+ * Gather write system call
+ */
 int
 writev(struct proc *p, struct writev_args *uap, user_ssize_t *retval)
 {
 	__pthread_testcancel(1);
-	return(writev_nocancel(p, (struct writev_nocancel_args *)uap, retval));
+	return writev_nocancel(p, (struct writev_nocancel_args *)uap, retval);
 }
 
 int
@@ -638,14 +649,15 @@ writev_nocancel(struct proc *p, struct writev_nocancel_args *uap, user_ssize_t *
 	AUDIT_ARG(fd, uap->fd);
 
 	/* Verify range bedfore calling uio_create() */
-	if (uap->iovcnt <= 0 || uap->iovcnt > UIO_MAXIOV)
-		return (EINVAL);
+	if (uap->iovcnt <= 0 || uap->iovcnt > UIO_MAXIOV) {
+		return EINVAL;
+	}
 
 	/* allocate a uio large enough to hold the number of iovecs passed */
 	auio = uio_create(uap->iovcnt, 0,
-				  (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
-				  UIO_WRITE);
-				  
+	    (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
+	    UIO_WRITE);
+
 	/* get location of iovecs within the uio.  then copyin the iovecs from
 	 * user space.
 	 */
@@ -655,13 +667,13 @@ writev_nocancel(struct proc *p, struct writev_nocancel_args *uap, user_ssize_t *
 		goto ExitThisRoutine;
 	}
 	error = copyin_user_iovec_array(uap->iovp,
-		IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32,
-		uap->iovcnt, iovp);
+	    IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32,
+	    uap->iovcnt, iovp);
 	if (error) {
 		goto ExitThisRoutine;
 	}
-	
-	/* finalize uio_t for use and do the IO 
+
+	/* finalize uio_t for use and do the IO
 	 */
 	error = uio_calculateresid(auio);
 	if (error) {
@@ -669,9 +681,10 @@ writev_nocancel(struct proc *p, struct writev_nocancel_args *uap, user_ssize_t *
 	}
 
 	error = fp_lookup(p, uap->fd, &fp, 0);
-	if (error)
+	if (error) {
 		goto ExitThisRoutine;
-	
+	}
+
 	if ((fp->f_flag & FWRITE) == 0) {
 		error = EBADF;
 	} else if (FP_ISGUARDED(fp, GUARD_WRITE)) {
@@ -682,17 +695,18 @@ writev_nocancel(struct proc *p, struct writev_nocancel_args *uap, user_ssize_t *
 		error = wr_uio(p, fp, auio, retval);
 		wrote_some = *retval > 0;
 	}
-	
-	if (wrote_some)
-	        fp_drop_written(p, uap->fd, fp);
-	else
-	        fp_drop(p, uap->fd, fp, 0);
+
+	if (wrote_some) {
+		fp_drop_written(p, uap->fd, fp);
+	} else {
+		fp_drop(p, uap->fd, fp, 0);
+	}
 
 ExitThisRoutine:
 	if (auio != NULL) {
 		uio_free(auio);
 	}
-	return (error);
+	return error;
 }
 
 
@@ -709,16 +723,18 @@ wr_uio(struct proc *p, struct fileproc *fp, uio_t uio, user_ssize_t *retval)
 	error = fo_write(fp, uio, 0, &context);
 	if (error) {
 		if (uio_resid(uio) != count && (error == ERESTART ||
-						error == EINTR || error == EWOULDBLOCK))
-		        error = 0;
+		    error == EINTR || error == EWOULDBLOCK)) {
+			error = 0;
+		}
 		/* The socket layer handles SIGPIPE */
 		if (error == EPIPE && fp->f_type != DTYPE_SOCKET &&
-		    (fp->f_fglob->fg_lflags & FG_NOSIGPIPE) == 0)
-		        psignal(p, SIGPIPE);
+		    (fp->f_fglob->fg_lflags & FG_NOSIGPIPE) == 0) {
+			psignal(p, SIGPIPE);
+		}
 	}
 	*retval = count - uio_resid(uio);
 
-	return(error);
+	return error;
 }
 
 
@@ -730,8 +746,9 @@ rd_uio(struct proc *p, int fdes, uio_t uio, user_ssize_t *retval)
 	user_ssize_t count;
 	struct vfs_context context = *vfs_context_current();
 
-	if ( (error = preparefileread(p, &fp, fdes, 0)) )
-	        return (error);
+	if ((error = preparefileread(p, &fp, fdes, 0))) {
+		return error;
+	}
 
 	count = uio_resid(uio);
 
@@ -740,15 +757,16 @@ rd_uio(struct proc *p, int fdes, uio_t uio, user_ssize_t *retval)
 	error = fo_read(fp, uio, 0, &context);
 
 	if (error) {
-	        if (uio_resid(uio) != count && (error == ERESTART ||
-						error == EINTR || error == EWOULDBLOCK))
-		        error = 0;
+		if (uio_resid(uio) != count && (error == ERESTART ||
+		    error == EINTR || error == EWOULDBLOCK)) {
+			error = 0;
+		}
 	}
 	*retval = count - uio_resid(uio);
 
 	donefileread(p, fp, fdes);
 
-	return (error);
+	return error;
 }
 
 /*
@@ -773,7 +791,7 @@ ioctl(struct proc *p, struct ioctl_args *uap, __unused int32_t *retval)
 	caddr_t datap = NULL, memp = NULL;
 	boolean_t is64bit = FALSE;
 	int tmp = 0;
-#define STK_PARAMS	128
+#define STK_PARAMS      128
 	char stkbuf[STK_PARAMS] = {};
 	int fd = uap->fd;
 	u_long com = uap->com;
@@ -784,10 +802,11 @@ ioctl(struct proc *p, struct ioctl_args *uap, __unused int32_t *retval)
 
 	is64bit = proc_is64bit(p);
 #if CONFIG_AUDIT
-	if (is64bit)
+	if (is64bit) {
 		AUDIT_ARG(value64, com);
-	else
+	} else {
 		AUDIT_ARG(cmd, CAST_DOWN_EXPLICIT(int, com));
+	}
 #endif /* CONFIG_AUDIT */
 
 	/*
@@ -795,47 +814,49 @@ ioctl(struct proc *p, struct ioctl_args *uap, __unused int32_t *retval)
 	 * copied to/from the user's address space.
 	 */
 	size = IOCPARM_LEN(com);
-	if (size > IOCPARM_MAX)
-			return ENOTTY;
-	if (size > sizeof (stkbuf)) {
-		if ((memp = (caddr_t)kalloc(size)) == 0)
+	if (size > IOCPARM_MAX) {
+		return ENOTTY;
+	}
+	if (size > sizeof(stkbuf)) {
+		if ((memp = (caddr_t)kalloc(size)) == 0) {
 			return ENOMEM;
+		}
 		datap = memp;
-	} else
+	} else {
 		datap = &stkbuf[0];
+	}
 	if (com & IOC_IN) {
 		if (size) {
 			error = copyin(uap->data, datap, size);
-			if (error)
+			if (error) {
 				goto out_nofp;
+			}
 		} else {
 			/* XXX - IOC_IN and no size?  we should proably return an error here!! */
 			if (is64bit) {
 				*(user_addr_t *)datap = uap->data;
-			}
-			else {
+			} else {
 				*(uint32_t *)datap = (uint32_t)uap->data;
 			}
 		}
-	} else if ((com & IOC_OUT) && size)
+	} else if ((com & IOC_OUT) && size) {
 		/*
 		 * Zero the buffer so the user always
 		 * gets back something deterministic.
 		 */
 		bzero(datap, size);
-	else if (com & IOC_VOID) {
+	} else if (com & IOC_VOID) {
 		/* XXX - this is odd since IOC_VOID means no parameters */
 		if (is64bit) {
 			*(user_addr_t *)datap = uap->data;
-		}
-		else {
+		} else {
 			*(uint32_t *)datap = (uint32_t)uap->data;
 		}
 	}
 
 	proc_fdlock(p);
-	error = fp_lookup(p,fd,&fp,1);
-	if (error)  {
+	error = fp_lookup(p, fd, &fp, 1);
+	if (error) {
 		proc_fdunlock(p);
 		goto out_nofp;
 	}
@@ -843,16 +864,17 @@ ioctl(struct proc *p, struct ioctl_args *uap, __unused int32_t *retval)
 	AUDIT_ARG(file, p, fp);
 
 	if ((fp->f_flag & (FREAD | FWRITE)) == 0) {
-			error = EBADF;
-			goto out;
+		error = EBADF;
+		goto out;
 	}
 
 	context.vc_ucred = fp->f_fglob->fg_cred;
 
 #if CONFIG_MACF
 	error = mac_file_check_ioctl(context.vc_ucred, fp->f_fglob, com);
-	if (error)
+	if (error) {
 		goto out;
+	}
 #endif
 
 	switch (com) {
@@ -865,18 +887,20 @@ ioctl(struct proc *p, struct ioctl_args *uap, __unused int32_t *retval)
 		break;
 
 	case FIONBIO:
-		if ( (tmp = *(int *)datap) )
+		if ((tmp = *(int *)datap)) {
 			fp->f_flag |= FNONBLOCK;
-		else
+		} else {
 			fp->f_flag &= ~FNONBLOCK;
+		}
 		error = fo_ioctl(fp, FIONBIO, (caddr_t)&tmp, &context);
 		break;
 
 	case FIOASYNC:
-		if ( (tmp = *(int *)datap) )
+		if ((tmp = *(int *)datap)) {
 			fp->f_flag |= FASYNC;
-		else
+		} else {
 			fp->f_flag &= ~FASYNC;
+		}
 		error = fo_ioctl(fp, FIOASYNC, (caddr_t)&tmp, &context);
 		break;
 
@@ -887,7 +911,7 @@ ioctl(struct proc *p, struct ioctl_args *uap, __unused int32_t *retval)
 			break;
 		}
 		if (fp->f_type == DTYPE_PIPE) {
-		        error = fo_ioctl(fp, (int)TIOCSPGRP, (caddr_t)&tmp, &context);
+			error = fo_ioctl(fp, (int)TIOCSPGRP, (caddr_t)&tmp, &context);
 			break;
 		}
 		if (tmp <= 0) {
@@ -919,8 +943,9 @@ ioctl(struct proc *p, struct ioctl_args *uap, __unused int32_t *retval)
 		 * Copy any data to user, size was
 		 * already set and checked above.
 		 */
-		if (error == 0 && (com & IOC_OUT) && size)
+		if (error == 0 && (com & IOC_OUT) && size) {
 			error = copyout(datap, uap->data, (u_int)size);
+		}
 		break;
 	}
 out:
@@ -928,18 +953,19 @@ out:
 	proc_fdunlock(p);
 
 out_nofp:
-	if (memp)
+	if (memp) {
 		kfree(memp, size);
-	return(error);
+	}
+	return error;
 }
 
-int	selwait, nselcoll;
+int     selwait, nselcoll;
 #define SEL_FIRSTPASS 1
 #define SEL_SECONDPASS 2
 extern int selcontinue(int error);
 extern int selprocess(int error, int sel_pass);
 static int selscan(struct proc *p, struct _select * sel, struct _select_data * seldata,
-			int nfd, int32_t *retval, int sel_pass, struct waitq_set *wqset);
+    int nfd, int32_t *retval, int sel_pass, struct waitq_set *wqset);
 static int selcount(struct proc *p, u_int32_t *ibits, int nfd, int *count);
 static int seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wakeup, int fromselcount);
 static int seldrop(struct proc *p, u_int32_t *ibits, int nfd);
@@ -979,8 +1005,9 @@ select_nocancel(struct proc *p, struct select_nocancel_args *uap, int32_t *retva
 			atv.tv_sec = atv32.tv_sec;
 			atv.tv_usec = atv32.tv_usec;
 		}
-		if (err)
+		if (err) {
 			return err;
+		}
 
 		if (itimerfix(&atv)) {
 			err = EINVAL;
@@ -1075,7 +1102,7 @@ select_internal(struct proc *p, struct select_nocancel_args *uap, uint64_t timeo
 	int error = 0;
 	u_int ni, nw;
 	thread_t th_act;
-	struct uthread	*uth;
+	struct uthread  *uth;
 	struct _select *sel;
 	struct _select_data *seldata;
 	int needzerofill = 1;
@@ -1094,17 +1121,17 @@ select_internal(struct proc *p, struct select_nocancel_args *uap, uint64_t timeo
 	seldata->count = 0;
 
 	if (uap->nd < 0) {
-		return (EINVAL);
+		return EINVAL;
 	}
 
 	/* select on thread of process that already called proc_exit() */
 	if (p->p_fd == NULL) {
-		return (EBADF);
+		return EBADF;
 	}
 
-	if (uap->nd > p->p_fd->fd_nfiles)
+	if (uap->nd > p->p_fd->fd_nfiles) {
 		uap->nd = p->p_fd->fd_nfiles; /* forgiving; slightly wrong */
-
+	}
 	nw = howmany(uap->nd, NFDBITS);
 	ni = nw * sizeof(fd_mask);
 
@@ -1121,8 +1148,9 @@ select_internal(struct proc *p, struct select_nocancel_args *uap, uint64_t timeo
 		int nbytes = 3 * ni;
 
 		/* Free previous allocation, if any */
-		if (sel->ibits != NULL)
+		if (sel->ibits != NULL) {
 			FREE(sel->ibits, M_TEMP);
+		}
 		if (sel->obits != NULL) {
 			FREE(sel->obits, M_TEMP);
 			/* NULL out; subsequent ibits allocation may fail */
@@ -1130,13 +1158,14 @@ select_internal(struct proc *p, struct select_nocancel_args *uap, uint64_t timeo
 		}
 
 		MALLOC(sel->ibits, u_int32_t *, nbytes, M_TEMP, M_WAITOK | M_ZERO);
-		if (sel->ibits == NULL)
-			return (EAGAIN);
+		if (sel->ibits == NULL) {
+			return EAGAIN;
+		}
 		MALLOC(sel->obits, u_int32_t *, nbytes, M_TEMP, M_WAITOK | M_ZERO);
 		if (sel->obits == NULL) {
 			FREE(sel->ibits, M_TEMP);
 			sel->ibits = NULL;
-			return (EAGAIN);
+			return EAGAIN;
 		}
 		sel->nbytes = nbytes;
 		needzerofill = 0;
@@ -1150,22 +1179,22 @@ select_internal(struct proc *p, struct select_nocancel_args *uap, uint64_t timeo
 	/*
 	 * get the bits from the user address space
 	 */
-#define	getbits(name, x) \
+#define getbits(name, x) \
 	do { \
-		if (uap->name && (error = copyin(uap->name, \
-			(caddr_t)&sel->ibits[(x) * nw], ni))) \
-			goto continuation; \
+	        if (uap->name && (error = copyin(uap->name, \
+	                (caddr_t)&sel->ibits[(x) * nw], ni))) \
+	                goto continuation; \
 	} while (0)
 
 	getbits(in, 0);
 	getbits(ou, 1);
 	getbits(ex, 2);
-#undef	getbits
+#undef  getbits
 
 	seldata->abstime = timeout;
 
-	if ( (error = selcount(p, sel->ibits, uap->nd, &count)) ) {
-			goto continuation;
+	if ((error = selcount(p, sel->ibits, uap->nd, &count))) {
+		goto continuation;
 	}
 
 	/*
@@ -1194,25 +1223,29 @@ select_internal(struct proc *p, struct select_nocancel_args *uap, uint64_t timeo
 	if (sz > uth->uu_wqstate_sz) {
 		/* (re)allocate a buffer to hold waitq pointers */
 		if (uth->uu_wqset) {
-			if (waitq_set_is_valid(uth->uu_wqset))
+			if (waitq_set_is_valid(uth->uu_wqset)) {
 				waitq_set_deinit(uth->uu_wqset);
+			}
 			FREE(uth->uu_wqset, M_SELECT);
-		} else if (uth->uu_wqstate_sz && !uth->uu_wqset)
+		} else if (uth->uu_wqstate_sz && !uth->uu_wqset) {
 			panic("select: thread structure corrupt! "
-			      "uu_wqstate_sz:%ld, wqstate_buf == NULL",
-			      uth->uu_wqstate_sz);
+			    "uu_wqstate_sz:%ld, wqstate_buf == NULL",
+			    uth->uu_wqstate_sz);
+		}
 		uth->uu_wqstate_sz = sz;
 		MALLOC(uth->uu_wqset, struct waitq_set *, sz, M_SELECT, M_WAITOK);
-		if (!uth->uu_wqset)
+		if (!uth->uu_wqset) {
 			panic("can't allocate %ld bytes for wqstate buffer",
-			      uth->uu_wqstate_sz);
+			    uth->uu_wqstate_sz);
+		}
 		waitq_set_init(uth->uu_wqset,
-			       SYNC_POLICY_FIFO|SYNC_POLICY_PREPOST, NULL, NULL);
+		    SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST, NULL, NULL);
 	}
 
-	if (!waitq_set_is_valid(uth->uu_wqset))
+	if (!waitq_set_is_valid(uth->uu_wqset)) {
 		waitq_set_init(uth->uu_wqset,
-			       SYNC_POLICY_FIFO|SYNC_POLICY_PREPOST, NULL, NULL);
+		    SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST, NULL, NULL);
+	}
 
 	/* the last chunk of our buffer is an array of waitq pointers */
 	seldata->wqp = (uint64_t *)((char *)(uth->uu_wqset) + ALIGN(sizeof(struct waitq_set)));
@@ -1229,7 +1262,7 @@ continuation:
 		 * need to wait_subqueue_unlink_all(), since we haven't set
 		 * anything at this point.
 		 */
-		return (error);
+		return error;
 	}
 
 	return selprocess(0, SEL_FIRSTPASS);
@@ -1254,7 +1287,7 @@ selprocess(int error, int sel_pass)
 	int ncoll;
 	u_int ni, nw;
 	thread_t th_act;
-	struct uthread	*uth;
+	struct uthread  *uth;
 	struct proc *p;
 	struct select_nocancel_args *uap;
 	int *retval;
@@ -1274,13 +1307,16 @@ selprocess(int error, int sel_pass)
 	uap = seldata->args;
 	retval = seldata->retval;
 
-	if ((error != 0) && (sel_pass == SEL_FIRSTPASS))
+	if ((error != 0) && (sel_pass == SEL_FIRSTPASS)) {
 		unwind = 0;
-	if (seldata->count == 0)
+	}
+	if (seldata->count == 0) {
 		unwind = 0;
+	}
 retry:
-	if (error != 0)
+	if (error != 0) {
 		goto done;
+	}
 
 	ncoll = nselcoll;
 	OSBitOrAtomic(P_SELECT, &p->p_flag);
@@ -1304,11 +1340,12 @@ retry:
 	}
 
 	if (uap->tv) {
-		uint64_t	now;
+		uint64_t        now;
 
 		clock_get_uptime(&now);
-		if (now >= seldata->abstime)
+		if (now >= seldata->abstime) {
 			goto done;
+		}
 	}
 
 	if (doretry) {
@@ -1327,7 +1364,7 @@ retry:
 	}
 
 	/* No spurious wakeups due to colls,no need to check for them */
-	 if ((sel_pass == SEL_SECONDPASS) || ((p->p_flag & P_SELECT) == 0)) {
+	if ((sel_pass == SEL_SECONDPASS) || ((p->p_flag & P_SELECT) == 0)) {
 		sel_pass = SEL_FIRSTPASS;
 		goto retry;
 	}
@@ -1335,28 +1372,30 @@ retry:
 	OSBitAndAtomic(~((uint32_t)P_SELECT), &p->p_flag);
 
 	/* if the select is just for timeout skip check */
-	if (seldata->count && (sel_pass == SEL_SECONDPASS))
+	if (seldata->count && (sel_pass == SEL_SECONDPASS)) {
 		panic("selprocess: 2nd pass assertwaiting");
+	}
 
 	/* waitq_set has waitqueue as first element */
 	wait_result = waitq_assert_wait64_leeway((struct waitq *)uth->uu_wqset,
-						 NO_EVENT64, THREAD_ABORTSAFE,
-						 TIMEOUT_URGENCY_USER_NORMAL,
-						 seldata->abstime,
-						 TIMEOUT_NO_LEEWAY);
+	    NO_EVENT64, THREAD_ABORTSAFE,
+	    TIMEOUT_URGENCY_USER_NORMAL,
+	    seldata->abstime,
+	    TIMEOUT_NO_LEEWAY);
 	if (wait_result != THREAD_AWAKENED) {
 		/* there are no preposted events */
 		error = tsleep1(NULL, PSOCK | PCATCH,
-				"select", 0, selcontinue);
-	} else  {
+		    "select", 0, selcontinue);
+	} else {
 		prepost = 1;
 		error = 0;
 	}
 
 	if (error == 0) {
 		sel_pass = SEL_SECONDPASS;
-		if (!prepost)
+		if (!prepost) {
 			somewakeup = 1;
+		}
 		goto retry;
 	}
 done:
@@ -1372,18 +1411,20 @@ done:
 	}
 	OSBitAndAtomic(~((uint32_t)P_SELECT), &p->p_flag);
 	/* select is not restarted after signals... */
-	if (error == ERESTART)
+	if (error == ERESTART) {
 		error = EINTR;
-	if (error == EWOULDBLOCK)
+	}
+	if (error == EWOULDBLOCK) {
 		error = 0;
+	}
 	nw = howmany(uap->nd, NFDBITS);
 	ni = nw * sizeof(fd_mask);
 
-#define	putbits(name, x) \
+#define putbits(name, x) \
 	do { \
-		if (uap->name && (error2 = \
-			copyout((caddr_t)&sel->obits[(x) * nw], uap->name, ni))) \
-			error = error2; \
+	        if (uap->name && (error2 = \
+	                copyout((caddr_t)&sel->obits[(x) * nw], uap->name, ni))) \
+	                error = error2; \
 	} while (0)
 
 	if (error == 0) {
@@ -1402,7 +1443,7 @@ done:
 		uth->uu_flag &= ~UT_SAS_OLDMASK;
 	}
 
-	return(error);
+	return error;
 }
 
 
@@ -1417,7 +1458,8 @@ done:
  * Conditions:
  *		proc_fdlock is held
  */
-static void selunlinkfp(struct fileproc *fp, uint64_t wqp_id, struct waitq_set *wqset)
+static void
+selunlinkfp(struct fileproc *fp, uint64_t wqp_id, struct waitq_set *wqset)
 {
 	int valid_set = waitq_set_is_valid(wqset);
 	int valid_q = !!wqp_id;
@@ -1429,12 +1471,14 @@ static void selunlinkfp(struct fileproc *fp, uint64_t wqp_id, struct waitq_set *
 	 */
 
 	/* unlink the underlying waitq from the input set (thread waitq set) */
-	if (valid_q && valid_set)
+	if (valid_q && valid_set) {
 		waitq_unlink_by_prepost_id(wqp_id, wqset);
+	}
 
 	/* allow passing a NULL/invalid fp for seldrop unwind */
-	if (!fp || !(fp->f_flags & (FP_INSELECT|FP_SELCONFLICT)))
+	if (!fp || !(fp->f_flags & (FP_INSELECT | FP_SELCONFLICT))) {
 		return;
+	}
 
 	/*
 	 * We can always remove the conflict queue from our thread's set: this
@@ -1443,8 +1487,9 @@ static void selunlinkfp(struct fileproc *fp, uint64_t wqp_id, struct waitq_set *
 	 * be linked with the global conflict queue, and the last waiter
 	 * on the fp clears the CONFLICT marker.
 	 */
-	if (valid_set && (fp->f_flags & FP_SELCONFLICT))
+	if (valid_set && (fp->f_flags & FP_SELCONFLICT)) {
 		waitq_unlink(&select_conflict_queue, wqset);
+	}
 
 	/* jca: TODO:
 	 * This isn't quite right - we don't actually know if this
@@ -1471,14 +1516,16 @@ static void selunlinkfp(struct fileproc *fp, uint64_t wqp_id, struct waitq_set *
  * Conditions:
  *		proc_fdlock is held
  */
-static uint64_t sellinkfp(struct fileproc *fp, void **wq_data, struct waitq_set *wqset)
+static uint64_t
+sellinkfp(struct fileproc *fp, void **wq_data, struct waitq_set *wqset)
 {
 	struct waitq *f_wq = NULL;
 
 	if ((fp->f_flags & FP_INSELECT) != FP_INSELECT) {
-		if (wq_data)
+		if (wq_data) {
 			panic("non-null data:%p on fp:%p not in select?!"
-			      "(wqset:%p)", wq_data, fp, wqset);
+			    "(wqset:%p)", wq_data, fp, wqset);
+		}
 		return 0;
 	}
 
@@ -1497,13 +1544,15 @@ static uint64_t sellinkfp(struct fileproc *fp, void **wq_data, struct waitq_set 
 	 */
 	if (wq_data) {
 		memcpy(&f_wq, wq_data, sizeof(f_wq));
-		if (!waitq_is_valid(f_wq))
+		if (!waitq_is_valid(f_wq)) {
 			f_wq = NULL;
+		}
 	}
 
 	/* record the first thread's wqset in the fileproc structure */
-	if (!fp->f_wset)
+	if (!fp->f_wset) {
 		fp->f_wset = (void *)wqset;
+	}
 
 	/* handles NULL f_wq */
 	return waitq_get_prepost_id(f_wq);
@@ -1528,14 +1577,14 @@ static uint64_t sellinkfp(struct fileproc *fp, void **wq_data, struct waitq_set 
  */
 static int
 selscan(struct proc *p, struct _select *sel, struct _select_data * seldata,
-	int nfd, int32_t *retval, int sel_pass, struct waitq_set *wqset)
+    int nfd, int32_t *retval, int sel_pass, struct waitq_set *wqset)
 {
 	struct filedesc *fdp = p->p_fd;
 	int msk, i, j, fd;
 	u_int32_t bits;
 	struct fileproc *fp;
-	int n = 0;		/* count of bits */
-	int nc = 0;		/* bit vector offset (nc'th bit) */
+	int n = 0;              /* count of bits */
+	int nc = 0;             /* bit vector offset (nc'th bit) */
 	static int flag[3] = { FREAD, FWRITE, 0 };
 	u_int32_t *iptr, *optr;
 	u_int nw;
@@ -1549,8 +1598,8 @@ selscan(struct proc *p, struct _select *sel, struct _select_data * seldata,
 	 * in Beaker1C ; verify that the p->p_fd is valid
 	 */
 	if (fdp == NULL) {
-		*retval=0;
-		return(EIO);
+		*retval = 0;
+		return EIO;
 	}
 	ibits = sel->ibits;
 	obits = sel->obits;
@@ -1571,15 +1620,16 @@ selscan(struct proc *p, struct _select *sel, struct _select_data * seldata,
 		optr = (u_int32_t *)&obits[msk * nw];
 
 		for (i = 0; i < nfd; i += NFDBITS) {
-			bits = iptr[i/NFDBITS];
+			bits = iptr[i / NFDBITS];
 
 			while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
 				bits &= ~(1 << j);
 
-				if (fd < fdp->fd_nfiles)
+				if (fd < fdp->fd_nfiles) {
 					fp = fdp->fd_ofiles[fd];
-				else
+				} else {
 					fp = NULL;
+				}
 
 				if (fp == NULL || (fdp->fd_ofileflags[fd] & UF_RESERVED)) {
 					/*
@@ -1587,7 +1637,7 @@ selscan(struct proc *p, struct _select *sel, struct _select_data * seldata,
 					 * fd, let the caller unwind...
 					 */
 					proc_fdunlock(p);
-					return(EBADF);
+					return EBADF;
 				}
 				if (sel_pass == SEL_SECONDPASS) {
 					reserved_link = 0;
@@ -1596,11 +1646,12 @@ selscan(struct proc *p, struct _select *sel, struct _select_data * seldata,
 				} else {
 					reserved_link = waitq_link_reserve((struct waitq *)wqset);
 					rl_ptr = &reserved_link;
-					if (fp->f_flags & FP_INSELECT)
+					if (fp->f_flags & FP_INSELECT) {
 						/* someone is already in select on this fp */
 						fp->f_flags |= FP_SELCONFLICT;
-					else
+					} else {
 						fp->f_flags |= FP_INSELECT;
+					}
 
 					waitq_set_lazy_init_link(wqset);
 				}
@@ -1615,8 +1666,8 @@ selscan(struct proc *p, struct _select *sel, struct _select_data * seldata,
 
 				/* The select; set the bit, if true */
 				if (fp->f_ops && fp->f_type
-					&& fo_select(fp, flag[msk], rl_ptr, &context)) {
-					optr[fd/NFDBITS] |= (1 << (fd % NFDBITS));
+				    && fo_select(fp, flag[msk], rl_ptr, &context)) {
+					optr[fd / NFDBITS] |= (1 << (fd % NFDBITS));
 					n++;
 				}
 				if (sel_pass == SEL_FIRSTPASS) {
@@ -1627,8 +1678,9 @@ selscan(struct proc *p, struct _select *sel, struct _select_data * seldata,
 					 * will have been updated by selrecord to be a pointer
 					 * to the selinfo's waitq.
 					 */
-					if (reserved_link == rsvd)
+					if (reserved_link == rsvd) {
 						rl_ptr = NULL; /* fo_select never called selrecord() */
+					}
 					/*
 					 * Hook up the thread's waitq set either to
 					 * the fileproc structure, or to the global
@@ -1644,7 +1696,7 @@ selscan(struct proc *p, struct _select *sel, struct _select_data * seldata,
 	proc_fdunlock(p);
 
 	*retval = n;
-	return (0);
+	return 0;
 }
 
 int poll_callback(struct kqueue *, struct kevent_internal_s *, void *);
@@ -1659,7 +1711,7 @@ int
 poll(struct proc *p, struct poll_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
-	return(poll_nocancel(p, (struct poll_nocancel_args *)uap, retval));
+	return poll_nocancel(p, (struct poll_nocancel_args *)uap, retval);
 }
 
 
@@ -1684,12 +1736,14 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 	 * safe, but not overly restrictive.
 	 */
 	if (nfds > OPEN_MAX ||
-	    (nfds > p->p_rlimit[RLIMIT_NOFILE].rlim_cur && (proc_suser(p) || nfds > FD_SETSIZE)))
-		return (EINVAL);
+	    (nfds > p->p_rlimit[RLIMIT_NOFILE].rlim_cur && (proc_suser(p) || nfds > FD_SETSIZE))) {
+		return EINVAL;
+	}
 
 	kq = kqueue_alloc(p, 0);
-	if (kq == NULL)
-		return (EAGAIN);
+	if (kq == NULL) {
+		return EAGAIN;
+	}
 
 	ni = nfds * sizeof(struct pollfd) + sizeof(struct poll_continue_args);
 	MALLOC(cont, struct poll_continue_args *, ni, M_TEMP, M_WAITOK);
@@ -1697,11 +1751,12 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 		error = EAGAIN;
 		goto out;
 	}
-	
+
 	fds = (struct pollfd *)&cont[1];
 	error = copyin(uap->fds, fds, nfds * sizeof(struct pollfd));
-	if (error)
+	if (error) {
 		goto out;
+	}
 
 	if (uap->timeout != -1) {
 		struct timeval rtv;
@@ -1737,20 +1792,22 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 		struct kevent_internal_s kev = {
 			.ident = fds[i].fd,
 			.flags = EV_ADD | EV_ONESHOT | EV_POLL,
-			.udata = CAST_USER_ADDR_T(&fds[i]) };
+			.udata = CAST_USER_ADDR_T(&fds[i])
+		};
 
 		/* Handle input events */
-		if (events & ( POLLIN | POLLRDNORM | POLLPRI | POLLRDBAND | POLLHUP )) {
+		if (events & (POLLIN | POLLRDNORM | POLLPRI | POLLRDBAND | POLLHUP)) {
 			kev.filter = EVFILT_READ;
-			if (events & ( POLLPRI | POLLRDBAND ))
+			if (events & (POLLPRI | POLLRDBAND)) {
 				kev.flags |= EV_OOBAND;
+			}
 			rc = kevent_register(kq, &kev, &knlc);
 			assert((rc & FILTER_REGISTER_WAIT) == 0);
 		}
 
 		/* Handle output events */
 		if ((kev.flags & EV_ERROR) == 0 &&
-		    (events & ( POLLOUT | POLLWRNORM | POLLWRBAND ))) {
+		    (events & (POLLOUT | POLLWRNORM | POLLWRBAND))) {
 			kev.filter = EVFILT_WRITE;
 			rc = kevent_register(kq, &kev, &knlc);
 			assert((rc & FILTER_REGISTER_WAIT) == 0);
@@ -1758,17 +1815,21 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 
 		/* Handle BSD extension vnode events */
 		if ((kev.flags & EV_ERROR) == 0 &&
-		    (events & ( POLLEXTEND | POLLATTRIB | POLLNLINK | POLLWRITE ))) {
+		    (events & (POLLEXTEND | POLLATTRIB | POLLNLINK | POLLWRITE))) {
 			kev.filter = EVFILT_VNODE;
 			kev.fflags = 0;
-			if (events & POLLEXTEND)
+			if (events & POLLEXTEND) {
 				kev.fflags |= NOTE_EXTEND;
-			if (events & POLLATTRIB)
+			}
+			if (events & POLLATTRIB) {
 				kev.fflags |= NOTE_ATTRIB;
-			if (events & POLLNLINK)
+			}
+			if (events & POLLNLINK) {
 				kev.fflags |= NOTE_LINK;
-			if (events & POLLWRITE)
+			}
+			if (events & POLLWRITE) {
 				kev.fflags |= NOTE_WRITE;
+			}
 			rc = kevent_register(kq, &kev, &knlc);
 			assert((rc & FILTER_REGISTER_WAIT) == 0);
 		}
@@ -1776,8 +1837,9 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 		if (kev.flags & EV_ERROR) {
 			fds[i].revents = POLLNVAL;
 			rfds++;
-		} else
+		} else {
 			fds[i].revents = 0;
+		}
 	}
 
 	/*
@@ -1788,16 +1850,18 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 	 * out. If a subset of the provided FDs failed to register, then we
 	 * will still call the kqueue_scan function.
 	 */
-	if (nfds && (rfds == nfds))
+	if (nfds && (rfds == nfds)) {
 		goto done;
+	}
 
 	/*
 	 * If any events have trouble registering, an event has fired and we
 	 * shouldn't wait for events in kqueue_scan -- use the current time as
 	 * the deadline.
 	 */
-	if (rfds)
+	if (rfds) {
 		getmicrouptime(&atv);
+	}
 
 	/* scan for, and possibly wait for, the kevents to trigger */
 	cont->pca_fds = uap->fds;
@@ -1806,24 +1870,27 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 	error = kqueue_scan(kq, poll_callback, NULL, cont, NULL, &atv, p);
 	rfds = cont->pca_rfds;
 
- done:
+done:
 	OSBitAndAtomic(~((uint32_t)P_SELECT), &p->p_flag);
 	/* poll is not restarted after signals... */
-	if (error == ERESTART)
+	if (error == ERESTART) {
 		error = EINTR;
-	if (error == EWOULDBLOCK)
+	}
+	if (error == EWOULDBLOCK) {
 		error = 0;
+	}
 	if (error == 0) {
 		error = copyout(fds, uap->fds, nfds * sizeof(struct pollfd));
 		*retval = rfds;
 	}
 
- out:
-	if (NULL != cont)
+out:
+	if (NULL != cont) {
 		FREE(cont, M_TEMP);
+	}
 
 	kqueue_dealloc(kq);
-	return (error);
+	return error;
 }
 
 int
@@ -1835,51 +1902,59 @@ poll_callback(__unused struct kqueue *kq, struct kevent_internal_s *kevp, void *
 	short mask = 0;
 
 	/* convert the results back into revents */
-	if (kevp->flags & EV_EOF)
+	if (kevp->flags & EV_EOF) {
 		fds->revents |= POLLHUP;
-	if (kevp->flags & EV_ERROR)
+	}
+	if (kevp->flags & EV_ERROR) {
 		fds->revents |= POLLERR;
+	}
 
 	switch (kevp->filter) {
 	case EVFILT_READ:
-		if (fds->revents & POLLHUP)
-			mask = (POLLIN | POLLRDNORM | POLLPRI | POLLRDBAND );
-		else {
+		if (fds->revents & POLLHUP) {
+			mask = (POLLIN | POLLRDNORM | POLLPRI | POLLRDBAND);
+		} else {
 			mask = (POLLIN | POLLRDNORM);
-			if (kevp->flags & EV_OOBAND)
+			if (kevp->flags & EV_OOBAND) {
 				mask |= (POLLPRI | POLLRDBAND);
+			}
 		}
 		fds->revents |= (fds->events & mask);
 		break;
 
 	case EVFILT_WRITE:
-		if (!(fds->revents & POLLHUP))
-			fds->revents |= (fds->events & ( POLLOUT | POLLWRNORM | POLLWRBAND ));
+		if (!(fds->revents & POLLHUP)) {
+			fds->revents |= (fds->events & (POLLOUT | POLLWRNORM | POLLWRBAND));
+		}
 		break;
 
 	case EVFILT_VNODE:
-		if (kevp->fflags & NOTE_EXTEND)
+		if (kevp->fflags & NOTE_EXTEND) {
 			fds->revents |= (fds->events & POLLEXTEND);
-		if (kevp->fflags & NOTE_ATTRIB)
+		}
+		if (kevp->fflags & NOTE_ATTRIB) {
 			fds->revents |= (fds->events & POLLATTRIB);
-		if (kevp->fflags & NOTE_LINK)
+		}
+		if (kevp->fflags & NOTE_LINK) {
 			fds->revents |= (fds->events & POLLNLINK);
-		if (kevp->fflags & NOTE_WRITE)
+		}
+		if (kevp->fflags & NOTE_WRITE) {
 			fds->revents |= (fds->events & POLLWRITE);
+		}
 		break;
 	}
 
-	if (fds->revents != 0 && prev_revents == 0)
+	if (fds->revents != 0 && prev_revents == 0) {
 		cont->pca_rfds++;
+	}
 
 	return 0;
 }
-	
+
 int
 seltrue(__unused dev_t dev, __unused int flag, __unused struct proc *p)
 {
-
-	return (1);
+	return 1;
 }
 
 /*
@@ -1916,7 +1991,7 @@ selcount(struct proc *p, u_int32_t *ibits, int nfd, int *countp)
 	int n = 0;
 	u_int32_t *iptr;
 	u_int nw;
-	int error=0; 
+	int error = 0;
 	int dropcount;
 	int need_wakeup = 0;
 
@@ -1926,7 +2001,7 @@ selcount(struct proc *p, u_int32_t *ibits, int nfd, int *countp)
 	 */
 	if (fdp == NULL) {
 		*countp = 0;
-		return(EIO);
+		return EIO;
 	}
 	nw = howmany(nfd, NFDBITS);
 
@@ -1934,20 +2009,21 @@ selcount(struct proc *p, u_int32_t *ibits, int nfd, int *countp)
 	for (msk = 0; msk < 3; msk++) {
 		iptr = (u_int32_t *)&ibits[msk * nw];
 		for (i = 0; i < nfd; i += NFDBITS) {
-			bits = iptr[i/NFDBITS];
+			bits = iptr[i / NFDBITS];
 			while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
 				bits &= ~(1 << j);
 
-				if (fd < fdp->fd_nfiles)
+				if (fd < fdp->fd_nfiles) {
 					fp = fdp->fd_ofiles[fd];
-				else
+				} else {
 					fp = NULL;
+				}
 
 				if (fp == NULL ||
-					(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
-						*countp = 0;
-						error = EBADF;
-						goto bad;
+				    (fdp->fd_ofileflags[fd] & UF_RESERVED)) {
+					*countp = 0;
+					error = EBADF;
+					goto bad;
 				}
 				fp->f_iocount++;
 				n++;
@@ -1957,13 +2033,14 @@ selcount(struct proc *p, u_int32_t *ibits, int nfd, int *countp)
 	proc_fdunlock(p);
 
 	*countp = n;
-	return (0);
+	return 0;
 
 bad:
 	dropcount = 0;
-	
-	if (n == 0)
+
+	if (n == 0) {
 		goto out;
+	}
 	/* Ignore error return; it's already EBADF */
 	(void)seldrop_locked(p, ibits, nfd, n, &need_wakeup, 1);
 
@@ -1972,7 +2049,7 @@ out:
 	if (need_wakeup) {
 		wakeup(&p->p_fpdrainwait);
 	}
-	return(error);
+	return error;
 }
 
 
@@ -2022,7 +2099,7 @@ seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wak
 	 * in Beaker1C ; verify that the p->p_fd is valid
 	 */
 	if (fdp == NULL) {
-		return(EIO);
+		return EIO;
 	}
 
 	nw = howmany(nfd, NFDBITS);
@@ -2032,16 +2109,17 @@ seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wak
 	for (msk = 0; msk < 3; msk++) {
 		iptr = (u_int32_t *)&ibits[msk * nw];
 		for (i = 0; i < nfd; i += NFDBITS) {
-			bits = iptr[i/NFDBITS];
+			bits = iptr[i / NFDBITS];
 			while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
 				bits &= ~(1 << j);
 				fp = fdp->fd_ofiles[fd];
 				/*
 				 * If we've already dropped as many as were
-				 * counted/scanned, then we are done.  
+				 * counted/scanned, then we are done.
 				 */
-				if ((fromselcount != 0) && (++dropcount > lim))
+				if ((fromselcount != 0) && (++dropcount > lim)) {
 					goto done;
+				}
 
 				/*
 				 * unlink even potentially NULL fileprocs.
@@ -2049,8 +2127,8 @@ seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wak
 				 * still need to cleanup the waitq links!
 				 */
 				selunlinkfp(fp,
-					    seldata->wqp ? seldata->wqp[nc] : 0,
-					    uth->uu_wqset);
+				    seldata->wqp ? seldata->wqp[nc] : 0,
+				    uth->uu_wqset);
 
 				nc++;
 
@@ -2061,8 +2139,9 @@ seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wak
 				}
 
 				fp->f_iocount--;
-				if (fp->f_iocount < 0)
+				if (fp->f_iocount < 0) {
 					panic("f_iocount overdecrement!");
+				}
 
 				if (fp->f_iocount == 0) {
 					/*
@@ -2071,8 +2150,9 @@ seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wak
 					 * and is also responsible for waking up anyone
 					 * waiting on iocounts to drain.
 					 */
-					if (fp->f_flags & FP_SELCONFLICT)
+					if (fp->f_flags & FP_SELCONFLICT) {
 						fp->f_flags &= ~FP_SELCONFLICT;
+					}
 					if (p->p_fpdrainwait) {
 						p->p_fpdrainwait = 0;
 						*need_wakeup = 1;
@@ -2082,7 +2162,7 @@ seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wak
 		}
 	}
 done:
-	return (error);
+	return error;
 }
 
 
@@ -2098,7 +2178,7 @@ seldrop(struct proc *p, u_int32_t *ibits, int nfd)
 	if (need_wakeup) {
 		wakeup(&p->p_fpdrainwait);
 	}
-	return (error);
+	return error;
 }
 
 /*
@@ -2107,7 +2187,7 @@ seldrop(struct proc *p, u_int32_t *ibits, int nfd)
 void
 selrecord(__unused struct proc *selector, struct selinfo *sip, void *s_data)
 {
-	thread_t	cur_act = current_thread();
+	thread_t        cur_act = current_thread();
 	struct uthread * ut = get_bsdthread_info(cur_act);
 	/* on input, s_data points to the 64-bit ID of a reserved link object */
 	uint64_t *reserved_link = (uint64_t *)s_data;
@@ -2115,8 +2195,9 @@ selrecord(__unused struct proc *selector, struct selinfo *sip, void *s_data)
 	/* need to look at collisions */
 
 	/*do not record if this is second pass of select */
-	if (!s_data)
+	if (!s_data) {
 		return;
+	}
 
 	if ((sip->si_flags & SI_INITED) == 0) {
 		waitq_init(&sip->si_waitq, SYNC_POLICY_FIFO);
@@ -2124,15 +2205,16 @@ selrecord(__unused struct proc *selector, struct selinfo *sip, void *s_data)
 		sip->si_flags &= ~SI_CLEAR;
 	}
 
-	if (sip->si_flags & SI_RECORDED)
+	if (sip->si_flags & SI_RECORDED) {
 		sip->si_flags |= SI_COLL;
-	else
+	} else {
 		sip->si_flags &= ~SI_COLL;
+	}
 
 	sip->si_flags |= SI_RECORDED;
 	/* note: this checks for pre-existing linkage */
 	waitq_link(&sip->si_waitq, ut->uu_wqset,
-		   WAITQ_SHOULD_LOCK, reserved_link);
+	    WAITQ_SHOULD_LOCK, reserved_link);
 
 	/*
 	 * Always consume the reserved link.
@@ -2165,7 +2247,6 @@ selrecord(__unused struct proc *selector, struct selinfo *sip, void *s_data)
 void
 selwakeup(struct selinfo *sip)
 {
-	
 	if ((sip->si_flags & SI_INITED) == 0) {
 		return;
 	}
@@ -2181,13 +2262,12 @@ selwakeup(struct selinfo *sip)
 
 	if (sip->si_flags & SI_RECORDED) {
 		waitq_wakeup64_all(&sip->si_waitq, NO_EVENT64,
-				   THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
+		    THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
 		sip->si_flags &= ~SI_RECORDED;
 	}
-
 }
 
-void 
+void
 selthreadclear(struct selinfo *sip)
 {
 	struct waitq *wq;
@@ -2196,8 +2276,8 @@ selthreadclear(struct selinfo *sip)
 		return;
 	}
 	if (sip->si_flags & SI_RECORDED) {
-			selwakeup(sip);
-			sip->si_flags &= ~(SI_RECORDED | SI_COLL);
+		selwakeup(sip);
+		sip->si_flags &= ~(SI_RECORDED | SI_COLL);
 	}
 	sip->si_flags |= SI_CLEAR;
 	sip->si_flags &= ~SI_INITED;
@@ -2217,13 +2297,13 @@ selthreadclear(struct selinfo *sip)
 
 
 
-#define DBG_POST	0x10
-#define DBG_WATCH	0x11
-#define DBG_WAIT	0x12
-#define DBG_MOD		0x13
-#define DBG_EWAKEUP	0x14
-#define DBG_ENQUEUE	0x15
-#define DBG_DEQUEUE	0x16
+#define DBG_POST        0x10
+#define DBG_WATCH       0x11
+#define DBG_WAIT        0x12
+#define DBG_MOD         0x13
+#define DBG_EWAKEUP     0x14
+#define DBG_ENQUEUE     0x15
+#define DBG_DEQUEUE     0x16
 
 #define DBG_MISC_POST MISCDBG_CODE(DBG_EVENT,DBG_POST)
 #define DBG_MISC_WATCH MISCDBG_CODE(DBG_EVENT,DBG_WATCH)
@@ -2234,13 +2314,13 @@ selthreadclear(struct selinfo *sip)
 #define DBG_MISC_DEQUEUE MISCDBG_CODE(DBG_EVENT,DBG_DEQUEUE)
 
 
-#define EVPROCDEQUE(p, evq)	do {				\
-	proc_lock(p);						\
-	if (evq->ee_flags & EV_QUEUED) {			\
-	        TAILQ_REMOVE(&p->p_evlist, evq, ee_plist);	\
-		evq->ee_flags &= ~EV_QUEUED;			\
-	}							\
-	proc_unlock(p);						\
+#define EVPROCDEQUE(p, evq)     do {                            \
+	proc_lock(p);                                           \
+	if (evq->ee_flags & EV_QUEUED) {                        \
+	        TAILQ_REMOVE(&p->p_evlist, evq, ee_plist);      \
+	        evq->ee_flags &= ~EV_QUEUED;                    \
+	}                                                       \
+	proc_unlock(p);                                         \
 } while (0);
 
 
@@ -2251,18 +2331,19 @@ selthreadclear(struct selinfo *sip)
 void
 evsofree(struct socket *sp)
 {
-        struct eventqelt *evq, *next;
-	proc_t 	p;
+	struct eventqelt *evq, *next;
+	proc_t  p;
 
-	if (sp == NULL)
-	        return;
+	if (sp == NULL) {
+		return;
+	}
 
 	for (evq = sp->so_evlist.tqh_first; evq != NULL; evq = next) {
-	        next = evq->ee_slist.tqe_next;
+		next = evq->ee_slist.tqe_next;
 		p = evq->ee_proc;
 
 		if (evq->ee_flags & EV_QUEUED) {
-		        EVPROCDEQUE(p, evq);
+			EVPROCDEQUE(p, evq);
 		}
 		TAILQ_REMOVE(&sp->so_evlist, evq, ee_slist); // remove from socket q
 		FREE(evq, M_TEMP);
@@ -2277,11 +2358,11 @@ evsofree(struct socket *sp)
 void
 evpipefree(struct pipe *cpipe)
 {
-        struct eventqelt *evq, *next;
-	proc_t 	p;
+	struct eventqelt *evq, *next;
+	proc_t  p;
 
 	for (evq = cpipe->pipe_evlist.tqh_first; evq != NULL; evq = next) {
-	        next = evq->ee_slist.tqe_next;
+		next = evq->ee_slist.tqe_next;
 		p = evq->ee_proc;
 
 		EVPROCDEQUE(p, evq);
@@ -2301,19 +2382,19 @@ evpipefree(struct pipe *cpipe)
 static void
 evprocenque(struct eventqelt *evq)
 {
-        proc_t	p;
+	proc_t  p;
 
 	assert(evq);
 	p = evq->ee_proc;
 
-	KERNEL_DEBUG(DBG_MISC_ENQUEUE|DBG_FUNC_START, (uint32_t)evq, evq->ee_flags, evq->ee_eventmask,0,0);
+	KERNEL_DEBUG(DBG_MISC_ENQUEUE | DBG_FUNC_START, (uint32_t)evq, evq->ee_flags, evq->ee_eventmask, 0, 0);
 
 	proc_lock(p);
 
 	if (evq->ee_flags & EV_QUEUED) {
-	        proc_unlock(p);
+		proc_unlock(p);
 
-	        KERNEL_DEBUG(DBG_MISC_ENQUEUE|DBG_FUNC_END, 0,0,0,0,0);
+		KERNEL_DEBUG(DBG_MISC_ENQUEUE | DBG_FUNC_END, 0, 0, 0, 0, 0);
 		return;
 	}
 	evq->ee_flags |= EV_QUEUED;
@@ -2324,7 +2405,7 @@ evprocenque(struct eventqelt *evq)
 
 	wakeup(&p->p_evlist);
 
-	KERNEL_DEBUG(DBG_MISC_ENQUEUE|DBG_FUNC_END, 0,0,0,0,0);
+	KERNEL_DEBUG(DBG_MISC_ENQUEUE | DBG_FUNC_END, 0, 0, 0, 0, 0);
 }
 
 
@@ -2334,58 +2415,57 @@ evprocenque(struct eventqelt *evq)
 void
 postpipeevent(struct pipe *pipep, int event)
 {
-	int	mask;
+	int     mask;
 	struct eventqelt *evq;
 
-	if (pipep == NULL)
-	        return;
-	KERNEL_DEBUG(DBG_MISC_POST|DBG_FUNC_START, event,0,0,1,0);
+	if (pipep == NULL) {
+		return;
+	}
+	KERNEL_DEBUG(DBG_MISC_POST | DBG_FUNC_START, event, 0, 0, 1, 0);
 
 	for (evq = pipep->pipe_evlist.tqh_first;
-	     evq != NULL; evq = evq->ee_slist.tqe_next) {
-
-	        if (evq->ee_eventmask == 0)
-		        continue;
-	        mask = 0;
+	    evq != NULL; evq = evq->ee_slist.tqe_next) {
+		if (evq->ee_eventmask == 0) {
+			continue;
+		}
+		mask = 0;
 
 		switch (event & (EV_RWBYTES | EV_RCLOSED | EV_WCLOSED)) {
-
 		case EV_RWBYTES:
-		  if ((evq->ee_eventmask & EV_RE) && pipep->pipe_buffer.cnt) {
-		          mask |= EV_RE;
-			  evq->ee_req.er_rcnt = pipep->pipe_buffer.cnt;
-		  }
-		  if ((evq->ee_eventmask & EV_WR) && 
-		      (MAX(pipep->pipe_buffer.size,PIPE_SIZE) - pipep->pipe_buffer.cnt) >= PIPE_BUF) {
-
-		          if (pipep->pipe_state & PIPE_EOF) {
-			          mask |= EV_WR|EV_RESET;
-				  break;
-			  }
-			  mask |= EV_WR;
-			  evq->ee_req.er_wcnt = MAX(pipep->pipe_buffer.size, PIPE_SIZE) - pipep->pipe_buffer.cnt;
-		  }
-		  break;
+			if ((evq->ee_eventmask & EV_RE) && pipep->pipe_buffer.cnt) {
+				mask |= EV_RE;
+				evq->ee_req.er_rcnt = pipep->pipe_buffer.cnt;
+			}
+			if ((evq->ee_eventmask & EV_WR) &&
+			    (MAX(pipep->pipe_buffer.size, PIPE_SIZE) - pipep->pipe_buffer.cnt) >= PIPE_BUF) {
+				if (pipep->pipe_state & PIPE_EOF) {
+					mask |= EV_WR | EV_RESET;
+					break;
+				}
+				mask |= EV_WR;
+				evq->ee_req.er_wcnt = MAX(pipep->pipe_buffer.size, PIPE_SIZE) - pipep->pipe_buffer.cnt;
+			}
+			break;
 
 		case EV_WCLOSED:
 		case EV_RCLOSED:
-		  if ((evq->ee_eventmask & EV_RE)) {
-		          mask |= EV_RE|EV_RCLOSED;
-		  }
-		  if ((evq->ee_eventmask & EV_WR)) {
-		          mask |= EV_WR|EV_WCLOSED;
-		  }
-		  break;
+			if ((evq->ee_eventmask & EV_RE)) {
+				mask |= EV_RE | EV_RCLOSED;
+			}
+			if ((evq->ee_eventmask & EV_WR)) {
+				mask |= EV_WR | EV_WCLOSED;
+			}
+			break;
 
 		default:
-		  return;
+			return;
 		}
 		if (mask) {
-		        /*
+			/*
 			 * disarm... postevents are nops until this event is 'read' via
 			 * waitevent and then re-armed via modwatch
 			 */
-		        evq->ee_eventmask = 0;
+			evq->ee_eventmask = 0;
 
 			/*
 			 * since events are disarmed until after the waitevent
@@ -2396,14 +2476,14 @@ postpipeevent(struct pipe *pipep, int event)
 			 * the pipe lock, and we're updating the event outside
 			 * of the proc lock, which it will hold
 			 */
-		        evq->ee_req.er_eventbits |= mask;
+			evq->ee_req.er_eventbits |= mask;
 
-			KERNEL_DEBUG(DBG_MISC_POST, (uint32_t)evq, evq->ee_req.er_eventbits, mask, 1,0);
+			KERNEL_DEBUG(DBG_MISC_POST, (uint32_t)evq, evq->ee_req.er_eventbits, mask, 1, 0);
 
 			evprocenque(evq);
 		}
 	}
-	KERNEL_DEBUG(DBG_MISC_POST|DBG_FUNC_END, 0,0,0,1,0);
+	KERNEL_DEBUG(DBG_MISC_POST | DBG_FUNC_END, 0, 0, 0, 1, 0);
 }
 
 #if SOCKETS
@@ -2415,175 +2495,178 @@ postpipeevent(struct pipe *pipep, int event)
 void
 postevent(struct socket *sp, struct sockbuf *sb, int event)
 {
-        int	mask;
-	struct	eventqelt *evq;
-	struct	tcpcb *tp;
+	int     mask;
+	struct  eventqelt *evq;
+	struct  tcpcb *tp;
 
-	if (sb)
-	        sp = sb->sb_so;
-	if (sp == NULL)
-	        return;
+	if (sb) {
+		sp = sb->sb_so;
+	}
+	if (sp == NULL) {
+		return;
+	}
 
-	KERNEL_DEBUG(DBG_MISC_POST|DBG_FUNC_START, (int)sp, event, 0, 0, 0);
+	KERNEL_DEBUG(DBG_MISC_POST | DBG_FUNC_START, (int)sp, event, 0, 0, 0);
 
 	for (evq = sp->so_evlist.tqh_first;
-	     evq != NULL; evq = evq->ee_slist.tqe_next) {
-
-	        if (evq->ee_eventmask == 0)
-		        continue;
-	        mask = 0;
+	    evq != NULL; evq = evq->ee_slist.tqe_next) {
+		if (evq->ee_eventmask == 0) {
+			continue;
+		}
+		mask = 0;
 
 		/* ready for reading:
-		   - byte cnt >= receive low water mark
-		   - read-half of conn closed
-		   - conn pending for listening sock
-		   - socket error pending
-
-		   ready for writing
-		   - byte cnt avail >= send low water mark
-		   - write half of conn closed
-		   - socket error pending
-		   - non-blocking conn completed successfully
-
-		   exception pending
-		   - out of band data
-		   - sock at out of band mark
-		*/
+		 *  - byte cnt >= receive low water mark
+		 *  - read-half of conn closed
+		 *  - conn pending for listening sock
+		 *  - socket error pending
+		 *
+		 *  ready for writing
+		 *  - byte cnt avail >= send low water mark
+		 *  - write half of conn closed
+		 *  - socket error pending
+		 *  - non-blocking conn completed successfully
+		 *
+		 *  exception pending
+		 *  - out of band data
+		 *  - sock at out of band mark
+		 */
 
 		switch (event & EV_DMASK) {
-
 		case EV_OOB:
-		  if ((evq->ee_eventmask & EV_EX)) {
-		          if (sp->so_oobmark || ((sp->so_state & SS_RCVATMARK)))
-			          mask |= EV_EX|EV_OOB;
-		  }
-		  break;
+			if ((evq->ee_eventmask & EV_EX)) {
+				if (sp->so_oobmark || ((sp->so_state & SS_RCVATMARK))) {
+					mask |= EV_EX | EV_OOB;
+				}
+			}
+			break;
 
-		case EV_RWBYTES|EV_OOB:
-		  if ((evq->ee_eventmask & EV_EX)) {
-		          if (sp->so_oobmark || ((sp->so_state & SS_RCVATMARK)))
-			          mask |= EV_EX|EV_OOB;
-		  }
-		  /*
-		   * fall into the next case
-		   */
+		case EV_RWBYTES | EV_OOB:
+			if ((evq->ee_eventmask & EV_EX)) {
+				if (sp->so_oobmark || ((sp->so_state & SS_RCVATMARK))) {
+					mask |= EV_EX | EV_OOB;
+				}
+			}
+		/*
+		 * fall into the next case
+		 */
 		case EV_RWBYTES:
-		  if ((evq->ee_eventmask & EV_RE) && soreadable(sp)) {
-			  /* for AFP/OT purposes; may go away in future */
-		          if ((SOCK_DOM(sp) == PF_INET ||
-			      SOCK_DOM(sp) == PF_INET6) &&
-			      SOCK_PROTO(sp) == IPPROTO_TCP &&
-			      (sp->so_error == ECONNREFUSED ||
-			      sp->so_error == ECONNRESET)) {
-			          if (sp->so_pcb == NULL ||
-				      sotoinpcb(sp)->inp_state ==
-				      INPCB_STATE_DEAD ||
-				      (tp = sototcpcb(sp)) == NULL ||
-				      tp->t_state == TCPS_CLOSED) {
-				          mask |= EV_RE|EV_RESET;
-					  break;
-				  }
-			  }
-			  mask |= EV_RE;
-			  evq->ee_req.er_rcnt = sp->so_rcv.sb_cc;
+			if ((evq->ee_eventmask & EV_RE) && soreadable(sp)) {
+				/* for AFP/OT purposes; may go away in future */
+				if ((SOCK_DOM(sp) == PF_INET ||
+				    SOCK_DOM(sp) == PF_INET6) &&
+				    SOCK_PROTO(sp) == IPPROTO_TCP &&
+				    (sp->so_error == ECONNREFUSED ||
+				    sp->so_error == ECONNRESET)) {
+					if (sp->so_pcb == NULL ||
+					    sotoinpcb(sp)->inp_state ==
+					    INPCB_STATE_DEAD ||
+					    (tp = sototcpcb(sp)) == NULL ||
+					    tp->t_state == TCPS_CLOSED) {
+						mask |= EV_RE | EV_RESET;
+						break;
+					}
+				}
+				mask |= EV_RE;
+				evq->ee_req.er_rcnt = sp->so_rcv.sb_cc;
 
-			  if (sp->so_state & SS_CANTRCVMORE) {
-			          mask |= EV_FIN;
-				  break;
-			  }
-		  }
-		  if ((evq->ee_eventmask & EV_WR) && sowriteable(sp)) {
-			  /* for AFP/OT purposes; may go away in future */
-		          if ((SOCK_DOM(sp) == PF_INET ||
-			      SOCK_DOM(sp) == PF_INET6) &&
-			      SOCK_PROTO(sp) == IPPROTO_TCP &&
-			      (sp->so_error == ECONNREFUSED ||
-			      sp->so_error == ECONNRESET)) {
-			          if (sp->so_pcb == NULL ||
-				      sotoinpcb(sp)->inp_state ==
-				      INPCB_STATE_DEAD ||
-				      (tp = sototcpcb(sp)) == NULL ||
-				      tp->t_state == TCPS_CLOSED) {
-					  mask |= EV_WR|EV_RESET;
-					  break;
-				  }
-			  }
-			  mask |= EV_WR;
-			  evq->ee_req.er_wcnt = sbspace(&sp->so_snd);
-		  }
-		  break;
+				if (sp->so_state & SS_CANTRCVMORE) {
+					mask |= EV_FIN;
+					break;
+				}
+			}
+			if ((evq->ee_eventmask & EV_WR) && sowriteable(sp)) {
+				/* for AFP/OT purposes; may go away in future */
+				if ((SOCK_DOM(sp) == PF_INET ||
+				    SOCK_DOM(sp) == PF_INET6) &&
+				    SOCK_PROTO(sp) == IPPROTO_TCP &&
+				    (sp->so_error == ECONNREFUSED ||
+				    sp->so_error == ECONNRESET)) {
+					if (sp->so_pcb == NULL ||
+					    sotoinpcb(sp)->inp_state ==
+					    INPCB_STATE_DEAD ||
+					    (tp = sototcpcb(sp)) == NULL ||
+					    tp->t_state == TCPS_CLOSED) {
+						mask |= EV_WR | EV_RESET;
+						break;
+					}
+				}
+				mask |= EV_WR;
+				evq->ee_req.er_wcnt = sbspace(&sp->so_snd);
+			}
+			break;
 
 		case EV_RCONN:
-		  if ((evq->ee_eventmask & EV_RE)) {
-			  mask |= EV_RE|EV_RCONN;
-		          evq->ee_req.er_rcnt = sp->so_qlen + 1;  // incl this one
-		  }
-		  break;
+			if ((evq->ee_eventmask & EV_RE)) {
+				mask |= EV_RE | EV_RCONN;
+				evq->ee_req.er_rcnt = sp->so_qlen + 1; // incl this one
+			}
+			break;
 
 		case EV_WCONN:
-		  if ((evq->ee_eventmask & EV_WR)) {
-		          mask |= EV_WR|EV_WCONN;
-		  }
-		  break;
+			if ((evq->ee_eventmask & EV_WR)) {
+				mask |= EV_WR | EV_WCONN;
+			}
+			break;
 
 		case EV_RCLOSED:
-		  if ((evq->ee_eventmask & EV_RE)) {
-		          mask |= EV_RE|EV_RCLOSED;
-		  }
-		  break;
+			if ((evq->ee_eventmask & EV_RE)) {
+				mask |= EV_RE | EV_RCLOSED;
+			}
+			break;
 
 		case EV_WCLOSED:
-		  if ((evq->ee_eventmask & EV_WR)) {
-		          mask |= EV_WR|EV_WCLOSED;
-		  }
-		  break;
+			if ((evq->ee_eventmask & EV_WR)) {
+				mask |= EV_WR | EV_WCLOSED;
+			}
+			break;
 
 		case EV_FIN:
-		  if (evq->ee_eventmask & EV_RE) {
-		          mask |= EV_RE|EV_FIN;
-		  }
-		  break;
+			if (evq->ee_eventmask & EV_RE) {
+				mask |= EV_RE | EV_FIN;
+			}
+			break;
 
 		case EV_RESET:
 		case EV_TIMEOUT:
-		  if (evq->ee_eventmask & EV_RE) {
-		          mask |= EV_RE | event;
-		  } 
-		  if (evq->ee_eventmask & EV_WR) {
-		          mask |= EV_WR | event;
-		  }
-		  break;
+			if (evq->ee_eventmask & EV_RE) {
+				mask |= EV_RE | event;
+			}
+			if (evq->ee_eventmask & EV_WR) {
+				mask |= EV_WR | event;
+			}
+			break;
 
 		default:
-		  KERNEL_DEBUG(DBG_MISC_POST|DBG_FUNC_END, (int)sp, -1, 0, 0, 0);
-		  return;
+			KERNEL_DEBUG(DBG_MISC_POST | DBG_FUNC_END, (int)sp, -1, 0, 0, 0);
+			return;
 		} /* switch */
 
 		KERNEL_DEBUG(DBG_MISC_POST, (int)evq, evq->ee_eventmask, evq->ee_req.er_eventbits, mask, 0);
 
 		if (mask) {
-		        /*
+			/*
 			 * disarm... postevents are nops until this event is 'read' via
 			 * waitevent and then re-armed via modwatch
 			 */
-		        evq->ee_eventmask = 0;
+			evq->ee_eventmask = 0;
 
 			/*
 			 * since events are disarmed until after the waitevent
 			 * the ee_req.er_xxxx fields can't change once we've
 			 * inserted this event into the proc queue...
-			 * since waitevent can't see this event until we 
+			 * since waitevent can't see this event until we
 			 * enqueue it, waitevent will see a 'consistent'
 			 * snapshot of the event, even though it won't hold
 			 * the socket lock, and we're updating the event outside
 			 * of the proc lock, which it will hold
 			 */
-		        evq->ee_req.er_eventbits |= mask;
+			evq->ee_req.er_eventbits |= mask;
 
 			evprocenque(evq);
 		}
 	}
-	KERNEL_DEBUG(DBG_MISC_POST|DBG_FUNC_END, (int)sp, 0, 0, 0, 0);
+	KERNEL_DEBUG(DBG_MISC_POST | DBG_FUNC_END, (int)sp, 0, 0, 0, 0);
 }
 #endif /* SOCKETS */
 
@@ -2610,42 +2693,43 @@ watchevent(proc_t p, struct watchevent_args *uap, __unused int *retval)
 	struct fileproc *fp = NULL;
 	int error;
 
-	KERNEL_DEBUG(DBG_MISC_WATCH|DBG_FUNC_START, 0,0,0,0,0);
+	KERNEL_DEBUG(DBG_MISC_WATCH | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
 	// get a qelt and fill with users req
 	MALLOC(evq, struct eventqelt *, sizeof(struct eventqelt), M_TEMP, M_WAITOK);
 
-	if (evq == NULL)
-		return (ENOMEM);
+	if (evq == NULL) {
+		return ENOMEM;
+	}
 	erp = &evq->ee_req;
 
 	// get users request pkt
 
 	if (IS_64BIT_PROCESS(p)) {
-	        error = copyin(uap->u_req, (caddr_t)erp, sizeof(struct eventreq64));
+		error = copyin(uap->u_req, (caddr_t)erp, sizeof(struct eventreq64));
 	} else {
-	        struct eventreq32 er32;
+		struct eventreq32 er32;
 
-	        error = copyin(uap->u_req, (caddr_t)&er32, sizeof(struct eventreq32));
+		error = copyin(uap->u_req, (caddr_t)&er32, sizeof(struct eventreq32));
 		if (error == 0) {
-		       /*
-			* the user only passes in the
-			* er_type, er_handle and er_data...
-			* the other fields are initialized
-			* below, so don't bother to copy
-			*/
-		        erp->er_type = er32.er_type;
-		        erp->er_handle = er32.er_handle;
-		        erp->er_data = (user_addr_t)er32.er_data;
+			/*
+			 * the user only passes in the
+			 * er_type, er_handle and er_data...
+			 * the other fields are initialized
+			 * below, so don't bother to copy
+			 */
+			erp->er_type = er32.er_type;
+			erp->er_handle = er32.er_handle;
+			erp->er_data = (user_addr_t)er32.er_data;
 		}
 	}
 	if (error) {
-	        FREE(evq, M_TEMP);
-		KERNEL_DEBUG(DBG_MISC_WATCH|DBG_FUNC_END, error,0,0,0,0);
+		FREE(evq, M_TEMP);
+		KERNEL_DEBUG(DBG_MISC_WATCH | DBG_FUNC_END, error, 0, 0, 0, 0);
 
-		return(error);		
+		return error;
 	}
-	KERNEL_DEBUG(DBG_MISC_WATCH, erp->er_handle,uap->u_eventmask,(uint32_t)evq,0,0);
+	KERNEL_DEBUG(DBG_MISC_WATCH, erp->er_handle, uap->u_eventmask, (uint32_t)evq, 0, 0);
 
 	// validate, freeing qelt if errors
 	error = 0;
@@ -2672,26 +2756,26 @@ watchevent(proc_t p, struct watchevent_args *uap, __unused int *retval)
 	if (error) {
 		FREE(evq, M_TEMP);
 
-		KERNEL_DEBUG(DBG_MISC_WATCH|DBG_FUNC_END, error,0,0,0,0);
-		return(error);
+		KERNEL_DEBUG(DBG_MISC_WATCH | DBG_FUNC_END, error, 0, 0, 0, 0);
+		return error;
 	}
-		
+
 	/*
 	 * only allow one watch per file per proc
 	 */
-	for ( ; np != NULL; np = np->ee_slist.tqe_next) {
+	for (; np != NULL; np = np->ee_slist.tqe_next) {
 		if (np->ee_proc == p) {
 #if SOCKETS
-			if (fp->f_type == DTYPE_SOCKET)
+			if (fp->f_type == DTYPE_SOCKET) {
 				socket_unlock((struct socket *)fp->f_data, 1);
-			else 
+			} else
 #endif /* SOCKETS */
-				PIPE_UNLOCK((struct pipe *)fp->f_data);
+			PIPE_UNLOCK((struct pipe *)fp->f_data);
 			fp_drop(p, erp->er_handle, fp, 0);
 			FREE(evq, M_TEMP);
-			
-			KERNEL_DEBUG(DBG_MISC_WATCH|DBG_FUNC_END, EINVAL,0,0,0,0);
-			return(EINVAL);
+
+			KERNEL_DEBUG(DBG_MISC_WATCH | DBG_FUNC_END, EINVAL, 0, 0, 0, 0);
+			return EINVAL;
 		}
 	}
 	erp->er_ecnt = erp->er_rcnt = erp->er_wcnt = erp->er_eventbits = 0;
@@ -2715,8 +2799,8 @@ watchevent(proc_t p, struct watchevent_args *uap, __unused int *retval)
 	}
 	fp_drop_event(p, erp->er_handle, fp);
 
-	KERNEL_DEBUG(DBG_MISC_WATCH|DBG_FUNC_END, 0,0,0,0,0);
-	return(0);
+	KERNEL_DEBUG(DBG_MISC_WATCH | DBG_FUNC_END, 0, 0, 0, 0, 0);
+	return 0;
 }
 
 
@@ -2731,14 +2815,14 @@ watchevent(proc_t p, struct watchevent_args *uap, __unused int *retval)
 int
 waitevent(proc_t p, struct waitevent_args *uap, int *retval)
 {
-        int error = 0;
+	int error = 0;
 	struct eventqelt *evq;
 	struct eventreq64 *erp;
 	uint64_t abstime, interval;
 	boolean_t fast_poll = FALSE;
 	union {
-	        struct eventreq64 er64;
-	        struct eventreq32 er32;
+		struct eventreq64 er64;
+		struct eventreq32 er32;
 	} uer = {};
 
 	interval = 0;
@@ -2749,19 +2833,21 @@ waitevent(proc_t p, struct waitevent_args *uap, int *retval)
 		 * check for fast poll method
 		 */
 		if (IS_64BIT_PROCESS(p)) {
-		        if (uap->tv == (user_addr_t)-1)
-			        fast_poll = TRUE;
-		} else if (uap->tv == (user_addr_t)((uint32_t)-1))
-		        fast_poll = TRUE;
+			if (uap->tv == (user_addr_t)-1) {
+				fast_poll = TRUE;
+			}
+		} else if (uap->tv == (user_addr_t)((uint32_t)-1)) {
+			fast_poll = TRUE;
+		}
 
 		if (fast_poll == TRUE) {
-		        if (p->p_evlist.tqh_first == NULL) {
-				KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_NONE, -1,0,0,0,0);
+			if (p->p_evlist.tqh_first == NULL) {
+				KERNEL_DEBUG(DBG_MISC_WAIT | DBG_FUNC_NONE, -1, 0, 0, 0, 0);
 				/*
 				 * poll failed
 				 */
-			        *retval = 1;
-				return (0);
+				*retval = 1;
+				return 0;
 			}
 			proc_lock(p);
 			goto retry;
@@ -2779,76 +2865,80 @@ waitevent(proc_t p, struct waitevent_args *uap, int *retval)
 			atv.tv_usec = atv32.tv_usec;
 		}
 
-		if (error)
-			return(error);
+		if (error) {
+			return error;
+		}
 		if (itimerfix(&atv)) {
 			error = EINVAL;
-			return(error);
+			return error;
 		}
 		interval = tvtoabstime(&atv);
 	}
-	KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_START, 0,0,0,0,0);
+	KERNEL_DEBUG(DBG_MISC_WAIT | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
 	proc_lock(p);
 retry:
 	if ((evq = p->p_evlist.tqh_first) != NULL) {
-	        /*
+		/*
 		 * found one... make a local copy while it's still on the queue
 		 * to prevent it from changing while in the midst of copying
 		 * don't want to hold the proc lock across a copyout because
 		 * it might block on a page fault at the target in user space
 		 */
-	        erp = &evq->ee_req;
+		erp = &evq->ee_req;
 
-		if (IS_64BIT_PROCESS(p))
-		        bcopy((caddr_t)erp, (caddr_t)&uer.er64, sizeof (struct eventreq64));
-		else {
-		        uer.er32.er_type  = erp->er_type;
-		        uer.er32.er_handle  = erp->er_handle;
-		        uer.er32.er_data  = (uint32_t)erp->er_data;
-		        uer.er32.er_ecnt  = erp->er_ecnt;
-		        uer.er32.er_rcnt  = erp->er_rcnt;
-		        uer.er32.er_wcnt  = erp->er_wcnt;
-		        uer.er32.er_eventbits = erp->er_eventbits;
+		if (IS_64BIT_PROCESS(p)) {
+			bcopy((caddr_t)erp, (caddr_t)&uer.er64, sizeof(struct eventreq64));
+		} else {
+			uer.er32.er_type  = erp->er_type;
+			uer.er32.er_handle  = erp->er_handle;
+			uer.er32.er_data  = (uint32_t)erp->er_data;
+			uer.er32.er_ecnt  = erp->er_ecnt;
+			uer.er32.er_rcnt  = erp->er_rcnt;
+			uer.er32.er_wcnt  = erp->er_wcnt;
+			uer.er32.er_eventbits = erp->er_eventbits;
 		}
-	        TAILQ_REMOVE(&p->p_evlist, evq, ee_plist);
+		TAILQ_REMOVE(&p->p_evlist, evq, ee_plist);
 
 		evq->ee_flags &= ~EV_QUEUED;
 
 		proc_unlock(p);
 
-		if (IS_64BIT_PROCESS(p))
-		        error = copyout((caddr_t)&uer.er64, uap->u_req, sizeof(struct eventreq64));
-		else
-		        error = copyout((caddr_t)&uer.er32, uap->u_req, sizeof(struct eventreq32));
+		if (IS_64BIT_PROCESS(p)) {
+			error = copyout((caddr_t)&uer.er64, uap->u_req, sizeof(struct eventreq64));
+		} else {
+			error = copyout((caddr_t)&uer.er32, uap->u_req, sizeof(struct eventreq32));
+		}
 
-		KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_END, error,
-			     evq->ee_req.er_handle,evq->ee_req.er_eventbits,(uint32_t)evq,0);
-		return (error);
-	}
-	else {
+		KERNEL_DEBUG(DBG_MISC_WAIT | DBG_FUNC_END, error,
+		    evq->ee_req.er_handle, evq->ee_req.er_eventbits, (uint32_t)evq, 0);
+		return error;
+	} else {
 		if (uap->tv && interval == 0) {
 			proc_unlock(p);
 			*retval = 1;  // poll failed
 
-			KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_END, error,0,0,0,0);
-			return (error);
+			KERNEL_DEBUG(DBG_MISC_WAIT | DBG_FUNC_END, error, 0, 0, 0, 0);
+			return error;
 		}
-		if (interval != 0)
+		if (interval != 0) {
 			clock_absolutetime_interval_to_deadline(interval, &abstime);
-		else
-		        abstime = 0;
+		} else {
+			abstime = 0;
+		}
 
-		KERNEL_DEBUG(DBG_MISC_WAIT, 1,(uint32_t)&p->p_evlist,0,0,0);
+		KERNEL_DEBUG(DBG_MISC_WAIT, 1, (uint32_t)&p->p_evlist, 0, 0, 0);
 
 		error = msleep1(&p->p_evlist, &p->p_mlock, (PSOCK | PCATCH), "waitevent", abstime);
 
-		KERNEL_DEBUG(DBG_MISC_WAIT, 2,(uint32_t)&p->p_evlist,0,0,0);
+		KERNEL_DEBUG(DBG_MISC_WAIT, 2, (uint32_t)&p->p_evlist, 0, 0, 0);
 
-		if (error == 0)
+		if (error == 0) {
 			goto retry;
-		if (error == ERESTART)
+		}
+		if (error == ERESTART) {
 			error = EINTR;
+		}
 		if (error == EWOULDBLOCK) {
 			*retval = 1;
 			error = 0;
@@ -2856,8 +2946,8 @@ retry:
 	}
 	proc_unlock(p);
 
-	KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_END, 0,0,0,0,0);
-	return (error);
+	KERNEL_DEBUG(DBG_MISC_WAIT | DBG_FUNC_END, 0, 0, 0, 0, 0);
+	return error;
 }
 
 
@@ -2871,12 +2961,12 @@ modwatch(proc_t p, struct modwatch_args *uap, __unused int *retval)
 {
 	struct eventreq64 er;
 	struct eventreq64 *erp = &er;
-	struct eventqelt *evq = NULL;	/* protected by error return */
+	struct eventqelt *evq = NULL;   /* protected by error return */
 	int error;
 	struct fileproc *fp;
 	int flag;
 
-	KERNEL_DEBUG(DBG_MISC_MOD|DBG_FUNC_START, 0,0,0,0,0);
+	KERNEL_DEBUG(DBG_MISC_MOD | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
 	/*
 	 * get user's request pkt
@@ -2885,8 +2975,8 @@ modwatch(proc_t p, struct modwatch_args *uap, __unused int *retval)
 	 * those 2 fields
 	 */
 	if ((error = copyin(uap->u_req, (caddr_t)erp, sizeof(er.er_type) + sizeof(er.er_handle)))) {
-	        KERNEL_DEBUG(DBG_MISC_MOD|DBG_FUNC_END, error,0,0,0,0);
-	        return(error);
+		KERNEL_DEBUG(DBG_MISC_MOD | DBG_FUNC_END, error, 0, 0, 0, 0);
+		return error;
 	}
 	proc_fdlock(p);
 
@@ -2909,8 +2999,8 @@ modwatch(proc_t p, struct modwatch_args *uap, __unused int *retval)
 
 	if (error) {
 		proc_fdunlock(p);
-		KERNEL_DEBUG(DBG_MISC_MOD|DBG_FUNC_END, error,0,0,0,0);
-		return(error);
+		KERNEL_DEBUG(DBG_MISC_MOD | DBG_FUNC_END, error, 0, 0, 0, 0);
+		return error;
 	}
 
 	if ((uap->u_eventmask == EV_RM) && (fp->f_flags & FP_WAITEVENT)) {
@@ -2919,22 +3009,23 @@ modwatch(proc_t p, struct modwatch_args *uap, __unused int *retval)
 	proc_fdunlock(p);
 
 	// locate event if possible
-	for ( ; evq != NULL; evq = evq->ee_slist.tqe_next) {
-	        if (evq->ee_proc == p)
-		        break;
+	for (; evq != NULL; evq = evq->ee_slist.tqe_next) {
+		if (evq->ee_proc == p) {
+			break;
+		}
 	}
 	if (evq == NULL) {
 #if SOCKETS
-		if (fp->f_type == DTYPE_SOCKET) 
+		if (fp->f_type == DTYPE_SOCKET) {
 			socket_unlock((struct socket *)fp->f_data, 1);
-		else
+		} else
 #endif /* SOCKETS */
-			PIPE_UNLOCK((struct pipe *)fp->f_data);
+		PIPE_UNLOCK((struct pipe *)fp->f_data);
 		fp_drop(p, erp->er_handle, fp, 0);
-		KERNEL_DEBUG(DBG_MISC_MOD|DBG_FUNC_END, EINVAL,0,0,0,0);
-		return(EINVAL);
+		KERNEL_DEBUG(DBG_MISC_MOD | DBG_FUNC_END, EINVAL, 0, 0, 0, 0);
+		return EINVAL;
 	}
-	KERNEL_DEBUG(DBG_MISC_MOD, erp->er_handle,uap->u_eventmask,(uint32_t)evq,0,0);
+	KERNEL_DEBUG(DBG_MISC_MOD, erp->er_handle, uap->u_eventmask, (uint32_t)evq, 0, 0);
 
 	if (uap->u_eventmask == EV_RM) {
 		EVPROCDEQUE(p, evq);
@@ -2951,18 +3042,17 @@ modwatch(proc_t p, struct modwatch_args *uap, __unused int *retval)
 		}
 		fp_drop(p, erp->er_handle, fp, 0);
 		FREE(evq, M_TEMP);
-		KERNEL_DEBUG(DBG_MISC_MOD|DBG_FUNC_END, 0,0,0,0,0);
-		return(0);
+		KERNEL_DEBUG(DBG_MISC_MOD | DBG_FUNC_END, 0, 0, 0, 0, 0);
+		return 0;
 	}
 	switch (uap->u_eventmask & EV_MASK) {
- 
 	case 0:
 		flag = 0;
 		break;
 
 	case EV_RE:
 	case EV_WR:
-	case EV_RE|EV_WR:
+	case EV_RE | EV_WR:
 		flag = EV_RWBYTES;
 		break;
 
@@ -2970,22 +3060,22 @@ modwatch(proc_t p, struct modwatch_args *uap, __unused int *retval)
 		flag = EV_OOB;
 		break;
 
-	case EV_EX|EV_RE:
-	case EV_EX|EV_WR:
-	case EV_EX|EV_RE|EV_WR:
-		flag = EV_OOB|EV_RWBYTES;
+	case EV_EX | EV_RE:
+	case EV_EX | EV_WR:
+	case EV_EX | EV_RE | EV_WR:
+		flag = EV_OOB | EV_RWBYTES;
 		break;
 
 	default:
 #if SOCKETS
-		if (fp->f_type == DTYPE_SOCKET) 
+		if (fp->f_type == DTYPE_SOCKET) {
 			socket_unlock((struct socket *)fp->f_data, 1);
-		else 
+		} else
 #endif /* SOCKETS */
-			PIPE_UNLOCK((struct pipe *)fp->f_data);
+		PIPE_UNLOCK((struct pipe *)fp->f_data);
 		fp_drop(p, erp->er_handle, fp, 0);
-		KERNEL_DEBUG(DBG_MISC_WATCH|DBG_FUNC_END, EINVAL,0,0,0,0);
-		return(EINVAL);
+		KERNEL_DEBUG(DBG_MISC_WATCH | DBG_FUNC_END, EINVAL, 0, 0, 0, 0);
+		return EINVAL;
 	}
 	/*
 	 * since we're holding the socket/pipe lock, the event
@@ -3021,8 +3111,8 @@ modwatch(proc_t p, struct modwatch_args *uap, __unused int *retval)
 		PIPE_UNLOCK((struct pipe *)fp->f_data);
 	}
 	fp_drop(p, erp->er_handle, fp, 0);
-	KERNEL_DEBUG(DBG_MISC_MOD|DBG_FUNC_END, evq->ee_req.er_handle,evq->ee_eventmask,(uint32_t)fp->f_data,flag,0);
-	return(0);
+	KERNEL_DEBUG(DBG_MISC_MOD | DBG_FUNC_END, evq->ee_req.er_handle, evq->ee_eventmask, (uint32_t)fp->f_data, flag, 0);
+	return 0;
 }
 
 /* this routine is called from the close of fd with proc_fdlock held */
@@ -3036,36 +3126,36 @@ waitevent_close(struct proc *p, struct fileproc *fp)
 
 #if SOCKETS
 	if (fp->f_type == DTYPE_SOCKET) {
-	        socket_lock((struct socket *)fp->f_data, 1);
+		socket_lock((struct socket *)fp->f_data, 1);
 		evq = ((struct socket *)fp->f_data)->so_evlist.tqh_first;
 	} else
 #endif /* SOCKETS */
 	if (fp->f_type == DTYPE_PIPE) {
-	        PIPE_LOCK((struct pipe *)fp->f_data);
+		PIPE_LOCK((struct pipe *)fp->f_data);
 		evq = ((struct pipe *)fp->f_data)->pipe_evlist.tqh_first;
-	}
-	else {
-		return(EINVAL);
+	} else {
+		return EINVAL;
 	}
 	proc_fdunlock(p);
 
 
 	// locate event if possible
-	for ( ; evq != NULL; evq = evq->ee_slist.tqe_next) {
-	        if (evq->ee_proc == p)
-		        break;
+	for (; evq != NULL; evq = evq->ee_slist.tqe_next) {
+		if (evq->ee_proc == p) {
+			break;
+		}
 	}
 	if (evq == NULL) {
 #if SOCKETS
-	        if (fp->f_type == DTYPE_SOCKET) 
-		        socket_unlock((struct socket *)fp->f_data, 1);
-		else 
+		if (fp->f_type == DTYPE_SOCKET) {
+			socket_unlock((struct socket *)fp->f_data, 1);
+		} else
 #endif /* SOCKETS */
-		        PIPE_UNLOCK((struct pipe *)fp->f_data);
+		PIPE_UNLOCK((struct pipe *)fp->f_data);
 
 		proc_fdlock(p);
 
-		return(EINVAL);
+		return EINVAL;
 	}
 	EVPROCDEQUE(p, evq);
 
@@ -3083,7 +3173,7 @@ waitevent_close(struct proc *p, struct fileproc *fp)
 
 	proc_fdlock(p);
 
-	return(0);
+	return 0;
 }
 
 
@@ -3109,33 +3199,35 @@ gethostuuid(struct proc *p, struct gethostuuid_args *uap, __unused int32_t *retv
 {
 	kern_return_t kret;
 	int error;
-	mach_timespec_t mach_ts;	/* for IOKit call */
-	__darwin_uuid_t uuid_kern = {};	/* for IOKit call */
+	mach_timespec_t mach_ts;        /* for IOKit call */
+	__darwin_uuid_t uuid_kern = {}; /* for IOKit call */
 
 	if (!uap->spi) {
 #if CONFIG_EMBEDDED
 #if CONFIG_MACF
 		if ((error = mac_system_check_info(kauth_cred_get(), "hw.uuid")) != 0) {
 			/* EPERM invokes userspace upcall if present */
-			return (error);
+			return error;
 		}
 #endif
 #endif
 	}
 
 	/* Convert the 32/64 bit timespec into a mach_timespec_t */
-	if ( proc_is64bit(p) ) {
+	if (proc_is64bit(p)) {
 		struct user64_timespec ts;
 		error = copyin(uap->timeoutp, &ts, sizeof(ts));
-		if (error)
-			return (error);
+		if (error) {
+			return error;
+		}
 		mach_ts.tv_sec = ts.tv_sec;
 		mach_ts.tv_nsec = ts.tv_nsec;
 	} else {
 		struct user32_timespec ts;
-		error = copyin(uap->timeoutp, &ts, sizeof(ts) );
-		if (error)
-			return (error);
+		error = copyin(uap->timeoutp, &ts, sizeof(ts));
+		if (error) {
+			return error;
+		}
 		mach_ts.tv_sec = ts.tv_sec;
 		mach_ts.tv_nsec = ts.tv_nsec;
 	}
@@ -3154,7 +3246,7 @@ gethostuuid(struct proc *p, struct gethostuuid_args *uap, __unused int32_t *retv
 		error = EWOULDBLOCK;
 	}
 
-	return (error);
+	return error;
 }
 
 /*
@@ -3178,101 +3270,109 @@ ledger(struct proc *p, struct ledger_args *args, __unused int32_t *retval)
 	/* Finish copying in the necessary args before taking the proc lock */
 	error = 0;
 	len = 0;
-	if (args->cmd == LEDGER_ENTRY_INFO)
-		error = copyin(args->arg3, (char *)&len, sizeof (len));
-	else if (args->cmd == LEDGER_TEMPLATE_INFO)
-		error = copyin(args->arg2, (char *)&len, sizeof (len));
-	else if (args->cmd == LEDGER_LIMIT)
+	if (args->cmd == LEDGER_ENTRY_INFO) {
+		error = copyin(args->arg3, (char *)&len, sizeof(len));
+	} else if (args->cmd == LEDGER_TEMPLATE_INFO) {
+		error = copyin(args->arg2, (char *)&len, sizeof(len));
+	} else if (args->cmd == LEDGER_LIMIT)
 #ifdef LEDGER_DEBUG
-		error = copyin(args->arg2, (char *)&lla, sizeof (lla));
+	{ error = copyin(args->arg2, (char *)&lla, sizeof(lla));}
 #else
-		return (EINVAL);
+	{ return EINVAL; }
 #endif
-	else if ((args->cmd < 0) || (args->cmd > LEDGER_MAX_CMD))
-		return (EINVAL);
+	else if ((args->cmd < 0) || (args->cmd > LEDGER_MAX_CMD)) {
+		return EINVAL;
+	}
 
-	if (error)
-		return (error);
-	if (len < 0)
-		return (EINVAL);
+	if (error) {
+		return error;
+	}
+	if (len < 0) {
+		return EINVAL;
+	}
 
 	rval = 0;
 	if (args->cmd != LEDGER_TEMPLATE_INFO) {
 		pid = args->arg1;
 		proc = proc_find(pid);
-		if (proc == NULL)
-			return (ESRCH);
+		if (proc == NULL) {
+			return ESRCH;
+		}
 
 #if CONFIG_MACF
 		error = mac_proc_check_ledger(p, proc, args->cmd);
 		if (error) {
 			proc_rele(proc);
-			return (error);
+			return error;
 		}
 #endif
 
 		task = proc->task;
 	}
-		
+
 	switch (args->cmd) {
 #ifdef LEDGER_DEBUG
-		case LEDGER_LIMIT: {
-			if (!kauth_cred_issuser(kauth_cred_get()))
-				rval = EPERM;
-			rval = ledger_limit(task, &lla);
-			proc_rele(proc);
-			break;
+	case LEDGER_LIMIT: {
+		if (!kauth_cred_issuser(kauth_cred_get())) {
+			rval = EPERM;
 		}
+		rval = ledger_limit(task, &lla);
+		proc_rele(proc);
+		break;
+	}
 #endif
-		case LEDGER_INFO: {
-			struct ledger_info info = {};
+	case LEDGER_INFO: {
+		struct ledger_info info = {};
 
-			rval = ledger_info(task, &info);
-			proc_rele(proc);
-			if (rval == 0)
-				rval = copyout(&info, args->arg2,
-				    sizeof (info));
-			break;
+		rval = ledger_info(task, &info);
+		proc_rele(proc);
+		if (rval == 0) {
+			rval = copyout(&info, args->arg2,
+			    sizeof(info));
 		}
-
-		case LEDGER_ENTRY_INFO: {
-			void *buf;
-			int sz;
-
-			rval = ledger_get_task_entry_info_multiple(task, &buf, &len);
-			proc_rele(proc);
-			if ((rval == 0) && (len >= 0)) {
-				sz = len * sizeof (struct ledger_entry_info);
-				rval = copyout(buf, args->arg2, sz);
-				kfree(buf, sz);
-			}
-			if (rval == 0)
-				rval = copyout(&len, args->arg3, sizeof (len));
-			break;
-		}
-
-		case LEDGER_TEMPLATE_INFO: {
-			void *buf;
-			int sz;
-
-			rval = ledger_template_info(&buf, &len);
-			if ((rval == 0) && (len >= 0)) {
-				sz = len * sizeof (struct ledger_template_info);
-				rval = copyout(buf, args->arg1, sz);
-				kfree(buf, sz);
-			}
-			if (rval == 0)
-				rval = copyout(&len, args->arg2, sizeof (len));
-			break;
-		}
-
-		default:
-			panic("ledger syscall logic error -- command type %d", args->cmd);
-			proc_rele(proc);
-			rval = EINVAL;
+		break;
 	}
 
-	return (rval);
+	case LEDGER_ENTRY_INFO: {
+		void *buf;
+		int sz;
+
+		rval = ledger_get_task_entry_info_multiple(task, &buf, &len);
+		proc_rele(proc);
+		if ((rval == 0) && (len >= 0)) {
+			sz = len * sizeof(struct ledger_entry_info);
+			rval = copyout(buf, args->arg2, sz);
+			kfree(buf, sz);
+		}
+		if (rval == 0) {
+			rval = copyout(&len, args->arg3, sizeof(len));
+		}
+		break;
+	}
+
+	case LEDGER_TEMPLATE_INFO: {
+		void *buf;
+		int sz;
+
+		rval = ledger_template_info(&buf, &len);
+		if ((rval == 0) && (len >= 0)) {
+			sz = len * sizeof(struct ledger_template_info);
+			rval = copyout(buf, args->arg1, sz);
+			kfree(buf, sz);
+		}
+		if (rval == 0) {
+			rval = copyout(&len, args->arg2, sizeof(len));
+		}
+		break;
+	}
+
+	default:
+		panic("ledger syscall logic error -- command type %d", args->cmd);
+		proc_rele(proc);
+		rval = EINVAL;
+	}
+
+	return rval;
 }
 
 int
@@ -3290,8 +3390,9 @@ telemetry(__unused struct proc *p, struct telemetry_args *args, __unused int32_t
 		break;
 #endif /* CONFIG_TELEMETRY */
 	case TELEMETRY_CMD_VOUCHER_NAME:
-		if (thread_set_voucher_name((mach_port_name_t)args->deadline))
+		if (thread_set_voucher_name((mach_port_name_t)args->deadline)) {
 			error = EINVAL;
+		}
 		break;
 
 	default:
@@ -3299,7 +3400,7 @@ telemetry(__unused struct proc *p, struct telemetry_args *args, __unused int32_t
 		break;
 	}
 
-	return (error);
+	return error;
 }
 
 #if DEVELOPMENT || DEBUG
@@ -3313,17 +3414,20 @@ struct g_wqset {
 static queue_head_t         g_wqset_list;
 static struct waitq_set    *g_waitq_set = NULL;
 
-static inline struct waitq_set *sysctl_get_wqset(int idx)
+static inline struct waitq_set *
+sysctl_get_wqset(int idx)
 {
 	struct g_wqset *gwqs;
 
-	if (!g_wqset_num)
+	if (!g_wqset_num) {
 		queue_init(&g_wqset_list);
+	}
 
 	/* don't bother with locks: this is test-only code! */
 	qe_foreach_element(gwqs, &g_wqset_list, link) {
-		if ((int)(wqset_id(gwqs->wqset) & 0xffffffff) == idx)
+		if ((int)(wqset_id(gwqs->wqset) & 0xffffffff) == idx) {
 			return gwqs->wqset;
+		}
 	}
 
 	/* allocate a new one */
@@ -3331,7 +3435,7 @@ static inline struct waitq_set *sysctl_get_wqset(int idx)
 	gwqs = (struct g_wqset *)kalloc(sizeof(*gwqs));
 	assert(gwqs != NULL);
 
-	gwqs->wqset = waitq_set_alloc(SYNC_POLICY_FIFO|SYNC_POLICY_PREPOST, NULL);
+	gwqs->wqset = waitq_set_alloc(SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST, NULL);
 	enqueue_tail(&g_wqset_list, &gwqs->link);
 	printf("[WQ]: created new waitq set 0x%llx\n", wqset_id(gwqs->wqset));
 
@@ -3342,15 +3446,18 @@ static inline struct waitq_set *sysctl_get_wqset(int idx)
 static int g_wq_init = 0;
 static struct waitq  g_wq[MAX_GLOBAL_TEST_QUEUES];
 
-static inline struct waitq *global_test_waitq(int idx)
+static inline struct waitq *
+global_test_waitq(int idx)
 {
-	if (idx < 0)
+	if (idx < 0) {
 		return NULL;
+	}
 
 	if (!g_wq_init) {
 		g_wq_init = 1;
-		for (int i = 0; i < MAX_GLOBAL_TEST_QUEUES; i++)
+		for (int i = 0; i < MAX_GLOBAL_TEST_QUEUES; i++) {
 			waitq_init(&g_wq[i], SYNC_POLICY_FIFO);
+		}
 	}
 
 	return &g_wq[idx % MAX_GLOBAL_TEST_QUEUES];
@@ -3366,11 +3473,13 @@ static int sysctl_waitq_wakeup_one SYSCTL_HANDLER_ARGS
 	int64_t event64 = 0;
 
 	error = SYSCTL_IN(req, &event64, sizeof(event64));
-	if (error)
+	if (error) {
 		return error;
+	}
 
-	if (!req->newptr)
+	if (!req->newptr) {
 		return SYSCTL_OUT(req, &event64, sizeof(event64));
+	}
 
 	if (event64 < 0) {
 		index = (int)((-event64) & 0xffffffff);
@@ -3384,15 +3493,15 @@ static int sysctl_waitq_wakeup_one SYSCTL_HANDLER_ARGS
 	event64 = 0;
 
 	printf("[WQ]: Waking one thread on waitq [%d] event:0x%llx\n",
-	       index, event64);
+	    index, event64);
 	kr = waitq_wakeup64_one(waitq, (event64_t)event64, THREAD_AWAKENED,
-				WAITQ_ALL_PRIORITIES);
+	    WAITQ_ALL_PRIORITIES);
 	printf("[WQ]: \tkr=%d\n", kr);
 
 	return SYSCTL_OUT(req, &kr, sizeof(kr));
 }
 SYSCTL_PROC(_kern, OID_AUTO, waitq_wakeup_one, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_waitq_wakeup_one, "Q", "wakeup one thread waiting on given event");
+    0, 0, sysctl_waitq_wakeup_one, "Q", "wakeup one thread waiting on given event");
 
 
 static int sysctl_waitq_wakeup_all SYSCTL_HANDLER_ARGS
@@ -3405,11 +3514,13 @@ static int sysctl_waitq_wakeup_all SYSCTL_HANDLER_ARGS
 	int64_t event64 = 0;
 
 	error = SYSCTL_IN(req, &event64, sizeof(event64));
-	if (error)
+	if (error) {
 		return error;
+	}
 
-	if (!req->newptr)
+	if (!req->newptr) {
 		return SYSCTL_OUT(req, &event64, sizeof(event64));
+	}
 
 	if (event64 < 0) {
 		index = (int)((-event64) & 0xffffffff);
@@ -3423,15 +3534,15 @@ static int sysctl_waitq_wakeup_all SYSCTL_HANDLER_ARGS
 	event64 = 0;
 
 	printf("[WQ]: Waking all threads on waitq [%d] event:0x%llx\n",
-	       index, event64);
+	    index, event64);
 	kr = waitq_wakeup64_all(waitq, (event64_t)event64,
-				THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
+	    THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
 	printf("[WQ]: \tkr=%d\n", kr);
 
 	return SYSCTL_OUT(req, &kr, sizeof(kr));
 }
 SYSCTL_PROC(_kern, OID_AUTO, waitq_wakeup_all, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_waitq_wakeup_all, "Q", "wakeup all threads waiting on given event");
+    0, 0, sysctl_waitq_wakeup_all, "Q", "wakeup all threads waiting on given event");
 
 
 static int sysctl_waitq_wait SYSCTL_HANDLER_ARGS
@@ -3444,11 +3555,13 @@ static int sysctl_waitq_wait SYSCTL_HANDLER_ARGS
 	int64_t event64 = 0;
 
 	error = SYSCTL_IN(req, &event64, sizeof(event64));
-	if (error)
+	if (error) {
 		return error;
+	}
 
-	if (!req->newptr)
+	if (!req->newptr) {
 		return SYSCTL_OUT(req, &event64, sizeof(event64));
+	}
 
 	if (event64 < 0) {
 		index = (int)((-event64) & 0xffffffff);
@@ -3462,16 +3575,17 @@ static int sysctl_waitq_wait SYSCTL_HANDLER_ARGS
 	event64 = 0;
 
 	printf("[WQ]: Current thread waiting on waitq [%d] event:0x%llx\n",
-	       index, event64);
+	    index, event64);
 	kr = waitq_assert_wait64(waitq, (event64_t)event64, THREAD_INTERRUPTIBLE, 0);
-	if (kr == THREAD_WAITING)
+	if (kr == THREAD_WAITING) {
 		thread_block(THREAD_CONTINUE_NULL);
+	}
 	printf("[WQ]: \tWoke Up: kr=%d\n", kr);
 
 	return SYSCTL_OUT(req, &kr, sizeof(kr));
 }
 SYSCTL_PROC(_kern, OID_AUTO, waitq_wait, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_waitq_wait, "Q", "start waiting on given event");
+    0, 0, sysctl_waitq_wait, "Q", "start waiting on given event");
 
 
 static int sysctl_wqset_select SYSCTL_HANDLER_ARGS
@@ -3482,11 +3596,13 @@ static int sysctl_wqset_select SYSCTL_HANDLER_ARGS
 	uint64_t event64 = 0;
 
 	error = SYSCTL_IN(req, &event64, sizeof(event64));
-	if (error)
+	if (error) {
 		return error;
+	}
 
-	if (!req->newptr)
+	if (!req->newptr) {
 		goto out;
+	}
 
 	wqset = sysctl_get_wqset((int)(event64 & 0xffffffff));
 	g_waitq_set = wqset;
@@ -3495,15 +3611,16 @@ static int sysctl_wqset_select SYSCTL_HANDLER_ARGS
 	printf("[WQ]: selected wqset 0x%llx\n", event64);
 
 out:
-	if (g_waitq_set)
+	if (g_waitq_set) {
 		event64 = wqset_id(g_waitq_set);
-	else
+	} else {
 		event64 = (uint64_t)(-1);
+	}
 
 	return SYSCTL_OUT(req, &event64, sizeof(event64));
 }
 SYSCTL_PROC(_kern, OID_AUTO, wqset_select, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_wqset_select, "Q", "select/create a global waitq set");
+    0, 0, sysctl_wqset_select, "Q", "select/create a global waitq set");
 
 
 static int sysctl_waitq_link SYSCTL_HANDLER_ARGS
@@ -3518,22 +3635,26 @@ static int sysctl_waitq_link SYSCTL_HANDLER_ARGS
 	int64_t event64 = 0;
 
 	error = SYSCTL_IN(req, &event64, sizeof(event64));
-	if (error)
+	if (error) {
 		return error;
+	}
 
-	if (!req->newptr)
+	if (!req->newptr) {
 		return SYSCTL_OUT(req, &event64, sizeof(event64));
+	}
 
-	if (!g_waitq_set)
+	if (!g_waitq_set) {
 		g_waitq_set = sysctl_get_wqset(1);
+	}
 	wqset = g_waitq_set;
 
 	if (event64 < 0) {
 		struct waitq_set *tmp;
 		index = (int)((-event64) & 0xffffffff);
 		tmp = sysctl_get_wqset(index);
-		if (tmp == wqset)
+		if (tmp == wqset) {
 			goto out;
+		}
 		waitq = wqset_waitq(tmp);
 		index = -index;
 	} else {
@@ -3542,7 +3663,7 @@ static int sysctl_waitq_link SYSCTL_HANDLER_ARGS
 	}
 
 	printf("[WQ]: linking waitq [%d] to global wqset (0x%llx)\n",
-	       index, wqset_id(wqset));
+	    index, wqset_id(wqset));
 	reserved_link = waitq_link_reserve(waitq);
 	kr = waitq_link(waitq, wqset, WAITQ_SHOULD_LOCK, &reserved_link);
 	waitq_link_release(reserved_link);
@@ -3553,7 +3674,7 @@ out:
 	return SYSCTL_OUT(req, &kr, sizeof(kr));
 }
 SYSCTL_PROC(_kern, OID_AUTO, waitq_link, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_waitq_link, "Q", "link global waitq to test waitq set");
+    0, 0, sysctl_waitq_link, "Q", "link global waitq to test waitq set");
 
 
 static int sysctl_waitq_unlink SYSCTL_HANDLER_ARGS
@@ -3567,21 +3688,24 @@ static int sysctl_waitq_unlink SYSCTL_HANDLER_ARGS
 	uint64_t event64 = 0;
 
 	error = SYSCTL_IN(req, &event64, sizeof(event64));
-	if (error)
+	if (error) {
 		return error;
+	}
 
-	if (!req->newptr)
+	if (!req->newptr) {
 		return SYSCTL_OUT(req, &event64, sizeof(event64));
+	}
 
-	if (!g_waitq_set)
+	if (!g_waitq_set) {
 		g_waitq_set = sysctl_get_wqset(1);
+	}
 	wqset = g_waitq_set;
 
 	index = (int)event64;
 	waitq = global_test_waitq(index);
 
 	printf("[WQ]: unlinking waitq [%d] from global wqset (0x%llx)\n",
-	       index, wqset_id(wqset));
+	    index, wqset_id(wqset));
 
 	kr = waitq_unlink(waitq, wqset);
 	printf("[WQ]: \tkr=%d\n", kr);
@@ -3589,7 +3713,7 @@ static int sysctl_waitq_unlink SYSCTL_HANDLER_ARGS
 	return SYSCTL_OUT(req, &kr, sizeof(kr));
 }
 SYSCTL_PROC(_kern, OID_AUTO, waitq_unlink, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_waitq_unlink, "Q", "unlink global waitq from test waitq set");
+    0, 0, sysctl_waitq_unlink, "Q", "unlink global waitq from test waitq set");
 
 
 static int sysctl_waitq_clear_prepost SYSCTL_HANDLER_ARGS
@@ -3600,11 +3724,13 @@ static int sysctl_waitq_clear_prepost SYSCTL_HANDLER_ARGS
 	int error, index;
 
 	error = SYSCTL_IN(req, &event64, sizeof(event64));
-	if (error)
+	if (error) {
 		return error;
+	}
 
-	if (!req->newptr)
+	if (!req->newptr) {
 		return SYSCTL_OUT(req, &event64, sizeof(event64));
+	}
 
 	index = (int)event64;
 	waitq = global_test_waitq(index);
@@ -3615,7 +3741,7 @@ static int sysctl_waitq_clear_prepost SYSCTL_HANDLER_ARGS
 	return SYSCTL_OUT(req, &event64, sizeof(event64));
 }
 SYSCTL_PROC(_kern, OID_AUTO, waitq_clear_prepost, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_waitq_clear_prepost, "Q", "clear prepost on given waitq");
+    0, 0, sysctl_waitq_clear_prepost, "Q", "clear prepost on given waitq");
 
 
 static int sysctl_wqset_unlink_all SYSCTL_HANDLER_ARGS
@@ -3627,18 +3753,21 @@ static int sysctl_wqset_unlink_all SYSCTL_HANDLER_ARGS
 	uint64_t event64 = 0;
 
 	error = SYSCTL_IN(req, &event64, sizeof(event64));
-	if (error)
+	if (error) {
 		return error;
+	}
 
-	if (!req->newptr)
+	if (!req->newptr) {
 		return SYSCTL_OUT(req, &event64, sizeof(event64));
+	}
 
-	if (!g_waitq_set)
+	if (!g_waitq_set) {
 		g_waitq_set = sysctl_get_wqset(1);
+	}
 	wqset = g_waitq_set;
 
 	printf("[WQ]: unlinking all queues from global wqset (0x%llx)\n",
-	       wqset_id(wqset));
+	    wqset_id(wqset));
 
 	kr = waitq_set_unlink_all(wqset);
 	printf("[WQ]: \tkr=%d\n", kr);
@@ -3646,7 +3775,7 @@ static int sysctl_wqset_unlink_all SYSCTL_HANDLER_ARGS
 	return SYSCTL_OUT(req, &kr, sizeof(kr));
 }
 SYSCTL_PROC(_kern, OID_AUTO, wqset_unlink_all, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_wqset_unlink_all, "Q", "unlink all queues from test waitq set");
+    0, 0, sysctl_wqset_unlink_all, "Q", "unlink all queues from test waitq set");
 
 
 static int sysctl_wqset_clear_preposts SYSCTL_HANDLER_ARGS
@@ -3657,11 +3786,13 @@ static int sysctl_wqset_clear_preposts SYSCTL_HANDLER_ARGS
 	int error, index;
 
 	error = SYSCTL_IN(req, &event64, sizeof(event64));
-	if (error)
+	if (error) {
 		return error;
+	}
 
-	if (!req->newptr)
+	if (!req->newptr) {
 		goto out;
+	}
 
 	index = (int)((event64) & 0xffffffff);
 	wqset = sysctl_get_wqset(index);
@@ -3671,15 +3802,16 @@ static int sysctl_wqset_clear_preposts SYSCTL_HANDLER_ARGS
 	waitq_set_clear_preposts(wqset);
 
 out:
-	if (wqset)
+	if (wqset) {
 		event64 = wqset_id(wqset);
-	else
+	} else {
 		event64 = (uint64_t)(-1);
+	}
 
 	return SYSCTL_OUT(req, &event64, sizeof(event64));
 }
 SYSCTL_PROC(_kern, OID_AUTO, wqset_clear_preposts, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_wqset_clear_preposts, "Q", "clear preposts on given waitq set");
+    0, 0, sysctl_wqset_clear_preposts, "Q", "clear preposts on given waitq set");
 
 #endif /* CONFIG_WAITQ_DEBUG */
 
@@ -3687,11 +3819,12 @@ static int
 sysctl_waitq_set_nelem SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg1, arg2)
-        int nelem;
+	int nelem;
 
 	/* Read only  */
-	if (req->newptr != USER_ADDR_NULL)
-		return (EPERM);
+	if (req->newptr != USER_ADDR_NULL) {
+		return EPERM;
+	}
 
 	nelem = sysctl_helper_waitq_set_nelem();
 
@@ -3699,9 +3832,194 @@ sysctl_waitq_set_nelem SYSCTL_HANDLER_ARGS
 }
 
 SYSCTL_PROC(_kern, OID_AUTO, n_ltable_entries, CTLFLAG_RD | CTLFLAG_LOCKED,
-                0, 0, sysctl_waitq_set_nelem, "I", "ltable elementis currently used");
+    0, 0, sysctl_waitq_set_nelem, "I", "ltable elementis currently used");
 
 
 #endif /* DEVELOPMENT || DEBUG */
 
+/*Remote Time api*/
+SYSCTL_NODE(_machdep, OID_AUTO, remotetime, CTLFLAG_RD | CTLFLAG_LOCKED, 0, "Remote time api");
 
+#if DEVELOPMENT || DEBUG
+#if CONFIG_MACH_BRIDGE_SEND_TIME
+extern _Atomic uint32_t bt_init_flag;
+extern uint32_t mach_bridge_timer_enable(uint32_t, int);
+
+SYSCTL_INT(_machdep_remotetime, OID_AUTO, bridge_timer_init_flag,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &bt_init_flag, 0, "");
+
+static int sysctl_mach_bridge_timer_enable SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	uint32_t value = 0;
+	int error = 0;
+	/* User is querying buffer size */
+	if (req->oldptr == USER_ADDR_NULL && req->newptr == USER_ADDR_NULL) {
+		req->oldidx = sizeof(value);
+		return 0;
+	}
+	if (bt_init_flag) {
+		if (req->newptr) {
+			int new_value = 0;
+			error = SYSCTL_IN(req, &new_value, sizeof(new_value));
+			if (error) {
+				return error;
+			}
+			if (new_value == 0 || new_value == 1) {
+				value = mach_bridge_timer_enable(new_value, 1);
+			} else {
+				return EPERM;
+			}
+		} else {
+			value = mach_bridge_timer_enable(0, 0);
+		}
+	}
+	error = SYSCTL_OUT(req, &value, sizeof(value));
+	return error;
+}
+
+SYSCTL_PROC(_machdep_remotetime, OID_AUTO, bridge_timer_enable,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, sysctl_mach_bridge_timer_enable, "I", "");
+
+#endif /* CONFIG_MACH_BRIDGE_SEND_TIME */
+
+static int sysctl_mach_bridge_remote_time SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	uint64_t ltime = 0, rtime = 0;
+	if (req->oldptr == USER_ADDR_NULL) {
+		req->oldidx = sizeof(rtime);
+		return 0;
+	}
+	if (req->newptr) {
+		int error = SYSCTL_IN(req, &ltime, sizeof(ltime));
+		if (error) {
+			return error;
+		}
+	}
+	rtime = mach_bridge_remote_time(ltime);
+	return SYSCTL_OUT(req, &rtime, sizeof(rtime));
+}
+SYSCTL_PROC(_machdep_remotetime, OID_AUTO, mach_bridge_remote_time,
+    CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, sysctl_mach_bridge_remote_time, "Q", "");
+
+#endif /* DEVELOPMENT || DEBUG */
+
+#if CONFIG_MACH_BRIDGE_RECV_TIME
+extern struct bt_params bt_params_get_latest(void);
+
+static int sysctl_mach_bridge_conversion_params SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	struct bt_params params = {};
+	if (req->oldptr == USER_ADDR_NULL) {
+		req->oldidx = sizeof(struct bt_params);
+		return 0;
+	}
+	if (req->newptr) {
+		return EPERM;
+	}
+	params = bt_params_get_latest();
+	return SYSCTL_OUT(req, &params, MIN(sizeof(params), req->oldlen));
+}
+
+SYSCTL_PROC(_machdep_remotetime, OID_AUTO, conversion_params,
+    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0,
+    0, sysctl_mach_bridge_conversion_params, "S,bt_params", "");
+
+#endif /* CONFIG_MACH_BRIDGE_RECV_TIME */
+
+
+
+static int
+sysctl_kern_tcsm_available SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	uint32_t value = machine_csv(CPUVN_CI) ? 1 : 0;
+
+	if (req->newptr) {
+		return EINVAL;
+	}
+
+	return SYSCTL_OUT(req, &value, sizeof(value));
+}
+SYSCTL_PROC(_kern, OID_AUTO, tcsm_available,
+    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_MASKED | CTLFLAG_ANYBODY,
+    0, 0, sysctl_kern_tcsm_available, "I", "");
+
+
+static int
+sysctl_kern_tcsm_enable SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	uint32_t soflags = 0;
+	uint32_t old_value = thread_get_no_smt() ? 1 : 0;
+
+	int error = SYSCTL_IN(req, &soflags, sizeof(soflags));
+	if (error) {
+		return error;
+	}
+
+	if (soflags && machine_csv(CPUVN_CI)) {
+		thread_set_no_smt(true);
+		machine_tecs(current_thread());
+	}
+
+	return SYSCTL_OUT(req, &old_value, sizeof(old_value));
+}
+SYSCTL_PROC(_kern, OID_AUTO, tcsm_enable,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_MASKED | CTLFLAG_ANYBODY,
+    0, 0, sysctl_kern_tcsm_enable, "I", "");
+
+
+#if DEVELOPMENT || DEBUG
+extern void sysctl_task_set_no_smt(char no_smt);
+extern char sysctl_task_get_no_smt(void);
+
+static int
+sysctl_kern_sched_task_set_no_smt SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	char buff[4];
+
+	int error = SYSCTL_IN(req, buff, 1);
+	if (error) {
+		return error;
+	}
+	char no_smt = buff[0];
+
+	if (!req->newptr) {
+		goto out;
+	}
+
+	sysctl_task_set_no_smt(no_smt);
+out:
+	no_smt = sysctl_task_get_no_smt();
+	buff[0] = no_smt;
+
+	return SYSCTL_OUT(req, buff, 1);
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, sched_task_set_no_smt, CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY,
+    0, 0, sysctl_kern_sched_task_set_no_smt, "A", "");
+
+static int
+sysctl_kern_sched_thread_set_no_smt(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	int new_value, changed;
+	int old_value = thread_get_no_smt() ? 1 : 0;
+	int error = sysctl_io_number(req, old_value, sizeof(int), &new_value, &changed);
+
+	if (changed) {
+		thread_set_no_smt(!!new_value);
+	}
+
+	return error;
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, sched_thread_set_no_smt,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY,
+    0, 0, sysctl_kern_sched_thread_set_no_smt, "I", "");
+#endif

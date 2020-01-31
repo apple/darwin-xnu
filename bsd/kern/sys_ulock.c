@@ -2,7 +2,7 @@
  * Copyright (c) 2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -62,6 +62,7 @@
 #define XNU_TEST_BITMAP
 #include <kern/bits.h>
 
+#include <os/hash.h>
 #include <sys/ulock.h>
 
 /*
@@ -92,7 +93,7 @@ static lck_grp_t *ull_lck_grp;
 typedef lck_spin_t ull_lock_t;
 #define ull_lock_init(ull)      lck_spin_init(&ull->ull_lock, ull_lck_grp, NULL)
 #define ull_lock_destroy(ull)   lck_spin_destroy(&ull->ull_lock, ull_lck_grp)
-#define ull_lock(ull)           lck_spin_lock(&ull->ull_lock)
+#define ull_lock(ull)           lck_spin_lock_grp(&ull->ull_lock, ull_lck_grp)
 #define ull_unlock(ull)         lck_spin_unlock(&ull->ull_lock)
 #define ull_assert_owned(ull)   LCK_SPIN_ASSERT(&ull->ull_lock, LCK_ASSERT_OWNED)
 #define ull_assert_notwned(ull) LCK_SPIN_ASSERT(&ull->ull_lock, LCK_ASSERT_NOTOWNED)
@@ -101,15 +102,15 @@ typedef lck_spin_t ull_lock_t;
 #define EVENT_TO_ULOCK(event) ((ull_t *)event)
 
 typedef struct __attribute__((packed)) {
-	user_addr_t	ulk_addr;
-	pid_t		ulk_pid;
+	user_addr_t     ulk_addr;
+	pid_t           ulk_pid;
 } ulk_t;
 
 inline static bool
 ull_key_match(ulk_t *a, ulk_t *b)
 {
-	return ((a->ulk_pid == b->ulk_pid) &&
-		(a->ulk_addr == b->ulk_addr));
+	return (a->ulk_pid == b->ulk_pid) &&
+	       (a->ulk_addr == b->ulk_addr);
 }
 
 typedef struct ull {
@@ -118,21 +119,21 @@ typedef struct ull {
 	 * i.e. it may be out of date WRT the real value in userspace.
 	 */
 	thread_t        ull_owner; /* holds +1 thread reference */
-	ulk_t		ull_key;
-	ulk_t		ull_saved_key;
-	ull_lock_t	ull_lock;
-	uint		ull_bucket_index;
-	int32_t		ull_nwaiters;
-	int32_t		ull_max_nwaiters;
-	int32_t		ull_refcount;
-	uint8_t		ull_opcode;
+	ulk_t           ull_key;
+	ulk_t           ull_saved_key;
+	ull_lock_t      ull_lock;
+	uint            ull_bucket_index;
+	int32_t         ull_nwaiters;
+	int32_t         ull_max_nwaiters;
+	int32_t         ull_refcount;
+	uint8_t         ull_opcode;
 	struct turnstile *ull_turnstile;
-	queue_chain_t	ull_hash_link;
+	queue_chain_t   ull_hash_link;
 } ull_t;
 
 extern void ulock_initialize(void);
 
-#define ULL_MUST_EXIST	0x0001
+#define ULL_MUST_EXIST  0x0001
 static ull_t *ull_get(ulk_t *, uint32_t, ull_t **);
 static void ull_put(ull_t *);
 
@@ -166,13 +167,13 @@ static ull_bucket_t *ull_bucket;
 static uint32_t ull_nzalloc = 0;
 static zone_t ull_zone;
 
-#define ull_bucket_lock(i)       lck_spin_lock(&ull_bucket[i].ulb_lock)
+#define ull_bucket_lock(i)       lck_spin_lock_grp(&ull_bucket[i].ulb_lock, ull_lck_grp)
 #define ull_bucket_unlock(i)     lck_spin_unlock(&ull_bucket[i].ulb_lock)
 
 static __inline__ uint32_t
-ull_hash_index(char *key, size_t length)
+ull_hash_index(const void *key, size_t length)
 {
-	uint32_t hash = jenkins_hash(key, length);
+	uint32_t hash = os_hash_jenkins(key, length);
 
 	hash &= (ull_hash_buckets - 1);
 
@@ -185,7 +186,7 @@ ull_hash_index(char *key, size_t length)
  */
 static_assert(sizeof(ulk_t) == sizeof(user_addr_t) + sizeof(pid_t));
 
-#define ULL_INDEX(keyp)	ull_hash_index((char *)keyp, sizeof *keyp)
+#define ULL_INDEX(keyp) ull_hash_index(keyp, sizeof *keyp)
 
 void
 ulock_initialize(void)
@@ -199,7 +200,7 @@ ulock_initialize(void)
 	ull_hash_buckets = (1 << (bit_ceiling(thread_max) - 2));
 
 	kprintf("%s>thread_max=%d, ull_hash_buckets=%d\n", __FUNCTION__, thread_max, ull_hash_buckets);
-	assert(ull_hash_buckets >= thread_max/4);
+	assert(ull_hash_buckets >= thread_max / 4);
 
 	ull_bucket = (ull_bucket_t *)kalloc(sizeof(ull_bucket_t) * ull_hash_buckets);
 	assert(ull_bucket != NULL);
@@ -210,8 +211,8 @@ ulock_initialize(void)
 	}
 
 	ull_zone = zinit(sizeof(ull_t),
-	                 thread_max * sizeof(ull_t),
-	                 0, "ulocks");
+	    thread_max * sizeof(ull_t),
+	    0, "ulocks");
 
 	zone_change(ull_zone, Z_NOENCRYPT, TRUE);
 }
@@ -539,7 +540,7 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 	struct turnstile *ts;
 
 	ts = turnstile_prepare((uintptr_t)ull, &ull->ull_turnstile,
-	                       TURNSTILE_NULL, TURNSTILE_ULOCK);
+	    TURNSTILE_NULL, TURNSTILE_ULOCK);
 	thread_set_pending_block_hint(self, kThreadWaitUserLock);
 
 	if (flags & ULF_WAIT_WORKQ_DATA_CONTENTION) {
@@ -551,10 +552,10 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 	}
 
 	turnstile_update_inheritor(ts, owner_thread,
-		(TURNSTILE_DELAYED_UPDATE | TURNSTILE_INHERITOR_THREAD));
+	    (TURNSTILE_DELAYED_UPDATE | TURNSTILE_INHERITOR_THREAD));
 
 	wr = waitq_assert_wait64(&ts->ts_waitq, CAST_EVENT64_T(ULOCK_TO_EVENT(ull)),
-			interruptible, deadline);
+	    interruptible, deadline);
 
 	ull_unlock(ull);
 
@@ -762,14 +763,14 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 
 	struct turnstile *ts;
 	ts = turnstile_prepare((uintptr_t)ull, &ull->ull_turnstile,
-	                       TURNSTILE_NULL, TURNSTILE_ULOCK);
+	    TURNSTILE_NULL, TURNSTILE_ULOCK);
 
 	if (flags & ULF_WAKE_ALL) {
 		waitq_wakeup64_all(&ts->ts_waitq, CAST_EVENT64_T(ULOCK_TO_EVENT(ull)),
-			THREAD_AWAKENED, 0);
+		    THREAD_AWAKENED, 0);
 	} else if (flags & ULF_WAKE_THREAD) {
 		kern_return_t kr = waitq_wakeup64_thread(&ts->ts_waitq, CAST_EVENT64_T(ULOCK_TO_EVENT(ull)),
-			wake_thread, THREAD_AWAKENED);
+		    wake_thread, THREAD_AWAKENED);
 		if (kr != KERN_SUCCESS) {
 			assert(kr == KERN_NOT_WAITING);
 			ret = EALREADY;
@@ -783,7 +784,7 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 		 * <rdar://problem/25487001>
 		 */
 		waitq_wakeup64_one(&ts->ts_waitq, CAST_EVENT64_T(ULOCK_TO_EVENT(ull)),
-			THREAD_AWAKENED, WAITQ_SELECT_MAX_PRI);
+		    THREAD_AWAKENED, WAITQ_SELECT_MAX_PRI);
 	}
 
 	/*
@@ -798,7 +799,7 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 
 	if (ull->ull_owner == current_thread()) {
 		turnstile_update_inheritor(ts, THREAD_NULL,
-			(TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
+		    (TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
 		turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_HELD);
 		old_owner = ull->ull_owner;
 		ull->ull_owner = THREAD_NULL;

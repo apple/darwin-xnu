@@ -36,40 +36,40 @@
 /* statistics for pfkey socket */
 struct pfkeystat {
 	/* kernel -> userland */
-	u_quad_t out_total;		/* # of total calls */
-	u_quad_t out_bytes;		/* total bytecount */
-	u_quad_t out_msgtype[256];	/* message type histogram */
-	u_quad_t out_invlen;		/* invalid length field */
-	u_quad_t out_invver;		/* invalid version field */
-	u_quad_t out_invmsgtype;	/* invalid message type field */
-	u_quad_t out_tooshort;		/* msg too short */
-	u_quad_t out_nomem;		/* memory allocation failure */
-	u_quad_t out_dupext;		/* duplicate extension */
-	u_quad_t out_invexttype;	/* invalid extension type */
-	u_quad_t out_invsatype;		/* invalid sa type */
-	u_quad_t out_invaddr;		/* invalid address extension */
+	u_quad_t out_total;             /* # of total calls */
+	u_quad_t out_bytes;             /* total bytecount */
+	u_quad_t out_msgtype[256];      /* message type histogram */
+	u_quad_t out_invlen;            /* invalid length field */
+	u_quad_t out_invver;            /* invalid version field */
+	u_quad_t out_invmsgtype;        /* invalid message type field */
+	u_quad_t out_tooshort;          /* msg too short */
+	u_quad_t out_nomem;             /* memory allocation failure */
+	u_quad_t out_dupext;            /* duplicate extension */
+	u_quad_t out_invexttype;        /* invalid extension type */
+	u_quad_t out_invsatype;         /* invalid sa type */
+	u_quad_t out_invaddr;           /* invalid address extension */
 	/* userland -> kernel */
-	u_quad_t in_total;		/* # of total calls */
-	u_quad_t in_bytes;		/* total bytecount */
-	u_quad_t in_msgtype[256];	/* message type histogram */
-	u_quad_t in_msgtarget[3];	/* one/all/registered */
-	u_quad_t in_nomem;		/* memory allocation failure */
+	u_quad_t in_total;              /* # of total calls */
+	u_quad_t in_bytes;              /* total bytecount */
+	u_quad_t in_msgtype[256];       /* message type histogram */
+	u_quad_t in_msgtarget[3];       /* one/all/registered */
+	u_quad_t in_nomem;              /* memory allocation failure */
 	/* others */
-	u_quad_t sockerr;		/* # of socket related errors */
+	u_quad_t sockerr;               /* # of socket related errors */
 };
 
-#define KEY_SENDUP_ONE		0
-#define KEY_SENDUP_ALL		1
-#define KEY_SENDUP_REGISTERED	2
+#define KEY_SENDUP_ONE          0
+#define KEY_SENDUP_ALL          1
+#define KEY_SENDUP_REGISTERED   2
 
 #ifdef BSD_KERNEL_PRIVATE
-#define PFKEY_STAT_INCREMENT(x)	 \
+#define PFKEY_STAT_INCREMENT(x)  \
 	{lck_mtx_lock(pfkey_stat_mutex); (x)++; lck_mtx_unlock(pfkey_stat_mutex);}
 
 struct keycb {
-	struct rawcb kp_raw;	/* rawcb */
-	int kp_promisc;		/* promiscuous mode */
-	int kp_registered;	/* registered socket */
+	struct rawcb kp_raw;    /* rawcb */
+	int kp_promisc;         /* promiscuous mode */
+	int kp_registered;      /* registered socket */
 };
 
 extern struct pfkeystat pfkeystat;
@@ -80,7 +80,7 @@ extern int key_output(struct mbuf *, struct socket* so);
 extern int key_output(struct mbuf *, ...);
 #endif
 extern int key_usrreq(struct socket *,
-	int, struct mbuf *, struct mbuf *, struct mbuf *);
+    int, struct mbuf *, struct mbuf *, struct mbuf *);
 
 extern int key_sendup(struct socket *, struct sadb_msg *, u_int, int);
 extern int key_sendup_mbuf(struct socket *, struct mbuf *, int);

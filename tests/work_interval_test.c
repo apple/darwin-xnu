@@ -1,4 +1,3 @@
-
 /* test that the header doesn't implicitly depend on others */
 #include <sys/work_interval.h>
 
@@ -64,7 +63,7 @@ T_DECL(work_interval, "work interval interface")
 		WORK_INTERVAL_FLAG_JOINABLE | WORK_INTERVAL_FLAG_GROUP,
 	};
 
-	for (uint32_t i = 0 ; i < sizeof(flags) / sizeof(flags[0]) ; i++) {
+	for (uint32_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
 		ret = work_interval_create(&handle, flags[i]);
 		T_ASSERT_POSIX_SUCCESS(ret, "work_interval_create, joinable");
 
@@ -117,6 +116,4 @@ T_DECL(work_interval, "work interval interface")
 
 	ret = work_interval_destroy(handle);
 	T_ASSERT_POSIX_SUCCESS(ret, "work_interval_destroy");
-
 }
-

@@ -13,18 +13,16 @@
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.vm"),
 	T_META_CHECK_LEAKS(false)
-);
+	);
 
-#define MEM_SIZE_MB			10
-#define NUM_ITERATIONS		5
+#define MEM_SIZE_MB                     10
+#define NUM_ITERATIONS          5
 
 #define CREATE_LIST(X) \
 	X(SUCCESS) \
 	X(TOO_FEW_ARGUMENTS) \
 	X(SYSCTL_VM_PAGESIZE_FAILED) \
 	X(VM_PAGESIZE_IS_ZERO) \
-	X(SYSCTL_VM_FREEZE_ENABLED_FAILED) \
-	X(FREEZER_DISABLED) \
 	X(DISPATCH_SOURCE_CREATE_FAILED) \
 	X(INITIAL_SIGNAL_TO_PARENT_FAILED) \
 	X(SIGNAL_TO_PARENT_FAILED) \
@@ -52,8 +50,9 @@ void run_freezer_test(int size_mb);
 void freeze_helper_process(void);
 
 
-void move_to_idle_band(void) {
-
+void
+move_to_idle_band(void)
+{
 	memorystatus_priority_properties_t props;
 	/*
 	 * Freezing a process also moves it to an elevated jetsam band in order to protect it from idle exits.
@@ -71,19 +70,34 @@ void move_to_idle_band(void) {
 	}
 }
 
-void freeze_helper_process(void) {
-	int ret;
+void
+freeze_helper_process(void)
+{
+	size_t length;
+	int ret, freeze_enabled, errno_freeze_sysctl;
 
 	T_LOG("Freezing child pid %d", pid);
 	ret = sysctlbyname("kern.memorystatus_freeze", NULL, NULL, &pid, sizeof(pid));
+	errno_freeze_sysctl = errno;
 	sleep(1);
 
+	/*
+	 * The child process toggles its freezable state on each iteration.
+	 * So a failure for every alternate freeze is expected.
+	 */
 	if (freeze_count % 2 == 0) {
-		/*
-		 * The child process toggles its freezable state on each iteration.
-		 * So a failure for every alternate freeze is expected.
-		 */
-		T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "sysctl kern.memorystatus_freeze failed");
+		length = sizeof(freeze_enabled);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("vm.freeze_enabled", &freeze_enabled, &length, NULL, 0),
+		    "failed to query vm.freeze_enabled");
+		if (freeze_enabled) {
+			errno = errno_freeze_sysctl;
+			T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "sysctl kern.memorystatus_freeze failed");
+		} else {
+			/* If freezer is disabled, skip the test. This can happen due to disk space shortage. */
+			T_LOG("Freeze has been disabled. Terminating early.");
+			T_END;
+		}
+
 		T_LOG("Freeze succeeded. Thawing child pid %d", pid);
 		ret = sysctlbyname("kern.memorystatus_thaw", NULL, NULL, &pid, sizeof(pid));
 		T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "sysctl kern.memorystatus_thaw failed");
@@ -97,17 +111,24 @@ void freeze_helper_process(void) {
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(kill(pid, SIGUSR1), "failed to send SIGUSR1 to child process");
 }
 
-void run_freezer_test(int size_mb) {
-	int ret;
+void
+run_freezer_test(int size_mb)
+{
+	int ret, freeze_enabled;
 	char sz_str[50];
 	char **launch_tool_args;
 	char testpath[PATH_MAX];
 	uint32_t testpath_buf_size;
 	dispatch_source_t ds_freeze, ds_proc;
+	size_t length;
 
-#ifndef CONFIG_FREEZE
-	T_SKIP("Task freeze not supported.");
-#endif
+	length = sizeof(freeze_enabled);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("vm.freeze_enabled", &freeze_enabled, &length, NULL, 0),
+	    "failed to query vm.freeze_enabled");
+	if (!freeze_enabled) {
+		/* If freezer is disabled, skip the test. This can happen due to disk space shortage. */
+		T_SKIP("Freeze has been disabled. Skipping test.");
+	}
 
 	signal(SIGUSR1, SIG_IGN);
 	ds_freeze = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGUSR1, 0, dispatch_get_main_queue());
@@ -115,10 +136,10 @@ void run_freezer_test(int size_mb) {
 
 	dispatch_source_set_event_handler(ds_freeze, ^{
 		if (freeze_count < NUM_ITERATIONS) {
-			freeze_helper_process();
+		        freeze_helper_process();
 		} else {
-			kill(pid, SIGKILL);
-			dispatch_source_cancel(ds_freeze);
+		        kill(pid, SIGKILL);
+		        dispatch_source_cancel(ds_freeze);
 		}
 	});
 	dispatch_activate(ds_freeze);
@@ -155,11 +176,11 @@ void run_freezer_test(int size_mb) {
 		code = WEXITSTATUS(status);
 
 		if (code == 0) {
-			T_END;
+		        T_END;
 		} else if (code > 0 && code < EXIT_CODE_MAX) {
-			T_ASSERT_FAIL("Child exited with %s", exit_codes_str[code]);
+		        T_ASSERT_FAIL("Child exited with %s", exit_codes_str[code]);
 		} else {
-			T_ASSERT_FAIL("Child exited with unknown exit code %d", code);
+		        T_ASSERT_FAIL("Child exited with unknown exit code %d", code);
 		}
 	});
 	dispatch_activate(ds_proc);
@@ -169,9 +190,9 @@ void run_freezer_test(int size_mb) {
 }
 
 T_HELPER_DECL(allocate_pages,
-		"allocates pages to freeze",
-		T_META_ASROOT(true)) {
-	int i, j, temp, ret, size_mb, vmpgsize;
+    "allocates pages to freeze",
+    T_META_ASROOT(true)) {
+	int i, j, ret, size_mb, vmpgsize;
 	size_t len;
 	char val;
 	__block int num_pages, num_iter = 0;
@@ -189,15 +210,6 @@ T_HELPER_DECL(allocate_pages,
 
 	if (argc < 1) {
 		exit(TOO_FEW_ARGUMENTS);
-	}
-
-	len = sizeof(temp);
-	ret = sysctlbyname("vm.freeze_enabled", &temp, &len, NULL, 0);
-	if (ret != 0) {
-		exit(SYSCTL_VM_FREEZE_ENABLED_FAILED);
-	}
-	if (temp == 0) {
-		exit(FREEZER_DISABLED);
 	}
 
 	size_mb = atoi(argv[0]);
@@ -218,9 +230,9 @@ T_HELPER_DECL(allocate_pages,
 
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
 		/* Signal to the parent that we're done allocating and it's ok to freeze us */
-		printf("Sending initial signal to parent to begin freezing\n");
+		printf("[%d] Sending initial signal to parent to begin freezing\n", getpid());
 		if (kill(getppid(), SIGUSR1) != 0) {
-			exit(INITIAL_SIGNAL_TO_PARENT_FAILED);
+		        exit(INITIAL_SIGNAL_TO_PARENT_FAILED);
 		}
 	});
 
@@ -236,27 +248,28 @@ T_HELPER_DECL(allocate_pages,
 
 		/* Make sure all the pages are accessed before trying to freeze again */
 		for (int x = 0; x < num_pages; x++) {
-			tmp = buf[x][0];
+		        tmp = buf[x][0];
 		}
 
 		current_state = memorystatus_control(MEMORYSTATUS_CMD_GET_PROCESS_IS_FREEZABLE, getpid(), 0, NULL, 0);
 
 		/* Toggle freezable state */
 		new_state = (current_state) ? 0: 1;
-		printf("Changing state from %s to %s\n", (current_state) ? "freezable": "unfreezable", (new_state) ? "freezable": "unfreezable");
+		printf("[%d] Changing state from %s to %s\n", getpid(),
+		(current_state) ? "freezable": "unfreezable", (new_state) ? "freezable": "unfreezable");
 		if (memorystatus_control(MEMORYSTATUS_CMD_SET_PROCESS_IS_FREEZABLE, getpid(), (uint32_t)new_state, NULL, 0) != KERN_SUCCESS) {
-			exit(MEMORYSTATUS_CONTROL_FAILED);
+		        exit(MEMORYSTATUS_CONTROL_FAILED);
 		}
 
 		/* Verify that the state has been set correctly */
 		current_state = memorystatus_control(MEMORYSTATUS_CMD_GET_PROCESS_IS_FREEZABLE, getpid(), 0, NULL, 0);
 		if (new_state != current_state) {
-			exit(IS_FREEZABLE_NOT_AS_EXPECTED);
+		        exit(IS_FREEZABLE_NOT_AS_EXPECTED);
 		}
 		num_iter++;
 
 		if (kill(getppid(), SIGUSR1) != 0) {
-			exit(SIGNAL_TO_PARENT_FAILED);
+		        exit(SIGNAL_TO_PARENT_FAILED);
 		}
 	});
 	dispatch_activate(ds_signal);

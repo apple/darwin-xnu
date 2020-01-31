@@ -62,51 +62,51 @@
 extern "C" {
 #endif
 
-#define	PFLOGIFS_MAX		16
-#define	PFLOGIF_ZONE_MAX_ELEM		MIN(IFNETS_MAX, PFLOGIFS_MAX)
+#define PFLOGIFS_MAX            16
+#define PFLOGIF_ZONE_MAX_ELEM           MIN(IFNETS_MAX, PFLOGIFS_MAX)
 
 #if KERNEL_PRIVATE
 struct pflog_softc {
-	struct ifnet		*sc_if;		/* back ptr to interface */
-	u_int32_t		sc_flags;
-#define	IFPFLF_DETACHING	0x1
-	int			sc_unit;
-	LIST_ENTRY(pflog_softc)	sc_list;
+	struct ifnet            *sc_if;         /* back ptr to interface */
+	u_int32_t               sc_flags;
+#define IFPFLF_DETACHING        0x1
+	int                     sc_unit;
+	LIST_ENTRY(pflog_softc) sc_list;
 };
 #endif /* KERNEL_PRIVATE */
 
-#define PFLOG_RULESET_NAME_SIZE	16
+#define PFLOG_RULESET_NAME_SIZE 16
 
 struct pfloghdr {
-	u_int8_t	length;
-	sa_family_t	af;
-	u_int8_t	action;
-	u_int8_t	reason;
-	char		ifname[IFNAMSIZ];
-	char		ruleset[PFLOG_RULESET_NAME_SIZE];
-	u_int32_t	rulenr;
-	u_int32_t	subrulenr;
-	uid_t		uid;
-	pid_t		pid;
-	uid_t		rule_uid;
-	pid_t		rule_pid;
-	u_int8_t	dir;
-	u_int8_t	pad[3];
+	u_int8_t        length;
+	sa_family_t     af;
+	u_int8_t        action;
+	u_int8_t        reason;
+	char            ifname[IFNAMSIZ];
+	char            ruleset[PFLOG_RULESET_NAME_SIZE];
+	u_int32_t       rulenr;
+	u_int32_t       subrulenr;
+	uid_t           uid;
+	pid_t           pid;
+	uid_t           rule_uid;
+	pid_t           rule_pid;
+	u_int8_t        dir;
+	u_int8_t        pad[3];
 };
 
-#define PFLOG_HDRLEN		sizeof(struct pfloghdr)
+#define PFLOG_HDRLEN            sizeof(struct pfloghdr)
 /* minus pad, also used as a signature */
-#define PFLOG_REAL_HDRLEN	offsetof(struct pfloghdr, pad)
+#define PFLOG_REAL_HDRLEN       offsetof(struct pfloghdr, pad)
 
 #ifdef KERNEL_PRIVATE
 
 #if PFLOG
-#define	PFLOG_PACKET(i,x,a,b,c,d,e,f,g,h) pflog_packet(i,a,b,c,d,e,f,g,h)
+#define PFLOG_PACKET(i, x, a, b, c, d, e, f, g, h) pflog_packet(i,a,b,c,d,e,f,g,h)
 #else
-#define	PFLOG_PACKET(i,x,a,b,c,d,e,f,g,h) ((void)0)
+#define PFLOG_PACKET(i, x, a, b, c, d, e, f, g, h) ((void)0)
 #endif /* PFLOG */
 
-__private_extern__ void	pfloginit(void);
+__private_extern__ void pfloginit(void);
 #endif /* KERNEL_PRIVATE */
 
 #ifdef  __cplusplus

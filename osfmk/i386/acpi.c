@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -73,14 +73,14 @@
 #endif /* MONOTONIC */
 
 #if CONFIG_SLEEP
-extern void	acpi_sleep_cpu(acpi_sleep_callback, void * refcon);
-extern void	acpi_wake_prot(void);
+extern void     acpi_sleep_cpu(acpi_sleep_callback, void * refcon);
+extern void     acpi_wake_prot(void);
 #endif
 extern kern_return_t IOCPURunPlatformQuiesceActions(void);
 extern kern_return_t IOCPURunPlatformActiveActions(void);
 extern kern_return_t IOCPURunPlatformHaltRestartActions(uint32_t message);
 
-extern void 	fpinit(void);
+extern void     fpinit(void);
 
 vm_offset_t
 acpi_install_wake_handler(void)
@@ -95,11 +95,11 @@ acpi_install_wake_handler(void)
 
 #if CONFIG_SLEEP
 
-unsigned int		save_kdebug_enable = 0;
-static uint64_t		acpi_sleep_abstime;
-static uint64_t		acpi_idle_abstime;
-static uint64_t		acpi_wake_abstime, acpi_wake_postrebase_abstime;
-boolean_t		deep_idle_rebase = TRUE;
+unsigned int            save_kdebug_enable = 0;
+static uint64_t         acpi_sleep_abstime;
+static uint64_t         acpi_idle_abstime;
+static uint64_t         acpi_wake_abstime, acpi_wake_postrebase_abstime;
+boolean_t               deep_idle_rebase = TRUE;
 
 #if HIBERNATION
 struct acpi_hibernate_callback_data {
@@ -114,35 +114,32 @@ acpi_hibernate(void *refcon)
 	uint32_t mode;
 
 	acpi_hibernate_callback_data_t *data =
-		(acpi_hibernate_callback_data_t *)refcon;
+	    (acpi_hibernate_callback_data_t *)refcon;
 
-	if (current_cpu_datap()->cpu_hibernate) 
-	{
+	if (current_cpu_datap()->cpu_hibernate) {
 		mode = hibernate_write_image();
 
-		if( mode == kIOHibernatePostWriteHalt )
-		{
+		if (mode == kIOHibernatePostWriteHalt) {
 			// off
 			HIBLOG("power off\n");
 			IOCPURunPlatformHaltRestartActions(kPEHaltCPU);
-			if (PE_halt_restart) (*PE_halt_restart)(kPEHaltCPU);
-		}
-		else if( mode == kIOHibernatePostWriteRestart )
-		{
+			if (PE_halt_restart) {
+				(*PE_halt_restart)(kPEHaltCPU);
+			}
+		} else if (mode == kIOHibernatePostWriteRestart) {
 			// restart
 			HIBLOG("restart\n");
 			IOCPURunPlatformHaltRestartActions(kPERestartCPU);
-			if (PE_halt_restart) (*PE_halt_restart)(kPERestartCPU);
-		}
-		else
-		{
+			if (PE_halt_restart) {
+				(*PE_halt_restart)(kPERestartCPU);
+			}
+		} else {
 			// sleep
 			HIBLOG("sleep\n");
-	
-			// should we come back via regular wake, set the state in memory.
-			cpu_datap(0)->cpu_hibernate = 0;			
-		}
 
+			// should we come back via regular wake, set the state in memory.
+			cpu_datap(0)->cpu_hibernate = 0;
+		}
 	}
 
 #if CONFIG_VMX
@@ -161,8 +158,8 @@ acpi_hibernate(void *refcon)
 #endif /* HIBERNATION */
 #endif /* CONFIG_SLEEP */
 
-extern void			slave_pstart(void);
-extern void			hibernate_rebuild_vm_structs(void);
+extern void                     slave_pstart(void);
+extern void                     hibernate_rebuild_vm_structs(void);
 
 extern unsigned int wake_nkdbufs;
 extern unsigned int trace_wrap;
@@ -175,25 +172,27 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 #endif
 	boolean_t did_hibernate;
 	cpu_data_t *cdp = current_cpu_datap();
-	unsigned int	cpu;
-	kern_return_t	rc;
-	unsigned int	my_cpu;
-	uint64_t	start;
-	uint64_t	elapsed = 0;
-	uint64_t	elapsed_trace_start = 0;
+	unsigned int    cpu;
+	kern_return_t   rc;
+	unsigned int    my_cpu;
+	uint64_t        start;
+	uint64_t        elapsed = 0;
+	uint64_t        elapsed_trace_start = 0;
 
 	my_cpu = cpu_number();
 	kprintf("acpi_sleep_kernel hib=%d, cpu=%d\n", cdp->cpu_hibernate,
-			my_cpu);
+	    my_cpu);
 
 	/* Get all CPUs to be in the "off" state */
 	for (cpu = 0; cpu < real_ncpus; cpu += 1) {
-		if (cpu == my_cpu)
+		if (cpu == my_cpu) {
 			continue;
+		}
 		rc = pmCPUExitHaltToOff(cpu);
-		if (rc != KERN_SUCCESS)
+		if (rc != KERN_SUCCESS) {
 			panic("Error %d trying to transition CPU %d to OFF",
-			      rc, cpu);
+			    rc, cpu);
+		}
 	}
 
 	/* shutdown local APIC before passing control to firmware */
@@ -219,7 +218,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	/*
 	 * Enable FPU/SIMD unit for potential hibernate acceleration
 	 */
-	clear_ts(); 
+	clear_ts();
 
 	KDBG(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_START);
 
@@ -261,15 +260,15 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	 * for compatibility with firewire kprintf.
 	 */
 
-	if (FALSE == disable_serial_output)
+	if (FALSE == disable_serial_output) {
 		pal_serial_init();
+	}
 
 #if HIBERNATION
 	if (current_cpu_datap()->cpu_hibernate) {
 		did_hibernate = TRUE;
-
 	} else
-#endif 
+#endif
 	{
 		did_hibernate = FALSE;
 	}
@@ -296,7 +295,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 #endif
 
 #if CONFIG_VMX
-	/* 
+	/*
 	 * Restore VT mode
 	 */
 	vmx_resume(did_hibernate);
@@ -310,8 +309,9 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 
 
 	/* re-enable and re-init local apic (prior to starting timers) */
-	if (lapic_probe())
+	if (lapic_probe()) {
 		lapic_configure();
+	}
 
 #if KASAN
 	/*
@@ -356,7 +356,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 #endif /* HIBERNATION */
 
 	KDBG(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_END, start, elapsed,
-			elapsed_trace_start, acpi_wake_abstime);
+	    elapsed_trace_start, acpi_wake_abstime);
 
 	/* Restore power management register state */
 	pmCPUMarkRunning(current_cpu_datap());
@@ -374,7 +374,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 
 #if CONFIG_SLEEP
 	/* Becase we don't save the bootstrap page, and we share it
-	 * between sleep and mp slave init, we need to recreate it 
+	 * between sleep and mp slave init, we need to recreate it
 	 * after coming back from sleep or hibernate */
 	install_real_mode_bootstrap(slave_pstart);
 #endif
@@ -395,10 +395,10 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 void
 acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 {
-	boolean_t	istate = ml_get_interrupts_enabled();
-	
+	boolean_t       istate = ml_get_interrupts_enabled();
+
 	kprintf("acpi_idle_kernel, cpu=%d, interrupts %s\n",
-		cpu_number(), istate ? "enabled" : "disabled");
+	    cpu_number(), istate ? "enabled" : "disabled");
 
 	assert(cpu_number() == master_cpu);
 
@@ -410,16 +410,16 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 		ml_set_interrupts_enabled(FALSE);
 	}
 
-	if (current_cpu_datap()->cpu_hibernate)  {
-        /* Call hibernate_write_image() to put disk to low power state */
-        hibernate_write_image();
-        cpu_datap(0)->cpu_hibernate = 0;
-    }
+	if (current_cpu_datap()->cpu_hibernate) {
+		/* Call hibernate_write_image() to put disk to low power state */
+		hibernate_write_image();
+		cpu_datap(0)->cpu_hibernate = 0;
+	}
 
 	/*
 	 * Call back to caller to indicate that interrupts will remain
 	 * disabled while we deep idle, wake and return.
-	 */ 
+	 */
 	IOCPURunPlatformQuiesceActions();
 
 	func(refcon);
@@ -450,7 +450,7 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 	 * Get wakeup time relative to the TSC which has progressed.
 	 * Then rebase nanotime to reflect time not progressing over sleep
 	 * - unless overriden so that tracing can occur during deep_idle.
-	 */ 
+	 */
 	acpi_wake_abstime = mach_absolute_time();
 	if (deep_idle_rebase) {
 		rtc_sleep_wakeup(acpi_idle_abstime);
@@ -462,8 +462,8 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 	KERNEL_DEBUG_CONSTANT(
 		MACHDBG_CODE(DBG_MACH_SCHED, MACH_DEEP_IDLE) | DBG_FUNC_END,
 		acpi_wake_abstime, acpi_wake_abstime - acpi_idle_abstime, 0, 0, 0);
- 
-	/* Like S3 sleep, turn on tracing if trace_wake boot-arg is present */ 
+
+	/* Like S3 sleep, turn on tracing if trace_wake boot-arg is present */
 	if (kdebug_enable == 0) {
 		if (wake_nkdbufs) {
 			__kdebug_only uint64_t start = mach_absolute_time();
@@ -492,24 +492,25 @@ install_real_mode_bootstrap(void *prot_entry)
 	 * mode and then jumping to the common startup, _start().
 	 */
 	bcopy_phys(kvtophys((vm_offset_t) real_mode_bootstrap_base),
-		   (addr64_t) REAL_MODE_BOOTSTRAP_OFFSET,
-		   real_mode_bootstrap_end-real_mode_bootstrap_base);
+	    (addr64_t) REAL_MODE_BOOTSTRAP_OFFSET,
+	    real_mode_bootstrap_end - real_mode_bootstrap_base);
 
 	/*
 	 * Set the location at the base of the stack to point to the
 	 * common startup entry.
 	 */
 	ml_phys_write_word(
-		PROT_MODE_START+REAL_MODE_BOOTSTRAP_OFFSET,
+		PROT_MODE_START + REAL_MODE_BOOTSTRAP_OFFSET,
 		(unsigned int)kvtophys((vm_offset_t)prot_entry));
-	
+
 	/* Flush caches */
 	__asm__("wbinvd");
 }
 
 boolean_t
-ml_recent_wake(void) {
+ml_recent_wake(void)
+{
 	uint64_t ctime = mach_absolute_time();
 	assert(ctime > acpi_wake_postrebase_abstime);
-	return ((ctime - acpi_wake_postrebase_abstime) < 5 * NSEC_PER_SEC);
+	return (ctime - acpi_wake_postrebase_abstime) < 5 * NSEC_PER_SEC;
 }

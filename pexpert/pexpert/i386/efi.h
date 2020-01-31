@@ -2,7 +2,7 @@
  * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -58,17 +58,17 @@ typedef uint32_t  EFI_HANDLE32;
 typedef uint64_t  EFI_PTR64;
 typedef uint64_t  EFI_HANDLE64;
 /*
-
-Portions Copyright 2004, Intel Corporation
-All rights reserved. This program and the accompanying materials
-are licensed and made available under the terms and conditions of the BSD License
-which accompanies this distribution.  The full text of the license may be found at
-    http://opensource.org/licenses/bsd-license.php
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
-
-*/
+ *
+ *  Portions Copyright 2004, Intel Corporation
+ *  All rights reserved. This program and the accompanying materials
+ *  are licensed and made available under the terms and conditions of the BSD License
+ *  which accompanies this distribution.  The full text of the license may be found at
+ *   http://opensource.org/licenses/bsd-license.php
+ *
+ *  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+ *
+ */
 
 
 //
@@ -131,10 +131,10 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #define EFI_SPECIFICATION_MINOR_REVISION  10
 
 typedef struct {
-  EFI_UINT32  Data1;
-  EFI_UINT16  Data2;
-  EFI_UINT16  Data3;
-  EFI_UINT8   Data4[8];
+	EFI_UINT32  Data1;
+	EFI_UINT16  Data2;
+	EFI_UINT16  Data3;
+	EFI_UINT8   Data4[8];
 } EFI_GUID;
 
 #define APPLE_VENDOR_GUID \
@@ -144,8 +144,8 @@ typedef struct {
     {0x8BE4DF61, 0x93CA, 0x11d2, {0xAA, 0x0D, 0x00, 0xE0, 0x98, 0x03, 0x2B, 0x8C} }
 
 typedef union {
-  EFI_GUID  Guid;
-  EFI_UINT8 Raw[16];
+	EFI_GUID  Guid;
+	EFI_UINT8 Raw[16];
 } EFI_GUID_UNION;
 
 //
@@ -160,17 +160,17 @@ typedef union {
 //  TimeZone:   -1440 to 1440 or 2047
 //
 typedef struct {
-  EFI_UINT16  Year;
-  EFI_UINT8   Month;
-  EFI_UINT8   Day;
-  EFI_UINT8   Hour;
-  EFI_UINT8   Minute;
-  EFI_UINT8   Second;
-  EFI_UINT8   Pad1;
-  EFI_UINT32  Nanosecond;
-  EFI_INT16   TimeZone;
-  EFI_UINT8   Daylight;
-  EFI_UINT8   Pad2;
+	EFI_UINT16  Year;
+	EFI_UINT8   Month;
+	EFI_UINT8   Day;
+	EFI_UINT8   Hour;
+	EFI_UINT8   Minute;
+	EFI_UINT8   Second;
+	EFI_UINT8   Pad1;
+	EFI_UINT32  Nanosecond;
+	EFI_INT16   TimeZone;
+	EFI_UINT8   Daylight;
+	EFI_UINT8   Pad2;
 } EFI_TIME;
 
 //
@@ -185,29 +185,29 @@ typedef struct {
 #define EFI_UNSPECIFIED_TIMEZONE  0x07FF
 
 typedef enum {
-  EfiReservedMemoryType,
-  EfiLoaderCode,
-  EfiLoaderData,
-  EfiBootServicesCode,
-  EfiBootServicesData,
-  EfiRuntimeServicesCode,
-  EfiRuntimeServicesData,
-  EfiConventionalMemory,
-  EfiUnusableMemory,
-  EfiACPIReclaimMemory,
-  EfiACPIMemoryNVS,
-  EfiMemoryMappedIO,
-  EfiMemoryMappedIOPortSpace,
-  EfiPalCode,
-  EfiMaxMemoryType
+	EfiReservedMemoryType,
+	EfiLoaderCode,
+	EfiLoaderData,
+	EfiBootServicesCode,
+	EfiBootServicesData,
+	EfiRuntimeServicesCode,
+	EfiRuntimeServicesData,
+	EfiConventionalMemory,
+	EfiUnusableMemory,
+	EfiACPIReclaimMemory,
+	EfiACPIMemoryNVS,
+	EfiMemoryMappedIO,
+	EfiMemoryMappedIOPortSpace,
+	EfiPalCode,
+	EfiMaxMemoryType
 } EFI_MEMORY_TYPE;
 
 typedef struct {
-  EFI_UINT64  Signature;
-  EFI_UINT32  Revision;
-  EFI_UINT32  HeaderSize;
-  EFI_UINT32  CRC32;
-  EFI_UINT32  Reserved;
+	EFI_UINT64  Signature;
+	EFI_UINT32  Revision;
+	EFI_UINT32  HeaderSize;
+	EFI_UINT32  CRC32;
+	EFI_UINT32  Reserved;
 } __attribute__((aligned(8))) EFI_TABLE_HEADER;
 
 //
@@ -236,32 +236,32 @@ typedef EFI_UINT64  EFI_VIRTUAL_ADDRESS;
 
 #define EFI_MEMORY_DESCRIPTOR_VERSION 1
 typedef struct {
-  EFI_UINT32            Type;
-  EFI_UINT32            Pad;
-  EFI_PHYSICAL_ADDRESS  PhysicalStart;
-  EFI_VIRTUAL_ADDRESS   VirtualStart;
-  EFI_UINT64            NumberOfPages;
-  EFI_UINT64            Attribute;
+	EFI_UINT32            Type;
+	EFI_UINT32            Pad;
+	EFI_PHYSICAL_ADDRESS  PhysicalStart;
+	EFI_VIRTUAL_ADDRESS   VirtualStart;
+	EFI_UINT64            NumberOfPages;
+	EFI_UINT64            Attribute;
 } __attribute__((aligned(8))) EFI_MEMORY_DESCRIPTOR;
 
 
 typedef
-EFI_RUNTIMESERVICE
-EFI_STATUS
-(EFIAPI *EFI_SET_VIRTUAL_ADDRESS_MAP) (
-  IN EFI_UINTN                    MemoryMapSize,
-  IN EFI_UINTN                    DescriptorSize,
-  IN EFI_UINT32                   DescriptorVersion,
-  IN EFI_MEMORY_DESCRIPTOR        * VirtualMap
-  );
+    EFI_RUNTIMESERVICE
+    EFI_STATUS
+(EFIAPI *EFI_SET_VIRTUAL_ADDRESS_MAP)(
+	IN EFI_UINTN                    MemoryMapSize,
+	IN EFI_UINTN                    DescriptorSize,
+	IN EFI_UINT32                   DescriptorVersion,
+	IN EFI_MEMORY_DESCRIPTOR        * VirtualMap
+	);
 
 typedef
-EFI_RUNTIMESERVICE
-EFI_STATUS
-(EFIAPI *EFI_CONVERT_POINTER) (
-  IN EFI_UINTN                DebugDisposition,
-  IN OUT VOID                 **Address
-  );
+    EFI_RUNTIMESERVICE
+    EFI_STATUS
+(EFIAPI *EFI_CONVERT_POINTER)(
+	IN EFI_UINTN                DebugDisposition,
+	IN OUT VOID                 **Address
+	);
 
 //
 // Variable attributes
@@ -272,104 +272,103 @@ EFI_STATUS
 #define EFI_VARIABLE_READ_ONLY          0x00000008
 
 typedef
-EFI_RUNTIMESERVICE
-EFI_STATUS
-(EFIAPI *EFI_GET_VARIABLE) (
-  IN EFI_CHAR16               * VariableName,
-  IN EFI_GUID                 * VendorGuid,
-  OUT EFI_UINT32              * Attributes OPTIONAL,
-  IN OUT EFI_UINTN            * DataSize,
-  OUT VOID                    * Data
-  );
+    EFI_RUNTIMESERVICE
+    EFI_STATUS
+(EFIAPI *EFI_GET_VARIABLE)(
+	IN EFI_CHAR16               * VariableName,
+	IN EFI_GUID                 * VendorGuid,
+	OUT EFI_UINT32              * Attributes OPTIONAL,
+	IN OUT EFI_UINTN            * DataSize,
+	OUT VOID                    * Data
+	);
 
 typedef
-EFI_RUNTIMESERVICE
-EFI_STATUS
-(EFIAPI *EFI_GET_NEXT_VARIABLE_NAME) (
-  IN OUT EFI_UINTN            * VariableNameSize,
-  IN OUT EFI_CHAR16           * VariableName,
-  IN OUT EFI_GUID             * VendorGuid
-  );
+    EFI_RUNTIMESERVICE
+    EFI_STATUS
+(EFIAPI *EFI_GET_NEXT_VARIABLE_NAME)(
+	IN OUT EFI_UINTN            * VariableNameSize,
+	IN OUT EFI_CHAR16           * VariableName,
+	IN OUT EFI_GUID             * VendorGuid
+	);
 
 typedef
-EFI_RUNTIMESERVICE
-EFI_STATUS
-(EFIAPI *EFI_SET_VARIABLE) (
-  IN EFI_CHAR16               * VariableName,
-  IN EFI_GUID                 * VendorGuid,
-  IN EFI_UINT32               Attributes,
-  IN EFI_UINTN                DataSize,
-  IN VOID                     * Data
-  );
+    EFI_RUNTIMESERVICE
+    EFI_STATUS
+(EFIAPI *EFI_SET_VARIABLE)(
+	IN EFI_CHAR16               * VariableName,
+	IN EFI_GUID                 * VendorGuid,
+	IN EFI_UINT32               Attributes,
+	IN EFI_UINTN                DataSize,
+	IN VOID                     * Data
+	);
 
 //
 // EFI Time
 //
 typedef struct {
-  EFI_UINT32  Resolution;
-  EFI_UINT32  Accuracy;
-  EFI_BOOLEAN SetsToZero;
+	EFI_UINT32  Resolution;
+	EFI_UINT32  Accuracy;
+	EFI_BOOLEAN SetsToZero;
 } __attribute__((aligned(4))) EFI_TIME_CAPABILITIES;
 
 typedef
-EFI_RUNTIMESERVICE
-EFI_STATUS
-(EFIAPI *EFI_GET_TIME) (
-  OUT EFI_TIME                * Time,
-  OUT EFI_TIME_CAPABILITIES   * Capabilities OPTIONAL
-  );
+    EFI_RUNTIMESERVICE
+    EFI_STATUS
+(EFIAPI *EFI_GET_TIME)(
+	OUT EFI_TIME                * Time,
+	OUT EFI_TIME_CAPABILITIES   * Capabilities OPTIONAL
+	);
 
 typedef
-EFI_RUNTIMESERVICE
-EFI_STATUS
-(EFIAPI *EFI_SET_TIME) (
-  IN EFI_TIME                 * Time
-  );
+    EFI_RUNTIMESERVICE
+    EFI_STATUS
+(EFIAPI *EFI_SET_TIME)(
+	IN EFI_TIME                 * Time
+	);
 
 typedef
-EFI_RUNTIMESERVICE
-EFI_STATUS
-(EFIAPI *EFI_GET_WAKEUP_TIME) (
-  OUT EFI_BOOLEAN             * Enabled,
-  OUT EFI_BOOLEAN             * Pending,
-  OUT EFI_TIME                * Time
-  );
+    EFI_RUNTIMESERVICE
+    EFI_STATUS
+(EFIAPI *EFI_GET_WAKEUP_TIME)(
+	OUT EFI_BOOLEAN             * Enabled,
+	OUT EFI_BOOLEAN             * Pending,
+	OUT EFI_TIME                * Time
+	);
 
 typedef
-EFI_RUNTIMESERVICE
-EFI_STATUS
-(EFIAPI *EFI_SET_WAKEUP_TIME) (
-  IN EFI_BOOLEAN              Enable,
-  IN EFI_TIME                 * Time OPTIONAL
-  );
+    EFI_RUNTIMESERVICE
+    EFI_STATUS
+(EFIAPI *EFI_SET_WAKEUP_TIME)(
+	IN EFI_BOOLEAN              Enable,
+	IN EFI_TIME                 * Time OPTIONAL
+	);
 
 typedef enum {
-  EfiResetCold,
-  EfiResetWarm,
-  EfiResetShutdown,
+	EfiResetCold,
+	EfiResetWarm,
+	EfiResetShutdown,
 
 #ifdef TIANO_EXTENSION_FLAG
-  EfiResetUpdate
+	EfiResetUpdate
 #endif
-
 } EFI_RESET_TYPE;
 
 typedef
-EFI_RUNTIMESERVICE
-VOID
-(EFIAPI *EFI_RESET_SYSTEM) (
-  IN EFI_RESET_TYPE               ResetType,
-  IN EFI_STATUS                   ResetStatus,
-  IN EFI_UINTN                    DataSize,
-  IN EFI_CHAR16                   * ResetData OPTIONAL
-  );
+    EFI_RUNTIMESERVICE
+    VOID
+(EFIAPI *EFI_RESET_SYSTEM)(
+	IN EFI_RESET_TYPE               ResetType,
+	IN EFI_STATUS                   ResetStatus,
+	IN EFI_UINTN                    DataSize,
+	IN EFI_CHAR16                   * ResetData OPTIONAL
+	);
 
 typedef
-EFI_RUNTIMESERVICE
-EFI_STATUS
-(EFIAPI *EFI_GET_NEXT_HIGH_MONO_COUNT) (
-  OUT EFI_UINT32                  * HighCount
-  );
+    EFI_RUNTIMESERVICE
+    EFI_STATUS
+(EFIAPI *EFI_GET_NEXT_HIGH_MONO_COUNT)(
+	OUT EFI_UINT32                  * HighCount
+	);
 
 //
 // Definition of Status Code extended data header
@@ -386,15 +385,15 @@ EFI_STATUS
 #ifdef TIANO_EXTENSION_FLAG
 
 typedef
-EFI_RUNTIMESERVICE
-EFI_STATUS
-(EFIAPI *EFI_REPORT_STATUS_CODE) (
-  IN EFI_STATUS_CODE_TYPE       Type,
-  IN EFI_STATUS_CODE_VALUE      Value,
-  IN EFI_UINT32                 Instance,
-  IN EFI_GUID                   * CallerId OPTIONAL,
-  IN EFI_STATUS_CODE_DATA       * Data OPTIONAL
-  );
+    EFI_RUNTIMESERVICE
+    EFI_STATUS
+(EFIAPI *EFI_REPORT_STATUS_CODE)(
+	IN EFI_STATUS_CODE_TYPE       Type,
+	IN EFI_STATUS_CODE_VALUE      Value,
+	IN EFI_UINT32                 Instance,
+	IN EFI_GUID                   * CallerId OPTIONAL,
+	IN EFI_STATUS_CODE_DATA       * Data OPTIONAL
+	);
 
 #endif
 //
@@ -404,98 +403,96 @@ EFI_STATUS
 #define EFI_RUNTIME_SERVICES_REVISION   ((EFI_SPECIFICATION_MAJOR_REVISION << 16) | (EFI_SPECIFICATION_MINOR_REVISION))
 
 typedef struct {
-  EFI_TABLE_HEADER              Hdr;
+	EFI_TABLE_HEADER              Hdr;
 
-  //
-  // Time services
-  //
-  EFI_PTR32                     GetTime;
-  EFI_PTR32                     SetTime;
-  EFI_PTR32                     GetWakeupTime;
-  EFI_PTR32                     SetWakeupTime;
+	//
+	// Time services
+	//
+	EFI_PTR32                     GetTime;
+	EFI_PTR32                     SetTime;
+	EFI_PTR32                     GetWakeupTime;
+	EFI_PTR32                     SetWakeupTime;
 
-  //
-  // Virtual memory services
-  //
-  EFI_PTR32                     SetVirtualAddressMap;
-  EFI_PTR32                     ConvertPointer;
+	//
+	// Virtual memory services
+	//
+	EFI_PTR32                     SetVirtualAddressMap;
+	EFI_PTR32                     ConvertPointer;
 
-  //
-  // Variable services
-  //
-  EFI_PTR32                     GetVariable;
-  EFI_PTR32                     GetNextVariableName;
-  EFI_PTR32                     SetVariable;
+	//
+	// Variable services
+	//
+	EFI_PTR32                     GetVariable;
+	EFI_PTR32                     GetNextVariableName;
+	EFI_PTR32                     SetVariable;
 
-  //
-  // Misc
-  //
-  EFI_PTR32                     GetNextHighMonotonicCount;
-  EFI_PTR32                     ResetSystem;
+	//
+	// Misc
+	//
+	EFI_PTR32                     GetNextHighMonotonicCount;
+	EFI_PTR32                     ResetSystem;
 
 #ifdef TIANO_EXTENSION_FLAG
-  //
-  // ////////////////////////////////////////////////////
-  // Extended EFI Services
-    //////////////////////////////////////////////////////
-  //
-  EFI_PTR32                     ReportStatusCode;
+	//
+	// ////////////////////////////////////////////////////
+	// Extended EFI Services
+	//////////////////////////////////////////////////////
+	//
+	EFI_PTR32                     ReportStatusCode;
 #endif
-
 } __attribute__((aligned(8))) EFI_RUNTIME_SERVICES_32;
 
 typedef struct {
-  EFI_TABLE_HEADER              Hdr;
+	EFI_TABLE_HEADER              Hdr;
 
-  //
-  // Time services
-  //
-  EFI_PTR64                     GetTime;
-  EFI_PTR64                     SetTime;
-  EFI_PTR64                     GetWakeupTime;
-  EFI_PTR64                     SetWakeupTime;
+	//
+	// Time services
+	//
+	EFI_PTR64                     GetTime;
+	EFI_PTR64                     SetTime;
+	EFI_PTR64                     GetWakeupTime;
+	EFI_PTR64                     SetWakeupTime;
 
-  //
-  // Virtual memory services
-  //
-  EFI_PTR64                     SetVirtualAddressMap;
-  EFI_PTR64                     ConvertPointer;
+	//
+	// Virtual memory services
+	//
+	EFI_PTR64                     SetVirtualAddressMap;
+	EFI_PTR64                     ConvertPointer;
 
-  //
-  // Variable services
-  //
-  EFI_PTR64                     GetVariable;
-  EFI_PTR64                     GetNextVariableName;
-  EFI_PTR64                     SetVariable;
+	//
+	// Variable services
+	//
+	EFI_PTR64                     GetVariable;
+	EFI_PTR64                     GetNextVariableName;
+	EFI_PTR64                     SetVariable;
 
-  //
-  // Misc
-  //
-  EFI_PTR64                     GetNextHighMonotonicCount;
-  EFI_PTR64                     ResetSystem;
+	//
+	// Misc
+	//
+	EFI_PTR64                     GetNextHighMonotonicCount;
+	EFI_PTR64                     ResetSystem;
 
 #ifdef TIANO_EXTENSION_FLAG
-  //
-  // ////////////////////////////////////////////////////
-  // Extended EFI Services
-    //////////////////////////////////////////////////////
-  //
-  EFI_PTR64                     ReportStatusCode;
+	//
+	// ////////////////////////////////////////////////////
+	// Extended EFI Services
+	//////////////////////////////////////////////////////
+	//
+	EFI_PTR64                     ReportStatusCode;
 #endif
-
 } __attribute__((aligned(8))) EFI_RUNTIME_SERVICES_64;
 
 //
 // EFI Configuration Table
 //
 typedef struct {
-  EFI_GUID  VendorGuid;
-  EFI_PTR32 VendorTable;
+	EFI_GUID  VendorGuid;
+	EFI_PTR32 VendorTable;
 } EFI_CONFIGURATION_TABLE_32;
 
 typedef struct {
-  EFI_GUID  VendorGuid;
-  EFI_PTR64 VendorTable;
+	EFI_GUID  VendorGuid;
+	EFI_PTR64 VendorTable;
 } __attribute__((aligned(8))) EFI_CONFIGURATION_TABLE_64;
 
 //
@@ -508,51 +505,49 @@ typedef struct {
 #define EFI_1_10_SYSTEM_TABLE_REVISION  ((1 << 16) | 10)
 
 typedef struct EFI_SYSTEM_TABLE_32 {
-  EFI_TABLE_HEADER              Hdr;
+	EFI_TABLE_HEADER              Hdr;
 
-  EFI_PTR32                     FirmwareVendor;
-  EFI_UINT32                    FirmwareRevision;
+	EFI_PTR32                     FirmwareVendor;
+	EFI_UINT32                    FirmwareRevision;
 
-  EFI_HANDLE32                  ConsoleInHandle;
-  EFI_PTR32                     ConIn;
+	EFI_HANDLE32                  ConsoleInHandle;
+	EFI_PTR32                     ConIn;
 
-  EFI_HANDLE32                  ConsoleOutHandle;
-  EFI_PTR32                     ConOut;
+	EFI_HANDLE32                  ConsoleOutHandle;
+	EFI_PTR32                     ConOut;
 
-  EFI_HANDLE32                  StandardErrorHandle;
-  EFI_PTR32                     StdErr;
+	EFI_HANDLE32                  StandardErrorHandle;
+	EFI_PTR32                     StdErr;
 
-  EFI_PTR32                     RuntimeServices;
-  EFI_PTR32                     BootServices;
+	EFI_PTR32                     RuntimeServices;
+	EFI_PTR32                     BootServices;
 
-  EFI_UINT32                    NumberOfTableEntries;
-  EFI_PTR32                     ConfigurationTable;
-
+	EFI_UINT32                    NumberOfTableEntries;
+	EFI_PTR32                     ConfigurationTable;
 } __attribute__((aligned(8))) EFI_SYSTEM_TABLE_32;
 
 typedef struct EFI_SYSTEM_TABLE_64 {
-  EFI_TABLE_HEADER              Hdr;
+	EFI_TABLE_HEADER              Hdr;
 
-  EFI_PTR64                     FirmwareVendor;
-  EFI_UINT32                    FirmwareRevision;
+	EFI_PTR64                     FirmwareVendor;
+	EFI_UINT32                    FirmwareRevision;
 
-  EFI_UINT32                    __pad;
+	EFI_UINT32                    __pad;
 
-  EFI_HANDLE64                  ConsoleInHandle;
-  EFI_PTR64                     ConIn;
+	EFI_HANDLE64                  ConsoleInHandle;
+	EFI_PTR64                     ConIn;
 
-  EFI_HANDLE64                  ConsoleOutHandle;
-  EFI_PTR64                     ConOut;
+	EFI_HANDLE64                  ConsoleOutHandle;
+	EFI_PTR64                     ConOut;
 
-  EFI_HANDLE64                  StandardErrorHandle;
-  EFI_PTR64                     StdErr;
+	EFI_HANDLE64                  StandardErrorHandle;
+	EFI_PTR64                     StdErr;
 
-  EFI_PTR64                     RuntimeServices;
-  EFI_PTR64                     BootServices;
+	EFI_PTR64                     RuntimeServices;
+	EFI_PTR64                     BootServices;
 
-  EFI_UINT64                    NumberOfTableEntries;
-  EFI_PTR64                     ConfigurationTable;
-
+	EFI_UINT64                    NumberOfTableEntries;
+	EFI_PTR64                     ConfigurationTable;
 } __attribute__((aligned(8))) EFI_SYSTEM_TABLE_64;
 
 #endif /* _PEXPERT_I386_EFI_H */

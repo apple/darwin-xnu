@@ -36,7 +36,8 @@ extern uint64_t _mach_continuous_time_base(void);
 extern int __gettimeofday_with_mach(struct timeval *, struct timezone *, uint64_t *);
 
 kern_return_t
-mach_get_times(uint64_t* absolute_time, uint64_t* cont_time, struct timespec *tp) {
+mach_get_times(uint64_t* absolute_time, uint64_t* cont_time, struct timespec *tp)
+{
 	if (tp == NULL) {
 		return _mach_continuous_time(absolute_time, cont_time);
 	}
@@ -75,8 +76,12 @@ mach_get_times(uint64_t* absolute_time, uint64_t* cont_time, struct timespec *tp
 		continuous_time_base_post = _mach_continuous_time_base();
 	} while (__builtin_expect(continuous_time_base_prior != continuous_time_base_post, 0));
 
-	if (absolute_time) *absolute_time = tbr;
-	if (cont_time) *cont_time = continuous_time_base_prior + tbr;
+	if (absolute_time) {
+		*absolute_time = tbr;
+	}
+	if (cont_time) {
+		*cont_time = continuous_time_base_prior + tbr;
+	}
 	tp->tv_sec = tv.tv_sec;
 	tp->tv_nsec = tv.tv_usec * NSEC_PER_USEC;
 

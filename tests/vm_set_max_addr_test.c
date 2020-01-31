@@ -11,9 +11,9 @@
 extern char * testpath;
 
 T_DECL(set_max_addr,
-	"Description",
-	T_META_NAMESPACE("xnu.vm"),
-	T_META_CHECK_LEAKS(false))
+    "Description",
+    T_META_NAMESPACE("xnu.vm"),
+    T_META_CHECK_LEAKS(false))
 {
 #if (defined(__arm64__) && defined(__LP64__))
 	int result = 0;
@@ -54,4 +54,3 @@ T_DECL(set_max_addr,
 	T_SKIP("Not supported on this architecture");
 #endif /* (defined(__arm64__) && defined(__LP64__)) */
 }
-

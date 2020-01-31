@@ -30,8 +30,9 @@
 char error[100];
 
 jmp_buf resume;
-void test_signal_handler(int signo)
-{       
+void
+test_signal_handler(int signo)
+{
 	longjmp(resume, signo);
 }
 
@@ -46,7 +47,8 @@ typedef struct {
 } test_t;
 
 boolean_t
-check_kr(int kr, char *fn) {
+check_kr(int kr, char *fn)
+{
 	if (kr) {
 		sprintf(error, "%s() returned %d", fn, kr);
 		return FALSE;
@@ -55,7 +57,8 @@ check_kr(int kr, char *fn) {
 }
 
 boolean_t
-check_addr0(mach_vm_address_t addr, char *fn) {
+check_addr0(mach_vm_address_t addr, char *fn)
+{
 	if (!addr) {
 		sprintf(error, "%s() returned address 0", fn);
 		return FALSE;
@@ -64,7 +67,8 @@ check_addr0(mach_vm_address_t addr, char *fn) {
 }
 
 boolean_t
-check_addr(mach_vm_address_t addr1, mach_vm_address_t addr2, char *fn) {
+check_addr(mach_vm_address_t addr1, mach_vm_address_t addr2, char *fn)
+{
 	if (addr1 != addr2) {
 		sprintf(error, "%s() returned address %llx instead of %llx", fn, addr1, addr2);
 		return FALSE;
@@ -73,7 +77,8 @@ check_addr(mach_vm_address_t addr1, mach_vm_address_t addr2, char *fn) {
 }
 
 boolean_t
-check_align(mach_vm_address_t addr) {
+check_align(mach_vm_address_t addr)
+{
 	if (addr & !SUPERPAGE_MASK) {
 		sprintf(error, "address not aligned properly: 0x%llx", addr);
 		return FALSE;
@@ -82,31 +87,35 @@ check_align(mach_vm_address_t addr) {
 }
 
 boolean_t
-check_r(mach_vm_address_t addr, mach_vm_size_t size, int *res) {
+check_r(mach_vm_address_t addr, mach_vm_size_t size, int *res)
+{
 	volatile char *data = (char*)(uintptr_t)addr;
 	int i, sig, test;
-	
+
 	if ((sig = setjmp(resume)) != 0) {
 		sprintf(error, "%s when reading", signame[sig]);
 		return FALSE;
 	}
 	test = 0;
-	for (i=0; i<size; i++)
+	for (i = 0; i < size; i++) {
 		test += (data)[i];
+	}
 
-	if (res)
+	if (res) {
 		*res = test;
-	
+	}
+
 	return TRUE;
 }
 
 /* check that no subpage of the superpage is readable */
 boolean_t
-check_nr(mach_vm_address_t addr, mach_vm_size_t size, int *res) {
+check_nr(mach_vm_address_t addr, mach_vm_size_t size, int *res)
+{
 	int i;
 	boolean_t ret;
-	for (i=0; i<size/PAGE_SIZE; i++) {
-		if ((ret = check_r(addr+i*PAGE_SIZE, PAGE_SIZE, res))) {
+	for (i = 0; i < size / PAGE_SIZE; i++) {
+		if ((ret = check_r(addr + i * PAGE_SIZE, PAGE_SIZE, res))) {
 			sprintf(error, "page still readable");
 			return FALSE;
 		}
@@ -115,7 +124,8 @@ check_nr(mach_vm_address_t addr, mach_vm_size_t size, int *res) {
 }
 
 boolean_t
-check_w(mach_vm_address_t addr, mach_vm_size_t size) {
+check_w(mach_vm_address_t addr, mach_vm_size_t size)
+{
 	char *data = (char*)(uintptr_t)addr;
 	int i, sig;
 
@@ -124,19 +134,21 @@ check_w(mach_vm_address_t addr, mach_vm_size_t size) {
 		return FALSE;
 	}
 
-	for (i=0; i<size; i++)
+	for (i = 0; i < size; i++) {
 		(data)[i] = i & 0xFF;
+	}
 
 	return TRUE;
 }
 
 boolean_t
-check_nw(mach_vm_address_t addr, mach_vm_size_t size) {
+check_nw(mach_vm_address_t addr, mach_vm_size_t size)
+{
 	int i;
 	boolean_t ret;
 
-	for (i=0; i<size/PAGE_SIZE; i++) {
-		if ((ret = check_w(addr+i*PAGE_SIZE, PAGE_SIZE))) {
+	for (i = 0; i < size / PAGE_SIZE; i++) {
+		if ((ret = check_w(addr + i * PAGE_SIZE, PAGE_SIZE))) {
 			sprintf(error, "page still writable");
 			return FALSE;
 		}
@@ -145,12 +157,17 @@ check_nw(mach_vm_address_t addr, mach_vm_size_t size) {
 }
 
 boolean_t
-check_rw(mach_vm_address_t addr, mach_vm_size_t size) {
+check_rw(mach_vm_address_t addr, mach_vm_size_t size)
+{
 	int ret;
 	int res;
-	if (!(ret = check_w(addr, size))) return ret;
-	if (!(ret = check_r(addr, size, &res))) return ret;
-	if ((size==SUPERPAGE_SIZE) && (res!=0xfff00000)) {
+	if (!(ret = check_w(addr, size))) {
+		return ret;
+	}
+	if (!(ret = check_r(addr, size, &res))) {
+		return ret;
+	}
+	if ((size == SUPERPAGE_SIZE) && (res != 0xfff00000)) {
 		sprintf(error, "checksum error");
 		return FALSE;
 	}
@@ -159,7 +176,7 @@ check_rw(mach_vm_address_t addr, mach_vm_size_t size) {
 }
 
 mach_vm_address_t global_addr = 0;
-mach_vm_size_t	global_size = 0;
+mach_vm_size_t  global_size = 0;
 
 /*
  * If we allocate a 2 MB superpage read-write without specifying an address,
@@ -169,17 +186,26 @@ mach_vm_size_t	global_size = 0;
  * - the memory should be readable and writable
  */
 boolean_t
-test_allocate() {
+test_allocate()
+{
 	int kr, ret;
 
 	global_addr = 0;
 	global_size = SUPERPAGE_SIZE;
-	
+
 	kr = mach_vm_allocate(mach_task_self(), &global_addr, global_size, VM_FLAGS_ANYWHERE | VM_FLAGS_SUPERPAGE_SIZE_2MB);
-	if (!(ret = check_kr(kr, "mach_vm_allocate"))) return ret;
-	if (!(ret = check_addr0(global_addr, "mach_vm_allocate"))) return ret;
-	if (!(ret = check_align(global_addr))) return ret;
-	if (!(ret = check_rw(global_addr, global_size))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate"))) {
+		return ret;
+	}
+	if (!(ret = check_addr0(global_addr, "mach_vm_allocate"))) {
+		return ret;
+	}
+	if (!(ret = check_align(global_addr))) {
+		return ret;
+	}
+	if (!(ret = check_rw(global_addr, global_size))) {
+		return ret;
+	}
 
 	return TRUE;
 }
@@ -190,8 +216,9 @@ test_allocate() {
  * - make the memory inaccessible
  */
 boolean_t
-test_deallocate() {
-	mach_vm_size_t	size = SUPERPAGE_SIZE;
+test_deallocate()
+{
+	mach_vm_size_t  size = SUPERPAGE_SIZE;
 	int kr, ret;
 
 	if (!global_addr) {
@@ -199,8 +226,12 @@ test_deallocate() {
 		return FALSE;
 	}
 	kr = mach_vm_deallocate(mach_task_self(), global_addr, global_size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) return ret;
-	if (!(ret = check_nr(global_addr, size, NULL))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) {
+		return ret;
+	}
+	if (!(ret = check_nr(global_addr, size, NULL))) {
+		return ret;
+	}
 	return TRUE;
 }
 
@@ -214,19 +245,30 @@ test_deallocate() {
  * - make the memory inaccessible
  */
 boolean_t
-test_allocate_size_any() {
+test_allocate_size_any()
+{
 	int kr;
 	int ret;
 	mach_vm_address_t addr = 0;
-	mach_vm_size_t	size = 2*PAGE_SIZE; /* will be rounded up to some superpage size */
+	mach_vm_size_t  size = 2 * PAGE_SIZE; /* will be rounded up to some superpage size */
 
 	kr = mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_ANYWHERE | VM_FLAGS_SUPERPAGE_SIZE_ANY);
-	if (!(ret = check_kr(kr, "mach_vm_allocate"))) return ret;
-	if (!(ret = check_addr0(addr, "mach_vm_allocate"))) return ret;
-	if (!(ret = check_rw(addr, size))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate"))) {
+		return ret;
+	}
+	if (!(ret = check_addr0(addr, "mach_vm_allocate"))) {
+		return ret;
+	}
+	if (!(ret = check_rw(addr, size))) {
+		return ret;
+	}
 	kr = mach_vm_deallocate(mach_task_self(), addr, size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) return ret;
-	if (!(ret = check_nr(addr, size, NULL))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) {
+		return ret;
+	}
+	if (!(ret = check_nr(addr, size, NULL))) {
+		return ret;
+	}
 	return TRUE;
 }
 
@@ -240,19 +282,30 @@ test_allocate_size_any() {
  * - make the memory inaccessible
  */
 boolean_t
-test_allocatefixed() {
+test_allocatefixed()
+{
 	int kr;
 	int ret;
 	mach_vm_address_t addr = FIXED_ADDRESS1;
-	mach_vm_size_t	size = SUPERPAGE_SIZE;
+	mach_vm_size_t  size = SUPERPAGE_SIZE;
 
 	kr = mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_SUPERPAGE_SIZE_2MB);
-	if (!(ret = check_kr(kr, "mach_vm_allocate"))) return ret;
-	if (!(ret = check_addr(addr, FIXED_ADDRESS1, "mach_vm_allocate"))) return ret;
-	if (!(ret = check_rw(addr, size))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate"))) {
+		return ret;
+	}
+	if (!(ret = check_addr(addr, FIXED_ADDRESS1, "mach_vm_allocate"))) {
+		return ret;
+	}
+	if (!(ret = check_rw(addr, size))) {
+		return ret;
+	}
 	kr = mach_vm_deallocate(mach_task_self(), addr, size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) return ret;
-	if (!(ret = check_nr(addr, size, NULL))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) {
+		return ret;
+	}
+	if (!(ret = check_nr(addr, size, NULL))) {
+		return ret;
+	}
 	return TRUE;
 }
 
@@ -261,12 +314,13 @@ test_allocatefixed() {
  * - the call should fail
  */
 boolean_t
-test_allocateunalignedfixed() {
+test_allocateunalignedfixed()
+{
 	int kr;
 	int ret;
 	mach_vm_address_t addr = FIXED_ADDRESS2;
-	mach_vm_size_t	size = SUPERPAGE_SIZE;
-	
+	mach_vm_size_t  size = SUPERPAGE_SIZE;
+
 	kr = mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_SUPERPAGE_SIZE_2MB);
 	/* is supposed to fail */
 	if ((ret = check_kr(kr, "mach_vm_allocate"))) {
@@ -281,11 +335,12 @@ test_allocateunalignedfixed() {
  * - the call should fail
  */
 boolean_t
-test_allocateoddsize() {
+test_allocateoddsize()
+{
 	int kr;
 	int ret;
 	mach_vm_address_t addr = FIXED_ADDRESS1;
-	mach_vm_size_t	size = PAGE_SIZE; /* != 2 MB */
+	mach_vm_size_t  size = PAGE_SIZE; /* != 2 MB */
 
 	kr = mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_SUPERPAGE_SIZE_2MB);
 	/* is supposed to fail */
@@ -302,17 +357,24 @@ test_allocateoddsize() {
  * - make the complete memory inaccessible
  */
 boolean_t
-test_deallocatesubpage() {
+test_deallocatesubpage()
+{
 	int kr;
 	int ret;
 	mach_vm_address_t addr = 0;
-	mach_vm_size_t	size = SUPERPAGE_SIZE;
-	
+	mach_vm_size_t  size = SUPERPAGE_SIZE;
+
 	kr = mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_ANYWHERE | VM_FLAGS_SUPERPAGE_SIZE_2MB);
-	if (!(ret = check_kr(kr, "mach_vm_allocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate"))) {
+		return ret;
+	}
 	kr = mach_vm_deallocate(mach_task_self(), addr + PAGE_SIZE, size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) return ret;
-	if (!(ret = check_nr(addr, size, NULL))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) {
+		return ret;
+	}
+	if (!(ret = check_nr(addr, size, NULL))) {
+		return ret;
+	}
 	return TRUE;
 }
 
@@ -321,18 +383,21 @@ test_deallocatesubpage() {
  * - the call should fail
  */
 boolean_t
-test_reallocate() {
+test_reallocate()
+{
 	mach_vm_address_t addr = 0, addr2;
-	mach_vm_size_t	size = SUPERPAGE_SIZE;
+	mach_vm_size_t  size = SUPERPAGE_SIZE;
 	int kr, ret;
 	int i;
 
 	kr = mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_ANYWHERE | VM_FLAGS_SUPERPAGE_SIZE_2MB);
-	if (!(ret = check_kr(kr, "mach_vm_allocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate"))) {
+		return ret;
+	}
 
 	/* attempt to allocate every sub-page of superpage */
-	for (i=0; i<SUPERPAGE_SIZE/PAGE_SIZE; i++) {
-		addr2 = addr + i*PAGE_SIZE;
+	for (i = 0; i < SUPERPAGE_SIZE / PAGE_SIZE; i++) {
+		addr2 = addr + i * PAGE_SIZE;
 		size = PAGE_SIZE;
 		kr = mach_vm_allocate(mach_task_self(), &addr2, size, 0);
 		if ((ret = check_kr(kr, "mach_vm_allocate"))) {
@@ -342,7 +407,9 @@ test_reallocate() {
 		}
 	}
 	kr = mach_vm_deallocate(mach_task_self(), addr, size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) {
+		return ret;
+	}
 	return TRUE;
 }
 
@@ -352,24 +419,34 @@ test_reallocate() {
  * - the memory should remain readable and writable
  */
 boolean_t
-test_wire() {
+test_wire()
+{
 	int kr;
 	int ret;
 	mach_vm_address_t addr = 0;
-	mach_vm_size_t	size = SUPERPAGE_SIZE;
+	mach_vm_size_t  size = SUPERPAGE_SIZE;
 
 	kr = mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_ANYWHERE | VM_FLAGS_SUPERPAGE_SIZE_2MB);
-	if (!(ret = check_kr(kr, "mach_vm_allocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate"))) {
+		return ret;
+	}
 
 	kr = mach_vm_wire(mach_host_self(), mach_task_self(), addr, size, VM_PROT_WRITE | VM_PROT_READ);
 
-	if (!geteuid()) /* may fail as user */
-		if (!(ret = check_kr(kr, "mach_vm_wire"))) return ret;
+	if (!geteuid()) { /* may fail as user */
+		if (!(ret = check_kr(kr, "mach_vm_wire"))) {
+			return ret;
+		}
+	}
 
-	if (!(ret = check_rw(addr, size))) return ret;
+	if (!(ret = check_rw(addr, size))) {
+		return ret;
+	}
 
 	kr = mach_vm_deallocate(mach_task_self(), addr, size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) {
+		return ret;
+	}
 
 	return TRUE;
 }
@@ -381,14 +458,17 @@ test_wire() {
  * Currently, superpages are always wired.
  */
 boolean_t
-test_unwire() {
+test_unwire()
+{
 	int kr;
 	int ret;
 	mach_vm_address_t addr = 0;
-	mach_vm_size_t	size = SUPERPAGE_SIZE;
+	mach_vm_size_t  size = SUPERPAGE_SIZE;
 
 	kr = mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_ANYWHERE | VM_FLAGS_SUPERPAGE_SIZE_2MB);
-	if (!(ret = check_kr(kr, "mach_vm_allocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate"))) {
+		return ret;
+	}
 
 	kr = mach_vm_wire(mach_host_self(), mach_task_self(), addr, size, VM_PROT_NONE);
 	if ((ret = check_kr(kr, "mach_vm_wire"))) {
@@ -396,10 +476,14 @@ test_unwire() {
 		return FALSE;
 	}
 
-	if (!(ret = check_rw(addr, size))) return ret;
+	if (!(ret = check_rw(addr, size))) {
+		return ret;
+	}
 
 	kr = mach_vm_deallocate(mach_task_self(), addr, size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) {
+		return ret;
+	}
 
 	return TRUE;
 }
@@ -411,23 +495,34 @@ test_unwire() {
  * - the memory should not be writable
  */
 boolean_t
-test_readonly() {
+test_readonly()
+{
 	int kr;
 	int ret;
 	mach_vm_address_t addr = 0;
-	mach_vm_size_t	size = SUPERPAGE_SIZE;
+	mach_vm_size_t  size = SUPERPAGE_SIZE;
 
 	kr = mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_ANYWHERE | VM_FLAGS_SUPERPAGE_SIZE_2MB);
-	if (!(ret = check_kr(kr, "mach_vm_allocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate"))) {
+		return ret;
+	}
 
 	mach_vm_protect(mach_task_self(), addr, size, 0, VM_PROT_READ);
-	if (!(ret = check_kr(kr, "mach_vm_protect"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_protect"))) {
+		return ret;
+	}
 
-	if (!(ret = check_r(addr, size, NULL))) return ret;
-	if (!(ret = check_nw(addr, size))) return ret;
+	if (!(ret = check_r(addr, size, NULL))) {
+		return ret;
+	}
+	if (!(ret = check_nw(addr, size))) {
+		return ret;
+	}
 
 	kr = mach_vm_deallocate(mach_task_self(), addr, size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) {
+		return ret;
+	}
 
 	return TRUE;
 }
@@ -439,23 +534,34 @@ test_readonly() {
  * - the complete memory should not be writable
  */
 boolean_t
-test_readonlysubpage() {
+test_readonlysubpage()
+{
 	int kr;
 	int ret;
 	mach_vm_address_t addr = 0;
-	mach_vm_size_t	size = SUPERPAGE_SIZE;
+	mach_vm_size_t  size = SUPERPAGE_SIZE;
 
 	kr = mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_ANYWHERE | VM_FLAGS_SUPERPAGE_SIZE_2MB);
-	if (!(ret = check_kr(kr, "mach_vm_allocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate"))) {
+		return ret;
+	}
 
-	mach_vm_protect(mach_task_self(), addr+PAGE_SIZE, PAGE_SIZE, 0, VM_PROT_READ);
-	if (!(ret = check_kr(kr, "mach_vm_protect"))) return ret;
+	mach_vm_protect(mach_task_self(), addr + PAGE_SIZE, PAGE_SIZE, 0, VM_PROT_READ);
+	if (!(ret = check_kr(kr, "mach_vm_protect"))) {
+		return ret;
+	}
 
-	if (!(ret = check_r(addr, size, NULL))) return ret;
-	if (!(ret = check_nw(addr, size))) return ret;
+	if (!(ret = check_r(addr, size, NULL))) {
+		return ret;
+	}
+	if (!(ret = check_nw(addr, size))) {
+		return ret;
+	}
 
 	kr = mach_vm_deallocate(mach_task_self(), addr, size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) {
+		return ret;
+	}
 
 	return TRUE;
 }
@@ -466,30 +572,39 @@ test_readonlysubpage() {
  * - the child should not be able to access the superpages
  */
 boolean_t
-test_fork() {
+test_fork()
+{
 	mach_vm_address_t addr = 0;
-	mach_vm_size_t	size = SUPERPAGE_SIZE;
+	mach_vm_size_t  size = SUPERPAGE_SIZE;
 	int kr, ret;
 	pid_t pid;
-	
+
 	kr = mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_ANYWHERE | VM_FLAGS_SUPERPAGE_SIZE_2MB);
-	if (!(ret = check_kr(kr, "mach_vm_allocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate"))) {
+		return ret;
+	}
 
 	fflush(stdout);
-	if ((pid=fork())) { /* parent */
-		if (!(ret = check_rw(addr, size))) return ret;
+	if ((pid = fork())) { /* parent */
+		if (!(ret = check_rw(addr, size))) {
+			return ret;
+		}
 		waitpid(pid, &ret, 0);
 		if (!ret) {
 			sprintf(error, "child could access superpage");
 			return ret;
 		}
 	} else { /* child */
-		if (!(ret = check_nr(addr, size, NULL))) exit(ret);
+		if (!(ret = check_nr(addr, size, NULL))) {
+			exit(ret);
+		}
 		exit(TRUE);
 	}
-	
+
 	kr = mach_vm_deallocate(mach_task_self(), addr, size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) {
+		return ret;
+	}
 	return TRUE;
 }
 
@@ -500,23 +615,28 @@ test_fork() {
  */
 #define FILENAME "/System/Library/Kernels/kernel"
 boolean_t
-test_fileio() {
+test_fileio()
+{
 	mach_vm_address_t addr1 = 0;
 	mach_vm_address_t addr2 = 0;
-	mach_vm_size_t	size = SUPERPAGE_SIZE;
+	mach_vm_size_t  size = SUPERPAGE_SIZE;
 	int kr, ret;
 	int fd;
 	unsigned int bytes;
-	
+
 	/* allocate one superpage */
 	kr = mach_vm_allocate(mach_task_self(), &addr1, size, VM_FLAGS_ANYWHERE | VM_FLAGS_SUPERPAGE_SIZE_2MB);
-	if (!(ret = check_kr(kr, "mach_vm_allocate (1)"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate (1)"))) {
+		return ret;
+	}
 
 	/* allocate base pages (superpage-sized) */
 	kr = mach_vm_allocate(mach_task_self(), &addr2, size, VM_FLAGS_ANYWHERE);
-	if (!(ret = check_kr(kr, "mach_vm_allocate (2)"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate (2)"))) {
+		return ret;
+	}
 
-	if ((fd = open(FILENAME, O_RDONLY))<0) {
+	if ((fd = open(FILENAME, O_RDONLY)) < 0) {
 		sprintf(error, "couldn't open %s", FILENAME);
 		return FALSE;
 	}
@@ -533,7 +653,7 @@ test_fileio() {
 		return FALSE;
 	}
 	close(fd);
-	
+
 	/* compare */
 	if (memcmp((void*)(uintptr_t)addr1, (void*)(uintptr_t)addr2, bytes)) {
 		sprintf(error, "read data corrupt");
@@ -541,9 +661,13 @@ test_fileio() {
 	}
 
 	kr = mach_vm_deallocate(mach_task_self(), addr1, size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate (1)"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate (1)"))) {
+		return ret;
+	}
 	kr = mach_vm_deallocate(mach_task_self(), addr2, size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate (2)"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate (2)"))) {
+		return ret;
+	}
 	return TRUE;
 }
 
@@ -551,23 +675,36 @@ test_fileio() {
  * The mmap() interface should work just as well!
  */
 boolean_t
-test_mmap() {
+test_mmap()
+{
 	int kr, ret;
 	uintptr_t addr = 0;
 	int size = SUPERPAGE_SIZE;
-	
+
 	addr = (uintptr_t)mmap((void*)addr, size, PROT_READ, MAP_ANON | MAP_PRIVATE, VM_FLAGS_SUPERPAGE_SIZE_2MB, 0);
 	if (addr == (uintptr_t)MAP_FAILED) {
 		sprintf(error, "mmap()");
 		return FALSE;
 	}
-	if (!(ret = check_addr0(addr, "mach_vm_allocate"))) return ret;
-	if (!(ret = check_align(addr))) return ret;
-	if (!(ret = check_r(addr, SUPERPAGE_SIZE, NULL))) return ret;
-	if (!(ret = check_nw(addr, SUPERPAGE_SIZE))) return ret;
+	if (!(ret = check_addr0(addr, "mach_vm_allocate"))) {
+		return ret;
+	}
+	if (!(ret = check_align(addr))) {
+		return ret;
+	}
+	if (!(ret = check_r(addr, SUPERPAGE_SIZE, NULL))) {
+		return ret;
+	}
+	if (!(ret = check_nw(addr, SUPERPAGE_SIZE))) {
+		return ret;
+	}
 	kr = munmap((void*)addr, size);
-	if (!(ret = check_kr(kr, "munmap"))) return ret;
-	if (!(ret = check_nr(addr, size, NULL))) return ret;
+	if (!(ret = check_kr(kr, "munmap"))) {
+		return ret;
+	}
+	if (!(ret = check_nr(addr, size, NULL))) {
+		return ret;
+	}
 
 	return TRUE;
 }
@@ -576,18 +713,29 @@ test_mmap() {
  * Tests one allocation/deallocaton cycle; used in a loop this tests for leaks
  */
 boolean_t
-test_alloc_dealloc() {
+test_alloc_dealloc()
+{
 	mach_vm_address_t addr = 0;
-	mach_vm_size_t	size = SUPERPAGE_SIZE;
+	mach_vm_size_t  size = SUPERPAGE_SIZE;
 	int kr, ret;
-	
+
 	kr = mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_ANYWHERE | VM_FLAGS_SUPERPAGE_SIZE_2MB);
-	if (!(ret = check_kr(kr, "mach_vm_allocate"))) return ret;
-	if (!(ret = check_addr0(addr, "mach_vm_allocate"))) return ret;
-	if (!(ret = check_align(addr))) return ret;
-	if (!(ret = check_rw(addr, size))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_allocate"))) {
+		return ret;
+	}
+	if (!(ret = check_addr0(addr, "mach_vm_allocate"))) {
+		return ret;
+	}
+	if (!(ret = check_align(addr))) {
+		return ret;
+	}
+	if (!(ret = check_rw(addr, size))) {
+		return ret;
+	}
 	kr = mach_vm_deallocate(mach_task_self(), addr, size);
-	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) return ret;
+	if (!(ret = check_kr(kr, "mach_vm_deallocate"))) {
+		return ret;
+	}
 	return TRUE;
 }
 
@@ -610,29 +758,33 @@ test_t test[] = {
 #define TESTS ((int)(sizeof(test)/sizeof(*test)))
 
 boolean_t
-testit(int i) {
+testit(int i)
+{
 	boolean_t ret;
 
 	error[0] = 0;
-	printf ("Test #%d \"%s\"...", i+1, test[i].description);
+	printf("Test #%d \"%s\"...", i + 1, test[i].description);
 	ret = test[i].fn();
-	if (ret)
-		printf ("OK\n");
-	else {
-		printf ("FAILED!");
-		if (error[0])
-			printf (" (%s)\n", error);
-		else
-			printf ("\n");
+	if (ret) {
+		printf("OK\n");
+	} else {
+		printf("FAILED!");
+		if (error[0]) {
+			printf(" (%s)\n", error);
+		} else {
+			printf("\n");
+		}
 	}
 }
 
-int main(int argc, char **argv) {
+int
+main(int argc, char **argv)
+{
 	int i;
 	uint64_t time1, time2;
 
 	int mode = 0;
-	if (argc>1) {
+	if (argc > 1) {
 		if (!strcmp(argv[1], "-h")) {
 			printf("Usage: %s <mode>\n", argv[0]);
 			printf("\tmode = 0:  test all cases\n");
@@ -640,9 +792,9 @@ int main(int argc, char **argv) {
 			printf("\tmode > 0:  run test <tmode>\n");
 			exit(0);
 		}
-		mode=atoi(argv[1]);
+		mode = atoi(argv[1]);
 	}
-	
+
 	/* install SIGBUS handler */
 	struct sigaction my_sigaction;
 	my_sigaction.sa_handler = test_signal_handler;
@@ -650,25 +802,27 @@ int main(int argc, char **argv) {
 	my_sigaction.sa_mask = 0;
 	sigaction( SIGBUS, &my_sigaction, NULL );
 	sigaction( SIGSEGV, &my_sigaction, NULL );
-	
-	if (mode>0)		/* one specific test */
-		testit(mode-1);
 
-	if (mode==0) {	/* test all cases */
+	if (mode > 0) {           /* one specific test */
+		testit(mode - 1);
+	}
+
+	if (mode == 0) {  /* test all cases */
 		printf("Running %d tests:\n", TESTS);
-		for (i=0; i<TESTS; i++) {
+		for (i = 0; i < TESTS; i++) {
 			testit(i);
 		}
 	}
-	if (mode==-1) {	/* alloc/dealloc */
-			boolean_t ret;
+	if (mode == -1) { /* alloc/dealloc */
+		boolean_t ret;
 		do {
 			ret = test_alloc_dealloc(TRUE);
 			printf(".");
 			fflush(stdout);
 		} while (ret);
-		if (error[0])
-			printf (" (%s)\n", error);
+		if (error[0]) {
+			printf(" (%s)\n", error);
+		}
 	}
 	return 0;
 }

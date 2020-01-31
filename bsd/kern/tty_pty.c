@@ -2,7 +2,7 @@
  * Copyright (c) 1997-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -64,7 +64,7 @@
  * Pseudo-teletype Driver
  * (Actually two drivers, requiring two entries in 'cdevsw')
  */
-#include "pty.h"		/* XXX */
+#include "pty.h"                /* XXX */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -88,8 +88,8 @@
 
 #if NPTY == 1
 #undef NPTY
-#define	NPTY	32		/* crude XXX */
-#warning	You have only one pty defined, redefining to 32.
+#define NPTY    32              /* crude XXX */
+#warning        You have only one pty defined, redefining to 32.
 #endif
 
 /*
@@ -108,8 +108,8 @@ pty_init(__unused int n_ptys)
 }
 #else // DEVFS
 #include <miscfs/devfs/devfs.h>
-#define START_CHAR	'p'
-#define HEX_BASE	16
+#define START_CHAR      'p'
+#define HEX_BASE        16
 
 static struct tty_dev_t _pty_driver;
 
@@ -120,7 +120,7 @@ pty_get_ioctl(int minor, int open_flag)
 		return NULL;
 	}
 	struct ptmx_ioctl *pti = &pt_ioctl[minor];
-	if (open_flag & (PF_OPEN_M|PF_OPEN_S)) {
+	if (open_flag & (PF_OPEN_M | PF_OPEN_S)) {
 		if (!pti->pt_tty) {
 			pti->pt_tty = ttymalloc();
 		}
@@ -135,8 +135,8 @@ static int
 pty_get_name(int minor, char *buffer, size_t size)
 {
 	return snprintf(buffer, size, "/dev/tty%c%x",
-			START_CHAR + (minor / HEX_BASE),
-			minor % HEX_BASE);
+	           START_CHAR + (minor / HEX_BASE),
+	           minor % HEX_BASE);
 }
 
 int
@@ -155,11 +155,11 @@ pty_init(int n_ptys)
 				goto done;
 			}
 			pt_ioctl[m].pt_devhandle = devfs_make_node(makedev(PTS_MAJOR, m),
-					DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666,
-					"tty%c%x", j + START_CHAR, i);
+			    DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666,
+			    "tty%c%x", j + START_CHAR, i);
 			(void)devfs_make_node(makedev(PTC_MAJOR, m),
-					DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666,
-					"pty%c%x", j + START_CHAR, i);
+			    DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666,
+			    "pty%c%x", j + START_CHAR, i);
 		}
 	}
 

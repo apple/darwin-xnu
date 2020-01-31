@@ -28,7 +28,7 @@
 
 /* Flushed the log data. Return the updated pointers */
 #ifndef LOGFLUSHED
-#define LOGFLUSHED	_IOW('t', 81, firehose_push_reply_t)
+#define LOGFLUSHED      _IOW('t', 81, firehose_push_reply_t)
 #endif
 
 /* <Reserved for later. Unused now> Map the kernel log buffers to logd's address space */

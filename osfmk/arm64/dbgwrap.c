@@ -32,24 +32,24 @@
 #include <machine/atomic.h>
 #include <pexpert/arm64/board_config.h>
 
-#define DBGWRAP_REG_OFFSET	0
-#define DBGWRAP_DBGHALT		(1ULL << 31)
-#define DBGWRAP_DBGACK		(1ULL << 28)
+#define DBGWRAP_REG_OFFSET      0
+#define DBGWRAP_DBGHALT         (1ULL << 31)
+#define DBGWRAP_DBGACK          (1ULL << 28)
 
-#define EDDTRRX_REG_OFFSET	0x80
-#define EDITR_REG_OFFSET	0x84
-#define EDSCR_REG_OFFSET	0x88
-#define EDSCR_TXFULL		(1ULL << 29)
-#define EDSCR_ITE		(1ULL << 24)
-#define EDSCR_MA		(1ULL << 20)
-#define EDSCR_ERR		(1ULL << 6)
-#define EDDTRTX_REG_OFFSET	0x8C
-#define EDRCR_REG_OFFSET	0x90
-#define EDRCR_CSE		(1ULL << 2)
-#define EDPRSR_REG_OFFSET	0x314
-#define EDPRSR_OSLK		(1ULL << 5)
+#define EDDTRRX_REG_OFFSET      0x80
+#define EDITR_REG_OFFSET        0x84
+#define EDSCR_REG_OFFSET        0x88
+#define EDSCR_TXFULL            (1ULL << 29)
+#define EDSCR_ITE               (1ULL << 24)
+#define EDSCR_MA                (1ULL << 20)
+#define EDSCR_ERR               (1ULL << 6)
+#define EDDTRTX_REG_OFFSET      0x8C
+#define EDRCR_REG_OFFSET        0x90
+#define EDRCR_CSE               (1ULL << 2)
+#define EDPRSR_REG_OFFSET       0x314
+#define EDPRSR_OSLK             (1ULL << 5)
 
-#define MAX_EDITR_RETRIES	16
+#define MAX_EDITR_RETRIES       16
 
 /* Older SoCs require 32-bit accesses for DBGWRAP;
  * newer ones require 64-bit accesses. */
@@ -60,29 +60,31 @@ typedef uint64_t dbgwrap_reg_t;
 #endif
 
 #if DEVELOPMENT || DEBUG
-#define MAX_STUFFED_INSTRS	64
+#define MAX_STUFFED_INSTRS      64
 uint32_t stuffed_instrs[MAX_STUFFED_INSTRS];
 volatile uint32_t stuffed_instr_count = 0;
 #endif
 
-static volatile uint32_t halt_from_cpu = (uint32_t)-1; 
+static volatile uint32_t halt_from_cpu = (uint32_t)-1;
 
 boolean_t
 ml_dbgwrap_cpu_is_halted(int cpu_index)
 {
 	cpu_data_t *cdp = cpu_datap(cpu_index);
-	if ((cdp == NULL) || (cdp->coresight_base[CORESIGHT_UTT] == 0))
+	if ((cdp == NULL) || (cdp->coresight_base[CORESIGHT_UTT] == 0)) {
 		return FALSE;
+	}
 
-	return ((*(volatile dbgwrap_reg_t *)(cdp->coresight_base[CORESIGHT_UTT] + DBGWRAP_REG_OFFSET) & DBGWRAP_DBGACK) != 0);
+	return (*(volatile dbgwrap_reg_t *)(cdp->coresight_base[CORESIGHT_UTT] + DBGWRAP_REG_OFFSET) & DBGWRAP_DBGACK) != 0;
 }
 
 dbgwrap_status_t
 ml_dbgwrap_wait_cpu_halted(int cpu_index, uint64_t timeout_ns)
 {
 	cpu_data_t *cdp = cpu_datap(cpu_index);
-	if ((cdp == NULL) || (cdp->coresight_base[CORESIGHT_UTT] == 0))
+	if ((cdp == NULL) || (cdp->coresight_base[CORESIGHT_UTT] == 0)) {
 		return DBGWRAP_ERR_UNSUPPORTED;
+	}
 
 	volatile dbgwrap_reg_t *dbgWrapReg = (volatile dbgwrap_reg_t *)(cdp->coresight_base[CORESIGHT_UTT] + DBGWRAP_REG_OFFSET);
 
@@ -90,8 +92,9 @@ ml_dbgwrap_wait_cpu_halted(int cpu_index, uint64_t timeout_ns)
 	nanoseconds_to_absolutetime(timeout_ns, &interval);
 	uint64_t deadline = mach_absolute_time() + interval;
 	while (!(*dbgWrapReg & DBGWRAP_DBGACK)) {
-		if (mach_absolute_time() > deadline)
-			return DBGWRAP_ERR_HALT_TIMEOUT; 
+		if (mach_absolute_time() > deadline) {
+			return DBGWRAP_ERR_HALT_TIMEOUT;
+		}
 	}
 
 	return DBGWRAP_SUCCESS;
@@ -101,23 +104,27 @@ dbgwrap_status_t
 ml_dbgwrap_halt_cpu(int cpu_index, uint64_t timeout_ns)
 {
 	cpu_data_t *cdp = cpu_datap(cpu_index);
-	if ((cdp == NULL) || (cdp->coresight_base[CORESIGHT_UTT] == 0))
+	if ((cdp == NULL) || (cdp->coresight_base[CORESIGHT_UTT] == 0)) {
 		return DBGWRAP_ERR_UNSUPPORTED;
+	}
 
 	/* Only one cpu is allowed to initiate the halt sequence, to prevent cpus from cross-halting
 	 * each other.  The first cpu to request a halt may then halt any and all other cpus besides itself. */
 	int curcpu = cpu_number();
-	if (cpu_index == curcpu)
+	if (cpu_index == curcpu) {
 		return DBGWRAP_ERR_SELF_HALT;
+	}
 
 	if (!hw_compare_and_store((uint32_t)-1, (unsigned int)curcpu, &halt_from_cpu) &&
-	    (halt_from_cpu != (uint32_t)curcpu))
+	    (halt_from_cpu != (uint32_t)curcpu)) {
 		return DBGWRAP_ERR_INPROGRESS;
+	}
 
 	volatile dbgwrap_reg_t *dbgWrapReg = (volatile dbgwrap_reg_t *)(cdp->coresight_base[CORESIGHT_UTT] + DBGWRAP_REG_OFFSET);
 
-	if (ml_dbgwrap_cpu_is_halted(cpu_index))
+	if (ml_dbgwrap_cpu_is_halted(cpu_index)) {
 		return DBGWRAP_WARN_ALREADY_HALTED;
+	}
 
 	/* Clear all other writable bits besides dbgHalt; none of the power-down or reset bits must be set. */
 	*dbgWrapReg = DBGWRAP_DBGHALT;
@@ -125,16 +132,17 @@ ml_dbgwrap_halt_cpu(int cpu_index, uint64_t timeout_ns)
 	if (timeout_ns != 0) {
 		dbgwrap_status_t stat = ml_dbgwrap_wait_cpu_halted(cpu_index, timeout_ns);
 		return stat;
-	}
-	else
+	} else {
 		return DBGWRAP_SUCCESS;
+	}
 }
 
 static void
 ml_dbgwrap_stuff_instr(cpu_data_t *cdp, uint32_t instr, uint64_t timeout_ns, dbgwrap_status_t *status)
 {
-	if (*status < 0)
+	if (*status < 0) {
 		return;
+	}
 
 	volatile uint32_t *editr = (volatile uint32_t *)(cdp->coresight_base[CORESIGHT_ED] + EDITR_REG_OFFSET);
 	volatile uint32_t *edscr = (volatile uint32_t *)(cdp->coresight_base[CORESIGHT_ED] + EDSCR_REG_OFFSET);
@@ -159,18 +167,21 @@ ml_dbgwrap_stuff_instr(cpu_data_t *cdp, uint32_t instr, uint64_t timeout_ns, dbg
 				*status = DBGWRAP_ERR_INSTR_TIMEOUT;
 				return;
 			}
-			if (edscr_val & EDSCR_ERR)
+			if (edscr_val & EDSCR_ERR) {
 				break;
+			}
 		}
 		if (edscr_val & EDSCR_ERR) {
 			/* If memory access mode was enable by a debugger, clear it.
-			 * This will cause ERR to be set on any attempt to use EDITR. */	
-			if (edscr_val & EDSCR_MA)
+			 * This will cause ERR to be set on any attempt to use EDITR. */
+			if (edscr_val & EDSCR_MA) {
 				*edscr = edscr_val & ~EDSCR_MA;
+			}
 			*edrcr = EDRCR_CSE;
 			++retries;
-		} else
+		} else {
 			break;
+		}
 	} while (retries < MAX_EDITR_RETRIES);
 
 	if (retries >= MAX_EDITR_RETRIES) {
@@ -182,14 +193,15 @@ ml_dbgwrap_stuff_instr(cpu_data_t *cdp, uint32_t instr, uint64_t timeout_ns, dbg
 static uint64_t
 ml_dbgwrap_read_dtr(cpu_data_t *cdp, uint64_t timeout_ns, dbgwrap_status_t *status)
 {
-	if (*status < 0)
+	if (*status < 0) {
 		return 0;
+	}
 
 	uint64_t interval;
 	nanoseconds_to_absolutetime(timeout_ns, &interval);
 	uint64_t deadline = mach_absolute_time() + interval;
 
-	/* Per armv8 debug spec, writes to DBGDTR_EL0 on target cpu will set EDSCR.TXFull, 
+	/* Per armv8 debug spec, writes to DBGDTR_EL0 on target cpu will set EDSCR.TXFull,
 	 * with bits 63:32 available in EDDTRRX and bits 31:0 availabe in EDDTRTX. */
 	volatile uint32_t *edscr = (volatile uint32_t *)(cdp->coresight_base[CORESIGHT_ED] + EDSCR_REG_OFFSET);
 
@@ -207,15 +219,16 @@ ml_dbgwrap_read_dtr(cpu_data_t *cdp, uint64_t timeout_ns, dbgwrap_status_t *stat
 	uint32_t dtrrx = *((volatile uint32_t*)(cdp->coresight_base[CORESIGHT_ED] + EDDTRRX_REG_OFFSET));
 	uint32_t dtrtx = *((volatile uint32_t*)(cdp->coresight_base[CORESIGHT_ED] + EDDTRTX_REG_OFFSET));
 
-	return (((uint64_t)dtrrx << 32) | dtrtx);
+	return ((uint64_t)dtrrx << 32) | dtrtx;
 }
 
 dbgwrap_status_t
 ml_dbgwrap_halt_cpu_with_state(int cpu_index, uint64_t timeout_ns, dbgwrap_thread_state_t *state)
 {
 	cpu_data_t *cdp = cpu_datap(cpu_index);
-	if ((cdp == NULL) || (cdp->coresight_base[CORESIGHT_ED] == 0))
+	if ((cdp == NULL) || (cdp->coresight_base[CORESIGHT_ED] == 0)) {
 		return DBGWRAP_ERR_UNSUPPORTED;
+	}
 
 	/* Ensure memory-mapped coresight registers can be written */
 	*((volatile uint32_t *)(cdp->coresight_base[CORESIGHT_ED] + ARM_DEBUG_OFFSET_DBGLAR)) = ARM_DBG_LOCK_ACCESS_KEY;
@@ -252,7 +265,7 @@ ml_dbgwrap_halt_cpu_with_state(int cpu_index, uint64_t timeout_ns, dbgwrap_threa
 	 * rather than sp when used as the transfer operand there.  Instead, load sp into a GPR
 	 * we've already saved off and then store that register in the DTR.  I've chosen x18
 	 * as the temporary GPR since it's reserved by the arm64 ABI and unused by xnu, so overwriting
-	 * it poses the least risk of causing trouble for external debuggers. */ 
+	 * it poses the least risk of causing trouble for external debuggers. */
 
 	instr = (0x91U << 24) | (31 << 5) | 18; // mov x18, sp
 	ml_dbgwrap_stuff_instr(cdp, instr, timeout_ns, &status);
@@ -279,5 +292,3 @@ ml_dbgwrap_halt_cpu_with_state(int cpu_index, uint64_t timeout_ns, dbgwrap_threa
 
 	return status;
 }
-
-

@@ -53,8 +53,8 @@
 #if !CC_KERNEL || !CC_USE_ASM
 
 // Various logical functions
-#define Ch(x,y,z)       (z ^ (x & (y ^ z)))
-#define Maj(x,y,z)      (((x | y) & z) | (x & y))
+#define Ch(x, y, z)       (z ^ (x & (y ^ z)))
+#define Maj(x, y, z)      (((x | y) & z) | (x & y))
 #define S(x, n)         ror((x),(n))
 #define R(x, n)         ((x)>>(n))
 
@@ -87,70 +87,70 @@
 #endif
 
 // the round function
-#define RND(a,b,c,d,e,f,g,h,i)                                 \
+#define RND(a, b, c, d, e, f, g, h, i)                                 \
     t0 = h + Sigma1(e) + Ch(e, f, g) + ccsha256_K[i] + W[i];   \
     t1 = Sigma0(a) + Maj(a, b, c);                             \
     d += t0;                                                   \
     h  = t0 + t1;
 
 // compress 512-bits
-void ccsha256_ltc_compress(ccdigest_state_t state, size_t nblocks, const void *in)
+void
+ccsha256_ltc_compress(ccdigest_state_t state, size_t nblocks, const void *in)
 {
-    uint32_t W[64], t0, t1;
-    uint32_t S0,S1,S2,S3,S4,S5,S6,S7;
-    int i;
-    uint32_t *s = ccdigest_u32(state);
+	uint32_t W[64], t0, t1;
+	uint32_t S0, S1, S2, S3, S4, S5, S6, S7;
+	int i;
+	uint32_t *s = ccdigest_u32(state);
 #if CC_HANDLE_UNALIGNED_DATA
-    const unsigned char *buf = in;
+	const unsigned char *buf = in;
 #else
-    const uint32_t *buf = in;
+	const uint32_t *buf = in;
 #endif
 
-    while(nblocks--) {
+	while (nblocks--) {
+		// schedule W 0..15
+		set_W(0); set_W(1); set_W(2); set_W(3); set_W(4); set_W(5); set_W(6); set_W(7);
+		set_W(8); set_W(9); set_W(10); set_W(11); set_W(12); set_W(13); set_W(14); set_W(15);
 
-        // schedule W 0..15
-        set_W(0); set_W(1); set_W(2); set_W(3); set_W(4); set_W(5); set_W(6); set_W(7);
-        set_W(8); set_W(9); set_W(10);set_W(11);set_W(12);set_W(13);set_W(14);set_W(15);
+		// schedule W 16..63
+		for (i = 16; i < 64; i++) {
+			W[i] = Gamma1(W[i - 2]) + W[i - 7] + Gamma0(W[i - 15]) + W[i - 16];
+		}
 
-        // schedule W 16..63
-        for (i = 16; i < 64; i++) {
-            W[i] = Gamma1(W[i - 2]) + W[i - 7] + Gamma0(W[i - 15]) + W[i - 16];
-        }
+		// copy state into S
+		S0 = s[0];
+		S1 = s[1];
+		S2 = s[2];
+		S3 = s[3];
+		S4 = s[4];
+		S5 = s[5];
+		S6 = s[6];
+		S7 = s[7];
 
-        // copy state into S
-        S0= s[0];
-        S1= s[1];
-        S2= s[2];
-        S3= s[3];
-        S4= s[4];
-        S5= s[5];
-        S6= s[6];
-        S7= s[7];
+		// Compress
+		for (i = 0; i < 64; i += 8) {
+			RND(S0, S1, S2, S3, S4, S5, S6, S7, i + 0);
+			RND(S7, S0, S1, S2, S3, S4, S5, S6, i + 1);
+			RND(S6, S7, S0, S1, S2, S3, S4, S5, i + 2);
+			RND(S5, S6, S7, S0, S1, S2, S3, S4, i + 3);
+			RND(S4, S5, S6, S7, S0, S1, S2, S3, i + 4);
+			RND(S3, S4, S5, S6, S7, S0, S1, S2, i + 5);
+			RND(S2, S3, S4, S5, S6, S7, S0, S1, i + 6);
+			RND(S1, S2, S3, S4, S5, S6, S7, S0, i + 7);
+		}
 
-        // Compress
-        for (i = 0; i < 64; i += 8) {
-            RND(S0,S1,S2,S3,S4,S5,S6,S7,i+0);
-            RND(S7,S0,S1,S2,S3,S4,S5,S6,i+1);
-            RND(S6,S7,S0,S1,S2,S3,S4,S5,i+2);
-            RND(S5,S6,S7,S0,S1,S2,S3,S4,i+3);
-            RND(S4,S5,S6,S7,S0,S1,S2,S3,i+4);
-            RND(S3,S4,S5,S6,S7,S0,S1,S2,i+5);
-            RND(S2,S3,S4,S5,S6,S7,S0,S1,i+6);
-            RND(S1,S2,S3,S4,S5,S6,S7,S0,i+7);
-        }
+		// feedback
+		s[0] += S0;
+		s[1] += S1;
+		s[2] += S2;
+		s[3] += S3;
+		s[4] += S4;
+		s[5] += S5;
+		s[6] += S6;
+		s[7] += S7;
 
-        // feedback
-        s[0] += S0;
-        s[1] += S1;
-        s[2] += S2;
-        s[3] += S3;
-        s[4] += S4;
-        s[5] += S5;
-        s[6] += S6;
-        s[7] += S7;
-
-        buf+=CCSHA256_BLOCK_SIZE/sizeof(buf[0]);
-    }
+		buf += CCSHA256_BLOCK_SIZE / sizeof(buf[0]);
+	}
 }
 
 #endif

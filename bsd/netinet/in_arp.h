@@ -27,7 +27,7 @@
  */
 
 #ifndef _NETINET_IN_ARP_H_
-#define	_NETINET_IN_ARP_H_
+#define _NETINET_IN_ARP_H_
 #ifdef KERNEL
 #include <sys/kernel_types.h>
 
@@ -61,7 +61,7 @@ struct sockaddr_in;
  *		the packet.
  */
 #ifdef BSD_KERNEL_PRIVATE
-extern boolean_t arp_is_entry_probing (route_t p_route);
+extern boolean_t arp_is_entry_probing(route_t p_route);
 extern errno_t arp_lookup_ip(ifnet_t interface,
     const struct sockaddr_in *ip_dest, struct sockaddr_dl *ll_dest,
     size_t ll_dest_len, route_t hint, mbuf_t packet);
@@ -124,7 +124,7 @@ extern errno_t inet_arp_handle_input(ifnet_t ifp, u_int16_t arpop,
  */
 #ifdef BSD_KERNEL_PRIVATE
 /* inet_arp_init_ifaddr is aliased to arp_ifinit (if_ether.h) */
-#define	inet_arp_init_ifaddr	arp_ifinit
+#define inet_arp_init_ifaddr    arp_ifinit
 #else
 extern void inet_arp_init_ifaddr(ifnet_t interface, ifaddr_t ipaddr);
 #endif /* !BSD_KERNEL_PRIVATE */

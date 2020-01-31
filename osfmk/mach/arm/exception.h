@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#ifndef	_MACH_ARM_EXCEPTION_H_
+#ifndef _MACH_ARM_EXCEPTION_H_
 #define _MACH_ARM_EXCEPTION_H_
 
 #define EXC_TYPES_COUNT         14      /* incl. illegal exception 0 */
@@ -43,7 +43,7 @@
  *      EXC_BAD_INSTRUCTION
  */
 
-#define EXC_ARM_UNDEFINED	1	/* Undefined */
+#define EXC_ARM_UNDEFINED       1       /* Undefined */
 
 
 /*
@@ -51,16 +51,16 @@
  *      Note: do not conflict with kern_return_t values returned by vm_fault
  */
 
-#define EXC_ARM_DA_ALIGN	0x101	/* Alignment Fault */
-#define EXC_ARM_DA_DEBUG	0x102	/* Debug (watch/break) Fault */
-#define EXC_ARM_SP_ALIGN	0x103	/* SP Alignment Fault */
-#define EXC_ARM_SWP			0x104	/* SWP instruction */
+#define EXC_ARM_DA_ALIGN        0x101   /* Alignment Fault */
+#define EXC_ARM_DA_DEBUG        0x102   /* Debug (watch/break) Fault */
+#define EXC_ARM_SP_ALIGN        0x103   /* SP Alignment Fault */
+#define EXC_ARM_SWP                     0x104   /* SWP instruction */
 
 /*
  *	EXC_BREAKPOINT
  */
 
-#define EXC_ARM_BREAKPOINT	1	/* breakpoint trap */
+#define EXC_ARM_BREAKPOINT      1       /* breakpoint trap */
 
 
-#endif	/* _MACH_ARM_EXCEPTION_H_ */
+#endif  /* _MACH_ARM_EXCEPTION_H_ */

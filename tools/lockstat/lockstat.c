@@ -81,37 +81,36 @@ void get_lockgroup_deltas(void);
 char *pgmname;
 mach_port_t host_control;
 
-lockgroup_info_t	*lockgroup_info, *lockgroup_start, *lockgroup_deltas;
-unsigned int		count;
+lockgroup_info_t        *lockgroup_info, *lockgroup_start, *lockgroup_deltas;
+unsigned int            count;
 
-unsigned int		gDebug = 1;
+unsigned int            gDebug = 1;
 
 int
 main(int argc, char **argv)
 {
-	kern_return_t		kr;
-	int 			arg2;
-	unsigned int 		i;
-	int 			found;
+	kern_return_t           kr;
+	int                     arg2;
+	unsigned int            i;
+	int                     found;
 
 	setlinebuf(stdout);
 
 	pgmname = argv[0];
 	gDebug = (NULL != strstr(argv[0], "debug"));
 
-	host_control = mach_host_self();  
+	host_control = mach_host_self();
 
 	kr = host_lockgroup_info(host_control, &lockgroup_info, &count);
 
-	if (kr != KERN_SUCCESS)
-	{
+	if (kr != KERN_SUCCESS) {
 		mach_error("host_statistics", kr);
-		exit (EXIT_FAILURE);
+		exit(EXIT_FAILURE);
 	}
 	if (gDebug) {
 		printf("count = %d\n", count);
 		for (i = 0; i < count; i++) {
-			printf("%s\n",lockgroup_info[i].lockgroup_name);
+			printf("%s\n", lockgroup_info[i].lockgroup_name);
 		}
 	}
 
@@ -124,22 +123,18 @@ main(int argc, char **argv)
 			print_all_mutex(lockgroup_info);
 			print_rw_hdr();
 			print_all_rw(lockgroup_info);
-		}
-		else if (strcmp(argv[1], "spin") == 0) {
+		} else if (strcmp(argv[1], "spin") == 0) {
 			print_spin_hdr();
 			print_all_spin(lockgroup_info);
-		}
-		else if (strcmp(argv[1], "mutex") == 0) {
+		} else if (strcmp(argv[1], "mutex") == 0) {
 			print_mutex_hdr();
 			print_all_mutex(lockgroup_info);
-		}
-		else if (strcmp(argv[1], "rw") == 0) {
+		} else if (strcmp(argv[1], "rw") == 0) {
 			print_rw_hdr();
 			print_all_rw(lockgroup_info);
-		}
-		else {
+		} else {
 			found = 0;
-			for (i = 0;i < count;i++) {
+			for (i = 0; i < count; i++) {
 				if (strcmp(argv[1], lockgroup_info[i].lockgroup_name) == 0) {
 					found = 1;
 					print_spin_hdr();
@@ -151,10 +146,11 @@ main(int argc, char **argv)
 					break;
 				}
 			}
-			if (found == 0) 
-			{ usage(); }
+			if (found == 0) {
+				usage();
+			}
 		}
-		break;	
+		break;
 	case 3:
 		if (sscanf(argv[2], "%d", &arg2) != 1) {
 			usage();
@@ -164,7 +160,6 @@ main(int argc, char **argv)
 		}
 		prime_lockgroup_deltas();
 		if (strcmp(argv[1], "all") == 0) {
-
 			while (1) {
 				sleep(arg2);
 				get_lockgroup_deltas();
@@ -175,38 +170,30 @@ main(int argc, char **argv)
 				print_rw_hdr();
 				print_all_rw(lockgroup_deltas);
 			}
-		}
-		else if (strcmp(argv[1], "spin") == 0) {
-
+		} else if (strcmp(argv[1], "spin") == 0) {
 			while (1) {
 				sleep(arg2);
 				get_lockgroup_deltas();
 				print_spin_hdr();
 				print_all_spin(lockgroup_deltas);
 			}
-		}
-		else if (strcmp(argv[1], "mutex") == 0) {
-
+		} else if (strcmp(argv[1], "mutex") == 0) {
 			while (1) {
 				sleep(arg2);
 				get_lockgroup_deltas();
 				print_mutex_hdr();
 				print_all_mutex(lockgroup_deltas);
 			}
-		}
-		else if (strcmp(argv[1], "rw") == 0) {
-
+		} else if (strcmp(argv[1], "rw") == 0) {
 			while (1) {
 				sleep(arg2);
 				get_lockgroup_deltas();
 				print_rw_hdr();
 				print_all_rw(lockgroup_deltas);
 			}
-		}
-		else {
-
+		} else {
 			found = 0;
-			for (i = 0;i < count;i++) {
+			for (i = 0; i < count; i++) {
 				if (strcmp(argv[1], lockgroup_info[i].lockgroup_name) == 0) {
 					found = 1;
 					while (1) {
@@ -221,18 +208,20 @@ main(int argc, char **argv)
 					}
 				}
 			}
-			if (found == 0)
-			{ usage(); }
+			if (found == 0) {
+				usage();
+			}
 		}
 		break;
 	case 4:
-		if (strcmp(argv[3], "abs") != 0)
-		{ usage(); }
-		if (sscanf(argv[2], "%d", &arg2) != 1)
-		{ usage(); }
+		if (strcmp(argv[3], "abs") != 0) {
+			usage();
+		}
+		if (sscanf(argv[2], "%d", &arg2) != 1) {
+			usage();
+		}
 		if (strcmp(argv[1], "all") == 0) {
-			while (1)
-			{
+			while (1) {
 				print_spin_hdr();
 				print_all_spin(lockgroup_info);
 				print_mutex_hdr();
@@ -241,34 +230,29 @@ main(int argc, char **argv)
 				print_all_rw(lockgroup_info);
 				sleep(arg2);
 			}
-		}
-		else if (strcmp(argv[1], "spin") == 0) {
-			while (1)
-			{print_all_spin(lockgroup_info);
+		} else if (strcmp(argv[1], "spin") == 0) {
+			while (1) {
+				print_all_spin(lockgroup_info);
 				sleep(arg2);
 			}
-		}
-		else if (strcmp(argv[1], "mutex") == 0) {
+		} else if (strcmp(argv[1], "mutex") == 0) {
 			print_mutex_hdr();
-			while (1)
-			{print_all_mutex(lockgroup_info);
+			while (1) {
+				print_all_mutex(lockgroup_info);
 				sleep(arg2);
 			}
-		}
-		else if (strcmp(argv[1], "rw") == 0) {
+		} else if (strcmp(argv[1], "rw") == 0) {
 			print_rw_hdr();
-			while (1)
-			{print_all_rw(lockgroup_info);
+			while (1) {
+				print_all_rw(lockgroup_info);
 				sleep(arg2);
 			}
-		}
-		else {
+		} else {
 			found = 0;
-			for (i = 0;i < count;i++) {
+			for (i = 0; i < count; i++) {
 				if (strcmp(argv[1], lockgroup_info[i].lockgroup_name) == 0) {
 					found = 1;
-					while (1)
-					{
+					while (1) {
 						print_spin_hdr();
 						print_spin(i, lockgroup_info);
 						print_mutex_hdr();
@@ -279,19 +263,20 @@ main(int argc, char **argv)
 					}
 				}
 			}
-			if (found == 0)
-			{ usage(); }
+			if (found == 0) {
+				usage();
+			}
 		}
 		break;
 	default:
 		usage();
 		break;
-	}	
+	}
 
 	exit(0);
 }
- 
-void 
+
+void
 usage()
 {
 	fprintf(stderr, "Usage: %s [all, spin, mutex, rw, <lock group name>] {<repeat interval>} {abs}\n", pgmname);
@@ -307,7 +292,7 @@ print_spin_hdr(void)
 void
 print_spin(int requested, lockgroup_info_t *lockgroup)
 {
-	lockgroup_info_t	*curptr = &lockgroup[requested];
+	lockgroup_info_t        *curptr = &lockgroup[requested];
 
 	if (curptr->lock_spin_cnt != 0 && curptr->lock_spin_util_cnt != 0) {
 		printf("%16lld ", curptr->lock_spin_util_cnt);
@@ -319,11 +304,12 @@ print_spin(int requested, lockgroup_info_t *lockgroup)
 void
 print_all_spin(lockgroup_info_t *lockgroup)
 {
-	unsigned int		i;
+	unsigned int            i;
 
-	for (i = 0;i < count;i++)
+	for (i = 0; i < count; i++) {
 		print_spin(i, lockgroup);
-        printf("\n");
+	}
+	printf("\n");
 }
 
 void
@@ -332,21 +318,21 @@ print_mutex_hdr(void)
 #if defined(__i386__) || defined(__x86_64__)
 	printf("Mutex lock attempts  Misses      Waits Direct Waits Name\n");
 #else
-        printf("     mutex locks           misses            waits   name\n");
+	printf("     mutex locks           misses            waits   name\n");
 #endif
 }
 
 void
 print_mutex(int requested, lockgroup_info_t *lockgroup)
 {
-	lockgroup_info_t	*curptr = &lockgroup[requested];
+	lockgroup_info_t        *curptr = &lockgroup[requested];
 
 	if (curptr->lock_mtx_cnt != 0 && curptr->lock_mtx_util_cnt != 0) {
 		printf("%16lld ", curptr->lock_mtx_util_cnt);
 #if defined(__i386__) || defined(__x86_64__)
-		printf("%10lld %10lld %10lld   ", curptr->lock_mtx_miss_cnt,  curptr->lock_mtx_wait_cnt, curptr->lock_mtx_held_cnt);
+		printf("%10lld %10lld %10lld   ", curptr->lock_mtx_miss_cnt, curptr->lock_mtx_wait_cnt, curptr->lock_mtx_held_cnt);
 #else
-		printf("%16lld %16lld   ", curptr->lock_mtx_miss_cnt,  curptr->lock_mtx_wait_cnt);
+		printf("%16lld %16lld   ", curptr->lock_mtx_miss_cnt, curptr->lock_mtx_wait_cnt);
 #endif
 		printf("%-14s\n", curptr->lockgroup_name);
 	}
@@ -355,12 +341,12 @@ print_mutex(int requested, lockgroup_info_t *lockgroup)
 void
 print_all_mutex(lockgroup_info_t *lockgroup)
 {
-	unsigned int		i;
+	unsigned int            i;
 
-	for (i = 0;i < count;i++)
+	for (i = 0; i < count; i++) {
 		print_mutex(i, lockgroup);
-        printf("\n");
-
+	}
+	printf("\n");
 }
 
 void
@@ -372,11 +358,11 @@ print_rw_hdr(void)
 void
 print_rw(int requested, lockgroup_info_t *lockgroup)
 {
-	lockgroup_info_t	*curptr = &lockgroup[requested];
+	lockgroup_info_t        *curptr = &lockgroup[requested];
 
 	if (curptr->lock_rw_cnt != 0 && curptr->lock_rw_util_cnt != 0) {
 		printf("%16lld ", curptr->lock_rw_util_cnt);
-		printf("%16lld %16lld   ", curptr->lock_rw_miss_cnt,  curptr->lock_rw_wait_cnt);
+		printf("%16lld %16lld   ", curptr->lock_rw_miss_cnt, curptr->lock_rw_wait_cnt);
 		printf("%-14s\n", curptr->lockgroup_name);
 	}
 }
@@ -384,12 +370,12 @@ print_rw(int requested, lockgroup_info_t *lockgroup)
 void
 print_all_rw(lockgroup_info_t *lockgroup)
 {
-	unsigned int		i;
+	unsigned int            i;
 
-	for (i = 0;i < count;i++)
+	for (i = 0; i < count; i++) {
 		print_rw(i, lockgroup);
-        printf("\n");
-
+	}
+	printf("\n");
 }
 
 void
@@ -398,29 +384,28 @@ prime_lockgroup_deltas(void)
 	lockgroup_start = calloc(count, sizeof(lockgroup_info_t));
 	if (lockgroup_start == NULL) {
 		fprintf(stderr, "Can't allocate memory for lockgroup info\n");
-		exit (EXIT_FAILURE);
+		exit(EXIT_FAILURE);
 	}
 	memcpy(lockgroup_start, lockgroup_info, count * sizeof(lockgroup_info_t));
 
-	lockgroup_deltas = calloc(count,  sizeof(lockgroup_info_t));
+	lockgroup_deltas = calloc(count, sizeof(lockgroup_info_t));
 	if (lockgroup_deltas == NULL) {
 		fprintf(stderr, "Can't allocate memory for lockgroup info\n");
-		exit (EXIT_FAILURE);
+		exit(EXIT_FAILURE);
 	}
 }
 
 void
 get_lockgroup_deltas(void)
 {
-	kern_return_t 			kr;
-	unsigned int			i;
+	kern_return_t                   kr;
+	unsigned int                    i;
 
 	kr = host_lockgroup_info(host_control, &lockgroup_info, &count);
 
-	if (kr != KERN_SUCCESS)
-	{
+	if (kr != KERN_SUCCESS) {
 		mach_error("host_statistics", kr);
-		exit (EXIT_FAILURE);
+		exit(EXIT_FAILURE);
 	}
 
 	memcpy(lockgroup_deltas, lockgroup_info, count * sizeof(lockgroup_info_t));

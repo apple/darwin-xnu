@@ -122,12 +122,12 @@ extern void serial_putc(char);
 static void _serial_putc(int, int, int);
 
 SECURITY_READ_ONLY_EARLY(struct console_ops) cons_ops[] = {
-    {
-        .putc = _serial_putc, .getc = _serial_getc,
-    },
-    {
-        .putc = vcputc, .getc = vcgetc,
-    },
+	{
+		.putc = _serial_putc, .getc = _serial_getc,
+	},
+	{
+		.putc = vcputc, .getc = vcgetc,
+	},
 };
 
 SECURITY_READ_ONLY_EARLY(uint32_t) nconsops = (sizeof cons_ops / sizeof cons_ops[0]);
@@ -156,8 +156,9 @@ console_restore_interrupts_state(boolean_t state)
 	 * take the panic when it reenables interrupts.
 	 * Hopefully one day this is fixed so that this workaround is unnecessary.
 	 */
-	if (state == TRUE)
+	if (state == TRUE) {
 		ml_spin_debug_clear_self();
+	}
 #endif /* INTERRUPT_MASKED_DEBUG */
 	ml_set_interrupts_enabled(state);
 }
@@ -175,8 +176,9 @@ console_init(void)
 	int ret, i;
 	uint32_t * p;
 
-	if (!OSCompareAndSwap(0, KERN_CONSOLE_RING_SIZE, (UInt32 *)&console_ring.len))
+	if (!OSCompareAndSwap(0, KERN_CONSOLE_RING_SIZE, (UInt32 *)&console_ring.len)) {
 		return;
+	}
 
 	assert(console_ring.len > 0);
 
@@ -211,8 +213,9 @@ console_cpu_alloc(__unused boolean_t boot_processor)
 	/* select the next slot from the per cpu buffers at end of console_ring.buffer */
 	for (i = 0; i < MAX_CPU_SLOTS; i++) {
 		p = (uint32_t *)((uintptr_t)console_ring.buffer + console_ring.len + (i * sizeof(console_buf_t)));
-		if (OSCompareAndSwap(CPU_BUF_FREE_HEX, 0, (UInt32 *)p))
+		if (OSCompareAndSwap(CPU_BUF_FREE_HEX, 0, (UInt32 *)p)) {
 			break;
+		}
 	}
 	assert(i < MAX_CPU_SLOTS);
 
@@ -233,8 +236,9 @@ console_cpu_free(void * buf)
 {
 	assert((uintptr_t)buf > (uintptr_t)console_ring.buffer);
 	assert((uintptr_t)buf < (uintptr_t)console_ring.buffer + KERN_CONSOLE_BUF_SIZE);
-	if (buf != NULL)
+	if (buf != NULL) {
 		*(uint32_t *)buf = CPU_BUF_FREE_HEX;
+	}
 }
 
 static inline int
@@ -249,8 +253,9 @@ console_ring_put(char ch)
 	if (console_ring.used < console_ring.len) {
 		console_ring.used++;
 		*console_ring.write_ptr++ = ch;
-		if (console_ring.write_ptr - console_ring.buffer == console_ring.len)
+		if (console_ring.write_ptr - console_ring.buffer == console_ring.len) {
 			console_ring.write_ptr = console_ring.buffer;
+		}
 		return TRUE;
 	} else {
 		return FALSE;
@@ -287,7 +292,7 @@ _cnputs(char * c, int size)
 #endif
 
 	mp_disable_preemption();
-	if (!hw_lock_to(&cnputc_lock, lock_timeout_ticks)) {
+	if (!hw_lock_to(&cnputc_lock, lock_timeout_ticks, LCK_GRP_NULL)) {
 		/* If we timed out on the lock, and we're in the debugger,
 		 * copy lock data for debugging and break the lock.
 		 */
@@ -297,17 +302,18 @@ _cnputs(char * c, int size)
 			/* Since hw_lock_to takes a pre-emption count...*/
 			mp_enable_preemption();
 			hw_lock_init(&cnputc_lock);
-			hw_lock_lock(&cnputc_lock);
+			hw_lock_lock(&cnputc_lock, LCK_GRP_NULL);
 		} else {
 			panic("Lock acquire timeout in _cnputs() lock=%p, lock owner thread=0x%lx, current_thread: %p\n", &_shadow_lock,
-			      _shadow_lock.lock_data, current_thread());
+			    _shadow_lock.lock_data, current_thread());
 		}
 	}
 
 	while (size-- > 0) {
 		cons_ops[cons_ops_index].putc(0, 0, *c);
-		if (*c == '\n')
+		if (*c == '\n') {
 			cons_ops[cons_ops_index].putc(0, 0, '\r');
+		}
 		c++;
 	}
 
@@ -322,7 +328,8 @@ cnputc_unbuffered(char c)
 }
 
 
-void cnputcusr(char c)
+void
+cnputcusr(char c)
 {
 	cnputsusr(&c, 1);
 }
@@ -330,7 +337,6 @@ void cnputcusr(char c)
 void
 cnputsusr(char *s, int size)
 {
-
 	if (size > 1) {
 		console_write(s, size);
 		return;
@@ -377,15 +383,16 @@ console_ring_try_empty(void)
 
 	do {
 #ifdef __x86_64__
-		if (handle_tlb_flushes)
+		if (handle_tlb_flushes) {
 			handle_pending_TLB_flushes();
+		}
 #endif /* __x86_64__ */
 
 		/*
 		 * Try to get the read lock on the ring buffer to empty it.
 		 * If this fails someone else is already emptying...
 		 */
-		if (!simple_lock_try(&console_ring.read_lock)) {
+		if (!simple_lock_try(&console_ring.read_lock, LCK_GRP_NULL)) {
 			/*
 			 * If multiple cores are spinning trying to empty the buffer,
 			 * we may suffer lock starvation (get the read lock, but
@@ -402,15 +409,16 @@ console_ring_try_empty(void)
 		/* Indicate that we're in the process of writing a block of data to the console. */
 		(void)hw_atomic_add(&console_output, 1);
 
-		simple_lock_try_lock_loop(&console_ring.write_lock);
+		simple_lock_try_lock_loop(&console_ring.write_lock, LCK_GRP_NULL);
 
 		/* try small chunk at a time, so we allow writes from other cpus into the buffer */
 		nchars_out = MIN(console_ring.used, MAX_INT_DISABLED_FLUSH_SIZE);
 
 		/* account for data to be read before wrap around */
 		size_before_wrap = (int)((console_ring.buffer + console_ring.len) - console_ring.read_ptr);
-		if (nchars_out > size_before_wrap)
+		if (nchars_out > size_before_wrap) {
 			nchars_out = size_before_wrap;
+		}
 
 		if (nchars_out > 0) {
 			_cnputs(console_ring.read_ptr, nchars_out);
@@ -433,9 +441,9 @@ console_ring_try_empty(void)
 		 * for far too long, break out. Except in panic/suspend cases
 		 * where we should clear out full buffer.
 		 */
-		if (!kernel_debugger_entry_count && !console_suspended && (total_chars_out >= MAX_TOTAL_FLUSH_SIZE))
+		if (!kernel_debugger_entry_count && !console_suspended && (total_chars_out >= MAX_TOTAL_FLUSH_SIZE)) {
 			break;
-
+		}
 	} while (nchars_out > 0);
 }
 
@@ -460,13 +468,14 @@ console_write(char * str, int size)
 	int chunk_size = size;
 	int i          = 0;
 
-	if (size > console_ring.len)
+	if (size > console_ring.len) {
 		chunk_size = CPU_CONS_BUF_SIZE;
+	}
 
 	while (size > 0) {
 		boolean_t state = ml_set_interrupts_enabled(FALSE);
 
-		simple_lock_try_lock_loop(&console_ring.write_lock);
+		simple_lock_try_lock_loop(&console_ring.write_lock, LCK_GRP_NULL);
 		while (chunk_size > console_ring_space()) {
 			simple_unlock(&console_ring.write_lock);
 			console_restore_interrupts_state(state);
@@ -474,11 +483,12 @@ console_write(char * str, int size)
 			console_ring_try_empty();
 
 			state = ml_set_interrupts_enabled(FALSE);
-			simple_lock_try_lock_loop(&console_ring.write_lock);
+			simple_lock_try_lock_loop(&console_ring.write_lock, LCK_GRP_NULL);
 		}
 
-		for (i = 0; i < chunk_size; i++)
+		for (i = 0; i < chunk_size; i++) {
 			console_ring_put(str[i]);
+		}
 
 		str = &str[i];
 		size -= chunk_size;
@@ -536,7 +546,7 @@ restart:
 	 * it.
 	 */
 	if (needs_print && !cpu_buffer_put(cbp, c)) {
-		simple_lock_try_lock_loop(&console_ring.write_lock);
+		simple_lock_try_lock_loop(&console_ring.write_lock, LCK_GRP_NULL);
 
 		if (cpu_buffer_size(cbp) > console_ring_space()) {
 			simple_unlock(&console_ring.write_lock);
@@ -547,8 +557,9 @@ restart:
 			goto restart;
 		}
 
-		for (cp = cbp->buf_base; cp < cbp->buf_ptr; cp++)
+		for (cp = cbp->buf_base; cp < cbp->buf_ptr; cp++) {
 			console_ring_put(*cp);
+		}
 		cbp->buf_ptr = cbp->buf_base;
 		simple_unlock(&console_ring.write_lock);
 
@@ -564,7 +575,7 @@ restart:
 	}
 
 	/* We printed a newline, time to flush the CPU buffer to the global buffer */
-	simple_lock_try_lock_loop(&console_ring.write_lock);
+	simple_lock_try_lock_loop(&console_ring.write_lock, LCK_GRP_NULL);
 
 	/*
 	 * Is there enough space in the shared ring buffer?
@@ -583,8 +594,9 @@ restart:
 		goto restart;
 	}
 
-	for (cp = cbp->buf_base; cp < cbp->buf_ptr; cp++)
+	for (cp = cbp->buf_base; cp < cbp->buf_ptr; cp++) {
 		console_ring_put(*cp);
+	}
 
 	cbp->buf_ptr = cbp->buf_base;
 	simple_unlock(&console_ring.write_lock);
@@ -646,10 +658,11 @@ vcgetc(__unused int l, __unused int u, __unused boolean_t wait, __unused boolean
 {
 	char c;
 
-	if (0 == (*PE_poll_input)(0, &c))
+	if (0 == (*PE_poll_input)(0, &c)) {
 		return c;
-	else
+	} else {
 		return 0;
+	}
 }
 
 #ifdef CONFIG_XNUPOST
@@ -814,8 +827,9 @@ console_serial_test(void)
 	T_LOG("Using console_write call repeatedly for 100 iterations");
 	for (i = 0; i < 100; i++) {
 		console_write(&buffer[0], 14);
-		if ((i % 6) == 0)
+		if ((i % 6) == 0) {
 			printf("\n");
+		}
 	}
 	printf("\n");
 

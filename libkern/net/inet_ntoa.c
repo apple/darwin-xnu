@@ -34,14 +34,14 @@
 char *
 inet_ntoa(struct in_addr ina)
 {
-	static char buf[4*sizeof "123"];
+	static char buf[4 * sizeof "123"];
 	unsigned char *ucp = (unsigned char *)&ina;
 
 	snprintf(buf, sizeof(buf), "%d.%d.%d.%d",
-		ucp[0] & 0xff,
-		ucp[1] & 0xff,
-		ucp[2] & 0xff,
-		ucp[3] & 0xff);
+	    ucp[0] & 0xff,
+	    ucp[1] & 0xff,
+	    ucp[2] & 0xff,
+	    ucp[3] & 0xff);
 	return buf;
 }
 
@@ -51,9 +51,9 @@ inet_ntoa_r(struct in_addr ina, char *buf, size_t buflen)
 	unsigned char *ucp = (unsigned char *)&ina;
 
 	snprintf(buf, buflen, "%d.%d.%d.%d",
-		ucp[0] & 0xff,
-		ucp[1] & 0xff,
-		ucp[2] & 0xff,
-		ucp[3] & 0xff);
+	    ucp[0] & 0xff,
+	    ucp[1] & 0xff,
+	    ucp[2] & 0xff,
+	    ucp[3] & 0xff);
 	return buf;
 }

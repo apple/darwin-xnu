@@ -31,23 +31,23 @@
 /*
  * Mach Operating System Copyright (c) 1991,1990,1989,1988,1987 Carnegie
  * Mellon University All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright notice
  * and this permission notice appear in all copies of the software,
  * derivative works or modified versions, and any portions thereof, and that
  * both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS" CONDITION.
  * CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR ANY DAMAGES
  * WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  * Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  * School of Computer Science Carnegie Mellon University Pittsburgh PA
  * 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon the
  * rights to redistribute these changes.
  */
@@ -68,12 +68,12 @@
 #include <string.h>
 #include <tests/xnupost.h>
 
-#if	MACH_KDB
+#if     MACH_KDB
 #include <ddb/db_command.h>
 #include <ddb/db_output.h>
 #include <ddb/db_sym.h>
 #include <ddb/db_print.h>
-#endif				/* MACH_KDB */
+#endif                          /* MACH_KDB */
 
 #include <sys/kdebug.h>
 #include <sys/munge.h>
@@ -97,12 +97,12 @@ volatile char pan_fault_value = 0;
 
 #include <libkern/OSAtomic.h>
 #define LOCK_TEST_ITERATIONS 50
-static hw_lock_data_t 	lt_hw_lock;
-static lck_spin_t 	lt_lck_spin_t;
-static lck_mtx_t	lt_mtx;
-static lck_rw_t		lt_rwlock;
+static hw_lock_data_t   lt_hw_lock;
+static lck_spin_t       lt_lck_spin_t;
+static lck_mtx_t        lt_mtx;
+static lck_rw_t         lt_rwlock;
 static volatile uint32_t lt_counter = 0;
-static volatile int 	lt_spinvolatile;
+static volatile int     lt_spinvolatile;
 static volatile uint32_t lt_max_holders = 0;
 static volatile uint32_t lt_upgrade_holders = 0;
 static volatile uint32_t lt_max_upgrade_holders = 0;
@@ -112,40 +112,40 @@ static volatile uint32_t lt_target_done_threads;
 static volatile uint32_t lt_cpu_bind_id = 0;
 
 static void
-lt_note_another_blocking_lock_holder() 
+lt_note_another_blocking_lock_holder()
 {
-	hw_lock_lock(&lt_hw_lock);
+	hw_lock_lock(&lt_hw_lock, LCK_GRP_NULL);
 	lt_num_holders++;
 	lt_max_holders = (lt_max_holders < lt_num_holders) ? lt_num_holders : lt_max_holders;
 	hw_lock_unlock(&lt_hw_lock);
 }
 
 static void
-lt_note_blocking_lock_release() 
+lt_note_blocking_lock_release()
 {
-	hw_lock_lock(&lt_hw_lock);
+	hw_lock_lock(&lt_hw_lock, LCK_GRP_NULL);
 	lt_num_holders--;
 	hw_lock_unlock(&lt_hw_lock);
 }
 
 static void
-lt_spin_a_little_bit() 
+lt_spin_a_little_bit()
 {
 	uint32_t i;
-	
+
 	for (i = 0; i < 10000; i++) {
 		lt_spinvolatile++;
 	}
 }
 
 static void
-lt_sleep_a_little_bit() 
+lt_sleep_a_little_bit()
 {
 	delay(100);
 }
 
 static void
-lt_grab_mutex() 
+lt_grab_mutex()
 {
 	lck_mtx_lock(&lt_mtx);
 	lt_note_another_blocking_lock_holder();
@@ -158,13 +158,14 @@ lt_grab_mutex()
 static void
 lt_grab_mutex_with_try()
 {
-	while(0 == lck_mtx_try_lock(&lt_mtx));
+	while (0 == lck_mtx_try_lock(&lt_mtx)) {
+		;
+	}
 	lt_note_another_blocking_lock_holder();
 	lt_sleep_a_little_bit();
 	lt_counter++;
 	lt_note_blocking_lock_release();
 	lck_mtx_unlock(&lt_mtx);
-
 }
 
 static void
@@ -181,7 +182,7 @@ lt_grab_rw_exclusive()
 static void
 lt_grab_rw_exclusive_with_try()
 {
-	while(0 == lck_rw_try_lock_exclusive(&lt_rwlock)) {
+	while (0 == lck_rw_try_lock_exclusive(&lt_rwlock)) {
 		lt_sleep_a_little_bit();
 	}
 
@@ -193,37 +194,37 @@ lt_grab_rw_exclusive_with_try()
 }
 
 /* Disabled until lt_grab_rw_shared() is fixed (rdar://30685840)
-static void 
-lt_grab_rw_shared()
-{
-	lck_rw_lock_shared(&lt_rwlock);
-	lt_counter++;
-
-	lt_note_another_blocking_lock_holder();
-	lt_sleep_a_little_bit();
-	lt_note_blocking_lock_release();
-
-	lck_rw_done(&lt_rwlock);
-}
-*/
+ *  static void
+ *  lt_grab_rw_shared()
+ *  {
+ *       lck_rw_lock_shared(&lt_rwlock);
+ *       lt_counter++;
+ *
+ *       lt_note_another_blocking_lock_holder();
+ *       lt_sleep_a_little_bit();
+ *       lt_note_blocking_lock_release();
+ *
+ *       lck_rw_done(&lt_rwlock);
+ *  }
+ */
 
 /* Disabled until lt_grab_rw_shared_with_try() is fixed (rdar://30685840)
-static void 
-lt_grab_rw_shared_with_try()
-{
-	while(0 == lck_rw_try_lock_shared(&lt_rwlock));
-	lt_counter++;
-
-	lt_note_another_blocking_lock_holder();
-	lt_sleep_a_little_bit();
-	lt_note_blocking_lock_release();
-
-	lck_rw_done(&lt_rwlock);
-}
-*/
+ *  static void
+ *  lt_grab_rw_shared_with_try()
+ *  {
+ *       while(0 == lck_rw_try_lock_shared(&lt_rwlock));
+ *       lt_counter++;
+ *
+ *       lt_note_another_blocking_lock_holder();
+ *       lt_sleep_a_little_bit();
+ *       lt_note_blocking_lock_release();
+ *
+ *       lck_rw_done(&lt_rwlock);
+ *  }
+ */
 
 static void
-lt_upgrade_downgrade_rw() 
+lt_upgrade_downgrade_rw()
 {
 	boolean_t upgraded, success;
 
@@ -235,7 +236,7 @@ lt_upgrade_downgrade_rw()
 	lt_note_another_blocking_lock_holder();
 	lt_sleep_a_little_bit();
 	lt_note_blocking_lock_release();
-	
+
 	upgraded = lck_rw_lock_shared_to_exclusive(&lt_rwlock);
 	if (!upgraded) {
 		success = lck_rw_try_lock_exclusive(&lt_rwlock);
@@ -254,7 +255,7 @@ lt_upgrade_downgrade_rw()
 	lt_sleep_a_little_bit();
 
 	lt_upgrade_holders--;
-	
+
 	lck_rw_lock_exclusive_to_shared(&lt_rwlock);
 
 	lt_spin_a_little_bit();
@@ -273,7 +274,7 @@ lt_stress_hw_lock()
 
 	kprintf("%s>cpu %d starting\n", __FUNCTION__, cpuid);
 
-	hw_lock_lock(&lt_hw_lock);
+	hw_lock_lock(&lt_hw_lock, LCK_GRP_NULL);
 	lt_counter++;
 	local_counter++;
 	hw_lock_unlock(&lt_hw_lock);
@@ -285,14 +286,12 @@ lt_stress_hw_lock()
 	kprintf("%s>cpu %d started\n", __FUNCTION__, cpuid);
 
 	while (lt_counter < limit) {
-		spl_t s = splsched();
-		hw_lock_lock(&lt_hw_lock);
+		hw_lock_lock(&lt_hw_lock, LCK_GRP_NULL);
 		if (lt_counter < limit) {
 			lt_counter++;
 			local_counter++;
 		}
 		hw_lock_unlock(&lt_hw_lock);
-		splx(s);
 	}
 
 	lt_stress_local_counters[cpuid] = local_counter;
@@ -301,9 +300,9 @@ lt_stress_hw_lock()
 }
 
 static void
-lt_grab_hw_lock() 
+lt_grab_hw_lock()
 {
-	hw_lock_lock(&lt_hw_lock);
+	hw_lock_lock(&lt_hw_lock, LCK_GRP_NULL);
 	lt_counter++;
 	lt_spin_a_little_bit();
 	hw_lock_unlock(&lt_hw_lock);
@@ -312,7 +311,9 @@ lt_grab_hw_lock()
 static void
 lt_grab_hw_lock_with_try()
 {
-	while(0 == hw_lock_try(&lt_hw_lock));
+	while (0 == hw_lock_try(&lt_hw_lock, LCK_GRP_NULL)) {
+		;
+	}
 	lt_counter++;
 	lt_spin_a_little_bit();
 	hw_lock_unlock(&lt_hw_lock);
@@ -321,15 +322,16 @@ lt_grab_hw_lock_with_try()
 static void
 lt_grab_hw_lock_with_to()
 {
-	while(0 == hw_lock_to(&lt_hw_lock, LockTimeOut))
+	while (0 == hw_lock_to(&lt_hw_lock, LockTimeOut, LCK_GRP_NULL)) {
 		mp_enable_preemption();
+	}
 	lt_counter++;
 	lt_spin_a_little_bit();
 	hw_lock_unlock(&lt_hw_lock);
 }
 
 static void
-lt_grab_spin_lock() 
+lt_grab_spin_lock()
 {
 	lck_spin_lock(&lt_lck_spin_t);
 	lt_counter++;
@@ -338,9 +340,11 @@ lt_grab_spin_lock()
 }
 
 static void
-lt_grab_spin_lock_with_try() 
+lt_grab_spin_lock_with_try()
 {
-	while(0 == lck_spin_try_lock(&lt_lck_spin_t));
+	while (0 == lck_spin_try_lock(&lt_lck_spin_t)) {
+		;
+	}
 	lt_counter++;
 	lt_spin_a_little_bit();
 	lck_spin_unlock(&lt_lck_spin_t);
@@ -372,7 +376,7 @@ lt_trylock_hw_lock_with_to()
 		lt_sleep_a_little_bit();
 		OSMemoryBarrier();
 	}
-	lt_thread_lock_success = hw_lock_to(&lt_hw_lock, 100);
+	lt_thread_lock_success = hw_lock_to(&lt_hw_lock, 100, LCK_GRP_NULL);
 	OSMemoryBarrier();
 	mp_enable_preemption();
 }
@@ -392,7 +396,7 @@ lt_trylock_spin_try_lock()
 static void
 lt_trylock_thread(void *arg, wait_result_t wres __unused)
 {
-	void (*func)(void) = (void(*)(void))arg;
+	void (*func)(void) = (void (*)(void))arg;
 
 	func();
 
@@ -426,10 +430,10 @@ lt_wait_for_lock_test_threads()
 static kern_return_t
 lt_test_trylocks()
 {
-	boolean_t success; 
+	boolean_t success;
 	extern unsigned int real_ncpus;
-	
-	/* 
+
+	/*
 	 * First mtx try lock succeeds, second fails.
 	 */
 	success = lck_mtx_try_lock(&lt_mtx);
@@ -447,7 +451,7 @@ lt_test_trylocks()
 	lck_mtx_unlock(&lt_mtx);
 
 	/*
-	 * Two shared try locks on a previously unheld rwlock suceed, and a 
+	 * Two shared try locks on a previously unheld rwlock suceed, and a
 	 * subsequent exclusive attempt fails.
 	 */
 	success = lck_rw_try_lock_shared(&lt_rwlock);
@@ -493,17 +497,17 @@ lt_test_trylocks()
 	T_ASSERT_NULL(success, "After regular exclusive grab, exclusive trylock should not succeed");
 	lck_rw_done(&lt_rwlock);
 
-	/* 
+	/*
 	 * First spin lock attempts succeed, second attempts fail.
 	 */
-	success = hw_lock_try(&lt_hw_lock);
+	success = hw_lock_try(&lt_hw_lock, LCK_GRP_NULL);
 	T_ASSERT_NOTNULL(success, "First spin lock attempts should succeed");
-	success = hw_lock_try(&lt_hw_lock);
+	success = hw_lock_try(&lt_hw_lock, LCK_GRP_NULL);
 	T_ASSERT_NULL(success, "Second attempt to spin lock should fail");
 	hw_lock_unlock(&lt_hw_lock);
-	
-	hw_lock_lock(&lt_hw_lock);
-	success = hw_lock_try(&lt_hw_lock);
+
+	hw_lock_lock(&lt_hw_lock, LCK_GRP_NULL);
+	success = hw_lock_try(&lt_hw_lock, LCK_GRP_NULL);
 	T_ASSERT_NULL(success, "After taking spin lock, trylock attempt should fail");
 	hw_lock_unlock(&lt_hw_lock);
 
@@ -513,7 +517,7 @@ lt_test_trylocks()
 	lt_target_done_threads = 1;
 	OSMemoryBarrier();
 	lt_start_trylock_thread(lt_trylock_hw_lock_with_to);
-	success = hw_lock_to(&lt_hw_lock, 100);
+	success = hw_lock_to(&lt_hw_lock, 100, LCK_GRP_NULL);
 	T_ASSERT_NOTNULL(success, "First spin lock with timeout should succeed");
 	if (real_ncpus == 1) {
 		mp_enable_preemption(); /* if we re-enable preemption, the other thread can timeout and exit */
@@ -532,7 +536,7 @@ lt_test_trylocks()
 	lt_target_done_threads = 1;
 	OSMemoryBarrier();
 	lt_start_trylock_thread(lt_trylock_hw_lock_with_to);
-	hw_lock_lock(&lt_hw_lock);
+	hw_lock_lock(&lt_hw_lock, LCK_GRP_NULL);
 	if (real_ncpus == 1) {
 		mp_enable_preemption(); /* if we re-enable preemption, the other thread can timeout and exit */
 	}
@@ -571,9 +575,9 @@ lt_test_trylocks()
 }
 
 static void
-lt_thread(void *arg, wait_result_t wres __unused) 
+lt_thread(void *arg, wait_result_t wres __unused)
 {
-	void (*func)(void) = (void(*)(void)) arg;
+	void (*func)(void) = (void (*)(void))arg;
 	uint32_t i;
 
 	for (i = 0; i < LOCK_TEST_ITERATIONS; i++) {
@@ -584,9 +588,9 @@ lt_thread(void *arg, wait_result_t wres __unused)
 }
 
 static void
-lt_bound_thread(void *arg, wait_result_t wres __unused) 
+lt_bound_thread(void *arg, wait_result_t wres __unused)
 {
-	void (*func)(void) = (void(*)(void)) arg;
+	void (*func)(void) = (void (*)(void))arg;
 
 	int cpuid = OSIncrementAtomic((volatile SInt32 *)&lt_cpu_bind_id);
 
@@ -695,14 +699,14 @@ lt_test_locks()
 	/* Uncontended shared rwlock */
 
 	/* Disabled until lt_grab_rw_shared() is fixed (rdar://30685840)
-	T_LOG("Running uncontended shared rwlock test.");
-	lt_reset();
-	lt_target_done_threads = 1;
-	lt_start_lock_thread(lt_grab_rw_shared);
-	lt_wait_for_lock_test_threads();
-	T_EXPECT_EQ_UINT(lt_counter, LOCK_TEST_ITERATIONS * lt_target_done_threads, NULL);
-	T_EXPECT_EQ_UINT(lt_max_holders, 1, NULL);
-	*/
+	 *  T_LOG("Running uncontended shared rwlock test.");
+	 *  lt_reset();
+	 *  lt_target_done_threads = 1;
+	 *  lt_start_lock_thread(lt_grab_rw_shared);
+	 *  lt_wait_for_lock_test_threads();
+	 *  T_EXPECT_EQ_UINT(lt_counter, LOCK_TEST_ITERATIONS * lt_target_done_threads, NULL);
+	 *  T_EXPECT_EQ_UINT(lt_max_holders, 1, NULL);
+	 */
 
 	/* Contended exclusive rwlock */
 	T_LOG("Running contended exclusive rwlock test.");
@@ -717,29 +721,29 @@ lt_test_locks()
 
 	/* One shared, two exclusive */
 	/* Disabled until lt_grab_rw_shared() is fixed (rdar://30685840)
-	T_LOG("Running test with one shared and two exclusive rw lock threads.");
-	lt_reset();
-	lt_target_done_threads = 3;
-	lt_start_lock_thread(lt_grab_rw_shared);
-	lt_start_lock_thread(lt_grab_rw_exclusive);
-	lt_start_lock_thread(lt_grab_rw_exclusive);
-	lt_wait_for_lock_test_threads();
-	T_EXPECT_EQ_UINT(lt_counter, LOCK_TEST_ITERATIONS * lt_target_done_threads, NULL);
-	T_EXPECT_EQ_UINT(lt_max_holders, 1, NULL);
-	*/
+	 *  T_LOG("Running test with one shared and two exclusive rw lock threads.");
+	 *  lt_reset();
+	 *  lt_target_done_threads = 3;
+	 *  lt_start_lock_thread(lt_grab_rw_shared);
+	 *  lt_start_lock_thread(lt_grab_rw_exclusive);
+	 *  lt_start_lock_thread(lt_grab_rw_exclusive);
+	 *  lt_wait_for_lock_test_threads();
+	 *  T_EXPECT_EQ_UINT(lt_counter, LOCK_TEST_ITERATIONS * lt_target_done_threads, NULL);
+	 *  T_EXPECT_EQ_UINT(lt_max_holders, 1, NULL);
+	 */
 
 	/* Four shared */
 	/* Disabled until lt_grab_rw_shared() is fixed (rdar://30685840)
-	T_LOG("Running test with four shared holders.");
-	lt_reset();
-	lt_target_done_threads = 4;
-	lt_start_lock_thread(lt_grab_rw_shared);
-	lt_start_lock_thread(lt_grab_rw_shared);
-	lt_start_lock_thread(lt_grab_rw_shared);
-	lt_start_lock_thread(lt_grab_rw_shared);
-	lt_wait_for_lock_test_threads();
-	T_EXPECT_LE_UINT(lt_max_holders, 4, NULL);
-	*/
+	 *  T_LOG("Running test with four shared holders.");
+	 *  lt_reset();
+	 *  lt_target_done_threads = 4;
+	 *  lt_start_lock_thread(lt_grab_rw_shared);
+	 *  lt_start_lock_thread(lt_grab_rw_shared);
+	 *  lt_start_lock_thread(lt_grab_rw_shared);
+	 *  lt_start_lock_thread(lt_grab_rw_shared);
+	 *  lt_wait_for_lock_test_threads();
+	 *  T_EXPECT_LE_UINT(lt_max_holders, 4, NULL);
+	 */
 
 	/* Three doing upgrades and downgrades */
 	T_LOG("Running test with threads upgrading and downgrading.");
@@ -764,14 +768,14 @@ lt_test_locks()
 
 	/* Uncontended - shared trylocks */
 	/* Disabled until lt_grab_rw_shared_with_try() is fixed (rdar://30685840)
-	T_LOG("Running test with single thread doing shared rwlock trylocks.");
-	lt_reset();
-	lt_target_done_threads = 1;
-	lt_start_lock_thread(lt_grab_rw_shared_with_try);
-	lt_wait_for_lock_test_threads();
-	T_EXPECT_EQ_UINT(lt_counter, LOCK_TEST_ITERATIONS * lt_target_done_threads, NULL);
-	T_EXPECT_EQ_UINT(lt_max_holders, 1, NULL);
-	*/
+	 *  T_LOG("Running test with single thread doing shared rwlock trylocks.");
+	 *  lt_reset();
+	 *  lt_target_done_threads = 1;
+	 *  lt_start_lock_thread(lt_grab_rw_shared_with_try);
+	 *  lt_wait_for_lock_test_threads();
+	 *  T_EXPECT_EQ_UINT(lt_counter, LOCK_TEST_ITERATIONS * lt_target_done_threads, NULL);
+	 *  T_EXPECT_EQ_UINT(lt_max_holders, 1, NULL);
+	 */
 
 	/* Three doing exclusive trylocks */
 	T_LOG("Running test with threads doing exclusive rwlock trylocks.");
@@ -786,30 +790,30 @@ lt_test_locks()
 
 	/* Three doing shared trylocks */
 	/* Disabled until lt_grab_rw_shared_with_try() is fixed (rdar://30685840)
-	T_LOG("Running test with threads doing shared rwlock trylocks.");
-	lt_reset();
-	lt_target_done_threads = 3;
-	lt_start_lock_thread(lt_grab_rw_shared_with_try);
-	lt_start_lock_thread(lt_grab_rw_shared_with_try);
-	lt_start_lock_thread(lt_grab_rw_shared_with_try);
-	lt_wait_for_lock_test_threads();
-	T_EXPECT_LE_UINT(lt_counter, LOCK_TEST_ITERATIONS * lt_target_done_threads, NULL);
-	T_EXPECT_LE_UINT(lt_max_holders, 3, NULL);
-	*/
+	 *  T_LOG("Running test with threads doing shared rwlock trylocks.");
+	 *  lt_reset();
+	 *  lt_target_done_threads = 3;
+	 *  lt_start_lock_thread(lt_grab_rw_shared_with_try);
+	 *  lt_start_lock_thread(lt_grab_rw_shared_with_try);
+	 *  lt_start_lock_thread(lt_grab_rw_shared_with_try);
+	 *  lt_wait_for_lock_test_threads();
+	 *  T_EXPECT_LE_UINT(lt_counter, LOCK_TEST_ITERATIONS * lt_target_done_threads, NULL);
+	 *  T_EXPECT_LE_UINT(lt_max_holders, 3, NULL);
+	 */
 
 	/* Three doing various trylocks */
 	/* Disabled until lt_grab_rw_shared_with_try() is fixed (rdar://30685840)
-	T_LOG("Running test with threads doing mixed rwlock trylocks.");
-	lt_reset();
-	lt_target_done_threads = 4;
-	lt_start_lock_thread(lt_grab_rw_shared_with_try);
-	lt_start_lock_thread(lt_grab_rw_shared_with_try);
-	lt_start_lock_thread(lt_grab_rw_exclusive_with_try);
-	lt_start_lock_thread(lt_grab_rw_exclusive_with_try);
-	lt_wait_for_lock_test_threads();
-	T_EXPECT_LE_UINT(lt_counter, LOCK_TEST_ITERATIONS * lt_target_done_threads, NULL);
-	T_EXPECT_LE_UINT(lt_max_holders, 2, NULL);
-	*/
+	 *  T_LOG("Running test with threads doing mixed rwlock trylocks.");
+	 *  lt_reset();
+	 *  lt_target_done_threads = 4;
+	 *  lt_start_lock_thread(lt_grab_rw_shared_with_try);
+	 *  lt_start_lock_thread(lt_grab_rw_shared_with_try);
+	 *  lt_start_lock_thread(lt_grab_rw_exclusive_with_try);
+	 *  lt_start_lock_thread(lt_grab_rw_exclusive_with_try);
+	 *  lt_wait_for_lock_test_threads();
+	 *  T_EXPECT_LE_UINT(lt_counter, LOCK_TEST_ITERATIONS * lt_target_done_threads, NULL);
+	 *  T_EXPECT_LE_UINT(lt_max_holders, 2, NULL);
+	 */
 
 	/* HW locks */
 	T_LOG("Running test with hw_lock_lock()");
@@ -888,68 +892,68 @@ lt_test_locks()
 	return KERN_SUCCESS;
 }
 
-#define MT_MAX_ARGS		8
-#define MT_INITIAL_VALUE	0xfeedbeef
-#define MT_W_VAL		(0x00000000feedbeefULL)	/* Drop in zeros */
-#define MT_S_VAL		(0xfffffffffeedbeefULL) /* High bit is 1, so sign-extends as negative */
-#define MT_L_VAL		(((uint64_t)MT_INITIAL_VALUE) | (((uint64_t)MT_INITIAL_VALUE) << 32)) /* Two back-to-back */
+#define MT_MAX_ARGS             8
+#define MT_INITIAL_VALUE        0xfeedbeef
+#define MT_W_VAL                (0x00000000feedbeefULL) /* Drop in zeros */
+#define MT_S_VAL                (0xfffffffffeedbeefULL) /* High bit is 1, so sign-extends as negative */
+#define MT_L_VAL                (((uint64_t)MT_INITIAL_VALUE) | (((uint64_t)MT_INITIAL_VALUE) << 32)) /* Two back-to-back */
 
 typedef void (*sy_munge_t)(void*);
 
 #define MT_FUNC(x) #x, x
 struct munger_test {
-	const char	*mt_name;
-	sy_munge_t 	mt_func;
-	uint32_t	mt_in_words;
-	uint32_t	mt_nout;
-	uint64_t 	mt_expected[MT_MAX_ARGS];
+	const char      *mt_name;
+	sy_munge_t      mt_func;
+	uint32_t        mt_in_words;
+	uint32_t        mt_nout;
+	uint64_t        mt_expected[MT_MAX_ARGS];
 } munger_tests[] = {
-	{MT_FUNC(munge_w), 		1, 1, 	{MT_W_VAL}},
-	{MT_FUNC(munge_ww), 		2, 2, 	{MT_W_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_www), 		3, 3, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wwww), 		4, 4, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wwwww), 		5, 5, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wwwwww), 	6, 6, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wwwwwww), 	7, 7, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wwwwwwww),	8, 8, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wl), 		3, 2, 	{MT_W_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wwl),		4, 3, 	{MT_W_VAL, MT_W_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wwlll), 		8, 5, 	{MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wlw), 		4, 3, 	{MT_W_VAL, MT_L_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wlwwwll), 	10, 7, 	{MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wlwwwllw),	11, 8, 	{MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wlwwlwlw),	11, 8,	{MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wll), 		5, 3, 	{MT_W_VAL, MT_L_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wlll), 		7, 4, 	{MT_W_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wllwwll),	11, 7,	{MT_W_VAL, MT_L_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wwwlw), 		6, 5, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wwwlww), 	7, 6, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wwwl), 		5, 4, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wwwwlw), 	7, 6, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wwwwl), 		6, 5, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wwwwwl), 	7, 6, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wwwwwlww),	9, 8, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wwwwwllw),	10, 8, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wwwwwlll),	11, 8, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wwwwwwl), 	8, 7, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wwwwwwlw),	9, 8, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wwwwwwll),	10, 8, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wsw), 		3, 3, 	{MT_W_VAL, MT_S_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wws), 		3, 3, 	{MT_W_VAL, MT_W_VAL, MT_S_VAL}},
-	{MT_FUNC(munge_wwwsw), 		5, 5, 	{MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_S_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_llllll), 	12, 6, 	{MT_L_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_l), 		2, 1, 	{MT_L_VAL}},
-	{MT_FUNC(munge_lw), 		3, 2, 	{MT_L_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_lwww), 		5, 4, 	{MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_lwwwwwww),	9, 8, 	{MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
-	{MT_FUNC(munge_wlwwwl), 	8, 6, 	{MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL}},
-	{MT_FUNC(munge_wwlwwwl), 	9, 7, 	{MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL}}
+	{MT_FUNC(munge_w), 1, 1, {MT_W_VAL}},
+	{MT_FUNC(munge_ww), 2, 2, {MT_W_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_www), 3, 3, {MT_W_VAL, MT_W_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wwww), 4, 4, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wwwww), 5, 5, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wwwwww), 6, 6, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wwwwwww), 7, 7, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wwwwwwww), 8, 8, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wl), 3, 2, {MT_W_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wwl), 4, 3, {MT_W_VAL, MT_W_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wwlll), 8, 5, {MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wlw), 4, 3, {MT_W_VAL, MT_L_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wlwwwll), 10, 7, {MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wlwwwllw), 11, 8, {MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wlwwlwlw), 11, 8, {MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wll), 5, 3, {MT_W_VAL, MT_L_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wlll), 7, 4, {MT_W_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wllwwll), 11, 7, {MT_W_VAL, MT_L_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wwwlw), 6, 5, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wwwlww), 7, 6, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wwwl), 5, 4, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wwwwlw), 7, 6, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wwwwl), 6, 5, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wwwwwl), 7, 6, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wwwwwlww), 9, 8, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wwwwwllw), 10, 8, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wwwwwlll), 11, 8, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wwwwwwl), 8, 7, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wwwwwwlw), 9, 8, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wwwwwwll), 10, 8, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wsw), 3, 3, {MT_W_VAL, MT_S_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wws), 3, 3, {MT_W_VAL, MT_W_VAL, MT_S_VAL}},
+	{MT_FUNC(munge_wwwsw), 5, 5, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_S_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_llllll), 12, 6, {MT_L_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_l), 2, 1, {MT_L_VAL}},
+	{MT_FUNC(munge_lw), 3, 2, {MT_L_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_lwww), 5, 4, {MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_lwwwwwww), 9, 8, {MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
+	{MT_FUNC(munge_wlwwwl), 8, 6, {MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_wwlwwwl), 9, 7, {MT_W_VAL, MT_W_VAL, MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_L_VAL}}
 };
 
 #define MT_TEST_COUNT (sizeof(munger_tests) / sizeof(struct munger_test))
 
 static void
-mt_reset(uint32_t in_words, size_t total_size, uint32_t *data) 
+mt_reset(uint32_t in_words, size_t total_size, uint32_t *data)
 {
 	uint32_t i;
 
@@ -990,29 +994,28 @@ mt_test_mungers()
 }
 
 /* Exception Callback Test */
-static ex_cb_action_t excb_test_action(
-	ex_cb_class_t		cb_class,
-	void				*refcon,
-	const ex_cb_state_t	*state
+static ex_cb_action_t
+excb_test_action(
+	ex_cb_class_t           cb_class,
+	void                            *refcon,
+	const ex_cb_state_t     *state
 	)
 {
 	ex_cb_state_t *context = (ex_cb_state_t *)refcon;
 
-	if ((NULL == refcon) || (NULL == state))
-	{
+	if ((NULL == refcon) || (NULL == state)) {
 		return EXCB_ACTION_TEST_FAIL;
 	}
 
 	context->far = state->far;
 
-	switch (cb_class)
-	{
-		case EXCB_CLASS_TEST1:
-			return EXCB_ACTION_RERUN;
-		case EXCB_CLASS_TEST2:
-			return EXCB_ACTION_NONE;
-		default:
-			return EXCB_ACTION_TEST_FAIL;
+	switch (cb_class) {
+	case EXCB_CLASS_TEST1:
+		return EXCB_ACTION_RERUN;
+	case EXCB_CLASS_TEST2:
+		return EXCB_ACTION_NONE;
+	default:
+		return EXCB_ACTION_TEST_FAIL;
 	}
 }
 
@@ -1028,7 +1031,7 @@ ex_cb_test()
 	ex_cb_action_t action;
 
 	T_LOG("Testing Exception Callback.");
-	
+
 	T_LOG("Running registration test.");
 
 	kr = ex_cb_register(EXCB_CLASS_TEST1, &excb_test_action, &test_context_1);
@@ -1072,7 +1075,7 @@ arm64_pan_test()
 	pan_fault_value = 0xDE;
 	// convert priv_addr to one that is accessible from user mode
 	pan_test_addr = priv_addr + _COMM_HIGH_PAGE64_BASE_ADDRESS -
-		_COMM_PAGE_START_ADDRESS;
+	    _COMM_PAGE_START_ADDRESS;
 
 	// Below should trigger a PAN exception as pan_test_addr is accessible
 	// in user mode
@@ -1121,5 +1124,4 @@ arm64_munger_test()
 	mt_test_mungers();
 	return 0;
 }
-
 

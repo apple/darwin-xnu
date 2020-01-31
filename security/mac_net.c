@@ -2,7 +2,7 @@
  * Copyright (c) 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -83,23 +83,24 @@ mac_mbuf_to_label(struct mbuf *mbuf)
 	struct m_tag *tag;
 	struct label *label;
 
-	if (mbuf == NULL)
-		return (NULL);
+	if (mbuf == NULL) {
+		return NULL;
+	}
 
 	if ((mbuf->m_flags & M_PKTHDR) == 0) {
 		printf("%s() got non-header MBUF!\n", __func__);
-		return (NULL);
+		return NULL;
 	}
 
 	tag = m_tag_locate(mbuf, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_MACLABEL,
-			   NULL);
+	    NULL);
 	if (tag == NULL) {
 		printf("%s() m_tag_locate() returned NULL! (m->flags %04x)\n",
-			__func__, mbuf->m_flags);
-		return (NULL);
+		    __func__, mbuf->m_flags);
+		return NULL;
 	}
-	label = (struct label *)(tag+1);
-	return (label);
+	label = (struct label *)(tag + 1);
+	return label;
 }
 
 static struct label *
@@ -108,10 +109,11 @@ mac_bpfdesc_label_alloc(void)
 	struct label *label;
 
 	label = mac_labelzone_alloc(M_WAITOK);
-	if (label == NULL)
-		return (NULL);
+	if (label == NULL) {
+		return NULL;
+	}
 	MAC_PERFORM(bpfdesc_label_init, label);
-	return (label);
+	return label;
 }
 
 void
@@ -129,16 +131,16 @@ mac_ifnet_label_alloc(void)
 	struct label *label;
 
 	label = mac_labelzone_alloc(M_WAITOK);
-	if (label == NULL)
-		return (NULL);
+	if (label == NULL) {
+		return NULL;
+	}
 	MAC_PERFORM(ifnet_label_init, label);
-	return (label);
+	return label;
 }
 
 void
 mac_ifnet_label_init(struct ifnet *ifp)
 {
-
 	ifp->if_label = mac_ifnet_label_alloc();
 }
 
@@ -155,16 +157,16 @@ mac_mbuf_tag_init(struct m_tag *tag, int flag)
 	mac_label_init(label);
 
 	MAC_CHECK(mbuf_label_init, label, flag);
-	if (error)
+	if (error) {
 		printf("%s(): mpo_mbuf_label_init() failed!\n", __func__);
+	}
 
-	return (error);
+	return error;
 }
 
 static void
 mac_bpfdesc_label_free(struct label *label)
 {
-
 	MAC_PERFORM(bpfdesc_label_destroy, label);
 	mac_labelzone_free(label);
 }
@@ -182,7 +184,6 @@ mac_bpfdesc_label_destroy(struct bpf_d *bpf_d)
 static void
 mac_ifnet_label_free(struct label *label)
 {
-
 	MAC_PERFORM(ifnet_label_destroy, label);
 	mac_labelzone_free(label);
 }
@@ -190,7 +191,6 @@ mac_ifnet_label_free(struct label *label)
 void
 mac_ifnet_label_destroy(struct ifnet *ifp)
 {
-
 	mac_ifnet_label_free(ifp->if_label);
 	ifp->if_label = NULL;
 }
@@ -198,7 +198,6 @@ mac_ifnet_label_destroy(struct ifnet *ifp)
 void
 mac_ifnet_label_recycle(struct ifnet *ifp)
 {
-
 	MAC_PERFORM(ifnet_label_recycle, ifp->if_label);
 }
 
@@ -222,8 +221,9 @@ mac_mbuf_tag_copy(struct m_tag *src, struct m_tag *dest)
 	src_label = (struct label *)(src + 1);
 	dest_label = (struct label *)(dest + 1);
 
-	if (src_label == NULL || dest_label == NULL)
+	if (src_label == NULL || dest_label == NULL) {
 		return;
+	}
 
 	/*
 	 * mac_mbuf_tag_init() is called on the target tag
@@ -248,7 +248,6 @@ mac_mbuf_label_copy(struct mbuf *m_from, struct mbuf *m_to)
 static void
 mac_ifnet_label_copy(struct label *src, struct label *dest)
 {
-
 	MAC_PERFORM(ifnet_label_copy, src, dest);
 }
 
@@ -256,21 +255,18 @@ static int
 mac_ifnet_label_externalize(struct label *label, char *elements,
     char *outbuf, size_t outbuflen)
 {
-
-	return (MAC_EXTERNALIZE(ifnet, label, elements, outbuf, outbuflen));
+	return MAC_EXTERNALIZE(ifnet, label, elements, outbuf, outbuflen);
 }
 
 static int
 mac_ifnet_label_internalize(struct label *label, char *string)
 {
-
-	return (MAC_INTERNALIZE(ifnet, label, string));
+	return MAC_INTERNALIZE(ifnet, label, string);
 }
 
 void
 mac_ifnet_label_associate(struct ifnet *ifp)
 {
-
 	MAC_PERFORM(ifnet_label_associate, ifp, ifp->if_label);
 }
 
@@ -295,7 +291,7 @@ mac_bpfdesc_check_receive(struct bpf_d *bpf_d, struct ifnet *ifp)
 	    ifp->if_label);
 	ifnet_lock_done(ifp);
 
-	return (error);
+	return error;
 }
 
 int
@@ -304,23 +300,24 @@ mac_mbuf_label_init(struct mbuf *m, int flag)
 	struct m_tag *tag;
 	int error;
 
-	if (mac_label_mbufs == 0)
-		return (0);
+	if (mac_label_mbufs == 0) {
+		return 0;
+	}
 
 	tag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_MACLABEL,
-			  sizeof(struct label), flag, m);
+	    sizeof(struct label), flag, m);
 	if (tag == NULL) {
 		printf("%s(): m_tag_alloc() failed!\n", __func__);
-		return (ENOBUFS);
+		return ENOBUFS;
 	}
 	error = mac_mbuf_tag_init(tag, flag);
 	if (error) {
 		printf("%s(): mac_mbuf_tag_init() failed!\n", __func__);
 		m_tag_free(tag);
-		return (error);
+		return error;
 	}
 	m_tag_prepend(m, tag);
-	return (0);
+	return 0;
 }
 
 void
@@ -402,7 +399,7 @@ mac_mbuf_label_associate_socket(struct socket *socket, struct mbuf *mbuf)
 
 	sotoxsocket(socket, &xso);
 	MAC_PERFORM(mbuf_label_associate_socket, &xso, socket->so_label,
-		    mbuf, label);
+	    mbuf, label);
 }
 
 int
@@ -419,7 +416,7 @@ mac_ifnet_check_transmit(struct ifnet *ifp, struct mbuf *mbuf, int family,
 	    family, type);
 	ifnet_lock_done(ifp);
 
-	return (error);
+	return error;
 }
 
 int
@@ -434,19 +431,21 @@ mac_ifnet_label_get(__unused struct ucred *cred, struct ifreq *ifr,
 
 	error = copyin(CAST_USER_ADDR_T(ifr->ifr_ifru.ifru_data),
 	    &mac, sizeof(mac));
-	if (error)
-		return (error);
+	if (error) {
+		return error;
+	}
 
 	error = mac_check_structmac_consistent(&mac);
-	if (error)
-		return (error);
+	if (error) {
+		return error;
+	}
 
 	MALLOC(elements, char *, mac.m_buflen, M_MACTEMP, M_WAITOK);
 	error = copyinstr(CAST_USER_ADDR_T(mac.m_string), elements,
 	    mac.m_buflen, &len);
 	if (error) {
 		FREE(elements, M_MACTEMP);
-		return (error);
+		return error;
 	}
 	AUDIT_ARG(mac_string, elements);
 
@@ -460,12 +459,13 @@ mac_ifnet_label_get(__unused struct ucred *cred, struct ifreq *ifr,
 	mac_ifnet_label_free(intlabel);
 	FREE(elements, M_MACTEMP);
 
-	if (error == 0)
+	if (error == 0) {
 		error = copyout(buffer, CAST_USER_ADDR_T(mac.m_string),
 		    strlen(buffer) + 1);
+	}
 	FREE(buffer, M_MACTEMP);
 
-	return (error);
+	return error;
 }
 
 int
@@ -480,19 +480,21 @@ mac_ifnet_label_set(struct ucred *cred, struct ifreq *ifr,
 
 	error = copyin(CAST_USER_ADDR_T(ifr->ifr_ifru.ifru_data),
 	    &mac, sizeof(mac));
-	if (error)
-		return (error);
+	if (error) {
+		return error;
+	}
 
 	error = mac_check_structmac_consistent(&mac);
-	if (error)
-		return (error);
+	if (error) {
+		return error;
+	}
 
 	MALLOC(buffer, char *, mac.m_buflen, M_MACTEMP, M_WAITOK);
 	error = copyinstr(CAST_USER_ADDR_T(mac.m_string), buffer,
 	    mac.m_buflen, &len);
 	if (error) {
 		FREE(buffer, M_MACTEMP);
-		return (error);
+		return error;
 	}
 	AUDIT_ARG(mac_string, buffer);
 
@@ -501,7 +503,7 @@ mac_ifnet_label_set(struct ucred *cred, struct ifreq *ifr,
 	FREE(buffer, M_MACTEMP);
 	if (error) {
 		mac_ifnet_label_free(intlabel);
-		return (error);
+		return error;
 	}
 
 	/*
@@ -512,7 +514,7 @@ mac_ifnet_label_set(struct ucred *cred, struct ifreq *ifr,
 	error = suser(cred, NULL);
 	if (error) {
 		mac_ifnet_label_free(intlabel);
-		return (error);
+		return error;
 	}
 
 	ifnet_lock_exclusive(ifp);
@@ -521,12 +523,12 @@ mac_ifnet_label_set(struct ucred *cred, struct ifreq *ifr,
 	if (error) {
 		ifnet_lock_done(ifp);
 		mac_ifnet_label_free(intlabel);
-		return (error);
+		return error;
 	}
 
 	MAC_PERFORM(ifnet_label_update, cred, ifp, ifp->if_label, intlabel);
 	ifnet_lock_done(ifp);
 	mac_ifnet_label_free(intlabel);
 
-	return (0);
+	return 0;
 }

@@ -56,7 +56,7 @@ static int nwk_wq_thread_cont(int err);
 static void nwk_wq_thread_func(void *v, wait_result_t w);
 
 void
-nwk_wq_init (void)
+nwk_wq_init(void)
 {
 	thread_t nwk_wq_thread = THREAD_NULL;
 
@@ -103,8 +103,9 @@ nwk_wq_thread_cont(int err)
 		VERIFY(TAILQ_FIRST(&temp_nwk_wq_head) != NULL);
 		TAILQ_FOREACH_SAFE(nwk_item, &temp_nwk_wq_head, nwk_wq_link, nwk_item_next) {
 			nwk_item->func(nwk_item->arg);
-			if (nwk_item->is_arg_managed == FALSE)
+			if (nwk_item->is_arg_managed == FALSE) {
 				FREE(nwk_item->arg, M_NWKWQ);
+			}
 			FREE(nwk_item, M_NWKWQ);
 		}
 		lck_mtx_lock(&nwk_wq_lock);
@@ -134,4 +135,3 @@ nwk_wq_enqueue(struct nwk_wq_entry *nwk_item)
 	lck_mtx_unlock(&nwk_wq_lock);
 	wakeup((caddr_t)&nwk_wq_waitch);
 }
-

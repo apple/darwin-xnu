@@ -70,12 +70,12 @@ struct _bank_ledger_indices bank_ledgers = { -1, -1 };
 
 static bank_task_t bank_task_alloc_init(task_t task);
 static bank_account_t bank_account_alloc_init(bank_task_t bank_holder, bank_task_t bank_merchant,
-		bank_task_t bank_secureoriginator, bank_task_t bank_proximateprocess, struct thread_group* banktg);
+    bank_task_t bank_secureoriginator, bank_task_t bank_proximateprocess, struct thread_group* banktg);
 static bank_task_t get_bank_task_context(task_t task, boolean_t initialize);
 static void bank_task_dealloc(bank_task_t bank_task, mach_voucher_attr_value_reference_t sync);
 static kern_return_t bank_account_dealloc_with_sync(bank_account_t bank_account, mach_voucher_attr_value_reference_t sync);
 static void bank_rollup_chit_to_tasks(ledger_t bill, ledger_t bank_holder_ledger, ledger_t bank_merchant_ledger,
-	int bank_holder_pid, int bank_merchant_pid);
+    int bank_holder_pid, int bank_merchant_pid);
 static ledger_t bank_get_bank_task_ledger_with_ref(bank_task_t bank_task);
 static void bank_destroy_bank_task_ledger(bank_task_t bank_task);
 static void init_bank_ledgers(void);
@@ -89,11 +89,11 @@ static lck_spin_t g_bank_task_lock_data;    /* lock to protect task->bank_contex
 	lck_spin_init(&g_bank_task_lock_data, &bank_lock_grp, &bank_lock_attr)
 #define global_bank_task_lock_destroy() \
 	lck_spin_destroy(&g_bank_task_lock_data, &bank_lock_grp)
-#define	global_bank_task_lock() \
-	lck_spin_lock(&g_bank_task_lock_data)
-#define	global_bank_task_lock_try() \
-	lck_spin_try_lock(&g_bank_task_lock_data)
-#define	global_bank_task_unlock() \
+#define global_bank_task_lock() \
+	lck_spin_lock_grp(&g_bank_task_lock_data, &bank_lock_grp)
+#define global_bank_task_lock_try() \
+	lck_spin_try_lock_grp(&g_bank_task_lock_data, &bank_lock_grp)
+#define global_bank_task_unlock() \
 	lck_spin_unlock(&g_bank_task_lock_data)
 
 extern uint64_t proc_uniqueid(void *p);
@@ -159,7 +159,7 @@ struct ipc_voucher_attr_manager bank_manager = {
 	.ivam_release_value    = bank_release_value,
 	.ivam_get_value        = bank_get_value,
 	.ivam_extract_content  = bank_extract_content,
-	.ivam_command	       = bank_command,
+	.ivam_command          = bank_command,
 	.ivam_release          = bank_release,
 	.ivam_flags            = (IVAM_FLAGS_SUPPORT_SEND_PREPROCESS | IVAM_FLAGS_SUPPORT_RECEIVE_POSTPROCESS),
 };
@@ -169,17 +169,17 @@ struct ipc_voucher_attr_manager bank_manager = {
 decl_lck_mtx_data(, bank_tasks_list_lock);
 decl_lck_mtx_data(, bank_accounts_list_lock);
 
-lck_grp_t		bank_dev_lock_grp;
-lck_attr_t		bank_dev_lock_attr;
-lck_grp_attr_t		bank_dev_lock_grp_attr;
+lck_grp_t               bank_dev_lock_grp;
+lck_attr_t              bank_dev_lock_attr;
+lck_grp_attr_t          bank_dev_lock_grp_attr;
 #endif
 
 /*
  * Lock group attributes for bank sub system.
  */
-lck_grp_t		bank_lock_grp;
-lck_attr_t		bank_lock_attr;
-lck_grp_attr_t		bank_lock_grp_attr;
+lck_grp_t               bank_lock_grp;
+lck_attr_t              bank_lock_attr;
+lck_grp_attr_t          bank_lock_grp_attr;
 
 /*
  * Routine: bank_init
@@ -192,14 +192,14 @@ bank_init()
 	kern_return_t kr = KERN_SUCCESS;
 	/* setup zones for bank_task and bank_account objects */
 	bank_task_zone       = zinit(sizeof(struct bank_task),
-	                       MAX_BANK_TASK * sizeof(struct bank_task),
-	                       sizeof(struct bank_task),
-	                       "bank_task");
+	    MAX_BANK_TASK * sizeof(struct bank_task),
+	    sizeof(struct bank_task),
+	    "bank_task");
 
 	bank_account_zone    = zinit(sizeof(struct bank_account),
-	                       MAX_BANK_ACCOUNT * sizeof(struct bank_account),
-	                       sizeof(struct bank_account),
-	                       "bank_account");
+	    MAX_BANK_ACCOUNT * sizeof(struct bank_account),
+	    sizeof(struct bank_account),
+	    "bank_account");
 
 	init_bank_ledgers();
 
@@ -224,15 +224,16 @@ bank_init()
 
 	/* Register the bank manager with the Vouchers sub system. */
 	kr = ipc_register_well_known_mach_voucher_attr_manager(
-	                &bank_manager,
-	                0,
-	                MACH_VOUCHER_ATTR_KEY_BANK,
-	                &bank_voucher_attr_control);
-	if (kr != KERN_SUCCESS )
+		&bank_manager,
+		0,
+		MACH_VOUCHER_ATTR_KEY_BANK,
+		&bank_voucher_attr_control);
+	if (kr != KERN_SUCCESS) {
 		panic("BANK subsystem initialization failed");
+	}
 
 	kprintf("BANK subsystem is initialized\n");
-	return ;
+	return;
 }
 
 
@@ -249,10 +250,10 @@ bank_init()
  */
 kern_return_t
 bank_release_value(
-	ipc_voucher_attr_manager_t		__assert_only manager,
-	mach_voucher_attr_key_t			__assert_only key,
-	mach_voucher_attr_value_handle_t		      value,
-	mach_voucher_attr_value_reference_t	          sync)
+	ipc_voucher_attr_manager_t              __assert_only manager,
+	mach_voucher_attr_key_t                 __assert_only key,
+	mach_voucher_attr_value_handle_t                      value,
+	mach_voucher_attr_value_reference_t               sync)
 {
 	bank_task_t bank_task = BANK_TASK_NULL;
 	bank_element_t bank_element = BANK_ELEMENT_NULL;
@@ -305,16 +306,16 @@ bank_release_value(
  */
 kern_return_t
 bank_get_value(
-	ipc_voucher_attr_manager_t 		__assert_only manager,
-	mach_voucher_attr_key_t 		__assert_only key,
-	mach_voucher_attr_recipe_command_t 	          command,
-	mach_voucher_attr_value_handle_array_t 	      prev_values,
-	mach_msg_type_number_t 			      prev_value_count,
+	ipc_voucher_attr_manager_t              __assert_only manager,
+	mach_voucher_attr_key_t                 __assert_only key,
+	mach_voucher_attr_recipe_command_t                command,
+	mach_voucher_attr_value_handle_array_t        prev_values,
+	mach_msg_type_number_t                        prev_value_count,
 	mach_voucher_attr_content_t          __unused recipe,
 	mach_voucher_attr_content_size_t     __unused recipe_size,
 	mach_voucher_attr_value_handle_t             *out_value,
 	mach_voucher_attr_value_flags_t              *out_flags,
-	ipc_voucher_t 				                 *out_value_voucher)
+	ipc_voucher_t                                            *out_value_voucher)
 {
 	bank_task_t bank_task = BANK_TASK_NULL;
 	bank_task_t bank_holder = BANK_TASK_NULL;
@@ -339,7 +340,6 @@ bank_get_value(
 	*out_flags = MACH_VOUCHER_ATTR_VALUE_FLAGS_NONE;
 
 	switch (command) {
-
 	case MACH_VOUCHER_ATTR_BANK_CREATE:
 
 		/* Return the default task value instead of bank task */
@@ -354,8 +354,9 @@ bank_get_value(
 			bank_element = HANDLE_TO_BANK_ELEMENT(bank_handle);
 
 			/* Should not have received default task value from an IPC */
-			if (bank_element == BANK_DEFAULT_VALUE || bank_element == BANK_DEFAULT_TASK_VALUE)
+			if (bank_element == BANK_DEFAULT_VALUE || bank_element == BANK_DEFAULT_TASK_VALUE) {
 				continue;
+			}
 
 			task = current_task();
 			if (bank_element->be_type == BANK_TASK) {
@@ -369,14 +370,14 @@ bank_get_value(
 				bank_secureoriginator = old_bank_account->ba_secureoriginator;
 				bank_proximateprocess = old_bank_account->ba_proximateprocess;
 				thread_group = bank_get_bank_account_thread_group(old_bank_account);
-
 			} else {
 				panic("Bogus bank type: %d passed in get_value\n", bank_element->be_type);
 			}
 
 			bank_merchant = get_bank_task_context(task, FALSE);
-			if (bank_merchant == BANK_TASK_NULL)
+			if (bank_merchant == BANK_TASK_NULL) {
 				return KERN_RESOURCE_SHORTAGE;
+			}
 
 			cur_thread_group = bank_get_bank_task_thread_group(bank_merchant);
 
@@ -386,20 +387,21 @@ bank_get_value(
 			}
 
 			/* Check if trying to redeem for self task, return the default bank task */
-			if (bank_holder == bank_merchant && 
-				bank_holder == bank_secureoriginator &&
-				bank_holder == bank_proximateprocess &&
-				thread_group == cur_thread_group) {
+			if (bank_holder == bank_merchant &&
+			    bank_holder == bank_secureoriginator &&
+			    bank_holder == bank_proximateprocess &&
+			    thread_group == cur_thread_group) {
 				*out_value = BANK_ELEMENT_TO_HANDLE(BANK_DEFAULT_TASK_VALUE);
 				*out_flags = MACH_VOUCHER_ATTR_VALUE_FLAGS_PERSIST;
 				return kr;
 			}
 
 			bank_account = bank_account_alloc_init(bank_holder, bank_merchant,
-						bank_secureoriginator, bank_proximateprocess,
-						thread_group);
-			if (bank_account == BANK_ACCOUNT_NULL)
+			    bank_secureoriginator, bank_proximateprocess,
+			    thread_group);
+			if (bank_account == BANK_ACCOUNT_NULL) {
 				return KERN_RESOURCE_SHORTAGE;
+			}
 
 			*out_value = BANK_ELEMENT_TO_HANDLE(bank_account);
 			return kr;
@@ -414,8 +416,9 @@ bank_get_value(
 			bank_handle = prev_values[i];
 			bank_element = HANDLE_TO_BANK_ELEMENT(bank_handle);
 
-			if (bank_element == BANK_DEFAULT_VALUE)
+			if (bank_element == BANK_DEFAULT_VALUE) {
 				continue;
+			}
 
 			task = current_task();
 			if (bank_element == BANK_DEFAULT_TASK_VALUE) {
@@ -436,8 +439,9 @@ bank_get_value(
 			}
 
 			bank_merchant = get_bank_task_context(task, FALSE);
-			if (bank_merchant == BANK_TASK_NULL)
+			if (bank_merchant == BANK_TASK_NULL) {
 				return KERN_RESOURCE_SHORTAGE;
+			}
 
 			cur_thread_group = bank_get_bank_task_thread_group(bank_merchant);
 
@@ -447,19 +451,18 @@ bank_get_value(
 			 */
 			if (bank_merchant->bt_hasentitlement == 0) {
 				KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-					(BANK_CODE(BANK_ACCOUNT_INFO, (BANK_SECURE_ORIGINATOR_CHANGED))) | DBG_FUNC_NONE,
-					bank_secureoriginator->bt_pid, bank_merchant->bt_pid, 0, 0, 0);
+				    (BANK_CODE(BANK_ACCOUNT_INFO, (BANK_SECURE_ORIGINATOR_CHANGED))) | DBG_FUNC_NONE,
+				    bank_secureoriginator->bt_pid, bank_merchant->bt_pid, 0, 0, 0);
 				bank_secureoriginator = bank_merchant;
 			}
 
 			bank_proximateprocess = bank_merchant;
 
 			/* Check if trying to redeem for self task, return the bank task */
-			if (bank_holder == bank_merchant && 
-				bank_holder == bank_secureoriginator &&
-				bank_holder == bank_proximateprocess &&
-				thread_group == cur_thread_group) {
-
+			if (bank_holder == bank_merchant &&
+			    bank_holder == bank_secureoriginator &&
+			    bank_holder == bank_proximateprocess &&
+			    thread_group == cur_thread_group) {
 				lck_mtx_lock(&bank_holder->bt_acc_to_pay_lock);
 				bank_task_made_reference(bank_holder);
 				if (bank_holder->bt_voucher_ref == 0) {
@@ -473,10 +476,11 @@ bank_get_value(
 				return kr;
 			}
 			bank_account = bank_account_alloc_init(bank_holder, bank_merchant,
-						bank_secureoriginator, bank_proximateprocess,
-						thread_group);
-			if (bank_account == BANK_ACCOUNT_NULL)
+			    bank_secureoriginator, bank_proximateprocess,
+			    thread_group);
+			if (bank_account == BANK_ACCOUNT_NULL) {
 				return KERN_RESOURCE_SHORTAGE;
+			}
 
 			*out_value = BANK_ELEMENT_TO_HANDLE(bank_account);
 			return kr;
@@ -491,8 +495,9 @@ bank_get_value(
 			bank_handle = prev_values[i];
 			bank_element = HANDLE_TO_BANK_ELEMENT(bank_handle);
 
-			if (bank_element == BANK_DEFAULT_VALUE)
+			if (bank_element == BANK_DEFAULT_VALUE) {
 				continue;
+			}
 
 			task = current_task();
 			if (bank_element == BANK_DEFAULT_TASK_VALUE) {
@@ -505,7 +510,6 @@ bank_get_value(
 				panic("Found a bank task in MACH_VOUCHER_ATTR_REDEEM: %p", bank_task);
 
 				return kr;
-
 			} else if (bank_element->be_type == BANK_ACCOUNT) {
 				bank_account = CAST_TO_BANK_ACCOUNT(bank_element);
 				bank_merchant = bank_account->ba_merchant;
@@ -545,7 +549,7 @@ bank_extract_content(
 	ipc_voucher_attr_manager_t      __assert_only manager,
 	mach_voucher_attr_key_t         __assert_only key,
 	mach_voucher_attr_value_handle_array_t        values,
-	mach_msg_type_number_t 			              value_count,
+	mach_msg_type_number_t                                value_count,
 	mach_voucher_attr_recipe_command_t           *out_command,
 	mach_voucher_attr_content_t                   out_recipe,
 	mach_voucher_attr_content_size_t             *in_out_recipe_size)
@@ -560,11 +564,12 @@ bank_extract_content(
 	assert(MACH_VOUCHER_ATTR_KEY_BANK == key);
 	assert(manager == &bank_manager);
 
-	for (i = 0; i < value_count; i++) {
+	for (i = 0; i < value_count && *in_out_recipe_size > 0; i++) {
 		bank_handle = values[i];
 		bank_element = HANDLE_TO_BANK_ELEMENT(bank_handle);
-		if (bank_element == BANK_DEFAULT_VALUE)
+		if (bank_element == BANK_DEFAULT_VALUE) {
 			continue;
+		}
 
 		if (bank_element == BANK_DEFAULT_TASK_VALUE) {
 			bank_element = CAST_TO_BANK_ELEMENT(get_bank_task_context(current_task(), FALSE));
@@ -577,18 +582,18 @@ bank_extract_content(
 
 		if (bank_element->be_type == BANK_TASK) {
 			bank_task = CAST_TO_BANK_TASK(bank_element);
-			snprintf(buf, MACH_VOUCHER_BANK_CONTENT_SIZE, 
-			         " Bank Context for a pid %d\n", bank_task->bt_pid);
+			snprintf(buf, MACH_VOUCHER_BANK_CONTENT_SIZE,
+			    " Bank Context for a pid %d\n", bank_task->bt_pid);
 		} else if (bank_element->be_type == BANK_ACCOUNT) {
 			bank_account = CAST_TO_BANK_ACCOUNT(bank_element);
 			snprintf(buf, MACH_VOUCHER_BANK_CONTENT_SIZE,
-			         " Bank Account linking holder pid %d with merchant pid %d, originator PID/persona: %d, %u and proximate PID/persona: %d, %u\n",
-				 bank_account->ba_holder->bt_pid,
-				 bank_account->ba_merchant->bt_pid,
-				 bank_account->ba_secureoriginator->bt_pid,
-				 bank_account->ba_secureoriginator->bt_persona_id,
-				 bank_account->ba_proximateprocess->bt_pid,
-				 bank_account->ba_proximateprocess->bt_persona_id);
+			    " Bank Account linking holder pid %d with merchant pid %d, originator PID/persona: %d, %u and proximate PID/persona: %d, %u\n",
+			    bank_account->ba_holder->bt_pid,
+			    bank_account->ba_merchant->bt_pid,
+			    bank_account->ba_secureoriginator->bt_pid,
+			    bank_account->ba_secureoriginator->bt_persona_id,
+			    bank_account->ba_proximateprocess->bt_pid,
+			    bank_account->ba_proximateprocess->bt_persona_id);
 		} else {
 			panic("Bogus bank type: %d passed in get_value\n", bank_element->be_type);
 		}
@@ -607,18 +612,18 @@ bank_extract_content(
  * Routine: bank_command
  * Purpose: Execute a command against a set of ATM values.
  * Returns: KERN_SUCCESS: On successful execution of command.
- 	    KERN_FAILURE: On failure.
+ *           KERN_FAILURE: On failure.
  */
 kern_return_t
 bank_command(
-	ipc_voucher_attr_manager_t 		   __assert_only manager,
-	mach_voucher_attr_key_t 		   __assert_only key,
-	mach_voucher_attr_value_handle_array_t 	__unused values,
-	mach_msg_type_number_t 			__unused value_count,
-	mach_voucher_attr_command_t		 __unused command,
-	mach_voucher_attr_content_t 	   __unused in_content,
+	ipc_voucher_attr_manager_t                 __assert_only manager,
+	mach_voucher_attr_key_t                    __assert_only key,
+	mach_voucher_attr_value_handle_array_t  __unused values,
+	mach_msg_type_number_t                  __unused value_count,
+	mach_voucher_attr_command_t              __unused command,
+	mach_voucher_attr_content_t        __unused in_content,
 	mach_voucher_attr_content_size_t   __unused in_content_size,
-	mach_voucher_attr_content_t 	   __unused out_content,
+	mach_voucher_attr_content_t        __unused out_content,
 	mach_voucher_attr_content_size_t   __unused *out_content_size)
 {
 	bank_task_t bank_task = BANK_TASK_NULL;
@@ -645,8 +650,9 @@ bank_command(
 		for (i = 0; i < value_count; i++) {
 			bank_handle = values[i];
 			bank_element = HANDLE_TO_BANK_ELEMENT(bank_handle);
-			if (bank_element == BANK_DEFAULT_VALUE)
+			if (bank_element == BANK_DEFAULT_VALUE) {
 				continue;
+			}
 
 			if (bank_element == BANK_DEFAULT_TASK_VALUE) {
 				bank_element = CAST_TO_BANK_ELEMENT(get_bank_task_context(current_task(), FALSE));
@@ -679,8 +685,9 @@ bank_command(
 		for (i = 0; i < value_count; i++) {
 			bank_handle = values[i];
 			bank_element = HANDLE_TO_BANK_ELEMENT(bank_handle);
-			if (bank_element == BANK_DEFAULT_VALUE)
+			if (bank_element == BANK_DEFAULT_VALUE) {
 				continue;
+			}
 
 			if (bank_element == BANK_DEFAULT_TASK_VALUE) {
 				bank_element = CAST_TO_BANK_ELEMENT(get_bank_task_context(current_task(), FALSE));
@@ -716,7 +723,7 @@ bank_command(
 
 void
 bank_release(
-	ipc_voucher_attr_manager_t 		__assert_only manager)
+	ipc_voucher_attr_manager_t              __assert_only manager)
 {
 	assert(manager == &bank_manager);
 }
@@ -733,7 +740,7 @@ bank_release(
  * Returns: bank_task_t on Success.
  *          BANK_TASK_NULL: on Failure.
  * Notes:   Leaves the task and ledger blank and has only 1 ref,
-            needs to take 1 extra ref after the task field is initialized.
+ *           needs to take 1 extra ref after the task field is initialized.
  */
 static bank_task_t
 bank_task_alloc_init(task_t task)
@@ -741,8 +748,9 @@ bank_task_alloc_init(task_t task)
 	bank_task_t new_bank_task;
 
 	new_bank_task = (bank_task_t) zalloc(bank_task_zone);
-	if (new_bank_task == BANK_TASK_NULL)
+	if (new_bank_task == BANK_TASK_NULL) {
 		return BANK_TASK_NULL;
+	}
 
 	new_bank_task->bt_type = BANK_TASK;
 	new_bank_task->bt_voucher_ref = 0;
@@ -774,7 +782,7 @@ bank_task_alloc_init(task_t task)
 	queue_enter(&bank_tasks_list, new_bank_task, bank_task_t, bt_global_elt);
 	lck_mtx_unlock(&bank_tasks_list_lock);
 #endif
-	return (new_bank_task);
+	return new_bank_task;
 }
 
 /*
@@ -816,8 +824,9 @@ bank_account_alloc_init(
 	boolean_t entry_found = FALSE;
 	ledger_t new_ledger = ledger_instantiate(bank_ledger_template, LEDGER_CREATE_INACTIVE_ENTRIES);
 
-	if (new_ledger == LEDGER_NULL)
+	if (new_ledger == LEDGER_NULL) {
 		return BANK_ACCOUNT_NULL;
+	}
 
 	ledger_entry_setactive(new_ledger, bank_ledgers.cpu_time);
 	ledger_entry_setactive(new_ledger, bank_ledgers.energy);
@@ -843,8 +852,9 @@ bank_account_alloc_init(
 		if (bank_account->ba_merchant != bank_merchant ||
 		    bank_account->ba_secureoriginator != bank_secureoriginator ||
 		    bank_account->ba_proximateprocess != bank_proximateprocess ||
-		    bank_get_bank_account_thread_group(bank_account) != thread_group)
+		    bank_get_bank_account_thread_group(bank_account) != thread_group) {
 			continue;
+		}
 
 		entry_found = TRUE;
 		/* Take a made ref, since this value would be returned to voucher system. */
@@ -853,10 +863,9 @@ bank_account_alloc_init(
 	}
 
 	if (!entry_found) {
-	
 		/*  Create a linkage between the holder and the merchant task, Grab both the list locks before adding it to the list. */
 		lck_mtx_lock(&bank_merchant->bt_acc_to_charge_lock);
-	
+
 		/* Add the account entry into Accounts need to pay account link list. */
 		queue_enter(&bank_holder->bt_accounts_to_pay, new_bank_account, bank_account_t, ba_next_acc_to_pay);
 
@@ -873,7 +882,7 @@ bank_account_alloc_init(
 		zfree(bank_account_zone, new_bank_account);
 		return bank_account;
 	}
-	
+
 	bank_task_reference(bank_holder);
 	bank_task_reference(bank_merchant);
 	bank_task_reference(bank_secureoriginator);
@@ -886,7 +895,7 @@ bank_account_alloc_init(
 	lck_mtx_unlock(&bank_accounts_list_lock);
 #endif
 
-	return (new_bank_account);
+	return new_bank_account;
 }
 
 /*
@@ -898,14 +907,14 @@ bank_account_alloc_init(
  */
 static bank_task_t
 get_bank_task_context
-	(task_t task,
-	boolean_t initialize)
+(task_t task,
+    boolean_t initialize)
 {
 	bank_task_t bank_task;
 
 	if (task->bank_context || !initialize) {
 		assert(task->bank_context != NULL);
-		return (task->bank_context);
+		return task->bank_context;
 	}
 
 	bank_task = bank_task_alloc_init(task);
@@ -914,9 +923,10 @@ get_bank_task_context
 	task_lock(task);
 	if (task->bank_context) {
 		task_unlock(task);
-		if (bank_task != BANK_TASK_NULL) 
+		if (bank_task != BANK_TASK_NULL) {
 			bank_task_dealloc(bank_task, 1);
-		return (task->bank_context);
+		}
+		return task->bank_context;
 	} else if (bank_task == BANK_TASK_NULL) {
 		task_unlock(task);
 		return BANK_TASK_NULL;
@@ -934,10 +944,10 @@ get_bank_task_context
 	global_bank_task_unlock();
 
 	task_unlock(task);
-	
-	return (bank_task);
+
+	return bank_task;
 }
-	
+
 /*
  * Routine: bank_task_dealloc
  * Purpose: Drops the reference on bank task.
@@ -950,8 +960,9 @@ bank_task_dealloc(
 {
 	assert(bank_task->bt_refs >= 0);
 
-	if (bank_task_release_num(bank_task, sync) > (int)sync)
+	if (bank_task_release_num(bank_task, sync) > (int)sync) {
 		return;
+	}
 
 	assert(bank_task->bt_refs == 0);
 	assert(queue_empty(&bank_task->bt_accounts_to_pay));
@@ -1004,11 +1015,12 @@ bank_account_dealloc_with_sync(
 		}
 		return KERN_FAILURE;
 	}
-		
+
 	bank_account_made_release_num(bank_account, sync);
 
-	if (bank_account_release_num(bank_account, 1) > 1)
+	if (bank_account_release_num(bank_account, 1) > 1) {
 		panic("Releasing a non zero ref bank account %p\n", bank_account);
+	}
 
 
 	/* Grab both the acc to pay and acc to charge locks */
@@ -1016,14 +1028,14 @@ bank_account_dealloc_with_sync(
 
 	/* No need to take ledger reference for bank_holder ledger since bt_acc_to_pay_lock is locked */
 	bank_rollup_chit_to_tasks(bank_account->ba_bill, bank_holder->bt_ledger, bank_merchant_ledger,
-		bank_holder->bt_pid, bank_merchant->bt_pid);
+	    bank_holder->bt_pid, bank_merchant->bt_pid);
 
 	/* Remove the account entry from Accounts need to pay account link list. */
 	queue_remove(&bank_holder->bt_accounts_to_pay, bank_account, bank_account_t, ba_next_acc_to_pay);
-	
+
 	/* Remove the account entry from Accounts need to charge account link list. */
 	queue_remove(&bank_merchant->bt_accounts_to_charge, bank_account, bank_account_t, ba_next_acc_to_charge);
-	
+
 	lck_mtx_unlock(&bank_merchant->bt_acc_to_charge_lock);
 	lck_mtx_unlock(&bank_holder->bt_acc_to_pay_lock);
 
@@ -1043,7 +1055,7 @@ bank_account_dealloc_with_sync(
 	queue_remove(&bank_accounts_list, bank_account, bank_account_t, ba_global_elt);
 	lck_mtx_unlock(&bank_accounts_list_lock);
 #endif
-	
+
 	zfree(bank_account_zone, bank_account);
 	return KERN_SUCCESS;
 }
@@ -1065,14 +1077,15 @@ bank_rollup_chit_to_tasks(
 	ledger_amount_t debit;
 	kern_return_t ret;
 
-	if (bank_holder_ledger == bank_merchant_ledger)
+	if (bank_holder_ledger == bank_merchant_ledger) {
 		return;
+	}
 
 	ret = ledger_get_entries(bill, bank_ledgers.cpu_time, &credit, &debit);
 	if (ret == KERN_SUCCESS) {
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-			(BANK_CODE(BANK_ACCOUNT_INFO, (BANK_SETTLE_CPU_TIME))) | DBG_FUNC_NONE,
-			bank_merchant_pid, bank_holder_pid, credit, debit, 0);
+		    (BANK_CODE(BANK_ACCOUNT_INFO, (BANK_SETTLE_CPU_TIME))) | DBG_FUNC_NONE,
+		    bank_merchant_pid, bank_holder_pid, credit, debit, 0);
 
 		if (bank_holder_ledger) {
 			ledger_credit(bank_holder_ledger, task_ledgers.cpu_time_billed_to_me, credit);
@@ -1088,8 +1101,8 @@ bank_rollup_chit_to_tasks(
 	ret = ledger_get_entries(bill, bank_ledgers.energy, &credit, &debit);
 	if (ret == KERN_SUCCESS) {
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-			(BANK_CODE(BANK_ACCOUNT_INFO, (BANK_SETTLE_ENERGY))) | DBG_FUNC_NONE,
-			bank_merchant_pid, bank_holder_pid, credit, debit, 0);
+		    (BANK_CODE(BANK_ACCOUNT_INFO, (BANK_SETTLE_ENERGY))) | DBG_FUNC_NONE,
+		    bank_merchant_pid, bank_holder_pid, credit, debit, 0);
 
 		if (bank_holder_ledger) {
 			ledger_credit(bank_holder_ledger, task_ledgers.energy_billed_to_me, credit);
@@ -1142,14 +1155,16 @@ bank_task_initialize(task_t task)
  * Returns: None.
  */
 static void
-init_bank_ledgers(void) {
+init_bank_ledgers(void)
+{
 	ledger_template_t t;
 	int idx;
-	
+
 	assert(bank_ledger_template == NULL);
 
-	if ((t = ledger_template_create("Bank ledger")) == NULL)
+	if ((t = ledger_template_create("Bank ledger")) == NULL) {
 		panic("couldn't create bank ledger template");
+	}
 
 	if ((idx = ledger_entry_add(t, "cpu_time", "sched", "ns")) < 0) {
 		panic("couldn't create cpu_time entry for bank ledger template");
@@ -1168,7 +1183,7 @@ init_bank_ledgers(void) {
 /* Routine: bank_billed_balance_safe
  * Purpose: Walk through all the bank accounts billed to me by other tasks and get the current billing balance.
  *          Called from another task. It takes global bank task lock to make sure the bank context is
-            not deallocated while accesing it.
+ *           not deallocated while accesing it.
  * Returns: cpu balance and energy balance in out paremeters.
  */
 void
@@ -1194,12 +1209,12 @@ bank_billed_balance_safe(task_t task, uint64_t *cpu_time, uint64_t *energy)
 		bank_task_dealloc(bank_task, 1);
 	} else {
 		kr = ledger_get_entries(task->ledger, task_ledgers.cpu_time_billed_to_me,
-			&credit, &debit);
+		    &credit, &debit);
 		if (kr == KERN_SUCCESS) {
 			cpu_balance = credit - debit;
 		}
 		kr = ledger_get_entries(task->ledger, task_ledgers.energy_billed_to_me,
-			&credit, &debit);
+		    &credit, &debit);
 		if (kr == KERN_SUCCESS) {
 			energy_balance = credit - debit;
 		}
@@ -1228,7 +1243,7 @@ bank_billed_balance(bank_task_t bank_task, uint64_t *cpu_time, uint64_t *energy)
 		*energy = 0;
 		return;
 	}
-	
+
 	lck_mtx_lock(&bank_task->bt_acc_to_pay_lock);
 
 	/* bt_acc_to_pay_lock locked, no need to take ledger reference for bt_ledger */
@@ -1275,7 +1290,7 @@ bank_billed_balance(bank_task_t bank_task, uint64_t *cpu_time, uint64_t *energy)
 /* Routine: bank_serviced_balance_safe
  * Purpose: Walk through the bank accounts billed to other tasks by me and get the current balance to be charged.
  *          Called from another task. It takes global bank task lock to make sure the bank context is
-            not deallocated while accesing it.
+ *           not deallocated while accesing it.
  * Returns: cpu balance and energy balance in out paremeters.
  */
 void
@@ -1301,13 +1316,13 @@ bank_serviced_balance_safe(task_t task, uint64_t *cpu_time, uint64_t *energy)
 		bank_task_dealloc(bank_task, 1);
 	} else {
 		kr = ledger_get_entries(task->ledger, task_ledgers.cpu_time_billed_to_others,
-			&credit, &debit);
+		    &credit, &debit);
 		if (kr == KERN_SUCCESS) {
 			cpu_balance = credit - debit;
 		}
 
 		kr = ledger_get_entries(task->ledger, task_ledgers.energy_billed_to_others,
-			&credit, &debit);
+		    &credit, &debit);
 		if (kr == KERN_SUCCESS) {
 			energy_balance = credit - debit;
 		}
@@ -1404,18 +1419,21 @@ bank_get_voucher_bank_account(ipc_voucher_t voucher)
 
 	val_count = MACH_VOUCHER_ATTR_VALUE_MAX_NESTED;
 	kr = mach_voucher_attr_control_get_values(bank_voucher_attr_control,
-				voucher,
-				vals,
-				&val_count);
+	    voucher,
+	    vals,
+	    &val_count);
 
-	if (kr != KERN_SUCCESS || val_count == 0)
+	if (kr != KERN_SUCCESS || val_count == 0) {
 		return BANK_ACCOUNT_NULL;
+	}
 
 	bank_element = HANDLE_TO_BANK_ELEMENT(vals[0]);
-	if (bank_element == BANK_DEFAULT_VALUE)
+	if (bank_element == BANK_DEFAULT_VALUE) {
 		return BANK_ACCOUNT_NULL;
-	if (bank_element == BANK_DEFAULT_TASK_VALUE)
+	}
+	if (bank_element == BANK_DEFAULT_TASK_VALUE) {
 		bank_element = CAST_TO_BANK_ELEMENT(get_bank_task_context(current_task(), FALSE));
+	}
 
 	if (bank_element->be_type == BANK_TASK) {
 		return BANK_ACCOUNT_NULL;
@@ -1432,8 +1450,8 @@ bank_get_voucher_bank_account(ipc_voucher_t voucher)
 		 * voucher to App's thread group when it gets auto redeemed by the App).
 		 */
 		if (bank_account->ba_holder != bank_account->ba_merchant ||
-			bank_get_bank_account_thread_group(bank_account) !=
-				bank_get_bank_task_thread_group(bank_account->ba_merchant)) {
+		    bank_get_bank_account_thread_group(bank_account) !=
+		    bank_get_bank_task_thread_group(bank_account->ba_merchant)) {
 			return bank_account;
 		} else {
 			return BANK_ACCOUNT_NULL;
@@ -1492,10 +1510,11 @@ bank_get_bank_account_ledger(bank_account_t bank_account)
 	ledger_t bankledger = LEDGER_NULL;
 
 	if (bank_account != BANK_ACCOUNT_NULL &&
-		bank_account->ba_holder != bank_account->ba_merchant)
+	    bank_account->ba_holder != bank_account->ba_merchant) {
 		bankledger = bank_account->ba_bill;
+	}
 
-	return (bankledger);
+	return bankledger;
 }
 
 /*
@@ -1508,7 +1527,7 @@ bank_get_bank_task_thread_group(bank_task_t bank_task __unused)
 	struct thread_group *banktg = NULL;
 
 
-	return (banktg);
+	return banktg;
 }
 
 /*
@@ -1521,7 +1540,7 @@ bank_get_bank_account_thread_group(bank_account_t bank_account __unused)
 	struct thread_group *banktg = NULL;
 
 
-	return (banktg);
+	return banktg;
 }
 
 /*
@@ -1545,7 +1564,7 @@ bank_get_bank_ledger_and_thread_group(
 
 	/* Return NULL thread group if voucher has current task's thread group */
 	if (thread_group == bank_get_bank_task_thread_group(
-			get_bank_task_context(current_task(), FALSE))) {
+		    get_bank_task_context(current_task(), FALSE))) {
 		thread_group = NULL;
 	}
 	*banktg = thread_group;
@@ -1561,16 +1580,17 @@ bank_get_bank_ledger_and_thread_group(
 void
 bank_swap_thread_bank_ledger(thread_t thread __unused, ledger_t new_ledger __unused)
 {
-	spl_t			s;
-	processor_t		processor;
+	spl_t                   s;
+	processor_t             processor;
 	ledger_t old_ledger = thread->t_bankledger;
-	int64_t ctime, effective_ledger_time_consumed = 0; 
+	int64_t ctime, effective_ledger_time_consumed = 0;
 	int64_t remainder = 0, consumed = 0;
 	int64_t effective_energy_consumed = 0;
 	uint64_t thread_energy;
-	
-	if (old_ledger == LEDGER_NULL && new_ledger == LEDGER_NULL)
+
+	if (old_ledger == LEDGER_NULL && new_ledger == LEDGER_NULL) {
 		return;
+	}
 
 	assert((thread == current_thread() || thread->started == 0));
 
@@ -1595,9 +1615,10 @@ bank_swap_thread_bank_ledger(thread_t thread __unused, ledger_t new_ledger __unu
 	ctime = mach_absolute_time();
 	processor = thread->last_processor;
 	if (processor != NULL) {
-		if ((int64_t)processor->quantum_end > ctime)
+		if ((int64_t)processor->quantum_end > ctime) {
 			remainder = (int64_t)processor->quantum_end - ctime;
-	
+		}
+
 		consumed = thread->quantum_remaining - remainder;
 		effective_ledger_time_consumed = consumed - thread->t_deduct_bank_ledger_time;
 	}
@@ -1606,7 +1627,7 @@ bank_swap_thread_bank_ledger(thread_t thread __unused, ledger_t new_ledger __unu
 
 	thread_energy = ml_energy_stat(thread);
 	effective_energy_consumed =
-		thread_energy - thread->t_deduct_bank_ledger_energy;
+	    thread_energy - thread->t_deduct_bank_ledger_energy;
 	assert(effective_energy_consumed >= 0);
 	thread->t_deduct_bank_ledger_energy = thread_energy;
 
@@ -1614,14 +1635,13 @@ bank_swap_thread_bank_ledger(thread_t thread __unused, ledger_t new_ledger __unu
 
 	thread_unlock(thread);
 	splx(s);
-	
+
 	if (old_ledger != LEDGER_NULL) {
 		ledger_credit(old_ledger,
-			bank_ledgers.cpu_time,
-			effective_ledger_time_consumed);
+		    bank_ledgers.cpu_time,
+		    effective_ledger_time_consumed);
 		ledger_credit(old_ledger,
-			bank_ledgers.energy,
-			effective_energy_consumed);
+		    bank_ledgers.energy,
+		    effective_energy_consumed);
 	}
 }
-

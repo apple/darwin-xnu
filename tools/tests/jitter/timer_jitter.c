@@ -2,7 +2,7 @@
  * Copyright (c) 2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <unistd.h>
@@ -53,9 +53,9 @@
 
 typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY_FIXEDPRI } my_policy_type_t;
 
-#define DEFAULT_MAX_SLEEP_NS	2000000000ll /* Two seconds */
-#define CONSTRAINT_NANOS	(20000000ll)	/* 20 ms */
-#define COMPUTATION_NANOS	(10000000ll)	/* 10 ms */
+#define DEFAULT_MAX_SLEEP_NS    2000000000ll /* Two seconds */
+#define CONSTRAINT_NANOS        (20000000ll)    /* 20 ms */
+#define COMPUTATION_NANOS       (10000000ll)    /* 10 ms */
 
 struct mach_timebase_info g_mti;
 
@@ -103,38 +103,38 @@ thread_setup(my_policy_type_t pol)
 	int res;
 
 	switch (pol) {
-		case MY_POLICY_TIMESHARE:
-		{
-			return 0;
-		}
-		case MY_POLICY_REALTIME: 
-		{
-			thread_time_constraint_policy_data_t pol;
+	case MY_POLICY_TIMESHARE:
+	{
+		return 0;
+	}
+	case MY_POLICY_REALTIME:
+	{
+		thread_time_constraint_policy_data_t pol;
 
-			/* Hard-coded realtime parameters (similar to what Digi uses) */
-			pol.period = 100000;
-			pol.constraint =  CONSTRAINT_NANOS * g_mti.denom / g_mti.numer;
-			pol.computation = COMPUTATION_NANOS * g_mti.denom / g_mti.numer;
-			pol.preemptible = 0; /* Ignored by OS */
+		/* Hard-coded realtime parameters (similar to what Digi uses) */
+		pol.period = 100000;
+		pol.constraint =  CONSTRAINT_NANOS * g_mti.denom / g_mti.numer;
+		pol.computation = COMPUTATION_NANOS * g_mti.denom / g_mti.numer;
+		pol.preemptible = 0;         /* Ignored by OS */
 
-			res = thread_policy_set(mach_thread_self(), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t) &pol, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
-			assert(res == 0, fail);
-			break;
-		}
-		case MY_POLICY_FIXEDPRI: 
-		{
-			thread_extended_policy_data_t pol;
-			pol.timeshare = 0;
+		res = thread_policy_set(mach_thread_self(), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t) &pol, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+		assert(res == 0, fail);
+		break;
+	}
+	case MY_POLICY_FIXEDPRI:
+	{
+		thread_extended_policy_data_t pol;
+		pol.timeshare = 0;
 
-			res = thread_policy_set(mach_thread_self(), THREAD_EXTENDED_POLICY, (thread_policy_t) &pol, THREAD_EXTENDED_POLICY_COUNT);
-			assert(res == 0, fail);
-			break;
-		}
-		default:
-		{
-			printf("invalid policy type\n");
-			return 1;
-		}
+		res = thread_policy_set(mach_thread_self(), THREAD_EXTENDED_POLICY, (thread_policy_t) &pol, THREAD_EXTENDED_POLICY_COUNT);
+		assert(res == 0, fail);
+		break;
+	}
+	default:
+	{
+		printf("invalid policy type\n");
+		return 1;
+	}
 	}
 
 	return 0;
@@ -142,7 +142,7 @@ fail:
 	return 1;
 }
 
-uint64_t 
+uint64_t
 get_random_sleep_length_abs_ns(uint64_t min_sleep_ns, uint64_t max_sleep_ns)
 {
 	uint64_t tmp;
@@ -157,7 +157,7 @@ get_random_sleep_length_abs_ns(uint64_t min_sleep_ns, uint64_t max_sleep_ns)
 	return min_sleep_ns + tmp;
 }
 
-void 
+void
 compute_stats(double *values, uint64_t count, double *average_magnitudep, double *maxp, double *minp, double *stddevp)
 {
 	uint64_t i;
@@ -174,12 +174,12 @@ compute_stats(double *values, uint64_t count, double *average_magnitudep, double
 	}
 
 	_avg = _sum / (double)count;
-	
+
 	_dev = 0;
 	for (i = 0; i < count; i++) {
 		_dev += pow((values[i] - _avg), 2);
 	}
-	
+
 	_dev /= count;
 	_dev = sqrt(_dev);
 
@@ -206,7 +206,7 @@ print_stats_fract(const char *label, double avg, double max, double min, double 
 	printf("Min %s jitter: %.1lf%%\n", label, min * 100);
 	printf("Avg %s jitter: %.1lf%%\n", label, avg * 100);
 	printf("Stddev: %.1lf%%\n", stddev * 100);
-	putchar('\n');	
+	putchar('\n');
 }
 
 int
@@ -242,32 +242,32 @@ main(int argc, char **argv)
 	opterr = 0;
 	while ((ch = getopt(argc, argv, "m:n:hs:w")) != -1 && ch != '?') {
 		switch (ch) {
-			case 's':
-				/* Specified seed for random)() */
-				random_seed = (unsigned)atoi(optarg);
-				srandom(random_seed);
-				need_seed = FALSE;
-				break;
-			case 'm':
-				/* How long per timer? */
-				max_sleep_ns = strtoull(optarg, NULL, 10);	
-				break;
-			case 'n':
-				/* How long per timer? */
-				min_sleep_ns = strtoull(optarg, NULL, 10);	
-				break;
-			case 'w':
-				/* After each timed wait, wakeup another thread */
-				wakeup_second_thread = TRUE;
-				break;
-			case 'h':
-				print_usage();
-				exit(0);
-				break;
-			default:
-				fprintf(stderr, "Got unexpected result from getopt().\n");
-				exit(1);
-				break;
+		case 's':
+			/* Specified seed for random)() */
+			random_seed = (unsigned)atoi(optarg);
+			srandom(random_seed);
+			need_seed = FALSE;
+			break;
+		case 'm':
+			/* How long per timer? */
+			max_sleep_ns = strtoull(optarg, NULL, 10);
+			break;
+		case 'n':
+			/* How long per timer? */
+			min_sleep_ns = strtoull(optarg, NULL, 10);
+			break;
+		case 'w':
+			/* After each timed wait, wakeup another thread */
+			wakeup_second_thread = TRUE;
+			break;
+		case 'h':
+			print_usage();
+			exit(0);
+			break;
+		default:
+			fprintf(stderr, "Got unexpected result from getopt().\n");
+			exit(1);
+			break;
 		}
 	}
 
@@ -296,7 +296,7 @@ main(int argc, char **argv)
 
 	/* How much jitter is so extreme that we should cut a trace point */
 	too_much = strtoull(argv[2], NULL, 10);
-	
+
 	/* Array for data */
 	jitter_arr = (double*)malloc(sizeof(*jitter_arr) * iterations);
 	if (jitter_arr == NULL) {
@@ -368,21 +368,21 @@ main(int argc, char **argv)
 		/* For now, do not exit; this call could be locked down */
 	}
 
-	/* 
-	 * Repeatedly pick a random timer length and 
-	 * try to sleep exactly that long 
+	/*
+	 * Repeatedly pick a random timer length and
+	 * try to sleep exactly that long
 	 */
 	for (i = 0; i < iterations; i++) {
 		sleep_length_abs = (uint64_t) (get_random_sleep_length_abs_ns(min_sleep_ns, max_sleep_ns) * (((double)g_mti.denom) / ((double)g_mti.numer)));
 		target_time = mach_absolute_time() + sleep_length_abs;
-		
+
 		/* Sleep */
 		kret = mach_wait_until(target_time);
 		wake_time = mach_absolute_time();
-	
+
 		jitter_arr[i] = (double)(wake_time - target_time);
 		fraction_arr[i] = jitter_arr[i] / ((double)sleep_length_abs);
-		
+
 		/* Too much: cut a tracepoint for a debugger */
 		if (jitter_arr[i] >= too_much) {
 			kdebug_trace(0xeeeee0 | DBG_FUNC_NONE, 0, 0, 0, 0);
@@ -401,12 +401,11 @@ main(int argc, char **argv)
 			if (kret != KERN_SUCCESS) {
 				errx(1, "semaphore_wait");
 			}
-
 		}
 	}
 
 	/*
-	 * Compute statistics and output results. 
+	 * Compute statistics and output results.
 	 */
 	compute_stats(jitter_arr, iterations, &avg, &max, &min, &stddev);
 	compute_stats(fraction_arr, iterations, &avg_fract, &max_fract, &min_fract, &stddev_fract);
@@ -416,20 +415,19 @@ main(int argc, char **argv)
 	print_stats_fract("%", avg_fract, max_fract, min_fract, stddev_fract);
 
 	if (wakeup_second_thread) {
-
 		res = pthread_join(secthread, NULL);
 		if (res) {
 			err(1, "pthread_join");
 		}
 
 		compute_stats(wakeup_second_jitter_arr, iterations, &avg, &max, &min, &stddev);
-		
+
 		putchar('\n');
 		print_stats_us("second jitter", avg, max, min, stddev);
 
 		putchar('\n');
 		printf("%llu/%llu (%.1f%%) wakeups on same CPU\n", secargs.woke_on_same_cpu, iterations,
-			   100.0*((double)secargs.woke_on_same_cpu)/iterations);
+		    100.0 * ((double)secargs.woke_on_same_cpu) / iterations);
 	}
 
 	return 0;
@@ -452,12 +450,11 @@ second_thread(void *args)
 		exit(1);
 	}
 
-	/* 
-	 * Repeatedly pick a random timer length and 
-	 * try to sleep exactly that long 
+	/*
+	 * Repeatedly pick a random timer length and
+	 * try to sleep exactly that long
 	 */
 	for (i = 0; i < secargs->iterations; i++) {
-
 		/* Wake up when poked by main thread */
 		kret = semaphore_wait(secargs->wakeup_semaphore);
 		if (kret != KERN_SUCCESS) {
@@ -468,7 +465,7 @@ second_thread(void *args)
 		cpuno = _os_cpu_number();
 		if (wake_time < secargs->last_poke_time) {
 			/* Woke in past, unsynchronized mach_absolute_time()? */
-			
+
 			errx(1, "woke in past %llu (%d) < %llu (%d)", wake_time, cpuno, secargs->last_poke_time, secargs->cpuno);
 		}
 
@@ -477,7 +474,7 @@ second_thread(void *args)
 		}
 
 		secargs->wakeup_second_jitter_arr[i] = (double)(wake_time - secargs->last_poke_time);
-		
+
 		/* Too much: cut a tracepoint for a debugger */
 		if (secargs->wakeup_second_jitter_arr[i] >= secargs->too_much) {
 			kdebug_trace(0xeeeee4 | DBG_FUNC_NONE, 0, 0, 0, 0);
@@ -487,7 +484,6 @@ second_thread(void *args)
 		if (kret != KERN_SUCCESS) {
 			errx(1, "semaphore_signal %d", kret);
 		}
-
 	}
 
 	return NULL;

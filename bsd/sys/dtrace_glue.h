@@ -2,7 +2,7 @@
  * Copyright (c) 2005-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -50,8 +50,8 @@
 /*
  * cmn_err
  */
-#define	CE_NOTE		1	/* notice		*/
-#define	CE_WARN		2	/* warning		*/
+#define CE_NOTE         1       /* notice		*/
+#define CE_WARN         2       /* warning		*/
 
 extern void cmn_err( int, const char *, ... );
 
@@ -128,25 +128,25 @@ extern dtrace_cpu_t *cpu_list;
  * is up to the platform to assure that this is performed properly.  Note that
  * the structure is sized to avoid false sharing.
  */
-#define	CPU_CACHE_COHERENCE_SIZE	64
+#define CPU_CACHE_COHERENCE_SIZE        64
 
 typedef struct cpu_core {
-	uint64_t	cpuc_dtrace_illval;     /* DTrace illegal value */
-	lck_mtx_t	cpuc_pid_lock;          /* DTrace pid provider lock */
-	uint16_t	cpuc_dtrace_flags;      /* DTrace flags */
-        uint64_t	cpuc_missing_tos;	/* Addr. of top most stack frame if missing */
-        uint8_t		cpuc_pad[CPU_CACHE_COHERENCE_SIZE - sizeof(uint64_t) - sizeof(lck_mtx_t) - sizeof(uint16_t) - sizeof(uint64_t) ];	/* padding */
+	uint64_t        cpuc_dtrace_illval;     /* DTrace illegal value */
+	lck_mtx_t       cpuc_pid_lock;          /* DTrace pid provider lock */
+	uint16_t        cpuc_dtrace_flags;      /* DTrace flags */
+	uint64_t        cpuc_missing_tos;       /* Addr. of top most stack frame if missing */
+	uint8_t         cpuc_pad[CPU_CACHE_COHERENCE_SIZE - sizeof(uint64_t) - sizeof(lck_mtx_t) - sizeof(uint16_t) - sizeof(uint64_t)];        /* padding */
 } cpu_core_t;
 
 extern cpu_core_t *cpu_core;
 
-extern unsigned int dtrace_max_cpus;		/* max number of enabled cpus */
-#define NCPU	    dtrace_max_cpus
+extern unsigned int dtrace_max_cpus;            /* max number of enabled cpus */
+#define NCPU        dtrace_max_cpus
 
 extern int cpu_number(void); /* From #include <kern/cpu_number.h>. Called from probe context, must blacklist. */
 
-#define	CPU		(&(cpu_list[cpu_number()]))	/* Pointer to current CPU */
-#define	CPU_ON_INTR(cpup) ml_at_interrupt_context() /* always invoked on current cpu */
+#define CPU             (&(cpu_list[cpu_number()]))     /* Pointer to current CPU */
+#define CPU_ON_INTR(cpup) ml_at_interrupt_context() /* always invoked on current cpu */
 
 /*
  * Routines used to register interest in cpu's being added to or removed
@@ -174,26 +174,26 @@ extern void unregister_cpu_setup_func(cpu_setup_func_t *, void *);
 /*
  * DTrace flags.
  */
-#define	CPU_DTRACE_NOFAULT	0x0001	/* Don't fault */
-#define	CPU_DTRACE_DROP		0x0002	/* Drop this ECB */
-#define	CPU_DTRACE_BADADDR	0x0004	/* DTrace fault: bad address */
-#define	CPU_DTRACE_BADALIGN	0x0008	/* DTrace fault: bad alignment */
-#define	CPU_DTRACE_DIVZERO	0x0010	/* DTrace fault: divide by zero */
-#define	CPU_DTRACE_ILLOP	0x0020	/* DTrace fault: illegal operation */
-#define	CPU_DTRACE_NOSCRATCH	0x0040	/* DTrace fault: out of scratch */
-#define	CPU_DTRACE_KPRIV	0x0080	/* DTrace fault: bad kernel access */
-#define	CPU_DTRACE_UPRIV	0x0100	/* DTrace fault: bad user access */
-#define	CPU_DTRACE_TUPOFLOW	0x0200	/* DTrace fault: tuple stack overflow */
-#define CPU_DTRACE_USTACK_FP	0x0400  /* pid provider hint to ustack() */
-#define	CPU_DTRACE_ENTRY	0x0800	/* pid provider hint to ustack() */
+#define CPU_DTRACE_NOFAULT      0x0001  /* Don't fault */
+#define CPU_DTRACE_DROP         0x0002  /* Drop this ECB */
+#define CPU_DTRACE_BADADDR      0x0004  /* DTrace fault: bad address */
+#define CPU_DTRACE_BADALIGN     0x0008  /* DTrace fault: bad alignment */
+#define CPU_DTRACE_DIVZERO      0x0010  /* DTrace fault: divide by zero */
+#define CPU_DTRACE_ILLOP        0x0020  /* DTrace fault: illegal operation */
+#define CPU_DTRACE_NOSCRATCH    0x0040  /* DTrace fault: out of scratch */
+#define CPU_DTRACE_KPRIV        0x0080  /* DTrace fault: bad kernel access */
+#define CPU_DTRACE_UPRIV        0x0100  /* DTrace fault: bad user access */
+#define CPU_DTRACE_TUPOFLOW     0x0200  /* DTrace fault: tuple stack overflow */
+#define CPU_DTRACE_USTACK_FP    0x0400  /* pid provider hint to ustack() */
+#define CPU_DTRACE_ENTRY        0x0800  /* pid provider hint to ustack() */
 #define CPU_DTRACE_BADSTACK 0x1000  /* DTrace fault: bad stack */
 
-#define	CPU_DTRACE_FAULT	(CPU_DTRACE_BADADDR | CPU_DTRACE_BADALIGN | \
-				CPU_DTRACE_DIVZERO | CPU_DTRACE_ILLOP | \
-				CPU_DTRACE_NOSCRATCH | CPU_DTRACE_KPRIV | \
-				CPU_DTRACE_UPRIV | CPU_DTRACE_TUPOFLOW | \
-				CPU_DTRACE_BADSTACK)
-#define	CPU_DTRACE_ERROR	(CPU_DTRACE_FAULT | CPU_DTRACE_DROP)
+#define CPU_DTRACE_FAULT        (CPU_DTRACE_BADADDR | CPU_DTRACE_BADALIGN | \
+	                        CPU_DTRACE_DIVZERO | CPU_DTRACE_ILLOP | \
+	                        CPU_DTRACE_NOSCRATCH | CPU_DTRACE_KPRIV | \
+	                        CPU_DTRACE_UPRIV | CPU_DTRACE_TUPOFLOW | \
+	                        CPU_DTRACE_BADSTACK)
+#define CPU_DTRACE_ERROR        (CPU_DTRACE_FAULT | CPU_DTRACE_DROP)
 
 /*
  * Loadable Modules
@@ -204,55 +204,55 @@ struct dtrace_module_symbols;
 
 /* Solaris' modctl structure, greatly simplified, shadowing parts of xnu kmod structure. */
 typedef struct modctl {
-	struct modctl	*mod_next;
-	struct modctl	*mod_stale;     // stale module chain
-	uint32_t	mod_id;		// the kext unique identifier
-	char		mod_modname[KMOD_MAX_NAME];
-	int		mod_loadcnt;
-	char		mod_loaded;
-	uint16_t	mod_flags;	// See flags below
-	int		mod_nenabled;	// # of enabled DTrace probes in module
-	vm_address_t	mod_address;	// starting address (of Mach-o header blob)
-	vm_size_t	mod_size;	// total size (of blob)
-	UUID		mod_uuid;
+	struct modctl   *mod_next;
+	struct modctl   *mod_stale;     // stale module chain
+	uint32_t        mod_id;         // the kext unique identifier
+	char            mod_modname[KMOD_MAX_NAME];
+	int             mod_loadcnt;
+	char            mod_loaded;
+	uint16_t        mod_flags;      // See flags below
+	int             mod_nenabled;   // # of enabled DTrace probes in module
+	vm_address_t    mod_address;    // starting address (of Mach-o header blob)
+	vm_size_t       mod_size;       // total size (of blob)
+	UUID            mod_uuid;
 	struct dtrace_module_symbols* mod_user_symbols;
 } modctl_t;
 
 /* Definitions for mod_flags */
-#define MODCTL_IS_MACH_KERNEL			0x01  // This module represents /mach_kernel
-#define MODCTL_HAS_KERNEL_SYMBOLS		0x02  // Kernel symbols (nlist) are available
-#define MODCTL_FBT_PROBES_PROVIDED      	0x04  // fbt probes have been provided
-#define MODCTL_FBT_INVALID			0x08  // Module is invalid for fbt probes
-#define MODCTL_SDT_PROBES_PROVIDED		0x10  // sdt probes have been provided
-#define MODCTL_SDT_INVALID			0x20  // Module is invalid for sdt probes
-#define MODCTL_HAS_UUID				0x40  // Module has UUID
-#define MODCTL_FBT_PRIVATE_PROBES_PROVIDED	0x80  // fbt private probes have been provided
-#define MODCTL_FBT_PROVIDE_PRIVATE_PROBES	0x100 // fbt provider must provide private probes
-#define MODCTL_FBT_PROVIDE_BLACKLISTED_PROBES	0x200 // fbt provider must provide blacklisted probes
-#define MODCTL_FBT_BLACKLISTED_PROBES_PROVIDED	0x400 // fbt blacklisted probes have been provided
-#define MODCTL_IS_STATIC_KEXT			0x800 // module is a static kext
+#define MODCTL_IS_MACH_KERNEL                   0x01  // This module represents /mach_kernel
+#define MODCTL_HAS_KERNEL_SYMBOLS               0x02  // Kernel symbols (nlist) are available
+#define MODCTL_FBT_PROBES_PROVIDED              0x04  // fbt probes have been provided
+#define MODCTL_FBT_INVALID                      0x08  // Module is invalid for fbt probes
+#define MODCTL_SDT_PROBES_PROVIDED              0x10  // sdt probes have been provided
+#define MODCTL_SDT_INVALID                      0x20  // Module is invalid for sdt probes
+#define MODCTL_HAS_UUID                         0x40  // Module has UUID
+#define MODCTL_FBT_PRIVATE_PROBES_PROVIDED      0x80  // fbt private probes have been provided
+#define MODCTL_FBT_PROVIDE_PRIVATE_PROBES       0x100 // fbt provider must provide private probes
+#define MODCTL_FBT_PROVIDE_BLACKLISTED_PROBES   0x200 // fbt provider must provide blacklisted probes
+#define MODCTL_FBT_BLACKLISTED_PROBES_PROVIDED  0x400 // fbt blacklisted probes have been provided
+#define MODCTL_IS_STATIC_KEXT                   0x800 // module is a static kext
 
 /* Simple/singular mod_flags accessors */
-#define MOD_IS_MACH_KERNEL(mod)			(mod->mod_flags & MODCTL_IS_MACH_KERNEL)
-#define MOD_HAS_KERNEL_SYMBOLS(mod)		(mod->mod_flags & MODCTL_HAS_KERNEL_SYMBOLS)
-#define MOD_HAS_USERSPACE_SYMBOLS(mod)		(mod->mod_user_symbols) /* No point in duplicating state in the flags bits */
-#define MOD_FBT_PROBES_PROVIDED(mod)   		(mod->mod_flags & MODCTL_FBT_PROBES_PROVIDED)
-#define MOD_FBT_INVALID(mod)			(mod->mod_flags & MODCTL_FBT_INVALID)
-#define MOD_SDT_PROBES_PROVIDED(mod)   		(mod->mod_flags & MODCTL_SDT_PROBES_PROVIDED)
-#define MOD_SDT_INVALID(mod)			(mod->mod_flags & MODCTL_SDT_INVALID)
-#define MOD_HAS_UUID(mod)			(mod->mod_flags & MODCTL_HAS_UUID)
-#define MOD_FBT_PRIVATE_PROBES_PROVIDED(mod)	(mod->mod_flags & MODCTL_FBT_PRIVATE_PROBES_PROVIDED)
-#define MOD_FBT_PROVIDE_PRIVATE_PROBES(mod)	(mod->mod_flags & MODCTL_FBT_PROVIDE_PRIVATE_PROBES)
+#define MOD_IS_MACH_KERNEL(mod)                 (mod->mod_flags & MODCTL_IS_MACH_KERNEL)
+#define MOD_HAS_KERNEL_SYMBOLS(mod)             (mod->mod_flags & MODCTL_HAS_KERNEL_SYMBOLS)
+#define MOD_HAS_USERSPACE_SYMBOLS(mod)          (mod->mod_user_symbols) /* No point in duplicating state in the flags bits */
+#define MOD_FBT_PROBES_PROVIDED(mod)            (mod->mod_flags & MODCTL_FBT_PROBES_PROVIDED)
+#define MOD_FBT_INVALID(mod)                    (mod->mod_flags & MODCTL_FBT_INVALID)
+#define MOD_SDT_PROBES_PROVIDED(mod)            (mod->mod_flags & MODCTL_SDT_PROBES_PROVIDED)
+#define MOD_SDT_INVALID(mod)                    (mod->mod_flags & MODCTL_SDT_INVALID)
+#define MOD_HAS_UUID(mod)                       (mod->mod_flags & MODCTL_HAS_UUID)
+#define MOD_FBT_PRIVATE_PROBES_PROVIDED(mod)    (mod->mod_flags & MODCTL_FBT_PRIVATE_PROBES_PROVIDED)
+#define MOD_FBT_PROVIDE_PRIVATE_PROBES(mod)     (mod->mod_flags & MODCTL_FBT_PROVIDE_PRIVATE_PROBES)
 #define MOD_FBT_BLACKLISTED_PROBES_PROVIDED(mod) (mod->mod_flags & MODCTL_FBT_BLACKLISTED_PROBES_PROVIDED)
-#define MOD_FBT_PROVIDE_BLACKLISTED_PROBES(mod)	(mod->mod_flags & MODCTL_FBT_PROVIDE_BLACKLISTED_PROBES)
-#define MOD_IS_STATIC_KEXT(mod)			(mod->mod_flags & MODCTL_IS_STATIC_KEXT)
+#define MOD_FBT_PROVIDE_BLACKLISTED_PROBES(mod) (mod->mod_flags & MODCTL_FBT_PROVIDE_BLACKLISTED_PROBES)
+#define MOD_IS_STATIC_KEXT(mod)                 (mod->mod_flags & MODCTL_IS_STATIC_KEXT)
 
 /* Compound accessors */
-#define MOD_FBT_PRIVATE_PROBES_DONE(mod)	(MOD_FBT_PRIVATE_PROBES_PROVIDED(mod) || !MOD_FBT_PROVIDE_PRIVATE_PROBES(mod))
-#define MOD_FBT_BLACKLISTED_PROBES_DONE(mod)	(MOD_FBT_BLACKLISTED_PROBES_PROVIDED(mod) || !MOD_FBT_PROVIDE_BLACKLISTED_PROBES(mod))
-#define MOD_FBT_DONE(mod)			((MOD_FBT_PROBES_PROVIDED(mod) && MOD_FBT_PRIVATE_PROBES_DONE(mod) && MOD_FBT_BLACKLISTED_PROBES_DONE(mod)) || MOD_FBT_INVALID(mod))
-#define MOD_SDT_DONE(mod)			(MOD_SDT_PROBES_PROVIDED(mod) || MOD_SDT_INVALID(mod))
-#define MOD_SYMBOLS_DONE(mod)			(MOD_FBT_DONE(mod) && MOD_SDT_DONE(mod))
+#define MOD_FBT_PRIVATE_PROBES_DONE(mod)        (MOD_FBT_PRIVATE_PROBES_PROVIDED(mod) || !MOD_FBT_PROVIDE_PRIVATE_PROBES(mod))
+#define MOD_FBT_BLACKLISTED_PROBES_DONE(mod)    (MOD_FBT_BLACKLISTED_PROBES_PROVIDED(mod) || !MOD_FBT_PROVIDE_BLACKLISTED_PROBES(mod))
+#define MOD_FBT_DONE(mod)                       ((MOD_FBT_PROBES_PROVIDED(mod) && MOD_FBT_PRIVATE_PROBES_DONE(mod) && MOD_FBT_BLACKLISTED_PROBES_DONE(mod)) || MOD_FBT_INVALID(mod))
+#define MOD_SDT_DONE(mod)                       (MOD_SDT_PROBES_PROVIDED(mod) || MOD_SDT_INVALID(mod))
+#define MOD_SYMBOLS_DONE(mod)                   (MOD_FBT_DONE(mod) && MOD_SDT_DONE(mod))
 
 extern modctl_t *dtrace_modctl_list;
 
@@ -267,7 +267,7 @@ extern int dtrace_addr_in_module(void*, struct modctl*);
 #define PRIV_DTRACE_USER          5
 #define PRIV_PROC_OWNER          30
 #define PRIV_PROC_ZONE           35
-#define	PRIV_ALL			(-1)	/* All privileges required */
+#define PRIV_ALL                        (-1)    /* All privileges required */
 
 /* Privilege sets */
 #define PRIV_EFFECTIVE            0
@@ -286,16 +286,16 @@ extern uid_t crgetuid(const cred_t *);
 /*
  * "cyclic"
  */
-#define	CY_LOW_LEVEL		0
-#define	CY_HIGH_LEVEL		2
-#define	CY_LEVELS			3
+#define CY_LOW_LEVEL            0
+#define CY_HIGH_LEVEL           2
+#define CY_LEVELS                       3
 
 typedef uintptr_t cyclic_id_t;
 typedef cyclic_id_t *cyclic_id_list_t;
 typedef uint16_t cyc_level_t;
 typedef void (*cyc_func_t)(void *);
 
-#define	CYCLIC_NONE		((cyclic_id_t)0)
+#define CYCLIC_NONE             ((cyclic_id_t)0)
 
 typedef struct cyc_time {
 	hrtime_t cyt_when;
@@ -329,8 +329,8 @@ extern void cyclic_timer_remove(cyclic_id_t);
  * ddi
  */
 
-#define DDI_SUCCESS			0
-#define DDI_FAILURE			-1
+#define DDI_SUCCESS                     0
+#define DDI_FAILURE                     -1
 
 #define DDI_PSEUDO "ddi_pseudo"
 
@@ -338,10 +338,10 @@ typedef enum {
 	DDI_DETACH = 0,
 	DDI_SUSPEND = 1,
 	DDI_PM_SUSPEND = 2,
-	DDI_HOTPLUG_DETACH = 3		/* detach, don't try to auto-unconfig */
+	DDI_HOTPLUG_DETACH = 3          /* detach, don't try to auto-unconfig */
 } ddi_detach_cmd_t;
 
-#define	DDI_PROP_SUCCESS	0
+#define DDI_PROP_SUCCESS        0
 
 #define DDI_PROP_DONTPASS   1
 typedef uint_t major_t;
@@ -370,8 +370,8 @@ extern void debug_enter(char *);
  * kmem
  */
 
-#define KM_SLEEP	0x00000000
-#define KM_NOSLEEP	0x00000001
+#define KM_SLEEP        0x00000000
+#define KM_NOSLEEP      0x00000001
 
 typedef struct vmem vmem_t;
 typedef struct kmem_cache kmem_cache_t;
@@ -405,8 +405,8 @@ extern void *dt_kmem_zalloc_aligned_site(size_t, size_t, int, vm_allocation_site
 extern void dt_kmem_free_aligned(void*, size_t);
 
 extern kmem_cache_t *
-kmem_cache_create(const char *, size_t, size_t, int (*)(void *, void *, int),
-	void (*)(void *, void *), void (*)(void *), void *, vmem_t *, int);
+    kmem_cache_create(const char *, size_t, size_t, int (*)(void *, void *, int),
+    void (*)(void *, void *), void (*)(void *), void *, vmem_t *, int);
 extern void *kmem_cache_alloc(kmem_cache_t *, int);
 extern void kmem_cache_free(kmem_cache_t *, void *);
 extern void kmem_cache_destroy(kmem_cache_t *);
@@ -439,13 +439,13 @@ typedef unsigned int model_t; /* For dtrace_instr_size_isa() prototype in <sys/d
  * vmem
  */
 
-#define	VMC_IDENTIFIER	0x00040000	/* not backed by memory */
-#define	VM_SLEEP	0x00000000	/* same as KM_SLEEP */
-#define	VM_BESTFIT	0x00000100
+#define VMC_IDENTIFIER  0x00040000      /* not backed by memory */
+#define VM_SLEEP        0x00000000      /* same as KM_SLEEP */
+#define VM_BESTFIT      0x00000100
 
 extern void *vmem_alloc(vmem_t *, size_t, int);
 extern vmem_t *vmem_create(const char *, void *, size_t, size_t, void *,
-					void *, vmem_t *, size_t, int);
+    void *, vmem_t *, size_t, int);
 extern void vmem_destroy(vmem_t *);
 extern void vmem_free(vmem_t *vmp, void *vaddr, size_t size);
 
@@ -453,44 +453,51 @@ extern void vmem_free(vmem_t *vmp, void *vaddr, size_t size);
  * Atomic
  */
 
-static inline uint8_t atomic_or_8(uint8_t *addr, uint8_t mask)
+static inline uint8_t
+atomic_or_8(uint8_t *addr, uint8_t mask)
 {
 	return OSBitOrAtomic8(mask, addr);
 }
 
-static inline uint32_t atomic_and_32( uint32_t *addr, int32_t mask)
+static inline uint32_t
+atomic_and_32( uint32_t *addr, int32_t mask)
 {
 	return OSBitAndAtomic(mask, addr);
 }
 
-static inline uint32_t atomic_add_32( uint32_t *theAddress, int32_t theAmount )
+static inline uint32_t
+atomic_add_32( uint32_t *theAddress, int32_t theAmount )
 {
 	return OSAddAtomic( theAmount, theAddress );
 }
 
 #if defined(__i386__) || defined(__x86_64__)
-static inline void atomic_add_64( uint64_t *theAddress, int64_t theAmount )
+static inline void
+atomic_add_64( uint64_t *theAddress, int64_t theAmount )
 {
 	(void)OSAddAtomic64( theAmount, (SInt64 *)theAddress );
 }
 #elif defined(__arm__)
-static inline void atomic_add_64( uint64_t *theAddress, int64_t theAmount )
+static inline void
+atomic_add_64( uint64_t *theAddress, int64_t theAmount )
 {
 	// FIXME
 	// atomic_add_64() is at present only called from fasttrap.c to increment
 	// or decrement a 64bit counter. Narrow to 32bits since arm has
 	// no convenient 64bit atomic op.
-	
-	(void)OSAddAtomic( (int32_t)theAmount, &(((SInt32 *)theAddress)[0]));
+
+	(void)OSAddAtomic((int32_t)theAmount, &(((SInt32 *)theAddress)[0]));
 }
 #elif defined (__arm64__)
-static inline void atomic_add_64( uint64_t *theAddress, int64_t theAmount )
+static inline void
+atomic_add_64( uint64_t *theAddress, int64_t theAmount )
 {
 	(void)OSAddAtomic64( theAmount, (SInt64 *)theAddress );
 }
 #endif
 
-static inline uint32_t atomic_or_32(uint32_t *addr, uint32_t mask)
+static inline uint32_t
+atomic_or_32(uint32_t *addr, uint32_t mask)
 {
 	return OSBitOrAtomic(mask, addr);
 }
@@ -511,7 +518,7 @@ extern vm_offset_t max_valid_stack_address(void); /* kern/thread.h */
 
 #define panic_quiesce (panic_active())
 
-#define	IS_P2ALIGNED(v, a) ((((uintptr_t)(v)) & ((uintptr_t)(a) - 1)) == 0)
+#define IS_P2ALIGNED(v, a) ((((uintptr_t)(v)) & ((uintptr_t)(a) - 1)) == 0)
 
 extern int vuprintf(const char *, va_list);
 
@@ -545,4 +552,3 @@ int dtrace_buffer_copyout(const void*, user_addr_t, vm_size_t);
 #define KERNELBASE VM_MIN_KERNEL_ADDRESS
 #endif /* KERNEL_BUILD */
 #endif /* _DTRACE_GLUE_H */
-

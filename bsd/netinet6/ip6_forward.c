@@ -131,7 +131,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	int error, type = 0, code = 0;
 	boolean_t proxy = FALSE;
 	struct mbuf *mcopy = NULL;
-	struct ifnet *ifp, *rcvifp, *origifp;	/* maybe unnecessary */
+	struct ifnet *ifp, *rcvifp, *origifp;   /* maybe unnecessary */
 	u_int32_t inzone, outzone, len;
 	struct in6_addr src_in6, dst_in6;
 	uint64_t curtime = net_uptime();
@@ -157,14 +157,16 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	if (!srcrt && nd6_prproxy &&
 	    (rt = ip6forward_rt->ro_rt) != NULL && (rt->rt_flags & RTF_PROXY)) {
 		nd6_proxy_find_fwdroute(m->m_pkthdr.rcvif, ip6forward_rt);
-		if ((rt = ip6forward_rt->ro_rt) != NULL)
+		if ((rt = ip6forward_rt->ro_rt) != NULL) {
 			ifscope = rt->rt_ifp->if_index;
+		}
 	}
 
 #if PF
 	pf_mtag = pf_find_mtag(m);
-	if (pf_mtag != NULL && pf_mtag->pftag_rtableid != IFSCOPE_NONE)
+	if (pf_mtag != NULL && pf_mtag->pftag_rtableid != IFSCOPE_NONE) {
 		ifscope = pf_mtag->pftag_rtableid;
+	}
 
 	/*
 	 * If the caller provides a route which is on a different interface
@@ -195,7 +197,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		if (ipsec6_in_reject(m, NULL)) {
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
 			m_freem(m);
-			return (NULL);
+			return NULL;
 		}
 	}
 #endif /*IPSEC*/
@@ -205,7 +207,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	 * Do not forward packets with unspecified source.  It was discussed
 	 * in July 2000, on ipngwg mailing list.
 	 */
-	if ((m->m_flags & (M_BCAST|M_MCAST)) != 0 ||
+	if ((m->m_flags & (M_BCAST | M_MCAST)) != 0 ||
 	    IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst) ||
 	    IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_src)) {
 		ip6stat.ip6s_cantforward++;
@@ -221,14 +223,14 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			    if_name(m->m_pkthdr.rcvif));
 		}
 		m_freem(m);
-		return (NULL);
+		return NULL;
 	}
 
 	if (ip6->ip6_hlim <= IPV6_HLIMDEC) {
 		/* XXX in6_ifstat_inc(rt->rt_ifp, ifs6_in_discard) */
 		icmp6_error_flag(m, ICMP6_TIME_EXCEEDED,
-				ICMP6_TIME_EXCEED_TRANSIT, 0, 0);
-		return (NULL);
+		    ICMP6_TIME_EXCEED_TRANSIT, 0, 0);
+		return NULL;
 	}
 
 	/*
@@ -245,8 +247,9 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		 * Also skip IPsec forwarding path processing as this
 		 * packet is not to be forwarded.
 		 */
-		if (proxy)
+		if (proxy) {
 			goto skip_ipsec;
+		}
 	}
 
 	ip6->ip6_hlim -= IPV6_HLIMDEC;
@@ -263,8 +266,9 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	mcopy = m_copy(m, 0, imin(m->m_pkthdr.len, ICMPV6_PLD_MAXLEN));
 
 #if IPSEC
-	if (ipsec_bypass != 0)
+	if (ipsec_bypass != 0) {
 		goto skip_ipsec;
+	}
 	/* get a security policy for this packet */
 	sp = ipsec6_getpolicybyaddr(m, IPSEC_DIR_OUTBOUND, IP_FORWARDING,
 	    &error);
@@ -279,7 +283,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 #endif
 		}
 		m_freem(m);
-		return (NULL);
+		return NULL;
 	}
 
 	error = 0;
@@ -287,7 +291,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	/* check policy */
 	switch (sp->policy) {
 	case IPSEC_POLICY_DISCARD:
-        case IPSEC_POLICY_GENERATE:
+	case IPSEC_POLICY_GENERATE:
 		/*
 		 * This packet is just discarded.
 		 */
@@ -302,7 +306,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 #endif
 		}
 		m_freem(m);
-		return (NULL);
+		return NULL;
 
 	case IPSEC_POLICY_BYPASS:
 	case IPSEC_POLICY_NONE:
@@ -324,7 +328,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 #endif
 			}
 			m_freem(m);
-			return (NULL);
+			return NULL;
 		}
 		/* do IPsec */
 		break;
@@ -337,61 +341,61 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		goto skip_ipsec;
 	}
 
-    {
-	struct ipsec_output_state state;
+	{
+		struct ipsec_output_state state;
 
-	/*
-	 * All the extension headers will become inaccessible
-	 * (since they can be encrypted).
-	 * Don't panic, we need no more updates to extension headers
-	 * on inner IPv6 packet (since they are now encapsulated).
-	 *
-	 * IPv6 [ESP|AH] IPv6 [extension headers] payload
-	 */
-	bzero(&state, sizeof(state));
-	state.m = m;
-	state.dst = NULL;	/* update at ipsec6_output_tunnel() */
+		/*
+		 * All the extension headers will become inaccessible
+		 * (since they can be encrypted).
+		 * Don't panic, we need no more updates to extension headers
+		 * on inner IPv6 packet (since they are now encapsulated).
+		 *
+		 * IPv6 [ESP|AH] IPv6 [extension headers] payload
+		 */
+		bzero(&state, sizeof(state));
+		state.m = m;
+		state.dst = NULL; /* update at ipsec6_output_tunnel() */
 
-	error = ipsec6_output_tunnel(&state, sp, 0);
-	key_freesp(sp, KEY_SADB_UNLOCKED);
-	if (state.tunneled == 4) {
+		error = ipsec6_output_tunnel(&state, sp, 0);
+		key_freesp(sp, KEY_SADB_UNLOCKED);
+		if (state.tunneled == 4) {
+			ROUTE_RELEASE(&state.ro);
+			return NULL; /* packet is gone - sent over IPv4 */
+		}
+
+		m = state.m;
 		ROUTE_RELEASE(&state.ro);
-		return (NULL);  /* packet is gone - sent over IPv4 */
-	}
 
-	m = state.m;
-	ROUTE_RELEASE(&state.ro);
-
-	if (error) {
-		/* mbuf is already reclaimed in ipsec6_output_tunnel. */
-		switch (error) {
-		case EHOSTUNREACH:
-		case ENETUNREACH:
-		case EMSGSIZE:
-		case ENOBUFS:
-		case ENOMEM:
-			break;
-		default:
-			printf("ip6_output (ipsec): error code %d\n", error);
+		if (error) {
+			/* mbuf is already reclaimed in ipsec6_output_tunnel. */
+			switch (error) {
+			case EHOSTUNREACH:
+			case ENETUNREACH:
+			case EMSGSIZE:
+			case ENOBUFS:
+			case ENOMEM:
+				break;
+			default:
+				printf("ip6_output (ipsec): error code %d\n", error);
 			/* fall through */
-		case ENOENT:
-			/* don't show these error codes to the user */
-			break;
-		}
-		ip6stat.ip6s_cantforward++;
-		if (mcopy) {
+			case ENOENT:
+				/* don't show these error codes to the user */
+				break;
+			}
+			ip6stat.ip6s_cantforward++;
+			if (mcopy) {
 #if 0
-			/* XXX: what icmp ? */
+				/* XXX: what icmp ? */
 #else
-			m_freem(mcopy);
+				m_freem(mcopy);
 #endif
+			}
+			m_freem(m);
+			return NULL;
 		}
-		m_freem(m);
-		return (NULL);
 	}
-    }
 #endif /* IPSEC */
-    skip_ipsec:
+skip_ipsec:
 
 	dst = (struct sockaddr_in6 *)&ip6forward_rt->ro_dst;
 	if ((rt = ip6forward_rt->ro_rt) != NULL) {
@@ -426,11 +430,12 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		if (rt == NULL) {
 			ip6stat.ip6s_noroute++;
 			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_noroute);
-			if (mcopy)
+			if (mcopy) {
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
-					    ICMP6_DST_UNREACH_NOROUTE, 0);
+				    ICMP6_DST_UNREACH_NOROUTE, 0);
+			}
 			m_freem(m);
-			return (NULL);
+			return NULL;
 		}
 		RT_LOCK_ASSERT_HELD(rt);
 	} else if (ROUTE_UNUSABLE(ip6forward_rt) ||
@@ -452,11 +457,12 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		if ((rt = ip6forward_rt->ro_rt) == NULL) {
 			ip6stat.ip6s_noroute++;
 			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_noroute);
-			if (mcopy)
+			if (mcopy) {
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_NOROUTE, 0);
+			}
 			m_freem(m);
-			return (NULL);
+			return NULL;
 		}
 		RT_LOCK(rt);
 		/* Take an extra ref for ourselves */
@@ -481,7 +487,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
 		m_freem(m);
-		return (NULL);
+		return NULL;
 	}
 	if (in6_setscope(&src_in6, m->m_pkthdr.rcvif, &inzone)) {
 		RT_REMREF_LOCKED(rt);
@@ -489,7 +495,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
 		m_freem(m);
-		return (NULL);
+		return NULL;
 	}
 
 	if (inzone != outzone && !proxy) {
@@ -512,10 +518,10 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		RT_UNLOCK(rt);
 		if (mcopy) {
 			icmp6_error(mcopy, ICMP6_DST_UNREACH,
-				    ICMP6_DST_UNREACH_BEYONDSCOPE, 0);
+			    ICMP6_DST_UNREACH_BEYONDSCOPE, 0);
 		}
 		m_freem(m);
-		return (NULL);
+		return NULL;
 	}
 
 	/*
@@ -534,7 +540,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
 		m_freem(m);
-		return (NULL);
+		return NULL;
 	}
 
 	if (m->m_pkthdr.len > rt->rt_ifp->if_mtu) {
@@ -557,20 +563,22 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			 * encapsulated packet as "rt->rt_ifp".
 			 */
 			sp2 = ipsec6_getpolicybyaddr(mcopy, IPSEC_DIR_OUTBOUND,
-				IP_FORWARDING, &ipsecerror);
+			    IP_FORWARDING, &ipsecerror);
 			if (sp2) {
 				ipsechdrsiz = ipsec6_hdrsiz(mcopy,
-					IPSEC_DIR_OUTBOUND, NULL);
-				if (ipsechdrsiz < mtu)
+				    IPSEC_DIR_OUTBOUND, NULL);
+				if (ipsechdrsiz < mtu) {
 					mtu -= ipsechdrsiz;
+				}
 				key_freesp(sp2, KEY_SADB_UNLOCKED);
 			}
 			/*
 			 * if mtu becomes less than minimum MTU,
 			 * tell minimum MTU (and I'll need to fragment it).
 			 */
-			if (mtu < IPV6_MMTU)
+			if (mtu < IPV6_MMTU) {
 				mtu = IPV6_MMTU;
+			}
 #endif
 			/* Release extra ref */
 			RT_REMREF_LOCKED(rt);
@@ -582,11 +590,12 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			RT_UNLOCK(rt);
 		}
 		m_freem(m);
-		return (NULL);
- 	}
+		return NULL;
+	}
 
-	if (rt->rt_flags & RTF_GATEWAY)
+	if (rt->rt_flags & RTF_GATEWAY) {
 		dst = (struct sockaddr_in6 *)(void *)rt->rt_gateway;
+	}
 
 	/*
 	 * If we are to forward the packet using the same interface
@@ -599,7 +608,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	 */
 	if (!proxy &&
 	    ip6_sendredirects && rt->rt_ifp == m->m_pkthdr.rcvif && !srcrt &&
-	    (rt->rt_flags & (RTF_DYNAMIC|RTF_MODIFIED)) == 0) {
+	    (rt->rt_flags & (RTF_DYNAMIC | RTF_MODIFIED)) == 0) {
 		if ((rt->rt_ifp->if_flags & IFF_POINTOPOINT) != 0) {
 			/*
 			 * If the incoming interface is equal to the outgoing
@@ -611,12 +620,12 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			 * type/code is based on suggestion by Rich Draves.
 			 * not sure if it is the best pick.
 			 */
-			RT_REMREF_LOCKED(rt);	/* Release extra ref */
+			RT_REMREF_LOCKED(rt);   /* Release extra ref */
 			RT_UNLOCK(rt);
 			icmp6_error(mcopy, ICMP6_DST_UNREACH,
-				    ICMP6_DST_UNREACH_ADDR, 0);
+			    ICMP6_DST_UNREACH_ADDR, 0);
 			m_freem(m);
-			return (NULL);
+			return NULL;
 		}
 		type = ND_REDIRECT;
 	}
@@ -641,15 +650,15 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 #if 1
 		if ((0))
 #else
-		if ((rt->rt_flags & (RTF_BLACKHOLE|RTF_REJECT)) == 0)
+		if ((rt->rt_flags & (RTF_BLACKHOLE | RTF_REJECT)) == 0)
 #endif
 		{
 			printf("ip6_forward: outgoing interface is loopback. "
-				"src %s, dst %s, nxt %d, rcvif %s, outif %s\n",
-				ip6_sprintf(&ip6->ip6_src),
-				ip6_sprintf(&ip6->ip6_dst),
-				ip6->ip6_nxt, if_name(m->m_pkthdr.rcvif),
-				if_name(rt->rt_ifp));
+			    "src %s, dst %s, nxt %d, rcvif %s, outif %s\n",
+			    ip6_sprintf(&ip6->ip6_src),
+			    ip6_sprintf(&ip6->ip6_dst),
+			    ip6->ip6_nxt, if_name(m->m_pkthdr.rcvif),
+			    if_name(rt->rt_ifp));
 		}
 
 		/* we can just use rcvif in forwarding. */
@@ -684,9 +693,10 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		VERIFY(m->m_pkthdr.pkt_flags & PKTF_PROXY_DST);
 		/* Release extra ref */
 		RT_REMREF(rt);
-		if (mcopy != NULL)
+		if (mcopy != NULL) {
 			m_freem(mcopy);
-		return (m);
+		}
+		return m;
 	}
 
 	/* Mark this packet as being forwarded from another interface */
@@ -745,9 +755,9 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 
 		ip6stat.ip6s_forward++;
 		in6_ifstat_inc(ifp, ifs6_out_forward);
-		if (type)
+		if (type) {
 			ip6stat.ip6s_redirectsent++;
-		else {
+		} else {
 			if (mcopy) {
 				goto freecopy;
 			}
@@ -759,7 +769,7 @@ senderr:
 	if (mcopy == NULL) {
 		/* Release extra ref */
 		RT_REMREF(rt);
-		return (NULL);
+		return NULL;
 	}
 	switch (error) {
 	case 0:
@@ -768,7 +778,7 @@ senderr:
 			icmp6_redirect_output(mcopy, rt);
 			/* Release extra ref */
 			RT_REMREF(rt);
-			return (NULL);
+			return NULL;
 		}
 #endif
 		goto freecopy;
@@ -781,7 +791,7 @@ senderr:
 		/* Tell source to slow down like source quench in IP? */
 		goto freecopy;
 
-	case ENETUNREACH:	/* shouldn't happen, checked above */
+	case ENETUNREACH:       /* shouldn't happen, checked above */
 	case EHOSTUNREACH:
 	case ENETDOWN:
 	case EHOSTDOWN:
@@ -793,11 +803,11 @@ senderr:
 	icmp6_error(mcopy, type, code, 0);
 	/* Release extra ref */
 	RT_REMREF(rt);
-	return (NULL);
+	return NULL;
 
- freecopy:
+freecopy:
 	m_freem(mcopy);
 	/* Release extra ref */
 	RT_REMREF(rt);
-	return (NULL);
+	return NULL;
 }

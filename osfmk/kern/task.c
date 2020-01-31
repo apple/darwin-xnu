@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -114,7 +114,7 @@
 #include <kern/kalloc.h>
 #include <kern/kern_cdata.h>
 #include <kern/processor.h>
-#include <kern/sched_prim.h>	/* for thread_wakeup */
+#include <kern/sched_prim.h>    /* for thread_wakeup */
 #include <kern/ipc_tt.h>
 #include <kern/host.h>
 #include <kern/clock.h>
@@ -140,7 +140,7 @@
 
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
-#include <vm/vm_kern.h>		/* for kernel_map, ipc_kernel_map */
+#include <vm/vm_kern.h>         /* for kernel_map, ipc_kernel_map */
 #include <vm/vm_pageout.h>
 #include <vm/vm_protos.h>
 #include <vm/vm_purgeable_internal.h>
@@ -167,7 +167,7 @@
 #include <atm/atm_internal.h>
 #endif
 
-#include <kern/sfi.h>		/* picks up ledger.h */
+#include <kern/sfi.h>           /* picks up ledger.h */
 
 #if CONFIG_MACF
 #include <security/mac_mach_internal.h>
@@ -177,8 +177,8 @@
 extern int kpc_force_all_ctrs(task_t, int);
 #endif
 
-task_t			kernel_task;
-zone_t			task_zone;
+task_t                  kernel_task;
+zone_t                  task_zone;
 lck_attr_t      task_lck_attr;
 lck_grp_t       task_lck_grp;
 lck_grp_attr_t  task_lck_grp_attr;
@@ -194,8 +194,8 @@ zinfo_usage_store_t tasks_tkm_private;
 zinfo_usage_store_t tasks_tkm_shared;
 
 /* A container to accumulate statistics for expired tasks */
-expired_task_statistics_t		dead_task_statistics;
-lck_spin_t		dead_task_statistics_lock;
+expired_task_statistics_t               dead_task_statistics;
+lck_spin_t              dead_task_statistics_lock;
 
 ledger_template_t task_ledger_template = NULL;
 
@@ -224,14 +224,17 @@ SECURITY_READ_ONLY_LATE(struct _task_ledger_indices) task_ledgers __attribute__(
  .interrupt_wakeups = -1,
 #if !CONFIG_EMBEDDED
  .sfi_wait_times = { 0 /* initialized at runtime */},
-#endif /* !CONFIG_EMBEDDED */	 
+#endif /* !CONFIG_EMBEDDED */
  .cpu_time_billed_to_me = -1,
  .cpu_time_billed_to_others = -1,
  .physical_writes = -1,
  .logical_writes = -1,
  .energy_billed_to_me = -1,
- .energy_billed_to_others = -1
-};
+ .energy_billed_to_others = -1,
+ .pages_grabbed = -1,
+ .pages_grabbed_kern = -1,
+ .pages_grabbed_iopl = -1,
+ .pages_grabbed_upl = -1};
 
 /* System sleep state */
 boolean_t tasks_suspend_state;
@@ -256,10 +259,10 @@ extern void bsd_copythreadname(void *dst_uth, void *src_uth);
 extern kern_return_t thread_resume(thread_t thread);
 
 // Warn tasks when they hit 80% of their memory limit.
-#define	PHYS_FOOTPRINT_WARNING_LEVEL 80
+#define PHYS_FOOTPRINT_WARNING_LEVEL 80
 
-#define TASK_WAKEUPS_MONITOR_DEFAULT_LIMIT		150 /* wakeups per second */
-#define TASK_WAKEUPS_MONITOR_DEFAULT_INTERVAL	300 /* in seconds. */
+#define TASK_WAKEUPS_MONITOR_DEFAULT_LIMIT              150 /* wakeups per second */
+#define TASK_WAKEUPS_MONITOR_DEFAULT_INTERVAL   300 /* in seconds. */
 
 /*
  * Level (in terms of percentage of the limit) at which the wakeups monitor triggers telemetry.
@@ -267,7 +270,7 @@ extern kern_return_t thread_resume(thread_t thread);
  * (ie when the task's wakeups rate exceeds 70% of the limit, start taking user
  *  stacktraces, aka micro-stackshots)
  */
-#define	TASK_WAKEUPS_MONITOR_DEFAULT_USTACKSHOTS_TRIGGER	70
+#define TASK_WAKEUPS_MONITOR_DEFAULT_USTACKSHOTS_TRIGGER        70
 
 int task_wakeups_monitor_interval; /* In seconds. Time period over which wakeups rate is observed */
 int task_wakeups_monitor_rate;     /* In hz. Maximum allowable wakeups per task before EXC_RESOURCE is sent */
@@ -281,15 +284,15 @@ int max_task_footprint_warning_level = 0;  /* Per-task limit warning percentage 
 int max_task_footprint_mb = 0;  /* Per-task limit on physical memory consumption in megabytes */
 
 /* I/O Monitor Limits */
-#define IOMON_DEFAULT_LIMIT 			(20480ull) 	/* MB of logical/physical I/O */
-#define IOMON_DEFAULT_INTERVAL  		(86400ull) 	/* in seconds */
+#define IOMON_DEFAULT_LIMIT                     (20480ull)      /* MB of logical/physical I/O */
+#define IOMON_DEFAULT_INTERVAL                  (86400ull)      /* in seconds */
 
-uint64_t task_iomon_limit_mb; 		/* Per-task I/O monitor limit in MBs */
-uint64_t task_iomon_interval_secs;	/* Per-task I/O monitor interval in secs */
+uint64_t task_iomon_limit_mb;           /* Per-task I/O monitor limit in MBs */
+uint64_t task_iomon_interval_secs;      /* Per-task I/O monitor interval in secs */
 
-#define IO_TELEMETRY_DEFAULT_LIMIT 		(10ll * 1024ll * 1024ll)
-int64_t io_telemetry_limit;			/* Threshold to take a microstackshot (0 indicated I/O telemetry is turned off) */
-int64_t global_logical_writes_count = 0; 	/* Global count for logical writes */
+#define IO_TELEMETRY_DEFAULT_LIMIT              (10ll * 1024ll * 1024ll)
+int64_t io_telemetry_limit;                     /* Threshold to take a microstackshot (0 indicated I/O telemetry is turned off) */
+int64_t global_logical_writes_count = 0;        /* Global count for logical writes */
 static boolean_t global_update_logical_writes(int64_t);
 
 #define TASK_MAX_THREAD_LIMIT 256
@@ -306,20 +309,20 @@ int hwm_user_cores = 0; /* high watermark violations generate user core files */
 #endif
 
 #ifdef MACH_BSD
-extern void	proc_getexecutableuuid(void *, unsigned char *, unsigned long);
-extern int	proc_pid(struct proc *p);
-extern int	proc_selfpid(void);
+extern void     proc_getexecutableuuid(void *, unsigned char *, unsigned long);
+extern int      proc_pid(struct proc *p);
+extern int      proc_selfpid(void);
 extern struct proc *current_proc(void);
-extern char	*proc_name_address(struct proc *p);
+extern char     *proc_name_address(struct proc *p);
 extern uint64_t get_dispatchqueue_offset_from_proc(void *);
 extern int kevent_proc_copy_uptrs(void *proc, uint64_t *buf, int bufsize);
 extern void workq_proc_suspended(struct proc *p);
 extern void workq_proc_resumed(struct proc *p);
 
 #if CONFIG_MEMORYSTATUS
-extern void	proc_memstat_terminated(struct proc* p, boolean_t set);
-extern void	memorystatus_on_ledger_footprint_exceeded(int warning, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
-extern void	memorystatus_log_exception(const int max_footprint_mb, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
+extern void     proc_memstat_terminated(struct proc* p, boolean_t set);
+extern void     memorystatus_on_ledger_footprint_exceeded(int warning, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
+extern void     memorystatus_log_exception(const int max_footprint_mb, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
 extern boolean_t memorystatus_allowed_vm_map_fork(task_t task);
 
 #if DEVELOPMENT || DEBUG
@@ -336,7 +339,7 @@ int exc_resource_threads_enabled;
 
 #if (DEVELOPMENT || DEBUG) && TASK_EXC_GUARD_DELIVER_CORPSE
 uint32_t task_exc_guard_default = TASK_EXC_GUARD_MP_DELIVER | TASK_EXC_GUARD_MP_CORPSE |
-                                  TASK_EXC_GUARD_VM_DELIVER | TASK_EXC_GUARD_VM_CORPSE;
+    TASK_EXC_GUARD_VM_DELIVER | TASK_EXC_GUARD_VM_CORPSE;
 #else
 uint32_t task_exc_guard_default = 0;
 #endif
@@ -352,9 +355,9 @@ static void task_synchronizer_destroy_all(task_t task);
 
 void
 task_set_64bit(
-		task_t task,
-		boolean_t is_64bit,
-		boolean_t is_64bit_data)
+	task_t task,
+	boolean_t is_64bit,
+	boolean_t is_64bit_data)
 {
 #if defined(__i386__) || defined(__x86_64__) || defined(__arm64__)
 	thread_t thread;
@@ -379,13 +382,15 @@ task_set_64bit(
 	 * Switching to/from 64-bit register state.
 	 */
 	if (is_64bit_data) {
-		if (task_has_64Bit_data(task))
+		if (task_has_64Bit_data(task)) {
 			goto out;
+		}
 
 		task_set_64Bit_data(task);
 	} else {
-		if ( !task_has_64Bit_data(task))
+		if (!task_has_64Bit_data(task)) {
 			goto out;
+		}
 
 		task_clear_64Bit_data(task);
 	}
@@ -442,8 +447,8 @@ task_get_64bit_data(task_t task)
 
 void
 task_set_platform_binary(
-		task_t task,
-		boolean_t is_platform)
+	task_t task,
+	boolean_t is_platform)
 {
 	task_lock(task);
 	if (is_platform) {
@@ -460,17 +465,18 @@ task_set_platform_binary(
  */
 bool
 task_set_ca_client_wi(
-		task_t task,
-		boolean_t set_or_clear)
+	task_t task,
+	boolean_t set_or_clear)
 {
 	bool ret = true;
 	task_lock(task);
 	if (set_or_clear) {
 		/* Tasks can have only one CA_CLIENT work interval */
-		if (task->t_flags & TF_CA_CLIENT_WI)
+		if (task->t_flags & TF_CA_CLIENT_WI) {
 			ret = false;
-		else
+		} else {
 			task->t_flags |= TF_CA_CLIENT_WI;
+		}
 	} else {
 		task->t_flags &= ~TF_CA_CLIENT_WI;
 	}
@@ -480,33 +486,32 @@ task_set_ca_client_wi(
 
 void
 task_set_dyld_info(
-    task_t task, 
-    mach_vm_address_t addr, 
-    mach_vm_size_t size)
+	task_t task,
+	mach_vm_address_t addr,
+	mach_vm_size_t size)
 {
 	task_lock(task);
 	task->all_image_info_addr = addr;
-	task->all_image_info_size = size;    
-    task_unlock(task);
+	task->all_image_info_size = size;
+	task_unlock(task);
 }
 
 void
-task_atm_reset(__unused task_t task) {
-
+task_atm_reset(__unused task_t task)
+{
 #if CONFIG_ATM
 	if (task->atm_context != NULL) {
-		 atm_task_descriptor_destroy(task->atm_context);
-		 task->atm_context = NULL;
+		atm_task_descriptor_destroy(task->atm_context);
+		task->atm_context = NULL;
 	}
 #endif
-
 }
 
 void
-task_bank_reset(__unused task_t task) {
-
+task_bank_reset(__unused task_t task)
+{
 	if (task->bank_context != NULL) {
-		 bank_task_destroy(task);
+		bank_task_destroy(task);
 	}
 }
 
@@ -516,8 +521,8 @@ task_bank_reset(__unused task_t task) {
  *	 proc associated with the task.
  */
 void
-task_bank_init(__unused task_t task) {
-
+task_bank_init(__unused task_t task)
+{
 	if (task->bank_context != NULL) {
 		panic("Task bank init called with non null bank context for task: %p and bank_context: %p", task, task->bank_context);
 	}
@@ -643,11 +648,11 @@ task_is_halting(task_t task)
 #include <kern/btlog.h>
 
 static btlog_t *task_ref_btlog;
-#define TASK_REF_OP_INCR	0x1
-#define TASK_REF_OP_DECR	0x2
+#define TASK_REF_OP_INCR        0x1
+#define TASK_REF_OP_DECR        0x2
 
-#define TASK_REF_NUM_RECORDS	100000
-#define TASK_REF_BTDEPTH	7
+#define TASK_REF_NUM_RECORDS    100000
+#define TASK_REF_BTDEPTH        7
 
 void
 task_reference_internal(task_t task)
@@ -659,7 +664,7 @@ task_reference_internal(task_t task)
 
 	numsaved = OSBacktrace(bt, TASK_REF_BTDEPTH);
 	btlog_add_entry(task_ref_btlog, task, TASK_REF_OP_INCR,
-					bt, numsaved);
+	    bt, numsaved);
 }
 
 os_ref_count_t
@@ -670,7 +675,7 @@ task_deallocate_internal(task_t task)
 
 	numsaved = OSBacktrace(bt, TASK_REF_BTDEPTH);
 	btlog_add_entry(task_ref_btlog, task, TASK_REF_OP_DECR,
-					bt, numsaved);
+	    bt, numsaved);
 
 	return os_ref_release(&task->ref_count);
 }
@@ -680,7 +685,6 @@ task_deallocate_internal(task_t task)
 void
 task_init(void)
 {
-
 	lck_grp_attr_setdefault(&task_lck_grp_attr);
 	lck_grp_init(&task_lck_grp, "task", &task_lck_grp_attr);
 	lck_attr_setdefault(&task_lck_attr);
@@ -688,10 +692,10 @@ task_init(void)
 	lck_mtx_init(&tasks_corpse_lock, &task_lck_grp, &task_lck_attr);
 
 	task_zone = zinit(
-			sizeof(struct task),
-			task_max * sizeof(struct task),
-			TASK_CHUNK * sizeof(struct task),
-			"tasks");
+		sizeof(struct task),
+		task_max * sizeof(struct task),
+		TASK_CHUNK * sizeof(struct task),
+		"tasks");
 
 	zone_change(task_zone, Z_NOENCRYPT, TRUE);
 
@@ -706,12 +710,12 @@ task_init(void)
 	 * Setting the boot-arg to 0 disables task limits.
 	 */
 	if (!PE_parse_boot_argn("max_task_pmem", &max_task_footprint_mb,
-			sizeof (max_task_footprint_mb))) {
+	    sizeof(max_task_footprint_mb))) {
 		/*
 		 * No limit was found in boot-args, so go look in the device tree.
 		 */
 		if (!PE_get_default("kern.max_task_pmem", &max_task_footprint_mb,
-				sizeof(max_task_footprint_mb))) {
+		    sizeof(max_task_footprint_mb))) {
 			/*
 			 * No limit was found in device tree.
 			 */
@@ -722,12 +726,12 @@ task_init(void)
 	if (max_task_footprint_mb != 0) {
 #if CONFIG_MEMORYSTATUS
 		if (max_task_footprint_mb < 50) {
-				printf("Warning: max_task_pmem %d below minimum.\n",
-				max_task_footprint_mb);
-				max_task_footprint_mb = 50;
+			printf("Warning: max_task_pmem %d below minimum.\n",
+			    max_task_footprint_mb);
+			max_task_footprint_mb = 50;
 		}
 		printf("Limiting task physical memory footprint to %d MB\n",
-			max_task_footprint_mb);
+		    max_task_footprint_mb);
 
 		max_task_footprint = (ledger_amount_t)max_task_footprint_mb * 1024 * 1024; // Convert MB to bytes
 
@@ -771,8 +775,8 @@ task_init(void)
 
 #if DEVELOPMENT || DEBUG
 	if (!PE_parse_boot_argn("exc_resource_threads",
-		&exc_resource_threads_enabled,
-		sizeof(exc_resource_threads_enabled))) {
+	    &exc_resource_threads_enabled,
+	    sizeof(exc_resource_threads_enabled))) {
 		exc_resource_threads_enabled = 1;
 	}
 	PE_parse_boot_argn("task_exc_guard_default",
@@ -782,40 +786,40 @@ task_init(void)
 
 #if CONFIG_COREDUMP
 	if (!PE_parse_boot_argn("hwm_user_cores", &hwm_user_cores,
-			sizeof (hwm_user_cores))) {
+	    sizeof(hwm_user_cores))) {
 		hwm_user_cores = 0;
 	}
 #endif
 
 	proc_init_cpumon_params();
 
-	if (!PE_parse_boot_argn("task_wakeups_monitor_rate", &task_wakeups_monitor_rate, sizeof (task_wakeups_monitor_rate))) {
+	if (!PE_parse_boot_argn("task_wakeups_monitor_rate", &task_wakeups_monitor_rate, sizeof(task_wakeups_monitor_rate))) {
 		task_wakeups_monitor_rate = TASK_WAKEUPS_MONITOR_DEFAULT_LIMIT;
 	}
 
-	if (!PE_parse_boot_argn("task_wakeups_monitor_interval", &task_wakeups_monitor_interval, sizeof (task_wakeups_monitor_interval))) {
+	if (!PE_parse_boot_argn("task_wakeups_monitor_interval", &task_wakeups_monitor_interval, sizeof(task_wakeups_monitor_interval))) {
 		task_wakeups_monitor_interval = TASK_WAKEUPS_MONITOR_DEFAULT_INTERVAL;
 	}
 
 	if (!PE_parse_boot_argn("task_wakeups_monitor_ustackshots_trigger_pct", &task_wakeups_monitor_ustackshots_trigger_pct,
-		sizeof (task_wakeups_monitor_ustackshots_trigger_pct))) {
+	    sizeof(task_wakeups_monitor_ustackshots_trigger_pct))) {
 		task_wakeups_monitor_ustackshots_trigger_pct = TASK_WAKEUPS_MONITOR_DEFAULT_USTACKSHOTS_TRIGGER;
 	}
 
 	if (!PE_parse_boot_argn("disable_exc_resource", &disable_exc_resource,
-		sizeof (disable_exc_resource))) {
+	    sizeof(disable_exc_resource))) {
 		disable_exc_resource = 0;
 	}
 
-	if (!PE_parse_boot_argn("task_iomon_limit_mb", &task_iomon_limit_mb, sizeof (task_iomon_limit_mb))) {
+	if (!PE_parse_boot_argn("task_iomon_limit_mb", &task_iomon_limit_mb, sizeof(task_iomon_limit_mb))) {
 		task_iomon_limit_mb = IOMON_DEFAULT_LIMIT;
 	}
 
-	if (!PE_parse_boot_argn("task_iomon_interval_secs", &task_iomon_interval_secs, sizeof (task_iomon_interval_secs))) {
+	if (!PE_parse_boot_argn("task_iomon_interval_secs", &task_iomon_interval_secs, sizeof(task_iomon_interval_secs))) {
 		task_iomon_interval_secs = IOMON_DEFAULT_INTERVAL;
 	}
 
-	if (!PE_parse_boot_argn("io_telemetry_limit", &io_telemetry_limit, sizeof (io_telemetry_limit))) {
+	if (!PE_parse_boot_argn("io_telemetry_limit", &io_telemetry_limit, sizeof(io_telemetry_limit))) {
 		io_telemetry_limit = IO_TELEMETRY_DEFAULT_LIMIT;
 	}
 
@@ -843,7 +847,7 @@ task_init(void)
 #else
 	if (task_create_internal(TASK_NULL, NULL, FALSE, FALSE, FALSE, TF_NONE, TPF_NONE, &kernel_task) != KERN_SUCCESS)
 #endif
-		panic("task_init\n");
+	{ panic("task_init\n");}
 
 
 	vm_map_deallocate(kernel_task->map);
@@ -857,54 +861,57 @@ task_init(void)
  */
 kern_return_t
 kernel_task_create(
-	__unused task_t		parent_task,
-	__unused vm_offset_t		map_base,
-	__unused vm_size_t		map_size,
-	__unused task_t		*child_task)
+	__unused task_t         parent_task,
+	__unused vm_offset_t            map_base,
+	__unused vm_size_t              map_size,
+	__unused task_t         *child_task)
 {
-	return (KERN_INVALID_ARGUMENT);
+	return KERN_INVALID_ARGUMENT;
 }
 
 kern_return_t
 task_create(
-	task_t				parent_task,
-	__unused ledger_port_array_t	ledger_ports,
-	__unused mach_msg_type_number_t	num_ledger_ports,
-	__unused boolean_t		inherit_memory,
-	__unused task_t			*child_task)	/* OUT */
+	task_t                          parent_task,
+	__unused ledger_port_array_t    ledger_ports,
+	__unused mach_msg_type_number_t num_ledger_ports,
+	__unused boolean_t              inherit_memory,
+	__unused task_t                 *child_task)    /* OUT */
 {
-	if (parent_task == TASK_NULL)
-		return(KERN_INVALID_ARGUMENT);
+	if (parent_task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	/*
 	 * No longer supported: too many calls assume that a task has a valid
 	 * process attached.
 	 */
-	return(KERN_FAILURE);
+	return KERN_FAILURE;
 }
 
 kern_return_t
 host_security_create_task_token(
-	host_security_t			host_security,
-	task_t				parent_task,
-	__unused security_token_t	sec_token,
-	__unused audit_token_t		audit_token,
-	__unused host_priv_t		host_priv,
-	__unused ledger_port_array_t	ledger_ports,
-	__unused mach_msg_type_number_t	num_ledger_ports,
-	__unused boolean_t		inherit_memory,
-	__unused task_t			*child_task)	/* OUT */
+	host_security_t                 host_security,
+	task_t                          parent_task,
+	__unused security_token_t       sec_token,
+	__unused audit_token_t          audit_token,
+	__unused host_priv_t            host_priv,
+	__unused ledger_port_array_t    ledger_ports,
+	__unused mach_msg_type_number_t num_ledger_ports,
+	__unused boolean_t              inherit_memory,
+	__unused task_t                 *child_task)    /* OUT */
 {
-	if (parent_task == TASK_NULL)
-		return(KERN_INVALID_ARGUMENT);
+	if (parent_task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
-	if (host_security == HOST_NULL)
-		return(KERN_INVALID_SECURITY);
+	if (host_security == HOST_NULL) {
+		return KERN_INVALID_SECURITY;
+	}
 
 	/*
 	 * No longer supported.
 	 */
-	return(KERN_FAILURE);
+	return KERN_FAILURE;
 }
 
 /*
@@ -931,32 +938,37 @@ host_security_create_task_token(
  *
  * iokit_mapped
  *   IOKit mappings: The total size of all IOKit mappings in this task, regardless of
-     clean/dirty or internal/external state].
+ *    clean/dirty or internal/external state].
  *
  * alternate_accounting
  *   The number of internal dirty pages which are part of IOKit mappings. By definition, these pages
  *   are counted in both internal *and* iokit_mapped, so we must subtract them from the total to avoid
  *   double counting.
+ *
+ * pages_grabbed
+ *   pages_grabbed counts all page grabs in a task.  It is also broken out into three subtypes
+ *   which track UPL, IOPL and Kernel page grabs.
  */
 void
 init_task_ledgers(void)
 {
 	ledger_template_t t;
-	
+
 	assert(task_ledger_template == NULL);
 	assert(kernel_task == TASK_NULL);
 
 #if MACH_ASSERT
 	PE_parse_boot_argn("pmap_ledgers_panic",
-			   &pmap_ledgers_panic,
-			  sizeof (pmap_ledgers_panic));
+	    &pmap_ledgers_panic,
+	    sizeof(pmap_ledgers_panic));
 	PE_parse_boot_argn("pmap_ledgers_panic_leeway",
-			   &pmap_ledgers_panic_leeway,
-			  sizeof (pmap_ledgers_panic_leeway));
+	    &pmap_ledgers_panic_leeway,
+	    sizeof(pmap_ledgers_panic_leeway));
 #endif /* MACH_ASSERT */
 
-	if ((t = ledger_template_create("Per-task ledger")) == NULL)
+	if ((t = ledger_template_create("Per-task ledger")) == NULL) {
 		panic("couldn't create task ledger template");
+	}
 
 	task_ledgers.cpu_time = ledger_entry_add(t, "cpu_time", "sched", "ns");
 	task_ledgers.tkm_private = ledger_entry_add(t, "tkm_private",
@@ -970,21 +982,25 @@ init_task_ledgers(void)
 	task_ledgers.internal = ledger_entry_add(t, "internal", "physmem",
 	    "bytes");
 	task_ledgers.iokit_mapped = ledger_entry_add(t, "iokit_mapped", "mappings",
- 	    "bytes");
+	    "bytes");
 	task_ledgers.alternate_accounting = ledger_entry_add(t, "alternate_accounting", "physmem",
- 	    "bytes");
+	    "bytes");
 	task_ledgers.alternate_accounting_compressed = ledger_entry_add(t, "alternate_accounting_compressed", "physmem",
- 	    "bytes");
+	    "bytes");
 	task_ledgers.page_table = ledger_entry_add(t, "page_table", "physmem",
 	    "bytes");
 	task_ledgers.phys_footprint = ledger_entry_add(t, "phys_footprint", "physmem",
- 	    "bytes");
+	    "bytes");
 	task_ledgers.internal_compressed = ledger_entry_add(t, "internal_compressed", "physmem",
- 	    "bytes");
+	    "bytes");
 	task_ledgers.purgeable_volatile = ledger_entry_add(t, "purgeable_volatile", "physmem", "bytes");
 	task_ledgers.purgeable_nonvolatile = ledger_entry_add(t, "purgeable_nonvolatile", "physmem", "bytes");
 	task_ledgers.purgeable_volatile_compressed = ledger_entry_add(t, "purgeable_volatile_compress", "physmem", "bytes");
 	task_ledgers.purgeable_nonvolatile_compressed = ledger_entry_add(t, "purgeable_nonvolatile_compress", "physmem", "bytes");
+	task_ledgers.pages_grabbed = ledger_entry_add(t, "pages_grabbed", "physmem", "count");
+	task_ledgers.pages_grabbed_kern = ledger_entry_add(t, "pages_grabbed_kern", "physmem", "count");
+	task_ledgers.pages_grabbed_iopl = ledger_entry_add(t, "pages_grabbed_iopl", "physmem", "count");
+	task_ledgers.pages_grabbed_upl = ledger_entry_add(t, "pages_grabbed_upl", "physmem", "count");
 
 	task_ledgers.network_volatile = ledger_entry_add(t, "network_volatile", "physmem", "bytes");
 	task_ledgers.network_nonvolatile = ledger_entry_add(t, "network_nonvolatile", "physmem", "bytes");
@@ -992,10 +1008,10 @@ init_task_ledgers(void)
 	task_ledgers.network_nonvolatile_compressed = ledger_entry_add(t, "network_nonvolatile_compressed", "physmem", "bytes");
 
 	task_ledgers.platform_idle_wakeups = ledger_entry_add(t, "platform_idle_wakeups", "power",
- 	    "count");
+	    "count");
 	task_ledgers.interrupt_wakeups = ledger_entry_add(t, "interrupt_wakeups", "power",
- 	    "count");
-	
+	    "count");
+
 #if CONFIG_SCHED_SFI
 	sfi_class_id_t class_id, ledger_alias;
 	for (class_id = SFI_CLASS_UNSPECIFIED; class_id < MAX_SFI_CLASS_ID; class_id++) {
@@ -1022,7 +1038,7 @@ init_task_ledgers(void)
 		}
 	}
 
-	assert(task_ledgers.sfi_wait_times[MAX_SFI_CLASS_ID -1] != -1);
+	assert(task_ledgers.sfi_wait_times[MAX_SFI_CLASS_ID - 1] != -1);
 #endif /* CONFIG_SCHED_SFI */
 
 	task_ledgers.cpu_time_billed_to_me = ledger_entry_add(t, "cpu_time_billed_to_me", "sched", "ns");
@@ -1074,6 +1090,10 @@ init_task_ledgers(void)
 	ledger_track_credit_only(t, task_ledgers.purgeable_nonvolatile);
 	ledger_track_credit_only(t, task_ledgers.purgeable_volatile_compressed);
 	ledger_track_credit_only(t, task_ledgers.purgeable_nonvolatile_compressed);
+	ledger_track_credit_only(t, task_ledgers.pages_grabbed);
+	ledger_track_credit_only(t, task_ledgers.pages_grabbed_kern);
+	ledger_track_credit_only(t, task_ledgers.pages_grabbed_iopl);
+	ledger_track_credit_only(t, task_ledgers.pages_grabbed_upl);
 
 	ledger_track_credit_only(t, task_ledgers.network_volatile);
 	ledger_track_credit_only(t, task_ledgers.network_nonvolatile);
@@ -1107,7 +1127,7 @@ init_task_ledgers(void)
 #endif /* CONFIG_MEMORYSTATUS */
 
 	ledger_set_callback(t, task_ledgers.interrupt_wakeups,
-		task_wakeups_rate_exceeded, NULL, NULL);
+	    task_wakeups_rate_exceeded, NULL, NULL);
 	ledger_set_callback(t, task_ledgers.physical_writes, task_io_rate_exceeded, (void *)FLAVOR_IO_PHYSICAL_WRITES, NULL);
 	ledger_set_callback(t, task_ledgers.logical_writes, task_io_rate_exceeded, (void *)FLAVOR_IO_LOGICAL_WRITES, NULL);
 
@@ -1119,23 +1139,24 @@ os_refgrp_decl(static, task_refgrp, "task", NULL);
 
 kern_return_t
 task_create_internal(
-	task_t		parent_task,
-	coalition_t	*parent_coalitions __unused,
-	boolean_t	inherit_memory,
-	__unused boolean_t	is_64bit,
+	task_t          parent_task,
+	coalition_t     *parent_coalitions __unused,
+	boolean_t       inherit_memory,
+	__unused boolean_t      is_64bit,
 	boolean_t is_64bit_data,
-	uint32_t	t_flags,
-	uint32_t	t_procflags,
-	task_t		*child_task)		/* OUT */
+	uint32_t        t_flags,
+	uint32_t        t_procflags,
+	task_t          *child_task)            /* OUT */
 {
-	task_t			new_task;
-	vm_shared_region_t	shared_region;
-	ledger_t		ledger = NULL;
+	task_t                  new_task;
+	vm_shared_region_t      shared_region;
+	ledger_t                ledger = NULL;
 
 	new_task = (task_t) zalloc(task_zone);
 
-	if (new_task == TASK_NULL)
-		return(KERN_RESOURCE_SHORTAGE);
+	if (new_task == TASK_NULL) {
+		return KERN_RESOURCE_SHORTAGE;
+	}
 
 	/* one ref for just being alive; one for our caller */
 	os_ref_init_count(&new_task->ref_count, &task_refgrp, 2);
@@ -1143,9 +1164,9 @@ task_create_internal(
 	/* allocate with active entries */
 	assert(task_ledger_template != NULL);
 	if ((ledger = ledger_instantiate(task_ledger_template,
-			LEDGER_CREATE_ACTIVE_ENTRIES)) == NULL) {
+	    LEDGER_CREATE_ACTIVE_ENTRIES)) == NULL) {
 		zfree(task_zone, new_task);
-		return(KERN_RESOURCE_SHORTAGE);
+		return KERN_RESOURCE_SHORTAGE;
 	}
 
 
@@ -1156,16 +1177,18 @@ task_create_internal(
 #endif
 
 	/* if inherit_memory is true, parent_task MUST not be NULL */
-	if (!(t_flags & TF_CORPSE_FORK) && inherit_memory)
+	if (!(t_flags & TF_CORPSE_FORK) && inherit_memory) {
 		new_task->map = vm_map_fork(ledger, parent_task->map, 0);
-	else
+	} else {
 		new_task->map = vm_map_create(pmap_create(ledger, 0, is_64bit),
-				(vm_map_offset_t)(VM_MIN_ADDRESS),
-				(vm_map_offset_t)(VM_MAX_ADDRESS), TRUE);
+		    (vm_map_offset_t)(VM_MIN_ADDRESS),
+		    (vm_map_offset_t)(VM_MAX_ADDRESS), TRUE);
+	}
 
 	/* Inherit memlock limit from parent */
-	if (parent_task)
+	if (parent_task) {
 		vm_map_set_user_wire_limit(new_task->map, (vm_size_t)parent_task->map->user_wire_limit);
+	}
 
 	lck_mtx_init(&new_task->lock, &task_lck_grp, &task_lck_attr);
 	queue_init(&new_task->threads);
@@ -1184,7 +1207,7 @@ task_create_internal(
 	new_task->exec_token = 0;
 
 	new_task->task_exc_guard = task_exc_guard_default;
-	
+
 #if CONFIG_ATM
 	new_task->atm_context = NULL;
 #endif
@@ -1275,21 +1298,28 @@ task_create_internal(
 		shared_region = vm_shared_region_get(parent_task);
 		vm_shared_region_set(new_task, shared_region);
 
-		if(task_has_64Bit_addr(parent_task)) {
+		if (task_has_64Bit_addr(parent_task)) {
 			task_set_64Bit_addr(new_task);
 		}
 
-		if(task_has_64Bit_data(parent_task)) {
+		if (task_has_64Bit_data(parent_task)) {
 			task_set_64Bit_data(new_task);
 		}
 
 		new_task->all_image_info_addr = parent_task->all_image_info_addr;
 		new_task->all_image_info_size = parent_task->all_image_info_size;
 
-		if (inherit_memory && parent_task->affinity_space)
+		if (inherit_memory && parent_task->affinity_space) {
 			task_affinity_create(parent_task, new_task);
+		}
 
 		new_task->pset_hint = parent_task->pset_hint = task_choose_pset(parent_task);
+
+#if DEBUG || DEVELOPMENT
+		if (parent_task->t_flags & TF_NO_SMT) {
+			new_task->t_flags |= TF_NO_SMT;
+		}
+#endif
 
 		new_task->priority = BASEPRI_DEFAULT;
 		new_task->max_priority = MAXPRI_USER;
@@ -1299,12 +1329,12 @@ task_create_internal(
 		new_task->sec_token = KERNEL_SECURITY_TOKEN;
 		new_task->audit_token = KERNEL_AUDIT_TOKEN;
 #ifdef __LP64__
-		if(is_64bit) {
+		if (is_64bit) {
 			task_set_64Bit_addr(new_task);
 		}
 #endif
 
-		if(is_64bit_data) {
+		if (is_64bit_data) {
 			task_set_64Bit_data(new_task);
 		}
 
@@ -1323,8 +1353,9 @@ task_create_internal(
 	}
 
 	bzero(new_task->coalition, sizeof(new_task->coalition));
-	for (int i = 0; i < COALITION_NUM_TYPES; i++)
+	for (int i = 0; i < COALITION_NUM_TYPES; i++) {
 		queue_chain_init(new_task->task_coalition[i]);
+	}
 
 	/* Allocate I/O Statistics */
 	new_task->task_io_stats = (io_stat_info_t)kalloc(sizeof(struct io_stat_info));
@@ -1444,20 +1475,20 @@ task_create_internal(
 	 */
 	new_task->t_flags &= ~(TF_DARKWAKE_MODE);
 
-        queue_init(&new_task->io_user_clients);
+	queue_init(&new_task->io_user_clients);
 
 	ipc_task_enable(new_task);
 
 	lck_mtx_lock(&tasks_threads_lock);
 	queue_enter(&tasks, new_task, task_t, tasks);
 	tasks_count++;
-        if (tasks_suspend_state) {
-            task_suspend_internal(new_task);
-        }
+	if (tasks_suspend_state) {
+		task_suspend_internal(new_task);
+	}
 	lck_mtx_unlock(&tasks_threads_lock);
 
 	*child_task = new_task;
-	return(KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1529,13 +1560,14 @@ int task_dropped_imp_count = 0;
  */
 void
 task_deallocate(
-	task_t		task)
+	task_t          task)
 {
 	ledger_amount_t credit, debit, interrupt_wakeups, platform_idle_wakeups;
 	os_ref_count_t refs;
 
-	if (task == TASK_NULL)
-	    return;
+	if (task == TASK_NULL) {
+		return;
+	}
 
 	refs = task_deallocate_internal(task);
 
@@ -1548,8 +1580,9 @@ task_deallocate(
 		 * naturally (it may happen on a recursive task_deallocate()
 		 * from the ipc_importance_disconnect_task() call).
 		 */
-		if (IIT_NULL != task->task_imp_base)
+		if (IIT_NULL != task->task_imp_base) {
 			ipc_importance_disconnect_task(task);
+		}
 		return;
 	}
 #endif /* IMPORTANCE_INHERITANCE */
@@ -1573,8 +1606,9 @@ task_deallocate(
 	 */
 	task_bank_reset(task);
 
-	if (task->task_io_stats)
+	if (task->task_io_stats) {
 		kfree(task->task_io_stats, sizeof(struct io_stat_info));
+	}
 
 	/*
 	 *	Give the machine dependent code a chance
@@ -1588,8 +1622,9 @@ task_deallocate(
 	/* let iokit know */
 	iokit_task_terminate(task);
 
-	if (task->affinity_space)
+	if (task->affinity_space) {
 		task_affinity_deallocate(task);
+	}
 
 #if MACH_ASSERT
 	if (task->ledger != NULL &&
@@ -1605,19 +1640,19 @@ task_deallocate(
 	if (task->task_volatile_objects != 0 ||
 	    task->task_nonvolatile_objects != 0) {
 		panic("task_deallocate(%p): "
-		      "volatile_objects=%d nonvolatile_objects=%d\n",
-		      task,
-		      task->task_volatile_objects,
-		      task->task_nonvolatile_objects);
+		    "volatile_objects=%d nonvolatile_objects=%d\n",
+		    task,
+		    task->task_volatile_objects,
+		    task->task_nonvolatile_objects);
 	}
 
 	vm_map_deallocate(task->map);
 	is_release(task->itk_space);
 
 	ledger_get_entries(task->ledger, task_ledgers.interrupt_wakeups,
-	                   &interrupt_wakeups, &debit);
+	    &interrupt_wakeups, &debit);
 	ledger_get_entries(task->ledger, task_ledgers.platform_idle_wakeups,
-	                   &platform_idle_wakeups, &debit);
+	    &platform_idle_wakeups, &debit);
 
 #if defined(CONFIG_SCHED_MULTIQ)
 	sched_group_destroy(task->sched_group);
@@ -1694,9 +1729,9 @@ task_deallocate(
  */
 void
 task_name_deallocate(
-	task_name_t		task_name)
+	task_name_t             task_name)
 {
-	return(task_deallocate((task_t)task_name));
+	return task_deallocate((task_t)task_name);
 }
 
 /*
@@ -1706,9 +1741,9 @@ task_name_deallocate(
  */
 void
 task_inspect_deallocate(
-	task_inspect_t		task_inspect)
+	task_inspect_t          task_inspect)
 {
-	return(task_deallocate((task_t)task_inspect));
+	return task_deallocate((task_t)task_inspect);
 }
 
 /*
@@ -1718,9 +1753,9 @@ task_inspect_deallocate(
  */
 void
 task_suspension_token_deallocate(
-	task_suspension_token_t		token)
+	task_suspension_token_t         token)
 {
-	return(task_deallocate((task_t)token));
+	return task_deallocate((task_t)token);
 }
 
 
@@ -1756,7 +1791,7 @@ task_collect_crash_info(
 #if CONFIG_MACF
 	free_label = label = mac_exc_create_label();
 #endif
-	
+
 	task_lock(task);
 
 	assert(is_corpse_fork || task->bsd_info != NULL);
@@ -1779,8 +1814,8 @@ task_collect_crash_info(
 
 		/* Do not get a corpse ref for corpse fork */
 		crash_data = task_crashinfo_alloc_init((mach_vm_address_t)crash_data_ptr, size,
-				is_corpse_fork ? 0 : CORPSE_CRASHINFO_HAS_REF,
-				KCFLAG_USE_MEMCOPY);
+		    is_corpse_fork ? 0 : CORPSE_CRASHINFO_HAS_REF,
+		    KCFLAG_USE_MEMCOPY);
 		if (crash_data) {
 			task_lock(task);
 			crash_data_release = task->corpse_info;
@@ -1832,8 +1867,9 @@ task_deliver_crash_notification(
 	mach_exception_data_type_t code[EXCEPTION_CODE_MAX];
 	ipc_port_t task_port, old_notify;
 
-	if (crash_info == NULL)
+	if (crash_info == NULL) {
 		return KERN_FAILURE;
+	}
 
 	task_lock(task);
 	if (task_is_a_corpse_fork(task)) {
@@ -1892,15 +1928,17 @@ task_deliver_crash_notification(
 
 kern_return_t
 task_terminate(
-	task_t		task)
+	task_t          task)
 {
-	if (task == TASK_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
-	if (task->bsd_info)
-		return (KERN_FAILURE);
+	if (task->bsd_info) {
+		return KERN_FAILURE;
+	}
 
-	return (task_terminate_internal(task));
+	return task_terminate_internal(task);
 }
 
 #if MACH_ASSERT
@@ -1912,19 +1950,19 @@ extern void proc_name_kdp(task_t t, char *buf, int size);
 static void
 __unused task_partial_reap(task_t task, __unused int pid)
 {
-        unsigned int    reclaimed_resident = 0;
-        unsigned int    reclaimed_compressed = 0;
+	unsigned int    reclaimed_resident = 0;
+	unsigned int    reclaimed_compressed = 0;
 	uint64_t        task_page_count;
 
 	task_page_count = (get_task_phys_footprint(task) / PAGE_SIZE_64);
 
 	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_MAP_PARTIAL_REAP) | DBG_FUNC_START),
-                              pid, task_page_count, 0, 0, 0);
+	    pid, task_page_count, 0, 0, 0);
 
 	vm_map_partial_reap(task->map, &reclaimed_resident, &reclaimed_compressed);
 
-        KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_MAP_PARTIAL_REAP) | DBG_FUNC_END),
-                              pid, reclaimed_resident, reclaimed_compressed, 0, 0);
+	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_MAP_PARTIAL_REAP) | DBG_FUNC_END),
+	    pid, reclaimed_resident, reclaimed_compressed, 0, 0);
 }
 
 kern_return_t
@@ -1945,12 +1983,12 @@ task_mark_corpse(task_t task)
 #if CONFIG_MACF
 	crash_label = mac_exc_create_label_for_proc((struct proc*)task->bsd_info);
 #endif
-	
+
 	kr = task_collect_crash_info(task,
 #if CONFIG_MACF
-								 crash_label,
+	    crash_label,
 #endif
-								 FALSE);
+	    FALSE);
 	if (kr != KERN_SUCCESS) {
 		goto out;
 	}
@@ -1978,7 +2016,7 @@ task_mark_corpse(task_t task)
 
 	/* Add it to global corpse task list */
 	task_add_to_corpse_task_list(task);
-	
+
 	task_start_halt(task);
 	thread_terminate_internal(self_thread);
 
@@ -2073,13 +2111,13 @@ task_wait_till_threads_terminate_locked(task_t task)
  */
 kern_return_t
 task_duplicate_map_and_threads(
-		task_t task,
-		void *p,
-		task_t new_task,
-		thread_t *thread_ret,
-		uint64_t **udata_buffer,
-		int *size,
-		int *num_udata)
+	task_t task,
+	void *p,
+	task_t new_task,
+	thread_t *thread_ret,
+	uint64_t **udata_buffer,
+	int *size,
+	int *num_udata)
 {
 	kern_return_t kr = KERN_SUCCESS;
 	int active;
@@ -2122,14 +2160,13 @@ task_duplicate_map_and_threads(
 
 	/* Check with VM if vm_map_fork is allowed for this task */
 	if (memorystatus_allowed_vm_map_fork(task)) {
-
 		/* Setup new task's vmmap, switch from parent task's map to it COW map */
 		oldmap = new_task->map;
 		new_task->map = vm_map_fork(new_task->ledger,
-					    task->map,
-					    (VM_MAP_FORK_SHARE_IF_INHERIT_NONE |
-					     VM_MAP_FORK_PRESERVE_PURGEABLE |
-					     VM_MAP_FORK_CORPSE_FOOTPRINT));
+		    task->map,
+		    (VM_MAP_FORK_SHARE_IF_INHERIT_NONE |
+		    VM_MAP_FORK_PRESERVE_PURGEABLE |
+		    VM_MAP_FORK_CORPSE_FOOTPRINT));
 		vm_map_deallocate(oldmap);
 
 		/* copy ledgers that impact the memory footprint */
@@ -2177,7 +2214,6 @@ task_duplicate_map_and_threads(
 	task_unlock(task);
 
 	for (i = 0; i < array_count; i++) {
-
 		kr = thread_create_with_continuation(new_task, &new_thread, (thread_continue_t)thread_corpse_continue);
 		if (kr != KERN_SUCCESS) {
 			break;
@@ -2211,8 +2247,7 @@ task_duplicate_map_and_threads(
 	/* return the first thread if we couldn't find the equivalent of current */
 	if (thread_return == THREAD_NULL) {
 		thread_return = first_thread;
-	}
-	else if (first_thread != THREAD_NULL) {
+	} else if (first_thread != THREAD_NULL) {
 		/* drop the extra ref returned by thread_create_with_continuation */
 		thread_deallocate(first_thread);
 	}
@@ -2243,18 +2278,18 @@ task_duplicate_map_and_threads(
 
 #if CONFIG_SECLUDED_MEMORY
 extern void task_set_can_use_secluded_mem_locked(
-	task_t		task,
-	boolean_t	can_use_secluded_mem);
+	task_t          task,
+	boolean_t       can_use_secluded_mem);
 #endif /* CONFIG_SECLUDED_MEMORY */
 
 kern_return_t
 task_terminate_internal(
-	task_t			task)
+	task_t                  task)
 {
-	thread_t			thread, self;
-	task_t				self_task;
-	boolean_t			interrupt_save;
-	int				pid = 0;
+	thread_t                        thread, self;
+	task_t                          self_task;
+	boolean_t                       interrupt_save;
+	int                             pid = 0;
 
 	assert(task != kernel_task);
 
@@ -2265,14 +2300,12 @@ task_terminate_internal(
 	 *	Get the task locked and make sure that we are not racing
 	 *	with someone else trying to terminate us.
 	 */
-	if (task == self_task)
+	if (task == self_task) {
 		task_lock(task);
-	else
-	if (task < self_task) {
+	} else if (task < self_task) {
 		task_lock(task);
 		task_lock(self_task);
-	}
-	else {
+	} else {
 		task_lock(self_task);
 		task_lock(task);
 	}
@@ -2297,10 +2330,11 @@ task_terminate_internal(
 		 *	will get us to finalize the termination of ourselves.
 		 */
 		task_unlock(task);
-		if (self_task != task)
+		if (self_task != task) {
 			task_unlock(self_task);
+		}
 
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	if (task_corpse_pending_report(task)) {
@@ -2311,14 +2345,16 @@ task_terminate_internal(
 		 *	will get us to finish the path to death
 		 */
 		task_unlock(task);
-		if (self_task != task)
+		if (self_task != task) {
 			task_unlock(self_task);
+		}
 
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
-	if (self_task != task)
+	if (self_task != task) {
 		task_unlock(self_task);
+	}
 
 	/*
 	 * Make sure the current thread does not get aborted out of
@@ -2349,7 +2385,7 @@ task_terminate_internal(
 	 *	Terminate each thread in the task.
 	 */
 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
-			thread_terminate_internal(thread);
+		thread_terminate_internal(thread);
 	}
 
 #ifdef MACH_BSD
@@ -2361,16 +2397,16 @@ task_terminate_internal(
 	task_unlock(task);
 
 	proc_set_task_policy(task, TASK_POLICY_ATTRIBUTE,
-			     TASK_POLICY_TERMINATED, TASK_POLICY_ENABLE);
+	    TASK_POLICY_TERMINATED, TASK_POLICY_ENABLE);
 
-        /* Early object reap phase */
+	/* Early object reap phase */
 
 // PR-17045188: Revisit implementation
 //        task_partial_reap(task, pid);
 
 #if CONFIG_EMBEDDED
 	/*
-	 * remove all task watchers 
+	 * remove all task watchers
 	 */
 	task_removewatchers(task);
 
@@ -2389,17 +2425,17 @@ task_terminate_internal(
 #if 00
 	/* if some ledgers go negative on tear-down again... */
 	ledger_disable_panic_on_negative(task->map->pmap->ledger,
-					 task_ledgers.phys_footprint);
+	    task_ledgers.phys_footprint);
 	ledger_disable_panic_on_negative(task->map->pmap->ledger,
-					 task_ledgers.internal);
+	    task_ledgers.internal);
 	ledger_disable_panic_on_negative(task->map->pmap->ledger,
-					 task_ledgers.internal_compressed);
+	    task_ledgers.internal_compressed);
 	ledger_disable_panic_on_negative(task->map->pmap->ledger,
-					 task_ledgers.iokit_mapped);
+	    task_ledgers.iokit_mapped);
 	ledger_disable_panic_on_negative(task->map->pmap->ledger,
-					 task_ledgers.alternate_accounting);
+	    task_ledgers.alternate_accounting);
 	ledger_disable_panic_on_negative(task->map->pmap->ledger,
-					 task_ledgers.alternate_accounting_compressed);
+	    task_ledgers.alternate_accounting_compressed);
 #endif
 
 	/*
@@ -2423,26 +2459,26 @@ task_terminate_internal(
 	char procname[17];
 	if (task->bsd_info && !task_is_exec_copy(task)) {
 		pid = proc_pid(task->bsd_info);
-		proc_name_kdp(task, procname, sizeof (procname));
+		proc_name_kdp(task, procname, sizeof(procname));
 	} else {
 		pid = 0;
-		strlcpy(procname, "<unknown>", sizeof (procname));
+		strlcpy(procname, "<unknown>", sizeof(procname));
 	}
 	pmap_set_process(task->map->pmap, pid, procname);
 #endif /* MACH_ASSERT */
 
 	vm_map_remove(task->map,
-		      task->map->min_offset,
-		      task->map->max_offset,
-		      /*
-		       * Final cleanup:
-		       * + no unnesting
-		       * + remove immutable mappings
-		       * + allow gaps in range
-		       */
-		      (VM_MAP_REMOVE_NO_UNNESTING |
-		       VM_MAP_REMOVE_IMMUTABLE |
-		       VM_MAP_REMOVE_GAPS_OK));
+	    task->map->min_offset,
+	    task->map->max_offset,
+	    /*
+	     * Final cleanup:
+	     * + no unnesting
+	     * + remove immutable mappings
+	     * + allow gaps in range
+	     */
+	    (VM_MAP_REMOVE_NO_UNNESTING |
+	    VM_MAP_REMOVE_IMMUTABLE |
+	    VM_MAP_REMOVE_GAPS_OK));
 
 	/* release our shared region */
 	vm_shared_region_set(task, NULL);
@@ -2463,8 +2499,9 @@ task_terminate_internal(
 
 #if KPC
 	/* force the task to release all ctrs */
-	if (task->t_kpc & TASK_KPC_FORCED_ALL_CTRS)
+	if (task->t_kpc & TASK_KPC_FORCED_ALL_CTRS) {
 		kpc_force_all_ctrs(task, 0);
+	}
 #endif /* KPC */
 
 #if CONFIG_COALITIONS
@@ -2479,7 +2516,7 @@ task_terminate_internal(
 	 */
 	task_deallocate(task);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 void
@@ -2502,7 +2539,7 @@ tasks_system_suspend(boolean_t suspend)
 /*
  * task_start_halt:
  *
- * 	Shut the current task down (except for the current thread) in
+ *      Shut the current task down (except for the current thread) in
  *	preparation for dramatic changes to the task (probably exec).
  *	We hold the task and mark all other threads in the task for
  *	termination.
@@ -2527,8 +2564,9 @@ task_start_halt_locked(task_t task, boolean_t should_mark_corpse)
 
 	self = current_thread();
 
-	if (task != self->task && !task_is_a_corpse_fork(task))
-		return (KERN_INVALID_ARGUMENT);
+	if (task != self->task && !task_is_a_corpse_fork(task)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	if (task->halting || !task->active || !self->active) {
 		/*
@@ -2537,7 +2575,7 @@ task_start_halt_locked(task_t task, boolean_t should_mark_corpse)
 		 * so that we run our AST special handler to terminate
 		 * ourselves.
 		 */
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	task->halting = TRUE;
@@ -2561,8 +2599,9 @@ task_start_halt_locked(task_t task, boolean_t should_mark_corpse)
 			thread->inspection = TRUE;
 			thread_mtx_unlock(thread);
 		}
-		if (thread != self)
+		if (thread != self) {
 			thread_terminate_internal(thread);
+		}
 	}
 	task->dispatchqueue_offset = dispatchqueue_offset;
 
@@ -2626,16 +2665,16 @@ task_complete_halt(task_t task)
 	 * getting a new one.
 	 */
 	vm_map_remove(task->map, task->map->min_offset,
-		      task->map->max_offset,
-		      /*
-		       * Final cleanup:
-		       * + no unnesting
-		       * + remove immutable mappings
-		       * + allow gaps in the range
-		       */
-		      (VM_MAP_REMOVE_NO_UNNESTING |
-		       VM_MAP_REMOVE_IMMUTABLE |
-		       VM_MAP_REMOVE_GAPS_OK));
+	    task->map->max_offset,
+	    /*
+	     * Final cleanup:
+	     * + no unnesting
+	     * + remove immutable mappings
+	     * + allow gaps in the range
+	     */
+	    (VM_MAP_REMOVE_NO_UNNESTING |
+	    VM_MAP_REMOVE_IMMUTABLE |
+	    VM_MAP_REMOVE_GAPS_OK));
 
 	/*
 	 * Kick out any IOKitUser handles to the task. At best they're stale,
@@ -2655,14 +2694,15 @@ task_complete_halt(task_t task)
  */
 void
 task_hold_locked(
-	task_t		task)
+	task_t          task)
 {
-	thread_t	thread;
+	thread_t        thread;
 
 	assert(task->active);
 
-	if (task->suspend_count++ > 0)
+	if (task->suspend_count++ > 0) {
 		return;
+	}
 
 	if (task->bsd_info) {
 		workq_proc_suspended(task->bsd_info);
@@ -2683,53 +2723,55 @@ task_hold_locked(
  *
  *	Same as the internal routine above, except that is must lock
  *	and verify that the task is active.  This differs from task_suspend
- *	in that it places a kernel hold on the task rather than just a 
+ *	in that it places a kernel hold on the task rather than just a
  *	user-level hold.  This keeps users from over resuming and setting
  *	it running out from under the kernel.
  *
- * 	CONDITIONS: the caller holds a reference on the task
+ *      CONDITIONS: the caller holds a reference on the task
  */
 kern_return_t
 task_hold(
-	task_t		task)
+	task_t          task)
 {
-	if (task == TASK_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	task_lock(task);
 
 	if (!task->active) {
 		task_unlock(task);
 
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	task_hold_locked(task);
 	task_unlock(task);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
 task_wait(
-		task_t		task,
-		boolean_t	until_not_runnable)
+	task_t          task,
+	boolean_t       until_not_runnable)
 {
-	if (task == TASK_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	task_lock(task);
 
 	if (!task->active) {
 		task_unlock(task);
 
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	task_wait_locked(task, until_not_runnable);
 	task_unlock(task);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -2742,10 +2784,10 @@ task_wait(
  */
 void
 task_wait_locked(
-	task_t		task,
-	boolean_t		until_not_runnable)
+	task_t          task,
+	boolean_t               until_not_runnable)
 {
-	thread_t	thread, self;
+	thread_t        thread, self;
 
 	assert(task->active);
 	assert(task->suspend_count > 0);
@@ -2758,8 +2800,9 @@ task_wait_locked(
 	 *	the task.
 	 */
 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
-		if (thread != self)
+		if (thread != self) {
 			thread_wait(thread, until_not_runnable);
+		}
 	}
 }
 
@@ -2768,19 +2811,20 @@ task_wait_locked(
  *
  *	Release a kernel hold on a task.
  *
- * 	CONDITIONS: the task is locked and active
+ *      CONDITIONS: the task is locked and active
  */
 void
 task_release_locked(
-	task_t		task)
+	task_t          task)
 {
-	thread_t	thread;
+	thread_t        thread;
 
 	assert(task->active);
 	assert(task->suspend_count > 0);
 
-	if (--task->suspend_count > 0)
+	if (--task->suspend_count > 0) {
 		return;
+	}
 
 	if (task->bsd_info) {
 		workq_proc_resumed(task->bsd_info);
@@ -2799,44 +2843,46 @@ task_release_locked(
  *	Same as the internal routine above, except that it must lock
  *	and verify that the task is active.
  *
- * 	CONDITIONS: The caller holds a reference to the task
+ *      CONDITIONS: The caller holds a reference to the task
  */
 kern_return_t
 task_release(
-	task_t		task)
+	task_t          task)
 {
-	if (task == TASK_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	task_lock(task);
 
 	if (!task->active) {
 		task_unlock(task);
 
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	task_release_locked(task);
 	task_unlock(task);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
 task_threads(
-	task_t					task,
-	thread_act_array_t		*threads_out,
-	mach_msg_type_number_t	*count)
+	task_t                                  task,
+	thread_act_array_t              *threads_out,
+	mach_msg_type_number_t  *count)
 {
-	mach_msg_type_number_t	actual;
-	thread_t				*thread_list;
-	thread_t				thread;
-	vm_size_t				size, size_needed;
-	void					*addr;
-	unsigned int			i, j;
+	mach_msg_type_number_t  actual;
+	thread_t                                *thread_list;
+	thread_t                                thread;
+	vm_size_t                               size, size_needed;
+	void                                    *addr;
+	unsigned int                    i, j;
 
-	if (task == TASK_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	size = 0; addr = NULL;
 
@@ -2845,31 +2891,35 @@ task_threads(
 		if (!task->active) {
 			task_unlock(task);
 
-			if (size != 0)
+			if (size != 0) {
 				kfree(addr, size);
+			}
 
-			return (KERN_FAILURE);
+			return KERN_FAILURE;
 		}
 
 		actual = task->thread_count;
 
 		/* do we have the memory we need? */
-		size_needed = actual * sizeof (mach_port_t);
-		if (size_needed <= size)
+		size_needed = actual * sizeof(mach_port_t);
+		if (size_needed <= size) {
 			break;
+		}
 
 		/* unlock the task and allocate more memory */
 		task_unlock(task);
 
-		if (size != 0)
+		if (size != 0) {
 			kfree(addr, size);
+		}
 
 		assert(size_needed > 0);
 		size = size_needed;
 
 		addr = kalloc(size);
-		if (addr == 0)
-			return (KERN_RESOURCE_SHORTAGE);
+		if (addr == 0) {
+			return KERN_RESOURCE_SHORTAGE;
+		}
 	}
 
 	/* OK, have memory and the task is locked & active */
@@ -2878,7 +2928,7 @@ task_threads(
 	i = j = 0;
 
 	for (thread = (thread_t)queue_first(&task->threads); i < actual;
-				++i, thread = (thread_t)queue_next(&thread->task_threads)) {
+	    ++i, thread = (thread_t)queue_next(&thread->task_threads)) {
 		thread_reference_internal(thread);
 		thread_list[j++] = thread;
 	}
@@ -2886,7 +2936,7 @@ task_threads(
 	assert(queue_end(&task->threads, (queue_entry_t)thread));
 
 	actual = j;
-	size_needed = actual * sizeof (mach_port_t);
+	size_needed = actual * sizeof(mach_port_t);
 
 	/* can unlock task now that we've got the thread refs */
 	task_unlock(task);
@@ -2897,10 +2947,10 @@ task_threads(
 		*threads_out = NULL;
 		*count = 0;
 
-		if (size != 0)
+		if (size != 0) {
 			kfree(addr, size);
-	}
-	else {
+		}
+	} else {
 		/* if we allocated too much, must copy */
 
 		if (size_needed < size) {
@@ -2908,10 +2958,11 @@ task_threads(
 
 			newaddr = kalloc(size_needed);
 			if (newaddr == 0) {
-				for (i = 0; i < actual; ++i)
+				for (i = 0; i < actual; ++i) {
 					thread_deallocate(thread_list[i]);
+				}
 				kfree(addr, size);
-				return (KERN_RESOURCE_SHORTAGE);
+				return KERN_RESOURCE_SHORTAGE;
 			}
 
 			bcopy(addr, newaddr, size_needed);
@@ -2924,25 +2975,26 @@ task_threads(
 
 		/* do the conversion that Mig should handle */
 
-		for (i = 0; i < actual; ++i)
+		for (i = 0; i < actual; ++i) {
 			((ipc_port_t *) thread_list)[i] = convert_thread_to_port(thread_list[i]);
+		}
 	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
-#define TASK_HOLD_NORMAL	0
-#define TASK_HOLD_PIDSUSPEND	1
-#define TASK_HOLD_LEGACY	2
-#define TASK_HOLD_LEGACY_ALL	3
+#define TASK_HOLD_NORMAL        0
+#define TASK_HOLD_PIDSUSPEND    1
+#define TASK_HOLD_LEGACY        2
+#define TASK_HOLD_LEGACY_ALL    3
 
 static kern_return_t
-place_task_hold    (
+place_task_hold(
 	task_t task,
 	int mode)
-{    
+{
 	if (!task->active && !task_is_a_corpse(task)) {
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	/* Return success for corpse task */
@@ -2951,7 +3003,7 @@ place_task_hold    (
 	}
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	    MACHDBG_CODE(DBG_MACH_IPC,MACH_TASK_SUSPEND) | DBG_FUNC_NONE,
+	    MACHDBG_CODE(DBG_MACH_IPC, MACH_TASK_SUSPEND) | DBG_FUNC_NONE,
 	    task_pid(task), ((thread_t)queue_first(&task->threads))->thread_id,
 	    task->user_stop_count, task->user_stop_count + 1, 0);
 
@@ -2959,15 +3011,16 @@ place_task_hold    (
 	current_task()->suspends_outstanding++;
 #endif
 
-	if (mode == TASK_HOLD_LEGACY)
+	if (mode == TASK_HOLD_LEGACY) {
 		task->legacy_stop_count++;
+	}
 
 	if (task->user_stop_count++ > 0) {
 		/*
 		 *	If the stop count was positive, the task is
 		 *	already stopped and we can exit.
 		 */
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	/*
@@ -2978,37 +3031,36 @@ place_task_hold    (
 	 */
 	task_hold_locked(task);
 	task_wait_locked(task, FALSE);
-	
-	return (KERN_SUCCESS);
+
+	return KERN_SUCCESS;
 }
 
 static kern_return_t
-release_task_hold    (
-	task_t		task,
-	int           		mode)
+release_task_hold(
+	task_t          task,
+	int                     mode)
 {
 	boolean_t release = FALSE;
-    
+
 	if (!task->active && !task_is_a_corpse(task)) {
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	/* Return success for corpse task */
 	if (task_is_a_corpse(task)) {
 		return KERN_SUCCESS;
 	}
-	
+
 	if (mode == TASK_HOLD_PIDSUSPEND) {
-	    if (task->pidsuspended == FALSE) {
-		    return (KERN_FAILURE);
-	    }
-	    task->pidsuspended = FALSE;
+		if (task->pidsuspended == FALSE) {
+			return KERN_FAILURE;
+		}
+		task->pidsuspended = FALSE;
 	}
 
 	if (task->user_stop_count > (task->pidsuspended ? 1 : 0)) {
-
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		    MACHDBG_CODE(DBG_MACH_IPC,MACH_TASK_RESUME) | DBG_FUNC_NONE,
+		    MACHDBG_CODE(DBG_MACH_IPC, MACH_TASK_RESUME) | DBG_FUNC_NONE,
 		    task_pid(task), ((thread_t)queue_first(&task->threads))->thread_id,
 		    task->user_stop_count, mode, task->legacy_stop_count);
 
@@ -3030,23 +3082,25 @@ release_task_hold    (
 			}
 			task->legacy_stop_count = 0;
 		} else {
-			if (mode == TASK_HOLD_LEGACY && task->legacy_stop_count > 0)
+			if (mode == TASK_HOLD_LEGACY && task->legacy_stop_count > 0) {
 				task->legacy_stop_count--;
-			if (--task->user_stop_count == 0)
+			}
+			if (--task->user_stop_count == 0) {
 				release = TRUE;
+			}
 		}
-	}
-	else {
-		return (KERN_FAILURE);
+	} else {
+		return KERN_FAILURE;
 	}
 
 	/*
 	 *	Release the task if necessary.
 	 */
-	if (release)
+	if (release) {
 		task_release_locked(task);
-		
-    return (KERN_SUCCESS);
+	}
+
+	return KERN_SUCCESS;
 }
 
 
@@ -3063,29 +3117,31 @@ release_task_hold    (
  *	unique send-once right).
  *
  * Conditions:
- * 	The caller holds a reference to the task
+ *      The caller holds a reference to the task
  */
 kern_return_t
 task_suspend(
-	task_t		task)
+	task_t          task)
 {
-	kern_return_t	 		kr;
-	mach_port_t			port, send, old_notify;
-	mach_port_name_t		name;
+	kern_return_t                   kr;
+	mach_port_t                     port, send, old_notify;
+	mach_port_name_t                name;
 
-	if (task == TASK_NULL || task == kernel_task)
-		return (KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL || task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	task_lock(task);
 
-	/* 
+	/*
 	 * Claim a send right on the task resume port, and request a no-senders
-	 * notification on that port (if none outstanding). 
+	 * notification on that port (if none outstanding).
 	 */
 	if (task->itk_resume == IP_NULL) {
 		task->itk_resume = ipc_port_alloc_kernel();
-		if (!IP_VALID(task->itk_resume))
+		if (!IP_VALID(task->itk_resume)) {
 			panic("failed to create resume port");
+		}
 		ipc_kobject_set(task->itk_resume, (ipc_kobject_t)task, IKOT_TASK_RESUME);
 	}
 
@@ -3122,34 +3178,35 @@ task_suspend(
 	 * deallocate the send right will auto-release the suspension.
 	 */
 	if ((kr = ipc_kmsg_copyout_object(current_task()->itk_space, (ipc_object_t)send,
-		MACH_MSG_TYPE_MOVE_SEND, &name)) != KERN_SUCCESS) {
+	    MACH_MSG_TYPE_MOVE_SEND, &name)) != KERN_SUCCESS) {
 		printf("warning: %s(%d) failed to copyout suspension token for pid %d with error: %d\n",
-				proc_name_address(current_task()->bsd_info), proc_pid(current_task()->bsd_info),
-				task_pid(task), kr);
-		return (kr);
+		    proc_name_address(current_task()->bsd_info), proc_pid(current_task()->bsd_info),
+		    task_pid(task), kr);
+		return kr;
 	}
 
-	return (kr);
+	return kr;
 }
 
 /*
  *	task_resume:
  *		Release a user hold on a task.
- *		
+ *
  * Conditions:
  *		The caller holds a reference to the task
  */
-kern_return_t 
+kern_return_t
 task_resume(
-	task_t	task)
+	task_t  task)
 {
-	kern_return_t	 kr;
+	kern_return_t    kr;
 	mach_port_name_t resume_port_name;
-	ipc_entry_t		 resume_port_entry;
-	ipc_space_t		 space = current_task()->itk_space;
+	ipc_entry_t              resume_port_entry;
+	ipc_space_t              space = current_task()->itk_space;
 
-	if (task == TASK_NULL || task == kernel_task )
-		return (KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL || task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	/* release a legacy task hold */
 	task_lock(task);
@@ -3165,17 +3222,19 @@ task_resume(
 		 * go ahead and drop all the rights, as someone either already released our holds or the task
 		 * is gone.
 		 */
-		if (kr == KERN_SUCCESS)
+		if (kr == KERN_SUCCESS) {
 			ipc_right_dealloc(space, resume_port_name, resume_port_entry);
-		else
+		} else {
 			ipc_right_destroy(space, resume_port_name, resume_port_entry, FALSE, 0);
+		}
 		/* space unlocked */
 	} else {
 		is_write_unlock(space);
-		if (kr == KERN_SUCCESS)
+		if (kr == KERN_SUCCESS) {
 			printf("warning: %s(%d) performed out-of-band resume on pid %d\n",
-			       proc_name_address(current_task()->bsd_info), proc_pid(current_task()->bsd_info),
-			       task_pid(task));
+			    proc_name_address(current_task()->bsd_info), proc_pid(current_task()->bsd_info),
+			    task_pid(task));
+		}
 	}
 
 	return kr;
@@ -3188,15 +3247,16 @@ task_resume(
 kern_return_t
 task_suspend_internal(task_t task)
 {
-	kern_return_t	 kr;
-       
-	if (task == TASK_NULL || task == kernel_task)
-		return (KERN_INVALID_ARGUMENT);
+	kern_return_t    kr;
+
+	if (task == TASK_NULL || task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	task_lock(task);
 	kr = place_task_hold(task, TASK_HOLD_NORMAL);
 	task_unlock(task);
-	return (kr);
+	return kr;
 }
 
 /*
@@ -3205,15 +3265,15 @@ task_suspend_internal(task_t task)
  */
 kern_return_t
 task_suspend2(
-	task_t			task,
+	task_t                  task,
 	task_suspension_token_t *suspend_token)
 {
-	kern_return_t	 kr;
- 
+	kern_return_t    kr;
+
 	kr = task_suspend_internal(task);
 	if (kr != KERN_SUCCESS) {
 		*suspend_token = TASK_NULL;
-		return (kr);
+		return kr;
 	}
 
 	/*
@@ -3224,7 +3284,7 @@ task_suspend2(
 	task_reference_internal(task);
 	*suspend_token = task;
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -3233,17 +3293,18 @@ task_suspend2(
  */
 kern_return_t
 task_resume_internal(
-	task_suspension_token_t		task)
+	task_suspension_token_t         task)
 {
 	kern_return_t kr;
 
-	if (task == TASK_NULL || task == kernel_task)
-		return (KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL || task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	task_lock(task);
 	kr = release_task_hold(task, TASK_HOLD_NORMAL);
 	task_unlock(task);
-	return (kr);
+	return kr;
 }
 
 /*
@@ -3251,14 +3312,14 @@ task_resume_internal(
  */
 kern_return_t
 task_resume2(
-	task_suspension_token_t		task)
+	task_suspension_token_t         task)
 {
 	kern_return_t kr;
 
 	kr = task_resume_internal(task);
 	task_suspension_token_deallocate(task);
 
-	return (kr);
+	return kr;
 }
 
 boolean_t
@@ -3268,11 +3329,10 @@ task_suspension_notify(mach_msg_header_t *request_header)
 	task_t task = convert_port_to_task_suspension_token(port);
 	mach_msg_type_number_t not_count;
 
-	if (task == TASK_NULL || task == kernel_task)
+	if (task == TASK_NULL || task == kernel_task) {
 		return TRUE;  /* nothing to do */
-
+	}
 	switch (request_header->msgh_id) {
-
 	case MACH_NOTIFY_SEND_ONCE:
 		/* release the hold held by this specific send-once right */
 		task_lock(task);
@@ -3286,13 +3346,11 @@ task_suspension_notify(mach_msg_header_t *request_header)
 		task_lock(task);
 		ip_lock(port);
 		if (port->ip_mscount == not_count) {
-
 			/* release all the [remaining] outstanding legacy holds */
 			assert(port->ip_nsrequest == IP_NULL);
 			ip_unlock(port);
 			release_task_hold(task, TASK_HOLD_LEGACY_ALL);
 			task_unlock(task);
-
 		} else if (port->ip_nsrequest == IP_NULL) {
 			ipc_port_t old_notify;
 
@@ -3332,7 +3390,7 @@ task_pidsuspend_locked(task_t task)
 		task->pidsuspended = FALSE;
 	}
 out:
-	return(kr);
+	return kr;
 }
 
 
@@ -3342,16 +3400,17 @@ out:
  *	Suspends a task by placing a hold on its threads.
  *
  * Conditions:
- * 	The caller holds a reference to the task
+ *      The caller holds a reference to the task
  */
 kern_return_t
 task_pidsuspend(
-	task_t		task)
+	task_t          task)
 {
-	kern_return_t	 kr;
-    
-	if (task == TASK_NULL || task == kernel_task)
-		return (KERN_INVALID_ARGUMENT);
+	kern_return_t    kr;
+
+	if (task == TASK_NULL || task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	task_lock(task);
 
@@ -3359,31 +3418,31 @@ task_pidsuspend(
 
 	task_unlock(task);
 
-	return (kr);
+	return kr;
 }
 
 /*
  *	task_pidresume:
  *		Resumes a previously suspended task.
- *		
+ *
  * Conditions:
  *		The caller holds a reference to the task
  */
-kern_return_t 
+kern_return_t
 task_pidresume(
-	task_t	task)
+	task_t  task)
 {
-	kern_return_t	 kr;
+	kern_return_t    kr;
 
-	if (task == TASK_NULL || task == kernel_task)
-		return (KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL || task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	task_lock(task);
-	
+
 #if CONFIG_FREEZE
 
 	while (task->changing_freeze_state) {
-
 		assert_wait((event_t)&task->changing_freeze_state, THREAD_UNINT);
 		task_unlock(task);
 		thread_block(THREAD_CONTINUE_NULL);
@@ -3401,15 +3460,16 @@ task_pidresume(
 
 	task_lock(task);
 
-	if (kr == KERN_SUCCESS)
+	if (kr == KERN_SUCCESS) {
 		task->frozen = FALSE;
+	}
 	task->changing_freeze_state = FALSE;
 	thread_wakeup(&task->changing_freeze_state);
-	
+
 	task_unlock(task);
 #endif
 
-	return (kr);
+	return kr;
 }
 
 
@@ -3420,10 +3480,11 @@ extern void IOSleep(int);
 kern_return_t
 task_disconnect_page_mappings(task_t task)
 {
-	int	n;
+	int     n;
 
-	if (task == TASK_NULL || task == kernel_task)
-		return (KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL || task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	/*
 	 * this function is used to strip all of the mappings from
@@ -3435,17 +3496,17 @@ task_disconnect_page_mappings(task_t task)
 	 * sweep (at least for a while - I've arbitrarily set the limit at
 	 * 100 sweeps to be re-looked at as we gain experience) to get a better
 	 * view into what areas within a page are being visited (as opposed to only
-	 * seeing the first fault of a page after the task becomes 
+	 * seeing the first fault of a page after the task becomes
 	 * runnable)...  in the future I may
 	 * try to block until awakened by a thread in this task
 	 * being made runnable, but for now we'll periodically poll from the
 	 * user level debug tool driving the sysctl
 	 */
 	for (n = 0; n < 100; n++) {
-		thread_t	thread;
-		boolean_t	runnable;
-		boolean_t	do_unnest;
-		int		page_count;
+		thread_t        thread;
+		boolean_t       runnable;
+		boolean_t       do_unnest;
+		int             page_count;
 
 		runnable = FALSE;
 		do_unnest = FALSE;
@@ -3453,14 +3514,14 @@ task_disconnect_page_mappings(task_t task)
 		task_lock(task);
 
 		queue_iterate(&task->threads, thread, thread_t, task_threads) {
-	
 			if (thread->state & TH_RUN) {
 				runnable = TRUE;
 				break;
 			}
 		}
-		if (n == 0)
+		if (n == 0) {
 			task->task_disconnected_count++;
+		}
 
 		if (task->task_unnested == FALSE) {
 			if (runnable == TRUE) {
@@ -3470,21 +3531,23 @@ task_disconnect_page_mappings(task_t task)
 		}
 		task_unlock(task);
 
-		if (runnable == FALSE)
+		if (runnable == FALSE) {
 			break;
+		}
 
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_DISCONNECT_TASK_PAGE_MAPPINGS)) | DBG_FUNC_START,
-					  task, do_unnest, task->task_disconnected_count, 0, 0);
+		    task, do_unnest, task->task_disconnected_count, 0, 0);
 
 		page_count = vm_map_disconnect_page_mappings(task->map, do_unnest);
 
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_DISCONNECT_TASK_PAGE_MAPPINGS)) | DBG_FUNC_END,
-					  task, page_count, 0, 0, 0);
+		    task, page_count, 0, 0, 0);
 
-		if ((n % 5) == 4)
+		if ((n % 5) == 4) {
 			IOSleep(1);
+		}
 	}
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 #endif
@@ -3498,10 +3561,10 @@ task_disconnect_page_mappings(task_t task)
  *	Freeze a task.
  *
  * Conditions:
- * 	The caller holds a reference to the task
+ *      The caller holds a reference to the task
  */
-extern void		vm_wake_compactor_swapper(void);
-extern queue_head_t	c_swapout_list_head;
+extern void             vm_wake_compactor_swapper(void);
+extern queue_head_t     c_swapout_list_head;
 
 kern_return_t
 task_freeze(
@@ -3511,19 +3574,19 @@ task_freeze(
 	uint32_t           *clean_count,
 	uint32_t           *dirty_count,
 	uint32_t           dirty_budget,
-	uint32_t	   *shared_count,
-	int		   *freezer_error_code,
-	boolean_t	   eval_only)
+	uint32_t           *shared_count,
+	int                *freezer_error_code,
+	boolean_t          eval_only)
 {
 	kern_return_t kr = KERN_SUCCESS;
-    
-	if (task == TASK_NULL || task == kernel_task)
-		return (KERN_INVALID_ARGUMENT);
+
+	if (task == TASK_NULL || task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	task_lock(task);
 
 	while (task->changing_freeze_state) {
-
 		assert_wait((event_t)&task->changing_freeze_state, THREAD_UNINT);
 		task_unlock(task);
 		thread_block(THREAD_CONTINUE_NULL);
@@ -3532,21 +3595,21 @@ task_freeze(
 	}
 	if (task->frozen) {
 		task_unlock(task);
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 	task->changing_freeze_state = TRUE;
 
 	task_unlock(task);
 
 	kr = vm_map_freeze(task->map,
-			   purgeable_count,
-			   wired_count,
-			   clean_count,
-			   dirty_count,
-			   dirty_budget,
-			   shared_count,
-			   freezer_error_code,
-			   eval_only);
+	    purgeable_count,
+	    wired_count,
+	    clean_count,
+	    dirty_count,
+	    dirty_budget,
+	    shared_count,
+	    freezer_error_code,
+	    eval_only);
 
 	task_lock(task);
 
@@ -3556,7 +3619,7 @@ task_freeze(
 
 	task->changing_freeze_state = FALSE;
 	thread_wakeup(&task->changing_freeze_state);
-	
+
 	task_unlock(task);
 
 	if (VM_CONFIG_COMPRESSOR_IS_PRESENT &&
@@ -3572,7 +3635,7 @@ task_freeze(
 		thread_wakeup((event_t)&c_swapout_list_head);
 	}
 
-	return (kr);
+	return kr;
 }
 
 /*
@@ -3581,19 +3644,19 @@ task_freeze(
  *	Thaw a currently frozen task.
  *
  * Conditions:
- * 	The caller holds a reference to the task
+ *      The caller holds a reference to the task
  */
 kern_return_t
 task_thaw(
-	task_t		task)
+	task_t          task)
 {
-	if (task == TASK_NULL || task == kernel_task)
-		return (KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL || task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	task_lock(task);
-	
-	while (task->changing_freeze_state) {
 
+	while (task->changing_freeze_state) {
 		assert_wait((event_t)&task->changing_freeze_state, THREAD_UNINT);
 		task_unlock(task);
 		thread_block(THREAD_CONTINUE_NULL);
@@ -3602,36 +3665,38 @@ task_thaw(
 	}
 	if (!task->frozen) {
 		task_unlock(task);
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 	task->frozen = FALSE;
-	
+
 	task_unlock(task);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 #endif /* CONFIG_FREEZE */
 
 kern_return_t
 host_security_set_task_token(
-        host_security_t  host_security,
-        task_t		 task,
-        security_token_t sec_token,
-	audit_token_t	 audit_token,
-	host_priv_t	 host_priv)
+	host_security_t  host_security,
+	task_t           task,
+	security_token_t sec_token,
+	audit_token_t    audit_token,
+	host_priv_t      host_priv)
 {
-	ipc_port_t	 host_port;
-	kern_return_t	 kr;
+	ipc_port_t       host_port;
+	kern_return_t    kr;
 
-	if (task == TASK_NULL)
-		return(KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
-	if (host_security == HOST_NULL)
-		return(KERN_INVALID_SECURITY);
+	if (host_security == HOST_NULL) {
+		return KERN_INVALID_SECURITY;
+	}
 
-        task_lock(task);
-        task->sec_token = sec_token;
+	task_lock(task);
+	task->sec_token = sec_token;
 	task->audit_token = audit_token;
 
 	task_unlock(task);
@@ -3643,7 +3708,7 @@ host_security_set_task_token(
 	}
 	assert(kr == KERN_SUCCESS);
 	kr = task_set_special_port(task, TASK_HOST_PORT, host_port);
-        return(kr);
+	return kr;
 }
 
 kern_return_t
@@ -3665,122 +3730,123 @@ task_send_trace_memory(
  */
 kern_return_t
 task_set_info(
-	task_t		task,
-	task_flavor_t	flavor,
-	__unused task_info_t	task_info_in,		/* pointer to IN array */
-	__unused mach_msg_type_number_t	task_info_count)
+	task_t          task,
+	task_flavor_t   flavor,
+	__unused task_info_t    task_info_in,           /* pointer to IN array */
+	__unused mach_msg_type_number_t task_info_count)
 {
-	if (task == TASK_NULL)
-		return(KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	switch (flavor) {
-
 #if CONFIG_ATM
-		case TASK_TRACE_MEMORY_INFO:
-		{
-			if (task_info_count != TASK_TRACE_MEMORY_INFO_COUNT)
-				return (KERN_INVALID_ARGUMENT);
-			
-			assert(task_info_in != NULL);
-			task_trace_memory_info_t mem_info;
-			mem_info = (task_trace_memory_info_t) task_info_in;
-			kern_return_t kr = atm_register_trace_memory(task,
-						mem_info->user_memory_address,
-						mem_info->buffer_size);
-			return kr;
+	case TASK_TRACE_MEMORY_INFO:
+	{
+		if (task_info_count != TASK_TRACE_MEMORY_INFO_COUNT) {
+			return KERN_INVALID_ARGUMENT;
 		}
 
-#endif
-	    default:
-		return (KERN_INVALID_ARGUMENT);
+		assert(task_info_in != NULL);
+		task_trace_memory_info_t mem_info;
+		mem_info = (task_trace_memory_info_t) task_info_in;
+		kern_return_t kr = atm_register_trace_memory(task,
+		    mem_info->user_memory_address,
+		    mem_info->buffer_size);
+		return kr;
 	}
-	return (KERN_SUCCESS);
+
+#endif
+	default:
+		return KERN_INVALID_ARGUMENT;
+	}
+	return KERN_SUCCESS;
 }
 
 int radar_20146450 = 1;
 kern_return_t
 task_info(
-	task_t			task,
-	task_flavor_t		flavor,
-	task_info_t		task_info_out,
-	mach_msg_type_number_t	*task_info_count)
+	task_t                  task,
+	task_flavor_t           flavor,
+	task_info_t             task_info_out,
+	mach_msg_type_number_t  *task_info_count)
 {
 	kern_return_t error = KERN_SUCCESS;
-	mach_msg_type_number_t	original_task_info_count;
+	mach_msg_type_number_t  original_task_info_count;
 
-	if (task == TASK_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	original_task_info_count = *task_info_count;
 	task_lock(task);
 
 	if ((task != current_task()) && (!task->active)) {
 		task_unlock(task);
-		return (KERN_INVALID_ARGUMENT);
+		return KERN_INVALID_ARGUMENT;
 	}
 
 	switch (flavor) {
-
 	case TASK_BASIC_INFO_32:
 	case TASK_BASIC2_INFO_32:
 #if defined(__arm__) || defined(__arm64__)
 	case TASK_BASIC_INFO_64:
-#endif 
-	{
-		task_basic_info_32_t	basic_info;
-		vm_map_t				map;
-		clock_sec_t				secs;
-		clock_usec_t			usecs;
+#endif
+		{
+			task_basic_info_32_t    basic_info;
+			vm_map_t                                map;
+			clock_sec_t                             secs;
+			clock_usec_t                    usecs;
 
-		if (*task_info_count < TASK_BASIC_INFO_32_COUNT) {
-		    error = KERN_INVALID_ARGUMENT;
-		    break;
+			if (*task_info_count < TASK_BASIC_INFO_32_COUNT) {
+				error = KERN_INVALID_ARGUMENT;
+				break;
+			}
+
+			basic_info = (task_basic_info_32_t)task_info_out;
+
+			map = (task == kernel_task)? kernel_map: task->map;
+			basic_info->virtual_size = (typeof(basic_info->virtual_size))map->size;
+			if (flavor == TASK_BASIC2_INFO_32) {
+				/*
+				 * The "BASIC2" flavor gets the maximum resident
+				 * size instead of the current resident size...
+				 */
+				basic_info->resident_size = pmap_resident_max(map->pmap);
+			} else {
+				basic_info->resident_size = pmap_resident_count(map->pmap);
+			}
+			basic_info->resident_size *= PAGE_SIZE;
+
+			basic_info->policy = ((task != kernel_task)?
+			    POLICY_TIMESHARE: POLICY_RR);
+			basic_info->suspend_count = task->user_stop_count;
+
+			absolutetime_to_microtime(task->total_user_time, &secs, &usecs);
+			basic_info->user_time.seconds =
+			    (typeof(basic_info->user_time.seconds))secs;
+			basic_info->user_time.microseconds = usecs;
+
+			absolutetime_to_microtime(task->total_system_time, &secs, &usecs);
+			basic_info->system_time.seconds =
+			    (typeof(basic_info->system_time.seconds))secs;
+			basic_info->system_time.microseconds = usecs;
+
+			*task_info_count = TASK_BASIC_INFO_32_COUNT;
+			break;
 		}
-
-		basic_info = (task_basic_info_32_t)task_info_out;
-
-		map = (task == kernel_task)? kernel_map: task->map;
-		basic_info->virtual_size = (typeof(basic_info->virtual_size))map->size;
-		if (flavor == TASK_BASIC2_INFO_32) {
-			/*
-			 * The "BASIC2" flavor gets the maximum resident
-			 * size instead of the current resident size...
-			 */
-			basic_info->resident_size = pmap_resident_max(map->pmap);
-		} else {
-			basic_info->resident_size = pmap_resident_count(map->pmap);
-		}
-		basic_info->resident_size *= PAGE_SIZE;
-
-		basic_info->policy = ((task != kernel_task)?
-										  POLICY_TIMESHARE: POLICY_RR);
-		basic_info->suspend_count = task->user_stop_count;
-
-		absolutetime_to_microtime(task->total_user_time, &secs, &usecs);
-		basic_info->user_time.seconds = 
-			(typeof(basic_info->user_time.seconds))secs;
-		basic_info->user_time.microseconds = usecs;
-
-		absolutetime_to_microtime(task->total_system_time, &secs, &usecs);
-		basic_info->system_time.seconds = 
-			(typeof(basic_info->system_time.seconds))secs;
-		basic_info->system_time.microseconds = usecs;
-
-		*task_info_count = TASK_BASIC_INFO_32_COUNT;
-		break;
-	}
 
 #if defined(__arm__) || defined(__arm64__)
 	case TASK_BASIC_INFO_64_2:
 	{
-		task_basic_info_64_2_t	basic_info;
-		vm_map_t				map;
-		clock_sec_t				secs;
-		clock_usec_t			usecs;
+		task_basic_info_64_2_t  basic_info;
+		vm_map_t                                map;
+		clock_sec_t                             secs;
+		clock_usec_t                    usecs;
 
 		if (*task_info_count < TASK_BASIC_INFO_64_2_COUNT) {
-		    error = KERN_INVALID_ARGUMENT;
-		    break;
+			error = KERN_INVALID_ARGUMENT;
+			break;
 		}
 
 		basic_info = (task_basic_info_64_2_t)task_info_out;
@@ -3788,21 +3854,21 @@ task_info(
 		map = (task == kernel_task)? kernel_map: task->map;
 		basic_info->virtual_size  = map->size;
 		basic_info->resident_size =
-			(mach_vm_size_t)(pmap_resident_count(map->pmap))
-			* PAGE_SIZE_64;
+		    (mach_vm_size_t)(pmap_resident_count(map->pmap))
+		    * PAGE_SIZE_64;
 
 		basic_info->policy = ((task != kernel_task)?
-										  POLICY_TIMESHARE: POLICY_RR);
+		    POLICY_TIMESHARE: POLICY_RR);
 		basic_info->suspend_count = task->user_stop_count;
 
 		absolutetime_to_microtime(task->total_user_time, &secs, &usecs);
-		basic_info->user_time.seconds = 
-			(typeof(basic_info->user_time.seconds))secs;
+		basic_info->user_time.seconds =
+		    (typeof(basic_info->user_time.seconds))secs;
 		basic_info->user_time.microseconds = usecs;
 
 		absolutetime_to_microtime(task->total_system_time, &secs, &usecs);
 		basic_info->system_time.seconds =
-			(typeof(basic_info->system_time.seconds))secs;
+		    (typeof(basic_info->system_time.seconds))secs;
 		basic_info->system_time.microseconds = usecs;
 
 		*task_info_count = TASK_BASIC_INFO_64_2_COUNT;
@@ -3812,14 +3878,14 @@ task_info(
 #else /* defined(__arm__) || defined(__arm64__) */
 	case TASK_BASIC_INFO_64:
 	{
-		task_basic_info_64_t	basic_info;
-		vm_map_t				map;
-		clock_sec_t				secs;
-		clock_usec_t			usecs;
+		task_basic_info_64_t    basic_info;
+		vm_map_t                                map;
+		clock_sec_t                             secs;
+		clock_usec_t                    usecs;
 
 		if (*task_info_count < TASK_BASIC_INFO_64_COUNT) {
-		    error = KERN_INVALID_ARGUMENT;
-		    break;
+			error = KERN_INVALID_ARGUMENT;
+			break;
 		}
 
 		basic_info = (task_basic_info_64_t)task_info_out;
@@ -3827,21 +3893,21 @@ task_info(
 		map = (task == kernel_task)? kernel_map: task->map;
 		basic_info->virtual_size  = map->size;
 		basic_info->resident_size =
-			(mach_vm_size_t)(pmap_resident_count(map->pmap))
-			* PAGE_SIZE_64;
+		    (mach_vm_size_t)(pmap_resident_count(map->pmap))
+		    * PAGE_SIZE_64;
 
 		basic_info->policy = ((task != kernel_task)?
-										  POLICY_TIMESHARE: POLICY_RR);
+		    POLICY_TIMESHARE: POLICY_RR);
 		basic_info->suspend_count = task->user_stop_count;
 
 		absolutetime_to_microtime(task->total_user_time, &secs, &usecs);
-		basic_info->user_time.seconds = 
-			(typeof(basic_info->user_time.seconds))secs;
+		basic_info->user_time.seconds =
+		    (typeof(basic_info->user_time.seconds))secs;
 		basic_info->user_time.microseconds = usecs;
 
 		absolutetime_to_microtime(task->total_system_time, &secs, &usecs);
 		basic_info->system_time.seconds =
-			(typeof(basic_info->system_time.seconds))secs;
+		    (typeof(basic_info->system_time.seconds))secs;
 		basic_info->system_time.microseconds = usecs;
 
 		*task_info_count = TASK_BASIC_INFO_64_COUNT;
@@ -3857,8 +3923,8 @@ task_info(
 		clock_usec_t            usecs;
 
 		if (*task_info_count < MACH_TASK_BASIC_INFO_COUNT) {
-		    error = KERN_INVALID_ARGUMENT;
-		    break;
+			error = KERN_INVALID_ARGUMENT;
+			break;
 		}
 
 		basic_info = (mach_task_basic_info_t)task_info_out;
@@ -3875,13 +3941,13 @@ task_info(
 		    (mach_vm_size_t)(pmap_resident_max(map->pmap));
 		basic_info->resident_size_max *= PAGE_SIZE_64;
 
-		basic_info->policy = ((task != kernel_task) ? 
-		                      POLICY_TIMESHARE : POLICY_RR);
+		basic_info->policy = ((task != kernel_task) ?
+		    POLICY_TIMESHARE : POLICY_RR);
 
 		basic_info->suspend_count = task->user_stop_count;
 
 		absolutetime_to_microtime(task->total_user_time, &secs, &usecs);
-		basic_info->user_time.seconds = 
+		basic_info->user_time.seconds =
 		    (typeof(basic_info->user_time.seconds))secs;
 		basic_info->user_time.microseconds = usecs;
 
@@ -3896,12 +3962,12 @@ task_info(
 
 	case TASK_THREAD_TIMES_INFO:
 	{
-		task_thread_times_info_t	times_info;
-		thread_t					thread;
+		task_thread_times_info_t        times_info;
+		thread_t                                        thread;
 
 		if (*task_info_count < TASK_THREAD_TIMES_INFO_COUNT) {
-		    error = KERN_INVALID_ARGUMENT;
-		    break;
+			error = KERN_INVALID_ARGUMENT;
+			break;
 		}
 
 		times_info = (task_thread_times_info_t) task_info_out;
@@ -3912,10 +3978,11 @@ task_info(
 
 
 		queue_iterate(&task->threads, thread, thread_t, task_threads) {
-			time_value_t	user_time, system_time;
+			time_value_t    user_time, system_time;
 
-			if (thread->options & TH_OPT_IDLE_THREAD)
+			if (thread->options & TH_OPT_IDLE_THREAD) {
 				continue;
+			}
 
 			thread_read_times(thread, &user_time, &system_time, NULL);
 
@@ -3929,8 +3996,8 @@ task_info(
 
 	case TASK_ABSOLUTETIME_INFO:
 	{
-		task_absolutetime_info_t	info;
-		thread_t			thread;
+		task_absolutetime_info_t        info;
+		thread_t                        thread;
 
 		if (*task_info_count < TASK_ABSOLUTETIME_INFO_COUNT) {
 			error = KERN_INVALID_ARGUMENT;
@@ -3945,11 +4012,12 @@ task_info(
 		info->total_system = task->total_system_time;
 
 		queue_iterate(&task->threads, thread, thread_t, task_threads) {
-			uint64_t	tval;
-			spl_t 		x;
+			uint64_t        tval;
+			spl_t           x;
 
-			if (thread->options & TH_OPT_IDLE_THREAD)
+			if (thread->options & TH_OPT_IDLE_THREAD) {
 				continue;
+			}
 
 			x = splsched();
 			thread_lock(thread);
@@ -3988,7 +4056,7 @@ task_info(
 		 * size of the expected result structure.
 		 */
 #define TASK_LEGACY_DYLD_INFO_COUNT \
-		offsetof(struct task_dyld_info, all_image_info_format)/sizeof(natural_t)
+	        offsetof(struct task_dyld_info, all_image_info_format)/sizeof(natural_t)
 
 		if (*task_info_count < TASK_LEGACY_DYLD_INFO_COUNT) {
 			error = KERN_INVALID_ARGUMENT;
@@ -4002,8 +4070,8 @@ task_info(
 		/* only set format on output for those expecting it */
 		if (*task_info_count >= TASK_DYLD_INFO_COUNT) {
 			info->all_image_info_format = task_has_64Bit_addr(task) ?
-				                 TASK_DYLD_ALL_IMAGE_INFO_64 : 
-				                 TASK_DYLD_ALL_IMAGE_INFO_32 ;
+			    TASK_DYLD_ALL_IMAGE_INFO_64 :
+			    TASK_DYLD_ALL_IMAGE_INFO_32;
 			*task_info_count = TASK_DYLD_INFO_COUNT;
 		} else {
 			*task_info_count = TASK_LEGACY_DYLD_INFO_COUNT;
@@ -4037,12 +4105,12 @@ task_info(
 
 	case TASK_KERNELMEMORY_INFO:
 	{
-		task_kernelmemory_info_t	tkm_info;
-		ledger_amount_t			credit, debit;
+		task_kernelmemory_info_t        tkm_info;
+		ledger_amount_t                 credit, debit;
 
 		if (*task_info_count < TASK_KERNELMEMORY_INFO_COUNT) {
-		   error = KERN_INVALID_ARGUMENT;
-		   break;
+			error = KERN_INVALID_ARGUMENT;
+			break;
 		}
 
 		tkm_info = (task_kernelmemory_info_t) task_info_out;
@@ -4104,7 +4172,6 @@ task_info(
 	/* OBSOLETE */
 	case TASK_SCHED_FIFO_INFO:
 	{
-
 		if (*task_info_count < POLICY_FIFO_BASE_COUNT) {
 			error = KERN_INVALID_ARGUMENT;
 			break;
@@ -4117,7 +4184,7 @@ task_info(
 	/* OBSOLETE */
 	case TASK_SCHED_RR_INFO:
 	{
-		policy_rr_base_t	rr_base;
+		policy_rr_base_t        rr_base;
 		uint32_t quantum_time;
 		uint64_t quantum_ns;
 
@@ -4137,7 +4204,7 @@ task_info(
 
 		quantum_time = SCHED(initial_quantum_size)(THREAD_NULL);
 		absolutetime_to_nanoseconds(quantum_time, &quantum_ns);
-		
+
 		rr_base->quantum = (uint32_t)(quantum_ns / 1000 / 1000);
 
 		*task_info_count = POLICY_RR_BASE_COUNT;
@@ -4147,7 +4214,7 @@ task_info(
 	/* OBSOLETE */
 	case TASK_SCHED_TIMESHARE_INFO:
 	{
-		policy_timeshare_base_t	ts_base;
+		policy_timeshare_base_t ts_base;
 
 		if (*task_info_count < POLICY_TIMESHARE_BASE_COUNT) {
 			error = KERN_INVALID_ARGUMENT;
@@ -4169,11 +4236,11 @@ task_info(
 
 	case TASK_SECURITY_TOKEN:
 	{
-		security_token_t	*sec_token_p;
+		security_token_t        *sec_token_p;
 
 		if (*task_info_count < TASK_SECURITY_TOKEN_COUNT) {
-		    error = KERN_INVALID_ARGUMENT;
-		    break;
+			error = KERN_INVALID_ARGUMENT;
+			break;
 		}
 
 		sec_token_p = (security_token_t *) task_info_out;
@@ -4183,14 +4250,14 @@ task_info(
 		*task_info_count = TASK_SECURITY_TOKEN_COUNT;
 		break;
 	}
-            
+
 	case TASK_AUDIT_TOKEN:
 	{
-		audit_token_t	*audit_token_p;
+		audit_token_t   *audit_token_p;
 
 		if (*task_info_count < TASK_AUDIT_TOKEN_COUNT) {
-		    error = KERN_INVALID_ARGUMENT;
-		    break;
+			error = KERN_INVALID_ARGUMENT;
+			break;
 		}
 
 		audit_token_p = (audit_token_t *) task_info_out;
@@ -4200,19 +4267,19 @@ task_info(
 		*task_info_count = TASK_AUDIT_TOKEN_COUNT;
 		break;
 	}
-            
+
 	case TASK_SCHED_INFO:
 		error = KERN_INVALID_ARGUMENT;
 		break;
 
 	case TASK_EVENTS_INFO:
 	{
-		task_events_info_t	events_info;
-		thread_t			thread;
+		task_events_info_t      events_info;
+		thread_t                        thread;
 
 		if (*task_info_count < TASK_EVENTS_INFO_COUNT) {
-		   error = KERN_INVALID_ARGUMENT;
-		   break;
+			error = KERN_INVALID_ARGUMENT;
+			break;
 		}
 
 		events_info = (task_events_info_t) task_info_out;
@@ -4229,7 +4296,7 @@ task_info(
 		events_info->csw = task->c_switch;
 
 		queue_iterate(&task->threads, thread, thread_t, task_threads) {
-			events_info->csw	   += thread->c_switch;
+			events_info->csw           += thread->c_switch;
 			events_info->syscalls_mach += thread->syscalls_mach;
 			events_info->syscalls_unix += thread->syscalls_unix;
 		}
@@ -4241,8 +4308,8 @@ task_info(
 	case TASK_AFFINITY_TAG_INFO:
 	{
 		if (*task_info_count < TASK_AFFINITY_TAG_INFO_COUNT) {
-		    error = KERN_INVALID_ARGUMENT;
-		    break;
+			error = KERN_INVALID_ARGUMENT;
+			break;
 		}
 
 		error = task_affinity_info(task, task_info_out, task_info_count);
@@ -4273,12 +4340,12 @@ task_info(
 	case TASK_VM_INFO:
 	case TASK_VM_INFO_PURGEABLE:
 	{
-		task_vm_info_t		vm_info;
-		vm_map_t		map;
+		task_vm_info_t          vm_info;
+		vm_map_t                map;
 
 		if (*task_info_count < TASK_VM_INFO_REV0_COUNT) {
-		    error = KERN_INVALID_ARGUMENT;
-		    break;
+			error = KERN_INVALID_ARGUMENT;
+			break;
 		}
 
 		vm_info = (task_vm_info_t)task_info_out;
@@ -4335,14 +4402,14 @@ task_info(
 			 * when the system is under memory pressure.
 			 */
 			vm_info->internal -= (VM_PAGE_COMPRESSOR_COUNT *
-					      PAGE_SIZE);
+			    PAGE_SIZE);
 		} else {
-			mach_vm_size_t	volatile_virtual_size;
-			mach_vm_size_t	volatile_resident_size;
-			mach_vm_size_t	volatile_compressed_size;
-			mach_vm_size_t	volatile_pmap_size;
-			mach_vm_size_t	volatile_compressed_pmap_size;
-			kern_return_t	kr;
+			mach_vm_size_t  volatile_virtual_size;
+			mach_vm_size_t  volatile_resident_size;
+			mach_vm_size_t  volatile_compressed_size;
+			mach_vm_size_t  volatile_pmap_size;
+			mach_vm_size_t  volatile_compressed_pmap_size;
+			kern_return_t   kr;
 
 			if (flavor == TASK_VM_INFO_PURGEABLE) {
 				kr = vm_map_query_volatile(
@@ -4354,15 +4421,15 @@ task_info(
 					&volatile_compressed_pmap_size);
 				if (kr == KERN_SUCCESS) {
 					vm_info->purgeable_volatile_pmap =
-						volatile_pmap_size;
+					    volatile_pmap_size;
 					if (radar_20146450) {
-					vm_info->compressed -=
-						volatile_compressed_pmap_size;
+						vm_info->compressed -=
+						    volatile_compressed_pmap_size;
 					}
 					vm_info->purgeable_volatile_resident =
-						volatile_resident_size;
+					    volatile_resident_size;
 					vm_info->purgeable_volatile_virtual =
-						volatile_virtual_size;
+					    volatile_virtual_size;
 				}
 			}
 		}
@@ -4370,7 +4437,7 @@ task_info(
 
 		if (original_task_info_count >= TASK_VM_INFO_REV1_COUNT) {
 			vm_info->phys_footprint =
-				(mach_vm_size_t) get_task_phys_footprint(task);
+			    (mach_vm_size_t) get_task_phys_footprint(task);
 			*task_info_count = TASK_VM_INFO_REV1_COUNT;
 		}
 		if (original_task_info_count >= TASK_VM_INFO_REV2_COUNT) {
@@ -4388,16 +4455,16 @@ task_info(
 
 	case TASK_WAIT_STATE_INFO:
 	{
-		/* 
-		 * Deprecated flavor. Currently allowing some results until all users 
+		/*
+		 * Deprecated flavor. Currently allowing some results until all users
 		 * stop calling it. The results may not be accurate.
-         */
-		task_wait_state_info_t	wait_state_info;
+		 */
+		task_wait_state_info_t  wait_state_info;
 		uint64_t total_sfi_ledger_val = 0;
 
 		if (*task_info_count < TASK_WAIT_STATE_INFO_COUNT) {
-		   error = KERN_INVALID_ARGUMENT;
-		   break;
+			error = KERN_INVALID_ARGUMENT;
+			break;
 		}
 
 		wait_state_info = (task_wait_state_info_t) task_info_out;
@@ -4409,23 +4476,23 @@ task_info(
 		int i, prev_lentry = -1;
 		int64_t  val_credit, val_debit;
 
-		for (i = 0; i < MAX_SFI_CLASS_ID; i++){
-			val_credit =0;
+		for (i = 0; i < MAX_SFI_CLASS_ID; i++) {
+			val_credit = 0;
 			/*
-			 * checking with prev_lentry != entry ensures adjacent classes 
+			 * checking with prev_lentry != entry ensures adjacent classes
 			 * which share the same ledger do not add wait times twice.
 			 * Note: Use ledger() call to get data for each individual sfi class.
 			 */
 			if (prev_lentry != task_ledgers.sfi_wait_times[i] &&
-				KERN_SUCCESS == ledger_get_entries(task->ledger, 
-				                task_ledgers.sfi_wait_times[i], &val_credit, &val_debit)) {
+			    KERN_SUCCESS == ledger_get_entries(task->ledger,
+			    task_ledgers.sfi_wait_times[i], &val_credit, &val_debit)) {
 				total_sfi_ledger_val += val_credit;
 			}
 			prev_lentry = task_ledgers.sfi_wait_times[i];
 		}
 
 #endif /* CONFIG_SCHED_SFI */
-		wait_state_info->total_wait_sfi_state_time = total_sfi_ledger_val; 
+		wait_state_info->total_wait_sfi_state_time = total_sfi_ledger_val;
 		*task_info_count = TASK_WAIT_STATE_INFO_COUNT;
 
 		break;
@@ -4433,7 +4500,7 @@ task_info(
 	case TASK_VM_INFO_PURGEABLE_ACCOUNT:
 	{
 #if DEVELOPMENT || DEBUG
-		pvm_account_info_t	acnt_info;
+		pvm_account_info_t      acnt_info;
 
 		if (*task_info_count < PVM_ACCOUNT_INFO_COUNT) {
 			error = KERN_INVALID_ARGUMENT;
@@ -4459,11 +4526,11 @@ task_info(
 	}
 	case TASK_FLAGS_INFO:
 	{
-		task_flags_info_t  		flags_info;
+		task_flags_info_t               flags_info;
 
 		if (*task_info_count < TASK_FLAGS_INFO_COUNT) {
-		    error = KERN_INVALID_ARGUMENT;
-		    break;
+			error = KERN_INVALID_ARGUMENT;
+			break;
 		}
 
 		flags_info = (task_flags_info_t)task_info_out;
@@ -4490,10 +4557,10 @@ task_info(
 		}
 		dbg_info = (task_debug_info_internal_t) task_info_out;
 		dbg_info->ipc_space_size = 0;
-		if (task->itk_space){
+		if (task->itk_space) {
 			dbg_info->ipc_space_size = task->itk_space->is_table_size;
 		}
-		
+
 		dbg_info->suspend_count = task->suspend_count;
 
 		error = KERN_SUCCESS;
@@ -4509,7 +4576,7 @@ task_info(
 	}
 
 	task_unlock(task);
-	return (error);
+	return error;
 }
 
 /*
@@ -4527,18 +4594,19 @@ task_info(
  */
 kern_return_t
 task_info_from_user(
-	mach_port_t		task_port,
-	task_flavor_t		flavor,
-	task_info_t		task_info_out,
-	mach_msg_type_number_t	*task_info_count)
+	mach_port_t             task_port,
+	task_flavor_t           flavor,
+	task_info_t             task_info_out,
+	mach_msg_type_number_t  *task_info_count)
 {
 	task_t task;
 	kern_return_t ret;
 
-	if (flavor == TASK_DYLD_INFO)
+	if (flavor == TASK_DYLD_INFO) {
 		task = convert_port_to_task(task_port);
-	else
+	} else {
 		task = convert_port_to_task_name(task_port);
+	}
 
 	ret = task_info(task, flavor, task_info_out, task_info_count);
 
@@ -4547,7 +4615,7 @@ task_info_from_user(
 	return ret;
 }
 
-/* 
+/*
  *	task_power_info
  *
  *	Returns power stats for the task.
@@ -4555,20 +4623,20 @@ task_info_from_user(
  */
 void
 task_power_info_locked(
-	task_t			task,
-	task_power_info_t	info,
-	gpu_energy_data_t	ginfo,
-	task_power_info_v2_t	infov2)
+	task_t                  task,
+	task_power_info_t       info,
+	gpu_energy_data_t       ginfo,
+	task_power_info_v2_t    infov2)
 {
-	thread_t		thread;
-	ledger_amount_t		tmp;
+	thread_t                thread;
+	ledger_amount_t         tmp;
 
 	task_lock_assert_owned(task);
 
 	ledger_get_entries(task->ledger, task_ledgers.interrupt_wakeups,
-		(ledger_amount_t *)&info->task_interrupt_wakeups, &tmp);
+	    (ledger_amount_t *)&info->task_interrupt_wakeups, &tmp);
 	ledger_get_entries(task->ledger, task_ledgers.platform_idle_wakeups,
-		(ledger_amount_t *)&info->task_platform_idle_wakeups, &tmp);
+	    (ledger_amount_t *)&info->task_platform_idle_wakeups, &tmp);
 
 	info->task_timer_wakeups_bin_1 = task->task_timer_wakeups_bin_1;
 	info->task_timer_wakeups_bin_2 = task->task_timer_wakeups_bin_2;
@@ -4592,11 +4660,12 @@ task_power_info_locked(
 	}
 
 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
-		uint64_t	tval;
-		spl_t 		x;
+		uint64_t        tval;
+		spl_t           x;
 
-		if (thread->options & TH_OPT_IDLE_THREAD)
+		if (thread->options & TH_OPT_IDLE_THREAD) {
 			continue;
+		}
 
 		x = splsched();
 		thread_lock(thread);
@@ -4635,7 +4704,7 @@ task_power_info_locked(
 	}
 }
 
-/* 
+/*
  *	task_gpu_utilisation
  *
  *	Returns the total gpu time used by the all the threads of the task
@@ -4643,7 +4712,7 @@ task_power_info_locked(
  */
 uint64_t
 task_gpu_utilisation(
-	task_t	task)
+	task_t  task)
 {
 	uint64_t gpu_time = 0;
 #if !CONFIG_EMBEDDED
@@ -4669,7 +4738,7 @@ task_gpu_utilisation(
 	return gpu_time;
 }
 
-/* 
+/*
  *	task_energy
  *
  *	Returns the total energy used by the all the threads of the task
@@ -4677,7 +4746,7 @@ task_gpu_utilisation(
  */
 uint64_t
 task_energy(
-	task_t	task)
+	task_t  task)
 {
 	uint64_t energy = 0;
 	thread_t thread;
@@ -4703,7 +4772,7 @@ uint64_t
 task_cpu_ptime(
 	__unused task_t  task)
 {
-    return 0;
+	return 0;
 }
 
 
@@ -4712,7 +4781,7 @@ task_cpu_ptime(
  */
 void
 task_update_cpu_time_qos_stats(
-	task_t	task,
+	task_t  task,
 	uint64_t *eqos_stats,
 	uint64_t *rqos_stats)
 {
@@ -4755,11 +4824,12 @@ task_update_cpu_time_qos_stats(
 
 kern_return_t
 task_purgable_info(
-	task_t			task,
-	task_purgable_info_t	*stats)
+	task_t                  task,
+	task_purgable_info_t    *stats)
 {
-	if (task == TASK_NULL || stats == NULL)
+	if (task == TASK_NULL || stats == NULL) {
 		return KERN_INVALID_ARGUMENT;
+	}
 	/* Take task reference */
 	task_reference(task);
 	vm_purgeable_stats((vm_purgeable_info_t)stats, task);
@@ -4770,26 +4840,26 @@ task_purgable_info(
 
 void
 task_vtimer_set(
-	task_t		task,
-	integer_t	which)
+	task_t          task,
+	integer_t       which)
 {
-	thread_t	thread;
-	spl_t		x;
+	thread_t        thread;
+	spl_t           x;
 
 	task_lock(task);
 
 	task->vtimers |= which;
 
 	switch (which) {
-
 	case TASK_VTIMER_USER:
 		queue_iterate(&task->threads, thread, thread_t, task_threads) {
 			x = splsched();
 			thread_lock(thread);
-			if (thread->precise_user_kernel_time)
+			if (thread->precise_user_kernel_time) {
 				thread->vtimer_user_save = timer_grab(&thread->user_timer);
-			else
+			} else {
 				thread->vtimer_user_save = timer_grab(&thread->system_timer);
+			}
 			thread_unlock(thread);
 			splx(x);
 		}
@@ -4823,8 +4893,8 @@ task_vtimer_set(
 
 void
 task_vtimer_clear(
-	task_t		task,
-	integer_t	which)
+	task_t          task,
+	integer_t       which)
 {
 	assert(task == current_task());
 
@@ -4837,15 +4907,15 @@ task_vtimer_clear(
 
 void
 task_vtimer_update(
-__unused
-	task_t		task,
-	integer_t	which,
-	uint32_t	*microsecs)
+	__unused
+	task_t          task,
+	integer_t       which,
+	uint32_t        *microsecs)
 {
-	thread_t	thread = current_thread();
-	uint32_t	tdelt = 0;
-	clock_sec_t	secs = 0;
-	uint64_t	tsum;
+	thread_t        thread = current_thread();
+	uint32_t        tdelt = 0;
+	clock_sec_t     secs = 0;
+	uint64_t        tsum;
 
 	assert(task == current_task());
 
@@ -4859,14 +4929,13 @@ __unused
 	}
 
 	switch (which) {
-
 	case TASK_VTIMER_USER:
 		if (thread->precise_user_kernel_time) {
 			tdelt = (uint32_t)timer_delta(&thread->user_timer,
-								&thread->vtimer_user_save);
+			    &thread->vtimer_user_save);
 		} else {
 			tdelt = (uint32_t)timer_delta(&thread->system_timer,
-								&thread->vtimer_user_save);
+			    &thread->vtimer_user_save);
 		}
 		absolutetime_to_microtime(tdelt, &secs, microsecs);
 		break;
@@ -4877,8 +4946,9 @@ __unused
 		tdelt = (uint32_t)(tsum - thread->vtimer_prof_save);
 		absolutetime_to_microtime(tdelt, &secs, microsecs);
 		/* if the time delta is smaller than a usec, ignore */
-		if (*microsecs != 0)
+		if (*microsecs != 0) {
 			thread->vtimer_prof_save = tsum;
+		}
 		break;
 
 	case TASK_VTIMER_RLIM:
@@ -4901,11 +4971,11 @@ __unused
  */
 kern_return_t
 task_assign(
-	__unused task_t		task,
-	__unused processor_set_t	new_pset,
-	__unused boolean_t	assign_threads)
+	__unused task_t         task,
+	__unused processor_set_t        new_pset,
+	__unused boolean_t      assign_threads)
 {
-	return(KERN_FAILURE);
+	return KERN_FAILURE;
 }
 
 /*
@@ -4915,10 +4985,10 @@ task_assign(
  */
 kern_return_t
 task_assign_default(
-	task_t		task,
-	boolean_t	assign_threads)
+	task_t          task,
+	boolean_t       assign_threads)
 {
-    return (task_assign(task, &pset0, assign_threads));
+	return task_assign(task, &pset0, assign_threads);
 }
 
 /*
@@ -4928,11 +4998,12 @@ task_assign_default(
  */
 kern_return_t
 task_get_assignment(
-	task_t		task,
-	processor_set_t	*pset)
+	task_t          task,
+	processor_set_t *pset)
 {
-	if (!task || !task->active)
+	if (!task || !task->active) {
 		return KERN_FAILURE;
+	}
 
 	*pset = &pset0;
 
@@ -4941,57 +5012,57 @@ task_get_assignment(
 
 uint64_t
 get_task_dispatchqueue_offset(
-		task_t 		task)
+	task_t          task)
 {
 	return task->dispatchqueue_offset;
 }
 
 /*
- * 	task_policy
+ *      task_policy
  *
  *	Set scheduling policy and parameters, both base and limit, for
  *	the given task. Policy must be a policy which is enabled for the
- *	processor set. Change contained threads if requested. 
+ *	processor set. Change contained threads if requested.
  */
 kern_return_t
 task_policy(
-	__unused task_t			task,
-	__unused policy_t			policy_id,
-	__unused policy_base_t		base,
-	__unused mach_msg_type_number_t	count,
-	__unused boolean_t			set_limit,
-	__unused boolean_t			change)
+	__unused task_t                 task,
+	__unused policy_t                       policy_id,
+	__unused policy_base_t          base,
+	__unused mach_msg_type_number_t count,
+	__unused boolean_t                      set_limit,
+	__unused boolean_t                      change)
 {
-	return(KERN_FAILURE);
+	return KERN_FAILURE;
 }
 
 /*
  *	task_set_policy
  *
- *	Set scheduling policy and parameters, both base and limit, for 
+ *	Set scheduling policy and parameters, both base and limit, for
  *	the given task. Policy can be any policy implemented by the
  *	processor set, whether enabled or not. Change contained threads
  *	if requested.
  */
 kern_return_t
 task_set_policy(
-	__unused task_t			task,
-	__unused processor_set_t		pset,
-	__unused policy_t			policy_id,
-	__unused policy_base_t		base,
-	__unused mach_msg_type_number_t	base_count,
-	__unused policy_limit_t		limit,
-	__unused mach_msg_type_number_t	limit_count,
-	__unused boolean_t			change)
+	__unused task_t                 task,
+	__unused processor_set_t                pset,
+	__unused policy_t                       policy_id,
+	__unused policy_base_t          base,
+	__unused mach_msg_type_number_t base_count,
+	__unused policy_limit_t         limit,
+	__unused mach_msg_type_number_t limit_count,
+	__unused boolean_t                      change)
 {
-	return(KERN_FAILURE);
+	return KERN_FAILURE;
 }
 
 kern_return_t
 task_set_ras_pc(
- 	__unused task_t	task,
- 	__unused vm_offset_t	pc,
- 	__unused vm_offset_t	endpc)
+	__unused task_t task,
+	__unused vm_offset_t    pc,
+	__unused vm_offset_t    endpc)
 {
 	return KERN_FAILURE;
 }
@@ -5006,29 +5077,29 @@ task_synchronizer_destroy_all(task_t task)
 }
 
 /*
- * Install default (machine-dependent) initial thread state 
+ * Install default (machine-dependent) initial thread state
  * on the task.  Subsequent thread creation will have this initial
  * state set on the thread by machine_thread_inherit_taskwide().
  * Flavors and structures are exactly the same as those to thread_set_state()
  */
-kern_return_t 
+kern_return_t
 task_set_state(
-	task_t task, 
-	int flavor, 
-	thread_state_t state, 
+	task_t task,
+	int flavor,
+	thread_state_t state,
 	mach_msg_type_number_t state_count)
 {
 	kern_return_t ret;
 
 	if (task == TASK_NULL) {
-		return (KERN_INVALID_ARGUMENT);
+		return KERN_INVALID_ARGUMENT;
 	}
 
 	task_lock(task);
 
 	if (!task->active) {
 		task_unlock(task);
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	ret = machine_task_set_state(task, flavor, state, state_count);
@@ -5038,28 +5109,28 @@ task_set_state(
 }
 
 /*
- * Examine the default (machine-dependent) initial thread state 
+ * Examine the default (machine-dependent) initial thread state
  * on the task, as set by task_set_state().  Flavors and structures
  * are exactly the same as those passed to thread_get_state().
  */
-kern_return_t 
+kern_return_t
 task_get_state(
-	task_t 	task, 
-	int	flavor,
+	task_t  task,
+	int     flavor,
 	thread_state_t state,
 	mach_msg_type_number_t *state_count)
 {
 	kern_return_t ret;
 
 	if (task == TASK_NULL) {
-		return (KERN_INVALID_ARGUMENT);
+		return KERN_INVALID_ARGUMENT;
 	}
 
 	task_lock(task);
 
 	if (!task->active) {
 		task_unlock(task);
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	ret = machine_task_get_state(task, flavor, state, state_count);
@@ -5069,15 +5140,16 @@ task_get_state(
 }
 
 
-static kern_return_t __attribute__((noinline,not_tail_called))
+static kern_return_t __attribute__((noinline, not_tail_called))
 PROC_VIOLATED_GUARD__SEND_EXC_GUARD_AND_SUSPEND(
 	mach_exception_code_t code,
 	mach_exception_subcode_t subcode,
 	void *reason)
 {
 #ifdef MACH_BSD
-	if (1 == proc_selfpid())
-		return KERN_NOT_SUPPORTED;		// initproc is immune
+	if (1 == proc_selfpid()) {
+		return KERN_NOT_SUPPORTED;              // initproc is immune
+	}
 #endif
 	mach_exception_data_type_t codes[EXCEPTION_CODE_MAX] = {
 		[0] = code,
@@ -5109,19 +5181,19 @@ task_violated_guard(
 boolean_t
 task_get_memlimit_is_active(task_t task)
 {
-	assert (task != NULL);
+	assert(task != NULL);
 
 	if (task->memlimit_is_active == 1) {
-		return(TRUE);
+		return TRUE;
 	} else {
-		return (FALSE);
+		return FALSE;
 	}
 }
 
 void
 task_set_memlimit_is_active(task_t task, boolean_t memlimit_is_active)
 {
-	assert (task != NULL);
+	assert(task != NULL);
 
 	if (memlimit_is_active) {
 		task->memlimit_is_active = 1;
@@ -5132,20 +5204,20 @@ task_set_memlimit_is_active(task_t task, boolean_t memlimit_is_active)
 
 boolean_t
 task_get_memlimit_is_fatal(task_t task)
-{	
+{
 	assert(task != NULL);
 
 	if (task->memlimit_is_fatal == 1) {
- 		return(TRUE);
- 	} else {
- 		return(FALSE);
- 	}
+		return TRUE;
+	} else {
+		return FALSE;
+	}
 }
 
 void
 task_set_memlimit_is_fatal(task_t task, boolean_t memlimit_is_fatal)
 {
-	assert (task != NULL);
+	assert(task != NULL);
 
 	if (memlimit_is_fatal) {
 		task->memlimit_is_fatal = 1;
@@ -5161,7 +5233,7 @@ task_has_triggered_exc_resource(task_t task, boolean_t memlimit_is_active)
 
 	assert(task == current_task());
 
-	/* 
+	/*
 	 * Returns true, if task has already triggered an exc_resource exception.
 	 */
 
@@ -5171,7 +5243,7 @@ task_has_triggered_exc_resource(task_t task, boolean_t memlimit_is_active)
 		triggered = (task->memlimit_inactive_exc_resource ? TRUE : FALSE);
 	}
 
-	return(triggered);
+	return triggered;
 }
 
 void
@@ -5196,10 +5268,10 @@ task_mark_has_triggered_exc_resource(task_t task, boolean_t memlimit_is_active)
 void __attribute__((noinline))
 PROC_CROSSED_HIGH_WATERMARK__SEND_EXC_RESOURCE_AND_SUSPEND(int max_footprint_mb, boolean_t is_fatal)
 {
-	task_t						task 		= current_task();
-	int							pid         = 0;
-	const char					*procname 	= "unknown";
-	mach_exception_data_type_t	code[EXCEPTION_CODE_MAX];
+	task_t                                          task            = current_task();
+	int                                                     pid         = 0;
+	const char                                      *procname       = "unknown";
+	mach_exception_data_type_t      code[EXCEPTION_CODE_MAX];
 	boolean_t send_sync_exc_resource = FALSE;
 
 #ifdef MACH_BSD
@@ -5220,10 +5292,10 @@ PROC_CROSSED_HIGH_WATERMARK__SEND_EXC_RESOURCE_AND_SUSPEND(int max_footprint_mb,
 #endif
 #if CONFIG_COREDUMP
 	if (hwm_user_cores) {
-		int				error;
-		uint64_t		starttime, end;
-		clock_sec_t		secs = 0;
-		uint32_t		microsecs = 0;
+		int                             error;
+		uint64_t                starttime, end;
+		clock_sec_t             secs = 0;
+		uint32_t                microsecs = 0;
 
 		starttime = mach_absolute_time();
 		/*
@@ -5235,20 +5307,20 @@ PROC_CROSSED_HIGH_WATERMARK__SEND_EXC_RESOURCE_AND_SUSPEND(int max_footprint_mb,
 			printf("couldn't take coredump of %s[%d]: %d\n", procname, pid, error);
 		}
 		/*
-		* coredump() leaves the task suspended.
-		*/
+		 * coredump() leaves the task suspended.
+		 */
 		task_resume_internal(current_task());
 
 		end = mach_absolute_time();
 		absolutetime_to_microtime(end - starttime, &secs, &microsecs);
 		printf("coredump of %s[%d] taken in %d secs %d microsecs\n",
-		       proc_name_address(current_task()->bsd_info), pid, (int)secs, microsecs);
+		    proc_name_address(current_task()->bsd_info), pid, (int)secs, microsecs);
 	}
 #endif /* CONFIG_COREDUMP */
 
 	if (disable_exc_resource) {
 		printf("process %s[%d] crossed memory high watermark (%d MB); EXC_RESOURCE "
-			"supressed by a boot-arg.\n", procname, pid, max_footprint_mb);
+		    "supressed by a boot-arg.\n", procname, pid, max_footprint_mb);
 		return;
 	}
 
@@ -5283,10 +5355,10 @@ PROC_CROSSED_HIGH_WATERMARK__SEND_EXC_RESOURCE_AND_SUSPEND(int max_footprint_mb,
 	} else {
 		if (audio_active) {
 			printf("process %s[%d] crossed memory high watermark (%d MB); EXC_RESOURCE "
-			"supressed due to audio playback.\n", procname, pid, max_footprint_mb);
+			    "supressed due to audio playback.\n", procname, pid, max_footprint_mb);
 		} else {
 			task_enqueue_exception_with_corpse(task, EXC_RESOURCE,
-				code, EXCEPTION_CODE_MAX, NULL);
+			    code, EXCEPTION_CODE_MAX, NULL);
 		}
 	}
 
@@ -5306,7 +5378,7 @@ task_footprint_exceeded(int warning, __unused const void *param0, __unused const
 {
 	ledger_amount_t max_footprint, max_footprint_mb;
 	task_t task;
-        boolean_t is_warning;
+	boolean_t is_warning;
 	boolean_t memlimit_is_active;
 	boolean_t memlimit_is_fatal;
 
@@ -5315,19 +5387,19 @@ task_footprint_exceeded(int warning, __unused const void *param0, __unused const
 		 * Task memory limits only provide a warning on the way up.
 		 */
 		return;
-        } else if (warning == LEDGER_WARNING_ROSE_ABOVE) {
-                /*
-                 * This task is in danger of violating a memory limit,
-                 * It has exceeded a percentage level of the limit.
-                 */
-                is_warning = TRUE;
-        } else {
-                /*
-                 * The task has exceeded the physical footprint limit.
-                 * This is not a warning but a true limit violation.
-                 */
-                is_warning = FALSE;
-        }
+	} else if (warning == LEDGER_WARNING_ROSE_ABOVE) {
+		/*
+		 * This task is in danger of violating a memory limit,
+		 * It has exceeded a percentage level of the limit.
+		 */
+		is_warning = TRUE;
+	} else {
+		/*
+		 * The task has exceeded the physical footprint limit.
+		 * This is not a warning but a true limit violation.
+		 */
+		is_warning = FALSE;
+	}
 
 	task = current_task();
 
@@ -5366,7 +5438,7 @@ task_set_phys_footprint_limit(
 	boolean_t memlimit_is_fatal;
 
 	if ((error = proc_check_footprint_priv())) {
-		return (KERN_NO_ACCESS);
+		return KERN_NO_ACCESS;
 	}
 
 	/*
@@ -5397,7 +5469,7 @@ task_convert_phys_footprint_limit(
 		/* nothing to convert */
 		*converted_limit_mb = limit_mb;
 	}
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 
@@ -5409,17 +5481,17 @@ task_set_phys_footprint_limit_internal(
 	boolean_t memlimit_is_active,
 	boolean_t memlimit_is_fatal)
 {
-	ledger_amount_t	old;
+	ledger_amount_t old;
 
 	ledger_get_limit(task->ledger, task_ledgers.phys_footprint, &old);
 
-	/* 
+	/*
 	 * Check that limit >> 20 will not give an "unexpected" 32-bit
 	 * result. There are, however, implicit assumptions that -1 mb limit
 	 * equates to LEDGER_LIMIT_INFINITY.
 	 */
 	assert(((old & 0xFFF0000000000000LL) == 0) || (old == LEDGER_LIMIT_INFINITY));
-	
+
 	if (old_limit_mb) {
 		*old_limit_mb = (int)(old >> 20);
 	}
@@ -5429,19 +5501,19 @@ task_set_phys_footprint_limit_internal(
 		 * Caller wishes to remove the limit.
 		 */
 		ledger_set_limit(task->ledger, task_ledgers.phys_footprint,
-		                 max_task_footprint ? max_task_footprint : LEDGER_LIMIT_INFINITY,
-		                 max_task_footprint ? max_task_footprint_warning_level : 0);
+		    max_task_footprint ? max_task_footprint : LEDGER_LIMIT_INFINITY,
+		    max_task_footprint ? max_task_footprint_warning_level : 0);
 
 		task_lock(task);
 		task_set_memlimit_is_active(task, memlimit_is_active);
 		task_set_memlimit_is_fatal(task, memlimit_is_fatal);
 		task_unlock(task);
 
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 #ifdef CONFIG_NOMONITORS
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 #endif /* CONFIG_NOMONITORS */
 
 	task_lock(task);
@@ -5453,42 +5525,42 @@ task_set_phys_footprint_limit_internal(
 		 * memlimit state is not changing
 		 */
 		task_unlock(task);
-		return(KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	task_set_memlimit_is_active(task, memlimit_is_active);
 	task_set_memlimit_is_fatal(task, memlimit_is_fatal);
 
 	ledger_set_limit(task->ledger, task_ledgers.phys_footprint,
-		(ledger_amount_t)new_limit_mb << 20, PHYS_FOOTPRINT_WARNING_LEVEL);
+	    (ledger_amount_t)new_limit_mb << 20, PHYS_FOOTPRINT_WARNING_LEVEL);
 
-        if (task == current_task()) {
-                ledger_check_new_balance(current_thread(), task->ledger,
-                                         task_ledgers.phys_footprint);
-        }
+	if (task == current_task()) {
+		ledger_check_new_balance(current_thread(), task->ledger,
+		    task_ledgers.phys_footprint);
+	}
 
 	task_unlock(task);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
-task_get_phys_footprint_limit(  	
+task_get_phys_footprint_limit(
 	task_t task,
 	int *limit_mb)
 {
-	ledger_amount_t	limit;
-    
+	ledger_amount_t limit;
+
 	ledger_get_limit(task->ledger, task_ledgers.phys_footprint, &limit);
-	/* 
+	/*
 	 * Check that limit >> 20 will not give an "unexpected" signed, 32-bit
 	 * result. There are, however, implicit assumptions that -1 mb limit
 	 * equates to LEDGER_LIMIT_INFINITY.
 	 */
 	assert(((limit & 0xFFF0000000000000LL) == 0) || (limit == LEDGER_LIMIT_INFINITY));
 	*limit_mb = (int)(limit >> 20);
-	
-	return (KERN_SUCCESS);
+
+	return KERN_SUCCESS;
 }
 #else /* CONFIG_MEMORYSTATUS */
 kern_return_t
@@ -5497,15 +5569,15 @@ task_set_phys_footprint_limit(
 	__unused int new_limit_mb,
 	__unused int *old_limit_mb)
 {
-	return (KERN_FAILURE);
+	return KERN_FAILURE;
 }
 
 kern_return_t
-task_get_phys_footprint_limit(  	
+task_get_phys_footprint_limit(
 	__unused task_t task,
 	__unused int *limit_mb)
 {
-	return (KERN_FAILURE);
+	return KERN_FAILURE;
 }
 #endif /* CONFIG_MEMORYSTATUS */
 
@@ -5525,43 +5597,50 @@ task_set_thread_limit(task_t task, uint16_t thread_limit)
  * are currently implemented in macros within the osfmk
  * component.  Just export them as functions of the same name.
  */
-boolean_t is_kerneltask(task_t t)
+boolean_t
+is_kerneltask(task_t t)
 {
-	if (t == kernel_task)
-		return (TRUE);
+	if (t == kernel_task) {
+		return TRUE;
+	}
 
-	return (FALSE);
+	return FALSE;
 }
 
-boolean_t is_corpsetask(task_t t)
+boolean_t
+is_corpsetask(task_t t)
 {
-	return (task_is_a_corpse(t));
+	return task_is_a_corpse(t);
 }
 
 #undef current_task
 task_t current_task(void);
-task_t current_task(void)
+task_t
+current_task(void)
 {
-	return (current_task_fast());
+	return current_task_fast();
 }
 
 #undef task_reference
 void task_reference(task_t task);
 void
 task_reference(
-	task_t		task)
+	task_t          task)
 {
-	if (task != TASK_NULL)
+	if (task != TASK_NULL) {
 		task_reference_internal(task);
+	}
 }
 
 /* defined in bsd/kern/kern_prot.c */
 extern int get_audit_token_pid(audit_token_t *audit_token);
 
-int task_pid(task_t task)
+int
+task_pid(task_t task)
 {
-	if (task)
+	if (task) {
 		return get_audit_token_pid(&task->audit_token);
+	}
 	return -1;
 }
 
@@ -5603,10 +5682,11 @@ task_findtid(task_t task, uint64_t tid)
 
 	task_unlock(task);
 
-	return (found_thread);
+	return found_thread;
 }
 
-int pid_from_task(task_t task)
+int
+pid_from_task(task_t task)
 {
 	int pid = -1;
 
@@ -5646,8 +5726,8 @@ task_wakeups_monitor_ctl(task_t task, uint32_t *flags, int32_t *rate_hz)
 
 	task_lock(task);
 	if (*flags & WAKEMON_GET_PARAMS) {
-		ledger_amount_t	limit;
-		uint64_t		period;
+		ledger_amount_t limit;
+		uint64_t                period;
 
 		ledger_get_limit(ledger, task_ledgers.interrupt_wakeups, &limit);
 		ledger_get_period(ledger, task_ledgers.interrupt_wakeups, &period);
@@ -5669,7 +5749,7 @@ task_wakeups_monitor_ctl(task_t task, uint32_t *flags, int32_t *rate_hz)
 		/*
 		 * If WAKEMON_GET_PARAMS is present in flags, all other flags are ignored.
 		 */
- 		task_unlock(task);
+		task_unlock(task);
 		return KERN_SUCCESS;
 	}
 
@@ -5691,7 +5771,7 @@ task_wakeups_monitor_ctl(task_t task, uint32_t *flags, int32_t *rate_hz)
 
 #ifndef CONFIG_NOMONITORS
 		ledger_set_limit(ledger, task_ledgers.interrupt_wakeups, *rate_hz * task_wakeups_monitor_interval,
-			task_wakeups_monitor_ustackshots_trigger_pct);
+		    task_wakeups_monitor_ustackshots_trigger_pct);
 		ledger_set_period(ledger, task_ledgers.interrupt_wakeups, task_wakeups_monitor_interval * NSEC_PER_SEC);
 		ledger_enable_callback(ledger, task_ledgers.interrupt_wakeups);
 #endif /* CONFIG_NOMONITORS */
@@ -5717,7 +5797,7 @@ void
 task_wakeups_rate_exceeded(int warning, __unused const void *param0, __unused const void *param1)
 {
 	if (warning == LEDGER_WARNING_ROSE_ABOVE) {
-#if CONFIG_TELEMETRY		
+#if CONFIG_TELEMETRY
 		/*
 		 * This task is in danger of violating the wakeups monitor. Enable telemetry on this task
 		 * so there are micro-stackshots available if and when EXC_RESOURCE is triggered.
@@ -5755,8 +5835,9 @@ SENDING_NOTIFICATION__THIS_PROCESS_IS_CAUSING_TOO_MANY_WAKEUPS(void)
 
 #ifdef MACH_BSD
 	pid = proc_selfpid();
-	if (task->bsd_info != NULL)
+	if (task->bsd_info != NULL) {
 		procname = proc_name_address(current_task()->bsd_info);
+	}
 #endif
 
 	ledger_get_entry_info(task->ledger, task_ledgers.interrupt_wakeups, &lei);
@@ -5772,17 +5853,17 @@ SENDING_NOTIFICATION__THIS_PROCESS_IS_CAUSING_TOO_MANY_WAKEUPS(void)
 	fatal = task->rusage_cpu_flags & TASK_RUSECPU_FLAGS_FATAL_WAKEUPSMON;
 	trace_resource_violation(RMON_CPUWAKES_VIOLATED, &lei);
 	os_log(OS_LOG_DEFAULT, "process %s[%d] caught waking the CPU %llu times "
-	       "over ~%llu seconds, averaging %llu wakes / second and "
-	       "violating a %slimit of %llu wakes over %llu seconds.\n",
-	       procname, pid,
-	       lei.lei_balance, lei.lei_last_refill / NSEC_PER_SEC,
-		   lei.lei_last_refill == 0 ? 0 :
-				(NSEC_PER_SEC * lei.lei_balance / lei.lei_last_refill),
-	       fatal ? "FATAL " : "",
-		   lei.lei_limit, lei.lei_refill_period / NSEC_PER_SEC);
+	    "over ~%llu seconds, averaging %llu wakes / second and "
+	    "violating a %slimit of %llu wakes over %llu seconds.\n",
+	    procname, pid,
+	    lei.lei_balance, lei.lei_last_refill / NSEC_PER_SEC,
+	    lei.lei_last_refill == 0 ? 0 :
+	    (NSEC_PER_SEC * lei.lei_balance / lei.lei_last_refill),
+	    fatal ? "FATAL " : "",
+	    lei.lei_limit, lei.lei_refill_period / NSEC_PER_SEC);
 
 	kr = send_resource_violation(send_cpu_wakes_violation, task, &lei,
-	                             fatal ? kRNFatalLimitFlag : 0);
+	    fatal ? kRNFatalLimitFlag : 0);
 	if (kr) {
 		printf("send_resource_violation(CPU wakes, ...): error %#x\n", kr);
 	}
@@ -5790,28 +5871,28 @@ SENDING_NOTIFICATION__THIS_PROCESS_IS_CAUSING_TOO_MANY_WAKEUPS(void)
 #ifdef EXC_RESOURCE_MONITORS
 	if (disable_exc_resource) {
 		printf("process %s[%d] caught causing excessive wakeups. EXC_RESOURCE "
-			"supressed by a boot-arg\n", procname, pid);
+		    "supressed by a boot-arg\n", procname, pid);
 		return;
 	}
 	if (audio_active) {
 		os_log(OS_LOG_DEFAULT, "process %s[%d] caught causing excessive wakeups. EXC_RESOURCE "
-		       "supressed due to audio playback\n", procname, pid);
+		    "supressed due to audio playback\n", procname, pid);
 		return;
 	}
 	if (lei.lei_last_refill == 0) {
 		os_log(OS_LOG_DEFAULT, "process %s[%d] caught causing excessive wakeups. EXC_RESOURCE "
-		       "supressed due to lei.lei_last_refill = 0 \n", procname, pid);
+		    "supressed due to lei.lei_last_refill = 0 \n", procname, pid);
 	}
 
 	code[0] = code[1] = 0;
 	EXC_RESOURCE_ENCODE_TYPE(code[0], RESOURCE_TYPE_WAKEUPS);
 	EXC_RESOURCE_ENCODE_FLAVOR(code[0], FLAVOR_WAKEUPS_MONITOR);
 	EXC_RESOURCE_CPUMONITOR_ENCODE_WAKEUPS_PERMITTED(code[0],
-	                    NSEC_PER_SEC * lei.lei_limit / lei.lei_refill_period);
+	    NSEC_PER_SEC * lei.lei_limit / lei.lei_refill_period);
 	EXC_RESOURCE_CPUMONITOR_ENCODE_OBSERVATION_INTERVAL(code[0],
-	                    lei.lei_last_refill);
+	    lei.lei_last_refill);
 	EXC_RESOURCE_CPUMONITOR_ENCODE_WAKEUPS_OBSERVED(code[1],
-	                    NSEC_PER_SEC * lei.lei_balance / lei.lei_last_refill);
+	    NSEC_PER_SEC * lei.lei_balance / lei.lei_last_refill);
 	exception_triage(EXC_RESOURCE, code, EXCEPTION_CODE_MAX);
 #endif /* EXC_RESOURCE_MONITORS */
 
@@ -5820,12 +5901,12 @@ SENDING_NOTIFICATION__THIS_PROCESS_IS_CAUSING_TOO_MANY_WAKEUPS(void)
 	}
 }
 
-static boolean_t 
+static boolean_t
 global_update_logical_writes(int64_t io_delta)
 {
 	int64_t old_count, new_count;
 	boolean_t needs_telemetry;
-	
+
 	do {
 		new_count = old_count = global_logical_writes_count;
 		new_count += io_delta;
@@ -5835,45 +5916,47 @@ global_update_logical_writes(int64_t io_delta)
 		} else {
 			needs_telemetry = FALSE;
 		}
-	} while(!OSCompareAndSwap64(old_count, new_count, &global_logical_writes_count));
+	} while (!OSCompareAndSwap64(old_count, new_count, &global_logical_writes_count));
 	return needs_telemetry;
 }
 
-void task_update_logical_writes(task_t task, uint32_t io_size, int flags, void *vp)
+void
+task_update_logical_writes(task_t task, uint32_t io_size, int flags, void *vp)
 {
 	int64_t io_delta = 0;
 	boolean_t needs_telemetry = FALSE;
 
-	if ((!task) || (!io_size) || (!vp))
+	if ((!task) || (!io_size) || (!vp)) {
 		return;
-	
-	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_DATA_WRITE)) | DBG_FUNC_NONE, 
-							task_pid(task), io_size, flags, (uintptr_t)VM_KERNEL_ADDRPERM(vp), 0);
+	}
+
+	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_DATA_WRITE)) | DBG_FUNC_NONE,
+	    task_pid(task), io_size, flags, (uintptr_t)VM_KERNEL_ADDRPERM(vp), 0);
 	DTRACE_IO4(logical_writes, struct task *, task, uint32_t, io_size, int, flags, vnode *, vp);
-	switch(flags) {
-		case TASK_WRITE_IMMEDIATE:
-			OSAddAtomic64(io_size, (SInt64 *)&(task->task_immediate_writes));
-			ledger_credit(task->ledger, task_ledgers.logical_writes, io_size);
-			break;
-		case TASK_WRITE_DEFERRED:
-			OSAddAtomic64(io_size, (SInt64 *)&(task->task_deferred_writes));
-			ledger_credit(task->ledger, task_ledgers.logical_writes, io_size);
-			break;
-		case TASK_WRITE_INVALIDATED:
-			OSAddAtomic64(io_size, (SInt64 *)&(task->task_invalidated_writes));
-			ledger_debit(task->ledger, task_ledgers.logical_writes, io_size);
-			break;
-		case TASK_WRITE_METADATA:
-			OSAddAtomic64(io_size, (SInt64 *)&(task->task_metadata_writes));
-			ledger_credit(task->ledger, task_ledgers.logical_writes, io_size);
-			break;
+	switch (flags) {
+	case TASK_WRITE_IMMEDIATE:
+		OSAddAtomic64(io_size, (SInt64 *)&(task->task_immediate_writes));
+		ledger_credit(task->ledger, task_ledgers.logical_writes, io_size);
+		break;
+	case TASK_WRITE_DEFERRED:
+		OSAddAtomic64(io_size, (SInt64 *)&(task->task_deferred_writes));
+		ledger_credit(task->ledger, task_ledgers.logical_writes, io_size);
+		break;
+	case TASK_WRITE_INVALIDATED:
+		OSAddAtomic64(io_size, (SInt64 *)&(task->task_invalidated_writes));
+		ledger_debit(task->ledger, task_ledgers.logical_writes, io_size);
+		break;
+	case TASK_WRITE_METADATA:
+		OSAddAtomic64(io_size, (SInt64 *)&(task->task_metadata_writes));
+		ledger_credit(task->ledger, task_ledgers.logical_writes, io_size);
+		break;
 	}
 
 	io_delta = (flags == TASK_WRITE_INVALIDATED) ? ((int64_t)io_size * -1ll) : ((int64_t)io_size);
-	if (io_telemetry_limit != 0) {  
+	if (io_telemetry_limit != 0) {
 		/* If io_telemetry_limit is 0, disable global updates and I/O telemetry */
 		needs_telemetry = global_update_logical_writes(io_delta);
-		if (needs_telemetry) { 
+		if (needs_telemetry) {
 			act_set_io_telemetry_ast(current_thread());
 		}
 	}
@@ -5889,14 +5972,13 @@ task_io_monitor_ctl(task_t task, uint32_t *flags)
 
 	task_lock(task);
 	if (*flags & IOMON_ENABLE) {
-		/* Configure the physical I/O ledger */	
+		/* Configure the physical I/O ledger */
 		ledger_set_limit(ledger, task_ledgers.physical_writes, (task_iomon_limit_mb * 1024 * 1024), 0);
 		ledger_set_period(ledger, task_ledgers.physical_writes, (task_iomon_interval_secs * NSEC_PER_SEC));
 
 		/* Configure the logical I/O ledger */
 		ledger_set_limit(ledger, task_ledgers.logical_writes, (task_iomon_limit_mb * 1024 * 1024), 0);
 		ledger_set_period(ledger, task_ledgers.logical_writes, (task_iomon_interval_secs * NSEC_PER_SEC));
-		
 	} else if (*flags & IOMON_DISABLE) {
 		/*
 		 * Caller wishes to disable I/O monitor on the task.
@@ -5919,7 +6001,8 @@ task_io_rate_exceeded(int warning, const void *param0, __unused const void *para
 	}
 }
 
-void __attribute__((noinline)) SENDING_NOTIFICATION__THIS_PROCESS_IS_CAUSING_TOO_MUCH_IO(int flavor)
+void __attribute__((noinline))
+SENDING_NOTIFICATION__THIS_PROCESS_IS_CAUSING_TOO_MUCH_IO(int flavor)
 {
 	int                             pid = 0;
 	task_t                          task = current_task();
@@ -5932,20 +6015,20 @@ void __attribute__((noinline)) SENDING_NOTIFICATION__THIS_PROCESS_IS_CAUSING_TOO
 #ifdef MACH_BSD
 	pid = proc_selfpid();
 #endif
-	/* 
-	 * Get the ledger entry info. We need to do this before disabling the exception 
+	/*
+	 * Get the ledger entry info. We need to do this before disabling the exception
 	 * to get correct values for all fields.
 	 */
-	switch(flavor) {
-		case FLAVOR_IO_PHYSICAL_WRITES:
-			ledger_get_entry_info(task->ledger, task_ledgers.physical_writes, &lei);
-			break;
-		case FLAVOR_IO_LOGICAL_WRITES:
-			ledger_get_entry_info(task->ledger, task_ledgers.logical_writes, &lei);
-			break;
+	switch (flavor) {
+	case FLAVOR_IO_PHYSICAL_WRITES:
+		ledger_get_entry_info(task->ledger, task_ledgers.physical_writes, &lei);
+		break;
+	case FLAVOR_IO_LOGICAL_WRITES:
+		ledger_get_entry_info(task->ledger, task_ledgers.logical_writes, &lei);
+		break;
 	}
 
-	
+
 	/*
 	 * Disable the exception notification so we don't overwhelm
 	 * the listener with an endless stream of redundant exceptions.
@@ -5958,7 +6041,7 @@ void __attribute__((noinline)) SENDING_NOTIFICATION__THIS_PROCESS_IS_CAUSING_TOO
 		trace_resource_violation(RMON_LOGWRITES_VIOLATED, &lei);
 	}
 	os_log(OS_LOG_DEFAULT, "process [%d] caught causing excessive I/O (flavor: %d). Task I/O: %lld MB. [Limit : %lld MB per %lld secs]\n",
-		pid, flavor, (lei.lei_balance / (1024 * 1024)), (lei.lei_limit / (1024 * 1024)), (lei.lei_refill_period / NSEC_PER_SEC));
+	    pid, flavor, (lei.lei_balance / (1024 * 1024)), (lei.lei_limit / (1024 * 1024)), (lei.lei_refill_period / NSEC_PER_SEC));
 
 	kr = send_resource_violation(send_disk_writes_violation, task, &lei, kRNFlagsNone);
 	if (kr) {
@@ -5974,29 +6057,31 @@ void __attribute__((noinline)) SENDING_NOTIFICATION__THIS_PROCESS_IS_CAUSING_TOO
 	EXC_RESOURCE_IO_ENCODE_OBSERVED(code[1], (lei.lei_balance / (1024 * 1024)));
 	exception_triage(EXC_RESOURCE, code, EXCEPTION_CODE_MAX);
 #endif /* EXC_RESOURCE_MONITORS */
-}	
+}
 
 /* Placeholders for the task set/get voucher interfaces */
-kern_return_t 
+kern_return_t
 task_get_mach_voucher(
-	task_t			task,
+	task_t                  task,
 	mach_voucher_selector_t __unused which,
-	ipc_voucher_t		*voucher)
+	ipc_voucher_t           *voucher)
 {
-	if (TASK_NULL == task)
+	if (TASK_NULL == task) {
 		return KERN_INVALID_TASK;
+	}
 
 	*voucher = NULL;
 	return KERN_SUCCESS;
 }
 
-kern_return_t 
+kern_return_t
 task_set_mach_voucher(
-	task_t			task,
-	ipc_voucher_t		__unused voucher)
+	task_t                  task,
+	ipc_voucher_t           __unused voucher)
 {
-	if (TASK_NULL == task)
+	if (TASK_NULL == task) {
 		return KERN_INVALID_TASK;
+	}
 
 	return KERN_SUCCESS;
 }
@@ -6017,7 +6102,8 @@ task_swap_mach_voucher(
 	return KERN_NOT_SUPPORTED;
 }
 
-void task_set_gpu_denied(task_t task, boolean_t denied)
+void
+task_set_gpu_denied(task_t task, boolean_t denied)
 {
 	task_lock(task);
 
@@ -6030,23 +6116,25 @@ void task_set_gpu_denied(task_t task, boolean_t denied)
 	task_unlock(task);
 }
 
-boolean_t task_is_gpu_denied(task_t task)
+boolean_t
+task_is_gpu_denied(task_t task)
 {
 	/* We don't need the lock to read this flag */
 	return (task->t_flags & TF_GPU_DENIED) ? TRUE : FALSE;
 }
 
 
-uint64_t get_task_memory_region_count(task_t task)
+uint64_t
+get_task_memory_region_count(task_t task)
 {
 	vm_map_t map;
 	map = (task == kernel_task) ? kernel_map: task->map;
-	return((uint64_t)get_map_nentries(map));
+	return (uint64_t)get_map_nentries(map);
 }
 
 static void
 kdebug_trace_dyld_internal(uint32_t base_code,
-	struct dyld_kernel_image_info *info)
+    struct dyld_kernel_image_info *info)
 {
 	static_assert(sizeof(info->uuid) >= 16);
 
@@ -6054,34 +6142,34 @@ kdebug_trace_dyld_internal(uint32_t base_code,
 	uint64_t *uuid = (uint64_t *)&(info->uuid);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, base_code), uuid[0],
-		uuid[1], info->load_addr,
-		(uint64_t)info->fsid.val[0] | ((uint64_t)info->fsid.val[1] << 32),
-		0);
+	    KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, base_code), uuid[0],
+	    uuid[1], info->load_addr,
+	    (uint64_t)info->fsid.val[0] | ((uint64_t)info->fsid.val[1] << 32),
+	    0);
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, base_code + 1),
-		(uint64_t)info->fsobjid.fid_objno |
-		((uint64_t)info->fsobjid.fid_generation << 32),
-		0, 0, 0, 0);
+	    KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, base_code + 1),
+	    (uint64_t)info->fsobjid.fid_objno |
+	    ((uint64_t)info->fsobjid.fid_generation << 32),
+	    0, 0, 0, 0);
 #else /* defined(__LP64__) */
 	uint32_t *uuid = (uint32_t *)&(info->uuid);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, base_code + 2), uuid[0],
-		uuid[1], uuid[2], uuid[3], 0);
+	    KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, base_code + 2), uuid[0],
+	    uuid[1], uuid[2], uuid[3], 0);
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, base_code + 3),
-		(uint32_t)info->load_addr, info->fsid.val[0], info->fsid.val[1],
-		info->fsobjid.fid_objno, 0);
+	    KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, base_code + 3),
+	    (uint32_t)info->load_addr, info->fsid.val[0], info->fsid.val[1],
+	    info->fsobjid.fid_objno, 0);
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, base_code + 4),
-		info->fsobjid.fid_generation, 0, 0, 0, 0);
+	    KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, base_code + 4),
+	    info->fsobjid.fid_generation, 0, 0, 0, 0);
 #endif /* !defined(__LP64__) */
 }
 
 static kern_return_t
 kdebug_trace_dyld(task_t task, uint32_t base_code,
-	vm_map_copy_t infos_copy, mach_msg_type_number_t infos_len)
+    vm_map_copy_t infos_copy, mach_msg_type_number_t infos_len)
 {
 	kern_return_t kr;
 	dyld_kernel_image_info_array_t infos;
@@ -6093,8 +6181,7 @@ kdebug_trace_dyld(task_t task, uint32_t base_code,
 	}
 
 	if (!kdebug_enable ||
-		!kdebug_debugid_enabled(KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, 0)))
-	{
+	    !kdebug_debugid_enabled(KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, 0))) {
 		vm_map_copy_discard(infos_copy);
 		return KERN_SUCCESS;
 	}
@@ -6121,35 +6208,35 @@ kdebug_trace_dyld(task_t task, uint32_t base_code,
 
 kern_return_t
 task_register_dyld_image_infos(task_t task,
-                               dyld_kernel_image_info_array_t infos_copy,
-                               mach_msg_type_number_t infos_len)
+    dyld_kernel_image_info_array_t infos_copy,
+    mach_msg_type_number_t infos_len)
 {
 	return kdebug_trace_dyld(task, DBG_DYLD_UUID_MAP_A,
-		(vm_map_copy_t)infos_copy, infos_len);
+	           (vm_map_copy_t)infos_copy, infos_len);
 }
 
 kern_return_t
 task_unregister_dyld_image_infos(task_t task,
-                                 dyld_kernel_image_info_array_t infos_copy,
-                                 mach_msg_type_number_t infos_len)
+    dyld_kernel_image_info_array_t infos_copy,
+    mach_msg_type_number_t infos_len)
 {
 	return kdebug_trace_dyld(task, DBG_DYLD_UUID_UNMAP_A,
-		(vm_map_copy_t)infos_copy, infos_len);
+	           (vm_map_copy_t)infos_copy, infos_len);
 }
 
 kern_return_t
 task_get_dyld_image_infos(__unused task_t task,
-                          __unused dyld_kernel_image_info_array_t * dyld_images,
-                          __unused mach_msg_type_number_t * dyld_imagesCnt)
+    __unused dyld_kernel_image_info_array_t * dyld_images,
+    __unused mach_msg_type_number_t * dyld_imagesCnt)
 {
 	return KERN_NOT_SUPPORTED;
 }
 
 kern_return_t
 task_register_dyld_shared_cache_image_info(task_t task,
-                                           dyld_kernel_image_info_t cache_img,
-                                           __unused boolean_t no_cache,
-                                           __unused boolean_t private_cache)
+    dyld_kernel_image_info_t cache_img,
+    __unused boolean_t no_cache,
+    __unused boolean_t private_cache)
 {
 	if (task == NULL || task != current_task()) {
 		return KERN_INVALID_TASK;
@@ -6161,21 +6248,21 @@ task_register_dyld_shared_cache_image_info(task_t task,
 
 kern_return_t
 task_register_dyld_set_dyld_state(__unused task_t task,
-                                  __unused uint8_t dyld_state)
+    __unused uint8_t dyld_state)
 {
 	return KERN_NOT_SUPPORTED;
 }
 
 kern_return_t
 task_register_dyld_get_process_state(__unused task_t task,
-                                     __unused dyld_kernel_process_info_t * dyld_process_state)
+    __unused dyld_kernel_process_info_t * dyld_process_state)
 {
 	return KERN_NOT_SUPPORTED;
 }
 
 kern_return_t
 task_inspect(task_inspect_t task_insp, task_inspect_flavor_t flavor,
-		task_inspect_info_t info_out, mach_msg_type_number_t *size_in_out)
+    task_inspect_info_t info_out, mach_msg_type_number_t *size_in_out)
 {
 #if MONOTONIC
 	task_t task = (task_t)task_insp;
@@ -6229,8 +6316,8 @@ int num_tasks_can_use_secluded_mem = 0;
 
 void
 task_set_can_use_secluded_mem(
-	task_t		task,
-	boolean_t	can_use_secluded_mem)
+	task_t          task,
+	boolean_t       can_use_secluded_mem)
 {
 	if (!task->task_could_use_secluded_mem) {
 		return;
@@ -6242,8 +6329,8 @@ task_set_can_use_secluded_mem(
 
 void
 task_set_can_use_secluded_mem_locked(
-	task_t		task,
-	boolean_t	can_use_secluded_mem)
+	task_t          task,
+	boolean_t       can_use_secluded_mem)
 {
 	assert(task->task_could_use_secluded_mem);
 	if (can_use_secluded_mem &&
@@ -6251,37 +6338,37 @@ task_set_can_use_secluded_mem_locked(
 	    !task->task_can_use_secluded_mem) {
 		assert(num_tasks_can_use_secluded_mem >= 0);
 		OSAddAtomic(+1,
-			    (volatile SInt32 *)&num_tasks_can_use_secluded_mem);
+		    (volatile SInt32 *)&num_tasks_can_use_secluded_mem);
 		task->task_can_use_secluded_mem = TRUE;
 	} else if (!can_use_secluded_mem &&
-		   task->task_can_use_secluded_mem) {
+	    task->task_can_use_secluded_mem) {
 		assert(num_tasks_can_use_secluded_mem > 0);
 		OSAddAtomic(-1,
-			    (volatile SInt32 *)&num_tasks_can_use_secluded_mem);
+		    (volatile SInt32 *)&num_tasks_can_use_secluded_mem);
 		task->task_can_use_secluded_mem = FALSE;
 	}
 }
 
 void
 task_set_could_use_secluded_mem(
-	task_t		task,
-	boolean_t	could_use_secluded_mem)
+	task_t          task,
+	boolean_t       could_use_secluded_mem)
 {
 	task->task_could_use_secluded_mem = could_use_secluded_mem;
 }
 
 void
 task_set_could_also_use_secluded_mem(
-	task_t		task,
-	boolean_t	could_also_use_secluded_mem)
+	task_t          task,
+	boolean_t       could_also_use_secluded_mem)
 {
 	task->task_could_also_use_secluded_mem = could_also_use_secluded_mem;
 }
 
 boolean_t
 task_can_use_secluded_mem(
-	task_t		task,
-	boolean_t	is_alloc)
+	task_t          task,
+	boolean_t       is_alloc)
 {
 	if (task->task_can_use_secluded_mem) {
 		assert(task->task_could_use_secluded_mem);
@@ -6312,7 +6399,7 @@ task_can_use_secluded_mem(
 
 boolean_t
 task_could_use_secluded_mem(
-	task_t	task)
+	task_t  task)
 {
 	return task->task_could_use_secluded_mem;
 }
@@ -6321,7 +6408,7 @@ task_could_use_secluded_mem(
 queue_head_t *
 task_io_user_clients(task_t task)
 {
-    return (&task->io_user_clients);
+	return &task->io_user_clients;
 }
 
 void
@@ -6350,7 +6437,7 @@ void
 task_self_region_footprint_set(
 	boolean_t newval)
 {
-	task_t	curtask;
+	task_t  curtask;
 
 	curtask = current_task();
 	task_lock(curtask);
@@ -6382,14 +6469,14 @@ boolean_t
 task_get_darkwake_mode(task_t task)
 {
 	assert(task);
-	return ((task->t_flags & TF_DARKWAKE_MODE) != 0);
+	return (task->t_flags & TF_DARKWAKE_MODE) != 0;
 }
 
 #if __arm64__
 void
 task_set_legacy_footprint(
-	task_t		task,
-	boolean_t	new_val)
+	task_t          task,
+	boolean_t       new_val)
 {
 	task_lock(task);
 	task->task_legacy_footprint = new_val;

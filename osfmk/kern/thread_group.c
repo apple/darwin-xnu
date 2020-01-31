@@ -44,7 +44,12 @@
 
 #if CONFIG_EMBEDDED
 void
-sched_perfcontrol_thread_group_recommend(void *machine_data __unused, cluster_type_t new_recommendation __unused)	
+thread_group_join_io_storage(void)
+{
+}
+
+void
+sched_perfcontrol_thread_group_recommend(void *machine_data __unused, cluster_type_t new_recommendation __unused)
 {
 }
 #endif /* CONFIG_EMBEDDED */

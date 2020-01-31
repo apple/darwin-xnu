@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -73,19 +73,19 @@ __BEGIN_DECLS
  * the state associated with the FIFO.
  */
 struct fifoinfo {
-	unsigned int	fi_flags;
-    struct socket   *fi_readsock;
-    struct socket   *fi_writesock;
-    long        fi_readers;
-    long        fi_writers;
-	unsigned int	fi_count;
+	unsigned int    fi_flags;
+	struct socket   *fi_readsock;
+	struct socket   *fi_writesock;
+	long        fi_readers;
+	long        fi_writers;
+	unsigned int    fi_count;
 };
 
-#define FIFO_INCREATE	1
-#define FIFO_CREATEWAIT	2
-#define FIFO_CREATED	4
+#define FIFO_INCREATE   1
+#define FIFO_CREATEWAIT 2
+#define FIFO_CREATED    4
 
-int	fifo_close_internal (vnode_t, int, vfs_context_t, int);
+int     fifo_close_internal(vnode_t, int, vfs_context_t, int);
 int fifo_freespace(struct vnode *vp, long *count);
 int fifo_charcount(struct vnode *vp, int *count);
 
@@ -94,14 +94,14 @@ int fifo_charcount(struct vnode *vp, int *count);
 /*
  * Prototypes for fifo operations on vnodes.
  */
-int	fifo_ebadf(void *);
+int     fifo_ebadf(void *);
 
 #define fifo_create (int (*) (struct  vnop_create_args *))err_create
 #define fifo_mknod (int (*) (struct  vnop_mknod_args *))err_mknod
 #define fifo_access (int (*) (struct  vnop_access_args *))fifo_ebadf
 #define fifo_getattr (int (*) (struct  vnop_getattr_args *))fifo_ebadf
 #define fifo_setattr (int (*) (struct  vnop_setattr_args *))fifo_ebadf
-#define	fifo_revoke nop_revoke
+#define fifo_revoke nop_revoke
 #define fifo_mmap (int (*) (struct  vnop_mmap_args *))err_mmap
 #define fifo_fsync (int (*) (struct  vnop_fsync_args *))nullop
 #define fifo_remove (int (*) (struct  vnop_remove_args *))err_remove
@@ -119,16 +119,16 @@ int	fifo_ebadf(void *);
 #define fifo_bwrite (int (*) (struct  vnop_bwrite_args *))nullop
 #define fifo_blktooff (int (*) (struct vnop_blktooff_args *))err_blktooff
 
-int	fifo_lookup (struct vnop_lookup_args *);
-int	fifo_open (struct vnop_open_args *);
-int	fifo_close (struct vnop_close_args *);
-int	fifo_read (struct vnop_read_args *);
-int	fifo_write (struct vnop_write_args *);
-int	fifo_ioctl (struct vnop_ioctl_args *);
-int	fifo_select (struct vnop_select_args *);
-int	fifo_inactive (struct  vnop_inactive_args *);
-int	fifo_pathconf (struct vnop_pathconf_args *);
-int	fifo_advlock (struct vnop_advlock_args *);
+int     fifo_lookup(struct vnop_lookup_args *);
+int     fifo_open(struct vnop_open_args *);
+int     fifo_close(struct vnop_close_args *);
+int     fifo_read(struct vnop_read_args *);
+int     fifo_write(struct vnop_write_args *);
+int     fifo_ioctl(struct vnop_ioctl_args *);
+int     fifo_select(struct vnop_select_args *);
+int     fifo_inactive(struct  vnop_inactive_args *);
+int     fifo_pathconf(struct vnop_pathconf_args *);
+int     fifo_advlock(struct vnop_advlock_args *);
 
 #endif /* KERNEL */
 

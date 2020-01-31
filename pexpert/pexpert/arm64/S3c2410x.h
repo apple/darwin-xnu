@@ -11,7 +11,7 @@
 // History
 //   0.0 : Programming start (February 15,2002) -> SOP
 //         INTERRUPT rPRIORITY 0x4a00000a -> 0x4a00000c       (May 02, 2002 SOP)
-//         RTC BCD DAY and DATE Register Name Correction      (May 06, 2002 SOP) 
+//         RTC BCD DAY and DATE Register Name Correction      (May 06, 2002 SOP)
 //=============================================================================
 
 #ifndef __2410ADDR_H__
@@ -26,9 +26,9 @@ extern "C" {
 #include <pexpert/arm/S3cUART.h>
 
 #if 0
-#define _ISR_STARTADDRESS	0x30000000
+#define _ISR_STARTADDRESS       0x30000000
 
-// Memory control 
+// Memory control
 #define rBWSCON    (*(volatile unsigned *)0x48000000) //Bus width & wait status
 #define rBANKCON0  (*(volatile unsigned *)0x48000004) //Boot ROM control
 #define rBANKCON1  (*(volatile unsigned *)0x48000008) //BANK1 control
@@ -119,7 +119,7 @@ extern "C" {
 #define rLCDSADDR2  (*(volatile unsigned *)0x4d000018) //STN/TFT Frame buffer start address 2
 #define rLCDSADDR3  (*(volatile unsigned *)0x4d00001c) //STN/TFT Virtual screen address set
 #define rREDLUT     (*(volatile unsigned *)0x4d000020) //STN Red lookup table
-#define rGREENLUT   (*(volatile unsigned *)0x4d000024) //STN Green lookup table 
+#define rGREENLUT   (*(volatile unsigned *)0x4d000024) //STN Green lookup table
 #define rBLUELUT    (*(volatile unsigned *)0x4d000028) //STN Blue lookup table
 #define rDITHMODE   (*(volatile unsigned *)0x4d00004c) //STN Dithering mode
 #define rTPAL       (*(volatile unsigned *)0x4d000050) //TFT Temporary palette
@@ -170,7 +170,7 @@ extern "C" {
 #if 0
 // USB DEVICE
 #ifdef __BIG_ENDIAN
-<ERROR IF BIG_ENDIAN>
+< ERROR IF BIG_ENDIAN >
 #define rFUNC_ADDR_REG     (*(volatile unsigned char *)0x52000143) //Function address
 #define rPWR_REG           (*(volatile unsigned char *)0x52000147) //Power management
 #define rEP_INT_REG        (*(volatile unsigned char *)0x5200014b) //EP Interrupt pending and clear
@@ -296,38 +296,38 @@ extern "C" {
 #endif
 
 
-// I/O PORT 
+// I/O PORT
 #define rGPACON    (*(volatile unsigned *)0x56000000) //Port A control
 #define rGPADAT    (*(volatile unsigned *)0x56000004) //Port A data
-                        
+
 #define rGPBCON    (*(volatile unsigned *)0x56000010) //Port B control
 #define rGPBDAT    (*(volatile unsigned *)0x56000014) //Port B data
 #define rGPBUP     (*(volatile unsigned *)0x56000018) //Pull-up control B
-                        
+
 #define rGPCCON    (*(volatile unsigned *)0x56000020) //Port C control
 #define rGPCDAT    (*(volatile unsigned *)0x56000024) //Port C data
 #define rGPCUP     (*(volatile unsigned *)0x56000028) //Pull-up control C
-                        
+
 #define rGPDCON    (*(volatile unsigned *)0x56000030) //Port D control
 #define rGPDDAT    (*(volatile unsigned *)0x56000034) //Port D data
 #define rGPDUP     (*(volatile unsigned *)0x56000038) //Pull-up control D
-                        
+
 #define rGPECON    (*(volatile unsigned *)0x56000040) //Port E control
 #define rGPEDAT    (*(volatile unsigned *)0x56000044) //Port E data
 #define rGPEUP     (*(volatile unsigned *)0x56000048) //Pull-up control E
-                        
+
 #define rGPFCON    (*(volatile unsigned *)0x56000050) //Port F control
 #define rGPFDAT    (*(volatile unsigned *)0x56000054) //Port F data
 #define rGPFUP     (*(volatile unsigned *)0x56000058) //Pull-up control F
-                        
+
 #define rGPGCON    (*(volatile unsigned *)0x56000060) //Port G control
 #define rGPGDAT    (*(volatile unsigned *)0x56000064) //Port G data
 #define rGPGUP     (*(volatile unsigned *)0x56000068) //Pull-up control G
-                        
+
 #define rGPHCON    (*(volatile unsigned *)0x56000070) //Port H control
 #define rGPHDAT    (*(volatile unsigned *)0x56000074) //Port H data
 #define rGPHUP     (*(volatile unsigned *)0x56000078) //Pull-up control H
-                        
+
 #define rMISCCR    (*(volatile unsigned *)0x56000080) //Miscellaneous control
 #define rDCLKCON   (*(volatile unsigned *)0x56000084) //DCLK0/1 control
 #define rEXTINT0   (*(volatile unsigned *)0x56000088) //External interrupt control register 0
@@ -342,8 +342,8 @@ extern "C" {
 #define rGSTATUS0  (*(volatile unsigned *)0x560000ac) //External pin status
 #define rGSTATUS1  (*(volatile unsigned *)0x560000b0) //Chip ID(0x32410000)
 #define rGSTATUS2  (*(volatile unsigned *)0x560000b4) //Reset type
-#define rGSTATUS3  (*(volatile unsigned *)0x560000b8) //Saved data0(32-bit) before entering POWER_OFF mode 
-#define rGSTATUS4  (*(volatile unsigned *)0x560000bc) //Saved data0(32-bit) before entering POWER_OFF mode 
+#define rGSTATUS3  (*(volatile unsigned *)0x560000b8) //Saved data0(32-bit) before entering POWER_OFF mode
+#define rGSTATUS4  (*(volatile unsigned *)0x560000bc) //Saved data0(32-bit) before entering POWER_OFF mode
 
 
 // RTC
@@ -392,9 +392,9 @@ extern "C" {
 #define rADCTSC    (*(volatile unsigned *)0x58000004) //ADC touch screen control
 #define rADCDLY    (*(volatile unsigned *)0x58000008) //ADC start or Interval Delay
 #define rADCDAT0   (*(volatile unsigned *)0x5800000c) //ADC conversion data 0
-#define rADCDAT1   (*(volatile unsigned *)0x58000010) //ADC conversion data 1                   
-                        
-// SPI          
+#define rADCDAT1   (*(volatile unsigned *)0x58000010) //ADC conversion data 1
+
+// SPI
 #define rSPCON0    (*(volatile unsigned *)0x59000000) //SPI0 control
 #define rSPSTA0    (*(volatile unsigned *)0x59000004) //SPI0 status
 #define rSPPIN0    (*(volatile unsigned *)0x59000008) //SPI0 pin control
@@ -435,7 +435,7 @@ extern "C" {
 #define rSDIDAT    (*(volatile unsigned *)0x5a00003c) //SDI data
 #define SDIDAT     0x5a00003c
 #endif   //SD Interface
-             
+
 
 // ISR
 #define pISR_RESET     (*(unsigned *)(_ISR_STARTADDRESS+0x0))
@@ -530,10 +530,10 @@ extern "C" {
 #define BIT_SUB_RXD0   (0x1<<0)
 
 #define ClearPending(bit) {\
-                rSRCPND = bit;\
-                rINTPND = bit;\
-                rINTPND;\
-                }       
+	        rSRCPND = bit;\
+	        rINTPND = bit;\
+	        rINTPND;\
+	        }
 //Wait until rINTPND is changed for the case that the ISR is very short.
 
 #endif

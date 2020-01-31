@@ -53,12 +53,12 @@
 #define DISK_IDLE_SEC (10 * 60)
 
 struct saved_mount_fields {
-	uint32_t	mnt_maxreadcnt;		/* Max. byte count for read */
-	uint32_t	mnt_maxwritecnt;	/* Max. byte count for write */
-	uint32_t	mnt_segreadcnt;		/* Max. segment count for read */
-	uint32_t	mnt_segwritecnt;	/* Max. segment count for write */
-	uint32_t	mnt_ioqueue_depth;	/* the maxiumum number of commands a device can accept */
-	uint32_t	mnt_ioscale;		/* scale the various throttles/limits imposed on the amount of I/O in flight */
+	uint32_t        mnt_maxreadcnt;         /* Max. byte count for read */
+	uint32_t        mnt_maxwritecnt;        /* Max. byte count for write */
+	uint32_t        mnt_segreadcnt;         /* Max. segment count for read */
+	uint32_t        mnt_segwritecnt;        /* Max. segment count for write */
+	uint32_t        mnt_ioqueue_depth;      /* the maxiumum number of commands a device can accept */
+	uint32_t        mnt_ioscale;            /* scale the various throttles/limits imposed on the amount of I/O in flight */
 };
 
 struct _disk_conditioner_info_t {
@@ -190,7 +190,8 @@ disk_conditioner_get_info(mount_t mp, disk_conditioner_info *uinfo)
 }
 
 static inline void
-disk_conditioner_restore_mount_fields(mount_t mp, struct saved_mount_fields *mnt_fields) {
+disk_conditioner_restore_mount_fields(mount_t mp, struct saved_mount_fields *mnt_fields)
+{
 	mp->mnt_maxreadcnt = mnt_fields->mnt_maxreadcnt;
 	mp->mnt_maxwritecnt = mnt_fields->mnt_maxwritecnt;
 	mp->mnt_segreadcnt = mnt_fields->mnt_segreadcnt;

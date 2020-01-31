@@ -71,12 +71,12 @@ int rtclock_init(void);
 
 static int
 deadline_to_decrementer(uint64_t deadline,
-                        uint64_t now);
+    uint64_t now);
 static void
 timebase_callback(struct timebase_freq_t * freq);
 
 #if DEVELOPMENT || DEBUG
-uint32_t absolute_time_validation = 1;
+uint32_t absolute_time_validation = 0;
 #endif
 
 /*
@@ -88,13 +88,15 @@ rtclock_early_init(void)
 	PE_register_timebase_callback(timebase_callback);
 #if DEVELOPMENT || DEBUG
 	uint32_t tmp_mv = 1;
+
+	/* Enable MAT validation on A0 hardware by default. */
+	absolute_time_validation = (get_arm_cpu_version() == 0x00);
+
 	if (kern_feature_override(KF_MATV_OVRD)) {
 		absolute_time_validation = 0;
 	}
 	if (PE_parse_boot_argn("timebase_validation", &tmp_mv, sizeof(tmp_mv))) {
-		if (tmp_mv == 0) {
-			absolute_time_validation = 0;
-		}
+		absolute_time_validation = tmp_mv;
 	}
 #endif
 }
@@ -107,9 +109,10 @@ timebase_callback(struct timebase_freq_t * freq)
 	uint32_t      divisor;
 
 	if (freq->timebase_den < 1 || freq->timebase_den > 4 ||
-	    freq->timebase_num < freq->timebase_den)
+	    freq->timebase_num < freq->timebase_den) {
 		panic("rtclock timebase_callback: invalid constant %ld / %ld",
-		      freq->timebase_num, freq->timebase_den);
+		    freq->timebase_num, freq->timebase_den);
+	}
 
 	denom = freq->timebase_num;
 	numer = freq->timebase_den * NSEC_PER_SEC;
@@ -152,10 +155,10 @@ rtclock_init(void)
 	cdp = getCpuDatap();
 
 	abstime = mach_absolute_time();
-	cdp->rtcPop = EndOfAllTime;					/* Init Pop time */
-	timer_resync_deadlines();					/* Start the timers going */
+	cdp->rtcPop = EndOfAllTime;                                     /* Init Pop time */
+	timer_resync_deadlines();                                       /* Start the timers going */
 
-	return (1);
+	return 1;
 }
 
 uint64_t
@@ -189,7 +192,7 @@ mach_absolute_time(void)
 			old_absolute_time = s_last_absolute_time;
 
 #if __arm64__
-			__asm__ volatile("dsb ld" ::: "memory");
+			__asm__ volatile ("dsb ld" ::: "memory");
 #else
 			OSSynchronizeIO(); // See osfmk/arm64/rtclock.c
 #endif
@@ -231,14 +234,14 @@ mach_approximate_time(void)
 
 void
 clock_get_system_microtime(clock_sec_t *  secs,
-                           clock_usec_t * microsecs)
+    clock_usec_t * microsecs)
 {
 	absolutetime_to_microtime(mach_absolute_time(), secs, microsecs);
 }
 
 void
 clock_get_system_nanotime(clock_sec_t *  secs,
-                          clock_nsec_t * nanosecs)
+    clock_nsec_t * nanosecs)
 {
 	uint64_t abstime;
 	uint64_t t64;
@@ -252,10 +255,10 @@ clock_get_system_nanotime(clock_sec_t *  secs,
 
 void
 clock_gettimeofday_set_commpage(uint64_t abstime,
-                                uint64_t sec,
-                                uint64_t frac,
-                                uint64_t scale,
-                                uint64_t tick_per_sec)
+    uint64_t sec,
+    uint64_t frac,
+    uint64_t scale,
+    uint64_t tick_per_sec)
 {
 	commpage_set_timestamp(abstime, sec, frac, scale, tick_per_sec);
 }
@@ -289,10 +292,11 @@ rtclock_intr(__unused unsigned int is_user_context)
 	abstime = mach_absolute_time();
 
 	if (cdp->cpu_idle_pop != 0x0ULL) {
-		if (( cdp->rtcPop-abstime) < cdp->cpu_idle_latency) {
+		if ((cdp->rtcPop - abstime) < cdp->cpu_idle_latency) {
 			cdp->cpu_idle_pop = 0x0ULL;
-			while (abstime < cdp->rtcPop)
+			while (abstime < cdp->rtcPop) {
 				abstime = mach_absolute_time();
+			}
 		} else {
 			ClearIdlePop(FALSE);
 		}
@@ -313,9 +317,9 @@ rtclock_intr(__unused unsigned int is_user_context)
 	if (abstime >= cdp->rtcPop) {
 		/* Log the interrupt service latency (-ve value expected by tool) */
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		                          MACHDBG_CODE(DBG_MACH_EXCP_DECI, 0) | DBG_FUNC_NONE,
-		                          -(abstime - cdp->rtcPop),
-		                          user_mode ? pc : VM_KERNEL_UNSLIDE(pc), user_mode, 0, 0);
+		    MACHDBG_CODE(DBG_MACH_EXCP_DECI, 0) | DBG_FUNC_NONE,
+		    -(abstime - cdp->rtcPop),
+		    user_mode ? pc : VM_KERNEL_UNSLIDE(pc), user_mode, 0, 0);
 	}
 
 	/* call the generic etimer */
@@ -324,13 +328,13 @@ rtclock_intr(__unused unsigned int is_user_context)
 
 static int
 deadline_to_decrementer(uint64_t deadline,
-                        uint64_t now)
+    uint64_t now)
 {
 	uint64_t delt;
 
-	if (deadline <= now)
+	if (deadline <= now) {
 		return DECREMENTER_MIN;
-	else {
+	} else {
 		delt = deadline - now;
 
 		return (delt >= (DECREMENTER_MAX + 1)) ? DECREMENTER_MAX : ((delt >= (DECREMENTER_MIN + 1)) ? (int)delt : DECREMENTER_MIN);
@@ -355,7 +359,7 @@ setPop(uint64_t time)
 
 	ml_set_decrementer((uint32_t) delay_time);
 
-	return (delay_time);
+	return delay_time;
 }
 
 /*
@@ -373,8 +377,9 @@ SetIdlePop(void)
 	current_time = mach_absolute_time();
 
 	if (((cdp->rtcPop < current_time) ||
-	    (cdp->rtcPop - current_time) < cdp->cpu_idle_latency))
+	    (cdp->rtcPop - current_time) < cdp->cpu_idle_latency)) {
 		return FALSE;
+	}
 
 	time = cdp->rtcPop - cdp->cpu_idle_latency;
 
@@ -390,7 +395,7 @@ SetIdlePop(void)
  */
 void
 ClearIdlePop(
-             boolean_t wfi)
+	boolean_t wfi)
 {
 #if !__arm64__
 #pragma unused(wfi)
@@ -418,8 +423,8 @@ ClearIdlePop(
 
 void
 absolutetime_to_microtime(uint64_t       abstime,
-                          clock_sec_t *  secs,
-                          clock_usec_t * microsecs)
+    clock_sec_t *  secs,
+    clock_usec_t * microsecs)
 {
 	uint64_t t64;
 
@@ -431,7 +436,7 @@ absolutetime_to_microtime(uint64_t       abstime,
 
 void
 absolutetime_to_nanoseconds(uint64_t   abstime,
-                            uint64_t * result)
+    uint64_t * result)
 {
 	uint64_t        t64;
 
@@ -442,7 +447,7 @@ absolutetime_to_nanoseconds(uint64_t   abstime,
 
 void
 nanoseconds_to_absolutetime(uint64_t   nanosecs,
-                            uint64_t * result)
+    uint64_t * result)
 {
 	uint64_t        t64;
 
@@ -453,17 +458,17 @@ nanoseconds_to_absolutetime(uint64_t   nanosecs,
 
 void
 nanotime_to_absolutetime(clock_sec_t  secs,
-                         clock_nsec_t nanosecs,
-                         uint64_t *   result)
+    clock_nsec_t nanosecs,
+    uint64_t *   result)
 {
 	*result = ((uint64_t) secs * rtclock_sec_divisor) +
-	((uint64_t) nanosecs * rtclock_sec_divisor) / NSEC_PER_SEC;
+	    ((uint64_t) nanosecs * rtclock_sec_divisor) / NSEC_PER_SEC;
 }
 
 void
 clock_interval_to_absolutetime_interval(uint32_t   interval,
-                                        uint32_t   scale_factor,
-                                        uint64_t * result)
+    uint32_t   scale_factor,
+    uint64_t * result)
 {
 	uint64_t nanosecs = (uint64_t) interval * scale_factor;
 	uint64_t t64;
@@ -475,13 +480,13 @@ clock_interval_to_absolutetime_interval(uint32_t   interval,
 
 void
 machine_delay_until(uint64_t interval,
-                    uint64_t deadline)
+    uint64_t deadline)
 {
 #pragma unused(interval)
 	uint64_t now;
 
 	do {
-#if	__ARM_ENABLE_WFE_
+#if     __ARM_ENABLE_WFE_
 #if __arm64__
 		if (arm64_wfe_allowed())
 #endif /* __arm64__ */

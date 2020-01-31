@@ -52,20 +52,19 @@ typedef enum {
 } dbgwrap_status_t;
 
 static inline const char*
-ml_dbgwrap_strerror(dbgwrap_status_t status) {
+ml_dbgwrap_strerror(dbgwrap_status_t status)
+{
 	switch (status) {
-
-	case DBGWRAP_ERR_SELF_HALT:		return "CPU attempted to halt itself";
-	case DBGWRAP_ERR_UNSUPPORTED:		return "halt not supported for this configuration";
-	case DBGWRAP_ERR_INPROGRESS:		return "halt in progress on another CPU";
-	case DBGWRAP_ERR_INSTR_ERROR:		return "instruction-stuffing failure";
-	case DBGWRAP_ERR_INSTR_TIMEOUT:		return "instruction-stuffing timeout";
-	case DBGWRAP_ERR_HALT_TIMEOUT:		return "halt ack timeout, CPU likely wedged";
-	case DBGWRAP_SUCCESS:			return "halt succeeded";
-	case DBGWRAP_WARN_ALREADY_HALTED:	return "CPU already halted";
-	case DBGWRAP_WARN_CPU_OFFLINE:		return "CPU offline";
-	default:				return "unrecognized status";
-
+	case DBGWRAP_ERR_SELF_HALT:             return "CPU attempted to halt itself";
+	case DBGWRAP_ERR_UNSUPPORTED:           return "halt not supported for this configuration";
+	case DBGWRAP_ERR_INPROGRESS:            return "halt in progress on another CPU";
+	case DBGWRAP_ERR_INSTR_ERROR:           return "instruction-stuffing failure";
+	case DBGWRAP_ERR_INSTR_TIMEOUT:         return "instruction-stuffing timeout";
+	case DBGWRAP_ERR_HALT_TIMEOUT:          return "halt ack timeout, CPU likely wedged";
+	case DBGWRAP_SUCCESS:                   return "halt succeeded";
+	case DBGWRAP_WARN_ALREADY_HALTED:       return "CPU already halted";
+	case DBGWRAP_WARN_CPU_OFFLINE:          return "CPU offline";
+	default:                                return "unrecognized status";
 	}
 }
 
@@ -75,7 +74,6 @@ dbgwrap_status_t ml_dbgwrap_wait_cpu_halted(int cpu_index, uint64_t timeout_ns);
 
 dbgwrap_status_t ml_dbgwrap_halt_cpu(int cpu_index, uint64_t timeout_ns);
 
-dbgwrap_status_t ml_dbgwrap_halt_cpu_with_state(int cpu_index, uint64_t timeout_ns, dbgwrap_thread_state_t *state); 
+dbgwrap_status_t ml_dbgwrap_halt_cpu_with_state(int cpu_index, uint64_t timeout_ns, dbgwrap_thread_state_t *state);
 
 __END_DECLS
-

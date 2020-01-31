@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -29,8 +29,8 @@
  * @OSF_COPYRIGHT@
  */
 
-#ifndef	_ARM_MACHINE_ROUTINES_H_
-#define	_ARM_MACHINE_ROUTINES_H_
+#ifndef _ARM_MACHINE_ROUTINES_H_
+#define _ARM_MACHINE_ROUTINES_H_
 
 #include <mach/mach_types.h>
 #include <mach/boolean.h>
@@ -60,6 +60,7 @@ boolean_t ml_get_interrupts_enabled(void);
 
 /* Set Interrupts Enabled */
 boolean_t ml_set_interrupts_enabled(boolean_t enable);
+boolean_t ml_early_set_interrupts_enabled(boolean_t enable);
 
 /* Check if running at interrupt context */
 boolean_t ml_at_interrupt_context(void);
@@ -76,6 +77,7 @@ void ml_check_interrupts_disabled_duration(thread_t thread);
 #endif
 
 #ifdef XNU_KERNEL_PRIVATE
+extern bool ml_snoop_thread_is_on_core(thread_t thread);
 extern boolean_t ml_is_quiescing(void);
 extern void ml_set_is_quiescing(boolean_t);
 extern uint64_t ml_get_booter_memory_size(void);
@@ -88,18 +90,18 @@ typedef void (*time_base_enable_t)(cpu_id_t cpu_id, boolean_t enable);
 typedef void (*cache_dispatch_t)(cpu_id_t cpu_id, unsigned int select, unsigned int param0, unsigned int param1);
 #endif
 
-#define CacheConfig			0x00000000UL
-#define CacheControl			0x00000001UL
-#define CacheClean			0x00000002UL
-#define CacheCleanRegion		0x00000003UL
-#define CacheCleanFlush			0x00000004UL
-#define CacheCleanFlushRegion		0x00000005UL
-#define CacheShutdown			0x00000006UL
+#define CacheConfig                     0x00000000UL
+#define CacheControl                    0x00000001UL
+#define CacheClean                      0x00000002UL
+#define CacheCleanRegion                0x00000003UL
+#define CacheCleanFlush                 0x00000004UL
+#define CacheCleanFlushRegion           0x00000005UL
+#define CacheShutdown                   0x00000006UL
 
-#define CacheControlEnable		0x00000000UL
+#define CacheControlEnable              0x00000000UL
 
-#define CacheConfigCCSIDR		0x00000001UL
-#define CacheConfigSize			0x00000100UL
+#define CacheConfigCCSIDR               0x00000001UL
+#define CacheConfigSize                 0x00000100UL
 
 /* Type for the Processor Idle function */
 typedef void (*processor_idle_t)(cpu_id_t cpu_id, boolean_t enter, uint64_t *new_timeout_ticks);
@@ -120,73 +122,70 @@ typedef void (*lockdown_handler_t)(void *);
 typedef void (*platform_error_handler_t)(void *refcon, vm_offset_t fault_addr);
 
 /*
- * The exception callback (ex_cb) module allows kernel drivers to 
- * register and receive callbacks for exceptions, and indicate 
+ * The exception callback (ex_cb) module allows kernel drivers to
+ * register and receive callbacks for exceptions, and indicate
  * actions to be taken by the platform kernel
- * Currently this is supported for ARM64 but extending support for ARM32 
+ * Currently this is supported for ARM64 but extending support for ARM32
  * should be straightforward
  */
 
 /* Supported exception classes for callbacks */
-typedef enum
-{
+typedef enum{
 	EXCB_CLASS_ILLEGAL_INSTR_SET,
 #ifdef CONFIG_XNUPOST
 	EXCB_CLASS_TEST1,
 	EXCB_CLASS_TEST2,
 	EXCB_CLASS_TEST3,
 #endif
-	EXCB_CLASS_MAX		// this must be last
+	EXCB_CLASS_MAX          // this must be last
 }
 ex_cb_class_t;
 
 /* Actions indicated by callbacks to be taken by platform kernel */
-typedef enum
-{
-	EXCB_ACTION_RERUN,	// re-run the faulting instruction
-	EXCB_ACTION_NONE,	// continue normal exception handling
+typedef enum{
+	EXCB_ACTION_RERUN,      // re-run the faulting instruction
+	EXCB_ACTION_NONE,       // continue normal exception handling
 #ifdef CONFIG_XNUPOST
 	EXCB_ACTION_TEST_FAIL,
 #endif
 }
 ex_cb_action_t;
 
-/* 
- * Exception state 
- * We cannot use a private kernel data structure such as arm_saved_state_t 
- * The CPSR and ESR are not clobbered when the callback function is invoked so 
+/*
+ * Exception state
+ * We cannot use a private kernel data structure such as arm_saved_state_t
+ * The CPSR and ESR are not clobbered when the callback function is invoked so
  * those registers can be examined by the callback function;
  * the same is done in the platform error handlers
  */
-typedef struct 
-{
+typedef struct{
 	vm_offset_t far;
 }
 ex_cb_state_t;
 
 /* callback type definition */
 typedef ex_cb_action_t (*ex_cb_t) (
-	ex_cb_class_t		cb_class,
-	void				*refcon,// provided at registration 
-	const ex_cb_state_t	*state	// exception state
+	ex_cb_class_t           cb_class,
+	void                            *refcon,// provided at registration
+	const ex_cb_state_t     *state  // exception state
 	);
 
-/* 
- * Callback registration 
- * Currently we support only one registered callback per class but 
+/*
+ * Callback registration
+ * Currently we support only one registered callback per class but
  * it should be possible to support more callbacks
  */
 kern_return_t ex_cb_register(
-	ex_cb_class_t	cb_class, 
-	ex_cb_t			cb,
-	void			*refcon );
+	ex_cb_class_t   cb_class,
+	ex_cb_t                 cb,
+	void                    *refcon );
 
 /*
  * Called internally by platform kernel to invoke the registered callback for class
  */
 ex_cb_action_t ex_cb_invoke(
-	ex_cb_class_t	cb_class,
-    vm_offset_t		far);
+	ex_cb_class_t   cb_class,
+	vm_offset_t         far);
 
 
 void ml_parse_cpu_topology(void);
@@ -201,14 +200,14 @@ int ml_get_max_cpu_number(void);
 
 /* Struct for ml_cpu_get_info */
 struct ml_cpu_info {
-	unsigned long		vector_unit;
-	unsigned long		cache_line_size;
-	unsigned long		l1_icache_size;
-	unsigned long		l1_dcache_size;
-	unsigned long		l2_settings;
-	unsigned long		l2_cache_size;
-	unsigned long		l3_settings;
-	unsigned long		l3_cache_size;
+	unsigned long           vector_unit;
+	unsigned long           cache_line_size;
+	unsigned long           l1_icache_size;
+	unsigned long           l1_dcache_size;
+	unsigned long           l2_settings;
+	unsigned long           l2_cache_size;
+	unsigned long           l3_settings;
+	unsigned long           l3_cache_size;
 };
 typedef struct ml_cpu_info ml_cpu_info_t;
 
@@ -220,48 +219,69 @@ cluster_type_t ml_get_boot_cluster(void);
 
 /* Struct for ml_processor_register */
 struct ml_processor_info {
-	cpu_id_t			cpu_id;
-	vm_offset_t			start_paddr;
-	boolean_t			supports_nap;
-	void 				*platform_cache_dispatch;
-	time_base_enable_t		time_base_enable;
-	processor_idle_t		processor_idle;
-	idle_tickle_t			*idle_tickle;
-	idle_timer_t			idle_timer;
-	void				*idle_timer_refcon;
-	vm_offset_t			powergate_stub_addr;
-	uint32_t			powergate_stub_length;
-	uint32_t			powergate_latency;
-	platform_error_handler_t	platform_error_handler;
-	uint64_t			regmap_paddr;
-	uint32_t			phys_id;
-	uint32_t			log_id;
-	uint32_t			l2_access_penalty;
-	uint32_t			cluster_id;
-	cluster_type_t			cluster_type;
-	uint32_t			l2_cache_id;
-	uint32_t			l2_cache_size;
-	uint32_t			l3_cache_id;
-	uint32_t			l3_cache_size;
+	cpu_id_t                        cpu_id;
+	vm_offset_t                     start_paddr;
+	boolean_t                       supports_nap;
+	void                            *platform_cache_dispatch;
+	time_base_enable_t              time_base_enable;
+	processor_idle_t                processor_idle;
+	idle_tickle_t                   *idle_tickle;
+	idle_timer_t                    idle_timer;
+	void                            *idle_timer_refcon;
+	vm_offset_t                     powergate_stub_addr;
+	uint32_t                        powergate_stub_length;
+	uint32_t                        powergate_latency;
+	platform_error_handler_t        platform_error_handler;
+	uint64_t                        regmap_paddr;
+	uint32_t                        phys_id;
+	uint32_t                        log_id;
+	uint32_t                        l2_access_penalty;
+	uint32_t                        cluster_id;
+	cluster_type_t                  cluster_type;
+	uint32_t                        l2_cache_id;
+	uint32_t                        l2_cache_size;
+	uint32_t                        l3_cache_id;
+	uint32_t                        l3_cache_size;
 };
 typedef struct ml_processor_info ml_processor_info_t;
 
-#if	defined(PEXPERT_KERNEL_PRIVATE) || defined(MACH_KERNEL_PRIVATE)
+#if     defined(PEXPERT_KERNEL_PRIVATE) || defined(MACH_KERNEL_PRIVATE)
 /* Struct for ml_init_timebase */
 struct  tbd_ops {
-	void		(*tbd_fiq_handler)(void);
-	uint32_t	(*tbd_get_decrementer)(void);
-	void 		(*tbd_set_decrementer)(uint32_t dec_value);
+	void            (*tbd_fiq_handler)(void);
+	uint32_t        (*tbd_get_decrementer)(void);
+	void            (*tbd_set_decrementer)(uint32_t dec_value);
 };
 typedef struct tbd_ops        *tbd_ops_t;
 typedef struct tbd_ops        tbd_ops_data_t;
 #endif
 
-/* Register a processor */                      
-kern_return_t	ml_processor_register(
-	ml_processor_info_t	*ml_processor_info,
-	processor_t			*processor,
-	ipi_handler_t		*ipi_handler);
+/*!
+ * @function ml_processor_register
+ *
+ * @abstract callback from platform kext to register processor
+ *
+ * @discussion This function is called by the platform kext when a processor is
+ * being registered.  This is called while running on the CPU itself, as part of
+ * its initialization.
+ *
+ * @param ml_processor_info provides machine-specific information about the
+ * processor to xnu.
+ *
+ * @param processor is set as an out-parameter to an opaque handle that should
+ * be used by the platform kext when referring to this processor in the future.
+ *
+ * @param ipi_handler is set as an out-parameter to the function that should be
+ * registered as the IPI handler.
+ *
+ * @param pmi_handler is set as an out-parameter to the function that should be
+ * registered as the PMI handler.
+ *
+ * @returns KERN_SUCCESS on success and an error code, otherwise.
+ */
+kern_return_t ml_processor_register(ml_processor_info_t *ml_processor_info,
+    processor_t *processor, ipi_handler_t *ipi_handler,
+    perfmon_interrupt_handler_func *pmi_handler);
 
 /* Register a lockdown handler */
 kern_return_t ml_lockdown_handler_register(lockdown_handler_t, void *);
@@ -274,27 +294,27 @@ boolean_t ml_wants_panic_trap_to_debugger(void);
 
 /* Machine layer routine for intercepting panics */
 void ml_panic_trap_to_debugger(const char *panic_format_str,
-                               va_list *panic_args,
-                               unsigned int reason,
-                               void *ctx,
-                               uint64_t panic_options_mask,
-                               unsigned long panic_caller);
+    va_list *panic_args,
+    unsigned int reason,
+    void *ctx,
+    uint64_t panic_options_mask,
+    unsigned long panic_caller);
 #endif /* XNU_KERNEL_PRIVATE */
 
 /* Initialize Interrupts */
 void ml_install_interrupt_handler(
-    void *nub,
-    int source,
-    void *target,
-    IOInterruptHandler handler,
-    void *refCon);
+	void *nub,
+	int source,
+	void *target,
+	IOInterruptHandler handler,
+	void *refCon);
 
 vm_offset_t
-ml_static_vtop(
+    ml_static_vtop(
 	vm_offset_t);
 
 vm_offset_t
-ml_static_ptovirt(
+    ml_static_ptovirt(
 	vm_offset_t);
 
 vm_offset_t ml_static_slide(
@@ -346,6 +366,12 @@ unsigned int ml_io_read16(uintptr_t iovaddr);
 unsigned int ml_io_read32(uintptr_t iovaddr);
 unsigned long long ml_io_read64(uintptr_t iovaddr);
 
+extern void ml_io_write(uintptr_t vaddr, uint64_t val, int size);
+extern void ml_io_write8(uintptr_t vaddr, uint8_t val);
+extern void ml_io_write16(uintptr_t vaddr, uint16_t val);
+extern void ml_io_write32(uintptr_t vaddr, uint32_t val);
+extern void ml_io_write64(uintptr_t vaddr, uint64_t val);
+
 /* Read physical address double word */
 unsigned long long ml_phys_read_double(
 	vm_offset_t paddr);
@@ -386,9 +412,9 @@ void ml_static_mfree(
 
 kern_return_t
 ml_static_protect(
-    vm_offset_t start,
-    vm_size_t size,
-    vm_prot_t new_prot);
+	vm_offset_t start,
+	vm_size_t size,
+	vm_prot_t new_prot);
 
 /* virtual to physical on wired pages */
 vm_offset_t ml_vtophys(
@@ -400,24 +426,24 @@ void ml_cpu_get_info(ml_cpu_info_t *ml_cpu_info);
 #endif /* __APPLE_API_UNSTABLE */
 
 #ifdef __APPLE_API_PRIVATE
-#ifdef	XNU_KERNEL_PRIVATE
+#ifdef  XNU_KERNEL_PRIVATE
 vm_size_t ml_nofault_copy(
-	vm_offset_t virtsrc, 
-	vm_offset_t virtdst, 
+	vm_offset_t virtsrc,
+	vm_offset_t virtdst,
 	vm_size_t size);
 boolean_t ml_validate_nofault(
 	vm_offset_t virtsrc, vm_size_t size);
 #endif /* XNU_KERNEL_PRIVATE */
-#if	defined(PEXPERT_KERNEL_PRIVATE) || defined(MACH_KERNEL_PRIVATE)
+#if     defined(PEXPERT_KERNEL_PRIVATE) || defined(MACH_KERNEL_PRIVATE)
 /* IO memory map services */
 
 /* Map memory map IO space */
 vm_offset_t ml_io_map(
-	vm_offset_t phys_addr, 
+	vm_offset_t phys_addr,
 	vm_size_t size);
 
 vm_offset_t ml_io_map_wcomb(
-	vm_offset_t phys_addr, 
+	vm_offset_t phys_addr,
 	vm_size_t size);
 
 void ml_get_bouncepool_info(
@@ -425,18 +451,18 @@ void ml_get_bouncepool_info(
 	vm_size_t   *size);
 
 vm_map_address_t ml_map_high_window(
-	vm_offset_t	phys_addr,
-	vm_size_t	len);
+	vm_offset_t     phys_addr,
+	vm_size_t       len);
 
 /* boot memory allocation */
 vm_offset_t ml_static_malloc(
 	vm_size_t size);
 
 void ml_init_timebase(
-	void		*args,
-	tbd_ops_t	tbd_funcs,
-	vm_offset_t	int_address,
-	vm_offset_t 	int_value);
+	void            *args,
+	tbd_ops_t       tbd_funcs,
+	vm_offset_t     int_address,
+	vm_offset_t     int_value);
 
 uint64_t ml_get_timebase(void);
 
@@ -472,12 +498,12 @@ void ml_init_arm_debug_interface(void *args, vm_offset_t virt_address);
 
 /* These calls are only valid if __ARM_USER_PROTECT__ is defined */
 uintptr_t arm_user_protect_begin(
-                                 thread_t thread);
+	thread_t thread);
 
 void arm_user_protect_end(
-                          thread_t thread,
-                          uintptr_t up,
-                          boolean_t disable_interrupts);
+	thread_t thread,
+	uintptr_t up,
+	boolean_t disable_interrupts);
 
 #endif /* PEXPERT_KERNEL_PRIVATE || MACH_KERNEL_PRIVATE  */
 
@@ -493,10 +519,10 @@ void ml_thread_policy(
 	unsigned policy_id,
 	unsigned policy_info);
 
-#define MACHINE_GROUP					0x00000001
-#define MACHINE_NETWORK_GROUP			0x10000000
-#define MACHINE_NETWORK_WORKLOOP		0x00000001
-#define MACHINE_NETWORK_NETISR			0x00000002
+#define MACHINE_GROUP                                   0x00000001
+#define MACHINE_NETWORK_GROUP                   0x10000000
+#define MACHINE_NETWORK_WORKLOOP                0x00000001
+#define MACHINE_NETWORK_NETISR                  0x00000002
 
 /* Initialize the maximum number of CPUs */
 void ml_init_max_cpus(
@@ -512,17 +538,17 @@ unsigned int ml_get_machine_mem(void);
 #ifdef XNU_KERNEL_PRIVATE
 /* Return max offset */
 vm_map_offset_t ml_get_max_offset(
-	boolean_t	is64,
+	boolean_t       is64,
 	unsigned int option);
-#define MACHINE_MAX_OFFSET_DEFAULT	0x01
-#define MACHINE_MAX_OFFSET_MIN		0x02
-#define MACHINE_MAX_OFFSET_MAX		0x04
-#define MACHINE_MAX_OFFSET_DEVICE	0x08
+#define MACHINE_MAX_OFFSET_DEFAULT      0x01
+#define MACHINE_MAX_OFFSET_MIN          0x02
+#define MACHINE_MAX_OFFSET_MAX          0x04
+#define MACHINE_MAX_OFFSET_DEVICE       0x08
 #endif
 
-extern void	ml_cpu_up(void);
-extern void	ml_cpu_down(void);
-extern void	ml_arm_sleep(void);
+extern void     ml_cpu_up(void);
+extern void     ml_cpu_down(void);
+extern void     ml_arm_sleep(void);
 
 extern uint64_t ml_get_wake_timebase(void);
 extern uint64_t ml_get_conttime_wake_time(void);
@@ -540,27 +566,27 @@ extern kern_return_t ml_interrupt_prewarm(uint64_t deadline);
 vm_offset_t ml_stack_remaining(void);
 
 #ifdef MACH_KERNEL_PRIVATE
-uint32_t	get_fpscr(void);
-void		set_fpscr(uint32_t);
+uint32_t        get_fpscr(void);
+void            set_fpscr(uint32_t);
 
 #ifdef __arm64__
 unsigned long update_mdscr(unsigned long clear, unsigned long set);
 #endif /* __arm64__ */
 
-extern	void		init_vfp(void);
-extern	boolean_t	get_vfp_enabled(void);
-extern	void		arm_debug_set_cp14(arm_debug_state_t *debug_state);
-extern	void		fiq_context_init(boolean_t enable_fiq);
-extern	void		fiq_context_bootstrap(boolean_t enable_fiq);
+extern  void            init_vfp(void);
+extern  boolean_t       get_vfp_enabled(void);
+extern  void            arm_debug_set_cp14(arm_debug_state_t *debug_state);
+extern  void            fiq_context_init(boolean_t enable_fiq);
+extern  void            fiq_context_bootstrap(boolean_t enable_fiq);
 
-extern	void		reenable_async_aborts(void);
-extern	void		cpu_idle_wfi(boolean_t wfi_fast);
+extern  void            reenable_async_aborts(void);
+extern  void            cpu_idle_wfi(boolean_t wfi_fast);
 
 #ifdef MONITOR
-#define MONITOR_SET_ENTRY	0x800	/* Set kernel entry point from monitor */
-#define MONITOR_LOCKDOWN	0x801	/* Enforce kernel text/rodata integrity */
-unsigned long		monitor_call(uintptr_t callnum, uintptr_t arg1,
-				     uintptr_t arg2, uintptr_t arg3);
+#define MONITOR_SET_ENTRY       0x800   /* Set kernel entry point from monitor */
+#define MONITOR_LOCKDOWN        0x801   /* Enforce kernel text/rodata integrity */
+unsigned long           monitor_call(uintptr_t callnum, uintptr_t arg1,
+    uintptr_t arg2, uintptr_t arg3);
 #endif /* MONITOR */
 
 #if defined(KERNEL_INTEGRITY_KTRR)
@@ -573,11 +599,11 @@ extern void set_vbar_el1(uint64_t);
 #endif /* __ARM_KERNEL_PROTECT__ */
 #endif /* MACH_KERNEL_PRIVATE */
 
-extern	uint32_t	arm_debug_read_dscr(void);
+extern  uint32_t        arm_debug_read_dscr(void);
 
-extern int	set_be_bit(void);
-extern int	clr_be_bit(void);
-extern int	be_tracing(void);
+extern int      set_be_bit(void);
+extern int      clr_be_bit(void);
+extern int      be_tracing(void);
 
 typedef void (*broadcastFunc) (void *);
 unsigned int cpu_broadcast_xcall(uint32_t *, boolean_t, broadcastFunc, void *);
@@ -596,57 +622,57 @@ void cpu_qos_update_register(cpu_qos_update_t);
 #endif /* __arm64__ */
 
 struct going_on_core {
-	uint64_t	thread_id;
-	uint16_t	qos_class;
-	uint16_t	urgency;	/* XCPM compatibility */
-	uint32_t	is_32_bit : 1; /* uses 32-bit ISA/register state in userspace (which may differ from address space size) */
-	uint32_t	is_kernel_thread : 1;
-	uint64_t	thread_group_id;
-	void		*thread_group_data;
-	uint64_t	scheduling_latency;	/* absolute time between when thread was made runnable and this ctx switch */
-	uint64_t	start_time;
-	uint64_t	scheduling_latency_at_same_basepri;
-	uint32_t	energy_estimate_nj;	/* return: In nanojoules */
-	 /* smaller of the time between last change to base priority and ctx switch and scheduling_latency */
+	uint64_t        thread_id;
+	uint16_t        qos_class;
+	uint16_t        urgency;        /* XCPM compatibility */
+	uint32_t        is_32_bit : 1; /* uses 32-bit ISA/register state in userspace (which may differ from address space size) */
+	uint32_t        is_kernel_thread : 1;
+	uint64_t        thread_group_id;
+	void            *thread_group_data;
+	uint64_t        scheduling_latency;     /* absolute time between when thread was made runnable and this ctx switch */
+	uint64_t        start_time;
+	uint64_t        scheduling_latency_at_same_basepri;
+	uint32_t        energy_estimate_nj;     /* return: In nanojoules */
+	/* smaller of the time between last change to base priority and ctx switch and scheduling_latency */
 };
 typedef struct going_on_core *going_on_core_t;
 
 struct going_off_core {
-	uint64_t	thread_id;
-	uint32_t	energy_estimate_nj;	/* return: In nanojoules */
-	uint32_t	reserved;
-	uint64_t	end_time;
-	uint64_t	thread_group_id;
-	void		*thread_group_data;
+	uint64_t        thread_id;
+	uint32_t        energy_estimate_nj;     /* return: In nanojoules */
+	uint32_t        reserved;
+	uint64_t        end_time;
+	uint64_t        thread_group_id;
+	void            *thread_group_data;
 };
 typedef struct going_off_core *going_off_core_t;
 
 struct thread_group_data {
-	uint64_t	thread_group_id;
-	void		*thread_group_data;
-	uint32_t	thread_group_size;
-	uint32_t	thread_group_flags;
+	uint64_t        thread_group_id;
+	void            *thread_group_data;
+	uint32_t        thread_group_size;
+	uint32_t        thread_group_flags;
 };
 typedef struct thread_group_data *thread_group_data_t;
 
 struct perfcontrol_max_runnable_latency {
-	uint64_t	max_scheduling_latencies[4 /* THREAD_URGENCY_MAX */];
+	uint64_t        max_scheduling_latencies[4 /* THREAD_URGENCY_MAX */];
 };
 typedef struct perfcontrol_max_runnable_latency *perfcontrol_max_runnable_latency_t;
 
 struct perfcontrol_work_interval {
-	uint64_t	thread_id;
-	uint16_t	qos_class;
-	uint16_t	urgency;
-	uint32_t	flags; // notify
-	uint64_t	work_interval_id;
-	uint64_t	start;
-	uint64_t	finish;
-	uint64_t	deadline;
-	uint64_t	next_start;
-	uint64_t	thread_group_id;
-	void		*thread_group_data;
-	uint32_t	create_flags;
+	uint64_t        thread_id;
+	uint16_t        qos_class;
+	uint16_t        urgency;
+	uint32_t        flags; // notify
+	uint64_t        work_interval_id;
+	uint64_t        start;
+	uint64_t        finish;
+	uint64_t        deadline;
+	uint64_t        next_start;
+	uint64_t        thread_group_id;
+	void            *thread_group_data;
+	uint32_t        create_flags;
 };
 typedef struct perfcontrol_work_interval *perfcontrol_work_interval_t;
 
@@ -657,27 +683,27 @@ typedef enum {
 } work_interval_ctl_t;
 
 struct perfcontrol_work_interval_instance {
-	work_interval_ctl_t	ctl;
-	uint32_t		create_flags;
-	uint64_t		complexity;
-	uint64_t		thread_id;
-	uint64_t		work_interval_id;
-	uint64_t		instance_id; /* out: start, in: update/finish */
-	uint64_t		start;
-	uint64_t		finish;
-	uint64_t		deadline;
-	uint64_t		thread_group_id;
-	void			*thread_group_data;
+	work_interval_ctl_t     ctl;
+	uint32_t                create_flags;
+	uint64_t                complexity;
+	uint64_t                thread_id;
+	uint64_t                work_interval_id;
+	uint64_t                instance_id; /* out: start, in: update/finish */
+	uint64_t                start;
+	uint64_t                finish;
+	uint64_t                deadline;
+	uint64_t                thread_group_id;
+	void                    *thread_group_data;
 };
 typedef struct perfcontrol_work_interval_instance *perfcontrol_work_interval_instance_t;
 
-/* 
- * Structure to export per-CPU counters as part of the CLPC callout. 
- * Contains only the fixed CPU counters (instructions and cycles); CLPC 
- * would call back into XNU to get the configurable counters if needed. 
+/*
+ * Structure to export per-CPU counters as part of the CLPC callout.
+ * Contains only the fixed CPU counters (instructions and cycles); CLPC
+ * would call back into XNU to get the configurable counters if needed.
  */
 struct perfcontrol_cpu_counters {
-	uint64_t	instructions;
+	uint64_t        instructions;
 	uint64_t        cycles;
 };
 
@@ -687,7 +713,7 @@ struct perfcontrol_cpu_counters {
 struct perfcontrol_thread_data {
 	/*
 	 * Energy estimate (return value)
-	 * The field is populated by CLPC and used to update the 
+	 * The field is populated by CLPC and used to update the
 	 * energy estimate of the thread
 	 */
 	uint32_t            energy_estimate_nj;
@@ -697,11 +723,11 @@ struct perfcontrol_thread_data {
 	uint64_t            thread_id;
 	/* Thread Group ID */
 	uint64_t            thread_group_id;
-	/* 
-	 * Scheduling latency for threads at the same base priority. 
-	 * Calculated by the scheduler and passed into CLPC. The field is 
-	 * populated only in the thread_data structure for the thread 
-	 * going on-core. 
+	/*
+	 * Scheduling latency for threads at the same base priority.
+	 * Calculated by the scheduler and passed into CLPC. The field is
+	 * populated only in the thread_data structure for the thread
+	 * going on-core.
 	 */
 	uint64_t            scheduling_latency_at_same_basepri;
 	/* Thread Group data pointer */
@@ -794,7 +820,7 @@ typedef void (*sched_perfcontrol_deadline_passed_t)(uint64_t deadline);
 
 /*
  * Context Switch Callout
- * 
+ *
  * Parameters:
  * event        - The perfcontrol_event for this callout
  * cpu_id       - The CPU doing the context switch
@@ -866,12 +892,14 @@ extern void sched_perfcontrol_register_callbacks(sched_perfcontrol_callbacks_t c
  * Non-recommended cores can still be used to field interrupts or run bound threads.
  * This should be called with interrupts enabled and no scheduler locks held.
  */
-#define ALL_CORES_RECOMMENDED	(~(uint32_t)0)
+#define ALL_CORES_RECOMMENDED   (~(uint32_t)0)
 
 extern void sched_perfcontrol_update_recommended_cores(uint32_t recommended_cores);
 extern void sched_perfcontrol_thread_group_recommend(void *data, cluster_type_t recommendation);
 extern void sched_override_recommended_cores_for_sleep(void);
 extern void sched_restore_recommended_cores_after_sleep(void);
+
+extern void sched_usercontrol_update_recommended_cores(uint64_t recommended_cores);
 
 /*
  * Update the deadline after which sched_perfcontrol_deadline_passed will be called.
@@ -886,23 +914,23 @@ extern void sched_restore_recommended_cores_after_sleep(void);
 extern boolean_t sched_perfcontrol_update_callback_deadline(uint64_t deadline);
 
 typedef enum perfcontrol_callout_type {
-    PERFCONTROL_CALLOUT_ON_CORE,
-    PERFCONTROL_CALLOUT_OFF_CORE,
-    PERFCONTROL_CALLOUT_CONTEXT,
-    PERFCONTROL_CALLOUT_STATE_UPDATE,
-    /* Add other callout types here */
-    PERFCONTROL_CALLOUT_MAX
+	PERFCONTROL_CALLOUT_ON_CORE,
+	PERFCONTROL_CALLOUT_OFF_CORE,
+	PERFCONTROL_CALLOUT_CONTEXT,
+	PERFCONTROL_CALLOUT_STATE_UPDATE,
+	/* Add other callout types here */
+	PERFCONTROL_CALLOUT_MAX
 } perfcontrol_callout_type_t;
 
 typedef enum perfcontrol_callout_stat {
-    PERFCONTROL_STAT_INSTRS,
-    PERFCONTROL_STAT_CYCLES,
-    /* Add other stat types here */
-    PERFCONTROL_STAT_MAX
+	PERFCONTROL_STAT_INSTRS,
+	PERFCONTROL_STAT_CYCLES,
+	/* Add other stat types here */
+	PERFCONTROL_STAT_MAX
 } perfcontrol_callout_stat_t;
 
 uint64_t perfcontrol_callout_stat_avg(perfcontrol_callout_type_t type,
-	perfcontrol_callout_stat_t stat);
+    perfcontrol_callout_stat_t stat);
 
 
 #endif /* KERNEL_PRIVATE */
@@ -910,6 +938,7 @@ uint64_t perfcontrol_callout_stat_avg(perfcontrol_callout_type_t type,
 boolean_t machine_timeout_suspended(void);
 void ml_get_power_state(boolean_t *, boolean_t *);
 
+uint32_t get_arm_cpu_version(void);
 boolean_t user_cont_hwclock_allowed(void);
 boolean_t user_timebase_allowed(void);
 boolean_t ml_thread_is64bit(thread_t thread);

@@ -24,23 +24,23 @@
  * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
  * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
  * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE. 
+ * POSSIBILITY OF SUCH DAMAGE.
  *
  * $P4: //depot/projects/trustedbsd/openbsm/sys/bsm/audit_socket_type.h#1 $
  */
 
 #ifndef _BSM_AUDIT_SOCKET_TYPE_H_
-#define	_BSM_AUDIT_SOCKET_TYPE_H_
+#define _BSM_AUDIT_SOCKET_TYPE_H_
 
 /*
  * BSM socket type constants.
  */
-#define	BSM_SOCK_DGRAM		1
-#define	BSM_SOCK_STREAM		2
-#define	BSM_SOCK_RAW		4
-#define	BSM_SOCK_RDM		5
-#define	BSM_SOCK_SEQPACKET	6
+#define BSM_SOCK_DGRAM          1
+#define BSM_SOCK_STREAM         2
+#define BSM_SOCK_RAW            4
+#define BSM_SOCK_RDM            5
+#define BSM_SOCK_SEQPACKET      6
 
-#define	BSM_SOCK_UNKNOWN	500
+#define BSM_SOCK_UNKNOWN        500
 
 #endif /* !_BSM_AUDIT_SOCKET_TYPE_H_ */

@@ -2,7 +2,7 @@
  * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -37,34 +37,35 @@
 
 #include "mach/host_notify_reply.h"
 
-decl_lck_mtx_data(,host_notify_lock)
+decl_lck_mtx_data(, host_notify_lock)
 
-lck_mtx_ext_t			host_notify_lock_ext;
-lck_grp_t				host_notify_lock_grp;
-lck_attr_t				host_notify_lock_attr;
-static lck_grp_attr_t	host_notify_lock_grp_attr;
-static zone_t			host_notify_zone;
+lck_mtx_ext_t                   host_notify_lock_ext;
+lck_grp_t                               host_notify_lock_grp;
+lck_attr_t                              host_notify_lock_attr;
+static lck_grp_attr_t   host_notify_lock_grp_attr;
+static zone_t                   host_notify_zone;
 
-static queue_head_t		host_notify_queue[HOST_NOTIFY_TYPE_MAX+1];
+static queue_head_t             host_notify_queue[HOST_NOTIFY_TYPE_MAX + 1];
 
-static mach_msg_id_t	host_notify_replyid[HOST_NOTIFY_TYPE_MAX+1] =
-								{ HOST_CALENDAR_CHANGED_REPLYID,
-								  HOST_CALENDAR_SET_REPLYID };
+static mach_msg_id_t    host_notify_replyid[HOST_NOTIFY_TYPE_MAX + 1] =
+{ HOST_CALENDAR_CHANGED_REPLYID,
+  HOST_CALENDAR_SET_REPLYID };
 
 struct host_notify_entry {
-	queue_chain_t		entries;
-	ipc_port_t			port;
+	queue_chain_t           entries;
+	ipc_port_t                      port;
 };
 
-typedef struct host_notify_entry	*host_notify_t;
+typedef struct host_notify_entry        *host_notify_t;
 
 void
 host_notify_init(void)
 {
-	int		i;
+	int             i;
 
-	for (i = 0; i <= HOST_NOTIFY_TYPE_MAX; i++)
+	for (i = 0; i <= HOST_NOTIFY_TYPE_MAX; i++) {
 		queue_init(&host_notify_queue[i]);
+	}
 
 	lck_grp_attr_setdefault(&host_notify_lock_grp_attr);
 	lck_grp_init(&host_notify_lock_grp, "host_notify", &host_notify_lock_grp_attr);
@@ -72,31 +73,35 @@ host_notify_init(void)
 
 	lck_mtx_init_ext(&host_notify_lock, &host_notify_lock_ext, &host_notify_lock_grp, &host_notify_lock_attr);
 
-	i = sizeof (struct host_notify_entry);
+	i = sizeof(struct host_notify_entry);
 	host_notify_zone =
-			zinit(i, (4096 * i), (16 * i), "host_notify");
+	    zinit(i, (4096 * i), (16 * i), "host_notify");
 }
 
 kern_return_t
 host_request_notification(
-	host_t					host,
-	host_flavor_t			notify_type,
-	ipc_port_t				port)
+	host_t                                  host,
+	host_flavor_t                   notify_type,
+	ipc_port_t                              port)
 {
-	host_notify_t		entry;
+	host_notify_t           entry;
 
-	if (host == HOST_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (host == HOST_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
-	if (!IP_VALID(port))
-		return (KERN_INVALID_CAPABILITY);
+	if (!IP_VALID(port)) {
+		return KERN_INVALID_CAPABILITY;
+	}
 
-	if (notify_type > HOST_NOTIFY_TYPE_MAX || notify_type < 0)
-		return (KERN_INVALID_ARGUMENT);
+	if (notify_type > HOST_NOTIFY_TYPE_MAX || notify_type < 0) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	entry = (host_notify_t)zalloc(host_notify_zone);
-	if (entry == NULL)
-		return (KERN_RESOURCE_SHORTAGE);
+	if (entry == NULL) {
+		return KERN_RESOURCE_SHORTAGE;
+	}
 
 	lck_mtx_lock(&host_notify_lock);
 
@@ -107,7 +112,7 @@ host_request_notification(
 		lck_mtx_unlock(&host_notify_lock);
 		zfree(host_notify_zone, entry);
 
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	entry->port = port;
@@ -117,14 +122,14 @@ host_request_notification(
 	enqueue_tail(&host_notify_queue[notify_type], (queue_entry_t)entry);
 	lck_mtx_unlock(&host_notify_lock);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 void
 host_notify_port_destroy(
-	ipc_port_t			port)
+	ipc_port_t                      port)
 {
-	host_notify_t		entry;
+	host_notify_t           entry;
 
 	lck_mtx_lock(&host_notify_lock);
 
@@ -150,17 +155,17 @@ host_notify_port_destroy(
 
 static void
 host_notify_all(
-	host_flavor_t		notify_type,
-	mach_msg_header_t	*msg,
-	mach_msg_size_t		msg_size)
+	host_flavor_t           notify_type,
+	mach_msg_header_t       *msg,
+	mach_msg_size_t         msg_size)
 {
-	queue_t		notify_queue = &host_notify_queue[notify_type];
+	queue_t         notify_queue = &host_notify_queue[notify_type];
 
 	lck_mtx_lock(&host_notify_lock);
 
 	if (!queue_empty(notify_queue)) {
-		queue_head_t		send_queue;
-		host_notify_t		entry;
+		queue_head_t            send_queue;
+		host_notify_t           entry;
 
 		send_queue = *notify_queue;
 		queue_init(notify_queue);
@@ -175,7 +180,7 @@ host_notify_all(
 		msg->msgh_id = host_notify_replyid[notify_type];
 
 		while ((entry = (host_notify_t)dequeue(&send_queue)) != NULL) {
-			ipc_port_t		port;
+			ipc_port_t              port;
 
 			port = entry->port;
 			assert(port != IP_NULL);
@@ -203,15 +208,15 @@ host_notify_all(
 void
 host_notify_calendar_change(void)
 {
-	__Request__host_calendar_changed_t	msg;
+	__Request__host_calendar_changed_t      msg;
 
-	host_notify_all(HOST_NOTIFY_CALENDAR_CHANGE, &msg.Head, sizeof (msg));
+	host_notify_all(HOST_NOTIFY_CALENDAR_CHANGE, &msg.Head, sizeof(msg));
 }
 
 void
 host_notify_calendar_set(void)
 {
-	__Request__host_calendar_set_t	msg;
+	__Request__host_calendar_set_t  msg;
 
-	host_notify_all(HOST_NOTIFY_CALENDAR_SET, &msg.Head, sizeof (msg));
+	host_notify_all(HOST_NOTIFY_CALENDAR_SET, &msg.Head, sizeof(msg));
 }

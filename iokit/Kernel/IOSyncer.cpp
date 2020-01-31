@@ -2,7 +2,7 @@
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* IOSyncer.cpp created by wgulland on 2000-02-02 */
@@ -34,88 +34,100 @@ OSDefineMetaClassAndStructors(IOSyncer, OSObject)
 
 IOSyncer * IOSyncer::create(bool twoRetains)
 {
-    IOSyncer * me = new IOSyncer;
+	IOSyncer * me = new IOSyncer;
 
-    if (me && !me->init(twoRetains)) {
-        me->release();
-        return 0;
-    }
+	if (me && !me->init(twoRetains)) {
+		me->release();
+		return 0;
+	}
 
-    return me;
+	return me;
 }
 
-bool IOSyncer::init(bool twoRetains)
+bool
+IOSyncer::init(bool twoRetains)
 {
-    if (!OSObject::init())
-        return false;
+	if (!OSObject::init()) {
+		return false;
+	}
 
-    if (!(guardLock = IOSimpleLockAlloc()) )
-        return false;
-	
-    IOSimpleLockInit(guardLock);
+	if (!(guardLock = IOSimpleLockAlloc())) {
+		return false;
+	}
 
-    if(twoRetains)
-	retain();
+	IOSimpleLockInit(guardLock);
 
-    fResult = kIOReturnSuccess;
+	if (twoRetains) {
+		retain();
+	}
 
-    reinit();
+	fResult = kIOReturnSuccess;
 
-    return true;
+	reinit();
+
+	return true;
 }
 
-void IOSyncer::reinit()
+void
+IOSyncer::reinit()
 {
-    IOInterruptState is = IOSimpleLockLockDisableInterrupt(guardLock);
-    threadMustStop = true;
-    IOSimpleLockUnlockEnableInterrupt(guardLock, is);
+	IOInterruptState is = IOSimpleLockLockDisableInterrupt(guardLock);
+	threadMustStop = true;
+	IOSimpleLockUnlockEnableInterrupt(guardLock, is);
 }
 
-void IOSyncer::free()
+void
+IOSyncer::free()
 {
-    // just in case a thread is blocked here:
-    privateSignal();
+	// just in case a thread is blocked here:
+	privateSignal();
 
-    if (guardLock != NULL)
-       IOSimpleLockFree(guardLock);
+	if (guardLock != NULL) {
+		IOSimpleLockFree(guardLock);
+	}
 
-    OSObject::free();
+	OSObject::free();
 }
 
-IOReturn IOSyncer::wait(bool autoRelease)
+IOReturn
+IOSyncer::wait(bool autoRelease)
 {
-    IOInterruptState is = IOSimpleLockLockDisableInterrupt(guardLock);
+	IOInterruptState is = IOSimpleLockLockDisableInterrupt(guardLock);
 
-    if (threadMustStop) {
-	assert_wait((void *) &threadMustStop, false);
-    	IOSimpleLockUnlockEnableInterrupt(guardLock, is);
-        thread_block(THREAD_CONTINUE_NULL);
-    }
-    else
-        IOSimpleLockUnlockEnableInterrupt(guardLock, is);
+	if (threadMustStop) {
+		assert_wait((void *) &threadMustStop, false);
+		IOSimpleLockUnlockEnableInterrupt(guardLock, is);
+		thread_block(THREAD_CONTINUE_NULL);
+	} else {
+		IOSimpleLockUnlockEnableInterrupt(guardLock, is);
+	}
 
-    IOReturn result = fResult;	// Pick up before auto deleting!
+	IOReturn result = fResult; // Pick up before auto deleting!
 
-    if(autoRelease)
-	release();
+	if (autoRelease) {
+		release();
+	}
 
-    return result;
+	return result;
 }
 
-void IOSyncer::signal(IOReturn res, bool autoRelease)
+void
+IOSyncer::signal(IOReturn res, bool autoRelease)
 {
-    fResult = res;
-    privateSignal();
-    if(autoRelease)
-	release();
+	fResult = res;
+	privateSignal();
+	if (autoRelease) {
+		release();
+	}
 }
 
-void IOSyncer::privateSignal()
+void
+IOSyncer::privateSignal()
 {
-    if (threadMustStop) {
-         IOInterruptState is = IOSimpleLockLockDisableInterrupt(guardLock);
-         threadMustStop = false;
-         thread_wakeup_one((void *) &threadMustStop);
-         IOSimpleLockUnlockEnableInterrupt(guardLock, is);
-    }
+	if (threadMustStop) {
+		IOInterruptState is = IOSimpleLockLockDisableInterrupt(guardLock);
+		threadMustStop = false;
+		thread_wakeup_one((void *) &threadMustStop);
+		IOSimpleLockUnlockEnableInterrupt(guardLock, is);
+	}
 }

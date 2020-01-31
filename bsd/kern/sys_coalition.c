@@ -35,10 +35,12 @@ coalition_create_syscall(user_addr_t cidp, uint32_t flags)
 	int role = COALITION_CREATE_FLAGS_GET_ROLE(flags);
 	boolean_t privileged = !!(flags & COALITION_CREATE_FLAGS_PRIVILEGED);
 
-	if ((flags & (~COALITION_CREATE_FLAGS_MASK)) != 0)
+	if ((flags & (~COALITION_CREATE_FLAGS_MASK)) != 0) {
 		return EINVAL;
-	if (type < 0 || type > COALITION_TYPE_MAX)
+	}
+	if (type < 0 || type > COALITION_TYPE_MAX) {
 		return EINVAL;
+	}
 
 	kr = coalition_create_internal(type, role, privileged, &coal);
 	if (kr != KERN_SUCCESS) {
@@ -183,7 +185,8 @@ coalition_reap_syscall(user_addr_t cidp, uint32_t flags)
 /* Syscall demux.
  * Returns EPERM if the calling process is not privileged to make this call.
  */
-int coalition(proc_t p, struct coalition_args *cap, __unused int32_t *retval)
+int
+coalition(proc_t p, struct coalition_args *cap, __unused int32_t *retval)
 {
 	uint32_t operation = cap->operation;
 	user_addr_t cidp = cap->cid;
@@ -240,21 +243,25 @@ static int
 coalition_info_efficiency(coalition_t coal, user_addr_t buffer, user_size_t bufsize)
 {
 	int error = 0;
-	if (coalition_type(coal) != COALITION_TYPE_JETSAM)
+	if (coalition_type(coal) != COALITION_TYPE_JETSAM) {
 		return EINVAL;
-	uint64_t flags = 0;	
+	}
+	uint64_t flags = 0;
 	error = copyin(buffer, &flags, MIN(bufsize, sizeof(flags)));
-	if (error)
+	if (error) {
 		return error;
-	if ((flags & COALITION_EFFICIENCY_VALID_FLAGS) == 0)
+	}
+	if ((flags & COALITION_EFFICIENCY_VALID_FLAGS) == 0) {
 		return EINVAL;
+	}
 	if (flags & COALITION_FLAGS_EFFICIENT) {
-	    coalition_set_efficient(coal);
+		coalition_set_efficient(coal);
 	}
 	return error;
 }
 
-int coalition_info(proc_t p, struct coalition_info_args *uap, __unused int32_t *retval)
+int
+coalition_info(proc_t p, struct coalition_info_args *uap, __unused int32_t *retval)
 {
 	user_addr_t cidp = uap->cid;
 	user_addr_t buffer = uap->buffer;
@@ -319,12 +326,14 @@ static int sysctl_coalition_get_ids SYSCTL_HANDLER_ARGS
 
 
 	error = SYSCTL_IN(req, &value, sizeof(value));
-	if (error)
+	if (error) {
 		return error;
-	if (!req->newptr)
+	}
+	if (!req->newptr) {
 		pid = req->p->p_pid;
-	else
+	} else {
 		pid = (int)value;
+	}
 
 	coal_dbg("looking up coalitions for pid:%d", pid);
 	tproc = proc_find(pid);
@@ -340,7 +349,7 @@ static int sysctl_coalition_get_ids SYSCTL_HANDLER_ARGS
 }
 
 SYSCTL_PROC(_kern, OID_AUTO, coalitions, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_coalition_get_ids, "Q", "coalition ids of a given process");
+    0, 0, sysctl_coalition_get_ids, "Q", "coalition ids of a given process");
 
 
 static int sysctl_coalition_get_roles SYSCTL_HANDLER_ARGS
@@ -353,12 +362,14 @@ static int sysctl_coalition_get_roles SYSCTL_HANDLER_ARGS
 
 
 	error = SYSCTL_IN(req, &value, sizeof(value));
-	if (error)
+	if (error) {
 		return error;
-	if (!req->newptr)
+	}
+	if (!req->newptr) {
 		pid = req->p->p_pid;
-	else
+	} else {
 		pid = (int)value;
+	}
 
 	coal_dbg("looking up coalitions for pid:%d", pid);
 	tproc = proc_find(pid);
@@ -374,7 +385,7 @@ static int sysctl_coalition_get_roles SYSCTL_HANDLER_ARGS
 }
 
 SYSCTL_PROC(_kern, OID_AUTO, coalition_roles, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_coalition_get_roles, "I", "coalition roles of a given process");
+    0, 0, sysctl_coalition_get_roles, "I", "coalition roles of a given process");
 
 
 static int sysctl_coalition_get_page_count SYSCTL_HANDLER_ARGS
@@ -388,12 +399,14 @@ static int sysctl_coalition_get_page_count SYSCTL_HANDLER_ARGS
 
 
 	error = SYSCTL_IN(req, &value, sizeof(value));
-	if (error)
+	if (error) {
 		return error;
-	if (!req->newptr)
+	}
+	if (!req->newptr) {
 		pid = req->p->p_pid;
-	else
+	} else {
 		pid = (int)value;
+	}
 
 	coal_dbg("looking up coalitions for pid:%d", pid);
 	tproc = proc_find(pid);
@@ -411,7 +424,7 @@ static int sysctl_coalition_get_page_count SYSCTL_HANDLER_ARGS
 			int ntasks = 0;
 			pgcount[t] = coalition_get_page_count(coal, &ntasks);
 			coal_dbg("PID:%d, Coalition:%lld, type:%d, pgcount:%lld",
-				 pid, coalition_id(coal), t, pgcount[t]);
+			    pid, coalition_id(coal), t, pgcount[t]);
 		}
 	}
 
@@ -421,7 +434,7 @@ static int sysctl_coalition_get_page_count SYSCTL_HANDLER_ARGS
 }
 
 SYSCTL_PROC(_kern, OID_AUTO, coalition_page_count, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_coalition_get_page_count, "Q", "coalition page count of a specified process");
+    0, 0, sysctl_coalition_get_page_count, "Q", "coalition page count of a specified process");
 
 
 static int sysctl_coalition_get_pid_list SYSCTL_HANDLER_ARGS
@@ -442,8 +455,9 @@ static int sysctl_coalition_get_pid_list SYSCTL_HANDLER_ARGS
 		has_pid = 0;
 		error = SYSCTL_IN(req, &value, sizeof(value) - sizeof(value[0]));
 	}
-	if (error)
+	if (error) {
 		return error;
+	}
 	if (!req->newptr) {
 		type = COALITION_TYPE_RESOURCE;
 		sort_order = COALITION_SORT_DEFAULT;
@@ -451,17 +465,19 @@ static int sysctl_coalition_get_pid_list SYSCTL_HANDLER_ARGS
 	} else {
 		type = value[0];
 		sort_order = value[1];
-		if (has_pid)
+		if (has_pid) {
 			pid = value[2];
-		else
+		} else {
 			pid = req->p->p_pid;
+		}
 	}
 
-	if (type < 0 || type >= COALITION_NUM_TYPES)
+	if (type < 0 || type >= COALITION_NUM_TYPES) {
 		return EINVAL;
+	}
 
 	coal_dbg("getting constituent PIDS for coalition of type %d "
-		 "containing pid:%d (sort:%d)", type, pid, sort_order);
+	    "containing pid:%d (sort:%d)", type, pid, sort_order);
 	tproc = proc_find(pid);
 	if (tproc == NULL) {
 		coal_dbg("ERROR: Couldn't find pid:%d", pid);
@@ -474,10 +490,10 @@ static int sysctl_coalition_get_pid_list SYSCTL_HANDLER_ARGS
 	}
 
 	npids = coalition_get_pid_list(coal, COALITION_ROLEMASK_ALLROLES, sort_order,
-				       pidlist, sizeof(pidlist) / sizeof(pidlist[0]));
+	    pidlist, sizeof(pidlist) / sizeof(pidlist[0]));
 	if (npids > (int)(sizeof(pidlist) / sizeof(pidlist[0]))) {
 		coal_dbg("Too many members in coalition %llu (from pid:%d): %d!",
-			 coalition_id(coal), pid, npids);
+		    coalition_id(coal), pid, npids);
 		npids = sizeof(pidlist) / sizeof(pidlist[0]);
 	}
 
@@ -489,14 +505,15 @@ out:
 		return -npids;
 	}
 
-	if (npids == 0)
+	if (npids == 0) {
 		return ENOENT;
+	}
 
 	return SYSCTL_OUT(req, pidlist, sizeof(pidlist[0]) * npids);
 }
 
 SYSCTL_PROC(_kern, OID_AUTO, coalition_pid_list, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_coalition_get_pid_list, "I", "list of PIDS which are members of the coalition of the current process");
+    0, 0, sysctl_coalition_get_pid_list, "I", "list of PIDS which are members of the coalition of the current process");
 
 #if DEVELOPMENT
 static int sysctl_coalition_notify SYSCTL_HANDLER_ARGS
@@ -510,12 +527,14 @@ static int sysctl_coalition_notify SYSCTL_HANDLER_ARGS
 	error = SYSCTL_IN(req, value, sizeof(value));
 	if (error) {
 		error = SYSCTL_IN(req, value, sizeof(value) - sizeof(value[0]));
-		if (error)
+		if (error) {
 			return error;
+		}
 		should_set = 0;
 	}
-	if (!req->newptr)
+	if (!req->newptr) {
 		return error;
+	}
 
 	coal = coalition_find_by_id(value[0]);
 	if (coal == COALITION_NULL) {
@@ -523,8 +542,9 @@ static int sysctl_coalition_notify SYSCTL_HANDLER_ARGS
 		return ESRCH;
 	}
 
-	if (should_set)
+	if (should_set) {
 		coalition_set_notify(coal, (int)value[1]);
+	}
 
 	value[0] = (uint64_t)coalition_should_notify(coal);
 
@@ -534,12 +554,12 @@ static int sysctl_coalition_notify SYSCTL_HANDLER_ARGS
 }
 
 SYSCTL_PROC(_kern, OID_AUTO, coalition_notify, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
-	    0, 0, sysctl_coalition_notify, "Q", "get/set coalition notification flag");
+    0, 0, sysctl_coalition_notify, "Q", "get/set coalition notification flag");
 
 extern int unrestrict_coalition_syscalls;
 SYSCTL_INT(_kern, OID_AUTO, unrestrict_coalitions,
-	   CTLFLAG_RW, &unrestrict_coalition_syscalls, 0,
-	   "unrestrict the coalition interface");
+    CTLFLAG_RW, &unrestrict_coalition_syscalls, 0,
+    "unrestrict the coalition interface");
 
 #endif /* DEVELOPMENT */
 

@@ -25,14 +25,14 @@ static void perf_setup(char **path, int *fd);
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.vfs.dmc"),
 	T_META_ASROOT(true)
-);
+	);
 
 #pragma mark Entitled Tests
 
 #ifndef TEST_UNENTITLED
 T_DECL(fsctl_get_uninitialized,
-	"Initial fsctl.get should return zeros",
-	T_META_ASROOT(false))
+    "Initial fsctl.get should return zeros",
+    T_META_ASROOT(false))
 {
 	int err;
 	char *mount_path;
@@ -54,7 +54,7 @@ T_DECL(fsctl_get_uninitialized,
 }
 
 T_DECL(fsctl_set,
-	"fsctl.set should succeed and fsctl.get should verify")
+    "fsctl.set should succeed and fsctl.get should verify")
 {
 	int err;
 	char *mount_path;
@@ -118,7 +118,7 @@ verify_mount_fallback_values(const char *mount_path, disk_conditioner_info *info
 }
 
 T_DECL(fsctl_set_zero,
-	"fsctl.set zero values should fall back to original mount settings")
+    "fsctl.set zero values should fall back to original mount settings")
 {
 	char *mount_path;
 	disk_conditioner_info info = {0};
@@ -135,7 +135,7 @@ T_DECL(fsctl_set_zero,
 }
 
 T_DECL(fsctl_set_out_of_bounds,
-	"fsctl.set out-of-bounds values should fall back to original mount settings")
+    "fsctl.set out-of-bounds values should fall back to original mount settings")
 {
 	char *mount_path;
 	disk_conditioner_info info;
@@ -156,7 +156,7 @@ T_DECL(fsctl_set_out_of_bounds,
 }
 
 T_DECL(fsctl_restore_mount_fields,
-	"fsctl.set should restore fields on mount_t that it temporarily overrides")
+    "fsctl.set should restore fields on mount_t that it temporarily overrides")
 {
 	int err;
 	char *mount_path;
@@ -212,8 +212,8 @@ T_DECL(fsctl_restore_mount_fields,
 }
 
 T_DECL(fsctl_get_nonroot,
-	"fsctl.get should not require root",
-	T_META_ASROOT(false))
+    "fsctl.get should not require root",
+    T_META_ASROOT(false))
 {
 	int err;
 	char *mount_path;
@@ -234,8 +234,8 @@ T_DECL(fsctl_get_nonroot,
 }
 
 T_DECL(fsctl_set_nonroot,
-	"fsctl.set should require root",
-	T_META_ASROOT(false))
+    "fsctl.set should require root",
+    T_META_ASROOT(false))
 {
 	int err;
 	char *mount_path;
@@ -271,7 +271,7 @@ T_DECL(fsctl_set_nonroot,
 }
 
 T_DECL(fsctl_delays,
-	"Validate I/O delays when DMC is enabled")
+    "Validate I/O delays when DMC is enabled")
 {
 	char *path;
 	int fd;
@@ -323,7 +323,7 @@ T_DECL(fsctl_delays,
 #pragma mark Unentitled Tests
 
 T_DECL(fsctl_get_unentitled,
-	"fsctl.get should not require entitlement")
+    "fsctl.get should not require entitlement")
 {
 	int err;
 	char *mount_path;
@@ -339,7 +339,7 @@ T_DECL(fsctl_get_unentitled,
 }
 
 T_DECL(fsctl_set_unentitled,
-	"fsctl.set should require entitlement")
+    "fsctl.set should require entitlement")
 {
 	int err;
 	char *mount_path;
@@ -373,7 +373,9 @@ T_DECL(fsctl_set_unentitled,
 
 #pragma mark Helpers
 
-static char *mktempdir(void) {
+static char *
+mktempdir(void)
+{
 	char *path = malloc(PATH_MAX);
 	strcpy(path, "/tmp/dmc.XXXXXXXX");
 	atexit_b(^{ free(path); });
@@ -394,7 +396,9 @@ static char *mktempdir(void) {
  * Faster than creating a ram disk to test with
  * when access to the filesystem is not necessary
  */
-static char *mktempmount(void) {
+static char *
+mktempmount(void)
+{
 	char *mount_path = mktempdir();
 
 	T_WITH_ERRNO;
@@ -410,7 +414,9 @@ static char *mktempmount(void) {
  * Wrapper around dt_launch_tool/dt_waitpid
  * that works like libc:system()
  */
-static int system_legal(const char *command) {
+static int
+system_legal(const char *command)
+{
 	pid_t pid = -1;
 	int exit_status = 0;
 	const char *argv[] = {
@@ -439,7 +445,9 @@ static int system_legal(const char *command) {
  * that contains a usable HFS+ filesystem
  * mounted via a ram disk
  */
-static char *mkramdisk(void) {
+static char *
+mkramdisk(void)
+{
 	char cmd[1024];
 	char *mount_path = mktempdir();
 	char *dev_disk_file = malloc(256);
@@ -473,7 +481,9 @@ static char *mkramdisk(void) {
 	return mount_path;
 }
 
-static uint64_t time_for_read(int fd, const char *expected) {
+static uint64_t
+time_for_read(int fd, const char *expected)
+{
 	int err;
 	ssize_t ret;
 	char buf[READSIZE];
@@ -491,10 +501,12 @@ static uint64_t time_for_read(int fd, const char *expected) {
 	err = memcmp(buf, expected, sizeof(buf));
 	T_ASSERT_EQ_INT(0, err, "read expected contents from temporary file");
 
-	return (stop - start);
+	return stop - start;
 }
 
-static void perf_setup(char **path, int *fd) {
+static void
+perf_setup(char **path, int *fd)
+{
 	int temp_fd;
 	char *temp_path;
 

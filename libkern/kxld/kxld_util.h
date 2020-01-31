@@ -2,7 +2,7 @@
  * Copyright (c) 2007-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef _KXLD_UTIL_H_
@@ -36,9 +36,9 @@
     #include <architecture/byte_order.h>
     #include "kxld_types.h"
 
-    /* Get machine.h from the kernel source so we can support all platforms
-     * that the kernel supports. Otherwise we're at the mercy of the host.
-     */
+/* Get machine.h from the kernel source so we can support all platforms
+ * that the kernel supports. Otherwise we're at the mercy of the host.
+ */
     #include "../../osfmk/mach/machine.h"
 #endif
 
@@ -47,28 +47,28 @@
 
     #define KXLD_3264_FUNC(cond32, rval, func32, func64, ...) \
     do {                        \
-        if (cond32) {           \
-            (rval) = (func32)(__VA_ARGS__); \
-        } else {                \
-            (rval) = (func64)(__VA_ARGS__); \
-        }                       \
+	if (cond32) {           \
+	    (rval) = (func32)(__VA_ARGS__); \
+	} else {                \
+	    (rval) = (func64)(__VA_ARGS__); \
+	}                       \
     } while(0)
 
 #elif defined(__LP64__)
 
     #define KXLD_3264_FUNC(cond32, rval, func32, func64, ...) \
     do {                        \
-        (rval) = (func64)(__VA_ARGS__);     \
-    } while(0)                 
+	(rval) = (func64)(__VA_ARGS__);     \
+    } while(0)
 
 #else
 
     #define KXLD_3264_FUNC(cond32, rval, func32, func64, ...) \
     do {                        \
-        (rval) = (func32)(__VA_ARGS__);     \
+	(rval) = (func32)(__VA_ARGS__);     \
     } while(0)                  \
 
-#endif 
+#endif
 
 /* Misc string functions */
 #define streq(str1, str2) (((str1) && (str2)) ? !strcmp((str1), (str2)) : 0)
@@ -83,7 +83,7 @@
 #define START_TIMER()  gettimeofday(&start, NULL);
 #define END_TIMER()    gettimeofday(&end, NULL);
 #define PRINT_TIMER(msg)  kxld_log("%s: %ds, %dus\n", (msg), \
-        (end.tv_sec - start.tv_sec), (end.tv_usec - start.tv_usec));
+	(end.tv_sec - start.tv_sec), (end.tv_usec - start.tv_usec));
 
 /* Misc definitions */
 #define KXLD_MAX_NAME_LEN                       256
@@ -97,8 +97,8 @@
 #define KXLD_OPERATOR_DELETE_ARRAY_SYMBOL       "__ZdaPv"
 
 struct kxld_section_name {
-    char segname[16];
-    char sectname[16];
+	char segname[16];
+	char sectname[16];
 };
 typedef struct kxld_section_name KXLDSectionName;
 
@@ -107,14 +107,14 @@ typedef struct kxld_section_name KXLDSectionName;
 *******************************************************************************/
 
 void kxld_set_logging_callback(KXLDLoggingCallback logging_callback)
-    __attribute__((visibility("hidden")));
+__attribute__((visibility("hidden")));
 
 void kxld_set_logging_callback_data(const char * name, void *user_data)
-    __attribute__((visibility("hidden")));
+__attribute__((visibility("hidden")));
 
-void kxld_log(KXLDLogSubsystem subsystem, KXLDLogLevel level, 
+void kxld_log(KXLDLogSubsystem subsystem, KXLDLogLevel level,
     const char *format, ...)
-    __attribute__((visibility("hidden"), format(printf, 3, 4)));
+__attribute__((visibility("hidden"), format(printf, 3, 4)));
 
 /* Common logging strings */
 #define kKxldLogArchNotSupported        "The target architecture (cputype 0x%x) is not supported by kxld."
@@ -128,40 +128,41 @@ void kxld_log(KXLDLogSubsystem subsystem, KXLDLogLevel level,
 #define kKxldLogParentOutOfDate         "The super class vtable '%s' for vtable '%s' is out of date. Make sure your kext has been built against the correct headers."
 #define kKxldLogNoKmodInfo              "The kext is missing its kmod_info structure."
 #define kKxldLogRelocationOverflow      "A relocation entry has overflowed. The kext may be too far from one " \
-                                        "of its dependencies. Check your kext's load address."
-#define kKxldLogRelocatingPatchedSym    "Relocation failed because some class in this kext "    \
-    "didn't use the OSDeclareDefaultStructors and OSDefineMetaClassAndStructors, so it still "  \
+    "of its dependencies. Check your kext's load address."
+#define kKxldLogRelocatingPatchedSym    "Warning: relocation failed because some class in this kext "    \
+    "didn't use the OSDeclareDefaultStructors and OSDefineMetaClassAndStructors, "  \
+    "or didn't export all vtable symbols, so it still "  \
     "references %s, which has been patched with another symbol for binary compatibility. "      \
     "Please make sure all classes that inherit from OSObject use these macros."
 
 /*******************************************************************************
-* Allocators 
+* Allocators
 *******************************************************************************/
-    
-void * kxld_alloc(size_t size) 
-    __attribute__((malloc, visibility("hidden")));
 
-void * kxld_page_alloc(size_t size) 
-    __attribute__((malloc, visibility("hidden")));
+void * kxld_alloc(size_t size)
+__attribute__((malloc, visibility("hidden")));
 
-void * kxld_page_alloc_untracked(size_t size) 
-    __attribute__((malloc, visibility("hidden")));
+void * kxld_page_alloc(size_t size)
+__attribute__((malloc, visibility("hidden")));
 
-void * kxld_alloc_pageable(size_t size) 
-    __attribute__((malloc, visibility("hidden")));
+void * kxld_page_alloc_untracked(size_t size)
+__attribute__((malloc, visibility("hidden")));
+
+void * kxld_alloc_pageable(size_t size)
+__attribute__((malloc, visibility("hidden")));
 
 /*******************************************************************************
 * Deallocators
 *******************************************************************************/
 
-void kxld_free(void *ptr, size_t size) 
-    __attribute__((visibility("hidden")));
+void kxld_free(void *ptr, size_t size)
+__attribute__((visibility("hidden")));
 
-void kxld_page_free(void *ptr, size_t size) 
-    __attribute__((visibility("hidden")));
-    
-void kxld_page_free_untracked(void *ptr, size_t size) 
-    __attribute__((visibility("hidden")));
+void kxld_page_free(void *ptr, size_t size)
+__attribute__((visibility("hidden")));
+
+void kxld_page_free_untracked(void *ptr, size_t size)
+__attribute__((visibility("hidden")));
 
 /*******************************************************************************
 * Mach-O Functions
@@ -180,9 +181,9 @@ kern_return_t validate_and_swap_macho_64(u_char *file, u_long size
     ) __attribute__((visibility("hidden")));
 
 #if !KERNEL
-void unswap_macho(u_char *file, enum NXByteOrder host_order, 
+void unswap_macho(u_char *file, enum NXByteOrder host_order,
     enum NXByteOrder target_order)
-    __attribute__((visibility("hidden")));
+__attribute__((visibility("hidden")));
 #endif /* !KERNEL */
 
 /*******************************************************************************
@@ -190,20 +191,20 @@ void unswap_macho(u_char *file, enum NXByteOrder host_order,
 *******************************************************************************/
 
 kxld_addr_t kxld_align_address(kxld_addr_t address, u_int align)
-    __attribute__((const, visibility("hidden")));
+__attribute__((const, visibility("hidden")));
 
 boolean_t kxld_is_32_bit(cpu_type_t)
-    __attribute__((const, visibility("hidden")));
+__attribute__((const, visibility("hidden")));
 
 const char * kxld_strstr(const char *s, const char *find)
-    __attribute__((pure, visibility("hidden")));
+__attribute__((pure, visibility("hidden")));
 
 /*******************************************************************************
 * Debugging
 *******************************************************************************/
 
-void kxld_print_memory_report(void) 
-    __attribute__((visibility("hidden")));
+void kxld_print_memory_report(void)
+__attribute__((visibility("hidden")));
 
 /*******************************************************************************
 * Cross Linking

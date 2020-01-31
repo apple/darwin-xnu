@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -122,30 +122,30 @@
  */
 
 mach_msg_return_t mach_msg_send(
-	mach_msg_header_t	*msg,
-	mach_msg_option_t	option,
-	mach_msg_size_t		send_size,
-	mach_msg_timeout_t	send_timeout,
-	mach_port_name_t	notify);
+	mach_msg_header_t       *msg,
+	mach_msg_option_t       option,
+	mach_msg_size_t         send_size,
+	mach_msg_timeout_t      send_timeout,
+	mach_port_name_t        notify);
 
 mach_msg_return_t mach_msg_receive(
-	mach_msg_header_t	*msg,
-	mach_msg_option_t	option,
-	mach_msg_size_t		rcv_size,
-	mach_port_name_t	rcv_name,
-	mach_msg_timeout_t	rcv_timeout,
-	void 			(*continuation)(mach_msg_return_t),
-	mach_msg_size_t		slist_size);
+	mach_msg_header_t       *msg,
+	mach_msg_option_t       option,
+	mach_msg_size_t         rcv_size,
+	mach_port_name_t        rcv_name,
+	mach_msg_timeout_t      rcv_timeout,
+	void                    (*continuation)(mach_msg_return_t),
+	mach_msg_size_t         slist_size);
 
 
 mach_msg_return_t msg_receive_error(
-	ipc_kmsg_t		kmsg,
-	mach_msg_option_t	option,
-	mach_vm_address_t	rcv_addr,
-	mach_msg_size_t		rcv_size,
-	mach_port_seqno_t	seqno,
-	ipc_space_t		space,
-	mach_msg_size_t		*out_size);
+	ipc_kmsg_t              kmsg,
+	mach_msg_option_t       option,
+	mach_vm_address_t       rcv_addr,
+	mach_msg_size_t         rcv_size,
+	mach_port_seqno_t       seqno,
+	ipc_space_t             space,
+	mach_msg_size_t         *out_size);
 
 static mach_msg_return_t
 mach_msg_rcv_link_special_reply_port(
@@ -161,8 +161,8 @@ audit_token_t KERNEL_AUDIT_TOKEN = KERNEL_AUDIT_TOKEN_VALUE;
 mach_msg_format_0_trailer_t trailer_template = {
 	/* mach_msg_trailer_type_t */ MACH_MSG_TRAILER_FORMAT_0,
 	/* mach_msg_trailer_size_t */ MACH_MSG_TRAILER_MINIMUM_SIZE,
-        /* mach_port_seqno_t */       0,
-	/* security_token_t */        KERNEL_SECURITY_TOKEN_VALUE
+	/* mach_port_seqno_t */ 0,
+	/* security_token_t */ KERNEL_SECURITY_TOKEN_VALUE
 };
 
 /*
@@ -193,50 +193,52 @@ mach_msg_format_0_trailer_t trailer_template = {
 
 mach_msg_return_t
 mach_msg_send(
-	mach_msg_header_t	*msg,
-	mach_msg_option_t	option,
-	mach_msg_size_t		send_size,
-	mach_msg_timeout_t	send_timeout,
-	mach_msg_priority_t	override)
+	mach_msg_header_t       *msg,
+	mach_msg_option_t       option,
+	mach_msg_size_t         send_size,
+	mach_msg_timeout_t      send_timeout,
+	mach_msg_priority_t     override)
 {
 	ipc_space_t space = current_space();
 	vm_map_t map = current_map();
 	ipc_kmsg_t kmsg;
 	mach_msg_return_t mr;
-	mach_msg_size_t	msg_and_trailer_size;
-	mach_msg_max_trailer_t	*trailer;
+	mach_msg_size_t msg_and_trailer_size;
+	mach_msg_max_trailer_t  *trailer;
 
 	option |= MACH_SEND_KERNEL;
 
 	if ((send_size & 3) ||
 	    send_size < sizeof(mach_msg_header_t) ||
-	    (send_size < sizeof(mach_msg_base_t) && (msg->msgh_bits & MACH_MSGH_BITS_COMPLEX)))
+	    (send_size < sizeof(mach_msg_base_t) && (msg->msgh_bits & MACH_MSGH_BITS_COMPLEX))) {
 		return MACH_SEND_MSG_TOO_SMALL;
+	}
 
-	if (send_size > MACH_MSG_SIZE_MAX - MAX_TRAILER_SIZE)
+	if (send_size > MACH_MSG_SIZE_MAX - MAX_TRAILER_SIZE) {
 		return MACH_SEND_TOO_LARGE;
-	
-	KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_START);
+	}
+
+	KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_START);
 
 	msg_and_trailer_size = send_size + MAX_TRAILER_SIZE;
 
 	kmsg = ipc_kmsg_alloc(msg_and_trailer_size);
 
 	if (kmsg == IKM_NULL) {
-		KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, MACH_SEND_NO_BUFFER);
+		KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_END, MACH_SEND_NO_BUFFER);
 		return MACH_SEND_NO_BUFFER;
 	}
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_LINK) | DBG_FUNC_NONE,
-			      (uintptr_t)0, /* this should only be called from the kernel! */
-			      VM_KERNEL_ADDRPERM((uintptr_t)kmsg),
-			      0, 0,
-			      0);
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_LINK) | DBG_FUNC_NONE,
+	    (uintptr_t)0,                   /* this should only be called from the kernel! */
+	    VM_KERNEL_ADDRPERM((uintptr_t)kmsg),
+	    0, 0,
+	    0);
 	(void) memcpy((void *) kmsg->ikm_header, (const void *) msg, send_size);
 
 	kmsg->ikm_header->msgh_size = send_size;
 
-	/* 
+	/*
 	 * reserve for the trailer the largest space (MAX_TRAILER_SIZE)
 	 * However, the internal size field of the trailer (msgh_trailer_size)
 	 * is initialized to the minimum (sizeof(mach_msg_trailer_t)), to optimize
@@ -252,35 +254,34 @@ mach_msg_send(
 
 	if (mr != MACH_MSG_SUCCESS) {
 		ipc_kmsg_free(kmsg);
-		KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
+		KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 		return mr;
 	}
 
 	mr = ipc_kmsg_send(kmsg, option, send_timeout);
 
 	if (mr != MACH_MSG_SUCCESS) {
-	    mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);
-	    (void) memcpy((void *) msg, (const void *) kmsg->ikm_header, 
-			  kmsg->ikm_header->msgh_size);
-	    ipc_kmsg_free(kmsg);
-	    KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
+		mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);
+		(void) memcpy((void *) msg, (const void *) kmsg->ikm_header,
+		    kmsg->ikm_header->msgh_size);
+		ipc_kmsg_free(kmsg);
+		KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 	}
 
 	return mr;
 }
 
-/* 
+/*
  * message header as seen at user-space
  * (for MACH_RCV_LARGE/IDENTITY updating)
  */
-typedef	struct 
-{
-  mach_msg_bits_t	msgh_bits;
-  mach_msg_size_t	msgh_size;
-  mach_port_name_t	msgh_remote_port;
-  mach_port_name_t	msgh_local_port;
-  mach_msg_size_t 	msgh_reserved;
-  mach_msg_id_t		msgh_id;
+typedef struct{
+	mach_msg_bits_t       msgh_bits;
+	mach_msg_size_t       msgh_size;
+	mach_port_name_t      msgh_remote_port;
+	mach_port_name_t      msgh_local_port;
+	mach_msg_size_t       msgh_reserved;
+	mach_msg_id_t         msgh_id;
 } mach_msg_user_header_t;
 
 /*
@@ -331,9 +332,7 @@ mach_msg_receive_results(
 	io_release(object);
 
 	if (mr != MACH_MSG_SUCCESS) {
-
 		if (mr == MACH_RCV_TOO_LARGE) {
-
 			/*
 			 * If the receive operation occurs with MACH_RCV_LARGE set
 			 * then no message was extracted from the queue, and the size
@@ -342,10 +341,8 @@ mach_msg_receive_results(
 			 * header.
 			 */
 			if (option & MACH_RCV_LARGE) {
-
 				if ((option & MACH_RCV_STACK) == 0 &&
 				    rcv_size >= offsetof(mach_msg_user_header_t, msgh_reserved)) {
-
 					/*
 					 * We need to inform the user-level code that it needs more
 					 * space.  The value for how much space was returned in the
@@ -354,28 +351,31 @@ mach_msg_receive_results(
 					 */
 					if (option & MACH_RCV_LARGE_IDENTITY) {
 						if (copyout((char *) &self->ith_receiver_name,
-							    rcv_addr + offsetof(mach_msg_user_header_t, msgh_local_port),
-							    sizeof(mach_port_name_t)))
+						    rcv_addr + offsetof(mach_msg_user_header_t, msgh_local_port),
+						    sizeof(mach_port_name_t))) {
 							mr = MACH_RCV_INVALID_DATA;
+						}
 					}
 					if (copyout((char *) &self->ith_msize,
-						    rcv_addr + offsetof(mach_msg_user_header_t, msgh_size),
-						    sizeof(mach_msg_size_t)))
+					    rcv_addr + offsetof(mach_msg_user_header_t, msgh_size),
+					    sizeof(mach_msg_size_t))) {
 						mr = MACH_RCV_INVALID_DATA;
+					}
 				}
 			} else {
-
 				/* discard importance in message */
 				ipc_importance_clean(kmsg);
 
 				if (msg_receive_error(kmsg, option, rcv_addr, rcv_size, seqno, space, &size)
-				    == MACH_RCV_INVALID_DATA)
+				    == MACH_RCV_INVALID_DATA) {
 					mr = MACH_RCV_INVALID_DATA;
+				}
 			}
 		}
 
-		if (sizep)
+		if (sizep) {
 			*sizep = size;
+		}
 		return mr;
 	}
 
@@ -391,24 +391,25 @@ mach_msg_receive_results(
 	/* auto redeem the voucher in the message */
 	ipc_voucher_receive_postprocessing(kmsg, option);
 
-	trailer_size = ipc_kmsg_add_trailer(kmsg, space, option, self, seqno, FALSE, 
-			kmsg->ikm_header->msgh_remote_port->ip_context);
-	
+	trailer_size = ipc_kmsg_add_trailer(kmsg, space, option, self, seqno, FALSE,
+	    kmsg->ikm_header->msgh_remote_port->ip_context);
+
 	mr = ipc_kmsg_copyout(kmsg, space, map, MACH_MSG_BODY_NULL, option);
 
 	if (mr != MACH_MSG_SUCCESS) {
-
 		/* already received importance, so have to undo that here */
 		ipc_importance_unreceive(kmsg, option);
 
 		/* if we had a body error copyout what we have, otherwise a simple header/trailer */
-		if ((mr &~ MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
-			if (ipc_kmsg_put(kmsg, option, rcv_addr, rcv_size, trailer_size, &size) == MACH_RCV_INVALID_DATA)
+		if ((mr & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
+			if (ipc_kmsg_put(kmsg, option, rcv_addr, rcv_size, trailer_size, &size) == MACH_RCV_INVALID_DATA) {
 				mr = MACH_RCV_INVALID_DATA;
+			}
 		} else {
-			if (msg_receive_error(kmsg, option, rcv_addr, rcv_size, seqno, space, &size) 
-						== MACH_RCV_INVALID_DATA)
+			if (msg_receive_error(kmsg, option, rcv_addr, rcv_size, seqno, space, &size)
+			    == MACH_RCV_INVALID_DATA) {
 				mr = MACH_RCV_INVALID_DATA;
+			}
 		}
 	} else {
 		/* capture ksmg QoS values to the thread continuation state */
@@ -417,8 +418,9 @@ mach_msg_receive_results(
 		mr = ipc_kmsg_put(kmsg, option, rcv_addr, rcv_size, trailer_size, &size);
 	}
 
-	if (sizep)
+	if (sizep) {
 		*sizep = size;
+	}
 	return mr;
 }
 
@@ -441,12 +443,12 @@ mach_msg_receive_results(
  */
 mach_msg_return_t
 mach_msg_receive(
-	mach_msg_header_t	*msg,
-	mach_msg_option_t	option,
-	mach_msg_size_t		rcv_size,
-	mach_port_name_t	rcv_name,
-	mach_msg_timeout_t	rcv_timeout,
-	void			(*continuation)(mach_msg_return_t),
+	mach_msg_header_t       *msg,
+	mach_msg_option_t       option,
+	mach_msg_size_t         rcv_size,
+	mach_port_name_t        rcv_name,
+	mach_msg_timeout_t      rcv_timeout,
+	void                    (*continuation)(mach_msg_return_t),
 	__unused mach_msg_size_t slist_size)
 {
 	thread_t self = current_thread();
@@ -456,7 +458,7 @@ mach_msg_receive(
 	mach_msg_return_t mr;
 
 	mr = ipc_mqueue_copyin(space, rcv_name, &mqueue, &object);
- 	if (mr != MACH_MSG_SUCCESS) {
+	if (mr != MACH_MSG_SUCCESS) {
 		return mr;
 	}
 	/* hold ref for object */
@@ -470,8 +472,9 @@ mach_msg_receive(
 	self->ith_knote = ITH_KNOTE_NULL;
 
 	ipc_mqueue_receive(mqueue, option, rcv_size, rcv_timeout, THREAD_ABORTSAFE);
-	if ((option & MACH_RCV_TIMEOUT) && rcv_timeout == 0)
+	if ((option & MACH_RCV_TIMEOUT) && rcv_timeout == 0) {
 		thread_poll_yield(self);
+	}
 	return mach_msg_receive_results(NULL);
 }
 
@@ -481,10 +484,11 @@ mach_msg_receive_continue(void)
 	mach_msg_return_t mr;
 	thread_t self = current_thread();
 
-	if (self->ith_state == MACH_PEEK_READY)
+	if (self->ith_state == MACH_PEEK_READY) {
 		mr = MACH_PEEK_READY;
-	else
+	} else {
 		mr = mach_msg_receive_results(NULL);
+	}
 	(*self->ith_continuation)(mr);
 }
 
@@ -503,14 +507,14 @@ mach_msg_return_t
 mach_msg_overwrite_trap(
 	struct mach_msg_overwrite_trap_args *args)
 {
-  	mach_vm_address_t	msg_addr = args->msg;
-	mach_msg_option_t	option = args->option;
-	mach_msg_size_t		send_size = args->send_size;
-	mach_msg_size_t		rcv_size = args->rcv_size;
-	mach_port_name_t	rcv_name = args->rcv_name;
-	mach_msg_timeout_t	msg_timeout = args->timeout;
+	mach_vm_address_t       msg_addr = args->msg;
+	mach_msg_option_t       option = args->option;
+	mach_msg_size_t         send_size = args->send_size;
+	mach_msg_size_t         rcv_size = args->rcv_size;
+	mach_port_name_t        rcv_name = args->rcv_name;
+	mach_msg_timeout_t      msg_timeout = args->timeout;
 	mach_msg_priority_t override = args->override;
-	mach_vm_address_t	rcv_msg_addr = args->rcv_msg;
+	mach_vm_address_t       rcv_msg_addr = args->rcv_msg;
 	__unused mach_port_seqno_t temp_seqno = 0;
 
 	mach_msg_return_t  mr = MACH_MSG_SUCCESS;
@@ -523,26 +527,26 @@ mach_msg_overwrite_trap(
 		ipc_space_t space = current_space();
 		ipc_kmsg_t kmsg;
 
-		KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_START);
+		KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_START);
 
 		mr = ipc_kmsg_get(msg_addr, send_size, &kmsg);
 
 		if (mr != MACH_MSG_SUCCESS) {
-			KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
+			KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 			return mr;
 		}
 
-		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_LINK) | DBG_FUNC_NONE,
-				      (uintptr_t)msg_addr,
-				      VM_KERNEL_ADDRPERM((uintptr_t)kmsg),
-				      0, 0,
-				      0);
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_LINK) | DBG_FUNC_NONE,
+		    (uintptr_t)msg_addr,
+		    VM_KERNEL_ADDRPERM((uintptr_t)kmsg),
+		    0, 0,
+		    0);
 
 		mr = ipc_kmsg_copyin(kmsg, space, map, override, &option);
 
 		if (mr != MACH_MSG_SUCCESS) {
 			ipc_kmsg_free(kmsg);
-			KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
+			KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 			return mr;
 		}
 
@@ -551,10 +555,9 @@ mach_msg_overwrite_trap(
 		if (mr != MACH_MSG_SUCCESS) {
 			mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);
 			(void) ipc_kmsg_put(kmsg, option, msg_addr, send_size, 0, NULL);
-			KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
+			KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 			return mr;
 		}
-
 	}
 
 	if (option & MACH_RCV_MSG) {
@@ -575,17 +578,18 @@ mach_msg_overwrite_trap(
 			__IGNORE_WCASTALIGN(special_reply_port = (ipc_port_t) object);
 			/* link the special reply port to the destination */
 			mr = mach_msg_rcv_link_special_reply_port(special_reply_port,
-					(mach_port_name_t)override);
+			    (mach_port_name_t)override);
 			if (mr != MACH_MSG_SUCCESS) {
 				io_release(object);
 				return mr;
 			}
 		}
 
-		if (rcv_msg_addr != (mach_vm_address_t)0)
+		if (rcv_msg_addr != (mach_vm_address_t)0) {
 			self->ith_msg_addr = rcv_msg_addr;
-		else
+		} else {
 			self->ith_msg_addr = msg_addr;
+		}
 		self->ith_object = object;
 		self->ith_rsize = rcv_size;
 		self->ith_msize = 0;
@@ -595,8 +599,9 @@ mach_msg_overwrite_trap(
 		self->ith_knote = ITH_KNOTE_NULL;
 
 		ipc_mqueue_receive(mqueue, option, rcv_size, msg_timeout, THREAD_ABORTSAFE);
-		if ((option & MACH_RCV_TIMEOUT) && msg_timeout == 0)
+		if ((option & MACH_RCV_TIMEOUT) && msg_timeout == 0) {
 			thread_poll_yield(self);
+		}
 		return mach_msg_receive_results(NULL);
 	}
 
@@ -631,8 +636,8 @@ mach_msg_rcv_link_special_reply_port(
 	}
 
 	kr = ipc_object_copyin(current_space(),
-			       dest_name_port, MACH_MSG_TYPE_COPY_SEND,
-			       (ipc_object_t *) &dest_port);
+	    dest_name_port, MACH_MSG_TYPE_COPY_SEND,
+	    (ipc_object_t *) &dest_port);
 
 	/*
 	 * The receive right of dest port might have gone away,
@@ -640,7 +645,7 @@ mach_msg_rcv_link_special_reply_port(
 	 */
 	if (kr == KERN_SUCCESS && IP_VALID(dest_port)) {
 		ipc_port_link_special_reply_port(special_reply_port,
-			dest_port);
+		    dest_port);
 
 		/* release the send right */
 		ipc_port_release_send(dest_port);
@@ -679,16 +684,15 @@ mach_msg_receive_results_complete(ipc_object_t object)
 	 * Don't clear the ip_srp_msg_sent bit if...
 	 */
 	if (!((self->ith_state == MACH_RCV_TOO_LARGE && self->ith_option & MACH_RCV_LARGE) || //msg was too large and the next receive will get it
-		self->ith_state == MACH_RCV_INTERRUPTED ||
-		self->ith_state == MACH_RCV_TIMED_OUT ||
-		self->ith_state == MACH_RCV_PORT_CHANGED ||
-		self->ith_state == MACH_PEEK_READY)) {
-
+	    self->ith_state == MACH_RCV_INTERRUPTED ||
+	    self->ith_state == MACH_RCV_TIMED_OUT ||
+	    self->ith_state == MACH_RCV_PORT_CHANGED ||
+	    self->ith_state == MACH_PEEK_READY)) {
 		flags |= IPC_PORT_ADJUST_SR_RECEIVED_MSG;
 	}
 
 	ipc_port_adjust_special_reply_port(port,
-		flags, get_turnstile);
+	    flags, get_turnstile);
 	/* thread now has a turnstile */
 }
 
@@ -709,10 +713,10 @@ mach_msg_trap(
 	kern_return_t kr;
 	args->rcv_msg = (mach_vm_address_t)0;
 
- 	kr = mach_msg_overwrite_trap(args);
+	kr = mach_msg_overwrite_trap(args);
 	return kr;
 }
- 
+
 
 /*
  *	Routine:	msg_receive_error	[internal]
@@ -728,51 +732,52 @@ mach_msg_trap(
  *		MACH_MSG_SUCCESS	minimal header/trailer copied
  *		MACH_RCV_INVALID_DATA	copyout to user buffer failed
  */
-	
+
 mach_msg_return_t
 msg_receive_error(
-	ipc_kmsg_t		kmsg,
-	mach_msg_option_t	option,
-	mach_vm_address_t	rcv_addr,
-	mach_msg_size_t		rcv_size,
-	mach_port_seqno_t	seqno,
-	ipc_space_t		space,
-	mach_msg_size_t		*sizep)
+	ipc_kmsg_t              kmsg,
+	mach_msg_option_t       option,
+	mach_vm_address_t       rcv_addr,
+	mach_msg_size_t         rcv_size,
+	mach_port_seqno_t       seqno,
+	ipc_space_t             space,
+	mach_msg_size_t         *sizep)
 {
-	mach_vm_address_t	context;
+	mach_vm_address_t       context;
 	mach_msg_trailer_size_t trailer_size;
-	mach_msg_max_trailer_t	*trailer;
+	mach_msg_max_trailer_t  *trailer;
 
 	context = kmsg->ikm_header->msgh_remote_port->ip_context;
 
 	/*
 	 * Copy out the destination port in the message.
- 	 * Destroy all other rights and memory in the message.
+	 * Destroy all other rights and memory in the message.
 	 */
 	ipc_kmsg_copyout_dest(kmsg, space);
 
 	/*
 	 * Build a minimal message with the requested trailer.
 	 */
-	trailer = (mach_msg_max_trailer_t *) 
-			((vm_offset_t)kmsg->ikm_header +
-			round_msg(sizeof(mach_msg_header_t)));
+	trailer = (mach_msg_max_trailer_t *)
+	    ((vm_offset_t)kmsg->ikm_header +
+	    round_msg(sizeof(mach_msg_header_t)));
 	kmsg->ikm_header->msgh_size = sizeof(mach_msg_header_t);
-	bcopy(  (char *)&trailer_template, 
-		(char *)trailer, 
-		sizeof(trailer_template));
+	bcopy((char *)&trailer_template,
+	    (char *)trailer,
+	    sizeof(trailer_template));
 
-	trailer_size = ipc_kmsg_add_trailer(kmsg, space, 
-			option, current_thread(), seqno,
-			TRUE, context);
+	trailer_size = ipc_kmsg_add_trailer(kmsg, space,
+	    option, current_thread(), seqno,
+	    TRUE, context);
 
 	/*
 	 * Copy the message to user space and return the size
 	 * (note that ipc_kmsg_put may also adjust the actual
 	 * size copied out to user-space).
 	 */
-	if (ipc_kmsg_put(kmsg, option, rcv_addr, rcv_size, trailer_size, sizep) == MACH_RCV_INVALID_DATA)
-		return(MACH_RCV_INVALID_DATA);
-	else 
-		return(MACH_MSG_SUCCESS);
+	if (ipc_kmsg_put(kmsg, option, rcv_addr, rcv_size, trailer_size, sizep) == MACH_RCV_INVALID_DATA) {
+		return MACH_RCV_INVALID_DATA;
+	} else {
+		return MACH_MSG_SUCCESS;
+	}
 }

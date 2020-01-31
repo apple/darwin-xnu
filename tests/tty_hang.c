@@ -40,7 +40,7 @@
 #include <darwintest_utils.h>
 #include <darwintest_multiprocess.h>
 
-#define TEST_TIMEOUT	10
+#define TEST_TIMEOUT    10
 
 /*
  * Receiving SIGTTIN (from the blocked read) is the passing condition, we just
@@ -70,23 +70,23 @@ get_new_session_and_terminal_and_fork_child_to_read(char *pty_name)
 	 * child.
 	 */
 	T_ASSERT_POSIX_SUCCESS(socketpair(AF_UNIX, SOCK_STREAM, 0, sock_fd),
-	   NULL);
-	
+	    NULL);
+
 	/*
 	 * New session, lose any existing controlling terminal and become
 	 * session leader.
 	 */
 	T_ASSERT_POSIX_SUCCESS(setsid(), NULL);
-	
+
 	/* now open pty, become controlling terminal of new session */
 	T_ASSERT_POSIX_SUCCESS(pty_fd = open(pty_name, O_RDWR), NULL);
-	
+
 	T_ASSERT_POSIX_SUCCESS(pid = fork(), NULL);
 
 	if (pid == 0) { /* child */
 		int pty_fd_child;
 		char buf[10];
-		
+
 		T_ASSERT_POSIX_SUCCESS(close(sock_fd[0]), NULL);
 		T_ASSERT_POSIX_SUCCESS(close(pty_fd), NULL);
 
@@ -122,12 +122,12 @@ get_new_session_and_terminal_and_fork_child_to_read(char *pty_name)
 		 */
 		exit(0);
 	}
-	
+
 	T_ASSERT_POSIX_SUCCESS(close(sock_fd[1]), NULL);
-	
+
 	/* wait for child to open slave side and set its pgid to its pid */
 	T_ASSERT_POSIX_SUCCESS(read(sock_fd[0], buf, sizeof(buf)), NULL);
-	
+
 	/*
 	 * We need this to happen and in the order shown
 	 *
@@ -142,17 +142,17 @@ get_new_session_and_terminal_and_fork_child_to_read(char *pty_name)
 	 */
 
 	T_ASSERT_POSIX_SUCCESS(tcsetpgrp(pty_fd, pid), NULL);
-	
+
 	/* let child know you have set it to be the foreground process group */
 	T_ASSERT_POSIX_SUCCESS(write(sock_fd[0], "done", sizeof("done")), NULL);
-	
+
 	/*
 	 * give it a second to do the read of the terminal in response.
 	 *
 	 * XXX : Find a way to detect that the child is blocked in read(2).
 	 */
 	sleep(1);
-	
+
 	/*
 	 * now change the foreground process group to ourselves -
 	 * Note we are now in the background process group and we need to ignore
@@ -164,7 +164,7 @@ get_new_session_and_terminal_and_fork_child_to_read(char *pty_name)
 	signal(SIGTTOU, SIG_IGN);
 	T_ASSERT_POSIX_SUCCESS(tcsetpgrp(pty_fd, getpid()), NULL);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -187,19 +187,19 @@ run_test(int do_revoke)
 	T_QUIET;
 
 	T_SETUPBEGIN;
-	
-	slave_pty= NULL;
+
+	slave_pty = NULL;
 	T_ASSERT_POSIX_SUCCESS(master_fd = posix_openpt(O_RDWR | O_NOCTTY),
 	    NULL);
 	(void)fcntl(master_fd, F_SETFL, O_NONBLOCK);
 	T_ASSERT_POSIX_SUCCESS(grantpt(master_fd), NULL);
 	T_ASSERT_POSIX_SUCCESS(unlockpt(master_fd), NULL);
-	slave_pty= ptsname(master_fd);
+	slave_pty = ptsname(master_fd);
 	T_ASSERT_NOTNULL(slave_pty, NULL);
 	T_LOG("slave pty is %s\n", slave_pty);
 
 	T_SETUPEND;
-	
+
 	/*
 	 * We get the stdin and stdout redirection but we don't have visibility
 	 * into the child (nor can we wait for it). To get around that, we fork
@@ -207,7 +207,7 @@ run_test(int do_revoke)
 	 * returning to the caller.
 	 */
 	T_ASSERT_POSIX_SUCCESS(pid = fork(), NULL);
-	
+
 	if (pid == 0) { /* child */
 		T_ASSERT_POSIX_SUCCESS(close(master_fd), NULL);
 		get_new_session_and_terminal_and_fork_child_to_read(slave_pty);
@@ -243,10 +243,10 @@ run_test(int do_revoke)
 	dt_waitpid(pid, &status, &sig, 0);
 	if (sig) {
 		T_FAIL("Test failed because child received signal %s\n",
-		       strsignal(sig));
+		    strsignal(sig));
 	} else if (status) {
 		T_FAIL("Test failed because child exited with status %d\n",
-		       status);
+		    status);
 	} else {
 		T_PASS("test_passed\n");
 	}
@@ -265,7 +265,7 @@ T_HELPER_DECL(create_new_session_and_exit, "create_new_session_and_exit") {
 T_DECL(tty_exit_bgread_hang_test, "test for background read hang on ttys with proc exit")
 {
 	dt_helper_t helpers[1];
-	
+
 	helpers[0] = dt_fork_helper("create_new_session_and_exit");
 	dt_run_helpers(helpers, 1, TEST_TIMEOUT);
 }
@@ -279,9 +279,8 @@ T_HELPER_DECL(create_new_session_and_revoke_terminal, "create_new_session_and_re
 T_DECL(tty_revoke_bgread_hang_test, "test for background read hang on ttys with revoke")
 {
 	dt_helper_t helpers[1];
-	
+
 	helpers[0] = dt_fork_helper("create_new_session_and_revoke_terminal");
 	dt_run_helpers(helpers, 1, TEST_TIMEOUT);
 }
 /***********************  END TEST 2 *********************************/
-

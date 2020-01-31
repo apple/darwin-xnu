@@ -14,7 +14,7 @@ T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.vm.perf"),
 	T_META_CHECK_LEAKS(false),
 	T_META_TAG_PERF
-);
+	);
 
 enum {
 	ALL_ZEROS,
@@ -44,6 +44,7 @@ static const char *exit_codes_str[] = {
 	CREATE_LIST(EXIT_CODES_STRING)
 };
 
+#define SYSCTL_FREEZE_TO_MEMORY         "kern.memorystatus_freeze_to_memory=1"
 
 static pid_t pid = -1;
 static dt_stat_t r;
@@ -55,8 +56,11 @@ void allocate_random_pages(char **buf, int num_pages, int vmpgsize);
 void allocate_representative_pages(char **buf, int num_pages, int vmpgsize);
 void run_compressor_test(int size_mb, int page_type);
 void freeze_helper_process(void);
+void cleanup(void);
 
-void allocate_zero_pages(char **buf, int num_pages, int vmpgsize) {
+void
+allocate_zero_pages(char **buf, int num_pages, int vmpgsize)
+{
 	int i;
 
 	for (i = 0; i < num_pages; i++) {
@@ -65,19 +69,23 @@ void allocate_zero_pages(char **buf, int num_pages, int vmpgsize) {
 	}
 }
 
-void allocate_mostly_zero_pages(char **buf, int num_pages, int vmpgsize) {
+void
+allocate_mostly_zero_pages(char **buf, int num_pages, int vmpgsize)
+{
 	int i, j;
 
 	for (i = 0; i < num_pages; i++) {
 		buf[i] = (char*)malloc((size_t)vmpgsize * sizeof(char));
 		memset(buf[i], 0, vmpgsize);
 		for (j = 0; j < 40; j++) {
-			buf[i][j] = (char)(j+1);
+			buf[i][j] = (char)(j + 1);
 		}
 	}
 }
 
-void allocate_random_pages(char **buf, int num_pages, int vmpgsize) {
+void
+allocate_random_pages(char **buf, int num_pages, int vmpgsize)
+{
 	int i;
 
 	for (i = 0; i < num_pages; i++) {
@@ -87,7 +95,9 @@ void allocate_random_pages(char **buf, int num_pages, int vmpgsize) {
 }
 
 // Gives us the compression ratio we see in the typical case (~2.7)
-void allocate_representative_pages(char **buf, int num_pages, int vmpgsize) {
+void
+allocate_representative_pages(char **buf, int num_pages, int vmpgsize)
+{
 	int i, j;
 	char val;
 
@@ -103,32 +113,46 @@ void allocate_representative_pages(char **buf, int num_pages, int vmpgsize) {
 	}
 }
 
-void freeze_helper_process(void) {
-	int ret;
+void
+freeze_helper_process(void)
+{
+	int ret, freeze_enabled;
 	int64_t compressed_before, compressed_after, input_before, input_after;
 	size_t length;
+	int errno_sysctl_freeze;
 
 	length = sizeof(compressed_before);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("vm.compressor_compressed_bytes", &compressed_before, &length, NULL, 0),
-			"failed to query vm.compressor_compressed_bytes");
+	    "failed to query vm.compressor_compressed_bytes");
 	length = sizeof(input_before);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("vm.compressor_input_bytes", &input_before, &length, NULL, 0),
-			"failed to query vm.compressor_input_bytes");
+	    "failed to query vm.compressor_input_bytes");
 
 	T_STAT_MEASURE(s) {
 		ret = sysctlbyname("kern.memorystatus_freeze", NULL, NULL, &pid, sizeof(pid));
+		errno_sysctl_freeze = errno;
 	};
 
 	length = sizeof(compressed_after);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("vm.compressor_compressed_bytes", &compressed_after, &length, NULL, 0),
-			"failed to query vm.compressor_compressed_bytes");
+	    "failed to query vm.compressor_compressed_bytes");
 	length = sizeof(input_after);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("vm.compressor_input_bytes", &input_after, &length, NULL, 0),
-			"failed to query vm.compressor_input_bytes");
+	    "failed to query vm.compressor_input_bytes");
 
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "sysctl kern.memorystatus_freeze failed");
+	length = sizeof(freeze_enabled);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("vm.freeze_enabled", &freeze_enabled, &length, NULL, 0),
+	    "failed to query vm.freeze_enabled");
+	if (freeze_enabled) {
+		errno = errno_sysctl_freeze;
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "sysctl kern.memorystatus_freeze failed");
+	} else {
+		/* If freezer is disabled, skip the test. This can happen due to disk space shortage. */
+		T_LOG("Freeze has been disabled. Terminating early.");
+		T_END;
+	}
 
-	dt_stat_add(r, (double)(input_after - input_before)/(double)(compressed_after - compressed_before));
+	dt_stat_add(r, (double)(input_after - input_before) / (double)(compressed_after - compressed_before));
 
 	ret = sysctlbyname("kern.memorystatus_thaw", NULL, NULL, &pid, sizeof(pid));
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "sysctl kern.memorystatus_thaw failed");
@@ -136,7 +160,22 @@ void freeze_helper_process(void) {
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(kill(pid, SIGUSR1), "failed to send SIGUSR1 to child process");
 }
 
-void run_compressor_test(int size_mb, int page_type) {
+void
+cleanup(void)
+{
+	int status = 0;
+
+	/* No helper process. */
+	if (pid == -1) {
+		return;
+	}
+	/* Kill the helper process. */
+	kill(pid, SIGKILL);
+}
+
+void
+run_compressor_test(int size_mb, int page_type)
+{
 	int ret;
 	char sz_str[50];
 	char pt_str[50];
@@ -144,10 +183,18 @@ void run_compressor_test(int size_mb, int page_type) {
 	char testpath[PATH_MAX];
 	uint32_t testpath_buf_size;
 	dispatch_source_t ds_freeze, ds_proc;
+	int freeze_enabled;
+	size_t length;
 
-#ifndef CONFIG_FREEZE
-	T_SKIP("Task freeze not supported.");
-#endif
+	length = sizeof(freeze_enabled);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("vm.freeze_enabled", &freeze_enabled, &length, NULL, 0),
+	    "failed to query vm.freeze_enabled");
+	if (!freeze_enabled) {
+		/* If freezer is disabled, skip the test. This can happen due to disk space shortage. */
+		T_SKIP("Freeze has been disabled. Skipping test.");
+	}
+
+	T_ATEND(cleanup);
 
 	r = dt_stat_create("(input bytes / compressed bytes)", "compression_ratio");
 	s = dt_stat_time_create("compressor_latency");
@@ -160,13 +207,13 @@ void run_compressor_test(int size_mb, int page_type) {
 
 	dispatch_source_set_event_handler(ds_freeze, ^{
 		if (!dt_stat_stable(s)) {
-			freeze_helper_process();
+		        freeze_helper_process();
 		} else {
-			dt_stat_finalize(s);
-			dt_stat_finalize(r);
+		        dt_stat_finalize(s);
+		        dt_stat_finalize(r);
 
-			kill(pid, SIGKILL);
-			dispatch_source_cancel(ds_freeze);
+		        kill(pid, SIGKILL);
+		        dispatch_source_cancel(ds_freeze);
 		}
 	});
 	dispatch_activate(ds_freeze);
@@ -205,11 +252,11 @@ void run_compressor_test(int size_mb, int page_type) {
 		code = WEXITSTATUS(status);
 
 		if (code == 0) {
-			T_END;
+		        T_END;
 		} else if (code > 0 && code < EXIT_CODE_MAX) {
-			T_ASSERT_FAIL("Child exited with %s", exit_codes_str[code]);
+		        T_ASSERT_FAIL("Child exited with %s", exit_codes_str[code]);
 		} else {
-			T_ASSERT_FAIL("Child exited with unknown exit code %d", code);
+		        T_ASSERT_FAIL("Child exited with unknown exit code %d", code);
 		}
 	});
 	dispatch_activate(ds_proc);
@@ -244,21 +291,21 @@ T_HELPER_DECL(allocate_pages, "allocates pages to compress") {
 	buf = (char**)malloc(sizeof(char*) * (size_t)num_pages);
 
 	// Switch on the type of page requested
-	switch(page_type) {
-		case ALL_ZEROS:
-			allocate_zero_pages(buf, num_pages, vmpgsize);
-			break;
-		case MOSTLY_ZEROS:
-			allocate_mostly_zero_pages(buf, num_pages, vmpgsize);
-			break;
-		case RANDOM:
-			allocate_random_pages(buf, num_pages, vmpgsize);
-			break;
-		case TYPICAL:
-			allocate_representative_pages(buf, num_pages, vmpgsize);
-			break;
-		default:
-			exit(UNKNOWN_PAGE_TYPE);
+	switch (page_type) {
+	case ALL_ZEROS:
+		allocate_zero_pages(buf, num_pages, vmpgsize);
+		break;
+	case MOSTLY_ZEROS:
+		allocate_mostly_zero_pages(buf, num_pages, vmpgsize);
+		break;
+	case RANDOM:
+		allocate_random_pages(buf, num_pages, vmpgsize);
+		break;
+	case TYPICAL:
+		allocate_representative_pages(buf, num_pages, vmpgsize);
+		break;
+	default:
+		exit(UNKNOWN_PAGE_TYPE);
 	}
 
 	for (j = 0; j < num_pages; j++) {
@@ -267,9 +314,9 @@ T_HELPER_DECL(allocate_pages, "allocates pages to compress") {
 
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
 		/* Signal to the parent that we're done allocating and it's ok to freeze us */
-		printf("Sending initial signal to parent to begin freezing\n");
+		printf("[%d] Sending initial signal to parent to begin freezing\n", getpid());
 		if (kill(getppid(), SIGUSR1) != 0) {
-			exit(INITIAL_SIGNAL_TO_PARENT_FAILED);
+		        exit(INITIAL_SIGNAL_TO_PARENT_FAILED);
 		}
 	});
 
@@ -284,10 +331,10 @@ T_HELPER_DECL(allocate_pages, "allocates pages to compress") {
 
 		/* Make sure all the pages are accessed before trying to freeze again */
 		for (int x = 0; x < num_pages; x++) {
-			tmp = buf[x][0];
+		        tmp = buf[x][0];
 		}
 		if (kill(getppid(), SIGUSR1) != 0) {
-			exit(SIGNAL_TO_PARENT_FAILED);
+		        exit(SIGNAL_TO_PARENT_FAILED);
 		}
 	});
 	dispatch_activate(ds_signal);
@@ -299,36 +346,51 @@ T_HELPER_DECL(allocate_pages, "allocates pages to compress") {
 
 // Keeping just the 100MB version for iOSMark
 #ifndef DT_IOSMARK
-T_DECL(compr_10MB_zero, "Compressor latencies") {
+T_DECL(compr_10MB_zero,
+    "Compression latency for 10MB - zero pages",
+    T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(10, ALL_ZEROS);
 }
 
-T_DECL(compr_10MB_mostly_zero, "Compressor latencies") {
+T_DECL(compr_10MB_mostly_zero,
+    "Compression latency for 10MB - mostly zero pages",
+    T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(10, MOSTLY_ZEROS);
 }
 
-T_DECL(compr_10MB_random, "Compressor latencies") {
+T_DECL(compr_10MB_random,
+    "Compression latency for 10MB - random pages",
+    T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(10, RANDOM);
 }
 
-T_DECL(compr_10MB_typical, "Compressor latencies") {
+T_DECL(compr_10MB_typical,
+    "Compression latency for 10MB - typical pages",
+    T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(10, TYPICAL);
 }
 
-T_DECL(compr_100MB_zero, "Compressor latencies") {
+T_DECL(compr_100MB_zero,
+    "Compression latency for 100MB - zero pages",
+    T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(100, ALL_ZEROS);
 }
 
-T_DECL(compr_100MB_mostly_zero, "Compressor latencies") {
+T_DECL(compr_100MB_mostly_zero,
+    "Compression latency for 100MB - mostly zero pages",
+    T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(100, MOSTLY_ZEROS);
 }
 
-T_DECL(compr_100MB_random, "Compressor latencies") {
+T_DECL(compr_100MB_random,
+    "Compression latency for 100MB - random pages",
+    T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(100, RANDOM);
 }
 #endif
 
-T_DECL(compr_100MB_typical, "Compressor latencies") {
+T_DECL(compr_100MB_typical,
+    "Compression latency for 100MB - typical pages",
+    T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(100, TYPICAL);
 }
-

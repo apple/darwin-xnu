@@ -34,7 +34,7 @@
 #include <kern/task.h>
 
 extern void memorystatus_proc_flags_unsafe(void * v, boolean_t *is_dirty,
-		boolean_t *is_dirty_tracked, boolean_t *allow_idle_exit);
+    boolean_t *is_dirty_tracked, boolean_t *allow_idle_exit);
 
 void
 kperf_task_snapshot_sample(task_t task, struct kperf_task_snapshot *tksn)
@@ -82,19 +82,19 @@ kperf_task_snapshot_log(struct kperf_task_snapshot *tksn)
 
 #if defined(__LP64__)
 	BUF_DATA(PERF_TK_SNAP_DATA, tksn->kptksn_flags,
-	         ENCODE_UPPER_64(tksn->kptksn_suspend_count) |
-	         ENCODE_LOWER_64(tksn->kptksn_pageins),
-	         tksn->kptksn_user_time_in_terminated_threads,
-	         tksn->kptksn_system_time_in_terminated_threads);
+	    ENCODE_UPPER_64(tksn->kptksn_suspend_count) |
+	    ENCODE_LOWER_64(tksn->kptksn_pageins),
+	    tksn->kptksn_user_time_in_terminated_threads,
+	    tksn->kptksn_system_time_in_terminated_threads);
 #else
 	BUF_DATA(PERF_TK_SNAP_DATA1_32, UPPER_32(tksn->kptksn_flags),
-	                                LOWER_32(tksn->kptksn_flags),
-	                                tksn->kptksn_suspend_count,
-	                                tksn->kptksn_pageins);
+	    LOWER_32(tksn->kptksn_flags),
+	    tksn->kptksn_suspend_count,
+	    tksn->kptksn_pageins);
 	BUF_DATA(PERF_TK_SNAP_DATA2_32, UPPER_32(tksn->kptksn_user_time_in_terminated_threads),
-	                                LOWER_32(tksn->kptksn_user_time_in_terminated_threads),
-	                                UPPER_32(tksn->kptksn_system_time_in_terminated_threads),
-	                                LOWER_32(tksn->kptksn_system_time_in_terminated_threads));
+	    LOWER_32(tksn->kptksn_user_time_in_terminated_threads),
+	    UPPER_32(tksn->kptksn_system_time_in_terminated_threads),
+	    LOWER_32(tksn->kptksn_system_time_in_terminated_threads));
 #endif /* defined(__LP64__) */
 }
 

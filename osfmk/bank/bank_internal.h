@@ -2,7 +2,7 @@
  * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -32,7 +32,7 @@
 #include <stdint.h>
 #include <mach/mach_types.h>
 
-#ifdef	MACH_KERNEL_PRIVATE
+#ifdef  MACH_KERNEL_PRIVATE
 
 #include <kern/thread.h>
 #include <kern/thread_group.h>
@@ -52,7 +52,7 @@ typedef mach_voucher_attr_value_handle_t bank_handle_t;
 
 struct bank_element {
 	unsigned int  be_type:31,                /* Type of element */
-	              be_voucher_ref:1;          /* Voucher system holds a ref */
+	    be_voucher_ref:1;                    /* Voucher system holds a ref */
 	int           be_refs;                   /* Ref count */
 	unsigned int  be_made;                   /* Made refs for voucher, Actual ref is only taken for voucher ref transition (0 to 1) */
 #if DEVELOPMENT || DEBUG
@@ -69,8 +69,8 @@ struct bank_task {
 	ledger_t                  bt_ledger;               /* Ledger of the customer task */
 	queue_head_t              bt_accounts_to_pay;      /* List of accounts worked for me and need to pay */
 	queue_head_t              bt_accounts_to_charge;   /* List of accounts I did work and need to charge */
-	decl_lck_mtx_data(,       bt_acc_to_pay_lock)      /* Lock to protect accounts to pay list */
-	decl_lck_mtx_data(,       bt_acc_to_charge_lock)   /* Lock to protect accounts to charge list */
+	decl_lck_mtx_data(, bt_acc_to_pay_lock)            /* Lock to protect accounts to pay list */
+	decl_lck_mtx_data(, bt_acc_to_charge_lock)         /* Lock to protect accounts to charge list */
 	uint8_t                   bt_hasentitlement;       /* If the secure persona entitlement is set on the task */
 #if DEVELOPMENT || DEBUG
 	queue_chain_t             bt_global_elt;           /* Element on the global bank task chain */
@@ -98,23 +98,23 @@ struct bank_task {
 typedef struct bank_task * bank_task_t;
 #define BANK_TASK_NULL  ((bank_task_t) 0)
 
-#define bank_task_reference(elem) 	\
-		(OSAddAtomic(1, &(elem)->bt_refs))
+#define bank_task_reference(elem)       \
+	        (OSAddAtomic(1, &(elem)->bt_refs))
 
-#define bank_task_release(elem) 	\
-		(OSAddAtomic(-1, &(elem)->bt_refs))
+#define bank_task_release(elem)         \
+	        (OSAddAtomic(-1, &(elem)->bt_refs))
 
-#define bank_task_release_num(elem, num) 	\
-		(OSAddAtomic(-(num), &(elem)->bt_refs))
+#define bank_task_release_num(elem, num)        \
+	        (OSAddAtomic(-(num), &(elem)->bt_refs))
 
-#define bank_task_made_reference(elem) 	\
-		(hw_atomic_add(&(elem)->bt_made, 1) - 1)
+#define bank_task_made_reference(elem)  \
+	        (hw_atomic_add(&(elem)->bt_made, 1) - 1)
 
-#define bank_task_made_release(elem) 	\
-		(hw_atomic_sub(&(elem)->bt_made, 1) + 1)
+#define bank_task_made_release(elem)    \
+	        (hw_atomic_sub(&(elem)->bt_made, 1) + 1)
 
-#define bank_task_made_release_num(elem, num) 	\
-		(hw_atomic_sub(&(elem)->bt_made, (num)) + (num))
+#define bank_task_made_release_num(elem, num)   \
+	        (hw_atomic_sub(&(elem)->bt_made, (num)) + (num))
 
 
 struct bank_account {
@@ -143,23 +143,23 @@ struct bank_account {
 typedef struct bank_account * bank_account_t;
 #define BANK_ACCOUNT_NULL  ((bank_account_t) 0)
 
-#define bank_account_reference(elem) 	\
-		(OSAddAtomic(1, &(elem)->ba_refs))
+#define bank_account_reference(elem)    \
+	        (OSAddAtomic(1, &(elem)->ba_refs))
 
-#define bank_account_release(elem) 	\
-		(OSAddAtomic(-1, &(elem)->ba_refs))
+#define bank_account_release(elem)      \
+	        (OSAddAtomic(-1, &(elem)->ba_refs))
 
-#define bank_account_release_num(elem, num) 	\
-		(OSAddAtomic(-(num), &(elem)->ba_refs))
+#define bank_account_release_num(elem, num)     \
+	        (OSAddAtomic(-(num), &(elem)->ba_refs))
 
-#define bank_account_made_reference(elem) 	\
-		(hw_atomic_add(&(elem)->ba_made, 1) - 1)
+#define bank_account_made_reference(elem)       \
+	        (hw_atomic_add(&(elem)->ba_made, 1) - 1)
 
-#define bank_account_made_release(elem) 	\
-		(hw_atomic_sub(&(elem)->ba_made, 1) + 1)
+#define bank_account_made_release(elem)         \
+	        (hw_atomic_sub(&(elem)->ba_made, 1) + 1)
 
-#define bank_account_made_release_num(elem, num) 	\
-		(hw_atomic_sub(&(elem)->ba_made, (num)) + (num))
+#define bank_account_made_release_num(elem, num)        \
+	        (hw_atomic_sub(&(elem)->ba_made, (num)) + (num))
 
 struct _bank_ledger_indices {
 	int cpu_time;
@@ -176,7 +176,7 @@ extern void bank_billed_balance(bank_task_t bank_task, uint64_t *cpu_time, uint6
 extern void bank_serviced_balance_safe(task_t task, uint64_t *cpu_time, uint64_t *energy);
 extern void bank_serviced_balance(bank_task_t bank_task, uint64_t *cpu_time, uint64_t *energy);
 extern kern_return_t bank_get_bank_ledger_and_thread_group(ipc_voucher_t voucher,
-	ledger_t *bankledger, struct thread_group **banktg);
+    ledger_t *bankledger, struct thread_group **banktg);
 extern void bank_swap_thread_bank_ledger(thread_t thread, ledger_t ledger);
 
 #endif /* MACH_KERNEL_PRIVATE */

@@ -64,17 +64,17 @@ extern unsigned int start_cpu;
 
 unsigned int   start_cpu_paddr;
 
-extern boolean_t	idle_enable;
-extern unsigned int	real_ncpus;
-extern uint64_t		wake_abstime;
+extern boolean_t        idle_enable;
+extern unsigned int     real_ncpus;
+extern uint64_t         wake_abstime;
 
 extern void* wfi_inst;
 unsigned wfi_fast = 1;
 unsigned patch_to_nop = 0xe1a00000;
 
-void	*LowExceptionVectorsAddr;
-#define	IOS_STATE		(((vm_offset_t)LowExceptionVectorsAddr + 0x80))
-#define	IOS_STATE_SIZE	(0x08UL)
+void    *LowExceptionVectorsAddr;
+#define IOS_STATE               (((vm_offset_t)LowExceptionVectorsAddr + 0x80))
+#define IOS_STATE_SIZE  (0x08UL)
 static const uint8_t suspend_signature[] = {'X', 'S', 'O', 'M', 'P', 'S', 'U', 'S'};
 static const uint8_t running_signature[] = {'X', 'S', 'O', 'M', 'N', 'N', 'U', 'R'};
 
@@ -105,7 +105,6 @@ cpu_sleep(void)
 	CleanPoC_Dcache();
 
 	PE_cpu_machine_quiesce(cpu_data_ptr->cpu_id);
-
 }
 
 _Atomic uint32_t cpu_idle_count = 0;
@@ -118,22 +117,26 @@ void __attribute__((noreturn))
 cpu_idle(void)
 {
 	cpu_data_t     *cpu_data_ptr = getCpuDatap();
-	uint64_t	new_idle_timeout_ticks = 0x0ULL, lastPop;
+	uint64_t        new_idle_timeout_ticks = 0x0ULL, lastPop;
 
-	if ((!idle_enable) || (cpu_data_ptr->cpu_signal & SIGPdisabled))
+	if ((!idle_enable) || (cpu_data_ptr->cpu_signal & SIGPdisabled)) {
 		Idle_load_context();
-	if (!SetIdlePop())
+	}
+	if (!SetIdlePop()) {
 		Idle_load_context();
+	}
 	lastPop = cpu_data_ptr->rtcPop;
 
 	pmap_switch_user_ttb(kernel_pmap);
 	cpu_data_ptr->cpu_active_thread = current_thread();
-	if (cpu_data_ptr->cpu_user_debug)
+	if (cpu_data_ptr->cpu_user_debug) {
 		arm_debug_set(NULL);
+	}
 	cpu_data_ptr->cpu_user_debug = NULL;
 
-	if (cpu_data_ptr->cpu_idle_notify)
-		((processor_idle_t) cpu_data_ptr->cpu_idle_notify) (cpu_data_ptr->cpu_id, TRUE, &new_idle_timeout_ticks);
+	if (cpu_data_ptr->cpu_idle_notify) {
+		((processor_idle_t) cpu_data_ptr->cpu_idle_notify)(cpu_data_ptr->cpu_id, TRUE, &new_idle_timeout_ticks);
+	}
 
 	if (cpu_data_ptr->idle_timer_notify != 0) {
 		if (new_idle_timeout_ticks == 0x0ULL) {
@@ -144,8 +147,9 @@ cpu_idle(void)
 			clock_absolutetime_interval_to_deadline(new_idle_timeout_ticks, &cpu_data_ptr->idle_timer_deadline);
 		}
 		timer_resync_deadlines();
-		if (cpu_data_ptr->rtcPop != lastPop)
+		if (cpu_data_ptr->rtcPop != lastPop) {
 			SetIdlePop();
+		}
 	}
 
 #if KPC
@@ -167,7 +171,7 @@ cpu_idle(void)
 void
 cpu_idle_exit(boolean_t from_reset __unused)
 {
-	uint64_t	new_idle_timeout_ticks = 0x0ULL;
+	uint64_t        new_idle_timeout_ticks = 0x0ULL;
 	cpu_data_t     *cpu_data_ptr = getCpuDatap();
 
 #if KPC
@@ -177,8 +181,9 @@ cpu_idle_exit(boolean_t from_reset __unused)
 
 	pmap_set_pmap(cpu_data_ptr->cpu_active_thread->map->pmap, current_thread());
 
-	if (cpu_data_ptr->cpu_idle_notify)
-		((processor_idle_t) cpu_data_ptr->cpu_idle_notify) (cpu_data_ptr->cpu_id, FALSE, &new_idle_timeout_ticks);
+	if (cpu_data_ptr->cpu_idle_notify) {
+		((processor_idle_t) cpu_data_ptr->cpu_idle_notify)(cpu_data_ptr->cpu_id, FALSE, &new_idle_timeout_ticks);
+	}
 
 	if (cpu_data_ptr->idle_timer_notify != 0) {
 		if (new_idle_timeout_ticks == 0x0ULL) {
@@ -201,7 +206,6 @@ cpu_init(void)
 	arm_cpu_info_t *cpu_info_p;
 
 	if (cdp->cpu_type != CPU_TYPE_ARM) {
-
 		cdp->cpu_type = CPU_TYPE_ARM;
 
 		timer_call_queue_init(&cdp->rtclock_timer.queue);
@@ -231,10 +235,11 @@ cpu_init(void)
 			break;
 		case CPU_ARCH_ARMv5TE:
 		case CPU_ARCH_ARMv5TEJ:
-			if (cpu_info_p->arm_info.arm_implementor == CPU_VID_INTEL)
+			if (cpu_info_p->arm_info.arm_implementor == CPU_VID_INTEL) {
 				cdp->cpu_subtype = CPU_SUBTYPE_ARM_XSCALE;
-			else
+			} else {
 				cdp->cpu_subtype = CPU_SUBTYPE_ARM_V5TEJ;
+			}
 			break;
 		case CPU_ARCH_ARMv6:
 			cdp->cpu_subtype = CPU_SUBTYPE_ARM_V6;
@@ -264,33 +269,34 @@ cpu_init(void)
 	cdp->cpu_running = TRUE;
 	cdp->cpu_sleep_token_last = cdp->cpu_sleep_token;
 	cdp->cpu_sleep_token = 0x0UL;
-
 }
 
 void
 cpu_stack_alloc(cpu_data_t *cpu_data_ptr)
 {
-	vm_offset_t		irq_stack = 0;
-	vm_offset_t		fiq_stack = 0;
+	vm_offset_t             irq_stack = 0;
+	vm_offset_t             fiq_stack = 0;
 
 	kern_return_t kr = kernel_memory_allocate(kernel_map, &irq_stack,
-				   INTSTACK_SIZE + (2 * PAGE_SIZE),
-				   PAGE_MASK,
-				   KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT,
-				   VM_KERN_MEMORY_STACK);
-	if (kr != KERN_SUCCESS)
+	    INTSTACK_SIZE + (2 * PAGE_SIZE),
+	    PAGE_MASK,
+	    KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT,
+	    VM_KERN_MEMORY_STACK);
+	if (kr != KERN_SUCCESS) {
 		panic("Unable to allocate cpu interrupt stack\n");
+	}
 
 	cpu_data_ptr->intstack_top = irq_stack + PAGE_SIZE + INTSTACK_SIZE;
 	cpu_data_ptr->istackptr = cpu_data_ptr->intstack_top;
 
 	kr = kernel_memory_allocate(kernel_map, &fiq_stack,
-				   FIQSTACK_SIZE + (2 * PAGE_SIZE),
-				   PAGE_MASK,
-				   KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT,
-				   VM_KERN_MEMORY_STACK);
-	if (kr != KERN_SUCCESS)
+	    FIQSTACK_SIZE + (2 * PAGE_SIZE),
+	    PAGE_MASK,
+	    KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT,
+	    VM_KERN_MEMORY_STACK);
+	if (kr != KERN_SUCCESS) {
 		panic("Unable to allocate cpu exception stack\n");
+	}
 
 	cpu_data_ptr->fiqstack_top = fiq_stack + PAGE_SIZE + FIQSTACK_SIZE;
 	cpu_data_ptr->fiqstackptr = cpu_data_ptr->fiqstack_top;
@@ -299,12 +305,13 @@ cpu_stack_alloc(cpu_data_t *cpu_data_ptr)
 void
 cpu_data_free(cpu_data_t *cpu_data_ptr)
 {
-        if (cpu_data_ptr == &BootCpuData)
-                return;
+	if (cpu_data_ptr == &BootCpuData) {
+		return;
+	}
 
 	cpu_processor_free( cpu_data_ptr->cpu_processor);
-	kfree( (void *)(cpu_data_ptr->intstack_top - INTSTACK_SIZE), INTSTACK_SIZE);
-	kfree( (void *)(cpu_data_ptr->fiqstack_top - FIQSTACK_SIZE), FIQSTACK_SIZE);
+	(kfree)((void *)(cpu_data_ptr->intstack_top - INTSTACK_SIZE), INTSTACK_SIZE);
+	(kfree)((void *)(cpu_data_ptr->fiqstack_top - FIQSTACK_SIZE), FIQSTACK_SIZE);
 	kmem_free(kernel_map, (vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t));
 }
 
@@ -314,7 +321,7 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	uint32_t i = 0;
 
 	cpu_data_ptr->cpu_flags = 0;
-#if	__arm__
+#if     __arm__
 	cpu_data_ptr->cpu_exc_vectors = (vm_offset_t)&ExceptionVectorsTable;
 #endif
 	cpu_data_ptr->interrupts_enabled = 0;
@@ -360,7 +367,7 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	cpu_data_ptr->cpu_xcall_p0 = NULL;
 	cpu_data_ptr->cpu_xcall_p1 = NULL;
 
-#if	__ARM_SMP__ && defined(ARMA7)
+#if     __ARM_SMP__ && defined(ARMA7)
 	cpu_data_ptr->cpu_CLWFlush_req = 0x0ULL;
 	cpu_data_ptr->cpu_CLWFlush_last = 0x0ULL;
 	cpu_data_ptr->cpu_CLWClean_req = 0x0ULL;
@@ -392,7 +399,7 @@ cpu_data_register(cpu_data_t *cpu_data_ptr)
 
 	cpu_data_ptr->cpu_number = cpu;
 	CpuDataEntries[cpu].cpu_data_vaddr = cpu_data_ptr;
-	CpuDataEntries[cpu].cpu_data_paddr = (void *)ml_vtophys( (vm_offset_t)cpu_data_ptr);
+	CpuDataEntries[cpu].cpu_data_paddr = (void *)ml_vtophys((vm_offset_t)cpu_data_ptr);
 	return KERN_SUCCESS;
 }
 
@@ -405,18 +412,19 @@ cpu_start(int cpu)
 		return KERN_SUCCESS;
 	} else {
 #if     __ARM_SMP__
-		cpu_data_t	*cpu_data_ptr;
-		thread_t	first_thread;
+		cpu_data_t      *cpu_data_ptr;
+		thread_t        first_thread;
 
 		cpu_data_ptr = CpuDataEntries[cpu].cpu_data_vaddr;
 		cpu_data_ptr->cpu_reset_handler = (vm_offset_t) start_cpu_paddr;
 
 		cpu_data_ptr->cpu_pmap_cpu_data.cpu_user_pmap = NULL;
 
-		if (cpu_data_ptr->cpu_processor->next_thread != THREAD_NULL)
+		if (cpu_data_ptr->cpu_processor->next_thread != THREAD_NULL) {
 			first_thread = cpu_data_ptr->cpu_processor->next_thread;
-		else
+		} else {
 			first_thread = cpu_data_ptr->cpu_processor->idle_thread;
+		}
 		cpu_data_ptr->cpu_active_thread = first_thread;
 		first_thread->machine.CpuDatap = cpu_data_ptr;
 
@@ -452,7 +460,7 @@ cpu_timebase_init(boolean_t from_boot __unused)
 	cdp->cpu_base_timebase_low = rtclock_base_abstime_low;
 	cdp->cpu_base_timebase_high = rtclock_base_abstime_high;
 #else
-	*((uint64_t *) & cdp->cpu_base_timebase_low) = rtclock_base_abstime;
+	*((uint64_t *) &cdp->cpu_base_timebase_low) = rtclock_base_abstime;
 #endif
 }
 
@@ -464,31 +472,34 @@ ml_arm_sleep(void)
 	cpu_data_t     *cpu_data_ptr = getCpuDatap();
 
 	if (cpu_data_ptr == &BootCpuData) {
-		cpu_data_t	*target_cdp;
-		unsigned int	cpu;
+		cpu_data_t      *target_cdp;
+		unsigned int    cpu;
 
-		for (cpu=0; cpu < MAX_CPUS; cpu++) {
+		for (cpu = 0; cpu < MAX_CPUS; cpu++) {
 			target_cdp = (cpu_data_t *)CpuDataEntries[cpu].cpu_data_vaddr;
-			if(target_cdp == (cpu_data_t *)NULL)
+			if (target_cdp == (cpu_data_t *)NULL) {
 				break;
+			}
 
-			if (target_cdp == cpu_data_ptr)
+			if (target_cdp == cpu_data_ptr) {
 				continue;
+			}
 
-			while (target_cdp->cpu_sleep_token != ARM_CPU_ON_SLEEP_PATH);
+			while (target_cdp->cpu_sleep_token != ARM_CPU_ON_SLEEP_PATH) {
+				;
+			}
 		}
 
 		/* Now that the other cores have entered the sleep path, set
 		 * the abstime fixup we'll use when we resume.*/
 		rtclock_base_abstime = ml_get_timebase();
 		wake_abstime = rtclock_base_abstime;
-
 	} else {
 		platform_cache_disable();
 		CleanPoU_Dcache();
 	}
 	cpu_data_ptr->cpu_sleep_token = ARM_CPU_ON_SLEEP_PATH;
-#if	__ARM_SMP__ && defined(ARMA7)
+#if     __ARM_SMP__ && defined(ARMA7)
 	cpu_data_ptr->cpu_CLWFlush_req = 0;
 	cpu_data_ptr->cpu_CLWClean_req = 0;
 	__builtin_arm_dmb(DMB_ISH);
@@ -498,8 +509,9 @@ ml_arm_sleep(void)
 		platform_cache_disable();
 		platform_cache_shutdown();
 		bcopy((const void *)suspend_signature, (void *)(IOS_STATE), IOS_STATE_SIZE);
-	} else
+	} else {
 		CleanPoC_DcacheRegion((vm_offset_t) cpu_data_ptr, sizeof(cpu_data_t));
+	}
 
 	__builtin_arm_dsb(DSB_SY);
 	while (TRUE) {
@@ -512,32 +524,37 @@ ml_arm_sleep(void)
 void
 cpu_machine_idle_init(boolean_t from_boot)
 {
-	static const unsigned int	*BootArgs_paddr = (unsigned int *)NULL;
-	static const unsigned int	*CpuDataEntries_paddr = (unsigned int *)NULL;
-	static unsigned int		resume_idle_cpu_paddr = (unsigned int )NULL;
-	cpu_data_t			*cpu_data_ptr = getCpuDatap();
+	static const unsigned int       *BootArgs_paddr = (unsigned int *)NULL;
+	static const unsigned int       *CpuDataEntries_paddr = (unsigned int *)NULL;
+	static unsigned int             resume_idle_cpu_paddr = (unsigned int)NULL;
+	cpu_data_t                      *cpu_data_ptr = getCpuDatap();
 
 	if (from_boot) {
 		unsigned int    jtag = 0;
 		unsigned int    wfi;
 
 
-		if (PE_parse_boot_argn("jtag", &jtag, sizeof (jtag))) {
-			if (jtag != 0)
+		if (PE_parse_boot_argn("jtag", &jtag, sizeof(jtag))) {
+			if (jtag != 0) {
 				idle_enable = FALSE;
-			else
+			} else {
 				idle_enable = TRUE;
-		} else
+			}
+		} else {
 			idle_enable = TRUE;
+		}
 
-		if (!PE_parse_boot_argn("wfi", &wfi, sizeof (wfi)))
+		if (!PE_parse_boot_argn("wfi", &wfi, sizeof(wfi))) {
 			wfi = 1;
+		}
 
-		if (wfi == 0)
+		if (wfi == 0) {
 			bcopy_phys((addr64_t)ml_static_vtop((vm_offset_t)&patch_to_nop),
-				           (addr64_t)ml_static_vtop((vm_offset_t)&wfi_inst), sizeof(unsigned));
-		if (wfi == 2)
+			    (addr64_t)ml_static_vtop((vm_offset_t)&wfi_inst), sizeof(unsigned));
+		}
+		if (wfi == 2) {
 			wfi_fast = 0;
+		}
 
 		LowExceptionVectorsAddr = (void *)ml_io_map(ml_vtophys((vm_offset_t)gPhysBase), PAGE_SIZE);
 
@@ -549,25 +566,25 @@ cpu_machine_idle_init(boolean_t from_boot)
 
 		BootArgs_paddr = (unsigned int *)ml_static_vtop((vm_offset_t)BootArgs);
 		bcopy_phys((addr64_t)ml_static_vtop((vm_offset_t)&BootArgs_paddr),
-		           (addr64_t)((unsigned int)(gPhysBase) +
-		                     ((unsigned int)&(ResetHandlerData.boot_args) - (unsigned int)&ExceptionLowVectorsBase)),
-		           4);
+		    (addr64_t)((unsigned int)(gPhysBase) +
+		    ((unsigned int)&(ResetHandlerData.boot_args) - (unsigned int)&ExceptionLowVectorsBase)),
+		    4);
 
 		CpuDataEntries_paddr = (unsigned int *)ml_static_vtop((vm_offset_t)CpuDataEntries);
 		bcopy_phys((addr64_t)ml_static_vtop((vm_offset_t)&CpuDataEntries_paddr),
-		           (addr64_t)((unsigned int)(gPhysBase) +
-		                     ((unsigned int)&(ResetHandlerData.cpu_data_entries) - (unsigned int)&ExceptionLowVectorsBase)),
-		           4);
+		    (addr64_t)((unsigned int)(gPhysBase) +
+		    ((unsigned int)&(ResetHandlerData.cpu_data_entries) - (unsigned int)&ExceptionLowVectorsBase)),
+		    4);
 
 		CleanPoC_DcacheRegion((vm_offset_t) phystokv(gPhysBase), PAGE_SIZE);
 
 		resume_idle_cpu_paddr = (unsigned int)ml_static_vtop((vm_offset_t)&resume_idle_cpu);
-
 	}
 
 	if (cpu_data_ptr == &BootCpuData) {
 		bcopy(((const void *)running_signature), (void *)(IOS_STATE), IOS_STATE_SIZE);
-	};
+	}
+	;
 
 	cpu_data_ptr->cpu_reset_handler = resume_idle_cpu_paddr;
 	clean_dcache((vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t), FALSE);
@@ -576,9 +593,9 @@ cpu_machine_idle_init(boolean_t from_boot)
 void
 machine_track_platform_idle(boolean_t entry)
 {
-	if (entry)
+	if (entry) {
 		(void)__c11_atomic_fetch_add(&cpu_idle_count, 1, __ATOMIC_RELAXED);
-	else
+	} else {
 		(void)__c11_atomic_fetch_sub(&cpu_idle_count, 1, __ATOMIC_RELAXED);
+	}
 }
-

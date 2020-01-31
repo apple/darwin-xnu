@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -92,32 +92,35 @@
 #include <mach/mach_host_server.h>
 #include <mach/processor_set_server.h>
 
-struct processor_set	pset0;
-struct pset_node		pset_node0;
-decl_simple_lock_data(static,pset_node_lock)
+struct processor_set    pset0;
+struct pset_node                pset_node0;
+decl_simple_lock_data(static, pset_node_lock)
 
-queue_head_t			tasks;
-queue_head_t			terminated_tasks;	/* To be used ONLY for stackshot. */
-queue_head_t			corpse_tasks;
-int						tasks_count;
-int						terminated_tasks_count;
-queue_head_t			threads;
-int						threads_count;
-decl_lck_mtx_data(,tasks_threads_lock)
-decl_lck_mtx_data(,tasks_corpse_lock)
+lck_grp_t pset_lck_grp;
 
-processor_t				processor_list;
-unsigned int			processor_count;
-static processor_t		processor_list_tail;
-decl_simple_lock_data(,processor_list_lock)
+queue_head_t                    tasks;
+queue_head_t                    terminated_tasks;       /* To be used ONLY for stackshot. */
+queue_head_t                    corpse_tasks;
+int                                             tasks_count;
+int                                             terminated_tasks_count;
+queue_head_t                    threads;
+int                                             threads_count;
+decl_lck_mtx_data(, tasks_threads_lock)
+decl_lck_mtx_data(, tasks_corpse_lock)
 
-uint32_t				processor_avail_count;
+processor_t                             processor_list;
+unsigned int                    processor_count;
+static processor_t              processor_list_tail;
+decl_simple_lock_data(, processor_list_lock)
 
-processor_t		master_processor;
-int 			master_cpu = 0;
-boolean_t		sched_stats_active = FALSE;
+uint32_t                                processor_avail_count;
+uint32_t                                processor_avail_count_user;
 
-processor_t		processor_array[MAX_SCHED_CPUS] = { 0 };
+processor_t             master_processor;
+int                     master_cpu = 0;
+boolean_t               sched_stats_active = FALSE;
+
+processor_t             processor_array[MAX_SCHED_CPUS] = { 0 };
 
 #if defined(CONFIG_XNUPOST)
 kern_return_t ipi_test(void);
@@ -150,14 +153,17 @@ ipi_test()
 }
 #endif /* defined(CONFIG_XNUPOST) */
 
+int sched_enable_smt = 1;
 
 void
 processor_bootstrap(void)
 {
-	pset_init(&pset0, &pset_node0);
-	pset_node0.psets = &pset0;
+	lck_grp_init(&pset_lck_grp, "pset", LCK_GRP_ATTR_NULL);
 
 	simple_lock_init(&pset_node_lock, 0);
+
+	pset_node0.psets = &pset0;
+	pset_init(&pset0, &pset_node0);
 
 	queue_init(&tasks);
 	queue_init(&terminated_tasks);
@@ -178,11 +184,11 @@ processor_bootstrap(void)
  */
 void
 processor_init(
-	processor_t			processor,
-	int					cpu_id,
-	processor_set_t		pset)
+	processor_t                     processor,
+	int                                     cpu_id,
+	processor_set_t         pset)
 {
-	spl_t		s;
+	spl_t           s;
 
 	if (processor != master_processor) {
 		/* Scheduler state for master_processor initialized in sched_init() */
@@ -210,24 +216,26 @@ processor_init(
 	processor->processor_list = NULL;
 	processor->cpu_quiesce_state = CPU_QUIESCE_COUNTER_NONE;
 	processor->cpu_quiesce_last_checkin = 0;
+	processor->must_idle = false;
 
 	s = splsched();
 	pset_lock(pset);
 	bit_set(pset->cpu_bitmask, cpu_id);
-	if (pset->cpu_set_count++ == 0)
+	if (pset->cpu_set_count++ == 0) {
 		pset->cpu_set_low = pset->cpu_set_hi = cpu_id;
-	else {
+	} else {
 		pset->cpu_set_low = (cpu_id < pset->cpu_set_low)? cpu_id: pset->cpu_set_low;
 		pset->cpu_set_hi = (cpu_id > pset->cpu_set_hi)? cpu_id: pset->cpu_set_hi;
 	}
 	pset_unlock(pset);
 	splx(s);
 
-	simple_lock(&processor_list_lock);
-	if (processor_list == NULL)
+	simple_lock(&processor_list_lock, LCK_GRP_NULL);
+	if (processor_list == NULL) {
 		processor_list = processor;
-	else
+	} else {
 		processor_list_tail->processor_list = processor;
+	}
 	processor_list_tail = processor;
 	processor_count++;
 	processor_array[cpu_id] = processor;
@@ -236,8 +244,8 @@ processor_init(
 
 void
 processor_set_primary(
-	processor_t		processor,
-	processor_t		primary)
+	processor_t             processor,
+	processor_t             primary)
 {
 	assert(processor->processor_primary == primary || processor->processor_primary == processor);
 	/* Re-adjust primary point for this (possibly) secondary processor */
@@ -256,43 +264,58 @@ processor_set_primary(
 		processor->is_SMT = TRUE;
 
 		processor_set_t pset = processor->processor_set;
-		atomic_bit_clear(&pset->primary_map, processor->cpu_id, memory_order_relaxed);
+		spl_t s = splsched();
+		pset_lock(pset);
+		bit_clear(pset->primary_map, processor->cpu_id);
+		pset_unlock(pset);
+		splx(s);
 	}
 }
 
 processor_set_t
 processor_pset(
-	processor_t	processor)
+	processor_t     processor)
 {
-	return (processor->processor_set);
+	return processor->processor_set;
 }
 
 void
 processor_state_update_idle(processor_t processor)
 {
-    processor->current_pri = IDLEPRI;
-    processor->current_sfi_class = SFI_CLASS_KERNEL;
-    processor->current_recommended_pset_type = PSET_SMP;
-    processor->current_perfctl_class = PERFCONTROL_CLASS_IDLE;
+	processor->current_pri = IDLEPRI;
+	processor->current_sfi_class = SFI_CLASS_KERNEL;
+	processor->current_recommended_pset_type = PSET_SMP;
+	processor->current_perfctl_class = PERFCONTROL_CLASS_IDLE;
+	processor->current_urgency = THREAD_URGENCY_NONE;
+	processor->current_is_NO_SMT = false;
+	processor->current_is_bound = false;
 }
 
 void
 processor_state_update_from_thread(processor_t processor, thread_t thread)
 {
-    processor->current_pri = thread->sched_pri;
-    processor->current_sfi_class = thread->sfi_class;
-    processor->current_recommended_pset_type = recommended_pset_type(thread);
-    processor->current_perfctl_class = thread_get_perfcontrol_class(thread);
+	processor->current_pri = thread->sched_pri;
+	processor->current_sfi_class = thread->sfi_class;
+	processor->current_recommended_pset_type = recommended_pset_type(thread);
+	processor->current_perfctl_class = thread_get_perfcontrol_class(thread);
+	processor->current_urgency = thread_get_urgency(thread, NULL, NULL);
+#if DEBUG || DEVELOPMENT
+	processor->current_is_NO_SMT = (thread->sched_flags & TH_SFLAG_NO_SMT) || (thread->task->t_flags & TF_NO_SMT);
+#else
+	processor->current_is_NO_SMT = (thread->sched_flags & TH_SFLAG_NO_SMT);
+#endif
+	processor->current_is_bound = thread->bound_processor != PROCESSOR_NULL;
 }
 
 void
-processor_state_update_explicit(processor_t processor, int pri, sfi_class_id_t sfi_class, 
-	pset_cluster_type_t pset_type, perfcontrol_class_t perfctl_class)
+processor_state_update_explicit(processor_t processor, int pri, sfi_class_id_t sfi_class,
+    pset_cluster_type_t pset_type, perfcontrol_class_t perfctl_class, thread_urgency_t urgency)
 {
-    processor->current_pri = pri;
-    processor->current_sfi_class = sfi_class;
-    processor->current_recommended_pset_type = pset_type;
-    processor->current_perfctl_class = perfctl_class;
+	processor->current_pri = pri;
+	processor->current_sfi_class = sfi_class;
+	processor->current_recommended_pset_type = pset_type;
+	processor->current_perfctl_class = perfctl_class;
+	processor->current_urgency = urgency;
 }
 
 pset_node_t
@@ -303,29 +326,31 @@ pset_node_root(void)
 
 processor_set_t
 pset_create(
-	pset_node_t			node)
+	pset_node_t                     node)
 {
 	/* some schedulers do not support multiple psets */
-	if (SCHED(multiple_psets_enabled) == FALSE)
+	if (SCHED(multiple_psets_enabled) == FALSE) {
 		return processor_pset(master_processor);
+	}
 
-	processor_set_t		*prev, pset = kalloc(sizeof (*pset));
+	processor_set_t         *prev, pset = kalloc(sizeof(*pset));
 
 	if (pset != PROCESSOR_SET_NULL) {
 		pset_init(pset, node);
 
-		simple_lock(&pset_node_lock);
+		simple_lock(&pset_node_lock, LCK_GRP_NULL);
 
 		prev = &node->psets;
-		while (*prev != PROCESSOR_SET_NULL)
+		while (*prev != PROCESSOR_SET_NULL) {
 			prev = &(*prev)->pset_list;
+		}
 
 		*prev = pset;
 
 		simple_unlock(&pset_node_lock);
 	}
 
-	return (pset);
+	return pset;
 }
 
 /*
@@ -337,22 +362,24 @@ pset_find(
 	uint32_t cluster_id,
 	processor_set_t default_pset)
 {
-	simple_lock(&pset_node_lock);
+	simple_lock(&pset_node_lock, LCK_GRP_NULL);
 	pset_node_t node = &pset_node0;
 	processor_set_t pset = NULL;
 
 	do {
 		pset = node->psets;
 		while (pset != NULL) {
-			if (pset->pset_cluster_id == cluster_id)
+			if (pset->pset_cluster_id == cluster_id) {
 				break;
+			}
 			pset = pset->pset_list;
 		}
 	} while ((node = node->node_list) != NULL);
 	simple_unlock(&pset_node_lock);
-	if (pset == NULL)
+	if (pset == NULL) {
 		return default_pset;
-	return (pset);
+	}
+	return pset;
 }
 
 /*
@@ -360,8 +387,8 @@ pset_find(
  */
 void
 pset_init(
-	processor_set_t		pset,
-	pset_node_t			node)
+	processor_set_t         pset,
+	pset_node_t                     node)
 {
 	if (pset != &pset0) {
 		/* Scheduler state for pset0 initialized in sched_init() */
@@ -381,7 +408,8 @@ pset_init(
 	for (uint i = PROCESSOR_SHUTDOWN; i < PROCESSOR_STATE_LEN; i++) {
 		pset->cpu_state_map[i] = 0;
 	}
-	pset->pending_AST_cpu_mask = 0;
+	pset->pending_AST_URGENT_cpu_mask = 0;
+	pset->pending_AST_PREEMPT_cpu_mask = 0;
 #if defined(CONFIG_SCHED_DEFERRED_AST)
 	pset->pending_deferred_AST_cpu_mask = 0;
 #endif
@@ -393,15 +421,18 @@ pset_init(
 	pset->node = node;
 	pset->pset_cluster_type = PSET_SMP;
 	pset->pset_cluster_id = 0;
+
+	simple_lock(&pset_node_lock, LCK_GRP_NULL);
+	node->pset_count++;
+	simple_unlock(&pset_node_lock);
 }
 
 kern_return_t
 processor_info_count(
-	processor_flavor_t		flavor,
-	mach_msg_type_number_t	*count)
+	processor_flavor_t              flavor,
+	mach_msg_type_number_t  *count)
 {
 	switch (flavor) {
-
 	case PROCESSOR_BASIC_INFO:
 		*count = PROCESSOR_BASIC_INFO_COUNT;
 		break;
@@ -411,64 +442,71 @@ processor_info_count(
 		break;
 
 	default:
-		return (cpu_info_count(flavor, count));
+		return cpu_info_count(flavor, count);
 	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 
 kern_return_t
 processor_info(
-	processor_t	processor,
-	processor_flavor_t		flavor,
-	host_t					*host,
-	processor_info_t		info,
-	mach_msg_type_number_t	*count)
+	processor_t     processor,
+	processor_flavor_t              flavor,
+	host_t                                  *host,
+	processor_info_t                info,
+	mach_msg_type_number_t  *count)
 {
-	int	cpu_id, state;
-	kern_return_t	result;
+	int     cpu_id, state;
+	kern_return_t   result;
 
-	if (processor == PROCESSOR_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (processor == PROCESSOR_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	cpu_id = processor->cpu_id;
 
 	switch (flavor) {
-
 	case PROCESSOR_BASIC_INFO:
 	{
-		processor_basic_info_t		basic_info;
+		processor_basic_info_t          basic_info;
 
-		if (*count < PROCESSOR_BASIC_INFO_COUNT)
-			return (KERN_FAILURE);
+		if (*count < PROCESSOR_BASIC_INFO_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		basic_info = (processor_basic_info_t) info;
 		basic_info->cpu_type = slot_type(cpu_id);
 		basic_info->cpu_subtype = slot_subtype(cpu_id);
 		state = processor->state;
-		if (state == PROCESSOR_OFF_LINE)
+		if (state == PROCESSOR_OFF_LINE
+#if defined(__x86_64__)
+		    || !processor->is_recommended
+#endif
+		    ) {
 			basic_info->running = FALSE;
-		else
+		} else {
 			basic_info->running = TRUE;
+		}
 		basic_info->slot_num = cpu_id;
-		if (processor == master_processor) 
+		if (processor == master_processor) {
 			basic_info->is_master = TRUE;
-		else
+		} else {
 			basic_info->is_master = FALSE;
+		}
 
 		*count = PROCESSOR_BASIC_INFO_COUNT;
 		*host = &realhost;
 
-	    return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	case PROCESSOR_CPU_LOAD_INFO:
 	{
-		processor_cpu_load_info_t	cpu_load_info;
-		timer_t		idle_state;
-		uint64_t	idle_time_snapshot1, idle_time_snapshot2;
-		uint64_t	idle_time_tstamp1, idle_time_tstamp2;
+		processor_cpu_load_info_t       cpu_load_info;
+		timer_t         idle_state;
+		uint64_t        idle_time_snapshot1, idle_time_snapshot2;
+		uint64_t        idle_time_tstamp1, idle_time_tstamp2;
 
 		/*
 		 * We capture the accumulated idle time twice over
@@ -481,18 +519,19 @@ processor_info(
 		 * data.
 		 */
 
-		if (*count < PROCESSOR_CPU_LOAD_INFO_COUNT)
-			return (KERN_FAILURE);
+		if (*count < PROCESSOR_CPU_LOAD_INFO_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		cpu_load_info = (processor_cpu_load_info_t) info;
 		if (precise_user_kernel_time) {
 			cpu_load_info->cpu_ticks[CPU_STATE_USER] =
-							(uint32_t)(timer_grab(&PROCESSOR_DATA(processor, user_state)) / hz_tick_interval);
+			    (uint32_t)(timer_grab(&PROCESSOR_DATA(processor, user_state)) / hz_tick_interval);
 			cpu_load_info->cpu_ticks[CPU_STATE_SYSTEM] =
-							(uint32_t)(timer_grab(&PROCESSOR_DATA(processor, system_state)) / hz_tick_interval);
+			    (uint32_t)(timer_grab(&PROCESSOR_DATA(processor, system_state)) / hz_tick_interval);
 		} else {
 			uint64_t tval = timer_grab(&PROCESSOR_DATA(processor, user_state)) +
-				timer_grab(&PROCESSOR_DATA(processor, system_state));
+			    timer_grab(&PROCESSOR_DATA(processor, system_state));
 
 			cpu_load_info->cpu_ticks[CPU_STATE_USER] = (uint32_t)(tval / hz_tick_interval);
 			cpu_load_info->cpu_ticks[CPU_STATE_SYSTEM] = 0;
@@ -513,54 +552,56 @@ processor_info(
 		 */
 		if (PROCESSOR_DATA(processor, current_state) != idle_state) {
 			cpu_load_info->cpu_ticks[CPU_STATE_IDLE] =
-							(uint32_t)(idle_time_snapshot1 / hz_tick_interval);
+			    (uint32_t)(idle_time_snapshot1 / hz_tick_interval);
 		} else if ((idle_time_snapshot1 != (idle_time_snapshot2 = timer_grab(idle_state))) ||
-				   (idle_time_tstamp1 != (idle_time_tstamp2 = idle_state->tstamp))){
+		    (idle_time_tstamp1 != (idle_time_tstamp2 = idle_state->tstamp))) {
 			/* Idle timer is being updated concurrently, second stamp is good enough */
 			cpu_load_info->cpu_ticks[CPU_STATE_IDLE] =
-							(uint32_t)(idle_time_snapshot2 / hz_tick_interval);
+			    (uint32_t)(idle_time_snapshot2 / hz_tick_interval);
 		} else {
 			/*
 			 * Idle timer may be very stale. Fortunately we have established
 			 * that idle_time_snapshot1 and idle_time_tstamp1 are unchanging
 			 */
 			idle_time_snapshot1 += mach_absolute_time() - idle_time_tstamp1;
-				
+
 			cpu_load_info->cpu_ticks[CPU_STATE_IDLE] =
-				(uint32_t)(idle_time_snapshot1 / hz_tick_interval);
+			    (uint32_t)(idle_time_snapshot1 / hz_tick_interval);
 		}
 
 		cpu_load_info->cpu_ticks[CPU_STATE_NICE] = 0;
 
-	    *count = PROCESSOR_CPU_LOAD_INFO_COUNT;
-	    *host = &realhost;
+		*count = PROCESSOR_CPU_LOAD_INFO_COUNT;
+		*host = &realhost;
 
-	    return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	default:
-	    result = cpu_info(flavor, cpu_id, info, count);
-	    if (result == KERN_SUCCESS)
-			*host = &realhost;		   
+		result = cpu_info(flavor, cpu_id, info, count);
+		if (result == KERN_SUCCESS) {
+			*host = &realhost;
+		}
 
-	    return (result);
+		return result;
 	}
 }
 
 kern_return_t
 processor_start(
-	processor_t			processor)
+	processor_t                     processor)
 {
-	processor_set_t		pset;
-	thread_t			thread;   
-	kern_return_t		result;
-	spl_t				s;
+	processor_set_t         pset;
+	thread_t                        thread;
+	kern_return_t           result;
+	spl_t                           s;
 
-	if (processor == PROCESSOR_NULL || processor->processor_set == PROCESSOR_SET_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (processor == PROCESSOR_NULL || processor->processor_set == PROCESSOR_SET_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	if (processor == master_processor) {
-		processor_t		prev;
+		processor_t             prev;
 
 		prev = thread_bind(processor);
 		thread_block(THREAD_CONTINUE_NULL);
@@ -569,7 +610,20 @@ processor_start(
 
 		thread_bind(prev);
 
-		return (result);
+		return result;
+	}
+
+	bool scheduler_disable = false;
+
+	if ((processor->processor_primary != processor) && (sched_enable_smt == 0)) {
+		if (cpu_can_exit(processor->cpu_id)) {
+			return KERN_SUCCESS;
+		}
+		/*
+		 * This secondary SMT processor must start in order to service interrupts,
+		 * so instead it will be disabled at the scheduler level.
+		 */
+		scheduler_disable = true;
 	}
 
 	s = splsched();
@@ -579,7 +633,7 @@ processor_start(
 		pset_unlock(pset);
 		splx(s);
 
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	pset_update_processor_state(pset, processor, PROCESSOR_START);
@@ -598,7 +652,7 @@ processor_start(
 			pset_unlock(pset);
 			splx(s);
 
-			return (result);
+			return result;
 		}
 	}
 
@@ -607,8 +661,8 @@ processor_start(
 	 *	has never been started.  Create a dedicated
 	 *	start up thread.
 	 */
-	if (	processor->active_thread == THREAD_NULL		&&
-			processor->next_thread == THREAD_NULL		) {
+	if (processor->active_thread == THREAD_NULL &&
+	    processor->next_thread == THREAD_NULL) {
 		result = kernel_thread_create((thread_continue_t)processor_start_thread, NULL, MAXPRI_KERNEL, &thread);
 		if (result != KERN_SUCCESS) {
 			s = splsched();
@@ -617,7 +671,7 @@ processor_start(
 			pset_unlock(pset);
 			splx(s);
 
-			return (result);
+			return result;
 		}
 
 		s = splsched();
@@ -632,8 +686,9 @@ processor_start(
 		thread_deallocate(thread);
 	}
 
-	if (processor->processor_self == IP_NULL)
+	if (processor->processor_self == IP_NULL) {
 		ipc_processor_init(processor);
+	}
 
 	result = cpu_start(processor->cpu_id);
 	if (result != KERN_SUCCESS) {
@@ -643,127 +698,222 @@ processor_start(
 		pset_unlock(pset);
 		splx(s);
 
-		return (result);
+		return result;
+	}
+	if (scheduler_disable) {
+		assert(processor->processor_primary != processor);
+		sched_processor_enable(processor, FALSE);
 	}
 
 	ipc_processor_enable(processor);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
+
 
 kern_return_t
 processor_exit(
-	processor_t	processor)
+	processor_t     processor)
 {
-	if (processor == PROCESSOR_NULL)
-		return(KERN_INVALID_ARGUMENT);
+	if (processor == PROCESSOR_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
-	return(processor_shutdown(processor));
+	return processor_shutdown(processor);
+}
+
+
+kern_return_t
+processor_start_from_user(
+	processor_t                     processor)
+{
+	kern_return_t ret;
+
+	if (processor == PROCESSOR_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (!cpu_can_exit(processor->cpu_id)) {
+		ret = sched_processor_enable(processor, TRUE);
+	} else {
+		ret = processor_start(processor);
+	}
+
+	return ret;
+}
+
+kern_return_t
+processor_exit_from_user(
+	processor_t     processor)
+{
+	kern_return_t ret;
+
+	if (processor == PROCESSOR_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (!cpu_can_exit(processor->cpu_id)) {
+		ret = sched_processor_enable(processor, FALSE);
+	} else {
+		ret = processor_shutdown(processor);
+	}
+
+	return ret;
+}
+
+kern_return_t
+enable_smt_processors(bool enable)
+{
+	if (machine_info.logical_cpu_max == machine_info.physical_cpu_max) {
+		/* Not an SMT system */
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	int ncpus = machine_info.logical_cpu_max;
+
+	for (int i = 1; i < ncpus; i++) {
+		processor_t processor = processor_array[i];
+
+		if (processor->processor_primary != processor) {
+			if (enable) {
+				processor_start_from_user(processor);
+			} else { /* Disable */
+				processor_exit_from_user(processor);
+			}
+		}
+	}
+
+#define BSD_HOST 1
+	host_basic_info_data_t hinfo;
+	mach_msg_type_number_t count = HOST_BASIC_INFO_COUNT;
+	kern_return_t kret = host_info((host_t)BSD_HOST, HOST_BASIC_INFO, (host_info_t)&hinfo, &count);
+	if (kret != KERN_SUCCESS) {
+		return kret;
+	}
+
+	if (enable && (hinfo.logical_cpu != hinfo.logical_cpu_max)) {
+		return KERN_FAILURE;
+	}
+
+	if (!enable && (hinfo.logical_cpu != hinfo.physical_cpu)) {
+		return KERN_FAILURE;
+	}
+
+	return KERN_SUCCESS;
 }
 
 kern_return_t
 processor_control(
-	processor_t		processor,
-	processor_info_t	info,
-	mach_msg_type_number_t	count)
+	processor_t             processor,
+	processor_info_t        info,
+	mach_msg_type_number_t  count)
 {
-	if (processor == PROCESSOR_NULL)
-		return(KERN_INVALID_ARGUMENT);
+	if (processor == PROCESSOR_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
-	return(cpu_control(processor->cpu_id, info, count));
+	return cpu_control(processor->cpu_id, info, count);
 }
-	    
+
 kern_return_t
 processor_set_create(
-	__unused host_t		host,
-	__unused processor_set_t	*new_set,
-	__unused processor_set_t	*new_name)
+	__unused host_t         host,
+	__unused processor_set_t        *new_set,
+	__unused processor_set_t        *new_name)
 {
-	return(KERN_FAILURE);
+	return KERN_FAILURE;
 }
 
 kern_return_t
 processor_set_destroy(
-	__unused processor_set_t	pset)
+	__unused processor_set_t        pset)
 {
-	return(KERN_FAILURE);
+	return KERN_FAILURE;
 }
 
 kern_return_t
 processor_get_assignment(
-	processor_t	processor,
-	processor_set_t	*pset)
+	processor_t     processor,
+	processor_set_t *pset)
 {
 	int state;
 
-	if (processor == PROCESSOR_NULL)
-		return(KERN_INVALID_ARGUMENT);
+	if (processor == PROCESSOR_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	state = processor->state;
-	if (state == PROCESSOR_SHUTDOWN || state == PROCESSOR_OFF_LINE)
-		return(KERN_FAILURE);
+	if (state == PROCESSOR_SHUTDOWN || state == PROCESSOR_OFF_LINE) {
+		return KERN_FAILURE;
+	}
 
 	*pset = &pset0;
 
-	return(KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
 processor_set_info(
-	processor_set_t		pset,
-	int			flavor,
-	host_t			*host,
-	processor_set_info_t	info,
-	mach_msg_type_number_t	*count)
+	processor_set_t         pset,
+	int                     flavor,
+	host_t                  *host,
+	processor_set_info_t    info,
+	mach_msg_type_number_t  *count)
 {
-	if (pset == PROCESSOR_SET_NULL)
-		return(KERN_INVALID_ARGUMENT);
+	if (pset == PROCESSOR_SET_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	if (flavor == PROCESSOR_SET_BASIC_INFO) {
-		processor_set_basic_info_t	basic_info;
+		processor_set_basic_info_t      basic_info;
 
-		if (*count < PROCESSOR_SET_BASIC_INFO_COUNT)
-			return(KERN_FAILURE);
+		if (*count < PROCESSOR_SET_BASIC_INFO_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		basic_info = (processor_set_basic_info_t) info;
+#if defined(__x86_64__)
+		basic_info->processor_count = processor_avail_count_user;
+#else
 		basic_info->processor_count = processor_avail_count;
+#endif
 		basic_info->default_policy = POLICY_TIMESHARE;
 
 		*count = PROCESSOR_SET_BASIC_INFO_COUNT;
 		*host = &realhost;
-		return(KERN_SUCCESS);
-	}
-	else if (flavor == PROCESSOR_SET_TIMESHARE_DEFAULT) {
-		policy_timeshare_base_t	ts_base;
+		return KERN_SUCCESS;
+	} else if (flavor == PROCESSOR_SET_TIMESHARE_DEFAULT) {
+		policy_timeshare_base_t ts_base;
 
-		if (*count < POLICY_TIMESHARE_BASE_COUNT)
-			return(KERN_FAILURE);
+		if (*count < POLICY_TIMESHARE_BASE_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		ts_base = (policy_timeshare_base_t) info;
 		ts_base->base_priority = BASEPRI_DEFAULT;
 
 		*count = POLICY_TIMESHARE_BASE_COUNT;
 		*host = &realhost;
-		return(KERN_SUCCESS);
-	}
-	else if (flavor == PROCESSOR_SET_FIFO_DEFAULT) {
-		policy_fifo_base_t		fifo_base;
+		return KERN_SUCCESS;
+	} else if (flavor == PROCESSOR_SET_FIFO_DEFAULT) {
+		policy_fifo_base_t              fifo_base;
 
-		if (*count < POLICY_FIFO_BASE_COUNT)
-			return(KERN_FAILURE);
+		if (*count < POLICY_FIFO_BASE_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		fifo_base = (policy_fifo_base_t) info;
 		fifo_base->base_priority = BASEPRI_DEFAULT;
 
 		*count = POLICY_FIFO_BASE_COUNT;
 		*host = &realhost;
-		return(KERN_SUCCESS);
-	}
-	else if (flavor == PROCESSOR_SET_RR_DEFAULT) {
-		policy_rr_base_t		rr_base;
+		return KERN_SUCCESS;
+	} else if (flavor == PROCESSOR_SET_RR_DEFAULT) {
+		policy_rr_base_t                rr_base;
 
-		if (*count < POLICY_RR_BASE_COUNT)
-			return(KERN_FAILURE);
+		if (*count < POLICY_RR_BASE_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		rr_base = (policy_rr_base_t) info;
 		rr_base->base_priority = BASEPRI_DEFAULT;
@@ -771,86 +921,88 @@ processor_set_info(
 
 		*count = POLICY_RR_BASE_COUNT;
 		*host = &realhost;
-		return(KERN_SUCCESS);
-	}
-	else if (flavor == PROCESSOR_SET_TIMESHARE_LIMITS) {
-		policy_timeshare_limit_t	ts_limit;
+		return KERN_SUCCESS;
+	} else if (flavor == PROCESSOR_SET_TIMESHARE_LIMITS) {
+		policy_timeshare_limit_t        ts_limit;
 
-		if (*count < POLICY_TIMESHARE_LIMIT_COUNT)
-			return(KERN_FAILURE);
+		if (*count < POLICY_TIMESHARE_LIMIT_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		ts_limit = (policy_timeshare_limit_t) info;
 		ts_limit->max_priority = MAXPRI_KERNEL;
 
 		*count = POLICY_TIMESHARE_LIMIT_COUNT;
 		*host = &realhost;
-		return(KERN_SUCCESS);
-	}
-	else if (flavor == PROCESSOR_SET_FIFO_LIMITS) {
-		policy_fifo_limit_t		fifo_limit;
+		return KERN_SUCCESS;
+	} else if (flavor == PROCESSOR_SET_FIFO_LIMITS) {
+		policy_fifo_limit_t             fifo_limit;
 
-		if (*count < POLICY_FIFO_LIMIT_COUNT)
-			return(KERN_FAILURE);
+		if (*count < POLICY_FIFO_LIMIT_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		fifo_limit = (policy_fifo_limit_t) info;
 		fifo_limit->max_priority = MAXPRI_KERNEL;
 
 		*count = POLICY_FIFO_LIMIT_COUNT;
 		*host = &realhost;
-		return(KERN_SUCCESS);
-	}
-	else if (flavor == PROCESSOR_SET_RR_LIMITS) {
-		policy_rr_limit_t		rr_limit;
+		return KERN_SUCCESS;
+	} else if (flavor == PROCESSOR_SET_RR_LIMITS) {
+		policy_rr_limit_t               rr_limit;
 
-		if (*count < POLICY_RR_LIMIT_COUNT)
-			return(KERN_FAILURE);
+		if (*count < POLICY_RR_LIMIT_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		rr_limit = (policy_rr_limit_t) info;
 		rr_limit->max_priority = MAXPRI_KERNEL;
 
 		*count = POLICY_RR_LIMIT_COUNT;
 		*host = &realhost;
-		return(KERN_SUCCESS);
-	}
-	else if (flavor == PROCESSOR_SET_ENABLED_POLICIES) {
-		int				*enabled;
+		return KERN_SUCCESS;
+	} else if (flavor == PROCESSOR_SET_ENABLED_POLICIES) {
+		int                             *enabled;
 
-		if (*count < (sizeof(*enabled)/sizeof(int)))
-			return(KERN_FAILURE);
+		if (*count < (sizeof(*enabled) / sizeof(int))) {
+			return KERN_FAILURE;
+		}
 
 		enabled = (int *) info;
 		*enabled = POLICY_TIMESHARE | POLICY_RR | POLICY_FIFO;
 
-		*count = sizeof(*enabled)/sizeof(int);
+		*count = sizeof(*enabled) / sizeof(int);
 		*host = &realhost;
-		return(KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 
 	*host = HOST_NULL;
-	return(KERN_INVALID_ARGUMENT);
+	return KERN_INVALID_ARGUMENT;
 }
 
 /*
  *	processor_set_statistics
  *
- *	Returns scheduling statistics for a processor set. 
+ *	Returns scheduling statistics for a processor set.
  */
-kern_return_t 
+kern_return_t
 processor_set_statistics(
 	processor_set_t         pset,
 	int                     flavor,
 	processor_set_info_t    info,
-	mach_msg_type_number_t	*count)
+	mach_msg_type_number_t  *count)
 {
-	if (pset == PROCESSOR_SET_NULL || pset != &pset0)
-		return (KERN_INVALID_PROCESSOR_SET);
+	if (pset == PROCESSOR_SET_NULL || pset != &pset0) {
+		return KERN_INVALID_PROCESSOR_SET;
+	}
 
 	if (flavor == PROCESSOR_SET_LOAD_INFO) {
 		processor_set_load_info_t     load_info;
 
-		if (*count < PROCESSOR_SET_LOAD_INFO_COUNT)
-			return(KERN_FAILURE);
+		if (*count < PROCESSOR_SET_LOAD_INFO_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		load_info = (processor_set_load_info_t) info;
 
@@ -861,10 +1013,10 @@ processor_set_statistics(
 		load_info->thread_count = threads_count;
 
 		*count = PROCESSOR_SET_LOAD_INFO_COUNT;
-		return(KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
-	return(KERN_INVALID_ARGUMENT);
+	return KERN_INVALID_ARGUMENT;
 }
 
 /*
@@ -872,15 +1024,15 @@ processor_set_statistics(
  *
  *	Specify max priority permitted on processor set.  This affects
  *	newly created and assigned threads.  Optionally change existing
- * 	ones.
+ *      ones.
  */
 kern_return_t
 processor_set_max_priority(
-	__unused processor_set_t	pset,
-	__unused int			max_priority,
-	__unused boolean_t		change_threads)
+	__unused processor_set_t        pset,
+	__unused int                    max_priority,
+	__unused boolean_t              change_threads)
 {
-	return (KERN_INVALID_ARGUMENT);
+	return KERN_INVALID_ARGUMENT;
 }
 
 /*
@@ -891,10 +1043,10 @@ processor_set_max_priority(
 
 kern_return_t
 processor_set_policy_enable(
-	__unused processor_set_t	pset,
-	__unused int			policy)
+	__unused processor_set_t        pset,
+	__unused int                    policy)
 {
-	return (KERN_INVALID_ARGUMENT);
+	return KERN_INVALID_ARGUMENT;
 }
 
 /*
@@ -905,11 +1057,11 @@ processor_set_policy_enable(
  */
 kern_return_t
 processor_set_policy_disable(
-	__unused processor_set_t	pset,
-	__unused int			policy,
-	__unused boolean_t		change_threads)
+	__unused processor_set_t        pset,
+	__unused int                    policy,
+	__unused boolean_t              change_threads)
 {
-	return (KERN_INVALID_ARGUMENT);
+	return KERN_INVALID_ARGUMENT;
 }
 
 /*
@@ -919,7 +1071,7 @@ processor_set_policy_disable(
  */
 kern_return_t
 processor_set_things(
-	processor_set_t	pset,
+	processor_set_t pset,
 	void **thing_list,
 	mach_msg_type_number_t *count,
 	int type)
@@ -939,8 +1091,9 @@ processor_set_things(
 	void *addr, *newaddr;
 	vm_size_t size, size_needed;
 
-	if (pset == PROCESSOR_SET_NULL || pset != &pset0)
-		return (KERN_INVALID_ARGUMENT);
+	if (pset == PROCESSOR_SET_NULL || pset != &pset0) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	task_size = 0;
 	task_size_needed = 0;
@@ -956,49 +1109,55 @@ processor_set_things(
 		lck_mtx_lock(&tasks_threads_lock);
 
 		/* do we have the memory we need? */
-		if (type == PSET_THING_THREAD)
+		if (type == PSET_THING_THREAD) {
 			thread_size_needed = threads_count * sizeof(void *);
+		}
 #if !CONFIG_MACF
 		else
 #endif
-			task_size_needed = tasks_count * sizeof(void *);
+		task_size_needed = tasks_count * sizeof(void *);
 
 		if (task_size_needed <= task_size &&
-		    thread_size_needed <= thread_size)
+		    thread_size_needed <= thread_size) {
 			break;
+		}
 
 		/* unlock and allocate more memory */
 		lck_mtx_unlock(&tasks_threads_lock);
 
 		/* grow task array */
 		if (task_size_needed > task_size) {
-			if (task_size != 0)
+			if (task_size != 0) {
 				kfree(task_list, task_size);
+			}
 
 			assert(task_size_needed > 0);
 			task_size = task_size_needed;
 
 			task_list = (task_t *)kalloc(task_size);
 			if (task_list == NULL) {
-				if (thread_size != 0)
+				if (thread_size != 0) {
 					kfree(thread_list, thread_size);
-				return (KERN_RESOURCE_SHORTAGE);
+				}
+				return KERN_RESOURCE_SHORTAGE;
 			}
 		}
 
 		/* grow thread array */
 		if (thread_size_needed > thread_size) {
-			if (thread_size != 0)
+			if (thread_size != 0) {
 				kfree(thread_list, thread_size);
+			}
 
 			assert(thread_size_needed > 0);
 			thread_size = thread_size_needed;
 
 			thread_list = (thread_t *)kalloc(thread_size);
 			if (thread_list == 0) {
-				if (task_size != 0)
+				if (task_size != 0) {
 					kfree(task_list, task_size);
-				return (KERN_RESOURCE_SHORTAGE);
+				}
+				return KERN_RESOURCE_SHORTAGE;
 			}
 		}
 	}
@@ -1008,36 +1167,36 @@ processor_set_things(
 	/* If we need it, get the thread list */
 	if (type == PSET_THING_THREAD) {
 		for (thread = (thread_t)queue_first(&threads);
-		     !queue_end(&threads, (queue_entry_t)thread);
-		     thread = (thread_t)queue_next(&thread->threads)) {
+		    !queue_end(&threads, (queue_entry_t)thread);
+		    thread = (thread_t)queue_next(&thread->threads)) {
 #if defined(SECURE_KERNEL)
 			if (thread->task != kernel_task) {
 #endif
-				thread_reference_internal(thread);
-				thread_list[actual_threads++] = thread;
+			thread_reference_internal(thread);
+			thread_list[actual_threads++] = thread;
 #if defined(SECURE_KERNEL)
-			}
+		}
 #endif
 		}
 	}
 #if !CONFIG_MACF
-	  else {
+	else {
 #endif
-		/* get a list of the tasks */
-		for (task = (task_t)queue_first(&tasks);
-		     !queue_end(&tasks, (queue_entry_t)task);
-		     task = (task_t)queue_next(&task->tasks)) {
+	/* get a list of the tasks */
+	for (task = (task_t)queue_first(&tasks);
+	    !queue_end(&tasks, (queue_entry_t)task);
+	    task = (task_t)queue_next(&task->tasks)) {
 #if defined(SECURE_KERNEL)
-			if (task != kernel_task) {
+		if (task != kernel_task) {
 #endif
-				task_reference_internal(task);
-				task_list[actual_tasks++] = task;
+		task_reference_internal(task);
+		task_list[actual_tasks++] = task;
 #if defined(SECURE_KERNEL)
-			}
-#endif
-		}
-#if !CONFIG_MACF
 	}
+#endif
+	}
+#if !CONFIG_MACF
+}
 #endif
 
 	lck_mtx_unlock(&tasks_threads_lock);
@@ -1057,7 +1216,6 @@ processor_set_things(
 	task_size_needed = actual_tasks * sizeof(void *);
 
 	if (type == PSET_THING_THREAD) {
-
 		/* for each thread (if any), make sure it's task is in the allowed list */
 		for (i = used = 0; i < actual_threads; i++) {
 			boolean_t found_task = FALSE;
@@ -1069,17 +1227,19 @@ processor_set_things(
 					break;
 				}
 			}
-			if (found_task)
+			if (found_task) {
 				thread_list[used++] = thread_list[i];
-			else
+			} else {
 				thread_deallocate(thread_list[i]);
+			}
 		}
 		actual_threads = used;
 		thread_size_needed = actual_threads * sizeof(void *);
 
 		/* done with the task list */
-		for (i = 0; i < actual_tasks; i++)
+		for (i = 0; i < actual_tasks; i++) {
 			task_deallocate(task_list[i]);
+		}
 		kfree(task_list, task_size);
 		task_size = 0;
 		actual_tasks = 0;
@@ -1091,8 +1251,9 @@ processor_set_things(
 		if (actual_threads == 0) {
 			/* no threads available to return */
 			assert(task_size == 0);
-			if (thread_size != 0)
+			if (thread_size != 0) {
 				kfree(thread_list, thread_size);
+			}
 			*thing_list = NULL;
 			*count = 0;
 			return KERN_SUCCESS;
@@ -1104,12 +1265,13 @@ processor_set_things(
 		if (actual_tasks == 0) {
 			/* no tasks available to return */
 			assert(thread_size == 0);
-			if (task_size != 0)
+			if (task_size != 0) {
 				kfree(task_list, task_size);
+			}
 			*thing_list = NULL;
 			*count = 0;
 			return KERN_SUCCESS;
-		} 
+		}
 		size_needed = actual_tasks * sizeof(void *);
 		size = task_size;
 		addr = task_list;
@@ -1120,14 +1282,16 @@ processor_set_things(
 		newaddr = kalloc(size_needed);
 		if (newaddr == 0) {
 			for (i = 0; i < actual_tasks; i++) {
-				if (type == PSET_THING_THREAD)
+				if (type == PSET_THING_THREAD) {
 					thread_deallocate(thread_list[i]);
-				else
+				} else {
 					task_deallocate(task_list[i]);
+				}
 			}
-			if (size)
+			if (size) {
 				kfree(addr, size);
-			return (KERN_RESOURCE_SHORTAGE);
+			}
+			return KERN_RESOURCE_SHORTAGE;
 		}
 
 		bcopy((void *) addr, (void *) newaddr, size_needed);
@@ -1140,7 +1304,7 @@ processor_set_things(
 	*thing_list = (void **)addr;
 	*count = (unsigned int)size / sizeof(void *);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 
@@ -1151,20 +1315,22 @@ processor_set_things(
  */
 kern_return_t
 processor_set_tasks(
-	processor_set_t		pset,
-	task_array_t		*task_list,
-	mach_msg_type_number_t	*count)
+	processor_set_t         pset,
+	task_array_t            *task_list,
+	mach_msg_type_number_t  *count)
 {
 	kern_return_t ret;
 	mach_msg_type_number_t i;
 
 	ret = processor_set_things(pset, (void **)task_list, count, PSET_THING_TASK);
-	if (ret != KERN_SUCCESS)
+	if (ret != KERN_SUCCESS) {
 		return ret;
+	}
 
 	/* do the conversion that Mig should handle */
-	for (i = 0; i < *count; i++)
+	for (i = 0; i < *count; i++) {
 		(*task_list)[i] = (task_t)convert_task_to_port((*task_list)[i]);
+	}
 	return KERN_SUCCESS;
 }
 
@@ -1176,38 +1342,40 @@ processor_set_tasks(
 #if defined(SECURE_KERNEL)
 kern_return_t
 processor_set_threads(
-	__unused processor_set_t		pset,
-	__unused thread_array_t		*thread_list,
-	__unused mach_msg_type_number_t	*count)
+	__unused processor_set_t                pset,
+	__unused thread_array_t         *thread_list,
+	__unused mach_msg_type_number_t *count)
 {
-    return KERN_FAILURE;
+	return KERN_FAILURE;
 }
 #elif defined(CONFIG_EMBEDDED)
 kern_return_t
 processor_set_threads(
-	__unused processor_set_t		pset,
-	__unused thread_array_t		*thread_list,
-	__unused mach_msg_type_number_t	*count)
+	__unused processor_set_t                pset,
+	__unused thread_array_t         *thread_list,
+	__unused mach_msg_type_number_t *count)
 {
-    return KERN_NOT_SUPPORTED;
+	return KERN_NOT_SUPPORTED;
 }
 #else
 kern_return_t
 processor_set_threads(
-	processor_set_t		pset,
-	thread_array_t		*thread_list,
-	mach_msg_type_number_t	*count)
+	processor_set_t         pset,
+	thread_array_t          *thread_list,
+	mach_msg_type_number_t  *count)
 {
 	kern_return_t ret;
 	mach_msg_type_number_t i;
 
 	ret = processor_set_things(pset, (void **)thread_list, count, PSET_THING_THREAD);
-	if (ret != KERN_SUCCESS)
+	if (ret != KERN_SUCCESS) {
 		return ret;
+	}
 
 	/* do the conversion that Mig should handle */
-	for (i = 0; i < *count; i++)
+	for (i = 0; i < *count; i++) {
 		(*thread_list)[i] = (thread_t)convert_thread_to_port((*thread_list)[i]);
+	}
 	return KERN_SUCCESS;
 }
 #endif
@@ -1221,20 +1389,20 @@ processor_set_threads(
  */
 kern_return_t
 processor_set_policy_control(
-	__unused processor_set_t		pset,
-	__unused int				flavor,
-	__unused processor_set_info_t	policy_info,
-	__unused mach_msg_type_number_t	count,
-	__unused boolean_t			change)
+	__unused processor_set_t                pset,
+	__unused int                            flavor,
+	__unused processor_set_info_t   policy_info,
+	__unused mach_msg_type_number_t count,
+	__unused boolean_t                      change)
 {
-	return (KERN_INVALID_ARGUMENT);
+	return KERN_INVALID_ARGUMENT;
 }
 
 #undef pset_deallocate
 void pset_deallocate(processor_set_t pset);
 void
 pset_deallocate(
-__unused processor_set_t	pset)
+	__unused processor_set_t        pset)
 {
 	return;
 }
@@ -1243,7 +1411,7 @@ __unused processor_set_t	pset)
 void pset_reference(processor_set_t pset);
 void
 pset_reference(
-__unused processor_set_t	pset)
+	__unused processor_set_t        pset)
 {
 	return;
 }

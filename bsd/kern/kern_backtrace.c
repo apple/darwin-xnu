@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2016, 2019 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,6 +32,8 @@
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 
+#if DEVELOPMENT || DEBUG
+
 #define MAX_BACKTRACE  (128)
 
 #define BACKTRACE_USER (0)
@@ -39,21 +41,23 @@
 static int backtrace_sysctl SYSCTL_HANDLER_ARGS;
 
 SYSCTL_NODE(_kern, OID_AUTO, backtrace, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
-	"backtrace");
+    "backtrace");
 
 SYSCTL_PROC(_kern_backtrace, OID_AUTO, user,
-	CTLFLAG_RW | CTLFLAG_LOCKED, (void *)BACKTRACE_USER,
-	sizeof(uint64_t), backtrace_sysctl, "O", "take user backtrace of current thread");
+    CTLFLAG_RW | CTLFLAG_LOCKED, (void *)BACKTRACE_USER,
+    sizeof(uint64_t), backtrace_sysctl, "O",
+    "take user backtrace of current thread");
 
 static int
 backtrace_sysctl SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg2)
-	uintptr_t *bt;
-	uint32_t bt_len, bt_filled;
 	uintptr_t type = (uintptr_t)arg1;
-	bool user_64;
-	int err = 0;
+	uintptr_t *bt = NULL;
+	uint32_t bt_len = 0, bt_filled = 0;
+	size_t bt_size = 0;
+	int error = 0;
+	bool user_64 = false;
 
 	if (type != BACKTRACE_USER) {
 		return EINVAL;
@@ -64,23 +68,27 @@ backtrace_sysctl SYSCTL_HANDLER_ARGS
 	}
 
 	bt_len = req->oldlen > MAX_BACKTRACE ? MAX_BACKTRACE : req->oldlen;
-	bt = kalloc(sizeof(uintptr_t) * bt_len);
+	bt_size = sizeof(bt[0]) * bt_len;
+	bt = kalloc(bt_size);
 	if (!bt) {
 		return ENOBUFS;
 	}
-	bzero(bt, sizeof(uintptr_t) * bt_len);
-	err = backtrace_user(bt, bt_len, &bt_filled, &user_64);
-	if (err) {
+	memset(bt, 0, bt_size);
+	error = backtrace_user(bt, bt_len, &bt_filled, &user_64);
+	if (error) {
 		goto out;
 	}
+	bt_filled = min(bt_filled, bt_len);
 
-	err = copyout(bt, req->oldptr, bt_filled * sizeof(uint64_t));
-	if (err) {
+	error = copyout(bt, req->oldptr, sizeof(bt[0]) * bt_filled);
+	if (error) {
 		goto out;
 	}
 	req->oldidx = bt_filled;
 
 out:
-	kfree(bt, sizeof(uintptr_t) * bt_len);
-	return err;
+	kfree(bt, bt_size);
+	return error;
 }
+
+#endif /* DEVELOPMENT || DEBUG */

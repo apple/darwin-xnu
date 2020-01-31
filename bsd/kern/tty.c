@@ -2,7 +2,7 @@
  * Copyright (c) 1997-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -92,9 +92,9 @@
  *	  only when _all_ openers leave open().
  */
 #include <sys/param.h>
-#define	TTYDEFCHARS 1
+#define TTYDEFCHARS 1
 #include <sys/systm.h>
-#undef	TTYDEFCHARS
+#undef  TTYDEFCHARS
 #include <sys/ioctl.h>
 #include <sys/proc_internal.h>
 #include <sys/kauth.h>
@@ -112,28 +112,28 @@
 
 #include <dev/kmreg_com.h>
 #include <machine/cons.h>
-#include <sys/resource.h>	/* averunnable */
+#include <sys/resource.h>       /* averunnable */
 #include <kern/waitq.h>
 #include <libkern/section_keywords.h>
 
-static lck_grp_t	*tty_lck_grp;
-static lck_grp_attr_t	*tty_lck_grp_attr;
+static lck_grp_t        *tty_lck_grp;
+static lck_grp_attr_t   *tty_lck_grp_attr;
 static lck_attr_t      *tty_lck_attr;
 
 __private_extern__ int ttnread(struct tty *tp);
-static void	ttyecho(int c, struct tty *tp);
-static int	ttyoutput(int c, struct tty *tp);
-static void	ttypend(struct tty *tp);
-static void	ttyretype(struct tty *tp);
-static void	ttyrub(int c, struct tty *tp);
-static void	ttyrubo(struct tty *tp, int count);
-static void	ttystop(struct tty *tp, int rw);
-static void	ttyunblock(struct tty *tp);
-static int	ttywflush(struct tty *tp);
-static int	proc_compare(proc_t p1, proc_t p2);
+static void     ttyecho(int c, struct tty *tp);
+static int      ttyoutput(int c, struct tty *tp);
+static void     ttypend(struct tty *tp);
+static void     ttyretype(struct tty *tp);
+static void     ttyrub(int c, struct tty *tp);
+static void     ttyrubo(struct tty *tp, int count);
+static void     ttystop(struct tty *tp, int rw);
+static void     ttyunblock(struct tty *tp);
+static int      ttywflush(struct tty *tp);
+static int      proc_compare(proc_t p1, proc_t p2);
 
 void ttyhold(struct tty *tp);
-static void	ttydeallocate(struct tty *tp);
+static void     ttydeallocate(struct tty *tp);
 
 static int isctty(proc_t p, struct tty  *tp);
 static int isctty_sp(proc_t p, struct tty  *tp, struct session *sessp);
@@ -145,86 +145,86 @@ static int isctty_sp(proc_t p, struct tty  *tp, struct session *sessp);
  * are 0 then the character needs no special processing on output; classes
  * other than 0 might be translated or (not currently) require delays.
  */
-#define	E	0x00	/* Even parity. */
-#define	O	0x80	/* Odd parity. */
-#define	PARITY(c)	(char_type[c] & O)
+#define E       0x00    /* Even parity. */
+#define O       0x80    /* Odd parity. */
+#define PARITY(c)       (char_type[c] & O)
 
-#define	ALPHA	0x40	/* Alpha or underscore. */
-#define	ISALPHA(c)	(char_type[(c) & TTY_CHARMASK] & ALPHA)
+#define ALPHA   0x40    /* Alpha or underscore. */
+#define ISALPHA(c)      (char_type[(c) & TTY_CHARMASK] & ALPHA)
 
-#define	CCLASSMASK	0x3f
-#define	CCLASS(c)	(char_type[c] & CCLASSMASK)
+#define CCLASSMASK      0x3f
+#define CCLASS(c)       (char_type[c] & CCLASSMASK)
 /* 0b10xxxxxx is the mask for UTF-8 continuations */
-#define	CCONT(c)	((c & 0xc0) == 0x80)
+#define CCONT(c)        ((c & 0xc0) == 0x80)
 
-#define	BS	BACKSPACE
-#define	CC	CONTROL
-#define	CR	RETURN
-#define	NA	ORDINARY | ALPHA
-#define	NL	NEWLINE
-#define	NO	ORDINARY
-#define	TB	TAB
-#define	VT	VTAB
+#define BS      BACKSPACE
+#define CC      CONTROL
+#define CR      RETURN
+#define NA      ORDINARY | ALPHA
+#define NL      NEWLINE
+#define NO      ORDINARY
+#define TB      TAB
+#define VT      VTAB
 
 static u_char const char_type[] = {
-	E|CC, O|CC, O|CC, E|CC, O|CC, E|CC, E|CC, O|CC,	/* nul - bel */
-	O|BS, E|TB, E|NL, O|CC, E|VT, O|CR, O|CC, E|CC, /* bs - si */
-	O|CC, E|CC, E|CC, O|CC, E|CC, O|CC, O|CC, E|CC, /* dle - etb */
-	E|CC, O|CC, O|CC, E|CC, O|CC, E|CC, E|CC, O|CC, /* can - us */
-	O|NO, E|NO, E|NO, O|NO, E|NO, O|NO, O|NO, E|NO, /* sp - ' */
-	E|NO, O|NO, O|NO, E|NO, O|NO, E|NO, E|NO, O|NO, /* ( - / */
-	E|NA, O|NA, O|NA, E|NA, O|NA, E|NA, E|NA, O|NA, /* 0 - 7 */
-	O|NA, E|NA, E|NO, O|NO, E|NO, O|NO, O|NO, E|NO, /* 8 - ? */
-	O|NO, E|NA, E|NA, O|NA, E|NA, O|NA, O|NA, E|NA, /* @ - G */
-	E|NA, O|NA, O|NA, E|NA, O|NA, E|NA, E|NA, O|NA, /* H - O */
-	E|NA, O|NA, O|NA, E|NA, O|NA, E|NA, E|NA, O|NA, /* P - W */
-	O|NA, E|NA, E|NA, O|NO, E|NO, O|NO, O|NO, O|NA, /* X - _ */
-	E|NO, O|NA, O|NA, E|NA, O|NA, E|NA, E|NA, O|NA, /* ` - g */
-	O|NA, E|NA, E|NA, O|NA, E|NA, O|NA, O|NA, E|NA, /* h - o */
-	O|NA, E|NA, E|NA, O|NA, E|NA, O|NA, O|NA, E|NA, /* p - w */
-	E|NA, O|NA, O|NA, E|NO, O|NO, E|NO, E|NO, O|CC, /* x - del */
+	E | CC, O | CC, O | CC, E | CC, O | CC, E | CC, E | CC, O | CC, /* nul - bel */
+	O | BS, E | TB, E | NL, O | CC, E | VT, O | CR, O | CC, E | CC, /* bs - si */
+	O | CC, E | CC, E | CC, O | CC, E | CC, O | CC, O | CC, E | CC, /* dle - etb */
+	E | CC, O | CC, O | CC, E | CC, O | CC, E | CC, E | CC, O | CC, /* can - us */
+	O | NO, E | NO, E | NO, O | NO, E | NO, O | NO, O | NO, E | NO, /* sp - ' */
+	E | NO, O | NO, O | NO, E | NO, O | NO, E | NO, E | NO, O | NO, /* ( - / */
+	E | NA, O | NA, O | NA, E | NA, O | NA, E | NA, E | NA, O | NA, /* 0 - 7 */
+	O | NA, E | NA, E | NO, O | NO, E | NO, O | NO, O | NO, E | NO, /* 8 - ? */
+	O | NO, E | NA, E | NA, O | NA, E | NA, O | NA, O | NA, E | NA, /* @ - G */
+	E | NA, O | NA, O | NA, E | NA, O | NA, E | NA, E | NA, O | NA, /* H - O */
+	E | NA, O | NA, O | NA, E | NA, O | NA, E | NA, E | NA, O | NA, /* P - W */
+	O | NA, E | NA, E | NA, O | NO, E | NO, O | NO, O | NO, O | NA, /* X - _ */
+	E | NO, O | NA, O | NA, E | NA, O | NA, E | NA, E | NA, O | NA, /* ` - g */
+	O | NA, E | NA, E | NA, O | NA, E | NA, O | NA, O | NA, E | NA, /* h - o */
+	O | NA, E | NA, E | NA, O | NA, E | NA, O | NA, O | NA, E | NA, /* p - w */
+	E | NA, O | NA, O | NA, E | NO, O | NO, E | NO, E | NO, O | CC, /* x - del */
 	/*
 	 * Meta chars; should be settable per character set;
 	 * for now, treat them all as normal characters.
 	 */
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
-	NA,   NA,   NA,   NA,   NA,   NA,   NA,   NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
+	NA, NA, NA, NA, NA, NA, NA, NA,
 };
-#undef	BS
-#undef	CC
-#undef	CR
-#undef	NA
-#undef	NL
-#undef	NO
-#undef	TB
-#undef	VT
+#undef  BS
+#undef  CC
+#undef  CR
+#undef  NA
+#undef  NL
+#undef  NO
+#undef  TB
+#undef  VT
 
 /* Macros to clear/set/test flags. */
-#define	SET(t, f)	(t) |= (f)
-#define	CLR(t, f)	(t) &= ~(f)
-#define	ISSET(t, f)	((t) & (f))
+#define SET(t, f)       (t) |= (f)
+#define CLR(t, f)       (t) &= ~(f)
+#define ISSET(t, f)     ((t) & (f))
 
 /*
  * Input control starts when we would not be able to fit the maximum
  * contents of the ping-pong buffers and finishes when we would be able
  * to fit that much plus 1/8 more.
  */
-#define	I_HIGH_WATER	(TTYHOG - 2 * 256)	/* XXX */
-#define	I_LOW_WATER	((TTYHOG - 2 * 256) * 7 / 8)	/* XXX */
+#define I_HIGH_WATER    (TTYHOG - 2 * 256)      /* XXX */
+#define I_LOW_WATER     ((TTYHOG - 2 * 256) * 7 / 8)    /* XXX */
 
 static void
 termios32to64(struct termios32 *in, struct user_termios *out)
@@ -278,7 +278,7 @@ void
 tty_init(void)
 {
 	tty_lck_grp_attr = lck_grp_attr_alloc_init();
-	tty_lck_grp = lck_grp_alloc_init("tty",  tty_lck_grp_attr);
+	tty_lck_grp = lck_grp_alloc_init("tty", tty_lck_grp_attr);
 	tty_lck_attr = lck_attr_alloc_init();
 }
 
@@ -297,7 +297,7 @@ tty_init(void)
 void
 tty_lock(struct tty *tp)
 {
-	TTY_LOCK_NOTOWNED(tp);	/* debug assert */
+	TTY_LOCK_NOTOWNED(tp);  /* debug assert */
 	lck_mtx_lock(&tp->t_lock);
 }
 
@@ -316,7 +316,7 @@ tty_lock(struct tty *tp)
 void
 tty_unlock(struct tty *tp)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 	lck_mtx_unlock(&tp->t_lock);
 }
 
@@ -330,18 +330,19 @@ tty_unlock(struct tty *tp)
 int
 ttyopen(dev_t device, struct tty *tp)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	tp->t_dev = device;
 
 	if (!ISSET(tp->t_state, TS_ISOPEN)) {
 		SET(tp->t_state, TS_ISOPEN);
 		if (ISSET(tp->t_cflag, CLOCAL)) {
-			SET(tp->t_state, TS_CONNECTED); }
+			SET(tp->t_state, TS_CONNECTED);
+		}
 		bzero(&tp->t_winsize, sizeof(tp->t_winsize));
 	}
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -363,7 +364,7 @@ ttyclose(struct tty *tp)
 	struct session * oldsessp;
 	struct knote *kn;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	if (constty == tp) {
 		constty = NULL;
@@ -371,10 +372,10 @@ ttyclose(struct tty *tp)
 
 		/*
 		 * Closing current console tty; disable printing of console
-		 * messages at bottom-level driver. 
+		 * messages at bottom-level driver.
 		 */
 		(*cdevsw[major(tp->t_dev)].d_ioctl)
-			(tp->t_dev, KMIOCDISABLCONS, NULL, 0, current_proc());
+		(tp->t_dev, KMIOCDISABLCONS, NULL, 0, current_proc());
 	}
 
 	ttyflush(tp, FREAD | FWRITE);
@@ -386,16 +387,19 @@ ttyclose(struct tty *tp)
 	oldsessp = tp->t_session;
 	tp->t_pgrp = NULL;
 	tp->t_session = NULL;
-	if (oldsessp != SESSION_NULL)
+	if (oldsessp != SESSION_NULL) {
 		oldsessp->s_ttypgrpid = NO_PID;
+	}
 	proc_list_unlock();
 	/* drop the reference on prev session and pgrp */
 	/* SAFE: All callers drop the lock on return */
 	tty_unlock(tp);
-	if (oldsessp != SESSION_NULL)
+	if (oldsessp != SESSION_NULL) {
 		session_rele(oldsessp);
-	if (oldpg != PGRP_NULL)
+	}
+	if (oldpg != PGRP_NULL) {
 		pg_rele(oldpg);
+	}
 	tty_lock(tp);
 	tp->t_state = 0;
 	SLIST_FOREACH(kn, &tp->t_wsel.si_note, kn_selnext) {
@@ -407,18 +411,18 @@ ttyclose(struct tty *tp)
 	}
 	selthreadclear(&tp->t_rsel);
 
-	return (0);
+	return 0;
 }
 
-#define	FLUSHQ(q) {							\
-	if ((q)->c_cc)							\
-		ndflush(q, (q)->c_cc);					\
+#define FLUSHQ(q) {                                                     \
+	if ((q)->c_cc)                                                  \
+	        ndflush(q, (q)->c_cc);                                  \
 }
 
 /* Is 'c' a line delimiter ("break" character)? */
-#define	TTBREAKC(c, lflag)							\
-	((c) == '\n' || (((c) == cc[VEOF] ||				\
-	  (c) == cc[VEOL] || ((c) == cc[VEOL2] && lflag & IEXTEN)) &&	\
+#define TTBREAKC(c, lflag)                                                      \
+	((c) == '\n' || (((c) == cc[VEOF] ||                            \
+	  (c) == cc[VEOL] || ((c) == cc[VEOL2] && lflag & IEXTEN)) &&   \
 	 (c) != _POSIX_VDISABLE))
 
 /*
@@ -439,16 +443,17 @@ ttyinput(int c, struct tty *tp)
 	tcflag_t iflag, lflag;
 	cc_t *cc;
 	int i, err;
-	int retval = 0;			/* default return value */
+	int retval = 0;                 /* default return value */
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
-        
+	TTY_LOCK_OWNED(tp);     /* debug assert */
+
 	/*
 	 * If input is pending take it first.
 	 */
 	lflag = tp->t_lflag;
-	if (ISSET(lflag, PENDIN))
+	if (ISSET(lflag, PENDIN)) {
 		ttypend(tp);
+	}
 	/*
 	 * Gather stats.
 	 */
@@ -471,8 +476,9 @@ ttyinput(int c, struct tty *tp)
 	if (tp->t_rawq.c_cc + tp->t_canq.c_cc > I_HIGH_WATER - 3 &&
 	    (!ISSET(lflag, ICANON) || tp->t_canq.c_cc != 0) &&
 	    (ISSET(tp->t_cflag, CRTS_IFLOW) || ISSET(iflag, IXOFF)) &&
-	    !ISSET(tp->t_state, TS_TBLOCK))
+	    !ISSET(tp->t_state, TS_TBLOCK)) {
 		ttyblock(tp);
+	}
 
 	/* Handle exceptional conditions (break, parity, framing). */
 	cc = tp->t_cc;
@@ -482,7 +488,7 @@ ttyinput(int c, struct tty *tp)
 		if (ISSET(err, TTY_BI)) {
 			if (ISSET(iflag, IGNBRK)) {
 				goto out;
-                        }
+			}
 			if (ISSET(iflag, BRKINT)) {
 				ttyflush(tp, FREAD | FWRITE);
 				/* SAFE: All callers drop the lock on return */
@@ -491,29 +497,32 @@ ttyinput(int c, struct tty *tp)
 				tty_lock(tp);
 				goto endcase;
 			}
-			if (ISSET(iflag, PARMRK))
+			if (ISSET(iflag, PARMRK)) {
 				goto parmrk;
+			}
 		} else if ((ISSET(err, TTY_PE) && ISSET(iflag, INPCK))
-			|| ISSET(err, TTY_FE)) {
+		    || ISSET(err, TTY_FE)) {
 			if (ISSET(iflag, IGNPAR)) {
 				goto out;
-			}
-			else if (ISSET(iflag, PARMRK)) {
+			} else if (ISSET(iflag, PARMRK)) {
 parmrk:
 				if (tp->t_rawq.c_cc + tp->t_canq.c_cc >
-				    MAX_INPUT - 3)
+				    MAX_INPUT - 3) {
 					goto input_overflow;
+				}
 				(void)putc(0377 | TTY_QUOTE, &tp->t_rawq);
 				(void)putc(0 | TTY_QUOTE, &tp->t_rawq);
 				(void)putc(c | TTY_QUOTE, &tp->t_rawq);
 				goto endcase;
-			} else
+			} else {
 				c = 0;
+			}
 		}
 	}
 
-	if (!ISSET(tp->t_state, TS_TYPEN) && ISSET(iflag, ISTRIP))
+	if (!ISSET(tp->t_state, TS_TYPEN) && ISSET(iflag, ISTRIP)) {
 		CLR(c, 0x80);
+	}
 	if (!ISSET(lflag, EXTPROC)) {
 		/*
 		 * Check for literal nexting very first
@@ -540,20 +549,22 @@ parmrk:
 					if (ISSET(lflag, ECHOE)) {
 						(void)ttyoutput('^', tp);
 						(void)ttyoutput('\b', tp);
-					} else
+					} else {
 						ttyecho(c, tp);
+					}
 				}
 				SET(tp->t_state, TS_LNCH);
 				goto endcase;
 			}
 			if (CCEQ(cc[VDISCARD], c)) {
-				if (ISSET(lflag, FLUSHO))
+				if (ISSET(lflag, FLUSHO)) {
 					CLR(tp->t_lflag, FLUSHO);
-				else {
+				} else {
 					ttyflush(tp, FWRITE);
 					ttyecho(c, tp);
-					if (tp->t_rawq.c_cc + tp->t_canq.c_cc)
+					if (tp->t_rawq.c_cc + tp->t_canq.c_cc) {
 						ttyretype(tp);
+					}
 					SET(tp->t_lflag, FLUSHO);
 				}
 				goto startoutput;
@@ -564,8 +575,9 @@ parmrk:
 		 */
 		if (ISSET(lflag, ISIG)) {
 			if (CCEQ(cc[VINTR], c) || CCEQ(cc[VQUIT], c)) {
-				if (!ISSET(lflag, NOFLSH))
+				if (!ISSET(lflag, NOFLSH)) {
 					ttyflush(tp, FREAD | FWRITE);
+				}
 				ttyecho(c, tp);
 				/*
 				 * SAFE: All callers drop the lock on return;
@@ -583,8 +595,9 @@ parmrk:
 				goto endcase;
 			}
 			if (CCEQ(cc[VSUSP], c)) {
-				if (!ISSET(lflag, NOFLSH))
+				if (!ISSET(lflag, NOFLSH)) {
 					ttyflush(tp, FREAD);
+				}
 				ttyecho(c, tp);
 				/* SAFE: All callers drop the lock on return */
 				tty_unlock(tp);
@@ -600,19 +613,20 @@ parmrk:
 			if (CCEQ(cc[VSTOP], c)) {
 				if (!ISSET(tp->t_state, TS_TTSTOP)) {
 					SET(tp->t_state, TS_TTSTOP);
-                                        ttystop(tp, 0);
+					ttystop(tp, 0);
 					goto out;
 				}
 				if (!CCEQ(cc[VSTART], c)) {
 					goto out;
-                                }
+				}
 				/*
 				 * if VSTART == VSTOP then toggle
 				 */
 				goto endcase;
 			}
-			if (CCEQ(cc[VSTART], c))
+			if (CCEQ(cc[VSTART], c)) {
 				goto restartoutput;
+			}
 		}
 		/*
 		 * IGNCR, ICRNL, & INLCR
@@ -620,11 +634,12 @@ parmrk:
 		if (c == '\r') {
 			if (ISSET(iflag, IGNCR)) {
 				goto out;
-                        }
-			else if (ISSET(iflag, ICRNL))
+			} else if (ISSET(iflag, ICRNL)) {
 				c = '\n';
-		} else if (c == '\n' && ISSET(iflag, INLCR))
+			}
+		} else if (c == '\n' && ISSET(iflag, INLCR)) {
 			c = '\r';
+		}
 	}
 	if (!ISSET(tp->t_lflag, EXTPROC) && ISSET(lflag, ICANON)) {
 		/*
@@ -639,7 +654,7 @@ parmrk:
 				if (ISSET(iflag, IUTF8)) {
 					do {
 						ttyrub((c = unputc(&tp->t_rawq)), tp);
-					} while(tp->t_rawq.c_cc && CCONT(c));
+					} while (tp->t_rawq.c_cc && CCONT(c));
 				} else {
 					ttyrub(unputc(&tp->t_rawq), tp);
 				}
@@ -652,14 +667,16 @@ parmrk:
 		if (CCEQ(cc[VKILL], c)) {
 			if (ISSET(lflag, ECHOKE) &&
 			    tp->t_rawq.c_cc == tp->t_rocount &&
-			    !ISSET(lflag, ECHOPRT))
-				while (tp->t_rawq.c_cc)
+			    !ISSET(lflag, ECHOPRT)) {
+				while (tp->t_rawq.c_cc) {
 					ttyrub(unputc(&tp->t_rawq), tp);
-			else {
+				}
+			} else {
 				ttyecho(c, tp);
 				if (ISSET(lflag, ECHOK) ||
-				    ISSET(lflag, ECHOKE))
+				    ISSET(lflag, ECHOKE)) {
 					ttyecho('\n', tp);
+				}
 				FLUSHQ(&tp->t_rawq);
 				tp->t_rocount = 0;
 			}
@@ -675,18 +692,21 @@ parmrk:
 			/*
 			 * erase whitespace
 			 */
-			while ((c = unputc(&tp->t_rawq)) == ' ' || c == '\t')
+			while ((c = unputc(&tp->t_rawq)) == ' ' || c == '\t') {
 				ttyrub(c, tp);
-			if (c == -1)
+			}
+			if (c == -1) {
 				goto endcase;
+			}
 			/*
 			 * erase last char of word and remember the
 			 * next chars type (for ALTWERASE)
 			 */
 			ttyrub(c, tp);
 			c = unputc(&tp->t_rawq);
-			if (c == -1)
+			if (c == -1) {
 				goto endcase;
+			}
 			if (c == ' ' || c == '\t') {
 				(void)putc(c, &tp->t_rawq);
 				goto endcase;
@@ -698,8 +718,9 @@ parmrk:
 			do {
 				ttyrub(c, tp);
 				c = unputc(&tp->t_rawq);
-				if (c == -1)
+				if (c == -1) {
 					goto endcase;
+				}
 			} while (c != ' ' && c != '\t' &&
 			    (!ISSET(lflag, ALTWERASE) || ISALPHA(c) == ctype));
 			(void)putc(c, &tp->t_rawq);
@@ -722,8 +743,9 @@ parmrk:
 				tty_pgsignal(tp, SIGINFO, 1);
 				tty_lock(tp);
 			}
-			if (!ISSET(lflag, NOKERNINFO))
+			if (!ISSET(lflag, NOKERNINFO)) {
 				ttyinfo_locked(tp);
+			}
 			goto endcase;
 		}
 	}
@@ -733,15 +755,17 @@ parmrk:
 	if (tp->t_rawq.c_cc + tp->t_canq.c_cc >= MAX_INPUT) {
 input_overflow:
 		if (ISSET(iflag, IMAXBEL)) {
-			if (tp->t_outq.c_cc < tp->t_hiwat)
+			if (tp->t_outq.c_cc < tp->t_hiwat) {
 				(void)ttyoutput(CTRL('g'), tp);
+			}
 		}
 		goto endcase;
 	}
 
-	if (   c == 0377 && ISSET(iflag, PARMRK) && !ISSET(iflag, ISTRIP)
-	     && ISSET(iflag, IGNBRK|IGNPAR) != (IGNBRK|IGNPAR))
+	if (c == 0377 && ISSET(iflag, PARMRK) && !ISSET(iflag, ISTRIP)
+	    && ISSET(iflag, IGNBRK | IGNPAR) != (IGNBRK | IGNPAR)) {
 		(void)putc(0377 | TTY_QUOTE, &tp->t_rawq);
+	}
 
 	/*
 	 * Put data char in q for user and
@@ -757,8 +781,9 @@ input_overflow:
 			tp->t_rocount = 0;
 			catq(&tp->t_rawq, &tp->t_canq);
 			ttwakeup(tp);
-		} else if (tp->t_rocount++ == 0)
+		} else if (tp->t_rocount++ == 0) {
 			tp->t_rocol = tp->t_column;
+		}
 		if (ISSET(tp->t_state, TS_ERASE)) {
 			/*
 			 * end of prterase \.../
@@ -786,8 +811,8 @@ endcase:
 	 */
 	if (ISSET(tp->t_state, TS_TTSTOP) &&
 	    !ISSET(iflag, IXANY) && cc[VSTART] != cc[VSTOP]) {
-	    	goto out;
-        }
+		goto out;
+	}
 
 restartoutput:
 	CLR(tp->t_lflag, FLUSHO);
@@ -798,7 +823,7 @@ startoutput:
 	retval = ttstart(tp);
 
 out:
-	return (retval);
+	return retval;
 }
 
 
@@ -824,17 +849,19 @@ ttyoutput(int c, struct tty *tp)
 	tcflag_t oflag;
 	int col;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	oflag = tp->t_oflag;
 	if (!ISSET(oflag, OPOST)) {
-		if (ISSET(tp->t_lflag, FLUSHO))
-			return (-1);
-		if (putc(c, &tp->t_outq))
-			return (c);
+		if (ISSET(tp->t_lflag, FLUSHO)) {
+			return -1;
+		}
+		if (putc(c, &tp->t_outq)) {
+			return c;
+		}
 		tk_nout++;
 		tp->t_outcc++;
-		return (-1);
+		return -1;
 	}
 	/*
 	 * Do tab expansion if OXTABS is set.  Special case if we external
@@ -852,10 +879,11 @@ ttyoutput(int c, struct tty *tp)
 			tp->t_outcc += c;
 		}
 		tp->t_column += c;
-		return (c == col ? -1 : '\t');
+		return c == col ? -1 : '\t';
 	}
-	if (c == CEOT && ISSET(oflag, ONOEOT))
-		return (-1);
+	if (c == CEOT && ISSET(oflag, ONOEOT)) {
+		return -1;
+	}
 
 	/*
 	 * Newline translation: if ONLCR is set,
@@ -864,25 +892,30 @@ ttyoutput(int c, struct tty *tp)
 	if (c == '\n' && ISSET(tp->t_oflag, ONLCR)) {
 		tk_nout++;
 		tp->t_outcc++;
-		if (putc('\r', &tp->t_outq))
-			return (c);
+		if (putc('\r', &tp->t_outq)) {
+			return c;
+		}
 	}
-        /* If OCRNL is set, translate "\r" into "\n". */
-        else if (c == '\r' && ISSET(tp->t_oflag, OCRNL))
-                c = '\n';
-        /* If ONOCR is set, don't transmit CRs when on column 0. */
-        else if (c == '\r' && ISSET(tp->t_oflag, ONOCR) && tp->t_column == 0)
-                return (-1);
+	/* If OCRNL is set, translate "\r" into "\n". */
+	else if (c == '\r' && ISSET(tp->t_oflag, OCRNL)) {
+		c = '\n';
+	}
+	/* If ONOCR is set, don't transmit CRs when on column 0. */
+	else if (c == '\r' && ISSET(tp->t_oflag, ONOCR) && tp->t_column == 0) {
+		return -1;
+	}
 	tk_nout++;
 	tp->t_outcc++;
-	if (!ISSET(tp->t_lflag, FLUSHO) && putc(c, &tp->t_outq))
-		return (c);
+	if (!ISSET(tp->t_lflag, FLUSHO) && putc(c, &tp->t_outq)) {
+		return c;
+	}
 
 	col = tp->t_column;
 	switch (CCLASS(c)) {
 	case BACKSPACE:
-		if (col > 0)
+		if (col > 0) {
 			--col;
+		}
 		break;
 	case CONTROL:
 		break;
@@ -898,7 +931,7 @@ ttyoutput(int c, struct tty *tp)
 		break;
 	}
 	tp->t_column = col;
-	return (-1);
+	return -1;
 }
 
 /*
@@ -954,18 +987,18 @@ ttyclrpgrphup(struct tty *tp)
  * Notes:	This is supported to ensure the line discipline interfaces
  *		all have the same locking semantics.
  *
- *		This function is called from 
+ *		This function is called from
  */
 int
 ttioctl(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 {
-	int	retval;
+	int     retval;
 
 	tty_lock(tp);
 	retval = ttioctl_locked(tp, cmd, data, flag, p);
 	tty_unlock(tp);
 
-	return (retval);
+	return retval;
 }
 
 
@@ -1036,7 +1069,7 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 	struct session *sessp, *oldsessp;
 	struct tty *oldtp;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	ut = (struct uthread *)get_bsdthread_info(current_thread());
 	/* If the ioctl involves modification, signal if in the background. */
@@ -1100,28 +1133,30 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		break;
 	}
 
-	switch (cmd) {			/* Process the ioctl. */
-	case FIOASYNC:			/* set/clear async i/o */
-		if (*(int *)data)
+	switch (cmd) {                  /* Process the ioctl. */
+	case FIOASYNC:                  /* set/clear async i/o */
+		if (*(int *)data) {
 			SET(tp->t_state, TS_ASYNC);
-		else
+		} else {
 			CLR(tp->t_state, TS_ASYNC);
+		}
 		break;
-	case FIONBIO:			/* set/clear non-blocking i/o */
-		break;			/* XXX: delete. */
-	case FIONREAD:			/* get # bytes to read */
+	case FIONBIO:                   /* set/clear non-blocking i/o */
+		break;                  /* XXX: delete. */
+	case FIONREAD:                  /* get # bytes to read */
 		*(int *)data = ttnread(tp);
 		break;
-	case TIOCEXCL:			/* set exclusive use of tty */
+	case TIOCEXCL:                  /* set exclusive use of tty */
 		SET(tp->t_state, TS_XCLUDE);
 		break;
-	case TIOCFLUSH: {		/* flush buffers */
+	case TIOCFLUSH: {               /* flush buffers */
 		int flags = *(int *)data;
 
-		if (flags == 0)
+		if (flags == 0) {
 			flags = FREAD | FWRITE;
-		else
+		} else {
 			flags &= FREAD | FWRITE;
+		}
 		ttyflush(tp, flags);
 		break;
 	}
@@ -1131,54 +1166,56 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 
 		/* No break - Fall through to BSD code */
 	}
-	case TIOCCONS: {			/* become virtual console */
+	case TIOCCONS: {                        /* become virtual console */
 		if (*(int *)data) {
 			if (constty && constty != tp &&
 			    ISSET(constty->t_state, TS_CONNECTED)) {
 				error = EBUSY;
 				goto out;
 			}
-			if ( (error = suser(kauth_cred_get(), &p->p_acflag)) ) 
+			if ((error = suser(kauth_cred_get(), &p->p_acflag))) {
 				goto out;
+			}
 			constty = tp;
 		} else if (tp == constty) {
 			constty = NULL;
 		}
 		if (constty) {
 			(*cdevsw[major(constty->t_dev)].d_ioctl)
-				(constty->t_dev, KMIOCDISABLCONS, NULL, 0, p);
+			(constty->t_dev, KMIOCDISABLCONS, NULL, 0, p);
 		} else {
 			(*cdevsw[major(tp->t_dev)].d_ioctl)
-				(tp->t_dev, KMIOCDISABLCONS, NULL, 0, p);
+			(tp->t_dev, KMIOCDISABLCONS, NULL, 0, p);
 		}
 		break;
 	}
-	case TIOCDRAIN:			/* wait till output drained */
+	case TIOCDRAIN:                 /* wait till output drained */
 		error = ttywait(tp);
-		if (error)
+		if (error) {
 			goto out;
+		}
 		break;
-	case TIOCGETA_32:		/* get termios struct */
+	case TIOCGETA_32:               /* get termios struct */
 #ifdef __LP64__
 		termios64to32((struct user_termios *)&tp->t_termios, (struct termios32 *)data);
 #else
 		bcopy(&tp->t_termios, data, sizeof(struct termios));
 #endif
 		break;
-	case TIOCGETA_64:		/* get termios struct */
+	case TIOCGETA_64:               /* get termios struct */
 #ifdef __LP64__
 		bcopy(&tp->t_termios, data, sizeof(struct termios));
 #else
 		termios32to64((struct termios32 *)&tp->t_termios, (struct user_termios *)data);
 #endif
 		break;
-	case TIOCGETD:			/* get line discipline */
+	case TIOCGETD:                  /* get line discipline */
 		*(int *)data = tp->t_line;
 		break;
-	case TIOCGWINSZ:		/* get window size */
+	case TIOCGWINSZ:                /* get window size */
 		*(struct winsize *)data = tp->t_winsize;
 		break;
-	case TIOCGPGRP:			/* get pgrp of tty */
+	case TIOCGPGRP:                 /* get pgrp of tty */
 		if (!isctty(p, tp)) {
 			error = ENOTTY;
 			goto out;
@@ -1186,54 +1223,56 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		*(int *)data = tp->t_pgrp ? tp->t_pgrp->pg_id : NO_PID;
 		break;
 #ifdef TIOCHPCL
-	case TIOCHPCL:			/* hang up on last close */
+	case TIOCHPCL:                  /* hang up on last close */
 		SET(tp->t_cflag, HUPCL);
 		break;
 #endif
-	case TIOCNXCL:			/* reset exclusive use of tty */
+	case TIOCNXCL:                  /* reset exclusive use of tty */
 		CLR(tp->t_state, TS_XCLUDE);
 		break;
-	case TIOCOUTQ:			/* output queue size */
+	case TIOCOUTQ:                  /* output queue size */
 		*(int *)data = tp->t_outq.c_cc;
 		break;
-	case TIOCSETA_32:			/* set termios struct */
+	case TIOCSETA_32:                       /* set termios struct */
 	case TIOCSETA_64:
-	case TIOCSETAW_32:			/* drain output, set */
+	case TIOCSETAW_32:                      /* drain output, set */
 	case TIOCSETAW_64:
-	case TIOCSETAF_32:		/* drn out, fls in, set */
+	case TIOCSETAF_32:              /* drn out, fls in, set */
 	case TIOCSETAF_64:
-	{		/* drn out, fls in, set */
+	{               /* drn out, fls in, set */
 		struct termios *t = (struct termios *)data;
 		struct termios lcl_termios;
 
 #ifdef __LP64__
-		if (cmd==TIOCSETA_32 || cmd==TIOCSETAW_32 || cmd==TIOCSETAF_32) {
+		if (cmd == TIOCSETA_32 || cmd == TIOCSETAW_32 || cmd == TIOCSETAF_32) {
 			termios32to64((struct termios32 *)data, (struct user_termios *)&lcl_termios);
 			t = &lcl_termios;
 		}
 #else
-		if (cmd==TIOCSETA_64 || cmd==TIOCSETAW_64 || cmd==TIOCSETAF_64) {
+		if (cmd == TIOCSETA_64 || cmd == TIOCSETAW_64 || cmd == TIOCSETAF_64) {
 			termios64to32((struct user_termios *)data, (struct termios32 *)&lcl_termios);
 			t = &lcl_termios;
 		}
 #endif
 #if 0
-	/* XXX bogus test; always false */
+		/* XXX bogus test; always false */
 		if (t->c_ispeed < 0 || t->c_ospeed < 0) {
 			error = EINVAL;
 			goto out;
 		}
-#endif	/* 0 - leave in; may end up being a conformance issue */
-		if (t->c_ispeed == 0)
+#endif  /* 0 - leave in; may end up being a conformance issue */
+		if (t->c_ispeed == 0) {
 			t->c_ispeed = t->c_ospeed;
+		}
 		if (cmd == TIOCSETAW_32 || cmd == TIOCSETAF_32 ||
 		    cmd == TIOCSETAW_64 || cmd == TIOCSETAF_64) {
 			error = ttywait(tp);
 			if (error) {
 				goto out;
 			}
-			if (cmd == TIOCSETAF_32 || cmd == TIOCSETAF_64)
+			if (cmd == TIOCSETAF_32 || cmd == TIOCSETAF_64) {
 				ttyflush(tp, FREAD);
+			}
 		}
 		if (!ISSET(t->c_cflag, CIGNORE)) {
 			/*
@@ -1257,11 +1296,12 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 				ttwwakeup(tp);
 			}
 			if ((ISSET(tp->t_state, TS_CARR_ON) ||
-			     ISSET(t->c_cflag, CLOCAL)) &&
-			    !ISSET(tp->t_state, TS_ZOMBIE))
+			    ISSET(t->c_cflag, CLOCAL)) &&
+			    !ISSET(tp->t_state, TS_ZOMBIE)) {
 				SET(tp->t_state, TS_CONNECTED);
-			else
+			} else {
 				CLR(tp->t_state, TS_CONNECTED);
+			}
 			tp->t_cflag = t->c_cflag;
 			tp->t_ispeed = t->c_ispeed;
 			tp->t_ospeed = t->c_ospeed;
@@ -1269,9 +1309,9 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		}
 		if (ISSET(t->c_lflag, ICANON) != ISSET(tp->t_lflag, ICANON) &&
 		    cmd != TIOCSETAF_32 && cmd != TIOCSETAF_64) {
-			if (ISSET(t->c_lflag, ICANON))
+			if (ISSET(t->c_lflag, ICANON)) {
 				SET(tp->t_lflag, PENDIN);
-			else {
+			} else {
 				/*
 				 * XXX we really shouldn't allow toggling
 				 * ICANON while we're in a non-termios line
@@ -1279,12 +1319,12 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 				 * panicing for a null queue.
 				 */
 				if (tp->t_rawq.c_cs && tp->t_canq.c_cs) {
-				    struct clist tq;
+					struct clist tq;
 
-				    catq(&tp->t_rawq, &tp->t_canq);
-				    tq = tp->t_rawq;
-				    tp->t_rawq = tp->t_canq;
-				    tp->t_canq = tq;
+					catq(&tp->t_rawq, &tp->t_canq);
+					tq = tp->t_rawq;
+					tp->t_rawq = tp->t_canq;
+					tp->t_canq = tq;
 				}
 				CLR(tp->t_lflag, PENDIN);
 			}
@@ -1295,18 +1335,20 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		/*
 		 * Make the EXTPROC bit read only.
 		 */
-		if (ISSET(tp->t_lflag, EXTPROC))
+		if (ISSET(tp->t_lflag, EXTPROC)) {
 			SET(t->c_lflag, EXTPROC);
-		else
+		} else {
 			CLR(t->c_lflag, EXTPROC);
+		}
 		tp->t_lflag = t->c_lflag | ISSET(tp->t_lflag, PENDIN);
 		if (t->c_cc[VMIN] != tp->t_cc[VMIN] ||
-		    t->c_cc[VTIME] != tp->t_cc[VTIME])
+		    t->c_cc[VTIME] != tp->t_cc[VTIME]) {
 			ttwakeup(tp);
+		}
 		bcopy(t->c_cc, tp->t_cc, sizeof(t->c_cc));
 		break;
 	}
-	case TIOCSETD: {		/* set line discipline */
+	case TIOCSETD: {                /* set line discipline */
 		int t = *(int *)data;
 		dev_t device = tp->t_dev;
 
@@ -1330,7 +1372,7 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		}
 		break;
 	}
-	case TIOCSTART:			/* start output, like ^Q */
+	case TIOCSTART:                 /* start output, like ^Q */
 		if (ISSET(tp->t_state, TS_TTSTOP) ||
 		    ISSET(tp->t_lflag, FLUSHO)) {
 			CLR(tp->t_lflag, FLUSHO);
@@ -1338,7 +1380,7 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 			ttstart(tp);
 		}
 		break;
-	case TIOCSTI:			/* simulate terminal input */
+	case TIOCSTI:                   /* simulate terminal input */
 		if (suser(kauth_cred_get(), NULL) && (flag & FREAD) == 0) {
 			error = EPERM;
 			goto out;
@@ -1349,10 +1391,10 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		}
 		(*linesw[tp->t_line].l_rint)(*(u_char *)data, tp);
 		break;
-	case TIOCSTOP:			/* stop output, like ^S */
+	case TIOCSTOP:                  /* stop output, like ^S */
 		if (!ISSET(tp->t_state, TS_TTSTOP)) {
 			SET(tp->t_state, TS_TTSTOP);
-                        ttystop(tp, 0);
+			ttystop(tp, 0);
 		}
 		break;
 	case TIOCIXON:
@@ -1361,7 +1403,7 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 	case TIOCIXOFF:
 		ttyblock(tp);
 		break;
-	case TIOCSCTTY:			/* become controlling tty */
+	case TIOCSCTTY:                 /* become controlling tty */
 		/* Session ctty vnode pointer set in vnode layer. */
 		sessp = proc_session(p);
 		if (sessp == SESSION_NULL) {
@@ -1418,8 +1460,9 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		proc_list_lock();
 		oldsessp = tp->t_session;
 		oldpg = tp->t_pgrp;
-		if (oldsessp != SESSION_NULL)
+		if (oldsessp != SESSION_NULL) {
 			oldsessp->s_ttypgrpid = NO_PID;
+		}
 		/* do not drop refs on sessp and pg as tp holds them */
 		tp->t_session = sessp;
 		tp->t_pgrp = pg;
@@ -1428,35 +1471,40 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		/* SAFE: All callers drop the lock on return */
 		tty_unlock(tp);
 		/* drop the reference on prev session and pgrp */
-		if (oldsessp != SESSION_NULL)
+		if (oldsessp != SESSION_NULL) {
 			session_rele(oldsessp);
-		if (oldpg != PGRP_NULL)
+		}
+		if (oldpg != PGRP_NULL) {
 			pg_rele(oldpg);
-		if (NULL != oldtp)
+		}
+		if (NULL != oldtp) {
 			ttyfree(oldtp);
+		}
 		tty_lock(tp);
 		break;
 
-	case TIOCSPGRP: {		/* set pgrp of tty */
+	case TIOCSPGRP: {               /* set pgrp of tty */
 		struct pgrp *pgrp = PGRP_NULL;
 
 		sessp = proc_session(p);
 		if (!isctty_sp(p, tp, sessp)) {
-			if (sessp != SESSION_NULL)
+			if (sessp != SESSION_NULL) {
 				session_rele(sessp);
+			}
 			error = ENOTTY;
 			goto out;
-		}
-		else if ((pgrp = pgfind(*(int *)data)) == PGRP_NULL) {
-			if (sessp != SESSION_NULL)
+		} else if ((pgrp = pgfind(*(int *)data)) == PGRP_NULL) {
+			if (sessp != SESSION_NULL) {
 				session_rele(sessp);
+			}
 			error = EINVAL;
 			goto out;
-		 } else if (pgrp->pg_session != sessp) {
+		} else if (pgrp->pg_session != sessp) {
 			/* SAFE: All callers drop the lock on return */
 			tty_unlock(tp);
-			if (sessp != SESSION_NULL)
+			if (sessp != SESSION_NULL) {
 				session_rele(sessp);
+			}
 			pg_rele(pgrp);
 			tty_lock(tp);
 			error = EPERM;
@@ -1468,8 +1516,9 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		 * case.
 		 */
 		if (ISSET(tp->t_state, TS_PGRPHUP)) {
-			if (sessp != SESSION_NULL)
+			if (sessp != SESSION_NULL) {
 				session_rele(sessp);
+			}
 			pg_rele(pgrp);
 			error = EPERM;
 			goto out;
@@ -1498,19 +1547,21 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 
 		/* SAFE: All callers drop the lock on return */
 		tty_unlock(tp);
-		if (oldpg != PGRP_NULL)
+		if (oldpg != PGRP_NULL) {
 			pg_rele(oldpg);
-		if (sessp != SESSION_NULL)
+		}
+		if (sessp != SESSION_NULL) {
 			session_rele(sessp);
+		}
 		tty_lock(tp);
 		break;
 	}
-	case TIOCSTAT:			/* simulate control-T */
+	case TIOCSTAT:                  /* simulate control-T */
 		ttyinfo_locked(tp);
 		break;
-	case TIOCSWINSZ:		/* set window size */
+	case TIOCSWINSZ:                /* set window size */
 		if (bcmp((caddr_t)&tp->t_winsize, data,
-		    sizeof (struct winsize))) {
+		    sizeof(struct winsize))) {
 			tp->t_winsize = *(struct winsize *)data;
 			/* SAFE: All callers drop the lock on return */
 			tty_unlock(tp);
@@ -1529,7 +1580,7 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		break;
 	case TIOCGDRAINWAIT:
 		*(int *)data = tp->t_timeout / hz;
-		break; 
+		break;
 	default:
 		error = ttcompat(tp, cmd, data, flag, p);
 		goto out;
@@ -1537,7 +1588,7 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 
 	error = 0;
 out:
-	return(error);
+	return error;
 }
 
 
@@ -1612,14 +1663,14 @@ out:
 int
 ttselect(dev_t dev, int rw, void *wql, proc_t p)
 {
-	int	rv;
+	int     rv;
 	struct tty *tp = cdevsw[major(dev)].d_ttys[minor(dev)];
 
 	tty_lock(tp);
 	rv =  ttyselect(tp, rw, wql, p);
 	tty_unlock(tp);
 
-	return (rv);
+	return rv;
 }
 
 
@@ -1631,17 +1682,19 @@ ttnread(struct tty *tp)
 {
 	int nread;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
-	if (ISSET(tp->t_lflag, PENDIN))
+	if (ISSET(tp->t_lflag, PENDIN)) {
 		ttypend(tp);
+	}
 	nread = tp->t_canq.c_cc;
 	if (!ISSET(tp->t_lflag, ICANON)) {
 		nread += tp->t_rawq.c_cc;
-		if (nread < tp->t_cc[VMIN] && tp->t_cc[VTIME] == 0)
+		if (nread < tp->t_cc[VMIN] && tp->t_cc[VTIME] == 0) {
 			nread = 0;
+		}
 	}
-	return (nread);
+	return nread;
 }
 
 
@@ -1668,29 +1721,32 @@ ttywait(struct tty *tp)
 {
 	int error;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	error = 0;
 	while ((tp->t_outq.c_cc || ISSET(tp->t_state, TS_BUSY)) &&
-	       ISSET(tp->t_state, TS_CONNECTED) && tp->t_oproc) {
+	    ISSET(tp->t_state, TS_CONNECTED) && tp->t_oproc) {
 		(*tp->t_oproc)(tp);
 		if ((tp->t_outq.c_cc || ISSET(tp->t_state, TS_BUSY)) &&
 		    ISSET(tp->t_state, TS_CONNECTED)) {
 			SET(tp->t_state, TS_SO_OCOMPLETE);
 			error = ttysleep(tp, TSA_OCOMPLETE(tp),
-					 TTOPRI | PCATCH, "ttywai",
-					 tp->t_timeout);
+			    TTOPRI | PCATCH, "ttywai",
+			    tp->t_timeout);
 			if (error) {
-				if (error == EWOULDBLOCK)
+				if (error == EWOULDBLOCK) {
 					error = EIO;
+				}
 				break;
 			}
-		} else
+		} else {
 			break;
+		}
 	}
-	if (!error && (tp->t_outq.c_cc || ISSET(tp->t_state, TS_BUSY)))
+	if (!error && (tp->t_outq.c_cc || ISSET(tp->t_state, TS_BUSY))) {
 		error = EIO;
-	return (error);
+	}
+	return error;
 }
 
 /*
@@ -1701,7 +1757,7 @@ ttywait(struct tty *tp)
 static void
 ttystop(struct tty *tp, int rw)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	(*cdevsw[major(tp->t_dev)].d_stop)(tp, rw);
 }
@@ -1716,11 +1772,12 @@ ttywflush(struct tty *tp)
 {
 	int error;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
-	if ((error = ttywait(tp)) == 0)
+	if ((error = ttywait(tp)) == 0) {
 		ttyflush(tp, FREAD);
-	return (error);
+	}
+	return error;
 }
 
 /*
@@ -1731,7 +1788,7 @@ ttywflush(struct tty *tp)
 void
 ttyflush(struct tty *tp, int rw)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 #if 0
 again:
@@ -1740,8 +1797,8 @@ again:
 		FLUSHQ(&tp->t_outq);
 		CLR(tp->t_state, TS_TTSTOP);
 	}
-        ttystop(tp, rw);
-        if (rw & FREAD) {
+	ttystop(tp, rw);
+	if (rw & FREAD) {
 		FLUSHQ(&tp->t_canq);
 		FLUSHQ(&tp->t_rawq);
 		CLR(tp->t_lflag, PENDIN);
@@ -1750,8 +1807,9 @@ again:
 		CLR(tp->t_state, TS_LOCAL);
 		ttwakeup(tp);
 		if (ISSET(tp->t_state, TS_TBLOCK)) {
-			if (rw & FWRITE)
+			if (rw & FWRITE) {
 				FLUSHQ(&tp->t_outq);
+			}
 			ttyunblock(tp);
 
 			/*
@@ -1776,7 +1834,7 @@ again:
 				 */
 				SET(tp->t_state, TS_SO_OCOMPLETE);
 				ttysleep(tp, TSA_OCOMPLETE(tp), TTOPRI,
-					 "ttyfls", hz / 10);
+				    "ttyfls", hz / 10);
 				/*
 				 * Don't try sending the stop character again.
 				 */
@@ -1816,12 +1874,13 @@ termioschars(struct termios *t)
 void
 ttyblock(struct tty *tp)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	SET(tp->t_state, TS_TBLOCK);
 	if (ISSET(tp->t_iflag, IXOFF) && tp->t_cc[VSTOP] != _POSIX_VDISABLE &&
-	    putc(tp->t_cc[VSTOP], &tp->t_outq) != 0)
-		CLR(tp->t_state, TS_TBLOCK);	/* try again later */
+	    putc(tp->t_cc[VSTOP], &tp->t_outq) != 0) {
+		CLR(tp->t_state, TS_TBLOCK);    /* try again later */
+	}
 	ttstart(tp);
 }
 
@@ -1836,12 +1895,13 @@ ttyblock(struct tty *tp)
 static void
 ttyunblock(struct tty *tp)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	CLR(tp->t_state, TS_TBLOCK);
 	if (ISSET(tp->t_iflag, IXOFF) && tp->t_cc[VSTART] != _POSIX_VDISABLE &&
-	    putc(tp->t_cc[VSTART], &tp->t_outq) != 0)
-		SET(tp->t_state, TS_TBLOCK);	/* try again later */
+	    putc(tp->t_cc[VSTART], &tp->t_outq) != 0) {
+		SET(tp->t_state, TS_TBLOCK);    /* try again later */
+	}
 	ttstart(tp);
 }
 
@@ -1865,12 +1925,13 @@ ttyunblock(struct tty *tp)
 int
 ttstart(struct tty *tp)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
-	if (tp->t_oproc != NULL)	/* XXX: Kludge for pty. */
+	if (tp->t_oproc != NULL) {      /* XXX: Kludge for pty. */
 		(*tp->t_oproc)(tp);
+	}
 
-	return (0);
+	return 0;
 }
 
 
@@ -1884,12 +1945,13 @@ ttstart(struct tty *tp)
 int
 ttylclose(struct tty *tp, int flag)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
-	if ( (flag & FNONBLOCK) || ttywflush(tp))
+	if ((flag & FNONBLOCK) || ttywflush(tp)) {
 		ttyflush(tp, FREAD | FWRITE);
+	}
 
-	return (0);
+	return 0;
 }
 
 
@@ -1905,9 +1967,9 @@ ttylclose(struct tty *tp, int flag)
 int
 ttymodem(struct tty *tp, int flag)
 {
-	int rval = 1;		/* default return value */
+	int rval = 1;           /* default return value */
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	if (ISSET(tp->t_state, TS_CARR_ON) && ISSET(tp->t_cflag, MDMBUF)) {
 		/*
@@ -1922,7 +1984,7 @@ ttymodem(struct tty *tp, int flag)
 		} else if (!ISSET(tp->t_state, TS_CAR_OFLOW)) {
 			SET(tp->t_state, TS_CAR_OFLOW);
 			SET(tp->t_state, TS_TTSTOP);
-                        ttystop(tp, 0);
+			ttystop(tp, 0);
 		}
 	} else if (flag == 0) {
 		/*
@@ -1933,8 +1995,9 @@ ttymodem(struct tty *tp, int flag)
 		    !ISSET(tp->t_cflag, CLOCAL)) {
 			SET(tp->t_state, TS_ZOMBIE);
 			CLR(tp->t_state, TS_CONNECTED);
-			if (tp->t_session && tp->t_session->s_leader)
+			if (tp->t_session && tp->t_session->s_leader) {
 				psignal(tp->t_session->s_leader, SIGHUP);
+			}
 			ttyflush(tp, FREAD | FWRITE);
 			rval = 0;
 			goto out;
@@ -1944,15 +2007,16 @@ ttymodem(struct tty *tp, int flag)
 		 * Carrier now on.
 		 */
 		SET(tp->t_state, TS_CARR_ON);
-		if (!ISSET(tp->t_state, TS_ZOMBIE))
+		if (!ISSET(tp->t_state, TS_ZOMBIE)) {
 			SET(tp->t_state, TS_CONNECTED);
+		}
 		wakeup(TSA_CARR_ON(tp));
 		ttwakeup(tp);
 		ttwwakeup(tp);
 	}
 
 out:
-	return (rval);
+	return rval;
 }
 
 
@@ -1968,15 +2032,16 @@ ttypend(struct tty *tp)
 	struct clist tq;
 	int c;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	CLR(tp->t_lflag, PENDIN);
 	SET(tp->t_state, TS_TYPEN);
 	tq = tp->t_rawq;
 	tp->t_rawq.c_cc = 0;
 	tp->t_rawq.c_cf = tp->t_rawq.c_cl = NULL;
-	while ((c = getc(&tq)) >= 0)
+	while ((c = getc(&tq)) >= 0) {
 		ttyinput(c, tp);
+	}
 	CLR(tp->t_state, TS_TYPEN);
 }
 
@@ -1998,11 +2063,11 @@ ttread(struct tty *tp, struct uio *uio, int flag)
 	proc_t p = current_proc();
 	int first, error = 0;
 	int has_etime = 0, last_cc = 0;
-	long slp = 0;		/* XXX this should be renamed `timo'. */
+	long slp = 0;           /* XXX this should be renamed `timo'. */
 	struct uthread *ut;
 	struct pgrp * pg;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	ut = (struct uthread *)get_bsdthread_info(current_thread());
 
@@ -2013,7 +2078,7 @@ loop:
 	 */
 	if (ISSET(lflag, PENDIN)) {
 		ttypend(tp);
-		lflag = tp->t_lflag;	/* XXX ttypend() clobbers it */
+		lflag = tp->t_lflag;    /* XXX ttypend() clobbers it */
 	}
 
 	/*
@@ -2021,14 +2086,14 @@ loop:
 	 */
 	if (isbackground(p, tp)) {
 		if ((p->p_sigignore & sigmask(SIGTTIN)) ||
-		   (ut->uu_sigmask & sigmask(SIGTTIN)) ||
+		    (ut->uu_sigmask & sigmask(SIGTTIN)) ||
 		    p->p_lflag & P_LPPWAIT) {
-		    	error = EIO;
+			error = EIO;
 			goto err;
 		}
 		pg = proc_pgrp(p);
 		if (pg == PGRP_NULL) {
-		    	error = EIO;
+			error = EIO;
 			goto err;
 		}
 		if (pg->pg_jobc == 0) {
@@ -2036,7 +2101,7 @@ loop:
 			tty_unlock(tp);
 			pg_rele(pg);
 			tty_lock(tp);
-		    	error = EIO;
+			error = EIO;
 			goto err;
 		}
 		/* SAFE: All callers drop the lock on return */
@@ -2069,10 +2134,11 @@ loop:
 	qp = ISSET(lflag, ICANON) ? &tp->t_canq : &tp->t_rawq;
 
 	if (flag & IO_NDELAY) {
-		if (qp->c_cc > 0)
+		if (qp->c_cc > 0) {
 			goto read;
+		}
 		if (ISSET(lflag, ICANON) || cc[VMIN] != 0) {
-		    	error = EWOULDBLOCK;
+			error = EWOULDBLOCK;
 		}
 		/* else polling - returning 0 */
 		goto err;
@@ -2081,7 +2147,7 @@ loop:
 		int m = cc[VMIN];
 		long t = cc[VTIME];
 		struct timeval timecopy;
-		struct timeval etime = {0, 0};	/* protected by !has_etime */
+		struct timeval etime = {0, 0};  /* protected by !has_etime */
 
 		/*
 		 * Check each of the four combinations.
@@ -2092,22 +2158,26 @@ loop:
 		 * into slp.
 		 */
 		if (t == 0) {
-			if (qp->c_cc < m)
+			if (qp->c_cc < m) {
 				goto sleep;
-			if (qp->c_cc > 0)
+			}
+			if (qp->c_cc > 0) {
 				goto read;
+			}
 
 			/* m, t and qp->c_cc are all 0.  0 is enough input. */
 			goto err;
 		}
-		t *= 100000;		/* time in us */
+		t *= 100000;            /* time in us */
 #define diff(t1, t2) (((t1).tv_sec - (t2).tv_sec) * 1000000 + \
-			 ((t1).tv_usec - (t2).tv_usec))
+	                 ((t1).tv_usec - (t2).tv_usec))
 		if (m > 0) {
-			if (qp->c_cc <= 0)
+			if (qp->c_cc <= 0) {
 				goto sleep;
-			if (qp->c_cc >= m)
+			}
+			if (qp->c_cc >= m) {
 				goto read;
+			}
 			microuptime(&timecopy);
 			if (!has_etime) {
 				/* first character, start timer */
@@ -2116,7 +2186,7 @@ loop:
 				etime.tv_sec = t / 1000000;
 				etime.tv_usec = (t - (etime.tv_sec * 1000000));
 				timeradd(&etime, &timecopy, &etime);
-				
+
 				slp = t;
 			} else if (qp->c_cc > last_cc) {
 				/* got a character, restart timer */
@@ -2128,15 +2198,17 @@ loop:
 				slp = t;
 			} else {
 				/* nothing, check expiration */
-			        if (timercmp(&etime, &timecopy, <=))
+				if (timercmp(&etime, &timecopy, <=)) {
 					goto read;
+				}
 
 				slp = diff(etime, timecopy);
 			}
 			last_cc = qp->c_cc;
-		} else {	/* m == 0 */
-			if (qp->c_cc > 0)
+		} else {        /* m == 0 */
+			if (qp->c_cc > 0) {
 				goto read;
+			}
 			microuptime(&timecopy);
 			if (!has_etime) {
 				has_etime = 1;
@@ -2147,7 +2219,7 @@ loop:
 
 				slp = t;
 			} else {
-			        if (timercmp(&etime, &timecopy, <=)) {
+				if (timercmp(&etime, &timecopy, <=)) {
 					/* Timed out, but 0 is enough input. */
 					goto err;
 				}
@@ -2173,11 +2245,11 @@ sleep:
 		 * There is no input, or not enough input and we can block.
 		 */
 		error = ttysleep(tp, TSA_HUP_OR_INPUT(tp), TTIPRI | PCATCH,
-				 ISSET(tp->t_state, TS_CONNECTED) ?
-				 "ttyin" : "ttyhup", (int)slp);
-		if (error == EWOULDBLOCK)
+		    ISSET(tp->t_state, TS_CONNECTED) ?
+		    "ttyin" : "ttyhup", (int)slp);
+		if (error == EWOULDBLOCK) {
 			error = 0;
-		else if (error) {
+		} else if (error) {
 			goto err;
 		}
 		/*
@@ -2195,8 +2267,9 @@ read:
 	 */
 	first = 1;
 	if (ISSET(lflag, ICANON)
-	|| (ISSET(lflag, IEXTEN | ISIG) == (IEXTEN | ISIG)) )
+	    || (ISSET(lflag, IEXTEN | ISIG) == (IEXTEN | ISIG))) {
 		goto slowcase;
+	}
 	for (;;) {
 		char ibuf[IBUFSIZ];
 		int icc;
@@ -2204,8 +2277,9 @@ read:
 		icc = MIN(uio_resid(uio), IBUFSIZ);
 		icc = q_to_b(qp, (u_char *)ibuf, icc);
 		if (icc <= 0) {
-			if (first)
+			if (first) {
 				goto loop;
+			}
 			break;
 		}
 		error = uiomove(ibuf, icc, uio);
@@ -2213,10 +2287,12 @@ read:
 		 * XXX if there was an error then we should ungetc() the
 		 * unmoved chars and reduce icc here.
 		 */
-		if (error)
+		if (error) {
 			break;
- 		if (uio_resid(uio) == 0)
+		}
+		if (uio_resid(uio) == 0) {
 			break;
+		}
 		first = 0;
 	}
 	goto out;
@@ -2224,8 +2300,9 @@ slowcase:
 	for (;;) {
 		c = getc(qp);
 		if (c < 0) {
-			if (first)
+			if (first) {
 				goto loop;
+			}
 			break;
 		}
 		/*
@@ -2243,9 +2320,10 @@ slowcase:
 			tty_lock(tp);
 			if (first) {
 				error = ttysleep(tp, &ttread, TTIPRI | PCATCH,
-						 "ttybg3", hz);
-				if (error)
+				    "ttybg3", hz);
+				if (error) {
 					break;
+				}
 				goto loop;
 			}
 			break;
@@ -2253,23 +2331,27 @@ slowcase:
 		/*
 		 * Interpret EOF only in canonical mode.
 		 */
-		if (CCEQ(cc[VEOF], c) && ISSET(lflag, ICANON))
+		if (CCEQ(cc[VEOF], c) && ISSET(lflag, ICANON)) {
 			break;
+		}
 		/*
 		 * Give user character.
 		 */
- 		error = ureadc(c, uio);
-		if (error)
+		error = ureadc(c, uio);
+		if (error) {
 			/* XXX should ungetc(c, qp). */
 			break;
- 		if (uio_resid(uio) == 0)
+		}
+		if (uio_resid(uio) == 0) {
 			break;
+		}
 		/*
 		 * In canonical mode check for a "break character"
 		 * marking the end of a "line of input".
 		 */
-		if (ISSET(lflag, ICANON) && TTBREAKC(c, lflag))
+		if (ISSET(lflag, ICANON) && TTBREAKC(c, lflag)) {
 			break;
+		}
 		first = 0;
 	}
 
@@ -2279,11 +2361,12 @@ out:
 	 * the input queue has gone down.
 	 */
 	if (ISSET(tp->t_state, TS_TBLOCK) &&
-	    tp->t_rawq.c_cc + tp->t_canq.c_cc <= I_LOW_WATER)
+	    tp->t_rawq.c_cc + tp->t_canq.c_cc <= I_LOW_WATER) {
 		ttyunblock(tp);
+	}
 
 err:
-	return (error);
+	return error;
 }
 
 
@@ -2305,24 +2388,26 @@ ttycheckoutq(struct tty *tp, int wait)
 	sigset_t oldsig;
 	struct uthread *ut;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	ut = (struct uthread *)get_bsdthread_info(current_thread());
 
 	hiwat = tp->t_hiwat;
 	oldsig = wait ? ut->uu_siglist : 0;
-	if (tp->t_outq.c_cc > hiwat + OBUFSIZ + 100)
+	if (tp->t_outq.c_cc > hiwat + OBUFSIZ + 100) {
 		while (tp->t_outq.c_cc > hiwat) {
 			ttstart(tp);
-			if (tp->t_outq.c_cc <= hiwat)
+			if (tp->t_outq.c_cc <= hiwat) {
 				break;
+			}
 			if (wait == 0 || ut->uu_siglist != oldsig) {
-				return (0);
+				return 0;
 			}
 			SET(tp->t_state, TS_SO_OLOWAT);
 			ttysleep(tp, TSA_OLOWAT(tp), PZERO - 1, "ttoutq", hz);
 		}
-	return (1);
+	}
+	return 1;
 }
 
 
@@ -2345,7 +2430,7 @@ ttwrite(struct tty *tp, struct uio *uio, int flag)
 	struct uthread *ut;
 	struct pgrp * pg;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	ut = (struct uthread *)get_bsdthread_info(current_thread());
 	hiwat = tp->t_hiwat;
@@ -2354,8 +2439,9 @@ ttwrite(struct tty *tp, struct uio *uio, int flag)
 	cc = 0;
 loop:
 	if (ISSET(tp->t_state, TS_ZOMBIE)) {
-		if (uio_resid(uio) == count)
+		if (uio_resid(uio) == count) {
 			error = EIO;
+		}
 		goto out;
 	}
 	if (!ISSET(tp->t_state, TS_CONNECTED)) {
@@ -2364,9 +2450,10 @@ loop:
 			goto out;
 		}
 		error = ttysleep(tp, TSA_CARR_ON(tp), TTIPRI | PCATCH,
-				 "ttydcd", 0);
+		    "ttydcd", 0);
 		if (error) {
-			goto out; }
+			goto out;
+		}
 		goto loop;
 	}
 	/*
@@ -2377,7 +2464,6 @@ loop:
 	    ISSET(tp->t_lflag, TOSTOP) && (p->p_lflag & P_LPPWAIT) == 0 &&
 	    (p->p_sigignore & sigmask(SIGTTOU)) == 0 &&
 	    (ut->uu_sigmask & sigmask(SIGTTOU)) == 0) {
-
 		pg = proc_pgrp(p);
 		if (pg == PGRP_NULL) {
 			error = EIO;
@@ -2403,7 +2489,7 @@ loop:
 		 * process, that's handled in the signal sending code.
 		 */
 		error = EINTR;
-			goto out;
+		goto out;
 	}
 	/*
 	 * Process the user's data in at most OBUFSIZ chunks.  Perform any
@@ -2413,10 +2499,11 @@ loop:
 	while (uio_resid(uio) > 0 || cc > 0) {
 		if (ISSET(tp->t_lflag, FLUSHO)) {
 			uio_setresid(uio, 0);
-			return (0);
+			return 0;
 		}
-		if (tp->t_outq.c_cc > hiwat)
+		if (tp->t_outq.c_cc > hiwat) {
 			goto ovhiwat;
+		}
 		/*
 		 * Grab a hunk of data from the user, unless we have some
 		 * leftover from last time.
@@ -2440,11 +2527,11 @@ loop:
 		 * immediately.
 		 */
 		while (cc > 0) {
-			if (!ISSET(tp->t_oflag, OPOST))
+			if (!ISSET(tp->t_oflag, OPOST)) {
 				ce = cc;
-			else {
+			} else {
 				ce = cc - scanc((u_int)cc, (u_char *)cp,
-						char_type, CCLASSMASK);
+				    char_type, CCLASSMASK);
 				/*
 				 * If ce is zero, then we're processing
 				 * a special character through ttyoutput.
@@ -2458,8 +2545,9 @@ loop:
 					cp++;
 					cc--;
 					if (ISSET(tp->t_lflag, FLUSHO) ||
-					    tp->t_outq.c_cc > hiwat)
+					    tp->t_outq.c_cc > hiwat) {
 						goto ovhiwat;
+					}
 					continue;
 				}
 			}
@@ -2484,8 +2572,9 @@ loop:
 				goto overfull;
 			}
 			if (ISSET(tp->t_lflag, FLUSHO) ||
-			    tp->t_outq.c_cc > hiwat)
+			    tp->t_outq.c_cc > hiwat) {
 				break;
+			}
 		}
 		ttstart(tp);
 	}
@@ -2496,7 +2585,7 @@ out:
 	 * (the call will either return short or restart with a new uio).
 	 */
 	uio_setresid(uio, (uio_resid(uio) + cc));
-	return (error);
+	return error;
 
 overfull:
 
@@ -2519,15 +2608,17 @@ ovhiwat:
 	}
 	if (flag & IO_NDELAY) {
 		uio_setresid(uio, (uio_resid(uio) + cc));
-		return (uio_resid(uio) == count ? EWOULDBLOCK : 0);
+		return uio_resid(uio) == count ? EWOULDBLOCK : 0;
 	}
 	SET(tp->t_state, TS_SO_OLOWAT);
 	error = ttysleep(tp, TSA_OLOWAT(tp), TTOPRI | PCATCH, "ttywri",
-			 tp->t_timeout);
-	if (error == EWOULDBLOCK)
+	    tp->t_timeout);
+	if (error == EWOULDBLOCK) {
 		error = EIO;
-	if (error)
+	}
+	if (error) {
 		goto out;
+	}
 	goto loop;
 }
 
@@ -2545,10 +2636,11 @@ ttyrub(int c, struct tty *tp)
 	int savecol;
 	int tabc;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
-	if (!ISSET(tp->t_lflag, ECHO) || ISSET(tp->t_lflag, EXTPROC))
+	if (!ISSET(tp->t_lflag, ECHO) || ISSET(tp->t_lflag, EXTPROC)) {
 		return;
+	}
 	CLR(tp->t_lflag, FLUSHO);
 	if (ISSET(tp->t_lflag, ECHOE)) {
 		if (tp->t_rocount == 0) {
@@ -2558,13 +2650,13 @@ ttyrub(int c, struct tty *tp)
 			ttyretype(tp);
 			return;
 		}
-		if (c == ('\t' | TTY_QUOTE) || c == ('\n' | TTY_QUOTE))
+		if (c == ('\t' | TTY_QUOTE) || c == ('\n' | TTY_QUOTE)) {
 			ttyrubo(tp, 2);
-		else {
+		} else {
 			CLR(c, ~TTY_CHARMASK);
 			switch (CCLASS(c)) {
 			case ORDINARY:
-				if(!(ISSET(tp->t_iflag, IUTF8) && CCONT(c))) {
+				if (!(ISSET(tp->t_iflag, IUTF8) && CCONT(c))) {
 					ttyrubo(tp, 1);
 				}
 				break;
@@ -2573,8 +2665,9 @@ ttyrub(int c, struct tty *tp)
 			case NEWLINE:
 			case RETURN:
 			case VTAB:
-				if (ISSET(tp->t_lflag, ECHOCTL))
+				if (ISSET(tp->t_lflag, ECHOCTL)) {
 					ttyrubo(tp, 2);
+				}
 				break;
 			case TAB:
 				if (tp->t_rocount < tp->t_rawq.c_cc) {
@@ -2586,21 +2679,24 @@ ttyrub(int c, struct tty *tp)
 				SET(tp->t_lflag, FLUSHO);
 				tp->t_column = tp->t_rocol;
 				for (cp = firstc(&tp->t_rawq, &tabc); cp;
-				    cp = nextc(&tp->t_rawq, cp, &tabc))
+				    cp = nextc(&tp->t_rawq, cp, &tabc)) {
 					ttyecho(tabc, tp);
+				}
 				CLR(tp->t_lflag, FLUSHO);
 				CLR(tp->t_state, TS_CNTTB);
 
 				/* savecol will now be length of the tab. */
 				savecol -= tp->t_column;
 				tp->t_column += savecol;
-				if (savecol > 8)
-					savecol = 8;	/* overflow fixup */
-				while (--savecol >= 0)
+				if (savecol > 8) {
+					savecol = 8;    /* overflow fixup */
+				}
+				while (--savecol >= 0) {
 					(void)ttyoutput('\b', tp);
+				}
 				break;
-			default:			/* XXX */
-#define	PANICSTR	"ttyrub: would panic c = %d, val = %d\n"
+			default:                        /* XXX */
+#define PANICSTR        "ttyrub: would panic c = %d, val = %d\n"
 				printf(PANICSTR, c, CCLASS(c));
 #ifdef notdef
 				panic(PANICSTR, c, CCLASS(c));
@@ -2613,8 +2709,9 @@ ttyrub(int c, struct tty *tp)
 			(void)ttyoutput('\\', tp);
 		}
 		ttyecho(c, tp);
-	} else
+	} else {
 		ttyecho(tp->t_cc[VERASE], tp);
+	}
 	--tp->t_rocount;
 }
 
@@ -2627,7 +2724,7 @@ ttyrub(int c, struct tty *tp)
 static void
 ttyrubo(struct tty *tp, int count)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	while (count-- > 0) {
 		(void)ttyoutput('\b', tp);
@@ -2650,11 +2747,12 @@ ttyretype(struct tty *tp)
 	u_char *cp;
 	int c;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	/* Echo the reprint character. */
-	if (tp->t_cc[VREPRINT] != _POSIX_VDISABLE)
+	if (tp->t_cc[VREPRINT] != _POSIX_VDISABLE) {
 		ttyecho(tp->t_cc[VREPRINT], tp);
+	}
 
 	(void)ttyoutput('\n', tp);
 
@@ -2663,10 +2761,12 @@ ttyretype(struct tty *tp)
 	 * FIX: NEXTC IS BROKEN - DOESN'T CHECK QUOTE
 	 * BIT OF FIRST CHAR.
 	 */
-	for (cp = firstc(&tp->t_canq, &c); cp; cp = nextc(&tp->t_canq, cp, &c))
+	for (cp = firstc(&tp->t_canq, &c); cp; cp = nextc(&tp->t_canq, cp, &c)) {
 		ttyecho(c, tp);
-	for (cp = firstc(&tp->t_rawq, &c); cp; cp = nextc(&tp->t_rawq, cp, &c))
+	}
+	for (cp = firstc(&tp->t_rawq, &c); cp; cp = nextc(&tp->t_rawq, cp, &c)) {
 		ttyecho(c, tp);
+	}
 	CLR(tp->t_state, TS_ERASE);
 
 	tp->t_rocount = tp->t_rawq.c_cc;
@@ -2682,23 +2782,26 @@ ttyretype(struct tty *tp)
 static void
 ttyecho(int c, struct tty *tp)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
-	if (!ISSET(tp->t_state, TS_CNTTB))
+	if (!ISSET(tp->t_state, TS_CNTTB)) {
 		CLR(tp->t_lflag, FLUSHO);
+	}
 	if ((!ISSET(tp->t_lflag, ECHO) &&
-	     (c != '\n' || !ISSET(tp->t_lflag, ECHONL))) ||
-	    ISSET(tp->t_lflag, EXTPROC))
+	    (c != '\n' || !ISSET(tp->t_lflag, ECHONL))) ||
+	    ISSET(tp->t_lflag, EXTPROC)) {
 		return;
+	}
 	if (ISSET(tp->t_lflag, ECHOCTL) &&
 	    ((ISSET(c, TTY_CHARMASK) <= 037 && c != '\t' && c != '\n') ||
 	    ISSET(c, TTY_CHARMASK) == 0177)) {
 		(void)ttyoutput('^', tp);
 		CLR(c, ~TTY_CHARMASK);
-		if (c == 0177)
+		if (c == 0177) {
 			c = '?';
-		else
+		} else {
 			c += 'A' - 1;
+		}
 	}
 	(void)ttyoutput(c, tp);
 }
@@ -2712,7 +2815,7 @@ ttyecho(int c, struct tty *tp)
 void
 ttwakeup(struct tty *tp)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	selwakeup(&tp->t_rsel);
 	KNOTE(&tp->t_rsel.si_note, 1);
@@ -2743,7 +2846,7 @@ ttwakeup(struct tty *tp)
 void
 ttwwakeup(struct tty *tp)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	if (tp->t_outq.c_cc <= tp->t_lowat) {
 		selwakeup(&tp->t_wsel);
@@ -2772,10 +2875,12 @@ ttwwakeup(struct tty *tp)
 int
 ttspeedtab(int speed, struct speedtab *table)
 {
-	for ( ; table->sp_speed != -1; table++)
-		if (table->sp_speed == speed)
-			return (table->sp_code);
-	return (-1);
+	for (; table->sp_speed != -1; table++) {
+		if (table->sp_speed == speed) {
+			return table->sp_code;
+		}
+	}
+	return -1;
 }
 
 
@@ -2793,26 +2898,26 @@ ttsetwater(struct tty *tp)
 	int cps;
 	unsigned int x;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
-#define CLAMP(x, h, l)	((x) > h ? h : ((x) < l) ? l : (x))
+#define CLAMP(x, h, l)  ((x) > h ? h : ((x) < l) ? l : (x))
 
 	cps = tp->t_ospeed / 10;
 	tp->t_lowat = x = CLAMP(cps / 2, TTMAXLOWAT, TTMINLOWAT);
 	x += cps;
 	x = CLAMP(x, TTMAXHIWAT, TTMINHIWAT);
 	tp->t_hiwat = roundup(x, CBSIZE);
-#undef	CLAMP
+#undef  CLAMP
 }
 
 /* ttyinfo has been converted to the MACH kernel */
 #include <mach/thread_info.h>
 
 /* XXX Should be in Mach header <kern/thread.h>, but doesn't work */
-extern kern_return_t	thread_info_internal(thread_t thread,
-				thread_flavor_t flavor,
-				thread_info_t thread_info_out,
-				mach_msg_type_number_t *thread_info_count);
+extern kern_return_t    thread_info_internal(thread_t thread,
+    thread_flavor_t flavor,
+    thread_info_t thread_info_out,
+    mach_msg_type_number_t *thread_info_count);
 
 
 /*
@@ -2823,23 +2928,24 @@ extern kern_return_t	thread_info_internal(thread_t thread,
 void
 ttyinfo_locked(struct tty *tp)
 {
-	int		load;
-	thread_t	thread;
-	uthread_t	uthread;
-	proc_t		p;
-	proc_t		pick;
+	int             load;
+	thread_t        thread;
+	uthread_t       uthread;
+	proc_t          p;
+	proc_t          pick;
 	pid_t pickpid;
-	const char	*state;
-	struct timeval	utime;
-	struct timeval	stime;
-	thread_basic_info_data_t	basic_info;
-	mach_msg_type_number_t		mmtn = THREAD_BASIC_INFO_COUNT;
+	const char      *state;
+	struct timeval  utime;
+	struct timeval  stime;
+	thread_basic_info_data_t        basic_info;
+	mach_msg_type_number_t          mmtn = THREAD_BASIC_INFO_COUNT;
 	struct pgrp * pg;
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
-	if (ttycheckoutq(tp,0) == 0)
+	if (ttycheckoutq(tp, 0) == 0) {
 		return;
+	}
 
 	/* Print load average. */
 	load = (averunnable.ldavg[0] * 100 + FSCALE / 2) >> FSHIFT;
@@ -2853,7 +2959,7 @@ ttyinfo_locked(struct tty *tp)
 		ttyprintf(tp, "not a controlling terminal\n");
 		tp->t_rocount = 0;
 		return;
-}
+	}
 	if (tp->t_pgrp == NULL) {
 		ttyprintf(tp, "no foreground process group\n");
 		tp->t_rocount = 0;
@@ -2889,8 +2995,9 @@ ttyinfo_locked(struct tty *tp)
 	tty_lock(tp);
 
 	pick = proc_find(pickpid);
-	if (pick == PROC_NULL)
+	if (pick == PROC_NULL) {
 		return;
+	}
 
 	if (TAILQ_EMPTY(&pick->p_uthlist) ||
 	    (uthread = TAILQ_FIRST(&pick->p_uthlist)) == NULL ||
@@ -2902,7 +3009,7 @@ ttyinfo_locked(struct tty *tp)
 		return;
 	}
 
-	switch(basic_info.run_state) {
+	switch (basic_info.run_state) {
 	case TH_STATE_RUNNING:
 		state = "running";
 		break;
@@ -2927,11 +3034,11 @@ ttyinfo_locked(struct tty *tp)
 
 	/* Print command, pid, state, utime, and stime */
 	ttyprintf(tp, " cmd: %s %d %s %ld.%02du %ld.%02ds\n",
-		pick->p_comm,
-		pick->p_pid,
-		state,
-		(long)utime.tv_sec, utime.tv_usec / 10000,
-		(long)stime.tv_sec, stime.tv_usec / 10000);
+	    pick->p_comm,
+	    pick->p_pid,
+	    state,
+	    (long)utime.tv_sec, utime.tv_usec / 10000,
+	    (long)stime.tv_sec, stime.tv_usec / 10000);
 	tp->t_rocount = 0;
 }
 
@@ -2948,7 +3055,7 @@ ttyinfo_locked(struct tty *tp)
  *	3) The sleeper with the shortest sleep time is next.
  *	4) Further ties are broken by picking the highest pid.
  */
-#define ISRUN(p)	(((p)->p_stat == SRUN) || ((p)->p_stat == SIDL))
+#define ISRUN(p)        (((p)->p_stat == SRUN) || ((p)->p_stat == SIDL))
 #define TESTAB(a, b)    ((a)<<1 | (b))
 #define ONLYA   2
 #define ONLYB   1
@@ -2964,51 +3071,56 @@ proc_compare(proc_t p1, proc_t p2)
 {
 	/* NOTE THIS FN needs to be NON BLOCKING */
 
-	if (p1 == NULL)
-		return (1);
+	if (p1 == NULL) {
+		return 1;
+	}
 	/*
 	 * see if at least one of them is runnable
 	 */
 	switch (TESTAB(ISRUN(p1), ISRUN(p2))) {
 	case ONLYA:
-		return (0);
+		return 0;
 	case ONLYB:
-		return (1);
+		return 1;
 	case BOTH:
 		/*
 		 * tie - favor one with highest recent cpu utilization
 		 */
 #ifdef _PROC_HAS_SCHEDINFO_
 		/* Without the support the fields are always zero */
-		if (p2->p_estcpu > p1->p_estcpu)
-			return (1);
-		if (p1->p_estcpu > p2->p_estcpu)
-			return (0);
+		if (p2->p_estcpu > p1->p_estcpu) {
+			return 1;
+		}
+		if (p1->p_estcpu > p2->p_estcpu) {
+			return 0;
+		}
 #endif /* _PROC_HAS_SCHEDINFO_ */
-		return (p2->p_pid > p1->p_pid);	/* tie - return highest pid */
+		return p2->p_pid > p1->p_pid; /* tie - return highest pid */
 	}
 	/*
- 	 * weed out zombies
+	 * weed out zombies
 	 */
 	switch (TESTAB(p1->p_stat == SZOMB, p2->p_stat == SZOMB)) {
 	case ONLYA:
-		return (1);
+		return 1;
 	case ONLYB:
-		return (0);
+		return 0;
 	case BOTH:
-		return (p2->p_pid > p1->p_pid); /* tie - return highest pid */
+		return p2->p_pid > p1->p_pid; /* tie - return highest pid */
 	}
 	/*
 	 * pick the one with the smallest sleep time
 	 */
 #ifdef _PROC_HAS_SCHEDINFO_
 	/* Without the support the fields are always zero */
-	if (p2->p_slptime > p1->p_slptime)
-		return (0);
-	if (p1->p_slptime > p2->p_slptime)
-		return (1);
+	if (p2->p_slptime > p1->p_slptime) {
+		return 0;
+	}
+	if (p1->p_slptime > p2->p_slptime) {
+		return 1;
+	}
 #endif /* _PROC_HAS_SCHEDINFO_ */
-	return (p2->p_pid > p1->p_pid);		/* tie - return highest pid */
+	return p2->p_pid > p1->p_pid;         /* tie - return highest pid */
 }
 
 
@@ -3022,16 +3134,17 @@ proc_compare(proc_t p1, proc_t p2)
 int
 tputchar(int c, struct tty *tp)
 {
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	if (!ISSET(tp->t_state, TS_CONNECTED)) {
-		return (-1);
+		return -1;
 	}
-	if (c == '\n')
+	if (c == '\n') {
 		(void)ttyoutput('\r', tp);
+	}
 	(void)ttyoutput(c, tp);
 	ttstart(tp);
-	return (0);
+	return 0;
 }
 
 
@@ -3075,9 +3188,10 @@ ttysleep(struct tty *tp, void *chan, int pri, const char *wmesg, int timo)
 	gen = tp->t_gen;
 	/* Use of msleep0() avoids conversion timo/timespec/timo */
 	error = msleep0(chan, &tp->t_lock, pri, wmesg, timo, (int (*)(int))0);
-	if (error)
-		return (error);
-	return (tp->t_gen == gen ? 0 : ERESTART);
+	if (error) {
+		return error;
+	}
+	return tp->t_gen == gen ? 0 : ERESTART;
 }
 
 
@@ -3097,7 +3211,7 @@ ttymalloc(void)
 {
 	struct tty *tp;
 
-	MALLOC(tp, struct tty *, sizeof(struct tty), M_TTYS, M_WAITOK|M_ZERO);
+	MALLOC(tp, struct tty *, sizeof(struct tty), M_TTYS, M_WAITOK | M_ZERO);
 	if (tp != NULL) {
 		/* XXX: default to TTYCLSIZE(1024) chars for now */
 		clalloc(&tp->t_rawq, TTYCLSIZE, 1);
@@ -3109,7 +3223,7 @@ ttymalloc(void)
 		klist_init(&tp->t_wsel.si_note);
 		tp->t_refcnt = 1;
 	}
-	return (tp);
+	return tp;
 }
 
 /*
@@ -3137,8 +3251,9 @@ ttyfree(struct tty *tp)
 		ttydeallocate(tp);
 	} else if (tp->t_refcnt < 0) {
 		panic("%s: freeing free tty %p", __func__, tp);
-	} else
+	} else {
 		tty_unlock(tp);
+	}
 }
 
 /*
@@ -3150,7 +3265,7 @@ ttyfree(struct tty *tp)
 static void
 ttydeallocate(struct tty *tp)
 {
-	TTY_LOCK_NOTOWNED(tp);	/* debug assert */
+	TTY_LOCK_NOTOWNED(tp);  /* debug assert */
 
 #if DEBUG
 	if (!(SLIST_EMPTY(&tp->t_rsel.si_note) && SLIST_EMPTY(&tp->t_wsel.si_note))) {
@@ -3174,10 +3289,10 @@ isbackground(proc_t p, struct tty  *tp)
 {
 	TTY_LOCK_OWNED(tp);
 
-	return (tp->t_session != NULL && p->p_pgrp != NULL && (p->p_pgrp != tp->t_pgrp) && isctty_sp(p, tp, p->p_pgrp->pg_session));
+	return tp->t_session != NULL && p->p_pgrp != NULL && (p->p_pgrp != tp->t_pgrp) && isctty_sp(p, tp, p->p_pgrp->pg_session);
 }
 
-static int 
+static int
 isctty(proc_t p, struct tty  *tp)
 {
 	int retval;
@@ -3186,14 +3301,13 @@ isctty(proc_t p, struct tty  *tp)
 	sessp = proc_session(p);
 	retval = (sessp == tp->t_session && p->p_flag & P_CONTROLT);
 	session_rele(sessp);
-	return(retval);
+	return retval;
 }
 
 static int
 isctty_sp(proc_t p, struct tty  *tp, struct session *sessp)
 {
-	return(sessp == tp->t_session && p->p_flag & P_CONTROLT);
-
+	return sessp == tp->t_session && p->p_flag & P_CONTROLT;
 }
 
 
@@ -3364,7 +3478,7 @@ tty_set_knote_hook(struct knote *kn)
 	 * might happen before we can unlink it.
 	 */
 	kr = waitq_set_init(&tmp_wqs, SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST, NULL,
-			NULL);
+	    NULL);
 	assert(kr == KERN_SUCCESS);
 
 	/*
@@ -3491,7 +3605,7 @@ filt_ttydetach(struct knote *kn)
 	case FWRITE:
 		si = &tp->t_wsel;
 		break;
-	/* knote_get_seltype will panic on default */
+		/* knote_get_seltype will panic on default */
 	}
 
 	KNOTE_DETACH(&si->si_note, kn);

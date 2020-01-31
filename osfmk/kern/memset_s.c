@@ -45,19 +45,22 @@ memset_s(void *s, size_t smax, int c, size_t n)
 {
 	int err = 0;
 
-	if (s == NULL) return EINVAL;
-	if (smax > RSIZE_MAX) return E2BIG;
+	if (s == NULL) {
+		return EINVAL;
+	}
+	if (smax > RSIZE_MAX) {
+		return E2BIG;
+	}
 	if (n > smax) {
 		n = smax;
 		err = EOVERFLOW;
 	}
 
-	/* 
+	/*
 	 * secure_memset is defined in assembly, we therefore
- 	 * expect that the compiler will not inline the call.
+	 * expect that the compiler will not inline the call.
 	 */
 	secure_memset(s, c, n);
 
 	return err;
 }
-

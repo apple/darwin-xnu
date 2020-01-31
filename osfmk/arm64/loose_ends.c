@@ -88,8 +88,9 @@ bcopy_phys_internal(addr64_t src, addr64_t dst, vm_size_t bytes, int flags)
 #if !defined(__ARM_COHERENT_IO__) && !__ARM_PTE_PHYSMAP__
 			count = PAGE_SIZE - src_offset;
 			wimg_bits_src = pmap_cache_attributes(pn_src);
-			if ((wimg_bits_src & VM_WIMG_MASK) != VM_WIMG_DEFAULT)
+			if ((wimg_bits_src & VM_WIMG_MASK) != VM_WIMG_DEFAULT) {
 				use_copy_window_src = TRUE;
+			}
 #else
 			if (use_copy_window_src) {
 				wimg_bits_src = pmap_cache_attributes(pn_src);
@@ -104,8 +105,9 @@ bcopy_phys_internal(addr64_t src, addr64_t dst, vm_size_t bytes, int flags)
 #if !defined(__ARM_COHERENT_IO__) && !__ARM_PTE_PHYSMAP__
 			count2 = PAGE_SIZE - dst_offset;
 			wimg_bits_dst = pmap_cache_attributes(pn_dst);
-			if ((wimg_bits_dst & VM_WIMG_MASK) != VM_WIMG_DEFAULT)
+			if ((wimg_bits_dst & VM_WIMG_MASK) != VM_WIMG_DEFAULT) {
 				use_copy_window_dst = TRUE;
+			}
 #else
 			if (use_copy_window_dst) {
 				wimg_bits_dst = pmap_cache_attributes(pn_dst);
@@ -139,24 +141,30 @@ bcopy_phys_internal(addr64_t src, addr64_t dst, vm_size_t bytes, int flags)
 			tmp_dst = (char*)dst;
 		}
 
-		if (count > count2)
+		if (count > count2) {
 			count = count2;
-		if (count > bytes)
+		}
+		if (count > bytes) {
 			count = bytes;
+		}
 
-		if (BCOPY_PHYS_SRC_IS_USER(flags))
+		if (BCOPY_PHYS_SRC_IS_USER(flags)) {
 			res = copyin((user_addr_t)src, tmp_dst, count);
-		else if (BCOPY_PHYS_DST_IS_USER(flags))
+		} else if (BCOPY_PHYS_DST_IS_USER(flags)) {
 			res = copyout(tmp_src, (user_addr_t)dst, count);
-		else
+		} else {
 			bcopy(tmp_src, tmp_dst, count);
+		}
 
-		if (use_copy_window_src)
+		if (use_copy_window_src) {
 			pmap_unmap_cpu_windows_copy(src_index);
-		if (use_copy_window_dst)
+		}
+		if (use_copy_window_dst) {
 			pmap_unmap_cpu_windows_copy(dst_index);
-		if (use_copy_window_src || use_copy_window_dst)
+		}
+		if (use_copy_window_src || use_copy_window_dst) {
 			mp_enable_preemption();
+		}
 
 		src += count;
 		dst += count;
@@ -197,8 +205,9 @@ bzero_phys(addr64_t src, vm_size_t bytes)
 #if !defined(__ARM_COHERENT_IO__) && !__ARM_PTE_PHYSMAP__
 		count = PAGE_SIZE - offset;
 		wimg_bits = pmap_cache_attributes(pn);
-		if ((wimg_bits & VM_WIMG_MASK) != VM_WIMG_DEFAULT)
+		if ((wimg_bits & VM_WIMG_MASK) != VM_WIMG_DEFAULT) {
 			use_copy_window = TRUE;
+		}
 #else
 		if (use_copy_window) {
 			wimg_bits = pmap_cache_attributes(pn);
@@ -216,8 +225,9 @@ bzero_phys(addr64_t src, vm_size_t bytes)
 			buf = (char *)phystokv_range((pmap_paddr_t)src, &count);
 		}
 
-		if (count > bytes)
+		if (count > bytes) {
 			count = bytes;
+		}
 
 		bzero(buf, count);
 
@@ -243,15 +253,16 @@ ml_phys_read_data(pmap_paddr_t paddr, int size)
 	unsigned int   index;
 	unsigned int   wimg_bits;
 	ppnum_t        pn = (ppnum_t)(paddr >> PAGE_SHIFT);
-	ppnum_t        pn_end = (ppnum_t)((paddr + size - 1) >> PAGE_SHIFT); 
+	ppnum_t        pn_end = (ppnum_t)((paddr + size - 1) >> PAGE_SHIFT);
 	unsigned long  long result = 0;
 	vm_offset_t    copywindow_vaddr = 0;
 	unsigned char  s1;
 	unsigned short s2;
 	unsigned int   s4;
 
-	if (__improbable(pn_end != pn))
+	if (__improbable(pn_end != pn)) {
 		panic("%s: paddr 0x%llx spans a page boundary", __func__, (uint64_t)paddr);
+	}
 
 #if defined(__ARM_COHERENT_IO__) || __ARM_PTE_PHYSMAP__
 	if (pmap_valid_address(paddr)) {
@@ -273,7 +284,7 @@ ml_phys_read_data(pmap_paddr_t paddr, int size)
 			break;
 		default:
 			panic("Invalid size %d for ml_phys_read_data\n", size);
-                	break;
+			break;
 		}
 		return result;
 	}
@@ -285,25 +296,24 @@ ml_phys_read_data(pmap_paddr_t paddr, int size)
 	copywindow_vaddr = pmap_cpu_windows_copy_addr(cpu_number(), index) | ((uint32_t)paddr & PAGE_MASK);
 
 	switch (size) {
-		case 1:
-			s1 = *(volatile unsigned char *)copywindow_vaddr;
-			result = s1;
-			break;
-		case 2:
-			s2 = *(volatile unsigned short *)copywindow_vaddr;
-			result = s2;
-			break;
-		case 4:
-			s4 = *(volatile unsigned int *)copywindow_vaddr;
-			result = s4;
-			break;
-		case 8:
-			result = *(volatile unsigned long long*)copywindow_vaddr;
-			break;
-		default:
-			panic("Invalid size %d for ml_phys_read_data\n", size);
-                	break;
-
+	case 1:
+		s1 = *(volatile unsigned char *)copywindow_vaddr;
+		result = s1;
+		break;
+	case 2:
+		s2 = *(volatile unsigned short *)copywindow_vaddr;
+		result = s2;
+		break;
+	case 4:
+		s4 = *(volatile unsigned int *)copywindow_vaddr;
+		result = s4;
+		break;
+	case 8:
+		result = *(volatile unsigned long long*)copywindow_vaddr;
+		break;
+	default:
+		panic("Invalid size %d for ml_phys_read_data\n", size);
+		break;
 	}
 
 	pmap_unmap_cpu_windows_copy(index);
@@ -312,54 +322,64 @@ ml_phys_read_data(pmap_paddr_t paddr, int size)
 	return result;
 }
 
-unsigned int ml_phys_read( vm_offset_t paddr)
+unsigned int
+ml_phys_read( vm_offset_t paddr)
 {
-        return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr, 4);
+	return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr, 4);
 }
 
-unsigned int ml_phys_read_word(vm_offset_t paddr) {
-
-        return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr, 4);
+unsigned int
+ml_phys_read_word(vm_offset_t paddr)
+{
+	return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr, 4);
 }
 
-unsigned int ml_phys_read_64(addr64_t paddr64)
+unsigned int
+ml_phys_read_64(addr64_t paddr64)
 {
-        return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr64, 4);
+	return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr64, 4);
 }
 
-unsigned int ml_phys_read_word_64(addr64_t paddr64)
+unsigned int
+ml_phys_read_word_64(addr64_t paddr64)
 {
-        return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr64, 4);
+	return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr64, 4);
 }
 
-unsigned int ml_phys_read_half(vm_offset_t paddr)
+unsigned int
+ml_phys_read_half(vm_offset_t paddr)
 {
-        return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr, 2);
+	return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr, 2);
 }
 
-unsigned int ml_phys_read_half_64(addr64_t paddr64)
+unsigned int
+ml_phys_read_half_64(addr64_t paddr64)
 {
-        return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr64, 2);
+	return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr64, 2);
 }
 
-unsigned int ml_phys_read_byte(vm_offset_t paddr)
+unsigned int
+ml_phys_read_byte(vm_offset_t paddr)
 {
-        return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr, 1);
+	return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr, 1);
 }
 
-unsigned int ml_phys_read_byte_64(addr64_t paddr64)
+unsigned int
+ml_phys_read_byte_64(addr64_t paddr64)
 {
-        return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr64, 1);
+	return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr64, 1);
 }
 
-unsigned long long ml_phys_read_double(vm_offset_t paddr)
+unsigned long long
+ml_phys_read_double(vm_offset_t paddr)
 {
-        return ml_phys_read_data((pmap_paddr_t)paddr, 8);
+	return ml_phys_read_data((pmap_paddr_t)paddr, 8);
 }
 
-unsigned long long ml_phys_read_double_64(addr64_t paddr64)
+unsigned long long
+ml_phys_read_double_64(addr64_t paddr64)
 {
-        return ml_phys_read_data((pmap_paddr_t)paddr64, 8);
+	return ml_phys_read_data((pmap_paddr_t)paddr64, 8);
 }
 
 
@@ -374,11 +394,12 @@ ml_phys_write_data(pmap_paddr_t paddr, unsigned long long data, int size)
 	unsigned int    index;
 	unsigned int    wimg_bits;
 	ppnum_t         pn = (ppnum_t)(paddr >> PAGE_SHIFT);
-	ppnum_t         pn_end = (ppnum_t)((paddr + size - 1) >> PAGE_SHIFT); 
+	ppnum_t         pn_end = (ppnum_t)((paddr + size - 1) >> PAGE_SHIFT);
 	vm_offset_t     copywindow_vaddr = 0;
 
-	if (__improbable(pn_end != pn))
+	if (__improbable(pn_end != pn)) {
 		panic("%s: paddr 0x%llx spans a page boundary", __func__, (uint64_t)paddr);
+	}
 
 #if defined(__ARM_COHERENT_IO__) || __ARM_PTE_PHYSMAP__
 	if (pmap_valid_address(paddr)) {
@@ -403,83 +424,93 @@ ml_phys_write_data(pmap_paddr_t paddr, unsigned long long data, int size)
 
 	mp_disable_preemption();
 	wimg_bits = pmap_cache_attributes(pn);
-	index = pmap_map_cpu_windows_copy(pn, VM_PROT_READ|VM_PROT_WRITE, wimg_bits);
+	index = pmap_map_cpu_windows_copy(pn, VM_PROT_READ | VM_PROT_WRITE, wimg_bits);
 	copywindow_vaddr = pmap_cpu_windows_copy_addr(cpu_number(), index) | ((uint32_t)paddr & PAGE_MASK);
 
 	switch (size) {
-		case 1:
-			*(volatile unsigned char *)(copywindow_vaddr) =
-			                        (unsigned char)data;
-			break;
-		case 2:
-			*(volatile unsigned short *)(copywindow_vaddr) =
-			                         (unsigned short)data;
-			break;
-		case 4:
-			*(volatile unsigned int *)(copywindow_vaddr) =
-			                           (uint32_t)data;
-			break;
-		case 8:
-			*(volatile unsigned long long *)(copywindow_vaddr) =
-			                         (unsigned long long)data;
-			break;
-		default:
-			panic("Invalid size %d for ml_phys_write_data\n", size);
-			break;
+	case 1:
+		*(volatile unsigned char *)(copywindow_vaddr) =
+		    (unsigned char)data;
+		break;
+	case 2:
+		*(volatile unsigned short *)(copywindow_vaddr) =
+		    (unsigned short)data;
+		break;
+	case 4:
+		*(volatile unsigned int *)(copywindow_vaddr) =
+		    (uint32_t)data;
+		break;
+	case 8:
+		*(volatile unsigned long long *)(copywindow_vaddr) =
+		    (unsigned long long)data;
+		break;
+	default:
+		panic("Invalid size %d for ml_phys_write_data\n", size);
+		break;
 	}
 
 	pmap_unmap_cpu_windows_copy(index);
 	mp_enable_preemption();
 }
 
-void ml_phys_write_byte(vm_offset_t paddr, unsigned int data)
+void
+ml_phys_write_byte(vm_offset_t paddr, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr, data, 1);
+	ml_phys_write_data((pmap_paddr_t)paddr, data, 1);
 }
 
-void ml_phys_write_byte_64(addr64_t paddr64, unsigned int data)
+void
+ml_phys_write_byte_64(addr64_t paddr64, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr64, data, 1);
+	ml_phys_write_data((pmap_paddr_t)paddr64, data, 1);
 }
 
-void ml_phys_write_half(vm_offset_t paddr, unsigned int data)
+void
+ml_phys_write_half(vm_offset_t paddr, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr, data, 2);
+	ml_phys_write_data((pmap_paddr_t)paddr, data, 2);
 }
 
-void ml_phys_write_half_64(addr64_t paddr64, unsigned int data)
+void
+ml_phys_write_half_64(addr64_t paddr64, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr64, data, 2);
+	ml_phys_write_data((pmap_paddr_t)paddr64, data, 2);
 }
 
-void ml_phys_write(vm_offset_t paddr, unsigned int data)
+void
+ml_phys_write(vm_offset_t paddr, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr, data, 4);
+	ml_phys_write_data((pmap_paddr_t)paddr, data, 4);
 }
 
-void ml_phys_write_64(addr64_t paddr64, unsigned int data)
+void
+ml_phys_write_64(addr64_t paddr64, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr64, data, 4);
+	ml_phys_write_data((pmap_paddr_t)paddr64, data, 4);
 }
 
-void ml_phys_write_word(vm_offset_t paddr, unsigned int data)
+void
+ml_phys_write_word(vm_offset_t paddr, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr, data, 4);
+	ml_phys_write_data((pmap_paddr_t)paddr, data, 4);
 }
 
-void ml_phys_write_word_64(addr64_t paddr64, unsigned int data)
+void
+ml_phys_write_word_64(addr64_t paddr64, unsigned int data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr64, data, 4);
+	ml_phys_write_data((pmap_paddr_t)paddr64, data, 4);
 }
 
-void ml_phys_write_double(vm_offset_t paddr, unsigned long long data)
+void
+ml_phys_write_double(vm_offset_t paddr, unsigned long long data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr, data, 8);
+	ml_phys_write_data((pmap_paddr_t)paddr, data, 8);
 }
 
-void ml_phys_write_double_64(addr64_t paddr64, unsigned long long data)
+void
+ml_phys_write_double_64(addr64_t paddr64, unsigned long long data)
 {
-        ml_phys_write_data((pmap_paddr_t)paddr64, data, 8);
+	ml_phys_write_data((pmap_paddr_t)paddr64, data, 8);
 }
 
 
@@ -518,15 +549,18 @@ ffsbit(int *s)
 {
 	int             offset;
 
-	for (offset = 0; !*s; offset += INT_SIZE, ++s);
+	for (offset = 0; !*s; offset += INT_SIZE, ++s) {
+		;
+	}
 	return offset + __builtin_ctz(*s);
 }
 
 int
 ffs(unsigned int mask)
 {
-	if (mask == 0)
+	if (mask == 0) {
 		return 0;
+	}
 
 	/*
 	 * NOTE: cannot use __builtin_ffs because it generates a call to
@@ -538,8 +572,9 @@ ffs(unsigned int mask)
 int
 ffsll(unsigned long long mask)
 {
-	if (mask == 0)
+	if (mask == 0) {
 		return 0;
+	}
 
 	/*
 	 * NOTE: cannot use __builtin_ffsll because it generates a call to
@@ -554,48 +589,53 @@ ffsll(unsigned long long mask)
 int
 fls(unsigned int mask)
 {
-	if (mask == 0)
+	if (mask == 0) {
 		return 0;
+	}
 
-	return (sizeof (mask) << 3) - __builtin_clz(mask);
+	return (sizeof(mask) << 3) - __builtin_clz(mask);
 }
 
 int
 flsll(unsigned long long mask)
 {
-	if (mask == 0)
+	if (mask == 0) {
 		return 0;
+	}
 
-	return (sizeof (mask) << 3) - __builtin_clzll(mask);
+	return (sizeof(mask) << 3) - __builtin_clzll(mask);
 }
 
 #undef bcmp
-int 
+int
 bcmp(
-     const void *pa,
-     const void *pb,
-     size_t len)
+	const void *pa,
+	const void *pb,
+	size_t len)
 {
 	const char     *a = (const char *) pa;
 	const char     *b = (const char *) pb;
 
-	if (len == 0)
+	if (len == 0) {
 		return 0;
+	}
 
-	do
-		if (*a++ != *b++)
+	do{
+		if (*a++ != *b++) {
 			break;
-	while (--len);
+		}
+	} while (--len);
 
 	/*
 	 * Check for the overflow case but continue to handle the non-overflow
 	 * case the same way just in case someone is using the return value
 	 * as more than zero/non-zero
 	 */
-	if ((len & 0xFFFFFFFF00000000ULL) && !(len & 0x00000000FFFFFFFFULL))
+	if ((len & 0xFFFFFFFF00000000ULL) && !(len & 0x00000000FFFFFFFFULL)) {
 		return 0xFFFFFFFFL;
-	else
+	} else {
 		return (int)len;
+	}
 }
 
 #undef memcmp
@@ -606,27 +646,31 @@ memcmp(const void *s1, const void *s2, size_t n)
 		const unsigned char *p1 = s1, *p2 = s2;
 
 		do {
-			if (*p1++ != *p2++)
-				return (*--p1 - *--p2);
+			if (*p1++ != *p2++) {
+				return *--p1 - *--p2;
+			}
 		} while (--n != 0);
 	}
-	return (0);
+	return 0;
 }
 
 kern_return_t
 copypv(addr64_t source, addr64_t sink, unsigned int size, int which)
 {
-	if ((which & (cppvPsrc | cppvPsnk)) == 0)	/* Make sure that only one is virtual */
+	if ((which & (cppvPsrc | cppvPsnk)) == 0) {     /* Make sure that only one is virtual */
 		panic("%s: no more than 1 parameter may be virtual", __func__);
+	}
 
 	kern_return_t res = bcopy_phys_internal(source, sink, size, which);
 
 #ifndef __ARM_COHERENT_IO__
-        if (which & cppvFsrc)
-                flush_dcache64(source, size, ((which & cppvPsrc) == cppvPsrc));
+	if (which & cppvFsrc) {
+		flush_dcache64(source, size, ((which & cppvPsrc) == cppvPsrc));
+	}
 
-        if (which & cppvFsnk)
-                flush_dcache64(sink, size, ((which & cppvPsnk) == cppvPsnk));
+	if (which & cppvFsnk) {
+		flush_dcache64(sink, size, ((which & cppvPsnk) == cppvPsnk));
+	}
 #endif
 
 	return res;
@@ -642,45 +686,48 @@ extern int copyinframe(vm_address_t fp, char *frame, boolean_t is64bit);
  */
 void
 machine_callstack(
-		  uintptr_t * buf,
-		  vm_size_t callstack_max)
+	uintptr_t * buf,
+	vm_size_t callstack_max)
 {
 	/* Captures the USER call stack */
-	uint32_t i=0;
+	uint32_t i = 0;
 
 	struct arm_saved_state *state = find_user_regs(current_thread());
 
 	if (!state) {
-		while (i<callstack_max)
+		while (i < callstack_max) {
 			buf[i++] = 0;
+		}
 	} else {
 		if (is_saved_state64(state)) {
 			uint64_t frame[2];
 			buf[i++] = (uintptr_t)get_saved_state_pc(state);
 			frame[0] = get_saved_state_fp(state);
-			while (i<callstack_max && frame[0] != 0) {
-				if (copyinframe(frame[0], (void*) frame, TRUE))
+			while (i < callstack_max && frame[0] != 0) {
+				if (copyinframe(frame[0], (void*) frame, TRUE)) {
 					break;
+				}
 				buf[i++] = (uintptr_t)frame[1];
 			}
-		}
-		else {
+		} else {
 			uint32_t frame[2];
 			buf[i++] = (uintptr_t)get_saved_state_pc(state);
 			frame[0] = (uint32_t)get_saved_state_fp(state);
-			while (i<callstack_max && frame[0] != 0) {
-				if (copyinframe(frame[0], (void*) frame, FALSE))
+			while (i < callstack_max && frame[0] != 0) {
+				if (copyinframe(frame[0], (void*) frame, FALSE)) {
 					break;
+				}
 				buf[i++] = (uintptr_t)frame[1];
 			}
 		}
 
-		while (i<callstack_max)
+		while (i < callstack_max) {
 			buf[i++] = 0;
+		}
 	}
 }
 
-#endif				/* MACH_ASSERT */
+#endif                          /* MACH_ASSERT */
 
 int
 clr_be_bit(void)
@@ -691,8 +738,8 @@ clr_be_bit(void)
 
 boolean_t
 ml_probe_read(
-	      __unused vm_offset_t paddr,
-	      __unused unsigned int *val)
+	__unused vm_offset_t paddr,
+	__unused unsigned int *val)
 {
 	panic("ml_probe_read() unimplemented");
 	return 1;
@@ -700,8 +747,8 @@ ml_probe_read(
 
 boolean_t
 ml_probe_read_64(
-		 __unused addr64_t paddr,
-		 __unused unsigned int *val)
+	__unused addr64_t paddr,
+	__unused unsigned int *val)
 {
 	panic("ml_probe_read_64() unimplemented");
 	return 1;
@@ -710,16 +757,16 @@ ml_probe_read_64(
 
 void
 ml_thread_policy(
-		 __unused thread_t thread,
-		 __unused unsigned policy_id,
-		 __unused unsigned policy_info)
+	__unused thread_t thread,
+	__unused unsigned policy_id,
+	__unused unsigned policy_info)
 {
-  //    <rdar://problem/7141284>: Reduce print noise
-  //	kprintf("ml_thread_policy() unimplemented\n");
+	//    <rdar://problem/7141284>: Reduce print noise
+	//	kprintf("ml_thread_policy() unimplemented\n");
 }
 
 void
-panic_unimplemented() 
+panic_unimplemented()
 {
 	panic("Not yet implemented.");
 }
@@ -728,7 +775,7 @@ panic_unimplemented()
 void abort(void);
 
 void
-abort() 
+abort()
 {
 	panic("Abort.");
 }
@@ -741,4 +788,3 @@ kdp_register_callout(kdp_callout_fn_t fn, void *arg)
 #pragma unused(fn,arg)
 }
 #endif
-

@@ -66,18 +66,18 @@
 #include <netinet/tcp_var.h>
 #include <kern/zalloc.h>
 
-#define	TCP_CC_ALGO_NONE		0
-#define	TCP_CC_ALGO_NEWRENO_INDEX	1
-#define	TCP_CC_ALGO_BACKGROUND_INDEX	2 /* CC for background transport */
-#define	TCP_CC_ALGO_CUBIC_INDEX		3 /* default CC algorithm */
-#define	TCP_CC_ALGO_COUNT		4 /* Count of CC algorithms */
+#define TCP_CC_ALGO_NONE                0
+#define TCP_CC_ALGO_NEWRENO_INDEX       1
+#define TCP_CC_ALGO_BACKGROUND_INDEX    2 /* CC for background transport */
+#define TCP_CC_ALGO_CUBIC_INDEX         3 /* default CC algorithm */
+#define TCP_CC_ALGO_COUNT               4 /* Count of CC algorithms */
 
-#define TCP_CA_NAME_MAX 16		/* Maximum characters in the name of a CC algorithm */
+#define TCP_CA_NAME_MAX 16              /* Maximum characters in the name of a CC algorithm */
 
 extern int tcp_recv_bg;
 
 /*
- * Structure to hold definition various actions defined by a congestion 
+ * Structure to hold definition various actions defined by a congestion
  * control algorithm for TCP. This can be used to change the congestion
  * control on a connection based on the user settings of priority of a
  * connection.
@@ -91,10 +91,10 @@ struct tcp_cc_algo {
 	int (*init) (struct tcpcb *tp);
 
 	/*
-	 * cleanup any state that is stored in the connection 
+	 * cleanup any state that is stored in the connection
 	 * related to the algorithm
 	 */
-	int (*cleanup) (struct tcpcb *tp); 
+	int (*cleanup) (struct tcpcb *tp);
 
 	/* initialize cwnd at the start of a connection */
 	void (*cwnd_init) (struct tcpcb *tp);
@@ -124,29 +124,28 @@ struct tcp_cc_algo {
 	int (*delay_ack)(struct tcpcb *tp, struct tcphdr *th);
 
 	/* Switch a connection to this CC algorithm after sending some packets */
-	void (*switch_to)(struct tcpcb *tp, uint16_t old_cc_index); 
-
+	void (*switch_to)(struct tcpcb *tp, uint16_t old_cc_index);
 } __attribute__((aligned(4)));
 
-extern struct zone *tcp_cc_zone; 
+extern struct zone *tcp_cc_zone;
 
 extern struct tcp_cc_algo* tcp_cc_algo_list[TCP_CC_ALGO_COUNT];
 
 #define CC_ALGO(tp) (tcp_cc_algo_list[tp->tcp_cc_index])
-#define	TCP_CC_CWND_INIT_BYTES	4380
+#define TCP_CC_CWND_INIT_BYTES  4380
 /*
  * The congestion window will have to be reset after a
  * non-validated period -- currently set to 3 minutes
  */
-#define	TCP_CC_CWND_NONVALIDATED_PERIOD	(3 * 60 * TCP_RETRANSHZ)
+#define TCP_CC_CWND_NONVALIDATED_PERIOD (3 * 60 * TCP_RETRANSHZ)
 
-extern void	tcp_cc_init(void);
+extern void     tcp_cc_init(void);
 extern void tcp_cc_resize_sndbuf(struct tcpcb *tp);
 extern void tcp_bad_rexmt_fix_sndbuf(struct tcpcb *tp);
 extern void tcp_cc_cwnd_init_or_reset(struct tcpcb *tp);
 extern int tcp_cc_delay_ack(struct tcpcb *tp, struct tcphdr *th);
 extern void tcp_ccdbg_trace(struct tcpcb *tp, struct tcphdr *th,
-	int32_t event);
+    int32_t event);
 extern void tcp_cc_allocate_state(struct tcpcb *tp);
 extern void tcp_cc_after_idle_stretchack(struct tcpcb *tp);
 extern uint32_t tcp_cc_is_cwnd_nonvalidated(struct tcpcb *tp);

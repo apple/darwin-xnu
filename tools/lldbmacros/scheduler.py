@@ -43,6 +43,7 @@ def ShowInterrupts(cmd_args=None):
             cpu_data_entry = Cast(element, 'cpu_data_t *')
             print "CPU {} IRQ: {:d}\n".format(y, cpu_data_entry.cpu_stat.irq_ex_cnt)
             print "CPU {} IPI: {:d}\n".format(y, cpu_data_entry.cpu_stat.ipi_cnt)
+            print "CPU {} PMI: {:d}\n".format(y, cpu_data_entry.cpu_stat.pmi_cnt)
             print "CPU {} TMR: {:d}\n".format(y, cpu_data_entry.cpu_stat.timer_cnt)
             x = x + 1
         y = y + 1
@@ -489,6 +490,9 @@ def ShowRunQSummary(runq):
                     print "\t" + GetThreadBackTrace(thread, prefix="\t\t") + "\n"
 
 def ShowRTRunQSummary(rt_runq):
+    if (hex(rt_runq.count) == hex(0xfdfdfdfd)) :
+        print "    Realtime Queue ({:<#012x}) uninitialized\n".format(addressof(rt_runq.queue))
+        return
     print "    Realtime Queue ({:<#012x}) Count {:d}\n".format(addressof(rt_runq.queue), rt_runq.count)
     if rt_runq.count != 0:
         print "\t" + GetThreadSummary.header + "\n"

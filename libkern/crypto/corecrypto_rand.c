@@ -46,7 +46,8 @@ cc_rand_generate(void *out, size_t outlen)
 	return error;
 }
 
-int random_buf(void *buf, size_t buflen)
+int
+random_buf(void *buf, size_t buflen)
 {
 	return cc_rand_generate(buf, buflen);
 }

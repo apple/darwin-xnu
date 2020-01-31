@@ -76,11 +76,12 @@ struct kasan_test {
 #define TEST_START(t)     do { t->result = 1; TEST_BARRIER(); } while (0)
 #define TEST_FAULT(t)     do { TEST_BARRIER(); t->result = 0; TEST_BARRIER(); } while (0)
 #define TEST_NOFAULT(t)   do { TEST_BARRIER(); t->result = 1; TEST_BARRIER(); } while (0)
-#define TEST_DONE(t,res)  do { t->result = (res); kasan_handle_test(); } while (0)
-#define DECLARE_TEST(f,s)    { .func = f, .name = s }
-#define DECLARE_TEST3(f,c,s) { .func = f, .cleanup = c, .name = s }
+#define TEST_DONE(t, res)  do { t->result = (res); kasan_handle_test(); } while (0)
+#define DECLARE_TEST(f, s)    { .func = f, .name = s }
+#define DECLARE_TEST3(f, c, s) { .func = f, .cleanup = c, .name = s }
 
-static void heap_cleanup(struct kasan_test *t)
+static void
+heap_cleanup(struct kasan_test *t)
 {
 	if (t->data) {
 		kfree(t->data, t->datasz);
@@ -88,7 +89,8 @@ static void heap_cleanup(struct kasan_test *t)
 	}
 }
 
-static int test_global_overflow(struct kasan_test __unused *t)
+static int
+test_global_overflow(struct kasan_test __unused *t)
 {
 	int i;
 	/* rookie error */
@@ -98,7 +100,8 @@ static int test_global_overflow(struct kasan_test __unused *t)
 	return 0;
 }
 
-static int test_heap_underflow(struct kasan_test __unused *t)
+static int
+test_heap_underflow(struct kasan_test __unused *t)
 {
 	uint8_t *x = kalloc(BUFSZ);
 	if (!x) {
@@ -110,7 +113,8 @@ static int test_heap_underflow(struct kasan_test __unused *t)
 	return 0;
 }
 
-static int test_heap_overflow(struct kasan_test __unused *t)
+static int
+test_heap_overflow(struct kasan_test __unused *t)
 {
 	uint8_t *x = kalloc(BUFSZ);
 	if (!x) {
@@ -122,7 +126,8 @@ static int test_heap_overflow(struct kasan_test __unused *t)
 	return 0;
 }
 
-static int test_heap_uaf(struct kasan_test __unused *t)
+static int
+test_heap_uaf(struct kasan_test __unused *t)
 {
 	uint8_t *x = kalloc(LBUFSZ);
 	if (!x) {
@@ -133,14 +138,17 @@ static int test_heap_uaf(struct kasan_test __unused *t)
 	return 0;
 }
 
-static int test_heap_inval_free(struct kasan_test __unused *t)
+static int
+test_heap_inval_free(struct kasan_test __unused *t)
 {
 	int x;
-	kfree(&x, BUFSZ);
+	int *ptr = &x;
+	kfree(ptr, BUFSZ);
 	return 0;
 }
 
-static int test_heap_double_free(struct kasan_test *t)
+static int
+test_heap_double_free(struct kasan_test *t)
 {
 	TEST_START(t);
 
@@ -156,7 +164,8 @@ static int test_heap_double_free(struct kasan_test *t)
 	return 0;
 }
 
-static int test_heap_small_free(struct kasan_test *t)
+static int
+test_heap_small_free(struct kasan_test *t)
 {
 	TEST_START(t);
 
@@ -168,14 +177,15 @@ static int test_heap_small_free(struct kasan_test *t)
 	t->data = x;
 
 	TEST_FAULT(t);
-	kfree(x, BUFSZ-2);
+	kfree(x, BUFSZ - 2);
 	t->data = NULL;
 	t->datasz = 0;
 
 	return 0;
 }
 
-static int test_stack_overflow(struct kasan_test *t)
+static int
+test_stack_overflow(struct kasan_test *t)
 {
 	TEST_START(t);
 
@@ -195,7 +205,8 @@ static int test_stack_overflow(struct kasan_test *t)
 	return !(a[0] == 0);
 }
 
-static int test_stack_underflow(struct kasan_test *t)
+static int
+test_stack_underflow(struct kasan_test *t)
 {
 	TEST_START(t);
 
@@ -206,9 +217,9 @@ static int test_stack_underflow(struct kasan_test *t)
 
 	/* generate a negative index without the compiler noticing */
 #if __x86_64__
-	__asm__ __volatile__("movq $-1, %0" : "=r"(idx) :: "memory");
+	__asm__ __volatile__ ("movq $-1, %0" : "=r"(idx) :: "memory");
 #else
-	__asm__ __volatile__("mov %0, #-1" : "=r"(idx) :: "memory");
+	__asm__ __volatile__ ("mov %0, #-1" : "=r"(idx) :: "memory");
 #endif
 
 	TEST_FAULT(t);
@@ -216,10 +227,11 @@ static int test_stack_underflow(struct kasan_test *t)
 	TEST_NOFAULT(t);
 
 	TEST_BARRIER();
-	return (a[0] == 0);
+	return a[0] == 0;
 }
 
-static int test_memcpy(struct kasan_test *t)
+static int
+test_memcpy(struct kasan_test *t)
 {
 	TEST_START(t);
 	uint8_t a1[STACK_ARRAY_SZ];
@@ -232,13 +244,14 @@ static int test_memcpy(struct kasan_test *t)
 
 	/* should fail */
 	TEST_FAULT(t);
-	memcpy(a2, a1, STACK_ARRAY_SZ+1);
+	memcpy(a2, a1, STACK_ARRAY_SZ + 1);
 	TEST_NOFAULT(t);
 
 	return 0;
 }
 
-static int test_memmove(struct kasan_test *t)
+static int
+test_memmove(struct kasan_test *t)
 {
 	TEST_START(t);
 	uint8_t a1[STACK_ARRAY_SZ];
@@ -251,13 +264,14 @@ static int test_memmove(struct kasan_test *t)
 
 	/* should fail */
 	TEST_FAULT(t);
-	memmove(a2, a1, STACK_ARRAY_SZ+1);
+	memmove(a2, a1, STACK_ARRAY_SZ + 1);
 	TEST_NOFAULT(t);
 
 	return 0;
 }
 
-static int test_bcopy(struct kasan_test *t)
+static int
+test_bcopy(struct kasan_test *t)
 {
 	TEST_START(t);
 	uint8_t a1[STACK_ARRAY_SZ];
@@ -270,13 +284,14 @@ static int test_bcopy(struct kasan_test *t)
 
 	/* should fail */
 	TEST_FAULT(t);
-	bcopy(a2, a1, STACK_ARRAY_SZ+1);
+	bcopy(a2, a1, STACK_ARRAY_SZ + 1);
 	TEST_NOFAULT(t);
 
 	return 0;
 }
 
-static int test_memset(struct kasan_test *t)
+static int
+test_memset(struct kasan_test *t)
 {
 	TEST_START(t);
 	uint8_t a1[STACK_ARRAY_SZ];
@@ -288,67 +303,74 @@ static int test_memset(struct kasan_test *t)
 
 	/* should fail */
 	TEST_FAULT(t);
-	memset(a1, 'f', STACK_ARRAY_SZ+1);
+	memset(a1, 'f', STACK_ARRAY_SZ + 1);
 	TEST_NOFAULT(t);
 
 	return 0;
 }
 
-static int test_memcmp(struct kasan_test *t)
+static int
+test_memcmp(struct kasan_test *t)
 {
 	TEST_START(t);
 	uint8_t *a1;
 	uint8_t *a2;
 
 	a1 = kalloc(STACK_ARRAY_SZ);
-	if (!a1)
+	if (!a1) {
 		return 1;
-	a2 = kalloc(STACK_ARRAY_SZ+1);
-	if (!a2)
+	}
+	a2 = kalloc(STACK_ARRAY_SZ + 1);
+	if (!a2) {
 		return 1;
+	}
 
 	/* should work */
 	memcmp(a1, a2, STACK_ARRAY_SZ);
-	memcmp(a1, a2+1, STACK_ARRAY_SZ);
+	memcmp(a1, a2 + 1, STACK_ARRAY_SZ);
 
 	TEST_BARRIER();
 
 	/* should fail */
 	TEST_FAULT(t);
-	memcmp(a1, a2, STACK_ARRAY_SZ+1);
+	memcmp(a1, a2, STACK_ARRAY_SZ + 1);
 	TEST_NOFAULT(t);
 
 	return 0;
 }
 
-static int test_bcmp(struct kasan_test *t)
+static int
+test_bcmp(struct kasan_test *t)
 {
 	TEST_START(t);
 	uint8_t *a1;
 	uint8_t *a2;
 
 	a1 = kalloc(STACK_ARRAY_SZ);
-	if (!a1)
+	if (!a1) {
 		return 1;
-	a2 = kalloc(STACK_ARRAY_SZ+1);
-	if (!a2)
+	}
+	a2 = kalloc(STACK_ARRAY_SZ + 1);
+	if (!a2) {
 		return 1;
+	}
 
 	/* should work */
 	bcmp(a1, a2, STACK_ARRAY_SZ);
-	bcmp(a1, a2+1, STACK_ARRAY_SZ);
+	bcmp(a1, a2 + 1, STACK_ARRAY_SZ);
 
 	TEST_BARRIER();
 
 	/* should fail */
 	TEST_FAULT(t);
-	bcmp(a1, a2, STACK_ARRAY_SZ+1);
+	bcmp(a1, a2, STACK_ARRAY_SZ + 1);
 	TEST_NOFAULT(t);
 
 	return 0;
 }
 
-static int test_bzero(struct kasan_test *t)
+static int
+test_bzero(struct kasan_test *t)
 {
 	TEST_START(t);
 	uint8_t a1[STACK_ARRAY_SZ];
@@ -360,13 +382,14 @@ static int test_bzero(struct kasan_test *t)
 
 	/* should fail */
 	TEST_FAULT(t);
-	bzero(a1, STACK_ARRAY_SZ+1);
+	bzero(a1, STACK_ARRAY_SZ + 1);
 	TEST_NOFAULT(t);
 
 	return 0;
 }
 
-static int test_strlcpy(struct kasan_test *t)
+static int
+test_strlcpy(struct kasan_test *t)
 {
 	TEST_START(t);
 	char a1[8];
@@ -382,7 +405,8 @@ static int test_strlcpy(struct kasan_test *t)
 	return 0;
 }
 
-static int test_strncpy(struct kasan_test *t)
+static int
+test_strncpy(struct kasan_test *t)
 {
 	TEST_START(t);
 	char a1[9];
@@ -398,7 +422,8 @@ static int test_strncpy(struct kasan_test *t)
 	return a1[0] != 'l';
 }
 
-static int test_strlcat(struct kasan_test *t)
+static int
+test_strlcat(struct kasan_test *t)
 {
 	TEST_START(t);
 	char a1[9] = {};
@@ -418,7 +443,8 @@ static int test_strlcat(struct kasan_test *t)
 	return a1[0] != 'l';
 }
 
-static int test_strncat(struct kasan_test *t)
+static int
+test_strncat(struct kasan_test *t)
 {
 	TEST_START(t);
 	char a1[9] = {};
@@ -463,20 +489,24 @@ test_blacklist_str(struct kasan_test *t)
 }
 
 #if 0
-static int test_strnlen(struct kasan_test *t)
+static int
+test_strnlen(struct kasan_test *t)
 {
 	TEST_START(t);
 	const char *a1 = "abcdef";
 
 	/* should not fault */
-	if (strnlen(a1, 6) != 6)
+	if (strnlen(a1, 6) != 6) {
 		return 1;
-	if (strnlen(a1, 7) != 6)
+	}
+	if (strnlen(a1, 7) != 6) {
 		return 1;
+	}
 
 	TEST_FAULT(t);
-	if (strnlen(a1, 8) != 6)
+	if (strnlen(a1, 8) != 6) {
 		return 1;
+	}
 	TEST_NOFAULT(t);
 
 	return a1[0] != 'a';
@@ -486,7 +516,7 @@ static int test_strnlen(struct kasan_test *t)
 static void OS_NOINLINE
 force_fakestack(char *x)
 {
-	__asm__ __volatile__("" :: "r" (x) : "memory");
+	__asm__ __volatile__ ("" :: "r" (x) : "memory");
 }
 
 OS_NOINLINE
@@ -536,7 +566,8 @@ stack_uaf_helper(void)
 	return uaf_ptr;
 }
 
-static int test_stack_uaf(struct kasan_test __unused *t)
+static int
+test_stack_uaf(struct kasan_test __unused *t)
 {
 	int *x = stack_uaf_helper();
 	*x = 0xb4d;
@@ -547,32 +578,32 @@ static int test_stack_uaf(struct kasan_test __unused *t)
 static struct kasan_test xnu_tests[] = {
 	DECLARE_TEST(NULL, NULL),
 	DECLARE_TEST(test_global_overflow, "Global overflow"),
-	DECLARE_TEST3(test_heap_underflow,  heap_cleanup, "Heap underflow"),
-	DECLARE_TEST3(test_heap_overflow,   heap_cleanup, "Heap overflow"),
-	DECLARE_TEST(test_heap_uaf,        "Heap use-after-free"),
+	DECLARE_TEST3(test_heap_underflow, heap_cleanup, "Heap underflow"),
+	DECLARE_TEST3(test_heap_overflow, heap_cleanup, "Heap overflow"),
+	DECLARE_TEST(test_heap_uaf, "Heap use-after-free"),
 	DECLARE_TEST(test_heap_inval_free, "Heap invalid free"),
-	DECLARE_TEST(test_heap_double_free,"Heap double free"),
+	DECLARE_TEST(test_heap_double_free, "Heap double free"),
 	DECLARE_TEST3(test_heap_small_free, heap_cleanup, "Heap small free"),
-	DECLARE_TEST(test_stack_overflow,  "Stack overflow"),
+	DECLARE_TEST(test_stack_overflow, "Stack overflow"),
 	DECLARE_TEST(test_stack_underflow, "Stack underflow"),
-	DECLARE_TEST(test_stack_uaf,       "Stack use-after-return"),
-	DECLARE_TEST(test_memcpy,          "memcpy"),
-	DECLARE_TEST(test_memmove,         "memmmove"),
-	DECLARE_TEST(test_bcopy,           "bcopy"),
-	DECLARE_TEST(test_memset,          "memset"),
-	DECLARE_TEST(test_memcmp,          "memcmp"),
-	DECLARE_TEST(test_bcmp,            "bcmp"),
-	DECLARE_TEST(test_bzero,           "bzero"),
-	DECLARE_TEST(test_strlcpy,         "strlcpy"),
-	DECLARE_TEST(test_strlcat,         "strlcat"),
-	DECLARE_TEST(test_strncpy,         "strncpy"),
-	DECLARE_TEST(test_strncat,         "strncat"),
-	DECLARE_TEST(test_blacklist,       "blacklist"),
-	DECLARE_TEST(test_blacklist_str,   "blacklist_str"),
-	DECLARE_TEST(test_fakestack,       "fakestack"),
+	DECLARE_TEST(test_stack_uaf, "Stack use-after-return"),
+	DECLARE_TEST(test_memcpy, "memcpy"),
+	DECLARE_TEST(test_memmove, "memmmove"),
+	DECLARE_TEST(test_bcopy, "bcopy"),
+	DECLARE_TEST(test_memset, "memset"),
+	DECLARE_TEST(test_memcmp, "memcmp"),
+	DECLARE_TEST(test_bcmp, "bcmp"),
+	DECLARE_TEST(test_bzero, "bzero"),
+	DECLARE_TEST(test_strlcpy, "strlcpy"),
+	DECLARE_TEST(test_strlcat, "strlcat"),
+	DECLARE_TEST(test_strncpy, "strncpy"),
+	DECLARE_TEST(test_strncat, "strncat"),
+	DECLARE_TEST(test_blacklist, "blacklist"),
+	DECLARE_TEST(test_blacklist_str, "blacklist_str"),
+	DECLARE_TEST(test_fakestack, "fakestack"),
 	// DECLARE_TEST(test_strnlen,         "strnlen"),
 };
-static int num_xnutests = sizeof(xnu_tests)/sizeof(xnu_tests[0]);
+static int num_xnutests = sizeof(xnu_tests) / sizeof(xnu_tests[0]);
 
 static int
 kasan_run_test(struct kasan_test *test_list, int testno, int fail)
@@ -629,7 +660,7 @@ kasan_test(int testno, int fail)
 
 	if (testno == -1) {
 		/* shorthand for all tests */
-		testno = (1U << (num_xnutests-1)) - 1;
+		testno = (1U << (num_xnutests - 1)) - 1;
 	}
 
 	while (testno) {

@@ -40,60 +40,60 @@
 
 
 #if (DEVELOPMENT || DEBUG)
-copyout_shim_fn_t copyout_shim_fn=NULL;
-unsigned co_src_flags=0;
+copyout_shim_fn_t copyout_shim_fn = NULL;
+unsigned co_src_flags = 0;
 #endif
 
-kern_return_t register_copyout_shim(void (*fn)(const void *,user_addr_t,vm_size_t,unsigned co_src),unsigned types)
+kern_return_t
+register_copyout_shim(void (*fn)(const void *, user_addr_t, vm_size_t, unsigned co_src), unsigned types)
 {
 #if (DEVELOPMENT || DEBUG)
-    int copyout_shim_enabled=0;
-    
-    if(!fn)
-    {
-        /* unregistration is always allowed */
-        copyout_shim_fn=NULL;
-        return KERN_SUCCESS;
-    }
-    
-    if(copyout_shim_fn)
-    {
-        //need to unregister first before registering a new one.
-        return KERN_FAILURE;
-    }
-    
-    if(!PE_parse_boot_argn("enable_copyout_shim",&copyout_shim_enabled,sizeof(copyout_shim_enabled)) || !copyout_shim_enabled)
-    {
-        return KERN_FAILURE;
-    }
-    
+	int copyout_shim_enabled = 0;
 
-    co_src_flags=types;
-    copyout_shim_fn=fn;
-    return KERN_SUCCESS;
+	if (!fn) {
+		/* unregistration is always allowed */
+		copyout_shim_fn = NULL;
+		return KERN_SUCCESS;
+	}
+
+	if (copyout_shim_fn) {
+		//need to unregister first before registering a new one.
+		return KERN_FAILURE;
+	}
+
+	if (!PE_parse_boot_argn("enable_copyout_shim", &copyout_shim_enabled, sizeof(copyout_shim_enabled)) || !copyout_shim_enabled) {
+		return KERN_FAILURE;
+	}
+
+
+	co_src_flags = types;
+	copyout_shim_fn = fn;
+	return KERN_SUCCESS;
 #else
-    UNUSED_IN_RELEASE(fn);
-    UNUSED_IN_RELEASE(types);
-    return KERN_FAILURE;
+	UNUSED_IN_RELEASE(fn);
+	UNUSED_IN_RELEASE(types);
+	return KERN_FAILURE;
 #endif
 }
 
-void *cos_kernel_unslide(const void *ptr)
+void *
+cos_kernel_unslide(const void *ptr)
 {
 #if (DEVELOPMENT || DEBUG)
-    return (void *)(VM_KERNEL_UNSLIDE(ptr));
+	return (void *)(VM_KERNEL_UNSLIDE(ptr));
 #else
-    UNUSED_IN_RELEASE(ptr);
-    return NULL;
+	UNUSED_IN_RELEASE(ptr);
+	return NULL;
 #endif
 }
 
-void *cos_kernel_reslide(const void *ptr)
+void *
+cos_kernel_reslide(const void *ptr)
 {
 #if (DEVELOPMENT || DEBUG)
-    return (void *)(VM_KERNEL_SLIDE(ptr));
+	return (void *)(VM_KERNEL_SLIDE(ptr));
 #else
-    UNUSED_IN_RELEASE(ptr);
-    return NULL;
+	UNUSED_IN_RELEASE(ptr);
+	return NULL;
 #endif
 }

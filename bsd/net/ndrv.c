@@ -568,10 +568,10 @@ ndrv_do_detach(struct ndrv_cb *np)
 		}
 	}
     	if (np->nd_laddr != NULL) {
-		FREE((caddr_t)np->nd_laddr, M_IFADDR);
+		FREE(np->nd_laddr, M_IFADDR);
 		np->nd_laddr = NULL;
 	}
-	FREE((caddr_t)np, M_PCB);
+	FREE(np, M_PCB);
 	so->so_pcb = 0;
 	so->so_flags |= SOF_PCBCLEARING;
 	sofree(so);

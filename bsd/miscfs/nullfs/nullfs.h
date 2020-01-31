@@ -88,13 +88,13 @@ typedef int (*vop_t)(void *);
 struct null_mount {
 	struct vnode * nullm_rootvp;       /* Reference to root null_node (inode 1) */
 	struct vnode * nullm_secondvp;     /* Reference to virtual directory vnode to wrap app
-	                                      bundles (inode 2) */
+	                                    *  bundles (inode 2) */
 	struct vnode * nullm_thirdcovervp; /* Reference to vnode that covers
-	                                      lowerrootvp  (inode 3) */
+	                                    *  lowerrootvp  (inode 3) */
 	struct vnode * nullm_lowerrootvp;  /* reference to the root of the tree we are
-	                                      relocating (in the other file system) */
+	                                   *  relocating (in the other file system) */
 	uint32_t nullm_lowerrootvid;       /* store the lower root vid so we can check
-	                                      before we build the shadow vnode lazily*/
+	                                    *  before we build the shadow vnode lazily*/
 	lck_mtx_t nullm_lock;              /* lock to protect vps above */
 	uint64_t nullm_flags;
 };
@@ -111,7 +111,7 @@ struct null_node {
 	struct vnode * null_lowervp;     /* VREFed once */
 	struct vnode * null_vnode;       /* Back pointer */
 	uint32_t null_lowervid;          /* vid for lowervp to detect lowervp getting recycled out
-	                                    from under us */
+	                                  *  from under us */
 	uint32_t null_myvid;
 	uint32_t null_flags;
 };
@@ -136,10 +136,10 @@ int nullfs_init_lck(lck_mtx_t * lck);
 int nullfs_destroy_lck(lck_mtx_t * lck);
 int nullfs_uninit(void);
 int null_nodeget(
-    struct mount * mp, struct vnode * lowervp, struct vnode * dvp, struct vnode ** vpp, struct componentname * cnp, int root);
+	struct mount * mp, struct vnode * lowervp, struct vnode * dvp, struct vnode ** vpp, struct componentname * cnp, int root);
 int null_hashget(struct mount * mp, struct vnode * lowervp, struct vnode ** vpp);
 int null_getnewvnode(
-    struct mount * mp, struct vnode * lowervp, struct vnode * dvp, struct vnode ** vpp, struct componentname * cnp, int root);
+	struct mount * mp, struct vnode * lowervp, struct vnode * dvp, struct vnode ** vpp, struct componentname * cnp, int root);
 void null_hashrem(struct null_node * xp);
 
 int nullfs_getbackingvnode(vnode_t in_vp, vnode_t* out_vpp);

@@ -2,7 +2,7 @@
  * Copyright (c) 2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -60,8 +60,8 @@
 #define f_flag f_fglob->fg_flag
 #define f_type f_fglob->fg_ops->fo_type
 extern int dofilewrite(vfs_context_t ctx, struct fileproc *fp,
-			 user_addr_t bufp, user_size_t nbyte, off_t offset, 
-			 int flags, user_ssize_t *retval );
+    user_addr_t bufp, user_size_t nbyte, off_t offset,
+    int flags, user_ssize_t *retval );
 extern int wr_uio(struct proc *p, struct fileproc *fp, uio_t uio, user_ssize_t *retval);
 
 /*
@@ -69,7 +69,7 @@ extern int wr_uio(struct proc *p, struct fileproc *fp, uio_t uio, user_ssize_t *
  */
 
 kern_return_t task_exception_notify(exception_type_t exception,
-        mach_exception_data_type_t code, mach_exception_data_type_t subcode);
+    mach_exception_data_type_t code, mach_exception_data_type_t subcode);
 kern_return_t task_violated_guard(mach_exception_code_t, mach_exception_subcode_t, void *);
 
 /*
@@ -87,17 +87,17 @@ kern_return_t task_violated_guard(mach_exception_code_t, mach_exception_subcode_
 
 struct guarded_fileproc {
 	struct fileproc gf_fileproc;
-	u_int		gf_magic;
-	u_int		gf_attrs;
-	guardid_t	gf_guard;
+	u_int           gf_magic;
+	u_int           gf_attrs;
+	guardid_t       gf_guard;
 };
 
-const size_t sizeof_guarded_fileproc = sizeof (struct guarded_fileproc);
+const size_t sizeof_guarded_fileproc = sizeof(struct guarded_fileproc);
 
-#define FP_TO_GFP(fp)	((struct guarded_fileproc *)(fp))
-#define	GFP_TO_FP(gfp)	(&(gfp)->gf_fileproc)
+#define FP_TO_GFP(fp)   ((struct guarded_fileproc *)(fp))
+#define GFP_TO_FP(gfp)  (&(gfp)->gf_fileproc)
 
-#define GUARDED_FILEPROC_MAGIC	0x29083
+#define GUARDED_FILEPROC_MAGIC  0x29083
 
 struct gfp_crarg {
 	guardid_t gca_guard;
@@ -110,16 +110,17 @@ guarded_fileproc_alloc_init(void *crarg)
 	struct gfp_crarg *aarg = crarg;
 	struct guarded_fileproc *gfp;
 
-	if ((gfp = kalloc(sizeof (*gfp))) == NULL)
-		return (NULL);
+	if ((gfp = kalloc(sizeof(*gfp))) == NULL) {
+		return NULL;
+	}
 
-	bzero(gfp, sizeof (*gfp));
+	bzero(gfp, sizeof(*gfp));
 	gfp->gf_fileproc.f_flags = FTYPE_GUARDED;
 	gfp->gf_magic = GUARDED_FILEPROC_MAGIC;
 	gfp->gf_guard = aarg->gca_guard;
 	gfp->gf_attrs = aarg->gca_attrs;
 
-	return (GFP_TO_FP(gfp));
+	return GFP_TO_FP(gfp);
 }
 
 void
@@ -128,10 +129,11 @@ guarded_fileproc_free(struct fileproc *fp)
 	struct guarded_fileproc *gfp = FP_TO_GFP(fp);
 
 	if (FILEPROC_TYPE(fp) != FTYPE_GUARDED ||
-	    GUARDED_FILEPROC_MAGIC != gfp->gf_magic)
+	    GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
 		panic("%s: corrupt fp %p flags %x", __func__, fp, fp->f_flags);
+	}
 
-	kfree(gfp, sizeof (*gfp));
+	kfree(gfp, sizeof(*gfp));
 }
 
 static int
@@ -141,31 +143,34 @@ fp_lookup_guarded(proc_t p, int fd, guardid_t guard,
 	struct fileproc *fp;
 	int error;
 
-	if ((error = fp_lookup(p, fd, &fp, locked)) != 0)
-		return (error);
+	if ((error = fp_lookup(p, fd, &fp, locked)) != 0) {
+		return error;
+	}
 	if (FILEPROC_TYPE(fp) != FTYPE_GUARDED) {
 		(void) fp_drop(p, fd, fp, locked);
-		return (EINVAL);
+		return EINVAL;
 	}
 	struct guarded_fileproc *gfp = FP_TO_GFP(fp);
 
-	if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic)
+	if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
 		panic("%s: corrupt fp %p", __func__, fp);
+	}
 
 	if (guard != gfp->gf_guard) {
 		(void) fp_drop(p, fd, fp, locked);
-		return (EPERM);	/* *not* a mismatch exception */
+		return EPERM; /* *not* a mismatch exception */
 	}
-	if (gfpp)
+	if (gfpp) {
 		*gfpp = gfp;
-	return (0);
+	}
+	return 0;
 }
 
 /*
  * Expected use pattern:
  *
  * if (FP_ISGUARDED(fp, GUARD_CLOSE)) {
- * 	error = fp_guard_exception(p, fd, fp, kGUARD_EXC_CLOSE);
+ *      error = fp_guard_exception(p, fd, fp, kGUARD_EXC_CLOSE);
  *      proc_fdunlock(p);
  *      return (error);
  * }
@@ -177,12 +182,13 @@ fp_isguarded(struct fileproc *fp, u_int attrs)
 	if (FILEPROC_TYPE(fp) == FTYPE_GUARDED) {
 		struct guarded_fileproc *gfp = FP_TO_GFP(fp);
 
-		if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic)
+		if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
 			panic("%s: corrupt gfp %p flags %x",
 			    __func__, gfp, fp->f_flags);
-		return ((attrs & gfp->gf_attrs) == attrs);
+		}
+		return (attrs & gfp->gf_attrs) == attrs;
 	}
-	return (0);
+	return 0;
 }
 
 extern char *proc_name_address(void *p);
@@ -190,8 +196,9 @@ extern char *proc_name_address(void *p);
 int
 fp_guard_exception(proc_t p, int fd, struct fileproc *fp, u_int flavor)
 {
-	if (FILEPROC_TYPE(fp) != FTYPE_GUARDED)
+	if (FILEPROC_TYPE(fp) != FTYPE_GUARDED) {
 		panic("%s corrupt fp %p flags %x", __func__, fp, fp->f_flags);
+	}
 
 	struct guarded_fileproc *gfp = FP_TO_GFP(fp);
 	/* all gfd fields protected via proc_fdlock() */
@@ -205,7 +212,7 @@ fp_guard_exception(proc_t p, int fd, struct fileproc *fp, u_int flavor)
 
 	thread_t t = current_thread();
 	thread_guard_violation(t, code, subcode);
-	return (EPERM);
+	return EPERM;
 }
 
 /*
@@ -251,16 +258,18 @@ fd_guard_ast(
 int
 guarded_open_np(proc_t p, struct guarded_open_np_args *uap, int32_t *retval)
 {
-	if ((uap->flags & O_CLOEXEC) == 0)
-		return (EINVAL);
+	if ((uap->flags & O_CLOEXEC) == 0) {
+		return EINVAL;
+	}
 
 #define GUARD_REQUIRED (GUARD_DUP)
-#define GUARD_ALL      (GUARD_REQUIRED |	\
-			(GUARD_CLOSE | GUARD_SOCKET_IPC | GUARD_FILEPORT | GUARD_WRITE))
+#define GUARD_ALL      (GUARD_REQUIRED |        \
+	                (GUARD_CLOSE | GUARD_SOCKET_IPC | GUARD_FILEPORT | GUARD_WRITE))
 
 	if (((uap->guardflags & GUARD_REQUIRED) != GUARD_REQUIRED) ||
-	    ((uap->guardflags & ~GUARD_ALL) != 0))
-		return (EINVAL);
+	    ((uap->guardflags & ~GUARD_ALL) != 0)) {
+		return EINVAL;
+	}
 
 	int error;
 	struct gfp_crarg crarg = {
@@ -268,14 +277,16 @@ guarded_open_np(proc_t p, struct guarded_open_np_args *uap, int32_t *retval)
 	};
 
 	if ((error = copyin(uap->guard,
-	    &(crarg.gca_guard), sizeof (crarg.gca_guard))) != 0)
-		return (error);
+	    &(crarg.gca_guard), sizeof(crarg.gca_guard))) != 0) {
+		return error;
+	}
 
 	/*
 	 * Disallow certain guard values -- is zero enough?
 	 */
-	if (crarg.gca_guard == 0)
-		return (EINVAL);
+	if (crarg.gca_guard == 0) {
+		return EINVAL;
+	}
 
 	struct filedesc *fdp = p->p_fd;
 	struct vnode_attr va;
@@ -288,10 +299,10 @@ guarded_open_np(proc_t p, struct guarded_open_np_args *uap, int32_t *retval)
 	VATTR_SET(&va, va_mode, cmode & ACCESSPERMS);
 
 	NDINIT(&nd, LOOKUP, OP_OPEN, FOLLOW | AUDITVNPATH1, UIO_USERSPACE,
-	       uap->path, ctx);
+	    uap->path, ctx);
 
-	return (open1(ctx, &nd, uap->flags | O_CLOFORK, &va,
-	    guarded_fileproc_alloc_init, &crarg, retval));
+	return open1(ctx, &nd, uap->flags | O_CLOFORK, &va,
+	           guarded_fileproc_alloc_init, &crarg, retval);
 }
 
 /*
@@ -305,12 +316,14 @@ guarded_open_np(proc_t p, struct guarded_open_np_args *uap, int32_t *retval)
 int
 guarded_open_dprotected_np(proc_t p, struct guarded_open_dprotected_np_args *uap, int32_t *retval)
 {
-	if ((uap->flags & O_CLOEXEC) == 0)
-		return (EINVAL);
+	if ((uap->flags & O_CLOEXEC) == 0) {
+		return EINVAL;
+	}
 
 	if (((uap->guardflags & GUARD_REQUIRED) != GUARD_REQUIRED) ||
-	    ((uap->guardflags & ~GUARD_ALL) != 0))
-		return (EINVAL);
+	    ((uap->guardflags & ~GUARD_ALL) != 0)) {
+		return EINVAL;
+	}
 
 	int error;
 	struct gfp_crarg crarg = {
@@ -318,14 +331,16 @@ guarded_open_dprotected_np(proc_t p, struct guarded_open_dprotected_np_args *uap
 	};
 
 	if ((error = copyin(uap->guard,
-	    &(crarg.gca_guard), sizeof (crarg.gca_guard))) != 0)
-		return (error);
+	    &(crarg.gca_guard), sizeof(crarg.gca_guard))) != 0) {
+		return error;
+	}
 
 	/*
 	 * Disallow certain guard values -- is zero enough?
 	 */
-	if (crarg.gca_guard == 0)
-		return (EINVAL);
+	if (crarg.gca_guard == 0) {
+		return EINVAL;
+	}
 
 	struct filedesc *fdp = p->p_fd;
 	struct vnode_attr va;
@@ -338,33 +353,33 @@ guarded_open_dprotected_np(proc_t p, struct guarded_open_dprotected_np_args *uap
 	VATTR_SET(&va, va_mode, cmode & ACCESSPERMS);
 
 	NDINIT(&nd, LOOKUP, OP_OPEN, FOLLOW | AUDITVNPATH1, UIO_USERSPACE,
-	       uap->path, ctx);
+	    uap->path, ctx);
 
-	/* 
-	 * Initialize the extra fields in vnode_attr to pass down dataprotection 
+	/*
+	 * Initialize the extra fields in vnode_attr to pass down dataprotection
 	 * extra fields.
 	 * 1. target cprotect class.
-	 * 2. set a flag to mark it as requiring open-raw-encrypted semantics. 
-	 */ 
-	if (uap->flags & O_CREAT) {	
+	 * 2. set a flag to mark it as requiring open-raw-encrypted semantics.
+	 */
+	if (uap->flags & O_CREAT) {
 		VATTR_SET(&va, va_dataprotect_class, uap->dpclass);
 	}
-	
-	if (uap->dpflags & (O_DP_GETRAWENCRYPTED|O_DP_GETRAWUNENCRYPTED)) {
-		if ( uap->flags & (O_RDWR | O_WRONLY)) {
+
+	if (uap->dpflags & (O_DP_GETRAWENCRYPTED | O_DP_GETRAWUNENCRYPTED)) {
+		if (uap->flags & (O_RDWR | O_WRONLY)) {
 			/* Not allowed to write raw encrypted bytes */
-			return EINVAL;		
-		}			
+			return EINVAL;
+		}
 		if (uap->dpflags & O_DP_GETRAWENCRYPTED) {
-		    VATTR_SET(&va, va_dataprotect_flags, VA_DP_RAWENCRYPTED);
+			VATTR_SET(&va, va_dataprotect_flags, VA_DP_RAWENCRYPTED);
 		}
 		if (uap->dpflags & O_DP_GETRAWUNENCRYPTED) {
-		    VATTR_SET(&va, va_dataprotect_flags, VA_DP_RAWUNENCRYPTED);
+			VATTR_SET(&va, va_dataprotect_flags, VA_DP_RAWUNENCRYPTED);
 		}
 	}
 
-	return (open1(ctx, &nd, uap->flags | O_CLOFORK, &va,
-	    guarded_fileproc_alloc_init, &crarg, retval));
+	return open1(ctx, &nd, uap->flags | O_CLOFORK, &va,
+	           guarded_fileproc_alloc_init, &crarg, retval);
 }
 
 /*
@@ -380,8 +395,9 @@ int
 guarded_kqueue_np(proc_t p, struct guarded_kqueue_np_args *uap, int32_t *retval)
 {
 	if (((uap->guardflags & GUARD_REQUIRED) != GUARD_REQUIRED) ||
-	    ((uap->guardflags & ~GUARD_ALL) != 0))
-		return (EINVAL);
+	    ((uap->guardflags & ~GUARD_ALL) != 0)) {
+		return EINVAL;
+	}
 
 	int error;
 	struct gfp_crarg crarg = {
@@ -389,13 +405,15 @@ guarded_kqueue_np(proc_t p, struct guarded_kqueue_np_args *uap, int32_t *retval)
 	};
 
 	if ((error = copyin(uap->guard,
-	    &(crarg.gca_guard), sizeof (crarg.gca_guard))) != 0)
-		return (error);
+	    &(crarg.gca_guard), sizeof(crarg.gca_guard))) != 0) {
+		return error;
+	}
 
-	if (crarg.gca_guard == 0)
-		return (EINVAL);
+	if (crarg.gca_guard == 0) {
+		return EINVAL;
+	}
 
-	return (kqueue_body(p, guarded_fileproc_alloc_init, &crarg, retval));
+	return kqueue_body(p, guarded_fileproc_alloc_init, &crarg, retval);
 }
 
 /*
@@ -412,17 +430,18 @@ guarded_close_np(proc_t p, struct guarded_close_np_args *uap,
 
 	AUDIT_SYSCLOSE(p, fd);
 
-	if ((error = copyin(uap->guard, &uguard, sizeof (uguard))) != 0)
-		return (error);
+	if ((error = copyin(uap->guard, &uguard, sizeof(uguard))) != 0) {
+		return error;
+	}
 
 	proc_fdlock(p);
 	if ((error = fp_lookup_guarded(p, fd, uguard, &gfp, 1)) != 0) {
 		proc_fdunlock(p);
-		return (error);
+		return error;
 	}
 	error = close_internal_locked(p, fd, GFP_TO_FP(gfp), 0);
 	proc_fdunlock(p);
-	return (error);
+	return error;
 }
 
 /*
@@ -451,7 +470,7 @@ guarded_close_np(proc_t p, struct guarded_close_np_args *uap,
  * If 'nguard' is NULL, fd must be guarded at entry, <guard, guardflags>
  * must match with what's already guarding the descriptor, and the
  * result will be to completely remove the guard.  Note also that the
- * fdflags are copied to the descriptor from the incoming *fdflagsp argument. 
+ * fdflags are copied to the descriptor from the incoming *fdflagsp argument.
  *
  * If the descriptor is guarded, and neither 'guard' nor 'nguard' is NULL
  * and <guard, guardflags> matches what's already guarding the descriptor,
@@ -494,30 +513,30 @@ change_fdguard_np(proc_t p, struct change_fdguard_np_args *uap,
 	int nfdflags = 0;
 
 	if (0 != uap->guard &&
-	    0 != (error = copyin(uap->guard, &oldg, sizeof (oldg))))
-		return (error); /* can't copyin current guard */
-
+	    0 != (error = copyin(uap->guard, &oldg, sizeof(oldg)))) {
+		return error; /* can't copyin current guard */
+	}
 	if (0 != uap->nguard &&
-	    0 != (error = copyin(uap->nguard, &newg, sizeof (newg))))
-		return (error); /* can't copyin new guard */
-
+	    0 != (error = copyin(uap->nguard, &newg, sizeof(newg)))) {
+		return error; /* can't copyin new guard */
+	}
 	if (0 != uap->fdflagsp &&
-	    0 != (error = copyin(uap->fdflagsp, &nfdflags, sizeof (nfdflags))))
-		return (error); /* can't copyin new fdflags */
-	    
+	    0 != (error = copyin(uap->fdflagsp, &nfdflags, sizeof(nfdflags)))) {
+		return error; /* can't copyin new fdflags */
+	}
 	proc_fdlock(p);
 restart:
 	if ((error = fp_lookup(p, fd, &fp, 1)) != 0) {
 		proc_fdunlock(p);
-		return (error);
+		return error;
 	}
 
 	if (0 != uap->fdflagsp) {
 		int ofdflags = FDFLAGS_GET(p, fd);
 		int ofl = ((ofdflags & UF_EXCLOSE) ? FD_CLOEXEC : 0) |
-			((ofdflags & UF_FORKCLOSE) ? FD_CLOFORK : 0);
+		    ((ofdflags & UF_FORKCLOSE) ? FD_CLOFORK : 0);
 		proc_fdunlock(p);
-		if (0 != (error = copyout(&ofl, uap->fdflagsp, sizeof (ofl)))) {
+		if (0 != (error = copyout(&ofl, uap->fdflagsp, sizeof(ofl)))) {
 			proc_fdlock(p);
 			goto dropout; /* can't copyout old fdflags */
 		}
@@ -525,29 +544,34 @@ restart:
 	}
 
 	if (FILEPROC_TYPE(fp) == FTYPE_GUARDED) {
-		if (0 == uap->guard || 0 == uap->guardflags)
+		if (0 == uap->guard || 0 == uap->guardflags) {
 			error = EINVAL; /* missing guard! */
-		else if (0 == oldg)
+		} else if (0 == oldg) {
 			error = EPERM; /* guardids cannot be zero */
+		}
 	} else {
-		if (0 != uap->guard || 0 != uap->guardflags)
+		if (0 != uap->guard || 0 != uap->guardflags) {
 			error = EINVAL; /* guard provided, but none needed! */
+		}
 	}
 
-	if (0 != error)
+	if (0 != error) {
 		goto dropout;
+	}
 
 	if (0 != uap->nguard) {
 		/*
 		 * There's a new guard in town.
 		 */
-		if (0 == newg)
+		if (0 == newg) {
 			error = EINVAL; /* guards cannot contain zero */
-		else if (((uap->nguardflags & GUARD_REQUIRED) != GUARD_REQUIRED) ||
-		    ((uap->nguardflags & ~GUARD_ALL) != 0))
+		} else if (((uap->nguardflags & GUARD_REQUIRED) != GUARD_REQUIRED) ||
+		    ((uap->nguardflags & ~GUARD_ALL) != 0)) {
 			error = EINVAL; /* must have valid attributes too */
-		if (0 != error)
+		}
+		if (0 != error) {
 			goto dropout;
+		}
 
 		if (FILEPROC_TYPE(fp) == FTYPE_GUARDED) {
 			/*
@@ -555,9 +579,10 @@ restart:
 			 */
 			struct guarded_fileproc *gfp = FP_TO_GFP(fp);
 
-			if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic)
+			if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
 				panic("%s: corrupt gfp %p flags %x",
-				      __func__, gfp, fp->f_flags);
+				    __func__, gfp, fp->f_flags);
+			}
 
 			if (oldg == gfp->gf_guard &&
 			    uap->guardflags == gfp->gf_attrs) {
@@ -567,12 +592,14 @@ restart:
 				 * fdflags "side-effects" as we go.   Note that
 				 * userland can request FD_CLOFORK semantics.
 				 */
-				if (gfp->gf_attrs & GUARD_CLOSE)
+				if (gfp->gf_attrs & GUARD_CLOSE) {
 					FDFLAGS_CLR(p, fd, UF_FORKCLOSE);
+				}
 				gfp->gf_guard = newg;
 				gfp->gf_attrs = uap->nguardflags;
-				if (gfp->gf_attrs & GUARD_CLOSE)
+				if (gfp->gf_attrs & GUARD_CLOSE) {
 					FDFLAGS_SET(p, fd, UF_FORKCLOSE);
+				}
 				FDFLAGS_SET(p, fd,
 				    (nfdflags & FD_CLOFORK) ? UF_FORKCLOSE : 0);
 				/* FG_CONFINED enforced regardless */
@@ -603,7 +630,7 @@ restart:
 				.gca_attrs = uap->nguardflags
 			};
 			struct fileproc *nfp =
-				guarded_fileproc_alloc_init(&crarg);
+			    guarded_fileproc_alloc_init(&crarg);
 			struct guarded_fileproc *gfp;
 
 			proc_fdlock(p);
@@ -611,8 +638,9 @@ restart:
 			switch (error = fp_tryswap(p, fd, nfp)) {
 			case 0: /* guarded-ness comes with side-effects */
 				gfp = FP_TO_GFP(nfp);
-				if (gfp->gf_attrs & GUARD_CLOSE)
+				if (gfp->gf_attrs & GUARD_CLOSE) {
 					FDFLAGS_SET(p, fd, UF_FORKCLOSE);
+				}
 				FDFLAGS_SET(p, fd, UF_EXCLOSE);
 				(void) fp_drop(p, fd, nfp, 1);
 				fileproc_free(fp);
@@ -627,7 +655,7 @@ restart:
 				break;
 			}
 			proc_fdunlock(p);
-			return (error);
+			return error;
 		}
 	} else {
 		/*
@@ -644,9 +672,10 @@ restart:
 				goto dropout;
 			}
 
-			if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic)
+			if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
 				panic("%s: corrupt gfp %p flags %x",
-				      __func__, gfp, fp->f_flags);
+				    __func__, gfp, fp->f_flags);
+			}
 
 			if (oldg != gfp->gf_guard ||
 			    uap->guardflags != gfp->gf_attrs) {
@@ -679,7 +708,7 @@ restart:
 				break;
 			}
 			proc_fdunlock(p);
-			return (error);
+			return error;
 		} else {
 			/*
 			 * Not already guarded, and no new guard?
@@ -691,7 +720,7 @@ restart:
 dropout:
 	(void) fp_drop(p, fd, fp, 1);
 	proc_fdunlock(p);
-	return (error);
+	return error;
 }
 
 /*
@@ -703,7 +732,7 @@ dropout:
 int
 guarded_write_np(struct proc *p, struct guarded_write_np_args *uap, user_ssize_t *retval)
 {
-	int error;      
+	int error;
 	int fd = uap->fd;
 	guardid_t uguard;
 	struct fileproc *fp;
@@ -712,30 +741,32 @@ guarded_write_np(struct proc *p, struct guarded_write_np_args *uap, user_ssize_t
 
 	AUDIT_ARG(fd, fd);
 
-	if ((error = copyin(uap->guard, &uguard, sizeof (uguard))) != 0)
-		return (error);
+	if ((error = copyin(uap->guard, &uguard, sizeof(uguard))) != 0) {
+		return error;
+	}
 
 	error = fp_lookup_guarded(p, fd, uguard, &gfp, 0);
-	if (error)
-		return(error);
+	if (error) {
+		return error;
+	}
 
 	fp = GFP_TO_FP(gfp);
 	if ((fp->f_flag & FWRITE) == 0) {
 		error = EBADF;
 	} else {
-
 		struct vfs_context context = *(vfs_context_current());
 		context.vc_ucred = fp->f_fglob->fg_cred;
 
 		error = dofilewrite(&context, fp, uap->cbuf, uap->nbyte,
-			(off_t)-1, 0, retval);
+		    (off_t)-1, 0, retval);
 		wrote_some = *retval > 0;
 	}
-	if (wrote_some)
-	        fp_drop_written(p, fd, fp);
-	else
-	        fp_drop(p, fd, fp, 0);
-	return(error);
+	if (wrote_some) {
+		fp_drop_written(p, fd, fp);
+	} else {
+		fp_drop(p, fd, fp, 0);
+	}
+	return error;
 }
 
 /*
@@ -744,11 +775,11 @@ guarded_write_np(struct proc *p, struct guarded_write_np_args *uap, user_ssize_t
  *
  * Initial implementation of guarded pwrites.
  */
- int
- guarded_pwrite_np(struct proc *p, struct guarded_pwrite_np_args *uap, user_ssize_t *retval)
- {
+int
+guarded_pwrite_np(struct proc *p, struct guarded_pwrite_np_args *uap, user_ssize_t *retval)
+{
 	struct fileproc *fp;
-	int error; 
+	int error;
 	int fd = uap->fd;
 	vnode_t vp  = (vnode_t)0;
 	guardid_t uguard;
@@ -757,12 +788,14 @@ guarded_write_np(struct proc *p, struct guarded_write_np_args *uap, user_ssize_t
 
 	AUDIT_ARG(fd, fd);
 
-	if ((error = copyin(uap->guard, &uguard, sizeof (uguard))) != 0)
-		return (error);
+	if ((error = copyin(uap->guard, &uguard, sizeof(uguard))) != 0) {
+		return error;
+	}
 
 	error = fp_lookup_guarded(p, fd, uguard, &gfp, 0);
-	if (error)
-		return(error);
+	if (error) {
+		return error;
+	}
 
 	fp = GFP_TO_FP(gfp);
 	if ((fp->f_flag & FWRITE) == 0) {
@@ -779,7 +812,7 @@ guarded_write_np(struct proc *p, struct guarded_write_np_args *uap, user_ssize_t
 		if (vnode_isfifo(vp)) {
 			error = ESPIPE;
 			goto errout;
-		} 
+		}
 		if ((vp->v_flag & VISTTY)) {
 			error = ENXIO;
 			goto errout;
@@ -790,19 +823,20 @@ guarded_write_np(struct proc *p, struct guarded_write_np_args *uap, user_ssize_t
 		}
 
 		error = dofilewrite(&context, fp, uap->buf, uap->nbyte,
-			uap->offset, FOF_OFFSET, retval);
+		    uap->offset, FOF_OFFSET, retval);
 		wrote_some = *retval > 0;
 	}
 errout:
-	if (wrote_some)
-	        fp_drop_written(p, fd, fp);
-	else
-	        fp_drop(p, fd, fp, 0);
+	if (wrote_some) {
+		fp_drop_written(p, fd, fp);
+	} else {
+		fp_drop(p, fd, fp, 0);
+	}
 
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_guarded_pwrite_np) | DBG_FUNC_NONE),
-	      uap->fd, uap->nbyte, (unsigned int)((uap->offset >> 32)), (unsigned int)(uap->offset), 0);
-	
-        return(error);
+	    uap->fd, uap->nbyte, (unsigned int)((uap->offset >> 32)), (unsigned int)(uap->offset), 0);
+
+	return error;
 }
 
 /*
@@ -826,14 +860,15 @@ guarded_writev_np(struct proc *p, struct guarded_writev_np_args *uap, user_ssize
 	AUDIT_ARG(fd, uap->fd);
 
 	/* Verify range bedfore calling uio_create() */
-	if (uap->iovcnt <= 0 || uap->iovcnt > UIO_MAXIOV)
-		return (EINVAL);
+	if (uap->iovcnt <= 0 || uap->iovcnt > UIO_MAXIOV) {
+		return EINVAL;
+	}
 
 	/* allocate a uio large enough to hold the number of iovecs passed */
 	auio = uio_create(uap->iovcnt, 0,
-				  (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
-				  UIO_WRITE);
-				  
+	    (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
+	    UIO_WRITE);
+
 	/* get location of iovecs within the uio.  then copyin the iovecs from
 	 * user space.
 	 */
@@ -843,25 +878,27 @@ guarded_writev_np(struct proc *p, struct guarded_writev_np_args *uap, user_ssize
 		goto ExitThisRoutine;
 	}
 	error = copyin_user_iovec_array(uap->iovp,
-		IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32,
-		uap->iovcnt, iovp);
+	    IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32,
+	    uap->iovcnt, iovp);
 	if (error) {
 		goto ExitThisRoutine;
 	}
-	
-	/* finalize uio_t for use and do the IO 
+
+	/* finalize uio_t for use and do the IO
 	 */
 	error = uio_calculateresid(auio);
 	if (error) {
 		goto ExitThisRoutine;
 	}
 
-	if ((error = copyin(uap->guard, &uguard, sizeof (uguard))) != 0)
+	if ((error = copyin(uap->guard, &uguard, sizeof(uguard))) != 0) {
 		goto ExitThisRoutine;
+	}
 
 	error = fp_lookup_guarded(p, uap->fd, uguard, &gfp, 0);
-	if (error)
+	if (error) {
 		goto ExitThisRoutine;
+	}
 
 	fp = GFP_TO_FP(gfp);
 	if ((fp->f_flag & FWRITE) == 0) {
@@ -870,16 +907,17 @@ guarded_writev_np(struct proc *p, struct guarded_writev_np_args *uap, user_ssize
 		error = wr_uio(p, fp, auio, retval);
 		wrote_some = *retval > 0;
 	}
-	
-	if (wrote_some)
-	        fp_drop_written(p, uap->fd, fp);
-	else
-	        fp_drop(p, uap->fd, fp, 0);
+
+	if (wrote_some) {
+		fp_drop_written(p, uap->fd, fp);
+	} else {
+		fp_drop(p, uap->fd, fp, 0);
+	}
 ExitThisRoutine:
 	if (auio != NULL) {
 		uio_free(auio);
 	}
-	return (error);
+	return error;
 }
 
 /*
@@ -896,15 +934,16 @@ falloc_guarded(struct proc *p, struct fileproc **fp, int *fd,
 	struct gfp_crarg crarg;
 
 	if (((attrs & GUARD_REQUIRED) != GUARD_REQUIRED) ||
-	    ((attrs & ~GUARD_ALL) != 0) || (*guard == 0))
-		return (EINVAL);
+	    ((attrs & ~GUARD_ALL) != 0) || (*guard == 0)) {
+		return EINVAL;
+	}
 
-	bzero(&crarg, sizeof (crarg));
+	bzero(&crarg, sizeof(crarg));
 	crarg.gca_guard = *guard;
 	crarg.gca_attrs = attrs;
 
-	return (falloc_withalloc(p, fp, fd, ctx, guarded_fileproc_alloc_init,
-	    &crarg));
+	return falloc_withalloc(p, fp, fd, ctx, guarded_fileproc_alloc_init,
+	           &crarg);
 }
 
 #if CONFIG_MACF && CONFIG_VNGUARD
@@ -951,7 +990,7 @@ struct vng_owner { /* lives on the fileglob label */
 static struct vng_info *
 new_vgi(unsigned attrs, guardid_t guard)
 {
-	struct vng_info *vgi = kalloc(sizeof (*vgi));
+	struct vng_info *vgi = kalloc(sizeof(*vgi));
 	vgi->vgi_guard = guard;
 	vgi->vgi_attrs = attrs;
 	TAILQ_INIT(&vgi->vgi_owners);
@@ -961,8 +1000,8 @@ new_vgi(unsigned attrs, guardid_t guard)
 static struct vng_owner *
 new_vgo(proc_t p, struct fileglob *fg)
 {
-	struct vng_owner *vgo = kalloc(sizeof (*vgo));
-	memset(vgo, 0, sizeof (*vgo));
+	struct vng_owner *vgo = kalloc(sizeof(*vgo));
+	memset(vgo, 0, sizeof(*vgo));
 	vgo->vgo_p = p;
 	vgo->vgo_fg = fg;
 	return vgo;
@@ -988,18 +1027,18 @@ free_vgi(struct vng_info *vgi)
 {
 	assert(TAILQ_EMPTY(&vgi->vgi_owners));
 #if DEVELOP || DEBUG
-	memset(vgi, 0xbeadfade, sizeof (*vgi));
+	memset(vgi, 0xbeadfade, sizeof(*vgi));
 #endif
-	kfree(vgi, sizeof (*vgi));
+	kfree(vgi, sizeof(*vgi));
 }
 
 static void
 free_vgo(struct vng_owner *vgo)
 {
 #if DEVELOP || DEBUG
-	memset(vgo, 0x2bedf1d0, sizeof (*vgo));
+	memset(vgo, 0x2bedf1d0, sizeof(*vgo));
 #endif
-	kfree(vgo, sizeof (*vgo));
+	kfree(vgo, sizeof(*vgo));
 }
 
 static int label_slot;
@@ -1011,10 +1050,11 @@ vng_lbl_get(struct label *label)
 {
 	lck_rw_assert(&llock, LCK_RW_ASSERT_HELD);
 	void *data;
-	if (NULL == label)
+	if (NULL == label) {
 		data = NULL;
-	else
+	} else {
 		data = (void *)mac_label_get(label, label_slot);
+	}
 	return data;
 }
 
@@ -1023,8 +1063,9 @@ vng_lbl_get_withattr(struct label *label, unsigned attrmask)
 {
 	struct vng_info *vgi = vng_lbl_get(label);
 	assert(NULL == vgi || (vgi->vgi_attrs & ~VNG_ALL) == 0);
-	if (NULL != vgi && 0 == (vgi->vgi_attrs & attrmask))
+	if (NULL != vgi && 0 == (vgi->vgi_attrs & attrmask)) {
 		vgi = NULL;
+	}
 	return vgi;
 }
 
@@ -1042,19 +1083,21 @@ vnguard_sysc_setguard(proc_t p, const struct vnguard_set *vns)
 	const int fd = vns->vns_fd;
 
 	if ((vns->vns_attrs & ~VNG_ALL) != 0 ||
-	    0 == vns->vns_attrs || 0 == vns->vns_guard)
+	    0 == vns->vns_attrs || 0 == vns->vns_guard) {
 		return EINVAL;
+	}
 
 	int error;
 	struct fileproc *fp;
-	if (0 != (error = fp_lookup(p, fd, &fp, 0)))
+	if (0 != (error = fp_lookup(p, fd, &fp, 0))) {
 		return error;
+	}
 	do {
 		/*
 		 * To avoid trivial DoS, insist that the caller
 		 * has read/write access to the file.
 		 */
-		if ((FREAD|FWRITE) != (fp->f_flag & (FREAD|FWRITE))) {
+		if ((FREAD | FWRITE) != (fp->f_flag & (FREAD | FWRITE))) {
 			error = EBADF;
 			break;
 		}
@@ -1101,9 +1144,10 @@ vnguard_sysc_setguard(proc_t p, const struct vnguard_set *vns)
 
 			if (NULL == vgi) {
 				/* vnode unguarded, add the first guard */
-				if (NULL != vgo)
+				if (NULL != vgo) {
 					panic("vnguard label on fileglob "
-					      "but not vnode");
+					    "but not vnode");
+				}
 				/* add a kusecount so we can unlabel later */
 				error = vnode_ref_ext(vp, O_EVTONLY, 0);
 				if (0 == error) {
@@ -1118,10 +1162,11 @@ vnguard_sysc_setguard(proc_t p, const struct vnguard_set *vns)
 			} else {
 				/* vnode already guarded */
 				free_vgi(nvgi);
-				if (vgi->vgi_guard != vns->vns_guard)
+				if (vgi->vgi_guard != vns->vns_guard) {
 					error = EPERM; /* guard mismatch */
-				else if (vgi->vgi_attrs != vns->vns_attrs)
+				} else if (vgi->vgi_attrs != vns->vns_attrs) {
 					error = EACCES; /* attr mismatch */
+				}
 				if (0 != error || NULL != vgo) {
 					free_vgo(nvgo);
 					break;
@@ -1147,21 +1192,23 @@ vng_policy_syscall(proc_t p, int cmd, user_addr_t arg)
 
 	switch (cmd) {
 	case VNG_SYSC_PING:
-		if (0 == arg)
+		if (0 == arg) {
 			error = 0;
+		}
 		break;
 	case VNG_SYSC_SET_GUARD: {
 		struct vnguard_set vns;
-		error = copyin(arg, (void *)&vns, sizeof (vns));
-		if (error)
+		error = copyin(arg, (void *)&vns, sizeof(vns));
+		if (error) {
 			break;
+		}
 		error = vnguard_sysc_setguard(p, &vns);
 		break;
 	}
 	default:
 		break;
 	}
-	return (error);
+	return error;
 }
 
 /*
@@ -1207,8 +1254,9 @@ static os_reason_t
 vng_reason_from_pathname(const char *path, uint32_t pathlen)
 {
 	os_reason_t r = os_reason_create(OS_REASON_GUARD, GUARD_REASON_VNODE);
-	if (NULL == r)
-		return (r);
+	if (NULL == r) {
+		return r;
+	}
 	/*
 	 * If the pathname is very long, just keep the trailing part
 	 */
@@ -1224,11 +1272,11 @@ vng_reason_from_pathname(const char *path, uint32_t pathlen)
 		if (kcdata_get_memory_addr(kcd,
 		    EXIT_REASON_USER_DESC, pathlen, &addr) == KERN_SUCCESS) {
 			kcdata_memcpy(kcd, addr, path, pathlen);
-			return (r);
+			return r;
 		}
 	}
 	os_reason_free(r);
-	return (OS_REASON_NULL);
+	return OS_REASON_NULL;
 }
 
 static int vng_policy_flags;
@@ -1244,7 +1292,7 @@ vng_guard_violation(const struct vng_info *vgi,
 		retval = EPERM;
 	}
 
-	if (vng_policy_flags & (kVNG_POLICY_LOGMSG|kVNG_POLICY_UPRINTMSG)) {
+	if (vng_policy_flags & (kVNG_POLICY_LOGMSG | kVNG_POLICY_UPRINTMSG)) {
 		/* log a message */
 		const char *op;
 		switch (opval) {
@@ -1298,11 +1346,12 @@ vng_guard_violation(const struct vng_info *vgi,
 				    proc_pid(vgo->vgo_p), vgi->vgi_guard);
 			}
 		}
-		if (NULL != nm)
+		if (NULL != nm) {
 			vnode_putname(nm);
+		}
 	}
 
-	if (vng_policy_flags & (kVNG_POLICY_EXC|kVNG_POLICY_EXC_CORPSE)) {
+	if (vng_policy_flags & (kVNG_POLICY_EXC | kVNG_POLICY_EXC_CORPSE)) {
 		/* EXC_GUARD exception */
 		const struct vng_owner *vgo = TAILQ_FIRST(&vgi->vgi_owners);
 		pid_t pid = vgo ? proc_pid(vgo->vgo_p) : 0;
@@ -1322,14 +1371,17 @@ vng_guard_violation(const struct vng_info *vgi,
 			os_reason_t r = NULL;
 			if (NULL != path) {
 				vn_getpath(vp, path, &len);
-				if (*path && len)
+				if (*path && len) {
 					r = vng_reason_from_pathname(path, len);
+				}
 			}
 			task_violated_guard(code, subcode, r); /* not fatal */
-			if (NULL != r)
+			if (NULL != r) {
 				os_reason_free(r);
-			if (NULL != path)
+			}
+			if (NULL != path) {
 				FREE(path, M_TEMP);
+			}
 		} else {
 			thread_t t = current_thread();
 			thread_guard_violation(t, code, subcode);
@@ -1339,7 +1391,7 @@ vng_guard_violation(const struct vng_info *vgi,
 		psignal(p, SIGKILL);
 	}
 
-	return (retval);
+	return retval;
 }
 
 /*
@@ -1374,17 +1426,19 @@ vng_vnode_check_rename(kauth_cred_t __unused cred,
 		lck_rw_lock_shared(&llock);
 		const struct vng_info *vgi =
 		    vng_lbl_get_withattr(label, VNG_RENAME_FROM);
-		if (NULL != vgi)
+		if (NULL != vgi) {
 			error = vng_guard_violation(vgi, VNG_RENAME_FROM, vp);
+		}
 		if (0 == error) {
 			vgi = vng_lbl_get_withattr(tlabel, VNG_RENAME_TO);
-			if (NULL != vgi)
+			if (NULL != vgi) {
 				error = vng_guard_violation(vgi,
 				    VNG_RENAME_TO, tvp);
+			}
 		}
 		lck_rw_unlock_shared(&llock);
 	}
-	return (error);
+	return error;
 }
 
 static int
@@ -1396,12 +1450,13 @@ vng_vnode_check_link(kauth_cred_t __unused cred,
 	if (NULL != label) {
 		lck_rw_lock_shared(&llock);
 		const struct vng_info *vgi =
-			vng_lbl_get_withattr(label, VNG_LINK);
-		if (vgi)
+		    vng_lbl_get_withattr(label, VNG_LINK);
+		if (vgi) {
 			error = vng_guard_violation(vgi, VNG_LINK, vp);
+		}
 		lck_rw_unlock_shared(&llock);
 	}
-	return (error);
+	return error;
 }
 
 static int
@@ -1414,11 +1469,12 @@ vng_vnode_check_unlink(kauth_cred_t __unused cred,
 		lck_rw_lock_shared(&llock);
 		const struct vng_info *vgi =
 		    vng_lbl_get_withattr(label, VNG_UNLINK);
-		if (vgi)
+		if (vgi) {
 			error = vng_guard_violation(vgi, VNG_UNLINK, vp);
+		}
 		lck_rw_unlock_shared(&llock);
 	}
-	return (error);
+	return error;
 }
 
 /*
@@ -1437,15 +1493,16 @@ vng_vnode_check_write(kauth_cred_t __unused actv_cred,
 			proc_t p = current_proc();
 			const struct vng_owner *vgo;
 			TAILQ_FOREACH(vgo, &vgi->vgi_owners, vgo_link) {
-				if (vgo->vgo_p == p)
+				if (vgo->vgo_p == p) {
 					goto done;
+				}
 			}
 			error = vng_guard_violation(vgi, VNG_WRITE_OTHER, vp);
 		}
-	done:
+done:
 		lck_rw_unlock_shared(&llock);
 	}
-	return (error);
+	return error;
 }
 
 /*
@@ -1465,12 +1522,13 @@ vng_vnode_check_truncate(kauth_cred_t __unused actv_cred,
 			proc_t p = current_proc();
 			const struct vng_owner *vgo;
 			TAILQ_FOREACH(vgo, &vgi->vgi_owners, vgo_link) {
-				if (vgo->vgo_p == p)
+				if (vgo->vgo_p == p) {
 					goto done;
+				}
 			}
 			error = vng_guard_violation(vgi, VNG_TRUNC_OTHER, vp);
 		}
-	done:
+done:
 		lck_rw_unlock_shared(&llock);
 	}
 	return error;
@@ -1485,18 +1543,20 @@ vng_vnode_check_exchangedata(kauth_cred_t __unused cred,
 	if (NULL != flabel || NULL != slabel) {
 		lck_rw_lock_shared(&llock);
 		const struct vng_info *vgi =
-			vng_lbl_get_withattr(flabel, VNG_EXCHDATA);
-		if (NULL != vgi)
+		    vng_lbl_get_withattr(flabel, VNG_EXCHDATA);
+		if (NULL != vgi) {
 			error = vng_guard_violation(vgi, VNG_EXCHDATA, fvp);
+		}
 		if (0 == error) {
 			vgi = vng_lbl_get_withattr(slabel, VNG_EXCHDATA);
-			if (NULL != vgi)
+			if (NULL != vgi) {
 				error = vng_guard_violation(vgi,
 				    VNG_EXCHDATA, svp);
+			}
 		}
 		lck_rw_unlock_shared(&llock);
 	}
-	return (error);
+	return error;
 }
 
 /* Intercept open-time truncations (by "other") of a guarded vnode */
@@ -1505,9 +1565,10 @@ static int
 vng_vnode_check_open(kauth_cred_t cred,
     struct vnode *vp, struct label *label, int acc_mode)
 {
-	if (0 == (acc_mode & O_TRUNC))
-		return (0);
-	return (vng_vnode_check_truncate(cred, NULL, vp, label));
+	if (0 == (acc_mode & O_TRUNC)) {
+		return 0;
+	}
+	return vng_vnode_check_truncate(cred, NULL, vp, label);
 }
 
 /*
@@ -1558,13 +1619,15 @@ static mac_policy_handle_t vng_policy_handle;
 void
 vnguard_policy_init(void)
 {
-	if (0 == PE_i_can_has_debugger(NULL))
+	if (0 == PE_i_can_has_debugger(NULL)) {
 		return;
+	}
 	vng_policy_flags = kVNG_POLICY_LOGMSG |
-		kVNG_POLICY_EXC_CORPSE | kVNG_POLICY_UPRINTMSG;
-	PE_parse_boot_argn("vnguard", &vng_policy_flags, sizeof (vng_policy_flags));
-	if (vng_policy_flags)
+	    kVNG_POLICY_EXC_CORPSE | kVNG_POLICY_UPRINTMSG;
+	PE_parse_boot_argn("vnguard", &vng_policy_flags, sizeof(vng_policy_flags));
+	if (vng_policy_flags) {
 		mac_policy_register(&vng_policy_conf, &vng_policy_handle, NULL);
+	}
 }
 
 #if DEBUG || DEVELOPMENT
@@ -1573,7 +1636,7 @@ vnguard_policy_init(void)
 SYSCTL_DECL(_kern_vnguard);
 SYSCTL_NODE(_kern, OID_AUTO, vnguard, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "vnguard");
 SYSCTL_INT(_kern_vnguard, OID_AUTO, flags, CTLFLAG_RW | CTLFLAG_LOCKED,
-	   &vng_policy_flags, 0, "vnguard policy flags");
+    &vng_policy_flags, 0, "vnguard policy flags");
 #endif
 
 #endif /* CONFIG_MACF && CONFIG_VNGUARD */

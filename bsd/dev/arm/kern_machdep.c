@@ -10,14 +10,14 @@
  *	Machine-specific kernel routines.
  */
 
-#include	<sys/types.h>
-#include	<mach/machine.h>
-#include	<kern/cpu_number.h>
-#include	<machine/exec.h>
-#include	<pexpert/arm64/board_config.h>
+#include        <sys/types.h>
+#include        <mach/machine.h>
+#include        <kern/cpu_number.h>
+#include        <machine/exec.h>
+#include        <pexpert/arm64/board_config.h>
 
 #if __arm64__
-extern int bootarg_no64exec;	/* bsd_init.c */
+extern int bootarg_no64exec;    /* bsd_init.c */
 static cpu_subtype_t cpu_subtype32(void);
 #endif /* __arm64__ */
 
@@ -39,19 +39,19 @@ cpu_subtype32()
 #endif /* __arm64__*/
 
 /**********************************************************************
- * Routine:	grade_binary()
- *
- * Function:	Return a relative preference for exectypes and
- *		execsubtypes in fat executable files.  The higher the
- *		grade, the higher the preference.  A grade of 0 means
- *		not acceptable.
- **********************************************************************/
+* Routine:	grade_binary()
+*
+* Function:	Return a relative preference for exectypes and
+*		execsubtypes in fat executable files.  The higher the
+*		grade, the higher the preference.  A grade of 0 means
+*		not acceptable.
+**********************************************************************/
 int
 grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
 {
 #if __arm64__
 	cpu_subtype_t hostsubtype =
-		(exectype & CPU_ARCH_ABI64) ? cpu_subtype() : cpu_subtype32();
+	    (exectype & CPU_ARCH_ABI64) ? cpu_subtype() : cpu_subtype32();
 #else
 	cpu_subtype_t hostsubtype = cpu_subtype();
 #endif /* __arm64__ */
@@ -59,7 +59,9 @@ grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
 	switch (exectype) {
 #if __arm64__
 	case CPU_TYPE_ARM64:
-		if (bootarg_no64exec) return 0;
+		if (bootarg_no64exec) {
+			return 0;
+		}
 
 		switch (hostsubtype) {
 		case CPU_SUBTYPE_ARM64_V8:
@@ -87,10 +89,10 @@ grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
 			}
 			goto v7s;
 
-		/*
-		 * For Swift and later, we prefer to run a swift slice, but fall back
-		 * to v7 as Cortex A9 errata should not apply
-		 */
+			/*
+			 * For Swift and later, we prefer to run a swift slice, but fall back
+			 * to v7 as Cortex A9 errata should not apply
+			 */
 v7s:
 		case CPU_SUBTYPE_ARM_V7S:
 			switch (execsubtype) {
@@ -107,7 +109,7 @@ v7s:
 			case CPU_SUBTYPE_ARM_V7K:
 				return 6;
 			}
-			break;	
+			break;
 
 		/*
 		 * For Cortex A9, we prefer the A9 slice, but will run v7 albeit
@@ -126,21 +128,21 @@ v7:
 			case CPU_SUBTYPE_ARM_V7:
 				return 5;
 			}
-			// fall through...
+		// fall through...
 
 		case CPU_SUBTYPE_ARM_V6:
 			switch (execsubtype) {
 			case CPU_SUBTYPE_ARM_V6:
 				return 4;
 			}
-			// fall through...
+		// fall through...
 
 		case CPU_SUBTYPE_ARM_V5TEJ:
 			switch (execsubtype) {
 			case CPU_SUBTYPE_ARM_V5TEJ:
 				return 3;
 			}
-			// fall through
+		// fall through
 
 		case CPU_SUBTYPE_ARM_V4T:
 			switch (execsubtype) {
@@ -181,9 +183,9 @@ pie_required(cpu_type_t exectype, cpu_subtype_t execsubtype)
 
 	case CPU_TYPE_ARM:
 		switch (execsubtype) {
-			case CPU_SUBTYPE_ARM_V7K:
-				return TRUE;
-			}
+		case CPU_SUBTYPE_ARM_V7K:
+			return TRUE;
+		}
 		break;
 	}
 	return FALSE;

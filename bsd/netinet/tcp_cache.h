@@ -34,8 +34,8 @@
 #include <netinet/tcp_var.h>
 #include <netinet/in.h>
 
-#define ECN_MIN_CE_PROBES	10 /* Probes are basically the number of incoming packets */
-#define ECN_MAX_CE_RATIO	7 /* Ratio is the maximum number of CE-packets we accept per incoming "probe" */
+#define ECN_MIN_CE_PROBES       10 /* Probes are basically the number of incoming packets */
+#define ECN_MAX_CE_RATIO        7 /* Ratio is the maximum number of CE-packets we accept per incoming "probe" */
 
 extern void tcp_cache_set_cookie(struct tcpcb *tp, u_char *cookie, u_int8_t len);
 extern int tcp_cache_get_cookie(struct tcpcb *tp, u_char *cookie, u_int8_t *len);
@@ -58,17 +58,16 @@ extern void tcp_heuristic_ecn_droprxmt(struct tcpcb *tp);
 extern void tcp_heuristic_ecn_synrst(struct tcpcb *tp);
 
 extern boolean_t tcp_heuristic_do_ecn_with_address(struct ifnet *ifp,
-	union sockaddr_in_4_6 *local_address);
+    union sockaddr_in_4_6 *local_address);
 extern void tcp_heuristics_ecn_update(struct necp_tcp_ecn_cache *necp_buffer,
-	struct ifnet *ifp, union sockaddr_in_4_6 *local_address);
+    struct ifnet *ifp, union sockaddr_in_4_6 *local_address);
 extern boolean_t tcp_heuristic_do_tfo_with_address(struct ifnet *ifp,
-	union sockaddr_in_4_6 *local_address, union sockaddr_in_4_6 *remote_address,
-	u_int8_t *cookie, u_int8_t *cookie_len);
+    union sockaddr_in_4_6 *local_address, union sockaddr_in_4_6 *remote_address,
+    u_int8_t *cookie, u_int8_t *cookie_len);
 extern void tcp_heuristics_tfo_update(struct necp_tcp_tfo_cache *necp_buffer,
-	struct ifnet *ifp, union sockaddr_in_4_6 *local_address,
-	union sockaddr_in_4_6 *remote_address);
+    struct ifnet *ifp, union sockaddr_in_4_6 *local_address,
+    union sockaddr_in_4_6 *remote_address);
 
 extern void tcp_cache_init(void);
 
 #endif /* _NETINET_TCP_CACHE_H */
-

@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -62,7 +62,7 @@
  */
 
 #ifndef _NET_IF_ARP_H_
-#define	_NET_IF_ARP_H_
+#define _NET_IF_ARP_H_
 #include <stdint.h>
 #include <sys/appleapiopts.h>
 #include <netinet/in.h>
@@ -77,32 +77,32 @@
  * arp_tha and arp_tpa in that order, according to the lengths
  * specified.  Field names used correspond to RFC 826.
  */
-struct	arphdr {
-	u_short	ar_hrd;		/* format of hardware address */
-#define ARPHRD_ETHER 	1	/* ethernet hardware format */
-#define ARPHRD_IEEE802	6	/* token-ring hardware format */
-#define ARPHRD_FRELAY 	15	/* frame relay hardware format */
-#define ARPHRD_IEEE1394	24	/* IEEE1394 hardware address */
+struct  arphdr {
+	u_short ar_hrd;         /* format of hardware address */
+#define ARPHRD_ETHER    1       /* ethernet hardware format */
+#define ARPHRD_IEEE802  6       /* token-ring hardware format */
+#define ARPHRD_FRELAY   15      /* frame relay hardware format */
+#define ARPHRD_IEEE1394 24      /* IEEE1394 hardware address */
 #define ARPHRD_IEEE1394_EUI64 27 /* IEEE1394 EUI-64 */
-	u_short	ar_pro;		/* format of protocol address */
-	u_char	ar_hln;		/* length of hardware address */
-	u_char	ar_pln;		/* length of protocol address */
-	u_short	ar_op;		/* one of: */
-#define	ARPOP_REQUEST	1	/* request to resolve address */
-#define	ARPOP_REPLY	2	/* response to previous request */
-#define	ARPOP_REVREQUEST 3	/* request protocol address given hardware */
-#define	ARPOP_REVREPLY	4	/* response giving protocol address */
-#define ARPOP_INVREQUEST 8 	/* request to identify peer */
-#define ARPOP_INVREPLY	9	/* response identifying peer */
+	u_short ar_pro;         /* format of protocol address */
+	u_char  ar_hln;         /* length of hardware address */
+	u_char  ar_pln;         /* length of protocol address */
+	u_short ar_op;          /* one of: */
+#define ARPOP_REQUEST   1       /* request to resolve address */
+#define ARPOP_REPLY     2       /* response to previous request */
+#define ARPOP_REVREQUEST 3      /* request protocol address given hardware */
+#define ARPOP_REVREPLY  4       /* response giving protocol address */
+#define ARPOP_INVREQUEST 8      /* request to identify peer */
+#define ARPOP_INVREPLY  9       /* response identifying peer */
 /*
  * The remaining fields are variable in size,
  * according to the sizes above.
  */
 #ifdef COMMENT_ONLY
-	u_char	ar_sha[];	/* sender hardware address */
-	u_char	ar_spa[];	/* sender protocol address */
-	u_char	ar_tha[];	/* target hardware address */
-	u_char	ar_tpa[];	/* target protocol address */
+	u_char  ar_sha[];       /* sender hardware address */
+	u_char  ar_spa[];       /* sender protocol address */
+	u_char  ar_tha[];       /* target hardware address */
+	u_char  ar_tpa[];       /* target protocol address */
 #endif
 };
 
@@ -110,40 +110,40 @@ struct	arphdr {
  * ARP ioctl request
  */
 struct arpreq {
-	struct	sockaddr arp_pa;		/* protocol address */
-	struct	sockaddr arp_ha;		/* hardware address */
-	int	arp_flags;			/* flags */
+	struct  sockaddr arp_pa;                /* protocol address */
+	struct  sockaddr arp_ha;                /* hardware address */
+	int     arp_flags;                      /* flags */
 };
 /*  arp_flags and at_flags field values */
-#define	ATF_INUSE	0x01	/* entry in use */
-#define ATF_COM		0x02	/* completed entry (enaddr valid) */
-#define	ATF_PERM	0x04	/* permanent entry */
-#define	ATF_PUBL	0x08	/* publish entry (respond for other host) */
-#define	ATF_USETRAILERS	0x10	/* has requested trailers */
+#define ATF_INUSE       0x01    /* entry in use */
+#define ATF_COM         0x02    /* completed entry (enaddr valid) */
+#define ATF_PERM        0x04    /* permanent entry */
+#define ATF_PUBL        0x08    /* publish entry (respond for other host) */
+#define ATF_USETRAILERS 0x10    /* has requested trailers */
 
 struct arpstat {
 	/* Normal things that happen: */
-	uint32_t txrequests;	/* # of ARP requests sent by this host. */
-	uint32_t txreplies;	/* # of ARP replies sent by this host. */
-	uint32_t txannounces;	/* # of ARP announcements sent by this host. */
-	uint32_t rxrequests;	/* # of ARP requests received by this host. */
-	uint32_t rxreplies;	/* # of ARP replies received by this host. */
-	uint32_t received;	/* # of ARP packets received by this host. */
+	uint32_t txrequests;    /* # of ARP requests sent by this host. */
+	uint32_t txreplies;     /* # of ARP replies sent by this host. */
+	uint32_t txannounces;   /* # of ARP announcements sent by this host. */
+	uint32_t rxrequests;    /* # of ARP requests received by this host. */
+	uint32_t rxreplies;     /* # of ARP replies received by this host. */
+	uint32_t received;      /* # of ARP packets received by this host. */
 
 	/* Abnormal event and error counting: */
-	uint32_t txconflicts;	/* # of ARP conflict probes sent */
-	uint32_t invalidreqs;	/* # of invalid ARP resolve requests */
-	uint32_t reqnobufs;	/* # of failed requests due to no memory */
-	uint32_t dropped;	/* # of packets dropped waiting for a reply. */
-	uint32_t purged;	/* # of packets purged while removing entries */
-	uint32_t timeouts;	/* # of times with entries removed */
-				/* due to timeout. */
-	uint32_t dupips;	/* # of duplicate IPs detected. */
+	uint32_t txconflicts;   /* # of ARP conflict probes sent */
+	uint32_t invalidreqs;   /* # of invalid ARP resolve requests */
+	uint32_t reqnobufs;     /* # of failed requests due to no memory */
+	uint32_t dropped;       /* # of packets dropped waiting for a reply. */
+	uint32_t purged;        /* # of packets purged while removing entries */
+	uint32_t timeouts;      /* # of times with entries removed */
+	                        /* due to timeout. */
+	uint32_t dupips;        /* # of duplicate IPs detected. */
 
 	/* General statistics */
-	uint32_t inuse;		/* # of ARP entries in routing table */
-	uint32_t txurequests;	/* # of ARP requests sent (unicast) */
-	uint32_t held;		/* # of packets held waiting for a reply */
+	uint32_t inuse;         /* # of ARP entries in routing table */
+	uint32_t txurequests;   /* # of ARP requests sent (unicast) */
+	uint32_t held;          /* # of packets held waiting for a reply */
 };
 
 #ifdef BSD_KERNEL_PRIVATE

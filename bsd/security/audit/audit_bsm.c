@@ -64,10 +64,10 @@ MALLOC_DEFINE(M_AUDITBSM, "audit_bsm", "Audit BSM data");
 #include <security/mac_framework.h>
 #endif
 
-static void	audit_sys_auditon(struct audit_record *ar,
-		    struct au_record *rec);
-static void	audit_sys_fcntl(struct kaudit_record *kar,
-		    struct au_record *rec);
+static void     audit_sys_auditon(struct audit_record *ar,
+    struct au_record *rec);
+static void     audit_sys_fcntl(struct kaudit_record *kar,
+    struct au_record *rec);
 
 /*
  * Initialize the BSM auditing subsystem.
@@ -75,7 +75,6 @@ static void	audit_sys_fcntl(struct kaudit_record *kar,
 void
 kau_init(void)
 {
-
 	au_evclassmap_init();
 }
 
@@ -96,7 +95,7 @@ kau_open(void)
 	rec->len = 0;
 	rec->used = 1;
 
-	return (rec);
+	return rec;
 }
 
 /*
@@ -105,7 +104,6 @@ kau_open(void)
 static void
 kau_write(struct au_record *rec, struct au_token *tok)
 {
-
 	KASSERT(tok != NULL, ("kau_write: tok == NULL"));
 
 	TAILQ_INSERT_TAIL(&rec->token_q, tok, tokens);
@@ -147,10 +145,11 @@ kau_close(struct au_record *rec, struct timespec *ctime, short event)
 
 	tm.tv_usec = ctime->tv_nsec / 1000;
 	tm.tv_sec = ctime->tv_sec;
-	if (hdrsize != AUDIT_HEADER_SIZE)
+	if (hdrsize != AUDIT_HEADER_SIZE) {
 		hdr = au_to_header32_ex_tm(tot_rec_size, event, 0, tm, &ak);
-	else
+	} else {
 		hdr = au_to_header32_tm(tot_rec_size, event, 0, tm);
+	}
 	TAILQ_INSERT_HEAD(&rec->token_q, hdr, tokens);
 
 	trail = au_to_trailer(tot_rec_size);
@@ -194,181 +193,181 @@ kau_free(struct au_record *rec)
  * caller are OK with this.
  */
 #if CONFIG_MACF
-#define	MAC_VNODE1_LABEL_TOKEN   do {				          \
-	if (ar->ar_vnode1_mac_labels != NULL && 			  \
-	    strlen(ar->ar_vnode1_mac_labels) != 0) {			  \
-		tok = au_to_text(ar->ar_vnode1_mac_labels);	          \
-		kau_write(rec, tok);				          \
-	}							          \
+#define MAC_VNODE1_LABEL_TOKEN   do {                                     \
+	if (ar->ar_vnode1_mac_labels != NULL &&                           \
+	    strlen(ar->ar_vnode1_mac_labels) != 0) {                      \
+	        tok = au_to_text(ar->ar_vnode1_mac_labels);               \
+	        kau_write(rec, tok);                                      \
+	}                                                                 \
 } while (0)
 
-#define	MAC_VNODE2_LABEL_TOKEN  do {					  \
-	if (ar->ar_vnode2_mac_labels != NULL &&				  \
-	    strlen(ar->ar_vnode2_mac_labels) != 0) {			  \
-		tok = au_to_text(ar->ar_vnode2_mac_labels);	          \
-		kau_write(rec, tok);				          \
-	}							          \
+#define MAC_VNODE2_LABEL_TOKEN  do {                                      \
+	if (ar->ar_vnode2_mac_labels != NULL &&                           \
+	    strlen(ar->ar_vnode2_mac_labels) != 0) {                      \
+	        tok = au_to_text(ar->ar_vnode2_mac_labels);               \
+	        kau_write(rec, tok);                                      \
+	}                                                                 \
 } while (0)
 #else
-#define	MAC_VNODE1_LABEL_TOKEN
-#define	MAC_VNODE2_LABEL_TOKEN
+#define MAC_VNODE1_LABEL_TOKEN
+#define MAC_VNODE2_LABEL_TOKEN
 #endif
-#define	UPATH1_TOKENS do {						\
-	if (ARG_IS_VALID(kar, ARG_UPATH1)) {				\
-		tok = au_to_path(ar->ar_arg_upath1);			\
-		kau_write(rec, tok);					\
-	}								\
+#define UPATH1_TOKENS do {                                              \
+	if (ARG_IS_VALID(kar, ARG_UPATH1)) {                            \
+	        tok = au_to_path(ar->ar_arg_upath1);                    \
+	        kau_write(rec, tok);                                    \
+	}                                                               \
 } while (0)
 
-#define	UPATH2_TOKENS do {						\
-	if (ARG_IS_VALID(kar, ARG_UPATH2)) {				\
-		tok = au_to_path(ar->ar_arg_upath2);			\
-		kau_write(rec, tok);					\
-	}								\
+#define UPATH2_TOKENS do {                                              \
+	if (ARG_IS_VALID(kar, ARG_UPATH2)) {                            \
+	        tok = au_to_path(ar->ar_arg_upath2);                    \
+	        kau_write(rec, tok);                                    \
+	}                                                               \
 } while (0)
 
-#define KPATH2_TOKENS do {						\
-	if (ARG_IS_VALID(kar, ARG_KPATH2)) {				\
-		tok = au_to_path(ar->ar_arg_kpath2);			\
-		kau_write(rec, tok);					\
-	}								\
+#define KPATH2_TOKENS do {                                              \
+	if (ARG_IS_VALID(kar, ARG_KPATH2)) {                            \
+	        tok = au_to_path(ar->ar_arg_kpath2);                    \
+	        kau_write(rec, tok);                                    \
+	}                                                               \
 } while (0)
 
-#define	VNODE1_TOKENS do {						\
-	if (ARG_IS_VALID(kar, ARG_KPATH1)) {				\
-		tok = au_to_path(ar->ar_arg_kpath1);			\
-		kau_write(rec, tok);					\
-	}								\
-	if (ARG_IS_VALID(kar, ARG_VNODE1)) {				\
-		tok = au_to_attr32(&ar->ar_arg_vnode1);			\
-		kau_write(rec, tok);					\
-		MAC_VNODE1_LABEL_TOKEN;					\
-	}								\
+#define VNODE1_TOKENS do {                                              \
+	if (ARG_IS_VALID(kar, ARG_KPATH1)) {                            \
+	        tok = au_to_path(ar->ar_arg_kpath1);                    \
+	        kau_write(rec, tok);                                    \
+	}                                                               \
+	if (ARG_IS_VALID(kar, ARG_VNODE1)) {                            \
+	        tok = au_to_attr32(&ar->ar_arg_vnode1);                 \
+	        kau_write(rec, tok);                                    \
+	        MAC_VNODE1_LABEL_TOKEN;                                 \
+	}                                                               \
 } while (0)
 
-#define	UPATH1_VNODE1_TOKENS do {					\
-	if (ARG_IS_VALID(kar, ARG_UPATH1)) {				\
-		tok = au_to_path(ar->ar_arg_upath1);			\
-		kau_write(rec, tok);					\
-	}								\
-	if (ARG_IS_VALID(kar, ARG_KPATH1)) {				\
-		tok = au_to_path(ar->ar_arg_kpath1);			\
-		kau_write(rec, tok);					\
-	}								\
-	if (ARG_IS_VALID(kar, ARG_VNODE1)) {				\
-		tok = au_to_attr32(&ar->ar_arg_vnode1);			\
-		kau_write(rec, tok);					\
-		MAC_VNODE1_LABEL_TOKEN;					\
-	}								\
+#define UPATH1_VNODE1_TOKENS do {                                       \
+	if (ARG_IS_VALID(kar, ARG_UPATH1)) {                            \
+	        tok = au_to_path(ar->ar_arg_upath1);                    \
+	        kau_write(rec, tok);                                    \
+	}                                                               \
+	if (ARG_IS_VALID(kar, ARG_KPATH1)) {                            \
+	        tok = au_to_path(ar->ar_arg_kpath1);                    \
+	        kau_write(rec, tok);                                    \
+	}                                                               \
+	if (ARG_IS_VALID(kar, ARG_VNODE1)) {                            \
+	        tok = au_to_attr32(&ar->ar_arg_vnode1);                 \
+	        kau_write(rec, tok);                                    \
+	        MAC_VNODE1_LABEL_TOKEN;                                 \
+	}                                                               \
 } while (0)
 
-#define	VNODE2_TOKENS do {						\
-	if (ARG_IS_VALID(kar, ARG_VNODE2)) {				\
-		tok = au_to_attr32(&ar->ar_arg_vnode2);			\
-		kau_write(rec, tok);					\
-		MAC_VNODE2_LABEL_TOKEN;					\
-	}								\
+#define VNODE2_TOKENS do {                                              \
+	if (ARG_IS_VALID(kar, ARG_VNODE2)) {                            \
+	        tok = au_to_attr32(&ar->ar_arg_vnode2);                 \
+	        kau_write(rec, tok);                                    \
+	        MAC_VNODE2_LABEL_TOKEN;                                 \
+	}                                                               \
 } while (0)
 
-#define	VNODE2_PATH_TOKENS do {					\
-	if (ARG_IS_VALID(kar, ARG_KPATH2)) {				\
-		tok = au_to_path(ar->ar_arg_kpath2);			\
-		kau_write(rec, tok);					\
-	}								\
-	if (ARG_IS_VALID(kar, ARG_VNODE2)) {				\
-		tok = au_to_attr32(&ar->ar_arg_vnode2);			\
-		kau_write(rec, tok);					\
-		MAC_VNODE2_LABEL_TOKEN;					\
-	}								\
+#define VNODE2_PATH_TOKENS do {                                 \
+	if (ARG_IS_VALID(kar, ARG_KPATH2)) {                            \
+	        tok = au_to_path(ar->ar_arg_kpath2);                    \
+	        kau_write(rec, tok);                                    \
+	}                                                               \
+	if (ARG_IS_VALID(kar, ARG_VNODE2)) {                            \
+	        tok = au_to_attr32(&ar->ar_arg_vnode2);                 \
+	        kau_write(rec, tok);                                    \
+	        MAC_VNODE2_LABEL_TOKEN;                                 \
+	}                                                               \
 } while (0)
 
-#define	FD_VNODE1_TOKENS do {						\
-	if (ARG_IS_VALID(kar, ARG_VNODE1)) {				\
-		if (ARG_IS_VALID(kar, ARG_KPATH1)) {			\
-			tok = au_to_path(ar->ar_arg_kpath1);		\
-			kau_write(rec, tok);				\
-		}							\
-		if (ARG_IS_VALID(kar, ARG_FD)) {			\
-			tok = au_to_arg32(1, "fd", ar->ar_arg_fd);	\
-			kau_write(rec, tok);				\
-			MAC_VNODE1_LABEL_TOKEN;				\
-		}							\
-		tok = au_to_attr32(&ar->ar_arg_vnode1);			\
-		kau_write(rec, tok);					\
-	} else {							\
-		if (ARG_IS_VALID(kar, ARG_FD)) {			\
-			tok = au_to_arg32(1, "fd",			\
-			    ar->ar_arg_fd);				\
-			kau_write(rec, tok);				\
-			MAC_VNODE1_LABEL_TOKEN;				\
-		}							\
-	}								\
+#define FD_VNODE1_TOKENS do {                                           \
+	if (ARG_IS_VALID(kar, ARG_VNODE1)) {                            \
+	        if (ARG_IS_VALID(kar, ARG_KPATH1)) {                    \
+	                tok = au_to_path(ar->ar_arg_kpath1);            \
+	                kau_write(rec, tok);                            \
+	        }                                                       \
+	        if (ARG_IS_VALID(kar, ARG_FD)) {                        \
+	                tok = au_to_arg32(1, "fd", ar->ar_arg_fd);      \
+	                kau_write(rec, tok);                            \
+	                MAC_VNODE1_LABEL_TOKEN;                         \
+	        }                                                       \
+	        tok = au_to_attr32(&ar->ar_arg_vnode1);                 \
+	        kau_write(rec, tok);                                    \
+	} else {                                                        \
+	        if (ARG_IS_VALID(kar, ARG_FD)) {                        \
+	                tok = au_to_arg32(1, "fd",                      \
+	                    ar->ar_arg_fd);                             \
+	                kau_write(rec, tok);                            \
+	                MAC_VNODE1_LABEL_TOKEN;                         \
+	        }                                                       \
+	}                                                               \
 } while (0)
 
-#define	PROCESS_PID_TOKENS(argn) do {					\
-	if ((ar->ar_arg_pid > 0) /* Reference a single process */	\
-	    && (ARG_IS_VALID(kar, ARG_PROCESS))) {			\
-		tok = au_to_process32_ex(ar->ar_arg_auid,		\
-		    ar->ar_arg_euid, ar->ar_arg_egid,			\
-		    ar->ar_arg_ruid, ar->ar_arg_rgid,			\
-		    ar->ar_arg_pid, ar->ar_arg_asid,			\
-		    &ar->ar_arg_termid_addr);				\
-		kau_write(rec, tok);					\
-	} else if (ARG_IS_VALID(kar, ARG_PID)) {			\
-		tok = au_to_arg32(argn, "process", ar->ar_arg_pid);	\
-		kau_write(rec, tok);					\
-	}								\
+#define PROCESS_PID_TOKENS(argn) do {                                   \
+	if ((ar->ar_arg_pid > 0) /* Reference a single process */       \
+	    && (ARG_IS_VALID(kar, ARG_PROCESS))) {                      \
+	        tok = au_to_process32_ex(ar->ar_arg_auid,               \
+	            ar->ar_arg_euid, ar->ar_arg_egid,                   \
+	            ar->ar_arg_ruid, ar->ar_arg_rgid,                   \
+	            ar->ar_arg_pid, ar->ar_arg_asid,                    \
+	            &ar->ar_arg_termid_addr);                           \
+	        kau_write(rec, tok);                                    \
+	} else if (ARG_IS_VALID(kar, ARG_PID)) {                        \
+	        tok = au_to_arg32(argn, "process", ar->ar_arg_pid);     \
+	        kau_write(rec, tok);                                    \
+	}                                                               \
 } while (0)
 
-#define	EXTATTR_TOKENS do {						\
-	if (ARG_IS_VALID(kar, ARG_VALUE32)) {				\
-		switch (ar->ar_arg_value32) {				\
-		case EXTATTR_NAMESPACE_USER:				\
-			tok = au_to_text(EXTATTR_NAMESPACE_USER_STRING);\
-			break;						\
-		case EXTATTR_NAMESPACE_SYSTEM:				\
-			tok = au_to_text(EXTATTR_NAMESPACE_SYSTEM_STRING);\
-			break;						\
-		default:						\
-			tok = au_to_arg32(3, "attrnamespace",		\
-			    ar->ar_arg_value32);			\
-			break;						\
-		}							\
-		kau_write(rec, tok);					\
-	}								\
-	/* attrname is in the text field */				\
-	if (ARG_IS_VALID(kar, ARG_TEXT)) {				\
-		tok = au_to_text(ar->ar_arg_text);			\
-		kau_write(rec, tok);					\
-	}								\
+#define EXTATTR_TOKENS do {                                             \
+	if (ARG_IS_VALID(kar, ARG_VALUE32)) {                           \
+	        switch (ar->ar_arg_value32) {                           \
+	        case EXTATTR_NAMESPACE_USER:                            \
+	                tok = au_to_text(EXTATTR_NAMESPACE_USER_STRING);\
+	                break;                                          \
+	        case EXTATTR_NAMESPACE_SYSTEM:                          \
+	                tok = au_to_text(EXTATTR_NAMESPACE_SYSTEM_STRING);\
+	                break;                                          \
+	        default:                                                \
+	                tok = au_to_arg32(3, "attrnamespace",           \
+	                    ar->ar_arg_value32);                        \
+	                break;                                          \
+	        }                                                       \
+	        kau_write(rec, tok);                                    \
+	}                                                               \
+	/* attrname is in the text field */                             \
+	if (ARG_IS_VALID(kar, ARG_TEXT)) {                              \
+	        tok = au_to_text(ar->ar_arg_text);                      \
+	        kau_write(rec, tok);                                    \
+	}                                                               \
 } while (0)
 
-#define EXTENDED_TOKENS(n) do {						\
-		/* ACL data */						\
-		if (ARG_IS_VALID(kar, ARG_OPAQUE)) {			\
-			tok = au_to_opaque(ar->ar_arg_opaque,		\
-			    ar->ar_arg_opq_size);			\
-			kau_write(rec, tok);				\
-		}							\
-		if (ARG_IS_VALID(kar, ARG_MODE)) {			\
-			tok = au_to_arg32(n+2, "mode", ar->ar_arg_mode);\
-			kau_write(rec, tok);				\
-		}							\
-		if (ARG_IS_VALID(kar, ARG_GID)) {			\
-			tok = au_to_arg32(n+1, "gid", ar->ar_arg_gid);	\
-			kau_write(rec, tok);				\
-		}							\
-		if (ARG_IS_VALID(kar, ARG_UID)) {			\
-			tok = au_to_arg32(n, "uid", ar->ar_arg_uid);	\
-			kau_write(rec, tok);				\
-		}							\
+#define EXTENDED_TOKENS(n) do {                                         \
+	/* ACL data */                                          \
+	        if (ARG_IS_VALID(kar, ARG_OPAQUE)) {                    \
+	                tok = au_to_opaque(ar->ar_arg_opaque,           \
+	                    ar->ar_arg_opq_size);                       \
+	                kau_write(rec, tok);                            \
+	        }                                                       \
+	        if (ARG_IS_VALID(kar, ARG_MODE)) {                      \
+	                tok = au_to_arg32(n+2, "mode", ar->ar_arg_mode);\
+	                kau_write(rec, tok);                            \
+	        }                                                       \
+	        if (ARG_IS_VALID(kar, ARG_GID)) {                       \
+	                tok = au_to_arg32(n+1, "gid", ar->ar_arg_gid);  \
+	                kau_write(rec, tok);                            \
+	        }                                                       \
+	        if (ARG_IS_VALID(kar, ARG_UID)) {                       \
+	                tok = au_to_arg32(n, "uid", ar->ar_arg_uid);    \
+	                kau_write(rec, tok);                            \
+	        }                                                       \
 } while (0)
 
-#define	PROCESS_MAC_TOKENS do {						\
-	if (ar->ar_valid_arg & ARG_MAC_STRING) {			\
-		tok = au_to_text(ar->ar_arg_mac_string);		\
-		kau_write(rec, tok);					\
-	}								\
+#define PROCESS_MAC_TOKENS do {                                         \
+	if (ar->ar_valid_arg & ARG_MAC_STRING) {                        \
+	        tok = au_to_text(ar->ar_arg_mac_string);                \
+	        kau_write(rec, tok);                                    \
+	}                                                               \
 } while (0)
 
 /*
@@ -391,7 +390,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 			kau_write(rec, tok);
 			break;
 		}
-		/* FALLTHROUGH */
+	/* FALLTHROUGH */
 	case A_SETPOLICY:
 		tok = au_to_arg32(3, "length", ar->ar_arg_len);
 		kau_write(rec, tok);
@@ -431,7 +430,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 			kau_write(rec, tok);
 			break;
 		}
-		/* FALLTHROUGH */
+	/* FALLTHROUGH */
 	case A_SETQCTRL:
 		tok = au_to_arg32(3, "length", ar->ar_arg_len);
 		kau_write(rec, tok);
@@ -483,7 +482,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 			kau_write(rec, tok);
 			break;
 		}
-		/* FALLTHROUGH */
+	/* FALLTHROUGH */
 	case A_SETCOND:
 		tok = au_to_arg32(3, "length", ar->ar_arg_len);
 		kau_write(rec, tok);
@@ -540,7 +539,6 @@ audit_sys_fcntl(struct kaudit_record *kar, struct au_record *rec)
 	struct audit_record *ar = &kar->k_ar;
 
 	switch (ar->ar_arg_cmd) {
-
 	case F_DUPFD:
 		if (ARG_IS_VALID(kar, ARG_VALUE32)) {
 			tok = au_to_arg32(3, "min fd", ar->ar_arg_value32);
@@ -570,7 +568,7 @@ audit_sys_fcntl(struct kaudit_record *kar, struct au_record *rec)
 		}
 		break;
 
-#ifdef	F_SETSIZE
+#ifdef  F_SETSIZE
 	case F_SETSIZE:
 		if (ARG_IS_VALID(kar, ARG_VALUE64)) {
 			tok = au_to_arg64(3, "offset", ar->ar_arg_value64);
@@ -579,7 +577,7 @@ audit_sys_fcntl(struct kaudit_record *kar, struct au_record *rec)
 		break;
 #endif /* F_SETSIZE */
 
-#ifdef	F_PATHPKG_CHECK
+#ifdef  F_PATHPKG_CHECK
 	case F_PATHPKG_CHECK:
 		if (ARG_IS_VALID(kar, ARG_TEXT)) {
 			tok = au_to_text(ar->ar_arg_text);
@@ -630,11 +628,11 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		tid.machine = ar->ar_subj_term_addr.at_addr[0];
 		subj_tok = au_to_subject32(ar->ar_subj_auid,  /* audit ID */
 		    ar->ar_subj_cred.cr_uid, /* eff uid */
-		    ar->ar_subj_egid,	/* eff group id */
-		    ar->ar_subj_ruid,	/* real uid */
-		    ar->ar_subj_rgid,	/* real group id */
-		    ar->ar_subj_pid,	/* process id */
-		    ar->ar_subj_asid,	/* session ID */
+		    ar->ar_subj_egid,   /* eff group id */
+		    ar->ar_subj_ruid,   /* real uid */
+		    ar->ar_subj_rgid,   /* real group id */
+		    ar->ar_subj_pid,    /* process id */
+		    ar->ar_subj_asid,   /* session ID */
 		    &tid);
 		break;
 	case AU_IPv6:
@@ -665,14 +663,14 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	 * header and trailer tokens are added by the kau_close() function.
 	 * The return token is added outside of the switch statement.
 	 */
-	switch(ar->ar_event) {
+	switch (ar->ar_event) {
 	case AUE_SENDFILE:
 		/* For sendfile the file and socket descriptor are both saved */
 		if (ARG_IS_VALID(kar, ARG_VALUE32)) {
 			tok = au_to_arg32(2, "sd", ar->ar_arg_value32);
 			kau_write(rec, tok);
 		}
-		/* FALLTHROUGH */
+	/* FALLTHROUGH */
 	case AUE_ACCEPT:
 	case AUE_BIND:
 	case AUE_LISTEN:
@@ -701,7 +699,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		}
 		if (ARG_IS_VALID(kar, ARG_SADDRINET6)) {
 			tok = au_to_sock_inet128((struct sockaddr_in6 *)
-				&ar->ar_arg_sockaddr);
+			    &ar->ar_arg_sockaddr);
 			kau_write(rec, tok);
 		}
 		break;
@@ -709,13 +707,13 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_SOCKET:
 	case AUE_SOCKETPAIR:
 		if (ARG_IS_VALID(kar, ARG_SOCKINFO)) {
-			tok = au_to_arg32(1,"domain",
+			tok = au_to_arg32(1, "domain",
 			    au_domain_to_bsm(ar->ar_arg_sockinfo.sai_domain));
 			kau_write(rec, tok);
-			tok = au_to_arg32(2,"type",
+			tok = au_to_arg32(2, "type",
 			    au_socket_type_to_bsm(ar->ar_arg_sockinfo.sai_type));
 			kau_write(rec, tok);
-			tok = au_to_arg32(3,"protocol",
+			tok = au_to_arg32(3, "protocol",
 			    ar->ar_arg_sockinfo.sai_protocol);
 			kau_write(rec, tok);
 		}
@@ -794,12 +792,14 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg32(1, "setaudit_addr:port",
 			    ar->ar_arg_termid_addr.at_port);
 			kau_write(rec, tok);
-			if (ar->ar_arg_termid_addr.at_type == AU_IPv6)
+			if (ar->ar_arg_termid_addr.at_type == AU_IPv6) {
 				tok = au_to_in_addr_ex((struct in6_addr *)
 				    &ar->ar_arg_termid_addr.at_addr[0]);
-			if (ar->ar_arg_termid_addr.at_type == AU_IPv4)
+			}
+			if (ar->ar_arg_termid_addr.at_type == AU_IPv4) {
 				tok = au_to_in_addr((struct in_addr *)
 				    &ar->ar_arg_termid_addr.at_addr[0]);
+			}
 			kau_write(rec, tok);
 		}
 		break;
@@ -812,7 +812,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg32(1, "cmd", ar->ar_arg_cmd);
 			kau_write(rec, tok);
 		}
-		/* FALLTHROUGH */
+	/* FALLTHROUGH */
 
 	case AUE_AUDITON_GETCAR:
 	case AUE_AUDITON_GETCLASS:
@@ -830,8 +830,9 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_AUDITON_SETUMASK:
 	case AUE_AUDITON_SPOLICY:
 	case AUE_AUDITON_SQCTRL:
-		if (ARG_IS_VALID(kar, ARG_AUDITON))
+		if (ARG_IS_VALID(kar, ARG_AUDITON)) {
 			audit_sys_auditon(ar, rec);
+		}
 		break;
 
 	case AUE_AUDITCTL:
@@ -855,7 +856,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_GETFSSTAT:
 	case AUE_KQUEUE:
 	case AUE_LSEEK:
-#if 0 
+#if 0
 /*  XXXss replace with kext  */
 	case AUE_MODLOAD:
 	case AUE_MODUNLOAD:
@@ -988,7 +989,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg32(0, "child PID", ar->ar_arg_pid);
 			kau_write(rec, tok);
 		}
-		/* FALLTHROUGH */
+	/* FALLTHROUGH */
 
 	case AUE_EXECVE:
 		if (ARG_IS_VALID(kar, ARG_ARGV)) {
@@ -1034,11 +1035,11 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 
 	/*
 	 * XXXRW: Some of these need to handle non-vnode cases as well.
-         */
+	 */
 	case AUE_FSTAT_EXTENDED:
 	case AUE_FCHDIR:
 	case AUE_FPATHCONF:
-	case AUE_FSTAT:		/* XXX Need to handle sockets and shm */
+	case AUE_FSTAT:         /* XXX Need to handle sockets and shm */
 	case AUE_FSTATFS:
 	case AUE_FSYNC:
 	case AUE_FTRUNCATE:
@@ -1071,8 +1072,9 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		break;
 
 	case AUE_FCNTL:
-		if (ARG_IS_VALID(kar, ARG_CMD))
+		if (ARG_IS_VALID(kar, ARG_CMD)) {
 			audit_sys_fcntl(kar, rec);
+		}
 		FD_VNODE1_TOKENS;
 		break;
 
@@ -1161,17 +1163,17 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			    (u_int32_t)ar->ar_arg_addr);
 			kau_write(rec, tok);
 		}
-		if (ARG_IS_VALID(kar, ARG_VNODE1))
+		if (ARG_IS_VALID(kar, ARG_VNODE1)) {
 			FD_VNODE1_TOKENS;
-		else {
+		} else {
 			if (ARG_IS_VALID(kar, ARG_SOCKINFO)) {
 				tok = au_to_socket_ex(
-				    ar->ar_arg_sockinfo.sai_domain,
-				    ar->ar_arg_sockinfo.sai_type,
-				    (struct sockaddr *)
-				    &ar->ar_arg_sockinfo.sai_laddr,
-				    (struct sockaddr *)
-				    &ar->ar_arg_sockinfo.sai_faddr);
+					ar->ar_arg_sockinfo.sai_domain,
+					ar->ar_arg_sockinfo.sai_type,
+					(struct sockaddr *)
+					&ar->ar_arg_sockinfo.sai_laddr,
+					(struct sockaddr *)
+					&ar->ar_arg_sockinfo.sai_faddr);
 				kau_write(rec, tok);
 			} else {
 				if (ARG_IS_VALID(kar, ARG_FD)) {
@@ -1243,8 +1245,9 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg64(2, "len", ar->ar_arg_len);
 			kau_write(rec, tok);
 		}
-		if (ar->ar_event == AUE_MMAP)
+		if (ar->ar_event == AUE_MMAP) {
 			FD_VNODE1_TOKENS;
+		}
 		if (ar->ar_event == AUE_MPROTECT) {
 			if (ARG_IS_VALID(kar, ARG_VALUE32)) {
 				tok = au_to_arg32(3, "protection",
@@ -1276,7 +1279,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_text(ar->ar_arg_text);
 			kau_write(rec, tok);
 		}
-		/* FALLTHROUGH */
+	/* FALLTHROUGH */
 
 	case AUE_UMOUNT:
 	case AUE_UNMOUNT:
@@ -1299,7 +1302,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 
 	case AUE_MSGCTL:
 		ar->ar_event = audit_msgctl_to_event(ar->ar_arg_svipc_cmd);
-		/* FALLTHROUGH */
+	/* FALLTHROUGH */
 
 	case AUE_MSGRCV:
 	case AUE_MSGSND:
@@ -1531,7 +1534,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 
 	case AUE_SEMCTL:
 		ar->ar_event = audit_semctl_to_event(ar->ar_arg_svipc_cmd);
-		/* FALLTHROUGH */
+	/* FALLTHROUGH */
 
 	case AUE_SEMOP:
 		if (ARG_IS_VALID(kar, ARG_SVIPC_ID)) {
@@ -1687,7 +1690,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			}
 			break;
 		default:
-			break;	/* We will audit a bad command */
+			break;  /* We will audit a bad command */
 		}
 		break;
 
@@ -1724,7 +1727,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg32(3, "mode", ar->ar_arg_mode);
 			kau_write(rec, tok);
 		}
-		/* FALLTHROUGH */
+	/* FALLTHROUGH */
 
 	case AUE_SHMUNLINK:
 		if (ARG_IS_VALID(kar, ARG_TEXT)) {
@@ -1759,7 +1762,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg32(4, "value", ar->ar_arg_value32);
 			kau_write(rec, tok);
 		}
-		/* FALLTHROUGH */
+	/* FALLTHROUGH */
 
 	case AUE_SEMUNLINK:
 		if (ARG_IS_VALID(kar, ARG_TEXT)) {
@@ -1822,7 +1825,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			    ar->ar_arg_opq_size);
 			kau_write(rec, tok);
 		}
-		/* FALLTHROUGH */
+	/* FALLTHROUGH */
 
 	case AUE_UMASK:
 		if (ARG_IS_VALID(kar, ARG_MASK)) {
@@ -1877,8 +1880,8 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		break;
 
 	/************************
-	 * Mach system calls    *
-	 ************************/
+	* Mach system calls    *
+	************************/
 	case AUE_INITPROCESS:
 		break;
 
@@ -1997,7 +2000,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		 */
 		kau_write(rec, subj_tok);
 		kau_free(rec);
-		return (BSM_NOAUDIT);
+		return BSM_NOAUDIT;
 	}
 
 #if CONFIG_MACF
@@ -2008,24 +2011,24 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		LIST_FOREACH(mar, ar->ar_mac_records, records) {
 			switch (mar->type) {
 			case MAC_AUDIT_DATA_TYPE:
-					tok = au_to_data(AUP_BINARY, AUR_BYTE,
-					    mar->length, 
-					    (const char *)mar->data);
-					break;
-				case MAC_AUDIT_TEXT_TYPE:
-					tok = au_to_text((char*) mar->data);
-					break;
-				default:
-					/*
-					 * XXX: we can either continue,
-					 * skipping this particular entry,
-					 * or we can pre-verify the list and
-					 * abort before writing any records
-					 */
-					printf("kaudit_to_bsm(): "
-					    "BSM conversion requested for"
-					    "unknown mac_audit data type %d\n",
-					    mar->type);
+				tok = au_to_data(AUP_BINARY, AUR_BYTE,
+				    mar->length,
+				    (const char *)mar->data);
+				break;
+			case MAC_AUDIT_TEXT_TYPE:
+				tok = au_to_text((char*) mar->data);
+				break;
+			default:
+				/*
+				 * XXX: we can either continue,
+				 * skipping this particular entry,
+				 * or we can pre-verify the list and
+				 * abort before writing any records
+				 */
+				printf("kaudit_to_bsm(): "
+				    "BSM conversion requested for"
+				    "unknown mac_audit data type %d\n",
+				    mar->type);
 			}
 
 			kau_write(rec, tok);
@@ -2049,15 +2052,15 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	if (ARG_IS_VALID(kar, ARG_IDENTITY)) {
 		struct au_identity_info *id = &ar->ar_arg_identity;
 		tok = au_to_identity(id->signer_type, id->signing_id,
-			id->signing_id_trunc, id->team_id, id->team_id_trunc,
-			id->cdhash, id->cdhash_len);
+		    id->signing_id_trunc, id->team_id, id->team_id_trunc,
+		    id->cdhash, id->cdhash_len);
 		kau_write(rec, tok);
 	}
 
 	kau_close(rec, &ar->ar_endtime, ar->ar_event);
 
 	*pau = rec;
-	return (BSM_SUCCESS);
+	return BSM_SUCCESS;
 }
 
 /*
@@ -2073,14 +2076,14 @@ bsm_rec_verify(void *rec, int length)
 
 	/* A record requires a complete header and trailer token */
 	if (length < (AUDIT_HEADER_SIZE + AUDIT_TRAILER_SIZE)) {
-		return (0);
+		return 0;
 	}
 
 	hdr = (struct hdr_tok_partial*)rec;
 
 	/* Ensure the provided length matches what the record shows */
 	if ((uint32_t)length != ntohl(hdr->len)) {
-		return (0);
+		return 0;
 	}
 
 	trl = (struct trl_tok_partial*)(rec + (length - AUDIT_TRAILER_SIZE));
@@ -2089,19 +2092,19 @@ bsm_rec_verify(void *rec, int length)
 	if (((hdr->type != AUT_HEADER32) && (hdr->type != AUT_HEADER32_EX) &&
 	    (hdr->type != AUT_HEADER64) && (hdr->type != AUT_HEADER64_EX)) ||
 	    (trl->type != AUT_TRAILER)) {
-		return (0);
+		return 0;
 	}
 
 	/* Ensure the header and trailer agree on the length */
 	if (hdr->len != trl->len) {
-		return (0);
+		return 0;
 	}
 
 	/* Ensure the trailer token has a proper magic value */
 	if (ntohs(trl->magic) != AUT_TRAILER_MAGIC) {
-		return (0);
+		return 0;
 	}
 
-	return (1);
+	return 1;
 }
 #endif /* CONFIG_AUDIT */

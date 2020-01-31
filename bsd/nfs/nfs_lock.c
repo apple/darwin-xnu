@@ -2,7 +2,7 @@
  * Copyright (c) 2002-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -59,13 +59,13 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/fcntl.h>
-#include <sys/kernel.h>		/* for hz */
+#include <sys/kernel.h>         /* for hz */
 #include <sys/file_internal.h>
 #include <sys/malloc.h>
-#include <sys/lockf.h>		/* for hz */ /* Must come after sys/malloc.h */
+#include <sys/lockf.h>          /* for hz */ /* Must come after sys/malloc.h */
 #include <sys/kpi_mbuf.h>
 #include <sys/mount_internal.h>
-#include <sys/proc_internal.h>	/* for p_start */
+#include <sys/proc_internal.h>  /* for p_start */
 #include <sys/kauth.h>
 #include <sys/resourcevar.h>
 #include <sys/socket.h>
@@ -103,7 +103,7 @@ static uint64_t nfs_lockxid = 0;
 static LOCKD_MSG_QUEUE nfs_pendlockq;
 
 /* list of mounts that are (potentially) making lockd requests */
-TAILQ_HEAD(nfs_lockd_mount_list,nfsmount) nfs_lockd_mount_list;
+TAILQ_HEAD(nfs_lockd_mount_list, nfsmount) nfs_lockd_mount_list;
 
 static lck_grp_t *nfs_lock_lck_grp;
 static lck_mtx_t *nfs_lock_mutex;
@@ -159,7 +159,7 @@ nfs_lockd_mount_unregister(struct nfsmount *nmp)
 		lck_mtx_unlock(nfs_lock_mutex);
 		return;
 	}
-	
+
 	TAILQ_REMOVE(&nfs_lockd_mount_list, nmp, nm_ldlink);
 	nmp->nm_ldlink.tqe_next = NFSNOLIST;
 
@@ -167,13 +167,15 @@ nfs_lockd_mount_unregister(struct nfsmount *nmp)
 
 	/* send a shutdown request if there are no more lockd mounts */
 	send_shutdown = ((nfs_lockd_mounts == 0) && nfs_lockd_request_sent);
-	if (send_shutdown)
+	if (send_shutdown) {
 		nfs_lockd_request_sent = 0;
+	}
 
 	lck_mtx_unlock(nfs_lock_mutex);
 
-	if (!send_shutdown)
+	if (!send_shutdown) {
 		return;
+	}
 
 	/*
 	 * Let lockd know that it is no longer needed for any NFS mounts
@@ -181,14 +183,15 @@ nfs_lockd_mount_unregister(struct nfsmount *nmp)
 	kr = host_get_lockd_port(host_priv_self(), &lockd_port);
 	if ((kr != KERN_SUCCESS) || !IPC_PORT_VALID(lockd_port)) {
 		printf("nfs_lockd_mount_change: shutdown couldn't get port, kr %d, port %s\n",
-			kr, (lockd_port == IPC_PORT_NULL) ? "NULL" :
-			(lockd_port == IPC_PORT_DEAD) ? "DEAD" : "VALID");
+		    kr, (lockd_port == IPC_PORT_NULL) ? "NULL" :
+		    (lockd_port == IPC_PORT_DEAD) ? "DEAD" : "VALID");
 		return;
 	}
 
 	kr = lockd_shutdown(lockd_port);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		printf("nfs_lockd_mount_change: shutdown %d\n", kr);
+	}
 
 	ipc_port_release_send(lockd_port);
 }
@@ -247,10 +250,12 @@ nfs_lockdmsg_find_by_xid(uint64_t lockxid)
 	LOCKD_MSG_REQUEST *mr;
 
 	TAILQ_FOREACH(mr, &nfs_pendlockq, lmr_next) {
-		if (mr->lmr_msg.lm_xid == lockxid)
+		if (mr->lmr_msg.lm_xid == lockxid) {
 			return mr;
-		if (mr->lmr_msg.lm_xid > lockxid)
+		}
+		if (mr->lmr_msg.lm_xid > lockxid) {
 			return NULL;
+		}
 	}
 	return mr;
 }
@@ -270,18 +275,24 @@ nfs_lockdmsg_find_by_xid(uint64_t lockxid)
 int
 nfs_lockdmsg_compare_to_answer(LOCKD_MSG_REQUEST *msgreq, struct lockd_ans *ansp)
 {
-	if (!(ansp->la_flags & LOCKD_ANS_LOCK_INFO))
+	if (!(ansp->la_flags & LOCKD_ANS_LOCK_INFO)) {
 		return 1;
-	if (msgreq->lmr_msg.lm_fl.l_pid != ansp->la_pid)
+	}
+	if (msgreq->lmr_msg.lm_fl.l_pid != ansp->la_pid) {
 		return 1;
-	if (msgreq->lmr_msg.lm_fl.l_start != ansp->la_start)
+	}
+	if (msgreq->lmr_msg.lm_fl.l_start != ansp->la_start) {
 		return 1;
-	if (msgreq->lmr_msg.lm_fl.l_len != ansp->la_len)
+	}
+	if (msgreq->lmr_msg.lm_fl.l_len != ansp->la_len) {
 		return 1;
-	if (msgreq->lmr_msg.lm_fh_len != ansp->la_fh_len)
+	}
+	if (msgreq->lmr_msg.lm_fh_len != ansp->la_fh_len) {
 		return 1;
-	if (bcmp(msgreq->lmr_msg.lm_fh, ansp->la_fh, ansp->la_fh_len))
+	}
+	if (bcmp(msgreq->lmr_msg.lm_fh, ansp->la_fh, ansp->la_fh_len)) {
 		return 1;
+	}
 	return 0;
 }
 
@@ -305,11 +316,13 @@ nfs_lockdmsg_find_by_answer(struct lockd_ans *ansp)
 {
 	LOCKD_MSG_REQUEST *mr;
 
-	if (!(ansp->la_flags & LOCKD_ANS_LOCK_INFO))
+	if (!(ansp->la_flags & LOCKD_ANS_LOCK_INFO)) {
 		return NULL;
+	}
 	TAILQ_FOREACH(mr, &nfs_pendlockq, lmr_next) {
-		if (!nfs_lockdmsg_compare_to_answer(mr, ansp))
+		if (!nfs_lockdmsg_compare_to_answer(mr, ansp)) {
 			break;
+		}
 	}
 	return mr;
 }
@@ -339,10 +352,11 @@ nfs_lockxid_get(void)
 	/* make sure we get a unique xid */
 	do {
 		/* Skip zero xid if it should ever happen.  */
-		if (++nfs_lockxid == 0)
+		if (++nfs_lockxid == 0) {
 			nfs_lockxid++;
+		}
 		if (!(mr = TAILQ_LAST(&nfs_pendlockq, nfs_lock_msg_queue)) ||
-		     (mr->lmr_msg.lm_xid < nfs_lockxid)) {
+		    (mr->lmr_msg.lm_xid < nfs_lockxid)) {
 			/* fast path: empty queue or new largest xid */
 			break;
 		}
@@ -362,8 +376,9 @@ nfs_lockd_send_request(LOCKD_MSG *msg, int interruptable)
 	mach_port_t lockd_port = IPC_PORT_NULL;
 
 	kr = host_get_lockd_port(host_priv_self(), &lockd_port);
-	if (kr != KERN_SUCCESS || !IPC_PORT_VALID(lockd_port))
-		return (ENOTSUP);
+	if (kr != KERN_SUCCESS || !IPC_PORT_VALID(lockd_port)) {
+		return ENOTSUP;
+	}
 
 	do {
 		/* In the kernel all mach messaging is interruptable */
@@ -382,22 +397,23 @@ nfs_lockd_send_request(LOCKD_MSG *msg, int interruptable)
 				(uint32_t *)&msg->lm_cred,
 				msg->lm_fh_len,
 				msg->lm_fh);
-			if (kr != KERN_SUCCESS)
+			if (kr != KERN_SUCCESS) {
 				printf("lockd_request received %d!\n", kr);
+			}
 		} while (!interruptable && kr == MACH_SEND_INTERRUPTED);
 	} while (kr == MIG_SERVER_DIED && retries++ < MACH_MAX_TRIES);
 
 	ipc_port_release_send(lockd_port);
 	switch (kr) {
-	case MACH_SEND_INTERRUPTED: 
-		return (EINTR);
+	case MACH_SEND_INTERRUPTED:
+		return EINTR;
 	default:
 		/*
 		 * Other MACH or MIG errors we will retry. Eventually
-		 * we will call nfs_down and allow the user to disable 
+		 * we will call nfs_down and allow the user to disable
 		 * locking.
 		 */
-		return (EAGAIN);
+		return EAGAIN;
 	}
 }
 
@@ -422,17 +438,20 @@ nfs3_lockd_request(
 	struct sockaddr *saddr;
 
 	nmp = NFSTONMP(np);
-	if (!nmp || !nmp->nm_saddr)
-		return (ENXIO);
+	if (!nmp || !nmp->nm_saddr) {
+		return ENXIO;
+	}
 
 	lck_mtx_lock(&nmp->nm_lock);
 	saddr = nmp->nm_saddr;
 	bcopy(saddr, &msg->lm_addr, min(sizeof msg->lm_addr, saddr->sa_len));
-	if (nmp->nm_vers == NFS_VER3)
+	if (nmp->nm_vers == NFS_VER3) {
 		msg->lm_flags |= LOCKD_MSG_NFSV3;
+	}
 
-	if (nmp->nm_sotype != SOCK_DGRAM)
+	if (nmp->nm_sotype != SOCK_DGRAM) {
 		msg->lm_flags |= LOCKD_MSG_TCP;
+	}
 
 	microuptime(&now);
 	starttime = now.tv_sec;
@@ -455,8 +474,9 @@ nfs3_lockd_request(
 		lck_mtx_unlock(nfs_lock_mutex);
 		error = nfs_lockd_send_request(msg, interruptable);
 		lck_mtx_lock(nfs_lock_mutex);
-		if (error && error != EAGAIN)
+		if (error && error != EAGAIN) {
 			break;
+		}
 
 		/*
 		 * Always wait for an answer.  Not waiting for unlocks could
@@ -512,16 +532,18 @@ wait_for_granted:
 				}
 				break;
 			}
-			if (error != EWOULDBLOCK)
+			if (error != EWOULDBLOCK) {
 				break;
+			}
 			/* check that we still have our mount... */
 			/* ...and that we still support locks */
 			/* ...and that there isn't a recovery pending */
 			nmp = NFSTONMP(np);
 			if ((error2 = nfs_sigintr(nmp, NULL, NULL, 0))) {
 				error = error2;
-				if (type == F_UNLCK)
+				if (type == F_UNLCK) {
 					printf("nfs3_lockd_request: aborting unlock request, error %d\n", error);
+				}
 				break;
 			}
 			lck_mtx_lock(&nmp->nm_lock);
@@ -545,16 +567,18 @@ wait_for_granted:
 			if ((error2 = nfs_sigintr(nmp, NULL, NULL, 0))) {
 				error = error2;
 				if (error2 != EINTR) {
-					if (type == F_UNLCK)
+					if (type == F_UNLCK) {
 						printf("nfs3_lockd_request: aborting unlock request, error %d\n", error);
+					}
 					break;
 				}
 			}
 			/* ...and that we still support locks */
 			lck_mtx_lock(&nmp->nm_lock);
 			if (nmp->nm_lockmode == NFS_LOCK_MODE_DISABLED) {
-				if (error == EWOULDBLOCK)
+				if (error == EWOULDBLOCK) {
 					error = ENOTSUP;
+				}
 				lck_mtx_unlock(&nmp->nm_lock);
 				break;
 			}
@@ -609,8 +633,9 @@ wait_for_granted:
 				lastmsg = now.tv_sec;
 				nfs_down(nmp, thd, 0, NFSSTA_LOCKTIMEO, "lockd not responding", 1);
 				wentdown = 1;
-			} else
+			} else {
 				lck_mtx_unlock(&nmp->nm_lock);
+			}
 
 			if (msgreq->lmr_errno == EINPROGRESS) {
 				/*
@@ -639,17 +664,19 @@ wait_for_granted:
 			/*
 			 * We timed out, so we will resend the request.
 			 */
-			if (!(flags & R_RECOVER))
+			if (!(flags & R_RECOVER)) {
 				timeo *= 2;
-			if (timeo > 30)
+			}
+			if (timeo > 30) {
 				timeo = 30;
+			}
 			/* resend request */
 			continue;
 		}
 
 		/* we got a reponse, so the server's lockd is OK */
 		nfs_up(NFSTONMP(np), thd, NFSSTA_LOCKTIMEO,
-			wentdown ? "lockd alive again" : NULL);
+		    wentdown ? "lockd alive again" : NULL);
 		wentdown = 0;
 
 		if (msgreq->lmr_answered && (msg->lm_flags & LOCKD_MSG_DENIED_GRACE)) {
@@ -714,15 +741,16 @@ wait_for_granted:
 			nmp->nm_state &= ~NFSSTA_LOCKTIMEO;
 			lck_mtx_unlock(&nmp->nm_lock);
 			printf("lockd returned ENOTSUP, disabling locks for nfs server: %s\n",
-				vfs_statfs(nmp->nm_mountp)->f_mntfromname);
-			return (error);
+			    vfs_statfs(nmp->nm_mountp)->f_mntfromname);
+			return error;
 		}
 		if (!error) {
 			/* record that NFS file locking has worked on this mount */
 			if (nmp) {
 				lck_mtx_lock(&nmp->nm_lock);
-				if (!(nmp->nm_state & NFSSTA_LOCKSWORK))
+				if (!(nmp->nm_state & NFSSTA_LOCKSWORK)) {
 					nmp->nm_state |= NFSSTA_LOCKSWORK;
+				}
 				lck_mtx_unlock(&nmp->nm_lock);
 			}
 		}
@@ -733,7 +761,7 @@ wait_for_granted:
 
 	lck_mtx_unlock(nfs_lock_mutex);
 
-	return (error);
+	return error;
 }
 
 /*
@@ -756,24 +784,28 @@ nfs3_setlock_rpc(
 	LOCKD_MSG *msg;
 
 	nmp = NFSTONMP(np);
-	if (nfs_mount_gone(nmp))
-		return (ENXIO);
+	if (nfs_mount_gone(nmp)) {
+		return ENXIO;
+	}
 
 	if (!nlop->nlo_open_owner) {
 		nfs_open_owner_ref(nofp->nof_owner);
 		nlop->nlo_open_owner = nofp->nof_owner;
 	}
-	if ((error = nfs_lock_owner_set_busy(nlop, thd)))
-		return (error);
+	if ((error = nfs_lock_owner_set_busy(nlop, thd))) {
+		return error;
+	}
 
 	/* set up lock message request structure */
 	bzero(&msgreq, sizeof(msgreq));
 	msg = &msgreq.lmr_msg;
 	msg->lm_version = LOCKD_MSG_VERSION;
-	if ((nflp->nfl_flags & NFS_FILE_LOCK_WAIT) && !reclaim)
+	if ((nflp->nfl_flags & NFS_FILE_LOCK_WAIT) && !reclaim) {
 		msg->lm_flags |= LOCKD_MSG_BLOCK;
-	if (reclaim)
+	}
+	if (reclaim) {
 		msg->lm_flags |= LOCKD_MSG_RECLAIM;
+	}
 	msg->lm_fh_len = (nmp->nm_vers == NFS_VER2) ? NFSX_V2FH : np->n_fhsize;
 	bcopy(np->n_fhp, msg->lm_fh, msg->lm_fh_len);
 	cru2x(cred, &msg->lm_cred);
@@ -787,7 +819,7 @@ nfs3_setlock_rpc(
 	error = nfs3_lockd_request(np, 0, &msgreq, flags, thd);
 
 	nfs_lock_owner_clear_busy(nlop);
-	return (error);
+	return error;
 }
 
 /*
@@ -809,8 +841,9 @@ nfs3_unlock_rpc(
 	LOCKD_MSG *msg;
 
 	nmp = NFSTONMP(np);
-	if (!nmp)
-		return (ENXIO);
+	if (!nmp) {
+		return ENXIO;
+	}
 
 	/* set up lock message request structure */
 	bzero(&msgreq, sizeof(msgreq));
@@ -826,7 +859,7 @@ nfs3_unlock_rpc(
 	msg->lm_fl.l_type = F_UNLCK;
 	msg->lm_fl.l_pid = nlop->nlo_pid;
 
-	return (nfs3_lockd_request(np, F_UNLCK, &msgreq, flags, thd));
+	return nfs3_lockd_request(np, F_UNLCK, &msgreq, flags, thd);
 }
 
 /*
@@ -847,8 +880,9 @@ nfs3_getlock_rpc(
 	LOCKD_MSG *msg;
 
 	nmp = NFSTONMP(np);
-	if (nfs_mount_gone(nmp))
-		return (ENXIO);
+	if (nfs_mount_gone(nmp)) {
+		return ENXIO;
+	}
 
 	/* set up lock message request structure */
 	bzero(&msgreq, sizeof(msgreq));
@@ -874,11 +908,12 @@ nfs3_getlock_rpc(
 			fl->l_start = msg->lm_fl.l_start;
 			fl->l_len = msg->lm_fl.l_len;
 			fl->l_whence = SEEK_SET;
-		} else
+		} else {
 			fl->l_type = F_UNLCK;
+		}
 	}
 
-	return (error);
+	return error;
 }
 
 /*
@@ -893,12 +928,14 @@ nfslockdans(proc_t p, struct lockd_ans *ansp)
 
 	/* Let root make this call. */
 	error = proc_suser(p);
-	if (error)
-		return (error);
+	if (error) {
+		return error;
+	}
 
 	/* the version should match, or we're out of sync */
-	if (ansp->la_version != LOCKD_ANS_VERSION)
-		return (EINVAL);
+	if (ansp->la_version != LOCKD_ANS_VERSION) {
+		return EINVAL;
+	}
 
 	lck_mtx_lock(nfs_lock_mutex);
 
@@ -911,27 +948,30 @@ nfslockdans(proc_t p, struct lockd_ans *ansp)
 		 * If no message was found or it doesn't match the answer,
 		 * we look for the lockd message by the answer's lock info.
 		 */
-		if (!msgreq || nfs_lockdmsg_compare_to_answer(msgreq, ansp))
+		if (!msgreq || nfs_lockdmsg_compare_to_answer(msgreq, ansp)) {
 			msgreq = nfs_lockdmsg_find_by_answer(ansp);
+		}
 		/*
 		 * We need to make sure this request isn't being cancelled
 		 * If it is, we don't want to accept the granted message.
 		 */
-		if (msgreq && (msgreq->lmr_msg.lm_flags & LOCKD_MSG_CANCEL))
+		if (msgreq && (msgreq->lmr_msg.lm_flags & LOCKD_MSG_CANCEL)) {
 			msgreq = NULL;
+		}
 	}
 	if (!msgreq) {
 		lck_mtx_unlock(nfs_lock_mutex);
-		return (EPIPE);
+		return EPIPE;
 	}
 
 	msgreq->lmr_errno = ansp->la_errno;
 	if ((msgreq->lmr_msg.lm_flags & LOCKD_MSG_TEST) && msgreq->lmr_errno == 0) {
 		if (ansp->la_flags & LOCKD_ANS_LOCK_INFO) {
-			if (ansp->la_flags & LOCKD_ANS_LOCK_EXCL)
+			if (ansp->la_flags & LOCKD_ANS_LOCK_EXCL) {
 				msgreq->lmr_msg.lm_fl.l_type = F_WRLCK;
-			else
+			} else {
 				msgreq->lmr_msg.lm_fl.l_type = F_RDLCK;
+			}
 			msgreq->lmr_msg.lm_fl.l_pid = ansp->la_pid;
 			msgreq->lmr_msg.lm_fl.l_start = ansp->la_start;
 			msgreq->lmr_msg.lm_fl.l_len = ansp->la_len;
@@ -939,14 +979,15 @@ nfslockdans(proc_t p, struct lockd_ans *ansp)
 			msgreq->lmr_msg.lm_fl.l_type = F_UNLCK;
 		}
 	}
-	if (ansp->la_flags & LOCKD_ANS_DENIED_GRACE)
+	if (ansp->la_flags & LOCKD_ANS_DENIED_GRACE) {
 		msgreq->lmr_msg.lm_flags |= LOCKD_MSG_DENIED_GRACE;
+	}
 
 	msgreq->lmr_answered = 1;
 	lck_mtx_unlock(nfs_lock_mutex);
 	wakeup(msgreq);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -966,32 +1007,38 @@ nfslockdnotify(proc_t p, user_addr_t argp)
 
 	/* Let root make this call. */
 	error = proc_suser(p);
-	if (error)
-		return (error);
+	if (error) {
+		return error;
+	}
 
 	headsize = (char*)&ln.ln_addr[0] - (char*)&ln.ln_version;
 	error = copyin(argp, &ln, headsize);
-	if (error)
-		return (error);
-	if (ln.ln_version != LOCKD_NOTIFY_VERSION)
-		return (EINVAL);
-	if ((ln.ln_addrcount < 1) || (ln.ln_addrcount > 128))
-		return (EINVAL);
+	if (error) {
+		return error;
+	}
+	if (ln.ln_version != LOCKD_NOTIFY_VERSION) {
+		return EINVAL;
+	}
+	if ((ln.ln_addrcount < 1) || (ln.ln_addrcount > 128)) {
+		return EINVAL;
+	}
 	argp += headsize;
 	saddr = (struct sockaddr *)&ln.ln_addr[0];
 
 	lck_mtx_lock(nfs_lock_mutex);
 
-	for (i=0; i < ln.ln_addrcount; i++) {
+	for (i = 0; i < ln.ln_addrcount; i++) {
 		error = copyin(argp, &ln.ln_addr[0], sizeof(ln.ln_addr[0]));
-		if (error)
+		if (error) {
 			break;
+		}
 		argp += sizeof(ln.ln_addr[0]);
 		/* scan lockd mount list for match to this address */
 		TAILQ_FOREACH(nmp, &nfs_lockd_mount_list, nm_ldlink) {
 			/* check if address matches this mount's server address */
-			if (!nmp->nm_saddr || nfs_sockaddr_cmp(saddr, nmp->nm_saddr))
+			if (!nmp->nm_saddr || nfs_sockaddr_cmp(saddr, nmp->nm_saddr)) {
 				continue;
+			}
 			/* We have a match!  Mark it as needing recovery. */
 			lck_mtx_lock(&nmp->nm_lock);
 			nfs_need_recover(nmp, 0);
@@ -1001,6 +1048,5 @@ nfslockdnotify(proc_t p, user_addr_t argp)
 
 	lck_mtx_unlock(nfs_lock_mutex);
 
-	return (error);
+	return error;
 }
-

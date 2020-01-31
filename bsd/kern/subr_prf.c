@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -74,8 +74,8 @@
  *	in bsd/dev/XXX/cons.c
  *
  * 26-MAR-1997 Umesh Vaishampayan (umeshv@NeXT.com
- * 	Fixed tharshing format in many functions. Cleanup.
- * 
+ *      Fixed tharshing format in many functions. Cleanup.
+ *
  * 17-Jun-1995 Mac Gillon (mgillon) at NeXT
  *	Purged old history
  *	New version based on 4.4 and NS3.3
@@ -97,7 +97,7 @@
 #include <sys/lock.h>
 #include <sys/subr_prf.h>
 
-#include <kern/cpu_number.h>	/* for cpu_number() */
+#include <kern/cpu_number.h>    /* for cpu_number() */
 #include <libkern/libkern.h>
 #include <os/log_private.h>
 
@@ -119,26 +119,26 @@ struct snprintf_arg {
  * debugger_panic_str contains argument to last
  * call to panic.
  */
-extern const char	*debugger_panic_str;
+extern const char       *debugger_panic_str;
 
-extern	void cnputc(char);		/* standard console putc */
-void	(*v_putc)(char) = cnputc;	/* routine to putc on virtual console */
+extern  void cnputc(char);              /* standard console putc */
+void    (*v_putc)(char) = cnputc;       /* routine to putc on virtual console */
 
-extern	struct tty cons;		/* standard console tty */
-extern struct	tty *constty;		/* pointer to console "window" tty */
+extern  struct tty cons;                /* standard console tty */
+extern struct   tty *constty;           /* pointer to console "window" tty */
 extern int  __doprnt(const char *fmt,
-					 va_list    argp,
-					 void       (*)(int, void *),
-					 void       *arg,
-					 int        radix,
-					 int        is_log);
+    va_list    argp,
+    void       (*)(int, void *),
+    void       *arg,
+    int        radix,
+    int        is_log);
 
 /*
  *	Record cpu that panic'd and lock around panic data
  */
 
-extern	void logwakeup(struct msgbuf *);
-extern	void halt_cpu(void);
+extern  void logwakeup(struct msgbuf *);
+extern  void halt_cpu(void);
 
 static void
 snprintf_func(int ch, void *arg);
@@ -162,22 +162,25 @@ uprintf(const char *fmt, ...)
 	struct putchar_args pca;
 	va_list ap;
 	struct session *sessp;
-	
+
 	sessp = proc_session(p);
 
 	if (p->p_flag & P_CONTROLT && sessp != SESSION_NULL && sessp->s_ttyvp) {
 		pca.flags = TOTTY;
 		pca.tty   = SESSION_TP(sessp);
-		if (pca.tty != NULL)
+		if (pca.tty != NULL) {
 			tty_lock(pca.tty);
+		}
 		va_start(ap, fmt);
 		__doprnt(fmt, ap, putchar, &pca, 10, FALSE);
 		va_end(ap);
-		if (pca.tty != NULL)
-		tty_unlock(pca.tty);
+		if (pca.tty != NULL) {
+			tty_unlock(pca.tty);
+		}
 	}
-	if (sessp != SESSION_NULL)
+	if (sessp != SESSION_NULL) {
 		session_rele(sessp);
+	}
 }
 
 tpr_t
@@ -188,19 +191,21 @@ tprintf_open(struct proc *p)
 	sessp = proc_session(p);
 
 	if (p->p_flag & P_CONTROLT && sessp->s_ttyvp) {
-		return ((tpr_t)sessp);
+		return (tpr_t)sessp;
 	}
-	if (sessp != SESSION_NULL)
+	if (sessp != SESSION_NULL) {
 		session_rele(sessp);
+	}
 
-	return ((tpr_t) NULL);
+	return (tpr_t) NULL;
 }
 
 void
 tprintf_close(tpr_t sessp)
 {
-	if (sessp)
+	if (sessp) {
 		session_rele((struct session *) sessp);
+	}
 }
 
 /*
@@ -220,7 +225,7 @@ tprintf(tpr_t tpr, const char *fmt, ...)
 	if (sess && (tp = SESSION_TP(sess)) != TTY_NULL) {
 		/* ttycheckoutq(), tputchar() require a locked tp */
 		tty_lock(tp);
-		if(ttycheckoutq(tp, 0)) {
+		if (ttycheckoutq(tp, 0)) {
 			pca.flags = TOTTY;
 			/* going to the tty; leave locked */
 			pca.tty = tp;
@@ -232,7 +237,7 @@ tprintf(tpr_t tpr, const char *fmt, ...)
 	}
 
 	pca.flags = TOLOG;
-	pca.tty	  = TTY_NULL;
+	pca.tty   = TTY_NULL;
 	va_start(ap, fmt);
 	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
 	va_end(ap);
@@ -262,7 +267,7 @@ ttyprintf(struct tty *tp, const char *fmt, ...)
 		struct putchar_args pca;
 		pca.flags = TOTTY;
 		pca.tty   = tp;
-		
+
 		va_start(ap, fmt);
 		__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
 		va_end(ap);
@@ -280,8 +285,9 @@ putchar_asl(int c, void *arg)
 {
 	struct putchar_args *pca = arg;
 
-	if ((pca->flags & TOLOGLOCKED) && c != '\0' && c != '\r' && c != 0177)
+	if ((pca->flags & TOLOGLOCKED) && c != '\0' && c != '\r' && c != 0177) {
 		log_putc_locked(aslbufp, c);
+	}
 	putchar(c, arg);
 }
 
@@ -301,7 +307,7 @@ vaddlog(const char *fmt, va_list ap)
 	bsd_log_unlock();
 	logwakeup(NULL);
 
-	return (0);
+	return 0;
 }
 
 void
@@ -315,7 +321,7 @@ _printf(int flags, struct tty *ttyp, const char *format, ...)
 
 	if (ttyp != NULL) {
 		tty_lock(ttyp);
-	
+
 		va_start(ap, format);
 		__doprnt(format, ap, putchar, &pca, 10, TRUE);
 		va_end(ap);
@@ -340,7 +346,8 @@ prf(const char *fmt, va_list ap, int flags, struct tty *ttyp)
 /*
  * Warn that a system table is full.
  */
-void tablefull(const char *tab)
+void
+tablefull(const char *tab)
 {
 	log(LOG_ERR, "%s: table is full\n", tab);
 }
@@ -360,21 +367,26 @@ putchar(int c, void *arg)
 	struct putchar_args *pca = arg;
 	char **sp = (char**) pca->tty;
 
-	if (debugger_panic_str)
+	if (debugger_panic_str) {
 		constty = 0;
+	}
 	if ((pca->flags & TOCONS) && pca->tty == NULL && constty) {
 		pca->tty = constty;
 		pca->flags |= TOTTY;
 	}
 	if ((pca->flags & TOTTY) && pca->tty && tputchar(c, pca->tty) < 0 &&
-	    (pca->flags & TOCONS) && pca->tty == constty)
+	    (pca->flags & TOCONS) && pca->tty == constty) {
 		constty = 0;
-	if ((pca->flags & TOLOG) && c != '\0' && c != '\r' && c != 0177)
+	}
+	if ((pca->flags & TOLOG) && c != '\0' && c != '\r' && c != 0177) {
 		log_putc(c);
-	if ((pca->flags & TOLOGLOCKED) && c != '\0' && c != '\r' && c != 0177)
+	}
+	if ((pca->flags & TOLOGLOCKED) && c != '\0' && c != '\r' && c != 0177) {
 		log_putc_locked(msgbufp, c);
-	if ((pca->flags & TOCONS) && constty == 0 && c != '\0')
+	}
+	if ((pca->flags & TOCONS) && constty == 0 && c != '\0') {
 		(*v_putc)(c);
+	}
 	if (pca->flags & TOSTR) {
 		**sp = c;
 		(*sp)++;
@@ -398,7 +410,7 @@ vprintf_log_locked(const char *fmt, va_list ap)
  * Scaled down version of vsprintf(3).
  *
  * Deprecation Warning:
- *	vsprintf() is being deprecated. Please use vsnprintf() instead. 
+ *	vsprintf() is being deprecated. Please use vsnprintf() instead.
  */
 int
 vsprintf(char *buf, const char *cfmt, va_list ap)
@@ -415,7 +427,7 @@ vsprintf(char *buf, const char *cfmt, va_list ap)
 	}
 	return 0;
 }
-#endif	/* !CONFIG_EMBEDDED */
+#endif  /* !CONFIG_EMBEDDED */
 
 /*
  * Scaled down version of snprintf(3).
@@ -429,7 +441,7 @@ snprintf(char *str, size_t size, const char *format, ...)
 	va_start(ap, format);
 	retval = vsnprintf(str, size, format, ap);
 	va_end(ap);
-	return(retval);
+	return retval;
 }
 
 /*
@@ -444,8 +456,9 @@ vsnprintf(char *str, size_t size, const char *format, va_list ap)
 	info.str = str;
 	info.remain = size;
 	retval = __doprnt(format, ap, snprintf_func, &info, 10, FALSE);
-	if (info.remain >= 1)
+	if (info.remain >= 1) {
 		*info.str++ = '\0';
+	}
 	return retval;
 }
 
@@ -466,4 +479,3 @@ kvprintf(char const *fmt, void (*func)(int, void*), void *arg, int radix, va_lis
 	__doprnt(fmt, ap, func, arg, radix, TRUE);
 	return 0;
 }
-

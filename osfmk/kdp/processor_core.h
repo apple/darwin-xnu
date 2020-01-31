@@ -58,7 +58,7 @@ __BEGIN_DECLS
  * error).
  */
 
-void kern_coredump_log(void *context, const char *string, ...) __printflike(2,3);
+void kern_coredump_log(void *context, const char *string, ...) __printflike(2, 3);
 
 /*
  * The core_save_summary callback is provided with the call to the kcc_coredump_get_summary
@@ -75,8 +75,8 @@ void kern_coredump_log(void *context, const char *string, ...) __printflike(2,3)
  * context              -- Passed to kcc_coredump_get_summary_routine
  */
 typedef kern_return_t (*core_save_summary_cb)(uint64_t core_segment_count, uint64_t core_byte_count,
-                                    uint64_t thread_count, uint64_t thread_state_size,
-				    uint64_t misc_bytes_count, void *context);
+    uint64_t thread_count, uint64_t thread_state_size,
+    uint64_t misc_bytes_count, void *context);
 
 /*
  * The core_save_segment_descriptions callback is provided with the call to the
@@ -93,7 +93,7 @@ typedef kern_return_t (*core_save_summary_cb)(uint64_t core_segment_count, uint6
  * context   -- Passed to kcc_coredump_save_segment_descriptions routine
  */
 typedef kern_return_t (*core_save_segment_descriptions_cb)(uint64_t seg_start, uint64_t seg_end,
-                                                 void *context);
+    void *context);
 /*
  * The core_save_thread_state callback is provided with the call to the
  * kcc_coredump_save_thread_state routine that was registered.
@@ -149,14 +149,14 @@ typedef kern_return_t (*core_save_segment_data_cb)(void *seg_data, uint64_t leng
 typedef kern_return_t (*core_save_misc_data_cb)(void *misc_data, uint64_t length, void *context);
 
 typedef struct {
-        kern_return_t (*kcc_coredump_init)(void *refcon, void *context); /* OPTIONAL -- return KERN_NODE_DOWN if the co-processor should be skipped */
-        kern_return_t (*kcc_coredump_get_summary)(void *refcon, core_save_summary_cb callback, void *context);
-        kern_return_t (*kcc_coredump_save_segment_descriptions)(void *refcon, core_save_segment_descriptions_cb callback, void *context);
-        kern_return_t (*kcc_coredump_save_thread_state)(void *refcon, void *buf, core_save_thread_state_cb callback, void *context);
-        kern_return_t (*kcc_coredump_save_sw_vers)(void *refcon, core_save_sw_vers_cb callback, void *context);
-        kern_return_t (*kcc_coredump_save_segment_data)(void *refcon, core_save_segment_data_cb callback, void *context);
-        kern_return_t (*kcc_coredump_save_misc_data)(void *refcon, core_save_misc_data_cb callback, void *context); /* OPTIONAL */
-        /* End of version 1 */
+	kern_return_t (*kcc_coredump_init)(void *refcon, void *context); /* OPTIONAL -- return KERN_NODE_DOWN if the co-processor should be skipped */
+	kern_return_t (*kcc_coredump_get_summary)(void *refcon, core_save_summary_cb callback, void *context);
+	kern_return_t (*kcc_coredump_save_segment_descriptions)(void *refcon, core_save_segment_descriptions_cb callback, void *context);
+	kern_return_t (*kcc_coredump_save_thread_state)(void *refcon, void *buf, core_save_thread_state_cb callback, void *context);
+	kern_return_t (*kcc_coredump_save_sw_vers)(void *refcon, core_save_sw_vers_cb callback, void *context);
+	kern_return_t (*kcc_coredump_save_segment_data)(void *refcon, core_save_segment_data_cb callback, void *context);
+	kern_return_t (*kcc_coredump_save_misc_data)(void *refcon, core_save_misc_data_cb callback, void *context); /* OPTIONAL */
+	/* End of version 1 */
 } kern_coredump_callback_config;
 
 #define KERN_COREDUMP_MAX_CORES MACH_CORE_FILEHEADER_MAXFILES
@@ -170,7 +170,7 @@ typedef struct {
  * structure, a description of the core should be provided -- i.e.: AP
  */
 kern_return_t kern_register_coredump_helper(int kern_coredump_config_vers, kern_coredump_callback_config *kc_callbacks, void *refcon,
-		const char *core_description, boolean_t is64bit, uint32_t mh_magic, cpu_type_t cpu_type, cpu_subtype_t cpu_subtype);
+    const char *core_description, boolean_t is64bit, uint32_t mh_magic, cpu_type_t cpu_type, cpu_subtype_t cpu_subtype);
 
 #if PRIVATE
 

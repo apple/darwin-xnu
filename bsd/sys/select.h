@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -61,7 +61,7 @@
  */
 
 #ifndef _SYS_SELECT_H_
-#define	_SYS_SELECT_H_
+#define _SYS_SELECT_H_
 
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
@@ -105,7 +105,7 @@
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #include <sys/_types/_fd_copy.h>
-#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+#endif  /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 #ifdef KERNEL
 #include <sys/kernel_types.h>
@@ -118,15 +118,15 @@
  */
 #ifdef KERNEL_PRIVATE
 struct selinfo {
-	struct	waitq si_waitq;		/* waitq for wait/wakeup */
-	struct	klist si_note;		/* JMM - temporary separation */
-	u_int	si_flags;		/* see below */
+	struct  waitq si_waitq;         /* waitq for wait/wakeup */
+	struct  klist si_note;          /* JMM - temporary separation */
+	u_int   si_flags;               /* see below */
 };
 
-#define	SI_COLL		0x0001		/* collision occurred */
-#define	SI_RECORDED	0x0004		/* select has been recorded */ 
-#define	SI_INITED	0x0008		/* selinfo has been inited */ 
-#define	SI_CLEAR	0x0010		/* selinfo has been cleared */ 
+#define SI_COLL         0x0001          /* collision occurred */
+#define SI_RECORDED     0x0004          /* select has been recorded */
+#define SI_INITED       0x0008          /* selinfo has been inited */
+#define SI_CLEAR        0x0010          /* selinfo has been cleared */
 
 #else
 struct selinfo;
@@ -135,9 +135,9 @@ struct selinfo;
 __BEGIN_DECLS
 
 extern int selwait;
-void	selrecord(proc_t selector, struct selinfo *, void *);
-void	selwakeup(struct selinfo *);
-void	selthreadclear(struct selinfo *);
+void    selrecord(proc_t selector, struct selinfo *, void *);
+void    selwakeup(struct selinfo *);
+void    selthreadclear(struct selinfo *);
 
 __END_DECLS
 
@@ -146,22 +146,22 @@ __END_DECLS
 __BEGIN_DECLS
 
 #ifndef  __MWERKS__
-int	 pselect(int, fd_set * __restrict, fd_set * __restrict,
-		fd_set * __restrict, const struct timespec * __restrict,
-		const sigset_t * __restrict)
+int      pselect(int, fd_set * __restrict, fd_set * __restrict,
+    fd_set * __restrict, const struct timespec * __restrict,
+    const sigset_t * __restrict)
 #if defined(_DARWIN_C_SOURCE) || defined(_DARWIN_UNLIMITED_SELECT)
-		__DARWIN_EXTSN_C(pselect)
+__DARWIN_EXTSN_C(pselect)
 #else /* !_DARWIN_C_SOURCE && !_DARWIN_UNLIMITED_SELECT */
 #  if defined(__LP64__) && !__DARWIN_NON_CANCELABLE
-		__DARWIN_1050(pselect)
+__DARWIN_1050(pselect)
 #  else /* !__LP64__ || __DARWIN_NON_CANCELABLE */
-		__DARWIN_ALIAS_C(pselect)
+__DARWIN_ALIAS_C(pselect)
 #  endif /* __LP64__ && !__DARWIN_NON_CANCELABLE */
 #endif /* _DARWIN_C_SOURCE || _DARWIN_UNLIMITED_SELECT */
-		;
+;
 #endif /* __MWERKS__ */
 
-#include <sys/_select.h>	/* select() prototype */
+#include <sys/_select.h>        /* select() prototype */
 
 __END_DECLS
 

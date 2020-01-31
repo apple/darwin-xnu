@@ -18,8 +18,9 @@
 #include "kperf_helpers.h"
 
 T_GLOBAL_META(
-		T_META_NAMESPACE("xnu.kperf"),
-		T_META_CHECK_LEAKS(false));
+	T_META_NAMESPACE("xnu.kperf"),
+	T_META_CHECK_LEAKS(false),
+	T_META_ASROOT(true));
 
 #define MAX_CPUS    64
 #define MAX_THREADS 64
@@ -33,7 +34,9 @@ spinning_thread(void *semp)
 	T_ASSERT_NOTNULL(semp, "semaphore passed to thread should not be NULL");
 	dispatch_semaphore_signal(*(dispatch_semaphore_t *)semp);
 
-	while (running_threads);
+	while (running_threads) {
+		;
+	}
 	return NULL;
 }
 
@@ -45,7 +48,7 @@ spinning_thread(void *semp)
 #define PERF_TMR_SKIP  KDBG_EVENTID(DBG_PERF, 3, 4)
 
 #define SCHED_HANDOFF KDBG_EVENTID(DBG_MACH, DBG_MACH_SCHED, \
-		MACH_STACK_HANDOFF)
+	        MACH_STACK_HANDOFF)
 #define SCHED_SWITCH  KDBG_EVENTID(DBG_MACH, DBG_MACH_SCHED, MACH_SCHED)
 #define SCHED_IDLE    KDBG_EVENTID(DBG_MACH, DBG_MACH_SCHED, MACH_IDLE)
 
@@ -69,19 +72,18 @@ reset_ktrace(void)
  */
 
 T_DECL(ipi_active_cpus,
-		"make sure that kperf IPIs all active CPUs",
-		T_META_ASROOT(true))
+    "make sure that kperf IPIs all active CPUs")
 {
 	int ncpus = dt_ncpu();
 	T_QUIET;
 	T_ASSERT_LT(ncpus, MAX_CPUS,
-			"only supports up to %d CPUs", MAX_CPUS);
+	    "only supports up to %d CPUs", MAX_CPUS);
 	T_LOG("found %d CPUs", ncpus);
 
 	int nthreads = ncpus - 1;
 	T_QUIET;
 	T_ASSERT_LT(nthreads, MAX_THREADS,
-			"only supports up to %d threads", MAX_THREADS);
+	    "only supports up to %d threads", MAX_THREADS);
 
 	static pthread_t threads[MAX_THREADS];
 
@@ -98,8 +100,8 @@ T_DECL(ipi_active_cpus,
 	for (int i = 0; i < nthreads; i++) {
 		T_QUIET;
 		T_ASSERT_POSIX_ZERO(
-				pthread_create(&threads[i], NULL, &spinning_thread,
-				&thread_spinning), NULL);
+			pthread_create(&threads[i], NULL, &spinning_thread,
+			&thread_spinning), NULL);
 		dispatch_semaphore_wait(thread_spinning, DISPATCH_TIME_FOREVER);
 	}
 
@@ -117,10 +119,10 @@ T_DECL(ipi_active_cpus,
 	 */
 
 	ktrace_events_single(s, DISPATCH_AFTER_EVENT,
-			^(__unused struct trace_point *tp)
+	    ^(__unused struct trace_point *tp)
 	{
 		dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-				TIMEOUT_SECS * NSEC_PER_SEC), q, ^{
+		TIMEOUT_SECS * NSEC_PER_SEC), q, ^{
 			ktrace_end(s, 0);
 		});
 	});
@@ -136,17 +138,17 @@ T_DECL(ipi_active_cpus,
 		running_threads = false;
 
 		for (int i = 0; i < nthreads; i++) {
-			T_QUIET;
-			T_ASSERT_POSIX_ZERO(pthread_join(threads[i], NULL), NULL);
+		        T_QUIET;
+		        T_ASSERT_POSIX_ZERO(pthread_join(threads[i], NULL), NULL);
 		}
 
 		for (int i = 0; i < nidles; i++) {
-			T_LOG("CPU %d idle thread: %#" PRIx64, i, idle_tids[i]);
+		        T_LOG("CPU %d idle thread: %#" PRIx64, i, idle_tids[i]);
 		}
 
 		T_LOG("saw %" PRIu64 " timer fires, %" PRIu64 " samples, "
-				"%g samples/fire", nfires, nsamples,
-				(double)nsamples / (double)nfires);
+		"%g samples/fire", nfires, nsamples,
+		(double)nsamples / (double)nfires);
 
 		T_END;
 	});
@@ -183,8 +185,8 @@ T_DECL(ipi_active_cpus,
 		tids_on_cpu[tp->cpuid] = 0;
 
 		for (int i = 0; i < nidles; i++) {
-			if (idle_tids[i] == idle_thread) {
-				return;
+		        if (idle_tids[i] == idle_thread) {
+		                return;
 			}
 		}
 
@@ -211,18 +213,18 @@ T_DECL(ipi_active_cpus,
 
 		nexpected = 0;
 		for (int i = 0; i < ncpus; i++) {
-			uint64_t i_bit = UINT64_C(1) << i;
-			if (sample_missing & i_bit) {
-				T_LOG("missed sample on CPU %d for thread %#llx from timer on CPU %d (xcall mask = %llx, expected %d samples)",
-						tp->cpuid, tids_snap[i], last_fire_cpu,
-						xcall_mask, last_expected);
-				sample_missing &= ~i_bit;
+		        uint64_t i_bit = UINT64_C(1) << i;
+		        if (sample_missing & i_bit) {
+		                T_LOG("missed sample on CPU %d for thread %#llx from timer on CPU %d (xcall mask = %llx, expected %d samples)",
+		                tp->cpuid, tids_snap[i], last_fire_cpu,
+		                xcall_mask, last_expected);
+		                sample_missing &= ~i_bit;
 			}
 
-			if (tids_on_cpu[i] != 0) {
-				tids_snap[i] = tids_on_cpu[i];
-				sample_missing |= i_bit;
-				nexpected++;
+		        if (tids_on_cpu[i] != 0) {
+		                tids_snap[i] = tids_on_cpu[i];
+		                sample_missing |= i_bit;
+		                nexpected++;
 			}
 		}
 
@@ -242,7 +244,7 @@ T_DECL(ipi_active_cpus,
 
 	ktrace_events_single(s, MP_CPUS_CALL, ^(struct trace_point *tp) {
 		if (xcall_from_cpu != (int)tp->cpuid) {
-			return;
+		        return;
 		}
 
 		xcall_mask = tp->arg1;
@@ -257,8 +259,8 @@ T_DECL(ipi_active_cpus,
 	ktrace_events_single(s, PERF_TMR_HNDLR, ^(struct trace_point *tp) {
 		nsamples++;
 		if ((int)tp->cpuid > ncpus) {
-			/* skip IOPs; they're not scheduling our threads */
-			return;
+		        /* skip IOPs; they're not scheduling our threads */
+		        return;
 		}
 
 		sample_missing &= ~(UINT64_C(1) << tp->cpuid);
@@ -271,11 +273,11 @@ T_DECL(ipi_active_cpus,
 	(void)kperf_action_count_set(1);
 	T_QUIET;
 	T_ASSERT_POSIX_SUCCESS(kperf_action_samplers_set(1, KPERF_SAMPLER_KSTACK),
-			NULL);
+	    NULL);
 	(void)kperf_timer_count_set(1);
 	T_QUIET;
 	T_ASSERT_POSIX_SUCCESS(kperf_timer_period_set(0,
-			kperf_ns_to_ticks(TIMER_PERIOD_NS)), NULL);
+	    kperf_ns_to_ticks(TIMER_PERIOD_NS)), NULL);
 	T_QUIET;
 	T_ASSERT_POSIX_SUCCESS(kperf_timer_action_set(0, 1), NULL);
 
@@ -283,8 +285,8 @@ T_DECL(ipi_active_cpus,
 	T_ATEND(reset_ktrace);
 
 	T_ASSERT_POSIX_ZERO(ktrace_start(s,
-			dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0)),
-			"start ktrace");
+	    dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0)),
+	    "start ktrace");
 
 	kdebug_trace(DISPATCH_AFTER_EVENT, 0, 0, 0, 0);
 
@@ -300,12 +302,12 @@ T_DECL(ipi_active_cpus,
 #define NON_TRIGGER_CODE     UINT8_C(0xff)
 
 #define NON_TRIGGER_EVENT \
-		(KDBG_EVENTID(NON_TRIGGER_CLASS, NON_TRIGGER_SUBCLASS, \
-		NON_TRIGGER_CODE))
+	        (KDBG_EVENTID(NON_TRIGGER_CLASS, NON_TRIGGER_SUBCLASS, \
+	        NON_TRIGGER_CODE))
 
 static void
 expect_kdebug_trigger(const char *filter_desc, const uint32_t *debugids,
-		unsigned int n_debugids)
+    unsigned int n_debugids)
 {
 	__block int missing_kernel_stacks = 0;
 	__block int missing_user_stacks = 0;
@@ -316,37 +318,37 @@ expect_kdebug_trigger(const char *filter_desc, const uint32_t *debugids,
 	T_QUIET; T_ASSERT_NOTNULL(s, NULL);
 
 	ktrace_events_single(s, PERF_STK_KHDR, ^(struct trace_point *tp) {
-			missing_kernel_stacks--;
-			T_LOG("saw kernel stack with %lu frames, flags = %#lx", tp->arg2,
-					tp->arg1);
-			});
+		missing_kernel_stacks--;
+		T_LOG("saw kernel stack with %lu frames, flags = %#lx", tp->arg2,
+		tp->arg1);
+	});
 	ktrace_events_single(s, PERF_STK_UHDR, ^(struct trace_point *tp) {
-			missing_user_stacks--;
-			T_LOG("saw user stack with %lu frames, flags = %#lx", tp->arg2,
-					tp->arg1);
-			});
+		missing_user_stacks--;
+		T_LOG("saw user stack with %lu frames, flags = %#lx", tp->arg2,
+		tp->arg1);
+	});
 
 	for (unsigned int i = 0; i < n_debugids; i++) {
 		ktrace_events_single(s, debugids[i], ^(struct trace_point *tp) {
-				missing_kernel_stacks++;
-				missing_user_stacks++;
-				T_LOG("saw event with debugid 0x%" PRIx32, tp->debugid);
-				});
+			missing_kernel_stacks++;
+			missing_user_stacks++;
+			T_LOG("saw event with debugid 0x%" PRIx32, tp->debugid);
+		});
 	}
 
 	ktrace_events_single(s, NON_TRIGGER_EVENT,
-			^(__unused struct trace_point *tp)
-			{
-			ktrace_end(s, 0);
-			});
+	    ^(__unused struct trace_point *tp)
+	{
+		ktrace_end(s, 0);
+	});
 
 	ktrace_set_completion_handler(s, ^{
-			T_EXPECT_LE(missing_kernel_stacks, 0, NULL);
-			T_EXPECT_LE(missing_user_stacks, 0, NULL);
+		T_EXPECT_LE(missing_kernel_stacks, 0, NULL);
+		T_EXPECT_LE(missing_user_stacks, 0, NULL);
 
-			ktrace_session_destroy(s);
-			T_END;
-			});
+		ktrace_session_destroy(s);
+		T_END;
+	});
 
 	/* configure kperf */
 
@@ -354,14 +356,14 @@ expect_kdebug_trigger(const char *filter_desc, const uint32_t *debugids,
 
 	(void)kperf_action_count_set(1);
 	T_ASSERT_POSIX_SUCCESS(kperf_action_samplers_set(1,
-				KPERF_SAMPLER_KSTACK | KPERF_SAMPLER_USTACK), NULL);
+	    KPERF_SAMPLER_KSTACK | KPERF_SAMPLER_USTACK), NULL);
 
 	filter = kperf_kdebug_filter_create();
 	T_ASSERT_NOTNULL(filter, NULL);
 
 	T_ASSERT_POSIX_SUCCESS(kperf_kdebug_action_set(1), NULL);
 	T_ASSERT_POSIX_SUCCESS(kperf_kdebug_filter_add_desc(filter, filter_desc),
-			NULL);
+	    NULL);
 	T_ASSERT_POSIX_SUCCESS(kperf_kdebug_filter_set(filter), NULL);
 	kperf_kdebug_filter_destroy(filter);
 
@@ -378,10 +380,10 @@ expect_kdebug_trigger(const char *filter_desc, const uint32_t *debugids,
 	T_ASSERT_POSIX_SUCCESS(kdebug_trace(NON_TRIGGER_EVENT, 0, 0, 0, 0), NULL);
 
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, KDEBUG_TRIGGER_TIMEOUT_NS),
-			dispatch_get_main_queue(), ^(void)
-			{
-			ktrace_end(s, 1);
-			});
+	    dispatch_get_main_queue(), ^(void)
+	{
+		ktrace_end(s, 1);
+	});
 }
 
 #define TRIGGER_CLASS     UINT8_C(0xfe)
@@ -389,11 +391,10 @@ expect_kdebug_trigger(const char *filter_desc, const uint32_t *debugids,
 #define TRIGGER_SUBCLASS  UINT8_C(0xff)
 #define TRIGGER_CODE      UINT8_C(0)
 #define TRIGGER_DEBUGID \
-		(KDBG_EVENTID(TRIGGER_CLASS, TRIGGER_SUBCLASS, TRIGGER_CODE))
+	        (KDBG_EVENTID(TRIGGER_CLASS, TRIGGER_SUBCLASS, TRIGGER_CODE))
 
 T_DECL(kdebug_trigger_classes,
-		"test that kdebug trigger samples on classes",
-		T_META_ASROOT(true))
+    "test that kdebug trigger samples on classes")
 {
 	const uint32_t class_debugids[] = {
 		KDBG_EVENTID(TRIGGER_CLASS, 1, 1),
@@ -403,13 +404,12 @@ T_DECL(kdebug_trigger_classes,
 	};
 
 	expect_kdebug_trigger("C0xfe,C0xfdr", class_debugids,
-			sizeof(class_debugids) / sizeof(class_debugids[0]));
+	    sizeof(class_debugids) / sizeof(class_debugids[0]));
 	dispatch_main();
 }
 
 T_DECL(kdebug_trigger_subclasses,
-		"test that kdebug trigger samples on subclasses",
-		T_META_ASROOT(true))
+    "test that kdebug trigger samples on subclasses")
 {
 	const uint32_t subclass_debugids[] = {
 		KDBG_EVENTID(TRIGGER_CLASS, TRIGGER_SUBCLASS, 0),
@@ -419,20 +419,19 @@ T_DECL(kdebug_trigger_subclasses,
 	};
 
 	expect_kdebug_trigger("S0xfeff,S0xfdffr", subclass_debugids,
-			sizeof(subclass_debugids) / sizeof(subclass_debugids[0]));
+	    sizeof(subclass_debugids) / sizeof(subclass_debugids[0]));
 	dispatch_main();
 }
 
 T_DECL(kdebug_trigger_debugids,
-		"test that kdebug trigger samples on debugids",
-		T_META_ASROOT(true))
+    "test that kdebug trigger samples on debugids")
 {
 	const uint32_t debugids[] = {
 		TRIGGER_DEBUGID
 	};
 
 	expect_kdebug_trigger("D0xfeff0000", debugids,
-			sizeof(debugids) / sizeof(debugids[0]));
+	    sizeof(debugids) / sizeof(debugids[0]));
 	dispatch_main();
 }
 
@@ -442,8 +441,7 @@ T_DECL(kdebug_trigger_debugids,
  */
 
 T_DECL(kdbg_callstacks,
-		"test that the kdbg_callstacks samples on syscalls",
-		T_META_ASROOT(true))
+    "test that the kdbg_callstacks samples on syscalls")
 {
 	ktrace_session_t s;
 	__block bool saw_user_stack = false;
@@ -454,7 +452,7 @@ T_DECL(kdbg_callstacks,
 	/*
 	 * Make sure BSD events are traced in order to trigger samples on syscalls.
 	 */
-	ktrace_events_class(s, DBG_BSD, ^void(__unused struct trace_point *tp) {});
+	ktrace_events_class(s, DBG_BSD, ^void (__unused struct trace_point *tp) {});
 
 	ktrace_events_single(s, PERF_STK_UHDR, ^(__unused struct trace_point *tp) {
 		saw_user_stack = true;
@@ -465,7 +463,7 @@ T_DECL(kdbg_callstacks,
 		ktrace_session_destroy(s);
 
 		T_EXPECT_TRUE(saw_user_stack,
-				"saw user stack after configuring kdbg_callstacks");
+		"saw user stack after configuring kdbg_callstacks");
 		T_END;
 	});
 
@@ -478,7 +476,7 @@ T_DECL(kdbg_callstacks,
 	T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()), NULL);
 
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC),
-			dispatch_get_main_queue(), ^(void) {
+	    dispatch_get_main_queue(), ^(void) {
 		ktrace_end(s, 1);
 	});
 
@@ -501,58 +499,80 @@ expect_stacks_traced(void (^cb)(void))
 	__block unsigned int kernel_stacks = 0;
 
 	ktrace_events_single(s, PERF_STK_UHDR, ^(__unused struct trace_point *tp) {
-			user_stacks++;
-			});
+		user_stacks++;
+	});
 	ktrace_events_single(s, PERF_STK_KHDR, ^(__unused struct trace_point *tp) {
-			kernel_stacks++;
-			});
+		kernel_stacks++;
+	});
 
 	ktrace_set_completion_handler(s, ^(void) {
-			ktrace_session_destroy(s);
-			T_EXPECT_GT(user_stacks, 0U, NULL);
-			T_EXPECT_GT(kernel_stacks, 0U, NULL);
-			cb();
-			});
+		ktrace_session_destroy(s);
+		T_EXPECT_GT(user_stacks, 0U, NULL);
+		T_EXPECT_GT(kernel_stacks, 0U, NULL);
+		cb();
+	});
 
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(kperf_sample_set(1), NULL);
 
 	T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()), NULL);
 
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, STACKS_WAIT_DURATION_NS),
-			dispatch_get_main_queue(), ^(void)
-			{
-			kperf_reset();
-			ktrace_end(s, 0);
-			});
+	    dispatch_get_main_queue(), ^(void)
+	{
+		kperf_reset();
+		ktrace_end(s, 0);
+	});
 }
 
-T_DECL(pet, "test that PET mode samples kernel and user stacks",
-		T_META_ASROOT(true))
+T_DECL(pet, "test that PET mode samples kernel and user stacks")
 {
 	configure_kperf_stacks_timer(-1, 10);
 	T_ASSERT_POSIX_SUCCESS(kperf_timer_pet_set(0), NULL);
 
 	expect_stacks_traced(^(void) {
-			T_END;
-			});
+		T_END;
+	});
 
 	dispatch_main();
 }
 
 T_DECL(lightweight_pet,
-		"test that lightweight PET mode samples kernel and user stacks",
-		T_META_ASROOT(true))
+    "test that lightweight PET mode samples kernel and user stacks",
+    T_META_ASROOT(true))
 {
 	int set = 1;
 
 	configure_kperf_stacks_timer(-1, 10);
 	T_ASSERT_POSIX_SUCCESS(sysctlbyname("kperf.lightweight_pet", NULL, NULL,
-				&set, sizeof(set)), NULL);
+	    &set, sizeof(set)), NULL);
 	T_ASSERT_POSIX_SUCCESS(kperf_timer_pet_set(0), NULL);
 
 	expect_stacks_traced(^(void) {
-			T_END;
-			});
+		T_END;
+	});
 
 	dispatch_main();
+}
+
+T_DECL(pet_stress, "repeatedly enable and disable PET mode")
+{
+	int niters = 1000;
+	while (niters--) {
+		configure_kperf_stacks_timer(-1, 10);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(kperf_timer_pet_set(0), NULL);
+		usleep(20);
+		kperf_reset();
+	}
+	;
+}
+
+T_DECL(timer_stress, "repeatedly enable and disable timers")
+{
+	int niters = 1000;
+	while (niters--) {
+		configure_kperf_stacks_timer(-1, 1);
+		usleep(20);
+		kperf_reset();
+	}
+	;
 }

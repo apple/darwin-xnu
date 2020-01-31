@@ -31,20 +31,72 @@
 /*
  * Non-sanitized versions of memory intrinsics
  */
-static inline void *__nosan_memcpy(void *dst, const void *src, size_t sz)   { return memcpy(dst, src, sz); }
-static inline void *__nosan_memset(void *src, int c, size_t sz)             { return memset(src, c, sz); }
-static inline void *__nosan_memmove(void *src, const void *dst, size_t sz)  { return memmove(src, dst, sz); }
-static inline int   __nosan_bcmp(const void *a, const void *b, size_t sz)   { return bcmp(a, b, sz); }
-static inline void  __nosan_bcopy(const void *src, void *dst, size_t sz)    { return bcopy(src, dst, sz); }
-static inline int   __nosan_memcmp(const void *a, const void *b, size_t sz) { return memcmp(a, b, sz); }
-static inline void  __nosan_bzero(void *dst, size_t sz)                     { return bzero(dst, sz); }
+static inline void *
+__nosan_memcpy(void *dst, const void *src, size_t sz)
+{
+	return memcpy(dst, src, sz);
+}
+static inline void *
+__nosan_memset(void *src, int c, size_t sz)
+{
+	return memset(src, c, sz);
+}
+static inline void *
+__nosan_memmove(void *src, const void *dst, size_t sz)
+{
+	return memmove(src, dst, sz);
+}
+static inline int
+__nosan_bcmp(const void *a, const void *b, size_t sz)
+{
+	return bcmp(a, b, sz);
+}
+static inline void
+__nosan_bcopy(const void *src, void *dst, size_t sz)
+{
+	return bcopy(src, dst, sz);
+}
+static inline int
+__nosan_memcmp(const void *a, const void *b, size_t sz)
+{
+	return memcmp(a, b, sz);
+}
+static inline void
+__nosan_bzero(void *dst, size_t sz)
+{
+	return bzero(dst, sz);
+}
 
-static inline size_t __nosan_strlcpy(char *dst, const char *src, size_t sz) { return strlcpy(dst, src, sz); }
-static inline char  *__nosan_strncpy(char *dst, const char *src, size_t sz) { return strncpy(dst, src, sz); }
-static inline size_t __nosan_strlcat(char *dst, const char *src, size_t sz) { return strlcat(dst, src, sz); }
-static inline char  *__nosan_strncat(char *dst, const char *src, size_t sz) { return strncat(dst, src, sz); }
-static inline size_t __nosan_strnlen(const char *src, size_t sz)            { return strnlen(src, sz); }
-static inline size_t __nosan_strlen(const char *src)                        { return strlen(src); }
+static inline size_t
+__nosan_strlcpy(char *dst, const char *src, size_t sz)
+{
+	return strlcpy(dst, src, sz);
+}
+static inline char  *
+__nosan_strncpy(char *dst, const char *src, size_t sz)
+{
+	return strncpy(dst, src, sz);
+}
+static inline size_t
+__nosan_strlcat(char *dst, const char *src, size_t sz)
+{
+	return strlcat(dst, src, sz);
+}
+static inline char  *
+__nosan_strncat(char *dst, const char *src, size_t sz)
+{
+	return strncat(dst, src, sz);
+}
+static inline size_t
+__nosan_strnlen(const char *src, size_t sz)
+{
+	return strnlen(src, sz);
+}
+static inline size_t
+__nosan_strlen(const char *src)
+{
+	return strlen(src);
+}
 
 #if KASAN
 void *__asan_memcpy(void *src, const void *dst, size_t sz);

@@ -39,22 +39,25 @@
 
 #if CC_KERNEL
 #include <kern/debug.h>
-void cc_try_abort(const char * msg CC_UNUSED , ...)
+void
+cc_try_abort(const char * msg CC_UNUSED, ...)
 {
-    panic("%s", msg);
+	panic("%s", msg);
 }
 
 #elif CC_USE_SEPROM || CC_USE_S3 || CC_BASEBAND || CC_EFI || CC_IBOOT || CC_RTKIT || CC_RTKITROM
-void cc_try_abort(const char * msg CC_UNUSED, ...)
+void
+cc_try_abort(const char * msg CC_UNUSED, ...)
 {
-    //Do nothing and return because we don't have panic() in those
-    //environments. Make sure you return error, when using cc_try_abort() in above environments
+	//Do nothing and return because we don't have panic() in those
+	//environments. Make sure you return error, when using cc_try_abort() in above environments
 }
 
 #else
 #include <stdlib.h>
-void cc_try_abort(const char * msg CC_UNUSED, ...)
+void
+cc_try_abort(const char * msg CC_UNUSED, ...)
 {
-    abort();
+	abort();
 }
 #endif

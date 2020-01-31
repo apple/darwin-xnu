@@ -46,78 +46,78 @@
  *  Flavors
  */
 
-#define ARM_THREAD_STATE		1
+#define ARM_THREAD_STATE                1
 #define ARM_UNIFIED_THREAD_STATE ARM_THREAD_STATE
-#define ARM_VFP_STATE			2
-#define ARM_EXCEPTION_STATE		3
-#define ARM_DEBUG_STATE			4 /* pre-armv8 */
-#define THREAD_STATE_NONE		5
-#define ARM_THREAD_STATE64		6
-#define ARM_EXCEPTION_STATE64	7
+#define ARM_VFP_STATE                   2
+#define ARM_EXCEPTION_STATE             3
+#define ARM_DEBUG_STATE                 4 /* pre-armv8 */
+#define THREAD_STATE_NONE               5
+#define ARM_THREAD_STATE64              6
+#define ARM_EXCEPTION_STATE64   7
 // ARM_THREAD_STATE_LAST (legacy) 8
-#define ARM_THREAD_STATE32		9
+#define ARM_THREAD_STATE32              9
 
 /* API */
-#define ARM_DEBUG_STATE32		14
-#define ARM_DEBUG_STATE64		15
-#define ARM_NEON_STATE			16
-#define ARM_NEON_STATE64		17
-#define ARM_CPMU_STATE64		18
+#define ARM_DEBUG_STATE32               14
+#define ARM_DEBUG_STATE64               15
+#define ARM_NEON_STATE                  16
+#define ARM_NEON_STATE64                17
+#define ARM_CPMU_STATE64                18
 
 #ifdef XNU_KERNEL_PRIVATE
 /* For kernel use */
-#define ARM_SAVED_STATE32		20
-#define ARM_SAVED_STATE64		21
-#define ARM_NEON_SAVED_STATE32	22
-#define ARM_NEON_SAVED_STATE64	23
+#define ARM_SAVED_STATE32               20
+#define ARM_SAVED_STATE64               21
+#define ARM_NEON_SAVED_STATE32  22
+#define ARM_NEON_SAVED_STATE64  23
 #endif /* XNU_KERNEL_PRIVATE */
 
-#define VALID_THREAD_STATE_FLAVOR(x)\
-((x == ARM_THREAD_STATE) 		||	\
- (x == ARM_VFP_STATE) 			||	\
- (x == ARM_EXCEPTION_STATE) 	||	\
- (x == ARM_DEBUG_STATE) 		||	\
+#define VALID_THREAD_STATE_FLAVOR(x) \
+((x == ARM_THREAD_STATE)                ||      \
+ (x == ARM_VFP_STATE)                   ||      \
+ (x == ARM_EXCEPTION_STATE)     ||      \
+ (x == ARM_DEBUG_STATE)                 ||      \
  (x == THREAD_STATE_NONE)		||  \
- (x == ARM_THREAD_STATE32)		||	\
- (x == ARM_THREAD_STATE64)		||	\
- (x == ARM_EXCEPTION_STATE64)	||	\
- (x == ARM_NEON_STATE)		||	\
- (x == ARM_NEON_STATE64)		||	\
- (x == ARM_DEBUG_STATE32) 		||	\
+ (x == ARM_THREAD_STATE32)		||      \
+ (x == ARM_THREAD_STATE64)		||      \
+ (x == ARM_EXCEPTION_STATE64)	||      \
+ (x == ARM_NEON_STATE)		||      \
+ (x == ARM_NEON_STATE64)		||      \
+ (x == ARM_DEBUG_STATE32)               ||      \
  (x == ARM_DEBUG_STATE64))
 
 struct arm_state_hdr {
-    uint32_t flavor;
-    uint32_t count;
+	uint32_t flavor;
+	uint32_t count;
 };
 typedef struct arm_state_hdr arm_state_hdr_t;
 
-typedef _STRUCT_ARM_THREAD_STATE		arm_thread_state_t;
-typedef _STRUCT_ARM_THREAD_STATE		arm_thread_state32_t;
-typedef _STRUCT_ARM_THREAD_STATE64		arm_thread_state64_t;
+typedef _STRUCT_ARM_THREAD_STATE                arm_thread_state_t;
+typedef _STRUCT_ARM_THREAD_STATE                arm_thread_state32_t;
+typedef _STRUCT_ARM_THREAD_STATE64              arm_thread_state64_t;
 
 #if !defined(KERNEL)
 #if __DARWIN_C_LEVEL >= __DARWIN_C_FULL && defined(__arm64__)
 #define arm_thread_state64_get_pc(ts) \
-		__darwin_arm_thread_state64_get_pc(ts)
+	        __darwin_arm_thread_state64_get_pc(ts)
 #define arm_thread_state64_get_pc_fptr(ts) \
-		__darwin_arm_thread_state64_get_pc_fptr(ts)
+	        __darwin_arm_thread_state64_get_pc_fptr(ts)
 #define arm_thread_state64_set_pc_fptr(ts, fptr) \
-		__darwin_arm_thread_state64_set_pc_fptr(ts, fptr)
+	        __darwin_arm_thread_state64_set_pc_fptr(ts, fptr)
 #define arm_thread_state64_get_lr(ts) \
-		__darwin_arm_thread_state64_get_lr(ts)
+	        __darwin_arm_thread_state64_get_lr(ts)
 #define arm_thread_state64_get_lr_fptr(ts) \
-		__darwin_arm_thread_state64_get_lr_fptr(ts)
+	        __darwin_arm_thread_state64_get_lr_fptr(ts)
 #define arm_thread_state64_set_lr_fptr(ts, fptr) \
-		__darwin_arm_thread_state64_set_lr_fptr(ts, fptr)
+	        __darwin_arm_thread_state64_set_lr_fptr(ts, fptr)
 #define arm_thread_state64_get_sp(ts) \
-		__darwin_arm_thread_state64_get_sp(ts)
+	        __darwin_arm_thread_state64_get_sp(ts)
 #define arm_thread_state64_set_sp(ts, ptr) \
-		__darwin_arm_thread_state64_set_sp(ts, ptr)
+	        __darwin_arm_thread_state64_set_sp(ts, ptr)
 #define arm_thread_state64_get_fp(ts) \
-		__darwin_arm_thread_state64_get_fp(ts)
+	        __darwin_arm_thread_state64_get_fp(ts)
 #define arm_thread_state64_set_fp(ts, ptr) \
-		__darwin_arm_thread_state64_set_fp(ts, ptr)
+	        __darwin_arm_thread_state64_set_fp(ts, ptr)
 #endif /* __DARWIN_C_LEVEL >= __DARWIN_C_FULL && defined(__arm64__) */
 #endif /* !defined(KERNEL) */
 
@@ -128,8 +128,8 @@ struct arm_unified_thread_state {
 		arm_thread_state64_t ts_64;
 	} uts;
 };
-#define	ts_32	uts.ts_32
-#define	ts_64	uts.ts_64
+#define ts_32   uts.ts_32
+#define ts_64   uts.ts_64
 typedef struct arm_unified_thread_state arm_unified_thread_state_t;
 
 #define ARM_THREAD_STATE_COUNT ((mach_msg_type_number_t) \
@@ -142,17 +142,17 @@ typedef struct arm_unified_thread_state arm_unified_thread_state_t;
    (sizeof (arm_unified_thread_state_t)/sizeof(uint32_t)))
 
 
-typedef _STRUCT_ARM_VFP_STATE			arm_vfp_state_t;
-typedef _STRUCT_ARM_NEON_STATE			arm_neon_state_t;
-typedef _STRUCT_ARM_NEON_STATE			arm_neon_state32_t;
-typedef _STRUCT_ARM_NEON_STATE64		arm_neon_state64_t;
+typedef _STRUCT_ARM_VFP_STATE                   arm_vfp_state_t;
+typedef _STRUCT_ARM_NEON_STATE                  arm_neon_state_t;
+typedef _STRUCT_ARM_NEON_STATE                  arm_neon_state32_t;
+typedef _STRUCT_ARM_NEON_STATE64                arm_neon_state64_t;
 
-typedef _STRUCT_ARM_EXCEPTION_STATE		arm_exception_state_t;
-typedef _STRUCT_ARM_EXCEPTION_STATE		arm_exception_state32_t;
-typedef _STRUCT_ARM_EXCEPTION_STATE64	arm_exception_state64_t;
+typedef _STRUCT_ARM_EXCEPTION_STATE             arm_exception_state_t;
+typedef _STRUCT_ARM_EXCEPTION_STATE             arm_exception_state32_t;
+typedef _STRUCT_ARM_EXCEPTION_STATE64   arm_exception_state64_t;
 
-typedef _STRUCT_ARM_DEBUG_STATE32		arm_debug_state32_t;
-typedef _STRUCT_ARM_DEBUG_STATE64		arm_debug_state64_t;
+typedef _STRUCT_ARM_DEBUG_STATE32               arm_debug_state32_t;
+typedef _STRUCT_ARM_DEBUG_STATE64               arm_debug_state64_t;
 
 #if defined(XNU_KERNEL_PRIVATE) && defined(__arm64__)
 /* See below for ARM64 kernel structure definition for arm_debug_state. */
@@ -162,9 +162,9 @@ typedef _STRUCT_ARM_DEBUG_STATE64		arm_debug_state64_t;
  * arm_debug_state for binary compatability of userland consumers of this file.
  */
 #if defined(__arm__)
-typedef _STRUCT_ARM_DEBUG_STATE			arm_debug_state_t;
+typedef _STRUCT_ARM_DEBUG_STATE                 arm_debug_state_t;
 #elif defined(__arm64__)
-typedef _STRUCT_ARM_LEGACY_DEBUG_STATE		arm_debug_state_t;
+typedef _STRUCT_ARM_LEGACY_DEBUG_STATE          arm_debug_state_t;
 #else
 #error Undefined architecture
 #endif
@@ -194,26 +194,26 @@ typedef _STRUCT_ARM_LEGACY_DEBUG_STATE		arm_debug_state_t;
 #define ARM_NEON_STATE64_COUNT ((mach_msg_type_number_t) \
    (sizeof (arm_neon_state64_t)/sizeof(uint32_t)))
 
-#define MACHINE_THREAD_STATE 		ARM_THREAD_STATE
-#define MACHINE_THREAD_STATE_COUNT	ARM_UNIFIED_THREAD_STATE_COUNT
+#define MACHINE_THREAD_STATE            ARM_THREAD_STATE
+#define MACHINE_THREAD_STATE_COUNT      ARM_UNIFIED_THREAD_STATE_COUNT
 
 /*
  * Largest state on this machine:
  */
-#define THREAD_MACHINE_STATE_MAX	THREAD_STATE_MAX
+#define THREAD_MACHINE_STATE_MAX        THREAD_STATE_MAX
 
 #ifdef XNU_KERNEL_PRIVATE
 
 static inline boolean_t
 is_thread_state32(const arm_unified_thread_state_t *its)
 {
-	return (its->ash.flavor == ARM_THREAD_STATE32);
+	return its->ash.flavor == ARM_THREAD_STATE32;
 }
 
 static inline boolean_t
 is_thread_state64(const arm_unified_thread_state_t *its)
 {
-	return (its->ash.flavor == ARM_THREAD_STATE64);
+	return its->ash.flavor == ARM_THREAD_STATE64;
 }
 
 static inline arm_thread_state32_t*
@@ -243,17 +243,17 @@ const_thread_state64(const arm_unified_thread_state_t *its)
 #if defined(__arm__)
 #include <arm/proc_reg.h>
 
-#define ARM_SAVED_STATE			THREAD_STATE_NONE + 1
+#define ARM_SAVED_STATE                 THREAD_STATE_NONE + 1
 
 struct arm_saved_state {
-    uint32_t    r[13];      /* General purpose register r0-r12 */
-    uint32_t    sp;     /* Stack pointer r13 */
-    uint32_t    lr;     /* Link register r14 */
-    uint32_t    pc;     /* Program counter r15 */
-    uint32_t    cpsr;       /* Current program status register */
-    uint32_t    fsr;        /* Fault status */
-    uint32_t    far;        /* Virtual Fault Address */
-    uint32_t    exception;  /* exception number */
+	uint32_t    r[13];  /* General purpose register r0-r12 */
+	uint32_t    sp; /* Stack pointer r13 */
+	uint32_t    lr; /* Link register r14 */
+	uint32_t    pc; /* Program counter r15 */
+	uint32_t    cpsr;   /* Current program status register */
+	uint32_t    fsr;    /* Fault status */
+	uint32_t    far;    /* Virtual Fault Address */
+	uint32_t    exception;/* exception number */
 };
 typedef struct arm_saved_state arm_saved_state_t;
 
@@ -265,24 +265,24 @@ typedef struct arm_saved_state arm_saved_state32_t;
 static inline arm_saved_state32_t*
 saved_state32(arm_saved_state_t *iss)
 {
-    return iss;
+	return iss;
 }
 
 static inline boolean_t
 is_saved_state32(const arm_saved_state_t *iss __unused)
 {
-    return TRUE;
+	return TRUE;
 }
 
 
 struct arm_saved_state_tagged {
-	uint32_t					tag;
-	struct arm_saved_state		state;
+	uint32_t                                        tag;
+	struct arm_saved_state          state;
 };
 typedef struct arm_saved_state_tagged arm_saved_state_tagged_t;
 
 #define ARM_SAVED_STATE32_COUNT ((mach_msg_type_number_t) \
-		(sizeof (arm_saved_state_t)/sizeof(unsigned int)))
+	        (sizeof (arm_saved_state_t)/sizeof(unsigned int)))
 
 
 static inline register_t
@@ -368,46 +368,46 @@ set_saved_state_reg(arm_saved_state_t *iss, unsigned regno, register_t val)
  */
 
 struct arm_saved_state32 {
-	uint32_t	r[13];		/* General purpose register r0-r12 */
-	uint32_t	sp;			/* Stack pointer r13 */
-	uint32_t	lr;			/* Link register r14 */
-	uint32_t	pc;			/* Program counter r15 */
-	uint32_t	cpsr;		/* Current program status register */
-	uint32_t	far;		/* Virtual fault address */
-	uint32_t	esr;		/* Exception syndrome register */
-	uint32_t	exception;	/* Exception number */
+	uint32_t        r[13];          /* General purpose register r0-r12 */
+	uint32_t        sp;                     /* Stack pointer r13 */
+	uint32_t        lr;                     /* Link register r14 */
+	uint32_t        pc;                     /* Program counter r15 */
+	uint32_t        cpsr;           /* Current program status register */
+	uint32_t        far;            /* Virtual fault address */
+	uint32_t        esr;            /* Exception syndrome register */
+	uint32_t        exception;      /* Exception number */
 };
 typedef struct arm_saved_state32 arm_saved_state32_t;
 
 struct arm_saved_state32_tagged {
-	uint32_t					tag;
-	struct arm_saved_state32	state;
+	uint32_t                                        tag;
+	struct arm_saved_state32        state;
 };
 typedef struct arm_saved_state32_tagged arm_saved_state32_tagged_t;
 
 #define ARM_SAVED_STATE32_COUNT ((mach_msg_type_number_t) \
-		(sizeof (arm_saved_state32_t)/sizeof(unsigned int)))
+	        (sizeof (arm_saved_state32_t)/sizeof(unsigned int)))
 
 struct arm_saved_state64 {
-	uint64_t	x[29];		/* General purpose registers x0-x28 */
-	uint64_t	fp;			/* Frame pointer x29 */
-	uint64_t	lr;			/* Link register x30 */
-	uint64_t	sp;			/* Stack pointer x31 */
-	uint64_t	pc;			/* Program counter */
-	uint32_t	cpsr;		/* Current program status register */
-	uint32_t	reserved;	/* Reserved padding */
-	uint64_t	far;		/* Virtual fault address */
-	uint32_t	esr;		/* Exception syndrome register */
-	uint32_t	exception;	/* Exception number */
+	uint64_t        x[29];          /* General purpose registers x0-x28 */
+	uint64_t        fp;                     /* Frame pointer x29 */
+	uint64_t        lr;                     /* Link register x30 */
+	uint64_t        sp;                     /* Stack pointer x31 */
+	uint64_t        pc;                     /* Program counter */
+	uint32_t        cpsr;           /* Current program status register */
+	uint32_t        reserved;       /* Reserved padding */
+	uint64_t        far;            /* Virtual fault address */
+	uint32_t        esr;            /* Exception syndrome register */
+	uint32_t        exception;      /* Exception number */
 };
 typedef struct arm_saved_state64 arm_saved_state64_t;
 
 #define ARM_SAVED_STATE64_COUNT ((mach_msg_type_number_t) \
-		(sizeof (arm_saved_state64_t)/sizeof(unsigned int)))
+	        (sizeof (arm_saved_state64_t)/sizeof(unsigned int)))
 
 struct arm_saved_state64_tagged {
-	uint32_t					tag;
-	struct arm_saved_state64	state;
+	uint32_t                                        tag;
+	struct arm_saved_state64        state;
 };
 typedef struct arm_saved_state64_tagged arm_saved_state64_tagged_t;
 
@@ -418,8 +418,8 @@ struct arm_saved_state {
 		struct arm_saved_state64 ss_64;
 	} uss;
 } __attribute__((aligned(16)));
-#define	ss_32	uss.ss_32
-#define	ss_64	uss.ss_64
+#define ss_32   uss.ss_32
+#define ss_64   uss.ss_64
 
 typedef struct arm_saved_state arm_saved_state_t;
 
@@ -427,13 +427,13 @@ typedef struct arm_saved_state arm_saved_state_t;
 static inline boolean_t
 is_saved_state32(const arm_saved_state_t *iss)
 {
-	return (iss->ash.flavor == ARM_SAVED_STATE32);
+	return iss->ash.flavor == ARM_SAVED_STATE32;
 }
 
 static inline boolean_t
 is_saved_state64(const arm_saved_state_t *iss)
 {
-	return (iss->ash.flavor == ARM_SAVED_STATE64);
+	return iss->ash.flavor == ARM_SAVED_STATE64;
 }
 
 static inline arm_saved_state32_t*
@@ -463,7 +463,7 @@ const_saved_state64(const arm_saved_state_t *iss)
 static inline register_t
 get_saved_state_pc(const arm_saved_state_t *iss)
 {
-	return (is_saved_state32(iss) ? const_saved_state32(iss)->pc : const_saved_state64(iss)->pc);
+	return is_saved_state32(iss) ? const_saved_state32(iss)->pc : const_saved_state64(iss)->pc;
 }
 
 static inline void
@@ -479,7 +479,7 @@ set_saved_state_pc(arm_saved_state_t *iss, register_t pc)
 static inline register_t
 get_saved_state_sp(const arm_saved_state_t *iss)
 {
-	return (is_saved_state32(iss) ? const_saved_state32(iss)->sp : const_saved_state64(iss)->sp);
+	return is_saved_state32(iss) ? const_saved_state32(iss)->sp : const_saved_state64(iss)->sp;
 }
 
 static inline void
@@ -495,7 +495,7 @@ set_saved_state_sp(arm_saved_state_t *iss, register_t sp)
 static inline register_t
 get_saved_state_lr(const arm_saved_state_t *iss)
 {
-	return (is_saved_state32(iss) ? const_saved_state32(iss)->lr : const_saved_state64(iss)->lr);
+	return is_saved_state32(iss) ? const_saved_state32(iss)->lr : const_saved_state64(iss)->lr;
 }
 
 static inline void
@@ -511,7 +511,7 @@ set_saved_state_lr(arm_saved_state_t *iss, register_t lr)
 static inline register_t
 get_saved_state_fp(const arm_saved_state_t *iss)
 {
-	return (is_saved_state32(iss) ? const_saved_state32(iss)->r[7] : const_saved_state64(iss)->fp);
+	return is_saved_state32(iss) ? const_saved_state32(iss)->r[7] : const_saved_state64(iss)->fp;
 }
 
 static inline void
@@ -525,23 +525,27 @@ set_saved_state_fp(arm_saved_state_t *iss, register_t fp)
 }
 
 static inline int
-check_saved_state_reglimit(const arm_saved_state_t *iss, unsigned reg) 
+check_saved_state_reglimit(const arm_saved_state_t *iss, unsigned reg)
 {
-	return (is_saved_state32(iss) ? (reg < ARM_SAVED_STATE32_COUNT) : (reg < ARM_SAVED_STATE64_COUNT));
+	return is_saved_state32(iss) ? (reg < ARM_SAVED_STATE32_COUNT) : (reg < ARM_SAVED_STATE64_COUNT);
 }
 
 static inline register_t
 get_saved_state_reg(const arm_saved_state_t *iss, unsigned reg)
 {
-	if (!check_saved_state_reglimit(iss, reg)) return 0;
+	if (!check_saved_state_reglimit(iss, reg)) {
+		return 0;
+	}
 
-	return (is_saved_state32(iss) ? (const_saved_state32(iss)->r[reg]) : (const_saved_state64(iss)->x[reg]));
+	return is_saved_state32(iss) ? (const_saved_state32(iss)->r[reg]) : (const_saved_state64(iss)->x[reg]);
 }
 
 static inline void
 set_saved_state_reg(arm_saved_state_t *iss, unsigned reg, register_t value)
 {
-	if (!check_saved_state_reglimit(iss, reg)) return;
+	if (!check_saved_state_reglimit(iss, reg)) {
+		return;
+	}
 
 	if (is_saved_state32(iss)) {
 		saved_state32(iss)->r[reg] = CAST_ASSERT_SAFE(uint32_t, value);
@@ -553,7 +557,7 @@ set_saved_state_reg(arm_saved_state_t *iss, unsigned reg, register_t value)
 static inline uint32_t
 get_saved_state_cpsr(const arm_saved_state_t *iss)
 {
-	return (is_saved_state32(iss) ? const_saved_state32(iss)->cpsr : const_saved_state64(iss)->cpsr);
+	return is_saved_state32(iss) ? const_saved_state32(iss)->cpsr : const_saved_state64(iss)->cpsr;
 }
 
 static inline void
@@ -569,7 +573,7 @@ set_saved_state_cpsr(arm_saved_state_t *iss, uint32_t cpsr)
 static inline register_t
 get_saved_state_far(const arm_saved_state_t *iss)
 {
-	return (is_saved_state32(iss) ? const_saved_state32(iss)->far : const_saved_state64(iss)->far);
+	return is_saved_state32(iss) ? const_saved_state32(iss)->far : const_saved_state64(iss)->far;
 }
 
 static inline void
@@ -585,7 +589,7 @@ set_saved_state_far(arm_saved_state_t *iss, register_t far)
 static inline uint32_t
 get_saved_state_esr(const arm_saved_state_t *iss)
 {
-	return (is_saved_state32(iss) ? const_saved_state32(iss)->esr : const_saved_state64(iss)->esr);
+	return is_saved_state32(iss) ? const_saved_state32(iss)->esr : const_saved_state64(iss)->esr;
 }
 
 static inline void
@@ -601,7 +605,7 @@ set_saved_state_esr(arm_saved_state_t *iss, uint32_t esr)
 static inline uint32_t
 get_saved_state_exc(const arm_saved_state_t *iss)
 {
-	return (is_saved_state32(iss) ? const_saved_state32(iss)->exception : const_saved_state64(iss)->exception);
+	return is_saved_state32(iss) ? const_saved_state32(iss)->exception : const_saved_state64(iss)->exception;
 }
 
 static inline void
@@ -617,19 +621,19 @@ set_saved_state_exc(arm_saved_state_t *iss, uint32_t exc)
 extern void panic_unimplemented(void);
 
 static inline int
-get_saved_state_svc_number(const arm_saved_state_t *iss) 
+get_saved_state_svc_number(const arm_saved_state_t *iss)
 {
-	return (is_saved_state32(iss) ? (int)const_saved_state32(iss)->r[12] : (int)const_saved_state64(iss)->x[ARM64_SYSCALL_CODE_REG_NUM]); /* Only first word counts here */
+	return is_saved_state32(iss) ? (int)const_saved_state32(iss)->r[12] : (int)const_saved_state64(iss)->x[ARM64_SYSCALL_CODE_REG_NUM]; /* Only first word counts here */
 }
 
-typedef _STRUCT_ARM_LEGACY_DEBUG_STATE		arm_legacy_debug_state_t;
+typedef _STRUCT_ARM_LEGACY_DEBUG_STATE          arm_legacy_debug_state_t;
 
 struct arm_debug_aggregate_state {
-    arm_state_hdr_t         dsh;
-    union {
-        arm_debug_state32_t ds32;
-        arm_debug_state64_t ds64;
-    } uds;
+	arm_state_hdr_t         dsh;
+	union {
+		arm_debug_state32_t ds32;
+		arm_debug_state64_t ds64;
+	} uds;
 } __attribute__((aligned(16)));
 
 typedef struct arm_debug_aggregate_state arm_debug_state_t;
@@ -646,31 +650,31 @@ typedef uint32_t uint32x4_t __attribute__((ext_vector_type(4)));
 
 struct arm_neon_saved_state32 {
 	union {
-		uint128_t	q[16];
-		uint64_t	d[32];
-		uint32_t	s[32];
+		uint128_t       q[16];
+		uint64_t        d[32];
+		uint32_t        s[32];
 	} v;
-	uint32_t		fpsr;
-	uint32_t		fpcr;
+	uint32_t                fpsr;
+	uint32_t                fpcr;
 };
 typedef struct arm_neon_saved_state32 arm_neon_saved_state32_t;
 
 #define ARM_NEON_SAVED_STATE32_COUNT ((mach_msg_type_number_t) \
-		(sizeof (arm_neon_saved_state32_t)/sizeof(unsigned int)))
+	        (sizeof (arm_neon_saved_state32_t)/sizeof(unsigned int)))
 
 struct arm_neon_saved_state64 {
 	union {
-		uint128_t		q[32];
-		uint64x2_t		d[32];
-		uint32x4_t		s[32];
+		uint128_t               q[32];
+		uint64x2_t              d[32];
+		uint32x4_t              s[32];
 	} v;
-	uint32_t		fpsr;
-	uint32_t		fpcr;
+	uint32_t                fpsr;
+	uint32_t                fpcr;
 };
 typedef struct arm_neon_saved_state64 arm_neon_saved_state64_t;
 
 #define ARM_NEON_SAVED_STATE64_COUNT ((mach_msg_type_number_t) \
-		(sizeof (arm_neon_saved_state64_t)/sizeof(unsigned int)))
+	        (sizeof (arm_neon_saved_state64_t)/sizeof(unsigned int)))
 
 struct arm_neon_saved_state {
 	arm_state_hdr_t nsh;
@@ -680,19 +684,19 @@ struct arm_neon_saved_state {
 	} uns;
 };
 typedef struct arm_neon_saved_state arm_neon_saved_state_t;
-#define	ns_32	uns.ns_32
-#define	ns_64	uns.ns_64
+#define ns_32   uns.ns_32
+#define ns_64   uns.ns_64
 
 static inline boolean_t
 is_neon_saved_state32(const arm_neon_saved_state_t *state)
 {
-	return (state->nsh.flavor == ARM_NEON_SAVED_STATE32);
+	return state->nsh.flavor == ARM_NEON_SAVED_STATE32;
 }
 
 static inline boolean_t
 is_neon_saved_state64(const arm_neon_saved_state_t *state)
 {
-	return (state->nsh.flavor == ARM_NEON_SAVED_STATE64);
+	return state->nsh.flavor == ARM_NEON_SAVED_STATE64;
 }
 
 static inline arm_neon_saved_state32_t *

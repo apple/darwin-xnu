@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -83,12 +83,15 @@
 void __inline__
 lck_mtx_check_preemption(void)
 {
-	if (get_preemption_level() == 0)
+	if (get_preemption_level() == 0) {
 		return;
-	if (LckDisablePreemptCheck)
+	}
+	if (LckDisablePreemptCheck) {
 		return;
-	if (current_cpu_datap()->cpu_hibernate)
+	}
+	if (current_cpu_datap()->cpu_hibernate) {
 		return;
+	}
 
 	panic("preemption_level(%d) != 0\n", get_preemption_level());
 }
@@ -172,7 +175,7 @@ lck_mtx_lock(
 __attribute__((noinline))
 boolean_t
 lck_mtx_try_lock(
-	lck_mtx_t	*lock)
+	lck_mtx_t       *lock)
 {
 	uint32_t prev, state;
 
@@ -233,7 +236,7 @@ lck_mtx_try_lock(
 __attribute__((noinline))
 void
 lck_mtx_lock_spin_always(
-	lck_mtx_t	*lock)
+	lck_mtx_t       *lock)
 {
 	uint32_t prev, state;
 
@@ -269,7 +272,7 @@ lck_mtx_lock_spin_always(
 	}
 #endif
 
-#if	CONFIG_DTRACE
+#if     CONFIG_DTRACE
 	LOCKSTAT_RECORD(LS_LCK_MTX_LOCK_SPIN_ACQUIRE, lock, 0);
 #endif
 	/* return with the interlock held and preemption disabled */
@@ -296,7 +299,7 @@ lck_mtx_lock_spin_always(
  */
 void
 lck_mtx_lock_spin(
-	lck_mtx_t	*lock)
+	lck_mtx_t       *lock)
 {
 	lck_mtx_check_preemption();
 	lck_mtx_lock_spin_always(lock);
@@ -387,7 +390,7 @@ lck_mtx_try_lock_spin(
 }
 
 /*
- * Routine: 	lck_mtx_unlock
+ * Routine:     lck_mtx_unlock
  *
  * Unlocks a mutex held by current thread.
  * It tries the fast path first, and falls
@@ -400,14 +403,15 @@ lck_mtx_try_lock_spin(
 __attribute__((noinline))
 void
 lck_mtx_unlock(
-	lck_mtx_t	*lock)
+	lck_mtx_t       *lock)
 {
 	uint32_t prev, state;
 
 	state = ordered_load_mtx_state(lock);
 
-	if (state & LCK_MTX_SPIN_MSK)
+	if (state & LCK_MTX_SPIN_MSK) {
 		return lck_mtx_unlock_slow(lock);
+	}
 
 	/*
 	 * Only full mutex will go through the fast path
@@ -418,10 +422,10 @@ lck_mtx_unlock(
 	 * If it is indirect it will fall through the slow path.
 	 */
 
-	 /*
-	  * Fast path state:
-	  * interlock not held, no waiters, no promotion and mutex held.
-	  */
+	/*
+	 * Fast path state:
+	 * interlock not held, no waiters, no promotion and mutex held.
+	 */
 	prev = state & ~(LCK_MTX_ILOCKED_MSK | LCK_MTX_WAITERS_MSK | LCK_MTX_PROMOTED_MSK);
 	prev |= LCK_MTX_MLOCKED_MSK;
 
@@ -440,8 +444,9 @@ lck_mtx_unlock(
 
 #if DEVELOPMENT | DEBUG
 	thread_t owner = (thread_t)lock->lck_mtx_owner;
-	if(__improbable(owner != current_thread()))
+	if (__improbable(owner != current_thread())) {
 		return lck_mtx_owner_check_panic(lock);
+	}
 #endif
 
 	/* clear owner */
@@ -452,11 +457,11 @@ lck_mtx_unlock(
 
 #if     MACH_LDEBUG
 	thread_t thread = current_thread();
-	if (thread)
+	if (thread) {
 		thread->mutex_count--;
+	}
 #endif  /* MACH_LDEBUG */
 
 	/* re-enable preemption */
 	lck_mtx_unlock_finish_inline(lock, FALSE);
 }
-

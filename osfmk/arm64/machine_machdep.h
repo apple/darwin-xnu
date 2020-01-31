@@ -35,8 +35,8 @@
  * NOTE: Keep this in sync with libsyscall/os/tsd.h, specifically _os_cpu_number()
  */
 
-#define MACHDEP_CTHREAD_ALIGNMENT	(1 << 3)
-#define MACHDEP_CPUNUM_MASK			(MACHDEP_CTHREAD_ALIGNMENT - 1)
-#define MACHDEP_CTHREAD_MASK		(~MACHDEP_CPUNUM_MASK)
+#define MACHDEP_CTHREAD_ALIGNMENT       (1 << 3)
+#define MACHDEP_CPUNUM_MASK                     (MACHDEP_CTHREAD_ALIGNMENT - 1)
+#define MACHDEP_CTHREAD_MASK            (~MACHDEP_CPUNUM_MASK)
 
 #endif /* _MACHDEP_INTERNAL_H_ */

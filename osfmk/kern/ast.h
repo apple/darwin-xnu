@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2012 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -108,39 +108,39 @@ typedef uint32_t ast_t;
  *      TODO: Split the context switch and return-to-user AST namespaces
  *      NOTE: Some of these are exported as the 'reason' code in scheduler tracepoints
  */
-#define AST_PREEMPT		0x01
-#define AST_QUANTUM		0x02
-#define AST_URGENT		0x04
-#define AST_HANDOFF		0x08
-#define AST_YIELD		0x10
-#define AST_APC			0x20	/* migration APC hook */
-#define AST_LEDGER		0x40
-#define AST_BSD			0x80
-#define AST_KPERF		0x100   /* kernel profiling */
-#define	AST_MACF		0x200	/* MACF user ret pending */
+#define AST_PREEMPT             0x01
+#define AST_QUANTUM             0x02
+#define AST_URGENT              0x04
+#define AST_HANDOFF             0x08
+#define AST_YIELD               0x10
+#define AST_APC                 0x20    /* migration APC hook */
+#define AST_LEDGER              0x40
+#define AST_BSD                 0x80
+#define AST_KPERF               0x100   /* kernel profiling */
+#define AST_MACF                0x200   /* MACF user ret pending */
 /* 0x400, 0x800 unused */
-#define AST_GUARD		0x1000
-#define AST_TELEMETRY_USER	0x2000	/* telemetry sample requested on interrupt from userspace */
-#define AST_TELEMETRY_KERNEL	0x4000	/* telemetry sample requested on interrupt from kernel */
-#define AST_TELEMETRY_PMI	0x8000	/* telemetry sample requested on PMI */
-#define AST_SFI			0x10000	/* Evaluate if SFI wait is needed before return to userspace */
-#define AST_DTRACE		0x20000
-#define AST_TELEMETRY_IO	0x40000 /* telemetry sample requested for I/O */
-#define AST_KEVENT		0x80000
+#define AST_GUARD               0x1000
+#define AST_TELEMETRY_USER      0x2000  /* telemetry sample requested on interrupt from userspace */
+#define AST_TELEMETRY_KERNEL    0x4000  /* telemetry sample requested on interrupt from kernel */
+#define AST_TELEMETRY_PMI       0x8000  /* telemetry sample requested on PMI */
+#define AST_SFI                 0x10000 /* Evaluate if SFI wait is needed before return to userspace */
+#define AST_DTRACE              0x20000
+#define AST_TELEMETRY_IO        0x40000 /* telemetry sample requested for I/O */
+#define AST_KEVENT              0x80000
 #define AST_REBALANCE           0x100000 /* thread context switched due to rebalancing */
 #define AST_UNQUIESCE           0x200000 /* catch unquiesced processor before returning to userspace */
 
-#define AST_NONE		0x00
-#define AST_ALL			(~AST_NONE)
+#define AST_NONE                0x00
+#define AST_ALL                 (~AST_NONE)
 
-#define AST_SCHEDULING	(AST_PREEMPTION | AST_YIELD | AST_HANDOFF)
-#define AST_PREEMPTION	(AST_PREEMPT | AST_QUANTUM | AST_URGENT)
+#define AST_SCHEDULING  (AST_PREEMPTION | AST_YIELD | AST_HANDOFF)
+#define AST_PREEMPTION  (AST_PREEMPT | AST_QUANTUM | AST_URGENT)
 
 #define AST_TELEMETRY_ALL (AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL | \
-		AST_TELEMETRY_PMI | AST_TELEMETRY_IO)
+	        AST_TELEMETRY_PMI | AST_TELEMETRY_IO)
 
 /* Per-thread ASTs follow the thread at context-switch time. */
-#define AST_PER_THREAD	(AST_APC | AST_BSD | AST_MACF | AST_LEDGER | AST_GUARD | AST_TELEMETRY_ALL | AST_KEVENT)
+#define AST_PER_THREAD  (AST_APC | AST_BSD | AST_MACF | AST_LEDGER | AST_GUARD | AST_TELEMETRY_ALL | AST_KEVENT)
 
 /* Handle AST_URGENT detected while in the kernel */
 extern void ast_taken_kernel(void);

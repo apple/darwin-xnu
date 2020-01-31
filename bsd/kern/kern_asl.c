@@ -47,17 +47,17 @@
 #include <stdarg.h>
 
 /* String to append as format modifier for each key-value pair */
-#define	KASL_KEYVAL_FMT	"[%s %s] "
-#define	KASL_KEYVAL_FMT_LEN	(sizeof(KASL_KEYVAL_FMT) - 1)
+#define KASL_KEYVAL_FMT "[%s %s] "
+#define KASL_KEYVAL_FMT_LEN     (sizeof(KASL_KEYVAL_FMT) - 1)
 
-#define	KASL_NEWLINE_CHAR	"\n"
-#define	KASL_NEWLINE_CHAR_LEN	(sizeof(KASL_NEWLINE_CHAR) - 1)
+#define KASL_NEWLINE_CHAR       "\n"
+#define KASL_NEWLINE_CHAR_LEN   (sizeof(KASL_NEWLINE_CHAR) - 1)
 
 /* Length of entire ASL message in 10 characters.  Kernel defaults to zero */
-#define	KASL_ASL_MSG_LEN	"         0"
+#define KASL_ASL_MSG_LEN        "         0"
 
 /* Length of default format string to be used by printf */
-#define	MAX_FMT_LEN		256
+#define MAX_FMT_LEN             256
 
 
 /* Function to print input values as key-value pairs in format
@@ -68,13 +68,13 @@
  * (b) variable number of arguments passed to this function.
  *
  * Parameters -
- * 	level 	  - Priority level for this ASL message
+ *      level     - Priority level for this ASL message
  *	facility  - Facility for this ASL message.
  *	num_pairs - Number of key-value pairs provided by vargs argument.
- *	vargs 	  - List of key-value pairs.
- *	... 	  - Additional key-value pairs (apart from vargs) as variable
- *	      	    argument list.  A NULL value indicates the end of the
- *	      	    variable argument list.
+ *	vargs     - List of key-value pairs.
+ *	...       - Additional key-value pairs (apart from vargs) as variable
+ *	            argument list.  A NULL value indicates the end of the
+ *	            variable argument list.
  *
  * Returns -
  *	zero	- On success, when it prints all key-values pairs provided.
@@ -85,7 +85,7 @@ int
 kern_asl_msg_va(int level, const char *facility, int num_pairs, va_list vargs, ...)
 {
 	int err = 0;
-	char fmt[MAX_FMT_LEN];	/* Format string to use with vaddlog */
+	char fmt[MAX_FMT_LEN];  /* Format string to use with vaddlog */
 	int calc_pairs = 0;
 	size_t len;
 	int i;
@@ -100,13 +100,13 @@ kern_asl_msg_va(int level, const char *facility, int num_pairs, va_list vargs, .
 	 */
 	if (facility) {
 		snprintf(fmt, MAX_FMT_LEN, "%s [%s %d] [%s %s] ",
-			KASL_ASL_MSG_LEN,
-			KASL_KEY_LEVEL, level,
-			KASL_KEY_FACILITY, facility);
+		    KASL_ASL_MSG_LEN,
+		    KASL_KEY_LEVEL, level,
+		    KASL_KEY_FACILITY, facility);
 	} else {
 		snprintf(fmt, MAX_FMT_LEN, "%s [%s %d] ",
-			KASL_ASL_MSG_LEN,
-			KASL_KEY_LEVEL, level);
+		    KASL_ASL_MSG_LEN,
+		    KASL_KEY_LEVEL, level);
 	}
 
 	/* Determine the number of key-value format string [%s %s] that
@@ -197,7 +197,7 @@ kern_asl_msg_va(int level, const char *facility, int num_pairs, va_list vargs, .
 	 * doesn't grok ASL either.
 	 */
 
-	return (err);
+	return err;
 }
 
 int
@@ -215,11 +215,11 @@ kern_asl_msg(int level, const char *facility, int num_pairs, ...)
 }
 
 /* Search if given string contains '[' and ']'.  If any, escape it by
- * prefixing with a '\'.  If the length of the string is not big enough, 
+ * prefixing with a '\'.  If the length of the string is not big enough,
  * no changes are done and error is returned.
  *
  * Parameters -
- * 	str - string that can contain '[' or ']', should be NULL terminated
+ *      str - string that can contain '[' or ']', should be NULL terminated
  *	len - length, in bytes, of valid data, including NULL character.
  *	buflen - size of buffer that contains the string
  */
@@ -244,7 +244,7 @@ escape_str(char *str, int len, int buflen)
 		 * characters
 		 */
 		if ((buflen - len) < count) {
-			return (ENOSPC);
+			return ENOSPC;
 		}
 
 		src = str + len;
@@ -260,5 +260,5 @@ escape_str(char *str, int len, int buflen)
 		}
 	}
 
-	return (0);
+	return 0;
 }

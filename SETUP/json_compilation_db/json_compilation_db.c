@@ -56,7 +56,8 @@ char *escape_string(const char *);
  * "]"
  */
 
-int main(int argc, char * argv[])
+int
+main(int argc, char * argv[])
 {
 	struct stat sb;
 	int ret;
@@ -82,47 +83,55 @@ int main(int argc, char * argv[])
 	argc -= 4;
 
 	input_file_len = strlen(input_file);
-	if (!(input_file_len > 2 && 0 == strcmp(".c",   input_file + input_file_len - 2)) &&
-		!(input_file_len > 3 && 0 == strcmp(".cp",  input_file + input_file_len - 3)) &&
-		!(input_file_len > 4 && 0 == strcmp(".cpp", input_file + input_file_len - 4))) {
+	if (!(input_file_len > 2 && 0 == strcmp(".c", input_file + input_file_len - 2)) &&
+	    !(input_file_len > 3 && 0 == strcmp(".cp", input_file + input_file_len - 3)) &&
+	    !(input_file_len > 4 && 0 == strcmp(".cpp", input_file + input_file_len - 4))) {
 		/* Not a C/C++ file, just skip it */
 		return 0;
 	}
 
 	dstfd = open(json_output, O_RDWR | O_CREAT | O_EXLOCK, DEFFILEMODE);
-	if (dstfd < 0)
+	if (dstfd < 0) {
 		err(EX_NOINPUT, "open(%s)", json_output);
+	}
 
 	ret = fstat(dstfd, &sb);
-	if (ret < 0)
+	if (ret < 0) {
 		err(EX_NOINPUT, "fstat(%s)", json_output);
+	}
 
-	if (!S_ISREG(sb.st_mode))
+	if (!S_ISREG(sb.st_mode)) {
 		err(EX_USAGE, "%s is not a regular file", json_output);
+	}
 
 	dst = fdopen(dstfd, "w+");
-	if (dst == NULL)
+	if (dst == NULL) {
 		err(EX_UNAVAILABLE, "fdopen");
+	}
 
-	read_bytes = fread(start, sizeof(start[0]), sizeof(start)/sizeof(start[0]), dst);
-	if ((read_bytes != sizeof(start)) || (0 != memcmp(start, "[\n", sizeof(start)/sizeof(start[0])))) {
+	read_bytes = fread(start, sizeof(start[0]), sizeof(start) / sizeof(start[0]), dst);
+	if ((read_bytes != sizeof(start)) || (0 != memcmp(start, "[\n", sizeof(start) / sizeof(start[0])))) {
 		/* no JSON start, we don't really care why */
 		ret = fseeko(dst, 0, SEEK_SET);
-		if (ret < 0)
+		if (ret < 0) {
 			err(EX_UNAVAILABLE, "fseeko");
+		}
 
 		ret = fputs("[", dst);
-		if (ret < 0)
+		if (ret < 0) {
 			err(EX_UNAVAILABLE, "fputs");
+		}
 	} else {
 		/* has at least two bytes at the start. Seek to 3 bytes before the end */
 		ret = fseeko(dst, -3, SEEK_END);
-		if (ret < 0)
+		if (ret < 0) {
 			err(EX_UNAVAILABLE, "fseeko");
+		}
 
 		ret = fputs(",", dst);
-		if (ret < 0)
+		if (ret < 0) {
 			err(EX_UNAVAILABLE, "fputs");
+		}
 	}
 
 	fprintf(dst, "\n");
@@ -130,9 +139,9 @@ int main(int argc, char * argv[])
 	fprintf(dst, "  \"directory\": \"%s\",\n", cwd);
 	fprintf(dst, "  \"file\": \"%s\",\n", input_file);
 	fprintf(dst, "  \"command\": \"");
-	for (i=0; i < argc; i++) {
+	for (i = 0; i < argc; i++) {
 		bool needs_escape = strchr(argv[i], '\\') || strchr(argv[i], '"') || strchr(argv[i], ' ');
-		
+
 		if (needs_escape) {
 			char *escaped_string = escape_string(argv[i]);
 			fprintf(dst, "%s\\\"%s\\\"", i == 0 ? "" : " ", escaped_string);
@@ -146,13 +155,15 @@ int main(int argc, char * argv[])
 	fprintf(dst, "]\n");
 
 	ret = fclose(dst);
-	if (ret < 0)
+	if (ret < 0) {
 		err(EX_UNAVAILABLE, "fclose");
+	}
 
 	return 0;
 }
 
-void usage(void)
+void
+usage(void)
 {
 	fprintf(stderr, "Usage: %s <json_output> <cwd> <input_file> <compiler> [<invocation> ...]\n", getprogname());
 	exit(EX_USAGE);
@@ -171,7 +182,7 @@ escape_string(const char *input)
 	size_t i, j;
 	char *output = malloc(len * 4 + 1);
 
-	for (i=0, j=0; i < len; i++) {
+	for (i = 0, j = 0; i < len; i++) {
 		char ch = input[i];
 
 		if (ch == '\\' || ch == '"') {

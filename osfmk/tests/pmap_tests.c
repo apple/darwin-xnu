@@ -2,7 +2,7 @@
  * Copyright (c) 2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -43,22 +43,25 @@ typedef struct {
 	pmap_t pmap;
 	volatile boolean_t stop;
 	ppnum_t pn;
-} pmap_test_thread_args;	
+} pmap_test_thread_args;
 
 static pmap_t
-pmap_create_wrapper() {
+pmap_create_wrapper()
+{
 	pmap_t new_pmap = NULL;
 	ledger_t ledger;
 	assert(task_ledger_template != NULL);
-	if ((ledger = ledger_instantiate(task_ledger_template, LEDGER_CREATE_ACTIVE_ENTRIES)) == NULL)
+	if ((ledger = ledger_instantiate(task_ledger_template, LEDGER_CREATE_ACTIVE_ENTRIES)) == NULL) {
 		return NULL;
-        new_pmap = pmap_create(ledger, 0, FALSE);
+	}
+	new_pmap = pmap_create(ledger, 0, FALSE);
 	ledger_dereference(ledger);
 	return new_pmap;
 }
 
 static void
-pmap_disconnect_thread(void *arg, wait_result_t __unused wres) {
+pmap_disconnect_thread(void *arg, wait_result_t __unused wres)
+{
 	pmap_test_thread_args *args = arg;
 	do {
 		pmap_disconnect(args->pn);
@@ -72,8 +75,9 @@ test_pmap_enter_disconnect(unsigned int num_loops)
 	kern_return_t kr = KERN_SUCCESS;
 	thread_t disconnect_thread;
 	pmap_t new_pmap = pmap_create_wrapper();
-	if (new_pmap == NULL)
+	if (new_pmap == NULL) {
 		return KERN_FAILURE;
+	}
 	vm_page_t m = vm_page_grab();
 	if (m == VM_PAGE_NULL) {
 		pmap_destroy(new_pmap);
@@ -93,7 +97,7 @@ test_pmap_enter_disconnect(unsigned int num_loops)
 
 	while (num_loops-- != 0) {
 		kr = pmap_enter(new_pmap, PMAP_TEST_VA, phys_page,
-		                VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, FALSE);
+		    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, FALSE);
 		assert(kr == KERN_SUCCESS);
 	}
 
@@ -114,4 +118,3 @@ test_pmap_iommu_disconnect(void)
 {
 	return KERN_SUCCESS;
 }
-

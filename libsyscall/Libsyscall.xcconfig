@@ -13,7 +13,7 @@ EXECUTABLE_PREFIX = libsystem_
 PRODUCT_NAME = kernel
 ALWAYS_SEARCH_USER_PATHS = NO
 ORDER_FILE[sdk=iphoneos*] = $(SDKROOT)/$(APPLE_INTERNAL_DIR)/OrderFiles/libsystem_kernel.order
-OTHER_CFLAGS = -fdollars-in-identifiers -no-cpp-precomp -fno-common -fno-stack-protector -momit-leaf-frame-pointer -DLIBSYSCALL_INTERFACE -D__DARWIN_VERS_1050=1
+OTHER_CFLAGS = -fdollars-in-identifiers -no-cpp-precomp -fno-common -fno-stack-protector -fno-stack-check -momit-leaf-frame-pointer -DLIBSYSCALL_INTERFACE -D__DARWIN_VERS_1050=1
 OTHER_CFLAGS[sdk=macosx*] = $(inherited) -DSYSCALL_PRE1050
 OTHER_CFLAGS[sdk=macosx*][arch=x86_64*] = $(inherited) -DNO_SYSCALL_LEGACY
 OTHER_CFLAGS[sdk=iphoneos*] = $(inherited) -DNO_SYSCALL_LEGACY

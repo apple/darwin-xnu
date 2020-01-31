@@ -38,7 +38,7 @@ mac_skywalk_flow_check_connect(proc_t proc, void *flow, const struct sockaddr *a
 	int error;
 
 	MAC_CHECK(skywalk_flow_check_connect, proc_ucred(proc), flow, addr, type, protocol);
-	return (error);
+	return error;
 }
 
 int
@@ -47,6 +47,5 @@ mac_skywalk_flow_check_listen(proc_t proc, void *flow, const struct sockaddr *ad
 	int error;
 
 	MAC_CHECK(skywalk_flow_check_listen, proc_ucred(proc), flow, addr, type, protocol);
-	return (error);
+	return error;
 }
-

@@ -31,12 +31,12 @@
 
 #ifdef KERNEL
 #ifndef _KERNEL
-#define _KERNEL			/* Solaris vs. Darwin */
+#define _KERNEL                 /* Solaris vs. Darwin */
 #endif
 #endif
 
-#define MACH__POSIX_C_SOURCE_PRIVATE 1	/* pulls in suitable savearea from
-					 * mach/ppc/thread_status.h */
+#define MACH__POSIX_C_SOURCE_PRIVATE 1  /* pulls in suitable savearea from
+	                                 * mach/ppc/thread_status.h */
 #include <kern/thread.h>
 #include <mach/thread_status.h>
 #include <arm/proc_reg.h>
@@ -67,8 +67,8 @@
 
 #define DTRACE_INVOP_PUSH_FRAME 11
 
-#define DTRACE_INVOP_NOP_SKIP		4
-#define DTRACE_INVOP_ADD_FP_SP_SKIP	4
+#define DTRACE_INVOP_NOP_SKIP           4
+#define DTRACE_INVOP_ADD_FP_SP_SKIP     4
 
 #define DTRACE_INVOP_POP_PC_SKIP 2
 
@@ -76,45 +76,45 @@
  * stp	fp, lr, [sp, #val]
  * stp	fp, lr, [sp, #val]!
  */
-#define FBT_IS_ARM64_FRAME_PUSH(x)	\
+#define FBT_IS_ARM64_FRAME_PUSH(x)      \
 	(((x) & 0xffc07fff) == 0xa9007bfd || ((x) & 0xffc07fff) == 0xa9807bfd)
 
 /*
  * stp	Xt1, Xt2, [sp, #val]
  * stp	Xt1, Xt2, [sp, #val]!
  */
-#define FBT_IS_ARM64_PUSH(x)		\
+#define FBT_IS_ARM64_PUSH(x)            \
 	(((x) & 0xffc003e0) == 0xa90003e0 || ((x) & 0xffc003e0) == 0xa98003e0)
 
 /*
  * ldp	fp, lr, [sp,  #val]
  * ldp	fp, lr, [sp], #val
  */
-#define FBT_IS_ARM64_FRAME_POP(x)	\
+#define FBT_IS_ARM64_FRAME_POP(x)       \
 	(((x) & 0xffc07fff) == 0xa9407bfd || ((x) & 0xffc07fff) == 0xa8c07bfd)
 
-#define FBT_IS_ARM64_ADD_FP_SP(x)	(((x) & 0xffc003ff) == 0x910003fd)	/* add fp, sp, #val  (add fp, sp, #0 == mov fp, sp) */
-#define FBT_IS_ARM64_RET(x)		(((x) == 0xd65f03c0) || ((x) == 0xd65f0fff)) 			/* ret, retab */
+#define FBT_IS_ARM64_ADD_FP_SP(x)       (((x) & 0xffc003ff) == 0x910003fd)      /* add fp, sp, #val  (add fp, sp, #0 == mov fp, sp) */
+#define FBT_IS_ARM64_RET(x)             (((x) == 0xd65f03c0) || ((x) == 0xd65f0fff))                    /* ret, retab */
 
 
-#define FBT_B_MASK 			0xff000000
-#define FBT_B_IMM_MASK			0x00ffffff
-#define FBT_B_INSTR			0x14000000
+#define FBT_B_MASK                      0xff000000
+#define FBT_B_IMM_MASK                  0x00ffffff
+#define FBT_B_INSTR                     0x14000000
 
-#define FBT_IS_ARM64_B_INSTR(x)		((x & FBT_B_MASK) == FBT_B_INSTR)
-#define FBT_GET_ARM64_B_IMM(x)		((x & FBT_B_IMM_MASK) << 2)
+#define FBT_IS_ARM64_B_INSTR(x)         ((x & FBT_B_MASK) == FBT_B_INSTR)
+#define FBT_GET_ARM64_B_IMM(x)          ((x & FBT_B_IMM_MASK) << 2)
 
-#define	FBT_PATCHVAL			0xe7eeee7e
-#define FBT_AFRAMES_ENTRY		7
-#define FBT_AFRAMES_RETURN		7
+#define FBT_PATCHVAL                    0xe7eeee7e
+#define FBT_AFRAMES_ENTRY               7
+#define FBT_AFRAMES_RETURN              7
 
-#define	FBT_ENTRY	"entry"
-#define	FBT_RETURN	"return"
-#define	FBT_ADDR2NDX(addr)	((((uintptr_t)(addr)) >> 4) & fbt_probetab_mask)
+#define FBT_ENTRY       "entry"
+#define FBT_RETURN      "return"
+#define FBT_ADDR2NDX(addr)      ((((uintptr_t)(addr)) >> 4) & fbt_probetab_mask)
 
-extern dtrace_provider_id_t	fbt_id;
-extern fbt_probe_t		 **fbt_probetab;
-extern int      		fbt_probetab_mask;
+extern dtrace_provider_id_t     fbt_id;
+extern fbt_probe_t               **fbt_probetab;
+extern int                      fbt_probetab_mask;
 
 kern_return_t fbt_perfCallback(int, struct arm_saved_state *, __unused int, __unused int);
 
@@ -126,8 +126,8 @@ fbt_invop(uintptr_t addr, uintptr_t * stack, uintptr_t rval)
 	for (; fbt != NULL; fbt = fbt->fbtp_hashnext) {
 		if ((uintptr_t) fbt->fbtp_patchpoint == addr) {
 			if (0 == CPU->cpu_dtrace_invop_underway) {
-				CPU->cpu_dtrace_invop_underway = 1;	/* Race not possible on
-									 * this per-cpu state */
+				CPU->cpu_dtrace_invop_underway = 1;     /* Race not possible on
+				                                        * this per-cpu state */
 
 				if (fbt->fbtp_roffset == 0) {
 					/*
@@ -168,7 +168,7 @@ fbt_invop(uintptr_t addr, uintptr_t * stack, uintptr_t rval)
 					 */
 					CPU->cpu_dtrace_caller = get_saved_state_lr(regs);
 					dtrace_probe(fbt->fbtp_id, get_saved_state_reg(regs, 0), get_saved_state_reg(regs, 1),
-					    get_saved_state_reg(regs, 2), get_saved_state_reg(regs, 3),get_saved_state_reg(regs, 4));
+					    get_saved_state_reg(regs, 2), get_saved_state_reg(regs, 3), get_saved_state_reg(regs, 4));
 					CPU->cpu_dtrace_caller = 0;
 				} else {
 					/*
@@ -204,15 +204,15 @@ fbt_invop(uintptr_t addr, uintptr_t * stack, uintptr_t rval)
 			}
 
 			/*
-				On other architectures, we return a DTRACE constant to let the callback function
-				know what was replaced. On the ARM, since the function prologue/epilogue machine code
-				can vary, we need the actual bytes of the instruction, so return the savedval instead.
-			*/
-			return (fbt->fbtp_savedval);
+			 *       On other architectures, we return a DTRACE constant to let the callback function
+			 *       know what was replaced. On the ARM, since the function prologue/epilogue machine code
+			 *       can vary, we need the actual bytes of the instruction, so return the savedval instead.
+			 */
+			return fbt->fbtp_savedval;
 		}
 	}
 
-	return (0);
+	return 0;
 }
 
 #define IS_USER_TRAP(regs)   (PSR64_IS_USER(get_saved_state_cpsr(regs)))
@@ -221,10 +221,10 @@ fbt_invop(uintptr_t addr, uintptr_t * stack, uintptr_t rval)
 
 kern_return_t
 fbt_perfCallback(
-		 int trapno,
-		 struct arm_saved_state * regs,
-		 __unused int unused1,
-		 __unused int unused2)
+	int trapno,
+	struct arm_saved_state * regs,
+	__unused int unused1,
+	__unused int unused2)
 {
 	kern_return_t   retval = KERN_FAILURE;
 
@@ -235,25 +235,25 @@ fbt_perfCallback(
 
 		oldlevel = ml_set_interrupts_enabled(FALSE);
 
-		__asm__ volatile(
-			"Ldtrace_invop_callsite_pre_label:\n"
-			".data\n"
-			".private_extern _dtrace_invop_callsite_pre\n"
-			"_dtrace_invop_callsite_pre:\n"
-			"  .quad Ldtrace_invop_callsite_pre_label\n"
-			".text\n"
-				 );
+		__asm__ volatile (
+                         "Ldtrace_invop_callsite_pre_label:\n"
+                         ".data\n"
+                         ".private_extern _dtrace_invop_callsite_pre\n"
+                         "_dtrace_invop_callsite_pre:\n"
+                         "  .quad Ldtrace_invop_callsite_pre_label\n"
+                         ".text\n"
+                );
 
-		emul = dtrace_invop(get_saved_state_pc(regs), (uintptr_t*) regs, get_saved_state_reg(regs,0));
+		emul = dtrace_invop(get_saved_state_pc(regs), (uintptr_t*) regs, get_saved_state_reg(regs, 0));
 
-		__asm__ volatile(
-			"Ldtrace_invop_callsite_post_label:\n"
-			".data\n"
-			".private_extern _dtrace_invop_callsite_post\n"
-			"_dtrace_invop_callsite_post:\n"
-			"  .quad Ldtrace_invop_callsite_post_label\n"
-			".text\n"
-				 );
+		__asm__ volatile (
+                         "Ldtrace_invop_callsite_post_label:\n"
+                         ".data\n"
+                         ".private_extern _dtrace_invop_callsite_post\n"
+                         "_dtrace_invop_callsite_post:\n"
+                         "  .quad Ldtrace_invop_callsite_post_label\n"
+                         ".text\n"
+                );
 
 		if (emul == DTRACE_INVOP_NOP) {
 			/*
@@ -272,7 +272,7 @@ fbt_perfCallback(
 
 			/*
 			 * emulate the instruction:
-			 * 	add 	fp, sp, #val
+			 *      add     fp, sp, #val
 			 */
 			assert(sp < (UINT64_MAX - val));
 			set_saved_state_fp(regs, sp + val);
@@ -310,10 +310,10 @@ fbt_perfCallback(
 void
 fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolName, machine_inst_t* symbolStart, machine_inst_t *instrHigh)
 {
-        int		doenable = 0;
-	dtrace_id_t	thisid;
+	int             doenable = 0;
+	dtrace_id_t     thisid;
 
-	fbt_probe_t	*newfbt, *retfbt, *entryfbt;
+	fbt_probe_t     *newfbt, *retfbt, *entryfbt;
 	machine_inst_t *instr, *pushinstr = NULL, *limit, theInstr;
 	int             foundPushLR, savedRegs;
 
@@ -334,8 +334,7 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 
 	assert(sizeof(*instr) == 4);
 
-	for (instr = symbolStart, theInstr = 0; instr < instrHigh; instr++)
-	{
+	for (instr = symbolStart, theInstr = 0; instr < instrHigh; instr++) {
 		/*
 		 * Count the number of time we pushed something onto the stack
 		 * before hitting a frame push. That will give us an estimation
@@ -348,13 +347,16 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 			pushinstr = instr;
 		}
 
-		if (foundPushLR && (FBT_IS_ARM64_ADD_FP_SP(theInstr)))
+		if (foundPushLR && (FBT_IS_ARM64_ADD_FP_SP(theInstr))) {
 			/* Guard against a random setting of fp from sp, we make sure we found the push first */
 			break;
-		if (FBT_IS_ARM64_RET(theInstr)) /* We've gone too far, bail. */
+		}
+		if (FBT_IS_ARM64_RET(theInstr)) { /* We've gone too far, bail. */
 			break;
-		if (FBT_IS_ARM64_FRAME_POP(theInstr)) /* We've gone too far, bail. */
+		}
+		if (FBT_IS_ARM64_FRAME_POP(theInstr)) { /* We've gone too far, bail. */
 			break;
+		}
 	}
 
 	if (!(foundPushLR && (FBT_IS_ARM64_ADD_FP_SP(theInstr)))) {
@@ -364,7 +366,7 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 	thisid = dtrace_probe_lookup(fbt_id, modname, symbolName, FBT_ENTRY);
 	newfbt = kmem_zalloc(sizeof(fbt_probe_t), KM_SLEEP);
 	newfbt->fbtp_next = NULL;
-	strlcpy( (char *)&(newfbt->fbtp_name), symbolName, MAX_FBTP_NAME_CHARS );
+	strlcpy((char *)&(newfbt->fbtp_name), symbolName, MAX_FBTP_NAME_CHARS );
 
 	if (thisid != 0) {
 		/*
@@ -375,11 +377,12 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 		 * fire, (as indicated by the current patched value), then
 		 * we want to enable this newfbt on the spot.
 		 */
-		entryfbt = dtrace_probe_arg (fbt_id, thisid);
-		ASSERT (entryfbt != NULL);
-		for(; entryfbt != NULL; entryfbt = entryfbt->fbtp_next) {
-			if (entryfbt->fbtp_currentval == entryfbt->fbtp_patchval)
+		entryfbt = dtrace_probe_arg(fbt_id, thisid);
+		ASSERT(entryfbt != NULL);
+		for (; entryfbt != NULL; entryfbt = entryfbt->fbtp_next) {
+			if (entryfbt->fbtp_currentval == entryfbt->fbtp_patchval) {
 				doenable++;
+			}
 
 			if (entryfbt->fbtp_next == NULL) {
 				entryfbt->fbtp_next = newfbt;
@@ -387,8 +390,7 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 				break;
 			}
 		}
-	}
-	else {
+	} else {
 		/*
 		 * The dtrace_probe did not previously exist, so we
 		 * create it and hook in the newfbt.  Since the probe is
@@ -408,8 +410,9 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 	newfbt->fbtp_hashnext = fbt_probetab[FBT_ADDR2NDX(instr)];
 	fbt_probetab[FBT_ADDR2NDX(instr)] = newfbt;
 
-	if (doenable)
+	if (doenable) {
 		fbt_enable(NULL, newfbt->fbtp_id, newfbt);
+	}
 
 	/*
 	 * The fbt entry chain is in place, one entry point per symbol.
@@ -418,7 +421,7 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 	 * Here we find the end of the fbt return chain.
 	 */
 
-	doenable=0;
+	doenable = 0;
 
 	thisid = dtrace_probe_lookup(fbt_id, modname, symbolName, FBT_RETURN);
 
@@ -429,16 +432,17 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 		 * (as indicated by the currrent patched value), then
 		 * we want to enable any new fbts on the spot.
 		 */
-		retfbt = dtrace_probe_arg (fbt_id, thisid);
+		retfbt = dtrace_probe_arg(fbt_id, thisid);
 		ASSERT(retfbt != NULL);
-		for (;  retfbt != NULL; retfbt =  retfbt->fbtp_next) {
-			if (retfbt->fbtp_currentval == retfbt->fbtp_patchval)
+		for (; retfbt != NULL; retfbt =  retfbt->fbtp_next) {
+			if (retfbt->fbtp_currentval == retfbt->fbtp_patchval) {
 				doenable++;
-			if(retfbt->fbtp_next == NULL)
+			}
+			if (retfbt->fbtp_next == NULL) {
 				break;
+			}
 		}
-	}
-	else {
+	} else {
 		doenable = 0;
 		retfbt = NULL;
 	}
@@ -450,8 +454,9 @@ fbt_provide_probe(struct modctl *ctl, const char *modname, const char* symbolNam
 	 */
 	instr = pushinstr + 1;
 again:
-	if (instr >= limit)
+	if (instr >= limit) {
 		return;
+	}
 
 	/* XXX FIXME ... extra jump table detection? */
 
@@ -462,8 +467,9 @@ again:
 
 	/* Walked onto the start of the next routine? If so, bail out from this function */
 	if (FBT_IS_ARM64_FRAME_PUSH(theInstr)) {
-		if (!retfbt)
-			kprintf("dtrace: fbt: No return probe for %s, walked to next routine at 0x%016llx\n",symbolName,(uint64_t)instr);
+		if (!retfbt) {
+			kprintf("dtrace: fbt: No return probe for %s, walked to next routine at 0x%016llx\n", symbolName, (uint64_t)instr);
+		}
 		return;
 	}
 
@@ -471,8 +477,8 @@ again:
 
 	/*
 	 * Look for:
-	 * 	ldp fp, lr, [sp], #val
-	 * 	ldp fp, lr, [sp,  #val]
+	 *      ldp fp, lr, [sp], #val
+	 *      ldp fp, lr, [sp,  #val]
 	 */
 	if (!FBT_IS_ARM64_FRAME_POP(theInstr)) {
 		instr++;
@@ -485,25 +491,28 @@ again:
 	/* Scan ahead for a ret or a branch outside the function */
 	for (; instr < limit; instr++) {
 		theInstr = *instr;
-		if (FBT_IS_ARM64_RET(theInstr))
+		if (FBT_IS_ARM64_RET(theInstr)) {
 			break;
+		}
 		if (FBT_IS_ARM64_B_INSTR(theInstr)) {
 			machine_inst_t *dest = instr + FBT_GET_ARM64_B_IMM(theInstr);
 			/*
 			 * Check whether the destination of the branch
 			 * is outside of the function
 			 */
-			if (dest >= limit || dest < symbolStart)
+			if (dest >= limit || dest < symbolStart) {
 				break;
+			}
 		}
 	}
 
-	if (!FBT_IS_ARM64_RET(theInstr) && !FBT_IS_ARM64_B_INSTR(theInstr))
+	if (!FBT_IS_ARM64_RET(theInstr) && !FBT_IS_ARM64_B_INSTR(theInstr)) {
 		return;
+	}
 
 	newfbt = kmem_zalloc(sizeof(fbt_probe_t), KM_SLEEP);
 	newfbt->fbtp_next = NULL;
-	strlcpy( (char *)&(newfbt->fbtp_name), symbolName, MAX_FBTP_NAME_CHARS );
+	strlcpy((char *)&(newfbt->fbtp_name), symbolName, MAX_FBTP_NAME_CHARS );
 
 	if (retfbt == NULL) {
 		newfbt->fbtp_id = dtrace_probe_create(fbt_id, modname,
@@ -527,8 +536,9 @@ again:
 	newfbt->fbtp_hashnext = fbt_probetab[FBT_ADDR2NDX(instr)];
 	fbt_probetab[FBT_ADDR2NDX(instr)] = newfbt;
 
-	if (doenable)
+	if (doenable) {
 		fbt_enable(NULL, newfbt->fbtp_id, newfbt);
+	}
 
 	instr++;
 	goto again;

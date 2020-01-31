@@ -42,38 +42,38 @@ static int
 stackshot_kern_return_to_bsd_error(kern_return_t kr)
 {
 	switch (kr) {
-		case KERN_SUCCESS:
-			return 0;
-		case KERN_RESOURCE_SHORTAGE:
-			/* could not allocate memory, or stackshot is actually bigger than
-			 * SANE_TRACEBUF_SIZE */
-			return ENOMEM;
-	    case KERN_INSUFFICIENT_BUFFER_SIZE:
-		case KERN_NO_SPACE:
-			/* ran out of buffer to write the stackshot.  Normally this error
-			 * causes a larger buffer to be allocated in-kernel, rather than
-			 * being returned to the user. */
-			return ENOSPC;
-		case KERN_NO_ACCESS:
-			return EPERM;
-		case KERN_MEMORY_PRESENT:
-			return EEXIST;
-		case KERN_NOT_SUPPORTED:
-			return ENOTSUP;
-		case KERN_NOT_IN_SET:
-			/* requested existing buffer, but there isn't one. */
-			return ENOENT;
-	    case KERN_ABORTED:
-			/* kdp did not report an error, but also did not produce any data */
-			return EINTR;
-	    case KERN_FAILURE:
-			/* stackshot came across inconsistent data and needed to bail out */
-			return EBUSY;
-	    case KERN_OPERATION_TIMED_OUT:
-			/* debugger synchronization timed out */
-			return ETIMEDOUT;
-		default:
-			return EINVAL;
+	case KERN_SUCCESS:
+		return 0;
+	case KERN_RESOURCE_SHORTAGE:
+		/* could not allocate memory, or stackshot is actually bigger than
+		 * SANE_TRACEBUF_SIZE */
+		return ENOMEM;
+	case KERN_INSUFFICIENT_BUFFER_SIZE:
+	case KERN_NO_SPACE:
+		/* ran out of buffer to write the stackshot.  Normally this error
+		 * causes a larger buffer to be allocated in-kernel, rather than
+		 * being returned to the user. */
+		return ENOSPC;
+	case KERN_NO_ACCESS:
+		return EPERM;
+	case KERN_MEMORY_PRESENT:
+		return EEXIST;
+	case KERN_NOT_SUPPORTED:
+		return ENOTSUP;
+	case KERN_NOT_IN_SET:
+		/* requested existing buffer, but there isn't one. */
+		return ENOENT;
+	case KERN_ABORTED:
+		/* kdp did not report an error, but also did not produce any data */
+		return EINTR;
+	case KERN_FAILURE:
+		/* stackshot came across inconsistent data and needed to bail out */
+		return EBUSY;
+	case KERN_OPERATION_TIMED_OUT:
+		/* debugger synchronization timed out */
+		return ETIMEDOUT;
+	default:
+		return EINVAL;
 	}
 }
 
@@ -82,7 +82,7 @@ stackshot_kern_return_to_bsd_error(kern_return_t kr)
  *				tracing both kernel and user stacks where available. Allocates a buffer from the
  *				kernel and maps the buffer into the calling task's address space.
  *
- * Inputs:      		uap->stackshot_config_version - version of the stackshot config that is being passed
+ * Inputs:                      uap->stackshot_config_version - version of the stackshot config that is being passed
  *				uap->stackshot_config - pointer to the stackshot config
  *				uap->stackshot_config_size- size of the stackshot config being passed
  * Outputs:			EINVAL if there is a problem with the arguments
@@ -95,7 +95,7 @@ stackshot_kern_return_to_bsd_error(kern_return_t kr)
  *				ENOMEM if the kernel is unable to allocate enough memory to serve the request
  *				ENOSPC if there isn't enough space in the caller's address space to remap the buffer
  *				ESRCH if the target PID isn't found
- *				returns KERN_SUCCESS on success	
+ *				returns KERN_SUCCESS on success
  */
 int
 stack_snapshot_with_config(struct proc *p, struct stack_snapshot_with_config_args *uap, __unused int *retval)
@@ -103,28 +103,28 @@ stack_snapshot_with_config(struct proc *p, struct stack_snapshot_with_config_arg
 	int error = 0;
 	kern_return_t kr;
 
-	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
-                return(error);
+	if ((error = suser(kauth_cred_get(), &p->p_acflag))) {
+		return error;
+	}
 
-	if((void*)uap->stackshot_config == NULL) {
+	if ((void*)uap->stackshot_config == NULL) {
 		return EINVAL;
 	}
 
 	switch (uap->stackshot_config_version) {
-		case STACKSHOT_CONFIG_TYPE:
-			if (uap->stackshot_config_size != sizeof(stackshot_config_t)) {
-				return EINVAL;
-			}
-			stackshot_config_t config;
-			error = copyin(uap->stackshot_config, &config, sizeof(stackshot_config_t));
-			if (error != KERN_SUCCESS)
-			{
-				return EFAULT;
-			}
-			kr = kern_stack_snapshot_internal(uap->stackshot_config_version, &config, sizeof(stackshot_config_t), TRUE);
-			return stackshot_kern_return_to_bsd_error(kr);
-		default:
-			return ENOTSUP;
+	case STACKSHOT_CONFIG_TYPE:
+		if (uap->stackshot_config_size != sizeof(stackshot_config_t)) {
+			return EINVAL;
+		}
+		stackshot_config_t config;
+		error = copyin(uap->stackshot_config, &config, sizeof(stackshot_config_t));
+		if (error != KERN_SUCCESS) {
+			return EFAULT;
+		}
+		kr = kern_stack_snapshot_internal(uap->stackshot_config_version, &config, sizeof(stackshot_config_t), TRUE);
+		return stackshot_kern_return_to_bsd_error(kr);
+	default:
+		return ENOTSUP;
 	}
 }
 
@@ -133,7 +133,7 @@ stack_snapshot_with_config(struct proc *p, struct stack_snapshot_with_config_arg
  * microstackshot:	Catch all system call for microstackshot related operations, including
  *			enabling/disabling both global and windowed microstackshots as well
  *			as retrieving windowed or global stackshots and the boot profile.
- * Inputs:   		uap->tracebuf - address of the user space destination
+ * Inputs:              uap->tracebuf - address of the user space destination
  *			buffer
  *			uap->tracebuf_size - size of the user space trace buffer
  *			uap->flags - various flags
@@ -149,8 +149,9 @@ microstackshot(struct proc *p, struct microstackshot_args *uap, int32_t *retval)
 	int error = 0;
 	kern_return_t kr;
 
-	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
-                return(error);
+	if ((error = suser(kauth_cred_get(), &p->p_acflag))) {
+		return error;
+	}
 
 	kr = stack_microstackshot(uap->tracebuf, uap->tracebuf_size, uap->flags, retval);
 	return stackshot_kern_return_to_bsd_error(kr);
@@ -162,7 +163,7 @@ microstackshot(struct proc *p, struct microstackshot_args *uap, int32_t *retval)
  *					tracing both kernel and user stacks where available. Allocates a buffer from the
  *					kernel and stores the address of this buffer.
  *
- * Inputs:      			reason - the reason for triggering a stackshot (unused at the moment, but in the
+ * Inputs:                              reason - the reason for triggering a stackshot (unused at the moment, but in the
  *						future will be saved in the stackshot)
  * Outputs:				EINVAL/ENOTSUP if there is a problem with the arguments
  *					EPERM if the caller doesn't pass at least one KERNEL stackshot flag
@@ -178,8 +179,8 @@ kern_stack_snapshot_with_reason(__unused char *reason)
 
 	config.sc_pid = -1;
 	config.sc_flags = (STACKSHOT_SAVE_LOADINFO | STACKSHOT_GET_GLOBAL_MEM_STATS | STACKSHOT_SAVE_IN_KERNEL_BUFFER |
-				STACKSHOT_KCDATA_FORMAT | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_THREAD_WAITINFO |
-				STACKSHOT_NO_IO_STATS);
+	    STACKSHOT_KCDATA_FORMAT | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_THREAD_WAITINFO |
+	    STACKSHOT_NO_IO_STATS);
 	config.sc_delta_timestamp = 0;
 	config.sc_out_buffer_addr = 0;
 	config.sc_out_size_addr = 0;

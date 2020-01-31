@@ -2,7 +2,7 @@
  * Copyright (c) 2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -59,12 +59,12 @@
 #include <vm/vm_kern.h>
 
 
-/* 
- * 4K MEMORY PAGER 
+/*
+ * 4K MEMORY PAGER
  *
  * This external memory manager (EMM) handles memory mappings that are
  * 4K-aligned but not page-aligned and can therefore not be mapped directly.
- * 
+ *
  * It mostly handles page-in requests (from memory_object_data_request()) by
  * getting the data needed to fill in each 4K-chunk.  That can require
  * getting data from one or two pages from its backing VM object
@@ -82,35 +82,35 @@
 void fourk_pager_reference(memory_object_t mem_obj);
 void fourk_pager_deallocate(memory_object_t mem_obj);
 kern_return_t fourk_pager_init(memory_object_t mem_obj,
-				 memory_object_control_t control,
-				 memory_object_cluster_size_t pg_size);
+    memory_object_control_t control,
+    memory_object_cluster_size_t pg_size);
 kern_return_t fourk_pager_terminate(memory_object_t mem_obj);
 kern_return_t fourk_pager_data_request(memory_object_t mem_obj,
-					 memory_object_offset_t offset,
-					 memory_object_cluster_size_t length,
-					 vm_prot_t protection_required,
-					 memory_object_fault_info_t fault_info);
+    memory_object_offset_t offset,
+    memory_object_cluster_size_t length,
+    vm_prot_t protection_required,
+    memory_object_fault_info_t fault_info);
 kern_return_t fourk_pager_data_return(memory_object_t mem_obj,
-					memory_object_offset_t offset,
-					memory_object_cluster_size_t	data_cnt,
-					memory_object_offset_t *resid_offset,
-					int *io_error,
-					boolean_t dirty,
-					boolean_t kernel_copy,
-					int upl_flags);
+    memory_object_offset_t offset,
+    memory_object_cluster_size_t    data_cnt,
+    memory_object_offset_t *resid_offset,
+    int *io_error,
+    boolean_t dirty,
+    boolean_t kernel_copy,
+    int upl_flags);
 kern_return_t fourk_pager_data_initialize(memory_object_t mem_obj,
-					    memory_object_offset_t offset,
-					    memory_object_cluster_size_t data_cnt);
+    memory_object_offset_t offset,
+    memory_object_cluster_size_t data_cnt);
 kern_return_t fourk_pager_data_unlock(memory_object_t mem_obj,
-					memory_object_offset_t offset,
-					memory_object_size_t size,
-					vm_prot_t desired_access);
+    memory_object_offset_t offset,
+    memory_object_size_t size,
+    vm_prot_t desired_access);
 kern_return_t fourk_pager_synchronize(memory_object_t mem_obj,
-					memory_object_offset_t offset,
-					memory_object_size_t length,
-					vm_sync_t sync_flags);
+    memory_object_offset_t offset,
+    memory_object_size_t length,
+    vm_sync_t sync_flags);
 kern_return_t fourk_pager_map(memory_object_t mem_obj,
-				vm_prot_t prot);
+    vm_prot_t prot);
 kern_return_t fourk_pager_last_unmap(memory_object_t mem_obj);
 
 /*
@@ -137,33 +137,33 @@ const struct memory_object_pager_ops fourk_pager_ops = {
  * The "fourk_pager" describes a memory object backed by
  * the "4K" EMM.
  */
-#define FOURK_PAGER_SLOTS 4	/* 16K / 4K */
+#define FOURK_PAGER_SLOTS 4     /* 16K / 4K */
 typedef struct fourk_pager_backing {
-	vm_object_t		backing_object;
-	vm_object_offset_t	backing_offset;
+	vm_object_t             backing_object;
+	vm_object_offset_t      backing_offset;
 } *fourk_pager_backing_t;
 typedef struct fourk_pager {
 	/* mandatory generic header */
 	struct memory_object fourk_pgr_hdr;
 
 	/* pager-specific data */
-	queue_chain_t		pager_queue;	/* next & prev pagers */
-	unsigned int		ref_count;	/* reference count */
-	int	is_ready;	/* is this pager ready ? */
-	int	is_mapped;	/* is this mem_obj mapped ? */
+	queue_chain_t           pager_queue;    /* next & prev pagers */
+	unsigned int            ref_count;      /* reference count */
+	int     is_ready;       /* is this pager ready ? */
+	int     is_mapped;      /* is this mem_obj mapped ? */
 	struct fourk_pager_backing slots[FOURK_PAGER_SLOTS]; /* backing for each
-								4K-chunk */
+	                                                      *  4K-chunk */
 } *fourk_pager_t;
-#define	FOURK_PAGER_NULL	((fourk_pager_t) NULL)
+#define FOURK_PAGER_NULL        ((fourk_pager_t) NULL)
 
 /*
  * List of memory objects managed by this EMM.
  * The list is protected by the "fourk_pager_lock" lock.
  */
-int fourk_pager_count = 0;		/* number of pagers */
-int fourk_pager_count_mapped = 0;	/* number of unmapped pagers */
+int fourk_pager_count = 0;              /* number of pagers */
+int fourk_pager_count_mapped = 0;       /* number of unmapped pagers */
 queue_head_t fourk_pager_queue;
-decl_lck_mtx_data(,fourk_pager_lock)
+decl_lck_mtx_data(, fourk_pager_lock)
 
 /*
  * Maximum number of unmapped pagers we're willing to keep around.
@@ -179,31 +179,31 @@ int fourk_pager_num_trim_max = 0;
 int fourk_pager_num_trim_total = 0;
 
 
-lck_grp_t	fourk_pager_lck_grp;
-lck_grp_attr_t	fourk_pager_lck_grp_attr;
-lck_attr_t	fourk_pager_lck_attr;
+lck_grp_t       fourk_pager_lck_grp;
+lck_grp_attr_t  fourk_pager_lck_grp_attr;
+lck_attr_t      fourk_pager_lck_attr;
 
 
 /* internal prototypes */
 fourk_pager_t fourk_pager_lookup(memory_object_t mem_obj);
 void fourk_pager_dequeue(fourk_pager_t pager);
 void fourk_pager_deallocate_internal(fourk_pager_t pager,
-				       boolean_t locked);
+    boolean_t locked);
 void fourk_pager_terminate_internal(fourk_pager_t pager);
 void fourk_pager_trim(void);
 
 
 #if DEBUG
 int fourk_pagerdebug = 0;
-#define PAGER_ALL		0xffffffff
-#define	PAGER_INIT		0x00000001
-#define	PAGER_PAGEIN		0x00000002
+#define PAGER_ALL               0xffffffff
+#define PAGER_INIT              0x00000001
+#define PAGER_PAGEIN            0x00000002
 
-#define PAGER_DEBUG(LEVEL, A)						\
-	MACRO_BEGIN							\
-	if ((fourk_pagerdebug & LEVEL)==LEVEL) {		\
-		printf A;						\
-	}								\
+#define PAGER_DEBUG(LEVEL, A)                                           \
+	MACRO_BEGIN                                                     \
+	if ((fourk_pagerdebug & LEVEL)==LEVEL) {                \
+	        printf A;                                               \
+	}                                                               \
 	MACRO_END
 #else
 #define PAGER_DEBUG(LEVEL, A)
@@ -227,23 +227,24 @@ fourk_pager_bootstrap(void)
  */
 kern_return_t
 fourk_pager_init(
-	memory_object_t		mem_obj, 
-	memory_object_control_t	control, 
+	memory_object_t         mem_obj,
+	memory_object_control_t control,
 #if !DEBUG
 	__unused
 #endif
 	memory_object_cluster_size_t pg_size)
 {
-	fourk_pager_t	pager;
-	kern_return_t   	kr;
+	fourk_pager_t   pager;
+	kern_return_t           kr;
 	memory_object_attr_info_data_t  attributes;
 
 	PAGER_DEBUG(PAGER_ALL,
-		    ("fourk_pager_init: %p, %p, %x\n",
-		     mem_obj, control, pg_size));
+	    ("fourk_pager_init: %p, %p, %x\n",
+	    mem_obj, control, pg_size));
 
-	if (control == MEMORY_OBJECT_CONTROL_NULL)
+	if (control == MEMORY_OBJECT_CONTROL_NULL) {
 		return KERN_INVALID_ARGUMENT;
+	}
 
 	pager = fourk_pager_lookup(mem_obj);
 
@@ -258,13 +259,14 @@ fourk_pager_init(
 	attributes.temporary = TRUE;
 
 	kr = memory_object_change_attributes(
-					control,
-					MEMORY_OBJECT_ATTRIBUTE_INFO,
-					(memory_object_info_t) &attributes,
-					MEMORY_OBJECT_ATTR_INFO_COUNT);
-	if (kr != KERN_SUCCESS)
+		control,
+		MEMORY_OBJECT_ATTRIBUTE_INFO,
+		(memory_object_info_t) &attributes,
+		MEMORY_OBJECT_ATTR_INFO_COUNT);
+	if (kr != KERN_SUCCESS) {
 		panic("fourk_pager_init: "
-		      "memory_object_change_attributes() failed");
+		    "memory_object_change_attributes() failed");
+	}
 
 #if CONFIG_SECLUDED_MEMORY
 	if (secluded_for_filecache) {
@@ -285,14 +287,14 @@ fourk_pager_init(
  */
 kern_return_t
 fourk_pager_data_return(
-        __unused memory_object_t	mem_obj,
-        __unused memory_object_offset_t	offset,
-        __unused memory_object_cluster_size_t		data_cnt,
-        __unused memory_object_offset_t	*resid_offset,
-	__unused int			*io_error,
-	__unused boolean_t		dirty,
-	__unused boolean_t		kernel_copy,
-	__unused int			upl_flags)  
+	__unused memory_object_t        mem_obj,
+	__unused memory_object_offset_t offset,
+	__unused memory_object_cluster_size_t           data_cnt,
+	__unused memory_object_offset_t *resid_offset,
+	__unused int                    *io_error,
+	__unused boolean_t              dirty,
+	__unused boolean_t              kernel_copy,
+	__unused int                    upl_flags)
 {
 	panic("fourk_pager_data_return: should never get called");
 	return KERN_FAILURE;
@@ -300,9 +302,9 @@ fourk_pager_data_return(
 
 kern_return_t
 fourk_pager_data_initialize(
-	__unused memory_object_t	mem_obj,
-	__unused memory_object_offset_t	offset,
-	__unused memory_object_cluster_size_t		data_cnt)
+	__unused memory_object_t        mem_obj,
+	__unused memory_object_offset_t offset,
+	__unused memory_object_cluster_size_t           data_cnt)
 {
 	panic("fourk_pager_data_initialize: should never get called");
 	return KERN_FAILURE;
@@ -310,10 +312,10 @@ fourk_pager_data_initialize(
 
 kern_return_t
 fourk_pager_data_unlock(
-	__unused memory_object_t	mem_obj,
-	__unused memory_object_offset_t	offset,
-	__unused memory_object_size_t		size,
-	__unused vm_prot_t		desired_access)
+	__unused memory_object_t        mem_obj,
+	__unused memory_object_offset_t offset,
+	__unused memory_object_size_t           size,
+	__unused vm_prot_t              desired_access)
 {
 	return KERN_FAILURE;
 }
@@ -327,9 +329,9 @@ fourk_pager_data_unlock(
  */
 void
 fourk_pager_reference(
-	memory_object_t		mem_obj)
-{	
-	fourk_pager_t	pager;
+	memory_object_t         mem_obj)
+{
+	fourk_pager_t   pager;
 
 	pager = fourk_pager_lookup(mem_obj);
 
@@ -354,12 +356,12 @@ fourk_pager_dequeue(
 	assert(!pager->is_mapped);
 
 	queue_remove(&fourk_pager_queue,
-		     pager,
-		     fourk_pager_t,
-		     pager_queue);
+	    pager,
+	    fourk_pager_t,
+	    pager_queue);
 	pager->pager_queue.next = NULL;
 	pager->pager_queue.prev = NULL;
-	
+
 	fourk_pager_count--;
 }
 
@@ -393,7 +395,7 @@ fourk_pager_terminate_internal(
 			pager->slots[i].backing_offset = (vm_object_offset_t) -1;
 		}
 	}
-	
+
 	/* trigger the destruction of the memory object */
 	memory_object_destroy(pager->fourk_pgr_hdr.mo_control, 0);
 }
@@ -408,18 +410,18 @@ fourk_pager_terminate_internal(
  */
 void
 fourk_pager_deallocate_internal(
-	fourk_pager_t	pager,
-	boolean_t		locked)
+	fourk_pager_t   pager,
+	boolean_t               locked)
 {
-	boolean_t	needs_trimming;
-	int		count_unmapped;
+	boolean_t       needs_trimming;
+	int             count_unmapped;
 
-	if (! locked) {
+	if (!locked) {
 		lck_mtx_lock(&fourk_pager_lock);
 	}
 
-	count_unmapped = (fourk_pager_count - 
-			  fourk_pager_count_mapped);
+	count_unmapped = (fourk_pager_count -
+	    fourk_pager_count_mapped);
 	if (count_unmapped > fourk_pager_cache_limit) {
 		/* we have too many unmapped pagers:  trim some */
 		needs_trimming = TRUE;
@@ -451,7 +453,7 @@ fourk_pager_deallocate_internal(
 			memory_object_control_deallocate(pager->fourk_pgr_hdr.mo_control);
 			pager->fourk_pgr_hdr.mo_control = MEMORY_OBJECT_CONTROL_NULL;
 		}
-		kfree(pager, sizeof (*pager));
+		kfree(pager, sizeof(*pager));
 		pager = FOURK_PAGER_NULL;
 	} else {
 		/* there are still plenty of references:  keep going... */
@@ -472,9 +474,9 @@ fourk_pager_deallocate_internal(
  */
 void
 fourk_pager_deallocate(
-	memory_object_t		mem_obj)
+	memory_object_t         mem_obj)
 {
-	fourk_pager_t	pager;
+	fourk_pager_t   pager;
 
 	PAGER_DEBUG(PAGER_ALL, ("fourk_pager_deallocate: %p\n", mem_obj));
 	pager = fourk_pager_lookup(mem_obj);
@@ -489,7 +491,7 @@ fourk_pager_terminate(
 #if !DEBUG
 	__unused
 #endif
-	memory_object_t	mem_obj)
+	memory_object_t mem_obj)
 {
 	PAGER_DEBUG(PAGER_ALL, ("fourk_pager_terminate: %p\n", mem_obj));
 
@@ -501,13 +503,13 @@ fourk_pager_terminate(
  */
 kern_return_t
 fourk_pager_synchronize(
-	__unused memory_object_t	mem_obj,
-	__unused memory_object_offset_t	offset,
-	__unused memory_object_size_t	length,
-	__unused vm_sync_t		sync_flags)
+	__unused memory_object_t        mem_obj,
+	__unused memory_object_offset_t offset,
+	__unused memory_object_size_t   length,
+	__unused vm_sync_t              sync_flags)
 {
 	panic("fourk_pager_synchronize: memory_object_synchronize no longer supported\n");
-	return (KERN_FAILURE);
+	return KERN_FAILURE;
 }
 
 /*
@@ -520,10 +522,10 @@ fourk_pager_synchronize(
  */
 kern_return_t
 fourk_pager_map(
-	memory_object_t		mem_obj,
-	__unused vm_prot_t	prot)
+	memory_object_t         mem_obj,
+	__unused vm_prot_t      prot)
 {
-	fourk_pager_t	pager;
+	fourk_pager_t   pager;
 
 	PAGER_DEBUG(PAGER_ALL, ("fourk_pager_map: %p\n", mem_obj));
 
@@ -554,13 +556,13 @@ fourk_pager_map(
  */
 kern_return_t
 fourk_pager_last_unmap(
-	memory_object_t		mem_obj)
+	memory_object_t         mem_obj)
 {
-	fourk_pager_t	pager;
-	int			count_unmapped;
+	fourk_pager_t   pager;
+	int                     count_unmapped;
 
 	PAGER_DEBUG(PAGER_ALL,
-		    ("fourk_pager_last_unmap: %p\n", mem_obj));
+	    ("fourk_pager_last_unmap: %p\n", mem_obj));
 
 	pager = fourk_pager_lookup(mem_obj);
 
@@ -572,7 +574,7 @@ fourk_pager_last_unmap(
 		 */
 		fourk_pager_count_mapped--;
 		count_unmapped = (fourk_pager_count -
-				  fourk_pager_count_mapped);
+		    fourk_pager_count_mapped);
 		if (count_unmapped > fourk_pager_count_unmapped_max) {
 			fourk_pager_count_unmapped_max = count_unmapped;
 		}
@@ -582,7 +584,7 @@ fourk_pager_last_unmap(
 	} else {
 		lck_mtx_unlock(&fourk_pager_lock);
 	}
-	
+
 	return KERN_SUCCESS;
 }
 
@@ -592,9 +594,9 @@ fourk_pager_last_unmap(
  */
 fourk_pager_t
 fourk_pager_lookup(
-	memory_object_t	 mem_obj)
+	memory_object_t  mem_obj)
 {
-	fourk_pager_t	pager;
+	fourk_pager_t   pager;
 
 	assert(mem_obj->mo_pager_ops == &fourk_pager_ops);
 	pager = (fourk_pager_t) mem_obj;
@@ -605,10 +607,10 @@ fourk_pager_lookup(
 void
 fourk_pager_trim(void)
 {
-	fourk_pager_t	pager, prev_pager;
-	queue_head_t		trim_queue;
-	int			num_trim;
-	int			count_unmapped;
+	fourk_pager_t   pager, prev_pager;
+	queue_head_t            trim_queue;
+	int                     num_trim;
+	int                     count_unmapped;
 
 	lck_mtx_lock(&fourk_pager_lock);
 
@@ -620,13 +622,13 @@ fourk_pager_trim(void)
 	num_trim = 0;
 
 	for (pager = (fourk_pager_t)
-		     queue_last(&fourk_pager_queue);
-	     !queue_end(&fourk_pager_queue,
-			(queue_entry_t) pager);
-	     pager = prev_pager) {
+	    queue_last(&fourk_pager_queue);
+	    !queue_end(&fourk_pager_queue,
+	    (queue_entry_t) pager);
+	    pager = prev_pager) {
 		/* get prev elt before we dequeue */
 		prev_pager = (fourk_pager_t)
-			queue_prev(&pager->pager_queue);
+		    queue_prev(&pager->pager_queue);
 
 		if (pager->ref_count == 2 &&
 		    pager->is_ready &&
@@ -637,12 +639,12 @@ fourk_pager_trim(void)
 			fourk_pager_dequeue(pager);
 			/* ... and add it to our trim queue */
 			queue_enter_first(&trim_queue,
-					  pager,
-					  fourk_pager_t,
-					  pager_queue);
+			    pager,
+			    fourk_pager_t,
+			    pager_queue);
 
 			count_unmapped = (fourk_pager_count -
-					  fourk_pager_count_mapped);
+			    fourk_pager_count_mapped);
 			if (count_unmapped <= fourk_pager_cache_limit) {
 				/* we have enough pagers to trim */
 				break;
@@ -659,9 +661,9 @@ fourk_pager_trim(void)
 	/* terminate the trimmed pagers */
 	while (!queue_empty(&trim_queue)) {
 		queue_remove_first(&trim_queue,
-				   pager,
-				   fourk_pager_t,
-				   pager_queue);
+		    pager,
+		    fourk_pager_t,
+		    pager_queue);
 		pager->pager_queue.next = NULL;
 		pager->pager_queue.prev = NULL;
 		assert(pager->ref_count == 2);
@@ -682,10 +684,10 @@ fourk_pager_trim(void)
 
 vm_object_t
 fourk_pager_to_vm_object(
-	memory_object_t	mem_obj)
+	memory_object_t mem_obj)
 {
-	fourk_pager_t	pager;
-	vm_object_t	object;
+	fourk_pager_t   pager;
+	vm_object_t     object;
 
 	pager = fourk_pager_lookup(mem_obj);
 	if (pager == NULL) {
@@ -702,10 +704,10 @@ fourk_pager_to_vm_object(
 memory_object_t
 fourk_pager_create(void)
 {
-	fourk_pager_t		pager;
-	memory_object_control_t	control;
-	kern_return_t		kr;
-	int			i;
+	fourk_pager_t           pager;
+	memory_object_control_t control;
+	kern_return_t           kr;
+	int                     i;
 
 #if 00
 	if (PAGE_SIZE_64 == FOURK_PAGE_SIZE) {
@@ -713,11 +715,11 @@ fourk_pager_create(void)
 	}
 #endif
 
-	pager = (fourk_pager_t) kalloc(sizeof (*pager));
+	pager = (fourk_pager_t) kalloc(sizeof(*pager));
 	if (pager == FOURK_PAGER_NULL) {
 		return MEMORY_OBJECT_NULL;
 	}
-	bzero(pager, sizeof (*pager));
+	bzero(pager, sizeof(*pager));
 
 	/*
 	 * The vm_map call takes both named entry ports and raw memory
@@ -730,7 +732,7 @@ fourk_pager_create(void)
 	pager->fourk_pgr_hdr.mo_pager_ops = &fourk_pager_ops;
 	pager->fourk_pgr_hdr.mo_control = MEMORY_OBJECT_CONTROL_NULL;
 
-	pager->ref_count = 2;	/* existence + setup reference */
+	pager->ref_count = 2;   /* existence + setup reference */
 	pager->is_ready = FALSE;/* not ready until it has a "name" */
 	pager->is_mapped = FALSE;
 
@@ -738,14 +740,14 @@ fourk_pager_create(void)
 		pager->slots[i].backing_object = (vm_object_t) -1;
 		pager->slots[i].backing_offset = (vm_object_offset_t) -1;
 	}
-	
+
 	lck_mtx_lock(&fourk_pager_lock);
 
 	/* enter new pager at the head of our list of pagers */
 	queue_enter_first(&fourk_pager_queue,
-			  pager,
-			  fourk_pager_t,
-			  pager_queue);
+	    pager,
+	    fourk_pager_t,
+	    pager_queue);
 	fourk_pager_count++;
 	if (fourk_pager_count > fourk_pager_count_max) {
 		fourk_pager_count_max = fourk_pager_count;
@@ -753,8 +755,8 @@ fourk_pager_create(void)
 	lck_mtx_unlock(&fourk_pager_lock);
 
 	kr = memory_object_create_named((memory_object_t) pager,
-					0,
-					&control);
+	    0,
+	    &control);
 	assert(kr == KERN_SUCCESS);
 
 	lck_mtx_lock(&fourk_pager_lock);
@@ -774,31 +776,31 @@ fourk_pager_create(void)
  * Handles page-in requests from VM.
  */
 int fourk_pager_data_request_debug = 0;
-kern_return_t	
+kern_return_t
 fourk_pager_data_request(
-	memory_object_t		mem_obj,
-	memory_object_offset_t	offset,
-	memory_object_cluster_size_t		length,
+	memory_object_t         mem_obj,
+	memory_object_offset_t  offset,
+	memory_object_cluster_size_t            length,
 #if !DEBUG
 	__unused
 #endif
-	vm_prot_t		protection_required,
+	vm_prot_t               protection_required,
 	memory_object_fault_info_t mo_fault_info)
 {
-	fourk_pager_t		pager;
-	memory_object_control_t	mo_control;
-	upl_t			upl;
-	int			upl_flags;
-	upl_size_t		upl_size;
-	upl_page_info_t		*upl_pl;
-	unsigned int		pl_count;
-	vm_object_t		dst_object;
-	kern_return_t		kr, retval;
-	vm_map_offset_t		kernel_mapping;
-	vm_offset_t		src_vaddr, dst_vaddr;
-	vm_offset_t		cur_offset;
-	int			sub_page;
-	int			sub_page_idx, sub_page_cnt;
+	fourk_pager_t           pager;
+	memory_object_control_t mo_control;
+	upl_t                   upl;
+	int                     upl_flags;
+	upl_size_t              upl_size;
+	upl_page_info_t         *upl_pl;
+	unsigned int            pl_count;
+	vm_object_t             dst_object;
+	kern_return_t           kr, retval;
+	vm_map_offset_t         kernel_mapping;
+	vm_offset_t             src_vaddr, dst_vaddr;
+	vm_offset_t             cur_offset;
+	int                     sub_page;
+	int                     sub_page_idx, sub_page_cnt;
 
 	pager = fourk_pager_lookup(mem_obj);
 	assert(pager->is_ready);
@@ -818,15 +820,15 @@ fourk_pager_data_request(
 
 	upl_size = length;
 	upl_flags =
-		UPL_RET_ONLY_ABSENT |
-		UPL_SET_LITE |
-		UPL_NO_SYNC |
-		UPL_CLEAN_IN_PLACE |	/* triggers UPL_CLEAR_DIRTY */
-		UPL_SET_INTERNAL;
+	    UPL_RET_ONLY_ABSENT |
+	    UPL_SET_LITE |
+	    UPL_NO_SYNC |
+	    UPL_CLEAN_IN_PLACE |        /* triggers UPL_CLEAR_DIRTY */
+	    UPL_SET_INTERNAL;
 	pl_count = 0;
 	kr = memory_object_upl_request(mo_control,
-				       offset, upl_size,
-				       &upl, NULL, NULL, upl_flags, VM_KERN_MEMORY_NONE);
+	    offset, upl_size,
+	    &upl, NULL, NULL, upl_flags, VM_KERN_MEMORY_NONE);
 	if (kr != KERN_SUCCESS) {
 		retval = kr;
 		goto done;
@@ -842,16 +844,16 @@ fourk_pager_data_request(
 	 * source and destination physical pages when it's their turn to
 	 * be processed.
 	 */
-	vm_map_entry_t		map_entry;
+	vm_map_entry_t          map_entry;
 
-	vm_object_reference(kernel_object);	/* ref. for mapping */
+	vm_object_reference(kernel_object);     /* ref. for mapping */
 	kr = vm_map_find_space(kernel_map,
-			       &kernel_mapping,
-			       2 * PAGE_SIZE_64,
-			       0,
-			       0,
-			       VM_MAP_KERNEL_FLAGS_NONE,
-			       &map_entry);
+	    &kernel_mapping,
+	    2 * PAGE_SIZE_64,
+	    0,
+	    0,
+	    VM_MAP_KERNEL_FLAGS_NONE,
+	    &map_entry);
 	if (kr != KERN_SUCCESS) {
 		vm_object_deallocate(kernel_object);
 		retval = kr;
@@ -870,8 +872,8 @@ fourk_pager_data_request(
 	upl_pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
 	pl_count = length / PAGE_SIZE;
 	for (cur_offset = 0;
-	     retval == KERN_SUCCESS && cur_offset < length;
-	     cur_offset += PAGE_SIZE) {
+	    retval == KERN_SUCCESS && cur_offset < length;
+	    cur_offset += PAGE_SIZE) {
 		ppnum_t dst_pnum;
 		int num_subpg_signed, num_subpg_validated;
 		int num_subpg_tainted, num_subpg_nx;
@@ -888,22 +890,22 @@ fourk_pager_data_request(
 		 * is "busy".
 		 */
 		dst_pnum = (ppnum_t)
-			upl_phys_page(upl_pl, (int)(cur_offset / PAGE_SIZE));
+		    upl_phys_page(upl_pl, (int)(cur_offset / PAGE_SIZE));
 		assert(dst_pnum != 0);
 #if __x86_64__
 		dst_vaddr = (vm_map_offset_t)
-			PHYSMAP_PTOV((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
+		    PHYSMAP_PTOV((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
 #elif __arm__ || __arm64__
 		dst_vaddr = (vm_map_offset_t)
-			phystokv((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
+		    phystokv((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
 #else
 		kr = pmap_enter(kernel_pmap,
-		                dst_vaddr,
-		                dst_pnum,
-		                VM_PROT_READ | VM_PROT_WRITE,
-		                VM_PROT_NONE,
-		                0,
-		                TRUE);
+		    dst_vaddr,
+		    dst_pnum,
+		    VM_PROT_READ | VM_PROT_WRITE,
+		    VM_PROT_NONE,
+		    0,
+		    TRUE);
 
 		assert(kr == KERN_SUCCESS);
 #endif
@@ -918,7 +920,7 @@ fourk_pager_data_request(
 			assert(PAGE_SHIFT == FOURK_PAGE_SHIFT);
 			assert(page_shift_user32 == SIXTEENK_PAGE_SHIFT);
 			sub_page_idx = ((offset & SIXTEENK_PAGE_MASK) /
-					PAGE_SIZE);
+			    PAGE_SIZE);
 			/*
 			 * ... and provide only that one 4KB page.
 			 */
@@ -940,32 +942,32 @@ fourk_pager_data_request(
 
 		/* retrieve appropriate data for each 4K-page in this page */
 		for (sub_page = sub_page_idx;
-		     sub_page < sub_page_idx + sub_page_cnt;
-		     sub_page++) {
-			vm_object_t		src_object;
-			memory_object_offset_t	src_offset;
-			vm_offset_t		offset_in_src_page;
-			kern_return_t		error_code;
-			vm_object_t		src_page_object;
-			vm_page_t		src_page;
-			vm_page_t		top_page;
-			vm_prot_t		prot;
-			int			interruptible;
-			struct vm_object_fault_info	fault_info;
-			boolean_t	subpg_validated;
-			unsigned	subpg_tainted;
+		    sub_page < sub_page_idx + sub_page_cnt;
+		    sub_page++) {
+			vm_object_t             src_object;
+			memory_object_offset_t  src_offset;
+			vm_offset_t             offset_in_src_page;
+			kern_return_t           error_code;
+			vm_object_t             src_page_object;
+			vm_page_t               src_page;
+			vm_page_t               top_page;
+			vm_prot_t               prot;
+			int                     interruptible;
+			struct vm_object_fault_info     fault_info;
+			boolean_t       subpg_validated;
+			unsigned        subpg_tainted;
 
 
 			if (offset < SIXTEENK_PAGE_SIZE) {
 				/*
 				 * The 1st 16K-page can cover multiple
-				 * sub-mappings, as described in the 
+				 * sub-mappings, as described in the
 				 * pager->slots[] array.
 				 */
 				src_object =
-					pager->slots[sub_page].backing_object;
+				    pager->slots[sub_page].backing_object;
 				src_offset =
-					pager->slots[sub_page].backing_offset;
+				    pager->slots[sub_page].backing_offset;
 			} else {
 				fourk_pager_backing_t slot;
 
@@ -974,45 +976,45 @@ fourk_pager_data_request(
 				 * an extension of the last "sub page" in
 				 * the pager->slots[] array.
 				 */
-				slot = &pager->slots[FOURK_PAGER_SLOTS-1];
+				slot = &pager->slots[FOURK_PAGER_SLOTS - 1];
 				src_object = slot->backing_object;
 				src_offset = slot->backing_offset;
 				src_offset += FOURK_PAGE_SIZE;
 				src_offset +=
-					(vm_map_trunc_page(offset,
-							   SIXTEENK_PAGE_MASK)
-					 - SIXTEENK_PAGE_SIZE);
+				    (vm_map_trunc_page(offset,
+				    SIXTEENK_PAGE_MASK)
+				    - SIXTEENK_PAGE_SIZE);
 				src_offset += sub_page * FOURK_PAGE_SIZE;
 			}
 			offset_in_src_page = src_offset & PAGE_MASK_64;
 			src_offset = vm_object_trunc_page(src_offset);
-				
+
 			if (src_object == VM_OBJECT_NULL ||
 			    src_object == (vm_object_t) -1) {
 				/* zero-fill */
 				bzero((char *)(dst_vaddr +
-					       ((sub_page-sub_page_idx)
-						* FOURK_PAGE_SIZE)),
-				      FOURK_PAGE_SIZE);
+				    ((sub_page - sub_page_idx)
+				    * FOURK_PAGE_SIZE)),
+				    FOURK_PAGE_SIZE);
 				if (fourk_pager_data_request_debug) {
 					printf("fourk_pager_data_request"
-					       "(%p,0x%llx+0x%lx+0x%04x): "
-					       "ZERO\n",
-					       pager,
-					       offset,
-					       cur_offset,
-					       ((sub_page - sub_page_idx)
-						* FOURK_PAGE_SIZE));
+					    "(%p,0x%llx+0x%lx+0x%04x): "
+					    "ZERO\n",
+					    pager,
+					    offset,
+					    cur_offset,
+					    ((sub_page - sub_page_idx)
+					    * FOURK_PAGE_SIZE));
 				}
 				continue;
 			}
 
 			/* fault in the source page from src_object */
-		retry_src_fault:
+retry_src_fault:
 			src_page = VM_PAGE_NULL;
 			top_page = VM_PAGE_NULL;
 			fault_info = *((struct vm_object_fault_info *)
-				       (uintptr_t)mo_fault_info);
+			    (uintptr_t)mo_fault_info);
 			fault_info.stealth = TRUE;
 			fault_info.io_sync = FALSE;
 			fault_info.mark_zf_absent = FALSE;
@@ -1024,18 +1026,18 @@ fourk_pager_data_request(
 			vm_object_lock(src_object);
 			vm_object_paging_begin(src_object);
 			kr = vm_fault_page(src_object,
-					   src_offset,
-					   VM_PROT_READ,
-					   FALSE,
-					   FALSE, /* src_page not looked up */
-					   &prot,
-					   &src_page,
-					   &top_page,
-					   NULL,
-					   &error_code,
-					   FALSE,
-					   FALSE,
-					   &fault_info);
+			    src_offset,
+			    VM_PROT_READ,
+			    FALSE,
+			    FALSE,                /* src_page not looked up */
+			    &prot,
+			    &src_page,
+			    &top_page,
+			    NULL,
+			    &error_code,
+			    FALSE,
+			    FALSE,
+			    &fault_info);
 			switch (kr) {
 			case VM_FAULT_SUCCESS:
 				break;
@@ -1045,7 +1047,7 @@ fourk_pager_data_request(
 				if (vm_page_wait(interruptible)) {
 					goto retry_src_fault;
 				}
-				/* fall thru */
+			/* fall thru */
 			case VM_FAULT_INTERRUPTED:
 				retval = MACH_SEND_INTERRUPTED;
 				goto src_fault_done;
@@ -1053,7 +1055,7 @@ fourk_pager_data_request(
 				/* success but no VM page: fail */
 				vm_object_paging_end(src_object);
 				vm_object_unlock(src_object);
-				/*FALLTHROUGH*/
+			/*FALLTHROUGH*/
 			case VM_FAULT_MEMORY_ERROR:
 				/* the page is not there! */
 				if (error_code) {
@@ -1064,18 +1066,18 @@ fourk_pager_data_request(
 				goto src_fault_done;
 			default:
 				panic("fourk_pager_data_request: "
-				      "vm_fault_page() unexpected error 0x%x\n",
-				      kr);
+				    "vm_fault_page() unexpected error 0x%x\n",
+				    kr);
 			}
 			assert(src_page != VM_PAGE_NULL);
 			assert(src_page->vmp_busy);
 
 			src_page_object = VM_PAGE_OBJECT(src_page);
 
-			if (( !VM_PAGE_PAGEABLE(src_page)) &&
+			if ((!VM_PAGE_PAGEABLE(src_page)) &&
 			    !VM_PAGE_WIRED(src_page)) {
 				vm_page_lockspin_queues();
-				if (( !VM_PAGE_PAGEABLE(src_page)) &&
+				if ((!VM_PAGE_PAGEABLE(src_page)) &&
 				    !VM_PAGE_WIRED(src_page)) {
 					vm_page_deactivate(src_page);
 				}
@@ -1084,24 +1086,24 @@ fourk_pager_data_request(
 
 #if __x86_64__
 			src_vaddr = (vm_map_offset_t)
-				PHYSMAP_PTOV((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
-					     << PAGE_SHIFT);
+			    PHYSMAP_PTOV((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
+			        << PAGE_SHIFT);
 #elif __arm__ || __arm64__
 			src_vaddr = (vm_map_offset_t)
-				phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
-					 << PAGE_SHIFT);
+			    phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
+			        << PAGE_SHIFT);
 #else
 			/*
 			 * Establish an explicit mapping of the source
 			 * physical page.
 			 */
 			kr = pmap_enter(kernel_pmap,
-			                src_vaddr,
-			                VM_PAGE_GET_PHYS_PAGE(src_page),
-			                VM_PROT_READ,
-			                VM_PROT_NONE,
-			                0,
-			                TRUE);
+			    src_vaddr,
+			    VM_PAGE_GET_PHYS_PAGE(src_page),
+			    VM_PROT_READ,
+			    VM_PROT_NONE,
+			    0,
+			    TRUE);
 
 			assert(kr == KERN_SUCCESS);
 #endif
@@ -1149,33 +1151,33 @@ fourk_pager_data_request(
 			 * into the appropriate part of the destination page.
 			 */
 			bcopy((const char *)(src_vaddr + offset_in_src_page),
-			      (char *)(dst_vaddr +
-				       ((sub_page - sub_page_idx) *
-					FOURK_PAGE_SIZE)),
-			      FOURK_PAGE_SIZE);
+			    (char *)(dst_vaddr +
+			    ((sub_page - sub_page_idx) *
+			    FOURK_PAGE_SIZE)),
+			    FOURK_PAGE_SIZE);
 			if (fourk_pager_data_request_debug) {
 				printf("fourk_data_request"
-				       "(%p,0x%llx+0x%lx+0x%04x): "
-				       "backed by [%p:0x%llx]: "
-				       "[0x%016llx 0x%016llx] "
-				       "code_signed=%d "
-				       "cs_valid=%d cs_tainted=%d cs_nx=%d\n",
-				       pager,
-				       offset, cur_offset,
-				       (sub_page-sub_page_idx)*FOURK_PAGE_SIZE,
-				       src_page_object,
-				       src_page->vmp_offset + offset_in_src_page,
-				       *(uint64_t *)(dst_vaddr +
-						     ((sub_page-sub_page_idx) *
-						      FOURK_PAGE_SIZE)),
-				       *(uint64_t *)(dst_vaddr +
-						     ((sub_page-sub_page_idx) *
-						      FOURK_PAGE_SIZE) +
-						     8),
-				       src_page_object->code_signed,
-				       subpg_validated,
-				       !!(subpg_tainted & CS_VALIDATE_TAINTED),
-				       !!(subpg_tainted & CS_VALIDATE_NX));
+				    "(%p,0x%llx+0x%lx+0x%04x): "
+				    "backed by [%p:0x%llx]: "
+				    "[0x%016llx 0x%016llx] "
+				    "code_signed=%d "
+				    "cs_valid=%d cs_tainted=%d cs_nx=%d\n",
+				    pager,
+				    offset, cur_offset,
+				    (sub_page - sub_page_idx) * FOURK_PAGE_SIZE,
+				    src_page_object,
+				    src_page->vmp_offset + offset_in_src_page,
+				    *(uint64_t *)(dst_vaddr +
+				    ((sub_page - sub_page_idx) *
+				    FOURK_PAGE_SIZE)),
+				    *(uint64_t *)(dst_vaddr +
+				    ((sub_page - sub_page_idx) *
+				    FOURK_PAGE_SIZE) +
+				    8),
+				    src_page_object->code_signed,
+				    subpg_validated,
+				    !!(subpg_tainted & CS_VALIDATE_TAINTED),
+				    !!(subpg_tainted & CS_VALIDATE_NX));
 			}
 
 #if __x86_64__ || __arm__ || __arm64__
@@ -1183,15 +1185,15 @@ fourk_pager_data_request(
 			src_vaddr = 0;
 #else /* __x86_64__ || __arm__ || __arm64__ */
 			/*
-			 * Remove the pmap mapping of the source page 
+			 * Remove the pmap mapping of the source page
 			 * in the kernel.
 			 */
 			pmap_remove(kernel_pmap,
-				    (addr64_t) src_vaddr,
-				    (addr64_t) src_vaddr + PAGE_SIZE_64);
+			    (addr64_t) src_vaddr,
+			    (addr64_t) src_vaddr + PAGE_SIZE_64);
 #endif /* __x86_64__ || __arm__ || __arm64__ */
 
-		src_fault_done:
+src_fault_done:
 			/*
 			 * Cleanup the result of vm_fault_page().
 			 */
@@ -1203,7 +1205,7 @@ fourk_pager_data_request(
 				vm_object_paging_end(src_page_object);
 				vm_object_unlock(src_page_object);
 				if (top_page) {
-					vm_object_t	top_object;
+					vm_object_t     top_object;
 
 					top_object = VM_PAGE_OBJECT(top_page);
 					vm_object_lock(top_object);
@@ -1219,12 +1221,12 @@ fourk_pager_data_request(
 			if (num_subpg_tainted > 0) {
 				/* a tainted subpage taints entire 16K page */
 				UPL_SET_CS_TAINTED(upl_pl,
-						   cur_offset / PAGE_SIZE,
-						   TRUE);
+				    cur_offset / PAGE_SIZE,
+				    TRUE);
 				/* also mark as "validated" for consisteny */
 				UPL_SET_CS_VALIDATED(upl_pl,
-						     cur_offset / PAGE_SIZE,
-						     TRUE);
+				    cur_offset / PAGE_SIZE,
+				    TRUE);
 			} else if (num_subpg_validated == num_subpg_signed) {
 				/*
 				 * All the code-signed 4K subpages of this
@@ -1232,13 +1234,13 @@ fourk_pager_data_request(
 				 * considered validated.
 				 */
 				UPL_SET_CS_VALIDATED(upl_pl,
-						     cur_offset / PAGE_SIZE,
-						     TRUE);
+				    cur_offset / PAGE_SIZE,
+				    TRUE);
 			}
 			if (num_subpg_nx > 0) {
 				UPL_SET_CS_NX(upl_pl,
-					      cur_offset / PAGE_SIZE,
-					      TRUE);
+				    cur_offset / PAGE_SIZE,
+				    TRUE);
 			}
 		}
 	}
@@ -1260,7 +1262,7 @@ done:
 		if (retval != KERN_SUCCESS) {
 			upl_abort(upl, 0);
 			if (retval == KERN_ABORTED) {
-				wait_result_t	wait_result;
+				wait_result_t   wait_result;
 
 				/*
 				 * We aborted the fault and did not provide
@@ -1280,7 +1282,7 @@ done:
 				wait_result = assert_wait_timeout(
 					(event_t) fourk_pager_data_request,
 					THREAD_UNINT,
-					10000,	/* 10ms */
+					10000,  /* 10ms */
 					NSEC_PER_USEC);
 				assert(wait_result == THREAD_WAITING);
 				wait_result = thread_block(THREAD_CONTINUE_NULL);
@@ -1288,9 +1290,9 @@ done:
 			}
 		} else {
 			boolean_t empty;
-			upl_commit_range(upl, 0, upl->size, 
-					 UPL_COMMIT_CS_VALIDATED | UPL_COMMIT_WRITTEN_BY_KERNEL,
-					 upl_pl, pl_count, &empty);
+			upl_commit_range(upl, 0, upl->size,
+			    UPL_COMMIT_CS_VALIDATED | UPL_COMMIT_WRITTEN_BY_KERNEL,
+			    upl_pl, pl_count, &empty);
 		}
 
 		/* and deallocate the UPL */
@@ -1300,9 +1302,9 @@ done:
 	if (kernel_mapping != 0) {
 		/* clean up the mapping of the source and destination pages */
 		kr = vm_map_remove(kernel_map,
-				   kernel_mapping,
-				   kernel_mapping + (2 * PAGE_SIZE_64),
-				   VM_MAP_REMOVE_NO_FLAGS);
+		    kernel_mapping,
+		    kernel_mapping + (2 * PAGE_SIZE_64),
+		    VM_MAP_REMOVE_NO_FLAGS);
 		assert(kr == KERN_SUCCESS);
 		kernel_mapping = 0;
 		src_vaddr = 0;
@@ -1316,15 +1318,15 @@ done:
 
 kern_return_t
 fourk_pager_populate(
-	memory_object_t		mem_obj,
-	boolean_t		overwrite,
-	int			index,
-	vm_object_t		new_backing_object,
-	vm_object_offset_t	new_backing_offset,
-	vm_object_t		*old_backing_object,
-	vm_object_offset_t	*old_backing_offset)
+	memory_object_t         mem_obj,
+	boolean_t               overwrite,
+	int                     index,
+	vm_object_t             new_backing_object,
+	vm_object_offset_t      new_backing_offset,
+	vm_object_t             *old_backing_object,
+	vm_object_offset_t      *old_backing_offset)
 {
-	fourk_pager_t	pager;
+	fourk_pager_t   pager;
 
 	pager = fourk_pager_lookup(mem_obj);
 	if (pager == NULL) {
@@ -1340,7 +1342,7 @@ fourk_pager_populate(
 
 	if (!overwrite &&
 	    (pager->slots[index].backing_object != (vm_object_t) -1 ||
-	     pager->slots[index].backing_offset != (vm_object_offset_t) -1)) {
+	    pager->slots[index].backing_offset != (vm_object_offset_t) -1)) {
 		return KERN_INVALID_ADDRESS;
 	}
 
@@ -1352,4 +1354,3 @@ fourk_pager_populate(
 
 	return KERN_SUCCESS;
 }
-

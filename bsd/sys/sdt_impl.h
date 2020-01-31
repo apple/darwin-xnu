@@ -25,7 +25,7 @@
  */
 
 #ifndef _SDT_IMPL_H
-#define	_SDT_IMPL_H
+#define _SDT_IMPL_H
 
 /*
  * This file has been created by splitting up the original DTrace sdt.h
@@ -34,26 +34,26 @@
 
 /* #pragma ident	"@(#)sdt.h	1.7	05/06/08 SMI" */
 
-#ifdef	__cplusplus
+#ifdef  __cplusplus
 extern "C" {
 #endif
 
 extern const char *sdt_prefix;
 
 typedef struct sdt_probedesc {
-	char			*sdpd_name;	/* name of this probe */
-	char			*sdpd_func;	/* APPLE NOTE: function name */
-	unsigned long		sdpd_offset;	/* offset of call in text */
-	struct sdt_probedesc	*sdpd_next;	/* next static probe */
+	char                    *sdpd_name;     /* name of this probe */
+	char                    *sdpd_func;     /* APPLE NOTE: function name */
+	unsigned long           sdpd_offset;    /* offset of call in text */
+	struct sdt_probedesc    *sdpd_next;     /* next static probe */
 } sdt_probedesc_t;
 
-#ifdef	__cplusplus
+#ifdef  __cplusplus
 }
 #endif
 
 /* #pragma ident	"@(#)sdt_impl.h	1.3	05/06/08 SMI" */
 
-#ifdef	__cplusplus
+#ifdef  __cplusplus
 extern "C" {
 #endif
 
@@ -87,42 +87,42 @@ typedef uint32_t sdt_instr_t;
 #endif
 
 typedef struct sdt_provider {
-	const char			*sdtp_name;	/* name of provider */
-	const char			*sdtp_prefix;	/* prefix for probe names */
-	dtrace_pattr_t		*sdtp_attr;	/* stability attributes */
-	dtrace_provider_id_t	sdtp_id;	/* provider ID */
+	const char                      *sdtp_name;     /* name of provider */
+	const char                      *sdtp_prefix;   /* prefix for probe names */
+	dtrace_pattr_t          *sdtp_attr;     /* stability attributes */
+	dtrace_provider_id_t    sdtp_id;        /* provider ID */
 } sdt_provider_t;
 
-extern sdt_provider_t sdt_providers[];		/* array of providers */
+extern sdt_provider_t sdt_providers[];          /* array of providers */
 
 typedef struct sdt_probe {
-	sdt_provider_t	*sdp_provider;		/* provider */
-	char		*sdp_name;		/* name of probe */
-	int		sdp_namelen;		/* length of allocated name */
-	dtrace_id_t	sdp_id;			/* probe ID */
-	struct modctl	*sdp_ctl;		/* modctl for module */
-	int		sdp_loadcnt;		/* load count for module */
-	int		sdp_primary;		/* non-zero if primary mod */
-	sdt_instr_t	*sdp_patchpoint;	/* patch point */
-	sdt_instr_t	sdp_patchval;		/* instruction to patch */
-	sdt_instr_t	sdp_savedval;		/* saved instruction value */
-	struct sdt_probe *sdp_next;		/* next probe */
-	struct sdt_probe *sdp_hashnext;		/* next on hash */
+	sdt_provider_t  *sdp_provider;          /* provider */
+	char            *sdp_name;              /* name of probe */
+	int             sdp_namelen;            /* length of allocated name */
+	dtrace_id_t     sdp_id;                 /* probe ID */
+	struct modctl   *sdp_ctl;               /* modctl for module */
+	int             sdp_loadcnt;            /* load count for module */
+	int             sdp_primary;            /* non-zero if primary mod */
+	sdt_instr_t     *sdp_patchpoint;        /* patch point */
+	sdt_instr_t     sdp_patchval;           /* instruction to patch */
+	sdt_instr_t     sdp_savedval;           /* saved instruction value */
+	struct sdt_probe *sdp_next;             /* next probe */
+	struct sdt_probe *sdp_hashnext;         /* next on hash */
 } sdt_probe_t;
 
 typedef struct sdt_argdesc {
-	const char *sda_provider;		/* provider for arg */
-	const char *sda_name;			/* name of probe */
-	const int sda_ndx;			/* argument index */
-	const int sda_mapping;			/* mapping of argument */
-	const char *sda_native;			/* native type of argument */
-	const char *sda_xlate;			/* translated type of arg */
+	const char *sda_provider;               /* provider for arg */
+	const char *sda_name;                   /* name of probe */
+	const int sda_ndx;                      /* argument index */
+	const int sda_mapping;                  /* mapping of argument */
+	const char *sda_native;                 /* native type of argument */
+	const char *sda_xlate;                  /* translated type of arg */
 } sdt_argdesc_t;
 
 extern void sdt_getargdesc(void *, dtrace_id_t, void *, dtrace_argdesc_t *);
 
-#ifdef	__cplusplus
+#ifdef  __cplusplus
 }
 #endif
 
-#endif	/* _SDT_IMPL_H */
+#endif  /* _SDT_IMPL_H */

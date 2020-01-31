@@ -63,7 +63,7 @@
  */
 
 #ifndef _NET_PKTSCHED_PKTSCHED_RMCLASS_H_
-#define	_NET_PKTSCHED_PKTSCHED_RMCLASS_H_
+#define _NET_PKTSCHED_PKTSCHED_RMCLASS_H_
 
 #ifdef PRIVATE
 #include <net/classq/classq.h>
@@ -73,23 +73,23 @@
 extern "C" {
 #endif
 
-#define	RM_MAXPRIO	8	/* Max priority */
+#define RM_MAXPRIO      8       /* Max priority */
 
 /* flags for rmc_init and rmc_newclass */
 /* class flags */
-#define	RMCF_RED		0x0001	/* use RED */
-#define	RMCF_ECN		0x0002	/* use ECN with RED/BLUE/SFB */
-#define	RMCF_RIO		0x0004	/* use RIO */
-#define	RMCF_FLOWVALVE		0x0008	/* use flowvalve (aka penalty-box) */
-#define	RMCF_CLEARDSCP		0x0010  /* clear diffserv codepoint */
+#define RMCF_RED                0x0001  /* use RED */
+#define RMCF_ECN                0x0002  /* use ECN with RED/BLUE/SFB */
+#define RMCF_RIO                0x0004  /* use RIO */
+#define RMCF_FLOWVALVE          0x0008  /* use flowvalve (aka penalty-box) */
+#define RMCF_CLEARDSCP          0x0010  /* clear diffserv codepoint */
 
 /* flags for rmc_init */
-#define	RMCF_WRR		0x0100
-#define	RMCF_EFFICIENT		0x0200
+#define RMCF_WRR                0x0100
+#define RMCF_EFFICIENT          0x0200
 
-#define	RMCF_BLUE		0x10000	/* use BLUE */
-#define	RMCF_SFB		0x20000	/* use SFB */
-#define	RMCF_FLOWCTL		0x40000	/* enable flow control advisories */
+#define RMCF_BLUE               0x10000 /* use BLUE */
+#define RMCF_SFB                0x20000 /* use SFB */
+#define RMCF_FLOWCTL            0x40000 /* enable flow control advisories */
 
 #ifdef __cplusplus
 }

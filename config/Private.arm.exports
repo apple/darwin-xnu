@@ -21,3 +21,4 @@ _ml_static_mfree
 _sched_perfcontrol_register_callbacks
 _sched_perfcontrol_update_recommended_cores
 _PE_panic_debugging_enabled
+_register_additional_panic_data_buffer

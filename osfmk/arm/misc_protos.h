@@ -29,8 +29,8 @@
  * @OSF_COPYRIGHT@
  */
 
-#ifndef	_ARM_MISC_PROTOS_H_
-#define	_ARM_MISC_PROTOS_H_
+#ifndef _ARM_MISC_PROTOS_H_
+#define _ARM_MISC_PROTOS_H_
 
 #include <kern/kern_types.h>
 
@@ -71,11 +71,11 @@ extern void dcache_incoherent_io_flush64(addr64_t pa, unsigned int count, unsign
 extern void dcache_incoherent_io_store64(addr64_t pa, unsigned int count, unsigned int remaining, unsigned int *res);
 
 #if defined(__arm__)
-extern void copy_debug_state(arm_debug_state_t *src, arm_debug_state_t *target, __unused boolean_t all);
+extern void copy_debug_state(arm_debug_state_t * src, arm_debug_state_t *target, __unused boolean_t all);
 #elif defined(__arm64__)
-extern void copy_legacy_debug_state(arm_legacy_debug_state_t *src, arm_legacy_debug_state_t *target, __unused boolean_t all);
-extern void copy_debug_state32(arm_debug_state32_t *src, arm_debug_state32_t *target, __unused boolean_t all);
-extern void copy_debug_state64(arm_debug_state64_t *src, arm_debug_state64_t *target, __unused boolean_t all);
+extern void copy_legacy_debug_state(arm_legacy_debug_state_t * src, arm_legacy_debug_state_t *target, __unused boolean_t all);
+extern void copy_debug_state32(arm_debug_state32_t * src, arm_debug_state32_t *target, __unused boolean_t all);
+extern void copy_debug_state64(arm_debug_state64_t * src, arm_debug_state64_t *target, __unused boolean_t all);
 
 extern boolean_t debug_legacy_state_is_valid(arm_legacy_debug_state_t *ds);
 extern boolean_t debug_state_is_valid32(arm_debug_state32_t *ds);
@@ -85,9 +85,9 @@ extern int copyio_check_user_addr(user_addr_t user_addr, vm_size_t nbytes);
 
 /* Top-Byte-Ignore */
 extern boolean_t user_tbi;
-#define TBI_MASK		0xff00000000000000
-#define user_tbi_enabled()	(user_tbi)
-#define tbi_clear(addr)		((addr) & ~(TBI_MASK))
+#define TBI_MASK                0xff00000000000000
+#define user_tbi_enabled()      (user_tbi)
+#define tbi_clear(addr)         ((addr) & ~(TBI_MASK))
 
 #else
 #error Unknown architecture.

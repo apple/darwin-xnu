@@ -17,6 +17,7 @@ KERNELFILES = \
 	lock.h	\
 	locks.h	\
 	machine_cpuid.h		\
+	machine_remote_time.h \
 	machine_routines.h	\
 	machine_kpc.h		\
 	monotonic.h \
@@ -24,8 +25,8 @@ KERNELFILES = \
 	pal_hibernate.h		\
 	simple_lock.h
 
-EXPORT_FILES =
-
+EXPORT_FILES = \
+	machine_remote_time.h
 
 INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 

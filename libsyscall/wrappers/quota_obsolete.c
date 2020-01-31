@@ -34,12 +34,14 @@
 extern int quota(void);
 extern int setquota(void);
 
-int quota(void)
+int
+quota(void)
 {
 	return kill(getpid(), SIGSYS);
 }
 
-int setquota(void)
+int
+setquota(void)
 {
 	return kill(getpid(), SIGSYS);
 }

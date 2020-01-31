@@ -57,7 +57,7 @@ backtrace(uintptr_t *bt, uint32_t max_frames)
  * inlined, it doesn't record the frame of the function it's inside (because
  * there's no stack frame).
  */
-uint32_t __attribute__((noinline,not_tail_called))
+uint32_t __attribute__((noinline, not_tail_called))
 backtrace_frame(uintptr_t *bt, uint32_t max_frames, void *start_frame)
 {
 	thread_t thread = current_thread();
@@ -94,8 +94,7 @@ backtrace_frame(uintptr_t *bt, uint32_t max_frames, void *start_frame)
 		 */
 		in_valid_stack = IN_STK_BOUNDS(next_fp);
 
-		if (next_fp == NULL || !in_valid_stack)
-		{
+		if (next_fp == NULL || !in_valid_stack) {
 			break;
 		}
 
@@ -224,15 +223,15 @@ backtrace_interrupted(uintptr_t *bt, uint32_t max_frames)
 
 int
 backtrace_user(uintptr_t *bt, uint32_t max_frames, uint32_t *frames_out,
-	bool *user_64_out)
+    bool *user_64_out)
 {
 	return backtrace_thread_user(current_thread(), bt, max_frames, frames_out,
-		user_64_out);
+	           user_64_out);
 }
 
 int
 backtrace_thread_user(void *thread, uintptr_t *bt, uint32_t max_frames,
-	uint32_t *frames_out, bool *user_64_out)
+    uint32_t *frames_out, bool *user_64_out)
 {
 	bool user_64;
 	uintptr_t pc, fp, next_fp;

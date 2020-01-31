@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -34,14 +34,14 @@
  *		time; it's primary use is by kld, and all externally
  *		referenced routines at the present time operate against
  *		the kernel mach header _mh_execute_header, which is the
- *		header for the currently executing kernel. 
+ *		header for the currently executing kernel.
  *
  */
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 #include <libkern/kernel_mach_header.h>
-#include <string.h>		// from libsa
+#include <string.h>             // from libsa
 
 /*
  * return the last address (first avail)
@@ -51,17 +51,18 @@
 vm_offset_t
 getlastaddr(void)
 {
-	kernel_segment_command_t	*sgp;
-	vm_offset_t		last_addr = 0;
+	kernel_segment_command_t        *sgp;
+	vm_offset_t             last_addr = 0;
 	kernel_mach_header_t *header = &_mh_execute_header;
 	unsigned long i;
 
 	sgp = (kernel_segment_command_t *)
-		((uintptr_t)header + sizeof(kernel_mach_header_t));
-	for (i = 0; i < header->ncmds; i++){
+	    ((uintptr_t)header + sizeof(kernel_mach_header_t));
+	for (i = 0; i < header->ncmds; i++) {
 		if (sgp->cmd == LC_SEGMENT_KERNEL) {
-			if (sgp->vmaddr + sgp->vmsize > last_addr)
+			if (sgp->vmaddr + sgp->vmsize > last_addr) {
 				last_addr = sgp->vmaddr + sgp->vmsize;
+			}
 		}
 		sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
 	}
@@ -73,13 +74,14 @@ getlastaddr(void)
  * the command. If there is no such load command, NULL is returned.
  */
 void *
-getcommandfromheader(kernel_mach_header_t *mhp, uint32_t cmd) {
+getcommandfromheader(kernel_mach_header_t *mhp, uint32_t cmd)
+{
 	struct load_command *lcp;
 	unsigned long i;
 
 	lcp = (struct load_command *) (mhp + 1);
-	for(i = 0; i < mhp->ncmds; i++){
-		if(lcp->cmd == cmd) {
+	for (i = 0; i < mhp->ncmds; i++) {
+		if (lcp->cmd == cmd) {
 			return (void *)lcp;
 		}
 
@@ -97,17 +99,17 @@ getcommandfromheader(kernel_mach_header_t *mhp, uint32_t cmd) {
 void *
 getuuidfromheader(kernel_mach_header_t *mhp, unsigned long *size)
 {
-    struct uuid_command *cmd = (struct uuid_command *)
-        getcommandfromheader(mhp, LC_UUID);
+	struct uuid_command *cmd = (struct uuid_command *)
+	    getcommandfromheader(mhp, LC_UUID);
 
-    if (cmd != NULL) {
-        if (size) {
-            *size = sizeof(cmd->uuid);
-        }
-        return cmd->uuid;
-    }
+	if (cmd != NULL) {
+		if (size) {
+			*size = sizeof(cmd->uuid);
+		}
+		return cmd->uuid;
+	}
 
-    return NULL;
+	return NULL;
 }
 
 /*
@@ -120,21 +122,21 @@ getuuidfromheader(kernel_mach_header_t *mhp, unsigned long *size)
  */
 void *
 getsectdatafromheader(
-    kernel_mach_header_t *mhp,
-    const char *segname,
-    const char *sectname,
-    unsigned long *size)
-{		
+	kernel_mach_header_t *mhp,
+	const char *segname,
+	const char *sectname,
+	unsigned long *size)
+{
 	const kernel_section_t *sp;
 	void *result;
 
 	sp = getsectbynamefromheader(mhp, segname, sectname);
-	if(sp == (kernel_section_t *)0){
-	    *size = 0;
-	    return((char *)0);
+	if (sp == (kernel_section_t *)0) {
+		*size = 0;
+		return (char *)0;
 	}
 	*size = sp->size;
-	result = (void *)sp->addr; 
+	result = (void *)sp->addr;
 	return result;
 }
 
@@ -147,15 +149,15 @@ getsectdatafromheader(
  */
 uint32_t
 getsectoffsetfromheader(
-    kernel_mach_header_t *mhp,
-    const char *segname,
-    const char *sectname)
+	kernel_mach_header_t *mhp,
+	const char *segname,
+	const char *sectname)
 {
 	const kernel_section_t *sp;
 
 	sp = getsectbynamefromheader(mhp, segname, sectname);
-	if(sp == (kernel_section_t *)0){
-	    return(0);
+	if (sp == (kernel_section_t *)0) {
+		return 0;
 	}
 
 	return sp->offset;
@@ -169,7 +171,7 @@ getsectoffsetfromheader(
  */
 void *
 getsegdatafromheader(
-    kernel_mach_header_t *mhp,
+	kernel_mach_header_t *mhp,
 	const char *segname,
 	unsigned long *size)
 {
@@ -177,9 +179,9 @@ getsegdatafromheader(
 	void *result;
 
 	sc = getsegbynamefromheader(mhp, segname);
-	if(sc == (kernel_segment_command_t *)0){
-	    *size = 0;
-	    return((char *)0);
+	if (sc == (kernel_segment_command_t *)0) {
+		*size = 0;
+		return (char *)0;
 	}
 	*size = sc->vmsize;
 	result = (void *)sc->vmaddr;
@@ -195,35 +197,37 @@ getsegdatafromheader(
  */
 kernel_section_t *
 getsectbynamefromheader(
-    kernel_mach_header_t *mhp,
-    const char *segname,
-    const char *sectname)
+	kernel_mach_header_t *mhp,
+	const char *segname,
+	const char *sectname)
 {
 	kernel_segment_command_t *sgp;
 	kernel_section_t *sp;
 	unsigned long i, j;
 
 	sgp = (kernel_segment_command_t *)
-	      ((uintptr_t)mhp + sizeof(kernel_mach_header_t));
-	for(i = 0; i < mhp->ncmds; i++){
-	    if(sgp->cmd == LC_SEGMENT_KERNEL)
-		if(strncmp(sgp->segname, segname, sizeof(sgp->segname)) == 0 ||
-		   mhp->filetype == MH_OBJECT){
-		    sp = (kernel_section_t *)((uintptr_t)sgp +
-			 sizeof(kernel_segment_command_t));
-		    for(j = 0; j < sgp->nsects; j++){
-			if(strncmp(sp->sectname, sectname,
-			   sizeof(sp->sectname)) == 0 &&
-			   strncmp(sp->segname, segname,
-			   sizeof(sp->segname)) == 0)
-			    return(sp);
-			sp = (kernel_section_t *)((uintptr_t)sp +
-			     sizeof(kernel_section_t));
-		    }
+	    ((uintptr_t)mhp + sizeof(kernel_mach_header_t));
+	for (i = 0; i < mhp->ncmds; i++) {
+		if (sgp->cmd == LC_SEGMENT_KERNEL) {
+			if (strncmp(sgp->segname, segname, sizeof(sgp->segname)) == 0 ||
+			    mhp->filetype == MH_OBJECT) {
+				sp = (kernel_section_t *)((uintptr_t)sgp +
+				    sizeof(kernel_segment_command_t));
+				for (j = 0; j < sgp->nsects; j++) {
+					if (strncmp(sp->sectname, sectname,
+					    sizeof(sp->sectname)) == 0 &&
+					    strncmp(sp->segname, segname,
+					    sizeof(sp->segname)) == 0) {
+						return sp;
+					}
+					sp = (kernel_section_t *)((uintptr_t)sp +
+					    sizeof(kernel_section_t));
+				}
+			}
 		}
-	    sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
+		sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
 	}
-	return((kernel_section_t *)NULL);
+	return (kernel_section_t *)NULL;
 }
 
 /*
@@ -231,18 +235,19 @@ getsectbynamefromheader(
  */
 kernel_segment_command_t *
 getsegbynamefromheader(
-	kernel_mach_header_t	*header,
-	const char		*seg_name)
+	kernel_mach_header_t    *header,
+	const char              *seg_name)
 {
 	kernel_segment_command_t *sgp;
 	unsigned long i;
 
 	sgp = (kernel_segment_command_t *)
-		((uintptr_t)header + sizeof(kernel_mach_header_t));
-	for (i = 0; i < header->ncmds; i++){
-		if (   sgp->cmd == LC_SEGMENT_KERNEL
-		    && !strncmp(sgp->segname, seg_name, sizeof(sgp->segname)))
+	    ((uintptr_t)header + sizeof(kernel_mach_header_t));
+	for (i = 0; i < header->ncmds; i++) {
+		if (sgp->cmd == LC_SEGMENT_KERNEL
+		    && !strncmp(sgp->segname, seg_name, sizeof(sgp->segname))) {
 			return sgp;
+		}
 		sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
 	}
 	return (kernel_segment_command_t *)NULL;
@@ -254,22 +259,23 @@ getsegbynamefromheader(
 kernel_segment_command_t *
 firstseg(void)
 {
-    return firstsegfromheader(&_mh_execute_header);
+	return firstsegfromheader(&_mh_execute_header);
 }
 
 kernel_segment_command_t *
 firstsegfromheader(kernel_mach_header_t *header)
 {
-    u_int i = 0;
-    kernel_segment_command_t *sgp = (kernel_segment_command_t *)
-        ((uintptr_t)header + sizeof(*header));
+	u_int i = 0;
+	kernel_segment_command_t *sgp = (kernel_segment_command_t *)
+	    ((uintptr_t)header + sizeof(*header));
 
-    for (i = 0; i < header->ncmds; i++){
-        if (sgp->cmd == LC_SEGMENT_KERNEL)
-            return sgp;
-        sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
-    }
-    return (kernel_segment_command_t *)NULL;
+	for (i = 0; i < header->ncmds; i++) {
+		if (sgp->cmd == LC_SEGMENT_KERNEL) {
+			return sgp;
+		}
+		sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
+	}
+	return (kernel_segment_command_t *)NULL;
 }
 
 /*
@@ -279,30 +285,32 @@ firstsegfromheader(kernel_mach_header_t *header)
  */
 kernel_segment_command_t *
 nextsegfromheader(
-        kernel_mach_header_t	*header,
-        kernel_segment_command_t	*seg)
+	kernel_mach_header_t    *header,
+	kernel_segment_command_t        *seg)
 {
-    u_int i = 0;
-    kernel_segment_command_t *sgp = (kernel_segment_command_t *)
-        ((uintptr_t)header + sizeof(*header));
+	u_int i = 0;
+	kernel_segment_command_t *sgp = (kernel_segment_command_t *)
+	    ((uintptr_t)header + sizeof(*header));
 
-    /* Find the index of the passed-in segment */
-    for (i = 0; sgp != seg && i < header->ncmds; i++) {
-        sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
-    }
+	/* Find the index of the passed-in segment */
+	for (i = 0; sgp != seg && i < header->ncmds; i++) {
+		sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
+	}
 
-    /* Increment to the next load command */
-    i++;
-    sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
+	/* Increment to the next load command */
+	i++;
+	sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
 
-    /* Return the next segment command, if any */
-    for (; i < header->ncmds; i++) {
-        if (sgp->cmd == LC_SEGMENT_KERNEL) return sgp;
+	/* Return the next segment command, if any */
+	for (; i < header->ncmds; i++) {
+		if (sgp->cmd == LC_SEGMENT_KERNEL) {
+			return sgp;
+		}
 
-        sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
-    }
+		sgp = (kernel_segment_command_t *)((uintptr_t)sgp + sgp->cmdsize);
+	}
 
-    return (kernel_segment_command_t *)NULL;
+	return (kernel_segment_command_t *)NULL;
 }
 
 
@@ -313,7 +321,7 @@ nextsegfromheader(
 kernel_segment_command_t *
 getsegbyname(const char *seg_name)
 {
-	return(getsegbynamefromheader(&_mh_execute_header, seg_name));
+	return getsegbynamefromheader(&_mh_execute_header, seg_name);
 }
 
 /*
@@ -323,11 +331,11 @@ getsegbyname(const char *seg_name)
  */
 kernel_section_t *
 getsectbyname(
-    const char *segname,
-    const char *sectname)
+	const char *segname,
+	const char *sectname)
 {
-	return(getsectbynamefromheader(
-		(kernel_mach_header_t *)&_mh_execute_header, segname, sectname));
+	return getsectbynamefromheader(
+		(kernel_mach_header_t *)&_mh_execute_header, segname, sectname);
 }
 
 /*
@@ -339,10 +347,11 @@ getsectbyname(
 kernel_section_t *
 firstsect(kernel_segment_command_t *sgp)
 {
-	if (!sgp || sgp->nsects == 0)
+	if (!sgp || sgp->nsects == 0) {
 		return (kernel_section_t *)NULL;
+	}
 
-	return (kernel_section_t *)(sgp+1);
+	return (kernel_section_t *)(sgp + 1);
 }
 
 /*
@@ -356,8 +365,9 @@ nextsect(kernel_segment_command_t *sgp, kernel_section_t *sp)
 {
 	kernel_section_t *fsp = firstsect(sgp);
 
-	if (((uintptr_t)(sp - fsp) + 1) >= sgp->nsects)
+	if (((uintptr_t)(sp - fsp) + 1) >= sgp->nsects) {
 		return (kernel_section_t *)NULL;
+	}
 
-	return sp+1;
+	return sp + 1;
 }

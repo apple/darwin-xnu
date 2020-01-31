@@ -24,7 +24,7 @@ include $(DEVELOPER_DIR)/AppleInternal/Makefiles/darwintest/Makefile.common
 OTHER_CFLAGS  = -Weverything -Wno-gnu-union-cast -Wno-missing-field-initializers -Wno-partial-availability
 OTHER_CFLAGS += -Wno-missing-noreturn -Wno-vla -Wno-reserved-id-macro -Wno-documentation-unknown-command
 OTHER_CFLAGS += -Wno-padded -Wno-used-but-marked-unused -Wno-covered-switch-default -Wno-nullability-extension
-OTHER_CFLAGS += -Wno-gnu-empty-initializer -Wno-unused-macros
+OTHER_CFLAGS += -Wno-gnu-empty-initializer -Wno-unused-macros -Wno-undef
 OTHER_CFLAGS += --std=gnu11 -isystem $(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 OTHER_CFLAGS += -UT_NAMESPACE_PREFIX -DT_NAMESPACE_PREFIX=xnu
 OTHER_CFLAGS += -F $(SDKROOT)/System/Library/PrivateFrameworks
@@ -36,6 +36,8 @@ CODESIGN_ALLOCATE:=$(shell xcrun -sdk "$(TARGETSDK)" -find codesign_allocate)
 # target: OTHER_CFLAGS += <my flags>
 
 atm_diagnostic_flag: OTHER_CFLAGS += drop_priv.c
+
+testposixshm: INVALID_ARCHS = i386
 
 avx: INVALID_ARCHS = i386
 avx: OTHER_CFLAGS += -mavx512f -mavx512bw -mavx512vl
@@ -59,25 +61,20 @@ kdebug: OTHER_LDFLAGS = -framework ktrace -ldarwintest_utils -framework kperf
 
 EXCLUDED_SOURCES += drop_priv.c kperf_helpers.c xnu_quick_test_helpers.c
 
-ifeq ($(PLATFORM),iPhoneOS)
-CONFIG_FREEZE_DEFINE:= -DCONFIG_FREEZE
-else
-CONFIG_FREEZE_DEFINE:=
-EXCLUDED_SOURCES += jumbo_va_spaces_28530648.c
+ifneq ($(PLATFORM),iPhoneOS)
+EXCLUDED_SOURCES += jumbo_va_spaces_28530648.c perf_compressor.c memorystatus_freeze_test.c
 endif
 
-perf_compressor: OTHER_CFLAGS += $(CONFIG_FREEZE_DEFINE)
 perf_compressor: OTHER_LDFLAGS += -ldarwintest_utils
 perf_compressor: CODE_SIGN_ENTITLEMENTS=./private_entitlement.plist
 
-memorystatus_freeze_test: OTHER_CFLAGS += $(CONFIG_FREEZE_DEFINE)
 memorystatus_freeze_test: OTHER_LDFLAGS += -ldarwintest_utils
 
 stackshot: OTHER_CFLAGS += -Wno-objc-messaging-id
 stackshot: OTHER_LDFLAGS += -lkdd -framework Foundation
 stackshot: INVALID_ARCHS = i386
 
-telemetry: OTHER_LDFLAGS = -framework ktrace
+telemetry: OTHER_LDFLAGS = -framework ktrace -framework CoreFoundation
 telemetry: INVALID_ARCHS = i386
 
 memorystatus_zone_test: INVALID_ARCHS = i386
@@ -105,7 +102,7 @@ monotonic_core: OTHER_LDFLAGS += -framework ktrace
 monotonic_core: INVALID_ARCHS = i386
 
 perf_exit: perf_exit_proc
-perf_exit: OTHER_LDFLAGS = -framework ktrace
+perf_exit: OTHER_LDFLAGS = -framework ktrace -ldarwintest_utils
 perf_exit: INVALID_ARCHS = i386
 perf_exit: CODE_SIGN_ENTITLEMENTS=./private_entitlement.plist
 
@@ -230,10 +227,30 @@ install-excserver: ;
 exc_resource_threads: excserver
 exc_resource_threads: OTHER_CFLAGS += $(OBJROOT)/excserver.c -I $(OBJROOT)
 
+ifneq (osx,$(TARGET_NAME))
+EXCLUDED_SOURCES += ldt_code32.s ldt.c
+else
+$(OBJROOT)/ldt_mach_exc_server.c:
+	$(MIG) $(CFLAGS) \
+		-user /dev/null \
+		-server $(OBJROOT)/ldt_mach_exc_server.c \
+		-header $(OBJROOT)/ldt_mach_exc.h \
+		mach_exc.defs
+
+ldt: INVALID_ARCHS = i386
+ldt: $(OBJROOT)/ldt_mach_exc_server.c
+ldt: OTHER_CFLAGS += -I $(OBJROOT) $(SRCROOT)/ldt_code32.s -Wl,-pagezero_size,0x1000
+endif
+
 ifneq ($(PLATFORM),BridgeOS)
 EXCLUDED_SOURCES += remote_time.c
 else
 remote_time: INVALID_ARCHS = armv7 armv7s arm64_32
 endif
+
+vm_phys_footprint: OTHER_LDFLAGS += -framework CoreFoundation -framework IOSurface
+vm_phys_footprint_legacy: legacy_footprint.entitlement
+vm_phys_footprint_legacy: OTHER_LDFLAGS += -framework CoreFoundation -framework IOSurface
+vm_phys_footprint_legacy: CODE_SIGN_ENTITLEMENTS=./legacy_footprint.entitlement
 
 include $(DEVELOPER_DIR)/AppleInternal/Makefiles/darwintest/Makefile.targets

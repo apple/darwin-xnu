@@ -71,14 +71,14 @@ __private_extern__
 void
 qsort(void *a, size_t n, size_t es, int (*cmp)(const void *, const void *));
 
-#define	FBT_ADDR2NDX(addr)	((((uintptr_t)(addr)) >> 4) & fbt_probetab_mask)
-#define	FBT_PROBETAB_SIZE	0x8000		/* 32k entries -- 128K total */
+#define FBT_ADDR2NDX(addr)      ((((uintptr_t)(addr)) >> 4) & fbt_probetab_mask)
+#define FBT_PROBETAB_SIZE       0x8000          /* 32k entries -- 128K total */
 
-static int				fbt_probetab_size;
-dtrace_provider_id_t	fbt_id;
-fbt_probe_t				**fbt_probetab;
-int						fbt_probetab_mask;
-static int				fbt_verbose = 0;
+static int                              fbt_probetab_size;
+dtrace_provider_id_t    fbt_id;
+fbt_probe_t                             **fbt_probetab;
+int                                             fbt_probetab_mask;
+static int                              fbt_verbose = 0;
 
 int ignore_fbt_blacklist = 0;
 
@@ -107,7 +107,7 @@ static const char * critical_blacklist[] =
 	"_ZNK6OSData14getBytesNoCopyEv", /* Data::getBytesNoCopy, IOHibernateSystemWake path */
 	"__ZN16IOPlatformExpert11haltRestartEj",
 	"__ZN18IODTPlatformExpert11haltRestartEj",
-	"__ZN9IODTNVRAM13savePanicInfoEPhy"
+	"__ZN9IODTNVRAM13savePanicInfoEPhy",
 	"_disable_preemption",
 	"_enable_preemption",
 	"alternate_debugger_enter",
@@ -280,12 +280,14 @@ static const char * probe_ctx_closure[] =
 	"mt_update_thread",
 	"ovbcopy",
 	"panic",
-	"pmap64_pde",
 	"pmap64_pdpt",
 	"pmap_find_phys",
 	"pmap_get_mapwindow",
 	"pmap_pde",
+	"pmap_pde_internal0",
+	"pmap_pde_internal1",
 	"pmap_pte",
+	"pmap_pte_internal",
 	"pmap_put_mapwindow",
 	"pmap_valid_page",
 	"prf",
@@ -305,9 +307,10 @@ static const char * probe_ctx_closure[] =
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wcast-qual"
-static int _cmp(const void *a, const void *b)
+static int
+_cmp(const void *a, const void *b)
 {
-    return strncmp((const char *)a, *(const char **)b, strlen((const char *)a) + 1);
+	return strncmp((const char *)a, *(const char **)b, strlen((const char *)a) + 1);
 }
 #pragma clang diagnostic pop
 /*
@@ -323,14 +326,15 @@ fbt_module_excluded(struct modctl* ctl)
 	}
 
 	if (ctl->mod_loaded == 0) {
-	        return TRUE;
+		return TRUE;
 	}
 
-        /*
+	/*
 	 * If the user sets this, trust they know what they are doing.
 	 */
-	if (ignore_fbt_blacklist)
+	if (ignore_fbt_blacklist) {
 		return FALSE;
+	}
 
 	/*
 	 * These drivers control low level functions that when traced
@@ -341,35 +345,44 @@ fbt_module_excluded(struct modctl* ctl)
 	 */
 
 #ifdef __x86_64__
-	if (strstr(ctl->mod_modname, "AppleACPIEC") != NULL)
+	if (strstr(ctl->mod_modname, "AppleACPIEC") != NULL) {
 		return TRUE;
+	}
 
-	if (strstr(ctl->mod_modname, "AppleACPIPlatform") != NULL)
+	if (strstr(ctl->mod_modname, "AppleACPIPlatform") != NULL) {
 		return TRUE;
+	}
 
-	if (strstr(ctl->mod_modname, "AppleRTC") != NULL)
+	if (strstr(ctl->mod_modname, "AppleRTC") != NULL) {
 		return TRUE;
+	}
 
-	if (strstr(ctl->mod_modname, "IOACPIFamily") != NULL)
+	if (strstr(ctl->mod_modname, "IOACPIFamily") != NULL) {
 		return TRUE;
+	}
 
-	if (strstr(ctl->mod_modname, "AppleIntelCPUPowerManagement") != NULL)
+	if (strstr(ctl->mod_modname, "AppleIntelCPUPowerManagement") != NULL) {
 		return TRUE;
+	}
 
-	if (strstr(ctl->mod_modname, "AppleProfile") != NULL)
+	if (strstr(ctl->mod_modname, "AppleProfile") != NULL) {
 		return TRUE;
+	}
 
-	if (strstr(ctl->mod_modname, "AppleIntelProfile") != NULL)
+	if (strstr(ctl->mod_modname, "AppleIntelProfile") != NULL) {
 		return TRUE;
+	}
 
-	if (strstr(ctl->mod_modname, "AppleEFI") != NULL)
+	if (strstr(ctl->mod_modname, "AppleEFI") != NULL) {
 		return TRUE;
+	}
 
 #elif __arm__ || __arm64__
 	if (LIT_STRNEQL(ctl->mod_modname, "com.apple.driver.AppleARMPlatform") ||
-	LIT_STRNEQL(ctl->mod_modname, "com.apple.driver.AppleARMPL192VIC") ||
-	LIT_STRNEQL(ctl->mod_modname, "com.apple.driver.AppleInterruptController"))
+	    LIT_STRNEQL(ctl->mod_modname, "com.apple.driver.AppleARMPL192VIC") ||
+	    LIT_STRNEQL(ctl->mod_modname, "com.apple.driver.AppleInterruptController")) {
 		return TRUE;
+	}
 #endif
 
 	return FALSE;
@@ -384,8 +397,9 @@ fbt_excluded(const char* name)
 	/*
 	 * If the user set this, trust they know what they are doing.
 	 */
-	if (ignore_fbt_blacklist)
+	if (ignore_fbt_blacklist) {
 		return FALSE;
+	}
 
 	if (LIT_STRNSTART(name, "dtrace_") && !LIT_STRNSTART(name, "dtrace_safe_")) {
 		/*
@@ -398,117 +412,124 @@ fbt_excluded(const char* name)
 	}
 
 	/*
-	* Place no probes on critical routines (5221096)
-	*/
-	if (bsearch( name, critical_blacklist, CRITICAL_BLACKLIST_COUNT, sizeof(name), _cmp ) != NULL)
+	 * Place no probes on critical routines (5221096)
+	 */
+	if (bsearch( name, critical_blacklist, CRITICAL_BLACKLIST_COUNT, sizeof(name), _cmp ) != NULL) {
 		return TRUE;
+	}
 
 	/*
-	* Place no probes that could be hit in probe context.
-	*/
+	 * Place no probes that could be hit in probe context.
+	 */
 	if (bsearch( name, probe_ctx_closure, PROBE_CTX_CLOSURE_COUNT, sizeof(name), _cmp ) != NULL) {
 		return TRUE;
 	}
 
 	/*
-	* Place no probes that could be hit in probe context.
-	* In the interests of safety, some of these may be overly cautious.
-	* Also exclude very low-level "firmware" class calls.
-	*/
-	if (LIT_STRNSTART(name, "cpu_") ||	/* Coarse */
-		LIT_STRNSTART(name, "platform_") ||	/* Coarse */
-		LIT_STRNSTART(name, "machine_") ||	/* Coarse */
-		LIT_STRNSTART(name, "ml_") ||	/* Coarse */
-		LIT_STRNSTART(name, "PE_") ||	/* Coarse */
-		LIT_STRNSTART(name, "rtc_") ||	/* Coarse */
-		LIT_STRNSTART(name, "_rtc_") ||
-		LIT_STRNSTART(name, "rtclock_") ||
-		LIT_STRNSTART(name, "clock_") ||
-		LIT_STRNSTART(name, "bcopy") ||
-		LIT_STRNSTART(name, "pmap_") ||
-		LIT_STRNSTART(name, "hw_") ||	/* Coarse */
-		LIT_STRNSTART(name, "lapic_") ||	/* Coarse */
-		LIT_STRNSTART(name, "OSAdd") ||
-		LIT_STRNSTART(name, "OSBit") ||
-		LIT_STRNSTART(name, "OSDecrement") ||
-		LIT_STRNSTART(name, "OSIncrement") ||
-		LIT_STRNSTART(name, "OSCompareAndSwap") ||
-		LIT_STRNSTART(name, "etimer_") ||
-		LIT_STRNSTART(name, "dtxnu_kern_") ||
-		LIT_STRNSTART(name, "flush_mmu_tlb_"))
+	 * Place no probes that could be hit in probe context.
+	 * In the interests of safety, some of these may be overly cautious.
+	 * Also exclude very low-level "firmware" class calls.
+	 */
+	if (LIT_STRNSTART(name, "cpu_") ||      /* Coarse */
+	    LIT_STRNSTART(name, "platform_") ||         /* Coarse */
+	    LIT_STRNSTART(name, "machine_") ||          /* Coarse */
+	    LIT_STRNSTART(name, "ml_") ||       /* Coarse */
+	    LIT_STRNSTART(name, "PE_") ||       /* Coarse */
+	    LIT_STRNSTART(name, "rtc_") ||      /* Coarse */
+	    LIT_STRNSTART(name, "_rtc_") ||
+	    LIT_STRNSTART(name, "rtclock_") ||
+	    LIT_STRNSTART(name, "clock_") ||
+	    LIT_STRNSTART(name, "bcopy") ||
+	    LIT_STRNSTART(name, "pmap_") ||
+	    LIT_STRNSTART(name, "hw_") ||       /* Coarse */
+	    LIT_STRNSTART(name, "lapic_") ||            /* Coarse */
+	    LIT_STRNSTART(name, "OSAdd") ||
+	    LIT_STRNSTART(name, "OSBit") ||
+	    LIT_STRNSTART(name, "OSDecrement") ||
+	    LIT_STRNSTART(name, "OSIncrement") ||
+	    LIT_STRNSTART(name, "OSCompareAndSwap") ||
+	    LIT_STRNSTART(name, "etimer_") ||
+	    LIT_STRNSTART(name, "dtxnu_kern_") ||
+	    LIT_STRNSTART(name, "flush_mmu_tlb_")) {
 		return TRUE;
+	}
 	/*
 	 * Fasttrap inner-workings we can't instrument
 	 * on Intel (6230149)
-	*/
+	 */
 	if (LIT_STRNSTART(name, "fasttrap_") ||
-		LIT_STRNSTART(name, "fuword") ||
-		LIT_STRNSTART(name, "suword"))
+	    LIT_STRNSTART(name, "fuword") ||
+	    LIT_STRNSTART(name, "suword")) {
 		return TRUE;
+	}
 
-	if (LIT_STRNSTART(name, "_dtrace"))
+	if (LIT_STRNSTART(name, "_dtrace")) {
 		return TRUE; /* Shims in dtrace.c */
-
-	if (LIT_STRNSTART(name, "hibernate_"))
+	}
+	if (LIT_STRNSTART(name, "hibernate_")) {
 		return TRUE;
+	}
 
 	/*
 	 * Place no probes in the exception handling path
 	 */
 #if __arm__ || __arm64__
 	if (LIT_STRNSTART(name, "fleh_") ||
-		LIT_STRNSTART(name, "sleh_") ||
-		LIT_STRNSTART(name, "timer_state_event") ||
-		LIT_STRNEQL(name, "get_vfp_enabled"))
+	    LIT_STRNSTART(name, "sleh_") ||
+	    LIT_STRNSTART(name, "timer_state_event") ||
+	    LIT_STRNEQL(name, "get_vfp_enabled")) {
 		return TRUE;
+	}
 
 	if (LIT_STRNSTART(name, "_ZNK15OSMetaClassBase8metaCastEPK11OSMetaClass") ||
-		LIT_STRNSTART(name, "_ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass") ||
-		LIT_STRNSTART(name, "_ZNK11OSMetaClass13checkMetaCastEPK15OSMetaClassBase"))
+	    LIT_STRNSTART(name, "_ZN15OSMetaClassBase12safeMetaCastEPKS_PK11OSMetaClass") ||
+	    LIT_STRNSTART(name, "_ZNK11OSMetaClass13checkMetaCastEPK15OSMetaClassBase")) {
 		return TRUE;
+	}
 #endif
 
 #ifdef __x86_64__
 	if (LIT_STRNSTART(name, "machine_") ||
-		LIT_STRNSTART(name, "idt64") ||
-		LIT_STRNSTART(name, "ks_") ||
-		LIT_STRNSTART(name, "hndl_") ||
-		LIT_STRNSTART(name, "_intr_") ||
-		LIT_STRNSTART(name, "mapping_") ||
-		LIT_STRNSTART(name, "tsc_") ||
-		LIT_STRNSTART(name, "pmCPU") ||
-		LIT_STRNSTART(name, "pms") ||
-		LIT_STRNSTART(name, "usimple_") ||
-		LIT_STRNSTART(name, "lck_spin_lock") ||
-		LIT_STRNSTART(name, "lck_spin_unlock") ||
-		LIT_STRNSTART(name, "absolutetime_to_") ||
-		LIT_STRNSTART(name, "commpage_") ||
-		LIT_STRNSTART(name, "ml_") ||
-		LIT_STRNSTART(name, "PE_") ||
-		LIT_STRNSTART(name, "act_machine") ||
-		LIT_STRNSTART(name, "acpi_")  ||
-		LIT_STRNSTART(name, "pal_")) {
+	    LIT_STRNSTART(name, "idt64") ||
+	    LIT_STRNSTART(name, "ks_") ||
+	    LIT_STRNSTART(name, "hndl_") ||
+	    LIT_STRNSTART(name, "_intr_") ||
+	    LIT_STRNSTART(name, "mapping_") ||
+	    LIT_STRNSTART(name, "tsc_") ||
+	    LIT_STRNSTART(name, "pmCPU") ||
+	    LIT_STRNSTART(name, "pms") ||
+	    LIT_STRNSTART(name, "usimple_") ||
+	    LIT_STRNSTART(name, "lck_spin_lock") ||
+	    LIT_STRNSTART(name, "lck_spin_unlock") ||
+	    LIT_STRNSTART(name, "absolutetime_to_") ||
+	    LIT_STRNSTART(name, "commpage_") ||
+	    LIT_STRNSTART(name, "ml_") ||
+	    LIT_STRNSTART(name, "PE_") ||
+	    LIT_STRNSTART(name, "act_machine") ||
+	    LIT_STRNSTART(name, "acpi_") ||
+	    LIT_STRNSTART(name, "pal_")) {
 		return TRUE;
 	}
 	// Don't Steal Mac OS X
-	if (LIT_STRNSTART(name, "dsmos_"))
+	if (LIT_STRNSTART(name, "dsmos_")) {
 		return TRUE;
+	}
 
 #endif
 
 	/*
-	* Place no probes that could be hit on the way to the debugger.
-	*/
+	 * Place no probes that could be hit on the way to the debugger.
+	 */
 	if (LIT_STRNSTART(name, "kdp_") ||
-		LIT_STRNSTART(name, "kdb_") ||
-		LIT_STRNSTART(name, "debug_")) {
+	    LIT_STRNSTART(name, "kdb_") ||
+	    LIT_STRNSTART(name, "debug_")) {
 		return TRUE;
 	}
 
 #if KASAN
 	if (LIT_STRNSTART(name, "kasan") ||
-		LIT_STRNSTART(name, "__kasan") ||
-		LIT_STRNSTART(name, "__asan")) {
+	    LIT_STRNSTART(name, "__kasan") ||
+	    LIT_STRNSTART(name, "__asan")) {
 		return TRUE;
 	}
 #endif
@@ -516,8 +537,9 @@ fbt_excluded(const char* name)
 	/*
 	 * Place no probes that could be hit on the way to a panic.
 	 */
-	if (NULL != strstr(name, "panic_"))
+	if (NULL != strstr(name, "panic_")) {
 		return TRUE;
+	}
 
 	return FALSE;
 }
@@ -552,7 +574,7 @@ fbt_destroy(void *arg, dtrace_id_t id, void *parg)
 		}
 
 		next = fbt->fbtp_next;
-		kmem_free(fbt, sizeof (fbt_probe_t));
+		kmem_free(fbt, sizeof(fbt_probe_t));
 
 		fbt = next;
 	} while (fbt != NULL);
@@ -566,71 +588,69 @@ fbt_enable(void *arg, dtrace_id_t id, void *parg)
 	fbt_probe_t *fbt = parg;
 	struct modctl *ctl = NULL;
 
-    for (; fbt != NULL; fbt = fbt->fbtp_next) {
+	for (; fbt != NULL; fbt = fbt->fbtp_next) {
+		ctl = fbt->fbtp_ctl;
 
-	ctl = fbt->fbtp_ctl;
+		if (!ctl->mod_loaded) {
+			if (fbt_verbose) {
+				cmn_err(CE_NOTE, "fbt is failing for probe %s "
+				    "(module %s unloaded)",
+				    fbt->fbtp_name, ctl->mod_modname);
+			}
 
-	if (!ctl->mod_loaded) {
-		if (fbt_verbose) {
-			cmn_err(CE_NOTE, "fbt is failing for probe %s "
-			    "(module %s unloaded)",
-			    fbt->fbtp_name, ctl->mod_modname);
+			continue;
 		}
 
-		continue;
-	}
+		/*
+		 * Now check that our modctl has the expected load count.  If it
+		 * doesn't, this module must have been unloaded and reloaded -- and
+		 * we're not going to touch it.
+		 */
+		if (ctl->mod_loadcnt != fbt->fbtp_loadcnt) {
+			if (fbt_verbose) {
+				cmn_err(CE_NOTE, "fbt is failing for probe %s "
+				    "(module %s reloaded)",
+				    fbt->fbtp_name, ctl->mod_modname);
+			}
 
-	/*
-	 * Now check that our modctl has the expected load count.  If it
-	 * doesn't, this module must have been unloaded and reloaded -- and
-	 * we're not going to touch it.
-	 */
-	if (ctl->mod_loadcnt != fbt->fbtp_loadcnt) {
-		if (fbt_verbose) {
-			cmn_err(CE_NOTE, "fbt is failing for probe %s "
-			    "(module %s reloaded)",
-			    fbt->fbtp_name, ctl->mod_modname);
+			continue;
 		}
 
-		continue;
-	}
-
-	dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
-	if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
-		if (fbt_verbose) {
-			cmn_err(CE_NOTE, "fbt_enable is failing for probe %s "
-			    "in module %s: tempDTraceTrapHook already occupied.",
-			    fbt->fbtp_name, ctl->mod_modname);
+		dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
+		if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
+			if (fbt_verbose) {
+				cmn_err(CE_NOTE, "fbt_enable is failing for probe %s "
+				    "in module %s: tempDTraceTrapHook already occupied.",
+				    fbt->fbtp_name, ctl->mod_modname);
+			}
+			continue;
 		}
-		continue;
-	}
 
-	if (fbt->fbtp_currentval != fbt->fbtp_patchval) {
+		if (fbt->fbtp_currentval != fbt->fbtp_patchval) {
 #if KASAN
-		/* Since dtrace probes can call into KASan and vice versa, things can get
-		 * very slow if we have a lot of probes. This call will disable the KASan
-		 * fakestack after a threshold of probes is reached. */
-		kasan_fakestack_suspend();
+			/* Since dtrace probes can call into KASan and vice versa, things can get
+			 * very slow if we have a lot of probes. This call will disable the KASan
+			 * fakestack after a threshold of probes is reached. */
+			kasan_fakestack_suspend();
 #endif
 
-		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint,
-								sizeof(fbt->fbtp_patchval));
-		/*
-		 * Make the patched instruction visible via a data + instruction
-		 * cache flush for the platforms that need it
-		 */
-		flush_dcache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_patchval), 0);
-		invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_patchval), 0);
-                fbt->fbtp_currentval = fbt->fbtp_patchval;
+			(void)ml_nofault_copy((vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint,
+			    sizeof(fbt->fbtp_patchval));
+			/*
+			 * Make the patched instruction visible via a data + instruction
+			 * cache flush for the platforms that need it
+			 */
+			flush_dcache((vm_offset_t)fbt->fbtp_patchpoint, (vm_size_t)sizeof(fbt->fbtp_patchval), 0);
+			invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint, (vm_size_t)sizeof(fbt->fbtp_patchval), 0);
+			fbt->fbtp_currentval = fbt->fbtp_patchval;
 
-		ctl->mod_nenabled++;
+			ctl->mod_nenabled++;
+		}
 	}
 
-    }
+	dtrace_membar_consumer();
 
-    dtrace_membar_consumer();
-
-    return (0);
+	return 0;
 }
 
 /*ARGSUSED*/
@@ -642,29 +662,30 @@ fbt_disable(void *arg, dtrace_id_t id, void *parg)
 	struct modctl *ctl = NULL;
 
 	for (; fbt != NULL; fbt = fbt->fbtp_next) {
-	    ctl = fbt->fbtp_ctl;
+		ctl = fbt->fbtp_ctl;
 
-	    if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt))
-		continue;
+		if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt)) {
+			continue;
+		}
 
-	    if (fbt->fbtp_currentval != fbt->fbtp_savedval) {
-		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint,
-								sizeof(fbt->fbtp_savedval));
-		/*
-		 * Make the patched instruction visible via a data + instruction
-		 * cache flush for the platforms that need it
-		 */
-		flush_dcache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_patchval), 0);
-		invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_patchval), 0);
+		if (fbt->fbtp_currentval != fbt->fbtp_savedval) {
+			(void)ml_nofault_copy((vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint,
+			    sizeof(fbt->fbtp_savedval));
+			/*
+			 * Make the patched instruction visible via a data + instruction
+			 * cache flush for the platforms that need it
+			 */
+			flush_dcache((vm_offset_t)fbt->fbtp_patchpoint, (vm_size_t)sizeof(fbt->fbtp_patchval), 0);
+			invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint, (vm_size_t)sizeof(fbt->fbtp_patchval), 0);
 
-		fbt->fbtp_currentval = fbt->fbtp_savedval;
-		ASSERT(ctl->mod_nenabled > 0);
-		ctl->mod_nenabled--;
+			fbt->fbtp_currentval = fbt->fbtp_savedval;
+			ASSERT(ctl->mod_nenabled > 0);
+			ctl->mod_nenabled--;
 
 #if KASAN
-		kasan_fakestack_resume();
+			kasan_fakestack_resume();
 #endif
-	    }
+		}
 	}
 	dtrace_membar_consumer();
 }
@@ -678,21 +699,22 @@ fbt_suspend(void *arg, dtrace_id_t id, void *parg)
 	struct modctl *ctl = NULL;
 
 	for (; fbt != NULL; fbt = fbt->fbtp_next) {
-	    ctl = fbt->fbtp_ctl;
+		ctl = fbt->fbtp_ctl;
 
-	    ASSERT(ctl->mod_nenabled > 0);
-	    if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt))
-		continue;
+		ASSERT(ctl->mod_nenabled > 0);
+		if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt)) {
+			continue;
+		}
 
-	    (void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint,
-								sizeof(fbt->fbtp_savedval));
+		(void)ml_nofault_copy((vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint,
+		    sizeof(fbt->fbtp_savedval));
 
 		/*
 		 * Make the patched instruction visible via a data + instruction
 		 * cache flush for the platforms that need it
 		 */
-		flush_dcache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_savedval), 0);
-		invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_savedval), 0);
+		flush_dcache((vm_offset_t)fbt->fbtp_patchpoint, (vm_size_t)sizeof(fbt->fbtp_savedval), 0);
+		invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint, (vm_size_t)sizeof(fbt->fbtp_savedval), 0);
 
 		fbt->fbtp_currentval = fbt->fbtp_savedval;
 	}
@@ -709,32 +731,33 @@ fbt_resume(void *arg, dtrace_id_t id, void *parg)
 	struct modctl *ctl = NULL;
 
 	for (; fbt != NULL; fbt = fbt->fbtp_next) {
-	    ctl = fbt->fbtp_ctl;
+		ctl = fbt->fbtp_ctl;
 
-	    ASSERT(ctl->mod_nenabled > 0);
-	    if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt))
-		continue;
-
-	    dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
-	    if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
-		if (fbt_verbose) {
-			cmn_err(CE_NOTE, "fbt_resume is failing for probe %s "
-			    "in module %s: tempDTraceTrapHook already occupied.",
-			    fbt->fbtp_name, ctl->mod_modname);
+		ASSERT(ctl->mod_nenabled > 0);
+		if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt)) {
+			continue;
 		}
-		return;
-	    }
 
-	    (void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint,
-								sizeof(fbt->fbtp_patchval));
+		dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
+		if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
+			if (fbt_verbose) {
+				cmn_err(CE_NOTE, "fbt_resume is failing for probe %s "
+				    "in module %s: tempDTraceTrapHook already occupied.",
+				    fbt->fbtp_name, ctl->mod_modname);
+			}
+			return;
+		}
+
+		(void)ml_nofault_copy((vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint,
+		    sizeof(fbt->fbtp_patchval));
 
 		/*
 		 * Make the patched instruction visible via a data + instruction cache flush.
 		 */
-		flush_dcache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_patchval), 0);
-		invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_patchval), 0);
+		flush_dcache((vm_offset_t)fbt->fbtp_patchpoint, (vm_size_t)sizeof(fbt->fbtp_patchval), 0);
+		invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint, (vm_size_t)sizeof(fbt->fbtp_patchval), 0);
 
-  	    fbt->fbtp_currentval = fbt->fbtp_patchval;
+		fbt->fbtp_currentval = fbt->fbtp_patchval;
 	}
 
 	dtrace_membar_consumer();
@@ -748,9 +771,8 @@ fbt_provide_module_user_syms(struct modctl *ctl)
 
 	dtrace_module_symbols_t* module_symbols = ctl->mod_user_symbols;
 	if (module_symbols) {
-		for (i=0; i<module_symbols->dtmodsyms_count; i++) {
-
-		        /*
+		for (i = 0; i < module_symbols->dtmodsyms_count; i++) {
+			/*
 			 * symbol->dtsym_addr (the symbol address) passed in from
 			 * user space, is already slid for both kexts and kernel.
 			 */
@@ -759,23 +781,27 @@ fbt_provide_module_user_syms(struct modctl *ctl)
 			char* name = symbol->dtsym_name;
 
 			/* Lop off omnipresent leading underscore. */
-			if (*name == '_')
+			if (*name == '_') {
 				name += 1;
+			}
 
-			if (MOD_IS_MACH_KERNEL(ctl) && fbt_excluded(name))
+			if (MOD_IS_MACH_KERNEL(ctl) && fbt_excluded(name)) {
 				continue;
+			}
 
 			/*
 			 * Ignore symbols with a null address
 			 */
-			if (!symbol->dtsym_addr)
+			if (!symbol->dtsym_addr) {
 				continue;
+			}
 
 			/*
 			 * Ignore symbols not part of this module
 			 */
-			if (!dtrace_addr_in_module((void*)symbol->dtsym_addr, ctl))
+			if (!dtrace_addr_in_module((void*)symbol->dtsym_addr, ctl)) {
 				continue;
+			}
 
 			fbt_provide_probe(ctl, modname, name, (machine_inst_t*)(uintptr_t)symbol->dtsym_addr, (machine_inst_t*)(uintptr_t)(symbol->dtsym_addr + symbol->dtsym_size));
 		}
@@ -797,19 +823,23 @@ fbt_provide_kernel_section(struct modctl *ctl, kernel_section_t *sect, kernel_nl
 		const char           *name = strings + sym[i].n_un.n_strx;
 		uint64_t limit;
 
-		if (sym[i].n_value < sect_start || sym[i].n_value > sect_end)
+		if (sym[i].n_value < sect_start || sym[i].n_value > sect_end) {
 			continue;
+		}
 
 		/* Check that the symbol is a global and that it has a name. */
-		if (((N_SECT | N_EXT) != n_type && (N_ABS | N_EXT) != n_type))
+		if (((N_SECT | N_EXT) != n_type && (N_ABS | N_EXT) != n_type)) {
 			continue;
+		}
 
-		if (0 == sym[i].n_un.n_strx)	/* iff a null, "", name. */
+		if (0 == sym[i].n_un.n_strx) {  /* iff a null, "", name. */
 			continue;
+		}
 
 		/* Lop off omnipresent leading underscore. */
-		if (*name == '_')
+		if (*name == '_') {
 			name += 1;
+		}
 
 #if defined(__arm__)
 		// Skip non-thumb functions on arm32
@@ -818,8 +848,9 @@ fbt_provide_kernel_section(struct modctl *ctl, kernel_section_t *sect, kernel_nl
 		}
 #endif /* defined(__arm__) */
 
-		if (MOD_IS_MACH_KERNEL(ctl) && fbt_excluded(name))
+		if (MOD_IS_MACH_KERNEL(ctl) && fbt_excluded(name)) {
 			continue;
+		}
 
 		/*
 		 * Find the function boundary by looking at either the
@@ -827,14 +858,12 @@ fbt_provide_kernel_section(struct modctl *ctl, kernel_section_t *sect, kernel_nl
 		 */
 		if (i == nsyms - 1) {
 			limit = sect_end;
-		}
-		else {
+		} else {
 			limit = sym[i + 1].n_value;
 		}
 
 		fbt_provide_probe(ctl, ctl->mod_modname, name, (machine_inst_t*)sym[i].n_value, (machine_inst_t*)limit);
 	}
-
 }
 
 static int
@@ -856,15 +885,17 @@ fbt_provide_module_kernel_syms(struct modctl *ctl)
 	unsigned int i;
 	size_t symlen;
 
-	if (mh->magic != MH_MAGIC_KERNEL)
+	if (mh->magic != MH_MAGIC_KERNEL) {
 		return;
+	}
 
 	cmd = (struct load_command *) &mh[1];
 	for (i = 0; i < mh->ncmds; i++) {
 		if (cmd->cmd == LC_SEGMENT_KERNEL) {
 			kernel_segment_command_t *orig_sg = (kernel_segment_command_t *) cmd;
-			if (LIT_STRNEQL(orig_sg->segname, SEG_LINKEDIT))
+			if (LIT_STRNEQL(orig_sg->segname, SEG_LINKEDIT)) {
 				linkedit = orig_sg;
+			}
 		} else if (cmd->cmd == LC_SYMTAB) {
 			symtab = (struct symtab_command *) cmd;
 		}
@@ -914,11 +945,13 @@ fbt_provide_module(void *arg, struct modctl *ctl)
 	LCK_MTX_ASSERT(&mod_lock, LCK_MTX_ASSERT_OWNED);
 
 	// Update the "ignore blacklist" bit
-	if (ignore_fbt_blacklist)
+	if (ignore_fbt_blacklist) {
 		ctl->mod_flags |= MODCTL_FBT_PROVIDE_BLACKLISTED_PROBES;
+	}
 
-	if (MOD_FBT_DONE(ctl))
+	if (MOD_FBT_DONE(ctl)) {
 		return;
+	}
 
 	if (fbt_module_excluded(ctl)) {
 		ctl->mod_flags |= MODCTL_FBT_INVALID;
@@ -928,41 +961,44 @@ fbt_provide_module(void *arg, struct modctl *ctl)
 	if (MOD_HAS_KERNEL_SYMBOLS(ctl)) {
 		fbt_provide_module_kernel_syms(ctl);
 		ctl->mod_flags |= MODCTL_FBT_PROBES_PROVIDED;
-		if (MOD_FBT_PROVIDE_BLACKLISTED_PROBES(ctl))
+		if (MOD_FBT_PROVIDE_BLACKLISTED_PROBES(ctl)) {
 			ctl->mod_flags |= MODCTL_FBT_BLACKLISTED_PROBES_PROVIDED;
+		}
 		return;
 	}
 
 	if (MOD_HAS_USERSPACE_SYMBOLS(ctl)) {
 		fbt_provide_module_user_syms(ctl);
 		ctl->mod_flags |= MODCTL_FBT_PROBES_PROVIDED;
-		if (MOD_FBT_PROVIDE_PRIVATE_PROBES(ctl))
+		if (MOD_FBT_PROVIDE_PRIVATE_PROBES(ctl)) {
 			ctl->mod_flags |= MODCTL_FBT_PRIVATE_PROBES_PROVIDED;
-		if (MOD_FBT_PROVIDE_BLACKLISTED_PROBES(ctl))
+		}
+		if (MOD_FBT_PROVIDE_BLACKLISTED_PROBES(ctl)) {
 			ctl->mod_flags |= MODCTL_FBT_BLACKLISTED_PROBES_PROVIDED;
+		}
 		return;
 	}
 }
 
 static dtrace_pattr_t fbt_attr = {
-{ DTRACE_STABILITY_EVOLVING, DTRACE_STABILITY_EVOLVING, DTRACE_CLASS_ISA },
-{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
-{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
-{ DTRACE_STABILITY_EVOLVING, DTRACE_STABILITY_EVOLVING, DTRACE_CLASS_ISA },
-{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_ISA },
+	{ DTRACE_STABILITY_EVOLVING, DTRACE_STABILITY_EVOLVING, DTRACE_CLASS_ISA },
+	{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
+	{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
+	{ DTRACE_STABILITY_EVOLVING, DTRACE_STABILITY_EVOLVING, DTRACE_CLASS_ISA },
+	{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_ISA },
 };
 
 static dtrace_pops_t fbt_pops = {
-	.dtps_provide =		NULL,
-	.dtps_provide_module =	fbt_provide_module,
-	.dtps_enable =		fbt_enable,
-	.dtps_disable =		fbt_disable,
-	.dtps_suspend =		fbt_suspend,
-	.dtps_resume =		fbt_resume,
-	.dtps_getargdesc =	NULL, /* APPLE NOTE: fbt_getargdesc implemented in userspace */
-	.dtps_getargval =	NULL,
-	.dtps_usermode =	NULL,
-	.dtps_destroy =		fbt_destroy
+	.dtps_provide =         NULL,
+	.dtps_provide_module =  fbt_provide_module,
+	.dtps_enable =          fbt_enable,
+	.dtps_disable =         fbt_disable,
+	.dtps_suspend =         fbt_suspend,
+	.dtps_resume =          fbt_resume,
+	.dtps_getargdesc =      NULL, /* APPLE NOTE: fbt_getargdesc implemented in userspace */
+	.dtps_getargval =       NULL,
+	.dtps_usermode =        NULL,
+	.dtps_destroy =         fbt_destroy
 };
 
 static void
@@ -970,7 +1006,7 @@ fbt_cleanup(dev_info_t *devi)
 {
 	dtrace_invop_remove(fbt_invop);
 	ddi_remove_minor_node(devi, NULL);
-	kmem_free(fbt_probetab, fbt_probetab_size * sizeof (fbt_probe_t *));
+	kmem_free(fbt_probetab, fbt_probetab_size * sizeof(fbt_probe_t *));
 	fbt_probetab = NULL;
 	fbt_probetab_mask = 0;
 }
@@ -978,12 +1014,13 @@ fbt_cleanup(dev_info_t *devi)
 static int
 fbt_attach(dev_info_t *devi)
 {
-	if (fbt_probetab_size == 0)
+	if (fbt_probetab_size == 0) {
 		fbt_probetab_size = FBT_PROBETAB_SIZE;
+	}
 
 	fbt_probetab_mask = fbt_probetab_size - 1;
 	fbt_probetab =
-	    kmem_zalloc(fbt_probetab_size * sizeof (fbt_probe_t *), KM_SLEEP);
+	    kmem_zalloc(fbt_probetab_size * sizeof(fbt_probe_t *), KM_SLEEP);
 
 	dtrace_invop_add(fbt_invop);
 
@@ -992,10 +1029,10 @@ fbt_attach(dev_info_t *devi)
 	    dtrace_register("fbt", &fbt_attr, DTRACE_PRIV_KERNEL, NULL,
 	    &fbt_pops, NULL, &fbt_id) != 0) {
 		fbt_cleanup(devi);
-		return (DDI_FAILURE);
+		return DDI_FAILURE;
 	}
 
-	return (DDI_SUCCESS);
+	return DDI_SUCCESS;
 }
 
 static d_open_t _fbt_open;
@@ -1019,11 +1056,13 @@ sysctl_dtrace_ignore_fbt_blacklist SYSCTL_HANDLER_ARGS
 	int value = *(int*)arg1;
 
 	err = sysctl_io_number(req, value, sizeof(value), &value, NULL);
-	if (err)
-		return (err);
+	if (err) {
+		return err;
+	}
 	if (req->newptr) {
-		if (!(value == 0 || value == 1))
-			return (ERANGE);
+		if (!(value == 0 || value == 1)) {
+			return ERANGE;
+		}
 
 		/*
 		 * We do not allow setting the blacklist back to on, as we have no way
@@ -1036,19 +1075,20 @@ sysctl_dtrace_ignore_fbt_blacklist SYSCTL_HANDLER_ARGS
 		 * are permanent and do not change after boot.
 		 */
 		if (value != 1 || dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_NEVER ||
-		  dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_ALWAYS_FROM_KERNEL)
-			return (EPERM);
+		    dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_ALWAYS_FROM_KERNEL) {
+			return EPERM;
+		}
 
 		ignore_fbt_blacklist = 1;
 	}
 
-	return (0);
+	return 0;
 }
 
 SYSCTL_PROC(_kern_dtrace, OID_AUTO, ignore_fbt_blacklist,
-	CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
-	&ignore_fbt_blacklist, 0,
-	sysctl_dtrace_ignore_fbt_blacklist, "I", "fbt provider ignore blacklist");
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &ignore_fbt_blacklist, 0,
+    sysctl_dtrace_ignore_fbt_blacklist, "I", "fbt provider ignore blacklist");
 
 /*
  * A struct describing which functions will get invoked for certain
@@ -1056,20 +1096,20 @@ SYSCTL_PROC(_kern_dtrace, OID_AUTO, ignore_fbt_blacklist,
  */
 static struct cdevsw fbt_cdevsw =
 {
-	_fbt_open,		/* open */
-	eno_opcl,			/* close */
-	eno_rdwrt,			/* read */
-	eno_rdwrt,			/* write */
-	eno_ioctl,			/* ioctl */
+	_fbt_open,              /* open */
+	eno_opcl,                       /* close */
+	eno_rdwrt,                      /* read */
+	eno_rdwrt,                      /* write */
+	eno_ioctl,                      /* ioctl */
 	(stop_fcn_t *)nulldev, /* stop */
 	(reset_fcn_t *)nulldev, /* reset */
-	NULL,				/* tty's */
-	eno_select,			/* select */
-	eno_mmap,			/* mmap */
-	eno_strat,			/* strategy */
-	eno_getc,			/* getc */
-	eno_putc,			/* putc */
-	0					/* type */
+	NULL,                           /* tty's */
+	eno_select,                     /* select */
+	eno_mmap,                       /* mmap */
+	eno_strat,                      /* strategy */
+	eno_getc,                       /* getc */
+	eno_putc,                       /* putc */
+	0                                       /* type */
 };
 
 #undef kmem_alloc /* from its binding to dt_kmem_alloc glue */
@@ -1086,7 +1126,7 @@ fbt_init( void )
 		return;
 	}
 
-	PE_parse_boot_argn("IgnoreFBTBlacklist", &ignore_fbt_blacklist, sizeof (ignore_fbt_blacklist));
+	PE_parse_boot_argn("IgnoreFBTBlacklist", &ignore_fbt_blacklist, sizeof(ignore_fbt_blacklist));
 
 	fbt_attach((dev_info_t*)(uintptr_t)majdevno);
 }

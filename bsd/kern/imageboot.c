@@ -2,7 +2,7 @@
  * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -75,12 +75,12 @@ static boolean_t imageboot_setup_new(void);
 __private_extern__ int
 imageboot_format_is_valid(const char *root_path)
 {
-	return (strncmp(root_path, kIBFilePrefix,
-				strlen(kIBFilePrefix)) == 0);
+	return strncmp(root_path, kIBFilePrefix,
+	           strlen(kIBFilePrefix)) == 0;
 }
 
 static void
-vnode_get_and_drop_always(vnode_t vp) 
+vnode_get_and_drop_always(vnode_t vp)
 {
 	vnode_getalways(vp);
 	vnode_rele(vp);
@@ -92,18 +92,19 @@ imageboot_needed(void)
 {
 	int result = 0;
 	char *root_path = NULL;
-	
+
 	DBG_TRACE("%s: checking for presence of root path\n", __FUNCTION__);
 
 	MALLOC_ZONE(root_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	if (root_path == NULL)
+	if (root_path == NULL) {
 		panic("%s: M_NAMEI zone exhausted", __FUNCTION__);
+	}
 
 	/* Check for first layer */
 	if (!(PE_parse_boot_argn("rp0", root_path, MAXPATHLEN) ||
-			PE_parse_boot_argn("rp", root_path, MAXPATHLEN) ||
-			PE_parse_boot_argn(IMAGEBOOT_ROOT_ARG, root_path, MAXPATHLEN) ||
-			PE_parse_boot_argn(IMAGEBOOT_AUTHROOT_ARG, root_path, MAXPATHLEN))) {
+	    PE_parse_boot_argn("rp", root_path, MAXPATHLEN) ||
+	    PE_parse_boot_argn(IMAGEBOOT_ROOT_ARG, root_path, MAXPATHLEN) ||
+	    PE_parse_boot_argn(IMAGEBOOT_AUTHROOT_ARG, root_path, MAXPATHLEN))) {
 		goto out;
 	}
 
@@ -118,7 +119,7 @@ imageboot_needed(void)
 
 	/* Check for second layer */
 	if (!(PE_parse_boot_argn("rp1", root_path, MAXPATHLEN) ||
-			PE_parse_boot_argn(IMAGEBOOT_CONTAINER_ARG, root_path, MAXPATHLEN))) {
+	    PE_parse_boot_argn(IMAGEBOOT_CONTAINER_ARG, root_path, MAXPATHLEN))) {
 		goto out;
 	}
 
@@ -127,31 +128,31 @@ imageboot_needed(void)
 		DBG_TRACE("%s: Found %s\n", __FUNCTION__, root_path);
 	} else {
 		panic("%s: Invalid URL scheme for %s\n",
-				__FUNCTION__, root_path);
+		    __FUNCTION__, root_path);
 	}
 
 out:
 	FREE_ZONE(root_path, MAXPATHLEN, M_NAMEI);
 
-	return (result);
+	return result;
 }
 
 
 /*
  * Swaps in new root filesystem based on image path.
  * Current root filesystem is removed from mount list and
- * tagged MNTK_BACKS_ROOT, MNT_ROOTFS is cleared on it, and 
- * "rootvnode" is reset.  Root vnode of currentroot filesystem 
+ * tagged MNTK_BACKS_ROOT, MNT_ROOTFS is cleared on it, and
+ * "rootvnode" is reset.  Root vnode of currentroot filesystem
  * is returned with usecount (no iocount).
  */
 __private_extern__ int
 imageboot_mount_image(const char *root_path, int height)
 {
-	dev_t       	dev;
-	int 		error;
-	vnode_t 	old_rootvnode = NULL;
-	vnode_t 	newdp;
-	mount_t 	new_rootfs;
+	dev_t           dev;
+	int             error;
+	vnode_t         old_rootvnode = NULL;
+	vnode_t         newdp;
+	mount_t         new_rootfs;
 
 	error = di_root_image(root_path, rootdevice, DEVMAXNAMESIZE, &dev);
 	if (error) {
@@ -170,18 +171,19 @@ imageboot_mount_image(const char *root_path, int height)
 	 * Get the vnode for '/'.
 	 * Set fdp->fd_fd.fd_cdir to reference it.
 	 */
-	if (VFS_ROOT(TAILQ_LAST(&mountlist,mntlist), &newdp, vfs_context_kernel()))
+	if (VFS_ROOT(TAILQ_LAST(&mountlist, mntlist), &newdp, vfs_context_kernel())) {
 		panic("%s: cannot find root vnode", __FUNCTION__);
+	}
 
 	if (rootvnode != NULL) {
 		/* remember the old rootvnode, but remove it from mountlist */
-		mount_t 	old_rootfs;
+		mount_t         old_rootfs;
 
 		old_rootvnode = rootvnode;
 		old_rootfs = rootvnode->v_mount;
-	
+
 		mount_list_remove(old_rootfs);
-	
+
 		mount_lock(old_rootfs);
 #ifdef CONFIG_IMGSRC_ACCESS
 		old_rootfs->mnt_kern_flag |= MNTK_BACKS_ROOT;
@@ -205,14 +207,14 @@ imageboot_mount_image(const char *root_path, int height)
 
 	if (old_rootvnode != NULL) {
 #ifdef CONFIG_IMGSRC_ACCESS
-	    if (height >= 0 && PE_imgsrc_mount_supported()) {
-		imgsrc_rootvnodes[height] = old_rootvnode;
-	    } else {
+		if (height >= 0 && PE_imgsrc_mount_supported()) {
+			imgsrc_rootvnodes[height] = old_rootvnode;
+		} else {
+			vnode_get_and_drop_always(old_rootvnode);
+		}
+#else
+		height = 0; /* keep the compiler from complaining */
 		vnode_get_and_drop_always(old_rootvnode);
-	    }
-#else 
-	    height = 0; /* keep the compiler from complaining */
-	    vnode_get_and_drop_always(old_rootvnode);
 #endif /* CONFIG_IMGSRC_ACCESS */
 	}
 	return 0;
@@ -243,7 +245,7 @@ key_byteswap(void *_dst, const void *_src, size_t len)
 
 	len = len / sizeof(uint32_t);
 	for (size_t i = 0; i < len; i++) {
-		dst[len-i-1] = OSSwapInt32(src[i]);
+		dst[len - i - 1] = OSSwapInt32(src[i]);
 	}
 }
 
@@ -348,17 +350,17 @@ validate_signature(const uint8_t *key_msb, size_t keylen, uint8_t *sig_msb, size
 	key_byteswap(sig, sig_msb, siglen);
 
 	err = rsa_make_pub(rsa_ctx,
-			sizeof(exponent), exponent,
-			CHUNKLIST_PUBKEY_LEN, modulus);
+	    sizeof(exponent), exponent,
+	    CHUNKLIST_PUBKEY_LEN, modulus);
 	if (err) {
 		AUTHPRNT("rsa_make_pub() failed");
 		goto out;
 	}
 
 	err = rsa_verify_pkcs1v15(rsa_ctx, CC_DIGEST_OID_SHA256,
-			SHA256_DIGEST_LENGTH, digest,
-			siglen, sig,
-			&sig_valid);
+	    SHA256_DIGEST_LENGTH, digest,
+	    siglen, sig,
+	    &sig_valid);
 	if (err) {
 		sig_valid = false;
 		AUTHPRNT("rsa_verify() failed");
@@ -397,26 +399,26 @@ validate_chunklist(void *buf, size_t len)
 
 	/* recognized file format? */
 	if (hdr->cl_magic != CHUNKLIST_MAGIC ||
-			hdr->cl_file_ver != CHUNKLIST_FILE_VERSION_10 ||
-			hdr->cl_chunk_method != CHUNKLIST_SIGNATURE_METHOD_10 ||
-			hdr->cl_sig_method != CHUNKLIST_SIGNATURE_METHOD_10) {
+	    hdr->cl_file_ver != CHUNKLIST_FILE_VERSION_10 ||
+	    hdr->cl_chunk_method != CHUNKLIST_SIGNATURE_METHOD_10 ||
+	    hdr->cl_sig_method != CHUNKLIST_SIGNATURE_METHOD_10) {
 		AUTHPRNT("unrecognized chunklist format");
 		return EINVAL;
 	}
 
 	/* does the chunk list fall within the bounds of the buffer? */
 	if (os_mul_and_add_overflow(hdr->cl_chunk_count, sizeof(struct chunklist_chunk), hdr->cl_chunk_offset, &chunks_end) ||
-			hdr->cl_chunk_offset < sizeof(struct chunklist_hdr) || chunks_end > len) {
+	    hdr->cl_chunk_offset < sizeof(struct chunklist_hdr) || chunks_end > len) {
 		AUTHPRNT("invalid chunk_count (%llu) or chunk_offset (%llu)",
-				hdr->cl_chunk_count, hdr->cl_chunk_offset);
+		    hdr->cl_chunk_count, hdr->cl_chunk_offset);
 		return EINVAL;
 	}
 
 	/* does the signature fall within the bounds of the buffer? */
 	if (os_add_overflow(hdr->cl_sig_offset, sizeof(struct chunklist_sig), &sig_end) ||
-			hdr->cl_sig_offset < sizeof(struct chunklist_hdr) ||
-			hdr->cl_sig_offset < chunks_end ||
-			hdr->cl_sig_offset > len) {
+	    hdr->cl_sig_offset < sizeof(struct chunklist_hdr) ||
+	    hdr->cl_sig_offset < chunks_end ||
+	    hdr->cl_sig_offset > len) {
 		AUTHPRNT("invalid signature offset (%llu)", hdr->cl_sig_offset);
 		return EINVAL;
 	}
@@ -439,7 +441,7 @@ validate_chunklist(void *buf, size_t len)
 	for (size_t i = 0; i < CHUNKLIST_NPUBKEYS; i++) {
 		const struct chunklist_pubkey *key = &chunklist_pubkeys[i];
 		err = validate_signature(key->key, CHUNKLIST_PUBKEY_LEN,
-				buf + hdr->cl_sig_offset, sigsz, sha_digest);
+		    buf + hdr->cl_sig_offset, sigsz, sha_digest);
 		if (err == 0) {
 			AUTHDBG("validated chunklist signature with key %lu (prod=%d)", i, key->isprod);
 			valid_sig = key->isprod;
@@ -646,7 +648,7 @@ authenticate_root(const char *root_path)
 {
 	char *chunklist_path = NULL;
 	void *chunklist_buf = NULL;
-	size_t chunklist_len = 32*1024*1024UL;
+	size_t chunklist_len = 32 * 1024 * 1024UL;
 	int err = 0;
 
 	err = construct_chunklist_path(root_path, &chunklist_path);
@@ -691,7 +693,7 @@ authenticate_root(const char *root_path)
 	/* everything checked out - go ahead and mount this */
 	AUTHDBG("root image authenticated");
 
- out:
+out:
 	kfree_safe(chunklist_buf);
 	kfree_safe(chunklist_path);
 	return err;
@@ -726,7 +728,7 @@ getuuidfromheader_safe(const void *buf, size_t bufsz, size_t *uuidsz)
 		}
 
 		if (os_add_overflow(cmd->cmdsize, offset, &offset) ||
-				offset > bufsz - sizeof(struct uuid_command)) {
+		    offset > bufsz - sizeof(struct uuid_command)) {
 			return NULL;
 		}
 	}
@@ -745,7 +747,7 @@ auth_version_check(void)
 {
 	int err = 0;
 	void *buf = NULL;
-	size_t bufsz = 4*1024*1024UL;
+	size_t bufsz = 4 * 1024 * 1024UL;
 
 	/* get the UUID of the libkern in /S/L/E */
 
@@ -901,7 +903,7 @@ imageboot_mount_ramdisk(const char *path)
 	}
 
 	/* Switch to new root vnode */
-	if (VFS_ROOT(TAILQ_LAST(&mountlist,mntlist), &newdp, vfs_context_kernel())) {
+	if (VFS_ROOT(TAILQ_LAST(&mountlist, mntlist), &newdp, vfs_context_kernel())) {
 		panic("%s: cannot find root vnode", __func__);
 	}
 	rootvnode = newdp;
@@ -1004,7 +1006,7 @@ imageboot_setup_new()
 
 	if (error) {
 		panic("Failed to mount root image (err=%d, auth=%d, ramdisk=%d)\n",
-				error, auth_root, ramdisk_root);
+		    error, auth_root, ramdisk_root);
 	}
 
 	if (auth_root) {
@@ -1039,9 +1041,9 @@ imageboot_setup()
 
 	/*
 	 * New boot-arg scheme:
-	 * 	root-dmg : the dmg that will be the root filesystem.
-	 * 	auth-root-dmg : same as root-dmg but with image authentication.
-	 * 	container-dmg : an optional dmg that contains the root-dmg.
+	 *      root-dmg : the dmg that will be the root filesystem.
+	 *      auth-root-dmg : same as root-dmg but with image authentication.
+	 *      container-dmg : an optional dmg that contains the root-dmg.
 	 */
 	if (imageboot_setup_new()) {
 		return;
@@ -1054,16 +1056,16 @@ imageboot_setup()
 	 * Look for outermost disk image to root from.  If we're doing a nested boot,
 	 * there's some sense in which the outer image never needs to be the root filesystem,
 	 * but it does need very similar treatment: it must not be unmounted, needs a fake
-	 * device vnode created for it, and should not show up in getfsstat() until exposed 
+	 * device vnode created for it, and should not show up in getfsstat() until exposed
 	 * with MNT_IMGSRC. We just make it the temporary root.
 	 */
-	if((PE_parse_boot_argn("rp", root_path, MAXPATHLEN) == FALSE) &&
-		(PE_parse_boot_argn("rp0", root_path, MAXPATHLEN) == FALSE)) {
+	if ((PE_parse_boot_argn("rp", root_path, MAXPATHLEN) == FALSE) &&
+	    (PE_parse_boot_argn("rp0", root_path, MAXPATHLEN) == FALSE)) {
 		panic("%s: no valid path to image.\n", __FUNCTION__);
 	}
 
 	printf("%s: root image url is %s\n", __FUNCTION__, root_path);
-	
+
 	error = imageboot_mount_image(root_path, 0);
 	if (error) {
 		panic("Failed on first stage of imageboot.");
@@ -1072,19 +1074,19 @@ imageboot_setup()
 	/*
 	 * See if we are rooting from a nested image
 	 */
-	if(PE_parse_boot_argn("rp1", root_path, MAXPATHLEN) == FALSE) {
+	if (PE_parse_boot_argn("rp1", root_path, MAXPATHLEN) == FALSE) {
 		goto done;
 	}
-	
+
 	printf("%s: second level root image url is %s\n", __FUNCTION__, root_path);
 
 	/*
 	 * If we fail to set up second image, it's not a given that we
-	 * can safely root off the first.  
+	 * can safely root off the first.
 	 */
 	error = imageboot_mount_image(root_path, 1);
 	if (error) {
-		panic("Failed on second stage of imageboot.");	
+		panic("Failed on second stage of imageboot.");
 	}
 
 done:

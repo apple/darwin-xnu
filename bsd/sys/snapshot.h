@@ -27,7 +27,7 @@
  */
 
 #ifndef _SYS_SNAPSHOT_H_
-#define	_SYS_SNAPSHOT_H_
+#define _SYS_SNAPSHOT_H_
 
 #ifndef KERNEL
 

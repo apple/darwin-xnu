@@ -34,7 +34,9 @@
 
 #include <corecrypto/cchmac.h>
 
-void cchmac_update(const struct ccdigest_info *di, cchmac_ctx_t hc,
-                   size_t data_len, const void *data) {
-    ccdigest_update(di, cchmac_digest_ctx(di, hc), data_len, data);
+void
+cchmac_update(const struct ccdigest_info *di, cchmac_ctx_t hc,
+    size_t data_len, const void *data)
+{
+	ccdigest_update(di, cchmac_digest_ctx(di, hc), data_len, data);
 }

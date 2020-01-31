@@ -76,11 +76,11 @@ extern void thread_deallocate_safe(thread_t thread);
 #define PTHREAD_STRUCT_ACCESSOR(get, set, rettype, structtype, member) \
 	static rettype \
 	get(structtype x) { \
-		return (x)->member; \
+	        return (x)->member; \
 	} \
 	static void \
 	set(structtype x, rettype y) { \
-		(x)->member = y; \
+	        (x)->member = y; \
 	}
 
 PTHREAD_STRUCT_ACCESSOR(proc_get_threadstart, proc_set_threadstart, user_addr_t, struct proc*, p_threadstart);
@@ -132,17 +132,20 @@ pthread_bootstrap_return(void)
 }
 
 static uint32_t
-get_task_threadmax(void) {
+get_task_threadmax(void)
+{
 	return task_threadmax;
 }
 
 static uint64_t
-proc_get_register(struct proc *p) {
-	return (p->p_lflag & P_LREGISTER);
+proc_get_register(struct proc *p)
+{
+	return p->p_lflag & P_LREGISTER;
 }
 
 static void
-proc_set_register(struct proc *p) {
+proc_set_register(struct proc *p)
+{
 	proc_setregister(p);
 }
 
@@ -170,10 +173,11 @@ qos_main_thread_active(void)
 	return TRUE;
 }
 
-static int proc_usynch_get_requested_thread_qos(struct uthread *uth)
+static int
+proc_usynch_get_requested_thread_qos(struct uthread *uth)
 {
-	thread_t	thread = uth ? uth->uu_thread : current_thread();
-	int			requested_qos;
+	thread_t        thread = uth ? uth->uu_thread : current_thread();
+	int                     requested_qos;
 
 	requested_qos = proc_get_thread_policy(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS);
 
@@ -192,49 +196,49 @@ static int proc_usynch_get_requested_thread_qos(struct uthread *uth)
 
 static boolean_t
 proc_usynch_thread_qos_add_override_for_resource(task_t task, struct uthread *uth,
-		uint64_t tid, int override_qos, boolean_t first_override_for_resource,
-		user_addr_t resource, int resource_type)
+    uint64_t tid, int override_qos, boolean_t first_override_for_resource,
+    user_addr_t resource, int resource_type)
 {
 	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
 
 	return proc_thread_qos_add_override(task, thread, tid, override_qos,
-			first_override_for_resource, resource, resource_type) == 0;
+	           first_override_for_resource, resource, resource_type) == 0;
 }
 
 static boolean_t
 proc_usynch_thread_qos_remove_override_for_resource(task_t task,
-		struct uthread *uth, uint64_t tid, user_addr_t resource, int resource_type)
+    struct uthread *uth, uint64_t tid, user_addr_t resource, int resource_type)
 {
 	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
 
 	return proc_thread_qos_remove_override(task, thread, tid, resource,
-			resource_type) == 0;
+	           resource_type) == 0;
 }
 
 
 static wait_result_t
 psynch_wait_prepare(uintptr_t kwq, struct turnstile **tstore,
-		thread_t owner, block_hint_t block_hint, uint64_t deadline)
+    thread_t owner, block_hint_t block_hint, uint64_t deadline)
 {
 	struct turnstile *ts;
 	wait_result_t wr;
 
 	if (tstore) {
 		ts = turnstile_prepare(kwq, tstore, TURNSTILE_NULL,
-				TURNSTILE_PTHREAD_MUTEX);
+		    TURNSTILE_PTHREAD_MUTEX);
 
 		turnstile_update_inheritor(ts, owner,
-				(TURNSTILE_DELAYED_UPDATE | TURNSTILE_INHERITOR_THREAD));
+		    (TURNSTILE_DELAYED_UPDATE | TURNSTILE_INHERITOR_THREAD));
 
 		thread_set_pending_block_hint(current_thread(), block_hint);
 
 		wr = waitq_assert_wait64_leeway(&ts->ts_waitq, (event64_t)kwq,
-				THREAD_ABORTSAFE, TIMEOUT_URGENCY_USER_NORMAL, deadline, 0);
+		    THREAD_ABORTSAFE, TIMEOUT_URGENCY_USER_NORMAL, deadline, 0);
 	} else {
 		thread_set_pending_block_hint(current_thread(), block_hint);
 
 		wr = assert_wait_deadline_with_leeway((event_t)kwq, THREAD_ABORTSAFE,
-				TIMEOUT_URGENCY_USER_NORMAL, deadline, 0);
+		    TIMEOUT_URGENCY_USER_NORMAL, deadline, 0);
 	}
 
 	return wr;
@@ -256,15 +260,15 @@ psynch_wait_complete(uintptr_t kwq, struct turnstile **tstore)
 
 static void
 psynch_wait_update_owner(uintptr_t kwq, thread_t owner,
-		struct turnstile **tstore)
+    struct turnstile **tstore)
 {
 	struct turnstile *ts;
 
 	ts = turnstile_prepare(kwq, tstore, TURNSTILE_NULL,
-			TURNSTILE_PTHREAD_MUTEX);
+	    TURNSTILE_PTHREAD_MUTEX);
 
 	turnstile_update_inheritor(ts, owner,
-			(TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
+	    (TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
 	turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_HELD);
 	turnstile_complete(kwq, tstore, NULL);
 }
@@ -277,7 +281,7 @@ psynch_wait_cleanup(void)
 
 static kern_return_t
 psynch_wait_wakeup(uintptr_t kwq, struct ksyn_waitq_element *kwe,
-		struct turnstile **tstore)
+    struct turnstile **tstore)
 {
 	struct uthread *uth;
 	struct turnstile *ts;
@@ -288,12 +292,12 @@ psynch_wait_wakeup(uintptr_t kwq, struct ksyn_waitq_element *kwe,
 
 	if (tstore) {
 		ts = turnstile_prepare(kwq, tstore, TURNSTILE_NULL,
-				TURNSTILE_PTHREAD_MUTEX);
+		    TURNSTILE_PTHREAD_MUTEX);
 		turnstile_update_inheritor(ts, uth->uu_thread,
-				(TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
+		    (TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
 
 		kr = waitq_wakeup64_thread(&ts->ts_waitq, (event64_t)kwq,
-				uth->uu_thread, THREAD_AWAKENED);
+		    uth->uu_thread, THREAD_AWAKENED);
 
 		turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_HELD);
 		turnstile_complete(kwq, tstore, NULL);
@@ -339,20 +343,20 @@ bsdthread_register(struct proc *p, struct bsdthread_register_args *uap, __unused
 {
 	kern_return_t kr;
 	static_assert(offsetof(struct bsdthread_register_args, threadstart) + sizeof(user_addr_t) ==
-			offsetof(struct bsdthread_register_args, wqthread));
+	    offsetof(struct bsdthread_register_args, wqthread));
 	kr = machine_thread_function_pointers_convert_from_user(current_thread(), &uap->threadstart, 2);
 	assert(kr == KERN_SUCCESS);
 
 	if (pthread_functions->version >= 1) {
 		return pthread_functions->bsdthread_register2(p, uap->threadstart,
-				uap->wqthread, uap->flags, uap->stack_addr_hint,
-				uap->targetconc_ptr, uap->dispatchqueue_offset,
-				uap->tsd_offset, retval);
+		           uap->wqthread, uap->flags, uap->stack_addr_hint,
+		           uap->targetconc_ptr, uap->dispatchqueue_offset,
+		           uap->tsd_offset, retval);
 	} else {
 		return pthread_functions->bsdthread_register(p, uap->threadstart,
-				uap->wqthread, uap->flags, uap->stack_addr_hint,
-				uap->targetconc_ptr, uap->dispatchqueue_offset,
-				retval);
+		           uap->wqthread, uap->flags, uap->stack_addr_hint,
+		           uap->targetconc_ptr, uap->dispatchqueue_offset,
+		           retval);
 	}
 }
 
@@ -411,7 +415,7 @@ psynch_cvclrprepost(proc_t p, struct psynch_cvclrprepost_args * uap, int *retval
 }
 
 int
-psynch_rw_longrdlock(proc_t p, struct psynch_rw_longrdlock_args * uap,  uint32_t *retval)
+psynch_rw_longrdlock(proc_t p, struct psynch_rw_longrdlock_args * uap, uint32_t *retval)
 {
 	return pthread_functions->psynch_rw_longrdlock(p, uap->rwlock, uap->lgenval, uap->ugenval, uap->rw_wc, uap->flags, retval);
 }
@@ -461,15 +465,17 @@ psynch_rw_downgrade(__unused proc_t p, __unused struct psynch_rw_downgrade_args 
 void
 kdp_pthread_find_owner(thread_t thread, struct stackshot_thread_waitinfo *waitinfo)
 {
-	if (pthread_functions->pthread_find_owner)
+	if (pthread_functions->pthread_find_owner) {
 		pthread_functions->pthread_find_owner(thread, waitinfo);
+	}
 }
 
 void *
 kdp_pthread_get_thread_kwq(thread_t thread)
 {
-	if (pthread_functions->pthread_get_thread_kwq)
+	if (pthread_functions->pthread_get_thread_kwq) {
 		return pthread_functions->pthread_get_thread_kwq(thread);
+	}
 
 	return NULL;
 }

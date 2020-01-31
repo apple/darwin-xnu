@@ -2,7 +2,7 @@
  * Copyright (c) 2013 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -56,7 +56,7 @@ void          task_release_coalitions(task_t task);
  *
  */
 kern_return_t coalitions_set_roles(coalition_t coalitions[COALITION_NUM_TYPES],
-				   task_t task, int roles[COALITION_NUM_TYPES]);
+    task_t task, int roles[COALITION_NUM_TYPES]);
 
 uint64_t coalition_id(coalition_t coal);
 void     task_coalition_ids(task_t task, uint64_t ids[COALITION_NUM_TYPES]);
@@ -69,13 +69,13 @@ uint32_t task_coalition_focal_count(task_t task);
 boolean_t task_coalition_adjust_nonfocal_count(task_t task, int count, uint32_t *new_count);
 uint32_t task_coalition_nonfocal_count(task_t task);
 struct thread_group *task_coalition_get_thread_group(task_t task);
-void	 coalition_set_thread_group(coalition_t coal, struct thread_group *tg);
+void     coalition_set_thread_group(coalition_t coal, struct thread_group *tg);
 struct thread_group *kdp_coalition_get_thread_group(coalition_t coal);
 struct thread_group *coalition_get_thread_group(coalition_t coal);
 void task_coalition_thread_group_focal_update(task_t task);
 
 void coalition_for_each_task(coalition_t coal, void *ctx,
-			     void (*callback)(coalition_t, void *, task_t));
+    void (*callback)(coalition_t, void *, task_t));
 
 void coalition_set_efficient(coalition_t coal);
 
@@ -143,34 +143,39 @@ void coalition_set_notify(coalition_t coal, int notify);
 
 #else /* !CONFIG_COALITIONS */
 
-static inline void task_coalition_update_gpu_stats(__unused task_t task,
-						   __unused uint64_t gpu_ns_delta)
+static inline void
+task_coalition_update_gpu_stats(__unused task_t task,
+    __unused uint64_t gpu_ns_delta)
 {
 	return;
 }
 
-static inline boolean_t task_coalition_adjust_focal_count(__unused task_t task,
-							 __unused int count,
-							 __unused uint32_t *new_count)
+static inline boolean_t
+task_coalition_adjust_focal_count(__unused task_t task,
+    __unused int count,
+    __unused uint32_t *new_count)
 {
 	return FALSE;
 }
 
-static inline boolean_t task_coalition_adjust_nonfocal_count(__unused task_t task,
-							    __unused int count,
-							    __unused uint32_t *new_count)
+static inline boolean_t
+task_coalition_adjust_nonfocal_count(__unused task_t task,
+    __unused int count,
+    __unused uint32_t *new_count)
 {
 	return FALSE;
 }
 
-static inline uint32_t task_coalition_focal_count(__unused task_t task)
+static inline uint32_t
+task_coalition_focal_count(__unused task_t task)
 {
 	return 0;
 }
 
-static inline void coalition_for_each_task(__unused coalition_t coal,
-					   __unused void *ctx,
-					   __unused void (*callback)(coalition_t, void *, task_t))
+static inline void
+coalition_for_each_task(__unused coalition_t coal,
+    __unused void *ctx,
+    __unused void (*callback)(coalition_t, void *, task_t))
 {
 	return;
 }

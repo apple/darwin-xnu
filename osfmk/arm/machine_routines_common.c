@@ -76,20 +76,20 @@ sched_perfcontrol_thread_group_default(thread_group_data_t data __unused)
 {
 }
 
-static void 
+static void
 sched_perfcontrol_max_runnable_latency_default(perfcontrol_max_runnable_latency_t latencies __unused)
 {
 }
 
 static void
 sched_perfcontrol_work_interval_notify_default(perfcontrol_state_t thread_state __unused,
-					       perfcontrol_work_interval_t work_interval __unused)
+    perfcontrol_work_interval_t work_interval __unused)
 {
 }
 
 static void
 sched_perfcontrol_work_interval_ctl_default(perfcontrol_state_t thread_state __unused,
-					    perfcontrol_work_interval_instance_t instance __unused)
+    perfcontrol_work_interval_instance_t instance __unused)
 {
 }
 
@@ -100,9 +100,9 @@ sched_perfcontrol_deadline_passed_default(__unused uint64_t deadline)
 
 static void
 sched_perfcontrol_csw_default(
-	__unused perfcontrol_event event, __unused uint32_t cpu_id, __unused uint64_t timestamp, 
-	__unused uint32_t flags, __unused struct perfcontrol_thread_data *offcore, 
-	__unused struct perfcontrol_thread_data *oncore, 
+	__unused perfcontrol_event event, __unused uint32_t cpu_id, __unused uint64_t timestamp,
+	__unused uint32_t flags, __unused struct perfcontrol_thread_data *offcore,
+	__unused struct perfcontrol_thread_data *oncore,
 	__unused struct perfcontrol_cpu_counters *cpu_counters, __unused void *unused)
 {
 }
@@ -138,7 +138,6 @@ sched_perfcontrol_register_callbacks(sched_perfcontrol_callbacks_t callbacks, un
 	}
 
 	if (callbacks) {
-
 
 		if (callbacks->version >= SCHED_PERFCONTROL_CALLBACKS_VERSION_7) {
 			if (callbacks->work_interval_ctl != NULL) {
@@ -193,7 +192,7 @@ sched_perfcontrol_register_callbacks(sched_perfcontrol_callbacks_t callbacks, un
 		} else {
 			sched_perfcontrol_max_runnable_latency = sched_perfcontrol_max_runnable_latency_default;
 		}
-		
+
 		if (callbacks->work_interval_notify != NULL) {
 			sched_perfcontrol_work_interval_notify = callbacks->work_interval_notify;
 		} else {
@@ -217,9 +216,9 @@ sched_perfcontrol_register_callbacks(sched_perfcontrol_callbacks_t callbacks, un
 
 
 static void
-machine_switch_populate_perfcontrol_thread_data(struct perfcontrol_thread_data *data, 
-						thread_t thread,
-						uint64_t same_pri_latency)
+machine_switch_populate_perfcontrol_thread_data(struct perfcontrol_thread_data *data,
+    thread_t thread,
+    uint64_t same_pri_latency)
 {
 	bzero(data, sizeof(struct perfcontrol_thread_data));
 	data->perfctl_class = thread_get_perfcontrol_class(thread);
@@ -246,45 +245,50 @@ static _Atomic uint64_t perfcontrol_callout_count[PERFCONTROL_CALLOUT_MAX];
 
 #if MONOTONIC
 static inline
-bool perfcontrol_callout_counters_begin(uint64_t *counters)
+bool
+perfcontrol_callout_counters_begin(uint64_t *counters)
 {
-    if (!perfcontrol_callout_stats_enabled)
-        return false;
-    mt_fixed_counts(counters);
-    return true;
+	if (!perfcontrol_callout_stats_enabled) {
+		return false;
+	}
+	mt_fixed_counts(counters);
+	return true;
 }
 
 static inline
-void perfcontrol_callout_counters_end(uint64_t *start_counters,
-	perfcontrol_callout_type_t type)
+void
+perfcontrol_callout_counters_end(uint64_t *start_counters,
+    perfcontrol_callout_type_t type)
 {
-    uint64_t end_counters[MT_CORE_NFIXED];
-    mt_fixed_counts(end_counters);
-    atomic_fetch_add_explicit(&perfcontrol_callout_stats[type][PERFCONTROL_STAT_CYCLES],
-            end_counters[MT_CORE_CYCLES] - start_counters[MT_CORE_CYCLES], memory_order_relaxed);
+	uint64_t end_counters[MT_CORE_NFIXED];
+	mt_fixed_counts(end_counters);
+	atomic_fetch_add_explicit(&perfcontrol_callout_stats[type][PERFCONTROL_STAT_CYCLES],
+	    end_counters[MT_CORE_CYCLES] - start_counters[MT_CORE_CYCLES], memory_order_relaxed);
 #ifdef MT_CORE_INSTRS
-    atomic_fetch_add_explicit(&perfcontrol_callout_stats[type][PERFCONTROL_STAT_INSTRS],
-            end_counters[MT_CORE_INSTRS] - start_counters[MT_CORE_INSTRS], memory_order_relaxed);
+	atomic_fetch_add_explicit(&perfcontrol_callout_stats[type][PERFCONTROL_STAT_INSTRS],
+	    end_counters[MT_CORE_INSTRS] - start_counters[MT_CORE_INSTRS], memory_order_relaxed);
 #endif /* defined(MT_CORE_INSTRS) */
-    atomic_fetch_add_explicit(&perfcontrol_callout_count[type], 1, memory_order_relaxed);
+	atomic_fetch_add_explicit(&perfcontrol_callout_count[type], 1, memory_order_relaxed);
 }
 #endif /* MONOTONIC */
 
-uint64_t perfcontrol_callout_stat_avg(perfcontrol_callout_type_t type,
-	perfcontrol_callout_stat_t stat)
+uint64_t
+perfcontrol_callout_stat_avg(perfcontrol_callout_type_t type,
+    perfcontrol_callout_stat_t stat)
 {
-    if (!perfcontrol_callout_stats_enabled)
-        return 0;
-    return (perfcontrol_callout_stats[type][stat] / perfcontrol_callout_count[type]);
+	if (!perfcontrol_callout_stats_enabled) {
+		return 0;
+	}
+	return perfcontrol_callout_stats[type][stat] / perfcontrol_callout_count[type];
 }
 
 void
 machine_switch_perfcontrol_context(perfcontrol_event event,
-                                   uint64_t timestamp,
-                                   uint32_t flags,
-                                   uint64_t new_thread_same_pri_latency,
-                                   thread_t old,
-                                   thread_t new)
+    uint64_t timestamp,
+    uint32_t flags,
+    uint64_t new_thread_same_pri_latency,
+    thread_t old,
+    thread_t new)
 {
 	if (sched_perfcontrol_switch != sched_perfcontrol_switch_default) {
 		perfcontrol_state_t old_perfcontrol_state = FIND_PERFCONTROL_STATE(old);
@@ -298,7 +302,7 @@ machine_switch_perfcontrol_context(perfcontrol_event event,
 		struct perfcontrol_thread_data offcore, oncore;
 		machine_switch_populate_perfcontrol_thread_data(&offcore, old, 0);
 		machine_switch_populate_perfcontrol_thread_data(&oncore, new,
-			new_thread_same_pri_latency);
+		    new_thread_same_pri_latency);
 		machine_switch_populate_perfcontrol_cpu_counters(&cpu_counters);
 
 #if MONOTONIC
@@ -306,9 +310,11 @@ machine_switch_perfcontrol_context(perfcontrol_event event,
 		bool ctrs_enabled = perfcontrol_callout_counters_begin(counters);
 #endif /* MONOTONIC */
 		sched_perfcontrol_csw(event, cpu_id, timestamp, flags,
-			&offcore, &oncore, &cpu_counters, NULL);
+		    &offcore, &oncore, &cpu_counters, NULL);
 #if MONOTONIC
-		if (ctrs_enabled) perfcontrol_callout_counters_end(counters, PERFCONTROL_CALLOUT_CONTEXT);
+		if (ctrs_enabled) {
+			perfcontrol_callout_counters_end(counters, PERFCONTROL_CALLOUT_CONTEXT);
+		}
 #endif /* MONOTONIC */
 
 #if __arm64__
@@ -320,12 +326,13 @@ machine_switch_perfcontrol_context(perfcontrol_event event,
 
 void
 machine_switch_perfcontrol_state_update(perfcontrol_event event,
-					uint64_t timestamp,
-					uint32_t flags,
-					thread_t thread)
+    uint64_t timestamp,
+    uint32_t flags,
+    thread_t thread)
 {
-	if (sched_perfcontrol_state_update == sched_perfcontrol_state_update_default)
+	if (sched_perfcontrol_state_update == sched_perfcontrol_state_update_default) {
 		return;
+	}
 	uint32_t cpu_id = (uint32_t)cpu_number();
 	struct perfcontrol_thread_data data;
 	machine_switch_populate_perfcontrol_thread_data(&data, thread, 0);
@@ -334,10 +341,12 @@ machine_switch_perfcontrol_state_update(perfcontrol_event event,
 	uint64_t counters[MT_CORE_NFIXED];
 	bool ctrs_enabled = perfcontrol_callout_counters_begin(counters);
 #endif /* MONOTONIC */
-	sched_perfcontrol_state_update(event, cpu_id, timestamp, flags, 
-		&data, NULL);
+	sched_perfcontrol_state_update(event, cpu_id, timestamp, flags,
+	    &data, NULL);
 #if MONOTONIC
-	if (ctrs_enabled) perfcontrol_callout_counters_end(counters, PERFCONTROL_CALLOUT_STATE_UPDATE);
+	if (ctrs_enabled) {
+		perfcontrol_callout_counters_end(counters, PERFCONTROL_CALLOUT_STATE_UPDATE);
+	}
 #endif /* MONOTONIC */
 
 #if __arm64__
@@ -347,14 +356,14 @@ machine_switch_perfcontrol_state_update(perfcontrol_event event,
 
 void
 machine_thread_going_on_core(thread_t   new_thread,
-                             int        urgency,
-                             uint64_t   sched_latency,
-                             uint64_t   same_pri_latency,
-                             uint64_t   timestamp)
+    thread_urgency_t        urgency,
+    uint64_t   sched_latency,
+    uint64_t   same_pri_latency,
+    uint64_t   timestamp)
 {
-	
-	if (sched_perfcontrol_oncore == sched_perfcontrol_oncore_default)
+	if (sched_perfcontrol_oncore == sched_perfcontrol_oncore_default) {
 		return;
+	}
 	struct going_on_core on_core;
 	perfcontrol_state_t state = FIND_PERFCONTROL_STATE(new_thread);
 
@@ -374,7 +383,9 @@ machine_thread_going_on_core(thread_t   new_thread,
 #endif /* MONOTONIC */
 	sched_perfcontrol_oncore(state, &on_core);
 #if MONOTONIC
-	if (ctrs_enabled) perfcontrol_callout_counters_end(counters, PERFCONTROL_CALLOUT_ON_CORE);
+	if (ctrs_enabled) {
+		perfcontrol_callout_counters_end(counters, PERFCONTROL_CALLOUT_ON_CORE);
+	}
 #endif /* MONOTONIC */
 
 #if __arm64__
@@ -383,10 +394,12 @@ machine_thread_going_on_core(thread_t   new_thread,
 }
 
 void
-machine_thread_going_off_core(thread_t old_thread, boolean_t thread_terminating, uint64_t last_dispatch)
+machine_thread_going_off_core(thread_t old_thread, boolean_t thread_terminating,
+    uint64_t last_dispatch, __unused boolean_t thread_runnable)
 {
-	if (sched_perfcontrol_offcore == sched_perfcontrol_offcore_default)
+	if (sched_perfcontrol_offcore == sched_perfcontrol_offcore_default) {
 		return;
+	}
 	struct going_off_core off_core;
 	perfcontrol_state_t state = FIND_PERFCONTROL_STATE(old_thread);
 
@@ -400,7 +413,9 @@ machine_thread_going_off_core(thread_t old_thread, boolean_t thread_terminating,
 #endif /* MONOTONIC */
 	sched_perfcontrol_offcore(state, &off_core, thread_terminating);
 #if MONOTONIC
-	if (ctrs_enabled) perfcontrol_callout_counters_end(counters, PERFCONTROL_CALLOUT_OFF_CORE);
+	if (ctrs_enabled) {
+		perfcontrol_callout_counters_end(counters, PERFCONTROL_CALLOUT_OFF_CORE);
+	}
 #endif /* MONOTONIC */
 
 #if __arm64__
@@ -411,11 +426,12 @@ machine_thread_going_off_core(thread_t old_thread, boolean_t thread_terminating,
 
 void
 machine_max_runnable_latency(uint64_t bg_max_latency,
-							 uint64_t default_max_latency,
-							 uint64_t realtime_max_latency)
+    uint64_t default_max_latency,
+    uint64_t realtime_max_latency)
 {
-	if (sched_perfcontrol_max_runnable_latency == sched_perfcontrol_max_runnable_latency_default)
+	if (sched_perfcontrol_max_runnable_latency == sched_perfcontrol_max_runnable_latency_default) {
 		return;
+	}
 	struct perfcontrol_max_runnable_latency latencies = {
 		.max_scheduling_latencies = {
 			[THREAD_URGENCY_NONE] = 0,
@@ -430,10 +446,11 @@ machine_max_runnable_latency(uint64_t bg_max_latency,
 
 void
 machine_work_interval_notify(thread_t thread,
-                             struct kern_work_interval_args* kwi_args)
+    struct kern_work_interval_args* kwi_args)
 {
-	if (sched_perfcontrol_work_interval_notify == sched_perfcontrol_work_interval_notify_default)
+	if (sched_perfcontrol_work_interval_notify == sched_perfcontrol_work_interval_notify_default) {
 		return;
+	}
 	perfcontrol_state_t state = FIND_PERFCONTROL_STATE(thread);
 	struct perfcontrol_work_interval work_interval = {
 		.thread_id      = thread->thread_id,
@@ -454,15 +471,16 @@ machine_work_interval_notify(thread_t thread,
 void
 machine_perfcontrol_deadline_passed(uint64_t deadline)
 {
-	if (sched_perfcontrol_deadline_passed != sched_perfcontrol_deadline_passed_default)
+	if (sched_perfcontrol_deadline_passed != sched_perfcontrol_deadline_passed_default) {
 		sched_perfcontrol_deadline_passed(deadline);
+	}
 }
 
 #if INTERRUPT_MASKED_DEBUG
 /*
  * ml_spin_debug_reset()
  * Reset the timestamp on a thread that has been unscheduled
- * to avoid false alarms.    Alarm will go off if interrupts are held 
+ * to avoid false alarms.    Alarm will go off if interrupts are held
  * disabled for too long, starting from now.
  */
 void
@@ -509,10 +527,10 @@ ml_check_interrupts_disabled_duration(thread_t thread)
 
 #ifndef KASAN
 			/*
-			* Disable the actual panic for KASAN due to the overhead of KASAN itself, leave the rest of the
-			* mechanism enabled so that KASAN can catch any bugs in the mechanism itself.
-			*/
-			panic("Interrupts held disabled for %llu nanoseconds", (((now - start) * timebase.numer)/timebase.denom));
+			 * Disable the actual panic for KASAN due to the overhead of KASAN itself, leave the rest of the
+			 * mechanism enabled so that KASAN can catch any bugs in the mechanism itself.
+			 */
+			panic("Interrupts held disabled for %llu nanoseconds", (((now - start) * timebase.numer) / timebase.denom));
 #endif
 		}
 	}
@@ -525,8 +543,8 @@ ml_check_interrupts_disabled_duration(thread_t thread)
 boolean_t
 ml_set_interrupts_enabled(boolean_t enable)
 {
-	thread_t	thread;
-	uint64_t	state;
+	thread_t        thread;
+	uint64_t        state;
 
 #if __arm__
 #define INTERRUPT_MASK PSR_IRQF
@@ -543,7 +561,7 @@ ml_set_interrupts_enabled(boolean_t enable)
 			ml_check_interrupts_disabled_duration(thread);
 			thread->machine.intmask_timestamp = 0;
 		}
-#endif	// INTERRUPT_MASKED_DEBUG
+#endif  // INTERRUPT_MASKED_DEBUG
 		if (get_preemption_level() == 0) {
 			thread = current_thread();
 			while (thread->machine.CpuDatap->cpu_pending_ast & AST_URGENT) {
@@ -574,7 +592,13 @@ ml_set_interrupts_enabled(boolean_t enable)
 		}
 #endif
 	}
-	return ((state & INTERRUPT_MASK) == 0);
+	return (state & INTERRUPT_MASK) == 0;
+}
+
+boolean_t
+ml_early_set_interrupts_enabled(boolean_t enable)
+{
+	return ml_set_interrupts_enabled(enable);
 }
 
 /*
@@ -593,10 +617,10 @@ ml_at_interrupt_context(void)
 	 * up checking the interrupt state of a different CPU, resulting in a false
 	 * positive.  But if interrupts are disabled, we also know we cannot be
 	 * preempted. */
-	return (!ml_get_interrupts_enabled() && (getCpuDatap()->cpu_int_state != NULL));
+	return !ml_get_interrupts_enabled() && (getCpuDatap()->cpu_int_state != NULL);
 }
 
-vm_offset_t 
+vm_offset_t
 ml_stack_remaining(void)
 {
 	uintptr_t local = (uintptr_t) &local;
@@ -608,38 +632,43 @@ ml_stack_remaining(void)
 	 * something has gone horribly wrong. */
 	intstack_top_ptr = getCpuDatap()->intstack_top;
 	if ((local < intstack_top_ptr) && (local > intstack_top_ptr - INTSTACK_SIZE)) {
-		return (local - (getCpuDatap()->intstack_top - INTSTACK_SIZE));
+		return local - (getCpuDatap()->intstack_top - INTSTACK_SIZE);
 	} else {
-		return (local - current_thread()->kernel_stack);
+		return local - current_thread()->kernel_stack;
 	}
 }
 
 static boolean_t ml_quiescing;
 
-void ml_set_is_quiescing(boolean_t quiescing)
+void
+ml_set_is_quiescing(boolean_t quiescing)
 {
 	assert(FALSE == ml_get_interrupts_enabled());
 	ml_quiescing = quiescing;
 }
 
-boolean_t ml_is_quiescing(void)
+boolean_t
+ml_is_quiescing(void)
 {
 	assert(FALSE == ml_get_interrupts_enabled());
-	return (ml_quiescing);
+	return ml_quiescing;
 }
 
-uint64_t ml_get_booter_memory_size(void)
+uint64_t
+ml_get_booter_memory_size(void)
 {
 	uint64_t size;
-	uint64_t roundsize = 512*1024*1024ULL;
+	uint64_t roundsize = 512 * 1024 * 1024ULL;
 	size = BootArgs->memSizeActual;
 	if (!size) {
 		size  = BootArgs->memSize;
-		if (size < (2 * roundsize)) roundsize >>= 1;
+		if (size < (2 * roundsize)) {
+			roundsize >>= 1;
+		}
 		size  = (size + roundsize - 1) & ~(roundsize - 1);
 		size -= BootArgs->memSize;
 	}
-	return (size);
+	return size;
 }
 
 uint64_t
@@ -651,7 +680,7 @@ ml_get_abstime_offset(void)
 uint64_t
 ml_get_conttime_offset(void)
 {
-	return (rtclock_base_abstime + mach_absolutetime_asleep); 
+	return rtclock_base_abstime + mach_absolutetime_asleep;
 }
 
 uint64_t
@@ -668,3 +697,24 @@ ml_get_conttime_wake_time(void)
 	return ml_get_conttime_offset();
 }
 
+/*
+ * ml_snoop_thread_is_on_core(thread_t thread)
+ * Check if the given thread is currently on core.  This function does not take
+ * locks, disable preemption, or otherwise guarantee synchronization.  The
+ * result should be considered advisory.
+ */
+bool
+ml_snoop_thread_is_on_core(thread_t thread)
+{
+	unsigned int cur_cpu_num = 0;
+
+	for (cur_cpu_num = 0; cur_cpu_num < MAX_CPUS; cur_cpu_num++) {
+		if (CpuDataEntries[cur_cpu_num].cpu_data_vaddr) {
+			if (CpuDataEntries[cur_cpu_num].cpu_data_vaddr->cpu_active_thread == thread) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}

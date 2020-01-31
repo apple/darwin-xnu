@@ -75,7 +75,7 @@ extern kern_return_t dtrace_user_probe(arm_saved_state_t* regs, unsigned int ins
 extern boolean_t dtrace_tally_fault(user_addr_t);
 
 /* Traps for userland processing. Can't include bsd/sys/fasttrap_isa.h, so copy and paste the trap instructions
-   over from that file. Need to keep these in sync! */
+ *  over from that file. Need to keep these in sync! */
 #define FASTTRAP_ARM_INSTR 0xe7ffdefc
 #define FASTTRAP_THUMB_INSTR 0xdefc
 
@@ -86,23 +86,23 @@ extern boolean_t dtrace_tally_fault(user_addr_t);
 perfCallback tempDTraceTrapHook = NULL; /* Pointer to DTrace fbt trap hook routine */
 #endif
 
-#define COPYIN(dst, src, size)					\
-	((regs->cpsr & PSR_MODE_MASK) != PSR_USER_MODE) ?	\
-		copyin_kern(dst, src, size)			\
-	:							\
-		copyin(dst, src, size)
+#define COPYIN(dst, src, size)                                  \
+	((regs->cpsr & PSR_MODE_MASK) != PSR_USER_MODE) ?       \
+	        copyin_kern(dst, src, size)                     \
+	:                                                       \
+	        copyin(dst, src, size)
 
-#define COPYOUT(src, dst, size)					\
-	((regs->cpsr & PSR_MODE_MASK) != PSR_USER_MODE) ?	\
-		copyout_kern(src, dst, size)			\
-	:							\
-		copyout(src, dst, size)
+#define COPYOUT(src, dst, size)                                 \
+	((regs->cpsr & PSR_MODE_MASK) != PSR_USER_MODE) ?       \
+	        copyout_kern(src, dst, size)                    \
+	:                                                       \
+	        copyout(src, dst, size)
 
 /* Second-level exception handlers forward declarations */
 void            sleh_undef(struct arm_saved_state *, struct arm_vfpsaved_state *);
 void            sleh_abort(struct arm_saved_state *, int);
 static kern_return_t sleh_alignment(struct arm_saved_state *);
-static void 	panic_with_thread_kernel_state(const char *msg, arm_saved_state_t *regs);
+static void     panic_with_thread_kernel_state(const char *msg, arm_saved_state_t *regs);
 
 int             sleh_alignment_count = 0;
 int             trap_on_alignment_fault = 0;
@@ -127,8 +127,9 @@ sleh_undef(struct arm_saved_state * regs, struct arm_vfpsaved_state * vfp_ss __u
 	getCpuDatap()->cpu_stat.undef_ex_cnt++;
 
 	/* Inherit the interrupt masks from previous */
-	if (!(regs->cpsr & PSR_INTMASK))
+	if (!(regs->cpsr & PSR_INTMASK)) {
 		ml_set_interrupts_enabled(TRUE);
+	}
 
 #if CONFIG_DTRACE
 	if (tempDTraceTrapHook) {
@@ -145,24 +146,28 @@ sleh_undef(struct arm_saved_state * regs, struct arm_vfpsaved_state * vfp_ss __u
 		if (regs->cpsr & PSR_TF) {
 			uint16_t instr = 0;
 
-			if(COPYIN((user_addr_t)(regs->pc), (char *)&instr,(vm_size_t)(sizeof(uint16_t))) != KERN_SUCCESS)
+			if (COPYIN((user_addr_t)(regs->pc), (char *)&instr, (vm_size_t)(sizeof(uint16_t))) != KERN_SUCCESS) {
 				goto exit;
+			}
 
 			if (instr == FASTTRAP_THUMB_INSTR || instr == FASTTRAP_THUMB_RET_INSTR) {
-				if (dtrace_user_probe(regs, instr) == KERN_SUCCESS)
+				if (dtrace_user_probe(regs, instr) == KERN_SUCCESS) {
 					/* If it succeeds, we are done... */
 					goto exit;
+				}
 			}
 		} else {
 			uint32_t instr = 0;
 
-			if(COPYIN((user_addr_t)(regs->pc), (char *)&instr,(vm_size_t)(sizeof(uint32_t))) != KERN_SUCCESS)
+			if (COPYIN((user_addr_t)(regs->pc), (char *)&instr, (vm_size_t)(sizeof(uint32_t))) != KERN_SUCCESS) {
 				goto exit;
+			}
 
 			if (instr == FASTTRAP_ARM_INSTR || instr == FASTTRAP_ARM_RET_INSTR) {
-				if (dtrace_user_probe(regs, instr) == KERN_SUCCESS)
+				if (dtrace_user_probe(regs, instr) == KERN_SUCCESS) {
 					/* If it succeeds, we are done... */
 					goto exit;
+				}
 			}
 		}
 	}
@@ -172,25 +177,28 @@ sleh_undef(struct arm_saved_state * regs, struct arm_vfpsaved_state * vfp_ss __u
 	if (regs->cpsr & PSR_TF) {
 		unsigned short instr = 0;
 
-		if(COPYIN((user_addr_t)(regs->pc), (char *)&instr,(vm_size_t)(sizeof(unsigned short))) != KERN_SUCCESS)
+		if (COPYIN((user_addr_t)(regs->pc), (char *)&instr, (vm_size_t)(sizeof(unsigned short))) != KERN_SUCCESS) {
 			goto exit;
+		}
 
 		if (IS_THUMB32(instr)) {
 			unsigned int instr32;
 
-			instr32 = (instr<<16);
+			instr32 = (instr << 16);
 
-			if(COPYIN((user_addr_t)(((unsigned short *) (regs->pc))+1), (char *)&instr,(vm_size_t)(sizeof(unsigned short))) != KERN_SUCCESS)
+			if (COPYIN((user_addr_t)(((unsigned short *) (regs->pc)) + 1), (char *)&instr, (vm_size_t)(sizeof(unsigned short))) != KERN_SUCCESS) {
 				goto exit;
+			}
 
 			instr32 |= instr;
 			code[1] = instr32;
 
-#if	__ARM_VFP__
+#if     __ARM_VFP__
 			if (IS_THUMB_VFP(instr32)) {
 				/* We no longer manage FPEXC beyond bootstrap, so verify that VFP is still enabled. */
-				if (!get_vfp_enabled())
+				if (!get_vfp_enabled()) {
 					panic("VFP was disabled (thumb); VFP should always be enabled");
+				}
 			}
 #endif
 		} else {
@@ -205,15 +213,17 @@ sleh_undef(struct arm_saved_state * regs, struct arm_vfpsaved_state * vfp_ss __u
 	} else {
 		uint32_t instr = 0;
 
-		if(COPYIN((user_addr_t)(regs->pc), (char *)&instr,(vm_size_t)(sizeof(uint32_t))) != KERN_SUCCESS)
+		if (COPYIN((user_addr_t)(regs->pc), (char *)&instr, (vm_size_t)(sizeof(uint32_t))) != KERN_SUCCESS) {
 			goto exit;
+		}
 
 		code[1] = instr;
-#if	__ARM_VFP__
+#if     __ARM_VFP__
 		if (IS_ARM_VFP(instr)) {
 			/* We no longer manage FPEXC beyond bootstrap, so verify that VFP is still enabled. */
-			if (!get_vfp_enabled())
+			if (!get_vfp_enabled()) {
 				panic("VFP was disabled (arm); VFP should always be enabled");
+			}
 		}
 #endif
 
@@ -224,7 +234,7 @@ sleh_undef(struct arm_saved_state * regs, struct arm_vfpsaved_state * vfp_ss __u
 	}
 
 	if (!((regs->cpsr & PSR_MODE_MASK) == PSR_USER_MODE)) {
-		boolean_t	intr;
+		boolean_t       intr;
 
 		intr = ml_set_interrupts_enabled(FALSE);
 
@@ -242,15 +252,15 @@ sleh_undef(struct arm_saved_state * regs, struct arm_vfpsaved_state * vfp_ss __u
 		panic_with_thread_kernel_state("undefined kernel instruction", regs);
 
 		(void) ml_set_interrupts_enabled(intr);
-
 	} else {
 		exception_triage(exception, code, codeCnt);
 		/* NOTREACHED */
 	}
 
 exit:
-	if (recover)
+	if (recover) {
 		thread->recover = recover;
+	}
 }
 
 /*
@@ -261,8 +271,8 @@ exit:
 void
 sleh_abort(struct arm_saved_state * regs, int type)
 {
-	int             status; 
-	int		debug_status=0;
+	int             status;
+	int             debug_status = 0;
 	int             spsr;
 	int             exc;
 	mach_exception_data_type_t codes[2];
@@ -273,7 +283,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 	kern_return_t   result;
 	vm_offset_t     recover;
 	thread_t        thread = current_thread();
-	boolean_t		intr;
+	boolean_t               intr;
 
 	recover = thread->recover;
 	thread->recover = 0;
@@ -285,10 +295,10 @@ sleh_abort(struct arm_saved_state * regs, int type)
 	 * Allow a platform-level error handler to decode it.
 	 */
 	if ((regs->fsr) & FSR_EXT) {
-		cpu_data_t	*cdp = getCpuDatap();
+		cpu_data_t      *cdp = getCpuDatap();
 
 		if (cdp->platform_error_handler != (platform_error_handler_t) NULL) {
-			(*(platform_error_handler_t)cdp->platform_error_handler) (cdp->cpu_id, 0);
+			(*(platform_error_handler_t)cdp->platform_error_handler)(cdp->cpu_id, 0);
 			/* If a platform error handler is registered, expect it to panic, not fall through */
 			panic("Unexpected return from platform_error_handler");
 		}
@@ -315,12 +325,14 @@ sleh_abort(struct arm_saved_state * regs, int type)
 		fault_type = VM_PROT_READ | VM_PROT_EXECUTE;
 	}
 
-	if (status == FSR_DEBUG)
-	    debug_status = arm_debug_read_dscr() & ARM_DBGDSCR_MOE_MASK;
+	if (status == FSR_DEBUG) {
+		debug_status = arm_debug_read_dscr() & ARM_DBGDSCR_MOE_MASK;
+	}
 
 	/* Inherit the interrupt masks from previous */
-	if (!(spsr & PSR_INTMASK))
+	if (!(spsr & PSR_INTMASK)) {
 		ml_set_interrupts_enabled(TRUE);
+	}
 
 	if (type == T_DATA_ABT) {
 		/*
@@ -338,11 +350,13 @@ sleh_abort(struct arm_saved_state * regs, int type)
 			if (!(regs->cpsr & PSR_TF)) {
 				unsigned int ins = 0;
 
-				if(COPYIN((user_addr_t)(regs->pc), (char *)&ins,(vm_size_t)(sizeof(unsigned int))) != KERN_SUCCESS)
+				if (COPYIN((user_addr_t)(regs->pc), (char *)&ins, (vm_size_t)(sizeof(unsigned int))) != KERN_SUCCESS) {
 					goto exit;
+				}
 
-				if (arm_mcr_cp15(ins) || arm_mcrr_cp15(ins))
+				if (arm_mcr_cp15(ins) || arm_mcrr_cp15(ins)) {
 					fault_type = VM_PROT_READ;
+				}
 			}
 		} else {
 			fault_type = VM_PROT_READ;
@@ -354,11 +368,13 @@ sleh_abort(struct arm_saved_state * regs, int type)
 			if (!(regs->cpsr & PSR_TF)) {
 				unsigned int ins = 0;
 
-				if(COPYIN((user_addr_t)(regs->pc), (char *)&ins,(vm_size_t)(sizeof(unsigned int))) != KERN_SUCCESS)
+				if (COPYIN((user_addr_t)(regs->pc), (char *)&ins, (vm_size_t)(sizeof(unsigned int))) != KERN_SUCCESS) {
 					goto exit;
+				}
 
-				if ((ins & ARM_SWP_MASK) == ARM_SWP)
+				if ((ins & ARM_SWP_MASK) == ARM_SWP) {
 					fault_type = VM_PROT_WRITE;
+				}
 			}
 		}
 	}
@@ -377,7 +393,6 @@ sleh_abort(struct arm_saved_state * regs, int type)
 		}
 
 		if ((type == T_PREFETCH_ABT) || (status == FSR_DEBUG)) {
-
 			intr = ml_set_interrupts_enabled(FALSE);
 			if (status == FSR_DEBUG) {
 				DebuggerCall(EXC_BREAKPOINT, regs);
@@ -387,11 +402,9 @@ sleh_abort(struct arm_saved_state * regs, int type)
 			panic_with_thread_kernel_state("prefetch abort in kernel mode", regs);
 
 			(void) ml_set_interrupts_enabled(intr);
-
 		} else if (TEST_FSR_VMFAULT(status)) {
-
 #if CONFIG_DTRACE
-			if (thread->options & TH_OPT_DTRACE) {	/* Executing under dtrace_probe? */
+			if (thread->options & TH_OPT_DTRACE) {  /* Executing under dtrace_probe? */
 				if (dtrace_tally_fault(fault_addr)) { /* Should a fault under dtrace be ignored? */
 					/* Point to next instruction */
 					regs->pc += ((regs->cpsr & PSR_TF) && !IS_THUMB32(*((uint16_t*) (regs->pc)))) ? 2 : 4;
@@ -407,25 +420,27 @@ sleh_abort(struct arm_saved_state * regs, int type)
 			}
 #endif
 
-			if (VM_KERNEL_ADDRESS(vaddr) || thread == THREAD_NULL)
+			if (VM_KERNEL_ADDRESS(vaddr) || thread == THREAD_NULL) {
 				map = kernel_map;
-			else
+			} else {
 				map = thread->map;
+			}
 
 			if (!TEST_FSR_TRANSLATION_FAULT(status)) {
 				/* check to see if it is just a pmap ref/modify fault */
 				result = arm_fast_fault(map->pmap, trunc_page(fault_addr), fault_type, FALSE);
-				if (result == KERN_SUCCESS)
+				if (result == KERN_SUCCESS) {
 					goto exit;
+				}
 			}
 
 			/*
 			 *  We have to "fault" the page in.
 			 */
 			result = vm_fault(map, fault_addr,
-					  fault_type,
-					  FALSE /* change_wiring */, VM_KERN_MEMORY_NONE,
-					  (map == kernel_map) ? THREAD_UNINT : THREAD_ABORTSAFE, NULL, 0);
+			    fault_type,
+			    FALSE /* change_wiring */, VM_KERN_MEMORY_NONE,
+			    (map == kernel_map) ? THREAD_UNINT : THREAD_ABORTSAFE, NULL, 0);
 
 			if (result == KERN_SUCCESS) {
 				goto exit;
@@ -452,22 +467,21 @@ sleh_abort(struct arm_saved_state * regs, int type)
 
 				goto exit;
 			}
-
 		}
 		intr = ml_set_interrupts_enabled(FALSE);
 
 		panic_plain("kernel abort type %d: fault_type=0x%x, fault_addr=0x%x\n"
-		      "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
-		      "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
-		      "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
-		      "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
-		      "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
-		      type, fault_type, fault_addr,
-		      regs->r[0], regs->r[1], regs->r[2], regs->r[3],
-		      regs->r[4], regs->r[5], regs->r[6], regs->r[7],
-		      regs->r[8], regs->r[9], regs->r[10], regs->r[11],
-		      regs->r[12], regs->sp, regs->lr, regs->pc,
-		      regs->cpsr, regs->fsr, regs->far);
+		    "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
+		    "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
+		    "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
+		    "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
+		    "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
+		    type, fault_type, fault_addr,
+		    regs->r[0], regs->r[1], regs->r[2], regs->r[3],
+		    regs->r[4], regs->r[5], regs->r[6], regs->r[7],
+		    regs->r[8], regs->r[9], regs->r[10], regs->r[11],
+		    regs->r[12], regs->sp, regs->lr, regs->pc,
+		    regs->cpsr, regs->fsr, regs->far);
 
 		(void) ml_set_interrupts_enabled(intr);
 
@@ -479,7 +493,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 		map = thread->map;
 
 #if CONFIG_DTRACE
-		if (thread->options & TH_OPT_DTRACE) {	/* Executing under dtrace_probe? */
+		if (thread->options & TH_OPT_DTRACE) {  /* Executing under dtrace_probe? */
 			if (dtrace_tally_fault(fault_addr)) { /* Should a user mode fault under dtrace be ignored? */
 				if (recover) {
 					regs->pc = recover;
@@ -506,16 +520,17 @@ sleh_abort(struct arm_saved_state * regs, int type)
 		if (!TEST_FSR_TRANSLATION_FAULT(status)) {
 			/* check to see if it is just a pmap ref/modify fault */
 			result = arm_fast_fault(map->pmap, trunc_page(fault_addr), fault_type, TRUE);
-			if (result == KERN_SUCCESS)
+			if (result == KERN_SUCCESS) {
 				goto exception_return;
+			}
 		}
 
 		/*
 		 * We have to "fault" the page in.
 		 */
 		result = vm_fault(map, fault_addr, fault_type,
-				  FALSE /* change_wiring */, VM_KERN_MEMORY_NONE,
-				  THREAD_ABORTSAFE, NULL, 0);
+		    FALSE /* change_wiring */, VM_KERN_MEMORY_NONE,
+		    THREAD_ABORTSAFE, NULL, 0);
 		if (result == KERN_SUCCESS || result == KERN_ABORTED) {
 			goto exception_return;
 		}
@@ -543,14 +558,16 @@ sleh_abort(struct arm_saved_state * regs, int type)
 	/* NOTREACHED */
 
 exception_return:
-	if (recover)
+	if (recover) {
 		thread->recover = recover;
+	}
 	thread_exception_return();
 	/* NOTREACHED */
 
 exit:
-	if (recover)
+	if (recover) {
 		thread->recover = recover;
+	}
 	return;
 }
 
@@ -578,33 +595,37 @@ sleh_alignment(struct arm_saved_state * regs)
 	getCpuDatap()->cpu_stat.unaligned_cnt++;
 
 	/* Do not try to emulate in modified execution states */
-	if (regs->cpsr & (PSR_EF | PSR_JF))
+	if (regs->cpsr & (PSR_EF | PSR_JF)) {
 		return KERN_NOT_SUPPORTED;
+	}
 
 	/* Disallow emulation of kernel instructions */
-	if ((regs->cpsr & PSR_MODE_MASK) != PSR_USER_MODE)
+	if ((regs->cpsr & PSR_MODE_MASK) != PSR_USER_MODE) {
 		return KERN_NOT_SUPPORTED;
-		
+	}
+
 
 #define ALIGN_THRESHOLD 1024
 	if ((sleh_alignment_count++ & (ALIGN_THRESHOLD - 1)) ==
-	    (ALIGN_THRESHOLD - 1))
+	    (ALIGN_THRESHOLD - 1)) {
 		kprintf("sleh_alignment: %d more alignment faults: %d total\n",
-			ALIGN_THRESHOLD, sleh_alignment_count);
+		    ALIGN_THRESHOLD, sleh_alignment_count);
+	}
 
 	if ((trap_on_alignment_fault != 0)
-	    && (sleh_alignment_count % trap_on_alignment_fault == 0))
+	    && (sleh_alignment_count % trap_on_alignment_fault == 0)) {
 		return KERN_NOT_SUPPORTED;
+	}
 
 	status = regs->fsr;
 	paddr = regs->far;
 
 	if (regs->cpsr & PSR_TF) {
-		 unsigned short ins16 = 0;
+		unsigned short ins16 = 0;
 
 		/* Get aborted instruction */
-#if	__ARM_SMP__ || __ARM_USER_PROTECT__
-		if(COPYIN((user_addr_t)(regs->pc), (char *)&ins16,(vm_size_t)(sizeof(uint16_t))) != KERN_SUCCESS) {
+#if     __ARM_SMP__ || __ARM_USER_PROTECT__
+		if (COPYIN((user_addr_t)(regs->pc), (char *)&ins16, (vm_size_t)(sizeof(uint16_t))) != KERN_SUCCESS) {
 			/* Failed to fetch instruction, return success to re-drive the exception */
 			return KERN_SUCCESS;
 		}
@@ -620,18 +641,21 @@ sleh_alignment(struct arm_saved_state * regs)
 		 */
 
 		reg_list = ins16 & 0xff;
-		if (reg_list == 0)
+		if (reg_list == 0) {
 			return KERN_NOT_SUPPORTED;
+		}
 
 		if (((ins16 & THUMB_STR_1_MASK) == THUMB_LDMIA) ||
 		    ((ins16 & THUMB_STR_1_MASK) == THUMB_STMIA)) {
 			base_index = (ins16 >> 8) & 0x7;
 			ins = 0xE8800000 | (base_index << 16) | reg_list;
-			if ((ins16 & THUMB_STR_1_MASK) == THUMB_LDMIA)
+			if ((ins16 & THUMB_STR_1_MASK) == THUMB_LDMIA) {
 				ins |= (1 << 20);
+			}
 			if (((ins16 & THUMB_STR_1_MASK) == THUMB_STMIA) ||
-			    !(reg_list & (1 << base_index)))
+			    !(reg_list & (1 << base_index))) {
 				ins |= (1 << 21);
+			}
 		} else if ((ins16 & THUMB_PUSH_MASK) == THUMB_POP) {
 			unsigned int    r = (ins16 >> 8) & 1;
 			ins = 0xE8BD0000 | (r << 15) | reg_list;
@@ -643,8 +667,8 @@ sleh_alignment(struct arm_saved_state * regs)
 		}
 	} else {
 		/* Get aborted instruction */
-#if	__ARM_SMP__ || __ARM_USER_PROTECT__
-		if(COPYIN((user_addr_t)(regs->pc), (char *)&ins,(vm_size_t)(sizeof(unsigned int))) != KERN_SUCCESS) {
+#if     __ARM_SMP__ || __ARM_USER_PROTECT__
+		if (COPYIN((user_addr_t)(regs->pc), (char *)&ins, (vm_size_t)(sizeof(unsigned int))) != KERN_SUCCESS) {
 			/* Failed to fetch instruction, return success to re-drive the exception */
 			return KERN_SUCCESS;
 		}
@@ -654,8 +678,9 @@ sleh_alignment(struct arm_saved_state * regs)
 	}
 
 	/* Don't try to emulate unconditional instructions */
-	if ((ins & 0xF0000000) == 0xF0000000)
+	if ((ins & 0xF0000000) == 0xF0000000) {
 		return KERN_NOT_SUPPORTED;
+	}
 
 	pre = (ins >> 24) & 1;
 	up = (ins >> 23) & 1;
@@ -663,36 +688,37 @@ sleh_alignment(struct arm_saved_state * regs)
 	write_back = (ins >> 21) & 1;
 	base_index = (ins >> 16) & 0xf;
 
-	if ((ins & ARM_BLK_MASK) == ARM_STM) {	/* STM or LDM */
+	if ((ins & ARM_BLK_MASK) == ARM_STM) {  /* STM or LDM */
 		int             reg_count = 0;
 		int             waddr;
 
 		for (rd_index = 0; rd_index < 16; rd_index++) {
-			if (reg_list & (1 << rd_index))
+			if (reg_list & (1 << rd_index)) {
 				reg_count++;
+			}
 		}
 
 		paddr = regs->r[base_index];
 
 		switch (ins & (ARM_POST_INDEXING | ARM_INCREMENT)) {
-			/* Increment after */
+		/* Increment after */
 		case ARM_INCREMENT:
 			waddr = paddr + reg_count * 4;
 			break;
 
-			/* Increment before */
+		/* Increment before */
 		case ARM_POST_INDEXING | ARM_INCREMENT:
 			waddr = paddr + reg_count * 4;
 			paddr += 4;
 			break;
 
-			/* Decrement after */
+		/* Decrement after */
 		case 0:
 			waddr = paddr - reg_count * 4;
 			paddr = waddr + 4;
 			break;
 
-			/* Decrement before */
+		/* Decrement before */
 		case ARM_POST_INDEXING:
 			waddr = paddr - reg_count * 4;
 			paddr = waddr;
@@ -706,13 +732,15 @@ sleh_alignment(struct arm_saved_state * regs)
 			if (reg_list & (1 << rd_index)) {
 				src = &regs->r[rd_index];
 
-				if ((ins & (1 << 20)) == 0)	/* STM */
+				if ((ins & (1 << 20)) == 0) {   /* STM */
 					rc = COPYOUT(src, paddr, 4);
-				else	/* LDM */
+				} else { /* LDM */
 					rc = COPYIN(paddr, src, 4);
+				}
 
-				if (rc != KERN_SUCCESS)
+				if (rc != KERN_SUCCESS) {
 					break;
+				}
 
 				paddr += 4;
 			}
@@ -724,19 +752,21 @@ sleh_alignment(struct arm_saved_state * regs)
 	}
 
 	if (rc == KERN_SUCCESS) {
-		if (regs->cpsr & PSR_TF)
+		if (regs->cpsr & PSR_TF) {
 			regs->pc += 2;
-		else
+		} else {
 			regs->pc += 4;
+		}
 
-		if (write_back)
+		if (write_back) {
 			regs->r[base_index] = paddr;
+		}
 	}
-	return (rc);
+	return rc;
 }
 
 
-#ifndef	NO_KDEBUG
+#ifndef NO_KDEBUG
 /* XXX quell warnings */
 void            syscall_trace(struct arm_saved_state * regs);
 void            syscall_trace_exit(unsigned int, unsigned int);
@@ -748,66 +778,67 @@ void            interrupt_trace_exit(void);
 /* called from the fleh_swi handler, if TRACE_SYSCALL is enabled */
 void
 syscall_trace(
-	      struct arm_saved_state * regs)
+	struct arm_saved_state * regs)
 {
 	kprintf("syscall: %d\n", regs->r[12]);
 }
 
 void
 syscall_trace_exit(
-		   unsigned int r0,
-		   unsigned int r1)
+	unsigned int r0,
+	unsigned int r1)
 {
 	kprintf("syscall exit: 0x%x 0x%x\n", r0, r1);
 }
 
 void
 mach_syscall_trace(
-		   struct arm_saved_state * regs,
-		   unsigned int call_number)
+	struct arm_saved_state * regs,
+	unsigned int call_number)
 {
 	int             i, argc;
 	int             kdarg[3] = {0, 0, 0};
 
 	argc = mach_trap_table[call_number].mach_trap_arg_count;
 
-	if (argc > 3)
+	if (argc > 3) {
 		argc = 3;
+	}
 
-	for (i = 0; i < argc; i++)
+	for (i = 0; i < argc; i++) {
 		kdarg[i] = (int) regs->r[i];
+	}
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_START,
-		kdarg[0], kdarg[1], kdarg[2], 0, 0);
-
+	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_START,
+	    kdarg[0], kdarg[1], kdarg[2], 0, 0);
 }
 
 void
 mach_syscall_trace_exit(
-			unsigned int retval,
-			unsigned int call_number)
+	unsigned int retval,
+	unsigned int call_number)
 {
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_END,
-		retval, 0, 0, 0, 0);
+	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_END,
+	    retval, 0, 0, 0, 0);
 }
 
 void
 interrupt_trace(
-		struct arm_saved_state * regs)
+	struct arm_saved_state * regs)
 {
-#define	UMODE(rp)	(((rp)->cpsr & PSR_MODE_MASK) == PSR_USER_MODE)
+#define UMODE(rp)       (((rp)->cpsr & PSR_MODE_MASK) == PSR_USER_MODE)
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_START,
-		0, UMODE(regs) ? regs->pc : VM_KERNEL_UNSLIDE(regs->pc),
-		UMODE(regs), 0, 0);
+	    MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_START,
+	    0, UMODE(regs) ? regs->pc : VM_KERNEL_UNSLIDE(regs->pc),
+	    UMODE(regs), 0, 0);
 }
 
 void
 interrupt_trace_exit(
-		     void)
+	void)
 {
 #if KPERF
 	kperf_interrupt();
@@ -826,20 +857,19 @@ interrupt_stats(void)
 	SCHED_STATS_INTERRUPT(current_processor());
 }
 
-static void 
+static void
 panic_with_thread_kernel_state(const char *msg, struct arm_saved_state *regs)
 {
 	panic_plain("%s (saved state:%p)\n"
-		    "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
-		    "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
-		    "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
-		    "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
-		    "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
-		    msg, regs,
-		    regs->r[0], regs->r[1], regs->r[2], regs->r[3],
-		    regs->r[4], regs->r[5], regs->r[6], regs->r[7],
-		    regs->r[8], regs->r[9], regs->r[10], regs->r[11],
-		    regs->r[12], regs->sp, regs->lr, regs->pc,
-		    regs->cpsr, regs->fsr, regs->far);
-
+	    "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
+	    "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
+	    "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
+	    "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
+	    "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
+	    msg, regs,
+	    regs->r[0], regs->r[1], regs->r[2], regs->r[3],
+	    regs->r[4], regs->r[5], regs->r[6], regs->r[7],
+	    regs->r[8], regs->r[9], regs->r[10], regs->r[11],
+	    regs->r[12], regs->sp, regs->lr, regs->pc,
+	    regs->cpsr, regs->fsr, regs->far);
 }

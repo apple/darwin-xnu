@@ -2,14 +2,14 @@
  * Copyright (c) 2008 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
  * compliance with the License. Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this
  * file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -17,7 +17,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
 
@@ -42,7 +42,7 @@ int
 __commpage_gettimeofday_internal(struct timeval *tp, uint64_t *tbr_out)
 {
 	uint64_t now, over;
-	uint64_t delta,frac;
+	uint64_t delta, frac;
 	uint64_t TimeStamp_tick;
 	uint64_t TimeStamp_sec;
 	uint64_t TimeStamp_frac;
@@ -81,36 +81,39 @@ __commpage_gettimeofday_internal(struct timeval *tp, uint64_t *tbr_out)
 		 * This barrier prevents the reordering of the second read of gtod_TimeStamp_tick_p
 		 * w.r.t the values read just after mach_absolute_time is invoked.
 		 */
-#if	(__ARM_ARCH__ >= 7)
-		__asm__ volatile("dmb ishld" ::: "memory");
+#if     (__ARM_ARCH__ >= 7)
+		__asm__ volatile ("dmb ishld" ::: "memory");
 #endif
 	} while (TimeStamp_tick != *gtod_TimeStamp_tick_p);
 
-	if (TimeStamp_tick == 0)
-		return(1);
+	if (TimeStamp_tick == 0) {
+		return 1;
+	}
 
 	delta = now - TimeStamp_tick;
 
 	/* If more than one second force a syscall */
-	if (delta >= Ticks_per_sec)
-		return(1);
+	if (delta >= Ticks_per_sec) {
+		return 1;
+	}
 
 	if (TimeStamp_sec > __LONG_MAX__) {
-		return(1);
+		return 1;
 	}
 
 	tp->tv_sec = (__darwin_time_t)TimeStamp_sec;
 
 	over = multi_overflow(Tick_scale, delta);
-	if(over){
+	if (over) {
 		tp->tv_sec += over;
 	}
 
 	/* Sum scale*delta to TimeStamp_frac, if it overflows increment sec */
 	frac = TimeStamp_frac;
 	frac += Tick_scale * delta;
-	if( TimeStamp_frac > frac )
+	if (TimeStamp_frac > frac) {
 		tp->tv_sec++;
+	}
 
 	/*
 	 * Convert frac (64 bit frac of a sec) to usec
@@ -122,5 +125,5 @@ __commpage_gettimeofday_internal(struct timeval *tp, uint64_t *tbr_out)
 		*tbr_out = now;
 	}
 
-	return(0);
+	return 0;
 }

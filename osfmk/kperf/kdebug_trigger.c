@@ -98,7 +98,7 @@ int
 kperf_kdebug_init(void)
 {
 	kperf_kdebug_filter = kalloc_tag(sizeof(*kperf_kdebug_filter),
-	                                 VM_KERN_MEMORY_DIAG);
+	    VM_KERN_MEMORY_DIAG);
 	if (kperf_kdebug_filter == NULL) {
 		return ENOMEM;
 	}
@@ -136,7 +136,7 @@ kperf_kdebug_should_trigger(uint32_t debugid)
 	 */
 	for (uint8_t i = 0; i < kperf_kdebug_filter->n_debugids; i++) {
 		uint32_t check_debugid =
-			kperf_kdebug_filter->debugids[i];
+		    kperf_kdebug_filter->debugids[i];
 		uint32_t mask = debugid_masks[DECODE_TYPE(kperf_kdebug_filter->types, i)];
 
 		if ((debugid & mask) == check_debugid) {
@@ -170,8 +170,7 @@ kperf_kdebug_set_filter(user_addr_t user_filter, uint32_t user_size)
 	}
 
 	if ((err = copyin(user_filter, (char *)kperf_kdebug_filter,
-	                  KPERF_KDEBUG_FILTER_SIZE(n_debugids_provided))))
-	{
+	    KPERF_KDEBUG_FILTER_SIZE(n_debugids_provided)))) {
 		bzero(kperf_kdebug_filter, sizeof(*kperf_kdebug_filter));
 		goto out;
 	}
@@ -244,8 +243,7 @@ kperf_kdebug_update(void)
 	}
 
 	if (kperf_kdebug_action != 0 &&
-	    kperf_kdebug_filter->n_debugids != 0)
-	{
+	    kperf_kdebug_filter->n_debugids != 0) {
 		kperf_kdebug_active = TRUE;
 	} else {
 		kperf_kdebug_active = FALSE;

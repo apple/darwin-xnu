@@ -30,22 +30,22 @@
 
 static void
 expect_special_port_description(const char *(*fn)(mach_port_t),
-		mach_port_t port, const char *namestr)
+    mach_port_t port, const char *namestr)
 {
 	const char *desc = fn(port);
 	T_EXPECT_NOTNULL(desc, "%s is %s", namestr, desc);
 	if (desc) {
 		T_QUIET; T_EXPECT_GT(strlen(desc), strlen(""),
-				"%s's description string is not empty", namestr);
+		    "%s's description string is not empty", namestr);
 	}
 }
 
 T_DECL(host_special_port_descriptions,
-		"verify that host special ports can be described")
+    "verify that host special ports can be described")
 {
 #define TEST_HSP(portdef) \
-		expect_special_port_description(mach_host_special_port_description, \
-		portdef, #portdef)
+	        expect_special_port_description(mach_host_special_port_description, \
+	        portdef, #portdef)
 
 	TEST_HSP(HOST_PORT);
 	TEST_HSP(HOST_PRIV_PORT);
@@ -76,20 +76,20 @@ T_DECL(host_special_port_descriptions,
 #undef TEST_HSP
 
 	T_EXPECT_EQ(HOST_SYSPOLICYD_PORT, HOST_MAX_SPECIAL_PORT,
-			"checked all of the ports");
+	    "checked all of the ports");
 
 	const char *invalid_hsp =
-			mach_host_special_port_description(HOST_MAX_SPECIAL_PORT + 1);
+	    mach_host_special_port_description(HOST_MAX_SPECIAL_PORT + 1);
 	T_EXPECT_NULL(invalid_hsp,
-			"invalid host special port description should be NULL");
+	    "invalid host special port description should be NULL");
 }
 
 T_DECL(task_special_port_descriptions,
-		"verify that task special ports can be described")
+    "verify that task special ports can be described")
 {
 #define TEST_TSP(portdef) \
-		expect_special_port_description(mach_task_special_port_description, \
-		portdef, #portdef)
+	        expect_special_port_description(mach_task_special_port_description, \
+	        portdef, #portdef)
 
 	TEST_TSP(TASK_KERNEL_PORT);
 	TEST_TSP(TASK_HOST_PORT);
@@ -103,12 +103,12 @@ T_DECL(task_special_port_descriptions,
 #undef TEST_TSP
 
 	T_EXPECT_EQ(TASK_RESOURCE_NOTIFY_PORT, TASK_MAX_SPECIAL_PORT,
-			"checked all of the ports");
+	    "checked all of the ports");
 
 	const char *invalid_tsp =
-			mach_task_special_port_description(TASK_MAX_SPECIAL_PORT + 1);
+	    mach_task_special_port_description(TASK_MAX_SPECIAL_PORT + 1);
 	T_EXPECT_NULL(invalid_tsp,
-			"invalid task special port description should be NULL");
+	    "invalid task special port description should be NULL");
 }
 
 static void
@@ -120,11 +120,11 @@ expect_special_port_id(int (*fn)(const char *id), int port, const char *portid)
 }
 
 T_DECL(host_special_port_mapping,
-		"verify that task special port names can be mapped to numbers")
+    "verify that task special port names can be mapped to numbers")
 {
 #define TEST_HSP(portdef) \
-		expect_special_port_id(mach_host_special_port_for_id, \
-		portdef, #portdef)
+	        expect_special_port_id(mach_host_special_port_for_id, \
+	        portdef, #portdef)
 
 	TEST_HSP(HOST_PORT);
 	TEST_HSP(HOST_PRIV_PORT);
@@ -156,15 +156,15 @@ T_DECL(host_special_port_mapping,
 
 	int invalid_tsp = mach_host_special_port_for_id("BOGUS_SPECIAL_PORT_NAME");
 	T_EXPECT_EQ(invalid_tsp, -1,
-			"invalid host special port IDs should return -1");
+	    "invalid host special port IDs should return -1");
 }
 
 T_DECL(task_special_port_mapping,
-		"verify that task special port names can be mapped to numbers")
+    "verify that task special port names can be mapped to numbers")
 {
 #define TEST_TSP(portdef) \
-		expect_special_port_id(mach_task_special_port_for_id, \
-		portdef, #portdef)
+	        expect_special_port_id(mach_task_special_port_for_id, \
+	        portdef, #portdef)
 
 	TEST_TSP(TASK_KERNEL_PORT);
 	TEST_TSP(TASK_HOST_PORT);
@@ -179,5 +179,5 @@ T_DECL(task_special_port_mapping,
 
 	int invalid_tsp = mach_task_special_port_for_id("BOGUS_SPECIAL_PORT_NAME");
 	T_EXPECT_EQ(invalid_tsp, -1,
-			"invalid task special port IDs should return -1");
+	    "invalid task special port IDs should return -1");
 }

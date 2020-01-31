@@ -48,6 +48,8 @@
 
 #include <sys/lockstat.h>
 
+#include <kern/lock_stat.h>
+
 #include <kern/processor.h>
 
 #define membar_producer dtrace_membar_producer
@@ -68,27 +70,27 @@
  * Hot patch values, x86
  */
 #if defined(__x86_64__)
-#define	NOP	0x90
-#define	RET	0xc3
+#define NOP     0x90
+#define RET     0xc3
 #define LOCKSTAT_AFRAMES 1
-#elif	defined(__arm__)
-#define NOP	0xE1A00000
-#define BXLR	0xE12FFF1E
+#elif   defined(__arm__)
+#define NOP     0xE1A00000
+#define BXLR    0xE12FFF1E
 #define LOCKSTAT_AFRAMES 2
 #elif   defined(__arm64__)
-#define NOP	0xD503201F
-#define RET	0xD65f03c0
+#define NOP     0xD503201F
+#define RET     0xD65f03c0
 #define LOCKSTAT_AFRAMES 2
 #else
 #error "not ported to this architecture"
 #endif
 
 typedef struct lockstat_probe {
-	const char	*lsp_func;
-	const char	*lsp_name;
-	int		lsp_probe;
-	dtrace_id_t	lsp_id;
-	const char	*lsp_args;
+	const char      *lsp_func;
+	const char      *lsp_name;
+	int             lsp_probe;
+	dtrace_id_t     lsp_id;
+	const char      *lsp_args;
 } lockstat_probe_t;
 
 lockstat_probe_t lockstat_probes[] =
@@ -163,7 +165,7 @@ lockstat_probe_t lockstat_probes[] =
 #endif
 	/* Interlock measurements would be nice, but later */
 
-#ifdef	LATER
+#ifdef  LATER
 	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_EXCL_TO_SHARED, LSA_ILK_SPIN, LS_LCK_RW_LOCK_EXCL_TO_SHARED_ILK_SPIN),
 	LOCKSTAT_PROBE(LS_LCK_MTX_LOCK, LSA_ILK_SPIN, LS_LCK_MTX_LOCK_ILK_SPIN),
 	LOCKSTAT_PROBE(LS_LCK_MTX_EXT_LOCK, LSA_ILK_SPIN, LS_LCK_MTX_EXT_LOCK_ILK_SPIN),
@@ -171,87 +173,14 @@ lockstat_probe_t lockstat_probes[] =
 	LOCKSTAT_PROBE(LS_LCK_RW_TRY_LOCK_SHARED, LSA_SPIN, LS_LCK_RW_TRY_LOCK_SHARED_SPIN)
 #endif
 
-	{ NULL, NULL, 0, 0, NULL}
+	{
+		NULL, NULL, 0, 0, NULL
+	}
 };
 
 dtrace_id_t lockstat_probemap[LS_NPROBES];
-
-typedef struct lockstat_assembly_probe {
-	int lsap_probe;
-	vm_offset_t * lsap_patch_point;
-} lockstat_assembly_probe_t;
-	
-
-	lockstat_assembly_probe_t assembly_probes[] =
-	{
-		{ LS_LCK_INVALID, NULL }
-	};
-
-
-/*
- * APPLE NOTE:
- * Hot patch is used to manipulate probe points by swapping between
- * no-op and return instructions.
- * The active flag indicates whether the probe point will turn on or off.
- *	on == plant a NOP and thus fall through to the probe call
- *     off == plant a RET and thus avoid the probe call completely
- * The ls_probe identifies which probe we will patch.
- */
-static
-void lockstat_hot_patch(boolean_t active, int ls_probe)
-{
-#pragma unused(active)
-	int i;
-
-	/*
-	 * Loop through entire table, in case there are
-	 * multiple patch points per probe. 
-	 */
-	for (i = 0; assembly_probes[i].lsap_patch_point; i++) {
-		if (ls_probe == assembly_probes[i].lsap_probe)
-#if defined(__x86_64__)
-		{			
-			uint8_t instr;
-			instr = (active ? NOP : RET );
-			(void) ml_nofault_copy( (vm_offset_t)&instr, *(assembly_probes[i].lsap_patch_point), 
-								sizeof(instr));
-		}
-#elif defined (__arm__)
-		{
-			uint32_t instr;
-			instr = (active ? NOP : BXLR );
-			(void) ml_nofault_copy( (vm_offset_t)&instr, *(assembly_probes[i].lsap_patch_point), 
-								sizeof(instr));
-		}
-#elif defined (__arm64__)
-		{
-			uint32_t instr;
-			instr = (active ? NOP : RET );
-			(void) ml_nofault_copy( (vm_offset_t)&instr, *(assembly_probes[i].lsap_patch_point), 
-								sizeof(instr));
-		}
-#endif
-	} /* for */
-}
-
 void (*lockstat_probe)(dtrace_id_t, uint64_t, uint64_t,
-				    uint64_t, uint64_t, uint64_t);
-
-
-/*
- * APPLE NOTE:
- * This wrapper is used only by assembler hot patched probes.
- */
-void
-lockstat_probe_wrapper(int probe, uintptr_t lp, int rwflag)
-{
-	dtrace_id_t id;
-	id = lockstat_probemap[probe];
-	if (id != 0)
-	{
-		(*lockstat_probe)(id, (uintptr_t)lp, (uint64_t)rwflag, 0,0,0);
-	}
-}
+    uint64_t, uint64_t, uint64_t);
 
 static dtrace_provider_id_t lockstat_id;
 
@@ -260,7 +189,7 @@ static int
 lockstat_enable(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg) /* __APPLE__ */
-    
+
 	lockstat_probe_t *probe = parg;
 
 	ASSERT(!lockstat_probemap[probe->lsp_probe]);
@@ -268,10 +197,8 @@ lockstat_enable(void *arg, dtrace_id_t id, void *parg)
 	lockstat_probemap[probe->lsp_probe] = id;
 	membar_producer();
 
-	lockstat_hot_patch(TRUE, probe->lsp_probe);
 	membar_producer();
-	return(0);
-
+	return 0;
 }
 
 /*ARGSUSED*/
@@ -286,7 +213,6 @@ lockstat_disable(void *arg, dtrace_id_t id, void *parg)
 	ASSERT(lockstat_probemap[probe->lsp_probe]);
 
 	lockstat_probemap[probe->lsp_probe] = 0;
-	lockstat_hot_patch(FALSE, probe->lsp_probe);
 	membar_producer();
 
 	/*
@@ -302,7 +228,6 @@ lockstat_disable(void *arg, dtrace_id_t id, void *parg)
 			return;
 		}
 	}
-
 }
 
 /*ARGSUSED*/
@@ -310,15 +235,16 @@ static void
 lockstat_provide(void *arg, const dtrace_probedesc_t *desc)
 {
 #pragma unused(arg, desc) /* __APPLE__ */
-    
+
 	int i = 0;
 
 	for (i = 0; lockstat_probes[i].lsp_func != NULL; i++) {
 		lockstat_probe_t *probe = &lockstat_probes[i];
 
 		if (dtrace_probe_lookup(lockstat_id, "mach_kernel",
-		    probe->lsp_func, probe->lsp_name) != 0)
+		    probe->lsp_func, probe->lsp_name) != 0) {
 			continue;
+		}
 
 		ASSERT(!probe->lsp_id);
 		probe->lsp_id = dtrace_probe_create(lockstat_id,
@@ -333,7 +259,7 @@ static void
 lockstat_destroy(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg, id) /* __APPLE__ */
-    
+
 	lockstat_probe_t *probe = parg;
 
 	ASSERT(!lockstat_probemap[probe->lsp_probe]);
@@ -351,7 +277,7 @@ lockstat_getargdesc(void *arg, dtrace_id_t id, void *parg, dtrace_argdesc_t *des
 	desc->dtargd_native[0] = '\0';
 	desc->dtargd_xlate[0] = '\0';
 
-	while(argdesc[0] != '\0') {
+	while (argdesc[0] != '\0') {
 		if (narg == desc->dtargd_ndx) {
 			strlcpy(desc->dtargd_native, argdesc, DTRACE_ARGTYPELEN);
 			return;
@@ -364,24 +290,24 @@ lockstat_getargdesc(void *arg, dtrace_id_t id, void *parg, dtrace_argdesc_t *des
 }
 
 static dtrace_pattr_t lockstat_attr = {
-{ DTRACE_STABILITY_EVOLVING, DTRACE_STABILITY_EVOLVING, DTRACE_CLASS_COMMON },
-{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
-{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
-{ DTRACE_STABILITY_EVOLVING, DTRACE_STABILITY_EVOLVING, DTRACE_CLASS_COMMON },
-{ DTRACE_STABILITY_EVOLVING, DTRACE_STABILITY_EVOLVING, DTRACE_CLASS_COMMON },
+	{ DTRACE_STABILITY_EVOLVING, DTRACE_STABILITY_EVOLVING, DTRACE_CLASS_COMMON },
+	{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
+	{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
+	{ DTRACE_STABILITY_EVOLVING, DTRACE_STABILITY_EVOLVING, DTRACE_CLASS_COMMON },
+	{ DTRACE_STABILITY_EVOLVING, DTRACE_STABILITY_EVOLVING, DTRACE_CLASS_COMMON },
 };
 
 static dtrace_pops_t lockstat_pops = {
-	.dtps_provide =		lockstat_provide,
-	.dtps_provide_module =	NULL,
-	.dtps_enable =		lockstat_enable,
-	.dtps_disable =		lockstat_disable,
-	.dtps_suspend =		NULL,
-	.dtps_resume =		NULL,
-	.dtps_getargdesc =	lockstat_getargdesc,
-	.dtps_getargval =	NULL,
-	.dtps_usermode =	NULL,
-	.dtps_destroy =		lockstat_destroy
+	.dtps_provide =         lockstat_provide,
+	.dtps_provide_module =  NULL,
+	.dtps_enable =          lockstat_enable,
+	.dtps_disable =         lockstat_disable,
+	.dtps_suspend =         NULL,
+	.dtps_resume =          NULL,
+	.dtps_getargdesc =      lockstat_getargdesc,
+	.dtps_getargval =       NULL,
+	.dtps_usermode =        NULL,
+	.dtps_destroy =         lockstat_destroy
 };
 
 static int
@@ -392,18 +318,19 @@ lockstat_attach(dev_info_t *devi)
 	    dtrace_register("lockstat", &lockstat_attr, DTRACE_PRIV_KERNEL,
 	    NULL, &lockstat_pops, NULL, &lockstat_id) != 0) {
 		ddi_remove_minor_node(devi, NULL);
-		return (DDI_FAILURE);
+		return DDI_FAILURE;
 	}
 
 	lockstat_probe = dtrace_probe;
 	membar_producer();
 
-	return (DDI_SUCCESS);
+	return DDI_SUCCESS;
 }
 
 d_open_t _lockstat_open;
 
-int _lockstat_open(dev_t dev, int flags, int devtype, struct proc *p)
+int
+_lockstat_open(dev_t dev, int flags, int devtype, struct proc *p)
 {
 #pragma unused(dev,flags,devtype,p)
 	return 0;
@@ -417,25 +344,26 @@ int _lockstat_open(dev_t dev, int flags, int devtype, struct proc *p)
  */
 static struct cdevsw lockstat_cdevsw =
 {
-	_lockstat_open,		/* open */
-	eno_opcl,			/* close */
-	eno_rdwrt,			/* read */
-	eno_rdwrt,			/* write */
-	eno_ioctl,			/* ioctl */
+	_lockstat_open,         /* open */
+	eno_opcl,                       /* close */
+	eno_rdwrt,                      /* read */
+	eno_rdwrt,                      /* write */
+	eno_ioctl,                      /* ioctl */
 	(stop_fcn_t *)nulldev, /* stop */
 	(reset_fcn_t *)nulldev, /* reset */
-	NULL,				/* tty's */
-	eno_select,			/* select */
-	eno_mmap,			/* mmap */
-	eno_strat,			/* strategy */
-	eno_getc,			/* getc */
-	eno_putc,			/* putc */
-	0					/* type */
+	NULL,                           /* tty's */
+	eno_select,                     /* select */
+	eno_mmap,                       /* mmap */
+	eno_strat,                      /* strategy */
+	eno_getc,                       /* getc */
+	eno_putc,                       /* putc */
+	0                                       /* type */
 };
 
 void lockstat_init( void );
 
-void lockstat_init( void )
+void
+lockstat_init( void )
 {
 	int majdevno = cdevsw_add(LOCKSTAT_MAJOR, &lockstat_cdevsw);
 

@@ -2,7 +2,7 @@
  * Copyright (c) 2006-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -50,8 +50,8 @@
 /* Log information about external modification of a process,
  * using MessageTracer formatting. Assumes that both the caller
  * and target are appropriately locked.
- * Currently prints following information - 
- * 	1. Caller process name (truncated to 16 characters)
+ * Currently prints following information -
+ *      1. Caller process name (truncated to 16 characters)
  *	2. Caller process Mach-O UUID
  *  3. Target process name (truncated to 16 characters)
  *  4. Target process Mach-O UUID
@@ -60,15 +60,14 @@ void
 fslog_extmod_msgtracer(proc_t caller, proc_t target)
 {
 	if ((caller != PROC_NULL) && (target != PROC_NULL)) {
-
 		/*
 		 * Print into buffer large enough for "ThisIsAnApplicat(BC223DD7-B314-42E0-B6B0-C5D2E6638337)",
 		 * including space for escaping, and NUL byte included in sizeof(uuid_string_t).
 		 */
 
 		uuid_string_t uuidstr;
-		char c_name[2*MAXCOMLEN + 2 /* () */ + sizeof(uuid_string_t)];
-		char t_name[2*MAXCOMLEN + 2 /* () */ + sizeof(uuid_string_t)];
+		char c_name[2 * MAXCOMLEN + 2 /* () */ + sizeof(uuid_string_t)];
+		char t_name[2 * MAXCOMLEN + 2 /* () */ + sizeof(uuid_string_t)];
 
 		strlcpy(c_name, caller->p_comm, sizeof(c_name));
 		uuid_unparse_upper(caller->p_uuid, uuidstr);
@@ -89,20 +88,20 @@ fslog_extmod_msgtracer(proc_t caller, proc_t target)
 		}
 #if DEBUG
 		printf("EXTMOD: %s(%d) -> %s(%d)\n",
-			   c_name,
-			   proc_pid(caller),
-			   t_name,
-			   proc_pid(target));
+		    c_name,
+		    proc_pid(caller),
+		    t_name,
+		    proc_pid(target));
 #endif
 
 		kern_asl_msg(LOG_DEBUG, "messagetracer",
-							5,
-							"com.apple.message.domain", "com.apple.kernel.external_modification", /* 0 */
-							"com.apple.message.signature", c_name, /* 1 */
-							"com.apple.message.signature2", t_name, /* 2 */
-							"com.apple.message.result", "noop", /* 3 */
-							"com.apple.message.summarize", "YES", /* 4 */
-							NULL);
+		    5,
+		    "com.apple.message.domain", "com.apple.kernel.external_modification",                                     /* 0 */
+		    "com.apple.message.signature", c_name,                                     /* 1 */
+		    "com.apple.message.signature2", t_name,                                     /* 2 */
+		    "com.apple.message.result", "noop",                                     /* 3 */
+		    "com.apple.message.summarize", "YES",                                     /* 4 */
+		    NULL);
 	}
 }
 
@@ -133,8 +132,8 @@ static bool
 match_fpx_event(const struct fpx_event *fe,
     const uuid_t uuid, const uint32_t code, const uint32_t xcpt)
 {
-	return (code == fe->fe_code && xcpt == fe->fe_xcpt &&
-	    0 == memcmp(uuid, fe->fe_uuid, sizeof (uuid_t)));
+	return code == fe->fe_code && xcpt == fe->fe_xcpt &&
+	       0 == memcmp(uuid, fe->fe_uuid, sizeof(uuid_t));
 }
 
 #if FPX_EVENT_DBG
@@ -146,12 +145,12 @@ print_fpx_event(const char *pfx, const struct fpx_event *fe)
 	printf("%s: code 0x%x xcpt 0x%x uuid '%s'\n",
 	    pfx, fe->fe_code, fe->fe_xcpt, uustr);
 }
-#define DPRINTF_FPX_EVENT(pfx, fe)	print_fpx_event(pfx, fe)
+#define DPRINTF_FPX_EVENT(pfx, fe)      print_fpx_event(pfx, fe)
 #else
-#define DPRINTF_FPX_EVENT(pfx, fe)	/* nothing */
+#define DPRINTF_FPX_EVENT(pfx, fe)      /* nothing */
 #endif
 
-#define MAX_DISTINCT_FPX_EVENTS	101	/* (approx one page of heap) */
+#define MAX_DISTINCT_FPX_EVENTS 101     /* (approx one page of heap) */
 
 /*
  * Filter to detect "new" <uuid, code, xcpt> tuples.
@@ -167,7 +166,7 @@ static bool
 novel_fpx_event(const uuid_t uuid, uint32_t code, uint32_t xcpt)
 {
 	static TAILQ_HEAD(fpx_event_head, fpx_event) fehead =
-		TAILQ_HEAD_INITIALIZER(fehead);
+	    TAILQ_HEAD_INITIALIZER(fehead);
 	struct fpx_event *fe;
 
 	lck_mtx_lock(&fpxlock);
@@ -178,7 +177,7 @@ novel_fpx_event(const uuid_t uuid, uint32_t code, uint32_t xcpt)
 		/* seen before and element already at head */
 		lck_mtx_unlock(&fpxlock);
 		DPRINTF_FPX_EVENT("seen, head", fe);
-		return (false);
+		return false;
 	}
 
 	unsigned int count = 0;
@@ -190,7 +189,7 @@ novel_fpx_event(const uuid_t uuid, uint32_t code, uint32_t xcpt)
 			TAILQ_INSERT_HEAD(&fehead, fe, fe_link);
 			lck_mtx_unlock(&fpxlock);
 			DPRINTF_FPX_EVENT("seen, moved to head", fe);
-			return (false);
+			return false;
 		}
 		count++;
 	}
@@ -204,9 +203,9 @@ novel_fpx_event(const uuid_t uuid, uint32_t code, uint32_t xcpt)
 		DPRINTF_FPX_EVENT("reusing", fe);
 	} else {
 		/* add a new element to the list */
-		fe = kalloc(sizeof (*fe));
+		fe = kalloc(sizeof(*fe));
 	}
-	memcpy(fe->fe_uuid, uuid, sizeof (uuid_t));
+	memcpy(fe->fe_uuid, uuid, sizeof(uuid_t));
 	fe->fe_code = code;
 	fe->fe_xcpt = xcpt;
 	TAILQ_INSERT_HEAD(&fehead, fe, fe_link);
@@ -214,62 +213,67 @@ novel_fpx_event(const uuid_t uuid, uint32_t code, uint32_t xcpt)
 
 	DPRINTF_FPX_EVENT("novel", fe);
 
-	return (true);
+	return true;
 }
 
 void
 fpxlog(
-	int code,	/* Mach exception code: e.g. 5 or 8 */
-	uint32_t stat,	/* Full FP status register bits */
-	uint32_t ctrl,	/* Full FP control register bits */
-	uint32_t xcpt)	/* Exception bits from FP status */
+	int code,       /* Mach exception code: e.g. 5 or 8 */
+	uint32_t stat,  /* Full FP status register bits */
+	uint32_t ctrl,  /* Full FP control register bits */
+	uint32_t xcpt)  /* Exception bits from FP status */
 {
 	proc_t p = current_proc();
-	if (PROC_NULL == p)
+	if (PROC_NULL == p) {
 		return;
+	}
 
 	uuid_t uuid;
-	proc_getexecutableuuid(p, uuid, sizeof (uuid));
+	proc_getexecutableuuid(p, uuid, sizeof(uuid));
 
 	/*
 	 * Check to see if an exception with this <uuid, code, xcpt>
 	 * has been seen before.  If "novel" then log a message.
 	 */
-	if (!novel_fpx_event(uuid, code, xcpt))
+	if (!novel_fpx_event(uuid, code, xcpt)) {
 		return;
+	}
 
 	const size_t nmlen = 2 * MAXCOMLEN + 1;
 	char nm[nmlen] = {};
 	proc_selfname(nm, nmlen);
-	if (escape_str(nm, strlen(nm) + 1, nmlen))
-	        snprintf(nm, nmlen, "(a.out)");
+	if (escape_str(nm, strlen(nm) + 1, nmlen)) {
+		snprintf(nm, nmlen, "(a.out)");
+	}
 
 	const size_t slen = 8 + 1 + 8 + 1;
 	char xcptstr[slen], csrstr[slen];
 
 	snprintf(xcptstr, slen, "%x.%x", code, xcpt);
-	if (ctrl == stat)
+	if (ctrl == stat) {
 		snprintf(csrstr, slen, "%x", ctrl);
-	else
+	} else {
 		snprintf(csrstr, slen, "%x.%x", ctrl, stat);
+	}
 
 #if DEVELOPMENT || DEBUG
 	printf("%s[%d]: com.apple.kernel.fpx: %s, %s\n",
-		nm, proc_pid(p), xcptstr, csrstr);
+	    nm, proc_pid(p), xcptstr, csrstr);
 #endif
 	kern_asl_msg(LOG_DEBUG, "messagetracer", 5,
-	/* 0 */	"com.apple.message.domain", "com.apple.kernel.fpx",
-	/* 1 */ "com.apple.message.signature", nm,
-	/* 2 */ "com.apple.message.signature2", xcptstr,
-	/* 3 */ "com.apple.message.value", csrstr,
-	/* 4 */ "com.apple.message.summarize", "YES",
-		NULL);
+	    /* 0 */ "com.apple.message.domain", "com.apple.kernel.fpx",
+	    /* 1 */ "com.apple.message.signature", nm,
+	    /* 2 */ "com.apple.message.signature2", xcptstr,
+	    /* 3 */ "com.apple.message.value", csrstr,
+	    /* 4 */ "com.apple.message.summarize", "YES",
+	    NULL);
 }
 
 #else
 
 void
 fpxlog_init(void)
-{}
+{
+}
 
 #endif /* __x86_64__ */

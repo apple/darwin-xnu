@@ -3,7 +3,7 @@
 #include <mach/message.h>
 #include <darwintest.h>
 
-T_DECL(mach_port_insert_right,"insert send right for an existing right", T_META_CHECK_LEAKS(false))
+T_DECL(mach_port_insert_right, "insert send right for an existing right", T_META_CHECK_LEAKS(false))
 {
 	mach_port_t port = MACH_PORT_NULL;
 	mach_port_t port2 = MACH_PORT_NULL;

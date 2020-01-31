@@ -681,10 +681,11 @@ L_mmu_kvtop_wpreflight_invalid:
  */
 .macro SET_RECOVERY_HANDLER
 	mrs		$0, TPIDR_EL1					// Load thread pointer
-	ldr		$1, [$0, TH_RECOVER]			// Save previous recovery handler
 	adrp	$2, $3@page						// Load the recovery handler address
 	add		$2, $2, $3@pageoff
-	str		$2, [$0, TH_RECOVER]			// Set new recovery handler
+
+	ldr		$1, [$0, TH_RECOVER]			// Save previous recovery handler
+	str		$2, [$0, TH_RECOVER]			// Set new signed recovery handler
 .endmacro
 
 /*
@@ -823,7 +824,9 @@ LEXT(_bcopyinstr)
 	adr		x4, Lcopyinstr_error		// Get address for recover
 	mrs		x10, TPIDR_EL1				// Get thread pointer
 	ldr		x11, [x10, TH_RECOVER]		// Save previous recover
+
 	str		x4, [x10, TH_RECOVER]		// Store new recover
+
 	mov		x4, #0						// x4 - total bytes copied
 Lcopyinstr_loop:
 	ldrb	w5, [x0], #1					// Load a byte from the user source

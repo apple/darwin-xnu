@@ -2,7 +2,7 @@
  * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -39,7 +39,7 @@
  * no representations about the suitability of this software for any
  * purpose.  It is provided "as is" without express or implied
  * warranty.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY M.I.T. ``AS IS''.  M.I.T. DISCLAIMS
  * ALL EXPRESS OR IMPLIED WARRANTIES WITH REGARD TO THIS SOFTWARE,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
@@ -57,33 +57,33 @@
  */
 
 #ifndef _NET_IF_VLAN_VAR_H_
-#define	_NET_IF_VLAN_VAR_H_	1
+#define _NET_IF_VLAN_VAR_H_     1
 
-#define	ETHER_VLAN_ENCAP_LEN	4	/* len of 802.1Q VLAN encapsulation */
-struct	ether_vlan_header {
-	u_char	evl_dhost[ETHER_ADDR_LEN];
-	u_char	evl_shost[ETHER_ADDR_LEN];
+#define ETHER_VLAN_ENCAP_LEN    4       /* len of 802.1Q VLAN encapsulation */
+struct  ether_vlan_header {
+	u_char  evl_dhost[ETHER_ADDR_LEN];
+	u_char  evl_shost[ETHER_ADDR_LEN];
 	u_int16_t evl_encap_proto;
 	u_int16_t evl_tag;
 	u_int16_t evl_proto;
 };
 
-#define EVL_VLID_MASK	0x0FFF
-#define	EVL_VLANOFTAG(tag) ((tag) & EVL_VLID_MASK)
-#define	EVL_PRIOFTAG(tag) (((tag) >> 13) & 7)
+#define EVL_VLID_MASK   0x0FFF
+#define EVL_VLANOFTAG(tag) ((tag) & EVL_VLID_MASK)
+#define EVL_PRIOFTAG(tag) (((tag) >> 13) & 7)
 
 #if 0
 /* sysctl(3) tags, for compatibility purposes */
-#define	VLANCTL_PROTO	1
-#define	VLANCTL_MAX	2
+#define VLANCTL_PROTO   1
+#define VLANCTL_MAX     2
 #endif
 
 /*
  * Configuration structure for SIOCSETVLAN and SIOCGETVLAN ioctls.
  */
-struct	vlanreq {
-	char	vlr_parent[IFNAMSIZ];
-	u_short	vlr_tag;
+struct  vlanreq {
+	char    vlr_parent[IFNAMSIZ];
+	u_short vlr_tag;
 };
 
 #ifdef KERNEL_PRIVATE

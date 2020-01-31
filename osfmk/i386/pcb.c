@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -93,6 +93,7 @@
 #include <i386/thread.h>
 #include <i386/machine_routines.h>
 #include <i386/lapic.h> /* LAPIC_PMC_SWI_VECTOR */
+#include <i386/seg.h>
 
 #if HYPERVISOR
 #include <kern/hv_support.h>
@@ -102,36 +103,39 @@
  * Maps state flavor to number of words in the state:
  */
 unsigned int _MachineStateCount[] = {
-	[x86_THREAD_STATE32]	= x86_THREAD_STATE32_COUNT,
-	[x86_THREAD_STATE64]	= x86_THREAD_STATE64_COUNT,
-	[x86_THREAD_STATE]	= x86_THREAD_STATE_COUNT,
-	[x86_FLOAT_STATE32]	= x86_FLOAT_STATE32_COUNT,
-	[x86_FLOAT_STATE64]	= x86_FLOAT_STATE64_COUNT,
-	[x86_FLOAT_STATE]	= x86_FLOAT_STATE_COUNT,
-	[x86_EXCEPTION_STATE32]	= x86_EXCEPTION_STATE32_COUNT,
-	[x86_EXCEPTION_STATE64]	= x86_EXCEPTION_STATE64_COUNT,
-	[x86_EXCEPTION_STATE]	= x86_EXCEPTION_STATE_COUNT,
-	[x86_DEBUG_STATE32]	= x86_DEBUG_STATE32_COUNT,
-	[x86_DEBUG_STATE64]	= x86_DEBUG_STATE64_COUNT,
-	[x86_DEBUG_STATE]	= x86_DEBUG_STATE_COUNT,
-	[x86_AVX_STATE32]	= x86_AVX_STATE32_COUNT,
-	[x86_AVX_STATE64]	= x86_AVX_STATE64_COUNT,
-	[x86_AVX_STATE]		= x86_AVX_STATE_COUNT,
+	[x86_THREAD_STATE32]      = x86_THREAD_STATE32_COUNT,
+	[x86_THREAD_STATE64]      = x86_THREAD_STATE64_COUNT,
+	[x86_THREAD_FULL_STATE64] = x86_THREAD_FULL_STATE64_COUNT,
+	[x86_THREAD_STATE]        = x86_THREAD_STATE_COUNT,
+	[x86_FLOAT_STATE32]       = x86_FLOAT_STATE32_COUNT,
+	[x86_FLOAT_STATE64]       = x86_FLOAT_STATE64_COUNT,
+	[x86_FLOAT_STATE]         = x86_FLOAT_STATE_COUNT,
+	[x86_EXCEPTION_STATE32]   = x86_EXCEPTION_STATE32_COUNT,
+	[x86_EXCEPTION_STATE64]   = x86_EXCEPTION_STATE64_COUNT,
+	[x86_EXCEPTION_STATE]     = x86_EXCEPTION_STATE_COUNT,
+	[x86_DEBUG_STATE32]       = x86_DEBUG_STATE32_COUNT,
+	[x86_DEBUG_STATE64]       = x86_DEBUG_STATE64_COUNT,
+	[x86_DEBUG_STATE]         = x86_DEBUG_STATE_COUNT,
+	[x86_AVX_STATE32]         = x86_AVX_STATE32_COUNT,
+	[x86_AVX_STATE64]         = x86_AVX_STATE64_COUNT,
+	[x86_AVX_STATE]           = x86_AVX_STATE_COUNT,
 #if !defined(RC_HIDE_XNU_J137)
-	[x86_AVX512_STATE32]	= x86_AVX512_STATE32_COUNT,
-	[x86_AVX512_STATE64]	= x86_AVX512_STATE64_COUNT,
-	[x86_AVX512_STATE]	= x86_AVX512_STATE_COUNT,
+	[x86_AVX512_STATE32]      = x86_AVX512_STATE32_COUNT,
+	[x86_AVX512_STATE64]      = x86_AVX512_STATE64_COUNT,
+	[x86_AVX512_STATE]        = x86_AVX512_STATE_COUNT,
 #endif /* not RC_HIDE_XNU_J137 */
 };
 
-zone_t		iss_zone;		/* zone for saved_state area */
-zone_t		ids_zone;		/* zone for debug_state area */
+zone_t          iss_zone;               /* zone for saved_state area */
+zone_t          ids_zone;               /* zone for debug_state area */
+
+extern int      allow_64bit_proc_LDT_ops;
 
 /* Forward */
 
-extern void		Thread_continue(void);
-extern void		Load_context(
-				thread_t			thread) __attribute__((noreturn));
+extern void             Thread_continue(void);
+extern void             Load_context(
+	thread_t                        thread) __attribute__((noreturn));
 
 static void
 get_exception_state32(thread_t thread, x86_exception_state32_t *es);
@@ -143,23 +147,25 @@ static void
 get_thread_state32(thread_t thread, x86_thread_state32_t *ts);
 
 static void
-get_thread_state64(thread_t thread, x86_thread_state64_t *ts);
+get_thread_state64(thread_t thread, void *ts, boolean_t full);
 
 static int
 set_thread_state32(thread_t thread, x86_thread_state32_t *ts);
 
 static int
-set_thread_state64(thread_t thread, x86_thread_state64_t *ts);
+set_thread_state64(thread_t thread, void *ts, boolean_t full);
 
 #if HYPERVISOR
 static inline void
 ml_hv_cswitch(thread_t old, thread_t new)
 {
-	if (old->hv_thread_target)
+	if (old->hv_thread_target) {
 		hv_callbacks.preempt(old->hv_thread_target);
+	}
 
-	if (new->hv_thread_target)
-		hv_callbacks.dispatch(new->hv_thread_target);	
+	if (new->hv_thread_target) {
+		hv_callbacks.dispatch(new->hv_thread_target);
+	}
 }
 #endif
 
@@ -179,21 +185,26 @@ dr7d_is_valid(uint32_t *dr7d)
 	 * If the DE bit is set in CR4, R/W0-3 can be pattern
 	 * "10B" to indicate i/o reads and write
 	 */
-	if (!(get_cr4() & CR4_DE))
-		for (i = 0, mask1 = 0x3<<16, mask2 = 0x2<<16; i < 4; 
-				i++, mask1 <<= 4, mask2 <<= 4)
-			if ((*dr7d & mask1) == mask2)
-				return (FALSE);
+	if (!(get_cr4() & CR4_DE)) {
+		for (i = 0, mask1 = 0x3 << 16, mask2 = 0x2 << 16; i < 4;
+		    i++, mask1 <<= 4, mask2 <<= 4) {
+			if ((*dr7d & mask1) == mask2) {
+				return FALSE;
+			}
+		}
+	}
 
 	/*
 	 * if we are doing an instruction execution break (indicated
 	 * by r/w[x] being "00B"), then the len[x] must also be set
 	 * to "00B"
 	 */
-	for (i = 0; i < 4; i++)
-		if (((((*dr7d >> (16 + i*4))) & 0x3) == 0) &&
-				((((*dr7d >> (18 + i*4))) & 0x3) != 0))
-			return (FALSE);
+	for (i = 0; i < 4; i++) {
+		if (((((*dr7d >> (16 + i * 4))) & 0x3) == 0) &&
+		    ((((*dr7d >> (18 + i * 4))) & 0x3) != 0)) {
+			return FALSE;
+		}
+	}
 
 	/*
 	 * Intel docs have these bits fixed.
@@ -208,28 +219,33 @@ dr7d_is_valid(uint32_t *dr7d)
 	 * We don't allow anything to set the global breakpoints.
 	 */
 
-	if (*dr7d & 0x2)
-		return (FALSE);
+	if (*dr7d & 0x2) {
+		return FALSE;
+	}
 
-	if (*dr7d & (0x2<<2))
-		return (FALSE);
+	if (*dr7d & (0x2 << 2)) {
+		return FALSE;
+	}
 
-	if (*dr7d & (0x2<<4))
-		return (FALSE);
+	if (*dr7d & (0x2 << 4)) {
+		return FALSE;
+	}
 
-	if (*dr7d & (0x2<<6))
-		return (FALSE);
+	if (*dr7d & (0x2 << 6)) {
+		return FALSE;
+	}
 
-	return (TRUE);
+	return TRUE;
 }
 
 extern void set_64bit_debug_regs(x86_debug_state64_t *ds);
 
 boolean_t
-debug_state_is_valid32(x86_debug_state32_t *ds) 
+debug_state_is_valid32(x86_debug_state32_t *ds)
 {
-	if (!dr7d_is_valid(&ds->dr7))
+	if (!dr7d_is_valid(&ds->dr7)) {
 		return FALSE;
+	}
 
 	return TRUE;
 }
@@ -237,28 +253,37 @@ debug_state_is_valid32(x86_debug_state32_t *ds)
 boolean_t
 debug_state_is_valid64(x86_debug_state64_t *ds)
 {
-	if (!dr7d_is_valid((uint32_t *)&ds->dr7))
+	if (!dr7d_is_valid((uint32_t *)&ds->dr7)) {
 		return FALSE;
+	}
 
 	/*
 	 * Don't allow the user to set debug addresses above their max
 	 * value
 	 */
-	if (ds->dr7 & 0x1)
-		if (ds->dr0 >= VM_MAX_PAGE_ADDRESS)
+	if (ds->dr7 & 0x1) {
+		if (ds->dr0 >= VM_MAX_PAGE_ADDRESS) {
 			return FALSE;
+		}
+	}
 
-	if (ds->dr7 & (0x1<<2))
-		if (ds->dr1 >= VM_MAX_PAGE_ADDRESS)
+	if (ds->dr7 & (0x1 << 2)) {
+		if (ds->dr1 >= VM_MAX_PAGE_ADDRESS) {
 			return FALSE;
+		}
+	}
 
-	if (ds->dr7 & (0x1<<4))
-		if (ds->dr2 >= VM_MAX_PAGE_ADDRESS)
+	if (ds->dr7 & (0x1 << 4)) {
+		if (ds->dr2 >= VM_MAX_PAGE_ADDRESS) {
 			return FALSE;
+		}
+	}
 
-	if (ds->dr7 & (0x1<<6))
-		if (ds->dr3 >= VM_MAX_PAGE_ADDRESS)
+	if (ds->dr7 & (0x1 << 6)) {
+		if (ds->dr3 >= VM_MAX_PAGE_ADDRESS) {
 			return FALSE;
+		}
+	}
 
 	/* For x86-64, we must ensure the upper 32-bits of DR7 are clear */
 	ds->dr7 &= 0xffffffffULL;
@@ -283,7 +308,7 @@ set_debug_state32(thread_t thread, x86_debug_state32_t *ds)
 		new_ids = zalloc(ids_zone);
 		bzero(new_ids, sizeof *new_ids);
 
-		simple_lock(&pcb->lock);
+		simple_lock(&pcb->lock, LCK_GRP_NULL);
 		/* make sure it wasn't already alloc()'d elsewhere */
 		if (pcb->ids == NULL) {
 			pcb->ids = new_ids;
@@ -297,7 +322,7 @@ set_debug_state32(thread_t thread, x86_debug_state32_t *ds)
 
 	copy_debug_state32(ds, pcb->ids, FALSE);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 static kern_return_t
@@ -319,11 +344,11 @@ set_debug_state64(thread_t thread, x86_debug_state64_t *ds)
 #if HYPERVISOR
 		if (thread->hv_thread_target) {
 			hv_callbacks.volatile_state(thread->hv_thread_target,
-				HV_DEBUG_STATE);
+			    HV_DEBUG_STATE);
 		}
 #endif
 
-		simple_lock(&pcb->lock);
+		simple_lock(&pcb->lock, LCK_GRP_NULL);
 		/* make sure it wasn't already alloc()'d elsewhere */
 		if (pcb->ids == NULL) {
 			pcb->ids = new_ids;
@@ -336,7 +361,7 @@ set_debug_state64(thread_t thread, x86_debug_state64_t *ds)
 
 	copy_debug_state64(ds, pcb->ids, FALSE);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 static void
@@ -348,8 +373,9 @@ get_debug_state32(thread_t thread, x86_debug_state32_t *ds)
 
 	if (saved_state) {
 		copy_debug_state32(saved_state, ds, TRUE);
-	} else
+	} else {
 		bzero(ds, sizeof *ds);
+	}
 }
 
 static void
@@ -361,8 +387,9 @@ get_debug_state64(thread_t thread, x86_debug_state64_t *ds)
 
 	if (saved_state) {
 		copy_debug_state64(saved_state, ds, TRUE);
-	} else
+	} else {
 		bzero(ds, sizeof *ds);
+	}
 }
 
 /*
@@ -385,14 +412,16 @@ consider_machine_adjust(void)
  */
 void
 machine_load_context(
-	thread_t		new)
+	thread_t                new)
 {
 	new->machine.specFlags |= OnProc;
 	act_machine_switch_pcb(NULL, new);
 	Load_context(new);
 }
 
-static inline void pmap_switch_context(thread_t ot, thread_t nt, int cnum) {
+static inline void
+pmap_switch_context(thread_t ot, thread_t nt, int cnum)
+{
 	pmap_assert(ml_get_interrupts_enabled() == FALSE);
 	vm_map_t nmap = nt->map, omap = ot->map;
 	if ((omap != nmap) || (nmap->pmap->pagezero_accessible)) {
@@ -408,9 +437,9 @@ static inline void pmap_switch_context(thread_t ot, thread_t nt, int cnum) {
  */
 thread_t
 machine_switch_context(
-	thread_t			old,
-	thread_continue_t	continuation,
-	thread_t			new)
+	thread_t                        old,
+	thread_continue_t       continuation,
+	thread_t                        new)
 {
 	assert(current_cpu_datap()->cpu_active_stack == old->kernel_stack);
 
@@ -430,7 +459,7 @@ machine_switch_context(
 	 * Monitor the stack depth and report new max,
 	 * not worrying about races.
 	 */
-	vm_offset_t	depth = current_stack_depth();
+	vm_offset_t     depth = current_stack_depth();
 	if (depth > kernel_stack_depth_max) {
 		kernel_stack_depth_max = depth;
 		KERNEL_DEBUG_CONSTANT(
@@ -453,21 +482,21 @@ machine_switch_context(
 	ml_hv_cswitch(old, new);
 #endif
 
-	return(Switch_context(old, continuation, new));
+	return Switch_context(old, continuation, new);
 }
 
-thread_t        
+thread_t
 machine_processor_shutdown(
-	thread_t	thread,
-	void		(*doshutdown)(processor_t),
-	processor_t	processor)
+	thread_t        thread,
+	void            (*doshutdown)(processor_t),
+	processor_t     processor)
 {
 #if CONFIG_VMX
 	vmx_suspend();
 #endif
 	fpu_switch_context(thread, NULL);
 	pmap_switch_context(thread, processor->idle_thread, cpu_number());
-	return(Shutdown_context(thread, doshutdown, processor));
+	return Shutdown_context(thread, doshutdown, processor);
 }
 
 
@@ -479,16 +508,17 @@ kern_return_t
 machine_thread_state_initialize(
 	thread_t thread)
 {
-    /*
-     * If there's an fpu save area, free it.
-     * The initialized state will then be lazily faulted-in, if required.
-     * And if we're target, re-arm the no-fpu trap.
-     */
+	/*
+	 * If there's an fpu save area, free it.
+	 * The initialized state will then be lazily faulted-in, if required.
+	 * And if we're target, re-arm the no-fpu trap.
+	 */
 	if (thread->machine.ifps) {
 		(void) fpu_set_fxstate(thread, NULL, x86_FLOAT_STATE64);
 
-		if (thread == current_thread())
+		if (thread == current_thread()) {
 			clear_fpu();
+		}
 	}
 
 	if (thread->machine.ids) {
@@ -496,7 +526,7 @@ machine_thread_state_initialize(
 		thread->machine.ids = NULL;
 	}
 
-	return  KERN_SUCCESS;
+	return KERN_SUCCESS;
 }
 
 uint32_t
@@ -530,38 +560,38 @@ get_eflags_exportmask(void)
  *			   for either 32bit or 64bit tasks
  */
 
- 
+
 static void
 get_exception_state64(thread_t thread, x86_exception_state64_t *es)
 {
-        x86_saved_state64_t *saved_state;
+	x86_saved_state64_t *saved_state;
 
-        saved_state = USER_REGS64(thread);
+	saved_state = USER_REGS64(thread);
 
 	es->trapno = saved_state->isf.trapno;
 	es->cpu = saved_state->isf.cpu;
 	es->err = (typeof(es->err))saved_state->isf.err;
 	es->faultvaddr = saved_state->cr2;
-}		
+}
 
 static void
 get_exception_state32(thread_t thread, x86_exception_state32_t *es)
 {
-        x86_saved_state32_t *saved_state;
+	x86_saved_state32_t *saved_state;
 
-        saved_state = USER_REGS32(thread);
+	saved_state = USER_REGS32(thread);
 
 	es->trapno = saved_state->trapno;
 	es->cpu = saved_state->cpu;
 	es->err = saved_state->err;
 	es->faultvaddr = saved_state->cr2;
-}		
+}
 
 
 static int
 set_thread_state32(thread_t thread, x86_thread_state32_t *ts)
 {
-        x86_saved_state32_t	*saved_state;
+	x86_saved_state32_t     *saved_state;
 
 	pal_register_cache_state(thread, DIRTY);
 
@@ -583,15 +613,16 @@ set_thread_state32(thread_t thread, x86_thread_state32_t *ts)
 
 	/* Set GS to CTHREAD only if's been established */
 	ts->gs = thread->machine.cthread_self ? USER_CTHREAD : NULL_SEG;
- 
+
 	/* Check segment selectors are safe */
 	if (!valid_user_segment_selectors(ts->cs,
-					  ts->ss,
-					  ts->ds,
-					  ts->es,
-					  ts->fs,
-					  ts->gs))
-		return(KERN_INVALID_ARGUMENT);
+	    ts->ss,
+	    ts->ds,
+	    ts->es,
+	    ts->fs,
+	    ts->gs)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	saved_state->eax = ts->eax;
 	saved_state->ebx = ts->ebx;
@@ -615,24 +646,33 @@ set_thread_state32(thread_t thread, x86_thread_state32_t *ts)
 	 * ensure that the user returns via iret
 	 * - which is signaled thusly:
 	 */
-	if ((saved_state->efl & EFL_TF) && saved_state->cs == SYSENTER_CS)
+	if ((saved_state->efl & EFL_TF) && saved_state->cs == SYSENTER_CS) {
 		saved_state->cs = SYSENTER_TF_CS;
+	}
 
-	return(KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 static int
-set_thread_state64(thread_t thread, x86_thread_state64_t *ts)
+set_thread_state64(thread_t thread, void *state, int full)
 {
-        x86_saved_state64_t	*saved_state;
+	x86_thread_state64_t *ts;
+	x86_saved_state64_t     *saved_state;
+
+	if (full == TRUE) {
+		ts = &((x86_thread_full_state64_t *)state)->ss64;
+	} else {
+		ts = (x86_thread_state64_t *)state;
+	}
 
 	pal_register_cache_state(thread, DIRTY);
 
 	saved_state = USER_REGS64(thread);
 
 	if (!IS_USERADDR64_CANONICAL(ts->rsp) ||
-	    !IS_USERADDR64_CANONICAL(ts->rip))
-		return(KERN_INVALID_ARGUMENT);
+	    !IS_USERADDR64_CANONICAL(ts->rip)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	saved_state->r8 = ts->r8;
 	saved_state->r9 = ts->r9;
@@ -652,11 +692,22 @@ set_thread_state64(thread_t thread, x86_thread_state64_t *ts)
 	saved_state->isf.rsp = ts->rsp;
 	saved_state->isf.rflags = (ts->rflags & ~EFL_USER_CLEAR) | EFL_USER_SET;
 	saved_state->isf.rip = ts->rip;
-	saved_state->isf.cs = USER64_CS;
+
+	if (full == FALSE) {
+		saved_state->isf.cs = USER64_CS;
+	} else {
+		saved_state->isf.cs = ((x86_thread_full_state64_t *)ts)->ss64.cs;
+		saved_state->isf.ss = ((x86_thread_full_state64_t *)ts)->ss;
+		saved_state->ds = (uint32_t)((x86_thread_full_state64_t *)ts)->ds;
+		saved_state->es = (uint32_t)((x86_thread_full_state64_t *)ts)->es;
+		machine_thread_set_tsd_base(thread,
+		    ((x86_thread_full_state64_t *)ts)->gsbase);
+	}
+
 	saved_state->fs = (uint32_t)ts->fs;
 	saved_state->gs = (uint32_t)ts->gs;
 
-	return(KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 
@@ -664,7 +715,7 @@ set_thread_state64(thread_t thread, x86_thread_state64_t *ts)
 static void
 get_thread_state32(thread_t thread, x86_thread_state32_t *ts)
 {
-        x86_saved_state32_t	*saved_state;
+	x86_saved_state32_t     *saved_state;
 
 	pal_register_cache_state(thread, VALID);
 
@@ -690,9 +741,16 @@ get_thread_state32(thread_t thread, x86_thread_state32_t *ts)
 
 
 static void
-get_thread_state64(thread_t thread, x86_thread_state64_t *ts)
+get_thread_state64(thread_t thread, void *state, boolean_t full)
 {
-        x86_saved_state64_t	*saved_state;
+	x86_thread_state64_t    *ts;
+	x86_saved_state64_t     *saved_state;
+
+	if (full == TRUE) {
+		ts = &((x86_thread_full_state64_t *)state)->ss64;
+	} else {
+		ts = (x86_thread_state64_t *)state;
+	}
 
 	pal_register_cache_state(thread, VALID);
 
@@ -717,16 +775,25 @@ get_thread_state64(thread_t thread, x86_thread_state64_t *ts)
 	ts->rflags = saved_state->isf.rflags;
 	ts->rip = saved_state->isf.rip;
 	ts->cs = saved_state->isf.cs;
+
+	if (full == TRUE) {
+		((x86_thread_full_state64_t *)state)->ds = saved_state->ds;
+		((x86_thread_full_state64_t *)state)->es = saved_state->es;
+		((x86_thread_full_state64_t *)state)->ss = saved_state->isf.ss;
+		((x86_thread_full_state64_t *)state)->gsbase =
+		    thread->machine.cthread_self;
+	}
+
 	ts->fs = saved_state->fs;
 	ts->gs = saved_state->gs;
 }
 
 kern_return_t
 machine_thread_state_convert_to_user(
-			 __unused thread_t thread,
-			 __unused thread_flavor_t flavor,
-			 __unused thread_state_t tstate,
-			 __unused mach_msg_type_number_t *count)
+	__unused thread_t thread,
+	__unused thread_flavor_t flavor,
+	__unused thread_state_t tstate,
+	__unused mach_msg_type_number_t *count)
 {
 	// No conversion to userspace representation on this platform
 	return KERN_SUCCESS;
@@ -734,10 +801,10 @@ machine_thread_state_convert_to_user(
 
 kern_return_t
 machine_thread_state_convert_from_user(
-			 __unused thread_t thread,
-			 __unused thread_flavor_t flavor,
-			 __unused thread_state_t tstate,
-			 __unused mach_msg_type_number_t count)
+	__unused thread_t thread,
+	__unused thread_flavor_t flavor,
+	__unused thread_state_t tstate,
+	__unused mach_msg_type_number_t count)
 {
 	// No conversion from userspace representation on this platform
 	return KERN_SUCCESS;
@@ -745,8 +812,8 @@ machine_thread_state_convert_from_user(
 
 kern_return_t
 machine_thread_siguctx_pointer_convert_to_user(
-			 __unused thread_t thread,
-			 __unused user_addr_t *uctxp)
+	__unused thread_t thread,
+	__unused user_addr_t *uctxp)
 {
 	// No conversion to userspace representation on this platform
 	return KERN_SUCCESS;
@@ -754,9 +821,9 @@ machine_thread_siguctx_pointer_convert_to_user(
 
 kern_return_t
 machine_thread_function_pointers_convert_from_user(
-			 __unused thread_t thread,
-			 __unused user_addr_t *fptrs,
-			 __unused uint32_t count)
+	__unused thread_t thread,
+	__unused user_addr_t *fptrs,
+	__unused uint32_t count)
 {
 	// No conversion from userspace representation on this platform
 	return KERN_SUCCESS;
@@ -778,25 +845,37 @@ machine_thread_set_state(
 	switch (flavor) {
 	case x86_SAVED_STATE32:
 	{
-		x86_saved_state32_t	*state;
-		x86_saved_state32_t	*saved_state;
+		x86_saved_state32_t     *state;
+		x86_saved_state32_t     *saved_state;
 
-		if (count < x86_SAVED_STATE32_COUNT)
-			return(KERN_INVALID_ARGUMENT);
-        
-		if (thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (count < x86_SAVED_STATE32_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_saved_state32_t *) tstate;
 
+		/*
+		 * Allow a thread in a 64-bit process to set
+		 * 32-bit state iff the code segment originates
+		 * in the LDT (the implication is that only
+		 * 32-bit code segments are allowed there, so
+		 * setting 32-bit state implies a switch to
+		 * compatibility mode on resume-to-user).
+		 */
+		if (thread_is_64bit_addr(thr_act) &&
+		    thr_act->task->i386_ldt == 0) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
 		/* Check segment selectors are safe */
 		if (!valid_user_segment_selectors(state->cs,
-					state->ss,
-					state->ds,
-					state->es,
-					state->fs,
-					state->gs))
+		    state->ss,
+		    state->ds,
+		    state->es,
+		    state->fs,
+		    state->gs)) {
 			return KERN_INVALID_ARGUMENT;
+		}
 
 		pal_register_cache_state(thr_act, DIRTY);
 
@@ -822,8 +901,9 @@ machine_thread_set_state(
 		 * ensure that the user returns via iret
 		 * - which is signaled thusly:
 		 */
-		if ((saved_state->efl & EFL_TF) && state->cs == SYSENTER_CS)
+		if ((saved_state->efl & EFL_TF) && state->cs == SYSENTER_CS) {
 			state->cs = SYSENTER_TF_CS;
+		}
 
 		/*
 		 * User setting segment registers.
@@ -843,14 +923,16 @@ machine_thread_set_state(
 
 	case x86_SAVED_STATE64:
 	{
-		x86_saved_state64_t	*state;
-		x86_saved_state64_t	*saved_state;
+		x86_saved_state64_t     *state;
+		x86_saved_state64_t     *saved_state;
 
-		if (count < x86_SAVED_STATE64_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+		if (count < x86_SAVED_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-		if (!thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_saved_state64_t *) tstate;
 
@@ -861,13 +943,15 @@ machine_thread_set_state(
 		 * restore the segment registers--hence they are no
 		 * longer relevant for validation.
 		 */
-		if (!valid_user_code_selector(state->isf.cs))
-		        return KERN_INVALID_ARGUMENT;
-		
+		if (!valid_user_code_selector(state->isf.cs)) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
 		/* Check pc and stack are canonical addresses */
 		if (!IS_USERADDR64_CANONICAL(state->isf.rsp) ||
-		    !IS_USERADDR64_CANONICAL(state->isf.rip))
+		    !IS_USERADDR64_CANONICAL(state->isf.rip)) {
 			return KERN_INVALID_ARGUMENT;
+		}
 
 		pal_register_cache_state(thr_act, DIRTY);
 
@@ -915,37 +999,42 @@ machine_thread_set_state(
 #if !defined(RC_HIDE_XNU_J137)
 	case x86_AVX512_STATE32:
 #endif /* not RC_HIDE_XNU_J137 */
-	{
-		if (count != _MachineStateCount[flavor])
-			return(KERN_INVALID_ARGUMENT);
+		{
+			if (count != _MachineStateCount[flavor]) {
+				return KERN_INVALID_ARGUMENT;
+			}
 
-		if (thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+			if (thread_is_64bit_addr(thr_act)) {
+				return KERN_INVALID_ARGUMENT;
+			}
 
-		return fpu_set_fxstate(thr_act, tstate, flavor);
-	}
+			return fpu_set_fxstate(thr_act, tstate, flavor);
+		}
 
 	case x86_FLOAT_STATE64:
 	case x86_AVX_STATE64:
 #if !defined(RC_HIDE_XNU_J137)
 	case x86_AVX512_STATE64:
 #endif /* not RC_HIDE_XNU_J137 */
-	{
-		if (count != _MachineStateCount[flavor])
-			return(KERN_INVALID_ARGUMENT);
+		{
+			if (count != _MachineStateCount[flavor]) {
+				return KERN_INVALID_ARGUMENT;
+			}
 
-		if (!thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+			if (!thread_is_64bit_addr(thr_act)) {
+				return KERN_INVALID_ARGUMENT;
+			}
 
-		return fpu_set_fxstate(thr_act, tstate, flavor);
-	}
+			return fpu_set_fxstate(thr_act, tstate, flavor);
+		}
 
 	case x86_FLOAT_STATE:
-	{   
+	{
 		x86_float_state_t       *state;
 
-		if (count != x86_FLOAT_STATE_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+		if (count != x86_FLOAT_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_float_state_t *)tstate;
 		if (state->fsh.flavor == x86_FLOAT_STATE64 && state->fsh.count == x86_FLOAT_STATE64_COUNT &&
@@ -954,91 +1043,120 @@ machine_thread_set_state(
 		}
 		if (state->fsh.flavor == x86_FLOAT_STATE32 && state->fsh.count == x86_FLOAT_STATE32_COUNT &&
 		    !thread_is_64bit_addr(thr_act)) {
-			return fpu_set_fxstate(thr_act, (thread_state_t)&state->ufs.fs32, x86_FLOAT_STATE32); 
+			return fpu_set_fxstate(thr_act, (thread_state_t)&state->ufs.fs32, x86_FLOAT_STATE32);
 		}
-		return(KERN_INVALID_ARGUMENT);
+		return KERN_INVALID_ARGUMENT;
 	}
 
 	case x86_AVX_STATE:
 #if !defined(RC_HIDE_XNU_J137)
 	case x86_AVX512_STATE:
 #endif
-	{   
-		x86_avx_state_t       *state;
+		{
+			x86_avx_state_t       *state;
 
-		if (count != _MachineStateCount[flavor])
-			return(KERN_INVALID_ARGUMENT);
+			if (count != _MachineStateCount[flavor]) {
+				return KERN_INVALID_ARGUMENT;
+			}
 
-		state = (x86_avx_state_t *)tstate;
-		/* Flavors are defined to have sequential values: 32-bit, 64-bit, non-specific */
-		/* 64-bit flavor? */
-		if (state->ash.flavor == (flavor - 1) &&
-		    state->ash.count  == _MachineStateCount[flavor - 1] &&
-		    thread_is_64bit_addr(thr_act)) {
-			return fpu_set_fxstate(thr_act,
-					       (thread_state_t)&state->ufs.as64,
-					       flavor - 1);
+			state = (x86_avx_state_t *)tstate;
+			/* Flavors are defined to have sequential values: 32-bit, 64-bit, non-specific */
+			/* 64-bit flavor? */
+			if (state->ash.flavor == (flavor - 1) &&
+			    state->ash.count == _MachineStateCount[flavor - 1] &&
+			    thread_is_64bit_addr(thr_act)) {
+				return fpu_set_fxstate(thr_act,
+				           (thread_state_t)&state->ufs.as64,
+				           flavor - 1);
+			}
+			/* 32-bit flavor? */
+			if (state->ash.flavor == (flavor - 2) &&
+			    state->ash.count == _MachineStateCount[flavor - 2] &&
+			    !thread_is_64bit_addr(thr_act)) {
+				return fpu_set_fxstate(thr_act,
+				           (thread_state_t)&state->ufs.as32,
+				           flavor - 2);
+			}
+			return KERN_INVALID_ARGUMENT;
 		}
-		/* 32-bit flavor? */
-		if (state->ash.flavor == (flavor - 2) &&
-		    state->ash.count  == _MachineStateCount[flavor - 2] &&
-		    !thread_is_64bit_addr(thr_act)) {
-			return fpu_set_fxstate(thr_act,
-					       (thread_state_t)&state->ufs.as32,
-					       flavor - 2); 
-		}
-		return(KERN_INVALID_ARGUMENT);
-	}
 
-	case x86_THREAD_STATE32: 
+	case x86_THREAD_STATE32:
 	{
-		if (count != x86_THREAD_STATE32_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+		if (count != x86_THREAD_STATE32_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-		if (thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		return set_thread_state32(thr_act, (x86_thread_state32_t *)tstate);
 	}
 
-	case x86_THREAD_STATE64: 
+	case x86_THREAD_STATE64:
 	{
-		if (count != x86_THREAD_STATE64_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+		if (count != x86_THREAD_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-		if (!thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-		return set_thread_state64(thr_act, (x86_thread_state64_t *)tstate);
-
+		return set_thread_state64(thr_act, tstate, FALSE);
 	}
+
+	case x86_THREAD_FULL_STATE64:
+	{
+		if (!allow_64bit_proc_LDT_ops) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		if (count != x86_THREAD_FULL_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		return set_thread_state64(thr_act, tstate, TRUE);
+	}
+
 	case x86_THREAD_STATE:
 	{
 		x86_thread_state_t      *state;
 
-		if (count != x86_THREAD_STATE_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+		if (count != x86_THREAD_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_thread_state_t *)tstate;
 
 		if (state->tsh.flavor == x86_THREAD_STATE64 &&
 		    state->tsh.count == x86_THREAD_STATE64_COUNT &&
 		    thread_is_64bit_addr(thr_act)) {
-			return set_thread_state64(thr_act, &state->uts.ts64);
+			return set_thread_state64(thr_act, &state->uts.ts64, FALSE);
+		} else if (state->tsh.flavor == x86_THREAD_FULL_STATE64 &&
+		    state->tsh.count == x86_THREAD_FULL_STATE64_COUNT &&
+		    thread_is_64bit_addr(thr_act)) {
+			return set_thread_state64(thr_act, &state->uts.ts64, TRUE);
 		} else if (state->tsh.flavor == x86_THREAD_STATE32 &&
-			   state->tsh.count == x86_THREAD_STATE32_COUNT &&
-			   !thread_is_64bit_addr(thr_act)) {
+		    state->tsh.count == x86_THREAD_STATE32_COUNT &&
+		    !thread_is_64bit_addr(thr_act)) {
 			return set_thread_state32(thr_act, &state->uts.ts32);
-		} else
-			return(KERN_INVALID_ARGUMENT);
+		} else {
+			return KERN_INVALID_ARGUMENT;
+		}
 	}
 	case x86_DEBUG_STATE32:
 	{
 		x86_debug_state32_t *state;
 		kern_return_t ret;
 
-		if (thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_debug_state32_t *)tstate;
 
@@ -1051,8 +1169,9 @@ machine_thread_set_state(
 		x86_debug_state64_t *state;
 		kern_return_t ret;
 
-		if (!thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_debug_state64_t *)tstate;
 
@@ -1065,28 +1184,27 @@ machine_thread_set_state(
 		x86_debug_state_t *state;
 		kern_return_t ret = KERN_INVALID_ARGUMENT;
 
-		if (count != x86_DEBUG_STATE_COUNT)
-			return (KERN_INVALID_ARGUMENT);
+		if (count != x86_DEBUG_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_debug_state_t *)tstate;
 		if (state->dsh.flavor == x86_DEBUG_STATE64 &&
-				state->dsh.count == x86_DEBUG_STATE64_COUNT &&
-				thread_is_64bit_addr(thr_act)) {
+		    state->dsh.count == x86_DEBUG_STATE64_COUNT &&
+		    thread_is_64bit_addr(thr_act)) {
 			ret = set_debug_state64(thr_act, &state->uds.ds64);
-		}
-		else
-			if (state->dsh.flavor == x86_DEBUG_STATE32 &&
-			    state->dsh.count == x86_DEBUG_STATE32_COUNT &&
-			    !thread_is_64bit_addr(thr_act)) {
-				ret = set_debug_state32(thr_act, &state->uds.ds32);
+		} else if (state->dsh.flavor == x86_DEBUG_STATE32 &&
+		    state->dsh.count == x86_DEBUG_STATE32_COUNT &&
+		    !thread_is_64bit_addr(thr_act)) {
+			ret = set_debug_state32(thr_act, &state->uds.ds32);
 		}
 		return ret;
 	}
 	default:
-		return(KERN_INVALID_ARGUMENT);
+		return KERN_INVALID_ARGUMENT;
 	}
 
-	return(KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 
@@ -1104,42 +1222,43 @@ machine_thread_get_state(
 	thread_state_t tstate,
 	mach_msg_type_number_t *count)
 {
+	switch (flavor) {
+	case THREAD_STATE_FLAVOR_LIST:
+	{
+		if (*count < 3) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-	switch (flavor)  {
-
-	    case THREAD_STATE_FLAVOR_LIST:
-	    {
-		if (*count < 3)
-		        return (KERN_INVALID_ARGUMENT);
-
-	        tstate[0] = i386_THREAD_STATE;
+		tstate[0] = i386_THREAD_STATE;
 		tstate[1] = i386_FLOAT_STATE;
 		tstate[2] = i386_EXCEPTION_STATE;
 
 		*count = 3;
 		break;
-	    }
+	}
 
-	    case THREAD_STATE_FLAVOR_LIST_NEW:
-	    {
-		if (*count < 4)
-		        return (KERN_INVALID_ARGUMENT);
+	case THREAD_STATE_FLAVOR_LIST_NEW:
+	{
+		if (*count < 4) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-	        tstate[0] = x86_THREAD_STATE;
+		tstate[0] = x86_THREAD_STATE;
 		tstate[1] = x86_FLOAT_STATE;
 		tstate[2] = x86_EXCEPTION_STATE;
 		tstate[3] = x86_DEBUG_STATE;
 
 		*count = 4;
 		break;
-	    }
+	}
 
-	    case THREAD_STATE_FLAVOR_LIST_10_9:
-	    {
-		if (*count < 5)
-		        return (KERN_INVALID_ARGUMENT);
+	case THREAD_STATE_FLAVOR_LIST_10_9:
+	{
+		if (*count < 5) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-	        tstate[0] = x86_THREAD_STATE;
+		tstate[0] = x86_THREAD_STATE;
 		tstate[1] = x86_FLOAT_STATE;
 		tstate[2] = x86_EXCEPTION_STATE;
 		tstate[3] = x86_DEBUG_STATE;
@@ -1147,15 +1266,16 @@ machine_thread_get_state(
 
 		*count = 5;
 		break;
-	    }
+	}
 
 #if !defined(RC_HIDE_XNU_J137)
-	    case THREAD_STATE_FLAVOR_LIST_10_13:
-	    {
-		if (*count < 6)
-		        return (KERN_INVALID_ARGUMENT);
+	case THREAD_STATE_FLAVOR_LIST_10_13:
+	{
+		if (*count < 6) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-	        tstate[0] = x86_THREAD_STATE;
+		tstate[0] = x86_THREAD_STATE;
 		tstate[1] = x86_FLOAT_STATE;
 		tstate[2] = x86_EXCEPTION_STATE;
 		tstate[3] = x86_DEBUG_STATE;
@@ -1164,19 +1284,21 @@ machine_thread_get_state(
 
 		*count = 6;
 		break;
-	    }
+	}
 
 #endif
-	    case x86_SAVED_STATE32:
-	    {
-		x86_saved_state32_t	*state;
-		x86_saved_state32_t	*saved_state;
+	case x86_SAVED_STATE32:
+	{
+		x86_saved_state32_t     *state;
+		x86_saved_state32_t     *saved_state;
 
-		if (*count < x86_SAVED_STATE32_COUNT)
-		        return(KERN_INVALID_ARGUMENT);
+		if (*count < x86_SAVED_STATE32_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-		if (thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_saved_state32_t *) tstate;
 		saved_state = USER_REGS32(thr_act);
@@ -1192,18 +1314,20 @@ machine_thread_get_state(
 
 		*count = x86_SAVED_STATE32_COUNT;
 		break;
-	    }
+	}
 
-	    case x86_SAVED_STATE64:
-	    {
-		x86_saved_state64_t	*state;
-		x86_saved_state64_t	*saved_state;
+	case x86_SAVED_STATE64:
+	{
+		x86_saved_state64_t     *state;
+		x86_saved_state64_t     *saved_state;
 
-		if (*count < x86_SAVED_STATE64_COUNT)
-		        return(KERN_INVALID_ARGUMENT);
+		if (*count < x86_SAVED_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-		if (!thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_saved_state64_t *)tstate;
 		saved_state = USER_REGS64(thr_act);
@@ -1212,164 +1336,201 @@ machine_thread_get_state(
 		 * First, copy everything:
 		 */
 		*state = *saved_state;
+		state->ds = saved_state->ds & 0xffff;
+		state->es = saved_state->es & 0xffff;
 		state->fs = saved_state->fs & 0xffff;
 		state->gs = saved_state->gs & 0xffff;
 
 		*count = x86_SAVED_STATE64_COUNT;
 		break;
-	    }
+	}
 
-	    case x86_FLOAT_STATE32:
-	    {
-		if (*count < x86_FLOAT_STATE32_COUNT) 
-			return(KERN_INVALID_ARGUMENT);
+	case x86_FLOAT_STATE32:
+	{
+		if (*count < x86_FLOAT_STATE32_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-		if (thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		*count = x86_FLOAT_STATE32_COUNT;
 
 		return fpu_get_fxstate(thr_act, tstate, flavor);
-	    }
+	}
 
-	    case x86_FLOAT_STATE64:
-	    {
-		if (*count < x86_FLOAT_STATE64_COUNT) 
-			return(KERN_INVALID_ARGUMENT);
+	case x86_FLOAT_STATE64:
+	{
+		if (*count < x86_FLOAT_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-		if ( !thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		*count = x86_FLOAT_STATE64_COUNT;
 
 		return fpu_get_fxstate(thr_act, tstate, flavor);
-	    }
+	}
 
-	    case x86_FLOAT_STATE:
-	    {
-	        x86_float_state_t	*state;
-		kern_return_t		kret;
+	case x86_FLOAT_STATE:
+	{
+		x86_float_state_t       *state;
+		kern_return_t           kret;
 
-		if (*count < x86_FLOAT_STATE_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+		if (*count < x86_FLOAT_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_float_state_t *)tstate;
 
 		/*
-		 * no need to bzero... currently 
+		 * no need to bzero... currently
 		 * x86_FLOAT_STATE64_COUNT == x86_FLOAT_STATE32_COUNT
 		 */
 		if (thread_is_64bit_addr(thr_act)) {
-		        state->fsh.flavor = x86_FLOAT_STATE64;
-		        state->fsh.count  = x86_FLOAT_STATE64_COUNT;
+			state->fsh.flavor = x86_FLOAT_STATE64;
+			state->fsh.count  = x86_FLOAT_STATE64_COUNT;
 
 			kret = fpu_get_fxstate(thr_act, (thread_state_t)&state->ufs.fs64, x86_FLOAT_STATE64);
 		} else {
-		        state->fsh.flavor = x86_FLOAT_STATE32;
+			state->fsh.flavor = x86_FLOAT_STATE32;
 			state->fsh.count  = x86_FLOAT_STATE32_COUNT;
 
 			kret = fpu_get_fxstate(thr_act, (thread_state_t)&state->ufs.fs32, x86_FLOAT_STATE32);
 		}
 		*count = x86_FLOAT_STATE_COUNT;
 
-		return(kret);
-	    }
+		return kret;
+	}
 
-	    case x86_AVX_STATE32:
+	case x86_AVX_STATE32:
 #if !defined(RC_HIDE_XNU_J137)
-	    case x86_AVX512_STATE32:
+	case x86_AVX512_STATE32:
 #endif
-	    {
-		if (*count != _MachineStateCount[flavor])
-			return(KERN_INVALID_ARGUMENT);
+		{
+			if (*count != _MachineStateCount[flavor]) {
+				return KERN_INVALID_ARGUMENT;
+			}
 
-		if (thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+			if (thread_is_64bit_addr(thr_act)) {
+				return KERN_INVALID_ARGUMENT;
+			}
 
-		*count = _MachineStateCount[flavor];
+			*count = _MachineStateCount[flavor];
 
-		return fpu_get_fxstate(thr_act, tstate, flavor);
-	    }
+			return fpu_get_fxstate(thr_act, tstate, flavor);
+		}
 
-	    case x86_AVX_STATE64:
+	case x86_AVX_STATE64:
 #if !defined(RC_HIDE_XNU_J137)
-	    case x86_AVX512_STATE64:
+	case x86_AVX512_STATE64:
 #endif
-	    {
-		if (*count != _MachineStateCount[flavor])
-			return(KERN_INVALID_ARGUMENT);
+		{
+			if (*count != _MachineStateCount[flavor]) {
+				return KERN_INVALID_ARGUMENT;
+			}
 
-		if ( !thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+			if (!thread_is_64bit_addr(thr_act)) {
+				return KERN_INVALID_ARGUMENT;
+			}
 
-		*count = _MachineStateCount[flavor];
+			*count = _MachineStateCount[flavor];
 
-		return fpu_get_fxstate(thr_act, tstate, flavor);
-	    }
+			return fpu_get_fxstate(thr_act, tstate, flavor);
+		}
 
-	    case x86_AVX_STATE:
+	case x86_AVX_STATE:
 #if !defined(RC_HIDE_XNU_J137)
-	    case x86_AVX512_STATE:
+	case x86_AVX512_STATE:
 #endif
-	    {
-	        x86_avx_state_t		*state;
-		thread_state_t		fstate;
+		{
+			x86_avx_state_t         *state;
+			thread_state_t          fstate;
 
-		if (*count < _MachineStateCount[flavor])
-			return(KERN_INVALID_ARGUMENT);
+			if (*count < _MachineStateCount[flavor]) {
+				return KERN_INVALID_ARGUMENT;
+			}
 
-		*count = _MachineStateCount[flavor];
-		state = (x86_avx_state_t *)tstate;
+			*count = _MachineStateCount[flavor];
+			state = (x86_avx_state_t *)tstate;
 
-		bzero((char *)state, *count * sizeof(int));
+			bzero((char *)state, *count * sizeof(int));
+
+			if (thread_is_64bit_addr(thr_act)) {
+				flavor -= 1; /* 64-bit flavor */
+				fstate = (thread_state_t) &state->ufs.as64;
+			} else {
+				flavor -= 2; /* 32-bit flavor */
+				fstate = (thread_state_t) &state->ufs.as32;
+			}
+			state->ash.flavor = flavor;
+			state->ash.count  = _MachineStateCount[flavor];
+
+			return fpu_get_fxstate(thr_act, fstate, flavor);
+		}
+
+	case x86_THREAD_STATE32:
+	{
+		if (*count < x86_THREAD_STATE32_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		if (thread_is_64bit_addr(thr_act)) {
-			flavor -= 1;	/* 64-bit flavor */
-			fstate = (thread_state_t) &state->ufs.as64;
-		} else {
-			flavor -= 2;	/* 32-bit flavor */
-			fstate = (thread_state_t) &state->ufs.as32;
+			return KERN_INVALID_ARGUMENT;
 		}
-		state->ash.flavor = flavor; 
-		state->ash.count  = _MachineStateCount[flavor];
-
-		return fpu_get_fxstate(thr_act, fstate, flavor);
-	    }
-
-	    case x86_THREAD_STATE32: 
-	    {
-		if (*count < x86_THREAD_STATE32_COUNT)
-			return(KERN_INVALID_ARGUMENT);
-
-		if (thread_is_64bit_addr(thr_act))
-		        return(KERN_INVALID_ARGUMENT);
 
 		*count = x86_THREAD_STATE32_COUNT;
 
 		get_thread_state32(thr_act, (x86_thread_state32_t *)tstate);
 		break;
-	    }
+	}
 
-	    case x86_THREAD_STATE64:
-	    {
-		if (*count < x86_THREAD_STATE64_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+	case x86_THREAD_STATE64:
+	{
+		if (*count < x86_THREAD_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-                if ( !thread_is_64bit_addr(thr_act))
-		        return(KERN_INVALID_ARGUMENT);
+		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		*count = x86_THREAD_STATE64_COUNT;
 
-		get_thread_state64(thr_act, (x86_thread_state64_t *)tstate);
+		get_thread_state64(thr_act, tstate, FALSE);
 		break;
-	    }
+	}
 
-	    case x86_THREAD_STATE:
-	    {
-		x86_thread_state_t 	*state;
+	case x86_THREAD_FULL_STATE64:
+	{
+		if (!allow_64bit_proc_LDT_ops) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-		if (*count < x86_THREAD_STATE_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+		if (*count < x86_THREAD_FULL_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		*count = x86_THREAD_FULL_STATE64_COUNT;
+
+		get_thread_state64(thr_act, tstate, TRUE);
+		break;
+	}
+
+	case x86_THREAD_STATE:
+	{
+		x86_thread_state_t      *state;
+
+		if (*count < x86_THREAD_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_thread_state_t *)tstate;
 
@@ -1379,26 +1540,28 @@ machine_thread_get_state(
 			state->tsh.flavor = x86_THREAD_STATE64;
 			state->tsh.count  = x86_THREAD_STATE64_COUNT;
 
-		        get_thread_state64(thr_act, &state->uts.ts64);
+			get_thread_state64(thr_act, &state->uts.ts64, FALSE);
 		} else {
 			state->tsh.flavor = x86_THREAD_STATE32;
 			state->tsh.count  = x86_THREAD_STATE32_COUNT;
 
-		        get_thread_state32(thr_act, &state->uts.ts32);
+			get_thread_state32(thr_act, &state->uts.ts32);
 		}
 		*count = x86_THREAD_STATE_COUNT;
 
 		break;
-	    }
+	}
 
 
-	    case x86_EXCEPTION_STATE32:
-	    {
-		if (*count < x86_EXCEPTION_STATE32_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+	case x86_EXCEPTION_STATE32:
+	{
+		if (*count < x86_EXCEPTION_STATE32_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-		if (thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		*count = x86_EXCEPTION_STATE32_COUNT;
 
@@ -1409,15 +1572,17 @@ machine_thread_get_state(
 		 */
 		((x86_exception_state32_t *)tstate)->cpu = 0;
 		break;
-	    }
+	}
 
-	    case x86_EXCEPTION_STATE64:
-	    {
-		if (*count < x86_EXCEPTION_STATE64_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+	case x86_EXCEPTION_STATE64:
+	{
+		if (*count < x86_EXCEPTION_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-		if ( !thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		*count = x86_EXCEPTION_STATE64_COUNT;
 
@@ -1428,14 +1593,15 @@ machine_thread_get_state(
 		 */
 		((x86_exception_state64_t *)tstate)->cpu = 0;
 		break;
-	    }
+	}
 
-	    case x86_EXCEPTION_STATE:
-	    {
-		x86_exception_state_t 	*state;
+	case x86_EXCEPTION_STATE:
+	{
+		x86_exception_state_t   *state;
 
-		if (*count < x86_EXCEPTION_STATE_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+		if (*count < x86_EXCEPTION_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_exception_state_t *)tstate;
 
@@ -1445,12 +1611,12 @@ machine_thread_get_state(
 			state->esh.flavor = x86_EXCEPTION_STATE64;
 			state->esh.count  = x86_EXCEPTION_STATE64_COUNT;
 
-		        get_exception_state64(thr_act, &state->ues.es64);
+			get_exception_state64(thr_act, &state->ues.es64);
 		} else {
 			state->esh.flavor = x86_EXCEPTION_STATE32;
 			state->esh.count  = x86_EXCEPTION_STATE32_COUNT;
 
-		        get_exception_state32(thr_act, &state->ues.es32);
+			get_exception_state32(thr_act, &state->ues.es32);
 		}
 		*count = x86_EXCEPTION_STATE_COUNT;
 
@@ -1458,11 +1624,13 @@ machine_thread_get_state(
 	}
 	case x86_DEBUG_STATE32:
 	{
-		if (*count < x86_DEBUG_STATE32_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+		if (*count < x86_DEBUG_STATE32_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
-		if (thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		get_debug_state32(thr_act, (x86_debug_state32_t *)tstate);
 
@@ -1472,11 +1640,13 @@ machine_thread_get_state(
 	}
 	case x86_DEBUG_STATE64:
 	{
-		if (*count < x86_DEBUG_STATE64_COUNT)
-			return(KERN_INVALID_ARGUMENT);
-		
-		if (!thread_is_64bit_addr(thr_act))
-			return(KERN_INVALID_ARGUMENT);
+		if (*count < x86_DEBUG_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		get_debug_state64(thr_act, (x86_debug_state64_t *)tstate);
 
@@ -1488,8 +1658,9 @@ machine_thread_get_state(
 	{
 		x86_debug_state_t   *state;
 
-		if (*count < x86_DEBUG_STATE_COUNT)
-			return(KERN_INVALID_ARGUMENT);
+		if (*count < x86_DEBUG_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_debug_state_t *)tstate;
 
@@ -1510,35 +1681,37 @@ machine_thread_get_state(
 		break;
 	}
 	default:
-		return(KERN_INVALID_ARGUMENT);
+		return KERN_INVALID_ARGUMENT;
 	}
 
-	return(KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
 machine_thread_get_kern_state(
-		thread_t		thread,
-		thread_flavor_t		flavor,
-		thread_state_t		tstate,
-		mach_msg_type_number_t	*count)
+	thread_t                thread,
+	thread_flavor_t         flavor,
+	thread_state_t          tstate,
+	mach_msg_type_number_t  *count)
 {
-	x86_saved_state_t	*int_state = current_cpu_datap()->cpu_int_state;
+	x86_saved_state_t       *int_state = current_cpu_datap()->cpu_int_state;
 
 	/*
 	 * This works only for an interrupted kernel thread
 	 */
-	if (thread != current_thread() || int_state == NULL)
+	if (thread != current_thread() || int_state == NULL) {
 		return KERN_FAILURE;
+	}
 
 	switch (flavor) {
-	    case x86_THREAD_STATE32: {
+	case x86_THREAD_STATE32: {
 		x86_thread_state32_t *state;
 		x86_saved_state32_t *saved_state;
 
 		if (!is_saved_state32(int_state) ||
-		    *count < x86_THREAD_STATE32_COUNT)
-			return (KERN_INVALID_ARGUMENT);
+		    *count < x86_THREAD_STATE32_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_thread_state32_t *) tstate;
 
@@ -1566,15 +1739,16 @@ machine_thread_get_kern_state(
 		*count = x86_THREAD_STATE32_COUNT;
 
 		return KERN_SUCCESS;
-	    }
-  
-	    case x86_THREAD_STATE64: {
-		x86_thread_state64_t	*state;
-		x86_saved_state64_t	*saved_state;
+	}
+
+	case x86_THREAD_STATE64: {
+		x86_thread_state64_t    *state;
+		x86_saved_state64_t     *saved_state;
 
 		if (!is_saved_state64(int_state) ||
-		    *count < x86_THREAD_STATE64_COUNT)
-			return (KERN_INVALID_ARGUMENT);
+		    *count < x86_THREAD_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_thread_state64_t *) tstate;
 
@@ -1607,13 +1781,14 @@ machine_thread_get_kern_state(
 		*count = x86_THREAD_STATE64_COUNT;
 
 		return KERN_SUCCESS;
-	    }
-  
-	    case x86_THREAD_STATE: {
+	}
+
+	case x86_THREAD_STATE: {
 		x86_thread_state_t *state = NULL;
 
-		if (*count < x86_THREAD_STATE_COUNT)
-			return (KERN_INVALID_ARGUMENT);
+		if (*count < x86_THREAD_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (x86_thread_state_t *) tstate;
 
@@ -1679,7 +1854,7 @@ machine_thread_get_kern_state(
 
 		*count = x86_THREAD_STATE_COUNT;
 		return KERN_SUCCESS;
-	    }
+	}
 	}
 	return KERN_FAILURE;
 }
@@ -1732,14 +1907,14 @@ void
 machine_thread_init(void)
 {
 	iss_zone = zinit(sizeof(x86_saved_state_t),
-			thread_max * sizeof(x86_saved_state_t),
-			THREAD_CHUNK * sizeof(x86_saved_state_t),
-			"x86_64 saved state");
+	    thread_max * sizeof(x86_saved_state_t),
+	    THREAD_CHUNK * sizeof(x86_saved_state_t),
+	    "x86_64 saved state");
 
-        ids_zone = zinit(sizeof(x86_debug_state64_t),
-			 thread_max * sizeof(x86_debug_state64_t),
-			 THREAD_CHUNK * sizeof(x86_debug_state64_t),
-			 "x86_64 debug state");
+	ids_zone = zinit(sizeof(x86_debug_state64_t),
+	    thread_max * sizeof(x86_debug_state64_t),
+	    THREAD_CHUNK * sizeof(x86_debug_state64_t),
+	    "x86_64 debug state");
 
 	fpu_module_init();
 }
@@ -1749,20 +1924,20 @@ machine_thread_init(void)
 user_addr_t
 get_useraddr(void)
 {
-        thread_t thr_act = current_thread();
- 
-        if (thread_is_64bit_addr(thr_act)) {
-	        x86_saved_state64_t	*iss64;
-		
+	thread_t thr_act = current_thread();
+
+	if (thread_is_64bit_addr(thr_act)) {
+		x86_saved_state64_t     *iss64;
+
 		iss64 = USER_REGS64(thr_act);
 
-         	return(iss64->isf.rip);
+		return iss64->isf.rip;
 	} else {
-	        x86_saved_state32_t	*iss32;
+		x86_saved_state32_t     *iss32;
 
 		iss32 = USER_REGS32(thr_act);
 
-         	return(iss32->eip);
+		return iss32->eip;
 	}
 }
 
@@ -1776,14 +1951,14 @@ machine_stack_detach(thread_t thread)
 	vm_offset_t     stack;
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_STACK_DETACH),
-		     (uintptr_t)thread_tid(thread), thread->priority,
-		     thread->sched_pri, 0,
-		     0);
+	    (uintptr_t)thread_tid(thread), thread->priority,
+	    thread->sched_pri, 0,
+	    0);
 
 	stack = thread->kernel_stack;
 	thread->kernel_stack = 0;
 
-	return (stack);
+	return stack;
 }
 
 /*
@@ -1792,14 +1967,14 @@ machine_stack_detach(thread_t thread)
 
 void
 machine_stack_attach(
-	thread_t		thread,
-	vm_offset_t		stack)
+	thread_t                thread,
+	vm_offset_t             stack)
 {
 	struct x86_kernel_state *statep;
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_STACK_ATTACH),
-		     (uintptr_t)thread_tid(thread), thread->priority,
-		     thread->sched_pri, 0, 0);
+	    (uintptr_t)thread_tid(thread), thread->priority,
+	    thread->sched_pri, 0, 0);
 
 	assert(stack);
 	thread->kernel_stack = stack;
@@ -1825,7 +2000,7 @@ machine_stack_attach(
 
 void
 machine_stack_handoff(thread_t old,
-	      thread_t new)
+    thread_t new)
 {
 	vm_offset_t     stack;
 
@@ -1848,7 +2023,7 @@ machine_stack_handoff(thread_t old,
 	new->kernel_stack = stack;
 
 	fpu_switch_context(old, new);
-	
+
 	old->machine.specFlags &= ~OnProc;
 	new->machine.specFlags |= OnProc;
 
@@ -1894,110 +2069,113 @@ act_thread_csave(void)
 
 		ic64 = (struct x86_act_context64 *)kalloc(sizeof(struct x86_act_context64));
 
-		if (ic64 == (struct x86_act_context64 *)NULL)
-			return((void *)0);
-
-		val = x86_SAVED_STATE64_COUNT; 
-		kret = machine_thread_get_state(thr_act, x86_SAVED_STATE64,
-				(thread_state_t) &ic64->ss, &val);
-		if (kret != KERN_SUCCESS) {
-			kfree(ic64, sizeof(struct x86_act_context64));
-			return((void *)0);
+		if (ic64 == (struct x86_act_context64 *)NULL) {
+			return (void *)0;
 		}
-		val = x86_FLOAT_STATE64_COUNT; 
-		kret = machine_thread_get_state(thr_act, x86_FLOAT_STATE64,
-				(thread_state_t) &ic64->fs, &val);
+
+		val = x86_SAVED_STATE64_COUNT;
+		kret = machine_thread_get_state(thr_act, x86_SAVED_STATE64,
+		    (thread_state_t) &ic64->ss, &val);
 		if (kret != KERN_SUCCESS) {
 			kfree(ic64, sizeof(struct x86_act_context64));
-			return((void *)0);
+			return (void *)0;
+		}
+		val = x86_FLOAT_STATE64_COUNT;
+		kret = machine_thread_get_state(thr_act, x86_FLOAT_STATE64,
+		    (thread_state_t) &ic64->fs, &val);
+		if (kret != KERN_SUCCESS) {
+			kfree(ic64, sizeof(struct x86_act_context64));
+			return (void *)0;
 		}
 
 		val = x86_DEBUG_STATE64_COUNT;
 		kret = machine_thread_get_state(thr_act,
-						x86_DEBUG_STATE64,
-						(thread_state_t)&ic64->ds,
-						&val);
+		    x86_DEBUG_STATE64,
+		    (thread_state_t)&ic64->ds,
+		    &val);
 		if (kret != KERN_SUCCESS) {
-		        kfree(ic64, sizeof(struct x86_act_context64));
-			return((void *)0);
+			kfree(ic64, sizeof(struct x86_act_context64));
+			return (void *)0;
 		}
-		return(ic64);
-
+		return ic64;
 	} else {
 		struct x86_act_context32 *ic32;
 
 		ic32 = (struct x86_act_context32 *)kalloc(sizeof(struct x86_act_context32));
 
-		if (ic32 == (struct x86_act_context32 *)NULL)
-			return((void *)0);
-
-		val = x86_SAVED_STATE32_COUNT; 
-		kret = machine_thread_get_state(thr_act, x86_SAVED_STATE32,
-				(thread_state_t) &ic32->ss, &val);
-		if (kret != KERN_SUCCESS) {
-			kfree(ic32, sizeof(struct x86_act_context32));
-			return((void *)0);
+		if (ic32 == (struct x86_act_context32 *)NULL) {
+			return (void *)0;
 		}
-		val = x86_FLOAT_STATE32_COUNT; 
-		kret = machine_thread_get_state(thr_act, x86_FLOAT_STATE32,
-				(thread_state_t) &ic32->fs, &val);
+
+		val = x86_SAVED_STATE32_COUNT;
+		kret = machine_thread_get_state(thr_act, x86_SAVED_STATE32,
+		    (thread_state_t) &ic32->ss, &val);
 		if (kret != KERN_SUCCESS) {
 			kfree(ic32, sizeof(struct x86_act_context32));
-			return((void *)0);
+			return (void *)0;
+		}
+		val = x86_FLOAT_STATE32_COUNT;
+		kret = machine_thread_get_state(thr_act, x86_FLOAT_STATE32,
+		    (thread_state_t) &ic32->fs, &val);
+		if (kret != KERN_SUCCESS) {
+			kfree(ic32, sizeof(struct x86_act_context32));
+			return (void *)0;
 		}
 
 		val = x86_DEBUG_STATE32_COUNT;
 		kret = machine_thread_get_state(thr_act,
-						x86_DEBUG_STATE32,
-						(thread_state_t)&ic32->ds,
-						&val);
+		    x86_DEBUG_STATE32,
+		    (thread_state_t)&ic32->ds,
+		    &val);
 		if (kret != KERN_SUCCESS) {
-		        kfree(ic32, sizeof(struct x86_act_context32));
-			return((void *)0);
+			kfree(ic32, sizeof(struct x86_act_context32));
+			return (void *)0;
 		}
-		return(ic32);
+		return ic32;
 	}
 }
 
 
-void 
+void
 act_thread_catt(void *ctx)
 {
-        thread_t thr_act = current_thread();
+	thread_t thr_act = current_thread();
 	kern_return_t kret;
 
-	if (ctx == (void *)NULL)
-				return;
+	if (ctx == (void *)NULL) {
+		return;
+	}
 
-        if (thread_is_64bit_addr(thr_act)) {
-	        struct x86_act_context64 *ic64;
+	if (thread_is_64bit_addr(thr_act)) {
+		struct x86_act_context64 *ic64;
 
-	        ic64 = (struct x86_act_context64 *)ctx;
+		ic64 = (struct x86_act_context64 *)ctx;
 
 		kret = machine_thread_set_state(thr_act, x86_SAVED_STATE64,
-						(thread_state_t) &ic64->ss, x86_SAVED_STATE64_COUNT);
+		    (thread_state_t) &ic64->ss, x86_SAVED_STATE64_COUNT);
 		if (kret == KERN_SUCCESS) {
-			        machine_thread_set_state(thr_act, x86_FLOAT_STATE64,
-							 (thread_state_t) &ic64->fs, x86_FLOAT_STATE64_COUNT);
+			machine_thread_set_state(thr_act, x86_FLOAT_STATE64,
+			    (thread_state_t) &ic64->fs, x86_FLOAT_STATE64_COUNT);
 		}
 		kfree(ic64, sizeof(struct x86_act_context64));
 	} else {
-	        struct x86_act_context32 *ic32;
+		struct x86_act_context32 *ic32;
 
-	        ic32 = (struct x86_act_context32 *)ctx;
+		ic32 = (struct x86_act_context32 *)ctx;
 
 		kret = machine_thread_set_state(thr_act, x86_SAVED_STATE32,
-						(thread_state_t) &ic32->ss, x86_SAVED_STATE32_COUNT);
+		    (thread_state_t) &ic32->ss, x86_SAVED_STATE32_COUNT);
 		if (kret == KERN_SUCCESS) {
 			(void) machine_thread_set_state(thr_act, x86_FLOAT_STATE32,
-						 (thread_state_t) &ic32->fs, x86_FLOAT_STATE32_COUNT);
+			    (thread_state_t) &ic32->fs, x86_FLOAT_STATE32_COUNT);
 		}
 		kfree(ic32, sizeof(struct x86_act_context32));
 	}
 }
 
 
-void act_thread_cfree(__unused void *ctx)
+void
+act_thread_cfree(__unused void *ctx)
 {
 	/* XXX - Unused */
 }
@@ -2005,14 +2183,14 @@ void act_thread_cfree(__unused void *ctx)
 /*
  * Duplicate one x86_debug_state32_t to another.  "all" parameter
  * chooses whether dr4 and dr5 are copied (they are never meant
- * to be installed when we do machine_task_set_state() or 
+ * to be installed when we do machine_task_set_state() or
  * machine_thread_set_state()).
  */
 void
 copy_debug_state32(
-		x86_debug_state32_t *src,
-		x86_debug_state32_t *target,
-		boolean_t all)
+	x86_debug_state32_t *src,
+	x86_debug_state32_t *target,
+	boolean_t all)
 {
 	if (all) {
 		target->dr4 = src->dr4;
@@ -2030,14 +2208,14 @@ copy_debug_state32(
 /*
  * Duplicate one x86_debug_state64_t to another.  "all" parameter
  * chooses whether dr4 and dr5 are copied (they are never meant
- * to be installed when we do machine_task_set_state() or 
+ * to be installed when we do machine_task_set_state() or
  * machine_thread_set_state()).
  */
 void
 copy_debug_state64(
-		x86_debug_state64_t *src,
-		x86_debug_state64_t *target,
-		boolean_t all)
+	x86_debug_state64_t *src,
+	x86_debug_state64_t *target,
+	boolean_t all)
 {
 	if (all) {
 		target->dr4 = src->dr4;

@@ -5,7 +5,7 @@
 extern kern_return_t mach_timebase_info_trap(mach_timebase_info_t info);
 
 T_DECL(mach_timebase_info, "mach_timebase_info(_trap)",
-		T_META_ALL_VALID_ARCHS(true), T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ALL_VALID_ARCHS(true), T_META_LTEPHASE(LTE_POSTINIT))
 {
 	mach_timebase_info_data_t a, b, c;
 

@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2004 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -43,14 +43,14 @@ __BEGIN_DECLS
  */
 kern_return_t
 KUNCUserNotificationDisplayNotice(
-	int		noticeTimeout,
-	unsigned	flags,
-	char		*iconPath,
-	char		*soundPath,
-	char		*localizationPath,
-	char		*alertHeader,
-	char		*alertMessage,
-	char		*defaultButtonTitle) __attribute__((deprecated));
+	int             noticeTimeout,
+	unsigned        flags,
+	char            *iconPath,
+	char            *soundPath,
+	char            *localizationPath,
+	char            *alertHeader,
+	char            *alertMessage,
+	char            *defaultButtonTitle) __attribute__((deprecated));
 
 /*
  * ***BLOCKING*** alert call, returned int value corresponds to the
@@ -58,36 +58,36 @@ KUNCUserNotificationDisplayNotice(
  */
 kern_return_t
 KUNCUserNotificationDisplayAlert(
-	int		alertTimeout,
-	unsigned	flags,
-	char		*iconPath,
-	char		*soundPath,
-	char		*localizationPath,
-	char		*alertHeader,
-	char		*alertMessage,
-	char 		*defaultButtonTitle,
-	char		*alternateButtonTitle,
-	char		*otherButtonTitle,
-	unsigned	*responseFlags) __attribute__((deprecated));
+	int             alertTimeout,
+	unsigned        flags,
+	char            *iconPath,
+	char            *soundPath,
+	char            *localizationPath,
+	char            *alertHeader,
+	char            *alertMessage,
+	char            *defaultButtonTitle,
+	char            *alternateButtonTitle,
+	char            *otherButtonTitle,
+	unsigned        *responseFlags) __attribute__((deprecated));
 
 
 /*
  * Execute a userland executable with the given path, user and type
  */
- 
-#define kOpenApplicationPath 	0	/* essentially executes the path */
-#define kOpenPreferencePanel    1	/* runs the preferences with the foo.preference opened.  foo.preference must exist in /System/Library/Preferences */
-#define kOpenApplication	2	/* essentially runs /usr/bin/open on the passed in application name */
- 
- 
-#define kOpenAppAsRoot		0
-#define kOpenAppAsConsoleUser	1 
- 
+
+#define kOpenApplicationPath    0       /* essentially executes the path */
+#define kOpenPreferencePanel    1       /* runs the preferences with the foo.preference opened.  foo.preference must exist in /System/Library/Preferences */
+#define kOpenApplication        2       /* essentially runs /usr/bin/open on the passed in application name */
+
+
+#define kOpenAppAsRoot          0
+#define kOpenAppAsConsoleUser   1
+
 kern_return_t
 KUNCExecute(
-	char	*executionPath,
-	int	openAsUser,
-	int	pathExecutionType) __attribute__((deprecated));
+	char    *executionPath,
+	int     openAsUser,
+	int     pathExecutionType) __attribute__((deprecated));
 
 
 /* KUNC User Notification XML Keys
@@ -101,30 +101,30 @@ KUNCExecute(
  *
  *  Key			Type
  * Header			string (header displayed on dialog)
- * 				corresponds to kCFUserNotificationAlertHeaderKey
+ *                              corresponds to kCFUserNotificationAlertHeaderKey
  *
  * Icon URL			string (url of the icon to display)
- * 				corresponds to kCFUserNotificationIconURLKey
+ *                              corresponds to kCFUserNotificationIconURLKey
  *
  * Sound URL			string (url of the sound to play on display)
- * 				corresponds to kCFUserNotificationSoundURLKey
+ *                              corresponds to kCFUserNotificationSoundURLKey
  *
  * Localization URL		string (url of bundle to retrieve localization
  *				info from, using Localizable.strings files)
- * 				corresponds to kCFUserNotificationLocalizationURLKey
+ *                              corresponds to kCFUserNotificationLocalizationURLKey
  *
  * Message			string (text of the message, can contain %@'s
- *				which are filled from tokenString passed in) 
- * 				corresponds to kCFUserNotificationAlertMessageKey
+ *				which are filled from tokenString passed in)
+ *                              corresponds to kCFUserNotificationAlertMessageKey
  *
- * OK Button Title 		string (title of the "main" button)
- * 				corresponds to kCFUserNotificationDefaultButtonTitleKey
+ * OK Button Title              string (title of the "main" button)
+ *                              corresponds to kCFUserNotificationDefaultButtonTitleKey
  *
- * Alternate Button Title 	string (title of the "alternate" button,  usually cancel)
- * 				corresponds to kCFUserNotificationAlternateButtonTitleKey
+ * Alternate Button Title       string (title of the "alternate" button,  usually cancel)
+ *                              corresponds to kCFUserNotificationAlternateButtonTitleKey
  *
- * Other Button Title	 	string (title of the "other" button)
- * 				corresponds to kCFUserNotificationOtherButtonTitleKey
+ * Other Button Title	        string (title of the "other" button)
+ *                              corresponds to kCFUserNotificationOtherButtonTitleKey
  *
  * Timeout			string (numeric, int - seconds until the dialog
  *				goes away on it's own)
@@ -135,7 +135,7 @@ KUNCExecute(
  *				have no buttons)
  *
  * Text Field Strings		array of strings (each becomes a text field)
- * 				corresponds to kCFUserNotificationTextFieldTitlesKey
+ *                              corresponds to kCFUserNotificationTextFieldTitlesKey
  *
  * Password Fields		array of strings (numeric - each indicates a
  *				pwd field)
@@ -146,7 +146,7 @@ KUNCExecute(
  * Radio Button Strings		array of strings (each becomes a radio button)
  *
  * Check Box Strings		array of strings (each becomes a check box)
- * 				corresponds to kCFUserNotificationCheckBoxTitlesKey
+ *                              corresponds to kCFUserNotificationCheckBoxTitlesKey
  *
  * Selected Radio		string (numeric - which radio is selected)
  *
@@ -169,7 +169,7 @@ KUNCExecute(
  *		This WILL change soon to expect the CFBundleIdentifier instead of a bundle path
  *	fileName
  *		filename in bundle to retrive the xml from (i.e. "Messages")
- *	fileExtension 
+ *	fileExtension
  *		if fileName has an extension, it goes here (i.e., "dict");
  *	messageKey
  *		name of the xml key in the dictionary in the file to retrieve
@@ -196,23 +196,23 @@ typedef uintptr_t KUNCUserNotificationID;
  */
 
 enum {
-    kKUNCDefaultResponse	= 0,
-    kKUNCAlternateResponse	= 1,
-    kKUNCOtherResponse		= 2,
-    kKUNCCancelResponse		= 3
+	kKUNCDefaultResponse        = 0,
+	kKUNCAlternateResponse      = 1,
+	kKUNCOtherResponse          = 2,
+	kKUNCCancelResponse         = 3
 };
 
-#define KUNCCheckBoxChecked(i)	(1 << (8 + i))   /* can be used for radio's too */
-#define KUNCPopUpSelection(n)	(n << 24)
+#define KUNCCheckBoxChecked(i)  (1 << (8 + i))   /* can be used for radio's too */
+#define KUNCPopUpSelection(n)   (n << 24)
 
 /*
  * Callback function for KUNCNotifications
  */
 typedef void
 (*KUNCUserNotificationCallBack)(
-	int		contextKey,
-	int		responseFlags,
-	const void	*xmlData);
+	int             contextKey,
+	int             responseFlags,
+	const void      *xmlData);
 
 /*
  * Get a notification ID
@@ -223,19 +223,19 @@ KUNCUserNotificationID KUNCGetNotificationID(void) __attribute__((deprecated));
 
 kern_return_t
 KUNCUserNotificationDisplayFromBundle(
-	KUNCUserNotificationID		notificationID,
-	char				*bundleIdentifier,
-	char				*fileName,
-	char				*fileExtension,
-	char				*messageKey,
-	char				*tokenString,
-	KUNCUserNotificationCallBack	callback,
-	int				contextKey) __attribute__((deprecated));
+	KUNCUserNotificationID          notificationID,
+	char                            *bundleIdentifier,
+	char                            *fileName,
+	char                            *fileExtension,
+	char                            *messageKey,
+	char                            *tokenString,
+	KUNCUserNotificationCallBack    callback,
+	int                             contextKey) __attribute__((deprecated));
 
 
 kern_return_t
 KUNCUserNotificationCancel(
-	KUNCUserNotificationID	notification) __attribute__((deprecated));
+	KUNCUserNotificationID  notification) __attribute__((deprecated));
 
 
 __END_DECLS

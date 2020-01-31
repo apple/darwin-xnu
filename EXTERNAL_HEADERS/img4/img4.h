@@ -4,7 +4,7 @@
  * for authenticating and validating Image4 manifests as being authoritative.
  * These concepts are:
  *
- * Environment
+ * @section Environment
  * An environment is a description of a host comprised of hardware identifiers
  * and policy configurations. For example, the environment of an iPhone may
  * include the following hardware identifiers (among others):
@@ -26,7 +26,7 @@
  *     should be prevented from being executed on the host environment. The
  *     default is true.
  *
- * Manifest
+ * @section Manifest
  * An Image4 manifest is a set of constraints that describe a host environment.
  * For example, a manifest may have been signed such that it is only valid for a
  * single host environment. In this case, the manifest may include specific
@@ -39,7 +39,7 @@
  * The manifest also includes one or more objects which may be executed in the
  * environment.
  *
- * Object
+ * @section Object
  * An object is a description of a payload. An object can describe any payload,
  * not just the payload that is in the Image4. An object describes a payload by
  * means of its digest. Examples of objects present in a secure boot manifest
@@ -69,6 +69,63 @@
  *     - a type of object (e.g. 'krnl')
  *
  * Tags comprised of all-caps are reserved for the Image4 specification.
+ *
+ * @section Secure Boot Policy
+ * Manifests are evaluated with the Secure Boot evaluation policy. Broadly
+ * speaking, this policy:
+ *
+ *     - enforces that manifest identifiers match the host's silicon
+ *       identifiers,
+ *     - enforces that the epoch of the certificate which signed the manifest is
+ *       greater than or equal to the host silicon's epoch
+ *     - enforces that the current manifest is the same one that was used in the
+ *       previous stage of Secure Boot unless mix-n-match is allowed
+ *
+ * For manifests which lack a CHMH property, mix-n-match policy is enforced as
+ * follows
+ *
+ *   (1) If the previous stage of Secure Boot disallows mix-n-match and the
+ *       manifest does not possess the AMNM entitlement, the hash of the
+ *       manifest will be enforced against the hash of the manifest which was
+ *       evaluated by the previous stage of Secure Boot.
+ *
+ *   (2) If the previous stage of Secure Boot allows mix-n-match or the manifest
+ *       possesses the AMNM entitlement, the manifest's constraints will be
+ *       enforced on the environment, but the manifest will not be expected to
+ *       be consistent with the manifest evaluated in the previous stage of
+ *       Secure Boot, i.e. the hash of the previous manifest will not be
+ *       enforced against the manifest being evaluated.
+ *
+ *       Enforcement of the manifest's constraints will include the value of the
+ *       BNCH tag in the manifest, if any. Therefore the caller should always
+ *       provide a nonce value to the implementation via {@link img4_set_nonce}
+ *       if this option is used.
+ *
+ * For manifests which possess a CHMH property, mix-n-match policy is enforced
+ * as follows:
+ *
+ *   (1) If the previous stage of Secure Boot disallows mix-n-match or the
+ *       manifest does not possess the AMNM entitlement, the value of the CHMH
+ *       property will be enforced against the hash of the manifest which was
+ *       evaluated by the previous stage of Secure Boot.
+ *
+ *   (2) If the previous stage of Secure Boot allows mix-n-match and the
+ *       manifest possesses the AMNM entitlement, all of the manifest's
+ *       constraints will be enforced on the environment except for the CHMH
+ *       constraint, which will be ignored.
+ *
+ *       Enforcement of the manifest's constraints will include the value of the
+ *       BNCH tag in the manifest, if any. Therefore the caller should always
+ *       provide a nonce value to the implementation via {@link img4_set_nonce}
+ *       if this option is used.
+ *
+ * The CHMH policy may be expressed as the following truth table:
+ *
+ * AMNM [manifest]  Verify Manifest Hash [environment]   Enforce CHMH
+ *        0                        0                           Y
+ *        0                        1                           Y
+ *        1                        0                           N
+ *        1                        1                           Y
  */
 
 
@@ -86,7 +143,7 @@
  * This header is used in the pmap layer in xnu, which is in osfmk, which does
  * not have access to most of the BSD headers. (But for some reason it does have
  * access to sys/cdefs.h.) The only thing we need from that header is the
- * errno_t typedef though, so if we can't get to it, then just typeded it
+ * errno_t typedef though, so if we can't get to it, then just typedef it
  * ourselves.
  */
 #if MACH_KERNEL_PRIVATE
@@ -128,47 +185,6 @@ OS_ENUM(img4_section, uint8_t,
 ) IMG4_API_AVAILABLE_20180112;
 
 /*!
- * @typedef img4_custom_tag_handler_t
- * A handler for a tag unrecognized by the implementation.
- *
- * @param tag
- * The FourCC tag.
- *
- * @param ctx
- * The user-provided context pointer given to either
- * {@link img4_get_trusted_payload} or
- * {@link img4_get_trusted_external_payload}.
- */
-IMG4_API_AVAILABLE_20180112
-typedef errno_t (*img4_custom_tag_handler_t)(
-	img4_tag_t tag,
-	img4_section_t section,
-	void *ctx);
-
-/*!
- * @typedef img4_custom_tag_t
- * A type describing a custom tag and its handler.
- *
- * @property i4ct_tag
- * The FourCC tag.
- *
- * @property i4ct_section
- * The section in which the tag is expected. If {@link IMG4_SECTION_OBJECT} is
- * given, the object corresponding to the tag given to
- * {@link img4_get_trusted_payload} or {@link img4_get_trusted_external_payload}
- * will be consulted for the tag.
- *
- * @property i4ct_handler
- * The handler for the tag.
- */
-IMG4_API_AVAILABLE_20180112
-typedef struct _img4_custom_tag {
-	img4_tag_t i4ct_tag;
-	img4_section_t i4ct_section;
-	img4_custom_tag_handler_t i4ct_handler;
-} img4_custom_tag_t;
-
-/*!
  * @typedef img4_destructor_t
  * A type describing a destructor routine for an Image4 object.
  *
@@ -201,35 +217,37 @@ typedef void (*img4_destructor_t)(
  * @const I4F_FORCE_MIXNMATCH
  * Causes the implementation to bypass mix-n-match policy evaluation and always
  * allow mix-n-match, irrespective of the previous boot stage's conclusion or
- * manifest policy.
+ * manifest policy. This also allows replay of manifests whose personalization
+ * has been invalidated by rolling the nonce.
  *
  * This option is for testing purposes only and is not respected on the RELEASE
  * variant of the implementation.
+ *
+ * @const I4F_FIRST_STAGE
+ * Indicates that the manifest being evaluated is the first link in the secure
+ * boot chain. This causes the implementation to enforce the manifest directly
+ * on the environment rather than requiring that a previous stage has already
+ * done so by way of checking the previous stage's boot manifest hash. In effect
+ * this disables the mix-n-match enforcement policy.
+ *
+ * The critical difference between this flag and {@link I4F_FORCE_MIXNMATCH} is
+ * that this flag will cause the entire manifest to be enforced on the
+ * environment, including the anti-replay token in BNCH.
+ * {@link I4F_FORCE_MIXNMATCH} will ignore the nonce.
+ *
+ * It is illegal to use a manifest which possesses a CHMH tag as a first-stage
+ * manifest.
  */
 OS_ENUM(img4_flags, uint64_t,
 	I4F_INIT = 0,
 	I4F_TRUST_MANIFEST = (1 << 0),
 	I4F_FORCE_MIXNMATCH = (1 << 1),
+	I4F_FIRST_STAGE = (1 << 2),
 ) IMG4_API_AVAILABLE_20180112;
 
-#if TARGET_OS_OSX || defined(PLATFORM_MacOSX)
-typedef char _img4_opaque_data_64[656];
-typedef char _img4_opaque_data_32[476];
-#elif TARGET_OS_IOS || defined(PLATFORM_iPhoneOS)
-typedef char _img4_opaque_data_64[656];
-typedef char _img4_opaque_data_32[476];
-#elif TARGET_OS_WATCH || defined(PLATFORM_WatchOS)
-typedef char _img4_opaque_data_64[656];
-typedef char _img4_opaque_data_32[488];
-#elif TARGET_OS_TV || defined(PLATFORM_tvOS) || defined(PLATFORM_AppleTVOS)
-typedef char _img4_opaque_data_64[656];
-typedef char _img4_opaque_data_32[476];
-#elif TARGET_OS_BRIDGE || defined(PLATFORM_BridgeOS)
-typedef char _img4_opaque_data_64[656];
-typedef char _img4_opaque_data_32[476];
-#else
-#error "Unsupported platform"
-#endif
+typedef char _img4_opaque_data_64[696];
+
+typedef char _img4_opaque_data_32[520];
 
 /*!
  * @typedef img4_t
@@ -246,23 +264,12 @@ typedef struct _img4 {
 #endif
 } img4_t;
 
-#if TARGET_OS_OSX  || defined(PLATFORM_MacOSX)
-typedef char _img4_payload_opaque_data_64[488];
-typedef char _img4_payload_opaque_data_32[316];
-#elif TARGET_OS_IOS || defined(PLATFORM_iPhoneOS)
-typedef char _img4_payload_opaque_data_64[488];
-typedef char _img4_payload_opaque_data_32[316];
-#elif TARGET_OS_WATCH || defined(PLATFORM_WatchOS)
-typedef char _img4_payload_opaque_data_64[488];
-typedef char _img4_payload_opaque_data_32[316];
-#elif TARGET_OS_TV || defined(PLATFORM_tvOS) || defined(PLATFORM_AppleTVOS)
-typedef char _img4_payload_opaque_data_64[488];
-typedef char _img4_payload_opaque_data_32[316];
-#elif TARGET_OS_BRIDGE || defined(PLATFORM_BridgeOS)
-typedef char _img4_payload_opaque_data_64[488];
-typedef char _img4_payload_opaque_data_32[316];
+typedef char _img4_payload_opaque_data_64[496];
+
+#if __ARM_ARCH_7S__ || __i386__
+typedef char _img4_payload_opaque_data_32[324];
 #else
-#error "Unsupported platform"
+typedef char _img4_payload_opaque_data_32[328];
 #endif
 
 /*!
@@ -281,7 +288,14 @@ typedef struct _img4_payload {
 
 #if !IMG4_PROJECT_BUILD
 #include <img4/environment.h>
+#include <img4/nonce.h>
 #include <img4/payload.h>
+#endif
+
+#if IMG4_TAPI
+#include "environment.h"
+#include "nonce.h"
+#include "payload.h"
 #endif
 
 /*!
@@ -316,40 +330,69 @@ typedef struct _img4_payload {
  * The bytes given to this routine must represent an Image4 manifest. They may
  * optionally also represent an Image4 payload.
  */
+#if !MACH_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
 OS_EXPORT OS_WARN_RESULT OS_NONNULL1 OS_NONNULL3
 errno_t
 img4_init(img4_t *i4, img4_flags_t flags, const uint8_t *bytes, size_t len,
 		img4_destructor_t destructor);
+#else
+#define img4_init(...) (img4if->i4if_init(__VA_ARGS__))
+#endif
 
 /*!
- * @function img4_set_custom_tag_handler
- * Sets custom tag handlers for an Image4. These handlers are invoked during
- * trust evaluation of the Image4.
+ * @function img4_set_nonce
+ * Sets the anti-reply token to be used during manifest enforcement. This value
+ * will be compared against the value of the manifest's BNCH property.
  *
  * @param i4
  * The Image4 to modify.
  *
- * @param tags
- * An array of custom tag structures which specify the custom tags expected.
- * This must be constant storage. Passing heap or stack storage will result in
- * undefined behavior.
+ * @param bytes
+ * The bytes which comprise the anti-replay token.
  *
- * @param tags_cnt
- * The number of items in the {@link tags} array.
+ * @param len
+ * The length of the anti-replay token.
  *
  * @discussion
- * Invocations of custom tag handlers occur during trust evaluation. You should
- * not assume that the Image4 is trusted within the scope of a custom tag
- * handler. Trustworthiness can only be determined by consulting the return
- * value of {@link img4_get_trusted_payload} or
- * {@link img4_get_trusted_external_payload}.
+ * If a nonce is not set prior to a call to either
+ * {@link img4_get_trusted_payload} or
+ * {@link img4_get_trusted_external_payload}, the implementation will act as
+ * though there is no nonce in the environment. Therefore, any manifests which
+ * have a BNCH property constraint will fail to validate.
  */
+#if !MACH_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
 OS_EXPORT OS_NONNULL1 OS_NONNULL2
 void
-img4_set_custom_tag_handler(img4_t *i4,
-		const img4_custom_tag_t *tags, size_t tags_cnt);
+img4_set_nonce(img4_t *i4, const void *bytes, size_t len);
+#else
+#define img4_set_nonce(...) (img4if->i4if_set_nonce(__VA_ARGS__))
+#endif
+
+/*!
+ * @function img4_set_nonce_domain
+ * Sets the nonce domain to be consulted for the anti-replay token during
+ * manifest enforcement.
+ *
+ * @param i4
+ * The Image4 to modify.
+ *
+ * @param nd
+ * The nonce domain to use for anti-replay.
+ *
+ * @discussion
+ * See discussion for {@link img4_set_nonce}.
+ */
+#if !MACH_KERNEL_PRIVATE
+IMG4_API_AVAILABLE_20181106
+OS_EXPORT OS_NONNULL1 OS_NONNULL2
+void
+img4_set_nonce_domain(img4_t *i4, const img4_nonce_domain_t *nd);
+#else
+#define img4_set_nonce_domain(...) \
+		(img4if->i4if_v1.set_nonce_domain(__VA_ARGS__))
+#endif
 
 /*!
  * @function img4_get_trusted_payload
@@ -363,10 +406,6 @@ img4_set_custom_tag_handler(img4_t *i4,
  *
  * @param env
  * The environment against which to validate the Image4.
- *
- * @param ctx
- * The context pointer to pass to the routines defined in the environment (if
- * a custom environment was passed) and to any custom tag handlers.
  *
  * @param bytes
  * A pointer to the storage where the pointer to the payload buffer will be
@@ -384,6 +423,7 @@ img4_set_custom_tag_handler(img4_t *i4,
  *     [EAUTH]      The Image4 manifest was not authentic
  *     [EACCES]     The environment given does not satisfy the manifest
  *                  constraints
+ *     [ESTALE]     The nonce specified is not valid
  *     [EACCES]     The environment and manifest do not agree on a digest
  *                  algorithm
  *     [EILSEQ]     The payload for the given tag does not match its description
@@ -406,12 +446,16 @@ img4_set_custom_tag_handler(img4_t *i4,
  * If any one of these validation checks fails, the payload is considered
  * untrustworthy and is not returned.
  */
+#if !MACH_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
-OS_EXPORT OS_WARN_RESULT OS_NONNULL1 OS_NONNULL3 OS_NONNULL5 OS_NONNULL6
+OS_EXPORT OS_WARN_RESULT OS_NONNULL1 OS_NONNULL3 OS_NONNULL4 OS_NONNULL5
 errno_t
 img4_get_trusted_payload(img4_t *i4, img4_tag_t tag,
-		const img4_environment_t *env, void *ctx,
-		const uint8_t **bytes, size_t *len);
+		const img4_environment_t *env, const uint8_t **bytes, size_t *len);
+#else
+#define img4_get_trusted_payload(...) \
+		(img4if->i4if_get_trusted_payload(__VA_ARGS__))
+#endif
 
 /*!
  * @function img4_get_trusted_external_payload
@@ -426,10 +470,6 @@ img4_get_trusted_payload(img4_t *i4, img4_tag_t tag,
  *
  * @param env
  * The environment against which to validate the Image4.
- *
- * @param ctx
- * The context pointer to pass to the routines defined in the environment and to
- * any custom tag handlers.
  *
  * @param bytes
  * A pointer to the storage where the pointer to the payload buffer will be
@@ -448,6 +488,7 @@ img4_get_trusted_payload(img4_t *i4, img4_tag_t tag,
  *     [EAUTH]      The Image4 manifest was not authentic
  *     [EACCES]     The environment given does not satisfy the manifest
  *                  constraints
+ *     [ESTALE]     The nonce specified is not valid
  *     [EACCES]     The environment and manifest do not agree on a digest
  *                  algorithm
  *     [EILSEQ]     The payload for the given tag does not match its description
@@ -461,66 +502,17 @@ img4_get_trusted_payload(img4_t *i4, img4_tag_t tag,
  * This routine performs the same validation steps as
  * {@link img4_get_trusted_payload}.
  */
+#if !MACH_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
-OS_EXPORT OS_WARN_RESULT OS_NONNULL1 OS_NONNULL2
+OS_EXPORT OS_WARN_RESULT OS_NONNULL1 OS_NONNULL2 OS_NONNULL3 OS_NONNULL4
+OS_NONNULL5
 errno_t
 img4_get_trusted_external_payload(img4_t *i4, img4_payload_t *payload,
-		const img4_environment_t *env, void *ctx,
-		const uint8_t **bytes, size_t *len);
-
-/*!
- * @function img4_get_entitlement_bool
- * Queries the Image4 manifest for a Boolean entitlement value.
- *
- * @param i4
- * The Image4 to query.
- *
- * @param entitlement
- * The tag for the entitlement to query.
- *
- * @result
- * The Boolean value of the entitlement. If the entitlement was not present,
- * false is returned. If the entitlement was present but did not have a Boolean
- * value, false is returned.
- *
- * @discussion
- * This routine does not trigger validation of the Image4. Therefore the result
- * result of this routine cannot be used to confer trust without also having
- * obtained a valid payload.
- */
-IMG4_API_AVAILABLE_20180112
-OS_EXPORT OS_WARN_RESULT OS_NONNULL1
-bool
-img4_get_entitlement_bool(img4_t *i4, img4_tag_t entitlement);
-
-/*!
- * @function img4_get_object_entitlement_bool
- * Queries the specified object in the Image4 manifest for a Boolean entitlement
- * value.
- *
- * @param i4
- * The Image4 to query.
- *
- * @param object
- * The tag for the object to query.
- *
- * @param entitlement
- * The tag for the entitlement to query.
- *
- * @result
- * The Boolean value of the entitlement. If the entitlement was not present,
- * false is returned. If the entitlement was present but did not have a Boolean
- * value, false is returned. If the object specified was not present, false is
- * returned.
- *
- * @discussion
- * See discussion for {@link img4_get_entitlement_bool}.
- */
-IMG4_API_AVAILABLE_20180112
-OS_EXPORT OS_WARN_RESULT OS_NONNULL1
-bool
-img4_get_object_entitlement_bool(img4_t *i4, img4_tag_t object,
-		img4_tag_t entitlement);
+		const img4_environment_t *env, const uint8_t **bytes, size_t *len);
+#else
+#define img4_get_trusted_external_payload(...) \
+		(img4if->i4if_get_trusted_external_payload(__VA_ARGS__))
+#endif
 
 /*!
  * @function img4_destroy
@@ -533,10 +525,14 @@ img4_get_object_entitlement_bool(img4_t *i4, img4_tag_t object,
  * The destructor passed to {@link img4_init} is called as a result of this
  * routine, if any was set.
  */
+#if !MACH_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
 OS_EXPORT OS_NONNULL1
 void
 img4_destroy(img4_t *i4);
+#else
+#define img4_destroy(...) (img4if->i4if_destroy(__VA_ARGS__))
+#endif
 
 __END_DECLS;
 

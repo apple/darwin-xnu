@@ -31,9 +31,8 @@
 
 #include <machine/types.h> /* __int64_t */
 
-struct timeval64
-{
-	__int64_t		tv_sec;		/* seconds */
-	__int64_t		tv_usec;	/* and microseconds */
+struct timeval64 {
+	__int64_t               tv_sec;         /* seconds */
+	__int64_t               tv_usec;        /* and microseconds */
 };
 #endif /* _STRUCT_TIMEVAL32 */

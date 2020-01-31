@@ -52,7 +52,7 @@ int once_callback_counter = 0;
 
 static void
 test_once_callback(thread_call_param_t param0,
-                   thread_call_param_t param1)
+    thread_call_param_t param1)
 {
 	T_ASSERT_EQ_INT((test_param)param0, TEST_ARG1, "param0 is correct");
 	T_ASSERT_EQ_INT((test_param)param1, TEST_ARG2, "param1 is correct");
@@ -87,9 +87,9 @@ test_once_thread_call(void)
 
 	thread_call_t call;
 	call = thread_call_allocate_with_options(&test_once_callback,
-	                                         (thread_call_param_t)TEST_ARG1,
-	                                         THREAD_CALL_PRIORITY_HIGH,
-	                                         THREAD_CALL_OPTIONS_ONCE);
+	    (thread_call_param_t)TEST_ARG1,
+	    THREAD_CALL_PRIORITY_HIGH,
+	    THREAD_CALL_OPTIONS_ONCE);
 
 	thread_call_param_t arg2_param = (thread_call_param_t)TEST_ARG2;
 
@@ -150,7 +150,7 @@ int signal_callback_counter = 0;
 
 static void
 test_signal_callback(__unused thread_call_param_t param0,
-                     __unused thread_call_param_t param1)
+    __unused thread_call_param_t param1)
 {
 	/*
 	 * ktest sometimes panics if you assert from interrupt context,
@@ -166,9 +166,9 @@ test_signal_thread_call(void)
 {
 	thread_call_t call;
 	call = thread_call_allocate_with_options(&test_signal_callback,
-	                                         (thread_call_param_t)TEST_ARG1,
-	                                         THREAD_CALL_PRIORITY_HIGH,
-	                                         THREAD_CALL_OPTIONS_ONCE|THREAD_CALL_OPTIONS_SIGNAL);
+	    (thread_call_param_t)TEST_ARG1,
+	    THREAD_CALL_PRIORITY_HIGH,
+	    THREAD_CALL_OPTIONS_ONCE | THREAD_CALL_OPTIONS_SIGNAL);
 
 	thread_call_param_t arg2_param = (thread_call_param_t)TEST_ARG2;
 

@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -62,7 +62,7 @@
  */
 
 #ifndef _SYS_UIO_INTERNAL_H_
-#define	_SYS_UIO_INTERNAL_H_
+#define _SYS_UIO_INTERNAL_H_
 
 #include <sys/appleapiopts.h>
 
@@ -76,17 +76,17 @@
  * WARNING - make sure to check when adding flags!  Be sure new flags
  * don't overlap the definitions in uio.h
  */
-//	UIO_USERSPACE 				0	defined in uio.h
-#define	UIO_USERISPACE			1
+//	UIO_USERSPACE                           0	defined in uio.h
+#define UIO_USERISPACE                  1
 //	UIO_SYSSPACE				2	defined in uio.h
-#define UIO_PHYS_USERSPACE		3
-#define UIO_PHYS_SYSSPACE		4	
+#define UIO_PHYS_USERSPACE              3
+#define UIO_PHYS_SYSSPACE               4
 //	UIO_USERSPACE32				5	defined in uio.h
-#define UIO_USERISPACE32		6
-#define UIO_PHYS_USERSPACE32	7	
+#define UIO_USERISPACE32                6
+#define UIO_PHYS_USERSPACE32    7
 //	UIO_USERSPACE64				8	defined in uio.h
-#define UIO_USERISPACE64		9	
-#define UIO_PHYS_USERSPACE64	10
+#define UIO_USERISPACE64                9
+#define UIO_PHYS_USERSPACE64    10
 //	UIO_SYSSPACE32				11	defined in uio.h
 //  UIO_PHYS_SYSSPACE32			12	reserved, never used. Use UIO_PHYS_SYSSPACE
 //  UIO_SYSSPACE64				13	reserved, never used. Use UIO_SYSSPACE
@@ -109,51 +109,51 @@ __private_extern__ void uio_pushback( uio_t a_uio, user_size_t a_count );
 
 /* use kern_iovec for system space requests */
 struct kern_iovec {
-	u_int64_t	iov_base;	/* Base address. */
-	u_int64_t	iov_len;	/* Length. */
+	u_int64_t       iov_base;       /* Base address. */
+	u_int64_t       iov_len;        /* Length. */
 };
 
 /* use user_iovec for user space requests */
 struct user_iovec {
-	user_addr_t	iov_base;	/* Base address. */
-	user_size_t	iov_len;	/* Length. */
+	user_addr_t     iov_base;       /* Base address. */
+	user_size_t     iov_len;        /* Length. */
 };
 
 /* use user32_iovec/user64_iovec for representing
  * in-memory structures in 32-64 processes during copyin */
 struct user32_iovec {
-	uint32_t	iov_base;	/* Base address. */
-	uint32_t	iov_len;	/* Length. */
+	uint32_t        iov_base;       /* Base address. */
+	uint32_t        iov_len;        /* Length. */
 };
 
 struct user64_iovec {
-	uint64_t	iov_base;	/* Base address. */
-	uint64_t	iov_len;	/* Length. */
+	uint64_t        iov_base;       /* Base address. */
+	uint64_t        iov_len;        /* Length. */
 };
 
 union iovecs {
-	struct kern_iovec	*kiovp;
-	struct user_iovec 	*uiovp;
+	struct kern_iovec       *kiovp;
+	struct user_iovec       *uiovp;
 };
 
 /* WARNING - use accessor calls for uio_iov and uio_resid since these */
 /* fields vary depending on the originating address space. */
 struct uio {
-	union iovecs 	uio_iovs;		/* current iovec */
-	int				uio_iovcnt;		/* active iovecs */
-	off_t			uio_offset;
-	enum uio_seg 	uio_segflg;
-	enum uio_rw 	uio_rw;
-	user_size_t	uio_resid_64;
-	int				uio_size;		/* size for use with kfree */
-	int				uio_max_iovs;	/* max number of iovecs this uio_t can hold */
-	u_int32_t		uio_flags;		
+	union iovecs    uio_iovs;               /* current iovec */
+	int                             uio_iovcnt;             /* active iovecs */
+	off_t                   uio_offset;
+	enum uio_seg    uio_segflg;
+	enum uio_rw     uio_rw;
+	user_size_t     uio_resid_64;
+	int                             uio_size;               /* size for use with kfree */
+	int                             uio_max_iovs;   /* max number of iovecs this uio_t can hold */
+	u_int32_t               uio_flags;
 };
 
 /* values for uio_flags */
-#define UIO_FLAGS_INITED 		0x00000001
-#define UIO_FLAGS_WE_ALLOCED 	0x00000002
-#define UIO_FLAGS_IS_COMPRESSED_FILE 	0x00000004
+#define UIO_FLAGS_INITED                0x00000001
+#define UIO_FLAGS_WE_ALLOCED    0x00000002
+#define UIO_FLAGS_IS_COMPRESSED_FILE    0x00000004
 
 __END_DECLS
 
@@ -164,7 +164,7 @@ __END_DECLS
  */
 #define UIO_SIZEOF( a_iovcount ) \
 	( sizeof(struct uio) + (MAX(sizeof(struct user_iovec), sizeof(struct kern_iovec)) * (a_iovcount)) )
-	
+
 #define UIO_IS_USER_SPACE32( a_uio_t )  \
 	( (a_uio_t)->uio_segflg == UIO_USERSPACE32 || (a_uio_t)->uio_segflg == UIO_PHYS_USERSPACE32 || \
 	  (a_uio_t)->uio_segflg == UIO_USERISPACE32 )

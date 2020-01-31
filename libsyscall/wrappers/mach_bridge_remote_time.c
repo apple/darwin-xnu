@@ -71,8 +71,8 @@ mach_bridge_remote_time(__unused uint64_t local_time)
 		 * This barrier prevents the second read of base_local_ts from being reordered
 		 * w.r.t the reads of other values in bt_params.
 		 */
-		__asm__ volatile("dmb ishld" ::: "memory");
-	} while(params.base_local_ts && (params.base_local_ts != commpage_bt_params_p->base_local_ts));
+		__asm__ volatile ("dmb ishld" ::: "memory");
+	} while (params.base_local_ts && (params.base_local_ts != commpage_bt_params_p->base_local_ts));
 
 	if (!local_time) {
 		local_time = now;

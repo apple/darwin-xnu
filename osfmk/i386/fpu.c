@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1992-1990 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -76,81 +76,89 @@
 #include <i386/thread.h>
 #include <i386/trap.h>
 
-xstate_t	fpu_capability = UNDEFINED;	/* extended state capability */
-xstate_t	fpu_default = UNDEFINED;	/* default extended state */
+xstate_t        fpu_capability = UNDEFINED;     /* extended state capability */
+xstate_t        fpu_default = UNDEFINED;        /* default extended state */
 
-#define ALIGNED(addr,size)	(((uintptr_t)(addr)&((size)-1))==0)
+#define ALIGNED(addr, size)      (((uintptr_t)(addr)&((size)-1))==0)
 
 /* Forward */
 
-extern void		fpinit(void);
-extern void		fp_save(
-				thread_t	thr_act);
-extern void		fp_load(
-				thread_t	thr_act);
+extern void             fpinit(void);
+extern void             fp_save(
+	thread_t        thr_act);
+extern void             fp_load(
+	thread_t        thr_act);
 
 static void configure_mxcsr_capability_mask(x86_ext_thread_state_t *fps);
 static xstate_t thread_xstate(thread_t);
 
-x86_ext_thread_state_t	initial_fp_state __attribute((aligned(64)));
-x86_ext_thread_state_t	default_avx512_state __attribute((aligned(64)));
-x86_ext_thread_state_t	default_avx_state __attribute((aligned(64)));
-x86_ext_thread_state_t	default_fx_state __attribute((aligned(64)));
+x86_ext_thread_state_t  initial_fp_state __attribute((aligned(64)));
+x86_ext_thread_state_t  default_avx512_state __attribute((aligned(64)));
+x86_ext_thread_state_t  default_avx_state __attribute((aligned(64)));
+x86_ext_thread_state_t  default_fx_state __attribute((aligned(64)));
 
 /* Global MXCSR capability bitmask */
 static unsigned int mxcsr_capability_mask;
 
-#define	fninit() \
+#define fninit() \
 	__asm__ volatile("fninit")
 
-#define	fnstcw(control) \
+#define fnstcw(control) \
 	__asm__("fnstcw %0" : "=m" (*(unsigned short *)(control)))
 
-#define	fldcw(control) \
+#define fldcw(control) \
 	__asm__ volatile("fldcw %0" : : "m" (*(unsigned short *) &(control)) )
 
-#define	fnclex() \
+#define fnclex() \
 	__asm__ volatile("fnclex")
 
-#define	fnsave(state)  \
+#define fnsave(state)  \
 	__asm__ volatile("fnsave %0" : "=m" (*state))
 
-#define	frstor(state) \
+#define frstor(state) \
 	__asm__ volatile("frstor %0" : : "m" (state))
 
 #define fwait() \
-    	__asm__("fwait");
+	__asm__("fwait");
 
-static inline void fxrstor(struct x86_fx_thread_state *a) {
-	__asm__ __volatile__("fxrstor %0" ::  "m" (*a));
+static inline void
+fxrstor(struct x86_fx_thread_state *a)
+{
+	__asm__ __volatile__ ("fxrstor %0" ::  "m" (*a));
 }
 
-static inline void fxsave(struct x86_fx_thread_state *a) {
-	__asm__ __volatile__("fxsave %0" : "=m" (*a));
+static inline void
+fxsave(struct x86_fx_thread_state *a)
+{
+	__asm__ __volatile__ ("fxsave %0" : "=m" (*a));
 }
 
-static inline void fxrstor64(struct x86_fx_thread_state *a) {
-	__asm__ __volatile__("fxrstor64 %0" ::  "m" (*a));
+static inline void
+fxrstor64(struct x86_fx_thread_state *a)
+{
+	__asm__ __volatile__ ("fxrstor64 %0" ::  "m" (*a));
 }
 
-static inline void fxsave64(struct x86_fx_thread_state *a) {
-	__asm__ __volatile__("fxsave64 %0" : "=m" (*a));
+static inline void
+fxsave64(struct x86_fx_thread_state *a)
+{
+	__asm__ __volatile__ ("fxsave64 %0" : "=m" (*a));
 }
 
 #if !defined(RC_HIDE_XNU_J137)
-#define IS_VALID_XSTATE(x)	((x) == FP || (x) == AVX || (x) == AVX512) 
+#define IS_VALID_XSTATE(x)      ((x) == FP || (x) == AVX || (x) == AVX512)
 #else
-#define IS_VALID_XSTATE(x)	((x) == FP || (x) == AVX)
+#define IS_VALID_XSTATE(x)      ((x) == FP || (x) == AVX)
 #endif
 
-zone_t		ifps_zone[] = {
+zone_t          ifps_zone[] = {
 	[FP]     = NULL,
 	[AVX]    = NULL,
 #if !defined(RC_HIDE_XNU_J137)
 	[AVX512] = NULL
 #endif
 };
-static uint32_t	fp_state_size[] = {
+static uint32_t fp_state_size[] = {
 	[FP]     = sizeof(struct x86_fx_thread_state),
 	[AVX]    = sizeof(struct x86_avx_thread_state),
 #if !defined(RC_HIDE_XNU_J137)
@@ -200,46 +208,56 @@ static const char *xstate_name[] = {
 #else
 #define fpu_YMM_capable (fpu_capability == AVX)
 #endif
-static uint32_t	cpuid_reevaluated = 0;
+static uint32_t cpuid_reevaluated = 0;
 
 static void fpu_store_registers(void *, boolean_t);
 static void fpu_load_registers(void *);
 
 #if !defined(RC_HIDE_XNU_J137)
 static const uint32_t xstate_xmask[] = {
-	[FP] =		FP_XMASK,
-	[AVX] =		AVX_XMASK,
-	[AVX512] =	AVX512_XMASK
+	[FP] =          FP_XMASK,
+	[AVX] =         AVX_XMASK,
+	[AVX512] =      AVX512_XMASK
 };
 #else
 static const uint32_t xstate_xmask[] = {
-	[FP] =		FP_XMASK,
-	[AVX] =		AVX_XMASK,
+	[FP] =          FP_XMASK,
+	[AVX] =         AVX_XMASK,
 };
 #endif
 
-static inline void xsave(struct x86_fx_thread_state *a, uint32_t rfbm) {
-	__asm__ __volatile__("xsave %0" :"=m" (*a) : "a"(rfbm), "d"(0));
+static inline void
+xsave(struct x86_fx_thread_state *a, uint32_t rfbm)
+{
+	__asm__ __volatile__ ("xsave %0" :"=m" (*a) : "a"(rfbm), "d"(0));
 }
 
-static inline void xsave64(struct x86_fx_thread_state *a, uint32_t rfbm) {
-	__asm__ __volatile__("xsave64 %0" :"=m" (*a) : "a"(rfbm), "d"(0));
+static inline void
+xsave64(struct x86_fx_thread_state *a, uint32_t rfbm)
+{
+	__asm__ __volatile__ ("xsave64 %0" :"=m" (*a) : "a"(rfbm), "d"(0));
 }
 
-static inline void xrstor(struct x86_fx_thread_state *a, uint32_t rfbm) {
-	__asm__ __volatile__("xrstor %0" ::  "m" (*a), "a"(rfbm), "d"(0));
+static inline void
+xrstor(struct x86_fx_thread_state *a, uint32_t rfbm)
+{
+	__asm__ __volatile__ ("xrstor %0" ::  "m" (*a), "a"(rfbm), "d"(0));
 }
 
-static inline void xrstor64(struct x86_fx_thread_state *a, uint32_t rfbm) {
-	__asm__ __volatile__("xrstor64 %0" ::  "m" (*a), "a"(rfbm), "d"(0));
+static inline void
+xrstor64(struct x86_fx_thread_state *a, uint32_t rfbm)
+{
+	__asm__ __volatile__ ("xrstor64 %0" ::  "m" (*a), "a"(rfbm), "d"(0));
 }
 
 #if !defined(RC_HIDE_XNU_J137)
-__unused static inline void vzeroupper(void) {
-	__asm__ __volatile__("vzeroupper" ::);
+__unused static inline void
+vzeroupper(void)
+{
+	__asm__ __volatile__ ("vzeroupper" ::);
 }
 
-static boolean_t fpu_thread_promote_avx512(thread_t); 	/* Forward */
+static boolean_t fpu_thread_promote_avx512(thread_t);   /* Forward */
 
 /*
  * Define a wrapper for bcopy to defeat destination size checka.
@@ -251,16 +269,18 @@ static boolean_t fpu_thread_promote_avx512(thread_t); 	/* Forward */
  *	bcopy_nockch(src,&dst->fpu_ymmh0,8*sizeof(_STRUCT_XMM_REG));
  * without the compiler throwing a __builtin__memmove_chk error.
  */
-static inline void bcopy_nochk(void *_src, void *_dst, size_t _len) {
+static inline void
+bcopy_nochk(void *_src, void *_dst, size_t _len)
+{
 	bcopy(_src, _dst, _len);
-} 
+}
 
 /*
  * Furthermore, make compile-time asserts that no padding creeps into structures
  * for which we're doing this.
  */
-#define ASSERT_PACKED(t, m1, m2, n, mt)			\
-extern char assert_packed_ ## t ## _ ## m1 ## _ ## m2	\
+#define ASSERT_PACKED(t, m1, m2, n, mt)                 \
+extern char assert_packed_ ## t ## _ ## m1 ## _ ## m2   \
 	[(offsetof(t,m2) - offsetof(t,m1) == (n - 1)*sizeof(mt)) ? 1 : -1]
 
 ASSERT_PACKED(x86_avx_state32_t, fpu_ymmh0, fpu_ymmh7, 8, _STRUCT_XMM_REG);
@@ -278,7 +298,7 @@ ASSERT_PACKED(x86_avx512_state64_t, fpu_zmm16, fpu_zmm31, 16, _STRUCT_ZMM_REG);
 
 #if defined(DEBUG_AVX512)
 
-#define	DBG(x...)	kprintf("DBG: " x)
+#define DBG(x...)       kprintf("DBG: " x)
 
 typedef struct { uint8_t byte[8]; }  opmask_t;
 typedef struct { uint8_t byte[16]; } xmm_t;
@@ -288,7 +308,7 @@ typedef struct { uint8_t byte[64]; } zmm_t;
 static void
 DBG_AVX512_STATE(struct x86_avx512_thread_state *sp)
 {
-	int	i, j;
+	int     i, j;
 	xmm_t *xmm  = (xmm_t *) &sp->fp.fx_XMM_reg;
 	xmm_t *ymmh = (xmm_t *) &sp->x_YMM_Hi128;
 	ymm_t *zmmh = (ymm_t *) &sp->x_ZMM_Hi256;
@@ -306,24 +326,29 @@ DBG_AVX512_STATE(struct x86_avx512_thread_state *sp)
 	/* Print all ZMM registers */
 	for (i = 0; i < 16; i++) {
 		kprintf("zmm%d:\t0x", i);
-		for (j = 0; j < 16; j++)
+		for (j = 0; j < 16; j++) {
 			kprintf("%02x", xmm[i].byte[j]);
-		for (j = 0; j < 16; j++)
+		}
+		for (j = 0; j < 16; j++) {
 			kprintf("%02x", ymmh[i].byte[j]);
-		for (j = 0; j < 32; j++)
+		}
+		for (j = 0; j < 32; j++) {
 			kprintf("%02x", zmmh[i].byte[j]);
+		}
 		kprintf("\n");
 	}
 	for (i = 0; i < 16; i++) {
-		kprintf("zmm%d:\t0x", 16+i);
-		for (j = 0; j < 64; j++)
+		kprintf("zmm%d:\t0x", 16 + i);
+		for (j = 0; j < 64; j++) {
 			kprintf("%02x", zmm[i].byte[j]);
+		}
 		kprintf("\n");
 	}
 	for (i = 0; i < 8; i++) {
 		kprintf("k%d:\t0x", i);
-		for (j = 0; j < 8; j++)
+		for (j = 0; j < 8; j++) {
 			kprintf("%02x", k[i].byte[j]);
+		}
 		kprintf("\n");
 	}
 
@@ -331,7 +356,7 @@ DBG_AVX512_STATE(struct x86_avx512_thread_state *sp)
 	kprintf("xcomp_bv:  0x%016llx\n", sp->_xh.xcomp_bv);
 }
 #else
-#define	DBG(x...)
+#define DBG(x...)
 static void
 DBG_AVX512_STATE(__unused struct x86_avx512_thread_state *sp)
 {
@@ -341,13 +366,13 @@ DBG_AVX512_STATE(__unused struct x86_avx512_thread_state *sp)
 
 #endif
 
-#if	DEBUG
+#if     DEBUG
 static inline unsigned short
 fnstsw(void)
 {
 	unsigned short status;
-	__asm__ volatile("fnstsw %0" : "=ma" (status));
-	return(status);
+	__asm__ volatile ("fnstsw %0" : "=ma" (status));
+	return status;
 }
 #endif
 
@@ -372,17 +397,18 @@ configure_mxcsr_capability_mask(x86_ext_thread_state_t *fps)
 	mxcsr_capability_mask = fps->fx.fx_MXCSR_MASK;
 
 	/* Set default mask value if necessary */
-	if (mxcsr_capability_mask == 0)
+	if (mxcsr_capability_mask == 0) {
 		mxcsr_capability_mask = 0xffbf;
-	
+	}
+
 	/* Clear vector register store */
-	bzero(&fps->fx.fx_XMM_reg[0][0],   sizeof(fps->fx.fx_XMM_reg));
+	bzero(&fps->fx.fx_XMM_reg[0][0], sizeof(fps->fx.fx_XMM_reg));
 	bzero(fps->avx.x_YMM_Hi128, sizeof(fps->avx.x_YMM_Hi128));
 #if !defined(RC_HIDE_XNU_J137)
 	if (fpu_ZMM_capable) {
 		bzero(fps->avx512.x_ZMM_Hi256, sizeof(fps->avx512.x_ZMM_Hi256));
-		bzero(fps->avx512.x_Hi16_ZMM,  sizeof(fps->avx512.x_Hi16_ZMM));
-		bzero(fps->avx512.x_Opmask,    sizeof(fps->avx512.x_Opmask));
+		bzero(fps->avx512.x_Hi16_ZMM, sizeof(fps->avx512.x_Hi16_ZMM));
+		bzero(fps->avx512.x_Opmask, sizeof(fps->avx512.x_Opmask));
 	}
 #endif
 
@@ -415,21 +441,21 @@ int fpsimd_fault_popc = 0;
 void
 init_fpu(void)
 {
-#if	DEBUG	
-	unsigned short	status;
-	unsigned short 	control;
+#if     DEBUG
+	unsigned short  status;
+	unsigned short  control;
 #endif
 	/*
 	 * Check for FPU by initializing it,
 	 * then trying to read the correct bit patterns from
 	 * the control and status registers.
 	 */
-	set_cr0((get_cr0() & ~(CR0_EM|CR0_TS)) | CR0_NE);	/* allow use of FPU */
+	set_cr0((get_cr0() & ~(CR0_EM | CR0_TS)) | CR0_NE);       /* allow use of FPU */
 	fninit();
-#if	DEBUG	
+#if     DEBUG
 	status = fnstsw();
 	fnstcw(&control);
-	
+
 	assert(((status & 0xff) == 0) && ((control & 0x103f) == 0x3f));
 #endif
 	/* Advertise SSE support */
@@ -439,8 +465,9 @@ init_fpu(void)
 		if (cpuid_features() & CPUID_FEATURE_SSE) {
 			set_cr4(get_cr4() | CR4_OSXMM);
 		}
-	} else
+	} else {
 		panic("fpu is not FP_FXSR");
+	}
 
 	fpu_capability = fpu_default = FP;
 
@@ -452,11 +479,11 @@ init_fpu(void)
 		if (cpuid_leaf7_features() & CPUID_LEAF7_FEATURE_AVX512F) {
 			PE_parse_boot_argn("avx512", &is_avx512_enabled, sizeof(boolean_t));
 			kprintf("AVX512 supported %s\n",
-				is_avx512_enabled ? "and enabled" : "but disabled");
+			    is_avx512_enabled ? "and enabled" : "but disabled");
 		}
 	}
 #endif
-		
+
 	/* Configure the XSAVE context mechanism if the processor supports
 	 * AVX/YMM registers
 	 */
@@ -472,8 +499,9 @@ init_fpu(void)
 			set_cr4(get_cr4() | CR4_OSXSAVE);
 			xsetbv(0, AVX512_XMASK);
 			/* Re-evaluate CPUID, once, to reflect OSXSAVE */
-			if (OSCompareAndSwap(0, 1, &cpuid_reevaluated))
+			if (OSCompareAndSwap(0, 1, &cpuid_reevaluated)) {
 				cpuid_set_info();
+			}
 			/* Verify that now selected state can be accommodated */
 			assert(xs0p->extended_state[ebx] == fp_state_size[AVX512]);
 			/*
@@ -492,17 +520,19 @@ init_fpu(void)
 			set_cr4(get_cr4() | CR4_OSXSAVE);
 			xsetbv(0, AVX_XMASK);
 			/* Re-evaluate CPUID, once, to reflect OSXSAVE */
-			if (OSCompareAndSwap(0, 1, &cpuid_reevaluated))
+			if (OSCompareAndSwap(0, 1, &cpuid_reevaluated)) {
 				cpuid_set_info();
+			}
 			/* Verify that now selected state can be accommodated */
 			assert(xs0p->extended_state[ebx] == fp_state_size[AVX]);
 		}
 	}
 
-	if (cpu_number() == master_cpu)
+	if (cpu_number() == master_cpu) {
 		kprintf("fpu_state: %s, state_size: %d\n",
-			xstate_name[fpu_capability],
-			fp_state_size[fpu_capability]);
+		    xstate_name[fpu_capability],
+		    fp_state_size[fpu_capability]);
+	}
 
 	fpinit();
 	current_cpu_datap()->cpu_xstate = fpu_default;
@@ -525,12 +555,12 @@ fp_state_alloc(xstate_t xs)
 	assert(ifps_zone[xs] != NULL);
 	ifps = zalloc(ifps_zone[xs]);
 
-#if	DEBUG	
-	if (!(ALIGNED(ifps,64))) {
+#if     DEBUG
+	if (!(ALIGNED(ifps, 64))) {
 		panic("fp_state_alloc: %p, %u, %p, %u",
-			ifps, (unsigned) ifps_zone[xs]->elem_size,
-			(void *) ifps_zone[xs]->free_elements,
-			(unsigned) ifps_zone[xs]->alloc_size);
+		    ifps, (unsigned) ifps_zone[xs]->elem_size,
+		    (void *) ifps_zone[xs]->free_elements,
+		    (unsigned) ifps_zone[xs]->alloc_size);
 	}
 #endif
 	bzero(ifps, fp_state_size[xs]);
@@ -545,64 +575,73 @@ fp_state_free(void *ifps, xstate_t xs)
 	zfree(ifps_zone[xs], ifps);
 }
 
-void clear_fpu(void)
+void
+clear_fpu(void)
 {
 	set_ts();
 }
 
 
-static void fpu_load_registers(void *fstate) {
+static void
+fpu_load_registers(void *fstate)
+{
 	struct x86_fx_thread_state *ifps = fstate;
 	fp_save_layout_t layout = ifps->fp_save_layout;
 
-	assert(current_task() == NULL ||				\
-	       (thread_is_64bit_addr(current_thread()) ?			\
-			(layout == FXSAVE64 || layout == XSAVE64) :	\
-			(layout == FXSAVE32 || layout == XSAVE32)));
+	assert(current_task() == NULL ||                                \
+	    (thread_is_64bit_addr(current_thread()) ?                        \
+	    (layout == FXSAVE64 || layout == XSAVE64) :     \
+	    (layout == FXSAVE32 || layout == XSAVE32)));
 	assert(ALIGNED(ifps, 64));
 	assert(ml_get_interrupts_enabled() == FALSE);
 
-#if	DEBUG	
+#if     DEBUG
 	if (layout == XSAVE32 || layout == XSAVE64) {
 		struct x86_avx_thread_state *iavx = fstate;
 		unsigned i;
 		/* Verify reserved bits in the XSAVE header*/
-		if (iavx->_xh.xstate_bv & ~xstate_xmask[current_xstate()])
+		if (iavx->_xh.xstate_bv & ~xstate_xmask[current_xstate()]) {
 			panic("iavx->_xh.xstate_bv: 0x%llx", iavx->_xh.xstate_bv);
-		for (i = 0; i < sizeof(iavx->_xh.xhrsvd); i++)
-			if (iavx->_xh.xhrsvd[i])
+		}
+		for (i = 0; i < sizeof(iavx->_xh.xhrsvd); i++) {
+			if (iavx->_xh.xhrsvd[i]) {
 				panic("Reserved bit set");
+			}
+		}
 	}
 	if (fpu_YMM_capable) {
-		if (layout != XSAVE32 && layout != XSAVE64)
+		if (layout != XSAVE32 && layout != XSAVE64) {
 			panic("Inappropriate layout: %u\n", layout);
+		}
 	}
-#endif	/* DEBUG */
+#endif  /* DEBUG */
 
 	switch (layout) {
-	    case FXSAVE64:
+	case FXSAVE64:
 		fxrstor64(ifps);
 		break;
-	    case FXSAVE32:
+	case FXSAVE32:
 		fxrstor(ifps);
 		break;
-	    case XSAVE64:
+	case XSAVE64:
 		xrstor64(ifps, xstate_xmask[current_xstate()]);
 		break;
-	    case XSAVE32:
+	case XSAVE32:
 		xrstor(ifps, xstate_xmask[current_xstate()]);
 		break;
-	    default:
+	default:
 		panic("fpu_load_registers() bad layout: %d\n", layout);
 	}
 }
 
-static void fpu_store_registers(void *fstate, boolean_t is64) {
+static void
+fpu_store_registers(void *fstate, boolean_t is64)
+{
 	struct x86_fx_thread_state *ifps = fstate;
 	assert(ALIGNED(ifps, 64));
 	xstate_t xs = current_xstate();
 	switch (xs) {
-	    case FP:
+	case FP:
 		if (is64) {
 			fxsave64(fstate);
 			ifps->fp_save_layout = FXSAVE64;
@@ -611,9 +650,9 @@ static void fpu_store_registers(void *fstate, boolean_t is64) {
 			ifps->fp_save_layout = FXSAVE32;
 		}
 		break;
-	    case AVX:
+	case AVX:
 #if !defined(RC_HIDE_XNU_J137)
-	    case AVX512:
+	case AVX512:
 #endif
 		if (is64) {
 			xsave64(ifps, xstate_xmask[xs]);
@@ -623,7 +662,7 @@ static void fpu_store_registers(void *fstate, boolean_t is64) {
 			ifps->fp_save_layout = XSAVE32;
 		}
 		break;
-	    default:
+	default:
 		panic("fpu_store_registers() bad xstate: %d\n", xs);
 	}
 }
@@ -635,18 +674,19 @@ static void fpu_store_registers(void *fstate, boolean_t is64) {
 void
 fpu_module_init(void)
 {
-	if (!IS_VALID_XSTATE(fpu_default))
+	if (!IS_VALID_XSTATE(fpu_default)) {
 		panic("fpu_module_init: invalid extended state %u\n",
-			fpu_default);
+		    fpu_default);
+	}
 
 	/* We explicitly choose an allocation size of 13 pages = 64 * 832
 	 * to eliminate waste for the 832 byte sized
 	 * AVX XSAVE register save area.
 	 */
 	ifps_zone[fpu_default] = zinit(fp_state_size[fpu_default],
-				       thread_max * fp_state_size[fpu_default],
-				       64 * fp_state_size[fpu_default],
-				       "x86 fpsave state");
+	    thread_max * fp_state_size[fpu_default],
+	    64 * fp_state_size[fpu_default],
+	    "x86 fpsave state");
 
 	/* To maintain the required alignment, disable
 	 * zone debugging for this zone as that appends
@@ -661,9 +701,9 @@ fpu_module_init(void)
 	 */
 	if (fpu_capability == AVX512) {
 		ifps_zone[AVX512] = zinit(fp_state_size[AVX512],
-					  thread_max * fp_state_size[AVX512],
-					  32 * fp_state_size[AVX512],
-					  "x86 avx512 save state");
+		    thread_max * fp_state_size[AVX512],
+		    32 * fp_state_size[AVX512],
+		    "x86 avx512 save state");
 		zone_change(ifps_zone[AVX512], Z_ALIGNMENT_REQUIRED, TRUE);
 	}
 #endif
@@ -681,13 +721,13 @@ fpu_module_init(void)
 void
 fpu_switch_context(thread_t old, thread_t new)
 {
-	struct x86_fx_thread_state	*ifps;
+	struct x86_fx_thread_state      *ifps;
 	cpu_data_t *cdp = current_cpu_datap();
 	xstate_t new_xstate = new ? thread_xstate(new) : fpu_default;
 
 	assert(ml_get_interrupts_enabled() == FALSE);
 	ifps = (old)->machine.ifps;
-#if	DEBUG
+#if     DEBUG
 	if (ifps && ((ifps->fp_valid != FALSE) && (ifps->fp_valid != TRUE))) {
 		panic("ifps->fp_valid: %u\n", ifps->fp_valid);
 	}
@@ -716,9 +756,9 @@ fpu_switch_context(thread_t old, thread_t new)
 	}
 
 	assertf(fpu_YMM_capable ? (xgetbv(XCR0) == xstate_xmask[cdp->cpu_xstate]) : TRUE, "XCR0 mismatch: 0x%llx 0x%x 0x%x", xgetbv(XCR0), cdp->cpu_xstate, xstate_xmask[cdp->cpu_xstate]);
-	if (new_xstate != cdp->cpu_xstate) {
+	if (new_xstate != (xstate_t) cdp->cpu_xstate) {
 		DBG("fpu_switch_context(%p,%p) new xstate: %s\n",
-			old, new, xstate_name[new_xstate]);
+		    old, new, xstate_name[new_xstate]);
 		xsetbv(0, xstate_xmask[new_xstate]);
 		cdp->cpu_xstate = new_xstate;
 	}
@@ -733,45 +773,49 @@ fpu_switch_context(thread_t old, thread_t new)
 void
 fpu_free(thread_t thread, void *fps)
 {
-	pcb_t	pcb = THREAD_TO_PCB(thread);
-	
+	pcb_t   pcb = THREAD_TO_PCB(thread);
+
 	fp_state_free(fps, pcb->xstate);
 	pcb->xstate = UNDEFINED;
 }
 
 /*
- * Set the floating-point state for a thread based 
- * on the FXSave formatted data. This is basically  
- * the same as fpu_set_state except it uses the 
- * expanded data structure. 
+ * Set the floating-point state for a thread based
+ * on the FXSave formatted data. This is basically
+ * the same as fpu_set_state except it uses the
+ * expanded data structure.
  * If the thread is not the current thread, it is
  * not running (held).  Locking needed against
  * concurrent fpu_set_state or fpu_get_state.
  */
 kern_return_t
 fpu_set_fxstate(
-	thread_t	thr_act,
-	thread_state_t	tstate,
+	thread_t        thr_act,
+	thread_state_t  tstate,
 	thread_flavor_t f)
 {
-	struct x86_fx_thread_state	*ifps;
-	struct x86_fx_thread_state	*new_ifps;
-	x86_float_state64_t		*state;
-	pcb_t				pcb;
-	boolean_t			old_valid, fresh_state = FALSE;
+	struct x86_fx_thread_state      *ifps;
+	struct x86_fx_thread_state      *new_ifps;
+	x86_float_state64_t             *state;
+	pcb_t                           pcb;
+	boolean_t                       old_valid, fresh_state = FALSE;
 
-	if (fpu_capability == UNDEFINED)
+	if (fpu_capability == UNDEFINED) {
 		return KERN_FAILURE;
+	}
 
 	if ((f == x86_AVX_STATE32 || f == x86_AVX_STATE64) &&
-	    fpu_capability < AVX)
+	    fpu_capability < AVX) {
 		return KERN_FAILURE;
+	}
 
 #if !defined(RC_HIDE_XNU_J137)
 	if ((f == x86_AVX512_STATE32 || f == x86_AVX512_STATE64) &&
-	    thread_xstate(thr_act) == AVX)
-		if (!fpu_thread_promote_avx512(thr_act))
+	    thread_xstate(thr_act) == AVX) {
+		if (!fpu_thread_promote_avx512(thr_act)) {
 			return KERN_FAILURE;
+		}
+	}
 #endif
 
 	state = (x86_float_state64_t *)tstate;
@@ -784,7 +828,7 @@ fpu_set_fxstate(
 		 * new FPU state is 'invalid'.
 		 * Deallocate the fp state if it exists.
 		 */
-		simple_lock(&pcb->lock);
+		simple_lock(&pcb->lock, LCK_GRP_NULL);
 
 		ifps = pcb->ifps;
 		pcb->ifps = 0;
@@ -799,8 +843,8 @@ fpu_set_fxstate(
 		 * Valid incoming state. Allocate the fp state if there is none.
 		 */
 		new_ifps = 0;
-		Retry:
-		simple_lock(&pcb->lock);
+Retry:
+		simple_lock(&pcb->lock, LCK_GRP_NULL);
 
 		ifps = pcb->ifps;
 		if (ifps == 0) {
@@ -822,7 +866,7 @@ fpu_set_fxstate(
 
 		old_valid = ifps->fp_valid;
 
-#if	DEBUG || DEVELOPMENT
+#if     DEBUG || DEVELOPMENT
 		if ((fresh_state == FALSE) && (old_valid == FALSE) && (thr_act != current_thread())) {
 			panic("fpu_set_fxstate inconsistency, thread: %p not stopped", thr_act);
 		}
@@ -837,13 +881,20 @@ fpu_set_fxstate(
 		bcopy((char *)&state->fpu_fcw, (char *)ifps, fp_state_size[FP]);
 
 		switch (thread_xstate(thr_act)) {
-		    case UNDEFINED:
+		case UNDEFINED_FULL:
+		case FP_FULL:
+		case AVX_FULL:
+		case AVX512_FULL:
+			panic("fpu_set_fxstate() INVALID xstate: 0x%x", thread_xstate(thr_act));
+			break;
+
+		case UNDEFINED:
 			panic("fpu_set_fxstate() UNDEFINED xstate");
 			break;
-		    case FP:
+		case FP:
 			ifps->fp_save_layout = thread_is_64bit_addr(thr_act) ? FXSAVE64 : FXSAVE32;
 			break;
-		    case AVX: {
+		case AVX: {
 			struct x86_avx_thread_state *iavx = (void *) ifps;
 			x86_avx_state64_t *xs = (x86_avx_state64_t *) state;
 
@@ -862,9 +913,9 @@ fpu_set_fxstate(
 				iavx->_xh.xstate_bv = (XFEM_SSE | XFEM_X87);
 			}
 			break;
-		    }
+		}
 #if !defined(RC_HIDE_XNU_J137)
-		    case AVX512: {
+		case AVX512: {
 			struct x86_avx512_thread_state *iavx = (void *) ifps;
 			union {
 				thread_state_t       ts;
@@ -880,28 +931,28 @@ fpu_set_fxstate(
 			iavx->_xh.xcomp_bv  = 0;
 
 			switch (f) {
-			    case x86_AVX512_STATE32:
-				bcopy_nochk(&xs.s32->fpu_k0,    iavx->x_Opmask,     8 * sizeof(_STRUCT_OPMASK_REG));
-				bcopy_nochk(&xs.s32->fpu_zmmh0, iavx->x_ZMM_Hi256,  8 * sizeof(_STRUCT_YMM_REG));
-				bcopy_nochk(&xs.s32->fpu_ymmh0, iavx->x_YMM_Hi128,  8 * sizeof(_STRUCT_XMM_REG));
+			case x86_AVX512_STATE32:
+				bcopy_nochk(&xs.s32->fpu_k0, iavx->x_Opmask, 8 * sizeof(_STRUCT_OPMASK_REG));
+				bcopy_nochk(&xs.s32->fpu_zmmh0, iavx->x_ZMM_Hi256, 8 * sizeof(_STRUCT_YMM_REG));
+				bcopy_nochk(&xs.s32->fpu_ymmh0, iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG));
 				DBG_AVX512_STATE(iavx);
 				break;
-			    case x86_AVX_STATE32:
-				bcopy_nochk(&xs.s32->fpu_ymmh0, iavx->x_YMM_Hi128,  8 * sizeof(_STRUCT_XMM_REG));
+			case x86_AVX_STATE32:
+				bcopy_nochk(&xs.s32->fpu_ymmh0, iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG));
 				break;
-			    case x86_AVX512_STATE64:
-				bcopy_nochk(&xs.s64->fpu_k0,    iavx->x_Opmask,     8 * sizeof(_STRUCT_OPMASK_REG));
-				bcopy_nochk(&xs.s64->fpu_zmm16, iavx->x_Hi16_ZMM,  16 * sizeof(_STRUCT_ZMM_REG));
+			case x86_AVX512_STATE64:
+				bcopy_nochk(&xs.s64->fpu_k0, iavx->x_Opmask, 8 * sizeof(_STRUCT_OPMASK_REG));
+				bcopy_nochk(&xs.s64->fpu_zmm16, iavx->x_Hi16_ZMM, 16 * sizeof(_STRUCT_ZMM_REG));
 				bcopy_nochk(&xs.s64->fpu_zmmh0, iavx->x_ZMM_Hi256, 16 * sizeof(_STRUCT_YMM_REG));
 				bcopy_nochk(&xs.s64->fpu_ymmh0, iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG));
 				DBG_AVX512_STATE(iavx);
 				break;
-			    case x86_AVX_STATE64:
+			case x86_AVX_STATE64:
 				bcopy_nochk(&xs.s64->fpu_ymmh0, iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG));
 				break;
 			}
 			break;
-		    }
+		}
 #endif
 		}
 
@@ -911,16 +962,18 @@ fpu_set_fxstate(
 			boolean_t istate = ml_set_interrupts_enabled(FALSE);
 			ifps->fp_valid = TRUE;
 			/* If altering the current thread's state, disable FPU */
-			if (thr_act == current_thread())
+			if (thr_act == current_thread()) {
 				set_ts();
+			}
 
 			ml_set_interrupts_enabled(istate);
 		}
 
 		simple_unlock(&pcb->lock);
 
-		if (new_ifps != 0)
+		if (new_ifps != 0) {
 			fp_state_free(new_ifps, thread_xstate(thr_act));
+		}
 	}
 	return KERN_SUCCESS;
 }
@@ -933,26 +986,29 @@ fpu_set_fxstate(
  */
 kern_return_t
 fpu_get_fxstate(
-	thread_t	thr_act,
-	thread_state_t	tstate,
+	thread_t        thr_act,
+	thread_state_t  tstate,
 	thread_flavor_t f)
 {
-	struct x86_fx_thread_state	*ifps;
-	x86_float_state64_t		*state;
-	kern_return_t			ret = KERN_FAILURE;
-	pcb_t				pcb;
+	struct x86_fx_thread_state      *ifps;
+	x86_float_state64_t             *state;
+	kern_return_t                   ret = KERN_FAILURE;
+	pcb_t                           pcb;
 
-	if (fpu_capability == UNDEFINED)
+	if (fpu_capability == UNDEFINED) {
 		return KERN_FAILURE;
+	}
 
 	if ((f == x86_AVX_STATE32 || f == x86_AVX_STATE64) &&
-	    fpu_capability < AVX)
+	    fpu_capability < AVX) {
 		return KERN_FAILURE;
+	}
 
 #if !defined(RC_HIDE_XNU_J137)
 	if ((f == x86_AVX512_STATE32 || f == x86_AVX512_STATE64) &&
-	    thread_xstate(thr_act) != AVX512)
+	    thread_xstate(thr_act) != AVX512) {
 		return KERN_FAILURE;
+	}
 #endif
 
 	state = (x86_float_state64_t *)tstate;
@@ -960,7 +1016,7 @@ fpu_get_fxstate(
 	assert(thr_act != THREAD_NULL);
 	pcb = THREAD_TO_PCB(thr_act);
 
-	simple_lock(&pcb->lock);
+	simple_lock(&pcb->lock, LCK_GRP_NULL);
 
 	ifps = pcb->ifps;
 	if (ifps == 0) {
@@ -980,7 +1036,7 @@ fpu_get_fxstate(
 	 * If the live fpu state belongs to our target
 	 */
 	if (thr_act == current_thread()) {
-		boolean_t	intr;
+		boolean_t       intr;
 
 		intr = ml_set_interrupts_enabled(FALSE);
 
@@ -991,14 +1047,21 @@ fpu_get_fxstate(
 		(void)ml_set_interrupts_enabled(intr);
 	}
 	if (ifps->fp_valid) {
-        	bcopy((char *)ifps, (char *)&state->fpu_fcw, fp_state_size[FP]);
+		bcopy((char *)ifps, (char *)&state->fpu_fcw, fp_state_size[FP]);
 		switch (thread_xstate(thr_act)) {
-		    case UNDEFINED:
+		case UNDEFINED_FULL:
+		case FP_FULL:
+		case AVX_FULL:
+		case AVX512_FULL:
+			panic("fpu_get_fxstate() INVALID xstate: 0x%x", thread_xstate(thr_act));
+			break;
+
+		case UNDEFINED:
 			panic("fpu_get_fxstate() UNDEFINED xstate");
 			break;
-		    case FP:
-			break;			/* already done */
-		    case AVX: {
+		case FP:
+			break;                  /* already done */
+		case AVX: {
 			struct x86_avx_thread_state *iavx = (void *) ifps;
 			x86_avx_state64_t *xs = (x86_avx_state64_t *) state;
 			if (f == x86_AVX_STATE32) {
@@ -1007,9 +1070,9 @@ fpu_get_fxstate(
 				bcopy_nochk(iavx->x_YMM_Hi128, &xs->fpu_ymmh0, 16 * sizeof(_STRUCT_XMM_REG));
 			}
 			break;
-		    }
+		}
 #if !defined(RC_HIDE_XNU_J137)
-		    case AVX512: {
+		case AVX512: {
 			struct x86_avx512_thread_state *iavx = (void *) ifps;
 			union {
 				thread_state_t       ts;
@@ -1017,28 +1080,28 @@ fpu_get_fxstate(
 				x86_avx512_state64_t *s64;
 			} xs = { .ts = tstate };
 			switch (f) {
-			    case x86_AVX512_STATE32:
-				bcopy_nochk(iavx->x_Opmask,    &xs.s32->fpu_k0,    8 * sizeof(_STRUCT_OPMASK_REG));
+			case x86_AVX512_STATE32:
+				bcopy_nochk(iavx->x_Opmask, &xs.s32->fpu_k0, 8 * sizeof(_STRUCT_OPMASK_REG));
 				bcopy_nochk(iavx->x_ZMM_Hi256, &xs.s32->fpu_zmmh0, 8 * sizeof(_STRUCT_YMM_REG));
 				bcopy_nochk(iavx->x_YMM_Hi128, &xs.s32->fpu_ymmh0, 8 * sizeof(_STRUCT_XMM_REG));
 				DBG_AVX512_STATE(iavx);
 				break;
-			    case x86_AVX_STATE32:
+			case x86_AVX_STATE32:
 				bcopy_nochk(iavx->x_YMM_Hi128, &xs.s32->fpu_ymmh0, 8 * sizeof(_STRUCT_XMM_REG));
 				break;
-			    case x86_AVX512_STATE64:
-				bcopy_nochk(iavx->x_Opmask,    &xs.s64->fpu_k0,    8 * sizeof(_STRUCT_OPMASK_REG));
-				bcopy_nochk(iavx->x_Hi16_ZMM,  &xs.s64->fpu_zmm16, 16 * sizeof(_STRUCT_ZMM_REG));
+			case x86_AVX512_STATE64:
+				bcopy_nochk(iavx->x_Opmask, &xs.s64->fpu_k0, 8 * sizeof(_STRUCT_OPMASK_REG));
+				bcopy_nochk(iavx->x_Hi16_ZMM, &xs.s64->fpu_zmm16, 16 * sizeof(_STRUCT_ZMM_REG));
 				bcopy_nochk(iavx->x_ZMM_Hi256, &xs.s64->fpu_zmmh0, 16 * sizeof(_STRUCT_YMM_REG));
 				bcopy_nochk(iavx->x_YMM_Hi128, &xs.s64->fpu_ymmh0, 16 * sizeof(_STRUCT_XMM_REG));
 				DBG_AVX512_STATE(iavx);
 				break;
-			    case x86_AVX_STATE64:
+			case x86_AVX_STATE64:
 				bcopy_nochk(iavx->x_YMM_Hi128, &xs.s64->fpu_ymmh0, 16 * sizeof(_STRUCT_XMM_REG));
 				break;
 			}
 			break;
-		    }
+		}
 #endif
 		}
 
@@ -1060,29 +1123,31 @@ fpu_get_fxstate(
 
 void
 fpu_dup_fxstate(
-	thread_t	parent,
-	thread_t	child)
+	thread_t        parent,
+	thread_t        child)
 {
 	struct x86_fx_thread_state *new_ifps = NULL;
-	boolean_t	intr;
-	pcb_t		ppcb;
-	xstate_t	xstate = thread_xstate(parent);
+	boolean_t       intr;
+	pcb_t           ppcb;
+	xstate_t        xstate = thread_xstate(parent);
 
 	ppcb = THREAD_TO_PCB(parent);
 
-	if (ppcb->ifps == NULL)
-	        return;
+	if (ppcb->ifps == NULL) {
+		return;
+	}
 
-        if (child->machine.ifps)
-	        panic("fpu_dup_fxstate: child's ifps non-null");
+	if (child->machine.ifps) {
+		panic("fpu_dup_fxstate: child's ifps non-null");
+	}
 
 	new_ifps = fp_state_alloc(xstate);
 
-	simple_lock(&ppcb->lock);
+	simple_lock(&ppcb->lock, LCK_GRP_NULL);
 
 	if (ppcb->ifps != NULL) {
 		struct x86_fx_thread_state *ifps = ppcb->ifps;
-	        /*
+		/*
 		 * Make sure we`ve got the latest fp state info
 		 */
 		if (current_thread() == parent) {
@@ -1099,8 +1164,8 @@ fpu_dup_fxstate(
 			child->machine.ifps = new_ifps;
 			child->machine.xstate = xstate;
 			bcopy((char *)(ppcb->ifps),
-			      (char *)(child->machine.ifps),
-			      fp_state_size[xstate]);
+			    (char *)(child->machine.ifps),
+			    fp_state_size[xstate]);
 
 			/* Mark the new fp saved state as non-live. */
 			/* Temporarily disabled: radar 4647827
@@ -1117,8 +1182,9 @@ fpu_dup_fxstate(
 	}
 	simple_unlock(&ppcb->lock);
 
-	if (new_ifps != NULL)
-	        fp_state_free(new_ifps, xstate);
+	if (new_ifps != NULL) {
+		fp_state_free(new_ifps, xstate);
+	}
 }
 
 /*
@@ -1128,7 +1194,8 @@ fpu_dup_fxstate(
  */
 
 void
-fpinit(void) {
+fpinit(void)
+{
 	boolean_t istate = ml_set_interrupts_enabled(FALSE);
 	clear_ts();
 	fninit();
@@ -1137,18 +1204,18 @@ fpinit(void) {
 	 * non-DEBUG, as dirtying the x87 control word may slow down
 	 * xsave/xrstor and affect energy use.
 	 */
-	unsigned short	control, control2;
+	unsigned short  control, control2;
 	fnstcw(&control);
 	control2 = control;
-	control &= ~(FPC_PC|FPC_RC); /* Clear precision & rounding control */
-	control |= (FPC_PC_64 |		/* Set precision */ 
-			FPC_RC_RN | 	/* round-to-nearest */
-			FPC_ZE |	/* Suppress zero-divide */
-			FPC_OE |	/*  and overflow */
-			FPC_UE |	/*  underflow */
-			FPC_IE |	/* Allow NaNQs and +-INF */
-			FPC_DE |	/* Allow denorms as operands  */
-			FPC_PE);	/* No trap for precision loss */
+	control &= ~(FPC_PC | FPC_RC); /* Clear precision & rounding control */
+	control |= (FPC_PC_64 |         /* Set precision */
+	    FPC_RC_RN |                 /* round-to-nearest */
+	    FPC_ZE |                    /* Suppress zero-divide */
+	    FPC_OE |                    /*  and overflow */
+	    FPC_UE |                    /*  underflow */
+	    FPC_IE |                    /* Allow NaNQs and +-INF */
+	    FPC_DE |                    /* Allow denorms as operands  */
+	    FPC_PE);                    /* No trap for precision loss */
 	assert(control == control2);
 	fldcw(control);
 #endif
@@ -1171,29 +1238,29 @@ uint64_t x86_isr_fp_simd_use;
 void
 fpnoextflt(void)
 {
-	boolean_t	intr;
-	thread_t	thr_act;
-	pcb_t		pcb;
+	boolean_t       intr;
+	thread_t        thr_act;
+	pcb_t           pcb;
 	struct x86_fx_thread_state *ifps = 0;
-	xstate_t	xstate = current_xstate();
+	xstate_t        xstate = current_xstate();
 
 	thr_act = current_thread();
 	pcb = THREAD_TO_PCB(thr_act);
 
 	if (pcb->ifps == 0 && !get_interrupt_level()) {
-	        ifps = fp_state_alloc(xstate);
+		ifps = fp_state_alloc(xstate);
 		bcopy((char *)&initial_fp_state, (char *)ifps,
 		    fp_state_size[xstate]);
 		if (!thread_is_64bit_addr(thr_act)) {
 			ifps->fp_save_layout = fpu_YMM_capable ? XSAVE32 : FXSAVE32;
-		}
-		else
+		} else {
 			ifps->fp_save_layout = fpu_YMM_capable ? XSAVE64 : FXSAVE64;
+		}
 		ifps->fp_valid = TRUE;
 	}
 	intr = ml_set_interrupts_enabled(FALSE);
 
-	clear_ts();			/*  Enable FPU use */
+	clear_ts();                     /*  Enable FPU use */
 
 	if (__improbable(get_interrupt_level())) {
 		/* Track number of #DNA traps at interrupt context,
@@ -1209,9 +1276,9 @@ fpnoextflt(void)
 		}
 		fpinit();
 	} else {
-	        if (pcb->ifps == 0) {
-		        pcb->ifps = ifps;
-		        pcb->xstate = xstate;
+		if (pcb->ifps == 0) {
+			pcb->ifps = ifps;
+			pcb->xstate = xstate;
 			ifps = 0;
 		}
 		/*
@@ -1221,8 +1288,9 @@ fpnoextflt(void)
 	}
 	(void)ml_set_interrupts_enabled(intr);
 
-	if (ifps)
-	        fp_state_free(ifps, xstate);
+	if (ifps) {
+		fp_state_free(ifps, xstate);
+	}
 }
 
 /*
@@ -1233,25 +1301,27 @@ fpnoextflt(void)
 void
 fpextovrflt(void)
 {
-	thread_t	thr_act = current_thread();
-	pcb_t		pcb;
+	thread_t        thr_act = current_thread();
+	pcb_t           pcb;
 	struct x86_fx_thread_state *ifps;
-	boolean_t	intr;
-	xstate_t	xstate = current_xstate();
+	boolean_t       intr;
+	xstate_t        xstate = current_xstate();
 
 	intr = ml_set_interrupts_enabled(FALSE);
 
-	if (get_interrupt_level())
+	if (get_interrupt_level()) {
 		panic("FPU segment overrun exception  at interrupt context\n");
-	if (current_task() == kernel_task)
+	}
+	if (current_task() == kernel_task) {
 		panic("FPU segment overrun exception in kernel thread context\n");
+	}
 
 	/*
 	 * This is a non-recoverable error.
 	 * Invalidate the thread`s FPU state.
 	 */
 	pcb = THREAD_TO_PCB(thr_act);
-	simple_lock(&pcb->lock);
+	simple_lock(&pcb->lock, LCK_GRP_NULL);
 	ifps = pcb->ifps;
 	pcb->ifps = 0;
 	simple_unlock(&pcb->lock);
@@ -1269,13 +1339,14 @@ fpextovrflt(void)
 
 	(void)ml_set_interrupts_enabled(intr);
 
-	if (ifps)
-	    fp_state_free(ifps, xstate);
+	if (ifps) {
+		fp_state_free(ifps, xstate);
+	}
 
 	/*
 	 * Raise exception.
 	 */
-	i386_exception(EXC_BAD_ACCESS, VM_PROT_READ|VM_PROT_EXECUTE, 0);
+	i386_exception(EXC_BAD_ACCESS, VM_PROT_READ | VM_PROT_EXECUTE, 0);
 	/*NOTREACHED*/
 }
 
@@ -1288,16 +1359,18 @@ extern void fpxlog(int, uint32_t, uint32_t, uint32_t);
 void
 fpexterrflt(void)
 {
-	thread_t	thr_act = current_thread();
+	thread_t        thr_act = current_thread();
 	struct x86_fx_thread_state *ifps = thr_act->machine.ifps;
-	boolean_t	intr;
+	boolean_t       intr;
 
 	intr = ml_set_interrupts_enabled(FALSE);
 
-	if (get_interrupt_level())
+	if (get_interrupt_level()) {
 		panic("FPU error exception at interrupt context\n");
-	if (current_task() == kernel_task)
+	}
+	if (current_task() == kernel_task) {
 		panic("FPU error exception in kernel thread context\n");
+	}
 
 	/*
 	 * Save the FPU state and turn off the FPU.
@@ -1317,8 +1390,8 @@ fpexterrflt(void)
 	 * since thread is running.
 	 */
 	i386_exception(EXC_ARITHMETIC,
-		       EXC_I386_EXTERR,
-		       ifps->fx_status);
+	    EXC_I386_EXTERR,
+	    ifps->fx_status);
 
 	/*NOTREACHED*/
 }
@@ -1335,7 +1408,7 @@ fpexterrflt(void)
 
 void
 fp_save(
-	thread_t	thr_act)
+	thread_t        thr_act)
 {
 	pcb_t pcb = THREAD_TO_PCB(thr_act);
 	struct x86_fx_thread_state *ifps = pcb->ifps;
@@ -1357,16 +1430,16 @@ fp_save(
 
 void
 fp_load(
-	thread_t	thr_act)
+	thread_t        thr_act)
 {
 	pcb_t pcb = THREAD_TO_PCB(thr_act);
 	struct x86_fx_thread_state *ifps = pcb->ifps;
 
 	assert(ifps);
-#if	DEBUG
+#if     DEBUG
 	if (ifps->fp_valid != FALSE && ifps->fp_valid != TRUE) {
 		panic("fp_load() invalid fp_valid: %u, fp_save_layout: %u\n",
-		      ifps->fp_valid, ifps->fp_save_layout);
+		    ifps->fp_valid, ifps->fp_save_layout);
 	}
 #endif
 
@@ -1375,7 +1448,7 @@ fp_load(
 	} else {
 		fpu_load_registers(ifps);
 	}
-	ifps->fp_valid = FALSE;		/* in FPU */
+	ifps->fp_valid = FALSE;         /* in FPU */
 }
 
 /*
@@ -1386,16 +1459,18 @@ fp_load(
 void
 fpSSEexterrflt(void)
 {
-	thread_t	thr_act = current_thread();
+	thread_t        thr_act = current_thread();
 	struct x86_fx_thread_state *ifps = thr_act->machine.ifps;
-	boolean_t	intr;
+	boolean_t       intr;
 
 	intr = ml_set_interrupts_enabled(FALSE);
 
-	if (get_interrupt_level())
+	if (get_interrupt_level()) {
 		panic("SSE exception at interrupt context\n");
-	if (current_task() == kernel_task)
+	}
+	if (current_task() == kernel_task) {
 		panic("SSE exception in kernel thread context\n");
+	}
 
 	/*
 	 * Save the FPU state and turn off the FPU.
@@ -1409,14 +1484,14 @@ fpSSEexterrflt(void)
 	 * since thread is running.
 	 */
 	const uint32_t mask = (ifps->fx_MXCSR >> 7) &
-		(FPC_IM | FPC_DM | FPC_ZM | FPC_OM | FPC_UE | FPC_PE);
+	    (FPC_IM | FPC_DM | FPC_ZM | FPC_OM | FPC_UE | FPC_PE);
 	const uint32_t xcpt = ~mask & (ifps->fx_MXCSR &
-		(FPS_IE | FPS_DE | FPS_ZE | FPS_OE | FPS_UE | FPS_PE));
+	    (FPS_IE | FPS_DE | FPS_ZE | FPS_OE | FPS_UE | FPS_PE));
 	fpxlog(EXC_I386_SSEEXTERR, ifps->fx_MXCSR, ifps->fx_MXCSR, xcpt);
 
 	i386_exception(EXC_ARITHMETIC,
-		       EXC_I386_SSEEXTERR,
-		       ifps->fx_MXCSR);
+	    EXC_I386_SSEEXTERR,
+	    ifps->fx_MXCSR);
 	/*NOTREACHED*/
 }
 
@@ -1431,14 +1506,14 @@ fpSSEexterrflt(void)
 static void
 fpu_savearea_promote_avx512(thread_t thread)
 {
-	struct x86_avx_thread_state	*ifps = NULL;
-	struct x86_avx512_thread_state	*ifps512 = NULL;
-	pcb_t				pcb = THREAD_TO_PCB(thread);
-	boolean_t			do_avx512_alloc = FALSE;
+	struct x86_avx_thread_state     *ifps = NULL;
+	struct x86_avx512_thread_state  *ifps512 = NULL;
+	pcb_t                           pcb = THREAD_TO_PCB(thread);
+	boolean_t                       do_avx512_alloc = FALSE;
 
 	DBG("fpu_upgrade_savearea(%p)\n", thread);
 
-	simple_lock(&pcb->lock);
+	simple_lock(&pcb->lock, LCK_GRP_NULL);
 
 	ifps = pcb->ifps;
 	if (ifps == NULL) {
@@ -1462,9 +1537,9 @@ fpu_savearea_promote_avx512(thread_t thread)
 		ifps512 = fp_state_alloc(AVX512);
 	}
 
-	simple_lock(&pcb->lock);
+	simple_lock(&pcb->lock, LCK_GRP_NULL);
 	if (thread == current_thread()) {
-		boolean_t	intr;
+		boolean_t       intr;
 
 		intr = ml_set_interrupts_enabled(FALSE);
 
@@ -1506,12 +1581,14 @@ fpu_savearea_promote_avx512(thread_t thread)
 boolean_t
 fpu_thread_promote_avx512(thread_t thread)
 {
-	task_t		task = current_task();
+	task_t          task = current_task();
 
-	if (thread != current_thread())
+	if (thread != current_thread()) {
 		return FALSE;
-	if (!ml_fpu_avx512_enabled())
+	}
+	if (!ml_fpu_avx512_enabled()) {
 		return FALSE;
+	}
 
 	fpu_savearea_promote_avx512(thread);
 
@@ -1534,9 +1611,9 @@ fpu_thread_promote_avx512(thread_t thread)
 void
 fpUDflt(user_addr_t rip)
 {
-	uint8_t		instruction_prefix;
-	boolean_t	is_AVX512_instruction = FALSE;
-	user_addr_t	original_rip = rip;
+	uint8_t         instruction_prefix;
+	boolean_t       is_AVX512_instruction = FALSE;
+	user_addr_t     original_rip = rip;
 	do {
 		/* TODO: as an optimisation, copy up to the lesser of the
 		 * next page boundary or maximal prefix length in one pass
@@ -1546,31 +1623,31 @@ fpUDflt(user_addr_t rip)
 			return;
 		}
 		DBG("fpUDflt(0x%016llx) prefix: 0x%x\n",
-			rip, instruction_prefix);
+		    rip, instruction_prefix);
 		/* TODO: determine more specifically which prefixes
 		 * are sane possibilities for AVX512 insns
 		 */
 		switch (instruction_prefix) {
-		    case 0x2E:	/* CS segment override */
-		    case 0x36:	/* SS segment override */
-		    case 0x3E:	/* DS segment override */
-		    case 0x26:	/* ES segment override */
-		    case 0x64:	/* FS segment override */
-		    case 0x65:	/* GS segment override */
-		    case 0x66:  /* Operand-size override */
-		    case 0x67:	/* address-size override */
+		case 0x2E:      /* CS segment override */
+		case 0x36:      /* SS segment override */
+		case 0x3E:      /* DS segment override */
+		case 0x26:      /* ES segment override */
+		case 0x64:      /* FS segment override */
+		case 0x65:      /* GS segment override */
+		case 0x66:      /* Operand-size override */
+		case 0x67:      /* address-size override */
 			/* Skip optional prefixes */
 			rip++;
 			if ((rip - original_rip) > MAX_X86_INSN_LENGTH) {
 				return;
 			}
 			break;
-		    case 0x62:  /* EVEX */
-		    case 0xC5:	/* VEX 2-byte */
-		    case 0xC4:	/* VEX 3-byte */
+		case 0x62:      /* EVEX */
+		case 0xC5:      /* VEX 2-byte */
+		case 0xC4:      /* VEX 3-byte */
 			is_AVX512_instruction = TRUE;
 			break;
-		    default:
+		default:
 			return;
 		}
 	} while (!is_AVX512_instruction);
@@ -1580,8 +1657,9 @@ fpUDflt(user_addr_t rip)
 	/*
 	 * Fail if this machine doesn't support AVX512
 	 */
-	if (fpu_capability != AVX512)
+	if (fpu_capability != AVX512) {
 		return;
+	}
 
 	assert(xgetbv(XCR0) == AVX_XMASK);
 
@@ -1594,50 +1672,55 @@ fpUDflt(user_addr_t rip)
 #endif /* !defined(RC_HIDE_XNU_J137) */
 
 void
-fp_setvalid(boolean_t value) {
-        thread_t	thr_act = current_thread();
+fp_setvalid(boolean_t value)
+{
+	thread_t        thr_act = current_thread();
 	struct x86_fx_thread_state *ifps = thr_act->machine.ifps;
 
 	if (ifps) {
-	        ifps->fp_valid = value;
+		ifps->fp_valid = value;
 
 		if (value == TRUE) {
 			boolean_t istate = ml_set_interrupts_enabled(FALSE);
-		        clear_fpu();
+			clear_fpu();
 			ml_set_interrupts_enabled(istate);
 		}
 	}
 }
 
 boolean_t
-ml_fpu_avx_enabled(void) {
-	return (fpu_capability >= AVX);
+ml_fpu_avx_enabled(void)
+{
+	return fpu_capability >= AVX;
 }
 
 #if !defined(RC_HIDE_XNU_J137)
 boolean_t
-ml_fpu_avx512_enabled(void) {
-	return (fpu_capability == AVX512);
+ml_fpu_avx512_enabled(void)
+{
+	return fpu_capability == AVX512;
 }
 #endif
 
 static xstate_t
 task_xstate(task_t task)
 {
-	if (task == TASK_NULL)
+	if (task == TASK_NULL) {
 		return fpu_default;
-	else
+	} else {
 		return task->xstate;
+	}
 }
 
 static xstate_t
 thread_xstate(thread_t thread)
 {
 	xstate_t xs = THREAD_TO_PCB(thread)->xstate;
-	if (xs == UNDEFINED)
+	if (xs == UNDEFINED) {
 		return task_xstate(thread->task);
-	else
+	} else {
 		return xs;
+	}
 }
 
 xstate_t
@@ -1666,7 +1749,9 @@ fpu_switch_addrmode(thread_t thread, boolean_t is_64bit)
 	mp_enable_preemption();
 }
 
-static inline uint32_t fpsimd_pop(uintptr_t ins, int sz) {
+static inline uint32_t
+fpsimd_pop(uintptr_t ins, int sz)
+{
 	uint32_t rv = 0;
 
 
@@ -1697,9 +1782,12 @@ static inline uint32_t fpsimd_pop(uintptr_t ins, int sz) {
 	return rv;
 }
 
-uint32_t thread_fpsimd_hash(thread_t ft) {
-	if (fpsimd_fault_popc == 0)
+uint32_t
+thread_fpsimd_hash(thread_t ft)
+{
+	if (fpsimd_fault_popc == 0) {
 		return 0;
+	}
 
 	uint32_t prv = 0;
 	boolean_t istate = ml_set_interrupts_enabled(FALSE);

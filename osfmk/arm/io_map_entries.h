@@ -28,22 +28,21 @@
 /*
  * @OSF_COPYRIGHT@
  */
-#ifdef	KERNEL_PRIVATE
+#ifdef  KERNEL_PRIVATE
 
 #ifndef _ARM_IO_MAP_ENTRIES
 #define _ARM_IO_MAP_ENTRIES
 
 #include <sys/appleapiopts.h>
 
-#ifdef	__APPLE_API_PRIVATE
-extern vm_offset_t	io_map(
-				vm_map_offset_t		phys_addr,
-				vm_size_t		size,
-				unsigned int		flags);
+#ifdef  __APPLE_API_PRIVATE
+extern vm_offset_t      io_map(
+	vm_map_offset_t         phys_addr,
+	vm_size_t               size,
+	unsigned int            flags);
 extern vm_offset_t io_map_spec(vm_map_offset_t phys_addr, vm_size_t size, unsigned int flags);
-#endif	/* __APPLE_API_PRIVATE */
+#endif  /* __APPLE_API_PRIVATE */
 
 #endif  /* _ARM_IO_MAP_ENTRIES */
 
-#endif	/* KERNEL_PRIVATE */
-
+#endif  /* KERNEL_PRIVATE */

@@ -93,29 +93,33 @@ read_dsfield(struct mbuf *m, struct pf_mtag *t)
 	u_int8_t ds_field = 0;
 
 	if (t->pftag_hdr == NULL ||
-	    !(t->pftag_flags & (PF_TAG_HDR_INET|PF_TAG_HDR_INET6)))
-		return ((u_int8_t)0);
+	    !(t->pftag_flags & (PF_TAG_HDR_INET | PF_TAG_HDR_INET6))) {
+		return (u_int8_t)0;
+	}
 
 	/* verify that hdr is within the mbuf data */
-	for (m0 = m; m0 != NULL; m0 = m0->m_next)
+	for (m0 = m; m0 != NULL; m0 = m0->m_next) {
 		if (((caddr_t)t->pftag_hdr >= m0->m_data) &&
-		    ((caddr_t)t->pftag_hdr < m0->m_data + m0->m_len))
+		    ((caddr_t)t->pftag_hdr < m0->m_data + m0->m_len)) {
 			break;
+		}
+	}
 	if (m0 == NULL) {
 		/* ick, tag info is stale */
 		printf("%s: can't locate header!\n", __func__);
-		return ((u_int8_t)0);
+		return (u_int8_t)0;
 	}
 
 	if (t->pftag_flags & PF_TAG_HDR_INET) {
 		struct ip *ip = (struct ip *)(void *)t->pftag_hdr;
 
-		if (((uintptr_t)ip + sizeof (*ip)) >
-		    ((uintptr_t)mbuf_datastart(m0) + mbuf_maxlen(m0)))
-			return (0);		/* out of bounds */
-
-		if (ip->ip_v != 4)
-			return ((u_int8_t)0);	/* version mismatch! */
+		if (((uintptr_t)ip + sizeof(*ip)) >
+		    ((uintptr_t)mbuf_datastart(m0) + mbuf_maxlen(m0))) {
+			return 0;             /* out of bounds */
+		}
+		if (ip->ip_v != 4) {
+			return (u_int8_t)0;   /* version mismatch! */
+		}
 		ds_field = ip->ip_tos;
 	}
 #if INET6
@@ -123,17 +127,18 @@ read_dsfield(struct mbuf *m, struct pf_mtag *t)
 		struct ip6_hdr *ip6 = (struct ip6_hdr *)(void *)t->pftag_hdr;
 		u_int32_t flowlabel;
 
-		if (((uintptr_t)ip6 + sizeof (*ip6)) >
-		    ((uintptr_t)mbuf_datastart(m0) + mbuf_maxlen(m0)))
-			return (0);		/* out of bounds */
-
+		if (((uintptr_t)ip6 + sizeof(*ip6)) >
+		    ((uintptr_t)mbuf_datastart(m0) + mbuf_maxlen(m0))) {
+			return 0;             /* out of bounds */
+		}
 		flowlabel = ntohl(ip6->ip6_flow);
-		if ((flowlabel >> 28) != 6)
-			return ((u_int8_t)0);	/* version mismatch! */
+		if ((flowlabel >> 28) != 6) {
+			return (u_int8_t)0;   /* version mismatch! */
+		}
 		ds_field = (flowlabel >> 20) & 0xff;
 	}
 #endif
-	return (ds_field);
+	return ds_field;
 }
 
 void
@@ -142,14 +147,17 @@ write_dsfield(struct mbuf *m, struct pf_mtag *t, u_int8_t dsfield)
 	struct mbuf *m0;
 
 	if (t->pftag_hdr == NULL ||
-	    !(t->pftag_flags & (PF_TAG_HDR_INET|PF_TAG_HDR_INET6)))
+	    !(t->pftag_flags & (PF_TAG_HDR_INET | PF_TAG_HDR_INET6))) {
 		return;
+	}
 
 	/* verify that hdr is within the mbuf data */
-	for (m0 = m; m0 != NULL; m0 = m0->m_next)
+	for (m0 = m; m0 != NULL; m0 = m0->m_next) {
 		if (((caddr_t)t->pftag_hdr >= m0->m_data) &&
-		    ((caddr_t)t->pftag_hdr < m0->m_data + m0->m_len))
+		    ((caddr_t)t->pftag_hdr < m0->m_data + m0->m_len)) {
 			break;
+		}
+	}
 	if (m0 == NULL) {
 		/* ick, tag info is stale */
 		printf("%s: can't locate header!\n", __func__);
@@ -161,16 +169,18 @@ write_dsfield(struct mbuf *m, struct pf_mtag *t, u_int8_t dsfield)
 		u_int8_t old;
 		int32_t sum;
 
-		if (((uintptr_t)ip + sizeof (*ip)) >
-		    ((uintptr_t)mbuf_datastart(m0) + mbuf_maxlen(m0)))
-			return;		/* out of bounds */
-
-		if (ip->ip_v != 4)
-			return;		/* version mismatch! */
+		if (((uintptr_t)ip + sizeof(*ip)) >
+		    ((uintptr_t)mbuf_datastart(m0) + mbuf_maxlen(m0))) {
+			return;         /* out of bounds */
+		}
+		if (ip->ip_v != 4) {
+			return;         /* version mismatch! */
+		}
 		old = ip->ip_tos;
-		dsfield |= old & 3;	/* leave CU bits */
-		if (old == dsfield)
+		dsfield |= old & 3;     /* leave CU bits */
+		if (old == dsfield) {
 			return;
+		}
 		ip->ip_tos = dsfield;
 		/*
 		 * update checksum (from RFC1624)
@@ -188,13 +198,14 @@ write_dsfield(struct mbuf *m, struct pf_mtag *t, u_int8_t dsfield)
 		struct ip6_hdr *ip6 = (struct ip6_hdr *)t->pftag_hdr;
 		u_int32_t flowlabel;
 
-		if (((uintptr_t)ip6 + sizeof (*ip6)) >
-		    ((uintptr_t)mbuf_datastart(m0) + mbuf_maxlen(m0)))
-			return;		/* out of bounds */
-
+		if (((uintptr_t)ip6 + sizeof(*ip6)) >
+		    ((uintptr_t)mbuf_datastart(m0) + mbuf_maxlen(m0))) {
+			return;         /* out of bounds */
+		}
 		flowlabel = ntohl(ip6->ip6_flow);
-		if ((flowlabel >> 28) != 6)
-			return;		/* version mismatch! */
+		if ((flowlabel >> 28) != 6) {
+			return;         /* version mismatch! */
+		}
 		flowlabel = (flowlabel & 0xf03fffff) | (dsfield << 20);
 		ip6->ip6_flow = htonl(flowlabel);
 	}
@@ -208,50 +219,56 @@ write_dsfield(struct mbuf *m, struct pf_mtag *t, u_int8_t dsfield)
 int
 mark_ecn(struct mbuf *m, struct pf_mtag *t, int flags)
 {
-	struct mbuf	*m0;
-	void		*hdr;
-	int		af;
+	struct mbuf     *m0;
+	void            *hdr;
+	int             af;
 
 	if ((hdr = t->pftag_hdr) == NULL ||
-	    !(t->pftag_flags & (PF_TAG_HDR_INET|PF_TAG_HDR_INET6)))
-		return (0);
+	    !(t->pftag_flags & (PF_TAG_HDR_INET | PF_TAG_HDR_INET6))) {
+		return 0;
+	}
 
 	/* verify that hdr is within the mbuf data */
-	for (m0 = m; m0 != NULL; m0 = m0->m_next)
+	for (m0 = m; m0 != NULL; m0 = m0->m_next) {
 		if (((caddr_t)hdr >= m0->m_data) &&
-		    ((caddr_t)hdr < m0->m_data + m0->m_len))
+		    ((caddr_t)hdr < m0->m_data + m0->m_len)) {
 			break;
+		}
+	}
 	if (m0 == NULL) {
 		/* ick, tag info is stale */
 		printf("%s: can't locate header!\n", __func__);
-		return (0);
+		return 0;
 	}
 
-	if (t->pftag_flags & PF_TAG_HDR_INET)
+	if (t->pftag_flags & PF_TAG_HDR_INET) {
 		af = AF_INET;
-	else if (t->pftag_flags & PF_TAG_HDR_INET6)
+	} else if (t->pftag_flags & PF_TAG_HDR_INET6) {
 		af = AF_INET6;
-	else
+	} else {
 		af = AF_UNSPEC;
+	}
 
 	switch (af) {
 	case AF_INET:
-		if (flags & CLASSQF_ECN4) {	/* REDF_ECN4 == BLUEF_ECN4 */
+		if (flags & CLASSQF_ECN4) {     /* REDF_ECN4 == BLUEF_ECN4 */
 			struct ip *ip = hdr;
 			u_int8_t otos;
 			int sum;
 
-			if (((uintptr_t)ip + sizeof (*ip)) >
-			    ((uintptr_t)mbuf_datastart(m0) + mbuf_maxlen(m0)))
-				return (0);	/* out of bounds */
-
-			if (ip->ip_v != 4)
-				return (0);	/* version mismatch! */
-			if ((ip->ip_tos & IPTOS_ECN_MASK) == IPTOS_ECN_NOTECT)
-				return (0);	/* not-ECT */
-			if ((ip->ip_tos & IPTOS_ECN_MASK) == IPTOS_ECN_CE)
-				return (1);	/* already marked */
-
+			if (((uintptr_t)ip + sizeof(*ip)) >
+			    ((uintptr_t)mbuf_datastart(m0) + mbuf_maxlen(m0))) {
+				return 0;     /* out of bounds */
+			}
+			if (ip->ip_v != 4) {
+				return 0;     /* version mismatch! */
+			}
+			if ((ip->ip_tos & IPTOS_ECN_MASK) == IPTOS_ECN_NOTECT) {
+				return 0;     /* not-ECT */
+			}
+			if ((ip->ip_tos & IPTOS_ECN_MASK) == IPTOS_ECN_CE) {
+				return 1;     /* already marked */
+			}
 			/*
 			 * ecn-capable but not marked,
 			 * mark CE and update checksum
@@ -270,40 +287,43 @@ mark_ecn(struct mbuf *m, struct pf_mtag *t, int flags)
 				sum += (sum >> 16);  /* add carry */
 				ip->ip_sum = htons(~sum & 0xffff);
 			}
-			return (1);
+			return 1;
 		}
 		break;
 #if INET6
 	case AF_INET6:
-		if (flags & CLASSQF_ECN6) {	/* REDF_ECN6 == BLUEF_ECN6 */
+		if (flags & CLASSQF_ECN6) {     /* REDF_ECN6 == BLUEF_ECN6 */
 			struct ip6_hdr *ip6 = hdr;
 			u_int32_t flowlabel;
 
-			if (((uintptr_t)ip6 + sizeof (*ip6)) >
-			    ((uintptr_t)mbuf_datastart(m0) + mbuf_maxlen(m0)))
-				return (0);	/* out of bounds */
-
+			if (((uintptr_t)ip6 + sizeof(*ip6)) >
+			    ((uintptr_t)mbuf_datastart(m0) + mbuf_maxlen(m0))) {
+				return 0;     /* out of bounds */
+			}
 			flowlabel = ntohl(ip6->ip6_flow);
-			if ((flowlabel >> 28) != 6)
-				return (0);	/* version mismatch! */
+			if ((flowlabel >> 28) != 6) {
+				return 0;     /* version mismatch! */
+			}
 			if ((flowlabel & (IPTOS_ECN_MASK << 20)) ==
-			    (IPTOS_ECN_NOTECT << 20))
-				return (0);	/* not-ECT */
+			    (IPTOS_ECN_NOTECT << 20)) {
+				return 0;     /* not-ECT */
+			}
 			if ((flowlabel & (IPTOS_ECN_MASK << 20)) ==
-			    (IPTOS_ECN_CE << 20))
-				return (1);	/* already marked */
+			    (IPTOS_ECN_CE << 20)) {
+				return 1;     /* already marked */
+			}
 			/*
 			 * ecn-capable but not marked,  mark CE
 			 */
 			flowlabel |= (IPTOS_ECN_CE << 20);
 			ip6->ip6_flow = htonl(flowlabel);
-			return (1);
+			return 1;
 		}
 		break;
 #endif  /* INET6 */
 	}
 
 	/* not marked */
-	return (0);
+	return 0;
 }
 #endif /* PF_ECN */

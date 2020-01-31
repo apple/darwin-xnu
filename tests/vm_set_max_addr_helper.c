@@ -2,7 +2,8 @@
 #include <mach/mach_vm.h>
 #include <stdlib.h>
 
-int main(void)
+int
+main(void)
 {
 	kern_return_t kr;
 	mach_vm_address_t addr = 50ULL * 1024ULL * 1024ULL * 1024ULL;
@@ -15,4 +16,3 @@ int main(void)
 		return 1;
 	}
 }
-

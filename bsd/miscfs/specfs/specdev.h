@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -75,20 +75,20 @@
  * in vgone.
  */
 struct specinfo {
-	struct	vnode **si_hashchain;
-	struct	vnode *si_specnext;
-	long	si_flags;
-	dev_t	si_rdev;
+	struct  vnode **si_hashchain;
+	struct  vnode *si_specnext;
+	long    si_flags;
+	dev_t   si_rdev;
 	int32_t si_opencount;
-	daddr_t	si_size;		/* device block size in bytes */
-	daddr64_t	si_lastr;	/* last read blkno (read-ahead) */
-	u_int64_t	si_devsize;	/* actual device size in bytes */
+	daddr_t si_size;                /* device block size in bytes */
+	daddr64_t       si_lastr;       /* last read blkno (read-ahead) */
+	u_int64_t       si_devsize;     /* actual device size in bytes */
 
-	u_int8_t	si_initted;
-	u_int8_t	si_throttleable;
-	u_int16_t	si_isssd;
-	u_int32_t	si_devbsdunit;
-	u_int64_t	si_throttle_mask;
+	u_int8_t        si_initted;
+	u_int8_t        si_throttleable;
+	u_int16_t       si_isssd;
+	u_int32_t       si_devbsdunit;
+	u_int64_t       si_throttle_mask;
 };
 /*
  * Exported shorthand
@@ -104,17 +104,17 @@ struct specinfo {
 /*
  * Flags for specinfo
  */
-#define	SI_MOUNTEDON	0x0001	/* block special device is mounted on */
-#define SI_ALIASED	0x0002  /* multiple active vnodes refer to this device */
+#define SI_MOUNTEDON    0x0001  /* block special device is mounted on */
+#define SI_ALIASED      0x0002  /* multiple active vnodes refer to this device */
 
 /*
  * Special device management
  */
-#define	SPECHSZ	64
-#if	((SPECHSZ&(SPECHSZ-1)) == 0)
-#define	SPECHASH(rdev)	(((rdev>>21)+(rdev))&(SPECHSZ-1))
+#define SPECHSZ 64
+#if     ((SPECHSZ & (SPECHSZ - 1)) == 0)
+#define SPECHASH(rdev)  (((rdev>>21)+(rdev))&(SPECHSZ-1))
 #else
-#define	SPECHASH(rdev)	(((unsigned)((rdev>>21)+(rdev)))%SPECHSZ)
+#define SPECHASH(rdev)  (((unsigned)((rdev>>21)+(rdev)))%SPECHSZ)
 #endif
 
 extern struct vnode *speclisth[SPECHSZ];
@@ -122,39 +122,39 @@ extern struct vnode *speclisth[SPECHSZ];
 /*
  * Prototypes for special file operations on vnodes.
  */
-extern	int (**spec_vnodeop_p)(void *);
-struct	nameidata;
-struct	componentname;
-struct	flock;
-struct	buf;
-struct	uio;
+extern  int(**spec_vnodeop_p)(void *);
+struct  nameidata;
+struct  componentname;
+struct  flock;
+struct  buf;
+struct  uio;
 
 __BEGIN_DECLS
 #ifdef BSD_KERNEL_PRIVATE
-int spec_blktooff (struct  vnop_blktooff_args *);
-int spec_offtoblk (struct  vnop_offtoblk_args *);
-int	spec_fsync_internal (vnode_t, int, vfs_context_t);
-int spec_blockmap (struct  vnop_blockmap_args *);
-int spec_kqfilter (vnode_t vp, struct knote *kn, struct kevent_internal_s *kev);
+int spec_blktooff(struct  vnop_blktooff_args *);
+int spec_offtoblk(struct  vnop_offtoblk_args *);
+int     spec_fsync_internal(vnode_t, int, vfs_context_t);
+int spec_blockmap(struct  vnop_blockmap_args *);
+int spec_kqfilter(vnode_t vp, struct knote *kn, struct kevent_internal_s *kev);
 #endif /* BSD_KERNEL_PRIVATE */
 
-int	spec_ebadf(void *);
+int     spec_ebadf(void *);
 
-int	spec_lookup (struct vnop_lookup_args *);
+int     spec_lookup(struct vnop_lookup_args *);
 #define spec_create (int (*) (struct  vnop_access_args *))err_create
 #define spec_mknod (int (*) (struct  vnop_access_args *))err_mknod
-int	spec_open (struct vnop_open_args *);
-int	spec_close (struct vnop_close_args *);
+int     spec_open(struct vnop_open_args *);
+int     spec_close(struct vnop_close_args *);
 #define spec_access (int (*) (struct  vnop_access_args *))spec_ebadf
 #define spec_getattr (int (*) (struct  vnop_getattr_args *))spec_ebadf
 #define spec_setattr (int (*) (struct  vnop_setattr_args *))spec_ebadf
-int	spec_read (struct vnop_read_args *);
-int	spec_write (struct vnop_write_args *);
-int	spec_ioctl (struct vnop_ioctl_args *);
-int	spec_select (struct vnop_select_args *);
+int     spec_read(struct vnop_read_args *);
+int     spec_write(struct vnop_write_args *);
+int     spec_ioctl(struct vnop_ioctl_args *);
+int     spec_select(struct vnop_select_args *);
 #define spec_revoke (int (*) (struct  vnop_access_args *))nop_revoke
 #define spec_mmap (int (*) (struct  vnop_access_args *))err_mmap
-int	spec_fsync (struct  vnop_fsync_args *);
+int     spec_fsync(struct  vnop_fsync_args *);
 #define spec_remove (int (*) (struct  vnop_access_args *))err_remove
 #define spec_link (int (*) (struct  vnop_access_args *))err_link
 #define spec_rename (int (*) (struct  vnop_access_args *))err_rename
@@ -167,9 +167,9 @@ int	spec_fsync (struct  vnop_fsync_args *);
 #define spec_reclaim (int (*) (struct  vnop_access_args *))nop_reclaim
 #define spec_lock (int (*) (struct  vnop_access_args *))nop_lock
 #define spec_unlock (int (*)(struct  vnop_access_args *))nop_unlock
-int	spec_strategy (struct vnop_strategy_args *);
+int     spec_strategy(struct vnop_strategy_args *);
 #define spec_islocked (int (*) (struct  vnop_access_args *))nop_islocked
-int	spec_pathconf (struct vnop_pathconf_args *);
+int     spec_pathconf(struct vnop_pathconf_args *);
 #define spec_advlock (int (*) (struct  vnop_access_args *))err_advlock
 #define spec_blkatoff (int (*) (struct  vnop_access_args *))err_blkatoff
 #define spec_valloc (int (*) (struct  vnop_access_args *))err_valloc

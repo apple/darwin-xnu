@@ -27,7 +27,7 @@
  */
 
 #ifndef _NET_CLASSQ_CLASSQ_FQ_CODEL_H
-#define	_NET_CLASSQ_CLASSQ_FQ_CODEL_H
+#define _NET_CLASSQ_CLASSQ_FQ_CODEL_H
 #ifdef PRIVATE
 #ifdef BSD_KERNEL_PRIVATE
 #include <stdbool.h>
@@ -39,12 +39,12 @@
 extern "C" {
 #endif
 
-#define	FQ_MIN_FC_THRESHOLD_BYTES	7500
-#define	FQ_IS_DELAYHIGH(_fq_)	((_fq_)->fq_flags & FQF_DELAY_HIGH)
-#define	FQ_SET_DELAY_HIGH(_fq_) do { \
+#define FQ_MIN_FC_THRESHOLD_BYTES       7500
+#define FQ_IS_DELAYHIGH(_fq_)   ((_fq_)->fq_flags & FQF_DELAY_HIGH)
+#define FQ_SET_DELAY_HIGH(_fq_) do { \
 	(_fq_)->fq_flags |= FQF_DELAY_HIGH; \
 } while (0)
-#define	FQ_CLEAR_DELAY_HIGH(_fq_) do { \
+#define FQ_CLEAR_DELAY_HIGH(_fq_) do { \
 	(_fq_)->fq_flags &= ~FQF_DELAY_HIGH; \
 } while (0)
 
@@ -52,34 +52,34 @@ typedef struct flowq {
 	union {
 		MBUFQ_HEAD(mbufq_head) __mbufq; /* mbuf packet queue */
 	} __fq_pktq_u;
-#define	FQF_FLOWCTL_CAPABLE 0x01 /* Use flow control instead of drop */
-#define	FQF_DELAY_HIGH	0x02	/* Min delay is greater than target */
-#define	FQF_NEW_FLOW	0x04	/* Currently on new flows queue */
-#define	FQF_OLD_FLOW	0x08	/* Currently on old flows queue */
-#define	FQF_FLOWCTL_ON	0x10	/* Currently flow controlled */
-	u_int8_t	fq_flags;	/* flags */
-	u_int8_t	fq_sc_index; /* service_class index */
-	int16_t		fq_deficit;	/* Deficit for scheduling */
-	u_int32_t	fq_bytes;	/* Number of bytes in the queue */
-	u_int64_t	fq_min_qdelay; /* min queue delay for Codel */
-	u_int64_t	fq_updatetime; /* next update interval */
-	u_int64_t	fq_getqtime;	/* last dequeue time */
+#define FQF_FLOWCTL_CAPABLE 0x01 /* Use flow control instead of drop */
+#define FQF_DELAY_HIGH  0x02    /* Min delay is greater than target */
+#define FQF_NEW_FLOW    0x04    /* Currently on new flows queue */
+#define FQF_OLD_FLOW    0x08    /* Currently on old flows queue */
+#define FQF_FLOWCTL_ON  0x10    /* Currently flow controlled */
+	u_int8_t        fq_flags;       /* flags */
+	u_int8_t        fq_sc_index; /* service_class index */
+	int16_t         fq_deficit;     /* Deficit for scheduling */
+	u_int32_t       fq_bytes;       /* Number of bytes in the queue */
+	u_int64_t       fq_min_qdelay; /* min queue delay for Codel */
+	u_int64_t       fq_updatetime; /* next update interval */
+	u_int64_t       fq_getqtime;    /* last dequeue time */
 	SLIST_ENTRY(flowq) fq_hashlink; /* for flow queue hash table */
 	STAILQ_ENTRY(flowq) fq_actlink; /* for new/old flow queues */
-	u_int32_t	fq_flowhash;	/* Flow hash */
-	classq_pkt_type_t	fq_ptype; /* Packet type */
+	u_int32_t       fq_flowhash;    /* Flow hash */
+	classq_pkt_type_t       fq_ptype; /* Packet type */
 } fq_t;
 
-#define	fq_mbufq	__fq_pktq_u.__mbufq
+#define fq_mbufq        __fq_pktq_u.__mbufq
 
-#define	fq_empty(_q)	MBUFQ_EMPTY(&(_q)->fq_mbufq)
+#define fq_empty(_q)    MBUFQ_EMPTY(&(_q)->fq_mbufq)
 
-#define	fq_enqueue(_q, _p)	MBUFQ_ENQUEUE(&(_q)->fq_mbufq, (mbuf_t)_p)
+#define fq_enqueue(_q, _p)      MBUFQ_ENQUEUE(&(_q)->fq_mbufq, (mbuf_t)_p)
 
-#define	fq_dequeue(_q, _p) do {						\
-	mbuf_t _m;							\
-	MBUFQ_DEQUEUE(&(_q)->fq_mbufq, _m);				\
-	(_p) = _m;							\
+#define fq_dequeue(_q, _p) do {                                         \
+	mbuf_t _m;                                                      \
+	MBUFQ_DEQUEUE(&(_q)->fq_mbufq, _m);                             \
+	(_p) = _m;                                                      \
 } while (0)
 
 struct fq_codel_sched_data;

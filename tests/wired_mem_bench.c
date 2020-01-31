@@ -33,19 +33,19 @@
 #define WIRED_MEM_THRESHOLD_PERCENTAGE 30
 
 T_DECL(wired_mem_bench,
-       "report the amount of wired memory consumed by the booted OS; guard against egregious or unexpected regressions",
-	T_META_CHECK_LEAKS(false),
-	T_META_ASROOT(true),
-	T_META_REQUIRES_REBOOT(true)) // Help reduce noise by asking for a clean boot
+    "report the amount of wired memory consumed by the booted OS; guard against egregious or unexpected regressions",
+    T_META_CHECK_LEAKS(false),
+    T_META_ASROOT(true),
+    T_META_REQUIRES_REBOOT(true))     // Help reduce noise by asking for a clean boot
 //	T_META_TAG_PERF)
 {
-	vm_statistics64_data_t	stat;
-	uint64_t		memsize;
-	vm_size_t		page_size = 0;
-	unsigned int		count = HOST_VM_INFO64_COUNT;
-	kern_return_t		ret;
-	int			wired_mem_pct;
-	struct utsname		uname_vers;
+	vm_statistics64_data_t  stat;
+	uint64_t                memsize;
+	vm_size_t               page_size = 0;
+	unsigned int            count = HOST_VM_INFO64_COUNT;
+	kern_return_t           ret;
+	int                     wired_mem_pct;
+	struct utsname          uname_vers;
 
 	T_SETUPBEGIN;
 	ret = uname(&uname_vers);
@@ -75,10 +75,10 @@ T_DECL(wired_mem_bench,
 	T_SETUPEND;
 
 	T_PERF("wired_memory", (double)(stat.wire_count * (mach_vm_size_t)vm_kernel_page_size >> 10), "kB",
-	       "Wired memory at boot");
+	    "Wired memory at boot");
 
 	T_LOG("\nwired memory: %llu kB (%llu MB)\n", stat.wire_count * (mach_vm_size_t)vm_kernel_page_size >> 10,
-	       stat.wire_count * (mach_vm_size_t)vm_kernel_page_size >> 20);
+	    stat.wire_count * (mach_vm_size_t)vm_kernel_page_size >> 20);
 
 #if TARGET_OS_IOS || TARGET_OS_OSX
 	// zprint is not mastered onto other platforms.
@@ -95,6 +95,6 @@ T_DECL(wired_mem_bench,
 	T_PERF("wired_memory_percentage", wired_mem_pct, "%", "Wired memory as percentage of device DRAM size");
 
 	T_ASSERT_LT(wired_mem_pct, WIRED_MEM_THRESHOLD_PERCENTAGE,
-		    "Wired memory percentage is below allowable threshold (%llu bytes / %u pages / %llu total device memory)",
-		    (uint64_t)stat.wire_count * page_size, stat.wire_count, memsize);
+	    "Wired memory percentage is below allowable threshold (%llu bytes / %u pages / %llu total device memory)",
+	    (uint64_t)stat.wire_count * page_size, stat.wire_count, memsize);
 }

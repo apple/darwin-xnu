@@ -2,7 +2,7 @@
  * Copyright (c) 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -76,23 +76,22 @@ mac_posixshm_label_alloc(void)
 	struct label *label;
 
 	label = mac_labelzone_alloc(MAC_WAITOK);
-	if (label == NULL)
-		return (NULL);
+	if (label == NULL) {
+		return NULL;
+	}
 	MAC_PERFORM(posixshm_label_init, label);
-	return (label);
+	return label;
 }
 
 void
 mac_posixshm_label_init(struct pshminfo *pshm)
 {
-
 	pshm->pshm_label = mac_posixshm_label_alloc();
 }
 
 static void
 mac_posixshm_label_free(struct label *label)
 {
-
 	MAC_PERFORM(posixshm_label_destroy, label);
 	mac_labelzone_free(label);
 }
@@ -100,25 +99,23 @@ mac_posixshm_label_free(struct label *label)
 void
 mac_posixshm_label_destroy(struct pshminfo *pshm)
 {
-
 	mac_posixshm_label_free(pshm->pshm_label);
 	pshm->pshm_label = NULL;
 }
 
 void
 mac_posixshm_vnode_label_associate(kauth_cred_t cred,
-	struct pshminfo *pshm, struct label *plabel,
-	vnode_t vp, struct label *vlabel)
+    struct pshminfo *pshm, struct label *plabel,
+    vnode_t vp, struct label *vlabel)
 {
-	MAC_PERFORM(vnode_label_associate_posixshm, cred, 
-		    pshm, plabel, vp, vlabel);
+	MAC_PERFORM(vnode_label_associate_posixshm, cred,
+	    pshm, plabel, vp, vlabel);
 }
 
 void
 mac_posixshm_label_associate(kauth_cred_t cred, struct pshminfo *pshm,
     const char *name)
 {
-
 	MAC_PERFORM(posixshm_label_associate, cred, pshm, pshm->pshm_label, name);
 }
 
@@ -128,9 +125,10 @@ mac_posixshm_check_create(kauth_cred_t cred, const char *name)
 	int error = 0;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_posixshm_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_posixshm_enforce) {
+		return 0;
+	}
 #endif
 
 	MAC_CHECK(posixshm_check_create, cred, name);
@@ -144,14 +142,15 @@ mac_posixshm_check_open(kauth_cred_t cred, struct pshminfo *shm, int fflags)
 	int error = 0;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_posixshm_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_posixshm_enforce) {
+		return 0;
+	}
 #endif
 
 	MAC_CHECK(posixshm_check_open, cred, shm, shm->pshm_label, fflags);
 
-	return (error);
+	return error;
 }
 
 int
@@ -161,15 +160,16 @@ mac_posixshm_check_mmap(kauth_cred_t cred, struct pshminfo *shm,
 	int error = 0;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_posixshm_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_posixshm_enforce) {
+		return 0;
+	}
 #endif
 
 	MAC_CHECK(posixshm_check_mmap, cred, shm, shm->pshm_label,
-            prot, flags);
+	    prot, flags);
 
-	return (error);
+	return error;
 }
 
 int
@@ -178,14 +178,15 @@ mac_posixshm_check_stat(kauth_cred_t cred, struct pshminfo *shm)
 	int error = 0;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_posixshm_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_posixshm_enforce) {
+		return 0;
+	}
 #endif
 
 	MAC_CHECK(posixshm_check_stat, cred, shm, shm->pshm_label);
 
-	return (error);
+	return error;
 }
 
 int
@@ -195,14 +196,15 @@ mac_posixshm_check_truncate(kauth_cred_t cred, struct pshminfo *shm,
 	int error = 0;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_posixshm_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_posixshm_enforce) {
+		return 0;
+	}
 #endif
 
 	MAC_CHECK(posixshm_check_truncate, cred, shm, shm->pshm_label, size);
 
-	return (error);
+	return error;
 }
 
 int
@@ -212,12 +214,13 @@ mac_posixshm_check_unlink(kauth_cred_t cred, struct pshminfo *shm,
 	int error = 0;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_posixshm_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_posixshm_enforce) {
+		return 0;
+	}
 #endif
 
 	MAC_CHECK(posixshm_check_unlink, cred, shm, shm->pshm_label, name);
 
-	return (error);
+	return error;
 }

@@ -88,11 +88,11 @@ typedef const struct pthread_functions_s {
 	void *__unused_was_workq_open;
 
 	/* psynch syscalls */
-	int (*psynch_mutexwait)(proc_t p, user_addr_t mutex,  uint32_t mgen, uint32_t  ugen, uint64_t tid, uint32_t flags, uint32_t *retval);
-	int (*psynch_mutexdrop)(proc_t p, user_addr_t mutex,  uint32_t mgen, uint32_t  ugen, uint64_t tid, uint32_t flags, uint32_t *retval);
+	int (*psynch_mutexwait)(proc_t p, user_addr_t mutex, uint32_t mgen, uint32_t  ugen, uint64_t tid, uint32_t flags, uint32_t *retval);
+	int (*psynch_mutexdrop)(proc_t p, user_addr_t mutex, uint32_t mgen, uint32_t  ugen, uint64_t tid, uint32_t flags, uint32_t *retval);
 	int (*psynch_cvbroad)(proc_t p, user_addr_t cv, uint64_t cvlsgen, uint64_t cvudgen, uint32_t flags, user_addr_t mutex, uint64_t mugen, uint64_t tid, uint32_t *retval);
 	int (*psynch_cvsignal)(proc_t p, user_addr_t cv, uint64_t cvlsgen, uint32_t cvugen, int thread_port, user_addr_t mutex, uint64_t mugen, uint64_t tid, uint32_t flags, uint32_t *retval);
-	int (*psynch_cvwait)(proc_t p, user_addr_t cv, uint64_t cvlsgen, uint32_t cvugen, user_addr_t mutex,  uint64_t mugen, uint32_t flags, int64_t sec, uint32_t nsec, uint32_t * retval);
+	int (*psynch_cvwait)(proc_t p, user_addr_t cv, uint64_t cvlsgen, uint32_t cvugen, user_addr_t mutex, uint64_t mugen, uint32_t flags, int64_t sec, uint32_t nsec, uint32_t * retval);
 	int (*psynch_cvclrprepost)(proc_t p, user_addr_t cv, uint32_t cvgen, uint32_t cvugen, uint32_t cvsgen, uint32_t prepocnt, uint32_t preposeq, uint32_t flags, int *retval);
 	int (*psynch_rw_longrdlock)(proc_t p, user_addr_t rwlock, uint32_t lgenval, uint32_t ugenval, uint32_t rw_wc, int flags, uint32_t *retval);
 	int (*psynch_rw_rdlock)(proc_t p, user_addr_t rwlock, uint32_t lgenval, uint32_t ugenval, uint32_t rw_wc, int flags, uint32_t *retval);
@@ -120,21 +120,21 @@ typedef const struct pthread_functions_s {
 	void *__unused_was_workq_threadreq;
 
 	int  (*workq_handle_stack_events)(proc_t p, thread_t th, vm_map_t map,
-			user_addr_t stackaddr, mach_port_name_t kport,
-			user_addr_t events, int nevents, int upcall_flags);
+	    user_addr_t stackaddr, mach_port_name_t kport,
+	    user_addr_t events, int nevents, int upcall_flags);
 
 	int (*workq_create_threadstack)(proc_t p, vm_map_t vmap,
-			mach_vm_offset_t *out_addr);
+	    mach_vm_offset_t *out_addr);
 
 	int (*workq_destroy_threadstack)(proc_t p, vm_map_t vmap,
-			mach_vm_offset_t stackaddr);
+	    mach_vm_offset_t stackaddr);
 
 	void (*workq_setup_thread)(proc_t p, thread_t th, vm_map_t map,
-			user_addr_t stackaddr, mach_port_name_t kport, int th_qos,
-			int setup_flags, int upcall_flags);
+	    user_addr_t stackaddr, mach_port_name_t kport, int th_qos,
+	    int setup_flags, int upcall_flags);
 
 	void (*workq_markfree_threadstack)(proc_t p, thread_t, vm_map_t map,
-			user_addr_t stackaddr);
+	    user_addr_t stackaddr);
 
 	/* padding for future */
 	void * _pad[83];
@@ -167,8 +167,8 @@ typedef const struct pthread_callbacks_s {
 	void *__unused_was_proc_get_wqptr;
 
 	wait_result_t (*psynch_wait_prepare)(uintptr_t kwq,
-			struct turnstile **tstore, thread_t owner, block_hint_t block_hint,
-			uint64_t deadline);
+	    struct turnstile **tstore, thread_t owner, block_hint_t block_hint,
+	    uint64_t deadline);
 
 	void (*psynch_wait_update_complete)(struct turnstile *turnstile);
 
@@ -177,10 +177,10 @@ typedef const struct pthread_callbacks_s {
 	void (*psynch_wait_cleanup)(void);
 
 	kern_return_t (*psynch_wait_wakeup)(uintptr_t kwq,
-			struct ksyn_waitq_element *kwe, struct turnstile **tstore);
+	    struct ksyn_waitq_element *kwe, struct turnstile **tstore);
 
 	void (*psynch_wait_update_owner)(uintptr_t kwq, thread_t owner,
-			struct turnstile **tstore);
+	    struct turnstile **tstore);
 
 	void* (*proc_get_pthhash)(struct proc *t);
 	void (*proc_set_pthhash)(struct proc *t, void* ptr);
@@ -267,7 +267,7 @@ typedef const struct pthread_callbacks_s {
 
 	kern_return_t (*thread_set_tsd_base)(thread_t thread, mach_vm_offset_t tsd_base);
 
-	int	(*proc_usynch_get_requested_thread_qos)(struct uthread *);
+	int     (*proc_usynch_get_requested_thread_qos)(struct uthread *);
 	uint64_t (*proc_get_mach_thread_self_tsd_offset)(struct proc *p);
 	void (*proc_set_mach_thread_self_tsd_offset)(struct proc *p, uint64_t mach_thread_self_tsd_offset);
 

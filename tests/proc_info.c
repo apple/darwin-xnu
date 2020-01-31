@@ -55,7 +55,8 @@
 
 #define CONF_OPN_FILE_COUNT 3
 #define CONF_TMP_FILE_PFX   "/tmp/xnu.tests.proc_info."
-static int CONF_TMP_FILE_OPEN(char path[PATH_MAX])
+static int
+CONF_TMP_FILE_OPEN(char path[PATH_MAX])
 {
 	static char stmp_path[PATH_MAX] = {};
 	char *nm;
@@ -75,43 +76,43 @@ uint32_t get_tty_dev(void);
 
 #define WAIT_FOR_CHILDREN(pipefd, action, child_count)                           \
 	do {                                                                         \
-		long ret;                                                                \
-		if (child_count == 1) {                                                  \
-			int child_ret_action = 999;                                          \
-			while (child_ret_action != action) {                                 \
-				ret = read(pipefd, &child_ret_action, sizeof(child_ret_action)); \
-			}                                                                    \
-		} else {                                                                 \
-			int child_ready_count = child_count * (int)sizeof(action);           \
+	        long ret;                                                                \
+	        if (child_count == 1) {                                                  \
+	                int child_ret_action = 999;                                          \
+	                while (child_ret_action != action) {                                 \
+	                        ret = read(pipefd, &child_ret_action, sizeof(child_ret_action)); \
+	                }                                                                    \
+	        } else {                                                                 \
+	                int child_ready_count = child_count * (int)sizeof(action);           \
                                                                                  \
-			action = 0;                                                          \
-			while (child_ready_count) {                                          \
-				ret = read(pipefd, &action, (int)sizeof(action));                \
-				if (ret != -1) {                                                 \
-					child_ready_count -= ret;                                    \
-				} else {                                                         \
-					T_FAIL("ERROR: Could not read from pipe() : %d", errno);     \
-				}                                                                \
-				if (action) {                                                    \
-					T_FAIL("ERROR: Child action failed with error %d", action);  \
-				}                                                                \
-			}                                                                    \
-		}                                                                        \
+	                action = 0;                                                          \
+	                while (child_ready_count) {                                          \
+	                        ret = read(pipefd, &action, (int)sizeof(action));                \
+	                        if (ret != -1) {                                                 \
+	                                child_ready_count -= ret;                                    \
+	                        } else {                                                         \
+	                                T_FAIL("ERROR: Could not read from pipe() : %d", errno);     \
+	                        }                                                                \
+	                        if (action) {                                                    \
+	                                T_FAIL("ERROR: Child action failed with error %d", action);  \
+	                        }                                                                \
+	                }                                                                    \
+	        }                                                                        \
 	} while (0)
 
 #define PROC_INFO_CALL(struct_name, pid, flavor, proc_arg)                                                     \
 	do {                                                                                                       \
-		struct struct_name * struct_var = malloc(sizeof(struct struct_name));                                  \
-		T_QUIET;                                                                                               \
-		T_ASSERT_NOTNULL(struct_var, "malloc() for " #flavor);                                                 \
-		retval = __proc_info(PROC_INFO_CALL_PIDINFO, pid, flavor, (uint64_t)proc_arg, (user_addr_t)struct_var, \
-		                     (uint32_t)sizeof(struct struct_name));                                            \
+	        struct struct_name * struct_var = malloc(sizeof(struct struct_name));                                  \
+	        T_QUIET;                                                                                               \
+	        T_ASSERT_NOTNULL(struct_var, "malloc() for " #flavor);                                                 \
+	        retval = __proc_info(PROC_INFO_CALL_PIDINFO, pid, flavor, (uint64_t)proc_arg, (user_addr_t)struct_var, \
+	                             (uint32_t)sizeof(struct struct_name));                                            \
                                                                                                                \
-		T_QUIET;                                                                                               \
-		T_EXPECT_POSIX_SUCCESS(retval, "__proc_info call for " #flavor);                                       \
-		T_ASSERT_EQ_INT(retval, (int)sizeof(struct struct_name), "__proc_info call for " #flavor);             \
-		ret_structs[i] = (void *)struct_var;                                                                   \
-		i++;                                                                                                   \
+	        T_QUIET;                                                                                               \
+	        T_EXPECT_POSIX_SUCCESS(retval, "__proc_info call for " #flavor);                                       \
+	        T_ASSERT_EQ_INT(retval, (int)sizeof(struct struct_name), "__proc_info call for " #flavor);             \
+	        ret_structs[i] = (void *)struct_var;                                                                   \
+	        i++;                                                                                                   \
 	} while (0)
 
 uint32_t
@@ -119,7 +120,7 @@ get_tty_dev()
 {
 	struct stat buf;
 	stat(ttyname(1), &buf);
-	return ((uint32_t)buf.st_rdev);
+	return (uint32_t)buf.st_rdev;
 }
 
 /*
@@ -165,183 +166,187 @@ enum proc_info_opt {
 
 static int tmp_fd = -1;
 
-static child_action_handler_t proc_info_listpids_handler = ^void(proc_config_t proc_config, int child_id) {
-  close(proc_config->parent_pipe[PIPE_IN]);
-  close(proc_config->child_pipe[child_id][PIPE_OUT]);
-  long retval      = 0;
-  int child_action = 0;
-  retval           = write(proc_config->parent_pipe[PIPE_OUT], &child_action, sizeof(child_action));
-  if (retval != -1) {
-	  while (child_action != ACT_EXIT) {
-		  retval = read(proc_config->child_pipe[child_id][PIPE_IN], &child_action, sizeof(child_action));
-		  if (retval == 0 || (retval == -1 && errno == EAGAIN)) {
-			  continue;
-		  }
-		  if (retval != -1) {
-			  switch (child_action) {
-			  case ACT_CHANGE_UID:
-				  /*
-				   * Change uid
-				   */
-				  retval = setuid(CONF_UID_VAL);
-				  break;
-			  case ACT_CHANGE_RUID:
-				  /*
-				   * Change ruid
-				   */
-				  retval = setreuid(CONF_RUID_VAL, (uid_t)-1);
-				  break;
-			  case ACT_EXIT:
-				  /*
-				   * Exit
-				   */
-				  break;
-			  }
-		  }
-		  if (child_action != ACT_EXIT) {
-			  retval = write(proc_config->parent_pipe[PIPE_OUT], &retval, sizeof(retval));
-			  if (retval == -1)
-				  break;
-		  }
-	  }
-  }
-  close(proc_config->parent_pipe[PIPE_OUT]);
-  close(proc_config->child_pipe[child_id][PIPE_IN]);
-  exit(0);
+static child_action_handler_t proc_info_listpids_handler = ^void (proc_config_t proc_config, int child_id) {
+	close(proc_config->parent_pipe[PIPE_IN]);
+	close(proc_config->child_pipe[child_id][PIPE_OUT]);
+	long retval      = 0;
+	int child_action = 0;
+	retval           = write(proc_config->parent_pipe[PIPE_OUT], &child_action, sizeof(child_action));
+	if (retval != -1) {
+		while (child_action != ACT_EXIT) {
+			retval = read(proc_config->child_pipe[child_id][PIPE_IN], &child_action, sizeof(child_action));
+			if (retval == 0 || (retval == -1 && errno == EAGAIN)) {
+				continue;
+			}
+			if (retval != -1) {
+				switch (child_action) {
+				case ACT_CHANGE_UID:
+					/*
+					 * Change uid
+					 */
+					retval = setuid(CONF_UID_VAL);
+					break;
+				case ACT_CHANGE_RUID:
+					/*
+					 * Change ruid
+					 */
+					retval = setreuid(CONF_RUID_VAL, (uid_t)-1);
+					break;
+				case ACT_EXIT:
+					/*
+					 * Exit
+					 */
+					break;
+				}
+			}
+			if (child_action != ACT_EXIT) {
+				retval = write(proc_config->parent_pipe[PIPE_OUT], &retval, sizeof(retval));
+				if (retval == -1) {
+					break;
+				}
+			}
+		}
+	}
+	close(proc_config->parent_pipe[PIPE_OUT]);
+	close(proc_config->child_pipe[child_id][PIPE_IN]);
+	exit(0);
 };
 
-static child_action_handler_t proc_info_call_pidinfo_handler = ^void(proc_config_t proc_config, int child_id) {
-  close(proc_config->parent_pipe[PIPE_IN]);
-  close(proc_config->child_pipe[child_id][PIPE_OUT]);
-  int action  = 0;
-  long retval = 0;
-  int i;
-  void * tmp_map           = NULL;
-  dispatch_queue_t q       = NULL;
-  dispatch_semaphore_t sem = NULL;
-  /*
-   * PHASE 1: Child ready and waits for parent to send next action
-   */
-  T_LOG("Child ready to accept action from parent");
-  retval = write(proc_config->parent_pipe[PIPE_OUT], &action, sizeof(action));
-  if (retval != -1) {
-	  while (action != ACT_EXIT) {
-		  retval = read(proc_config->child_pipe[child_id][PIPE_IN], &action, sizeof(action));
+static child_action_handler_t proc_info_call_pidinfo_handler = ^void (proc_config_t proc_config, int child_id) {
+	close(proc_config->parent_pipe[PIPE_IN]);
+	close(proc_config->child_pipe[child_id][PIPE_OUT]);
+	int action  = 0;
+	long retval = 0;
+	int i;
+	void * tmp_map           = NULL;
+	dispatch_queue_t q       = NULL;
+	dispatch_semaphore_t sem = NULL;
+	/*
+	 * PHASE 1: Child ready and waits for parent to send next action
+	 */
+	T_LOG("Child ready to accept action from parent");
+	retval = write(proc_config->parent_pipe[PIPE_OUT], &action, sizeof(action));
+	if (retval != -1) {
+		while (action != ACT_EXIT) {
+			retval = read(proc_config->child_pipe[child_id][PIPE_IN], &action, sizeof(action));
 
-		  if (retval != -1) {
-			  retval = 0;
-			  switch (action) {
-			  case ACT_PHASE2: {
-				  /*
-				   * Change uid, euid, guid, rgid, nice value
-				   * Also change the svuid and svgid
-				   */
-				  T_LOG("Child changing uid, euid, rguid, svuid, svgid and nice value");
-				  retval = nice(CONF_NICE_VAL);
-				  if (retval == -1) {
-					  T_LOG("(child) ERROR: nice() failed");
-					  break;
-				  }
-				  retval = setgid(CONF_GID_VAL);
-				  if (retval == -1) {
-					  T_LOG("(child) ERROR: setgid() failed");
-					  break;
-				  }
-				  retval = setreuid((uid_t)-1, CONF_RUID_VAL);
-				  if (retval == -1) {
-					  T_LOG("(child) ERROR: setreuid() failed");
-					  break;
-				  }
-				  break;
-			  }
-			  case ACT_PHASE3: {
-				  /*
-				   * Allocate a page of memory
-				   * Copy on write shared memory
-				   */
-				  T_LOG("Child allocating a page of memory, and causing a copy-on-write");
-				  retval  = 0;
-				  tmp_map = mmap(0, PAGE_SIZE, PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
-				  if (tmp_map == MAP_FAILED) {
-					  T_LOG("(child) ERROR: mmap() failed");
-					  retval = 1;
-					  break;
-				  }
-				  /*
-				   * Get the page allocated
-				   */
-				  int * map_ptr = (int *)tmp_map;
-				  for (i = 0; i < (int)(PAGE_SIZE / sizeof(int)); i++) {
-					  *map_ptr++ = i;
-				  }
-				  /*
-				   * Cause copy on write to the page
-				   */
-				  *((int *)(proc_config->cow_map)) = 20;
+			if (retval != -1) {
+				retval = 0;
+				switch (action) {
+				case ACT_PHASE2: {
+					/*
+					 * Change uid, euid, guid, rgid, nice value
+					 * Also change the svuid and svgid
+					 */
+					T_LOG("Child changing uid, euid, rguid, svuid, svgid and nice value");
+					retval = nice(CONF_NICE_VAL);
+					if (retval == -1) {
+						T_LOG("(child) ERROR: nice() failed");
+						break;
+					}
+					retval = setgid(CONF_GID_VAL);
+					if (retval == -1) {
+						T_LOG("(child) ERROR: setgid() failed");
+						break;
+					}
+					retval = setreuid((uid_t)-1, CONF_RUID_VAL);
+					if (retval == -1) {
+						T_LOG("(child) ERROR: setreuid() failed");
+						break;
+					}
+					break;
+				}
+				case ACT_PHASE3: {
+					/*
+					 * Allocate a page of memory
+					 * Copy on write shared memory
+					 */
+					T_LOG("Child allocating a page of memory, and causing a copy-on-write");
+					retval  = 0;
+					tmp_map = mmap(0, PAGE_SIZE, PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+					if (tmp_map == MAP_FAILED) {
+						T_LOG("(child) ERROR: mmap() failed");
+						retval = 1;
+						break;
+					}
+					/*
+					 * Get the page allocated
+					 */
+					int * map_ptr = (int *)tmp_map;
+					for (i = 0; i < (int)(PAGE_SIZE / sizeof(int)); i++) {
+						*map_ptr++ = i;
+					}
+					/*
+					 * Cause copy on write to the page
+					 */
+					*((int *)(proc_config->cow_map)) = 20;
 
-				  break;
-			  }
-			  case ACT_PHASE4: {
-				  T_LOG("Child spending CPU cycles and changing thread name");
-				  retval                       = 0;
-				  int number                   = 1000;
-				  unsigned long long factorial = 1;
-				  int j;
-				  for (j = 1; j <= number; j++) {
-					  factorial *= (unsigned long long)j;
-				  }
-				  sysctlbyname("kern.threadname", NULL, 0, CONF_THREAD_NAME, strlen(CONF_THREAD_NAME));
-				  break;
-			  }
-			  case ACT_PHASE5: {
-				  /*
-				   * Dispatch for Workq test
-				   */
-				  T_LOG("Child creating a dispatch queue, and dispatching blocks on it");
-				  q = dispatch_queue_create("com.apple.test_proc_info.workqtest",
-					                        DISPATCH_QUEUE_CONCURRENT); // dispatch_get_global_queue(0, 0);
-				  sem = dispatch_semaphore_create(0);
+					break;
+				}
+				case ACT_PHASE4: {
+					T_LOG("Child spending CPU cycles and changing thread name");
+					retval                       = 0;
+					int number                   = 1000;
+					unsigned long long factorial = 1;
+					int j;
+					for (j = 1; j <= number; j++) {
+						factorial *= (unsigned long long)j;
+					}
+					sysctlbyname("kern.threadname", NULL, 0, CONF_THREAD_NAME, strlen(CONF_THREAD_NAME));
+					break;
+				}
+				case ACT_PHASE5: {
+					/*
+					 * Dispatch for Workq test
+					 */
+					T_LOG("Child creating a dispatch queue, and dispatching blocks on it");
+					q = dispatch_queue_create("com.apple.test_proc_info.workqtest",
+					    DISPATCH_QUEUE_CONCURRENT);                     // dispatch_get_global_queue(0, 0);
+					sem = dispatch_semaphore_create(0);
 
-				  for (i = 0; i < CONF_NUM_THREADS; i++) {
-					  dispatch_async(q, ^{
-						/*
-						 * Block the thread, do nothing
-						 */
-						dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
-					  });
-				  }
-				  break;
-			  }
-			  case ACT_EXIT: {
-				  /*
-				   * Exit
-				   */
-				  if (sem) {
-					  for (i = 0; i < CONF_NUM_THREADS; i++) {
-						  dispatch_semaphore_signal(sem);
-					  }
-				  }
+					for (i = 0; i < CONF_NUM_THREADS; i++) {
+						dispatch_async(q, ^{
+								/*
+								 * Block the thread, do nothing
+								 */
+								dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+							});
+					}
+					break;
+				}
+				case ACT_EXIT: {
+					/*
+					 * Exit
+					 */
+					if (sem) {
+						for (i = 0; i < CONF_NUM_THREADS; i++) {
+							dispatch_semaphore_signal(sem);
+						}
+					}
 
-				  if (tmp_map)
-					  munmap(tmp_map, PAGE_SIZE);
+					if (tmp_map) {
+						munmap(tmp_map, PAGE_SIZE);
+					}
 
-				  if (proc_config->cow_map)
-					  munmap(proc_config->cow_map, PAGE_SIZE);
+					if (proc_config->cow_map) {
+						munmap(proc_config->cow_map, PAGE_SIZE);
+					}
 
-				  break;
-			  }
-			  }
-		  }
-		  if (action != ACT_EXIT) {
-			  retval = write(proc_config->parent_pipe[PIPE_OUT], &action, sizeof(action));
-			  if (retval == -1)
-				  break;
-		  }
-	  }
-	  close(proc_config->parent_pipe[PIPE_OUT]);
-	  close(proc_config->child_pipe[child_id][PIPE_IN]);
-	  exit(0);
-  }
+					break;
+				}
+				}
+			}
+			if (action != ACT_EXIT) {
+				retval = write(proc_config->parent_pipe[PIPE_OUT], &action, sizeof(action));
+				if (retval == -1) {
+					break;
+				}
+			}
+		}
+		close(proc_config->parent_pipe[PIPE_OUT]);
+		close(proc_config->child_pipe[child_id][PIPE_IN]);
+		exit(0);
+	}
 };
 
 static void
@@ -452,6 +457,7 @@ proc_info_caller(int proc_info_opts, void ** ret_structs, int * ret_child_pid)
 	int retval, i = 0;
 	uint64_t * thread_addr = NULL;
 	void * map_tmp         = NULL;
+	static char tmp_path[PATH_MAX] = {};
 
 	proc_config_t proc_config = spawn_child_processes(1, proc_info_call_pidinfo_handler);
 	int child_pid             = proc_config->child_pids[0];
@@ -522,7 +528,7 @@ proc_info_caller(int proc_info_opts, void ** ret_structs, int * ret_child_pid)
 		T_ASSERT_NOTNULL(pall, "malloc() for PROC_TASKALLINFO");
 
 		retval = __proc_info(PROC_INFO_CALL_PIDINFO, child_pid, PROC_PIDTASKALLINFO, (uint32_t)0, (user_addr_t)pall,
-		                     (uint32_t)sizeof(struct proc_taskallinfo));
+		    (uint32_t)sizeof(struct proc_taskallinfo));
 		T_QUIET;
 		T_ASSERT_EQ_INT(retval, (int)sizeof(struct proc_taskallinfo), "__proc_info call for PROC_PIDTASKALLINFO in THREAD_ADDR");
 
@@ -532,11 +538,11 @@ proc_info_caller(int proc_info_opts, void ** ret_structs, int * ret_child_pid)
 		T_ASSERT_NOTNULL(thread_addr, "malloc() for PROC_PIDLISTTHREADS");
 
 		retval = __proc_info(PROC_INFO_CALL_PIDINFO, child_pid, PROC_PIDLISTTHREADS, (uint32_t)0, (user_addr_t)thread_addr,
-		                     (int32_t)(sizeof(uint64_t) * (unsigned long)(pall->ptinfo.pti_threadnum + 1)));
+		    (int32_t)(sizeof(uint64_t) * (unsigned long)(pall->ptinfo.pti_threadnum + 1)));
 		T_LOG("(int)((unsigned long)retval / PROC_PIDLISTTHREADS_SIZE: %d",
-		      (int)((unsigned long)retval / PROC_PIDLISTTHREADS_SIZE));
+		    (int)((unsigned long)retval / PROC_PIDLISTTHREADS_SIZE));
 		T_ASSERT_GE_INT((int)((unsigned long)retval / PROC_PIDLISTTHREADS_SIZE), pall->ptinfo.pti_threadnum,
-		                "__proc_info call for PROC_PIDLISTTHREADS");
+		    "__proc_info call for PROC_PIDLISTTHREADS");
 
 		free(pall);
 	}
@@ -574,7 +580,7 @@ proc_info_caller(int proc_info_opts, void ** ret_structs, int * ret_child_pid)
 		T_ASSERT_MACH_SUCCESS(retval, "thread_info call for PROC_PIDTHREADID64INFO");
 
 		retval = __proc_info(PROC_INFO_CALL_PIDINFO, child_pid, PROC_PIDTHREADID64INFO, (uint64_t)child_thread_threadinfo.thread_id,
-		                     (user_addr_t)pthinfo_64, (uint32_t)sizeof(struct proc_threadinfo));
+		    (user_addr_t)pthinfo_64, (uint32_t)sizeof(struct proc_threadinfo));
 		T_ASSERT_EQ_INT(retval, (int)sizeof(struct proc_threadinfo), "__proc_info call for PROC_PIDTHREADID64INFO");
 
 		ret_structs[i] = (void *)pthinfo_64;
@@ -596,7 +602,6 @@ proc_info_caller(int proc_info_opts, void ** ret_structs, int * ret_child_pid)
 	vm_map_size_t map_tmp_sz = 0;
 	if ((proc_info_opts & PREGINFO) | (proc_info_opts & PREGINFO_PATH) | (proc_info_opts & PREGINFO_PATH_2) |
 	    (proc_info_opts & PREGINFO_PATH_3)) {
-		static char tmp_path[PATH_MAX] = {};
 		tmp_fd = CONF_TMP_FILE_OPEN(tmp_path);
 
 		/*
@@ -634,7 +639,7 @@ proc_info_caller(int proc_info_opts, void ** ret_structs, int * ret_child_pid)
 		T_ASSERT_NE_PTR(map_tmp, MAP_FAILED, "mmap() for PROC_PIDREGIONINFO");
 
 		T_LOG("file: %s is opened as fd %d and mapped at %llx with size %lu", tmp_path, tmp_fd, (uint64_t)map_tmp,
-		      (unsigned long)PAGE_SIZE);
+		    (unsigned long)PAGE_SIZE);
 
 		/*
 		 * unlink() the file to be nice, but do it _after_ we've
@@ -675,25 +680,26 @@ proc_info_caller(int proc_info_opts, void ** ret_structs, int * ret_child_pid)
 		struct proc_regionwithpathinfo * preginfo_path = malloc(sizeof(struct proc_regionwithpathinfo));
 
 		retval = __proc_info(PROC_INFO_CALL_PIDINFO, getpid(), PROC_PIDREGIONPATHINFO2, (uint64_t)map_tmp,
-		                     (user_addr_t)preginfo_path, (uint32_t)sizeof(struct proc_regionwithpathinfo));
+		    (user_addr_t)preginfo_path, (uint32_t)sizeof(struct proc_regionwithpathinfo));
 
 		T_ASSERT_EQ_INT(retval, (int)sizeof(struct proc_regionwithpathinfo), "__proc_info call for PROC_PIDREGIONPATHINFO2");
 
 		T_LOG("preginfo_path.prp_vip.vip_vi.vi_fsid.val 0: %d", preginfo_path->prp_vip.vip_vi.vi_fsid.val[0]);
 		T_LOG("preginfo_path.prp_vip.vip_vi.vi_fsid.val 1: %d", preginfo_path->prp_vip.vip_vi.vi_fsid.val[1]);
+		ret_structs[3] = (void *)(uintptr_t)preginfo_path->prp_vip.vip_vi.vi_fsid.val[0];
+		ret_structs[4] = (void *)(uintptr_t)preginfo_path->prp_vip.vip_vi.vi_fsid.val[1];
 
 		retval = __proc_info(PROC_INFO_CALL_PIDINFO, getpid(), PROC_PIDREGIONPATHINFO3,
-		                     (uint64_t)(*(uint32_t *)(preginfo_path->prp_vip.vip_vi.vi_fsid.val)), (user_addr_t)preginfo_path,
-		                     (uint32_t)sizeof(struct proc_regionwithpathinfo));
+		    (uint64_t)preginfo_path->prp_vip.vip_vi.vi_fsid.val[0] +
+		    ((uint64_t)preginfo_path->prp_vip.vip_vi.vi_fsid.val[1] << 32),
+		    (user_addr_t)preginfo_path,
+		    (uint32_t)sizeof(struct proc_regionwithpathinfo));
 		T_ASSERT_EQ_INT(retval, (int)sizeof(struct proc_regionwithpathinfo), "__proc_info call for PROC_PIDREGIONPATHWITHINFO3");
-		ret_structs[i] = (void *)preginfo_path;
-		i++;
-		ret_structs[i] = (void *)map_tmp;
-		i++;
-		ret_structs[i] = (void *)(uintptr_t)map_tmp_sz;
-		i++;
+		ret_structs[0] = (void *)preginfo_path;
+		ret_structs[1] = (void *)map_tmp;
+		ret_structs[2] = (void *)(uintptr_t)map_tmp_sz;
 
-		retval = unlink(preginfo_path->prp_vip.vip_path);
+		retval = unlink(tmp_path);
 		T_QUIET;
 		T_ASSERT_POSIX_SUCCESS(retval, "unlink(%s) failed", preginfo_path->prp_vip.vip_path);
 	}
@@ -725,9 +731,9 @@ free_proc_info(void ** proc_info, int num)
  */
 
 T_DECL(proc_info_listpids_all_pids,
-       "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	/*
 	 * Get the value of nprocs with no buffer sent in
@@ -747,7 +753,7 @@ T_DECL(proc_info_listpids_all_pids,
 	}
 	pid_t * proc_ids = malloc(sizeof(pid_t) * (unsigned long)proc_count);
 	num_procs        = __proc_info(PROC_INFO_CALL_LISTPIDS, PROC_ALL_PIDS, (uint32_t)getpid(), (uint32_t)0, (user_addr_t)proc_ids,
-	                        (int32_t)(proc_count * (int)sizeof(pid_t)));
+	    (int32_t)(proc_count * (int)sizeof(pid_t)));
 	num_procs = num_procs / (int)sizeof(pid_t);
 	T_ASSERT_GE_INT(num_procs, proc_count, "Valid number of pids obtained for PROC_ALL_PIDS.");
 
@@ -759,7 +765,7 @@ T_DECL(proc_info_listpids_all_pids,
 
 	proc_ids  = malloc(sizeof(pid_t) * (unsigned long)proc_count_all);
 	num_procs = __proc_info(PROC_INFO_CALL_LISTPIDS, PROC_ALL_PIDS, (uint32_t)getpid(), (uint32_t)0, (user_addr_t)proc_ids,
-	                        (int32_t)(proc_count_all * (int)sizeof(pid_t)));
+	    (int32_t)(proc_count_all * (int)sizeof(pid_t)));
 	num_procs = num_procs / (int)sizeof(pid_t);
 
 	int pid_match = 1;
@@ -788,14 +794,14 @@ T_DECL(proc_info_listpids_all_pids,
 
 	errno     = 0;
 	num_procs = __proc_info(PROC_INFO_CALL_LISTPIDS, PROC_ALL_PIDS, (uint32_t)getpid(), (uint32_t)0, (user_addr_t)proc_ids,
-	                        (uint32_t)(sizeof(pid_t) - 1));
+	    (uint32_t)(sizeof(pid_t) - 1));
 	T_EXPECT_POSIX_ERROR(errno, ENOMEM, "Valid proc_info behavior when bufsize < sizeof(pid_t).");
 }
 
 T_DECL(proc_info_listpids_pgrp_only,
-       "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	proc_config_t proc_config = spawn_child_processes(CONF_PROC_COUNT, proc_info_listpids_handler);
 	T_LOG("Test to verify PROC_PGRP_ONLY returns correct value");
@@ -807,7 +813,7 @@ T_DECL(proc_info_listpids_pgrp_only,
 	int proc_count   = CONF_PROC_COUNT + 2;
 	pid_t * proc_ids = malloc(sizeof(*proc_ids) * (unsigned long)proc_count);
 	int num_procs    = __proc_info(PROC_INFO_CALL_LISTPIDS, PROC_PGRP_ONLY, (uint32_t)proc_config->proc_grp_id, (uint32_t)0,
-	                            (user_addr_t)proc_ids, (int32_t)(proc_count * (int)sizeof(*proc_ids)));
+	    (user_addr_t)proc_ids, (int32_t)(proc_count * (int)sizeof(*proc_ids)));
 	num_procs = num_procs / (int)sizeof(pid_t);
 	T_ASSERT_EQ_INT(num_procs, CONF_PROC_COUNT + 1, "Valid number of pids obtained for PROC_PGRP_ONLY.");
 	kill_child_processes(proc_config);
@@ -816,9 +822,9 @@ T_DECL(proc_info_listpids_pgrp_only,
 }
 
 T_DECL(proc_info_listpids_ppid_only,
-       "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	proc_config_t proc_config = spawn_child_processes(CONF_PROC_COUNT, proc_info_listpids_handler);
 	T_LOG("Test to verify PROC_PPID_ONLY returns correct value");
@@ -828,7 +834,7 @@ T_DECL(proc_info_listpids_ppid_only,
 	int proc_count   = CONF_PROC_COUNT + 2;
 	pid_t * proc_ids = malloc(sizeof(*proc_ids) * (unsigned long)proc_count);
 	int num_procs    = __proc_info(PROC_INFO_CALL_LISTPIDS, PROC_PPID_ONLY, (uint32_t)getpid(), (uint32_t)0, (user_addr_t)proc_ids,
-	                            (int32_t)(proc_count * (int)sizeof(*proc_ids)));
+	    (int32_t)(proc_count * (int)sizeof(*proc_ids)));
 	num_procs = num_procs / (int)sizeof(pid_t);
 	T_ASSERT_EQ_INT(num_procs, CONF_PROC_COUNT, "Valid number of pids obtained for PROC_PPID_ONLY.");
 	kill_child_processes(proc_config);
@@ -837,9 +843,9 @@ T_DECL(proc_info_listpids_ppid_only,
 }
 
 T_DECL(proc_info_listpids_uid_only,
-       "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	proc_config_t proc_config = spawn_child_processes(CONF_PROC_COUNT, proc_info_listpids_handler);
 	T_LOG("Test to verify PROC_UID_ONLY returns correct value");
@@ -848,18 +854,18 @@ T_DECL(proc_info_listpids_uid_only,
 	send_action_to_child_processes(proc_config, ACT_CHANGE_UID);
 	usleep(10000);
 	int num_procs = __proc_info(PROC_INFO_CALL_LISTPIDS, PROC_UID_ONLY, CONF_UID_VAL, (uint32_t)0, (user_addr_t)proc_ids,
-	                            (int32_t)(proc_count * (int)sizeof(*proc_ids)));
+	    (int32_t)(proc_count * (int)sizeof(*proc_ids)));
 	T_ASSERT_GE_ULONG((unsigned long)num_procs / sizeof(pid_t), (unsigned long)CONF_PROC_COUNT,
-	                  "Valid number of pids obtained for PROC_UID_ONLY.");
+	    "Valid number of pids obtained for PROC_UID_ONLY.");
 	kill_child_processes(proc_config);
 	free_proc_config(proc_config);
 	free(proc_ids);
 }
 
 T_DECL(proc_info_listpids_ruid_only,
-       "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	proc_config_t proc_config = spawn_child_processes(CONF_PROC_COUNT, proc_info_listpids_handler);
 	T_LOG("Test to verify PROC_RUID_ONLY returns correct value");
@@ -868,18 +874,18 @@ T_DECL(proc_info_listpids_ruid_only,
 	send_action_to_child_processes(proc_config, ACT_CHANGE_RUID);
 	usleep(10000);
 	int num_procs = __proc_info(PROC_INFO_CALL_LISTPIDS, PROC_RUID_ONLY, CONF_RUID_VAL, (uint32_t)0, (user_addr_t)proc_ids,
-	                            (int32_t)(proc_count * (int)sizeof(*proc_ids)));
+	    (int32_t)(proc_count * (int)sizeof(*proc_ids)));
 	T_ASSERT_GE_ULONG((unsigned long)num_procs / sizeof(pid_t), (unsigned long)CONF_PROC_COUNT,
-	                  "Valid number of pids obtained for PROC_RUID_ONLY.");
+	    "Valid number of pids obtained for PROC_RUID_ONLY.");
 	kill_child_processes(proc_config);
 	free_proc_config(proc_config);
 	free(proc_ids);
 }
 
 T_DECL(proc_info_listpids_tty_only,
-       "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	int ret = isatty(STDOUT_FILENO);
 	if (ret != 1) {
@@ -892,7 +898,7 @@ T_DECL(proc_info_listpids_tty_only,
 	int proc_count   = CONF_PROC_COUNT + 2;
 	pid_t * proc_ids = malloc(sizeof(*proc_ids) * (unsigned long)proc_count);
 	int num_procs    = __proc_info(PROC_INFO_CALL_LISTPIDS, PROC_TTY_ONLY, get_tty_dev(), (uint32_t)0, (user_addr_t)proc_ids,
-	                            (int32_t)(proc_count * (int)sizeof(*proc_ids)));
+	    (int32_t)(proc_count * (int)sizeof(*proc_ids)));
 	num_procs = num_procs / (int)sizeof(pid_t);
 	T_ASSERT_GE_INT(num_procs, 0, "Valid number of pids returned by PROC_TTY_ONLY.");
 	kill_child_processes(proc_config);
@@ -908,9 +914,9 @@ T_DECL(proc_info_listpids_tty_only,
  */
 
 T_DECL(proc_info_pidinfo_proc_piduniqidentifierinfo,
-       "Test to identify PROC_PIDUNIQIDENTIFIERINFO returns correct unique identifiers for process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to identify PROC_PIDUNIQIDENTIFIERINFO returns correct unique identifiers for process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[2];
 	proc_info_caller(P_UNIQIDINFO | C_UNIQIDINFO, proc_info, NULL);
@@ -923,15 +929,15 @@ T_DECL(proc_info_pidinfo_proc_piduniqidentifierinfo,
 		T_EXPECT_EQ_UCHAR(c_uniqidinfo->p_uuid[i], p_uniqidinfo->p_uuid[i], "p_uuid should be the same unique id");
 	}
 	T_EXPECT_EQ_ULLONG(c_uniqidinfo->p_puniqueid, p_uniqidinfo->p_uniqueid,
-	                   "p_puniqueid of child should be same as p_uniqueid for parent");
+	    "p_puniqueid of child should be same as p_uniqueid for parent");
 
 	free_proc_info(proc_info, 2);
 }
 
 T_DECL(proc_info_pidinfo_proc_pidtbsdinfo,
-       "Test to verify PROC_PIDTBSDINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDTBSDINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[2];
 	int child_pid = 0;
@@ -962,9 +968,9 @@ T_DECL(proc_info_pidinfo_proc_pidtbsdinfo,
 }
 
 T_DECL(proc_info_pidt_shortbsdinfo,
-       "Test to verify PROC_PIDT_SHORTBSDINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDT_SHORTBSDINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[2];
 	int child_pid = 0;
@@ -981,7 +987,7 @@ T_DECL(proc_info_pidt_shortbsdinfo,
 	 * The short variant returns all flags except session flags, hence ignoring them here.
 	 */
 	T_EXPECT_EQ_UINT(pbsd_short->pbsi_flags, (pbsd->pbi_flags & (unsigned int)(~PROC_FLAG_CTTY)),
-	                 "PROC_PIDT_SHORTBSDINFO returns valid flags");
+	    "PROC_PIDT_SHORTBSDINFO returns valid flags");
 	T_EXPECT_EQ_UINT(pbsd_short->pbsi_uid, CONF_RUID_VAL, "PROC_PIDT_SHORTBSDINFO returns valid uid");
 	T_EXPECT_EQ_UINT(pbsd_short->pbsi_gid, CONF_GID_VAL, "PROC_PIDT_SHORTBSDINFO returns valid gid");
 	T_EXPECT_EQ_UINT(pbsd_short->pbsi_ruid, 0U, "PROC_PIDT_SHORTBSDINFO returns valid ruid");
@@ -992,9 +998,9 @@ T_DECL(proc_info_pidt_shortbsdinfo,
 }
 
 T_DECL(proc_info_pidt_bsdinfowithuniqid,
-       "Test to verify PROC_PIDT_BSDINFOWITHUNIQID returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDT_BSDINFOWITHUNIQID returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[4];
 	int child_pid = 0;
@@ -1018,28 +1024,28 @@ T_DECL(proc_info_pidt_bsdinfowithuniqid,
 	T_EXPECT_EQ_STR(pbsd_uniqid->pbsd.pbi_comm, CONF_CMD_NAME, "PROC_PIDT_BSDINFOWITHUNIQID returns valid p_comm name");
 	T_EXPECT_EQ_STR(pbsd_uniqid->pbsd.pbi_name, CONF_CMD_NAME, "PROC_PIDT_BSDINFOWITHUNIQID returns valid p_name name");
 	T_EXPECT_EQ_UINT(pbsd_uniqid->pbsd.pbi_flags, (pbsd_old->pbi_flags | PROC_FLAG_PSUGID),
-	                 "PROC_PIDT_BSDINFOWITHUNIQID returns valid flags");
+	    "PROC_PIDT_BSDINFOWITHUNIQID returns valid flags");
 	T_EXPECT_EQ_UINT(pbsd_uniqid->pbsd.pbi_nfiles, pbsd_old->pbi_nfiles, "PROC_PIDT_BSDINFOWITHUNIQID returned valid pbi_nfiles");
 	T_EXPECT_EQ_UINT(pbsd_uniqid->pbsd.pbi_pgid, (uint32_t)getpgid(getpid()),
-	                 "PROC_PIDT_BSDINFOWITHUNIQID returned valid pbi_pgid");
+	    "PROC_PIDT_BSDINFOWITHUNIQID returned valid pbi_pgid");
 	T_EXPECT_EQ_UINT(pbsd_uniqid->pbsd.pbi_pjobc, pbsd->pbi_pjobc, "PROC_PIDT_BSDINFOWITHUNIQID returned valid pbi_pjobc");
 	T_EXPECT_NE_UINT(pbsd_uniqid->pbsd.e_tdev, 0U, "PROC_PIDT_BSDINFOWITHUNIQID returned valid e_tdev");
 	T_EXPECT_NE_ULLONG(pbsd_uniqid->p_uniqidentifier.p_uniqueid, p_uniqidinfo->p_uniqueid,
-	                   "PROC_PIDT_BSDINFOWITHUNIQID returned valid p_uniqueid");
+	    "PROC_PIDT_BSDINFOWITHUNIQID returned valid p_uniqueid");
 	for (int i = 0; i < 16; i++) {
 		T_EXPECT_EQ_UCHAR(pbsd_uniqid->p_uniqidentifier.p_uuid[i], p_uniqidinfo->p_uuid[i],
-		                  "PROC_PIDT_BSDINFOWITHUNIQID reported valid p_uniqueid");
+		    "PROC_PIDT_BSDINFOWITHUNIQID reported valid p_uniqueid");
 	}
 	T_EXPECT_EQ_ULLONG(pbsd_uniqid->p_uniqidentifier.p_puniqueid, p_uniqidinfo->p_uniqueid,
-	                   "p_puniqueid of child should be same as p_uniqueid for parent");
+	    "p_puniqueid of child should be same as p_uniqueid for parent");
 
 	free_proc_info(proc_info, 4);
 }
 
 T_DECL(proc_info_proc_pidtask_info,
-       "Test to verify PROC_PIDTASKINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDTASKINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[2];
 	proc_info_caller(P_TASK_INFO | P_TASK_INFO_NEW, proc_info, NULL);
@@ -1047,36 +1053,36 @@ T_DECL(proc_info_proc_pidtask_info,
 	struct proc_taskinfo * p_task_info_new = (struct proc_taskinfo *)proc_info[1];
 
 	T_EXPECT_GE_ULLONG((p_task_info_new->pti_virtual_size - p_task_info->pti_virtual_size), (unsigned long long)PAGE_SIZE,
-	                   "PROC_PIDTASKINFO returned valid value for pti_virtual_size");
+	    "PROC_PIDTASKINFO returned valid value for pti_virtual_size");
 	T_EXPECT_GE_ULLONG((p_task_info_new->pti_resident_size - p_task_info->pti_resident_size), (unsigned long long)PAGE_SIZE,
-	                   "PROC_PIDTASKINFO returned valid value for pti_virtual_size");
+	    "PROC_PIDTASKINFO returned valid value for pti_virtual_size");
 	T_EXPECT_EQ_INT(p_task_info_new->pti_policy, POLICY_TIMESHARE, "PROC_PIDTASKINFO returned valid value for pti_virtual_size");
 	T_EXPECT_GE_ULLONG(p_task_info->pti_threads_user, 1ULL, "PROC_PIDTASKINFO returned valid value for pti_threads_user");
 #if defined(__arm__) || defined(__arm64__)
 	T_EXPECT_GE_ULLONG(p_task_info->pti_threads_system, 0ULL, "PROC_PIDTASKINFO returned valid value for pti_threads_system");
 	T_EXPECT_GE_ULLONG((p_task_info_new->pti_total_system - p_task_info->pti_total_system), 0ULL,
-	                   "PROC_PIDTASKINFO returned valid value for pti_total_system");
+	    "PROC_PIDTASKINFO returned valid value for pti_total_system");
 #else
 	T_EXPECT_GE_ULLONG(p_task_info->pti_threads_system, 1ULL, "PROC_PIDTASKINFO returned valid value for pti_threads_system");
 	T_EXPECT_GT_ULLONG((p_task_info_new->pti_total_system - p_task_info->pti_total_system), 0ULL,
-	                   "PROC_PIDTASKINFO returned valid value for pti_total_system");
+	    "PROC_PIDTASKINFO returned valid value for pti_total_system");
 #endif
 	T_EXPECT_GT_ULLONG((p_task_info_new->pti_total_user - p_task_info->pti_total_user), 0ULL,
-	                   "PROC_PIDTASKINFO returned valid value for pti_total_user");
+	    "PROC_PIDTASKINFO returned valid value for pti_total_user");
 	T_EXPECT_GE_INT((p_task_info_new->pti_faults - p_task_info->pti_faults), 1,
-	                "PROC_PIDTASKINFO returned valid value for pti_faults");
+	    "PROC_PIDTASKINFO returned valid value for pti_faults");
 	T_EXPECT_GE_INT((p_task_info_new->pti_cow_faults - p_task_info->pti_cow_faults), 1,
-	                "PROC_PIDTASKINFO returned valid value for pti_cow_faults");
+	    "PROC_PIDTASKINFO returned valid value for pti_cow_faults");
 	T_EXPECT_GE_INT((p_task_info_new->pti_syscalls_mach - p_task_info->pti_syscalls_mach), 0,
-	                "PROC_PIDTASKINFO returned valid value for pti_syscalls_mach");
+	    "PROC_PIDTASKINFO returned valid value for pti_syscalls_mach");
 	T_EXPECT_GE_INT((p_task_info_new->pti_syscalls_unix - p_task_info->pti_syscalls_unix), 2,
-	                "PROC_PIDTASKINFO returned valid value for pti_syscalls_unix");
+	    "PROC_PIDTASKINFO returned valid value for pti_syscalls_unix");
 	T_EXPECT_EQ_INT((p_task_info_new->pti_messages_sent - p_task_info->pti_messages_sent), 0,
-	                "PROC_PIDTASKINFO returned valid value for pti_messages_sent");
+	    "PROC_PIDTASKINFO returned valid value for pti_messages_sent");
 	T_EXPECT_EQ_INT((p_task_info_new->pti_messages_received - p_task_info->pti_messages_received), 0,
-	                "PROC_PIDTASKINFO returned valid value for pti_messages_received");
+	    "PROC_PIDTASKINFO returned valid value for pti_messages_received");
 	T_EXPECT_EQ_INT(p_task_info_new->pti_priority, p_task_info->pti_priority,
-	                "PROC_PIDTASKINFO returned valid value for pti_priority");
+	    "PROC_PIDTASKINFO returned valid value for pti_priority");
 	T_EXPECT_GE_INT(p_task_info_new->pti_threadnum, 1, "PROC_PIDTASKINFO returned valid value for pti_threadnum");
 
 	if (p_task_info_new->pti_threadnum > 1) {
@@ -1095,9 +1101,9 @@ T_DECL(proc_info_proc_pidtask_info,
 }
 
 T_DECL(proc_info_proc_pidtaskallinfo,
-       "Test to verify PROC_PIDTASKALLINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDTASKALLINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[4];
 	int child_pid = 0;
@@ -1129,35 +1135,35 @@ T_DECL(proc_info_proc_pidtaskallinfo,
 #if defined(__arm__) || defined(__arm64__)
 	T_EXPECT_GE_ULLONG(pall->ptinfo.pti_threads_system, 0ULL, "PROC_PIDTASKALLINFO returned valid value for pti_threads_system");
 	T_EXPECT_GE_ULLONG((pall->ptinfo.pti_total_system - p_task_info->pti_total_system), 0ULL,
-	                   "PROC_PIDTASKALLINFO returned valid value for pti_total_system");
+	    "PROC_PIDTASKALLINFO returned valid value for pti_total_system");
 #else
 	T_EXPECT_GE_ULLONG(pall->ptinfo.pti_threads_system, 1ULL, "PROC_PIDTASKALLINFO returned valid value for pti_threads_system");
 	T_EXPECT_GT_ULLONG((pall->ptinfo.pti_total_system - p_task_info->pti_total_system), 0ULL,
-	                   "PROC_PIDTASKALLINFO returned valid value for pti_total_system");
+	    "PROC_PIDTASKALLINFO returned valid value for pti_total_system");
 #endif /* ARM */
 
 	T_EXPECT_GE_ULLONG((pall->ptinfo.pti_virtual_size - p_task_info->pti_virtual_size), (unsigned long long)PAGE_SIZE,
-	                   "PROC_PIDTASKALLINFO returned valid value for pti_virtual_size");
+	    "PROC_PIDTASKALLINFO returned valid value for pti_virtual_size");
 	T_EXPECT_GE_ULLONG((pall->ptinfo.pti_resident_size - p_task_info->pti_resident_size), (unsigned long long)PAGE_SIZE,
-	                   "PROC_PIDTASKALLINFO returned valid value for pti_virtual_size");
+	    "PROC_PIDTASKALLINFO returned valid value for pti_virtual_size");
 	T_EXPECT_EQ_INT(pall->ptinfo.pti_policy, POLICY_TIMESHARE, "PROC_PIDTASKALLINFO returned valid value for pti_virtual_size");
 	T_EXPECT_GE_ULLONG(pall->ptinfo.pti_threads_user, 1ULL, "PROC_PIDTASKALLINFO returned valid value for pti_threads_user ");
 	T_EXPECT_GT_ULLONG((pall->ptinfo.pti_total_user - p_task_info->pti_total_user), 0ULL,
-	                   "PROC_PIDTASKALLINFO returned valid value for pti_total_user");
+	    "PROC_PIDTASKALLINFO returned valid value for pti_total_user");
 	T_EXPECT_GE_INT((pall->ptinfo.pti_faults - p_task_info->pti_faults), 1,
-	                "PROC_PIDTASKALLINFO returned valid value for pti_faults");
+	    "PROC_PIDTASKALLINFO returned valid value for pti_faults");
 	T_EXPECT_GE_INT((pall->ptinfo.pti_cow_faults - p_task_info->pti_cow_faults), 1,
-	                "PROC_PIDTASKALLINFO returned valid value for pti_cow_faults");
+	    "PROC_PIDTASKALLINFO returned valid value for pti_cow_faults");
 	T_EXPECT_GE_INT((pall->ptinfo.pti_syscalls_mach - p_task_info->pti_syscalls_mach), 0,
-	                "PROC_PIDTASKALLINFO returned valid value for pti_syscalls_mach");
+	    "PROC_PIDTASKALLINFO returned valid value for pti_syscalls_mach");
 	T_EXPECT_GE_INT((pall->ptinfo.pti_syscalls_unix - p_task_info->pti_syscalls_unix), 2,
-	                "PROC_PIDTASKALLINFO returned valid value for pti_syscalls_unix");
+	    "PROC_PIDTASKALLINFO returned valid value for pti_syscalls_unix");
 	T_EXPECT_EQ_INT((pall->ptinfo.pti_messages_sent - p_task_info->pti_messages_sent), 0,
-	                "PROC_PIDTASKALLINFO returned valid value for pti_messages_sent");
+	    "PROC_PIDTASKALLINFO returned valid value for pti_messages_sent");
 	T_EXPECT_EQ_INT((pall->ptinfo.pti_messages_received - p_task_info->pti_messages_received), 0,
-	                "PROC_PIDTASKALLINFO returned valid value for pti_messages_received");
+	    "PROC_PIDTASKALLINFO returned valid value for pti_messages_received");
 	T_EXPECT_EQ_INT(pall->ptinfo.pti_priority, p_task_info->pti_priority,
-	                "PROC_PIDTASKALLINFO returned valid value for pti_priority");
+	    "PROC_PIDTASKALLINFO returned valid value for pti_priority");
 	T_EXPECT_GE_INT(pall->ptinfo.pti_threadnum, 1, "PROC_PIDTASKALLINFO returned valid value for pti_threadnum");
 	if (pall->ptinfo.pti_threadnum > 1) {
 		T_LOG("WARN: PROC_PIDTASKALLINFO returned threadnum greater than 1");
@@ -1173,18 +1179,18 @@ T_DECL(proc_info_proc_pidtaskallinfo,
 }
 
 T_DECL(proc_info_proc_pidlistthreads,
-       "Test to verify PROC_PIDLISTTHREADS returns valid information about process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDLISTTHREADS returns valid information about process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[1];
 	proc_info_caller(THREAD_ADDR, proc_info, NULL);
 }
 
 T_DECL(proc_info_proc_pidthreadinfo,
-       "Test to verify PROC_PIDTHREADINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDTHREADINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[2];
 	int child_pid = 0;
@@ -1193,9 +1199,9 @@ T_DECL(proc_info_proc_pidthreadinfo,
 	struct proc_threadinfo * pthinfo     = (struct proc_threadinfo *)proc_info[1];
 
 	T_EXPECT_GT_ULLONG((pthinfo->pth_user_time - pthinfo_old->pth_user_time), 0ULL,
-	                   "PROC_PIDTHREADINFO returns valid value for pth_user_time");
+	    "PROC_PIDTHREADINFO returns valid value for pth_user_time");
 	T_EXPECT_GE_ULLONG((pthinfo->pth_system_time - pthinfo_old->pth_system_time), 0ULL,
-	                   "PROC_PIDTHREADINFO returns valid value for pth_system_time");
+	    "PROC_PIDTHREADINFO returns valid value for pth_system_time");
 	/*
 	 * This is the scaled cpu usage percentage, since we are not
 	 * doing a really long CPU bound task, it is (nearly) zero
@@ -1211,9 +1217,9 @@ T_DECL(proc_info_proc_pidthreadinfo,
 	 */
 	T_EXPECT_EQ_INT(pthinfo->pth_sleep_time, 0, "PROC_PIDTHREADINFO returns valid value for pth_sleep_time");
 	T_EXPECT_LE_INT(pthinfo->pth_curpri, (BASEPRI_DEFAULT - CONF_NICE_VAL),
-	                "PROC_PIDTHREADINFO returns valid value for pth_curpri");
+	    "PROC_PIDTHREADINFO returns valid value for pth_curpri");
 	T_EXPECT_EQ_INT(pthinfo->pth_priority, (BASEPRI_DEFAULT - CONF_NICE_VAL),
-	                "PROC_PIDTHREADINFO returns valid value for pth_priority");
+	    "PROC_PIDTHREADINFO returns valid value for pth_priority");
 	T_EXPECT_EQ_INT(pthinfo->pth_maxpriority, MAXPRI_USER, "PROC_PIDTHREADINFO returns valid value for pth_maxpriority");
 	T_EXPECT_EQ_STR(pthinfo->pth_name, CONF_THREAD_NAME, "PROC_PIDTHREADINFO returns valid value for pth_name");
 
@@ -1221,20 +1227,20 @@ T_DECL(proc_info_proc_pidthreadinfo,
 }
 
 T_DECL(proc_info_proc_threadid64info,
-       "Test to verify PROC_PIDTHREADID64INFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDTHREADID64INFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[2];
 	proc_info_caller(PTHINFO | PTHINFO_64, proc_info, NULL);
 	struct proc_threadinfo pthinfo    = *((struct proc_threadinfo *)proc_info[0]);
 	struct proc_threadinfo pthinfo_64 = *((struct proc_threadinfo *)proc_info[1]);
 	T_EXPECT_GE_ULLONG(pthinfo_64.pth_user_time, pthinfo.pth_user_time,
-	                   "PROC_PIDTHREADID64INFO returns valid value for pth_user_time");
+	    "PROC_PIDTHREADID64INFO returns valid value for pth_user_time");
 	T_EXPECT_GE_ULLONG(pthinfo_64.pth_system_time, pthinfo.pth_system_time,
-	                   "PROC_PIDTHREADID64INFO returns valid value for pth_system_time");
+	    "PROC_PIDTHREADID64INFO returns valid value for pth_system_time");
 	T_EXPECT_GE_INT(pthinfo_64.pth_cpu_usage, pthinfo.pth_cpu_usage,
-	                "PROC_PIDTHREADID64INFO returns valid value for pth_cpu_usage");
+	    "PROC_PIDTHREADID64INFO returns valid value for pth_cpu_usage");
 	T_EXPECT_EQ_INT(pthinfo_64.pth_policy, POLICY_TIMESHARE, "PROC_PIDTHREADID64INFO returns valid value for pth_policy");
 	if (!(pthinfo_64.pth_run_state == TH_STATE_WAITING) && !(pthinfo_64.pth_run_state == TH_STATE_RUNNING)) {
 		T_EXPECT_EQ_INT(pthinfo_64.pth_run_state, -1, "PROC_PIDTHREADID64INFO returns valid value for pth_run_state");
@@ -1243,16 +1249,16 @@ T_DECL(proc_info_proc_threadid64info,
 	T_EXPECT_EQ_INT(pthinfo_64.pth_curpri, pthinfo.pth_curpri, "PROC_PIDTHREADID64INFO returns valid value for pth_curpri");
 	T_EXPECT_EQ_INT(pthinfo_64.pth_priority, pthinfo.pth_priority, "PROC_PIDTHREADID64INFO returns valid value for pth_priority");
 	T_EXPECT_EQ_INT(pthinfo_64.pth_maxpriority, pthinfo.pth_maxpriority,
-	                "PROC_PIDTHREADID64INFO returns valid value for pth_maxpriority");
+	    "PROC_PIDTHREADID64INFO returns valid value for pth_maxpriority");
 	T_EXPECT_EQ_STR(pthinfo_64.pth_name, CONF_THREAD_NAME, "PROC_PIDTHREADID64INFO returns valid value for pth_name");
 
 	free_proc_info(proc_info, 2);
 }
 
 T_DECL(proc_info_proc_pidthreadpathinfo,
-       "Test to verify PROC_PIDTHREADPATHINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDTHREADPATHINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[2];
 	proc_info_caller(PTHINFO | PINFO_PATH, proc_info, NULL);
@@ -1260,11 +1266,11 @@ T_DECL(proc_info_proc_pidthreadpathinfo,
 	struct proc_threadwithpathinfo pinfo_path = *((struct proc_threadwithpathinfo *)proc_info[1]);
 
 	T_EXPECT_GE_ULLONG(pinfo_path.pt.pth_user_time, pthinfo.pth_user_time,
-	                   "PROC_PIDTHREADPATHINFO returns valid value for pth_user_time");
+	    "PROC_PIDTHREADPATHINFO returns valid value for pth_user_time");
 	T_EXPECT_GE_ULLONG(pinfo_path.pt.pth_system_time, pthinfo.pth_system_time,
-	                   "PROC_PIDTHREADPATHINFO returns valid value for pth_system_time");
+	    "PROC_PIDTHREADPATHINFO returns valid value for pth_system_time");
 	T_EXPECT_GE_INT(pinfo_path.pt.pth_cpu_usage, pthinfo.pth_cpu_usage,
-	                "PROC_PIDTHREADPATHINFO returns valid value for pth_cpu_usage");
+	    "PROC_PIDTHREADPATHINFO returns valid value for pth_cpu_usage");
 	T_EXPECT_EQ_INT(pinfo_path.pt.pth_policy, POLICY_TIMESHARE, "PROC_PIDTHREADPATHINFO returns valid value for pth_policy");
 	if (!(pinfo_path.pt.pth_run_state == TH_STATE_WAITING) && !(pinfo_path.pt.pth_run_state == TH_STATE_RUNNING)) {
 		T_EXPECT_EQ_INT(pinfo_path.pt.pth_run_state, -1, "PROC_PIDTHREADPATHINFO returns valid value for pth_run_state");
@@ -1272,9 +1278,9 @@ T_DECL(proc_info_proc_pidthreadpathinfo,
 	T_EXPECT_EQ_INT(pinfo_path.pt.pth_sleep_time, 0, "PROC_PIDTHREADPATHINFO returns valid value for pth_sleep_time");
 	T_EXPECT_EQ_INT(pinfo_path.pt.pth_curpri, pthinfo.pth_curpri, "PROC_PIDTHREADPATHINFO returns valid value for pth_curpri");
 	T_EXPECT_EQ_INT(pinfo_path.pt.pth_priority, pthinfo.pth_priority,
-	                "PROC_PIDTHREADPATHINFO returns valid value for pth_priority");
+	    "PROC_PIDTHREADPATHINFO returns valid value for pth_priority");
 	T_EXPECT_EQ_INT(pinfo_path.pt.pth_maxpriority, pthinfo.pth_maxpriority,
-	                "PROC_PIDTHREADPATHINFO returns valid value for pth_maxpriority");
+	    "PROC_PIDTHREADPATHINFO returns valid value for pth_maxpriority");
 	T_EXPECT_EQ_STR(pinfo_path.pt.pth_name, CONF_THREAD_NAME, "PROC_PIDTHREADPATHINFO returns valid value for pth_name");
 	T_EXPECT_EQ_INT(pinfo_path.pvip.vip_vi.vi_type, VNON, "PROC_PIDTHREADPATHINFO valid vnode information");
 
@@ -1282,9 +1288,9 @@ T_DECL(proc_info_proc_pidthreadpathinfo,
 }
 
 T_DECL(proc_info_proc_pidarchinfo,
-       "Test to verify PROC_PIDARCHINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDARCHINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[1];
 	proc_info_caller(PAI, proc_info, NULL);
@@ -1295,7 +1301,7 @@ T_DECL(proc_info_proc_pidarchinfo,
 		T_EXPECT_EQ_INT(pai.p_cputype, CPU_TYPE_ARM, "PROC_PIDARCHINFO returned valid value for p_cputype");
 	}
 	T_EXPECT_EQ_INT((pai.p_cpusubtype & CPU_SUBTYPE_ARM_ALL), CPU_SUBTYPE_ARM_ALL,
-	                "PROC_PIDARCHINFO returned valid value for p_cpusubtype");
+	    "PROC_PIDARCHINFO returned valid value for p_cpusubtype");
 #else
 	if (!((pai.p_cputype & CPU_TYPE_X86) == CPU_TYPE_X86) && !((pai.p_cputype & CPU_TYPE_X86_64) == CPU_TYPE_X86_64)) {
 		T_EXPECT_EQ_INT(pai.p_cputype, CPU_TYPE_X86, "PROC_PIDARCHINFO returned valid value for p_cputype");
@@ -1305,9 +1311,9 @@ T_DECL(proc_info_proc_pidarchinfo,
 }
 
 T_DECL(proc_info_proc_pidregioninfo,
-       "Test to verify PROC_PIDREGIONINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDREGIONINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[3];
 	proc_info_caller(PREGINFO, proc_info, NULL);
@@ -1321,28 +1327,28 @@ T_DECL(proc_info_proc_pidregioninfo,
 
 	T_EXPECT_EQ_ULLONG(preginfo.pri_offset, (unsigned long long)PAGE_SIZE, "PROC_PIDREGIONINFO returns valid value for pri_offset");
 	T_EXPECT_EQ_UINT((preginfo.pri_protection ^ (VM_PROT_READ | VM_PROT_WRITE)), 0U,
-	                 "PROC_PIDREGIONINFO returns valid value for pri_protection, expected read/write only");
+	    "PROC_PIDREGIONINFO returns valid value for pri_protection, expected read/write only");
 	T_EXPECT_EQ_UINT((preginfo.pri_max_protection & (VM_PROT_READ | VM_PROT_WRITE)), (unsigned int)(VM_PROT_READ | VM_PROT_WRITE),
-	                 "PROC_PIDREGIONINFO returns valid value for pri_max_protection");
+	    "PROC_PIDREGIONINFO returns valid value for pri_max_protection");
 	T_EXPECT_EQ_UINT((preginfo.pri_inheritance ^ VM_INHERIT_COPY), 0U,
-	                 "PROC_PIDREGIONINFO returns valid value for pri_inheritance");
+	    "PROC_PIDREGIONINFO returns valid value for pri_inheritance");
 	T_EXPECT_EQ_UINT((preginfo.pri_behavior ^ VM_BEHAVIOR_DEFAULT), 0U, "PROC_PIDREGIONINFO returns valid value for pri_behavior");
 	T_EXPECT_EQ_UINT(preginfo.pri_user_wired_count, 0U, "PROC_PIDREGIONINFO returns valid value for pri_user_wired_count");
 	T_EXPECT_EQ_UINT(preginfo.pri_user_tag, 0U, "PROC_PIDREGIONINFO returns valid value for pri_user_tag");
 	T_EXPECT_NE_UINT((preginfo.pri_flags ^ (PROC_REGION_SUBMAP | PROC_REGION_SHARED)), 0U,
-	                 "PROC_PIDREGIONINFO returns valid value for pri_flags");
+	    "PROC_PIDREGIONINFO returns valid value for pri_flags");
 	T_EXPECT_EQ_UINT(preginfo.pri_pages_resident, 0U, "PROC_PIDREGIONINFO returns valid value for pri_pages_resident");
 	T_EXPECT_EQ_UINT(preginfo.pri_pages_shared_now_private, 0U,
-	                 "PROC_PIDREGIONINFO returns valid value for pri_pages_shared_now_private");
+	    "PROC_PIDREGIONINFO returns valid value for pri_pages_shared_now_private");
 	T_EXPECT_EQ_UINT(preginfo.pri_pages_swapped_out, 0U, "PROC_PIDREGIONINFO returns valid value for pri_pages_swapped_out");
 	T_EXPECT_EQ_UINT(preginfo.pri_pages_dirtied, 0U, "PROC_PIDREGIONINFO returns valid value for pri_pages_dirtied");
 	T_EXPECT_EQ_UINT(preginfo.pri_ref_count, 2U, "PROC_PIDREGIONINFO returns valid value for pri_ref_count");
 	T_EXPECT_EQ_UINT(preginfo.pri_shadow_depth, 1U, "PROC_PIDREGIONINFO returns valid value for pri_shadow_depth");
 	T_EXPECT_EQ_UINT(preginfo.pri_share_mode, (unsigned int)SM_COW, "PROC_PIDREGIONINFO returns valid value for pri_share_mode");
 	T_EXPECT_EQ_UINT(preginfo.pri_private_pages_resident, 0U,
-	                 "PROC_PIDREGIONINFO returns valid value for pri_private_pages_resident");
+	    "PROC_PIDREGIONINFO returns valid value for pri_private_pages_resident");
 	T_EXPECT_GE_UINT(preginfo.pri_shared_pages_resident, 0U,
-	                 "PROC_PIDREGIONINFO returns valid value for pri_shared_pages_resident");
+	    "PROC_PIDREGIONINFO returns valid value for pri_shared_pages_resident");
 	T_EXPECT_EQ_ULLONG(preginfo.pri_address, (uint64_t)map_tmp, "PROC_PIDREGIONINFO returns valid value for pri_addr");
 	T_EXPECT_NE_UINT(preginfo.pri_obj_id, 0U, "PROC_PIDREGIONINFO returns valid value for pri_obj_id");
 	T_EXPECT_EQ_ULLONG(preginfo.pri_size, (unsigned long long)map_tmp_sz, "PROC_PIDREGIONINFO returns valid value for pri_size");
@@ -1356,9 +1362,9 @@ T_DECL(proc_info_proc_pidregioninfo,
 }
 
 T_DECL(proc_info_proc_pidregionpathinfo,
-       "Test to verify PROC_PIDREGIONPATHINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_INSTALLEDUSEROS))
+    "Test to verify PROC_PIDREGIONPATHINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_INSTALLEDUSEROS))
 {
 	void * proc_info[3];
 	proc_info_caller(PREGINFO_PATH, proc_info, NULL);
@@ -1366,75 +1372,75 @@ T_DECL(proc_info_proc_pidregionpathinfo,
 	struct proc_regionwithpathinfo preginfo_path = *((struct proc_regionwithpathinfo *)proc_info[0]);
 	/*
 	 *	map_tmp isn't a struct like the rest of our ret_structs, but we sneak it back because we need it
-	     */
+	 */
 	void *map_tmp = proc_info[1];
 	vm_map_size_t map_tmp_sz = (vm_map_size_t)(uintptr_t)proc_info[2];
 
 	T_EXPECT_EQ_ULLONG(preginfo_path.prp_prinfo.pri_offset, (uint64_t)PAGE_SIZE,
-	                   "PROC_PIDREGIONPATHINFO returns valid value for pri_offset");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_offset");
 	T_EXPECT_EQ_UINT((preginfo_path.prp_prinfo.pri_protection ^ (VM_PROT_READ | VM_PROT_WRITE)), 0U,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_protection, expected read/write only");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_protection, expected read/write only");
 	T_EXPECT_EQ_UINT((preginfo_path.prp_prinfo.pri_max_protection & (VM_PROT_READ | VM_PROT_WRITE)),
-	                 (unsigned int)(VM_PROT_READ | VM_PROT_WRITE),
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_max_protection");
+	    (unsigned int)(VM_PROT_READ | VM_PROT_WRITE),
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_max_protection");
 	T_EXPECT_EQ_UINT((preginfo_path.prp_prinfo.pri_inheritance ^ VM_INHERIT_COPY), 0U,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_inheritance");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_inheritance");
 	T_EXPECT_EQ_UINT((preginfo_path.prp_prinfo.pri_behavior ^ VM_BEHAVIOR_DEFAULT), 0U,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_behavior");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_behavior");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_user_wired_count, 0U,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_user_wired_count");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_user_wired_count");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_user_tag, 0U, "PROC_PIDREGIONPATHINFO returns valid value for pri_user_tag");
 	T_EXPECT_NE_UINT((preginfo_path.prp_prinfo.pri_flags ^ (PROC_REGION_SUBMAP | PROC_REGION_SHARED)), 0U,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_flags");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_flags");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_pages_resident, 0U,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_pages_resident");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_pages_resident");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_pages_shared_now_private, 0U,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_pages_shared_now_private");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_pages_shared_now_private");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_pages_swapped_out, 0U,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_pages_swapped_out");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_pages_swapped_out");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_pages_dirtied, 0U,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_pages_dirtied");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_pages_dirtied");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_ref_count, 2U, "PROC_PIDREGIONPATHINFO returns valid value for pri_ref_count");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_shadow_depth, 1U,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_shadow_depth");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_shadow_depth");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_share_mode, (unsigned int)SM_COW,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_share_mode");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_share_mode");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_private_pages_resident, 0U,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_private_pages_resident");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_private_pages_resident");
 	T_EXPECT_GE_UINT(preginfo_path.prp_prinfo.pri_shared_pages_resident, 0U,
-	                 "PROC_PIDREGIONPATHINFO returns valid value for pri_shared_pages_resident");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_shared_pages_resident");
 	T_EXPECT_EQ_ULLONG(preginfo_path.prp_prinfo.pri_address, (uint64_t)map_tmp,
-	                   "PROC_PIDREGIONPATHINFO returns valid value for pri_addr");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_addr");
 	T_EXPECT_NE_UINT(preginfo_path.prp_prinfo.pri_obj_id, 0U, "PROC_PIDREGIONPATHINFO returns valid value for pri_obj_id");
 	T_EXPECT_EQ_ULLONG(preginfo_path.prp_prinfo.pri_size, (uint64_t)map_tmp_sz,
-	                   "PROC_PIDREGIONPATHINFO returns valid value for pri_size");
+	    "PROC_PIDREGIONPATHINFO returns valid value for pri_size");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_depth, 0U, "PROC_PIDREGIONPATHINFO returns valid value for pri_depth");
 	T_EXPECT_EQ_INT(preginfo_path.prp_vip.vip_vi.vi_type, VREG, "PROC_PIDREGIONPATHINFO returns valid value for vi_type");
 	T_EXPECT_EQ_INT(preginfo_path.prp_vip.vip_vi.vi_pad, 0, "PROC_PIDREGIONPATHINFO returns valid value for vi_pad");
 	T_EXPECT_NE_INT(preginfo_path.prp_vip.vip_vi.vi_fsid.val[0], 0,
-	                "PROC_PIDREGIONPATHINFO returns valid value for vi_fsid.val[0]");
+	    "PROC_PIDREGIONPATHINFO returns valid value for vi_fsid.val[0]");
 	T_EXPECT_NE_INT(preginfo_path.prp_vip.vip_vi.vi_fsid.val[1], 0,
-	                "PROC_PIDREGIONPATHINFO returns valid value for vi_fsid.val[1]");
+	    "PROC_PIDREGIONPATHINFO returns valid value for vi_fsid.val[1]");
 	T_EXPECT_NE_PTR((void *)(strcasestr(preginfo_path.prp_vip.vip_path, CONF_TMP_FILE_PFX)), NULL,
-	                "PROC_PIDREGIONPATHINFO returns valid value for vi_path");
+	    "PROC_PIDREGIONPATHINFO returns valid value for vi_path");
 	/*
 	 * Basic sanity checks for vnode stat returned by the API
 	 */
 	T_EXPECT_NE_UINT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_dev, 0U, "PROC_PIDREGIONPATHINFO returns valid value for vst_dev");
 	T_EXPECT_EQ_INT(((preginfo_path.prp_vip.vip_vi.vi_stat.vst_mode & S_IFMT) ^ S_IFREG), 0,
-	                "PROC_PIDREGIONPATHINFO returns valid value for vst_mode");
+	    "PROC_PIDREGIONPATHINFO returns valid value for vst_mode");
 	T_EXPECT_EQ_USHORT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_nlink, (unsigned short)0, /* the file was unlink()'d! */
-	                   "PROC_PIDREGIONPATHINFO returns valid value for vst_nlink");
+	    "PROC_PIDREGIONPATHINFO returns valid value for vst_nlink");
 	T_EXPECT_NE_ULLONG(preginfo_path.prp_vip.vip_vi.vi_stat.vst_ino, 0ULL,
-	                   "PROC_PIDREGIONPATHINFO returns valid value for vst_ino");
+	    "PROC_PIDREGIONPATHINFO returns valid value for vst_ino");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_uid, 0U, "PROC_PIDREGIONPATHINFO returns valid value for vst_uid");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_gid, 0U, "PROC_PIDREGIONPATHINFO returns valid value for vst_gid");
 	T_EXPECT_GE_LLONG(preginfo_path.prp_vip.vip_vi.vi_stat.vst_size, (off_t)CONF_BLK_SIZE,
-	                  "PROC_PIDREGIONPATHINFO returns valid value for vst_size");
+	    "PROC_PIDREGIONPATHINFO returns valid value for vst_size");
 	T_EXPECT_GE_LLONG(preginfo_path.prp_vip.vip_vi.vi_stat.vst_blocks, 1LL,
-	                  "PROC_PIDREGIONPATHINFO returns valid value for vst_blocks");
+	    "PROC_PIDREGIONPATHINFO returns valid value for vst_blocks");
 	T_EXPECT_GE_INT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_blksize, CONF_BLK_SIZE,
-	                "PROC_PIDREGIONPATHINFO returns valid value for vst_blksize");
+	    "PROC_PIDREGIONPATHINFO returns valid value for vst_blksize");
 
 	int ret = 0;
 	ret     = munmap(map_tmp, (size_t)map_tmp_sz);
@@ -1444,9 +1450,9 @@ T_DECL(proc_info_proc_pidregionpathinfo,
 }
 
 T_DECL(proc_info_proc_pidregionpathinfo2,
-       "Test to verify PROC_PIDREGIONPATHINFO2 returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_INSTALLEDUSEROS))
+    "Test to verify PROC_PIDREGIONPATHINFO2 returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_INSTALLEDUSEROS))
 {
 	void * proc_info[3];
 	proc_info_caller(PREGINFO_PATH_2, proc_info, NULL);
@@ -1454,80 +1460,80 @@ T_DECL(proc_info_proc_pidregionpathinfo2,
 	struct proc_regionwithpathinfo preginfo_path = *((struct proc_regionwithpathinfo *)proc_info[0]);
 	/*
 	 *	map_tmp isn't a struct like the rest of our ret_structs, but we sneak it back because we need it
-	     */
+	 */
 	void *map_tmp = proc_info[1];
 	vm_map_size_t map_tmp_sz = (vm_map_size_t)(uintptr_t)proc_info[2];
 
 	T_EXPECT_EQ_ULLONG(preginfo_path.prp_prinfo.pri_offset, (uint64_t)PAGE_SIZE,
-	                   "PROC_PIDREGIONPATHINFO2 returns valid value for pri_offset");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_offset");
 	T_EXPECT_EQ_UINT((preginfo_path.prp_prinfo.pri_protection ^ (VM_PROT_READ | VM_PROT_WRITE)), 0U,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_protection, expected read/write only");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_protection, expected read/write only");
 	T_EXPECT_EQ_UINT((preginfo_path.prp_prinfo.pri_max_protection & (VM_PROT_READ | VM_PROT_WRITE)),
-	                 (unsigned int)(VM_PROT_READ | VM_PROT_WRITE),
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_max_protection");
+	    (unsigned int)(VM_PROT_READ | VM_PROT_WRITE),
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_max_protection");
 	T_EXPECT_EQ_UINT((preginfo_path.prp_prinfo.pri_inheritance ^ VM_INHERIT_COPY), 0U,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_inheritance");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_inheritance");
 	T_EXPECT_EQ_UINT((preginfo_path.prp_prinfo.pri_behavior ^ VM_BEHAVIOR_DEFAULT), 0U,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_behavior");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_behavior");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_user_wired_count, 0U,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_user_wired_count");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_user_wired_count");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_user_tag, 0U, "PROC_PIDREGIONPATHINFO2 returns valid value for pri_user_tag");
 	T_EXPECT_NE_UINT((preginfo_path.prp_prinfo.pri_flags ^ (PROC_REGION_SUBMAP | PROC_REGION_SHARED)), 0U,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_flags");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_flags");
 	/*
 	 * Following values are hard-coded to be zero in source
 	 */
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_pages_resident, 0U,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_pages_resident");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_pages_resident");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_pages_shared_now_private, 0U,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_pages_shared_now_private");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_pages_shared_now_private");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_pages_swapped_out, 0U,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_pages_swapped_out");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_pages_swapped_out");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_pages_dirtied, 0U,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_pages_dirtied");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_pages_dirtied");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_ref_count, 0U, "PROC_PIDREGIONPATHINFO2 returns valid value for pri_ref_count");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_shadow_depth, 0U,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_shadow_depth");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_shadow_depth");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_share_mode, 0U, "PROC_PIDREGIONPATHINFO2 returns valid value for pri_share_mode");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_private_pages_resident, 0U,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_private_pages_resident");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_private_pages_resident");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_shared_pages_resident, 0U,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for pri_shared_pages_resident");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_shared_pages_resident");
 	T_EXPECT_EQ_ULLONG(preginfo_path.prp_prinfo.pri_address, (uint64_t)map_tmp,
-	                   "PROC_PIDREGIONPATHINFO2 returns valid value for pri_addr");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_addr");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_obj_id, 0U, "PROC_PIDREGIONPATHINFO2 returns valid value for pri_obj_id");
 	T_EXPECT_EQ_ULLONG(preginfo_path.prp_prinfo.pri_size, (unsigned long long)map_tmp_sz,
-	                   "PROC_PIDREGIONPATHINFO2 returns valid value for pri_size");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for pri_size");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_depth, 0U, "PROC_PIDREGIONPATHINFO2 returns valid value for pri_depth");
 
 	T_EXPECT_EQ_INT(preginfo_path.prp_vip.vip_vi.vi_type, VREG, "PROC_PIDREGIONPATHINFO2 returns valid value for vi_type");
 	T_EXPECT_EQ_INT(preginfo_path.prp_vip.vip_vi.vi_pad, 0, "PROC_PIDREGIONPATHINFO2 returns valid value for vi_pad");
 	T_EXPECT_NE_INT(preginfo_path.prp_vip.vip_vi.vi_fsid.val[0], 0,
-	                "PROC_PIDREGIONPATHINFO2 returns valid value for vi_fsid.val[0]:%d",
-	                preginfo_path.prp_vip.vip_vi.vi_fsid.val[0]);
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for vi_fsid.val[0]:%d",
+	    preginfo_path.prp_vip.vip_vi.vi_fsid.val[0]);
 	T_EXPECT_NE_INT(preginfo_path.prp_vip.vip_vi.vi_fsid.val[1], 0,
-	                "PROC_PIDREGIONPATHINFO2 returns valid value for vi_fsid.val[1]:%d",
-	                preginfo_path.prp_vip.vip_vi.vi_fsid.val[1]);
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for vi_fsid.val[1]:%d",
+	    preginfo_path.prp_vip.vip_vi.vi_fsid.val[1]);
 	T_EXPECT_NE_PTR((void *)(strcasestr(preginfo_path.prp_vip.vip_path, CONF_TMP_FILE_PFX)), NULL,
-	                "PROC_PIDREGIONPATHINFO2 returns valid value for vi_path");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for vi_path");
 	/*
 	 * Basic sanity checks for vnode stat returned by the API
 	 */
 	T_EXPECT_NE_UINT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_dev, 0U, "PROC_PIDREGIONPATHINFO2 returns valid value for vst_dev");
 	T_EXPECT_EQ_UINT(((preginfo_path.prp_vip.vip_vi.vi_stat.vst_mode & S_IFMT) ^ S_IFREG), 0,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for vst_mode");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for vst_mode");
 	T_EXPECT_EQ_USHORT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_nlink, (unsigned short)0, /* the file was unlink()'d! */
-	                   "PROC_PIDREGIONPATHINFO2 returns valid value for vst_nlink");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for vst_nlink");
 	T_EXPECT_NE_ULLONG(preginfo_path.prp_vip.vip_vi.vi_stat.vst_ino, 0ULL,
-	                   "PROC_PIDREGIONPATHINFO2 returns valid value for vst_ino");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for vst_ino");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_uid, 0U, "PROC_PIDREGIONPATHINFO2 returns valid value for vst_uid");
 	T_EXPECT_EQ_UINT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_gid, 0U, "PROC_PIDREGIONPATHINFO2 returns valid value for vst_gid");
 	T_EXPECT_GE_LLONG(preginfo_path.prp_vip.vip_vi.vi_stat.vst_size, (off_t)CONF_BLK_SIZE,
-	                  "PROC_PIDREGIONPATHINFO2 returns valid value for vst_size");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for vst_size");
 	T_EXPECT_GE_LLONG(preginfo_path.prp_vip.vip_vi.vi_stat.vst_blocks, 1LL,
-	                  "PROC_PIDREGIONPATHINFO2 returns valid value for vst_blocks");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for vst_blocks");
 	T_EXPECT_GE_UINT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_blksize, CONF_BLK_SIZE,
-	                 "PROC_PIDREGIONPATHINFO2 returns valid value for vst_blksize");
+	    "PROC_PIDREGIONPATHINFO2 returns valid value for vst_blksize");
 
 	int ret = 0;
 	ret     = munmap(map_tmp, (size_t)map_tmp_sz);
@@ -1537,86 +1543,22 @@ T_DECL(proc_info_proc_pidregionpathinfo2,
 }
 
 T_DECL(proc_info_proc_pidregionpathinfo3,
-       "Test to verify PROC_PIDREGIONPATHINFO3 returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_INSTALLEDUSEROS))
+    "Test to verify PROC_PIDREGIONPATHINFO3 returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_INSTALLEDUSEROS))
 {
-	void * proc_info[3];
+	void * proc_info[5];
 	proc_info_caller(PREGINFO_PATH_3, proc_info, NULL);
 
 	struct proc_regionwithpathinfo preginfo_path = *((struct proc_regionwithpathinfo *)proc_info[0]);
 	void *map_tmp = proc_info[1];
 	vm_map_size_t map_tmp_sz = (vm_map_size_t)(uintptr_t)proc_info[2];
 
-	T_EXPECT_GE_ULLONG(preginfo_path.prp_prinfo.pri_offset, (uint64_t)PAGE_SIZE,
-	                   "PROC_PIDREGIONPATHINFO3 returns valid value for pri_offset");
-	T_EXPECT_NE_UINT((preginfo_path.prp_prinfo.pri_protection ^ (VM_PROT_WRITE | VM_PROT_EXECUTE)), 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_protection");
-#if defined(__arm__) || defined(__arm64__)
-	T_EXPECT_GT_UINT(preginfo_path.prp_prinfo.pri_max_protection, 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_max_protection");
-#else
-	T_EXPECT_EQ_UINT((preginfo_path.prp_prinfo.pri_max_protection ^ VM_PROT_ALL), 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_max_protection");
-#endif
-	T_EXPECT_EQ_UINT((preginfo_path.prp_prinfo.pri_inheritance ^ VM_INHERIT_COPY), 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_inheritance");
-	T_EXPECT_EQ_UINT((preginfo_path.prp_prinfo.pri_behavior ^ VM_BEHAVIOR_DEFAULT), 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_behavior");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_user_wired_count, 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_user_wired_count");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_user_tag, 0U, "PROC_PIDREGIONPATHINFO3 returns valid value for pri_user_tag");
-	T_EXPECT_NE_UINT((preginfo_path.prp_prinfo.pri_flags ^ (PROC_REGION_SUBMAP | PROC_REGION_SHARED)), 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_flags");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_pages_resident, 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_pages_resident");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_pages_shared_now_private, 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_pages_shared_now_private");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_pages_swapped_out, 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_pages_swapped_out");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_pages_dirtied, 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_pages_dirtied");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_ref_count, 0U, "PROC_PIDREGIONPATHINFO3 returns valid value for pri_ref_count");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_shadow_depth, 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_shadow_depth");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_share_mode, 0U, "PROC_PIDREGIONPATHINFO3 returns valid value for pri_share_mode");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_private_pages_resident, 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_private_pages_resident");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_shared_pages_resident, 0U,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for pri_shared_pages_resident");
-	T_EXPECT_NE_ULLONG(preginfo_path.prp_prinfo.pri_address, 0ULL, "PROC_PIDREGIONPATHINFO3 returns valid value for pri_addr");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_obj_id, 0U, "PROC_PIDREGIONPATHINFO3 returns valid value for pri_obj_id");
-	T_EXPECT_GE_ULLONG(preginfo_path.prp_prinfo.pri_size, (uint64_t)map_tmp_sz,
-	                   "PROC_PIDREGIONPATHINFO3 returns valid value for pri_size");
-	T_EXPECT_EQ_UINT(preginfo_path.prp_prinfo.pri_depth, 0U, "PROC_PIDREGIONPATHINFO3 returns valid value for pri_depth");
-
-	T_EXPECT_EQ_INT(preginfo_path.prp_vip.vip_vi.vi_type, VREG, "PROC_PIDREGIONPATHINFO3 returns valid value for vi_type");
-	T_EXPECT_EQ_INT(preginfo_path.prp_vip.vip_vi.vi_pad, 0, "PROC_PIDREGIONPATHINFO3 returns valid value for vi_pad");
-	T_EXPECT_NE_INT(preginfo_path.prp_vip.vip_vi.vi_fsid.val[0], 0,
-	                "PROC_PIDREGIONPATHINFO3 returns valid value for vi_fsid.val[0]");
-	T_EXPECT_NE_INT(preginfo_path.prp_vip.vip_vi.vi_fsid.val[1], 0,
-	                "PROC_PIDREGIONPATHINFO3 returns valid value for vi_fsid.val[1]");
-	/*
-	 * Basic sanity checks for vnode stat returned by the API
-	 */
-	T_EXPECT_NE_UINT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_dev, 0U, "PROC_PIDREGIONPATHINFO3 returns valid value for vst_dev");
-	T_EXPECT_EQ_UINT(((preginfo_path.prp_vip.vip_vi.vi_stat.vst_mode & S_IFMT) ^ S_IFREG), 0,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for vst_mode");
-	T_EXPECT_EQ_USHORT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_nlink, (unsigned short)1, /* the file was unlink()'d _after_ calling proc_info */
-	                   "PROC_PIDREGIONPATHINFO3 returns valid value for vst_nlink");
-	T_EXPECT_NE_ULLONG(preginfo_path.prp_vip.vip_vi.vi_stat.vst_ino, 0ULL,
-	                   "PROC_PIDREGIONPATHINFO3 returns valid value for vst_ino");
-	/*
-	 * No way to confirm actual ownership or binary. Just log the value
-	 */
-	T_EXPECT_GE_UINT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_uid, 0U, "PROC_PIDREGIONPATHINFO3 returns valid value for vst_uid");
-	T_EXPECT_GE_UINT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_gid, 0U, "PROC_PIDREGIONPATHINFO3 returns valid value for vst_gid");
-	T_EXPECT_GE_LLONG(preginfo_path.prp_vip.vip_vi.vi_stat.vst_size, (off_t)CONF_BLK_SIZE,
-	                  "PROC_PIDREGIONPATHINFO3 returns valid value for vst_size");
-	T_EXPECT_GE_LLONG(preginfo_path.prp_vip.vip_vi.vi_stat.vst_blocks, 1LL,
-	                  "PROC_PIDREGIONPATHINFO3 returns valid value for vst_blocks");
-	T_EXPECT_GE_UINT(preginfo_path.prp_vip.vip_vi.vi_stat.vst_blksize, CONF_BLK_SIZE,
-	                 "PROC_PIDREGIONPATHINFO3 returns valid value for vst_blksize");
+	/* The *info3 version of this call returns any open file that lives on the same file system */
+	T_EXPECT_EQ_INT(preginfo_path.prp_vip.vip_vi.vi_fsid.val[0], (int)(uintptr_t)proc_info[3],
+	    "PROC_PIDREGIONPATHINFO3 returns valid value for vi_fsid.val[0]");
+	T_EXPECT_EQ_INT(preginfo_path.prp_vip.vip_vi.vi_fsid.val[1], (int)(uintptr_t)proc_info[4],
+	    "PROC_PIDREGIONPATHINFO3 returns valid value for vi_fsid.val[1]");
 
 	int ret = 0;
 	ret     = munmap(map_tmp, (size_t)map_tmp_sz);
@@ -1626,9 +1568,9 @@ T_DECL(proc_info_proc_pidregionpathinfo3,
 }
 
 T_DECL(proc_info_proc_pidvnodepathinfo,
-       "Test to verify PROC_PIDVNODEPATHINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDVNODEPATHINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	void * proc_info[1];
 	proc_info_caller(PVNINFO, proc_info, NULL);
@@ -1643,16 +1585,16 @@ T_DECL(proc_info_proc_pidvnodepathinfo,
 	 */
 	T_EXPECT_NE_UINT(pvninfo.pvi_cdir.vip_vi.vi_stat.vst_dev, 0U, "PROC_PIDVNODEPATHINFO returns valid value for vst_dev");
 	T_EXPECT_EQ_INT(((pvninfo.pvi_cdir.vip_vi.vi_stat.vst_mode & S_IFMT) ^ S_IFDIR), 0,
-	                "PROC_PIDVNODEPATHINFO returns valid value for vst_mode");
+	    "PROC_PIDVNODEPATHINFO returns valid value for vst_mode");
 	T_EXPECT_GE_USHORT(pvninfo.pvi_cdir.vip_vi.vi_stat.vst_nlink, (unsigned short)2,
-	                   "PROC_PIDVNODEPATHINFO returns valid value for vst_nlink");
+	    "PROC_PIDVNODEPATHINFO returns valid value for vst_nlink");
 	T_EXPECT_NE_ULLONG(pvninfo.pvi_cdir.vip_vi.vi_stat.vst_ino, 0ULL, "PROC_PIDVNODEPATHINFO returns valid value for vst_ino");
 	T_EXPECT_GE_UINT(pvninfo.pvi_cdir.vip_vi.vi_stat.vst_uid, 0U, "PROC_PIDVNODEPATHINFO returns valid value for vst_uid");
 	T_EXPECT_GE_UINT(pvninfo.pvi_cdir.vip_vi.vi_stat.vst_gid, 0U, "PROC_PIDVNODEPATHINFO returns valid value for vst_gid");
 	T_EXPECT_GT_LLONG(pvninfo.pvi_cdir.vip_vi.vi_stat.vst_size, 0LL, "PROC_PIDVNODEPATHINFO returns valid value for vst_size");
 	T_EXPECT_GE_LLONG(pvninfo.pvi_cdir.vip_vi.vi_stat.vst_blocks, 0LL, "PROC_PIDVNODEPATHINFO returns valid value for vst_blocks");
 	T_EXPECT_GE_UINT(pvninfo.pvi_cdir.vip_vi.vi_stat.vst_blksize, CONF_BLK_SIZE,
-	                 "PROC_PIDVNODEPATHINFO returns valid value for vst_blksize");
+	    "PROC_PIDVNODEPATHINFO returns valid value for vst_blksize");
 
 	free_proc_info(proc_info, 1);
 }
@@ -1662,9 +1604,9 @@ T_DECL(proc_info_proc_pidvnodepathinfo,
  */
 
 T_DECL(proc_info_pidinfo_proc_pidlistfds,
-       "proc_info API tests to verify PROC_INFO_CALL_PIDINFO/PROC_PIDLISTFDS",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "proc_info API tests to verify PROC_INFO_CALL_PIDINFO/PROC_PIDLISTFDS",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	int retval;
 	int orig_nfiles              = 0;
@@ -1676,10 +1618,10 @@ T_DECL(proc_info_pidinfo_proc_pidlistfds,
 	T_EXPECT_GE_INT(orig_nfiles, CONF_OPN_FILE_COUNT, "The number of open files is lower than expected.");
 
 	/*
-	  * Allocate a buffer of expected size + 1 to ensure that
-	  * the API still returns expected size
-	  * i.e. 3 + 1 = 4 open fds
-	  */
+	 * Allocate a buffer of expected size + 1 to ensure that
+	 * the API still returns expected size
+	 * i.e. 3 + 1 = 4 open fds
+	 */
 	T_LOG("Test to verify PROC_PIDLISTFDS returns valid fd information");
 	fd_info = malloc(sizeof(*fd_info) * 5);
 	tmp_fd = CONF_TMP_FILE_OPEN(NULL);
@@ -1688,7 +1630,7 @@ T_DECL(proc_info_pidinfo_proc_pidlistfds,
 	T_EXPECT_POSIX_SUCCESS(tmp_fd, "open() for PROC_PIDLISTFDS");
 
 	retval = __proc_info(PROC_INFO_CALL_PIDINFO, getpid(), PROC_PIDLISTFDS, (uint32_t)0, (user_addr_t)fd_info,
-	                     (uint32_t)(sizeof(*fd_info) * 5));
+	    (uint32_t)(sizeof(*fd_info) * 5));
 	retval = retval / (int)sizeof(struct proc_fdinfo);
 
 	close(tmp_fd);
@@ -1711,15 +1653,15 @@ T_DECL(proc_info_pidinfo_proc_pidlistfds,
 }
 
 T_DECL(proc_info_proc_pidpathinfo,
-       "Test to verify PROC_PIDPATHINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDPATHINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	char * pid_path = NULL;
 	pid_path        = malloc(sizeof(char) * PROC_PIDPATHINFO_MAXSIZE);
 	T_EXPECT_NOTNULL(pid_path, "malloc for PROC_PIDPATHINFO");
 	int retval = __proc_info(PROC_INFO_CALL_PIDINFO, getpid(), PROC_PIDPATHINFO, (uint64_t)0, (user_addr_t)pid_path,
-	                         (uint32_t)PROC_PIDPATHINFO_MAXSIZE);
+	    (uint32_t)PROC_PIDPATHINFO_MAXSIZE);
 	T_EXPECT_EQ_INT(retval, 0, "__proc_info call for PROC_PIDPATHINFO");
 
 	T_EXPECT_NE_PTR((void *)(strcasestr(pid_path, CONF_CMD_NAME)), NULL, "PROC_PIDPATHINFOreturns valid value for pid_path");
@@ -1728,9 +1670,9 @@ T_DECL(proc_info_proc_pidpathinfo,
 }
 
 T_DECL(proc_info_proc_pidlistfileports,
-       "Test to verify PROC_PIDLISTFILEPORTS returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDLISTFILEPORTS returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	struct proc_fileportinfo * fileport_info = NULL;
 	mach_port_t tmp_file_port                = MACH_PORT_NULL;
@@ -1749,23 +1691,23 @@ T_DECL(proc_info_proc_pidlistfileports,
 	 */
 	retval = __proc_info(PROC_INFO_CALL_PIDINFO, getpid(), PROC_PIDLISTFILEPORTS, (uint64_t)0, (user_addr_t)0, (uint32_t)0);
 	T_EXPECT_GE_INT(retval / (int)sizeof(fileport_info), 1,
-	                "__proc_info call for PROC_PIDLISTFILEPORTS to get total ports in parent");
+	    "__proc_info call for PROC_PIDLISTFILEPORTS to get total ports in parent");
 
 	/*
 	 * Child doesn't have any fileports, should return zero
 	 */
 	retval = __proc_info(PROC_INFO_CALL_PIDINFO, child_pid, PROC_PIDLISTFILEPORTS, (uint64_t)0, (user_addr_t)0, (uint32_t)0);
 	T_EXPECT_EQ_INT(retval / (int)sizeof(fileport_info), 0,
-	                "__proc_info call for PROC_PIDLISTFILEPORTS to get total ports in child");
+	    "__proc_info call for PROC_PIDLISTFILEPORTS to get total ports in child");
 
 	fileport_info = malloc(sizeof(*fileport_info) * (size_t)retval);
 	retval        = __proc_info(PROC_INFO_CALL_PIDINFO, getpid(), PROC_PIDLISTFILEPORTS, (uint64_t)0, (user_addr_t)fileport_info,
-	                     (uint32_t)sizeof(*fileport_info));
+	    (uint32_t)sizeof(*fileport_info));
 	T_EXPECT_EQ_INT(retval, (int)sizeof(*fileport_info), "__proc_info call for PROC_PIDLISTFILEPORTS");
 
 	T_EXPECT_NE_UINT(fileport_info->proc_fileport, (uint32_t)0, "PROC_PIDLISTFILEPORTS returns valid value for proc_fileport");
 	T_EXPECT_EQ_UINT(fileport_info->proc_fdtype, (uint32_t)PROX_FDTYPE_VNODE,
-	                 "PROC_PIDLISTFILEPORTS returns valid value for proc_fdtype");
+	    "PROC_PIDLISTFILEPORTS returns valid value for proc_fdtype");
 
 	/*
 	 * Cleanup for the fileport
@@ -1780,9 +1722,9 @@ T_DECL(proc_info_proc_pidlistfileports,
 }
 
 T_DECL(proc_info_proc_pidcoalitioninfo,
-       "Test to verify PROC_PIDCOALITIONINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDCOALITIONINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	proc_config_t proc_config = spawn_child_processes(1, proc_info_call_pidinfo_handler);
 	int child_pid             = proc_config->child_pids[0];
@@ -1790,10 +1732,10 @@ T_DECL(proc_info_proc_pidcoalitioninfo,
 	struct proc_pidcoalitioninfo pci_parent;
 	struct proc_pidcoalitioninfo pci_child;
 	int retval = __proc_info(PROC_INFO_CALL_PIDINFO, getpid(), PROC_PIDCOALITIONINFO, (uint64_t)0, (user_addr_t)&pci_parent,
-	                         (uint32_t)sizeof(pci_parent));
+	    (uint32_t)sizeof(pci_parent));
 	T_EXPECT_EQ_INT(retval, (int)sizeof(pci_parent), "__proc_info call for PROC_PIDCOALITIONINFO (parent)");
 	retval = __proc_info(PROC_INFO_CALL_PIDINFO, child_pid, PROC_PIDCOALITIONINFO, (uint64_t)0, (user_addr_t)&pci_child,
-	                     (uint32_t)sizeof(pci_child));
+	    (uint32_t)sizeof(pci_child));
 	T_EXPECT_EQ_INT(retval, (int)sizeof(pci_child), "__proc_info call for PROC_PIDCOALITIONINFO (child)");
 
 	/*
@@ -1801,16 +1743,16 @@ T_DECL(proc_info_proc_pidcoalitioninfo,
 	 */
 	for (int i = 0; i < COALITION_NUM_TYPES; i++) {
 		T_EXPECT_EQ_ULLONG(pci_parent.coalition_id[i], pci_child.coalition_id[i],
-		                   "PROC_PIDCOALITIONINFO returns valid value for coalition_id");
+		    "PROC_PIDCOALITIONINFO returns valid value for coalition_id");
 	}
 
 	free_proc_config(proc_config);
 }
 
 T_DECL(proc_info_proc_pidworkqueueinfo,
-       "Test to verify PROC_PIDWORKQUEUEINFO returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDWORKQUEUEINFO returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	proc_config_t proc_config = spawn_child_processes(1, proc_info_call_pidinfo_handler);
 	int child_pid             = proc_config->child_pids[0];
@@ -1819,7 +1761,7 @@ T_DECL(proc_info_proc_pidworkqueueinfo,
 	struct proc_workqueueinfo pwqinfo;
 	usleep(10000);
 	int retval = __proc_info(PROC_INFO_CALL_PIDINFO, child_pid, PROC_PIDWORKQUEUEINFO, (uint64_t)0, (user_addr_t)&pwqinfo,
-	                         (uint32_t)sizeof(pwqinfo));
+	    (uint32_t)sizeof(pwqinfo));
 	T_EXPECT_EQ_INT(retval, (int)sizeof(pwqinfo), "__proc_info call for PROC_PIDWORKQUEUEINFO");
 
 	int ncpu         = 0;
@@ -1828,16 +1770,16 @@ T_DECL(proc_info_proc_pidworkqueueinfo,
 	T_EXPECT_EQ_INT(retval, 0, "sysctl() for PROC_PIDWORKQUEUEINFO");
 	T_EXPECT_GE_UINT(pwqinfo.pwq_nthreads, (uint32_t)1, "PROC_PIDWORKQUEUEINFO returns valid value for pwq_nthreads");
 	T_EXPECT_GE_UINT(pwqinfo.pwq_blockedthreads + pwqinfo.pwq_runthreads, (uint32_t)1,
-	                 "PROC_PIDWORKQUEUEINFO returns valid value for pwqinfo.pwq_runthreads/pwq_blockedthreads");
+	    "PROC_PIDWORKQUEUEINFO returns valid value for pwqinfo.pwq_runthreads/pwq_blockedthreads");
 	T_EXPECT_EQ_UINT(pwqinfo.pwq_state, (uint32_t)0, "PROC_PIDWORKQUEUEINFO returns valid value for pwq_state");
 
 	kill_child_processes(proc_config);
 	free_proc_config(proc_config);
 }
 T_DECL(proc_info_proc_pidnoteexit,
-       "Test to verify PROC_PIDNOTEEXIT returns valid information about the process",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to verify PROC_PIDNOTEEXIT returns valid information about the process",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	/*
 	 * Ask the child to close pipe and quit, cleanup pipes for parent
@@ -1848,7 +1790,7 @@ T_DECL(proc_info_proc_pidnoteexit,
 
 	uint32_t exit_data = 0;
 	int retval = __proc_info(PROC_INFO_CALL_PIDINFO, child_pid, PROC_PIDNOTEEXIT, (uint64_t)(NOTE_EXITSTATUS | NOTE_EXIT_DETAIL),
-	                         (user_addr_t)&exit_data, (uint32_t)sizeof(exit_data));
+	    (user_addr_t)&exit_data, (uint32_t)sizeof(exit_data));
 	T_EXPECT_EQ_INT(retval, (int)sizeof(exit_data), "__proc_info call for PROC_PIDNOTEEXIT");
 
 	T_EXPECT_EQ_UINT(exit_data, 0U, "PROC_PIDNOTEEXIT returned valid value for exit_data");
@@ -1857,9 +1799,9 @@ T_DECL(proc_info_proc_pidnoteexit,
 }
 
 T_DECL(proc_info_negative_tests,
-       "Test to validate PROC_INFO_CALL_PIDINFO for invalid arguments",
-       T_META_ASROOT(true),
-       T_META_LTEPHASE(LTE_POSTINIT))
+    "Test to validate PROC_INFO_CALL_PIDINFO for invalid arguments",
+    T_META_ASROOT(true),
+    T_META_LTEPHASE(LTE_POSTINIT))
 {
 	proc_config_t proc_config = spawn_child_processes(1, proc_info_call_pidinfo_handler);
 	int child_pid             = proc_config->child_pids[0];
@@ -1869,17 +1811,17 @@ T_DECL(proc_info_negative_tests,
 	    __proc_info(PROC_INFO_CALL_PIDINFO, child_pid, PROC_PIDNOTEEXIT, (uint64_t)0, (user_addr_t)&exit_data, (uint32_t)0);
 	T_EXPECT_EQ_INT(errno, ENOMEM, "PROC_INFO_CALL_PIDINFO call should fail with ENOMEM if buffersize is zero");
 	retval = __proc_info(PROC_INFO_CALL_PIDINFO, child_pid, PROC_PIDPATHINFO, (uint64_t)0, (user_addr_t)&exit_data,
-	                     (uint32_t)PROC_PIDPATHINFO_MAXSIZE + 1);
+	    (uint32_t)PROC_PIDPATHINFO_MAXSIZE + 1);
 	T_EXPECT_EQ_INT(errno, EOVERFLOW,
-	                "PROC_INFO_CALL_PIDINFO call should fail with EOVERFLOW if buffersize is larger than PROC_PIDPATHINFO_MAXSIZE");
+	    "PROC_INFO_CALL_PIDINFO call should fail with EOVERFLOW if buffersize is larger than PROC_PIDPATHINFO_MAXSIZE");
 	retval = __proc_info(PROC_INFO_CALL_PIDINFO, -1, PROC_PIDNOTEEXIT, (uint64_t)0, (user_addr_t)&exit_data,
-	                     (uint32_t)sizeof(exit_data));
+	    (uint32_t)sizeof(exit_data));
 	T_EXPECT_EQ_INT(errno, ESRCH, "PROC_INFO_CALL_PIDINFO call should fail with ESRCH for invalid process id");
 	retval = __proc_info(PROC_INFO_CALL_PIDINFO, child_pid, -1U, (uint64_t)0, (user_addr_t)&exit_data, (uint32_t)sizeof(exit_data));
 	T_EXPECT_EQ_INT(errno, EINVAL, "PROC_INFO_CALL_PIDINFO call should fail with EINVAL for invalid flavor");
 	retval = __proc_info(PROC_INFO_CALL_PIDINFO, 0, PROC_PIDWORKQUEUEINFO, (uint64_t)0, (user_addr_t)0, (uint32_t)0);
 	T_EXPECT_EQ_INT(errno, EINVAL,
-	                "PROC_INFO_CALL_PIDINFO call should fail with EINVAL if flavor is PROC_PIDWORKQUEUEINFO and pid=0");
+	    "PROC_INFO_CALL_PIDINFO call should fail with EINVAL if flavor is PROC_PIDWORKQUEUEINFO and pid=0");
 
 	free_proc_config(proc_config);
 }
@@ -1972,12 +1914,12 @@ T_DECL(proc_list_uptrs, "the kernel should return any up-pointers it knows about
 	 */
 	uptr_names[cur_uptr] = "dynamic kqueue non-file-backed knote";
 	struct kevent_qos_s events_id[] = {{
-		.filter = EVFILT_USER,
-		.ident = 1,
-		.flags = EV_ADD,
-		.qos = (int)_pthread_qos_class_encode(QOS_CLASS_DEFAULT, 0, 0),
-		.udata = uptrs[cur_uptr++]
-	}};
+						   .filter = EVFILT_USER,
+						   .ident = 1,
+						   .flags = EV_ADD,
+						   .qos = (int)_pthread_qos_class_encode(QOS_CLASS_DEFAULT, 0, 0),
+						   .udata = uptrs[cur_uptr++]
+					   }};
 
 	uptr_names[cur_uptr] = "dynamic kqueue ID";
 	kev_err = kevent_id(uptrs[cur_uptr++], events_id, 1, NULL, 0, NULL, NULL, KEVENT_FLAG_WORKLOOP | KEVENT_FLAG_IMMEDIATE);
@@ -2004,15 +1946,15 @@ T_DECL(proc_list_uptrs, "the kernel should return any up-pointers it knows about
 			}
 		}
 		T_FAIL("unexpected up-pointer found: %#" PRIx64, uptrs_obs[i]);
-	next:;
+next:           ;
 		if (found != -1) {
 			T_PASS("found up-pointer for %s", uptr_names[found]);
 		}
 	}
 
 	uint64_t up_overflow[2] = {0};
-	uptrs_count = proc_list_uptrs(getpid(), up_overflow, sizeof(uint64_t)+1);
-	T_ASSERT_EQ(up_overflow[1], (uint64_t)0 , "overflow check");
+	uptrs_count = proc_list_uptrs(getpid(), up_overflow, sizeof(uint64_t) + 1);
+	T_ASSERT_EQ(up_overflow[1], (uint64_t)0, "overflow check");
 }
 
 #pragma mark dynamic kqueue info
@@ -2027,12 +1969,12 @@ static void
 setup_kevent_id(kqueue_id_t id)
 {
 	struct kevent_qos_s events_id[] = {{
-		.filter = EVFILT_USER,
-		.ident = 1,
-		.flags = EV_ADD,
-		.qos = (int)_pthread_qos_class_encode(QOS_CLASS_DEFAULT, 0, 0),
-		.udata = EXPECTED_UDATA
-	}};
+						   .filter = EVFILT_USER,
+						   .ident = 1,
+						   .flags = EV_ADD,
+						   .qos = (int)_pthread_qos_class_encode(QOS_CLASS_DEFAULT, 0, 0),
+						   .udata = EXPECTED_UDATA
+					   }};
 
 	int err = kevent_id(id, events_id, 1, NULL, 0, NULL, NULL, KEVENT_FLAG_WORKLOOP | KEVENT_FLAG_IMMEDIATE);
 	T_ASSERT_POSIX_SUCCESS(err, "register event with kevent_id");
